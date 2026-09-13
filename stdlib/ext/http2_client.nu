@@ -1488,26 +1488,6 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ !v H2ClientErr { T 0 }
     } {}
     ? & == frames 0 ( __h2c_any_pending c ) {
-        // Nothing arrived and streams are still open, so this is where the
-        // pump parks. Bytes still queued for the peer mean the SOCKET
-        // refused them, not that the peer owes us a frame — and parking in
-        // a blocking read with a backed-up writer is a deadlock. A duplex
-        // exchange is exactly where it bites: the peer has sent everything
-        // it had and is waiting for the rest of our request, which is the
-        // very bytes sitting in this writer, so nothing will ever arrive to
-        // wake this side. It stays hidden wherever the kernel's send buffer
-        // is large enough that the flush above always drains. Wait for the
-        // socket to take more instead and come back around to flush;
-        // readable stays in the set so a peer that does have something to
-        // say need not wait out the poll.
-        ? > ( h2_frame_writer_pending . c writer ) 0 {
-            : i ready ( tcp_wait_io . c tcp T T 100 )
-            ? < ready 0 {
-                ( nurl_poke . c st 15 1 )
-                ^ @ !v H2ClientErr { F # H2ClientErr H2CWriteIo }
-            } {}
-            ^ ( __h2c_expire_deadlines c )
-        } {}
         : !H2Frame H2ClientErr rf ( __h2c_read_one c )
         ?? rf { T frame → {
                 : !v H2ClientErr dr ( __h2c_dispatch c frame )

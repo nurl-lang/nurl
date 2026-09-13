@@ -85,7 +85,13 @@ $ `stdlib/std/thread.nu`
     : ~ b request_end F
     : ~ b response_end F
     : ~ b pressure F
-    : i deadline + ( monotonic_ns ) 10000000000
+    // Two megabytes crossing through 4 KiB socket buffers is a lot of
+    // round trips, and the budget has to cover the slowest machine that
+    // runs this, not the fastest. The FreeBSD CI VM was still at ~70%
+    // of the request when ten seconds ran out, with no error and both
+    // sides still making progress. A deadline is here to bound a hang,
+    // so set it where only a hang can reach it.
+    : i deadline + ( monotonic_ns ) 45000000000
     ~ & & ok ! response_end < ( monotonic_ns ) deadline {
         // Fill a bounded burst before flushing. A single frame can fit into
         // the kernel even with SO_SNDBUF=4096 and a fast loopback reader,
@@ -212,7 +218,7 @@ $ `stdlib/std/thread.nu`
             ~ < k 1048576 { ( vec_push [u] request # u 65 ) = k + k 1 }
             ?? ( h2_client_submit client `POST` `http` `localhost` `/duplex` headers request ) {
                 T sid → {
-                    ?? ( h2_client_set_stream_deadline client sid + ( monotonic_ns ) 10000000000 ) { T _ → {} F _ → {} }
+                    ?? ( h2_client_set_stream_deadline client sid + ( monotonic_ns ) 45000000000 ) { T _ → {} F _ → {} }
                     ?? ( h2_client_run_until_complete client ) {
                         T _ → {
                             ?? ( h2_client_take_response client sid ) {
