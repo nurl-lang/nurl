@@ -98,7 +98,14 @@ if "%~2"=="" (
 for %%I in ("%OUTBASE%") do set "OUTBASE=%%~fI"
 for %%I in ("%OUTBASE%") do set "EXEDIR=%%~dpI"
 for %%I in ("%OUTBASE%") do set "OUTNAME=%%~nxI"
-set "SCRIPTDIR=%~dp0"
+REM %~dp0 carries whatever the install directory is named, and a name may
+REM hold %, ! and &. Those do not survive being carried through expansion
+REM into every derived path below -- the toolchain then looks for nurlc.exe
+REM and runtime.o at a path with the specials rubbed out, finds neither, and
+REM says it was never built. The short (8.3) form of the same directory has
+REM none of them. Where a volume has short names disabled the call hands
+REM back the long form unchanged, which is exactly today's behaviour.
+for %%I in ("%~dp0.") do set "SCRIPTDIR=%%~sI\"
 REM Values inserted through delayed expansion are not parsed as command
 REM operators and their embedded ! characters are not expanded again.
 setlocal EnableDelayedExpansion
@@ -119,14 +126,22 @@ if not exist "!NURLC!" (
     if not exist "!NURLC!" (
         REM Fall back to nurlc.exe on PATH
         where nurlc.exe >nul 2>&1
-        if !errorlevel! neq 0 (
-            echo ERROR: nurlc.exe not found in build\, next to this script, or in PATH
-            echo        Run build.bat first to build nurlc.exe
-            exit /b 1
-        )
+        REM Leave the block before failing: `exit /b` from inside nested
+        REM parentheses reported success to the caller, so a driver that had
+        REM just said it could not find its compiler exited 0 and the caller
+        REM went looking for output that was never built.
+        if !errorlevel! neq 0 goto nurlc_missing
         set "NURLC=nurlc.exe"
     )
 )
+goto nurlc_found
+
+:nurlc_missing
+echo ERROR: nurlc.exe not found in build\, next to this script, or in PATH
+echo        Run build.bat first to build nurlc.exe
+exit /b 1
+
+:nurlc_found
 
 REM ── Pick the compiler: bundled zig (preferred) or system clang ──
 REM The Windows archive ships a zig at <prefix>\zig\zig.exe, exactly as
