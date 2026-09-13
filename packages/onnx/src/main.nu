@@ -28,9 +28,7 @@ $ `runtime.nu`
         T bytes → {
             : i n / ( vec_len [u] bytes ) 4
             : *u host ( nurl_alloc * n 4 )
-            : *PbR r ( pb_new bytes )
-            ( pb_read_f32_into r host n )
-            ( pb_free r )
+            ( vec_f32_into bytes host n )
             ( nurl_poke pcount 0 n )
             ^ host
         }

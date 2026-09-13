@@ -31,9 +31,7 @@ $ `src/runtime.nu`
         T bytes → {
             : i n / ( vec_len [u] bytes ) 4
             : *u host ( nurl_alloc * n 4 )
-            : *PbR r ( pb_new bytes )
-            ( pb_read_f32_into r host n )
-            ( pb_free r )
+            ( vec_f32_into bytes host n )
             ( nurl_poke pcell 0 n )
             ^ host
         }
@@ -58,6 +56,27 @@ $ `src/runtime.nu`
     ( check >= w1i 0 `W1 present` )
     ?? ( vec_get [OTensor] . g inits w1i ) {
         T w1 → ( check == . w1 nelem 32 `W1 has 32 elements (4x8)` ) F _ → ( check F `W1 fetch` )
+    }
+
+    // A malformed model must be REJECTED, not decoded past. This fixture
+    // is a mutated tiny.onnx whose length prefix runs off the end of the
+    // buffer: the package's own hand-rolled reader used to advance the
+    // cursor by that bogus length and loop forever, because nothing
+    // bounded it. The stdlib reader reports the bad length instead.
+    ( nurl_print `[reject]\n` )
+    ?? ( read_file_bytes `tests/data/malformed_length.onnx` ) {
+        T bad → {
+            ?? ( onnx_parse_checked bad ) {
+                T ok → { ( check F `malformed model is rejected` ) ( graph_free ok ) }
+                F _ → ( check T `malformed model is rejected` )
+            }
+            // The historical entry point degrades to an empty graph.
+            : OGraph empty ( onnx_parse bad )
+            ( check == ( vec_len [ONode] . empty nodes ) 0 `onnx_parse yields an empty graph` )
+            ( graph_free empty )
+            ( vec_free [u] bad )
+        }
+        F _ → ( check F `cannot read tests/data/malformed_length.onnx` )
     }
 
     ( nurl_print `[infer]\n` )
