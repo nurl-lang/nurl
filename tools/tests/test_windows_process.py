@@ -120,14 +120,22 @@ class WindowsProcess(unittest.TestCase):
         env = {**self.env, 'COMSPEC': str(self.directory / 'not-the-system-shell.exe')}
         quoted = self.directory / 'quoted shell target & !keep!.exe'
         shutil.copy2(self.probe, quoted)
+        # A pipe is the one operator that cannot be tested beside a broken
+        # COMSPEC: cmd spawns each half of a pipe through %COMSPEC% itself,
+        # so pointing that at a file which does not exist breaks the pipe no
+        # matter who built the command line. Python's own `cmd /c` fails on
+        # the identical command with the identical error, which is what says
+        # this is cmd and not our encoding. The pipe therefore runs with the
+        # shell COMSPEC names; every other case keeps the broken one, which
+        # is what proves we do not consult it.
+        piped = f'echo pipe-value|"{self.probe}" copy'
+        result = subprocess.run([str(self.probe), 'shell', piped], env=self.env,
+                                capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, repr(piped) + '\n'
+                         + result.stderr.decode(errors='replace'))
+        self.assertEqual(result.stdout.replace(b'\r\n', b'\n'), b'pipe-value\n')
         commands = [
             (f'"{quoted}" echo "two words" & echo second', 0, b'9:two words\nsecond\n'),
-            # Plain name on the right of the pipe: cmd runs that side in a
-            # subshell of its own making, and the & in a quoted program name
-            # does not survive its re-parse. That an & in the name works at
-            # all is what the case above covers, where cmd parses the line
-            # once; this one is about the pipe.
-            (f'echo pipe-value|"{self.probe}" copy', 0, b'pipe-value\n'),
             ('exit /b 23', 23, b''),
             ('', 0, b''),
         ]
@@ -378,17 +386,28 @@ class WindowsProcess(unittest.TestCase):
                 # defeated something or the directory was simply gone. If the
                 # plain one passes, the specials in TEMP are the cause; if it
                 # fails too, TEMP is not what this is about.
-                plain = self.directory / f'plain-scratch-{command}'
-                plain.mkdir(exist_ok=True)
+                controls = []
+                for label, leaf in (('plain', 'scratch'),
+                                    ('percent', 'scratch %NURL_TEST_VALUE%'),
+                                    ('ampersand', 'scratch & keep'),
+                                    ('bang', 'scratch !keep!')):
+                    alternate = self.directory / f'{label}-{command}' / leaf
+                    alternate.mkdir(parents=True, exist_ok=True)
+                    run = subprocess.run(
+                        [str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
+                        env={**env, 'TEMP': str(alternate), 'TMP': str(alternate)},
+                        capture_output=True, timeout=180)
+                    controls.append(f'{label} TEMP rc={run.returncode}')
                 control = subprocess.run(
                     [str(ROOT / 'build/nurlpkg.exe'), command], cwd=project,
-                    env={**env, 'TEMP': str(plain), 'TMP': str(plain)},
+                    env={**env, 'TEMP': str(self.directory), 'TMP': str(self.directory)},
                     capture_output=True, timeout=180)
                 self.assertEqual(result.returncode, 0,
                                  (result.stdout + result.stderr).decode(errors='replace')
                                  + f'\nTEMP={env["TEMP"]}\n'
                                  + 'scratch ' + self.produced(scratch)
-                                 + f'\nplain TEMP rc={control.returncode}\n'
+                                 + '\n' + '\n'.join(controls)
+                                 + f'\nno-specials TEMP rc={control.returncode}\n'
                                  + (control.stdout + control.stderr).decode(errors='replace'))
                 self.assertFalse(list(scratch.glob('nurlpkg-run-*')))
 
