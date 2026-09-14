@@ -6,6 +6,22 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `;` defer body nested in a `?` arm, a `??` arm, a `~` body or a foreach
+  body is borrow-checked.** A defer body is replayed at function exit against
+  the ownership holding there, and only sites the exit state showed as
+  *definitely* armed were replayed — but a `?` join weakens the arming to
+  maybe, a `??` arm discards it, and a loop drops it as loop-local, so those
+  bodies were never analysed at all. A double free or use-after-move among the
+  body's own bindings compiled clean and corrupted the heap. Arming stays
+  conditional; the body does not, so any site the exit replay did not reach is
+  now swept from an empty state — the `??`-arm rule — tracking only bindings
+  the body itself declares. Found by the weekly inverse-oracle fuzzer
+  (`FUZZ_GEN=reject`), 12 of 400 seeds.
+
 ## [0.65.0] — 2026-09-13
 
 ### Added

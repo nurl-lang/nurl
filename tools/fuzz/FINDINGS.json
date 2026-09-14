@@ -2,6 +2,13 @@
   "_comment": "Curated log of real compiler/runtime bugs found by the fuzzers. Newest first. report.py renders this into FUZZRESULTS.md — keep entries short; the fix commit/PR carries the detail.",
   "findings": [
     {
+      "date": "2026-09-14",
+      "family": "reject-inverse",
+      "title": "Borrow-checker blind spot: a definite double free inside a `;` defer body was accepted whenever the defer was written in a `?` arm, a `??` arm, a `~` body or a foreach body — the exit-state replay only walked a site whose synthetic arming flag was DEFINITELY set, and each of those four contexts weakens or drops it. Conditionally-armed bodies are now swept body-local, from an EMPTY state, like a `??` arm",
+      "severity": "unsoundness",
+      "status": "fixed (borrow_defer_nested_context); 12 of 400 seeds, the first weekly CI fuzz finding"
+    },
+    {
       "date": "2026-08-26",
       "family": "reject-inverse",
       "title": "Borrow-checker blind spot: a definite double free inside a closure body was accepted — one flag meant both 'this belongs to the closure' and 'record nothing', so the checker was off for everything written in a closure. The body now gets its own recording context and its own analyze pass",
