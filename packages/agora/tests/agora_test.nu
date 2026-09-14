@@ -18,6 +18,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/ext/sqlite.nu`
 $ `stdlib/ext/mcp_server.nu`
 $ `src/service.nu`
 
@@ -113,14 +114,27 @@ $ `src/service.nu`
     ( check == ( ag_task_cancel st t2 `alice` 312 ) AG_TASK_OK `store: the poster cancels` )
     ( check == ( ag_task_cancel st t2 `alice` 313 ) AG_TASK_WRONG_STATE `store: cancel is once` )
 
-    ( check ( ag_note_set st `plan` `step 1` `alice` 400 ) `store: note set` )
-    ( check ( ag_note_set st `plan` `step 2` `bob` 401 ) `store: note overwrite` )
-    ?? ( ag_note_get st `plan` ) {
+    ( check ( ag_note_set st `` `plan` `step 1` `alice` 400 ) `store: note set` )
+    ( check ( ag_note_set st `` `plan` `step 2` `bob` 401 ) `store: note overwrite` )
+    ?? ( ag_note_get st `` `plan` ) {
         T n → { ( check ( seq ( string_data . n body ) `step 2` ) `store: note reads back` ) ( ag_note_free n ) }
         F _ → { ( check F `store: note reads back` ) }
     }
-    ( check ( ag_note_del st `plan` ) `store: note deleted` )
-    ( check ! ( ag_note_del st `plan` ) `store: deleting twice fails` )
+    ( check ( ag_note_set st `repo` `plan` `repo plan` `alice` 402 ) `store: same key under a project` )
+    ?? ( ag_note_get st `` `plan` ) {
+        T n → { ( check ( seq ( string_data . n body ) `step 2` ) `store: the global one is untouched` ) ( ag_note_free n ) }
+        F _ → { ( check F `store: the global one is untouched` ) }
+    }
+    : ( Vec AgNote ) only ( ag_notes st `repo` F T )
+    ( check == ( vec_len [AgNote] only ) 1 `store: notes of one project` )
+    ( ag_notes_free only )
+    : ( Vec AgNote ) every ( ag_notes st `` T F )
+    ( check == ( vec_len [AgNote] every ) 2 `store: notes of every project` )
+    ( check == ( ag_note_count st ) 2 `store: note count spans projects` )
+    ( ag_notes_free every )
+    ( check ( ag_note_del st `repo` `plan` ) `store: project note deleted` )
+    ( check ( ag_note_del st `` `plan` ) `store: note deleted` )
+    ( check ! ( ag_note_del st `` `plan` ) `store: deleting twice fails` )
 
     ( check ( ag_channel_create st `dev` `dev talk` `alice` 500 ) `store: channel created` )
     ( check ! ( ag_channel_create st `dev` `` `bob` 501 ) `store: channel exists once` )
@@ -150,6 +164,32 @@ $ `src/service.nu`
     : ( Vec AgMsg ) h ( ag_history st `dev` 0 10 )
     ( check == ( vec_len [AgMsg] h ) 2 `store: history sees everything` )
     ( ag_msgs_free h )
+}
+
+// A 0.1.0 store (notes keyed by `key` alone) opened by 0.2.0: the rows
+// move under project '' and keep working.
+@ test_migration → v {
+    : s path `agora_test_scratch/v1.db`
+    ?? ( file_delete path ) { T _ → {} F _ → {} }
+    ?? ( sqlite_open path ) {
+        F _ → { ( check F `migrate: seed a 0.1.0 store` ) }
+        T db → {
+            ?? ( sqlite_exec db `CREATE TABLE notes (key TEXT PRIMARY KEY, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL)` ) { T _ → {} F _ → {} }
+            ?? ( sqlite_exec db `INSERT INTO notes VALUES ('old', 'from 0.1.0', 'alice', 7)` ) { T _ → { ( check T `migrate: seed a 0.1.0 store` ) } F _ → { ( check F `migrate: seed a 0.1.0 store` ) } }
+        }
+    }
+    : AgStore st ( ag_store_open path )
+    ( check . st ok `migrate: 0.2.0 opens it` )
+    ?? ( ag_note_get st `` `old` ) {
+        T n → { ( check ( seq ( string_data . n body ) `from 0.1.0` ) `migrate: the old note is a global note` ) ( ag_note_free n ) }
+        F _ → { ( check F `migrate: the old note is a global note` ) }
+    }
+    ( check ( ag_note_set st `p` `old` `new` `bob` 8 ) `migrate: the new key shape works` )
+    ( check == ( ag_note_count st ) 2 `migrate: both rows` )
+    : AgStore again ( ag_store_open path )
+    ( check & . again ok == ( ag_note_count again ) 2 `migrate: opening again migrates nothing` )
+    ( ag_store_free again )
+    ( ag_store_free st )
 }
 
 // ── 2. operations ────────────────────────────────────────────────────
@@ -275,6 +315,35 @@ $ `src/service.nu`
     : AgRes nd2 ( call `carol` `note_del` `{"key":"plan"}` 1261 )
     ( check == . nd2 status 404 `ops: note_del twice is 404` )
     ( ag_res_free nd2 )
+    : AgRes pn ( call `dan` `note_set` `{"project":"nurl","key":"build","body":"./build.sh"}` 1270 )
+    ( check ( seq ( string_data . pn text ) `note nurl/build saved\n` ) `ops: note_set under a project` )
+    ( ag_res_free pn )
+    : AgRes pn2 ( call `dan` `note_set` `{"project":"Bad Project","key":"x","body":"y"}` 1270 )
+    ( check == . pn2 status 400 `ops: a project is a name` )
+    ( ag_res_free pn2 )
+    : AgRes gn ( call `dan` `note_set` `{"key":"build","body":"global build"}` 1271 )
+    ( ag_res_free gn )
+    : AgRes pr ( call `carol` `note` `{"project":"nurl","key":"build"}` 1331 )
+    ( check ( has . pr text `nurl/build (dan 1m):\n./build.sh` ) `ops: note reads the project's` )
+    ( ag_res_free pr )
+    : AgRes gr ( call `carol` `note` `{"key":"build"}` 1331 )
+    ( check ( has . gr text `build (dan 1m):\nglobal build` ) `ops: note without project reads the global one` )
+    ( ag_res_free gr )
+    : AgRes pl ( call `carol` `notes` `{"project":"nurl"}` 1332 )
+    ( check ( seq ( string_data . pl text ) `build (dan 1m)\n` ) `ops: notes of a project` )
+    ( ag_res_free pl )
+    : AgRes al ( call `carol` `notes` `{}` 1332 )
+    ( check ( seq ( string_data . al text ) `build (dan 1m)\nnurl/build (dan 1m)\n` ) `ops: notes of every project, prefixed` )
+    ( ag_res_free al )
+    : AgRes el ( call `carol` `notes` `{"project":"empty"}` 1332 )
+    ( check ( has . el text `no notes for project empty` ) `ops: an empty project says how` )
+    ( ag_res_free el )
+    : AgRes pd ( call `carol` `note_del` `{"project":"nurl","key":"build"}` 1333 )
+    ( check == . pd status 200 `ops: note_del under a project` )
+    ( ag_res_free pd )
+    : AgRes gd ( call `carol` `note_del` `{"key":"build"}` 1333 )
+    ( check == . gd status 200 `ops: and the global one` )
+    ( ag_res_free gd )
 
     : AgRes cc ( call `dan` `channel_create` `{"name":"dev"}` 1300 )
     ( check == . cc status 200 `ops: channel_create` )
@@ -443,6 +512,7 @@ $ `src/service.nu`
     : AgStore st ( ag_store_open `agora_test_scratch/store.db` )
     ( test_store st )
     ( ag_store_free st )
+    ( test_migration )
     ( test_ops )
     : *HttpApp app ( ag_build_app 1 T )
     : Router r ( http_app_router app )

@@ -72,6 +72,9 @@ has "task_done" "$("$BIN" task_done id=1 result="LGTM" --as alice 2>/dev/null)" 
 OUT=$("$BIN" brief --as bob 2>/dev/null)
 has "the poster hears of the claim" "$OUT" "task #1 claimed by alice"
 has "and gets the result" "$OUT" "result: LGTM"
+has "note_set under a project" "$("$BIN" note_set project=nurl key=build body="./build.sh" --as bob 2>/dev/null)" "note nurl/build saved"
+has "notes project= lists it" "$("$BIN" notes project=nurl --as alice 2>/dev/null)" "build (bob now)"
+has "note project= reads it" "$("$BIN" note project=nurl key=build --as alice 2>/dev/null)" "./build.sh"
 has "--json prints the body" "$("$BIN" tasks which=done --json --as alice 2>/dev/null)" '"result":"LGTM"'
 "$BIN" post body="x" channel=nope --as alice >/dev/null 2>&1; check "an unknown channel exits 1" "$?" "1"
 "$BIN" brief >/dev/null 2>"$WORK/e1.txt"; check "no identity exits 2" "$?" "2"

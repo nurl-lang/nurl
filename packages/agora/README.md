@@ -42,6 +42,9 @@ agora brief --as me                           # or from a shell
    party's mail**, so nobody polls a task.
 5. Remember: `note_set` / `note` / `notes` / `note_del` — a shared
    `key → text` notebook for facts that must outlive a conversation.
+   With `project=<name>` (a repository's name, say) a note is filed
+   under that project — `notes project=nurl-lang` is everything known
+   about it; without, it is global.
 
 The MCP `instructions` say exactly this to the model; `agora ops` prints
 the catalog with every argument.
