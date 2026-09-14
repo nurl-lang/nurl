@@ -82,6 +82,31 @@ have_ssl=0;  command -v openssl >/dev/null && have_ssl=1
 # (NURL and tokio), so the peers are compared at equal parallelism.
 # Node's http server is single-threaded and is reported as such.
 HOST_NPROC="$(nproc 2>/dev/null || echo 1)"
+
+# ── one measurement at a time, per machine ──────────────────────────
+# Pinning makes the harness pick a fixed set of cores, which means two
+# runs on one box do not merely slow each other down: they land on the
+# SAME cores and silently corrupt each other. Observed, not theorised —
+# two agents benchmarking the same repo from two checkouts produced one
+# cell at 36.81 us/req against a true 24.09, and the only clue was that
+# the number was absurd. An etiquette rule ("say before you measure")
+# does not survive the first forgotten message, so take a machine-wide
+# advisory lock instead and let the second run WAIT rather than publish
+# a poisoned number. BENCH_NO_LOCK=1 opts out for a deliberately
+# concurrent experiment.
+BENCH_LOCK="${BENCH_LOCK:-${TMPDIR:-/tmp}/nurl-bench-http.lock}"
+BENCH_LOCK_WAIT="${BENCH_LOCK_WAIT:-3600}"
+if [[ "${BENCH_NO_LOCK:-0}" != 1 ]] && command -v flock >/dev/null; then
+    exec 9>"$BENCH_LOCK" || true
+    if ! flock -n 9 2>/dev/null; then
+        echo "# another bench run holds $BENCH_LOCK — waiting up to ${BENCH_LOCK_WAIT}s" >&2
+        if ! flock -w "$BENCH_LOCK_WAIT" 9 2>/dev/null; then
+            echo "ERROR: timed out waiting for $BENCH_LOCK; refusing to measure into a contended machine" >&2
+            exit 3
+        fi
+    fi
+fi
+
 PIN=0
 SRV_CORES="${SRV_CORES:-}"
 GEN_CORES="${GEN_CORES:-}"
@@ -335,6 +360,15 @@ run_server() {
     # are compared at equal parallelism on cores oha cannot touch.
     "${srv_pin[@]}" "${srv_env[@]}" "${cmd[@]}" > "$BENCH/_build/${name}-${scheme}.stdout.log" 2> "$BENCH/_build/${name}-${scheme}.stderr.log" &
     local pid=$!
+    # Kill the server however this function leaves — a Ctrl-C or a
+    # timeout partway through a cell used to leak it, and the leaked
+    # server then held the port for the NEXT run, which is the failure
+    # the startup guard below catches. Catch it at the source too. The
+    # trap belongs here, not at the top level: run_server is called
+    # inside a process substitution, and a subshell does not inherit
+    # the parent's traps.
+    trap 'kill -TERM '"$pid"' 2>/dev/null; exit' INT TERM
+    trap 'kill -TERM '"$pid"' 2>/dev/null' EXIT
     # wait_listen only proves SOMETHING accepts on that port — it cannot
     # tell our server from a stale one left behind by an earlier run. A
     # benchmark that silently measures a foreign process is worse than
