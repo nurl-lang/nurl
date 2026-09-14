@@ -144,4 +144,6 @@ stdlib/runtime.nvrtc
 # .forest blobs staged for the next `git add -A`, nor put them in a published
 # tarball.
 packages/*/anomaly_tv_test/
+# agora's unit test scratch (tests/agora_test.nu), created in the package dir.
+packages/agora/agora_test_scratch/
 bench/rust_http3_server/target/
