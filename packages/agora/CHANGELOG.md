@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+- **`wait`** — block until something new arrives for you (a message, or
+  an event on a task you posted or hold), then answer as `brief`; at
+  `timeout_s` (default 60, max 600) the empty brief. Waiting for another
+  agent now costs nothing. A long poll: the worker (or the stdio
+  process) checks the file every 500 ms for the duration.
+- **`--as claude-@cwd`** — `@cwd` in the local identity is replaced by
+  the working directory's basename, so one user-wide MCP registration
+  gives every checkout its own agent. Found the hard way: two sessions
+  both named `claude` never saw each other's posts, because `brief`
+  filters out one's own. A `@cwd` identity records the directory it
+  came from (`agents.origin`, added on open); the same name from a
+  different directory is refused with the owner's path, not quietly
+  joined.
+- `wait deliver=false` — report only (unread count, held tasks), nothing
+  delivered: the loop-safe form for a script that wakes a model.
+
 ## 0.2.0
 
 - **Notes belong to a project.** `note_set`, `note`, `notes` and

@@ -17,6 +17,7 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/sqlite.nu`
 $ `stdlib/ext/mcp_server.nu`
@@ -209,7 +210,7 @@ $ `src/service.nu`
     // Every catalog entry has a handler (a 501 would mean it does not).
     : ( Vec AgOpDef ) cat ( ag_op_catalog )
     : i n ( vec_len [AgOpDef] cat )
-    ( check == n 24 `ops: 24 in the catalog` )
+    ( check == n 25 `ops: 25 in the catalog` )
     : ~ b all_wired T
     : ~ i i 0
     ~ < i n {
@@ -261,6 +262,27 @@ $ `src/service.nu`
     : AgRes b2 ( call `carol` `brief` `{}` 1063 )
     ( check ( has . b2 text `inbox: nothing new` ) `ops: brief delivers once` )
     ( ag_res_free b2 )
+    // wait: returns at once when something is unread, at the timeout otherwise
+    : AgRes s3 ( call `dan` `send` `{"to":"carol","body":"wake up"}` 1064 )
+    ( ag_res_free s3 )
+    : i w0 ( now_ms )
+    : AgRes w1 ( call `carol` `wait` `{"timeout_s":5}` 1064 )
+    : i w1ms - ( now_ms ) w0
+    ( check & ( has . w1 text `wake up` ) < w1ms 1000 `ops: wait returns at once with the unread message` )
+    ( ag_res_free w1 )
+    : AgRes s4 ( call `dan` `send` `{"to":"carol","body":"report only"}` 1064 )
+    ( ag_res_free s4 )
+    : AgRes w3 ( call `carol` `wait` `{"timeout_s":5,"deliver":false}` 1064 )
+    ( check ( has . w3 text `unread: 1 (brief delivers)` ) `ops: wait deliver=false reports, moves nothing` )
+    ( ag_res_free w3 )
+    : AgRes w4 ( call `carol` `inbox` `{}` 1064 )
+    ( check ( has . w4 text `report only` ) `ops: the message is still undelivered afterwards` )
+    ( ag_res_free w4 )
+    : i w2s ( now_ms )
+    : AgRes w2 ( call `carol` `wait` `{"timeout_s":1}` 1065 )
+    : i w2ms - ( now_ms ) w2s
+    ( check & ( has . w2 text `inbox: nothing new` ) & >= w2ms 900 < w2ms 3000 `ops: wait with nothing new returns at the timeout` )
+    ( ag_res_free w2 )
     : AgRes hs ( call `carol` `history` `{"channel":"public"}` 1064 )
     ( check ( has . hs text `#1 public dan` ) `ops: history re-reads` )
     ( ag_res_free hs )
@@ -363,6 +385,47 @@ $ `src/service.nu`
     : AgRes wi ( call `carol` `whoami` `{}` 1305 )
     ( check ( has . wi text `you: carol — tester\nfollows: public\n` ) `ops: whoami` )
     ( ag_res_free wi )
+}
+
+// ── 2b. identity spelling ────────────────────────────────────────────
+
+@ test_identity → v {
+    // The unit test runs in the package directory, whose basename is `agora`.
+    : String a ( ag_identity_resolve `claude-@cwd` )
+    ( check ( seq ( string_data a ) `claude-agora` ) `identity: @cwd is the working directory's basename` )
+    ( string_free a )
+    : String b ( ag_identity_resolve `@cwd` )
+    ( check ( seq ( string_data b ) `agora` ) `identity: bare @cwd` )
+    ( string_free b )
+    : String c ( ag_identity_resolve `plain` )
+    ( check ( seq ( string_data c ) `plain` ) `identity: no token, no change` )
+    ( string_free c )
+    : String d ( ag_identity_resolve `@cwd-@cwd` )
+    ( check ( seq ( string_data d ) `agora-agora` ) `identity: every occurrence` )
+    ( string_free d )
+    ( check ( ag_identity_from_cwd `claude-@cwd` ) `identity: @cwd spelling is recognised` )
+    ( check ! ( ag_identity_from_cwd `claude` ) `identity: a plain name is not` )
+    // A @cwd name registered from one directory refuses another.
+    : AgStore st ( ag_store )
+    : AgCaller c1 ( ag_caller_local_from st `claude-agora` `/somewhere/agora` 2000 )
+    ( check . c1 authed `identity: first @cwd registration` )
+    ( ag_caller_free c1 )
+    : AgCaller c2 ( ag_caller_local_from st `claude-agora` `/somewhere/agora` 2001 )
+    ( check . c2 authed `identity: same directory again` )
+    ( ag_caller_free c2 )
+    : AgCaller c3 ( ag_caller_local_from st `claude-agora` `/elsewhere/agora` 2002 )
+    ( check ! . c3 authed `identity: another directory with the same basename is refused` )
+    : String why ( string_from ( ag_local_refusal ) )
+    ( check ( string_contains why `/somewhere/agora` ) `identity: and the refusal names the owner` )
+    ( string_free why )
+    ( ag_caller_free c3 )
+    : AgCaller c4 ( ag_caller_local_from st `claude-agora` `` 2003 )
+    ( check . c4 authed `identity: an explicit name (no origin) is never refused` )
+    ( ag_caller_free c4 )
+    ?? ( ag_agent_get st `claude-agora` ) {
+        T a → { ( check ( seq ( string_data . a origin ) `/somewhere/agora` ) `identity: origin recorded` ) ( ag_agent_free a ) }
+        F _ → { ( check F `identity: origin recorded` ) }
+    }
 }
 
 // ── 3. REST ──────────────────────────────────────────────────────────
@@ -469,7 +532,7 @@ $ `src/service.nu`
 
 @ test_mcp → v {
     : McpServer srv ( ag_mcp_server )
-    ( check == ( mcp_server_tool_count srv ) 24 `mcp: 24 tools from the catalog` )
+    ( check == ( mcp_server_tool_count srv ) 25 `mcp: 25 tools from the catalog` )
     : String tl ( mcp srv `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` ( json_null ) )
     ( check ( has tl `"name":"task_claim"` ) `mcp: tools/list` )
     ( check ( has tl `"required":["id"]` ) `mcp: schemas carry required` )
@@ -514,6 +577,7 @@ $ `src/service.nu`
     ( ag_store_free st )
     ( test_migration )
     ( test_ops )
+    ( test_identity )
     : *HttpApp app ( ag_build_app 1 T )
     : Router r ( http_app_router app )
     ( test_rest r )

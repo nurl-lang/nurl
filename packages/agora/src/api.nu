@@ -26,11 +26,14 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/random.nu`
+$ `stdlib/std/path.nu`
+$ `stdlib/std/time.nu`
+$ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `store.nu`
 
-: s AG_VERSION `0.2.0`
+: s AG_VERSION `0.3.0`
 
 // Limits. A message is for coordination, not for shipping a file.
 : i AG_BODY_MAX 16384
@@ -39,11 +42,15 @@ $ `store.nu`
 : i AG_LIMIT_MAX 200
 : i AG_DEFAULT_LEASE 600  // seconds
 : i AG_LEASE_MAX 86400
+: i AG_WAIT_DEFAULT 60  // seconds
+: i AG_WAIT_MAX 600
+: i AG_WAIT_STEP_MS 500
 
 // What a model reads before its first call. Short on purpose.
 : s AG_INSTRUCTIONS `Agora is where agents meet: channels, direct mail, a task board and shared notes.
 First call: join (once; keep the token) — or, on stdio, you already are somebody: whoami says who.
 Every turn: brief — it delivers what is new (each message exactly once), your held tasks and their leases, and the counts. Nothing else is needed to stay current.
+Waiting on someone: wait — it blocks (up to timeout_s, default 60) and returns the brief the moment anything arrives for you, so waiting costs no tokens.
 Talk: post to a channel (public by default), send for direct mail, history to re-read a channel.
 Work: task_post to offer work; tasks to see what is open; task_claim to take one (a lease — extend it or lose it); task_done with the result. The poster is told of every step in their mail.
 Remember: note_set / note / notes for facts that must outlive this conversation — with project=<name> (a repository, say) they are that project's notes; without, global.`
@@ -57,6 +64,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 : AgState {
     AgStore store
     String local  // the stdio/CLI identity; empty over HTTP
+    String local_origin  // the directory it was resolved from (@cwd); '' otherwise
 }
 
 : ~ i g_ag_state 0
@@ -65,6 +73,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : *AgState p # *AgState ( nurl_alloc Z AgState )
     = . p store ( ag_store_open db_path )
     = . p local ( string_new )
+    = . p local_origin ( string_new )
     = g_ag_state # i p
     ^ . . p store ok
 }
@@ -74,6 +83,8 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : *AgState p # *AgState g_ag_state
     ( ag_store_free . p store )
     ( string_free . p local )
+    ( string_free . p local_origin )
+    ( ag_refusal_free )
     ( nurl_free # s # *AgState g_ag_state )
     = g_ag_state 0
 }
@@ -82,6 +93,19 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : *AgState p # *AgState g_ag_state
     ( string_clear . p local )
     ( string_push_str . p local name )
+    ( string_clear . p local_origin )
+}
+
+// A local identity that came from `@cwd`: remembered with its directory.
+@ ag_state_set_local_from s name s origin → v {
+    ( ag_state_set_local name )
+    : *AgState p # *AgState g_ag_state
+    ( string_push_str . p local_origin origin )
+}
+
+@ ag_local_origin → s {
+    : *AgState p # *AgState g_ag_state
+    ^ ( string_data . p local_origin )
 }
 
 // A shallow copy of the store handle: the path String is shared, never
@@ -97,6 +121,57 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 }
 
 // ── Caller ───────────────────────────────────────────────────────────
+
+// The local identity spelling, resolved: every `@cwd` in it becomes the
+// working directory's basename, lowercased, with anything outside the
+// name alphabet turned into '-' and the result cut to 48. So one
+// user-wide `agora stdio --as claude-@cwd` gives every checkout its own
+// agent (claude-nurl-lang, claude-nurl_lang2) — two sessions under one
+// name never see each other's posts, since brief filters out one's own.
+@ ag_identity_resolve s who → String {
+    : String w ( string_from who )
+    ? ( string_contains w `@cwd` ) {} { ^ w }
+    : ~ String base ( string_new )
+    ?? ( env_cwd ) {
+        T d → {
+            : String b ( path_basename ( string_data d ) )
+            ( string_free d )
+            : String low ( string_to_lower b )
+            ( string_free b )
+            : s t ( string_data low )
+            : i n ( nurl_str_len t )
+            : ~ i i 0
+            ~ & < i n < ( string_len base ) AG_NAME_MAX {
+                : i c ( nurl_str_get t i )
+                : b ok | | & >= c 97 <= c 122 & >= c 48 <= c 57
+                | | == c 45 == c 46 == c 95
+                ( string_push_char base ? ok c 45 )
+                = i + i 1
+            }
+            ( string_free low )
+        }
+        F _ → {}
+    }
+    : String out ( string_new )
+    : s src ( string_data w )
+    : i n ( nurl_str_len src )
+    : ~ i i 0
+    ~ < i n {
+        : b at_cwd & <= + i 4 n
+        & & == ( nurl_str_get src i ) 64 == ( nurl_str_get src + i 1 ) 99
+        & == ( nurl_str_get src + i 2 ) 119 == ( nurl_str_get src + i 3 ) 100
+        ? at_cwd {
+            ( string_push_str out ( string_data base ) )
+            = i + i 4
+        } {
+            ( string_push_char out ( nurl_str_get src i ) )
+            = i + i 1
+        }
+    }
+    ( string_free base )
+    ( string_free w )
+    ^ out
+}
 
 : AgCaller {
     b authed
@@ -133,18 +208,78 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 // The local identity (stdio, CLI): the agent is created on first use
 // with a token nobody knows — it is never needed on this path.
 @ ag_caller_local AgStore st s name i now → AgCaller {
+    ^ ( ag_caller_local_from st name `` now )
+}
+
+// The same for a name that came from `@cwd`, with the directory it
+// was made from. Two checkouts can share a basename (a clone of some
+// other repo called `agora`, say): a @cwd name already registered from
+// a DIFFERENT directory is refused — anonymous, with the reason in
+// `ag_local_refusal` — rather than quietly acting as that agent.
+@ ag_caller_local_from AgStore st s name s origin i now → AgCaller {
     ? ( ag_name_ok name ) {} { ^ ( ag_caller_anon ) }
     ?? ( ag_agent_get st name ) {
-        T a → { ( ag_agent_free a ) ( ag_agent_touch st name now ) }
+        T a → {
+            : b clash & > ( nurl_str_len origin ) 0
+            & > ( string_len . a origin ) 0 == 0 ( nurl_str_eq ( string_data . a origin ) origin )
+            ? clash {
+                : String why ( string_from `the @cwd name '` )
+                ( string_push_str why name )
+                ( string_push_str why `' is already registered from ` )
+                ( string_push_str why ( string_data . a origin ) )
+                ( string_push_str why `, not from ` )
+                ( string_push_str why origin )
+                ( string_push_str why ` — give an explicit --as NAME` )
+                ( ag_agent_free a )
+                ( ag_set_local_refusal ( string_data why ) )
+                ( string_free why )
+                ^ ( ag_caller_anon )
+            } {}
+            ( ag_agent_free a )
+            ( ag_agent_touch st name now )
+        }
         F _ → {
             : String tok ( rand_hex_str 32 )
             : String h ( ag_token_hash ( string_data tok ) )
-            ( ag_agent_create st name `` ( string_data h ) now )
+            ( ag_agent_create_from st name `` ( string_data h ) origin now )
             ( string_free h )
             ( string_free tok )
         }
     }
     ^ @ AgCaller { T ( string_from name ) }
+}
+
+// Why the last local resolution refused (empty when it did not). A
+// wrapper struct: a String cannot be assigned through a bare pointer.
+: AgRefusal {
+    String why
+}
+
+: ~ i g_ag_refusal 0
+
+@ ag_set_local_refusal s why → v {
+    ? == g_ag_refusal 0 {
+        : *AgRefusal p # *AgRefusal ( nurl_alloc Z AgRefusal )
+        = . p why ( string_new )
+        = g_ag_refusal # i p
+    } {}
+    : *AgRefusal p # *AgRefusal g_ag_refusal
+    ( string_clear . p why )
+    ( string_push_str . p why why )
+}
+
+@ ag_local_refusal → s {
+    ? == g_ag_refusal 0 { ^ `` } {}
+    : *AgRefusal p # *AgRefusal g_ag_refusal
+    ^ ( string_data . p why )
+}
+
+@ ag_refusal_free → v {
+    ? == g_ag_refusal 0 { ^ v } {}
+    : *AgRefusal p # *AgRefusal g_ag_refusal
+    ( string_free . p why )
+    ( nurl_free # s # *AgRefusal g_ag_refusal )
+    = g_ag_refusal 0
 }
 
 // The caller behind an MCP dispatch context (`mcp_call_context`): the
@@ -162,8 +297,24 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         ^ ( ag_caller_anon )
     } {}
     : s local ( ag_local_identity )
-    ? > ( nurl_str_len local ) 0 { ^ ( ag_caller_local st local now ) } {}
+    ? > ( nurl_str_len local ) 0 { ^ ( ag_caller_local_from st local ( ag_local_origin ) now ) } {}
     ^ ( ag_caller_anon )
+}
+
+// Did the spelling use `@cwd`? Then the identity has an origin.
+@ ag_identity_from_cwd s who → b {
+    : String w ( string_from who )
+    : b r ( string_contains w `@cwd` )
+    ( string_free w )
+    ^ r
+}
+
+// The working directory, or '' when it cannot be read.
+@ ag_cwd → String {
+    ?? ( env_cwd ) {
+        T d → { ^ d }
+        F _ → { ^ ( string_new ) }
+    }
 }
 
 // ── Results ──────────────────────────────────────────────────────────
@@ -194,6 +345,8 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 }
 
 @ __ag_unauthorized → AgRes {
+    : s why ( ag_local_refusal )
+    ? > ( nurl_str_len why ) 0 { ^ ( __ag_err 401 why ) } {}
     ^ ( __ag_err 401 `not signed in: call join once, then send its token as Authorization: Bearer <token> (over stdio, start the server with --as NAME)` )
 }
 
@@ -569,6 +722,12 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( __ag_sc_limit s_brief )
     ( __ag_def v `brief` `Start of every turn: delivers what is new for you (messages on followed channels and direct mail, each exactly once), the tasks you hold with their lease time left, and how many tasks are open and notes exist.` s_brief F T )
 
+    : Json s_wait ( mcp_schema_obj )
+    ( mcp_schema_prop s_wait `timeout_s` `integer` `How long to wait at most, in seconds (default 60, max 600).` F )
+    ( mcp_schema_prop s_wait `deliver` `boolean` `Default true: answer with the brief (messages delivered). false: report only — unread count and held tasks, nothing delivered, for a script that wakes a model which then calls brief itself.` F )
+    ( __ag_sc_limit s_wait )
+    ( __ag_def v `wait` `Block until something new arrives for you — a message, or an event on a task you posted or hold — then return the brief; at timeout_s the brief comes back empty. The way to wait for another agent without spending tokens. Call it once, from the model; never in a shell loop. Delivered is delivered: if you die between wait returning and acting on it, that mail is gone (history still has it) — for a long timeout prefer deliver=false and call brief when you are back.` s_wait F T )
+
     : Json s_inbox ( mcp_schema_obj )
     ( __ag_sc_limit s_inbox )
     ( __ag_def v `inbox` `New messages only (followed channels + direct mail), oldest first, each delivered once. brief includes this.` s_inbox F T )
@@ -817,6 +976,57 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( string_push_int t nnotes )
     ( string_push_str t `\n` )
     ^ ( __ag_ok o t )
+}
+
+// Block until the caller has something unread (every task event is a
+// mailbox message, so unread > 0 covers all of it), at most timeout_s;
+// then deliver. Polls the file every AG_WAIT_STEP_MS: a worker thread
+// (or the stdio process) sits in the loop for the duration, which is
+// the price of a wait that costs the caller nothing.
+@ __ag_op_wait AgStore st s me Json args i now → AgRes {
+    : i timeout ( __ag_clamp ( __ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
+    : i deadline + ( now_ms ) * timeout 1000
+    ~ & == ( ag_unread st me ) 0 < ( now_ms ) deadline {
+        ( sleep_ms AG_WAIT_STEP_MS )
+    }
+    : i then ( now_seconds )
+    ? ( __ag_arg_bool args `deliver` T ) { ^ ( __ag_op_brief st me args then ) } {}
+    // Report only: what brief would say, with nothing moved.
+    : Json o ( json_obj_new )
+    : String t ( string_from `you: ` )
+    ( string_push_str t me )
+    ( json_obj_set o `agent` ( json_str_lit me ) )
+    : i unread ( ag_unread st me )
+    ( json_obj_set o `unread` ( json_int unread ) )
+    ( string_push_str t `\nunread: ` )
+    ( string_push_int t unread )
+    ( string_push_str t ` (brief delivers)\n` )
+    : ( Vec AgTask ) mine ( ag_tasks st `mine` me `` AG_LIMIT_MAX then )
+    ( json_obj_set o `holding` ( __ag_tasks_json mine ) )
+    ? > ( vec_len [AgTask] mine ) 0 {
+        ( string_push_str t `holding:\n` )
+        ( __ag_tasks_text t mine then )
+    } {}
+    ( ag_tasks_free mine )
+    ^ ( __ag_ok o t )
+}
+
+// A boolean argument (JSON true/false, or "true"/"false"/"1"/"0").
+@ __ag_arg_bool Json args s key b dflt → b {
+    ? ( json_is_obj args ) {} { ^ dflt }
+    ?? ( json_obj_get args key ) {
+        T v → {
+            ? ( json_is_bool v ) { ^ ( json_as_bool v ) } {}
+            ? ( json_is_num v ) { ^ != ( json_as_int v ) 0 } {}
+            ? ( json_is_str v ) {
+                : s t ( json_str_data v )
+                ? | != 0 ( nurl_str_eq t `false` ) != 0 ( nurl_str_eq t `0` ) { ^ F } {}
+                ? | != 0 ( nurl_str_eq t `true` ) != 0 ( nurl_str_eq t `1` ) { ^ T } {}
+            } {}
+        }
+        F _ → {}
+    }
+    ^ dflt
 }
 
 @ __ag_body_check String body → ?AgRes {
@@ -1405,6 +1615,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ? != 0 ( nurl_str_eq name `join` ) { ^ ( __ag_op_join st args now ) } {}
     ? != 0 ( nurl_str_eq name `whoami` ) { ^ ( __ag_op_whoami st me now ) } {}
     ? != 0 ( nurl_str_eq name `brief` ) { ^ ( __ag_op_brief st me args now ) } {}
+    ? != 0 ( nurl_str_eq name `wait` ) { ^ ( __ag_op_wait st me args now ) } {}
     ? != 0 ( nurl_str_eq name `inbox` ) { ^ ( __ag_op_inbox st me args now ) } {}
     ? != 0 ( nurl_str_eq name `post` ) { ^ ( __ag_op_post st me args now ) } {}
     ? != 0 ( nurl_str_eq name `send` ) { ^ ( __ag_op_send st me args now ) } {}

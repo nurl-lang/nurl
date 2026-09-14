@@ -2,7 +2,8 @@
 //
 // Tables (all in the one file; see SPEC.md §4):
 //   agents    who has joined: id (the slug), what they said about
-//             themselves, the sha256 of their bearer token, when seen
+//             themselves, the sha256 of their bearer token, when seen,
+//             and for a `@cwd` identity the directory it came from
 //   channels  named topics; `public` exists from the start
 //   follows   which channels each agent reads
 //   messages  one row per post, in one global sequence (the id), so
@@ -38,6 +39,7 @@ $ `stdlib/ext/sqlite.nu`
     String about
     i created
     i seen
+    String origin  // the working directory a @cwd identity was made from; '' otherwise
 }
 
 : AgChannel {
@@ -87,6 +89,7 @@ $ `stdlib/ext/sqlite.nu`
 @ ag_agent_free sink AgAgent a → v {
     ( string_free . a id )
     ( string_free . a about )
+    ( string_free . a origin )
 }
 
 @ ag_agents_free sink ( Vec AgAgent ) v → v {
@@ -183,7 +186,7 @@ $ `stdlib/ext/sqlite.nu`
 
 @ __ag_schema → ( Vec String ) {
     : ( Vec String ) v ( vec_new [String] )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '')` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS channels (name TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS follows (agent TEXT NOT NULL, channel TEXT NOT NULL, PRIMARY KEY (agent, channel))` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, sender TEXT NOT NULL, body TEXT NOT NULL, reply_to INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)` ) )
@@ -212,6 +215,10 @@ $ `stdlib/ext/sqlite.nu`
         T db → {
             ?? ( sqlite_exec db `PRAGMA journal_mode=WAL` ) { T _ → {} F _ → {} }
             : b old_notes ( __ag_notes_need_project db )
+            // 0.3.0: agents.origin. Adding a column needs no copy.
+            ? ( __ag_table_lacks db `agents` `origin` ) {
+                ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN origin TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
+            } {}
             ? old_notes {
                 ?? ( sqlite_exec db `ALTER TABLE notes RENAME TO notes_v1` ) { T _ → {} F _ → {} }
             } {}
@@ -245,19 +252,30 @@ $ `stdlib/ext/sqlite.nu`
 // (project, key). T when the table exists without the project column,
 // so ag_store_open moves the rows over (a global note keeps its key
 // under project '').
-@ __ag_notes_need_project Database db → b {
+@ __ag_notes_need_project Database db → b { ^ ( __ag_table_lacks db `notes` `project` ) }
+
+// T when `table` exists without `column` — the shape of every
+// "an older file" test here.
+@ __ag_table_lacks Database db s table s column → b {
     : ~ b has_table F
-    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes'` ) {
+    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1` ) {
         F _ → {}
-        T q → { ? ( __ag_row q ) { = has_table > ( sqlite_column_int q 0 ) 0 } {} }
+        T q → {
+            ( __ag_bind_s q 1 table )
+            ? ( __ag_row q ) { = has_table > ( sqlite_column_int q 0 ) 0 } {}
+        }
     }
     ? has_table {} { ^ F }
-    : ~ b has_project F
-    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'project'` ) {
+    : ~ b has_col F
+    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2` ) {
         F _ → {}
-        T q → { ? ( __ag_row q ) { = has_project > ( sqlite_column_int q 0 ) 0 } {} }
+        T q → {
+            ( __ag_bind_s q 1 table )
+            ( __ag_bind_s q 2 column )
+            ? ( __ag_row q ) { = has_col > ( sqlite_column_int q 0 ) 0 } {}
+        }
     }
-    ^ ! has_project
+    ^ ! has_col
 }
 
 // ── Statement helpers ─────────────────────────────────────────────────
@@ -319,18 +337,24 @@ $ `stdlib/ext/sqlite.nu`
 // dump the whole history into the first brief. `ag_history` is for
 // the past.
 @ ag_agent_create AgStore st s id s about s token_hash i now → b {
+    ^ ( ag_agent_create_from st id about token_hash `` now )
+}
+
+// The same, recording where a @cwd identity came from.
+@ ag_agent_create_from AgStore st s id s about s token_hash s origin i now → b {
     : ~ b ok F
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
             ? ( __ag_begin db ) {} { ^ F }
-            ?? ( sqlite_prepare db `INSERT INTO agents (id, about, token_hash, created, seen) VALUES (?1, ?2, ?3, ?4, ?4)` ) {
+            ?? ( sqlite_prepare db `INSERT INTO agents (id, about, token_hash, created, seen, origin) VALUES (?1, ?2, ?3, ?4, ?4, ?5)` ) {
                 F _ → {}
                 T q → {
                     ( __ag_bind_s q 1 id )
                     ( __ag_bind_s q 2 about )
                     ( __ag_bind_s q 3 token_hash )
                     ( __ag_bind_i q 4 now )
+                    ( __ag_bind_s q 5 origin )
                     = ok ( __ag_run q )
                 }
             }
@@ -431,16 +455,17 @@ $ `stdlib/ext/sqlite.nu`
         ( sqlite_column_text q 1 )
         ( sqlite_column_int q 2 )
         ( sqlite_column_int q 3 )
+        ( sqlite_column_text q 4 )
     }
 }
 
 @ ag_agent_get AgStore st s id → ?AgAgent {
     : ~ b found F
-    : ~ AgAgent out @ AgAgent { ( string_new ) ( string_new ) 0 0 }
+    : ~ AgAgent out @ AgAgent { ( string_new ) ( string_new ) 0 0 ( string_new ) }
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, about, created, seen FROM agents WHERE id = ?1` ) {
+            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin FROM agents WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
                     ( __ag_bind_s q 1 id )
@@ -463,7 +488,7 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, about, created, seen FROM agents ORDER BY seen DESC` ) {
+            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin FROM agents ORDER BY seen DESC` ) {
                 F _ → {}
                 T q → {
                     ~ ( __ag_row q ) { ( vec_push [AgAgent] out ( __ag_read_agent q ) ) }

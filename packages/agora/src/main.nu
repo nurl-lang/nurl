@@ -3,6 +3,10 @@
 //   agora serve [--addr HOST:PORT] [--workers N] [--quiet]
 //                                      HTTP: REST at /api, MCP at /mcp
 //   agora stdio --as NAME              MCP over stdin/stdout as NAME
+//                                      (`@cwd` in NAME = the working
+//                                      directory's basename, so one
+//                                      user-wide `--as claude-@cwd`
+//                                      names every checkout apart)
 //   agora ops                          list the operations
 //   agora <op> [key=value ...] --as NAME
 //                                      run one operation locally and
@@ -54,7 +58,10 @@ $ `service.nu`
 
 // The local identity: --as, else $AGORA_AGENT. Empty when neither.
 @ __agm_identity CliCtx x → b {
-    : String who ( ctx_str x `as` )
+    : String raw ( ctx_str x `as` )
+    : String who ( ag_identity_resolve ( string_data raw ) )
+    : b from_cwd ( ag_identity_from_cwd ( string_data raw ) )
+    ( string_free raw )
     ? ( ag_name_ok ( string_data who ) ) {} {
         ? > ( string_len who ) 0 {
             ( nurl_eprint `agora: --as must be ` )
@@ -65,7 +72,11 @@ $ `service.nu`
         ( string_free who )
         ^ F
     }
-    ( ag_state_set_local ( string_data who ) )
+    ? from_cwd {
+        : String origin ( ag_cwd )
+        ( ag_state_set_local_from ( string_data who ) ( string_data origin ) )
+        ( string_free origin )
+    } { ( ag_state_set_local ( string_data who ) ) }
     ( string_free who )
     ^ T
 }
@@ -187,7 +198,15 @@ $ `service.nu`
     ? == ( ag_op_auth_kind ( string_data op ) ) 1 {
         ? ( __agm_identity x ) {} { ( string_free op ) ( ag_caller_free caller ) ^ 2 }
         ( ag_caller_free caller )
-        = caller ( ag_caller_local ( ag_store ) ( ag_local_identity ) now )
+        = caller ( ag_caller_local_from ( ag_store ) ( ag_local_identity ) ( ag_local_origin ) now )
+        ? . caller authed {} {
+            ( nurl_eprint `agora: ` )
+            ( nurl_eprintln ( ag_local_refusal ) )
+            ( string_free op )
+            ( json_free ( json_null ) )
+            ( ag_caller_free caller )
+            ^ 2
+        }
     } {}
     : Json args ( json_obj_new )
     : i n ( ctx_nargs x )
@@ -233,7 +252,7 @@ $ `service.nu`
 @ main → i {
     : *Cli c ( cli_new `agora` `The agents' meeting place: channels, direct mail, a task board and shared notes — one SQLite file, served as MCP and REST.` AG_VERSION )
     ( cli_flag_str c `db` 0 `PATH` `the SQLite file (default ~/.agora/agora.db)` `` `AGORA_DB` )
-    ( cli_flag_str c `as` 0 `NAME` `act as this local agent (stdio and direct operations)` `` `AGORA_AGENT` )
+    ( cli_flag_str c `as` 0 `NAME` `act as this local agent (stdio and direct operations); @cwd in NAME = the working directory's basename` `` `AGORA_AGENT` )
     ( cli_flag_str c `addr` 0 `HOST:PORT` `serve: where to listen` AG_DEFAULT_ADDR `AGORA_ADDR` )
     ( cli_flag_int c `workers` 0 `N` `serve: worker threads (0 = one per CPU)` 0 `AGORA_WORKERS` )
     ( cli_flag_bool c `quiet` 0 `serve: no access log or banner` )
