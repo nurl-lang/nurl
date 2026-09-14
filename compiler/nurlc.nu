@@ -16391,12 +16391,58 @@
         : i flag ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` row ) ) )
         ? == ( bck_st_get st flag ) BCK_MOVED {
             = st ( bck_st_set st flag BCK_UNINIT )
+            ( nurl_sym_set g_bck ( nurl_str_cat `dw_` row ) `1` )
             : i end ( bck_match_close start `block` `endblock` )
             = st ( bck_walk_seq + start 1 end st )
             = rest ( nurl_sym_get g_bck `defer_blocks` )
         } {}
     }
     ^ st
+}
+
+// Defer bodies the exit-state sweep never reached.
+//
+// bck_apply_defers walks a site only when its synthetic arming flag is
+// *definitely* MOVED at the exit it is replaying. A `;` written inside a
+// `?` arm, a `??` arm, a `~` body or a foreach body never gets there: the
+// `?` join weakens the flag to MaybeMoved, a `??` arm is walked in
+// isolation and its exit state discarded, and a loop drops the flag as
+// loop-local. The body was then never analysed at all — a double free or
+// a use-after-move written inside such a defer compiled clean. That is
+// what the inverse fuzzer found: 12 findings in 400 seeds, every one a
+// `;` nested in one of those four contexts, and the violation always
+// among bindings the body itself declares.
+//
+// Arming is conditional; the body is not. If the site runs at all, its
+// own statements run in order, so a violation between bindings the body
+// declares is unconditional and diagnosable — the uncertainty is only
+// about names that come from outside. So this sweep borrows the `??`-arm
+// rule (bck_handle_match): walk from an EMPTY state, where every id
+// reads Uninit and only a binding with its own `let` row inside the body
+// becomes tracked. Such a binding is body-local by construction, nothing
+// an outer name does can fire here, and the resulting state is discarded
+// rather than merged back — so this cannot report anything that was not
+// a definite bug. Moving a body-local binding twice is still caught,
+// because the first move is what makes it tracked.
+//
+// Sites already replayed against a real exit state are skipped (`dw_`),
+// keeping their sharper outer-binding diagnostics; the warnset would
+// deduplicate a repeat anyway.
+@ bck_sweep_unwalked_defers → v {
+    : ~ s rest ( nurl_sym_get g_bck `defer_blocks` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s row ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq ( nurl_sym_get g_bck ( nurl_str_cat `dw_` row ) ) `1` ) {} {
+            ( nurl_sym_set g_bck ( nurl_str_cat `dw_` row ) `1` )
+            : i start ( nurl_str_to_int row )
+            : i end ( bck_match_close start `block` `endblock` )
+            : s dead ( bck_walk_seq + start 1 end `` )
+            // Reference the walk's result in a void `?` so the body
+            // type-checks as `v` without a spurious unused binding.
+            ? != 0 ( nurl_str_len dead ) {} {}
+        }
+    }
 }
 
 // `?` — split at the explicit else edge and walk both complete arm
@@ -16571,6 +16617,9 @@
             : s index ( nurl_str_int row )
             : i flag ( bck_intern ( nurl_str_cat `$defer:` index ) )
             ( nurl_sym_set g_bck ( nurl_str_cat `df_` index ) ( nurl_str_int flag ) )
+            // Fresh per function: `dw_` rows left by an earlier function
+            // would otherwise mark this one's sites as already walked.
+            ( nurl_sym_set g_bck ( nurl_str_cat `dw_` index ) `0` )
             ( nurl_sym_set g_bck `defer_blocks`
             ( nurl_str_cat3 index ` ` ( nurl_sym_get g_bck `defer_blocks` ) ) )
         } {}
@@ -16586,6 +16635,9 @@
     // Walk from the seeded state. n == 0 (no records) walks nothing.
     : s final ( bck_walk_seq 0 n seed )
     ? ! ( seq final `!` ) { : s cleanup ( bck_apply_defers final ) } {}
+    // Every `ret` row replayed the defers armed on its path; anything
+    // still unwalked is a conditionally-armed site, analysed body-local.
+    ( bck_sweep_unwalked_defers )
     // `final` is the function's exit state; the walk inspects it no
     // further. Reference it in a void `?` so the body type-checks as
     // `v` without a spurious unused binding.

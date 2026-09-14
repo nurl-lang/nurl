@@ -1254,8 +1254,18 @@ on; they are not two separate tools or two separate builds.
    rejection for an unrelated reason does not count. A missed rejection is
    the one failure mode nothing else here catches — the program compiles,
    runs, and corrupts the heap. Its first sweep (0.53.0) found exactly
-   that in two contexts, a `??` arm and a closure body; both are now
-   analysed, and 400 seeds at depth 4 are clean.
+   that in two contexts, a `??` arm and a closure body, and its first
+   *weekly CI* run found a third: a `;` defer body, in every context that
+   arms the defer only conditionally (a `?` arm, a `??` arm, a `~` body,
+   a foreach body). A defer body is not analysed where it is written but
+   replayed at function exit, and only a site the exit state showed as
+   definitely armed was replayed — the `?` join weakens that arming to
+   maybe, a `??` arm discards it, a loop drops it as loop-local, so those
+   bodies were never walked at all. Arming is conditional; the body is
+   not, so a site the exit replay does not reach is now swept from an
+   EMPTY state (the `??`-arm rule above), tracking only the bindings the
+   body itself declares. All three are analysed now, and 400 seeds at
+   depth 4 are clean.
 
 ## 7. Leaks versus memory safety
 

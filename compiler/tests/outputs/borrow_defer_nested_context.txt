@@ -1,0 +1,11 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_defer_nested_context.nu:50: error: use of moved value 'd' — a heap handle has exactly one owner, and this one was consumed at line 49 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+            ( vec_free [i] d )
+compiler/tests/borrow_defer_nested_context.nu:39: error: use of moved value 'c' — a heap handle has exactly one owner, and this one was consumed at line 38 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+            ( vec_free [i] c )
+compiler/tests/borrow_defer_nested_context.nu:27: error: use of moved value 'b' — a heap handle has exactly one owner, and this one was consumed at line 26 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+                ( vec_free [i] b )
+compiler/tests/borrow_defer_nested_context.nu:17: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 16 by vec_free. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+            ( vec_free [i] a )
+error: compilation aborted — 4 borrow-checker violations (re-run with --no-borrowck to bypass)

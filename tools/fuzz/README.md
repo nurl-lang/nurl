@@ -239,6 +239,37 @@ cleanup block (invalid IR), field/element stores skipping width coercion
 match literal constraint disagree with the arm's own payload binding
 (miscompile class).
 
+## Bugs found (2026-09-14, inverse oracle — first weekly CI catch)
+
+The first finding from the scheduled run rather than a hand-launched one:
+**12 of 400 reject seeds compiled clean**, and all twelve were the same
+hole in a different costume — a definite double free or use-after-move
+written inside a `;` defer body, where the defer itself sits in a `?` arm,
+a `??` arm, a `~` body or a foreach body.
+
+A defer body is not analysed where it is written; it is *replayed* at the
+function's exit, against the ownership holding there, so the walk needs to
+know which sites are armed. That was carried in the lattice as a synthetic
+per-site flag — and only a site whose flag is **definitely** `Moved` at the
+exit was replayed. Each of the four nesting contexts loses that:
+
+* a `?` arm joins armed with unarmed and gets `MaybeMoved`;
+* a `??` arm is walked in isolation and its exit state discarded entirely;
+* a `~` / foreach body drops the flag as loop-local (it has no `pre` entry).
+
+So the body was never walked at all — not conservatively, not partially.
+`;` at function top level was checked; `;` one brace deeper was not.
+
+The fix keeps the conservative reading of *arming* and separates it from the
+body: arming is conditional, the body is not. If the site runs at all, its
+own statements run in order, so a violation between bindings the body itself
+declares is unconditional. Any site the exit replay did not reach is now
+swept from an **empty** state — the same rule `??` arms already use — where
+only a binding with its own `let` row inside the body is tracked, nothing an
+outer name does can fire, and the resulting state is discarded rather than
+merged back. (`borrow_defer_nested_context.nu`, all four contexts in one
+file; 400/400 after the fix.)
+
 ## Bugs found (2026-08-26, inverse oracle)
 
 Two borrow-checker soundness holes, each a **definite** double free that the
