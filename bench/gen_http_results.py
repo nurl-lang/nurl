@@ -6,11 +6,15 @@
 #
 # Input (on stdin):
 #   ENV<TAB>key<TAB>value            one per environment field
-#   ROW scheme name c rps p50 p99 mean   one per closed-loop cell
+#   ROW scheme name c rps p50 p99 mean us_req   one closed-loop cell
 #   HS  scheme name conn_per_s       one connection-setup-rate cell/server
 # scheme is http|https, name is nurl|rust|node; numeric fields are numbers
 # or the literal "n/a" / "FAIL". Latencies are in ms, `mean` is the mean
-# latency in ms used for the effective-concurrency (Little's-law) check.
+# latency in ms used for the effective-concurrency (Little's-law) check,
+# and `us_req` is server CPU microseconds per request (utime+stime from
+# /proc/<pid>/stat over the measured window, divided by the exact
+# response count) — the one column that is not a function of how hard
+# the generator happened to push.
 
 import sys
 
@@ -28,7 +32,7 @@ def num(v):
 
 def main():
     env = {}
-    cells = {}   # (scheme, name, c) -> (rps, p50, p99, mean) strings
+    cells = {}   # (scheme, name, c) -> (rps, p50, p99, mean, us_req) strings
     conn = {}    # (scheme, name) -> conn_per_s string
     for line in sys.stdin:
         line = line.rstrip("\n")
@@ -38,9 +42,9 @@ def main():
                 env[parts[1]] = "\t".join(parts[2:])
         elif line.startswith("ROW "):
             f = line.split()[1:]
-            if len(f) == 7:
-                scheme, name, c, rps, p50, p99, mean = f
-                cells[(scheme, name, c)] = (rps, p50, p99, mean)
+            if len(f) == 8:
+                scheme, name, c, rps, p50, p99, mean, us_req = f
+                cells[(scheme, name, c)] = (rps, p50, p99, mean, us_req)
         elif line.startswith("HS "):
             f = line.split()[1:]
             if len(f) == 3:
@@ -62,7 +66,7 @@ def main():
         cell = cells.get((scheme, name, c))
         if not cell:
             return False
-        rps, _, _, mean = cell
+        rps, _, _, mean = cell[0], cell[1], cell[2], cell[3]
         r, m = num(rps), num(mean)
         if r is None or m is None:
             return False
@@ -81,6 +85,10 @@ def main():
     def fmt_rps(v):
         n = num(v)
         return v if n is None else f"{int(round(n)):,}".replace(",", " ")
+
+    def fmt_cpu(v):
+        n = num(v)
+        return v if n is None else f"{n:.2f}"
 
     def fmt_lat(v):
         n = num(v)
@@ -127,6 +135,20 @@ def main():
         "`req/s x mean-latency` (Little's law)."
     )
     w("")
+    w(
+        "**The `CPU us/req` row is the one to compare across peers.** It is "
+        "server CPU time (`utime+stime` over every thread, read externally "
+        "from `/proc/<pid>/stat` around the measured window) divided by the "
+        "exact number of responses — so unlike `req/s` it does not move when "
+        "the generator pushes harder or softer. Two warnings that cost real "
+        "time to learn: it rises with worker count for **every** runtime "
+        "(~30 % from 1 to 4 workers here), and an unpinned run inflates it "
+        "because the generator is stealing the server's cores. Comparing a "
+        "figure taken at one worker count against a figure taken at another "
+        "manufactures a peer gap out of nothing but concurrency. The "
+        "Environment block above states both, for exactly that reason."
+    )
+    w("")
 
     # ── environment ──────────────────────────────────────────────
     w("## Environment\n")
@@ -156,6 +178,21 @@ def main():
         f"connections at c={env.get('hs_conc','20')}, `--disable-keepalive` |"
     )
     w("| TLS cert | self-signed EC P-256, `CN=localhost` |")
+    if env.get("pinned") == "yes":
+        w(
+            f"| Core isolation | server on cores `{env.get('srv_cores','?')}`, "
+            f"generator on cores `{env.get('gen_cores','?')}` (`taskset`) |"
+        )
+    else:
+        w(
+            "| Core isolation | **none** — server and generator share every "
+            "core, so each cell measures the pair, not the server |"
+        )
+    w(
+        f"| Worker threads | {env.get('workers','?')} per server "
+        "(`NURL_WORKERS` / `TOKIO_WORKER_THREADS`); Node's server is "
+        "single-threaded |"
+    )
     w("")
 
     # ── one throughput/latency table per scheme ──────────────────
@@ -171,6 +208,7 @@ def main():
             ("**req/s**", 0, True, fmt_rps, False),
             ("**p50 (ms)**", 1, False, fmt_lat, True),
             ("**p99 (ms)**", 2, False, fmt_lat, True),
+            ("**CPU us/req**", 4, False, fmt_cpu, False),
         ):
             # Best per concurrency column, ignoring starved latency cells
             # so a starved 0.06 ms never wins (or bolds) a latency row.
@@ -188,7 +226,7 @@ def main():
                 left = metric_label if si == 0 else ""
                 out_cells = []
                 for c in concs:
-                    cell = cells.get((scheme, name, c), ("n/a", "n/a", "n/a", "n/a"))
+                    cell = cells.get((scheme, name, c), ("n/a", "n/a", "n/a", "n/a", "n/a"))
                     raw = cell[idx]
                     txt = fmt(raw)
                     n = num(raw)
@@ -290,14 +328,19 @@ def main():
         f"marked {DAGGER} rather than trusted."
     )
     w(
-        "2. **Core isolation.** Pin the server and the load generator to "
-        "disjoint core sets (`taskset`) and equalise pool sizes, so `oha`'s "
-        "threads do not compete with the server for CPU."
+        "2. ~~**Core isolation.**~~ **Done** — the server and the generator "
+        "run on disjoint core sets via `taskset` and every runtime that "
+        "sizes a pool from `nproc` is given the same worker count. See the "
+        "Environment block; a run on fewer than 4 cores, or without "
+        "`taskset`, says so there instead."
     )
     w(
-        "3. **CPU-time per request.** `getrusage(RUSAGE_SELF)` in each "
-        "server → `(utime+stime)/requests`: the one figure immune to "
-        "loopback, generator contention and pool size."
+        "3. ~~**CPU-time per request.**~~ **Done**, and without the "
+        "`getrusage` call the original plan wanted in each server: "
+        "`utime+stime` read externally from `/proc/<pid>/stat` is the same "
+        "figure and needs no code change in any peer, so NURL, Rust and "
+        "Node are all measured the same way. Divided by the exact response "
+        "count from oha's status-code histogram, never by `rps x duration`."
     )
     w(
         "4. **Record-layer throughput.** Re-run TLS with 16 KB and 1 MB "

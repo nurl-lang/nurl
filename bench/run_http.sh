@@ -69,6 +69,43 @@ have_rs=0;   command -v cargo >/dev/null && have_rs=1
 have_js=0;   command -v node  >/dev/null && have_js=1
 have_ssl=0;  command -v openssl >/dev/null && have_ssl=1
 
+# ── core isolation + worker equalisation ────────────────────────────
+# Planned rigor #2: the load generator must not compete with the server
+# for CPU. Without this every cell measures the pair, not the server —
+# on a 12-core box the default per-core worker count sits PAST the
+# throughput peak once oha's threads are in the way, and CPU/request
+# rises with worker count for every runtime, so an unpinned table can
+# manufacture a large peer "gap" out of nothing but concurrency.
+#
+# The server gets the low half of the cores, oha the high half. Both
+# halves are also the worker count handed to the runtimes that take one
+# (NURL and tokio), so the peers are compared at equal parallelism.
+# Node's http server is single-threaded and is reported as such.
+HOST_NPROC="$(nproc 2>/dev/null || echo 1)"
+PIN=0
+SRV_CORES="${SRV_CORES:-}"
+GEN_CORES="${GEN_CORES:-}"
+if command -v taskset >/dev/null && (( HOST_NPROC >= 4 )); then
+    half=$(( HOST_NPROC / 2 ))
+    [[ -z "$SRV_CORES" ]] && SRV_CORES="0-$((half - 1))"
+    [[ -z "$GEN_CORES" ]] && GEN_CORES="$half-$((HOST_NPROC - 1))"
+    PIN=1
+fi
+SRV_WORKERS="${SRV_WORKERS:-}"
+if [[ -z "$SRV_WORKERS" ]]; then
+    if (( PIN )); then SRV_WORKERS=$(( HOST_NPROC / 2 )); else SRV_WORKERS="$HOST_NPROC"; fi
+fi
+# Applied to the server command; empty when unpinned.
+srv_pin=(); (( PIN )) && srv_pin=(taskset -c "$SRV_CORES")
+gen_pin=(); (( PIN )) && gen_pin=(taskset -c "$GEN_CORES")
+# Equal parallelism for the runtimes that size a pool from nproc.
+srv_env=(env "NURL_WORKERS=$SRV_WORKERS" "TOKIO_WORKER_THREADS=$SRV_WORKERS")
+if (( PIN )); then
+    echo "# pinned: server cores $SRV_CORES, generator cores $GEN_CORES, $SRV_WORKERS workers" >&2
+else
+    echo "# NOT pinned (taskset missing or < 4 cores): server and generator share $HOST_NPROC cores" >&2
+fi
+
 # ── TLS cert (self-signed, EC P-256, localhost) ─────────────────────
 # One cert for all three TLS servers. EC because it exercises the ECDHE
 # + ECDSA path a modern deployment negotiates (and the NURL facade takes
@@ -154,7 +191,13 @@ mean = summary.get("average", 0.0) or 0.0
 lat = r.get("latencyPercentiles", {})
 def ms(v):
     return (v * 1000.0) if isinstance(v, (int, float)) else 0.0
-print(f"{rps:.0f} {ms(lat.get('p50')):.2f} {ms(lat.get('p99')):.2f} {mean*1000.0:.4f}")
+# Exact number of responses, from the status-code histogram. The
+# CPU-per-request figure divides by THIS, never by rps*duration:
+# that approximation is several percent off, which is the size of
+# the very differences the comparison exists to resolve.
+codes = r.get("statusCodeDistribution", {}) or {}
+reqs = sum(codes.values()) if codes else 0
+print(f"{rps:.0f} {ms(lat.get('p50')):.2f} {ms(lat.get('p99')):.2f} {mean*1000.0:.4f} {reqs}")
 PY
 }
 
@@ -162,22 +205,41 @@ PY
 # <scheme>://127.0.0.1:<port>/ for $DURATION seconds at the given
 # concurrency, keep-alive on, and echoes `<rps> <p50> <p99> <mean_ms>`.
 # `scheme` https adds `--insecure` so oha accepts the self-signed cert.
+# Server CPU so far, in clock ticks: utime+stime from /proc/<pid>/stat
+# (fields 14 and 15), which for a thread-group leader are the totals
+# across every thread of the process. Read externally, so it needs no
+# getrusage call inside any peer and works identically for NURL, Rust
+# and Node.
+cpu_ticks() {
+    local pid="$1"
+    awk '{print $14 + $15}' "/proc/$pid/stat" 2>/dev/null || echo ""
+}
+
 run_oha() {
-    local scheme="$1" port="$2" concurrency="$3"
+    local scheme="$1" port="$2" concurrency="$3" pid="${4:-}"
     local report="$BENCH/_build/oha-$scheme-$port-c$concurrency.json"
     local insecure=(); [[ "$scheme" == https ]] && insecure=(--insecure)
     mkdir -p "$BENCH/_build"
 
     # Warmup: hit it briefly so JIT / OS-level caches settle (matters
     # most for Node; harmless on NURL / Rust). oha keeps connections
-    # alive by default; we don't pass --disable-keepalive.
-    "$OHA" --no-tui "${insecure[@]}" -n 1000 -c "$concurrency" \
+    # alive by default; we don't pass --disable-keepalive. Deliberately
+    # OUTSIDE the CPU window below — warmup CPU is not per-request cost.
+    "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" -n 1000 -c "$concurrency" \
         "$scheme://127.0.0.1:$port/" >/dev/null 2>&1 || true
 
-    "$OHA" --no-tui "${insecure[@]}" -j -z "${DURATION}s" -c "$concurrency" \
+    local t0 t1; t0="$(cpu_ticks "$pid")"
+    "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" -j -z "${DURATION}s" -c "$concurrency" \
         "$scheme://127.0.0.1:$port/" > "$report" 2>/dev/null \
-        || { echo "FAIL FAIL FAIL FAIL"; return; }
-    _parse_oha "$report"
+        || { echo "FAIL FAIL FAIL FAIL FAIL FAIL"; return; }
+    t1="$(cpu_ticks "$pid")"
+
+    local parsed; parsed="$(_parse_oha "$report")"
+    # Append the CPU ticks consumed during the measured window; the
+    # caller turns (ticks, requests) into us/request once per cell.
+    local ticks=""
+    [[ -n "$t0" && -n "$t1" ]] && ticks=$(( t1 - t0 ))
+    echo "$parsed ${ticks:-FAIL}"
 }
 
 # Connection-setup-rate cell. `--disable-keepalive` opens a fresh
@@ -192,7 +254,7 @@ run_oha_conn() {
     local scheme="$1" port="$2"
     local report="$BENCH/_build/ohaconn-$scheme-$port.json"
     local insecure=(); [[ "$scheme" == https ]] && insecure=(--insecure)
-    "$OHA" --no-tui "${insecure[@]}" --disable-keepalive -j -n "$HS_REQS" -c "$HS_CONC" \
+    "${gen_pin[@]}" "$OHA" --no-tui "${insecure[@]}" --disable-keepalive -j -n "$HS_REQS" -c "$HS_CONC" \
         "$scheme://127.0.0.1:$port/" > "$report" 2>/dev/null \
         || { echo "FAIL"; return; }
     _parse_oha "$report" | awk '{print $1}'
@@ -268,11 +330,27 @@ run_server() {
     [[ "$1" == "--" ]] && shift
     local cmd=("$@")
 
-    "${cmd[@]}" > "$BENCH/_build/${name}-${scheme}.stdout.log" 2> "$BENCH/_build/${name}-${scheme}.stderr.log" &
+    # Pinned to the server half of the cores, with the worker pool of
+    # every runtime that takes one set to the same number, so the peers
+    # are compared at equal parallelism on cores oha cannot touch.
+    "${srv_pin[@]}" "${srv_env[@]}" "${cmd[@]}" > "$BENCH/_build/${name}-${scheme}.stdout.log" 2> "$BENCH/_build/${name}-${scheme}.stderr.log" &
     local pid=$!
+    # wait_listen only proves SOMETHING accepts on that port — it cannot
+    # tell our server from a stale one left behind by an earlier run. A
+    # benchmark that silently measures a foreign process is worse than
+    # one that fails, so check our own child is still alive and treat a
+    # dead child on a live port as the port conflict it is.
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo "ERROR: $name $scheme died at startup — port $port already in use?" >&2
+        sed -n '1,3p' "$BENCH/_build/${name}-${scheme}.stderr.log" >&2 2>/dev/null
+        local c
+        for c in $CONCURRENCIES; do echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL FAIL"; done
+        echo "HS $scheme $name FAIL"
+        return
+    fi
     if ! wait_listen "$port"; then
         local c
-        for c in $CONCURRENCIES; do echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL"; done
+        for c in $CONCURRENCIES; do echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL FAIL"; done
         echo "HS $scheme $name FAIL"
         stop_pid "$pid"
         return
@@ -280,19 +358,36 @@ run_server() {
 
     # Brief settle window after listen accepts.
     sleep "$(python3 -c "print($SETTLE_MS / 1000.0)")"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo "ERROR: $name $scheme exited during startup; the port was answered by another process" >&2
+        sed -n '1,3p' "$BENCH/_build/${name}-${scheme}.stderr.log" >&2 2>/dev/null
+        local c
+        for c in $CONCURRENCIES; do echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL FAIL"; done
+        echo "HS $scheme $name FAIL"
+        return
+    fi
 
     for c in $CONCURRENCIES; do
         # Run ITERS measurements at each cell, pick the median of rps.
+        # CPU per request is NOT a median: ticks and requests are summed
+        # over every iteration and divided once, so the figure is the
+        # true cost over the whole measured window.
         local rps_list=() p50_list=() p99_list=() mean_list=() i
+        local ticks_sum=0 reqs_sum=0 cpu_ok=1
         for i in $(seq 1 "$ITERS"); do
-            local r rps p50 p99 mean
-            r=$(run_oha "$scheme" "$port" "$c")
-            read -r rps p50 p99 mean <<<"$r"
+            local r rps p50 p99 mean reqs ticks
+            r=$(run_oha "$scheme" "$port" "$c" "$pid")
+            read -r rps p50 p99 mean reqs ticks <<<"$r"
             if [[ "$rps" == "FAIL" ]]; then
-                echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL"
+                echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL FAIL"
                 rps_list=(); break
             fi
             rps_list+=("$rps"); p50_list+=("$p50"); p99_list+=("$p99"); mean_list+=("$mean")
+            if [[ "$ticks" == "FAIL" || "$reqs" == "0" || -z "$reqs" ]]; then
+                cpu_ok=0
+            else
+                ticks_sum=$(( ticks_sum + ticks )); reqs_sum=$(( reqs_sum + reqs ))
+            fi
         done
         (( ${#rps_list[@]} == 0 )) && continue
         local rps_med p50_med p99_med mean_med
@@ -304,7 +399,14 @@ print(int(round(m)))" "${rps_list[@]}")
         p50_med=$(median3 "${p50_list[@]}")
         p99_med=$(median3 "${p99_list[@]}")
         mean_med=$(median3 "${mean_list[@]}")
-        echo "ROW $scheme $name $c $rps_med $p50_med $p99_med $mean_med"
+        local us_req="n/a"
+        if (( cpu_ok )) && (( reqs_sum > 0 )); then
+            us_req=$(python3 -c "
+import os
+hz = os.sysconf('SC_CLK_TCK')
+print('%.2f' % ($ticks_sum / hz / $reqs_sum * 1e6))")
+        fi
+        echo "ROW $scheme $name $c $rps_med $p50_med $p99_med $mean_med $us_req"
     done
 
     # Connection-setup rate (one bounded run, this server still up): plain
@@ -326,7 +428,7 @@ results=()
 collect() { while read -r line; do results+=("$line"); done; }
 na_rows() {
     local scheme="$1" name="$2" c
-    for c in $CONCURRENCIES; do results+=("ROW $scheme $name $c n/a n/a n/a n/a"); done
+    for c in $CONCURRENCIES; do results+=("ROW $scheme $name $c n/a n/a n/a n/a n/a"); done
     results+=("HS $scheme $name n/a")
 }
 
@@ -371,6 +473,10 @@ fi
     printf 'ENV\tconcurrencies\t%s\n' "$CONCURRENCIES"
     printf 'ENV\ths_reqs\t%s\n' "$HS_REQS"
     printf 'ENV\ths_conc\t%s\n' "$HS_CONC"
+    printf 'ENV\tpinned\t%s\n' "$( (( PIN )) && echo yes || echo no )"
+    printf 'ENV\tsrv_cores\t%s\n' "${SRV_CORES:-n/a}"
+    printf 'ENV\tgen_cores\t%s\n' "${GEN_CORES:-n/a}"
+    printf 'ENV\tworkers\t%s\n' "$SRV_WORKERS"
     # run_server / na_rows lines already carry their ROW / HS tag.
     for row in "${results[@]}"; do
         printf '%s\n' "$row"
