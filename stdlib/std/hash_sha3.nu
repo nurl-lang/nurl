@@ -234,36 +234,64 @@ pub @ sha3_free sink * Sha3 h → v {
 // an or and a store apiece for what is one aligned XOR per lane. The
 // byte loops on either side handle only the unaligned head and the
 // ragged tail.
+// `pos` and `last` are byte offsets INSIDE one block, so both are in
+// [0, rate) and never negative. That matters for how the lane index and
+// the bit shift are spelled: NURL's `/` and `%` are signed, and signed
+// division by a power of two has to round toward zero, so `/ pos 8`
+// lowers to a test/cmov/and/sub sequence rather than one shift. Six
+// extra instructions per lane is most of the absorb loop's cost — the
+// sponge's own work is a load and an xor. `>> pos 3` and `& pos 7` are
+// exactly equal to `/ pos 8` and `% pos 8` for a non-negative `pos`,
+// and are one instruction each.
 @ __sha3_absorb_raw * Sha3 h * u p i n → v {
     : *u64 sp ( vec_data [u64] . h st )
     : i rate . h rate
     : ~ i off 0
     : ~ i pos . h pos
+    // Hoisted out of the loop: both are loop-invariant, and re-deriving
+    // them per block cost a dependent load chain once every `rate` bytes.
+    : *u64 scr ( vec_data [u64] . h scr )
+    : *u64 rc ( vec_data [u64] . h rc )
     ~ < off n {
-        ? & == % pos 8 0 & <= + pos 8 rate <= + off 8 n {
-            // aligned whole lane
-            : u64 w | | | | | | |
-            # u64 . p off
-            << # u64 . p + off 1 # u64 8
-            << # u64 . p + off 2 # u64 16
-            << # u64 . p + off 3 # u64 24
-            << # u64 . p + off 4 # u64 32
-            << # u64 . p + off 5 # u64 40
-            << # u64 . p + off 6 # u64 48
-            << # u64 . p + off 7 # u64 56
-            : i lane / pos 8
-            = . sp lane ^^ . sp lane w
-            = off + off 8
-            = pos + pos 8
+        ? & == & pos 7 0 & <= + pos 8 rate <= + off 8 n {
+            // Whole lanes, counted once instead of re-tested per lane.
+            // The guard above says at least one lane fits in both the
+            // block and the remaining input; this asks how many do, so
+            // the inner loop carries no conditionals at all — it is a
+            // load, an xor into the state, and two increments. Assembling
+            // the lane from eight bytes keeps it endian-correct and
+            // alignment-free in the source; LLVM folds the eight loads
+            // back into one 64-bit load (verified in the disassembly).
+            : i lanes_blk >> - rate pos 3
+            : i lanes_dat >> - n off 3
+            : i cnt ? < lanes_blk lanes_dat lanes_blk lanes_dat
+            : i base >> pos 3
+            : ~ i k 0
+            ~ < k cnt {
+                : i o + off << k 3
+                : u64 w | | | | | | |
+                # u64 . p o
+                << # u64 . p + o 1 # u64 8
+                << # u64 . p + o 2 # u64 16
+                << # u64 . p + o 3 # u64 24
+                << # u64 . p + o 4 # u64 32
+                << # u64 . p + o 5 # u64 40
+                << # u64 . p + o 6 # u64 48
+                << # u64 . p + o 7 # u64 56
+                = . sp + base k ^^ . sp + base k w
+                = k + k 1
+            }
+            = off + off << cnt 3
+            = pos + pos << cnt 3
         } {
-            : i lane / pos 8
-            : i sh * 8 % pos 8
+            : i lane >> pos 3
+            : i sh * 8 & pos 7
             = . sp lane ^^ . sp lane << # u64 . p off # u64 sh
             = off + off 1
             = pos + pos 1
         }
         ? >= pos rate {
-            ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
+            ( __keccakf1600 sp scr rc )
             = pos 0
         } {}
     }
@@ -284,9 +312,9 @@ pub @ sha3_absorb * Sha3 h ( Vec u ) data → v {
     : *u64 sp ( vec_data [u64] . h st )
     : i pos . h pos
     : i rate . h rate
-    = . sp / pos 8 ^^ . sp / pos 8 << # u64 . h dom # u64 * 8 % pos 8
+    = . sp >> pos 3 ^^ . sp >> pos 3 << # u64 . h dom # u64 * 8 & pos 7
     : i last - rate 1
-    = . sp / last 8 ^^ . sp / last 8 << # u64 128 # u64 * 8 % last 8
+    = . sp >> last 3 ^^ . sp >> last 3 << # u64 128 # u64 * 8 & last 7
     ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
     = . h pos 0
     = . h squeezing T
@@ -311,8 +339,8 @@ pub @ sha3_squeeze * Sha3 h i n → ( Vec u ) {
             ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
             = pos 0
         } {}
-        ? & == % pos 8 0 & <= + pos 8 rate <= + off 8 n {
-            : u64 w . sp / pos 8
+        ? & == & pos 7 0 & <= + pos 8 rate <= + off 8 n {
+            : u64 w . sp >> pos 3
             = . op off # u & # i w 255
             = . op + off 1 # u & # i >> w # u64 8 255
             = . op + off 2 # u & # i >> w # u64 16 255
@@ -324,8 +352,8 @@ pub @ sha3_squeeze * Sha3 h i n → ( Vec u ) {
             = off + off 8
             = pos + pos 8
         } {
-            : u64 w . sp / pos 8
-            = . op off # u & # i >> w # u64 * 8 % pos 8 255
+            : u64 w . sp >> pos 3
+            = . op off # u & # i >> w # u64 * 8 & pos 7 255
             = off + off 1
             = pos + pos 1
         }
