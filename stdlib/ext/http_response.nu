@@ -91,7 +91,9 @@ $ `stdlib/ext/json.nu`
 @ response_new i status → HttpResponse {
     ^ @ HttpResponse {
         status
-        ( vec_new [Header] )
+        // Content-Type, Content-Length, Connection and one more fit
+        // without a regrow on the first push.
+        ( vec_with_cap [Header] 4 )
         ( vec_new [u] )
     }
 }

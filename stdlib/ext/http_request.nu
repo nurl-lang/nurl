@@ -369,6 +369,58 @@ $ `stdlib/std/simd.nu`
     ( vec_free [u] . req body )
 }
 
+// Empty a request for reuse, keeping every allocation: the four line
+// Strings are cleared in place, the headers move — Strings and all —
+// onto `spare`, from where the next parse takes them back, and the body
+// keeps its capacity. A keep-alive connection serves thousands of
+// requests on one HttpRequest this way instead of allocating and
+// freeing ~a dozen objects per request (measured: the allocator family
+// was 10 % of the server's CPU at the 14-byte cell). Pair with
+// `parse_request_head_into`; free `req` and `spare` (headers_free) at
+// connection end.
+@ request_recycle HttpRequest req ( Vec Header ) spare → v {
+    ( string_clear . req method )
+    ( string_clear . req path )
+    ( string_clear . req query )
+    ( string_clear . req version )
+    : i n ( vec_len [Header] . req headers )
+    : *Header hd ( vec_data [Header] . req headers )
+    : ~ i k 0
+    ~ < k n {
+        ( vec_push [Header] spare . hd k )
+        = k + k 1
+    }
+    ( vec_clear [Header] . req headers )
+    ( vec_clear [u] . req body )
+}
+
+// Index of the first header named `name` (case-insensitive), or -1.
+// The borrow-only companion of `header_get`: read the value through
+// `vec_data` and no String is copied.
+@ header_index ( Vec Header ) hs s name → i {
+    : i n ( vec_len [Header] hs )
+    : *Header data ( vec_data [Header] hs )
+    : ~ i k 0
+    ~ < k n {
+        : Header h . data k
+        ? ( __string_eq_ci . h name name ) { ^ k } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
+// Replace s's content with buf[from..to) — clear keeps the capacity, so
+// a String that has held a header before allocates nothing.
+@ __string_set_bytes String s ( Vec u ) buf i from i to → v {
+    ( string_clear s )
+    : i n - to from
+    ? > n 0 {
+        : *u data ( vec_data [u] buf )
+        : *u at # *u + # i data from
+        ( string_push_bytes s at n )
+    } {}
+}
+
 // ── Percent codec (RFC 3986 §2.1) ─────────────────────────────────────
 
 @ __hex_val i c → i {
@@ -563,6 +615,29 @@ $ `stdlib/std/simd.nu`
     ( string_free . r version )
 }
 
+// The allocation-free form: writes method / path / query / version into
+// `req`'s own Strings. F on a malformed line (req is then partially
+// written; the caller discards the request).
+@ __parse_request_line_into ( Vec u ) buf i from i line_end HttpRequest req → b {
+    : i sp1 ( __bindex_byte buf from line_end 32 )
+    ? < sp1 0 { ^ F } {}
+    : i sp2 ( __bindex_byte buf + sp1 1 line_end 32 )
+    ? < sp2 0 { ^ F } {}
+    ? | | <= sp1 from <= sp2 + sp1 1 <= line_end + sp2 1 { ^ F } {}
+    ( __string_set_bytes . req method buf from sp1 )
+    // The target splits at its first '?', as parse_url does.
+    : i q ( __bindex_byte buf + sp1 1 sp2 63 )
+    ? < q 0 {
+        ( __string_set_bytes . req path buf + sp1 1 sp2 )
+        ( string_clear . req query )
+    } {
+        ( __string_set_bytes . req path buf + sp1 1 q )
+        ( __string_set_bytes . req query buf + q 1 sp2 )
+    }
+    ( __string_set_bytes . req version buf + sp2 1 line_end )
+    ^ T
+}
+
 @ __parse_request_line ( Vec u ) buf i from i line_end → ReqLineParts {
     : i sp1 ( __bindex_byte buf from line_end 32 )
     ? < sp1 0 {
@@ -680,6 +755,29 @@ $ `stdlib/std/simd.nu`
 
 @ __parse_headers ( Vec u ) buf i from i head_end i header_max → ParsedHeaders {
     : ( Vec Header ) hs ( vec_new [Header] )
+    : ( Vec Header ) spare ( vec_new [Header] )
+    : i status ( __parse_headers_into buf from head_end header_max hs spare )
+    ( vec_free [Header] spare )
+    ^ @ ParsedHeaders { hs status }
+}
+
+// A Header for buf[nf..nt) / buf[vf..vt): one taken back from `spare`
+// when there is one (its Strings keep their capacity), else new.
+@ __hdr_recycled ( Vec Header ) spare ( Vec u ) buf i nf i nt i vf i vt → Header {
+    ?? ( vec_pop [Header] spare ) {
+        T h → {
+            ( __string_set_bytes . h name buf nf nt )
+            ( __string_set_bytes . h value buf vf vt )
+            ^ h
+        }
+        F _ → {}
+    }
+    ^ @ Header { ( _bsubstr buf nf nt ) ( _bsubstr buf vf vt ) }
+}
+
+// Parse the header block into `hs` (must be empty), recycling Headers
+// from `spare`. Returns 1 = ok, 0 = malformed, 2 = too many.
+@ __parse_headers_into ( Vec u ) buf i from i head_end i header_max ( Vec Header ) hs ( Vec Header ) spare → i {
     : ~ i pos from
     : ~ i status 1  // 1 = ok, 0 = malformed, 2 = too-large
     : ~ b done F
@@ -707,8 +805,7 @@ $ `stdlib/std/simd.nu`
                             ? >= ( vec_len [Header] hs ) header_max {
                                 = status 2 = done T
                             } {
-                                : String name ( _bsubstr buf pos name_end )
-                                : String value ( _bsubstr buf v_start v_end )
+                                : Header newh ( __hdr_recycled spare buf pos name_end v_start v_end )
                                 // Folding: if a prior header has the same case-insens
                                 // name, append ", " + value to its value field.
                                 // Direct *Header iteration — `vec_get` would copy
@@ -721,9 +818,9 @@ $ `stdlib/std/simd.nu`
                                 : ~ i fk 0
                                 ~ & ! folded < fk hcount {
                                     : Header h . hdata fk
-                                    ? ( __string_eq_ci . h name ( string_data name ) ) {
+                                    ? ( __string_eq_ci . h name ( string_data . newh name ) ) {
                                         ( string_push_str . h value `, ` )
-                                        ( string_push_str . h value ( string_data value ) )
+                                        ( string_push_str . h value ( string_data . newh value ) )
                                         = folded T
                                     } {}
                                     = fk + fk 1
@@ -733,13 +830,12 @@ $ `stdlib/std/simd.nu`
                                     // are singletons (RFC 9112 §5.3 / §6.3): a
                                     // second occurrence is a smuggling vector,
                                     // not a list to comma-combine. Reject rather
-                                    // than fold.
-                                    : b singleton ( __http_is_singleton_name name )
-                                    ( string_free name )
-                                    ( string_free value )
+                                    // than fold. The unused Header goes back
+                                    // to spare, Strings and all.
+                                    : b singleton ( __http_is_singleton_name . newh name )
+                                    ( vec_push [Header] spare newh )
                                     ? singleton { = status 0 = done T } {}
                                 } {
-                                    : Header newh @ Header { name value }
                                     ( vec_push [Header] hs newh )
                                 }
                                 = pos + nl 2
@@ -750,7 +846,7 @@ $ `stdlib/std/simd.nu`
             }
         }
     }
-    ^ @ ParsedHeaders { hs status }
+    ^ status
 }
 
 // ── parse_request_head ────────────────────────────────────────────────
@@ -760,52 +856,67 @@ $ `stdlib/std/simd.nu`
 }
 
 @ parse_request_head_with ( Vec u ) buf HttpLimits limits → !ParsedHeadOk HttpReqErr {
+    : HttpRequest req ( request_new )
+    : ( Vec Header ) spare ( vec_new [Header] )
+    : !i HttpReqErr r ( parse_request_head_into buf limits req spare )
+    ( vec_free [Header] spare )
+    ?? r {
+        T consumed → { ^ @ !ParsedHeadOk HttpReqErr { T @ ParsedHeadOk { req consumed } } }
+        F e → {
+            ( request_free req )
+            ^ @ !ParsedHeadOk HttpReqErr { F e }
+        }
+    }
+}
+
+// The allocation-free parse: fills a caller-owned `req` (empty, or
+// emptied by `request_recycle`), taking Header objects back from `spare`
+// before allocating new ones. Ok carries the number of bytes consumed
+// (head + closing CRLF). Nothing is written into `req` before the head
+// terminator has been seen, so an Incomplete result leaves it untouched
+// and the caller can read more and call again; after any other error
+// `req` is partially written and should be recycled or freed.
+@ parse_request_head_into ( Vec u ) buf HttpLimits limits HttpRequest req ( Vec Header ) spare → !i HttpReqErr {
     : i head_max . limits head_max_bytes
     : i header_max . limits header_max_count
     : i blen ( vec_len [u] buf )
     : i head_end ( __find_head_end buf 0 )
     ? < head_end 0 {
         ? > blen head_max {
-            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
+            ^ @ !i HttpReqErr { F # HttpReqErr HttpReqTooLarge }
         } {}
-        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqIncomplete }
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqIncomplete }
     } {}
     ? > + head_end 4 head_max {
-        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqTooLarge }
     } {}
 
     : i line_end ( __bindex_crlf buf 0 head_end )
     ? < line_end 0 {
-        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
-    : ReqLineParts rl ( __parse_request_line buf 0 line_end )
-    ? ! . rl ok {
-        ( __req_line_parts_free rl )
-        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
-    } {}
+    ? ( __parse_request_line_into buf 0 line_end req ) {} {
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqMalformed }
+    }
 
-    : s vraw ( string_data . rl version )
+    : s vraw ( string_data . req version )
     : b v10 != 0 ( nurl_str_eq vraw `HTTP/1.0` )
     : b v11 != 0 ( nurl_str_eq vraw `HTTP/1.1` )
     ? ! | v10 v11 {
-        ( __req_line_parts_free rl )
-        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqUnsupportedVersion }
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqUnsupportedVersion }
     } {}
 
     // `head_end` is the position of the FIRST CRLF in the closing
     // \r\n\r\n — i.e., the trailing CRLF of the last header line. The
     // header parser scans up to (but not including) the empty CRLF,
     // which starts at `head_end + 2`.
-    : ParsedHeaders hr ( __parse_headers buf + line_end 2 + head_end 2 header_max )
-    : i hstatus . hr status
+    : i hstatus ( __parse_headers_into buf + line_end 2 + head_end 2 header_max . req headers spare )
     ? != hstatus 1 {
-        ( __req_line_parts_free rl )
-        ( headers_free . hr headers )
         ? == hstatus 2 {
-            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqTooLarge }
+            ^ @ !i HttpReqErr { F # HttpReqErr HttpReqTooLarge }
         } {}
-        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     // Request-smuggling defence (RFC 7230 §3.3.3): a message carrying BOTH
@@ -813,57 +924,34 @@ $ `stdlib/std/simd.nu`
     // back-end may disagree on the body framing. Reject it outright rather
     // than silently letting Transfer-Encoding win (the classic CL.TE
     // desync). Checked here, at head parse, so every caller is covered.
-    : ?String __te ( header_get . hr headers `Transfer-Encoding` )
-    : ?String __cl ( header_get . hr headers `Content-Length` )
-    : b __has_te ?? __te { T x → { ( string_free x ) T } F _ → F }
-    : b __has_cl ?? __cl { T x → { ( string_free x ) T } F _ → F }
-    ? & __has_te __has_cl {
-        ( __req_line_parts_free rl )
-        ( headers_free . hr headers )
-        ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
+    : i te_i ( header_index . req headers `Transfer-Encoding` )
+    : i cl_i ( header_index . req headers `Content-Length` )
+    ? & >= te_i 0 >= cl_i 0 {
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
     // RFC 9112 §6.3 — Content-Length is `1*DIGIT`. A sign (`+5` / `-5`),
     // whitespace, or any non-digit makes a front-end and back-end disagree
     // on the framing; reject at head parse so no body reader ever sees a
     // signed/garbage length. (Value OWS is already trimmed by the parser.)
-    ? __has_cl {
-        : ?String __cl2 ( header_get . hr headers `Content-Length` )
-        : b __cl_ok ?? __cl2 {
-            T x → { : b v ( __http_all_digits x ) ( string_free x ) v }
-            F _ → F
+    ? >= cl_i 0 {
+        : *Header hd ( vec_data [Header] . req headers )
+        : Header clh . hd cl_i
+        ? ( __http_all_digits . clh value ) {} {
+            ^ @ !i HttpReqErr { F # HttpReqErr HttpReqMalformed }
         }
-        ? ! __cl_ok {
-            ( __req_line_parts_free rl )
-            ( headers_free . hr headers )
-            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
-        } {}
     } {}
 
     // RFC 9112 §3.2 — an HTTP/1.1 request MUST carry a Host header. A
     // missing Host is a 400 (a proxy could otherwise route it by an
     // absolute-form target the origin never saw). HTTP/1.0 has no such
     // requirement. Duplicate Host is already rejected as a singleton in
-    // __parse_headers.
-    ? v11 {
-        : ?String __host ( header_get . hr headers `Host` )
-        : b __has_host ?? __host { T x → { ( string_free x ) T } F _ → F }
-        ? ! __has_host {
-            ( __req_line_parts_free rl )
-            ( headers_free . hr headers )
-            ^ @ !ParsedHeadOk HttpReqErr { F # HttpReqErr HttpReqMalformed }
-        } {}
+    // __parse_headers_into.
+    ? & v11 < ( header_index . req headers `Host` ) 0 {
+        ^ @ !i HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
 
-    : HttpRequest req @ HttpRequest {
-        . rl method
-        . rl path
-        . rl query
-        . rl version
-        . hr headers
-        ( vec_new [u] )
-    }
-    ^ @ !ParsedHeadOk HttpReqErr { T @ ParsedHeadOk { req + head_end 4 } }
+    ^ @ !i HttpReqErr { T + head_end 4 }
 }
 
 // ── Body reader (Phase 2.3) ───────────────────────────────────────────
