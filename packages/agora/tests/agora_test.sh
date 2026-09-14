@@ -75,6 +75,10 @@ has "and gets the result" "$OUT" "result: LGTM"
 has "note_set under a project" "$("$BIN" note_set project=nurl key=build body="./build.sh" --as bob 2>/dev/null)" "note nurl/build saved"
 has "notes project= lists it" "$("$BIN" notes project=nurl --as alice 2>/dev/null)" "build (bob now)"
 has "note project= reads it" "$("$BIN" note project=nurl key=build --as alice 2>/dev/null)" "./build.sh"
+has "--as claude-@cwd names the checkout" "$("$BIN" whoami --as claude-@cwd 2>/dev/null)" "you: claude-agora"
+mkdir -p "$WORK/elsewhere/agora"
+(cd "$WORK/elsewhere/agora" && "$BIN" whoami --as claude-@cwd >/dev/null 2>"$WORK/clash.txt"); check "the same basename elsewhere is refused (exit 2)" "$?" "2"
+has "and told why" "$(cat "$WORK/clash.txt")" "already registered from"
 has "--json prints the body" "$("$BIN" tasks which=done --json --as alice 2>/dev/null)" '"result":"LGTM"'
 "$BIN" post body="x" channel=nope --as alice >/dev/null 2>&1; check "an unknown channel exits 1" "$?" "1"
 "$BIN" brief >/dev/null 2>"$WORK/e1.txt"; check "no identity exits 2" "$?" "2"
@@ -155,6 +159,26 @@ wait $PIDS
 check "parallel drains: 40 distinct bodies" "$(grep -o '"body":"m[0-9]*"' "$WORK/drain.txt" | sort -u | wc -l | tr -d ' ')" "40"
 check "parallel drains: no duplicates" "$(grep -o '"body":"m[0-9]*"' "$WORK/drain.txt" | wc -l | tr -d ' ')" "40"
 check "and then nothing is left" "$(curl -s -m 5 -H "Authorization: Bearer $R1" $J -X POST -d '{}' "$U/api/inbox" | grep -c '"messages":\[\]')" "1"
+
+# wait: a long poll that returns the moment something arrives. racer2
+# follows public and has the 40 posts waiting — drain them first, so the
+# wait below has nothing to return until the send.
+R2=$(sed -n 2p "$WORK/racers.txt")
+curl -s -m 10 -o /dev/null -H "Authorization: Bearer $R2" $J -X POST -d '{"limit":200}' "$U/api/inbox"
+T0=$(date +%s%N)
+curl -s -m 30 -H "Authorization: Bearer $R2" $J -X POST -d '{"timeout_s":20}' "$U/api/wait" > "$WORK/wait.out" &
+WPID=$!
+sleep 1
+curl -s -m 5 -o /dev/null -H "$A" $J -X POST -d '{"to":"racer2","body":"you are up"}' "$U/api/send"
+wait $WPID
+WMS=$(( ($(date +%s%N) - T0) / 1000000 ))
+has "wait returns with the message" "$(cat "$WORK/wait.out")" '"body":"you are up"'
+check "and returned early, not at the timeout" "$([ "$WMS" -lt 5000 ] && echo early || echo "late ${WMS}ms")" "early"
+T0=$(date +%s%N)
+curl -s -m 30 -H "Authorization: Bearer $R2" $J -X POST -d '{"timeout_s":1}' "$U/api/wait" > "$WORK/wait2.out"
+WMS=$(( ($(date +%s%N) - T0) / 1000000 ))
+has "wait with nothing new is the empty brief" "$(cat "$WORK/wait2.out")" '"messages":[]'
+check "at the timeout" "$([ "$WMS" -ge 900 ] && [ "$WMS" -lt 4000 ] && echo ok || echo "${WMS}ms")" "ok"
 
 kill "$SERVE_PID"; wait "$SERVE_PID" 2>/dev/null; SERVE_PID=""
 check "the server log is quiet" "$(wc -c < "$WORK/serve.log" | tr -d ' ')" "0"
