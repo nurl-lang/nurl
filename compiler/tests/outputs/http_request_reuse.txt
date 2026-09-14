@@ -1,0 +1,16 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+consumed 58 of 66
+1: GET /a q=[x=1&y=2] HTTP/1.1 headers=3 spare=0 Host=one X-A=first X-B=b
+1 recycled:   q=[]  headers=0 spare=3
+consumed 50 of 50
+2: POST /b q=[] HTTP/1.1 headers=2 spare=1 Host=two Content-Length=0
+consumed 43 of 43
+3: HEAD / q=[] HTTP/1.0 headers=4 spare=0 A=1 B=2 C=3 D=4
+consumed 50 of 50
+4: GET /c q=[] HTTP/1.1 headers=2 spare=2 Host=h Accept=a, b
+error HttpReqMalformed
+error HttpReqIncomplete
+5 after incomplete:   q=[]  headers=0 spare=4

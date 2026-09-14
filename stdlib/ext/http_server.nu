@@ -383,6 +383,45 @@ $ `stdlib/ext/http2_conn.nu`
     ^ @ !ParsedHeadOk HttpReqErr { F err }
 }
 
+// The same loop for the keep-alive path: parses into the connection's
+// own HttpRequest (see `request_recycle`), returning the bytes consumed.
+@ _read_request_head_into TcpConn conn ( Vec u ) carry HttpLimits limits HttpRequest req ( Vec Header ) spare → !i HttpReqErr {
+    : ~ b done F
+    : ~ HttpReqErr err # HttpReqErr HttpReqIo
+    ~ ! done {
+        : !i HttpReqErr ph ( parse_request_head_into carry limits req spare )
+        ?? ph {
+            T used → {
+                ( __vec_drop_front_u carry used )
+                = done T
+                ^ @ !i HttpReqErr { T used }
+            }
+            F e → {
+                : s nm ( http_req_err_name e )
+                ? != 0 ( nurl_str_eq nm `HttpReqIncomplete` ) {
+                    : !i NetErr r ( tcp_read_into conn carry 4096 )
+                    ?? r {
+                        T got → {
+                            ? <= got 0 {
+                                = err # HttpReqErr HttpReqIo
+                                = done T
+                            } {}
+                        }
+                        F _ → {
+                            = err # HttpReqErr HttpReqIo
+                            = done T
+                        }
+                    }
+                } {
+                    = err e
+                    = done T
+                }
+            }
+        }
+    }
+    ^ @ !i HttpReqErr { F err }
+}
+
 // ── Top up body from Content-Length, draining carry first ─────────────
 //
 // `carry` holds whatever bytes arrived past the head (body bytes that
@@ -512,63 +551,56 @@ $ `stdlib/ext/http2_conn.nu`
     // MUST be drained here too — otherwise its bytes are left in `carry`,
     // handed to the handler as an empty body, and mis-parsed as the next
     // request on a keep-alive connection (a desync / smuggling vector).
-    : ?String te ( header_get . req headers `Transfer-Encoding` )
-    ?? te {
-        T tev → {
-            : String te_lc ( string_to_lower tev )
-            : b is_chunked != 0 ( nurl_str_eq ( string_data te_lc ) `chunked` )
-            ( string_free te_lc )
-            ( string_free tev )
-            ? is_chunked { ^ ( __finish_body_chunked conn req carry body_max ) } {}
-            // Non-chunked Transfer-Encoding is unsupported (and CL+TE is
-            // already rejected at head parse) — fail the body read.
-            ^ F
-        }
-        F _ → {}
-    }
-    : ?String cl ( header_get . req headers `Content-Length` )
-    ?? cl {
-        T clv → {
-            : !i ParseErr nr ( string_to_int clv )
-            ( string_free clv )
-            ?? nr {
-                T clen → {
-                    ? < clen 0 { ^ F } {}
-                    ? > clen body_max { ^ F } {}
-                    // Drain carry's front into req.body, up to clen bytes.
-                    : i avail ( vec_len [u] carry )
-                    : i take ? < clen avail clen avail
-                    ? > take 0 {
-                        : *u cdata ( vec_data [u] carry )
-                        : ~ i k 0
-                        ~ < k take {
-                            ( vec_push [u] . req body . cdata k )
-                            = k + k 1
-                        }
-                        ( __vec_drop_front_u carry take )
-                    } {}
-                    : i have ( vec_len [u] . req body )
-                    ? >= have clen { ^ T } {}
-                    : i need - clen have
-                    // `carry` already drained `have` body bytes into req.body;
-                    // exactly `need` more sit on the socket. Read precisely
-                    // that — NOT read_body_to, which re-derives the length
-                    // from Content-Length and would try to read the whole
-                    // `clen` again (and rejects need<clen as HttpReqTooLarge).
-                    : !( Vec u ) HttpReqErr more ( _read_n_bytes conn need )
-                    ?? more {
-                        T extra → {
-                            ( vec_extend [u] . req body extra )
-                            ( vec_free [u] extra )
-                            ^ T
-                        }
-                        F _ → ^ F
-                    }
+    : i te_i ( header_index . req headers `Transfer-Encoding` )
+    ? >= te_i 0 {
+        : *Header thd ( vec_data [Header] . req headers )
+        : Header teh . thd te_i
+        ? ( __header_value_eq_ci . teh value `chunked` ) { ^ ( __finish_body_chunked conn req carry body_max ) } {}
+        // Non-chunked Transfer-Encoding is unsupported (and CL+TE is
+        // already rejected at head parse) — fail the body read.
+        ^ F
+    } {}
+    : i cl_i ( header_index . req headers `Content-Length` )
+    // No Content-Length: nothing more to read.
+    ? < cl_i 0 { ^ T } {}
+    : *Header chd ( vec_data [Header] . req headers )
+    : Header clh . chd cl_i
+    : !i ParseErr nr ( string_to_int . clh value )
+    ?? nr {
+        T clen → {
+            ? < clen 0 { ^ F } {}
+            ? > clen body_max { ^ F } {}
+            // Drain carry's front into req.body, up to clen bytes.
+            : i avail ( vec_len [u] carry )
+            : i take ? < clen avail clen avail
+            ? > take 0 {
+                : *u cdata ( vec_data [u] carry )
+                : ~ i k 0
+                ~ < k take {
+                    ( vec_push [u] . req body . cdata k )
+                    = k + k 1
+                }
+                ( __vec_drop_front_u carry take )
+            } {}
+            : i have ( vec_len [u] . req body )
+            ? >= have clen { ^ T } {}
+            : i need - clen have
+            // `carry` already drained `have` body bytes into req.body;
+            // exactly `need` more sit on the socket. Read precisely
+            // that — NOT read_body_to, which re-derives the length
+            // from Content-Length and would try to read the whole
+            // `clen` again (and rejects need<clen as HttpReqTooLarge).
+            : !( Vec u ) HttpReqErr more ( _read_n_bytes conn need )
+            ?? more {
+                T extra → {
+                    ( vec_extend [u] . req body extra )
+                    ( vec_free [u] extra )
+                    ^ T
                 }
                 F _ → ^ F
             }
         }
-        F _ → ^ T  // No Content-Length: nothing more to read.
+        F _ → ^ F
     }
 }
 
@@ -837,12 +869,21 @@ $ `stdlib/ext/http2_conn.nu`
     // rebuilt below only after a panic (or panic+timeout) actually
     // consumed it — a cold path — and freed at connection end.
     : ~ HttpResponse panic_resp ( response_text 500 `internal server error\n` )
+    // One HttpRequest per CONNECTION, refilled in place by every parse:
+    // its four line Strings keep their capacity across requests, and
+    // its Header objects — Strings and all — cycle through `spare`
+    // (request_recycle moves them there, the next parse takes them
+    // back). A request therefore allocates nothing on the steady-state
+    // keep-alive path; before this the parse and the free together were
+    // ~a dozen allocations per request and 10 % of the server's CPU.
+    : HttpRequest req ( request_new )
+    : ( Vec Header ) spare ( vec_new [Header] )
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
-        : !ParsedHeadOk HttpReqErr ph ( _read_request_head conn carry lim )
+        : !i HttpReqErr ph ( _read_request_head_into conn carry lim req spare )
         ?? ph {
-            T pho → {
+            T _used → {
                 // Snapshot the request-start wall-clock right after the
                 // head is parsed. If the handler + body-completion
                 // exceed `request_total_timeout_ms`, we drop the
@@ -851,7 +892,6 @@ $ `stdlib/ext/http2_conn.nu`
                 // cancellation primitives, so a genuinely runaway
                 // handler runs to completion regardless.
                 : i req_start_ms ? > req_timeout_ms 0 ( now_ms ) 0
-                : HttpRequest req . pho head
                 : b body_ok ( _finish_body conn req carry body_max )
                 ? body_ok {
                     // Upgrade hook (e.g. WebSocket) gets first crack. If it takes
@@ -870,7 +910,7 @@ $ `stdlib/ext/http2_conn.nu`
                         : ( @ b TcpConn HttpRequest ) __shf . __sh fn
                         ? ( __shf conn req ) { = __ws_handled T } {}
                     } {}
-                    ? __ws_handled { ( request_free req ) = done T } {
+                    ? __ws_handled { = done T } {
                         : b req_close ( __request_says_close req )
                         : ( @ HttpResponse HttpRequest ) f . s handler
                         // Wrap the handler in `recover` so a panic inside
@@ -924,7 +964,7 @@ $ `stdlib/ext/http2_conn.nu`
                         : b at_cap ? > max_req 0 >= n_served max_req T
                         : b should_close | | | req_close resp_close at_cap timed_out
                         : !v NetErr wr ( __write_response conn final_resp should_close wire )
-                        ( request_free req )
+                        ( request_recycle req spare )
                         // A panic (or panic+timeout) consumed the
                         // connection-level fallback — rebuild it. Cold
                         // path: never taken on a successful request.
@@ -948,7 +988,6 @@ $ `stdlib/ext/http2_conn.nu`
                 } {
                     : HttpResponse er ( response_text 400 `malformed body\n` )
                     : !v NetErr _wr ( __write_response conn er T wire )
-                    ( request_free req )
                     = done T
                 }
             }
@@ -968,6 +1007,8 @@ $ `stdlib/ext/http2_conn.nu`
         }
     }
     ( http_response_free panic_resp )
+    ( request_free req )
+    ( headers_free spare )
     ( vec_free [u] wire )
     ( vec_free [u] carry )
 }

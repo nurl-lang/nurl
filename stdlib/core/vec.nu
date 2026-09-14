@@ -478,7 +478,13 @@
     ? > n 0 {
         : s ctl . v ctl
         : i len ( __vec_len_raw ctl )
-        ( __vec_grow [A] ctl + len n )
+        // Decide here, not in __vec_grow: every string_push_bytes and
+        // bytes_extend_str reserves first, and on the HTTP serve path the
+        // call into __vec_grow that then found nothing to do was 2 % of
+        // the server's CPU. A borrowed view (cap < 0) always takes the
+        // grow path, which is where it detaches.
+        : i cap ( __vec_cap_raw ctl )
+        ? < cap + len n { ( __vec_grow [A] ctl + len n ) } {}
     } {}
 }
 
