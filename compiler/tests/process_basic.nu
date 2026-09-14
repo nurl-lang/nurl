@@ -4,6 +4,14 @@
 // `echo`, `sh`, `cat`, `true`, `false`, plus a known-missing command
 // name. The test runner cwd is build/tests, but execvp searches PATH
 // so these resolve regardless of layout.
+//
+// "any POSIX host" is the operative word: a stock Windows shell has
+// none of these on PATH (Git-for-Windows ships them, but in usr\bin,
+// which its installer does not add), so every case returned
+// ProcessNotFound and the test failed for a missing package rather
+// than a defect. Declare the dependency and let such a host skip.
+//
+// requires: cat sh
 
 $ `stdlib/std/process.nu`
 
