@@ -107,6 +107,34 @@ if [[ "${BENCH_NO_LOCK:-0}" != 1 ]] && command -v flock >/dev/null; then
     fi
 fi
 
+# ── and not into a loaded machine ───────────────────────────────────
+# The lock above stops two BENCHMARKS from colliding. It does nothing
+# about the compiler test suite running with six jobs in the checkout
+# next door, which loads every core and inflates every cell just as
+# effectively. Wait for the machine to go quiet; if it will not, measure
+# anyway (CI must not hang) but record the load in the report, so the
+# number can never be read as if it had been taken on an idle box.
+BENCH_LOAD_WAIT="${BENCH_LOAD_WAIT:-300}"
+# Half the cores busy is already enough to move us/req; below that the
+# pinning absorbs it.
+BENCH_MAX_LOAD="${BENCH_MAX_LOAD:-$(python3 -c "print(max(1.0, $HOST_NPROC / 2.0))")}"
+load_now() { awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0; }
+LOAD_AT_START="$(load_now)"
+if [[ "${BENCH_NO_LOADCHECK:-0}" != 1 ]]; then
+    _waited=0
+    while python3 -c "import sys; sys.exit(0 if $(load_now) > $BENCH_MAX_LOAD else 1)" 2>/dev/null; do
+        if (( _waited == 0 )); then
+            echo "# load $(load_now) > $BENCH_MAX_LOAD — waiting up to ${BENCH_LOAD_WAIT}s for the machine to go quiet" >&2
+        fi
+        (( _waited >= BENCH_LOAD_WAIT )) && break
+        sleep 10; _waited=$(( _waited + 10 ))
+    done
+    LOAD_AT_START="$(load_now)"
+    if python3 -c "import sys; sys.exit(0 if $LOAD_AT_START > $BENCH_MAX_LOAD else 1)" 2>/dev/null; then
+        echo "WARNING: measuring at load $LOAD_AT_START (threshold $BENCH_MAX_LOAD) — the report will say so" >&2
+    fi
+fi
+
 PIN=0
 SRV_CORES="${SRV_CORES:-}"
 GEN_CORES="${GEN_CORES:-}"
@@ -511,6 +539,8 @@ fi
     printf 'ENV\tsrv_cores\t%s\n' "${SRV_CORES:-n/a}"
     printf 'ENV\tgen_cores\t%s\n' "${GEN_CORES:-n/a}"
     printf 'ENV\tworkers\t%s\n' "$SRV_WORKERS"
+    printf 'ENV\tload\t%s\n' "$LOAD_AT_START"
+    printf 'ENV\tmax_load\t%s\n' "$BENCH_MAX_LOAD"
     # run_server / na_rows lines already carry their ROW / HS tag.
     for row in "${results[@]}"; do
         printf '%s\n' "$row"

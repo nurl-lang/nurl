@@ -66,7 +66,7 @@ def main():
         cell = cells.get((scheme, name, c))
         if not cell:
             return False
-        rps, _, _, mean = cell[0], cell[1], cell[2], cell[3]
+        rps, mean = cell[0], cell[3]
         r, m = num(rps), num(mean)
         if r is None or m is None:
             return False
@@ -79,7 +79,7 @@ def main():
 
     def n_eff_of(scheme, name, c):
         cell = cells.get((scheme, name, c))
-        rps, _, _, mean = cell
+        rps, mean = cell[0], cell[3]
         return num(rps) * (num(mean) / 1000.0)
 
     def fmt_rps(v):
@@ -193,6 +193,16 @@ def main():
         "(`NURL_WORKERS` / `TOKIO_WORKER_THREADS`); Node's server is "
         "single-threaded |"
     )
+    _load = num(env.get("load"))
+    _maxload = num(env.get("max_load"))
+    if _load is not None and _maxload is not None and _load > _maxload:
+        w(
+            f"| Machine load | **{_load:.2f} at start, over the {_maxload:.2f} "
+            "threshold** — something else was using the CPU, so every cell "
+            "below is inflated; re-run on a quiet box before quoting these |"
+        )
+    elif _load is not None:
+        w(f"| Machine load | {_load:.2f} at start (quiet) |")
     w("")
 
     # ── one throughput/latency table per scheme ──────────────────
