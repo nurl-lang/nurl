@@ -76,6 +76,24 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# ── UTF-8 end to end ────────────────────────────────────────────
+# nurlc's diagnostics, the test programs' output and the goldens are all
+# UTF-8. .NET decodes a redirected child pipe with Console.OutputEncoding,
+# which on a stock Windows console is the OEM code page (850 on a fi-FI box,
+# 437 on en-US) — so '—', '→' and 'ä' arrive mojibake'd, get compared against
+# a correct UTF-8 golden, and the test "differs" for an encoding reason alone.
+# That is one bug with two halves: pin this console to UTF-8 here so the
+# report and its diff print honestly, and pin every redirected stream below
+# so the records are built from the bytes the child actually wrote.
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+try {
+    [Console]::OutputEncoding = $Utf8NoBom
+    $OutputEncoding           = $Utf8NoBom
+} catch {
+    # No console attached (fully redirected CI job). The per-stream
+    # encodings are what carry the fix; this half is cosmetic.
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir   = (Resolve-Path (Join-Path $ScriptDir '..\..')).Path
 # Imports inside tests are spelled repo-root-relative; nurlc resolves
@@ -198,6 +216,13 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         $psi.WorkingDirectory       = $cwd
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError  = $true
+        # nurlc emits UTF-8; decode it as UTF-8 rather than as whatever the
+        # console's OEM code page happens to be. Load-bearing twice over —
+        # the compiler's stdout IS the .ll we hand to clang below, so an
+        # OEM-decoded round trip corrupts every non-ASCII string literal in
+        # the program, not just the diagnostics.
+        $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $psi.StandardErrorEncoding  = [System.Text.UTF8Encoding]::new($false)
         $psi.UseShellExecute        = $false
         $psi.CreateNoWindow         = $true
         $proc = [System.Diagnostics.Process]::Start($psi)
@@ -252,6 +277,10 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         $psi.WorkingDirectory       = $cwd
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError  = $true
+        # Same reason as Run-Proc: the NURL runtime writes UTF-8 bytes to
+        # the pipe, so read them back as UTF-8 and not as CP850/CP437.
+        $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $psi.StandardErrorEncoding  = [System.Text.UTF8Encoding]::new($false)
         $psi.UseShellExecute        = $false
         $psi.CreateNoWindow         = $true
         # Windows auto-flags exes whose name contains "install"/"setup"/etc.
@@ -359,7 +388,15 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
                 # out to. Absent tool → skip, so a stripped host degrades
                 # to running less rather than failing on someone else's
                 # missing package.
-                default    { if (-not (Get-Command $tok -ErrorAction SilentlyContinue)) { $skip = $true } }
+                #
+                # -CommandType Application is load-bearing, and it is the
+                # Windows half of `command -v`: a bare Get-Command also
+                # resolves PowerShell's own aliases, and `cat` is one of
+                # them (→ Get-Content). A test that spawns cat(1) would
+                # then pass the gate on a host that has no cat.exe at all
+                # and fail with ProcessNotFound. Only a real executable
+                # on PATH counts.
+                default    { if (-not (Get-Command $tok -CommandType Application -ErrorAction SilentlyContinue)) { $skip = $true } }
             }
             if ($skip) { break }
         }

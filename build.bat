@@ -357,6 +357,14 @@ if errorlevel 1 (
     popd >nul
     exit /b 2
 )
+REM The runner writes its report (and the goldens' own text) in UTF-8, so
+REM the `type` in :tests_failed needs a UTF-8 console or every '—', '→' and
+REM 'ä' in a diff comes out as mojibake. Switch the code page for the test
+REM phase and put back whatever the user had in :cleanup — chcp's own line
+REM is localized, but "<text>: <n>" holds in every locale, so take token 2.
+for /f "tokens=2 delims=:" %%C in ('chcp') do for /f "tokens=1" %%D in ("%%C") do set "OLDCP=%%D"
+chcp 65001 >nul
+
 set "TESTOUT=%TEMP%\nurl_testout_%RANDOM%%RANDOM%.log"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\compiler\tests\run_tests.ps1" > "%TESTOUT%" 2>&1
 if errorlevel 1 goto :tests_failed
@@ -388,4 +396,5 @@ exit /b 1
 
 :cleanup
 if exist "%LOG%" del "%LOG%" 2>nul
+if defined OLDCP chcp %OLDCP% >nul
 exit /b 0

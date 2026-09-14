@@ -281,6 +281,11 @@ function Measure-Proc {
     $psi.WorkingDirectory       = $Root
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError  = $true
+    # Benchmarks print UTF-8. .NET would otherwise decode the pipe with the
+    # console's OEM code page (CP850/CP437) and $Utf8NoBom would then write
+    # the mojibake back out as UTF-8 — same trap run_tests.ps1 fell into.
+    $psi.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardErrorEncoding  = [System.Text.UTF8Encoding]::new($false)
     $psi.UseShellExecute        = $false
     $psi.CreateNoWindow         = $true
     # Windows auto-flags exes whose name contains "install"/"setup"/etc. as

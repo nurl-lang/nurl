@@ -12,6 +12,13 @@
 //   2. error mapping: spawn nonexistent command  → McpStdioSpawn
 //   3. error mapping: spawn `false` (exits 0)    → McpStdioEof
 //      (also asserts mcp_stdio_call's eof-vs-timeout discrimination)
+//
+// `cat` and `false` are POSIX tools: present everywhere but on a stock
+// Windows shell, where Git-for-Windows keeps them in usr\bin off PATH.
+// Without the declaration below both spawns returned McpStdioSpawn and
+// the test failed for a missing package rather than a defect.
+//
+// requires: cat false
 
 $ `stdlib/ext/mcp_stdio.nu`
 $ `stdlib/ext/json.nu`
