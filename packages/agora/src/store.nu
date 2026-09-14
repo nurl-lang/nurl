@@ -11,7 +11,7 @@
 //             the mechanism behind "shown exactly once"
 //   tasks     the work board: open → claimed (under a lease) → done,
 //             or back to open when released or the lease runs out
-//   notes     a shared key → text notebook
+//   notes     a shared key → text notebook, per project ('' = global)
 //
 // Threading: the service runs a worker pool and any number of stdio
 // processes may share the file. Every operation opens its OWN
@@ -73,6 +73,7 @@ $ `stdlib/ext/sqlite.nu`
 }
 
 : AgNote {
+    String project  // '' = a global note; else a namespace such as a repo name
     String key
     String body
     String author
@@ -151,6 +152,7 @@ $ `stdlib/ext/sqlite.nu`
 }
 
 @ ag_note_free sink AgNote n → v {
+    ( string_free . n project )
     ( string_free . n key )
     ( string_free . n body )
     ( string_free . n author )
@@ -189,7 +191,7 @@ $ `stdlib/ext/sqlite.nu`
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS cursors (agent TEXT NOT NULL, channel TEXT NOT NULL, last_id INTEGER NOT NULL, PRIMARY KEY (agent, channel))` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, result TEXT NOT NULL DEFAULT '', priority INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL)` ) )
     ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, priority, id)` ) )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (key TEXT PRIMARY KEY, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (project TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (project, key))` ) )
     ( vec_push [String] v ( string_from `INSERT OR IGNORE INTO channels (name, about, created_by, created) VALUES ('public', 'Everyone follows this channel.', '', 0)` ) )
     ^ v
 }
@@ -209,6 +211,10 @@ $ `stdlib/ext/sqlite.nu`
         F _ → {}
         T db → {
             ?? ( sqlite_exec db `PRAGMA journal_mode=WAL` ) { T _ → {} F _ → {} }
+            : b old_notes ( __ag_notes_need_project db )
+            ? old_notes {
+                ?? ( sqlite_exec db `ALTER TABLE notes RENAME TO notes_v1` ) { T _ → {} F _ → {} }
+            } {}
             : ( Vec String ) stmts ( __ag_schema )
             : i n ( vec_len [String] stmts )
             : ~ b failed F
@@ -224,11 +230,34 @@ $ `stdlib/ext/sqlite.nu`
                 = k + k 1
             }
             ( vec_free [String] stmts )
+            ? & old_notes ! failed {
+                ?? ( sqlite_exec db `INSERT INTO notes (project, key, body, author, updated) SELECT '', key, body, author, updated FROM notes_v1` ) { T _ → {} F _ → { = failed T } }
+                ? failed {} { ?? ( sqlite_exec db `DROP TABLE notes_v1` ) { T _ → {} F _ → {} } }
+            } {}
             = ok ! failed
         }
     }
     ( ag_store_free st )
     ^ @ AgStore { ( string_from path ) ok }
+}
+
+// A 0.1.0 store has notes keyed by `key` alone; 0.2.0 keys them by
+// (project, key). T when the table exists without the project column,
+// so ag_store_open moves the rows over (a global note keeps its key
+// under project '').
+@ __ag_notes_need_project Database db → b {
+    : ~ b has_table F
+    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes'` ) {
+        F _ → {}
+        T q → { ? ( __ag_row q ) { = has_table > ( sqlite_column_int q 0 ) 0 } {} }
+    }
+    ? has_table {} { ^ F }
+    : ~ b has_project F
+    ?? ( sqlite_prepare db `SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'project'` ) {
+        F _ → {}
+        T q → { ? ( __ag_row q ) { = has_project > ( sqlite_column_int q 0 ) 0 } {} }
+    }
+    ^ ! has_project
 }
 
 // ── Statement helpers ─────────────────────────────────────────────────
@@ -1198,19 +1227,25 @@ $ `stdlib/ext/sqlite.nu`
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────
+//
+// A note lives under a project ('' = global). The project is a
+// namespace an agent chooses — a repository's name, say — so that the
+// same key can mean one thing here and another there, and `notes
+// project=x` is everything known about x.
 
-@ ag_note_set AgStore st s key s body s author i now → b {
+@ ag_note_set AgStore st s project s key s body s author i now → b {
     : ~ b ok F
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `INSERT INTO notes (key, body, author, updated) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (key) DO UPDATE SET body = excluded.body, author = excluded.author, updated = excluded.updated` ) {
+            ?? ( sqlite_prepare db `INSERT INTO notes (project, key, body, author, updated) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (project, key) DO UPDATE SET body = excluded.body, author = excluded.author, updated = excluded.updated` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 key )
-                    ( __ag_bind_s q 2 body )
-                    ( __ag_bind_s q 3 author )
-                    ( __ag_bind_i q 4 now )
+                    ( __ag_bind_s q 1 project )
+                    ( __ag_bind_s q 2 key )
+                    ( __ag_bind_s q 3 body )
+                    ( __ag_bind_s q 4 author )
+                    ( __ag_bind_i q 5 now )
                     = ok ( __ag_run q )
                 }
             }
@@ -1219,19 +1254,30 @@ $ `stdlib/ext/sqlite.nu`
     ^ ok
 }
 
-@ ag_note_get AgStore st s key → ?AgNote {
+@ __ag_read_note Statement q → AgNote {
+    ^ @ AgNote {
+        ( sqlite_column_text q 0 )
+        ( sqlite_column_text q 1 )
+        ( sqlite_column_text q 2 )
+        ( sqlite_column_text q 3 )
+        ( sqlite_column_int q 4 )
+    }
+}
+
+@ ag_note_get AgStore st s project s key → ?AgNote {
     : ~ b found F
-    : ~ AgNote out @ AgNote { ( string_new ) ( string_new ) ( string_new ) 0 }
+    : ~ AgNote out @ AgNote { ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 }
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT key, body, author, updated FROM notes WHERE key = ?1` ) {
+            ?? ( sqlite_prepare db `SELECT project, key, body, author, updated FROM notes WHERE project = ?1 AND key = ?2` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 key )
+                    ( __ag_bind_s q 1 project )
+                    ( __ag_bind_s q 2 key )
                     ? ( __ag_row q ) {
                         ( ag_note_free out )
-                        = out @ AgNote { ( sqlite_column_text q 0 ) ( sqlite_column_text q 1 ) ( sqlite_column_text q 2 ) ( sqlite_column_int q 3 ) }
+                        = out ( __ag_read_note q )
                         = found T
                     } {}
                 }
@@ -1243,38 +1289,40 @@ $ `stdlib/ext/sqlite.nu`
     ^ @ ?AgNote { F }
 }
 
-// Every note, key order. `full` = with bodies; otherwise bodies are
-// left empty (the listing shows keys and authors only).
-@ ag_notes AgStore st b full → ( Vec AgNote ) {
+// The notes of one project (`all` F), or every note of every project
+// (`all` T), project then key order. `full` = with bodies; otherwise
+// bodies are left empty (the listing shows keys and authors only).
+@ ag_notes AgStore st s project b all b full → ( Vec AgNote ) {
     : ( Vec AgNote ) out ( vec_new [AgNote] )
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            : s sql ? full
-            `SELECT key, body, author, updated FROM notes ORDER BY key`
-            `SELECT key, '', author, updated FROM notes ORDER BY key`
-            ?? ( sqlite_prepare db sql ) {
+            : String sql ( string_from ? full `SELECT project, key, body, author, updated FROM notes` `SELECT project, key, '', author, updated FROM notes` )
+            ? all {} { ( string_push_str sql ` WHERE project = ?1` ) }
+            ( string_push_str sql ` ORDER BY project, key` )
+            ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
-                    ~ ( __ag_row q ) {
-                        ( vec_push [AgNote] out @ AgNote { ( sqlite_column_text q 0 ) ( sqlite_column_text q 1 ) ( sqlite_column_text q 2 ) ( sqlite_column_int q 3 ) } )
-                    }
+                    ? all {} { ( __ag_bind_s q 1 project ) }
+                    ~ ( __ag_row q ) { ( vec_push [AgNote] out ( __ag_read_note q ) ) }
                 }
             }
+            ( string_free sql )
         }
     }
     ^ out
 }
 
-@ ag_note_del AgStore st s key → b {
+@ ag_note_del AgStore st s project s key → b {
     : ~ b ok F
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `DELETE FROM notes WHERE key = ?1` ) {
+            ?? ( sqlite_prepare db `DELETE FROM notes WHERE project = ?1 AND key = ?2` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 key )
+                    ( __ag_bind_s q 1 project )
+                    ( __ag_bind_s q 2 key )
                     = ok & ( __ag_run q ) > ( sqlite_changes db ) 0
                 }
             }

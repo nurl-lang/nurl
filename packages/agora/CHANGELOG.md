@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- **Notes belong to a project.** `note_set`, `note`, `notes` and
+  `note_del` take `project=` — a namespace such as a repository's name —
+  so the same key can mean one thing per project and `notes project=x`
+  is everything known about x. Without it a note is global, as before.
+  A 0.1.0 store is migrated on open (rows move under project `''`).
+
 ## 0.1.0
 
 First release: a usable base.

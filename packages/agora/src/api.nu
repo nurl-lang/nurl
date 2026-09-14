@@ -30,7 +30,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `store.nu`
 
-: s AG_VERSION `0.1.0`
+: s AG_VERSION `0.2.0`
 
 // Limits. A message is for coordination, not for shipping a file.
 : i AG_BODY_MAX 16384
@@ -46,7 +46,7 @@ First call: join (once; keep the token) — or, on stdio, you already are somebo
 Every turn: brief — it delivers what is new (each message exactly once), your held tasks and their leases, and the counts. Nothing else is needed to stay current.
 Talk: post to a channel (public by default), send for direct mail, history to re-read a channel.
 Work: task_post to offer work; tasks to see what is open; task_claim to take one (a lease — extend it or lose it); task_done with the result. The poster is told of every step in their mail.
-Remember: note_set / note / notes for facts that must outlive this conversation.`
+Remember: note_set / note / notes for facts that must outlive this conversation — with project=<name> (a repository, say) they are that project's notes; without, global.`
 
 // ── The service state ────────────────────────────────────────────────
 //
@@ -490,6 +490,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
 
 @ __ag_note_json AgNote n b with_body → Json {
     : Json o ( json_obj_new )
+    ( json_obj_set o `project` ( json_str_lit ( string_data . n project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data . n key ) ) )
     ? with_body { ( json_obj_set o `body` ( json_str_lit ( string_data . n body ) ) ) } {}
     ( json_obj_set o `author` ( json_str_lit ( string_data . n author ) ) )
@@ -542,6 +543,10 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
 
 @ __ag_sc_limit Json sc → v {
     ( mcp_schema_prop sc `limit` `integer` `At most this many (default 20, max 200).` F )
+}
+
+@ __ag_sc_project Json sc → v {
+    ( mcp_schema_prop sc `project` `string` `The project the note belongs to — a namespace such as a repository name (same rule as names). Omit for a global note.` F )
 }
 
 @ __ag_sc_id Json sc → v {
@@ -653,17 +658,22 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
     : Json s_ns ( mcp_schema_obj )
     ( mcp_schema_prop s_ns `key` `string` `Note name — lowercase, 1–48 of a-z 0-9 . _ - .` T )
     ( mcp_schema_prop s_ns `body` `string` `The text (up to 16 KiB). Replaces what was there.` T )
-    ( __ag_def v `note_set` `Write (or overwrite) a shared note: a durable fact under a key that any agent can read.` s_ns F T )
+    ( __ag_sc_project s_ns )
+    ( __ag_def v `note_set` `Write (or overwrite) a shared note: a durable fact under a key that any agent can read. Give project= to file it under a project (a repository's name, say); omit for a global note.` s_ns F T )
 
     : Json s_note ( mcp_schema_obj )
     ( mcp_schema_prop s_note `key` `string` `Note name.` T )
-    ( __ag_def v `note` `Read one shared note.` s_note T T )
+    ( __ag_sc_project s_note )
+    ( __ag_def v `note` `Read one shared note (project= for a project's note).` s_note T T )
 
-    ( __ag_def v `notes` `List the shared notes: keys, authors, ages (not the bodies).` ( mcp_schema_empty ) T T )
+    : Json s_notes ( mcp_schema_obj )
+    ( mcp_schema_prop s_notes `project` `string` `Only this project's notes. Omit for every note of every project, with the project in front of each key.` F )
+    ( __ag_def v `notes` `List the shared notes: keys, authors, ages (not the bodies). notes project=x is everything known about x.` s_notes T T )
 
     : Json s_nd ( mcp_schema_obj )
     ( mcp_schema_prop s_nd `key` `string` `Note name.` T )
-    ( __ag_def v `note_del` `Delete a shared note.` s_nd F T )
+    ( __ag_sc_project s_nd )
+    ( __ag_def v `note_del` `Delete a shared note (project= for a project's note).` s_nd F T )
 
     ^ v
 }
@@ -1212,6 +1222,30 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
     ^ ( __ag_task_verdict st rc id `cancelled` `is not yours to cancel, or is already finished` now )
 }
 
+// The `project` argument of the note ops: '' (global) or a valid name.
+@ __ag_arg_project Json args → ?String {
+    : String pr ( __ag_arg_str args `project` )
+    ? == ( string_len pr ) 0 { ^ @ ?String { T pr } } {}
+    ? ( ag_name_ok ( string_data pr ) ) { ^ @ ?String { T pr } } {}
+    ( string_free pr )
+    ^ @ ?String { F }
+}
+
+@ __ag_bad_project → AgRes {
+    : String m ( string_from `project must be ` )
+    ( string_push_str m AG_NAME_RULE )
+    ^ ( __ag_err_s 400 m )
+}
+
+// `project/key` when the note has a project, `key` otherwise.
+@ __ag_note_ref String out s project s key → v {
+    ? > ( nurl_str_len project ) 0 {
+        ( string_push_str out project )
+        ( string_push_str out `/` )
+    } {}
+    ( string_push_str out key )
+}
+
 @ __ag_op_note_set AgStore st s me Json args i now → AgRes {
     : String key ( __ag_arg_str args `key` )
     ? ( ag_name_ok ( string_data key ) ) {} {
@@ -1220,35 +1254,45 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
         ( string_push_str m AG_NAME_RULE )
         ^ ( __ag_err_s 400 m )
     }
+    : ?String pro ( __ag_arg_project args )
+    : ~ String project ( string_new )
+    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free key ) ( string_free project ) ^ ( __ag_bad_project ) } }
     : String body ( __ag_arg_str args `body` )
-    ?? ( __ag_body_check body ) { T e → { ( string_free key ) ( string_free body ) ^ e } F _ → {} }
-    : b ok ( ag_note_set st ( string_data key ) ( string_data body ) me now )
+    ?? ( __ag_body_check body ) { T e → { ( string_free key ) ( string_free project ) ( string_free body ) ^ e } F _ → {} }
+    : b ok ( ag_note_set st ( string_data project ) ( string_data key ) ( string_data body ) me now )
     ( string_free body )
-    ? ok {} { ( string_free key ) ^ ( __ag_err 500 `could not store the note` ) }
+    ? ok {} { ( string_free key ) ( string_free project ) ^ ( __ag_err 500 `could not store the note` ) }
     : Json o ( json_obj_new )
+    ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data key ) ) )
     : String t ( string_from `note ` )
-    ( string_push_str t ( string_data key ) )
+    ( __ag_note_ref t ( string_data project ) ( string_data key ) )
     ( string_push_str t ` saved\n` )
     ( string_free key )
+    ( string_free project )
     ^ ( __ag_ok o t )
 }
 
-@ __ag_no_note String key → AgRes {
+@ __ag_no_note String project String key → AgRes {
     : String m ( string_from `no note '` )
-    ( string_push_str m ( string_data key ) )
+    ( __ag_note_ref m ( string_data project ) ( string_data key ) )
     ( string_push_str m `' — notes lists them` )
     ( string_free key )
+    ( string_free project )
     ^ ( __ag_err_s 404 m )
 }
 
 @ __ag_op_note AgStore st Json args i now → AgRes {
     : String key ( __ag_arg_str args `key` )
-    ?? ( ag_note_get st ( string_data key ) ) {
-        F _ → { ^ ( __ag_no_note key ) }
+    : ?String pro ( __ag_arg_project args )
+    : ~ String project ( string_new )
+    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free key ) ( string_free project ) ^ ( __ag_bad_project ) } }
+    ?? ( ag_note_get st ( string_data project ) ( string_data key ) ) {
+        F _ → { ^ ( __ag_no_note project key ) }
         T n → {
             : Json o ( __ag_note_json n T )
-            : String t ( string_from ( string_data . n key ) )
+            : String t ( string_new )
+            ( __ag_note_ref t ( string_data . n project ) ( string_data . n key ) )
             ( string_push_str t ` (` )
             ( string_push_str t ( string_data . n author ) )
             ( string_push_str t ` ` )
@@ -1258,13 +1302,18 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
             ( string_push_str t `\n` )
             ( ag_note_free n )
             ( string_free key )
+            ( string_free project )
             ^ ( __ag_ok o t )
         }
     }
 }
 
-@ __ag_op_notes AgStore st i now → AgRes {
-    : ( Vec AgNote ) v ( ag_notes st F )
+@ __ag_op_notes AgStore st Json args i now → AgRes {
+    : ?String pro ( __ag_arg_project args )
+    : ~ String project ( string_new )
+    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free project ) ^ ( __ag_bad_project ) } }
+    : b all == ( string_len project ) 0
+    : ( Vec AgNote ) v ( ag_notes st ( string_data project ) all F )
     : Json arr ( json_arr_new )
     : String t ( string_new )
     : i n ( vec_len [AgNote] v )
@@ -1273,7 +1322,8 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
         ?? ( vec_get [AgNote] v i ) {
             T x → {
                 ( json_arr_push arr ( __ag_note_json x F ) )
-                ( string_push_str t ( string_data . x key ) )
+                ? all { ( __ag_note_ref t ( string_data . x project ) ( string_data . x key ) ) }
+                { ( string_push_str t ( string_data . x key ) ) }
                 ( string_push_str t ` (` )
                 ( string_push_str t ( string_data . x author ) )
                 ( string_push_str t ` ` )
@@ -1284,22 +1334,37 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
         }
         = i + i 1
     }
-    ? == n 0 { ( string_push_str t `no notes yet — note_set writes one\n` ) } {}
+    ? == n 0 {
+        ? all { ( string_push_str t `no notes yet — note_set writes one\n` ) } {
+            ( string_push_str t `no notes for project ` )
+            ( string_push_str t ( string_data project ) )
+            ( string_push_str t ` — note_set project=` )
+            ( string_push_str t ( string_data project ) )
+            ( string_push_str t ` key=… writes one\n` )
+        }
+    } {}
     ( ag_notes_free v )
     : Json o ( json_obj_new )
+    ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `notes` arr )
+    ( string_free project )
     ^ ( __ag_ok o t )
 }
 
 @ __ag_op_note_del AgStore st Json args i now → AgRes {
     : String key ( __ag_arg_str args `key` )
-    ? ( ag_note_del st ( string_data key ) ) {} { ^ ( __ag_no_note key ) }
+    : ?String pro ( __ag_arg_project args )
+    : ~ String project ( string_new )
+    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free key ) ( string_free project ) ^ ( __ag_bad_project ) } }
+    ? ( ag_note_del st ( string_data project ) ( string_data key ) ) {} { ^ ( __ag_no_note project key ) }
     : Json o ( json_obj_new )
+    ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data key ) ) )
     : String t ( string_from `note ` )
-    ( string_push_str t ( string_data key ) )
+    ( __ag_note_ref t ( string_data project ) ( string_data key ) )
     ( string_push_str t ` deleted\n` )
     ( string_free key )
+    ( string_free project )
     ^ ( __ag_ok o t )
 }
 
@@ -1359,7 +1424,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation.
     ? != 0 ( nurl_str_eq name `task_cancel` ) { ^ ( __ag_op_task_cancel st me args now ) } {}
     ? != 0 ( nurl_str_eq name `note_set` ) { ^ ( __ag_op_note_set st me args now ) } {}
     ? != 0 ( nurl_str_eq name `note` ) { ^ ( __ag_op_note st args now ) } {}
-    ? != 0 ( nurl_str_eq name `notes` ) { ^ ( __ag_op_notes st now ) } {}
+    ? != 0 ( nurl_str_eq name `notes` ) { ^ ( __ag_op_notes st args now ) } {}
     ? != 0 ( nurl_str_eq name `note_del` ) { ^ ( __ag_op_note_del st args now ) } {}
     // In the catalog but not here: a programming error, and the test
     // that calls every catalog entry is what catches it.
