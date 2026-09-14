@@ -228,8 +228,10 @@ cpu_per_req() {
     local u0 s0 u1 s1; read -r u0 s0 < <(awk '{print $14, $15}' /proc/$pid/stat)
     oha_run "$SCRATCH/cpu_${name}_${size}.json" -z ${MEAS_SEC}s -q "$q" --latency-correction -c "$CONNS" "$url"
     read -r u1 s1 < <(awk '{print $14, $15}' /proc/$pid/stat)
-    local reqs; reqs=$(python3 "$PY" rps "$SCRATCH/cpu_${name}_${size}.json")
-    reqs=$(python3 -c "print(int($reqs*$MEAS_SEC))")
+    # Exact responses served, not rps*MEAS_SEC: the approximation is a
+    # few percent off and this table's whole job is resolving a few
+    # percent between two peers.
+    local reqs; reqs=$(python3 "$PY" reqs "$SCRATCH/cpu_${name}_${size}.json")
     local hz; hz=$(getconf CLK_TCK)
     python3 - "$u0" "$s0" "$u1" "$s1" "$reqs" "$hz" "$name" <<'PY' >>"$SCRATCH/cpu.row"
 import sys

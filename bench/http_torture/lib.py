@@ -16,6 +16,11 @@ def oha_row(path):
         "p999": p["p99.9"] * 1000.0,
         "data": s.get("totalData", 0),
         "errs": d.get("errorDistribution", {}) or {},
+        # Exact response count from the status-code histogram. CPU per
+        # request must divide by this, not by rps*duration: the latter
+        # is several percent off, which is the size of the differences
+        # the CPU table exists to resolve.
+        "reqs": sum((d.get("statusCodeDistribution", {}) or {}).values()),
     }
 
 if __name__ == "__main__":
@@ -25,3 +30,5 @@ if __name__ == "__main__":
         print("%.0f %.4f %.3f %.3f %.3f" % (r["rps"], r["ok"], r["p50"], r["p99"], r["p999"]))
     elif cmd == "rps":
         print("%.0f" % oha_row(sys.argv[2])["rps"])
+    elif cmd == "reqs":  # exact responses served, for CPU per request
+        print("%d" % oha_row(sys.argv[2])["reqs"])
