@@ -32,13 +32,17 @@ $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
 $ `deps/safetensor/src/safetensor.nu`
+$ `deps/torchpt/src/pickle.nu`
+$ `deps/torchpt/src/torchpt.nu`
 $ `kernels.nu`
 
 : f F5_PI 3.14159265358979323846
 
 : F5Model {
     * GpuKit kit
-    i st  // *St — the mmapped checkpoint
+    i st  // *St — a safetensors checkpoint, 0 when this is a .pt
+    i pt  // *Pt — a PyTorch pickle checkpoint, 0 when this is safetensors
+    String prefix  // what every tensor name in this file starts with
     b own_kit
     // architecture
     i dim
@@ -49,6 +53,9 @@ $ `kernels.nu`
     i td  // text_dim
     i mel
     i nconv  // ConvNeXt blocks in the text encoder
+    i cp_k  // the position embedding's kernel width
+    i cp_groups
+    i tb_k  // the text encoder's depthwise kernel width
     i vocab
     // timestep embedding
     GkBuf tm0_w GkBuf tm0_b GkBuf tm2_w GkBuf tm2_b
@@ -130,27 +137,116 @@ $ `kernels.nu`
 // Upload one f32 tensor straight out of the mapping. The checkpoint is f32
 // throughout, so there is no widening pass and no host copy: the bytes go
 // from the page cache to the device.
-@ __f5m_up * F5Model m s name → GkBuf {
+// ── one checkpoint, two containers ──────────────────────────────────
+//
+// F5-TTS releases come as safetensors and as PyTorch .pt, and a finetune's
+// .pt carries BOTH the live weights and the exponential moving average of
+// them — under a different prefix again. So nothing below names a container
+// or a prefix: it asks the source, and the source is whichever of the two
+// was opened.
+//
+// The prefixes seen in the wild, in the order they are preferred (the EMA
+// weights are what every F5-TTS release is evaluated with, so they win):
+//
+//   ema_model.transformer.                      a published .safetensors
+//   ema_model_state_dict.ema_model.transformer. a training checkpoint's EMA
+//   model_state_dict.transformer.               the same checkpoint's live weights
+//   transformer.                                a bare state dict
+//
+@ f5_st_tensors * F5Model m → ( Vec StTensor ) {
     : *St st # *St . m st
-    : i ti ( st_find_tensor st name )
-    ? < ti 0 { ^ ( __f5m_nobuf ) } {}
-    ?? ( vec_get [StTensor] . st tensors ti ) {
-        T t → {
-            ? == . t dtype ST_F32 {} { ^ ( __f5m_nobuf ) }
-            : GkBuf b ( gk_dbuf_new . m kit . t nelems GK_F32 )
-            ? ( gk_buf_ok b ) {} { ^ ( __f5m_nobuf ) }
-            ? ( gk_dbuf_upload_raw . m kit b ( st_tensor_ptr st t ) ) {} {
-                ( gk_dbuf_free b )
-                ^ ( __f5m_nobuf )
-            }
-            ^ b
-        }
-        F → { ^ ( __f5m_nobuf ) }
-    }
+    ^ . st tensors
 }
 
-@ __f5m_name s pre i k s suf → String {
-    : String s ( string_from `ema_model.transformer.` )
+@ f5_src_find * F5Model m s name → i {
+    ? != . m st 0 { ^ ( st_find_tensor # *St . m st name ) } {}
+    ? != . m pt 0 { ^ ( pt_find # *Pt . m pt name ) } {}
+    ^ -1
+}
+
+// The same, with this checkpoint's prefix in front.
+@ f5_src_find_p * F5Model m s rest → i {
+    : String full ( string_clone . m prefix )
+    ( string_push_str full rest )
+    : i idx ( f5_src_find m ( string_data full ) )
+    ( string_free full )
+    ^ idx
+}
+
+@ f5_src_nelems * F5Model m i idx → i {
+    ? != . m st 0 {
+        ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
+            T t → { ^ . t nelems }
+            F → { ^ 0 }
+        }
+    } {}
+    ? != . m pt 0 { ^ ( pt_nelems # *Pt . m pt idx ) } {}
+    ^ 0
+}
+
+@ f5_src_dim * F5Model m i idx i k → i {
+    ? != . m st 0 {
+        ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
+            T t → {
+                ? == k 0 { ^ . t d0 } {}
+                ? == k 1 { ^ . t d1 } {}
+                ? == k 2 { ^ . t d2 } {}
+                ^ . t d3
+            }
+            F → { ^ 0 }
+        }
+    } {}
+    ? != . m pt 0 { ^ ( pt_dim # *Pt . m pt idx k ) } {}
+    ^ 0
+}
+
+@ f5_src_f32 * F5Model m i idx → b {
+    ? != . m st 0 {
+        ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
+            T t → { ^ == . t dtype ST_F32 }
+            F → { ^ F }
+        }
+    } {}
+    ? != . m pt 0 {
+        ^ & == ( pt_dtype # *Pt . m pt idx ) PKS_F32 ( pt_is_contiguous # *Pt . m pt idx )
+    } {}
+    ^ F
+}
+
+@ f5_src_ptr * F5Model m i idx → *u {
+    ? != . m st 0 {
+        ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
+            T t → { ^ ( st_tensor_ptr # *St . m st t ) }
+            F → { ^ # *u 0 }
+        }
+    } {}
+    ? != . m pt 0 { ^ ( pt_tensor_ptr # *Pt . m pt idx ) } {}
+    ^ # *u 0
+}
+
+@ __f5m_up * F5Model m s name → GkBuf {
+    : i ti ( f5_src_find m name )
+    ? < ti 0 { ^ ( __f5m_nobuf ) } {}
+    ? ( f5_src_f32 m ti ) {} { ^ ( __f5m_nobuf ) }
+    : GkBuf b ( gk_dbuf_new . m kit ( f5_src_nelems m ti ) GK_F32 )
+    ? ( gk_buf_ok b ) {} { ^ ( __f5m_nobuf ) }
+    ? ( gk_dbuf_upload_raw . m kit b ( f5_src_ptr m ti ) ) {} {
+        ( gk_dbuf_free b )
+        ^ ( __f5m_nobuf )
+    }
+    ^ b
+}
+
+@ __f5m_name * F5Model m s pre i k s suf → String {
+    : String s ( string_clone . m prefix )
+    ( string_push_str s pre )
+    ( string_push_int s k )
+    ( string_push_str s suf )
+    ^ s
+}
+
+@ __f5m_name_p s prefix s pre i k s suf → String {
+    : String s ( string_from prefix )
     ( string_push_str s pre )
     ( string_push_int s k )
     ( string_push_str s suf )
@@ -158,7 +254,7 @@ $ `kernels.nu`
 }
 
 @ __f5m_up1 * F5Model m s suf → GkBuf {
-    : String s ( string_from `ema_model.transformer.` )
+    : String s ( string_clone . m prefix )
     ( string_push_str s suf )
     : GkBuf b ( __f5m_up m ( string_data s ) )
     ( string_free s )
@@ -166,7 +262,7 @@ $ `kernels.nu`
 }
 
 @ __f5m_upl * F5Model m s pre i k s suf ( Vec GkBuf ) dst → b {
-    : String s ( __f5m_name pre k suf )
+    : String s ( __f5m_name m pre k suf )
     : GkBuf b ( __f5m_up m ( string_data s ) )
     ( string_free s )
     ( vec_push [GkBuf] dst b )
@@ -179,52 +275,51 @@ $ `kernels.nu`
 // between one coalesced read and thirty-two scattered ones — and on the
 // position embedding's 31-tap grouped convolution it was 70 % of a whole
 // synthesis.
-@ __f5m_up_convw * F5Model m s name i cout i ipg i K → GkBuf {
-    : *St st # *St . m st
-    : i ti ( st_find_tensor st name )
+@ __f5m_up_convw * F5Model m s name → GkBuf {
+    : i ti ( f5_src_find m name )
     ? < ti 0 { ^ ( __f5m_nobuf ) } {}
-    ?? ( vec_get [StTensor] . st tensors ti ) {
-        T t → {
-            ? == . t dtype ST_F32 {} { ^ ( __f5m_nobuf ) }
-            : i ne . t nelems
-            ? == ne * cout * ipg K {} { ^ ( __f5m_nobuf ) }
-            : *u base ( st_tensor_ptr st t )
-            : ( Vec f ) perm ( vec_with_cap [f] ne )
-            : ~ i k 0
-            ~ < k K {
-                : ~ i j 0
-                ~ < j ipg {
-                    : ~ i c 0
-                    ~ < c cout {
-                        ( vec_push [f] perm # f ( bits_to_f32 ( __f5m_u32 base * 4 + * + * c ipg j K k ) ) )
-                        = c + c 1
-                    }
-                    = j + j 1
-                }
-                = k + k 1
+    ? ( f5_src_f32 m ti ) {} { ^ ( __f5m_nobuf ) }
+    // a Conv1d weight is [out, in/groups, kernel] — the file says which
+    : i cout ( f5_src_dim m ti 0 )
+    : i ipg ( f5_src_dim m ti 1 )
+    : i K ( f5_src_dim m ti 2 )
+    : i ne ( f5_src_nelems m ti )
+    ? & & > cout 0 > ipg 0 > K 0 {} { ^ ( __f5m_nobuf ) }
+    ? == ne * cout * ipg K {} { ^ ( __f5m_nobuf ) }
+    : *u base ( f5_src_ptr m ti )
+    : ( Vec f ) perm ( vec_with_cap [f] ne )
+    : ~ i k 0
+    ~ < k K {
+        : ~ i j 0
+        ~ < j ipg {
+            : ~ i c 0
+            ~ < c cout {
+                ( vec_push [f] perm # f ( bits_to_f32 ( __f5m_u32 base * 4 + * + * c ipg j K k ) ) )
+                = c + c 1
             }
-            : GkBuf b ( gk_dbuf_new . m kit ne GK_F32 )
-            ? ( gk_buf_ok b ) {} { ( vec_free [f] perm ) ^ ( __f5m_nobuf ) }
-            : b ok ( gk_dbuf_upload . m kit b perm )
-            ( vec_free [f] perm )
-            ? ok {} { ( gk_dbuf_free b ) ^ ( __f5m_nobuf ) }
-            ^ b
+            = j + j 1
         }
-        F → { ^ ( __f5m_nobuf ) }
+        = k + k 1
     }
+    : GkBuf b ( gk_dbuf_new . m kit ne GK_F32 )
+    ? ( gk_buf_ok b ) {} { ( vec_free [f] perm ) ^ ( __f5m_nobuf ) }
+    : b ok ( gk_dbuf_upload . m kit b perm )
+    ( vec_free [f] perm )
+    ? ok {} { ( gk_dbuf_free b ) ^ ( __f5m_nobuf ) }
+    ^ b
 }
 
-@ __f5m_up_convw1 * F5Model m s suf i cout i ipg i K → GkBuf {
-    : String s ( string_from `ema_model.transformer.` )
+@ __f5m_up_convw1 * F5Model m s suf → GkBuf {
+    : String s ( string_clone . m prefix )
     ( string_push_str s suf )
-    : GkBuf b ( __f5m_up_convw m ( string_data s ) cout ipg K )
+    : GkBuf b ( __f5m_up_convw m ( string_data s ) )
     ( string_free s )
     ^ b
 }
 
-@ __f5m_up_convwl * F5Model m s pre i idx s suf i cout i ipg i K ( Vec GkBuf ) dst → b {
-    : String s ( __f5m_name pre idx suf )
-    : GkBuf b ( __f5m_up_convw m ( string_data s ) cout ipg K )
+@ __f5m_up_convwl * F5Model m s pre i idx s suf ( Vec GkBuf ) dst → b {
+    : String s ( __f5m_name m pre idx suf )
+    : GkBuf b ( __f5m_up_convw m ( string_data s ) )
     ( string_free s )
     ( vec_push [GkBuf] dst b )
     ^ ( gk_buf_ok b )
@@ -237,14 +332,13 @@ $ `kernels.nu`
 // leaving a quarter of a wave empty and filling it — 28.5 against 22.9
 // TFLOP/s, measured on the shapes this model runs.
 @ __f5m_up_stack3 * F5Model m i idx s a s b s c i rows i cols ( Vec GkBuf ) dst → b {
-    : *St st # *St . m st
     : ( Vec i ) tis ( vec_new [i] )
-    : String n1 ( __f5m_name `transformer_blocks.` idx a )
-    : String n2 ( __f5m_name `transformer_blocks.` idx b )
-    : String n3 ( __f5m_name `transformer_blocks.` idx c )
-    ( vec_push [i] tis ( st_find_tensor st ( string_data n1 ) ) )
-    ( vec_push [i] tis ( st_find_tensor st ( string_data n2 ) ) )
-    ( vec_push [i] tis ( st_find_tensor st ( string_data n3 ) ) )
+    : String n1 ( __f5m_name m `transformer_blocks.` idx a )
+    : String n2 ( __f5m_name m `transformer_blocks.` idx b )
+    : String n3 ( __f5m_name m `transformer_blocks.` idx c )
+    ( vec_push [i] tis ( f5_src_find m ( string_data n1 ) ) )
+    ( vec_push [i] tis ( f5_src_find m ( string_data n2 ) ) )
+    ( vec_push [i] tis ( f5_src_find m ( string_data n3 ) ) )
     ( string_free n1 )
     ( string_free n2 )
     ( string_free n3 )
@@ -260,17 +354,10 @@ $ `kernels.nu`
     ~ < p 3 {
         : i ti ( __f5m_geti tis p )
         ? >= ti 0 {} { = ok F }
+        ? ok { ? & ( f5_src_f32 m ti ) == ( f5_src_nelems m ti ) want {} { = ok F } } {}
         ? ok {
-            ?? ( vec_get [StTensor] . st tensors ti ) {
-                T t → {
-                    ? & == . t dtype ST_F32 == . t nelems want {} { = ok F }
-                    ? ok {
-                        : GkBuf slot ( __f5m_view big * p want want )
-                        = ok ( gk_dbuf_upload_raw . m kit slot ( st_tensor_ptr st t ) )
-                    } {}
-                }
-                F → { = ok F }
-            }
+            : GkBuf slot ( __f5m_view big * p want want )
+            = ok ( gk_dbuf_upload_raw . m kit slot ( f5_src_ptr m ti ) )
         } {}
         = p + p 1
     }
@@ -294,7 +381,6 @@ $ `kernels.nu`
 // before the loop starts, ALL of them are one GEMM, so those 554 MB are read
 // once per utterance instead of once per step.
 @ __f5m_up_stack_mod * F5Model m → b {
-    : *St st # *St . m st
     : i per * * 6 . m dim . m dim
     : i pb * 6 . m dim
     : GkBuf w ( gk_dbuf_new . m kit * . m depth per GK_F32 )
@@ -307,33 +393,21 @@ $ `kernels.nu`
     : ~ b ok T
     : ~ i k 0
     ~ < k . m depth {
-        : String nw ( __f5m_name `transformer_blocks.` k `.attn_norm.linear.weight` )
-        : String nb ( __f5m_name `transformer_blocks.` k `.attn_norm.linear.bias` )
-        : i tw ( st_find_tensor st ( string_data nw ) )
-        : i tb ( st_find_tensor st ( string_data nb ) )
+        : String nw ( __f5m_name m `transformer_blocks.` k `.attn_norm.linear.weight` )
+        : String nb ( __f5m_name m `transformer_blocks.` k `.attn_norm.linear.bias` )
+        : i tw ( f5_src_find m ( string_data nw ) )
+        : i tb ( f5_src_find m ( string_data nb ) )
         ( string_free nw )
         ( string_free nb )
         ? & >= tw 0 >= tb 0 {} { = ok F }
+        ? ok { ? == ( f5_src_nelems m tw ) per {} { = ok F } } {}
         ? ok {
-            ?? ( vec_get [StTensor] . st tensors tw ) {
-                T t → {
-                    ? == . t nelems per {} { = ok F }
-                    ? ok {
-                        : GkBuf slot ( __f5m_view w * k per per )
-                        = ok ( gk_dbuf_upload_raw . m kit slot ( st_tensor_ptr st t ) )
-                    } {}
-                }
-                F → { = ok F }
-            }
+            : GkBuf slot ( __f5m_view w * k per per )
+            = ok ( gk_dbuf_upload_raw . m kit slot ( f5_src_ptr m tw ) )
         } {}
         ? ok {
-            ?? ( vec_get [StTensor] . st tensors tb ) {
-                T t → {
-                    : GkBuf slot ( __f5m_view b * k pb pb )
-                    = ok ( gk_dbuf_upload_raw . m kit slot ( st_tensor_ptr st t ) )
-                }
-                F → { = ok F }
-            }
+            : GkBuf slot ( __f5m_view b * k pb pb )
+            = ok ( gk_dbuf_upload_raw . m kit slot ( f5_src_ptr m tb ) )
         } {}
         = k + k 1
     }
@@ -351,7 +425,7 @@ $ `kernels.nu`
     : ~ b ok ( __f5m_up_stack_mod m )
     : ~ i k 0
     ~ < k . m nconv {
-        = ok & ok ( __f5m_up_convwl m `text_embed.text_blocks.` k `.dwconv.weight` . m td 1 7 . m tb_dw_w )
+        = ok & ok ( __f5m_up_convwl m `text_embed.text_blocks.` k `.dwconv.weight` . m tb_dw_w )
         = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.dwconv.bias` . m tb_dw_b )
         = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.norm.weight` . m tb_n_w )
         = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.norm.bias` . m tb_n_b )
@@ -468,53 +542,160 @@ $ `kernels.nu`
     = . m temb_w ( __f5m_up1 m `text_embed.text_embed.weight` )
     = . m ie_w ( __f5m_up1 m `input_embed.proj.weight` )
     = . m ie_b ( __f5m_up1 m `input_embed.proj.bias` )
-    = . m cp0_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.0.weight` 1024 64 31 )
+    = . m cp0_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.0.weight` )
     = . m cp0_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.0.bias` )
-    = . m cp2_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.2.weight` 1024 64 31 )
+    = . m cp2_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.2.weight` )
     = . m cp2_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.2.bias` )
     = . m no_w ( __f5m_up1 m `norm_out.linear.weight` )
     = . m no_b ( __f5m_up1 m `norm_out.linear.bias` )
     = . m po_w ( __f5m_up1 m `proj_out.weight` )
     = . m po_b ( __f5m_up1 m `proj_out.bias` )
-    // the embedding table's row count is text_num_embeds + 1
-    = . m vocab - / ( gk_buf_len . m temb_w ) . m td 1
     : ~ b ok ( __f5m_layers m )
     = ok & ok ( gk_buf_ok . m po_w )
     = . m loaded ok
     ^ ok
 }
 
-@ f5_open s ckpt s vocab_path i device → !*F5Model String {
-    ?? ( st_open ckpt ) {
-        T st → {
-            : *F5Model m # *F5Model ( nurl_alloc Z F5Model )
-            = . m st # i st
-            = . m kit ? >= device 0 ( gk_open device ) ( gk_open_best )
-            = . m own_kit T
-            ? ( gk_ok . m kit ) {} {
-                ( gk_close . m kit )
-                ( st_close st )
-                ( nurl_free # s m )
-                ^ ( __f5m_err `f5tts: no GPU backend available (neither CUDA nor a host C++ compiler)` )
+// Which of the four prefixes this checkpoint actually uses, found by asking
+// for a tensor every F5-TTS has. Empty when none of them do, which is what a
+// file that is not an F5-TTS checkpoint looks like from here.
+@ __f5m_probe_prefix * F5Model m → String {
+    : ( Vec String ) cands ( vec_new [String] )
+    ( vec_push [String] cands ( string_from `ema_model.transformer.` ) )
+    ( vec_push [String] cands ( string_from `ema_model_state_dict.ema_model.transformer.` ) )
+    ( vec_push [String] cands ( string_from `model_state_dict.transformer.` ) )
+    ( vec_push [String] cands ( string_from `transformer.` ) )
+    ( vec_push [String] cands ( string_new ) )
+    : ~ String found ( string_new )
+    : ~ i k 0
+    ~ < k ( vec_len [String] cands ) {
+        ?? ( vec_get [String] cands k ) {
+            T c → {
+                ? == 0 ( string_len found ) {
+                    : String probe ( string_clone c )
+                    ( string_push_str probe `proj_out.weight` )
+                    ? >= ( f5_src_find m ( string_data probe ) ) 0 {
+                        ( string_push_str found ( string_data c ) )
+                    } {}
+                    ( string_free probe )
+                } {}
             }
-            = . m dim 1024
-            = . m depth 22
-            = . m heads 16
-            = . m hd 64
-            = . m ffmult 2
-            = . m td 512
-            = . m mel 100
-            = . m nconv 4
-            = . m vocab 0
-            ( __f5m_veclists m )
-            ( __f5m_scratch_zero m )
-            ? ( __f5m_upload_all m ) {} {
-                ^ ( __f5m_err `f5tts: the checkpoint is missing tensors this architecture needs` )
-            }
-            ^ @ !*F5Model String { T m }
+            F → {}
         }
-        F e → { ^ @ !*F5Model String { F e } }
+        = k + k 1
     }
+    : ( @ v String ) drop_c \ String s → v { ( string_free s ) }
+    ( vec_free_with [String] cands drop_c )
+    ^ found
+}
+
+// The architecture, read off the tensors rather than assumed. A checkpoint
+// carries its own shape: proj_out is [mel, dim], the embedding table is
+// [text_num_embeds + 1, text_dim], the rotary inverse frequencies are hd/2
+// long, the feed-forward's first matrix is [ff_mult*dim, dim], and the depth
+// is however many transformer_blocks.N there are. So F5TTS_Base, _Small, v1
+// and a finetune of any of them all load without being told which they are.
+@ __f5m_read_arch * F5Model m → b {
+    : i po ( f5_src_find_p m `proj_out.weight` )
+    ? >= po 0 {} { ^ F }
+    = . m mel ( f5_src_dim m po 0 )
+    = . m dim ( f5_src_dim m po 1 )
+    : i te ( f5_src_find_p m `text_embed.text_embed.weight` )
+    ? >= te 0 {} { ^ F }
+    = . m vocab - ( f5_src_dim m te 0 ) 1
+    = . m td ( f5_src_dim m te 1 )
+    : i rf ( f5_src_find_p m `rotary_embed.inv_freq` )
+    = . m hd ? >= rf 0 * 2 ( f5_src_nelems m rf ) 64
+    = . m heads / . m dim . m hd
+    : i f1 ( f5_src_find_p m `transformer_blocks.0.ff.ff.0.0.weight` )
+    ? >= f1 0 {} { ^ F }
+    = . m ffmult / ( f5_src_dim m f1 0 ) . m dim
+    : i cp ( f5_src_find_p m `input_embed.conv_pos_embed.conv1d.0.weight` )
+    ? >= cp 0 {} { ^ F }
+    = . m cp_k ( f5_src_dim m cp 2 )
+    = . m cp_groups / . m dim ( f5_src_dim m cp 1 )
+    = . m tb_k 7
+    : ~ i depth 0
+    ~ T {
+        : String nm ( __f5m_name m `transformer_blocks.` depth `.attn.to_q.weight` )
+        : i idx ( f5_src_find m ( string_data nm ) )
+        ( string_free nm )
+        ? < idx 0 { ^ ( __f5m_arch_ok m depth ) } {}
+        = depth + depth 1
+    }
+    ^ F
+}
+
+@ __f5m_arch_ok * F5Model m i depth → b {
+    = . m depth depth
+    : ~ i nconv 0
+    ~ T {
+        : String nm ( __f5m_name m `text_embed.text_blocks.` nconv `.dwconv.weight` )
+        : i idx ( f5_src_find m ( string_data nm ) )
+        ( string_free nm )
+        ? < idx 0 {
+            = . m nconv nconv
+            ^ & & > depth 0 > . m dim 0 > . m heads 0
+        } {}
+        ? == nconv 0 { = . m tb_k ( f5_src_dim m idx 2 ) } {}
+        = nconv + nconv 1
+    }
+    ^ F
+}
+
+// A checkpoint is a path to a .safetensors or a .pt. Which container, which
+// prefix and which architecture are all read out of the file: nothing here is
+// told what it is about to open.
+@ f5_open s ckpt s vocab_path i device → !*F5Model String {
+    : *F5Model m # *F5Model ( nurl_alloc Z F5Model )
+    = . m st 0
+    = . m pt 0
+    = . m prefix ( string_new )
+    : b is_pt | ( nurl_str_ends ckpt `.pt` ) | ( nurl_str_ends ckpt `.pth` ) ( nurl_str_ends ckpt `.bin` )
+    ? is_pt {
+        ?? ( pt_open ckpt ) {
+            T pt → { = . m pt # i pt }
+            F e → {
+                ( nurl_free # s m )
+                ^ @ !*F5Model String { F e }
+            }
+        }
+    } {
+        ?? ( st_open ckpt ) {
+            T st → { = . m st # i st }
+            F e → {
+                ( nurl_free # s m )
+                ^ @ !*F5Model String { F e }
+            }
+        }
+    }
+    = . m kit ? >= device 0 ( gk_open device ) ( gk_open_best )
+    = . m own_kit T
+    ? ( gk_ok . m kit ) {} {
+        ( f5_close m )
+        ^ ( __f5m_err `f5tts: no GPU backend available (neither CUDA nor a host C++ compiler)` )
+    }
+    ( __f5m_veclists m )
+    ( __f5m_scratch_zero m )
+    = . m an_all ( __f5m_nobuf )
+    = . m anb_all ( __f5m_nobuf )
+    : String pfx ( __f5m_probe_prefix m )
+    ? > ( string_len pfx ) 0 {} {
+        ( string_free pfx )
+        ( f5_close m )
+        ^ ( __f5m_err `f5tts: this file has no F5-TTS transformer in it (looked for proj_out.weight under every prefix a release uses)` )
+    }
+    ( string_free . m prefix )
+    = . m prefix pfx
+    ? ( __f5m_read_arch m ) {} {
+        ( f5_close m )
+        ^ ( __f5m_err `f5tts: the checkpoint's shapes do not describe a DiT` )
+    }
+    ? ( __f5m_upload_all m ) {} {
+        ( f5_close m )
+        ^ ( __f5m_err `f5tts: the checkpoint is missing tensors this architecture needs` )
+    }
+    ^ @ !*F5Model String { T m }
 }
 
 // Free every buffer in the list but KEEP the list — an unload empties it and
@@ -572,6 +753,9 @@ $ `kernels.nu`
     ( __f5m_freev . m f1_w ) ( __f5m_freev . m f1_b )
     ( __f5m_freev . m f2_w ) ( __f5m_freev . m f2_b )
     ? != . m st 0 { ( st_close # *St . m st ) = . m st 0 } {}
+    ? != . m pt 0 { ( pt_close # *Pt . m pt ) = . m pt 0 } {}
+    ( string_free . m prefix )
+    = . m prefix ( string_new )
     ? . m own_kit { ( gk_close . m kit ) } {}
     ( nurl_free # s m )
 }
@@ -677,8 +861,7 @@ $ `kernels.nu`
     : i td . m td
     : i half / td 2
     : i nt ( vec_len [i] ids )
-    : *St st # *St . m st
-    : i ti ( st_find_tensor st `ema_model.transformer.text_embed.text_embed.weight` )
+    : i ti ( f5_src_find_p m `text_embed.text_embed.weight` )
     ? < ti 0 { ^ v } {}
     // the 256 frequencies, computed once
     : ( Vec f ) inv ( vec_with_cap [f] half )
@@ -687,42 +870,39 @@ $ `kernels.nu`
         ( vec_push [f] inv / 1.0 ( pow 10000.0 / # f * 2 j # f td ) )
         = j + j 1
     }
-    ?? ( vec_get [StTensor] . st tensors ti ) {
-        T tt → {
-            : *u base ( st_tensor_ptr st tt )
-            : ~ i t 0
-            ~ < t n {
-                // 0 is the filler token: a position past the end of the text,
-                // and the one the mask zeroes after every ConvNeXt block
-                : ~ i id 0
-                ? < t nt {
-                    ?? ( vec_get [i] ids t ) { T x → { = id + x 1 } F → {} }
-                } {}
-                // the padding mask is the REAL text's, computed before the
-                // drop — so the unconditional text embedding is the filler
-                // token run through the encoder, not a block of zeros
-                ( vec_push [f] keep ? == id 0 0.0 1.0 )
-                ? drop { = id 0 } {}
-                = j 0
-                ~ < j td {
-                    // row 0 is the FILLER token's embedding, not a hole: the
-                    // unconditional branch of classifier-free guidance reads
-                    // it at every position, so skipping it as if id 0 meant
-                    // "no embedding" leaves the unconditional forward with
-                    // the position code and nothing else
-                    : f w # f ( bits_to_f32 ( __f5m_u32 base * 4 + * id td j ) )
-                    : ~ f pe 0.0
-                    ?? ( vec_get [f] inv ? < j half j - j half ) {
-                        T fq → { : f a * # f t fq = pe ? < j half ( cos a ) ( sin a ) }
-                        F → {}
-                    }
-                    ( vec_push [f] out + w pe )
-                    = j + j 1
+    : *u base ( f5_src_ptr m ti )
+    {
+        : ~ i t 0
+        ~ < t n {
+            // 0 is the filler token: a position past the end of the text,
+            // and the one the mask zeroes after every ConvNeXt block
+            : ~ i id 0
+            ? < t nt {
+                ?? ( vec_get [i] ids t ) { T x → { = id + x 1 } F → {} }
+            } {}
+            // the padding mask is the REAL text's, computed before the
+            // drop — so the unconditional text embedding is the filler
+            // token run through the encoder, not a block of zeros
+            ( vec_push [f] keep ? == id 0 0.0 1.0 )
+            ? drop { = id 0 } {}
+            = j 0
+            ~ < j td {
+                // row 0 is the FILLER token's embedding, not a hole: the
+                // unconditional branch of classifier-free guidance reads
+                // it at every position, so skipping it as if id 0 meant
+                // "no embedding" leaves the unconditional forward with
+                // the position code and nothing else
+                : f w # f ( bits_to_f32 ( __f5m_u32 base * 4 + * id td j ) )
+                : ~ f pe 0.0
+                ?? ( vec_get [f] inv ? < j half j - j half ) {
+                    T fq → { : f a * # f t fq = pe ? < j half ( cos a ) ( sin a ) }
+                    F → {}
                 }
-                = t + t 1
+                ( vec_push [f] out + w pe )
+                = j + j 1
             }
+            = t + t 1
         }
-        F → {}
     }
     ( vec_free [f] inv )
 }
@@ -748,7 +928,8 @@ $ `kernels.nu`
     : GkBuf t3 ( __f5m_view . m tscr3 0 * rows td )
     : GkBuf big ( __f5m_view . m tscr 0 * rows inner )
     : ~ b ok ( f5k_conv1d_t4 . m kit . x dptr . t2 dptr
-    ( __f5m_dptr . m tb_dw_w idx ) ( __f5m_dptr . m tb_dw_b idx ) 1 rows td td 7 3 td )
+    ( __f5m_dptr . m tb_dw_w idx ) ( __f5m_dptr . m tb_dw_b idx ) 1 rows td td
+    . m tb_k / . m tb_k 2 td )
     = ok & ok ( f5k_lnaff . m kit . t2 dptr . t3 dptr
     ( __f5m_dptr . m tb_n_w idx ) ( __f5m_dptr . m tb_n_b idx ) rows td 1.0e-6 )
     = ok & ok ( gkd_gemm . m kit big t3 ( __f5m_bget . m tb_p1_w idx )
@@ -890,10 +1071,10 @@ $ `kernels.nu`
     = ok & ok ( gkd_gemm . m kit h cat . m ie_w . m ie_b 1 rows dim + * 2 mel td 1.0 1.0 1 )
     // the convolutional position embedding, added as a residual
     = ok & ok ( f5k_conv1d_t4 . m kit . h dptr . tmp dptr . . m cp0_w dptr
-    . . m cp0_b dptr batch n dim dim 31 15 16 )
+    . . m cp0_b dptr batch n dim dim . m cp_k / . m cp_k 2 . m cp_groups )
     = ok & ok ( f5k_mish . m kit . tmp dptr * rows dim )
     = ok & ok ( f5k_conv1d_t4 . m kit . tmp dptr . hn dptr . . m cp2_w dptr
-    . . m cp2_b dptr batch n dim dim 31 15 16 )
+    . . m cp2_b dptr batch n dim dim . m cp_k / . m cp_k 2 . m cp_groups )
     = ok & ok ( f5k_mish . m kit . hn dptr * rows dim )
     = ok & ok ( f5k_addinto . m kit . h dptr . hn dptr * rows dim )
     ? ok {} { ^ F }
@@ -1063,3 +1244,13 @@ $ `kernels.nu`
     ( vec_free [f] ts )
     ^ ok
 }
+
+@ f5_dim * F5Model m → i { ^ . m dim }
+
+@ f5_depth * F5Model m → i { ^ . m depth }
+
+@ f5_heads * F5Model m → i { ^ . m heads }
+
+@ f5_td * F5Model m → i { ^ . m td }
+
+@ f5_prefix * F5Model m → s { ^ ( string_data . m prefix ) }
