@@ -25,7 +25,6 @@ $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
 $ `deps/torchpt/src/torchpt.nu`
-$ `deps/audio/src/mel.nu`
 $ `deps/audio/src/istft.nu`
 $ `kernels.nu`
 

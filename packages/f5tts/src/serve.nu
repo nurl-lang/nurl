@@ -24,27 +24,22 @@
 // before it runs. The wakes come from a ticker thread, because a thread
 // asleep on a condition variable has no way to notice time passing.
 
-$ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/float.nu`
-$ `stdlib/std/path.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/core/cell.nu`
 $ `deps/http/src/http.nu`
 $ `deps/audio/src/wav.nu`
 $ `deps/audio/src/mp3.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `model.nu`
-$ `sample.nu`
 $ `vocos.nu`
 $ `run.nu`
 $ `text.nu`
-$ `verify.nu`
 $ `store.nu`
 $ `registry.nu`
 $ `ui.nu`
@@ -874,17 +869,21 @@ s host i port s token i device i unload_s → i {
     // The model in use may be a repository reference rather than a directory
     // on this machine, and a list that leaves out what is currently loaded is
     // a list nobody can trust.
-    : String cur ( __f5s_cur_id )
-    ? & > ( string_len cur ) 0 ! ( f5_registry_has reg ( string_data cur ) ) {
+    //
+    // `__f5s_cur_id` hands back the GLOBAL's handle, not a copy — binding it
+    // to a `String` and freeing it frees the service's own current-model id,
+    // and every later read of it is a use-after-free that lands in libc with
+    // no NURL frame to blame. It is borrowed here, as `s`, and never freed.
+    : s cur ( string_data ( __f5s_cur_id ) )
+    ? & > ( nurl_str_len cur ) 0 ! ( f5_registry_has reg cur ) {
         : Json o ( json_obj_new )
-        : b _a ( json_obj_set o `model_id` ( json_str_lit ( string_data cur ) ) )
+        : b _a ( json_obj_set o `model_id` ( json_str_lit cur ) )
         : b _b ( json_obj_set o `source` ( json_str_lit `reference` ) )
-        : b _c ( json_obj_set o `path` ( json_str_lit ( string_data cur ) ) )
+        : b _c ( json_obj_set o `path` ( json_str_lit cur ) )
         : b _d ( json_obj_set o `on_this_machine` ( json_bool T ) )
         : b _e ( json_obj_set o `current` ( json_bool T ) )
         : b _f ( json_arr_push arr o )
     } {}
-    ( string_free cur )
     ( f5_registry_free reg )
     : HttpResponse r ( response_json 200 arr )
     ( json_free arr )

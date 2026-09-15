@@ -17,7 +17,6 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/std/float.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
 $ `deps/audio/src/wav.nu`
@@ -216,14 +215,19 @@ $ `deps/audio/src/wav.nu`
 @ f5_transcribe ( Vec f ) wave → String {
     : ( Vec u ) wav ( wav_encode wave 24000 1 )
     : b as_form > ( nurl_str_len g_f5v_lang ) 0
-    : ~ String ctype ( string_from `audio/wav` )
-    : ( Vec u ) bytes ? as_form
-    ( __f5v_multipart wav g_f5v_lang `f5ttsboundary` )
-    ( vec_clone [u] wav )
+    // Built as statements rather than one ternary: both arms here allocate,
+    // and an arm that is chosen but never taken still has to be nobody's.
+    : ~ String ctype ( string_new )
+    : ~ ( Vec u ) bytes ( vec_new [u] )
     ? as_form {
-        ( string_free ctype )
-        = ctype ( string_from `multipart/form-data; boundary=f5ttsboundary` )
-    } {}
+        ( string_push_str ctype `multipart/form-data; boundary=f5ttsboundary` )
+        ( vec_free [u] bytes )
+        = bytes ( __f5v_multipart wav g_f5v_lang `f5ttsboundary` )
+    } {
+        ( string_push_str ctype `audio/wav` )
+        ( vec_free [u] bytes )
+        = bytes ( vec_clone [u] wav )
+    }
     ( vec_free [u] wav )
     : String url ( f5_whisper_where )
     ( string_push_str url `/inference` )

@@ -6,18 +6,15 @@
 //   f5tts tokens <vocab.txt> <file>    one line of ids per line of the file
 //   f5tts chunks <file> --max N        the text split the way F5-TTS splits it
 
-$ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/args.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/std/float.nu`
 $ `deps/audio/src/wav.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `text.nu`
 $ `model.nu`
-$ `sample.nu`
 $ `vocos.nu`
 $ `run.nu`
 $ `deps/audio/src/mp3.nu`

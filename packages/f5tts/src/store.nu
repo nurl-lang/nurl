@@ -13,11 +13,9 @@
 // happen to share. This directory is for what the machine ITSELF has: voices
 // somebody recorded, and checkpoints somebody trained or downloaded by hand.
 
-$ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
-$ `stdlib/std/path.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 

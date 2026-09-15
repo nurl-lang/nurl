@@ -32,9 +32,6 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/path.nu`
-$ `deps/hub/src/store.nu`
-$ `deps/hub/src/hf.nu`
-$ `deps/hub/src/pull.nu`
 $ `deps/hub/src/hub.nu`
 $ `deps/audio/src/wav.nu`
 $ `deps/audio/src/mel.nu`
@@ -44,7 +41,6 @@ $ `sample.nu`
 $ `text.nu`
 $ `vocos.nu`
 $ `verify.nu`
-$ `store.nu`
 
 : i F5_SR 24000
 
@@ -258,7 +254,6 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
     ( string_push_str full gen_text )
     ( f5_text_ids vocab ( string_data full ) ids )
     ( string_free full )
-    : i gen_bytes ( nurl_str_len gen_text )
     : i duration ( f5_duration v gen_text ( vec_len [i] ids ) speed )
     : ( Vec f ) noise ( f5_noise duration 100 seed )
     : ( Vec f ) y ( vec_new [f] )

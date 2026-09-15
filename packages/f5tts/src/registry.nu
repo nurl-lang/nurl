@@ -25,16 +25,10 @@
 // machine that has just installed it works, and the first request pays the
 // download.
 
-$ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
-$ `stdlib/std/path.nu`
-$ `deps/hub/src/store.nu`
-$ `deps/hub/src/hf.nu`
-$ `deps/hub/src/pull.nu`
 $ `deps/hub/src/hub.nu`
-$ `store.nu`
 
 : F5Entry {
     String id

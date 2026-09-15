@@ -12,8 +12,6 @@
 // starts empty: a prefilled sentence in one language is a default for that
 // language and a nuisance in every other.
 
-$ `stdlib/core/string.nu`
-
 @ f5_ui_html → s {
     ^ `<!doctype html>
 <html lang="en">
