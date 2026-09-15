@@ -576,3 +576,48 @@ $ `stdlib/std/float.nu`
     ( vec_free [f] re )
     ( vec_free [f] im )
 }
+
+// The inverse of `fft_rfft`: the n/2+1 bins of a real signal's spectrum back
+// to the n real samples, scaled by 1/n (numpy's norm="backward", torch's
+// default). This is the transform a vocoder's ISTFT is built on — a neural
+// vocoder predicts magnitude and phase per bin and has to get a waveform out.
+//
+// A real signal's spectrum is conjugate-symmetric, so the missing upper half
+// is not information, it is arithmetic: X[n−k] = conj(X[k]). Mirroring it and
+// running the ordinary inverse transform is exact, and it keeps one inverse
+// in the file rather than two that could drift apart. `out` is cleared and
+// filled with n samples; the imaginary part of the result is zero to rounding
+// and is dropped.
+@ fft_irfft_plan * FftPlan p ( Vec f ) in_re ( Vec f ) in_im ( Vec f ) out → v {
+    : i n . p n
+    : i h / n 2
+    : ( Vec f ) re ( vec_with_cap [f] n )
+    : ( Vec f ) im ( vec_with_cap [f] n )
+    : ~ i k 0
+    ~ <= k h {
+        ( vec_push [f] re ( __fget in_re k ) )
+        ( vec_push [f] im ( __fget in_im k ) )
+        = k + k 1
+    }
+    = k + h 1
+    ~ < k n {
+        ( vec_push [f] re ( __fget in_re - n k ) )
+        ( vec_push [f] im - 0.0 ( __fget in_im - n k ) )
+        = k + k 1
+    }
+    ( fft_exec_inv p re im )
+    ( vec_clear [f] out )
+    = k 0
+    ~ < k n {
+        ( vec_push [f] out ( __fget re k ) )
+        = k + k 1
+    }
+    ( vec_free [f] re )
+    ( vec_free [f] im )
+}
+
+@ fft_irfft ( Vec f ) in_re ( Vec f ) in_im i n ( Vec f ) out → v {
+    : *FftPlan p ( fft_plan n )
+    ( fft_irfft_plan p in_re in_im out )
+    ( fft_free p )
+}

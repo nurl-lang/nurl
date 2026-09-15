@@ -54,6 +54,7 @@ $ `src/vad.nu`
     ( args_opt p `rate` 0 `HZ` `for resample/tone: the target sample rate (default 16000)` )
     ( args_opt p `seconds` 0 `S` `for tone: length in seconds (default 1)` )
     ( args_opt p `mels` 0 `N` `for mel: how many mel bands (default 80; whisper large-v3 wants 128)` )
+    ( args_flag p `vocos` 0 `for mel: the vocos/torchaudio mel (24 kHz, 1024/256, HTK, magnitude) instead of whisper's` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -134,6 +135,35 @@ $ `src/vad.nu`
                 ( string_push_float m / # f frames # f . w rate )
                 ( string_push_str m ` s)` )
                 ( __say m )
+            } {}
+            // The vocos/torchaudio mel — the one F5-TTS and every
+            // vocos-family vocoder reads: HTK scale, unnormalised triangles,
+            // magnitude rather than power, natural log clamped at 1e-5, at
+            // 24 kHz with n_fft 1024 and hop 256, and no frame dropped.
+            ? & != 0 ( nurl_str_eq cmd `mel` ) ( args_present p `vocos` ) {
+                : ~ i nmel 100
+                : String smel ( args_value_or p `mels` `100` )
+                ?? ( string_to_int smel ) { T v → { = nmel v } F _ → {} }
+                ( string_free smel )
+                : ( Vec f ) mono ( wav_mono w )
+                : ( Vec f ) at24 ( resample mono . w rate 24000 )
+                : ( Vec f ) mel ( log_mel_vocos at24 1024 256 nmel 24000 )
+                : String o ( args_value_or p `output` `mel.f32` )
+                = rc ( __write_f32 ( string_data o ) mel )
+                : String m ( string_from `mel (vocos) — ` )
+                ( string_push_int m / ( vec_len [f] mel ) nmel )
+                ( string_push_str m ` frames x ` )
+                ( string_push_int m nmel )
+                ( string_push_str m ` mels → ` )
+                ( string_push_str m ( string_data o ) )
+                ( __say m )
+                ( string_free o )
+                ( vec_free [f] mono )
+                ( vec_free [f] at24 )
+                ( vec_free [f] mel )
+                ( wav_free w )
+                ( args_free p )
+                ^ rc
             } {}
             ? ( nurl_str_eq cmd `mel` ) {
                 : ~ i nmel 80
