@@ -103,6 +103,12 @@ function withToken(url) {
 }
 
 fetch("/health").then(function (r) { return r.json(); }).then(function (h) {
+  if (h.loaded === false) {
+    el("model").textContent = "model idle (released after " + h.unload_after_s +
+      " s without requests; the next request reloads it, last load " + h.last_load_ms +
+      " ms) — requests served: " + h.requests;
+    return;
+  }
   el("model").textContent = "model: d_model " + h.d_model + ", " + h.encoder_layers +
     "+" + h.decoder_layers + " layers, " + h.n_mels + " mel bands — requests served: " + h.requests;
 }).catch(function () { el("model").textContent = "health check failed"; });

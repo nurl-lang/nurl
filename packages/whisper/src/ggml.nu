@@ -42,6 +42,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 
 // dtype codes shared with the safetensor reader's ST_* so __wh_up's dispatch
@@ -49,8 +50,16 @@ $ `stdlib/std/fs.nu`
 // quantised block format this package does not run yet.
 
 : Gg {
-    ( Vec u ) data  // the whole file, owned by this handle
+    // The whole file, as bytes: an mmap where the platform has one (the
+    // page cache IS the copy, and a model that is already cached maps in
+    // microseconds), the read fallback's Vec elsewhere. `gg_release_data`
+    // gives it back once the weights are on the device — nothing reads
+    // the file after that, and 3 GB of a large model is not a thing to
+    // keep around for the vocabulary's sake.
+    * u map
     i nbytes
+    b from_mmap
+    ( Vec u ) data  // the read fallback's storage — empty when mapped
     i n_vocab
     i n_audio_ctx
     i n_audio_state
@@ -72,7 +81,21 @@ $ `stdlib/std/fs.nu`
     ( vec_free_with [String] v \ String s2 → v { ( string_free s2 ) } )
 }
 
+// Give the file back — the mapping or the read buffer — and keep the
+// parsed metadata (vocabulary, tensor table). After this `gg_ptr` must not
+// be called; the loader calls it exactly once, right after the last upload.
+@ gg_release_data * Gg g → v {
+    ? . g from_mmap {
+        ? != # i . g map 0 { : i32 _u ( munmap . g map . g nbytes ) } {}
+    } {}
+    = . g from_mmap F
+    = . g map # *u 0
+    ( vec_free [u] . g data )
+    = . g data ( vec_new [u] )
+}
+
 @ gg_close * Gg g → v {
+    ( gg_release_data g )
     ( vec_free [u] . g data )
     ( __gg_free_strings . g vocab )
     ( __gg_free_strings . g tnames )
@@ -97,137 +120,187 @@ $ `stdlib/std/fs.nu`
 }
 
 @ gg_open s path → !*Gg String {
+    : *Gg g # *Gg ( nurl_alloc Z Gg )
+    // nurl_alloc does NOT zero: every field read before assignment is set here
+    = . g map # *u 0
+    = . g nbytes 0
+    = . g from_mmap F
+    = . g data ( vec_new [u] )
+    = . g vocab ( vec_new [String] )
+    = . g tnames ( vec_new [String] )
+    = . g ttypes ( vec_new [i] )
+    = . g tnelems ( vec_new [i] )
+    = . g toffs ( vec_new [i] )
+    ? ( __gg_map g path ) {} {
+        ( gg_close g )
+        : String m ( string_from `ggml: cannot read ` )
+        ( string_push_str m path )
+        ^ @ !*Gg String { F m }
+    }
+    ^ ( __gg_parse g )
+}
+
+// Bring the file into the address space. mmap where the platform has it —
+// the same shape as the safetensor reader: no copy, the page cache is the
+// storage, and `MADV_SEQUENTIAL` tells the kernel the one pass the loader
+// makes over it (a cold file streams in at the disk's readahead rate rather
+// than a page fault at a time). Elsewhere (Windows, WASI) the file is read
+// into a Vec and `map` points at its bytes.
+@ __gg_map * Gg g s path → b {
+    ? != ( posix_const `MAP_PRIVATE` ) -1 {
+        : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
+        ? < # i fd 0 { ^ F } {}
+        : i sz ( lseek fd 0 # i32 2 )
+        ? < sz 0 { : i32 _c ( close fd ) ^ F } {}
+        // an empty file maps nothing; the parser says "too short" like it
+        // always did
+        ? == sz 0 { : i32 _c0 ( close fd ) ^ T } {}
+        // MAP_POPULATE (Linux): the kernel maps every page in one pass, so the
+        // upload's copy threads do not each take 780,000 page faults across
+        // a 3 GB model. Where the constant is unknown the mapping faults in
+        // lazily, which is only slower.
+        : ~ i flags ( posix_const `MAP_PRIVATE` )
+        : i pop ( posix_const `MAP_POPULATE` )
+        ? != pop -1 { = flags | flags pop } {}
+        : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 flags fd 0 )
+        : i32 _c1 ( close fd )
+        ? == # i m -1 { ^ F } {}
+        : i adv ( posix_const `MADV_SEQUENTIAL` )
+        ? != adv -1 { : i32 _a ( madvise m sz # i32 adv ) } {}
+        = . g map m
+        = . g nbytes sz
+        = . g from_mmap T
+        ^ T
+    } {}
     ?? ( read_file_bytes path ) {
         T raw → {
-            : i n ( vec_len [u] raw )
-            : *Gg g # *Gg ( nurl_alloc Z Gg )
             = . g data raw
-            = . g nbytes n
-            = . g vocab ( vec_new [String] )
-            = . g tnames ( vec_new [String] )
-            = . g ttypes ( vec_new [i] )
-            = . g tnelems ( vec_new [i] )
-            = . g toffs ( vec_new [i] )
-            ? < n 56 {
-                ( gg_close g )
-                ^ ( __gg_err `ggml: file too short for a header` )
-            } {}
-            : *u dd ( vec_data [u] raw )
-            // magic 0x67676d6c on disk is the bytes 'l' 'm' 'g' 'g' —
-            // checked as bytes, so nobody has to trust a decimal spelling
-            ? | | | != & # i . dd 0 255 108 != & # i . dd 1 255 109 != & # i . dd 2 255 103 != & # i . dd 3 255 103 {
-                ( gg_close g )
-                ^ ( __gg_err `ggml: bad magic (not a ggml file)` )
-            } {}
-            = . g n_vocab ( __gg_i32 dd 4 )
-            = . g n_audio_ctx ( __gg_i32 dd 8 )
-            = . g n_audio_state ( __gg_i32 dd 12 )
-            = . g n_audio_head ( __gg_i32 dd 16 )
-            = . g n_audio_layer ( __gg_i32 dd 20 )
-            = . g n_text_ctx ( __gg_i32 dd 24 )
-            = . g n_text_state ( __gg_i32 dd 28 )
-            = . g n_text_head ( __gg_i32 dd 32 )
-            = . g n_text_layer ( __gg_i32 dd 36 )
-            = . g n_mels ( __gg_i32 dd 40 )
-            // hparams[10] = ftype; the per-tensor ttypes below are what
-            // actually matter.
-
-            // mel filters: skip (ours are verified against HF's own)
-            : ~ i off 48
-            ? > + off 8 n { ( gg_close g ) ^ ( __gg_err `ggml: truncated at filters` ) } {}
-            : i fmel ( __gg_i32 dd off )
-            : i ffft ( __gg_i32 dd + off 4 )
-            = off + off 8
-            ? | | < fmel 0 < ffft 0 > + off * * fmel ffft 4 n {
-                ( gg_close g )
-                ^ ( __gg_err `ggml: filter block overruns the file` )
-            } {}
-            = off + off * * fmel ffft 4
-
-            // vocabulary: raw words
-            ? > + off 4 n { ( gg_close g ) ^ ( __gg_err `ggml: truncated at vocab` ) } {}
-            : i nvf ( __gg_i32 dd off )
-            = off + off 4
-            ? | < nvf 0 > nvf . g n_vocab {
-                ( gg_close g )
-                ^ ( __gg_err `ggml: vocab count is a lie` )
-            } {}
-            : ~ i k 0
-            : ~ b vok T
-            ~ & vok < k nvf {
-                ? > + off 4 n { = vok F } {
-                    : i wl ( __gg_i32 dd off )
-                    = off + off 4
-                    ? | < wl 0 > + off wl n { = vok F } {
-                        : String w2 ( string_with_cap + wl 1 )
-                        : ~ i j 0
-                        ~ < j wl {
-                            ( string_push_char w2 & # i . dd + off j 255 )
-                            = j + j 1
-                        }
-                        ( vec_push [String] . g vocab w2 )
-                        = off + off wl
-                    }
-                }
-                = k + k 1
-            }
-            ? ! vok { ( gg_close g ) ^ ( __gg_err `ggml: vocab overruns the file` ) } {}
-
-            // tensors until EOF
-            : ~ b tok2 T
-            ~ & tok2 < off n {
-                ? > + off 12 n { = tok2 F } {
-                    : i nd ( __gg_i32 dd off )
-                    : i nl ( __gg_i32 dd + off 4 )
-                    : i tt ( __gg_i32 dd + off 8 )
-                    = off + off 12
-                    ? | | | < nd 1 > nd 4 < nl 1 > nl 256 { = tok2 F } {
-                        ? > + off + * nd 4 nl n { = tok2 F } {
-                            : ~ i ne 1
-                            : ~ i di 0
-                            ~ < di nd {
-                                : i dv ( __gg_i32 dd + off * di 4 )
-                                ? | < dv 1 > dv 16777216 { = tok2 F } {}
-                                = ne * ne dv
-                                = di + di 1
-                            }
-                            = off + off * nd 4
-                            : String nm ( string_with_cap + nl 1 )
-                            : ~ i nj 0
-                            ~ < nj nl {
-                                ( string_push_char nm & # i . dd + off nj 255 )
-                                = nj + nj 1
-                            }
-                            = off + off nl
-                            ? & != tt 0 != tt 1 {
-                                ( string_free nm )
-                                ( gg_close g )
-                                ^ ( __gg_err `ggml: quantised tensors (q4/q5/q8) are not supported yet — use an f16 ggml model or the safetensors checkpoint` )
-                            } {}
-                            : i tsz * ne ? == tt 0 4 2
-                            ? | ! tok2 > + off tsz n {
-                                ( string_free nm )
-                                = tok2 F
-                            } {
-                                ( vec_push [String] . g tnames nm )
-                                ( vec_push [i] . g ttypes tt )
-                                ( vec_push [i] . g tnelems ne )
-                                ( vec_push [i] . g toffs off )
-                                = off + off tsz
-                            }
-                        }
-                    }
-                }
-            }
-            ? ! tok2 { ( gg_close g ) ^ ( __gg_err `ggml: tensor block overruns the file` ) } {}
-            ^ @ !*Gg String { T g }
+            = . g map ( vec_data [u] . g data )
+            = . g nbytes ( vec_len [u] . g data )
+            ^ T
         }
-        F _ → {
-            : String m ( string_from `ggml: cannot read ` )
-            ( string_push_str m path )
-            ^ @ !*Gg String { F m }
+        F _ → { ^ F }
+    }
+}
+
+// The container's own parse over the mapped bytes: header, the mel filters
+// (skipped), the vocabulary, the tensor table. Every length is checked
+// against the mapping before it is trusted.
+@ __gg_parse * Gg g → !*Gg String {
+    : i n . g nbytes
+    ? < n 56 {
+        ( gg_close g )
+        ^ ( __gg_err `ggml: file too short for a header` )
+    } {}
+    : *u dd . g map
+    // magic 0x67676d6c on disk is the bytes 'l' 'm' 'g' 'g' —
+    // checked as bytes, so nobody has to trust a decimal spelling
+    ? | | | != & # i . dd 0 255 108 != & # i . dd 1 255 109 != & # i . dd 2 255 103 != & # i . dd 3 255 103 {
+        ( gg_close g )
+        ^ ( __gg_err `ggml: bad magic (not a ggml file)` )
+    } {}
+    = . g n_vocab ( __gg_i32 dd 4 )
+    = . g n_audio_ctx ( __gg_i32 dd 8 )
+    = . g n_audio_state ( __gg_i32 dd 12 )
+    = . g n_audio_head ( __gg_i32 dd 16 )
+    = . g n_audio_layer ( __gg_i32 dd 20 )
+    = . g n_text_ctx ( __gg_i32 dd 24 )
+    = . g n_text_state ( __gg_i32 dd 28 )
+    = . g n_text_head ( __gg_i32 dd 32 )
+    = . g n_text_layer ( __gg_i32 dd 36 )
+    = . g n_mels ( __gg_i32 dd 40 )
+    // hparams[10] = ftype; the per-tensor ttypes below are what
+    // actually matter.
+
+    // mel filters: skip (ours are verified against HF's own)
+    : ~ i off 48
+    ? > + off 8 n { ( gg_close g ) ^ ( __gg_err `ggml: truncated at filters` ) } {}
+    : i fmel ( __gg_i32 dd off )
+    : i ffft ( __gg_i32 dd + off 4 )
+    = off + off 8
+    ? | | < fmel 0 < ffft 0 > + off * * fmel ffft 4 n {
+        ( gg_close g )
+        ^ ( __gg_err `ggml: filter block overruns the file` )
+    } {}
+    = off + off * * fmel ffft 4
+
+    // vocabulary: raw words
+    ? > + off 4 n { ( gg_close g ) ^ ( __gg_err `ggml: truncated at vocab` ) } {}
+    : i nvf ( __gg_i32 dd off )
+    = off + off 4
+    ? | < nvf 0 > nvf . g n_vocab {
+        ( gg_close g )
+        ^ ( __gg_err `ggml: vocab count is a lie` )
+    } {}
+    : ~ i k 0
+    : ~ b vok T
+    ~ & vok < k nvf {
+        ? > + off 4 n { = vok F } {
+            : i wl ( __gg_i32 dd off )
+            = off + off 4
+            ? | < wl 0 > + off wl n { = vok F } {
+                : String w2 ( string_with_cap + wl 1 )
+                : ~ i j 0
+                ~ < j wl {
+                    ( string_push_char w2 & # i . dd + off j 255 )
+                    = j + j 1
+                }
+                ( vec_push [String] . g vocab w2 )
+                = off + off wl
+            }
+        }
+        = k + k 1
+    }
+    ? ! vok { ( gg_close g ) ^ ( __gg_err `ggml: vocab overruns the file` ) } {}
+
+    // tensors until EOF
+    : ~ b tok2 T
+    ~ & tok2 < off n {
+        ? > + off 12 n { = tok2 F } {
+            : i nd ( __gg_i32 dd off )
+            : i nl ( __gg_i32 dd + off 4 )
+            : i tt ( __gg_i32 dd + off 8 )
+            = off + off 12
+            ? | | | < nd 1 > nd 4 < nl 1 > nl 256 { = tok2 F } {
+                ? > + off + * nd 4 nl n { = tok2 F } {
+                    : ~ i ne 1
+                    : ~ i di 0
+                    ~ < di nd {
+                        : i dv ( __gg_i32 dd + off * di 4 )
+                        ? | < dv 1 > dv 16777216 { = tok2 F } {}
+                        = ne * ne dv
+                        = di + di 1
+                    }
+                    = off + off * nd 4
+                    : String nm ( string_with_cap + nl 1 )
+                    : ~ i nj 0
+                    ~ < nj nl {
+                        ( string_push_char nm & # i . dd + off nj 255 )
+                        = nj + nj 1
+                    }
+                    = off + off nl
+                    ? & != tt 0 != tt 1 {
+                        ( string_free nm )
+                        ( gg_close g )
+                        ^ ( __gg_err `ggml: quantised tensors (q4/q5/q8) are not supported yet — use an f16 ggml model or the safetensors checkpoint` )
+                    } {}
+                    : i tsz * ne ? == tt 0 4 2
+                    ? | ! tok2 > + off tsz n {
+                        ( string_free nm )
+                        = tok2 F
+                    } {
+                        ( vec_push [String] . g tnames nm )
+                        ( vec_push [i] . g ttypes tt )
+                        ( vec_push [i] . g tnelems ne )
+                        ( vec_push [i] . g toffs off )
+                        = off + off tsz
+                    }
+                }
+            }
         }
     }
+    ? ! tok2 { ( gg_close g ) ^ ( __gg_err `ggml: tensor block overruns the file` ) } {}
+    ^ @ !*Gg String { T g }
 }
 
 // ── HF name → ggml name ─────────────────────────────────────────────
@@ -330,7 +403,7 @@ $ `stdlib/std/fs.nu`
 @ gg_ptr * Gg g i ti → *u {
     : ~ i o2 0
     ?? ( vec_get [i] . g toffs ti ) { T x → { = o2 x } F → {} }
-    ^ # *u + # i ( vec_data [u] . g data ) o2
+    ^ # *u + # i . g map o2
 }
 
 // ── the tokenizer, synthesized ──────────────────────────────────────

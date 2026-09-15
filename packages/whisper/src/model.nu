@@ -33,6 +33,28 @@ $ `src/kernels.nu`
     b w_half  // matrix weights live on the device as raw f16 halves
     i st  // *St, the safetensors file (HF checkpoint) — 0 in ggml mode
     i gg  // *Gg, whisper.cpp's legacy ggml container — 0 in HF mode
+    // the load's upload queue: every tensor is allocated as it is met and
+    // sent in ONE streamed batch (gpu_upload_batch) once the last one is
+    // known; f16/bf16 tensors that must be widened wait in cvt_* for their
+    // bytes to land, then a kernel widens each and its raw copy is freed
+    ( Vec GpuCopy ) up_q
+    // the weight arena: device memory is carved from 128 MB chunks (bufs
+    // holds the chunks), so a model is ~40 allocations rather than 1,300 —
+    // and ~40 frees when it is closed, which is what an idle unload pays
+    i arena_cur  // the chunk being carved (0 = none yet)
+    i arena_off
+    i arena_cap
+    // the raw arena: f16/bf16 sources waiting to be widened live here until
+    // the widen has run, then the chunks go back (cvt_raw lists them)
+    i raw_cur
+    i raw_off
+    i raw_cap
+    ( Vec i ) cvt_raw  // raw chunks on the device (freed after the widen)
+    ( Vec i ) cvt_rawsz
+    ( Vec i ) cvt_src  // per tensor: where its halves landed
+    ( Vec i ) cvt_dst  // the f32 buffer the model will use
+    ( Vec i ) cvt_n  // element count
+    ( Vec i ) cvt_f16  // 1 = f16 source, 0 = bf16
     i n_mels
     i d_model
     i n_head
@@ -231,34 +253,11 @@ $ `src/kernels.nu`
         ? < gi 0 { ^ -1 } {}
         : i gt ( gg_ttype gg gi )
         : i ge ( gg_nelems gg gi )
-        ? == gt 0 {
-            : GpuBuffer gb ( gpu_alloc . w g * ge 4 )
-            ? == . gb dptr 0 { = . w oom T ^ -1 } {}
-            : i _g ( gpu_upload gb ( gg_ptr gg gi ) )
-            ( vec_push [i] . w bufs . gb dptr )
-            ( vec_push [i] . w bufsz . gb bytes )
-            ^ . gb dptr
-        } {}
+        ? == gt 0 { ^ ( __wh_queue w ( gg_ptr gg gi ) * ge 4 ) } {}
         // f16: half mode keeps the halves; otherwise widen on device,
         // exactly like the safetensors path
-        ? & keep16 . w w_half {
-            : GpuBuffer gh ( gpu_alloc . w g * ge 2 )
-            ? == . gh dptr 0 { = . w oom T ^ -1 } {}
-            : i _h ( gpu_upload gh ( gg_ptr gg gi ) )
-            ( vec_push [i] . w bufs . gh dptr )
-            ( vec_push [i] . w bufsz . gh bytes )
-            ^ . gh dptr
-        } {}
-        : GpuBuffer graw ( gpu_alloc . w g * ge 2 )
-        ? == . graw dptr 0 { = . w oom T ^ -1 } {}
-        : i _r ( gpu_upload graw ( gg_ptr gg gi ) )
-        : GpuBuffer gf ( gpu_alloc . w g * ge 4 )
-        ? == . gf dptr 0 { ( gpu_free graw ) = . w oom T ^ -1 } {}
-        ( wk_cvt . w ks . graw dptr . gf dptr ge T )
-        ( gpu_free graw )
-        ( vec_push [i] . w bufs . gf dptr )
-        ( vec_push [i] . w bufsz . gf bytes )
-        ^ . gf dptr
+        ? & keep16 . w w_half { ^ ( __wh_queue w ( gg_ptr gg gi ) * ge 2 ) } {}
+        ^ ( __wh_queue_widen w ( gg_ptr gg gi ) ge T )
     } {}
     : *St st # *St . w st
     : i ti ( st_find_tensor st name )
@@ -273,54 +272,30 @@ $ `src/kernels.nu`
     // off disk takes 0.25 s. Don't copy what you can point at.
     ?? ( vec_get [StTensor] . st tensors ti ) {
         T t → {
-            ? == . t dtype ST_F32 {
-                : GpuBuffer b ( gpu_alloc . w g . t nbytes )
-                ? == . b dptr 0 { = . w oom T ^ -1 } {}
-                : i _u ( gpu_upload b ( st_tensor_ptr st t ) )
-                ( vec_push [i] . w bufs . b dptr )
-                ( vec_push [i] . w bufsz . b bytes )
-                ^ . b dptr
-            } {}
+            ? == . t dtype ST_F32 { ^ ( __wh_queue w ( st_tensor_ptr st t ) . t nbytes ) } {}
             // The checkpoint's own precision IS f16: for a matrix weight in
             // half mode there is nothing to widen — the halves are the model.
-            ? & & keep16 . w w_half == . t dtype ST_F16 {
-                : GpuBuffer hb ( gpu_alloc . w g . t nbytes )
-                ? == . hb dptr 0 { = . w oom T ^ -1 } {}
-                : i _uh ( gpu_upload hb ( st_tensor_ptr st t ) )
-                ( vec_push [i] . w bufs . hb dptr )
-                ( vec_push [i] . w bufsz . hb bytes )
-                ^ . hb dptr
-            } {}
+            ? & & keep16 . w w_half == . t dtype ST_F16 { ^ ( __wh_queue w ( st_tensor_ptr st t ) . t nbytes ) } {}
             // f16 / bf16 — which is what a whisper checkpoint actually is — go up
             // as RAW HALVES and are widened by a kernel. Half the bytes over PCIe,
             // and the widening happens where there are thousands of threads for
             // it instead of one host loop doing 378 million iterations.
             ? | == . t dtype ST_F16 == . t dtype ST_BF16 {
-                : GpuBuffer raw ( gpu_alloc . w g . t nbytes )
-                ? == . raw dptr 0 { = . w oom T ^ -1 } {}
-                : i _u2 ( gpu_upload raw ( st_tensor_ptr st t ) )
-                : GpuBuffer b ( gpu_alloc . w g * . t nelems 4 )
-                ? == . b dptr 0 { ( gpu_free raw ) = . w oom T ^ -1 } {}
-                ( wk_cvt . w ks . raw dptr . b dptr . t nelems == . t dtype ST_F16 )
-                ( gpu_free raw )
-                ( vec_push [i] . w bufs . b dptr )
-                ( vec_push [i] . w bufsz . b bytes )
-                ^ . b dptr
+                ^ ( __wh_queue_widen w ( st_tensor_ptr st t ) . t nelems == . t dtype ST_F16 )
             } {}
         }
         F → {}
     }
-    // anything else (an integer tensor) widens on the host
+    // anything else (an integer tensor) widens on the host — and goes up
+    // now, its Vec does not outlive this call
     ?? ( st_dequant st ti ) {
         T raw → {
             : i n ( vec_len [u] raw )
-            : GpuBuffer b ( gpu_alloc . w g n )
-            ? == . b dptr 0 { ( vec_free [u] raw ) = . w oom T ^ -1 } {}
-            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            : i d ( __wh_carve w n )
+            ? == d 0 { ( vec_free [u] raw ) ^ -1 } {}
+            : i _u ( gpu_upload @ GpuBuffer { d n } ( vec_data [u] raw ) )
             ( vec_free [u] raw )
-            ( vec_push [i] . w bufs . b dptr )
-            ( vec_push [i] . w bufsz . b bytes )
-            ^ . b dptr
+            ^ d
         }
         F e → {
             ( string_free e )
@@ -329,7 +304,168 @@ $ `src/kernels.nu`
     }
 }
 
-// A per-layer tensor: model.encoder.layers.<L>.<suffix>
+// ── the upload queue ────────────────────────────────────────────────
+//
+// Loading used to be one synchronous copy per tensor: 1,200 of them for
+// large-v3, each staged by the driver through its own small pinned buffer,
+// 0.65 s of the load. Now a tensor is ALLOCATED where it is met — the
+// model's pointer is final at that moment — and its bytes are queued; the
+// queue goes up as one streamed batch (gpu_upload_batch: pinned staging,
+// four copy threads, DMA overlapping the fill) once every tensor is known.
+@ __wh_queue_init * Whisper w → v {
+    = . w up_q ( vec_new [GpuCopy] )
+    = . w arena_cur 0
+    = . w arena_off 0
+    = . w arena_cap 0
+    = . w raw_cur 0
+    = . w raw_off 0
+    = . w raw_cap 0
+    = . w cvt_raw ( vec_new [i] )
+    = . w cvt_rawsz ( vec_new [i] )
+    = . w cvt_src ( vec_new [i] )
+    = . w cvt_dst ( vec_new [i] )
+    = . w cvt_n ( vec_new [i] )
+    = . w cvt_f16 ( vec_new [i] )
+}
+
+@ __WH_ARENA_CHUNK → i { ^ 134217728 }
+
+// `bytes` of device memory for the model's lifetime, 256-byte aligned,
+// carved from the weight arena: a new 128 MB chunk when the current one is
+// full, an exact-size chunk for anything larger than that (the token
+// embedding). Every chunk sits in bufs, which is what wh_close frees.
+// 0 = out of device memory (and `oom` is set for the error message).
+@ __wh_carve * Whisper w i bytes → i {
+    : i need * / + bytes 255 256 256
+    ? > need 0 {
+        : GpuBuffer big ( gpu_alloc . w g need )
+        ? == . big dptr 0 { = . w oom T ^ 0 } {}
+        ( vec_push [i] . w bufs . big dptr )
+        ( vec_push [i] . w bufsz . big bytes )
+        ^ . big dptr
+    } {}
+    ? > + . w arena_off need . w arena_cap {
+        : GpuBuffer ch ( gpu_alloc . w g ( __WH_ARENA_CHUNK ) )
+        ? == . ch dptr 0 { = . w oom T ^ 0 } {}
+        ( vec_push [i] . w bufs . ch dptr )
+        ( vec_push [i] . w bufsz . ch bytes )
+        = . w arena_cur . ch dptr
+        = . w arena_off 0
+        = . w arena_cap . ch bytes
+    } {}
+    : i d + . w arena_cur . w arena_off
+    = . w arena_off + . w arena_off need
+    ^ d
+}
+
+// The same, from the raw arena — memory that lives only until the widen
+// kernels have read it. Chunks are 16 MB or the request, whichever is
+// larger (in half mode the raw sources are a model's norms and biases,
+// a couple of megabytes in all; a checkpoint that widens every matrix
+// takes what it needs).
+@ __wh_carve_raw * Whisper w i bytes → i {
+    : i need * / + bytes 255 256 256
+    ? > + . w raw_off need . w raw_cap {
+        : i csz ? > need 16777216 need 16777216
+        : GpuBuffer ch ( gpu_alloc . w g csz )
+        ? == . ch dptr 0 { = . w oom T ^ 0 } {}
+        ( vec_push [i] . w cvt_raw . ch dptr )
+        ( vec_push [i] . w cvt_rawsz . ch bytes )
+        = . w raw_cur . ch dptr
+        = . w raw_off 0
+        = . w raw_cap . ch bytes
+    } {}
+    : i d + . w raw_cur . w raw_off
+    = . w raw_off + . w raw_off need
+    ^ d
+}
+
+// Carve `bytes` for the tensor at `host` and queue its upload. Returns the
+// device pointer the model keeps, -1 on OOM.
+@ __wh_queue * Whisper w * u host i bytes → i {
+    : i d ( __wh_carve w bytes )
+    ? == d 0 { ^ -1 } {}
+    ( vec_push [GpuCopy] . w up_q @ GpuCopy { d # i host bytes } )
+    ^ d
+}
+
+// `n` halves at `host` that the model wants as f32: the halves are queued
+// into the raw arena, the f32 buffer is carved now (its pointer is what
+// the model keeps), and the widen kernel runs after the batch has landed.
+// Returns the f32 pointer, -1 on OOM.
+@ __wh_queue_widen * Whisper w * u host i n b f16 → i {
+    : i raw ( __wh_carve_raw w * n 2 )
+    ? == raw 0 { ^ -1 } {}
+    : i d ( __wh_carve w * n 4 )
+    ? == d 0 { ^ -1 } {}
+    ( vec_push [GpuCopy] . w up_q @ GpuCopy { raw # i host * n 2 } )
+    ( vec_push [i] . w cvt_src raw )
+    ( vec_push [i] . w cvt_dst d )
+    ( vec_push [i] . w cvt_n n )
+    ( vec_push [i] . w cvt_f16 ? f16 1 0 )
+    ^ d
+}
+
+// Send the queue, widen what was waiting on it, give the raw arena back.
+// F = the upload failed.
+@ __wh_queue_flush * Whisper w → b {
+    : i rc ( gpu_upload_batch . w up_q )
+    ( vec_clear [GpuCopy] . w up_q )
+    ? != rc 0 { ^ F } {}
+    : ~ i k 0
+    ~ < k ( vec_len [i] . w cvt_src ) {
+        : ~ i src 0
+        : ~ i dst 0
+        : ~ i n 0
+        : ~ i f16 1
+        ?? ( vec_get [i] . w cvt_src k ) { T x → { = src x } F → {} }
+        ?? ( vec_get [i] . w cvt_dst k ) { T x → { = dst x } F → {} }
+        ?? ( vec_get [i] . w cvt_n k ) { T x → { = n x } F → {} }
+        ?? ( vec_get [i] . w cvt_f16 k ) { T x → { = f16 x } F → {} }
+        ( wk_cvt . w ks src dst n == f16 1 )
+        = k + k 1
+    }
+    // the widens are queued behind the uploads on the same stream; the raw
+    // chunks must outlive them — one sync, then the frees
+    : i _s ( gpu_sync . w g )
+    ( __wh_raw_free w )
+    ( vec_clear [i] . w cvt_src )
+    ( vec_clear [i] . w cvt_dst )
+    ( vec_clear [i] . w cvt_n )
+    ( vec_clear [i] . w cvt_f16 )
+    ^ T
+}
+
+@ __wh_raw_free * Whisper w → v {
+    : ~ i k 0
+    ~ < k ( vec_len [i] . w cvt_raw ) {
+        : ~ i raw 0
+        : ~ i rsz 0
+        ?? ( vec_get [i] . w cvt_raw k ) { T x → { = raw x } F → {} }
+        ?? ( vec_get [i] . w cvt_rawsz k ) { T x → { = rsz x } F → {} }
+        ( gpu_free @ GpuBuffer { raw rsz } )
+        = k + k 1
+    }
+    ( vec_clear [i] . w cvt_raw )
+    ( vec_clear [i] . w cvt_rawsz )
+    = . w raw_cur 0
+    = . w raw_off 0
+    = . w raw_cap 0
+}
+
+// wh_close: the queue itself, and any raw chunks a failed load left
+// waiting for a widen that never came
+@ __wh_queue_free * Whisper w → v {
+    ( __wh_raw_free w )
+    ( vec_free [GpuCopy] . w up_q )
+    ( vec_free [i] . w cvt_raw )
+    ( vec_free [i] . w cvt_rawsz )
+    ( vec_free [i] . w cvt_src )
+    ( vec_free [i] . w cvt_dst )
+    ( vec_free [i] . w cvt_n )
+    ( vec_free [i] . w cvt_f16 )
+}
+
 @ __wh_lname i layer s suffix → String {
     : String s2 ( string_from `model.encoder.layers.` )
     ( string_push_int s2 layer )
@@ -370,12 +506,39 @@ $ `src/kernels.nu`
 // hundred times, and the transcript is confident nonsense. That is what a full
 // card looked like from the outside. Every allocation is checked now, and the
 // model refuses to open instead.
+// ── the weight file: gone once the weights are up ──────────────────
+//
+// Both containers arrive as an mmap of the file, and the uploads read the
+// page cache through it. Once the last tensor is on the device nothing
+// reads the file again — not a transcription, not the server — so the
+// mapping is given back here. For large-v3 that is 3 GB of host memory a
+// resident server no longer holds.
+//
+// Tried and rejected: page-locking the mapping (`gpu_host_register`, the
+// read-only flag) so the uploads become direct DMA. On a file-backed
+// MAP_PRIVATE mapping the driver pinned pages at ~400 KB/s — a 3 GB model
+// would have taken two hours to register — with the process unstoppable
+// (R state, ptrace could not attach) for the duration. The staged path
+// the gpu package takes for pageable memory is the right one here.
+@ __wh_source_done * Whisper w → v {
+    // the staging pair is 128 MB of page-locked memory — a loader that is
+    // done loading gives it back
+    ( gpu_staging_free )
+    ? != . w gg 0 {
+        // the ggml handle stays (the tokenizer is built from its vocabulary
+        // after this returns); only the file goes
+        ( gg_release_data # *Gg . w gg )
+    } {}
+    ? != . w st 0 {
+        ( st_close # *St . w st )
+        = . w st 0
+    } {}
+}
+
 @ __wh_scratch * Whisper w i nfloats → i {
-    : GpuBuffer b ( gpu_alloc . w g * nfloats 4 )
-    ? == . b dptr 0 { = . w oom T ^ -1 } {}
-    ( vec_push [i] . w bufs . b dptr )
-    ( vec_push [i] . w bufsz . b bytes )
-    ^ . b dptr
+    : i d ( __wh_carve w * nfloats 4 )
+    ? == d 0 { ^ -1 } {}
+    ^ d
 }
 
 // "there was not enough room", with the numbers that make it actionable.
@@ -451,6 +614,8 @@ $ `src/kernels.nu`
     = . w gg 0
     = . w bufs ( vec_new [i] )
     = . w bufsz ( vec_new [i] )
+    ( __wh_queue_init w )
+    = . w oom F
     = . w n_mels n_mels
     = . w d_model d_model
     = . w n_head n_head
@@ -485,6 +650,8 @@ $ `src/kernels.nu`
             = . w st 0
             = . w bufs ( vec_new [i] )
             = . w bufsz ( vec_new [i] )
+            ( __wh_queue_init w )
+            = . w oom F
             = . w gg # i gg
             = . w n_mels . gg n_mels
             = . w d_model . gg n_audio_state
@@ -643,6 +810,11 @@ $ `src/kernels.nu`
         ( wh_close w )
         ^ ( __wh_err `whisper: the checkpoint is missing decoder tensors` )
     }
+    ? ( __wh_queue_flush w ) {} {
+        ( wh_close w )
+        ^ ( __wh_err `whisper: uploading the weights to the device failed` )
+    }
+    ( __wh_source_done w )
 
     : i nfr * 2 . w n_ctx_enc
     : i dm . w d_model
@@ -710,6 +882,7 @@ $ `src/kernels.nu`
     }
     ( vec_free [i] . w bufs )
     ( vec_free [i] . w bufsz )
+    ( __wh_queue_free w )
     ( vec_free [i] . w e_ln1_w ) ( vec_free [i] . w e_ln1_b )
     ( vec_free [i] . w e_wq ) ( vec_free [i] . w e_bq )
     ( vec_free [i] . w e_wk )

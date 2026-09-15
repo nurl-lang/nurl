@@ -697,6 +697,216 @@ $ `cpu.nu`
     ^ rc
 }
 
+// ── one streamed upload for many tensors ───────────────────────────
+//
+// A model is a thousand tensors and most of them are a few megabytes:
+// below the staged path's 64 MB chunk, so each went up as its own
+// synchronous copy out of pageable memory — the driver staging it through
+// its own small pinned buffer, one thread, ~4 GB/s, nothing overlapping
+// anything. `gpu_upload_batch` takes the whole list as ONE byte stream: it
+// packs tensors back to back into the pinned staging pair, four threads
+// filling a chunk while the DMA of the previous one drains (each buffer
+// waits on its OWN event, so a fill never waits for the other buffer's
+// copy), and issues one async copy per tensor out of the chunk. large-v3's
+// 3.1 GB, 1,200 tensors: 0.65 s becomes ~0.3 s, bounded by PCIe rather
+// than the driver.
+//
+// `host` is an address (`# i` of the pointer) so an entry is a plain value.
+// Every dptr must be a live allocation of at least `bytes`. 0 == success;
+// on the CPU/WebGPU backends the list is uploaded one entry at a time.
+: GpuCopy { i dptr i host i bytes }
+
+// Copy the parts of every segment that fall inside [lo, hi) of the chunk.
+// Segments are four parallel arrays (buffer offset, host address, length,
+// device address) so a stripe worker takes plain addresses, not a Vec.
+@ __gpu_seg_copy i pb i ph i pn i cnt i buf i lo i hi → v {
+    : *i vb # *i pb
+    : *i vh # *i ph
+    : *i vn # *i pn
+    : ~ i k 0
+    ~ < k cnt {
+        : i boff . vb k
+        : i a ? > boff lo boff lo
+        : i e0 + boff . vn k
+        : i e ? < e0 hi e0 hi
+        ? > e a {
+            ( nurl_memcpy # *u + buf a # *u + . vh k - a boff - e a )
+        } {}
+        = k + k 1
+    }
+}
+
+// Fill one chunk (`fill` bytes of segments) into `buf` on four stripes and
+// issue its DMAs. `ev` is recorded after the last copy; the caller syncs
+// it before the buffer is filled again. 0 == success.
+@ __gpu_batch_flush ( Vec i ) sb ( Vec i ) sh ( Vec i ) sn ( Vec i ) sd i buf i fill i ev → i {
+    : i cnt ( vec_len [i] sb )
+    : i pb # i ( vec_data [i] sb )
+    : i ph # i ( vec_data [i] sh )
+    : i pn # i ( vec_data [i] sn )
+    ? < fill 8388608 {
+        ( __gpu_seg_copy pb ph pn cnt buf 0 fill )
+    } {
+        : i q / fill 4
+        : i o2 * q 2
+        : i o3 * q 3
+        : ( @ v ) w1 \ → v { ( __gpu_seg_copy pb ph pn cnt buf q o2 ) }
+        : ( @ v ) w2 \ → v { ( __gpu_seg_copy pb ph pn cnt buf o2 o3 ) }
+        : ( @ v ) w3 \ → v { ( __gpu_seg_copy pb ph pn cnt buf o3 fill ) }
+        // owned spawns, inline fallback — the same shape as __gpu_par_memcpy
+        ?? ( thread_spawn_owned w1 ) {
+            T t1 → {
+                ?? ( thread_spawn_owned w2 ) {
+                    T t2 → {
+                        ?? ( thread_spawn_owned w3 ) {
+                            T t3 → {
+                                ( __gpu_seg_copy pb ph pn cnt buf 0 q )
+                                : i _j3 ( thread_join t3 )
+                            }
+                            F _ → {
+                                ( __gpu_seg_copy pb ph pn cnt buf 0 q )
+                                ( w3 )
+                                ( nurl_free # s # *u w3 1 )
+                            }
+                        }
+                        : i _j2 ( thread_join t2 )
+                    }
+                    F _ → {
+                        ( __gpu_seg_copy pb ph pn cnt buf 0 q )
+                        ( w2 )
+                        ( w3 )
+                        ( nurl_free # s # *u w2 1 )
+                        ( nurl_free # s # *u w3 1 )
+                    }
+                }
+                : i _j1 ( thread_join t1 )
+            }
+            F _ → {
+                ( __gpu_seg_copy pb ph pn cnt buf 0 q )
+                ( w1 )
+                ( w2 )
+                ( w3 )
+                ( nurl_free # s # *u w1 1 )
+                ( nurl_free # s # *u w2 1 )
+                ( nurl_free # s # *u w3 1 )
+            }
+        }
+    }
+    : ~ i rc 0
+    : ~ i k 0
+    ~ & == rc 0 < k cnt {
+        : ~ i boff 0
+        : ~ i n 0
+        : ~ i dptr 0
+        ?? ( vec_get [i] sb k ) { T x → { = boff x } F → {} }
+        ?? ( vec_get [i] sn k ) { T x → { = n x } F → {} }
+        ?? ( vec_get [i] sd k ) { T x → { = dptr x } F → {} }
+        = rc ( cuda_htod_async dptr # *u + buf boff n 0 )
+        = k + k 1
+    }
+    ? == rc 0 { = rc ( cuda_event_record ev ) } {}
+    ^ rc
+}
+
+// The one-at-a-time shape every other backend takes, and CUDA's fallback
+// when the pinned staging pair or the events cannot be had.
+@ __gpu_upload_each ( Vec GpuCopy ) items → i {
+    : ~ i rc 0
+    : ~ i k 0
+    ~ & == rc 0 < k ( vec_len [GpuCopy] items ) {
+        ?? ( vec_get [GpuCopy] items k ) {
+            T c → { = rc ( gpu_upload @ GpuBuffer { . c dptr . c bytes } # *u . c host ) }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ rc
+}
+
+@ gpu_upload_batch ( Vec GpuCopy ) items → i {
+    ? != __gpu_backend 0 { ^ ( __gpu_upload_each items ) } {}
+    ? == __gpu_stage_a 0 { = __gpu_stage_a # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
+    ? == __gpu_stage_b 0 { = __gpu_stage_b # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
+    ? | == __gpu_stage_a 0 == __gpu_stage_b 0 {
+        ( gpu_staging_free )
+        ^ ( __gpu_upload_each items )
+    } {}
+    : i eva ( cuda_event_create )
+    : i evb ( cuda_event_create )
+    ? | == eva 0 == evb 0 {
+        ( cuda_event_free eva )
+        ( cuda_event_free evb )
+        ^ ( __gpu_upload_each items )
+    } {}
+    : i chunk ( __GPU_STAGE_CHUNK )
+    : ( Vec i ) sb ( vec_new [i] )
+    : ( Vec i ) sh ( vec_new [i] )
+    : ( Vec i ) sn ( vec_new [i] )
+    : ( Vec i ) sd ( vec_new [i] )
+    : ~ i side 0  // which staging buffer is being filled
+    : ~ b pend_a F
+    : ~ b pend_b F
+    : ~ i fill 0
+    : ~ i rc 0
+    : ~ i it 0
+    : i n_items ( vec_len [GpuCopy] items )
+    // the partial chunk at the end flushes on the same path as a full one:
+    // the loop runs once more past the last item with nothing to add
+    ~ & == rc 0 <= it n_items {
+        : ~ i bytes 0
+        : ~ i host 0
+        : ~ i dptr 0
+        ? < it n_items {
+            ?? ( vec_get [GpuCopy] items it ) {
+                T c → { = bytes . c bytes = host . c host = dptr . c dptr }
+                F → {}
+            }
+        } {}
+        : ~ i off 0
+        : ~ b more T
+        ~ & == rc 0 more {
+            : i room - chunk fill
+            : i left - bytes off
+            : i n ? < left room left room
+            ? > n 0 {
+                ( vec_push [i] sb fill )
+                ( vec_push [i] sh + host off )
+                ( vec_push [i] sn n )
+                ( vec_push [i] sd + dptr off )
+                = fill + fill n
+                = off + off n
+            } {}
+            : b last & == it n_items > fill 0
+            ? | == fill chunk last {
+                : i buf ? == side 0 __gpu_stage_a __gpu_stage_b
+                : i ev ? == side 0 eva evb
+                : b pend ? == side 0 pend_a pend_b
+                // the DMA that last read this buffer must be done before the
+                // fill below overwrites it — wait on ITS event, not the stream
+                ? pend { = rc ( cuda_event_sync ev ) } {}
+                ? == rc 0 { = rc ( __gpu_batch_flush sb sh sn sd buf fill ev ) } {}
+                ? == side 0 { = pend_a T } { = pend_b T }
+                = side - 1 side
+                = fill 0
+                ( vec_clear [i] sb )
+                ( vec_clear [i] sh )
+                ( vec_clear [i] sn )
+                ( vec_clear [i] sd )
+            } {}
+            ? >= off bytes { = more F } {}
+        }
+        = it + it 1
+    }
+    ? == rc 0 { = rc ( cuda_stream_sync 0 ) } {}
+    ( cuda_event_free eva )
+    ( cuda_event_free evb )
+    ( vec_free [i] sb )
+    ( vec_free [i] sh )
+    ( vec_free [i] sn )
+    ( vec_free [i] sd )
+    ^ rc
+}
+
 // A host range the caller page-locked with gpu_host_register: copies
 // whose source lies inside it are direct DMA already, so the staged
 // path (an extra pass through DRAM) must NOT intercept them.

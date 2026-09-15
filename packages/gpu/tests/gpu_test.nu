@@ -157,10 +157,90 @@ $ `src/gpu.nu`
     ( gpu_close g )
 }
 
+// ── gpu_upload_batch: many tensors, one streamed pass ────────────
+//
+// The packing has three boundaries to get right: a tensor that starts
+// mid-chunk and ends in the next (the 70 MB one crosses the 64 MB chunk),
+// a run of small tensors sharing one chunk, and the partial chunk at the
+// end. Each buffer gets its own pattern (value = index*7 + tensor id) so a
+// byte landing in the wrong buffer or at the wrong offset is caught by the
+// spot checks at both ends and the middle of every tensor.
+@ test_batch → v {
+    ( nurl_print `[upload_batch]\n` )
+    : Gpu g ( gpu_open ( gpu_best_device ) )
+    ? ! ( gpu_ok g ) { ( check F `open a device (any backend)` ) ^ {} } {}
+    : ( Vec i ) sizes ( vec_new [i] )
+    ( vec_push [i] sizes 73400320 )  // 70 MB: crosses a chunk boundary
+    ( vec_push [i] sizes 4 )  // one float
+    ( vec_push [i] sizes 5120 )
+    ( vec_push [i] sizes 3276800 )  // a 1280x640 f32 matrix
+    ( vec_push [i] sizes 3276800 )
+    ( vec_push [i] sizes 13107200 )  // fc1-sized
+    ( vec_push [i] sizes 1024 )
+    : i nt ( vec_len [i] sizes )
+    : ( Vec GpuCopy ) items ( vec_new [GpuCopy] )
+    : ( Vec i ) hosts ( vec_new [i] )
+    : ~ i t 0
+    : ~ b alloc_ok T
+    ~ < t nt {
+        : ~ i bytes 0
+        ?? ( vec_get [i] sizes t ) { T x → { = bytes x } F → {} }
+        : *u h ( gpu_host_alloc bytes )
+        : i nf / bytes 4
+        : ~ i j 0
+        // (index masked to 20 bits: the pattern must stay exact in an f32)
+        ~ < j nf { ( gpu_host_set_f32 h j # f + * & j 1048575 7 t ) = j + j 1 }
+        : GpuBuffer d ( gpu_alloc g bytes )
+        ? == . d dptr 0 { = alloc_ok F } {}
+        ( vec_push [GpuCopy] items @ GpuCopy { . d dptr # i h bytes } )
+        ( vec_push [i] hosts # i h )
+        = t + t 1
+    }
+    ( check alloc_ok `allocate 7 device buffers (94 MB)` )
+    : i rc ( gpu_upload_batch items )
+    ( check == rc 0 `gpu_upload_batch returns 0` )
+    : ~ i bad 0
+    = t 0
+    ~ < t nt {
+        ?? ( vec_get [GpuCopy] items t ) {
+            T c → {
+                : *u back ( gpu_host_alloc . c bytes )
+                ( gpu_download back @ GpuBuffer { . c dptr . c bytes } )
+                : i nf / . c bytes 4
+                // first, middle, last — and every 1013th element in between
+                : ~ i j 0
+                ~ < j nf {
+                    : f want # f + * & j 1048575 7 t
+                    : ~ f d - ( gpu_host_get_f32 back j ) want
+                    ? < d 0.0 { = d - 0.0 d } {}
+                    ? > d 0.001 { = bad + bad 1 } {}
+                    = j ? == j - nf 1 nf ? >= + j 1013 - nf 1 - nf 1 + j 1013
+                }
+                ( gpu_host_free back )
+                ( gpu_free @ GpuBuffer { . c dptr . c bytes } )
+            }
+            F → {}
+        }
+        = t + t 1
+    }
+    ( check == bad 0 `every tensor lands whole, in its own buffer, at offset 0 (7 tensors, chunk-crossing 70 MB one included)` )
+    = t 0
+    ~ < t nt {
+        ?? ( vec_get [i] hosts t ) { T h → { ( gpu_host_free # *u h ) } F → {} }
+        = t + t 1
+    }
+    ( vec_free [i] hosts )
+    ( vec_free [GpuCopy] items )
+    ( vec_free [i] sizes )
+    ( gpu_staging_free )
+    ( gpu_close g )
+}
+
 @ main → i {
     ( test_args )
     ( test_device )
     ( test_coop )
+    ( test_batch )
     ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 }
     { ( nurl_print `\n` ) ( nurl_print ( nurl_str_int g_fail ) ) ( nurl_print ` FAILED\n` ) ^ 1 }
 }

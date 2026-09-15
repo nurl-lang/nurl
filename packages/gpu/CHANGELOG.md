@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.13.0
+
+- **`gpu_upload_batch`: many tensors, one streamed upload.** A model is a
+  thousand tensors and most are a few megabytes — below the staged path's
+  64 MB chunk, so each went up as its own synchronous copy out of pageable
+  memory, the driver staging it through its own small pinned buffer on
+  one thread. `gpu_upload_batch ( Vec GpuCopy )` takes the list as one
+  byte stream: tensors are packed back to back into the pinned staging
+  pair, four threads fill a chunk while the DMA of the previous one
+  drains (each buffer waits on its own event, never on the stream), and
+  one async copy per tensor goes out of the chunk. whisper large-v3's
+  3.1 GB in 1,200 tensors: 0.65 s of one-copy-per-tensor became 0.53 s —
+  which on the measuring machine (i7-5930K) is the page cache's own copy
+  bandwidth, four threads or one. On the CPU and WebGPU backends the list
+  is uploaded one entry at a time; on CUDA the plain path is the fallback
+  when the pinned pair cannot be had.
+
+  Tried and rejected on the way: `gpu_host_register` over a file-backed
+  `MAP_PRIVATE` mapping (the read-only flag exists for exactly this). The
+  driver pinned pages at ~400 KB/s — two hours for a 3 GB model — with the
+  process unstoppable (R state, ptrace could not attach) for the
+  duration. The function stays for anonymous memory; do not hand it a
+  file.
+
 ## 0.12.0
 
 `gpu_free`, `gpu_kernel_free`, `gpu_host_free`, `gpu_timer_free` and

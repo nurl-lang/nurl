@@ -101,6 +101,7 @@ backend (ROCm/HIP, OpenCL, a CPU fallback) slots in behind the same names.
 | `gpu_alloc Gpu i bytes → GpuBuffer` | device allocation |
 | `gpu_host_alloc i bytes → *u` | host staging buffer (+ `gpu_host_{set,get}_{f32,i32}`) |
 | `gpu_upload GpuBuffer *u host → i` | host → device |
+| `gpu_upload_batch ( Vec GpuCopy ) items → i` | many host spans → many device buffers in ONE streamed pass through the pinned staging pair (a model's thousand tensors: PCIe-bound, not driver-bound); `GpuCopy { i dptr i host i bytes }`, `host` is the pointer as `# i` |
 | `gpu_download *u host GpuBuffer → i` | device → host |
 | `gpu_arg_buffer/_i32/_i64/_f32 → i` | encode one kernel argument |
 | `gpu_launch GpuKernel i grid i block (Vec i) args → i` | 1-D launch |

@@ -197,15 +197,20 @@ $ `stdlib/core/cell.nu`
 
 // mmap(2): map `length` bytes of `fd` starting at `offset` into the
 // caller's address space. `prot` is `PROT_READ` / etc.; `flags` is
-// `MAP_PRIVATE` for a copy-on-write file mapping. Returns the
-// mapping pointer or `MAP_FAILED` ((void*)-1) on failure.
+// `MAP_PRIVATE` for a copy-on-write file mapping — OR in
+// `posix_const \`MAP_POPULATE\`` (Linux; -1 elsewhere, so test before
+// using it) to have the kernel map every page in one pass instead of
+// one fault at a time. Returns the mapping pointer or `MAP_FAILED`
+// ((void*)-1) on failure.
 & `c` @ mmap *u addr i length i32 prot i32 flags i32 fd i offset → *u
 
 // munmap(2): release a previous mmap.
 & `c` @ munmap *u addr i length → i32
 
-// madvise(2): kernel hint for read-ahead pattern. Best-effort, no
-// observable side effect on the data itself; ignore the return.
+// madvise(2): kernel hint for read-ahead pattern (`MADV_SEQUENTIAL`,
+// `MADV_WILLNEED` via posix_const; -1 where the platform lacks one).
+// Best-effort, no observable side effect on the data itself; ignore
+// the return.
 & `c` @ madvise *u addr i length i32 advice → i32
 
 // ── Directory iteration ───────────────────────────────────────────

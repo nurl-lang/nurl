@@ -305,6 +305,55 @@ PYEOF3
     fi
     kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null
 
+    # ── --unload-after: the model as a lease ────────────────────────
+    # Loaded before the port opens; gone two idle seconds later (/health
+    # says idle, and the process has no device memory); back — and right —
+    # on the next request, which /health counts as a second load. The
+    # WebSocket client afterwards proves a stream reloads it too.
+    UPORT=$(( 40000 + $$ % 20000 ))
+    "$WH" serve "$WORK/model" --addr 127.0.0.1:$UPORT --unload-after 2 >"$WORK/unload.log" 2>&1 &
+    USRV_PID=$!
+    for _ in $(seq 1 120); do
+        curl -s "http://127.0.0.1:$UPORT/health" 2>/dev/null | grep -q '"ok"' && break
+        sleep 0.5
+    done
+    if curl -s "http://127.0.0.1:$UPORT/health" | grep -q '"loaded":true'; then
+        curl -s -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$UPORT/inference" >/dev/null
+        sleep 3.5
+        H_IDLE=$(curl -s "http://127.0.0.1:$UPORT/health")
+        printf '%s' "$H_IDLE" | grep -q '"status":"idle"' \
+            && printf '%s' "$H_IDLE" | grep -q '"loaded":false' \
+            && printf '%s' "$H_IDLE" | grep -q '"unloads":1' \
+            && ok "--unload-after: two idle seconds later /health says idle, loaded:false, unloads:1" \
+            || { bad "--unload-after did not unload"; echo "    health: $H_IDLE"; }
+        # the process holds no device memory while idle (CUDA backend only;
+        # the CPU backend has none to hold, so the check is skipped there)
+        if command -v nvidia-smi >/dev/null 2>&1 && [ "${NURL_GPU:-}" != "cpu" ]; then
+            GPU_IDLE=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader 2>/dev/null | grep -c "^$USRV_PID,")
+            [ "$GPU_IDLE" = "0" ] \
+                && ok "--unload-after: the idle server holds no device memory (not in nvidia-smi's process list)" \
+                || bad "--unload-after: the idle server still holds device memory"
+        fi
+        U_GOT=$(curl -s -F "file=@$WORK/jfk.wav" -F "response_format=text" "http://127.0.0.1:$UPORT/inference")
+        H_BACK=$(curl -s "http://127.0.0.1:$UPORT/health")
+        printf '%s' "$U_GOT" | grep -qi "your country" \
+            && printf '%s' "$H_BACK" | grep -q '"loaded":true' \
+            && printf '%s' "$H_BACK" | grep -q '"loads":2' \
+            && ok "--unload-after: the next request reloads the model (loads:2) and transcribes correctly" \
+            || { bad "--unload-after reload"; echo "    got: [$U_GOT]"; echo "    health: $H_BACK"; }
+        if [ -x "$WORK/ws_client" ]; then
+            sleep 3.5
+            WS_U=$("$WORK/ws_client" "ws://127.0.0.1:$UPORT/" "$WORK/jfk.wav" 2>/dev/null)
+            printf '%s' "$WS_U" | tr -d '\n' | grep -q "your country" \
+                && curl -s "http://127.0.0.1:$UPORT/health" | grep -q '"loads":3' \
+                && ok "--unload-after: a WebSocket stream reloads the idle model too (loads:3)" \
+                || { bad "--unload-after WS reload"; echo "    got: [$WS_U]"; }
+        fi
+    else
+        bad "--unload-after server did not come up"; tail -5 "$WORK/unload.log"
+    fi
+    kill $USRV_PID 2>/dev/null; wait $USRV_PID 2>/dev/null
+
     START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 >/dev/null 2>&1
     SLOW=$(( ($(date +%s%N) - START) / 1000000 ))
     START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 --vad >/dev/null 2>&1
