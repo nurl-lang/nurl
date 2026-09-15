@@ -58,6 +58,13 @@ CKPT="${F5TTS_CKPT:-}"
 VOCAB="${F5TTS_VOCAB:-}"
 VOCODER="${F5TTS_VOCODER:-}"
 
+echo "== how a model name is read =="
+if build name_test && "$WORK/name_test" >"$WORK/name.out" 2>&1; then
+  ok "references, local names, and the vocabulary derived from each"
+else
+  bad "model-name resolution"; cat "$WORK/name.out"
+fi
+
 echo "== the transformer, against PyTorch =="
 if [ -n "$CKPT" ] && [ -n "$VOCAB" ] && [ -n "${F5TTS_REF_DIT:-}" ]; then
   if build dit_test && "$WORK/dit_test" "$CKPT" "$VOCAB" "$F5TTS_REF_DIT" >"$WORK/dit.out" 2>&1; then
