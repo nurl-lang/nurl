@@ -39,7 +39,9 @@ $ `stdlib/std/x509_gen.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/floatbits.nu`
 $ `deps/http/src/http.nu`
+$ `src/run.nu`
 
 : ~ i g_srv_w 0  // *Whisper, as an address (0 = not serving)
 : ~ i g_srv_t 0  // *Tok

@@ -23,6 +23,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/json.nu`
+$ `tokenizer.nu`
 
 // NOTE: this file does NOT import src/tokenizer.nu. A package's sibling files do
 // not import each other — the CONSUMER imports them in dependency order, because

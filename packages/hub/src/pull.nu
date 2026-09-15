@@ -24,6 +24,8 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/progress.nu`
 $ `stdlib/ext/http.nu`
+$ `store.nu`
+$ `hf.nu`
 // siblings (store: hub_blob_path, _hub_safe_name) are provided by the entry
 // point that imports every hub file — see the note in hub.nu.
 

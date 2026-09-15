@@ -44,6 +44,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
+$ `deps/tokenizer/src/tokenizer.nu`
+$ `deps/tokenizer/src/hf.nu`
 
 // dtype codes shared with the safetensor reader's ST_* so __wh_up's dispatch
 // works on either source. ttype 0 = f32, 1 = f16; anything else is a
