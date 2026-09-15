@@ -1,6 +1,6 @@
 // packages/embed — the embedding server. CLI:
 //
-//   embed serve <model-dir> [--addr HOST:PORT] [--token T] [--maxseq N]
+//   embed serve <model-dir> [--addr HOST:PORT] [--token T] [--maxseq N] [--unload-after S]
 //                           [--pool cls|mean] [--no-normalize]
 //   embed text  <model-dir> <text…>        one-shot: print the vector (CSV)
 //
@@ -35,13 +35,14 @@ $ `deps/hub/src/hub.nu`
 @ __cli_usage → v {
     ( nurl_print `embed — pure-NURL embedding server (XLM-RoBERTa family: BGE-M3, multilingual-e5, …)\n\n` )
     ( nurl_print `  embed serve <model> [--addr HOST:PORT] [--token T] [--maxseq N]\n` )
-    ( nurl_print `                      [--pool cls|mean] [--no-normalize] [--gpu N]\n` )
+    ( nurl_print `                      [--pool cls|mean] [--no-normalize] [--gpu N] [--unload-after S]\n` )
     ( nurl_print `  embed text  <model> <text…>          (same --gpu/--pool/… flags)\n\n` )
     ( nurl_print `model: a local directory (config.json + tokenizer.json + model.safetensors, f32)\n` )
     ( nurl_print `       or a Hugging Face ref (e.g. BAAI/bge-m3), fetched into ~/.nurl/models\n` )
     ( nurl_print `--gpu N: CUDA device ordinal (CUDA order, fastest first — not nvidia-smi's\n` )
     ( nurl_print `         PCI order); default: the best device, or $NURL_GPU_DEVICE\n` )
     ( nurl_print `default addr 127.0.0.1:8000; no --token = open server (loopback only!)\n` )
+    ( nurl_print `--unload-after S: release the weights (device memory) after S idle seconds and\n  reload them on the next request (default 0 = keep loaded)\n` )
 }
 
 @ __cli_arg ( Vec String ) av i k → s {
@@ -125,7 +126,11 @@ $ `deps/hub/src/hub.nu`
                     : s addr ( __cli_opt av 3 `--addr` )
                     : ~ i port 8000
                     ? > ( nurl_str_len addr ) 0 { = port ( __cli_addr addr host port ) } { ( string_push_str host `127.0.0.1` ) }
-                    = rc ( embed_serve e dir ( string_data host ) port ( __cli_opt av 3 `--token` ) )
+                    : s us ( __cli_opt av 3 `--unload-after` )
+                    : ~ i unload_s 0
+                    ? > ( nurl_str_len us ) 0 { = unload_s ( nurl_str_to_int us ) } {}
+                    ? < unload_s 0 { = unload_s 0 } {}
+                    = rc ( embed_serve e dir ( string_data host ) port ( __cli_opt av 3 `--token` ) unload_s )
                     ( string_free host )
                     ( embed_close e )
                 }

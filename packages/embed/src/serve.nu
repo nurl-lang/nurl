@@ -48,6 +48,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/cell.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/std/url.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
@@ -57,6 +58,23 @@ $ `model.nu`
 : ~ s g_em_token ``
 : ~ s g_em_name ``
 : ~ i g_em_reqs 0
+
+// ── the weights as a lease: --unload-after ─────────────────────────
+//
+// The model thread is the only thread that touches the device, so it is
+// the one that lets the weights go and brings them back: a job arriving
+// at an unloaded engine reloads it first (embed_reload — the tokenizer
+// and config never left, so the request was already tokenized on its own
+// fiber); a wake with no job and the idle clock past the limit unloads
+// (embed_unload — the arena, the pool, the kernels, the CUDA context).
+// The wakes come from a ticker thread that broadcasts the request cond
+// five times a second while the flag is on; without it the model thread
+// sleeps until a job and the limit could never fire.
+: ~ i g_em_unload_ms 0  // 0 = the weights stay for the process's life
+: ~ i g_em_idle_since 0  // monotonic_ns at the end of the last job
+: ~ i g_em_loads 0  // 1 is the load before the port opened
+: ~ i g_em_unloads 0
+: ~ i g_em_load_ms 0  // the last load's wall time
 
 // ── The model queue ───────────────────────────────────────────────────
 //
@@ -129,7 +147,21 @@ $ `model.nu`
     : ~ b run T
     ~ run {
         ( mutex_lock ( __em_qm ) )
-        ~ & == g_q_head 0 ! g_q_stop { ( cond_wait ( __em_qreq ) ( __em_qm ) ) }
+        ~ & == g_q_head 0 ! g_q_stop {
+            ( cond_wait ( __em_qreq ) ( __em_qm ) )
+            // a ticker wake: nothing queued — is it time to let go?
+            ? & & == g_q_head 0 > g_em_unload_ms 0 ( embed_loaded e ) {
+                ? >= ( elapsed_ms_since g_em_idle_since ) g_em_unload_ms {
+                    ( embed_unload e )
+                    = g_em_unloads + g_em_unloads 1
+                    : String m ( string_from `embed: idle for ` )
+                    ( string_push_int m / g_em_unload_ms 1000 )
+                    ( string_push_str m ` s — weights unloaded (device memory released; the next request reloads them)` )
+                    ( nurl_eprintln ( string_data m ) )
+                    ( string_free m )
+                } {}
+            } {}
+        }
         ? == g_q_head 0 {
             ( mutex_unlock ( __em_qm ) )
             = run F
@@ -138,13 +170,44 @@ $ `model.nu`
             = g_q_head . j next
             ? == g_q_head 0 { = g_q_tail 0 } {}
             ( mutex_unlock ( __em_qm ) )
-            : b r ( embed_encode_batch e . j ids . j offs . j out . j normalize )
+            : ~ b r T
+            ? ( embed_loaded e ) {} {
+                : i t0 ( monotonic_ns )
+                ?? ( embed_reload e ) {
+                    T _ → {
+                        = g_em_loads + g_em_loads 1
+                        = g_em_load_ms / - ( monotonic_ns ) t0 1000000
+                        : String m ( string_from `embed: weights loaded in ` )
+                        ( string_push_int m g_em_load_ms )
+                        ( string_push_str m ` ms` )
+                        ( nurl_eprintln ( string_data m ) )
+                        ( string_free m )
+                    }
+                    F le → {
+                        ( nurl_eprintln ( string_data le ) )
+                        ( string_free le )
+                        = r F
+                    }
+                }
+            }
+            ? r { = r ( embed_encode_batch e . j ids . j offs . j out . j normalize ) } {}
             ( mutex_lock ( __em_qm ) )
+            = g_em_idle_since ( monotonic_ns )
             = . j ok r
             = . j done T
             ( cond_broadcast ( __em_qdone ) )
             ( mutex_unlock ( __em_qm ) )
         }
+    }
+}
+
+// Five wakes a second for the model thread while --unload-after is on.
+@ __em_ticker → v {
+    ~ T {
+        ( sleep_ms 200 )
+        ( mutex_lock ( __em_qm ) )
+        ( cond_broadcast ( __em_qreq ) )
+        ( mutex_unlock ( __em_qm ) )
     }
 }
 
@@ -404,9 +467,18 @@ $ `model.nu`
 @ __em_health HttpRequest req → HttpResponse {
     : *Embed e # *Embed g_em
     : Json o ( json_obj_new )
+    // `healthy` either way: an engine whose weights are unloaded under
+    // --unload-after answers the next request, it just pays the reload
     : b _s1 ( json_obj_set o `status` ( json_str_lit `healthy` ) )
     : b _s2 ( json_obj_set o `model` ( json_str_lit g_em_name ) )
-    : b _s3 ( json_obj_set o `model_loaded` ( json_bool ( embed_ok e ) ) )
+    : b _s3 ( json_obj_set o `model_loaded` ( json_bool ( embed_loaded e ) ) )
+    : b _u1 ( json_obj_set o `unload_after_s` ( json_int / g_em_unload_ms 1000 ) )
+    : b _u2 ( json_obj_set o `loads` ( json_int g_em_loads ) )
+    : b _u3 ( json_obj_set o `unloads` ( json_int g_em_unloads ) )
+    : b _u4 ( json_obj_set o `last_load_ms` ( json_int g_em_load_ms ) )
+    ? ! ( embed_loaded e ) {
+        : b _u5 ( json_obj_set o `idle_s` ( json_int / ( elapsed_ms_since g_em_idle_since ) 1000 ) )
+    } {}
     : b _s4 ( json_obj_set o `device` ( json_str_lit ( embed_backend e ) ) )
     : b _s5 ( json_obj_set o `dimension` ( json_int ( embed_dim e ) ) )
     : b _s6 ( json_obj_set o `requests` ( json_int g_em_reqs ) )
@@ -425,8 +497,13 @@ $ `model.nu`
 }
 
 // Serve `e` (borrowed for the server's lifetime). Blocks until stopped.
-@ embed_serve * Embed e s name s host i port s token → i {
+@ embed_serve * Embed e s name s host i port s token i unload_s → i {
     = g_em # i e
+    = g_em_unload_ms * unload_s 1000
+    = g_em_idle_since ( monotonic_ns )
+    = g_em_loads 1
+    = g_em_unloads 0
+    = g_em_load_ms 0
     ? > ( nurl_str_len g_em_token ) 0 { ( nurl_free g_em_token ) } {}
     = g_em_token ( strdup token )
     ? > ( nurl_str_len g_em_name ) 0 { ( nurl_free g_em_name ) } {}
@@ -451,6 +528,16 @@ $ `model.nu`
             ^ 1
         }
     }
+    ? > unload_s 0 {
+        : ( @ v ) tickfn \ → v { ( __em_ticker ) }
+        ?? ( thread_spawn_owned tickfn ) {
+            T th → { ( thread_detach th ) }
+            F _te → {
+                ( nurl_eprint `embed: cannot start the unload timer — the weights stay loaded\n` )
+                = g_em_unload_ms 0
+            }
+        }
+    } {}
 
     : *HttpApp a ( http_app_new )
     // Fiber-per-connection: connections are cheap, and the one thing
@@ -474,6 +561,11 @@ $ `model.nu`
     ( string_push_int msg port )
     ( string_push_str msg ` (POST /create_embedding, GET /health)` )
     ? == ( nurl_str_len token ) 0 { ( string_push_str msg ` — NO TOKEN, keep it on loopback` ) } {}
+    ? > unload_s 0 {
+        ( string_push_str msg `\nembed: the weights are released after ` )
+        ( string_push_int msg unload_s )
+        ( string_push_str msg ` s idle and reloaded on the next request` )
+    } {}
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
     ( string_free msg )

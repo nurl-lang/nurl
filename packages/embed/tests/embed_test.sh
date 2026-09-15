@@ -140,6 +140,43 @@ PY
 then PASS=$((PASS+1)); else echo "  FAIL serve"; FAIL=$((FAIL+1)); tail -5 "$WORK/serve.log"; fi
 kill "$SERVER_PID" 2>/dev/null; SERVER_PID=""
 
+echo "[4b/5] serve --unload-after: the weights as a lease"
+UPORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
+"$WORK/embed" serve "$MODEL" --addr "127.0.0.1:$UPORT" --unload-after 2 >"$WORK/unload.log" 2>&1 &
+USERVER_PID=$!
+if python3 - "$UPORT" "$WORK/cli.csv" "$USERVER_PID" <<'PY'
+import json, sys, time, urllib.request, subprocess, shutil
+port, clipath, spid = sys.argv[1], sys.argv[2], sys.argv[3]
+base = f"http://127.0.0.1:{port}"
+def req(path, body=None):
+    r = urllib.request.Request(base+path, data=None if body is None else json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(r, timeout=120).read())
+for _ in range(120):
+    try: req("/health"); break
+    except Exception: time.sleep(1)
+else: print("  FAIL: server never came up"); sys.exit(1)
+fails = []
+cli = [float(x) for x in open(clipath).read().strip().split(",")]
+if req("/create_embedding", {"text": "kissa istuu matolla"})["embeddings"][0] != cli: fails.append("warm row disagrees with the CLI")
+time.sleep(3.5)
+h = req("/health")
+if h.get("model_loaded") is not False or h.get("unloads") != 1 or h.get("status") != "healthy":
+    fails.append(f"after 2 idle seconds health should say unloaded, unloads:1, healthy: {h}")
+# CUDA only: the process holds no device memory while idle
+if shutil.which("nvidia-smi") and h.get("device") == "none":
+    out = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader"], capture_output=True, text=True).stdout
+    if any(l.split(",")[0].strip() == spid for l in out.splitlines()): fails.append("the idle server still holds device memory")
+t = time.time(); row = req("/create_embedding", {"text": "kissa istuu matolla"})["embeddings"][0]; dt = time.time() - t
+if row != cli: fails.append("the row after a reload disagrees with the CLI")
+h = req("/health")
+if h.get("loads") != 2 or h.get("model_loaded") is not True: fails.append(f"health after the reload should say loads:2, loaded: {h}")
+print(f"  reload + forward took {dt*1000:.0f} ms (last_load_ms {h.get('last_load_ms')})")
+for f in fails: print("  FAIL:", f)
+sys.exit(1 if fails else 0)
+PY
+then PASS=$((PASS+1)); else echo "  FAIL serve --unload-after"; FAIL=$((FAIL+1)); tail -5 "$WORK/unload.log"; fi
+kill "$USERVER_PID" 2>/dev/null
+
 echo "[5/5] AddressSanitizer (one line)"
 if NURL_SAN=1 $NURL tests/embed_check.nu "$WORK/ec_san" >/dev/null 2>"$WORK/sb.err"; then
     head -1 tests/data/corpus.txt > "$WORK/one.txt"
