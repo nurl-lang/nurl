@@ -82,8 +82,17 @@ fi
 
 echo "== the whole pipeline =="
 if [ -n "$CKPT" ] && [ -n "$VOCAB" ] && [ -n "$VOCODER" ] && [ -n "${F5TTS_REF_GEN:-}" ]; then
+  # The dump says what it was made with. Taking these from a default instead
+  # compares the right waveform against the wrong scale: the reference
+  # normalises the recording to an rms of 0.1 and scales the result back by
+  # the recording's own rms afterwards, so guessing that number wrong shifts
+  # the whole waveform by a constant and the test reports a broken vocoder.
+  meta_num() { sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*\([0-9.eE+-]*\).*/\1/p' "$F5TTS_REF_GEN/meta.json" 2>/dev/null | head -1; }
+  REF_LEN="${F5TTS_REF_LEN:-$(meta_num ref_audio_len)}"; : "${REF_LEN:=1021}"
+  REF_NFE="${F5TTS_REF_NFE:-$(meta_num nfe)}";           : "${REF_NFE:=32}"
+  REF_RMS="${F5TTS_REF_RMS:-$(meta_num rms)}";           : "${REF_RMS:=0.1}"
   if build gen_test && "$WORK/gen_test" "$CKPT" "$VOCAB" "$VOCODER" "$F5TTS_REF_GEN" \
-       "${F5TTS_REF_LEN:-1021}" "${F5TTS_REF_NFE:-32}" "${F5TTS_REF_RMS:-0.1}" \
+       "$REF_LEN" "$REF_NFE" "$REF_RMS" \
        >"$WORK/gen.out" 2>&1; then
     ok "the integrated mel and the waveform"
     grep -E "took" "$WORK/gen.out" | sed 's/^/    /'

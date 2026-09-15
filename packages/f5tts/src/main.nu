@@ -1,7 +1,7 @@
 // packages/f5tts — F5-TTS, the flow-matching text-to-speech model, in pure
 // NURL. CLI:
 //
-//   f5tts synth  --voice DIR --text "..." -o out.wav
+//   f5tts synth  --voice DIR --text "..." -o out.wav   (or out.mp3)
 //   f5tts tokens <vocab.txt> <file>    one line of ids per line of the file
 //   f5tts chunks <file> --max N        the text split the way F5-TTS splits it
 
@@ -19,6 +19,7 @@ $ `model.nu`
 $ `sample.nu`
 $ `vocos.nu`
 $ `run.nu`
+$ `deps/audio/src/mp3.nu`
 $ `serve.nu`
 $ `store.nu`
 $ `registry.nu`
@@ -154,7 +155,7 @@ $ `verify.nu`
 }
 
 @ __f5_cmd_synth s ckpt s vocab_path s vocoder s voice s gen_text s outp
-i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet b profile → i {
+i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b quiet b profile → i {
     : i t0 ( now_ms )
     ?? ( f5_vocab_load vocab_path ) {
         T vocab → {
@@ -179,7 +180,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
                                             ( nurl_eprintln ( string_data m2 ) )
                                             ( string_free m2 )
                                         }
-                                        ?? ( wav_write outp wave 24000 1 ) {
+                                        ?? ( __f5_write_audio outp wave kbps ) {
                                             T _ → { ? quiet {} { ( nurl_eprint `f5tts: wrote ` ) ( nurl_eprintln outp ) } }
                                             F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) = rc 1 }
                                         }
@@ -246,6 +247,27 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
     ( string_free lang )
 }
 
+// The name decides the container: `-o out.mp3` writes MPEG-2 Layer III at
+// 24 kHz, anything else writes the wav. No flag to forget, and no wav quietly
+// carrying an .mp3 name.
+@ __f5_write_audio s path ( Vec f ) wave i kbps → !v String {
+    ? != 0 ( nurl_str_ends path `.mp3` ) {
+        ?? ( mp3_encode wave 24000 1 kbps ) {
+            T bytes → {
+                : ~ ! v String out @ !v String { T }
+                ?? ( write_file_bytes path bytes ) {
+                    T _ → {}
+                    F _ → { = out @ !v String { F ( string_from `f5tts: cannot write the mp3` ) } }
+                }
+                ( vec_free [u] bytes )
+                ^ out
+            }
+            F e → { ^ @ !v String { F e } }
+        }
+    } {}
+    ^ ( wav_write path wave 24000 1 )
+}
+
 @ main → i {
     : ArgParser p ( args_new `f5tts` `F5-TTS, the flow-matching text-to-speech model, in pure NURL.` )
     ( args_opt p `max` 0 `N` `for chunks: the byte budget per chunk (default 135)` )
@@ -254,7 +276,8 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
     ( args_opt p `vocoder` 0 `PATH` `the vocos checkpoint: a .bin, a directory, or a Hugging Face ref` )
     ( args_opt p `voice` 0 `DIR` `a voice directory: config.json + reference.wav` )
     ( args_opt p `text` 116 `TEXT` `what to say` )
-    ( args_opt p `output` 111 `FILE` `where to write the wav (default out.wav)` )
+    ( args_opt p `output` 111 `FILE` `where to write the audio; a .mp3 name is encoded as mp3 (default out.wav)` )
+    ( args_opt p `bitrate` 0 `KBPS` `for a .mp3 output: constant bitrate in kbit/s (default 128)` )
     ( args_opt p `steps` 0 `N` `ODE steps, the NFE (default 32)` )
     ( args_opt p `cfg` 0 `X` `classifier-free guidance strength (default 2.0)` )
     ( args_opt p `sway` 0 `X` `sway sampling coefficient (default -1.0)` )
@@ -380,6 +403,10 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
         : String svoc ( args_value_or p `vocoder` F5_DEFAULT_VOCODER )
         : String svoice ( args_value_or p `voice` `` )
         : String stext ( args_value_or p `text` `` )
+        : ~ i kbps 128
+        : String skb ( args_value_or p `bitrate` `128` )
+        ?? ( string_to_int skb ) { T v → { = kbps v } F _ → {} }
+        ( string_free skb )
         : String sout ( args_value_or p `output` `out.wav` )
         : ~ i steps 32
         : String sst ( args_value_or p `steps` `32` )
@@ -419,13 +446,25 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
         ( string_free smw )
         : ~ i rc 2
         ? != 0 ( nurl_str_len ( string_data svoice ) ) {
-            : String mp ( f5_resolve_file ( string_data smodel ) `.safetensors` )
-            : String vp ( f5_resolve_vocab ( string_data svocab ) ( string_data mp ) )
+            // A --model that is neither a path nor an owner/repo reference is
+            // a registry id — the same ids `GET /models` lists — so the CLI
+            // and the service agree about what a model is called.
+            : b _dirs ( f5_ensure_dirs )
+            : String models_dir ( f5_models_dir )
+            : String rck ( string_new )
+            : String rvo ( string_new )
+            : b in_reg ( f5_registry_resolve ( string_data models_dir ) ( string_data smodel ) rck rvo )
+            : String mp ? in_reg ( string_clone rck ) ( f5_resolve_file ( string_data smodel ) `.safetensors` )
+            : String vp ? & in_reg == 0 ( nurl_str_len ( string_data svocab ) ) ( string_clone rvo )
+            ( f5_resolve_vocab ( string_data svocab ) ( string_data mp ) )
+            ( string_free models_dir )
+            ( string_free rck )
+            ( string_free rvo )
             : String cp ( f5_resolve_file ( string_data svoc ) `.bin` )
             ? & & > ( string_len mp ) 0 > ( string_len vp ) 0 > ( string_len cp ) 0 {
                 = rc ( __f5_cmd_synth ( string_data mp ) ( string_data vp ) ( string_data cp )
                 ( string_data svoice ) ( string_data stext ) ( string_data sout )
-                steps cfg sway speed fade seed retries maxwer dev
+                steps cfg sway speed fade seed retries maxwer kbps dev
                 ( args_present p `quiet` ) ( args_present p `profile` ) )
             } {
                 ( nurl_eprintln `f5tts: could not resolve the checkpoint, its vocabulary or the vocoder` )

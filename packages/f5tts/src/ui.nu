@@ -70,7 +70,8 @@ fieldset{border:0;padding:0;margin:14px 0 0}
     <div class="row">
       <div><label for="model">Malli</label><select id="model"></select></div>
       <div><label for="fmt">Muoto</label><select id="fmt">
-        <option value="wav">wav</option><option value="pcm">pcm</option></select></div>
+        <option value="wav">wav</option><option value="mp3">mp3</option>
+        <option value="pcm">pcm</option></select></div>
       <div><label for="steps">Askelia</label><input id="steps" type="number" value="32" min="4" max="128"></div>
       <div><label for="seed">Siemen</label><input id="seed" type="number" value="-1"></div>
     </div>

@@ -37,6 +37,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/core/cell.nu`
 $ `deps/http/src/http.nu`
 $ `deps/audio/src/wav.nu`
+$ `deps/audio/src/mp3.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `model.nu`
 $ `sample.nu`
@@ -511,13 +512,30 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
     ^ r
 }
 
-// `wav` (the default) or `pcm` — raw signed 16-bit little-endian mono at
-// 24 kHz, which is the wav without its header. mp3 and ogg are the reference
-// service's other two and they need an encoder this package does not have:
-// saying so is better than returning a wav under an mp3 content type.
-@ __f5s_audio_response ( Vec f ) wave s fmt → HttpResponse {
-    ? | ( nurl_str_eq fmt `mp3` ) ( nurl_str_eq fmt `ogg` ) {
-        ^ ( __f5s_jerr 400 `only wav and pcm are encoded here; mp3 and ogg would need an encoder this build does not carry` )
+// `wav` (the default), `mp3`, or `pcm` — raw signed 16-bit little-endian
+// mono at 24 kHz, which is the wav without its header. The mp3 is MPEG-2
+// Layer III at 24 kHz, encoded here rather than by a subprocess. `ogg` is the
+// reference service's fourth and there is no Vorbis encoder in this ecosystem
+// yet, so it is refused by name instead of answered with something else.
+@ __f5s_audio_response ( Vec f ) wave s fmt i kbps → HttpResponse {
+    ? ( nurl_str_eq fmt `ogg` ) {
+        ^ ( __f5s_jerr 400 `ogg is not encoded here; ask for wav, mp3 or pcm` )
+    } {}
+    ? ( nurl_str_eq fmt `mp3` ) {
+        ?? ( mp3_encode wave 24000 1 kbps ) {
+            T mp3 → {
+                : HttpResponse r ( response_new 200 )
+                ( response_set_header r `content-type` `audio/mpeg` )
+                ( response_set_body_bytes r mp3 )
+                ( vec_free [u] mp3 )
+                ^ r
+            }
+            F e → {
+                : HttpResponse r ( __f5s_jerr 400 ( string_data e ) )
+                ( string_free e )
+                ^ r
+            }
+        }
     } {}
     : ( Vec u ) bytes ( wav_encode wave 24000 1 )
     : HttpResponse r ( response_new 200 )
@@ -559,6 +577,8 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
             ? < seed 0 { = seed & ( monotonic_ns ) 2147483647 } {}
             // whisper_retry / max_wer: the reference service's quality gate,
             // off unless both are asked for and a transcriber is configured
+            // 128 kbit/s is what the reference service asks ffmpeg for
+            : i kbps ( __f5s_jint root `mp3_bitrate` 128 )
             : i retries ( __f5s_jint root `whisper_retry` 1 )
             : f max_wer ( __f5s_jnum root `max_wer` 1.0 )
             // the reference normalises the recording to an rms of 0.1 before
@@ -637,7 +657,7 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
             ( string_free model_id )
             = g_f5_reqs + g_f5_reqs 1
             ? & ok > ( vec_len [f] wave ) 0 {
-                : HttpResponse r ( __f5s_audio_response wave ( string_data fmt ) )
+                : HttpResponse r ( __f5s_audio_response wave ( string_data fmt ) kbps )
                 ( vec_free [f] wave )
                 ( string_free err )
                 ( string_free fmt )
