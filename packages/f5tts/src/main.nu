@@ -21,6 +21,13 @@ $ `vocos.nu`
 $ `run.nu`
 $ `serve.nu`
 
+// The official release, so the tool works with no model flags at all. Both
+// are Hugging Face refs naming ONE file in a repo, which the hub fetches into
+// ~/.nurl/models and returns a path to.
+: s F5_DEFAULT_MODEL `SWivid/F5-TTS/F5TTS_v1_Base/model_1250000.safetensors`
+
+: s F5_DEFAULT_VOCODER `charactr/vocos-mel-24khz/pytorch_model.bin`
+
 @ __f5_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
 }
@@ -213,9 +220,9 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
 @ main → i {
     : ArgParser p ( args_new `f5tts` `F5-TTS, the flow-matching text-to-speech model, in pure NURL.` )
     ( args_opt p `max` 0 `N` `for chunks: the byte budget per chunk (default 135)` )
-    ( args_opt p `model` 0 `PATH` `the F5-TTS checkpoint (.safetensors)` )
-    ( args_opt p `vocab` 0 `PATH` `the checkpoint's vocab.txt` )
-    ( args_opt p `vocoder` 0 `PATH` `the vocos checkpoint (pytorch_model.bin)` )
+    ( args_opt p `model` 0 `PATH` `the checkpoint: a file, a directory holding one, or a Hugging Face ref` )
+    ( args_opt p `vocab` 0 `PATH` `the vocabulary (default: vocab.txt beside the checkpoint)` )
+    ( args_opt p `vocoder` 0 `PATH` `the vocos checkpoint: a .bin, a directory, or a Hugging Face ref` )
     ( args_opt p `voice` 0 `DIR` `a voice directory: config.json + reference.wav` )
     ( args_opt p `text` 116 `TEXT` `what to say` )
     ( args_opt p `output` 111 `FILE` `where to write the wav (default out.wav)` )
@@ -251,9 +258,9 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
     : ~ s cmd0 ``
     ? >= np 1 { ?? ( vec_get [String] pos0 0 ) { T c → { = cmd0 ( string_data c ) } F → {} } } {}
     ? ( nurl_str_eq cmd0 `serve` ) {
-        : String smodel ( args_value_or p `model` `` )
+        : String smodel ( args_value_or p `model` F5_DEFAULT_MODEL )
         : String svocab ( args_value_or p `vocab` `` )
-        : String svoc ( args_value_or p `vocoder` `` )
+        : String svoc ( args_value_or p `vocoder` F5_DEFAULT_VOCODER )
         : String svoices ( args_value_or p `voices` `` )
         : String saddr ( args_value_or p `addr` `127.0.0.1:7861` )
         : String stok ( args_value_or p `token` `` )
@@ -279,13 +286,22 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
             ( string_free hs )
         } {}
         : ~ i rc 2
-        ? & != 0 ( nurl_str_len ( string_data smodel ) ) != 0 ( nurl_str_len ( string_data svoices ) ) {
-            : String vp ? != 0 ( nurl_str_len ( string_data svocab ) ) ( string_clone svocab ) ( string_clone smodel )
-            = rc ( f5_serve ( string_data smodel ) ( string_data vp ) ( string_data svoc )
-            ( string_data svoices ) host port ( string_data stok ) dev unload )
+        ? != 0 ( nurl_str_len ( string_data svoices ) ) {
+            : String mp ( f5_resolve_file ( string_data smodel ) `.safetensors` )
+            : String vp ( f5_resolve_vocab ( string_data svocab ) ( string_data mp ) )
+            : String cp ( f5_resolve_file ( string_data svoc ) `.bin` )
+            ? & & > ( string_len mp ) 0 > ( string_len vp ) 0 > ( string_len cp ) 0 {
+                = rc ( f5_serve ( string_data mp ) ( string_data vp ) ( string_data cp )
+                ( string_data svoices ) host port ( string_data stok ) dev unload )
+            } {
+                ( nurl_eprintln `f5tts: could not resolve the checkpoint, its vocabulary or the vocoder` )
+                = rc 1
+            }
+            ( string_free mp )
             ( string_free vp )
+            ( string_free cp )
         } {
-            ( nurl_eprintln `usage: f5tts serve --model CKPT --vocab VOCAB --vocoder BIN --voices DIR [--addr H:P] [--token T] [--unload-after S]` )
+            ( nurl_eprintln `usage: f5tts serve --voices DIR [--model REF] [--vocoder REF] [--addr H:P] [--token T] [--unload-after S]` )
         }
         ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
         ( string_free svoices ) ( string_free saddr ) ( string_free stok )
@@ -293,9 +309,9 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
         ^ rc
     } {}
     ? ( nurl_str_eq cmd0 `synth` ) {
-        : String smodel ( args_value_or p `model` `` )
+        : String smodel ( args_value_or p `model` F5_DEFAULT_MODEL )
         : String svocab ( args_value_or p `vocab` `` )
-        : String svoc ( args_value_or p `vocoder` `` )
+        : String svoc ( args_value_or p `vocoder` F5_DEFAULT_VOCODER )
         : String svoice ( args_value_or p `voice` `` )
         : String stext ( args_value_or p `text` `` )
         : String sout ( args_value_or p `output` `out.wav` )
@@ -328,14 +344,23 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
         ?? ( string_to_float sfd ) { T x → { = fade x } F → {} }
         ( string_free sfd )
         : ~ i rc 2
-        ? & != 0 ( nurl_str_len ( string_data smodel ) ) != 0 ( nurl_str_len ( string_data svoice ) ) {
-            : String vp ? != 0 ( nurl_str_len ( string_data svocab ) ) ( string_clone svocab ) ( string_clone smodel )
-            = rc ( __f5_cmd_synth ( string_data smodel ) ( string_data vp ) ( string_data svoc )
-            ( string_data svoice ) ( string_data stext ) ( string_data sout )
-            steps cfg sway speed fade seed dev ( args_present p `quiet` ) ( args_present p `profile` ) )
+        ? != 0 ( nurl_str_len ( string_data svoice ) ) {
+            : String mp ( f5_resolve_file ( string_data smodel ) `.safetensors` )
+            : String vp ( f5_resolve_vocab ( string_data svocab ) ( string_data mp ) )
+            : String cp ( f5_resolve_file ( string_data svoc ) `.bin` )
+            ? & & > ( string_len mp ) 0 > ( string_len vp ) 0 > ( string_len cp ) 0 {
+                = rc ( __f5_cmd_synth ( string_data mp ) ( string_data vp ) ( string_data cp )
+                ( string_data svoice ) ( string_data stext ) ( string_data sout )
+                steps cfg sway speed fade seed dev ( args_present p `quiet` ) ( args_present p `profile` ) )
+            } {
+                ( nurl_eprintln `f5tts: could not resolve the checkpoint, its vocabulary or the vocoder` )
+                = rc 1
+            }
+            ( string_free mp )
             ( string_free vp )
+            ( string_free cp )
         } {
-            ( nurl_eprintln `usage: f5tts synth --model CKPT --vocab VOCAB --vocoder BIN --voice DIR --text TEXT -o out.wav` )
+            ( nurl_eprintln `usage: f5tts synth --voice DIR --text TEXT -o out.wav [--model REF] [--vocoder REF]` )
         }
         ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
         ( string_free svoice ) ( string_free stext ) ( string_free sout )

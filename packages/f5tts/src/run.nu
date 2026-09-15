@@ -31,6 +31,11 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/std/path.nu`
+$ `deps/hub/src/store.nu`
+$ `deps/hub/src/hf.nu`
+$ `deps/hub/src/pull.nu`
+$ `deps/hub/src/hub.nu`
 $ `deps/audio/src/wav.nu`
 $ `deps/audio/src/mel.nu`
 $ `deps/audio/src/resample.nu`
@@ -482,4 +487,85 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
     }
     ( vec_free [i] ns )
     ^ out
+}
+
+// ── finding the weights ─────────────────────────────────────────────
+//
+// A checkpoint argument is a local file, a local directory holding one, or a
+// Hugging Face reference — `SWivid/F5-TTS/F5TTS_v1_Base/model_1250000.safetensors`
+// names a single file in a repo and is fetched into the shared ~/.nurl cache.
+// The vocabulary is looked for beside whatever the checkpoint turned out to
+// be, because that is where every F5-TTS release puts it.
+
+@ __f5r_find_ext s dir s ext i depth → String {
+    : String found ( string_new )
+    ?? ( dir_list dir ) {
+        T names → {
+            : ~ i k 0
+            ~ < k ( vec_len [String] names ) {
+                ?? ( vec_get [String] names k ) {
+                    T nm → {
+                        ? == 0 ( string_len found ) {
+                            : String p ( string_from dir )
+                            ( string_push_char p 47 )
+                            ( string_push_str p ( string_data nm ) )
+                            ? ( string_ends_with nm ext ) {
+                                ( string_push_str found ( string_data p ) )
+                            } {
+                                ? > depth 0 {
+                                    : String sub ( __f5r_find_ext ( string_data p ) ext - depth 1 )
+                                    ? > ( string_len sub ) 0 {
+                                        ( string_push_str found ( string_data sub ) )
+                                    } {}
+                                    ( string_free sub )
+                                } {}
+                            }
+                            ( string_free p )
+                        } {}
+                    }
+                    F → {}
+                }
+                = k + k 1
+            }
+            : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
+            ( vec_free_with [String] names drop_s )
+        }
+        F _e → {}
+    }
+    ^ found
+}
+
+@ f5_resolve_file s arg s ext → String {
+    ? == 0 ( nurl_str_len arg ) { ^ ( string_new ) } {}
+    ? ( file_exists arg ) {
+        : String d ( __f5r_find_ext arg ext 2 )
+        ? > ( string_len d ) 0 { ^ d } {}
+        ( string_free d )
+        ^ ( string_from arg )
+    } {}
+    ?? ( hub_get arg ) {
+        T p → {
+            : String d ( __f5r_find_ext ( string_data p ) ext 2 )
+            ? > ( string_len d ) 0 { ( string_free p ) ^ d } {}
+            ( string_free d )
+            ^ p
+        }
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ( string_free e )
+            ^ ( string_new )
+        }
+    }
+}
+
+// vocab.txt beside the checkpoint, unless one was named.
+@ f5_resolve_vocab s arg s model_path → String {
+    ? != 0 ( nurl_str_len arg ) { ^ ( f5_resolve_file arg `.txt` ) } {}
+    : String dir ( path_dirname model_path )
+    : String p ( string_from ( string_data dir ) )
+    ( string_free dir )
+    ( string_push_str p `/vocab.txt` )
+    ? ( file_exists ( string_data p ) ) { ^ p } {}
+    ( string_free p )
+    ^ ( string_new )
 }
