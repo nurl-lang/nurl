@@ -41,11 +41,14 @@
 //   : i b ( rng_next g )          // a != b; stream is deterministic
 //   ( rng_free g )
 
+$ `stdlib/std/float.nu`
+
 // ── State ────────────────────────────────────────────────────────────
 
 // 256-bit xoshiro state. Heap-allocated; `Rng` is a single-pointer
 // handle, so passing a Rng by value shares the same stream (every copy
 // advances the one underlying state).
+
 : RngImpl {
     u64 s0
     u64 s1
@@ -169,6 +172,23 @@
 // weakness of plain xoshiro+), so the bottom bit is a sound source.
 @ rng_bool Rng g → b {
     ^ == 1 & ( rng_next g ) 1
+}
+
+// Standard normal — mean 0, variance 1 — by the Box-Muller transform.
+// Two uniforms in, one normal out: the transform produces a PAIR, and
+// keeping the second would mean caching per-generator state that the
+// caller could not see, so the pair is spent here. The first uniform is
+// nudged off zero because log(0) is not a number and rng_u01's range is
+// half-open at exactly that end.
+//
+// Wanted wherever a model needs noise rather than a choice: the initial
+// state of a diffusion or flow-matching sampler, a dropout mask, a
+// synthetic dataset.
+@ rng_normal Rng g → f {
+    : f u1 ( rng_u01 g )
+    : f u2 ( rng_u01 g )
+    : f a ? < u1 1.0e-300 1.0e-300 u1
+    ^ * ( sqrt * -2.0 ( log a ) ) ( cos * * 2.0 3.14159265358979323846 u2 )
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────

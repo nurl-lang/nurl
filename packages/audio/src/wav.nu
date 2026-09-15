@@ -19,7 +19,6 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/float.nu`
 
@@ -298,6 +297,36 @@ $ `stdlib/std/float.nu`
 }
 
 // 16-bit PCM, which every tool on earth reads.
+// The same file, as BYTES. An HTTP server that has just synthesised audio has
+// no path to write it to and no reason to invent one — it has a socket.
+@ wav_encode ( Vec f ) samples i rate i channels → ( Vec u ) {
+    : i n ( vec_len [f] samples )
+    : i data_len * n 2
+    : ( Vec u ) d ( vec_with_cap [u] + 44 data_len )
+    ( __wpush_tag d `RIFF` )
+    ( __wpush_u32 d + 36 data_len )
+    ( __wpush_tag d `WAVE` )
+    ( __wpush_tag d `fmt ` )
+    ( __wpush_u32 d 16 )
+    ( __wpush_u16 d WAV_PCM )
+    ( __wpush_u16 d channels )
+    ( __wpush_u32 d rate )
+    ( __wpush_u32 d * * rate channels 2 )
+    ( __wpush_u16 d * channels 2 )
+    ( __wpush_u16 d 16 )
+    ( __wpush_tag d `data` )
+    ( __wpush_u32 d data_len )
+    : ~ i k 0
+    ~ < k n {
+        : f v ( __wav_get samples k )
+        : f cl ? > v 1.0 1.0 ? < v -1.0 -1.0 v
+        : i q # i ( round * cl 32767.0 )
+        ( __wpush_u16 d & q 65535 )
+        = k + k 1
+    }
+    ^ d
+}
+
 @ wav_write s path ( Vec f ) samples i rate i channels → !v String {
     : i n ( vec_len [f] samples )
     : i data_len * n 2
