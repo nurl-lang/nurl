@@ -86,11 +86,13 @@ i steps f cfg f sway ( Vec f ) noise ( Vec f ) out → b {
     ? ok {} { ^ F }
 
     : ( Vec f ) ts ( f5_timesteps steps sway )
+    // every step's modulation, computed before the first forward
+    = ok & ok ( f5_set_times m ts )
+    ? ok {} { ( vec_free [f] ts ) ^ F }
     : ~ i st 0
     ~ < st steps {
-        : f t0 ( __f5s_get ts st )
-        : f dt - ( __f5s_get ts + st 1 ) t0
-        = ok & ok ( f5_set_time m t0 )
+        : f dt - ( __f5s_get ts + st 1 ) ( __f5s_get ts st )
+        ( f5_set_step m st )
         = ok & ok ( f5_forward m )
         // v = cond + (cond − uncond)·cfg, written over the first row block
         = ok & ok ( f5k_cfg ( f5_kit m ) . ( f5_buf_pred m ) dptr

@@ -141,6 +141,33 @@ extern "C" __global__ void f5_gated_add(float* x, const float* y, const float* g
 
 @ __f5k_split_rope → s {
     ^ `
+// The same split, reading a WIDER source row at a given column offset — so a
+// fused q/k/v projection's three thirds can each be taken out in place,
+// without a copy.
+extern "C" __global__ void f5_split_rope_s(const float* src, float* dst,
+                                           const float* cosd, const float* sind,
+                                           long long batch, long long n, long long heads,
+                                           long long hd, long long dorope,
+                                           long long stride, long long coff)
+{
+    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long total = batch * heads * n * hd;
+    if (i >= total) return;
+    long long e = i % hd;
+    long long t = (i / hd) % n;
+    long long bh = i / (hd * n);
+    long long h = bh % heads;
+    long long b = bh / heads;
+    const float* row = src + (b * n + t) * stride + coff + h * hd;
+    if (dorope == 0) { dst[i] = row[e]; return; }
+    long long p = e >> 1;
+    float c = cosd[t * (hd / 2) + p];
+    float s = sind[t * (hd / 2) + p];
+    float x0 = row[p * 2];
+    float x1 = row[p * 2 + 1];
+    dst[i] = ((e & 1) == 0) ? (x0 * c - x1 * s) : (x1 * c + x0 * s);
+}
+
 extern "C" __global__ void f5_split_rope(const float* src, float* dst,
                                          const float* cosd, const float* sind,
                                          long long batch, long long n, long long heads,
@@ -475,6 +502,26 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ( vec_push [i] a ( gpu_arg_i64 dorope ) )
     : i tot * * * batch heads n hd
     : b r ( gk_run_dev kit ( __f5k_split_rope ) `f5_split_rope` ( gk_grid tot 256 ) 256 a )
+    ( vec_free [i] a )
+    ^ r
+}
+
+@ f5k_split_rope_s * GpuKit kit i srcd i dstd i cosd i sind i batch i n i heads i hd
+i dorope i stride i coff → b {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a srcd )
+    ( vec_push [i] a dstd )
+    ( vec_push [i] a cosd )
+    ( vec_push [i] a sind )
+    ( vec_push [i] a ( gpu_arg_i64 batch ) )
+    ( vec_push [i] a ( gpu_arg_i64 n ) )
+    ( vec_push [i] a ( gpu_arg_i64 heads ) )
+    ( vec_push [i] a ( gpu_arg_i64 hd ) )
+    ( vec_push [i] a ( gpu_arg_i64 dorope ) )
+    ( vec_push [i] a ( gpu_arg_i64 stride ) )
+    ( vec_push [i] a ( gpu_arg_i64 coff ) )
+    : i tot * * * batch heads n hd
+    : b r ( gk_run_dev kit ( __f5k_split_rope ) `f5_split_rope_s` ( gk_grid tot 256 ) 256 a )
     ( vec_free [i] a )
     ^ r
 }

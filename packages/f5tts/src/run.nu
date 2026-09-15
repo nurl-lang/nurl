@@ -83,21 +83,33 @@ $ `vocos.nu`
 @ f5_voice_load s wav_path s ref_text → !*F5Voice String {
     ?? ( wav_read wav_path ) {
         T w → {
-            : ( Vec f ) mono ( wav_mono w )
+            : ( Vec f ) raw ( wav_mono w )
+            // the silence split happens at the FILE's own rate, before the
+            // resample, exactly where preprocess_ref_audio_text does it
+            : ( Vec f ) mono ( f5_prepare_reference raw . w rate )
+            ( vec_free [f] raw )
+            : i src_n ( vec_len [f] mono )
+            ? > src_n 0 {} {
+                ( vec_free [f] mono )
+                ( wav_free w )
+                ^ ( __f5r_err `f5tts: the reference recording is silent` )
+            }
+            // the loudness is measured before the resample, as the reference does
+            : ~ f sum0 0.0
+            : ~ i k0 0
+            ~ < k0 src_n { : f s ( __f5r_get mono k0 ) = sum0 + sum0 * s s = k0 + k0 1 }
+            : f rms0 ( sqrt / sum0 # f src_n )
+            ? < rms0 F5_TARGET_RMS {
+                : f g0 / F5_TARGET_RMS ? > rms0 1.0e-12 rms0 1.0e-12
+                = k0 0
+                ~ < k0 src_n { ( vec_set [f] mono k0 * g0 ( __f5r_get mono k0 ) ) = k0 + k0 1 }
+            } {}
             : ( Vec f ) at24 ( resample mono . w rate F5_SR )
             ( vec_free [f] mono )
             ( wav_free w )
             : i n ( vec_len [f] at24 )
             ? > n 0 {} { ( vec_free [f] at24 ) ^ ( __f5r_err `f5tts: the reference recording is empty` ) }
-            : ~ f sum 0.0
-            : ~ i k 0
-            ~ < k n { : f s ( __f5r_get at24 k ) = sum + sum * s s = k + k 1 }
-            : f rms ( sqrt / sum # f n )
-            ? < rms F5_TARGET_RMS {
-                : f g / F5_TARGET_RMS ? > rms 1.0e-12 rms 1.0e-12
-                = k 0
-                ~ < k n { ( vec_set [f] at24 k * g ( __f5r_get at24 k ) ) = k + k 1 }
-            } {}
+            : f rms rms0
             : ( Vec f ) mel ( log_mel_vocos at24 1024 F5_HOP 100 F5_SR )
             ( vec_free [f] at24 )
             : *F5Voice v # *F5Voice ( nurl_alloc Z F5Voice )
@@ -274,4 +286,200 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
     : ( @ v String ) drop_c \ String s → v { ( string_free s ) }
     ( vec_free_with [String] chunks drop_c )
     ^ ok
+}
+
+// ── preparing the reference recording ───────────────────────────────
+//
+// F5-TTS does not feed a recording to the model as it finds it. It splits it
+// on silence, keeps as much as fits in twelve seconds, trims the edges and
+// appends fifty milliseconds of quiet — and every one of those steps is load
+// bearing, because the reference IS the voice: whatever is in it, including
+// its leading breath and its room tone, is what the model imitates.
+//
+// The reference implementation does this through pydub, in milliseconds, on
+// integer samples. The arithmetic below is the same arithmetic on floats:
+// pydub's dBFS is 20·log10(rms / 32768) and a float sample is already that
+// ratio, so a threshold in dBFS compares directly against 10^(dB/20).
+
+@ __f5r_rms ( Vec f ) x i from i to → f {
+    : i n ( vec_len [f] x )
+    : i a ? < from 0 0 from
+    : i b ? > to n n to
+    ? >= a b { ^ 0.0 } {}
+    : ~ f s 0.0
+    : ~ i k a
+    ~ < k b { : f v ( __f5r_get x k ) = s + s * v v = k + k 1 }
+    ^ ( sqrt / s # f - b a )
+}
+
+@ __f5r_ms2s i ms i rate → i { ^ / * ms rate 1000 }
+
+// pydub's detect_silence, as [start_ms, end_ms) pairs.
+@ __f5r_silences ( Vec f ) x i rate i min_ms f thresh_db i seek_ms → ( Vec i ) {
+    : ( Vec i ) out ( vec_new [i] )
+    : i n ( vec_len [f] x )
+    : i seg_ms / * n 1000 rate
+    ? < seg_ms min_ms { ^ out } {}
+    : f thresh ( pow 10.0 / thresh_db 20.0 )
+    : ( Vec i ) starts ( vec_new [i] )
+    : i last - seg_ms min_ms
+    : ~ i i 0
+    ~ <= i last {
+        : i a ( __f5r_ms2s i rate )
+        : i b ( __f5r_ms2s + i min_ms rate )
+        ? <= ( __f5r_rms x a b ) thresh { ( vec_push [i] starts i ) } {}
+        = i + i seek_ms
+    }
+    // pydub always examines the final window, even when seek_step steps over it
+    ? != 0 % last seek_ms {
+        : i a ( __f5r_ms2s last rate )
+        : i b ( __f5r_ms2s + last min_ms rate )
+        ? <= ( __f5r_rms x a b ) thresh { ( vec_push [i] starts last ) } {}
+    } {}
+    : i ns ( vec_len [i] starts )
+    ? == ns 0 { ( vec_free [i] starts ) ^ out } {}
+    : ~ i prev ( __f5t_geti_pub starts 0 )
+    : ~ i cur prev
+    : ~ i k 1
+    ~ < k ns {
+        : i si ( __f5t_geti_pub starts k )
+        : b continuous == si + prev seek_ms
+        : b gap > si + prev min_ms
+        ? & ! continuous gap {
+            ( vec_push [i] out cur )
+            ( vec_push [i] out + prev min_ms )
+            = cur si
+        } {}
+        = prev si
+        = k + k 1
+    }
+    ( vec_push [i] out cur )
+    ( vec_push [i] out + prev min_ms )
+    ( vec_free [i] starts )
+    ^ out
+}
+
+// pydub's split_on_silence, as [start_ms, end_ms) pairs of KEPT audio.
+@ __f5r_nonsilent ( Vec f ) x i rate i min_ms f thresh_db i keep_ms i seek_ms → ( Vec i ) {
+    : ( Vec i ) sil ( __f5r_silences x rate min_ms thresh_db seek_ms )
+    : i n ( vec_len [f] x )
+    : i seg_ms / * n 1000 rate
+    : ( Vec i ) ns ( vec_new [i] )
+    : i np ( vec_len [i] sil )
+    ? == np 0 {
+        ( vec_push [i] ns 0 )
+        ( vec_push [i] ns seg_ms )
+    } {
+        : ~ i prev 0
+        : ~ i k 0
+        ~ < k np {
+            : i s ( __f5t_geti_pub sil k )
+            : i e ( __f5t_geti_pub sil + k 1 )
+            ? > s prev { ( vec_push [i] ns prev ) ( vec_push [i] ns s ) } {}
+            = prev e
+            = k + k 2
+        }
+        ? < prev seg_ms { ( vec_push [i] ns prev ) ( vec_push [i] ns seg_ms ) } {}
+    }
+    ( vec_free [i] sil )
+    // widen by keep_silence, then split any overlap down the middle
+    : i nn ( vec_len [i] ns )
+    : ~ i k 0
+    ~ < k nn {
+        ( vec_set [i] ns k - ( __f5t_geti_pub ns k ) keep_ms )
+        ( vec_set [i] ns + k 1 + ( __f5t_geti_pub ns + k 1 ) keep_ms )
+        = k + k 2
+    }
+    = k 0
+    ~ < k - nn 2 {
+        : i le ( __f5t_geti_pub ns + k 1 )
+        : i ns2 ( __f5t_geti_pub ns + k 2 )
+        ? < ns2 le {
+            : i mid / + le ns2 2
+            ( vec_set [i] ns + k 1 mid )
+            ( vec_set [i] ns + k 2 mid )
+        } {}
+        = k + k 2
+    }
+    ^ ns
+}
+
+// pydub's remove_silence_edges: leading silence in 10 ms chunks, trailing in
+// 1 ms ones, both against -42 dBFS.
+@ __f5r_trim_edges ( Vec f ) x i rate → ( Vec f ) {
+    : i n ( vec_len [f] x )
+    : f thresh ( pow 10.0 / -42.0 20.0 )
+    : i chunk ( __f5r_ms2s 10 rate )
+    : ~ i start 0
+    ~ & < start n < ( __f5r_rms x start + start chunk ) thresh { = start + start chunk }
+    ? >= start n { = start n } {}
+    : i one ( __f5r_ms2s 1 rate )
+    : ~ i end n
+    ~ & > end + start one <= ( __f5r_rms x - end one end ) thresh { = end - end one }
+    : ( Vec f ) out ( vec_new [f] )
+    : ~ i k start
+    ~ < k end { ( vec_push [f] out ( __f5r_get x k ) ) = k + k 1 }
+    ^ out
+}
+
+// The whole of preprocess_ref_audio_text's audio half.
+@ f5_prepare_reference ( Vec f ) x i rate → ( Vec f ) {
+    : ( Vec f ) first ( __f5r_take_segments x rate 1000 -50.0 1000 10 )
+    : ~ ( Vec f ) kept first
+    : i ms12 ( __f5r_ms2s 12000 rate )
+    ? > ( vec_len [f] kept ) ms12 {
+        // the long-silence pass did not find a cut: try short pauses
+        : ( Vec f ) second ( __f5r_take_segments x rate 100 -40.0 1000 10 )
+        ( vec_free [f] first )
+        = kept second
+    } {}
+    ? > ( vec_len [f] kept ) ms12 {
+        : ( Vec f ) cut ( vec_with_cap [f] ms12 )
+        : ~ i k 0
+        ~ < k ms12 { ( vec_push [f] cut ( __f5r_get kept k ) ) = k + k 1 }
+        ( vec_free [f] kept )
+        = kept cut
+    } {}
+    ? == 0 ( vec_len [f] kept ) {
+        // nothing survived: the recording is all silence by these thresholds,
+        // and its own samples are a better reference than none
+        ( vec_free [f] kept )
+        : ( Vec f ) all ( vec_with_cap [f] ( vec_len [f] x ) )
+        : ~ i k 0
+        ~ < k ( vec_len [f] x ) { ( vec_push [f] all ( __f5r_get x k ) ) = k + k 1 }
+        = kept all
+    } {}
+    : ( Vec f ) trimmed ( __f5r_trim_edges kept rate )
+    ( vec_free [f] kept )
+    // fifty milliseconds of quiet, so the model does not start mid-breath
+    : i pad ( __f5r_ms2s 50 rate )
+    : ~ i k 0
+    ~ < k pad { ( vec_push [f] trimmed 0.0 ) = k + k 1 }
+    ^ trimmed
+}
+
+// Concatenate non-silent segments while they fit: stop once six seconds are
+// in hand and the next one would take it past twelve.
+@ __f5r_take_segments ( Vec f ) x i rate i min_ms f thresh_db i keep_ms i seek_ms → ( Vec f ) {
+    : ( Vec i ) ns ( __f5r_nonsilent x rate min_ms thresh_db keep_ms seek_ms )
+    : i n ( vec_len [f] x )
+    : ( Vec f ) out ( vec_new [f] )
+    : i ms6 ( __f5r_ms2s 6000 rate )
+    : i ms12 ( __f5r_ms2s 12000 rate )
+    : i np ( vec_len [i] ns )
+    : ~ i k 0
+    ~ < k np {
+        : i a0 ( __f5t_geti_pub ns k )
+        : i b0 ( __f5t_geti_pub ns + k 1 )
+        : i a ? < ( __f5r_ms2s a0 rate ) 0 0 ( __f5r_ms2s a0 rate )
+        : i b ? > ( __f5r_ms2s b0 rate ) n n ( __f5r_ms2s b0 rate )
+        : i have ( vec_len [f] out )
+        ? & > have ms6 > + have - b a ms12 { = k np } {
+            : ~ i j a
+            ~ < j b { ( vec_push [f] out ( __f5r_get x j ) ) = j + j 1 }
+            = k + k 2
+        }
+    }
+    ( vec_free [i] ns )
+    ^ out
 }

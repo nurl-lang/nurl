@@ -63,7 +63,14 @@ $ `kernels.nu`
     GkBuf ie_w GkBuf ie_b
     GkBuf cp0_w GkBuf cp0_b GkBuf cp2_w GkBuf cp2_b
     // transformer blocks
-    ( Vec GkBuf ) an_w ( Vec GkBuf ) an_b
+    GkBuf an_all  // the 22 timestep projections, stacked into one matrix
+    GkBuf anb_all
+    // the modulation for EVERY step, computed before the loop starts
+    GkBuf mod_all
+    GkBuf mod2_all
+    i nsteps
+    i cur_step
+    ( Vec GkBuf ) wqkv ( Vec GkBuf ) bqkv  // q, k and v stacked: one GEMM, not three
     ( Vec GkBuf ) wq ( Vec GkBuf ) bq
     ( Vec GkBuf ) wk ( Vec GkBuf ) bk
     ( Vec GkBuf ) wv ( Vec GkBuf ) bv
@@ -83,6 +90,7 @@ $ `kernels.nu`
     GkBuf hn  // [batch*n, dim]  the normalised copy
     GkBuf tmp  // [batch*n, dim]
     GkBuf qb GkBuf kb GkBuf vb GkBuf ob
+    GkBuf qkv  // [batch*n, 3*dim] — the fused projection's output
     GkBuf ff  // [batch*n, ffmult*dim]
     GkBuf pred  // [batch*n, mel]
     GkBuf vel  // [n, mel]
@@ -106,6 +114,10 @@ $ `kernels.nu`
 }
 
 @ __f5m_nobuf → GkBuf { ^ @ GkBuf { 0 0 GK_F32 } }
+
+@ __f5m_geti ( Vec i ) v i k → i {
+    ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ -1 } }
+}
 
 @ __f5m_bget ( Vec GkBuf ) v i k → GkBuf {
     ?? ( vec_get [GkBuf] v k ) { T x → { ^ x } F → { ^ ( __f5m_nobuf ) } }
@@ -218,8 +230,125 @@ $ `kernels.nu`
     ^ ( gk_buf_ok b )
 }
 
-@ __f5m_layers * F5Model m → b {
+// The three attention projections read the SAME normalised activation and
+// write three tensors of the same shape, so they are one GEMM with N tripled.
+// That is not only two fewer launches: gpukit's tile covers a 3072-wide
+// output in 48 column tiles against 16, which is the difference between
+// leaving a quarter of a wave empty and filling it — 28.5 against 22.9
+// TFLOP/s, measured on the shapes this model runs.
+@ __f5m_up_stack3 * F5Model m i idx s a s b s c i rows i cols ( Vec GkBuf ) dst → b {
+    : *St st # *St . m st
+    : ( Vec i ) tis ( vec_new [i] )
+    : String n1 ( __f5m_name `transformer_blocks.` idx a )
+    : String n2 ( __f5m_name `transformer_blocks.` idx b )
+    : String n3 ( __f5m_name `transformer_blocks.` idx c )
+    ( vec_push [i] tis ( st_find_tensor st ( string_data n1 ) ) )
+    ( vec_push [i] tis ( st_find_tensor st ( string_data n2 ) ) )
+    ( vec_push [i] tis ( st_find_tensor st ( string_data n3 ) ) )
+    ( string_free n1 )
+    ( string_free n2 )
+    ( string_free n3 )
+    : i want * rows cols
+    : GkBuf big ( gk_dbuf_new . m kit * 3 want GK_F32 )
+    ? ( gk_buf_ok big ) {} {
+        ( vec_free [i] tis )
+        ( vec_push [GkBuf] dst ( __f5m_nobuf ) )
+        ^ F
+    }
     : ~ b ok T
+    : ~ i p 0
+    ~ < p 3 {
+        : i ti ( __f5m_geti tis p )
+        ? >= ti 0 {} { = ok F }
+        ? ok {
+            ?? ( vec_get [StTensor] . st tensors ti ) {
+                T t → {
+                    ? & == . t dtype ST_F32 == . t nelems want {} { = ok F }
+                    ? ok {
+                        : GkBuf slot ( __f5m_view big * p want want )
+                        = ok ( gk_dbuf_upload_raw . m kit slot ( st_tensor_ptr st t ) )
+                    } {}
+                }
+                F → { = ok F }
+            }
+        } {}
+        = p + p 1
+    }
+    ( vec_free [i] tis )
+    ? ok {} {
+        ( gk_dbuf_free big )
+        ( vec_push [GkBuf] dst ( __f5m_nobuf ) )
+        ^ F
+    }
+    ( vec_push [GkBuf] dst big )
+    ^ T
+}
+
+// The 22 blocks' timestep projections, stacked into ONE matrix.
+//
+// Each block derives its six modulation vectors from the same SiLU of the
+// same timestep embedding, through its own [6*dim, dim] matrix. Run one block
+// at a time that is 22 matrix-vector products per step, and a matrix-vector
+// product is pure bandwidth: 25 MB of weights read to produce 6144 floats.
+// Stacked, the whole step is one GEMM — and since the timesteps are known
+// before the loop starts, ALL of them are one GEMM, so those 554 MB are read
+// once per utterance instead of once per step.
+@ __f5m_up_stack_mod * F5Model m → b {
+    : *St st # *St . m st
+    : i per * * 6 . m dim . m dim
+    : i pb * 6 . m dim
+    : GkBuf w ( gk_dbuf_new . m kit * . m depth per GK_F32 )
+    : GkBuf b ( gk_dbuf_new . m kit * . m depth pb GK_F32 )
+    ? & ( gk_buf_ok w ) ( gk_buf_ok b ) {} {
+        ( gk_dbuf_free w )
+        ( gk_dbuf_free b )
+        ^ F
+    }
+    : ~ b ok T
+    : ~ i k 0
+    ~ < k . m depth {
+        : String nw ( __f5m_name `transformer_blocks.` k `.attn_norm.linear.weight` )
+        : String nb ( __f5m_name `transformer_blocks.` k `.attn_norm.linear.bias` )
+        : i tw ( st_find_tensor st ( string_data nw ) )
+        : i tb ( st_find_tensor st ( string_data nb ) )
+        ( string_free nw )
+        ( string_free nb )
+        ? & >= tw 0 >= tb 0 {} { = ok F }
+        ? ok {
+            ?? ( vec_get [StTensor] . st tensors tw ) {
+                T t → {
+                    ? == . t nelems per {} { = ok F }
+                    ? ok {
+                        : GkBuf slot ( __f5m_view w * k per per )
+                        = ok ( gk_dbuf_upload_raw . m kit slot ( st_tensor_ptr st t ) )
+                    } {}
+                }
+                F → { = ok F }
+            }
+        } {}
+        ? ok {
+            ?? ( vec_get [StTensor] . st tensors tb ) {
+                T t → {
+                    : GkBuf slot ( __f5m_view b * k pb pb )
+                    = ok ( gk_dbuf_upload_raw . m kit slot ( st_tensor_ptr st t ) )
+                }
+                F → { = ok F }
+            }
+        } {}
+        = k + k 1
+    }
+    ? ok {} {
+        ( gk_dbuf_free w )
+        ( gk_dbuf_free b )
+        ^ F
+    }
+    = . m an_all w
+    = . m anb_all b
+    ^ T
+}
+
+@ __f5m_layers * F5Model m → b {
+    : ~ b ok ( __f5m_up_stack_mod m )
     : ~ i k 0
     ~ < k . m nconv {
         = ok & ok ( __f5m_up_convwl m `text_embed.text_blocks.` k `.dwconv.weight` . m td 1 7 . m tb_dw_w )
@@ -236,14 +365,10 @@ $ `kernels.nu`
     }
     = k 0
     ~ < k . m depth {
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn_norm.linear.weight` . m an_w )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn_norm.linear.bias` . m an_b )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_q.weight` . m wq )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_q.bias` . m bq )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_k.weight` . m wk )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_k.bias` . m bk )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_v.weight` . m wv )
-        = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_v.bias` . m bv )
+        = ok & ok ( __f5m_up_stack3 m k `.attn.to_q.weight` `.attn.to_k.weight`
+        `.attn.to_v.weight` . m dim . m dim . m wqkv )
+        = ok & ok ( __f5m_up_stack3 m k `.attn.to_q.bias` `.attn.to_k.bias`
+        `.attn.to_v.bias` 1 . m dim . m bqkv )
         = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_out.0.weight` . m wo )
         = ok & ok ( __f5m_upl m `transformer_blocks.` k `.attn.to_out.0.bias` . m bo )
         = ok & ok ( __f5m_upl m `transformer_blocks.` k `.ff.ff.0.0.weight` . m f1_w )
@@ -266,8 +391,8 @@ $ `kernels.nu`
     = . m tb_gb ( vec_new [GkBuf] )
     = . m tb_p2_w ( vec_new [GkBuf] )
     = . m tb_p2_b ( vec_new [GkBuf] )
-    = . m an_w ( vec_new [GkBuf] )
-    = . m an_b ( vec_new [GkBuf] )
+    = . m wqkv ( vec_new [GkBuf] )
+    = . m bqkv ( vec_new [GkBuf] )
     = . m wq ( vec_new [GkBuf] )
     = . m bq ( vec_new [GkBuf] )
     = . m wk ( vec_new [GkBuf] )
@@ -293,6 +418,7 @@ $ `kernels.nu`
     = . m h ( __f5m_nobuf )
     = . m hn ( __f5m_nobuf )
     = . m tmp ( __f5m_nobuf )
+    = . m qkv ( __f5m_nobuf )
     = . m qb ( __f5m_nobuf )
     = . m kb ( __f5m_nobuf )
     = . m vb ( __f5m_nobuf )
@@ -303,6 +429,10 @@ $ `kernels.nu`
     = . m temb ( __f5m_nobuf )
     = . m tsin ( __f5m_nobuf )
     = . m mod6 ( __f5m_nobuf )
+    = . m mod_all ( __f5m_nobuf )
+    = . m mod2_all ( __f5m_nobuf )
+    = . m nsteps 0
+    = . m cur_step 0
     = . m mod2 ( __f5m_nobuf )
     = . m cosd ( __f5m_nobuf )
     = . m sind ( __f5m_nobuf )
@@ -324,7 +454,7 @@ $ `kernels.nu`
     ( vec_clear [GkBuf] . m tb_p1_w ) ( vec_clear [GkBuf] . m tb_p1_b )
     ( vec_clear [GkBuf] . m tb_gg ) ( vec_clear [GkBuf] . m tb_gb )
     ( vec_clear [GkBuf] . m tb_p2_w ) ( vec_clear [GkBuf] . m tb_p2_b )
-    ( vec_clear [GkBuf] . m an_w ) ( vec_clear [GkBuf] . m an_b )
+    ( vec_clear [GkBuf] . m wqkv ) ( vec_clear [GkBuf] . m bqkv )
     ( vec_clear [GkBuf] . m wq ) ( vec_clear [GkBuf] . m bq )
     ( vec_clear [GkBuf] . m wk ) ( vec_clear [GkBuf] . m bk )
     ( vec_clear [GkBuf] . m wv ) ( vec_clear [GkBuf] . m bv )
@@ -407,6 +537,7 @@ $ `kernels.nu`
     ( gk_dbuf_free . m xbuf ) ( gk_dbuf_free . m cond2 ) ( gk_dbuf_free . m txt2 )
     ( gk_dbuf_free . m cat ) ( gk_dbuf_free . m h ) ( gk_dbuf_free . m hn )
     ( gk_dbuf_free . m tmp ) ( gk_dbuf_free . m qb ) ( gk_dbuf_free . m kb )
+    ( gk_dbuf_free . m qkv )
     ( gk_dbuf_free . m vb ) ( gk_dbuf_free . m ob ) ( gk_dbuf_free . m ff )
     ( gk_dbuf_free . m pred ) ( gk_dbuf_free . m vel ) ( gk_dbuf_free . m temb )
     ( gk_dbuf_free . m tsin ) ( gk_dbuf_free . m mod6 ) ( gk_dbuf_free . m mod2 )
@@ -432,7 +563,8 @@ $ `kernels.nu`
     ( __f5m_freev . m tb_p1_w ) ( __f5m_freev . m tb_p1_b )
     ( __f5m_freev . m tb_gg ) ( __f5m_freev . m tb_gb )
     ( __f5m_freev . m tb_p2_w ) ( __f5m_freev . m tb_p2_b )
-    ( __f5m_freev . m an_w ) ( __f5m_freev . m an_b )
+    ( gk_dbuf_free . m an_all ) ( gk_dbuf_free . m anb_all )
+    ( __f5m_freev . m wqkv ) ( __f5m_freev . m bqkv )
     ( __f5m_freev . m wq ) ( __f5m_freev . m bq )
     ( __f5m_freev . m wk ) ( __f5m_freev . m bk )
     ( __f5m_freev . m wv ) ( __f5m_freev . m bv )
@@ -463,6 +595,7 @@ $ `kernels.nu`
     = . m h ( gk_dbuf_new . m kit * rows dim GK_F32 )
     = . m hn ( gk_dbuf_new . m kit * rows dim GK_F32 )
     = . m tmp ( gk_dbuf_new . m kit * rows dim GK_F32 )
+    = . m qkv ( gk_dbuf_new . m kit * rows * 3 dim GK_F32 )
     = . m qb ( gk_dbuf_new . m kit * rows dim GK_F32 )
     = . m kb ( gk_dbuf_new . m kit * rows dim GK_F32 )
     = . m vb ( gk_dbuf_new . m kit * rows dim GK_F32 )
@@ -490,6 +623,7 @@ $ `kernels.nu`
     = ok & ok ( gk_buf_ok . m h )
     = ok & ok ( gk_buf_ok . m ff )
     = ok & ok ( gk_buf_ok . m qb )
+    = ok & ok ( gk_buf_ok . m qkv )
     = ok & ok ( gk_buf_ok . m keep )
     = . m ready ok
     ^ ok
@@ -660,35 +794,75 @@ $ `kernels.nu`
 // scaled by a thousand — a different ladder and a different order from the
 // position code its text encoder uses. Getting this backwards does not crash;
 // it just conditions the whole network on the wrong time.
-@ f5_set_time * F5Model m f t → b {
+// Every step's conditioning, in one pass.
+//
+// The timesteps are a schedule, not a discovery: they are known before the
+// first forward. So the sinusoidal features, the two-layer MLP, the SiLU and
+// all 23 modulation projections are computed for all of them at once — which
+// turns 22 matrix-VECTOR products per step into one matrix-matrix product per
+// utterance, and reads the 554 MB of modulation weights once instead of once
+// per step.
+//
+// F5-TTS's timestep features are sin FIRST then cos, over
+// exp(-i·ln(10000)/127) scaled by a thousand — a different ladder and a
+// different order from the position code its text encoder uses. Getting this
+// backwards does not crash; it conditions the whole network on the wrong time.
+@ f5_set_times * F5Model m ( Vec f ) ts → b {
     : i dim . m dim
-    : ( Vec f ) e ( vec_with_cap [f] 256 )
+    : i S ( vec_len [f] ts )
+    ? > S 0 {} { ^ F }
+    ( gk_dbuf_free . m mod_all )
+    ( gk_dbuf_free . m mod2_all )
+    = . m mod_all ( gk_dbuf_new . m kit * S * . m depth * 6 dim GK_F32 )
+    = . m mod2_all ( gk_dbuf_new . m kit * S * 2 dim GK_F32 )
+    : GkBuf sins ( gk_dbuf_new . m kit * S 256 GK_F32 )
+    : GkBuf hid ( gk_dbuf_new . m kit * S dim GK_F32 )
+    : GkBuf emb ( gk_dbuf_new . m kit * S dim GK_F32 )
+    ? & & ( gk_buf_ok . m mod_all ) ( gk_buf_ok . m mod2_all ) & ( gk_buf_ok sins ) ( gk_buf_ok emb ) {} {
+        ( gk_dbuf_free sins )
+        ( gk_dbuf_free hid )
+        ( gk_dbuf_free emb )
+        ^ F
+    }
     : f step / ( log 10000.0 ) 127.0
-    : ~ i k 0
-    ~ < k 128 {
-        : f fq ( exp * -1.0 * # f k step )
-        ( vec_push [f] e ( sin * * 1000.0 t fq ) )
-        = k + k 1
+    : ( Vec f ) e ( vec_with_cap [f] * S 256 )
+    : ~ i si 0
+    ~ < si S {
+        : ~ f t 0.0
+        ?? ( vec_get [f] ts si ) { T x → { = t x } F → {} }
+        : ~ i k 0
+        ~ < k 128 {
+            : f fq ( exp * -1.0 * # f k step )
+            ( vec_push [f] e ( sin * * 1000.0 t fq ) )
+            = k + k 1
+        }
+        = k 0
+        ~ < k 128 {
+            : f fq ( exp * -1.0 * # f k step )
+            ( vec_push [f] e ( cos * * 1000.0 t fq ) )
+            = k + k 1
+        }
+        = si + si 1
     }
-    = k 0
-    ~ < k 128 {
-        : f fq ( exp * -1.0 * # f k step )
-        ( vec_push [f] e ( cos * * 1000.0 t fq ) )
-        = k + k 1
-    }
-    : ~ b ok ( gk_dbuf_upload . m kit . m tsin e )
+    : ~ b ok ( gk_dbuf_upload . m kit sins e )
     ( vec_free [f] e )
-    ? ok {} { ^ F }
-    : GkBuf t1 ( __f5m_view . m tsil 0 dim )
-    = ok & ok ( gkd_gemm . m kit t1 . m tsin . m tm0_w . m tm0_b 1 1 dim 256 1.0 1.0 1 )
-    = ok & ok ( f5k_silu . m kit . t1 dptr dim )
-    = ok & ok ( gkd_gemm . m kit . m temb t1 . m tm2_w . m tm2_b 1 1 dim dim 1.0 1.0 1 )
-    // every block and the final norm run the same SiLU on it, so it happens once
-    = ok & ok == 0 ( gpu_dtod @ GpuBuffer { . t1 dptr * dim 4 } . . m temb dptr )
-    = ok & ok ( f5k_silu . m kit . t1 dptr dim )
-    = ok & ok ( gkd_gemm . m kit . m mod2 t1 . m no_w . m no_b 1 1 * 2 dim dim 1.0 1.0 1 )
+    = ok & ok ( gkd_gemm . m kit hid sins . m tm0_w . m tm0_b 1 S dim 256 1.0 1.0 1 )
+    = ok & ok ( f5k_silu . m kit . hid dptr * S dim )
+    = ok & ok ( gkd_gemm . m kit emb hid . m tm2_w . m tm2_b 1 S dim dim 1.0 1.0 1 )
+    // every modulation runs the same SiLU on it, so it happens once
+    = ok & ok ( f5k_silu . m kit . emb dptr * S dim )
+    = ok & ok ( gkd_gemm . m kit . m mod_all emb . m an_all . m anb_all 1 S
+    * . m depth * 6 dim dim 1.0 1.0 1 )
+    = ok & ok ( gkd_gemm . m kit . m mod2_all emb . m no_w . m no_b 1 S * 2 dim dim 1.0 1.0 1 )
+    ( gk_dbuf_free sins )
+    ( gk_dbuf_free hid )
+    ( gk_dbuf_free emb )
+    = . m nsteps S
+    = . m cur_step 0
     ^ ok
 }
+
+@ f5_set_step * F5Model m i k → v { = . m cur_step k }
 
 // ── the forward ─────────────────────────────────────────────────────
 
@@ -727,31 +901,28 @@ $ `kernels.nu`
     : f qscale / 1.0 ( sqrt # f hd )
     : ~ i L 0
     ~ < L . m depth {
-        : GkBuf mod ( __f5m_view . m mod6 0 * 6 dim )
+        // this block's six modulation vectors, already computed for every step
+        : GkBuf mod ( __f5m_view . m mod_all + * . m cur_step * . m depth * 6 dim * L * 6 dim * 6 dim )
         : GkBuf shift_msa ( __f5m_view mod 0 dim )
         : GkBuf scale_msa ( __f5m_view mod dim dim )
         : GkBuf gate_msa ( __f5m_view mod * 2 dim dim )
         : GkBuf shift_mlp ( __f5m_view mod * 3 dim dim )
         : GkBuf scale_mlp ( __f5m_view mod * 4 dim dim )
         : GkBuf gate_mlp ( __f5m_view mod * 5 dim dim )
-        // this block's own projection of the timestep
-        = ok & ok ( gkd_gemm . m kit mod ( __f5m_view . m tsil 0 dim )
-        ( __f5m_bget . m an_w L ) ( __f5m_bget . m an_b L ) 1 1 * 6 dim dim 1.0 1.0 1 )
-
         = ok & ok ( f5k_modln . m kit . h dptr . hn dptr . scale_msa dptr
         . shift_msa dptr rows dim 1.0e-6 )
-        = ok & ok ( gkd_gemm . m kit tmp hn ( __f5m_bget . m wq L ) ( __f5m_bget . m bq L )
-        1 rows dim dim 1.0 1.0 1 )
-        = ok & ok ( f5k_split_rope . m kit . tmp dptr . . m qb dptr
-        . . m cosd dptr . . m sind dptr batch n heads hd 1 )
-        = ok & ok ( gkd_gemm . m kit tmp hn ( __f5m_bget . m wk L ) ( __f5m_bget . m bk L )
-        1 rows dim dim 1.0 1.0 1 )
-        = ok & ok ( f5k_split_rope . m kit . tmp dptr . . m kb dptr
-        . . m cosd dptr . . m sind dptr batch n heads hd 1 )
-        = ok & ok ( gkd_gemm . m kit tmp hn ( __f5m_bget . m wv L ) ( __f5m_bget . m bv L )
-        1 rows dim dim 1.0 1.0 1 )
-        = ok & ok ( f5k_split_rope . m kit . tmp dptr . . m vb dptr
-        . . m cosd dptr . . m sind dptr batch n heads hd 0 )
+        : GkBuf qkv ( __f5m_view . m qkv 0 * rows * 3 dim )
+        = ok & ok ( gkd_gemm . m kit qkv hn ( __f5m_bget . m wqkv L ) ( __f5m_bget . m bqkv L )
+        1 rows * 3 dim dim 1.0 1.0 1 )
+        // q, k and v now sit side by side in one row, so each split reads its
+        // own third in place: the same kernel with the row width and a column
+        // offset, and no copy between them
+        = ok & ok ( f5k_split_rope_s . m kit . qkv dptr . . m qb dptr
+        . . m cosd dptr . . m sind dptr batch n heads hd 1 * 3 dim 0 )
+        = ok & ok ( f5k_split_rope_s . m kit . qkv dptr . . m kb dptr
+        . . m cosd dptr . . m sind dptr batch n heads hd 1 * 3 dim dim )
+        = ok & ok ( f5k_split_rope_s . m kit . qkv dptr . . m vb dptr
+        . . m cosd dptr . . m sind dptr batch n heads hd 0 * 3 dim * 2 dim )
         = ok & ok ( gkd_attention . m kit ( __f5m_view . m ob 0 * rows dim )
         ( __f5m_view . m qb 0 * rows dim ) ( __f5m_view . m kb 0 * rows dim )
         ( __f5m_view . m vb 0 * rows dim ) * batch heads n n hd qscale )
@@ -774,8 +945,9 @@ $ `kernels.nu`
 
     // the final modulation takes scale FIRST and shift second, the other way
     // round from the six inside a block
-    : GkBuf fscale ( __f5m_view . m mod2 0 dim )
-    : GkBuf fshift ( __f5m_view . m mod2 dim dim )
+    : GkBuf fmod ( __f5m_view . m mod2_all * . m cur_step * 2 dim * 2 dim )
+    : GkBuf fscale ( __f5m_view fmod 0 dim )
+    : GkBuf fshift ( __f5m_view fmod dim dim )
     = ok & ok ( f5k_modln . m kit . h dptr . hn dptr . fscale dptr . fshift dptr
     rows dim 1.0e-6 )
     = ok & ok ( gkd_gemm . m kit predb hn . m po_w . m po_b 1 rows mel dim 1.0 1.0 1 )
@@ -861,7 +1033,10 @@ $ `kernels.nu`
     ( __f5m_freebufs . m tb_p1_w ) ( __f5m_freebufs . m tb_p1_b )
     ( __f5m_freebufs . m tb_gg ) ( __f5m_freebufs . m tb_gb )
     ( __f5m_freebufs . m tb_p2_w ) ( __f5m_freebufs . m tb_p2_b )
-    ( __f5m_freebufs . m an_w ) ( __f5m_freebufs . m an_b )
+    ( gk_dbuf_free . m an_all ) ( gk_dbuf_free . m anb_all )
+    = . m an_all ( __f5m_nobuf )
+    = . m anb_all ( __f5m_nobuf )
+    ( __f5m_freebufs . m wqkv ) ( __f5m_freebufs . m bqkv )
     ( __f5m_freebufs . m wq ) ( __f5m_freebufs . m bq )
     ( __f5m_freebufs . m wk ) ( __f5m_freebufs . m bk )
     ( __f5m_freebufs . m wv ) ( __f5m_freebufs . m bv )
@@ -877,4 +1052,14 @@ $ `kernels.nu`
 @ f5_reload * F5Model m → b {
     ? . m loaded { ^ T } {}
     ^ ( __f5m_upload_all m )
+}
+
+// One timestep, for a caller that has exactly one — the tensor-by-tensor
+// tests, which compare a single forward against the reference.
+@ f5_set_one_time * F5Model m f t → b {
+    : ( Vec f ) ts ( vec_new [f] )
+    ( vec_push [f] ts t )
+    : b ok ( f5_set_times m ts )
+    ( vec_free [f] ts )
+    ^ ok
 }

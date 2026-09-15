@@ -106,7 +106,7 @@ $ `src/sample.nu`
             ~ < k * n 100 { ( vec_push [f] c2 0.0 ) = k + k 1 }
             ? ( gk_dbuf_upload ( f5_kit m ) ( f5_buf_cond m ) c2 ) {} { ( nurl_eprintln `cond upload` ) ^ 1 }
             ? ( f5_set_x m noise ) {} { ( nurl_eprintln `x upload` ) ^ 1 }
-            ? ( f5_set_time m 0.0 ) {} { ( nurl_eprintln `time` ) ^ 1 }
+            ? ( f5_set_one_time m 0.0 ) {} { ( nurl_eprintln `time` ) ^ 1 }
             ? ( f5_forward m ) {} { ( nurl_eprintln `forward` ) ^ 1 }
             : ( Vec f ) got ( vec_new [f] )
             ? ( f5_download m ( f5_buf_pred m ) got * 2 * n 100 ) {} { ( nurl_eprintln `download` ) ^ 1 }

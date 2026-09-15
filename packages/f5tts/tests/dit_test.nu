@@ -152,7 +152,7 @@ $ `src/model.nu`
 
             ? ( f5_set_x m xin ) {} { ( nurl_eprintln `x upload failed` ) ( f5_close m ) ^ 1 }
             ? ( f5_set_cond m condin ) {} { ( nurl_eprintln `cond upload failed` ) ( f5_close m ) ^ 1 }
-            ? ( f5_set_time m ( __d_get tin 0 ) ) {} {
+            ? ( f5_set_one_time m ( __d_get tin 0 ) ) {} {
                 ( nurl_eprintln `timestep failed` ) ( f5_close m ) ^ 1
             }
             ? ( f5_forward m ) {} { ( nurl_eprintln `forward failed` ) ( f5_close m ) ^ 1 }

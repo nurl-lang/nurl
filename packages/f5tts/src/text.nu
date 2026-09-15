@@ -37,6 +37,11 @@ $ `stdlib/std/fs.nu`
     i size  // the vocabulary's length, which is also text_num_embeds
 }
 
+// The same read, public: run.nu's silence walk needs it too.
+@ __f5t_geti_pub ( Vec i ) v i k → i {
+    ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
+}
+
 @ __f5t_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ -1 } }
 }
