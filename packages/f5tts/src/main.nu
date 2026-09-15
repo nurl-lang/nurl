@@ -19,6 +19,7 @@ $ `model.nu`
 $ `sample.nu`
 $ `vocos.nu`
 $ `run.nu`
+$ `serve.nu`
 
 @ __f5_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
@@ -227,6 +228,10 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
     ( args_opt p `gpu` 0 `N` `CUDA device ordinal (default: the best one)` )
     ( args_flag p `quiet` 113 `no progress on stderr` )
     ( args_flag p `profile` 0 `print per-kernel GPU timings after synthesis` )
+    ( args_opt p `voices` 0 `DIR` `serve: the directory of voice directories` )
+    ( args_opt p `addr` 0 `HOST:PORT` `serve: listen here (default 127.0.0.1:7861)` )
+    ( args_opt p `token` 0 `T` `serve: require this bearer token (or $F5TTS_TOKEN)` )
+    ( args_opt p `unload-after` 0 `S` `serve: release the weights after S idle seconds (default 0 = never)` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -236,7 +241,7 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  synth --voice DIR --text TEXT -o out.wav\n  tokens <vocab.txt> <file>   one line of vocabulary ids per line of text\n  chunks <file> [--max N]     the text split the way F5-TTS splits it\n` )
+        ( nurl_print `\ncommands:\n  synth --voice DIR --text TEXT -o out.wav\n  serve --voices DIR [--addr H:P] [--token T] [--unload-after S]\n  tokens <vocab.txt> <file>   one line of vocabulary ids per line of text\n  chunks <file> [--max N]     the text split the way F5-TTS splits it\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -245,6 +250,48 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
     : ( Vec String ) pos0 ( args_positionals p )
     : ~ s cmd0 ``
     ? >= np 1 { ?? ( vec_get [String] pos0 0 ) { T c → { = cmd0 ( string_data c ) } F → {} } } {}
+    ? ( nurl_str_eq cmd0 `serve` ) {
+        : String smodel ( args_value_or p `model` `` )
+        : String svocab ( args_value_or p `vocab` `` )
+        : String svoc ( args_value_or p `vocoder` `` )
+        : String svoices ( args_value_or p `voices` `` )
+        : String saddr ( args_value_or p `addr` `127.0.0.1:7861` )
+        : String stok ( args_value_or p `token` `` )
+        ? == 0 ( string_len stok ) {
+            ?? ( env_get `F5TTS_TOKEN` ) { T t → { ( string_push_str stok ( string_data t ) ) } F → {} }
+        } {}
+        : ~ i unload 0
+        : String sul ( args_value_or p `unload-after` `0` )
+        ?? ( string_to_int sul ) { T x → { = unload x } F _ → {} }
+        ( string_free sul )
+        : ~ i dev -1
+        : String sdv ( args_value_or p `gpu` `-1` )
+        ?? ( string_to_int sdv ) { T x → { = dev x } F _ → {} }
+        ( string_free sdv )
+        : ~ s host `127.0.0.1`
+        : ~ i port 7861
+        : i colon ( nurl_str_find ( string_data saddr ) `:` )
+        ? >= colon 0 {
+            : String hs ( string_substr saddr 0 colon )
+            = host ( string_data ( string_clone hs ) )
+            = port ( nurl_str_to_int ( nurl_str_slice ( string_data saddr ) + colon 1
+            - ( string_len saddr ) + colon 1 ) )
+            ( string_free hs )
+        } {}
+        : ~ i rc 2
+        ? & != 0 ( nurl_str_len ( string_data smodel ) ) != 0 ( nurl_str_len ( string_data svoices ) ) {
+            : String vp ? != 0 ( nurl_str_len ( string_data svocab ) ) ( string_clone svocab ) ( string_clone smodel )
+            = rc ( f5_serve ( string_data smodel ) ( string_data vp ) ( string_data svoc )
+            ( string_data svoices ) host port ( string_data stok ) dev unload )
+            ( string_free vp )
+        } {
+            ( nurl_eprintln `usage: f5tts serve --model CKPT --vocab VOCAB --vocoder BIN --voices DIR [--addr H:P] [--token T] [--unload-after S]` )
+        }
+        ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
+        ( string_free svoices ) ( string_free saddr ) ( string_free stok )
+        ( args_free p )
+        ^ rc
+    } {}
     ? ( nurl_str_eq cmd0 `synth` ) {
         : String smodel ( args_value_or p `model` `` )
         : String svocab ( args_value_or p `vocab` `` )

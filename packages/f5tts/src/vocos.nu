@@ -163,6 +163,39 @@ $ `kernels.nu`
     = . v spec ( __voc_nobuf )
 }
 
+// Every weight, from the pickle to the device — again after an idle unload.
+@ __voc_upload_all * Vocos v → b {
+    ( vec_clear [GkBuf] . v dw_w ) ( vec_clear [GkBuf] . v dw_b )
+    ( vec_clear [GkBuf] . v nw ) ( vec_clear [GkBuf] . v nb )
+    ( vec_clear [GkBuf] . v p1w ) ( vec_clear [GkBuf] . v p1b )
+    ( vec_clear [GkBuf] . v p2w ) ( vec_clear [GkBuf] . v p2b )
+    ( vec_clear [GkBuf] . v gam )
+    = . v emb_w ( __voc_up_convw v `backbone.embed.weight` 512 100 7 )
+    = . v emb_b ( __voc_up v `backbone.embed.bias` )
+    = . v n_w ( __voc_up v `backbone.norm.weight` )
+    = . v n_b ( __voc_up v `backbone.norm.bias` )
+    = . v fn_w ( __voc_up v `backbone.final_layer_norm.weight` )
+    = . v fn_b ( __voc_up v `backbone.final_layer_norm.bias` )
+    = . v out_w ( __voc_up v `head.out.weight` )
+    = . v out_b ( __voc_up v `head.out.bias` )
+    : ~ b ok ( gk_buf_ok . v emb_w )
+    = ok & ok ( gk_buf_ok . v out_w )
+    : ~ i k 0
+    ~ < k . v layers {
+        = ok & ok ( __voc_upl_convw v k `.dwconv.weight` 512 1 7 . v dw_w )
+        = ok & ok ( __voc_upl v k `.dwconv.bias` . v dw_b )
+        = ok & ok ( __voc_upl v k `.norm.weight` . v nw )
+        = ok & ok ( __voc_upl v k `.norm.bias` . v nb )
+        = ok & ok ( __voc_upl v k `.pwconv1.weight` . v p1w )
+        = ok & ok ( __voc_upl v k `.pwconv1.bias` . v p1b )
+        = ok & ok ( __voc_upl v k `.pwconv2.weight` . v p2w )
+        = ok & ok ( __voc_upl v k `.pwconv2.bias` . v p2b )
+        = ok & ok ( __voc_upl v k `.gamma` . v gam )
+        = k + k 1
+    }
+    ^ ok
+}
+
 @ voc_open s path * GpuKit kit → !*Vocos String {
     ?? ( pt_open path ) {
         T pt → {
@@ -178,30 +211,9 @@ $ `kernels.nu`
             = . v hop 256
             ( __voc_lists v )
             ( __voc_scratch_zero v )
-            = . v emb_w ( __voc_up_convw v `backbone.embed.weight` 512 100 7 )
-            = . v emb_b ( __voc_up v `backbone.embed.bias` )
-            = . v n_w ( __voc_up v `backbone.norm.weight` )
-            = . v n_b ( __voc_up v `backbone.norm.bias` )
-            = . v fn_w ( __voc_up v `backbone.final_layer_norm.weight` )
-            = . v fn_b ( __voc_up v `backbone.final_layer_norm.bias` )
-            = . v out_w ( __voc_up v `head.out.weight` )
-            = . v out_b ( __voc_up v `head.out.bias` )
-            : ~ b ok ( gk_buf_ok . v emb_w )
-            = ok & ok ( gk_buf_ok . v out_w )
-            : ~ i k 0
-            ~ < k . v layers {
-                = ok & ok ( __voc_upl_convw v k `.dwconv.weight` 512 1 7 . v dw_w )
-                = ok & ok ( __voc_upl v k `.dwconv.bias` . v dw_b )
-                = ok & ok ( __voc_upl v k `.norm.weight` . v nw )
-                = ok & ok ( __voc_upl v k `.norm.bias` . v nb )
-                = ok & ok ( __voc_upl v k `.pwconv1.weight` . v p1w )
-                = ok & ok ( __voc_upl v k `.pwconv1.bias` . v p1b )
-                = ok & ok ( __voc_upl v k `.pwconv2.weight` . v p2w )
-                = ok & ok ( __voc_upl v k `.pwconv2.bias` . v p2b )
-                = ok & ok ( __voc_upl v k `.gamma` . v gam )
-                = k + k 1
+            ? ( __voc_upload_all v ) {} {
+                ^ ( __voc_err `f5tts: the vocoder checkpoint is missing tensors` )
             }
-            ? ok {} { ^ ( __voc_err `f5tts: the vocoder checkpoint is missing tensors` ) }
             ^ @ !*Vocos String { T v }
         }
         F e → { ^ @ !*Vocos String { F e } }
@@ -328,4 +340,38 @@ $ `kernels.nu`
     }
     ( vec_free [f] wave )
     ^ T
+}
+
+// ── the vocoder's lease ─────────────────────────────────────────────
+
+@ __voc_freebufs ( Vec GkBuf ) v → v {
+    : i n ( vec_len [GkBuf] v )
+    : ~ i k 0
+    ~ < k n { ( gk_dbuf_free ( __voc_bget v k ) ) = k + k 1 }
+    ( vec_clear [GkBuf] v )
+}
+
+@ voc_loaded * Vocos v → b { ^ ( gk_buf_ok . v out_w ) }
+
+@ voc_unload * Vocos v → v {
+    ? ( voc_loaded v ) {} { ^ }
+    ( voc_free_scratch v )
+    ( gk_dbuf_free . v emb_w ) ( gk_dbuf_free . v emb_b )
+    ( gk_dbuf_free . v n_w ) ( gk_dbuf_free . v n_b )
+    ( gk_dbuf_free . v fn_w ) ( gk_dbuf_free . v fn_b )
+    ( gk_dbuf_free . v out_w ) ( gk_dbuf_free . v out_b )
+    = . v emb_w ( __voc_nobuf ) = . v emb_b ( __voc_nobuf )
+    = . v n_w ( __voc_nobuf ) = . v n_b ( __voc_nobuf )
+    = . v fn_w ( __voc_nobuf ) = . v fn_b ( __voc_nobuf )
+    = . v out_w ( __voc_nobuf ) = . v out_b ( __voc_nobuf )
+    ( __voc_freebufs . v dw_w ) ( __voc_freebufs . v dw_b )
+    ( __voc_freebufs . v nw ) ( __voc_freebufs . v nb )
+    ( __voc_freebufs . v p1w ) ( __voc_freebufs . v p1b )
+    ( __voc_freebufs . v p2w ) ( __voc_freebufs . v p2b )
+    ( __voc_freebufs . v gam )
+}
+
+@ voc_reload * Vocos v → b {
+    ? ( voc_loaded v ) { ^ T } {}
+    ^ ( __voc_upload_all v )
 }

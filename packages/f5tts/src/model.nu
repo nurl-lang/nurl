@@ -98,6 +98,7 @@ $ `kernels.nu`
     GkBuf grn_gx GkBuf grn_mean
     GkBuf keep  // [n] 1.0 where the text has a character
     b ready
+    b loaded  // the weights are on the device
 }
 
 @ __f5m_err s msg → !*F5Model String {
@@ -314,6 +315,45 @@ $ `kernels.nu`
     = . m keep ( __f5m_nobuf )
 }
 
+// Every weight, from the mapping to the device. Split out of f5_open because
+// --unload-after calls it again: a server that has been idle gives the card
+// back and pays this to answer the next request.
+@ __f5m_upload_all * F5Model m → b {
+    ( vec_clear [GkBuf] . m tb_dw_w ) ( vec_clear [GkBuf] . m tb_dw_b )
+    ( vec_clear [GkBuf] . m tb_n_w ) ( vec_clear [GkBuf] . m tb_n_b )
+    ( vec_clear [GkBuf] . m tb_p1_w ) ( vec_clear [GkBuf] . m tb_p1_b )
+    ( vec_clear [GkBuf] . m tb_gg ) ( vec_clear [GkBuf] . m tb_gb )
+    ( vec_clear [GkBuf] . m tb_p2_w ) ( vec_clear [GkBuf] . m tb_p2_b )
+    ( vec_clear [GkBuf] . m an_w ) ( vec_clear [GkBuf] . m an_b )
+    ( vec_clear [GkBuf] . m wq ) ( vec_clear [GkBuf] . m bq )
+    ( vec_clear [GkBuf] . m wk ) ( vec_clear [GkBuf] . m bk )
+    ( vec_clear [GkBuf] . m wv ) ( vec_clear [GkBuf] . m bv )
+    ( vec_clear [GkBuf] . m wo ) ( vec_clear [GkBuf] . m bo )
+    ( vec_clear [GkBuf] . m f1_w ) ( vec_clear [GkBuf] . m f1_b )
+    ( vec_clear [GkBuf] . m f2_w ) ( vec_clear [GkBuf] . m f2_b )
+    = . m tm0_w ( __f5m_up1 m `time_embed.time_mlp.0.weight` )
+    = . m tm0_b ( __f5m_up1 m `time_embed.time_mlp.0.bias` )
+    = . m tm2_w ( __f5m_up1 m `time_embed.time_mlp.2.weight` )
+    = . m tm2_b ( __f5m_up1 m `time_embed.time_mlp.2.bias` )
+    = . m temb_w ( __f5m_up1 m `text_embed.text_embed.weight` )
+    = . m ie_w ( __f5m_up1 m `input_embed.proj.weight` )
+    = . m ie_b ( __f5m_up1 m `input_embed.proj.bias` )
+    = . m cp0_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.0.weight` 1024 64 31 )
+    = . m cp0_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.0.bias` )
+    = . m cp2_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.2.weight` 1024 64 31 )
+    = . m cp2_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.2.bias` )
+    = . m no_w ( __f5m_up1 m `norm_out.linear.weight` )
+    = . m no_b ( __f5m_up1 m `norm_out.linear.bias` )
+    = . m po_w ( __f5m_up1 m `proj_out.weight` )
+    = . m po_b ( __f5m_up1 m `proj_out.bias` )
+    // the embedding table's row count is text_num_embeds + 1
+    = . m vocab - / ( gk_buf_len . m temb_w ) . m td 1
+    : ~ b ok ( __f5m_layers m )
+    = ok & ok ( gk_buf_ok . m po_w )
+    = . m loaded ok
+    ^ ok
+}
+
 @ f5_open s ckpt s vocab_path i device → !*F5Model String {
     ?? ( st_open ckpt ) {
         T st → {
@@ -338,32 +378,22 @@ $ `kernels.nu`
             = . m vocab 0
             ( __f5m_veclists m )
             ( __f5m_scratch_zero m )
-            = . m tm0_w ( __f5m_up1 m `time_embed.time_mlp.0.weight` )
-            = . m tm0_b ( __f5m_up1 m `time_embed.time_mlp.0.bias` )
-            = . m tm2_w ( __f5m_up1 m `time_embed.time_mlp.2.weight` )
-            = . m tm2_b ( __f5m_up1 m `time_embed.time_mlp.2.bias` )
-            = . m temb_w ( __f5m_up1 m `text_embed.text_embed.weight` )
-            = . m ie_w ( __f5m_up1 m `input_embed.proj.weight` )
-            = . m ie_b ( __f5m_up1 m `input_embed.proj.bias` )
-            = . m cp0_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.0.weight` 1024 64 31 )
-            = . m cp0_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.0.bias` )
-            = . m cp2_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.2.weight` 1024 64 31 )
-            = . m cp2_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.2.bias` )
-            = . m no_w ( __f5m_up1 m `norm_out.linear.weight` )
-            = . m no_b ( __f5m_up1 m `norm_out.linear.bias` )
-            = . m po_w ( __f5m_up1 m `proj_out.weight` )
-            = . m po_b ( __f5m_up1 m `proj_out.bias` )
-            // the embedding table's row count is text_num_embeds + 1
-            = . m vocab - / ( gk_buf_len . m temb_w ) . m td 1
-            : ~ b ok ( __f5m_layers m )
-            = ok & ok ( gk_buf_ok . m po_w )
-            ? ok {} {
+            ? ( __f5m_upload_all m ) {} {
                 ^ ( __f5m_err `f5tts: the checkpoint is missing tensors this architecture needs` )
             }
             ^ @ !*F5Model String { T m }
         }
         F e → { ^ @ !*F5Model String { F e } }
     }
+}
+
+// Free every buffer in the list but KEEP the list — an unload empties it and
+// a reload fills it again.
+@ __f5m_freebufs ( Vec GkBuf ) v → v {
+    : i n ( vec_len [GkBuf] v )
+    : ~ i k 0
+    ~ < k n { ( gk_dbuf_free ( __f5m_bget v k ) ) = k + k 1 }
+    ( vec_clear [GkBuf] v )
 }
 
 @ __f5m_freev ( Vec GkBuf ) v → v {
@@ -797,3 +827,54 @@ $ `kernels.nu`
 }
 
 @ f5_buf_vel * F5Model m → GkBuf { ^ . m vel }
+
+// ── the weights as a lease ──────────────────────────────────────────
+//
+// A server that has not been asked for anything in a while has no business
+// holding 1.3 GB of a card. The checkpoint stays MAPPED — giving the file
+// back would mean re-reading it from disk — so a reload is a copy from the
+// page cache to the device and costs about as much as the first one did.
+
+@ f5_loaded * F5Model m → b { ^ . m loaded }
+
+@ f5_unload * F5Model m → v {
+    ? . m loaded {} { ^ }
+    ( f5_free_scratch m )
+    ( gk_dbuf_free . m tm0_w ) ( gk_dbuf_free . m tm0_b )
+    ( gk_dbuf_free . m tm2_w ) ( gk_dbuf_free . m tm2_b )
+    ( gk_dbuf_free . m temb_w )
+    ( gk_dbuf_free . m ie_w ) ( gk_dbuf_free . m ie_b )
+    ( gk_dbuf_free . m cp0_w ) ( gk_dbuf_free . m cp0_b )
+    ( gk_dbuf_free . m cp2_w ) ( gk_dbuf_free . m cp2_b )
+    ( gk_dbuf_free . m no_w ) ( gk_dbuf_free . m no_b )
+    ( gk_dbuf_free . m po_w ) ( gk_dbuf_free . m po_b )
+    = . m tm0_w ( __f5m_nobuf ) = . m tm0_b ( __f5m_nobuf )
+    = . m tm2_w ( __f5m_nobuf ) = . m tm2_b ( __f5m_nobuf )
+    = . m temb_w ( __f5m_nobuf )
+    = . m ie_w ( __f5m_nobuf ) = . m ie_b ( __f5m_nobuf )
+    = . m cp0_w ( __f5m_nobuf ) = . m cp0_b ( __f5m_nobuf )
+    = . m cp2_w ( __f5m_nobuf ) = . m cp2_b ( __f5m_nobuf )
+    = . m no_w ( __f5m_nobuf ) = . m no_b ( __f5m_nobuf )
+    = . m po_w ( __f5m_nobuf ) = . m po_b ( __f5m_nobuf )
+    ( __f5m_freebufs . m tb_dw_w ) ( __f5m_freebufs . m tb_dw_b )
+    ( __f5m_freebufs . m tb_n_w ) ( __f5m_freebufs . m tb_n_b )
+    ( __f5m_freebufs . m tb_p1_w ) ( __f5m_freebufs . m tb_p1_b )
+    ( __f5m_freebufs . m tb_gg ) ( __f5m_freebufs . m tb_gb )
+    ( __f5m_freebufs . m tb_p2_w ) ( __f5m_freebufs . m tb_p2_b )
+    ( __f5m_freebufs . m an_w ) ( __f5m_freebufs . m an_b )
+    ( __f5m_freebufs . m wq ) ( __f5m_freebufs . m bq )
+    ( __f5m_freebufs . m wk ) ( __f5m_freebufs . m bk )
+    ( __f5m_freebufs . m wv ) ( __f5m_freebufs . m bv )
+    ( __f5m_freebufs . m wo ) ( __f5m_freebufs . m bo )
+    ( __f5m_freebufs . m f1_w ) ( __f5m_freebufs . m f1_b )
+    ( __f5m_freebufs . m f2_w ) ( __f5m_freebufs . m f2_b )
+    = . m loaded F
+    // gk_dbuf_free retires a block to gpukit's pool; only this hands it back
+    // to the driver, which is the whole point of unloading
+    ( gk_pool_release . m kit )
+}
+
+@ f5_reload * F5Model m → b {
+    ? . m loaded { ^ T } {}
+    ^ ( __f5m_upload_all m )
+}
