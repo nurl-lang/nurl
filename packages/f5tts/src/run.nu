@@ -632,3 +632,185 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out �
     ( string_free p )
     ^ ( string_new )
 }
+
+// ── what a dialogue line is made of ─────────────────────────────────
+//
+// Above the chunking there is a second layer of splitting, and it belongs to
+// the dialogue rather than to the model. A line is first stripped of its
+// stage directions — "[laughs]" is for the reader, not the speaker — and then,
+// if it runs to more than six sentences, generated a sentence at a time with
+// sixty milliseconds of silence between them. A line that ends in ".." or
+// "..." gets a real pause after it, because the model does not read the dots
+// as time.
+
+: i F5_MIN_SPLIT_WORDS 5
+
+@ f5_strip_brackets s text → String {
+    : String out ( string_new )
+    : i n ( nurl_str_len text )
+    : ~ i depth 0
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get text k )
+        ? == c 91 { = depth + depth 1 } {
+            ? == c 93 { ? > depth 0 { = depth - depth 1 } {} } {
+                ? == depth 0 { ( string_push_char out c ) } {}
+            }
+        }
+        = k + k 1
+    }
+    ^ ( string_trim out )
+}
+
+// Sentences, split at . ! ? followed by whitespace, with anything under five
+// words merged into its neighbour — a two-word sentence given a duration
+// estimate of its own is exactly the case the model fumbles.
+@ f5_split_sentences s text → ( Vec String ) {
+    : ( Vec String ) raw ( vec_new [String] )
+    : i n ( nurl_str_len text )
+    : ~ i start 0
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get text k )
+        ? | == c 46 | == c 33 == c 63 {
+            ? & < + k 1 n ( __f5r_is_ws ( nurl_str_get text + k 1 ) ) {
+                : ~ i e + k 1
+                ~ & < e n ( __f5r_is_ws ( nurl_str_get text e ) ) { = e + e 1 }
+                : String piece ( string_from ( nurl_str_slice text start - + k 1 start ) )
+                : String tp ( string_trim piece )
+                ? > ( string_len tp ) 0 { ( vec_push [String] raw tp ) } { ( string_free tp ) }
+                ( string_free piece )
+                = start e
+                = k e
+            } { = k + k 1 }
+        } { = k + k 1 }
+    }
+    ? < start n {
+        : String piece ( string_from ( nurl_str_slice text start - n start ) )
+        : String tp ( string_trim piece )
+        ? > ( string_len tp ) 0 { ( vec_push [String] raw tp ) } { ( string_free tp ) }
+        ( string_free piece )
+    } {}
+    : ( Vec String ) merged ( vec_new [String] )
+    : String buf ( string_new )
+    : i nr ( vec_len [String] raw )
+    = k 0
+    ~ < k nr {
+        ?? ( vec_get [String] raw k ) {
+            T sp → {
+                ? > ( string_len buf ) 0 { ( string_push_char buf 32 ) } {}
+                ( string_push_str buf ( string_data sp ) )
+                ? >= ( f5_word_count ( string_data buf ) ) F5_MIN_SPLIT_WORDS {
+                    ( vec_push [String] merged ( string_clone buf ) )
+                    ( string_clear buf )
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ? > ( string_len buf ) 0 {
+        : i nm ( vec_len [String] merged )
+        ? > nm 0 {
+            ?? ( vec_get [String] merged - nm 1 ) {
+                T last → {
+                    : String joined ( string_clone last )
+                    ( string_push_char joined 32 )
+                    ( string_push_str joined ( string_data buf ) )
+                    ( vec_set [String] merged - nm 1 joined )
+                    ( string_free last )
+                }
+                F → {}
+            }
+        } { ( vec_push [String] merged ( string_clone buf ) ) }
+    } {}
+    ( string_free buf )
+    : ( @ v String ) drop_r \ String s → v { ( string_free s ) }
+    ( vec_free_with [String] raw drop_r )
+    ^ merged
+}
+
+@ __f5r_is_ws i c → b {
+    ? == c 32 { ^ T } {}
+    ^ & >= c 9 <= c 13
+}
+
+@ f5_word_count s text → i {
+    : i n ( nurl_str_len text )
+    : ~ i count 0
+    : ~ b inword F
+    : ~ i k 0
+    ~ < k n {
+        : b ws ( __f5r_is_ws ( nurl_str_get text k ) )
+        ? ws { = inword F } { ? inword {} { = count + count 1 = inword T } }
+        = k + k 1
+    }
+    ^ count
+}
+
+// Milliseconds of silence a line's own punctuation asks for.
+@ f5_trailing_pause_ms s text → i {
+    : String t ( string_trim ( string_from text ) )
+    : i n ( string_len t )
+    : ~ i ms 0
+    ? >= n 3 {
+        ? & & == 46 ( nurl_str_get ( string_data t ) - n 1 )
+        == 46 ( nurl_str_get ( string_data t ) - n 2 )
+        == 46 ( nurl_str_get ( string_data t ) - n 3 ) { = ms 800 } {}
+    } {}
+    ? & == ms 0 >= n 2 {
+        ? & == 46 ( nurl_str_get ( string_data t ) - n 1 )
+        == 46 ( nurl_str_get ( string_data t ) - n 2 ) { = ms 400 } {}
+    } {}
+    ( string_free t )
+    ^ ms
+}
+
+@ f5_append_silence ( Vec f ) out i ms → v {
+    : i k0 / * ms F5_SR 1000
+    : ~ i k 0
+    ~ < k k0 { ( vec_push [f] out 0.0 ) = k + k 1 }
+}
+
+// One dialogue line: the stage directions removed, split into sentences when
+// there are more than six of them, each generated with the quality gate, and
+// joined with the sixty-millisecond pause the reference service uses.
+@ f5_synth_line * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s text
+i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out → b {
+    : String clean ( f5_strip_brackets text )
+    ? > ( string_len clean ) 0 {} { ( string_free clean ) ^ T }
+    : ( Vec String ) sents ( f5_split_sentences ( string_data clean ) )
+    : i ns ( vec_len [String] sents )
+    : ~ b ok T
+    ? > ns 6 {
+        : ~ i k 0
+        ~ & < k ns ok {
+            ?? ( vec_get [String] sents k ) {
+                T sp → {
+                    : ( Vec f ) piece ( vec_new [f] )
+                    = ok ( f5_synth_checked m vc v vocab ( string_data sp ) steps cfg sway
+                    speed fade_s + seed k retries max_wer piece )
+                    ? ok {
+                        : ~ i j 0
+                        ~ < j ( vec_len [f] piece ) {
+                            ( vec_push [f] out ( __f5r_get piece j ) )
+                            = j + j 1
+                        }
+                        ? < k - ns 1 { ( f5_append_silence out 60 ) } {}
+                    } {}
+                    ( vec_free [f] piece )
+                }
+                F → {}
+            }
+            = k + k 1
+        }
+    } {
+        = ok ( f5_synth_checked m vc v vocab ( string_data clean ) steps cfg sway speed
+        fade_s seed retries max_wer out )
+    }
+    ( f5_append_silence out ( f5_trailing_pause_ms ( string_data clean ) ) )
+    : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
+    ( vec_free_with [String] sents drop_s )
+    ( string_free clean )
+    ^ ok
+}

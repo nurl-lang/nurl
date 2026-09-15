@@ -229,7 +229,7 @@ $ `verify.nu`
         ^ v
     }
     : *F5Voice v # *F5Voice vp
-    : b r ( f5_synth_checked m vc v vb ( string_data . j text ) . j steps . j cfg . j sway
+    : b r ( f5_synth_line m vc v vb ( string_data . j text ) . j steps . j cfg . j sway
     . j speed . j fade . j seed . j retries . j max_wer . j out )
     ? r {} { = . j err ( string_from `synthesis failed` ) }
     = . j ok r
@@ -383,11 +383,31 @@ i retries f max_wer ( Vec f ) out String err → b {
     ^ r
 }
 
-@ __f5s_wav_response ( Vec f ) wave → HttpResponse {
+// `wav` (the default) or `pcm` — raw signed 16-bit little-endian mono at
+// 24 kHz, which is the wav without its header. mp3 and ogg are the reference
+// service's other two and they need an encoder this package does not have:
+// saying so is better than returning a wav under an mp3 content type.
+@ __f5s_audio_response ( Vec f ) wave s fmt → HttpResponse {
+    ? | ( nurl_str_eq fmt `mp3` ) ( nurl_str_eq fmt `ogg` ) {
+        ^ ( __f5s_jerr 400 `only wav and pcm are encoded here; mp3 and ogg would need an encoder this build does not carry` )
+    } {}
     : ( Vec u ) bytes ( wav_encode wave 24000 1 )
     : HttpResponse r ( response_new 200 )
-    ( response_set_header r `content-type` `audio/wav` )
-    ( response_set_body_bytes r bytes )
+    ? ( nurl_str_eq fmt `pcm` ) {
+        // the same samples without the 44-byte RIFF header
+        : ( Vec u ) raw ( vec_new [u] )
+        : ~ i k 44
+        ~ < k ( vec_len [u] bytes ) {
+            ?? ( vec_get [u] bytes k ) { T b → { ( vec_push [u] raw b ) } F → {} }
+            = k + k 1
+        }
+        ( response_set_header r `content-type` `audio/L16; rate=24000; channels=1` )
+        ( response_set_body_bytes r raw )
+        ( vec_free [u] raw )
+    } {
+        ( response_set_header r `content-type` `audio/wav` )
+        ( response_set_body_bytes r bytes )
+    }
     ( vec_free [u] bytes )
     ^ r
 }
@@ -413,6 +433,8 @@ i retries f max_wer ( Vec f ) out String err → b {
             // off unless both are asked for and a transcriber is configured
             : i retries ( __f5s_jint root `whisper_retry` 1 )
             : f max_wer ( __f5s_jnum root `max_wer` 1.0 )
+            : String fmt ( __f5s_jstr root `output_format` )
+            ? == 0 ( string_len fmt ) { ( string_push_str fmt `wav` ) } {}
             : ( Vec f ) wave ( vec_new [f] )
             : String err ( string_new )
             : ~ b ok T
@@ -435,8 +457,33 @@ i retries f max_wer ( Vec f ) out String err → b {
                                 T it → {
                                     : String vid ( __f5s_jstr it `voice_id` )
                                     : String txt ( __f5s_jstr it `text` )
-                                    = ok ( __f5s_one ( string_data vid ) ( string_data txt ) steps cfg
-                                    sway speed ? == k 0 fade 0.0 + seed k retries max_wer wave err )
+                                    // a per-input voice_settings block overrides
+                                    // the request's own defaults, field by field
+                                    : ~ i i_steps steps
+                                    : ~ f i_cfg cfg
+                                    : ~ f i_sway sway
+                                    : ~ f i_speed speed
+                                    : ~ f i_fade fade
+                                    : ~ i i_seed + seed k
+                                    : ~ i i_retries retries
+                                    : ~ f i_wer max_wer
+                                    ?? ( json_obj_get it `voice_settings` ) {
+                                        T vs → {
+                                            = i_steps ( __f5s_jint vs `nfe_steps` i_steps )
+                                            = i_cfg ( __f5s_jnum vs `cfg_strength` i_cfg )
+                                            = i_sway ( __f5s_jnum vs `sway_sampling_coef` i_sway )
+                                            = i_speed ( __f5s_jnum vs `speed` i_speed )
+                                            = i_fade ( __f5s_jnum vs `cross_fade_duration` i_fade )
+                                            = i_seed ( __f5s_jint vs `seed` i_seed )
+                                            = i_retries ( __f5s_jint vs `whisper_retry` i_retries )
+                                            = i_wer ( __f5s_jnum vs `max_wer` i_wer )
+                                        }
+                                        F → {}
+                                    }
+                                    // a tenth of a second between speakers
+                                    ? > k 0 { ( f5_append_silence wave 100 ) } {}
+                                    = ok ( __f5s_one ( string_data vid ) ( string_data txt ) i_steps i_cfg
+                                    i_sway i_speed i_fade i_seed i_retries i_wer wave err )
                                     = count + count 1
                                     ( string_free vid )
                                     ( string_free txt )
@@ -455,11 +502,13 @@ i retries f max_wer ( Vec f ) out String err → b {
             ( json_free root )
             = g_f5_reqs + g_f5_reqs 1
             ? & ok > ( vec_len [f] wave ) 0 {
-                : HttpResponse r ( __f5s_wav_response wave )
+                : HttpResponse r ( __f5s_audio_response wave ( string_data fmt ) )
                 ( vec_free [f] wave )
                 ( string_free err )
+                ( string_free fmt )
                 ^ r
             } {}
+            ( string_free fmt )
             : String msg ? > ( string_len err ) 0 ( string_clone err ) ( string_from `nothing to say` )
             : HttpResponse r ( __f5s_jerr 400 ( string_data msg ) )
             ( string_free msg )
