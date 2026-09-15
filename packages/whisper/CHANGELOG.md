@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.2.0
+
+The server learns to let go of the model, and loading it stops paying for
+anything but the bytes.
+
+- **`--unload-after SECONDS`.** After that many idle seconds with nothing
+  in flight, a reaper thread closes the model — device buffers, kernels,
+  the CUDA context; the tokenizer stays — and the next request reloads it
+  before running. Idle, the server is the port and ~60 MB of process
+  (large-v3: 4.8 GB of device memory given back). A request or an open
+  WebSocket stream holds the model from acquire to release, and the reaper
+  only ever closes a model nobody holds; one mutex over the counters.
+  `/health` gains `loaded`, `unload_after_s`, `loads`, `unloads`,
+  `last_load_ms` and `idle_s`, and says `status: idle` (not `loading`)
+  for the unloaded state — a client should treat it as healthy. Default
+  `0` keeps the model for the process's life, as before.
+
+- **The host copy of the file is gone.** `gg_open` read the whole ggml
+  container into memory and kept it for the model's life: 3.1 GB of RSS
+  on a large-v3 server that nothing read after the upload. The container
+  is now mmap'd (the same shape as the safetensor reader, `MAP_POPULATE`
+  where the toolchain knows the constant) and BOTH containers are released
+  the moment the last tensor is on the device. Resident RSS: 3.2 GB →
+  ~130 MB.
+
+- **Loading is 3× faster.** large-v3 (3.1 GB, 1,200 tensors) opens in
+  0.8 s where 1.1.1 took 2.35 s; turbo 0.5 s where it took 1.45 s. Three
+  things, each measured: the 1.46 s read-into-memory became a 14 µs
+  mmap; every tensor is carved from 128 MB device arenas (~40 allocations
+  and ~40 frees instead of 1,300 — the frees are what an unload pays);
+  and every upload is queued and sent as ONE streamed batch through
+  pinned staging (`gpu_upload_batch`, gpu 0.13.0), the f16 sources that
+  need widening landing in a raw arena that is freed once, after the
+  widen kernels. What is left is the page cache's own copy bandwidth
+  (0.53 s of the 0.73 s reload) and the CUDA context (0.12 s).
+
+- **Fixed: the third load in one process reported "out of device memory"
+  with 23 GB free.** `Whisper.oom` was never initialised — `nurl_alloc`
+  does not zero, and the flag read whatever the heap held, which was zero
+  for as long as the block was fresh. A server that reloads the model made
+  it stale within two cycles. The flag is set at open, and the test suite
+  now cycles the model through HTTP and WebSocket reloads.
+
+Requires gpu `^0` (0.13.0 for `gpu_upload_batch`).
+
 ## 1.1.1
 
 Dependency requirements now pin the **major**, matching the rest of the

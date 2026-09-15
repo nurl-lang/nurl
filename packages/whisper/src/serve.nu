@@ -37,6 +37,8 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/x509_gen.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/std/thread.nu`
+$ `stdlib/std/time.nu`
 $ `deps/http/src/http.nu`
 
 : ~ i g_srv_w 0  // *Whisper, as an address (0 = not serving)
@@ -48,6 +50,123 @@ $ `deps/http/src/http.nu`
 : ~ i g_srv_max 0
 : ~ f g_srv_nospeech 0.6
 : ~ s g_srv_token ``  // empty = open server (loopback default)
+
+// ── the model as a lease: loaded on demand, released when idle ──────
+//
+// `--unload-after N` makes the model a thing the server HOLDS rather than
+// IS. A reaper thread watches the clock; N seconds after the last request
+// ends, with nothing in flight, it closes the model — device buffers,
+// kernels, the CUDA context, the tokenizer stays (a few MB) — and the
+// next request reloads it before it runs. What the server keeps while idle
+// is the port and about a hundred megabytes of process; what it gives
+// back is everything the model was (large-v3: 4.8 GB of device memory).
+//
+// Who may touch g_srv_w: a request holds `g_srv_busy` from acquire to
+// release, a WebSocket stream for the life of the connection, and the
+// reaper only ever closes a model nobody holds. One mutex over the three
+// counters; nothing waits on it for longer than a load.
+: ~ s g_srv_dir ``  // the model argument, kept for the reloads
+: ~ i g_srv_unload_ms 0  // 0 = the model stays for the process's life
+: ~ i g_srv_idle_since 0  // monotonic_ns when the last holder let go
+: ~ i g_srv_busy 0  // requests + streams holding the model right now
+: ~ i g_srv_mu_ptr 0
+: ~ i g_srv_mu_bytes 0
+: ~ i g_srv_loads 0  // (re)loads so far — 1 is the load before the port opened
+: ~ i g_srv_unloads 0
+: ~ i g_srv_load_ms 0  // the last load's wall time
+
+@ __srv_mu → Mutex { ^ @ Mutex { @ Cell { # s g_srv_mu_ptr g_srv_mu_bytes } } }
+
+@ __srv_lock → v { ? != g_srv_mu_ptr 0 { ( mutex_lock ( __srv_mu ) ) } {} }
+
+@ __srv_unlock → v { ? != g_srv_mu_ptr 0 { ( mutex_unlock ( __srv_mu ) ) } {} }
+
+// Open the model at g_srv_dir into g_srv_w. Called under the lock. The
+// tokenizer is not rebuilt: it was made once, before the port opened, and
+// a vocabulary does not change between loads of the same file.
+@ __srv_load → b {
+    : i t0 ( monotonic_ns )
+    : ~ i wp 0
+    ? ( _wh_is_ggml g_srv_dir ) {
+        ?? ( wh_open_ggml g_srv_dir ) {
+            T w → { = wp # i w }
+            F e → {
+                ( nurl_eprintln ( string_data e ) )
+                ( string_free e )
+            }
+        }
+    } {
+        : String cfg ( _wh_path g_srv_dir `config.json` )
+        : String wts ( _wh_path g_srv_dir `model.safetensors` )
+        ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
+            T w → { = wp # i w }
+            F e → {
+                ( nurl_eprintln ( string_data e ) )
+                ( string_free e )
+            }
+        }
+        ( string_free cfg )
+        ( string_free wts )
+    }
+    ? == wp 0 { ^ F } {}
+    = g_srv_w wp
+    = g_srv_loads + g_srv_loads 1
+    = g_srv_load_ms / - ( monotonic_ns ) t0 1000000
+    : String m ( string_from `whisper: model loaded in ` )
+    ( string_push_int m g_srv_load_ms )
+    ( string_push_str m ` ms` )
+    ( nurl_eprintln ( string_data m ) )
+    ( string_free m )
+    ^ T
+}
+
+// Take the model for one request or one stream: load it if the reaper has
+// let it go. F = it could not be loaded (the log says why) — the caller
+// answers 503 and the next request tries again.
+@ __srv_acquire → b {
+    ( __srv_lock )
+    ? == g_srv_w 0 {
+        ? ( __srv_load ) {} {
+            ( __srv_unlock )
+            ^ F
+        }
+    } {}
+    = g_srv_busy + g_srv_busy 1
+    ( __srv_unlock )
+    ^ T
+}
+
+@ __srv_release → v {
+    ( __srv_lock )
+    = g_srv_busy - g_srv_busy 1
+    = g_srv_idle_since ( monotonic_ns )
+    ( __srv_unlock )
+}
+
+// The reaper: a thread that wakes five times a second and closes the model
+// once it has sat unused for the configured time. The close runs on this
+// thread, so the device context is bound here first (gpu_bind_thread); the
+// model's own close releases the context, and the next load on the request
+// thread retains it again.
+@ __srv_reaper → v {
+    ~ T {
+        ( sleep_ms 200 )
+        ( __srv_lock )
+        ? & & != g_srv_w 0 == g_srv_busy 0 >= ( elapsed_ms_since g_srv_idle_since ) g_srv_unload_ms {
+            : *Whisper w # *Whisper g_srv_w
+            = g_srv_w 0
+            : b _b ( gpu_bind_thread . w g )
+            ( wh_close w )
+            = g_srv_unloads + g_srv_unloads 1
+            : String m ( string_from `whisper: idle for ` )
+            ( string_push_int m / g_srv_unload_ms 1000 )
+            ( string_push_str m ` s — model unloaded (device and host memory released; the next request reloads it)` )
+            ( nurl_eprintln ( string_data m ) )
+            ( string_free m )
+        } {}
+        ( __srv_unlock )
+    }
+}
 
 // Constant-time-ish token compare: every byte of the CONFIGURED token is
 // examined, and the length mismatch folds in, so response timing does not
@@ -236,7 +355,14 @@ $ `deps/http/src/http.nu`
 // POST /inference — the whisper.cpp endpoint.
 @ __srv_inference HttpRequest req → HttpResponse {
     ? ( __srv_authed req ) {} { ^ ( __srv_401 ) }
-    ? == g_srv_w 0 { ^ ( __srv_err 503 `no model loaded` ) } {}
+    ? ( __srv_acquire ) {} { ^ ( __srv_err 503 `the model could not be loaded — the server log has the reason` ) }
+    : HttpResponse r ( __srv_inference_run req )
+    ( __srv_release )
+    ^ r
+}
+
+// The request proper, with the model held.
+@ __srv_inference_run HttpRequest req → HttpResponse {
     = g_srv_reqs + g_srv_reqs 1
 
     ?? ( request_multipart_parts req ) {
@@ -334,8 +460,14 @@ $ `deps/http/src/http.nu`
 
 @ __srv_health HttpRequest req → HttpResponse {
     : Json o ( json_obj_new )
-    : b _a ( json_obj_set o `status` ( json_str_lit ? == g_srv_w 0 `loading` `ok` ) )
-    ? != g_srv_w 0 {
+    // `ok` = loaded and serving; `idle` = unloaded by --unload-after, the
+    // next request reloads it (still healthy — a client should not treat
+    // idle as down)
+    ( __srv_lock )
+    : b loaded != g_srv_w 0
+    : b _a ( json_obj_set o `status` ( json_str_lit ? loaded `ok` `idle` ) )
+    : b _l ( json_obj_set o `loaded` ( json_bool loaded ) )
+    ? loaded {
         : *Whisper w # *Whisper g_srv_w
         : b _b ( json_obj_set o `d_model` ( json_int . w d_model ) )
         : b _c ( json_obj_set o `n_mels` ( json_int . w n_mels ) )
@@ -343,6 +475,14 @@ $ `deps/http/src/http.nu`
         : b _e ( json_obj_set o `decoder_layers` ( json_int . w n_dec_layer ) )
     } {}
     : b _f ( json_obj_set o `requests` ( json_int g_srv_reqs ) )
+    : b _g ( json_obj_set o `unload_after_s` ( json_int / g_srv_unload_ms 1000 ) )
+    : b _h ( json_obj_set o `loads` ( json_int g_srv_loads ) )
+    : b _i ( json_obj_set o `unloads` ( json_int g_srv_unloads ) )
+    : b _j ( json_obj_set o `last_load_ms` ( json_int g_srv_load_ms ) )
+    ? & == g_srv_busy 0 ! loaded {
+        : b _k ( json_obj_set o `idle_s` ( json_int / ( elapsed_ms_since g_srv_idle_since ) 1000 ) )
+    } {}
+    ( __srv_unlock )
     : HttpResponse r ( response_json 200 o )
     ( json_free o )
     ^ r
@@ -521,6 +661,11 @@ $ `deps/http/src/http.nu`
         T _ → {}
         F _ → { ^ T }
     }
+    // a stream holds the model for as long as it is open
+    ? ( __srv_acquire ) {} {
+        : !v WsErr _c ( ws_send_close c 1011 `the model could not be loaded` )
+        ^ T
+    }
     = g_ws_f32 0
     ? > ( nurl_str_len g_ws_lang ) 0 { ( nurl_free g_ws_lang ) } {}
     = g_ws_lang ``
@@ -551,6 +696,7 @@ $ `deps/http/src/http.nu`
     ( vad_stream_free vs )
     ? > ( nurl_str_len g_ws_lang ) 0 { ( nurl_free g_ws_lang ) } {}
     = g_ws_lang ``
+    ( __srv_release )
     ^ T
 }
 
@@ -558,9 +704,32 @@ $ `deps/http/src/http.nu`
 // both containers. Owns neither; the caller closes them.
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
-@ __wh_serve_run * Whisper w * Tok t s host i port s lang i maxtok b use_vad b with_ts s cert s key s token → i {
+@ __wh_serve_run * Whisper w * Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
     = g_srv_w # i w
     = g_srv_t # i t
+    ? > ( nurl_str_len g_srv_dir ) 0 { ( nurl_free g_srv_dir ) } {}
+    = g_srv_dir ( strdup dir )
+    = g_srv_unload_ms * unload_s 1000
+    = g_srv_idle_since ( monotonic_ns )
+    = g_srv_busy 0
+    = g_srv_loads 1
+    = g_srv_unloads 0
+    ? == g_srv_mu_ptr 0 {
+        : Mutex mu ( mutex_new )
+        : Cell mc . mu c
+        = g_srv_mu_ptr # i . mc ptr
+        = g_srv_mu_bytes . mc bytes
+    } {}
+    ? > unload_s 0 {
+        : ( @ v ) reaper \ → v { ( __srv_reaper ) }
+        ?? ( thread_spawn_owned reaper ) {
+            T th → { ( thread_detach th ) }
+            F _ → {
+                ( nurl_eprintln `whisper: cannot start the unload timer — the model stays loaded` )
+                = g_srv_unload_ms 0
+            }
+        }
+    } {}
     = g_srv_lang ( strdup lang )
     = g_srv_vad use_vad
     = g_srv_ts with_ts
@@ -601,6 +770,11 @@ $ `deps/http/src/http.nu`
     ( string_push_char msg 58 )
     ( string_push_int msg port )
     ( string_push_str msg ` (test page at /, POST /inference, GET /health, WS: stream audio)` )
+    ? > unload_s 0 {
+        ( string_push_str msg `\nwhisper: the model is released after ` )
+        ( string_push_int msg unload_s )
+        ( string_push_str msg ` s idle and reloaded on the next request` )
+    } {}
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
     ( string_free msg )
@@ -612,7 +786,15 @@ $ `deps/http/src/http.nu`
         = rc ( http_app_listen a host port )
     }
 
-    = g_srv_w 0
+    // whichever model is loaded NOW is the one to close — the reaper may
+    // have replaced the caller's `w` with nothing, or a reload with a new one
+    ( __srv_lock )
+    ? != g_srv_w 0 {
+        : *Whisper wl # *Whisper g_srv_w
+        = g_srv_w 0
+        ( wh_close wl )
+    } {}
+    ( __srv_unlock )
     = g_srv_t 0
     ( nurl_free g_srv_lang )
     = g_srv_lang ``
@@ -620,7 +802,7 @@ $ `deps/http/src/http.nu`
 }
 
 // Load the model, open the port, serve until stopped.
-@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token → i {
+@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
     : String cfg ( _wh_path dir `config.json` )
     : String wts ( _wh_path dir `model.safetensors` )
     : String tjs ( _wh_path dir `tokenizer.json` )
@@ -633,9 +815,10 @@ $ `deps/http/src/http.nu`
             T w → {
                 ?? ( gg_build_tok # *Gg . w gg ) {
                     T t → {
-                        : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key token )
+                        // the run owns the model from here: it closes
+                        // whatever is loaded when it returns
+                        : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s )
                         ( tok_free t )
-                        ( wh_close w )
                         ^ rc2
                     }
                     F e → {
@@ -658,9 +841,8 @@ $ `deps/http/src/http.nu`
         T t → {
             ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                 T w → {
-                    : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key token )
+                    : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s )
                     = rc rc2
-                    ( wh_close w )
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )

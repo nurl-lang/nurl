@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`posix_const` knows `MAP_POPULATE` and `MADV_WILLNEED`.** A loader that
+  mmaps a multi-gigabyte model file can ask the kernel to map every page in
+  one pass (`MAP_POPULATE`, Linux) or to read a range ahead
+  (`MADV_WILLNEED`) instead of taking one page fault at a time. Both come
+  back as `-1` where the platform lacks them, so a caller ORs them in only
+  when they are known — the mapping is merely lazier without them.
+
 ### Fixed
 
 - **A `;` defer body nested in a `?` arm, a `??` arm, a `~` body or a foreach

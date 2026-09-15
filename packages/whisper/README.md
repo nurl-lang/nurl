@@ -85,6 +85,27 @@ The model loads once, before the port opens; a request pays only for its
 own audio (distil-large-v3: 0.33 s per warm request, where a cold CLI
 invocation of the same clip costs 1.15 s).
 
+**`--unload-after SECONDS`** makes the model a thing the server *holds*
+rather than *is*: after that many idle seconds — no request, no open
+stream — the model is closed (device buffers, kernels, the CUDA context)
+and the next request reloads it before it runs. While idle the server is
+the port and about 60 MB of process; large-v3 gives back 4.8 GB of device
+memory. The reload is what a fresh start costs minus the process: on an
+RTX 4090 with the file in the page cache, large-v3 (3.1 GB) reloads in
+~0.73 s and turbo (1.6 GB) in ~0.47 s, so the first request after a sleep
+answers in 1.3 s / 0.8 s where a warm one takes 0.54 s / 0.33 s. `0`
+(the default) keeps the model for the process's life. `/health` says which
+state it is in (`status` `ok` or `idle`, plus `loads`, `unloads`,
+`last_load_ms`, `idle_s`); a client should treat `idle` as healthy.
+
+Loading is the file's own copy bandwidth and nothing else: the container
+is mmap'd (no read into memory, no 3 GB host copy kept for the model's
+life — the resident server's RSS is ~130 MB where 1.1.x held 3.2 GB),
+every tensor is carved from 128 MB device arenas rather than allocated
+one by one, and the bytes go up as one streamed batch through pinned
+staging (`gpu_upload_batch` in packages/gpu). A cold start went from
+2.35 s to 0.8 s on large-v3.
+
 **`GET /`** is a built-in test page: drop an audio file on it, or press
 *Start microphone* and watch utterances appear as you pause. The page is
 staged by `nurlpkg install` into `share/whisper/` next to the binary.
@@ -127,7 +148,8 @@ into, remembered per browser); `/inference` and the WebSocket require it.
 Binding to a non-loopback address with no token prints a warning, because
 it should be a choice, not an accident.
 
-**`GET /health`** reports the model shape and request count as JSON.
+**`GET /health`** reports the model shape, the request count and — under
+`--unload-after` — whether the model is currently loaded, as JSON.
 
 ## How it is verified
 
@@ -155,7 +177,10 @@ OpenMP.
 | 11 s of speech, whisper-tiny | ~0.5 s |
 | 11 s of speech, distil-large-v3 | ~1.1 s (warm server: 0.33 s) |
 | 292 s recording, 8 % speech, distil + `--vad` | ~1.3 s |
-| large-v3 server VRAM | 4.9 GB (f16 weights stay f16 on the device) |
+| large-v3 server VRAM | 4.8 GB (f16 weights stay f16 on the device) |
+| large-v3 server RSS | ~130 MB (the file is mapped for the upload and released) |
+| large-v3 server start / reload (page cache warm) | 0.8 s / 0.73 s (was 2.35 s) |
+| large-v3 idle under `--unload-after` | ~60 MB RSS, 0 MB VRAM |
 
 A generated token costs **456 us** on whisper-tiny (RTX 4090). Getting
 there took two things, both found by measuring rather than reading: the

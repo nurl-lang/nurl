@@ -3638,6 +3638,15 @@ long long nurl_native_constant(const char *name) {
 #  ifdef MADV_SEQUENTIAL
     if (strcmp(name, "MADV_SEQUENTIAL") == 0) return MADV_SEQUENTIAL;
 #  endif
+#  ifdef MADV_WILLNEED
+    if (strcmp(name, "MADV_WILLNEED")   == 0) return MADV_WILLNEED;
+#  endif
+    /* Linux-only: pre-fault a file mapping in one kernel pass rather than
+     * one page fault at a time. Absent (-1) elsewhere; callers OR it in
+     * only when it is known. */
+#  ifdef MAP_POPULATE
+    if (strcmp(name, "MAP_POPULATE")    == 0) return MAP_POPULATE;
+#  endif
 #  ifdef TIOCGWINSZ
     /* terminal window size ioctl — value differs per platform
      * (0x5413 Linux, 0x40087468 BSD/macOS), so surface the real one. */

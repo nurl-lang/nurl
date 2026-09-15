@@ -622,6 +622,7 @@ $ `src/serve.nu`
     ( args_flag p `tls` 0 `serve: mint a self-signed certificate on the fly (the microphone needs a secure context)` )
     ( args_opt p `nospeech` 0 `P` `drop a window when the model itself is ≥P sure it holds no speech (default 0.6; 1 disables)` )
     ( args_opt p `token` 0 `TOKEN` `serve: require this bearer token (or set WHISPER_TOKEN); empty = open` )
+    ( args_opt p `unload-after` 0 `SECONDS` `serve: release the model (device and host memory) after this many idle seconds and reload it on the next request (default 0 = keep it loaded)` )
     ( args_opt p `max` 0 `N` `transcribe: stop after N tokens (default 200)` )
     ( args_flag p `vad` 0 `transcribe: skip the silence (energy VAD) before the model sees it` )
     ( args_flag p `timestamps` 0 `transcribe: "[a --> b] text" segments, in the RECORDING's timeline` )
@@ -658,6 +659,19 @@ $ `src/serve.nu`
         : String smax ( args_value_or p `max` `200` )
         ?? ( string_to_int smax ) { T v → { = maxtok v } F _ → {} }
         ( string_free smax )
+        : ~ i unload_s 0
+        : String sunl ( args_value_or p `unload-after` `0` )
+        ?? ( string_to_int sunl ) {
+            T v → { = unload_s v }
+            F _ → {
+                ( nurl_eprintln `whisper: --unload-after takes a number of seconds` )
+                ( string_free sunl )
+                ( string_free lang ) ( string_free __mdl ) ( args_free p )
+                ^ 2
+            }
+        }
+        ( string_free sunl )
+        ? < unload_s 0 { = unload_s 0 } {}
         // --addr host:port — the LAST colon splits, so a future [::1]:port
         // does not shear an IPv6 address in half
         : String addr ( args_value_or p `addr` `127.0.0.1:6543` )
@@ -725,7 +739,7 @@ $ `src/serve.nu`
         ? & == ( string_len token ) 0 & != 0 ( nurl_str_len ( string_data host ) ) == 0 ( nurl_str_eq ( string_data host ) `127.0.0.1` ) {
             ( nurl_eprintln `whisper: WARNING — serving on a non-loopback address with NO token; anyone who can reach this port can use the model. Pass --token or set WHISPER_TOKEN.` )
         } {}
-        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) ( string_data token ) )
+        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) ( string_data token ) unload_s )
         ( string_free token )
         ( string_free certf )
         ( string_free keyf )
