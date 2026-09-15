@@ -43,6 +43,7 @@ $ `sample.nu`
 $ `vocos.nu`
 $ `run.nu`
 $ `text.nu`
+$ `verify.nu`
 
 : ~ i g_f5_model 0  // *F5Model, owned by the model thread
 
@@ -78,6 +79,8 @@ $ `text.nu`
     f speed
     f fade
     i seed
+    i retries
+    f max_wer
     ( Vec f ) out
     b done
     b ok
@@ -226,8 +229,8 @@ $ `text.nu`
         ^ v
     }
     : *F5Voice v # *F5Voice vp
-    : b r ( f5_synth m vc v vb ( string_data . j text ) . j steps . j cfg . j sway
-    . j speed . j fade . j seed . j out )
+    : b r ( f5_synth_checked m vc v vb ( string_data . j text ) . j steps . j cfg . j sway
+    . j speed . j fade . j seed . j retries . j max_wer . j out )
     ? r {} { = . j err ( string_from `synthesis failed` ) }
     = . j ok r
 }
@@ -342,7 +345,7 @@ $ `text.nu`
 
 // One line of a dialogue, synthesised and appended to `out`.
 @ __f5s_one s voice s text i steps f cfg f sway f speed f fade i seed
-( Vec f ) out String err → b {
+i retries f max_wer ( Vec f ) out String err → b {
     ? ( f5_voice_id_ok voice ) {} {
         ( string_push_str err `voice id must be a plain directory name` )
         ^ F
@@ -357,6 +360,8 @@ $ `text.nu`
     = . j speed speed
     = . j fade fade
     = . j seed seed
+    = . j retries retries
+    = . j max_wer max_wer
     = . j out ( vec_new [f] )
     = . j done F
     = . j ok F
@@ -404,6 +409,10 @@ $ `text.nu`
             : f fade ( __f5s_jnum root `cross_fade_duration` 0.15 )
             : ~ i seed ( __f5s_jint root `seed` -1 )
             ? < seed 0 { = seed & ( monotonic_ns ) 2147483647 } {}
+            // whisper_retry / max_wer: the reference service's quality gate,
+            // off unless both are asked for and a transcriber is configured
+            : i retries ( __f5s_jint root `whisper_retry` 1 )
+            : f max_wer ( __f5s_jnum root `max_wer` 1.0 )
             : ( Vec f ) wave ( vec_new [f] )
             : String err ( string_new )
             : ~ b ok T
@@ -412,7 +421,7 @@ $ `text.nu`
                 : String vid ( __f5s_jstr root `voice_id` )
                 : String txt ( __f5s_jstr root `text` )
                 = ok ( __f5s_one ( string_data vid ) ( string_data txt ) steps cfg sway
-                speed fade seed wave err )
+                speed fade seed retries max_wer wave err )
                 = count 1
                 ( string_free vid )
                 ( string_free txt )
@@ -427,7 +436,7 @@ $ `text.nu`
                                     : String vid ( __f5s_jstr it `voice_id` )
                                     : String txt ( __f5s_jstr it `text` )
                                     = ok ( __f5s_one ( string_data vid ) ( string_data txt ) steps cfg
-                                    sway speed ? == k 0 fade 0.0 + seed k wave err )
+                                    sway speed ? == k 0 fade 0.0 + seed k retries max_wer wave err )
                                     = count + count 1
                                     ( string_free vid )
                                     ( string_free txt )

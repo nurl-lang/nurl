@@ -20,6 +20,7 @@ $ `sample.nu`
 $ `vocos.nu`
 $ `run.nu`
 $ `serve.nu`
+$ `verify.nu`
 
 // The official release, so the tool works with no model flags at all. Both
 // are Hugging Face refs naming ONE file in a repo, which the hub fetches into
@@ -151,7 +152,7 @@ $ `serve.nu`
 }
 
 @ __f5_cmd_synth s ckpt s vocab_path s vocoder s voice s gen_text s outp
-i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
+i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet b profile → i {
     : i t0 ( now_ms )
     ?? ( f5_vocab_load vocab_path ) {
         T vocab → {
@@ -166,7 +167,7 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
                                     : i t1 ( now_ms )
                                     : ( Vec f ) wave ( vec_new [f] )
                                     : ~ i rc 0
-                                    ? ( f5_synth m vc v vocab gen_text steps cfg sway speed fade seed wave ) {
+                                    ? ( f5_synth_checked m vc v vocab gen_text steps cfg sway speed fade seed retries max_wer wave ) {
                                         ? quiet {} {
                                             : String m2 ( string_from `f5tts: ` )
                                             ( string_push_float m2 / # f ( vec_len [f] wave ) 24000.0 )
@@ -217,6 +218,32 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
     }
 }
 
+// The transcriber, from the flags or from the environment the reference
+// service uses.
+@ __f5_whisper_from ArgParser p → v {
+    : String w ( args_value_or p `whisper` `` )
+    : ~ String host ( string_new )
+    : ~ i port 6543
+    ? > ( string_len w ) 0 {
+        : i c ( nurl_str_find ( string_data w ) `:` )
+        ? >= c 0 {
+            ( string_push_str host ( nurl_str_slice ( string_data w ) 0 c ) )
+            = port ( nurl_str_to_int ( nurl_str_slice ( string_data w ) + c 1
+            - ( string_len w ) + c 1 ) )
+        } { ( string_push_str host ( string_data w ) ) }
+    } {
+        ?? ( env_get `WHISPER_HOST` ) { T h → { ( string_push_str host ( string_data h ) ) } F → {} }
+        ?? ( env_get `WHISPER_PORT` ) { T v → { = port ( nurl_str_to_int ( string_data v ) ) } F → {} }
+    }
+    : String lang ( args_value_or p `lang` `fi` )
+    ? > ( string_len host ) 0 {
+        ( f5_whisper_set ( string_data ( string_clone host ) ) port ( string_data ( string_clone lang ) ) )
+    } {}
+    ( string_free w )
+    ( string_free host )
+    ( string_free lang )
+}
+
 @ main → i {
     : ArgParser p ( args_new `f5tts` `F5-TTS, the flow-matching text-to-speech model, in pure NURL.` )
     ( args_opt p `max` 0 `N` `for chunks: the byte budget per chunk (default 135)` )
@@ -239,6 +266,10 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
     ( args_opt p `addr` 0 `HOST:PORT` `serve: listen here (default 127.0.0.1:7861)` )
     ( args_opt p `token` 0 `T` `serve: require this bearer token (or $F5TTS_TOKEN)` )
     ( args_opt p `unload-after` 0 `S` `serve: release the weights after S idle seconds (default 0 = never)` )
+    ( args_opt p `whisper` 0 `HOST:PORT` `a transcriber to check the result against (or $WHISPER_HOST/$WHISPER_PORT)` )
+    ( args_opt p `retries` 0 `N` `attempts per chunk when the transcriber disagrees (default 1)` )
+    ( args_opt p `max-wer` 0 `X` `word error rate that buys another attempt (default 0.15)` )
+    ( args_opt p `lang` 0 `L` `the transcriber's language (default fi)` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -253,6 +284,7 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
         ( args_free p )
         ^ 0
     } {}
+    ( __f5_whisper_from p )
     : i np ( args_positional_count p )
     : ( Vec String ) pos0 ( args_positionals p )
     : ~ s cmd0 ``
@@ -343,6 +375,14 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
         : String sfd ( args_value_or p `fade` `0.15` )
         ?? ( string_to_float sfd ) { T x → { = fade x } F → {} }
         ( string_free sfd )
+        : ~ i retries 1
+        : String srt ( args_value_or p `retries` `1` )
+        ?? ( string_to_int srt ) { T x → { = retries x } F _ → {} }
+        ( string_free srt )
+        : ~ f maxwer 0.15
+        : String smw ( args_value_or p `max-wer` `0.15` )
+        ?? ( string_to_float smw ) { T x → { = maxwer x } F → {} }
+        ( string_free smw )
         : ~ i rc 2
         ? != 0 ( nurl_str_len ( string_data svoice ) ) {
             : String mp ( f5_resolve_file ( string_data smodel ) `.safetensors` )
@@ -351,7 +391,8 @@ i steps f cfg f sway f speed f fade i seed i device b quiet b profile → i {
             ? & & > ( string_len mp ) 0 > ( string_len vp ) 0 > ( string_len cp ) 0 {
                 = rc ( __f5_cmd_synth ( string_data mp ) ( string_data vp ) ( string_data cp )
                 ( string_data svoice ) ( string_data stext ) ( string_data sout )
-                steps cfg sway speed fade seed dev ( args_present p `quiet` ) ( args_present p `profile` ) )
+                steps cfg sway speed fade seed retries maxwer dev
+                ( args_present p `quiet` ) ( args_present p `profile` ) )
             } {
                 ( nurl_eprintln `f5tts: could not resolve the checkpoint, its vocabulary or the vocoder` )
                 = rc 1

@@ -43,6 +43,7 @@ $ `model.nu`
 $ `sample.nu`
 $ `text.nu`
 $ `vocos.nu`
+$ `verify.nu`
 
 : i F5_SR 24000
 
@@ -200,7 +201,7 @@ $ `vocos.nu`
 
 // ── one chunk ───────────────────────────────────────────────────────
 
-@ f5_synth_chunk * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+@ __f5r_synth_once * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
 i steps f cfg f sway f speed i seed ( Vec f ) out → b {
     : ( Vec i ) ids ( vec_new [i] )
     : String full ( string_clone . v text )
@@ -237,6 +238,61 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
     ^ T
 }
 
+// ── generate, listen, and try again ─────────────────────────────────
+//
+// The model has no idea whether it said the words. So when a transcriber is
+// configured, the chunk is generated, transcribed and scored, and a score
+// over the threshold buys another attempt from a different seed. The BEST
+// attempt is kept, not the last: a retry can come out worse, and returning
+// the worse one because it came later would make the feature harmful.
+//
+// A transcription that fails to happen — no server, a timeout — is not an
+// error rate of one. It is no information, and the first attempt stands.
+@ f5_synth_chunk * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out → b {
+    : ~ b ok ( __f5r_synth_once m vc v vocab gen_text steps cfg sway speed seed out )
+    ? ok {} { ^ F }
+    ? & > retries 1 ( f5_whisper_enabled ) {} { ^ T }
+    : String heard ( f5_transcribe out )
+    ? > ( string_len heard ) 0 {} { ( string_free heard ) ^ T }
+    : ~ f best ( f5_wer gen_text ( string_data heard ) )
+    ( string_free heard )
+    ? <= best max_wer { ^ T } {}
+    : ( Vec f ) try ( vec_new [f] )
+    : ~ i att 1
+    ~ & < att retries > best max_wer {
+        ( vec_clear [f] try )
+        ? ( __f5r_synth_once m vc v vocab gen_text steps cfg sway speed + seed * 7919 att try ) {
+            : String h2 ( f5_transcribe try )
+            : ~ f w2 1.0
+            ? > ( string_len h2 ) 0 { = w2 ( f5_wer gen_text ( string_data h2 ) ) } {}
+            ( string_free h2 )
+            ? < w2 best {
+                = best w2
+                ( vec_clear [f] out )
+                : ~ i k 0
+                ~ < k ( vec_len [f] try ) {
+                    ( vec_push [f] out ( __f5r_get try k ) )
+                    = k + k 1
+                }
+            } {}
+        } {}
+        = att + att 1
+    }
+    ( vec_free [f] try )
+    ? > best max_wer {
+        : String msg ( string_from `f5tts: kept the best of ` )
+        ( string_push_int msg att )
+        ( string_push_str msg ` attempts at ` )
+        ( string_push_float msg best )
+        ( string_push_str msg ` word error rate: ` )
+        ( string_push_str msg gen_text )
+        ( nurl_eprintln ( string_data msg ) )
+        ( string_free msg )
+    } {}
+    ^ T
+}
+
 // ── the whole utterance ─────────────────────────────────────────────
 
 // Join `next` onto `acc` with a linear cross-fade over `fade` samples.
@@ -269,6 +325,13 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
 
 @ f5_synth * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
 i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
+    ^ ( f5_synth_checked m vc v vocab gen_text steps cfg sway speed fade_s seed 1 1.0 out )
+}
+
+// The same, with the transcriber's opinion: `retries` attempts per chunk and
+// a word error rate over `max_wer` buys another one.
+@ f5_synth_checked * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out → b {
     : i mc ( f5_max_chars v speed )
     : ( Vec String ) chunks ( f5_chunk_text gen_text mc )
     : i nc ( vec_len [String] chunks )
@@ -280,7 +343,7 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
             T c → {
                 : ( Vec f ) piece ( vec_new [f] )
                 = ok & ok ( f5_synth_chunk m vc v vocab ( string_data c ) steps cfg sway speed
-                + seed k piece )
+                + seed k retries max_wer piece )
                 ? ok { ( f5_crossfade out piece fade ) } {}
                 ( vec_free [f] piece )
             }
@@ -343,11 +406,11 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
     } {}
     : i ns ( vec_len [i] starts )
     ? == ns 0 { ( vec_free [i] starts ) ^ out } {}
-    : ~ i prev ( __f5t_geti_pub starts 0 )
+    : ~ i prev ( _f5t_geti starts 0 )
     : ~ i cur prev
     : ~ i k 1
     ~ < k ns {
-        : i si ( __f5t_geti_pub starts k )
+        : i si ( _f5t_geti starts k )
         : b continuous == si + prev seek_ms
         : b gap > si + prev min_ms
         ? & ! continuous gap {
@@ -378,8 +441,8 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
         : ~ i prev 0
         : ~ i k 0
         ~ < k np {
-            : i s ( __f5t_geti_pub sil k )
-            : i e ( __f5t_geti_pub sil + k 1 )
+            : i s ( _f5t_geti sil k )
+            : i e ( _f5t_geti sil + k 1 )
             ? > s prev { ( vec_push [i] ns prev ) ( vec_push [i] ns s ) } {}
             = prev e
             = k + k 2
@@ -391,14 +454,14 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
     : i nn ( vec_len [i] ns )
     : ~ i k 0
     ~ < k nn {
-        ( vec_set [i] ns k - ( __f5t_geti_pub ns k ) keep_ms )
-        ( vec_set [i] ns + k 1 + ( __f5t_geti_pub ns + k 1 ) keep_ms )
+        ( vec_set [i] ns k - ( _f5t_geti ns k ) keep_ms )
+        ( vec_set [i] ns + k 1 + ( _f5t_geti ns + k 1 ) keep_ms )
         = k + k 2
     }
     = k 0
     ~ < k - nn 2 {
-        : i le ( __f5t_geti_pub ns + k 1 )
-        : i ns2 ( __f5t_geti_pub ns + k 2 )
+        : i le ( _f5t_geti ns + k 1 )
+        : i ns2 ( _f5t_geti ns + k 2 )
         ? < ns2 le {
             : i mid / + le ns2 2
             ( vec_set [i] ns + k 1 mid )
@@ -474,8 +537,8 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
     : i np ( vec_len [i] ns )
     : ~ i k 0
     ~ < k np {
-        : i a0 ( __f5t_geti_pub ns k )
-        : i b0 ( __f5t_geti_pub ns + k 1 )
+        : i a0 ( _f5t_geti ns k )
+        : i b0 ( _f5t_geti ns + k 1 )
         : i a ? < ( __f5r_ms2s a0 rate ) 0 0 ( __f5r_ms2s a0 rate )
         : i b ? > ( __f5r_ms2s b0 rate ) n n ( __f5r_ms2s b0 rate )
         : i have ( vec_len [f] out )
