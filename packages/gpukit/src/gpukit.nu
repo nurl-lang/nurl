@@ -332,8 +332,25 @@ $ `deps/gpu/src/gpu.nu`
     = g_pool_idle 0
 }
 
+// Every device pointer in the pool belongs to the CONTEXT that allocated it,
+// and closing the kit destroys that context. An entry left behind is a
+// pointer into a dead context — and the driver does not complain about one:
+// the next gk_dbuf_new hands it out, the upload reports success, the kernel
+// writes nowhere, and the program produces SILENCE rather than an error.
+// (Found exactly that way: a TTS server that switched models answered its
+// first request after the switch with sixteen seconds of digital zero, and
+// every request after it correctly.)
+//
+// gk_pool_release frees what is idle while the context is still alive; this
+// forgets the rest, which the context teardown reclaims anyway.
+@ __gk_pool_forget → v {
+    = g_pool_n 0
+    = g_pool_idle 0
+}
+
 @ gk_close * GpuKit kit → v {
     ( gk_pool_release kit )
+    ( __gk_pool_forget )
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {

@@ -44,6 +44,7 @@ $ `sample.nu`
 $ `text.nu`
 $ `vocos.nu`
 $ `verify.nu`
+$ `store.nu`
 
 : i F5_SR 24000
 
@@ -62,8 +63,11 @@ $ `verify.nu`
     i frames
     i samples  // of the normalised recording, which sets ref_audio_len
     f rms  // the recording's own loudness, to scale the result back
+    f target  // the loudness it was normalised TO, so a cache can tell
     String text
 }
+
+@ f5_voice_target * F5Voice v → f { ^ . v target }
 
 @ f5_voice_free * F5Voice v → v {
     ( vec_free [f] . v mel )
@@ -86,7 +90,7 @@ $ `verify.nu`
     ^ out
 }
 
-@ f5_voice_load s wav_path s ref_text → !*F5Voice String {
+@ f5_voice_load s wav_path s ref_text f target_rms → !*F5Voice String {
     ?? ( wav_read wav_path ) {
         T w → {
             : ( Vec f ) raw ( wav_mono w )
@@ -105,8 +109,11 @@ $ `verify.nu`
             : ~ i k0 0
             ~ < k0 src_n { : f s ( __f5r_get mono k0 ) = sum0 + sum0 * s s = k0 + k0 1 }
             : f rms0 ( sqrt / sum0 # f src_n )
-            ? < rms0 F5_TARGET_RMS {
-                : f g0 / F5_TARGET_RMS ? > rms0 1.0e-12 rms0 1.0e-12
+            // a target of zero or less disables the normalisation entirely,
+            // which is what the reference does with a negative target_rms:
+            // `if rms < target_rms` is false for every real recording
+            ? < rms0 target_rms {
+                : f g0 / target_rms ? > rms0 1.0e-12 rms0 1.0e-12
                 = k0 0
                 ~ < k0 src_n { ( vec_set [f] mono k0 * g0 ( __f5r_get mono k0 ) ) = k0 + k0 1 }
             } {}
@@ -118,11 +125,17 @@ $ `verify.nu`
             : f rms rms0
             : ( Vec f ) mel ( log_mel_vocos at24 1024 F5_HOP 100 F5_SR )
             ( vec_free [f] at24 )
+            // nurl_alloc does NOT zero, so every field is set here — a field
+            // left out is not zero, it is whatever the heap last held, and
+            // `target` in particular is DIVIDED BY: a stale huge value scales
+            // the finished waveform to 1e-225 and the voice goes silent with
+            // nothing else looking wrong.
             : *F5Voice v # *F5Voice ( nurl_alloc Z F5Voice )
             = . v mel mel
             = . v frames / ( vec_len [f] mel ) 100
             = . v samples n
             = . v rms rms
+            = . v target target_rms
             = . v text ( f5_fix_ref_text ref_text )
             ^ @ !*F5Voice String { T v }
         }
@@ -132,7 +145,7 @@ $ `verify.nu`
 
 // The voice directory the deployed service uses: config.json holds the
 // transcript, reference.wav the recording.
-@ f5_voice_open_dir s dir → !*F5Voice String {
+@ f5_voice_open_dir s dir f target_rms → !*F5Voice String {
     : String cfg ( string_from dir )
     ( string_push_str cfg `/config.json` )
     : String wavp ( string_from dir )
@@ -157,7 +170,7 @@ $ `verify.nu`
         F _e → {}
     }
     ( string_free cfg )
-    : !*F5Voice String r ( f5_voice_load ( string_data wavp ) ( string_data txt ) )
+    : !*F5Voice String r ( f5_voice_load ( string_data wavp ) ( string_data txt ) target_rms )
     ( string_free wavp )
     ( string_free txt )
     ^ r
@@ -267,8 +280,8 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
     ( vec_free [f] gmel )
     ? vok {} { ^ F }
     // and the loudness the caller's own recording had
-    ? < . v rms F5_TARGET_RMS {
-        : f g / . v rms F5_TARGET_RMS
+    ? < . v rms . v target {
+        : f g / . v rms . v target
         = k 0
         ~ < k ( vec_len [f] out ) { ( vec_set [f] out k * g ( __f5r_get out k ) ) = k + k 1 }
     } {}
@@ -851,3 +864,5 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out �
     ( string_free clean )
     ^ ok
 }
+
+@ f5_voice_rms * F5Voice v → f { ^ . v rms }

@@ -20,6 +20,8 @@ $ `sample.nu`
 $ `vocos.nu`
 $ `run.nu`
 $ `serve.nu`
+$ `store.nu`
+$ `registry.nu`
 $ `verify.nu`
 
 // The official release, so the tool works with no model flags at all. Both
@@ -156,7 +158,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
     : i t0 ( now_ms )
     ?? ( f5_vocab_load vocab_path ) {
         T vocab → {
-            ?? ( f5_voice_open_dir voice ) {
+            ?? ( f5_voice_open_dir voice 0.1 ) {
                 T v → {
                     ?? ( f5_open ckpt vocab_path device ) {
                         T m → {
@@ -263,7 +265,8 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
     ( args_flag p `quiet` 113 `no progress on stderr` )
     ( args_flag p `profile` 0 `print per-kernel GPU timings after synthesis` )
     ( args_flag p `short-fix` 0 `slow the duration estimate for short lines (TEKNINEN.md); off = the reference's own rule` )
-    ( args_opt p `voices` 0 `DIR` `serve: the directory of voice directories` )
+    ( args_opt p `voices` 0 `DIR` `serve: the voices directory (default ~/.f5tts/voices)` )
+    ( args_opt p `models` 0 `DIR` `serve: the local models directory (default ~/.f5tts/models)` )
     ( args_opt p `addr` 0 `HOST:PORT` `serve: listen here (default 127.0.0.1:7861)` )
     ( args_opt p `token` 0 `T` `serve: require this bearer token (or $F5TTS_TOKEN)` )
     ( args_opt p `unload-after` 0 `S` `serve: release the weights after S idle seconds (default 0 = never)` )
@@ -296,6 +299,18 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
         : String svocab ( args_value_or p `vocab` `` )
         : String svoc ( args_value_or p `vocoder` F5_DEFAULT_VOCODER )
         : String svoices ( args_value_or p `voices` `` )
+        ? == 0 ( string_len svoices ) {
+            ( f5_ensure_dirs )
+            : String d ( f5_voices_dir )
+            ( string_push_str svoices ( string_data d ) )
+            ( string_free d )
+        } {}
+        : String smodels ( args_value_or p `models` `` )
+        ? == 0 ( string_len smodels ) {
+            : String d ( f5_models_dir )
+            ( string_push_str smodels ( string_data d ) )
+            ( string_free d )
+        } {}
         : String saddr ( args_value_or p `addr` `127.0.0.1:7861` )
         : String stok ( args_value_or p `token` `` )
         ? == 0 ( string_len stok ) {
@@ -320,13 +335,29 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
             ( string_free hs )
         } {}
         : ~ i rc 2
+        // --model may be a registry id, a path, or a Hugging Face ref. An id
+        // is resolved through the registry so /models can report which one is
+        // loaded and a request can switch away and back.
+        : String smid ( string_new )
+        : String rck ( string_new )
+        : String rvo ( string_new )
+        ? ( f5_registry_resolve ( string_data smodels ) ( string_data smodel ) rck rvo ) {
+            ( string_push_str smid ( string_data smodel ) )
+            ( string_clear smodel )
+            ( string_push_str smodel ( string_data rck ) )
+            ( string_clear svocab )
+            ( string_push_str svocab ( string_data rvo ) )
+        } {}
+        ( string_free rck )
+        ( string_free rvo )
         ? != 0 ( nurl_str_len ( string_data svoices ) ) {
             : String mp ( f5_resolve_file ( string_data smodel ) `.safetensors` )
             : String vp ( f5_resolve_vocab ( string_data svocab ) ( string_data mp ) )
             : String cp ( f5_resolve_file ( string_data svoc ) `.bin` )
             ? & & > ( string_len mp ) 0 > ( string_len vp ) 0 > ( string_len cp ) 0 {
                 = rc ( f5_serve ( string_data mp ) ( string_data vp ) ( string_data cp )
-                ( string_data svoices ) host port ( string_data stok ) dev unload )
+                ( string_data svoices ) ( string_data smodels ) ( string_data smid )
+                host port ( string_data stok ) dev unload )
             } {
                 ( nurl_eprintln `f5tts: could not resolve the checkpoint, its vocabulary or the vocoder` )
                 = rc 1
@@ -338,7 +369,8 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
             ( nurl_eprintln `usage: f5tts serve --voices DIR [--model REF] [--vocoder REF] [--addr H:P] [--token T] [--unload-after S]` )
         }
         ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
-        ( string_free svoices ) ( string_free saddr ) ( string_free stok )
+        ( string_free svoices ) ( string_free smodels ) ( string_free smid )
+        ( string_free saddr ) ( string_free stok )
         ( args_free p )
         ^ rc
     } {}

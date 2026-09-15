@@ -65,6 +65,10 @@ $ `kernels.nu`
 
 @ __voc_dptr ( Vec GkBuf ) v i k → i { ^ . ( __voc_bget v k ) dptr }
 
+@ __voc_get ( Vec f ) v i k → f {
+    ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
+}
+
 @ __voc_view GkBuf b i offel i nel → GkBuf {
     ^ @ GkBuf { + . b dptr * offel 4 nel GK_F32 }
 }
