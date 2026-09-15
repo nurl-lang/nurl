@@ -19,6 +19,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
+$ `stdlib/std/floatbits.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
@@ -94,6 +95,52 @@ $ `kernels.nu`
     ^ ( gk_buf_ok b )
 }
 
+@ __voc_u32 * u p i off → i {
+    ^ | # i . p off | << # i . p + off 1 8 | << # i . p + off 2 16 << # i . p + off 3 24
+}
+
+// A convolution weight with the output channel moved LAST — see
+// __f5m_up_convw in model.nu: the same permutation, for the same reason.
+@ __voc_up_convw * Vocos v s name i cout i ipg i K → GkBuf {
+    : *Pt pt # *Pt . v pt
+    : i ti ( pt_find pt name )
+    ? < ti 0 { ^ ( __voc_nobuf ) } {}
+    ? ( pt_is_contiguous pt ti ) {} { ^ ( __voc_nobuf ) }
+    : i ne ( pt_nelems pt ti )
+    ? == ne * cout * ipg K {} { ^ ( __voc_nobuf ) }
+    : *u base ( pt_tensor_ptr pt ti )
+    : ( Vec f ) perm ( vec_with_cap [f] ne )
+    : ~ i k 0
+    ~ < k K {
+        : ~ i j 0
+        ~ < j ipg {
+            : ~ i c 0
+            ~ < c cout {
+                ( vec_push [f] perm # f ( bits_to_f32 ( __voc_u32 base * 4 + * + * c ipg j K k ) ) )
+                = c + c 1
+            }
+            = j + j 1
+        }
+        = k + k 1
+    }
+    : GkBuf b ( gk_dbuf_new . v kit ne GK_F32 )
+    ? ( gk_buf_ok b ) {} { ( vec_free [f] perm ) ^ ( __voc_nobuf ) }
+    : b ok ( gk_dbuf_upload . v kit b perm )
+    ( vec_free [f] perm )
+    ? ok {} { ( gk_dbuf_free b ) ^ ( __voc_nobuf ) }
+    ^ b
+}
+
+@ __voc_upl_convw * Vocos v i k s suf i cout i ipg i K ( Vec GkBuf ) dst → b {
+    : String s ( string_from `backbone.convnext.` )
+    ( string_push_int s k )
+    ( string_push_str s suf )
+    : GkBuf b ( __voc_up_convw v ( string_data s ) cout ipg K )
+    ( string_free s )
+    ( vec_push [GkBuf] dst b )
+    ^ ( gk_buf_ok b )
+}
+
 @ __voc_lists * Vocos v → v {
     = . v dw_w ( vec_new [GkBuf] )
     = . v dw_b ( vec_new [GkBuf] )
@@ -131,7 +178,7 @@ $ `kernels.nu`
             = . v hop 256
             ( __voc_lists v )
             ( __voc_scratch_zero v )
-            = . v emb_w ( __voc_up v `backbone.embed.weight` )
+            = . v emb_w ( __voc_up_convw v `backbone.embed.weight` 512 100 7 )
             = . v emb_b ( __voc_up v `backbone.embed.bias` )
             = . v n_w ( __voc_up v `backbone.norm.weight` )
             = . v n_b ( __voc_up v `backbone.norm.bias` )
@@ -143,7 +190,7 @@ $ `kernels.nu`
             = ok & ok ( gk_buf_ok . v out_w )
             : ~ i k 0
             ~ < k . v layers {
-                = ok & ok ( __voc_upl v k `.dwconv.weight` . v dw_w )
+                = ok & ok ( __voc_upl_convw v k `.dwconv.weight` 512 1 7 . v dw_w )
                 = ok & ok ( __voc_upl v k `.dwconv.bias` . v dw_b )
                 = ok & ok ( __voc_upl v k `.norm.weight` . v nw )
                 = ok & ok ( __voc_upl v k `.norm.bias` . v nb )
@@ -217,14 +264,14 @@ $ `kernels.nu`
     : GkBuf spec ( __voc_view . v spec 0 * frames + . v nfft 2 )
     : ~ b ok ( gk_dbuf_upload . v kit melb mel )
     // the stem: one convolution across all hundred mel bands, then a norm
-    = ok & ok ( f5k_conv1d . v kit . melb dptr . t1 dptr . . v emb_w dptr
+    = ok & ok ( f5k_conv1d_t . v kit . melb dptr . t1 dptr . . v emb_w dptr
     . . v emb_b dptr 1 frames . v nmel dim 7 3 1 )
     = ok & ok ( f5k_lnaff . v kit . t1 dptr . h dptr . . v n_w dptr . . v n_b dptr
     frames dim 1.0e-6 )
     ? ok {} { ^ F }
     : ~ i L 0
     ~ < L . v layers {
-        = ok & ok ( f5k_conv1d . v kit . h dptr . t1 dptr ( __voc_dptr . v dw_w L )
+        = ok & ok ( f5k_conv1d_t . v kit . h dptr . t1 dptr ( __voc_dptr . v dw_w L )
         ( __voc_dptr . v dw_b L ) 1 frames dim dim 7 3 dim )
         = ok & ok ( f5k_lnaff . v kit . t1 dptr . t2 dptr ( __voc_dptr . v nw L )
         ( __voc_dptr . v nb L ) frames dim 1.0e-6 )

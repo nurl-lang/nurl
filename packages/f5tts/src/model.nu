@@ -160,11 +160,68 @@ $ `kernels.nu`
     ^ ( gk_buf_ok b )
 }
 
+// A convolution weight, uploaded with the output channel moved LAST:
+// [cout][cin/groups][K] → [K][cin/groups][cout]. Every thread of a warp holds
+// a different output channel of the same position, so this is the difference
+// between one coalesced read and thirty-two scattered ones — and on the
+// position embedding's 31-tap grouped convolution it was 70 % of a whole
+// synthesis.
+@ __f5m_up_convw * F5Model m s name i cout i ipg i K → GkBuf {
+    : *St st # *St . m st
+    : i ti ( st_find_tensor st name )
+    ? < ti 0 { ^ ( __f5m_nobuf ) } {}
+    ?? ( vec_get [StTensor] . st tensors ti ) {
+        T t → {
+            ? == . t dtype ST_F32 {} { ^ ( __f5m_nobuf ) }
+            : i ne . t nelems
+            ? == ne * cout * ipg K {} { ^ ( __f5m_nobuf ) }
+            : *u base ( st_tensor_ptr st t )
+            : ( Vec f ) perm ( vec_with_cap [f] ne )
+            : ~ i k 0
+            ~ < k K {
+                : ~ i j 0
+                ~ < j ipg {
+                    : ~ i c 0
+                    ~ < c cout {
+                        ( vec_push [f] perm # f ( bits_to_f32 ( __f5m_u32 base * 4 + * + * c ipg j K k ) ) )
+                        = c + c 1
+                    }
+                    = j + j 1
+                }
+                = k + k 1
+            }
+            : GkBuf b ( gk_dbuf_new . m kit ne GK_F32 )
+            ? ( gk_buf_ok b ) {} { ( vec_free [f] perm ) ^ ( __f5m_nobuf ) }
+            : b ok ( gk_dbuf_upload . m kit b perm )
+            ( vec_free [f] perm )
+            ? ok {} { ( gk_dbuf_free b ) ^ ( __f5m_nobuf ) }
+            ^ b
+        }
+        F → { ^ ( __f5m_nobuf ) }
+    }
+}
+
+@ __f5m_up_convw1 * F5Model m s suf i cout i ipg i K → GkBuf {
+    : String s ( string_from `ema_model.transformer.` )
+    ( string_push_str s suf )
+    : GkBuf b ( __f5m_up_convw m ( string_data s ) cout ipg K )
+    ( string_free s )
+    ^ b
+}
+
+@ __f5m_up_convwl * F5Model m s pre i idx s suf i cout i ipg i K ( Vec GkBuf ) dst → b {
+    : String s ( __f5m_name pre idx suf )
+    : GkBuf b ( __f5m_up_convw m ( string_data s ) cout ipg K )
+    ( string_free s )
+    ( vec_push [GkBuf] dst b )
+    ^ ( gk_buf_ok b )
+}
+
 @ __f5m_layers * F5Model m → b {
     : ~ b ok T
     : ~ i k 0
     ~ < k . m nconv {
-        = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.dwconv.weight` . m tb_dw_w )
+        = ok & ok ( __f5m_up_convwl m `text_embed.text_blocks.` k `.dwconv.weight` . m td 1 7 . m tb_dw_w )
         = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.dwconv.bias` . m tb_dw_b )
         = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.norm.weight` . m tb_n_w )
         = ok & ok ( __f5m_upl m `text_embed.text_blocks.` k `.norm.bias` . m tb_n_b )
@@ -288,9 +345,9 @@ $ `kernels.nu`
             = . m temb_w ( __f5m_up1 m `text_embed.text_embed.weight` )
             = . m ie_w ( __f5m_up1 m `input_embed.proj.weight` )
             = . m ie_b ( __f5m_up1 m `input_embed.proj.bias` )
-            = . m cp0_w ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.0.weight` )
+            = . m cp0_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.0.weight` 1024 64 31 )
             = . m cp0_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.0.bias` )
-            = . m cp2_w ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.2.weight` )
+            = . m cp2_w ( __f5m_up_convw1 m `input_embed.conv_pos_embed.conv1d.2.weight` 1024 64 31 )
             = . m cp2_b ( __f5m_up1 m `input_embed.conv_pos_embed.conv1d.2.bias` )
             = . m no_w ( __f5m_up1 m `norm_out.linear.weight` )
             = . m no_b ( __f5m_up1 m `norm_out.linear.bias` )
@@ -526,7 +583,7 @@ $ `kernels.nu`
     : GkBuf t2 ( __f5m_view . m tscr2 0 * rows td )
     : GkBuf t3 ( __f5m_view . m tscr3 0 * rows td )
     : GkBuf big ( __f5m_view . m tscr 0 * rows inner )
-    : ~ b ok ( f5k_conv1d . m kit . x dptr . t2 dptr
+    : ~ b ok ( f5k_conv1d_t . m kit . x dptr . t2 dptr
     ( __f5m_dptr . m tb_dw_w idx ) ( __f5m_dptr . m tb_dw_b idx ) 1 rows td td 7 3 td )
     = ok & ok ( f5k_lnaff . m kit . t2 dptr . t3 dptr
     ( __f5m_dptr . m tb_n_w idx ) ( __f5m_dptr . m tb_n_b idx ) rows td 1.0e-6 )
@@ -628,10 +685,10 @@ $ `kernels.nu`
     . . m txt2 dptr . cat dptr batch n mel td )
     = ok & ok ( gkd_gemm . m kit h cat . m ie_w . m ie_b 1 rows dim + * 2 mel td 1.0 1.0 1 )
     // the convolutional position embedding, added as a residual
-    = ok & ok ( f5k_conv1d . m kit . h dptr . tmp dptr . . m cp0_w dptr
+    = ok & ok ( f5k_conv1d_t . m kit . h dptr . tmp dptr . . m cp0_w dptr
     . . m cp0_b dptr batch n dim dim 31 15 16 )
     = ok & ok ( f5k_mish . m kit . tmp dptr * rows dim )
-    = ok & ok ( f5k_conv1d . m kit . tmp dptr . hn dptr . . m cp2_w dptr
+    = ok & ok ( f5k_conv1d_t . m kit . tmp dptr . hn dptr . . m cp2_w dptr
     . . m cp2_b dptr batch n dim dim 31 15 16 )
     = ok & ok ( f5k_mish . m kit . hn dptr * rows dim )
     = ok & ok ( f5k_addinto . m kit . h dptr . hn dptr * rows dim )

@@ -265,6 +265,38 @@ extern "C" __global__ void f5_conv1d(const float* x, float* y, const float* w,
     }
     y[i] = acc;
 }
+
+// The same convolution with the weights already permuted to [K][cin/groups]
+// [cout] — the output channel LAST, so that the 32 threads of a warp (which
+// hold 32 consecutive output channels of the same position) read 32
+// consecutive floats instead of 32 floats 1984 apart. The arithmetic is
+// identical; the memory is a different machine. The permutation happens once,
+// while the weights are being uploaded.
+extern "C" __global__ void f5_conv1d_t(const float* x, float* y, const float* w,
+                                       const float* bias, long long batch, long long n,
+                                       long long cin, long long cout, long long K,
+                                       long long pad, long long groups)
+{
+    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long total = batch * n * cout;
+    if (i >= total) return;
+    long long c = i % cout;
+    long long t = (i / cout) % n;
+    long long b = i / (cout * n);
+    long long ipg = cin / groups;
+    long long opg = cout / groups;
+    long long gbase = (c / opg) * ipg;
+    const float* xb = x + b * n * cin;
+    float acc = bias ? bias[c] : 0.0f;
+    for (long long k = 0; k < K; k++) {
+        long long sp = t + k - pad;
+        if (sp < 0 || sp >= n) continue;
+        const float* xs = xb + sp * cin + gbase;
+        const float* wk = w + k * ipg * cout + c;
+        for (long long j = 0; j < ipg; j++) acc += wk[j * cout] * xs[j];
+    }
+    y[i] = acc;
+}
 `
 }
 
@@ -496,6 +528,26 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ( vec_push [i] a ( gpu_arg_i64 groups ) )
     : i tot * * batch n cout
     : b r ( gk_run_dev kit ( __f5k_convs ) `f5_conv1d` ( gk_grid tot 256 ) 256 a )
+    ( vec_free [i] a )
+    ^ r
+}
+
+// The transposed-weight form. Same arguments, same result.
+@ f5k_conv1d_t * GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a xd )
+    ( vec_push [i] a yd )
+    ( vec_push [i] a wd )
+    ( vec_push [i] a bd )
+    ( vec_push [i] a ( gpu_arg_i64 batch ) )
+    ( vec_push [i] a ( gpu_arg_i64 n ) )
+    ( vec_push [i] a ( gpu_arg_i64 cin ) )
+    ( vec_push [i] a ( gpu_arg_i64 cout ) )
+    ( vec_push [i] a ( gpu_arg_i64 K ) )
+    ( vec_push [i] a ( gpu_arg_i64 pad ) )
+    ( vec_push [i] a ( gpu_arg_i64 groups ) )
+    : i tot * * batch n cout
+    : b r ( gk_run_dev kit ( __f5k_convs ) `f5_conv1d_t` ( gk_grid tot 256 ) 256 a )
     ( vec_free [i] a )
     ^ r
 }

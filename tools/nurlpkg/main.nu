@@ -1633,7 +1633,21 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         : !String IoErr rl ( fs_readlink linkpath_s )
         ?? rl {
             T existing → {
-                ? != 0 ( nurl_str_eq ( string_data existing ) target_s ) {
+                // Compare where the two paths LEAD, not how they are spelled.
+                // The same package reached along two dependency edges is
+                // written two ways — `../gpu` from here, `../gpukit/../gpu`
+                // through the package that also depends on it — and a raw
+                // string compare calls that a name collision and refuses to
+                // build. Normalising both first is the whole fix; a genuine
+                // collision (two different trees wanting one deps/ slot)
+                // still differs after normalisation and is still an error.
+                : String ex_base ( path_dirname linkpath_s )
+                : String ex_abs ( __abs_join cwd ( string_data ex_base ) )
+                : String ex_join ( __abs_join ( string_data ex_abs ) ( string_data existing ) )
+                : String ex_norm ( path_normalize ( string_data ex_join ) )
+                : String tg_abs ( __abs_join cwd target_s )
+                : String tg_norm ( path_normalize ( string_data tg_abs ) )
+                ? != 0 ( nurl_str_eq ( string_data ex_norm ) ( string_data tg_norm ) ) {
                     ( nurl_print `  ` ) ( nurl_print name )
                     ( nurl_print ` (already installed, verified)\n` )
                 } {
@@ -1644,6 +1658,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     ( nurl_eprintln target_s )
                     = existing_rc 1
                 }
+                ( string_free ex_base ) ( string_free ex_abs ) ( string_free ex_join )
+                ( string_free ex_norm ) ( string_free tg_abs ) ( string_free tg_norm )
                 ( string_free existing )
             }
             F _ → {
