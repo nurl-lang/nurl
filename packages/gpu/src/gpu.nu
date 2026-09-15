@@ -253,7 +253,17 @@ $ `cpu.nu`
     ^ ( __gpu_meminfo_line `MemTotal:` )
 }
 
-@ gpu_close Gpu g → v { ? == __gpu_backend 0 { ( cuda_ctx_destroy_dev . g dev ) } {} }
+// Closing the device also gives back the pinned staging pair: it was
+// allocated in this context, and a program that opens the device again
+// (a server that unloads its model when idle) would otherwise hand the
+// next upload two host buffers the driver no longer knows — a segfault
+// inside the first cuMemcpyHtoDAsync, found exactly that way.
+@ gpu_close Gpu g → v {
+    ? == __gpu_backend 0 {
+        ( gpu_staging_free )
+        ( cuda_ctx_destroy_dev . g dev )
+    } {}
+}
 
 // Block until all submitted work on the context completes. 0 == success.
 // The CPU backend runs kernels synchronously, so there is nothing to await.

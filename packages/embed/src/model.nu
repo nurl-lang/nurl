@@ -87,6 +87,21 @@ $ `deps/tokenizer/src/unigram.nu`
     * Unigram tok
     b has_tok
     b ok
+    // the weights as a lease: `loaded` says whether kit + weights exist
+    // right now; `dir`/`gpu` are what a reload opens. The tokenizer and
+    // the config stay for the engine's life — a request tokenizes on its
+    // own fiber while the weights may be gone.
+    b loaded
+    String dir
+    i gpu
+    // the weight arena: device memory carved from 128 MB chunks (~20
+    // allocations for BGE-M3's 389 tensors, and ~20 frees on an unload)
+    ( Vec i ) arena
+    ( Vec i ) arenasz
+    i arena_cur
+    i arena_off
+    i arena_cap
+    ( Vec GpuCopy ) up_q  // every tensor's upload, sent as ONE batch
 }
 
 @ __em_err s msg → !*Embed String {
@@ -116,14 +131,59 @@ $ `deps/tokenizer/src/unigram.nu`
     ?? ( vec_get [StTensor] . s2 tensors idx ) {
         T t → {
             ? == . t dtype ST_F32 {} { = . e ok F ^ @ GkBuf { 0 0 GK_F32 } }
-            : GkBuf b ( gk_dbuf_new . e kit . t nelems GK_F32 )
-            ? ( gk_buf_ok b ) {} { = . e ok F ^ b }
-            : GpuBuffer gb @ GpuBuffer { . b dptr * . t nelems 4 }
-            ? == ( gpu_upload gb ( st_tensor_ptr s2 t ) ) 0 {} { = . e ok F }
-            ^ b
+            : i d ( __em_carve e * . t nelems 4 )
+            ? == d 0 { = . e ok F ^ @ GkBuf { 0 0 GK_F32 } }
+            ( vec_push [GpuCopy] . e up_q @ GpuCopy { d # i ( st_tensor_ptr s2 t ) * . t nelems 4 } )
+            ^ @ GkBuf { d . t nelems GK_F32 }
         }
         F → { = . e ok F ^ @ GkBuf { 0 0 GK_F32 } }
     }
+}
+
+@ __EM_ARENA_CHUNK → i { ^ 134217728 }
+
+// `bytes` of device memory for the weights' lifetime, 256-byte aligned,
+// carved from the arena: a new 128 MB chunk when the current one is full,
+// an exact-size chunk for anything larger (the 1 GB word embedding).
+// 0 = out of device memory.
+@ __em_carve * Embed e i bytes → i {
+    : i need * / + bytes 255 256 256
+    ? > need ( __EM_ARENA_CHUNK ) {
+        : GpuBuffer big ( gpu_alloc . . e kit gpu need )
+        ? == . big dptr 0 { ^ 0 } {}
+        ( vec_push [i] . e arena . big dptr )
+        ( vec_push [i] . e arenasz . big bytes )
+        ^ . big dptr
+    } {}
+    ? > + . e arena_off need . e arena_cap {
+        : GpuBuffer ch ( gpu_alloc . . e kit gpu ( __EM_ARENA_CHUNK ) )
+        ? == . ch dptr 0 { ^ 0 } {}
+        ( vec_push [i] . e arena . ch dptr )
+        ( vec_push [i] . e arenasz . ch bytes )
+        = . e arena_cur . ch dptr
+        = . e arena_off 0
+        = . e arena_cap . ch bytes
+    } {}
+    : i d + . e arena_cur . e arena_off
+    = . e arena_off + . e arena_off need
+    ^ d
+}
+
+@ __em_arena_free * Embed e → v {
+    : ~ i k 0
+    ~ < k ( vec_len [i] . e arena ) {
+        : ~ i d 0
+        : ~ i n 0
+        ?? ( vec_get [i] . e arena k ) { T x → { = d x } F → {} }
+        ?? ( vec_get [i] . e arenasz k ) { T x → { = n x } F → {} }
+        ( gpu_free @ GpuBuffer { d n } )
+        = k + k 1
+    }
+    ( vec_clear [i] . e arena )
+    ( vec_clear [i] . e arenasz )
+    = . e arena_cur 0
+    = . e arena_off 0
+    = . e arena_cap 0
 }
 
 // model-relative path: dir + "/" + leaf (caller frees)
@@ -165,9 +225,20 @@ $ `deps/tokenizer/src/unigram.nu`
 // hiding exactly the mistake the flag exists to make loud.
 @ embed_open_dev s dir i gpu → !*Embed String {
     : *Embed e # *Embed ( nurl_alloc Z Embed )
+    // nurl_alloc does NOT zero: every field read before assignment is set
     = . e ok T
     = . e has_tok F
+    = . e loaded F
+    = . e kit # *GpuKit 0
+    = . e dir ( string_from dir )
+    = . e gpu gpu
     = . e layers ( vec_new [EmbedLayer] )
+    = . e arena ( vec_new [i] )
+    = . e arenasz ( vec_new [i] )
+    = . e arena_cur 0
+    = . e arena_off 0
+    = . e arena_cap 0
+    = . e up_q ( vec_new [GpuCopy] )
     // config.json
     : String cfgp ( __em_path dir `config.json` )
     : ~ b cfg_ok F
@@ -216,6 +287,22 @@ $ `deps/tokenizer/src/unigram.nu`
         ^ @ !*Embed String { F tokerr }
     }
     ( string_free tokerr )
+    ?? ( __em_load_weights e ) {
+        T _ → {}
+        F le → { ( embed_close e ) ^ @ !*Embed String { F le } }
+    }
+    ^ @ !*Embed String { T e }
+}
+
+// ── the weights as a lease ──────────────────────────────────────────
+//
+// Open the device and put the weights on it — the part of embed_open_dev
+// that `embed_unload` undoes and `embed_reload` redoes. The config and the
+// tokenizer are not touched: they are the engine; the weights are what it
+// holds. `gpu` is the ordinal the caller named at open (-1 = best).
+@ __em_load_weights * Embed e → !v String {
+    : s dir ( string_data . e dir )
+    : i gpu . e gpu
     // device: the one the caller named, else the BEST one — not driver
     // ordinal 0. On a box with an old card in front of a new one — a
     // 4 GB GTX 970 ahead of a 24 GB RTX 4090 — ordinal 0 is where 2.3 GB
@@ -225,12 +312,17 @@ $ `deps/tokenizer/src/unigram.nu`
     ? >= gpu 0 {
         = . e kit ( gk_open gpu )
         ? & ( gk_ok . e kit ) != 0 ( nurl_str_eq ( gk_backend . e kit ) `cuda` ) {} {
-            ( embed_close e )
-            ^ ( __em_err `embed: --gpu: not a usable CUDA device ordinal (note: CUDA order is fastest-first, not nvidia-smi's PCI order)` )
+            ( gk_close . e kit )
+            = . e kit # *GpuKit 0
+            ^ @ !v String { F ( string_from `embed: --gpu: not a usable CUDA device ordinal (note: CUDA order is fastest-first, not nvidia-smi's PCI order)` ) }
         }
     } {
         = . e kit ( gk_open_best )
-        ? ( gk_ok . e kit ) {} { ( embed_close e ) ^ ( __em_err `embed: no compute device (CUDA or CPU backend)` ) }
+        ? ( gk_ok . e kit ) {} {
+            ( gk_close . e kit )
+            = . e kit # *GpuKit 0
+            ^ @ !v String { F ( string_from `embed: no compute device (CUDA or CPU backend)` ) }
+        }
     }
     // weights
     : String stp ( __em_path dir `model.safetensors` )
@@ -238,6 +330,7 @@ $ `deps/tokenizer/src/unigram.nu`
     ?? ( st_open ( string_data stp ) ) {
         T s2 → {
             = st_ok T
+            ( vec_clear [GpuCopy] . e up_q )
             = . e wemb ( __em_up e s2 `embeddings.word_embeddings.weight` )
             = . e pemb ( __em_up e s2 `embeddings.position_embeddings.weight` )
             = . e temb ( __em_up e s2 `embeddings.token_type_embeddings.weight` )
@@ -266,17 +359,52 @@ $ `deps/tokenizer/src/unigram.nu`
                 ( vec_push [EmbedLayer] . e layers lay )
                 = l + l 1
             }
+            // every tensor is known and carved: one streamed upload for all
+            // of them, then the file goes back
+            ? . e ok {
+                ? == ( gpu_upload_batch . e up_q ) 0 {} { = . e ok F }
+            } {}
+            ( vec_clear [GpuCopy] . e up_q )
+            // the staging pair is 128 MB of page-locked host memory; a
+            // loader that is done loading gives it back
+            ( gpu_staging_free )
             ( st_close s2 )
         }
         F se → { ( string_free se ) }
     }
     ( string_free stp )
     ? & st_ok . e ok {} {
-        ( embed_close e )
-        ^ ( __em_err `embed: model.safetensors missing, or a tensor absent / not f32` )
+        ( embed_unload e )
+        = . e ok T
+        ^ @ !v String { F ( string_from `embed: model.safetensors missing, or a tensor absent / not f32` ) }
     }
-    ^ @ !*Embed String { T e }
+    = . e loaded T
+    ^ @ !v String { T 0 }
 }
+
+// Give the device back: every weight (the arena chunks), the kit — its
+// buffer pool, its kernels, the CUDA context. What stays is the engine:
+// config, tokenizer, the model dir for the reload. Idempotent.
+@ embed_unload * Embed e → v {
+    ? . e loaded {} {
+        ? != # i . e kit 0 { ( gk_close . e kit ) = . e kit # *GpuKit 0 } {}
+        ^ {}
+    }
+    ( __em_arena_free e )
+    ( vec_clear [EmbedLayer] . e layers )
+    ( gk_close . e kit )
+    = . e kit # *GpuKit 0
+    = . e loaded F
+}
+
+// Bring the weights back after embed_unload. F carries the loader's
+// message; the engine stays usable for tokenizing either way.
+@ embed_reload * Embed e → !v String {
+    ? . e loaded { ^ @ !v String { T 0 } } {}
+    ^ ( __em_load_weights e )
+}
+
+@ embed_loaded * Embed e → b { ^ . e loaded }
 
 // Pooling override: mode EM_POOL_CLS | EM_POOL_MEAN, normalize on/off.
 // (cfg is an inline struct; a field write through two levels is not an
@@ -300,38 +428,20 @@ $ `deps/tokenizer/src/unigram.nu`
 
 @ embed_ok * Embed e → b { ^ . e ok }
 
-@ embed_backend * Embed e → s { ^ ( gk_backend . e kit ) }
+@ embed_backend * Embed e → s { ? . e loaded { ^ ( gk_backend . e kit ) } { ^ `none` } }
 
-@ embed_device_name * Embed e → s { ^ ( gk_device_name . e kit ) }
+@ embed_device_name * Embed e → s { ? . e loaded { ^ ( gk_device_name . e kit ) } { ^ `none (weights unloaded)` } }
 
 @ embed_maxseq * Embed e → i { ^ . . e cfg maxseq }
 
-@ __em_free_buf GkBuf b → v { ( gk_dbuf_free b ) }
-
 @ embed_close * Embed e → v {
-    ( __em_free_buf . e wemb ) ( __em_free_buf . e pemb ) ( __em_free_buf . e temb )
-    ( __em_free_buf . e elnw ) ( __em_free_buf . e elnb )
-    : i n ( vec_len [EmbedLayer] . e layers )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [EmbedLayer] . e layers k ) {
-            T l → {
-                ( __em_free_buf . l qw ) ( __em_free_buf . l qb )
-                ( __em_free_buf . l kw ) ( __em_free_buf . l kb )
-                ( __em_free_buf . l vw ) ( __em_free_buf . l vb )
-                ( __em_free_buf . l ow ) ( __em_free_buf . l ob )
-                ( __em_free_buf . l ln1w ) ( __em_free_buf . l ln1b )
-                ( __em_free_buf . l iw ) ( __em_free_buf . l ib )
-                ( __em_free_buf . l dw ) ( __em_free_buf . l db )
-                ( __em_free_buf . l ln2w ) ( __em_free_buf . l ln2b )
-            }
-            F → {}
-        }
-        = k + k 1
-    }
+    ( embed_unload e )
     ( vec_free [EmbedLayer] . e layers )
+    ( vec_free [i] . e arena )
+    ( vec_free [i] . e arenasz )
+    ( vec_free [GpuCopy] . e up_q )
+    ( string_free . e dir )
     ? . e has_tok { ( uni_free . e tok ) } {}
-    ? != # i . e kit 0 { ( gk_close . e kit ) } {}
     ( nurl_free # *u e )
 }
 

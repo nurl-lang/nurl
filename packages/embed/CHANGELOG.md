@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.4.0
+
+The server learns to let go of the weights, and the load path stops
+allocating one buffer per tensor.
+
+- **`--unload-after S`.** After S idle seconds with nothing queued, the
+  model thread — the one thread that touches the device — gives the
+  device back: the weight arena, gpukit's buffer pool, its kernels, the
+  CUDA context (`embed_unload`). A job arriving at an unloaded engine
+  reloads first (`embed_reload`). The tokenizer and the config stay, so
+  requests tokenize on their fibers as before; only the forward waits.
+  Idle: ~160 MB RSS, 0 MB VRAM (BGE-M3: 2.6 GB given back). Reload 0.63 s
+  on an RTX 4090 from the page cache; the first request after a sleep
+  answers in 0.67 s. A ticker thread wakes the model thread five times a
+  second while the flag is on, since the request cond alone would let it
+  sleep past the limit. `/health` gains `unload_after_s`, `loads`,
+  `unloads`, `last_load_ms`, `idle_s`; `model_loaded` now means the
+  weights, and `device` is `none` while they are gone. Default `0` = as
+  before.
+
+- **The weight arena.** Every tensor was its own `gk_dbuf_new` — 389
+  pooled allocations for BGE-M3 and, since the pool is exact-size, 389
+  blocks that an unload would have had to hand back one `cuMemFree` at a
+  time. Weights are now carved from 128 MB device chunks (the 1 GB word
+  embedding gets its own) — ~20 allocations, ~20 frees. Activations still
+  come from the pool.
+
+- **One streamed upload.** All tensors are queued as they are met and
+  sent as a single `gpu_upload_batch` (gpu 0.13.0) out of the mmap'd
+  file, then the file is released and so is the 128 MB pinned staging
+  pair — resident RSS 337 MB → 210 MB. The load is bounded by the page
+  cache's copy bandwidth; start-to-port is 0.90 s for BGE-M3, of which
+  0.36 s is the tokenizer.
+
+- `embed_loaded`, `embed_unload`, `embed_reload` are public; the engine
+  is created by `embed_open_dev` as before and every accessor
+  (`embed_dim`, `embed_maxseq`, `embed_tokenize`) works while unloaded.
+
+Requires gpu `^0` (0.13.0 for `gpu_upload_batch` and the staging release
+on `gpu_close`).
+
 ## 0.3.1
 
 Dependency requirements now pin the **major**, matching the rest of the

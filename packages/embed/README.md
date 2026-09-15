@@ -45,7 +45,7 @@ for models pooled by averaging (multilingual-e5) pass `--pool mean`.
 | `POST /create_embedding` | `{"text": "…" \| ["…", …], "normalize": true}` → `{"embeddings": [[…]], "model": "…", "dimension": N}` |
 | | `{"texts": ["…", …]}` is accepted for the same thing |
 | `GET /create_embedding?text=…&normalize=true` | single text, query-encoded |
-| `GET /health` | `{"status":"healthy", "model", "model_loaded", "device": "cuda"\|"cpu", "dimension", "requests"}` |
+| `GET /health` | `{"status":"healthy", "model", "model_loaded", "device": "cuda"\|"cpu"\|"none", "dimension", "requests", "unload_after_s", "loads", "unloads", "last_load_ms"}` |
 | `GET /` | same as /health |
 
 **Auth.** Without `--token` the server is open — bind loopback only (the
@@ -72,8 +72,24 @@ cut, 10 min request deadline, handler panics become 500s.
 ```
 embed serve <model-dir> [--addr HOST:PORT] [--token T] [--maxseq N]
                         [--pool cls|mean] [--no-normalize] [--gpu N]
+                        [--unload-after S]
 embed text  <model-dir> <text>          # one-shot: vector as CSV on stdout
 ```
+
+**`--unload-after S`** makes the weights a thing the server *holds*
+rather than *is*: after S idle seconds — no request in flight, none
+queued — the model thread gives the device back (the weights, gpukit's
+buffer pool, its kernels, the CUDA context) and the next request reloads
+them before it runs. The tokenizer and the config never leave, so a
+request is tokenized on its own fiber exactly as before and only the
+forward waits. While idle the server is the port and ~160 MB of process
+(BGE-M3 gives back 2.6 GB of device memory); the reload costs ~0.63 s on
+an RTX 4090 with the file in the page cache, so the first request after a
+sleep answers in ~0.67 s where a warm one takes 33 ms. `/health` says
+which state it is in (`model_loaded`, plus `loads`, `unloads`,
+`last_load_ms`, `idle_s`) and stays `healthy` in both — a client should
+not treat an unloaded engine as down. Default `0` keeps the weights for
+the process's life.
 
 `--maxseq` caps tokens per text (default: the model's full context, 8192
 for BGE-M3). Long inputs truncate head-first with `</s>` re-appended,
@@ -92,7 +108,12 @@ gpu package's CPU/OpenMP backend otherwise (identical results, cosine
 1.0 between backends). `--gpu N` names a CUDA device explicitly — the
 ordinal is CUDA's, fastest first, which is *not* `nvidia-smi`'s PCI
 order. A short text embeds in ~20 ms on an RTX 4090 —
-after a one-time model load (~2.3 GB of weights) at startup.
+after a one-time model load (~2.3 GB of weights) at startup: 0.36 s of
+tokenizer, 0.14 s of CUDA context, 0.42 s of weights. The weights are
+carved from 128 MB device arenas (~20 allocations for 389 tensors) and go
+up as ONE streamed batch (`gpu_upload_batch`, gpu 0.13.0) out of the
+mmap'd file, which is then released — the upload runs at the page cache's
+own copy bandwidth and nothing else is in the way.
 
 **The sequence length is quantised.** Every buffer and every
 shape-specialised kernel in the forward is a function of the token count,
@@ -141,8 +162,8 @@ difference is entirely host-side and start-up:
 
 | | container | `embed` |
 |---|---|---|
-| host RAM | ~1.8 GB | **~350 MB** |
-| VRAM | 2.9 GB | **2.8 GB** |
+| host RAM | ~1.8 GB | **~210 MB** (~160 MB with the weights unloaded) |
+| VRAM | 2.9 GB | **2.6 GB** (0 with the weights unloaded) |
 | on disk | 17.6 GB image (model baked in) | **800 KB** + the model dir |
 | cold start to first request | ~16 s | **~1.5 s** |
 | deps | CUDA image, Python, PyTorch, sentence-transformers | libcuda, libc |

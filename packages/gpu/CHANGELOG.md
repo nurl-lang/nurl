@@ -17,6 +17,13 @@
   is uploaded one entry at a time; on CUDA the plain path is the fallback
   when the pinned pair cannot be had.
 
+- **`gpu_close` gives back the pinned staging pair.** The pair is
+  allocated in the context being closed; a program that opens the device
+  again — a server that unloads its model when idle — would otherwise
+  hand the next upload two host buffers the driver no longer knows, and
+  segfault inside the first `cuMemcpyHtoDAsync`. Found exactly that way
+  (embed 0.4.0's first reload).
+
   Tried and rejected on the way: `gpu_host_register` over a file-backed
   `MAP_PRIVATE` mapping (the read-only flag exists for exactly this). The
   driver pinned pages at ~400 KB/s — two hours for a 3 GB model — with the
