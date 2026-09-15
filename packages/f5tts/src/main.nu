@@ -262,6 +262,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
     ( args_opt p `gpu` 0 `N` `CUDA device ordinal (default: the best one)` )
     ( args_flag p `quiet` 113 `no progress on stderr` )
     ( args_flag p `profile` 0 `print per-kernel GPU timings after synthesis` )
+    ( args_flag p `short-fix` 0 `slow the duration estimate for short lines (TEKNINEN.md); off = the reference's own rule` )
     ( args_opt p `voices` 0 `DIR` `serve: the directory of voice directories` )
     ( args_opt p `addr` 0 `HOST:PORT` `serve: listen here (default 127.0.0.1:7861)` )
     ( args_opt p `token` 0 `T` `serve: require this bearer token (or $F5TTS_TOKEN)` )
@@ -285,6 +286,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i device b quiet 
         ^ 0
     } {}
     ( __f5_whisper_from p )
+    ( f5_short_fix ( args_present p `short-fix` ) )
     : i np ( args_positional_count p )
     : ( Vec String ) pos0 ( args_positionals p )
     : ~ s cmd0 ``

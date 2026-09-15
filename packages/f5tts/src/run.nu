@@ -181,9 +181,40 @@ $ `verify.nu`
 // text's length in BYTES, not characters — a Finnish umlaut counts twice, and
 // that is the reference implementation's own arithmetic, not an oversight
 // this port kept.
-@ f5_duration * F5Voice v i gen_bytes i n_text f speed → i {
+// Off by default: the reference implementation's rule is one line, and a port
+// that quietly used a different one would not be a port. What turning it on
+// does, and why it exists, is in the comment inside f5_duration.
+: ~ b g_f5r_shortfix F
+
+@ f5_short_fix b on → v { = g_f5r_shortfix on }
+
+@ f5_short_fix_on → b { ^ g_f5r_shortfix }
+
+@ f5_duration * F5Voice v s gen_text i n_text f speed → i {
+    : i gen_bytes ( nurl_str_len gen_text )
     : ~ f local speed
-    ? < gen_bytes 10 { = local 0.3 } {}
+    ? g_f5r_shortfix {
+        // The remedy ~/dev/F5-TTS/TEKNINEN.md works out. The reference's own
+        // rule slows the duration estimate for text under TEN bytes; a
+        // two-word Finnish line is twelve. It lands just outside, gets its
+        // linear share of the reference's speaking rate — six tenths of a
+        // second — and the model runs out of room before it has settled, so
+        // what comes back is silence. Measured on this checkpoint: "Miten
+        // menee." and "Onko hyvä?" are inaudible, while "Menee?" (six bytes,
+        // and therefore slowed) is fine.
+        : i wc ( f5_word_count gen_text )
+        ? | < wc 4 < gen_bytes 7 {
+            ? <= gen_bytes 4 { = local 0.1 } {
+                ? <= gen_bytes 7 { = local 0.2 } {
+                    ? <= wc 2 { = local 0.25 } { = local 0.3 }
+                }
+            }
+        } {
+            ? < gen_bytes 15 { = local 0.5 } {}
+        }
+    } {
+        ? < gen_bytes 10 { = local 0.3 } {}
+    }
     : i ref_audio_len / . v samples F5_HOP
     : i rb ( nurl_str_len ( string_data . v text ) )
     : ~ i d ref_audio_len
@@ -193,6 +224,12 @@ $ `verify.nu`
     // at least the text's own length, and at least the conditioning, plus one
     : i floor1 + ? > n_text . v frames n_text . v frames 1
     ? < d floor1 { = d floor1 } {}
+    ? g_f5r_shortfix {
+        // and a floor: eight tenths of a second of generated audio, whatever
+        // the linear estimate said
+        : i floor2 + ref_audio_len / / * 8 F5_SR 10 F5_HOP
+        ? < d floor2 { = d floor2 } {}
+    } {}
     ? > d 4096 { = d 4096 } {}
     ^ d
 }
@@ -209,7 +246,7 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
     ( f5_text_ids vocab ( string_data full ) ids )
     ( string_free full )
     : i gen_bytes ( nurl_str_len gen_text )
-    : i duration ( f5_duration v gen_bytes ( vec_len [i] ids ) speed )
+    : i duration ( f5_duration v gen_text ( vec_len [i] ids ) speed )
     : ( Vec f ) noise ( f5_noise duration 100 seed )
     : ( Vec f ) y ( vec_new [f] )
     : b ok ( f5_sample m ids duration . v mel steps cfg sway noise y )
