@@ -1,5 +1,11 @@
 # hub changelog
 
+## 0.1.4
+
+`hub --version` says 0.1.4 — the literal in main.nu had not moved with the
+manifest, so the 0.1.3 binary reports 0.1.2 (the repo's version-string
+gate caught it in CI, after the publish). Otherwise identical to 0.1.3.
+
 ## 0.1.3
 
 `hub_ref_free` and `hub_file_free` take **`sink`** parameters: a free
