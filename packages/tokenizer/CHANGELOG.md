@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3
+
+`tok_free` and `uni_free` take **`sink`** parameters: a free function must consume the
+handle it releases, so the compiler-ownership hardening in the toolchain
+(#1107) can prove the caller cannot use it again. The change landed in the
+monorepo with that PR but this package was never republished, so the
+registry kept serving 0.3.2 — the same source minus this one keyword. No
+behaviour change; republished so dependents built against the monorepo
+(whisper 1.2.0, embed 0.4.0) pass the publish gate's byte-identity check.
+
 ## 0.3.2
 
 Unigram encoding was quadratic in the length of the text, twice over.

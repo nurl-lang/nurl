@@ -1,5 +1,22 @@
 # hub changelog
 
+## 0.1.4
+
+`hub --version` says 0.1.4 — the literal in main.nu had not moved with the
+manifest, so the 0.1.3 binary reports 0.1.2 (the repo's version-string
+gate caught it in CI, after the publish). Otherwise identical to 0.1.3.
+
+## 0.1.3
+
+`hub_ref_free` and `hub_file_free` take **`sink`** parameters: a free
+function must consume the handle it releases, so the compiler-ownership
+hardening in the toolchain (#1107) can prove the caller cannot use it
+again. The change landed in the monorepo with that PR but this package was
+never republished, so the registry kept serving 0.1.2 — the same source
+minus this one keyword. No behaviour change; republished so dependents
+built against the monorepo (whisper 1.2.0, embed 0.4.0) pass the publish
+gate's byte-identity check.
+
 ## 0.1.1
 
 - Add `hub_get` — the one call a consumer wants: an existing local file or

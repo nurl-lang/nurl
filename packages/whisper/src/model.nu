@@ -25,6 +25,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/std/fs.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/safetensor/src/safetensor.nu`
+$ `src/ggml.nu`
 $ `src/kernels.nu`
 
 : Whisper {

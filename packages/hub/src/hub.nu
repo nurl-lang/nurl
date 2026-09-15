@@ -17,6 +17,9 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/progress.nu`
 $ `stdlib/ext/json.nu`
+$ `store.nu`
+$ `hf.nu`
+$ `pull.nu`
 
 // This package is multiple files (store / hf / pull / hub). Following the
 // ecosystem convention for a CONSUMED library, a source file does not
