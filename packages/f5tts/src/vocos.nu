@@ -276,14 +276,14 @@ $ `kernels.nu`
     : GkBuf spec ( __voc_view . v spec 0 * frames + . v nfft 2 )
     : ~ b ok ( gk_dbuf_upload . v kit melb mel )
     // the stem: one convolution across all hundred mel bands, then a norm
-    = ok & ok ( f5k_conv1d_t . v kit . melb dptr . t1 dptr . . v emb_w dptr
+    = ok & ok ( f5k_conv1d_t4 . v kit . melb dptr . t1 dptr . . v emb_w dptr
     . . v emb_b dptr 1 frames . v nmel dim 7 3 1 )
     = ok & ok ( f5k_lnaff . v kit . t1 dptr . h dptr . . v n_w dptr . . v n_b dptr
     frames dim 1.0e-6 )
     ? ok {} { ^ F }
     : ~ i L 0
     ~ < L . v layers {
-        = ok & ok ( f5k_conv1d_t . v kit . h dptr . t1 dptr ( __voc_dptr . v dw_w L )
+        = ok & ok ( f5k_conv1d_t4 . v kit . h dptr . t1 dptr ( __voc_dptr . v dw_w L )
         ( __voc_dptr . v dw_b L ) 1 frames dim dim 7 3 dim )
         = ok & ok ( f5k_lnaff . v kit . t1 dptr . t2 dptr ( __voc_dptr . v nw L )
         ( __voc_dptr . v nb L ) frames dim 1.0e-6 )

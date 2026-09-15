@@ -299,6 +299,47 @@ extern "C" __global__ void f5_conv1d(const float* x, float* y, const float* w,
 // consecutive floats instead of 32 floats 1984 apart. The arithmetic is
 // identical; the memory is a different machine. The permutation happens once,
 // while the weights are being uploaded.
+// Four POSITIONS per thread. The convolution's weights do not depend on the
+// position, so computing four of them together reads each weight once for
+// four multiply-adds instead of once for one — and this kernel is bound by
+// reading weights, not by the arithmetic: at one position per thread a warp
+// fetched 128 bytes of weights and one broadcast float to do 32 MACs.
+extern "C" __global__ void f5_conv1d_t4(const float* x, float* y, const float* w,
+                                        const float* bias, long long batch, long long n,
+                                        long long cin, long long cout, long long K,
+                                        long long pad, long long groups)
+{
+    enum { TT = 4 };
+    long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long nt = (n + TT - 1) / TT;
+    long long total = batch * nt * cout;
+    if (i >= total) return;
+    long long c = i % cout;
+    long long t0 = ((i / cout) % nt) * TT;
+    long long b = i / (cout * nt);
+    long long ipg = cin / groups;
+    long long opg = cout / groups;
+    long long gbase = (c / opg) * ipg;
+    const float* xb = x + b * n * cin;
+    float bv = bias ? bias[c] : 0.0f;
+    float acc[TT];
+    for (int p = 0; p < TT; p++) acc[p] = bv;
+    for (long long k = 0; k < K; k++) {
+        long long s0 = t0 + k - pad;
+        const float* wk = w + k * ipg * cout + c;
+        for (long long j = 0; j < ipg; j++) {
+            float wv = wk[j * cout];
+            const float* xs = xb + s0 * cin + gbase + j;
+            for (int p = 0; p < TT; p++) {
+                long long sp = s0 + p;
+                if (sp >= 0 && sp < n) acc[p] += wv * xs[(long long)p * cin];
+            }
+        }
+    }
+    long long base = (b * n + t0) * cout + c;
+    for (int p = 0; p < TT; p++) if (t0 + p < n) y[base + (long long)p * cout] = acc[p];
+}
+
 extern "C" __global__ void f5_conv1d_t(const float* x, float* y, const float* w,
                                        const float* bias, long long batch, long long n,
                                        long long cin, long long cout, long long K,
@@ -580,6 +621,27 @@ i dorope i stride i coff → b {
 }
 
 // The transposed-weight form. Same arguments, same result.
+// The four-position form. Same weights, same result, a quarter of the weight
+// traffic.
+@ f5k_conv1d_t4 * GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a xd )
+    ( vec_push [i] a yd )
+    ( vec_push [i] a wd )
+    ( vec_push [i] a bd )
+    ( vec_push [i] a ( gpu_arg_i64 batch ) )
+    ( vec_push [i] a ( gpu_arg_i64 n ) )
+    ( vec_push [i] a ( gpu_arg_i64 cin ) )
+    ( vec_push [i] a ( gpu_arg_i64 cout ) )
+    ( vec_push [i] a ( gpu_arg_i64 K ) )
+    ( vec_push [i] a ( gpu_arg_i64 pad ) )
+    ( vec_push [i] a ( gpu_arg_i64 groups ) )
+    : i tot * * batch / + n 3 4 cout
+    : b r ( gk_run_dev kit ( __f5k_convs ) `f5_conv1d_t4` ( gk_grid tot 256 ) 256 a )
+    ( vec_free [i] a )
+    ^ r
+}
+
 @ f5k_conv1d_t * GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )

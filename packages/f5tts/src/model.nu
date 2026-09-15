@@ -747,7 +747,7 @@ $ `kernels.nu`
     : GkBuf t2 ( __f5m_view . m tscr2 0 * rows td )
     : GkBuf t3 ( __f5m_view . m tscr3 0 * rows td )
     : GkBuf big ( __f5m_view . m tscr 0 * rows inner )
-    : ~ b ok ( f5k_conv1d_t . m kit . x dptr . t2 dptr
+    : ~ b ok ( f5k_conv1d_t4 . m kit . x dptr . t2 dptr
     ( __f5m_dptr . m tb_dw_w idx ) ( __f5m_dptr . m tb_dw_b idx ) 1 rows td td 7 3 td )
     = ok & ok ( f5k_lnaff . m kit . t2 dptr . t3 dptr
     ( __f5m_dptr . m tb_n_w idx ) ( __f5m_dptr . m tb_n_b idx ) rows td 1.0e-6 )
@@ -889,10 +889,10 @@ $ `kernels.nu`
     . . m txt2 dptr . cat dptr batch n mel td )
     = ok & ok ( gkd_gemm . m kit h cat . m ie_w . m ie_b 1 rows dim + * 2 mel td 1.0 1.0 1 )
     // the convolutional position embedding, added as a residual
-    = ok & ok ( f5k_conv1d_t . m kit . h dptr . tmp dptr . . m cp0_w dptr
+    = ok & ok ( f5k_conv1d_t4 . m kit . h dptr . tmp dptr . . m cp0_w dptr
     . . m cp0_b dptr batch n dim dim 31 15 16 )
     = ok & ok ( f5k_mish . m kit . tmp dptr * rows dim )
-    = ok & ok ( f5k_conv1d_t . m kit . tmp dptr . hn dptr . . m cp2_w dptr
+    = ok & ok ( f5k_conv1d_t4 . m kit . tmp dptr . hn dptr . . m cp2_w dptr
     . . m cp2_b dptr batch n dim dim 31 15 16 )
     = ok & ok ( f5k_mish . m kit . hn dptr * rows dim )
     = ok & ok ( f5k_addinto . m kit . h dptr . hn dptr * rows dim )
