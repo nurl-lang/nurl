@@ -207,7 +207,7 @@ $ `store.nu`
     : i gen_bytes ( nurl_str_len gen_text )
     : ~ f local speed
     ? g_f5r_shortfix {
-        // The remedy ~/dev/F5-TTS/TEKNINEN.md works out. The reference's own
+        // The remedy the upstream project's own notes work out. The reference's
         // rule slows the duration estimate for text under TEN bytes; a
         // two-word Finnish line is twelve. It lands just outside, gets its
         // linear share of the reference's speaking rate — six tenths of a
@@ -605,7 +605,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out �
 // ── finding the weights ─────────────────────────────────────────────
 //
 // A checkpoint argument is a local file, a local directory holding one, or a
-// Hugging Face reference — `SWivid/F5-TTS/F5TTS_v1_Base/model_1250000.safetensors`
+// repository reference — `owner/repo/path/to/model.safetensors`
 // names a single file in a repo and is fetched into the shared ~/.nurl cache.
 // The vocabulary is looked for beside whatever the checkpoint turned out to
 // be, because that is where every F5-TTS release puts it.

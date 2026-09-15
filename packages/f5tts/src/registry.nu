@@ -1,20 +1,29 @@
 // packages/f5tts/src/registry.nu — which models this machine can speak with.
 //
-// Two kinds, and a request naming either by id gets the same answer:
+// There is no built-in catalogue. This package names no checkpoint, ships no
+// list of "known" models and has no default one, because a speech model is a
+// choice about a language, a voice and a licence, and none of those are this
+// program's to make. A model is named in one of three ways and they are tried
+// in that order:
 //
-//   LOCAL — a directory under ~/.f5tts/models holding a checkpoint and its
-//           vocab.txt. This is where a finetune lands, or a training run's
-//           output, or a file somebody copied off another machine. The id is
-//           the directory's name.
+//   A PATH        an existing file or a directory holding a checkpoint and a
+//                 vocab.txt. Whatever is on the disk.
 //
-//   KNOWN — a Hugging Face reference this package ships the address of. The
-//           id is a short name; asking for it fetches the checkpoint and its
-//           vocabulary into the shared ~/.nurl/models cache the first time
-//           and costs nothing after that.
+//   A LOCAL ID    the name of a directory under ~/.f5tts/models. This is
+//                 where a fine-tune lands, or a training run's output, or a
+//                 file copied off another machine. `GET /models` lists these.
 //
-// A fresh machine has no local models and every known one available, which is
-// the state this is designed around: `f5tts serve` on a machine that has just
-// installed it works, and the first request pays the download.
+//   A REFERENCE   owner/repo/path-to-file, which the hub fetches into the
+//                 shared ~/.nurl/models cache the first time and costs
+//                 nothing after that. The vocabulary is taken to be
+//                 `vocab.txt` beside the checkpoint in the same repository,
+//                 which is how every F5-TTS release is laid out; name it with
+//                 --vocab when it is not.
+//
+// A fresh machine has no local models and can reach any reference, which is
+// the state this is designed around: `f5tts serve --model <reference>` on a
+// machine that has just installed it works, and the first request pays the
+// download.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
@@ -29,10 +38,10 @@ $ `store.nu`
 
 : F5Entry {
     String id
-    String ckpt  // a local path, or a Hugging Face ref
+    String ckpt  // a local path, or a Hugging Face reference
     String vocab  // the same
-    b local
-    b cached  // a known model whose files are already on the machine
+    b local  // a directory under the models dir rather than a reference
+    b cached  // the files are on this machine already
 }
 
 @ f5_entry_free F5Entry e → v {
@@ -47,25 +56,38 @@ $ `store.nu`
     } )
 }
 
-// The addresses this package knows. Each names ONE file in a repo, so the
-// hub fetches a file rather than a whole tree — an F5-TTS repo carries every
-// release it ever made and most of them are not wanted.
-@ f5_known ( Vec F5Entry ) out → v {
-    ( __f5g_push out `F5TTS_v1_Base`
-    `SWivid/F5-TTS/F5TTS_v1_Base/model_1250000.safetensors`
-    `SWivid/F5-TTS/F5TTS_v1_Base/vocab.txt` F F )
-    ( __f5g_push out `F5TTS_Base`
-    `SWivid/F5-TTS/F5TTS_Base/model_1200000.safetensors`
-    `SWivid/F5-TTS/F5TTS_Base/vocab.txt` F F )
-    ( __f5g_push out `E2TTS_Base`
-    `SWivid/E2-TTS/E2TTS_Base/model_1200000.safetensors`
-    `SWivid/E2-TTS/E2TTS_Base/vocab.txt` F F )
-    ( __f5g_push out `Finnish_Model_v2_20250323`
-    `AsmoKoskinen/F5-TTS_Finnish_Model/model_commonvoice_fi_librivox_fi_vox_populi_fi_20250323/model_last_20250323.safetensors`
-    `AsmoKoskinen/F5-TTS_Finnish_Model/model_commonvoice_fi_librivox_fi_vox_populi_fi_20250323/vocab.txt` F F )
-    ( __f5g_push out `Finnish_Model_v1_20241217`
-    `AsmoKoskinen/F5-TTS_Finnish_Model/model_commonvoice_fi_librivox_fi_vox_populi_fi_20241217/model_last_20241217.safetensors`
-    `AsmoKoskinen/F5-TTS_Finnish_Model/model_commonvoice_fi_librivox_fi_vox_populi_fi_20241217/vocab.txt` F F )
+// An owner/repo/file reference rather than a plain name: a separator makes it
+// one, and `f5_id_ok` has already refused the separator to a local id, so the
+// two can never be confused.
+@ f5_is_reference s id → b {
+    : i n ( nurl_str_len id )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get id k )
+        ? == c 47 { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// vocab.txt beside the checkpoint, in whatever names the checkpoint —
+// a repository reference or a directory on this machine.
+@ f5_vocab_beside s ckpt_ref → String {
+    : i n ( nurl_str_len ckpt_ref )
+    : ~ i cut -1
+    : ~ i k 0
+    ~ < k n {
+        ? == ( nurl_str_get ckpt_ref k ) 47 { = cut k } {}
+        = k + k 1
+    }
+    : String out ( string_new )
+    : ~ i j 0
+    ~ <= j cut {
+        ( string_push_char out ( nurl_str_get ckpt_ref j ) )
+        = j + j 1
+    }
+    ( string_push_str out `vocab.txt` )
+    ^ out
 }
 
 @ __f5g_find_ckpt s dir → String {
@@ -99,7 +121,8 @@ $ `store.nu`
     ^ found
 }
 
-// Everything this machine can speak with right now, local first.
+// Everything this machine has on its own disk. A reference the machine has
+// fetched is not here — it belongs to whoever asked for it, by name.
 @ f5_registry s models_dir → ( Vec F5Entry ) {
     : ( Vec F5Entry ) out ( vec_new [F5Entry] )
     ?? ( dir_list models_dir ) {
@@ -133,29 +156,6 @@ $ `store.nu`
         }
         F _e → {}
     }
-    : ( Vec F5Entry ) known ( vec_new [F5Entry] )
-    ( f5_known known )
-    : ~ i k 0
-    ~ < k ( vec_len [F5Entry] known ) {
-        ?? ( vec_get [F5Entry] known k ) {
-            T e → {
-                // a local model of the same name wins: it is the one somebody
-                // put on this machine on purpose
-                ? ( f5_registry_has out ( string_data . e id ) ) {} {
-                    : b have ?? ( hub_path ( string_data . e ckpt ) ) {
-                        T p → { ( string_free p ) T }
-                        F → { F }
-                    }
-                    ( __f5g_push out ( string_data . e id ) ( string_data . e ckpt )
-                    ( string_data . e vocab ) F have )
-                }
-                ( f5_entry_free e )
-            }
-            F → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [F5Entry] known )
     ^ out
 }
 
@@ -180,10 +180,11 @@ $ `store.nu`
     ( vec_free [F5Entry] v )
 }
 
-// Resolve an id to the two local paths a model needs, fetching if the id
-// names a known model this machine has not pulled yet. Empty ckpt = no such
+// Resolve a name to the two paths a model needs, fetching if the name is a
+// repository reference this machine has not pulled yet. False = no such
 // model, or the fetch failed (which is reported on stderr).
 @ f5_registry_resolve s models_dir s id String ckpt_out String vocab_out → b {
+    ? == 0 ( nurl_str_len id ) { ^ F } {}
     : ( Vec F5Entry ) reg ( f5_registry models_dir )
     : ~ b ok F
     : ~ i k 0
@@ -191,35 +192,9 @@ $ `store.nu`
         ?? ( vec_get [F5Entry] reg k ) {
             T e → {
                 ? & ! ok != 0 ( nurl_str_eq ( string_data . e id ) id ) {
-                    ? . e local {
-                        ( string_push_str ckpt_out ( string_data . e ckpt ) )
-                        ( string_push_str vocab_out ( string_data . e vocab ) )
-                        = ok T
-                    } {
-                        // a known model: the hub turns the reference into a path,
-                        // downloading it the first time
-                        ?? ( hub_get ( string_data . e ckpt ) ) {
-                            T cp → {
-                                ?? ( hub_get ( string_data . e vocab ) ) {
-                                    T vp → {
-                                        ( string_push_str ckpt_out ( string_data cp ) )
-                                        ( string_push_str vocab_out ( string_data vp ) )
-                                        = ok T
-                                        ( string_free vp )
-                                    }
-                                    F ve → {
-                                        ( nurl_eprintln ( string_data ve ) )
-                                        ( string_free ve )
-                                    }
-                                }
-                                ( string_free cp )
-                            }
-                            F ce → {
-                                ( nurl_eprintln ( string_data ce ) )
-                                ( string_free ce )
-                            }
-                        }
-                    }
+                    ( string_push_str ckpt_out ( string_data . e ckpt ) )
+                    ( string_push_str vocab_out ( string_data . e vocab ) )
+                    = ok T
                 } {}
             }
             F → {}
@@ -227,5 +202,32 @@ $ `store.nu`
         = k + k 1
     }
     ( f5_registry_free reg )
+    ? ok { ^ T } {}
+    ? ( f5_is_reference id ) {} { ^ F }
+    // a repository reference: the hub turns it into a path, downloading the
+    // file the first time and nothing after that
+    : String vref ( f5_vocab_beside id )
+    ?? ( hub_get id ) {
+        T cp → {
+            ?? ( hub_get ( string_data vref ) ) {
+                T vp → {
+                    ( string_push_str ckpt_out ( string_data cp ) )
+                    ( string_push_str vocab_out ( string_data vp ) )
+                    = ok T
+                    ( string_free vp )
+                }
+                F ve → {
+                    ( nurl_eprintln ( string_data ve ) )
+                    ( string_free ve )
+                }
+            }
+            ( string_free cp )
+        }
+        F ce → {
+            ( nurl_eprintln ( string_data ce ) )
+            ( string_free ce )
+        }
+    }
+    ( string_free vref )
     ^ ok
 }

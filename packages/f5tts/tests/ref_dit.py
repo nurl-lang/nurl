@@ -1,18 +1,39 @@
 #!/usr/bin/env python
 """Reference dump of one F5-TTS DiT forward pass, layer by layer.
 
-Loads the deployed Finnish checkpoint with the config dialogue_api.py uses,
-runs one forward with fixed inputs, and writes every intermediate as raw
-little-endian f32 so the NURL port can be compared against it tensor by
-tensor.  Imports the model modules by path so f5_tts/model/__init__.py (which
+Runs one forward with fixed inputs and writes every intermediate as raw
+little-endian f32, so the NURL port can be compared against it tensor by
+tensor. Imports the model modules by path so f5_tts/model/__init__.py (which
 drags in the trainer, wandb and accelerate) never runs.
+
+Environment:
+  F5TTS_SRC    the reference F5-TTS source tree (the directory holding model/)
+  F5TTS_CKPT   the checkpoint to dump
+  F5TTS_VOCAB  its vocabulary (default: vocab.txt beside the checkpoint)
+  F5TTS_REF_TEXT / F5TTS_GEN_TEXT  the two fixed strings (defaults below)
+
+The default strings are deliberately full of letters outside jieba's character
+class, because that is where the text front-end does something surprising and
+where a port is most likely to disagree.
 """
 import sys, types, os, json, warnings
 warnings.filterwarnings("ignore")
 import numpy as np
 import torch
 
-SRC = "/home/wau/dev/F5-TTS/src/f5_tts"
+
+def _env(name, what):
+    v = os.environ.get(name, "")
+    if not v:
+        sys.exit("%s is not set: %s" % (name, what))
+    return v
+
+
+# Nothing here is hardcoded to one machine or one checkpoint. Point these at
+# whatever F5-TTS tree and weights you are comparing against.
+SRC = _env("F5TTS_SRC", "the reference F5-TTS source tree, the directory holding model/")
+CKPT = _env("F5TTS_CKPT", "the checkpoint to dump, a .safetensors file")
+VOCAB = os.environ.get("F5TTS_VOCAB", "") or os.path.join(os.path.dirname(CKPT), "vocab.txt")
 pkg = types.ModuleType("f5_tts"); pkg.__path__ = [SRC]; sys.modules["f5_tts"] = pkg
 mp = types.ModuleType("f5_tts.model"); mp.__path__ = [SRC + "/model"]; sys.modules["f5_tts.model"] = mp
 bp = types.ModuleType("f5_tts.model.backbones"); bp.__path__ = [SRC + "/model/backbones"]
@@ -21,10 +42,6 @@ sys.modules["f5_tts.model.backbones"] = bp
 from f5_tts.model.backbones.dit import DiT
 from f5_tts.model.utils import get_tokenizer, convert_char_to_pinyin
 
-CKPT = ("/home/wau/dev/F5-TTS/models/models--AsmoKoskinen--F5-TTS_Finnish_Model/snapshots/"
-        "cba9413e3c8ebe3e8f89513ad43510f97decac29/"
-        "model_commonvoice_fi_librivox_fi_vox_populi_fi_20250323/model_last_20250323.safetensors")
-VOCAB = os.path.join(os.path.dirname(CKPT), "vocab.txt")
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/f5ref"
 os.makedirs(OUT, exist_ok=True)
 
@@ -47,8 +64,8 @@ print("missing", missing)
 print("unexpected", unexpected)
 
 # fixed, reproducible inputs
-ref_text = "Yöllä hiljaisessa mökissä kuuntelin tuulta. "
-gen_text = "Hei, tämä on koe."
+ref_text = os.environ.get("F5TTS_REF_TEXT", "Yöllä hiljaisessa mökissä kuuntelin tuulta. ")
+gen_text = os.environ.get("F5TTS_GEN_TEXT", "Hei, tämä on koe.")
 chars = convert_char_to_pinyin([ref_text + gen_text])
 text = torch.tensor([[vocab_char_map.get(c, 0) for c in chars[0]]], dtype=torch.long)
 nt = text.shape[1]

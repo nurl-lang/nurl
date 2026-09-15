@@ -1,7 +1,8 @@
 // packages/f5tts — F5-TTS, the flow-matching text-to-speech model, in pure
 // NURL. CLI:
 //
-//   f5tts synth  --voice DIR --text "..." -o out.wav   (or out.mp3)
+//   f5tts synth  --model NAME --vocoder NAME --voice DIR --text "..." -o out.wav
+//   f5tts serve  --model NAME --vocoder NAME [--addr H:P]
 //   f5tts tokens <vocab.txt> <file>    one line of ids per line of the file
 //   f5tts chunks <file> --max N        the text split the way F5-TTS splits it
 
@@ -25,12 +26,21 @@ $ `store.nu`
 $ `registry.nu`
 $ `verify.nu`
 
-// The official release, so the tool works with no model flags at all. Both
-// are Hugging Face refs naming ONE file in a repo, which the hub fetches into
-// ~/.nurl/models and returns a path to.
-: s F5_DEFAULT_MODEL `SWivid/F5-TTS/F5TTS_v1_Base/model_1250000.safetensors`
+// This package names no checkpoint and has no default one. A speech model is
+// a choice about a language, a voice and a licence, so --model and --vocoder
+// are required and say so; see src/registry.nu for the three forms a name can
+// take.
+@ __f5_need_model → v {
+    ( nurl_eprintln `f5tts: --model is required, and takes one of three forms:` )
+    ( nurl_eprintln `  a path to a checkpoint, or to a directory holding one and its vocab.txt` )
+    ( nurl_eprintln `  the name of a directory under ~/.f5tts/models` )
+    ( nurl_eprintln `  a repository reference, owner/repo/path/to/model.safetensors, fetched on first use` )
+}
 
-: s F5_DEFAULT_VOCODER `charactr/vocos-mel-24khz/pytorch_model.bin`
+@ __f5_need_vocoder → v {
+    ( nurl_eprintln `f5tts: --vocoder is required: a path to the vocoder checkpoint, a directory` )
+    ( nurl_eprintln `holding one, or a repository reference owner/repo/path/to/pytorch_model.bin` )
+}
 
 @ __f5_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
@@ -238,7 +248,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
         ?? ( env_get `WHISPER_HOST` ) { T h → { ( string_push_str host ( string_data h ) ) } F → {} }
         ?? ( env_get `WHISPER_PORT` ) { T v → { = port ( nurl_str_to_int ( string_data v ) ) } F → {} }
     }
-    : String lang ( args_value_or p `lang` `fi` )
+    : String lang ( args_value_or p `lang` `` )
     ? > ( string_len host ) 0 {
         ( f5_whisper_set ( string_data ( string_clone host ) ) port ( string_data ( string_clone lang ) ) )
     } {}
@@ -271,9 +281,9 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
 @ main → i {
     : ArgParser p ( args_new `f5tts` `F5-TTS, the flow-matching text-to-speech model, in pure NURL.` )
     ( args_opt p `max` 0 `N` `for chunks: the byte budget per chunk (default 135)` )
-    ( args_opt p `model` 0 `PATH` `the checkpoint: a file, a directory holding one, or a Hugging Face ref` )
+    ( args_opt p `model` 0 `NAME` `REQUIRED — a path, a name under ~/.f5tts/models, or owner/repo/file` )
     ( args_opt p `vocab` 0 `PATH` `the vocabulary (default: vocab.txt beside the checkpoint)` )
-    ( args_opt p `vocoder` 0 `PATH` `the vocos checkpoint: a .bin, a directory, or a Hugging Face ref` )
+    ( args_opt p `vocoder` 0 `NAME` `REQUIRED — the vocoder checkpoint, as a path or owner/repo/file` )
     ( args_opt p `voice` 0 `DIR` `a voice directory: config.json + reference.wav` )
     ( args_opt p `text` 116 `TEXT` `what to say` )
     ( args_opt p `output` 111 `FILE` `where to write the audio; a .mp3 name is encoded as mp3 (default out.wav)` )
@@ -287,7 +297,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     ( args_opt p `gpu` 0 `N` `CUDA device ordinal (default: the best one)` )
     ( args_flag p `quiet` 113 `no progress on stderr` )
     ( args_flag p `profile` 0 `print per-kernel GPU timings after synthesis` )
-    ( args_flag p `short-fix` 0 `slow the duration estimate for short lines (TEKNINEN.md); off = the reference's own rule` )
+    ( args_flag p `short-fix` 0 `give short lines more time; off = the reference's own duration rule` )
     ( args_opt p `voices` 0 `DIR` `serve: the voices directory (default ~/.f5tts/voices)` )
     ( args_opt p `models` 0 `DIR` `serve: the local models directory (default ~/.f5tts/models)` )
     ( args_opt p `addr` 0 `HOST:PORT` `serve: listen here (default 127.0.0.1:7861)` )
@@ -296,7 +306,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     ( args_opt p `whisper` 0 `HOST:PORT` `a transcriber to check the result against (or $WHISPER_HOST/$WHISPER_PORT)` )
     ( args_opt p `retries` 0 `N` `attempts per chunk when the transcriber disagrees (default 1)` )
     ( args_opt p `max-wer` 0 `X` `word error rate that buys another attempt (default 0.15)` )
-    ( args_opt p `lang` 0 `L` `the transcriber's language (default fi)` )
+    ( args_opt p `lang` 0 `L` `the transcriber's language (default: let it detect one)` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -306,7 +316,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  synth --voice DIR --text TEXT -o out.wav\n  serve --voices DIR [--addr H:P] [--token T] [--unload-after S]\n  tokens <vocab.txt> <file>   one line of vocabulary ids per line of text\n  chunks <file> [--max N]     the text split the way F5-TTS splits it\n` )
+        ( nurl_print `\ncommands:\n  synth --model NAME --vocoder NAME --voice DIR --text TEXT -o out.wav\n  serve --model NAME --vocoder NAME [--addr H:P] [--token T] [--unload-after S]\n  tokens <vocab.txt> <file>   one line of vocabulary ids per line of text\n  chunks <file> [--max N]     the text split the way F5-TTS splits it\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -318,9 +328,21 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     : ~ s cmd0 ``
     ? >= np 1 { ?? ( vec_get [String] pos0 0 ) { T c → { = cmd0 ( string_data c ) } F → {} } } {}
     ? ( nurl_str_eq cmd0 `serve` ) {
-        : String smodel ( args_value_or p `model` F5_DEFAULT_MODEL )
+        : String smodel ( args_value_or p `model` `` )
         : String svocab ( args_value_or p `vocab` `` )
-        : String svoc ( args_value_or p `vocoder` F5_DEFAULT_VOCODER )
+        : String svoc ( args_value_or p `vocoder` `` )
+        ? == 0 ( string_len smodel ) {
+            ( __f5_need_model )
+            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
+            ( args_free p )
+            ^ 2
+        } {}
+        ? == 0 ( string_len svoc ) {
+            ( __f5_need_vocoder )
+            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
+            ( args_free p )
+            ^ 2
+        } {}
         : String svoices ( args_value_or p `voices` `` )
         ? == 0 ( string_len svoices ) {
             ( f5_ensure_dirs )
@@ -398,9 +420,21 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
         ^ rc
     } {}
     ? ( nurl_str_eq cmd0 `synth` ) {
-        : String smodel ( args_value_or p `model` F5_DEFAULT_MODEL )
+        : String smodel ( args_value_or p `model` `` )
         : String svocab ( args_value_or p `vocab` `` )
-        : String svoc ( args_value_or p `vocoder` F5_DEFAULT_VOCODER )
+        : String svoc ( args_value_or p `vocoder` `` )
+        ? == 0 ( string_len smodel ) {
+            ( __f5_need_model )
+            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
+            ( args_free p )
+            ^ 2
+        } {}
+        ? == 0 ( string_len svoc ) {
+            ( __f5_need_vocoder )
+            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
+            ( args_free p )
+            ^ 2
+        } {}
         : String svoice ( args_value_or p `voice` `` )
         : String stext ( args_value_or p `text` `` )
         : ~ i kbps 128
@@ -474,7 +508,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
             ( string_free vp )
             ( string_free cp )
         } {
-            ( nurl_eprintln `usage: f5tts synth --voice DIR --text TEXT -o out.wav [--model REF] [--vocoder REF]` )
+            ( nurl_eprintln `usage: f5tts synth --model NAME --vocoder NAME --voice DIR --text TEXT -o out.wav` )
         }
         ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
         ( string_free svoice ) ( string_free stext ) ( string_free sout )

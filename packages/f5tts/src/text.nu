@@ -11,7 +11,7 @@
 //
 //     "Yöllä"   segments: Y | ö | ll | ä   characters: Y ö _ l l ä
 //
-// The Finnish checkpoint was fine-tuned through this same front-end, so the
+// A checkpoint for such a language was fine-tuned through this same front-end, so the
 // inserted space is what the model expects to read. Reproducing it is not
 // bug-compatibility for its own sake: drop it and every umlauted word becomes
 // a word the model has never seen.

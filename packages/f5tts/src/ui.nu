@@ -6,12 +6,17 @@
 // any other client — /voices, /models, /tts, /dialogue, /voices/add — so
 // anything visible here is reachable with curl, and anything that works with
 // curl shows up here.
+//
+// Nothing here names a model or a language. The model list is whatever the
+// machine has, the voices are whatever somebody recorded, and the text box
+// starts empty: a prefilled sentence in one language is a default for that
+// language and a nuisance in every other.
 
 $ `stdlib/core/string.nu`
 
 @ f5_ui_html → s {
     ^ `<!doctype html>
-<html lang="fi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -62,34 +67,34 @@ fieldset{border:0;padding:0;margin:14px 0 0}
 </style>
 </head>
 <body>
-<header><h1>f5tts <small>puhesynteesi, puhdasta NURLia</small></h1></header>
+<header><h1>f5tts <small>speech synthesis, pure NURL</small></h1></header>
 <main>
   <section class="card">
-    <label for="text">Teksti</label>
-    <textarea id="text" placeholder="Kirjoita mitä ääni sanoo.">Hei, tämä on koe suomen kielellä.</textarea>
+    <label for="text">Text</label>
+    <textarea id="text" placeholder="Type what the voice should say."></textarea>
     <div class="row">
-      <div><label for="model">Malli</label><select id="model"></select></div>
-      <div><label for="fmt">Muoto</label><select id="fmt">
+      <div><label for="model">Model</label><select id="model"></select></div>
+      <div><label for="fmt">Format</label><select id="fmt">
         <option value="wav">wav</option><option value="mp3">mp3</option>
         <option value="pcm">pcm</option></select></div>
-      <div><label for="steps">Askelia</label><input id="steps" type="number" value="32" min="4" max="128"></div>
-      <div><label for="seed">Siemen</label><input id="seed" type="number" value="-1"></div>
+      <div><label for="steps">Steps</label><input id="steps" type="number" value="32" min="4" max="128"></div>
+      <div><label for="seed">Seed</label><input id="seed" type="number" value="-1"></div>
     </div>
     <details>
-      <summary>Lisäasetukset</summary>
+      <summary>Advanced</summary>
       <div class="row">
-        <div><label for="cfg">Ohjaus</label><input id="cfg" type="number" step="0.1" value="2"></div>
+        <div><label for="cfg">Guidance</label><input id="cfg" type="number" step="0.1" value="2"></div>
         <div><label for="sway">Sway</label><input id="sway" type="number" step="0.1" value="-1"></div>
-        <div><label for="speed">Nopeus</label><input id="speed" type="number" step="0.05" value="1"></div>
-        <div><label for="fade">Ristihäivytys</label><input id="fade" type="number" step="0.05" value="0.15"></div>
-        <div><label for="rms">target_rms</label><input id="rms" type="number" step="0.01" value="0.1"></div>
-        <div><label for="retry">Whisper-yritykset</label><input id="retry" type="number" value="1" min="1" max="10"></div>
-        <div><label for="wer">Suurin WER</label><input id="wer" type="number" step="0.05" value="0.15"></div>
+        <div><label for="speed">Speed</label><input id="speed" type="number" step="0.05" value="1"></div>
+        <div><label for="fade">Cross-fade</label><input id="fade" type="number" step="0.05" value="0.15"></div>
+        <div><label for="rms">Target RMS</label><input id="rms" type="number" step="0.01" value="0.1"></div>
+        <div><label for="retry">Retries</label><input id="retry" type="number" value="1" min="1" max="10"></div>
+        <div><label for="wer">Max WER</label><input id="wer" type="number" step="0.05" value="0.15"></div>
       </div>
     </details>
     <div class="bar">
-      <button id="go">Puhu</button>
-      <button id="dl" class="ghost" disabled>Tallenna</button>
+      <button id="go">Speak</button>
+      <button id="dl" class="ghost" disabled>Download</button>
       <span class="note" id="status"></span>
     </div>
     <audio id="player" controls></audio>
@@ -97,16 +102,16 @@ fieldset{border:0;padding:0;margin:14px 0 0}
   </section>
 
   <aside class="card">
-    <h2>Äänet</h2>
+    <h2>Voices</h2>
     <div class="vlist" id="voices"></div>
     <fieldset>
-      <h2>Lisää ääni</h2>
-      <label for="nid">Tunnus</label><input id="nid" placeholder="Matti">
-      <label for="ntext" style="margin-top:8px">Mitä nauhalla sanotaan</label>
-      <textarea id="ntext" style="min-height:70px" placeholder="Nauhoituksen tarkka teksti."></textarea>
-      <label for="nfile" style="margin-top:8px">Nauhoitus (wav)</label>
+      <h2>Add a voice</h2>
+      <label for="nid">Id</label><input id="nid" placeholder="narrator">
+      <label for="ntext" style="margin-top:8px">What the recording says</label>
+      <textarea id="ntext" style="min-height:70px" placeholder="The exact words spoken in the recording."></textarea>
+      <label for="nfile" style="margin-top:8px">Recording (wav)</label>
       <input id="nfile" type="file" accept="audio/wav,.wav">
-      <div class="bar"><button id="add" class="ghost">Tallenna ääni</button></div>
+      <div class="bar"><button id="add" class="ghost">Save voice</button></div>
     </fieldset>
   </aside>
 </main>
@@ -124,22 +129,22 @@ async function loadVoices(){
     const r = await fetch("/voices", { headers: hdr() });
     const vs = await r.json();
     const box = $("#voices"); box.innerHTML = "";
-    if(!vs.length) box.innerHTML = '<div class="note">Ei vielä ääniä. Lisää yksi oikealta.</div>';
+    if(!vs.length) box.innerHTML = '<div class="note">No voices yet. Add one below.</div>';
     for(const v of vs){
       const row = document.createElement("div");
       row.className = "vrow" + (v.voice_id === state.voice ? " on" : "");
       const nm = document.createElement("span"); nm.textContent = v.voice_id;
       row.appendChild(nm);
       const play = document.createElement("button");
-      play.textContent = "kuuntele"; play.title = "viitenauhoitus";
+      play.textContent = "play"; play.title = "the reference recording";
       play.onclick = e => { e.stopPropagation();
         $("#player").src = "/voices/" + encodeURIComponent(v.voice_id) + "/sample"
           + (tok ? "?token=" + encodeURIComponent(tok) : ""); $("#player").play(); };
       row.appendChild(play);
       const del = document.createElement("button");
-      del.textContent = "poista";
+      del.textContent = "delete";
       del.onclick = async e => { e.stopPropagation();
-        if(!confirm("Poistetaanko " + v.voice_id + "?")) return;
+        if(!confirm("Delete " + v.voice_id + "?")) return;
         await fetch("/voices/" + encodeURIComponent(v.voice_id), { method:"DELETE", headers: hdr() });
         if(state.voice === v.voice_id) state.voice = null;
         loadVoices(); };
@@ -148,7 +153,7 @@ async function loadVoices(){
       box.appendChild(row);
     }
     if(!state.voice && vs.length){ state.voice = vs[0].voice_id; loadVoices(); }
-  }catch(e){ oops("Ääniä ei saatu: " + e.message); }
+  }catch(e){ oops("Could not load the voices: " + e.message); }
 }
 
 async function loadModels(){
@@ -159,16 +164,16 @@ async function loadModels(){
     for(const m of ms){
       const o = document.createElement("option");
       o.value = m.model_id;
-      o.textContent = m.model_id + (m.on_this_machine ? "" : " (haetaan)");
+      o.textContent = m.model_id + (m.on_this_machine ? "" : " (will be fetched)");
       if(m.current) o.selected = true;
       sel.appendChild(o);
     }
-  }catch(e){ oops("Malleja ei saatu: " + e.message); }
+  }catch(e){ oops("Could not load the models: " + e.message); }
 }
 
 $("#go").onclick = async () => {
   oops("");
-  if(!state.voice){ oops("Valitse ääni."); return; }
+  if(!state.voice){ oops("Pick a voice first."); return; }
   const body = {
     voice_id: state.voice,
     text: $("#text").value,
@@ -185,7 +190,7 @@ $("#go").onclick = async () => {
     max_wer: +$("#wer").value
   };
   $("#go").disabled = true; $("#dl").disabled = true;
-  const t0 = performance.now(); say("puhuu…");
+  const t0 = performance.now(); say("speaking…");
   try{
     const r = await fetch("/tts", { method:"POST",
       headers: Object.assign({ "content-type":"application/json" }, hdr()),
@@ -204,24 +209,24 @@ $("#dl").onclick = () => {
   if(!state.blob) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(state.blob);
-  a.download = (state.voice||"puhe") + "." + $("#fmt").value;
+  a.download = (state.voice||"speech") + "." + $("#fmt").value;
   a.click();
 };
 
 $("#add").onclick = async () => {
   oops("");
   const f = $("#nfile").files[0];
-  if(!$("#nid").value || !f){ oops("Tunnus ja wav-tiedosto tarvitaan."); return; }
+  if(!$("#nid").value || !f){ oops("An id and a wav file are both required."); return; }
   const fd = new FormData();
   fd.append("voice_id", $("#nid").value);
   fd.append("ref_text", $("#ntext").value);
   fd.append("file", f);
-  $("#add").disabled = true; say("tallennetaan…");
+  $("#add").disabled = true; say("saving…");
   try{
     const r = await fetch("/voices/add", { method:"POST", headers: hdr(), body: fd });
     if(!r.ok){ const j = await r.json().catch(()=>({error:r.statusText})); throw new Error(j.error||r.statusText); }
     $("#nid").value = ""; $("#ntext").value = ""; $("#nfile").value = "";
-    say("tallennettu"); loadVoices();
+    say("saved"); loadVoices();
   }catch(e){ oops(e.message); say(""); }
   $("#add").disabled = false;
 };

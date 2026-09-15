@@ -26,7 +26,7 @@ $ `deps/audio/src/wav.nu`
 
 : ~ i g_f5v_port 6543
 
-: ~ s g_f5v_lang `fi`
+: ~ s g_f5v_lang ``  // empty = let the transcriber detect one
 
 @ f5_whisper_set s host i port s lang → v {
     = g_f5v_host host
@@ -176,12 +176,59 @@ $ `deps/audio/src/wav.nu`
 // that did not happen must not be read as "it said nothing", so the caller
 // checks `f5_whisper_enabled` first and treats an empty answer as a skipped
 // check rather than a perfect error rate.
+// A multipart body carrying the wav and, when one was configured, the
+// language to decode it as. The transcriber also accepts a bare wav body, and
+// that is what this sends when no language is set — a language field it would
+// have to guess at is worse than the detector it already has.
+@ __f5v_push_str ( Vec u ) out s t → v {
+    : i n ( nurl_str_len t )
+    : ~ i k 0
+    ~ < k n {
+        ( vec_push [u] out # u ( nurl_str_get t k ) )
+        = k + k 1
+    }
+}
+
+@ __f5v_multipart ( Vec u ) wav s lang s boundary → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    : String head ( string_from `--` )
+    ( string_push_str head boundary )
+    ( string_push_str head `\r\nContent-Disposition: form-data; name="language"\r\n\r\n` )
+    ( string_push_str head lang )
+    ( string_push_str head `\r\n--` )
+    ( string_push_str head boundary )
+    ( string_push_str head `\r\nContent-Disposition: form-data; name="file"; filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n` )
+    ( __f5v_push_str out ( string_data head ) )
+    ( string_free head )
+    : ~ i k 0
+    ~ < k ( vec_len [u] wav ) {
+        ?? ( vec_get [u] wav k ) { T b → { ( vec_push [u] out b ) } F → {} }
+        = k + k 1
+    }
+    : String tail ( string_from `\r\n--` )
+    ( string_push_str tail boundary )
+    ( string_push_str tail `--\r\n` )
+    ( __f5v_push_str out ( string_data tail ) )
+    ( string_free tail )
+    ^ out
+}
+
 @ f5_transcribe ( Vec f ) wave → String {
-    : ( Vec u ) bytes ( wav_encode wave 24000 1 )
+    : ( Vec u ) wav ( wav_encode wave 24000 1 )
+    : b as_form > ( nurl_str_len g_f5v_lang ) 0
+    : ~ String ctype ( string_from `audio/wav` )
+    : ( Vec u ) bytes ? as_form
+    ( __f5v_multipart wav g_f5v_lang `f5ttsboundary` )
+    ( vec_clone [u] wav )
+    ? as_form {
+        ( string_free ctype )
+        = ctype ( string_from `multipart/form-data; boundary=f5ttsboundary` )
+    } {}
+    ( vec_free [u] wav )
     : String url ( f5_whisper_where )
     ( string_push_str url `/inference` )
     : String out ( string_new )
-    ?? ( http_post_bytes ( string_data url ) bytes `audio/wav` ) {
+    ?? ( http_post_bytes ( string_data url ) bytes ( string_data ctype ) ) {
         T resp → {
             ? == ( http_status resp ) 200 {
                 ?? ( json_parse ( http_body_str resp ) ) {
@@ -200,6 +247,7 @@ $ `deps/audio/src/wav.nu`
         F _e → {}
     }
     ( string_free url )
+    ( string_free ctype )
     ( vec_free [u] bytes )
     ^ ( string_trim out )
 }

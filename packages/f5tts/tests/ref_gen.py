@@ -3,6 +3,13 @@
 
 Writes the noise it used, so the NURL port can integrate the same trajectory
 and be compared frame by frame rather than by ear.
+
+Environment:
+  F5TTS_SRC      the reference F5-TTS source tree (the directory holding model/)
+  F5TTS_CKPT     the checkpoint to generate with
+  F5TTS_VOCAB    its vocabulary (default: vocab.txt beside the checkpoint)
+  F5TTS_VOICE    a voice directory: config.json (with ref_text) + reference.wav
+  F5TTS_VOCODER  the vocos snapshot directory: config.yaml + pytorch_model.bin
 """
 import sys, types, os, json, warnings
 warnings.filterwarnings("ignore")
@@ -10,7 +17,19 @@ import numpy as np
 import torch
 import soundfile as sf
 
-SRC = "/home/wau/dev/F5-TTS/src/f5_tts"
+
+def _env(name, what):
+    v = os.environ.get(name, "")
+    if not v:
+        sys.exit("%s is not set: %s" % (name, what))
+    return v
+
+
+# Nothing here is hardcoded to one machine or one checkpoint. Point these at
+# whatever F5-TTS tree and weights you are comparing against.
+SRC = _env("F5TTS_SRC", "the reference F5-TTS source tree, the directory holding model/")
+CKPT = _env("F5TTS_CKPT", "the checkpoint to dump, a .safetensors file")
+VOCAB = os.environ.get("F5TTS_VOCAB", "") or os.path.join(os.path.dirname(CKPT), "vocab.txt")
 pkg = types.ModuleType("f5_tts"); pkg.__path__ = [SRC]; sys.modules["f5_tts"] = pkg
 mp = types.ModuleType("f5_tts.model"); mp.__path__ = [SRC + "/model"]; sys.modules["f5_tts.model"] = mp
 bp = types.ModuleType("f5_tts.model.backbones"); bp.__path__ = [SRC + "/model/backbones"]
@@ -20,13 +39,9 @@ from f5_tts.model.backbones.dit import DiT
 from f5_tts.model.utils import get_tokenizer, convert_char_to_pinyin
 import torchaudio
 
-CKPT = ("/home/wau/dev/F5-TTS/models/models--AsmoKoskinen--F5-TTS_Finnish_Model/snapshots/"
-        "cba9413e3c8ebe3e8f89513ad43510f97decac29/"
-        "model_commonvoice_fi_librivox_fi_vox_populi_fi_20250323/model_last_20250323.safetensors")
-VOCAB = os.path.join(os.path.dirname(CKPT), "vocab.txt")
-VOICE = "/home/wau/dev/F5-TTS/voices/Tero"
+VOICE = _env("F5TTS_VOICE", "a voice directory holding config.json and reference.wav")
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/f5gen"
-GEN_TEXT = sys.argv[2] if len(sys.argv) > 2 else "Hei, tämä on koe."
+GEN_TEXT = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("F5TTS_GEN_TEXT", "Hei, tämä on koe.")
 NFE = int(sys.argv[3]) if len(sys.argv) > 3 else 32
 os.makedirs(OUT, exist_ok=True)
 
@@ -118,7 +133,7 @@ np.asarray(text.numpy(), dtype=np.int32).tofile(os.path.join(OUT, "text_ids.i32"
 
 # the vocoder
 from vocos import Vocos
-VOCOS = "/home/wau/dev/F5-TTS/models/models--charactr--vocos-mel-24khz/snapshots/0feb3fdd929bcd6649e0e7c5a688cf7dd012ef21"
+VOCOS = _env("F5TTS_VOCODER", "the vocos snapshot directory: config.yaml + pytorch_model.bin")
 voc = Vocos.from_hparams(VOCOS + "/config.yaml")
 state = torch.load(VOCOS + "/pytorch_model.bin", map_location="cpu", weights_only=True)
 voc.load_state_dict(state)

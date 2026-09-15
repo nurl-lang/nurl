@@ -20,6 +20,9 @@ $ audio vad meeting.wav
 59.85 - 71.2 s
 190.85 - 202.2 s
 vad — 2 segment(s), 7.77 % of the audio is speech
+
+$ audio mp3 speech.wav speech.mp3 --bitrate 128
+mp3 — 269184 bytes at 128 kbit/s → speech.mp3
 ```
 
 ## Three places a mistake hides
@@ -96,6 +99,43 @@ speech model hears one utterance where there were two.
 transcribing the condensed audio reports times in the condensed timeline,
 and a caller who wants to say "this was said at 3:12 of the recording" has
 to walk the map back. `vad_map_sample` does.
+
+## Encoding MP3
+
+`mp3_encode` is MPEG-1, MPEG-2 and MPEG-2.5 Layer III, in NURL: the
+polyphase analysis filterbank, the 18-point MDCT with its alias-reduction
+butterflies, the quantiser's step-size search, and Huffman coding over the
+big-values regions and the count1 quadruples. All nine sample rates the
+format defines (32/44.1/48 kHz, 16/22.05/24 kHz, 8/11.025/12 kHz), mono or
+stereo, constant bitrate. No ffmpeg, no subprocess, no codec library.
+
+**There is no psychoacoustic model**, and saying so is the honest
+description of the quality. With no masking threshold there are no
+scalefactors, so every band gets the same step size, chosen only to fill
+the frame: the bits go where the signal is loud, not where the ear is
+deaf. Long blocks only, because deciding when to switch windows is itself
+a psychoacoustic decision. For speech at 128 kbit/s the difference is not
+audible; for music at 64 it would be. This is the quality shape of the
+fixed-point encoder `shine`, and the comparison below is against it.
+
+The arithmetic is f64 but mirrors a fixed-point encoder's exactly — that
+is what the three factors of 0.5 in the filterbank and the MDCT are for —
+so a sample of 1.0 is what a decoder calls full scale and the quantiser
+lands on the same integers.
+
+| | |
+|---|---|
+| frames byte-identical to `shine`, 17 s of speech | **454 / 702** |
+| round-trip SNR, this encoder vs `shine` | 18.13 dB vs 18.13 dB |
+| encoding 16.8 s of 24 kHz mono | 69 ms |
+
+**The test needs no decoder.** Every frame header says how long its frame
+is, so a correct file is a chain: the next sync word must land exactly
+where the previous frame's length says it will. `tests/mp3_frames.py`
+walks that chain and fails if one bit was written short or long anywhere
+in the bitstream — at all nine rates, mono and stereo. When ffmpeg is
+installed the suite also decodes one back and compares waveforms
+(correlation 1.0000).
 
 ## Built on
 

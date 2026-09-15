@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **packages/f5tts names no model.** `--model` and `--vocoder` are now
+  required and the built-in catalogue of "known" checkpoints is gone: a
+  speech model is a choice about a language, a voice and a licence, and none
+  of those are a library's to make. A name is a path, a directory under
+  `~/.f5tts/models`, or a `owner/repo/path/to/file` reference the hub fetches
+  once; the vocabulary is `vocab.txt` beside the checkpoint unless `--vocab`
+  says otherwise. The web interface is English throughout and starts with an
+  empty text box, the reference-dump scripts take their paths from the
+  environment, and `--lang` now actually reaches the transcriber (it was
+  collected and never sent) as a multipart field, defaulting to letting it
+  detect one.
+
 - **packages/audio 0.7.0 encodes MP3.** MPEG-1, MPEG-2 and MPEG-2.5 Layer III
   at all nine sample rates the format defines, mono or stereo, constant
   bitrate, in pure NURL: the polyphase analysis filterbank, the 18-point MDCT
