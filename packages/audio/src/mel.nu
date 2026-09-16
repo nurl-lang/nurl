@@ -272,3 +272,134 @@ $ `stdlib/std/float.nu`
     }
     ^ out
 }
+
+// ── the other mel convention: HTK, unnormalised, magnitude ──────────
+//
+// Whisper's mel is one convention; it is not the only one, and a model built
+// on the other one hears nothing useful through it. The vocos/torchaudio
+// flavour — what F5-TTS and every vocoder trained against `vocos-mel-24khz`
+// expects — differs from `log_mel_whisper` in four places, all of them
+// load-bearing:
+//
+//   * the mel scale is HTK — 2595·log10(1 + f/700) — not Slaney's.
+//   * the triangles are NOT area-normalised. Slaney's 2/(hi − lo) factor makes
+//     every filter carry the same energy; torchaudio's `norm=None` leaves the
+//     triangles at unit height, so a wide high-frequency band is simply louder.
+//   * the spectrogram is the MAGNITUDE |X|, not the power |X|² (torchaudio's
+//     `power=1`).
+//   * the log is natural and the floor is a plain clamp at 1e-5 — no maximum
+//     to find, no (x+4)/4 rescaling. A mel frame is not in [-1, 1] here.
+//
+// And no frame is dropped.
+
+@ hz_to_mel_htk f hz → f {
+    ^ * 2595.0 ( log10 + 1.0 / hz 700.0 )
+}
+
+@ mel_to_hz_htk f mel → f {
+    ^ * 700.0 - ( pow 10.0 / mel 2595.0 ) 1.0
+}
+
+// torchaudio's `melscale_fbanks(..., norm=None, mel_scale="htk")`, row-major
+// n_bins × n_mels — the same orientation `mel_filters` uses.
+@ mel_filters_htk i n_fft i n_mels i rate f f_min f f_max → ( Vec f ) {
+    : i n_bins + / n_fft 2 1
+    : ( Vec f ) fft_hz ( vec_with_cap [f] n_bins )
+    : ~ i k 0
+    ~ < k n_bins {
+        // linspace(0, sample_rate // 2, n_bins) — integer halving, as torchaudio
+        : f nyq # f / rate 2
+        ( vec_push [f] fft_hz / * nyq # f k # f - n_bins 1 )
+        = k + k 1
+    }
+    : f m_min ( hz_to_mel_htk f_min )
+    : f m_max ( hz_to_mel_htk f_max )
+    : ( Vec f ) edges ( vec_with_cap [f] + n_mels 2 )
+    = k 0
+    ~ < k + n_mels 2 {
+        : f m + m_min / * - m_max m_min # f k # f + n_mels 1
+        ( vec_push [f] edges ( mel_to_hz_htk m ) )
+        = k + k 1
+    }
+    : ( Vec f ) w ( vec_with_cap [f] * n_bins n_mels )
+    = k 0
+    ~ < k * n_bins n_mels { ( vec_push [f] w 0.0 ) = k + k 1 }
+    : ~ i m 0
+    ~ < m n_mels {
+        : f lo ( __mel_get edges m )
+        : f ce ( __mel_get edges + m 1 )
+        : f hi ( __mel_get edges + m 2 )
+        : ~ i b 0
+        ~ < b n_bins {
+            : f fz ( __mel_get fft_hz b )
+            : f down / - fz lo - ce lo
+            : f up / - hi fz - hi ce
+            : f tri ? < down up down up
+            ( vec_set [f] w + * b n_mels m ? > tri 0.0 tri 0.0 )
+            = b + b 1
+        }
+        = m + m 1
+    }
+    ( vec_free [f] fft_hz )
+    ( vec_free [f] edges )
+    ^ w
+}
+
+// log(clamp(mel(|STFT|), 1e-5)) — frames × n_mels, row-major. This is what an
+// F5-TTS checkpoint reads and what a vocos vocoder writes back out.
+@ log_mel_vocos ( Vec f ) x i n_fft i hop i n_mels i rate → ( Vec f ) {
+    : i n_bins + / n_fft 2 1
+    : ( Vec f ) win ( hann_periodic n_fft )
+    : ( Vec f ) padded ( reflect_pad x / n_fft 2 )
+    : *FftPlan p ( fft_plan n_fft )
+    : ( Vec f ) pw ( stft_power p padded win n_fft hop )
+    ( fft_free p )
+    ( vec_free [f] win )
+    ( vec_free [f] padded )
+    : i frames / ( vec_len [f] pw ) n_bins
+    : f nyq # f / rate 2
+    : ( Vec f ) fb ( mel_filters_htk n_fft n_mels rate 0.0 nyq )
+    // each band's nonzero bin range, found once — see log_mel_whisper
+    : ( Vec i ) blo ( vec_new [i] )
+    : ( Vec i ) bhi ( vec_new [i] )
+    : ~ i mm 0
+    ~ < mm n_mels {
+        : ~ i lo n_bins
+        : ~ i hi 0
+        : ~ i bb 0
+        ~ < bb n_bins {
+            ? > ( __mel_get fb + * bb n_mels mm ) 0.0 {
+                ? < bb lo { = lo bb } {}
+                = hi + bb 1
+            } {}
+            = bb + bb 1
+        }
+        ? > lo hi { = lo hi } {}
+        ( vec_push [i] blo lo )
+        ( vec_push [i] bhi hi )
+        = mm + mm 1
+    }
+    : ( Vec f ) out ( vec_with_cap [f] * frames n_mels )
+    : ~ i fr 0
+    ~ < fr frames {
+        : ~ i m 0
+        ~ < m n_mels {
+            : ~ f s 0.0
+            : ~ i b ( __mel_geti blo m )
+            : i bend ( __mel_geti bhi m )
+            ~ < b bend {
+                // power → magnitude, the one place torchaudio's power=1 shows
+                = s + s * ( sqrt ( __mel_get pw + * fr n_bins b ) ) ( __mel_get fb + * b n_mels m )
+                = b + b 1
+            }
+            ( vec_push [f] out ( log ? < s 1.0e-5 1.0e-5 s ) )
+            = m + m 1
+        }
+        = fr + fr 1
+    }
+    ( vec_free [f] pw )
+    ( vec_free [f] fb )
+    ( vec_free [i] blo )
+    ( vec_free [i] bhi )
+    ^ out
+}

@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **packages/f5tts names no model.** `--model` and `--vocoder` are now
+  required and the built-in catalogue of "known" checkpoints is gone: a
+  speech model is a choice about a language, a voice and a licence, and none
+  of those are a library's to make. A name is a path, a directory under
+  `~/.f5tts/models`, or a `owner/repo/path/to/file` reference the hub fetches
+  once; the vocabulary is `vocab.txt` beside the checkpoint unless `--vocab`
+  says otherwise. The web interface is English throughout and starts with an
+  empty text box, the reference-dump scripts take their paths from the
+  environment, and `--lang` now actually reaches the transcriber (it was
+  collected and never sent) as a multipart field, defaulting to letting it
+  detect one.
+
+- **packages/audio 0.7.0 encodes MP3.** MPEG-1, MPEG-2 and MPEG-2.5 Layer III
+  at all nine sample rates the format defines, mono or stereo, constant
+  bitrate, in pure NURL: the polyphase analysis filterbank, the 18-point MDCT
+  with its alias-reduction butterflies, the quantiser's step-size search, and
+  Huffman coding over the big-values regions and the count1 quadruples.
+  `audio mp3 in.wav out.mp3 --bitrate 128`, or `mp3_encode` from any package.
+  There is no psychoacoustic model, so there are no scalefactors and every
+  band gets the same step size — the shape of the fixed-point encoder
+  `shine`, and enough for speech. The test walks every frame header and
+  checks that they tile the file exactly, at all nine rates in both channel
+  configurations, then decodes one back with ffmpeg and compares waveforms.
+
+- **packages/f5tts answers `output_format: "mp3"`.** The synthesis service
+  encodes the mp3 itself rather than shelling out, so a request that asks for
+  one gets `audio/mpeg` instead of a 400; `mp3_bitrate` picks the rate (128
+  kbit/s by default). `f5tts synth -o out.mp3` does the same from the command
+  line, chosen by the file name. `ogg` is still refused by name: there is no
+  Vorbis encoder in this ecosystem yet.
+
 - **`posix_const` knows `MAP_POPULATE` and `MADV_WILLNEED`.** A loader that
   mmaps a multi-gigabyte model file can ask the kernel to map every page in
   one pass (`MAP_POPULATE`, Linux) or to read a range ahead

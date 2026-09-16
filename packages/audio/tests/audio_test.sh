@@ -8,6 +8,9 @@
 #  3. mel: against an independent numpy reference, and — when transformers is
 #     importable — against Hugging Face's own WhisperFeatureExtractor, which is
 #     the actual oracle
+#  4. mp3: every sample rate the format has, mono and stereo, checked frame by
+#     frame — the headers have to tile the file exactly — and, when ffmpeg is
+#     installed, decoded back and compared with what went in
 #
 #  Run from the package dir:  ./tests/audio_test.sh
 # ============================================================
@@ -25,13 +28,13 @@ PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
-echo "[1/4] build"
+echo "[1/6] build"
 if ! $NURL src/main.nu "$WORK/audio" >/dev/null 2>"$WORK/build.err"; then
     echo "  build FAILED"; cat "$WORK/build.err"; exit 1
 fi
 A="$WORK/audio"
 
-echo "[2/4] WAV — round-trip, bit depths, and files that lie"
+echo "[2/6] WAV — round-trip, bit depths, and files that lie"
 "$A" tone "$WORK/tone.wav" --rate 16000 --seconds 1 >/dev/null 2>&1
 "$A" info "$WORK/tone.wav" | grep -q "16000 Hz, 1 ch, 16 bit, 16000 frames" \
     && ok "write → read round-trip (16 kHz mono 16-bit, 1 s)" \
@@ -81,7 +84,7 @@ for f in lie_size lie_rate lie_ch lie_bits truncated notriff; do
 done
 [ "$LIES" = "0" ] && ok "6 malformed files (2 GB data chunk, 0 Hz, 0 channels, 12-bit, truncated, not RIFF) are clean errors"
 
-echo "[3/4] resample — the thing linear interpolation gets wrong"
+echo "[3/6] resample — the thing linear interpolation gets wrong"
 python3 - "$WORK" <<'PYEOF'
 import sys, numpy as np, wave, struct
 W = sys.argv[1]; sr = 44100
@@ -109,7 +112,7 @@ assert lvl(3000) > -12, f"3 kHz lost: {lvl(3000):.1f} dB"
 assert lvl(4000) < -60, f"12 kHz aliased into 4 kHz at {lvl(4000):.1f} dB (linear interpolation would)"
 PYEOF
 
-echo "[4/4] mel — against numpy, and against Hugging Face when it is installed"
+echo "[4/6] mel — against numpy, and against Hugging Face when it is installed"
 python3 - "$WORK" <<'PYEOF'
 import sys, numpy as np, wave, struct
 W = sys.argv[1]; sr = 16000
@@ -148,7 +151,7 @@ d = np.abs(ours - hf).max()
 assert d < 1e-3, f"max|delta| vs HF = {d:.3e}"
 PYEOF
 
-echo "[5/5] VAD — does it find the speech, and only the speech"
+echo "[5/6] VAD — does it find the speech, and only the speech"
 # A signal whose speech regions are KNOWN: bursts at [2,5) and [8,11) over a
 # quiet room. The detector never sees the answer; the test does.
 python3 - "$WORK" <<'PYEOF'
@@ -175,6 +178,80 @@ python3 tests/vad_check.py "$WORK/vad.txt" \
 "$A" vad "$WORK/quiet.wav" 2>&1 | grep -q "0 segment(s)" \
     && ok "a recording that is only room noise has no speech in it (the floor is adaptive, not a fixed dB)" \
     || { bad "VAD on silence"; "$A" vad "$WORK/quiet.wav"; }
+
+echo "[6/6] mp3 — MPEG-1/2/2.5 Layer III, all nine rates, mono and stereo"
+python3 - "$WORK" <<'MP3GEN'
+import sys, wave, numpy as np
+W = sys.argv[1]
+for rate in (44100, 48000, 32000, 22050, 24000, 16000, 11025, 12000, 8000):
+    for ch in (1, 2):
+        n = int(rate * 2.0); t = np.arange(n) / rate
+        L = 0.5 * np.sin(2 * np.pi * 440 * t) + 0.25 * np.sin(2 * np.pi * min(3000, rate / 3) * t)
+        R = 0.4 * np.sin(2 * np.pi * 660 * t)
+        x = L if ch == 1 else np.stack([L, R], 1).ravel()
+        x = np.clip(x, -1, 1)
+        w = wave.open("%s/mp3_%d_%d.wav" % (W, rate, ch), "wb")
+        w.setnchannels(ch); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes((x * 32767).astype("<i2").tobytes()); w.close()
+MP3GEN
+
+MP3_OK=1
+for rate in 44100 48000 32000 22050 24000 16000 11025 12000 8000; do
+    case $rate in 44100|48000|32000) kbps=128 ;; 22050|24000|16000) kbps=64 ;; *) kbps=32 ;; esac
+    for ch in 1 2; do
+        "$A" mp3 "$WORK/mp3_${rate}_${ch}.wav" "$WORK/mp3_${rate}_${ch}.mp3" --bitrate $kbps >/dev/null 2>&1
+        if ! python3 tests/mp3_frames.py "$WORK/mp3_${rate}_${ch}.mp3" $rate $ch $kbps >/dev/null 2>&1; then
+            bad "mp3 $rate Hz ch$ch: frame chain"
+            python3 tests/mp3_frames.py "$WORK/mp3_${rate}_${ch}.mp3" $rate $ch $kbps
+            MP3_OK=0
+        fi
+    done
+done
+[ "$MP3_OK" = 1 ] && ok "all nine sample rates, mono and stereo: every frame header tiles the file exactly"
+
+# A bitrate the chosen MPEG version does not have must be refused by name,
+# not rounded to the nearest one the encoder happens to like.
+"$A" mp3 "$WORK/mp3_24000_1.wav" "$WORK/bad.mp3" --bitrate 320 2>&1 | grep -q "not a bitrate" \
+    && ok "320 kbit/s at 24 kHz is refused (MPEG-2 stops at 160)" \
+    || bad "an impossible bitrate was accepted"
+
+if command -v ffmpeg >/dev/null 2>&1; then
+    ffmpeg -v error -y -i "$WORK/mp3_24000_1.wav" -f s16le "$WORK/mp3_src.raw" 2>/dev/null
+    ffmpeg -v error -y -i "$WORK/mp3_24000_1.mp3" -f s16le "$WORK/mp3_dec.raw" 2>"$WORK/mp3_dec.err"
+    if [ -s "$WORK/mp3_dec.err" ]; then
+        bad "ffmpeg reported errors decoding the mp3"
+        cat "$WORK/mp3_dec.err"
+    elif python3 - "$WORK" <<'MP3SNR'
+import sys, numpy as np
+W = sys.argv[1]
+a = np.fromfile(W + "/mp3_src.raw", dtype=np.int16).astype(float)
+b = np.fromfile(W + "/mp3_dec.raw", dtype=np.int16).astype(float)
+# the decoder emits the encoder's own delay first; find it rather than assume it
+best = None
+for d in range(0, 2000):
+    n = min(len(a), len(b) - d)
+    if n < 1000: break
+    s = ((b[d:d+n] - a[:n]) ** 2).mean()
+    if best is None or s < best[1]: best = (d, s)
+d, s = best
+n = min(len(a), len(b) - d)
+snr = 10 * np.log10((a[:n] ** 2).mean() / s)
+r = np.corrcoef(a[:n], b[d:d+n])[0, 1]
+print("  mp3 round trip: %.1f dB, correlation %.4f, delay %d samples" % (snr, r, d))
+# A perceptual coder is not a waveform coder, so the SNR floor here is a
+# sanity bound — it says the decoder got back THIS signal and not noise or
+# silence — and the correlation is what actually pins the waveform down.
+assert snr > 12.0, "%.1f dB: the decoded audio is not what went in" % snr
+assert r > 0.97, "correlation %.4f: the decoded audio is not what went in" % r
+MP3SNR
+    then
+        ok "decoded back with ffmpeg: the same waveform, delay and all"
+    else
+        bad "mp3 round-trip SNR"
+    fi
+else
+    echo "  SKIP ffmpeg is not installed — frame structure checked, audio not decoded"
+fi
 
 echo "== audio tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

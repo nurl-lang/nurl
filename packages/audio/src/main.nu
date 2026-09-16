@@ -5,6 +5,7 @@
 //   audio resample <in.wav> <out.wav> --rate 16000
 //   audio tone <out.wav> --rate 16000     a known signal, for tests
 //   audio vad <file.wav>                  where the speech is (and how much is not)
+//   audio mp3 <in.wav> <out.mp3> --bitrate 128    MPEG-1/2 Layer III
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -17,6 +18,7 @@ $ `src/wav.nu`
 $ `src/mel.nu`
 $ `src/resample.nu`
 $ `src/vad.nu`
+$ `src/mp3.nu`
 
 @ __say String m → v {
     ( nurl_print ( string_data m ) )
@@ -54,6 +56,8 @@ $ `src/vad.nu`
     ( args_opt p `rate` 0 `HZ` `for resample/tone: the target sample rate (default 16000)` )
     ( args_opt p `seconds` 0 `S` `for tone: length in seconds (default 1)` )
     ( args_opt p `mels` 0 `N` `for mel: how many mel bands (default 80; whisper large-v3 wants 128)` )
+    ( args_opt p `bitrate` 0 `KBPS` `for mp3: the constant bitrate in kbit/s (default 128)` )
+    ( args_flag p `vocos` 0 `for mel: the vocos/torchaudio mel (24 kHz, 1024/256, HTK, magnitude) instead of whisper's` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -63,7 +67,7 @@ $ `src/vad.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  info <file.wav>\n  mel <file.wav> -o mel.f32\n  resample <in.wav> <out.wav> --rate 16000\n  vad <file.wav>\n  tone <out.wav> [--rate N] [--seconds S]\n` )
+        ( nurl_print `\ncommands:\n  info <file.wav>\n  mel <file.wav> -o mel.f32\n  resample <in.wav> <out.wav> --rate 16000\n  mp3 <in.wav> <out.mp3> [--bitrate 128]\n  vad <file.wav>\n  tone <out.wav> [--rate N] [--seconds S]\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -135,6 +139,35 @@ $ `src/vad.nu`
                 ( string_push_str m ` s)` )
                 ( __say m )
             } {}
+            // The vocos/torchaudio mel — the one F5-TTS and every
+            // vocos-family vocoder reads: HTK scale, unnormalised triangles,
+            // magnitude rather than power, natural log clamped at 1e-5, at
+            // 24 kHz with n_fft 1024 and hop 256, and no frame dropped.
+            ? & != 0 ( nurl_str_eq cmd `mel` ) ( args_present p `vocos` ) {
+                : ~ i nmel 100
+                : String smel ( args_value_or p `mels` `100` )
+                ?? ( string_to_int smel ) { T v → { = nmel v } F _ → {} }
+                ( string_free smel )
+                : ( Vec f ) mono ( wav_mono w )
+                : ( Vec f ) at24 ( resample mono . w rate 24000 )
+                : ( Vec f ) mel ( log_mel_vocos at24 1024 256 nmel 24000 )
+                : String o ( args_value_or p `output` `mel.f32` )
+                = rc ( __write_f32 ( string_data o ) mel )
+                : String m ( string_from `mel (vocos) — ` )
+                ( string_push_int m / ( vec_len [f] mel ) nmel )
+                ( string_push_str m ` frames x ` )
+                ( string_push_int m nmel )
+                ( string_push_str m ` mels → ` )
+                ( string_push_str m ( string_data o ) )
+                ( __say m )
+                ( string_free o )
+                ( vec_free [f] mono )
+                ( vec_free [f] at24 )
+                ( vec_free [f] mel )
+                ( wav_free w )
+                ( args_free p )
+                ^ rc
+            } {}
             ? ( nurl_str_eq cmd `mel` ) {
                 : ~ i nmel 80
                 : String smel ( args_value_or p `mels` `80` )
@@ -190,6 +223,36 @@ $ `src/vad.nu`
                 ( vec_free [f] mono )
                 ( vec_free [f] at16 )
                 ( vec_free [VadSeg] segs )
+            } {}
+            ? ( nurl_str_eq cmd `mp3` ) {
+                : ~ i kbps 128
+                : String skb ( args_value_or p `bitrate` `128` )
+                ?? ( string_to_int skb ) { T v → { = kbps v } F _ → {} }
+                ( string_free skb )
+                ?? ( mp3_encode . w samples . w rate . w channels kbps ) {
+                    T bytes → {
+                        ?? ( write_file_bytes path2 bytes ) {
+                            T _ → {}
+                            F _ → {
+                                ( nurl_eprintln `audio: cannot write the mp3` )
+                                = rc 1
+                            }
+                        }
+                        : String m ( string_from `mp3 — ` )
+                        ( string_push_int m ( vec_len [u] bytes ) )
+                        ( string_push_str m ` bytes at ` )
+                        ( string_push_int m kbps )
+                        ( string_push_str m ` kbit/s → ` )
+                        ( string_push_str m path2 )
+                        ( __say m )
+                        ( vec_free [u] bytes )
+                    }
+                    F e → {
+                        ( nurl_eprintln ( string_data e ) )
+                        ( string_free e )
+                        = rc 1
+                    }
+                }
             } {}
             ? ( nurl_str_eq cmd `resample` ) {
                 : ( Vec f ) mono ( wav_mono w )
