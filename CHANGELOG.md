@@ -144,8 +144,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   program, not only the diagnostics.
 
 - **HTTP: one `HttpRequest` per connection.** The keep-alive path allocates
-  nothing per request on the request side — 23.75 to 22.85 µs/req, −3.7 %,
-  parity with the Rust peer at 14 B.
+  nothing per request on the request side — −0.9 µs/req, −3.7 %, and parity
+  with the Rust peer at 14 B.
 
 - **`nurlpkg` compares dependency path links after normalising them.**
   `../gpu` and `../gpukit/../gpu` are the same directory; comparing them by
