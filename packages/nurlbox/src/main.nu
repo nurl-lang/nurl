@@ -33,113 +33,7 @@ $ `archive.nu`
 $ `proc.nu`
 $ `sh.nu`
 
-: s NURLBOX_VERSION `0.2.0`
-
-// Every applet, in the order `nurlbox` lists them.
-@ __applet_names → ( Vec String ) {
-    : ( Vec String ) v ( vec_new [String] )
-    ( vec_push [String] v ( string_from `[` ) )
-    ( vec_push [String] v ( string_from `arch` ) )
-    ( vec_push [String] v ( string_from `ash` ) )
-    ( vec_push [String] v ( string_from `base64` ) )
-    ( vec_push [String] v ( string_from `basename` ) )
-    ( vec_push [String] v ( string_from `cat` ) )
-    ( vec_push [String] v ( string_from `chmod` ) )
-    ( vec_push [String] v ( string_from `cksum` ) )
-    ( vec_push [String] v ( string_from `clear` ) )
-    ( vec_push [String] v ( string_from `cmp` ) )
-    ( vec_push [String] v ( string_from `comm` ) )
-    ( vec_push [String] v ( string_from `cp` ) )
-    ( vec_push [String] v ( string_from `crc32` ) )
-    ( vec_push [String] v ( string_from `cut` ) )
-    ( vec_push [String] v ( string_from `date` ) )
-    ( vec_push [String] v ( string_from `dd` ) )
-    ( vec_push [String] v ( string_from `df` ) )
-    ( vec_push [String] v ( string_from `dirname` ) )
-    ( vec_push [String] v ( string_from `dos2unix` ) )
-    ( vec_push [String] v ( string_from `du` ) )
-    ( vec_push [String] v ( string_from `echo` ) )
-    ( vec_push [String] v ( string_from `egrep` ) )
-    ( vec_push [String] v ( string_from `env` ) )
-    ( vec_push [String] v ( string_from `expand` ) )
-    ( vec_push [String] v ( string_from `expr` ) )
-    ( vec_push [String] v ( string_from `factor` ) )
-    ( vec_push [String] v ( string_from `false` ) )
-    ( vec_push [String] v ( string_from `fgrep` ) )
-    ( vec_push [String] v ( string_from `find` ) )
-    ( vec_push [String] v ( string_from `fold` ) )
-    ( vec_push [String] v ( string_from `free` ) )
-    ( vec_push [String] v ( string_from `grep` ) )
-    ( vec_push [String] v ( string_from `groups` ) )
-    ( vec_push [String] v ( string_from `gunzip` ) )
-    ( vec_push [String] v ( string_from `gzip` ) )
-    ( vec_push [String] v ( string_from `head` ) )
-    ( vec_push [String] v ( string_from `hexdump` ) )
-    ( vec_push [String] v ( string_from `hostname` ) )
-    ( vec_push [String] v ( string_from `id` ) )
-    ( vec_push [String] v ( string_from `kill` ) )
-    ( vec_push [String] v ( string_from `killall` ) )
-    ( vec_push [String] v ( string_from `ln` ) )
-    ( vec_push [String] v ( string_from `logname` ) )
-    ( vec_push [String] v ( string_from `ls` ) )
-    ( vec_push [String] v ( string_from `md5sum` ) )
-    ( vec_push [String] v ( string_from `mkdir` ) )
-    ( vec_push [String] v ( string_from `mktemp` ) )
-    ( vec_push [String] v ( string_from `mount` ) )
-    ( vec_push [String] v ( string_from `mv` ) )
-    ( vec_push [String] v ( string_from `nl` ) )
-    ( vec_push [String] v ( string_from `nproc` ) )
-    ( vec_push [String] v ( string_from `od` ) )
-    ( vec_push [String] v ( string_from `paste` ) )
-    ( vec_push [String] v ( string_from `pidof` ) )
-    ( vec_push [String] v ( string_from `printenv` ) )
-    ( vec_push [String] v ( string_from `printf` ) )
-    ( vec_push [String] v ( string_from `ps` ) )
-    ( vec_push [String] v ( string_from `pwd` ) )
-    ( vec_push [String] v ( string_from `readlink` ) )
-    ( vec_push [String] v ( string_from `realpath` ) )
-    ( vec_push [String] v ( string_from `rev` ) )
-    ( vec_push [String] v ( string_from `rm` ) )
-    ( vec_push [String] v ( string_from `rmdir` ) )
-    ( vec_push [String] v ( string_from `sed` ) )
-    ( vec_push [String] v ( string_from `seq` ) )
-    ( vec_push [String] v ( string_from `sh` ) )
-    ( vec_push [String] v ( string_from `sha1sum` ) )
-    ( vec_push [String] v ( string_from `sha256sum` ) )
-    ( vec_push [String] v ( string_from `sha512sum` ) )
-    ( vec_push [String] v ( string_from `shuf` ) )
-    ( vec_push [String] v ( string_from `sleep` ) )
-    ( vec_push [String] v ( string_from `sort` ) )
-    ( vec_push [String] v ( string_from `split` ) )
-    ( vec_push [String] v ( string_from `stat` ) )
-    ( vec_push [String] v ( string_from `strings` ) )
-    ( vec_push [String] v ( string_from `sum` ) )
-    ( vec_push [String] v ( string_from `sync` ) )
-    ( vec_push [String] v ( string_from `tac` ) )
-    ( vec_push [String] v ( string_from `tail` ) )
-    ( vec_push [String] v ( string_from `tar` ) )
-    ( vec_push [String] v ( string_from `tee` ) )
-    ( vec_push [String] v ( string_from `test` ) )
-    ( vec_push [String] v ( string_from `touch` ) )
-    ( vec_push [String] v ( string_from `tr` ) )
-    ( vec_push [String] v ( string_from `true` ) )
-    ( vec_push [String] v ( string_from `truncate` ) )
-    ( vec_push [String] v ( string_from `tty` ) )
-    ( vec_push [String] v ( string_from `uname` ) )
-    ( vec_push [String] v ( string_from `unexpand` ) )
-    ( vec_push [String] v ( string_from `uniq` ) )
-    ( vec_push [String] v ( string_from `unix2dos` ) )
-    ( vec_push [String] v ( string_from `uptime` ) )
-    ( vec_push [String] v ( string_from `usleep` ) )
-    ( vec_push [String] v ( string_from `wc` ) )
-    ( vec_push [String] v ( string_from `which` ) )
-    ( vec_push [String] v ( string_from `whoami` ) )
-    ( vec_push [String] v ( string_from `xargs` ) )
-    ( vec_push [String] v ( string_from `xxd` ) )
-    ( vec_push [String] v ( string_from `yes` ) )
-    ( vec_push [String] v ( string_from `zcat` ) )
-    ^ v
-}
+: s NURLBOX_VERSION `0.2.1`
 
 // argv[0]'s basename, with a `.exe` suffix and any `nurlbox-` prefix
 // stripped — the three spellings an installed multi-call binary meets.
@@ -270,7 +164,7 @@ $ `sh.nu`
     ( nurl_print `Usage: nurlbox [applet] [arguments]...\n` )
     ( nurl_print `   or: applet [arguments]...\n\n` )
     ( nurl_print `Currently defined applets:\n` )
-    : ( Vec String ) names ( __applet_names )
+    : ( Vec String ) names ( _applet_names )
     : i n ( vec_len [String] names )
     : ~ i i 0
     : ~ i col 0
@@ -285,24 +179,12 @@ $ `sh.nu`
     ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
 }
 
-// Is `name` one of ours? A binary invoked under a name it does not
-// implement is the MULTIPLEXER — that is how `nurlbox` behaves when the
-// unikernel's loader calls it `main`, and how a copy named anything else
-// still works.
-@ bx_is_applet s name → b {
-    : ( Vec String ) names ( __applet_names )
-    : i n ( vec_len [String] names )
-    : ~ b found F
-    : ~ i i 0
-    ~ < i n {
-        ? ( bx_streq ( bx_at names i ) name ) { = found T } {}
-        = i + i 1
-    }
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-    ^ found
-}
-
 @ main → i {
+    // The shell applet runs other applets, and the table that names them is
+    // below in this file. Handing it over as a value keeps sh.nu from having
+    // to import the program's entry point, which is a circle no module can
+    // compile alone.
+    ( bx_dispatch_set \ s n ( Vec String ) a → i { ^ ( bx_run_applet n a ) } )
     : ( Vec String ) argv ( env_args_list )
     : String me ( __invoked_as argv )
     : ~ i rc 0
@@ -386,7 +268,7 @@ $ `sh.nu`
     }
     ( path_free me )
     ( vec_free_with [String] argv0 \ String x → v { ( string_free x ) } )
-    : ( Vec String ) names ( __applet_names )
+    : ( Vec String ) names ( _applet_names )
     : i n ( vec_len [String] names )
     : ~ i rc 0
     : ~ i made 0

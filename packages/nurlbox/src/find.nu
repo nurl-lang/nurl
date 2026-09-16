@@ -388,6 +388,7 @@ $ `bx.nu`
 // deep — the shape that makes short-circuiting obviously correct.
 
 $ `stdlib/core/posix.nu`
+$ `fileops.nu`
 
 : FindCtx {
     s path

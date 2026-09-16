@@ -433,3 +433,159 @@ $ `stdlib/std/bufio.nu`
     ? & >= c 97 <= c 102 { ^ + 10 - c 97 } {}
     ^ + 10 - c 65
 }
+
+// ── running one applet from another ──────────────────────────────────
+//
+// `bx_run_applet` is the dispatch table, and it lives in main.nu because it
+// names every applet there is. The shell applet needs to call it, and a
+// library module that imports the entry point is a circle — the publish gate
+// compiles every module ALONE and would not resolve it. So main.nu hands the
+// table over as a value at startup and sh.nu calls what it was given.
+//
+// A closure is a fat value and cannot sit in an `i` global, so one struct on
+// the heap holds it and the pointer to that fits.
+
+: BxDispatch { ( @ i s ( Vec String ) ) run }
+
+: ~ i g_bx_dispatch 0
+
+@ bx_dispatch_set ( @ i s ( Vec String ) ) f → v {
+    ? == g_bx_dispatch 0 { = g_bx_dispatch # i ( nurl_alloc Z BxDispatch ) } {}
+    : *BxDispatch d # *BxDispatch g_bx_dispatch
+    = . d run f
+}
+
+// -1 when nobody installed one, which is every caller that is not the
+// multiplexer — a library used on its own has no applet table.
+@ bx_dispatch s name ( Vec String ) argv → i {
+    ? == g_bx_dispatch 0 { ^ -1 } {}
+    : *BxDispatch d # *BxDispatch g_bx_dispatch
+    : ( @ i s ( Vec String ) ) f . d run
+    ^ ( f name argv )
+}
+
+// Which applet names this binary answers to, and whether a given name is one
+// of them. They live here rather than in main.nu because the shell applet
+// asks the same question.
+// Every applet, in the order `nurlbox` lists them.
+@ _applet_names → ( Vec String ) {
+    : ( Vec String ) v ( vec_new [String] )
+    ( vec_push [String] v ( string_from `[` ) )
+    ( vec_push [String] v ( string_from `arch` ) )
+    ( vec_push [String] v ( string_from `ash` ) )
+    ( vec_push [String] v ( string_from `base64` ) )
+    ( vec_push [String] v ( string_from `basename` ) )
+    ( vec_push [String] v ( string_from `cat` ) )
+    ( vec_push [String] v ( string_from `chmod` ) )
+    ( vec_push [String] v ( string_from `cksum` ) )
+    ( vec_push [String] v ( string_from `clear` ) )
+    ( vec_push [String] v ( string_from `cmp` ) )
+    ( vec_push [String] v ( string_from `comm` ) )
+    ( vec_push [String] v ( string_from `cp` ) )
+    ( vec_push [String] v ( string_from `crc32` ) )
+    ( vec_push [String] v ( string_from `cut` ) )
+    ( vec_push [String] v ( string_from `date` ) )
+    ( vec_push [String] v ( string_from `dd` ) )
+    ( vec_push [String] v ( string_from `df` ) )
+    ( vec_push [String] v ( string_from `dirname` ) )
+    ( vec_push [String] v ( string_from `dos2unix` ) )
+    ( vec_push [String] v ( string_from `du` ) )
+    ( vec_push [String] v ( string_from `echo` ) )
+    ( vec_push [String] v ( string_from `egrep` ) )
+    ( vec_push [String] v ( string_from `env` ) )
+    ( vec_push [String] v ( string_from `expand` ) )
+    ( vec_push [String] v ( string_from `expr` ) )
+    ( vec_push [String] v ( string_from `factor` ) )
+    ( vec_push [String] v ( string_from `false` ) )
+    ( vec_push [String] v ( string_from `fgrep` ) )
+    ( vec_push [String] v ( string_from `find` ) )
+    ( vec_push [String] v ( string_from `fold` ) )
+    ( vec_push [String] v ( string_from `free` ) )
+    ( vec_push [String] v ( string_from `grep` ) )
+    ( vec_push [String] v ( string_from `groups` ) )
+    ( vec_push [String] v ( string_from `gunzip` ) )
+    ( vec_push [String] v ( string_from `gzip` ) )
+    ( vec_push [String] v ( string_from `head` ) )
+    ( vec_push [String] v ( string_from `hexdump` ) )
+    ( vec_push [String] v ( string_from `hostname` ) )
+    ( vec_push [String] v ( string_from `id` ) )
+    ( vec_push [String] v ( string_from `kill` ) )
+    ( vec_push [String] v ( string_from `killall` ) )
+    ( vec_push [String] v ( string_from `ln` ) )
+    ( vec_push [String] v ( string_from `logname` ) )
+    ( vec_push [String] v ( string_from `ls` ) )
+    ( vec_push [String] v ( string_from `md5sum` ) )
+    ( vec_push [String] v ( string_from `mkdir` ) )
+    ( vec_push [String] v ( string_from `mktemp` ) )
+    ( vec_push [String] v ( string_from `mount` ) )
+    ( vec_push [String] v ( string_from `mv` ) )
+    ( vec_push [String] v ( string_from `nl` ) )
+    ( vec_push [String] v ( string_from `nproc` ) )
+    ( vec_push [String] v ( string_from `od` ) )
+    ( vec_push [String] v ( string_from `paste` ) )
+    ( vec_push [String] v ( string_from `pidof` ) )
+    ( vec_push [String] v ( string_from `printenv` ) )
+    ( vec_push [String] v ( string_from `printf` ) )
+    ( vec_push [String] v ( string_from `ps` ) )
+    ( vec_push [String] v ( string_from `pwd` ) )
+    ( vec_push [String] v ( string_from `readlink` ) )
+    ( vec_push [String] v ( string_from `realpath` ) )
+    ( vec_push [String] v ( string_from `rev` ) )
+    ( vec_push [String] v ( string_from `rm` ) )
+    ( vec_push [String] v ( string_from `rmdir` ) )
+    ( vec_push [String] v ( string_from `sed` ) )
+    ( vec_push [String] v ( string_from `seq` ) )
+    ( vec_push [String] v ( string_from `sh` ) )
+    ( vec_push [String] v ( string_from `sha1sum` ) )
+    ( vec_push [String] v ( string_from `sha256sum` ) )
+    ( vec_push [String] v ( string_from `sha512sum` ) )
+    ( vec_push [String] v ( string_from `shuf` ) )
+    ( vec_push [String] v ( string_from `sleep` ) )
+    ( vec_push [String] v ( string_from `sort` ) )
+    ( vec_push [String] v ( string_from `split` ) )
+    ( vec_push [String] v ( string_from `stat` ) )
+    ( vec_push [String] v ( string_from `strings` ) )
+    ( vec_push [String] v ( string_from `sum` ) )
+    ( vec_push [String] v ( string_from `sync` ) )
+    ( vec_push [String] v ( string_from `tac` ) )
+    ( vec_push [String] v ( string_from `tail` ) )
+    ( vec_push [String] v ( string_from `tar` ) )
+    ( vec_push [String] v ( string_from `tee` ) )
+    ( vec_push [String] v ( string_from `test` ) )
+    ( vec_push [String] v ( string_from `touch` ) )
+    ( vec_push [String] v ( string_from `tr` ) )
+    ( vec_push [String] v ( string_from `true` ) )
+    ( vec_push [String] v ( string_from `truncate` ) )
+    ( vec_push [String] v ( string_from `tty` ) )
+    ( vec_push [String] v ( string_from `uname` ) )
+    ( vec_push [String] v ( string_from `unexpand` ) )
+    ( vec_push [String] v ( string_from `uniq` ) )
+    ( vec_push [String] v ( string_from `unix2dos` ) )
+    ( vec_push [String] v ( string_from `uptime` ) )
+    ( vec_push [String] v ( string_from `usleep` ) )
+    ( vec_push [String] v ( string_from `wc` ) )
+    ( vec_push [String] v ( string_from `which` ) )
+    ( vec_push [String] v ( string_from `whoami` ) )
+    ( vec_push [String] v ( string_from `xargs` ) )
+    ( vec_push [String] v ( string_from `xxd` ) )
+    ( vec_push [String] v ( string_from `yes` ) )
+    ( vec_push [String] v ( string_from `zcat` ) )
+    ^ v
+}
+
+// Is `name` one of ours? A binary invoked under a name it does not
+// implement is the MULTIPLEXER — that is how `nurlbox` behaves when the
+// unikernel's loader calls it `main`, and how a copy named anything else
+// still works.
+@ bx_is_applet s name → b {
+    : ( Vec String ) names ( _applet_names )
+    : i n ( vec_len [String] names )
+    : ~ b found F
+    : ~ i i 0
+    ~ < i n {
+        ? ( bx_streq ( bx_at names i ) name ) { = found T } {}
+        = i + i 1
+    }
+    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
+    ^ found
+}
