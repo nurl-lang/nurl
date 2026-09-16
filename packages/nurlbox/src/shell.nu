@@ -16,6 +16,8 @@ $ `stdlib/std/term.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/regex.nu`
 $ `bx.nu`
+$ `sys.nu`
+$ `grep.nu`
 
 // ── test / [ ──────────────────────────────────────────────────────
 //

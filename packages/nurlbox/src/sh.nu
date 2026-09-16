@@ -32,6 +32,7 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/ext/env.nu`
 $ `bx.nu`
+$ `filter.nu`
 
 // ── Words ─────────────────────────────────────────────────────────
 
@@ -2037,7 +2038,7 @@ $ `bx.nu`
                         ? ( bx_is_applet cmd ) {
                             // In-process: no fork needed, which is what
                             // makes this shell work on a unikernel.
-                            = rc ( bx_run_applet cmd argv )
+                            = rc ( bx_dispatch cmd argv )
                             ( bx_set_name `sh` )
                         } { = rc ( __sh_exec_external argv ) }
                     }

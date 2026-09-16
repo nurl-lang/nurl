@@ -25,6 +25,7 @@ $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/ext/regex.nu`
 $ `bx.nu`
+$ `filter.nu`
 
 : i GREP_INVERT 1
 : i GREP_IGNORE 2

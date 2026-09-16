@@ -118,9 +118,19 @@ for toml in packages/*/nurl.toml; do
         # the PIPELINE reports failure — and `|| continue` then skips the
         # very check that just succeeded. This gate is silent when it is
         # wrong, so it must not have a way to be silently right either.
+        # The keying has a second accepted form, and nurlbox is why: its
+        # constant is named after the package (`NURLBOX_VERSION`) and its one
+        # call site is `( nurl_print NURLBOX_VERSION )` — no `nurlbox`
+        # literal anywhere near it, so the call-site keying above could not
+        # see it, and a bump to 0.2.1 sailed through a gate written four
+        # times over to stop exactly this. A constant named for the package
+        # IS the package's version; nothing else can own that name.
+        pkgconst=$(printf '%s' "$pkg" | tr 'a-z-' 'A-Z_')_VERSION
         while IFS='|' read -r cname lit; do
             [ -n "$cname" ] || continue
-            grep -q "\`$pkg\`.*\b$cname\b" <<<"$pkgsrc" || continue
+            if [ "$cname" != "$pkgconst" ]; then
+                grep -q "\`$pkg\`.*\b$cname\b" <<<"$pkgsrc" || continue
+            fi
             checked=$((checked + 1))
             if [ "$lit" != "$manifest" ]; then
                 echo "MISMATCH: $pkg — nurl.toml says '$manifest' but $src binds $cname = '$lit'"

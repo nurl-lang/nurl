@@ -22,6 +22,7 @@ $ `stdlib/std/cmp.nu`
 $ `stdlib/std/time.nu`
 $ `bx.nu`
 $ `filter.nu`
+$ `binio.nu`
 
 : s PROC_ROOT `/proc`
 
