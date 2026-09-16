@@ -1,0 +1,28 @@
+# Changelog
+
+## 1.0.10
+
+`--version` reported 1.0.8 while the manifest said 1.0.9.
+
+The string is a literal in the source and nothing derives it from `nurl.toml`,
+so the bump to 1.0.9 moved one and not the other. A published version cannot be
+replaced, only superseded — which is what this is.
+
+## 1.0.9
+
+`interp_free`, `module_free`, `wc_free` and 4 more now take a **`sink`** parameter.
+
+The compiler-ownership hardening in toolchain 0.65.0 (#1107) reached these
+signatures: a free function must consume the handle it releases, so the
+checker can prove the caller cannot use it again. The change landed in the
+monorepo at the time and this package was never republished, so the registry
+has been serving 1.0.8 with different source ever since. That is what this
+release closes.
+
+For a caller the effect is the ownership rule, not the call: the value is
+gone after the free, and using it again is now a compile error instead of a
+use-after-free. Code that already treated it that way needs no edit.
+
+It also carries the write-deadline and nonblocking socket declarations that
+came with toolchain 0.65.0: absolute TCP/TLS write deadlines, prepared
+nonblocking writes and reads, and combined read/write readiness.

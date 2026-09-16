@@ -37,9 +37,10 @@ $ `stdlib/ext/mcp_http.nu`
 $ `stdlib/ext/mcp_auth.nu`
 $ `src/authz.nu`
 $ `src/imptime.nu`
+$ `src/store.nu`
 
 // One version for the CLI banner and the MCP handshake.
-: s ANOMALY_VERSION `0.33.0`
+: s ANOMALY_VERSION `0.33.2`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 

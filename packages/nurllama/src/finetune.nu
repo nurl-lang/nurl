@@ -43,6 +43,7 @@ $ `deps/tensor/src/tensor.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
+$ `tokenizer.nu`
 
 // A heap-boxed f64 vector (NURL has no bare deref for *( Vec f ) — field
 // access through a struct pointer is the idiom).
