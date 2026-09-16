@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.1
+
+`gk_close` now forgets the device it closed.
+
+The buffer pool is process-global and keyed by device, and closing a kit
+released the buffers without dropping the pool's record of them. Reopening
+on the same device then handed back buffers belonging to a CUDA context
+that no longer existed — which is a use-after-free the caller has no way
+to see, because every handle involved still looks valid.
+
+A program that opens a kit once, as most do, never reached it. One that
+closes and reopens — a service releasing the card while idle, which is
+what `--unload-after` does — reached it on the second load.
+
 ## 0.8.0
 
 `gk_dbuf_free` now takes a **`sink`** parameter.
