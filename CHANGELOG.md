@@ -152,8 +152,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spelling refused the link and blocked `nurlpkg test`.
 
 - **`gk_close` drops the process-global pool's record of the device it
-  closed.** Reopening after a close handed back buffers belonging to a
-  context that no longer existed.
+  closed** (gpukit 0.8.1). Reopening after a close handed back buffers
+  belonging to a context that no longer existed. A program that opens a kit
+  once never reached it; one that closes and reopens — a service releasing
+  the card while idle — reached it on the second load.
+
+- **torchpt 0.1.2**: `pk_free` takes a `sink`, from the ownership hardening
+  in 0.65.0. Four packages were republished for that at the time and this
+  one was missed, so the registry had been serving 0.1.1 with different
+  source ever since.
 
 - **packages: safetensor 0.3.5, tokenizer 0.3.3, audio 0.6.1 and hub 0.1.4
   republished**, because whisper and embed could not pass the publish gate:
