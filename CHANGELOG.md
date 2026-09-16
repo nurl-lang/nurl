@@ -6,21 +6,23 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.66.0] — 2026-09-16
 
 ### Added
 
-- **packages/f5tts names no model.** `--model` and `--vocoder` are now
-  required and the built-in catalogue of "known" checkpoints is gone: a
-  speech model is a choice about a language, a voice and a licence, and none
-  of those are a library's to make. A name is a path, a directory under
-  `~/.f5tts/models`, or a `owner/repo/path/to/file` reference the hub fetches
-  once; the vocabulary is `vocab.txt` beside the checkpoint unless `--vocab`
-  says otherwise. The web interface is English throughout and starts with an
-  empty text box, the reference-dump scripts take their paths from the
-  environment, and `--lang` now actually reaches the transcriber (it was
-  collected and never sent) as a multipart field, defaulting to letting it
-  detect one.
+- **packages/f5tts 0.1.0 — F5-TTS in pure NURL.** The flow-matching
+  text-to-speech model, running from the checkpoints Hugging Face ships, with
+  no Python, no PyTorch and no ONNX export: a 22-block diffusion transformer
+  with adaLN-zero modulation, the conditional-flow-matching sampler with
+  classifier-free guidance and sway sampling, and the vocos vocoder. Verified
+  against the reference implementation with fixed inputs at every stage — the
+  text front-end id for id over 3039 lines, the text encoder at 2.6e-6, the
+  whole forward at 2.3e-6, 32 guided ODE steps at 7.4e-6, the waveform at
+  2.9e-4. `f5tts serve` answers POST /tts and POST /dialogue with a wav, an
+  mp3 or raw PCM, switches models per request, and gives the card back after
+  `--unload-after` idle seconds. An utterance the reference takes three
+  minutes over on one machine's CPU takes 1.6 s here.
+
 
 - **packages/audio 0.7.0 encodes MP3.** MPEG-1, MPEG-2 and MPEG-2.5 Layer III
   at all nine sample rates the format defines, mono or stereo, constant
@@ -34,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks that they tile the file exactly, at all nine rates in both channel
   configurations, then decodes one back with ffmpeg and compares waveforms.
 
+
 - **packages/f5tts answers `output_format: "mp3"`.** The synthesis service
   encodes the mp3 itself rather than shelling out, so a request that asks for
   one gets `audio/mpeg` instead of a 400; `mp3_bitrate` picks the rate (128
@@ -41,12 +44,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line, chosen by the file name. `ogg` is still refused by name: there is no
   Vorbis encoder in this ecosystem yet.
 
+
+- **packages/f5tts names no model.** `--model` and `--vocoder` are now
+  required and the built-in catalogue of "known" checkpoints is gone: a
+  speech model is a choice about a language, a voice and a licence, and none
+  of those are a library's to make. A name is a path, a directory under
+  `~/.f5tts/models`, or a `owner/repo/path/to/file` reference the hub fetches
+  once; the vocabulary is `vocab.txt` beside the checkpoint unless `--vocab`
+  says otherwise. The web interface is English throughout and starts with an
+  empty text box, the reference-dump scripts take their paths from the
+  environment, and `--lang` now actually reaches the transcriber (it was
+  collected and never sent) as a multipart field, defaulting to letting it
+  detect one.
+
+
+- **`fft_irfft` and `fft_irfft_plan` (`std/fft.nu`), `rng_normal`
+  (`std/rng.nu`).** A vocoder's head predicts a magnitude and a phase per
+  frame and bin, not a waveform, so the inverse real transform is the step
+  that makes it audio; `rng_normal` is Box–Muller over the existing
+  generator, for a diffusion model's starting noise.
+
+
+- **packages/audio: `istft_center`, `wav_encode`, and the HTK mel.** The
+  inverse short-time transform divides by the overlap-added window envelope,
+  which is what stops a steady tone coming back amplitude-modulated at the
+  frame rate; `log_mel_vocos` is the vocos-family mel (HTK scale,
+  unnormalised triangles, magnitude rather than power) beside whisper's.
+
+
 - **`posix_const` knows `MAP_POPULATE` and `MADV_WILLNEED`.** A loader that
   mmaps a multi-gigabyte model file can ask the kernel to map every page in
   one pass (`MAP_POPULATE`, Linux) or to read a range ahead
   (`MADV_WILLNEED`) instead of taking one page fault at a time. Both come
   back as `-1` where the platform lacks them, so a caller ORs them in only
   when they are known — the mapping is merely lazier without them.
+
+
+- **packages/agora 0.1.0, 0.2.0, 0.3.0 — a meeting place for agents.**
+  Channels, mail, a task board and shared notes over one SQLite file, served
+  as an MCP server and a REST API from one operation catalog. `brief` hands
+  an agent everything new exactly once (a cursor per agent and channel, moved
+  in the transaction that reads it); `wait` blocks until something arrives,
+  so waiting for another agent costs no tokens; notes take a `project=`
+  namespace and a 0.1.0 file is migrated on open.
+
+
+- **`whisper serve --unload-after S` and `embed serve --unload-after S`.**
+  The model becomes something the server holds rather than something it is: a
+  reaper closes it after S idle seconds with nothing in flight and the next
+  request reloads it. Idle, whisper gives back 4.8 GB of device memory for
+  large-v3 and keeps ~60 MB of process. `/health` reports `loads`, `unloads`,
+  `last_load_ms` and `idle_s`, and says `idle` — healthy — for the unloaded
+  state. Default 0 keeps the old behaviour.
+
+
+- **`gpu_upload_batch` and a staging pair `gpu_close` frees (gpu 0.13.0).**
+  Loading large-v3 is 3x faster and keeps no host copy of the weights.
+
+
+- **bench: server CPU per request, on cores the load generator cannot
+  touch.** Without core isolation and CPU time every cell measured the server
+  and the generator together, and req/s and latency both move when the
+  generator pushes harder — enough to invent a peer difference that does not
+  exist. It had: a remembered 20.0 µs/request against a peer's 13.9 was two
+  confounds stacked.
 
 ### Fixed
 
@@ -61,6 +122,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now swept from an empty state — the `??`-arm rule — tracking only bindings
   the body itself declares. Found by the weekly inverse-oracle fuzzer
   (`FUZZ_GEN=reject`), 12 of 400 seeds.
+
+
+- **The frontend's quadratic term is gone (self-compile 1.97x).** Resolution
+  was superlinear in the size of the import closure — 71.7 ms/kline at 56k
+  lines against 28.7 at 4k — in two spellings of one defect on the parked
+  implication lists: an append that copied the whole accumulated list three
+  times per record, and a replay that walked it word by word.
+
+- **`std/hash_sha3` absorbs whole lanes without a signed divide per lane.**
+  `pos` is always in `[0, rate)` but is typed `i`, and NURL's `/` and `%` are
+  signed, so dividing by a power of two lowered to lea/test/cmov/and/sub —
+  about ten instructions per 8-byte lane where the sponge needs two. 8 MB
+  one-shot absorb: 346 MB/s to ~365, instructions −7.1 %.
+
+- **Windows decodes child pipes as UTF-8.** .NET decoded a redirected child
+  pipe with the console's OEM code page, so `nurlc`'s diagnostics and the
+  test programs' output arrived mojibake'd and were compared against correct
+  UTF-8 goldens. The compiler's stdout *is* the `.ll` handed to clang, so the
+  round trip corrupted every non-ASCII string literal in the compiled
+  program, not only the diagnostics.
+
+- **HTTP: one `HttpRequest` per connection.** The keep-alive path allocates
+  nothing per request on the request side — −0.9 µs/req, −3.7 %, and parity
+  with the Rust peer at 14 B.
+
+- **`nurlpkg` compares dependency path links after normalising them.**
+  `../gpu` and `../gpukit/../gpu` are the same directory; comparing them by
+  spelling refused the link and blocked `nurlpkg test`.
+
+- **`gk_close` drops the process-global pool's record of the device it
+  closed** (gpukit 0.8.1). Reopening after a close handed back buffers
+  belonging to a context that no longer existed. A program that opens a kit
+  once never reached it; one that closes and reopens — a service releasing
+  the card while idle — reached it on the second load.
+
+- **torchpt 0.1.2**: `pk_free` takes a `sink`, from the ownership hardening
+  in 0.65.0. Four packages were republished for that at the time and this
+  one was missed, so the registry had been serving 0.1.1 with different
+  source ever since.
+
+- **packages: safetensor 0.3.5, tokenizer 0.3.3, audio 0.6.1 and hub 0.1.4
+  republished**, because whisper and embed could not pass the publish gate:
+  their path dependencies differed from the registry by exactly the `sink`
+  keyword added in 0.65.0. Three modules also leaned on the program's import
+  order rather than their own `$` lines, which the gate's per-module
+  typecheck caught.
+
+- **wasmbuilder 0.3.0 strips DWARF by default; `-g` keeps it.** The empty
+  program linked to 1,126,353 bytes of which 1,121,271 were debug info —
+  99.6 % of an artefact nobody had asked to debug. Stripped it is 3,889.
+
+- **onnx 0.9.0 reads the protobuf wire format through the stdlib.** The
+  package's own decoder bounded no length prefix and knew four wire types out
+  of six, so a group tag advanced the cursor by nothing and a malformed model
+  was decoded rather than rejected.
 
 ## [0.65.0] — 2026-09-13
 
@@ -19084,7 +19200,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.65.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.66.0...HEAD
+[0.66.0]: https://github.com/nurl-lang/nurl/compare/v0.65.0...v0.66.0
 [0.65.0]: https://github.com/nurl-lang/nurl/compare/v0.64.0...v0.65.0
 [0.64.0]: https://github.com/nurl-lang/nurl/compare/v0.63.0...v0.64.0
 [0.63.0]: https://github.com/nurl-lang/nurl/compare/v0.62.0...v0.63.0

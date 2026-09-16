@@ -395,17 +395,37 @@ platform-specific shims.
   LayerNorm rather than RMSNorm, error-function GELU rather than tanh, two
   conv1d layers, cross-attention, and the ecosystem's first **non-causal**
   attention.
+- **Speech synthesis, in pure NURL** (`f5tts` + `audio` + `safetensor` +
+  `torchpt` + `gpukit`): a reference recording and its transcript go in and
+  the same voice comes out saying something it never said — F5-TTS, the
+  flow-matching model, from the checkpoints Hugging Face ships, with no
+  Python and no ONNX export. A 22-block diffusion transformer with adaLN-zero
+  modulation, conditional flow matching with classifier-free guidance and
+  sway sampling, and the vocos vocoder. Verified against the reference with
+  fixed inputs at every stage: the text front-end id for id, the text encoder
+  at 2.6e-6, the whole forward at 2.3e-6, 32 guided ODE steps at 7.4e-6, the
+  waveform at 2.9e-4. What the model is *not* is the whole program — the
+  duration is guessed linearly, the reference is loudness-normalised and
+  scaled back, and long text is chunked and cross-faded, none of which is
+  learned and all of which changes what comes out. The service answers wav,
+  mp3 or raw PCM; the **MP3 encoder** is `audio`'s own (MPEG-1/2/2.5 Layer
+  III, all nine sample rates, no ffmpeg and no codec library), because a
+  program that can only hand back WAV cannot answer a request for an mp3.
 - **Package ecosystem** on the live registry (`reg.nurl-lang.org`,
   `nurlpkg install`): GPU compute (`gpu` — CUDA driver + NVRTC, a CPU
   fallback backend, a static-kernel backend, and a **WebGPU / WGSL backend**;
   `gpukit`, `tensor`), pure-NURL vision and ML (`image` PNG/JPEG codecs,
   `onnx` runtime, `objdet`, `yoloe`, `iforest`, `anomaly`, and `mlp` — the
   first *trainable* package, a deterministic sklearn-faithful MLP regressor),
-  local LLMs (`nurllama`, `gguf`, `tokenizer`, `safetensor`), speech (`whisper`,
-  `audio`), distributed compute (`swarm`, `swarm-mcp`), web
+  local LLMs (`nurllama`, `gguf`, `tokenizer`, `safetensor`), speech
+  recognition and synthesis (`whisper`, `f5tts`, `audio` — WAV, resampling,
+  mel spectrograms and MP3 encoding), agent coordination (`agora` — channels,
+  mail, a task board and notes over one SQLite file, as MCP and REST),
+  distributed compute (`swarm`, `swarm-mcp`), web
   (`template` HTML templating, `http`, `http-client` — one client facade
-  over HTTP/1.1, HTTP/2 and HTTP/3 — and `oauth`, an OpenID Connect
-  relying party and resource-server guard in pure NURL), PKI (`pki-server` — a private CA
+  over HTTP/1.1, HTTP/2 and HTTP/3 — `gRPC`, a native client and server over
+  that HTTP/2, and `oauth`, an OpenID Connect relying party and
+  resource-server guard in pure NURL), PKI (`pki-server` — a private CA
   with a classical *or* post-quantum signing key), database clients
   (`psql`, `redis`
   — pure NURL), and application scaffolding (`cli`, `cas`, `wasmbuilder`,
