@@ -32,6 +32,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/hash_blake3.nu`
 $ `stdlib/ext/env.nu`
+$ `token.nu`
 
 // The absolute block grid: block b covers dataset values
 // [b·BLOB_BLOCK_VALS, (b+1)·BLOB_BLOCK_VALS).

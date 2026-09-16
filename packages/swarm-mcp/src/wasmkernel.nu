@@ -42,6 +42,7 @@ $ `stdlib/std/random.nu`
 $ `stdlib/ext/env.nu`
 $ `deps/nwasm/src/module.nu`
 $ `deps/nwasm/src/interp.nu`
+$ `blob.nu`
 $ `token.nu`
 
 @ kind_wasm → i { ^ 2 }
