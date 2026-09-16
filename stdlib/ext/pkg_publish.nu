@@ -279,6 +279,29 @@ $ `stdlib/ext/http_cli.nu`
 // Recursively collect files under `root`/`rel` into `out` as TarEntries
 // keyed by their path relative to `root`. Returns 0 on success, 1 on I/O
 // failure.
+// A file or directory that is GONE between the listing and the read was
+// never part of this package, and saying so matters: the walk is not atomic,
+// so anything writing in the tree while it runs — an editor's swap file, a
+// build cleaning up, a second publish staging beside this one — makes a name
+// appear in `dir_list` and vanish before `read_file_bytes` opens it. Treating
+// that as a read failure made packaging fail about 5 % of the time under a
+// concurrent write, with an error naming nothing the publisher can fix.
+//
+// A file that is PRESENT and unreadable is a different thing and stays fatal:
+// a source the packer cannot read is a package it must not ship.
+@ __pack_vanished IoErr e → b {
+    ^ ?? e {
+        NotFound → T
+        PermissionDenied → F
+        AlreadyExists → F
+        Interrupted → F
+        UnexpectedEof → F
+        WriteFailed → F
+        ReadFailed → F
+        Other → F
+    }
+}
+
 @ __pack_collect s root s rel ( Vec TarEntry ) out ( Vec String ) ignores → i {
     : String dir ( string_from root )
     ? > ( nurl_str_len rel ) 0 {
@@ -301,7 +324,9 @@ $ `stdlib/ext/http_cli.nu`
     : !( Vec String ) IoErr lr ( dir_list ( string_data dir ) )
     : ~ i rc 0
     ?? lr {
-        F _ → { = rc 1 }
+        // The ROOT must exist — a missing project is not a vanishing file —
+        // so only a subdirectory reached by recursion is allowed to be gone.
+        F de → { ? & > ( nurl_str_len rel ) 0 ( __pack_vanished de ) {} { = rc 1 } }
         T entries → {
             : i n ( vec_len [String] entries )
             : ~ i k 0
@@ -335,7 +360,7 @@ $ `stdlib/ext/http_cli.nu`
                                         { ( vec_free [u] bytes ) }
                                         { ( vec_push [TarEntry] out ( tar_entry_file ( string_data relpath ) bytes ) ) }
                                     }
-                                    F _ → { = rc 1 }
+                                    F fe → { ? ( __pack_vanished fe ) {} { = rc 1 } }
                                 }
                             } {
                                 ? == t 2 {
