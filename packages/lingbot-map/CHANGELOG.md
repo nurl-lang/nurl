@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.8
+
+`--version` reported 0.9.6 while the manifest said 0.9.7.
+
+The string is a literal in the source and nothing derives it from `nurl.toml`,
+so the bump to 0.9.7 moved one and not the other. A published version cannot be
+replaced, only superseded — which is what this is.
+
 ## 0.9.7
 
 `ag_free`, `ch_free`, `ch_ws_free`, `dn_free`, `dp_free`, `lm_blk_free` and 5 more now take a **`sink`** parameter.

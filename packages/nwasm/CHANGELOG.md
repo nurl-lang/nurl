@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.10
+
+`--version` reported 1.0.8 while the manifest said 1.0.9.
+
+The string is a literal in the source and nothing derives it from `nurl.toml`,
+so the bump to 1.0.9 moved one and not the other. A published version cannot be
+replaced, only superseded — which is what this is.
+
 ## 1.0.9
 
 `interp_free`, `module_free`, `wc_free` and 4 more now take a **`sink`** parameter.

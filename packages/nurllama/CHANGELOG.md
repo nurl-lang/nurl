@@ -2,6 +2,14 @@
 
 All notable changes to the `nurllama` package.
 
+## 0.17.6
+
+`--version` reported 0.17.4 while the manifest said 0.17.5.
+
+The string is a literal in the source and nothing derives it from `nurl.toml`,
+so the bump to 0.17.5 moved one and not the other. A published version cannot be
+replaced, only superseded — which is what this is.
+
 ## 0.17.5
 
 `cfg_free`, `chat_msg_free`, `chat_msgs_free`, `ft_free`, `ft_train_free`, `lk_free` now take a **`sink`** parameter.

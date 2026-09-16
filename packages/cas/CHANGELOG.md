@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+`--version` reported 0.1.0 while the manifest said 0.1.1.
+
+The string is a literal in the source and nothing derives it from `nurl.toml`,
+so the bump to 0.1.1 moved one and not the other. A published version cannot be
+replaced, only superseded — which is what this is.
+
 ## 0.1.1
 
 `cas_free`, `manifest_free` now take a **`sink`** parameter.

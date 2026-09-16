@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.33.2
+
+`--version` reported 0.33.0 while the manifest said 0.33.1.
+
+The string is a literal in the source and nothing derives it from `nurl.toml`,
+so the bump to 0.33.1 moved one and not the other. A published version cannot be
+replaced, only superseded — which is what this is.
+
 ## 0.33.1
 
 `ae_contrib_free`, `ae_free`, `anom_csv_free`, `anom_vermodel_free`, `anomaly_report_free`, `cal_free` and 36 more now take a **`sink`** parameter.

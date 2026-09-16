@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4
+
+`--version` reported 0.3.2 while the manifest said 0.3.3.
+
+The string is a literal in the source and nothing derives it from `nurl.toml`,
+so the bump to 0.3.3 moved one and not the other. A published version cannot be
+replaced, only superseded — which is what this is.
+
 ## 0.3.3
 
 `gw_free`, `gws_free` now take a **`sink`** parameter.
