@@ -86,8 +86,9 @@ fieldset{border:0;padding:0;margin:14px 0 0}
         <div><label for="speed">Speed</label><input id="speed" type="number" step="0.05" value="1"></div>
         <div><label for="fade">Cross-fade</label><input id="fade" type="number" step="0.05" value="0.15"></div>
         <div><label for="rms">Target RMS</label><input id="rms" type="number" step="0.01" value="0.1"></div>
-        <div><label for="retry">Retries</label><input id="retry" type="number" value="1" min="1" max="10"></div>
+        <div><label for="retry">Retries</label><input id="retry" type="number" value="0" min="0" max="10"></div>
         <div><label for="wer">Max WER</label><input id="wer" type="number" step="0.05" value="0.15"></div>
+        <div><label for="split">Split after</label><input id="split" type="number" value="0" min="0" max="10"></div>
       </div>
     </details>
     <div class="bar">
@@ -185,7 +186,8 @@ $("#go").onclick = async () => {
     cross_fade_duration: +$("#fade").value,
     target_rms: +$("#rms").value,
     whisper_retry: +$("#retry").value,
-    max_wer: +$("#wer").value
+    max_wer: +$("#wer").value,
+    splitfail: +$("#split").value
   };
   $("#go").disabled = true; $("#dl").disabled = true;
   const t0 = performance.now(); say("speaking…");
@@ -197,7 +199,10 @@ $("#go").onclick = async () => {
     state.blob = await r.blob();
     $("#player").src = URL.createObjectURL(state.blob);
     $("#player").play();
-    say(((performance.now()-t0)/1000).toFixed(1) + " s");
+    const heard = r.headers.get("x-f5tts-words");
+    say(((performance.now()-t0)/1000).toFixed(1) + " s" + (heard ? " — the transcriber heard " +
+      r.headers.get("x-f5tts-word-errors") + " of " + heard + " words wrong (" +
+      r.headers.get("x-f5tts-attempts") + " attempts)" : ""));
     $("#dl").disabled = false;
   }catch(e){ oops(e.message); say(""); }
   $("#go").disabled = false;

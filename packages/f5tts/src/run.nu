@@ -199,29 +199,16 @@ $ `verify.nu`
 
 @ f5_short_fix_on → b { ^ g_f5r_shortfix }
 
+: i F5_SHORT_PLUS_MS 1100
+
+: i F5_SHORT_FULL_BYTES 30
+
+: i F5_SHORT_TAPER_END 120
+
 @ f5_duration * F5Voice v s gen_text i n_text f speed → i {
     : i gen_bytes ( nurl_str_len gen_text )
     : ~ f local speed
-    ? g_f5r_shortfix {
-        // The remedy the upstream project's own notes work out. The reference's
-        // rule slows the duration estimate for text under TEN bytes; a
-        // two-word Finnish line is twelve. It lands just outside, gets its
-        // linear share of the reference's speaking rate — six tenths of a
-        // second — and the model runs out of room before it has settled, so
-        // what comes back is silence. Measured on this checkpoint: "Miten
-        // menee." and "Onko hyvä?" are inaudible, while "Menee?" (six bytes,
-        // and therefore slowed) is fine.
-        : i wc ( f5_word_count gen_text )
-        ? | < wc 4 < gen_bytes 7 {
-            ? <= gen_bytes 4 { = local 0.1 } {
-                ? <= gen_bytes 7 { = local 0.2 } {
-                    ? <= wc 2 { = local 0.25 } { = local 0.3 }
-                }
-            }
-        } {
-            ? < gen_bytes 15 { = local 0.5 } {}
-        }
-    } {
+    ? g_f5r_shortfix {} {
         ? < gen_bytes 10 { = local 0.3 } {}
     }
     : i ref_audio_len / . v samples F5_HOP
@@ -230,15 +217,28 @@ $ `verify.nu`
     ? > rb 0 {
         = d + ref_audio_len # i / * / # f ref_audio_len # f rb # f gen_bytes local
     } {}
+    ? g_f5r_shortfix {
+        // The reference's estimate is a speaking RATE, and a short line is
+        // mostly not speaking: an onset, a word or two, a close. Measured on
+        // this checkpoint with two voices and eleven one-to-three-word lines
+        // (packages/f5tts, 2026-09-17): at 0.8 s of generated audio they
+        // come back as silence, at 1.2 s clipped ("Kiitos itselle"), at
+        // 1.6-2.0 s right, and at 2.5 s and over the model fills the room by
+        // saying the line twice or carrying on with the reference text. So a
+        // short line gets its linear estimate plus a fixed overhead — 1.1 s
+        // up to thirty bytes, tapering to nothing at a hundred and twenty,
+        // where the estimate is already a few seconds and stands on its own.
+        ? < gen_bytes F5_SHORT_TAPER_END {
+            : ~ i plus_ms F5_SHORT_PLUS_MS
+            ? > gen_bytes F5_SHORT_FULL_BYTES {
+                = plus_ms / * F5_SHORT_PLUS_MS - F5_SHORT_TAPER_END gen_bytes - F5_SHORT_TAPER_END F5_SHORT_FULL_BYTES
+            } {}
+            = d + d / / * plus_ms F5_SR 1000 F5_HOP
+        } {}
+    } {}
     // at least the text's own length, and at least the conditioning, plus one
     : i floor1 + ? > n_text . v frames n_text . v frames 1
     ? < d floor1 { = d floor1 } {}
-    ? g_f5r_shortfix {
-        // and a floor: eight tenths of a second of generated audio, whatever
-        // the linear estimate said
-        : i floor2 + ref_audio_len / / * 8 F5_SR 10 F5_HOP
-        ? < d floor2 { = d floor2 } {}
-    } {}
     ? > d 4096 { = d 4096 } {}
     ^ d
 }
@@ -287,54 +287,139 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
 //
 // The model has no idea whether it said the words. So when a transcriber is
 // configured, the chunk is generated, transcribed and scored, and a score
-// over the threshold buys another attempt from a different seed. The BEST
+// over the threshold buys another attempt from a different seed — `retries`
+// of them, so a line is generated at most 1 + retries times. The BEST
 // attempt is kept, not the last: a retry can come out worse, and returning
 // the worse one because it came later would make the feature harmful.
 //
 // A transcription that fails to happen — no server, a timeout — is not an
 // error rate of one. It is no information, and the first attempt stands.
+//
+// What the gate found out travels in a score: four integers — word errors,
+// reference words, the most attempts any chunk needed, and the chunks the
+// transcriber never answered for. The words stay zero when nothing was
+// transcribed, so "unchecked" and "perfect" are different answers, and an
+// unheard chunk is counted rather than passed off as fine.
+
+@ f5_score_new → ( Vec i ) {
+    : ( Vec i ) s ( vec_with_cap [i] 4 )
+    ( vec_push [i] s 0 )
+    ( vec_push [i] s 0 )
+    ( vec_push [i] s 0 )
+    ( vec_push [i] s 0 )
+    ^ s
+}
+
+@ f5_score_errs ( Vec i ) s → i { ^ ( _f5t_geti s 0 ) }
+
+@ f5_score_words ( Vec i ) s → i { ^ ( _f5t_geti s 1 ) }
+
+@ f5_score_attempts ( Vec i ) s → i { ^ ( _f5t_geti s 2 ) }
+
+@ f5_score_unheard ( Vec i ) s → i { ^ ( _f5t_geti s 3 ) }
+
+@ f5_score_checked ( Vec i ) s → b { ^ > ( _f5t_geti s 1 ) 0 }
+
+// The word error rate the score stands for, or -1 when nothing was checked.
+@ f5_score_wer ( Vec i ) s → f {
+    : i w ( _f5t_geti s 1 )
+    ? > w 0 {} { ^ -1.0 }
+    ^ / # f ( _f5t_geti s 0 ) # f w
+}
+
+@ __f5r_score_add ( Vec i ) s i errs i words i attempts → v {
+    ( vec_set [i] s 0 + ( _f5t_geti s 0 ) errs )
+    ( vec_set [i] s 1 + ( _f5t_geti s 1 ) words )
+    ? > attempts ( _f5t_geti s 2 ) { ( vec_set [i] s 2 attempts ) } {}
+}
+
+@ __f5r_score_unheard ( Vec i ) s → v { ( vec_set [i] s 3 + ( _f5t_geti s 3 ) 1 ) }
+
+@ f5_score_merge ( Vec i ) into ( Vec i ) from → v {
+    ( __f5r_score_add into ( _f5t_geti from 0 ) ( _f5t_geti from 1 ) ( _f5t_geti from 2 ) )
+    ( vec_set [i] into 3 + ( _f5t_geti into 3 ) ( _f5t_geti from 3 ) )
+}
+
+// Is the gate on at all for these settings? A transcriber, and something
+// that could act on its answer.
+@ f5_gate_on i retries f max_wer → b {
+    ? ( f5_whisper_enabled ) {} { ^ F }
+    ^ | > retries 0 < max_wer 1.0
+}
+
+// The transcriber's word errors against `gen_text`, or -1 when it had
+// nothing to say. A transcriber that is busy with someone else's request,
+// or reloading its weights, answers with nothing for a moment — so an empty
+// answer is asked again, a few times, before it counts as no answer.
+: i F5_LISTEN_TRIES 4
+
+@ __f5r_listen s gen_text ( Vec f ) wave → i {
+    : ~ i t 0
+    ~ < t F5_LISTEN_TRIES {
+        : String heard ( f5_transcribe wave )
+        ? > ( string_len heard ) 0 {
+            : i e ( f5_errors gen_text ( string_data heard ) )
+            ( string_free heard )
+            ^ e
+        } {}
+        ( string_free heard )
+        = t + t 1
+        ? < t F5_LISTEN_TRIES { ( sleep_ms * 500 t ) } {}
+    }
+    ( nurl_eprintln `f5tts: the transcriber did not answer; this chunk goes unchecked` )
+    ^ -1
+}
+
+@ __f5r_copy ( Vec f ) dst ( Vec f ) src → v {
+    ( vec_clear [f] dst )
+    : ~ i k 0
+    ~ < k ( vec_len [f] src ) {
+        ( vec_push [f] dst ( __f5r_get src k ) )
+        = k + k 1
+    }
+}
+
 @ f5_synth_chunk * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
-i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out → b {
+i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out ( Vec i ) score → b {
     : ~ b ok ( __f5r_synth_once m vc v vocab gen_text steps cfg sway speed seed out )
     ? ok {} { ^ F }
-    ? & > retries 1 ( f5_whisper_enabled ) {} { ^ T }
-    : String heard ( f5_transcribe out )
-    ? > ( string_len heard ) 0 {} { ( string_free heard ) ^ T }
-    : ~ f best ( f5_wer gen_text ( string_data heard ) )
-    ( string_free heard )
-    ? <= best max_wer { ^ T } {}
-    : ( Vec f ) try ( vec_new [f] )
+    ? ( f5_gate_on retries max_wer ) {} { ^ T }
+    : i nw ( f5_word_count_norm gen_text )
+    ? > nw 0 {} { ^ T }
+    : ~ i best ( __f5r_listen gen_text out )
+    ? >= best 0 {} { ( __f5r_score_unheard score ) ^ T }
+    : f allowed * max_wer # f nw
     : ~ i att 1
-    ~ & < att retries > best max_wer {
+    ? <= # f best allowed {
+        ( __f5r_score_add score best nw att )
+        ^ T
+    } {}
+    : ( Vec f ) try ( vec_new [f] )
+    ~ & <= att retries > # f best allowed {
         ( vec_clear [f] try )
         ? ( __f5r_synth_once m vc v vocab gen_text steps cfg sway speed + seed * 7919 att try ) {
-            : String h2 ( f5_transcribe try )
-            : ~ f w2 1.0
-            ? > ( string_len h2 ) 0 { = w2 ( f5_wer gen_text ( string_data h2 ) ) } {}
-            ( string_free h2 )
-            ? < w2 best {
-                = best w2
-                ( vec_clear [f] out )
-                : ~ i k 0
-                ~ < k ( vec_len [f] try ) {
-                    ( vec_push [f] out ( __f5r_get try k ) )
-                    = k + k 1
-                }
+            : i e2 ( __f5r_listen gen_text try )
+            ? & >= e2 0 < e2 best {
+                = best e2
+                ( __f5r_copy out try )
             } {}
         } {}
         = att + att 1
     }
     ( vec_free [f] try )
-    ? > best max_wer {
+    ? > # f best allowed {
         : String msg ( string_from `f5tts: kept the best of ` )
         ( string_push_int msg att )
-        ( string_push_str msg ` attempts at ` )
-        ( string_push_float msg best )
-        ( string_push_str msg ` word error rate: ` )
+        ( string_push_str msg ` attempts, ` )
+        ( string_push_int msg best )
+        ( string_push_str msg ` of ` )
+        ( string_push_int msg nw )
+        ( string_push_str msg ` words wrong: ` )
         ( string_push_str msg gen_text )
         ( nurl_eprintln ( string_data msg ) )
         ( string_free msg )
     } {}
+    ( __f5r_score_add score best nw att )
     ^ T
 }
 
@@ -370,15 +455,70 @@ i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out → b {
 
 @ f5_synth * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
 i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
-    ^ ( f5_synth_checked m vc v vocab gen_text steps cfg sway speed fade_s seed 1 1.0 out )
+    : ( Vec i ) score ( f5_score_new )
+    : b ok ( f5_synth_scored m vc v vocab gen_text steps cfg sway speed fade_s seed 0 1.0 out score )
+    ( vec_free [i] score )
+    ^ ok
 }
 
-// The same, with the transcriber's opinion: `retries` attempts per chunk and
-// a word error rate over `max_wer` buys another one.
-@ f5_synth_checked * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
-i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out → b {
+// A line that opens with a one-word sentence — "Juuri. Seuraavaksi ne
+// tuo…" — loses it: the model runs the reference straight into the second
+// sentence and the first is never said, from every seed. Said on its own
+// the same word comes out fine. So under --short-fix a one-word opening
+// sentence is its own chunk, with its own duration estimate. Two-word
+// openings ("Eipä kestä.", "Kiitos kutsusta.") were said as part of the
+// line and are left in it. Returns where the rest begins, or 0 when the
+// rule does not apply.
+: i F5_LEAD_WORDS 1
+
+@ _f5r_lead_split s text → i {
+    : i n ( nurl_str_len text )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get text k )
+        ? & | == c 46 | == c 33 == c 63 < + k 1 n {
+            ? ( __f5r_is_ws ( nurl_str_get text + k 1 ) ) {
+                : ~ i e + k 1
+                ~ & < e n ( __f5r_is_ws ( nurl_str_get text e ) ) { = e + e 1 }
+                ? >= e n { ^ 0 } {}
+                : String head ( string_from ( nurl_str_slice text 0 + k 1 ) )
+                : i wc ( f5_word_count ( string_data head ) )
+                ( string_free head )
+                ^ ? <= wc F5_LEAD_WORDS e 0
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ 0
+}
+
+@ __f5r_chunks * F5Voice v s gen_text f speed → ( Vec String ) {
     : i mc ( f5_max_chars v speed )
     : ( Vec String ) chunks ( f5_chunk_text gen_text mc )
+    ? g_f5r_shortfix {} { ^ chunks }
+    ? > ( vec_len [String] chunks ) 0 {} { ^ chunks }
+    ?? ( vec_get [String] chunks 0 ) {
+        T first → {
+            : i at ( _f5r_lead_split ( string_data first ) )
+            ? > at 0 {
+                : String lead ( string_trim ( string_from ( nurl_str_slice ( string_data first ) 0 at ) ) )
+                : String rest ( string_trim ( string_from ( nurl_str_slice ( string_data first ) at - ( string_len first ) at ) ) )
+                ( vec_set [String] chunks 0 lead )
+                : b _i ( vec_insert [String] chunks 1 rest )
+                ( string_free first )
+            } {}
+        }
+        F → {}
+    }
+    ^ chunks
+}
+
+// The utterance, chunk by chunk, each through the gate: `retries` more
+// attempts for a chunk whose word error rate is over `max_wer`, and the
+// score of what was kept added to `score`.
+@ f5_synth_scored * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out ( Vec i ) score → b {
+    : ( Vec String ) chunks ( __f5r_chunks v gen_text speed )
     : i nc ( vec_len [String] chunks )
     : i fade # i * fade_s # f F5_SR
     : ~ b ok T
@@ -388,7 +528,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out �
             T c → {
                 : ( Vec f ) piece ( vec_new [f] )
                 = ok & ok ( f5_synth_chunk m vc v vocab ( string_data c ) steps cfg sway speed
-                + seed k retries max_wer piece )
+                + seed k retries max_wer piece score )
                 ? ok { ( f5_crossfade out piece fade ) } {}
                 ( vec_free [f] piece )
             }
@@ -399,6 +539,24 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out �
     : ( @ v String ) drop_c \ String s → v { ( string_free s ) }
     ( vec_free_with [String] chunks drop_c )
     ^ ok
+}
+
+// Scale a waveform down, once, if it would clip on the way to 16 bits.
+// The model's output is louder than its reference for some voices, and
+// with target_rms off nothing else stands between it and the encoder.
+@ f5_limit_peak ( Vec f ) wave → v {
+    : ~ f peak 0.0
+    : i n ( vec_len [f] wave )
+    : ~ i k 0
+    ~ < k n {
+        : f a ( fabs ( __f5r_get wave k ) )
+        ? > a peak { = peak a } {}
+        = k + k 1
+    }
+    ? > peak 0.99 {} { ^ v }
+    : f g / 0.99 peak
+    = k 0
+    ~ < k n { ( vec_set [f] wave k * g ( __f5r_get wave k ) ) = k + k 1 }
 }
 
 // ── preparing the reference recording ───────────────────────────────
@@ -820,38 +978,92 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out �
 // One dialogue line: the stage directions removed, split into sentences when
 // there are more than six of them, each generated with the quality gate, and
 // joined with the sixty-millisecond pause the reference service uses.
+//
+// `splitfail` is the reference service's second remedy: when the line as a
+// whole is still over `max_wer` after at least `splitfail` attempts, it is
+// generated again a sentence at a time, each sentence through the gate, and
+// whichever of the two came out with fewer errors is kept. Zero turns it off.
+@ __f5r_synth_sentences * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab ( Vec String ) sents
+i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out ( Vec i ) score → b {
+    : i ns ( vec_len [String] sents )
+    : ~ b ok T
+    : ~ i k 0
+    ~ & < k ns ok {
+        ?? ( vec_get [String] sents k ) {
+            T sp → {
+                : ( Vec f ) piece ( vec_new [f] )
+                = ok ( f5_synth_scored m vc v vocab ( string_data sp ) steps cfg sway
+                speed fade_s + seed k retries max_wer piece score )
+                ? ok {
+                    : ~ i j 0
+                    ~ < j ( vec_len [f] piece ) {
+                        ( vec_push [f] out ( __f5r_get piece j ) )
+                        = j + j 1
+                    }
+                    ? < k - ns 1 { ( f5_append_silence out 60 ) } {}
+                } {}
+                ( vec_free [f] piece )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ ok
+}
+
 @ f5_synth_line * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s text
-i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out → b {
+i steps f cfg f sway f speed f fade_s i seed i retries f max_wer i splitfail ( Vec f ) out ( Vec i ) score → b {
     : String clean ( f5_strip_brackets text )
     ? > ( string_len clean ) 0 {} { ( string_free clean ) ^ T }
     : ( Vec String ) sents ( f5_split_sentences ( string_data clean ) )
     : i ns ( vec_len [String] sents )
     : ~ b ok T
     ? > ns 6 {
-        : ~ i k 0
-        ~ & < k ns ok {
-            ?? ( vec_get [String] sents k ) {
-                T sp → {
-                    : ( Vec f ) piece ( vec_new [f] )
-                    = ok ( f5_synth_checked m vc v vocab ( string_data sp ) steps cfg sway
-                    speed fade_s + seed k retries max_wer piece )
-                    ? ok {
-                        : ~ i j 0
-                        ~ < j ( vec_len [f] piece ) {
-                            ( vec_push [f] out ( __f5r_get piece j ) )
-                            = j + j 1
-                        }
-                        ? < k - ns 1 { ( f5_append_silence out 60 ) } {}
-                    } {}
-                    ( vec_free [f] piece )
-                }
-                F → {}
-            }
-            = k + k 1
-        }
+        = ok ( __f5r_synth_sentences m vc v vocab sents steps cfg sway speed fade_s seed
+        retries max_wer out score )
     } {
-        = ok ( f5_synth_checked m vc v vocab ( string_data clean ) steps cfg sway speed
-        fade_s seed retries max_wer out )
+        : ( Vec i ) s1 ( f5_score_new )
+        : ( Vec f ) whole ( vec_new [f] )
+        = ok ( f5_synth_scored m vc v vocab ( string_data clean ) steps cfg sway speed
+        fade_s seed retries max_wer whole s1 )
+        : b failed & ( f5_score_checked s1 ) > ( f5_score_wer s1 ) max_wer
+        ? & & ok failed & > splitfail 0 & >= ( f5_score_attempts s1 ) splitfail > ns 1 {
+            : ( Vec i ) s2 ( f5_score_new )
+            : ( Vec f ) split ( vec_new [f] )
+            : b ok2 ( __f5r_synth_sentences m vc v vocab sents steps cfg sway speed fade_s
+            + seed 1000 retries max_wer split s2 )
+            // fewer errors, and every sentence actually heard — a result
+            // the transcriber went quiet on is not a better one
+            : b better & & ok2 == ( f5_score_unheard s2 ) 0 < ( f5_score_wer s2 ) ( f5_score_wer s1 )
+            : String msg ( string_from `f5tts: split into ` )
+            ( string_push_int msg ns )
+            ( string_push_str msg ` sentences after ` )
+            ( string_push_int msg ( f5_score_attempts s1 ) )
+            ( string_push_str msg ` attempts: ` )
+            ( string_push_int msg ( f5_score_errs s2 ) )
+            ( string_push_str msg ` errors against ` )
+            ( string_push_int msg ( f5_score_errs s1 ) )
+            ( string_push_str msg ? better `, kept the sentences` `, kept the whole line` )
+            ( nurl_eprintln ( string_data msg ) )
+            ( string_free msg )
+            ? better {
+                ( __f5r_copy whole split )
+                ( vec_set [i] s1 0 ( f5_score_errs s2 ) )
+                ( vec_set [i] s1 1 ( f5_score_words s2 ) )
+                ( vec_set [i] s1 2 ( f5_score_attempts s2 ) )
+                ( vec_set [i] s1 3 ( f5_score_unheard s2 ) )
+            } {}
+            ( vec_free [f] split )
+            ( vec_free [i] s2 )
+        } {}
+        : ~ i j 0
+        ~ < j ( vec_len [f] whole ) {
+            ( vec_push [f] out ( __f5r_get whole j ) )
+            = j + j 1
+        }
+        ( f5_score_merge score s1 )
+        ( vec_free [f] whole )
+        ( vec_free [i] s1 )
     }
     ( f5_append_silence out ( f5_trailing_pause_ms ( string_data clean ) ) )
     : ( @ v String ) drop_s \ String s → v { ( string_free s ) }

@@ -57,6 +57,49 @@ context belongs to a thread and the device holds one copy of the activations,
 so a dialogue of eight lines is eight jobs answered in turn rather than eight
 forwards through the same scratch.
 
+## The quality gate
+
+A flow-matching model given a duration estimate and some noise does not
+always say the words: it drops a short one, runs two together, mumbles the end
+of a chunk whose duration guess was tight — and nothing inside the model says
+so. So the service can LISTEN. With `--whisper HOST:PORT` naming a transcriber
+(whisper.cpp's server or [packages/whisper](../whisper) — both answer
+`POST /inference`), three request fields turn the gate on, the same three the
+reference service takes:
+
+| field | meaning |
+|---|---|
+| `max_wer` | the word error rate a line has to stay under (default 0.15 once the gate is on) |
+| `whisper_retry` | how many MORE times a line may be generated when it is over — retries, so `0` generates once and `3` at most four times (default 0) |
+| `splitfail` | when a line is still over after N attempts, generate it again a sentence at a time and keep whichever came out better (default 0 = never) |
+
+Asking for either of the first two turns the gate on; each is also accepted
+per input, in `voice_settings`. What was heard comes back in the response
+headers `x-f5tts-word-errors`, `x-f5tts-words`, `x-f5tts-attempts` and
+`x-f5tts-unheard` — the last is the number of chunks the transcriber never
+answered for, so a quiet transcriber cannot pass as a perfect one.
+
+The gate works chunk by chunk, not line by line: a retry regenerates the
+chunk that came out wrong, from a different seed, and the BEST attempt is
+kept rather than the last, because a retry can come out worse. It measures
+what the model said, not how the transcriber spelt it — digits are read out
+in Finnish before comparing (`2026` meets *kaksituhatta kaksikymmentäkuusi*),
+a hyphen is a word boundary, and a compound the transcriber joined or split
+(*lepakonkosto* for *lepakon kosto*) costs nothing.
+
+Two remedies the gate leans on, both under `--short-fix`. A line that opens
+with a one-word sentence ("Juuri. Seuraavaksi…") is generated with that word
+as its own chunk, because run straight on from the reference the model skips
+it — from every seed — and said on its own it comes out fine. And a short
+line gets its linear duration estimate plus a fixed overhead of 1.1 s
+(tapering to nothing at 120 bytes), because the reference's estimate is a
+speaking RATE and a short line is mostly not speaking. Measured on eleven
+one-to-three-word lines, two voices, two seeds each: 0.8 s of generated
+audio comes back as silence, 1.2 s clipped, 1.6–2.0 s right, and from 2.5 s
+up the model fills the room by saying the line twice or carrying on with
+the reference text — 3 word errors in 84 at linear + 1.1 s against 12 for the
+speed table the upstream notes propose and 65 for a 0.8 s floor.
+
 ## Verified against the reference, stage by stage
 
 With **fixed inputs**, so a disagreement is about the model and not about
