@@ -8,7 +8,7 @@
 #  Env: NURL (build driver; defaults to ../../nurl.sh in a checkout)
 #       NURL_COV_DIFF_N  how many corpus programs to diff (default 12)
 #
-#  Two halves:
+#  Three parts:
 #
 #   1. The CLI: build a fixture package's tests with coverage, run them,
 #      and check the report, the LCOV tracefile, the JSON, the HTML and
@@ -20,6 +20,11 @@
 #      files have to agree on every count, every branch and every
 #      percentage — which is the only way to know that numbers nobody
 #      can work out by hand are right.
+#
+#   3. A fuzz sweep: truncations and byte flips of a real coverage pair.
+#      A reader is handed files it did not write, and the first sweep of
+#      this kind found a hang and twelve segfaults — every one of them a
+#      count taken from the file and used without a bound.
 #
 #  The differential needs llvm-cov and a checkout of the compiler's test
 #  corpus. Where either is missing it is reported as SKIP, loudly, and
@@ -48,7 +53,7 @@ ok()   { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 skip() { echo "  SKIP $1"; SKIP=$((SKIP+1)); }
 
-echo "[1/4] build nurl-cov"
+echo "[1/5] build nurl-cov"
 if ! $NURL -O0 src/main.nu "$WORK/nurl-cov" >/dev/null 2>"$WORK/build.err"; then
     echo "  build failed:"
     sed 's/^/    /' "$WORK/build.err"
@@ -58,7 +63,7 @@ COV="$WORK/nurl-cov"
 ok "nurl-cov builds"
 
 # ── 2. the CLI, on a package whose coverage is known ────────────
-echo "[2/4] run against a fixture package"
+echo "[2/5] run against a fixture package"
 PKG="$WORK/pkg"
 mkdir -p "$PKG/src" "$PKG/tests"
 cat > "$PKG/src/lib.nu" <<'EOF'
@@ -131,7 +136,7 @@ if [ $? = 2 ]; then ok "a missing coverage directory is a usage error, not a pas
 fi
 
 # ── 3. a coverage build that was never run ──────────────────────
-echo "[3/4] notes without data"
+echo "[3/5] notes without data"
 $NURL --coverage --no-dce -O0 tests/fixtures/sample.nu "$WORK/neverrun" \
     >/dev/null 2>"$WORK/neverrun.err"
 if [ -f "$WORK/neverrun.gcno" ] && [ ! -f "$WORK/neverrun.gcda" ]; then
@@ -147,7 +152,7 @@ else
 fi
 
 # ── 4. differential against llvm-cov ────────────────────────────
-echo "[4/4] differential against llvm-cov"
+echo "[4/5] differential against llvm-cov"
 LLVM_COV="$(command -v llvm-cov || true)"
 CORPUS="$REPO_ROOT/compiler/tests"
 if [ -z "$LLVM_COV" ]; then
@@ -201,6 +206,65 @@ else
         ok "$DIFF_OK programs, $FILES source files, identical to llvm-cov"
     else
         bad "$DIFF_BAD of $((DIFF_OK+DIFF_BAD)) programs differ from llvm-cov"
+    fi
+fi
+
+# ── 5. malformed input ─────────────────────────────────────────
+echo "[5/5] truncated and corrupted graphs"
+SEED_GCNO="$PKG/.nurl-cov/basic.gcno"
+SEED_GCDA="$PKG/.nurl-cov/basic.gcda"
+if [ ! -f "$SEED_GCNO" ] || [ ! -f "$SEED_GCDA" ]; then
+    bad "fuzz sweep: the fixture run left no coverage graphs to corrupt"
+elif ! command -v python3 >/dev/null 2>&1; then
+    skip "fuzz sweep (python3 is not installed)"
+else
+    FZ="$WORK/fuzz"
+    mkdir -p "$FZ"
+    # Deterministic: a fixed seed, so a failure here is reproducible and a
+    # green run means the same cases passed.
+    python3 - "$COV" "$SEED_GCNO" "$SEED_GCDA" "$FZ" "${NURL_COV_FUZZ_N:-200}" <<'PYFUZZ' > "$WORK/fuzz.out" 2>&1
+import random, subprocess, sys, os
+cov, gcno_path, gcda_path, d, n = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+gcno = open(gcno_path, 'rb').read()
+gcda = open(gcda_path, 'rb').read()
+random.seed(20260918)
+bad = []
+def run(tag, no, da):
+    open(d + '/t.gcno', 'wb').write(no)
+    open(d + '/t.gcda', 'wb').write(da)
+    try:
+        rc = subprocess.run([cov, 'gcov', d + '/t.gcno'],
+                            capture_output=True, timeout=30).returncode
+    except subprocess.TimeoutExpired:
+        bad.append((tag, 'hung')); return
+    # 0 = read it, 2 = refused it by name. Anything else is a crash.
+    if rc not in (0, 2):
+        bad.append((tag, 'exit %d' % rc))
+cases = 0
+for _ in range(n // 4):
+    run('truncated notes', gcno[:random.randrange(0, len(gcno))], gcda); cases += 1
+for _ in range(n // 4):
+    run('truncated data', gcno, gcda[:random.randrange(0, len(gcda))]); cases += 1
+for _ in range(n // 4):
+    b = bytearray(gcno)
+    for _ in range(random.randrange(1, 6)):
+        b[random.randrange(len(b))] = random.randrange(256)
+    run('corrupted notes', bytes(b), gcda); cases += 1
+for _ in range(n - 3 * (n // 4)):
+    b = bytearray(gcda)
+    for _ in range(random.randrange(1, 6)):
+        b[random.randrange(len(b))] = random.randrange(256)
+    run('corrupted data', gcno, bytes(b)); cases += 1
+print('cases=%d bad=%d' % (cases, len(bad)))
+for x in bad[:10]:
+    print('  %s: %s' % x)
+sys.exit(1 if bad else 0)
+PYFUZZ
+    if [ $? = 0 ]; then
+        ok "fuzz sweep: $(sed -n '1s/cases=\([0-9]*\).*/\1/p' "$WORK/fuzz.out") malformed graphs, no crash and no hang"
+    else
+        bad "fuzz sweep found a crash or a hang"
+        sed 's/^/    /' "$WORK/fuzz.out" | head -12
     fi
 fi
 

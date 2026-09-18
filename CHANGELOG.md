@@ -42,6 +42,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`packages/nurl-cov` is bounded by the file it is reading, not by the
+  numbers inside it.** A fuzz sweep over truncations and byte flips of a
+  real coverage pair found a hang and twelve segfaults, all the same
+  mistake: a count taken from the file and used without a bound. One
+  flipped byte named source line 1970155382, and because the per-line
+  tables are indexed by line number the reader sized a table from it;
+  another turned a string's word count into 738 million and the read
+  walked that far past the buffer; a third named a block the function does
+  not have, and an arc pointing outside the block table left the walk that
+  solves the flow unable to mark where it had been, so it looped. String
+  spans are now bounded by their own record, a line number past sixteen
+  million is a malformed file, block numbers are checked at parse time as
+  gcov checks them, and a function's own checksums are checked against the
+  notes — the check that catches a notes file corrupted after its build
+  stamp was written. 645 cases per seed over five seeds, no crash and no
+  hang, and the package's test suite runs a deterministic sweep of its
+  own.
+
 - **`args_values` — a repeated option's earlier values were recorded and
   unreachable.** `std/args` already kept the whole history of a value
   option (`val_idx` / `val_str` are append-only, and the header said so),

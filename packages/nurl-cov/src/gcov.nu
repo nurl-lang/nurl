@@ -47,8 +47,10 @@ $ `stdlib/std/fs.nu`
 : i GCOV_ARC_FAKE 2
 
 // Function table stride. One row per function.
-: i GFN_W 11
+: i GFN_W 13
 : i GFN_IDENT 0
+: i GFN_LCS 11  // line-number checksum, as the notes recorded it
+: i GFN_CCS 12  // control-flow checksum
 : i GFN_SRC 1  // index into `files`
 : i GFN_LINE 2
 : i GFN_NBLOCK 3
@@ -73,6 +75,14 @@ $ `stdlib/std/fs.nu`
 : i GBL_BLOCK 0
 : i GBL_SRC 1
 : i GBL_LINE 2
+
+// A line number no source file reaches. The per-line tables are indexed BY
+// line number, so an untrusted number decides how much memory this reader
+// asks for: one flipped byte in a notes file named line 1970155382, and a
+// dense table that long is tens of gigabytes and a hang. The largest file
+// in this project is 33795 lines. Sixteen million is a ceiling no real
+// source reaches and every corrupt one blows straight through.
+: i GCOV_MAX_LINE 16777216
 
 : GcovObj {
     String notes  // path of the .gcno that was read
@@ -105,6 +115,9 @@ $ `stdlib/std/fs.nu`
     GcovBadVersion  // a GCOV layout this reader does not implement
     GcovTruncated  // a record runs past the end of the file
     GcovStampMismatch  // .gcda belongs to a different build than the .gcno
+    GcovChecksumMismatch  // a function's own checksums disagree across the pair
+    GcovBadLine  // a line number no source file could have
+    GcovBadBlock  // a record names a block the function does not have
 }
 
 @ gcov_err_name GcovErr e → s {
@@ -114,6 +127,9 @@ $ `stdlib/std/fs.nu`
         GcovBadVersion → `unsupported GCOV version (this reader implements "408*")`
         GcovTruncated → `truncated record`
         GcovStampMismatch → `.gcda was produced by a different build than the .gcno`
+        GcovChecksumMismatch → `a function's checksums differ between the .gcno and the .gcda`
+        GcovBadLine → `a line number larger than any source file has`
+        GcovBadBlock → `a record names a block the function does not have`
     }
 }
 
@@ -134,9 +150,17 @@ $ `stdlib/std/fs.nu`
     ^ | ( __g_u32 p off ) << ( __g_u32 p + off 4 ) 32
 }
 
-// A GCOV string: `n` words of payload, NUL-padded to the word boundary.
-// The stored length is the padded one, so the real end is the first NUL.
-@ __g_str * u p i off i words → String {
+// A GCOV string: `words` words of payload, NUL-padded to the word
+// boundary. The stored length is the padded one, so the real end is the
+// first NUL.
+//
+// `limit` is where the record ends, and it is not optional. The word count
+// comes straight out of the file: a flipped byte turned one into 738
+// million here, and a reader that trusts it walks that far off the end of
+// the buffer. A span that does not fit is not a short string, it is a
+// broken record, and the caller is told by getting nothing back.
+@ __g_str * u p i off i words i limit → String {
+    ? | < words 0 > + off * words 4 limit { ^ ( string_new ) } {}
     : i cap * words 4
     : ~ i n 0
     ~ < n cap {
@@ -194,10 +218,18 @@ $ `stdlib/std/fs.nu`
                 ? >= cur 0 { ( __g_notes_blocks o cur words ) } {}
             } {
                 ? == tag GCOV_TAG_ARCS {
-                    ? >= cur 0 { ( __g_notes_arcs o cur p body end ) } {}
+                    ? >= cur 0 {
+                        ? ! ( __g_notes_arcs o cur p body end ) {
+                            ^ @ !v GcovErr { F GcovBadBlock }
+                        } {}
+                    } {}
                 } {
                     ? == tag GCOV_TAG_LINES {
-                        ? >= cur 0 { = cursrc ( __g_notes_lines o cur p body end ) } {}
+                        ? >= cur 0 {
+                            = cursrc ( __g_notes_lines o cur p body end )
+                            ? == cursrc -2 { ^ @ !v GcovErr { F GcovBadLine } } {}
+                            ? == cursrc -3 { ^ @ !v GcovErr { F GcovBadBlock } } {}
+                        } {}
                     } {}
                 }
             }
@@ -240,14 +272,18 @@ $ `stdlib/std/fs.nu`
 @ __g_notes_function * GcovObj o * u p i body i end → i {
     ? > + body 12 end { ^ -1 } {}
     : i ident ( __g_u32 p body )
+    : i lcs ( __g_u32 p + body 4 )
+    : i ccs ( __g_u32 p + body 8 )
     : ~ i q + body 12
+    ? > + q 4 end { ^ -1 } {}
     : i namew ( __g_u32 p q )
-    : String name ( __g_str p + q 4 namew )
+    : String name ( __g_str p + q 4 namew end )
     = q + q + 4 * namew 4
     ? > + q 4 end { ( string_free name ) ^ -1 } {}
     : i filew ( __g_u32 p q )
-    : String file ( __g_str p + q 4 filew )
+    : String file ( __g_str p + q 4 filew end )
     = q + q + 4 * filew 4
+    ? > q end { ( string_free name ) ( string_free file ) ^ -1 } {}
     : i line ? <= + q 4 end ( __g_u32 p q ) 0
     : i src ( __g_file_idx o file )
     ( string_free file )
@@ -265,6 +301,8 @@ $ `stdlib/std/fs.nu`
     ( vec_push [i] . o fns 0 )  // BL_N
     ( vec_push [i] . o fns 0 )  // CTR_OFF
     ( vec_push [i] . o fns 0 )  // CTR_N
+    ( vec_push [i] . o fns lcs )
+    ( vec_push [i] . o fns ccs )
     ^ idx
 }
 
@@ -277,13 +315,21 @@ $ `stdlib/std/fs.nu`
 }
 
 // An ARCS record is a source block followed by (destination, flags) pairs.
-@ __g_notes_arcs * GcovObj o i fi * u p i body i end → v {
-    ? > + body 4 end { ^ v } {}
+//
+// A block number out of range is not an arc to skip: the graph it
+// describes is not this function's, and an arc pointing outside the block
+// table makes the walk that solves the flow unable to mark where it has
+// been. It loops. So the file is refused, which is what gcov does too.
+@ __g_notes_arcs * GcovObj o i fi * u p i body i end → b {
+    ? > + body 4 end { ^ T } {}
+    : i nb ( __g_fn o fi GFN_NBLOCK )
     : i from ( __g_u32 p body )
+    ? >= from nb { ^ F } {}
     : ~ i q + body 4
     ~ <= + q 8 end {
         : i dst ( __g_u32 p q )
         : i flags ( __g_u32 p + q 4 )
+        ? >= dst nb { ^ F } {}
         ( vec_push [i] . o arcs from )
         ( vec_push [i] . o arcs dst )
         ( vec_push [i] . o arcs flags )
@@ -293,6 +339,7 @@ $ `stdlib/std/fs.nu`
         + 1 ( __g_fn o fi GFN_ARC_N ) )
         = q + q 8
     }
+    ^ T
 }
 
 // A LINES record is a block number followed by line numbers, with a
@@ -300,13 +347,19 @@ $ `stdlib/std/fs.nu`
 // ending the record. A block can span more than one file: a call that was
 // inlined, or — in NURL — a closure body whose declaration site lives in
 // the enclosing function's file.
+// Returns the file index the record ended on, or -2 for a line number no
+// source file could have and -3 for a block the function does not have.
+// Neither is a record to skip: nothing else in such a file can be trusted
+// either.
 @ __g_notes_lines * GcovObj o i fi * u p i body i end → i {
     ? > + body 4 end { ^ -1 } {}
     : i blk ( __g_u32 p body )
+    ? >= blk ( __g_fn o fi GFN_NBLOCK ) { ^ -3 } {}
     : ~ i src ( __g_fn o fi GFN_SRC )
     : ~ i q + body 4
     ~ <= + q 4 end {
         : i w ( __g_u32 p q )
+        ? > w GCOV_MAX_LINE { ^ -2 } {}
         ? != w 0 {
             ( vec_push [i] . o blines blk )
             ( vec_push [i] . o blines src )
@@ -318,8 +371,8 @@ $ `stdlib/std/fs.nu`
             = q + q 4
             ? > + q 4 end { = q end } {
                 : i namew ( __g_u32 p q )
-                ? == namew 0 { = q end } {
-                    : String f ( __g_str p + q 4 namew )
+                ? | <= namew 0 > + q + 4 * namew 4 end { = q end } {
+                    : String f ( __g_str p + q 4 namew end )
                     = src ( __g_file_idx o f )
                     ( string_free f )
                     = q + q + 4 * namew 4
@@ -355,7 +408,17 @@ $ `stdlib/std/fs.nu`
         ? > end len { ^ @ !v GcovErr { F GcovTruncated } } {}
         ? & == tag 0 == words 0 { = off len } {
             ? == tag GCOV_TAG_FUNCTION {
-                = cur ? >= + body 4 body ( __g_fn_by_ident o ( __g_u32 p body ) ) -1
+                = cur ? >= words 1 ( __g_fn_by_ident o ( __g_u32 p body ) ) -1
+                // The file stamp says the pair came from one build. These
+                // say this FUNCTION did: a notes file that was corrupted
+                // after the fact keeps the stamp and loses these, and
+                // every counter after it would land on the wrong arcs.
+                ? & >= cur 0 >= words 3 {
+                    ? | != ( __g_u32 p + body 4 ) ( __g_fn o cur GFN_LCS )
+                    != ( __g_u32 p + body 8 ) ( __g_fn o cur GFN_CCS ) {
+                        ^ @ !v GcovErr { F GcovChecksumMismatch }
+                    } {}
+                } {}
             } {
                 ? == tag GCOV_TAG_COUNTER {
                     ? >= cur 0 { ( __g_data_counters o cur p body / words 2 ) } {}
@@ -561,6 +624,15 @@ $ `stdlib/std/fs.nu`
 @ __g_index_build * GcovObj o → v {
     : i nblk ( gcov_total_blocks o )
     : i narc ( gcov_total_arcs o )
+    // These start empty from `gcov_new` so that an error path can still
+    // free the object; replacing a Vec field drops the old handle on the
+    // floor unless it is released first.
+    ( vec_free [i] . o pred_head )
+    ( vec_free [i] . o pred_tail )
+    ( vec_free [i] . o pred_next )
+    ( vec_free [i] . o succ_head )
+    ( vec_free [i] . o succ_tail )
+    ( vec_free [i] . o succ_next )
     = . o pred_head ( __g_zeros nblk )
     = . o pred_tail ( __g_zeros nblk )
     = . o pred_next ( __g_zeros narc )
@@ -600,35 +672,24 @@ $ `stdlib/std/fs.nu`
 // The arc a cursor points at, as an index into the arc table.
 @ gcov_edge_arc i cursor → i { ^ * - cursor 1 GARC_W }
 
-@ __g_edge_count * GcovObj o i fi i blk i side → i {
-    : ~ i n 0
-    : ~ i c ( gcov_edge_first o fi blk side )
-    ~ > c 0 { = n + n 1 = c ( gcov_edge_next o c side ) }
-    ^ n
-}
-
-@ __g_edge * GcovObj o i fi i blk i side i nth → i {
-    : ~ i seen 0
-    : ~ i c ( gcov_edge_first o fi blk side )
-    ~ > c 0 {
-        ? == seen nth { ^ ( gcov_edge_arc c ) } {}
-        = seen + seen 1
-        = c ( gcov_edge_next o c side )
-    }
-    ^ -1
-}
-
 // ── Propagation ──────────────────────────────────────────────────
 
 // Stack frame layout for the walk below. An explicit stack, not
 // recursion: a deeply nested function would otherwise decide how much
 // stack a coverage report needs.
-: i GST_W 5
+//
+// The frame carries a CURSOR into the block's arc chain rather than a
+// count of how many arcs it has consumed. Counting means re-walking the
+// chain to find the next one, which is quadratic in a block's degree —
+// invisible on ordinary code, and a hang on a graph where one block has
+// thousands of arcs pointing at it.
+: i GST_W 6
 : i GST_BLK 0
 : i GST_PRED 1  // arc index we arrived by, -1 at a root
 : i GST_INDST 2  // did we arrive along that arc's direction?
-: i GST_I 3  // how many of this block's arcs have been considered
-: i GST_EXCESS 4
+: i GST_SIDE 3  // -1 not started, 0 walking the arcs in, 1 the arcs out
+: i GST_CUR 4  // chain cursor, 0 when this side is exhausted
+: i GST_EXCESS 5
 
 @ __g_st ( Vec i ) st i sp i field → i {
     ^ ?? ( vec_get [i] st + * sp GST_W field ) { T x → x F _ → 0 }
@@ -644,7 +705,8 @@ $ `stdlib/std/fs.nu`
     ( __g_st_set st sp GST_BLK blk )
     ( __g_st_set st sp GST_PRED pred )
     ( __g_st_set st sp GST_INDST indst )
-    ( __g_st_set st sp GST_I 0 )
+    ( __g_st_set st sp GST_SIDE -1 )
+    ( __g_st_set st sp GST_CUR 0 )
     ( __g_st_set st sp GST_EXCESS 0 )
 }
 
@@ -656,40 +718,40 @@ $ `stdlib/std/fs.nu`
     ( __g_st_push st sp root -1 0 )
     ~ >= sp 0 {
         : i blk ( __g_st st sp GST_BLK )
-        : i i_ ( __g_st st sp GST_I )
-        : i npred ( __g_edge_count o fi blk 0 )
-        : i nsucc ( __g_edge_count o fi blk 1 )
-        // Arcs that do not in fact form a tree — bad input, or an arc
-        // set the instrumenter never promised — must not spin forever.
-        ? & == i_ 0 != 0 ( __g_ix visited blk ) {
-            = sp - sp 1
+        : i side ( __g_st st sp GST_SIDE )
+        ? < side 0 {
+            // Arcs that do not in fact form a tree — bad input, or an arc
+            // set the instrumenter never promised — must not spin forever.
+            ? != 0 ( __g_ix visited blk ) {
+                = sp - sp 1
+            } {
+                ( vec_set [i] visited blk 1 )
+                ( __g_st_set st sp GST_SIDE 0 )
+                ( __g_st_set st sp GST_CUR ( gcov_edge_first o fi blk 0 ) )
+            }
         } {
-            ? == i_ 0 { ( vec_set [i] visited blk 1 ) } {}
-            ? < i_ npred {
-                : i e ( __g_edge o fi blk 0 i_ )
-                ( __g_st_set st sp GST_I + i_ 1 )
+            : i cur ( __g_st st sp GST_CUR )
+            ? > cur 0 {
+                : i e ( gcov_edge_arc cur )
+                ( __g_st_set st sp GST_CUR ( gcov_edge_next o cur side ) )
                 ? != e ( __g_st st sp GST_PRED ) {
                     ? ( __g_on_tree o e ) {
+                        : i next_blk ? == side 0
+                        ( __g_arc_field o e GARC_SRC ) ( __g_arc_field o e GARC_DST )
                         = sp + sp 1
-                        ( __g_st_push st sp ( __g_arc_field o e GARC_SRC ) e 0 )
+                        ( __g_st_push st sp next_blk e side )
                     } {
+                        : i c ( __g_arc_field o e GARC_COUNT )
                         ( __g_st_set st sp GST_EXCESS
-                        + ( __g_st st sp GST_EXCESS ) ( __g_arc_field o e GARC_COUNT ) )
+                        ? == side 0
+                        + ( __g_st st sp GST_EXCESS ) c
+                        - ( __g_st st sp GST_EXCESS ) c )
                     }
                 } {}
             } {
-                ? < i_ + npred nsucc {
-                    : i e ( __g_edge o fi blk 1 - i_ npred )
-                    ( __g_st_set st sp GST_I + i_ 1 )
-                    ? != e ( __g_st st sp GST_PRED ) {
-                        ? ( __g_on_tree o e ) {
-                            = sp + sp 1
-                            ( __g_st_push st sp ( __g_arc_field o e GARC_DST ) e 1 )
-                        } {
-                            ( __g_st_set st sp GST_EXCESS
-                            - ( __g_st st sp GST_EXCESS ) ( __g_arc_field o e GARC_COUNT ) )
-                        }
-                    } {}
+                ? == side 0 {
+                    ( __g_st_set st sp GST_SIDE 1 )
+                    ( __g_st_set st sp GST_CUR ( gcov_edge_first o fi blk 1 ) )
                 } {
                     : i raw ( __g_st st sp GST_EXCESS )
                     : i excess ? < raw 0 - 0 raw raw

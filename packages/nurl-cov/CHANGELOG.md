@@ -40,6 +40,34 @@ anything that forks or exits abnormally, where it shows up as a percentage
 quietly a few points wrong. This implements the edge propagation gcov
 itself uses, synthetic exit-to-entry arc included.
 
+**The reader is handed files it did not write.** A fuzz sweep over
+truncations and byte flips of a real pair found a hang and twelve
+segfaults, all the same mistake: a number taken from the file and used
+without a bound.
+
+  * A flipped byte named source line 1970155382. The per-line tables are
+    indexed BY line number, so the reader sized a table from it. Anything
+    past sixteen million is now a malformed file, not an allocation.
+  * Another turned a string's word count into 738 million, and the read
+    walked that far past the buffer. Every string span is now bounded by
+    the record it sits in.
+  * Another named a block the function does not have. An arc pointing
+    outside the block table leaves the walk that solves the flow unable to
+    mark where it has been, and it loops — a hang rather than a wrong
+    number, which is the worse of the two. Block numbers are checked at
+    parse time, as gcov checks them.
+  * And a function's own checksums are now checked against the notes,
+    which is what catches a notes file corrupted after its build stamp was
+    written.
+
+645 cases per seed over five seeds, no crash and no hang; every case above
+is a regression test, and the suite runs a deterministic sweep of its own.
+
+The same sweep turned up two things worth having anyway: the propagation
+walk kept a count of the arcs it had consumed and re-walked the chain to
+find the next one, which is quadratic in a block's degree, and the edge
+index leaked the six empty vectors it replaced.
+
 Output: a summary table, the uncovered line ranges and the functions
 nothing called, an LCOV tracefile, one self-contained HTML page, JSON, and
 `--fail-under` as a CI gate.

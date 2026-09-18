@@ -323,6 +323,188 @@ $ `src/runner.nu`
     ( string_free junk )
 }
 
+// ── Hand-built graphs, for the inputs a fuzzer finds ──────────────
+//
+// A coverage reader is handed files it did not write. A flipped byte in a
+// notes file is not a theoretical worry: one of them named line 1970155382
+// here, and because the per-line tables are indexed BY line number, the
+// reader sized a table from an untrusted word and hung. These build the
+// smallest graphs that exercise those paths.
+
+@ put_u32 ( Vec u ) v i x → v {
+    ( vec_push [u] v # u & x 255 )
+    ( vec_push [u] v # u & >> x 8 255 )
+    ( vec_push [u] v # u & >> x 16 255 )
+    ( vec_push [u] v # u & >> x 24 255 )
+}
+
+// The four magic bytes, the version "408*" and a build stamp. Both files
+// spell the magic reversed, which is how a reader tells the endianness.
+@ put_header ( Vec u ) v s magic i stamp → v {
+    : ~ i k 0
+    ~ < k 4 { ( vec_push [u] v # u ( nurl_str_at magic 4 k ) ) = k + k 1 }
+    ( vec_push [u] v # u 42 )
+    ( vec_push [u] v # u 56 )
+    ( vec_push [u] v # u 48 )
+    ( vec_push [u] v # u 52 )
+    ( put_u32 v stamp )
+}
+
+// One word of NUL-padded name, the way the format stores a string.
+@ put_name1 ( Vec u ) v i ch → v {
+    ( put_u32 v 1 )
+    ( vec_push [u] v # u ch )
+    ( vec_push [u] v # u 0 )
+    ( vec_push [u] v # u 0 )
+    ( vec_push [u] v # u 0 )
+}
+
+// A notes file with one function, three blocks, and one line number that
+// `line` decides. Everything else is the smallest thing the format allows.
+@ build_notes i stamp i lcs i line → ( Vec u ) {
+    : ( Vec u ) v ( vec_new [u] )
+    ( put_header v `oncg` stamp )
+    ( put_u32 v 0x01000000 )
+    ( put_u32 v 8 )
+    ( put_u32 v 0 )  // ident
+    ( put_u32 v lcs )
+    ( put_u32 v 7 )  // cfg checksum
+    ( put_name1 v 102 )  // name "f"
+    ( put_name1 v 97 )  // file "a"
+    ( put_u32 v 1 )  // start line
+    ( put_u32 v 0x01410000 )
+    ( put_u32 v 3 )
+    ( put_u32 v 0 )
+    ( put_u32 v 0 )
+    ( put_u32 v 0 )
+    ( put_u32 v 0x01450000 )
+    ( put_u32 v 7 )
+    ( put_u32 v 2 )  // block 2
+    ( put_u32 v 0 )  // a file name follows
+    ( put_name1 v 97 )  // "a"
+    ( put_u32 v line )
+    ( put_u32 v 0 )
+    ( put_u32 v 0 )  // end of the record
+    ^ v
+}
+
+// A data file for that function, with whatever line checksum `lcs` says.
+@ build_data i stamp i lcs → ( Vec u ) {
+    : ( Vec u ) v ( vec_new [u] )
+    ( put_header v `adcg` stamp )
+    ( put_u32 v 0x01000000 )
+    ( put_u32 v 3 )
+    ( put_u32 v 0 )  // ident
+    ( put_u32 v lcs )
+    ( put_u32 v 7 )
+    ^ v
+}
+
+// Overwrite one 32-bit word in a graph that has already been built, so a
+// test can name the exact field it is corrupting.
+@ poke_u32 ( Vec u ) v i off i x → v {
+    ( vec_set [u] v off # u & x 255 )
+    ( vec_set [u] v + off 1 # u & >> x 8 255 )
+    ( vec_set [u] v + off 2 # u & >> x 16 255 )
+    ( vec_set [u] v + off 3 # u & >> x 24 255 )
+}
+
+@ dump_bytes s path ( Vec u ) v → v {
+    ?? ( write_file_bytes path v ) { T _ → {} F _ → {} }
+    ( vec_free [u] v )
+}
+
+// Reading must end in an answer or a named error, never in a crash and
+// never in a table sized from a number the file made up.
+@ expect_err s name s notes s data GcovErr want → v {
+    ?? ( gcov_read notes data ) {
+        T o → { ( bad name `the file was accepted` ) ( gcov_free o ) }
+        F e → ? == # i e # i want { ( ok name ) } {
+            ( bad name ( gcov_err_name e ) )
+        }
+    }
+}
+
+@ check_malformed s work → v {
+    : String n1 ( string_from work )
+    ( string_push_str n1 `/m1.gcno` )
+    : String d1 ( string_from work )
+    ( string_push_str d1 `/m1.gcda` )
+
+    // A line number no source file has. Before this was rejected, the
+    // reader grew a dense per-line table towards two billion entries.
+    ( dump_bytes ( string_data n1 ) ( build_notes 4660 1 1970155382 ) )
+    ( dump_bytes ( string_data d1 ) ( build_data 4660 1 ) )
+    ( expect_err `an impossible line number is refused, not allocated`
+    ( string_data n1 ) ( string_data d1 ) GcovBadLine )
+
+    // The same graph with a line a file really could have must be read.
+    ( dump_bytes ( string_data n1 ) ( build_notes 4660 1 7 ) )
+    ( dump_bytes ( string_data d1 ) ( build_data 4660 1 ) )
+    ?? ( gcov_read ( string_data n1 ) ( string_data d1 ) ) {
+        T o → {
+            ( eq_i `the same graph with a real line number is read` ( gcov_fn_count o ) 1 )
+            ( gcov_free o )
+        }
+        F e → ( bad `the same graph with a real line number is read` ( gcov_err_name e ) )
+    }
+
+    // The file stamp says the pair came from one build; the per-function
+    // checksums say this function did. A notes file corrupted after the
+    // fact keeps the first and loses the second, and every counter after
+    // it would land on the wrong arcs.
+    ( dump_bytes ( string_data n1 ) ( build_notes 4660 1 7 ) )
+    ( dump_bytes ( string_data d1 ) ( build_data 4660 99 ) )
+    ( expect_err `a function whose checksums disagree is refused`
+    ( string_data n1 ) ( string_data d1 ) GcovChecksumMismatch )
+
+    // A block the function does not have. An arc pointing outside the
+    // block table leaves the walk that solves the flow unable to mark
+    // where it has been, and it loops: this was a hang, not a wrong
+    // number, which is the worse of the two.
+    : ( Vec u ) badblk ( build_notes 4660 1 7 )
+    ( poke_u32 badblk 80 9 )  // the LINES record's block number
+    ( dump_bytes ( string_data n1 ) badblk )
+    ( dump_bytes ( string_data d1 ) ( build_data 4660 1 ) )
+    ( expect_err `a block the function does not have is refused`
+    ( string_data n1 ) ( string_data d1 ) GcovBadBlock )
+
+    // A whole different build.
+    ( dump_bytes ( string_data n1 ) ( build_notes 4660 1 7 ) )
+    ( dump_bytes ( string_data d1 ) ( build_data 1234 1 ) )
+    ( expect_err `a .gcda from another build is refused`
+    ( string_data n1 ) ( string_data d1 ) GcovStampMismatch )
+
+    // Cut short at every interesting offset: nothing may crash, and
+    // nothing may be read as if it were whole.
+    : ( Vec u ) whole ( build_notes 4660 1 7 )
+    : i n ( vec_len [u] whole )
+    : ~ i survived 0
+    : ~ i tried 0
+    : ~ i cut 0
+    ~ < cut n {
+        : ( Vec u ) part ( vec_new [u] )
+        : ~ i k 0
+        ~ < k cut {
+            ?? ( vec_get [u] whole k ) { T x → ( vec_push [u] part x ) F _ → {} }
+            = k + k 1
+        }
+        ( dump_bytes ( string_data n1 ) part )
+        = tried + tried 1
+        ?? ( gcov_read ( string_data n1 ) `/nonexistent.gcda` ) {
+            T o → ( gcov_free o )
+            F _ → {}
+        }
+        = survived + survived 1
+        = cut + cut 1
+    }
+    ( vec_free [u] whole )
+    ( eq_i `every truncation of a notes file is handled` survived tried )
+
+    ( string_free n1 )
+    ( string_free d1 )
+}
+
 @ main → i {
     : String work ?? ( fs_tempdir `` `nurl-cov-test-` ) {
         T d → d
@@ -353,6 +535,7 @@ $ `src/runner.nu`
     ( check_formats ( string_data notes ) ( string_data data ) )
     ( check_missing_data ( string_data notes ) )
     ( check_rejects_junk ( string_data work ) )
+    ( check_malformed ( string_data work ) )
 
     ( nurl_print `nurl-cov: PASS ` )
     ( nurl_print ( nurl_str_int g_pass ) )
