@@ -177,7 +177,19 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
                                     : i t1 ( now_ms )
                                     : ( Vec f ) wave ( vec_new [f] )
                                     : ~ i rc 0
-                                    ? ( f5_synth_checked m vc v vocab gen_text steps cfg sway speed fade seed retries max_wer wave ) {
+                                    : ( Vec i ) score ( f5_score_new )
+                                    ? ( f5_synth_scored m vc v vocab gen_text steps cfg sway speed fade seed retries max_wer wave score ) {
+                                        ? & ! quiet ( f5_score_checked score ) {
+                                            : String m3 ( string_from `f5tts: the transcriber heard ` )
+                                            ( string_push_int m3 ( f5_score_errs score ) )
+                                            ( string_push_str m3 ` of ` )
+                                            ( string_push_int m3 ( f5_score_words score ) )
+                                            ( string_push_str m3 ` words wrong (` )
+                                            ( string_push_int m3 ( f5_score_attempts score ) )
+                                            ( string_push_str m3 ` attempts at most)` )
+                                            ( nurl_eprintln ( string_data m3 ) )
+                                            ( string_free m3 )
+                                        } {}
                                         ? quiet {} {
                                             : String m2 ( string_from `f5tts: ` )
                                             ( string_push_float m2 / # f ( vec_len [f] wave ) 24000.0 )
@@ -196,6 +208,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
                                         = rc 1
                                     }
                                     ? profile { ( gk_prof_report ( f5_kit m ) ) } {}
+                                    ( vec_free [i] score )
                                     ( vec_free [f] wave )
                                     ( voc_close vc )
                                     ( f5_close m )
@@ -258,6 +271,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
 // 24 kHz, anything else writes the wav. No flag to forget, and no wav quietly
 // carrying an .mp3 name.
 @ __f5_write_audio s path ( Vec f ) wave i kbps → !v String {
+    ( f5_limit_peak wave )
     ? != 0 ( nurl_str_ends path `.mp3` ) {
         ?? ( mp3_encode wave 24000 1 kbps ) {
             T bytes → {
@@ -301,7 +315,7 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     ( args_opt p `token` 0 `T` `serve: require this bearer token (or $F5TTS_TOKEN)` )
     ( args_opt p `unload-after` 0 `S` `serve: release the weights after S idle seconds (default 0 = never)` )
     ( args_opt p `whisper` 0 `HOST:PORT` `a transcriber to check the result against (or $WHISPER_HOST/$WHISPER_PORT)` )
-    ( args_opt p `retries` 0 `N` `attempts per chunk when the transcriber disagrees (default 1)` )
+    ( args_opt p `retries` 0 `N` `more attempts for a chunk the transcriber heard wrong (default 0)` )
     ( args_opt p `max-wer` 0 `X` `word error rate that buys another attempt (default 0.15)` )
     ( args_opt p `lang` 0 `L` `the transcriber's language (default: let it detect one)` )
     ( args_flag p `help` 104 `show this help` )
@@ -467,8 +481,8 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
         : String sfd ( args_value_or p `fade` `0.15` )
         ?? ( string_to_float sfd ) { T x → { = fade x } F → {} }
         ( string_free sfd )
-        : ~ i retries 1
-        : String srt ( args_value_or p `retries` `1` )
+        : ~ i retries 0
+        : String srt ( args_value_or p `retries` `0` )
         ?? ( string_to_int srt ) { T x → { = retries x } F _ → {} }
         ( string_free srt )
         : ~ f maxwer 0.15

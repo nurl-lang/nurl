@@ -54,6 +54,17 @@ else
   bad "text_test does not build"
 fi
 
+echo "== the quality gate's ears =="
+if build verify_test; then
+  if "$WORK/verify_test" >"$WORK/verify.out" 2>&1; then
+    ok "word errors: numbers, hyphens, compounds; the opening-sentence rule"
+  else
+    bad "word errors"; grep -v "^  ok" "$WORK/verify.out" | tail -20
+  fi
+else
+  bad "verify_test does not build"
+fi
+
 CKPT="${F5TTS_CKPT:-}"
 VOCAB="${F5TTS_VOCAB:-}"
 VOCODER="${F5TTS_VOCODER:-}"

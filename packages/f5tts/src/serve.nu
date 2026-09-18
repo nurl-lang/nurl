@@ -88,9 +88,11 @@ $ `ui.nu`
     i seed
     i retries
     f max_wer
+    i splitfail
     f target_rms
     String model_id
     ( Vec f ) out
+    ( Vec i ) score
     b done
     b ok
     String err
@@ -351,7 +353,7 @@ $ `ui.nu`
     }
     : *F5Voice v # *F5Voice vp
     : b r ( f5_synth_line m vc v vb ( string_data . j text ) . j steps . j cfg . j sway
-    . j speed . j fade . j seed . j retries . j max_wer . j out )
+    . j speed . j fade . j seed . j retries . j max_wer . j splitfail . j out . j score )
     ? r {} { = . j err ( string_from `synthesis failed` ) }
     = . j ok r
 }
@@ -466,7 +468,7 @@ $ `ui.nu`
 
 // One line of a dialogue, synthesised and appended to `out`.
 @ __f5s_one s voice s text i steps f cfg f sway f speed f fade i seed
-i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
+i retries f max_wer i splitfail f target_rms s model_id ( Vec f ) out ( Vec i ) score String err → b {
     ? ( f5_voice_id_ok voice ) {} {
         ( string_push_str err `voice id must be a plain directory name` )
         ^ F
@@ -483,9 +485,11 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
     = . j seed seed
     = . j retries retries
     = . j max_wer max_wer
+    = . j splitfail splitfail
     = . j target_rms target_rms
     = . j model_id ( string_from model_id )
     = . j out ( vec_new [f] )
+    = . j score ( f5_score_new )
     = . j done F
     = . j ok F
     = . j err ( string_new )
@@ -497,8 +501,10 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
             ?? ( vec_get [f] . j out k ) { T x → { ( vec_push [f] out x ) } F → {} }
             = k + k 1
         }
+        ( f5_score_merge score . j score )
     } { ( string_push_str err ( string_data . j err ) ) }
     ( vec_free [f] . j out )
+    ( vec_free [i] . j score )
     ( string_free . j voice )
     ( string_free . j text )
     ( string_free . j model_id )
@@ -513,6 +519,7 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
 // reference service's fourth and there is no Vorbis encoder in this ecosystem
 // yet, so it is refused by name instead of answered with something else.
 @ __f5s_audio_response ( Vec f ) wave s fmt i kbps → HttpResponse {
+    ( f5_limit_peak wave )
     ? ( nurl_str_eq fmt `ogg` ) {
         ^ ( __f5s_jerr 400 `ogg is not encoded here; ask for wav, mp3 or pcm` )
     } {}
@@ -570,12 +577,19 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
             : f fade ( __f5s_jnum root `cross_fade_duration` 0.15 )
             : ~ i seed ( __f5s_jint root `seed` -1 )
             ? < seed 0 { = seed & ( monotonic_ns ) 2147483647 } {}
-            // whisper_retry / max_wer: the reference service's quality gate,
-            // off unless both are asked for and a transcriber is configured
             // 128 kbit/s is what the reference service asks ffmpeg for
             : i kbps ( __f5s_jint root `mp3_bitrate` 128 )
-            : i retries ( __f5s_jint root `whisper_retry` 1 )
-            : f max_wer ( __f5s_jnum root `max_wer` 1.0 )
+            // The quality gate. whisper_retry is a count of RETRIES — how many
+            // more times a line may be generated when the transcriber says
+            // it came out wrong — so 0 generates once. max_wer is the word
+            // error rate a line has to stay under; asking for either turns
+            // the gate on, with the reference service's default for the
+            // other (0.15), and splitfail N generates a line a sentence at a
+            // time when it is still failing after N attempts. All three
+            // need a transcriber (--whisper) to do anything.
+            : i retries ( __f5s_jint root `whisper_retry` 0 )
+            : f max_wer ( __f5s_jnum root `max_wer` ? > retries 0 0.15 1.0 )
+            : i splitfail ( __f5s_jint root `splitfail` 0 )
             // the reference normalises the recording to an rms of 0.1 before
             // the mel and scales the result back; a target at or below zero
             // turns both off, which is what a negative one means there too
@@ -584,6 +598,7 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
             : String fmt ( __f5s_jstr root `output_format` )
             ? == 0 ( string_len fmt ) { ( string_push_str fmt `wav` ) } {}
             : ( Vec f ) wave ( vec_new [f] )
+            : ( Vec i ) score ( f5_score_new )
             : String err ( string_new )
             : ~ b ok T
             : ~ i count 0
@@ -591,7 +606,7 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
                 : String vid ( __f5s_jstr root `voice_id` )
                 : String txt ( __f5s_jstr root `text` )
                 = ok ( __f5s_one ( string_data vid ) ( string_data txt ) steps cfg sway
-                speed fade seed retries max_wer target_rms ( string_data model_id ) wave err )
+                speed fade seed retries max_wer splitfail target_rms ( string_data model_id ) wave score err )
                 = count 1
                 ( string_free vid )
                 ( string_free txt )
@@ -615,6 +630,8 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
                                     : ~ i i_seed + seed k
                                     : ~ i i_retries retries
                                     : ~ f i_wer max_wer
+                                    : ~ i i_split splitfail
+                                    : ~ f i_rms target_rms
                                     ?? ( json_obj_get it `voice_settings` ) {
                                         T vs → {
                                             = i_steps ( __f5s_jint vs `nfe_steps` i_steps )
@@ -624,15 +641,17 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
                                             = i_fade ( __f5s_jnum vs `cross_fade_duration` i_fade )
                                             = i_seed ( __f5s_jint vs `seed` i_seed )
                                             = i_retries ( __f5s_jint vs `whisper_retry` i_retries )
-                                            = i_wer ( __f5s_jnum vs `max_wer` i_wer )
+                                            = i_wer ( __f5s_jnum vs `max_wer` ? & > i_retries 0 >= i_wer 1.0 0.15 i_wer )
+                                            = i_split ( __f5s_jint vs `splitfail` i_split )
+                                            = i_rms ( __f5s_jnum vs `target_rms` i_rms )
                                         }
                                         F → {}
                                     }
                                     // a tenth of a second between speakers
                                     ? > k 0 { ( f5_append_silence wave 100 ) } {}
                                     = ok ( __f5s_one ( string_data vid ) ( string_data txt ) i_steps i_cfg
-                                    i_sway i_speed i_fade i_seed i_retries i_wer target_rms
-                                    ( string_data model_id ) wave err )
+                                    i_sway i_speed i_fade i_seed i_retries i_wer i_split i_rms
+                                    ( string_data model_id ) wave score err )
                                     = count + count 1
                                     ( string_free vid )
                                     ( string_free txt )
@@ -653,11 +672,32 @@ i retries f max_wer f target_rms s model_id ( Vec f ) out String err → b {
             = g_f5_reqs + g_f5_reqs 1
             ? & ok > ( vec_len [f] wave ) 0 {
                 : HttpResponse r ( __f5s_audio_response wave ( string_data fmt ) kbps )
+                // what the gate heard, for a caller that wants to know
+                ? | ( f5_score_checked score ) > ( f5_score_unheard score ) 0 {
+                    : String he ( string_new )
+                    ( string_push_int he ( f5_score_errs score ) )
+                    ( response_set_header r `x-f5tts-word-errors` ( string_data he ) )
+                    : String hw ( string_new )
+                    ( string_push_int hw ( f5_score_words score ) )
+                    ( response_set_header r `x-f5tts-words` ( string_data hw ) )
+                    : String ha ( string_new )
+                    ( string_push_int ha ( f5_score_attempts score ) )
+                    ( response_set_header r `x-f5tts-attempts` ( string_data ha ) )
+                    : String hu ( string_new )
+                    ( string_push_int hu ( f5_score_unheard score ) )
+                    ( response_set_header r `x-f5tts-unheard` ( string_data hu ) )
+                    ( string_free hu )
+                    ( string_free he )
+                    ( string_free hw )
+                    ( string_free ha )
+                } {}
                 ( vec_free [f] wave )
+                ( vec_free [i] score )
                 ( string_free err )
                 ( string_free fmt )
                 ^ r
             } {}
+            ( vec_free [i] score )
             ( string_free fmt )
             : String msg ? > ( string_len err ) 0 ( string_clone err ) ( string_from `nothing to say` )
             : HttpResponse r ( __f5s_jerr 400 ( string_data msg ) )
