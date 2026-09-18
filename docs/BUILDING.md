@@ -344,14 +344,27 @@ when `gdb` isn't installed).
 
 `--coverage` instruments generated NURL code with LLVM's GCOV pass. It
 implies `--debug` and disables split lowering and LTO. Use `-O0` when
-investigating individual source lines:
+investigating individual source lines, and `--no-dce` when the question is
+how much of the code the tests reach:
 
 ```sh
-./nurl.sh --coverage -O0 src/myprog.nu build/myprog
+./nurl.sh --coverage --no-dce -O0 src/myprog.nu build/myprog
 ./build/myprog
 cd build
 llvm-cov gcov -b myprog.gcda
 ```
+
+**`--no-dce` is not optional for a coverage report.** Dead-code
+elimination removes functions nothing calls, which is exactly the code a
+coverage report exists to find: without the flag such a function is gone
+before it can be counted, and the report omits the gap instead of showing
+it as never executed. On a four-function sample the difference was 88.9%
+against an honest 72.7%. The driver forwards `--no-dce` and `--keep=a,b`
+to `nurlc` for this reason.
+
+For a package's whole test suite rather than one program, `nurl-cov`
+(`packages/nurl-cov`) does the build, the run, the merge across test
+binaries and the report, and reads the coverage graphs in pure NURL.
 
 Compilation writes `build/myprog.gcno`; a normal process exit writes
 `build/myprog.gcda`. Runs accumulate counters. Both paths are absolute in

@@ -24,6 +24,14 @@
 #                              maybe-moved binding)
 #    --strict-arity |          Forwarded to nurlc: the n-ary `&`/`|`
 #    --no-strict-arity         arity trap as error (default) / warning
+#    --no-dce                  Forwarded to nurlc: emit unreachable
+#                              functions too. Pair it with --coverage:
+#                              otherwise a function nothing calls is
+#                              removed before it can be counted, and the
+#                              report silently omits it instead of
+#                              reporting it as never executed.
+#    --keep=a,b                Forwarded to nurlc: keep these functions
+#                              even when nothing in the module calls them.
 #    -g | --debug              Pass -g to clang (DWARF line tables)
 #    --coverage                Line-coverage instrumentation (implies -g):
 #                              gcov-style -fprofile-arcs -ftest-coverage over
@@ -158,11 +166,17 @@ EMIT_ASM=0
 DEBUG_INFO=0
 COVERAGE=0
 CLI_OPT=""
-# Diagnostic flags this driver forwards verbatim to nurlc. Without the
-# pass-through, `--no-borrowck` — which the compiler's own borrow-checker
-# error tells the user to re-run with — was read as the source file name
-# ("Source file not found: --no-borrowck"), and `--strict-borrowck` was
-# unreachable through the driver entirely.
+# Flags this driver forwards verbatim to nurlc. Without the pass-through,
+# `--no-borrowck` — which the compiler's own borrow-checker error tells the
+# user to re-run with — was read as the source file name ("Source file not
+# found: --no-borrowck"), and `--strict-borrowck` was unreachable through
+# the driver entirely.
+#
+# `--no-dce` and `--keep=` are here for the same reason, and coverage is
+# why they matter: dead-code elimination drops functions nothing calls,
+# which is exactly the code a coverage report exists to find. Measured
+# through the driver, the omission did not look like a missing flag — it
+# looked like a suspiciously good score.
 NURLC_DIAG=""
 
 while [ $# -gt 0 ]; do
@@ -175,8 +189,9 @@ while [ $# -gt 0 ]; do
         # GCOV notes survive — so it implies --debug.
         --coverage)            COVERAGE=1; DEBUG_INFO=1; shift ;;
         -O0|-O1|-O2|-O3)       CLI_OPT="$1"; shift ;;
-        --no-borrowck|--strict-borrowck|--strict-arity|--no-strict-arity)
+        --no-borrowck|--strict-borrowck|--strict-arity|--no-strict-arity|--no-dce)
                                NURLC_DIAG="$NURLC_DIAG $1"; shift ;;
+        --keep=*)              NURLC_DIAG="$NURLC_DIAG $1"; shift ;;
         *) break ;;
     esac
 done
@@ -186,6 +201,7 @@ if [ $# -eq 0 ]; then
     echo "" >&2
     echo "  Flags: --emit-ir | --emit-asm | -O0..-O3 | -g | --debug | --coverage" >&2
     echo "         --no-borrowck | --strict-borrowck | --strict-arity | --no-strict-arity" >&2
+    echo "         --no-dce | --keep=a,b" >&2
     echo "" >&2
     echo "  Compiles a NURL source file to a native binary." >&2
     echo "  The intermediate .ll file is kept alongside the output." >&2

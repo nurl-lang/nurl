@@ -325,6 +325,30 @@ that generates both the MCP tools and the REST routes (`GET /api` lists
 them with their schemas). See [`agora/README.md`](agora/README.md) and
 [`agora/SPEC.md`](agora/SPEC.md).
 
+## `nurl-cov/` — which lines do the tests run? (installable program **and** library)
+
+Builds a package's test suite with the compiler's GCOV instrumentation,
+runs it, and reads the resulting `.gcno`/`.gcda` coverage graphs in pure
+NURL — no `llvm-cov`, no `gcov`, nothing to install. Line, branch and
+function coverage per source file, merged across every test binary.
+
+```
+nurlpkg install nurl-cov
+cd packages/mypkg
+nurl-cov run --uncovered            # the table, and the lines nothing ran
+nurl-cov run --fail-under 80        # a CI gate
+nurl-cov run --html coverage.html   # one page you can send to someone
+nurl-cov run --lcov coverage.info   # for Codecov, genhtml, your editor
+```
+
+A coverage report is a claim nobody can check by hand, so two things make
+this one checkable. `nurl-cov gcov` prints the annotated listing in gcov's
+own format, and the test suite diffs it byte for byte against `llvm-cov
+gcov -b -c -p` over programs from the compiler's own test corpus. And the
+build passes `--no-dce`, because dead-code elimination removes the
+functions nothing calls — exactly what the report exists to find. See
+[`nurl-cov/README.md`](nurl-cov/README.md).
+
 ## The full loop
 
 ```bash

@@ -27,6 +27,7 @@
 //   ( args_count p long )              → i   times seen (clustered/repeated)
 //   ( args_value p long )              → ? String   last value (owned copy)
 //   ( args_value_or p long default )   → String     value or a default (owned)
+//   ( args_values p `include` )        → ( Vec String )  every occurrence
 //   ( args_positional_count p )        → i
 //   ( args_positionals p )             → ( Vec String )  BORROW — do not free
 //   ( args_has_error p )               → b
@@ -330,6 +331,34 @@ $ `stdlib/core/vec.nu`
     : ?String so ( vec_get [String] . p val_str found )
     : s vraw ?? so { T x → ( string_data x ) F → `` }
     ^ @ ?String { T ( string_from vraw ) }
+}
+
+// Every value the option was given, in the order it was given them.
+//
+// The parse already keeps the history — `val_idx` / `val_str` are
+// append-only — and `args_value` answers with the last one, which is what
+// an option like `--output` wants. An option that MEANS "again" does not:
+// `--include a --include b` is two filters, not a correction of the first,
+// and without this the earlier ones were recorded and unreachable.
+//
+// The caller owns the Vec and every String in it.
+@ args_values ArgParser p s long → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i idx ( __args_find_long p long )
+    ? < idx 0 { ^ out } {}
+    : i n ( vec_len [i] . p val_idx )
+    : ~ i k 0
+    ~ < k n {
+        : i vi ?? ( vec_get [i] . p val_idx k ) { T x → x F → -1 }
+        ? == vi idx {
+            ?? ( vec_get [String] . p val_str k ) {
+                T sv → ( vec_push [String] out ( string_from ( string_data sv ) ) )
+                F → {}
+            }
+        } {}
+        = k + k 1
+    }
+    ^ out
 }
 
 @ args_value_or ArgParser p s long s default → String {

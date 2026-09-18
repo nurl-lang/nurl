@@ -6,6 +6,63 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`packages/nurl-cov` 0.1.0 — a test-coverage mapper for NURL.** The
+  toolchain has been able to *produce* coverage data since 0.53.0, but
+  reading it meant `llvm-cov`, and nothing turned it into an answer about a
+  package's test suite. `nurl-cov` does both: it builds every `tests/*.nu`
+  with the compiler's GCOV instrumentation, runs them, merges what each one
+  leaves behind, and reports line, branch and function coverage per source
+  file — as a table, the uncovered line ranges, an LCOV tracefile, one
+  self-contained HTML page, JSON, or a `--fail-under` gate. The `.gcno` and
+  `.gcda` readers are pure NURL; nothing outside the toolchain is needed.
+
+  A coverage report is a claim nobody can check by hand, so it is checked
+  against an independent implementation: `nurl-cov gcov` prints the
+  annotated listing in gcov's own format, and the package's test suite
+  diffs it byte for byte against `llvm-cov gcov -b -c -p` over programs
+  from the compiler's own test corpus — every line count, every branch
+  outcome, every percentage.
+
+  Two things it took getting wrong to learn. **A line is not the sum of its
+  blocks**: a condition and the two arms it guards all carry the same source
+  line, and adding them reports a line running three times as often as its
+  function was entered. The count is the traffic entering the line's blocks
+  from outside them, plus what goes round in circles inside them — the
+  second half is what makes a one-line loop report its iterations rather
+  than its single entry. And **an equivalent solver is not the same
+  solver**: an iterative fixed point over gcov's equations agrees on
+  ordinary functions and disagrees on anything that forks or exits
+  abnormally, where it surfaces as a percentage quietly a few points wrong.
+  `nurl-cov` implements gcov's own edge propagation, synthetic
+  exit-to-entry arc included.
+
+### Fixed
+
+- **`args_values` — a repeated option's earlier values were recorded and
+  unreachable.** `std/args` already kept the whole history of a value
+  option (`val_idx` / `val_str` are append-only, and the header said so),
+  and `args_value` answered with the last one — right for `--output`,
+  wrong for an option that means "again": `--include a --include b` is two
+  filters, not a correction of the first. `args_count` would say 2 and
+  nothing could reach the first value. The accessor now exists; the
+  storage always did.
+
+- **The build drivers forward `--no-dce` and `--keep=a,b` to `nurlc`.**
+  Both flags existed in the compiler and neither could be reached through
+  `nurl.sh` or `nurl.bat`: an unrecognised flag was read as the name of the
+  source file. For most builds that is an inconvenience. For a coverage
+  build it is a wrong answer, because dead-code elimination removes
+  functions nothing calls — exactly the code a coverage report exists to
+  find — so the report omitted the gap instead of showing it as never
+  executed. On a four-function sample the same suite scored 88.9% without
+  the flag and an honest 72.7% with it. The omission did not look like a
+  missing flag; it looked like a good score. `docs/BUILDING.md` now says so
+  where the coverage recipe is.
+
 ## [0.66.0] — 2026-09-16
 
 ### Added

@@ -27,6 +27,12 @@ REM    --no-borrowck        Forwarded to nurlc: bypass the borrow checker
 REM    --strict-borrowck    Forwarded to nurlc: the opt-in extra checks
 REM    --strict-arity /     Forwarded to nurlc: n-ary `&`/`|` arity trap
 REM    --no-strict-arity      as error (default) / warning
+REM    --no-dce             Forwarded to nurlc: emit unreachable
+REM                           functions too (what a coverage build
+REM                           needs, so that a function nothing
+REM                           calls is reported rather than removed)
+REM    --keep=a,b           Forwarded to nurlc: keep these functions
+REM                           even when nothing in the module calls them
 REM
 REM  Examples:
 REM    nurl.bat hello.nu               → hello.exe
@@ -81,12 +87,19 @@ if /i "%~1"=="--no-borrowck"     ( set "NURLC_DIAG=%NURLC_DIAG% --no-borrowck"  
 if /i "%~1"=="--strict-borrowck" ( set "NURLC_DIAG=%NURLC_DIAG% --strict-borrowck" & shift & goto parse_flags )
 if /i "%~1"=="--strict-arity"    ( set "NURLC_DIAG=%NURLC_DIAG% --strict-arity"    & shift & goto parse_flags )
 if /i "%~1"=="--no-strict-arity" ( set "NURLC_DIAG=%NURLC_DIAG% --no-strict-arity" & shift & goto parse_flags )
+if /i "%~1"=="--no-dce"          ( set "NURLC_DIAG=%NURLC_DIAG% --no-dce"          & shift & goto parse_flags )
+REM `--keep=a,b` carries a value, so it is matched by prefix. Delayed
+REM expansion is still off here (see the setlocal at the top), so the
+REM substring test has to use %%-expansion, on its own line.
+set "NURLC_ARG=%~1"
+if /i "%NURLC_ARG:~0,7%"=="--keep=" ( set "NURLC_DIAG=%NURLC_DIAG% %NURLC_ARG%" & shift & goto parse_flags )
 
 if "%~1"=="" (
     echo Usage: nurl.bat [flags] ^<file.nu^> [output_name]
     echo.
     echo  Flags: --emit-ir ^| --emit-asm ^| -O0..-O3 ^| -g ^| --debug
     echo         --no-borrowck ^| --strict-borrowck ^| --strict-arity ^| --no-strict-arity
+    echo         --no-dce ^| --keep=a,b
     echo.
     echo  Compiles a NURL source file to a native Windows executable.
     echo.
