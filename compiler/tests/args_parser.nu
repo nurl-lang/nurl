@@ -103,6 +103,39 @@ $ `stdlib/core/vec.nu`
     ( vec_free_with [String] t2 \ String s → v { ( string_free s ) } )
     ( args_free p2 )
 
+    // ── a repeated value option keeps every occurrence ──
+    //
+    // `args_value` answers with the last one, which is what `--output`
+    // wants. An option that MEANS "again" — `--include a --include b` is
+    // two filters, not a correction — needs all of them, and before
+    // `args_values` the earlier ones were recorded and unreachable.
+    : ArgParser p4 ( args_new `demo4` `` )
+    ( args_opt p4 `include` 105 `PREFIX` `filter` )
+    : ( Vec String ) t4 ( vec_new [String] )
+    ( push_tok t4 `--include` )
+    ( push_tok t4 `alpha` )
+    ( push_tok t4 `--include=beta` )
+    ( push_tok t4 `-igamma` )
+    : b ok4 ( args_parse p4 t4 )
+    ? ! ok4 { ( nurl_print `  FAIL parse4\n` ) = fails + fails 1 } {}
+    = fails + fails ( expect_int ( args_count p4 `include` ) 3 `include count` )
+    = fails + fails ( expect_val ( args_value p4 `include` ) `gamma` `include last` )
+    : ( Vec String ) vals ( args_values p4 `include` )
+    = fails + fails ( expect_int ( vec_len [String] vals ) 3 `include values` )
+    : s v0 ?? ( vec_get [String] vals 0 ) { T s → ( string_data s ) F → `` }
+    : s v1 ?? ( vec_get [String] vals 1 ) { T s → ( string_data s ) F → `` }
+    : s v2 ?? ( vec_get [String] vals 2 ) { T s → ( string_data s ) F → `` }
+    ? != 1 ( nurl_str_eq v0 `alpha` ) { ( nurl_print `  FAIL include0\n` ) = fails + fails 1 } {}
+    ? != 1 ( nurl_str_eq v1 `beta` ) { ( nurl_print `  FAIL include1\n` ) = fails + fails 1 } {}
+    ? != 1 ( nurl_str_eq v2 `gamma` ) { ( nurl_print `  FAIL include2\n` ) = fails + fails 1 } {}
+    ( vec_free_with [String] vals \ String s → v { ( string_free s ) } )
+    // An option that was never given has no values, and asking is not an error.
+    : ( Vec String ) none4 ( args_values p4 `missing` )
+    = fails + fails ( expect_int ( vec_len [String] none4 ) 0 `absent values` )
+    ( vec_free [String] none4 )
+    ( vec_free_with [String] t4 \ String s → v { ( string_free s ) } )
+    ( args_free p4 )
+
     // ── unknown option must error ──
     : ArgParser p3 ( args_new `demo3` `` )
     ( args_flag p3 `verbose` 118 `` )

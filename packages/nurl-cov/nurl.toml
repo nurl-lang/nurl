@@ -1,0 +1,13 @@
+[package]
+name = "nurl-cov"
+version = "0.1.0"
+description = "Test-coverage mapper for NURL. Builds a package's test suite with the compiler's GCOV instrumentation, runs it, and reads the resulting .gcno/.gcda coverage graphs in pure NURL — no llvm-cov, no gcov, nothing to install. Reports line and branch coverage per source file and per function, merged across every test binary, as a summary table, gcov-style annotated source, an LCOV tracefile for CI and editors, a standalone HTML report, or JSON. `--fail-under` turns it into a gate."
+# The coverage build passes --no-dce so that a function nothing calls is
+# still in the binary and still counted, as zero. Forwarding that flag
+# through the build driver landed in 0.67.0; on anything older the
+# report would silently omit the code it exists to find.
+nurl-version = "0.67.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl/tree/main/packages/nurl-cov"
+
+[dependencies]
