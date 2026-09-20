@@ -106,3 +106,24 @@ three self-asserting suites: `basic.nu` (variables, escaping, filters,
 literals, error paths), `control.nu` (if/elif/else, for, `loop.*`,
 nesting, conditions), `includes.nu` (sets, include, cycles, the
 directory loader).
+
+Linux CI also measures these three suites with `nurl-cov` and requires
+at least **96.3% line coverage** of the imported `src/` modules (initial
+baseline: 747/776 lines). Branch and function coverage are reported but
+have no minimum. The `template-coverage` artifact contains an HTML report,
+including when the coverage floor fails, and is retained for seven days.
+
+To reproduce from the repository root after `./build.sh`:
+
+```sh
+export NURL_STDLIB="$PWD"
+export NURL_CC="$PWD/nurl.sh"
+cd packages/nurl-cov
+../../nurl.sh -O0 src/main.nu ../../build/nurl-cov
+cd ../template
+../../build/nurl-cov run --work ../../build/template-coverage \
+  --no-color --fail-under 96.3 --html ../../build/template-coverage.html
+```
+
+The coverage run clears previous counters before measuring. Keep the CI
+floor when adding code; cover the new paths with tests.
