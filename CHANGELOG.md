@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Linux CI now gates the `template` package at 96.3% line coverage using
+  `nurl-cov` and retains its HTML report for seven days, including when
+  coverage falls below the floor.
+
 - **`packages/nurl-cov` 0.1.0 — a test-coverage mapper for NURL.** The
   toolchain has been able to *produce* coverage data since 0.53.0, but
   reading it meant `llvm-cov`, and nothing turned it into an answer about a

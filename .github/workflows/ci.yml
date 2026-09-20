@@ -549,6 +549,29 @@ jobs:
         # accepting --coverage or merely linking is not evidence of coverage.
         run: python3 tools/tests/test_driver_coverage.py
 
+      - name: Template line coverage (minimum 96.3%)
+        # Initial baseline: 747/776 lines. Reuse this job's toolchain;
+        # nurl-cov rebuilds the three tests at -O0 with --no-dce.
+        timeout-minutes: 2
+        env:
+          NURL_STDLIB: ${{ github.workspace }}
+          NURL_CC: ${{ github.workspace }}/nurl.sh
+        run: |
+          cd packages/nurl-cov
+          ../../nurl.sh -O0 src/main.nu ../../build/nurl-cov
+          cd ../template
+          ../../build/nurl-cov run --work ../../build/template-coverage \
+            --no-color --fail-under 96.3 --html ../../build/template-coverage.html
+
+      - name: Retain template coverage report
+        if: ${{ !cancelled() && hashFiles('build/template-coverage.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-coverage
+          path: build/template-coverage.html
+          retention-days: 7
+          if-no-files-found: error
+
   unikernel:
     name: unikernel (no libc, and then no operating system)
     needs: changes
