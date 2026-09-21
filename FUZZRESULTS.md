@@ -5,16 +5,16 @@
 > the same way `bench.yml` commits the benchmark numbers. Do not edit by hand;
 > curate the findings log in [`tools/fuzz/FINDINGS.json`](tools/fuzz/FINDINGS.json).
 
-_Last run: **2026-09-14** · toolchain `v0.65.0-13-gb177dcab` · commit `b177dcab`_
+_Last run: **2026-09-21** · toolchain `v0.66.0-9-g0bec19c0` · commit `0bec19c0`_
 
-**Latest run:** ❌ **12 finding(s)** — reproducers in `tools/fuzz/failures/` (workflow artifact)
+**Latest run:** ✅ **clean** — no findings
 
 | family | configuration | executions | pass | findings | sanitized runs | wasm runs |
 |---|---|---:|---:|---:|---:|---:|
 | `differential-int` | seeds 1–1500, size=12, depth=4 | 1500 | 1500 | 0 | 0 | 150 |
 | `parser-mutational` | iters=4000 rng-seed=1 | 4000 | 4000 | 0 | 4000 | 0 |
 | `parser-mutational` | iters=4000 rng-seed=2 | 4000 | 4000 | 0 | 4000 | 0 |
-| `reject-inverse` | seeds 1–400, depth=3 | 400 | 388 | 12 | 0 | 0 |
+| `reject-inverse` | seeds 1–400, depth=3 | 400 | 400 | 0 | 0 | 0 |
 | `differential-struct` | seeds 1–600, size=14, depth=3 | 600 | 600 | 0 | 120 | 120 |
 
 ## What each family probes
@@ -51,6 +51,7 @@ can.
 
 | date | family | severity | finding | status |
 |---|---|---|---|---|
+| 2026-09-14 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a `;` defer body was accepted whenever the defer was written in a `?` arm, a `??` arm, a `~` body or a foreach body — the exit-state replay only walked a site whose synthetic arming flag was DEFINITELY set, and each of those four contexts weakens or drops it. Conditionally-armed bodies are now swept body-local, from an EMPTY state, like a `??` arm | fixed (borrow_defer_nested_context); 12 of 400 seeds, the first weekly CI fuzz finding |
 | 2026-08-26 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a closure body was accepted — one flag meant both 'this belongs to the closure' and 'record nothing', so the checker was off for everything written in a closure. The body now gets its own recording context and its own analyze pass | fixed (borrow_closure_body_double_free) |
 | 2026-08-26 | `reject-inverse` | unsoundness | Borrow-checker blind spot: a definite double free inside a `??` arm was accepted — arms were a state-preserving black box because payload bindings have no `let` row. Each arm is now walked from an EMPTY state, so only arm-local bindings are tracked and nothing can be conflated | fixed (borrow_match_arm_double_free) |
 | 2026-08-26 | `reject-inverse` | diagnostic | A generic named `[T]` has its VALUE-position `T` — the boolean literal — rewritten by monomorphisation, so `? T { … }` becomes `? i { … }` and the instantiation fails against source nobody wrote. The diagnostic now names the collision | fixed (diag_generic_tparam_bool_name); the underlying lexer ambiguity remains |
