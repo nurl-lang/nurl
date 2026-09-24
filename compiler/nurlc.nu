@@ -20428,6 +20428,8 @@
     ( bck_save_expr_carriers syms `__last_cast_params__` source_tt source_val )
     // `# T x` of a T binding is x itself (mem_udrop_bind_flag: a cursor).
     ( nurl_sym_def syms `__last_cast_ident__` ? & ( is_ident_tok source_tt ) ( seq st dt ) ( nurl_str_cat source_val `` ) `` )
+    // `# ( Vec T ) 0` — the empty placeholder of a `F` option — holds nothing.
+    ( nurl_sym_def syms `__last_cast_lit__` ? == source_tt TT_INT `1` `` )
     ? ( seq st `void` )
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
@@ -29600,6 +29602,7 @@
         ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print acc ) ( nurl_print `, 1\n` )
         ^ r
     } {}
+    ? & == tt TT_HASH != 0 ( nurl_sym_len syms `__last_cast_lit__` ) { ^ ( nurl_str_cat `` `` ) } {}
     ? | == tt TT_DOT == tt TT_HASH { ^ ( nurl_str_cat `1` `` ) } {}
     ? == tt TT_AT { ^ ( nurl_str_cat `` `` ) } {}
     ? == tt TT_LPAREN {
