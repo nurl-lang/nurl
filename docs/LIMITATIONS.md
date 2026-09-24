@@ -62,7 +62,7 @@ before relying on any thread-safety expectation.
 
 | Limitation | Workaround |
 |---|---|
-| A `??` / `?` join that *yields* an owned `String` / `Vec` payload (`: String u ?? ( f ) { T x → x F → ( string_new ) }`) gives the binding a borrow, so that payload is not dropped (a leak, never a double free). A statement arm that reads, stores or releases the payload drops it correctly ([`docs/MEMORY.md` §7.6](MEMORY.md)) | Bind the option first and release the payload in the arm, or take it with a statement arm: `?? ( f ) { T x → ( vec_push [String] out x ) F → {} }` |
+| An option **binding** (`: ?String o ( f )`) does not drop its payload; its `??` arms borrow it. A `??` / `?` directly over a call owns the payload (docs/MEMORY.md §7.6) | Match the call directly — `?? ( f ) { T x → … }` — or move the payload into an owner in the arm |
 | A struct with an enum or trait-object field is not dropped as a whole; its `String` / `Vec` fields are released by the program or by a `% Drop` of its own | Give the struct a `% Drop`, or keep owning fields in a struct of their own |
 | Storing a *borrowed* `String` / `Vec` into an owner (a struct literal, a field of a value, an element via `vec_push`) stores a **copy**; mutations through the new owner are not seen through the old binding | Store the owned value (move it in), or keep the shared buffer behind a pointer-reached struct, whose fields are stored as is |
 

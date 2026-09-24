@@ -1514,6 +1514,15 @@ handles are freely aliased, so their bindings follow a few more rules:
   an argument is read from the callee's `@.__nurl_retown` constant once
   every return summary is final, so a forward or recursive callee is
   answered correctly.
+- **Joins.** A `?` / `??` that yields a `String` / `Vec` hands its
+  binding whatever the chosen arm owned — a payload or arm-local moves
+  out, a fresh call or literal is owned — through a phi of per-arm
+  ownership bits; an arm that yields an outer binding lends it. A fresh
+  `? T` / `! T E`'s payload is owned by the arm that binds it.
+- **Returns.** A returned local binding that turns out not to own what
+  it holds (it borrowed another local through a join, or read an element
+  through a pointer) is copied on the way out, so the caller always owns
+  the result.
 - `( mem_forget x )` gives up `x`'s value — for a hand-written disposer
   (`vec_free`, `string_free`) and for a table kept in a global for the
   program's lifetime.

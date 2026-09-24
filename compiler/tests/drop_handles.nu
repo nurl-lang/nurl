@@ -48,6 +48,14 @@ $ `stdlib/core/string.nu`
     ^ @ ?String { T ( string_from x ) }
 }
 
+// A join hands over what an arm owns and lends what it borrows; a
+// returned binding that only borrows is copied on the way out.
+@ pick b c s x → String {
+    : String kept ( string_from `outer` )
+    : String s ? c ( string_from x ) kept
+    ^ s
+}
+
 @ main → i {
     : String a ( string_from `alpha` )
     : String g ( greet a )
@@ -91,6 +99,11 @@ $ `stdlib/core/string.nu`
     ?? ( maybe `kept` ) { T x → ( vec_push [String] names x ) F → {} }
     ?? ( maybe `gone` ) { T x → ( string_free x ) F → {} }
     ( nurl_println_int ( vec_len [String] names ) )  // 3
+    : String u ?? ( maybe `joined` ) { T x → x F → ( string_new ) }
+    ( nurl_println ( string_data u ) )  // joined
+    : String w ( pick F `unused` )
+    : String w2 ( pick T `fresh` )
+    ( nurl_print ( string_data w ) ) ( nurl_println ( string_data w2 ) )  // outerfresh
 
     // Rebound and released early by hand (still allowed).
     : ~ String t ( string_from `one` )

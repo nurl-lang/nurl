@@ -3502,11 +3502,28 @@
     ? ( is_ident_tok ret_first_tt ) {
         ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `stret##` ( nurl_sym_get syms `__fn_self_name__` ) `##` ret_first_val ) `1` )
     } {}
-    // …and a binding that borrowed such a field (`: String n . x name`).
-    ? ( is_ident_tok ret_first_tt ) {
+    // …and a binding that borrowed such a field (`: String n . x name`),
+    // or any local binding that turns out not to own what it holds (a
+    // join that picked another local, an element read through a pointer):
+    // the caller gets a copy when the flag says borrowed. A parameter and a
+    // cursor over one keep lending (their return summaries say so).
+    ? & ( is_ident_tok ret_first_tt ) ! ret_field_copy {
         : s rup ( mem_udrop_ptr_of syms ret_first_val )
-        ? & != 0 ( nurl_str_len rup ) ( seq ( nurl_sym_get2 syms rup `__sborrow` ) `local` )
-        { = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val `1` ) } {}
+        : s rty ( nurl_get_last_type )
+        : s rsb ( nurl_sym_get2 syms rup `__sborrow` )
+        ? & & & & != 0 ( nurl_str_len rup ) == 0 ( nurl_sym_len2 syms rup `__pname` )
+        == 0 ( nurl_sym_len2 syms rup `__alias` ) ( __clone_supported rty syms )
+        // Only a binding that may hold ANOTHER LOCAL's value — a join, a
+        // field of a local struct. A payload or element alias keeps the
+        // older contract (its owner is not tracked here).
+        | == 0 ( nurl_str_len rsb ) ( seq rsb `local` ) {
+            ? ( seq ( nurl_sym_get2 syms rup `__sborrow` ) `local` )
+            { = val ( mem_emit_cloneif cg rty val `1` ) }
+            { : s rf ( mem_udrop_flag_get syms cg rup )
+                : s rb ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print rf ) ( nurl_print `, 1\n` )
+                = val ( mem_emit_cloneif cg rty val rb ) }
+        } {}
     } {}
     // Returned-closure ownership: the caller owns what it gets back
     // (mem_retclo_own_result).
@@ -11504,6 +11521,10 @@
 }
 
 @ gen_cond i lex i syms i cg → s {
+    // Scope depth at the `?`: an arm binding deeper than this is local to
+    // the arm (mem_arm_hown).
+    : i c_jdepth ( nurl_peek # s syms 1 )
+    ( nurl_sym_def syms `__last_join_own__` `` )
     // Borrow checker (Phase 0d): source line of the `?`, for the
     // `cond`/`endcond` structural markers bracketing this conditional.
     : i bck_cline ( nurl_lex_line lex )
@@ -11678,6 +11699,7 @@
         = t_dup T
     } {}
     : s t_owner ( mem_arm_string_owner syms cg tt2 t_tt0 tv t_dup )
+    : s t_hown ? == 0 g_did_ret ( mem_arm_hown syms cg tt2 t_tt0 t_v0 t_retid c_jdepth ) `false`
     // Which enum this arm's value is a variant TAG of, if any: a bare
     // variant name (`Red` — token and last-ident agree), or a nested
     // `?`-join that already proved both ITS arms variants of one enum.
@@ -11815,6 +11837,7 @@
         = e_dup T
     } {}
     : s e_owner ( mem_arm_string_owner syms cg et2 e_tt0 ev e_dup )
+    : s e_hown ? == 0 g_did_ret ( mem_arm_hown syms cg et2 e_tt0 e_v0 e_retid c_jdepth ) `false`
     // Mirror of t_ven above.
     : ~ s e_ven ``
     ? & ( is_ident_tok e_tt0 ) & ( seq e_v0 e_retid ) != 0 ( nurl_str_len e_retid )
@@ -12016,6 +12039,8 @@
         `'), so the conditional produces NO value — make the branches agree (e.g. '# T' inside a branch)` )
     } {}
     : ~ s result `undef`
+    // Cleared against a nested join's leftover; set below when owned.
+    ( nurl_sym_def syms `__last_join_own__` `` )
     ? == 0 g_did_ret
     { ? & ! ( seq phi_ty `void` ) types_ok
         {  // A value join CONSUMES an arm-tail literal — the exemption
@@ -12052,6 +12077,16 @@
             }
             ( nurl_set_last_type phi_ty )
             = result res
+            // String / Vec ownership through the join (mem_arm_hown).
+            ? & ( __is_handle_ty phi_ty ) | ! ( seq t_hown `false` ) ! ( seq e_hown `false` ) {
+                : s jo ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print jo ) ( nurl_print ` = phi i1 ` )
+                ? == 0 tdr { ( nurl_print `[ ` ) ( nurl_print t_hown ) ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ]` ) } {}
+                ? & == 0 tdr == 0 edr { ( nurl_print `, ` ) } {}
+                ? == 0 edr { ( nurl_print `[ ` ) ( nurl_print e_hown ) ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]` ) } {}
+                ( nurl_print `\n` )
+                ( nurl_sym_def syms `__last_join_own__` jo )
+            } {}
             // Both arms handed over an owned env: so does the join.
             ? ( __is_closure_ty phi_ty ) { ( mem_retclo_take syms cg res phi_ty ) } {}
             // then-LITERAL beside an OWNED else-arm: the then block was
@@ -12525,6 +12560,13 @@
     : ~ s phi_entries ``
     : ~ s owner_entries ``
     : ~ b any_str_owner F
+    // String / Vec join ownership (docs/MEMORY.md §7.6): per arm, whether
+    // the value it hands the join is owned — a payload or local it moves
+    // out, a fresh call or literal — phi'd into the join's own flag.
+    : ~ s hown_entries ``
+    : ~ b any_hown F
+    : i m_jdepth ( nurl_peek # s syms 1 )
+    ( nurl_sym_def syms `__last_join_own__` `` )
     : ~ s phi_type ``
     : ~ b phi_ok T
     : ~ i phi_count 0
@@ -13462,6 +13504,8 @@
             { = arm_result ( mem_clo_into_owner syms cg arm_type arm_result arm_tt0 ) }
             {}
             : s arm_owner ( mem_arm_string_owner syms cg arm_type arm_tt0 arm_result arm_dup )
+            : s arm_hown ? == 0 g_did_ret
+            ( mem_arm_hown syms cg arm_type arm_tt0 arm_v0 arm_retid m_jdepth ) `false`
             // The phi's predecessor for this arm: its last block, or the
             // private exit block a parked-drop arm leaves through.
             : ~ s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
@@ -13539,6 +13583,10 @@
                 : s owner_entry ( nurl_str_cat4 `[ ` arm_owner `, %` ( nurl_str_cat arm_lbl ` ]` ) )
                 = owner_entries ? == 0 ( nurl_str_len owner_entries )
                 ( nurl_str_cat owner_entry `` ) ( nurl_str_cat3 owner_entries `, ` owner_entry )
+                : s hown_entry ( nurl_str_cat4 `[ ` arm_hown `, %` ( nurl_str_cat arm_lbl ` ]` ) )
+                = hown_entries ? == 0 ( nurl_str_len hown_entries )
+                ( nurl_str_cat hown_entry `` ) ( nurl_str_cat3 hown_entries `, ` hown_entry )
+                ? ! ( seq arm_hown `false` ) { = any_hown T } {}
                 ? ! ( seq arm_owner `null` ) { = any_str_owner T } {}
                 ? ! ( seq arm_type `void` ) {
                     ? == phi_count 0 { = phi_type arm_type } {}
@@ -13719,6 +13767,7 @@
     { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
 
     ( nurl_sym_def syms `__last_call_guard__` `` )
+    ( nurl_sym_def syms `__last_join_own__` `` )
     // Emit phi if every live arm produced a value of one consistent
     // non-void type.  Otherwise the match is treated as a statement.
     ? & & != 0 phi_count phi_ok ! ( seq phi_type `void` ) {
@@ -13732,6 +13781,13 @@
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         // Every arm handed over an owned env: so does the join.
         ? ( __is_closure_ty phi_type ) { ( mem_retclo_take syms cg final_reg phi_type ) } {}
+        ? & any_hown ( __is_handle_ty phi_type ) {
+            : s own_reg ( nurl_cg_reg cg )
+            : ~ s hfull ( nurl_str_cat hown_entries `` )
+            ? != 0 ( nurl_str_len fallback_pred ) { = hfull ( nurl_str_cat4 hfull `, [ false, %` fallback_pred ` ]` ) } {}
+            ( nurl_print `  ` ) ( nurl_print own_reg ) ( nurl_print ` = phi i1 ` ) ( nurl_print hfull ) ( nurl_print `\n` )
+            ( nurl_sym_def syms `__last_join_own__` own_reg )
+        } {}
         ? & & & != 0 g_auto_drop_strings ! all_str_owned any_str_owner
         ( seq ( nurl_llty phi_type ) `i8*` ) {
             : ~ s owners ( nurl_str_cat owner_entries `` )
@@ -15798,6 +15854,12 @@
     // A field read or a cast reads a value something else owns: borrow it.
     // For a handle type (String / Vec, freely aliased) so does anything but
     // a call or a literal — a join, a block — whose arms may be borrows.
+    // A `??` join that phi'd its arms' ownership.
+    ? & & ( __is_handle_ty ty ) | == rhs_tt TT_QUESTQUEST == rhs_tt TT_QUEST != 0 ( nurl_sym_len syms `__last_join_own__` ) {
+        : s jo ( nurl_sym_get syms `__last_join_own__` )
+        ( mem_udrop_flag_set syms cg ptr jo )
+        ( __sb syms ptr `` )
+        ^ v } {}
     ? | == rhs_tt TT_DOT == rhs_tt TT_HASH {
         ( mem_udrop_flag_set syms cg ptr `0` )
         // Read out of a struct this function owns and drops: `local`.
@@ -29390,6 +29452,30 @@
     ( nurl_print `  ` ) ( nurl_print nv ) ( nurl_print ` = select i1 ` ) ( nurl_print cond ) ( nurl_print `, ` ) ( nurl_print fl )
     ( nurl_print ` zeroinitializer, ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print old ) ( nurl_print `\n` )
     ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print nv ) ( nurl_print `, ` ) ( nurl_print fl ) ( nurl_print `* ` ) ( nurl_print g ) ( nurl_print `\n` )
+}
+
+// Whether a join arm hands over an owned String / Vec / owning struct, as
+// an i1 operand (`false`, `true`, or a register): a binding local to the
+// arm (a payload) moves out; a fresh call or literal is owned; anything
+// else — an outer binding, a field — is lent.
+@ mem_arm_hown i syms i cg s ty i tt0 s v0 s retid i jdepth → s {
+    ? ! ( __is_handle_ty ty ) { ^ ( nurl_str_cat `false` `` ) } {}
+    ? & ( is_ident_tok tt0 ) ( seq v0 retid ) {
+        : s up ( mem_udrop_ptr_of syms retid )
+        ? & != 0 ( nurl_str_len up ) > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth {
+            : s r ( mem_udrop_flag_get syms cg up )
+            ( mem_udrop_flag_set syms cg up `0` )
+            ^ r
+        } {}
+        ^ ( nurl_str_cat `false` `` )
+    } {}
+    ? == tt0 TT_AT { ^ ( nurl_str_cat `true` `` ) } {}
+    ? & == tt0 TT_LPAREN & == 0 ( nurl_sym_len syms `__last_value_borrow__` )
+    == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
+        : s r ( mem_call_retown syms cg )
+        ? != 0 ( nurl_str_len r ) { ^ r } {}
+    } {}
+    ^ ( nurl_str_cat `false` `` )
 }
 
 // A lentness as an i1 operand: `!@.__nurl_retown.N` (borrowed when that
