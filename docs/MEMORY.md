@@ -11,13 +11,14 @@ v2.3).
   exactly one owning binding. The compiler inserts the matching free
   at the end of that binding's scope. No garbage collector, no
   reference counting. A small, explicit set of **manually-managed
-  handles** sits outside auto-drop — `Vec`, `String`, and a closure
-  that *escapes* its creating frame — and is
-  freed by you, exactly like C's `malloc`/`free` (§7.4).
+  handles** sits outside auto-drop — `Vec` and `String` — and is
+  freed by you, exactly like C's `malloc`/`free` (§7.4). A closure is
+  not one of them: its env is owned wherever the closure is kept and
+  dropped by that owner, and freeing one by hand is a compile error.
 - **Automatic cleanup includes unwind paths.** A thread-local journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
   tracks owned strings, slices, struct fields, enum owners, `% Drop` values
-  and non-escaping closure environments. Compiler leak gates and selected
+  and closure environments. Compiler leak gates and selected
   program leak tests verify these paths. Remaining ownership limitations,
   including unsupported sink transfers, are described below; this is not a
   guarantee that every accepted program is memory-safe or leak-free.
@@ -787,10 +788,9 @@ already-freed binding is rejected at the literal itself, even if it is
 never called.
 
 The discriminator is invocation, not "the argument is a closure". Merely
-*loading* a closure value is not a use of its captures — that is how a
-closure's heap env is reclaimed once its fibers have drained
-(`( nurl_free # s # *u cb 1 )`, §7.4), which happens after the captured
-handles are freed and is correct.
+*loading* a closure value is not a use of its captures, and neither is
+the drop of the closure's own env at the end of its scope (§7.5), which
+happens after the captured handles are freed and is correct.
 
 What is not covered is a closure that leaves the frame: stored into a
 struct field, returned, or handed to a callee that keeps it. That is the
@@ -990,9 +990,8 @@ get right:
 - **`*T` raw pointers and FFI.** `*T` is NURL's `unsafe`. A `*T` into a
   local, or any pointer crossing an `& \`lib\`` boundary, is outside the
   model; its lifetime is yours.
-- **Manually-managed handles.** `Vec`, `String`, a `sink` argument, and
-  the env of an *escaping* closure are freed by *you*, not by auto-drop
-  (§7.4). The checker tracks their *moves* (so a `vec_free`d handle can't
+- **Manually-managed handles.** `Vec`, `String` and a `sink` argument
+  are freed by *you*, not by auto-drop (§7.4). The checker tracks their *moves* (so a `vec_free`d handle can't
   be reused) but not their *freeing* — forget the `vec_free` and it leaks.
 - ~~**Definition order.**~~ **No longer a boundary — every rule is
   order-independent.** Summaries are built in codegen order, so a check
@@ -1372,9 +1371,8 @@ structs (and the `% Drop` move) can, which the escape-forget covers.
 
 ### 7.3 What a panic does **not** reclaim
 
-Only **manually-managed handles** (§7.4) — `Vec`, `String`, a `sink`
-argument, and the env of a closure that *escapes* its frame — survive a
-panic unfreed, because they are never auto-dropped in the first place:
+Only **manually-managed handles** (§7.4) — `Vec`, `String` and a `sink`
+argument — survive a panic unfreed, because they are never auto-dropped in the first place:
 *you* free them. A panic that abandons one mid-scope leaks it exactly as
 forgetting its free would — no different from the manual-handle contract
 everywhere else. The mitigation is the same as any manual resource: hold
@@ -1390,55 +1388,67 @@ yours to release. This is the complete list; nothing else leaks.
 - **`Vec`** and **`String`** — single boxed handles over a heap buffer;
   free with `vec_free` / `vec_free_with` / `string_free`. (`String` is
   `{ s ctl }`, the same single-handle shape as `Vec[u]`.)
-- the heap **environment of a capturing closure** that **escapes** its
-  creating frame — `\ → … x …` allocates an env block, and the compiler
-  now reclaims it automatically whenever it provably does *not* escape:
-  - an **inline closure literal** passed directly to a parameter the
-    callee only ever *invokes* (an **invoke-only** parameter — a pure
-    borrow, recorded in `g_fn_invoke_only`) has its env freed right after
-    the call;
-  - a closure **bound to a `:` name** has its env freed at scope exit
-    (and, in a loop body, each iteration) unless it escapes — covering
-    the `: f \ …` then `( hof f )` callback pattern.
-
-  One seam inside this: the invoke-only set is keyed on the callee's
-  name, and a **generic** callee is instantiated per type argument, so
-  an inline closure that CAPTURES something and is passed straight to
-  one (`( sort_by [T] v \ T a T b → i { … flags … } )`) is not proven
-  invoke-only, and its env is left to the caller. A closure that
-  captures nothing allocates no env at all and is unaffected, which is
-  why the stdlib's own comparators read their configuration from a
-  binding at the call site rather than closing over it — and why
-  `packages/nurlbox`'s `ls` comparator does the same.
-
-  An env is left for *you* only when the closure genuinely outlives the
-  frame: it is returned (`^ \ …` / `^ f`), stored into a struct field or
-  container, captured into another closure, detached onto a thread
-  (`thread_spawn`) or a fiber (`spawn`), or decomposed (`recover` frees
-  its own). The signal is positive (escape sites untrack the binding;
-  the default is to free nothing), so the reclamation is never a
-  use-after-free — an escaped closure is the consumer's to release via
-  the env pointer (`# *u f 1`), exactly like a returned `Vec`.
-
-  **An escape recorded inside a block escapes the whole function.** The
-  owned-closure set is function-level state, not block-level: the escape
-  site records a fact about the closure, not about the block it was
-  written in, so it survives the enclosing `?` / `~` body. It did not
-  always — the set lives in the scoped symbol table, the untracking was
-  written into the block's scope, and the matching pop restored the
-  binding — which made the same call free the env or not depending on
-  whether it sat inside a loop, and freed an env its consumer still
-  held. Doubly silent: the runtime recycles small blocks through a
-  freelist, so the free neither traps nor registers with ASan, and the
-  closure simply reads the next allocation's bytes as its captures.
-  `closure_env_escape_loop` pins it.
 - a value passed to a **`sink`** parameter — the callee frees it.
+
+A closure's env is not on this list (§7.5).
 
 These are deliberate seams, not defects: the conservatism that makes
 auto-drop double-free-proof (§6.1) is exactly what stops it from owning
 them. The checker still tracks these handles' *moves* — a `vec_free`d
 `Vec`, or a `sink`-consumed value, cannot be used again (§2.1) — it just
 does not free them for you.
+
+### 7.5 Closure environments
+
+A capturing closure `\ → … x …` is a value `{ fn, env }` whose env is one
+heap block. That env is **owned by exactly one place at a time, and that
+place drops it** — there is no escape hatch and no hand-written free:
+
+| Where the closure is kept | Who drops the env |
+|---|---|
+| a `:` binding | the binding, at scope exit (each iteration in a loop) |
+| a closure literal or call result passed straight to a call | the call site, right after the call |
+| a statement whose value is thrown away | that statement |
+| the result of a function returning a closure | the caller — every return path hands over an env the caller owns |
+| a struct field (literal, `= . s f …`, a returned struct) | the struct, with its other owned fields |
+| a slice of closures `[( @ … ) \| …]` | the slice, element by element |
+| another closure's captures | that closure's env (nested envs form a tree) |
+| a `?` / `??` join | whatever consumes the join, like a call result |
+| a spawned fiber, a thread, a signal handler, a sqlite authorizer | the runtime, which keeps its **own copy** |
+
+Two rules make this sound without reference counting:
+
+- **A place that keeps a closure it did not create stores a copy.**
+  `nurl_closure_clone` copies the env block (and, through the env's
+  descriptor, the envs of closures it captured). So a callee only ever
+  *borrows* its closure arguments: one that stores the closure into a
+  struct, captures it, spawns it or returns it keeps a copy, and the
+  caller's closure stays the caller's. Spawning one closure a hundred
+  times, or letting it go out of scope right after `spawn`, is correct.
+- **A move clears the source on its own path only.** `: h g` / `= h g`
+  hand `g`'s env to `h`, and `^ g` hands it to the caller; each binding
+  has a hidden owner slot, and the move stores null into `g`'s slot on
+  that path, so a path that did *not* move `g` still drops it.
+
+Every env's first word points at a compiler-emitted descriptor
+`{ size, drop, clone }`; `drop` / `clone` are null unless the closure
+captured other closures. `nurl_closure_drop` (null-safe) is what every
+owner calls.
+
+Freeing a closure's env by hand — `( nurl_free # s # *u f 1 )`, or through
+a `: *u e # *u f 1` local — is a compile error when `f` owns its env or is
+a parameter: either way someone else drops it. Code that hands a raw
+`( # *u f 1 )` env to C and must keep it past the call keeps a
+`nurl_closure_clone` of it and releases that with `nurl_closure_drop`
+(stdlib/ext/sqlite.nu's authorizer is the pattern). Heap structures built
+from raw pointers (`*RouteImpl` and friends) own the closures stored into
+them — a field store of a closure stores a copy — and release them with
+`nurl_closure_drop` when the structure is freed.
+
+What is not covered: a closure inside an option / result payload or an
+enum variant (those follow the manual-handle rules of the payload), and a
+generic container instantiated with a closure element type (`Vec` of
+closures does not compile).
 
 Outside this manual-handle set, nothing leaks. The corpus-wide
 sanitizer gate runs with leak detection **off** (§6.6) — deliberately,

@@ -1374,6 +1374,11 @@
 // tail produced it.
 : ~ s g_clo_tmp ``
 
+// The struct temporary with owned fields most recently returned by a call,
+// as `<value> <%Type> <owned-field tokens…>` — the same value-keyed
+// discipline as g_clo_tmp, for mem_clo_drop_discarded.
+: ~ s g_struct_tmp ``
+
 // Deferred interprocedural-escape checks (docs/MEMORY.md §3 forward /
 // generic boundary). A stack reference passed to a *user* function
 // whose escape summary is not yet known at the call site — a forward
@@ -5655,11 +5660,56 @@
     ^ ( nurl_str_cat `` `` )
 }
 
+// Drop one owned field (`<path>:<kind>:<leaf_sname>:<leaf_idx>`) of a struct
+// VALUE `val` of type `sty` — the by-value twin of mem_emit_struct_field_drop.
+@ mem_drop_value_field i syms i cg s sty s val s tok → v {
+    : i c1 ( nurl_str_find tok `:` )
+    : s path ( nurl_str_slice tok 0 c1 )
+    : s after1 ( nurl_str_slice tok + c1 1 - - ( nurl_str_len tok ) c1 1 )
+    : i c2 ( nurl_str_find after1 `:` )
+    : s kind ( nurl_str_slice after1 0 c2 )
+    : s after2 ( nurl_str_slice after1 + c2 1 - - ( nurl_str_len after1 ) c2 1 )
+    : i c3 ( nurl_str_find after2 `:` )
+    : s leaf_sname ( nurl_str_slice after2 0 c3 )
+    : s leaf_idx ( nurl_str_slice after2 + c3 1 - - ( nurl_str_len after2 ) c3 1 )
+    : s fty ( nurl_llty ( nurl_sym_get syms ( nurl_str_cat3 leaf_sname `__idx_` ( nurl_str_cat leaf_idx `__type` ) ) ) )
+    : s fv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty sty ) )
+    ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print ( mem_path_to_indices path ) ) ( nurl_print `\n` )
+    ? ( seq kind `str` )
+    { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` ) ^ v }
+    {}
+    : s p ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print p ) ( nurl_print ` = extractvalue ` ) ( nurl_print fty )
+    ( nurl_print ` ` ) ( nurl_print fv ) ( nurl_print ? ( seq kind `clo` ) `, 1\n` `, 0\n` )
+    ? ( seq kind `clo` )
+    { ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print p ) ( nurl_print `)\n` ) ^ v }
+    {}
+    : s raw ( nurl_cg_reg cg )
+    : i flen ( nurl_str_len fty )
+    ( nurl_print `  ` ) ( nurl_print raw ) ( nurl_print ` = bitcast ` )
+    ( nurl_print ( nurl_str_slice fty 2 - flen 9 ) ) ( nurl_print ` ` ) ( nurl_print p ) ( nurl_print ` to i8*\n` )
+    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+}
+
 // A statement whose value is thrown away: if that value is an owned closure
 // temporary (a call's result, a join, a literal), nothing else will drop
 // its env, so drop it here.
-@ mem_clo_drop_discarded i syms i cg s val → v {
+@ mem_clo_drop_discarded i syms i cg s val i tt → v {
     ? != 0 g_did_ret { ^ v } {}
+    // A discarded struct result with owned fields: drop those fields. Only
+    // for a statement that IS the call — a `:` / `=` statement's value is
+    // the same register, but the binding owns it.
+    ? & & == tt TT_LPAREN != 0 ( nurl_str_len val ) ( seq ( str_first_word g_struct_tmp ) val )
+    { : s rest0 ( str_skip_word g_struct_tmp )
+        : s sty ( str_first_word rest0 )
+        : ~ s toks ( str_skip_word rest0 )
+        = g_struct_tmp ``
+        ~ != 0 ( nurl_str_len toks ) {
+            : s tok ( str_first_word toks ) = toks ( str_skip_word toks )
+            ( mem_drop_value_field syms cg sty val tok )
+        } }
+    {}
     : s env ( __clo_temp_owner syms val )
     ? != 0 ( nurl_str_len env )
     { ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print env ) ( nurl_print `)` )
@@ -10889,6 +10939,12 @@
                 // publish its env for the consuming binding / argument /
                 // return to own.
                 ? ( __is_closure_ty rlt ) { ( mem_retclo_take syms cg res rlt ) } {}
+                // A struct result carrying owned fields: remember which value
+                // it is, so a statement that throws it away drops them.
+                = g_struct_tmp ? & == ( nurl_str_get rlt 0 ) 37
+                != 0 ( nurl_sym_len syms `__last_call_ret_struct_fields__` )
+                ( nurl_str_cat3 res ` ` ( nurl_str_cat3 rlt ` ` ( nurl_sym_get syms `__last_call_ret_struct_fields__` ) ) )
+                ``
                 ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
                 ( nurl_set_last_type rlt )
                 res
@@ -14212,7 +14268,7 @@
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = last ( gen_stmt lex syms cg )
-        ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last ) } {}
+        ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) } {}
         ? & & != 0 g_blk_tail_lit_line
         | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
         ( seq ( nurl_get_last_type ) `void` )
@@ -14315,7 +14371,7 @@
         // binding is tracked, so the loop re-entry frees the previous
         // iteration's and scope exit frees the last.
         : s __gs_val ( gen_stmt lex syms cg )
-        ( mem_clo_drop_discarded syms cg __gs_val )
+        ( mem_clo_drop_discarded syms cg __gs_val __bs_tt )
         // A tail `?`/`??` handed its exits up: this block discards every
         // value, so they drop (mem_exits_drain).
         ( mem_exits_drain syms cg T )
@@ -14368,7 +14424,7 @@
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = __tail_any T
         = last ( gen_stmt lex syms cg )
-        ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last ) } {}
+        ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) } {}
         ? & & != 0 g_blk_tail_lit_line
         | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
         ( seq ( nurl_get_last_type ) `void` )
@@ -19066,12 +19122,11 @@
                             // inits. Emitting the raw value stored e.g. an i32
                             // mul into an i16 field: invalid IR only clang caught.
                             : s __fs_rt ( nurl_get_last_type )
-                            : ~ s rhsc ( coerce_store_val lex rhs __fs_rt ftype syms cg )
+                            : s rhsc0 ( coerce_store_val lex rhs __fs_rt ftype syms cg )
                             // A closure stored into a field is owned by the
-                            // structure (docs/MEMORY.md §7.4).
-                            ? ( __is_closure_ty ftype )
-                            { = rhsc ( mem_clo_into_owner syms cg ftype rhsc __fs_tt ) }
-                            {}
+                            // structure (docs/MEMORY.md §7.5).
+                            : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_owner syms cg ftype rhsc0 __fs_tt )
+                            ( nurl_str_cat rhsc0 `` )
                             : s gep ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print gep )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -19209,7 +19264,9 @@
                 // inits. Emitting the raw value stored e.g. an i32
                 // mul into an i16 field: invalid IR only clang caught.
                 : s __fs_rt ( nurl_get_last_type )
-                : ~ s rhsc ( coerce_store_val lex rhs __fs_rt ftype syms cg )
+                : s rhsc0 ( coerce_store_val lex rhs __fs_rt ftype syms cg )
+                : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_owner syms cg ftype rhsc0 __fs_tt )
+                ( nurl_str_cat rhsc0 `` )
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty pt ) )
@@ -19220,8 +19277,7 @@
                 // §7.4): the new value is made owned, and when this binding
                 // owns the field the closure it replaces is released.
                 ? ( __is_closure_ty ftype )
-                { = rhsc ( mem_clo_into_owner syms cg ftype rhsc __fs_tt )
-                    ? ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `clo` )
+                { ? ( mem_struct_field_owned syms alloca_ptr ( nurl_str_int fidx ) `clo` )
                     { : s __ov ( nurl_cg_reg cg )
                         : s __oe ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print __ov ) ( nurl_print ` = load ` )
@@ -22857,6 +22913,8 @@
     // The lifted body is its own function: its temporaries are its own.
     : s __outer_clo_tmp ( nurl_str_cat g_clo_tmp `` )
     ( __clo_tmp_set `` )
+    : s __outer_struct_tmp ( nurl_str_cat g_struct_tmp `` )
+    = g_struct_tmp ``
     // …and the same argument for the other three owned-value rosters,
     // which were left visible. A closure body is a SEPARATE function:
     // its `^` runs gen_ret, gen_ret drains whatever these lists hold,
@@ -23173,7 +23231,8 @@
     // The tail's closure temporary: a `→ v` body discards it; a body
     // returning a closure hands its caller an owned env
     // (mem_retclo_own_result), exactly as a function's fall-off does.
-    ? ( seq ret_type `void` ) { ( mem_clo_drop_discarded body_syms cg body_val ) } {}
+    ? ( seq ret_type `void` ) { ( mem_clo_drop_discarded body_syms cg body_val
+        ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) ) ) } {}
     ? & __cl_fall_used ( __is_closure_ty ret_type )
     { : s __cl_tval ( nurl_sym_get body_syms `__tail_first_val__` )
         = body_val ( mem_retclo_own_result body_syms cg ret_type body_val
@@ -23311,6 +23370,7 @@
 
     ( nurl_sym_pop syms )
     ( __clo_tmp_set __outer_clo_tmp )
+    = g_struct_tmp __outer_struct_tmp
 
     // Stop capturing and store as deferred closure function
     : s funcdef ( nurl_print_buf_stop )
@@ -26262,6 +26322,7 @@
     ( nurl_sym_def syms `__owned_closure_envs__` `` )
     // Register names restart per function: no temporary outlives one.
     ( __clo_tmp_set `` )
+    = g_struct_tmp ``
     ( nurl_sym_def syms `__in_call_arg__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): gen_ret appends the
     // index of any parameter returned directly; merged into
@@ -26517,7 +26578,7 @@
     { ( nurl_sym_set_deep syms `__fn_ret_owned__` `1` ) }
     {}
     // A `→ v` body discards its tail value.
-    ? ( seq ret_ty `void` ) { ( mem_clo_drop_discarded syms cg last ) } {}
+    ? ( seq ret_ty `void` ) { ( mem_clo_drop_discarded syms cg last tail_tt ) } {}
     ? ( seq ret_ty `void` )
     { ? == g_did_ret 0
         { ? != 0 ( nurl_str_len dtop )

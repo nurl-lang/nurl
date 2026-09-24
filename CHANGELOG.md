@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A closure owns its environment wherever it is kept, and nothing frees
+  one by hand** (docs/MEMORY.md §7.5). Until now a closure that left the
+  frame that created it — returned, stored into a struct field, spawned
+  onto a fiber or a thread, captured by another closure — took its heap
+  env with it and left releasing it to whoever ended up holding it, which
+  in practice meant a hand-written `( nurl_free # s # *u f 1 )` or a leak.
+  Now:
+
+  - a function returning a closure hands its caller an env the caller
+    owns, on every return path (a borrowed one is copied on the way out);
+  - a struct field, a slice of closures, another closure's captures and a
+    `?` / `??` join own the closures stored into them and drop them with
+    their holder;
+  - `spawn`, `thread_spawn`, `signal_install` and `sqlite_set_authorizer`
+    keep their own copy of the closure and drop it when done, so the
+    spawner's closure can be reused or go out of scope immediately (the
+    `_owned` spawn variants are now the same as the plain ones);
+  - a closure temporary passed to a call is dropped right after the call,
+    and a discarded one at the end of its statement — whatever the callee
+    does with it, because a callee that keeps a closure keeps a copy;
+  - an env records its size and how to drop and copy the closures it
+    captured, so dropping an env releases the whole tree.
+
+  **Migration:** a hand-written free of a closure's env is now a compile
+  error when the closure owns it or is a parameter — delete the call.
+  `recover` no longer frees its argument's env. Heap structures that store
+  closures behind raw pointers release them with `nurl_closure_drop`
+  instead of `nurl_free`.
+
+- Reassigning a struct binding that owns heap fields from a constructor
+  call or literal (`= s ( make … )`) now drops the fields it replaces;
+  they leaked before, for string fields as much as closure ones.
+
 ### Added
 
 - Linux CI now gates the `template` package at 96.3% line coverage using
