@@ -3458,6 +3458,16 @@
     ( __clo_tmp_set `` )
     ( nurl_sym_def syms `__last_closure_env__` `` )
     : ~ s val ( gen_operand lex syms cg )
+    // `^ ( string_data x )`: a raw view of an auto-dropped local outlives
+    // it — x (and what it is a cursor over) is kept, not dropped. At worst
+    // a leak, never a dangling return; return the String to hand it over.
+    ? & == ret_first_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_borrow_src__` ) {
+        : s vsp ( mem_udrop_ptr_of syms ( nurl_sym_get syms `__last_borrow_src__` ) )
+        ? & != 0 ( nurl_str_len vsp ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) vsp ) {
+            ( mem_udrop_flag_set syms cg vsp `0` )
+            ( mem_udrop_alias_move syms cg vsp `0` )
+        } {}
+    } {}
     // `^ ( g … )`: this function lends whenever g does (resolved at module
     // end, when every callee's answer is final — mem_emit_arg_flags).
     ? & == ret_first_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_name__` ) {
@@ -29646,8 +29656,19 @@
     ? & ( is_ident_tok tt0 ) ( seq v0 retid ) {
         : s up ( mem_udrop_ptr_of syms retid )
         ? & != 0 ( nurl_str_len up ) > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth {
-            : s r ( mem_udrop_flag_get syms cg up )
+            : ~ s r ( mem_udrop_flag_get syms cg up )
             ( mem_udrop_flag_set syms cg up `0` )
+            // A cursor (`T s → s` over an option binding): the values it
+            // is a cursor over leave with it.
+            : ~ s al ( nurl_sym_get2 syms up `__alias` )
+            ~ != 0 ( nurl_str_len al ) {
+                : s w ( str_first_word al ) = al ( str_skip_word al )
+                : s wf ( mem_udrop_flag_get syms cg w )
+                : s o ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print r ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
+                = r o
+            }
+            ( mem_udrop_alias_move syms cg up `0` )
             ^ r
         } {}
         ^ ( nurl_str_cat `false` `` )
