@@ -58,6 +58,14 @@ before relying on any thread-safety expectation.
 | A parameter may not be named `r` followed only by digits (`r0`, `r12`, …) — a by-value parameter keeps its source name as its LLVM SSA register, and nurlc's temporaries are `%r0`, `%r1`, … in the same namespace | Rename it (`r0` → `r_0`, or something that says what it holds). Locals are unaffected — the code generator names those |
 | A `sink` parameter takes a manually-managed handle (`Vec`, single-pointer struct) that the callee frees explicitly. A *compiler-auto-dropped* value (an owned string, owned slice, `Drop` value, or struct with owned fields) is **rejected at the call site by design** — its auto-drop obligation can't be transferred without risking a double-free across `?`/`??`/loop scope restores (see [`docs/MEMORY.md` §1](MEMORY.md)) | Wrap it in a handle (`{ s data }` / `Vec`), or pass it by value as an ordinary parameter and let the caller's scope drop it |
 
+## Ownership
+
+| Limitation | Workaround |
+|---|---|
+| A `??` / `?` join that *yields* an owned `String` / `Vec` payload (`: String u ?? ( f ) { T x → x F → ( string_new ) }`) gives the binding a borrow, so that payload is not dropped (a leak, never a double free). A statement arm that reads, stores or releases the payload drops it correctly ([`docs/MEMORY.md` §7.6](MEMORY.md)) | Bind the option first and release the payload in the arm, or take it with a statement arm: `?? ( f ) { T x → ( vec_push [String] out x ) F → {} }` |
+| A struct with an enum or trait-object field is not dropped as a whole; its `String` / `Vec` fields are released by the program or by a `% Drop` of its own | Give the struct a `% Drop`, or keep owning fields in a struct of their own |
+| Storing a *borrowed* `String` / `Vec` into an owner (a struct literal, a field of a value, an element via `vec_push`) stores a **copy**; mutations through the new owner are not seen through the old binding | Store the owned value (move it in), or keep the shared buffer behind a pointer-reached struct, whose fields are stored as is |
+
 ## Imports
 
 | Limitation | Workaround |

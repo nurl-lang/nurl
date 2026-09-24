@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`String`, `Vec` and the structs that hold them are dropped by the
+  compiler** (docs/MEMORY.md §7.6). A program no longer needs
+  `string_free` / `vec_free`: every binding, parameter and temporary that
+  owns one releases it exactly once, tracked by a drop flag. Storing a
+  value into a struct, a field or a container moves it; a borrowed value
+  stored into an owner is copied; a `: cur root` alias is a cursor that
+  borrows; a fresh `? T` / `! T E` payload is owned by the arm that binds
+  it. `vec_free` / `string_free` remain as an explicit early release, and
+  `( mem_forget x )` hands a value over for good (a table kept in a
+  global). See docs/LIMITATIONS.md "Ownership" for the shapes that still
+  borrow.
+
 - **A closure owns its environment wherever it is kept, and nothing frees
   one by hand** (docs/MEMORY.md §7.5). Until now a closure that left the
   frame that created it — returned, stored into a struct field, spawned

@@ -42,6 +42,12 @@ $ `stdlib/core/string.nu`
     ^ -1
 }
 
+// A fresh Option: its payload is owned by the arm that binds it.
+@ maybe s x → ?String {
+    ? ( nurl_str_eq x `` ) { ^ @ ?String { F } } {}
+    ^ @ ?String { T ( string_from x ) }
+}
+
 @ main → i {
     : String a ( string_from `alpha` )
     : String g ( greet a )
@@ -79,6 +85,12 @@ $ `stdlib/core/string.nu`
         = k + k 1
     }
     ( nurl_println_int ( vec_len [i] cur ) )  // 1
+
+    // Option payloads: read, moved into a container, released by hand.
+    ?? ( maybe `opt` ) { T x → ( nurl_println ( string_data x ) ) F → {} }  // opt
+    ?? ( maybe `kept` ) { T x → ( vec_push [String] names x ) F → {} }
+    ?? ( maybe `gone` ) { T x → ( string_free x ) F → {} }
+    ( nurl_println_int ( vec_len [String] names ) )  // 3
 
     // Rebound and released early by hand (still allowed).
     : ~ String t ( string_from `one` )

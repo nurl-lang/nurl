@@ -12447,8 +12447,17 @@
     ( nurl_sym_def syms `__last_call_res_t_llvm__` `` )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` `` )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` `` )
+    : i match_first_tt ( nurl_lex_type lex )
     : s match_val ( gen_operand lex syms cg )
     : s match_type ( nurl_get_last_type )
+    // A fresh `? T` / `! T E` from a call owns its payload: the payload
+    // binding takes it over (docs/MEMORY.md §7.6) — dropped at the end of
+    // a statement arm unless moved on. Whether the call's result is owned
+    // at all is its `@.__nurl_retown` constant.
+    : ~ s scrut_own ``
+    ? & & == match_first_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` )
+    == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
+    { = scrut_own ( mem_call_retown syms cg ) } {}
     // Borrow provenance: snapshot whether the SCRUTINEE was a borrow. A
     // match that yields a value out of a borrowed scrutinee conservatively
     // yields a borrow (the arms commonly return a payload view); restored
@@ -13233,6 +13242,13 @@
                     ! ( __drop_is_compiler_auto pt0_eff )
                     { ( mem_own_add_user_drop syms cg vp0 pt0_eff ) }
                     {}
+                    // A String / Vec payload of a fresh option or result.
+                    ? & & pt0_is_opt_bool != 0 ( nurl_str_len scrut_own ) ( __is_handle_ty pt0_eff ) {
+                        ( __handle_drop_ensure pt0_eff )
+                        ( mem_own_add_user_drop syms cg vp0 pt0_eff )
+                        ( mem_udrop_flag_set syms cg vp0 scrut_own )
+                        ( nurl_sym_def syms ( nurl_str_cat vp0 `__sborrow` ) `dyn` )
+                    } {}
                 }
                 {}
                 // Borrow provenance: a match-arm payload of an auto-Drop
