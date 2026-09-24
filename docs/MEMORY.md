@@ -1519,6 +1519,12 @@ handles are freely aliased, so their bindings follow a few more rules:
   out, a fresh call or literal is owned — through a phi of per-arm
   ownership bits; an arm that yields an outer binding lends it. A fresh
   `? T` / `! T E`'s payload is owned by the arm that binds it.
+- **Option bindings.** `: ?String o ( f )` owns its payload and drops it
+  at scope exit (registered under a named twin `%__opt.<T>`, since the
+  drop registry is a space-separated list). A `?? o` payload is a cursor
+  over `o`: freeing, storing or returning it takes `o`'s ownership along,
+  and moving it into an outer binding takes it over before `o`'s scope
+  ends.
 - **Returns.** A returned local binding that turns out not to own what
   it holds (it borrowed another local through a join, or read an element
   through a pointer) is copied on the way out, so the caller always owns

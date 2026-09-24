@@ -99,6 +99,11 @@ $ `stdlib/core/string.nu`
     ?? ( maybe `kept` ) { T x → ( vec_push [String] names x ) F → {} }
     ?? ( maybe `gone` ) { T x → ( string_free x ) F → {} }
     ( nurl_println_int ( vec_len [String] names ) )  // 3
+    // An option binding owns its payload; an arm can take it over.
+    : ?String ob ( maybe `bound` )
+    ?? ob { T x → ( nurl_println ( string_data x ) ) F → {} }  // bound
+    : ?String ob2 ( maybe `taken` )
+    ?? ob2 { T x → ( vec_push [String] names x ) F → {} }
     : String u ?? ( maybe `joined` ) { T x → x F → ( string_new ) }
     ( nurl_println ( string_data u ) )  // joined
     : String w ( pick F `unused` )

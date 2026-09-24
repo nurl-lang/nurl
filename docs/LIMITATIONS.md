@@ -62,8 +62,9 @@ before relying on any thread-safety expectation.
 
 | Limitation | Workaround |
 |---|---|
-| An option **binding** (`: ?String o ( f )`) does not drop its payload; its `??` arms borrow it. A `??` / `?` directly over a call owns the payload (docs/MEMORY.md §7.6) | Match the call directly — `?? ( f ) { T x → … }` — or move the payload into an owner in the arm |
+| An option **parameter** (`? String p`) is not dropped by its function; a payload an arm takes over (frees, stores, returns) makes the caller hand the option over, so a path that leaves the payload alone leaks it | Pass the `String` itself, or take the payload on every path |
 | A struct with an enum or trait-object field is not dropped as a whole; its `String` / `Vec` fields are released by the program or by a `% Drop` of its own | Give the struct a `% Drop`, or keep owning fields in a struct of their own |
+| Freeing a field of a match payload (`?? o { T t → ( string_free . t name ) }`) hands the rest of the payload to the arm: it is dropped at the arm's end, and `o` must not be read after that match | Take the payload whole (`: Tagged x t`), or free the field after the last use of `o` |
 | Storing a *borrowed* `String` / `Vec` into an owner (a struct literal, a field of a value, an element via `vec_push`) stores a **copy**; mutations through the new owner are not seen through the old binding | Store the owned value (move it in), or keep the shared buffer behind a pointer-reached struct, whose fields are stored as is |
 
 ## Imports
