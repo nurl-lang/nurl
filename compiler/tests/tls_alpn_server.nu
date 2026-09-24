@@ -232,8 +232,6 @@ ss.close()" 2>&1` )
                             ( thread_join t )
                             // thread_spawn borrows the closure's heap env;
                             // release it now that the thread has exited.
-                            : *u server_env # *u server 1
-                            ( nurl_free # s server_env )
                             ( label `server_1` ( proto_name srv_proto_1 ) )
                             ( label `server_2` ( proto_name srv_proto_2 ) )
                             ( label `server_3` ( proto_name srv_proto_3 ) )

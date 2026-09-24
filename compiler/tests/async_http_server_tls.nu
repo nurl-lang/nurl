@@ -94,10 +94,6 @@ sys.stdout.write('tls_body='+body)" 2>&1`
             }
 
             ?? ct { T t → { ( thread_join t ) } F _ → {} }
-            : *u client_env # *u client 1
-            ( nurl_free # s client_env )
-            : *u handler_env # *u handler 1
-            ( nurl_free # s handler_env )
             ( runtime_shutdown )
         }
         F e → { ( tls_async_println `tls_listen` ( net_err_name e ) ) }

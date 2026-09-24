@@ -263,8 +263,6 @@ $ `stdlib/core/vec.nu`
                     ( pr_int `server_done` server_done )
                     // thread_spawn borrows the closure's heap env; the
                     // thread has joined, so free it here (LSan gate).
-                    : *u client_env # *u client 1
-                    ( nurl_free # s client_env )
                     ( runtime_run )
                     ( runtime_shutdown )
 

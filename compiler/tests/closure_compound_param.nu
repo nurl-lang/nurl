@@ -26,9 +26,6 @@ $ `stdlib/core/vec.nu`
     ( nurl_println_int ?? ( vec_get [u] r 0 ) { T x → # i x F → -1 } )  // 6
     ( nurl_println_int ?? ( vec_get [u] r 1 ) { T x → # i x F → -1 } )  // 8
 
-    // free the closure env (capture-less closures still allocate one)
-    : *u env # *u dbl 1
-    ? != # i env 0 { ( nurl_free # s env ) } {}
     ( vec_free [u] v ) ( vec_free [u] r )
     ^ 0
 }

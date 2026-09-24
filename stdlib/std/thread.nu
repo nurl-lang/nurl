@@ -105,8 +105,9 @@ $ `stdlib/core/marker.nu`
 
 & `c` @ nurl_pthread_detach_ptr *u t → v
 
-// pthread_create through a trampoline that frees the closure env once
-// the body returns (runtime_ffi.c §19). What thread_spawn_owned is made of.
+// pthread_create through a trampoline that runs the body on its own copy
+// of the closure env and drops the copy once the body returns
+// (runtime_ffi.c §19). What thread_spawn is made of.
 & `c` @ nurl_pthread_create_owned *u t *u start *u env → i32
 
 // ── ThreadErr ─────────────────────────────────────────────────────
@@ -194,7 +195,10 @@ $ `stdlib/core/marker.nu`
         ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
     } {}
     : *u tp # *u ptr
-    : i rc ( pthread_create tp # *u 0 fnp env )
+    // The thread runs on its own copy of the env (the runtime clones it
+    // and drops the copy when the body returns — docs/MEMORY.md §7.4), so
+    // the spawner's closure stays the spawner's to drop.
+    : i rc ( nurl_pthread_create_owned tp fnp env )
     ? != rc 0 {
         ( nurl_free ptr )
         ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
@@ -202,16 +206,10 @@ $ `stdlib/core/marker.nu`
     ^ @ !Thread ThreadErr { T @ Thread { ptr } }
 }
 
-// Spawn a thread that OWNS its closure env: the runtime frees the env
-// right after the body returns. For the fire-and-forget shape — an
-// inline closure, spawned, detached, never referred to again — where
-// `thread_spawn` leaks one env per spawn because it BORROWS the env and
-// the spawner has no correct moment to free it (the body is still
-// running, and nothing tells the spawner when it stops). What the body
-// captured is still the body's to free before it returns; only the
-// env block itself changes hands. Do NOT use when the spawner keeps the
-// closure binding to free or reuse later. Mirrors `spawn_owned` for
-// fibers.
+// The same as `thread_spawn`: every thread now runs on its own copy of
+// the env. Kept for the programs written when `thread_spawn` borrowed
+// the env and this was the only leak-free fire-and-forget spelling.
+// Mirrors `spawn_owned` for fibers.
 @ thread_spawn_owned ( @ v ) f → !Thread ThreadErr {
     : *u fnp # *u f 0
     : *u env # *u f 1

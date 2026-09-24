@@ -39,10 +39,6 @@ $ `stdlib/std/bench.nu`
     : i apo ( bench_result_allocs_per_op br )
     : i thpt ? > nspo 0 / * units_per_op 1000 nspo 0
     ( bench_result_free br )
-    // `body` is moved in and, after bench_auto, can never run again — release
-    // its captured environment (decompose the fat pointer, free the env slot).
-    : *u env # *u body 1
-    ( nurl_free # s env )
     ^ @ BenchRow { ( string_from name ) nspo apo thpt ( string_from unit ) }
 }
 

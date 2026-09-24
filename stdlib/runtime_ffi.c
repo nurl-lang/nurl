@@ -4474,7 +4474,7 @@ static void nurl__wf_body(void *arg) {
      * how a relay connection fiber ended up freeing a wild pointer,
      * intermittently, depending on whether the block had come from a
      * cache. The M:N backend frees it exactly this way. */
-    if (f->own_env && f->env) { nurl_free((char*)f->env); f->env = NULL; }
+    if (f->own_env && f->env) { nurl_closure_drop(f->env); f->env = NULL; }
     atomic_store(&f->done, 1);
     nurl__wake(&f->done, -1);
     {
@@ -4513,9 +4513,12 @@ static long long nurl__wf_spawn(void *fn, void *env, int own_env, int joinable) 
     return (long long)(uintptr_t)f;
 }
 
-long long nurl_fiber_spawn(void *fn, void *env)          { return nurl__wf_spawn(fn, env, 0, 0); }
-long long nurl_fiber_spawn_owned(void *fn, void *env)    { return nurl__wf_spawn(fn, env, 1, 0); }
-long long nurl_fiber_spawn_joinable(void *fn, void *env) { return nurl__wf_spawn(fn, env, 0, 1); }
+/* Every spawn keeps its OWN copy of the closure env (docs/MEMORY.md §7.4):
+ * the spawner's env stays the spawner's, whatever happens to it after the
+ * call, and the fiber drops its copy when the body returns. */
+long long nurl_fiber_spawn(void *fn, void *env)          { return nurl__wf_spawn(fn, nurl_closure_clone(env), 1, 0); }
+long long nurl_fiber_spawn_owned(void *fn, void *env)    { return nurl__wf_spawn(fn, nurl_closure_clone(env), 1, 0); }
+long long nurl_fiber_spawn_joinable(void *fn, void *env) { return nurl__wf_spawn(fn, nurl_closure_clone(env), 1, 1); }
 
 void nurl_fiber_join(long long fiber) {
     NurlWasmFiber *f = (NurlWasmFiber*)(uintptr_t)fiber;
@@ -4603,16 +4606,19 @@ static void nurl__thr_owned_tramp(void *p) {
     NurlThrOwned b = *(NurlThrOwned *)p;
     free(p);
     b.fn(b.env);
-    if (b.env) nurl_free((char *)b.env);
+    if (b.env) nurl_closure_drop(b.env);
 }
 
+/* The thread runs on its OWN copy of the closure env and drops it when the
+ * body returns (docs/MEMORY.md §7.4); the spawner's env stays the
+ * spawner's. */
 int nurl_pthread_create_owned(void *t, void *fn, void *env) {
     NurlThrOwned *b = (NurlThrOwned *)malloc(sizeof *b);
     if (!b) return 11;  /* EAGAIN */
     b->fn  = (void (*)(void *))fn;
-    b->env = env;
+    b->env = nurl_closure_clone(env);
     int rc = pthread_create(t, NULL, (void *(*)(void *))nurl__thr_owned_tramp, b);
-    if (rc != 0) free(b);
+    if (rc != 0) { nurl_closure_drop(b->env); free(b); }
     return rc;
 }
 
@@ -4816,18 +4822,24 @@ long long nurl_signal_register(long long signum, void *fn, void *env) {
 #  ifndef _WIN32
     nurl__signal_pipe_lazy_init();
 #  endif
+    /* The slot keeps its own copy of the handler's env (docs/MEMORY.md
+     * §7.4) and drops the handler it replaces. */
+    void *old = g_signal_slots[signum].env;
     g_signal_slots[signum].fn  = fn;
-    g_signal_slots[signum].env = env;
+    g_signal_slots[signum].env = nurl_closure_clone(env);
+    nurl_closure_drop(old);
     return (long long)nurl__signal_arm((int)signum);
 }
 
 /* Restore the default disposition and clear the NURL slot. */
 void nurl_signal_unregister(long long signum) {
     if (signum <= 0 || signum >= NURL_SIG_MAX) return;
+    void *old = g_signal_slots[signum].env;
     g_signal_slots[signum].fn  = NULL;
     g_signal_slots[signum].env = NULL;
     g_signal_pending[signum]   = 0;
     nurl__signal_disarm((int)signum);
+    nurl_closure_drop(old);
 }
 
 /* Non-destructive pending check. Returns 1 iff the signal fired
@@ -5391,7 +5403,7 @@ static void nurl__fiber_entry(void *arg) {
     nurl_ctx_asan_finish_switch(NULL, &nurl__tls_loop_lo, &nurl__tls_loop_size);
 #endif
     if (f && f->fn) f->fn(f->env);
-    if (f && f->own_env && f->env) { nurl_free(f->env); f->env = NULL; }
+    if (f && f->own_env && f->env) { nurl_closure_drop(f->env); f->env = NULL; }
     if (f) f->state = NF_DONE;
     NurlWorker *w = nurl__tls_worker;
     if (w) {
@@ -5413,7 +5425,7 @@ static void nurl__fiber_entry(unsigned hi, unsigned lo) {
     uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
     NurlFiber *f = (NurlFiber*)p;
     if (f && f->fn) f->fn(f->env);
-    if (f && f->own_env && f->env) { nurl_free(f->env); f->env = NULL; }
+    if (f && f->own_env && f->env) { nurl_closure_drop(f->env); f->env = NULL; }
     if (f) f->state = NF_DONE;
     NurlWorker *w = nurl__tls_worker;
     if (w) setcontext(&w->loop_ctx);
@@ -5568,32 +5580,31 @@ __attribute__((noinline))
 long long nurl_fiber_spawn(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
-    NurlFiber *f = nurl__fiber_alloc(fn, env, 0);
-    if (!f) nurl__fiber_spawn_failed();
-    nurl__enqueue_new(f);
-    return (long long)(uintptr_t)f;
-}
-
-/* Fire-and-forget spawn that takes OWNERSHIP of `env` — freed after the
- * fiber body returns (see NurlFiber.own_env). For per-item inline
- * closures that nothing else holds a handle to. */
-__attribute__((noinline))
-long long nurl_fiber_spawn_owned(void *fn, void *env) {
-    if (!fn) return 0;
-    if (!nurl__sched.initialized) nurl_runtime_init(0);
-    NurlFiber *f = nurl__fiber_alloc(fn, env, 0);
+    NurlFiber *f = nurl__fiber_alloc(fn, nurl_closure_clone(env), 0);
     if (!f) nurl__fiber_spawn_failed();
     f->own_env = 1;
     nurl__enqueue_new(f);
     return (long long)(uintptr_t)f;
 }
 
+/* Every spawn runs on its OWN copy of the closure env (docs/MEMORY.md
+ * §7.4), dropped after the fiber body returns (see NurlFiber.own_env):
+ * the spawner's env stays the spawner's, so a closure spawned a hundred
+ * times — or spawned and then dropped at the end of the spawner's scope —
+ * is never read after its owner released it. `_owned` is the historical
+ * name for the same thing. */
+__attribute__((noinline))
+long long nurl_fiber_spawn_owned(void *fn, void *env) {
+    return nurl_fiber_spawn(fn, env);
+}
+
 __attribute__((noinline))
 long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
-    NurlFiber *f = nurl__fiber_alloc(fn, env, 1);
+    NurlFiber *f = nurl__fiber_alloc(fn, nurl_closure_clone(env), 1);
     if (!f) nurl__fiber_spawn_failed();
+    f->own_env = 1;
     nurl__enqueue_new(f);
     return (long long)(uintptr_t)f;
 }

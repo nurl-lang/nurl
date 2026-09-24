@@ -3647,8 +3647,6 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
     : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
     : HttpResponse out ( h req )
-    ( nurl_free # s # *u h 1 )
-    ( nurl_free # s # *u d 1 )
     ( json_free ctx )
     ^ out
 }

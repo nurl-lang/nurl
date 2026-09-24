@@ -53,7 +53,7 @@
 //
 // Handle layout (i64 slots, nurl_zalloc'd):
 //
-//   Database  { 0: sqlite3*       1: err_kind   2: errmsg (heap)    3: _ }
+//   Database  { 0: sqlite3*       1: err_kind   2: errmsg (heap)    3: authorizer env (heap) }
 //   Statement { 0: sqlite3_stmt*  1: err_kind   2: text_buf (heap)  3: _ }
 //
 // Memory model — single-owner with auto-drop:
@@ -321,6 +321,9 @@ $ `stdlib/core/marker.nu`
         ? != # i db_ptr 0 { ( sqlite3_close db_ptr ) ( nurl_poke h 0 0 ) } {}
         : s msg # s ( nurl_peek h 2 )
         ? != # i msg 0 { ( nurl_free msg ) ( nurl_poke h 2 0 ) } {}
+        // The authorizer's env copy, released only after sqlite3_close —
+        // libsqlite may call the authorizer until then.
+        ( __sqlite_auth_release h )
         ( nurl_free h )
     }
 }
@@ -785,9 +788,10 @@ $ `stdlib/core/marker.nu`
 // SQLITE_IGNORE (silently skip / NULL the column). The closure's
 // compiled function has the exact C ABI libsqlite expects
 // (`int(void* env, int action, const char*, const char*, const char*,
-// const char*)`) — its env pointer is passed as pUserData. The closure
-// must outlive the registration; keep it alive (e.g. a top-level /
-// capture-free closure) until `sqlite_clear_authorizer` or close.
+// const char*)`) — its env pointer is passed as pUserData. The handle
+// keeps its own copy of the closure (docs/MEMORY.md §7.4) and drops it on
+// `sqlite_clear_authorizer`, on a replacing `sqlite_set_authorizer`, or
+// when the database closes, so the caller's closure can go out of scope.
 @ sqlite_set_authorizer Database db ( @ i i s s s s ) auth → !v SqliteErr {
     : s rp . db raw
     : i raw # i rp
@@ -796,11 +800,19 @@ $ `stdlib/core/marker.nu`
     : s db_ptr # s ( nurl_peek h 0 )
     ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : *u fnp # *u auth 0
-    : *u env # *u auth 1
+    : *u env ( nurl_closure_clone # *u auth 1 )
     : i rc ( sqlite3_set_authorizer db_ptr fnp env )
     ( nurl_poke h 1 rc )
-    ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ? != rc SQLITE_OK { ( nurl_closure_drop env ) ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ( __sqlite_auth_release h )
+    ( nurl_poke h 3 # i env )
     ^ @ !v SqliteErr { T 0 }
+}
+
+// Drop the authorizer env copy a Database handle holds (slot 3), if any.
+@ __sqlite_auth_release s h → v {
+    : *u env # *u ( nurl_peek h 3 )
+    ? != # i env 0 { ( nurl_closure_drop env ) ( nurl_poke h 3 0 ) } {}
 }
 
 // Remove a previously-installed authorizer.
@@ -813,6 +825,7 @@ $ `stdlib/core/marker.nu`
     ? == # i db_ptr 0 { ^ @ !v SqliteErr { F # SqliteErr SqliteUnsupported } } {}
     : i rc ( sqlite3_set_authorizer db_ptr # *u 0 # *u 0 )
     ? != rc SQLITE_OK { ^ @ !v SqliteErr { F ( __sqlite_err_of rc ) } } {}
+    ( __sqlite_auth_release h )
     ^ @ !v SqliteErr { T 0 }
 }
 

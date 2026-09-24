@@ -1232,12 +1232,6 @@ $ `stdlib/ext/http2_conn.nu`
         = j + j 1
     }
     ( nurl_free thandles )
-    // Every worker has joined and the threads shared this one `worker`
-    // closure's heap-captured env (thread_spawn BORROWS it — it is never
-    // freed by the thread). Release it now that no worker can touch it,
-    // mirroring the per-server cleanup contract.
-    : *u worker_env # *u worker 1
-    ( nurl_free # s worker_env )
     ( tcp_listener_release . s listener )
     ^ @ !v NetErr { T 0 }
 }
@@ -1342,16 +1336,8 @@ $ `stdlib/std/async.nu`
     ( tcp_listener_retain . s listener )
     // Spawn one accept fiber; runtime_run blocks until the accept
     // fiber exits AND every in-flight conn fiber drains (pending=0).
-    // Bind the closure so we can free its heap-captured env afterwards:
-    // `spawn` BORROWS the env (the fiber runtime never frees it), so a
-    // fire-and-forget inline closure here would leak its env once per
-    // server start. runtime_run returns only after the accept fiber has
-    // exited, so the env is safe to release at that point.
-    : ( @ v ) accept_fiber \ → v { ( __async_accept_loop s ) }
-    ( spawn accept_fiber )
+    ( spawn \ → v { ( __async_accept_loop s ) } )
     ( runtime_run )
     ( tcp_listener_release . s listener )
-    : *u accept_env # *u accept_fiber 1
-    ( nurl_free # s accept_env )
     ^ @ !v NetErr { T 0 }
 }

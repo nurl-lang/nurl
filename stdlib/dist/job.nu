@@ -202,8 +202,7 @@ $ `stdlib/net/transport.nu`
         ? != # i pp 0 {
             : *JobHandler jh # *JobHandler pp
             : ( @ ( Vec u ) ( Vec u ) ) hf . jh fn
-            : *u env # *u hf 1
-            ? != # i env 0 { ( nurl_free # s env ) } {}
+            ( nurl_closure_drop # *u hf 1 )
             ( nurl_free # s jh )
         } {}
         = k + k 1

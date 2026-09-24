@@ -170,15 +170,11 @@ $ `stdlib/ext/http2_client.nu`
                             ( thread_join t )
                             // thread_spawn borrows the closure's heap env;
                             // release it now that the thread has exited.
-                            : *u server_env # *u server 1
-                            ( nurl_free # s server_env )
                         }
                         F _ → { ( label `thread` `FAIL` ) }
                     }
                     ( server_stop sp )
                     ( server_stop st )
-                    : *u handler_env # *u handler 1
-                    ( nurl_free # s handler_env )
                 }
                 F e → { ( label `listen_plain` ( net_err_name e ) ) ( tcp_close_listener lt ) }
             }

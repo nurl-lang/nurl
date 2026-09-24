@@ -80,14 +80,11 @@ $ `stdlib/core/string.nu`
     // calls fn_ptr(env_ptr). Mirrors thread_spawn's shape.
     : *u fnp # *u closure 0
     : *u env # *u closure 1
+    // nurl_recover is synchronous: the closure is only borrowed for the
+    // call, and its env stays with the caller, who drops it (a literal
+    // after the call, a binding at the end of its scope — docs/MEMORY.md
+    // §7.4).
     : i rv ( nurl_recover fnp env )
-    // nurl_recover is synchronous — whether the closure completed or
-    // longjmp'd back, it can never run again, so its captured env is
-    // dead here. Decomposing into raw pointers above suppressed the
-    // param's auto-drop (the compiler must assume the env escapes, as
-    // it really does in thread_spawn), so release it explicitly.
-    // nurl_free is free(): NULL-safe for capture-less closures.
-    ( nurl_free # s env )
     ? == rv 0 {
         ^ @ !v PanicInfo { T 0 }
     } {}

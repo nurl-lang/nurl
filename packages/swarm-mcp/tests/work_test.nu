@@ -32,8 +32,6 @@ $ `src/work.nu`
         = k + k 1
     }
     ( shard_free cs ) ( vec_free [u] eb ) ( vec_free [u] key )
-    : *u env # *u h 1
-    ? != # i env 0 { ( nurl_free # s env ) } {}
     ^ acc
 }
 
@@ -59,8 +57,6 @@ $ `src/work.nu`
         = k + k 1
     }
     ( shard_free cs ) ( vec_free [u] eb ) ( vec_free [u] key )
-    : *u env # *u h 1
-    ? != # i env 0 { ( nurl_free # s env ) } {}
     ^ acc
 }
 

@@ -62,7 +62,6 @@ $ `stdlib/std/thread.nu`
     // `spawn` decomposes the closure, so the env escaped and is ours to
     // release (docs/MEMORY.md §7.4). Safe here and only here: runtime_run
     // has returned, so every fiber that could still be reading it is done.
-    ( nurl_free # s # *u work 1 )
     ( runtime_shutdown )
     ^ 0
 }

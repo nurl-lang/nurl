@@ -116,8 +116,6 @@ $ `stdlib/std/btree.nu`
     ( nurl_print `each_count=` ) ( nurl_print ( nurl_str_int ( nurl_peek asc_state 1 ) ) )
     ( nurl_print ` ascending=` ) ( nurl_print ? == ( nurl_peek asc_state 2 ) 1 `T` `F` ) ( nurl_print `\n` )
     ( nurl_free asc_state )
-    : *u visit_env # *u visit 1
-    ( nurl_free # s visit_env )
 
     // ── drain to empty (root collapse) + reinsert ──
     : ~ i d 0
@@ -136,8 +134,6 @@ $ `stdlib/std/btree.nu`
     ( nurl_print ` get42=` ) ?? ( btree_get [i i] m 42 cmp ) { T v → ( nurl_print ( nurl_str_int v ) ) F _ → ( nurl_print `none` ) }
     ( nurl_print `\n` )
     ( btree_free [i i] m )
-    : *u cmp_env # *u cmp 1
-    ( nurl_free # s cmp_env )
 
     // ── owned String keys+vals via free_with ──
     : ( @ i String String ) scmp \ String a String b → i { ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) ) }
@@ -164,11 +160,5 @@ $ `stdlib/std/btree.nu`
     : ( @ v String ) dk \ String x → v { ( string_free x ) }
     : ( @ v String ) dv \ String x → v { ( string_free x ) }
     ( btree_free_with [String String] sm dk dv )
-    : *u scmp_env # *u scmp 1
-    ( nurl_free # s scmp_env )
-    : *u dk_env # *u dk 1
-    ( nurl_free # s dk_env )
-    : *u dv_env # *u dv 1
-    ( nurl_free # s dv_env )
     ^ 0
 }

@@ -3472,8 +3472,6 @@ s combined_stdout s combined_stderr → v {
     ( json_free mods )
     : ( @ i String String ) cmp \ String a String b → i { ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) ) }
     ( sort_by [String] paths cmp )
-    : *u cmp_env # *u cmp 1
-    ( nurl_free # s cmp_env )
 
     : String md ( string_with_cap 8192 )
     ( string_push_str md `# NURL Standard Library\n\n` )
@@ -5723,10 +5721,6 @@ s combined_stdout s combined_stderr → v {
             ( ppt_install )  // /pptws/<channel> WebSocket voice relay (upgrade hook)
             : i rc ( http_app_listen app `0.0.0.0` port )
             ( gate_free )
-            ( nurl_free # s # *u mw 1 )
-            ( nurl_free # s # *u mcplog 1 )
-            ( nurl_free # s # *u mcph 1 )
-            ( nurl_free # s # *u mcpbase 1 )
             ( mcp_server_free msrv )
             // http_app_free frees the router it adopted.
             ( http_app_free app )

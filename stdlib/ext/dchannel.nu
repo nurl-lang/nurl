@@ -352,12 +352,14 @@ $ `stdlib/ext/cluster.nu`
     : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
     ( node_free . impl node )
     ( string_free . impl name )
+    // The heap block owns the codec closures stored into it (clones —
+    // docs/MEMORY.md §7.4); release them with the block.
     : ( @ Json A ) e . impl enc
-    ( nurl_free # s # *u e 1 )
+    ( nurl_closure_drop # *u e 1 )
     : ( @ A Json ) d . impl dec
-    ( nurl_free # s # *u d 1 )
+    ( nurl_closure_drop # *u d 1 )
     : ( @ v A ) dr . impl drop
-    ( nurl_free # s # *u dr 1 )
+    ( nurl_closure_drop # *u dr 1 )
     ( nurl_free . ch ctl )
 }
 

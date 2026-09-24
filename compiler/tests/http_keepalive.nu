@@ -324,8 +324,6 @@ $ `stdlib/ext/http_server.nu`
 
                             ( real_server_case )
                             ( thread_join t )
-                            : *u env # *u server 1
-                            ( nurl_free # s env )
                             ( label `server_handled` ( nurl_str_int handled ) )
                             ( label `server_run_once_returns` ( nurl_str_int run_once_returns ) )
                         }

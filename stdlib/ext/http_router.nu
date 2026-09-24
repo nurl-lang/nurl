@@ -154,13 +154,11 @@ $ `stdlib/ext/http_response.nu`
     : *RouteImpl impl # *RouteImpl . route ctl
     ( string_free . impl method )
     ( string_free . impl pattern )
-    // The router owns the handler closure registered via router_any.
-    // A closure value is a by-value { fn_ptr, env_ptr } pair; only the
-    // env is heap-allocated (NULL for capture-less lambdas) and
-    // closures have no auto-drop, so release it here — the same
-    // convention std/panic.nu's recover uses.
+    // The router owns the handler closure registered via router_any (a
+    // stored closure is a clone — docs/MEMORY.md §7.4); release it with
+    // the route.
     : ( @ HttpResponse HttpRequest Params ) h . impl handler
-    ( nurl_free # s # *u h 1 )
+    ( nurl_closure_drop # *u h 1 )
     ( nurl_free # s impl )
 }
 

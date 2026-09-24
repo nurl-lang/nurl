@@ -472,19 +472,16 @@ $ `stdlib/ext/http3_server.nu`
     ? h3_on {
         ( http3_server_stop h3 )
         ? h3_thread_ok { : i _j ( thread_join h3_thread ) } {}
-        ( nurl_free # s # *u h3_thread_body 1 )
-        ( nurl_free # s # *u altw 1 )
     } {}
     ? != # i h3 0 { ( http3_server_free h3 ) } {}
     ? != # i h3_tp 0 { ( quic_tp_free h3_tp ) } {}
     ? != # i h3_creds 0 { ( quic_creds_free h3_creds ) } {}
     ? != # i . h3_sock raw 0 { ( udp_close h3_sock ) } {}
-    ? has_log { ( nurl_free # s # *u logw 1 ) } {}
+    ? has_log {} {}
     // The handler the user middleware RETURNED is the facade's to free —
     // the wrapper itself belongs to whoever called http_app_use.
-    ? has_user { ( nurl_free # s # *u userw 1 ) } {}
-    ? has_cors { ( nurl_free # s # *u corsw 1 ) } {}
-    ( nurl_free # s # *u disp 1 )
+    ? has_user {} {}
+    ? has_cors {} {}
     ^ rc
 }
 

@@ -140,9 +140,9 @@ $ `stdlib/std/panic.nu`
     }
 }
 
-// Run a child closure under panic recovery WITHOUT freeing its env — the
-// supervisor re-invokes the same closure on the next restart. (std/panic.nu's
-// `recover` frees the env, which would dangle on restart.)
+// Run a child closure under panic recovery. The closure is borrowed for
+// the call — the supervisor re-invokes the same closure on the next
+// restart, and its ChildImpl owns it.
 @ __sup_recover ( @ v ) closure → !v PanicInfo {
     : *u fnp # *u closure 0
     : *u env # *u closure 1
@@ -326,10 +326,9 @@ $ `stdlib/std/panic.nu`
         : *ChildImpl ci # *ChildImpl . c ctl
         ( string_free . ci name )
         : ( @ v ) st . ci start
-        ( nurl_free # s # *u st 1 )
+        ( nurl_closure_drop # *u st 1 )
         ( nurl_free # s ci )
     }
     ( vec_free_with [ChildSpec] . sup children freeing )
-    ( nurl_free # s # *u freeing 1 )
     ( nurl_free # s sup )
 }

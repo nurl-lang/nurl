@@ -170,8 +170,6 @@ $ `stdlib/core/string.nu`
             // release it. `thread_spawn` borrows the env and never frees
             // it (§7.4: an escaped closure's env belongs to the
             // consumer), so without this the test leaks it.
-            : *u worker_env # *u worker 1
-            ( nurl_free # s worker_env )
             ( signal_clear_shutdown )
             ( tcp_close_listener listener )
         }

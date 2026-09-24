@@ -1,18 +1,20 @@
 // closure_env_binding.nu — env reclamation for `:`-bound capturing
 // closures (docs/MEMORY.md §7.4).
 //
-// A `: f \ → … x …` binding owns a heap env block. The compiler frees it
-// at scope exit (and, in a loop body, each iteration) UNLESS the closure
-// escapes the frame — returned, stored, captured, detached, or
-// decomposed — in which case the consumer owns it. Run under LSan this
-// is leak-clean; under ASan it is free of double-free / use-after-free
-// (an escaped closure read after the frame would fault if wrongly freed).
+// A `: f \ → … x …` binding owns a heap env block, and the compiler frees
+// it at scope exit (and, in a loop body, each iteration). Nothing the
+// closure is handed to changes that: a function that returns a closure
+// hands its caller an env the caller owns, and a struct field that keeps
+// one keeps its own copy, so every place that holds an env drops it and
+// no program writes a free. Run under LSan this is leak-clean; under ASan
+// it is free of double-free / use-after-free (a closure read after its env
+// was wrongly freed would fault).
 
 $ `stdlib/core/string.nu`
 
 @ run_it ( @ i ) f → i { ^ ( f ) }
 
-// Returns a capturing closure — it ESCAPES, so the env is NOT freed here.
+// Returns a capturing closure: the env moves out to the caller.
 @ adder i n → ( @ i ) { : ( @ i ) g \ → i { ^ + n 100 } ^ g }
 
 : Box { ( @ i ) cb }
@@ -37,22 +39,19 @@ $ `stdlib/core/string.nu`
         = k + k 1
     }
 
-    // ESCAPE via return: adder returns a closure; this frame owns its env
-    // now and frees it explicitly (the env survived — a freed env would
-    // fault on the invoke below).
+    // Returned: adder hands its env over; this binding owns it and drops it
+    // at scope exit (the env survived the callee's frame — a freed env
+    // would fault on the invoke below).
     : ( @ i ) r ( adder 5 )
     ( nurl_print ( nurl_str_int ( r ) ) ) ( nurl_print `\n` )
-    : *u re # *u r 1
-    ( nurl_free # s re )
 
-    // ESCAPE via store: g is moved into a struct field; not freed at scope
-    // exit. Read it back intact, then release its env.
+    // Stored: the struct field keeps its own copy of g, dropped with bx;
+    // g's env is g's, dropped with g. Read it back intact through a
+    // borrowing binding.
     : ( @ i ) g \ → i { ^ + base 50 }
     : ~ Box bx @ Box { g }
     : ( @ i ) gc . bx cb
     ( nurl_print ( nurl_str_int ( gc ) ) ) ( nurl_print `\n` )
-    : *u ge # *u gc 1
-    ( nurl_free # s ge )
 
     ( nurl_print `done\n` )
     ^ 0

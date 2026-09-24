@@ -75,10 +75,13 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── spawn ──────────────────────────────────────────────────────────
 
-// Spawn a new fiber to run `body`. The closure's (fn_ptr, env_ptr)
-// pair lands on the scheduler's runqueue; the scheduler's workers
-// pull it off and run it. Fire-and-forget — the fiber's control
-// block is freed automatically once its body returns.
+// Spawn a new fiber to run `body`. The closure's function and its OWN
+// copy of the env land on the scheduler's runqueue (the runtime clones
+// the env and drops the copy when the body returns — docs/MEMORY.md
+// §7.4), so the spawner's closure stays the spawner's: spawning one
+// closure many times, or letting it go out of scope right after, is
+// fine. Fire-and-forget — the fiber's control block is freed
+// automatically once its body returns.
 @ spawn ( @ v ) body → Fiber {
     // Decompose the closure exactly as `thread_spawn` does — bare-form
     // `#`-cast (parenthesised `( # ... )` would be parsed as a call
@@ -90,13 +93,9 @@ $ `stdlib/std/async_ffi.nu`
     ^ @ Fiber { rp }
 }
 
-// Spawn a fiber that OWNS its closure env: the runtime frees the env
-// right after the body returns. Use for fire-and-forget per-item
-// inline closures nothing else holds a handle to (one fiber per
-// accepted connection, say) — with plain `spawn` those envs leaked,
-// one per spawn, because `spawn` BORROWS the env and a fire-and-forget
-// caller has no correct place to free it. Do NOT use when the spawner
-// keeps the closure binding around to free (or reuse) it later.
+// The same as `spawn`: every spawn now runs on its own copy of the env.
+// Kept for the programs written when plain `spawn` borrowed the env and
+// this was the only leak-free spelling of a fire-and-forget fiber.
 @ spawn_owned ( @ v ) body → Fiber {
     : *u fnp # *u body 0
     : *u env # *u body 1

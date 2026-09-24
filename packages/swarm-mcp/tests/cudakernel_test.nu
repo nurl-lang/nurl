@@ -258,8 +258,6 @@ $ `src/wasmkernel.nu`
     ( pb `forged payload → tagged ok=0:    ` frame_ok )
     ( vec_free [u] res ) ( vec_free [u] forged ) ( vec_free [u] key )
     // release the handler closure's env (job_node_free does this in the node)
-    : *u henv # *u h 1
-    ? != # i henv 0 { ( nurl_free # s henv ) } {}
 
     // ── GPU handler: forged payload → tagged scalar ok=0 frame ────
     : ( Vec u ) gkey ( token_key `caps-test-gpu` )
@@ -280,7 +278,5 @@ $ `src/wasmkernel.nu`
     }
     ( pb `gpu forged payload → ok=0 frame: ` gframe_ok )
     ( vec_free [u] gres ) ( vec_free [u] gforged ) ( vec_free [u] gkey )
-    : *u ghenv # *u gh 1
-    ? != # i ghenv 0 { ( nurl_free # s ghenv ) } {}
     ^ 0
 }

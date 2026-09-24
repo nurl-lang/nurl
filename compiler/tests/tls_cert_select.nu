@@ -261,8 +261,6 @@ $ `stdlib/std/net.nu`
                 F _e → { = all ( chk `mldsa_only_pem      ` F ) }
             }
             ( thread_join t )
-            : *u env # *u server 1
-            ( nurl_free # s env )
         }
         F _e → { = all ( chk `thread              ` F ) }
     }

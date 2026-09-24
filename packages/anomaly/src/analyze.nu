@@ -409,7 +409,6 @@ $ `src/orgfiles.nu`
         T t → { ( thread_detach t ) ^ T }
         F _ → {}
     }
-    ( nurl_free # s # *u body 1 )
     ( string_free dir )
     ( string_free exe )
     ^ F

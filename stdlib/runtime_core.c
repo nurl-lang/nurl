@@ -165,6 +165,9 @@ static void *nurl__xrealloc(void *q, size_t n) {
  * way, so a site that frees one of these with plain free() — several
  * in the FFI half do — keeps working. */
 void *nurl_alloc(long long bytes);  /* §9a */
+void *nurl_closure_clone(void *env);  /* closure envs, see below */
+void  nurl_free(void *ptr);  /* §9a */
+void  nurl_closure_drop(void *env);  /* closure envs, see nurl_closure_clone */
 char *nurl_strdup(const char *s);   /* §9a */
 static char *nurl__xstrdup(const char *s) {
     char *p = nurl_strdup(s);
@@ -2700,19 +2703,42 @@ static __thread long long nurl__ret_owned;
 long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
 void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
 
-/* Returned-closure ownership, the closure twin of the proof above. A NURL
- * function returning a closure publishes, just before its `ret`, the env
- * block the caller now owns (null when the closure it hands back belongs to
- * someone else — a parameter, a struct field). The call site takes it
- * immediately after the call, which also clears it, so a publish can never
- * be read twice. */
-#if defined(__wasi__) && !defined(__wasm_atomics__)
-static void *nurl__ret_clo;
-#else
-static __thread void *nurl__ret_clo;
-#endif
-void *nurl_ret_clo_take(void) { void *p = nurl__ret_clo; nurl__ret_clo = 0; return p; }
-void nurl_ret_clo_set(void *owner) { nurl__ret_clo = owner; }
+/* Closure environments (docs/MEMORY.md §7.4). A capturing closure's env is
+ * one heap block whose first word points at a compiler-emitted descriptor:
+ * the block's size, and two optional thunks over the captures that are
+ * themselves closures — `drop` releases their envs, `clone` replaces each
+ * with a fresh copy. Every owner of an env releases it through
+ * nurl_closure_drop, so an env owning other envs frees the whole tree, and
+ * a borrowed closure stored into an owning place (a struct field, another
+ * closure's captures, a spawned fiber) is copied with nurl_closure_clone.
+ * A closure that captures nothing has a null env; both calls accept it. */
+typedef struct {
+    long long size;
+    void (*drop)(void *env);
+    void (*clone)(void *env);
+} NurlCenvVt;
+
+void nurl_closure_drop(void *env) {
+    if (!env) return;
+    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    if (vt && vt->drop) vt->drop(env);
+    nurl_free((char *)env);
+}
+
+void *nurl_closure_clone(void *env) {
+    if (!env) return NULL;
+    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    void *copy = nurl_alloc(vt->size);
+    memcpy(copy, env, (size_t)vt->size);
+    if (vt->clone) vt->clone(copy);
+    return copy;
+}
+
+/* The env a new owner holds: `env` itself when `owner` says it already
+ * belongs to the caller, a clone otherwise. */
+void *nurl_closure_own(void *env, void *owner) {
+    return owner ? env : nurl_closure_clone(env);
+}
 
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
  *

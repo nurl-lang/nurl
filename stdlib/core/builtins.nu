@@ -232,6 +232,18 @@
 
 & `c` @ nurl_malloc i bytes → s
 
+// Closure environments (docs/MEMORY.md §7.4). A capturing closure's env
+// is released with nurl_closure_drop, which also releases the envs of any
+// closures it captured; nurl_closure_clone makes an independent copy. The
+// compiler emits both itself — every closure a program binds, stores or
+// passes is dropped automatically — so these are for code that hands a
+// closure's raw `( # *u f 1 )` env to C and must keep it past the call:
+// keep a clone, and drop the clone when C is done with it. Both accept
+// the null env of a closure that captures nothing.
+& `c` @ nurl_closure_drop *u env → v
+
+& `c` @ nurl_closure_clone *u env → *u
+
 // Copy a NUL-terminated string onto a fresh block from the same
 // freelist cache — strdup, but recyclable by nurl_free. The copy is an
 // ordinary heap block, so plain free() releases it too.

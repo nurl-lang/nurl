@@ -638,7 +638,6 @@ $ `cpu.nu`
                         F _ → {
                             ( nurl_memcpy # *u dst # *u src q )
                             ( w3 )
-                            ( nurl_free # s # *u w3 1 )
                         }
                     }
                     : i _j2 ( thread_join t2 )
@@ -647,8 +646,6 @@ $ `cpu.nu`
                     ( nurl_memcpy # *u dst # *u src q )
                     ( w2 )
                     ( w3 )
-                    ( nurl_free # s # *u w2 1 )
-                    ( nurl_free # s # *u w3 1 )
                 }
             }
             : i _j1 ( thread_join t1 )
@@ -658,9 +655,6 @@ $ `cpu.nu`
             ( w1 )
             ( w2 )
             ( w3 )
-            ( nurl_free # s # *u w1 1 )
-            ( nurl_free # s # *u w2 1 )
-            ( nurl_free # s # *u w3 1 )
         }
     }
 }
@@ -776,7 +770,6 @@ $ `cpu.nu`
                             F _ → {
                                 ( __gpu_seg_copy pb ph pn cnt buf 0 q )
                                 ( w3 )
-                                ( nurl_free # s # *u w3 1 )
                             }
                         }
                         : i _j2 ( thread_join t2 )
@@ -785,8 +778,6 @@ $ `cpu.nu`
                         ( __gpu_seg_copy pb ph pn cnt buf 0 q )
                         ( w2 )
                         ( w3 )
-                        ( nurl_free # s # *u w2 1 )
-                        ( nurl_free # s # *u w3 1 )
                     }
                 }
                 : i _j1 ( thread_join t1 )
@@ -796,9 +787,6 @@ $ `cpu.nu`
                 ( w1 )
                 ( w2 )
                 ( w3 )
-                ( nurl_free # s # *u w1 1 )
-                ( nurl_free # s # *u w2 1 )
-                ( nurl_free # s # *u w3 1 )
             }
         }
     }

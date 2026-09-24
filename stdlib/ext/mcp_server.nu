@@ -1736,7 +1736,6 @@ b read_only b destructive b idempotent b open_world
 //   : Json ctx ( my_principal_json req )        // from the credential
 //   : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
 //   : HttpResponse out ( ( mcp_http_handler d ) req )
-//   ( nurl_free # s # *u d 1 )                  // the closure's env
 //   ( json_free ctx )
 @ mcp_server_envelope_as McpServer r Json req Json ctx → ?Json {
     : b had_id ( __mcp_has_id req )
