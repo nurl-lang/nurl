@@ -1313,6 +1313,13 @@
 // table is at hand (__is_handle_ty on a struct type).
 : ~ i g_root_syms 0
 
+// Whether this module calls the drop-flag helpers (emitted at module end).
+: ~ i g_use_clear_if 0
+
+// Set by a `:` binding just before registering its value: the binding
+// rule stores the drop flag itself, so registration only creates it.
+: ~ i g_udrop_noinit 0
+
 // The kept parameters whose value ends up somewhere the compiler drops — a
 // literal, a local struct, a container element — rather than in a struct
 // the program manages by hand through a pointer (`= . st out history` on a
@@ -10193,13 +10200,10 @@
                 ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
                 { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move syms cg uptr `0` ) }
                 { : s sflag ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) )
-                    : s sc ( nurl_cg_reg cg )
-                    ( emit_sink_flag_load sflag sc )
-                    : s old ( mem_udrop_flag_get syms cg uptr )
-                    : s nv ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print nv ) ( nurl_print ` = select i1 ` ) ( nurl_print sc )
-                    ( nurl_print `, i1 0, i1 ` ) ( nurl_print old ) ( nurl_print `\n` )
-                    ( mem_udrop_flag_set syms cg uptr nv )
+                    // A binding that only ever borrows has nothing to hand over.
+                    : s __usb ( nurl_sym_get2 syms uptr `__sborrow` )
+                    ? ! | | ( seq __usb `1` ) ( seq __usb `local` ) ( seq __usb `elem` )
+                    { ( mem_udrop_flag_clear_if syms cg uptr sflag ) } {}
                     : ~ s arest ( nurl_sym_get2 syms uptr `__alias` )
                     ~ != 0 ( nurl_str_len arest ) {
                         : s asrc ( str_first_word arest ) = arest ( str_skip_word arest )
@@ -10210,11 +10214,7 @@
                         ? & != 0 ( nurl_str_len apn ) >= api 0
                         { ( __park_append syms `__fn_pending_keep_impl__` ( nurl_str_cat4 ( nurl_str_int api ) ` ` call_name
                             ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) ) ) } {}
-                        : s aold ( mem_udrop_flag_get syms cg asrc )
-                        : s anv ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print anv ) ( nurl_print ` = select i1 ` ) ( nurl_print sc )
-                        ( nurl_print `, i1 0, i1 ` ) ( nurl_print aold ) ( nurl_print `\n` )
-                        ( mem_udrop_flag_set syms cg asrc anv ) } }
+                        ( mem_udrop_flag_clear_if syms cg asrc sflag ) } }
             } {}
         } {}
         // A field of an owned struct handed to a consumer — `( string_free
@@ -10224,7 +10224,7 @@
         // A closure's use of its argument is unknowable here: a field handed
         // to one is taken to be consumed (`( drop_a . p first )` in a
         // disposer) — at worst a leak, never a second free.
-        : b __cl_call ( __is_closure_ty ( nurl_sym_get syms call_name ) )
+        : b __cl_call & != 0 ( nurl_str_len arg_fread ) ( __is_closure_ty ( nurl_sym_get syms call_name ) )
         ? & != 0 ( nurl_str_len arg_fread ) | | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) __cl_call {
             : ~ s fr ( nurl_str_cat arg_fread `` )
             : s fr_ptr ( str_first_word fr ) = fr ( str_skip_word fr )
@@ -10260,14 +10260,7 @@
         // §7.6). A declared `sink` is an explicit release: left alone.
         ? & & summary_callee != 0 ( nurl_str_len arg_lent )
         ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
-            : s kf ( nurl_cg_reg cg )
-            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) kf )
-            : ~ s kc kf
-            ? ! ( seq arg_lent `1` ) {
-                = kc ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print kc ) ( nurl_print ` = and i1 ` ) ( nurl_print kf ) ( nurl_print `, ` ) ( nurl_print arg_lent ) ( nurl_print `\n` )
-            } {}
-            = av ( mem_emit_cloneif cg at av kc )
+            = av ( mem_emit_cloneif_k cg at av ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) arg_lent )
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
         | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
@@ -15555,6 +15548,20 @@
     ( nurl_print `  store i1 ` ) ( nurl_print val ) ( nurl_print `, i1* ` ) ( nurl_print flag ) ( nurl_print `\n` )
 }
 
+// Clear `ptr`'s drop flag when the module-end constant `kflag` holds —
+// one call to a helper LLVM inlines, instead of load/load/select/store at
+// every call site that may hand a value over.
+@ mem_udrop_flag_clear_if i syms i cg s ptr s kflag → v {
+    : ~ s flag ( nurl_sym_get2 syms ptr `__live` )
+    ? == 0 ( nurl_str_len flag )
+    { = flag ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print flag ) ( nurl_print ` = alloca i1\n  store i1 1, i1* ` ) ( nurl_print flag ) ( nurl_print `\n` )
+        ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) flag ) }
+    {}
+    = g_use_clear_if 1
+    ( nurl_print `  call void @__nurl_clear_if(ptr ` ) ( nurl_print kflag ) ( nurl_print `, ptr ` ) ( nurl_print flag ) ( nurl_print `)\n` )
+}
+
 // The value of a drop flag as a fresh i1 register (`1` when the binding
 // has none — an unflagged registration is unconditionally live).
 @ mem_udrop_flag_get i syms i cg s ptr → s {
@@ -15689,7 +15696,10 @@
 @ mem_udrop_ptr_of i syms s name → s {
     ? == 0 ( nurl_str_len name ) { ^ ( nurl_str_cat `` `` ) } {}
     : s p ( nurl_sym_get2 syms name `__ptr` )
-    ? & != 0 ( nurl_str_len p ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) p )
+    // Every registration has a drop flag: no flag, no registration — the
+    // common case, answered without copying the whole registration list.
+    ? | == 0 ( nurl_str_len p ) == 0 ( nurl_sym_len2 syms p `__live` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) p )
     { ^ ( nurl_str_cat p `` ) }
     {}
     ^ ( nurl_str_cat `` `` )
@@ -15700,6 +15710,19 @@
 // is cleared); over a binding that does not (a parameter, a borrowed
 // local) b borrows too; a borrowing call (vec_get, an accessor) lends;
 // anything else — a constructor, a literal — is fresh.
+// The `@.__nurl_retown.N` constant of the call just emitted, or ``.
+@ mem_call_retown_const i syms → s {
+    : ~ s cn ( nurl_sym_get syms `__last_call_name__` )
+    : ~ s gn ``
+    ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
+        : s fw ( nurl_sym_get syms `__last_call_forward__` )
+        = cn ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
+    } {}
+    ? == 0 ( nurl_str_len cn ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_len gn ) { = gn cn } {}
+    ^ ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag cn gn ) ) )
+}
+
 // Whether the call just emitted hands back a value its caller owns, as an
 // i1 register (`@.__nurl_retown.N`, resolved at module end once every
 // return summary is final), or `` when no call name was published.
@@ -15712,8 +15735,10 @@
     } {}
     ? == 0 ( nurl_str_len cn ) { ^ ( nurl_str_cat `` `` ) } {}
     ? == 0 ( nurl_str_len gn ) { = gn cn } {}
+    : s k ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag cn gn ) ) )
+    ( nurl_sym_def syms `__last_retown_const__` k )
     : s r ( nurl_cg_reg cg )
-    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag cn gn ) ) ) r )
+    ( emit_sink_flag_load k r )
     ^ r
 }
 
@@ -15766,7 +15791,8 @@
         : s r ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len r )
         { ( mem_udrop_flag_set syms cg ptr r )
-            ( __sb syms ptr `dyn` )
+            // Borrowed exactly when the callee's result is not owned.
+            ( __sb syms ptr ( nurl_str_cat `!` ( nurl_sym_get syms `__last_retown_const__` ) ) )
             ^ v } {}
     } {}
     // A field read or a cast reads a value something else owns: borrow it.
@@ -15804,8 +15830,14 @@
 @ mem_own_add_user_drop i syms i cg s ptr s vt → v {
     // Every registration carries its drop flag, created in the SAME scope
     // as the entry so a nested block's pop cannot take the flag away while
-    // the entry lives on.
-    ( mem_udrop_flag_set syms cg ptr `1` )
+    // the entry lives on. A `:` binding sets the flag itself right after
+    // (mem_udrop_bind_flag), so its registration only creates it.
+    ? != 0 g_udrop_noinit
+    { : s nf ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = alloca i1\n` )
+        ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) nf )
+        = g_udrop_noinit 0 }
+    { ( mem_udrop_flag_set syms cg ptr `1` ) }
     ( nurl_sym_def syms ( nurl_str_cat ptr `__alias` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat ptr `__sborrow` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat ptr `__fsrc` ) `` )
@@ -16113,8 +16145,10 @@
         : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
         : s mangle ( str_first_word rest ) = rest ( str_skip_word rest )
         : s ll ( nurl_llty vt )
+        // alwaysinline: most conditions are module-end constants, so the
+        // inlined branch folds away (a `vec_get`'s own parameter).
         ( nurl_print `define linkonce_odr void @__dropif_` ) ( nurl_print mangle )
-        ( nurl_print `(i1 %c, i8* %p) {\nentry:\n  br i1 %c, label %d, label %x\nd:\n  %t = bitcast i8* %p to ` )
+        ( nurl_print `(i1 %c, i8* %p) alwaysinline {\nentry:\n  br i1 %c, label %d, label %x\nd:\n  %t = bitcast i8* %p to ` )
         ( nurl_print ll ) ( nurl_print `*\n  %v = load ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll )
         ( nurl_print `* %t\n  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` mangle ) ) )
         ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v)\n  br label %x\nx:\n  ret void\n}\n` )
@@ -16189,6 +16223,11 @@
 // emitted wherever its typed drop is run on the normal path, so a later
 // panic in the same extent cannot replay an already-run destructor.
 @ mem_journal_forget_userdrop i cg s ptr s vt → v {
+    // Nothing to forget where nothing was journaled: a push is only made
+    // for a type with a journal thunk (mem_journal_push_userdrop). String /
+    // Vec bindings in a hot loop were paying a journal search per exit.
+    : s fm ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
+    ? | == 0 ( nurl_str_len fm ) == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` fm ) { ^ v } {}
     : s bc ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print bc )
     ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr )
@@ -18484,7 +18523,8 @@
                 : s impl_key ( nurl_str_cat `drop##` vt )
                 : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                 ? != 0 ( nurl_str_len impl_mangle_key )
-                { ( mem_own_add_user_drop syms cg ptr vt )
+                { = g_udrop_noinit 1
+                    ( mem_own_add_user_drop syms cg ptr vt )
                     ( mem_udrop_bind_flag syms cg ptr vt bck_rhs_tt bck_rhs_val rhs_borrow )
                     ( mem_journal_push_userdrop syms cg ptr vt ) }
                 {}
@@ -18773,7 +18813,8 @@
                     : s impl_key ( nurl_str_cat `drop##` ptype )
                     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                     ? != 0 ( nurl_str_len impl_mangle_key )
-                    { ( mem_own_add_user_drop syms cg ptr ptype )
+                    { = g_udrop_noinit 1
+                        ( mem_own_add_user_drop syms cg ptr ptype )
                         ( mem_udrop_bind_flag syms cg ptr ptype bck_rhs_tt bck_rhs_val rhs_borrow )
                         ( mem_journal_push_userdrop syms cg ptr ptype ) }
                     {}
@@ -25576,9 +25617,9 @@
 // owns (not a borrow, a view, or one of its arguments)? Resolved in
 // mem_emit_arg_flags once every body is compiled.
 @ retown_flag s callee s generic → i {
+    ? != 0 ( nurl_sym_len2 g_pending_impl `retown##` callee )
+    { ^ ( nurl_str_to_int ( nurl_sym_get2 g_pending_impl `retown##` callee ) ) } {}
     : s key ( nurl_str_cat `retown##` callee )
-    : s existing ( nurl_sym_get g_pending_impl key )
-    ? != 0 ( nurl_str_len existing ) { ^ ( nurl_str_to_int existing ) } {}
     : i next ( nurl_str_to_int ( nurl_sym_get g_pending_impl `retown_count` ) )
     ( nurl_sym_def g_pending_impl key ( nurl_str_int next ) )
     ( nurl_sym_def g_pending_impl `retown_count` ( nurl_str_int + next 1 ) )
@@ -28924,9 +28965,9 @@
     ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 g_impl_name_syms `ownty##` ty )
+    { ^ ( seq ( nurl_sym_get2 g_impl_name_syms `ownty##` ty ) `1` ) } {}
     : s ck ( nurl_str_cat `ownty##` ty )
-    : s cached ( nurl_sym_get g_impl_name_syms ck )
-    ? != 0 ( nurl_str_len cached ) { ^ ( seq cached `1` ) } {}
     : s sname ( nurl_str_slice ty 1 - n 1 )
     ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
     // Provisional answer while the fields are examined: a type reached
@@ -29255,6 +29296,8 @@
     }
     ( emit_pending_dropifs )
     ( emit_pending_clones syms )
+    ? != 0 g_use_clear_if
+    { ( nurl_print `define linkonce_odr void @__nurl_clear_if(ptr %k, ptr %f) alwaysinline {\nentry:\n  %c = load i1, ptr %k\n  %o = load i1, ptr %f\n  %n = select i1 %c, i1 0, i1 %o\n  store i1 %n, ptr %f\n  ret void\n}\n` ) } {}
 }
 
 // ── Clone-on-store (docs/MEMORY.md §7.6) ─────────────────────────
@@ -29270,6 +29313,16 @@
 // Is `ty` a type the clone graph copies (String, Vec, a struct of them)?
 @ __clone_supported s ty i syms → b {
     ? ( seq ty `%String` ) { ^ T } {}
+    : i n ( nurl_str_len ty )
+    ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? != 0 ( nurl_sym_len2 g_impl_name_syms `clsup##` ty )
+    { ^ ( seq ( nurl_sym_get2 g_impl_name_syms `clsup##` ty ) `1` ) } {}
+    : b r ( __clone_supported_calc ty syms )
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `clsup##` ty ) ? r `1` `0` )
+    ^ r
+}
+
+@ __clone_supported_calc s ty i syms → b {
     ? != 0 ( nurl_str_starts ty `%Vec__` ) {
         : s elem ( __vec_elem_llvm ty )
         ^ | ! ( __type_needs_drop elem syms ) ( __clone_supported elem syms )
@@ -29296,6 +29349,7 @@
         ? == 0 ( nurl_str_len up ) { ^ ( nurl_str_cat `1` `` ) } {}
         : s sb ( nurl_sym_get2 syms up `__sborrow` )
         ? | | ( seq sb `1` ) ( seq sb `local` ) ( seq sb `elem` ) { ^ ( nurl_str_cat `1` `` ) } {}
+        ? == ( nurl_str_get sb 0 ) 33 { ^ ( nurl_str_cat sb `` ) } {}
         ? ( seq sb `dyn` ) {
             : s lv ( mem_udrop_flag_get syms cg up )
             : s r ( nurl_cg_reg cg )
@@ -29309,15 +29363,9 @@
     ? == tt TT_LPAREN {
         ? | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
         { ^ ( nurl_str_cat `1` `` ) } {}
-        ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
-            : s fw ( nurl_sym_get syms `__last_call_forward__` )
-            : i num ( retown_flag ( str_first_word fw ) ( str_first_word ( str_skip_word fw ) ) )
-            : s o ( nurl_cg_reg cg )
-            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int num ) ) o )
-            : s r ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print o ) ( nurl_print `, 1\n` )
-            ^ r
-        } {}
+        // Otherwise the call's module-end ownership constant decides.
+        : s k ( mem_call_retown_const syms )
+        ? != 0 ( nurl_str_len k ) { ^ ( nurl_str_cat `!` k ) } {}
         ^ ( nurl_str_cat `` `` )
     } {}
     // A join or a block: its arms may be borrows.
@@ -29344,8 +29392,43 @@
     ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print nv ) ( nurl_print `, ` ) ( nurl_print fl ) ( nurl_print `* ` ) ( nurl_print g ) ( nurl_print `\n` )
 }
 
-@ mem_emit_cloneif i cg s ty s val s cond → s {
-    ? == 0 ( nurl_str_len cond ) { ^ val } {}
+// A lentness as an i1 operand: `!@.__nurl_retown.N` (borrowed when that
+// call's result is not owned) is loaded and negated; `1` / a register stay.
+@ mem_lent_reg i cg s lent → s {
+    ? == ( nurl_str_get lent 0 ) 33 {
+        : s k ( nurl_str_slice lent 1 - ( nurl_str_len lent ) 1 )
+        : s o ( nurl_cg_reg cg )
+        ( emit_sink_flag_load k o )
+        : s r ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = xor i1 ` ) ( nurl_print o ) ( nurl_print `, 1\n` )
+        ^ r
+    } {}
+    ^ ( nurl_str_cat lent `` )
+}
+
+// `val` copied when the module-end constant `kflag` AND `lent` (`1` or an
+// i1) hold: `__nurl_cloneifk_<m>`, one call.
+@ mem_emit_cloneif_k i cg s ty s val s kflag s lent → s {
+    : s m ( __drop_mangle ty )
+    ( __clone_request ty )
+    : s ll ( nurl_llty ty )
+    : s r ( nurl_cg_reg cg )
+    // Borrowed per a call's ownership constant: both constants, one call.
+    ? == ( nurl_str_get lent 0 ) 33 {
+        ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = call ` ) ( nurl_print ll ) ( nurl_print ` @__nurl_cloneifkr_` )
+        ( nurl_print m ) ( nurl_print `(ptr ` ) ( nurl_print kflag ) ( nurl_print `, ptr ` ) ( nurl_print ( nurl_str_slice lent 1 - ( nurl_str_len lent ) 1 ) )
+        ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)\n` )
+        ^ r
+    } {}
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = call ` ) ( nurl_print ll ) ( nurl_print ` @__nurl_cloneifk_` )
+    ( nurl_print m ) ( nurl_print `(ptr ` ) ( nurl_print kflag ) ( nurl_print `, i1 ` ) ( nurl_print ? ( seq lent `1` ) `true` lent )
+    ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)\n` )
+    ^ r
+}
+
+@ mem_emit_cloneif i cg s ty s val s cond0 → s {
+    ? == 0 ( nurl_str_len cond0 ) { ^ val } {}
+    : s cond ( mem_lent_reg cg cond0 )
     : s m ( __drop_mangle ty )
     ( __clone_request ty )
     : s ll ( nurl_llty ty )
@@ -29379,6 +29462,14 @@
         ( nurl_print `(i1 %c, ` ) ( nurl_print ll ) ( nurl_print ` %v) {\nentry:\n  br i1 %c, label %d, label %x\nd:\n  %r = call ` )
         ( nurl_print ll ) ( nurl_print ` @__nurl_clone_` ) ( nurl_print m ) ( nurl_print `(` ) ( nurl_print ll )
         ( nurl_print ` %v)\n  ret ` ) ( nurl_print ll ) ( nurl_print ` %r\nx:\n  ret ` ) ( nurl_print ll ) ( nurl_print ` %v\n}\n` )
+        ( nurl_print `define linkonce_odr ` ) ( nurl_print ll ) ( nurl_print ` @__nurl_cloneifk_` ) ( nurl_print m )
+        ( nurl_print `(ptr %k, i1 %l, ` ) ( nurl_print ll ) ( nurl_print ` %v) alwaysinline {\nentry:\n  %kv = load i1, ptr %k\n  %c = and i1 %kv, %l\n  %r = call ` )
+        ( nurl_print ll ) ( nurl_print ` @__nurl_cloneif_` ) ( nurl_print m ) ( nurl_print `(i1 %c, ` ) ( nurl_print ll ) ( nurl_print ` %v)\n  ret ` )
+        ( nurl_print ll ) ( nurl_print ` %r\n}\n` )
+        ( nurl_print `define linkonce_odr ` ) ( nurl_print ll ) ( nurl_print ` @__nurl_cloneifkr_` ) ( nurl_print m )
+        ( nurl_print `(ptr %k, ptr %o, ` ) ( nurl_print ll ) ( nurl_print ` %v) alwaysinline {\nentry:\n  %kv = load i1, ptr %k\n  %ov = load i1, ptr %o\n  %b = xor i1 %ov, 1\n  %c = and i1 %kv, %b\n  %r = call ` )
+        ( nurl_print ll ) ( nurl_print ` @__nurl_cloneif_` ) ( nurl_print m ) ( nurl_print `(i1 %c, ` ) ( nurl_print ll ) ( nurl_print ` %v)\n  ret ` )
+        ( nurl_print ll ) ( nurl_print ` %r\n}\n` )
     }
 }
 
