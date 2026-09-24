@@ -3148,6 +3148,30 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     nurl_free(ctl);
 }
 
+/* Deep copy of a Vec / String control block (docs/MEMORY.md §7.6): the
+ * compiler stores a COPY when a borrowed handle is put somewhere that owns
+ * it (a struct field, a container element), so the new owner and the old
+ * one never free the same buffer. `elem_clone`, when non-NULL, replaces
+ * each copied element in place with its own deep copy. One spare zero byte
+ * keeps a String's data NUL-terminated. A borrowed view (cap < 0) copies
+ * into an ordinary owned Vec. */
+void *nurl_vec_clone(void *ctl, void (*elem_clone)(void*), long long elem_size) {
+    if (!ctl) return NULL;
+    long long *c = (long long*)ctl;
+    long long len = c[1] > 0 ? c[1] : 0;
+    long long bytes = len * elem_size;
+    long long *n = (long long*)nurl_zalloc(24);
+    char *data = (char*)nurl_alloc(bytes + 1);
+    if (bytes > 0) memcpy(data, (void*)(intptr_t)c[0], (size_t)bytes);
+    data[bytes] = 0;
+    n[0] = (long long)(intptr_t)data;
+    n[1] = len;
+    n[2] = len;
+    if (elem_clone && elem_size > 0)
+        for (long long i = 0; i < len; i++) elem_clone(data + i*elem_size);
+    return n;
+}
+
 /* Back-compat alias. */
 void* nurl_malloc(long long bytes) { return nurl_alloc(bytes); }
 

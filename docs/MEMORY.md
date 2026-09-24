@@ -10,10 +10,10 @@ v2.3).
 - **Single owner, deterministic drop.** Every heap allocation has
   exactly one owning binding. The compiler inserts the matching free
   at the end of that binding's scope. No garbage collector, no
-  reference counting. A small, explicit set of **manually-managed
-  handles** sits outside auto-drop — `Vec` and `String` — and is
-  freed by you, exactly like C's `malloc`/`free` (§7.4). A closure is
-  not one of them: its env is owned wherever the closure is kept and
+  reference counting. `String`, `Vec` and the structs that hold them
+  are dropped by the compiler like everything else (§7.6); `vec_free` /
+  `string_free` remain as an explicit early release, never a
+  requirement. A closure's env is owned wherever the closure is kept and
   dropped by that owner, and freeing one by hand is a compile error.
 - **Automatic cleanup includes unwind paths.** A thread-local journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
@@ -1276,10 +1276,9 @@ separate axis.
 The contract is sharp: **the compiler never leaks an allocation it
 owns.** Everything auto-drop owns is freed at scope exit on the normal
 path (§7.1) and reclaimed across a `panic` unwind too (§7.2) — so there
-are *no known compiler-owned leaks*. What is left to you is a small,
-explicit set of **manually-managed handles** (§7.4): memory the model
-deliberately does not own, freed by you exactly as C requires `free`
-for `malloc`. Used per that contract, programs are leak-free. There is
+are *no known compiler-owned leaks*. What is left to you is raw memory
+(§7.4) — `nurl_alloc` behind a pointer, and what `mem_forget` hands over
+— freed by you exactly as C requires `free` for `malloc`. Used per that contract, programs are leak-free. There is
 no "leaks by design" tier here — only "the compiler's job" and "your
 job", with the boundary drawn precisely below.
 
@@ -1371,32 +1370,28 @@ structs (and the `% Drop` move) can, which the escape-forget covers.
 
 ### 7.3 What a panic does **not** reclaim
 
-Only **manually-managed handles** (§7.4) — `Vec`, `String` and a `sink`
-argument — survive a panic unfreed, because they are never auto-dropped in the first place:
-*you* free them. A panic that abandons one mid-scope leaks it exactly as
+Only **manually-managed memory** (§7.4) — raw `nurl_alloc` blocks and
+what `mem_forget` hands over — survives a panic unfreed, because it is
+never auto-dropped in the first place: *you* free it. A panic that abandons one mid-scope leaks it exactly as
 forgetting its free would — no different from the manual-handle contract
 everywhere else. The mitigation is the same as any manual resource: hold
 it in the *caller's* frame (the `: ~` by-ref-capture pattern
 `stdlib/std/panic.nu` documents), not in the scope the panic abandons.
 
-### 7.4 Manually-managed handles
+### 7.4 Manually-managed memory
 
-Auto-drop only frees what it saw allocated *directly*. The handles below
-sit outside that — the model deliberately does not own them, so they are
-yours to release. This is the complete list; nothing else leaks.
+What the compiler does not own is memory a program allocates as raw
+bytes — `nurl_alloc` behind a `*T`, a buffer reached only through a
+pointer — and what it deliberately hands over with `( mem_forget x )`.
+Those are released by the program (`nurl_free`). `Vec`, `String`, the
+structs that hold them and closure envs are not on this list: they are
+dropped by their owners (§7.5, §7.6). A value passed to a **`sink`**
+parameter is the callee's to drop or free.
 
-- **`Vec`** and **`String`** — single boxed handles over a heap buffer;
-  free with `vec_free` / `vec_free_with` / `string_free`. (`String` is
-  `{ s ctl }`, the same single-handle shape as `Vec[u]`.)
-- a value passed to a **`sink`** parameter — the callee frees it.
-
-A closure's env is not on this list (§7.5).
-
-These are deliberate seams, not defects: the conservatism that makes
-auto-drop double-free-proof (§6.1) is exactly what stops it from owning
-them. The checker still tracks these handles' *moves* — a `vec_free`d
-`Vec`, or a `sink`-consumed value, cannot be used again (§2.1) — it just
-does not free them for you.
+`vec_free` / `vec_free_with` / `string_free` stay available as an early,
+explicit release: they clear the binding's drop flag, so the value is
+released once. The checker still tracks these moves — a `vec_free`d
+`Vec`, or a `sink`-consumed value, cannot be used again (§2.1).
 
 ### 7.5 Closure environments
 
@@ -1477,6 +1472,53 @@ Before the flags, `: T b a` registered both bindings and dropped the value
 twice, a `sink` parameter rejected Drop values outright, and a reassigned
 binding leaked what it held. `compiler/tests/drop_flags.nu` pins every
 shape.
+
+**String, Vec and owning structs.** `String`, `Vec T` and every plain
+struct whose fields own a `String` / `Vec` (or such a struct) are dropped
+the same way, through `drop__String`, `drop__Vec__<T>` (which drops the
+elements) and `drop__<S>` from the drop graph. A struct with an enum or
+trait-object field, or a `% Drop` of its own, keeps its old rules. These
+handles are freely aliased, so their bindings follow a few more rules:
+
+- **Cursors.** `: cur root` borrows: `root` keeps its value and `cur`
+  remembers whom it borrows (a may-alias set). Consuming the cursor (a
+  `sink`, a store) consumes that value; returning a cursor over a
+  parameter lends the parameter back. Reassigning an owner while a cursor
+  still holds its value (`= old_r r = r nr`, a Euclid rotation) hands the
+  value to the cursor instead of dropping it — decided at run time by the
+  identity of the value's buffer. A source from an inner scope (`= m mp`
+  in a loop body) moves instead.
+- **Stores move.** A value stored into a struct or enum literal, a field,
+  or an element (`vec_push`'s `= . data len x`) leaves its binding. A
+  parameter stored that way is **kept** (`g_fn_keeps`): its caller hands
+  the value over, through module-end constants like a `sink`'s, without
+  it becoming a borrow-checker move. A parameter stored into a heap
+  object this function allocated is kept only if that object is not
+  freed here (scratch state such as `inflate_stream`'s `*InflState`
+  borrows).
+- **Borrowed values are copied into owners.** A borrowed `String` / `Vec`
+  / owning struct — a `?? ( vec_get … )` payload, a field read, a join —
+  stored into a literal, a field of a value, or an argument its callee
+  stores (`g_fn_stores`) is deep-copied (`nurl_vec_clone`,
+  `__nurl_clone_<T>`), so the new owner and the old never free the same
+  buffer. A literal that is returned as is lends instead (`vec_get`'s
+  `^ @ ?A { T x }`), and so does a field written back where it was read
+  (`: item . p k … = . p k item`).
+- **Fields.** A field of an owned struct handed to a consumer
+  (`( string_free . kr key )`) is zeroed in the struct, so the struct's
+  drop skips it. A field returned out of a struct this function owns is
+  copied (or, into a returned literal, moved and zeroed); a field of a
+  parameter is taken when the function consumes the parameter anyway and
+  lent when it does not, settled at module end (`retlend##`).
+- **Call results.** Whether a call hands back an owned value or a view of
+  an argument is read from the callee's `@.__nurl_retown` constant once
+  every return summary is final, so a forward or recursive callee is
+  answered correctly.
+- `( mem_forget x )` gives up `x`'s value — for a hand-written disposer
+  (`vec_free`, `string_free`) and for a table kept in a global for the
+  program's lifetime.
+
+`compiler/tests/drop_handles.nu` pins these shapes.
 
 Outside this manual-handle set, nothing leaks. The corpus-wide
 sanitizer gate runs with leak detection **off** (§6.6) — deliberately,

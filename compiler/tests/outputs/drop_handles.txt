@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+hi alpha
+1
+1
+bob
+carol
+1
+three

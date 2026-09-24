@@ -117,7 +117,8 @@ $ `stdlib/ext/http2_hpack.nu`
     }
     ( vec_free [u] b1 )
     ( vec_free [u] b2 )
-    ( hpack_dyn_free . e2 dyn )
+    // `. e2 dyn` is enc's table, threaded through both encodes: enc owns it
+    // and it is dropped with enc (docs/MEMORY.md §7.6).
 
     // ── peer disabled the dynamic table: size update, no indexing ──
     : HpackDynTable enc0 ( hpack_dyn_new 0 )
@@ -145,7 +146,6 @@ $ `stdlib/ext/http2_hpack.nu`
         F e → { ( label `zero_table_roundtrip` ( hpack_err_name e ) ) ( hpack_dyn_free dec0 ) }
     }
     ( vec_free [u] b3 )
-    ( hpack_dyn_free . e3 dyn )
     ( headers_free hs )
     ^ 0
 }
