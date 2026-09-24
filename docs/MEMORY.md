@@ -1450,6 +1450,34 @@ enum variant (those follow the manual-handle rules of the payload), and a
 generic container instantiated with a closure element type (`Vec` of
 closures does not compile).
 
+### 7.6 Drop flags
+
+A value whose type has a `% Drop` impl (a user one, or a compiler-auto
+enum) is dropped by the binding that owns it at scope exit. Each such
+binding carries a **drop flag** — an `i1` beside its alloca — and every
+drop is gated on it, so a value leaves its binding exactly once whichever
+way it goes:
+
+- `: b a` / `= b a` over a binding that owns its value **move** it: `b`
+  takes `a`'s flag and `a`'s is cleared on that path. Over a binding that
+  does not own one (a parameter, a borrowed local) `b` borrows too.
+- A value from a borrowing call (`vec_get`, an accessor that returns what
+  a parameter holds) is borrowed; a constructor's result is owned.
+- A `sink` argument clears the caller's flag, and the callee owns the
+  value: it drops it on the way out unless it moved it on. A parameter
+  consumed only by *inference* (it is handed to a sink further down) is
+  decided by the same module-end summary the call sites use.
+- `= a ( make … )` drops the value `a` held first.
+- A **disposer** — the function a Drop impl hands its receiver to, such as
+  a `release sink T x` that frees `x`'s parts by hand — never drops that
+  parameter itself; otherwise the drop would call the Drop impl again. The
+  compiler learns this from the Drop impl, at module end.
+
+Before the flags, `: T b a` registered both bindings and dropped the value
+twice, a `sink` parameter rejected Drop values outright, and a reassigned
+binding leaked what it held. `compiler/tests/drop_flags.nu` pins every
+shape.
+
 Outside this manual-handle set, nothing leaks. The corpus-wide
 sanitizer gate runs with leak detection **off** (§6.6) — deliberately,
 because a leak run would flag the compiler's process-lifetime arenas and

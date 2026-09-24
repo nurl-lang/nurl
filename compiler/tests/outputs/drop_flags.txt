@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+use 1
+take 2
+[drop 2]
+take 3
+[drop 3]
+take 5
+[drop 5]
+use 6
+[drop 7]
+[drop 10]
+[drop 11]
+end
+[drop 1]
+[drop 4]
+[drop 6]
+[drop 8]

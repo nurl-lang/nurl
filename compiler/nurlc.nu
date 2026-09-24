@@ -9791,7 +9791,10 @@
                 ? & != 0 ( nurl_str_len nf_ptr )
                 | | ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) nf_ptr )
                 ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) nf_id )
-                | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) nf_ptr )
+                | & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) nf_ptr )
+                // A by-value parameter's drop is decided at module end (it
+                // may be a disposer that frees by hand — docs/MEMORY.md §7.6).
+                == 0 ( nurl_sym_len2 syms nf_id `__param` )
                 ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) nf_ptr )
                 { ( die lex ( nurl_str_cat3
                     `'` nf_id
@@ -10000,7 +10003,6 @@
         ( is_ident_tok bck_arg_tt )
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
             ? & ! ( __is_autodrop_enum at syms ) | ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_arg_val )
-            | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) sink_ptr )
             ( str_contains_word ( nurl_sym_get syms `__owned_struct_fields__` ) sink_ptr )
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
@@ -10023,6 +10025,31 @@
                 : s implication ( nurl_str_cat4 ( nurl_str_int param ) ` ` call_name
                 ( nurl_str_cat4 ` ` fname ` ` ( nurl_str_int arg_idx ) ) )
                 ( __park_append syms `__fn_pending_sink_impl__` implication )
+            } {}
+        } {}
+        ? & ( is_ident_tok bck_arg_tt ) != 0 ( nurl_str_len bck_arg_val )
+        { ? ( seq bck_arg_val ( nurl_sym_get syms `__dtor_recv__` ) )
+            { ( mem_dtor_record call_name arg_idx ) } {} }
+        {}
+        // An auto-dropped value handed to a consuming parameter: the callee
+        // drops it now, so this binding's drop flag is cleared (docs/
+        // MEMORY.md §7.6) — at once for a declared `sink`, and through the
+        // module-end sink flag for a parameter whose consumption is only
+        // inferred.
+        ? & & ! ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
+        | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
+            : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
+            ? != 0 ( nurl_str_len uptr ) {
+                ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+                { ( mem_udrop_flag_set syms cg uptr `0` ) }
+                { : s sflag ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) )
+                    : s sc ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load sflag sc )
+                    : s old ( mem_udrop_flag_get syms cg uptr )
+                    : s nv ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print nv ) ( nurl_print ` = select i1 ` ) ( nurl_print sc )
+                    ( nurl_print `, i1 0, i1 ` ) ( nurl_print old ) ( nurl_print `\n` )
+                    ( mem_udrop_flag_set syms cg uptr nv ) }
             } {}
         } {}
         ? & & ( __is_autodrop_enum at syms ) ( is_ident_tok bck_arg_tt )
@@ -12986,7 +13013,7 @@
                     // `% Drop` consumes its arm payload.
                     ? & != 0 ( nurl_str_len arm_impl_mangle )
                     == 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` pt0_eff )
-                    { ( mem_own_add_user_drop syms vp0 pt0_eff ) }
+                    { ( mem_own_add_user_drop syms cg vp0 pt0_eff ) }
                     {}
                 }
                 {}
@@ -13047,7 +13074,7 @@
                 { : s a1_key ( nurl_str_cat `drop##` pt1 )
                     ? & != 0 ( nurl_sym_len g_impl_name_syms a1_key )
                     == 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` pt1 )
-                    { ( mem_own_add_user_drop syms vp1 pt1 ) }
+                    { ( mem_own_add_user_drop syms cg vp1 pt1 ) }
                     {}
                 }
                 {}
@@ -13074,7 +13101,7 @@
                 { : s a2_key ( nurl_str_cat `drop##` pt2 )
                     ? & != 0 ( nurl_sym_len g_impl_name_syms a2_key )
                     == 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` pt2 )
-                    { ( mem_own_add_user_drop syms vp2 pt2 ) }
+                    { ( mem_own_add_user_drop syms cg vp2 pt2 ) }
                     {}
                 }
                 {}
@@ -15286,7 +15313,68 @@
     }
 }
 
-@ mem_own_add_user_drop i syms s ptr s vt → v {
+// Drop flag of an auto-dropped value (docs/MEMORY.md §7.6): an i1 beside
+// its alloca, `<ptr>__live`, that says whether the value is still this
+// binding's to drop. Every drop site is gated on it (mem_sink_gate_begin);
+// a move — `: b a`, `= b a`, a `sink` argument — clears it on its own path,
+// so a path that did not move the value still drops it, and one that did
+// never drops it twice. `val` is `1`, `0`, or an i1 register.
+@ mem_udrop_flag_set i syms i cg s ptr s val → v {
+    : ~ s flag ( nurl_sym_get2 syms ptr `__live` )
+    ? == 0 ( nurl_str_len flag )
+    { = flag ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print flag ) ( nurl_print ` = alloca i1\n` )
+        ( nurl_sym_def syms ( nurl_str_cat ptr `__live` ) flag ) }
+    {}
+    ( nurl_print `  store i1 ` ) ( nurl_print val ) ( nurl_print `, i1* ` ) ( nurl_print flag ) ( nurl_print `\n` )
+}
+
+// The value of a drop flag as a fresh i1 register (`1` when the binding
+// has none — an unflagged registration is unconditionally live).
+@ mem_udrop_flag_get i syms i cg s ptr → s {
+    : s flag ( nurl_sym_get2 syms ptr `__live` )
+    ? == 0 ( nurl_str_len flag ) { ^ ( nurl_str_cat `1` `` ) } {}
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load i1, i1* ` ) ( nurl_print flag ) ( nurl_print `\n` )
+    ^ r
+}
+
+// Whether binding `name` is a registered auto-dropped value; its alloca.
+@ mem_udrop_ptr_of i syms s name → s {
+    ? == 0 ( nurl_str_len name ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s p ( nurl_sym_get2 syms name `__ptr` )
+    ? & != 0 ( nurl_str_len p ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) p )
+    { ^ ( nurl_str_cat p `` ) }
+    {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// A new `:` binding of an auto-dropped type: does it own its value?
+// `: b a` over a binding that owns one MOVES it (a's flag goes to b, a's
+// is cleared); over a binding that does not (a parameter, a borrowed
+// local) b borrows too; a borrowing call (vec_get, an accessor) lends;
+// anything else — a constructor, a literal — is fresh.
+@ mem_udrop_bind_flag i syms i cg s ptr i rhs_tt s rhs_val s rhs_borrow → v {
+    ? & ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms rhs_val `__ptr` )
+    { : s src ( mem_udrop_ptr_of syms rhs_val )
+        ? & != 0 ( nurl_str_len src ) ! ( seq src ptr )
+        { : s f ( mem_udrop_flag_get syms cg src )
+            ( mem_udrop_flag_set syms cg ptr f )
+            ( mem_udrop_flag_set syms cg src `0` ) }
+        { ( mem_udrop_flag_set syms cg ptr `0` ) }
+        ^ v }
+    {}
+    ? & ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms rhs_val `__global` )
+    { ( mem_udrop_flag_set syms cg ptr `0` ) ^ v }
+    {}
+    ? != 0 ( nurl_str_len rhs_borrow ) { ( mem_udrop_flag_set syms cg ptr `0` ) } {}
+}
+
+@ mem_own_add_user_drop i syms i cg s ptr s vt → v {
+    // Every registration carries its drop flag, created in the SAME scope
+    // as the entry so a nested block's pop cannot take the flag away while
+    // the entry lives on.
+    ( mem_udrop_flag_set syms cg ptr `1` )
     : s cur ( nurl_sym_get syms `__user_drops__` )
     : s entry ( nurl_str_cat3 ptr ` ` vt )
     : s new ? == 0 ( nurl_str_len cur )
@@ -15519,9 +15607,20 @@
 // constant is resolved after inference; ordinary locals need no extra blocks.
 @ mem_sink_gate_begin i syms i cg s ptr → s {
     : s flag ( nurl_sym_get2 syms ptr `__sinkflag` )
-    ? == 0 ( nurl_str_len flag ) { ^ ( nurl_str_cat `` `` ) } {}
-    : s cond ( nurl_cg_reg cg )
-    ( emit_sink_flag_load flag cond )
+    : s live ( nurl_sym_get2 syms ptr `__live` )
+    ? & == 0 ( nurl_str_len flag ) == 0 ( nurl_str_len live ) { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s cond ( nurl_cg_reg cg )
+    ? != 0 ( nurl_str_len flag )
+    { ( emit_sink_flag_load flag cond ) }
+    { ( nurl_print `  ` ) ( nurl_print cond ) ( nurl_print ` = add i1 1, 0\n` ) }
+    ? != 0 ( nurl_str_len live )
+    { : s lv ( nurl_cg_reg cg )
+        : s both ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print lv ) ( nurl_print ` = load i1, i1* ` ) ( nurl_print live ) ( nurl_print `\n` )
+        ( nurl_print `  ` ) ( nurl_print both ) ( nurl_print ` = and i1 ` ) ( nurl_print cond )
+        ( nurl_print `, ` ) ( nurl_print lv ) ( nurl_print `\n` )
+        = cond both }
+    {}
     : s live ( nurl_cg_lbl cg `sink_live` )
     : s done ( nurl_cg_lbl cg `sink_done` )
     ( nurl_print `  br i1 ` ) ( nurl_print cond ) ( nurl_print `, label %` ) ( nurl_print live )
@@ -15571,6 +15670,21 @@
     ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr )
     ( nurl_print ` to i8*\n` )
     ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print bc ) ( nurl_print `)\n` )
+}
+
+// Drop one auto-dropped binding's current value through its gate (drop flag
+// and sink flag), leaving the registration in place.
+@ mem_emit_user_drop_one i syms i cg s ptr s vt → v {
+    : s impl_mangle_key ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
+    ? == 0 ( nurl_str_len impl_mangle_key ) { ^ v } {}
+    : s done ( mem_sink_gate_begin syms cg ptr )
+    : s v ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print v )
+    ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
+    ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` impl_mangle_key ) ) )
+    ( nurl_print `(` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+    ( mem_sink_gate_end syms done )
 }
 
 @ mem_drop_user_drops i syms i cg s skip_ptr → v {
@@ -17876,7 +17990,9 @@
             { : s impl_key ( nurl_str_cat `drop##` vt )
                 : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                 ? != 0 ( nurl_str_len impl_mangle_key )
-                { ( mem_own_add_user_drop syms ptr vt ) ( mem_journal_push_userdrop syms cg ptr vt ) }
+                { ( mem_own_add_user_drop syms cg ptr vt )
+                    ( mem_udrop_bind_flag syms cg ptr bck_rhs_tt bck_rhs_val rhs_borrow )
+                    ( mem_journal_push_userdrop syms cg ptr vt ) }
                 {}
             }
             {} }
@@ -18162,7 +18278,9 @@
                 { : s impl_key ( nurl_str_cat `drop##` ptype )
                     : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
                     ? != 0 ( nurl_str_len impl_mangle_key )
-                    { ( mem_own_add_user_drop syms ptr ptype ) ( mem_journal_push_userdrop syms cg ptr ptype ) }
+                    { ( mem_own_add_user_drop syms cg ptr ptype )
+                        ( mem_udrop_bind_flag syms cg ptr bck_rhs_tt bck_rhs_val rhs_borrow )
+                        ( mem_journal_push_userdrop syms cg ptr ptype ) }
                     {}
                 }
                 {} }
@@ -18276,6 +18394,7 @@
         ( nurl_sym_def syms `__last_closure_caps__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
+        ( nurl_sym_def syms `__last_value_borrow__` `` )
         // Same snapshot the `:` paths take, and for the same reason:
         // generating the RHS reads the identifier, and a value read of a
         // closure binding drops it from the owned set.
@@ -18567,6 +18686,15 @@
         | == bck_rhs_tt TT_LPAREN == bck_rhs_tt TT_AT
         { ( mem_struct_reassign_drop syms cg ptr ) }
         {}
+        // An auto-dropped binding overwritten (docs/MEMORY.md §7.6): drop
+        // the value it holds (if it still owns one), then take ownership of
+        // the new one by the `:` binding's rule. A borrowed right-hand side
+        // might alias the old value, so the old value is left alone then.
+        : s __ud_ptr ( mem_udrop_ptr_of syms name )
+        : s __ud_borrow ( nurl_str_cat ( nurl_sym_get syms `__last_value_borrow__` ) `` )
+        ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) == 0 ( nurl_str_len __ud_borrow )
+        { ( mem_emit_user_drop_one syms cg __ud_ptr vt ) }
+        {}
         ? != 0 ( nurl_str_len ptr )
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` )
             ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
@@ -18586,6 +18714,9 @@
                 `assignment to undefined identifier '` name
                 `' — no binding, parameter, or global with this name is in scope; declare it first (': T name value')` ) ) }
         }
+        ? & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name )
+        { ( mem_udrop_bind_flag syms cg __ud_ptr bck_rhs_tt bck_rhs_val __ud_borrow ) }
+        {}
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
         ? lhs_is_owned_str { ( mem_journal_push_str cg ptr ) } {}
@@ -19423,7 +19554,7 @@
     { : s akey ( nurl_str_cat `drop##` pti )
         ? & != 0 ( nurl_sym_len g_impl_name_syms akey )
         == 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` pti )
-        { ( mem_own_add_user_drop syms vpi pti ) }
+        { ( mem_own_add_user_drop syms cg vpi pti ) }
         {}
     }
     {}
@@ -22911,6 +23042,7 @@
     // exist in this lifted function). Restored on sym_pop (§7.4).
     ( nurl_sym_def body_syms `__owned_closure_envs__` `` )
     // The lifted body is its own function: its temporaries are its own.
+    ( nurl_sym_def body_syms `__dtor_recv__` `` )
     : s __outer_clo_tmp ( nurl_str_cat g_clo_tmp `` )
     ( __clo_tmp_set `` )
     : s __outer_struct_tmp ( nurl_str_cat g_struct_tmp `` )
@@ -24757,6 +24889,43 @@
     ^ next
 }
 
+// Disposer parameters (docs/MEMORY.md §7.6). A `% Drop` impl that hands
+// its receiver to another function's parameter — `box_free`, `vec_free`,
+// `string_free` — is delegating the destruction itself: that parameter
+// frees the value by hand, so its function must not ALSO drop it on the way
+// out (that would call the Drop impl again, forever). `dtor_flag` names the
+// module-end constant that says so for (callee, index); a drop impl records
+// the fact with mem_dtor_record.
+@ dtor_flag s callee i index → i {
+    : s key ( nurl_str_cat4 `dtorflag##` callee `##` ( nurl_str_int index ) )
+    : s existing ( nurl_sym_get g_pending_impl key )
+    ? != 0 ( nurl_str_len existing ) { ^ ( nurl_str_to_int existing ) } {}
+    : i next ( nurl_str_to_int ( nurl_sym_get g_pending_impl `dtorflag_count` ) )
+    ( nurl_sym_def g_pending_impl key ( nurl_str_int next ) )
+    ( nurl_sym_def g_pending_impl `dtorflag_count` ( nurl_str_int + next 1 ) )
+    ( __park_append g_pending_impl `dtorflags`
+    ( nurl_str_cat4 ( nurl_str_int next ) ` ` callee ( nurl_str_cat ` ` ( nurl_str_int index ) ) ) )
+    ^ next
+}
+
+@ mem_dtor_record s callee i index → v {
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat4 `dtorparam##` callee `##` ( nurl_str_int index ) ) `1` )
+}
+
+@ mem_emit_dtor_flags → v {
+    : ~ s rest ( nurl_sym_get g_pending_impl `dtorflags` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( nurl_print `@.__nurl_dtor.` ) ( nurl_print number )
+        ( nurl_print ` = private constant i1 ` )
+        ( nurl_print ? != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `dtorparam##` callee `##` index ) )
+        `true` `false` )
+        ( nurl_print `\n` )
+    }
+}
+
 // Callers own register-name buffers; emitters borrow their explicit results.
 @ emit_sink_flag_load s flag s cond → v {
     ( nurl_print `  ` ) ( nurl_print cond ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print flag ) ( nurl_print `\n` )
@@ -26273,6 +26442,10 @@
     // a pointer base via `<obj>__ptr`). See `__alloca_struct_params`
     // for the predicate (multi-field named struct, not enum).
     ( __alloca_struct_params syms cg )
+    // A `% Drop` impl's receiver (its first parameter): passing it on marks
+    // the callee's parameter a disposer (dtor_flag).
+    ( nurl_sym_def syms `__dtor_recv__` ? != 0 ( nurl_str_starts fname `drop__` )
+    ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) `` )
     ( __own_sink_enum_params syms cg fname sink_acc )
     // Published for gen_field_store's by-value-parameter diagnostic: a
     // store into a param whose type is part of what this function
@@ -26322,6 +26495,7 @@
     ( nurl_sym_def syms `__owned_closure_envs__` `` )
     // Register names restart per function: no temporary outlives one.
     ( __clo_tmp_set `` )
+
     = g_struct_tmp ``
     ( nurl_sym_def syms `__in_call_arg__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): gen_ret appends the
@@ -27062,7 +27236,44 @@
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print value )
             ( nurl_print `, ptr ` ) ( nurl_print owner ) ( nurl_print `\n` )
             ( nurl_sym_def syms ( nurl_str_cat name `__enum_owner` ) owner )
-            ( mem_own_add_user_drop syms owner ty ) ( mem_journal_push_userdrop syms cg owner ty )
+            ( mem_own_add_user_drop syms cg owner ty ) ( mem_journal_push_userdrop syms cg owner ty )
+        } {}
+        // Any other auto-dropped type (a `% Drop` impl) taken by value: the
+        // parameter owns it exactly when the parameter consumes it — a
+        // declared `sink`, or a consumption the module-end summary proves —
+        // tracked by its drop flag (docs/MEMORY.md §7.6).
+        : ~ s pptr ( nurl_sym_get2 syms name `__ptr` )
+        // A `% Drop` impl IS the destructor of its receiver: never drop that.
+        : b __is_dtor != 0 ( nurl_str_starts fname `drop__` )
+        ? & & & & ! __is_dtor ! ( __is_autodrop_enum ty syms ) == 0 ( nurl_sym_len2 syms name `__inout` )
+        != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) == 0 ( nurl_str_len pptr ) {
+            // A parameter the body reads as an SSA value gets a home, so its
+            // drop flag has something to guard.
+            = pptr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print pptr ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `\n` )
+            ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` %` ) ( nurl_print name )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `* ` ) ( nurl_print pptr ) ( nurl_print `\n` )
+            ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) pptr )
+        } {}
+        ? & & & & ! __is_dtor ! ( __is_autodrop_enum ty syms ) == 0 ( nurl_sym_len2 syms name `__inout` )
+        != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) != 0 ( nurl_str_len pptr ) {
+            ( mem_own_add_user_drop syms cg pptr ty )
+            : ~ s pc ( nurl_str_cat `1` `` )
+            ? ! ( str_contains_word sinks ( nurl_str_int index ) ) {
+                : s pflag ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag fname fname index ) ) )
+                = pc ( nurl_cg_reg cg )
+                ( emit_sink_flag_load pflag pc )
+            } {}
+            : s dflag ( nurl_str_cat `@.__nurl_dtor.` ( nurl_str_int ( dtor_flag fname index ) ) )
+            : s dc ( nurl_cg_reg cg )
+            ( emit_sink_flag_load dflag dc )
+            : s nd ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nd ) ( nurl_print ` = xor i1 ` ) ( nurl_print dc ) ( nurl_print `, 1\n` )
+            : s own ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print own ) ( nurl_print ` = and i1 ` ) ( nurl_print pc )
+            ( nurl_print `, ` ) ( nurl_print nd ) ( nurl_print `\n` )
+            ( mem_udrop_flag_set syms cg pptr own )
+            ( mem_journal_push_userdrop syms cg pptr ty )
         } {}
         = index + index 1
     }
@@ -34155,6 +34366,7 @@
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
         ( mem_emit_env_flags )
+        ( mem_emit_dtor_flags )
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
         ( resolve_deferred_borrowck )

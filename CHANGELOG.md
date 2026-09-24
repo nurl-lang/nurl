@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closures behind raw pointers release them with `nurl_closure_drop`
   instead of `nurl_free`.
 
+- **`% Drop` values are dropped exactly once, however they move**
+  (docs/MEMORY.md §7.6). `: T b a` over a Drop value used to drop it twice
+  (a double free); a `sink` parameter could not take a Drop value at all;
+  `= a ( make … )` leaked the value it replaced. Every auto-dropped
+  binding now carries a drop flag that a move clears on its own path, a
+  `sink` parameter owns and drops what it is given, and the function a
+  Drop impl delegates to (its disposer) is recognised so it never drops
+  its parameter a second time.
+
 - Reassigning a struct binding that owns heap fields from a constructor
   call or literal (`= s ( make … )`) now drops the fields it replaces;
   they leaked before, for string fields as much as closure ones.
