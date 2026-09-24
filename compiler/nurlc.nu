@@ -14504,6 +14504,14 @@
     ( nurl_print `  ` ) ( nurl_print raw )
     ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
     ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+    // A slice of closures owns each element's env (docs/MEMORY.md §7.4).
+    ? ( __is_closure_ty ( nurl_str_slice tptr 0 - ( nurl_str_len tptr ) 1 ) )
+    { : s ln ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ln ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
+        ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 1\n` )
+        ( nurl_print `  call void @nurl_closure_slice_drop(i8* ` ) ( nurl_print raw )
+        ( nurl_print `, i64 ` ) ( nurl_print ln ) ( nurl_print `)\n` ) }
+    {}
     ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
 }
 
@@ -14640,6 +14648,44 @@
 // `__last_agg_owned_fields__` — space-separated tokens of shape
 // `<path>:<kind>:<leaf_sname>:<leaf_idx>`), register each for drop. vt
 // must be a named-struct type "%Name"; anon/non-struct types skip.
+// Two space-separated word lists hold the same words (order-free).
+@ __word_set_eq s a s b → b {
+    ? != ( count_words a ) ( count_words b ) { ^ F } {}
+    : ~ s rest ( nurl_str_cat a `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( str_contains_word b w ) { ^ F } {}
+    }
+    ^ T
+}
+
+// `= x <struct value>` over a binding that owns fields: when the new value
+// brings exactly the owned fields `x` has registered, drop the old ones
+// (the entries then describe the new value). Any other shape — a borrowed
+// copy, a different field set — keeps the registration untouched, which
+// can leak the old fields but never frees what `x` does not own.
+@ mem_struct_reassign_drop i syms i cg s ptr → v {
+    : s oldf ( mem_collect_struct_fields_for syms ptr )
+    ? == 0 ( nurl_str_len oldf ) { ^ v } {}
+    ? ( str_contains_word ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` ) ptr ) { ^ v } {}
+    ( __propagate_call_struct_fields syms )
+    : s newf ( nurl_sym_get syms `__last_agg_owned_fields__` )
+    ? ! ( __word_set_eq oldf newf ) { ^ v } {}
+    : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s eptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq eptr ptr )
+        { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
+        {}
+    }
+    ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+}
+
 // Whether binding alloca `ptr` owns the field at `path` with `kind`
 // (an `__owned_struct_fields__` entry).
 @ mem_struct_field_owned i syms s ptr s path s kind → b {
@@ -18172,6 +18218,8 @@
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( __clo_tmp_set `` )
         ( nurl_sym_def syms `__last_closure_caps__` `` )
+        ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
+        ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
         // Same snapshot the `:` paths take, and for the same reason:
         // generating the RHS reads the identifier, and a value read of a
         // closure binding drops it from the owned set.
@@ -18455,6 +18503,14 @@
         { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
         { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
         : s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
+        // A struct binding that owns fields, overwritten by a value that
+        // brings the SAME owned fields (a constructor call, a literal):
+        // release the old fields before the store, and the registration
+        // carries over to the new ones.
+        ? & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) == ( nurl_str_get vt 0 ) 37
+        | == bck_rhs_tt TT_LPAREN == bck_rhs_tt TT_AT
+        { ( mem_struct_reassign_drop syms cg ptr ) }
+        {}
         ? != 0 ( nurl_str_len ptr )
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` )
             ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
@@ -21333,8 +21389,12 @@
         // trust a bare VARIANT spelling (`Red`), never ident residue.
         : i __setok ( nurl_lex_type lex )
         : s __sev0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
+        ( __clo_tmp_set `` )
         : ~ s v ( gen_expr lex syms cg )
         : ~ s vt ( nurl_get_last_type )
+        // A slice of closures owns its elements' envs (docs/MEMORY.md
+        // §7.4): a borrowed element is cloned in.
+        ? ( __is_closure_ty vt ) { = v ( mem_clo_into_owner syms cg vt v __setok ) } {}
         // ENUM element type (`[Color | Red Green]`): a bare variant
         // evaluates to its i64 tag, and the store below is emitted at
         // the declared `%Color` — `store %Color <i64>` was invalid IR
@@ -29548,6 +29608,7 @@
     ( __emit_rt_decl syms `declare void @nurl_closure_drop(i8*)` )
     ( __emit_rt_decl syms `declare i8* @nurl_closure_clone(i8*)` )
     ( __emit_rt_decl syms `declare i8* @nurl_closure_own(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_closure_slice_drop(i8*, i64)` )
     ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**)` )
     ( __emit_rt_decl syms `declare void @nurl_print(i8* nocapture nofree)` )
     ( __emit_rt_decl syms `declare void @nurl_println(i8* nocapture nofree)` )
@@ -30509,6 +30570,7 @@
     ( nurl_sym_def syms `nurl_closure_drop` `void` )
     ( nurl_sym_def syms `nurl_closure_clone` `i8*` )
     ( nurl_sym_def syms `nurl_closure_own` `i8*` )
+    ( nurl_sym_def syms `nurl_closure_slice_drop` `void` )
     // The raw allocator ABI consumes its buffer. This contract also seeds
     // transitive consumption through casts, aliases and forward helpers.
     ( nurl_sym_def g_fn_sink `nurl_free` `0` )

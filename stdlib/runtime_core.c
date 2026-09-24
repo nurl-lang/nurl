@@ -2734,6 +2734,15 @@ void *nurl_closure_clone(void *env) {
     return copy;
 }
 
+/* An owned slice of closures `[( @ … ) | …]` owns each element's env: drop
+ * them all before its buffer is freed. The element layout is the closure
+ * value itself, { fn, env }. */
+typedef struct { void *fn; void *env; } NurlClosureVal;
+void nurl_closure_slice_drop(void *data, long long len) {
+    NurlClosureVal *c = (NurlClosureVal *)data;
+    for (long long i = 0; c && i < len; i++) nurl_closure_drop(c[i].env);
+}
+
 /* The env a new owner holds: `env` itself when `owner` says it already
  * belongs to the caller, a clone otherwise. */
 void *nurl_closure_own(void *env, void *owner) {
