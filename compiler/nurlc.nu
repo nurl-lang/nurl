@@ -2952,6 +2952,14 @@
 // Cleanup and defer bodies may call another string-returning function.
 @ mem_init_return_proof i syms i cg s ty → v {
     ( nurl_sym_def syms `__ret_proof_slot__` `` )
+    // Returned-closure owner of this body's return sites (mem_retclo_save).
+    ( nurl_sym_def syms `__retclo_slot__` `` )
+    ? ( __is_closure_ty ty )
+    { : s cslot ( nurl_cg_reg cg )
+        ( nurl_sym_def syms `__retclo_slot__` cslot )
+        ( nurl_print `  ` ) ( nurl_print cslot ) ( nurl_print ` = alloca i8*\n` )
+        ( nurl_print `  store i8* null, i8** ` ) ( nurl_print cslot ) ( nurl_print `\n` ) }
+    {}
     ? | == 0 g_auto_drop_strings ! ( seq ( nurl_llty ty ) `i8*` ) { ^ } {}
     : s slot ( nurl_cg_reg cg )
     ( nurl_sym_def syms `__ret_proof_slot__` slot )
@@ -3001,6 +3009,14 @@
 }
 
 @ mem_publish_return_proof i syms i cg s ty → v {
+    : s cslot ( nurl_sym_get syms `__retclo_slot__` )
+    ? & != 0 ( nurl_str_len cslot ) ( __is_closure_ty ty )
+    { : s co ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print co ) ( nurl_print ` = load i8*, i8** ` )
+        ( nurl_print cslot ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_ret_clo_set(i8* ` ) ( nurl_print co ) ( nurl_print `)\n` )
+        ^ }
+    {}
     ? | == 0 g_auto_drop_strings ! ( seq ( nurl_llty ty ) `i8*` ) { ^ } {}
     : s owner ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = load i8*, i8** ` )
@@ -3035,7 +3051,7 @@
             ( mem_drop_user_drops syms cg skip_user_ptr )
         }
         {}
-        ( mem_own_closure_remove syms ret_ident )
+        ( mem_own_closure_ret_release syms ret_ident )
         ( mem_drop_closure_envs syms cg )
         ( __dret_skip_add skip )
         ( __dret_skip_add skip_str_ptr )
@@ -3060,7 +3076,7 @@
             ? == g_bck_closure_depth 0 { ( mem_drain_deferred cg ) } {}
         }
         {}
-        ( mem_own_closure_remove syms ret_ident )
+        ( mem_own_closure_ret_release syms ret_ident )
         ( mem_drop_closure_envs syms cg )
         ? | ( seq lt `void` ) ( seq fn_rt `void` )
         { ( emit_call_term `ret void` ) }
@@ -3410,7 +3426,16 @@
         ? ( is_ident_tok __rr_pk ) { = ret_first_root ( nurl_lex_peek_val lex ) } {} }
     {}
     ( nurl_sym_def syms `__last_call_guard__` `` )
+    ( nurl_sym_def syms `__last_call_clo_own__` `` )
+    ( nurl_sym_def syms `__last_closure_env__` `` )
     : ~ s val ( gen_operand lex syms cg )
+    // Returned-closure ownership: save what the caller owns (mem_retclo_save).
+    ? ( __is_closure_ty ( nurl_get_last_type ) )
+    { ( mem_retclo_save syms cg ret_first_tt
+        & ( seq ( nurl_sym_get syms `__last_ident_name__` ) ret_first_val )
+        ( seq ( nurl_sym_get syms `__last_ident_env_moved__` ) `1` )
+        ret_first_val ) }
+    {}
     // Address-preserving expressions can return a parameter even when their
     // lowered type is an integer. Record the expression's own provenance,
     // not the last identifier visited while parsing it.
@@ -3998,10 +4023,14 @@
         // A call ARGUMENT load is exempt (`__in_call_arg__`): gen_call
         // decides borrow-vs-escape from the callee's invoke-only set; an
         // invocation's callee never reaches gen_ident at all.
+        // `__last_ident_env_moved__` says whether THIS read moved an owned
+        // env out (the return-site classifier's `own` case); it is written
+        // on every read so it always describes `__last_ident_name__`.
         ? & == 0 ( nurl_sym_len syms `__in_call_arg__` )
         ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) name )
-        { ( mem_own_closure_remove syms name ) }
-        {}
+        { ( mem_own_closure_remove syms name )
+            ( nurl_sym_def syms `__last_ident_env_moved__` `1` ) }
+        { ( nurl_sym_def syms `__last_ident_env_moved__` `` ) }
         // Lint: mark the name as read (unused-binding) and referenced
         // (unused-function). Unlike bck_note_read this is NOT suppressed
         // inside closures, so a binding captured by a closure counts.
@@ -5552,6 +5581,61 @@
     }
 }
 
+// True when `ty` (raw or lowered) is a closure VALUE,
+// `{ R (i8*, P…)*, i8* }` — a function pointer plus its env.
+@ __is_closure_ty s ty → b {
+    ? == 0 ( nurl_str_len ty ) { ^ F } {}
+    : s ll ( nurl_llty ty )
+    ^ & != 0 ( nurl_str_starts ll `{ ` ) != 0 ( nurl_str_ends ll `)*, i8* }` )
+}
+
+// Returned-closure ownership (docs/MEMORY.md §7.4). A function returning
+// a closure tells its caller, on every return path, which env the caller
+// now owns: the env of a closure literal, the env of an owned closure
+// binding moved out, the owner a closure-returning call handed THIS frame
+// — or null for anything else (a parameter, a struct field, a join),
+// which somebody else still owns. The owner is saved per return site into
+// `__retclo_slot__` and published through the thread-local channel just
+// before the `ret` (mem_publish_return_proof); the call site takes it
+// immediately after the call. Exact per call, so a function that returns
+// a fresh closure on one path and a borrowed one on another is handled
+// without guessing.
+@ mem_retclo_save i syms i cg i first_tt b moved s name → v {
+    : s slot ( nurl_sym_get syms `__retclo_slot__` )
+    ? == 0 ( nurl_str_len slot ) { ^ v } {}
+    : ~ s owner `null`
+    ? == first_tt TT_BACKSLASH
+    { : s env ( nurl_sym_get syms `__last_closure_env__` )
+        ? != 0 ( nurl_str_len env ) { = owner env } {} }
+    { ? & ( is_ident_tok first_tt ) moved
+        { = owner ( mem_clo_owner_of syms cg name )
+            // The env leaves with the value on THIS path only: clear the
+            // binding's slot (so this path's drain frees nothing) and keep
+            // it owned, so a path that does not return still frees it.
+            : s bslot ( nurl_sym_get2 syms name `__envown` )
+            ? != 0 ( nurl_str_len bslot )
+            { ( nurl_print `  store i8* null, i8** ` ) ( nurl_print bslot ) ( nurl_print `\n` )
+                ( mem_own_closure_add syms name ) }
+            {} }
+        { ? & == first_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_clo_own__` )
+            { = owner ( nurl_sym_get syms `__last_call_clo_own__` )
+                ( nurl_sym_def syms `__last_call_clo_own__` `` ) }
+            {} } }
+    ( nurl_print `  store i8* ` ) ( nurl_print owner ) ( nurl_print `, i8** ` )
+    ( nurl_print slot ) ( nurl_print `\n` )
+}
+
+// The call side: take the owner a closure-returning NURL function just
+// published. Only a callee whose body this compilation emits publishes
+// one (`__nurlfn`, or a closure invocation — every closure body is ours);
+// an FFI symbol never does, and taking after it would read whatever an
+// earlier call left behind.
+@ mem_retclo_take i syms i cg → v {
+    : s owner ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print owner ) ( nurl_print ` = call i8* @nurl_ret_clo_take()\n` )
+    ( nurl_sym_def syms `__last_call_clo_own__` owner )
+}
+
 @ mem_emit_arg_flags i syms → v {
     : ~ s rest ( nurl_sym_get g_pending_impl `argdrops` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -5797,6 +5881,9 @@
 }
 
 @ mem_propagate_call_ret_markers i syms s cn → v {
+    // Returned-closure ownership: cleared here, set by the call paths
+    // that take the callee's published owner (mem_retclo_take).
+    ( nurl_sym_def syms `__last_call_clo_own__` `` )
     ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get2 syms cn `__nurl_ret` ) )
     ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get2 syms cn `__res_t_llvm` ) )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get2 syms cn `__res_e_llvm` ) )
@@ -8458,6 +8545,7 @@
     ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get2 syms fname `__res_t_llvm` ) )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get2 syms fname `__res_e_llvm` ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get2 syms fname `__opt_nurl_t` ) )
+    ( nurl_sym_def syms `__last_call_clo_own__` `` )
     ( nurl_sym_def syms `__last_call_ret_owned__` ( __ret_owned_of syms fname ) )
     // A4c: propagate the callee's returned struct owned-field list so the
     // caller's `: T x ( f )` re-registers them for drop.
@@ -9185,6 +9273,7 @@
         // Reset the closure-env side-channel so it reflects only an inline
         // closure literal generated for THIS argument.
         ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_call_clo_own__` `` )
         // An argument at an `inout` parameter position is passed BY
         // ADDRESS, not by value. It must be a bare mutable (`: ~`)
         // binding — the callee mutates it in place. Pass the
@@ -9440,7 +9529,12 @@
         ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
         { ( bck_note_closure_caps syms bck_arg_val ) }
         {}
-        : s __cle ( nurl_sym_get syms `__last_closure_env__` )
+        // A closure-returning call as the argument hands over the owner it
+        // published (mem_retclo_take) — the same reclamation a literal gets.
+        : s __cle ? & == bck_arg_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_clo_own__` )
+        ( nurl_sym_get syms `__last_call_clo_own__` )
+        ( nurl_sym_get syms `__last_closure_env__` )
+        ( nurl_sym_def syms `__last_call_clo_own__` `` )
         ? != 0 ( nurl_str_len __cle )
         { : s __ceo ( mem_env_owner cg call_name arg_idx __cle )
             = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
@@ -10596,6 +10690,7 @@
             ( __closure_arity_check lex call_name call_type_ll T arg_idx )
             ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
             = final_result ( call_closure_function loaded_closure call_type argstr cg )
+            ? ( __is_closure_ty ( nurl_get_last_type ) ) { ( mem_retclo_take syms cg ) } {}
             ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_call_guard__`
             ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
@@ -10625,6 +10720,7 @@
                 ( __closure_arity_check lex call_name call_type_ll T arg_idx )
                 ( __callargs_agree lex call_name argstr ( __fnty_param_lltys call_type_ll T ) )
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
+                ? ( __is_closure_ty ( nurl_get_last_type ) ) { ( mem_retclo_take syms cg ) } {}
                 ( nurl_sym_def syms `__last_call_ret_owned__` `` )
                 ( nurl_sym_def syms `__last_call_guard__`
                 ( mem_capture_return_guard cg final_result ( nurl_get_last_type ) ) )
@@ -10698,6 +10794,12 @@
                 // evaluation can no longer clobber it.
                 ( nurl_sym_def syms `__last_call_guard__`
                 ( mem_emit_fwd_own_guard syms cg call_name res rlt ) )
+                // A returned closure: take the env the callee handed over
+                // (mem_retclo_save), for the consuming binding / argument /
+                // return to own.
+                ? & ( __is_closure_ty rlt ) != 0 ( nurl_sym_len2 syms call_name `__nurlfn` )
+                { ( mem_retclo_take syms cg ) }
+                {}
                 ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
                 ( nurl_set_last_type rlt )
                 res
@@ -15011,7 +15113,89 @@
 // the sibling drop emitters.
 // Emit the env free for one closure binding `name`: load the closure
 // value, extract field 1 (the env i8*), free it. NULL-safe.
+// The owner slot of a closure binding (`<name>__envown`): an i8* alloca
+// holding the env THIS binding is responsible for, or null. A closure
+// VALUE says where its env is; the slot says whether freeing it is this
+// binding's job — the two differ for a call result whose callee may hand
+// back a closure somebody else owns (mem_retclo_save), and a literal
+// with no captures has no env at all. Every `:` closure binding gets one,
+// so the drop never has to guess.
+@ mem_clo_slot_new i syms i cg s name s owner → v {
+    : s slot ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca i8*\n` )
+    ( nurl_print `  store i8* ` ) ( nurl_print owner ) ( nurl_print `, i8** ` )
+    ( nurl_print slot ) ( nurl_print `\n` )
+    ( nurl_sym_def syms ( nurl_str_cat name `__envown` ) slot )
+}
+
+// The env a closure binding `name` owns, as a fresh register: its slot's
+// content, or — for a binding without one (a parameter rebound with `=`)
+// — the env field of its current value.
+@ mem_clo_owner_of i syms i cg s name → s {
+    : s slot ( nurl_sym_get2 syms name `__envown` )
+    : s r ( nurl_cg_reg cg )
+    ? != 0 ( nurl_str_len slot )
+    { ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load i8*, i8** ` )
+        ( nurl_print slot ) ( nurl_print `\n` )
+        ^ r }
+    {}
+    : s ty ( nurl_llty ( nurl_sym_get syms name ) )
+    : s cv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print cv ) ( nurl_print ` = load ` ) ( nurl_print ty )
+    ( nurl_print `, ` ) ( nurl_print ty ) ( nurl_print `* ` )
+    ( nurl_print ( nurl_sym_get2 syms name `__ptr` ) ) ( nurl_print `\n` )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = extractvalue ` ) ( nurl_print ty )
+    ( nurl_print ` ` ) ( nurl_print cv ) ( nurl_print `, 1\n` )
+    ^ r
+}
+
+// Decide what a new closure binding owns and record it: the env of a
+// capturing literal, the owner a closure-returning call published, or —
+// for `: h g` — whatever `g` owned (a move: `g` stops owning it).
+@ mem_bind_closure_owner i syms i cg s name s ty s lit_env b src_owned i rhs_tt s rhs_val → v {
+    ? ! ( __is_closure_ty ty )
+    { ? != 0 ( nurl_str_len lit_env )
+        { ( mem_own_closure_add syms name ) }
+        { ? src_owned
+            { ( mem_own_closure_remove syms rhs_val ) ( mem_own_closure_add syms name ) }
+            {} }
+        ^ v }
+    {}
+    : ~ s owner `null`
+    : ~ b owns F
+    ? != 0 ( nurl_str_len lit_env )
+    { = owner lit_env = owns T }
+    { ? & == rhs_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_clo_own__` )
+        { = owner ( nurl_sym_get syms `__last_call_clo_own__` ) = owns T }
+        { ? src_owned
+            { = owner ( mem_clo_owner_of syms cg rhs_val ) = owns T
+                ( mem_own_closure_remove syms rhs_val ) }
+            {} } }
+    ( nurl_sym_def syms `__last_call_clo_own__` `` )
+    ( mem_clo_slot_new syms cg name owner )
+    ? owns { ( mem_own_closure_add syms name ) } {}
+}
+
+// A return site releasing the returned binding's env to the caller. A
+// binding with an owner slot was already settled by mem_retclo_save (its
+// slot cleared on this path only), so it stays owned for the paths that do
+// not return it; one without a slot leaves the owned set as before.
+@ mem_own_closure_ret_release i syms s name → v {
+    ? != 0 ( nurl_sym_len2 syms name `__envown` ) { ^ v } {}
+    ( mem_own_closure_remove syms name )
+}
+
 @ mem_emit_closure_env_drop i syms i cg s name → v {
+    : s slot ( nurl_sym_get2 syms name `__envown` )
+    ? != 0 ( nurl_str_len slot )
+    { : s ev ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ev ) ( nurl_print ` = load i8*, i8** ` )
+        ( nurl_print slot ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print ev ) ( nurl_print `)` )
+        ( emit_dbg_eol )
+        ( nurl_print `  store i8* null, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
+        ^ v }
+    {}
     : s ty ( nurl_sym_get syms name )
     : s ptr ( nurl_sym_get2 syms name `__ptr` )
     ? & & != 0 ( nurl_str_len ty ) != 0 ( nurl_str_len ptr )
@@ -17232,6 +17416,7 @@
         : b __src_owned_env & ( is_ident_tok bck_rhs_tt )
         ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
         ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_call_clo_own__` `` )
         ( nurl_sym_def syms `__last_closure_caps__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
         ( nurl_sym_def syms `__last_phi_idents__` `` )
@@ -17393,11 +17578,7 @@
         // owns the env → track it for the function-exit free. A `: g f`
         // copy MOVES the env to g (the borrow checker forbids reusing f),
         // so transfer the registration rather than tracking both.
-        ? != 0 ( nurl_str_len rhs_closure_env )
-        { ( mem_own_closure_add syms name ) }
-        { ? __src_owned_env
-            { ( mem_own_closure_remove syms bck_rhs_val ) ( mem_own_closure_add syms name ) }
-            {} }
+        ( mem_bind_closure_owner syms cg name vt rhs_closure_env __src_owned_env bck_rhs_tt bck_rhs_val )
         // Phase 2B: string ownership tracking (opt-in)
         ? != 0 g_auto_drop_strings
         { ? & | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
@@ -17517,6 +17698,7 @@
             : b __src_owned_env & ( is_ident_tok bck_rhs_tt )
             ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
             ( nurl_sym_def syms `__last_closure_env__` `` )
+            ( nurl_sym_def syms `__last_call_clo_own__` `` )
             ( nurl_sym_def syms `__last_closure_caps__` `` )
             ( nurl_sym_def syms `__last_slice_owned__` `` )
             ( nurl_sym_def syms `__last_phi_idents__` `` )
@@ -17682,11 +17864,7 @@
             // bound here for the function-exit free. A bare-identifier
             // RHS MOVES the env instead (the borrow checker forbids
             // reusing the source), so the registration transfers.
-            ? != 0 ( nurl_str_len rhs_closure_env )
-            { ( mem_own_closure_add syms name ) }
-            { ? __src_owned_env
-                { ( mem_own_closure_remove syms bck_rhs_val ) ( mem_own_closure_add syms name ) }
-                {} }
+            ( mem_bind_closure_owner syms cg name ptype rhs_closure_env __src_owned_env bck_rhs_tt bck_rhs_val )
             // Phase 2B: string ownership tracking (opt-in)
             ? != 0 g_auto_drop_strings
             { ? & | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
@@ -17821,6 +17999,7 @@
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_call_clo_own__` `` )
         ( nurl_sym_def syms `__last_closure_caps__` `` )
         // Same snapshot the `:` paths take, and for the same reason:
         // generating the RHS reads the identifier, and a value read of a
@@ -17862,13 +18041,33 @@
         // slot no longer holds it, freed through that slot, and the new
         // holder's copy leaked.
         : b __asn_move_env __src_owned_env
-        ? | != 0 ( nurl_str_len __asn_env ) __asn_move_env
-        { ? ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) name )
+        // A closure-returning call publishes its owner; a binding with an
+        // owner slot takes it like a `:` binding would.
+        : s __asn_slot ( nurl_sym_get2 syms name `__envown` )
+        : b __asn_call_env & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __asn_slot )
+        != 0 ( nurl_sym_len syms `__last_call_clo_own__` )
+        ? | | != 0 ( nurl_str_len __asn_env ) __asn_move_env __asn_call_env
+        { : s __asn_owner ? != 0 ( nurl_str_len __asn_env ) __asn_env
+            ? __asn_call_env ( nurl_sym_get syms `__last_call_clo_own__` )
+            ? != 0 ( nurl_str_len __asn_slot ) ( mem_clo_owner_of syms cg bck_rhs_val ) ``
+            ? ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) name )
             { ( mem_emit_closure_env_drop syms cg name ) }
             {}
             ? __asn_move_env { ( mem_own_closure_remove syms bck_rhs_val ) } {}
+            ? != 0 ( nurl_str_len __asn_slot )
+            { ( nurl_print `  store i8* ` ) ( nurl_print __asn_owner ) ( nurl_print `, i8** ` )
+                ( nurl_print __asn_slot ) ( nurl_print `\n` ) }
+            {}
             ( mem_own_closure_add syms name ) }
-        {}
+        {  // Any other closure value (a parameter, a field, a non-owning
+            // call) is not this binding's to free: release what it owned
+            // and clear the slot.
+            ? & != 0 ( nurl_str_len __asn_slot ) ( __is_closure_ty vt )
+            { ? ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) name )
+                { ( mem_emit_closure_env_drop syms cg name ) ( mem_own_closure_remove syms name ) }
+                {} }
+            {} }
+        ( nurl_sym_def syms `__last_call_clo_own__` `` )
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
         // first token isn't `[`) still frees the old buffer below.
         : b rhs_slice_owned != 0 ( nurl_sym_len syms `__last_slice_owned__` )
@@ -22305,6 +22504,9 @@
     // only ITS closures — never the outer frame's (whose allocas don't
     // exist in this lifted function). Restored on sym_pop (§7.4).
     ( nurl_sym_def body_syms `__owned_closure_envs__` `` )
+    // A `^` in the body returns from the lifted function, never the
+    // enclosing one (mem_retclo_record).
+    ( nurl_sym_def body_syms `__fn_retclo_key__` closure_fn_name )
     // …and the same argument for the other three owned-value rosters,
     // which were left visible. A closure body is a SEPARATE function:
     // its `^` runs gen_ret, gen_ret drains whatever these lists hold,
@@ -25686,6 +25888,7 @@
     // binding, escape sites remove it, the function-exit drain frees the
     // survivors.
     ( nurl_sym_def syms `__owned_closure_envs__` `` )
+    ( nurl_sym_def syms `__fn_retclo_key__` fname )
     ( nurl_sym_def syms `__in_call_arg__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): gen_ret appends the
     // index of any parameter returned directly; merged into
@@ -25869,6 +26072,12 @@
     : i tail_tt ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
     : b tail_direct | | == tail_tt TT_LPAREN == tail_tt TT_QUEST == tail_tt TT_QUESTQUEST
     : s ret_ident ( nurl_sym_get syms `__last_ident_name__` )
+    // Returned-closure ownership: the fall-off tail is a return site like
+    // any `^` (mem_retclo_save).
+    ? & __fall_used ( __is_closure_ty ret_ty )
+    { ( mem_retclo_save syms cg tail_tt
+        ( seq ( nurl_sym_get syms `__last_ident_env_moved__` ) `1` ) ret_ident ) }
+    {}
     : s skip ? & ( mem_is_slice_ty ret_ty ) ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) ret_ident )
     ret_ident
     ``
@@ -25972,7 +26181,7 @@
                     ( mem_drop_user_drops syms cg skip_user_ptr )
                 }
                 {}
-                ( mem_own_closure_remove syms ret_ident )
+                ( mem_own_closure_ret_release syms ret_ident )
                 ( mem_drop_closure_envs syms cg )
                 ( __dret_skip_add skip )
                 ( __dret_skip_add skip_str_ptr )
@@ -25994,7 +26203,7 @@
                 {}
                 // Return-escape: an implicitly-returned closure binding
                 // hands its env to the caller — do not free it here.
-                ( mem_own_closure_remove syms ret_ident )
+                ( mem_own_closure_ret_release syms ret_ident )
                 ( mem_drop_closure_envs syms cg )
                 ( mem_publish_return_proof syms cg ret_ty )
                 ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty ret_ty ) )
@@ -29016,6 +29225,10 @@
     // proves nothing — publishes 0 and no caller frees it.
     ( __emit_rt_decl syms `declare i64 @nurl_ret_owned_get()` )
     ( __emit_rt_decl syms `declare void @nurl_ret_owned_set(i64)` )
+    // Returned-closure owner channel (docs/MEMORY.md §7.4): the env a
+    // closure-returning function hands its caller, or null.
+    ( __emit_rt_decl syms `declare i8* @nurl_ret_clo_take()` )
+    ( __emit_rt_decl syms `declare void @nurl_ret_clo_set(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**)` )
     ( __emit_rt_decl syms `declare void @nurl_print(i8* nocapture nofree)` )
     ( __emit_rt_decl syms `declare void @nurl_println(i8* nocapture nofree)` )

@@ -2700,6 +2700,20 @@ static __thread long long nurl__ret_owned;
 long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
 void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
 
+/* Returned-closure ownership, the closure twin of the proof above. A NURL
+ * function returning a closure publishes, just before its `ret`, the env
+ * block the caller now owns (null when the closure it hands back belongs to
+ * someone else — a parameter, a struct field). The call site takes it
+ * immediately after the call, which also clears it, so a publish can never
+ * be read twice. */
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+static void *nurl__ret_clo;
+#else
+static __thread void *nurl__ret_clo;
+#endif
+void *nurl_ret_clo_take(void) { void *p = nurl__ret_clo; nurl__ret_clo = 0; return p; }
+void nurl_ret_clo_set(void *owner) { nurl__ret_clo = owner; }
+
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
  *
  * A `recover` frame establishes a setjmp landing pad; a `panic` inside
