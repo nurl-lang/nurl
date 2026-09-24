@@ -584,6 +584,9 @@
 // ── Cleanup ─────────────────────────────────────────────────────────
 
 @ vec_free [A] sink ( Vec A ) v → v {
+    // This IS the disposer: it releases the parts by hand below, so the
+    // handle is not dropped again on the way out (docs/MEMORY.md §7.6).
+    ( mem_forget v )
     : s ctl . v ctl
     : s data ( __vec_data_raw ctl )
     // A borrowed view (vec_borrow_raw) never owned its buffer: release
@@ -604,6 +607,7 @@
 // element types use the bare `vec_free` instead — calling
 // `vec_free_with` with a no-op closure works but is wasteful.
 @ vec_free_with [A] sink ( Vec A ) v ( @ v A ) drop → v {
+    ( mem_forget v )
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     : s data ( __vec_data_raw ctl )

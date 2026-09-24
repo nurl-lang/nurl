@@ -738,12 +738,13 @@ $ `stdlib/ext/http2_conn.nu`
     : s ds_rp . s dos_state
     : i ds_raw # i ds_rp
     : ~ s peer_ip ``
-    // When non-NULL, owns the String whose buffer `peer_ip` aliases
-    // (the "ip:port" truncated at the colon). Freed on EVERY exit
-    // path below — the DoS path used to leak one String per
-    // connection, which an attacker opening/closing connections in a
-    // loop turns into unbounded heap growth.
-    : ~ s ip_ctl # s 0
+    // Owns the "ip" prefix (the "ip:port" truncated at the colon) whose
+    // buffer `peer_ip` aliases; dropped on every exit path below, after
+    // the serve loop and the dos_state_release that reads peer_ip. The
+    // DoS path used to leak one String per connection, which an attacker
+    // opening/closing connections in a loop turns into unbounded heap
+    // growth.
+    : String ip_only ( string_new )
     ? != ds_raw 0 {
         : s addr ( tcp_peer_addr conn )
         : i an ( nurl_str_len addr )
@@ -754,22 +755,15 @@ $ `stdlib/ext/http2_conn.nu`
             = k + k 1
         }
         ? > colon 0 {
-            : String ip_only ( string_new )
             : ~ i j 0
             ~ < j colon {
                 ( string_push_char ip_only ( nurl_str_get addr j ) )
                 = j + j 1
             }
             = peer_ip ( string_data ip_only )
-            // Retain the ctl so we can free the String once the
-            // serve loop AND the dos_state_release that consumes
-            // peer_ip are done — `string_data` aliases this buffer,
-            // so it must outlive every peer_ip use below.
-            = ip_ctl . ip_only ctl
         } { = peer_ip addr }
         : i ok ( dos_state_try_acquire ds_raw peer_ip )
         ? == ok 0 {
-            ? != 0 # i ip_ctl { ( string_free @ String { ip_ctl } ) } {}
             ( tcp_close_conn conn )
             ^ v
         } {}
@@ -778,7 +772,6 @@ $ `stdlib/ext/http2_conn.nu`
     ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
     ( _serve_keepalive_loop s conn )
     ? != ds_raw 0 { ( dos_state_release ds_raw peer_ip ) } {}
-    ? != 0 # i ip_ctl { ( string_free @ String { ip_ctl } ) } {}
     ( tcp_close_conn conn )
 }
 

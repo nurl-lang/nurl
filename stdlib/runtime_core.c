@@ -3135,12 +3135,17 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     long long *c = (long long*)ctl;
     void *data = (void*)(intptr_t)c[0];
     long long len = c[1];
+    /* A borrowed view (vec_borrow_raw: cap < 0) owns neither its elements
+     * nor its buffer — only the control block, exactly as vec_free treats
+     * it. nurl_free, not free: an owned handle may sit in the panic
+     * journal, and only nurl_free takes it out. */
+    if (c[2] < 0) { nurl_free(ctl); return; }
     if (elem_drop && data && elem_size > 0) {
         char *base = (char*)data;
         for (long long i = 0; i < len; i++) elem_drop(base + i*elem_size);
     }
-    if (data && data != (void*)((char*)ctl + 24)) free(data);
-    free(ctl);
+    if (data && data != (void*)((char*)ctl + 24)) nurl_free(data);
+    nurl_free(ctl);
 }
 
 /* Back-compat alias. */

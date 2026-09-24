@@ -45,6 +45,8 @@ $ `stdlib/std/bytes.nu`
     ? == g_sha256_k 0 {
         : ( Vec u32 ) k ( __sha256_K )
         = g_sha256_k # i . k ctl
+        // The table lives for the rest of the program, through the global.
+        ( mem_forget k )
     } {}
     ^ @ ( Vec u32 ) { # s g_sha256_k }
 }
