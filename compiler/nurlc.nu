@@ -29518,7 +29518,9 @@
     : i cm ( nurl_str_find p `, ` )
     ? >= cm 0 {
         : s e ( nurl_str_slice p + cm 2 - - ( nurl_str_len p ) cm 2 )
-        ? | >= ( nurl_str_find e ` ` ) 0 ( __type_needs_drop e g_root_syms ) { ^ ( nurl_str_cat `` `` ) } {}
+        // Only the Ok payload is ever dropped through this registration;
+        // the error side keeps whatever protocol it had.
+        ? >= ( nurl_str_find e ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
         = p ( nurl_str_slice p 0 cm )
 
     } {}
@@ -29532,13 +29534,27 @@
 // Vec / owning struct owns its payload; its type `{ i1, T }` has spaces,
 // which the space-separated drop registry cannot carry, so it registers
 // under a named twin `%__opt.<T>` (same layout, declared at module end).
+// An error type as part of a twin's name: `%` dropped, each `*` spelled
+// `P` (`i8*` → `i8P`), so the name stays an identifier and not a pointer.
+@ __opt_err_mangle s e → s {
+    : s m ( __drop_mangle e )
+    : ~ s out ``
+    : ~ i k 0
+    ~ < k ( nurl_str_len m ) {
+        : i ch ( nurl_str_get m k )
+        = out ( nurl_str_cat out ? == ch 42 `P` ( nurl_str_slice m k 1 ) )
+        = k + k 1
+    }
+    ^ out
+}
+
 @ __udrop_regty s ty → s {
     : s p ( __opt_payload ty )
     ? == 0 ( nurl_str_len p ) { ^ ( nurl_str_cat ty `` ) } {}
     // A result's twin names its error type too: `%__opt.<T>.<E>`.
     : s tail ( nurl_str_slice ty + 6 ( nurl_str_len p ) - - ( nurl_str_len ty ) 8 ( nurl_str_len p ) )
     : s sv ? == 0 ( nurl_str_len tail ) ( nurl_str_cat `%__opt.` ( __drop_mangle p ) )
-    ( nurl_str_cat3 `%__opt.` ( __drop_mangle p ) ( nurl_str_cat `.` ( __drop_mangle ( nurl_str_slice tail 2 - ( nurl_str_len tail ) 2 ) ) ) )
+    ( nurl_str_cat3 `%__opt.` ( __drop_mangle p ) ( nurl_str_cat `.` ( __opt_err_mangle ( nurl_str_slice tail 2 - ( nurl_str_len tail ) 2 ) ) ) )
     ? == 0 ( nurl_sym_len2 g_impl_name_syms `optof##` sv )
     { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `optof##` sv ) p )
         ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `optlay##` sv ) ty ) } {}
