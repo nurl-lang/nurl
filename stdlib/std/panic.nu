@@ -71,6 +71,15 @@ $ `stdlib/core/string.nu`
     ( nurl_panic msg )
 }
 
+// `panic` with a message it takes over: nothing leaks when a `recover`
+// catches it. The copy is an owned raw string, which the panic journal
+// releases while unwinding.
+@ panic_with sink String m → v {
+    : s c ( nurl_str_cat ( string_data m ) `` )
+    ( string_free m )
+    ( nurl_panic c )
+}
+
 // Run `closure` under a recover guard. Closure must be a zero-arg
 // void-returning closure (`(@ v)` shape). Returns Ok(0) if the closure
 // completed normally, Err(PanicInfo) if it called `panic`. Nested

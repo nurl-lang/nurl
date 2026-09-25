@@ -570,23 +570,26 @@ $ `stdlib/ext/http_response.nu`
     ( string_push_str m name )
     ( string_push_str m `" — ` )
     ( string_push_str m why )
-    ( panic ( string_data m ) )
+    ( panic_with m )
 }
 
 // Every `mcp_server_add_*` calls this first. `dup` is the index a
 // lookup returned, or -1 when the name is free.
+@ __mcp_server_open_err McpServer r i dup → s {
+    ? ( mcp_server_is_serving r ) { ^ `the server is already serving requests` } {}
+    ? >= dup 0 { ^ `that name is already registered` } {}
+    ^ ``
+}
+
 @ __mcp_server_check_open McpServer r s kind s name i dup → v {
-    ? ( mcp_server_is_serving r ) {
-        ( __mcp_server_reject kind name `the server is already serving requests` )
-    } {}
-    ? >= dup 0 {
-        ( __mcp_server_reject kind name `that name is already registered` )
-    } {}
+    : s why ( __mcp_server_open_err r dup )
+    ? != 0 ( nurl_str_len why ) { ( __mcp_server_reject kind name why ) } {}
 }
 
 // CONSUMES `name`, `description`, `schema`. Handler is borrowed.
 @ mcp_server_add_tool McpServer r s name s description Json schema ( @ Json Json ) handler → v {
-    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
+    : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
+    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
     : McpTool t @ McpTool {
         ( string_from name )
         ( string_from description )
@@ -608,7 +611,8 @@ $ `stdlib/ext/http_response.nu`
 // CONSUMES `name`, `description`, `schema`.
 @ mcp_server_add_tool_full McpServer r s name s description Json schema
 b read_only b destructive b idempotent b open_world ( @ Json Json ) handler → v {
-    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
+    : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
+    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
     : Json ann ( json_obj_new )
     ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
     ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
@@ -636,7 +640,8 @@ b read_only b destructive b idempotent b open_world ( @ Json Json ) handler → 
 @ mcp_server_add_tool_ctx McpServer r s name s description Json schema
 b read_only b destructive b idempotent b open_world
 ( @ Json Json McpCall ) handler → v {
-    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
+    : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
+    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
     : Json ann ( json_obj_new )
     ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
     ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
@@ -674,7 +679,8 @@ b read_only b destructive b idempotent b open_world
 @ mcp_server_add_tool_gated McpServer r s name s description Json schema
 b read_only b destructive b idempotent b open_world
 ( @ b Json ) visible ( @ Json Json McpCall ) handler → v {
-    ( __mcp_server_check_open r `tool` name ( __mcp_find_tool_index r name ) )
+    : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
+    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
     : Json ann ( json_obj_new )
     ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
     ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
@@ -736,7 +742,8 @@ b read_only b destructive b idempotent b open_world
 }
 
 @ mcp_server_add_prompt McpServer r s name s description Json args_schema ( @ Json Json ) handler → v {
-    ( __mcp_server_check_open r `prompt` name ( __mcp_find_prompt_index r name ) )
+    : s __why ( __mcp_server_open_err r ( __mcp_find_prompt_index r name ) )
+    ? != 0 ( nurl_str_len __why ) { ( json_free args_schema ) ( __mcp_server_reject `prompt` name __why ) ^ } {}
     : McpPrompt p @ McpPrompt {
         ( string_from name )
         ( string_from description )
