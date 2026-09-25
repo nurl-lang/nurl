@@ -666,7 +666,7 @@ $ `stdlib/std/async.nu`
                 : String rh ( string_from ( string_data . e req_host ) )
                 : i rp . e req_port
                 : i oseq . e orig_seq
-                ( string_free . e req_host )
+                // The removed entry is dropped here, req_host with it.
                 ( vec_remove [FwdEntry] . n fwd idx )
                 ( mutex_unlock . n fwd_m )
                 : SwimMsg ack ( __mk_msg n @ SwimMsgType { MtAck } oseq `` 0 )

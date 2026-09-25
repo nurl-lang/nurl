@@ -5919,12 +5919,82 @@
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
         } {}
     } {}
+    // A discarded `?T` / `!T E` a call handed over (`( vec_remove v 0 )`)
+    // owns its payload as a binding of it would (__opt_payload): dropped
+    // when the tag says it is there.
+    : s __dop ( __opt_payload dty )
+    : s __doe ( __opt_err_payload dty )
+    ? & & & & & == tt TT_LPAREN != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings | != 0 ( nurl_str_len __dop ) != 0 ( nurl_str_len __doe )
+    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
+        : s ro ( mem_call_retown syms cg )
+        ? != 0 ( nurl_str_len ro ) {
+            : s tag ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print tag ) ( nurl_print ` = extractvalue ` ) ( nurl_print dty )
+            ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+            ? != 0 ( nurl_str_len __dop ) {
+                : s pv ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = extractvalue ` ) ( nurl_print dty )
+                ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+                : s c ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = and i1 ` ) ( nurl_print ro )
+                ( nurl_print `, ` ) ( nurl_print tag ) ( nurl_print `\n` )
+                ( __handle_drop_ensure __dop )
+                ( __dropifv_request __dop )
+                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle __dop ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty __dop ) ) ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `)` ) ( emit_dbg_eol )
+            } {}
+            // …and a result's error, when the tag says that is what it holds.
+            ? != 0 ( nurl_str_len __doe ) {
+                : s ev ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print ev ) ( nurl_print ` = extractvalue ` ) ( nurl_print dty )
+                ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 2\n` )
+                : s nt ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print nt ) ( nurl_print ` = xor i1 ` ) ( nurl_print tag ) ( nurl_print `, 1\n` )
+                : s ce ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print ce ) ( nurl_print ` = and i1 ` ) ( nurl_print ro )
+                ( nurl_print `, ` ) ( nurl_print nt ) ( nurl_print `\n` )
+                ( __handle_drop_ensure __doe )
+                ( __dropifv_request __doe )
+                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle __doe ) ) ( nurl_print `(i1 ` ) ( nurl_print ce )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty __doe ) ) ( nurl_print ` ` ) ( nurl_print ev ) ( nurl_print `)` ) ( emit_dbg_eol )
+            } {}
+        } {}
+    } {}
     : s env ( __clo_temp_owner syms val )
     ? != 0 ( nurl_str_len env )
     { ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print env ) ( nurl_print `)` )
         ( emit_dbg_eol )
         ( __clo_tmp_set `` ) }
     {}
+}
+
+// An arm's tail call handing back an owned String / Vec / struct / `?T` /
+// `!T E` (`? c { ( vec_remove v 0 ) } {}`): whether anything consumes it is
+// only known at the join. Held by an anonymous owner in the arm's scope, it
+// rides the arm's parked exit (mem_arm_exit_open): dropped when the join
+// consumes nothing, handed over with the value when it does.
+@ mem_arm_tail_own i syms i cg s val i tt → v {
+    // Read by this arm's own join (mem_arm_hown) right after the block: set
+    // for every arm tail, so an inner arm's owner never answers for it.
+    ( nurl_sym_set g_fn_escapes `__arm_tail_owner__` `` )
+    ? | | | != 0 g_did_ret != tt TT_LPAREN == 0 ( nurl_str_len val ) == 0 g_auto_drop_strings { ^ v } {}
+    ? | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ^ v } {}
+    : s dty ( nurl_get_last_type )
+    : s rty ( __udrop_regty dty )
+    ? ! ( __is_handle_ty rty ) { ^ v } {}
+    : s ro ( mem_call_retown syms cg )
+    ? == 0 ( nurl_str_len ro ) { ^ v } {}
+    : s ptr ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ptr ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print `\n` )
+    ( nurl_print `  store ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print `, ` ) ( nurl_print ( nurl_llty dty ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    ( __handle_drop_ensure rty )
+    ( mem_own_add_user_drop syms cg ptr rty )
+    ( mem_udrop_flag_set syms cg ptr ro )
+    ( nurl_sym_set g_fn_escapes `__arm_tail_owner__` ptr )
+    // The value the arm yields is still the call's: its register stays the
+    // arm's result (restore the type the stores above did not touch).
+    ( nurl_set_last_type dty )
 }
 
 // A closure value entering an owning place (a struct field): the env a
@@ -14899,7 +14969,8 @@
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = last ( gen_stmt lex syms cg )
-        ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) } {}
+        ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) }
+        { ? blk_is_arm { ( mem_arm_tail_own syms cg last __tail_tt ) } {} }
         ? & & != 0 g_blk_tail_lit_line
         | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
         ( seq ( nurl_get_last_type ) `void` )
@@ -16127,7 +16198,16 @@
     ^ r
 }
 
+// A tried call (`: T x \ ( mk )`) binds the call's payload: whether x owns
+// it is the call's answer, not a borrow's.
 @ mem_udrop_bind_flag i syms i cg s ptr s ty i rhs_tt s rhs_val s rhs_borrow → v {
+    ? & & == rhs_tt TT_BACKSLASH ( seq ( nurl_sym_get syms `__last_backslash_try__` ) `1` )
+    ( seq ( nurl_sym_get syms `__last_try_inner_tt__` ) ( nurl_str_int TT_LPAREN ) )
+    { ( __mem_udrop_bind_flag syms cg ptr ty TT_LPAREN rhs_val rhs_borrow ) ^ v } {}
+    ( __mem_udrop_bind_flag syms cg ptr ty rhs_tt rhs_val rhs_borrow )
+}
+
+@ __mem_udrop_bind_flag i syms i cg s ptr s ty i rhs_tt s rhs_val s rhs_borrow → v {
     ? & ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms rhs_val `__ptr` )
     { : s src ( mem_udrop_ptr_of syms rhs_val )
         // A binding that borrowed a field (`: pl . frm payload`) handed to
@@ -25185,7 +25265,11 @@
     {}
     // Reset NURL call type before evaluating sub-expression
     ( nurl_sym_def syms `__last_nurl_call__` `` )
+    // What the tried expression is: `\ ( call … )` hands its payload over
+    // exactly as the call itself would (mem_udrop_bind_flag).
+    : i __try_inner_tt ( nurl_lex_type lex )
     : s val ( gen_expr lex syms cg )
+    ( nurl_sym_def syms `__last_try_inner_tt__` ( nurl_str_int __try_inner_tt ) )
     : s vt ( nurl_get_last_type )
     // T7: verify expression is opt or res type (must start with "{ i1, ")
     : b is_opt_res & >= ( nurl_str_len vt ) 6
@@ -25296,22 +25380,28 @@
         ( nurl_print ` ` ) ( nurl_print ev ) ( nurl_print `, 2\n` )
         = fail_val rb }
     {}
-    ? != 0 ( nurl_str_len dtop )
-    { ? ! ( seq fn_rt `void` )
-        { : s rvp ( nurl_sym_get syms `__ret_val__` )
-            ( nurl_print `  store ` ) ( nurl_print ( nurl_llty fn_rt ) )
-            ( nurl_print ` ` ) ( nurl_print fail_val ) ( nurl_print `, ` )
-            ( nurl_print ( nurl_llty fn_rt ) ) ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
+    // Leaving the function drops what it owns, as a `^` does. A tried
+    // call's result is bound nowhere, so no local owns the failure being
+    // handed on; a tried binding may (its payload is returned as is), so
+    // that shape keeps the bare return.
+    ? & != 0 g_auto_drop_strings == __try_inner_tt TT_LPAREN
+    { ( gen_ret_term lex syms cg fn_rt fail_val `` `` `` `` `` ) }
+    { ? != 0 ( nurl_str_len dtop )
+        { ? ! ( seq fn_rt `void` )
+            { : s rvp ( nurl_sym_get syms `__ret_val__` )
+                ( nurl_print `  store ` ) ( nurl_print ( nurl_llty fn_rt ) )
+                ( nurl_print ` ` ) ( nurl_print fail_val ) ( nurl_print `, ` )
+                ( nurl_print ( nurl_llty fn_rt ) ) ( nurl_print `* ` ) ( nurl_print rvp ) ( nurl_print `\n` )
+            }
+            {}
+            ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
         }
-        {}
-        ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
-    }
-    { ? ( seq fn_rt `void` )
-        { ( emit_call_term `ret void` ) }
-        { ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty fn_rt ) )
-            ( nurl_print ` ` ) ( nurl_print fail_val ) ( emit_dbg_eol )
-        }
-    }
+        { ? ( seq fn_rt `void` )
+            { ( emit_call_term `ret void` ) }
+            { ( nurl_print `  ret ` ) ( nurl_print ( nurl_llty fn_rt ) )
+                ( nurl_print ` ` ) ( nurl_print fail_val ) ( emit_dbg_eol )
+            }
+        } }
     // Ok path: extract the Ok value from field 1 BY VALUE. With the wide
     // `{ i1, T, E }` layout the payload already sits at its real type T — no
     // i64 unbox / heap-load reconstruction is needed (the legacy squeeze that
@@ -29617,15 +29707,38 @@
     ^ out
 }
 
+// The error type of a result `{ i1, T, E }` whose E is a String, a Vec or
+// an owning struct (and whose T has a one-word spelling); `` otherwise.
+@ __opt_err_payload s ty → s {
+    : i n ( nurl_str_len ty )
+    ? | < n 9 == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? != ( nurl_str_get ty - n 1 ) 125 { ^ ( nurl_str_cat `` `` ) } {}
+    : s body ( nurl_str_slice ty 6 - n 8 )
+    : i cm ( nurl_str_find body `, ` )
+    ? < cm 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s t ( nurl_str_slice body 0 cm )
+    : s e ( nurl_str_slice body + cm 2 - - ( nurl_str_len body ) cm 2 )
+    ? | >= ( nurl_str_find t ` ` ) 0 >= ( nurl_str_find e ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ? | | ( seq e `%String` ) != 0 ( nurl_str_starts e `%Vec__` ) ( __is_owned_struct_ty e )
+    { ^ e } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
 @ __udrop_regty s ty → s {
     : s p ( __opt_payload ty )
-    ? == 0 ( nurl_str_len p ) { ^ ( nurl_str_cat ty `` ) } {}
-    // A result's twin names its error type too: `%__opt.<T>.<E>`.
-    : s tail ( nurl_str_slice ty + 6 ( nurl_str_len p ) - - ( nurl_str_len ty ) 8 ( nurl_str_len p ) )
-    : s sv ? == 0 ( nurl_str_len tail ) ( nurl_str_cat `%__opt.` ( __drop_mangle p ) )
-    ( nurl_str_cat3 `%__opt.` ( __drop_mangle p ) ( nurl_str_cat `.` ( __opt_err_mangle ( nurl_str_slice tail 2 - ( nurl_str_len tail ) 2 ) ) ) )
+    // A result owns its error as well: `! v E` with E a String / Vec /
+    // owning struct registers even though its payload owns nothing.
+    : s ep ( __opt_err_payload ty )
+    ? & == 0 ( nurl_str_len p ) == 0 ( nurl_str_len ep ) { ^ ( nurl_str_cat ty `` ) } {}
+    // The twin is named for T (and, for a result, E): `%__opt.<T>.<E>`.
+    : s body ( nurl_str_slice ty 6 - ( nurl_str_len ty ) 8 )
+    : i cm ( nurl_str_find body `, ` )
+    : s t ? < cm 0 ( nurl_str_cat body `` ) ( nurl_str_slice body 0 cm )
+    : s sv ? < cm 0 ( nurl_str_cat `%__opt.` ( __drop_mangle t ) )
+    ( nurl_str_cat3 `%__opt.` ( __drop_mangle t ) ( nurl_str_cat `.` ( __opt_err_mangle ( nurl_str_slice body + cm 2 - - ( nurl_str_len body ) cm 2 ) ) ) )
     ? == 0 ( nurl_sym_len2 g_impl_name_syms `optof##` sv )
     { ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `optof##` sv ) p )
+        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `opterr##` sv ) ep )
         ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `optlay##` sv ) ty ) } {}
     ^ sv
 }
@@ -29678,9 +29791,11 @@
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
     ( nurl_sym_def g_impl_name_syms key ( __drop_mangle ty ) )
     : s op ( nurl_sym_get2 g_impl_name_syms `optof##` ty )
-    ? != 0 ( nurl_str_len op ) {
+    : s oe ( nurl_sym_get2 g_impl_name_syms `opterr##` ty )
+    ? | != 0 ( nurl_str_len op ) != 0 ( nurl_str_len oe ) {
         ( __park_append g_impl_name_syms `__pending_opt_drops__` ty )
         ? ( __is_owned_struct_ty op ) { ( queue_drop_for_type op ) } {}
+        ? ( __is_owned_struct_ty oe ) { ( queue_drop_for_type oe ) } {}
         ^ v
     } {}
     ? ( __is_owned_struct_ty ty )
@@ -29975,17 +30090,27 @@
         : s ty ( str_first_word rest ) = rest ( str_skip_word rest )
         ( gen_drop_for_type ty syms )
     }
-    // `%__opt.<T>` and its drop: the payload when there is one.
+    // `%__opt.<T>` and its drop: the payload when there is one, and a
+    // result's error when that owns something.
     : ~ s orest ( nurl_sym_get g_impl_name_syms `__pending_opt_drops__` )
     ~ != 0 ( nurl_str_len orest ) {
         : s sv ( str_first_word orest ) = orest ( str_skip_word orest )
         : s pt ( nurl_sym_get2 g_impl_name_syms `optof##` sv )
+        : s et ( nurl_sym_get2 g_impl_name_syms `opterr##` sv )
         : ~ i ctr 0
         ( nurl_print sv ) ( nurl_print ` = type ` ) ( nurl_print ( nurl_sym_get2 g_impl_name_syms `optlay##` sv ) ) ( nurl_print `\n` )
         ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ( __drop_mangle sv ) ) ) )
         ( nurl_print `(` ) ( nurl_print sv ) ( nurl_print ` %v) {\nentry:\n  %t = extractvalue ` ) ( nurl_print sv )
-        ( nurl_print ` %v, 0\n  br i1 %t, label %d, label %x\nd:\n  %p = extractvalue ` ) ( nurl_print sv ) ( nurl_print ` %v, 1\n` )
-        ( emit_drop_value pt `%p` ctr syms )
+        ( nurl_print ` %v, 0\n  br i1 %t, label %d, label %e\nd:\n` )
+        ? != 0 ( nurl_str_len pt ) {
+            ( nurl_print `  %p = extractvalue ` ) ( nurl_print sv ) ( nurl_print ` %v, 1\n` )
+            ( emit_drop_value pt `%p` ctr syms )
+        } {}
+        ( nurl_print `  br label %x\ne:\n` )
+        ? != 0 ( nurl_str_len et ) {
+            ( nurl_print `  %q = extractvalue ` ) ( nurl_print sv ) ( nurl_print ` %v, 2\n` )
+            ( emit_drop_value et `%q` ctr syms )
+        } {}
         ( nurl_print `  br label %x\nx:\n  ret void\n}\n` )
     }
     ( emit_pending_dropifs )
@@ -30117,6 +30242,13 @@
     ? == tt0 TT_LBRACE {
         = ht ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
         = hv ( nurl_sym_get syms `__tail_first_val__` )
+        // A tail call's value, held by the arm's anonymous owner
+        // (mem_arm_tail_own): the join owns it when it consumes it, and
+        // the owner's parked drop (gated on the same flag) runs only when
+        // nothing does.
+        : s ato ( nurl_sym_get g_fn_escapes `__arm_tail_owner__` )
+        ( nurl_sym_set g_fn_escapes `__arm_tail_owner__` `` )
+        ? & == ht TT_LPAREN != 0 ( nurl_str_len ato ) { ^ ( mem_udrop_flag_get syms cg ato ) } {}
     } {}
     ? & ( is_ident_tok ht ) ( seq hv retid ) {
         : s up ( mem_udrop_ptr_of syms retid )

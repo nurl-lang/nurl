@@ -132,9 +132,8 @@ $ `stdlib/core/vec.nu`
             }
             = k + k 1
         }
-        : ?McpSession vo ( vec_get [McpSession] . store sessions victim )
+        : ?McpSession vo ( vec_remove [McpSession] . store sessions victim )
         ?? vo { T se → ( __mcp_session_free se ) F → {} }
-        ( vec_remove [McpSession] . store sessions victim )
     } {}
 }
 
@@ -193,12 +192,11 @@ $ `stdlib/core/vec.nu`
 @ mcp_session_delete McpSessionStore store s sid → b {
     : i idx ( __mcp_session_find store sid )
     ? < idx 0 { ^ F } {}
-    : ?McpSession so ( vec_get [McpSession] . store sessions idx )
+    : ?McpSession so ( vec_remove [McpSession] . store sessions idx )
     ?? so {
         T se → { ( __mcp_session_free se ) }
         F → {}
     }
-    ( vec_remove [McpSession] . store sessions idx )
     ^ T
 }
 
@@ -295,8 +293,7 @@ $ `stdlib/core/vec.nu`
             ( vec_clear [Json] . se notify )
             // Evict beyond the cap, oldest first.
             ~ > ( vec_len [String] . se backlog_frames ) ( mcp_session_backlog_cap ) {
-                : ?String victim ( vec_get [String] . se backlog_frames 0 )
-                ?? victim { T s → ( string_free s ) F → {} }
+                // The evicted frame is dropped with the removed element.
                 ( vec_remove [String] . se backlog_frames 0 )
                 ( vec_remove [i] . se backlog_ids 0 )
             }
@@ -391,8 +388,7 @@ $ `stdlib/core/vec.nu`
         T se → {
             : i si ( __mcp_sub_index . se subscriptions uri )
             ? < si 0 { ^ F } {}
-            : ?String victim ( vec_get [String] . se subscriptions si )
-            ?? victim { T s → ( string_free s ) F → {} }
+            // The removed subscription is dropped here.
             ( vec_remove [String] . se subscriptions si )
             ^ T
         }

@@ -547,7 +547,9 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 @ __h2c_ping_ack H2Client c ( Vec u ) payload → !v H2FrameErr {
-    ^ ( __h2c_write_frame c @ H2Frame { 6 1 0 payload } 16384 )
+    // The frame holds its own copy of the borrowed payload, dropped here.
+    : H2Frame frame @ H2Frame { 6 1 0 payload }
+    ^ ( __h2c_write_frame c frame 16384 )
 }
 
 // ── Request submission ────────────────────────────────────────────────

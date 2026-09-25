@@ -136,6 +136,14 @@ $ `metadata.nu`
     ?? ( h2_client_release_stream . call transport . call stream_id ) { T _ → {} F _ → {} }
     ( grpc_decoder_free . call decoder ) ( grpc_status_free . call status )
     ( grpc_metadata_free . call headers ) ( grpc_metadata_free . call trailers )
+    // `transport` is the client's, not the call's.
+    ( mem_forget call )
+}
+
+% Drop GrpcCall {
+    @ drop GrpcCall call → v {
+        ( grpc_call_free call )
+    }
 }
 
 // Queue one framed message. RESOURCE_EXHAUSTED/H2CWouldBlock leaves the

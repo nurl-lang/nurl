@@ -94,10 +94,11 @@ $ `stdlib/core/vec.nu`
     ? == n 0 { ^ @ ?A { F # A 0 } } {}
     : *A d ( vec_data [A] . h data )
     : A root . d 0
-    // Move the last element to the root, drop the (now duplicated) tail
+    ( mem_take root )  // the element leaves the heap
+    // Move the last element to the root, forget the (now duplicated) tail
     // slot, then sift the new root down over the shrunken length.
     = . d 0 . d - n 1
-    ( vec_pop [A] . h data )
+    ( vec_set_len [A] . h data - n 1 )
     : i m - n 1
     ? > m 1 { ( __heap_sift_down [A] d 0 m cmp ) } {}
     ^ @ ?A { T root }
