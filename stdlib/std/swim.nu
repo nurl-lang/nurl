@@ -322,7 +322,7 @@ $ `stdlib/std/async.nu`
 
     ? accept {
         : Member nm @ Member { . cur host up_port ui . up state ( monotonic_ns ) }
-        ( vec_set [Member] . t members idx nm )
+        : ?Member old ( vec_replace [Member] . t members idx nm )
         ( mutex_unlock . t m )
         ^ != us cs  // re-gossip only on an actual state change
     } {}
@@ -339,7 +339,7 @@ $ `stdlib/std/async.nu`
     : Member cur ?? ( vec_get [Member] . t members idx ) { T x → x F → ( member_new host port 0 @ MemberState { MAlive } ) }
     ? == ( __state_code . cur state ) 0 {
         : Member nm @ Member { . cur host port . cur incarnation @ MemberState { MSuspect } ( monotonic_ns ) }
-        ( vec_set [Member] . t members idx nm )
+        : ?Member old ( vec_replace [Member] . t members idx nm )
         ( mutex_unlock . t m )
         ^ T
     } {}
@@ -362,8 +362,8 @@ $ `stdlib/std/async.nu`
                     : i age_ms / - now . cur last_change_ms 1000000
                     ? >= age_ms . t suspect_timeout_ms {
                         : Member nm @ Member { . cur host . cur port . cur incarnation @ MemberState { MDead } now }
-                        ( vec_set [Member] . t members k nm )
                         ( vec_push [Member] dead ( __member_copy nm ) )
+                        : ?Member old ( vec_replace [Member] . t members k nm )
                     } {}
                 } {}
             }

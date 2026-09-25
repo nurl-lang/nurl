@@ -330,6 +330,20 @@
     ^ T
 }
 
+// Put `x` at `idx` and hand the element it replaces back, owned — bind it
+// and it is dropped with the binding. `F` (and `x` is not stored) when
+// `idx` is out of range.
+@ vec_replace [A] ( Vec A ) v i idx A x → ?A {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    : *A data # *A ( nurl_peek ctl 0 )
+    : A old . data idx
+    ( mem_take old )  // the element leaves the container
+    = . data idx x
+    ^ @ ?A { T old }
+}
+
 // ── Mutation ────────────────────────────────────────────────────────
 
 @ vec_push [A] ( Vec A ) v A x → v {
