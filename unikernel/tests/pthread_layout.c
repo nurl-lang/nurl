@@ -27,16 +27,22 @@ extern const unsigned long nurl__bare_sizeof_mutex;
 extern const unsigned long nurl__bare_sizeof_cond;
 extern const unsigned long nurl__bare_sizeof_coro;
 
-/* Same reason as sched_gate.c: runtime_bare frees an owned closure
- * environment through the NURL allocator, and this gate links the bare
- * runtime without runtime_core.c. Nothing here spawns an owned fiber,
- * so the definition exists to satisfy the link and aborts if that ever
- * stops being true. */
-void nurl_free(char *p);
-void nurl_free(char *p) {
-    (void)p;
-    fprintf(stderr, "pthread_layout: nurl_free reached — this gate links "
-                    "no allocator\n");
+/* Same reason as sched_gate.c: the bare runtime copies and drops a
+ * spawn's closure env through runtime_core.c, which this gate does not
+ * link. Nothing here spawns anything, so the definitions only satisfy
+ * the link and abort if that ever stops being true. */
+void *nurl_closure_clone(void *env);
+void *nurl_closure_clone(void *env) {
+    (void)env;
+    fprintf(stderr, "pthread_layout: nurl_closure_clone reached — this gate "
+                    "links no allocator\n");
+    abort();
+}
+void nurl_closure_drop(void *env);
+void nurl_closure_drop(void *env) {
+    (void)env;
+    fprintf(stderr, "pthread_layout: nurl_closure_drop reached — this gate "
+                    "links no allocator\n");
     abort();
 }
 
