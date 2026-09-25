@@ -20,7 +20,7 @@ $ `stdlib/ext/mcp_server.nu`
     ( json_obj_set req `jsonrpc` ( json_str_lit `2.0` ) )
     ( json_obj_set req `method` ( json_str_lit method ) )
     ?? params {
-        T p → { ( json_obj_set req `params` ( json_clone p ) ) }
+        T p → { ( json_obj_set req `params` p ) }  // moved in: freed with req
         F _ → {}
     }
     ^ req

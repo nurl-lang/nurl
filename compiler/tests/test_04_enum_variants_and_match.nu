@@ -165,5 +165,7 @@
     ( puts ( nurl_str_int ( count_clicks evs ) ) )
     ( puts `\n` )
 
+    // Raw boxes: released by hand.
+    ( nurl_free # s e1 ) ( nurl_free # s e2 ) ( nurl_free # s e3 ) ( nurl_free # s e4 ) ( nurl_free # s e5 )
     ^ 0
 }

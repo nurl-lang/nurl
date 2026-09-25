@@ -217,28 +217,28 @@ $ `stdlib/ext/http_server.nu`
 
 // ── offline: Location resolution and the header-blob probe ──────────
 
-@ resolve s base s loc → s {
+@ resolve s base s loc → String {
     ?? ( url_parse base ) {
         T u → {
             : ?String r ( _hp_resolve_redirect u loc )
             ( url_free u )
-            ?? r { T s → ^ ( string_data s ) F _ → ^ `(none)` }
+            ?? r { T s → ^ s F _ → ^ ( string_from `(none)` ) }
         }
-        F _ → ^ `(bad base)`
+        F _ → ^ ( string_from `(bad base)` )
     }
 }
 
 @ offline → v {
-    ( label `abs` ( resolve `http://a/b/c/d;p?q` `https://x.example/y#frag` ) )
-    ( label `scheme_rel` ( resolve `https://a:8443/b/c` `//other/p` ) )
-    ( label `root_rel` ( resolve `https://a:8443/b/c?q` `/g?x=1` ) )
-    ( label `path_rel` ( resolve `http://a/b/c/d;p?q` `g` ) )
-    ( label `dotdot` ( resolve `http://a/b/c/d;p?q` `../g` ) )
-    ( label `dotdot2` ( resolve `http://a/b/c/d;p?q` `../../g` ) )
-    ( label `dotdot_over` ( resolve `http://a/b/c/d;p?q` `../../../g` ) )
-    ( label `dot` ( resolve `http://a/b/c/d;p?q` `./g/.` ) )
-    ( label `query_only` ( resolve `http://a/b/c/d;p?q` `?y` ) )
-    ( label `empty_path_base` ( resolve `http://a` `g` ) )
+    ( label `abs` ( string_data ( resolve `http://a/b/c/d;p?q` `https://x.example/y#frag` ) ) )
+    ( label `scheme_rel` ( string_data ( resolve `https://a:8443/b/c` `//other/p` ) ) )
+    ( label `root_rel` ( string_data ( resolve `https://a:8443/b/c?q` `/g?x=1` ) ) )
+    ( label `path_rel` ( string_data ( resolve `http://a/b/c/d;p?q` `g` ) ) )
+    ( label `dotdot` ( string_data ( resolve `http://a/b/c/d;p?q` `../g` ) ) )
+    ( label `dotdot2` ( string_data ( resolve `http://a/b/c/d;p?q` `../../g` ) ) )
+    ( label `dotdot_over` ( string_data ( resolve `http://a/b/c/d;p?q` `../../../g` ) ) )
+    ( label `dot` ( string_data ( resolve `http://a/b/c/d;p?q` `./g/.` ) ) )
+    ( label `query_only` ( string_data ( resolve `http://a/b/c/d;p?q` `?y` ) ) )
+    ( label `empty_path_base` ( string_data ( resolve `http://a` `g` ) ) )
     ( label `blob_has_ae` ( yn ( _hp_blob_has `Accept-Encoding: gzip\r\n` `accept-encoding` ) ) )
     ( label `blob_has_ae_second` ( yn ( _hp_blob_has `X: 1\r\naccept-encoding: br\r\n` `accept-encoding` ) ) )
     ( label `blob_has_ae_not_value` ( yn ( _hp_blob_has `X: accept-encoding: gzip\r\n` `accept-encoding` ) ) )
