@@ -16705,11 +16705,8 @@
         ^ v }
     {}
     ( __dropif_request vt mangle )
-    : s bc ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print bc ) ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty vt ) )
-    ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print ` to i8*\n` )
     ( nurl_print `  call void @__dropif_` ) ( nurl_print mangle ) ( nurl_print `(i1 ` ) ( nurl_print cond )
-    ( nurl_print `, i8* ` ) ( nurl_print bc ) ( nurl_print `)` ) ( emit_dbg_eol )
+    ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `)` ) ( emit_dbg_eol )
 }
 
 @ __dropif_request s vt s mangle → v {
@@ -16738,9 +16735,8 @@
         // alwaysinline: most conditions are module-end constants, so the
         // inlined branch folds away (a `vec_get`'s own parameter).
         ( nurl_print `define linkonce_odr void @__dropif_` ) ( nurl_print mangle )
-        ( nurl_print `(i1 %c, i8* %p) alwaysinline {\nentry:\n  br i1 %c, label %d, label %x\nd:\n  %t = bitcast i8* %p to ` )
-        ( nurl_print ll ) ( nurl_print `*\n  %v = load ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll )
-        ( nurl_print `* %t\n  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` mangle ) ) )
+        ( nurl_print `(i1 %c, ptr %p) alwaysinline {\nentry:\n  br i1 %c, label %d, label %x\nd:\n  %v = load ` )
+        ( nurl_print ll ) ( nurl_print `, ptr %p\n  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` mangle ) ) )
         ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v)\n  br label %x\nx:\n  ret void\n}\n` )
     }
 }
@@ -30147,6 +30143,7 @@
         ( nurl_print `  br label %x\nx:\n  ret void\n}\n` )
     }
     ( emit_pending_dropifs )
+    ( emit_pending_zero_ifs )
     ( emit_pending_clones syms )
     ? != 0 g_use_clear_if
     { ( nurl_print `define linkonce_odr void @__nurl_clear_if(ptr %k, ptr %f) alwaysinline {\nentry:\n  %c = load i1, ptr %k\n  %o = load i1, ptr %f\n  %n = select i1 %c, i1 0, i1 %o\n  store i1 %n, ptr %f\n  ret void\n}\n` ) } {}
@@ -30254,12 +30251,38 @@
         ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` zeroinitializer, ` ) ( nurl_print fl ) ( nurl_print `* ` ) ( nurl_print g ) ( nurl_print `\n` )
         ^ v
     } {}
-    : s old ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print old ) ( nurl_print ` = load ` ) ( nurl_print fl ) ( nurl_print `, ` ) ( nurl_print fl ) ( nurl_print `* ` ) ( nurl_print g ) ( nurl_print `\n` )
-    : s nv ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print nv ) ( nurl_print ` = select i1 ` ) ( nurl_print cond ) ( nurl_print `, ` ) ( nurl_print fl )
-    ( nurl_print ` zeroinitializer, ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print old ) ( nurl_print `\n` )
-    ( nurl_print `  store ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print nv ) ( nurl_print `, ` ) ( nurl_print fl ) ( nurl_print `* ` ) ( nurl_print g ) ( nurl_print `\n` )
+    // One call, not load / select / store: the condition is nearly always
+    // a module-end flag, and the module writer drops a call whose flag
+    // folds to false in one piece (__ir_fold_range).
+    ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request fl ) )
+    ( nurl_print `(i1 ` ) ( nurl_print cond ) ( nurl_print `, ptr ` ) ( nurl_print g ) ( nurl_print `)\n` )
+}
+
+// `__nurl_zero_if.<n>(i1 c, ptr p)` stores a zero `fl` through `p` when
+// `c` holds — one helper per field type, emitted at module end.
+@ __zero_if_request s fl → s {
+    : s key ( nurl_str_cat `zeroif##` fl )
+    : s known ( nurl_sym_get g_impl_name_syms key )
+    ? != 0 ( nurl_str_len known ) { ^ ( nurl_str_cat known `` ) } {}
+    : i n ( nurl_str_to_int ( nurl_sym_get g_impl_name_syms `zeroif_count` ) )
+    : s id ( nurl_str_int n )
+    ( nurl_sym_def g_impl_name_syms `zeroif_count` ( nurl_str_int + n 1 ) )
+    ( nurl_sym_def g_impl_name_syms key id )
+    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `zeroif#` id ) fl )
+    ^ ( nurl_str_cat id `` )
+}
+
+@ emit_pending_zero_ifs → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_impl_name_syms `zeroif_count` ) )
+    : ~ i k 0
+    ~ < k n {
+        : s id ( nurl_str_int k )
+        : s fl ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `zeroif#` id ) )
+        ( nurl_print `define linkonce_odr void @__nurl_zero_if.` ) ( nurl_print id )
+        ( nurl_print `(i1 %c, ptr %p) alwaysinline {\nentry:\n  br i1 %c, label %z, label %x\nz:\n  store ` )
+        ( nurl_print fl ) ( nurl_print ` zeroinitializer, ptr %p\n  br label %x\nx:\n  ret void\n}\n` )
+        = k + k 1
+    }
 }
 
 // Whether a join arm hands over an owned String / Vec / owning struct, as
@@ -35762,6 +35785,7 @@
 : ~ i g_fold_nf 0
 : ~ i g_fold_fcap 0
 : ~ i g_fold_end 0
+: ~ i g_fold_fn_end 0
 : ~ i g_fold_k 0
 : ~ i g_fold_x 0
 : ~ i g_fold_y 0
@@ -36319,12 +36343,39 @@
             } {}
         } {}
     } {}
-    // The drop of a binding that never owns.
-    ? ( __fold_at ls `  call void @__dropif` 20 ) {
+    // The drop of a binding that never owns; a field zeroed only if a
+    // callee took it, when none does.
+    ? | ( __fold_at ls `  call void @__dropif` 20 ) ( __fold_at ls `  call void @__nurl_zero_if.` 28 ) {
         : i lp ( nurl_memmem_range # s + g_dce_mod ls - le ls `(i1 ` 4 )
         ? >= lp 0 { ? ( __fold_arg_false + + ls lp 4 le ) { ^ v } {} } {}
     } {}
+    // …and the field address computed for it alone, on the line before.
+    ? ( __fold_zeroes_next ls le ) { ^ v } {}
     ( __fold_put_range ls + le 1 part 0 )
+}
+
+// Is [ls, le) `  %rG = getelementptr …` whose only use is the next line,
+// a `__nurl_zero_if` that folds away? mem_zero_field emits the pair.
+@ __fold_zeroes_next i ls i le → b {
+    ? ! ( __fold_at ls `  %r` 4 ) { ^ F } {}
+    : i g ( __fold_reg + ls 2 le )
+    ? < g 0 { ^ F } {}
+    ? ! ( __fold_at g_fold_end ` = getelementptr ` 17 ) { ^ F } {}
+    : i gs + ls 2
+    : i ge g_fold_end
+    : i ns + le 1
+    ? >= ns g_fold_fn_end { ^ F } {}
+    ? ! ( __fold_at ns `  call void @__nurl_zero_if.` 28 ) { ^ F } {}
+    : i rel ( nurl_memmem_range # s + g_dce_mod ns - g_fold_fn_end ns `\n` 1 )
+    ? < rel 0 { ^ F } {}
+    : i ne + ns rel
+    : i lp ( nurl_memmem_range # s + g_dce_mod ns - ne ns `(i1 ` 4 )
+    ? < lp 0 { ^ F } {}
+    ? ! ( __fold_arg_false + + ns lp 4 ne ) { ^ F } {}
+    // `…, ptr %rG)` ends the call.
+    : i n - ge gs
+    ? < - ne ns + n 6 { ^ F } {}
+    ^ & ( __fold_at - - ne n 1 # s + g_dce_mod gs n ) ( __fold_at - - ne n 5 `ptr ` 4 )
 }
 
 // Write function [st, en) with its flags folded.
@@ -36357,6 +36408,7 @@
         } {}
     }
     ? == g_fold_nt 0 { ( __ir_write_range st en part ) ^ v } {}
+    = g_fold_fn_end en
     : ~ i p st
     ~ < p en {
         : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
