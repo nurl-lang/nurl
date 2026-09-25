@@ -11,6 +11,7 @@ $ `stdlib/std/heap.nu`
 : Holder { Item item }
 : Err { i code String msg }
 : Out { i n }
+: HostPort { String host i port }
 
 @ make_item i n → !Item i {
     ? < n 0 { ^ @ !Item i { F n } } {}
@@ -58,6 +59,14 @@ $ `stdlib/std/heap.nu`
     ^ @ !Out Err { T @ Out { n } }
 }
 
+// A join that owns on one path and lends on the other: the binding's
+// flag decides, so a store or return copies only the lent path.
+@ host_or String hp s dflt → HostPort {
+    : String h0 ( string_substr hp 0 ( string_len hp ) )
+    : String h ? == 0 ( string_len h0 ) { ( string_free h0 ) ( string_from dflt ) } { h0 }
+    ^ @ HostPort { h 1 }
+}
+
 @ fill ( Vec Item ) v i n → v {
     : ~ i k 0
     ~ < k n { ( vec_push [Item] v @ Item { k ( string_from `x` ) } ) = k + k 1 }
@@ -96,6 +105,12 @@ $ `stdlib/std/heap.nu`
     : ?Item a ? > ( vec_len [Item] v ) 2 { ( vec_remove [Item] v 0 ) } { ( vec_remove [Item] v 1 ) }
     ?? a { T x → { ( nurl_print ( string_data . x name ) ) ( nurl_print_int . x id ) ( nurl_print `\n` ) } F → {} }
     ( nurl_print_int ( vec_len [Item] v ) ) ( nurl_print `\n` )
+
+    : String named ( string_from `host` )
+    : String empty ( string_new )
+    : HostPort x ( host_or named `dflt` )
+    : HostPort y ( host_or empty `dflt` )
+    ( nurl_print ( string_data . x host ) ) ( nurl_print ` ` ) ( nurl_print ( string_data . y host ) ) ( nurl_print `\n` )
 
     // heap_pop hands out the root it took and forgets the moved tail slot.
     : ( Heap String ) hp ( heap_new [String] )

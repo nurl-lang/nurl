@@ -3549,7 +3549,7 @@
         // Only a binding that may hold ANOTHER LOCAL's value — a join, a
         // field of a local struct. A payload or element alias keeps the
         // older contract (its owner is not tracked here).
-        | == 0 ( nurl_str_len rsb ) ( seq rsb `local` ) {
+        | | == 0 ( nurl_str_len rsb ) ( seq rsb `local` ) ( seq rsb `dyn` ) {
             ? ( seq ( nurl_sym_get2 syms rup `__sborrow` ) `local` )
             { = val ( mem_emit_cloneif cg rty val `1` ) }
             { : s rf ( mem_udrop_flag_get syms cg rup )
@@ -16305,7 +16305,9 @@
     ? & & ( __is_handle_ty ty ) | == rhs_tt TT_QUESTQUEST == rhs_tt TT_QUEST != 0 ( nurl_sym_len syms `__last_join_own__` ) {
         : s jo ( nurl_sym_get syms `__last_join_own__` )
         ( mem_udrop_flag_set syms cg ptr jo )
-        ( __sb syms ptr `` )
+        // Owned on some paths, lent on others (`{ ( string_from d ) } { h0 }`):
+        // whether it owns is its flag, which a store or return consults.
+        ( __sb syms ptr `dyn` )
         ^ v } {}
     // `# T x` of an owning T binding: a cursor over x and whatever x is a
     // cursor over, so consuming a field through it takes the owner along.

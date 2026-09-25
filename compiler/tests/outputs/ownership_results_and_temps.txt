@@ -8,4 +8,5 @@ tried failed -2
 bad input
 x3
 3
+host dflt
 abc
