@@ -652,16 +652,15 @@ $ `stdlib/ext/http2_hpack.nu`
         != 0 ( __h2c_eq_ci nm `upgrade` )
         != 0 ( __h2c_eq_ci nm `proxy-connection` )
         ? is_hop {} {
-            : String lower ( string_to_lower . h name )
-            : Header checked @ Header { lower . h value }
-            ? | == ( string_get lower 0 ) 58 ! ( __h2c_header_valid checked ) {
-                ( string_free lower )
+            // `checked` owns its lowered name and a copy of the value, and
+            // moves into `all` once valid (dropped on the reject path).
+            : Header checked @ Header { ( string_to_lower . h name ) ( string_from ( string_data . h value ) ) }
+            ? | == ( string_get . checked name 0 ) 58 ! ( __h2c_header_valid checked ) {
                 ( vec_free_with [Header] all \ Header hh → v { ( header_free hh ) } )
                 ( vec_free [u] body )
                 ^ @ !i H2ClientErr { F # H2ClientErr H2CProtocol }
             } {}
-            ( vec_push [Header] all ( header_new ( string_data lower ) ( string_data . h value ) ) )
-            ( string_free lower )
+            ( vec_push [Header] all checked )
         }
         = k + k 1
     }
