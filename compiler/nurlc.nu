@@ -19918,7 +19918,36 @@
     ? & & indirect == __fs_tt TT_DOT == 0 ( nurl_str_len ( nurl_sym_get syms `__last_field_read__` ) )
     { = __fs_wb T } {}
     ? __fs_putback { = __fs_wb T } {}
-    ? & ! manual ! __fs_wb
+    // `= . s f . d g`: a field of a local this function owns (or of an
+    // option / result payload it takes over) moves — zeroed at the source
+    // when the source owns it, copied only when the source only borrows.
+    : ~ b __fs_moved F
+    ? & & ! manual ! __fs_wb == __fs_tt TT_DOT {
+        : ~ s __ffr ( nurl_str_cat ( nurl_sym_get syms `__last_field_read__` ) `` )
+        : s __fsp ( str_first_word __ffr ) = __ffr ( str_skip_word __ffr )
+        : s __fst ( str_first_word __ffr ) = __ffr ( str_skip_word __ffr )
+        : s __fsi ( str_first_word __ffr ) = __ffr ( str_skip_word __ffr )
+        : s __fsf ( str_first_word __ffr )
+        // Only a payload of an option / result binding (`T dd → …`),
+        // which is taken apart, not kept around and read again.
+        : ~ b __fs_payload F
+        : ~ s __fal ( nurl_sym_get2 syms __fsp `__alias` )
+        ~ != 0 ( nurl_str_len __fal ) {
+            : s __fw ( str_first_word __fal ) = __fal ( str_skip_word __fal )
+            ? != 0 ( nurl_str_starts ( nurl_sym_get2 syms __fw `__udty` ) `%__opt.` ) { = __fs_payload T } {}
+        }
+        ? & & & & __fs_payload != 0 ( nurl_str_len __fsp ) ( __is_handle_ty __fsf )
+        ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) __fsp ) == 0 ( nurl_sym_len2 syms __fsp `__pname` ) {
+            ( mem_udrop_takeover_opt syms cg __fsp )
+            : s __fo ( mem_udrop_flag_get syms cg __fsp )
+            ( mem_zero_field cg __fsp __fst __fsi __fsf __fo )
+            : s __fl ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __fl ) ( nurl_print ` = xor i1 ` ) ( nurl_print __fo ) ( nurl_print `, 1\n` )
+            = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v __fl )
+            = __fs_moved T
+        } {}
+    } {}
+    ? & & ! manual ! __fs_wb ! __fs_moved
     { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v ( mem_lent_cond syms cg __fs_ty __fs_tt __fs_val ) ) } {}
     ( origin_guard_barrier ( origin_expr syms __fs_tt __fs_val ) )
     // A parameter stored into a heap object this function made itself
