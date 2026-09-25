@@ -70,6 +70,9 @@ $ `stdlib/std/quic_conn.nu`
     ( vec_free [i] . s conns )
     ( map_free [i i] . s by_cid )
     ( vec_free [u] . s alpn_prefs )
+    // The event closure stored at creation is the server's own copy.
+    : ( @ v i i ) ev . s on_event
+    ( nurl_closure_drop # *u ev 1 )
     ( nurl_free # s s )
 }
 

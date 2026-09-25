@@ -160,10 +160,14 @@ $ `stdlib/core/vec.nu`
     : !UdpSocket NetErr sr ( udp_bind `` 0 )
     : !UdpSocket NetErr cr ( udp_bind `127.0.0.1` 0 )
     ?? sr {
-        F e → { ( pr_str `server_bind` ( net_err_name e ) ) ^ 1 }
+        F e → {
+            ( pr_str `server_bind` ( net_err_name e ) )
+            ?? cr { T c → ( udp_close c ) F _ → {} }
+            ^ 1
+        }
         T srv → {
             ?? cr {
-                F e → { ( pr_str `client_bind` ( net_err_name e ) ) ^ 1 }
+                F e → { ( pr_str `client_bind` ( net_err_name e ) ) ( udp_close srv ) ^ 1 }
                 T cli → {
                     : String slocal ( udp_local_addr srv )
                     : i sport ( port_of slocal )
