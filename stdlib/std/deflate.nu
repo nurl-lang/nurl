@@ -579,6 +579,7 @@ $ `stdlib/std/bytes.nu`
     : i err . st err
     : i consumed . st pos
     : ( Vec u ) out . st out
+    ( mem_take out )  // st is released by hand: out is the only owner
     ( nurl_free # s st )
     ? != err 0 {
         ( vec_free [u] out )
@@ -855,6 +856,7 @@ $ `stdlib/std/bytes.nu`
     ( __df_lz77_block w src 1 0 )
     ( __df_flush w )
     : ( Vec u ) out . w out
+    ( mem_take out )  // w is released by hand: out is the only owner
     ( nurl_free # s w )
     ^ out
 }
@@ -885,6 +887,7 @@ $ `stdlib/std/bytes.nu`
     ( vec_push [u] . w out # u 255 )
     ( vec_push [u] . w out # u 255 )
     : ( Vec u ) out . w out
+    ( mem_take out )  // w is released by hand: out is the only owner
     ( vec_free [u] combined )
     ( nurl_free # s w )
     ^ out
