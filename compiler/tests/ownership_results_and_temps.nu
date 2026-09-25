@@ -37,7 +37,8 @@ $ `stdlib/std/heap.nu`
 @ tried i n → !i i {
     : String kept ( string_from `kept` )
     : i v \ ( check_n n )
-    ^ @ !i i { T + v ( string_len kept ) }
+    : i total + v ( string_len kept )
+    ^ @ !i i { T total }
 }
 
 @ fail_op i n → !v Err {
