@@ -120,41 +120,47 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
+// The fmtN helpers pass copies of their arguments through the Vec (and
+// free them here), so a caller's temporary is only read, never kept.
+@ __fmt_args_free sink ( Vec s ) v → v {
+    ( vec_free_with [s] v \ s x → v { ( nurl_free x ) } )
+}
+
 @ fmt1 s tmpl s a → String {
     : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v a )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
     : String r ( fmt tmpl v )
-    ( vec_free [s] v )
+    ( __fmt_args_free v )
     ^ r
 }
 
 @ fmt2 s tmpl s a s b → String {
     : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
     : String r ( fmt tmpl v )
-    ( vec_free [s] v )
+    ( __fmt_args_free v )
     ^ r
 }
 
 @ fmt3 s tmpl s a s b s c → String {
     : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
-    ( vec_push [s] v c )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
+    ( vec_push [s] v ( nurl_str_cat c `` ) )
     : String r ( fmt tmpl v )
-    ( vec_free [s] v )
+    ( __fmt_args_free v )
     ^ r
 }
 
 @ fmt4 s tmpl s a s b s c s d → String {
     : ( Vec s ) v ( vec_with_cap [s] 4 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
-    ( vec_push [s] v c )
-    ( vec_push [s] v d )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
+    ( vec_push [s] v ( nurl_str_cat c `` ) )
+    ( vec_push [s] v ( nurl_str_cat d `` ) )
     : String r ( fmt tmpl v )
-    ( vec_free [s] v )
+    ( __fmt_args_free v )
     ^ r
 }
 

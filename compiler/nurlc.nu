@@ -8444,15 +8444,14 @@
     : s name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
-    : ~ s up ( mem_udrop_ptr_of syms name )
     // Not tracked yet (a payload of a known borrow): register it now.
     : s tty ( nurl_sym_get syms name )
     : s tptr ( nurl_sym_get2 syms name `__ptr` )
-    ? & & & == 0 ( nurl_str_len up ) != 0 g_auto_drop_strings ( __is_handle_ty tty ) != 0 ( nurl_str_len tptr ) {
+    ? & & & == 0 ( nurl_str_len ( mem_udrop_ptr_of syms name ) ) != 0 g_auto_drop_strings ( __is_handle_ty tty ) != 0 ( nurl_str_len tptr ) {
         ( __handle_drop_ensure tty )
         ( mem_own_add_user_drop syms cg tptr tty )
-        = up tptr
     } {}
+    : s up ( mem_udrop_ptr_of syms name )
     ? != 0 ( nurl_str_len up ) {
         ( mem_udrop_flag_set syms cg up `1` )
         ( __sb syms up `` )
@@ -9822,6 +9821,8 @@
             // the callee keeps the argument (mem_note_kept_arg).
             : s __aas_saved ( nurl_sym_get syms `__agg_arg_sink__` )
             ( nurl_sym_def syms `__deferred_temps__` `` )
+            // `( f ( dyn Trait v ) )`: the box dyn allocates is a temporary.
+            ( nurl_sym_def syms `__arg_dyn_box__` ? & == bck_arg_tt TT_LPAREN ( seq ( nurl_lex_peek_val lex ) `dyn` ) `1` `` )
             ( nurl_sym_def syms `__agg_arg_sink__` ? == bck_arg_tt TT_AT
             ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) `` )
             = av ( gen_operand lex syms cg )
@@ -10712,6 +10713,25 @@
         : s __crt ( nurl_sym_get syms call_name )
         : b __scalar_ret | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` )
         | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` )
+        // A trait object boxed right in the argument: its box is freed after
+        // the call unless the callee keeps the argument (argdrop).
+        ? & & != 0 g_auto_drop_strings ! __callee_shadowed
+        & ( seq ( nurl_sym_get syms `__arg_dyn_box__` ) `1` ) != 0 ( nurl_str_starts at `%dyn.` ) {
+            : s __db ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __db ) ( nurl_print ` = extractvalue ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 0\n` )
+            // A trait-object parameter is dropped by a callee that sinks it
+            // and kept by one that stores it; otherwise it is only read.
+            : s __dsk ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __dsk )
+            : s __dst ( nurl_cg_reg cg )
+            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) __dst )
+            : s __dkp ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __dkp ) ( nurl_print ` = or i1 ` ) ( nurl_print __dsk ) ( nurl_print `, ` ) ( nurl_print __dst ) ( nurl_print `\n` )
+            : s __dbo ( nurl_cg_reg cg )
+            ( emit_sink_owner_select __dkp `i8*` `null` __db __dbo )
+            = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) ( nurl_str_cat __dbo `` ) ( nurl_str_cat3 owned_arg_temps ` ` __dbo )
+        } {}
+        ( nurl_sym_def syms `__arg_dyn_box__` `` )
         // A temporary an inner call could not drop (it returned a view of
         // it: `( string_data ( mk ) )`) lives until this call is done —
         // when this call returns nothing that can point into it and
@@ -19552,10 +19572,14 @@
         // bare-identifier RHS may alias the old heap and is left alone.
         // nurl_free auto-forgets the journal entry, so a later panic
         // cannot replay the freed buffer.
+        // A different binding that owns its own buffer (`= ys zs`) cannot
+        // alias the old one either: that move frees it too.
+        : b rhs_other_owner & & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
+        ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_rhs_val )
         ? & lhs_is_owned_slc
-        | | == bck_rhs_tt TT_LBRACK
+        | | | == bck_rhs_tt TT_LBRACK
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
-        rhs_slice_owned
+        rhs_slice_owned rhs_other_owner
         { ( mem_emit_slice_free syms cg name ) }
         {}
         // `= name x` where x is a TRACKED owned string and `name` is

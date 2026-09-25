@@ -166,6 +166,6 @@
     ( puts `\n` )
 
     // Raw boxes: released by hand.
-    ( nurl_free # s e1 ) ( nurl_free # s e2 ) ( nurl_free # s e3 ) ( nurl_free # s e4 ) ( nurl_free # s e5 )
+    ( nurl_free # s e1 ) ( nurl_free # s e2 ) ( nurl_free # s e3 ) ( nurl_free # s e4 ) ( nurl_free # s e5 ) ( nurl_free # s e6 )
     ^ 0
 }

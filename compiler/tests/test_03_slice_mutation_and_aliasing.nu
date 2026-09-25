@@ -149,5 +149,7 @@
     ( puts `doubled: ` )
     ( print_slice dbl )  // 0 2 4 6 8 10 12 14 16 18
 
+    // Built over raw malloc buffers: released by hand.
+    ( nurl_free # s . built 0 ) ( nurl_free # s . dbl 0 )
     ^ 0
 }
