@@ -2703,6 +2703,18 @@ static __thread long long nurl__ret_owned;
 long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
 void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
 
+/* Per-call ownership of a returned handle (String / Vec / owning struct or
+ * enum, or an option of one), published by a callee whose paths differ
+ * (docs/MEMORY.md §7.6). Kept apart from the string proof above: a caller
+ * reads that one for callees that never publish it. */
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+static long long nurl__ret_hown;
+#else
+static __thread long long nurl__ret_hown;
+#endif
+long long nurl_ret_hown_get(void) { return nurl__ret_hown; }
+void nurl_ret_hown_set(long long own) { nurl__ret_hown = own; }
+
 /* Closure environments (docs/MEMORY.md §7.4). A capturing closure's env is
  * one heap block whose first word points at a compiler-emitted descriptor:
  * the block's size, and two optional thunks over the captures that are
@@ -3155,6 +3167,19 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     }
     if (data && data != (void*)((char*)ctl + 24)) nurl_free(data);
     nurl_free(ctl);
+}
+
+/* Empty slot `idx` of a Vec whose element was handed to a consumer while
+ * the Vec still held it (a `vec_get` payload freed by hand): the Vec's own
+ * drop then skips it. Looked up through the control block at this moment,
+ * so a buffer that moved since the read is still addressed correctly.
+ * [off, off+n) is the part emptied: the element, or one field of it. */
+void nurl_vec_slot_clear_if(int cond, void *ctl, long long idx, long long esize,
+                            long long off, long long n) {
+    if (!cond || !ctl || idx < 0 || esize <= 0 || off < 0 || n <= 0 || off + n > esize) return;
+    long long *c = (long long*)ctl;
+    if (idx >= c[1]) return;
+    memset((char*)(intptr_t)c[0] + idx * esize + off, 0, (size_t)n);
 }
 
 /* Deep copy of a Vec / String control block (docs/MEMORY.md §7.6): the

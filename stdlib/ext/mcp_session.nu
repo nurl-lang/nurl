@@ -86,6 +86,15 @@ $ `stdlib/core/vec.nu`
     ^ @ McpSessionStore { ( vec_new [McpSession] ) }
 }
 
+// Write a session read out of the store (vec_get) and updated back into
+// its slot. `se` is the slot's own value: it goes back as is, the store
+// still owns it — neither copied nor dropped (docs/MEMORY.md §7.6).
+@ __mcp_session_put McpSessionStore store i idx McpSession se → v {
+    : *McpSession sp ( vec_data [McpSession] . store sessions )
+    ( mem_put_back se )
+    = . sp idx se
+}
+
 @ __mcp_session_find McpSessionStore store s sid → i {
     : i n ( vec_len [McpSession] . store sessions )
     : ~ i k 0
@@ -172,7 +181,7 @@ $ `stdlib/core/vec.nu`
     ?? so {
         T se → {
             = . se last_ms now
-            ( vec_set [McpSession] . store sessions idx se )
+            ( __mcp_session_put store idx se )
             ^ T
         }
         F → { ^ F }
@@ -229,12 +238,12 @@ $ `stdlib/core/vec.nu`
             : ~ i k 0
             ~ < k n {
                 : ?Json e ( vec_get [Json] . se notify k )
-                ?? e { T j → ( vec_push [Json] out j ) F → {} }
+                // Each message moves out of the queue into `out`…
+                ?? e { T j → { ( mem_take j ) ( vec_push [Json] out j ) } F → {} }
                 = k + k 1
             }
-            // vec_clear drops the length without freeing elements — they
-            // now live solely in `out`.
-            ( vec_clear [Json] . se notify )
+            // …so the queue only forgets them.
+            ( vec_set_len [Json] . se notify 0 )
         }
         F → {}
     }
@@ -280,7 +289,6 @@ $ `stdlib/core/vec.nu`
                 ?? e {
                     T j → {
                         : String f ( mcp_sse_frame_id next `message` j )
-                        ( json_free j )
                         ( vec_push [i] . se backlog_ids next )
                         ( vec_push [String] . se backlog_frames ( string_from ( string_data f ) ) )
                         ( vec_push [String] out f )
@@ -300,7 +308,7 @@ $ `stdlib/core/vec.nu`
             // Vec pushes ride the heap-stable ctl; the id allocator is a
             // scalar field, so write the struct copy back.
             = . se next_event_id next
-            ( vec_set [McpSession] . store sessions idx se )
+            ( __mcp_session_put store idx se )
         }
         F → {}
     }
@@ -462,7 +470,7 @@ $ `stdlib/core/vec.nu`
             ( vec_push [Json] . se notify env )
             ( vec_push [i] . se pending_ids id )
             = . se next_rpc_id + id 1
-            ( vec_set [McpSession] . store sessions idx se )
+            ( __mcp_session_put store idx se )
             ^ id
         }
         F → { ( json_free params ) ^ -1 }
@@ -620,9 +628,11 @@ $ `stdlib/core/vec.nu`
     : ~ i k 0
     ~ < k n {
         : ?Json e ( vec_get [Json] messages k )
-        ?? e { T j → ( json_arr_push arr j ) F → {} }
+        // Each message moves from `messages` into the array…
+        ?? e { T j → { ( mem_take j ) ( json_arr_push arr j ) } F → {} }
         = k + k 1
     }
+    // …so only the buffer is left to free.
     ( vec_free [Json] messages )
     : Json params ( json_obj_new )
     ( json_obj_set params `messages` arr )

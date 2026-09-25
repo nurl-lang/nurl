@@ -272,5 +272,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
         ?? ( vec_get [V] . c vals cur ) { T v → ( drop v ) F _ → {} }
         = cur nx
     }
+    // `drop` took every value: the arrays release only their buffers.
+    ( vec_set_len [V] . c vals 0 )
     ( __lru_free_arrays [V] c )
 }

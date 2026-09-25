@@ -319,8 +319,7 @@ $ `stdlib/ext/http_cli.nu`
         }
         = ci + ci 1
     }
-    ( vec_extend [String] scope here )
-    ( vec_free [String] here )
+    ( vec_append [String] scope here )
     : !( Vec String ) IoErr lr ( dir_list ( string_data dir ) )
     : ~ i rc 0
     ?? lr {

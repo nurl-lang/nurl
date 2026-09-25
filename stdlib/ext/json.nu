@@ -268,27 +268,10 @@ $ `stdlib/core/vec.nu`
 // inside are pointers); after the call, the handle should not be
 // reused.
 
-@ __json_free_vec ( Vec Json ) v → v {
-    : i len ( vec_len [Json] v )
-    : *Json buf ( vec_data [Json] v )
-    : ~ i k 0
-    ~ < k len {
-        ( json_free . buf k )
-        = k + k 1
-    }
-    ( vec_free [Json] v )
-}
-
-@ json_free sink Json j → v {
-    ?? j {
-        JNull → {}
-        JBool _ → {}
-        JNum s → ( string_free s )
-        JStr s → ( string_free s )
-        JArr v → ( __json_free_vec v )
-        JObj v → ( __json_free_vec v )
-    }
-}
+// Early release. A Json owns its strings and children and is dropped by
+// whoever owns it (docs/MEMORY.md §7.6); taking it here as `sink` is what
+// releases it now — the parameter is dropped on the way out.
+@ json_free sink Json j → v {}
 
 // ── Parser state ─────────────────────────────────────────────────────
 //

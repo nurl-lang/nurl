@@ -75,6 +75,9 @@ $ `stdlib/core/vec.nu`
     : ( Vec String ) vs ( vec_new [String] )
     ( vec_push [String] vs ( string_from `aa` ) )
     ( run_each [String] vs \ String s → v { ( nurl_print `gen-s ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` ) ( string_free s ) } )
+    // The callback took every element (vec_free_with's contract): the Vec
+    // releases only its buffer.
+    ( vec_set_len [String] vs 0 )
     ( vec_free [String] vs )
 
     ( binding_case )

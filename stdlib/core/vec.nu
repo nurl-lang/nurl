@@ -59,7 +59,7 @@
 //   ( vec_pop [A] v )              → ? A        None if empty
 //   ( vec_insert [A] v idx x )     → b          F if idx out of range; idx == len → push
 //   ( vec_remove [A] v idx )       → ? A        None if idx out of range
-//   ( vec_clear [A] v )            → v          sets len=0, keeps cap
+//   ( vec_clear [A] v )            → v          drops the elements, len=0, keeps cap
 //   ( vec_set_len [A] v n )        → b          commit raw-pointer writes
 //                                                up to index n; F when n
 //                                                is negative or > current
@@ -78,6 +78,8 @@
 //   ( vec_extend [A] dst src )     → v          bitwise copy of src's elements
 //                                                onto dst (trivial element types
 //                                                only — same caveat as vec_map)
+//   ( vec_append [A] dst src )     → v          MOVE every element of src onto
+//                                                dst; src is consumed (any A)
 //
 //   Equality (closure-based, mirrors HashMap eq_fn convention):
 //   ( vec_contains [A] v target eq_fn ) → b     eq_fn : (@ b A A)
@@ -411,7 +413,19 @@
 }
 
 @ vec_clear [A] ( Vec A ) v → v {
-    ( nurl_poke . v ctl 1 0 )
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    : *A data # *A ( nurl_peek ctl 0 )
+    // Length first, so a drop that reaches `v` sees it empty.
+    ( nurl_poke ctl 1 0 )
+    // The elements leave with the length: each is dropped (a no-op, and no
+    // loop, for elements that own nothing).
+    : ~ i k 0
+    ~ < k len {
+        : A e . data k
+        ( mem_take e )
+        = k + k 1
+    }
 }
 
 // Commit a raw write that the caller performed via `vec_data` directly
@@ -597,24 +611,24 @@
     } {}
 }
 
+// Move every element of `src` onto the end of `dst`, then release `src`'s
+// buffer: the elements change owner, nothing is cloned or dropped. This is
+// the vec_extend for element types that own something — one memcpy-shaped
+// loop and one free, where extend-then-free would drop what it just copied.
+@ vec_append [A] ( Vec A ) dst sink ( Vec A ) src → v {
+    ( vec_extend [A] dst src )
+    // The elements live in `dst` now; `src` leaves empty.
+    ( nurl_poke . src ctl 1 0 )
+}
+
 // ── Cleanup ─────────────────────────────────────────────────────────
 
-@ vec_free [A] sink ( Vec A ) v → v {
-    // This IS the disposer: it releases the parts by hand below, so the
-    // handle is not dropped again on the way out (docs/MEMORY.md §7.6).
-    ( mem_forget v )
-    : s ctl . v ctl
-    : s data ( __vec_data_raw ctl )
-    // A borrowed view (vec_borrow_raw) never owned its buffer: release
-    // the handle only.
-    // `string_from_bytes_packed` (core/string.nu) lays the data
-    // buffer immediately after the 24-byte ctl in a single alloc.
-    // Detect that case (data == ctl + 24) and skip the separate
-    // buffer-free — both regions live in the one block freed below.
-    : i ctl_end + # i ctl 24
-    ? & ! ( __vec_is_borrowed ctl ) & != 0 # i data != # i data ctl_end { ( nurl_free data ) } {}
-    ( nurl_free ctl )
-}
+// Early release: exactly what dropping `v` does — its elements are dropped
+// (for elements that own nothing that is no work), then the buffer and the
+// handle (docs/MEMORY.md §7.6). The `sink` parameter is dropped on the way
+// out; a borrowed view (vec_borrow_raw) releases only its handle, and a
+// packed String buffer is freed with its control block (nurl_vec_drop).
+@ vec_free [A] sink ( Vec A ) v → v {}
 
 // Drop-aware free: invokes `drop` for every live element in [0..len)
 // before releasing the buffer + control block. Pass a closure that

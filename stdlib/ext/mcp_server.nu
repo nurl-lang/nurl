@@ -546,7 +546,9 @@ $ `stdlib/ext/http_response.nu`
     ( vec_free [i] . r __ctl )
     ( string_free . r __instructions )
     ( string_free . r __cache_scope )
-    // The task store is borrowed — freed by whoever created it.
+    // The task store is borrowed — freed by whoever created it — so the
+    // slot is forgotten, not dropped, before the vector goes.
+    ( vec_set_len [McpTaskStore] . r __tasks 0 )
     ( vec_free [McpTaskStore] . r __tasks )
     ( vec_free [McpTaskHook] . r __task_hook )
 }
@@ -731,7 +733,8 @@ b read_only b destructive b idempotent b open_world
 // task state is only current after it polls something; pass
 // `\ → v {}` when there is nothing to do.
 @ mcp_server_set_task_store McpServer r McpTaskStore store ( @ v ) hook → v {
-    ( vec_clear [McpTaskStore] . r __tasks )
+    // Borrowed: a previous store is forgotten, never dropped.
+    ( vec_set_len [McpTaskStore] . r __tasks 0 )
     ( vec_push [McpTaskStore] . r __tasks store )
     ( vec_clear [McpTaskHook] . r __task_hook )
     ( vec_push [McpTaskHook] . r __task_hook @ McpTaskHook { hook } )
@@ -1048,7 +1051,7 @@ b read_only b destructive b idempotent b open_world
         }
     }
     ? > ( vec_len [Json] sink ) 0 {
-        : ?Json e0 ( vec_get [Json] sink 0 )
+        : ?Json e0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
         ?? e0 { T jv → { ( json_free result ) = result jv } F → {} }
     } {}
     ( vec_free [Json] sink )
@@ -1200,7 +1203,7 @@ b read_only b destructive b idempotent b open_world
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `prompt handler panicked` ) }
     } {}
-    : ?Json e0 ( vec_get [Json] sink 0 )
+    : ?Json e0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
     : Json result ?? e0 { T jv → jv F → ( json_obj_new ) }
     ( vec_free [Json] sink )
     ^ @ !Json McpRpcErr { T result }
@@ -1282,7 +1285,7 @@ b read_only b destructive b idempotent b open_world
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `resource template handler panicked` ) }
     } {}
-    : ?Json c0 ( vec_get [Json] sink 0 )
+    : ?Json c0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
     : Json content ?? c0 { T jv → jv F → ( json_null ) }
     ( vec_free [Json] sink )
     // A handler that cannot serve this particular URI says so by
@@ -1367,7 +1370,7 @@ b read_only b destructive b idempotent b open_world
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `resource handler panicked` ) }
     } {}
-    : ?Json c0 ( vec_get [Json] sink 0 )
+    : ?Json c0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
     : Json content ?? c0 { T jv → jv F → ( json_null ) }
     ( vec_free [Json] sink )
     // Ensure the content has the expected fields. If handler didn't
@@ -1459,7 +1462,7 @@ b read_only b destructive b idempotent b open_world
         }
     }
     ? > ( vec_len [Json] sink ) 0 {
-        : ?Json e0 ( vec_get [Json] sink 0 )
+        : ?Json e0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
         ?? e0 { T jv → { ( json_free values ) = values jv } F → {} }
     } {}
     ( vec_free [Json] sink )
