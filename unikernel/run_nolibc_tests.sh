@@ -62,6 +62,16 @@ one() {
     work="$OUTDIR/work/$name"
     mkdir -p "$work"
     [ -f "$golden" ] || { echo "SKIP $name (no golden)"; return 0; }
+    # A peer on a real thread over the host kernel's TCP: the duplex test
+    # checks SO_SNDBUF, which the NURL socket layer deliberately does not
+    # have (it owns its queues — unikernel/net/sockets.nu), and the
+    # streaming test bounds a deadline in wall-clock time that a
+    # cooperative thread (runtime_bare.c §10) only reaches once the
+    # main thread blocks.
+    case "$name" in
+        http2_client_duplex|http2_client_streaming)
+            echo "SKIP $name (needs preemptive threads over host TCP)"; return 0 ;;
+    esac
     # Only run a test whose golden says what running it should DO. Ask
     # the GOLDEN, not the name: run_san_tests.sh settled that rule
     # already — "should_fail_*, diag_*, borrow_*, and whatever

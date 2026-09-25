@@ -181,10 +181,12 @@ struct NbCoro {
     int          owns_env;        /* free env after the body returns    */
 };
 
-/* The NURL allocator, not free(): an owned closure environment came out
- * of nurl_alloc and its header is not malloc's. Declared rather than
+/* An owned closure environment is a copy the spawn made with
+ * nurl_closure_clone; nurl_closure_drop releases it with everything it
+ * captured (runtime_core.c, docs/MEMORY.md §7.4). Declared rather than
  * included because this file has no libc to include it from. */
-extern void nurl_free(char *p);
+extern void *nurl_closure_clone(void *env);
+extern void  nurl_closure_drop(void *env);
 
 /* Defined in §8 — named here because §7's scheduler step performs the
  * parked-with-mutex handoff. A forward declaration, not an `extern`
@@ -349,7 +351,7 @@ static void nb_entry(void *arg) {
      * done. A fiber spawned per connection captures its connection in a
      * heap environment nobody else holds, so "nobody frees it" is one
      * leak per request. */
-    if (c->owns_env && c->env) { nurl_free((char *)c->env); c->env = 0; }
+    if (c->owns_env && c->env) { nurl_closure_drop(c->env); c->env = 0; }
     c->finished = 1;
     c->state = NB_DONE;
 #ifdef NURL_BARE_ASAN
@@ -756,6 +758,21 @@ int pthread_create(void *tp, void *attr, void *start, void *arg) {
     return 0;
 }
 
+/* The thread runs on its OWN copy of the closure env and drops it when
+ * the body returns; the spawner's env stays the spawner's — the same
+ * contract as runtime_ffi.c's nurl_pthread_create_owned. */
+int nurl_pthread_create_owned(void *tp, void *fn, void *env) {
+    if (!tp || !fn) return 22;
+    void *own = nurl_closure_clone(env);
+    NbCoro *c = nb_coro_new(fn, own, 1);
+    if (!c) { nurl_closure_drop(own); return 11; }   /* EAGAIN */
+    c->owns_env = 1;
+    nb_live++;
+    nb_rq_push(c);
+    *(void **)tp = c;
+    return 0;
+}
+
 static int nb_coro_finished(void *cp) { return ((NbCoro *)cp)->finished; }
 
 static int nb_join(NbCoro *c) {
@@ -892,11 +909,15 @@ static void nb_spawn_failed(void) {
     abort();
 }
 
+/* Every spawn runs on its OWN copy of the closure env, dropped after the
+ * body returns: the spawner's env stays the spawner's (runtime_ffi.c's
+ * nurl_fiber_spawn, docs/MEMORY.md §7.4). */
 long long nurl_fiber_spawn(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
-    NbCoro *c = nb_coro_new(fn, env, 0);
+    NbCoro *c = nb_coro_new(fn, nurl_closure_clone(env), 0);
     if (!c) nb_spawn_failed();
+    c->owns_env = 1;
     nb_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;
@@ -911,7 +932,7 @@ long long nurl_fiber_spawn(void *fn, void *env) {
 long long nurl_fiber_spawn_owned(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
-    NbCoro *c = nb_coro_new(fn, env, 0);
+    NbCoro *c = nb_coro_new(fn, nurl_closure_clone(env), 0);
     if (!c) nb_spawn_failed();
     c->owns_env = 1;
     nb_live++;
@@ -922,8 +943,9 @@ long long nurl_fiber_spawn_owned(void *fn, void *env) {
 long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
-    NbCoro *c = nb_coro_new(fn, env, 1);
+    NbCoro *c = nb_coro_new(fn, nurl_closure_clone(env), 1);
     if (!c) nb_spawn_failed();
+    c->owns_env = 1;
     nb_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;
