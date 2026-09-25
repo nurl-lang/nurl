@@ -383,14 +383,12 @@ $ `stdlib/std/simd.nu`
     ( string_clear . req path )
     ( string_clear . req query )
     ( string_clear . req version )
-    : i n ( vec_len [Header] . req headers )
-    : *Header hd ( vec_data [Header] . req headers )
-    : ~ i k 0
-    ~ < k n {
-        ( vec_push [Header] spare . hd k )
-        = k + k 1
+    ~ > ( vec_len [Header] . req headers ) 0 {
+        ?? ( vec_pop [Header] . req headers ) {
+            T h → ( vec_push [Header] spare h )
+            F _ → {}
+        }
     }
-    ( vec_clear [Header] . req headers )
     ( vec_clear [u] . req body )
 }
 
@@ -757,7 +755,6 @@ $ `stdlib/std/simd.nu`
     : ( Vec Header ) hs ( vec_new [Header] )
     : ( Vec Header ) spare ( vec_new [Header] )
     : i status ( __parse_headers_into buf from head_end header_max hs spare )
-    ( vec_free [Header] spare )
     ^ @ ParsedHeaders { hs status }
 }
 
@@ -859,7 +856,6 @@ $ `stdlib/std/simd.nu`
     : HttpRequest req ( request_new )
     : ( Vec Header ) spare ( vec_new [Header] )
     : !i HttpReqErr r ( parse_request_head_into buf limits req spare )
-    ( vec_free [Header] spare )
     ?? r {
         T consumed → { ^ @ !ParsedHeadOk HttpReqErr { T @ ParsedHeadOk { req consumed } } }
         F e → {

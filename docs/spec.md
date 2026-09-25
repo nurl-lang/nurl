@@ -1770,7 +1770,9 @@ whichever way it leaves:
   `? T` / `! T E` returned by a call owns its payload in the arm that
   binds it;
 - `( mem_forget x )` gives up `x`'s value for good — for a hand-written
-  disposer, or a table kept in a global for the program's lifetime.
+  disposer, or a table kept in a global for the program's lifetime;
+- `( mem_take x )` claims `x`'s value — for a container operation that
+  hands an element out (`vec_pop`), so the element is owned, not lent.
 
 See [`docs/MEMORY.md` §7.6](MEMORY.md) for the complete rules and
 [`docs/LIMITATIONS.md`](LIMITATIONS.md) for the shapes that still

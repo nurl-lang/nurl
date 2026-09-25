@@ -374,6 +374,7 @@
     ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_peek ctl 0 )
     : A x . data idx
+    ( mem_take x )  // the element leaves the container
     : ~ i i idx
     ~ < i - len 1 {
         = . data i . data + i 1
@@ -390,6 +391,7 @@
     : i last - len 1
     : *A data # *A ( nurl_peek ctl 0 )
     : A x . data last
+    ( mem_take x )  // the element leaves the container
     ( nurl_poke ctl 1 last )
     ^ @ ?A { T x }
 }

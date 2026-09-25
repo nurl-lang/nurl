@@ -1532,6 +1532,12 @@ handles are freely aliased, so their bindings follow a few more rules:
 - `( mem_forget x )` gives up `x`'s value — for a hand-written disposer
   (`vec_free`, `string_free`) and for a table kept in a global for the
   program's lifetime.
+- `( mem_take x )` is its dual: `x`, read out of a container by hand,
+  owns that value from here on because the container gave it up
+  (`vec_pop`, `vec_remove`, `deque_pop_front` after shortening their
+  buffer). It is dropped at scope exit and moved when stored or returned.
+- A `! T E` binding whose `T` is a `String` or `Vec` (and whose `E` owns
+  nothing) is dropped like a `? T` binding.
 
 `compiler/tests/drop_handles.nu` pins these shapes.
 
