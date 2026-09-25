@@ -78,7 +78,7 @@ $ `stdlib/net/relay.nu`
 
     : !Thread ThreadErr tr ( thread_spawn body )
     ?? tr {
-        T th → { = . hb thr th = . hb env # s # *u body 1 = . hb live 1 }
+        T th → { = . hb thr th = . hb live 1 }
         F e → { ( vec_free [u] grp ) }
     }
     ^ hb
@@ -89,7 +89,6 @@ $ `stdlib/net/relay.nu`
     ? == . hb live 1 {
         ( nurl_atomic_i64_inc # *u . hb stop )  // 0 → 1: stop after current sleep
         ( thread_join . hb thr )
-        ? != # i . hb env 0 { ( nurl_free . hb env ) } {}
         = . hb live 0
     } {}
     ( nurl_free # s . hb stop )

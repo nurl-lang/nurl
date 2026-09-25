@@ -149,6 +149,10 @@
     }
 
     ( puts ( show eval_count ) )
+    // Raw boxes: released by hand.
+    ( nurl_free # s three ) ( nurl_free # s four ) ( nurl_free # s ten ) ( nurl_free # s two )
+    ( nurl_free # s sum ) ( nurl_free # s div ) ( nurl_free # s neg ) ( nurl_free # s root )
+    ( nurl_free # s zero ) ( nurl_free # s bad )
 }
 
 // ── Entry point ──────────────────────────────────────────────

@@ -109,6 +109,7 @@
     : i head ( nurl_peek ctl 2 )
     : *A data # *A ( nurl_peek ctl 0 )
     : A x . data head
+    ( mem_take x )  // the element leaves the container
     ( nurl_poke ctl 2 % + head 1 cap )
     ( nurl_poke ctl 3 - len 1 )
     ^ @ ?A { T x }
@@ -123,6 +124,7 @@
     : *A data # *A ( nurl_peek ctl 0 )
     : i idx % + head - len 1 cap
     : A x . data idx
+    ( mem_take x )  // the element leaves the container
     ( nurl_poke ctl 3 - len 1 )
     ^ @ ?A { T x }
 }

@@ -175,7 +175,8 @@ $ `stdlib/std/cmp.nu`
 }
 
 @ __solver_load __Solver solver i id ( @ !RegIndex RegistryFetchErr s s ) fetch → !i ResolveErr {
-    : ~ __SolveNode node . ( vec_data [__SolveNode] . solver nodes ) id
+    : *__SolveNode nds ( vec_data [__SolveNode] . solver nodes )
+    : ~ __SolveNode node . nds id
     ? != . node loaded 0 { ^ @ !i ResolveErr { T 0 } } {}
     : String registry . ( vec_data [String] . solver registries ) . node registry
     ?? ( fetch ( string_data registry ) ( string_data . node name ) ) {
@@ -223,7 +224,9 @@ $ `stdlib/std/cmp.nu`
 
         }
     }
-    ( vec_set [__SolveNode] . solver nodes id node )
+    // Re-fetched: interning above may have grown a pool.
+    : *__SolveNode nds2 ( vec_data [__SolveNode] . solver nodes )
+    = . nds2 id node  // written back in place, not copied
     ^ @ !i ResolveErr { T 0 }
 }
 
@@ -287,9 +290,10 @@ $ `stdlib/std/cmp.nu`
 }
 
 @ __solver_position __Solver solver i id i position → v {
-    : ~ __SolveNode node . ( vec_data [__SolveNode] . solver nodes ) id
+    : *__SolveNode nds ( vec_data [__SolveNode] . solver nodes )
+    : ~ __SolveNode node . nds id
     = . node position position
-    ( vec_set [__SolveNode] . solver nodes id node )
+    = . nds id node  // written back in place, not copied
 }
 
 @ __solver_swap __Solver solver i a i b → v {
@@ -412,10 +416,11 @@ $ `stdlib/std/cmp.nu`
 }
 
 @ __solver_select __Solver solver i id i chosen → v {
-    : ~ __SolveNode node . ( vec_data [__SolveNode] . solver nodes ) id
+    : *__SolveNode nds ( vec_data [__SolveNode] . solver nodes )
+    : ~ __SolveNode node . nds id
     = . node chosen chosen
     = . node level ? >= chosen 0 - ( vec_len [__SolveFrame] . solver frames ) 1 -1
-    ( vec_set [__SolveNode] . solver nodes id node )
+    = . nds id node  // written back in place, not copied
     ? >= chosen 0 { ( __solver_unqueue solver id ) } { ( __solver_refresh solver id ) }
 }
 
@@ -472,7 +477,8 @@ $ `stdlib/std/cmp.nu`
         }
         = k + k 1
     }
-    ( vec_set [__SolveVersion] . node versions chosen version )
+    : *__SolveVersion vs ( vec_data [__SolveVersion] . node versions )
+    = . vs chosen version  // written back in place, not copied
     ^ > . version ready 0
 }
 

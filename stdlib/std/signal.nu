@@ -109,8 +109,9 @@ $ `stdlib/core/posix.nu`  // nurl_native_constant / SIG* lookups
 
 // Install `handler` as the NURL closure that runs when `sig` fires.
 // Returns 0 on success, -1 if the signum is unsupported on this
-// target. The closure is BORROWED — caller must keep it alive (and
-// its captured env block) until the corresponding `signal_clear`.
+// target. The runtime keeps its own copy of the closure (and drops it on
+// `signal_clear` or when another handler replaces it — docs/MEMORY.md
+// §7.4), so the caller's closure can go out of scope right away.
 @ signal_install i sig ( @ v i ) handler → i {
     : *u fnp # *u handler 0
     : *u env # *u handler 1

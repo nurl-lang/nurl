@@ -268,100 +268,106 @@ $ `stdlib/std/fmt.nu`
 
 // ── Formatted variants (1..3 args; build a Vec[s] then dispatch) ────
 
+// The log*fN helpers pass copies of their arguments through the Vec (and
+// free them here), so a caller's temporary is only read, never kept.
+@ __log_args_free sink ( Vec s ) v → v {
+    ( vec_free_with [s] v \ s x → v { ( nurl_free x ) } )
+}
+
 @ log_debugf1 s tmpl s a → v {
     : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v a )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
     ( __log_emitf 0 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_debugf2 s tmpl s a s b → v {
     : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
     ( __log_emitf 0 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_debugf3 s tmpl s a s b s c → v {
     : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
-    ( vec_push [s] v c )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
+    ( vec_push [s] v ( nurl_str_cat c `` ) )
     ( __log_emitf 0 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_infof1 s tmpl s a → v {
     : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v a )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
     ( __log_emitf 1 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_infof2 s tmpl s a s b → v {
     : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
     ( __log_emitf 1 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_infof3 s tmpl s a s b s c → v {
     : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
-    ( vec_push [s] v c )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
+    ( vec_push [s] v ( nurl_str_cat c `` ) )
     ( __log_emitf 1 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_warnf1 s tmpl s a → v {
     : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v a )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
     ( __log_emitf 2 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_warnf2 s tmpl s a s b → v {
     : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
     ( __log_emitf 2 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_warnf3 s tmpl s a s b s c → v {
     : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
-    ( vec_push [s] v c )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
+    ( vec_push [s] v ( nurl_str_cat c `` ) )
     ( __log_emitf 2 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_errorf1 s tmpl s a → v {
     : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v a )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
     ( __log_emitf 3 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_errorf2 s tmpl s a s b → v {
     : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
     ( __log_emitf 3 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 @ log_errorf3 s tmpl s a s b s c → v {
     : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v a )
-    ( vec_push [s] v b )
-    ( vec_push [s] v c )
+    ( vec_push [s] v ( nurl_str_cat a `` ) )
+    ( vec_push [s] v ( nurl_str_cat b `` ) )
+    ( vec_push [s] v ( nurl_str_cat c `` ) )
     ( __log_emitf 3 tmpl v )
-    ( vec_free [s] v )
+    ( __log_args_free v )
 }
 
 // ── Key/value variants (1..3 pairs at each level) ───────────────────

@@ -175,7 +175,9 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
                 T tkey → { ( __lru_idx_remove . c index ( string_data tkey ) ) ( string_free tkey ) }
                 F _ → {}
             }
-            ?? ( vec_get [V] . c vals t ) { T tv → { = evicted @ ?V { T tv } } F _ → {} }
+            // The slot gives its value up (it is reused below): taken, not
+            // copied.
+            ?? ( vec_get [V] . c vals t ) { T tv → { ( mem_take tv ) = evicted @ ?V { T tv } } F _ → {} }
             ( __lru_detach [V] c t )
             ( vec_push [i] . c freelist t )
             ( __lru_set_count ctl - ( __lru_count ctl ) 1 )

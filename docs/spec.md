@@ -1710,7 +1710,8 @@ right-hand side is a *fresh allocation produced on the spot*:
   `_int`, `_float`, `_slice`, `nurl_read_file`),
 - a named-struct literal `@ T { ... }` whose fields are themselves
   fresh allocations (each is tracked individually),
-- a value of a type with a user `Drop` trait impl.
+- a value of a type with a user `Drop` trait impl,
+- a `String`, a `Vec T`, or a struct whose fields own one (§8.5).
 
 The compiler only registers a drop for a resource it saw allocated
 *directly*. Copying an already-owned binding into another binding does
@@ -1736,15 +1737,12 @@ responsibility belongs to the auto-drop machinery.
 
 ### 8.4 Closure environments
 
-A closure's heap environment is **not** reference-counted. Instead the
-compiler reclaims it whenever the closure provably does not escape — an
-inline closure handed to an invoke-only parameter is freed right after
-the call, and a `:`-bound closure is freed at scope exit (each iteration
-in a loop body). When the closure genuinely escapes — returned, stored
-into a container or struct field, captured into another closure, or
-detached onto a thread — the env becomes a **manually-managed handle**
-(§6.4): the consumer frees it via the env pointer. See
-[`docs/MEMORY.md` §7.4](MEMORY.md) for the exact escape-site list.
+A closure's heap environment is **not** reference-counted. It is owned
+wherever the closure is kept — a binding, a struct field, a slice,
+another closure's captures, a spawned thread — and dropped by that
+owner; a returned closure's env belongs to the caller, and a borrowed
+one stored into an owner is copied. Freeing an env by hand is a compile
+error. See [`docs/MEMORY.md` §7.5](MEMORY.md).
 
 A closure may *capture by pointer* a mutable (`: ~`) multi-field struct
 binding (see [`docs/MEMORY.md` §2.3](MEMORY.md) for the lifetime rule):
@@ -1754,6 +1752,33 @@ by-pointer capture borrows the caller's stack frame and MUST NOT
 out-live it. The borrow checker rejects an escaping by-ref capture
 (returning the closure, pushing it into a longer-lived container,
 spawning a thread that holds it).
+
+### 8.5 `String`, `Vec` and owning structs
+
+`String`, `Vec T` and every plain struct whose fields own one are
+dropped like any other owned value; no program needs `string_free` /
+`vec_free`, which remain as an explicit early release. Each owning
+binding carries a drop flag, so a value is released exactly once
+whichever way it leaves:
+
+- storing it into a struct or enum literal, a field, or a container
+  element moves it; a parameter stored that way is taken over from the
+  caller;
+- `: cur root` makes a cursor that borrows `root`'s value;
+- a borrowed value stored into an owner is copied;
+- a `?` / `??` join hands over what its chosen arm owned, and a fresh
+  `? T` / `! T E` returned by a call owns its payload in the arm that
+  binds it;
+- `( mem_forget x )` gives up `x`'s value for good — for a hand-written
+  disposer, or a table kept in a global for the program's lifetime;
+- `( mem_take x )` claims `x`'s value — for a container operation that
+  hands an element out (`vec_pop`), so the element is owned, not lent.
+- `( mem_put_back x )` stores `x` back into the slot it was read from
+  without copying it or taking it over — for an element setter.
+
+See [`docs/MEMORY.md` §7.6](MEMORY.md) for the complete rules and
+[`docs/LIMITATIONS.md`](LIMITATIONS.md) for the shapes that still
+borrow.
 
 ## 9. Borrow checker
 

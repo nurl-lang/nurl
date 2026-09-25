@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_mem_put_back_non_binding.nu:5:20: error: mem_put_back takes a binding: '( mem_put_back x )' — x is written back into the slot it was read from, so a store of x through a pointer neither copies it nor takes it over.
+    ( mem_put_back ( string_from `x` ) )
+                   ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

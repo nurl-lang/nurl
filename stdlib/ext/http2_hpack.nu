@@ -202,19 +202,18 @@ $ `stdlib/ext/http2_frame.nu`
 }
 
 // Evict from the back until current_size + incoming ≤ max_size.
-@ __hpack_dyn_evict HpackDynTable t i incoming → HpackDynTable {
-    : ~ HpackDynTable cur t
+@ __hpack_dyn_evict inout HpackDynTable t i incoming → v {
     : ~ b done F
     ~ ! done {
-        : i n ( vec_len [Header] . cur entries )
+        : i n ( vec_len [Header] . t entries )
         ? == n 0 { = done T } {
-            ? <= + . cur current_size incoming . cur max_size
+            ? <= + . t current_size incoming . t max_size
             { = done T } {
-                : ?Header tail ( vec_pop [Header] . cur entries )
+                : ?Header tail ( vec_pop [Header] . t entries )
                 ?? tail {
                     T th → {
                         : i sz ( __hpack_entry_size th )
-                        = . cur current_size - . cur current_size sz
+                        = . t current_size - . t current_size sz
                         ( header_free th )
                     }
                     F _ → { = done T }
@@ -222,31 +221,28 @@ $ `stdlib/ext/http2_frame.nu`
             }
         }
     }
-    ^ cur
 }
 
 // Insert a header at the FRONT of the dynamic table. Owns name + value
 // (caller transfers ownership). If the entry alone is larger than
 // max_size, the table is fully drained per §4.4.
-@ hpack_dyn_insert HpackDynTable t s name s value → HpackDynTable {
+@ hpack_dyn_insert inout HpackDynTable t s name s value → v {
     : Header h ( header_new name value )
     : i sz ( __hpack_entry_size h )
-    : ~ HpackDynTable cur ( __hpack_dyn_evict t sz )
-    ? > sz . cur max_size {
+    ( __hpack_dyn_evict t sz )
+    ? > sz . t max_size {
         ( header_free h )
-        ^ cur
+        ^
     } {}
-    ( vec_insert [Header] . cur entries 0 h )
-    = . cur current_size + . cur current_size sz
-    ^ cur
+    ( vec_insert [Header] . t entries 0 h )
+    = . t current_size + . t current_size sz
 }
 
 // Resize: typically called when peer sends a "dynamic table size update"
 // header field (§6.3) lowering our max. Evicts to fit the new ceiling.
-@ hpack_dyn_set_max HpackDynTable t i new_max → HpackDynTable {
-    : ~ HpackDynTable cur t
-    = . cur max_size new_max
-    ^ ( __hpack_dyn_evict cur 0 )
+@ hpack_dyn_set_max inout HpackDynTable t i new_max → v {
+    = . t max_size new_max
+    ( __hpack_dyn_evict t 0 )
 }
 
 // Lookup by combined HPACK index (1-indexed). Static range first, then
@@ -423,7 +419,6 @@ $ `stdlib/ext/http2_frame.nu`
 
 : HpackDecoded {
     ( Vec Header ) headers
-    HpackDynTable dyn
 }
 
 // Local copy of http_request.nu's headers_free — keeps this module
@@ -434,20 +429,17 @@ $ `stdlib/ext/http2_frame.nu`
 
 @ hpack_decoded_free sink HpackDecoded d → v {
     ( __hpack_headers_free . d headers )
-    ( hpack_dyn_free . d dyn )
 }
 
 : HpackLitResult {
     String name
     String value
-    HpackDynTable dyn
     i consumed
 }
 
-@ hpack_decode_block ( Vec u ) buf HpackDynTable dyn → !HpackDecoded HpackErr {
+@ hpack_decode_block ( Vec u ) buf inout HpackDynTable dyn → !HpackDecoded HpackErr {
     : i n ( vec_len [u] buf )
     : ~ ( Vec Header ) hdrs ( vec_new [Header] )
-    : ~ HpackDynTable cur dyn
     : ~ i off 0
     : ~ b done F
     : ~ b ok T
@@ -467,7 +459,7 @@ $ `stdlib/ext/http2_frame.nu`
             : !HpackInt HpackErr ir ( hpack_decode_int buf off 7 )
             ?? ir {
                 T iv → {
-                    : ?Header opt ( hpack_dyn_lookup cur . iv value )
+                    : ?Header opt ( hpack_dyn_lookup dyn . iv value )
                     ?? opt {
                         T h → {
                             = total_decoded + total_decoded
@@ -484,7 +476,7 @@ $ `stdlib/ext/http2_frame.nu`
         } {
             ? != 0 & b0 64 {
                 // 6.2.1 Literal with Incremental Indexing
-                : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 6 T cur )
+                : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 6 T dyn )
                 ?? lr {
                     T lr_ → {
                         = total_decoded + total_decoded
@@ -492,9 +484,9 @@ $ `stdlib/ext/http2_frame.nu`
                         ( vec_push [Header] hdrs ( header_new
                         ( string_data . lr_ name )
                         ( string_data . lr_ value ) ) )
+                        ( hpack_dyn_insert dyn ( string_data . lr_ name ) ( string_data . lr_ value ) )
                         ( string_free . lr_ name )
                         ( string_free . lr_ value )
-                        = cur . lr_ dyn
                         = off + off . lr_ consumed
                         = seen_field T
                     }
@@ -524,7 +516,7 @@ $ `stdlib/ext/http2_frame.nu`
                                 ? > . iv value ( h2_default_header_table_size ) {
                                     = last_err HpackOther = ok F
                                 } {
-                                    = cur ( hpack_dyn_set_max cur . iv value )
+                                    ( hpack_dyn_set_max dyn . iv value )
                                     = off + off . iv consumed
                                 }
                             }
@@ -534,7 +526,7 @@ $ `stdlib/ext/http2_frame.nu`
                 } {
                     // 6.2.2 (top 4 = 0000) or 6.2.3 (top 4 = 0001) —
                     // both are "literal, do NOT add to dyn table".
-                    : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 4 F cur )
+                    : !HpackLitResult HpackErr lr ( __hpack_decode_lit_call buf off 4 F dyn )
                     ?? lr {
                         T lr_ → {
                             = total_decoded + total_decoded
@@ -544,7 +536,6 @@ $ `stdlib/ext/http2_frame.nu`
                             ( string_data . lr_ value ) ) )
                             ( string_free . lr_ name )
                             ( string_free . lr_ value )
-                            = cur . lr_ dyn
                             = off + off . lr_ consumed
                             = seen_field T
                         }
@@ -561,22 +552,18 @@ $ `stdlib/ext/http2_frame.nu`
     }
     ? ! ok {
         ( vec_free_with [Header] hdrs \ Header h → v { ( header_free h ) } )
-        // Do NOT free `cur`: `cur` was initialised from `dyn` (struct
-        // copy) and HpackDynTable.entries is shared by ctl pointer with
-        // the caller's table. Freeing here would leave the caller with
-        // a dangling entries Vec; the caller (typically h2_conn_free
-        // after the COMPRESSION_ERROR GOAWAY per RFC 9113 §4.3) will
-        // free it once via the input table.
+        // `dyn` stays the caller's (updated in place): it frees it, e.g.
+        // h2_conn_free after the COMPRESSION_ERROR GOAWAY (RFC 9113 §4.3).
         ^ @ !HpackDecoded HpackErr { F last_err }
     } {}
     ^ @ !HpackDecoded HpackErr {
-        T @ HpackDecoded { hdrs cur }
+        T @ HpackDecoded { hdrs }
     }
 }
 
 // Decode a literal-field representation starting at `off`. `prefix_bits`
-// is 6 for §6.2.1, 4 for §6.2.2 / §6.2.3. `indexing` says whether to
-// insert the resulting field into the dynamic table.
+// is 6 for §6.2.1, 4 for §6.2.2 / §6.2.3. `dyn` is only read (indexed
+// names); with `indexing` the caller inserts the field into its table.
 @ __hpack_decode_lit_call ( Vec u ) buf i off i prefix_bits b indexing HpackDynTable dyn → !HpackLitResult HpackErr {
     : !HpackInt HpackErr ni ( hpack_decode_int buf off prefix_bits )
     : ~ i name_idx 0
@@ -621,13 +608,10 @@ $ `stdlib/ext/http2_frame.nu`
             ^ @ !HpackLitResult HpackErr { F e }
         }
     }
-    : ~ HpackDynTable cur dyn
-    ? indexing {
-        = cur ( hpack_dyn_insert cur
-        ( string_data name ) ( string_data value ) )
-    } {}
+    // The caller inserts into its table when `indexing` (it owns the
+    // table; this only reads it).
     ^ @ !HpackLitResult HpackErr {
-        T @ HpackLitResult { name value cur - cur_off off }
+        T @ HpackLitResult { name value - cur_off off }
     }
 }
 
@@ -691,7 +675,6 @@ $ `stdlib/ext/http2_frame.nu`
 
 : HpackEncoded {
     ( Vec u ) block
-    HpackDynTable dyn  // the table after this block's insertions
 }
 
 // Combined HPACK index of an exact (name, value) match — static table
@@ -733,10 +716,9 @@ $ `stdlib/ext/http2_frame.nu`
     ^ 0
 }
 
-@ hpack_encode_headers_dyn ( Vec Header ) headers HpackDynTable dyn i size_update → HpackEncoded {
+@ hpack_encode_headers_dyn ( Vec Header ) headers inout HpackDynTable dyn i size_update → HpackEncoded {
     : i n ( vec_len [Header] headers )
     : ( Vec u ) out ( vec_with_cap [u] * + n 1 16 )
-    : ~ HpackDynTable cur dyn
     ? >= size_update 0 { ( hpack_encode_int out 5 32 size_update ) } {}
     : *Header hp ( vec_data [Header] headers )
     : ~ i k 0
@@ -744,20 +726,20 @@ $ `stdlib/ext/http2_frame.nu`
         : Header h . hp k
         : s lc_name ( __hpack_lower_name_dup ( string_data . h name ) )
         : s value ( string_data . h value )
-        : i exact ( __hpack_find_exact cur lc_name value )
+        : i exact ( __hpack_find_exact dyn lc_name value )
         ? > exact 0 {
             ( hpack_encode_int out 7 128 exact )
         } {
-            : i nidx ( __hpack_find_name cur lc_name )
+            : i nidx ( __hpack_find_name dyn lc_name )
             : i esz + + ( nurl_str_len lc_name ) ( nurl_str_len value ) 32
-            ? <= esz . cur max_size {
+            ? <= esz . dyn max_size {
                 // Literal with Incremental Indexing (0x40, 6-bit prefix).
                 ? > nidx 0 { ( hpack_encode_int out 6 64 nidx ) } {
                     ( vec_push [u] out # u 64 )
                     ( hpack_encode_string out lc_name )
                 }
                 ( hpack_encode_string out value )
-                = cur ( hpack_dyn_insert cur lc_name value )
+                ( hpack_dyn_insert dyn lc_name value )
             } {
                 // Literal without Indexing (0x00, 4-bit prefix).
                 ? > nidx 0 { ( hpack_encode_int out 4 0 nidx ) } {
@@ -770,7 +752,7 @@ $ `stdlib/ext/http2_frame.nu`
         ( nurl_free lc_name )
         = k + k 1
     }
-    ^ @ HpackEncoded { out cur }
+    ^ @ HpackEncoded { out }
 }
 
 // ── Huffman decoder (RFC 7541 Appendix B) ────────────────────────────

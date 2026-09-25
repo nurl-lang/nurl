@@ -47,6 +47,7 @@ $ `stdlib/ext/anthropic.nu`
     : Json m3 ( claude_msg_assistant_response fake_resp )
     ( pr_json m3 )
     ( json_free m3 )
+    ( json_free fake_resp )  // only read by claude_msg_assistant_response
 
     // claude_msg_user_blocks: pack tool_result blocks into a user turn.
     : ( Vec Json ) blocks ( vec_new [Json] )

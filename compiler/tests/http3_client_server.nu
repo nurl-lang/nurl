@@ -144,16 +144,12 @@ $ `stdlib/ext/http3_client.nu`
                     ( sleep_ms 100 )
                     ( http3_server_stop srv )
                     ( thread_join t )
-                    : *u server_env # *u server 1
-                    ( nurl_free # s server_env )
                 }
                 F _ → { ( label `spawn` `FAIL` ) }
             }
             ( label_int `server_requests` g_requests )
             ( label_int `server_accepted` ( http3_server_accepted srv ) )
             ( http3_server_free srv )
-            : *u hf_env # *u hf 1
-            ( nurl_free # s hf_env )
             ( quic_tp_free stp )
             ( vec_free [u] prefs )
             ( udp_close sock )

@@ -112,10 +112,6 @@ $ `stdlib/ext/http_jwt.nu`
 
     // Release the wrapped + leaf closure envs (heap-captured {fn,env};
     // with_jwt_* borrows the inner closure, never frees it).
-    : *u guarded_env # *u guarded 1
-    ( nurl_free # s guarded_env )
-    : *u leaf_env # *u leaf 1
-    ( nurl_free # s leaf_env )
 
     // ── EdDSA ──
     : !CryptoKeypair CryptoErr kp ( ed25519_keygen )
@@ -135,10 +131,6 @@ $ `stdlib/ext/http_jwt.nu`
                 F _ → ( nurl_print `eddsa sign FAILED\n` )
             }
             ( run `eddsa_missing` eguarded `` )
-            : *u eguarded_env # *u eguarded 1
-            ( nurl_free # s eguarded_env )
-            : *u eleaf_env # *u eleaf 1
-            ( nurl_free # s eleaf_env )
             ( vec_free [u] . k sk ) ( vec_free [u] . k pk )
         }
         F _ → ( nurl_print `keygen FAILED\n` )
@@ -162,10 +154,6 @@ $ `stdlib/ext/http_jwt.nu`
         F _ → ( nurl_print `es256 sign FAILED\n` )
     }
     ( run `es256_missing` esguarded `` )
-    : *u esguarded_env # *u esguarded 1
-    ( nurl_free # s esguarded_env )
-    : *u esleaf_env # *u esleaf 1
-    ( nurl_free # s esleaf_env )
     ( vec_free [u] es_scalar ) ( vec_free [u] es_pub )
 
     ^ 0

@@ -157,8 +157,6 @@ $ `src/wasmkernel.nu`
     ( blob_manifest_free m1 ) ( blob_manifest_free m2 )
     ( vec_free [u] data ) ( vec_free [u] key )
     // the handler closure's env is manual (factory-returned closure)
-    : *u henv # *u h 1
-    ? != # i henv 0 { ( nurl_free # s henv ) } {}
 
     ? == g_fail 0 { ( nurl_print `ALL PASS\n` ) ^ 0 } { ( nurl_print `FAILURES\n` ) ^ 1 }
 }

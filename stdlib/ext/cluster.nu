@@ -147,11 +147,10 @@ $ `stdlib/ext/http_server.nu`
 @ __rpc_entry_free sink RpcEntry e → v {
     : *RpcImpl impl # *RpcImpl . e ctl
     ( string_free . impl name )
-    // The closure value is a by-value { fn_ptr, env_ptr } pair; only the
-    // env is heap-allocated (NULL for capture-less lambdas) and closures
-    // have no auto-drop, so release it here (router/recover convention).
+    // The heap block owns the handler closure stored into it (a stored
+    // closure is a clone — docs/MEMORY.md §7.4); release it with the block.
     : ( @ !Json ClusterErr Json ) h . impl handler
-    ( nurl_free # s # *u h 1 )
+    ( nurl_closure_drop # *u h 1 )
     ( nurl_free # s impl )
 }
 

@@ -192,6 +192,8 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
             = s + s 1
         }
         ? == t 0 { = g_p256_comb_tbl # i . tbl ctl } { = g_p256_comb_tbl2 # i . tbl ctl }
+        // The table lives for the rest of the program, through the global.
+        ( mem_forget tbl )
         = t + t 1
     }
     ( vec_free [u] tbytes )

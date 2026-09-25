@@ -579,12 +579,18 @@ $ `stdlib/ext/http3_qpack.nu`
         ^ @ !HttpResponse i { F err }
     } {}
     : HttpResponse r ( response_new . s status )
-    ( vec_free [Header] . r headers )
-    = . r headers . s headers
+    // The stream's headers and body move into the response (the stream
+    // gets empty ones, dropped with it below).
+    : ( Vec Header ) hs . s headers
+    ( mem_take hs )
     = . s headers ( vec_new [Header] )
-    ( vec_free [u] . r body )
-    = . r body . s body
+    : ( Vec u ) bd . s body
+    ( mem_take bd )
     = . s body ( vec_new [u] )
+    ( vec_free [Header] . r headers )
+    = . r headers hs
+    ( vec_free [u] . r body )
+    = . r body bd
     ( quic_conn_stream_done c sid )
     ( __h3c_stream_drop h sid )
     ^ @ !HttpResponse i { T r }

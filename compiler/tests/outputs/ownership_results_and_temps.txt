@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+made
+6
+tried failed -2
+bad input
+x3
+3
+host dflt
+abc

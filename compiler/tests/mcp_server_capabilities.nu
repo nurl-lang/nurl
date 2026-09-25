@@ -63,8 +63,11 @@ $ `stdlib/core/vec.nu`
     ^ req
 }
 
+// CONSUMES `req` (every caller builds it in the argument).
 @ dispatch McpServer srv Json req → Json {
-    ?? ( mcp_server_dispatch srv req ) {
+    : !Json McpRpcErr r ( mcp_server_dispatch srv req )
+    ( json_free req )
+    ?? r {
         T res → { ^ res }
         F e → {
             ( label `UNEXPECTED_ERR` ( mcp_rpc_err_message e ) )

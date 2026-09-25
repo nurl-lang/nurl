@@ -507,8 +507,6 @@ $ `stdlib/std/async.nu`
     ( spawn accept_fiber )
     ( runtime_run )
     ( tcp_listener_release . rs lst )
-    : *u accept_env # *u accept_fiber 1
-    ( nurl_free # s accept_env )
 }
 
 @ relay_server_stop * RelayServer rs → v { ( tcp_close_listener . rs lst ) }

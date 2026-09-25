@@ -66,6 +66,7 @@ $ `stdlib/core/vec.nu`
             : !v NetErr sr ( server_run_once srv )
             ?? sr { T _ → {} F e → { ( nurl_print `server_err=` ) ( nurl_print ( net_err_name e ) ) ( nurl_print `\n` ) } }
             ?? ct { T t → ( thread_join t ) F _ → {} }
+            ( server_stop srv )  // closes the listener
 
             ( nurl_print `status=` ) ( nurl_println_int g_status )
             ( nurl_print `body_len=` ) ( nurl_println_int g_len )

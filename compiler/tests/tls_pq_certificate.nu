@@ -151,8 +151,6 @@ $ `stdlib/std/time.nu`
             ( thread_join t )
             // thread_spawn borrows the closure's heap env; the thread
             // has joined, so free it here (LSan gate).
-            : *u server_env # *u server 1
-            ( nurl_free # s server_env )
         }
         F _ → { = all ( chk `spawn                ` F ) }
     }

@@ -246,6 +246,7 @@ version = "1.0.0"
                 = served + served 1
             }
             ?? ct { T t → ( thread_join t ) F _ → {} }
+            ( server_stop srv )  // closes the listener
         }
         F e → ( nurl_print `listen_fail\n` )
     }

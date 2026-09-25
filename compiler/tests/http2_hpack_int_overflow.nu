@@ -71,7 +71,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ~ < c2 10 { ( vec_push [u] blk # u 0xFF ) = c2 + c2 1 }
     ( vec_push [u] blk # u 0x00 )  // final continuation byte
 
-    : HpackDynTable dyn ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable dyn ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr br ( hpack_decode_block blk dyn )
     ?? br {
         T dec → {

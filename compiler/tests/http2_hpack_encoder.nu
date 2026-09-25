@@ -77,7 +77,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec Header ) hs ( sample_headers )
 
     // ── two blocks against a live table ──
-    : HpackDynTable enc ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable enc ( hpack_dyn_new 4096 )
     : HpackEncoded e1 ( hpack_encode_headers_dyn hs enc -1 )
     : ( Vec u ) b1 . e1 block
     : i b1_0 ?? ( vec_get [u] b1 0 ) { T x → # i x F _ → -1 }
@@ -87,57 +87,59 @@ $ `stdlib/ext/http2_hpack.nu`
     ( string_free b1len )
     ( label `block1_status_is_0x88` ( yn == b1_0 136 ) )
     : String dl ( string_new )
-    ( string_push_int dl ( hpack_dyn_len . e1 dyn ) )
+    ( string_push_int dl ( hpack_dyn_len enc ) )
     ( label `dyn_entries_after_block1` ( string_data dl ) )
     ( string_free dl )
 
-    : HpackEncoded e2 ( hpack_encode_headers_dyn hs . e1 dyn -1 )
+    : HpackEncoded e2 ( hpack_encode_headers_dyn hs enc -1 )
     : ( Vec u ) b2 . e2 block
     : String h2 ( hex_of b2 )
     ( label `block2_hex` ( string_data h2 ) )
     ( string_free h2 )
 
     // Decoder side, mirroring: fresh table with the same default size.
-    : HpackDynTable dec ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable dec ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr d1 ( hpack_decode_block b1 dec )
     ?? d1 {
         T dd1 → {
             ( label `block1_roundtrip` ( yn ( matches_sample . dd1 headers ) ) )
             ( headers_free . dd1 headers )
-            : !HpackDecoded HpackErr d2 ( hpack_decode_block b2 . dd1 dyn )
+            : !HpackDecoded HpackErr d2 ( hpack_decode_block b2 dec )
             ?? d2 {
                 T dd2 → {
                     ( label `block2_roundtrip` ( yn ( matches_sample . dd2 headers ) ) )
-                    ( hpack_decoded_free dd2 )
+                    ( headers_free . dd2 headers )
                 }
-                F e → { ( label `block2_roundtrip` ( hpack_err_name e ) ) ( hpack_dyn_free . dd1 dyn ) }
+                F e → { ( label `block2_roundtrip` ( hpack_err_name e ) ) }
             }
         }
-        F e → { ( label `block1_roundtrip` ( hpack_err_name e ) ) ( hpack_dyn_free dec ) }
+        F e → { ( label `block1_roundtrip` ( hpack_err_name e ) ) }
     }
+    // hpack_decode_block updates dec in place; dec owns it and drops it.
     ( vec_free [u] b1 )
     ( vec_free [u] b2 )
-    ( hpack_dyn_free . e2 dyn )
+    // Both encodes updated enc in place: enc owns it and it is dropped
+    // with enc (docs/MEMORY.md §7.6).
 
     // ── peer disabled the dynamic table: size update, no indexing ──
-    : HpackDynTable enc0 ( hpack_dyn_new 0 )
+    : ~ HpackDynTable enc0 ( hpack_dyn_new 0 )
     : HpackEncoded e3 ( hpack_encode_headers_dyn hs enc0 0 )
     : ( Vec u ) b3 . e3 block
     : i b3_0 ?? ( vec_get [u] b3 0 ) { T x → # i x F _ → -1 }
     ( label `zero_table_opens_with_size_update` ( yn == b3_0 32 ) )
     : String dl0 ( string_new )
-    ( string_push_int dl0 ( hpack_dyn_len . e3 dyn ) )
+    ( string_push_int dl0 ( hpack_dyn_len enc0 ) )
     ( label `zero_table_entries` ( string_data dl0 ) )
     ( string_free dl0 )
     // No 0x40-prefixed (incremental indexing) field may appear after the
     // size update: scan the block for the representations used.
-    : HpackDynTable dec0 ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable dec0 ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr d3 ( hpack_decode_block b3 dec0 )
     ?? d3 {
         T dd3 → {
             ( label `zero_table_roundtrip` ( yn ( matches_sample . dd3 headers ) ) )
             : String dm ( string_new )
-            ( string_push_int dm ( hpack_dyn_len . dd3 dyn ) )
+            ( string_push_int dm ( hpack_dyn_len dec0 ) )
             ( label `decoder_table_after_zero_update` ( string_data dm ) )
             ( string_free dm )
             ( hpack_decoded_free dd3 )
@@ -145,7 +147,6 @@ $ `stdlib/ext/http2_hpack.nu`
         F e → { ( label `zero_table_roundtrip` ( hpack_err_name e ) ) ( hpack_dyn_free dec0 ) }
     }
     ( vec_free [u] b3 )
-    ( hpack_dyn_free . e3 dyn )
     ( headers_free hs )
     ^ 0
 }

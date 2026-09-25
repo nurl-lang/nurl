@@ -56,8 +56,6 @@ $ `stdlib/core/vec.nu`
 @ binding_case → v {
     : ( @ v i ) drop \ i x → v { ( nurl_print `binding-cb ` ) ( nurl_print ( nurl_str_int x ) ) ( nurl_print `\n` ) }
     ( drop 9 )
-    : *u __dropenv # *u drop 1
-    ( nurl_free # s __dropenv )
 }
 
 // 4. No shadow in this scope: the destructor still runs via auto-drop.

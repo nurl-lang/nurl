@@ -137,5 +137,6 @@
     ( puts ( nurl_str_int call_count ) )
     ( puts `\n` )
 
+    ( nurl_free # s . mapped 0 )  // map_i built it over a raw malloc buffer
     ^ 0
 }

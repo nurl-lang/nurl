@@ -119,8 +119,6 @@ $ `stdlib/ext/http3_server.nu`
                     }
                     ( quic_server_stop srv )
                     ( thread_join t )
-                    : *u server_env # *u server 1
-                    ( nurl_free # s server_env )
                 }
                 F _ → { ( label `spawn` `FAIL` ) }
             }
@@ -129,8 +127,6 @@ $ `stdlib/ext/http3_server.nu`
             ( label `server_echoed` ? == g_server_echoed 1 `T` `F` )
             ( label `server_saw_close` ? == g_server_gone 1 `T` `F` )
             ( quic_server_free srv )
-            : *u ev_env # *u ev 1
-            ( nurl_free # s ev_env )
             ( quic_tp_free stp )
             ( vec_free [u] prefs )
             ( udp_close sock )

@@ -178,7 +178,6 @@ $ `stdlib/std/thread.nu`
         F _ → { ( nurl_poke tflag 0 -2 ) }
     }
     // thread_spawn borrows the closure's env; joined, it is ours to free.
-    ( nurl_free # s # *u body 1 )
     ( check == ( nurl_peek tflag 0 ) 1 `gpu: accelerated scoring runs, bit-identical, from a thread the device was not opened on` )
     ? == ( nurl_peek tflag 0 ) 1 {} {
         ( nurl_print `gpu: thread status ` ) ( nurl_print_int ( nurl_peek tflag 0 ) ) ( pline `` )

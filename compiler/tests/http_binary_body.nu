@@ -77,6 +77,7 @@ $ `stdlib/core/vec.nu`
                 }
             }
             ?? ct { T t → { ( thread_join t ) } F _ → {} }
+            ( server_stop srv )  // closes the listener
 
             ( nurl_print `server_saw_len=` )
             ( nurl_println_int g_saw_len )

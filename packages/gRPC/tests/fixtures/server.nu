@@ -59,7 +59,10 @@ $ `stdlib/core/io.nu`
                 ~ < k repeats { \ ( grpc_server_send server id . event message ) = k + k 1 }
             } {}
         }
-        ( vec_set [TestCall] calls index call )
+        // `call` is the slot's own value, updated: it goes back as is.
+        : *TestCall slots ( vec_data [TestCall] calls )
+        ( mem_put_back call )
+        = . slots index call
     } {}
     ? == . event kind ( grpc_server_event_half_close ) {
         ? != ( nurl_str_eq method `/test.Echo/Slow` ) 0 { ^ @ !v GrpcError { T 0 } } {}
@@ -68,12 +71,11 @@ $ `stdlib/core/io.nu`
         \ ( grpc_metadata_add empty `finished` `yes` )
         : !v GrpcError result ( grpc_server_finish server id status empty )
         ( grpc_status_free status )
-        ( test_call_free call )
+        // The removed call is dropped here.
         ( vec_remove [TestCall] calls index )
         ^ result
     } {}
     ? == . event kind ( grpc_server_event_cancelled ) {
-        ( test_call_free call )
         ( vec_remove [TestCall] calls index )
     } {}
     ^ @ !v GrpcError { T 0 }

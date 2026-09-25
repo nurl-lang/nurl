@@ -420,6 +420,9 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2_set_stream H2Connection c i idx H2Stream s → v {
     : *H2Stream sp ( vec_data [H2Stream] . c streams )
+    // `s` is the slot's own value, read by the getter and updated: it
+    // goes back as is (the table still owns it).
+    ( mem_put_back s )
     = . sp idx s
 }
 
@@ -511,9 +514,8 @@ $ `stdlib/ext/http2_hpack.nu`
                 // the new size at the start of the next header block
                 // (RFC 7541 §4.2). A larger allowance is not taken up —
                 // an encoder may use less than the peer offers.
-                : HpackDynTable ed . cur enc_dyn
-                ? < value . ed max_size {
-                    = . cur enc_dyn ( hpack_dyn_set_max ed value )
+                ? < value . . cur enc_dyn max_size {
+                    ( hpack_dyn_set_max . cur enc_dyn value )
                     = . cur enc_size_update value
                 } {}
             }
@@ -700,13 +702,6 @@ $ `stdlib/ext/http2_hpack.nu`
             \ Header h → v { ( header_free h ) } )
             = . s decoded_headers . dd headers
             = . s headers_decoded T
-            // Update dec_dyn from the result. hpack_decode_block mutates
-            // the dyn table's entries Vec in place and returns the same
-            // (aliased) handle wrapped in a fresh HpackDynTable struct, so
-            // the old cur.dec_dyn and dd.dyn share storage. Overwriting
-            // is correct — explicitly freeing the old would double-free
-            // through the aliased entries pointer.
-            = . cur dec_dyn . dd dyn
             ( __h2_set_stream cur sidx s )
             ^ @ !H2Connection H2ConnErr { T cur }
         }
@@ -991,8 +986,10 @@ $ `stdlib/ext/http2_hpack.nu`
     // Transfer the body to the request. A cleared duplicate would retain a
     // whole request allocation for the lifetime of a flow-blocked response.
     ( vec_free [u] . req body )
-    = . req body . s body
+    : ( Vec u ) moved . s body
+    ( mem_take moved )  // leaves the stream: replaced right below
     = . s body ( vec_new [u] )
+    = . req body moved
     ^ req
 }
 
@@ -1145,7 +1142,6 @@ $ `stdlib/ext/http2_hpack.nu`
     ?? dr {
         F _ → { ^ @ !H2Event H2ConnErr { F H2ConnCompression } }
         T dd → {
-            = . c dec_dyn . dd dyn
             ( vec_clear [u] . s header_block )
             = . s headers_complete T
             = . c partial_headers_stream 0
@@ -1662,7 +1658,6 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ !v H2ConnErr { F H2ConnFrameSize }
     } {}
     : HpackEncoded encoded ( hpack_encode_headers_dyn headers . c enc_dyn . c enc_size_update )
-    = . c enc_dyn . encoded dyn
     = . c enc_size_update -1
     : ( Vec u ) block . encoded block
     : i length ( vec_len [u] block )
@@ -1885,9 +1880,13 @@ $ `stdlib/ext/http2_hpack.nu`
                 } {}
             } {}
             ? complete {
+                // The slot gives its response up: taken and freed; the
+                // slot is marked dead in place (stream_id 0), dropped by
+                // the compaction below.
+                : *H2PendingResponse ip # *H2PendingResponse + # i p * k Z H2PendingResponse
+                = . ip stream_id 0
+                ( mem_take item )
                 ( __h2_pending_free item )
-                = . item stream_id 0
-                = . p k item
             } {
                 = . p k item
             }
@@ -1926,6 +1925,9 @@ $ `stdlib/ext/http2_hpack.nu`
     ? == # i ( vec_data [u] . response body ) # i ( vec_data [u] . fallback body ) {
         = . c panic_resp ( response_text 500 `internal server error\n` )
     } {}
+    // Either the handler's response or the prebuilt panic response (just
+    // replaced in `c`): owned here, handed to `pending` below.
+    ( mem_take response )
     ? > ( vec_len [u] . response body ) - ( h2_default_max_buffered_bytes ) ( __h2_buffered_bytes c pending ) {
         ( http_response_free response )
         ^ ( h2_stream_reset c sid ( h2_err_enhance_your_calm ) )

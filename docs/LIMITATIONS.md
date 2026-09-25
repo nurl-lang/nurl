@@ -45,7 +45,7 @@ before relying on any thread-safety expectation.
 | `Send` answers "may this value **move** to another thread", never "is this program race-free". `( Vec i )` and `s` are Send **and** Sync — correctly, because sharing one read-only is ordinary code — so two threads *mutating* one is not caught by this check | It is caught by the next row instead, at the mutation. The two checks are complementary; neither subsumes the other |
 | Mutating the **contents** of a shared `Arc` from a worker is rejected: a `thread_spawn` / `spawn` closure that calls a container mutator on an `arc_get` result — inline, or inside a helper it calls — without holding a lock is a compile error. `Arc` makes the refcount atomic, not the payload, and `arc_get` over a `Vec`/`String` hands back a handle aliasing the one buffer | Take a `Mutex` **in the worker** around the mutation (`mutex_lock` / `mutex_unlock`, or `mutex_with`), one Mutex shared by every worker; or give each thread its own copy and merge after `thread_join` |
 | The lock check **counts** `mutex_lock`/`mutex_unlock` rather than proving a lock is held on every path, and it says nothing about the *parent* thread mutating shared state while a worker runs | Keep every access to shared state — parent included — inside the same lock |
-| `thread_spawn` / `spawn` take a `( @ v )` closure; the captured environment is copied to the worker. Send covers what the copy *reaches*; a raw `*T` pointer into the parent stack is covered separately by the borrow checker's escape analysis (`docs/MEMORY.md` §2.3) | Move shared state to a heap-backed, thread-safe handle (`Arc`, `Channel`) before spawning |
+| `thread_spawn` / `spawn` take a `( @ v )` closure; the worker runs on its own copy of the captured environment, dropped when the body returns ([`docs/MEMORY.md` §7.5](MEMORY.md)). Send covers what the copy *reaches*; a raw `*T` pointer into the parent stack is covered separately by the borrow checker's escape analysis (`docs/MEMORY.md` §2.3) | Move shared state to a heap-backed, thread-safe handle (`Arc`, `Channel`) before spawning |
 
 ## Functions and calls
 
@@ -57,6 +57,16 @@ before relying on any thread-safety expectation.
 | A closure holds the handles it captured, so freeing one and then invoking the closure is a compile error ([`docs/MEMORY.md` §2.11](MEMORY.md)) — but only while the closure is reachable by NAME. A closure **stored into a struct field**, returned, or kept by a callee escapes the check, exactly as a plain `Vec` stored into a field does | Free the captured handles after the closure's last call, in the frame that created it; or run `--strict-borrowck`, which reports the handover into the aggregate itself |
 | A parameter may not be named `r` followed only by digits (`r0`, `r12`, …) — a by-value parameter keeps its source name as its LLVM SSA register, and nurlc's temporaries are `%r0`, `%r1`, … in the same namespace | Rename it (`r0` → `r_0`, or something that says what it holds). Locals are unaffected — the code generator names those |
 | A `sink` parameter takes a manually-managed handle (`Vec`, single-pointer struct) that the callee frees explicitly. A *compiler-auto-dropped* value (an owned string, owned slice, `Drop` value, or struct with owned fields) is **rejected at the call site by design** — its auto-drop obligation can't be transferred without risking a double-free across `?`/`??`/loop scope restores (see [`docs/MEMORY.md` §1](MEMORY.md)) | Wrap it in a handle (`{ s data }` / `Vec`), or pass it by value as an ordinary parameter and let the caller's scope drop it |
+
+## Ownership
+
+| Limitation | Workaround |
+|---|---|
+| An option **parameter** (`? String p`) is not dropped by its function; a payload an arm takes over (frees, stores, returns) makes the caller hand the option over, so a path that leaves the payload alone leaks it | Pass the `String` itself, or take the payload on every path |
+| A struct with an enum or trait-object field is not dropped as a whole; its `String` / `Vec` fields are released by the program or by a `% Drop` of its own | Give the struct a `% Drop`, or keep owning fields in a struct of their own |
+| Freeing a field of a match payload (`?? o { T t → ( string_free . t name ) }`) hands the rest of the payload to the arm: it is dropped at the arm's end, and `o` must not be read after that match | Take the payload whole (`: Tagged x t`), or free the field after the last use of `o` |
+| Returning a raw view of a local (`^ ( string_data x )` with `x` a `String` this function owns) keeps `x` alive rather than dangling — it leaks | Return the `String` itself and let the caller take the view |
+| Storing a *borrowed* `String` / `Vec` into an owner (a struct literal, a field of a value, an element via `vec_push`) stores a **copy**; mutations through the new owner are not seen through the old binding | Store the owned value (move it in), or keep the shared buffer behind a pointer-reached struct, whose fields are stored as is |
 
 ## Imports
 

@@ -57,5 +57,6 @@
         _ → # u64 8
     }
     ( nurl_print ( nurl_str_int # i / mres # u64 4 ) ) ( nurl_print `\n` )
+    ( nurl_free cell )  // raw allocation: released by hand
     ^ 0
 }

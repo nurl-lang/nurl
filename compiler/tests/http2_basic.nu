@@ -176,7 +176,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : i blen ( vec_len [u] blob )
     ( print_label `roundtrip_blob_len` ( nurl_str_int blen ) )
 
-    : HpackDynTable dt ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable dt ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr dr ( hpack_decode_block blob dt )
     ?? dr {
         T dd → {
@@ -207,7 +207,7 @@ $ `stdlib/ext/http2_hpack.nu`
     // is the trivial happy path.
     : ( Vec u ) idx ( vec_new [u] )
     ( vec_push [u] idx # u 130 )
-    : HpackDynTable dt ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable dt ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr ir ( hpack_decode_block idx dt )
     ?? ir {
         T dd → {

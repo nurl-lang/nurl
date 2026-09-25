@@ -72,8 +72,6 @@ $ `stdlib/std/time.nu`
                     { ( nurl_print `: clean shutdown\n` ) }
                     { ( nurl_print `: run returned error\n` ) }
                     ( thread_join t )
-                    : *u stopper_env # *u stopper 1
-                    ( nurl_free # s stopper_env )
                 }
                 F e → {
                     ( nurl_print label )

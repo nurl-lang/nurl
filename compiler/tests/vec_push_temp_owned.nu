@@ -21,5 +21,8 @@ $ `stdlib/core/string.nu`
         T got → { = acc ( nurl_str_len got ) ( puts got ) }
         F → { = acc -1 }
     }
+    // Raw `s` elements carry no ownership of their own: the vector's
+    // owner releases them.
+    ( vec_free_with [s] v \ s x → v { ( nurl_free x ) } )
     ^ ? == acc 5 0 1
 }

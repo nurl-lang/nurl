@@ -667,6 +667,8 @@ $ `stdlib/core/vec.nu`
         = e + e 1
     }
     = g_xe_ntbl # i . ntbl ctl
+    // The table lives for the rest of the program, through the global.
+    ( mem_forget ntbl )
     ( vec_free [i] src ) ( vec_free [i] d2 )
     ( vec_free [i] x ) ( vec_free [i] y ) ( vec_free [i] t )
     ( vec_free [i] yp ) ( vec_free [i] ym ) ( vec_free [i] t2d )

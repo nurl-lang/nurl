@@ -24,12 +24,13 @@
 //
 // CONTROLs: the same programs with the free AFTER the last use; a container
 // rebound to a fresh handle before the second call; an inline `vec_each`
-// callback; and — the shape that decides the rule — reclaiming a closure's
-// heap env with `nurl_free` after freeing what it captured. That last one is
-// how async_mn / async_sleep end, and reading a mere VALUE load of a closure
-// as a use of its captures rejected both. Invocation is the discriminator:
-// the capture list is expanded at a call, and at an argument the callee is
-// known to invoke (its invoke-only set), never at a plain load.
+// callback; and — the shape that decides the rule — the closure's own env
+// being dropped at the end of its scope, after what it captured was freed
+// (docs/MEMORY.md §7.4). That drop is not a use of the captures, and nor is
+// a mere VALUE load of a closure: reading either as one would reject correct
+// programs. Invocation is the discriminator: the capture list is expanded at
+// a call, and at an argument the callee is known to invoke (its invoke-only
+// set), never at a plain load.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -45,7 +46,6 @@ $ `stdlib/core/string.nu`
     : ( @ i ) ca \ → i { ^ ( vec_len [i] a ) }
     : i n1 ( ca )
     ( vec_free [i] a )
-    ( nurl_free # s # *u ca 1 )
 
     // Rebound to a fresh handle before the second call.
     : ~ ( Vec i ) b ( vec_new [i] )
@@ -55,7 +55,6 @@ $ `stdlib/core/string.nu`
     = b ( vec_new [i] )
     : i n3 ( cb )
     ( vec_free [i] b )
-    ( nurl_free # s # *u cb 1 )
 
     // An inline callback over a container nobody frees underneath it.
     : ( Vec i ) c ( vec_new [i] )

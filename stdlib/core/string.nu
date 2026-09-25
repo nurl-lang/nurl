@@ -591,6 +591,9 @@ $ `stdlib/core/char.nu`
 }
 
 @ string_free sink String str → v {
+    // The disposer: the buffer is released through the Vec view below, so
+    // the String itself is not dropped again (docs/MEMORY.md §7.6).
+    ( mem_forget str )
     ( vec_free [u] ( __sbuf str ) )
 }
 

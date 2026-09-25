@@ -159,6 +159,9 @@ $ `stdlib/ext/http2_server.nu`
 
 @ __grpc_server_put GrpcServer server i idx GrpcServerCall call → v {
     : *GrpcServerCall p ( vec_data [GrpcServerCall] . server calls )
+    // `call` is the slot's own value, read by the getter and updated: it
+    // goes back as is (the table still owns it).
+    ( mem_put_back call )
     = . p idx call
 }
 

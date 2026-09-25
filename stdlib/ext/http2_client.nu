@@ -264,6 +264,9 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2c_set_stream H2Client c i idx H2CStream s → v {
     : *H2CStream sp ( vec_data [H2CStream] . c streams )
+    // `s` is the slot's own value, read by the getter and updated: it
+    // goes back as is (the table still owns it).
+    ( mem_put_back s )
     = . sp idx s
 }
 
@@ -544,7 +547,9 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 @ __h2c_ping_ack H2Client c ( Vec u ) payload → !v H2FrameErr {
-    ^ ( __h2c_write_frame c @ H2Frame { 6 1 0 payload } 16384 )
+    // The frame holds its own copy of the borrowed payload, dropped here.
+    : H2Frame frame @ H2Frame { 6 1 0 payload }
+    ^ ( __h2c_write_frame c frame 16384 )
 }
 
 // ── Request submission ────────────────────────────────────────────────
@@ -649,16 +654,15 @@ $ `stdlib/ext/http2_hpack.nu`
         != 0 ( __h2c_eq_ci nm `upgrade` )
         != 0 ( __h2c_eq_ci nm `proxy-connection` )
         ? is_hop {} {
-            : String lower ( string_to_lower . h name )
-            : Header checked @ Header { lower . h value }
-            ? | == ( string_get lower 0 ) 58 ! ( __h2c_header_valid checked ) {
-                ( string_free lower )
+            // `checked` owns its lowered name and a copy of the value, and
+            // moves into `all` once valid (dropped on the reject path).
+            : Header checked @ Header { ( string_to_lower . h name ) ( string_from ( string_data . h value ) ) }
+            ? | == ( string_get . checked name 0 ) 58 ! ( __h2c_header_valid checked ) {
                 ( vec_free_with [Header] all \ Header hh → v { ( header_free hh ) } )
                 ( vec_free [u] body )
                 ^ @ !i H2ClientErr { F # H2ClientErr H2CProtocol }
             } {}
-            ( vec_push [Header] all ( header_new ( string_data lower ) ( string_data . h value ) ) )
-            ( string_free lower )
+            ( vec_push [Header] all checked )
         }
         = k + k 1
     }
@@ -1024,10 +1028,14 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2c_apply_response_headers H2Client c i idx ( Vec u ) block b end_stream → !v H2ClientErr {
     : *HpackDynTable dp ( vec_data [HpackDynTable] . c dec_box )
-    : !HpackDecoded HpackErr hd ( hpack_decode_block block . dp 0 )
+    // The decoder updates the table in place; it goes back into its slot
+    // as is (the box still owns it).
+    : ~ HpackDynTable tbl . dp 0
+    : !HpackDecoded HpackErr hd ( hpack_decode_block block tbl )
+    ( mem_put_back tbl )
+    = . dp 0 tbl
     ?? hd {
         T dec → {
-            = . dp 0 . dec dyn
             ? < idx 0 {
                 ( vec_free_with [Header] . dec headers \ Header h → v { ( header_free h ) } )
                 ^ @ !v H2ClientErr { T 0 }

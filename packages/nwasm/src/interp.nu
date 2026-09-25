@@ -553,7 +553,7 @@ inline @ __mem_base * Interp it → i {
         ~ != 0 . it jit_ctx_free { : *i cb # *i . it jit_ctx_free = . it jit_ctx_free . cb 0 ( nurl_free # s cb ) }
         ? != 0 . it jit_slab { ( nurl_free # s . it jit_slab ) = . it jit_slab 0 } {}
         ? != 0 . it jit_spcell { ( nurl_free # s . it jit_spcell ) = . it jit_spcell 0 } {}
-        ? != 0 . it jit_co_env { ( nurl_free # s . it jit_co_env ) = . it jit_co_env 0 } {}
+        ? != 0 . it jit_co_env { ( nurl_closure_drop # *u . it jit_co_env ) = . it jit_co_env 0 } {}
         ( vec_free [u] . it capout )
         ( vec_free [u] . it caperr )
         : i tpn ( vec_len [s] . it pfuncs )
@@ -619,7 +619,7 @@ inline @ __mem_base * Interp it → i {
     ~ != 0 . it jit_ctx_free { : *i ocb # *i . it jit_ctx_free = . it jit_ctx_free . ocb 0 ( nurl_free # s ocb ) }
     ? != 0 . it jit_slab { ( nurl_free # s . it jit_slab ) = . it jit_slab 0 } {}
     ? != 0 . it jit_spcell { ( nurl_free # s . it jit_spcell ) = . it jit_spcell 0 } {}
-    ? != 0 . it jit_co_env { ( nurl_free # s . it jit_co_env ) = . it jit_co_env 0 } {}
+    ? != 0 . it jit_co_env { ( nurl_closure_drop # *u . it jit_co_env ) = . it jit_co_env 0 } {}
     ( nurl_free # s it )
 }
 
@@ -4102,10 +4102,12 @@ inline @ __fr_setpos s tp i v → v {
     = . spc 1 . it jit_slab_end
     // The inline call-out bridge: decompose a capturing closure into
     // (fn, env) the way recover/thread_spawn do — the emitted code calls
-    // fn(env) directly. env is freed in interp_free, not here.
+    // fn(env) directly. The interpreter keeps its own copy of the env
+    // (the closure itself is dropped at the end of this scope) and drops
+    // it in interp_free (docs/MEMORY.md §7.4).
     : ( @ v ) co \ → v { ( __jit_inline_co it ) }
     : *u cofn # *u co 0
-    : *u coenv # *u co 1
+    : *u coenv ( nurl_closure_clone # *u co 1 )
     = . it jit_co_fn # i cofn
     = . it jit_co_env # i coenv
 }

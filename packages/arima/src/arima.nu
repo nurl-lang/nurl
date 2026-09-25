@@ -1437,7 +1437,7 @@ $ `stdlib/ext/json.nu`
             : ( @ v ) body \ → v { ( __ar_lane_run ln ) }
             ?? ( thread_spawn_owned body ) {
                 T t → { ( vec_push [Thread] ts t ) }
-                F _ → { ( __ar_lane_run ln ) ( nurl_free # s # *u body 1 ) }
+                F _ → { ( __ar_lane_run ln ) }
             }
             = l + l 1
         }

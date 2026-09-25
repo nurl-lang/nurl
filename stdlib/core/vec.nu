@@ -330,6 +330,20 @@
     ^ T
 }
 
+// Put `x` at `idx` and hand the element it replaces back, owned — bind it
+// and it is dropped with the binding. `F` (and `x` is not stored) when
+// `idx` is out of range.
+@ vec_replace [A] ( Vec A ) v i idx A x → ?A {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
+    : *A data # *A ( nurl_peek ctl 0 )
+    : A old . data idx
+    ( mem_take old )  // the element leaves the container
+    = . data idx x
+    ^ @ ?A { T old }
+}
+
 // ── Mutation ────────────────────────────────────────────────────────
 
 @ vec_push [A] ( Vec A ) v A x → v {
@@ -374,6 +388,7 @@
     ? | < idx 0 >= idx len { ^ @ ?A { F # A 0 } } {}
     : *A data # *A ( nurl_peek ctl 0 )
     : A x . data idx
+    ( mem_take x )  // the element leaves the container
     : ~ i i idx
     ~ < i - len 1 {
         = . data i . data + i 1
@@ -390,6 +405,7 @@
     : i last - len 1
     : *A data # *A ( nurl_peek ctl 0 )
     : A x . data last
+    ( mem_take x )  // the element leaves the container
     ( nurl_poke ctl 1 last )
     ^ @ ?A { T x }
 }
@@ -584,6 +600,9 @@
 // ── Cleanup ─────────────────────────────────────────────────────────
 
 @ vec_free [A] sink ( Vec A ) v → v {
+    // This IS the disposer: it releases the parts by hand below, so the
+    // handle is not dropped again on the way out (docs/MEMORY.md §7.6).
+    ( mem_forget v )
     : s ctl . v ctl
     : s data ( __vec_data_raw ctl )
     // A borrowed view (vec_borrow_raw) never owned its buffer: release
@@ -604,6 +623,7 @@
 // element types use the bare `vec_free` instead — calling
 // `vec_free_with` with a no-op closure works but is wasteful.
 @ vec_free_with [A] sink ( Vec A ) v ( @ v A ) drop → v {
+    ( mem_forget v )
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     : s data ( __vec_data_raw ctl )

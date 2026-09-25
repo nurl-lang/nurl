@@ -23,7 +23,6 @@ $ `stdlib/ext/http_full.nu`
             : HttpServer srv ( server_new_with_timeout listener base 5000 )
             : !v NetErr rr ( server_run_pool srv 2 )
             ( signal_clear_shutdown ) ( server_stop srv ) ( router_free r )
-            ( nurl_free # s # *u base 1 )
             ?? rr { T _ → { ^ 0 } F _ → { ^ 1 } }
         }
         F _ → { ^ 1 }

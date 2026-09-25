@@ -41,7 +41,6 @@ $ `stdlib/std/bytes.nu`
 
 @ encode inout HpackDynTable table ( Vec Header ) hs → ( Vec u ) {
     : HpackEncoded encoded ( hpack_encode_headers_dyn hs table -1 )
-    = table . encoded dyn
     ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
     ^ . encoded block
 }

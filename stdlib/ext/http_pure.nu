@@ -138,10 +138,12 @@ $ `stdlib/std/thread.nu`
     : ~ i k 0
     : ~ b found F
     ~ & ! found < k n {
-        : HpSess e . d k
+        : ~ HpSess e . d k
         ? ( string_eq . e key key ) {
+            // Replace the blob in place; the entry keeps its key.
             ( vec_free [u] . e blob )
-            = . d k @ HpSess { . e key copy }
+            = . e blob copy
+            = . d k e
             = found T
         } { = k + k 1 }
     }

@@ -165,6 +165,9 @@ static void *nurl__xrealloc(void *q, size_t n) {
  * way, so a site that frees one of these with plain free() — several
  * in the FFI half do — keeps working. */
 void *nurl_alloc(long long bytes);  /* §9a */
+void *nurl_closure_clone(void *env);  /* closure envs, see below */
+void  nurl_free(void *ptr);  /* §9a */
+void  nurl_closure_drop(void *env);  /* closure envs, see nurl_closure_clone */
 char *nurl_strdup(const char *s);   /* §9a */
 static char *nurl__xstrdup(const char *s) {
     char *p = nurl_strdup(s);
@@ -2700,6 +2703,52 @@ static __thread long long nurl__ret_owned;
 long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
 void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
 
+/* Closure environments (docs/MEMORY.md §7.4). A capturing closure's env is
+ * one heap block whose first word points at a compiler-emitted descriptor:
+ * the block's size, and two optional thunks over the captures that are
+ * themselves closures — `drop` releases their envs, `clone` replaces each
+ * with a fresh copy. Every owner of an env releases it through
+ * nurl_closure_drop, so an env owning other envs frees the whole tree, and
+ * a borrowed closure stored into an owning place (a struct field, another
+ * closure's captures, a spawned fiber) is copied with nurl_closure_clone.
+ * A closure that captures nothing has a null env; both calls accept it. */
+typedef struct {
+    long long size;
+    void (*drop)(void *env);
+    void (*clone)(void *env);
+} NurlCenvVt;
+
+void nurl_closure_drop(void *env) {
+    if (!env) return;
+    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    if (vt && vt->drop) vt->drop(env);
+    nurl_free((char *)env);
+}
+
+void *nurl_closure_clone(void *env) {
+    if (!env) return NULL;
+    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    void *copy = nurl_alloc(vt->size);
+    memcpy(copy, env, (size_t)vt->size);
+    if (vt->clone) vt->clone(copy);
+    return copy;
+}
+
+/* An owned slice of closures `[( @ … ) | …]` owns each element's env: drop
+ * them all before its buffer is freed. The element layout is the closure
+ * value itself, { fn, env }. */
+typedef struct { void *fn; void *env; } NurlClosureVal;
+void nurl_closure_slice_drop(void *data, long long len) {
+    NurlClosureVal *c = (NurlClosureVal *)data;
+    for (long long i = 0; c && i < len; i++) nurl_closure_drop(c[i].env);
+}
+
+/* The env a new owner holds: `env` itself when `owner` says it already
+ * belongs to the caller, a clone otherwise. */
+void *nurl_closure_own(void *env, void *owner) {
+    return owner ? env : nurl_closure_clone(env);
+}
+
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
  *
  * A `recover` frame establishes a setjmp landing pad; a `panic` inside
@@ -2791,6 +2840,15 @@ static void nurl__jrnl_grow(void) {
         nurl__jrnl_cap = cap;
     }
     nurl__jrnl_reindex();
+}
+
+/* A thread that ends releases its journal: the buffers are thread-local,
+ * so nothing else can reach them afterwards. */
+static void nurl__journal_thread_exit(void) {
+    if (nurl__jrnl_active) return;
+    free(nurl__jrnl); free(nurl__jrnl_buckets);
+    nurl__jrnl = NULL; nurl__jrnl_buckets = NULL;
+    nurl__jrnl_len = nurl__jrnl_cap = nurl__jrnl_live = 0;
 }
 
 static void nurl__jrnl_push(void *p, void (*drop)(void*)) {
@@ -3086,12 +3144,41 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     long long *c = (long long*)ctl;
     void *data = (void*)(intptr_t)c[0];
     long long len = c[1];
+    /* A borrowed view (vec_borrow_raw: cap < 0) owns neither its elements
+     * nor its buffer — only the control block, exactly as vec_free treats
+     * it. nurl_free, not free: an owned handle may sit in the panic
+     * journal, and only nurl_free takes it out. */
+    if (c[2] < 0) { nurl_free(ctl); return; }
     if (elem_drop && data && elem_size > 0) {
         char *base = (char*)data;
         for (long long i = 0; i < len; i++) elem_drop(base + i*elem_size);
     }
-    if (data && data != (void*)((char*)ctl + 24)) free(data);
-    free(ctl);
+    if (data && data != (void*)((char*)ctl + 24)) nurl_free(data);
+    nurl_free(ctl);
+}
+
+/* Deep copy of a Vec / String control block (docs/MEMORY.md §7.6): the
+ * compiler stores a COPY when a borrowed handle is put somewhere that owns
+ * it (a struct field, a container element), so the new owner and the old
+ * one never free the same buffer. `elem_clone`, when non-NULL, replaces
+ * each copied element in place with its own deep copy. One spare zero byte
+ * keeps a String's data NUL-terminated. A borrowed view (cap < 0) copies
+ * into an ordinary owned Vec. */
+void *nurl_vec_clone(void *ctl, void (*elem_clone)(void*), long long elem_size) {
+    if (!ctl) return NULL;
+    long long *c = (long long*)ctl;
+    long long len = c[1] > 0 ? c[1] : 0;
+    long long bytes = len * elem_size;
+    long long *n = (long long*)nurl_zalloc(24);
+    char *data = (char*)nurl_alloc(bytes + 1);
+    if (bytes > 0) memcpy(data, (void*)(intptr_t)c[0], (size_t)bytes);
+    data[bytes] = 0;
+    n[0] = (long long)(intptr_t)data;
+    n[1] = len;
+    n[2] = len;
+    if (elem_clone && elem_size > 0)
+        for (long long i = 0; i < len; i++) elem_clone(data + i*elem_size);
+    return n;
 }
 
 /* Back-compat alias. */
