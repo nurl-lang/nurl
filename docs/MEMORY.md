@@ -1536,6 +1536,10 @@ handles are freely aliased, so their bindings follow a few more rules:
   owns that value from here on because the container gave it up
   (`vec_pop`, `vec_remove`, `deque_pop_front` after shortening their
   buffer). It is dropped at scope exit and moved when stored or returned.
+- `( mem_put_back x )` marks the next store of `x` through a pointer as a
+  write-back: `x` was read out of that slot (a getter), updated, and goes
+  back as is — neither copied nor taken over; the container still owns
+  it. For getter / setter pairs over a container's elements.
 - A `! T E` binding whose `T` is a `String` or `Vec` (and whose `E` owns
   nothing) is dropped like a `? T` binding.
 

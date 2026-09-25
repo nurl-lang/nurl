@@ -264,6 +264,9 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2c_set_stream H2Client c i idx H2CStream s → v {
     : *H2CStream sp ( vec_data [H2CStream] . c streams )
+    // `s` is the slot's own value, read by the getter and updated: it
+    // goes back as is (the table still owns it).
+    ( mem_put_back s )
     = . sp idx s
 }
 

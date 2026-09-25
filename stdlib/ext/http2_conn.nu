@@ -420,6 +420,9 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2_set_stream H2Connection c i idx H2Stream s → v {
     : *H2Stream sp ( vec_data [H2Stream] . c streams )
+    // `s` is the slot's own value, read by the getter and updated: it
+    // goes back as is (the table still owns it).
+    ( mem_put_back s )
     = . sp idx s
 }
 

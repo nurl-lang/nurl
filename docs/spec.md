@@ -1773,6 +1773,8 @@ whichever way it leaves:
   disposer, or a table kept in a global for the program's lifetime;
 - `( mem_take x )` claims `x`'s value — for a container operation that
   hands an element out (`vec_pop`), so the element is owned, not lent.
+- `( mem_put_back x )` stores `x` back into the slot it was read from
+  without copying it or taking it over — for an element setter.
 
 See [`docs/MEMORY.md` §7.6](MEMORY.md) for the complete rules and
 [`docs/LIMITATIONS.md`](LIMITATIONS.md) for the shapes that still

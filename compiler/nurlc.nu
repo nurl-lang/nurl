@@ -8487,6 +8487,22 @@
     ^ ( nurl_str_cat `undef` `` )
 }
 
+// `( mem_put_back x )` — the next store of `x` through a pointer writes it
+// back into the slot it was read from (a getter / modify / setter
+// protocol over a container's element): it is stored as is, neither
+// copied nor taken over, and whoever owns the container still owns it.
+@ gen_mem_put_back i lex i syms i cg → s {
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex `mem_put_back takes a binding: '( mem_put_back x )' — x is written back into the slot it was read from, so a store of x through a pointer neither copies it nor takes it over.` ) }
+    {}
+    : s name ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    ( expect lex TT_RPAREN )
+    ( nurl_sym_def syms ( nurl_str_cat name `__putback` ) `1` )
+    ( nurl_set_last_type `void` )
+    ^ ( nurl_str_cat `undef` `` )
+}
+
 @ gen_volatile_load i lex i syms i cg → s {
     : s pv ( gen_operand lex syms cg )
     : s pt ( nurl_get_last_type )
@@ -9405,6 +9421,9 @@
     {}
     ? ( seq fname `mem_take` )
     { ^ ( gen_mem_take lex syms cg ) }
+    {}
+    ? ( seq fname `mem_put_back` )
+    { ^ ( gen_mem_put_back lex syms cg ) }
     {}
     // Dynamic trait object construction `( dyn Trait v )` (docs/spec.md §4.9).
     // Intercepted only when `dyn` is followed by a known trait name, so a
@@ -19884,6 +19903,9 @@
     // An element read through a pointer and written back through one
     // (`: item . p k … = . p k item`) is put back, not copied.
     : ~ b __fs_wb F
+    // Declared a write-back (mem_put_back): stored as is, not kept.
+    : b __fs_putback & ( is_ident_tok __fs_tt ) != 0 ( nurl_sym_len2 syms __fs_val `__putback` )
+    ? __fs_putback { = __fs_wb T } {}
     ? & indirect ( is_ident_tok __fs_tt ) {
         : s __wbp ( mem_udrop_ptr_of syms __fs_val )
         ? != 0 ( nurl_str_len __wbp ) { = __fs_wb ( seq ( nurl_sym_get2 syms __wbp `__sborrow` ) `elem` ) } {}
@@ -19921,7 +19943,7 @@
             ( mem_udrop_flag_set syms cg __fsp __nf )
         } {}
     } {
-        ? ( is_ident_tok __fs_tt ) { ( mem_note_kept syms cg __fs_val ! manual ) } {}
+        ? & ( is_ident_tok __fs_tt ) ! __fs_putback { ( mem_note_kept syms cg __fs_val ! manual ) } {}
     }
     // A pointer/slice store hands the address to backing storage. The caller
     // cannot release an input merely because this function returns a scalar.
