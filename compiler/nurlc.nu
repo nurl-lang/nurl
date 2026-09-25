@@ -5678,6 +5678,24 @@
 // The final parameter summary decides whether a temporary remains the
 // caller's owner. Emit a private constant, just as for inferred sink moves;
 // LLVM folds both the select and null drop without a runtime ownership ABI.
+// `@.__nurl_argdrop.N` for argument `index` of `callee`: whether it may be
+// dropped once the call returns (mem_consumer_arg_drop_safe, resolved at
+// module end).
+@ mem_argdrop_const i syms s callee s generic i index → s {
+    : s key ( nurl_str_cat4 `argdrop##` callee `##` ( nurl_str_int index ) )
+    : s known ( nurl_sym_get g_pending_impl key )
+    : ~ i number ( nurl_str_to_int known )
+    ? == 0 ( nurl_str_len known ) {
+        = number ( nurl_str_to_int ( nurl_sym_get g_pending_impl `argdrop_count` ) )
+        ( nurl_sym_def g_pending_impl `argdrop_count` ( nurl_str_int + number 1 ) )
+        ( nurl_sym_def g_pending_impl key ( nurl_str_int number ) )
+        ( __park_append g_pending_impl `argdrops`
+        ( nurl_str_cat4 ( nurl_str_int number ) ` ` callee
+        ( nurl_str_cat4 ` ` generic ` ` ( nurl_str_int index ) ) ) )
+    } {}
+    ^ ( nurl_str_cat `@.__nurl_argdrop.` ( nurl_str_int number ) )
+}
+
 @ mem_arg_owner i syms i cg s callee s generic i index s value → s {
     : b user | != 0 ( nurl_sym_len2 syms generic `__nurlfn` )
     != 0 ( nurl_sym_len2 syms generic `__garity` )
@@ -9803,6 +9821,7 @@
             // A literal built as this argument moves its fields in only if
             // the callee keeps the argument (mem_note_kept_arg).
             : s __aas_saved ( nurl_sym_get syms `__agg_arg_sink__` )
+            ( nurl_sym_def syms `__deferred_temps__` `` )
             ( nurl_sym_def syms `__agg_arg_sink__` ? == bck_arg_tt TT_AT
             ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) `` )
             = av ( gen_operand lex syms cg )
@@ -10687,6 +10706,26 @@
         // argument (`( run ( string_from … ) )`) is a temporary: dropped
         // after the call unless the callee keeps or stores it, or the
         // inner call only lent it.
+        // Only where the call's result cannot point into the temporary
+        // (void or a scalar): `( string_data ( mk ) )` hands back a view
+        // of it, used after this call returns.
+        : s __crt ( nurl_sym_get syms call_name )
+        : b __scalar_ret | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` )
+        | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` )
+        // A temporary an inner call could not drop (it returned a view of
+        // it: `( string_data ( mk ) )`) lives until this call is done —
+        // when this call returns nothing that can point into it and
+        // provably keeps no argument it was handed (the raw-argument rule).
+        : s __dtmp ( nurl_sym_get syms `__deferred_temps__` )
+        // Only through an argument that IS a call: a join or a block in
+        // between may have made it in a branch this point does not follow.
+        ? & != 0 ( nurl_str_len __dtmp ) != bck_arg_tt TT_LPAREN { ( nurl_sym_def syms `__deferred_temps__` `` ) } {}
+        ? & != 0 ( nurl_str_len __dtmp ) == bck_arg_tt TT_LPAREN {
+            ? & __scalar_ret ( mem_consumer_arg_drop_safe syms call_name arg_idx ) {
+                = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) ( nurl_str_cat __dtmp `` ) ( nurl_str_cat3 owned_arg_temps ` ` __dtmp )
+                ( nurl_sym_def syms `__deferred_temps__` `` )
+            } {}
+        } {}
         ? & & & & & != 0 g_auto_drop_strings == bck_arg_tt TT_LPAREN ( __is_handle_ty at ) ! __callee_shadowed
         == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
             : s __tro ( mem_call_retown syms cg )
@@ -10699,12 +10738,25 @@
                 ( nurl_print `  ` ) ( nurl_print __tkp ) ( nurl_print ` = or i1 ` ) ( nurl_print __tsk ) ( nurl_print `, ` ) ( nurl_print __tst ) ( nurl_print `\n` )
                 : s __tnk ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __tnk ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tkp ) ( nurl_print `, 1\n` )
-                : s __tc ( nurl_cg_reg cg )
+                : ~ s __tc ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __tc ) ( nurl_print ` = and i1 ` ) ( nurl_print __tro ) ( nurl_print `, ` ) ( nurl_print __tnk ) ( nurl_print `\n` )
+                // A call handing back a String / Vec / struct: dropped here
+                // when it provably keeps no hold on this argument.
+                : b __hret & ! __scalar_ret ( __is_handle_ty __crt )
+                ? __hret {
+                    : s __tad ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( mem_argdrop_const syms call_name fname arg_idx ) __tad )
+                    : s __tc2 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __tc2 ) ( nurl_print ` = and i1 ` ) ( nurl_print __tc ) ( nurl_print `, ` ) ( nurl_print __tad ) ( nurl_print `\n` )
+                    = __tc __tc2
+                } {}
                 ( __handle_drop_ensure at )
                 ( __dropifv_request at )
                 : s __tw ( nurl_str_cat4 `h|` __tc ( nurl_str_cat3 `|` at `|` ) av )
-                = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __tw ( nurl_str_cat3 owned_arg_temps ` ` __tw )
+                ? | __scalar_ret __hret
+                { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __tw ( nurl_str_cat3 owned_arg_temps ` ` __tw ) }
+                { : s __dcur ( nurl_sym_get syms `__deferred_temps__` )
+                    ( nurl_sym_def syms `__deferred_temps__` ? == 0 ( nurl_str_len __dcur ) __tw ( nurl_str_cat3 __dcur ` ` __tw ) ) }
             } {}
         } {}
         ? != first 0
@@ -16141,6 +16193,24 @@
     { ( mem_udrop_flag_set syms cg ptr `1` ) ( __sb syms ptr `` ) }
 }
 
+// A payload cursor about to give up a field takes over the option / result
+// binding it reads from: only its own copy is zeroed, so it must also be
+// the one that drops the rest.
+@ mem_udrop_takeover_opt i syms i cg s fp → v {
+    : ~ s al ( nurl_sym_get2 syms fp `__alias` )
+    ~ != 0 ( nurl_str_len al ) {
+        : s w ( str_first_word al ) = al ( str_skip_word al )
+        ? & == 0 ( nurl_sym_len2 syms w `__pname` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms w `__udty` ) `%__opt.` ) {
+            : s wf ( mem_udrop_flag_get syms cg w )
+            : s cf ( mem_udrop_flag_get syms cg fp )
+            : s nf ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print cf ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
+            ( mem_udrop_flag_set syms cg fp nf )
+            ( mem_udrop_flag_set syms cg w `0` )
+        } {}
+    }
+}
+
 // `ptr` takes field `fr` (`<struct ptr> <sty> <idx> <fty>`) out of a
 // struct that is dropped before it: the struct first takes over whatever
 // it is a cursor over (an option binding's payload), then the field is
@@ -18277,6 +18347,8 @@
 }
 
 @ gen_stmt i lex i syms i cg → s {
+    // A view temporary never outlives its statement (gen_call).
+    ( nurl_sym_def syms `__deferred_temps__` `` )
     // DWARF Phase 4: snapshot the source line/col of this statement's
     // first token and seed a fresh DILocation. emit_dbg_eol attaches
     // it to every call/ret/br emitted by the dispatched gen_* below,
@@ -21361,7 +21433,11 @@
     ( nurl_lex_advance lex )  // consume '@'
     // Returned as is (`^ @ ?A { T x }` in vec_get): a borrowed field is
     // lent to the caller, not copied (docs/MEMORY.md §7.6).
-    : b agg_returned != 0 ( nurl_sym_len syms `__ret_agg__` )
+    // `2`: nested in a returned literal — only its field moves (`@ Json {
+    // JStr . r str }`) count as returned; a cursor it stores stays as is.
+    : b agg_nested ( seq ( nurl_sym_get syms `__ret_agg__` ) `2` )
+    : b agg_returned & != 0 ( nurl_sym_len syms `__ret_agg__` ) ! agg_nested
+    : b agg_moves_fields | agg_returned agg_nested
     ( nurl_sym_set_deep syms `__ret_agg__` `` )
     : s agg_ty ( parse_type lex )  // parse the aggregate type
     // A POINTER target has no fields to insert into: `@ *T { … }` reads
@@ -21577,6 +21653,8 @@
         // NEXT field, which is the wrong-line anchor the gate rejects.
         : i __fld_line ( nurl_lex_line lex )
         : i __fld_col ( nurl_lex_col lex )
+        // A literal nested in a returned one is returned with it.
+        ? & agg_moves_fields == fld_first_tt TT_AT { ( nurl_sym_set_deep syms `__ret_agg__` `2` ) } {}
         : ~ s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
         // A closure stored into a named struct's field is OWNED by the
@@ -21594,7 +21672,7 @@
         // (`: String cn . names cn … ^ @ Csr { … cn … }`, or `. names cn`
         // itself): the field moves out, zeroed at the source.
         : ~ s fld_src ``
-        ? & agg_returned == fld_first_tt TT_DOT { = fld_src ( nurl_sym_get syms `__last_field_read__` ) } {}
+        ? & agg_moves_fields == fld_first_tt TT_DOT { = fld_src ( nurl_sym_get syms `__last_field_read__` ) } {}
         ? & agg_returned ( is_ident_tok fld_first_tt ) {
             : s __fu ( mem_udrop_ptr_of syms fld_first_val )
             ? & != 0 ( nurl_str_len __fu ) ( seq ( nurl_sym_get2 syms __fu `__sborrow` ) `local` )
@@ -21608,7 +21686,8 @@
             : s fs_fty ( str_first_word fs )
             ? & & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) fs_ptr )
             == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) ( __is_handle_ty fs_fty )
-            { ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty ( mem_udrop_flag_get syms cg fs_ptr ) )
+            { ( mem_udrop_takeover_opt syms cg fs_ptr )
+                ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty ( mem_udrop_flag_get syms cg fs_ptr ) )
                 = fld_lent `` } {}
         } {}
         ? & agg_returned ( seq fld_lent `1` )

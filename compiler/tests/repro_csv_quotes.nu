@@ -28,5 +28,6 @@ $ `stdlib/core/string.nu`
     }
 
     ( nurl_print `Total rows: ` ) ( nurl_print ( nurl_str_int count ) ) ( nurl_print `\n` )
+    ( csv_reader_free r )  // a raw reader handle: released by hand
     ( string_free content )
 }

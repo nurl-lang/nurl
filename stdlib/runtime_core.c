@@ -2842,6 +2842,15 @@ static void nurl__jrnl_grow(void) {
     nurl__jrnl_reindex();
 }
 
+/* A thread that ends releases its journal: the buffers are thread-local,
+ * so nothing else can reach them afterwards. */
+static void nurl__journal_thread_exit(void) {
+    if (nurl__jrnl_active) return;
+    free(nurl__jrnl); free(nurl__jrnl_buckets);
+    nurl__jrnl = NULL; nurl__jrnl_buckets = NULL;
+    nurl__jrnl_len = nurl__jrnl_cap = nurl__jrnl_live = 0;
+}
+
 static void nurl__jrnl_push(void *p, void (*drop)(void*)) {
     if (!nurl__jrnl_active || !p) return;
     nurl__jrnl_grow();

@@ -4607,6 +4607,7 @@ static void nurl__thr_owned_tramp(void *p) {
     free(p);
     b.fn(b.env);
     if (b.env) nurl_closure_drop(b.env);
+    nurl__journal_thread_exit();
 }
 
 /* The thread runs on its OWN copy of the closure env and drops it when the

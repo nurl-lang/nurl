@@ -77,7 +77,7 @@ $ `stdlib/ext/websocket.nu`
     ( string_free acc )
 
     : HttpRequest r ( make_request_for_upgrade )
-    : !HttpResponse WsErr rr ( ws_handshake_response_for r @ ?String { F ( string_new ) } )
+    : !HttpResponse WsErr rr ( ws_handshake_response_for r @ ?String { F } )
     ?? rr {
         T resp → {
             : ( Vec u ) wire ( response_serialize resp )
