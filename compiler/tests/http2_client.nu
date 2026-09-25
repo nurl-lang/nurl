@@ -74,7 +74,7 @@ $ `stdlib/ext/http2_client.nu`
     ( vec_push [Header] hs ( header_new `x-test` `bar` ) )
     : ( Vec u ) block ( hpack_encode_headers hs )
     ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
-    : HpackDynTable dyn ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable dyn ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr dr ( hpack_decode_block block dyn )
     ( vec_free [u] block )
     ?? dr {

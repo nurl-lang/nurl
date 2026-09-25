@@ -57,7 +57,7 @@ $ `stdlib/ext/http2_hpack.nu`
         = r + r 1
     }
 
-    : HpackDynTable dyn ( hpack_dyn_new 4096 )
+    : ~ HpackDynTable dyn ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr res ( hpack_decode_block blk dyn )
     ?? res {
         T dd → {

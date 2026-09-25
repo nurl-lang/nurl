@@ -514,9 +514,8 @@ $ `stdlib/ext/http2_hpack.nu`
                 // the new size at the start of the next header block
                 // (RFC 7541 §4.2). A larger allowance is not taken up —
                 // an encoder may use less than the peer offers.
-                : HpackDynTable ed . cur enc_dyn
-                ? < value . ed max_size {
-                    = . cur enc_dyn ( hpack_dyn_set_max ed value )
+                ? < value . . cur enc_dyn max_size {
+                    ( hpack_dyn_set_max . cur enc_dyn value )
                     = . cur enc_size_update value
                 } {}
             }
@@ -703,13 +702,6 @@ $ `stdlib/ext/http2_hpack.nu`
             \ Header h → v { ( header_free h ) } )
             = . s decoded_headers . dd headers
             = . s headers_decoded T
-            // Update dec_dyn from the result. hpack_decode_block mutates
-            // the dyn table's entries Vec in place and returns the same
-            // (aliased) handle wrapped in a fresh HpackDynTable struct, so
-            // the old cur.dec_dyn and dd.dyn share storage. Overwriting
-            // is correct — explicitly freeing the old would double-free
-            // through the aliased entries pointer.
-            = . cur dec_dyn . dd dyn
             ( __h2_set_stream cur sidx s )
             ^ @ !H2Connection H2ConnErr { T cur }
         }
@@ -1148,7 +1140,6 @@ $ `stdlib/ext/http2_hpack.nu`
     ?? dr {
         F _ → { ^ @ !H2Event H2ConnErr { F H2ConnCompression } }
         T dd → {
-            = . c dec_dyn . dd dyn
             ( vec_clear [u] . s header_block )
             = . s headers_complete T
             = . c partial_headers_stream 0
@@ -1665,7 +1656,6 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ !v H2ConnErr { F H2ConnFrameSize }
     } {}
     : HpackEncoded encoded ( hpack_encode_headers_dyn headers . c enc_dyn . c enc_size_update )
-    = . c enc_dyn . encoded dyn
     = . c enc_size_update -1
     : ( Vec u ) block . encoded block
     : i length ( vec_len [u] block )

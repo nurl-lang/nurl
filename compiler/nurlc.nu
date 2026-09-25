@@ -19905,7 +19905,6 @@
     : ~ b __fs_wb F
     // Declared a write-back (mem_put_back): stored as is, not kept.
     : b __fs_putback & ( is_ident_tok __fs_tt ) != 0 ( nurl_sym_len2 syms __fs_val `__putback` )
-    ? __fs_putback { = __fs_wb T } {}
     ? & indirect ( is_ident_tok __fs_tt ) {
         : s __wbp ( mem_udrop_ptr_of syms __fs_val )
         ? != 0 ( nurl_str_len __wbp ) { = __fs_wb ( seq ( nurl_sym_get2 syms __wbp `__sborrow` ) `elem` ) } {}
@@ -19914,6 +19913,7 @@
     // . data - i 1`, vec_insert's shift): a move within the buffer.
     ? & & indirect == __fs_tt TT_DOT == 0 ( nurl_str_len ( nurl_sym_get syms `__last_field_read__` ) )
     { = __fs_wb T } {}
+    ? __fs_putback { = __fs_wb T } {}
     ? & ! manual ! __fs_wb
     { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v ( mem_lent_cond syms cg __fs_ty __fs_tt __fs_val ) ) } {}
     ( origin_guard_barrier ( origin_expr syms __fs_tt __fs_val ) )

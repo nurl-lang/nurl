@@ -1027,10 +1027,14 @@ $ `stdlib/ext/http2_hpack.nu`
 
 @ __h2c_apply_response_headers H2Client c i idx ( Vec u ) block b end_stream → !v H2ClientErr {
     : *HpackDynTable dp ( vec_data [HpackDynTable] . c dec_box )
-    : !HpackDecoded HpackErr hd ( hpack_decode_block block . dp 0 )
+    // The decoder updates the table in place; it goes back into its slot
+    // as is (the box still owns it).
+    : ~ HpackDynTable tbl . dp 0
+    : !HpackDecoded HpackErr hd ( hpack_decode_block block tbl )
+    ( mem_put_back tbl )
+    = . dp 0 tbl
     ?? hd {
         T dec → {
-            = . dp 0 . dec dyn
             ? < idx 0 {
                 ( vec_free_with [Header] . dec headers \ Header h → v { ( header_free h ) } )
                 ^ @ !v H2ClientErr { T 0 }
