@@ -25696,12 +25696,20 @@
 // source. The first 64 parameters use inline bits; larger arities allocate
 // only the nonempty words. Edges and words are owned by their source node.
 : ~ i g_origin_nodes 0
+: ~ i g_origin_named 0
 : ~ i g_origin_work 0
 : ~ i g_origin_functions 0
 : ~ i g_origin_returns 0
 
+// Node words: 0 next node, 1 edges out, 2 bits 0-63, 3 higher bit words,
+// 4 work-list link, 5 queued, 6 edges conditioned on this node, 7 summary
+// name, 8 summary map, 9 copy of the summary text last synced, 10 dirty
+// (bits changed since that sync), 11 next named node. The named (summary)
+// nodes are a small fraction of the graph and the only ones origin_resolve
+// syncs, so they get a list of their own, and a round skips the summaries
+// it did not touch instead of re-reading and re-writing all of them.
 @ origin_new → i {
-    : i node # i ( nurl_zalloc 72 )
+    : i node # i ( nurl_zalloc 96 )
     ( nurl_poke # s node 0 g_origin_nodes )
     = g_origin_nodes node
     ^ node
@@ -25736,6 +25744,7 @@
     : i after | before bits
     ? != before after {
         ( nurl_poke # s slot 0 after )
+        ( nurl_poke # s node 10 1 )
         ( origin_queue node )
     } {}
 }
@@ -25770,6 +25779,8 @@
     : i node ( origin_new )
     ( nurl_poke # s node 7 # i ( nurl_strdup name ) )
     ( nurl_poke # s node 8 summaries )
+    ( nurl_poke # s node 11 g_origin_named )
+    = g_origin_named node
     ( nurl_sym_def g_origin_functions key ( nurl_str_int node ) )
     ^ node
 }
@@ -25868,10 +25879,17 @@
 @ origin_resolve → b {
     // Import existing ABI and diagnostic summary facts. This also connects
     // implications inferred by the older escape walk to the same graph.
-    : ~ i node g_origin_nodes
+    : ~ i node g_origin_named
     ~ != node 0 {
         : i name ( nurl_peek # s node 7 )
+        : i synced ( nurl_peek # s node 9 )
+        : ~ b stale F
         ? != name 0 {
+            = stale T
+            ? != synced 0 { = stale ! ( seq # s synced ( nurl_sym_get ( nurl_peek # s node 8 ) # s name ) ) } {}
+        } {}
+        ? stale {
+            ( nurl_poke # s node 10 1 )
             : ~ s rest ( nurl_sym_get ( nurl_peek # s node 8 ) # s name )
             ~ != 0 ( nurl_str_len rest ) {
                 : s item ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -25879,7 +25897,7 @@
                 ( origin_add_bits node / index 64 << 1 % index 64 )
             }
         } {}
-        = node ( nurl_peek # s node 0 )
+        = node ( nurl_peek # s node 11 )
     }
     ~ != g_origin_work 0 {
         : i current g_origin_work
@@ -25897,10 +25915,11 @@
         }
     }
     : ~ b changed F
-    = node g_origin_nodes
+    = node g_origin_named
     ~ != node 0 {
         : i name ( nurl_peek # s node 7 )
-        ? != name 0 {
+        ? & != name 0 != 0 ( nurl_peek # s node 10 ) {
+            ( nurl_poke # s node 10 0 )
             : s before ( nurl_sym_get ( nurl_peek # s node 8 ) # s name )
             : ~ s after ( nurl_str_cat before `` )
             : ~ i slot + node 16
@@ -25928,12 +25947,14 @@
                 } {}
             }
             ( nurl_sym_def ( nurl_peek # s node 8 ) # s name after )
+            ( nurl_free # s ( nurl_peek # s node 9 ) )
+            ( nurl_poke # s node 9 # i ( nurl_strdup after ) )
             ? == ( nurl_peek # s node 8 ) g_origin_returns {
                 : s old ( nurl_sym_get g_fn_ret_param # s name )
                 ( nurl_sym_def g_fn_ret_param # s name ( __phi_ids_union old after ) )
             } {}
         } {}
-        = node ( nurl_peek # s node 0 )
+        = node ( nurl_peek # s node 11 )
     }
     ^ changed
 }
@@ -25953,8 +25974,10 @@
             ( nurl_free # s word ) = word next
         }
         ( nurl_free # s ( nurl_peek # s node 7 ) )
+        ( nurl_free # s ( nurl_peek # s node 9 ) )
         ( nurl_free # s node )
     }
+    = g_origin_named 0
     = g_origin_work 0
 }
 
@@ -35688,6 +35711,418 @@
     = . mp to sv
 }
 
+// ── Late flag folding ────────────────────────────────────────────
+//
+// Whether a callee takes a parameter over (sink / store / keep), whether
+// a call result is owned (retown), whether a Drop impl disposes of a
+// parameter (dtor) — ownership answers like these are final only once
+// every summary is, at module end, so the code generator reads each one
+// from a `@.__nurl_<kind>.<n>` constant and leaves the fold to LLVM. LLVM
+// folds all of it, but unfolded it is ~30% of a module's IR and every
+// pass before the fold pays for it (bench/http_server.nu: +41% IR lines,
+// +23% clang time). When the module is WRITTEN the answers are known, so
+// the writer folds them itself:
+//
+//   %rN = load i1, ptr @.__nurl_k.M          → the constant
+//   %rN = xor / and / or i1 A, B             → a constant, or A / B
+//   %rN = select i1 C, T A, T B              → A or B, once C is known
+//   %rN = call T @__nurl_cloneifk[r]_T(…)   → its operand when the flag
+//                                               says no copy; a plain
+//                                               __nurl_cloneif_T otherwise
+//   call void @__nurl_clear_if(ptr @.F, …)  → a store, or nothing
+//
+// A folded register's definition is dropped and every use of it in the
+// function is rewritten, phis included. Only registers the generator
+// names `%r<N>` are folded and only these exact shapes; anything else,
+// and anything inside a quoted string, is written as is. The constants
+// themselves stay in the module, so a reference that is not folded still
+// resolves.
+: ~ i g_fold_flags 0
+: ~ i g_fold_map 0
+: ~ i g_fold_cap 0
+: ~ i g_fold_touched 0
+: ~ i g_fold_nt 0
+: ~ i g_fold_tcap 0
+: ~ i g_fold_end 0
+: ~ i g_fold_k 0
+: ~ i g_fold_x 0
+: ~ i g_fold_y 0
+
+@ __fold_at i p s lit i n → b {
+    ^ == 0 # i ( memcmp # s + g_dce_mod p lit n )
+}
+
+@ __fold_byte i p → i {
+    : *u mp # *u # s g_dce_mod
+    ^ & # i . mp p 255
+}
+
+// Record the flag constants written at module scope in [from, to).
+@ __fold_scan_flags i from i to → v {
+    : ~ i pos from
+    ~ < pos to {
+        : i rel ( nurl_memmem_range # s + g_dce_mod pos - to pos `\n@.__nurl_` 10 )
+        ? < rel 0 { = pos to } {
+            : i ns + + pos rel 1
+            : i le ( nurl_memmem_range # s + g_dce_mod ns - to ns `\n` 1 )
+            : i lend ? < le 0 to + ns le
+            : i eq ( nurl_memmem_range # s + g_dce_mod ns - lend ns ` = private constant i1 ` 23 )
+            ? >= eq 0 {
+                : i ne + ns eq
+                : i vp + ne 23
+                : *u mp # *u # s g_dce_mod
+                : u sv . mp ne
+                = . mp ne # u 0
+                ( nurl_sym_def g_fold_flags # s + g_dce_mod ns ? == ( __fold_byte vp ) 116 `1` `0` )
+                = . mp ne sv
+            } {}
+            = pos lend
+        }
+    }
+}
+
+// The value of the flag global named at `p` (the `@`), -1 if unknown.
+@ __fold_flag i p i le → i {
+    : ~ i q p
+    ~ & < q le | ( __dce_ident_byte ( __fold_byte q ) ) == 64 ( __fold_byte q ) { = q + q 1 }
+    = g_fold_end q
+    : *u mp # *u # s g_dce_mod
+    : u sv . mp q
+    = . mp q # u 0
+    : s v ( nurl_sym_get g_fold_flags # s + g_dce_mod p )
+    = . mp q sv
+    ? == 0 ( nurl_str_len v ) { ^ -1 } {}
+    ^ ? == 49 ( nurl_str_get v 0 ) 1 0
+}
+
+// `%r<N>` at `p`: N (token end in g_fold_end), or -1.
+@ __fold_reg i p i en → i {
+    ? >= + p 2 en { ^ -1 } {}
+    ? | != ( __fold_byte p ) 37 != ( __fold_byte + p 1 ) 114 { ^ -1 } {}
+    : ~ i q + p 2
+    : ~ i v 0
+    : ~ b go T
+    ~ go {
+        ? >= q en { = go F } {
+            : i c ( __fold_byte q )
+            ? & >= c 48 <= c 57 { = v + * v 10 - c 48 = q + q 1 } { = go F }
+        }
+    }
+    ? == q + p 2 { ^ -1 } {}
+    ? < q en { ? ( __dce_ident_byte ( __fold_byte q ) ) { ^ -1 } {} } {}
+    = g_fold_end q
+    ^ v
+}
+
+@ __fold_kind i r → i {
+    ? | < r 0 >= r g_fold_cap { ^ 0 } {}
+    ^ ( nurl_peek # s g_fold_map * r 3 )
+}
+
+@ __fold_set i r i kind i a i b → v {
+    ? >= r g_fold_cap {
+        : ~ i cap ? == g_fold_cap 0 1024 * g_fold_cap 2
+        ~ <= cap r { = cap * cap 2 }
+        : i fresh # i ( nurl_zalloc * cap 24 )
+        ? != g_fold_map 0 {
+            ( memcpy # s fresh # s g_fold_map * g_fold_cap 24 )
+            ( nurl_free # s g_fold_map )
+        } {}
+        = g_fold_map fresh
+        = g_fold_cap cap
+    } {}
+    ? >= g_fold_nt g_fold_tcap {
+        : i tcap ? == g_fold_tcap 0 256 * g_fold_tcap 2
+        : i fresh # i ( nurl_zalloc * tcap 8 )
+        ? != g_fold_touched 0 {
+            ( memcpy # s fresh # s g_fold_touched * g_fold_nt 8 )
+            ( nurl_free # s g_fold_touched )
+        } {}
+        = g_fold_touched fresh
+        = g_fold_tcap tcap
+    } {}
+    ( nurl_poke # s g_fold_touched g_fold_nt r )
+    = g_fold_nt + g_fold_nt 1
+    ( nurl_poke # s g_fold_map * r 3 kind )
+    ( nurl_poke # s g_fold_map + * r 3 1 a )
+    ( nurl_poke # s g_fold_map + * r 3 2 b )
+}
+
+@ __fold_reset → v {
+    ~ > g_fold_nt 0 {
+        = g_fold_nt - g_fold_nt 1
+        ( nurl_poke # s g_fold_map * ( nurl_peek # s g_fold_touched g_fold_nt ) 3 0 )
+    }
+}
+
+// End of the operand token starting at `p`.
+@ __fold_tok_end i p i le → i {
+    : ~ i q p
+    : ~ b go T
+    ~ go {
+        ? >= q le { = go F } {
+            : i c ( __fold_byte q )
+            ? | | | == c 44 == c 32 == c 41 == c 93 { = go F } { = q + q 1 }
+        }
+    }
+    ^ q
+}
+
+// Classify operand [p, q): g_fold_k 1 → i1 constant g_fold_x; 2 → the
+// text range [g_fold_x, g_fold_y) (a folded register's own mapping).
+// A literal counts as a constant only where the type is i1 (`boolctx`).
+@ __fold_operand i p i q b boolctx → v {
+    = g_fold_k 2 = g_fold_x p = g_fold_y q
+    : i n - q p
+    ? boolctx {
+        ? | & == n 4 ( __fold_at p `true` 4 ) & == n 1 ( __fold_at p `1` 1 ) { = g_fold_k 1 = g_fold_x 1 ^ v } {}
+        ? | & == n 5 ( __fold_at p `false` 5 ) & == n 1 ( __fold_at p `0` 1 ) { = g_fold_k 1 = g_fold_x 0 ^ v } {}
+    } {}
+    : i r ( __fold_reg p q )
+    ? < r 0 { ^ v } {}
+    ? != g_fold_end q { ^ v } {}
+    : i kind ( __fold_kind r )
+    ? != kind 0 {
+        = g_fold_k kind
+        = g_fold_x ( nurl_peek # s g_fold_map + * r 3 1 )
+        = g_fold_y ( nurl_peek # s g_fold_map + * r 3 2 )
+    } {}
+}
+
+// Last argument of a call line ending `…, T V)`: V's range.
+@ __fold_last_arg i ls i le → b {
+    ? != ( __fold_byte - le 1 ) 41 { ^ F } {}
+    : ~ i p - le 2
+    ~ & > p ls != ( __fold_byte p ) 32 { = p - p 1 }
+    = g_fold_x + p 1
+    = g_fold_y - le 1
+    ^ < g_fold_x g_fold_y
+}
+
+// Pass 1 over one line [ls, le): decide whether its register folds.
+@ __fold_scan_line i ls i le → v {
+    ? ! ( __fold_at ls `  %r` 4 ) { ^ v } {}
+    : i r ( __fold_reg + ls 2 le )
+    ? < r 0 { ^ v } {}
+    : i o + g_fold_end 3
+    ? ! ( __fold_at g_fold_end ` = ` 3 ) { ^ v } {}
+    ? ( __fold_at o `load i1, ptr @.__nurl_` 22 ) {
+        : i f ( __fold_flag + o 13 le )
+        ? & >= f 0 == g_fold_end le { ( __fold_set r 1 f 0 ) } {}
+        ^ v
+    } {}
+    : ~ i op 0
+    : ~ i ap 0
+    ? ( __fold_at o `xor i1 ` 7 ) { = op 1 = ap + o 7 } {}
+    ? ( __fold_at o `and i1 ` 7 ) { = op 2 = ap + o 7 } {}
+    ? ( __fold_at o `or i1 ` 6 ) { = op 3 = ap + o 6 } {}
+    ? != op 0 {
+        : i ae ( __fold_tok_end ap le )
+        ? ! ( __fold_at ae `, ` 2 ) { ^ v } {}
+        : i bp + ae 2
+        : i be ( __fold_tok_end bp le )
+        ? != be le { ^ v } {}
+        ( __fold_operand ap ae T )
+        : i ak g_fold_k : i ax g_fold_x : i ay g_fold_y
+        ( __fold_operand bp be T )
+        : i bk g_fold_k : i bx g_fold_x : i by g_fold_y
+        ? & == ak 1 == bk 1 {
+            : i val ? == op 1 ^^ ax bx ? == op 2 & ax bx | ax bx
+            ( __fold_set r 1 val 0 ) ^ v
+        } {}
+        ? == op 1 { ^ v } {}
+        // and / or with one constant: the absorbing value, or the other side.
+        ? == ak 1 {
+            ? == ax ? == op 2 0 1 { ( __fold_set r 1 ax 0 ) } { ( __fold_set r bk bx by ) }
+            ^ v
+        } {}
+        ? == bk 1 {
+            ? == bx ? == op 2 0 1 { ( __fold_set r 1 bx 0 ) } { ( __fold_set r ak ax ay ) }
+        } {}
+        ^ v
+    } {}
+    ? ( __fold_at o `select i1 ` 10 ) {
+        : i cp + o 10
+        : i ce ( __fold_tok_end cp le )
+        ? ! ( __fold_at ce `, ` 2 ) { ^ v } {}
+        ( __fold_operand cp ce T )
+        ? != g_fold_k 1 { ^ v } {}
+        : i cv g_fold_x
+        // `T A, T B`: B is the last token; A the last token before the
+        // final `, `. Both are single tokens in generated code.
+        : ~ i bp - le 1
+        ~ & > bp ce != ( __fold_byte bp ) 32 { = bp - bp 1 }
+        = bp + bp 1
+        : ~ i sep - bp 2
+        ~ & > sep ce ! ( __fold_at sep `, ` 2 ) { = sep - sep 1 }
+        ? <= sep ce { ^ v } {}
+        : ~ i ap2 - sep 1
+        ~ & > ap2 ce != ( __fold_byte ap2 ) 32 { = ap2 - ap2 1 }
+        = ap2 + ap2 1
+        : b i1ty ( __fold_at + ce 2 `i1 ` 3 )
+        ? == cv 1 { ( __fold_operand ap2 sep i1ty ) } { ( __fold_operand bp le i1ty ) }
+        ( __fold_set r g_fold_k g_fold_x g_fold_y )
+        ^ v
+    } {}
+    ? ( __fold_at o `call ` 5 ) {
+        : i at ( nurl_memmem_range # s + g_dce_mod o - le o ` @__nurl_cloneifk` 17 )
+        ? < at 0 { ^ v } {}
+        : i np + + o at 17
+        : b rv ( __fold_at np `r_` 2 )
+        ? & ! rv ! ( __fold_at np `_` 1 ) { ^ v } {}
+        : i lp ( nurl_memmem_range # s + g_dce_mod np - le np `(ptr @.__nurl_` 14 )
+        ? < lp 0 { ^ v } {}
+        : i f1 ( __fold_flag + + np lp 5 le )
+        ? < f1 0 { ^ v } {}
+        : i a2 + g_fold_end 2
+        : ~ b none == f1 0
+        ? rv {
+            ? ( __fold_at a2 `ptr @.__nurl_` 13 ) {
+                ? == 1 ( __fold_flag + a2 4 le ) { = none T } {}
+            } {}
+        } {
+            ? ( __fold_at a2 `i1 ` 3 ) {
+                : i lq + a2 3
+                ( __fold_operand lq ( __fold_tok_end lq le ) T )
+                ? & == g_fold_k 1 == g_fold_x 0 { = none T } {}
+            } {}
+        }
+        ? none {
+            ? ( __fold_last_arg ls le ) {
+                ( __fold_operand g_fold_x g_fold_y F )
+                ( __fold_set r g_fold_k g_fold_x g_fold_y )
+            } {}
+        } {}
+        ^ v
+    } {}
+}
+
+@ __fold_puts s t i part → v {
+    ? == part 0 { ( nurl_print t ) } { ( __sp_puts t ) }
+}
+
+// Write the mapping of register r (depth-limited: an alias names an
+// earlier register, so chains are short and acyclic).
+@ __fold_put_reg i r i part i depth → v {
+    : i kind ( __fold_kind r )
+    ? == kind 1 { ( __fold_puts ? == 1 ( nurl_peek # s g_fold_map + * r 3 1 ) `true` `false` part ) ^ v } {}
+    : i a ( nurl_peek # s g_fold_map + * r 3 1 )
+    : i b ( nurl_peek # s g_fold_map + * r 3 2 )
+    ( __fold_put_range a b part depth )
+}
+
+// Write [from, to) with every folded `%r<N>` replaced. Quoted text is
+// copied as is.
+@ __fold_put_range i from i to i part i depth → v {
+    : ~ i p from
+    : ~ i run from
+    : ~ b quoted F
+    ~ < p to {
+        : i c ( __fold_byte p )
+        ? == c 34 { = quoted ! quoted = p + p 1 } {
+            ? & & & ! quoted == c 37 < depth 16 ! ( __dce_ident_byte ( __fold_byte - p 1 ) ) {
+                : i r ( __fold_reg p to )
+                : i re g_fold_end
+                ? & >= r 0 != 0 ( __fold_kind r ) {
+                    ( __ir_write_range run p part )
+                    ( __fold_put_reg r part + depth 1 )
+                    = p re
+                    = run p
+                } { = p + p 1 }
+            } { = p + p 1 }
+        }
+    }
+    ( __ir_write_range run to part )
+}
+
+// Pass 2 over one line [ls, le] (le at its newline).
+@ __fold_emit_line i ls i le i part → v {
+    ? ( __fold_at ls `  %r` 4 ) {
+        : i r ( __fold_reg + ls 2 le )
+        ? & >= r 0 != 0 ( __fold_kind r ) {
+            ? ( __fold_at g_fold_end ` = ` 3 ) { ^ v } {}
+        } {}
+        // A copy whose flag turned out set: call __nurl_cloneif_T directly.
+        : i o ? < r 0 ls + g_fold_end 3
+        ? & >= r 0 ( __fold_at o `call ` 5 ) {
+            : i at ( nurl_memmem_range # s + g_dce_mod o - le o ` @__nurl_cloneifk` 17 )
+            ? >= at 0 {
+                : i np + + o at 17
+                : b rv ( __fold_at np `r_` 2 )
+                : i lp ( nurl_memmem_range # s + g_dce_mod np - le np `(ptr @.__nurl_` 14 )
+                ? >= lp 0 {
+                    : i f1 ( __fold_flag + + np lp 5 le )
+                    : i a2 + g_fold_end 2
+                    ? & == f1 1 ( __fold_last_arg ls le ) {
+                        : i vs g_fold_x
+                        // the last argument's type starts after the final `, `
+                        : ~ i ts - vs 1
+                        ~ & > ts a2 ! ( __fold_at - ts 2 `, ` 2 ) { = ts - ts 1 }
+                        : ~ i cond_ok F
+                        : ~ i cs 0 : ~ i ce 0
+                        ? rv {
+                            ? ( __fold_at a2 `ptr @.__nurl_` 13 ) {
+                                ? == 0 ( __fold_flag + a2 4 le ) { = cond_ok T } {}
+                            } {}
+                        } {
+                            ? ( __fold_at a2 `i1 ` 3 ) {
+                                = cs + a2 3 = ce ( __fold_tok_end cs le ) = cond_ok T
+                            } {}
+                        }
+                        ? != 37 ( __fold_byte ts ) { = cond_ok F } {}
+                        ? cond_ok {
+                            ( __ir_write_range ls + + o at 16 part )
+                            ( __fold_puts `_` part )
+                            ( __ir_write_range + np ? rv 2 1 + np lp part )
+                            ( __fold_puts `(i1 ` part )
+                            ? == ce 0 { ( __fold_puts `true` part ) } { ( __fold_put_range cs ce part 0 ) }
+                            ( __fold_puts `, ` part )
+                            ( __fold_put_range ts + le 1 part 0 )
+                            ^ v
+                        } {}
+                    } {}
+                } {}
+            } {}
+        } {}
+    } {}
+    ? ( __fold_at ls `  call void @__nurl_clear_if(ptr @.__nurl_` 42 ) {
+        : i f ( __fold_flag + ls 33 le )
+        ? == f 0 { ^ v } {}
+        ? & == f 1 ( __fold_at g_fold_end `, ptr ` 6 ) {
+            ( __fold_puts `  store i1 0, ptr ` part )
+            ( __fold_put_range + g_fold_end 6 - le 1 part 0 )
+            ( __fold_puts `\n` part )
+            ^ v
+        } {}
+    } {}
+    ( __fold_put_range ls + le 1 part 0 )
+}
+
+// Write function [st, en) with its flags folded.
+@ __ir_fold_range i st i en i part → v {
+    ? | == g_fold_flags 0 < ( nurl_memmem_range # s + g_dce_mod st - en st `@.__nurl_` 9 ) 0 {
+        ( __ir_write_range st en part ) ^ v
+    } {}
+    : ~ i p st
+    ~ < p en {
+        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
+        : i le ? < rel 0 en + p rel
+        ( __fold_scan_line p le )
+        = p + le 1
+    }
+    ? == g_fold_nt 0 { ( __ir_write_range st en part ) ^ v } {}
+    = p st
+    ~ < p en {
+        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
+        ? < rel 0 { ( __fold_put_range p en part 0 ) = p en } {
+            : i le + p rel
+            ( __fold_emit_line p le part )
+            = p + le 1
+        }
+    }
+    ( __fold_reset )
+}
+
 // All generated definitions pass this boundary, including closure bodies,
 // drop/dyn/SIMD thunks and replicated split definitions. The module index
 // owns the ranges; adding an attribute during writing does not invalidate
@@ -35697,7 +36132,7 @@
 }
 
 @ __ir_write_function i st i en i part → v {
-    ? == 0 g_sanitize_address { ( __ir_write_range st en part ) ^ v } {}
+    ? == 0 g_sanitize_address { ( __ir_fold_range st en part ) ^ v } {}
     : *u mp # *u # s g_dce_mod
     // Return types may contain parentheses (function pointers/closures).
     // The parameter list starts after the function NAME, at the first @.
@@ -35718,7 +36153,7 @@
     } {}
     ( __ir_write_range st p part )
     ? == part 0 { ( nurl_print ` sanitize_address` ) } { ( __sp_puts ` sanitize_address` ) }
-    ( __ir_write_range p en part )
+    ( __ir_fold_range p en part )
 }
 
 // Emit the collected module: everything that is not a function body,
@@ -35780,6 +36215,17 @@
     = g_dce_map ( nurl_sym_new )
     = g_dce_qn 0
     ( __dce_index mlen 0 )
+    // The ownership flags are final by now; the writer folds them (see
+    // __ir_fold_range). They live at module scope, between the bodies.
+    = g_fold_flags ( nurl_sym_new )
+    : ~ i fgap 0
+    : ~ i fgi 0
+    ~ < fgi n {
+        ( __fold_scan_flags fgap ( nurl_peek # s g_dce_start fgi ) )
+        = fgap ( nurl_peek # s g_dce_end fgi )
+        = fgi + fgi 1
+    }
+    ( __fold_scan_flags fgap mlen )
     // No `main` — this is a module compiled to be linked into something
     // else, and every function in it is potentially an entry point.
     : s mainent ( nurl_sym_get g_dce_map `main` )
@@ -35856,6 +36302,7 @@
     ( nurl_free # s g_dce_live )
     ( nurl_free # s g_dce_queue )
     ( nurl_sym_free g_dce_map )
+    ? != g_fold_flags 0 { ( nurl_sym_free g_fold_flags ) = g_fold_flags 0 } {}
     = g_dce_start 0
     = g_dce_end 0
     = g_dce_live 0
