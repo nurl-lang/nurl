@@ -5682,18 +5682,32 @@
 // dropped once the call returns (mem_consumer_arg_drop_safe, resolved at
 // module end).
 @ mem_argdrop_const i syms s callee s generic i index → s {
-    : s key ( nurl_str_cat4 `argdrop##` callee `##` ( nurl_str_int index ) )
+    : s key ( nurl_str_cat4 `hdrop##` callee `##` ( nurl_str_int index ) )
     : s known ( nurl_sym_get g_pending_impl key )
     : ~ i number ( nurl_str_to_int known )
     ? == 0 ( nurl_str_len known ) {
         = number ( nurl_str_to_int ( nurl_sym_get g_pending_impl `argdrop_count` ) )
         ( nurl_sym_def g_pending_impl `argdrop_count` ( nurl_str_int + number 1 ) )
         ( nurl_sym_def g_pending_impl key ( nurl_str_int number ) )
-        ( __park_append g_pending_impl `argdrops`
+        ( __park_append g_pending_impl `hdrops`
         ( nurl_str_cat4 ( nurl_str_int number ) ` ` callee
         ( nurl_str_cat4 ` ` generic ` ` ( nurl_str_int index ) ) ) )
     } {}
-    ^ ( nurl_str_cat `@.__nurl_argdrop.` ( nurl_str_int number ) )
+    ^ ( nurl_str_cat `@.__nurl_hdrop.` ( nurl_str_int number ) )
+}
+
+// Whether a String / Vec / struct temporary passed at `index` may be dropped
+// once `fname` returns: it neither consumes, keeps, lets escape nor hands
+// back the argument. An unverified call inside `fname` does not veto it —
+// a named binding in the same place is dropped at scope exit regardless.
+@ mem_handle_temp_drop_safe i syms s fname i index → b {
+    : s arg ( nurl_str_int index )
+    ? | | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) arg )
+    ( str_contains_word ( nurl_sym_get g_fn_keeps fname ) arg )
+    ( str_contains_word ( nurl_sym_get g_fn_escapes fname ) arg ) { ^ F } {}
+    ? | ( str_contains_word ( nurl_sym_get g_fn_ret_param fname ) arg )
+    ( str_contains_word ( nurl_sym_get g_fn_ret_alias fname ) arg ) { ^ F } {}
+    ^ != 0 ( nurl_sym_len2 syms fname `__body_done` )
 }
 
 @ mem_arg_owner i syms i cg s callee s generic i index s value → s {
@@ -5993,6 +6007,17 @@
         ( nurl_print `@.__nurl_argdrop.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( mem_consumer_arg_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
+        ( nurl_print `\n` )
+    }
+    = rest ( nurl_sym_get g_pending_impl `hdrops` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+        ( nurl_print `@.__nurl_hdrop.` ) ( nurl_print number )
+        ( nurl_print ` = private constant i1 ` )
+        ( nurl_print ? ( mem_handle_temp_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
         ( nurl_print `\n` )
     }
     = rest ( nurl_sym_get g_pending_impl `argtransfers` )
@@ -10390,7 +10415,9 @@
         // A closure's use of its argument is unknowable here: a field handed
         // to one is taken to be consumed (`( drop_a . p first )` in a
         // disposer) — at worst a leak, never a second free.
-        : b __cl_call & != 0 ( nurl_str_len arg_fread ) ( __is_closure_ty ( nurl_sym_get syms call_name ) )
+        // (a closure BINDING being called — not a function that returns one)
+        : b __cl_call & & != 0 ( nurl_str_len arg_fread ) ( __is_closure_ty ( nurl_sym_get syms call_name ) )
+        & == 0 ( nurl_sym_len2 syms call_name `__nurlfn` ) == 0 ( nurl_sym_len2 syms call_name `__garity` )
         ? & != 0 ( nurl_str_len arg_fread ) | | summary_callee ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) __cl_call {
             : ~ s fr ( nurl_str_cat arg_fread `` )
             : s fr_ptr ( str_first_word fr ) = fr ( str_skip_word fr )
