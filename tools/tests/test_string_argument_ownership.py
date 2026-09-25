@@ -583,7 +583,8 @@ int main(void) {
     : *u function # *u action 0
     : *u environment # *u action 1
     : i result ( nurl_recover function environment )
-    ( nurl_free # s environment )
+    // The caller owns the env and drops it after the call; freeing it
+    // here would free it twice (docs/MEMORY.md 7.4).
     ^ result
 }
 @ main → i {

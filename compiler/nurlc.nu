@@ -3558,6 +3558,18 @@
                 = val ( mem_emit_cloneif cg rty val rb ) }
         } {}
     } {}
+    // A `?` / `??` join whose arms differ in ownership (`^ ?? h { T v → {
+    // ? ok v { … ( string_from … ) } } … }`: one arm lends a cursor, another
+    // hands over a fresh value) carries that as a phi: the caller gets a
+    // copy on the paths that only lent.
+    ? & & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
+    != 0 ( nurl_sym_len syms `__last_join_own__` ) ( __clone_supported ( nurl_get_last_type ) syms ) {
+        : s rty ( nurl_get_last_type )
+        : s jo ( nurl_sym_get syms `__last_join_own__` )
+        : s rb ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print jo ) ( nurl_print `, 1\n` )
+        = val ( mem_emit_cloneif cg rty val rb )
+    } {}
     // Returned-closure ownership: the caller owns what it gets back
     // (mem_retclo_own_result).
     ? ( __is_closure_ty ( nurl_get_last_type ) )
@@ -30260,6 +30272,11 @@
         ^ ( nurl_str_cat `false` `` )
     } {}
     ? == tt0 TT_AT { ^ ( nurl_str_cat `true` `` ) } {}
+    // An arm that is (or ends in) a `?` / `??` hands over what that join
+    // does — per path, when its arms differ.
+    ? & | == ht TT_QUEST == ht TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_join_own__` ) {
+        ^ ( nurl_str_cat ( nurl_sym_get syms `__last_join_own__` ) `` )
+    } {}
     // `{ … ( f ) }`: a block arm hands over what its tail call does.
     ? & | == tt0 TT_LPAREN == ht TT_LPAREN & == 0 ( nurl_sym_len syms `__last_value_borrow__` )
     == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
