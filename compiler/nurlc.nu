@@ -5968,15 +5968,11 @@
     {}
 }
 
-// An arm's tail call handing back an owned String / Vec / struct / `?T` /
-// `!T E` (`? c { ( vec_remove v 0 ) } {}`): whether anything consumes it is
-// only known at the join. Held by an anonymous owner in the arm's scope, it
-// rides the arm's parked exit (mem_arm_exit_open): dropped when the join
-// consumes nothing, handed over with the value when it does.
+// A `?` then-arm whose else is empty (`? c { ( vec_remove v 0 ) } {}`)
+// yields no value, so its tail call's owned String / Vec / struct / `?T` /
+// `!T E` is discarded: held by an anonymous owner in the arm's scope, it is
+// dropped when the arm ends.
 @ mem_arm_tail_own i syms i cg s val i tt → v {
-    // Read by this arm's own join (mem_arm_hown) right after the block: set
-    // for every arm tail, so an inner arm's owner never answers for it.
-    ( nurl_sym_set g_fn_escapes `__arm_tail_owner__` `` )
     ? | | | != 0 g_did_ret != tt TT_LPAREN == 0 ( nurl_str_len val ) == 0 g_auto_drop_strings { ^ v } {}
     ? | != 0 ( nurl_sym_len syms `__last_value_borrow__` ) != 0 ( nurl_sym_len syms `__last_call_ret_view__` ) { ^ v } {}
     : s dty ( nurl_get_last_type )
@@ -5991,7 +5987,6 @@
     ( __handle_drop_ensure rty )
     ( mem_own_add_user_drop syms cg ptr rty )
     ( mem_udrop_flag_set syms cg ptr ro )
-    ( nurl_sym_set g_fn_escapes `__arm_tail_owner__` ptr )
     // The value the arm yields is still the call's: its register stays the
     // arm's result (restore the type the stores above did not touch).
     ( nurl_set_last_type dty )
@@ -14970,7 +14965,8 @@
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = last ( gen_stmt lex syms cg )
         ? != ( nurl_lex_type lex ) TT_RBRACE { ( mem_clo_drop_discarded syms cg last __tail_tt ) }
-        { ? blk_is_arm { ( mem_arm_tail_own syms cg last __tail_tt ) } {} }
+        { ? & blk_is_arm & == ( nurl_lex_peek_type lex ) TT_LBRACE == ( nurl_lex_peek2_type lex ) TT_RBRACE
+            { ( mem_arm_tail_own syms cg last __tail_tt ) } {} }
         ? & & != 0 g_blk_tail_lit_line
         | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
         ( seq ( nurl_get_last_type ) `void` )
@@ -30242,13 +30238,6 @@
     ? == tt0 TT_LBRACE {
         = ht ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
         = hv ( nurl_sym_get syms `__tail_first_val__` )
-        // A tail call's value, held by the arm's anonymous owner
-        // (mem_arm_tail_own): the join owns it when it consumes it, and
-        // the owner's parked drop (gated on the same flag) runs only when
-        // nothing does.
-        : s ato ( nurl_sym_get g_fn_escapes `__arm_tail_owner__` )
-        ( nurl_sym_set g_fn_escapes `__arm_tail_owner__` `` )
-        ? & == ht TT_LPAREN != 0 ( nurl_str_len ato ) { ^ ( mem_udrop_flag_get syms cg ato ) } {}
     } {}
     ? & ( is_ident_tok ht ) ( seq hv retid ) {
         : s up ( mem_udrop_ptr_of syms retid )
@@ -30271,7 +30260,8 @@
         ^ ( nurl_str_cat `false` `` )
     } {}
     ? == tt0 TT_AT { ^ ( nurl_str_cat `true` `` ) } {}
-    ? & == tt0 TT_LPAREN & == 0 ( nurl_sym_len syms `__last_value_borrow__` )
+    // `{ … ( f ) }`: a block arm hands over what its tail call does.
+    ? & | == tt0 TT_LPAREN == ht TT_LPAREN & == 0 ( nurl_sym_len syms `__last_value_borrow__` )
     == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
         : s r ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len r ) { ^ r } {}

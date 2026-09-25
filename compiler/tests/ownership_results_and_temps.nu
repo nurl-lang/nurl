@@ -91,7 +91,7 @@ $ `stdlib/std/heap.nu`
     ( vec_pop [Item] v )
     // …in an arm tail whose value nothing consumes…
     ? > ( vec_len [Item] v ) 0 { ( vec_remove [Item] v 0 ) } {}
-    ?? ( vec_len [Item] v ) { 5 → { ( vec_remove [Item] v 0 ) } _ → {} }
+    ?? ( vec_len [Item] v ) { 5 → { : ?Item gone ( vec_remove [Item] v 0 ) } _ → {} }
     // …and consumed by a binding through the join.
     : ?Item a ? > ( vec_len [Item] v ) 2 { ( vec_remove [Item] v 0 ) } { ( vec_remove [Item] v 1 ) }
     ?? a { T x → { ( nurl_print ( string_data . x name ) ) ( nurl_print_int . x id ) ( nurl_print `\n` ) } F → {} }
