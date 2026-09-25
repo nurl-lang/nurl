@@ -48689,7 +48689,6 @@ entry:
   %r6332 = alloca i8*
   store i8* null, i8** %r6332
   %r6349 = alloca i64
-  %r6350 = alloca i1
   %r6377 = alloca i8*
   store i8* null, i8** %r6377
   %r6486 = alloca i8*
@@ -57339,7 +57338,6 @@ else_879:
 end_880:
   %r6348 = phi i64 [ 0, %then_878 ], [ %r6347, %else_879 ]
   store i64 %r6348, i64* %r6349
-  store i1 0, i1* %r6350
   br label %loop_check_881
 loop_check_881:
   %r6351 = load i64, i64* %r849
@@ -57347,11 +57345,9 @@ loop_check_881:
   %r6353 = icmp slt i64 %r6351, %r6352
   br i1 %r6353, label %and_right_884, label %and_end_885
 and_right_884:
-  %r6354 = load i1, i1* %r6350
-  %r6355 = xor i1 %r6354, 1
   br label %and_end_885
 and_end_885:
-  %r6356 = phi i1 [ 0, %loop_check_881 ], [ %r6355, %and_right_884 ]
+  %r6356 = phi i1 [ 0, %loop_check_881 ], [ true, %and_right_884 ]
   br i1 %r6356, label %and_right_886, label %and_end_887
 and_right_886:
   %r6357 = load i8*, i8** %r4
@@ -107930,7 +107926,6 @@ entry:
   store i8* null, i8** %r1236
   %r1284 = alloca i8*
   store i8* null, i8** %r1284
-  %r1317 = alloca i1
   %r1468 = alloca i8*
   store i8* null, i8** %r1468
   %r1599 = alloca i8*
@@ -109767,7 +109762,6 @@ end_204:
 else_200:
   br label %end_201
 end_201:
-  store i1 0, i1* %r1317
   %r1318 = load i8*, i8** %r1217
   %r1320 = load i8*, ptr %r1217
   store i8* %r1320, ptr %r1217
@@ -109802,11 +109796,9 @@ and_end_208:
   %r1345 = phi i1 [ 0, %and_end_206 ], [ %r1344, %and_right_207 ]
   br i1 %r1345, label %and_right_209, label %and_end_210
 and_right_209:
-  %r1346 = load i1, i1* %r1317
-  %r1347 = xor i1 %r1346, 1
   br label %and_end_210
 and_end_210:
-  %r1348 = phi i1 [ 0, %and_end_208 ], [ %r1347, %and_right_209 ]
+  %r1348 = phi i1 [ 0, %and_end_208 ], [ true, %and_right_209 ]
   br i1 %r1348, label %then_211, label %else_212
 then_211:
   %r1349 = load i8*, i8** %r1217
@@ -110041,11 +110033,9 @@ and_end_228:
   %r1530 = phi i1 [ 0, %else_225 ], [ %r1529, %and_right_227 ]
   br i1 %r1530, label %and_right_229, label %and_end_230
 and_right_229:
-  %r1531 = load i1, i1* %r1317
-  %r1532 = xor i1 %r1531, 1
   br label %and_end_230
 and_end_230:
-  %r1533 = phi i1 [ 0, %and_end_228 ], [ %r1532, %and_right_229 ]
+  %r1533 = phi i1 [ 0, %and_end_228 ], [ true, %and_right_229 ]
   br i1 %r1533, label %then_231, label %else_232
 then_231:
   %r1534 = load i8*, i8** %r1217
@@ -194742,6 +194732,12 @@ end_3:
 
 @g_fold_tcap = global i64 0
 
+@g_fold_flist = global i64 0
+
+@g_fold_nf = global i64 0
+
+@g_fold_fcap = global i64 0
+
 @g_fold_end = global i64 0
 
 @g_fold_k = global i64 0
@@ -195135,7 +195131,7 @@ end_25:
   ret i64 %r44
 }
 
-define i64 @__nurl_fn.__fold_kind__fp1(i64 %r) sanitize_address {
+define i64 @__nurl_fn.__fold_get__fp1(i64 %r, i64 %w) sanitize_address {
 entry:
   %r0 = alloca i64
   %r1 = icmp slt i64 %r, 0
@@ -195154,12 +195150,20 @@ else_4:
 end_5:
   %r5 = load i64, i64* @g_fold_map
   %r6 = inttoptr i64 %r5 to i8*
-  %r7 = mul i64 %r, 3
-  %r8 = tail call i64 @nurl_peek(i8* %r6, i64 %r7)
-  ret i64 %r8
+  %r7 = mul i64 %r, 6
+  %r8 = add i64 %r7, %w
+  %r9 = tail call i64 @nurl_peek(i8* %r6, i64 %r8)
+  ret i64 %r9
 }
 
-define void @__nurl_fn.__fold_set__fp1(i64 %r, i64 %kind, i64 %a, i64 %b) sanitize_address {
+define i64 @__nurl_fn.__fold_kind__fp1(i64 %r) sanitize_address {
+entry:
+  %r0 = alloca i64
+  %r1 = tail call i64 @__nurl_fn.__fold_get__fp1(i64 %r, i64 0)
+  ret i64 %r1
+}
+
+define void @__nurl_fn.__fold_touch__fp1(i64 %r) sanitize_address {
 entry:
   %r7 = alloca i64
   %r16 = alloca i64
@@ -195193,7 +195197,7 @@ loop_body_8:
   br label %loop_check_7
 loop_exit_9:
   %r12 = load i64, i64* %r7
-  %r13 = mul i64 %r12, 24
+  %r13 = mul i64 %r12, 48
   %r14 = call i8* @nurl_zalloc(i64 %r13)
   %r15 = ptrtoint i8* %r14 to i64
   store i64 %r15, i64* %r16
@@ -195206,7 +195210,7 @@ then_10:
   %r21 = load i64, i64* @g_fold_map
   %r22 = inttoptr i64 %r21 to i8*
   %r23 = load i64, i64* @g_fold_cap
-  %r24 = mul i64 %r23, 24
+  %r24 = mul i64 %r23, 48
   %r25 = call i8* @memcpy(i8* %r20, i8* %r22, i64 %r24)
   %r26 = load i64, i64* @g_fold_map
   %r27 = inttoptr i64 %r26 to i8*
@@ -195278,25 +195282,44 @@ end_15:
   %r60 = load i64, i64* @g_fold_nt
   %r61 = add i64 %r60, 1
   store i64 %r61, i64* @g_fold_nt
-  %r62 = load i64, i64* @g_fold_map
-  %r63 = inttoptr i64 %r62 to i8*
-  %r64 = mul i64 %r, 3
-  call void @nurl_poke(i8* %r63, i64 %r64, i64 %kind)
-  %r65 = load i64, i64* @g_fold_map
-  %r66 = inttoptr i64 %r65 to i8*
-  %r67 = mul i64 %r, 3
-  %r68 = add i64 %r67, 1
-  call void @nurl_poke(i8* %r66, i64 %r68, i64 %a)
-  %r69 = load i64, i64* @g_fold_map
-  %r70 = inttoptr i64 %r69 to i8*
-  %r71 = mul i64 %r, 3
-  %r72 = add i64 %r71, 2
-  call void @nurl_poke(i8* %r70, i64 %r72, i64 %b)
+  ret void
+}
+
+define void @__nurl_fn.__fold_put__fp1(i64 %r, i64 %w, i64 %val) sanitize_address {
+entry:
+  call void @__nurl_fn.__fold_touch__fp1(i64 %r)
+  %r0 = load i64, i64* @g_fold_map
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = mul i64 %r, 6
+  %r3 = add i64 %r2, %w
+  call void @nurl_poke(i8* %r1, i64 %r3, i64 %val)
+  ret void
+}
+
+define void @__nurl_fn.__fold_set__fp1(i64 %r, i64 %kind, i64 %a, i64 %b) sanitize_address {
+entry:
+  call void @__nurl_fn.__fold_touch__fp1(i64 %r)
+  %r0 = load i64, i64* @g_fold_map
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = mul i64 %r, 6
+  call void @nurl_poke(i8* %r1, i64 %r2, i64 %kind)
+  %r3 = load i64, i64* @g_fold_map
+  %r4 = inttoptr i64 %r3 to i8*
+  %r5 = mul i64 %r, 6
+  %r6 = add i64 %r5, 1
+  call void @nurl_poke(i8* %r4, i64 %r6, i64 %a)
+  %r7 = load i64, i64* @g_fold_map
+  %r8 = inttoptr i64 %r7 to i8*
+  %r9 = mul i64 %r, 6
+  %r10 = add i64 %r9, 2
+  call void @nurl_poke(i8* %r8, i64 %r10, i64 %b)
   ret void
 }
 
 define void @__nurl_fn.__fold_reset__fp1() sanitize_address {
 entry:
+  %r8 = alloca i64
+  %r9 = alloca i64
   br label %loop_check_1
 loop_check_1:
   %r0 = load i64, i64* @g_fold_nt
@@ -195306,14 +195329,139 @@ loop_body_2:
   %r2 = load i64, i64* @g_fold_nt
   %r3 = sub i64 %r2, 1
   store i64 %r3, i64* @g_fold_nt
-  %r4 = load i64, i64* @g_fold_map
+  %r4 = load i64, i64* @g_fold_touched
   %r5 = inttoptr i64 %r4 to i8*
-  %r6 = load i64, i64* @g_fold_touched
-  %r7 = inttoptr i64 %r6 to i8*
-  %r8 = load i64, i64* @g_fold_nt
-  %r9 = call i64 @nurl_peek(i8* %r7, i64 %r8)
-  %r10 = mul i64 %r9, 3
-  call void @nurl_poke(i8* %r5, i64 %r10, i64 0)
+  %r6 = load i64, i64* @g_fold_nt
+  %r7 = call i64 @nurl_peek(i8* %r5, i64 %r6)
+  store i64 %r7, i64* %r8
+  store i64 0, i64* %r9
+  br label %loop_check_4
+loop_check_4:
+  %r10 = load i64, i64* %r9
+  %r11 = icmp slt i64 %r10, 6
+  br i1 %r11, label %loop_body_5, label %loop_exit_6
+loop_body_5:
+  %r12 = load i64, i64* @g_fold_map
+  %r13 = inttoptr i64 %r12 to i8*
+  %r14 = load i64, i64* %r8
+  %r15 = mul i64 %r14, 6
+  %r16 = load i64, i64* %r9
+  %r17 = add i64 %r15, %r16
+  call void @nurl_poke(i8* %r13, i64 %r17, i64 0)
+  %r18 = load i64, i64* %r9
+  %r19 = add i64 %r18, 1
+  store i64 %r19, i64* %r9
+  br label %loop_check_4
+loop_exit_6:
+  br label %loop_check_1
+loop_exit_3:
+  store i64 0, i64* @g_fold_nf
+  ret void
+}
+
+define void @__nurl_fn.__fold_add_flag__fp1(i64 %r) sanitize_address {
+entry:
+  %r8 = alloca i64
+  %r13 = alloca i64
+  %r0 = load i64, i64* @g_fold_nf
+  %r1 = load i64, i64* @g_fold_fcap
+  %r2 = icmp sge i64 %r0, %r1
+  br i1 %r2, label %then_1, label %else_2
+then_1:
+  %r3 = load i64, i64* @g_fold_fcap
+  %r4 = icmp eq i64 %r3, 0
+  br i1 %r4, label %then_4, label %else_5
+then_4:
+  br label %end_6
+else_5:
+  %r5 = load i64, i64* @g_fold_fcap
+  %r6 = mul i64 %r5, 2
+  br label %end_6
+end_6:
+  %r7 = phi i64 [ 64, %then_4 ], [ %r6, %else_5 ]
+  store i64 %r7, i64* %r8
+  %r9 = load i64, i64* %r8
+  %r10 = mul i64 %r9, 8
+  %r11 = call i8* @nurl_zalloc(i64 %r10)
+  %r12 = ptrtoint i8* %r11 to i64
+  store i64 %r12, i64* %r13
+  %r14 = load i64, i64* @g_fold_flist
+  %r15 = icmp ne i64 %r14, 0
+  br i1 %r15, label %then_7, label %else_8
+then_7:
+  %r16 = load i64, i64* %r13
+  %r17 = inttoptr i64 %r16 to i8*
+  %r18 = load i64, i64* @g_fold_flist
+  %r19 = inttoptr i64 %r18 to i8*
+  %r20 = load i64, i64* @g_fold_nf
+  %r21 = mul i64 %r20, 8
+  %r22 = call i8* @memcpy(i8* %r17, i8* %r19, i64 %r21)
+  %r23 = load i64, i64* @g_fold_flist
+  %r24 = inttoptr i64 %r23 to i8*
+  call void @nurl_free(i8* %r24)
+  br label %end_9
+else_8:
+  br label %end_9
+end_9:
+  %r25 = load i64, i64* %r13
+  store i64 %r25, i64* @g_fold_flist
+  %r26 = load i64, i64* %r8
+  store i64 %r26, i64* @g_fold_fcap
+  br label %end_3
+else_2:
+  br label %end_3
+end_3:
+  %r27 = load i64, i64* @g_fold_flist
+  %r28 = inttoptr i64 %r27 to i8*
+  %r29 = load i64, i64* @g_fold_nf
+  call void @nurl_poke(i8* %r28, i64 %r29, i64 %r)
+  %r30 = load i64, i64* @g_fold_nf
+  %r31 = add i64 %r30, 1
+  store i64 %r31, i64* @g_fold_nf
+  call void @__nurl_fn.__fold_put__fp1(i64 %r, i64 3, i64 1)
+  ret void
+}
+
+define void @__nurl_fn.__fold_commit__fp1(i64 %r) sanitize_address {
+entry:
+  %r1 = alloca i64
+  %r0 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r, i64 5)
+  store i64 %r0, i64* %r1
+  %r2 = load i64, i64* %r1
+  %r3 = icmp ne i64 %r2, 0
+  br i1 %r3, label %then_1, label %else_2
+then_1:
+  %r4 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r, i64 4)
+  %r5 = load i64, i64* %r1
+  %r6 = or i64 %r4, %r5
+  call void @__nurl_fn.__fold_put__fp1(i64 %r, i64 4, i64 %r6)
+  call void @__nurl_fn.__fold_put__fp1(i64 %r, i64 5, i64 0)
+  br label %end_3
+else_2:
+  br label %end_3
+end_3:
+  ret void
+}
+
+define void @__nurl_fn.__fold_commit_all__fp1() sanitize_address {
+entry:
+  %r0 = alloca i64
+  store i64 0, i64* %r0
+  br label %loop_check_1
+loop_check_1:
+  %r1 = load i64, i64* %r0
+  %r2 = load i64, i64* @g_fold_nf
+  %r3 = icmp slt i64 %r1, %r2
+  br i1 %r3, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r4 = load i64, i64* @g_fold_flist
+  %r5 = inttoptr i64 %r4 to i8*
+  %r6 = load i64, i64* %r0
+  %r7 = call i64 @nurl_peek(i8* %r5, i64 %r6)
+  call void @__nurl_fn.__fold_commit__fp1(i64 %r7)
+  %r8 = load i64, i64* %r0
+  %r9 = add i64 %r8, 1
+  store i64 %r9, i64* %r0
   br label %loop_check_1
 loop_exit_3:
   ret void
@@ -195492,20 +195640,12 @@ end_27:
 then_28:
   %r35 = load i64, i64* %r32
   store i64 %r35, i64* @g_fold_k
-  %r36 = load i64, i64* @g_fold_map
-  %r37 = inttoptr i64 %r36 to i8*
+  %r36 = load i64, i64* %r25
+  %r37 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r36, i64 1)
+  store i64 %r37, i64* @g_fold_x
   %r38 = load i64, i64* %r25
-  %r39 = mul i64 %r38, 3
-  %r40 = add i64 %r39, 1
-  %r41 = call i64 @nurl_peek(i8* %r37, i64 %r40)
-  store i64 %r41, i64* @g_fold_x
-  %r42 = load i64, i64* @g_fold_map
-  %r43 = inttoptr i64 %r42 to i8*
-  %r44 = load i64, i64* %r25
-  %r45 = mul i64 %r44, 3
-  %r46 = add i64 %r45, 2
-  %r47 = call i64 @nurl_peek(i8* %r43, i64 %r46)
-  store i64 %r47, i64* @g_fold_y
+  %r39 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r38, i64 2)
+  store i64 %r39, i64* @g_fold_y
   br label %end_30
 else_29:
   br label %end_30
@@ -195562,623 +195702,1108 @@ loop_exit_6:
   ret i1 %r19
 }
 
+define i64 @__nurl_fn.__fold_ptr_reg__fp1(i64 %p, i64 %le) sanitize_address {
+entry:
+  %r0 = alloca i64
+  %r1 = alloca i64
+  %r12 = alloca i64
+  store i64 -1, i64* %r1
+  %r2 = getelementptr [5 x i8], [5 x i8]* @.str.11478, i64 0, i64 0
+  %r3 = call i1 @__nurl_fn.__fold_at__fp1(i64 %p, i8* %r2, i64 4)
+  br i1 %r3, label %then_1, label %else_2
+then_1:
+  %r4 = add i64 %p, 4
+  store i64 %r4, i64* %r1
+  br label %end_3
+else_2:
+  br label %end_3
+end_3:
+  %r5 = getelementptr [5 x i8], [5 x i8]* @.str.11479, i64 0, i64 0
+  %r6 = call i1 @__nurl_fn.__fold_at__fp1(i64 %p, i8* %r5, i64 4)
+  br i1 %r6, label %then_4, label %else_5
+then_4:
+  %r7 = add i64 %p, 4
+  store i64 %r7, i64* %r1
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
+  %r8 = load i64, i64* %r1
+  %r9 = icmp slt i64 %r8, 0
+  br i1 %r9, label %then_7, label %else_8
+then_7:
+  ret i64 -1
+else_8:
+  br label %end_9
+end_9:
+  %r10 = load i64, i64* %r1
+  %r11 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r10, i64 %le)
+  store i64 %r11, i64* %r12
+  %r13 = load i64, i64* %r12
+  %r14 = icmp slt i64 %r13, 0
+  br i1 %r14, label %or_end_11, label %or_right_10
+or_right_10:
+  %r15 = load i64, i64* @g_fold_end
+  %r16 = icmp ne i64 %r15, %le
+  br label %or_end_11
+or_end_11:
+  %r17 = phi i1 [ 1, %end_9 ], [ %r16, %or_right_10 ]
+  br i1 %r17, label %then_12, label %else_13
+then_12:
+  ret i64 -1
+else_13:
+  br label %end_14
+end_14:
+  %r18 = load i64, i64* %r12
+  ret i64 %r18
+}
+
+@.str.11478 = private unnamed_addr constant [5 x i8] c"i1* \00"
+@.str.11479 = private unnamed_addr constant [5 x i8] c"ptr \00"
+define i64 @__nurl_fn.__fold_store_flag__fp1(i64 %ls, i64 %le) sanitize_address {
+entry:
+  %r0 = alloca i64
+  %r5 = alloca i64
+  %r8 = alloca i64
+  %r16 = alloca i64
+  %r1 = getelementptr [12 x i8], [12 x i8]* @.str.11480, i64 0, i64 0
+  %r2 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r1, i64 11)
+  %r3 = xor i1 %r2, 1
+  br i1 %r3, label %then_1, label %else_2
+then_1:
+  ret i64 -1
+else_2:
+  br label %end_3
+end_3:
+  %r4 = add i64 %ls, 11
+  store i64 %r4, i64* %r5
+  %r6 = load i64, i64* %r5
+  %r7 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r6, i64 %le)
+  store i64 %r7, i64* %r8
+  %r9 = load i64, i64* %r8
+  %r10 = getelementptr [3 x i8], [3 x i8]* @.str.11481, i64 0, i64 0
+  %r11 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r9, i8* %r10, i64 2)
+  %r12 = xor i1 %r11, 1
+  br i1 %r12, label %then_4, label %else_5
+then_4:
+  ret i64 -1
+else_5:
+  br label %end_6
+end_6:
+  %r13 = load i64, i64* %r8
+  %r14 = add i64 %r13, 2
+  %r15 = call i64 @__nurl_fn.__fold_ptr_reg__fp1(i64 %r14, i64 %le)
+  store i64 %r15, i64* %r16
+  %r17 = load i64, i64* %r5
+  store i64 %r17, i64* @g_fold_x
+  %r18 = load i64, i64* %r8
+  store i64 %r18, i64* @g_fold_y
+  %r19 = load i64, i64* %r16
+  ret i64 %r19
+}
+
+@.str.11480 = private unnamed_addr constant [12 x i8] c"  store i1 \00"
+@.str.11481 = private unnamed_addr constant [3 x i8] c", \00"
+define void @__nurl_fn.__fold_escape__fp1(i64 %from, i64 %to) sanitize_address {
+entry:
+  %r0 = alloca i64
+  %r1 = alloca i1
+  %r6 = alloca i64
+  %r20 = alloca i64
+  store i64 %from, i64* %r0
+  store i1 0, i1* %r1
+  br label %loop_check_1
+loop_check_1:
+  %r2 = load i64, i64* %r0
+  %r3 = icmp slt i64 %r2, %to
+  br i1 %r3, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r4 = load i64, i64* %r0
+  %r5 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r4)
+  store i64 %r5, i64* %r6
+  %r7 = load i64, i64* %r6
+  %r8 = icmp eq i64 %r7, 34
+  br i1 %r8, label %then_4, label %else_5
+then_4:
+  %r9 = load i1, i1* %r1
+  %r10 = xor i1 %r9, 1
+  store i1 %r10, i1* %r1
+  %r11 = load i64, i64* %r0
+  %r12 = add i64 %r11, 1
+  store i64 %r12, i64* %r0
+  br label %end_6
+else_5:
+  %r13 = load i1, i1* %r1
+  %r14 = xor i1 %r13, 1
+  br i1 %r14, label %and_right_7, label %and_end_8
+and_right_7:
+  %r15 = load i64, i64* %r6
+  %r16 = icmp eq i64 %r15, 37
+  br label %and_end_8
+and_end_8:
+  %r17 = phi i1 [ 0, %else_5 ], [ %r16, %and_right_7 ]
+  br i1 %r17, label %then_9, label %else_10
+then_9:
+  %r18 = load i64, i64* %r0
+  %r19 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r18, i64 %to)
+  store i64 %r19, i64* %r20
+  %r21 = load i64, i64* %r20
+  %r22 = icmp sge i64 %r21, 0
+  br i1 %r22, label %then_12, label %else_13
+then_12:
+  %r23 = load i64, i64* %r20
+  %r24 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r23, i64 3)
+  %r25 = icmp eq i64 1, %r24
+  br i1 %r25, label %then_15, label %else_16
+then_15:
+  %r26 = load i64, i64* %r20
+  call void @__nurl_fn.__fold_put__fp1(i64 %r26, i64 3, i64 2)
+  br label %end_17
+else_16:
+  br label %end_17
+end_17:
+  %r27 = load i64, i64* @g_fold_end
+  store i64 %r27, i64* %r0
+  br label %end_14
+else_13:
+  %r28 = load i64, i64* %r0
+  %r29 = add i64 %r28, 1
+  store i64 %r29, i64* %r0
+  br label %end_14
+end_14:
+  %r30 = phi i64 [ %r27, %end_17 ], [ %r29, %else_13 ]
+  br label %end_11
+else_10:
+  %r31 = load i64, i64* %r0
+  %r32 = add i64 %r31, 1
+  store i64 %r32, i64* %r0
+  br label %end_11
+end_11:
+  %r33 = phi i64 [ %r30, %end_14 ], [ %r32, %else_10 ]
+  br label %end_6
+end_6:
+  %r34 = phi i64 [ %r12, %then_4 ], [ %r33, %end_11 ]
+  br label %loop_check_1
+loop_exit_3:
+  ret void
+}
+
+define i1 @__nurl_fn.__fold_flag_line__fp1(i64 %ls, i64 %le) sanitize_address {
+entry:
+  %r0 = alloca i1
+  %r7 = alloca i64
+  %r39 = alloca i64
+  %r43 = alloca i64
+  %r58 = alloca i64
+  %r67 = alloca i64
+  %r82 = alloca i64
+  %r89 = alloca i64
+  %r96 = alloca i64
+  %r1 = load i64, i64* @g_fold_nf
+  %r2 = icmp eq i64 0, %r1
+  br i1 %r2, label %then_1, label %else_2
+then_1:
+  %r3 = getelementptr [5 x i8], [5 x i8]* @.str.11482, i64 0, i64 0
+  %r4 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r3, i64 4)
+  br i1 %r4, label %then_4, label %else_5
+then_4:
+  %r5 = add i64 %ls, 2
+  %r6 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r5, i64 %le)
+  store i64 %r6, i64* %r7
+  %r8 = load i64, i64* %r7
+  %r9 = icmp sge i64 %r8, 0
+  br i1 %r9, label %then_7, label %else_8
+then_7:
+  %r10 = load i64, i64* @g_fold_end
+  %r11 = getelementptr [13 x i8], [13 x i8]* @.str.11483, i64 0, i64 0
+  %r12 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r10, i8* %r11, i64 12)
+  br i1 %r12, label %and_right_10, label %and_end_11
+and_right_10:
+  %r13 = load i64, i64* @g_fold_end
+  %r14 = add i64 %r13, 12
+  %r15 = icmp eq i64 %le, %r14
+  br label %and_end_11
+and_end_11:
+  %r16 = phi i1 [ 0, %then_7 ], [ %r15, %and_right_10 ]
+  br i1 %r16, label %then_12, label %else_13
+then_12:
+  %r17 = load i64, i64* %r7
+  call void @__nurl_fn.__fold_add_flag__fp1(i64 %r17)
+  ret i1 1
+else_13:
+  br label %end_14
+end_14:
+  br label %end_9
+else_8:
+  br label %end_9
+end_9:
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
+  ret i1 0
+else_2:
+  br label %end_3
+end_3:
+  %r18 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %ls)
+  %r19 = icmp ne i64 32, %r18
+  br i1 %r19, label %and_right_15, label %and_end_16
+and_right_15:
+  %r20 = sub i64 %le, 1
+  %r21 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r20)
+  %r22 = icmp eq i64 58, %r21
+  br label %and_end_16
+and_end_16:
+  %r23 = phi i1 [ 0, %end_3 ], [ %r22, %and_right_15 ]
+  br i1 %r23, label %then_17, label %else_18
+then_17:
+  call void @__nurl_fn.__fold_commit_all__fp1()
+  ret i1 1
+else_18:
+  br label %end_19
+end_19:
+  %r24 = getelementptr [6 x i8], [6 x i8]* @.str.11484, i64 0, i64 0
+  %r25 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r24, i64 5)
+  br i1 %r25, label %or_end_21, label %or_right_20
+or_right_20:
+  %r26 = getelementptr [6 x i8], [6 x i8]* @.str.11485, i64 0, i64 0
+  %r27 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r26, i64 5)
+  br label %or_end_21
+or_end_21:
+  %r28 = phi i1 [ 1, %end_19 ], [ %r27, %or_right_20 ]
+  br i1 %r28, label %or_end_23, label %or_right_22
+or_right_22:
+  %r29 = getelementptr [10 x i8], [10 x i8]* @.str.11486, i64 0, i64 0
+  %r30 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r29, i64 9)
+  br label %or_end_23
+or_end_23:
+  %r31 = phi i1 [ 1, %or_end_21 ], [ %r30, %or_right_22 ]
+  br i1 %r31, label %or_end_25, label %or_right_24
+or_right_24:
+  %r32 = getelementptr [14 x i8], [14 x i8]* @.str.11487, i64 0, i64 0
+  %r33 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r32, i64 13)
+  br label %or_end_25
+or_end_25:
+  %r34 = phi i1 [ 1, %or_end_23 ], [ %r33, %or_right_24 ]
+  br i1 %r34, label %then_26, label %else_27
+then_26:
+  call void @__nurl_fn.__fold_commit_all__fp1()
+  br label %end_28
+else_27:
+  br label %end_28
+end_28:
+  %r35 = getelementptr [5 x i8], [5 x i8]* @.str.11488, i64 0, i64 0
+  %r36 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r35, i64 4)
+  br i1 %r36, label %then_29, label %else_30
+then_29:
+  %r37 = add i64 %ls, 2
+  %r38 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r37, i64 %le)
+  store i64 %r38, i64* %r39
+  %r40 = load i64, i64* %r39
+  %r41 = icmp sge i64 %r40, 0
+  br i1 %r41, label %then_32, label %else_33
+then_32:
+  %r42 = load i64, i64* @g_fold_end
+  store i64 %r42, i64* %r43
+  %r44 = load i64, i64* %r43
+  %r45 = getelementptr [13 x i8], [13 x i8]* @.str.11489, i64 0, i64 0
+  %r46 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r44, i8* %r45, i64 12)
+  br i1 %r46, label %and_right_35, label %and_end_36
+and_right_35:
+  %r47 = load i64, i64* %r43
+  %r48 = add i64 %r47, 12
+  %r49 = icmp eq i64 %le, %r48
+  br label %and_end_36
+and_end_36:
+  %r50 = phi i1 [ 0, %then_32 ], [ %r49, %and_right_35 ]
+  br i1 %r50, label %then_37, label %else_38
+then_37:
+  %r51 = load i64, i64* %r39
+  call void @__nurl_fn.__fold_add_flag__fp1(i64 %r51)
+  ret i1 1
+else_38:
+  br label %end_39
+end_39:
+  %r52 = load i64, i64* %r43
+  %r53 = getelementptr [13 x i8], [13 x i8]* @.str.11490, i64 0, i64 0
+  %r54 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r52, i8* %r53, i64 12)
+  br i1 %r54, label %then_40, label %else_41
+then_40:
+  %r55 = load i64, i64* %r43
+  %r56 = add i64 %r55, 12
+  %r57 = call i64 @__nurl_fn.__fold_ptr_reg__fp1(i64 %r56, i64 %le)
+  store i64 %r57, i64* %r58
+  %r59 = load i64, i64* %r58
+  %r60 = icmp sge i64 %r59, 0
+  br i1 %r60, label %and_right_43, label %and_end_44
+and_right_43:
+  %r61 = load i64, i64* %r58
+  %r62 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r61, i64 3)
+  %r63 = icmp ne i64 0, %r62
+  br label %and_end_44
+and_end_44:
+  %r64 = phi i1 [ 0, %then_40 ], [ %r63, %and_right_43 ]
+  br i1 %r64, label %then_45, label %else_46
+then_45:
+  %r65 = load i64, i64* %r58
+  call void @__nurl_fn.__fold_commit__fp1(i64 %r65)
+  ret i1 1
+else_46:
+  br label %end_47
+end_47:
+  br label %end_42
+else_41:
+  br label %end_42
+end_42:
+  br label %end_34
+else_33:
+  br label %end_34
+end_34:
+  br label %end_31
+else_30:
+  br label %end_31
+end_31:
+  %r66 = call i64 @__nurl_fn.__fold_store_flag__fp1(i64 %ls, i64 %le)
+  store i64 %r66, i64* %r67
+  %r68 = load i64, i64* %r67
+  %r69 = icmp sge i64 %r68, 0
+  br i1 %r69, label %and_right_48, label %and_end_49
+and_right_48:
+  %r70 = load i64, i64* %r67
+  %r71 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r70, i64 3)
+  %r72 = icmp ne i64 0, %r71
+  br label %and_end_49
+and_end_49:
+  %r73 = phi i1 [ 0, %end_31 ], [ %r72, %and_right_48 ]
+  br i1 %r73, label %then_50, label %else_51
+then_50:
+  %r74 = load i64, i64* @g_fold_x
+  %r75 = load i64, i64* @g_fold_y
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r74, i64 %r75, i1 1)
+  %r76 = load i64, i64* @g_fold_k
+  %r77 = icmp eq i64 %r76, 1
+  br i1 %r77, label %then_53, label %else_54
+then_53:
+  %r78 = load i64, i64* @g_fold_x
+  %r79 = icmp eq i64 %r78, 1
+  br i1 %r79, label %then_56, label %else_57
+then_56:
+  br label %end_58
+else_57:
+  br label %end_58
+end_58:
+  %r80 = phi i64 [ 2, %then_56 ], [ 1, %else_57 ]
+  br label %end_55
+else_54:
+  br label %end_55
+end_55:
+  %r81 = phi i64 [ %r80, %end_58 ], [ 4, %else_54 ]
+  store i64 %r81, i64* %r82
+  %r83 = load i64, i64* %r67
+  %r84 = load i64, i64* %r82
+  call void @__nurl_fn.__fold_put__fp1(i64 %r83, i64 5, i64 %r84)
+  ret i1 1
+else_51:
+  br label %end_52
+end_52:
+  %r85 = getelementptr [43 x i8], [43 x i8]* @.str.11491, i64 0, i64 0
+  %r86 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r85, i64 42)
+  br i1 %r86, label %then_59, label %else_60
+then_59:
+  %r87 = add i64 %ls, 33
+  %r88 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r87, i64 %le)
+  store i64 %r88, i64* %r89
+  %r90 = load i64, i64* @g_fold_end
+  %r91 = getelementptr [7 x i8], [7 x i8]* @.str.11492, i64 0, i64 0
+  %r92 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r90, i8* %r91, i64 6)
+  br i1 %r92, label %then_62, label %else_63
+then_62:
+  %r93 = load i64, i64* @g_fold_end
+  %r94 = add i64 %r93, 6
+  %r95 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r94, i64 %le)
+  store i64 %r95, i64* %r96
+  %r97 = load i64, i64* %r96
+  %r98 = icmp sge i64 %r97, 0
+  br i1 %r98, label %and_right_65, label %and_end_66
+and_right_65:
+  %r99 = load i64, i64* %r96
+  %r100 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r99, i64 3)
+  %r101 = icmp ne i64 0, %r100
+  br label %and_end_66
+and_end_66:
+  %r102 = phi i1 [ 0, %then_62 ], [ %r101, %and_right_65 ]
+  br i1 %r102, label %then_67, label %else_68
+then_67:
+  %r103 = load i64, i64* %r89
+  %r104 = icmp eq i64 %r103, 1
+  br i1 %r104, label %then_70, label %else_71
+then_70:
+  %r105 = load i64, i64* %r96
+  call void @__nurl_fn.__fold_put__fp1(i64 %r105, i64 5, i64 1)
+  br label %end_72
+else_71:
+  br label %end_72
+end_72:
+  %r106 = load i64, i64* %r89
+  %r107 = icmp slt i64 %r106, 0
+  br i1 %r107, label %then_73, label %else_74
+then_73:
+  %r108 = load i64, i64* %r96
+  call void @__nurl_fn.__fold_commit__fp1(i64 %r108)
+  %r109 = load i64, i64* %r96
+  %r110 = load i64, i64* %r96
+  %r111 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r110, i64 4)
+  %r112 = or i64 %r111, 1
+  call void @__nurl_fn.__fold_put__fp1(i64 %r109, i64 4, i64 %r112)
+  br label %end_75
+else_74:
+  br label %end_75
+end_75:
+  ret i1 1
+else_68:
+  br label %end_69
+end_69:
+  br label %end_64
+else_63:
+  br label %end_64
+end_64:
+  br label %end_61
+else_60:
+  br label %end_61
+end_61:
+  call void @__nurl_fn.__fold_escape__fp1(i64 %ls, i64 %le)
+  ret i1 0
+}
+
+@.str.11482 = private unnamed_addr constant [5 x i8] c"  %r\00"
+@.str.11483 = private unnamed_addr constant [13 x i8] c" = alloca i1\00"
+@.str.11484 = private unnamed_addr constant [6 x i8] c"  br \00"
+@.str.11485 = private unnamed_addr constant [6 x i8] c"  ret\00"
+@.str.11486 = private unnamed_addr constant [10 x i8] c"  switch \00"
+@.str.11487 = private unnamed_addr constant [14 x i8] c"  unreachable\00"
+@.str.11488 = private unnamed_addr constant [5 x i8] c"  %r\00"
+@.str.11489 = private unnamed_addr constant [13 x i8] c" = alloca i1\00"
+@.str.11490 = private unnamed_addr constant [13 x i8] c" = load i1, \00"
+@.str.11491 = private unnamed_addr constant [43 x i8] c"  call void @__nurl_clear_if(ptr @.__nurl_\00"
+@.str.11492 = private unnamed_addr constant [7 x i8] c", ptr \00"
 define void @__nurl_fn.__fold_scan_line__fp1(i64 %ls, i64 %le) sanitize_address {
 entry:
-  %r5 = alloca i64
-  %r10 = alloca i64
-  %r21 = alloca i64
-  %r29 = alloca i64
+  %r6 = alloca i64
+  %r11 = alloca i64
+  %r22 = alloca i64
   %r30 = alloca i64
-  %r50 = alloca i64
-  %r57 = alloca i64
-  %r60 = alloca i64
-  %r66 = alloca i64
-  %r68 = alloca i64
-  %r70 = alloca i64
-  %r74 = alloca i64
-  %r76 = alloca i64
-  %r78 = alloca i64
-  %r99 = alloca i64
-  %r135 = alloca i64
-  %r138 = alloca i64
-  %r148 = alloca i64
-  %r150 = alloca i64
-  %r164 = alloca i64
-  %r180 = alloca i64
-  %r196 = alloca i1
-  %r219 = alloca i64
-  %r226 = alloca i64
-  %r230 = alloca i1
-  %r246 = alloca i64
-  %r254 = alloca i64
-  %r259 = alloca i64
-  %r262 = alloca i1
-  %r277 = alloca i64
-  %r0 = getelementptr [5 x i8], [5 x i8]* @.str.11478, i64 0, i64 0
-  %r1 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r0, i64 4)
-  %r2 = xor i1 %r1, 1
-  br i1 %r2, label %then_1, label %else_2
+  %r31 = alloca i64
+  %r51 = alloca i64
+  %r58 = alloca i64
+  %r61 = alloca i64
+  %r67 = alloca i64
+  %r69 = alloca i64
+  %r71 = alloca i64
+  %r75 = alloca i64
+  %r77 = alloca i64
+  %r79 = alloca i64
+  %r100 = alloca i64
+  %r136 = alloca i64
+  %r139 = alloca i64
+  %r149 = alloca i64
+  %r151 = alloca i64
+  %r165 = alloca i64
+  %r181 = alloca i64
+  %r197 = alloca i1
+  %r220 = alloca i64
+  %r227 = alloca i64
+  %r228 = alloca i1
+  %r240 = alloca i64
+  %r247 = alloca i64
+  %r260 = alloca i1
+  %r276 = alloca i64
+  %r284 = alloca i64
+  %r289 = alloca i64
+  %r306 = alloca i64
+  %r0 = call i1 @__nurl_fn.__fold_flag_line__fp1(i64 %ls, i64 %le)
+  br i1 %r0, label %then_1, label %else_2
 then_1:
   ret void
 else_2:
   br label %end_3
 end_3:
-  %r3 = add i64 %ls, 2
-  %r4 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r3, i64 %le)
-  store i64 %r4, i64* %r5
-  %r6 = load i64, i64* %r5
-  %r7 = icmp slt i64 %r6, 0
-  br i1 %r7, label %then_4, label %else_5
+  %r1 = getelementptr [5 x i8], [5 x i8]* @.str.11493, i64 0, i64 0
+  %r2 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r1, i64 4)
+  %r3 = xor i1 %r2, 1
+  br i1 %r3, label %then_4, label %else_5
 then_4:
   ret void
 else_5:
   br label %end_6
 end_6:
-  %r8 = load i64, i64* @g_fold_end
-  %r9 = add i64 %r8, 3
-  store i64 %r9, i64* %r10
-  %r11 = load i64, i64* @g_fold_end
-  %r12 = getelementptr [4 x i8], [4 x i8]* @.str.11479, i64 0, i64 0
-  %r13 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r11, i8* %r12, i64 3)
-  %r14 = xor i1 %r13, 1
-  br i1 %r14, label %then_7, label %else_8
+  %r4 = add i64 %ls, 2
+  %r5 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r4, i64 %le)
+  store i64 %r5, i64* %r6
+  %r7 = load i64, i64* %r6
+  %r8 = icmp slt i64 %r7, 0
+  br i1 %r8, label %then_7, label %else_8
 then_7:
   ret void
 else_8:
   br label %end_9
 end_9:
-  %r15 = load i64, i64* %r10
-  %r16 = getelementptr [23 x i8], [23 x i8]* @.str.11480, i64 0, i64 0
-  %r17 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r15, i8* %r16, i64 22)
-  br i1 %r17, label %then_10, label %else_11
+  %r9 = load i64, i64* @g_fold_end
+  %r10 = add i64 %r9, 3
+  store i64 %r10, i64* %r11
+  %r12 = load i64, i64* @g_fold_end
+  %r13 = getelementptr [4 x i8], [4 x i8]* @.str.11494, i64 0, i64 0
+  %r14 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r12, i8* %r13, i64 3)
+  %r15 = xor i1 %r14, 1
+  br i1 %r15, label %then_10, label %else_11
 then_10:
-  %r18 = load i64, i64* %r10
-  %r19 = add i64 %r18, 13
-  %r20 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r19, i64 %le)
-  store i64 %r20, i64* %r21
-  %r22 = load i64, i64* %r21
-  %r23 = icmp sge i64 %r22, 0
-  br i1 %r23, label %and_right_13, label %and_end_14
-and_right_13:
-  %r24 = load i64, i64* @g_fold_end
-  %r25 = icmp eq i64 %r24, %le
-  br label %and_end_14
-and_end_14:
-  %r26 = phi i1 [ 0, %then_10 ], [ %r25, %and_right_13 ]
-  br i1 %r26, label %then_15, label %else_16
-then_15:
-  %r27 = load i64, i64* %r5
-  %r28 = load i64, i64* %r21
-  call void @__nurl_fn.__fold_set__fp1(i64 %r27, i64 1, i64 %r28, i64 0)
-  br label %end_17
-else_16:
-  br label %end_17
-end_17:
   ret void
 else_11:
   br label %end_12
 end_12:
-  store i64 0, i64* %r29
-  store i64 0, i64* %r30
-  %r31 = load i64, i64* %r10
-  %r32 = getelementptr [8 x i8], [8 x i8]* @.str.11481, i64 0, i64 0
-  %r33 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r31, i8* %r32, i64 7)
-  br i1 %r33, label %then_18, label %else_19
+  %r16 = load i64, i64* %r11
+  %r17 = getelementptr [23 x i8], [23 x i8]* @.str.11495, i64 0, i64 0
+  %r18 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r16, i8* %r17, i64 22)
+  br i1 %r18, label %then_13, label %else_14
+then_13:
+  %r19 = load i64, i64* %r11
+  %r20 = add i64 %r19, 13
+  %r21 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r20, i64 %le)
+  store i64 %r21, i64* %r22
+  %r23 = load i64, i64* %r22
+  %r24 = icmp sge i64 %r23, 0
+  br i1 %r24, label %and_right_16, label %and_end_17
+and_right_16:
+  %r25 = load i64, i64* @g_fold_end
+  %r26 = icmp eq i64 %r25, %le
+  br label %and_end_17
+and_end_17:
+  %r27 = phi i1 [ 0, %then_13 ], [ %r26, %and_right_16 ]
+  br i1 %r27, label %then_18, label %else_19
 then_18:
-  store i64 1, i64* %r29
-  %r34 = load i64, i64* %r10
-  %r35 = add i64 %r34, 7
-  store i64 %r35, i64* %r30
+  %r28 = load i64, i64* %r6
+  %r29 = load i64, i64* %r22
+  call void @__nurl_fn.__fold_set__fp1(i64 %r28, i64 1, i64 %r29, i64 0)
   br label %end_20
 else_19:
   br label %end_20
 end_20:
-  %r36 = load i64, i64* %r10
-  %r37 = getelementptr [8 x i8], [8 x i8]* @.str.11482, i64 0, i64 0
-  %r38 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r36, i8* %r37, i64 7)
-  br i1 %r38, label %then_21, label %else_22
+  ret void
+else_14:
+  br label %end_15
+end_15:
+  store i64 0, i64* %r30
+  store i64 0, i64* %r31
+  %r32 = load i64, i64* %r11
+  %r33 = getelementptr [8 x i8], [8 x i8]* @.str.11496, i64 0, i64 0
+  %r34 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r32, i8* %r33, i64 7)
+  br i1 %r34, label %then_21, label %else_22
 then_21:
-  store i64 2, i64* %r29
-  %r39 = load i64, i64* %r10
-  %r40 = add i64 %r39, 7
-  store i64 %r40, i64* %r30
+  store i64 1, i64* %r30
+  %r35 = load i64, i64* %r11
+  %r36 = add i64 %r35, 7
+  store i64 %r36, i64* %r31
   br label %end_23
 else_22:
   br label %end_23
 end_23:
-  %r41 = load i64, i64* %r10
-  %r42 = getelementptr [7 x i8], [7 x i8]* @.str.11483, i64 0, i64 0
-  %r43 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r41, i8* %r42, i64 6)
-  br i1 %r43, label %then_24, label %else_25
+  %r37 = load i64, i64* %r11
+  %r38 = getelementptr [8 x i8], [8 x i8]* @.str.11497, i64 0, i64 0
+  %r39 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r37, i8* %r38, i64 7)
+  br i1 %r39, label %then_24, label %else_25
 then_24:
-  store i64 3, i64* %r29
-  %r44 = load i64, i64* %r10
-  %r45 = add i64 %r44, 6
-  store i64 %r45, i64* %r30
+  store i64 2, i64* %r30
+  %r40 = load i64, i64* %r11
+  %r41 = add i64 %r40, 7
+  store i64 %r41, i64* %r31
   br label %end_26
 else_25:
   br label %end_26
 end_26:
-  %r46 = load i64, i64* %r29
-  %r47 = icmp ne i64 %r46, 0
-  br i1 %r47, label %then_27, label %else_28
+  %r42 = load i64, i64* %r11
+  %r43 = getelementptr [7 x i8], [7 x i8]* @.str.11498, i64 0, i64 0
+  %r44 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r42, i8* %r43, i64 6)
+  br i1 %r44, label %then_27, label %else_28
 then_27:
-  %r48 = load i64, i64* %r30
-  %r49 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r48, i64 %le)
-  store i64 %r49, i64* %r50
-  %r51 = load i64, i64* %r50
-  %r52 = getelementptr [3 x i8], [3 x i8]* @.str.11484, i64 0, i64 0
-  %r53 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r51, i8* %r52, i64 2)
-  %r54 = xor i1 %r53, 1
-  br i1 %r54, label %then_30, label %else_31
+  store i64 3, i64* %r30
+  %r45 = load i64, i64* %r11
+  %r46 = add i64 %r45, 6
+  store i64 %r46, i64* %r31
+  br label %end_29
+else_28:
+  br label %end_29
+end_29:
+  %r47 = load i64, i64* %r30
+  %r48 = icmp ne i64 %r47, 0
+  br i1 %r48, label %then_30, label %else_31
 then_30:
-  ret void
-else_31:
-  br label %end_32
-end_32:
-  %r55 = load i64, i64* %r50
-  %r56 = add i64 %r55, 2
-  store i64 %r56, i64* %r57
-  %r58 = load i64, i64* %r57
-  %r59 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r58, i64 %le)
-  store i64 %r59, i64* %r60
-  %r61 = load i64, i64* %r60
-  %r62 = icmp ne i64 %r61, %le
-  br i1 %r62, label %then_33, label %else_34
+  %r49 = load i64, i64* %r31
+  %r50 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r49, i64 %le)
+  store i64 %r50, i64* %r51
+  %r52 = load i64, i64* %r51
+  %r53 = getelementptr [3 x i8], [3 x i8]* @.str.11499, i64 0, i64 0
+  %r54 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r52, i8* %r53, i64 2)
+  %r55 = xor i1 %r54, 1
+  br i1 %r55, label %then_33, label %else_34
 then_33:
   ret void
 else_34:
   br label %end_35
 end_35:
-  %r63 = load i64, i64* %r30
-  %r64 = load i64, i64* %r50
-  call void @__nurl_fn.__fold_operand__fp1(i64 %r63, i64 %r64, i1 1)
-  %r65 = load i64, i64* @g_fold_k
-  store i64 %r65, i64* %r66
-  %r67 = load i64, i64* @g_fold_x
-  store i64 %r67, i64* %r68
-  %r69 = load i64, i64* @g_fold_y
-  store i64 %r69, i64* %r70
-  %r71 = load i64, i64* %r57
-  %r72 = load i64, i64* %r60
-  call void @__nurl_fn.__fold_operand__fp1(i64 %r71, i64 %r72, i1 1)
-  %r73 = load i64, i64* @g_fold_k
-  store i64 %r73, i64* %r74
-  %r75 = load i64, i64* @g_fold_x
-  store i64 %r75, i64* %r76
-  %r77 = load i64, i64* @g_fold_y
-  store i64 %r77, i64* %r78
-  %r79 = load i64, i64* %r66
-  %r80 = icmp eq i64 %r79, 1
-  br i1 %r80, label %and_right_36, label %and_end_37
-and_right_36:
-  %r81 = load i64, i64* %r74
-  %r82 = icmp eq i64 %r81, 1
-  br label %and_end_37
-and_end_37:
-  %r83 = phi i1 [ 0, %end_35 ], [ %r82, %and_right_36 ]
-  br i1 %r83, label %then_38, label %else_39
-then_38:
-  %r84 = load i64, i64* %r29
-  %r85 = icmp eq i64 %r84, 1
-  br i1 %r85, label %then_41, label %else_42
+  %r56 = load i64, i64* %r51
+  %r57 = add i64 %r56, 2
+  store i64 %r57, i64* %r58
+  %r59 = load i64, i64* %r58
+  %r60 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r59, i64 %le)
+  store i64 %r60, i64* %r61
+  %r62 = load i64, i64* %r61
+  %r63 = icmp ne i64 %r62, %le
+  br i1 %r63, label %then_36, label %else_37
+then_36:
+  ret void
+else_37:
+  br label %end_38
+end_38:
+  %r64 = load i64, i64* %r31
+  %r65 = load i64, i64* %r51
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r64, i64 %r65, i1 1)
+  %r66 = load i64, i64* @g_fold_k
+  store i64 %r66, i64* %r67
+  %r68 = load i64, i64* @g_fold_x
+  store i64 %r68, i64* %r69
+  %r70 = load i64, i64* @g_fold_y
+  store i64 %r70, i64* %r71
+  %r72 = load i64, i64* %r58
+  %r73 = load i64, i64* %r61
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r72, i64 %r73, i1 1)
+  %r74 = load i64, i64* @g_fold_k
+  store i64 %r74, i64* %r75
+  %r76 = load i64, i64* @g_fold_x
+  store i64 %r76, i64* %r77
+  %r78 = load i64, i64* @g_fold_y
+  store i64 %r78, i64* %r79
+  %r80 = load i64, i64* %r67
+  %r81 = icmp eq i64 %r80, 1
+  br i1 %r81, label %and_right_39, label %and_end_40
+and_right_39:
+  %r82 = load i64, i64* %r75
+  %r83 = icmp eq i64 %r82, 1
+  br label %and_end_40
+and_end_40:
+  %r84 = phi i1 [ 0, %end_38 ], [ %r83, %and_right_39 ]
+  br i1 %r84, label %then_41, label %else_42
 then_41:
-  %r86 = load i64, i64* %r68
-  %r87 = load i64, i64* %r76
-  %r88 = xor i64 %r86, %r87
-  br label %end_43
-else_42:
-  %r89 = load i64, i64* %r29
-  %r90 = icmp eq i64 %r89, 2
-  br i1 %r90, label %then_44, label %else_45
+  %r85 = load i64, i64* %r30
+  %r86 = icmp eq i64 %r85, 1
+  br i1 %r86, label %then_44, label %else_45
 then_44:
-  %r91 = load i64, i64* %r68
-  %r92 = load i64, i64* %r76
-  %r93 = and i64 %r91, %r92
+  %r87 = load i64, i64* %r69
+  %r88 = load i64, i64* %r77
+  %r89 = xor i64 %r87, %r88
   br label %end_46
 else_45:
-  %r94 = load i64, i64* %r68
-  %r95 = load i64, i64* %r76
-  %r96 = or i64 %r94, %r95
-  br label %end_46
-end_46:
-  %r97 = phi i64 [ %r93, %then_44 ], [ %r96, %else_45 ]
-  br label %end_43
-end_43:
-  %r98 = phi i64 [ %r88, %then_41 ], [ %r97, %end_46 ]
-  store i64 %r98, i64* %r99
-  %r100 = load i64, i64* %r5
-  %r101 = load i64, i64* %r99
-  call void @__nurl_fn.__fold_set__fp1(i64 %r100, i64 1, i64 %r101, i64 0)
-  ret void
-else_39:
-  br label %end_40
-end_40:
-  %r102 = load i64, i64* %r29
-  %r103 = icmp eq i64 %r102, 1
-  br i1 %r103, label %then_47, label %else_48
+  %r90 = load i64, i64* %r30
+  %r91 = icmp eq i64 %r90, 2
+  br i1 %r91, label %then_47, label %else_48
 then_47:
-  ret void
+  %r92 = load i64, i64* %r69
+  %r93 = load i64, i64* %r77
+  %r94 = and i64 %r92, %r93
+  br label %end_49
 else_48:
+  %r95 = load i64, i64* %r69
+  %r96 = load i64, i64* %r77
+  %r97 = or i64 %r95, %r96
   br label %end_49
 end_49:
-  %r104 = load i64, i64* %r66
-  %r105 = icmp eq i64 %r104, 1
-  br i1 %r105, label %then_50, label %else_51
+  %r98 = phi i64 [ %r94, %then_47 ], [ %r97, %else_48 ]
+  br label %end_46
+end_46:
+  %r99 = phi i64 [ %r89, %then_44 ], [ %r98, %end_49 ]
+  store i64 %r99, i64* %r100
+  %r101 = load i64, i64* %r6
+  %r102 = load i64, i64* %r100
+  call void @__nurl_fn.__fold_set__fp1(i64 %r101, i64 1, i64 %r102, i64 0)
+  ret void
+else_42:
+  br label %end_43
+end_43:
+  %r103 = load i64, i64* %r30
+  %r104 = icmp eq i64 %r103, 1
+  br i1 %r104, label %then_50, label %else_51
 then_50:
-  %r106 = load i64, i64* %r68
-  %r107 = load i64, i64* %r29
-  %r108 = icmp eq i64 %r107, 2
-  br i1 %r108, label %then_53, label %else_54
-then_53:
-  br label %end_55
-else_54:
-  br label %end_55
-end_55:
-  %r109 = phi i64 [ 0, %then_53 ], [ 1, %else_54 ]
-  %r110 = icmp eq i64 %r106, %r109
-  br i1 %r110, label %then_56, label %else_57
-then_56:
-  %r111 = load i64, i64* %r5
-  %r112 = load i64, i64* %r68
-  call void @__nurl_fn.__fold_set__fp1(i64 %r111, i64 1, i64 %r112, i64 0)
-  br label %end_58
-else_57:
-  %r113 = load i64, i64* %r5
-  %r114 = load i64, i64* %r74
-  %r115 = load i64, i64* %r76
-  %r116 = load i64, i64* %r78
-  call void @__nurl_fn.__fold_set__fp1(i64 %r113, i64 %r114, i64 %r115, i64 %r116)
-  br label %end_58
-end_58:
   ret void
 else_51:
   br label %end_52
 end_52:
-  %r117 = load i64, i64* %r74
-  %r118 = icmp eq i64 %r117, 1
-  br i1 %r118, label %then_59, label %else_60
+  %r105 = load i64, i64* %r67
+  %r106 = icmp eq i64 %r105, 1
+  br i1 %r106, label %then_53, label %else_54
+then_53:
+  %r107 = load i64, i64* %r69
+  %r108 = load i64, i64* %r30
+  %r109 = icmp eq i64 %r108, 2
+  br i1 %r109, label %then_56, label %else_57
+then_56:
+  br label %end_58
+else_57:
+  br label %end_58
+end_58:
+  %r110 = phi i64 [ 0, %then_56 ], [ 1, %else_57 ]
+  %r111 = icmp eq i64 %r107, %r110
+  br i1 %r111, label %then_59, label %else_60
 then_59:
-  %r119 = load i64, i64* %r76
-  %r120 = load i64, i64* %r29
-  %r121 = icmp eq i64 %r120, 2
-  br i1 %r121, label %then_62, label %else_63
+  %r112 = load i64, i64* %r6
+  %r113 = load i64, i64* %r69
+  call void @__nurl_fn.__fold_set__fp1(i64 %r112, i64 1, i64 %r113, i64 0)
+  br label %end_61
+else_60:
+  %r114 = load i64, i64* %r6
+  %r115 = load i64, i64* %r75
+  %r116 = load i64, i64* %r77
+  %r117 = load i64, i64* %r79
+  call void @__nurl_fn.__fold_set__fp1(i64 %r114, i64 %r115, i64 %r116, i64 %r117)
+  br label %end_61
+end_61:
+  ret void
+else_54:
+  br label %end_55
+end_55:
+  %r118 = load i64, i64* %r75
+  %r119 = icmp eq i64 %r118, 1
+  br i1 %r119, label %then_62, label %else_63
 then_62:
+  %r120 = load i64, i64* %r77
+  %r121 = load i64, i64* %r30
+  %r122 = icmp eq i64 %r121, 2
+  br i1 %r122, label %then_65, label %else_66
+then_65:
+  br label %end_67
+else_66:
+  br label %end_67
+end_67:
+  %r123 = phi i64 [ 0, %then_65 ], [ 1, %else_66 ]
+  %r124 = icmp eq i64 %r120, %r123
+  br i1 %r124, label %then_68, label %else_69
+then_68:
+  %r125 = load i64, i64* %r6
+  %r126 = load i64, i64* %r77
+  call void @__nurl_fn.__fold_set__fp1(i64 %r125, i64 1, i64 %r126, i64 0)
+  br label %end_70
+else_69:
+  %r127 = load i64, i64* %r6
+  %r128 = load i64, i64* %r67
+  %r129 = load i64, i64* %r69
+  %r130 = load i64, i64* %r71
+  call void @__nurl_fn.__fold_set__fp1(i64 %r127, i64 %r128, i64 %r129, i64 %r130)
+  br label %end_70
+end_70:
   br label %end_64
 else_63:
   br label %end_64
 end_64:
-  %r122 = phi i64 [ 0, %then_62 ], [ 1, %else_63 ]
-  %r123 = icmp eq i64 %r119, %r122
-  br i1 %r123, label %then_65, label %else_66
-then_65:
-  %r124 = load i64, i64* %r5
-  %r125 = load i64, i64* %r76
-  call void @__nurl_fn.__fold_set__fp1(i64 %r124, i64 1, i64 %r125, i64 0)
-  br label %end_67
-else_66:
-  %r126 = load i64, i64* %r5
-  %r127 = load i64, i64* %r66
-  %r128 = load i64, i64* %r68
-  %r129 = load i64, i64* %r70
-  call void @__nurl_fn.__fold_set__fp1(i64 %r126, i64 %r127, i64 %r128, i64 %r129)
-  br label %end_67
-end_67:
-  br label %end_61
-else_60:
-  br label %end_61
-end_61:
   ret void
-else_28:
-  br label %end_29
-end_29:
-  %r130 = load i64, i64* %r10
-  %r131 = getelementptr [11 x i8], [11 x i8]* @.str.11485, i64 0, i64 0
-  %r132 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r130, i8* %r131, i64 10)
-  br i1 %r132, label %then_68, label %else_69
-then_68:
-  %r133 = load i64, i64* %r10
-  %r134 = add i64 %r133, 10
-  store i64 %r134, i64* %r135
-  %r136 = load i64, i64* %r135
-  %r137 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r136, i64 %le)
-  store i64 %r137, i64* %r138
-  %r139 = load i64, i64* %r138
-  %r140 = getelementptr [3 x i8], [3 x i8]* @.str.11486, i64 0, i64 0
-  %r141 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r139, i8* %r140, i64 2)
-  %r142 = xor i1 %r141, 1
-  br i1 %r142, label %then_71, label %else_72
+else_31:
+  br label %end_32
+end_32:
+  %r131 = load i64, i64* %r11
+  %r132 = getelementptr [11 x i8], [11 x i8]* @.str.11500, i64 0, i64 0
+  %r133 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r131, i8* %r132, i64 10)
+  br i1 %r133, label %then_71, label %else_72
 then_71:
-  ret void
-else_72:
-  br label %end_73
-end_73:
-  %r143 = load i64, i64* %r135
-  %r144 = load i64, i64* %r138
-  call void @__nurl_fn.__fold_operand__fp1(i64 %r143, i64 %r144, i1 1)
-  %r145 = load i64, i64* @g_fold_k
-  %r146 = icmp ne i64 %r145, 1
-  br i1 %r146, label %then_74, label %else_75
+  %r134 = load i64, i64* %r11
+  %r135 = add i64 %r134, 10
+  store i64 %r135, i64* %r136
+  %r137 = load i64, i64* %r136
+  %r138 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r137, i64 %le)
+  store i64 %r138, i64* %r139
+  %r140 = load i64, i64* %r139
+  %r141 = getelementptr [3 x i8], [3 x i8]* @.str.11501, i64 0, i64 0
+  %r142 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r140, i8* %r141, i64 2)
+  %r143 = xor i1 %r142, 1
+  br i1 %r143, label %then_74, label %else_75
 then_74:
   ret void
 else_75:
   br label %end_76
 end_76:
-  %r147 = load i64, i64* @g_fold_x
-  store i64 %r147, i64* %r148
-  %r149 = sub i64 %le, 1
-  store i64 %r149, i64* %r150
-  br label %loop_check_77
-loop_check_77:
-  %r151 = load i64, i64* %r150
-  %r152 = load i64, i64* %r138
-  %r153 = icmp sgt i64 %r151, %r152
-  br i1 %r153, label %and_right_80, label %and_end_81
-and_right_80:
-  %r154 = load i64, i64* %r150
-  %r155 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r154)
-  %r156 = icmp ne i64 %r155, 32
-  br label %and_end_81
-and_end_81:
-  %r157 = phi i1 [ 0, %loop_check_77 ], [ %r156, %and_right_80 ]
-  br i1 %r157, label %loop_body_78, label %loop_exit_79
-loop_body_78:
-  %r158 = load i64, i64* %r150
-  %r159 = sub i64 %r158, 1
-  store i64 %r159, i64* %r150
-  br label %loop_check_77
-loop_exit_79:
-  %r160 = load i64, i64* %r150
-  %r161 = add i64 %r160, 1
-  store i64 %r161, i64* %r150
-  %r162 = load i64, i64* %r150
-  %r163 = sub i64 %r162, 2
-  store i64 %r163, i64* %r164
-  br label %loop_check_82
-loop_check_82:
-  %r165 = load i64, i64* %r164
-  %r166 = load i64, i64* %r138
-  %r167 = icmp sgt i64 %r165, %r166
-  br i1 %r167, label %and_right_85, label %and_end_86
-and_right_85:
-  %r168 = load i64, i64* %r164
-  %r169 = getelementptr [3 x i8], [3 x i8]* @.str.11487, i64 0, i64 0
-  %r170 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r168, i8* %r169, i64 2)
-  %r171 = xor i1 %r170, 1
-  br label %and_end_86
-and_end_86:
-  %r172 = phi i1 [ 0, %loop_check_82 ], [ %r171, %and_right_85 ]
-  br i1 %r172, label %loop_body_83, label %loop_exit_84
-loop_body_83:
-  %r173 = load i64, i64* %r164
-  %r174 = sub i64 %r173, 1
-  store i64 %r174, i64* %r164
-  br label %loop_check_82
-loop_exit_84:
-  %r175 = load i64, i64* %r164
-  %r176 = load i64, i64* %r138
-  %r177 = icmp sle i64 %r175, %r176
-  br i1 %r177, label %then_87, label %else_88
-then_87:
+  %r144 = load i64, i64* %r136
+  %r145 = load i64, i64* %r139
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r144, i64 %r145, i1 1)
+  %r146 = load i64, i64* @g_fold_k
+  %r147 = icmp ne i64 %r146, 1
+  br i1 %r147, label %then_77, label %else_78
+then_77:
   ret void
-else_88:
-  br label %end_89
-end_89:
-  %r178 = load i64, i64* %r164
-  %r179 = sub i64 %r178, 1
-  store i64 %r179, i64* %r180
-  br label %loop_check_90
-loop_check_90:
-  %r181 = load i64, i64* %r180
-  %r182 = load i64, i64* %r138
-  %r183 = icmp sgt i64 %r181, %r182
-  br i1 %r183, label %and_right_93, label %and_end_94
-and_right_93:
-  %r184 = load i64, i64* %r180
-  %r185 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r184)
-  %r186 = icmp ne i64 %r185, 32
-  br label %and_end_94
-and_end_94:
-  %r187 = phi i1 [ 0, %loop_check_90 ], [ %r186, %and_right_93 ]
-  br i1 %r187, label %loop_body_91, label %loop_exit_92
-loop_body_91:
-  %r188 = load i64, i64* %r180
-  %r189 = sub i64 %r188, 1
-  store i64 %r189, i64* %r180
-  br label %loop_check_90
-loop_exit_92:
-  %r190 = load i64, i64* %r180
-  %r191 = add i64 %r190, 1
-  store i64 %r191, i64* %r180
-  %r192 = load i64, i64* %r138
-  %r193 = add i64 %r192, 2
-  %r194 = getelementptr [4 x i8], [4 x i8]* @.str.11488, i64 0, i64 0
-  %r195 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r193, i8* %r194, i64 3)
-  store i1 %r195, i1* %r196
-  %r197 = load i64, i64* %r148
-  %r198 = icmp eq i64 %r197, 1
-  br i1 %r198, label %then_95, label %else_96
-then_95:
-  %r199 = load i64, i64* %r180
-  %r200 = load i64, i64* %r164
-  %r201 = load i1, i1* %r196
-  call void @__nurl_fn.__fold_operand__fp1(i64 %r199, i64 %r200, i1 %r201)
-  br label %end_97
-else_96:
-  %r202 = load i64, i64* %r150
-  %r203 = load i1, i1* %r196
-  call void @__nurl_fn.__fold_operand__fp1(i64 %r202, i64 %le, i1 %r203)
-  br label %end_97
-end_97:
-  %r204 = load i64, i64* %r5
-  %r205 = load i64, i64* @g_fold_k
-  %r206 = load i64, i64* @g_fold_x
-  %r207 = load i64, i64* @g_fold_y
-  call void @__nurl_fn.__fold_set__fp1(i64 %r204, i64 %r205, i64 %r206, i64 %r207)
+else_78:
+  br label %end_79
+end_79:
+  %r148 = load i64, i64* @g_fold_x
+  store i64 %r148, i64* %r149
+  %r150 = sub i64 %le, 1
+  store i64 %r150, i64* %r151
+  br label %loop_check_80
+loop_check_80:
+  %r152 = load i64, i64* %r151
+  %r153 = load i64, i64* %r139
+  %r154 = icmp sgt i64 %r152, %r153
+  br i1 %r154, label %and_right_83, label %and_end_84
+and_right_83:
+  %r155 = load i64, i64* %r151
+  %r156 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r155)
+  %r157 = icmp ne i64 %r156, 32
+  br label %and_end_84
+and_end_84:
+  %r158 = phi i1 [ 0, %loop_check_80 ], [ %r157, %and_right_83 ]
+  br i1 %r158, label %loop_body_81, label %loop_exit_82
+loop_body_81:
+  %r159 = load i64, i64* %r151
+  %r160 = sub i64 %r159, 1
+  store i64 %r160, i64* %r151
+  br label %loop_check_80
+loop_exit_82:
+  %r161 = load i64, i64* %r151
+  %r162 = add i64 %r161, 1
+  store i64 %r162, i64* %r151
+  %r163 = load i64, i64* %r151
+  %r164 = sub i64 %r163, 2
+  store i64 %r164, i64* %r165
+  br label %loop_check_85
+loop_check_85:
+  %r166 = load i64, i64* %r165
+  %r167 = load i64, i64* %r139
+  %r168 = icmp sgt i64 %r166, %r167
+  br i1 %r168, label %and_right_88, label %and_end_89
+and_right_88:
+  %r169 = load i64, i64* %r165
+  %r170 = getelementptr [3 x i8], [3 x i8]* @.str.11502, i64 0, i64 0
+  %r171 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r169, i8* %r170, i64 2)
+  %r172 = xor i1 %r171, 1
+  br label %and_end_89
+and_end_89:
+  %r173 = phi i1 [ 0, %loop_check_85 ], [ %r172, %and_right_88 ]
+  br i1 %r173, label %loop_body_86, label %loop_exit_87
+loop_body_86:
+  %r174 = load i64, i64* %r165
+  %r175 = sub i64 %r174, 1
+  store i64 %r175, i64* %r165
+  br label %loop_check_85
+loop_exit_87:
+  %r176 = load i64, i64* %r165
+  %r177 = load i64, i64* %r139
+  %r178 = icmp sle i64 %r176, %r177
+  br i1 %r178, label %then_90, label %else_91
+then_90:
   ret void
-else_69:
-  br label %end_70
-end_70:
-  %r208 = load i64, i64* %r10
-  %r209 = getelementptr [6 x i8], [6 x i8]* @.str.11489, i64 0, i64 0
-  %r210 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r208, i8* %r209, i64 5)
-  br i1 %r210, label %then_98, label %else_99
+else_91:
+  br label %end_92
+end_92:
+  %r179 = load i64, i64* %r165
+  %r180 = sub i64 %r179, 1
+  store i64 %r180, i64* %r181
+  br label %loop_check_93
+loop_check_93:
+  %r182 = load i64, i64* %r181
+  %r183 = load i64, i64* %r139
+  %r184 = icmp sgt i64 %r182, %r183
+  br i1 %r184, label %and_right_96, label %and_end_97
+and_right_96:
+  %r185 = load i64, i64* %r181
+  %r186 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r185)
+  %r187 = icmp ne i64 %r186, 32
+  br label %and_end_97
+and_end_97:
+  %r188 = phi i1 [ 0, %loop_check_93 ], [ %r187, %and_right_96 ]
+  br i1 %r188, label %loop_body_94, label %loop_exit_95
+loop_body_94:
+  %r189 = load i64, i64* %r181
+  %r190 = sub i64 %r189, 1
+  store i64 %r190, i64* %r181
+  br label %loop_check_93
+loop_exit_95:
+  %r191 = load i64, i64* %r181
+  %r192 = add i64 %r191, 1
+  store i64 %r192, i64* %r181
+  %r193 = load i64, i64* %r139
+  %r194 = add i64 %r193, 2
+  %r195 = getelementptr [4 x i8], [4 x i8]* @.str.11503, i64 0, i64 0
+  %r196 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r194, i8* %r195, i64 3)
+  store i1 %r196, i1* %r197
+  %r198 = load i64, i64* %r149
+  %r199 = icmp eq i64 %r198, 1
+  br i1 %r199, label %then_98, label %else_99
 then_98:
-  %r211 = load i64, i64* @g_dce_mod
-  %r212 = load i64, i64* %r10
-  %r213 = add i64 %r211, %r212
-  %r214 = inttoptr i64 %r213 to i8*
-  %r215 = load i64, i64* %r10
-  %r216 = sub i64 %le, %r215
-  %r217 = getelementptr [18 x i8], [18 x i8]* @.str.11490, i64 0, i64 0
-  %r218 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r214, i64 %r216, i8* %r217, i64 17)
-  store i64 %r218, i64* %r219
-  %r220 = load i64, i64* %r219
-  %r221 = icmp slt i64 %r220, 0
-  br i1 %r221, label %then_101, label %else_102
+  %r200 = load i64, i64* %r181
+  %r201 = load i64, i64* %r165
+  %r202 = load i1, i1* %r197
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r200, i64 %r201, i1 %r202)
+  br label %end_100
+else_99:
+  %r203 = load i64, i64* %r151
+  %r204 = load i1, i1* %r197
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r203, i64 %le, i1 %r204)
+  br label %end_100
+end_100:
+  %r205 = load i64, i64* %r6
+  %r206 = load i64, i64* @g_fold_k
+  %r207 = load i64, i64* @g_fold_x
+  %r208 = load i64, i64* @g_fold_y
+  call void @__nurl_fn.__fold_set__fp1(i64 %r205, i64 %r206, i64 %r207, i64 %r208)
+  ret void
+else_72:
+  br label %end_73
+end_73:
+  %r209 = load i64, i64* %r11
+  %r210 = getelementptr [6 x i8], [6 x i8]* @.str.11504, i64 0, i64 0
+  %r211 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r209, i8* %r210, i64 5)
+  br i1 %r211, label %then_101, label %else_102
 then_101:
+  %r212 = load i64, i64* @g_dce_mod
+  %r213 = load i64, i64* %r11
+  %r214 = add i64 %r212, %r213
+  %r215 = inttoptr i64 %r214 to i8*
+  %r216 = load i64, i64* %r11
+  %r217 = sub i64 %le, %r216
+  %r218 = getelementptr [17 x i8], [17 x i8]* @.str.11505, i64 0, i64 0
+  %r219 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r215, i64 %r217, i8* %r218, i64 16)
+  store i64 %r219, i64* %r220
+  %r221 = load i64, i64* %r220
+  %r222 = icmp slt i64 %r221, 0
+  br i1 %r222, label %then_104, label %else_105
+then_104:
   ret void
-else_102:
-  br label %end_103
-end_103:
-  %r222 = load i64, i64* %r10
-  %r223 = load i64, i64* %r219
-  %r224 = add i64 %r222, %r223
-  %r225 = add i64 %r224, 17
-  store i64 %r225, i64* %r226
-  %r227 = load i64, i64* %r226
-  %r228 = getelementptr [3 x i8], [3 x i8]* @.str.11491, i64 0, i64 0
-  %r229 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r227, i8* %r228, i64 2)
-  store i1 %r229, i1* %r230
-  %r231 = load i1, i1* %r230
-  %r232 = xor i1 %r231, 1
-  br i1 %r232, label %and_right_104, label %and_end_105
-and_right_104:
-  %r233 = load i64, i64* %r226
-  %r234 = getelementptr [2 x i8], [2 x i8]* @.str.11492, i64 0, i64 0
-  %r235 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r233, i8* %r234, i64 1)
-  %r236 = xor i1 %r235, 1
-  br label %and_end_105
-and_end_105:
-  %r237 = phi i1 [ 0, %end_103 ], [ %r236, %and_right_104 ]
-  br i1 %r237, label %then_106, label %else_107
-then_106:
+else_105:
+  br label %end_106
+end_106:
+  %r223 = load i64, i64* %r11
+  %r224 = load i64, i64* %r220
+  %r225 = add i64 %r223, %r224
+  %r226 = add i64 %r225, 16
+  store i64 %r226, i64* %r227
+  store i1 0, i1* %r228
+  %r229 = load i64, i64* %r227
+  %r230 = getelementptr [2 x i8], [2 x i8]* @.str.11506, i64 0, i64 0
+  %r231 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r229, i8* %r230, i64 1)
+  br i1 %r231, label %then_107, label %else_108
+then_107:
+  %r232 = load i64, i64* @g_dce_mod
+  %r233 = load i64, i64* %r227
+  %r234 = add i64 %r232, %r233
+  %r235 = inttoptr i64 %r234 to i8*
+  %r236 = load i64, i64* %r227
+  %r237 = sub i64 %le, %r236
+  %r238 = getelementptr [5 x i8], [5 x i8]* @.str.11507, i64 0, i64 0
+  %r239 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r235, i64 %r237, i8* %r238, i64 4)
+  store i64 %r239, i64* %r240
+  %r241 = load i64, i64* %r240
+  %r242 = icmp slt i64 %r241, 0
+  br i1 %r242, label %then_110, label %else_111
+then_110:
   ret void
-else_107:
-  br label %end_108
-end_108:
-  %r238 = load i64, i64* @g_dce_mod
-  %r239 = load i64, i64* %r226
-  %r240 = add i64 %r238, %r239
-  %r241 = inttoptr i64 %r240 to i8*
-  %r242 = load i64, i64* %r226
-  %r243 = sub i64 %le, %r242
-  %r244 = getelementptr [15 x i8], [15 x i8]* @.str.11493, i64 0, i64 0
-  %r245 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r241, i64 %r243, i8* %r244, i64 14)
-  store i64 %r245, i64* %r246
-  %r247 = load i64, i64* %r246
-  %r248 = icmp slt i64 %r247, 0
-  br i1 %r248, label %then_109, label %else_110
-then_109:
-  ret void
-else_110:
-  br label %end_111
-end_111:
-  %r249 = load i64, i64* %r226
-  %r250 = load i64, i64* %r246
-  %r251 = add i64 %r249, %r250
-  %r252 = add i64 %r251, 5
-  %r253 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r252, i64 %le)
-  store i64 %r253, i64* %r254
-  %r255 = load i64, i64* %r254
-  %r256 = icmp slt i64 %r255, 0
-  br i1 %r256, label %then_112, label %else_113
-then_112:
-  ret void
-else_113:
-  br label %end_114
-end_114:
-  %r257 = load i64, i64* @g_fold_end
-  %r258 = add i64 %r257, 2
-  store i64 %r258, i64* %r259
-  %r260 = load i64, i64* %r254
-  %r261 = icmp eq i64 %r260, 0
-  store i1 %r261, i1* %r262
-  %r263 = load i1, i1* %r230
-  br i1 %r263, label %then_115, label %else_116
+else_111:
+  br label %end_112
+end_112:
+  %r243 = load i64, i64* %r227
+  %r244 = load i64, i64* %r240
+  %r245 = add i64 %r243, %r244
+  %r246 = add i64 %r245, 4
+  store i64 %r246, i64* %r247
+  %r248 = load i64, i64* %r247
+  %r249 = load i64, i64* %r247
+  %r250 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r249, i64 %le)
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r248, i64 %r250, i1 1)
+  %r251 = load i64, i64* @g_fold_k
+  %r252 = icmp eq i64 %r251, 1
+  br i1 %r252, label %and_right_113, label %and_end_114
+and_right_113:
+  %r253 = load i64, i64* @g_fold_x
+  %r254 = icmp eq i64 %r253, 0
+  br label %and_end_114
+and_end_114:
+  %r255 = phi i1 [ 0, %end_112 ], [ %r254, %and_right_113 ]
+  br i1 %r255, label %then_115, label %else_116
 then_115:
-  %r264 = load i64, i64* %r259
-  %r265 = getelementptr [14 x i8], [14 x i8]* @.str.11494, i64 0, i64 0
-  %r266 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r264, i8* %r265, i64 13)
-  br i1 %r266, label %then_118, label %else_119
-then_118:
-  %r267 = load i64, i64* %r259
-  %r268 = add i64 %r267, 4
-  %r269 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r268, i64 %le)
-  %r270 = icmp eq i64 1, %r269
-  br i1 %r270, label %then_121, label %else_122
-then_121:
-  store i1 1, i1* %r262
-  %r271 = zext i1 1 to i64
-  br label %end_123
-else_122:
-  br label %end_123
-end_123:
-  br label %end_120
-else_119:
-  br label %end_120
-end_120:
+  store i1 1, i1* %r228
+  %r256 = zext i1 1 to i64
   br label %end_117
 else_116:
-  %r272 = load i64, i64* %r259
-  %r273 = getelementptr [4 x i8], [4 x i8]* @.str.11495, i64 0, i64 0
-  %r274 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r272, i8* %r273, i64 3)
-  br i1 %r274, label %then_124, label %else_125
-then_124:
-  %r275 = load i64, i64* %r259
-  %r276 = add i64 %r275, 3
-  store i64 %r276, i64* %r277
-  %r278 = load i64, i64* %r277
-  %r279 = load i64, i64* %r277
-  %r280 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r279, i64 %le)
-  call void @__nurl_fn.__fold_operand__fp1(i64 %r278, i64 %r280, i1 1)
-  %r281 = load i64, i64* @g_fold_k
-  %r282 = icmp eq i64 %r281, 1
-  br i1 %r282, label %and_right_127, label %and_end_128
-and_right_127:
-  %r283 = load i64, i64* @g_fold_x
-  %r284 = icmp eq i64 %r283, 0
-  br label %and_end_128
-and_end_128:
-  %r285 = phi i1 [ 0, %then_124 ], [ %r284, %and_right_127 ]
-  br i1 %r285, label %then_129, label %else_130
-then_129:
-  store i1 1, i1* %r262
-  %r286 = zext i1 1 to i64
-  br label %end_131
-else_130:
-  br label %end_131
-end_131:
-  br label %end_126
-else_125:
-  br label %end_126
-end_126:
   br label %end_117
 end_117:
-  %r287 = load i1, i1* %r262
-  br i1 %r287, label %then_132, label %else_133
+  br label %end_109
+else_108:
+  %r257 = load i64, i64* %r227
+  %r258 = getelementptr [4 x i8], [4 x i8]* @.str.11508, i64 0, i64 0
+  %r259 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r257, i8* %r258, i64 3)
+  store i1 %r259, i1* %r260
+  %r261 = load i1, i1* %r260
+  %r262 = xor i1 %r261, 1
+  br i1 %r262, label %and_right_118, label %and_end_119
+and_right_118:
+  %r263 = load i64, i64* %r227
+  %r264 = getelementptr [3 x i8], [3 x i8]* @.str.11509, i64 0, i64 0
+  %r265 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r263, i8* %r264, i64 2)
+  %r266 = xor i1 %r265, 1
+  br label %and_end_119
+and_end_119:
+  %r267 = phi i1 [ 0, %else_108 ], [ %r266, %and_right_118 ]
+  br i1 %r267, label %then_120, label %else_121
+then_120:
+  ret void
+else_121:
+  br label %end_122
+end_122:
+  %r268 = load i64, i64* @g_dce_mod
+  %r269 = load i64, i64* %r227
+  %r270 = add i64 %r268, %r269
+  %r271 = inttoptr i64 %r270 to i8*
+  %r272 = load i64, i64* %r227
+  %r273 = sub i64 %le, %r272
+  %r274 = getelementptr [15 x i8], [15 x i8]* @.str.11510, i64 0, i64 0
+  %r275 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r271, i64 %r273, i8* %r274, i64 14)
+  store i64 %r275, i64* %r276
+  %r277 = load i64, i64* %r276
+  %r278 = icmp slt i64 %r277, 0
+  br i1 %r278, label %then_123, label %else_124
+then_123:
+  ret void
+else_124:
+  br label %end_125
+end_125:
+  %r279 = load i64, i64* %r227
+  %r280 = load i64, i64* %r276
+  %r281 = add i64 %r279, %r280
+  %r282 = add i64 %r281, 5
+  %r283 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r282, i64 %le)
+  store i64 %r283, i64* %r284
+  %r285 = load i64, i64* %r284
+  %r286 = icmp slt i64 %r285, 0
+  br i1 %r286, label %then_126, label %else_127
+then_126:
+  ret void
+else_127:
+  br label %end_128
+end_128:
+  %r287 = load i64, i64* @g_fold_end
+  %r288 = add i64 %r287, 2
+  store i64 %r288, i64* %r289
+  %r290 = load i64, i64* %r284
+  %r291 = icmp eq i64 %r290, 0
+  store i1 %r291, i1* %r228
+  %r292 = load i1, i1* %r260
+  br i1 %r292, label %then_129, label %else_130
+then_129:
+  %r293 = load i64, i64* %r289
+  %r294 = getelementptr [14 x i8], [14 x i8]* @.str.11511, i64 0, i64 0
+  %r295 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r293, i8* %r294, i64 13)
+  br i1 %r295, label %then_132, label %else_133
 then_132:
-  %r288 = call i1 @__nurl_fn.__fold_last_arg__fp1(i64 %ls, i64 %le)
-  br i1 %r288, label %then_135, label %else_136
+  %r296 = load i64, i64* %r289
+  %r297 = add i64 %r296, 4
+  %r298 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r297, i64 %le)
+  %r299 = icmp eq i64 1, %r298
+  br i1 %r299, label %then_135, label %else_136
 then_135:
-  %r289 = load i64, i64* @g_fold_x
-  %r290 = load i64, i64* @g_fold_y
-  call void @__nurl_fn.__fold_operand__fp1(i64 %r289, i64 %r290, i1 0)
-  %r291 = load i64, i64* %r5
-  %r292 = load i64, i64* @g_fold_k
-  %r293 = load i64, i64* @g_fold_x
-  %r294 = load i64, i64* @g_fold_y
-  call void @__nurl_fn.__fold_set__fp1(i64 %r291, i64 %r292, i64 %r293, i64 %r294)
+  store i1 1, i1* %r228
+  %r300 = zext i1 1 to i64
   br label %end_137
 else_136:
   br label %end_137
@@ -196187,31 +196812,288 @@ end_137:
 else_133:
   br label %end_134
 end_134:
+  br label %end_131
+else_130:
+  %r301 = load i64, i64* %r289
+  %r302 = getelementptr [4 x i8], [4 x i8]* @.str.11512, i64 0, i64 0
+  %r303 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r301, i8* %r302, i64 3)
+  br i1 %r303, label %then_138, label %else_139
+then_138:
+  %r304 = load i64, i64* %r289
+  %r305 = add i64 %r304, 3
+  store i64 %r305, i64* %r306
+  %r307 = load i64, i64* %r306
+  %r308 = load i64, i64* %r306
+  %r309 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r308, i64 %le)
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r307, i64 %r309, i1 1)
+  %r310 = load i64, i64* @g_fold_k
+  %r311 = icmp eq i64 %r310, 1
+  br i1 %r311, label %and_right_141, label %and_end_142
+and_right_141:
+  %r312 = load i64, i64* @g_fold_x
+  %r313 = icmp eq i64 %r312, 0
+  br label %and_end_142
+and_end_142:
+  %r314 = phi i1 [ 0, %then_138 ], [ %r313, %and_right_141 ]
+  br i1 %r314, label %then_143, label %else_144
+then_143:
+  store i1 1, i1* %r228
+  %r315 = zext i1 1 to i64
+  br label %end_145
+else_144:
+  br label %end_145
+end_145:
+  br label %end_140
+else_139:
+  br label %end_140
+end_140:
+  br label %end_131
+end_131:
+  br label %end_109
+end_109:
+  %r316 = load i1, i1* %r228
+  br i1 %r316, label %then_146, label %else_147
+then_146:
+  %r317 = call i1 @__nurl_fn.__fold_last_arg__fp1(i64 %ls, i64 %le)
+  br i1 %r317, label %then_149, label %else_150
+then_149:
+  %r318 = load i64, i64* @g_fold_x
+  %r319 = load i64, i64* @g_fold_y
+  call void @__nurl_fn.__fold_operand__fp1(i64 %r318, i64 %r319, i1 0)
+  %r320 = load i64, i64* %r6
+  %r321 = load i64, i64* @g_fold_k
+  %r322 = load i64, i64* @g_fold_x
+  %r323 = load i64, i64* @g_fold_y
+  call void @__nurl_fn.__fold_set__fp1(i64 %r320, i64 %r321, i64 %r322, i64 %r323)
+  br label %end_151
+else_150:
+  br label %end_151
+end_151:
+  br label %end_148
+else_147:
+  br label %end_148
+end_148:
   ret void
-else_99:
-  br label %end_100
-end_100:
+else_102:
+  br label %end_103
+end_103:
   ret void
 }
 
-@.str.11478 = private unnamed_addr constant [5 x i8] c"  %r\00"
-@.str.11479 = private unnamed_addr constant [4 x i8] c" = \00"
-@.str.11480 = private unnamed_addr constant [23 x i8] c"load i1, ptr @.__nurl_\00"
-@.str.11481 = private unnamed_addr constant [8 x i8] c"xor i1 \00"
-@.str.11482 = private unnamed_addr constant [8 x i8] c"and i1 \00"
-@.str.11483 = private unnamed_addr constant [7 x i8] c"or i1 \00"
-@.str.11484 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.11485 = private unnamed_addr constant [11 x i8] c"select i1 \00"
-@.str.11486 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.11487 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.11488 = private unnamed_addr constant [4 x i8] c"i1 \00"
-@.str.11489 = private unnamed_addr constant [6 x i8] c"call \00"
-@.str.11490 = private unnamed_addr constant [18 x i8] c" @__nurl_cloneifk\00"
-@.str.11491 = private unnamed_addr constant [3 x i8] c"r_\00"
-@.str.11492 = private unnamed_addr constant [2 x i8] c"_\00"
-@.str.11493 = private unnamed_addr constant [15 x i8] c"(ptr @.__nurl_\00"
-@.str.11494 = private unnamed_addr constant [14 x i8] c"ptr @.__nurl_\00"
-@.str.11495 = private unnamed_addr constant [4 x i8] c"i1 \00"
+@.str.11493 = private unnamed_addr constant [5 x i8] c"  %r\00"
+@.str.11494 = private unnamed_addr constant [4 x i8] c" = \00"
+@.str.11495 = private unnamed_addr constant [23 x i8] c"load i1, ptr @.__nurl_\00"
+@.str.11496 = private unnamed_addr constant [8 x i8] c"xor i1 \00"
+@.str.11497 = private unnamed_addr constant [8 x i8] c"and i1 \00"
+@.str.11498 = private unnamed_addr constant [7 x i8] c"or i1 \00"
+@.str.11499 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.11500 = private unnamed_addr constant [11 x i8] c"select i1 \00"
+@.str.11501 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.11502 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.11503 = private unnamed_addr constant [4 x i8] c"i1 \00"
+@.str.11504 = private unnamed_addr constant [6 x i8] c"call \00"
+@.str.11505 = private unnamed_addr constant [17 x i8] c" @__nurl_cloneif\00"
+@.str.11506 = private unnamed_addr constant [2 x i8] c"_\00"
+@.str.11507 = private unnamed_addr constant [5 x i8] c"(i1 \00"
+@.str.11508 = private unnamed_addr constant [4 x i8] c"kr_\00"
+@.str.11509 = private unnamed_addr constant [3 x i8] c"k_\00"
+@.str.11510 = private unnamed_addr constant [15 x i8] c"(ptr @.__nurl_\00"
+@.str.11511 = private unnamed_addr constant [14 x i8] c"ptr @.__nurl_\00"
+@.str.11512 = private unnamed_addr constant [4 x i8] c"i1 \00"
+define i64 @__nurl_fn.__fold_settle_flags__fp1(i64 %st, i64 %en) sanitize_address {
+entry:
+  %r0 = alloca i64
+  %r1 = alloca i64
+  %r2 = alloca i64
+  %r10 = alloca i64
+  %r16 = alloca i64
+  %r31 = alloca i64
+  %r32 = alloca i64
+  %r43 = alloca i64
+  %r50 = alloca i64
+  %r58 = alloca i64
+  %r66 = alloca i64
+  %r74 = alloca i64
+  %r77 = alloca i64
+  call void @__nurl_fn.__fold_commit_all__fp1()
+  store i64 0, i64* %r1
+  store i64 0, i64* %r2
+  br label %loop_check_1
+loop_check_1:
+  %r3 = load i64, i64* %r1
+  %r4 = load i64, i64* @g_fold_nf
+  %r5 = icmp slt i64 %r3, %r4
+  br i1 %r5, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r6 = load i64, i64* @g_fold_flist
+  %r7 = inttoptr i64 %r6 to i8*
+  %r8 = load i64, i64* %r1
+  %r9 = call i64 @nurl_peek(i8* %r7, i64 %r8)
+  store i64 %r9, i64* %r10
+  %r11 = load i64, i64* %r10
+  %r12 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r11, i64 3)
+  %r13 = icmp eq i64 1, %r12
+  br i1 %r13, label %then_4, label %else_5
+then_4:
+  %r14 = load i64, i64* %r10
+  %r15 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r14, i64 4)
+  store i64 %r15, i64* %r16
+  %r17 = load i64, i64* %r16
+  %r18 = icmp eq i64 %r17, 1
+  br i1 %r18, label %then_7, label %else_8
+then_7:
+  %r19 = load i64, i64* %r10
+  call void @__nurl_fn.__fold_put__fp1(i64 %r19, i64 3, i64 3)
+  %r20 = load i64, i64* %r2
+  %r21 = add i64 %r20, 1
+  store i64 %r21, i64* %r2
+  br label %end_9
+else_8:
+  br label %end_9
+end_9:
+  %r22 = load i64, i64* %r16
+  %r23 = icmp eq i64 %r22, 2
+  br i1 %r23, label %then_10, label %else_11
+then_10:
+  %r24 = load i64, i64* %r10
+  call void @__nurl_fn.__fold_put__fp1(i64 %r24, i64 3, i64 4)
+  %r25 = load i64, i64* %r2
+  %r26 = add i64 %r25, 1
+  store i64 %r26, i64* %r2
+  br label %end_12
+else_11:
+  br label %end_12
+end_12:
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
+  %r27 = load i64, i64* %r1
+  %r28 = add i64 %r27, 1
+  store i64 %r28, i64* %r1
+  br label %loop_check_1
+loop_exit_3:
+  %r29 = load i64, i64* %r2
+  %r30 = icmp eq i64 %r29, 0
+  br i1 %r30, label %then_13, label %else_14
+then_13:
+  ret i64 0
+else_14:
+  br label %end_15
+end_15:
+  store i64 0, i64* %r31
+  store i64 %st, i64* %r32
+  br label %loop_check_16
+loop_check_16:
+  %r33 = load i64, i64* %r32
+  %r34 = icmp slt i64 %r33, %en
+  br i1 %r34, label %loop_body_17, label %loop_exit_18
+loop_body_17:
+  %r35 = load i64, i64* @g_dce_mod
+  %r36 = load i64, i64* %r32
+  %r37 = add i64 %r35, %r36
+  %r38 = inttoptr i64 %r37 to i8*
+  %r39 = load i64, i64* %r32
+  %r40 = sub i64 %en, %r39
+  %r41 = getelementptr [2 x i8], [2 x i8]* @.str.11513, i64 0, i64 0
+  %r42 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r38, i64 %r40, i8* %r41, i64 1)
+  store i64 %r42, i64* %r43
+  %r44 = load i64, i64* %r43
+  %r45 = icmp slt i64 %r44, 0
+  br i1 %r45, label %then_19, label %else_20
+then_19:
+  br label %end_21
+else_20:
+  %r46 = load i64, i64* %r32
+  %r47 = load i64, i64* %r43
+  %r48 = add i64 %r46, %r47
+  br label %end_21
+end_21:
+  %r49 = phi i64 [ %en, %then_19 ], [ %r48, %else_20 ]
+  store i64 %r49, i64* %r50
+  %r51 = load i64, i64* %r32
+  %r52 = getelementptr [5 x i8], [5 x i8]* @.str.11514, i64 0, i64 0
+  %r53 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r51, i8* %r52, i64 4)
+  br i1 %r53, label %then_22, label %else_23
+then_22:
+  %r54 = load i64, i64* %r32
+  %r55 = add i64 %r54, 2
+  %r56 = load i64, i64* %r50
+  %r57 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r55, i64 %r56)
+  store i64 %r57, i64* %r58
+  %r59 = load i64, i64* %r58
+  %r60 = icmp sge i64 %r59, 0
+  br i1 %r60, label %and_right_25, label %and_end_26
+and_right_25:
+  %r61 = load i64, i64* %r58
+  %r62 = call i64 @__nurl_fn.__fold_kind__fp1(i64 %r61)
+  %r63 = icmp eq i64 0, %r62
+  br label %and_end_26
+and_end_26:
+  %r64 = phi i1 [ 0, %then_22 ], [ %r63, %and_right_25 ]
+  br i1 %r64, label %then_27, label %else_28
+then_27:
+  %r65 = load i64, i64* @g_fold_end
+  store i64 %r65, i64* %r66
+  %r67 = load i64, i64* %r66
+  %r68 = getelementptr [13 x i8], [13 x i8]* @.str.11515, i64 0, i64 0
+  %r69 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r67, i8* %r68, i64 12)
+  br i1 %r69, label %then_30, label %else_31
+then_30:
+  %r70 = load i64, i64* %r66
+  %r71 = add i64 %r70, 12
+  %r72 = load i64, i64* %r50
+  %r73 = call i64 @__nurl_fn.__fold_ptr_reg__fp1(i64 %r71, i64 %r72)
+  store i64 %r73, i64* %r74
+  %r75 = load i64, i64* %r74
+  %r76 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r75, i64 3)
+  store i64 %r76, i64* %r77
+  %r78 = load i64, i64* %r74
+  %r79 = icmp sge i64 %r78, 0
+  br i1 %r79, label %and_right_33, label %and_end_34
+and_right_33:
+  %r80 = load i64, i64* %r77
+  %r81 = icmp sge i64 %r80, 3
+  br label %and_end_34
+and_end_34:
+  %r82 = phi i1 [ 0, %then_30 ], [ %r81, %and_right_33 ]
+  br i1 %r82, label %then_35, label %else_36
+then_35:
+  %r83 = load i64, i64* %r58
+  %r84 = load i64, i64* %r77
+  %r85 = sub i64 %r84, 3
+  call void @__nurl_fn.__fold_set__fp1(i64 %r83, i64 1, i64 %r85, i64 0)
+  %r86 = load i64, i64* %r31
+  %r87 = add i64 %r86, 1
+  store i64 %r87, i64* %r31
+  br label %end_37
+else_36:
+  br label %end_37
+end_37:
+  br label %end_32
+else_31:
+  br label %end_32
+end_32:
+  br label %end_29
+else_28:
+  br label %end_29
+end_29:
+  br label %end_24
+else_23:
+  br label %end_24
+end_24:
+  %r88 = load i64, i64* %r50
+  %r89 = add i64 %r88, 1
+  store i64 %r89, i64* %r32
+  br label %loop_check_16
+loop_exit_18:
+  %r90 = load i64, i64* %r31
+  ret i64 %r90
+}
+
+@.str.11513 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.11514 = private unnamed_addr constant [5 x i8] c"  %r\00"
+@.str.11515 = private unnamed_addr constant [13 x i8] c" = load i1, \00"
 define void @__nurl_fn.__fold_puts__fp1(i8* %t, i64 %part) sanitize_address {
 entry:
   %r0 = icmp eq i64 %part, 0
@@ -196229,54 +197111,36 @@ end_3:
 define void @__nurl_fn.__fold_put_reg__fp1(i64 %r, i64 %part, i64 %depth) sanitize_address {
 entry:
   %r1 = alloca i64
-  %r18 = alloca i64
-  %r24 = alloca i64
   %r0 = call i64 @__nurl_fn.__fold_kind__fp1(i64 %r)
   store i64 %r0, i64* %r1
   %r2 = load i64, i64* %r1
   %r3 = icmp eq i64 %r2, 1
   br i1 %r3, label %then_1, label %else_2
 then_1:
-  %r4 = load i64, i64* @g_fold_map
-  %r5 = inttoptr i64 %r4 to i8*
-  %r6 = mul i64 %r, 3
-  %r7 = add i64 %r6, 1
-  %r8 = call i64 @nurl_peek(i8* %r5, i64 %r7)
-  %r9 = icmp eq i64 1, %r8
-  br i1 %r9, label %then_4, label %else_5
+  %r4 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r, i64 1)
+  %r5 = icmp eq i64 1, %r4
+  br i1 %r5, label %then_4, label %else_5
 then_4:
-  %r10 = getelementptr [5 x i8], [5 x i8]* @.str.11496, i64 0, i64 0
+  %r6 = getelementptr [5 x i8], [5 x i8]* @.str.11516, i64 0, i64 0
   br label %end_6
 else_5:
-  %r11 = getelementptr [6 x i8], [6 x i8]* @.str.11497, i64 0, i64 0
+  %r7 = getelementptr [6 x i8], [6 x i8]* @.str.11517, i64 0, i64 0
   br label %end_6
 end_6:
-  %r12 = phi i8* [ %r10, %then_4 ], [ %r11, %else_5 ]
-  call void @__nurl_fn.__fold_puts__fp1(i8* %r12, i64 %part)
+  %r8 = phi i8* [ %r6, %then_4 ], [ %r7, %else_5 ]
+  call void @__nurl_fn.__fold_puts__fp1(i8* %r8, i64 %part)
   ret void
 else_2:
   br label %end_3
 end_3:
-  %r13 = load i64, i64* @g_fold_map
-  %r14 = inttoptr i64 %r13 to i8*
-  %r15 = mul i64 %r, 3
-  %r16 = add i64 %r15, 1
-  %r17 = call i64 @nurl_peek(i8* %r14, i64 %r16)
-  store i64 %r17, i64* %r18
-  %r19 = load i64, i64* @g_fold_map
-  %r20 = inttoptr i64 %r19 to i8*
-  %r21 = mul i64 %r, 3
-  %r22 = add i64 %r21, 2
-  %r23 = call i64 @nurl_peek(i8* %r20, i64 %r22)
-  store i64 %r23, i64* %r24
-  %r25 = load i64, i64* %r18
-  %r26 = load i64, i64* %r24
-  call void @__nurl_fn.__fold_put_range__fp1(i64 %r25, i64 %r26, i64 %part, i64 %depth)
+  %r9 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r, i64 1)
+  %r10 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r, i64 2)
+  call void @__nurl_fn.__fold_put_range__fp1(i64 %r9, i64 %r10, i64 %part, i64 %depth)
   ret void
 }
 
-@.str.11496 = private unnamed_addr constant [5 x i8] c"true\00"
-@.str.11497 = private unnamed_addr constant [6 x i8] c"false\00"
+@.str.11516 = private unnamed_addr constant [5 x i8] c"true\00"
+@.str.11517 = private unnamed_addr constant [6 x i8] c"false\00"
 define void @__nurl_fn.__fold_put_range__fp1(i64 %from, i64 %to, i64 %part, i64 %depth) sanitize_address {
 entry:
   %r0 = alloca i64
@@ -196389,23 +197253,44 @@ loop_exit_3:
   ret void
 }
 
+define i1 @__nurl_fn.__fold_arg_false__fp1(i64 %lp, i64 %le) sanitize_address {
+entry:
+  %r0 = alloca i1
+  %r1 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %lp, i64 %le)
+  call void @__nurl_fn.__fold_operand__fp1(i64 %lp, i64 %r1, i1 1)
+  %r2 = load i64, i64* @g_fold_k
+  %r3 = icmp eq i64 %r2, 1
+  br i1 %r3, label %and_right_1, label %and_end_2
+and_right_1:
+  %r4 = load i64, i64* @g_fold_x
+  %r5 = icmp eq i64 %r4, 0
+  br label %and_end_2
+and_end_2:
+  %r6 = phi i1 [ 0, %entry ], [ %r5, %and_right_1 ]
+  ret i1 %r6
+}
+
 define void @__nurl_fn.__fold_emit_line__fp1(i64 %ls, i64 %le, i64 %part) sanitize_address {
 entry:
   %r4 = alloca i64
-  %r19 = alloca i64
-  %r34 = alloca i64
-  %r41 = alloca i64
-  %r45 = alloca i1
-  %r54 = alloca i64
-  %r62 = alloca i64
-  %r65 = alloca i64
-  %r71 = alloca i64
-  %r74 = alloca i64
-  %r87 = alloca i64
-  %r88 = alloca i64
-  %r89 = alloca i64
-  %r138 = alloca i64
-  %r0 = getelementptr [5 x i8], [5 x i8]* @.str.11498, i64 0, i64 0
+  %r8 = alloca i64
+  %r20 = alloca i64
+  %r32 = alloca i64
+  %r39 = alloca i64
+  %r43 = alloca i1
+  %r52 = alloca i64
+  %r60 = alloca i64
+  %r63 = alloca i64
+  %r69 = alloca i64
+  %r72 = alloca i64
+  %r84 = alloca i1
+  %r85 = alloca i64
+  %r86 = alloca i64
+  %r133 = alloca i64
+  %r144 = alloca i64
+  %r152 = alloca i64
+  %r171 = alloca i64
+  %r0 = getelementptr [5 x i8], [5 x i8]* @.str.11518, i64 0, i64 0
   %r1 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r0, i64 4)
   br i1 %r1, label %then_1, label %else_2
 then_1:
@@ -196414,335 +197299,408 @@ then_1:
   store i64 %r3, i64* %r4
   %r5 = load i64, i64* %r4
   %r6 = icmp sge i64 %r5, 0
-  br i1 %r6, label %and_right_4, label %and_end_5
-and_right_4:
-  %r7 = load i64, i64* %r4
-  %r8 = call i64 @__nurl_fn.__fold_kind__fp1(i64 %r7)
-  %r9 = icmp ne i64 0, %r8
-  br label %and_end_5
-and_end_5:
-  %r10 = phi i1 [ 0, %then_1 ], [ %r9, %and_right_4 ]
-  br i1 %r10, label %then_6, label %else_7
-then_6:
-  %r11 = load i64, i64* @g_fold_end
-  %r12 = getelementptr [4 x i8], [4 x i8]* @.str.11499, i64 0, i64 0
-  %r13 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r11, i8* %r12, i64 3)
-  br i1 %r13, label %then_9, label %else_10
-then_9:
+  br i1 %r6, label %then_4, label %else_5
+then_4:
+  %r7 = load i64, i64* @g_fold_end
+  store i64 %r7, i64* %r8
+  %r9 = load i64, i64* %r8
+  %r10 = getelementptr [4 x i8], [4 x i8]* @.str.11519, i64 0, i64 0
+  %r11 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r9, i8* %r10, i64 3)
+  br i1 %r11, label %then_7, label %else_8
+then_7:
+  %r12 = load i64, i64* %r4
+  %r13 = call i64 @__nurl_fn.__fold_kind__fp1(i64 %r12)
+  %r14 = icmp ne i64 0, %r13
+  br i1 %r14, label %then_10, label %else_11
+then_10:
   ret void
-else_10:
-  br label %end_11
-end_11:
-  br label %end_8
-else_7:
-  br label %end_8
-end_8:
-  %r14 = load i64, i64* %r4
-  %r15 = icmp slt i64 %r14, 0
-  br i1 %r15, label %then_12, label %else_13
-then_12:
-  br label %end_14
-else_13:
-  %r16 = load i64, i64* @g_fold_end
-  %r17 = add i64 %r16, 3
-  br label %end_14
-end_14:
-  %r18 = phi i64 [ %ls, %then_12 ], [ %r17, %else_13 ]
-  store i64 %r18, i64* %r19
-  %r20 = load i64, i64* %r4
-  %r21 = icmp sge i64 %r20, 0
-  br i1 %r21, label %and_right_15, label %and_end_16
-and_right_15:
-  %r22 = load i64, i64* %r19
-  %r23 = getelementptr [6 x i8], [6 x i8]* @.str.11500, i64 0, i64 0
-  %r24 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r22, i8* %r23, i64 5)
-  br label %and_end_16
-and_end_16:
-  %r25 = phi i1 [ 0, %end_14 ], [ %r24, %and_right_15 ]
-  br i1 %r25, label %then_17, label %else_18
-then_17:
-  %r26 = load i64, i64* @g_dce_mod
-  %r27 = load i64, i64* %r19
-  %r28 = add i64 %r26, %r27
-  %r29 = inttoptr i64 %r28 to i8*
-  %r30 = load i64, i64* %r19
-  %r31 = sub i64 %le, %r30
-  %r32 = getelementptr [18 x i8], [18 x i8]* @.str.11501, i64 0, i64 0
-  %r33 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r29, i64 %r31, i8* %r32, i64 17)
-  store i64 %r33, i64* %r34
-  %r35 = load i64, i64* %r34
-  %r36 = icmp sge i64 %r35, 0
-  br i1 %r36, label %then_20, label %else_21
-then_20:
-  %r37 = load i64, i64* %r19
-  %r38 = load i64, i64* %r34
-  %r39 = add i64 %r37, %r38
-  %r40 = add i64 %r39, 17
-  store i64 %r40, i64* %r41
-  %r42 = load i64, i64* %r41
-  %r43 = getelementptr [3 x i8], [3 x i8]* @.str.11502, i64 0, i64 0
-  %r44 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r42, i8* %r43, i64 2)
-  store i1 %r44, i1* %r45
-  %r46 = load i64, i64* @g_dce_mod
-  %r47 = load i64, i64* %r41
-  %r48 = add i64 %r46, %r47
-  %r49 = inttoptr i64 %r48 to i8*
-  %r50 = load i64, i64* %r41
-  %r51 = sub i64 %le, %r50
-  %r52 = getelementptr [15 x i8], [15 x i8]* @.str.11503, i64 0, i64 0
-  %r53 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r49, i64 %r51, i8* %r52, i64 14)
-  store i64 %r53, i64* %r54
-  %r55 = load i64, i64* %r54
-  %r56 = icmp sge i64 %r55, 0
-  br i1 %r56, label %then_23, label %else_24
-then_23:
-  %r57 = load i64, i64* %r41
-  %r58 = load i64, i64* %r54
-  %r59 = add i64 %r57, %r58
-  %r60 = add i64 %r59, 5
-  %r61 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r60, i64 %le)
-  store i64 %r61, i64* %r62
-  %r63 = load i64, i64* @g_fold_end
-  %r64 = add i64 %r63, 2
-  store i64 %r64, i64* %r65
-  %r66 = load i64, i64* %r62
-  %r67 = icmp eq i64 %r66, 1
-  br i1 %r67, label %and_right_26, label %and_end_27
-and_right_26:
-  %r68 = call i1 @__nurl_fn.__fold_last_arg__fp1(i64 %ls, i64 %le)
-  br label %and_end_27
-and_end_27:
-  %r69 = phi i1 [ 0, %then_23 ], [ %r68, %and_right_26 ]
-  br i1 %r69, label %then_28, label %else_29
-then_28:
-  %r70 = load i64, i64* @g_fold_x
-  store i64 %r70, i64* %r71
-  %r72 = load i64, i64* %r71
-  %r73 = sub i64 %r72, 1
-  store i64 %r73, i64* %r74
-  br label %loop_check_31
-loop_check_31:
-  %r75 = load i64, i64* %r74
-  %r76 = load i64, i64* %r65
-  %r77 = icmp sgt i64 %r75, %r76
-  br i1 %r77, label %and_right_34, label %and_end_35
-and_right_34:
-  %r78 = load i64, i64* %r74
-  %r79 = sub i64 %r78, 2
-  %r80 = getelementptr [3 x i8], [3 x i8]* @.str.11504, i64 0, i64 0
-  %r81 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r79, i8* %r80, i64 2)
-  %r82 = xor i1 %r81, 1
-  br label %and_end_35
-and_end_35:
-  %r83 = phi i1 [ 0, %loop_check_31 ], [ %r82, %and_right_34 ]
-  br i1 %r83, label %loop_body_32, label %loop_exit_33
-loop_body_32:
-  %r84 = load i64, i64* %r74
-  %r85 = sub i64 %r84, 1
-  store i64 %r85, i64* %r74
-  br label %loop_check_31
-loop_exit_33:
-  %r86 = zext i1 0 to i64
-  store i64 %r86, i64* %r87
-  store i64 0, i64* %r88
-  store i64 0, i64* %r89
-  %r90 = load i1, i1* %r45
-  br i1 %r90, label %then_36, label %else_37
-then_36:
-  %r91 = load i64, i64* %r65
-  %r92 = getelementptr [14 x i8], [14 x i8]* @.str.11505, i64 0, i64 0
-  %r93 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r91, i8* %r92, i64 13)
-  br i1 %r93, label %then_39, label %else_40
-then_39:
-  %r94 = load i64, i64* %r65
-  %r95 = add i64 %r94, 4
-  %r96 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r95, i64 %le)
-  %r97 = icmp eq i64 0, %r96
-  br i1 %r97, label %then_42, label %else_43
-then_42:
-  %r98 = zext i1 1 to i64
-  store i64 %r98, i64* %r87
-  br label %end_44
-else_43:
-  br label %end_44
-end_44:
-  br label %end_41
-else_40:
-  br label %end_41
-end_41:
-  br label %end_38
-else_37:
-  %r99 = load i64, i64* %r65
-  %r100 = getelementptr [4 x i8], [4 x i8]* @.str.11506, i64 0, i64 0
-  %r101 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r99, i8* %r100, i64 3)
-  br i1 %r101, label %then_45, label %else_46
-then_45:
-  %r102 = load i64, i64* %r65
-  %r103 = add i64 %r102, 3
-  store i64 %r103, i64* %r88
-  %r104 = load i64, i64* %r88
-  %r105 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r104, i64 %le)
-  store i64 %r105, i64* %r89
-  %r106 = zext i1 1 to i64
-  store i64 %r106, i64* %r87
-  br label %end_47
-else_46:
-  br label %end_47
-end_47:
-  br label %end_38
-end_38:
-  %r107 = load i64, i64* %r74
-  %r108 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r107)
-  %r109 = icmp ne i64 37, %r108
-  br i1 %r109, label %then_48, label %else_49
-then_48:
-  %r110 = zext i1 0 to i64
-  store i64 %r110, i64* %r87
-  br label %end_50
-else_49:
-  br label %end_50
-end_50:
-  %r111 = load i64, i64* %r87
-  %r112 = icmp ne i64 %r111, 0
-  br i1 %r112, label %then_51, label %else_52
-then_51:
-  %r113 = load i64, i64* %r19
-  %r114 = load i64, i64* %r34
-  %r115 = add i64 %r113, %r114
-  %r116 = add i64 %r115, 16
-  call void @__nurl_fn.__ir_write_range__fp1(i64 %ls, i64 %r116, i64 %part)
-  %r117 = getelementptr [2 x i8], [2 x i8]* @.str.11507, i64 0, i64 0
-  call void @__nurl_fn.__fold_puts__fp1(i8* %r117, i64 %part)
-  %r118 = load i64, i64* %r41
-  %r119 = load i1, i1* %r45
-  br i1 %r119, label %then_54, label %else_55
-then_54:
-  br label %end_56
-else_55:
-  br label %end_56
-end_56:
-  %r120 = phi i64 [ 2, %then_54 ], [ 1, %else_55 ]
-  %r121 = add i64 %r118, %r120
-  %r122 = load i64, i64* %r41
-  %r123 = load i64, i64* %r54
-  %r124 = add i64 %r122, %r123
-  call void @__nurl_fn.__ir_write_range__fp1(i64 %r121, i64 %r124, i64 %part)
-  %r125 = getelementptr [5 x i8], [5 x i8]* @.str.11508, i64 0, i64 0
-  call void @__nurl_fn.__fold_puts__fp1(i8* %r125, i64 %part)
-  %r126 = load i64, i64* %r89
-  %r127 = icmp eq i64 %r126, 0
-  br i1 %r127, label %then_57, label %else_58
-then_57:
-  %r128 = getelementptr [5 x i8], [5 x i8]* @.str.11509, i64 0, i64 0
-  call void @__nurl_fn.__fold_puts__fp1(i8* %r128, i64 %part)
-  br label %end_59
-else_58:
-  %r129 = load i64, i64* %r88
-  %r130 = load i64, i64* %r89
-  call void @__nurl_fn.__fold_put_range__fp1(i64 %r129, i64 %r130, i64 %part, i64 0)
-  br label %end_59
-end_59:
-  %r131 = getelementptr [3 x i8], [3 x i8]* @.str.11510, i64 0, i64 0
-  call void @__nurl_fn.__fold_puts__fp1(i8* %r131, i64 %part)
-  %r132 = load i64, i64* %r74
-  %r133 = add i64 %le, 1
-  call void @__nurl_fn.__fold_put_range__fp1(i64 %r132, i64 %r133, i64 %part, i64 0)
+else_11:
+  br label %end_12
+end_12:
+  %r15 = load i64, i64* %r4
+  %r16 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r15, i64 3)
+  %r17 = icmp sge i64 %r16, 3
+  br i1 %r17, label %then_13, label %else_14
+then_13:
   ret void
-else_52:
-  br label %end_53
-end_53:
-  br label %end_30
-else_29:
-  br label %end_30
-end_30:
-  br label %end_25
-else_24:
-  br label %end_25
-end_25:
-  br label %end_22
-else_21:
-  br label %end_22
-end_22:
-  br label %end_19
-else_18:
-  br label %end_19
-end_19:
+else_14:
+  br label %end_15
+end_15:
+  br label %end_9
+else_8:
+  br label %end_9
+end_9:
+  %r18 = load i64, i64* %r8
+  %r19 = add i64 %r18, 3
+  store i64 %r19, i64* %r20
+  %r21 = load i64, i64* %r20
+  %r22 = getelementptr [6 x i8], [6 x i8]* @.str.11520, i64 0, i64 0
+  %r23 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r21, i8* %r22, i64 5)
+  br i1 %r23, label %then_16, label %else_17
+then_16:
+  %r24 = load i64, i64* @g_dce_mod
+  %r25 = load i64, i64* %r20
+  %r26 = add i64 %r24, %r25
+  %r27 = inttoptr i64 %r26 to i8*
+  %r28 = load i64, i64* %r20
+  %r29 = sub i64 %le, %r28
+  %r30 = getelementptr [18 x i8], [18 x i8]* @.str.11521, i64 0, i64 0
+  %r31 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r27, i64 %r29, i8* %r30, i64 17)
+  store i64 %r31, i64* %r32
+  %r33 = load i64, i64* %r32
+  %r34 = icmp sge i64 %r33, 0
+  br i1 %r34, label %then_19, label %else_20
+then_19:
+  %r35 = load i64, i64* %r20
+  %r36 = load i64, i64* %r32
+  %r37 = add i64 %r35, %r36
+  %r38 = add i64 %r37, 17
+  store i64 %r38, i64* %r39
+  %r40 = load i64, i64* %r39
+  %r41 = getelementptr [3 x i8], [3 x i8]* @.str.11522, i64 0, i64 0
+  %r42 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r40, i8* %r41, i64 2)
+  store i1 %r42, i1* %r43
+  %r44 = load i64, i64* @g_dce_mod
+  %r45 = load i64, i64* %r39
+  %r46 = add i64 %r44, %r45
+  %r47 = inttoptr i64 %r46 to i8*
+  %r48 = load i64, i64* %r39
+  %r49 = sub i64 %le, %r48
+  %r50 = getelementptr [15 x i8], [15 x i8]* @.str.11523, i64 0, i64 0
+  %r51 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r47, i64 %r49, i8* %r50, i64 14)
+  store i64 %r51, i64* %r52
+  %r53 = load i64, i64* %r52
+  %r54 = icmp sge i64 %r53, 0
+  br i1 %r54, label %then_22, label %else_23
+then_22:
+  %r55 = load i64, i64* %r39
+  %r56 = load i64, i64* %r52
+  %r57 = add i64 %r55, %r56
+  %r58 = add i64 %r57, 5
+  %r59 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r58, i64 %le)
+  store i64 %r59, i64* %r60
+  %r61 = load i64, i64* @g_fold_end
+  %r62 = add i64 %r61, 2
+  store i64 %r62, i64* %r63
+  %r64 = load i64, i64* %r60
+  %r65 = icmp eq i64 %r64, 1
+  br i1 %r65, label %and_right_25, label %and_end_26
+and_right_25:
+  %r66 = call i1 @__nurl_fn.__fold_last_arg__fp1(i64 %ls, i64 %le)
+  br label %and_end_26
+and_end_26:
+  %r67 = phi i1 [ 0, %then_22 ], [ %r66, %and_right_25 ]
+  br i1 %r67, label %then_27, label %else_28
+then_27:
+  %r68 = load i64, i64* @g_fold_x
+  store i64 %r68, i64* %r69
+  %r70 = load i64, i64* %r69
+  %r71 = sub i64 %r70, 1
+  store i64 %r71, i64* %r72
+  br label %loop_check_30
+loop_check_30:
+  %r73 = load i64, i64* %r72
+  %r74 = load i64, i64* %r63
+  %r75 = icmp sgt i64 %r73, %r74
+  br i1 %r75, label %and_right_33, label %and_end_34
+and_right_33:
+  %r76 = load i64, i64* %r72
+  %r77 = sub i64 %r76, 2
+  %r78 = getelementptr [3 x i8], [3 x i8]* @.str.11524, i64 0, i64 0
+  %r79 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r77, i8* %r78, i64 2)
+  %r80 = xor i1 %r79, 1
+  br label %and_end_34
+and_end_34:
+  %r81 = phi i1 [ 0, %loop_check_30 ], [ %r80, %and_right_33 ]
+  br i1 %r81, label %loop_body_31, label %loop_exit_32
+loop_body_31:
+  %r82 = load i64, i64* %r72
+  %r83 = sub i64 %r82, 1
+  store i64 %r83, i64* %r72
+  br label %loop_check_30
+loop_exit_32:
+  store i1 0, i1* %r84
+  store i64 0, i64* %r85
+  store i64 0, i64* %r86
+  %r87 = load i1, i1* %r43
+  br i1 %r87, label %then_35, label %else_36
+then_35:
+  %r88 = load i64, i64* %r63
+  %r89 = getelementptr [14 x i8], [14 x i8]* @.str.11525, i64 0, i64 0
+  %r90 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r88, i8* %r89, i64 13)
+  br i1 %r90, label %then_38, label %else_39
+then_38:
+  %r91 = load i64, i64* %r63
+  %r92 = add i64 %r91, 4
+  %r93 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r92, i64 %le)
+  %r94 = icmp eq i64 0, %r93
+  br i1 %r94, label %then_41, label %else_42
+then_41:
+  store i1 1, i1* %r84
+  %r95 = zext i1 1 to i64
+  br label %end_43
+else_42:
+  br label %end_43
+end_43:
+  br label %end_40
+else_39:
+  br label %end_40
+end_40:
+  br label %end_37
+else_36:
+  %r96 = load i64, i64* %r63
+  %r97 = getelementptr [4 x i8], [4 x i8]* @.str.11526, i64 0, i64 0
+  %r98 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r96, i8* %r97, i64 3)
+  br i1 %r98, label %then_44, label %else_45
+then_44:
+  %r99 = load i64, i64* %r63
+  %r100 = add i64 %r99, 3
+  store i64 %r100, i64* %r85
+  %r101 = load i64, i64* %r85
+  %r102 = call i64 @__nurl_fn.__fold_tok_end__fp1(i64 %r101, i64 %le)
+  store i64 %r102, i64* %r86
+  store i1 1, i1* %r84
+  %r103 = zext i1 1 to i64
+  br label %end_46
+else_45:
+  br label %end_46
+end_46:
+  br label %end_37
+end_37:
+  %r104 = load i64, i64* %r72
+  %r105 = call i64 @__nurl_fn.__fold_byte__fp1(i64 %r104)
+  %r106 = icmp ne i64 37, %r105
+  br i1 %r106, label %then_47, label %else_48
+then_47:
+  store i1 0, i1* %r84
+  %r107 = zext i1 0 to i64
+  br label %end_49
+else_48:
+  br label %end_49
+end_49:
+  %r108 = load i1, i1* %r84
+  br i1 %r108, label %then_50, label %else_51
+then_50:
+  %r109 = load i64, i64* %r20
+  %r110 = load i64, i64* %r32
+  %r111 = add i64 %r109, %r110
+  %r112 = add i64 %r111, 16
+  call void @__nurl_fn.__ir_write_range__fp1(i64 %ls, i64 %r112, i64 %part)
+  %r113 = getelementptr [2 x i8], [2 x i8]* @.str.11527, i64 0, i64 0
+  call void @__nurl_fn.__fold_puts__fp1(i8* %r113, i64 %part)
+  %r114 = load i64, i64* %r39
+  %r115 = load i1, i1* %r43
+  br i1 %r115, label %then_53, label %else_54
+then_53:
+  br label %end_55
+else_54:
+  br label %end_55
+end_55:
+  %r116 = phi i64 [ 2, %then_53 ], [ 1, %else_54 ]
+  %r117 = add i64 %r114, %r116
+  %r118 = load i64, i64* %r39
+  %r119 = load i64, i64* %r52
+  %r120 = add i64 %r118, %r119
+  call void @__nurl_fn.__ir_write_range__fp1(i64 %r117, i64 %r120, i64 %part)
+  %r121 = getelementptr [5 x i8], [5 x i8]* @.str.11528, i64 0, i64 0
+  call void @__nurl_fn.__fold_puts__fp1(i8* %r121, i64 %part)
+  %r122 = load i64, i64* %r86
+  %r123 = icmp eq i64 %r122, 0
+  br i1 %r123, label %then_56, label %else_57
+then_56:
+  %r124 = getelementptr [5 x i8], [5 x i8]* @.str.11529, i64 0, i64 0
+  call void @__nurl_fn.__fold_puts__fp1(i8* %r124, i64 %part)
+  br label %end_58
+else_57:
+  %r125 = load i64, i64* %r85
+  %r126 = load i64, i64* %r86
+  call void @__nurl_fn.__fold_put_range__fp1(i64 %r125, i64 %r126, i64 %part, i64 0)
+  br label %end_58
+end_58:
+  %r127 = getelementptr [3 x i8], [3 x i8]* @.str.11530, i64 0, i64 0
+  call void @__nurl_fn.__fold_puts__fp1(i8* %r127, i64 %part)
+  %r128 = load i64, i64* %r72
+  %r129 = add i64 %le, 1
+  call void @__nurl_fn.__fold_put_range__fp1(i64 %r128, i64 %r129, i64 %part, i64 0)
+  ret void
+else_51:
+  br label %end_52
+end_52:
+  br label %end_29
+else_28:
+  br label %end_29
+end_29:
+  br label %end_24
+else_23:
+  br label %end_24
+end_24:
+  br label %end_21
+else_20:
+  br label %end_21
+end_21:
+  br label %end_18
+else_17:
+  br label %end_18
+end_18:
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
   br label %end_3
 else_2:
   br label %end_3
 end_3:
-  %r134 = getelementptr [43 x i8], [43 x i8]* @.str.11511, i64 0, i64 0
-  %r135 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r134, i64 42)
-  br i1 %r135, label %then_60, label %else_61
-then_60:
-  %r136 = add i64 %ls, 33
-  %r137 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r136, i64 %le)
-  store i64 %r137, i64* %r138
-  %r139 = load i64, i64* %r138
-  %r140 = icmp eq i64 %r139, 0
-  br i1 %r140, label %then_63, label %else_64
-then_63:
+  %r130 = load i64, i64* @g_fold_nf
+  %r131 = icmp ne i64 0, %r130
+  br i1 %r131, label %then_59, label %else_60
+then_59:
+  %r132 = call i64 @__nurl_fn.__fold_store_flag__fp1(i64 %ls, i64 %le)
+  store i64 %r132, i64* %r133
+  %r134 = load i64, i64* %r133
+  %r135 = icmp sge i64 %r134, 0
+  br i1 %r135, label %and_right_62, label %and_end_63
+and_right_62:
+  %r136 = load i64, i64* %r133
+  %r137 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r136, i64 3)
+  %r138 = icmp sge i64 %r137, 3
+  br label %and_end_63
+and_end_63:
+  %r139 = phi i1 [ 0, %then_59 ], [ %r138, %and_right_62 ]
+  br i1 %r139, label %then_64, label %else_65
+then_64:
   ret void
-else_64:
-  br label %end_65
-end_65:
-  %r141 = load i64, i64* %r138
-  %r142 = icmp eq i64 %r141, 1
-  br i1 %r142, label %and_right_66, label %and_end_67
-and_right_66:
-  %r143 = load i64, i64* @g_fold_end
-  %r144 = getelementptr [7 x i8], [7 x i8]* @.str.11512, i64 0, i64 0
-  %r145 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r143, i8* %r144, i64 6)
-  br label %and_end_67
-and_end_67:
-  %r146 = phi i1 [ 0, %end_65 ], [ %r145, %and_right_66 ]
-  br i1 %r146, label %then_68, label %else_69
-then_68:
-  %r147 = getelementptr [19 x i8], [19 x i8]* @.str.11513, i64 0, i64 0
-  call void @__nurl_fn.__fold_puts__fp1(i8* %r147, i64 %part)
-  %r148 = load i64, i64* @g_fold_end
-  %r149 = add i64 %r148, 6
-  %r150 = sub i64 %le, 1
-  call void @__nurl_fn.__fold_put_range__fp1(i64 %r149, i64 %r150, i64 %part, i64 0)
-  %r151 = getelementptr [2 x i8], [2 x i8]* @.str.11514, i64 0, i64 0
-  call void @__nurl_fn.__fold_puts__fp1(i8* %r151, i64 %part)
+else_65:
+  br label %end_66
+end_66:
+  br label %end_61
+else_60:
+  br label %end_61
+end_61:
+  %r140 = getelementptr [43 x i8], [43 x i8]* @.str.11531, i64 0, i64 0
+  %r141 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r140, i64 42)
+  br i1 %r141, label %then_67, label %else_68
+then_67:
+  %r142 = add i64 %ls, 33
+  %r143 = call i64 @__nurl_fn.__fold_flag__fp1(i64 %r142, i64 %le)
+  store i64 %r143, i64* %r144
+  %r145 = load i64, i64* %r144
+  %r146 = icmp eq i64 %r145, 0
+  br i1 %r146, label %then_70, label %else_71
+then_70:
   ret void
-else_69:
-  br label %end_70
-end_70:
-  br label %end_62
-else_61:
-  br label %end_62
-end_62:
-  %r152 = add i64 %le, 1
-  call void @__nurl_fn.__fold_put_range__fp1(i64 %ls, i64 %r152, i64 %part, i64 0)
+else_71:
+  br label %end_72
+end_72:
+  %r147 = load i64, i64* @g_fold_end
+  %r148 = getelementptr [7 x i8], [7 x i8]* @.str.11532, i64 0, i64 0
+  %r149 = call i1 @__nurl_fn.__fold_at__fp1(i64 %r147, i8* %r148, i64 6)
+  br i1 %r149, label %then_73, label %else_74
+then_73:
+  %r150 = load i64, i64* @g_fold_end
+  %r151 = add i64 %r150, 6
+  store i64 %r151, i64* %r152
+  %r153 = load i64, i64* %r152
+  %r154 = call i64 @__nurl_fn.__fold_reg__fp1(i64 %r153, i64 %le)
+  %r155 = call i64 @__nurl_fn.__fold_get__fp1(i64 %r154, i64 3)
+  %r156 = icmp sge i64 %r155, 3
+  br i1 %r156, label %then_76, label %else_77
+then_76:
+  ret void
+else_77:
+  br label %end_78
+end_78:
+  %r157 = load i64, i64* %r144
+  %r158 = icmp eq i64 %r157, 1
+  br i1 %r158, label %then_79, label %else_80
+then_79:
+  %r159 = getelementptr [19 x i8], [19 x i8]* @.str.11533, i64 0, i64 0
+  call void @__nurl_fn.__fold_puts__fp1(i8* %r159, i64 %part)
+  %r160 = load i64, i64* %r152
+  %r161 = sub i64 %le, 1
+  call void @__nurl_fn.__fold_put_range__fp1(i64 %r160, i64 %r161, i64 %part, i64 0)
+  %r162 = getelementptr [2 x i8], [2 x i8]* @.str.11534, i64 0, i64 0
+  call void @__nurl_fn.__fold_puts__fp1(i8* %r162, i64 %part)
+  ret void
+else_80:
+  br label %end_81
+end_81:
+  br label %end_75
+else_74:
+  br label %end_75
+end_75:
+  br label %end_69
+else_68:
+  br label %end_69
+end_69:
+  %r163 = getelementptr [22 x i8], [22 x i8]* @.str.11535, i64 0, i64 0
+  %r164 = call i1 @__nurl_fn.__fold_at__fp1(i64 %ls, i8* %r163, i64 20)
+  br i1 %r164, label %then_82, label %else_83
+then_82:
+  %r165 = load i64, i64* @g_dce_mod
+  %r166 = add i64 %r165, %ls
+  %r167 = inttoptr i64 %r166 to i8*
+  %r168 = sub i64 %le, %ls
+  %r169 = getelementptr [5 x i8], [5 x i8]* @.str.11536, i64 0, i64 0
+  %r170 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r167, i64 %r168, i8* %r169, i64 4)
+  store i64 %r170, i64* %r171
+  %r172 = load i64, i64* %r171
+  %r173 = icmp sge i64 %r172, 0
+  br i1 %r173, label %then_85, label %else_86
+then_85:
+  %r174 = load i64, i64* %r171
+  %r175 = add i64 %ls, %r174
+  %r176 = add i64 %r175, 4
+  %r177 = call i1 @__nurl_fn.__fold_arg_false__fp1(i64 %r176, i64 %le)
+  br i1 %r177, label %then_88, label %else_89
+then_88:
+  ret void
+else_89:
+  br label %end_90
+end_90:
+  br label %end_87
+else_86:
+  br label %end_87
+end_87:
+  br label %end_84
+else_83:
+  br label %end_84
+end_84:
+  %r178 = add i64 %le, 1
+  call void @__nurl_fn.__fold_put_range__fp1(i64 %ls, i64 %r178, i64 %part, i64 0)
   ret void
 }
 
-@.str.11498 = private unnamed_addr constant [5 x i8] c"  %r\00"
-@.str.11499 = private unnamed_addr constant [4 x i8] c" = \00"
-@.str.11500 = private unnamed_addr constant [6 x i8] c"call \00"
-@.str.11501 = private unnamed_addr constant [18 x i8] c" @__nurl_cloneifk\00"
-@.str.11502 = private unnamed_addr constant [3 x i8] c"r_\00"
-@.str.11503 = private unnamed_addr constant [15 x i8] c"(ptr @.__nurl_\00"
-@.str.11504 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.11505 = private unnamed_addr constant [14 x i8] c"ptr @.__nurl_\00"
-@.str.11506 = private unnamed_addr constant [4 x i8] c"i1 \00"
-@.str.11507 = private unnamed_addr constant [2 x i8] c"_\00"
-@.str.11508 = private unnamed_addr constant [5 x i8] c"(i1 \00"
-@.str.11509 = private unnamed_addr constant [5 x i8] c"true\00"
-@.str.11510 = private unnamed_addr constant [3 x i8] c", \00"
-@.str.11511 = private unnamed_addr constant [43 x i8] c"  call void @__nurl_clear_if(ptr @.__nurl_\00"
-@.str.11512 = private unnamed_addr constant [7 x i8] c", ptr \00"
-@.str.11513 = private unnamed_addr constant [19 x i8] c"  store i1 0, ptr \00"
-@.str.11514 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.11518 = private unnamed_addr constant [5 x i8] c"  %r\00"
+@.str.11519 = private unnamed_addr constant [4 x i8] c" = \00"
+@.str.11520 = private unnamed_addr constant [6 x i8] c"call \00"
+@.str.11521 = private unnamed_addr constant [18 x i8] c" @__nurl_cloneifk\00"
+@.str.11522 = private unnamed_addr constant [3 x i8] c"r_\00"
+@.str.11523 = private unnamed_addr constant [15 x i8] c"(ptr @.__nurl_\00"
+@.str.11524 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.11525 = private unnamed_addr constant [14 x i8] c"ptr @.__nurl_\00"
+@.str.11526 = private unnamed_addr constant [4 x i8] c"i1 \00"
+@.str.11527 = private unnamed_addr constant [2 x i8] c"_\00"
+@.str.11528 = private unnamed_addr constant [5 x i8] c"(i1 \00"
+@.str.11529 = private unnamed_addr constant [5 x i8] c"true\00"
+@.str.11530 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.11531 = private unnamed_addr constant [43 x i8] c"  call void @__nurl_clear_if(ptr @.__nurl_\00"
+@.str.11532 = private unnamed_addr constant [7 x i8] c", ptr \00"
+@.str.11533 = private unnamed_addr constant [19 x i8] c"  store i1 0, ptr \00"
+@.str.11534 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.11535 = private unnamed_addr constant [22 x i8] c"  call void @__dropif\00"
+@.str.11536 = private unnamed_addr constant [5 x i8] c"(i1 \00"
 define void @__nurl_fn.__ir_fold_range__fp1(i64 %st, i64 %en, i64 %part) sanitize_address {
 entry:
   %r10 = alloca i64
-  %r21 = alloca i64
-  %r28 = alloca i64
-  %r45 = alloca i64
+  %r11 = alloca i1
+  %r13 = alloca i64
+  %r24 = alloca i64
+  %r31 = alloca i64
+  %r44 = alloca i64
   %r52 = alloca i64
+  %r60 = alloca i64
+  %r71 = alloca i64
+  %r78 = alloca i64
   %r0 = load i64, i64* @g_fold_flags
   %r1 = icmp eq i64 %r0, 0
   br i1 %r1, label %or_end_2, label %or_right_1
@@ -196751,7 +197709,7 @@ or_right_1:
   %r3 = add i64 %r2, %st
   %r4 = inttoptr i64 %r3 to i8*
   %r5 = sub i64 %en, %st
-  %r6 = getelementptr [10 x i8], [10 x i8]* @.str.11515, i64 0, i64 0
+  %r6 = getelementptr [10 x i8], [10 x i8]* @.str.11537, i64 0, i64 0
   %r7 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r4, i64 %r5, i8* %r6, i64 9)
   %r8 = icmp slt i64 %r7, 0
   br label %or_end_2
@@ -196764,99 +197722,153 @@ then_3:
 else_4:
   br label %end_5
 end_5:
-  store i64 %st, i64* %r10
+  store i64 0, i64* %r10
+  store i1 1, i1* %r11
   br label %loop_check_6
 loop_check_6:
-  %r11 = load i64, i64* %r10
-  %r12 = icmp slt i64 %r11, %en
+  %r12 = load i1, i1* %r11
   br i1 %r12, label %loop_body_7, label %loop_exit_8
 loop_body_7:
-  %r13 = load i64, i64* @g_dce_mod
-  %r14 = load i64, i64* %r10
-  %r15 = add i64 %r13, %r14
-  %r16 = inttoptr i64 %r15 to i8*
-  %r17 = load i64, i64* %r10
-  %r18 = sub i64 %en, %r17
-  %r19 = getelementptr [2 x i8], [2 x i8]* @.str.11516, i64 0, i64 0
-  %r20 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r16, i64 %r18, i8* %r19, i64 1)
-  store i64 %r20, i64* %r21
-  %r22 = load i64, i64* %r21
-  %r23 = icmp slt i64 %r22, 0
-  br i1 %r23, label %then_9, label %else_10
-then_9:
-  br label %end_11
-else_10:
-  %r24 = load i64, i64* %r10
-  %r25 = load i64, i64* %r21
-  %r26 = add i64 %r24, %r25
-  br label %end_11
-end_11:
-  %r27 = phi i64 [ %en, %then_9 ], [ %r26, %else_10 ]
-  store i64 %r27, i64* %r28
-  %r29 = load i64, i64* %r10
-  %r30 = load i64, i64* %r28
-  call void @__nurl_fn.__fold_scan_line__fp1(i64 %r29, i64 %r30)
-  %r31 = load i64, i64* %r28
-  %r32 = add i64 %r31, 1
-  store i64 %r32, i64* %r10
-  br label %loop_check_6
-loop_exit_8:
-  %r33 = load i64, i64* @g_fold_nt
-  %r34 = icmp eq i64 %r33, 0
-  br i1 %r34, label %then_12, label %else_13
+  store i64 0, i64* @g_fold_nf
+  store i64 %st, i64* %r13
+  br label %loop_check_9
+loop_check_9:
+  %r14 = load i64, i64* %r13
+  %r15 = icmp slt i64 %r14, %en
+  br i1 %r15, label %loop_body_10, label %loop_exit_11
+loop_body_10:
+  %r16 = load i64, i64* @g_dce_mod
+  %r17 = load i64, i64* %r13
+  %r18 = add i64 %r16, %r17
+  %r19 = inttoptr i64 %r18 to i8*
+  %r20 = load i64, i64* %r13
+  %r21 = sub i64 %en, %r20
+  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.11538, i64 0, i64 0
+  %r23 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r19, i64 %r21, i8* %r22, i64 1)
+  store i64 %r23, i64* %r24
+  %r25 = load i64, i64* %r24
+  %r26 = icmp slt i64 %r25, 0
+  br i1 %r26, label %then_12, label %else_13
 then_12:
-  call void @__nurl_fn.__ir_write_range__fp1(i64 %st, i64 %en, i64 %part)
-  ret void
+  br label %end_14
 else_13:
+  %r27 = load i64, i64* %r13
+  %r28 = load i64, i64* %r24
+  %r29 = add i64 %r27, %r28
   br label %end_14
 end_14:
-  store i64 %st, i64* %r10
-  br label %loop_check_15
-loop_check_15:
-  %r35 = load i64, i64* %r10
-  %r36 = icmp slt i64 %r35, %en
-  br i1 %r36, label %loop_body_16, label %loop_exit_17
-loop_body_16:
-  %r37 = load i64, i64* @g_dce_mod
-  %r38 = load i64, i64* %r10
-  %r39 = add i64 %r37, %r38
-  %r40 = inttoptr i64 %r39 to i8*
-  %r41 = load i64, i64* %r10
-  %r42 = sub i64 %en, %r41
-  %r43 = getelementptr [2 x i8], [2 x i8]* @.str.11517, i64 0, i64 0
-  %r44 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r40, i64 %r42, i8* %r43, i64 1)
-  store i64 %r44, i64* %r45
-  %r46 = load i64, i64* %r45
-  %r47 = icmp slt i64 %r46, 0
-  br i1 %r47, label %then_18, label %else_19
-then_18:
-  %r48 = load i64, i64* %r10
-  call void @__nurl_fn.__fold_put_range__fp1(i64 %r48, i64 %en, i64 %part, i64 0)
-  store i64 %en, i64* %r10
-  br label %end_20
-else_19:
-  %r49 = load i64, i64* %r10
-  %r50 = load i64, i64* %r45
-  %r51 = add i64 %r49, %r50
+  %r30 = phi i64 [ %en, %then_12 ], [ %r29, %else_13 ]
+  store i64 %r30, i64* %r31
+  %r32 = load i64, i64* %r13
+  %r33 = load i64, i64* %r31
+  call void @__nurl_fn.__fold_scan_line__fp1(i64 %r32, i64 %r33)
+  %r34 = load i64, i64* %r31
+  %r35 = add i64 %r34, 1
+  store i64 %r35, i64* %r13
+  br label %loop_check_9
+loop_exit_11:
+  %r36 = load i64, i64* %r10
+  %r37 = add i64 %r36, 1
+  store i64 %r37, i64* %r10
+  %r38 = call i64 @__nurl_fn.__fold_settle_flags__fp1(i64 %st, i64 %en)
+  %r39 = icmp sgt i64 %r38, 0
+  br i1 %r39, label %and_right_15, label %and_end_16
+and_right_15:
+  %r40 = load i64, i64* %r10
+  %r41 = icmp slt i64 %r40, 4
+  br label %and_end_16
+and_end_16:
+  %r42 = phi i1 [ 0, %loop_exit_11 ], [ %r41, %and_right_15 ]
+  store i1 %r42, i1* %r11
+  %r43 = load i1, i1* %r11
+  br i1 %r43, label %then_17, label %else_18
+then_17:
+  store i64 0, i64* %r44
+  br label %loop_check_20
+loop_check_20:
+  %r45 = load i64, i64* %r44
+  %r46 = load i64, i64* @g_fold_nf
+  %r47 = icmp slt i64 %r45, %r46
+  br i1 %r47, label %loop_body_21, label %loop_exit_22
+loop_body_21:
+  %r48 = load i64, i64* @g_fold_flist
+  %r49 = inttoptr i64 %r48 to i8*
+  %r50 = load i64, i64* %r44
+  %r51 = call i64 @nurl_peek(i8* %r49, i64 %r50)
   store i64 %r51, i64* %r52
-  %r53 = load i64, i64* %r10
+  %r53 = load i64, i64* %r52
+  call void @__nurl_fn.__fold_put__fp1(i64 %r53, i64 3, i64 0)
   %r54 = load i64, i64* %r52
-  call void @__nurl_fn.__fold_emit_line__fp1(i64 %r53, i64 %r54, i64 %part)
+  call void @__nurl_fn.__fold_put__fp1(i64 %r54, i64 4, i64 0)
   %r55 = load i64, i64* %r52
-  %r56 = add i64 %r55, 1
-  store i64 %r56, i64* %r10
-  br label %end_20
-end_20:
-  %r57 = phi i64 [ %en, %then_18 ], [ %r56, %else_19 ]
-  br label %loop_check_15
-loop_exit_17:
+  call void @__nurl_fn.__fold_put__fp1(i64 %r55, i64 5, i64 0)
+  %r56 = load i64, i64* %r44
+  %r57 = add i64 %r56, 1
+  store i64 %r57, i64* %r44
+  br label %loop_check_20
+loop_exit_22:
+  br label %end_19
+else_18:
+  br label %end_19
+end_19:
+  br label %loop_check_6
+loop_exit_8:
+  %r58 = load i64, i64* @g_fold_nt
+  %r59 = icmp eq i64 %r58, 0
+  br i1 %r59, label %then_23, label %else_24
+then_23:
+  call void @__nurl_fn.__ir_write_range__fp1(i64 %st, i64 %en, i64 %part)
+  ret void
+else_24:
+  br label %end_25
+end_25:
+  store i64 %st, i64* %r60
+  br label %loop_check_26
+loop_check_26:
+  %r61 = load i64, i64* %r60
+  %r62 = icmp slt i64 %r61, %en
+  br i1 %r62, label %loop_body_27, label %loop_exit_28
+loop_body_27:
+  %r63 = load i64, i64* @g_dce_mod
+  %r64 = load i64, i64* %r60
+  %r65 = add i64 %r63, %r64
+  %r66 = inttoptr i64 %r65 to i8*
+  %r67 = load i64, i64* %r60
+  %r68 = sub i64 %en, %r67
+  %r69 = getelementptr [2 x i8], [2 x i8]* @.str.11539, i64 0, i64 0
+  %r70 = call i64 @__nurl_fn.nurl_memmem_range(i8* %r66, i64 %r68, i8* %r69, i64 1)
+  store i64 %r70, i64* %r71
+  %r72 = load i64, i64* %r71
+  %r73 = icmp slt i64 %r72, 0
+  br i1 %r73, label %then_29, label %else_30
+then_29:
+  %r74 = load i64, i64* %r60
+  call void @__nurl_fn.__fold_put_range__fp1(i64 %r74, i64 %en, i64 %part, i64 0)
+  store i64 %en, i64* %r60
+  br label %end_31
+else_30:
+  %r75 = load i64, i64* %r60
+  %r76 = load i64, i64* %r71
+  %r77 = add i64 %r75, %r76
+  store i64 %r77, i64* %r78
+  %r79 = load i64, i64* %r60
+  %r80 = load i64, i64* %r78
+  call void @__nurl_fn.__fold_emit_line__fp1(i64 %r79, i64 %r80, i64 %part)
+  %r81 = load i64, i64* %r78
+  %r82 = add i64 %r81, 1
+  store i64 %r82, i64* %r60
+  br label %end_31
+end_31:
+  %r83 = phi i64 [ %en, %then_29 ], [ %r82, %else_30 ]
+  br label %loop_check_26
+loop_exit_28:
   call void @__nurl_fn.__fold_reset__fp1()
   ret void
 }
 
-@.str.11515 = private unnamed_addr constant [10 x i8] c"@.__nurl_\00"
-@.str.11516 = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.str.11517 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.11537 = private unnamed_addr constant [10 x i8] c"@.__nurl_\00"
+@.str.11538 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.11539 = private unnamed_addr constant [2 x i8] c"\0A\00"
 define void @__nurl_fn.__ir_write_range__fp1(i64 %from, i64 %to, i64 %part) sanitize_address {
 entry:
   %r0 = icmp eq i64 %part, 0
@@ -196997,7 +198009,7 @@ or_end_26:
   %r57 = phi i1 [ 1, %loop_exit_16 ], [ %r56, %or_right_25 ]
   br i1 %r57, label %then_27, label %else_28
 then_27:
-  %r58 = getelementptr [43 x i8], [43 x i8]* @.str.11518, i64 0, i64 0
+  %r58 = getelementptr [43 x i8], [43 x i8]* @.str.11540, i64 0, i64 0
   call void @nurl_eprintln(i8* %r58)
   call void @nurl_exit(i64 1)
   unreachable
@@ -197009,11 +198021,11 @@ end_29:
   %r60 = icmp eq i64 %part, 0
   br i1 %r60, label %then_30, label %else_31
 then_30:
-  %r61 = getelementptr [18 x i8], [18 x i8]* @.str.11519, i64 0, i64 0
+  %r61 = getelementptr [18 x i8], [18 x i8]* @.str.11541, i64 0, i64 0
   call void @nurl_print(i8* %r61)
   br label %end_32
 else_31:
-  %r62 = getelementptr [18 x i8], [18 x i8]* @.str.11520, i64 0, i64 0
+  %r62 = getelementptr [18 x i8], [18 x i8]* @.str.11542, i64 0, i64 0
   call void @__nurl_fn.__sp_puts__fp1(i8* %r62)
   br label %end_32
 end_32:
@@ -197022,9 +198034,9 @@ end_32:
   ret void
 }
 
-@.str.11518 = private unnamed_addr constant [43 x i8] c"nurlc: malformed generated function header\00"
-@.str.11519 = private unnamed_addr constant [18 x i8] c" sanitize_address\00"
-@.str.11520 = private unnamed_addr constant [18 x i8] c" sanitize_address\00"
+@.str.11540 = private unnamed_addr constant [43 x i8] c"nurlc: malformed generated function header\00"
+@.str.11541 = private unnamed_addr constant [18 x i8] c" sanitize_address\00"
+@.str.11542 = private unnamed_addr constant [18 x i8] c" sanitize_address\00"
 define i64 @__nurl_fn.__sp_parts__fp1(i64 %mlen) sanitize_address {
 entry:
   %r0 = alloca i64
@@ -197050,7 +198062,7 @@ end_6:
   %r7 = icmp eq i64 %r5, 0
   br i1 %r7, label %numeric_fail_7, label %numeric_ok_8
 numeric_fail_7:
-  %r8 = getelementptr [17 x i8], [17 x i8]* @.str.11521, i64 0, i64 0
+  %r8 = getelementptr [17 x i8], [17 x i8]* @.str.11543, i64 0, i64 0
   call void @nurl_panic(i8* %r8)
   unreachable
 numeric_ok_8:
@@ -197059,7 +198071,7 @@ numeric_ok_8:
   %r11 = and i1 %r9, %r10
   br i1 %r11, label %numeric_fail_9, label %numeric_ok_10
 numeric_fail_9:
-  %r12 = getelementptr [18 x i8], [18 x i8]* @.str.11522, i64 0, i64 0
+  %r12 = getelementptr [18 x i8], [18 x i8]* @.str.11544, i64 0, i64 0
   call void @nurl_panic(i8* %r12)
   unreachable
 numeric_ok_10:
@@ -197090,8 +198102,8 @@ end_16:
   ret i64 %r22
 }
 
-@.str.11521 = private unnamed_addr constant [17 x i8] c"division by zero\00"
-@.str.11522 = private unnamed_addr constant [18 x i8] c"division overflow\00"
+@.str.11543 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.11544 = private unnamed_addr constant [18 x i8] c"division overflow\00"
 define void @__nurl_fn.dce_emit_module(i8* %mod) sanitize_address {
 entry:
   %r1 = alloca i64
@@ -197217,7 +198229,7 @@ loop_exit_13:
   %r59 = load i64, i64* %r1
   call void @__nurl_fn.__fold_scan_flags__fp1(i64 %r58, i64 %r59)
   %r60 = load i64, i64* @g_dce_map
-  %r61 = getelementptr [5 x i8], [5 x i8]* @.str.11523, i64 0, i64 0
+  %r61 = getelementptr [5 x i8], [5 x i8]* @.str.11545, i64 0, i64 0
   %r62 = call i8* @__nurl_fn.nurl_sym_get(i64 %r60, i8* %r61)
   %r64 = load i8*, i8** %r63
   call void @nurl_free(i8* %r64)
@@ -197268,7 +198280,7 @@ loop_body_23:
 loop_exit_24:
   br label %end_21
 else_20:
-  %r89 = getelementptr [5 x i8], [5 x i8]* @.str.11524, i64 0, i64 0
+  %r89 = getelementptr [5 x i8], [5 x i8]* @.str.11546, i64 0, i64 0
   call void @__nurl_fn.__dce_mark_name__fp1(i8* %r89)
   %r90 = load i8*, i8** @g_dce_keep
   %r91 = call i64 @__nurl_fn.nurl_str_len(i8* %r90)
@@ -197466,8 +198478,8 @@ end_53:
   ret void
 }
 
-@.str.11523 = private unnamed_addr constant [5 x i8] c"main\00"
-@.str.11524 = private unnamed_addr constant [5 x i8] c"main\00"
+@.str.11545 = private unnamed_addr constant [5 x i8] c"main\00"
+@.str.11546 = private unnamed_addr constant [5 x i8] c"main\00"
 define void @__nurl_fn.dce_free() sanitize_address {
 entry:
   %r0 = load i64, i64* @g_dce_start
@@ -197765,7 +198777,7 @@ end_3:
   %r12 = load i64, i64* %r2
   %r13 = add i64 %r11, %r12
   %r14 = inttoptr i64 %r13 to i8*
-  %r15 = getelementptr [12 x i8], [12 x i8]* @.str.11525, i64 0, i64 0
+  %r15 = getelementptr [12 x i8], [12 x i8]* @.str.11547, i64 0, i64 0
   %r16 = call i64 @__nurl_fn.nurl_str_starts(i8* %r14, i8* %r15)
   %r17 = icmp ne i64 0, %r16
   br i1 %r17, label %then_4, label %else_5
@@ -197780,7 +198792,7 @@ end_6:
   ret i1 %r20
 }
 
-@.str.11525 = private unnamed_addr constant [12 x i8] c" = private \00"
+@.str.11547 = private unnamed_addr constant [12 x i8] c" = private \00"
 define i64 @__nurl_fn.__sp_word_end__fp1(i64 %t, i64 %lim) sanitize_address {
 entry:
   %r0 = alloca i64
@@ -198049,7 +199061,7 @@ entry:
   store i64 %r0, i64* %r1
   %r2 = load i64, i64* %r1
   call void @__nurl_fn.__sp_write__fp1(i64 %p, i64 %r2)
-  %r3 = getelementptr [13 x i8], [13 x i8]* @.str.11526, i64 0, i64 0
+  %r3 = getelementptr [13 x i8], [13 x i8]* @.str.11548, i64 0, i64 0
   call void @__nurl_fn.__sp_puts__fp1(i8* %r3)
   %r4 = load i64, i64* %r1
   %r5 = add i64 %r4, 3
@@ -198074,7 +199086,7 @@ loop_body_2:
   store i64 %r15, i64* %r16
   %r17 = load i64, i64* %r6
   %r18 = load i64, i64* %r16
-  %r19 = getelementptr [7 x i8], [7 x i8]* @.str.11527, i64 0, i64 0
+  %r19 = getelementptr [7 x i8], [7 x i8]* @.str.11549, i64 0, i64 0
   %r20 = call i1 @__nurl_fn.__sp_word_eq__fp1(i64 %r17, i64 %r18, i8* %r19)
   br i1 %r20, label %then_6, label %else_7
 then_6:
@@ -198083,7 +199095,7 @@ then_6:
 else_7:
   %r21 = load i64, i64* %r6
   %r22 = load i64, i64* %r16
-  %r23 = getelementptr [9 x i8], [9 x i8]* @.str.11528, i64 0, i64 0
+  %r23 = getelementptr [9 x i8], [9 x i8]* @.str.11550, i64 0, i64 0
   %r24 = call i1 @__nurl_fn.__sp_word_eq__fp1(i64 %r21, i64 %r22, i8* %r23)
   br i1 %r24, label %then_9, label %else_10
 then_9:
@@ -198104,10 +199116,10 @@ loop_exit_3:
   %r28 = icmp eq i64 %r27, 1
   br i1 %r28, label %then_12, label %else_13
 then_12:
-  %r29 = getelementptr [10 x i8], [10 x i8]* @.str.11529, i64 0, i64 0
+  %r29 = getelementptr [10 x i8], [10 x i8]* @.str.11551, i64 0, i64 0
   br label %end_14
 else_13:
-  %r30 = getelementptr [8 x i8], [8 x i8]* @.str.11530, i64 0, i64 0
+  %r30 = getelementptr [8 x i8], [8 x i8]* @.str.11552, i64 0, i64 0
   br label %end_14
 end_14:
   %r31 = phi i8* [ %r29, %then_12 ], [ %r30, %else_13 ]
@@ -198116,17 +199128,17 @@ end_14:
   %r33 = load i64, i64* %r6
   %r34 = call i64 @__nurl_fn.__sp_type_end__fp1(i64 %r33, i64 %le)
   call void @__nurl_fn.__sp_write__fp1(i64 %r32, i64 %r34)
-  %r35 = getelementptr [2 x i8], [2 x i8]* @.str.11531, i64 0, i64 0
+  %r35 = getelementptr [2 x i8], [2 x i8]* @.str.11553, i64 0, i64 0
   call void @__nurl_fn.__sp_puts__fp1(i8* %r35)
   ret void
 }
 
-@.str.11526 = private unnamed_addr constant [13 x i8] c" = external \00"
-@.str.11527 = private unnamed_addr constant [7 x i8] c"global\00"
-@.str.11528 = private unnamed_addr constant [9 x i8] c"constant\00"
-@.str.11529 = private unnamed_addr constant [10 x i8] c"constant \00"
-@.str.11530 = private unnamed_addr constant [8 x i8] c"global \00"
-@.str.11531 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.11548 = private unnamed_addr constant [13 x i8] c" = external \00"
+@.str.11549 = private unnamed_addr constant [7 x i8] c"global\00"
+@.str.11550 = private unnamed_addr constant [9 x i8] c"constant\00"
+@.str.11551 = private unnamed_addr constant [10 x i8] c"constant \00"
+@.str.11552 = private unnamed_addr constant [8 x i8] c"global \00"
+@.str.11553 = private unnamed_addr constant [2 x i8] c"\0A\00"
 define void @__nurl_fn.__sp_scan_refs__fp1(i64 %from, i64 %to, i64 %part) sanitize_address {
 entry:
   %r3 = alloca i8*
@@ -198498,7 +199510,7 @@ end_20:
   %r71 = icmp eq i64 0, %first
   br i1 %r71, label %then_24, label %else_25
 then_24:
-  %r72 = getelementptr [3 x i8], [3 x i8]* @.str.11532, i64 0, i64 0
+  %r72 = getelementptr [3 x i8], [3 x i8]* @.str.11554, i64 0, i64 0
   call void @__nurl_fn.__sp_puts__fp1(i8* %r72)
   br label %end_26
 else_25:
@@ -198510,7 +199522,7 @@ end_26:
   ret void
 }
 
-@.str.11532 = private unnamed_addr constant [3 x i8] c", \00"
+@.str.11554 = private unnamed_addr constant [3 x i8] c", \00"
 define void @__nurl_fn.__sp_declare__fp1(i64 %st, i64 %en) sanitize_address {
 entry:
   %r3 = alloca i8*
@@ -198529,7 +199541,7 @@ entry:
   store i8* %r2, i8** %r3
   %r4 = call i64 @__nurl_fn.__sp_line_end__fp1(i64 %st, i64 %en)
   store i64 %r4, i64* %r5
-  %r6 = getelementptr [8 x i8], [8 x i8]* @.str.11533, i64 0, i64 0
+  %r6 = getelementptr [8 x i8], [8 x i8]* @.str.11555, i64 0, i64 0
   call void @__nurl_fn.__sp_puts__fp1(i8* %r6)
   %r7 = add i64 %st, 6
   store i64 %r7, i64* %r8
@@ -198708,13 +199720,13 @@ end_15:
   %r99 = phi i64 [ %r57, %then_13 ], [ %r98, %end_20 ]
   br label %loop_check_6
 loop_exit_8:
-  %r100 = getelementptr [3 x i8], [3 x i8]* @.str.11534, i64 0, i64 0
+  %r100 = getelementptr [3 x i8], [3 x i8]* @.str.11556, i64 0, i64 0
   call void @__nurl_fn.__sp_puts__fp1(i8* %r100)
   ret void
 }
 
-@.str.11533 = private unnamed_addr constant [8 x i8] c"declare\00"
-@.str.11534 = private unnamed_addr constant [3 x i8] c")\0A\00"
+@.str.11555 = private unnamed_addr constant [8 x i8] c"declare\00"
+@.str.11556 = private unnamed_addr constant [3 x i8] c")\0A\00"
 define void @__nurl_fn.__sp_emit_global__fp1(i64 %p, i64 %le, i64 %nx, i64 %k) sanitize_address {
 entry:
   %r5 = alloca i64
@@ -198842,10 +199854,10 @@ entry:
   store i8* null, i8** %r16
   %r27 = alloca i8*
   store i8* null, i8** %r27
-  %r0 = getelementptr [2 x i8], [2 x i8]* @.str.11535, i64 0, i64 0
+  %r0 = getelementptr [2 x i8], [2 x i8]* @.str.11557, i64 0, i64 0
   %r1 = call i8* @nurl_str_int(i64 %k)
   call void @nurl_journal_push(i8* %r1)
-  %r4 = getelementptr [4 x i8], [4 x i8]* @.str.11536, i64 0, i64 0
+  %r4 = getelementptr [4 x i8], [4 x i8]* @.str.11558, i64 0, i64 0
   %r5 = call i8* @__nurl_fn.nurl_str_cat3(i8* %r0, i8* %r1, i8* %r4)
   call void @nurl_free(i8* %r1)
   %r7 = load i8*, i8** %r6
@@ -198865,7 +199877,7 @@ entry:
   %r18 = load i8*, i8** %r16
   call void @nurl_journal_push(i8* %r18)
   %r19 = load i8*, i8** %r16
-  %r20 = getelementptr [3 x i8], [3 x i8]* @.str.11537, i64 0, i64 0
+  %r20 = getelementptr [3 x i8], [3 x i8]* @.str.11559, i64 0, i64 0
   %r22 = load i8*, ptr %r16
   store i8* %r22, ptr %r16
   call void @nurl_journal_forget(i8* null)
@@ -198877,7 +199889,7 @@ entry:
   %r30 = icmp eq i64 0, %r29
   br i1 %r30, label %then_1, label %else_2
 then_1:
-  %r31 = getelementptr [21 x i8], [21 x i8]* @.str.11538, i64 0, i64 0
+  %r31 = getelementptr [21 x i8], [21 x i8]* @.str.11560, i64 0, i64 0
   %r32 = load i8*, i8** %r16
   %r34 = load i8*, ptr %r16
   store i8* %r34, ptr %r16
@@ -198901,10 +199913,10 @@ end_3:
   ret void
 }
 
-@.str.11535 = private unnamed_addr constant [2 x i8] c".\00"
-@.str.11536 = private unnamed_addr constant [4 x i8] c".ll\00"
-@.str.11537 = private unnamed_addr constant [3 x i8] c"wb\00"
-@.str.11538 = private unnamed_addr constant [21 x i8] c"nurlc: cannot write \00"
+@.str.11557 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.11558 = private unnamed_addr constant [4 x i8] c".ll\00"
+@.str.11559 = private unnamed_addr constant [3 x i8] c"wb\00"
+@.str.11560 = private unnamed_addr constant [21 x i8] c"nurlc: cannot write \00"
 define void @__nurl_fn.__sp_close__fp1() sanitize_address {
 entry:
   %r3 = alloca i32
@@ -199049,7 +200061,7 @@ end_9:
   %r43 = icmp eq i64 %r41, 0
   br i1 %r43, label %numeric_fail_10, label %numeric_ok_11
 numeric_fail_10:
-  %r44 = getelementptr [17 x i8], [17 x i8]* @.str.11539, i64 0, i64 0
+  %r44 = getelementptr [17 x i8], [17 x i8]* @.str.11561, i64 0, i64 0
   call void @nurl_panic(i8* %r44)
   unreachable
 numeric_ok_11:
@@ -199058,7 +200070,7 @@ numeric_ok_11:
   %r47 = and i1 %r45, %r46
   br i1 %r47, label %numeric_fail_12, label %numeric_ok_13
 numeric_fail_12:
-  %r48 = getelementptr [18 x i8], [18 x i8]* @.str.11540, i64 0, i64 0
+  %r48 = getelementptr [18 x i8], [18 x i8]* @.str.11562, i64 0, i64 0
   call void @nurl_panic(i8* %r48)
   unreachable
 numeric_ok_13:
@@ -199071,7 +200083,7 @@ then_14:
   %r53 = icmp eq i64 %r51, 0
   br i1 %r53, label %numeric_fail_17, label %numeric_ok_18
 numeric_fail_17:
-  %r54 = getelementptr [17 x i8], [17 x i8]* @.str.11541, i64 0, i64 0
+  %r54 = getelementptr [17 x i8], [17 x i8]* @.str.11563, i64 0, i64 0
   call void @nurl_panic(i8* %r54)
   unreachable
 numeric_ok_18:
@@ -199080,7 +200092,7 @@ numeric_ok_18:
   %r57 = and i1 %r55, %r56
   br i1 %r57, label %numeric_fail_19, label %numeric_ok_20
 numeric_fail_19:
-  %r58 = getelementptr [18 x i8], [18 x i8]* @.str.11542, i64 0, i64 0
+  %r58 = getelementptr [18 x i8], [18 x i8]* @.str.11564, i64 0, i64 0
   call void @nurl_panic(i8* %r58)
   unreachable
 numeric_ok_20:
@@ -199129,7 +200141,7 @@ else_25:
   %r87 = load i64, i64* %r70
   %r88 = add i64 %r86, %r87
   %r89 = inttoptr i64 %r88 to i8*
-  %r90 = getelementptr [21 x i8], [21 x i8]* @.str.11543, i64 0, i64 0
+  %r90 = getelementptr [21 x i8], [21 x i8]* @.str.11565, i64 0, i64 0
   %r91 = call i64 @__nurl_fn.nurl_str_starts(i8* %r89, i8* %r90)
   %r92 = icmp ne i64 0, %r91
   br i1 %r92, label %then_27, label %else_28
@@ -199384,121 +200396,121 @@ loop_exit_49:
   ret void
 }
 
-@.str.11539 = private unnamed_addr constant [17 x i8] c"division by zero\00"
-@.str.11540 = private unnamed_addr constant [18 x i8] c"division overflow\00"
-@.str.11541 = private unnamed_addr constant [17 x i8] c"division by zero\00"
-@.str.11542 = private unnamed_addr constant [18 x i8] c"division overflow\00"
-@.str.11543 = private unnamed_addr constant [21 x i8] c"define linkonce_odr \00"
+@.str.11561 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.11562 = private unnamed_addr constant [18 x i8] c"division overflow\00"
+@.str.11563 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.11564 = private unnamed_addr constant [18 x i8] c"division overflow\00"
+@.str.11565 = private unnamed_addr constant [21 x i8] c"define linkonce_odr \00"
 define void @__nurl_fn.nurlc_print_help() sanitize_address {
 entry:
-  %r0 = getelementptr [80 x i8], [80 x i8]* @.str.11544, i64 0, i64 0
+  %r0 = getelementptr [80 x i8], [80 x i8]* @.str.11566, i64 0, i64 0
   call void @nurl_print(i8* %r0)
-  %r1 = getelementptr [42 x i8], [42 x i8]* @.str.11545, i64 0, i64 0
+  %r1 = getelementptr [42 x i8], [42 x i8]* @.str.11567, i64 0, i64 0
   call void @nurl_print(i8* %r1)
-  %r2 = getelementptr [8 x i8], [8 x i8]* @.str.11546, i64 0, i64 0
+  %r2 = getelementptr [8 x i8], [8 x i8]* @.str.11568, i64 0, i64 0
   call void @nurl_print(i8* %r2)
-  %r3 = getelementptr [48 x i8], [48 x i8]* @.str.11547, i64 0, i64 0
+  %r3 = getelementptr [48 x i8], [48 x i8]* @.str.11569, i64 0, i64 0
   call void @nurl_print(i8* %r3)
-  %r4 = getelementptr [60 x i8], [60 x i8]* @.str.11548, i64 0, i64 0
+  %r4 = getelementptr [60 x i8], [60 x i8]* @.str.11570, i64 0, i64 0
   call void @nurl_print(i8* %r4)
-  %r5 = getelementptr [77 x i8], [77 x i8]* @.str.11549, i64 0, i64 0
+  %r5 = getelementptr [77 x i8], [77 x i8]* @.str.11571, i64 0, i64 0
   call void @nurl_print(i8* %r5)
-  %r6 = getelementptr [79 x i8], [79 x i8]* @.str.11550, i64 0, i64 0
+  %r6 = getelementptr [79 x i8], [79 x i8]* @.str.11572, i64 0, i64 0
   call void @nurl_print(i8* %r6)
-  %r7 = getelementptr [74 x i8], [74 x i8]* @.str.11551, i64 0, i64 0
+  %r7 = getelementptr [74 x i8], [74 x i8]* @.str.11573, i64 0, i64 0
   call void @nurl_print(i8* %r7)
-  %r8 = getelementptr [75 x i8], [75 x i8]* @.str.11552, i64 0, i64 0
+  %r8 = getelementptr [75 x i8], [75 x i8]* @.str.11574, i64 0, i64 0
   call void @nurl_print(i8* %r8)
-  %r9 = getelementptr [81 x i8], [81 x i8]* @.str.11553, i64 0, i64 0
+  %r9 = getelementptr [81 x i8], [81 x i8]* @.str.11575, i64 0, i64 0
   call void @nurl_print(i8* %r9)
-  %r10 = getelementptr [71 x i8], [71 x i8]* @.str.11554, i64 0, i64 0
+  %r10 = getelementptr [71 x i8], [71 x i8]* @.str.11576, i64 0, i64 0
   call void @nurl_print(i8* %r10)
-  %r11 = getelementptr [80 x i8], [80 x i8]* @.str.11555, i64 0, i64 0
+  %r11 = getelementptr [80 x i8], [80 x i8]* @.str.11577, i64 0, i64 0
   call void @nurl_print(i8* %r11)
-  %r12 = getelementptr [74 x i8], [74 x i8]* @.str.11556, i64 0, i64 0
+  %r12 = getelementptr [74 x i8], [74 x i8]* @.str.11578, i64 0, i64 0
   call void @nurl_print(i8* %r12)
-  %r13 = getelementptr [78 x i8], [78 x i8]* @.str.11557, i64 0, i64 0
+  %r13 = getelementptr [78 x i8], [78 x i8]* @.str.11579, i64 0, i64 0
   call void @nurl_print(i8* %r13)
-  %r14 = getelementptr [76 x i8], [76 x i8]* @.str.11558, i64 0, i64 0
+  %r14 = getelementptr [76 x i8], [76 x i8]* @.str.11580, i64 0, i64 0
   call void @nurl_print(i8* %r14)
-  %r15 = getelementptr [71 x i8], [71 x i8]* @.str.11559, i64 0, i64 0
+  %r15 = getelementptr [71 x i8], [71 x i8]* @.str.11581, i64 0, i64 0
   call void @nurl_print(i8* %r15)
-  %r16 = getelementptr [61 x i8], [61 x i8]* @.str.11560, i64 0, i64 0
+  %r16 = getelementptr [61 x i8], [61 x i8]* @.str.11582, i64 0, i64 0
   call void @nurl_print(i8* %r16)
-  %r17 = getelementptr [78 x i8], [78 x i8]* @.str.11561, i64 0, i64 0
+  %r17 = getelementptr [78 x i8], [78 x i8]* @.str.11583, i64 0, i64 0
   call void @nurl_print(i8* %r17)
-  %r18 = getelementptr [70 x i8], [70 x i8]* @.str.11562, i64 0, i64 0
+  %r18 = getelementptr [70 x i8], [70 x i8]* @.str.11584, i64 0, i64 0
   call void @nurl_print(i8* %r18)
-  %r19 = getelementptr [85 x i8], [85 x i8]* @.str.11563, i64 0, i64 0
+  %r19 = getelementptr [85 x i8], [85 x i8]* @.str.11585, i64 0, i64 0
   call void @nurl_print(i8* %r19)
-  %r20 = getelementptr [59 x i8], [59 x i8]* @.str.11564, i64 0, i64 0
+  %r20 = getelementptr [59 x i8], [59 x i8]* @.str.11586, i64 0, i64 0
   call void @nurl_print(i8* %r20)
-  %r21 = getelementptr [69 x i8], [69 x i8]* @.str.11565, i64 0, i64 0
+  %r21 = getelementptr [69 x i8], [69 x i8]* @.str.11587, i64 0, i64 0
   call void @nurl_print(i8* %r21)
-  %r22 = getelementptr [73 x i8], [73 x i8]* @.str.11566, i64 0, i64 0
+  %r22 = getelementptr [73 x i8], [73 x i8]* @.str.11588, i64 0, i64 0
   call void @nurl_print(i8* %r22)
-  %r23 = getelementptr [74 x i8], [74 x i8]* @.str.11567, i64 0, i64 0
+  %r23 = getelementptr [74 x i8], [74 x i8]* @.str.11589, i64 0, i64 0
   call void @nurl_print(i8* %r23)
-  %r24 = getelementptr [72 x i8], [72 x i8]* @.str.11568, i64 0, i64 0
+  %r24 = getelementptr [72 x i8], [72 x i8]* @.str.11590, i64 0, i64 0
   call void @nurl_print(i8* %r24)
-  %r25 = getelementptr [70 x i8], [70 x i8]* @.str.11569, i64 0, i64 0
+  %r25 = getelementptr [70 x i8], [70 x i8]* @.str.11591, i64 0, i64 0
   call void @nurl_print(i8* %r25)
-  %r26 = getelementptr [74 x i8], [74 x i8]* @.str.11570, i64 0, i64 0
+  %r26 = getelementptr [74 x i8], [74 x i8]* @.str.11592, i64 0, i64 0
   call void @nurl_print(i8* %r26)
-  %r27 = getelementptr [75 x i8], [75 x i8]* @.str.11571, i64 0, i64 0
+  %r27 = getelementptr [75 x i8], [75 x i8]* @.str.11593, i64 0, i64 0
   call void @nurl_print(i8* %r27)
-  %r28 = getelementptr [66 x i8], [66 x i8]* @.str.11572, i64 0, i64 0
+  %r28 = getelementptr [66 x i8], [66 x i8]* @.str.11594, i64 0, i64 0
   call void @nurl_print(i8* %r28)
-  %r29 = getelementptr [70 x i8], [70 x i8]* @.str.11573, i64 0, i64 0
+  %r29 = getelementptr [70 x i8], [70 x i8]* @.str.11595, i64 0, i64 0
   call void @nurl_print(i8* %r29)
-  %r30 = getelementptr [73 x i8], [73 x i8]* @.str.11574, i64 0, i64 0
+  %r30 = getelementptr [73 x i8], [73 x i8]* @.str.11596, i64 0, i64 0
   call void @nurl_print(i8* %r30)
-  %r31 = getelementptr [74 x i8], [74 x i8]* @.str.11575, i64 0, i64 0
+  %r31 = getelementptr [74 x i8], [74 x i8]* @.str.11597, i64 0, i64 0
   call void @nurl_print(i8* %r31)
-  %r32 = getelementptr [57 x i8], [57 x i8]* @.str.11576, i64 0, i64 0
+  %r32 = getelementptr [57 x i8], [57 x i8]* @.str.11598, i64 0, i64 0
   call void @nurl_print(i8* %r32)
-  %r33 = getelementptr [64 x i8], [64 x i8]* @.str.11577, i64 0, i64 0
+  %r33 = getelementptr [64 x i8], [64 x i8]* @.str.11599, i64 0, i64 0
   call void @nurl_print(i8* %r33)
-  %r34 = getelementptr [58 x i8], [58 x i8]* @.str.11578, i64 0, i64 0
+  %r34 = getelementptr [58 x i8], [58 x i8]* @.str.11600, i64 0, i64 0
   call void @nurl_print(i8* %r34)
   ret void
 }
 
-@.str.11544 = private unnamed_addr constant [80 x i8] c"nurlc \E2\80\94 the NURL compiler. Compiles a .nu source file to LLVM IR on stdout.\0A\0A\00"
-@.str.11545 = private unnamed_addr constant [42 x i8] c"usage: nurlc [flags] <file.nu>  >out.ll\0A\0A\00"
-@.str.11546 = private unnamed_addr constant [8 x i8] c"flags:\0A\00"
-@.str.11547 = private unnamed_addr constant [48 x i8] c"  --help, -h          print this help and exit\0A\00"
-@.str.11548 = private unnamed_addr constant [60 x i8] c"  --version, -v       print the toolchain version and exit\0A\00"
-@.str.11549 = private unnamed_addr constant [77 x i8] c"  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\0A\00"
-@.str.11550 = private unnamed_addr constant [79 x i8] c"  --coverage=PREFIX   emit GCOV metadata for PREFIX.gcno/.gcda (implies --g);\0A\00"
-@.str.11551 = private unnamed_addr constant [74 x i8] c"                      lower and link with clang --coverage to instrument\0A\00"
-@.str.11552 = private unnamed_addr constant [75 x i8] c"  --coverage-link-ir=FILE  also write staged IR; stdout keeps final paths\0A\00"
-@.str.11553 = private unnamed_addr constant [81 x i8] c"  --coverage-notes=FILE  GCOV notes path in staged IR; use both with --coverage\0A\00"
-@.str.11554 = private unnamed_addr constant [71 x i8] c"  --check             validate without writing LLVM IR or split files\0A\00"
-@.str.11555 = private unnamed_addr constant [80 x i8] c"  --stdin             read source from stdin; <file.nu> keeps its logical path\0A\00"
-@.str.11556 = private unnamed_addr constant [74 x i8] c"  --sanitize-address  mark every generated function for AddressSanitizer\0A\00"
-@.str.11557 = private unnamed_addr constant [78 x i8] c"  --lint              run lint-only diagnostics: unused symbols and imports,\0A\00"
-@.str.11558 = private unnamed_addr constant [76 x i8] c"                      an unreleased handle, an allocation owned by nothing\0A\00"
-@.str.11559 = private unnamed_addr constant [71 x i8] c"  --no-borrowck       disable the borrow-checker pass (on by default)\0A\00"
-@.str.11560 = private unnamed_addr constant [61 x i8] c"  --strict-borrowck   run the borrow-checker in strict mode\0A\00"
-@.str.11561 = private unnamed_addr constant [78 x i8] c"  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\0A\00"
-@.str.11562 = private unnamed_addr constant [70 x i8] c"  --no-dce            emit unreachable functions too (on by default)\0A\00"
-@.str.11563 = private unnamed_addr constant [85 x i8] c"  --keep=a,b          keep these functions even if nothing in the module calls them\0A\00"
-@.str.11564 = private unnamed_addr constant [59 x i8] c"  --ffi-host-imports  emit FFI calls as wasm host imports\0A\00"
-@.str.11565 = private unnamed_addr constant [69 x i8] c"  --no-cpu-dispatch   ignore the 'simd' prefix and emit each marked\0A\00"
-@.str.11566 = private unnamed_addr constant [73 x i8] c"                      function once. The prefix names an x86-64 feature\0A\00"
-@.str.11567 = private unnamed_addr constant [74 x i8] c"                      set, and nurlc emits no target triple, so anything\0A\00"
-@.str.11568 = private unnamed_addr constant [72 x i8] c"                      building for another architecture must pass this\0A\00"
-@.str.11569 = private unnamed_addr constant [70 x i8] c"                      (nurl.sh does it for every non-x86-64 target).\0A\00"
-@.str.11570 = private unnamed_addr constant [74 x i8] c"  --split=N           ALSO write the module as up to N independent ones,\0A\00"
-@.str.11571 = private unnamed_addr constant [75 x i8] c"                      so N clang processes can lower them at once (stdout\0A\00"
-@.str.11572 = private unnamed_addr constant [66 x i8] c"                      still carries the whole module either way)\0A\00"
-@.str.11573 = private unnamed_addr constant [70 x i8] c"  --split-out=PREFIX  where they go: PREFIX.0.ll \E2\80\A6 PREFIX.<N-1>.ll\0A\00"
-@.str.11574 = private unnamed_addr constant [73 x i8] c"  --split-min=BYTES   smallest a part may be (default 131072). A module\0A\00"
-@.str.11575 = private unnamed_addr constant [74 x i8] c"                      too small to fill two of them is not split at all.\0A\00"
-@.str.11576 = private unnamed_addr constant [57 x i8] c"\0AThe LLVM IR goes to stdout; link it with clang against\0A\00"
-@.str.11577 = private unnamed_addr constant [64 x i8] c"stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\0A\00"
-@.str.11578 = private unnamed_addr constant [58 x i8] c"source-to-binary build use ./nurl.sh <file.nu> [output].\0A\00"
+@.str.11566 = private unnamed_addr constant [80 x i8] c"nurlc \E2\80\94 the NURL compiler. Compiles a .nu source file to LLVM IR on stdout.\0A\0A\00"
+@.str.11567 = private unnamed_addr constant [42 x i8] c"usage: nurlc [flags] <file.nu>  >out.ll\0A\0A\00"
+@.str.11568 = private unnamed_addr constant [8 x i8] c"flags:\0A\00"
+@.str.11569 = private unnamed_addr constant [48 x i8] c"  --help, -h          print this help and exit\0A\00"
+@.str.11570 = private unnamed_addr constant [60 x i8] c"  --version, -v       print the toolchain version and exit\0A\00"
+@.str.11571 = private unnamed_addr constant [77 x i8] c"  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\0A\00"
+@.str.11572 = private unnamed_addr constant [79 x i8] c"  --coverage=PREFIX   emit GCOV metadata for PREFIX.gcno/.gcda (implies --g);\0A\00"
+@.str.11573 = private unnamed_addr constant [74 x i8] c"                      lower and link with clang --coverage to instrument\0A\00"
+@.str.11574 = private unnamed_addr constant [75 x i8] c"  --coverage-link-ir=FILE  also write staged IR; stdout keeps final paths\0A\00"
+@.str.11575 = private unnamed_addr constant [81 x i8] c"  --coverage-notes=FILE  GCOV notes path in staged IR; use both with --coverage\0A\00"
+@.str.11576 = private unnamed_addr constant [71 x i8] c"  --check             validate without writing LLVM IR or split files\0A\00"
+@.str.11577 = private unnamed_addr constant [80 x i8] c"  --stdin             read source from stdin; <file.nu> keeps its logical path\0A\00"
+@.str.11578 = private unnamed_addr constant [74 x i8] c"  --sanitize-address  mark every generated function for AddressSanitizer\0A\00"
+@.str.11579 = private unnamed_addr constant [78 x i8] c"  --lint              run lint-only diagnostics: unused symbols and imports,\0A\00"
+@.str.11580 = private unnamed_addr constant [76 x i8] c"                      an unreleased handle, an allocation owned by nothing\0A\00"
+@.str.11581 = private unnamed_addr constant [71 x i8] c"  --no-borrowck       disable the borrow-checker pass (on by default)\0A\00"
+@.str.11582 = private unnamed_addr constant [61 x i8] c"  --strict-borrowck   run the borrow-checker in strict mode\0A\00"
+@.str.11583 = private unnamed_addr constant [78 x i8] c"  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\0A\00"
+@.str.11584 = private unnamed_addr constant [70 x i8] c"  --no-dce            emit unreachable functions too (on by default)\0A\00"
+@.str.11585 = private unnamed_addr constant [85 x i8] c"  --keep=a,b          keep these functions even if nothing in the module calls them\0A\00"
+@.str.11586 = private unnamed_addr constant [59 x i8] c"  --ffi-host-imports  emit FFI calls as wasm host imports\0A\00"
+@.str.11587 = private unnamed_addr constant [69 x i8] c"  --no-cpu-dispatch   ignore the 'simd' prefix and emit each marked\0A\00"
+@.str.11588 = private unnamed_addr constant [73 x i8] c"                      function once. The prefix names an x86-64 feature\0A\00"
+@.str.11589 = private unnamed_addr constant [74 x i8] c"                      set, and nurlc emits no target triple, so anything\0A\00"
+@.str.11590 = private unnamed_addr constant [72 x i8] c"                      building for another architecture must pass this\0A\00"
+@.str.11591 = private unnamed_addr constant [70 x i8] c"                      (nurl.sh does it for every non-x86-64 target).\0A\00"
+@.str.11592 = private unnamed_addr constant [74 x i8] c"  --split=N           ALSO write the module as up to N independent ones,\0A\00"
+@.str.11593 = private unnamed_addr constant [75 x i8] c"                      so N clang processes can lower them at once (stdout\0A\00"
+@.str.11594 = private unnamed_addr constant [66 x i8] c"                      still carries the whole module either way)\0A\00"
+@.str.11595 = private unnamed_addr constant [70 x i8] c"  --split-out=PREFIX  where they go: PREFIX.0.ll \E2\80\A6 PREFIX.<N-1>.ll\0A\00"
+@.str.11596 = private unnamed_addr constant [73 x i8] c"  --split-min=BYTES   smallest a part may be (default 131072). A module\0A\00"
+@.str.11597 = private unnamed_addr constant [74 x i8] c"                      too small to fill two of them is not split at all.\0A\00"
+@.str.11598 = private unnamed_addr constant [57 x i8] c"\0AThe LLVM IR goes to stdout; link it with clang against\0A\00"
+@.str.11599 = private unnamed_addr constant [64 x i8] c"stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\0A\00"
+@.str.11600 = private unnamed_addr constant [58 x i8] c"source-to-binary build use ./nurl.sh <file.nu> [output].\0A\00"
 define void @__nurl_fn.__compile_pipeline__fp1(i8* %src, i8* %path, i64 %syms, i64 %cg) sanitize_address {
 entry:
   %r0 = alloca i64
@@ -199568,11 +200580,11 @@ end_6:
   %r26 = icmp sgt i64 %r25, 0
   br i1 %r26, label %then_7, label %else_8
 then_7:
-  %r27 = getelementptr [24 x i8], [24 x i8]* @.str.11579, i64 0, i64 0
+  %r27 = getelementptr [24 x i8], [24 x i8]* @.str.11601, i64 0, i64 0
   %r28 = load i64, i64* @g_err_count
   %r29 = call i8* @nurl_str_int(i64 %r28)
   call void @nurl_journal_push(i8* %r29)
-  %r32 = getelementptr [16 x i8], [16 x i8]* @.str.11580, i64 0, i64 0
+  %r32 = getelementptr [16 x i8], [16 x i8]* @.str.11602, i64 0, i64 0
   %r33 = call i8* @__nurl_fn.nurl_str_cat3(i8* %r27, i8* %r29, i8* %r32)
   call void @nurl_free(i8* %r29)
   call void @nurl_journal_push(i8* %r33)
@@ -199580,10 +200592,10 @@ then_7:
   %r37 = icmp sgt i64 %r36, 1
   br i1 %r37, label %then_10, label %else_11
 then_10:
-  %r38 = getelementptr [2 x i8], [2 x i8]* @.str.11581, i64 0, i64 0
+  %r38 = getelementptr [2 x i8], [2 x i8]* @.str.11603, i64 0, i64 0
   br label %end_12
 else_11:
-  %r39 = getelementptr [1 x i8], [1 x i8]* @.str.11582, i64 0, i64 0
+  %r39 = getelementptr [1 x i8], [1 x i8]* @.str.11604, i64 0, i64 0
   br label %end_12
 end_12:
   %r40 = phi i8* [ %r38, %then_10 ], [ %r39, %else_11 ]
@@ -199592,7 +200604,7 @@ end_12:
   call void @nurl_journal_push(i8* %r41)
   call void @nurl_eprintln(i8* %r41)
   call void @nurl_free(i8* %r41)
-  %r42 = getelementptr [156 x i8], [156 x i8]* @.str.11583, i64 0, i64 0
+  %r42 = getelementptr [156 x i8], [156 x i8]* @.str.11605, i64 0, i64 0
   call void @nurl_eprintln(i8* %r42)
   store i64 1, i64* %r0
   br label %end_9
@@ -199622,7 +200634,7 @@ then_13:
   %r46 = icmp sgt i64 %r45, 0
   br i1 %r46, label %then_16, label %else_17
 then_16:
-  %r47 = getelementptr [32 x i8], [32 x i8]* @.str.11584, i64 0, i64 0
+  %r47 = getelementptr [32 x i8], [32 x i8]* @.str.11606, i64 0, i64 0
   %r48 = load i64, i64* @g_bck_errors
   %r49 = call i8* @nurl_str_int(i64 %r48)
   call void @nurl_journal_push(i8* %r49)
@@ -199630,17 +200642,17 @@ then_16:
   %r53 = icmp sgt i64 %r52, 1
   br i1 %r53, label %then_19, label %else_20
 then_19:
-  %r54 = getelementptr [27 x i8], [27 x i8]* @.str.11585, i64 0, i64 0
+  %r54 = getelementptr [27 x i8], [27 x i8]* @.str.11607, i64 0, i64 0
   br label %end_21
 else_20:
-  %r55 = getelementptr [26 x i8], [26 x i8]* @.str.11586, i64 0, i64 0
+  %r55 = getelementptr [26 x i8], [26 x i8]* @.str.11608, i64 0, i64 0
   br label %end_21
 end_21:
   %r56 = phi i8* [ %r54, %then_19 ], [ %r55, %else_20 ]
   %r57 = call i8* @__nurl_fn.nurl_str_cat3(i8* %r47, i8* %r49, i8* %r56)
   call void @nurl_free(i8* %r49)
   call void @nurl_journal_push(i8* %r57)
-  %r60 = getelementptr [39 x i8], [39 x i8]* @.str.11587, i64 0, i64 0
+  %r60 = getelementptr [39 x i8], [39 x i8]* @.str.11609, i64 0, i64 0
   %r61 = call i8* @__nurl_fn.nurl_str_cat(i8* %r57, i8* %r60)
   call void @nurl_free(i8* %r57)
   call void @nurl_journal_push(i8* %r61)
@@ -199658,15 +200670,15 @@ end_15:
   ret void
 }
 
-@.str.11579 = private unnamed_addr constant [24 x i8] c"error: aborting due to \00"
-@.str.11580 = private unnamed_addr constant [16 x i8] c" previous error\00"
-@.str.11581 = private unnamed_addr constant [2 x i8] c"s\00"
-@.str.11582 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.11583 = private unnamed_addr constant [156 x i8] c"note: each error stopped its declaration \E2\80\94 later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.\00"
-@.str.11584 = private unnamed_addr constant [32 x i8] c"error: compilation aborted \E2\80\94 \00"
-@.str.11585 = private unnamed_addr constant [27 x i8] c" borrow-checker violations\00"
-@.str.11586 = private unnamed_addr constant [26 x i8] c" borrow-checker violation\00"
-@.str.11587 = private unnamed_addr constant [39 x i8] c" (re-run with --no-borrowck to bypass)\00"
+@.str.11601 = private unnamed_addr constant [24 x i8] c"error: aborting due to \00"
+@.str.11602 = private unnamed_addr constant [16 x i8] c" previous error\00"
+@.str.11603 = private unnamed_addr constant [2 x i8] c"s\00"
+@.str.11604 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.11605 = private unnamed_addr constant [156 x i8] c"note: each error stopped its declaration \E2\80\94 later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.\00"
+@.str.11606 = private unnamed_addr constant [32 x i8] c"error: compilation aborted \E2\80\94 \00"
+@.str.11607 = private unnamed_addr constant [27 x i8] c" borrow-checker violations\00"
+@.str.11608 = private unnamed_addr constant [26 x i8] c" borrow-checker violation\00"
+@.str.11609 = private unnamed_addr constant [39 x i8] c" (re-run with --no-borrowck to bypass)\00"
 define i64 @_nurl_main() sanitize_address {
 entry:
   %r0 = alloca i64
@@ -199694,7 +200706,7 @@ entry:
   %r652 = alloca i8*
   store i8* null, i8** %r652
   store i64 0, i64* %r1
-  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.11588, i64 0, i64 0
+  %r2 = getelementptr [1 x i8], [1 x i8]* @.str.11610, i64 0, i64 0
   %r3 = call i8* @nurl_strdup(i8* %r2)
   %r5 = load i8*, i8** %r4
   call void @nurl_free(i8* %r5)
@@ -199744,7 +200756,7 @@ else_5:
   br label %end_6
 end_6:
   %r30 = load i8*, i8** %r17
-  %r31 = getelementptr [3 x i8], [3 x i8]* @.str.11589, i64 0, i64 0
+  %r31 = getelementptr [3 x i8], [3 x i8]* @.str.11611, i64 0, i64 0
   %r33 = load i8*, ptr %r17
   store i8* %r33, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199763,7 +200775,7 @@ else_8:
   br label %end_9
 end_9:
   %r40 = load i8*, i8** %r17
-  %r41 = getelementptr [8 x i8], [8 x i8]* @.str.11590, i64 0, i64 0
+  %r41 = getelementptr [8 x i8], [8 x i8]* @.str.11612, i64 0, i64 0
   %r43 = load i8*, ptr %r17
   store i8* %r43, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199782,7 +200794,7 @@ else_11:
   br label %end_12
 end_12:
   %r50 = load i8*, i8** %r17
-  %r51 = getelementptr [8 x i8], [8 x i8]* @.str.11591, i64 0, i64 0
+  %r51 = getelementptr [8 x i8], [8 x i8]* @.str.11613, i64 0, i64 0
   %r53 = load i8*, ptr %r17
   store i8* %r53, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199801,7 +200813,7 @@ else_14:
   br label %end_15
 end_15:
   %r60 = load i8*, i8** %r17
-  %r61 = getelementptr [20 x i8], [20 x i8]* @.str.11592, i64 0, i64 0
+  %r61 = getelementptr [20 x i8], [20 x i8]* @.str.11614, i64 0, i64 0
   %r63 = load i8*, ptr %r17
   store i8* %r63, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199832,7 +200844,7 @@ then_16:
   %r87 = icmp eq i64 0, %r86
   br i1 %r87, label %then_19, label %else_20
 then_19:
-  %r88 = getelementptr [60 x i8], [60 x i8]* @.str.11593, i64 0, i64 0
+  %r88 = getelementptr [60 x i8], [60 x i8]* @.str.11615, i64 0, i64 0
   call void @nurl_eprintln(i8* %r88)
   %r89 = load i8*, i8** %r4
   call void @nurl_free(i8* %r89)
@@ -199853,7 +200865,7 @@ else_17:
   br label %end_18
 end_18:
   %r94 = load i8*, i8** %r17
-  %r95 = getelementptr [18 x i8], [18 x i8]* @.str.11594, i64 0, i64 0
+  %r95 = getelementptr [18 x i8], [18 x i8]* @.str.11616, i64 0, i64 0
   %r97 = load i8*, ptr %r17
   store i8* %r97, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199884,7 +200896,7 @@ then_22:
   %r121 = icmp eq i64 0, %r120
   br i1 %r121, label %then_25, label %else_26
 then_25:
-  %r122 = getelementptr [57 x i8], [57 x i8]* @.str.11595, i64 0, i64 0
+  %r122 = getelementptr [57 x i8], [57 x i8]* @.str.11617, i64 0, i64 0
   call void @nurl_eprintln(i8* %r122)
   %r123 = load i8*, i8** %r4
   call void @nurl_free(i8* %r123)
@@ -199905,7 +200917,7 @@ else_23:
   br label %end_24
 end_24:
   %r128 = load i8*, i8** %r17
-  %r129 = getelementptr [12 x i8], [12 x i8]* @.str.11596, i64 0, i64 0
+  %r129 = getelementptr [12 x i8], [12 x i8]* @.str.11618, i64 0, i64 0
   %r131 = load i8*, ptr %r17
   store i8* %r131, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199936,7 +200948,7 @@ then_28:
   %r155 = icmp eq i64 0, %r154
   br i1 %r155, label %then_31, label %else_32
 then_31:
-  %r156 = getelementptr [56 x i8], [56 x i8]* @.str.11597, i64 0, i64 0
+  %r156 = getelementptr [56 x i8], [56 x i8]* @.str.11619, i64 0, i64 0
   call void @nurl_eprintln(i8* %r156)
   %r157 = load i8*, i8** %r4
   call void @nurl_free(i8* %r157)
@@ -199958,7 +200970,7 @@ else_29:
   br label %end_30
 end_30:
   %r162 = load i8*, i8** %r17
-  %r163 = getelementptr [19 x i8], [19 x i8]* @.str.11598, i64 0, i64 0
+  %r163 = getelementptr [19 x i8], [19 x i8]* @.str.11620, i64 0, i64 0
   %r165 = load i8*, ptr %r17
   store i8* %r165, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199969,7 +200981,7 @@ then_34:
   br label %end_36
 else_35:
   %r169 = load i8*, i8** %r17
-  %r170 = getelementptr [10 x i8], [10 x i8]* @.str.11599, i64 0, i64 0
+  %r170 = getelementptr [10 x i8], [10 x i8]* @.str.11621, i64 0, i64 0
   %r172 = load i8*, ptr %r17
   store i8* %r172, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199977,7 +200989,7 @@ else_35:
   br i1 %r175, label %or_end_38, label %or_right_37
 or_right_37:
   %r176 = load i8*, i8** %r17
-  %r177 = getelementptr [3 x i8], [3 x i8]* @.str.11600, i64 0, i64 0
+  %r177 = getelementptr [3 x i8], [3 x i8]* @.str.11622, i64 0, i64 0
   %r179 = load i8*, ptr %r17
   store i8* %r179, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -199989,7 +201001,7 @@ or_end_38:
 then_39:
   %r184 = call i8* @nurl_version()
   call void @nurl_print(i8* %r184)
-  %r185 = getelementptr [2 x i8], [2 x i8]* @.str.11601, i64 0, i64 0
+  %r185 = getelementptr [2 x i8], [2 x i8]* @.str.11623, i64 0, i64 0
   call void @nurl_print(i8* %r185)
   %r186 = load i8*, i8** %r4
   call void @nurl_free(i8* %r186)
@@ -199998,7 +201010,7 @@ then_39:
   ret i64 0
 else_40:
   %r188 = load i8*, i8** %r17
-  %r189 = getelementptr [7 x i8], [7 x i8]* @.str.11602, i64 0, i64 0
+  %r189 = getelementptr [7 x i8], [7 x i8]* @.str.11624, i64 0, i64 0
   %r191 = load i8*, ptr %r17
   store i8* %r191, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200006,7 +201018,7 @@ else_40:
   br i1 %r194, label %or_end_43, label %or_right_42
 or_right_42:
   %r195 = load i8*, i8** %r17
-  %r196 = getelementptr [3 x i8], [3 x i8]* @.str.11603, i64 0, i64 0
+  %r196 = getelementptr [3 x i8], [3 x i8]* @.str.11625, i64 0, i64 0
   %r198 = load i8*, ptr %r17
   store i8* %r198, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200024,7 +201036,7 @@ then_44:
   ret i64 0
 else_45:
   %r205 = load i8*, i8** %r17
-  %r206 = getelementptr [4 x i8], [4 x i8]* @.str.11604, i64 0, i64 0
+  %r206 = getelementptr [4 x i8], [4 x i8]* @.str.11626, i64 0, i64 0
   %r208 = load i8*, ptr %r17
   store i8* %r208, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200032,7 +201044,7 @@ else_45:
   br i1 %r211, label %or_end_48, label %or_right_47
 or_right_47:
   %r212 = load i8*, i8** %r17
-  %r213 = getelementptr [3 x i8], [3 x i8]* @.str.11605, i64 0, i64 0
+  %r213 = getelementptr [3 x i8], [3 x i8]* @.str.11627, i64 0, i64 0
   %r215 = load i8*, ptr %r17
   store i8* %r215, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200046,7 +201058,7 @@ then_49:
   br label %end_51
 else_50:
   %r220 = load i8*, i8** %r17
-  %r221 = getelementptr [7 x i8], [7 x i8]* @.str.11606, i64 0, i64 0
+  %r221 = getelementptr [7 x i8], [7 x i8]* @.str.11628, i64 0, i64 0
   %r223 = load i8*, ptr %r17
   store i8* %r223, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200057,7 +201069,7 @@ then_52:
   br label %end_54
 else_53:
   %r227 = load i8*, i8** %r17
-  %r228 = getelementptr [11 x i8], [11 x i8]* @.str.11607, i64 0, i64 0
+  %r228 = getelementptr [11 x i8], [11 x i8]* @.str.11629, i64 0, i64 0
   %r230 = load i8*, ptr %r17
   store i8* %r230, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200068,7 +201080,7 @@ then_55:
   br label %end_57
 else_56:
   %r234 = load i8*, i8** %r17
-  %r235 = getelementptr [14 x i8], [14 x i8]* @.str.11608, i64 0, i64 0
+  %r235 = getelementptr [14 x i8], [14 x i8]* @.str.11630, i64 0, i64 0
   %r237 = load i8*, ptr %r17
   store i8* %r237, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200079,7 +201091,7 @@ then_58:
   br label %end_60
 else_59:
   %r241 = load i8*, i8** %r17
-  %r242 = getelementptr [18 x i8], [18 x i8]* @.str.11609, i64 0, i64 0
+  %r242 = getelementptr [18 x i8], [18 x i8]* @.str.11631, i64 0, i64 0
   %r244 = load i8*, ptr %r17
   store i8* %r244, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200091,7 +201103,7 @@ then_61:
   br label %end_63
 else_62:
   %r248 = load i8*, i8** %r17
-  %r249 = getelementptr [15 x i8], [15 x i8]* @.str.11610, i64 0, i64 0
+  %r249 = getelementptr [15 x i8], [15 x i8]* @.str.11632, i64 0, i64 0
   %r251 = load i8*, ptr %r17
   store i8* %r251, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200102,7 +201114,7 @@ then_64:
   br label %end_66
 else_65:
   %r255 = load i8*, i8** %r17
-  %r256 = getelementptr [18 x i8], [18 x i8]* @.str.11611, i64 0, i64 0
+  %r256 = getelementptr [18 x i8], [18 x i8]* @.str.11633, i64 0, i64 0
   %r258 = load i8*, ptr %r17
   store i8* %r258, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200113,7 +201125,7 @@ then_67:
   br label %end_69
 else_68:
   %r262 = load i8*, i8** %r17
-  %r263 = getelementptr [19 x i8], [19 x i8]* @.str.11612, i64 0, i64 0
+  %r263 = getelementptr [19 x i8], [19 x i8]* @.str.11634, i64 0, i64 0
   %r265 = load i8*, ptr %r17
   store i8* %r265, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200124,7 +201136,7 @@ then_70:
   br label %end_72
 else_71:
   %r269 = load i8*, i8** %r17
-  %r270 = getelementptr [18 x i8], [18 x i8]* @.str.11613, i64 0, i64 0
+  %r270 = getelementptr [18 x i8], [18 x i8]* @.str.11635, i64 0, i64 0
   %r272 = load i8*, ptr %r17
   store i8* %r272, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200135,7 +201147,7 @@ then_73:
   br label %end_75
 else_74:
   %r276 = load i8*, i8** %r17
-  %r277 = getelementptr [9 x i8], [9 x i8]* @.str.11614, i64 0, i64 0
+  %r277 = getelementptr [9 x i8], [9 x i8]* @.str.11636, i64 0, i64 0
   %r279 = load i8*, ptr %r17
   store i8* %r279, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200146,7 +201158,7 @@ then_76:
   br label %end_78
 else_77:
   %r283 = load i8*, i8** %r17
-  %r284 = getelementptr [8 x i8], [8 x i8]* @.str.11615, i64 0, i64 0
+  %r284 = getelementptr [8 x i8], [8 x i8]* @.str.11637, i64 0, i64 0
   %r286 = load i8*, ptr %r17
   store i8* %r286, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200175,7 +201187,7 @@ then_79:
   br label %end_81
 else_80:
   %r308 = load i8*, i8** %r17
-  %r309 = getelementptr [9 x i8], [9 x i8]* @.str.11616, i64 0, i64 0
+  %r309 = getelementptr [9 x i8], [9 x i8]* @.str.11638, i64 0, i64 0
   %r311 = load i8*, ptr %r17
   store i8* %r311, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200201,7 +201213,7 @@ then_82:
   br label %end_84
 else_83:
   %r332 = load i8*, i8** %r17
-  %r333 = getelementptr [13 x i8], [13 x i8]* @.str.11617, i64 0, i64 0
+  %r333 = getelementptr [13 x i8], [13 x i8]* @.str.11639, i64 0, i64 0
   %r335 = load i8*, ptr %r17
   store i8* %r335, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200230,7 +201242,7 @@ then_85:
   br label %end_87
 else_86:
   %r357 = load i8*, i8** %r17
-  %r358 = getelementptr [13 x i8], [13 x i8]* @.str.11618, i64 0, i64 0
+  %r358 = getelementptr [13 x i8], [13 x i8]* @.str.11640, i64 0, i64 0
   %r360 = load i8*, ptr %r17
   store i8* %r360, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200256,7 +201268,7 @@ then_88:
   br label %end_90
 else_89:
   %r381 = load i8*, i8** %r17
-  %r382 = getelementptr [2 x i8], [2 x i8]* @.str.11619, i64 0, i64 0
+  %r382 = getelementptr [2 x i8], [2 x i8]* @.str.11641, i64 0, i64 0
   %r384 = load i8*, ptr %r17
   store i8* %r384, ptr %r17
   call void @nurl_journal_forget(i8* null)
@@ -200264,7 +201276,7 @@ else_89:
   %r388 = icmp ne i64 0, %r387
   br i1 %r388, label %then_91, label %else_92
 then_91:
-  %r389 = getelementptr [24 x i8], [24 x i8]* @.str.11620, i64 0, i64 0
+  %r389 = getelementptr [24 x i8], [24 x i8]* @.str.11642, i64 0, i64 0
   %r390 = load i8*, i8** %r17
   %r392 = load i8*, ptr %r17
   store i8* %r392, ptr %r17
@@ -200349,7 +201361,7 @@ or_end_95:
   %r417 = phi i1 [ 1, %loop_exit_3 ], [ %r416, %or_right_94 ]
   br i1 %r417, label %then_96, label %else_97
 then_96:
-  %r418 = getelementptr [248 x i8], [248 x i8]* @.str.11621, i64 0, i64 0
+  %r418 = getelementptr [248 x i8], [248 x i8]* @.str.11643, i64 0, i64 0
   call void @nurl_eprintln(i8* %r418)
   %r419 = load i8*, i8** %r4
   call void @nurl_free(i8* %r419)
@@ -200370,7 +201382,7 @@ and_end_100:
   %r426 = phi i1 [ 0, %end_98 ], [ %r425, %and_right_99 ]
   br i1 %r426, label %then_101, label %else_102
 then_101:
-  %r427 = getelementptr [51 x i8], [51 x i8]* @.str.11622, i64 0, i64 0
+  %r427 = getelementptr [51 x i8], [51 x i8]* @.str.11644, i64 0, i64 0
   call void @nurl_eprintln(i8* %r427)
   %r428 = load i8*, i8** %r4
   call void @nurl_free(i8* %r428)
@@ -200391,7 +201403,7 @@ and_end_105:
   %r435 = phi i1 [ 0, %end_103 ], [ %r434, %and_right_104 ]
   br i1 %r435, label %then_106, label %else_107
 then_106:
-  %r436 = getelementptr [53 x i8], [53 x i8]* @.str.11623, i64 0, i64 0
+  %r436 = getelementptr [53 x i8], [53 x i8]* @.str.11645, i64 0, i64 0
   call void @nurl_eprintln(i8* %r436)
   %r437 = load i8*, i8** %r4
   call void @nurl_free(i8* %r437)
@@ -200408,7 +201420,7 @@ end_108:
   %r444 = icmp ne i1 %r440, %r443
   br i1 %r444, label %then_109, label %else_110
 then_109:
-  %r445 = getelementptr [69 x i8], [69 x i8]* @.str.11624, i64 0, i64 0
+  %r445 = getelementptr [69 x i8], [69 x i8]* @.str.11646, i64 0, i64 0
   call void @nurl_eprintln(i8* %r445)
   %r446 = load i8*, i8** %r4
   call void @nurl_free(i8* %r446)
@@ -200455,7 +201467,7 @@ and_end_122:
   %r458 = phi i1 [ 0, %end_120 ], [ %r457, %and_right_121 ]
   br i1 %r458, label %then_123, label %else_124
 then_123:
-  %r459 = getelementptr [42 x i8], [42 x i8]* @.str.11625, i64 0, i64 0
+  %r459 = getelementptr [42 x i8], [42 x i8]* @.str.11647, i64 0, i64 0
   call void @nurl_eprintln(i8* %r459)
   %r460 = load i8*, i8** %r4
   call void @nurl_free(i8* %r460)
@@ -200474,7 +201486,7 @@ and_end_127:
   %r465 = phi i1 [ 0, %end_125 ], [ %r464, %and_right_126 ]
   br i1 %r465, label %then_128, label %else_129
 then_128:
-  %r466 = getelementptr [74 x i8], [74 x i8]* @.str.11626, i64 0, i64 0
+  %r466 = getelementptr [74 x i8], [74 x i8]* @.str.11648, i64 0, i64 0
   call void @nurl_eprintln(i8* %r466)
   %r467 = load i8*, i8** %r4
   call void @nurl_free(i8* %r467)
@@ -200524,7 +201536,7 @@ then_137:
   %r493 = call i8* @__nurl_fn.__canon_import_key__fp1(i8* %r488)
   br label %end_139
 else_138:
-  %r494 = getelementptr [1 x i8], [1 x i8]* @.str.11627, i64 0, i64 0
+  %r494 = getelementptr [1 x i8], [1 x i8]* @.str.11649, i64 0, i64 0
   %r495 = call i8* @nurl_strdup(i8* %r494)
   br label %end_139
 end_139:
@@ -200547,8 +201559,8 @@ then_140:
 else_141:
   br label %end_142
 end_142:
-  %r505 = getelementptr [15 x i8], [15 x i8]* @.str.11628, i64 0, i64 0
-  %r506 = getelementptr [20 x i8], [20 x i8]* @.str.11629, i64 0, i64 0
+  %r505 = getelementptr [15 x i8], [15 x i8]* @.str.11650, i64 0, i64 0
+  %r506 = getelementptr [20 x i8], [20 x i8]* @.str.11651, i64 0, i64 0
   %r507 = call i8* @__nurl_fn.nurl_str_cat(i8* %r505, i8* %r506)
   %r509 = load i8*, i8** %r508
   call void @nurl_free(i8* %r509)
@@ -200587,8 +201599,8 @@ end_145:
   %r531 = call i64 @__nurl_fn.nurl_sym_new()
   store i64 %r531, i64* @g_struct_inst_syms
   %r532 = load i64, i64* @g_generic_syms
-  %r533 = getelementptr [19 x i8], [19 x i8]* @.str.11630, i64 0, i64 0
-  %r534 = getelementptr [2 x i8], [2 x i8]* @.str.11631, i64 0, i64 0
+  %r533 = getelementptr [19 x i8], [19 x i8]* @.str.11652, i64 0, i64 0
+  %r534 = getelementptr [2 x i8], [2 x i8]* @.str.11653, i64 0, i64 0
   call void @__nurl_fn.nurl_sym_def(i64 %r532, i8* %r533, i8* %r534)
   %r535 = call i64 @__nurl_fn.nurl_sym_new()
   store i64 %r535, i64* @g_impl_ret_syms
@@ -200665,12 +201677,12 @@ end_145:
   %r571 = call i64 @__nurl_fn.nurl_sym_new()
   store i64 %r571, i64* @g_fn_noreturn
   %r572 = load i64, i64* @g_fn_noreturn
-  %r573 = getelementptr [10 x i8], [10 x i8]* @.str.11632, i64 0, i64 0
-  %r574 = getelementptr [2 x i8], [2 x i8]* @.str.11633, i64 0, i64 0
+  %r573 = getelementptr [10 x i8], [10 x i8]* @.str.11654, i64 0, i64 0
+  %r574 = getelementptr [2 x i8], [2 x i8]* @.str.11655, i64 0, i64 0
   call void @__nurl_fn.nurl_sym_def(i64 %r572, i8* %r573, i8* %r574)
   %r575 = load i64, i64* @g_fn_noreturn
-  %r576 = getelementptr [11 x i8], [11 x i8]* @.str.11634, i64 0, i64 0
-  %r577 = getelementptr [2 x i8], [2 x i8]* @.str.11635, i64 0, i64 0
+  %r576 = getelementptr [11 x i8], [11 x i8]* @.str.11656, i64 0, i64 0
+  %r577 = getelementptr [2 x i8], [2 x i8]* @.str.11657, i64 0, i64 0
   call void @__nurl_fn.nurl_sym_def(i64 %r575, i8* %r576, i8* %r577)
   %r578 = call i64 @__nurl_fn.nurl_sym_new()
   store i64 %r578, i64* @g_loop_break_used
@@ -200759,7 +201771,7 @@ then_158:
   %r636 = call i8* @nurl_panic_last_msg()
   store i8* %r636, i8** %r637
   %r638 = load i8*, i8** %r637
-  %r639 = getelementptr [14 x i8], [14 x i8]* @.str.11636, i64 0, i64 0
+  %r639 = getelementptr [14 x i8], [14 x i8]* @.str.11658, i64 0, i64 0
   %r640 = call i1 @__nurl_fn.seq(i8* %r638, i8* %r639)
   br i1 %r640, label %then_161, label %else_162
 then_161:
@@ -200976,55 +201988,55 @@ loop_exit_180:
   ret i64 %r734
 }
 
-@.str.11588 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.11589 = private unnamed_addr constant [3 x i8] c"--\00"
-@.str.11590 = private unnamed_addr constant [8 x i8] c"--stdin\00"
-@.str.11591 = private unnamed_addr constant [8 x i8] c"--check\00"
-@.str.11592 = private unnamed_addr constant [20 x i8] c"--coverage-link-ir=\00"
-@.str.11593 = private unnamed_addr constant [60 x i8] c"nurlc: --coverage-link-ir=FILE needs a nonempty output path\00"
-@.str.11594 = private unnamed_addr constant [18 x i8] c"--coverage-notes=\00"
-@.str.11595 = private unnamed_addr constant [57 x i8] c"nurlc: --coverage-notes=FILE needs a nonempty notes path\00"
-@.str.11596 = private unnamed_addr constant [12 x i8] c"--coverage=\00"
-@.str.11597 = private unnamed_addr constant [56 x i8] c"nurlc: --coverage=PREFIX needs a nonempty output prefix\00"
-@.str.11598 = private unnamed_addr constant [19 x i8] c"--sanitize-address\00"
-@.str.11599 = private unnamed_addr constant [10 x i8] c"--version\00"
-@.str.11600 = private unnamed_addr constant [3 x i8] c"-v\00"
-@.str.11601 = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.str.11602 = private unnamed_addr constant [7 x i8] c"--help\00"
-@.str.11603 = private unnamed_addr constant [3 x i8] c"-h\00"
-@.str.11604 = private unnamed_addr constant [4 x i8] c"--g\00"
-@.str.11605 = private unnamed_addr constant [3 x i8] c"-g\00"
-@.str.11606 = private unnamed_addr constant [7 x i8] c"--lint\00"
-@.str.11607 = private unnamed_addr constant [11 x i8] c"--borrowck\00"
-@.str.11608 = private unnamed_addr constant [14 x i8] c"--no-borrowck\00"
-@.str.11609 = private unnamed_addr constant [18 x i8] c"--strict-borrowck\00"
-@.str.11610 = private unnamed_addr constant [15 x i8] c"--strict-arity\00"
-@.str.11611 = private unnamed_addr constant [18 x i8] c"--no-strict-arity\00"
-@.str.11612 = private unnamed_addr constant [19 x i8] c"--ffi-host-imports\00"
-@.str.11613 = private unnamed_addr constant [18 x i8] c"--no-cpu-dispatch\00"
-@.str.11614 = private unnamed_addr constant [9 x i8] c"--no-dce\00"
-@.str.11615 = private unnamed_addr constant [8 x i8] c"--keep=\00"
-@.str.11616 = private unnamed_addr constant [9 x i8] c"--split=\00"
-@.str.11617 = private unnamed_addr constant [13 x i8] c"--split-out=\00"
-@.str.11618 = private unnamed_addr constant [13 x i8] c"--split-min=\00"
-@.str.11619 = private unnamed_addr constant [2 x i8] c"-\00"
-@.str.11620 = private unnamed_addr constant [24 x i8] c"nurlc: unknown option: \00"
-@.str.11621 = private unnamed_addr constant [248 x i8] c"usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>\00"
-@.str.11622 = private unnamed_addr constant [51 x i8] c"nurlc: --coverage-notes requires --coverage=PREFIX\00"
-@.str.11623 = private unnamed_addr constant [53 x i8] c"nurlc: --coverage-link-ir requires --coverage=PREFIX\00"
-@.str.11624 = private unnamed_addr constant [69 x i8] c"nurlc: --coverage-notes and --coverage-link-ir must be used together\00"
-@.str.11625 = private unnamed_addr constant [42 x i8] c"nurlc: --split=N needs --split-out=PREFIX\00"
-@.str.11626 = private unnamed_addr constant [74 x i8] c"nurlc: --split cannot be combined with --g (DWARF metadata is per-module)\00"
-@.str.11627 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.11628 = private unnamed_addr constant [15 x i8] c"@@nurl-disable\00"
-@.str.11629 = private unnamed_addr constant [20 x i8] c"-autodrop-strings@@\00"
-@.str.11630 = private unnamed_addr constant [19 x i8] c"__deferred_count__\00"
-@.str.11631 = private unnamed_addr constant [2 x i8] c"0\00"
-@.str.11632 = private unnamed_addr constant [10 x i8] c"nurl_exit\00"
-@.str.11633 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.11634 = private unnamed_addr constant [11 x i8] c"nurl_panic\00"
-@.str.11635 = private unnamed_addr constant [2 x i8] c"1\00"
-@.str.11636 = private unnamed_addr constant [14 x i8] c"__nurlc_ice__\00"
+@.str.11610 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.11611 = private unnamed_addr constant [3 x i8] c"--\00"
+@.str.11612 = private unnamed_addr constant [8 x i8] c"--stdin\00"
+@.str.11613 = private unnamed_addr constant [8 x i8] c"--check\00"
+@.str.11614 = private unnamed_addr constant [20 x i8] c"--coverage-link-ir=\00"
+@.str.11615 = private unnamed_addr constant [60 x i8] c"nurlc: --coverage-link-ir=FILE needs a nonempty output path\00"
+@.str.11616 = private unnamed_addr constant [18 x i8] c"--coverage-notes=\00"
+@.str.11617 = private unnamed_addr constant [57 x i8] c"nurlc: --coverage-notes=FILE needs a nonempty notes path\00"
+@.str.11618 = private unnamed_addr constant [12 x i8] c"--coverage=\00"
+@.str.11619 = private unnamed_addr constant [56 x i8] c"nurlc: --coverage=PREFIX needs a nonempty output prefix\00"
+@.str.11620 = private unnamed_addr constant [19 x i8] c"--sanitize-address\00"
+@.str.11621 = private unnamed_addr constant [10 x i8] c"--version\00"
+@.str.11622 = private unnamed_addr constant [3 x i8] c"-v\00"
+@.str.11623 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.11624 = private unnamed_addr constant [7 x i8] c"--help\00"
+@.str.11625 = private unnamed_addr constant [3 x i8] c"-h\00"
+@.str.11626 = private unnamed_addr constant [4 x i8] c"--g\00"
+@.str.11627 = private unnamed_addr constant [3 x i8] c"-g\00"
+@.str.11628 = private unnamed_addr constant [7 x i8] c"--lint\00"
+@.str.11629 = private unnamed_addr constant [11 x i8] c"--borrowck\00"
+@.str.11630 = private unnamed_addr constant [14 x i8] c"--no-borrowck\00"
+@.str.11631 = private unnamed_addr constant [18 x i8] c"--strict-borrowck\00"
+@.str.11632 = private unnamed_addr constant [15 x i8] c"--strict-arity\00"
+@.str.11633 = private unnamed_addr constant [18 x i8] c"--no-strict-arity\00"
+@.str.11634 = private unnamed_addr constant [19 x i8] c"--ffi-host-imports\00"
+@.str.11635 = private unnamed_addr constant [18 x i8] c"--no-cpu-dispatch\00"
+@.str.11636 = private unnamed_addr constant [9 x i8] c"--no-dce\00"
+@.str.11637 = private unnamed_addr constant [8 x i8] c"--keep=\00"
+@.str.11638 = private unnamed_addr constant [9 x i8] c"--split=\00"
+@.str.11639 = private unnamed_addr constant [13 x i8] c"--split-out=\00"
+@.str.11640 = private unnamed_addr constant [13 x i8] c"--split-min=\00"
+@.str.11641 = private unnamed_addr constant [2 x i8] c"-\00"
+@.str.11642 = private unnamed_addr constant [24 x i8] c"nurlc: unknown option: \00"
+@.str.11643 = private unnamed_addr constant [248 x i8] c"usage: nurlc [--version] [--g] [--check] [--stdin] [--sanitize-address] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-cpu-dispatch] [--no-dce] [--keep=a,b] [--split=N --split-out=PREFIX] [--] <file.nu>\00"
+@.str.11644 = private unnamed_addr constant [51 x i8] c"nurlc: --coverage-notes requires --coverage=PREFIX\00"
+@.str.11645 = private unnamed_addr constant [53 x i8] c"nurlc: --coverage-link-ir requires --coverage=PREFIX\00"
+@.str.11646 = private unnamed_addr constant [69 x i8] c"nurlc: --coverage-notes and --coverage-link-ir must be used together\00"
+@.str.11647 = private unnamed_addr constant [42 x i8] c"nurlc: --split=N needs --split-out=PREFIX\00"
+@.str.11648 = private unnamed_addr constant [74 x i8] c"nurlc: --split cannot be combined with --g (DWARF metadata is per-module)\00"
+@.str.11649 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.11650 = private unnamed_addr constant [15 x i8] c"@@nurl-disable\00"
+@.str.11651 = private unnamed_addr constant [20 x i8] c"-autodrop-strings@@\00"
+@.str.11652 = private unnamed_addr constant [19 x i8] c"__deferred_count__\00"
+@.str.11653 = private unnamed_addr constant [2 x i8] c"0\00"
+@.str.11654 = private unnamed_addr constant [10 x i8] c"nurl_exit\00"
+@.str.11655 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.11656 = private unnamed_addr constant [11 x i8] c"nurl_panic\00"
+@.str.11657 = private unnamed_addr constant [2 x i8] c"1\00"
+@.str.11658 = private unnamed_addr constant [14 x i8] c"__nurlc_ice__\00"
 
 define void @__closure_3(i8* %__env) sanitize_address {
 entry:
