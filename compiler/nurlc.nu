@@ -1315,6 +1315,9 @@
 
 // Whether this module calls the drop-flag helpers (emitted at module end).
 : ~ i g_use_clear_if 0
+// Set around a returned closure literal's env generation: its String / Vec
+// / owning-struct captures move into (are owned by) the env.
+: ~ i g_env_owns_handles 0
 
 // Set by a `:` binding just before registering its value: the binding
 // rule stores the drop flag itself, so registration only creates it.
@@ -3445,6 +3448,7 @@
     : i ret_first_tt ( nurl_lex_type lex )
     : s ret_first_val ( nurl_lex_val lex )
     ( nurl_sym_set_deep syms `__ret_agg__` ? == ret_first_tt TT_AT `1` `` )
+    ( nurl_sym_set_deep syms `__ret_clo__` ? == ret_first_tt TT_BACKSLASH `1` `` )
     // `^ . p field` hands back a handle stored INSIDE a parameter — an
     // alias of the caller's value, exactly like `^ p`. The root has to be
     // peeked before gen_operand consumes the expression. Ownership only;
@@ -23501,6 +23505,22 @@
             = clone_body ( nurl_str_cat4 clone_body `, i8* %n` k
             ( nurl_str_cat4 `, 1\n  store ` ct ` %w` ( nurl_str_cat4 k `, ` ct ( nurl_str_cat3 `* %p` k `\n` ) ) ) ) }
         {}
+        // A String / Vec / owning struct a returned closure captured is the
+        // env's own (gen_env_allocation moved or copied it in).
+        ? & & != 0 g_env_owns_handles ( __is_handle_ty vty ) ! ( __is_capture_byref var syms )
+        { : s ht ( nurl_llty vty )
+            : s hm ( __drop_mangle vty )
+            ( __handle_drop_ensure vty )
+            ( __clone_request vty )
+            : s k ( nurl_str_int field_idx )
+            : s gep ( nurl_str_cat4 `  %p` k ` = getelementptr ` ( nurl_str_cat4 struct_name `, ` struct_name `* %t, i32 0, i32 ` ) )
+            : s ld ( nurl_str_cat4 `  %v` k ` = load ` ( nurl_str_cat4 ht `, ` ht ( nurl_str_cat3 `* %p` k `\n` ) ) )
+            : s head ( nurl_str_cat4 gep k `\n` ld )
+            = drop_body ( nurl_str_cat4 drop_body head ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) `(` ht )
+            ( nurl_str_cat3 ` %v` k `)\n` ) )
+            = clone_body ( nurl_str_cat4 clone_body head ( nurl_str_cat4 `  %n` k ` = call ` ( nurl_str_cat4 ht ` @__nurl_clone_` hm `(` ) )
+            ( nurl_str_cat4 ht ` %v` k ( nurl_str_cat4 `)\n  store ` ht ` %n` ( nurl_str_cat4 k `, ` ht ( nurl_str_cat3 `* %p` k `\n` ) ) ) ) ) }
+        {}
         = vars ( str_skip_word vars )
         = field_idx + field_idx 1
     }
@@ -23599,6 +23619,19 @@
             ( nurl_print ` ` ) ( nurl_print loaded ) ( nurl_print `, i8* ` ) ( nurl_print cnew ) ( nurl_print `, 1\n` )
             = loaded cval }
         {}
+        // …and a String / Vec / owning struct captured by a returned closure
+        // moves in: the env drops it (gen_env_vtable). A value the binding
+        // only borrowed is copied in instead.
+        ? & & != 0 g_env_owns_handles ! cap_byref ( __is_handle_ty var_type ) {
+            : s up ( mem_udrop_ptr_of syms var )
+            ? != 0 ( nurl_str_len up ) {
+                : s f ( mem_udrop_flag_get syms cg up )
+                : s lr ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print lr ) ( nurl_print ` = xor i1 ` ) ( nurl_print f ) ( nurl_print `, 1\n` )
+                = loaded ( mem_emit_cloneif cg var_type loaded lr )
+                ( mem_udrop_flag_set syms cg up `0` )
+            } { = loaded ( mem_emit_cloneif cg var_type loaded `1` ) }
+        } {}
         // GEP to field and store with the effective type.
         : s store_ptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print store_ptr )
@@ -24045,6 +24078,9 @@
     // compile error, inline or via a named binding.
     = g_last_closure_nonsend ``
     = g_last_closure_sharedmut ``
+    // Returned right here (`^ \ …`): the env owns its handle captures.
+    : b clo_returned ( seq ( nurl_sym_get syms `__ret_clo__` ) `1` )
+    ( nurl_sym_set_deep syms `__ret_clo__` `` )
 
     // Parse parameters: type name pairs before arrow
     : ~ s param_types ``
@@ -24704,8 +24740,10 @@
     : s funcdef ( nurl_print_buf_stop )
     // The env descriptor and its thunks ride with the deferred definition.
     ? > captured_count 0
-    { ( store_closure_func ( nurl_str_cat funcdef
-        ( gen_env_vtable closure_fn_name env_struct_name captured_vars syms ) ) ) }
+    { = g_env_owns_handles ? clo_returned 1 0
+        ( store_closure_func ( nurl_str_cat funcdef
+        ( gen_env_vtable closure_fn_name env_struct_name captured_vars syms ) ) )
+        = g_env_owns_handles 0 }
     { ( store_closure_func funcdef ) }
     // Restore the enclosing function's DWARF context — subsequent
     // instructions emitted by gen_stmt continue under its DISubprogram.
@@ -24744,8 +24782,10 @@
     : ~ s env_ptr `null`
     ? > captured_count 0
     {
+        = g_env_owns_handles ? clo_returned 1 0
         = env_ptr ( gen_env_allocation env_struct_name captured_vars
         ( nurl_str_cat `@__cenv_vt.` closure_fn_name ) syms cg )
+        = g_env_owns_handles 0
     }
     {}
 
