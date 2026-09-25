@@ -8426,7 +8426,15 @@
     : s name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
     ( expect lex TT_RPAREN )
-    : s up ( mem_udrop_ptr_of syms name )
+    : ~ s up ( mem_udrop_ptr_of syms name )
+    // Not tracked yet (a payload of a known borrow): register it now.
+    : s tty ( nurl_sym_get syms name )
+    : s tptr ( nurl_sym_get2 syms name `__ptr` )
+    ? & & & == 0 ( nurl_str_len up ) != 0 g_auto_drop_strings ( __is_handle_ty tty ) != 0 ( nurl_str_len tptr ) {
+        ( __handle_drop_ensure tty )
+        ( mem_own_add_user_drop syms cg tptr tty )
+        = up tptr
+    } {}
     ? != 0 ( nurl_str_len up ) {
         ( mem_udrop_flag_set syms cg up `1` )
         ( __sb syms up `` )
@@ -12248,7 +12256,7 @@
             ( nurl_set_last_type phi_ty )
             = result res
             // String / Vec ownership through the join (mem_arm_hown).
-            ? & ( __is_handle_ty phi_ty ) | ! ( seq t_hown `false` ) ! ( seq e_hown `false` ) {
+            ? & ( __is_handle_ty ( __udrop_regty phi_ty ) ) | ! ( seq t_hown `false` ) ! ( seq e_hown `false` ) {
                 : s jo ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print jo ) ( nurl_print ` = phi i1 ` )
                 ? == 0 tdr { ( nurl_print `[ ` ) ( nurl_print t_hown ) ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ]` ) } {}
@@ -13972,7 +13980,7 @@
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         // Every arm handed over an owned env: so does the join.
         ? ( __is_closure_ty phi_type ) { ( mem_retclo_take syms cg final_reg phi_type ) } {}
-        ? & any_hown ( __is_handle_ty phi_type ) {
+        ? & any_hown ( __is_handle_ty ( __udrop_regty phi_type ) ) {
             : s own_reg ( nurl_cg_reg cg )
             : ~ s hfull ( nurl_str_cat hown_entries `` )
             ? != 0 ( nurl_str_len fallback_pred ) { = hfull ( nurl_str_cat4 hfull `, [ false, %` fallback_pred ` ]` ) } {}
@@ -16000,6 +16008,19 @@
 @ mem_udrop_bind_flag i syms i cg s ptr s ty i rhs_tt s rhs_val s rhs_borrow → v {
     ? & ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms rhs_val `__ptr` )
     { : s src ( mem_udrop_ptr_of syms rhs_val )
+        // A binding that borrowed a field (`: pl . frm payload`) handed to
+        // one that outlives that struct: the field moves out, as for a
+        // direct `= x . s f` (mem_udrop_field_move).
+        ? & & != 0 ( nurl_str_len src ) ! ( seq src ptr ) ( seq ( nurl_sym_get2 syms src `__sborrow` ) `local` ) {
+            : s fsrc ( nurl_sym_get2 syms src `__fsrc` )
+            : s fsp ( str_first_word fsrc )
+            ? & & != 0 ( nurl_str_len fsp ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) fsp )
+            > ( nurl_str_to_int ( nurl_sym_get2 syms fsp `__depth` ) ) ( nurl_str_to_int ( nurl_sym_get2 syms ptr `__depth` ) ) {
+                ( mem_udrop_field_move syms cg ptr fsrc )
+                ( nurl_sym_set_deep syms ( nurl_str_cat src `__fsrc` ) `` )
+                ( __sb syms src `1` )
+                ^ v } {}
+        } {}
         // A String / Vec is a freely aliased handle: `: ~ ( Vec T ) cur
         // root` is a cursor, not a transfer — root keeps its value, cur
         // borrows it and remembers whose it is, so moving cur on (into a
@@ -29848,7 +29869,8 @@
 // arm (a payload) moves out; a fresh call or literal is owned; anything
 // else — an outer binding, a field — is lent.
 @ mem_arm_hown i syms i cg s ty i tt0 s v0 s retid i jdepth → s {
-    ? ! ( __is_handle_ty ty ) { ^ ( nurl_str_cat `false` `` ) } {}
+    // An option / result of one counts as its registration twin.
+    ? ! ( __is_handle_ty ( __udrop_regty ty ) ) { ^ ( nurl_str_cat `false` `` ) } {}
     // `T v → { v }`: a block arm hands over what its tail statement does.
     : ~ i ht tt0
     : ~ s hv ( nurl_str_cat v0 `` )
