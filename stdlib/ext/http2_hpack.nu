@@ -440,7 +440,6 @@ $ `stdlib/ext/http2_frame.nu`
 : HpackLitResult {
     String name
     String value
-    HpackDynTable dyn
     i consumed
 }
 
@@ -492,9 +491,9 @@ $ `stdlib/ext/http2_frame.nu`
                         ( vec_push [Header] hdrs ( header_new
                         ( string_data . lr_ name )
                         ( string_data . lr_ value ) ) )
+                        = cur ( hpack_dyn_insert cur ( string_data . lr_ name ) ( string_data . lr_ value ) )
                         ( string_free . lr_ name )
                         ( string_free . lr_ value )
-                        = cur . lr_ dyn
                         = off + off . lr_ consumed
                         = seen_field T
                     }
@@ -544,7 +543,6 @@ $ `stdlib/ext/http2_frame.nu`
                             ( string_data . lr_ value ) ) )
                             ( string_free . lr_ name )
                             ( string_free . lr_ value )
-                            = cur . lr_ dyn
                             = off + off . lr_ consumed
                             = seen_field T
                         }
@@ -575,8 +573,8 @@ $ `stdlib/ext/http2_frame.nu`
 }
 
 // Decode a literal-field representation starting at `off`. `prefix_bits`
-// is 6 for §6.2.1, 4 for §6.2.2 / §6.2.3. `indexing` says whether to
-// insert the resulting field into the dynamic table.
+// is 6 for §6.2.1, 4 for §6.2.2 / §6.2.3. `dyn` is only read (indexed
+// names); with `indexing` the caller inserts the field into its table.
 @ __hpack_decode_lit_call ( Vec u ) buf i off i prefix_bits b indexing HpackDynTable dyn → !HpackLitResult HpackErr {
     : !HpackInt HpackErr ni ( hpack_decode_int buf off prefix_bits )
     : ~ i name_idx 0
@@ -621,13 +619,10 @@ $ `stdlib/ext/http2_frame.nu`
             ^ @ !HpackLitResult HpackErr { F e }
         }
     }
-    : ~ HpackDynTable cur dyn
-    ? indexing {
-        = cur ( hpack_dyn_insert cur
-        ( string_data name ) ( string_data value ) )
-    } {}
+    // The caller inserts into its table when `indexing` (it owns the
+    // table; this only reads it).
     ^ @ !HpackLitResult HpackErr {
-        T @ HpackLitResult { name value cur - cur_off off }
+        T @ HpackLitResult { name value - cur_off off }
     }
 }
 

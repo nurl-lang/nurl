@@ -21741,7 +21741,10 @@
                 ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty ( mem_udrop_flag_get syms cg fs_ptr ) )
                 = fld_lent `` } {}
         } {}
-        ? & agg_returned ( seq fld_lent `1` )
+        // A literal nested in a returned one lends the same way (`^ @
+        // !HpackDecoded E { T @ HpackDecoded { hdrs cur } }`, cur a cursor
+        // over a parameter): copying would split the aliased value.
+        ? & agg_moves_fields ( seq fld_lent `1` )
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` ) }
         { = fval ( mem_emit_cloneif cg fty fval fld_lent ) }
         // A POINTER read out of something else, stored into this

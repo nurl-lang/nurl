@@ -108,13 +108,15 @@ $ `stdlib/ext/http2_hpack.nu`
             ?? d2 {
                 T dd2 → {
                     ( label `block2_roundtrip` ( yn ( matches_sample . dd2 headers ) ) )
-                    ( hpack_decoded_free dd2 )
+                    ( headers_free . dd2 headers )
                 }
-                F e → { ( label `block2_roundtrip` ( hpack_err_name e ) ) ( hpack_dyn_free . dd1 dyn ) }
+                F e → { ( label `block2_roundtrip` ( hpack_err_name e ) ) }
             }
         }
-        F e → { ( label `block1_roundtrip` ( hpack_err_name e ) ) ( hpack_dyn_free dec ) }
+        F e → { ( label `block1_roundtrip` ( hpack_err_name e ) ) }
     }
+    // `. dd1 dyn` / `. dd2 dyn` alias dec's table (hpack_decode_block
+    // borrows it and hands it back): dec owns it and drops it.
     ( vec_free [u] b1 )
     ( vec_free [u] b2 )
     // `. e2 dyn` is enc's table, threaded through both encodes: enc owns it
