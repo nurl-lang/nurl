@@ -10389,16 +10389,20 @@
                 : ~ s fr_al ( nurl_sym_get2 syms fr_ptr `__alias` )
                 ~ != 0 ( nurl_str_len fr_al ) {
                     : s fr_w ( str_first_word fr_al ) = fr_al ( str_skip_word fr_al )
-                    : s wf ( mem_udrop_flag_get syms cg fr_w )
-                    : s cf ( mem_udrop_flag_get syms cg fr_ptr )
-                    : s tk ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print tk ) ( nurl_print ` = and i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print zc ) ( nurl_print `\n` )
-                    : s nf ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print cf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
-                    : s nw ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print nw ) ( nurl_print ` = xor i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
-                    ( mem_udrop_flag_set syms cg fr_ptr nf )
-                    ( mem_udrop_flag_set syms cg fr_w nw )
+                    // Only an option / result binding's payload: a value a
+                    // call merely handed back from its argument is shared.
+                    ? != 0 ( nurl_str_starts ( nurl_sym_get2 syms fr_w `__udty` ) `%__opt.` ) {
+                        : s wf ( mem_udrop_flag_get syms cg fr_w )
+                        : s cf ( mem_udrop_flag_get syms cg fr_ptr )
+                        : s tk ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print tk ) ( nurl_print ` = and i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print zc ) ( nurl_print `\n` )
+                        : s nf ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print cf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
+                        : s nw ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print nw ) ( nurl_print ` = xor i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
+                        ( mem_udrop_flag_set syms cg fr_ptr nf )
+                        ( mem_udrop_flag_set syms cg fr_w nw )
+                    } {}
                 }
                 // A parameter's field: the parameter is consumed with it.
                 : s fr_pn ( nurl_sym_get2 syms fr_ptr `__pname` )
@@ -16129,7 +16133,7 @@
     : ~ s al ( nurl_sym_get2 syms fp `__alias` )
     ~ != 0 ( nurl_str_len al ) {
         : s w ( str_first_word al ) = al ( str_skip_word al )
-        ? == 0 ( nurl_sym_len2 syms w `__pname` ) {
+        ? & == 0 ( nurl_sym_len2 syms w `__pname` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms w `__udty` ) `%__opt.` ) {
             : s wf ( mem_udrop_flag_get syms cg w )
             : s cf ( mem_udrop_flag_get syms cg fp )
             : s nf ( nurl_cg_reg cg )
@@ -16167,6 +16171,7 @@
     ( nurl_sym_def syms ( nurl_str_cat ptr `__sborrow` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat ptr `__fsrc` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat ptr `__borrowers` ) `` )
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__udty` ) vt )
     ( nurl_sym_def syms ( nurl_str_cat ptr `__depth` ) ( nurl_str_int ( nurl_peek # s syms 1 ) ) )
     : s cur ( nurl_sym_get syms `__user_drops__` )
     : s entry ( nurl_str_cat3 ptr ` ` vt )
@@ -29339,10 +29344,7 @@
         : s e ( nurl_str_slice p + cm 2 - - ( nurl_str_len p ) cm 2 )
         ? | >= ( nurl_str_find e ` ` ) 0 ( __type_needs_drop e g_root_syms ) { ^ ( nurl_str_cat `` `` ) } {}
         = p ( nurl_str_slice p 0 cm )
-        // Only a String / Vec payload: an owning struct threaded through
-        // a result (`!HpackDecoded HpackErr`, the table handed back) is
-        // not the result's alone.
-        ? ! | ( seq p `%String` ) != 0 ( nurl_str_starts p `%Vec__` ) { ^ ( nurl_str_cat `` `` ) } {}
+
     } {}
     ? >= ( nurl_str_find p ` ` ) 0 { ^ ( nurl_str_cat `` `` ) } {}
     ? | | ( seq p `%String` ) != 0 ( nurl_str_starts p `%Vec__` ) ( __is_owned_struct_ty p )
