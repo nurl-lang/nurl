@@ -986,8 +986,10 @@ $ `stdlib/ext/http2_hpack.nu`
     // Transfer the body to the request. A cleared duplicate would retain a
     // whole request allocation for the lifetime of a flow-blocked response.
     ( vec_free [u] . req body )
-    = . req body . s body
+    : ( Vec u ) moved . s body
+    ( mem_take moved )  // leaves the stream: replaced right below
     = . s body ( vec_new [u] )
+    = . req body moved
     ^ req
 }
 
@@ -1878,9 +1880,13 @@ $ `stdlib/ext/http2_hpack.nu`
                 } {}
             } {}
             ? complete {
+                // The slot gives its response up: taken and freed; the
+                // slot is marked dead in place (stream_id 0), dropped by
+                // the compaction below.
+                : *H2PendingResponse ip # *H2PendingResponse + # i p * k Z H2PendingResponse
+                = . ip stream_id 0
+                ( mem_take item )
                 ( __h2_pending_free item )
-                = . item stream_id 0
-                = . p k item
             } {
                 = . p k item
             }
@@ -1919,6 +1925,9 @@ $ `stdlib/ext/http2_hpack.nu`
     ? == # i ( vec_data [u] . response body ) # i ( vec_data [u] . fallback body ) {
         = . c panic_resp ( response_text 500 `internal server error\n` )
     } {}
+    // Either the handler's response or the prebuilt panic response (just
+    // replaced in `c`): owned here, handed to `pending` below.
+    ( mem_take response )
     ? > ( vec_len [u] . response body ) - ( h2_default_max_buffered_bytes ) ( __h2_buffered_bytes c pending ) {
         ( http_response_free response )
         ^ ( h2_stream_reset c sid ( h2_err_enhance_your_calm ) )
