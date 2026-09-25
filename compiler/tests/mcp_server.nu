@@ -67,8 +67,7 @@ $ `stdlib/ext/mcp_server.nu`
             ( mcp_rpc_err_free e )
         }
     }
-    ( json_free req )
-    ( json_free params )
+    ( json_free req )  // params went into req
 }
 
 // Tool: echoes the `text` argument back wrapped in the standard
