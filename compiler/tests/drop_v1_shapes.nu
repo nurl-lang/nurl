@@ -10,6 +10,8 @@
 //   - a scalar computed from a local handle (`^ + … ( vec_len v )`);
 //   - library handles (HashMap, Set, Deque, BTree, Box, Rc) with String
 //     contents, including their replace / remove operations;
+//   - a `?` / `??` join handing back a payload of a local option, by `^`
+//     and as the fall-off tail (copied, since the option dies here);
 //   - String / Vec / HashMap locals of a function a panic unwinds out of
 //     (under `recover`), and one that moved its value on first.
 
@@ -36,6 +38,20 @@ $ `stdlib/std/panic.nu`
 
 @ width ? String o → i {
     ^ ?? o { T s → ( string_len s ) F → 0 }
+}
+
+@ or_dot_ret i k → String {
+    : ?String h ( maybe k )
+    ^ ?? h {
+        T hv → { ? > ( string_len hv ) 0 hv { ( string_from `.` ) } }
+        F → ( string_from `.` )
+    }
+}
+
+@ or_dot_tail i k → String {
+    : ?String h ( maybe k )
+    : String dflt ( string_from `.` )
+    ?? h { T hv → hv F → dflt }
 }
 
 @ sizes i k → i {
@@ -75,6 +91,12 @@ $ `stdlib/std/panic.nu`
     ? > ( vec_len [String] v ) 0 { ( vec_pop [String] v ) } {}
     // vec_set drops what it replaces.
     : b _s ( vec_set [String] v 0 ( string_from `z` ) )
+    // Joins handing back a local option's payload.
+    : String j1 ( or_dot_ret 1 )
+    ( string_push_str j1 `/x` )
+    : String j2 ( or_dot_tail 0 )
+    ( string_push_str j2 `/y` )
+    = acc + acc + ( string_len j1 ) ( string_len j2 )
     // A scalar out of local handles.
     = acc + acc ( sizes r )
     // Library handles.

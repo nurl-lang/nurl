@@ -3080,6 +3080,33 @@
 // A return-site copy condition that only applies when this function's
 // result is decided statically: a function answering per call hands back
 // what it holds and says whether it owns it instead of copying.
+// Do the bindings a `?` / `??` join selected (`__last_phi_idents__`) lend
+// only what a parameter holds — a parameter, or a cursor over one?
+@ __phi_lends_params_only i syms → b {
+    : ~ s ids ( nurl_sym_get syms `__last_phi_idents__` )
+    : s pnames ( nurl_sym_get syms `__fn_param_names__` )
+    ~ != 0 ( nurl_str_len ids ) {
+        : s id ( str_first_word ids ) = ids ( str_skip_word ids )
+        // Still in scope here, registered, and neither a parameter nor a
+        // cursor over one: a local owner of this frame, gone at the return.
+        // (An arm's own binding is out of scope by now; its value moved out
+        // with the arm, mem_arm_hown.)
+        ? ! ( str_contains_word pnames id ) {
+            : s up ( mem_udrop_ptr_of syms id )
+            ? & & & != 0 ( nurl_str_len up ) == 0 ( nurl_sym_len2 syms up `__pname` ) == 0 ( nurl_sym_len2 syms up `__optparam` )
+            ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) up ) {
+                : ~ s al ( nurl_sym_get2 syms up `__alias` )
+                ? == 0 ( nurl_str_len al ) { ^ F } {}
+                ~ != 0 ( nurl_str_len al ) {
+                    : s w ( str_first_word al ) = al ( str_skip_word al )
+                    ? & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) { ^ F } {}
+                }
+            } {}
+        } {}
+    }
+    ^ T
+}
+
 @ mem_hown_static i syms i cg s cond → s {
     : s hs ( nurl_sym_get syms `__ret_hown_slot__` )
     ? == 0 ( nurl_str_len hs ) { ^ ( nurl_str_cat cond `` ) } {}
@@ -3683,16 +3710,30 @@
         : s jo ( nurl_sym_get syms `__last_join_own__` )
         : s rb ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print jo ) ( nurl_print `, 1\n` )
-        // Arms that differ are this function answering per call.
-        ( mem_hown_mark_dyn syms )
-        = val ( mem_emit_cloneif cg rty val ( mem_hown_static syms cg rb ) )
-        = hbit jo
+        // Arms that differ are this function answering per call — when
+        // what the lending arms lend is the caller's (a parameter). A lend
+        // of this frame's own value (a payload of a local option) dies with
+        // the frame: that is copied, always.
+        ? ( __phi_lends_params_only syms ) {
+            ( mem_hown_mark_dyn syms )
+            = val ( mem_emit_cloneif cg rty val ( mem_hown_static syms cg rb ) )
+            = hbit jo
+        } {
+            = val ( mem_emit_cloneif cg rty val rb )
+            = hbit ( nurl_str_cat `true` `` )
+        }
     } {}
-    // A join none of whose arms owns what it yields lends it.
+    // A join none of whose arms owns what it yields lends it — the
+    // caller's value; one that lends this frame's own is copied.
     ? & & | == ret_first_tt TT_QUEST == ret_first_tt TT_QUESTQUEST
     == 0 ( nurl_sym_len syms `__last_join_own__` ) ( __is_hown_ty ( nurl_get_last_type ) ) {
-        ( mem_hown_mark_dyn syms )
-        = hbit ( nurl_str_cat `false` `` )
+        ? | ( __phi_lends_params_only syms ) ! ( __clone_supported ( nurl_get_last_type ) syms ) {
+            ( mem_hown_mark_dyn syms )
+            = hbit ( nurl_str_cat `false` `` )
+        } {
+            = val ( mem_emit_cloneif cg ( nurl_get_last_type ) val `1` )
+            = hbit ( nurl_str_cat `true` `` )
+        }
     } {}
     // Returned-closure ownership: the caller owns what it gets back
     // (mem_retclo_own_result).
@@ -28941,14 +28982,25 @@
             : s tjo ( nurl_sym_get syms `__last_join_own__` )
             : s tnb ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print tnb ) ( nurl_print ` = xor i1 ` ) ( nurl_print tjo ) ( nurl_print `, 1\n` )
-            ( mem_hown_mark_dyn syms )
-            = last ( mem_emit_cloneif cg ret_ty last ( mem_hown_static syms cg tnb ) )
-            ( mem_store_hown syms tjo )
+            // (As `^` does: only a lend of the caller's value is handed on.)
+            ? ( __phi_lends_params_only syms ) {
+                ( mem_hown_mark_dyn syms )
+                = last ( mem_emit_cloneif cg ret_ty last ( mem_hown_static syms cg tnb ) )
+                ( mem_store_hown syms tjo )
+            } {
+                = last ( mem_emit_cloneif cg ret_ty last tnb )
+                ( mem_store_hown syms `true` )
+            }
         } {
             // A join none of whose arms owns what it yields lends it.
             ? | == tail_tt TT_QUEST == tail_tt TT_QUESTQUEST {
-                ( mem_hown_mark_dyn syms )
-                ( mem_store_hown syms `false` )
+                ? | ( __phi_lends_params_only syms ) ! ( __clone_supported ret_ty syms ) {
+                    ( mem_hown_mark_dyn syms )
+                    ( mem_store_hown syms `false` )
+                } {
+                    = last ( mem_emit_cloneif cg ret_ty last `1` )
+                    ( mem_store_hown syms `true` )
+                }
             } {}
             ? == tail_tt TT_LPAREN {
                 : s tro ( mem_call_retown syms cg )
@@ -29005,8 +29057,12 @@
         // A void fall-off returns nothing — no binding can escape
         // through it, so a stale __last_ident_name__ (e.g. the last
         // call's argument) must not cancel a Drop-value's drop here.
-        = skip_user_ptr ? & ! ( seq ret_ty `void` )
+        // …and only a bare identifier IS a binding handed back: a join's
+        // arms settle their own ownership (a payload taken over clears its
+        // owner's flag), and a call's value is not its last argument.
+        = skip_user_ptr ? & & ! ( seq ret_ty `void` )
         ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
+        ( is_ident_tok tail_tt )
         rid_ptr
         ``
     }
@@ -31284,7 +31340,31 @@
     // An arm that is (or ends in) a `?` / `??` hands over what that join
     // does — per path, when its arms differ.
     ? & | == ht TT_QUEST == ht TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_join_own__` ) {
-        ^ ( nurl_str_cat ( nurl_sym_get syms `__last_join_own__` ) `` )
+        : s ijo ( nurl_sym_get syms `__last_join_own__` )
+        // The inner join lends what it selected; when that is one binding
+        // local to THIS arm (`T hv → { ? ok hv { … } }`), it dies with the
+        // arm, so it moves out here as a bare `hv` arm would.
+        : s ids ( nurl_sym_get syms `__last_phi_idents__` )
+        ? & != 0 ( nurl_str_len ids ) == 0 ( nurl_str_len ( str_skip_word ids ) ) {
+            : s up ( mem_udrop_ptr_of syms ids )
+            ? & != 0 ( nurl_str_len up ) > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth {
+                : ~ s r ( mem_udrop_flag_get syms cg up )
+                ( mem_udrop_flag_set syms cg up `0` )
+                : ~ s al ( nurl_sym_get2 syms up `__alias` )
+                ~ != 0 ( nurl_str_len al ) {
+                    : s w ( str_first_word al ) = al ( str_skip_word al )
+                    : s wf ( mem_udrop_flag_get syms cg w )
+                    : s o ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print o ) ( nurl_print ` = or i1 ` ) ( nurl_print r ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
+                    = r o
+                }
+                ( mem_udrop_alias_move syms cg up `0` )
+                : s o2 ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print o2 ) ( nurl_print ` = or i1 ` ) ( nurl_print ijo ) ( nurl_print `, ` ) ( nurl_print r ) ( nurl_print `\n` )
+                ^ o2
+            } {}
+        } {}
+        ^ ( nurl_str_cat ijo `` )
     } {}
     // `{ … ( f ) }`: a block arm hands over what its tail call does.
     ? & | == tt0 TT_LPAREN == ht TT_LPAREN & == 0 ( nurl_sym_len syms `__last_value_borrow__` )

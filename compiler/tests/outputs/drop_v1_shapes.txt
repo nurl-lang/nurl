@@ -2,6 +2,6 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-11
-22
+19
+38
 live allocations: steady
