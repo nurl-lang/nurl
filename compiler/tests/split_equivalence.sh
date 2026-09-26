@@ -103,23 +103,37 @@ build_one() {  # build_one <src> <out> <parts>   (parts=0 → one module)
     # what is under test is the partition's structure, not whether
     # partitioning this particular program would pay for itself.
     "$NURLC" "--split=$n" "--split-out=$out" --split-min=1 "$src" > "$out.ll" 2>"$out.cerr" || return 1
+    local pids=() rc=0
     for p in "$out".[0-9]*.ll; do
         # shellcheck disable=SC2086
-        "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module -c "$p" -o "${p%.ll}.o" 2>>"$out.lerr" || return 1
+        "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module -c "$p" -o "${p%.ll}.o" 2>>"$out.lerr" &
+        pids+=($!)
         objs+=("${p%.ll}.o")
     done
+    for p in "${pids[@]}"; do wait "$p" || rc=1; done
+    (( rc == 0 )) || return 1
     # shellcheck disable=SC2086
     "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module $AS_NEEDED "${objs[@]}" \
         stdlib/runtime.o -o "$out" -lm -lpthread $DL_LIB 2>>"$out.lerr" || return 1
 }
 
+# Every build runs at once — each program one-module and split, and the
+# compiler split — and the checks below read the results in order.
 for src in "${PROGRAMS[@]}"; do
     name="$(basename "$src" .nu)"
-    if ! build_one "$src" "$WORK/$name.mono" 0; then
+    ( build_one "$src" "$WORK/$name.mono" 0 && : > "$WORK/$name.mono.built" ) &
+    ( build_one "$src" "$WORK/$name.split" "$PARTS" && : > "$WORK/$name.split.built" ) &
+done
+( build_one compiler/nurlc.nu "$WORK/nurlc.split" "$PARTS" && : > "$WORK/nurlc.split.built" ) &
+wait
+
+for src in "${PROGRAMS[@]}"; do
+    name="$(basename "$src" .nu)"
+    if [[ ! -f "$WORK/$name.mono.built" ]]; then
         echo "SKIP $name — the one-module build does not link here"
         continue
     fi
-    if ! build_one "$src" "$WORK/$name.split" "$PARTS"; then
+    if [[ ! -f "$WORK/$name.split.built" ]]; then
         echo "FAIL $name — split build failed"
         tail -5 "$WORK/$name.split.cerr" "$WORK/$name.split.lerr" 2>/dev/null
         fails=$((fails + 1))
@@ -146,9 +160,10 @@ done
 # The compiler itself: 500-odd functions, every construct the language
 # has, and a self-check no other program offers — the split-built nurlc
 # must emit, byte for byte, what the one-module nurlc emits.
-if build_one compiler/nurlc.nu "$WORK/nurlc.split" "$PARTS"; then
-    "$WORK/nurlc.split" compiler/nurlc.nu > "$WORK/from_split.ll" 2>/dev/null
-    "$NURLC" compiler/nurlc.nu > "$WORK/from_mono.ll" 2>/dev/null
+if [[ -f "$WORK/nurlc.split.built" ]]; then
+    "$WORK/nurlc.split" compiler/nurlc.nu > "$WORK/from_split.ll" 2>/dev/null &
+    "$NURLC" compiler/nurlc.nu > "$WORK/from_mono.ll" 2>/dev/null &
+    wait
     if cmp -s "$WORK/from_split.ll" "$WORK/from_mono.ll"; then
         echo "ok   nurlc self-compile ($PARTS parts, IR byte-identical)"
     else

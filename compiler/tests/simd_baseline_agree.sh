@@ -158,18 +158,27 @@ ymm_in_wide() {
 have_objdump=1
 command -v objdump >/dev/null 2>&1 || have_objdump=0
 
+# Every leg builds at once (six independent -O2 LTO links); the checks
+# below read the results in order.
+for name in "${DRIVERS[@]}"; do
+    for leg in on off; do
+        ( build_leg "$name" "$leg" && : > "$WORK/$name.$leg.built" ) &
+    done
+done
+wait
+
 for name in "${DRIVERS[@]}"; do
     gold="$SCRIPT_DIR/outputs/$name.txt"
     if [[ ! -f "$gold" ]]; then
         bad "$name" "no golden at ${gold#"$ROOT_DIR"/}"
         continue
     fi
-    if ! build_leg "$name" on; then
+    if [[ ! -f "$WORK/$name.on.built" ]]; then
         bad "$name (dispatch on)" "build failed"
         tail -3 "$WORK/$name.on.cerr" "$WORK/$name.on.lerr" 2>/dev/null
         continue
     fi
-    if ! build_leg "$name" off; then
+    if [[ ! -f "$WORK/$name.off.built" ]]; then
         bad "$name (--no-cpu-dispatch)" "build failed"
         tail -3 "$WORK/$name.off.cerr" "$WORK/$name.off.lerr" 2>/dev/null
         continue
