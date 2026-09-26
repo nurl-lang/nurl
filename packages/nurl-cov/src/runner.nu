@@ -42,16 +42,8 @@ $ `stdlib/ext/env.nu`
     i broken  // tests that would not build or would not run
 }
 
+// The tests (names and details) are dropped with their Vec.
 @ runresult_free sink RunResult r → v {
-    : i n ( vec_len [RunOne] . r tests )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [RunOne] . r tests i ) {
-            T t → { ( string_free . t name ) ( string_free . t detail ) }
-            F _ → {}
-        }
-        = i + i 1
-    }
     ( vec_free [RunOne] . r tests )
 }
 

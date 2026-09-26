@@ -10781,13 +10781,19 @@
             : s fa_p ( str_first_word arg_faddr )
             // (Not for a closure: whether it takes its argument is unknowable,
             // and emptying memory it only reads would destroy the data.)
-            // Only a declared `sink` (an explicit release): a callee merely
-            // inferred to keep the value may keep a VIEW of memory the program
-            // manages itself (`( wc_new . m code )` — a cursor over a raw-pointer
-            // struct's buffer), which emptying would destroy.
+            // Only a callee that CONSUMES it — releases it, or stores it where
+            // an owner drops it (consume_flag): one that merely keeps it in
+            // memory the program manages itself keeps a VIEW (`( wc_new . m
+            // code )`, a cursor over a raw-pointer struct's buffer), which
+            // emptying would destroy.
             ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print fa_p ) ( nurl_print `\n` )
-            } {}
+            } { ? summary_callee {
+                    : s fa_c ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( consume_flag call_name fname arg_idx ) fa_c )
+                    ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
+                    ( nurl_print `(i1 ` ) ( nurl_print fa_c ) ( nurl_print `, ptr ` ) ( nurl_print fa_p ) ( nurl_print `)\n` )
+                } {} }
         } {}
         // A foreach element handed to a consumer (`~ x v { ( string_free x ) }`)
         // leaves the container: its slot is emptied, so dropping or freeing
@@ -27033,6 +27039,21 @@
 // Static sink decisions are emitted after all bodies and generic instances
 // have contributed their implications. Private LLVM constants fold away, so
 // declaration order does not introduce a runtime ownership protocol.
+// A module-end constant: does `callee` CONSUME argument `index` — release
+// it, or store it where an owner drops it — as opposed to keeping a view
+// of it in memory the program manages itself?
+@ consume_flag s callee s generic i index → s {
+    : s key ( nurl_str_cat4 `consflag##` callee `##` ( nurl_str_int index ) )
+    : s existing ( nurl_sym_get g_fn_sink key )
+    ? != 0 ( nurl_str_len existing ) { ^ ( nurl_str_cat `@.__nurl_consume.` existing ) } {}
+    : i next ( nurl_str_to_int ( nurl_sym_get g_fn_sink `__consume_count__` ) )
+    ( nurl_sym_def g_fn_sink key ( nurl_str_int next ) )
+    ( nurl_sym_def g_fn_sink `__consume_count__` ( nurl_str_int + next 1 ) )
+    ( __park_append g_pending_impl `consumeflags`
+    ( nurl_str_cat4 ( nurl_str_int next ) ` ` callee ( nurl_str_cat4 ` ` generic ` ` ( nurl_str_int index ) ) ) )
+    ^ ( nurl_str_cat `@.__nurl_consume.` ( nurl_str_int next ) )
+}
+
 @ sink_flag s callee s generic i index → i {
     : s key ( nurl_str_cat4 `sinkflag##` callee `##` ( nurl_str_int index ) )
     : s existing ( nurl_sym_get g_fn_sink key )
@@ -27207,6 +27228,22 @@
         ? == 0 ( nurl_str_len keeps ) { = keeps ( nurl_sym_get g_fn_keeps generic ) } {}
         ( nurl_print flag ) ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? | ( str_contains_word sinks index ) ( str_contains_word keeps index ) `true` `false` ) ( nurl_print `\n` )
+    }
+    = rest ( nurl_sym_get g_pending_impl `consumeflags` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+        : ~ s sinks ( nurl_sym_get g_fn_sink callee )
+        ? == 0 ( nurl_str_len sinks ) { = sinks ( nurl_sym_get g_fn_sink generic ) } {}
+        : ~ s keeps ( nurl_sym_get g_fn_keeps callee )
+        ? == 0 ( nurl_str_len keeps ) { = keeps ( nurl_sym_get g_fn_keeps generic ) } {}
+        : ~ s st ( nurl_sym_get g_fn_stores callee )
+        ? == 0 ( nurl_str_len st ) { = st ( nurl_sym_get g_fn_stores generic ) } {}
+        ( nurl_print `@.__nurl_consume.` ) ( nurl_print number ) ( nurl_print ` = private constant i1 ` )
+        ( nurl_print ? | ( str_contains_word sinks index ) & ( str_contains_word keeps index ) ( str_contains_word st index ) `true` `false` )
+        ( nurl_print `\n` )
     }
 }
 

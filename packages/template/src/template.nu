@@ -174,6 +174,8 @@ $ `stdlib/ext/json.nu`
     : ( @ v String ) sdrop \ String x → v { ( string_free x ) }
     ( vec_free_with [String] . r sc_names sdrop )
     ( vec_free [Json] . r sc_vals )
+    // ctxv[0] is the caller's context, borrowed: forgotten, not dropped.
+    ( vec_set_len [Json] . r ctxv 0 )
     ( vec_free [Json] . r ctxv )
     ( vec_free [Json] . r va_node )
     ( vec_free [Json] . r vb_node )
