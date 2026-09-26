@@ -18175,7 +18175,36 @@
         = n + n 1
     } {}
     ( nurl_sym_set g_bck `rn` ( nurl_str_int n ) )
+    ( bck_index_closes n )
     n
+}
+
+// The close marker of every open marker, found once per walk with a stack
+// per bracket kind: the walk asks for them at every `?` / `??` / block it
+// enters, and again on each pass of a loop's fixpoint, and scanning forward
+// for the balance (three allocations per row stepped over) was the borrow
+// checker's largest cost.
+: ~ i g_bck_close 0  // i64[n]: close index + 1; 0 = unmatched
+
+@ bck_index_closes i n → v {
+    ? != 0 g_bck_close { ( nurl_free # s g_bck_close ) } {}
+    = g_bck_close # i ( nurl_zalloc * + n 1 8 )
+    : s stk ( nurl_zalloc * + * n 3 1 8 )
+    : ~ i t0 0
+    : ~ i t1 0
+    : ~ i t2 0
+    : ~ i j 0
+    ~ < j n {
+        : s k ( bck_field ( bck_rec j ) 0 )
+        ? ( seq k `cond` ) { ( nurl_poke stk t0 j ) = t0 + t0 1 } {}
+        ? ( seq k `match` ) { ( nurl_poke stk + n t1 j ) = t1 + t1 1 } {}
+        ? ( seq k `block` ) { ( nurl_poke stk + * n 2 t2 j ) = t2 + t2 1 } {}
+        ? & ( seq k `endcond` ) > t0 0 { = t0 - t0 1 ( nurl_poke # s g_bck_close ( nurl_peek stk t0 ) + j 1 ) } {}
+        ? & ( seq k `endmatch` ) > t1 0 { = t1 - t1 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + n t1 ) + j 1 ) } {}
+        ? & ( seq k `endblock` ) > t2 0 { = t2 - t2 1 ( nurl_poke # s g_bck_close ( nurl_peek stk + * n 2 t2 ) + j 1 ) } {}
+        = j + j 1
+    }
+    ( nurl_free stk )
 }
 
 // Index of the close marker matching the open marker at `idx`. The
@@ -18183,6 +18212,10 @@
 // are each independently balanced, so counting only the requested
 // pair steps over any nested constructs of the other two kinds.
 @ bck_match_close i idx s openk s closek → i {
+    ? != 0 g_bck_close {
+        : i c ( nurl_peek # s g_bck_close idx )
+        ? > c 0 { ^ - c 1 } {}
+    } {}
     : i n ( nurl_str_to_int ( nurl_sym_get g_bck `rn` ) )
     : ~ i d 1
     : ~ i j + idx 1

@@ -2600,10 +2600,48 @@ static void nurl__sc_register(void) {
     pthread_setspecific(nurl__sc_key, (void*)1);
 }
 
+/* glibc keeps a chunk's size in the word before it, so the usable size a
+ * free needs is one load away — no PLT call into malloc_usable_size, which
+ * was ~4 % of an allocation-heavy compile. Only trusted after a probe at
+ * start-up agrees with the library for a spread of sizes: an interposed
+ * allocator (LD_PRELOAD), memory tagging or any other layout fails it and
+ * keeps the library query. */
+#if defined(__GLIBC__) && (defined(__x86_64__) || defined(__aarch64__)) && !defined(__APPLE__)
+static int nurl__sc_hdr = 0;
+static inline size_t nurl__sc_usable_fast(void *p) {
+    if (__builtin_expect(nurl__sc_hdr, 1)) {
+        /* volatile: the word lies before the object malloc returned, and
+         * an optimiser may fold an ordinary read of it away. */
+        size_t h = *(volatile size_t *)((char *)p - sizeof(size_t));
+        if (!(h & 2)) return (h & ~(size_t)7) - sizeof(size_t);
+    }
+    return malloc_usable_size(p);
+}
+static void nurl__sc_probe_hdr(void) {
+    static const size_t sizes[] = { 1, 8, 16, 24, 25, 40, 64, 100, 200, 500, 1000, 4000 };
+    int ok = 1;
+    for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        void *p = malloc(sizes[i]);
+        if (!p) { ok = 0; break; }
+        /* volatile: the word lies before the object malloc returned, and
+         * an optimiser may fold an ordinary read of it away. */
+        size_t h = *(volatile size_t *)((char *)p - sizeof(size_t));
+        if ((h & 2) || (h & ~(size_t)7) - sizeof(size_t) != malloc_usable_size(p)) ok = 0;
+        free(p);
+    }
+    nurl__sc_hdr = ok;
+}
+#  undef nurl__sc_usable
+#  define nurl__sc_usable(p) nurl__sc_usable_fast(p)
+#else
+static void nurl__sc_probe_hdr(void) {}
+#endif
+
 __attribute__((noinline, cold))
 static int nurl__sc_init(void) {
     const char *e = getenv("NURL_ALLOC_CACHE");
     nurl__sc_on = !(e && e[0] == '0' && e[1] == '\0');
+    if (nurl__sc_on) nurl__sc_probe_hdr();
     return nurl__sc_on;
 }
 static inline int nurl__sc_live(void) {
