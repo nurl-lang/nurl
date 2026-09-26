@@ -369,8 +369,8 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     ? >= hit 0 {
-        : ?XmlAttr ho ( vec_get [XmlAttr] . x attrs hit )
-        ?? ho { T a → { ( string_free . a value ) = . a value ( string_from val ) ( vec_set [XmlAttr] . x attrs hit a ) } F → {} }
+        // The attribute is replaced whole; vec_set drops the old one.
+        : b _s ( vec_set [XmlAttr] . x attrs hit @ XmlAttr { ( string_from name ) ( string_from val ) } )
     } {
         ( vec_push [XmlAttr] . x attrs @ XmlAttr { ( string_from name ) ( string_from val ) } )
     }

@@ -528,16 +528,9 @@ $ `stdlib/core/vec.nu`
     ^ ?? lo { T l → ( string_data . l text ) F → `` }
 }
 
-// Replace line `idx` with (newind, newtext); frees the old text.
+// Replace line `idx` with (newind, newtext); the old line is dropped.
 @ __yp_rewrite_line * YamlParser p i idx i newind String newtext → v {
-    : ?YamlLine lo ( vec_get [YamlLine] . p lines idx )
-    ?? lo {
-        T l → {
-            ( string_free . l text )
-            ( vec_set [YamlLine] . p lines idx @ YamlLine { newind newtext } )
-        }
-        F → ( string_free newtext )
-    }
+    : b _s ( vec_set [YamlLine] . p lines idx @ YamlLine { newind newtext } )
 }
 
 @ __yaml_is_seq_item s text → b {

@@ -18,7 +18,7 @@
 //                                                    or evicted), owned; None
 //   ( lru_remove   [V] c s key )          → ?V       owned, or None
 //   ( lru_each     [V] c f )              → v        f:(@ v s V), MRU→LRU
-//   ( lru_free     [V] c )                → v        POD values
+//   ( lru_free     [V] c )                → v        early release (drops keys and values)
 //   ( lru_free_with[V] c drop )           → v        drop:(@ v V) each value
 //
 // The cache OWNS a private copy of each key (duplicated on insert) and
@@ -121,12 +121,12 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     ( nurl_poke ctl 0 -1 )
     ( nurl_poke ctl 1 -1 )
     ( nurl_poke ctl 2 0 )
-    : ( Vec String ) keys ( vec_with_cap [String] c )
-    : ( Vec V ) vals ( vec_with_cap [V] c )
+    // Key and value slots start empty (zero): storing into one drops what
+    // it held, which for a never-used slot is nothing.
+    : ( Vec String ) keys ( vec_zeroed [String] c )
+    : ( Vec V ) vals ( vec_zeroed [V] c )
     : ( Vec i ) prev ( vec_with_cap [i] c )
     : ( Vec i ) nxt ( vec_with_cap [i] c )
-    : b _k ( vec_set_len [String] keys c )
-    : b _v ( vec_set_len [V] vals c )
     : b _p ( vec_set_len [i] prev c )
     : b _n ( vec_set_len [i] nxt c )
     : ( Vec i ) fl ( vec_with_cap [i] c )
@@ -171,13 +171,14 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     ? >= ( __lru_count ctl ) . c cap {
         : i t ( __lru_tail ctl )
         ? >= t 0 {
-            ?? ( vec_get [String] . c keys t ) {
-                T tkey → { ( __lru_idx_remove . c index ( string_data tkey ) ) ( string_free tkey ) }
+            // The slot gives its key and value up (it is reused below): taken
+            // out, the slot left empty — the key is dropped here, the value
+            // handed back.
+            ?? ( vec_replace [String] . c keys t # String 0 ) {
+                T tkey → ( __lru_idx_remove . c index ( string_data tkey ) )
                 F _ → {}
             }
-            // The slot gives its value up (it is reused below): taken, not
-            // copied.
-            ?? ( vec_get [V] . c vals t ) { T tv → { ( mem_take tv ) = evicted @ ?V { T tv } } F _ → {} }
+            = evicted ( vec_replace [V] . c vals t # V 0 )
             ( __lru_detach [V] c t )
             ( vec_push [i] . c freelist t )
             ( __lru_set_count ctl - ( __lru_count ctl ) 1 )
@@ -198,8 +199,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 @ lru_put [V] ( LruCache V ) c s key V val → ?V {
     ^ ?? ( __lru_idx_get . c index key ) {
         T slot → {
-            : ?V old ( vec_get [V] . c vals slot )
-            : b _s ( vec_set [V] . c vals slot val )
+            : ?V old ( vec_replace [V] . c vals slot val )
             ( __lru_touch [V] c slot )
             old
         }
@@ -240,15 +240,6 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     }
 }
 
-@ __lru_free_keys [V] ( LruCache V ) c → v {
-    : ~ i cur ( __lru_head . c ctl )
-    ~ >= cur 0 {
-        : i nx ( __lru_gi . c nxt cur )
-        ?? ( vec_get [String] . c keys cur ) { T k → ( string_free k ) F _ → {} }
-        = cur nx
-    }
-}
-
 @ __lru_free_arrays [V] ( LruCache V ) c → v {
     ( vec_free [String] . c keys )
     ( vec_free [V] . c vals )
@@ -259,8 +250,8 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     ( nurl_free . c ctl )
 }
 
+// Early release; the key and value arrays drop their (live) entries.
 @ lru_free [V] sink ( LruCache V ) c → v {
-    ( __lru_free_keys [V] c )
     ( __lru_free_arrays [V] c )
 }
 

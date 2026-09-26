@@ -54,7 +54,7 @@
 //   ( vec_is_empty [A] v )         → b          len == 0
 //   ( vec_data [A] v )             → *A         borrowed raw pointer
 //   ( vec_get [A] v i )            → ? A        None if idx out of range
-//   ( vec_set [A] v i x )          → b          false if idx out of range
+//   ( vec_set [A] v i x )          → b          drops the old element; F if idx out of range
 //   ( vec_push [A] v x )           → v          grows buffer if needed
 //   ( vec_pop [A] v )              → ? A        None if empty
 //   ( vec_insert [A] v idx x )     → b          F if idx out of range; idx == len → push
@@ -323,11 +323,14 @@
     ^ @ ?A { T x }
 }
 
+// The element `x` replaces is dropped (vec_replace hands it back instead).
 @ vec_set [A] ( Vec A ) v i idx A x → b {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 >= idx len { ^ F } {}
     : *A data # *A ( nurl_peek ctl 0 )
+    : A old . data idx
+    ( mem_take old )
     = . data idx x
     ^ T
 }

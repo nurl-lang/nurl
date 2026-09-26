@@ -1363,14 +1363,10 @@ $ `stdlib/core/vec.nu`
                         ?? jk {
                             JStr ks → {
                                 ? != 0 ( nurl_str_eq ( string_data ks ) key ) {
-                                    // Key match: free old value, store new at slot k+1.
+                                    // Key match: the new value replaces the old at slot
+                                    // k+1 (vec_set drops the old one).
                                     : i k_v + k 1
                                     ? < k_v n {
-                                        : ?Json old ( vec_get [Json] v k_v )
-                                        ?? old {
-                                            T ojv → ( json_free ojv )
-                                            F → {}
-                                        }
                                         ( vec_set [Json] v k_v val )
                                     } {
                                         // Object was malformed (odd-sized) — append val to

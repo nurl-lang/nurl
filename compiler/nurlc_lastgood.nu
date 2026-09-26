@@ -3941,8 +3941,12 @@
         // named: a field that IS a bare binding moved in already (its flag
         // cleared, mem_note_kept); one that merely reads it — `^ @ R { T
         // ( f c ) }` — leaves `c` this frame's to drop.
-        = skip_user_ptr ? & & & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
-        ret_arg_alias ! ret_field_copy | != ret_first_tt TT_AT
+        // …and never one whose value cannot BE what is returned: a scalar
+        // computed from it (`^ + ( string_len s ) ( vec_len v )`) leaves `v`
+        // this frame's to drop.
+        : b rid_fits | == ret_first_tt TT_AT ( seq ( nurl_llty lt ) ( nurl_llty ( nurl_sym_get syms ret_ident ) ) )
+        = skip_user_ptr ? & & & & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
+        ret_arg_alias ! ret_field_copy rid_fits | != ret_first_tt TT_AT
         ( str_contains_word ( nurl_sym_get syms `__agg_direct__` ) ret_ident )
         rid_ptr
         ``
@@ -6051,11 +6055,15 @@
             ( mem_drop_value_field syms cg sty val tok )
         } }
     {}
-    // A discarded String / Vec / owning struct a call handed over.
+    // A discarded String / Vec / owning struct a call handed over — or a
+    // `?` / `??` statement whose join phi'd its arms' ownership.
     : s dty ( nurl_get_last_type )
-    ? & & & & & == tt TT_LPAREN != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings ( __is_handle_ty dty )
-    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
-        : s ro ( mem_call_retown syms cg )
+    : b __jt & | == tt TT_QUEST == tt TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_join_own__` )
+    : s __jown ? __jt ( nurl_sym_get syms `__last_join_own__` ) ``
+    ( nurl_sym_def syms `__last_join_own__` `` )
+    : b __dcall & == tt TT_LPAREN & == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
+    ? & & & | __dcall __jt != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings ( __is_handle_ty dty ) {
+        : s ro ? __jt __jown ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len ro ) {
             ( __handle_drop_ensure dty )
             ( __dropifv_request dty )
@@ -6068,9 +6076,8 @@
     // when the tag says it is there.
     : s __dop ( __opt_payload dty )
     : s __doe ( __opt_err_payload dty )
-    ? & & & & & == tt TT_LPAREN != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings | != 0 ( nurl_str_len __dop ) != 0 ( nurl_str_len __doe )
-    == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
-        : s ro ( mem_call_retown syms cg )
+    ? & & & | __dcall __jt != 0 ( nurl_str_len val ) != 0 g_auto_drop_strings | != 0 ( nurl_str_len __dop ) != 0 ( nurl_str_len __doe ) {
+        : s ro ? __jt __jown ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len ro ) {
             : s tag ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print tag ) ( nurl_print ` = extractvalue ` ) ( nurl_print dty )
@@ -11116,7 +11123,12 @@
                 ( nurl_sym_def syms `__deferred_temps__` `` )
             } {}
         } {}
-        ? & & & & & != 0 g_auto_drop_strings == bck_arg_tt TT_LPAREN ( __is_handle_ty at ) ! __callee_shadowed
+        // An option / result temporary owns its payload (and error) the way
+        // a binding of it would: those are dropped, by the tag.
+        : s __top ( __opt_payload at )
+        : s __toe ( __opt_err_payload at )
+        : b __topt | != 0 ( nurl_str_len __top ) != 0 ( nurl_str_len __toe )
+        ? & & & & & != 0 g_auto_drop_strings == bck_arg_tt TT_LPAREN | ( __is_handle_ty at ) __topt ! __callee_shadowed
         == 0 ( nurl_sym_len syms `__last_value_borrow__` ) == 0 ( nurl_sym_len syms `__last_call_ret_view__` ) {
             : s __tro ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __tro ) {
@@ -11140,9 +11152,36 @@
                     ( nurl_print `  ` ) ( nurl_print __tc2 ) ( nurl_print ` = and i1 ` ) ( nurl_print __tc ) ( nurl_print `, ` ) ( nurl_print __tad ) ( nurl_print `\n` )
                     = __tc __tc2
                 } {}
-                ( __handle_drop_ensure at )
-                ( __dropifv_request at )
-                : s __tw ( nurl_str_cat4 `h|` __tc ( nurl_str_cat3 `|` at `|` ) av )
+                : ~ s __tw ``
+                ? __topt {
+                    : s __ttag ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ttag ) ( nurl_print ` = extractvalue ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 0\n` )
+                    ? != 0 ( nurl_str_len __top ) {
+                        : s __tpv ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tpv ) ( nurl_print ` = extractvalue ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 1\n` )
+                        : s __tpc ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tpc ) ( nurl_print ` = and i1 ` ) ( nurl_print __tc ) ( nurl_print `, ` ) ( nurl_print __ttag ) ( nurl_print `\n` )
+                        ( __handle_drop_ensure __top )
+                        ( __dropifv_request __top )
+                        = __tw ( nurl_str_cat4 `h|` __tpc ( nurl_str_cat3 `|` __top `|` ) __tpv )
+                    } {}
+                    ? != 0 ( nurl_str_len __toe ) {
+                        : s __tev ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tev ) ( nurl_print ` = extractvalue ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 2\n` )
+                        : s __tnt ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tnt ) ( nurl_print ` = xor i1 ` ) ( nurl_print __ttag ) ( nurl_print `, 1\n` )
+                        : s __tec ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tec ) ( nurl_print ` = and i1 ` ) ( nurl_print __tc ) ( nurl_print `, ` ) ( nurl_print __tnt ) ( nurl_print `\n` )
+                        ( __handle_drop_ensure __toe )
+                        ( __dropifv_request __toe )
+                        : s __tew ( nurl_str_cat4 `h|` __tec ( nurl_str_cat3 `|` __toe `|` ) __tev )
+                        = __tw ? == 0 ( nurl_str_len __tw ) __tew ( nurl_str_cat3 __tw ` ` __tew )
+                    } {}
+                } {
+                    ( __handle_drop_ensure at )
+                    ( __dropifv_request at )
+                    = __tw ( nurl_str_cat4 `h|` __tc ( nurl_str_cat3 `|` at `|` ) av )
+                }
                 ? | __scalar_ret __hret
                 { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) __tw ( nurl_str_cat3 owned_arg_temps ` ` __tw ) }
                 { : s __dcur ( nurl_sym_get syms `__deferred_temps__` )
