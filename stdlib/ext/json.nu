@@ -257,16 +257,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// ── Recursive free ───────────────────────────────────────────────────
-//
-// Walks the tree and releases owned strings, then releases the Vec
-// buffers. Containers iterate over the raw element buffer and recurse
-// directly — a `vec_free_with` closure here would cost a closure
-// allocation per container and an indirect call per element, on what is
-// the second-hottest path of a parse-heavy program (right after the
-// parse that built the tree). Caller passes the Json by value (handles
-// inside are pointers); after the call, the handle should not be
-// reused.
+// ── Release ──────────────────────────────────────────────────────────
 
 // Early release. A Json owns its strings and children and is dropped by
 // whoever owns it (docs/MEMORY.md §7.6); taking it here as `sink` is what
@@ -795,8 +786,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec Json ) elems ( vec_with_cap [Json] 8 )
     ( __jp_skip_ws p )
     ? ( __jp_eof p ) {
-        : ( @ v Json ) drop1 \ Json e → v { ( json_free e ) }
-        ( vec_free_with [Json] elems drop1 )
         ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
     } {}
     ? == ( __jp_peek p ) 93 {  // empty array
@@ -810,15 +799,11 @@ $ `stdlib/core/vec.nu`
         ?? child {
             T jv → ( vec_push [Json] elems jv )
             F e → {
-                : ( @ v Json ) drop2 \ Json e2 → v { ( json_free e2 ) }
-                ( vec_free_with [Json] elems drop2 )
                 ^ @ !Json JsonError { F # JsonError e }
             }
         }
         ( __jp_skip_ws p )
         ? ( __jp_eof p ) {
-            : ( @ v Json ) drop3 \ Json e → v { ( json_free e ) }
-            ( vec_free_with [Json] elems drop3 )
             ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
         : i nc ( __jp_peek p )
@@ -830,8 +815,6 @@ $ `stdlib/core/vec.nu`
                 = . p pos + . p pos 1
                 = more F
             } {
-                : ( @ v Json ) drop4 \ Json e → v { ( json_free e ) }
-                ( vec_free_with [Json] elems drop4 )
                 ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
             }
         }
@@ -856,8 +839,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec Json ) kvs ( vec_with_cap [Json] 8 )
     ( __jp_skip_ws p )
     ? ( __jp_eof p ) {
-        : ( @ v Json ) drop1 \ Json e → v { ( json_free e ) }
-        ( vec_free_with [Json] kvs drop1 )
         ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
     } {}
     ? == ( __jp_peek p ) 125 {  // empty object
@@ -869,23 +850,17 @@ $ `stdlib/core/vec.nu`
     ~ more {
         ( __jp_skip_ws p )
         ? != ( __jp_peek p ) 34 {
-            : ( @ v Json ) drop2 \ Json e → v { ( json_free e ) }
-            ( vec_free_with [Json] kvs drop2 )
             ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
         : !String JsonError ks ( __jp_parse_string p )
         ?? ks {
             T s → ( vec_push [Json] kvs @ Json { JStr s } )
             F e → {
-                : ( @ v Json ) drop3 \ Json e2 → v { ( json_free e2 ) }
-                ( vec_free_with [Json] kvs drop3 )
                 ^ @ !Json JsonError { F # JsonError e }
             }
         }
         ( __jp_skip_ws p )
         ? != ( __jp_peek p ) 58 {  // ':'
-            : ( @ v Json ) drop4 \ Json e → v { ( json_free e ) }
-            ( vec_free_with [Json] kvs drop4 )
             ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
         = . p pos + . p pos 1
@@ -893,15 +868,11 @@ $ `stdlib/core/vec.nu`
         ?? vv {
             T jv → ( vec_push [Json] kvs jv )
             F e → {
-                : ( @ v Json ) drop5 \ Json e2 → v { ( json_free e2 ) }
-                ( vec_free_with [Json] kvs drop5 )
                 ^ @ !Json JsonError { F # JsonError e }
             }
         }
         ( __jp_skip_ws p )
         ? ( __jp_eof p ) {
-            : ( @ v Json ) drop6 \ Json e → v { ( json_free e ) }
-            ( vec_free_with [Json] kvs drop6 )
             ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
         } {}
         : i nc ( __jp_peek p )
@@ -912,8 +883,6 @@ $ `stdlib/core/vec.nu`
                 = . p pos + . p pos 1
                 = more F
             } {
-                : ( @ v Json ) drop7 \ Json e → v { ( json_free e ) }
-                ( vec_free_with [Json] kvs drop7 )
                 ^ @ !Json JsonError { F ( __jp_err p @ ParseErr { BadFormat } ) }
             }
         }

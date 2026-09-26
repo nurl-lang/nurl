@@ -4459,6 +4459,20 @@
         { ( die lex ( nurl_str_cat3 `unexpected ` un ` where a value was required. Every NURL operator has FIXED arity and no closing bracket, so a missing operand silently swallows whatever follows — count the operands on the operator before this point. Calls need parentheses: '( f a b )', never 'f a b'.` ) ) } }
 }
 
+// Is `v` an integer literal operand (`42`, `-7`)?
+@ __is_int_lit s v → b {
+    : i n ( nurl_str_len v )
+    ? == n 0 { ^ F } {}
+    : ~ i i ? == ( nurl_str_get v 0 ) 45 1 0
+    ? >= i n { ^ F } {}
+    ~ < i n {
+        : i c ( nurl_str_get v i )
+        ? | < c 48 > c 57 { ^ F } {}
+        = i + i 1
+    }
+    ^ T
+}
+
 // Reject an invalid numeric domain before evaluating an LLVM operation.
 // The valid continuation becomes the current block for surrounding phi nodes.
 @ emit_numeric_guard i syms i cg s bad s message → v {
@@ -4923,8 +4937,13 @@
     } {}
     : s numeric_ty ( nurl_llty cmp_ty )
     : i numeric_width ( int_width numeric_ty )
+    // A literal operand is checked here, once: a guard that cannot fire is
+    // no guard, and its panic call would make the function look like one
+    // a panic can leave (the journal elision reads the calls).
+    : b rv_lit ( __is_int_lit rv )
+    : i rv_n ? rv_lit ( nurl_str_to_int rv ) 0
     // Compare unsigned so a negative count also falls outside the domain.
-    ? & > numeric_width 0 | == tt TT_SHL == tt TT_SHR {
+    ? & & > numeric_width 0 | == tt TT_SHL == tt TT_SHR ! & rv_lit & >= rv_n 0 < rv_n numeric_width {
         : s bad ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print bad ) ( nurl_print ` = icmp uge ` )
         ( nurl_print numeric_ty ) ( nurl_print ` ` ) ( nurl_print rv )
@@ -4937,8 +4956,9 @@
         : s zero ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print zero ) ( nurl_print ` = icmp eq ` )
         ( nurl_print numeric_ty ) ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print `, 0\n` )
-        ( emit_numeric_guard syms cg zero ? == tt TT_SLASH `division by zero` `remainder by zero` )
-        ? & ! isu > numeric_width 0 {
+        ? & rv_lit != rv_n 0 {} {
+            ( emit_numeric_guard syms cg zero ? == tt TT_SLASH `division by zero` `remainder by zero` ) }
+        ? & & ! isu > numeric_width 0 ! & rv_lit != rv_n -1 {
             : i minimum - 0 << 1 - numeric_width 1
             : s low ( nurl_cg_reg cg )
             : s negative_one ( nurl_cg_reg cg )
@@ -10720,14 +10740,13 @@
             : s fa_p ( str_first_word arg_faddr )
             // (Not for a closure: whether it takes its argument is unknowable,
             // and emptying memory it only reads would destroy the data.)
+            // Only a declared `sink` (an explicit release): a callee merely
+            // inferred to keep the value may keep a VIEW of memory the program
+            // manages itself (`( wc_new . m code )` — a cursor over a raw-pointer
+            // struct's buffer), which emptying would destroy.
             ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) {
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty at ) ) ( nurl_print ` zeroinitializer, ptr ` ) ( nurl_print fa_p ) ( nurl_print `\n` )
-            } { ? summary_callee {
-                    : s fa_c ( nurl_cg_reg cg )
-                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) fa_c )
-                    ( nurl_print `  call void @__nurl_zero_if.` ) ( nurl_print ( __zero_if_request ( nurl_llty at ) ) )
-                    ( nurl_print `(i1 ` ) ( nurl_print fa_c ) ( nurl_print `, ptr ` ) ( nurl_print fa_p ) ( nurl_print `)\n` )
-                } {} }
+            } {}
         } {}
         // A foreach element handed to a consumer (`~ x v { ( string_free x ) }`)
         // leaves the container: its slot is emptied, so dropping or freeing
@@ -22433,9 +22452,12 @@
         // unless this function keeps p on another path (retlend). Taking it
         // over instead made every caller hand its value in — and the paths
         // that return something else then dropped the caller's value.
-        : b fld_param_lend & & & & agg_returned agg_is_wrap ( is_ident_tok fld_first_tt )
-        >= ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val ) 0
+        // (A `sink` parameter is this function's own: it moves out.)
+        : i __fpl_i ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val )
+        : b fld_param_lend & & & & & agg_returned agg_is_wrap ( is_ident_tok fld_first_tt )
+        >= __fpl_i 0
         ( __is_handle_ty ( nurl_sym_get syms fld_first_val ) )
+        ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpl_i ) )
         ? fld_param_lend {
             = fld_lent ( nurl_str_cat `1` `` )
             ( __record_param_idx syms `__fn_retlend__` fld_first_val )
@@ -36940,9 +36962,25 @@
             = . mp p # u 0
             : ~ i r -1
             : s ent ( nurl_sym_get g_dce_map # s + g_dce_mod ts )
-            ? != 0 ( nurl_str_len ent ) { = r ( nurl_str_to_int ent ) } {
-                ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) { = r -2 } {}
-            }
+            : b vwalk | != 0 ( nurl_str_starts # s + g_dce_mod ts `nurl_vec_drop` ) != 0 ( nurl_str_starts # s + g_dce_mod ts `nurl_vec_clone` )
+            = . mp p sv
+            ? != 0 ( nurl_str_len ent ) { ^ ( nurl_str_to_int ent ) } {}
+            // A drop / clone walk runs the thunk it is handed: that thunk is
+            // the callee (a module function), no thunk none.
+            ? vwalk {
+                : i hp ( nurl_memmem_range # s + g_dce_mod p - le p `, ptr @` 7 )
+                ? < hp 0 { ^ -1 } {}
+                : i hs + + p hp 7
+                : ~ i he hs
+                ~ & < he le ( __dce_ident_byte ( __fold_byte he ) ) { = he + he 1 }
+                : u hv . mp he
+                = . mp he # u 0
+                : s hent ( nurl_sym_get g_dce_map # s + g_dce_mod hs )
+                = . mp he hv
+                ^ ? != 0 ( nurl_str_len hent ) ( nurl_str_to_int hent ) -2
+            } {}
+            = . mp p # u 0
+            ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) { = r -2 } {}
             = . mp p sv
             ^ r
         } {}
