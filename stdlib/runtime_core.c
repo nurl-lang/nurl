@@ -2843,6 +2843,11 @@ void *nurl_closure_own(void *env, void *owner) {
 typedef struct {
     void *ptr;
     void (*drop)(void*);
+    /* An owned handle's drop flag (an `i1` alloca beside its slot): the
+     * binding may have moved its value on since it registered, and the
+     * flag — read when a panic drains the entry — says whether it still
+     * owns one. NULL: always drop. */
+    const unsigned char *flag;
     uint64_t sequence;
     size_t next;                 /* index + 1 in this pointer's hash bucket */
 } NurlJournalEntry;
@@ -2901,7 +2906,7 @@ static void nurl__journal_thread_exit(void) {
     nurl__jrnl_len = nurl__jrnl_cap = nurl__jrnl_live = 0;
 }
 
-static void nurl__jrnl_push(void *p, void (*drop)(void*)) {
+static void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned char *flag) {
     if (!nurl__jrnl_active || !p) return;
     nurl__jrnl_grow();
     if (nurl__jrnl_sequence == UINT64_MAX) {
@@ -2910,16 +2915,22 @@ static void nurl__jrnl_push(void *p, void (*drop)(void*)) {
     }
     size_t bucket = nurl__jrnl_bucket(p);
     NurlJournalEntry *entry = &nurl__jrnl[nurl__jrnl_len];
-    entry->ptr = p; entry->drop = drop;
+    entry->ptr = p; entry->drop = drop; entry->flag = flag;
     entry->sequence = ++nurl__jrnl_sequence;
     entry->next = nurl__jrnl_buckets[bucket];
     nurl__jrnl_buckets[bucket] = ++nurl__jrnl_len;
     ++nurl__jrnl_live;
 }
 
+static void nurl__jrnl_push(void *p, void (*drop)(void*)) { nurl__jrnl_push2(p, drop, NULL); }
 void nurl_journal_push(void *p) { nurl__jrnl_push(p, NULL); }
 void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
     if (fn) nurl__jrnl_push(slot, fn);
+}
+/* An owned String / Vec / struct / container binding: `fn` drops the value
+ * in `slot` on a panic if the binding's drop flag still says it owns one. */
+void nurl_journal_push_drop2(void *slot, void *flag, void (*fn)(void*)) {
+    if (fn) nurl__jrnl_push2(slot, fn, (const unsigned char *)flag);
 }
 
 static void nurl__jrnl_pop_nulls(void) {
@@ -2943,6 +2954,10 @@ void nurl_journal_forget(void *p) {
     nurl__jrnl_pop_nulls();
 }
 
+/* The registration of a binding's slot (nurl_journal_push_drop2) ends with
+ * its scope; a separate name so the compiler can tell it from a temporary's
+ * forget and drop both where no panic can reach. */
+void nurl_journal_forget_slot(void *slot) { nurl_journal_forget(slot); }
 static void nurl__jrnl_remove(void *p) { nurl_journal_forget(p); }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }
 
@@ -2971,8 +2986,15 @@ static void nurl__jrnl_drain(uint64_t mark) {
     while (nurl__jrnl_len && nurl__jrnl[nurl__jrnl_len - 1].sequence > mark) {
         NurlJournalEntry entry = nurl__jrnl[nurl__jrnl_len - 1];
         nurl_journal_forget(entry.ptr);
-        if (entry.drop) entry.drop(entry.ptr);
-        else free(entry.ptr);
+        if (entry.drop) {
+            if (!entry.flag || (*(volatile const unsigned char *)entry.flag & 1)) entry.drop(entry.ptr);
+        } else {
+            /* A raw buffer nurl_alloc handed out: count its release as
+             * nurl_free would, so nurl_alloc_count − nurl_free_count stays
+             * the live total across a panic. */
+            nurl__actr_bump(&nurl__actr_slot()->freed);
+            free(entry.ptr);
+        }
     }
 }
 
@@ -4176,7 +4198,7 @@ long long nurl_recover(void *fn_ptr, void *env_ptr) {
      * longjmp; truncate defensively in case the jump came from a path
      * that did not (it always does, but keep the invariant local). */
     nurl__jrnl_truncate(frame.jmark);
-    free(nurl__panic_last_msg);
+    nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
     nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
     return 1;
 }

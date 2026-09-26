@@ -16664,7 +16664,18 @@
         { : s f ( mem_udrop_flag_get syms cg src )
             ( mem_udrop_flag_set syms cg ptr f )
             ( mem_udrop_flag_set syms cg src `0` )
-            ( __sb syms ptr ( nurl_sym_get2 syms src `__sborrow` ) )
+            // The source's provenance slot (`@<slot>`) lives in its scope and
+            // is written only where the source was bound: past a loop that
+            // never ran it holds nothing. A binding with a slot of its own
+            // takes the source's provenance into it instead, so the slot it
+            // is read through is set on every path.
+            : s __ssb ( nurl_sym_get2 syms src `__sborrow` )
+            : s __psb ( nurl_sym_get2 syms ptr `__sborrow` )
+            ? & == ( nurl_str_get __ssb 0 ) 64 == ( nurl_str_get __psb 0 ) 64 {
+                : s __pv ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __pv ) ( nurl_print ` = load i1, ptr ` ) ( nurl_print ( nurl_str_slice __ssb 1 - ( nurl_str_len __ssb ) 1 ) ) ( nurl_print `\n` )
+                ( nurl_print `  store i1 ` ) ( nurl_print __pv ) ( nurl_print `, ptr ` ) ( nurl_print ( nurl_str_slice __psb 1 - ( nurl_str_len __psb ) 1 ) ) ( nurl_print `\n` )
+            } { ( __sb syms ptr __ssb ) }
             // …and whatever the source was a cursor over. An owner in a
             // deeper scope than this binding dies first: its value is
             // taken over here instead (a payload moved out of an option
@@ -16852,6 +16863,36 @@
     ( nurl_str_cat entry `` )
     ( nurl_str_cat3 cur ` ` entry )
     ( nurl_sym_def syms `__user_drops__` new )
+    ( mem_journal_push_handle syms cg ptr vt )
+}
+
+// A String / Vec / owning struct / container binding is journaled with its
+// drop flag: a panic that unwinds past it drops its value only if the flag
+// still says the binding owns one (it may have moved it on). The writer
+// drops the registration — and its forget — in a function no panic can
+// reach (__jrnl_elide).
+@ mem_journal_push_handle i syms i cg s ptr s vt → v {
+    ? | == 0 g_auto_drop_strings ! ( __is_handle_ty vt ) { ^ v } {}
+    : s live ( nurl_sym_get2 syms ptr `__live` )
+    ? == 0 ( nurl_str_len live ) { ^ v } {}
+    : s m ( __drop_mangle vt )
+    : s key ( nurl_str_cat `hjdrop##` m )
+    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
+        ( nurl_sym_def g_impl_name_syms key `1` )
+        ( __park_append g_impl_name_syms `__pending_hjdrops__` vt )
+    } {}
+    : ~ s fnv ( nurl_str_cat `@__jdrop_` m )
+    : s sf ( nurl_sym_get2 syms ptr `__sinkflag` )
+    ? != 0 ( nurl_str_len sf ) {
+        : s c ( nurl_cg_reg cg )
+        ( emit_sink_flag_load sf c )
+        : s sel ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print sel ) ( nurl_print ` = select i1 ` ) ( nurl_print c )
+        ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `, ptr null\n` )
+        = fnv sel
+    } {}
+    ( nurl_print `  call void @nurl_journal_push_drop2(ptr ` ) ( nurl_print ptr ) ( nurl_print `, ptr ` )
+    ( nurl_print live ) ( nurl_print `, ptr ` ) ( nurl_print fnv ) ( nurl_print `)\n` )
 }
 
 // Emit a `void(i8*)` journal-drop thunk for an owned value of LLVM type
@@ -17238,6 +17279,11 @@
     // for a type with a journal thunk (mem_journal_push_userdrop). String /
     // Vec bindings in a hot loop were paying a journal search per exit.
     : s fm ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
+    // A handle binding's slot registration (mem_journal_push_handle).
+    ? & != 0 ( nurl_sym_len2 g_impl_name_syms `hjdrop##` ( __drop_mangle vt ) ) ( __is_handle_ty vt ) {
+        ( nurl_print `  call void @nurl_journal_forget_slot(ptr ` ) ( nurl_print ptr ) ( nurl_print `)\n` )
+        ^ v
+    } {}
     ? | == 0 ( nurl_str_len fm ) == 0 ( nurl_sym_len2 g_impl_name_syms `jdrop##` fm ) { ^ v } {}
     : s bc ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print bc )
@@ -30977,6 +31023,12 @@
         } {}
         ( nurl_print `  br label %x\nx:\n  ret void\n}\n` )
     }
+    // Journal thunks of handle bindings (mem_journal_push_handle).
+    : ~ s hrest ( nurl_sym_get g_impl_name_syms `__pending_hjdrops__` )
+    ~ != 0 ( nurl_str_len hrest ) {
+        : s hv ( str_first_word hrest ) = hrest ( str_skip_word hrest )
+        ( emit_jdrop_thunk ( nurl_llty hv ) ( __drop_mangle hv ) )
+    }
     ( emit_pending_dropifs )
     ( emit_pending_zero_ifs )
     ( emit_pending_clones syms )
@@ -33120,6 +33172,8 @@
     ( __emit_rt_decl syms `declare i32  @nurl_cpu_x86_v3()` )
     ( __emit_rt_decl syms `declare void @nurl_journal_push(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_journal_push_drop(i8*, ptr)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push_drop2(ptr, ptr, ptr)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_forget_slot(ptr)` )
     ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_memcpy(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
     ( __emit_rt_decl syms `declare void @nurl_memmove(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
@@ -36993,12 +37047,35 @@
     ^ F
 }
 
+// Blank (as a comment) every line of function `fi` that starts with `pat`.
+@ __jrnl_blank_calls i fi s pat i pn → v {
+    : *u mp # *u # s g_dce_mod
+    : i en ( nurl_peek # s g_dce_end fi )
+    : ~ i p ( nurl_peek # s g_dce_start fi )
+    ~ < p en {
+        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p pat pn )
+        ? < rel 0 { = p en } {
+            : i ls + p rel
+            : i le ( __mp_eol ls en )
+            = . mp ls # u 59
+            : ~ i q + ls 1
+            ~ < q le { = . mp q # u 32 = q + q 1 }
+            = p le
+        }
+    }
+}
+
 // Blank (as a comment) every elidable journal push of the live functions.
 @ __jrnl_elide i n → v {
     ( __mp_compute n )
     : *u mp # *u # s g_dce_mod
     : ~ i fi 0
     ~ < fi n {
+        // A function no panic can reach journals none of its bindings.
+        ? & != 0 ( nurl_peek # s g_dce_live fi ) == 0 ( nurl_peek # s g_mp fi ) {
+            ( __jrnl_blank_calls fi `  call void @nurl_journal_push_drop2(` 37 )
+            ( __jrnl_blank_calls fi `  call void @nurl_journal_forget_slot(` 38 )
+        } {}
         ? != 0 ( nurl_peek # s g_dce_live fi ) {
             : i en ( nurl_peek # s g_dce_end fi )
             : ~ i p ( nurl_peek # s g_dce_start fi )

@@ -9,7 +9,9 @@
 //   - vec_set replacing an element (the old one is dropped);
 //   - a scalar computed from a local handle (`^ + … ( vec_len v )`);
 //   - library handles (HashMap, Set, Deque, BTree, Box, Rc) with String
-//     contents, including their replace / remove operations.
+//     contents, including their replace / remove operations;
+//   - String / Vec / HashMap locals of a function a panic unwinds out of
+//     (under `recover`), and one that moved its value on first.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -19,6 +21,7 @@ $ `stdlib/std/set.nu`
 $ `stdlib/std/deque.nu`
 $ `stdlib/std/btree.nu`
 $ `stdlib/std/rc.nu`
+$ `stdlib/std/panic.nu`
 
 & `libc` @ nurl_alloc_count → i
 
@@ -39,6 +42,20 @@ $ `stdlib/std/rc.nu`
     : String s ( string_from `abc` )
     : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v k )
+    ^ + ( string_len s ) ( vec_len [i] v )
+}
+
+@ explode i k ( Vec String ) keep → i {
+    : String s ( string_from `abc` )
+    : ( Vec i ) v ( vec_new [i] )
+    ( vec_push [i] v k )
+    : ( HashMap i i ) m ( map_new [i i] )
+    : ( @ i i ) hi \ i x → i { ^ ( hash_int x ) }
+    : ( @ b i i ) ei \ i a i b → b { ^ == a b }
+    ( map_set [i i] m k k hi ei )
+    : String moved ( string_from `moved` )
+    ( vec_push [String] keep moved )
+    ? > k 0 { ( panic `boom` ) } {}
     ^ + ( string_len s ) ( vec_len [i] v )
 }
 
@@ -96,6 +113,10 @@ $ `stdlib/std/rc.nu`
     : ( Rc String ) rc ( rc_new [String] ( string_from `shared` ) )
     : ( Rc String ) rc2 ( rc_clone [String] rc )
     = acc + acc ( rc_strong [String] rc2 )
+    // A panic unwinding out of a function with owned locals.
+    : ( Vec String ) kept ( vec_new [String] )
+    : !v PanicInfo pr ( recover \ → v { : i x ( explode r kept ) } )
+    = acc + acc ( vec_len [String] kept )
     ^ acc
 }
 

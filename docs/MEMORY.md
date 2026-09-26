@@ -1572,6 +1572,15 @@ handles; their `*_free` functions are early releases, their `*_free_with`
 hand each element to a closure instead. A program's own `% Drop` impl for
 an instance (`% Drop ( Box i )`) wins over the library's.
 
+**Panics unwind them too.** A String / Vec / owning struct / library
+handle binding is registered with the panic journal together with its drop
+flag (`nurl_journal_push_drop2`): a panic that unwinds past the binding
+drops its value only if the flag says the binding still owns one. The
+compiler drops the registration (and its `nurl_journal_forget_slot`) from
+every function no panic can reach — a call graph over the finished IR,
+where `nurl_panic`, calls through pointers and runtime entries that run
+handed-in code can panic — so code that cannot unwind pays nothing.
+
 **A stored value belongs to its owner.** A binding whose value was stored
 into an aggregate literal, or passed bare to a callee that stores it into
 an owner (`vec_push`'s element), may still be read — the owner keeps the
