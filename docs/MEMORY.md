@@ -1572,6 +1572,14 @@ handles; their `*_free` functions are early releases, their `*_free_with`
 hand each element to a closure instead. A program's own `% Drop` impl for
 an instance (`% Drop ( Box i )`) wins over the library's.
 
+**What still takes a hand.** The special cases, each an explicit call:
+synchronisation primitives shared between threads without a reference
+count (`Channel`, `Mutex`, `Cond`) — `chan_free` / `mutex_free` once every
+user is done; OS resources (files, sockets, processes), closed by their
+`*_close`; memory the program manages itself (`nurl_alloc` / `*T` blocks,
+arenas, globals kept for the program's lifetime). A value shared across
+threads is an `Arc`, which is dropped like any other handle.
+
 **Panics unwind them too.** A String / Vec / owning struct / library
 handle binding is registered with the panic journal together with its drop
 flag (`nurl_journal_push_drop2`): a panic that unwinds past the binding

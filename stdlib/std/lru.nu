@@ -37,6 +37,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 // arrays of length `cap`; `freelist` is a stack of unused slot indices.
 : LruCache [V] {
     s ctl
+    ( Vec i ) meta  // owns the 3 words `ctl` points at
     i cap
     ( HashMap s i ) index
     ( Vec String ) keys
@@ -117,7 +118,10 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 
 @ lru_new [V] i cap → ( LruCache V ) {
     : i c ? > cap 0 cap 1
-    : s ctl ( nurl_zalloc 24 )
+    // The control words live in a Vec the cache owns (dropped with it);
+    // `ctl` points at its buffer, which never grows.
+    : ( Vec i ) meta ( vec_zeroed [i] 3 )
+    : s ctl # s ( vec_data [i] meta )
     ( nurl_poke ctl 0 -1 )
     ( nurl_poke ctl 1 -1 )
     ( nurl_poke ctl 2 0 )
@@ -133,7 +137,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     : ~ i k 0
     ~ < k c { ( vec_push [i] fl k ) = k + k 1 }
     : ( HashMap s i ) index ( map_new [s i] )
-    ^ @ ( LruCache V ) { ctl c index keys vals prev nxt fl }
+    ^ @ ( LruCache V ) { ctl meta c index keys vals prev nxt fl }
 }
 
 @ lru_len [V] ( LruCache V ) c → i { ^ ( __lru_count . c ctl ) }
@@ -247,7 +251,7 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     ( vec_free [i] . c nxt )
     ( vec_free [i] . c freelist )
     ( map_free [s i] . c index )
-    ( nurl_free . c ctl )
+    ( vec_free [i] . c meta )
 }
 
 // Early release; the key and value arrays drop their (live) entries.
