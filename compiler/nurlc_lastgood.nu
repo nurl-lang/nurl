@@ -1315,6 +1315,7 @@
 
 // Whether this module calls the drop-flag helpers (emitted at module end).
 : ~ i g_use_clear_if 0
+: ~ i g_use_argxfer 0
 : ~ i g_use_hown 0
 // Set around a returned closure literal's env generation: its String / Vec
 // / owning-struct captures move into (are owned by) the env.
@@ -6298,15 +6299,11 @@
     ~ != 0 ( nurl_str_len rest ) {
         : s slot ( str_first_word rest ) = rest ( str_skip_word rest )
         : s flag ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s cond ( nurl_cg_reg cg ) ( emit_sink_flag_load flag cond )
-        : s previous ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print previous ) ( nurl_print ` = load i8*, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
-        : s next ( nurl_cg_reg cg )
-        ( emit_sink_owner_select cond `i8*` `null` previous next )
-        ( nurl_print `  store i8* ` ) ( nurl_print next ) ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
-        : s moved ( nurl_cg_reg cg )
-        ( emit_sink_owner_select cond `i8*` previous `null` moved )
-        ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print moved ) ( nurl_print `)\n` )
+        // One call the writer drops when the callee turns out not to take
+        // the string (the common case): the slot is emptied and its
+        // journal entry forgotten only when it does.
+        = g_use_argxfer 1
+        ( nurl_print `  call void @__nurl_argxfer(ptr ` ) ( nurl_print flag ) ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `)\n` )
     }
 }
 
@@ -30916,6 +30913,8 @@
         ( nurl_print `define linkonce_odr i1 @__nurl_ret_own(ptr %d, ptr %o) alwaysinline {\nentry:\n  %dv = load i1, ptr %d\n  br i1 %dv, label %t, label %s\nt:\n  %g = call i64 @nurl_ret_hown_get()\n  %b = icmp ne i64 %g, 0\n  ret i1 %b\ns:\n  %ov = load i1, ptr %o\n  ret i1 %ov\n}\n` )
         ( nurl_print `define linkonce_odr void @__nurl_hown_pub(ptr %d, ptr %s) alwaysinline {\nentry:\n  %dv = load i1, ptr %d\n  br i1 %dv, label %t, label %x\nt:\n  %sv = load i1, ptr %s\n  %z = zext i1 %sv to i64\n  call void @nurl_ret_hown_set(i64 %z)\n  br label %x\nx:\n  ret void\n}\n` )
     } {}
+    ? != 0 g_use_argxfer
+    { ( nurl_print `define linkonce_odr void @__nurl_argxfer(ptr %f, ptr %s) alwaysinline {\nentry:\n  %c = load i1, ptr %f\n  br i1 %c, label %t, label %x\nt:\n  %p = load i8*, ptr %s\n  store i8* null, ptr %s\n  call void @nurl_journal_forget(i8* %p)\n  br label %x\nx:\n  ret void\n}\n` ) } {}
     ? != 0 g_use_clear_if
     { ( nurl_print `define linkonce_odr void @__nurl_clear_if(ptr %k, ptr %f) alwaysinline {\nentry:\n  %c = load i1, ptr %k\n  %o = load i1, ptr %f\n  %n = select i1 %c, i1 0, i1 %o\n  store i1 %n, ptr %f\n  ret void\n}\n` ) } {}
 }
@@ -36773,6 +36772,187 @@
     ^ & # i . mp p 255
 }
 
+// ── Journal elision ─────────────────────────────────────────────────
+// A temporary registered with the panic journal (`nurl_journal_push`)
+// and released in the same basic block needs no registration when nothing
+// in between can panic: the journal exists only for the unwind a panic
+// starts, and none can start there. Which calls can panic is a module-wide
+// summary over the finished IR — `nurl_panic` itself, a call through a
+// pointer (a closure, a dyn method), a runtime entry that runs code it is
+// handed (a drop / clone thunk, a fiber switch), and every function that
+// calls one of those. A self-compile spent a fifth of its instructions in
+// the journal, nearly all of it temporaries such as a `nurl_str_int`
+// handed to a concatenation and freed after it.
+: ~ i g_mp 0  // i64[n]: 1 when function n may panic
+
+// A runtime / external function that can start a panic on this thread.
+@ __mp_runtime_panics s nm i p i le → b {
+    ? ( seq nm `nurl_panic` ) { ^ T } {}
+    // Drop / clone walks that call a thunk; with no thunk they cannot.
+    ? | != 0 ( nurl_str_starts nm `nurl_vec_drop` ) != 0 ( nurl_str_starts nm `nurl_vec_clone` ) {
+        ^ < ( nurl_memmem_range # s + g_dce_mod p - le p `, ptr null,` 11 ) 0
+    } {}
+    ? | != 0 ( nurl_str_starts nm `nurl_call_code` ) != 0 ( nurl_str_starts nm `nurl_cpu_launch` ) { ^ T } {}
+    // A fiber switch runs other code on this thread.
+    ? | | >= ( nurl_str_find nm `fiber` ) 0 >= ( nurl_str_find nm `park` ) 0 >= ( nurl_str_find nm `yield` ) 0 { ^ T } {}
+    ? | >= ( nurl_str_find nm `sched` ) 0 >= ( nurl_str_find nm `async` ) 0 { ^ T } {}
+    ^ F
+}
+
+// The callee of the call whose `call ` ends at `cp`, on the line ending at
+// `le`: its function index (>= 0), -1 for an external function that cannot
+// panic, -2 for one that can or one not known (a call through a pointer).
+@ __mp_callee i cp i le → i {
+    : ~ i p cp
+    ~ < p le {
+        ? & == ( __fold_byte p ) 40 & > p cp ( __dce_ident_byte ( __fold_byte - p 1 ) ) {
+            : ~ i ts - p 1
+            ~ & > ts cp ( __dce_ident_byte ( __fold_byte - ts 1 ) ) { = ts - ts 1 }
+            ? != ( __fold_byte - ts 1 ) 64 { ^ -2 } {}
+            : *u mp # *u # s g_dce_mod
+            : u sv . mp p
+            = . mp p # u 0
+            : ~ i r -1
+            : s ent ( nurl_sym_get g_dce_map # s + g_dce_mod ts )
+            ? != 0 ( nurl_str_len ent ) { = r ( nurl_str_to_int ent ) } {
+                ? ( __mp_runtime_panics # s + g_dce_mod ts p le ) { = r -2 } {}
+            }
+            = . mp p sv
+            ^ r
+        } {}
+        = p + p 1
+    }
+    ^ -2
+}
+
+// End of the line holding byte `p` (its newline, or `en`).
+@ __mp_eol i p i en → i {
+    : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `\n` 1 )
+    ^ ? < rel 0 en + p rel
+}
+
+// Which live functions may panic: each one's own calls, then the call
+// graph to a fixpoint.
+@ __mp_compute i n → v {
+    = g_mp # i # s ( nurl_zalloc * n 8 )
+    : ~ i ecap 4096
+    : ~ s edges ( nurl_alloc * ecap 8 )
+    : ~ i ne 0
+    : s eb ( nurl_zalloc * + n 1 8 )
+    : ~ i fi 0
+    ~ < fi n {
+        ( nurl_poke eb fi ne )
+        ? != 0 ( nurl_peek # s g_dce_live fi ) {
+            : i en ( nurl_peek # s g_dce_end fi )
+            : ~ i p ( nurl_peek # s g_dce_start fi )
+            ~ < p en {
+                : i rel ( nurl_memmem_range # s + g_dce_mod p - en p ` call ` 6 )
+                ? < rel 0 { = p en } {
+                    : i cp + + p rel 6
+                    : i le ( __mp_eol cp en )
+                    : i c ( __mp_callee cp le )
+                    ? == c -2 { ( nurl_poke # s g_mp fi 1 ) } {
+                        ? >= c 0 {
+                            ? >= ne ecap {
+                                = ecap * ecap 2
+                                = edges ( nurl_realloc edges * ecap 8 )
+                            } {}
+                            ( nurl_poke edges ne c )
+                            = ne + ne 1
+                        } {}
+                    }
+                    = p le
+                }
+            }
+        } {}
+        = fi + fi 1
+    }
+    ( nurl_poke eb n ne )
+    : ~ b changed T
+    ~ changed {
+        = changed F
+        = fi 0
+        ~ < fi n {
+            ? == 0 ( nurl_peek # s g_mp fi ) {
+                : ~ i e ( nurl_peek eb fi )
+                : i ee ( nurl_peek eb + fi 1 )
+                ~ < e ee {
+                    ? != 0 ( nurl_peek # s g_mp ( nurl_peek edges e ) ) {
+                        ( nurl_poke # s g_mp fi 1 )
+                        = changed T
+                        = e ee
+                    } { = e + e 1 }
+                }
+            } {}
+            = fi + fi 1
+        }
+    }
+    ( nurl_free edges )
+    ( nurl_free eb )
+}
+
+// Does the push of register [rs, re) at the line ending `le` reach its
+// release (`nurl_free` / `nurl_journal_forget` of it) in the same block
+// with no call in between that may panic?
+@ __jrnl_push_elidable i le i en i rs i re → b {
+    : i rn - re rs
+    : ~ i p + le 1
+    : ~ i lines 0
+    ~ & < p en < lines 256 {
+        : i e ( __mp_eol p en )
+        // A label or a terminator ends the block.
+        ? != ( __fold_byte p ) 32 { ^ F } {}
+        ? | | ( __fold_at p `  br ` 5 ) ( __fold_at p `  ret` 5 ) | ( __fold_at p `  switch ` 9 ) ( __fold_at p `  unreachable` 13 ) { ^ F } {}
+        : b fr ( __fold_at p `  call void @nurl_free(i8* ` 27 )
+        : b fg ( __fold_at p `  call void @nurl_journal_forget(i8* ` 37 )
+        ? | fr fg {
+            : i a + p ? fr 27 37
+            ? & & == - e a + rn 1 ( __fold_at a # s + g_dce_mod rs rn ) == ( __fold_byte + a rn ) 41 { ^ T } {}
+        } {}
+        : i cr ( nurl_memmem_range # s + g_dce_mod p - e p ` call ` 6 )
+        ? >= cr 0 {
+            : i c ( __mp_callee + + p cr 6 e )
+            ? == c -2 { ^ F } {}
+            ? & >= c 0 != 0 ( nurl_peek # s g_mp c ) { ^ F } {}
+        } {}
+        = p + e 1
+        = lines + lines 1
+    }
+    ^ F
+}
+
+// Blank (as a comment) every elidable journal push of the live functions.
+@ __jrnl_elide i n → v {
+    ( __mp_compute n )
+    : *u mp # *u # s g_dce_mod
+    : ~ i fi 0
+    ~ < fi n {
+        ? != 0 ( nurl_peek # s g_dce_live fi ) {
+            : i en ( nurl_peek # s g_dce_end fi )
+            : ~ i p ( nurl_peek # s g_dce_start fi )
+            ~ < p en {
+                : i rel ( nurl_memmem_range # s + g_dce_mod p - en p `  call void @nurl_journal_push(i8* %` 36 )
+                ? < rel 0 { = p en } {
+                    : i ls + p rel
+                    : i le ( __mp_eol ls en )
+                    : i rs + ls 35
+                    : ~ i re + rs 1
+                    ~ & < re le ( __dce_ident_byte ( __fold_byte re ) ) { = re + re 1 }
+                    ? & == ( __fold_byte re ) 41 ( __jrnl_push_elidable le en rs re ) {
+                        = . mp ls # u 59
+                        : ~ i q + ls 1
+                        ~ < q le { = . mp q # u 32 = q + q 1 }
+                    } {}
+                    = p le
+                }
+            }
+        } {}
+        = fi + fi 1
+    }
+    ( nurl_free # s g_mp )
+    = g_mp 0
+}
+
 // Record the flag constants written at module scope in [from, to).
 @ __fold_scan_flags i from i to → v {
     : ~ i pos from
@@ -37341,6 +37521,10 @@
     ? ( __fold_at ls `  call void @__nurl_hown_pub(ptr @.__nurl_retdyn.` 49 ) {
         ? == 0 ( __fold_flag + ls 33 le ) { ^ v } {}
     } {}
+    // A string argument its callee does not take: nothing to hand over.
+    ? ( __fold_at ls `  call void @__nurl_argxfer(ptr @.__nurl_` 41 ) {
+        ? == 0 ( __fold_flag + ls 32 le ) { ^ v } {}
+    } {}
     // The drop of a binding that never owns; a field zeroed only if a
     // callee took it, when none does.
     ? | ( __fold_at ls `  call void @__dropif` 20 ) ( __fold_at ls `  call void @__nurl_zero_if.` 28 ) {
@@ -37569,6 +37753,7 @@
             = qh + qh 1
         }
     }
+    ( __jrnl_elide n )
     // Emit the live sub-sequence.
     : ~ i pos 0
     : ~ i ei 0
