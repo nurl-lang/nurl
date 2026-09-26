@@ -45,10 +45,8 @@ $ `stdlib/core/vec.nu`
         JArr inner → {
             ( nurl_print ` inner_count=` )
             ( nurl_print ( nurl_str_int ( vec_len [Json] inner ) ) )
-            // This Json (raw `s` payloads) is not dropped by the compiler:
-            // arr's vector is released by hand.
-            ( mem_take inner )
-            ( vec_free [Json] inner )
+            // `arr` owns its vector and drops it (with its elements) at
+            // scope exit (docs/MEMORY.md §7.6) — nothing to free by hand.
         }
         _ → ( nurl_print ` (no arr)` )
     }

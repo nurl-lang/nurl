@@ -38,7 +38,7 @@
 //   ( rc_clone    [T] r )          → ( Rc T )   bump count, share storage
 //   ( rc_strong   [T] r )          → i          current strong count
 //   ( rc_is_unique [T] r )         → b          count == 1 (safe to mutate)
-//   ( rc_free     [T] r )          → v          dec count; free when 0
+//   ( rc_free     [T] r )          → v          early release (a handle is dropped by its owner)
 //   ( rc_free_with [T] r drop )    → v          dec count; if 0 run drop(T) then free
 //
 // Layout:
@@ -124,6 +124,9 @@
 // new value — there is no copy-on-write. See TRAP comment above.
 @ rc_set [T] ( Rc T ) r T x → v {
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
+    // The old value is dropped.
+    : T old . impl value
+    ( mem_take old )
     = . impl value x
 }
 
@@ -133,6 +136,7 @@
 @ rc_replace [T] ( Rc T ) r T x → T {
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
     : T old . impl value
+    ( mem_take old )
     = . impl value x
     ^ old
 }
@@ -161,31 +165,48 @@
 // ── Cloning ─────────────────────────────────────────────────────────
 
 // Increment the strong count; return a new handle pointing at the
-// same storage. O(1). After `rc_clone` you have TWO handles that
-// must both eventually `rc_free`.
+// same storage. O(1). After `rc_clone` you have TWO handles, each
+// dropped by its owner.
 @ rc_clone [T] ( Rc T ) r → ( Rc T ) {
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
     = . impl count + . impl count 1
-    ^ @ ( Rc T ) { . r ctl }
+    // A handle of its own (not a view of `r`): the caller owns it.
+    : s c . r ctl
+    ^ @ ( Rc T ) { c }
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
-// Decrement the strong count. If the count reaches zero, release the
-// storage — but DOES NOT run any per-payload drop. For owned-T
-// payloads use `rc_free_with`.
-@ rc_free [T] sink ( Rc T ) r → v {
+// What dropping a handle does (its owner does it at scope exit — docs/
+// MEMORY.md §7.6): the count goes down, and the last handle drops the
+// value and releases the storage.
+@ Rc_drop [T] sink ( Rc T ) r → v {
+    // This IS the drop: `r` is not dropped again on the way out.
+    ( mem_forget r )
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
     ? == 0 # i impl {} {
         = . impl count - . impl count 1
-        ? <= . impl count 0 { ( nurl_free # s impl ) } {}
+        ? <= . impl count 0 {
+            : T v . impl value
+            ( mem_take v )
+            ( nurl_free # s impl )
+        } {}
     }
 }
+
+// Another owner of the same value: the count goes up, nothing is copied.
+@ Rc_share [T] ( Rc T ) r → ( Rc T ) {
+    ^ ( rc_clone [T] r )
+}
+
+// Early release of this handle (Rc_drop).
+@ rc_free [T] sink ( Rc T ) r → v {}
 
 // Decrement the strong count. If it reaches zero, run `drop` on the
 // final value, then release the storage. Use for owned-T payloads:
 //   ( rc_free_with [Config] cfg \ c → v { ( config_free c ) } )
 @ rc_free_with [T] sink ( Rc T ) r ( @ v T ) drop → v {
+    ( mem_forget r )
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
     ? == 0 # i impl {} {
         = . impl count - . impl count 1

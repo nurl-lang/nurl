@@ -24,11 +24,12 @@
 //   Resize doubles cap and rehashes only OCCUPIED slots — tombstones evaporate.
 //
 // Ownership:
-//   map_new / map_with_cap → owned HashMap; caller MUST map_free when done.
-//   The map borrows keys and values (it stores them by value/copy).
-//   For HashMap[s V] (raw-string keys) the caller is responsible for
-//   keeping the key strings alive until removed; the map does NOT strdup.
-//   Same convention as Vec[A].
+//   map_new / map_with_cap → owned HashMap, dropped (with its keys and
+//   values) by its owner at scope exit like a Vec (docs/MEMORY.md §7.6);
+//   map_free releases early. A key / value handed to map_set moves in;
+//   map_set / map_remove hand the displaced value back owned, and a removed
+//   key is dropped. For HashMap[s V] (raw-string keys) the caller keeps the
+//   key strings alive until removed; the map does NOT strdup.
 //
 // API:
 //   ( map_new        [K V] )                                     → ( HashMap K V )
@@ -46,7 +47,7 @@
 //   ( map_values     [K V] m )                                   → ( Vec V )
 //   ( map_iter       [K V] m )                                   → ( Iter ( Pair K V ) )
 //   ( map_free       [K V] m )                                   → v
-//   ( map_clone      [K V] m )                  → ( HashMap K V )  bitwise — trivial K/V
+//   ( map_clone      [K V] m )                  → ( HashMap K V )  owns copies of every entry
 //   ( map_clone_with [K V] m clone_k clone_v )  → ( HashMap K V )  deep copy
 //
 // map_keys / map_values walk occupied slots and bitwise-copy keys/values
@@ -307,6 +308,8 @@ $ `stdlib/core/string.nu`
     : *i states # *i ( nurl_peek ctl 2 )
     ? >= slot 0
     { : V prev . vals slot
+        // The old value leaves the map: the caller owns it.
+        ( mem_take prev )
         = . vals slot val
         ^ @ ?V { T prev }
     }
@@ -334,7 +337,13 @@ $ `stdlib/core/string.nu`
     {}
     : *V vals # *V ( nurl_peek ctl 1 )
     : *i states # *i ( nurl_peek ctl 2 )
+    : *K keys # *K ( nurl_peek ctl 0 )
+    // The stored key leaves with its entry (dropped here); the value is
+    // handed to the caller.
+    : K gone . keys slot
+    ( mem_take gone )
     : V prev . vals slot
+    ( mem_take prev )
     = . states slot 2
     ( nurl_poke ctl 3 - ( __map_len_raw ctl ) 1 )
     ( nurl_poke ctl 5 + ( __map_tomb_raw ctl ) 1 )
@@ -343,8 +352,30 @@ $ `stdlib/core/string.nu`
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
-@ map_free [K V] sink ( HashMap K V ) m → v {
+// What dropping a map does (its owner does it at scope exit — docs/
+// MEMORY.md §7.6): every entry's key and value are dropped (no work, and
+// no loop, for ones that own nothing), then the buffers and the handle.
+@ HashMap_drop [K V] sink ( HashMap K V ) m → v {
+    // This IS the drop: `m` is not dropped again on the way out.
+    ( mem_forget m )
     : s ctl . m ctl
+    ? == 0 # i ctl { ^ } {}
+    : i cap ( __map_cap_raw ctl )
+    ? > cap 0 {
+        : *K keys # *K ( nurl_peek ctl 0 )
+        : *V vals # *V ( nurl_peek ctl 1 )
+        : *i states # *i ( nurl_peek ctl 2 )
+        : ~ i i 0
+        ~ < i cap {
+            ? == . states i 1 {
+                : K k . keys i
+                ( mem_take k )
+                : V v . vals i
+                ( mem_take v )
+            } {}
+            = i + i 1
+        }
+    } {}
     : s keys ( __map_keys_raw ctl )
     : s vals ( __map_vals_raw ctl )
     : s states ( __map_states_raw ctl )
@@ -353,6 +384,41 @@ $ `stdlib/core/string.nu`
     ? != 0 # i states { ( nurl_free states ) } {}
     ( nurl_free ctl )
 }
+
+// A copy of the map that owns its own entries (each key and value copied
+// — a String deep, an integer as is), at the same slot layout: no rehash.
+// What a borrowed map stored into an owner becomes (docs/MEMORY.md §7.6).
+@ HashMap_clone [K V] ( HashMap K V ) m → ( HashMap K V ) {
+    : s sctl . m ctl
+    : s dctl ( nurl_zalloc 48 )
+    : i cap ? == 0 # i sctl 0 ( __map_cap_raw sctl )
+    ? > cap 0 {
+        ( __map_alloc_buffers [K V] dctl cap )
+        : *K skeys # *K ( nurl_peek sctl 0 )
+        : *V svals # *V ( nurl_peek sctl 1 )
+        : *i sstates # *i ( nurl_peek sctl 2 )
+        : *K dkeys # *K ( nurl_peek dctl 0 )
+        : *V dvals # *V ( nurl_peek dctl 1 )
+        : *i dstates # *i ( nurl_peek dctl 2 )
+        : ~ i i 0
+        ~ < i cap {
+            = . dstates i . sstates i
+            ? == . sstates i 1 {
+                : K k . skeys i
+                = . dkeys i ( mem_dup k )
+                : V v . svals i
+                = . dvals i ( mem_dup v )
+            } {}
+            = i + i 1
+        }
+        ( nurl_poke dctl 3 ( __map_len_raw sctl ) )
+        ( nurl_poke dctl 5 ( __map_tomb_raw sctl ) )
+    } {}
+    ^ @ ( HashMap K V ) { dctl }
+}
+
+// Early release: exactly what dropping `m` does (HashMap_drop).
+@ map_free [K V] sink ( HashMap K V ) m → v {}
 
 // ── Higher-order ────────────────────────────────────────────────────
 
@@ -479,38 +545,10 @@ $ `stdlib/core/string.nu`
 
 // ── Clone ───────────────────────────────────────────────────────────
 
-// Bitwise shallow copy of the whole map. The clone keeps the source's
-// slot layout verbatim (same cap, same probe positions, tombstones and
-// all), so no rehash is needed and lookups behave identically. Safe ONLY
-// for trivial K and V (i, f, b, raw s, slice) — for owned keys/values
-// this aliases every heap pointer and double-frees on cleanup; use
-// `map_clone_with` then. Mirrors the vec_clone / vec_clone_with split.
+// A copy of the whole map that owns its entries: keys and values that own
+// memory are copied deep (HashMap_clone), at the same slot layout.
 @ map_clone [K V] ( HashMap K V ) m → ( HashMap K V ) {
-    : s sctl . m ctl
-    : ( HashMap K V ) out ( map_new [K V] )
-    : s dctl . out ctl
-    : i cap ( __map_cap_raw sctl )
-    ? > cap 0 {
-        ( __map_alloc_buffers [K V] dctl cap )
-        : *K skeys # *K ( nurl_peek sctl 0 )
-        : *V svals # *V ( nurl_peek sctl 1 )
-        : *i sstates # *i ( nurl_peek sctl 2 )
-        : *K dkeys # *K ( nurl_peek dctl 0 )
-        : *V dvals # *V ( nurl_peek dctl 1 )
-        : *i dstates # *i ( nurl_peek dctl 2 )
-        : ~ i i 0
-        ~ < i cap {
-            = . dstates i . sstates i
-            ? == . sstates i 1 {
-                = . dkeys i . skeys i
-                = . dvals i . svals i
-            } {}
-            = i + i 1
-        }
-        ( nurl_poke dctl 3 ( __map_len_raw sctl ) )
-        ( nurl_poke dctl 5 ( __map_tomb_raw sctl ) )
-    } {}
-    ^ out
+    ^ ( HashMap_clone [K V] m )
 }
 
 // Deep copy of the whole map: every occupied key is run through

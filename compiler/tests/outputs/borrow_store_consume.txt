@@ -1,0 +1,11 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_store_consume.nu:21: error: 'x' is consumed here, but its value was stored into an owner at line 20 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy (string_clone / vec_clone).
+    ( string_free x )
+compiler/tests/borrow_store_consume.nu:28: error: 'x' is stored into a second owner here, but its value was already stored into an owner at line 27 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy (string_clone / vec_clone).
+    : W b @ W { x }
+compiler/tests/borrow_store_consume.nu:36: error: 'x' is consumed here, but its value was stored into an owner at line 35 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy (string_clone / vec_clone).
+    ( string_free x )
+compiler/tests/borrow_store_consume.nu:44: error: 'x' is consumed here, but its value was stored into an owner at line 43 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy (string_clone / vec_clone).
+    ( string_free x )
+error: compilation aborted — 4 borrow-checker violations (re-run with --no-borrowck to bypass)

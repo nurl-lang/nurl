@@ -118,7 +118,7 @@ $ `stdlib/ext/json.nu`
     ~ & ! found < k n {
         : Header h . hdata k
         ? ( _header_name_eq_ci . h name name ) {
-            ( header_free h )
+            // vec_set drops the header it replaces.
             ( vec_set [Header] . r headers k ( header_new name value ) )
             = found T
         } {}

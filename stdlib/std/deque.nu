@@ -9,10 +9,9 @@
 //   slot 0 = element buffer pointer   slot 2 = head index
 //   slot 1 = capacity (in elements)   slot 3 = length (live elements)
 //
-// Ownership mirrors Vec: deque_new returns an owned Deque the caller
-// must release. For trivial element types (i, f, b, raw pointers) use
-// deque_free; for owned element types (String, nested Vec, …) use
-// deque_free_with with a per-element drop closure.
+// Ownership mirrors Vec: deque_new returns an owned Deque, dropped with its
+// elements by its owner at scope exit (docs/MEMORY.md §7.6); deque_free
+// releases early, deque_free_with hands each element to a closure first.
 //
 //   ( deque_new        [A] )              → ( Deque A )   empty, no alloc
 //   ( deque_len        [A] d )            → i
@@ -24,7 +23,7 @@
 //   ( deque_front      [A] d )            → ? A           peek, no remove
 //   ( deque_back       [A] d )            → ? A           peek, no remove
 //   ( deque_get        [A] d i )          → ? A           0 = front
-//   ( deque_clear      [A] d )            → v             keeps the buffer
+//   ( deque_clear      [A] d )            → v             drops the elements, keeps the buffer
 //   ( deque_free       [A] d )            → v
 //   ( deque_free_with  [A] d drop )       → v   drop : (@ v A)
 
@@ -155,19 +154,72 @@
 
 // ── Clear / free ──────────────────────────────────────────────────────
 
-@ deque_clear [A] ( Deque A ) d → v {
-    ( nurl_poke . d ctl 2 0 )
-    ( nurl_poke . d ctl 3 0 )
+// Drop every live element (no work, and no loop, for elements that own
+// nothing); the length goes to zero first.
+@ __dq_drop_elems [A] s ctl → v {
+    : i len ( nurl_peek ctl 3 )
+    : i cap ( nurl_peek ctl 1 )
+    : i head ( nurl_peek ctl 2 )
+    : *A data # *A ( nurl_peek ctl 0 )
+    ( nurl_poke ctl 2 0 )
+    ( nurl_poke ctl 3 0 )
+    : ~ i i 0
+    ~ < i len {
+        : A e . data % + head i cap
+        ( mem_take e )
+        = i + i 1
+    }
 }
 
-@ deque_free [A] sink ( Deque A ) d → v {
+// The elements are dropped; the buffer stays for reuse.
+@ deque_clear [A] ( Deque A ) d → v {
+    ( __dq_drop_elems [A] . d ctl )
+}
+
+// What dropping a deque does (its owner does it at scope exit — docs/
+// MEMORY.md §7.6): the elements, then the buffer and the handle.
+@ Deque_drop [A] sink ( Deque A ) d → v {
+    // This IS the drop: `d` is not dropped again on the way out.
+    ( mem_forget d )
     : s ctl . d ctl
+    ? == 0 # i ctl { ^ } {}
+    ( __dq_drop_elems [A] ctl )
     : s buf # s ( nurl_peek ctl 0 )
     ? != 0 # i buf { ( nurl_free buf ) } {}
     ( nurl_free ctl )
 }
 
+// A copy that owns its own elements, in logical order (head at 0).
+@ Deque_clone [A] ( Deque A ) d → ( Deque A ) {
+    : s sctl . d ctl
+    : s dctl ( nurl_zalloc 32 )
+    : i len ? == 0 # i sctl 0 ( nurl_peek sctl 3 )
+    ? > len 0 {
+        : i cap ( nurl_peek sctl 1 )
+        : i head ( nurl_peek sctl 2 )
+        : *A sd # *A ( nurl_peek sctl 0 )
+        : s buf ( nurl_alloc * Z A len )
+        : *A dd # *A buf
+        : ~ i i 0
+        ~ < i len {
+            : A e . sd % + head i cap
+            = . dd i ( mem_dup e )
+            = i + i 1
+        }
+        ( nurl_poke dctl 0 # i buf )
+        ( nurl_poke dctl 1 len )
+        ( nurl_poke dctl 3 len )
+    } {}
+    ^ @ ( Deque A ) { dctl }
+}
+
+// Early release: exactly what dropping `d` does (Deque_drop).
+@ deque_free [A] sink ( Deque A ) d → v {}
+
+// Release through `drop`: it is handed every live element (and owns it
+// from then on), then the buffer goes.
 @ deque_free_with [A] sink ( Deque A ) d ( @ v A ) drop → v {
+    ( mem_forget d )
     : s ctl . d ctl
     : i len ( nurl_peek ctl 3 )
     : i cap ( nurl_peek ctl 1 )

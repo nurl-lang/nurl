@@ -65,34 +65,10 @@ $ `lines.nu`
     ^ c
 }
 
+// The files (and everything they hold) are dropped with their Vec.
 @ cov_free sink * Cov c → v {
-    : i n ( vec_len [CovFile] . c files )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [CovFile] . c files i ) {
-            T f → {
-                ( string_free . f path )
-                ( vec_free [i] . f exists )
-                ( vec_free [i] . f count )
-                ( vec_free [i] . f branches )
-                ( __cov_free_fns . f funcs )
-            }
-            F _ → {}
-        }
-        = i + i 1
-    }
     ( vec_free [CovFile] . c files )
     ( nurl_free # s c )
-}
-
-@ __cov_free_fns ( Vec CovFn ) v → v {
-    : i n ( vec_len [CovFn] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [CovFn] v i ) { T f → ( string_free . f name ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [CovFn] v )
 }
 
 @ __cov_at ( Vec i ) v i idx → i {
@@ -251,31 +227,16 @@ $ `lines.nu`
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 0
     ~ < i n {
-        ?? ( vec_get [CovFile] . c files i ) {
-            T f → ? ( __cov_matches ( string_data . f path ) prefixes ) {
-                ( vec_push [CovFile] keep f )
-            } {
-                ( string_free . f path )
-                ( vec_free [i] . f exists )
-                ( vec_free [i] . f count )
-                ( vec_free [i] . f branches )
-                ( __cov_free_fns . f funcs )
-            }
+        // Each file is taken out of the list (its slot left empty): a kept
+        // one moves to `keep`, any other is dropped here.
+        ?? ( vec_replace [CovFile] . c files i # CovFile 0 ) {
+            T f → ? ( __cov_matches ( string_data . f path ) prefixes ) { ( vec_push [CovFile] keep f ) } {}
             F _ → {}
         }
         = i + i 1
     }
     ( vec_clear [CovFile] . c files )
-    : i m ( vec_len [CovFile] keep )
-    : ~ i k 0
-    ~ < k m {
-        ?? ( vec_get [CovFile] keep k ) {
-            T f → ( vec_push [CovFile] . c files f )
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [CovFile] keep )
+    ( vec_append [CovFile] . c files keep )
 }
 
 @ __cov_matches s path ( Vec String ) prefixes → b {

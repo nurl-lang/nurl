@@ -257,20 +257,14 @@ $ `stdlib/std/time.nu`
     ~ < k ( vec_len [Cookie] . j cookies ) {
         : ~ b hit F
         ?? ( vec_get [Cookie] . j cookies k ) {
-            T e → {
-                ? & & ( string_eq . e name . c name ) ( string_eq . e domain . c domain ) ( string_eq . e path . c path ) {
-                    ( __cookie_free e )
-                    = hit T
-                } {}
-            }
+            T e → { = hit & & ( string_eq . e name . c name ) ( string_eq . e domain . c domain ) ( string_eq . e path . c path ) }
             F _ → {}
         }
         ? hit {
-            : i last - ( vec_len [Cookie] . j cookies ) 1
-            ? > last k {
-                ?? ( vec_get [Cookie] . j cookies last ) { T lc → { : b _s ( vec_set [Cookie] . j cookies k lc ) } F _ → {} }
-            } {}
-            : b _t ( vec_set_len [Cookie] . j cookies last )
+            // Swap-remove: the last cookie takes the slot, the matched one
+            // is popped off the end and dropped.
+            : b _s ( vec_swap [Cookie] . j cookies k - ( vec_len [Cookie] . j cookies ) 1 )
+            : ?Cookie gone ( vec_pop [Cookie] . j cookies )
             = k ( vec_len [Cookie] . j cookies )  // unique → done
         } { = k + k 1 }
     }

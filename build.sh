@@ -636,15 +636,31 @@ step "publish compiler" publish_compiler
 # a test (it rebuilds a corpus and costs ~7 s), so it goes with the
 # tests: the Docker image asks for --no-tests precisely because CI runs
 # them elsewhere, and this is one of them.
+# The checks below are independent and mostly wait on clang, so they run
+# at once; each one's output lands in the log under its own label, and any
+# failure fails the step.
+run_checks_parallel() {
+    local dir i rc=0 pids=() names=()
+    dir=$(mktemp -d build/.checks.XXXXXX) || return 1
+    for t in "$@"; do
+        bash "compiler/tests/$t.sh" > "$dir/$t.log" 2>&1 &
+        pids+=($!); names+=("$t")
+    done
+    for i in "${!pids[@]}"; do
+        if wait "${pids[$i]}"; then echo "[${names[$i]}]"; else echo "[${names[$i]}] FAILED"; rc=1; fi
+        cat "$dir/${names[$i]}.log"
+    done
+    rm -rf "$dir"
+    return $rc
+}
 if (( RUN_TESTS == 1 )); then
-    step "split equivalence" bash compiler/tests/split_equivalence.sh
+    # split_equivalence: `--split` must not change the module or behaviour.
     # The `simd` prefix, checked where a behavioural test cannot look:
     # that two clones exist, that only the wide one carries feature
     # bits, that the dispatcher owns the undecorated symbol, and that
     # the wide clone really lowers to ymm. simd_dispatch.nu proves the
     # answers are right; nothing in it can notice the wide clone
     # silently disappearing, which is the regression that costs 1.7x.
-    step "simd dispatch IR" bash compiler/tests/simd_dispatch_ir.sh
     # And the clone the dispatcher did NOT pick. simd_dispatch_ir.sh
     # proves both are built; the corpus only ever runs the one this
     # CPU selects, which on every x86-64 runner here is the wide one.
@@ -652,7 +668,8 @@ if (( RUN_TESTS == 1 )); then
     # --no-cpu-dispatch and requires the baseline lowering to produce
     # the same goldens — the ML-KEM / ML-DSA keys are the same keys on
     # a machine without AVX2 or they are not, and nothing else asks.
-    step "simd baseline agree" bash compiler/tests/simd_baseline_agree.sh
+    step "split equivalence + simd dispatch IR + simd baseline agree" \
+        run_checks_parallel split_equivalence simd_dispatch_ir simd_baseline_agree
 fi
 
 # Both tools are required outputs of a complete toolchain build. Their

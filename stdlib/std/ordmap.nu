@@ -84,9 +84,7 @@ $ `stdlib/core/vec.nu`
         : ?K kmo ( vec_get [K] . m keys idx )
         : K km ?? kmo { T x → x F → k }
         ? == ( cmp km k ) 0 {
-            : ?V oldo ( vec_get [V] . m vals idx )
-            ( vec_set [V] . m vals idx val )
-            ^ oldo
+            ^ ( vec_replace [V] . m vals idx val )
         } {}
     } {}
     ( vec_insert [K] . m keys idx k )

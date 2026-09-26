@@ -62,43 +62,9 @@ $ `stdlib/std/float.nu`
 
 // ── Memory (cascading free) ──────────────────────────────────────
 
-@ toml_value_free sink TomlValue v → v {
-    ?? v {
-        TStr s → ( string_free s )
-        TInt _ → {}
-        TFloat _ → {}
-        TBool _ → {}
-        TArr arr → {
-            : i n ( vec_len [TomlValue] arr )
-            : ~ i k 0
-            ~ < k n {
-                : ?TomlValue ek ( vec_get [TomlValue] arr k )
-                ?? ek {
-                    T ev → ( toml_value_free ev )
-                    F _ → {}
-                }
-                = k + k 1
-            }
-            ( vec_free [TomlValue] arr )
-        }
-        TTable tbl → {
-            : i n ( vec_len [TomlEntry] tbl )
-            : ~ i k 0
-            ~ < k n {
-                : ?TomlEntry ek ( vec_get [TomlEntry] tbl k )
-                ?? ek {
-                    T ev → {
-                        ( string_free . ev key )
-                        ( toml_value_free . ev value )
-                    }
-                    F _ → {}
-                }
-                = k + k 1
-            }
-            ( vec_free [TomlEntry] tbl )
-        }
-    }
-}
+// Early release: a TomlValue owns its strings, arrays and tables and is
+// dropped by whoever owns it; the `sink` parameter is dropped on the way out.
+@ toml_value_free sink TomlValue v → v {}
 
 // ── Char-class predicates ────────────────────────────────────────
 

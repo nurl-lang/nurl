@@ -163,7 +163,7 @@ $ `metadata.nu`
     }
 }
 
-@ __grpc_call_fail inout GrpcCall call GrpcError error → !v GrpcError {
+@ __grpc_call_fail inout GrpcCall call sink GrpcError error → !v GrpcError {
     ?? ( grpc_call_cancel call ) { T _ → {} F e → { ( grpc_error_free e ) } }
     ^ @ !v GrpcError { F error }
 }

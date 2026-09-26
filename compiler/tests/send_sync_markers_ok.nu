@@ -79,7 +79,7 @@ $ `stdlib/core/marker.nu`
     ( chan_close [i] ch )
     ( chan_free [i] ch )
     ( vec_free [i] nums )
-    ( rc_free [i] local )
+    // `local` moved into `w`, which drops it.
     ( arc_free [i] counter )
     ( cell_free scratch )
     ( mutex_free lock )

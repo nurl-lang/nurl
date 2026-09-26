@@ -2600,10 +2600,48 @@ static void nurl__sc_register(void) {
     pthread_setspecific(nurl__sc_key, (void*)1);
 }
 
+/* glibc keeps a chunk's size in the word before it, so the usable size a
+ * free needs is one load away — no PLT call into malloc_usable_size, which
+ * was ~4 % of an allocation-heavy compile. Only trusted after a probe at
+ * start-up agrees with the library for a spread of sizes: an interposed
+ * allocator (LD_PRELOAD), memory tagging or any other layout fails it and
+ * keeps the library query. */
+#if defined(__GLIBC__) && (defined(__x86_64__) || defined(__aarch64__)) && !defined(__APPLE__)
+static int nurl__sc_hdr = 0;
+static inline size_t nurl__sc_usable_fast(void *p) {
+    if (__builtin_expect(nurl__sc_hdr, 1)) {
+        /* volatile: the word lies before the object malloc returned, and
+         * an optimiser may fold an ordinary read of it away. */
+        size_t h = *(volatile size_t *)((char *)p - sizeof(size_t));
+        if (!(h & 2)) return (h & ~(size_t)7) - sizeof(size_t);
+    }
+    return malloc_usable_size(p);
+}
+static void nurl__sc_probe_hdr(void) {
+    static const size_t sizes[] = { 1, 8, 16, 24, 25, 40, 64, 100, 200, 500, 1000, 4000 };
+    int ok = 1;
+    for (size_t i = 0; i < sizeof sizes / sizeof sizes[0]; i++) {
+        void *p = malloc(sizes[i]);
+        if (!p) { ok = 0; break; }
+        /* volatile: the word lies before the object malloc returned, and
+         * an optimiser may fold an ordinary read of it away. */
+        size_t h = *(volatile size_t *)((char *)p - sizeof(size_t));
+        if ((h & 2) || (h & ~(size_t)7) - sizeof(size_t) != malloc_usable_size(p)) ok = 0;
+        free(p);
+    }
+    nurl__sc_hdr = ok;
+}
+#  undef nurl__sc_usable
+#  define nurl__sc_usable(p) nurl__sc_usable_fast(p)
+#else
+static void nurl__sc_probe_hdr(void) {}
+#endif
+
 __attribute__((noinline, cold))
 static int nurl__sc_init(void) {
     const char *e = getenv("NURL_ALLOC_CACHE");
     nurl__sc_on = !(e && e[0] == '0' && e[1] == '\0');
+    if (nurl__sc_on) nurl__sc_probe_hdr();
     return nurl__sc_on;
 }
 static inline int nurl__sc_live(void) {
@@ -2703,6 +2741,18 @@ static __thread long long nurl__ret_owned;
 long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
 void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
 
+/* Per-call ownership of a returned handle (String / Vec / owning struct or
+ * enum, or an option of one), published by a callee whose paths differ
+ * (docs/MEMORY.md §7.6). Kept apart from the string proof above: a caller
+ * reads that one for callees that never publish it. */
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+static long long nurl__ret_hown;
+#else
+static __thread long long nurl__ret_hown;
+#endif
+long long nurl_ret_hown_get(void) { return nurl__ret_hown; }
+void nurl_ret_hown_set(long long own) { nurl__ret_hown = own; }
+
 /* Closure environments (docs/MEMORY.md §7.4). A capturing closure's env is
  * one heap block whose first word points at a compiler-emitted descriptor:
  * the block's size, and two optional thunks over the captures that are
@@ -2793,6 +2843,11 @@ void *nurl_closure_own(void *env, void *owner) {
 typedef struct {
     void *ptr;
     void (*drop)(void*);
+    /* An owned handle's drop flag (an `i1` alloca beside its slot): the
+     * binding may have moved its value on since it registered, and the
+     * flag — read when a panic drains the entry — says whether it still
+     * owns one. NULL: always drop. */
+    const unsigned char *flag;
     uint64_t sequence;
     size_t next;                 /* index + 1 in this pointer's hash bucket */
 } NurlJournalEntry;
@@ -2851,7 +2906,7 @@ static void nurl__journal_thread_exit(void) {
     nurl__jrnl_len = nurl__jrnl_cap = nurl__jrnl_live = 0;
 }
 
-static void nurl__jrnl_push(void *p, void (*drop)(void*)) {
+static void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned char *flag) {
     if (!nurl__jrnl_active || !p) return;
     nurl__jrnl_grow();
     if (nurl__jrnl_sequence == UINT64_MAX) {
@@ -2860,16 +2915,22 @@ static void nurl__jrnl_push(void *p, void (*drop)(void*)) {
     }
     size_t bucket = nurl__jrnl_bucket(p);
     NurlJournalEntry *entry = &nurl__jrnl[nurl__jrnl_len];
-    entry->ptr = p; entry->drop = drop;
+    entry->ptr = p; entry->drop = drop; entry->flag = flag;
     entry->sequence = ++nurl__jrnl_sequence;
     entry->next = nurl__jrnl_buckets[bucket];
     nurl__jrnl_buckets[bucket] = ++nurl__jrnl_len;
     ++nurl__jrnl_live;
 }
 
+static void nurl__jrnl_push(void *p, void (*drop)(void*)) { nurl__jrnl_push2(p, drop, NULL); }
 void nurl_journal_push(void *p) { nurl__jrnl_push(p, NULL); }
 void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
     if (fn) nurl__jrnl_push(slot, fn);
+}
+/* An owned String / Vec / struct / container binding: `fn` drops the value
+ * in `slot` on a panic if the binding's drop flag still says it owns one. */
+void nurl_journal_push_drop2(void *slot, void *flag, void (*fn)(void*)) {
+    if (fn) nurl__jrnl_push2(slot, fn, (const unsigned char *)flag);
 }
 
 static void nurl__jrnl_pop_nulls(void) {
@@ -2893,6 +2954,10 @@ void nurl_journal_forget(void *p) {
     nurl__jrnl_pop_nulls();
 }
 
+/* The registration of a binding's slot (nurl_journal_push_drop2) ends with
+ * its scope; a separate name so the compiler can tell it from a temporary's
+ * forget and drop both where no panic can reach. */
+void nurl_journal_forget_slot(void *slot) { nurl_journal_forget(slot); }
 static void nurl__jrnl_remove(void *p) { nurl_journal_forget(p); }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }
 
@@ -2921,8 +2986,15 @@ static void nurl__jrnl_drain(uint64_t mark) {
     while (nurl__jrnl_len && nurl__jrnl[nurl__jrnl_len - 1].sequence > mark) {
         NurlJournalEntry entry = nurl__jrnl[nurl__jrnl_len - 1];
         nurl_journal_forget(entry.ptr);
-        if (entry.drop) entry.drop(entry.ptr);
-        else free(entry.ptr);
+        if (entry.drop) {
+            if (!entry.flag || (*(volatile const unsigned char *)entry.flag & 1)) entry.drop(entry.ptr);
+        } else {
+            /* A raw buffer nurl_alloc handed out: count its release as
+             * nurl_free would, so nurl_alloc_count − nurl_free_count stays
+             * the live total across a panic. */
+            nurl__actr_bump(&nurl__actr_slot()->freed);
+            free(entry.ptr);
+        }
     }
 }
 
@@ -3155,6 +3227,19 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     }
     if (data && data != (void*)((char*)ctl + 24)) nurl_free(data);
     nurl_free(ctl);
+}
+
+/* Empty slot `idx` of a Vec whose element was handed to a consumer while
+ * the Vec still held it (a `vec_get` payload freed by hand): the Vec's own
+ * drop then skips it. Looked up through the control block at this moment,
+ * so a buffer that moved since the read is still addressed correctly.
+ * [off, off+n) is the part emptied: the element, or one field of it. */
+void nurl_vec_slot_clear_if(int cond, void *ctl, long long idx, long long esize,
+                            long long off, long long n) {
+    if (!cond || !ctl || idx < 0 || esize <= 0 || off < 0 || n <= 0 || off + n > esize) return;
+    long long *c = (long long*)ctl;
+    if (idx >= c[1]) return;
+    memset((char*)(intptr_t)c[0] + idx * esize + off, 0, (size_t)n);
 }
 
 /* Deep copy of a Vec / String control block (docs/MEMORY.md §7.6): the
@@ -4113,7 +4198,7 @@ long long nurl_recover(void *fn_ptr, void *env_ptr) {
      * longjmp; truncate defensively in case the jump came from a path
      * that did not (it always does, but keep the invariant local). */
     nurl__jrnl_truncate(frame.jmark);
-    free(nurl__panic_last_msg);
+    nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
     nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
     return 1;
 }
