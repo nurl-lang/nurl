@@ -8716,6 +8716,23 @@
     ^ ( nurl_str_cat `undef` `` )
 }
 
+// `( mem_dup x )` — an owned copy of x's value: a deep copy of a String,
+// a Vec, a library handle or an owning struct / enum, the value itself for
+// anything that owns nothing. How a generic container copies its elements
+// (`S_clone`, map_clone) without knowing what they are.
+@ gen_mem_dup i lex i syms i cg → s {
+    : s v ( gen_expr lex syms cg )
+    : s ty ( nurl_get_last_type )
+    ( expect lex TT_RPAREN )
+    ? & ( __type_needs_drop ty syms ) ( __clone_supported ty syms ) {
+        : s r ( mem_emit_cloneif cg ty v `1` )
+        ( nurl_set_last_type ty )
+        ^ r
+    } {}
+    ( nurl_set_last_type ty )
+    ^ v
+}
+
 // `( mem_put_back x )` — the next store of `x` through a pointer writes it
 // back into the slot it was read from (a getter / modify / setter
 // protocol over a container's element): it is stored as is, neither
@@ -9655,6 +9672,9 @@
     ? ( seq fname `mem_put_back` )
     { ^ ( gen_mem_put_back lex syms cg ) }
     {}
+    ? ( seq fname `mem_dup` )
+    { ^ ( gen_mem_dup lex syms cg ) }
+    {}
     // Dynamic trait object construction `( dyn Trait v )` (docs/spec.md §4.9).
     // Intercepted only when `dyn` is followed by a known trait name, so a
     // user function that happens to be named `dyn` still calls through.
@@ -10100,8 +10120,12 @@
             ( nurl_sym_def syms `__arg_dyn_box__` ? & == bck_arg_tt TT_LPAREN ( seq ( nurl_lex_peek_val lex ) `dyn` ) `1` `` )
             ( nurl_sym_def syms `__agg_arg_sink__` ? == bck_arg_tt TT_AT
             ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) `` )
+            : s __aac_saved ( nurl_sym_get syms `__agg_arg_call__` )
+            ( nurl_sym_def syms `__agg_arg_call__` ? == bck_arg_tt TT_AT
+            ( nurl_str_cat3 call_name ` ` ( nurl_str_int arg_idx ) ) `` )
             = av ( gen_operand lex syms cg )
             ( nurl_sym_def syms `__agg_arg_sink__` __aas_saved )
+            ( nurl_sym_def syms `__agg_arg_call__` __aac_saved )
             ( nurl_sym_def syms `__in_call_arg__` `` )
             = at ( nurl_get_last_type )
             // `( nurl_free # s st )`: a heap object released here (see
@@ -10816,7 +10840,10 @@
         ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         summary_callee
         { ( bck_stash_pending_call bck_arg_val ( nurl_lex_line lex )
-            call_name arg_idx fname F ) }
+            call_name arg_idx fname F )
+            // A handle it may keep instead (bck_stash_store).
+            ? & ( __is_handle_ty at ) ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) bck_arg_val )
+            { ( bck_stash_store bck_arg_val ( nurl_lex_line lex ) call_name ( nurl_str_int arg_idx ) `pendkeep` ) } {} }
         {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
         // append, since promotion replaces (at, av) with the widened pair.
@@ -17560,8 +17587,12 @@
     : s lty ( nurl_sym_get syms name )
     ? & ( bck_is_heap_lty lty )
     ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) name )
-    { ( bck_stash_maybe_move name line
-        `its handle was stored into an aggregate literal` ) }
+    {  // The aggregate owns it from here: a bound / returned literal at
+        // once, one built as an argument when its callee keeps it.
+        : s ac ( nurl_sym_get syms `__agg_arg_call__` )
+        ? == 0 ( nurl_str_len ac )
+        { ( bck_stash_store name line `-` `0` `store` ) }
+        { ( bck_stash_store name line ( str_first_word ac ) ( str_first_word ( str_skip_word ac ) ) `pendstore` ) } }
     {}
 }
 
@@ -17708,6 +17739,22 @@
     } {}
 }
 
+// Stash a store of `name`'s value into an owner at `line` (a `store` row,
+// or a `pendstore` one decided at the walk by whether `callee` keeps
+// argument `argidx`). Rides the pending-call list: same row shape.
+@ bck_stash_store s name i line s callee s argidx s kind → v {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        : s cur ( nurl_sym_get g_bck `ppends` )
+        : s add ( nurl_str_cat3
+        ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        ( nurl_str_cat3 ` ` callee ` ` )
+        ( nurl_str_cat3 argidx ` ` kind ) )
+        ( nurl_sym_set g_bck `ppends`
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
+        ? ! ( seq kind `store` ) { ( nurl_sym_set g_bck `deferred` `1` ) } {}
+    } {}
+}
+
 // Stash `name` as MAYBE consumed at `line` — the value-producing
 // `?` / `??` selected between this binding's handle and something
 // else, so the new owner holds it on some paths only (see the
@@ -17849,12 +17896,24 @@
 : i BCK_BORROWED_MUT 4
 : i BCK_MAYBE_MOVED 5
 : i BCK_INVALID 6
+// Stored into an owner (a struct / enum literal that keeps it): the value
+// lives on there, readable through this name, but no longer this
+// binding's to consume — a second consume (a sink, a free, another
+// store) is the double free.
+: i BCK_STORED 7
 
 // Lattice join — least upper bound of two per-binding states meeting
 // at a control-flow merge point.
 @ bck_join i a i b → i {
     ? == a b { ^ a } {}
     ? | == a BCK_INVALID == b BCK_INVALID { ^ BCK_INVALID } {}
+    // Stored on one path only: a later consume is a double free on that
+    // path alone — not flagged (the conditional-move contract below).
+    ? | == a BCK_STORED == b BCK_STORED {
+        : i o ? == a BCK_STORED b a
+        ? | == o BCK_MOVED == o BCK_MAYBE_MOVED { ^ BCK_MAYBE_MOVED } {}
+        ^ BCK_OWNED
+    } {}
     // Owned and Uninit are both "not moved here"; Moved and MaybeMoved
     // are "moved-ish". Any merge of a not-moved state with a moved-ish
     // one — or of two differing moved-ish states — is a conditional
@@ -18076,8 +18135,9 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : s w2 ? | | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
-    ( seq kind `maybemove` ) ( seq kind `pendcall` ) ( seq kind `pendretain` )
+    : b __pend | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` )
+    : s w2 ? | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
+    ( seq kind `maybemove` ) __pend
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
     : s rds ( bck_ids ( bck_field rec 2 ) )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
@@ -18085,7 +18145,7 @@
     : s five ( nurl_str_cat3 body `\t` ( bck_field rec 4 ) )
     // A `pendcall` row carries the callee and the argument index it was
     // passed at; everything else stops at field 4.
-    ? | ( seq kind `pendcall` ) ( seq kind `pendretain` )
+    ? __pend
     { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 )
         ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) }
     {}
@@ -18235,6 +18295,24 @@
     }
 }
 
+// A binding consumed (or stored again) after its value was stored into
+// an owner: the owner drops that value, so this is its second release.
+@ bck_diag_stored i id i useline b again → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `st:` ( nurl_str_int useline ) ) `:` ids )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) {} {
+        ( nurl_sym_set g_bck `warnset`
+        ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+        : s name ( nurl_sym_get2 g_bck `rv_` ids )
+        : s sl ( nurl_sym_get2 g_bck `sl_` ids )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+        ( nurl_str_cat4 `'` name ? again `' is stored into a second owner here, but its value was already stored into an owner at line ` `' is consumed here, but its value was stored into an owner at line `
+        ( nurl_str_cat3 sl ` (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading '`
+        ( nurl_str_cat name `' is fine; to hand a value on AND keep one in the owner, store a copy (string_clone / vec_clone).` ) ) ) )
+    }
+}
+
 // Flag any read of a definitely-Moved binding as a use-after-move.
 // MaybeMoved (a conditional move at a CFG join) is deliberately NOT
 // flagged — erroring only on a definite move keeps this check
@@ -18308,6 +18386,7 @@
             ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvid ) {
                 ( bck_diag_maybe mvid ( nurl_str_to_int ( bck_field rec 3 ) ) )
             } {}
+            ? == BCK_STORED ( bck_st_get st mvid ) { ( bck_diag_stored mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
             = st ( bck_st_set st mvid BCK_MOVED )
             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
             ( bck_field rec 3 ) )
@@ -18332,6 +18411,32 @@
             ( bck_join ( bck_st_get st qvid ) BCK_MOVED ) )
             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` qvn )
             ( bck_field rec 3 ) )
+            = p + p 1
+            = done T
+        } {}
+        ? & ! done | | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) {
+            // A value stored into an owner. A literal built as an argument
+            // stores only when its callee keeps (or sinks) that argument —
+            // a view handed to a reader leaves the binding its owner.
+            : s svn ( bck_field rec 1 )
+            : i svid ( nurl_str_to_int svn )
+            : s scal ( bck_field rec 5 )
+            : s saix ( bck_field rec 6 )
+            // `pendkeep` — a handle passed bare to a callee that keeps it
+            // (vec_push's element); a sink there is the `pendcall` move.
+            : b s_sink ( str_contains_word ( nurl_sym_get g_fn_sink scal ) saix )
+            // Stored into an owner that drops it (g_fn_stores) — not kept
+            // in raw memory the caller still frees by hand.
+            : b s_keep ( str_contains_word ( nurl_sym_get g_fn_stores scal ) saix )
+            : b takes ? ( seq kind `store` ) T ? ( seq kind `pendkeep` ) & s_keep ! s_sink | s_sink s_keep
+            ? takes {
+                : i cur ( bck_st_get st svid )
+                ? == cur BCK_STORED { ( bck_diag_stored svid ( nurl_str_to_int ( bck_field rec 3 ) ) T ) } {}
+                ? | == cur BCK_OWNED == cur BCK_UNINIT {
+                    = st ( bck_st_set st svid BCK_STORED )
+                    ( nurl_sym_set g_bck ( nurl_str_cat `sl_` svn ) ( bck_field rec 3 ) )
+                } {}
+            } {}
             = p + p 1
             = done T
         } {}
@@ -18361,6 +18466,7 @@
             ? ( str_contains_word psink paix )
             { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )
                 { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) ) } {}
+                ? == BCK_STORED ( bck_st_get st pvid ) { ( bck_diag_stored pvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
                 = st ( bck_st_set st pvid BCK_MOVED )
                 ? ( seq kind `pendretain` ) {
                     // A later borrowing argument on this same source line
@@ -27865,6 +27971,9 @@
                 = mangled ( nurl_str_cat mangled
                 ( nurl_str_cat `__` ( mangle_src_word ta ) ) )
             }
+            // A library handle is recognised by its instance type (__libh_base).
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhs##%` mangled ) sname )
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhta##%` mangled ) ta_list )
             // Dedupe — each distinct instantiation emitted at most once.
             : s done_key ( nurl_str_cat mangled `__done` )
             ? == 0 ( nurl_sym_len g_struct_inst_syms done_key ) {
@@ -27943,9 +28052,10 @@
     // can render `<generic vec_as_slice__i64 from user.nu:42>:1:21:` in
     // any diagnostic emitted while re-parsing the substituted body,
     // instead of the opaque `<generic>:1:21:`.
-    : s caller_file ( nurl_lex_filename lex )
-    : i caller_line ( nurl_lex_line lex )
-    : i caller_col ( nurl_lex_col lex )
+    ( defer_instantiation_at fname mangled type_args syms ( nurl_lex_filename lex ) ( nurl_lex_line lex ) ( nurl_lex_col lex ) )
+}
+
+@ defer_instantiation_at s fname s mangled s type_args i syms s caller_file i caller_line i caller_col → v {
     : s ret_ty ( compute_generic_ret_ty fname type_args )
     ( nurl_sym_def syms mangled ret_ty )
     : s cnt_s ( nurl_sym_get g_generic_syms `__deferred_count__` )
@@ -30147,6 +30257,7 @@
     // An option binding's registration type (__udrop_regty).
     ? != 0 ( nurl_str_starts ty `%__opt.` ) { ^ T } {}
     ? ( __is_handle_enum ty ) { ^ T } {}
+    ? ( __is_libh ty ) { ^ T } {}
     ^ ( __is_owned_struct_ty ty )
 }
 
@@ -30237,6 +30348,7 @@
     ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
     ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
+    ? ( __is_libh ty ) { ^ F } {}
     ? != 0 ( nurl_sym_len2 g_impl_name_syms `ownty##` ty )
     { ^ ( seq ( nurl_sym_get2 g_impl_name_syms `ownty##` ty ) `1` ) } {}
     : s ck ( nurl_str_cat `ownty##` ty )
@@ -30310,10 +30422,136 @@
     ? == g_hmemo_depth 0 { = g_hmemo_log `` } {}
 }
 
+// ── Library handles ─────────────────────────────────────────────────
+// A generic struct `S` whose module defines `S_drop [..] sink ( S .. ) x`
+// (and, to be copyable, `S_clone [..] ( S .. ) x → ( S .. )`) is a library
+// handle: HashMap, Set, Deque, BTree, Rc, Arc, Box. Its instances are owned
+// like a Vec — dropped by the binding that owns them, copied when a
+// borrowed one is stored into an owner (docs/MEMORY.md §7.6) — and the
+// module keeps its layout to itself: the drop and the copy are its own
+// functions, instantiated for each concrete type the program uses.
+@ __libh_base s ty → s {
+    : s sn ( nurl_sym_get2 g_impl_name_syms `libhs##` ty )
+    ? == 0 ( nurl_str_len sn ) { ^ sn } {}
+    ? == 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_drop` ) `__gsrc` ) { ^ ( nurl_str_cat `` `` ) } {}
+    // A program's own `% Drop` for this instance (`% Drop ( Box i )`) wins.
+    ? & != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) == 0 ( nurl_sym_len2 g_impl_name_syms `handledrop##` ty )
+    { ^ ( nurl_str_cat `` `` ) } {}
+    ^ sn
+}
+
+@ __is_libh s ty → b {
+    ? | == 0 ( nurl_str_len ty ) != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ^ != 0 ( nurl_str_len ( __libh_base ty ) )
+}
+
+// The instance of `S_<op>` for handle type `ty` (`%HashMap__i64__String`
+// → `HashMap_drop__i64__String`): the struct's own mangle suffix.
+@ __libh_fn s ty s op → s {
+    : s sn ( __libh_base ty )
+    : i k + 1 ( nurl_str_len sn )
+    ^ ( nurl_str_cat4 sn `_` op ( nurl_str_slice ty k - ( nurl_str_len ty ) k ) )
+}
+
+// Type argument `k` of a library handle instance, parsed.
+@ __libh_targ s ty i k → s {
+    : ~ s ta ( nurl_sym_get2 g_impl_name_syms `libhta##` ty )
+    : ~ i j 0
+    ~ < j k { = ta ( str_skip_word ta ) = j + j 1 }
+    : s w ( str_first_word ta )
+    ? == 0 ( nurl_str_len w ) { ^ w } {}
+    : i lx ( nurl_lex_new w `<libh-targ>` )
+    : s t ( parse_type lx )
+    ( nurl_lex_free lx )
+    ^ t
+}
+
+// How a copy is made: `share` (`S_share` — another owner of the same
+// value, a reference count going up: Rc, Arc) or `clone` (`S_clone` — a
+// copy owning copies of the contents).
+@ __libh_copy_op s ty → s {
+    : s sn ( __libh_base ty )
+    ? != 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_share` ) `__gsrc` ) { ^ ( nurl_str_cat `share` `` ) } {}
+    ^ ( nurl_str_cat `clone` `` )
+}
+
+// Copyable when the module supplies `S_share`, or `S_clone` and every
+// type argument that owns something copies too.
+@ __libh_clone_ok s ty i syms → b {
+    : s sn ( __libh_base ty )
+    ? != 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_share` ) `__gsrc` ) { ^ T } {}
+    ? == 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_clone` ) `__gsrc` ) { ^ F } {}
+    : i n ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
+    : ~ i k 0
+    ~ < k n {
+        : s t ( __libh_targ ty k )
+        ? & ( __type_needs_drop t syms ) ! ( __clone_supported t syms ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Queue `S_<op>`'s instance for `ty` (once) with the generic call path's
+// dedup key, so a program that also calls it by name shares the instance.
+@ __libh_defer s ty s op → v {
+    : s fname ( nurl_str_cat3 ( __libh_base ty ) `_` op )
+    : s mangled ( __libh_fn ty op )
+    : s gkey ( nurl_str_cat `__inst_` mangled )
+    ? != 0 ( nurl_sym_len g_generic_syms gkey ) { ^ v } {}
+    ( nurl_sym_def g_generic_syms gkey `1` )
+    ( defer_instantiation_at fname mangled ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) g_root_syms `<library handle>` 0 0 )
+}
+
+// Every library handle a type reaches (through Vec elements, fields,
+// payloads, option parts) gets its drop — and, when it copies, its copy —
+// instantiated now, while generic instances are still being collected:
+// the drop graphs that call them are written after the last one is.
+@ __libh_walk s ty i syms → v {
+    : i n ( nurl_str_len ty )
+    ? | < n 2 == ( nurl_str_get ty - n 1 ) 42 { ^ v } {}
+    : s key ( nurl_str_cat `libhw##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
+    ( nurl_sym_def g_impl_name_syms key `1` )
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        ( __libh_walk ( __wrap_part ty 0 ) syms )
+        ( __libh_walk ( __wrap_part ty 1 ) syms )
+        ^ v
+    } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ v } {}
+    ? ( __is_libh ty ) {
+        ( __libh_defer ty `drop` )
+        ? ( __libh_clone_ok ty syms ) { ( __libh_defer ty ( __libh_copy_op ty ) ) } {}
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ( __libh_walk ( __vec_elem_llvm ty ) syms ) ^ v } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : s vlist ( nurl_sym_get2 syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
+            : ~ i pi 0
+            ~ < pi pc {
+                ( __libh_walk ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms )
+                = pi + pi 1
+            }
+        }
+        ^ v
+    } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        ( __libh_walk ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms )
+        = fi + fi 1
+    }
+}
+
 // A String, a Vec, or a struct or enum that owns them and copies: the
 // values handled as freely aliased handles (docs/MEMORY.md §7.6).
 @ __is_value_handle s ty → b {
     ? ( seq ty `%String` ) { ^ T } {}
+    ? ( __is_libh ty ) { ^ ( __libh_clone_ok ty g_root_syms ) } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ T } {}
     ^ | ( __is_owned_struct_ty ty ) ( __is_handle_enum ty )
 }
@@ -30333,6 +30571,7 @@
 // Register a handle type's drop the first time a binding of it is owned.
 @ __handle_drop_ensure s ty → v {
     ? ! ( __is_handle_ty ty ) { ^ v } {}
+    ( __libh_walk ty g_root_syms )
     : s key ( nurl_str_cat `drop##` ty )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
     ( nurl_sym_def g_impl_name_syms key ( __drop_mangle ty ) )
@@ -30399,6 +30638,7 @@
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ T } {}
     ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    ? ( __is_libh ty ) { ^ T } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : s vlist ( nurl_sym_get2 syms sname `__variants` )
     ? != 0 ( nurl_str_len vlist ) { ^ ( __enum_needs_drop vlist syms ) } {}
@@ -30420,6 +30660,7 @@
     ? == 0 ( nurl_str_len pt ) { ^ F } {}
     ? ( seq pt `%String` ) { ^ T } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) { ^ T } {}
+    ? ( __is_libh pt ) { ^ T } {}
     ? ( __drop_is_boxed pt syms ) { ^ T } {}
     ? & == ( nurl_str_get pt 0 ) 37 != ( nurl_str_get pt - ( nurl_str_len pt ) 1 ) 42 {
         : s sn ( nurl_str_slice pt 1 - ( nurl_str_len pt ) 1 )
@@ -30458,6 +30699,11 @@
     // (runs the vtable slot-0 drop on the boxed value, then frees the box).
     ? != 0 ( nurl_str_starts ty `%dyn.` ) {
         ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) ) ) )
+        ( nurl_print `(` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print valreg ) ( nurl_print `)\n` )
+        ^ v
+    } {}
+    ? ( __is_libh ty ) {
+        ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( __libh_fn ty `drop` ) ) )
         ( nurl_print `(` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print valreg ) ( nurl_print `)\n` )
         ^ v
     } {}
@@ -30628,6 +30874,7 @@
 @ queue_drop_for_type s ty → v {
     : s key ( nurl_str_cat `dropqueued##` ty )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
+    ( __libh_walk ty g_root_syms )
     ( nurl_sym_def g_impl_name_syms key `1` )
     ( __park_append g_impl_name_syms `__pending_drop_types__` ty )
 }
@@ -30707,6 +30954,7 @@
 }
 
 @ __clone_supported_calc s ty i syms → b {
+    ? ( __is_libh ty ) { ^ ( __libh_clone_ok ty syms ) } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) {
         : s elem ( __vec_elem_llvm ty )
         ^ | ! ( __type_needs_drop elem syms ) ( __clone_supported elem syms )
@@ -31014,6 +31262,7 @@
 @ __clone_request s ty → v {
     : s key ( nurl_str_cat `clonereq##` ty )
     ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
+    ( __libh_walk ty g_root_syms )
     ( nurl_sym_def g_impl_name_syms key `1` )
     ( __park_append g_impl_name_syms `__pending_clones__` ty )
 }
@@ -31048,6 +31297,13 @@
     ( nurl_sym_def g_impl_name_syms key `1` )
     : s ll ( nurl_llty ty )
     : ~ i ctr 0
+    ? ( __is_libh ty ) {
+        ( nurl_print `define linkonce_odr ` ) ( nurl_print ll ) ( nurl_print ` @__nurl_clone_` ) ( nurl_print m )
+        ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v) {\nentry:\n  %r = call ` ) ( nurl_print ll ) ( nurl_print ` @` )
+        ( nurl_print ( llvm_source_fn ( __libh_fn ty ( __libh_copy_op ty ) ) ) ) ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v)\n  ret ` )
+        ( nurl_print ll ) ( nurl_print ` %r\n}\n` )
+        ^ v
+    } {}
     ? | ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) {
         : ~ s hook `null`
         : ~ s esz `1`
@@ -31225,7 +31481,7 @@
     : s donekey ( nurl_str_cat `dgen##` mangle )
     ? != 0 ( nurl_sym_len g_impl_name_syms donekey ) { ^ v } {}
     ( nurl_sym_def g_impl_name_syms donekey `1` )
-    ? ( seq ty `%String` ) { ( emit_drop_handle_fn ty syms ) ^ v } {}
+    ? | ( seq ty `%String` ) ( __is_libh ty ) { ( emit_drop_handle_fn ty syms ) ^ v } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) {
         : s elem ( __vec_elem_llvm ty )
         ? ( __type_needs_drop elem syms ) {

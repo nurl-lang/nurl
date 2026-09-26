@@ -110,10 +110,7 @@ $ `stdlib/core/option.nu`
     ( nurl_print ` clonelen=` )
     ( nurl_print ( nurl_str_int ( map_len [s String] msc ) ) )
     ( nurl_print `\n` )
-    // Free every owned value in both maps, then the maps themselves.
-    // A double-free here would trip ASan.
-    ( map_each [s String] ms \ s k String val → v { ( string_free val ) } )
-    ( map_each [s String] msc \ s k String val → v { ( string_free val ) } )
+    // Each map drops its own values (and a double free would trip ASan).
     ( map_free [s String] ms )
     ( map_free [s String] msc )
 

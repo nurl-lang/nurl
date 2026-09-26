@@ -30,6 +30,9 @@ $ `stdlib/std/thread.nu`
     : ( @ v ) worker \ → v {
         : s rp # s shared_ctl
         : ( Arc i ) my @ ( Arc i ) { rp }
+        // `my` is a view rebuilt from the raw pointer, not a handle of
+        // its own: it must not be dropped (that would be a decrement).
+        ( mem_forget my )
         : ( Arc i ) cl ( arc_clone [i] my )
         // touch the value (read race; safe because nobody writes)
         : i v ( arc_get [i] cl )

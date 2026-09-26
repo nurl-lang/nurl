@@ -7,25 +7,23 @@
 // parameters, channels, or thread spawns — without copying the value
 // every time the handle moves.
 //
-// Conceptually the same role `Box<T>` plays in Rust or `Box[T]` plays
-// in Zig's std.heap, with NURL's single-owner discipline: every Box
-// has exactly one owner, and that owner calls `box_free` exactly once
-// when done. There is no static checker behind this; the convention
-// matches `vec_free` / `hashmap_free` / `arena_free` already in core.
+// Conceptually the same role `Box<T>` plays in Rust: a box has one owner,
+// which drops it — payload first, then the storage — at scope exit, like a
+// Vec (docs/MEMORY.md §7.6). `box_free` releases early.
 //
 // API:
 //
 //   ( box_new  [T] x )            → ( Box T )    heap-allocate, store x
 //   ( box_zero [T] )              → ( Box T )    heap-allocate, zero-init
-//   ( box_get  [T] b )            → T            load by value (see TRAP)
-//   ( box_set  [T] b x )          → v            overwrite payload
-//   ( box_replace [T] b x )       → T            store new, return old
+//   ( box_get  [T] b )            → T            the payload, borrowed
+//   ( box_set  [T] b x )          → v            overwrite payload (old dropped)
+//   ( box_replace [T] b x )       → T            store new, return old (owned)
 //   ( box_ptr  [T] b )            → *T           borrowed raw pointer (FFI)
-//   ( box_into [T] b )            → T            consume + free the box
-//   ( box_clone [T] b )           → ( Box T )    bitwise shallow copy
-//   ( box_clone_with [T] b f )    → ( Box T )    deep copy via f : (@ T T)
-//   ( box_free [T] b )            → v            release storage
-//   ( box_free_with [T] b drop )  → v            drop : (@ v T); runs first
+//   ( box_into [T] b )            → T            consume the box, keep the payload
+//   ( box_clone [T] b )           → ( Box T )    a box owning a copy of the payload
+//   ( box_clone_with [T] b f )    → ( Box T )    copy via f : (@ T T)
+//   ( box_free [T] b )            → v            early release (payload + storage)
+//   ( box_free_with [T] b drop )  → v            drop : (@ v T) owns the payload
 //   ( box_is_null [T] b )         → b            T iff allocation failed
 //
 // Memory model:
@@ -37,8 +35,7 @@
 //     passing it to a function — duplicates the handle, not the
 //     storage. Both handles see the same heap slot, like `Channel` /
 //     `String` / `Arena`. Mutate through either; both observe the
-//     change. The owner discipline says ONE handle is responsible for
-//     calling `box_free` exactly once.
+//     change. The binding that owns the box drops it; the others borrow.
 //   * `box_ptr b` returns a raw `*T` borrowed from the box's slot.
 //     The pointer is valid until `box_free` (which deallocates) or
 //     `box_set` (which overwrites the slot but keeps the address).
@@ -47,19 +44,9 @@
 //     copies the T out by value, frees the slot, and renders the
 //     handle dead. Any prior `box_ptr` borrow is now dangling.
 //
-// TRAP — owned-T copy semantics:
-//
-//   For trivial element types (`i`, `f`, `b`, raw `s`, slice), `box_get`
-//   bitwise-copies T out — safe.
-//   For owned element types (`String`, `Vec`, `HashMap`, nested `Box`),
-//   `box_get` aliases the heap pointer inside T: now BOTH the Box and
-//   the returned T own the same underlying allocation. The next
-//   `box_free` plus the returned-T's auto-drop will double-free.
-//
-//   Use `box_into` to MOVE the payload out (the box dies, the T lives
-//   on), or `box_clone_with` with a deep-clone closure (`string_clone`
-//   for `Box[String]`, `vec_clone_with` for `Box[Vec[…]]`, etc.). This
-//   is the same `_with` convention `vec_clone` / `vec_free` use.
+// Payload ownership: `box_get` hands back the payload BORROWED — stored
+// into an owner it is copied, like a vec_get element; `box_into` moves it
+// out.
 //
 // Why a *single*-T heap slot when arena/vec already exist:
 //
@@ -79,7 +66,7 @@
 //
 //   : ( Box DosState ) s ( box_new @ DosState { 0 0 0 ( map_new ) m } )
 //   ( do_work s )                     // s is a single handle, address stable
-//   ( box_free_with s @ DosState d → v { ( map_free . d table ) } )
+//   // dropped (DosState's table with it) when `s` goes out of scope
 
 $ `stdlib/core/mem.nu`
 
@@ -119,21 +106,20 @@ $ `stdlib/core/mem.nu`
     ^ . p 0
 }
 
-// Overwrite the payload in place. Old value is discarded by bitwise
-// overwrite — for owned T, drop the old value separately first or
-// leak it. Use `box_replace` when the old value still matters.
+// Overwrite the payload in place; the old value is dropped. Use
+// `box_replace` when the old value still matters.
 @ box_set [T] ( Box T ) b T x → v {
     : *T p # *T . b ptr
+    : T old . p 0
+    ( mem_take old )
     = . p 0 x
 }
 
-// Store `x`, return the old payload. Caller now owns the old value
-// and is responsible for any cleanup (e.g. `string_free` on
-// Box[String], `vec_free` on Box[Vec[…]]). For owned-T this is the
-// SAFE way to update — `box_set` leaks the old payload silently.
+// Store `x`, return the old payload, which the caller now owns.
 @ box_replace [T] ( Box T ) b T x → T {
     : *T p # *T . b ptr
     : T old . p 0
+    ( mem_take old )
     = . p 0 x
     ^ old
 }
@@ -150,22 +136,46 @@ $ `stdlib/core/mem.nu`
 // Move the payload OUT of the box; free the box's storage; return T.
 // The handle `b` is dead afterwards — do not call any other box_* on
 // it. This is the only owner-respecting way to extract owned T.
-@ box_into [T] ( Box T ) b → T {
+@ box_into [T] sink ( Box T ) b → T {
+    // The payload leaves; only the storage is released.
+    ( mem_forget b )
     : *T p # *T . b ptr
     : T v . p 0
+    ( mem_take v )
     ( nurl_free # s p )
     ^ v
 }
 
 // ── Cloning ─────────────────────────────────────────────────────────
 
-// Bitwise shallow copy. Safe for trivial T; aliases owned heap state
-// inside T (same trap as `vec_clone` over `Vec[String]`).
+// A box of its own holding a copy of the payload (a String deep, an
+// integer as is).
 @ box_clone [T] ( Box T ) b → ( Box T ) {
+    ^ ( Box_clone [T] b )
+}
+
+// What dropping a box does (its owner does it at scope exit — docs/
+// MEMORY.md §7.6): the payload, then the storage.
+@ Box_drop [T] sink ( Box T ) b → v {
+    // This IS the drop: `b` is not dropped again on the way out.
+    ( mem_forget b )
+    : *T p # *T . b ptr
+    ? != 0 # i p {
+        : T v . p 0
+        ( mem_take v )
+        ( nurl_free # s p )
+    } {}
+}
+
+@ Box_clone [T] ( Box T ) b → ( Box T ) {
     : *T src # *T . b ptr
     ? == 0 # i src { ^ @ ( Box T ) { # s 0 } } {}
-    : T v . src 0
-    ^ ( box_new [T] v )
+    : *T p ( alloc [T] 1 )
+    ? != 0 # i p {
+        : T v . src 0
+        = . p 0 ( mem_dup v )
+    } {}
+    ^ @ ( Box T ) { # s p }
 }
 
 // Deep clone: caller supplies `f : (@ T T)` that returns an
@@ -186,16 +196,14 @@ $ `stdlib/core/mem.nu`
 // where alloc returned NULL); not idempotent over an already-freed
 // non-NULL box — calling twice is undefined behaviour (double-free),
 // matching `vec_free` / `nurl_free`.
-@ box_free [T] sink ( Box T ) b → v {
-    : *T p # *T . b ptr
-    ? != 0 # i p { ( nurl_free # s p ) } {}
-}
+@ box_free [T] sink ( Box T ) b → v { ( Box_drop [T] b ) }
 
 // Free with a per-payload drop closure. Used for owned-T boxes:
 //   ( box_free_with [String] sb \ x → v { ( string_free x ) } )
 // Equivalent to `( drop ( box_get b ) )` followed by `( box_free b )`,
 // but expressed as one call to mirror `vec_free_with`.
 @ box_free_with [T] sink ( Box T ) b ( @ v T ) drop → v {
+    ( mem_forget b )
     : *T p # *T . b ptr
     ? != 0 # i p {
         : T v . p 0

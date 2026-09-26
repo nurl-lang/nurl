@@ -29,14 +29,14 @@
 //   ( btree_min_key   [K V] m )            → ? K
 //   ( btree_max_key   [K V] m )            → ? K
 //   ( btree_each      [K V] m f )          → v     f:(@ v K V), in order
-//   ( btree_free      [K V] m )            → v     trivial K/V
+//   ( btree_free      [K V] m )            → v     drops every entry
 //   ( btree_free_with [K V] m dk dv )      → v     dk:(@ v K) dv:(@ v V)
 //
-// Ownership: mirrors OrdMap. On btree_set REPLACE the existing equal
-// key is kept and the passed-in `k` is NOT stored — for owned keys the
-// caller still owns that `k`. btree_remove returns the value (caller
-// frees an owned V); the removed key's storage is bitwise-dropped, so
-// owned-key maps should prefer bulk teardown via btree_free_with.
+// Ownership: a tree owns its keys and values and is dropped with them by
+// its owner at scope exit, like a Vec (docs/MEMORY.md §7.6); btree_free
+// releases early. btree_set moves `k` and `v` in (on REPLACE the existing
+// equal key stays and the passed-in `k` is dropped) and hands a replaced
+// value back owned; btree_remove drops the key and hands the value back.
 //
 // Node layout (heap block, 6 × i64 slots via nurl_peek/poke):
 //   slot 0: keys ptr   (*K, capacity 15)
@@ -207,7 +207,9 @@ $ `stdlib/core/vec.nu`
     : *V vp # *V ( nurl_peek n 1 )
     : i nk ( __bt_nkeys n )
     ? & < pos nk == ( cmp . kp pos k ) 0 {
+        // The old value leaves the tree: the caller owns it.
         : V prev . vp pos
+        ( mem_take prev )
         = . vp pos v
         ^ @ ?V { T prev }
     } {}
@@ -234,6 +236,7 @@ $ `stdlib/core/vec.nu`
         ? == cr 0 {
             : *V vp2 # *V ( nurl_peek n 1 )
             : V prev . vp2 ci
+            ( mem_take prev )
             = . vp2 ci v
             ^ @ ?V { T prev }
         } {}
@@ -488,7 +491,11 @@ $ `stdlib/core/vec.nu`
 
 // Remove k from the subtree at `n` (which has ≥ t keys unless root).
 // Returns Some(removed value).
-@ __bt_remove_rec [K V] s n K k ( @ i K K ) cmp → ?V {
+// `own` — the entry being removed is the caller's key's (its key is
+// dropped here, its value handed back owned); F — a predecessor /
+// successor already copied up into an inner node, whose slot is only
+// vacated: nothing is dropped, and the caller forgets the value.
+@ __bt_remove_rec [K V] s n K k ( @ i K K ) cmp b own → ?V {
     : i pos ( __bt_lower [K V] n k cmp )
     : *K kp # *K ( nurl_peek n 0 )
     : *V vp # *V ( nurl_peek n 1 )
@@ -497,6 +504,11 @@ $ `stdlib/core/vec.nu`
     ? ( __bt_leaf n ) {
         ? here {} { ^ @ ?V { F } }
         : V out . vp pos
+        ( mem_take out )
+        ? own {
+            : K gone . kp pos
+            ( mem_take gone )
+        } {}
         : ~ i j pos
         ~ < j - nk 1 {
             = . kp j . kp + j 1
@@ -509,6 +521,9 @@ $ `stdlib/core/vec.nu`
     } {}
     ? here {
         : V out . vp pos
+        ( mem_take out )
+        // The key in this slot is overwritten below (or merged down and
+        // removed there, still `own`).
         : s lc ( __bt_kid n pos )
         ? >= ( __bt_nkeys lc ) BT_DEG {
             // replace with predecessor (max of left subtree), recurse
@@ -518,10 +533,12 @@ $ `stdlib/core/vec.nu`
             : *V pv # *V ( nurl_peek pn 1 )
             : K predk . pk - ( __bt_nkeys pn ) 1
             : V predv . pv - ( __bt_nkeys pn ) 1
+            ? own { : K gone . kp pos ( mem_take gone ) } {}
             = . kp pos predk
             = . vp pos predv
-            : ?V sub ( __bt_remove_rec [K V] lc predk cmp )
-            ?? sub { T _ → {} F _ → {} }
+            // Its value now lives in this node: the result is forgotten.
+            : ?V sub ( __bt_remove_rec [K V] lc predk cmp F )
+            ( mem_forget sub )
             ( nurl_poke n 5 - ( __bt_size n ) 1 )
             ^ @ ?V { T out }
         } {}
@@ -534,16 +551,19 @@ $ `stdlib/core/vec.nu`
             : *V sv # *V ( nurl_peek sn 1 )
             : K succk . sk 0
             : V succv . sv 0
+            ? own { : K gone . kp pos ( mem_take gone ) } {}
             = . kp pos succk
             = . vp pos succv
-            : ?V sub ( __bt_remove_rec [K V] rc succk cmp )
-            ?? sub { T _ → {} F _ → {} }
+            : ?V sub ( __bt_remove_rec [K V] rc succk cmp F )
+            ( mem_forget sub )
             ( nurl_poke n 5 - ( __bt_size n ) 1 )
             ^ @ ?V { T out }
         } {}
         // both kids minimal: merge them around the key, recurse into merge
+        // (the entry moves down whole; `out` was a read of it)
+        ( mem_forget out )
         ( __bt_merge [K V] n pos )
-        : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n pos ) k cmp )
+        : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n pos ) k cmp own )
         ?? sub {
             T got → {
                 ( nurl_poke n 5 - ( __bt_size n ) 1 )
@@ -554,7 +574,7 @@ $ `stdlib/core/vec.nu`
     } {}
     // not in this node: descend (fix the child up first)
     : i ci ( __bt_fixup [K V] n pos )
-    : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n ci ) k cmp )
+    : ?V sub ( __bt_remove_rec [K V] ( __bt_kid n ci ) k cmp own )
     ?? sub {
         T got → {
             ( nurl_poke n 5 - ( __bt_size n ) 1 )
@@ -568,7 +588,7 @@ $ `stdlib/core/vec.nu`
     : s ctl . m ctl
     : s root # s ( nurl_peek ctl 0 )
     ? == 0 # i root { ^ @ ?V { F } } {}
-    : ?V r ( __bt_remove_rec [K V] root k cmp )
+    : ?V r ( __bt_remove_rec [K V] root k cmp T )
     ?? r {
         T got → {
             ( nurl_poke ctl 1 - ( nurl_peek ctl 1 ) 1 )
@@ -592,20 +612,77 @@ $ `stdlib/core/vec.nu`
 
 // ── teardown ────────────────────────────────────────────────────────
 
-@ __bt_free_rec [K V] s n → v {
+// Drop every entry of the subtree, then its nodes.
+@ __bt_drop_rec [K V] s n → v {
+    : *K kp # *K ( nurl_peek n 0 )
+    : *V vp # *V ( nurl_peek n 1 )
+    : i nk ( __bt_nkeys n )
+    : ~ i j 0
+    ~ < j nk {
+        : K k . kp j
+        ( mem_take k )
+        : V v . vp j
+        ( mem_take v )
+        = j + j 1
+    }
     ? ( __bt_leaf n ) {} {
-        : i nk ( __bt_nkeys n )
         : ~ i c 0
-        ~ <= c nk { ( __bt_free_rec [K V] ( __bt_kid n c ) ) = c + c 1 }
+        ~ <= c nk { ( __bt_drop_rec [K V] ( __bt_kid n c ) ) = c + c 1 }
     }
     ( __bt_node_free n )
 }
 
-@ btree_free [K V] sink ( BTree K V ) m → v {
-    : s root # s ( nurl_peek . m ctl 0 )
-    ? == 0 # i root {} { ( __bt_free_rec [K V] root ) }
-    ( nurl_free . m ctl )
+// What dropping a tree does (its owner does it at scope exit — docs/
+// MEMORY.md §7.6): every key and value, then the nodes and the handle.
+@ BTree_drop [K V] sink ( BTree K V ) m → v {
+    // This IS the drop: `m` is not dropped again on the way out.
+    ( mem_forget m )
+    : s ctl . m ctl
+    ? == 0 # i ctl { ^ } {}
+    : s root # s ( nurl_peek ctl 0 )
+    ? == 0 # i root {} { ( __bt_drop_rec [K V] root ) }
+    ( nurl_free ctl )
 }
+
+// A node-for-node copy of the subtree owning copies of its entries.
+@ __bt_clone_rec [K V] s n → s {
+    : b leaf ( __bt_leaf n )
+    : s d ( __bt_node_new [K V] ? leaf 1 0 )
+    : *K skp # *K ( nurl_peek n 0 )
+    : *V svp # *V ( nurl_peek n 1 )
+    : *K dkp # *K ( nurl_peek d 0 )
+    : *V dvp # *V ( nurl_peek d 1 )
+    : i nk ( __bt_nkeys n )
+    : ~ i j 0
+    ~ < j nk {
+        : K k . skp j
+        = . dkp j ( mem_dup k )
+        : V v . svp j
+        = . dvp j ( mem_dup v )
+        = j + j 1
+    }
+    ? leaf {} {
+        : ~ i c 0
+        ~ <= c nk { ( __bt_set_kid d c ( __bt_clone_rec [K V] ( __bt_kid n c ) ) ) = c + c 1 }
+    }
+    ( nurl_poke d 3 nk )
+    ( nurl_poke d 5 ( __bt_size n ) )
+    ^ d
+}
+
+@ BTree_clone [K V] ( BTree K V ) m → ( BTree K V ) {
+    : s sctl . m ctl
+    : s dctl ( nurl_zalloc 16 )
+    ? != 0 # i sctl {
+        : s root # s ( nurl_peek sctl 0 )
+        ? != 0 # i root { ( nurl_poke dctl 0 # i ( __bt_clone_rec [K V] root ) ) } {}
+        ( nurl_poke dctl 1 ( nurl_peek sctl 1 ) )
+    } {}
+    ^ @ ( BTree K V ) { dctl }
+}
+
+// Early release: exactly what dropping `m` does (BTree_drop).
+@ btree_free [K V] sink ( BTree K V ) m → v {}
 
 @ __bt_free_with_rec [K V] s n ( @ v K ) dk ( @ v V ) dv → v {
     : *K kp # *K ( nurl_peek n 0 )
@@ -625,6 +702,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ btree_free_with [K V] sink ( BTree K V ) m ( @ v K ) dk ( @ v V ) dv → v {
+    ( mem_forget m )
     : s root # s ( nurl_peek . m ctl 0 )
     ? == 0 # i root {} { ( __bt_free_with_rec [K V] root dk dv ) }
     ( nurl_free . m ctl )

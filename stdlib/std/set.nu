@@ -22,9 +22,10 @@
 // tombstones.
 //
 // Ownership:
-//   set_new / set_with_cap → owned Set; caller MUST set_free when done.
-//   The set borrows keys (stores them by value/copy). For Set[s] (raw
-//   string keys) the caller keeps the strings alive until removed.
+//   set_new / set_with_cap → owned Set, dropped (with its elements) by its
+//   owner at scope exit like a Vec (docs/MEMORY.md §7.6); set_free releases
+//   early. An added element moves in; a removed one is dropped. For Set[s]
+//   (raw string keys) the caller keeps the strings alive until removed.
 //
 // API:
 //   ( set_new      [E] )                                   → ( Set E )
@@ -210,6 +211,10 @@
     ? == ( __set_cap_raw ctl ) 0 { ^ F } {}
     : i slot ( __set_probe_for [E] ctl key hash_fn eq_fn )
     ? < slot 0 { ^ F } {}
+    : *E keys # *E ( nurl_peek ctl 0 )
+    // The stored element leaves with its slot.
+    : E gone . keys slot
+    ( mem_take gone )
     : *i states # *i ( nurl_peek ctl 1 )
     = . states slot 2
     ( nurl_poke ctl 2 - ( __set_len_raw ctl ) 1 )
@@ -258,8 +263,8 @@
 
 // ── Cleanup ─────────────────────────────────────────────────────────
 
-@ set_free [E] sink ( Set E ) st → v {
-    : s ctl . st ctl
+// The buffers and the handle, nothing else.
+@ __set_release s ctl → v {
     : s keys ( __set_keys_raw ctl )
     : s states ( __set_states_raw ctl )
     ? != 0 # i keys { ( nurl_free keys ) } {}
@@ -267,11 +272,66 @@
     ( nurl_free ctl )
 }
 
-// Drop-aware free: invoke `drop` for every live element before
-// releasing the buffers. Use for Set[String] etc.
+// What dropping a set does (its owner does it at scope exit — docs/
+// MEMORY.md §7.6): every element is dropped (no work, and no loop, for
+// elements that own nothing), then the buffers and the handle.
+@ Set_drop [E] sink ( Set E ) st → v {
+    // This IS the drop: `st` is not dropped again on the way out.
+    ( mem_forget st )
+    : s ctl . st ctl
+    ? == 0 # i ctl { ^ } {}
+    : i cap ( __set_cap_raw ctl )
+    ? > cap 0 {
+        : *E keys # *E ( nurl_peek ctl 0 )
+        : *i states # *i ( nurl_peek ctl 1 )
+        : ~ i i 0
+        ~ < i cap {
+            ? == . states i 1 {
+                : E e . keys i
+                ( mem_take e )
+            } {}
+            = i + i 1
+        }
+    } {}
+    ( __set_release ctl )
+}
+
+// A copy that owns its own elements, at the same slot layout (no rehash).
+@ Set_clone [E] ( Set E ) st → ( Set E ) {
+    : s sctl . st ctl
+    : s dctl ( nurl_zalloc 40 )
+    : i cap ? == 0 # i sctl 0 ( __set_cap_raw sctl )
+    ? > cap 0 {
+        ( __set_alloc_buffers [E] dctl cap )
+        : *E skeys # *E ( nurl_peek sctl 0 )
+        : *i sstates # *i ( nurl_peek sctl 1 )
+        : *E dkeys # *E ( nurl_peek dctl 0 )
+        : *i dstates # *i ( nurl_peek dctl 1 )
+        : ~ i i 0
+        ~ < i cap {
+            = . dstates i . sstates i
+            ? == . sstates i 1 {
+                : E e . skeys i
+                = . dkeys i ( mem_dup e )
+            } {}
+            = i + i 1
+        }
+        ( nurl_poke dctl 2 ( __set_len_raw sctl ) )
+        ( nurl_poke dctl 4 ( __set_tomb_raw sctl ) )
+    } {}
+    ^ @ ( Set E ) { dctl }
+}
+
+// Early release: exactly what dropping `st` does (Set_drop).
+@ set_free [E] sink ( Set E ) st → v {}
+
+// Release through `drop`: it is handed every live element (and owns it
+// from then on), then the buffers go. For elements needing a teardown of
+// their own; plain owned elements are dropped by set_free / scope exit.
 @ set_free_with [E] sink ( Set E ) st ( @ v E ) drop → v {
+    ( mem_forget st )
     ( set_each [E] st drop )
-    ( set_free [E] st )
+    ( __set_release . st ctl )
 }
 
 // ── Set algebra ─────────────────────────────────────────────────────

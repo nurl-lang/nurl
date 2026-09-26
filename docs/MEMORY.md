@@ -10,10 +10,11 @@ v2.3).
 - **Single owner, deterministic drop.** Every heap allocation has
   exactly one owning binding. The compiler inserts the matching free
   at the end of that binding's scope. No garbage collector, no
-  reference counting. `String`, `Vec` and the structs that hold them
-  are dropped by the compiler like everything else (§7.6); `vec_free` /
-  `string_free` remain as an explicit early release, never a
-  requirement. A closure's env is owned wherever the closure is kept and
+  reference counting. `String`, `Vec`, the enums and structs that hold
+  them, and the library containers (`HashMap`, `Set`, `Deque`, `BTree`,
+  `Box`, `Rc`, `Arc`) are dropped by the compiler like everything else
+  (§7.6); `vec_free` / `string_free` / `map_free` … remain as an explicit
+  early release, never a requirement. A closure's env is owned wherever the closure is kept and
   dropped by that owner, and freeing one by hand is a compile error.
 - **Automatic cleanup includes unwind paths.** A thread-local journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
@@ -990,9 +991,10 @@ get right:
 - **`*T` raw pointers and FFI.** `*T` is NURL's `unsafe`. A `*T` into a
   local, or any pointer crossing an `& \`lib\`` boundary, is outside the
   model; its lifetime is yours.
-- **Manually-managed handles.** `Vec`, `String` and a `sink` argument
-  are freed by *you*, not by auto-drop (§7.4). The checker tracks their *moves* (so a `vec_free`d handle can't
-  be reused) but not their *freeing* — forget the `vec_free` and it leaks.
+- **Raw memory.** A handle stored into memory the compiler does not
+  manage — a `*T` block from `nurl_alloc`, a global kept for the
+  program's lifetime — is yours to release (§7.6: auto-drop covers
+  bindings, owning structs, containers and library handles).
 - ~~**Definition order.**~~ **No longer a boundary — every rule is
   order-independent.** Summaries are built in codegen order, so a check
   that consults one *inline* sees an empty answer for a callee defined
@@ -1542,6 +1544,42 @@ handles are freely aliased, so their bindings follow a few more rules:
   it. For getter / setter pairs over a container's elements.
 - A `! T E` binding whose `T` is a `String` or `Vec` (and whose `E` owns
   nothing) is dropped like a `? T` binding.
+- `( mem_dup x )` is an owned copy of `x`'s value — deep for a `String`,
+  a `Vec`, a library handle or an owning struct / enum, the value itself
+  for anything that owns nothing. It is how a generic container copies
+  elements it knows nothing about (`HashMap_clone`).
+
+**Containers drop their elements.** `vec_free` / `vec_clear` drop the
+elements (and `vec_append` moves them from one Vec onto another; the
+bitwise `vec_extend` is for elements that own nothing). An element
+consumed through `vec_get` / a foreach binding / a field read through a
+pointer is emptied in its slot, so the container's drop skips it.
+
+**Enums that own memory are handles.** An enum whose payloads own a
+`String`, a `Vec` or a boxed struct — `Json`, `TomlValue` — is dropped,
+copied and moved like a `String` when every payload can be copied.
+`json_free` / `toml_value_free` are early releases.
+
+**Library handles.** A generic struct `S` whose module defines
+`S_drop [..] sink ( S .. ) x` — and, to be copyable, `S_clone` (a copy
+owning copies of the contents) or `S_share` (another owner of the same
+value, a reference count going up) — is a *library handle*: every
+instance is owned, dropped and copied like a `Vec`, and the module keeps
+its layout to itself. The compiler instantiates `S_drop` / `S_clone` for
+each concrete type the program uses (`HashMap_drop__i64__String`).
+`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc` and `Arc` are library
+handles; their `*_free` functions are early releases, their `*_free_with`
+hand each element to a closure instead. A program's own `% Drop` impl for
+an instance (`% Drop ( Box i )`) wins over the library's.
+
+**A stored value belongs to its owner.** A binding whose value was stored
+into an aggregate literal, or passed bare to a callee that stores it into
+an owner (`vec_push`'s element), may still be read — the owner keeps the
+value alive — but consuming it again (a sink, a free, a second store) is
+a double free, and the borrow checker rejects it
+(`compiler/tests/borrow_store_consume.nu`). A literal built as an
+argument to a function that only reads it moves nothing
+(`compiler/tests/store_then_read_ok.nu`).
 
 `compiler/tests/drop_handles.nu` pins these shapes.
 

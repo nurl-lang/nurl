@@ -1755,9 +1755,12 @@ spawning a thread that holds it).
 
 ### 8.5 `String`, `Vec` and owning structs
 
-`String`, `Vec T` and every plain struct whose fields own one are
-dropped like any other owned value; no program needs `string_free` /
-`vec_free`, which remain as an explicit early release. Each owning
+`String`, `Vec T`, every enum and plain struct whose fields own one, and
+the library handles (a generic struct whose module defines `S_drop`:
+`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc` — docs/MEMORY.md
+§7.6) are dropped like any other owned value; no program needs
+`string_free` / `vec_free` / `map_free`, which remain as an explicit early
+release. Each owning
 binding carries a drop flag, so a value is released exactly once
 whichever way it leaves:
 

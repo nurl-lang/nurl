@@ -20,7 +20,11 @@
 //      statements must not inline into the enclosing function's list),
 //      which also dropped this one.
 //
-// All three are MAYBE-moves, so they need --strict-borrowck. The reason
+// (2 is now reported without --strict-borrowck too: a store into an
+// aggregate hands the value to it, and a later consume of the old name is
+// a second release on every path — see borrow_store_consume.nu.)
+//
+// The other two are MAYBE-moves, so they need --strict-borrowck. The reason
 // is the same one that made the assignment case conditional in #899:
 // the handover is certain, but the old name may still be a legal way to
 // use the live buffer, and only liveness — which this checker does not

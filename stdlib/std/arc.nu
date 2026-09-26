@@ -28,7 +28,7 @@
 //   ( arc_ptr      [T] r )         → *T          borrowed raw pointer
 //   ( arc_clone    [T] r )         → ( Arc T )   atomic count++
 //   ( arc_strong   [T] r )         → i           current count (snapshot, racy)
-//   ( arc_free     [T] r )         → v           atomic dec; free when 0
+//   ( arc_free     [T] r )         → v           early release (a handle is dropped by its owner)
 //   ( arc_free_with [T] r drop )   → v           atomic dec; drop(T) before free
 //
 // Layout (SAME as Rc but the count is touched only via atomics):
@@ -124,6 +124,9 @@
 
 @ arc_set [T] ( Arc T ) r T x → v {
     : *( ArcImpl T ) impl # *( ArcImpl T ) . r ctl
+    // The old value is dropped.
+    : T old . impl value
+    ( mem_take old )
     = . impl value x
 }
 
@@ -136,30 +139,47 @@
 // ── Cloning ─────────────────────────────────────────────────────────
 
 // Atomic increment of the strong count. After this call you have
-// two Arc handles to the same storage; both must eventually call
-// `arc_free` (or `arc_free_with`).
+// two Arc handles to the same storage, each dropped by its owner.
 @ arc_clone [T] ( Arc T ) r → ( Arc T ) {
     : *u cp # *u . r ctl
     ( nurl_atomic_i64_inc cp )
-    ^ @ ( Arc T ) { . r ctl }
+    // A handle of its own (not a view of `r`): the caller owns it.
+    : s c . r ctl
+    ^ @ ( Arc T ) { c }
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
-// Atomic-decrement the strong count. If it reaches zero, the storage
-// is released. Caller is responsible for any per-payload cleanup
-// when T is owned — use `arc_free_with` instead.
-@ arc_free [T] sink ( Arc T ) r → v {
+// What dropping a handle does (its owner does it at scope exit — docs/
+// MEMORY.md §7.6): an atomic decrement, and the last handle drops the
+// value and releases the storage.
+@ Arc_drop [T] sink ( Arc T ) r → v {
+    // This IS the drop: `r` is not dropped again on the way out.
+    ( mem_forget r )
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
         : i n ( nurl_atomic_i64_dec_fetch cp )
-        ? <= n 0 { ( nurl_free # s cp ) } {}
+        ? <= n 0 {
+            : *( ArcImpl T ) impl # *( ArcImpl T ) . r ctl
+            : T v . impl value
+            ( mem_take v )
+            ( nurl_free # s cp )
+        } {}
     }
 }
+
+// Another owner of the same value: the count goes up, nothing is copied.
+@ Arc_share [T] ( Arc T ) r → ( Arc T ) {
+    ^ ( arc_clone [T] r )
+}
+
+// Early release of this handle (Arc_drop).
+@ arc_free [T] sink ( Arc T ) r → v {}
 
 // Atomic-decrement; if the count reached zero, run `drop` on the
 // final value and then release the storage.
 @ arc_free_with [T] sink ( Arc T ) r ( @ v T ) drop → v {
+    ( mem_forget r )
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
         : i n ( nurl_atomic_i64_dec_fetch cp )
