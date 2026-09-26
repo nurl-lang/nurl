@@ -97,7 +97,10 @@ CLASSES = [
                "owner may free the buffer, so every spelling here is a "
                "double free.",
         "expect": REJECT_STRICT,
-        "expect_msg": ["use of moved value", "may already be freed"],
+        # (A store into an aggregate is a definite handover since v1: the
+        # second free is reported by default, with its own wording.)
+        "expect_msg": ["use of moved value", "may already be freed",
+                       "its value was stored into an owner"],
         "spellings": {
             # Covered as of #899.
             "let-alias": prog(
@@ -1389,8 +1392,7 @@ CLASSES = [
                 "    : Wrapper wr @ Wrapper { r }\n"
                 "    : ( @ v ) w \\ → v { : Wrapper c wr }\n"
                 "    : !Thread ThreadErr t ( thread_spawn w )\n"
-                "    ?? t { T h → { ( thread_join h ) } F e → {} }\n"
-                "    ( rc_free [i] r )",
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
                 prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"
                         "$ `stdlib/core/marker.nu`\n",
                 extra=": Wrapper { ( Rc i ) r }\n% Send Wrapper { }\n"),
