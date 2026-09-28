@@ -10780,11 +10780,12 @@
             : b __vg_decl ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
             // (A value the callee only keeps in memory it manages by hand
             // stays in its slot: consume_flag.)
-            : ~ s __vg_c ? __vg_decl `1`
+            : s __vg_base ? __vg_decl `1`
             ? summary_callee ( consume_flag call_name fname arg_idx ) ``
+            : ~ s __vg_c ( nurl_str_cat __vg_base `` )
             ? & & ! __vg_decl summary_callee != 0 ( nurl_str_len arg_lent ) {
                 : s __vg_s ( nurl_cg_reg cg )
-                ( emit_sink_flag_load __vg_c __vg_s )
+                ( emit_sink_flag_load __vg_base __vg_s )
                 : s __vg_k ( nurl_cg_reg cg )
                 ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) __vg_k )
                 : s __vg_l ( mem_lent_reg cg arg_lent )
