@@ -26,3 +26,8 @@
 deps/
 src/deps/
 tests/deps/
+
+# Test stores left by local runs (ANOMALY_TEST_DIR defaults); `nurlpkg pack`
+# reads only this file, not the repo root one, so they are listed here too.
+/anomaly_*_test/
+*.db
