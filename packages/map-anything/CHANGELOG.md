@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.7
+
+Frame lists are compacted with `vec_replace` and trimmed with `vec_truncate` under NURL 0.67.0's element-dropping containers (#1143).
+
 ## 0.4.6
 
 `--version` reported 0.4.4 while the manifest said 0.4.5.

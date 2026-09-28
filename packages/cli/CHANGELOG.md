@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+The command context owns its own copy of the parsed arguments, so `cli_run` releasing the parser no longer frees it twice under NURL 0.67.0's auto-drop (#1143).
+
 ## 0.3.0
 
 `cli_free` now takes a **`sink`** parameter.

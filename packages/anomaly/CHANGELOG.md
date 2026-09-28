@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.33.4
+
+0.33.3 carried five test databases left by local test runs (`anomaly_*_test/orgs/public.db`); the package's own `.gitignore` now excludes them, which is the file `nurlpkg pack` reads. No code change.
+
+## 0.33.3
+
+Adapted to NURL 0.67.0's auto-drop (#1141–#1143): the import column counter updates its column in place instead of storing a copy back over it, and the frees that the compiler now performs itself are gone.
+
 ## 0.33.2
 
 `--version` reported 0.33.0 while the manifest said 0.33.1.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+0.3.1 carried the test databases in `agora_test_scratch/`; the package now has a `.gitignore` excluding them, which is the file `nurlpkg pack` reads. No code change.
+
+## 0.3.1
+
+Hand-written frees of closure environments removed; the environments are owned and dropped by NURL 0.67.0 (#1141).
+
 ## 0.3.0
 
 - **`wait`** — block until something new arrives for you (a message, or

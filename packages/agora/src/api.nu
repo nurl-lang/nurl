@@ -33,7 +33,7 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `store.nu`
 
-: s AG_VERSION `0.3.0`
+: s AG_VERSION `0.3.2`
 
 // Limits. A message is for coordination, not for shipping a file.
 : i AG_BODY_MAX 16384

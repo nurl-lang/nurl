@@ -1,0 +1,4 @@
+# Test stores left by local runs; `nurlpkg pack` reads only this file,
+# not the repo root .gitignore.
+/agora_test_scratch/
+*.db

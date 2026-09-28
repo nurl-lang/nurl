@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+The fallback lane no longer frees its closure's environment by hand (NURL 0.67.0 closure ownership, #1141). Needs NURL 0.67.0: the job views it hands its workers rely on the compiler treating hand-managed stores as views (#1143).
+
 ## 0.4.1
 
 `arima_forecast_free`, `arima_free`, `arima_models_free` and 6 more now take a **`sink`** parameter.

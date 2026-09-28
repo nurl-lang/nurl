@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+A render owns a copy of its context instead of storing the caller's, so the caller keeps (and drops) its own (NURL 0.67.0, #1143).
+
 ## 0.1.1
 
 `tset_free` and 1 more now take a **`sink`** parameter.

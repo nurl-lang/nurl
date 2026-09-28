@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+The benchmark body's closure environment is no longer freed by hand; NURL 0.67.0 owns and drops it (#1141).
+
 ## 0.1.3
 
 `bench_row_free` now takes a **`sink`** parameter.
