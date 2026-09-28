@@ -265,19 +265,15 @@ $ `core.nu`
         ? & > tn 0 || == color 0 == color 2 { = outch + rch 1 } {}
     }
 
-    // zlib: strip the 2-byte header; inflate stops at the final block, so the
-    // trailing adler32 is simply not read.
-    : ( Vec u ) defl ( vec_new [u] )
-    : i zn ( vec_len [u] zdata )
-    : ~ i k 2
-    ~ < k zn { ( vec_push [u] defl ( _byte zdata k ) ) = k + k 1 }
+    // zlib: skip the 2-byte header and decode the stream's prefix — the
+    // decoder stops at the final block, so the trailing adler32 is simply
+    // not read (`inflate` itself insists on consuming every byte).
+    : !Inflated DeflateErr ir ( inflate_prefix_max zdata 2 0 )
     ( vec_free [u] zdata )
-    : !( Vec u ) DeflateErr ir ( inflate defl )
-    ( vec_free [u] defl )
     : ~ ( Vec u ) raw ( vec_new [u] )
     : ~ b infl_ok F
     ?? ir {
-        T d → { ( vec_free [u] raw ) = raw d = infl_ok T }
+        T d → { ( vec_free [u] raw ) = raw . d bytes = infl_ok T }
         F _ → {}
     }
     ? infl_ok {} {

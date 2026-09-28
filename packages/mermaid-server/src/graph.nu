@@ -213,8 +213,8 @@ $ `stdlib/core/vec.nu`
 @ mmd_node_declare MmdGraph g i idx String label i shape → v {
     ?? ( vec_get [MmdNode] . g nodes idx ) {
         T old → {
+            // vec_set drops the node (and label) it replaces.
             : MmdNode nd @ MmdNode { . old id label shape T }
-            ( string_free . old label )
             ( vec_set [MmdNode] . g nodes idx nd )
         }
         F _ → ( string_free label )

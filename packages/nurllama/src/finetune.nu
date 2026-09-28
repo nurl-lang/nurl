@@ -1835,7 +1835,7 @@ $ `tokenizer.nu`
         : b want ? <= w 3 == % / mask 2 2 1 == % / mask 4 2 1
         ? want { ( __ft_emit_w so ( string_data nm ) mw reperm heads . m head_dim ) } {}
         ( string_free nm )
-        ( vec_free [f] md )
+        // (`md` lives in `mw` now, which drops it.)
         // qwen2 q/k/v biases pass through unmerged (NEOX: no reperm)
         ? <= w 2 {
             : ~ s bp # s 0

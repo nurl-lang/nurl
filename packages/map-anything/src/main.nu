@@ -365,21 +365,19 @@ $ `src/sky.nu`
     } {}
     // stride, then the cap — subsample first so the cap keeps coverage
     ? & == bad 0 > stride 1 {
+        // Each path is taken out of its slot: every `stride`th moves to
+        // `kept`, the rest are dropped here; `fr` then holds the kept ones.
+        : ( Vec String ) kept ( vec_new [String] )
         : ~ i r 0
-        : ~ i w 0
         ~ < r ( vec_len [String] fr ) {
-            ?? ( vec_get [String] fr r ) {
-                T st → {
-                    ? == 0 % r stride {
-                        : b _s ( vec_set [String] fr w st )
-                        = w + w 1
-                    } { ( string_free st ) }
-                }
+            ?? ( vec_replace [String] fr r # String 0 ) {
+                T st → { ? == 0 % r stride { ( vec_push [String] kept st ) } {} }
                 F → {}
             }
             = r + r 1
         }
-        : b _c ( vec_set_len [String] fr w )
+        ( vec_clear [String] fr )
+        ( vec_append [String] fr kept )
     } {}
     ? & == bad 0 & > maxviews 0 > ( vec_len [String] fr ) maxviews {
         ? != verbose 0 {
@@ -394,7 +392,7 @@ $ `src/sky.nu`
             ?? ( vec_get [String] fr d ) { T st → { ( string_free st ) } F → {} }
             = d + d 1
         }
-        : b _c ( vec_set_len [String] fr maxviews )
+        : b _c ( vec_truncate [String] fr maxviews )
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
     ^ @ Opts { model out video view port ascii verbose maxviews stride fps

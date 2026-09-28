@@ -1553,7 +1553,36 @@ handles are freely aliased, so their bindings follow a few more rules:
 elements (and `vec_append` moves them from one Vec onto another; the
 bitwise `vec_extend` is for elements that own nothing). An element
 consumed through `vec_get` / a foreach binding / a field read through a
-pointer is emptied in its slot, so the container's drop skips it.
+pointer is emptied in its slot, so the container's drop skips it — a
+field of such an element too (`( string_free . f path )` on a `vec_get`
+payload empties that field in the slot).
+
+**Memory managed by hand.** A struct behind a `nurl_malloc` / `nurl_alloc`
+pointer is not dropped by the compiler; what is stored there follows the
+program's own protocol:
+- A parameter stored there only — `= . j raw raw` in a job constructor —
+  is a *view*: the callee never drops it (on any path), and handing it a
+  `vec_get` payload or a field read through a pointer leaves the source in
+  place. Passing such a parameter on to another function's view parameter
+  makes it a view as well.
+- A field of an owned local stored there (`= . p phi . am phi`) is copied:
+  the local keeps its own, still readable, and drops it.
+- A parameter's field stored there (`= . p shape . t shape`, wrapping `t`
+  on the heap) is taken over: the caller hands `t` in, and the parameter's
+  drop skips the moved field. A binding over an owned local's field
+  (`: ~ M m . out m … = . h m m`) takes the field over the same way.
+- A global holding a handle's address, cast back (`^ # ( Vec T ) g_tbl`),
+  is lent, never owned by the caller.
+
+**A closure that releases its captures.** A closure body that frees a
+captured handle itself (`( string_free r2 )` in a thread body) takes that
+capture over when it is created: the enclosing binding no longer drops it,
+and the env's drop skips it.
+
+**Vector signatures.** A function taking or returning a SIMD vector by
+value is `alwaysinline`: a `simd` clone passes a `<4 x i64>` in a ymm
+register where a baseline callee expects it in memory, and only inlining
+makes the two agree (at `-O0` as well as `-O2`).
 
 **Enums that own memory are handles.** An enum whose payloads own a
 `String`, a `Vec` or a boxed struct — `Json`, `TomlValue` — is dropped,

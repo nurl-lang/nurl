@@ -312,7 +312,6 @@ $ `src/imptime.nu`
             T h → {
                 : String t ( __imp_trimmed ( string_data h ) )
                 : b _s ( vec_set [String] headers hk t )
-                ( string_free h )
             }
             F _ → {}
         }

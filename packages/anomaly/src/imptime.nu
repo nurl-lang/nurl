@@ -534,9 +534,8 @@ $ `stdlib/std/time.nu`
     ^ @ ImpCol { ( string_from name ) ( __it_norm_name name ) 0 0 0 0 0 0 0 0 0 0 0 0 ( string_new ) }
 }
 
-// Count one cell into its column (a copy; the caller stores it back).
-@ __it_col_add ImpCol c0 Json v → ImpCol {
-    : ~ ImpCol c c0
+// Count one cell into its column, in place.
+@ __it_col_add * ImpCol c Json v → v {
     = . c filled + . c filled 1
     ? == ( string_len . c sample ) 0 {
         ( string_free . c sample )
@@ -557,7 +556,7 @@ $ `stdlib/std/time.nu`
             }
             F _ → {}
         }
-        ^ c
+        ^
     } {}
     ? ( json_is_str v ) {
         = . c n_text + . c n_text 1
@@ -567,7 +566,6 @@ $ `stdlib/std/time.nu`
         ? == . st kind STAMP_CLOCK { = . c n_clock + . c n_clock 1 } {}
         ? == . st kind STAMP_UNIX { = . c n_unix + . c n_unix 1 } {}
     } {}
-    ^ c
 }
 
 // Nine in ten filled cells is the bar for "this column IS that": a few
@@ -610,12 +608,10 @@ $ `stdlib/std/time.nu`
                             } {}
                             ?? ( json_obj_get row ( string_data key ) ) {
                                 T v → {
-                                    ?? ( vec_get [ImpCol] cols ci ) {
-                                        T c → {
-                                            : b _s ( vec_set [ImpCol] cols ci ( __it_col_add c v ) )
-                                        }
-                                        F _ → {}
-                                    }
+                                    // Counted in place: the column stays in its slot.
+                                    ? < ci ( vec_len [ImpCol] cols ) {
+                                        ( __it_col_add # *ImpCol + # i ( vec_data [ImpCol] cols ) * ci Z ImpCol v )
+                                    } {}
                                 }
                                 F _ → {}
                             }
@@ -1001,8 +997,8 @@ $ `stdlib/std/time.nu`
                 : i secs ( __it_row_secs row plan tz )
                 ? >= secs 0 {
                     : Json nr ( __it_restamp row drop secs calendar tz )
+                    // vec_set drops the row it replaces.
                     : b _s ( vec_set [Json] rows k nr )
-                    ( json_free row )
                     = stamped + stamped 1
                 } {
                     = failed + failed 1
@@ -1033,9 +1029,9 @@ $ `stdlib/std/time.nu`
                             = q + q 1
                         }
                     } {}
-                    // Drop it: swap the slot to an empty marker, compact below.
+                    // Drop it: the slot becomes an empty marker (vec_set drops
+                    // the row it replaces), compacted below.
                     : b _s ( vec_set [Json] rows k ( json_obj_new ) )
-                    ( json_free row )
                 }
             }
             F _ → {}
@@ -1045,20 +1041,19 @@ $ `stdlib/std/time.nu`
     ( vec_free_with [String] drop \ String x → v { ( string_free x ) } )
     ? > failed 0 {
         // Compact: a failed row became an empty object; keep the rest.
+        // Each row is taken out of `rows` (its slot left empty): a stamped
+        // one moves to `kept`, a failed one is dropped here.
         : ( Vec Json ) kept ( vec_with_cap [Json] stamped )
         = k 0
         ~ < k n {
-            ?? ( vec_get [Json] rows k ) {
-                T row → {
-                    ? ( json_obj_has row `timestamp` ) { ( vec_push [Json] kept row ) } { ( json_free row ) }
-                }
+            ?? ( vec_replace [Json] rows k @ Json { JNull } ) {
+                T row → { ? ( json_obj_has row `timestamp` ) { ( vec_push [Json] kept row ) } {} }
                 F _ → {}
             }
             = k + k 1
         }
         ( vec_clear [Json] rows )
-        ( vec_extend [Json] rows kept )
-        ( vec_free [Json] kept )
+        ( vec_append [Json] rows kept )
     } {}
     ^ @ ImpTimeResult { stamped failed first }
 }

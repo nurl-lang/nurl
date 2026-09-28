@@ -27,6 +27,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/ext/toml.nu`
+$ `stdlib/std/sort.nu`
 
 : i MMD_TSRC_DIR 0
 
@@ -344,30 +345,7 @@ $ `stdlib/ext/toml.nu`
 // name, so sort the file names to make the listing and the "first file
 // wins" default deterministic.
 @ __mmdt_sort_names ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i i 1
-    ~ < i n {
-        ?? ( vec_get [String] v i ) {
-            T cur → {
-                : ~ i j - i 1
-                : ~ b placed F
-                ~ & ! placed >= j 0 {
-                    ?? ( vec_get [String] v j ) {
-                        T prev → {
-                            ? > ( nurl_str_cmp ( string_data prev ) ( string_data cur ) ) 0 {
-                                ( vec_set [String] v + j 1 prev )
-                                = j - j 1
-                            } { = placed T }
-                        }
-                        F _ → { = placed T }
-                    }
-                }
-                ( vec_set [String] v + j 1 cur )
-            }
-            F _ → {}
-        }
-        = i + i 1
-    }
+    ( sort_by [String] v \ String a String b → i { ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) ) } )
 }
 
 : MmdTemplatesRes {

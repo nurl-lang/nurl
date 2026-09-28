@@ -503,9 +503,9 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
             ? > at 0 {
                 : String lead ( string_trim ( string_from ( nurl_str_slice ( string_data first ) 0 at ) ) )
                 : String rest ( string_trim ( string_from ( nurl_str_slice ( string_data first ) at - ( string_len first ) at ) ) )
+                // vec_set drops the chunk it replaces.
                 ( vec_set [String] chunks 0 lead )
                 : b _i ( vec_insert [String] chunks 1 rest )
-                ( string_free first )
             } {}
         }
         F → {}
@@ -921,7 +921,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
                     ( string_push_char joined 32 )
                     ( string_push_str joined ( string_data buf ) )
                     ( vec_set [String] merged - nm 1 joined )
-                    ( string_free last )
                 }
                 F → {}
             }
