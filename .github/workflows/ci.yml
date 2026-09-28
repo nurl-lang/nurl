@@ -156,7 +156,9 @@ jobs:
     # can have, so the budget moves rather than the coverage. Watch this
     # number: the job grows with the corpus, and the next thing added
     # here should come with a measurement, not a hope.
-    timeout-minutes: 20
+    # 30, not 20: by v0.67.0 the job ran 15–19 min (18m36s on #1143) and
+    # a rerun was cancelled at exactly 20:00 in the nurl-cov gate.
+    timeout-minutes: 30
     container:
       # containers/ci/Dockerfile — clang/llvm, the FFI dev libraries,
       # qemu + grub for the unikernel gates, gdb, zstd, and zig at

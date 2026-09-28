@@ -20,8 +20,8 @@ v2.3).
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
   tracks owned strings, slices, struct fields, enum owners, `% Drop` values
   and closure environments. Compiler leak gates and selected
-  program leak tests verify these paths. Remaining ownership limitations,
-  including unsupported sink transfers, are described below; this is not a
+  program leak tests verify these paths. Remaining ownership limitations
+  (raw owned strings and slices cannot go to a `sink`) are described below; this is not a
   guarantee that every accepted program is memory-safe or leak-free.
 - **A borrow checker runs by default.** A diagnostic analysis pass
   catches use-after-move, alias double-free, and closures that escape
@@ -183,9 +183,9 @@ first.
 
 ### Conservative by construction
 
-The compiler only registers a drop for a resource it saw allocated
-*directly*. Copying an already-owned binding into a struct field does
-**not** register a second drop — so the compiler never emits a
+Every value has exactly one owner at a time. Storing an owned binding
+into a struct field moves it (the binding's drop flag clears); storing a
+*borrowed* one stores a copy — so the compiler never emits a
 double-free of its own accord. This conservatism is why the auto-drop
 layer is safe on its own; the borrow checker (below) is what catches
 the mistakes a *programmer* can still write.
@@ -235,8 +235,9 @@ use-after-move):
 ( give_away xs )                 // xs is consumed; using it now is a move error
 ```
 
-`sink` uses a by-value ABI. For manually managed handles such as `Vec`
-and `String`, the callee is responsible for releasing the handle. For a
+`sink` uses a by-value ABI, and the callee owns what it is given: a
+`String`, `Vec`, owning struct, library handle or `Drop` value is dropped
+by the callee unless it releases or hands it on first (§7.6). For a
 compiler-managed enum, ownership transfers to the callee: the caller's
 owner slot becomes inactive before the call, and the callee drops its owner
 on exit unless it returns or transfers it onward. An inferred conditional
@@ -245,11 +246,10 @@ explicitly release it. Borrowed enum parameters do not acquire this drop
 obligation. Ordinary functions, generic instances and trait impl methods
 can declare `sink` parameters.
 
-Transfer support for the other compiler-managed ownership kinds (raw owned
-strings, slices, user `Drop` values and tracked struct fields) remains
-incomplete. The compiler currently rejects their transfer to an explicit
-sink; this is an implementation limitation, not a language design rule.
-`compiler/tests/should_fail_sink_autodrop.nu` records the current rejection.
+A raw owned string (`s` from `nurl_str_cat` and friends) and an owned
+slice are the exception: their transfer to an explicit sink is still
+rejected at the call site — an implementation limitation, not a language
+design rule. `compiler/tests/should_fail_sink_autodrop.nu` records it.
 
 A parameter does not have to be *spelled* `sink` to be one. When a
 function's body consumes a parameter — passes it to a typed destructor,
@@ -288,7 +288,7 @@ diagnostics and never lowers anything, a borrow-clean program produces
 the exact same IR either way — the bootstrap fixed point is
 unaffected.
 
-All ten rules below (§2.1–§2.8, plus §2.1b and §2.11) emit `error:`. Use `--no-borrowck`
+All eleven rules below (§2.1–§2.8, plus §2.1b, §2.11 and §2.12) emit `error:`. Use `--no-borrowck`
 for the escape hatch if a corner case slips through, and
 `--strict-borrowck` (off by default) to add three opt-in checks on top —
 see §2.9.
@@ -639,7 +639,7 @@ same fixed point as the escape ones.
 
 ### 2.9 `--strict-borrowck` — three opt-in checks
 
-The nine rules above run by default. `--strict-borrowck` (off by
+The default rules (§2.1–§2.8, §2.1b, §2.11, §2.12) always run. `--strict-borrowck` (off by
 default) adds three further checks, all diagnostic-only and all emitting
 `error:` like the rest:
 
@@ -665,10 +665,12 @@ default) adds three further checks, all diagnostic-only and all emitting
    - freed on one arm of a `?` and still owned on the other;
    - its handle selected by a value-producing `?` / `??` and bound
      elsewhere;
-   - stored into an aggregate literal (`@ Wrap { h }`) — recorded as
+   - stored into an aggregate literal built as a call argument whose
+     callee may not keep it (`( f @ ?T { T h } )`) — recorded as
      maybe-moved rather than moved on purpose, because recording it as
-     definite rejects the option-wrapper idiom;
-   - pushed into a container that will free its elements;
+     definite rejects the option-wrapper idiom (a store the compiler
+     knows is kept — a bound or returned literal, `vec_push` — is the
+     default §2.12 error instead);
    - handed to another name by an alias assignment (`= z a`);
    - captured by a closure whose body frees it (the closure may run
      zero times, once, or many);
@@ -690,7 +692,7 @@ default) adds three further checks, all diagnostic-only and all emitting
 It is **off by default** because the extensions have a meaningful
 false-positive rate against existing stdlib code; it is a tightening
 knob for auditing a specific module, not part of the standard contract.
-The default-on nine rules remain the guarantee everything else in this
+The default-on rules remain the guarantee everything else in this
 document refers to.
 
 ### 2.10 Stale container borrows (`vec_data` / `string_data`)
@@ -794,11 +796,10 @@ the drop of the closure's own env at the end of its scope (§7.5), which
 happens after the captured handles are freed and is correct.
 
 What is not covered is a closure that leaves the frame: stored into a
-struct field, returned, or handed to a callee that keeps it. That is the
-aggregate-conduit boundary in §3, and it is not specific to closures —
-a plain `Vec` stored into a struct field and freed through the original
-name is unchecked in exactly the same way (`--strict-borrowck` reports
-the handover itself, §2.9).
+struct field, returned, or handed to a callee that keeps it. Its captures
+are then owned and dropped by the env (§7.5), so there is nothing left to
+free by hand; freeing a captured handle early through its own name after
+the closure was stored is the aggregate-conduit boundary in §3.
 
 Before this rule the whole family was invisible: a closure body is
 analysed as its own function, where a capture is never seeded and so can
@@ -807,6 +808,24 @@ body's reads at all. Nothing connected `( vec_free v )` to a later
 `( f )`, and the Vec form segfaulted while the String and HashMap forms
 quietly read a released control block.
 `compiler/tests/borrow_closure_capture_use_after_free.nu` pins it.
+
+### 2.12 Consuming a value after storing it into an owner
+
+A value stored into something that drops it — a bound or returned
+aggregate literal, a container (`vec_push`, `map_set`), a callee that
+keeps its parameter in an owner — belongs to that owner from then on.
+Releasing it again through the original name (`( vec_push v s )
+( string_free s )`) is a second release, and is an error:
+
+```
+error: 's' is consumed here, but its value was stored into an owner at line N …
+```
+
+Reading the value after the store is still fine; to hand a value on and
+keep one in the owner, store a copy (`string_clone`, `vec_clone`,
+`mem_dup`). A struct of plain words (a device buffer's address and
+length) is copied, not owned, and is not reported.
+`compiler/tests/borrow_store_consume.nu` pins it.
 
 ## 3. What is NOT checked
 
@@ -820,13 +839,12 @@ hits in practice. It deliberately does **not** cover:
   container that is then reallocated is warned about (§2.10), and
   `--strict-borrowck` reports a `# *T` escape from an owned binding
   (§2.9).
-- **Handles reached through an aggregate.** A heap handle stored into a
-  struct field (or a `Vec` element) and then freed through its original
-  name is not tracked to the reads that go through the container: the
-  checker records the handover as a *maybe*-move, and by default reads of
-  a maybe-moved binding are never flagged. `--strict-borrowck` reports
-  the second consume (§2.9). The same boundary is what stops §2.11 at a
-  closure that is stored into a struct rather than bound to a name.
+- **Reads of a handle through an aggregate.** A heap handle stored into a
+  struct field (or a `Vec` element) and then *released* through its
+  original name is an error (§2.12), but a *read* through the original
+  name after the owner itself released it is not tracked through the
+  container. The same boundary is what stops §2.11 at a closure that is
+  stored into a struct rather than bound to a name.
 - **Aliased mutation beyond a single call.** The exclusive-access
   check (§2.4) covers a binding aliased among one call's arguments —
   by default the bare-identifier spelling, and under
@@ -893,7 +911,8 @@ hits in practice. It deliberately does **not** cover:
 | Escape through a `?` / `??` join, or into a struct field | yes (`error:`) |
 | Return escape (through a field, a nested field, a closure env, a local name, a second helper, a forward / generic callee) | yes (`error:`) |
 | Use-after-free through a closure capture (invoke after the free) | yes (`error:`, §2.11) |
-| Handle read through a struct field after being freed by name | no (maybe-move; `--strict-borrowck` reports the handover, §2.9) |
+| Handle released by name after being stored into an owner | yes (`error:`, §2.12) |
+| Handle read by name after its owner released it | no (the aggregate-conduit boundary, §3) |
 | Returned borrows / general lifetime inference | partial (§2.8) |
 | `*T` raw pointers | no (by design) |
 
@@ -912,10 +931,10 @@ Memory safety in NURL rests on **two** mechanisms, and it is worth
 keeping them apart:
 
 1. **Auto-drop (§1) is what makes the base safe.** It is conservative
-   by construction: it registers a free *only* for a resource it saw
-   allocated directly, and a copy into another binding registers no
-   second free. So the compiler **never emits a double-free of its own
-   accord**, for any program, checked or not. This is a structural
+   by construction: every value has exactly one owner at a time, tracked
+   by a drop flag that a move clears (§7.6); a borrowed value stored into
+   an owner is copied rather than shared. So the compiler **never emits a
+   double-free of its own accord**, for any program, checked or not. This is a structural
    property, not an analysis result.
 
 2. **The borrow checker (§2) catches the mistakes a *programmer* can
@@ -1092,7 +1111,7 @@ safe Rust cannot:
    *contents* of an `Arc` it did not create — inline or through a
    helper — without holding a lock is rejected. `Arc ( Vec i )` shared
    by two pushing workers segfaulted 5 runs in 8 and silently lost half
-   its updates in the rest, because `arc_get` over a manually-managed
+   its updates in the rest, because `arc_get` over a shared-control
    handle hands back a *copy of the handle* aliasing one buffer. `Arc`
    makes the *refcount* atomic, not your data — put the data behind a
    `Mutex` the worker locks itself.
@@ -1164,9 +1183,10 @@ on; they are not two separate tools or two separate builds.
    **It deliberately does not gate leaks** (`detect_leaks=0`). A
    corpus-wide leak run would flag two non-defects: the compiler's own
    process-lifetime structures (symbol tables and interned strings),
-   never freed by design; and the many tests that allocate a manual handle
-   (`Vec` / `String`) and exit without freeing it — test brevity
-   exercising the §7.4 contract. So the corpus-wide gate proves
+   never freed by design; and the tests that allocate a raw handle the
+   compiler does not track (`nurl_alloc` memory, a `Channel`, an FFI
+   pointer) and exit without freeing it — test brevity exercising the
+   §7.4 contract. So the corpus-wide gate proves
    *memory-safety*, not leak-freedom.
 
 3. **Diagnostic-coverage gate** — `tools/metamorph/spellings.py`, in
@@ -1632,7 +1652,7 @@ argument to a function that only reads it moves nothing
 Outside this manual-handle set, nothing leaks. The corpus-wide
 sanitizer gate runs with leak detection **off** (§6.6) — deliberately,
 because a leak run would flag the compiler's process-lifetime arenas and
-the many tests that allocate a manual handle and exit without freeing it
+the tests that allocate a manual handle and exit without freeing it
 (test brevity exercising this contract, not a defect). The no-leak
 guarantees are instead pinned by the leak-verification tests and
 `tools/leakcheck` (§6.6). A program that honours the contract leaks

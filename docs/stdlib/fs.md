@@ -9,7 +9,7 @@ ACL. Creation uses the directory operation itself, with no intervening unlink.
 WASI creation remains subject to preopened directory capabilities. The nolibc
 provider uses the platform entropy and directory operations; a guest with no
 writable filesystem reports its filesystem error. The caller removes the directory with
-`dir_remove_all` and frees its path.
+`dir_remove_all`; the path is dropped with its binding.
 
 `fs_tempfile(dir, prefix)` similarly creates an empty, uniquely named file.
 To replace a working file or executable, create this temporary file in the

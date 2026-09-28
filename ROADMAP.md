@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-09-13 · Current release: **0.65.0** · Language: **Grammar
+_Last reviewed: 2026-09-28 · Current release: **0.67.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -54,8 +54,8 @@ What is solid today:
   scope exit — no GC, no hidden boxing. A **static borrow checker, on
   by default** (`--no-borrowck` to disable, `--strict-borrowck` to tighten),
   catches use-after-move, alias double-free, escaping closure captures,
-  interprocedural/return escape, loop-carried double-frees, and
-  iterator invalidation as hard errors without changing generated code.
+  interprocedural/return escape, loop-carried double-frees, a release
+  after storing into an owner, and iterator invalidation as hard errors without changing generated code.
   Since 0.44.0 **no rule depends on definition order**: every check that
   consults a per-function summary parks what it cannot answer and
   resolves it after the module, so where a helper is written can no
@@ -160,9 +160,13 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Generics: monomorphised generic structs and functions (signedness-aware
   monomorphs, including behind `*`/`?` prefixes), generic nesting
   (`Channel[A]`, `Vec[Thread]`), and generics over `?T` / `!T E`.
-- Memory model: auto-drop, recursive `Drop` for boxed enum/struct payloads,
-  `% Drop` user destructors, move/borrow analysis (incl. interprocedural and
-  loop-carried escape detection). Model and known gaps:
+- Memory model v1.0 (0.67.0): `String`, `Vec`, owning structs, closure
+  environments, handle enums (`Json`, `TomlValue`) and library handles
+  (`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`) are dropped by
+  the compiler through per-binding drop flags, on panic paths too;
+  containers drop their elements; recursive `Drop` for boxed enum/struct
+  payloads, `% Drop` user destructors, move/borrow analysis (incl.
+  interprocedural and loop-carried escape detection, consume after store). Model and known gaps:
   [`docs/MEMORY.md`](docs/MEMORY.md).
 - Front-end is diagnostic-first: malformed prefix-arity programs, undefined
   identifiers, call-arity mismatches, unbalanced braces / stray top-level

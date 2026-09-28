@@ -6,7 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.67.0] — 2026-09-28
 
 ### Changed
 
@@ -64,7 +64,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call or literal (`= s ( make … )`) now drops the fields it replaces;
   they leaked before, for string fields as much as closure ones.
 
+- **Containers, handle enums and library handles are dropped too — memory
+  model v1.0** (docs/MEMORY.md §7.6). `vec_free`, `vec_clear` and
+  `vec_set` drop the elements they release or replace; `vec_append` moves
+  one Vec's elements onto another (the bitwise `vec_extend` is only for
+  elements that own nothing). An enum whose payloads own memory — `Json`,
+  `TomlValue` — is dropped, copied and moved like a `String`. A generic
+  struct whose module defines `S_drop` (and `S_clone` for a deep copy or
+  `S_share` for a shared one) is a *library handle*, owned like a Vec:
+  `HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc` and `Arc` are dropped
+  when their binding goes out of scope. An element consumed through
+  `vec_get`, a foreach binding or a field read through a pointer is
+  emptied in its slot, so the container's drop skips it.
+
+  **Migration:** `vec_extend` followed by `vec_free` of a Vec whose
+  elements own memory now frees them twice — use `vec_append`. A loop that
+  frees each element and then the Vec keeps working.
+
+- **Consuming a value after storing it into an owner is a borrow error.**
+  `( vec_push v s ) ( string_free s )` used to compile and free `s` twice
+  (once by hand, once when `v` dropped it); the checker now reports the
+  second release. Reading the value after the store is still fine; to hand
+  a value on and keep one, store a copy.
+
+- **A panic unwinding past a `String`, `Vec`, owning struct or library
+  handle drops it**, through the same drop flag its scope exit uses. The
+  journal entry costs nothing in a function no panic can reach: the module
+  writer computes which functions may panic over the finished IR and
+  leaves the others out.
+
+- **Faster builds.** The ownership answers the code generator cannot know
+  mid-module are folded when the module is written, and a drop flag that
+  is constant for a whole function disappears with its loads and stores;
+  the in-build checks run in parallel. `./build.sh` 56 → 39 s; the
+  self-compile 11.8e9 → 10.0e9 instructions.
+
 ### Added
+
+- `( mem_dup x )` — an owned copy of any value (deep for a `String`, `Vec`,
+  handle enum, library handle or owning struct); `( mem_take x )` — a value
+  read out of a container by hand owns it from here on; `( mem_put_back x )`
+  — the next store of `x` through a pointer is a write-back, neither copied
+  nor taken over. `vec_append` and `vec_truncate`.
 
 - Linux CI now gates the `template` package at 96.3% line coverage using
   `nurl-cov` and retains its HTML report for seven days, including when
@@ -100,6 +141,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nurl-cov` implements gcov's own edge propagation, synthetic
   exit-to-entry arc included.
 
+### Packages
+
+- 26 packages whose registry copy no longer matched their source after
+  0.65.0's `sink` hardening were republished with patch bumps (#1134);
+  seven of them again because their hand-written `--version` literal had
+  not moved with the manifest.
+- `nurlbox` 0.2.1: the shell no longer imports the program's entry point,
+  so the package can be published.
+- `f5tts` 0.2.0: the quality gate retries and splits lines the way the
+  reference service does, and short lines get the duration they need.
+- `nurl-cov` 0.1.0 (above).
+- Packages changed by the memory model v1 sweep (#1143) are republished
+  after this release, against it.
+
 ### Fixed
 
 - **Values that cross into memory managed by hand keep their owner.** A
@@ -123,6 +178,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   words (a device buffer's address and length) is no longer reported as
   a second release, nor is `( nurl_free # s # *u . t host )` as freeing
   `t`.
+
+- **`nurlpkg publish` no longer fails when a file vanishes mid-walk.** The
+  packer lists a directory and then reads each name; a file removed in
+  between (an editor's swap file, a second publish staging beside it) was
+  reported as `PackReadFailed` about 5 % of the time under concurrent
+  writes. A file that is gone was never part of the package and is
+  skipped; one that is present and unreadable is still fatal.
+
+- The package version gate recognises a version constant named for the
+  package (`NURLBOX_VERSION`) wherever it is printed; nurlbox's bump had
+  passed it unchecked.
 
 - **ML-DSA signed nothing at `-O0`.** A `simd` clone built for AVX2 passed
   `<4 x i64>` values to baseline helpers in ymm registers while the

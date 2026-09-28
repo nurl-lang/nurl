@@ -202,7 +202,7 @@ per frame: headers, DATA, trailers, reset, GOAWAY, close, or control progress.
 The connection retains no DATA body. `h2_conn_next_until` and
 `h2_conn_new_until` take an absolute monotonic deadline; a read timeout keeps
 partial frame bytes so another stream can continue after an RPC expires.
-Free each event with `h2_event_free`. The response APIs
+An event is dropped with its binding (`h2_event_free` releases one early). The response APIs
 `h2_stream_headers`, `h2_stream_data`, and `h2_stream_trailers` keep metadata,
 message bytes, and final status separate. DATA returns the accepted byte
 count; after zero credit, process another event and retry the unsent suffix.
