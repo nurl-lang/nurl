@@ -376,10 +376,13 @@ $ `stdlib/ext/http_response.nu`
     // through the shared control block rather than replacing a field
     // that a by-value copy would swallow.
     String __instructions
-    // Zero or one task store. A ( Vec ) so that "no store" and "an
-    // empty store" stay distinguishable, and so that attaching one
-    // after construction is visible to every copy of the handle.
-    ( Vec McpTaskStore ) __tasks
+    // Zero or one task store: the address of a cell, managed by hand,
+    // holding a VIEW of the caller's store (it is borrowed — the tasks
+    // the caller creates must be the ones the server finds). A ( Vec )
+    // so that "no store" and "an empty store" stay distinguishable, and
+    // so that attaching one after construction is visible to every copy
+    // of the handle.
+    ( Vec i ) __tasks
     // Called before any tasks/* method is dispatched — the hook a
     // server needs when its task state is only current after it polls
     // something (swarm-mcp advances its cluster here). Empty Vec = no
@@ -405,7 +408,7 @@ $ `stdlib/ext/http_response.nu`
         ( __mcp_ctl_new )
         ( string_from `private` )
         ( string_new )
-        ( vec_new [McpTaskStore] )
+        ( vec_new [i] )
         ( vec_new [McpTaskHook] )
     }
 }
@@ -546,10 +549,10 @@ $ `stdlib/ext/http_response.nu`
     ( vec_free [i] . r __ctl )
     ( string_free . r __instructions )
     ( string_free . r __cache_scope )
-    // The task store is borrowed — freed by whoever created it — so the
-    // slot is forgotten, not dropped, before the vector goes.
-    ( vec_set_len [McpTaskStore] . r __tasks 0 )
-    ( vec_free [McpTaskStore] . r __tasks )
+    // The task store is borrowed — freed by whoever created it — so only
+    // the cell holding the view goes.
+    ( __mcp_task_cell_drop r )
+    ( vec_free [i] . r __tasks )
     ( vec_free [McpTaskHook] . r __task_hook )
 }
 
@@ -733,15 +736,31 @@ b read_only b destructive b idempotent b open_world
 // task state is only current after it polls something; pass
 // `\ → v {}` when there is nothing to do.
 @ mcp_server_set_task_store McpServer r McpTaskStore store ( @ v ) hook → v {
-    // Borrowed: a previous store is forgotten, never dropped.
-    ( vec_set_len [McpTaskStore] . r __tasks 0 )
-    ( vec_push [McpTaskStore] . r __tasks store )
+    // Borrowed: a previous store is forgotten, never dropped — and this
+    // one is kept as is, not copied (a copy would be a second task list
+    // the caller's own tasks never reach).
+    ( __mcp_task_cell_drop r )
+    : *McpTaskStore cell # *McpTaskStore ( nurl_zalloc Z McpTaskStore )
+    : ( Vec s ) view . store tasks
+    ( mem_put_back view )
+    = . cell tasks view
+    ( vec_push [i] . r __tasks # i cell )
     ( vec_clear [McpTaskHook] . r __task_hook )
     ( vec_push [McpTaskHook] . r __task_hook @ McpTaskHook { hook } )
 }
 
 @ mcp_server_has_task_store McpServer r → b {
-    ^ > ( vec_len [McpTaskStore] . r __tasks ) 0
+    ^ > ( vec_len [i] . r __tasks ) 0
+}
+
+// Release the cell holding the attached store's view (the store itself
+// is the caller's).
+@ __mcp_task_cell_drop McpServer r → v {
+    ? > ( vec_len [i] . r __tasks ) 0 {
+        : *i cp ( vec_data [i] . r __tasks )
+        ( nurl_free # s . cp 0 )
+    } {}
+    ( vec_clear [i] . r __tasks )
 }
 
 @ mcp_server_add_prompt McpServer r s name s description Json args_schema ( @ Json Json ) handler → v {
@@ -1583,7 +1602,8 @@ b read_only b destructive b idempotent b open_world
         : ( @ v ) f . hk f
         ( f )
     } {}
-    : *McpTaskStore sp ( vec_data [McpTaskStore] . r __tasks )
+    : *i cp ( vec_data [i] . r __tasks )
+    : *McpTaskStore sp # *McpTaskStore . cp 0
     : McpTaskStore store . sp 0
     // mcp_tasks_dispatch wants the id to echo; it is re-wrapped by the
     // envelope layer anyway, so a null placeholder is enough here.

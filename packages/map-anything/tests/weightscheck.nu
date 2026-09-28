@@ -93,7 +93,7 @@ $ `src/weights.nu`
         T w2 → {
             : b _m ( lw_require w2 `no.such.tensor` -1 -1 -1 -1 )
             ( __wc_check ! ( lw_ok w2 ) `missing tensor recorded` )
-            ( __wc_check ( nurl_str_eq ( lw_error w2 ) `map-anything: checkpoint has no tensor 'no.such.tensor'` ) `error names the tensor` )
+            ( __wc_check != 0 ( nurl_str_eq ( lw_error w2 ) `map-anything: checkpoint has no tensor 'no.such.tensor'` ) `error names the tensor` )
             ( lw_close w2 )
         }
     }

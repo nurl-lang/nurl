@@ -60,6 +60,7 @@
 //   ( vec_insert [A] v idx x )     → b          F if idx out of range; idx == len → push
 //   ( vec_remove [A] v idx )       → ? A        None if idx out of range
 //   ( vec_clear [A] v )            → v          drops the elements, len=0, keeps cap
+//   ( vec_truncate [A] v n )       → b          keep the first n, drop the rest
 //   ( vec_set_len [A] v n )        → b          commit raw-pointer writes
 //                                                up to index n; F when n
 //                                                is negative or > current
@@ -429,6 +430,24 @@
         ( mem_take e )
         = k + k 1
     }
+}
+
+// Shorten `v` to its first `n` elements; the ones past `n` are dropped
+// (vec_set_len would forget them). F when `n` is negative or past the end.
+@ vec_truncate [A] ( Vec A ) v i n → b {
+    : s ctl . v ctl
+    : i len ( __vec_len_raw ctl )
+    ? | < n 0 > n len { ^ F } {}
+    : *A data # *A ( nurl_peek ctl 0 )
+    // Length first, so a drop that reaches `v` sees it short.
+    ( nurl_poke ctl 1 n )
+    : ~ i k n
+    ~ < k len {
+        : A e . data k
+        ( mem_take e )
+        = k + k 1
+    }
+    ^ T
 }
 
 // Commit a raw write that the caller performed via `vec_data` directly

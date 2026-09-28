@@ -188,7 +188,9 @@ $ `core.nu`
     : i td ( _b_i . j ctd comp )
     : i ta + 4 ( _b_i . j cta comp )
     : i s ( __jpg_huff j td )
-    ? < s 0 { = . j ok F ^ } {}  // corrupt Huffman table/stream
+    // corrupt Huffman table/stream — or a DC category no sample can have
+    // (the table's symbols are bytes; a difference is at most 16 bits)
+    ? | < s 0 > s 16 { = . j ok F ^ } {}
     : i diff ? > s 0 { ( __jpg_extend ( __jpg_receive j s ) s ) } { 0 }
     : i pred + ( _b_i . j cpred comp ) diff
     ( vec_set [i] . j cpred comp pred )
@@ -431,7 +433,7 @@ $ `core.nu`
     ? == . j ah 0 {
         : i td ( _b_i . j ctd ci )
         : i s ( __jpg_huff j td )
-        ? < s 0 { = . j ok F ^ } {}
+        ? | < s 0 > s 16 { = . j ok F ^ } {}
         : i diff ? > s 0 { ( __jpg_extend ( __jpg_receive j s ) s ) } { 0 }
         : i pred + ( _b_i . j cpred ci ) diff
         ( vec_set [i] . j cpred ci pred )

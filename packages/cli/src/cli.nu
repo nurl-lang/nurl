@@ -657,7 +657,9 @@ $ `prompt.nu`
                         ? ( args_present p `help` ) {
                             ( __cli_print_cmd_help c idx )
                         } {
-                            : CliCtx ctx @ CliCtx { p c ( string_from cmdname ) }
+                            // The ctx drops its own copy of the parser; `p` stays
+                            // this function's (args_free below).
+                            : CliCtx ctx @ CliCtx { ( mem_dup p ) c ( string_from cmdname ) }
                             = rc ( __cli_dispatch c idx ctx )
                             ( string_free . ctx cmdname )
                         }

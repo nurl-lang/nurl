@@ -633,10 +633,12 @@ tpl.addEventListener("change", render);
     // MCP shares the process, the port and the template set. The
     // server is built here and captured by the routes below: its
     // fields are all shared handles, so the captured copy IS the
-    // server, and it lives as long as the app does.
+    // server, and it lives as long as the app does — this function
+    // must not drop it on the way out.
     : McpServer srv ( mmd_mcp_server )
     : ( @ HttpResponse HttpRequest ) mcph
     ( mcp_http_handler ( mcp_server_http_dispatch srv ) )
+    ( mem_forget srv )
     ( http_app_route a `POST` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )
     ( http_app_route a `GET` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )
     ( http_app_route a `DELETE` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )

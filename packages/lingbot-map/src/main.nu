@@ -428,27 +428,22 @@ $ `src/preproc.nu`
             ?? ( vec_get [String] fr d ) { T s → { ( string_free s ) } F → {} }
             = d + d 1
         }
-        : b _c ( vec_set_len [String] fr maxf )
+        : b _c ( vec_truncate [String] fr maxf )
     } {}
-    // Compacted in place: the kept handles move down to fill the gaps and
-    // the dropped ones are freed as they are passed. The stale duplicates
-    // left past the new length are never freed, so nothing is freed twice.
     ? > fstride 1 {
+        // Each path is taken out of its slot: every `fstride`th moves to
+        // `kept`, the rest are dropped here; `fr` then holds the kept ones.
+        : ( Vec String ) kept ( vec_new [String] )
         : ~ i r 0
-        : ~ i w 0
         ~ < r ( vec_len [String] fr ) {
-            ?? ( vec_get [String] fr r ) {
-                T s → {
-                    ? == 0 % r fstride {
-                        : b _s ( vec_set [String] fr w s )
-                        = w + w 1
-                    } { ( string_free s ) }
-                }
+            ?? ( vec_replace [String] fr r # String 0 ) {
+                T st → { ? == 0 % r fstride { ( vec_push [String] kept st ) } {} }
                 F → {}
             }
             = r + r 1
         }
-        : b _c ( vec_set_len [String] fr w )
+        ( vec_clear [String] fr )
+        ( vec_append [String] fr kept )
     } {}
     ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page host tls imgsize }
 }

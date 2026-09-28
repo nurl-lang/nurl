@@ -102,6 +102,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Values that cross into memory managed by hand keep their owner.** A
+  sweep of every package under the new drop rules found legacy spellings
+  that double-freed or read freed memory; each is now given the meaning
+  the code was written for (docs/MEMORY.md §7.6, "Memory managed by hand").
+  A parameter stored only through a pointer is a view the callee never
+  drops, on any path (arima's job batches freed their own list); a field
+  of such a Vec element or pointer struct handed to that view is left in
+  place (a fit's series was emptied after the first job read it); an
+  owned local's field stored through a pointer is copied, a parameter's
+  field is taken over (grad's tape freed every value it recorded); a
+  binding over a local's field stored through a pointer takes that field
+  over (anomaly's trained autoencoder was freed with its training
+  result); freeing each element's field through a `vec_get` payload
+  empties it in the slot; a global handle cast back is lent; a parameter
+  handed back inside a struct inside `? T` is not dropped on that path
+  when another path releases it (tensor_reshape); and a closure body that
+  frees a capture itself takes it over at creation (a thread read its
+  capture after the spawning loop dropped it). Storing a struct of plain
+  words (a device buffer's address and length) is no longer reported as
+  a second release, nor is `( nurl_free # s # *u . t host )` as freeing
+  `t`.
+
+- **ML-DSA signed nothing at `-O0`.** A `simd` clone built for AVX2 passed
+  `<4 x i64>` values to baseline helpers in ymm registers while the
+  helpers read them from memory; `-O2` inlined the helpers and hid it.
+  Functions with a vector signature are now always inlined. Every
+  `nurlpkg test` compiles at `-O0`, so pki-server's post-quantum CA could
+  not verify its own certificates there.
+
 - **`packages/nurl-cov` is bounded by the file it is reading, not by the
   numbers inside it.** A fuzz sweep over truncations and byte flips of a
   real coverage pair found a hang and twelve segfaults, all the same

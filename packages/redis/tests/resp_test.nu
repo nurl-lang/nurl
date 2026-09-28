@@ -68,7 +68,7 @@ $ `src/resp.nu`
     ( __ok `+OK consumed 5` == . p1 consumed 5 )
     : i r1 ( resp_reply_root . p1 reply )
     ( __ok `+OK kind str` == ( resp_node_kind . p1 reply r1 ) 2 )
-    ( __ok `+OK text` ( nurl_str_eq ( resp_node_str . p1 reply r1 ) `OK` ) )
+    ( __ok `+OK text` != 0 ( nurl_str_eq ( resp_node_str . p1 reply r1 ) `OK` ) )
     ( resp_reply_free . p1 reply ) ( vec_free [u] b1 )
 
     // ── error -ERR foo ──
@@ -76,7 +76,7 @@ $ `src/resp.nu`
     : RespParse p2 ( resp_parse b2 0 )
     : i r2 ( resp_reply_root . p2 reply )
     ( __ok `-ERR kind err` == ( resp_node_kind . p2 reply r2 ) 3 )
-    ( __ok `-ERR text` ( nurl_str_eq ( resp_node_str . p2 reply r2 ) `ERR bad` ) )
+    ( __ok `-ERR text` != 0 ( nurl_str_eq ( resp_node_str . p2 reply r2 ) `ERR bad` ) )
     ( resp_reply_free . p2 reply ) ( vec_free [u] b2 )
 
     // ── integer :1000 ──
@@ -98,7 +98,7 @@ $ `src/resp.nu`
     : RespParse p4 ( resp_parse b4 0 )
     : i r4 ( resp_reply_root . p4 reply )
     ( __ok `$5 kind str` == ( resp_node_kind . p4 reply r4 ) 2 )
-    ( __ok `$5 text` ( nurl_str_eq ( resp_node_str . p4 reply r4 ) `hello` ) )
+    ( __ok `$5 text` != 0 ( nurl_str_eq ( resp_node_str . p4 reply r4 ) `hello` ) )
     ( __ok `$5 consumed 11` == . p4 consumed 11 )
     ( resp_reply_free . p4 reply ) ( vec_free [u] b4 )
 
@@ -112,7 +112,7 @@ $ `src/resp.nu`
     : ( Vec u ) b5b ( __buf `$0\r\n\r\n` )
     : RespParse p5b ( resp_parse b5b 0 )
     ( __ok `$0 kind str` == ( resp_node_kind . p5b reply ( resp_reply_root . p5b reply ) ) 2 )
-    ( __ok `$0 empty text` ( nurl_str_eq ( resp_node_str . p5b reply ( resp_reply_root . p5b reply ) ) `` ) )
+    ( __ok `$0 empty text` != 0 ( nurl_str_eq ( resp_node_str . p5b reply ( resp_reply_root . p5b reply ) ) `` ) )
     ( resp_reply_free . p5b reply ) ( vec_free [u] b5b )
 
     // ── array of two bulks *2 foo bar ──
@@ -121,8 +121,8 @@ $ `src/resp.nu`
     : i r6 ( resp_reply_root . p6 reply )
     ( __ok `*2 kind arr` == ( resp_node_kind . p6 reply r6 ) 4 )
     ( __ok `*2 len 2` == ( resp_node_arr_len . p6 reply r6 ) 2 )
-    ( __ok `*2 [0] foo` ( nurl_str_eq ( resp_node_str . p6 reply ( resp_node_arr_at . p6 reply r6 0 ) ) `foo` ) )
-    ( __ok `*2 [1] bar` ( nurl_str_eq ( resp_node_str . p6 reply ( resp_node_arr_at . p6 reply r6 1 ) ) `bar` ) )
+    ( __ok `*2 [0] foo` != 0 ( nurl_str_eq ( resp_node_str . p6 reply ( resp_node_arr_at . p6 reply r6 0 ) ) `foo` ) )
+    ( __ok `*2 [1] bar` != 0 ( nurl_str_eq ( resp_node_str . p6 reply ( resp_node_arr_at . p6 reply r6 1 ) ) `bar` ) )
     ( resp_reply_free . p6 reply ) ( vec_free [u] b6 )
 
     // ── nested array: *2 :1 *2 $1 a $1 b ──
@@ -134,7 +134,7 @@ $ `src/resp.nu`
     : i n7b ( resp_node_arr_at . p7 reply r7 1 )
     ( __ok `nested [0] int` == ( resp_node_int . p7 reply n7a ) 1 )
     ( __ok `nested [1] arr` == ( resp_node_kind . p7 reply n7b ) 4 )
-    ( __ok `nested [1][1] b` ( nurl_str_eq ( resp_node_str . p7 reply ( resp_node_arr_at . p7 reply n7b 1 ) ) `b` ) )
+    ( __ok `nested [1][1] b` != 0 ( nurl_str_eq ( resp_node_str . p7 reply ( resp_node_arr_at . p7 reply n7b 1 ) ) `b` ) )
     ( resp_reply_free . p7 reply ) ( vec_free [u] b7 )
 
     // ── incomplete: bulk header without the data yet ──

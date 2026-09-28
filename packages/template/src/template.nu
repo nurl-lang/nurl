@@ -96,7 +96,8 @@ $ `stdlib/ext/json.nu`
 // Value slots A and B hold the result of expression evaluation
 // (kind: 0 null/missing, 1 bool, 2 number, 3 string, 4 array, 5 object).
 // The Json node for kinds 4/5 rides in a 0/1-element Vec so the struct
-// needs no bare Json field; all nodes are borrows into `ctxv[0]`.
+// needs no bare Json field; all nodes are borrows into `ctxv[0]`, a copy of
+// the caller's context that the render owns.
 
 : TplR {
     s src
@@ -112,7 +113,7 @@ $ `stdlib/ext/json.nu`
     String err
     String out
     String key  // scratch: NUL-terminated path segment / include name
-    ( Vec Json ) ctxv  // [0] = root context (borrow)
+    ( Vec Json ) ctxv  // [0] = root context (the render's own copy)
     ( Vec String ) sc_names  // loop-variable scope stack (owned names)
     ( Vec Json ) sc_vals  // parallel values (borrows)
     ( Vec i ) lp_idx  // loop frames, innermost last
@@ -146,7 +147,7 @@ $ `stdlib/ext/json.nu`
     = . r out ( string_with_cap 256 )
     = . r key ( string_with_cap 32 )
     = . r ctxv ( vec_new [Json] )
-    ( vec_push [Json] . r ctxv jctx )
+    ( vec_push [Json] . r ctxv ( mem_dup jctx ) )
     = . r sc_names ( vec_new [String] )
     = . r sc_vals ( vec_new [Json] )
     = . r lp_idx ( vec_new [i] )
@@ -174,8 +175,6 @@ $ `stdlib/ext/json.nu`
     : ( @ v String ) sdrop \ String x → v { ( string_free x ) }
     ( vec_free_with [String] . r sc_names sdrop )
     ( vec_free [Json] . r sc_vals )
-    // ctxv[0] is the caller's context, borrowed: forgotten, not dropped.
-    ( vec_set_len [Json] . r ctxv 0 )
     ( vec_free [Json] . r ctxv )
     ( vec_free [Json] . r va_node )
     ( vec_free [Json] . r vb_node )

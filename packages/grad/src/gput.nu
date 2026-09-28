@@ -491,6 +491,8 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ? != g_gp_src_f32 0 { ^ # s g_gp_src_f32 } {}
     : String o ( string_from ( __gp_src_f32 ) )
     = g_gp_src_f32 # i ( string_data o )
+    // Kept for the program's lifetime: the global holds the only pointer.
+    ( mem_forget o )
     ^ # s g_gp_src_f32
 }
 
@@ -518,6 +520,8 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ? != g_gp_src_mixed 0 { ^ # s g_gp_src_mixed } {}
     : String o ( string_from ( __gp_src_mixed ) )
     = g_gp_src_mixed # i ( string_data o )
+    // Kept for the program's lifetime: the global holds the only pointer.
+    ( mem_forget o )
     ^ # s g_gp_src_mixed
 }
 
