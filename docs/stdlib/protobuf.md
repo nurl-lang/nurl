@@ -100,7 +100,8 @@ the same valid-pointer-and-length contract as `core/slice.nu`. These lifetimes
 are a caller obligation, not a compiler-enforced borrow guarantee.
 
 `proto_read_string` validates the complete UTF-8 payload before allocating an
-owned String, which the caller releases with `string_free`. Embedded NUL is
+owned String, dropped when its binding goes out of scope (`string_free` is
+only an early release). Embedded NUL is
 preserved; use `string_len`, since a C-string function stops at the first NUL.
 Overlong UTF-8, surrogates, invalid continuations and code points above U+10FFFF
 are rejected. Byte fields perform no UTF-8 validation.
@@ -147,7 +148,7 @@ policy: allocation failure follows the runtime's panic contract, not ProtoError.
 
 ## Writing
 
-Create and eventually free the output with `vec_new[u]` and `vec_free[u]`.
+Create the output with `vec_new[u]`; it is dropped with its binding.
 For each scalar suffix in the table:
 
 - `proto_put_SUFFIX(out, value)` appends a value without a tag, for packed data.
@@ -174,16 +175,15 @@ supports constructing matching start/end group tags; callers must pair them.
     \ ( proto_put_sint32 packed # i32 150 )
     : ( Vec u ) out ( vec_new [u] )
     : !v ProtoError result ( proto_write_bytes out 1 packed )
-    ( vec_free [u] packed )
     ?? result {
         T → ^ @ !( Vec u ) ProtoError { T out }
-        F e → { ( vec_free [u] out ) ^ @ !( Vec u ) ProtoError { F e } }
+        F e → ^ @ !( Vec u ) ProtoError { F e }
     }
 }
 ```
 
-For arbitrary sequences of fallible writes, keep ownership outside the function
-that propagates errors, or explicitly release owned buffers on each failure.
+Buffers still owned on a failure path are dropped there automatically, so a
+sequence of fallible writes needs no per-failure cleanup.
 The caller must enforce application limits on accumulated decoded values too;
 a wire byte limit does not prescribe how much a schema parser may allocate.
 

@@ -315,8 +315,8 @@ bytes are rejected before formatting to prevent writing only a source prefix.
 Writing an already canonical file leaves its modification time unchanged.
 
 `tools/nurlfmt/format.nu` exposes `format_source String → String` for repeated
-use. It borrows the source and returns an owned result; the caller releases
-that result with `string_free`. Each call frees the intermediate token slices
+use. It borrows the source and returns an owned result, dropped with the
+caller's binding. Each call frees the intermediate token slices
 and vector. EOF is a borrowed literal, so token cleanup never frees it.
 
 ## Non-goals (v1)

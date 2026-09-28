@@ -1401,16 +1401,17 @@ and the `res_ok` / `res_err` / `opt_ok_or` bridges
 (`stdlib/core/result.nu`, `stdlib/core/option.nu`).
 
 A closure compiles to a 16-byte `{ fn_ptr, env_ptr }` value. Captures
-are stored in a heap-allocated environment struct. A closure that
-provably does **not** escape its creating frame has that env reclaimed
-automatically — an inline closure passed to an invoke-only parameter is
-freed right after the call, and a `:`-bound closure is freed at scope
-exit. An env is left for *you* to free (via the env pointer, `# *u f 1`)
-only when the closure genuinely escapes: it is returned, stored into a
-container or struct field, captured into another closure, or detached
-onto a thread. The escaping-closure env is therefore one of the
-manually-managed handles (§8); it is **not** reference-counted. See
-[`docs/MEMORY.md` §7.4](MEMORY.md) for the full reclamation rule.
+are stored in a heap-allocated environment struct. A closure owns
+its environment wherever it is kept, and nothing frees one by hand: a
+temporary closure passed to a call is dropped right after it, a
+`:`-bound closure at scope exit, a returned closure by the caller that
+receives it, and one stored into a struct field, a container or another
+closure's captures with its holder; `spawn` / `thread_spawn` keep their
+own copy. The env records how to drop and copy what it captured, so
+dropping it releases the whole tree. A hand-written free of an env is a
+compile error. It is **not** reference-counted — copying a closure
+copies its env. See [`docs/MEMORY.md` §7.5](MEMORY.md) for the full
+rule.
 
 ### 6.5 Function calls
 
@@ -1639,10 +1640,11 @@ conventions:
   the caller's storage. Generic functions may take `inout` parameters
   too.
 - **`sink`** — consume. The callee takes ownership; the caller's
-  binding is marked moved. The ABI is by value. Compiler-managed enum
-  ownership transfers before the call; the callee drops the value on exit
-  unless it returns or transfers it onward. Manual handles remain the
-  callee's responsibility.
+  binding is marked moved. The ABI is by value. Ownership transfers before
+  the call; the callee drops a `String`, `Vec`, owning struct, handle
+  enum, library handle or `Drop` value on exit unless it returns or
+  transfers it onward. (A raw owned `s` or slice cannot be passed to a
+  `sink` yet.)
 
 `in` / `inout` / `sink` are contextual keywords — recognised only as a
 parameter's leading token. `inout` is additionally banned as a
@@ -1794,7 +1796,7 @@ with a count of violations after walking the whole program. The checker
 is **diagnostic-only** — emitted IR is byte-identical whether it runs or
 not.
 
-Nine rules are enforced. The semantic level is summarised here; for
+Ten rules are enforced. The semantic level is summarised here; for
 exact phrasing and the soundness contract see
 [`docs/MEMORY.md` §2 and §6](MEMORY.md).
 
@@ -1902,15 +1904,21 @@ Merely *loading* a closure value is not a use of its captures — that is
 how a closure's heap environment is reclaimed once it is dead, which
 legitimately happens after the captured handles are freed.
 
-### 9.10 What is NOT checked
+### 9.10 Consume after store
+
+A value stored into an owner — a bound or returned aggregate literal, a
+container (`vec_push`), a callee that keeps it — belongs to that owner.
+Releasing it again through the original name is an error (a double free
+when the owner drops it). Reading it is fine; to keep one and hand one
+on, store a copy.
+
+### 9.11 What is NOT checked
 
 - `*T` raw pointer lifetimes (the FFI escape hatch) — except the one
   narrow `# *T`-escape check `--strict-borrowck` adds (§9 intro).
-- A handle reached through an aggregate: one stored into a struct field
-  (or a `Vec` element) and then freed through its original name is
-  recorded as a *maybe*-move, and reads of a maybe-moved binding are not
-  flagged. `--strict-borrowck` reports the second consume. This is also
-  where §9.9 stops — a closure stored into a struct rather than bound to
+- A read of a handle through its original name after the aggregate it
+  was stored into released it (releasing it again by name IS checked,
+  §9.10). This is also where §9.9 stops — a closure stored into a struct rather than bound to
   a name is reached the same way, and is not a closure-specific gap.
 - Aliased mutation beyond a single call: longer-range "exclusive
   reference" analysis is not implemented. Within one call,
