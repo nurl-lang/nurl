@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.5
+
+The cached kernel sources are kept for the program's lifetime with `mem_forget`; under NURL 0.67.0's auto-drop the String backing them was otherwise released while the global still pointed at it (#1143).
+
 ## 0.10.4
 
 `gpfuse_free`, `gpopt_free`, `gput_free`, `opt_free`, `tape_free` now take a **`sink`** parameter.

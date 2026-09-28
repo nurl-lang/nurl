@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+PNG: the zlib stream is decoded as a prefix, so the trailing adler32 no longer fails every file with "corrupt DEFLATE stream" (broken since NURL 0.65.0). JPEG: a corrupt DC category above 16 is rejected instead of panicking on a shift (#1143).
+
 ## 0.7.0
 
 `image_free`, `__jpg_free` and `__jpe_free` now take **`sink`**

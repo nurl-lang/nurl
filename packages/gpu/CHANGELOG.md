@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.1
+
+Hand-written frees of the worker closures' environments removed; the environments are owned and dropped by NURL 0.67.0 (#1141).
+
 ## 0.13.0
 
 - **`gpu_upload_batch`: many tensors, one streamed upload.** A model is a

@@ -2,6 +2,10 @@
 
 All notable changes to the `nurllama` package.
 
+## 0.17.7
+
+The merged LoRA weight is no longer freed after its owner took it over (a double free under NURL 0.67.0, #1143).
+
 ## 0.17.6
 
 `--version` reported 0.17.4 while the manifest said 0.17.5.

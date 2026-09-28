@@ -34,7 +34,7 @@ $ `render.nu`
 // and the handshake said 0.1.0 as well — three numbers, one of them
 // right. A hand-written second copy of a version is a copy that goes
 // stale; swarm-mcp's had frozen five releases back.
-: s MMD_VERSION `0.2.0`
+: s MMD_VERSION `0.2.1`
 
 : ~ i g_mmd_ts 0
 

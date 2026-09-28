@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.33.3
+
+Adapted to NURL 0.67.0's auto-drop (#1141–#1143): the import column counter updates its column in place instead of storing a copy back over it, and the frees that the compiler now performs itself are gone.
+
 ## 0.33.2
 
 `--version` reported 0.33.0 while the manifest said 0.33.1.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+Template names are sorted with `sort_by`, and the MCP server lives as long as the app instead of being dropped when the routes were built — MCP requests read a freed server under NURL 0.67.0 (#1143).
+
 ## 0.2.0
 
 The MCP surface moves onto `stdlib/ext/mcp_server.nu`, the stdlib's

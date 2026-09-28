@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.11
+
+The interpreter keeps its own copy of a coroutine's closure environment and drops it with `nurl_closure_drop` (NURL 0.67.0 closure ownership, #1141).
+
 ## 1.0.10
 
 `--version` reported 1.0.8 while the manifest said 1.0.9.

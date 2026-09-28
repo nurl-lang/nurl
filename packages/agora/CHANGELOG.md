@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+Hand-written frees of closure environments removed; the environments are owned and dropped by NURL 0.67.0 (#1141).
+
 ## 0.3.0
 
 - **`wait`** — block until something new arrives for you (a message, or
