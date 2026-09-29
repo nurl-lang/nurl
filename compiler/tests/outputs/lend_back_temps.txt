@@ -1,0 +1,23 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+id hello
+via hello
+field first
+generic hello
+pick-temp hello
+pick-named named
+method first
+named-arg hello
+7
+option hello
+option-part second
+element elem
+bound hello
+bound-part first
+ret-whole hello
+ret-part first
+ret-local-call first
+ret-local-binding first
+15

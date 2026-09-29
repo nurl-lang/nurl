@@ -808,6 +808,9 @@ jobs:
       - name: Enum payload representation and sink ownership
         run: LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh enum_nested_tag_payload sink_enum_owned sink_contract_names sink_callable_shadow sink_rebind_owned
 
+      - name: Temporaries a callee lends back
+        run: LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh lend_back_temps ownership_results_and_temps
+
       - name: Publication gate resource cleanup
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
