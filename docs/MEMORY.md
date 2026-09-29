@@ -1173,21 +1173,23 @@ on; they are not two separate tools or two separate builds.
 2. **Sanitizer gate** — `./build.sh --san` (runtime + every stage built
    with `-fsanitize=address,undefined`) then
    `compiler/tests/run_san_tests.sh`, which links each corpus test with
-   `-fsanitize=address,undefined` and runs it under **ASan + UBSan with
-   `detect_leaks=0`**. This is the gate that catches the dangerous
-   classes — use-after-free, double-free, out-of-bounds,
-   undefined behaviour — across the **whole** corpus; a clean branch is
-   `SAN_FAIL: 0`. It is the gate every claim of "no use-after-free /
-   double-free" in this document refers to.
+   `-fsanitize=address,undefined` and runs it under **ASan + UBSan +
+   LSan** (`detect_leaks=1`, `use_stacks=0`). This is the gate that
+   catches the dangerous classes — use-after-free, double-free,
+   out-of-bounds, undefined behaviour — **and leaks**, across the
+   **whole** corpus; a clean branch is `SAN_FAIL: 0`. It is the gate
+   every claim of "no use-after-free / double-free / leak" in this
+   document refers to. The sanitized compiler that builds each test runs
+   under the same leak check, so a leak in a compiler path only one test
+   reaches (the `select` codegen, say) fails here too.
 
-   **It deliberately does not gate leaks** (`detect_leaks=0`). A
-   corpus-wide leak run would flag two non-defects: the compiler's own
-   process-lifetime structures (symbol tables and interned strings),
-   never freed by design; and the tests that allocate a raw handle the
-   compiler does not track (`nurl_alloc` memory, a `Channel`, an FFI
-   pointer) and exit without freeing it — test brevity exercising the
-   §7.4 contract. So the corpus-wide gate proves
-   *memory-safety*, not leak-freedom.
+   It used to run with the leak check **off**, on the expectation that
+   the compiler's process-lifetime structures and tests that exit
+   without freeing a handle would flag. An LSan run over every test
+   showed neither did; the three leaks it found were compiler bugs,
+   fixed in the same change that turned the check on
+   (`guard_reassign_owned`, `ret_moved_owned`). `LSAN_DETECT_LEAKS=0`
+   still gives a memory-safety-only pass locally.
 
 3. **Diagnostic-coverage gate** — `tools/metamorph/spellings.py`, in
    the build-test job. Not a memory gate but a *consistency* one: it
@@ -1224,21 +1226,8 @@ on; they are not two separate tools or two separate builds.
    `detect_stack_use_after_return=1`, which is exactly the failure mode
    a dangling closure has.
 
-4. **Leak verification** — pinned, not corpus-wide. Because gate 2 runs
-   with leaks off, the no-leak guarantees are pinned two ways, both with
-   `detect_leaks=1`:
-   - `LSAN_DETECT_LEAKS=1 run_san_tests.sh` flips the *same* ASan run's
-     leak check on, turning any leak into a `SAN_FAIL`. Used as an audit
-     and on the leak-pinned tests, which run clean:
-     `struct_nested_field_drop`, `arm_local_drop`,
-     `arm_local_trailing_drop` (normal-path drop, §7.1),
-     `recover_unwind` (panic-unwind, §7.2), `loop_drop_reclaim`
-     (loop-body `% Drop` reclamation), and `closure_env_reclaim`,
-     `closure_env_binding` (closure-env reclamation, §7.4).
-     (`loop_drop_reclaim` + `recover_unwind` pin the fix for a real
-     loop-body leak: a `% Drop` value bound inside a `~` loop was not
-     dropped at iteration end — the while-loop scope exit freed owned
-     strings/vecs but skipped user destructors.)
+4. **Leak verification beyond the corpus** — gate 2 holds every test
+   leak-clean; two more checks cover what a test program does not:
    - `tools/leakcheck/run.sh` — an end-to-end gate that builds the HTTP
      server with ASan+LSan (`detect_leaks=1`), serves 21 requests, and
      fails on *any* leak; it locks the per-request leak class
@@ -1253,12 +1242,10 @@ on; they are not two separate tools or two separate builds.
      by design: unlike the RSS gate there is no budget to raise, because
      the number a leak gate accepts is zero.
 
-   All three pinned leak checks are wired into `ci.yml`: the leak-pinned
-   subset runs under `LSAN_DETECT_LEAKS=1` in the sanitizers job,
-   `tools/leakcheck/run.sh` runs in the build-test job, and
-   `tools/leakgate.sh` runs in the sanitizers job — reusing its
-   `--san` build, and only when `compiler/nurlc.nu` itself changed. So a
-   leak regression in the pinned surface fails CI, not just a manual audit.
+   Both are wired into `ci.yml`: `tools/leakcheck/run.sh` runs in the
+   build-test job, and `tools/leakgate.sh` runs in the sanitizers job —
+   reusing its `--san` build, and only when `compiler/nurlc.nu` itself
+   changed. So a leak regression fails CI, not just a manual audit.
 
 5. **Inverse-oracle fuzzing** — `tools/fuzz/genreject.py`
    (`FUZZ_GEN=reject`), in the weekly `fuzz.yml` run rather than on every
@@ -1650,10 +1637,7 @@ argument to a function that only reads it moves nothing
 `compiler/tests/drop_handles.nu` pins these shapes.
 
 Outside this manual-handle set, nothing leaks. The corpus-wide
-sanitizer gate runs with leak detection **off** (§6.6) — deliberately,
-because a leak run would flag the compiler's process-lifetime arenas and
-the tests that allocate a manual handle and exit without freeing it
-(test brevity exercising this contract, not a defect). The no-leak
-guarantees are instead pinned by the leak-verification tests and
-`tools/leakcheck` (§6.6). A program that honours the contract leaks
-nothing.
+sanitizer gate runs every test with leak detection **on** (§6.6), the
+compiler's own compile included; `tools/leakgate.sh` and
+`tools/leakcheck` cover the self-compile and a serving HTTP process. A
+program that honours the contract leaks nothing.
