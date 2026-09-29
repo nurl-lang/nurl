@@ -399,12 +399,6 @@
 
 & `c` @ nurl_recover s fn_ptr s env_ptr → i
 
-// `recover` without the ownership journal: values owned by the frames a
-// caught panic skips are not reclaimed, and code that only ever runs
-// under it registers nothing. For a process that ends soon after the
-// panic it catches (the compiler's per-declaration diagnostic resync).
-& `c` @ nurl_recover_unjournaled s fn_ptr s env_ptr → i
-
 & `c` @ nurl_panic_last_msg → s
 
 // ── CPU features ───────────────────────────────────────────────────

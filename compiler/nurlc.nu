@@ -37160,8 +37160,6 @@
 // itself. Both live in runtime_core.c and resolve from runtime.o.
 & `c` @ nurl_recover *u fnp *u env → i
 
-& `c` @ nurl_recover_unjournaled *u fnp *u env → i
-
 & `c` @ nurl_print_buf_unwind → v
 
 // strdup on the runtime's small-allocation cache, declared the same way
@@ -37175,19 +37173,18 @@
 // runtime entry yet. Current preamble emission deduplicates the declaration.
 & `c` @ nurl_read_stdin → s
 
-// Decompose the closure into (fn, env) and run it under recovery. A
-// diagnostic ends the compilation (with every error the walk still finds),
-// so what the frames a panic skips owned is left to the process exit: no
-// ownership journal, and with no journaled extent anywhere in the compiler
-// the writer drops every journal call from its IR (__ext_compute) — they
-// cost a fifth of a compile and kept every binding's slot in memory.
+// Decompose the closure into (fn, env) and run it under normal recovery.
+// The runtime's pointer index makes journal removal independent of the total
+// live allocation count. Panic now reclaims compiler-owned temporaries before
+// skipping their frames; the enclosing compilation still releases its tables
+// (a failed compile is leak-checked like any other).
 // Returns 0 = completed, 1 = panicked (message via nurl_panic_last_msg).
 @ __diag_recover ( @ v ) closure → i {
     : *u fnp # *u closure 0
     : *u env # *u closure 1
     // The closure is borrowed for the call; the caller drops its env
     // (docs/MEMORY.md §7.4).
-    : i rv ( nurl_recover_unjournaled fnp env )
+    : i rv ( nurl_recover fnp env )
     ^ rv
 }
 

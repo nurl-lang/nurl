@@ -37160,8 +37160,6 @@
 // itself. Both live in runtime_core.c and resolve from runtime.o.
 & `c` @ nurl_recover *u fnp *u env → i
 
-& `c` @ nurl_recover_unjournaled *u fnp *u env → i
-
 & `c` @ nurl_print_buf_unwind → v
 
 // strdup on the runtime's small-allocation cache, declared the same way
@@ -37175,19 +37173,18 @@
 // runtime entry yet. Current preamble emission deduplicates the declaration.
 & `c` @ nurl_read_stdin → s
 
-// Decompose the closure into (fn, env) and run it under recovery. A
-// diagnostic ends the compilation (with every error the walk still finds),
-// so what the frames a panic skips owned is left to the process exit: no
-// ownership journal, and with no journaled extent anywhere in the compiler
-// the writer drops every journal call from its IR (__ext_compute) — they
-// cost a fifth of a compile and kept every binding's slot in memory.
+// Decompose the closure into (fn, env) and run it under normal recovery.
+// The runtime's pointer index makes journal removal independent of the total
+// live allocation count. Panic now reclaims compiler-owned temporaries before
+// skipping their frames; the enclosing compilation still releases its tables
+// (a failed compile is leak-checked like any other).
 // Returns 0 = completed, 1 = panicked (message via nurl_panic_last_msg).
 @ __diag_recover ( @ v ) closure → i {
     : *u fnp # *u closure 0
     : *u env # *u closure 1
     // The closure is borrowed for the call; the caller drops its env
     // (docs/MEMORY.md §7.4).
-    : i rv ( nurl_recover_unjournaled fnp env )
+    : i rv ( nurl_recover fnp env )
     ^ rv
 }
 
@@ -37781,17 +37778,8 @@
 : ~ i g_ext_qn 0
 : ~ b g_ext_all F  // every address-taken function already queued
 : ~ i g_ext_sig 0  // symtab: normalized signature → address-taken indices
-: ~ i g_ext_glob 0  // symtab: module globals already scanned for thunks
-
-// Module bytes [a, b) as an owned string.
-@ __mod_sub i a i b → s {
-    : i k - b a
-    : s r # s ( nurl_alloc + k 1 )
-    ( memcpy r # s + g_dce_mod a k )
-    : *u rp # *u r
-    = . rp k # u 0
-    ^ r
-}
+: ~ i g_ext_glob 0  // symtab: module global → its line offset (`-` once scanned)
+: ~ i g_ext_mlen 0  // module length
 
 // Index of the function named by the identifier at [s, e), or -1.
 @ __ext_fn_at i s i e → i {
@@ -37851,15 +37839,32 @@
 // The module-scope definition `@<name> = …` of the global at [s, e): its
 // function references run with it.
 @ __ext_glob i s i e → v {
-    : s nm ( __mod_sub s e )
-    ? != 0 ( nurl_sym_len g_ext_glob nm ) { ^ v } {}
-    ( nurl_sym_def g_ext_glob nm `1` )
-    : s pat ( nurl_str_cat3 `\n@` nm ` = ` )
-    : i mlen ( strlen # s g_dce_mod )
-    : i at ( nurl_memmem_range # s g_dce_mod mlen pat ( nurl_str_len pat ) )
-    ? < at 0 { ^ v } {}
-    : i ls + at 1
-    ( __ext_refs ls ( __mp_eol ls mlen ) F )
+    : s nm ( __span_dup # s g_dce_mod s e )
+    : s at ( nurl_sym_get g_ext_glob nm )
+    // Unknown (not defined at module scope, or no function in it) or
+    // already scanned.
+    ? | == 0 ( nurl_str_len at ) ( seq at `-` ) { ^ v } {}
+    ( nurl_sym_set_deep g_ext_glob nm `-` )
+    : i ls ( nurl_str_to_int at )
+    ( __ext_refs ls ( __mp_eol ls g_ext_mlen ) F )
+}
+
+// Index the module-scope definitions in [from, to) that mention a
+// function (`@<name> = … @fn …`): name → the line's offset.
+@ __ext_index_globals i from i to → v {
+    : ~ i p from
+    ~ < p to {
+        : i le ( __mp_eol p to )
+        ? == ( __fold_byte p ) 64 {
+            : ~ i e + p 1
+            ~ & < e le ( __dce_ident_byte ( __fold_byte e ) ) { = e + e 1 }
+            ? >= ( nurl_memmem_range # s + g_dce_mod e - le e `@` 1 ) 0 {
+                : s nm ( __span_dup # s g_dce_mod + p 1 e )
+                ( nurl_sym_def g_ext_glob nm ( nurl_str_int p ) )
+            } {}
+        } {}
+        = p + le 1
+    }
 }
 
 // A type spelling, normalized: every pointer is `ptr`.
@@ -37869,7 +37874,7 @@
     ~ & < s e == ( __fold_byte s ) 32 { = s + s 1 }
     ~ & > e s == ( __fold_byte - e 1 ) 32 { = e - e 1 }
     ? | == ( __fold_byte - e 1 ) 42 & == - e s 3 ( __fold_at s `ptr` 3 ) { ^ ( nurl_str_cat `ptr` `` ) } {}
-    ^ ( __mod_sub s e )
+    ^ ( __span_dup # s g_dce_mod s e )
 }
 
 // The end of the bracket group opened at `p` (its matching `)`).
@@ -37997,7 +38002,7 @@
                             ( __ext_mark ( nurl_str_to_int w ) )
                         }
                     } {
-                        : s nm ( __mod_sub ts op )
+                        : s nm ( __span_dup # s g_dce_mod ts op )
                         ? ( __ext_calls_back nm ) { ( __ext_mark_all n ) } {}
                     }
                 } { ( __ext_mark_all n ) }
@@ -38019,7 +38024,7 @@
         ^ F
     } {}
     ? != ( __fold_byte vs ) 37 { ^ F } {}
-    : s v ( __mod_sub vs ve )
+    : s v ( __span_dup # s g_dce_mod vs ve )
     : s pat ( nurl_str_cat3 `\n  ` v ` = insertvalue ` )
     : i at ( nurl_memmem_range # s + g_dce_mod cs - ce cs pat ( nurl_str_len pat ) )
     ? < at 0 { ^ F } {}
@@ -38157,18 +38162,22 @@
     = g_ext_all F
     = g_ext_sig 0
     = g_ext_glob ( nurl_sym_new )
+    = g_ext_mlen ( strlen # s g_dce_mod )
     // Address-taken: module scope (globals, vtables) and every live body
     // past its `define` line.
     : ~ i gap 0
     = fi 0
     ~ < fi n {
         : i st ( nurl_peek # s g_dce_start fi )
+        ( __ext_index_globals gap st )
         ( __ext_refs gap st T )
         = gap ( nurl_peek # s g_dce_end fi )
         ? != 0 ( nurl_peek # s g_dce_live fi ) { ( __ext_refs ( __mp_eol st gap ) gap T ) } {}
         = fi + fi 1
     }
-    ( __ext_refs gap ( strlen # s g_dce_mod ) T )
+    : i mlen g_ext_mlen
+    ( __ext_index_globals gap mlen )
+    ( __ext_refs gap mlen T )
     ? != 0 ( nurl_str_len g_dce_keep ) {
         : ~ s rest ( nurl_str_cat g_dce_keep `` )
         ~ != 0 ( nurl_str_len rest ) {
