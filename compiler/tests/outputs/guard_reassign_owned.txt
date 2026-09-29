@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+98
+196
+lent
+fresh-1
+new-value
+live allocations: steady
