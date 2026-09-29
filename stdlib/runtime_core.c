@@ -2857,6 +2857,15 @@ static __thread size_t nurl__jrnl_len = 0, nurl__jrnl_cap = 0;
 static __thread size_t nurl__jrnl_live = 0;
 static __thread uint64_t nurl__jrnl_sequence = 0;
 static __thread int nurl__jrnl_active = 0;
+/* Handle-binding slot registrations (see nurl_journal_push_drop2). */
+typedef struct {
+    void *slot;
+    void (*drop)(void*);
+    const unsigned char *flag;
+    uint64_t sequence;
+} NurlSlotEntry;
+static __thread NurlSlotEntry *nurl__jslot = NULL;
+static __thread size_t nurl__jslot_len = 0, nurl__jslot_cap = 0;
 
 static size_t nurl__jrnl_bucket(void *p) {
     uint64_t h = (uint64_t)(uintptr_t)p;
@@ -2904,10 +2913,15 @@ static void nurl__journal_thread_exit(void) {
     free(nurl__jrnl); free(nurl__jrnl_buckets);
     nurl__jrnl = NULL; nurl__jrnl_buckets = NULL;
     nurl__jrnl_len = nurl__jrnl_cap = nurl__jrnl_live = 0;
+    free(nurl__jslot); nurl__jslot = NULL;
+    nurl__jslot_len = nurl__jslot_cap = 0;
 }
 
-static void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned char *flag) {
-    if (!nurl__jrnl_active || !p) return;
+/* The registration itself, out of line: outside a recover extent (nearly
+ * every call) the wrappers below return before touching a callee-saved
+ * register, instead of paying this body's prologue to learn that. */
+__attribute__((noinline))
+static void nurl__jrnl_push2_slow(void *p, void (*drop)(void*), const unsigned char *flag) {
     nurl__jrnl_grow();
     if (nurl__jrnl_sequence == UINT64_MAX) {
         fputs("nurl: panic journal sequence exhausted\n", stderr);
@@ -2921,16 +2935,46 @@ static void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned char *
     nurl__jrnl_buckets[bucket] = ++nurl__jrnl_len;
     ++nurl__jrnl_live;
 }
+static inline void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned char *flag) {
+    if (__builtin_expect(!nurl__jrnl_active, 1) || !p) return;
+    nurl__jrnl_push2_slow(p, drop, flag);
+}
 
 static void nurl__jrnl_push(void *p, void (*drop)(void*)) { nurl__jrnl_push2(p, drop, NULL); }
 void nurl_journal_push(void *p) { nurl__jrnl_push(p, NULL); }
 void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
     if (fn) nurl__jrnl_push(slot, fn);
 }
+/* Handle-binding slots (nurl_journal_push_drop2 / _forget_slot) live on a
+ * stack of their own. A slot is a stack address — nurl_free never sees
+ * one, and only forget_slot ends its registration — and bindings end in
+ * the reverse of their start, so the owner is found at (or next to) the
+ * top: no hashing, no bucket chain. The sequence numbers are the pointer
+ * journal's, so a drain or truncate still walks both newest-first. */
+
+__attribute__((noinline))
+static void nurl__jslot_push_slow(void *slot, void (*drop)(void*), const unsigned char *flag) {
+    if (nurl__jslot_len == nurl__jslot_cap) {
+        size_t cap = nurl__jslot_cap ? nurl__jslot_cap * 2 : 64;
+        nurl__jslot = realloc(nurl__jslot, cap * sizeof(NurlSlotEntry));
+        nurl__jslot_cap = cap;
+    }
+    if (nurl__jrnl_sequence == UINT64_MAX) {
+        fputs("nurl: panic journal sequence exhausted\n", stderr);
+        abort();
+    }
+    NurlSlotEntry *e = &nurl__jslot[nurl__jslot_len++];
+    e->slot = slot; e->drop = drop; e->flag = flag;
+    e->sequence = ++nurl__jrnl_sequence;
+}
 /* An owned String / Vec / struct / container binding: `fn` drops the value
  * in `slot` on a panic if the binding's drop flag still says it owns one. */
 void nurl_journal_push_drop2(void *slot, void *flag, void (*fn)(void*)) {
-    if (fn) nurl__jrnl_push2(slot, fn, (const unsigned char *)flag);
+    if (__builtin_expect(!nurl__jrnl_active, 1) || !fn || !slot) return;
+    nurl__jslot_push_slow(slot, fn, (const unsigned char *)flag);
+}
+static void nurl__jslot_pop_nulls(void) {
+    while (nurl__jslot_len && !nurl__jslot[nurl__jslot_len - 1].slot) --nurl__jslot_len;
 }
 
 static void nurl__jrnl_pop_nulls(void) {
@@ -2939,9 +2983,10 @@ static void nurl__jrnl_pop_nulls(void) {
 }
 
 /* Remove all aliases; normal frees and explicit ownership transfers share
- * this operation. Bucket links are stable until growth or compaction. */
-void nurl_journal_forget(void *p) {
-    if (!nurl__jrnl_live || !p) return;
+ * this operation. Bucket links are stable until growth or compaction.
+ * Inline into nurl_free (which already knows the journal is non-empty);
+ * out of line behind nurl_journal_forget's early return. */
+static inline void nurl__jrnl_forget_body(void *p) {
     size_t *link = &nurl__jrnl_buckets[nurl__jrnl_bucket(p)];
     while (*link) {
         NurlJournalEntry *entry = &nurl__jrnl[*link - 1];
@@ -2953,17 +2998,38 @@ void nurl_journal_forget(void *p) {
     }
     nurl__jrnl_pop_nulls();
 }
+__attribute__((noinline))
+static void nurl__jrnl_forget_slow(void *p) { nurl__jrnl_forget_body(p); }
+void nurl_journal_forget(void *p) {
+    if (__builtin_expect(!nurl__jrnl_live, 1) || !p) return;
+    nurl__jrnl_forget_slow(p);
+}
 
 /* The registration of a binding's slot (nurl_journal_push_drop2) ends with
  * its scope; a separate name so the compiler can tell it from a temporary's
- * forget and drop both where no panic can reach. */
-void nurl_journal_forget_slot(void *slot) { nurl_journal_forget(slot); }
-static void nurl__jrnl_remove(void *p) { nurl_journal_forget(p); }
+ * forget and drop both where no panic can reach. The newest registration of
+ * the slot is the one ending. */
+__attribute__((noinline))
+static void nurl__jslot_forget_slow(void *slot) {
+    for (size_t i = nurl__jslot_len; i-- > 0; )
+        if (nurl__jslot[i].slot == slot) { nurl__jslot[i].slot = NULL; break; }
+    nurl__jslot_pop_nulls();
+}
+void nurl_journal_forget_slot(void *slot) {
+    if (__builtin_expect(!nurl__jslot_len, 1) || !slot) return;
+    nurl__jslot_forget_slow(slot);
+}
+static inline void nurl__jrnl_remove(void *p) { if (nurl__jrnl_live) nurl__jrnl_forget_body(p); }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }
 
 /* Normal completion forgets only registrations made in this extent: an
  * outer registration for the same address retains its own obligation. */
 static void nurl__jrnl_truncate(uint64_t mark) {
+    nurl__jslot_pop_nulls();
+    while (nurl__jslot_len && nurl__jslot[nurl__jslot_len - 1].sequence > mark) {
+        --nurl__jslot_len;
+        nurl__jslot_pop_nulls();
+    }
     nurl__jrnl_pop_nulls();
     while (nurl__jrnl_len && nurl__jrnl[nurl__jrnl_len - 1].sequence > mark) {
         size_t index = nurl__jrnl_len - 1;
@@ -2982,8 +3048,17 @@ static void nurl__jrnl_truncate(uint64_t mark) {
  * the journal survives the call. Raw frees forget aliases in outer extents
  * too, so an outer panic cannot reclaim already-freed storage a second time. */
 static void nurl__jrnl_drain(uint64_t mark) {
-    nurl__jrnl_pop_nulls();
-    while (nurl__jrnl_len && nurl__jrnl[nurl__jrnl_len - 1].sequence > mark) {
+    for (;;) {
+        nurl__jrnl_pop_nulls();
+        nurl__jslot_pop_nulls();
+        uint64_t ps = nurl__jrnl_len ? nurl__jrnl[nurl__jrnl_len - 1].sequence : 0;
+        uint64_t ss = nurl__jslot_len ? nurl__jslot[nurl__jslot_len - 1].sequence : 0;
+        if (ps <= mark && ss <= mark) break;
+        if (ss > ps) {
+            NurlSlotEntry se = nurl__jslot[--nurl__jslot_len];
+            if (!se.flag || (*(volatile const unsigned char *)se.flag & 1)) se.drop(se.slot);
+            continue;
+        }
         NurlJournalEntry entry = nurl__jrnl[nurl__jrnl_len - 1];
         nurl_journal_forget(entry.ptr);
         if (entry.drop) {
