@@ -2983,9 +2983,10 @@ static void nurl__jrnl_pop_nulls(void) {
 }
 
 /* Remove all aliases; normal frees and explicit ownership transfers share
- * this operation. Bucket links are stable until growth or compaction. */
-__attribute__((noinline))
-static void nurl__jrnl_forget_slow(void *p) {
+ * this operation. Bucket links are stable until growth or compaction.
+ * Inline into nurl_free (which already knows the journal is non-empty);
+ * out of line behind nurl_journal_forget's early return. */
+static inline void nurl__jrnl_forget_body(void *p) {
     size_t *link = &nurl__jrnl_buckets[nurl__jrnl_bucket(p)];
     while (*link) {
         NurlJournalEntry *entry = &nurl__jrnl[*link - 1];
@@ -2997,6 +2998,8 @@ static void nurl__jrnl_forget_slow(void *p) {
     }
     nurl__jrnl_pop_nulls();
 }
+__attribute__((noinline))
+static void nurl__jrnl_forget_slow(void *p) { nurl__jrnl_forget_body(p); }
 void nurl_journal_forget(void *p) {
     if (__builtin_expect(!nurl__jrnl_live, 1) || !p) return;
     nurl__jrnl_forget_slow(p);
@@ -3016,7 +3019,7 @@ void nurl_journal_forget_slot(void *slot) {
     if (__builtin_expect(!nurl__jslot_len, 1) || !slot) return;
     nurl__jslot_forget_slow(slot);
 }
-static void nurl__jrnl_remove(void *p) { nurl_journal_forget(p); }
+static inline void nurl__jrnl_remove(void *p) { if (nurl__jrnl_live) nurl__jrnl_forget_body(p); }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }
 
 /* Normal completion forgets only registrations made in this extent: an

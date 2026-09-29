@@ -37366,6 +37366,7 @@
 : ~ i g_dce_live 0  // i64[n]: 1 once reached
 : ~ i g_dce_queue 0  // i64[n]: worklist of reached-but-unscanned indices
 : ~ i g_dce_qn 0  // worklist length
+: ~ i g_dce_at 0  // i64[n]: 1 when the scan saw function n's address taken
 : ~ i g_dce_map 0  // symtab: function name → its index, as decimal text
 
 // Is `c` a byte that can appear in an LLVM global identifier?
@@ -37382,14 +37383,15 @@
 // Mark the function called `nm` reachable and queue its body for
 // scanning. A name that is not a function in this module (a `declare`d
 // runtime symbol, a `@.str.N` global, a label) is simply absent.
-@ __dce_mark_name s nm → v {
+@ __dce_mark_name s nm → i {
     : s ent ( nurl_sym_get g_dce_map nm )
-    ? == 0 ( nurl_str_len ent ) { ^ v } {}
+    ? == 0 ( nurl_str_len ent ) { ^ -1 } {}
     : i idx ( nurl_str_to_int ent )
-    ? != 0 ( nurl_peek # s g_dce_live idx ) { ^ v } {}
+    ? != 0 ( nurl_peek # s g_dce_live idx ) { ^ idx } {}
     ( nurl_poke # s g_dce_live idx 1 )
     ( nurl_poke # s g_dce_queue g_dce_qn idx )
     = g_dce_qn + g_dce_qn 1
+    ^ idx
 }
 
 // Mark every function named by an `@ident` in module bytes [from, to).
@@ -37409,8 +37411,11 @@
                 // hand a line to a `s`-taking helper without copying.
                 : u sv . mp q
                 = . mp q # u 0
-                ( __dce_mark_name # s + # i mp + p 1 )
+                : i fi ( __dce_mark_name # s + # i mp + p 1 )
                 = . mp q sv
+                // Not a direct call's callee (`@name(`): its address is
+                // taken (__ext_compute).
+                ? & >= fi 0 != # i sv 40 { ( nurl_poke # s g_dce_at fi 1 ) } {}
                 = p q
             }
         }
@@ -38156,7 +38161,10 @@
         = fi + fi 1
     }
     ? ! rec { ^ v } {}
-    = g_at # i # s ( nurl_zalloc * + n 1 8 )
+    // The reachability scan already saw every address taken; without it
+    // (`--no-dce`) scan here.
+    : b scanned & != 0 g_dce != 0 ( nurl_str_len ( nurl_sym_get g_dce_map `main` ) )
+    = g_at ? scanned g_dce_at # i # s ( nurl_zalloc * + n 1 8 )
     = g_ext_q # i # s ( nurl_zalloc * + n 1 8 )
     = g_ext_qn 0
     = g_ext_all F
@@ -38170,14 +38178,14 @@
     ~ < fi n {
         : i st ( nurl_peek # s g_dce_start fi )
         ( __ext_index_globals gap st )
-        ( __ext_refs gap st T )
+        ? ! scanned { ( __ext_refs gap st T ) } {}
         = gap ( nurl_peek # s g_dce_end fi )
-        ? != 0 ( nurl_peek # s g_dce_live fi ) { ( __ext_refs ( __mp_eol st gap ) gap T ) } {}
+        ? & ! scanned != 0 ( nurl_peek # s g_dce_live fi ) { ( __ext_refs ( __mp_eol st gap ) gap T ) } {}
         = fi + fi 1
     }
     : i mlen g_ext_mlen
     ( __ext_index_globals gap mlen )
-    ( __ext_refs gap mlen T )
+    ? ! scanned { ( __ext_refs gap mlen T ) } {}
     ? != 0 ( nurl_str_len g_dce_keep ) {
         : ~ s rest ( nurl_str_cat g_dce_keep `` )
         ~ != 0 ( nurl_str_len rest ) {
@@ -38195,7 +38203,8 @@
         = qh + qh 1
         ( __ext_scan_fn n cf )
     }
-    ( nurl_free # s g_at ) = g_at 0
+    ? ! scanned { ( nurl_free # s g_at ) } {}
+    = g_at 0
     ( nurl_free # s g_ext_q ) = g_ext_q 0
     ? != 0 g_ext_sig { ( nurl_sym_free g_ext_sig ) = g_ext_sig 0 } {}
     ( nurl_sym_free g_ext_glob ) = g_ext_glob 0
@@ -39108,6 +39117,7 @@
     = g_dce_start # i # s ( nurl_zalloc * n 8 )
     = g_dce_end # i # s ( nurl_zalloc * n 8 )
     = g_dce_live # i # s ( nurl_zalloc * n 8 )
+    = g_dce_at # i # s ( nurl_zalloc * n 8 )
     = g_dce_queue # i # s ( nurl_zalloc * n 8 )
     = g_dce_map ( nurl_sym_new )
     = g_dce_qn 0
@@ -39198,6 +39208,7 @@
     ( nurl_free # s g_dce_start )
     ( nurl_free # s g_dce_end )
     ( nurl_free # s g_dce_live )
+    ( nurl_free # s g_dce_at ) = g_dce_at 0
     ( nurl_free # s g_dce_queue )
     ( nurl_sym_free g_dce_map )
     ? != g_fold_flags 0 { ( nurl_sym_free g_fold_flags ) = g_fold_flags 0 } {}
