@@ -7200,7 +7200,7 @@
 // in the same order, so the hash value is unchanged.
 // FNV-1a over base then suffix — the hash of the two concatenated,
 // without concatenating them. See nurl_sym_get2.
-@ __sym_hash2 s base i bl s suffix i sl i nb → i {
+@ __sym_hash2 s base i bl s suffix i sl → i {
     : *u bp # *u base
     : *u sp # *u suffix
     : ~ i hsh 2166136261
@@ -7216,10 +7216,10 @@
         = hsh & * hsh 16777619 4294967295
         = k + k 1
     }
-    ^ % hsh nb
+    ^ hsh
 }
 
-@ __sym_hash s name i nb → i {
+@ __sym_hash s name → i {
     : i n ( nurl_str_len name )
     : *u np # *u name
     : ~ i hsh 2166136261
@@ -7229,7 +7229,31 @@
         = hsh & * hsh 16777619 4294967295
         = k + k 1
     }
-    ^ % hsh nb
+    ^ hsh
+}
+
+// Twice as many live entries as buckets: four times the buckets, every
+// entry relinked oldest-first so each chain stays newest-first. A table
+// that only ever had a fixed bucket count degraded to long chains — the
+// pending-implication table holds tens of thousands of keys.
+@ __sym_rehash i h → v {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : i nb * ( nurl_peek t 6 ) 4
+    ( nurl_free # s ( nurl_peek t 7 ) )
+    : s nbk # s ( nurl_zalloc * nb 8 )
+    ( nurl_poke t 7 # i nbk )
+    ( nurl_poke t 6 nb )
+    : *i buckets # *i nbk
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
+    : ~ i k 0
+    ~ < k count {
+        : i bh % . hashes k nb
+        = . prev k . buckets bh
+        = . buckets bh + k 1
+        = k + k 1
+    }
 }
 
 @ __sym_grow i h → v {
@@ -7242,6 +7266,8 @@
     : s depths_old # s ( nurl_peek t 5 )
     : s prev_old # s ( nurl_peek t 8 )
     : s lens_old # s ( nurl_peek t 11 )
+    : s hashes_old # s ( nurl_peek t 12 )
+    : s hashes_new # s ( nurl_alloc * newcap 8 )
     : s names_new # s ( nurl_alloc * newcap 8 )
     : s types_new # s ( nurl_alloc * newcap 8 )
     : s depths_new # s ( nurl_alloc * newcap 8 )
@@ -7253,17 +7279,20 @@
     ( memcpy depths_new depths_old nbytes )
     ( memcpy prev_new prev_old nbytes )
     ( memcpy lens_new lens_old nbytes )
+    ( memcpy hashes_new hashes_old nbytes )
     ( nurl_free names_old )
     ( nurl_free types_old )
     ( nurl_free depths_old )
     ( nurl_free prev_old )
     ( nurl_free lens_old )
+    ( nurl_free hashes_old )
     ( nurl_poke t 2 newcap )
     ( nurl_poke t 3 # i names_new )
     ( nurl_poke t 4 # i types_new )
     ( nurl_poke t 5 # i depths_new )
     ( nurl_poke t 8 # i prev_new )
     ( nurl_poke t 11 # i lens_new )
+    ( nurl_poke t 12 # i hashes_new )
 }
 
 : ~ i g_live_symtables 0
@@ -7273,12 +7302,14 @@
     // 12 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
     // 6 nbuckets, 7 buckets (head index+1 per bucket; 0 = empty),
     // 8 prev (per-entry link to the previous entry in the same bucket),
-    // 11 lens (cached byte length of the value, 0 = "ask strlen").
+    // 11 lens (cached byte length of the value, 0 = "ask strlen"),
+    // 12 hashes (each name's full hash: chains compare it before the bytes,
+    // and a rehash needs no name re-read).
     // Only nurl_sym_append_word maintains slot 11, because it is the only
     // writer whose cost is dominated by re-deriving a length it just
     // computed; every other writer stores 0 and the readers never look.
     : i nb 4096
-    : s t # s ( nurl_zalloc 96 )
+    : s t # s ( nurl_zalloc 104 )
     // Compilation owns every table until its explicit release. Intrusive
     // links (slots 9/10) let final cleanup reclaim handles abandoned by a
     // diagnostic without scanning on normal release or allocating a tracker.
@@ -7293,6 +7324,7 @@
     ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 8 ) )
     ( nurl_poke t 8 # i # s ( nurl_alloc * 64 8 ) )
     ( nurl_poke t 11 # i # s ( nurl_zalloc * 64 8 ) )
+    ( nurl_poke t 12 # i # s ( nurl_alloc * 64 8 ) )
     ^ # i t
 }
 
@@ -7334,6 +7366,7 @@
     ( nurl_free # s ( nurl_peek t 7 ) )
     ( nurl_free # s ( nurl_peek t 8 ) )
     ( nurl_free # s ( nurl_peek t 11 ) )
+    ( nurl_free # s ( nurl_peek t 12 ) )
     ( nurl_free t )
 }
 
@@ -7350,10 +7383,13 @@
     : *i depths # *i # s ( nurl_peek t 5 )
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
-    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash name )
+    : i bh % hn ( nurl_peek t 6 )
     = . names count # s ( nurl_strdup name )
     = . types count # s ( nurl_strdup type )
     = . depths count ( nurl_peek t 1 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
+    = . hashes count hn
     // Slot 11 caches the value's length for nurl_sym_append_word; 0 means
     // "not known, ask strlen", which is also what an empty value measures.
     : *i lens # *i # s ( nurl_peek t 11 )
@@ -7364,6 +7400,7 @@
     = . prev count . buckets bh
     = . buckets bh + count 1
     ( nurl_poke t 0 + count 1 )
+    ? > + count 1 * 2 ( nurl_peek t 6 ) { ( __sym_rehash h ) } {}
 }
 
 @ nurl_sym_get i h s name → s {
@@ -7373,14 +7410,16 @@
     : *s types # *s # s ( nurl_peek t 4 )
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
-    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash name )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
     // Walk this name's bucket chain newest-first. Entries are stored as
     // index+1 (0 = chain end); pop unlinks, so every chained index is < count.
     : ~ i cur . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? == 0 # i ( strcmp name . names idx )
+            ? & == hn . hashes idx == 0 # i ( strcmp name . names idx )
             { ^ # s ( nurl_strdup . types idx ) }
             { = cur . prev idx }
         }
@@ -7409,13 +7448,15 @@
     : *i prev # *i # s ( nurl_peek t 8 )
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
-    : i bh ( __sym_hash2 base bl suffix sl ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash2 base bl suffix sl )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
             : s cand . names idx
-            ? & == ( nurl_str_len cand ) + bl sl
+            ? & & == hn . hashes idx == ( nurl_str_len cand ) + bl sl
             & == 0 # i ( memcmp cand base bl )
             == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
             { ^ # s ( nurl_strdup . types idx ) }
@@ -7473,14 +7514,16 @@
     : *s types # *s # s ( nurl_peek t 4 )
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
-    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash name )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
     // Same newest-first bucket walk as nurl_sym_get — the entry it would
     // read is the entry we overwrite, so reads and writes cannot disagree.
     : ~ i cur . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? == 0 # i ( strcmp name . names idx )
+            ? & == hn . hashes idx == 0 # i ( strcmp name . names idx )
             { ( nurl_free . types idx )
                 = . types idx # s ( nurl_strdup value )
                 : *i lens # *i # s ( nurl_peek t 11 )
@@ -7540,14 +7583,16 @@
     : *s types # *s # s ( nurl_peek t 4 )
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
-    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash name )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
     // Same newest-first bucket walk as nurl_sym_set_deep, so the entry
     // this grows is the entry nurl_sym_get would read back.
     : ~ i cur . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
-            ? == 0 # i ( strcmp name . names idx )
+            ? & == hn . hashes idx == 0 # i ( strcmp name . names idx )
             { : s old . types idx
                 : *i lens # *i # s ( nurl_peek t 11 )
                 // The cached length is what keeps this O(1) in the list's
@@ -7580,12 +7625,14 @@
     : *i depths # *i # s ( nurl_peek t 5 )
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
-    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash name )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ -1 } {}
-        ? == 0 # i ( strcmp name . names idx ) {
+        ? & == hn . hashes idx == 0 # i ( strcmp name . names idx ) {
             ? == . depths idx ( nurl_peek t 1 ) { ^ idx } {}
             ^ -1
         } {}
@@ -7604,12 +7651,14 @@
     : *s types # *s # s ( nurl_peek t 4 )
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
-    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash name )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ 0 } {}
-        ? == 0 # i ( strcmp name . names idx ) { ^ ( nurl_str_len . types idx ) } {}
+        ? & == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( nurl_str_len . types idx ) } {}
         = cur . prev idx
     }
     0
@@ -7625,13 +7674,15 @@
     : *i prev # *i # s ( nurl_peek t 8 )
     : i bl ( nurl_str_len base )
     : i sl ( nurl_str_len suffix )
-    : i bh ( __sym_hash2 base bl suffix sl ( nurl_peek t 6 ) )
+    : i hn ( __sym_hash2 base bl suffix sl )
+    : i bh % hn ( nurl_peek t 6 )
+    : *i hashes # *i # s ( nurl_peek t 12 )
     : ~ i cur . buckets bh
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ 0 } {}
         : s cand . names idx
-        ? & == ( nurl_str_len cand ) + bl sl
+        ? & & == hn . hashes idx == ( nurl_str_len cand ) + bl sl
         & == 0 # i ( memcmp cand base bl )
         == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
         { ^ ( nurl_str_len . types idx ) }
@@ -7659,7 +7710,8 @@
         : i idx - count 1
         // The top entry is the newest def for its name, hence the head of
         // its bucket chain — unlink it so the chain stays consistent.
-        : i bh ( __sym_hash . names idx nb )
+        : *i hashes # *i # s ( nurl_peek t 12 )
+        : i bh % . hashes idx nb
         = . buckets bh . prev idx
         ( nurl_free . names idx )
         ( nurl_free . types idx )
@@ -37104,6 +37156,8 @@
 // itself. Both live in runtime_core.c and resolve from runtime.o.
 & `c` @ nurl_recover *u fnp *u env → i
 
+& `c` @ nurl_recover_unjournaled *u fnp *u env → i
+
 & `c` @ nurl_print_buf_unwind → v
 
 // strdup on the runtime's small-allocation cache, declared the same way
@@ -37117,17 +37171,19 @@
 // runtime entry yet. Current preamble emission deduplicates the declaration.
 & `c` @ nurl_read_stdin → s
 
-// Decompose the closure into (fn, env) and run it under normal recovery.
-// The runtime's pointer index makes journal removal independent of the total
-// live allocation count. Panic now reclaims compiler-owned temporaries before
-// skipping their frames; the enclosing compilation still releases its tables.
+// Decompose the closure into (fn, env) and run it under recovery. A
+// diagnostic ends the compilation (with every error the walk still finds),
+// so what the frames a panic skips owned is left to the process exit: no
+// ownership journal, and with no journaled extent anywhere in the compiler
+// the writer drops every journal call from its IR (__ext_compute) — they
+// cost a fifth of a compile and kept every binding's slot in memory.
 // Returns 0 = completed, 1 = panicked (message via nurl_panic_last_msg).
 @ __diag_recover ( @ v ) closure → i {
     : *u fnp # *u closure 0
     : *u env # *u closure 1
     // The closure is borrowed for the call; the caller drops its env
     // (docs/MEMORY.md §7.4).
-    : i rv ( nurl_recover fnp env )
+    : i rv ( nurl_recover_unjournaled fnp env )
     ^ rv
 }
 
@@ -37713,12 +37769,122 @@
     }
 }
 
+: ~ i g_ext 0  // i64[n]: 1 when function n may run inside a recover extent
+
+// Queue function `fi` as running inside a recover extent.
+@ __ext_mark i fi s q i qn → i {
+    ? != 0 ( nurl_peek # s g_ext fi ) { ^ qn } {}
+    ( nurl_poke # s g_ext fi 1 )
+    ( nurl_poke q qn fi )
+    ^ + qn 1
+}
+
+// Mark every function whose address `[from, to)` takes — an `@name` that
+// is not a direct call's callee (`@name(`) — as a possible extent entry.
+@ __ext_roots i from i to s q i qn0 → i {
+    : *u mp # *u # s g_dce_mod
+    : ~ i qn qn0
+    : ~ i p from
+    ~ < p to {
+        ? != & # i . mp p 255 64 { = p + p 1 } {
+            : ~ i e + p 1
+            ~ & < e to ( __dce_ident_byte & # i . mp e 255 ) { = e + e 1 }
+            ? & > e + p 1 | >= e to != & # i . mp e 255 40 {
+                : u sv . mp e
+                = . mp e # u 0
+                : s ent ( nurl_sym_get g_dce_map # s + # i mp + p 1 )
+                = . mp e sv
+                ? != 0 ( nurl_str_len ent ) { = qn ( __ext_mark ( nurl_str_to_int ent ) q qn ) } {}
+            } {}
+            = p e
+        }
+    }
+    ^ qn
+}
+
+// Which live functions may run while a `recover` extent is active on their
+// thread — the only time the ownership journal is read. None, in a program
+// that never calls nurl_recover (a panic then aborts the process). Else
+// every function that may be entered through a pointer (a closure, a thunk,
+// a vtable slot: anything handed to recover is one), a `--keep=` root, and
+// everything those call directly. A module without `main` is a library:
+// any of its functions may be.
+@ __ext_compute i n b lib → v {
+    = g_ext # i # s ( nurl_zalloc * + n 1 8 )
+    : ~ i fi 0
+    ? lib {
+        ~ < fi n { ( nurl_poke # s g_ext fi 1 ) = fi + fi 1 }
+        ^ v
+    } {}
+    : ~ b rec F
+    ~ & < fi n ! rec {
+        ? != 0 ( nurl_peek # s g_dce_live fi ) {
+            : i st ( nurl_peek # s g_dce_start fi )
+            = rec >= ( nurl_memmem_range # s + g_dce_mod st - ( nurl_peek # s g_dce_end fi ) st `@nurl_recover(` 14 ) 0
+        } {}
+        = fi + fi 1
+    }
+    ? ! rec { ^ v } {}
+    : s q ( nurl_zalloc * + n 1 8 )
+    : ~ i qn 0
+    // Module scope (globals, vtables) and every live body past its
+    // `define` line.
+    : ~ i gap 0
+    = fi 0
+    ~ < fi n {
+        : i st ( nurl_peek # s g_dce_start fi )
+        = qn ( __ext_roots gap st q qn )
+        = gap ( nurl_peek # s g_dce_end fi )
+        ? != 0 ( nurl_peek # s g_dce_live fi ) {
+            : i en gap
+            = qn ( __ext_roots ( __mp_eol st en ) en q qn )
+        } {}
+        = fi + fi 1
+    }
+    = qn ( __ext_roots gap ( strlen # s g_dce_mod ) q qn )
+    ? != 0 ( nurl_str_len g_dce_keep ) {
+        : ~ s rest ( nurl_str_cat g_dce_keep `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : i cm ( nurl_str_find rest `,` )
+            : s nm ? < cm 0 ( nurl_str_cat rest `` ) ( nurl_str_slice rest 0 cm )
+            = rest ? < cm 0 ( nurl_str_cat `` `` ) ( nurl_str_slice rest + cm 1 - - ( nurl_str_len rest ) cm 1 )
+            : s ent ( nurl_sym_get g_dce_map nm )
+            ? != 0 ( nurl_str_len ent ) { = qn ( __ext_mark ( nurl_str_to_int ent ) q qn ) } {}
+        }
+    } {}
+    // Direct callees of what runs inside an extent run inside it too.
+    : ~ i qh 0
+    ~ < qh qn {
+        : i cf ( nurl_peek q qh )
+        = qh + qh 1
+        : i en ( nurl_peek # s g_dce_end cf )
+        : ~ i p ( nurl_peek # s g_dce_start cf )
+        ~ < p en {
+            : i rel ( nurl_memmem_range # s + g_dce_mod p - en p ` call ` 6 )
+            ? < rel 0 { = p en } {
+                : i cp + + p rel 6
+                : i le ( __mp_eol cp en )
+                : i c ( __mp_callee cp le )
+                ? >= c 0 { = qn ( __ext_mark c q qn ) } {}
+                = p le
+            }
+        }
+    }
+    ( nurl_free q )
+}
+
 // Blank (as a comment) every elidable journal push of the live functions.
-@ __jrnl_elide i n → v {
+@ __jrnl_elide i n b lib → v {
     ( __mp_compute n )
+    ( __ext_compute n lib )
     : *u mp # *u # s g_dce_mod
     : ~ i fi 0
     ~ < fi n {
+        // A function that never runs inside a recover extent has no use for
+        // the journal at all: nothing reads it there.
+        ? & != 0 ( nurl_peek # s g_dce_live fi ) == 0 ( nurl_peek # s g_ext fi ) {
+            ( __jrnl_blank_calls fi `  call void @nurl_journal_` 26 )
+        } {}
         // A function no panic can reach journals none of its bindings.
         ? & != 0 ( nurl_peek # s g_dce_live fi ) == 0 ( nurl_peek # s g_mp fi ) {
             ( __jrnl_blank_calls fi `  call void @nurl_journal_push_drop2(` 37 )
@@ -37748,6 +37914,8 @@
     }
     ( nurl_free # s g_mp )
     = g_mp 0
+    ( nurl_free # s g_ext )
+    = g_ext 0
 }
 
 // Record the flag constants written at module scope in [from, to).
@@ -38550,7 +38718,7 @@
             = qh + qh 1
         }
     }
-    ( __jrnl_elide n )
+    ( __jrnl_elide n == 0 ( nurl_str_len mainent ) )
     // Emit the live sub-sequence.
     : ~ i pos 0
     : ~ i ei 0

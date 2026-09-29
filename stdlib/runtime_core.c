@@ -4203,6 +4203,30 @@ long long nurl_recover(void *fn_ptr, void *env_ptr) {
     return 1;
 }
 
+/* `recover` for a process that ends soon after a panic it catches (the
+ * compiler's diagnostic resync): the same frame and message, but no
+ * ownership journal — values owned by the frames a panic skips are not
+ * reclaimed. Code that runs only inside such extents registers nothing,
+ * so the writer leaves its journal calls out entirely (__ext_compute).
+ * An enclosing journaled extent still drains what was registered in it. */
+long long nurl_recover_unjournaled(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    NurlPanicFrame frame;
+    frame.msg   = NULL;
+    frame.jmark = nurl__jrnl_mark();
+    frame.prev  = nurl__panic_top;
+    nurl__panic_top = &frame;
+    if (setjmp(frame.jb) == 0) {
+        ((void (*)(void *))fn_ptr)(env_ptr);
+        nurl__panic_top = frame.prev;
+        return 0;
+    }
+    nurl__panic_top = frame.prev;
+    nurl_free(nurl__panic_last_msg);
+    nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
+    return 1;
+}
+
 /* Captured panic message from the most recent recover-with-panic on
  * this thread. BORROWED — overwritten by the next panic. */
 const char *nurl_panic_last_msg(void) {
@@ -4260,6 +4284,10 @@ long long nurl_recover(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     ((void (*)(void *))fn_ptr)(env_ptr);
     return 0;
+}
+
+long long nurl_recover_unjournaled(void *fn_ptr, void *env_ptr) {
+    return nurl_recover(fn_ptr, env_ptr);
 }
 
 const char *nurl_panic_last_msg(void) { return ""; }
