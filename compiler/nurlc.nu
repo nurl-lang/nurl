@@ -37873,6 +37873,108 @@
     ( nurl_free q )
 }
 
+// Blank line [ls, le) as a comment.
+@ __jrnl_blank_line i ls i le → v {
+    : *u mp # *u # s g_dce_mod
+    = . mp ls # u 59
+    : ~ i q + ls 1
+    ~ < q le { = . mp q # u 32 = q + q 1 }
+}
+
+// Can nothing panic while the slot registered at the line ending `pe` is
+// registered — up to its last `forget_slot` at `fs`? No call in between
+// that may panic, and no branch from in between back above the
+// registration (a loop header re-run while it is live).
+@ __jrnl_slot_quiet i st i pe i fs → b {
+    : ~ i p + pe 1
+    : ~ i lines 0
+    ~ < p fs {
+        = lines + lines 1
+        ? > lines 4000 { ^ F } {}
+        : i e ( __mp_eol p fs )
+        : i cr ( nurl_memmem_range # s + g_dce_mod p - e p ` call ` 6 )
+        ? >= cr 0 {
+            : i c ( __mp_callee + + p cr 6 e )
+            ? == c -2 { ^ F } {}
+            ? & >= c 0 != 0 ( nurl_peek # s g_mp c ) { ^ F } {}
+        } {}
+        ? | ( __fold_at p `  br ` 5 ) ( __fold_at p `  switch ` 9 ) {
+            : ~ i q p
+            ~ < q e {
+                : i lr ( nurl_memmem_range # s + g_dce_mod q - e q `label %` 7 )
+                ? < lr 0 { = q e } {
+                    : i ns + + q lr 7
+                    : ~ i ne ns
+                    ~ & < ne e ( __dce_ident_byte ( __fold_byte ne ) ) { = ne + ne 1 }
+                    // `\n<name>:` above the registration?
+                    : i nl - ne ns
+                    : ~ i k st
+                    ~ < k pe {
+                        : i hit ( nurl_memmem_range # s + g_dce_mod k - pe k # s + g_dce_mod ns nl )
+                        ? < hit 0 { = k pe } {
+                            : i at + k hit
+                            ? & == ( __fold_byte - at 1 ) 10 == ( __fold_byte + at nl ) 58 { ^ F } {}
+                            = k + at 1
+                        }
+                    }
+                    = q ne
+                }
+            }
+        } {}
+        = p + e 1
+    }
+    ^ T
+}
+
+// Drop the registration of every handle binding whose registration no
+// panic can see (__jrnl_slot_quiet), with its forgets.
+@ __jrnl_slot_elide i fi → v {
+    : i st ( nurl_peek # s g_dce_start fi )
+    : i en ( nurl_peek # s g_dce_end fi )
+    : s pp `  call void @nurl_journal_push_drop2(ptr `
+    : s fp `  call void @nurl_journal_forget_slot(ptr `
+    : ~ i p st
+    ~ < p en {
+        : i rel ( nurl_memmem_range # s + g_dce_mod p - en p pp 41 )
+        ? < rel 0 { = p en } {
+            : i ls + p rel
+            : i le ( __mp_eol ls en )
+            : i ss + ls 41
+            : ~ i se ss
+            ~ & < se le != ( __fold_byte se ) 44 { = se + se 1 }
+            : i sn - se ss
+            // The last forget of this slot: `…forget_slot(ptr %rS)`.
+            : ~ i last -1
+            : ~ i q le
+            ~ < q en {
+                : i fr ( nurl_memmem_range # s + g_dce_mod q - en q fp 42 )
+                ? < fr 0 { = q en } {
+                    : i fa + + q fr 42
+                    ? & ( __fold_at fa # s + g_dce_mod ss sn ) == ( __fold_byte + fa sn ) 41 { = last + q fr } {}
+                    = q + fa 1
+                }
+            }
+            ? & >= last 0 ( __jrnl_slot_quiet st le last ) {
+                // Blank the forgets first: the slot name is read from the
+                // push line.
+                : ~ i r le
+                ~ < r en {
+                    : i fr ( nurl_memmem_range # s + g_dce_mod r - en r fp 42 )
+                    ? < fr 0 { = r en } {
+                        : i fl + r fr
+                        : i fa + fl 42
+                        : i fe ( __mp_eol fl en )
+                        ? & ( __fold_at fa # s + g_dce_mod ss sn ) == ( __fold_byte + fa sn ) 41 { ( __jrnl_blank_line fl fe ) } {}
+                        = r fe
+                    }
+                }
+                ( __jrnl_blank_line ls le )
+            } {}
+            = p le
+        }
+    }
+}
+
 // Blank (as a comment) every elidable journal push of the live functions.
 @ __jrnl_elide i n b lib → v {
     ( __mp_compute n )
@@ -37889,6 +37991,11 @@
         ? & != 0 ( nurl_peek # s g_dce_live fi ) == 0 ( nurl_peek # s g_mp fi ) {
             ( __jrnl_blank_calls fi `  call void @nurl_journal_push_drop2(` 37 )
             ( __jrnl_blank_calls fi `  call void @nurl_journal_forget_slot(` 38 )
+        } {}
+        // …and one that may panic journals only the bindings a panic can
+        // meet.
+        ? & & != 0 ( nurl_peek # s g_dce_live fi ) != 0 ( nurl_peek # s g_mp fi ) != 0 ( nurl_peek # s g_ext fi ) {
+            ( __jrnl_slot_elide fi )
         } {}
         ? != 0 ( nurl_peek # s g_dce_live fi ) {
             : i en ( nurl_peek # s g_dce_end fi )
