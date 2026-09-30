@@ -28,10 +28,10 @@ $ `stdlib/dist/sim.nu`
 
 @ pk i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
 
-@ ctr ( Vec s ) cs i i → *PNCounter { ^ # *PNCounter ?? ( vec_get [s] cs i ) { T x → x F → # s 0 } }
+@ ctr ( Vec PNCounter ) cs i i → PNCounter { ^ ?? ( vec_get [PNCounter] cs i ) { T x → x F → ( pncounter_new ) } }
 
 // each node broadcasts its encoded counter to every other node
-@ gossip_all * SimNet net ( Vec s ) cs i n i now → v {
+@ gossip_all * SimNet net ( Vec PNCounter ) cs i n i now → v {
     : ~ i i 0
     ~ < i n {
         : ( Vec u ) bytes ( pncounter_encode ( ctr cs i ) )
@@ -42,7 +42,7 @@ $ `stdlib/dist/sim.nu`
     }
 }
 // deliver due deltas, merging each into the destination node's counter
-@ deliver_all * SimNet net ( Vec s ) cs i now → v {
+@ deliver_all * SimNet net ( Vec PNCounter ) cs i now → v {
     : ( Vec s ) due ( sim_due net now )
     : i dn ( vec_len [s] due )
     : ~ i k 0
@@ -65,10 +65,10 @@ $ `stdlib/dist/sim.nu`
     // order (its own pubkey first). With a local-first-seen id every node would
     // call itself replica 0 — a universal collision. identity_stable_id derives
     // the id from the pubkey, so the registries agree without coordination.
-    : ( Vec s ) cs ( vec_new [s] )
+    : ( Vec PNCounter ) cs ( vec_new [PNCounter] )
     : ~ i i 0
     ~ < i n {
-        : *PNCounter c ( pncounter_new )
+        : PNCounter c ( pncounter_new )
         : *IdRegistry reg ( identity_new )
         // register peers in rotated order (self first) to provoke divergence
         : ~ i d 0
@@ -84,7 +84,7 @@ $ `stdlib/dist/sim.nu`
         ( pncounter_inc c rid 1 )  // each node does exactly one +1
         ( vec_free [u] selfpk )
         ( identity_free reg )
-        ( vec_push [s] cs # s c )
+        ( vec_push [PNCounter] cs c )
         = i + i 1
     }
 
@@ -110,9 +110,7 @@ $ `stdlib/dist/sim.nu`
     ( pb `CONVERGED to 3 on every node (no id collision): ` & & == ( pncounter_value ( ctr cs 0 ) ) 3 == ( pncounter_value ( ctr cs 1 ) ) 3 == ( pncounter_value ( ctr cs 2 ) ) 3 )
     ( pb `messages were actually dropped: ` > ( sim_dropped net ) 0 )
 
-    : ~ i fi 0
-    ~ < fi n { ( pncounter_free ( ctr cs fi ) ) = fi + fi 1 }
-    ( vec_free [s] cs )
+    ( vec_free [PNCounter] cs )
     ( sim_net_free net )
     ^ 0
 }

@@ -47,7 +47,7 @@ $ `stdlib/dist/identity.nu`
             : ( Vec u ) g ( group_id )
             ?? ( transport_group_join tr g ) { T _ → {} F _ → {} }
 
-            : *PNCounter ctr ( pncounter_new )
+            : PNCounter ctr ( pncounter_new )
 
             : ~ i round 0
             ~ < round 5 {

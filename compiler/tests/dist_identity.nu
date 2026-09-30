@@ -50,9 +50,9 @@ $ `stdlib/dist/crdt.nu`
 
     // ── headline: CRDT fed from the registry survives churn ──────
     // A and B both increment via their registry ids; merge; value correct.
-    : *PNCounter ca ( pncounter_new )
+    : PNCounter ca ( pncounter_new )
     ( pncounter_inc ca ( identity_of reg a ) 5 )
-    : *PNCounter cb ( pncounter_new )
+    : PNCounter cb ( pncounter_new )
     ( pncounter_inc cb ( identity_of reg b ) 7 )
     ( pncounter_merge ca cb )
     ( pb `crdt via stable ids merges to 12: ` == ( pncounter_value ca ) 12 )
@@ -64,7 +64,7 @@ $ `stdlib/dist/crdt.nu`
     : ( Vec u ) d ( mkpk 200 )
     : i idd ( identity_of reg d )
     ( pb `D does NOT inherit B slot: ` & != idd idb == idd 3 )
-    : *PNCounter cd ( pncounter_new )
+    : PNCounter cd ( pncounter_new )
     ( pncounter_inc cd idd 4 )
     ( pncounter_merge ca cd )  // ca now has A=5, B=7, D=4
     ( pncounter_merge ca cb )  // re-merge B's old state: idempotent, no clobber

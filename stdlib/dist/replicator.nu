@@ -60,10 +60,10 @@ $ `stdlib/dist/ring.nu`
     }
 }
 
-@ pncounter_encode * PNCounter c → ( Vec u ) {
+@ pncounter_encode PNCounter c → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
-    ( __pn_put b . c inc_id . c inc_amt )
-    ( __pn_put b . c dec_id . c dec_amt )
+    ( __pn_put b ( pncounter_inc_ids c ) ( pncounter_inc_amts c ) )
+    ( __pn_put b ( pncounter_dec_ids c ) ( pncounter_dec_amts c ) )
     ^ b
 }
 
@@ -73,19 +73,19 @@ $ `stdlib/dist/ring.nu`
     ~ < k n { ( vec_push [i] ids ( __rc_u64 cur ) ) ( vec_push [i] amts ( __rc_u64 cur ) ) = k + k 1 }
 }
 
-@ pncounter_decode ( Vec u ) buf → *PNCounter {
-    : *PNCounter c ( pncounter_new )
+@ pncounter_decode ( Vec u ) buf → PNCounter {
+    : PNCounter c ( pncounter_new )
     : *RcCur cur # *RcCur ( nurl_alloc Z RcCur )
     = . cur buf buf
     = . cur off 0
-    ( __pn_get cur . c inc_id . c inc_amt )
-    ( __pn_get cur . c dec_id . c dec_amt )
+    ( __pn_get cur ( pncounter_inc_ids c ) ( pncounter_inc_amts c ) )
+    ( __pn_get cur ( pncounter_dec_ids c ) ( pncounter_dec_amts c ) )
     ( nurl_free # s cur )
     ^ c
 }
 // Decode a peer's encoded counter and merge it into this one.
-@ pncounter_merge_bytes * PNCounter c ( Vec u ) buf → v {
-    : *PNCounter o ( pncounter_decode buf )
+@ pncounter_merge_bytes PNCounter c ( Vec u ) buf → v {
+    : PNCounter o ( pncounter_decode buf )
     ( pncounter_merge c o )
     ( pncounter_free o )
 }
@@ -129,10 +129,10 @@ $ `stdlib/dist/ring.nu`
     }
 }
 
-@ orset_encode * OrSet s → ( Vec u ) {
+@ orset_encode OrSet s → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
-    ( __ortags_put b . s adds )
-    ( __ortags_put b . s tombs )
+    ( __ortags_put b ( orset_adds s ) )
+    ( __ortags_put b ( orset_tombs s ) )
     ^ b
 }
 
@@ -155,19 +155,19 @@ $ `stdlib/dist/ring.nu`
     }
 }
 
-@ orset_decode ( Vec u ) buf → *OrSet {
-    : *OrSet s ( orset_new )
+@ orset_decode ( Vec u ) buf → OrSet {
+    : OrSet s ( orset_new )
     : *RcCur cur # *RcCur ( nurl_alloc Z RcCur )
     = . cur buf buf
     = . cur off 0
-    ( __ortags_get cur . s adds )
-    ( __ortags_get cur . s tombs )
+    ( __ortags_get cur ( orset_adds s ) )
+    ( __ortags_get cur ( orset_tombs s ) )
     ( nurl_free # s cur )
     ^ s
 }
 
-@ orset_merge_bytes * OrSet s ( Vec u ) buf → v {
-    : *OrSet o ( orset_decode buf )
+@ orset_merge_bytes OrSet s ( Vec u ) buf → v {
+    : OrSet o ( orset_decode buf )
     ( orset_merge s o )
     ( orset_free o )
 }
