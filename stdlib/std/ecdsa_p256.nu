@@ -165,6 +165,8 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 : ~ i g_p256_comb_tbl 0
 : ~ i g_p256_comb_tbl2 0
 
+& `c` @ nurl_once_slot i id i candidate → i
+
 @ __p256_comb_build → v {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec u ) tbytes ?? ( bytes_from_hex ( __p256_comb_tbl_hex ) ) { T v → v F _ → ( vec_new [u] ) }
@@ -191,9 +193,13 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
             ( vec_free [i] xl ) ( vec_free [i] yl )
             = s + s 1
         }
-        ? == t 0 { = g_p256_comb_tbl # i . tbl ctl } { = g_p256_comb_tbl2 # i . tbl ctl }
-        // The table lives for the rest of the program, through the global.
-        ( mem_forget tbl )
+        // Two first callers may both build: publish-once slots 5 / 6 pick
+        // one table each, and the other copy is dropped (slot registry:
+        // stdlib/std/tls_server.nu). The winner lives for the rest of the
+        // program, through the global.
+        : i won ( nurl_once_slot + 5 t # i . tbl ctl )
+        ? == won # i . tbl ctl { ( mem_forget tbl ) } {}
+        ? == t 0 { = g_p256_comb_tbl won } { = g_p256_comb_tbl2 won }
         = t + t 1
     }
     ( vec_free [u] tbytes )

@@ -619,10 +619,12 @@ $ `stdlib/core/vec.nu`
 // a mixed addition against a precomputed NIELS entry (y+x, y−x, 2d·t)
 // at 7M. The niels table (16 entries × 15 limbs) is derived ONCE per
 // process from the baked affine table and cached in a global — the old
-// path re-materialised the 320-limb table on every keygen. Benign init
-// race: two first callers may both build; one pointer wins, the losing
-// ~2 KB copy leaks once (same discipline as the P-256 comb tables).
+// path re-materialised the 320-limb table on every keygen. Two first
+// callers may both build: publish-once slot 4 picks one, and the other
+// copy is dropped (slot registry: stdlib/std/tls_server.nu).
 : ~ i g_xe_ntbl 0
+
+& `c` @ nurl_once_slot i id i candidate → i
 
 @ __xe_ntbl_build → v {
     : ( Vec i ) src ( __xe_comb_table )
@@ -666,9 +668,10 @@ $ `stdlib/core/vec.nu`
         }
         = e + e 1
     }
-    = g_xe_ntbl # i . ntbl ctl
-    // The table lives for the rest of the program, through the global.
-    ( mem_forget ntbl )
+    : i won ( nurl_once_slot 4 # i . ntbl ctl )
+    // The winner lives for the rest of the program, through the global.
+    ? == won # i . ntbl ctl { ( mem_forget ntbl ) } {}
+    = g_xe_ntbl won
     ( vec_free [i] src ) ( vec_free [i] d2 )
     ( vec_free [i] x ) ( vec_free [i] y ) ( vec_free [i] t )
     ( vec_free [i] yp ) ( vec_free [i] ym ) ( vec_free [i] t2d )

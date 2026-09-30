@@ -93,6 +93,9 @@ $ `stdlib/std/aes_gcm.nu`
 // gets the winner back. Slot ids in use across the stdlib:
 //   1  TLS server ticket master (this module)
 //   2  HTTP client session cache (ext/http_pure.nu)
+//   3  SHA-256 round constants (std/hash_sha256.nu)
+//   4  X25519 niels table (std/x25519.nu)
+//   5, 6  P-256 comb tables T1, T2 (std/ecdsa_p256.nu)
 & `c` @ nurl_once_slot i id i candidate → i
 
 @ _tls_ticket_key_ensure → v {

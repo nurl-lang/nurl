@@ -36,17 +36,20 @@ $ `stdlib/std/bytes.nu`
 // One process-wide copy of the round-constant table, built on first use
 // and BORROWED by every handle: the table is a public constant, and a TLS
 // key schedule runs one `sha256_init` per HMAC leg — a 64-word build and
-// a heap alloc/free per digest bought nothing. Benign init race: two
-// first callers may both build; one pointer wins, the losing 256-byte
-// copy leaks once (same discipline as the P-256 comb tables).
+// a heap alloc/free per digest bought nothing. Two first callers may both
+// build: the runtime's publish-once slot 3 picks one, and the other copy
+// is dropped (stdlib/std/tls_server.nu keeps the slot registry).
 : ~ i g_sha256_k 0
+
+& `c` @ nurl_once_slot i id i candidate → i
 
 @ __sha256_k_shared → ( Vec u32 ) {
     ? == g_sha256_k 0 {
         : ( Vec u32 ) k ( __sha256_K )
-        = g_sha256_k # i . k ctl
-        // The table lives for the rest of the program, through the global.
-        ( mem_forget k )
+        : i won ( nurl_once_slot 3 # i . k ctl )
+        // The winner lives for the rest of the program, through the global.
+        ? == won # i . k ctl { ( mem_forget k ) } {}
+        = g_sha256_k won
     } {}
     ^ @ ( Vec u32 ) { # s g_sha256_k }
 }
