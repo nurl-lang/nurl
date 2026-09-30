@@ -5857,6 +5857,20 @@ static NurlFiber *nurl__worker_next(NurlWorker *w) {
             return NULL;
         }
         nurl__sched.idle_waiters++;
+        /* Re-check the queues now that we are counted as a waiter. A
+         * spawn that pushed after our last look and then ran wake_one
+         * BEFORE we took idle_lock saw idle_waiters == 0 and signalled
+         * nobody — parking now would sleep through that fiber for good
+         * (runtime_init 1 + spawn + runtime_run hung with both threads
+         * on a futex, 1 run in ~12 under load). The pusher releases
+         * global_lock before it takes idle_lock, so its push is visible
+         * here; a push after this point finds us counted and signals. */
+        if (__atomic_load_n(&nurl__sched.global_len, __ATOMIC_ACQUIRE) > 0 ||
+            __atomic_load_n(&w->rq_len, __ATOMIC_ACQUIRE) > 0) {
+            nurl__sched.idle_waiters--;
+            pthread_mutex_unlock(&nurl__sched.idle_lock);
+            continue;
+        }
         pthread_cond_wait(&nurl__sched.idle_cv, &nurl__sched.idle_lock);
         nurl__sched.idle_waiters--;
         pthread_mutex_unlock(&nurl__sched.idle_lock);
@@ -5987,13 +6001,21 @@ void nurl_runtime_shutdown(void) {
      * are about to free. */
     extern void nurl__reactor_shutdown(void);
     nurl__reactor_shutdown();
-    /* Workers must be joined before scheduler state is torn down. */
+    /* Workers must be joined before scheduler state is torn down — ALL of
+     * them before any run-queue lock goes: a worker not yet joined may
+     * still be stealing from one that has been. Destroying worker i's
+     * rq_lock right after joining i let a later worker lock the destroyed
+     * mutex; glibc then refuses the unlock (EINVAL on __kind -1), the lock
+     * stays held by a thread that has exited, and every other worker —
+     * and this join — waits on it for good (async_basic, ~1 run in 100
+     * under load). */
     for (int i = 0; i < nurl__sched.worker_count; i++) {
         NurlWorker *w = &nurl__sched.workers[i];
         if (w->started) pthread_join(w->thread, NULL);
         w->started = 0;
-        pthread_mutex_destroy(&w->rq_lock);
     }
+    for (int i = 0; i < nurl__sched.worker_count; i++)
+        pthread_mutex_destroy(&nurl__sched.workers[i].rq_lock);
     /* Post-join half of the netpoller teardown (Linux frees its state
      * here — a worker could still be inside it before the join). */
     extern void nurl__reactor_cleanup(void);
