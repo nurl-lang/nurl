@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the call's own temporary argument; the kept `S` read freed memory. One
   level down (`@ Outer { ( keep v @ S { … } ) 7 }`) the inner literal's
   owned fields were read as paths into `Outer` (invalid IR).
+- **A None literal's payload is released where it is built.** Dropping an
+  option releases the payload only when present, so `@ ?S { F @ S {
+  ( string_new ) … } }` leaked whatever the payload owned (unless someone
+  read a None's payload and freed it by hand — `parse_basic_auth`'s early
+  exits needed exactly that). `compiler/tests/option_none_payload.nu`.
 - **`= . p f ( … )` releases the value the field held** when the binding
   owns its struct: a String / Vec / handle / closure field leaked on
   reassignment. `compiler/tests/struct_field_ownership.nu`.

@@ -22923,6 +22923,10 @@
     // An option or a result (`{ i1, … }`).
     : b agg_is_wrap & >= ( nurl_str_len agg_ty ) 6 ( seq ( nurl_str_slice agg_ty 0 6 ) `{ i1, ` )
     : ~ b res_is_ok F
+    // An option literal tagged `F` (None): nobody can own its payload —
+    // dropping an option releases the payload only when present — so a
+    // payload that owns something is released where it is built.
+    : ~ b opt_is_none F
     // Phase 2C/2D: collect indices of fields populated by a fresh allocating
     // call (i8* via nurl_str_cat et al, or slice via `[T | ...]` literal /
     // slice-returning call), AND nested owned subfields from inner struct
@@ -23005,6 +23009,7 @@
         : s fld_dot_obj ? == fld_first_tt TT_DOT ( nurl_lex_peek_val lex ) ``
         // Result tag (idx 0): `T` ⇒ Ok (payload→field 1), `F` ⇒ Err (→field 2).
         ? & agg_is_res == idx 0 { = res_is_ok ( seq fld_first_val `T` ) } {}
+        ? & & agg_is_wrap ! agg_is_res == idx 0 { = opt_is_none ( seq fld_first_val `F` ) } {}
         // A bare identifier as a field value moves the handle INTO the
         // aggregate — `^ @ SseEvent { n_ d_ id_ }` is how a builder
         // hands three Strings to its caller. Recorded before gen_expr
@@ -23408,6 +23413,16 @@
             ( llvm_to_nurl ( nurl_llty fty ) ) `'` `` )
             `. A literal names its variant first ('@ Color { Red }', '@ Node { NText payload }') — if the payload is there but the variant name is not, every value has shifted one slot left.` ) ) }
         {}
+        // A None's payload that owns something (`@ ?S { F @ S { ( string_new
+        // ) } }`) leaked: released here, and the slot left zero. Not when
+        // the literal lends a parameter's value (the caller still owns it).
+        ? & & & opt_is_none == idx 1 != 0 g_auto_drop_strings & ( __is_handle_ty fty ) ! & agg_moves_fields ( seq fld_lent `1` ) {
+            ( __handle_drop_ensure fty )
+            ( __dropifv_request fty )
+            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle fty ) ) ( nurl_print `(i1 true, ` )
+            ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print `)` ) ( emit_dbg_eol )
+            = fval ( nurl_str_cat `zeroinitializer` `` )
+        } {}
         // For payload fields (idx > 0): conversion depends on aggregate type.
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
         : ~ s actual_fval ( nurl_str_cat fval `` )
