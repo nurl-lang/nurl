@@ -445,7 +445,7 @@ $ `stdlib/net/tcpstack.nu`
         || == . s local_ip 0 == . s local_ip . r dst_ip {
             : *UdpBox b # *UdpBox . s udp
             ? != # i b 0 {
-                ( vec_extend_range [u] . . b q bytes frame . r payload_off . r payload_len )
+                ( vec_extend_range [u] ( pktbuf_bytes . b q ) frame . r payload_off . r payload_len )
                 // …_empty, not _mark: a zero-length datagram is a
                 // datagram, and it has to arrive as one.
                 ( pktbuf_mark_empty . b q )
@@ -758,7 +758,7 @@ $ `stdlib/net/tcpstack.nu`
     : i start ( pktbuf_start . b q idx )
     : i n ( pktbuf_len . b q idx )
     : i take ? < max n max n
-    ? > take 0 { ( vec_extend_range [u] dst . . b q bytes start take ) } {}
+    ? > take 0 { ( vec_extend_range [u] dst ( pktbuf_bytes . b q ) start take ) } {}
     = . b last_ip ?? ( vec_get [i] . b src * idx 2 ) { T x → x F → 0 }
     = . b last_port ?? ( vec_get [i] . b src + * idx 2 1 ) { T x → x F → 0 }
     = . b head + idx 1
