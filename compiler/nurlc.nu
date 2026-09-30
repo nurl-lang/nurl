@@ -131,6 +131,10 @@
 // body inherits its enclosing function's — which is the conservative
 // direction: it only ever SUPPRESSES a warning, never invents one.
 : ~ s g_cur_ret_llty ``
+// The LLVM type of the value a `% Drop` impl's `drop` is being compiled
+// for (`%R`), or `` — while set, every exit of that function ends with the
+// drop glue of its parameter (mem_emit_drop_glue).
+: ~ s g_drop_glue_ty ``
 
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
@@ -10843,6 +10847,11 @@
         // auto-drops needs ownership transfer. Compiler-managed enum owners
         // move through the neutralization queue below; the other distinct
         // ownership kinds still require their own transfer support.
+        // A `% Drop` impl handing its value to a disposer (`( t_free t )`):
+        // the disposer releases the fields, so no glue follows.
+        ? & & & != 0 ( nurl_str_len g_drop_glue_ty ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        ( is_ident_tok bck_arg_tt ) ( seq bck_arg_val ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) )
+        { ( nurl_sym_set_deep syms `__drop_glue_moved__` `1` ) } {}
         ? & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         ( is_ident_tok bck_arg_tt )
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
@@ -11006,7 +11015,11 @@
             : s fr_fty ( str_first_word fr )
             // (A Vec element read with vec_get is not an owner of its own,
             // but its slot is: the field is emptied there.)
-            ? & ( __is_handle_ty fr_fty ) | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) fr_ptr ) != 0 ( nurl_sym_len2 syms fr_ptr `__vget` ) {
+            // (…and in a `% Drop` impl's parameter, whose remaining fields
+            // its drop glue releases: mem_emit_drop_glue.)
+            : b fr_glue & != 0 ( nurl_str_len g_drop_glue_ty )
+            ( seq fr_ptr ( nurl_sym_get2 syms ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) `__ptr` ) )
+            ? & ( __is_handle_ty fr_fty ) | | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) fr_ptr ) != 0 ( nurl_sym_len2 syms fr_ptr `__vget` ) fr_glue {
                 : b fr_decl | ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) __cl_call
                 : ~ s zc ( nurl_str_cat `1` `` )
                 ? ! fr_decl {
@@ -17715,6 +17728,31 @@
             ( mem_journal_forget_userdrop cg ptr vt )
         }
     }
+    ( mem_emit_drop_glue syms cg )
+}
+
+// Drop glue: a `% Drop` impl releases what only it knows how to (a raw
+// buffer, a handle), and the fields the compiler owns — String, Vec,
+// library handles, values with their own `% Drop` — are dropped after it,
+// as a Rust Drop's fields are. So a destructor never has to free the
+// memory the language already manages. A field the impl released by hand
+// was emptied in the parameter's slot and is skipped.
+@ mem_emit_drop_glue i syms i cg → v {
+    ? | == 0 ( nurl_str_len g_drop_glue_ty ) != 0 g_bck_closure_depth { ^ v } {}
+    ? != 0 ( nurl_sym_len syms `__drop_glue_moved__` ) { ^ v } {}
+    : s pn ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) )
+    : s ptr ( nurl_sym_get2 syms pn `__ptr` )
+    ? == 0 ( nurl_str_len ptr ) { ^ v } {}
+    : s ll ( nurl_llty g_drop_glue_ty )
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop_glue__` ( __drop_mangle g_drop_glue_ty ) ) ) )
+    ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print r ) ( nurl_print `)` ) ( emit_dbg_eol )
+    : s key ( nurl_str_cat `glue##` g_drop_glue_ty )
+    ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
+        ( nurl_sym_def g_impl_name_syms key `1` )
+        ( __park_append g_impl_name_syms `__pending_glue__` g_drop_glue_ty )
+    } {}
 }
 
 @ mem_drop_new_user_drops i syms i cg s old_list → v {
@@ -23262,7 +23300,9 @@
         // paths accumulate across nesting levels. Must use a fresh str_cat
         // in both branches so owned_field_idxs never aliases ptok (which is
         // freed by the loop-body scope-exit drop).
-        ? & != 0 g_auto_drop_strings != 0 ( nurl_str_len cur_sname )
+        // Not through a field whose type has its own `% Drop`: that value is
+        // released whole, by its impl, when this aggregate drops it.
+        ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len cur_sname ) ! ( __has_user_drop fty )
         { : ~ s sub ( nurl_sym_get syms `__last_agg_owned_fields__` )
             ~ != 0 ( nurl_str_len sub ) {
                 : s subtok ( str_first_word sub )
@@ -24008,8 +24048,10 @@
     // can register drops. Only named-struct aggregates get tracked; anon
     // aggregates like `{ i1, i64 }` are excluded (they have different
     // ownership semantics and our drop helper keys off a `%Name` type).
+    // A type with its own `% Drop` owns its fields: the impl releases them,
+    // and releasing them here as well freed them twice.
     ? != 0 g_auto_drop_strings
-    { ? == ( nurl_str_get agg_ty 0 ) 37
+    { ? & == ( nurl_str_get agg_ty 0 ) 37 ! ( __has_user_drop agg_ty )
         { ( nurl_sym_def syms `__last_agg_owned_fields__` owned_field_idxs ) }
         { ( nurl_sym_def syms `__last_agg_owned_fields__` `` ) }
     }
@@ -29159,6 +29201,7 @@
     // / `nurl_sym_pop` scope, so a `:` inside a closure body checks
     // against the closure's params — not the enclosing function's.
     ( nurl_sym_def syms `__fn_param_names__` `` )
+    ( nurl_sym_def syms `__drop_glue_moved__` `` )
     // Guard against EOF too: without this, a malformed header that
     // never produces TT_ARROW (e.g. ASCII `->` instead of `→`) hangs
     // the compiler in an infinite loop, because gen_fn_param on EOF
@@ -31336,8 +31379,54 @@
     ^ ( __clone_supported ty g_root_syms )
 }
 
+// A struct none of whose parts can be copied as a handle because one of
+// its fields is (or holds) a value with its own `% Drop`.
+@ __needs_synth_drop s ty → b {
+    ? | == 0 g_root_syms == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? | != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
+    ? | ( __is_libh ty ) ( __has_user_drop ty ) { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ F } {}
+    : s fcs ( nurl_sym_get2 g_root_syms sname `__field_count` )
+    ? == 0 ( nurl_str_len fcs ) { ^ F } {}
+    : i fc ( nurl_str_to_int fcs )
+    : ~ i i 0
+    ~ < i fc {
+        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
+        ? | ( __has_user_drop ft ) != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ft ) { ^ T } {}
+        ? ( __needs_synth_drop ft ) { ^ T } {}
+        = i + i 1
+    }
+    ^ F
+}
+
+// A program's own `% Drop` for `ty` (registered in the signature
+// pre-scan), as opposed to a drop the compiler supplies for a struct or a
+// handle type (`structdrop##` / `handledrop##`).
+@ __has_user_drop s ty → b {
+    ? == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty ) { ^ F } {}
+    ^ & & != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty )
+    == 0 ( nurl_sym_len2 g_impl_name_syms `structdrop##` ty )
+    == 0 ( nurl_sym_len2 g_impl_name_syms `handledrop##` ty )
+}
+
 // Register a handle type's drop the first time a binding of it is owned.
 @ __handle_drop_ensure s ty → v {
+    ? ( __needs_synth_drop ty ) {
+        // A struct holding a value with its own `% Drop` cannot be copied,
+        // so it is not a handle: it is dropped like a `% Drop` value —
+        // moved, never copied, and released by a drop the compiler writes
+        // field by field (which runs the field's own `% Drop`). It was not
+        // dropped at all before.
+        : s key ( nurl_str_cat `drop##` ty )
+        ? == 0 ( nurl_sym_len g_impl_name_syms key ) {
+            ( nurl_sym_def g_impl_name_syms key ( __drop_mangle ty ) )
+            ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `synthdrop##` ty ) `1` )
+            ( queue_drop_for_type ty )
+        } {}
+        ^ v
+    } {}
     ? ! ( __is_handle_ty ty ) { ^ v } {}
     ( __libh_walk ty g_root_syms )
     : s key ( nurl_str_cat `drop##` ty )
@@ -31407,6 +31496,9 @@
     ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     ? ( __is_libh ty ) { ^ T } {}
+    // A `% Drop` of the program's own: whatever its fields, dropping the
+    // value runs it — as a Vec element or a struct field too.
+    ? ( __has_user_drop ty ) { ^ T } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
     : s vlist ( nurl_sym_get2 syms sname `__variants` )
     ? != 0 ( nurl_str_len vlist ) { ^ ( __enum_needs_drop vlist syms ) } {}
@@ -31531,8 +31623,14 @@
 }
 
 @ emit_drop_struct_fn s sname i syms → v {
+    ( emit_drop_fields_fn ( nurl_str_cat `drop__` sname ) sname syms )
+}
+
+// `define void @<fname>(%<sname> %v)` dropping each field that owns
+// something — a struct's drop, or a `% Drop` impl's glue.
+@ emit_drop_fields_fn s fname s sname i syms → v {
     : ~ i ctr 0
-    ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` sname ) ) )
+    ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn fname ) )
     ( nurl_print `(%` ) ( nurl_print sname ) ( nurl_print ` %v) {\nentry:\n` )
     : s fcs ( nurl_sym_get2 syms sname `__field_count` )
     : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
@@ -31675,6 +31773,21 @@
             ( emit_drop_value et `%q` ctr syms )
         } {}
         ( nurl_print `  br label %x\nx:\n  ret void\n}\n` )
+    }
+    // Drop glue of `% Drop` impls (mem_emit_drop_glue): the struct's
+    // compiler-owned fields, dropped after the impl ran.
+    : ~ s grest ( nurl_sym_get g_impl_name_syms `__pending_glue__` )
+    ~ != 0 ( nurl_str_len grest ) {
+        : s gty ( str_first_word grest ) = grest ( str_skip_word grest )
+        : s gm ( __drop_mangle gty )
+        : s gfc ( nurl_sym_get2 syms gm `__field_count` )
+        : i gn ? != 0 ( nurl_str_len gfc ) ( nurl_str_to_int gfc ) 0
+        : ~ i gi 0
+        ~ < gi gn {
+            ( gen_drop_for_type ( nurl_sym_get syms ( nurl_str_cat3 gm `__idx_` ( nurl_str_cat ( nurl_str_int gi ) `__type` ) ) ) syms )
+            = gi + gi 1
+        }
+        ( emit_drop_fields_fn ( nurl_str_cat `drop_glue__` gm ) gm syms )
     }
     // Journal thunks of handle bindings (mem_journal_push_handle).
     : ~ s hrest ( nurl_sym_get g_impl_name_syms `__pending_hjdrops__` )
@@ -32313,6 +32426,10 @@
         ( emit_drop_enum_fn mangle vlist syms )
         ^ v
     } {}
+    // A struct with its own `% Drop`: that impl IS `drop__<S>`. A generated
+    // field-by-field drop under the same name replaced it — the program's
+    // destructor never ran once the type was a Vec element or a field.
+    ? ( __has_user_drop ty ) { ^ v } {}
     // struct: recurse field types, then emit
     : s fcs ( nurl_sym_get2 syms mangle `__field_count` )
     : i fc ? != 0 ( nurl_str_len fcs ) ( nurl_str_to_int fcs ) 0
@@ -36140,8 +36257,12 @@
                         ( nurl_str_cat mname `` )
                         ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
                         : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
+                        // A struct's `% Drop` gets its fields' drop glue.
+                        : b __glue & & ( seq tname `Drop` ) ( seq mname `drop` ) == ( nurl_str_get impl_llvm 0 ) 37
+                        ? __glue { = g_drop_glue_ty ( nurl_str_cat impl_llvm `` ) } {}
                         // gen_fn_decl_concrete reads params, →, ret, body from lex
                         ( gen_fn_decl_concrete mangled lex syms cg )
+                        = g_drop_glue_ty ``
                         // Panic-unwind journal: for the `Drop` trait, emit a
                         // `void(i8*)` thunk that loads the value from its alloca
                         // and runs the just-emitted destructor, so a panic can

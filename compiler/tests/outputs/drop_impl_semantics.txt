@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+10
+20
+destructors per round: 6
+live allocations: steady

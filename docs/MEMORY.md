@@ -1474,6 +1474,18 @@ way it goes:
   a `release sink T x` that frees `x`'s parts by hand — never drops that
   parameter itself; otherwise the drop would call the Drop impl again. The
   compiler learns this from the Drop impl, at module end.
+- **Drop glue.** A Drop impl releases what only it knows how to (a raw
+  `s` buffer, an OS resource); the fields the compiler manages — `String`,
+  `Vec`, library handles, values with a `% Drop` of their own — are dropped
+  after it returns, as a Rust `Drop`'s fields are (`drop_glue__<T>`). A
+  field the impl released by hand is emptied in the parameter and skipped;
+  an impl that hands its value to a disposer leaves the fields to it. A
+  raw `s` field of a Drop type is the impl's alone: the compiler does not
+  free it as an owned struct field.
+- A `% Drop` type is dropped by its impl wherever it lives — a local, a
+  `Vec` element, a struct field. A struct holding one is **move-only** (it
+  cannot be copied, so it is not a handle) and gets a compiler-written
+  drop that drops its fields, running the impl of each Drop one.
 
 Before the flags, `: T b a` registered both bindings and dropped the value
 twice, a `sink` parameter rejected Drop values outright, and a reassigned

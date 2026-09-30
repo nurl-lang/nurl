@@ -6,6 +6,26 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
+  `Vec` element or a struct field had its impl replaced by a generated
+  field-by-field drop of the same name, so the program's destructor never
+  ran — anywhere in the program. A struct holding a Drop value was not
+  dropped at all; it is now move-only and dropped field by field. A raw
+  `s` field of a Drop type was freed by the compiler *and* by the impl (a
+  double free; nested, invalid IR).
+
+### Added
+
+- **Drop glue** (docs/MEMORY.md §7.6). After a `% Drop` impl returns, the
+  compiler drops the fields it manages (`String`, `Vec`, library handles,
+  Drop values), so a destructor only releases what the language cannot
+  see. Fields the impl freed by hand, and a value handed to a disposer,
+  are skipped. `compiler/tests/drop_impl_semantics.nu`.
+
 ## [0.68.0] — 2026-09-30
 
 ### Added
