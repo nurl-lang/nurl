@@ -217,7 +217,6 @@ $ `stdlib/std/async.nu`
 @ rz_build_ok → ( Vec u ) {
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) f ( __rz_frame ( rz_ok ) empty )
-    ( vec_free [u] empty )
     ^ f
 }
 
@@ -228,7 +227,6 @@ $ `stdlib/std/async.nu`
     ( vec_extend [u] body rec )
     ( vec_free [u] rec )
     : ( Vec u ) f ( __rz_frame ( rz_record ) body )
-    ( vec_free [u] body )
     ^ f
 }
 
@@ -236,7 +234,6 @@ $ `stdlib/std/async.nu`
     : ( Vec u ) body ( vec_new [u] )
     ( vec_push [u] body # u 0 )
     : ( Vec u ) f ( __rz_frame ( rz_record ) body )
-    ( vec_free [u] body )
     ^ f
 }
 
@@ -270,7 +267,7 @@ $ `stdlib/std/async.nu`
             F _ → { = fail T }
         }
     }
-    ? fail { ( vec_free [u] buf ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    ? fail { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     ^ @ ?( Vec u ) { T buf }
 }
 

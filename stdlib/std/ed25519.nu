@@ -492,8 +492,8 @@ $ `stdlib/std/hash_sha512.nu`
 
     ( __ed_pt_free pA ) ( __ed_pt_free pR ) ( vec_free [i] d2 ) ( vec_free [i] x )
     ( vec_free [u] h ) ( vec_free [u] a ) ( vec_free [u] prefix ) ( vec_free [u] cap_A )
-    ( vec_free [u] rin ) ( vec_free [u] rhash ) ( vec_free [u] rscalar ) ( vec_free [u] cap_R )
-    ( vec_free [u] kin ) ( vec_free [u] khash ) ( vec_free [u] cap_S )
+    ( vec_free [u] rhash ) ( vec_free [u] rscalar ) ( vec_free [u] cap_R )
+    ( vec_free [u] khash ) ( vec_free [u] cap_S )
     ^ sig
 }
 
@@ -539,6 +539,6 @@ $ `stdlib/std/hash_sha512.nu`
 
     ( __ed_pt_free negA ) ( __ed_pt_free p ) ( __ed_pt_free q ) ( vec_free [i] d2 )
     ( vec_free [u] cap_A ) ( vec_free [u] cap_R ) ( vec_free [u] cap_S )
-    ( vec_free [u] kin ) ( vec_free [u] khash ) ( vec_free [u] kscalar ) ( vec_free [u] tcheck )
+    ( vec_free [u] khash ) ( vec_free [u] kscalar ) ( vec_free [u] tcheck )
     ^ == diff 0
 }

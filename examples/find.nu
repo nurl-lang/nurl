@@ -113,7 +113,6 @@ $ `stdlib/ext/regex.nu`
     } { ( string_push_str out line ) }
     ( string_push_char out 10 )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
 }
 
 @ print_ctx b color s path i lineno s line → v {
@@ -124,7 +123,6 @@ $ `stdlib/ext/regex.nu`
     ( string_push_str out `- ` ) ( string_push_str out line )
     ( string_push_char out 10 )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
 }
 
 // ── Matchers (closure-shaped so the scanner is mode-agnostic) ────────
@@ -385,7 +383,6 @@ $ `stdlib/ext/regex.nu`
                                             ? ( seq v `never` ) { = color_mode 2 } {
                                                 ? ( seq v `auto` ) { = color_mode 0 } {
                                                     ( nurl_eprint `find: --color must be auto, always, or never\n` ) = bad T } } }
-                                        ( string_free ca ) ( string_free cv )
                                     } {
                                         ( nurl_eprint `find: unknown option: ` ) ( nurl_eprint a ) ( nurl_eprint `\n` ) = bad T
                                     } } } } } } }
@@ -395,11 +392,11 @@ $ `stdlib/ext/regex.nu`
         = ai + ai 1
     }
 
-    ? show_help { ( usage ) ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ( string_free path ) ^ 0 } {}
-    ? bad { ( usage ) ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ( string_free path ) ^ 2 } {}
+    ? show_help { ( usage ) ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ^ 0 } {}
+    ? bad { ( usage ) ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ^ 2 } {}
     ? == ( vec_len [String] terms ) 0 {
         ( nurl_eprint `find: no search terms given\n` ) ( usage )
-        ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ( string_free path ) ^ 2
+        ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ^ 2
     } {}
 
     : ~ b use_color F

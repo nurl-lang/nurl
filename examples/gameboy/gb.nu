@@ -21,7 +21,6 @@ $ `stdlib/ext/env.nu`
         ( nurl_print ( string_data row ) ) ( nurl_print `\n` )
         = y + y 1
     }
-    ( string_free row )
 }
 
 @ run_rom_ppu s path i frames → i {
@@ -72,7 +71,6 @@ $ `stdlib/ext/env.nu`
     ?? ( write_file_bytes outpath pcm ) { T _ → {} F _ → { ( nurl_print `write failed\n` ) } }
     ( nurl_print `wrote ` ) ( nurl_print ( nurl_str_int ( vec_len [u] pcm ) ) )
     ( nurl_print ` PCM bytes, nonzero-L samples: ` ) ( nurl_print ( nurl_str_int nz ) ) ( nurl_print `\n` )
-    ( vec_free [u] pcm )
     ^ 0
 }
 

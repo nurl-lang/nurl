@@ -951,7 +951,6 @@ i follow i maxredir i verify s ua i timeout_ms → *HttpStreamState {
                                     = result_p # i st
                                     = looping F
                                 }
-                                ( string_free loc )
                             }
                         }
                     }
@@ -961,8 +960,6 @@ i follow i maxredir i verify s ua i timeout_ms → *HttpStreamState {
             }
         }
     }
-    ( string_free cur_url )
-    ( string_free cur_method )
     ^ # *HttpStreamState result_p
 }
 
@@ -1007,7 +1004,6 @@ i follow i maxredir i verify s ua i timeout_ms → *HttpStreamState {
     ? ( nurl_str_starts loc `//` ) {
         ( string_push_str out loc )
         : String r ( __hp_strip_fragment ( string_data out ) )
-        ( string_free out )
         ^ @ ?String { T r }
     } {}
     ( string_push_str out `//` )
@@ -1037,10 +1033,8 @@ i follow i maxredir i verify s ua i timeout_ms → *HttpStreamState {
         : String dotless ( __hp_remove_dot_segments ( string_data merged ) )
         ( string_push_str out ( string_data dotless ) )
         ( string_free dotless )
-        ( string_free merged )
     }
     : String r ( __hp_strip_fragment ( string_data out ) )
-    ( string_free out )
     ^ @ ?String { T r }
 }
 

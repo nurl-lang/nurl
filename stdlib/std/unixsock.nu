@@ -208,7 +208,6 @@ $ `stdlib/core/posix.nu`  // read / write / close / posix_const / errno
     : *u dst ( vec_data [u] buf )
     : i n ( read . c fd dst max )
     ? < n 0 {
-        ( vec_free [u] buf )
         ^ @ !( Vec u ) UnixErr { F UnixRead }
     } {}
     : b _ok ( vec_set_len [u] buf n )

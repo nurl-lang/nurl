@@ -442,7 +442,6 @@ $ `stdlib/net/pktbuf.nu`
     : ( Vec u ) dg ( vec_new [u] )
     ( udp4_push dg src dst_ip src_port dst_port payload pay_off pay_len )
     : TxResult r ( stack_tx_ip4 st src dst_ip ( ip_proto_udp ) dg 0 ( vec_len [u] dg ) now out )
-    ( vec_free [u] dg )
     ^ r
 }
 

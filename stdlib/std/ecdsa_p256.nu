@@ -423,7 +423,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         ( _p256_limbs_to_be xb . P1 x )
         : ( Vec u ) xr ( p256n_reduce_be xb )
         = result ( bytes_eq xr rb )
-        ( vec_free [u] xb )
         ( vec_free [u] xr )
     } {}
     ( p256pt_free P1 )
@@ -493,7 +492,7 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         ? == clen 32
         { = result ( __p256_verify_core zb rb sb qx qy ) }
         { = result ( p384_ecdsa_verify_core zb rb sb qxb qyb ) }
-        ( vec_free [u] zb ) ( vec_free [u] rb ) ( vec_free [u] sb )
+        ( vec_free [u] rb ) ( vec_free [u] sb )
     } {}
     ( vec_free [u] qxb ) ( vec_free [u] qyb )
     ( bigint_free qx ) ( bigint_free qy )

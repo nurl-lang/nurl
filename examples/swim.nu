@@ -84,7 +84,6 @@ $ `stdlib/std/swim.nu`
                 ( string_push_int b seed )
                 ( string_push_char b 10 )
                 ( nurl_print ( string_data b ) )
-                ( string_free b )
             } {
                 ( nurl_print `seed node (no join)\n` )
             }

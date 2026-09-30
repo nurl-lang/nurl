@@ -27,7 +27,6 @@ $ `stdlib/ext/env.nu`
     ( string_push_char s ( hex_nib & >> v 4 0xF ) )
     ( string_push_char s ( hex_nib & v 0xF ) )
     ( nurl_print ( string_data s ) )
-    ( string_free s )
 }
 
 // ── Run the functional test, watching for the trap self-loop ────────

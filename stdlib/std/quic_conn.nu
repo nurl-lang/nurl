@@ -889,7 +889,6 @@ $ `stdlib/std/quic_recovery.nu`
     ? == space 2 { = delay >> * - . c now . c largest_rx_time2 1000 3 } {}
     ? < delay 0 { = delay 0 } {}
     ( quic_push_ack out largest delay - largest first_lo rest -1 0 0 )
-    ( vec_free [i] rest )
 }
 
 // ── receive: keys per space ──────────────────────────────────────
@@ -1629,7 +1628,7 @@ $ `stdlib/std/quic_recovery.nu`
         ? == . c close_sent 0 {
             ? != . c close_app 0 {
                 ? == space 2 { ( quic_push_application_close out . c close_code . c close_reason ) }
-                { : ( Vec u ) e ( vec_new [u] ) ( quic_push_connection_close out ( quic_err_application ) 0 e ) ( vec_free [u] e ) }
+                { : ( Vec u ) e ( vec_new [u] ) ( quic_push_connection_close out ( quic_err_application ) 0 e ) }
             } { ( quic_push_connection_close out . c close_code . c close_frame_type . c close_reason ) }
         } {}
         ^ 0
@@ -1653,7 +1652,6 @@ $ `stdlib/std/quic_recovery.nu`
         : ( Vec u ) piece ( vec_new [u] )
         : i moved ( __qc_move_frames rq piece left )
         ? > moved 0 { ( bytes_extend_bytes out piece ) ( bytes_extend_bytes retx piece ) = ae 1 = left - left moved } {}
-        ( vec_free [u] piece )
     } {}
     // CRYPTO
     : ( Vec u ) co ( __qc_crypto_out c space )
@@ -1692,7 +1690,6 @@ $ `stdlib/std/quic_recovery.nu`
         : ( Vec u ) piece ( vec_new [u] )
         : i moved ( __qc_move_frames . c ctl2 piece left )
         ? > moved 0 { ( bytes_extend_bytes out piece ) ( bytes_extend_bytes retx piece ) = ae 1 = left - left moved } {}
-        ( vec_free [u] piece )
     } {}
     // RESET_STREAM for streams asked to stop / reset by the application
     : ~ i k 0
@@ -1743,7 +1740,7 @@ $ `stdlib/std/quic_recovery.nu`
                     = . c data_sent + . c data_sent allow
                     ? fin_now { = . s tx_fin_sent 1 = . s tx_done 1 } {}
                 } {}
-                ( vec_free [u] fr ) ( vec_free [u] chunk )
+                ( vec_free [u] chunk )
             } {
                 // blocked by flow control: say so once per limit
                 ? & > pending 0 <= win_s 0 { ( quic_push_stream_data_blocked out . s id . s tx_max_data ) = left - room ( vec_len [u] out ) = ae 1 } {}
@@ -1833,8 +1830,6 @@ $ `stdlib/std/quic_recovery.nu`
     } {}
     ? == . c state 2 { ? | | != has0 0 != has1 0 != has2 0 { = . c close_sent 1 } {} } {}
     ? & & == has0 0 == has1 0 == has2 0 {
-        ( vec_free [u] pay0 ) ( vec_free [u] pay1 ) ( vec_free [u] pay2 )
-        ( vec_free [u] rt0 ) ( vec_free [u] rt1 ) ( vec_free [u] rt2 )
         ^ dgram
     } {}
     // A datagram carrying an ack-eliciting Initial is padded to 1200

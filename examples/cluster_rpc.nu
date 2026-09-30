@@ -113,7 +113,6 @@ $ `stdlib/ext/cluster.nu`
                 ( string_push_int line port )
                 ( string_push_char line 10 )
                 ( nurl_print ( string_data line ) )
-                ( string_free line )
             }
             F e → {
                 : ClusterErr ce # ClusterErr e
@@ -123,7 +122,6 @@ $ `stdlib/ext/cluster.nu`
                 ( string_push_str line ( cluster_err_name ce ) )
                 ( string_push_char line 10 )
                 ( nurl_print ( string_data line ) )
-                ( string_free line )
             }
         }
         ( node_free n )

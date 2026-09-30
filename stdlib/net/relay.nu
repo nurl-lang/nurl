@@ -108,7 +108,6 @@ $ `stdlib/std/async.nu`
 @ relay_build_keepalive → ( Vec u ) {
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) f ( __frame ( relay_ka ) empty )
-    ( vec_free [u] empty )
     ^ f
 }
 
@@ -117,7 +116,6 @@ $ `stdlib/std/async.nu`
     ( vec_extend [u] body pk )
     ( vec_extend [u] body payload )
     : ( Vec u ) f ( __frame ftype body )
-    ( vec_free [u] body )
     ^ f
 }
 
@@ -140,7 +138,6 @@ $ `stdlib/std/async.nu`
     ( vec_extend [u] body group_id )
     ( vec_extend [u] body payload )
     : ( Vec u ) f ( __frame ( relay_gsend ) body )
-    ( vec_free [u] body )
     ^ f
 }
 
@@ -230,7 +227,7 @@ $ `stdlib/std/async.nu`
             }
         }
     }
-    ? fail { ( vec_free [u] buf ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    ? fail { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     ^ @ ?( Vec u ) { T buf }
 }
 

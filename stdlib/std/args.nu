@@ -166,18 +166,15 @@ $ `stdlib/core/vec.nu`
     : i idx ( __args_find_long p ( string_data key ) )
     ? < idx 0 {
         ( __args_err3 p `unknown option: --` ( string_data key ) `` )
-        ( string_free key )
         ^ -1
     } {}
     : i kind ?? ( vec_get [i] . p kinds idx ) { T x → x F → 0 }
     ? == kind 0 {
         ? haveval {
             ( __args_err3 p `option '--` ( string_data key ) `' takes no value` )
-            ( string_free key )
             ^ -1
         } {}
         ( __args_bump p idx )
-        ( string_free key )
         ^ 1
     } {}
     // value option
@@ -186,7 +183,6 @@ $ `stdlib/core/vec.nu`
         ( vec_push [i] . p val_idx idx )
         ( vec_push [String] . p val_str valstr )
         ( __args_bump p idx )
-        ( string_free key )
         ^ 1
     } {}
     : i n ( vec_len [String] toks )
@@ -196,11 +192,9 @@ $ `stdlib/core/vec.nu`
         ( vec_push [i] . p val_idx idx )
         ( vec_push [String] . p val_str ( string_from nraw ) )
         ( __args_bump p idx )
-        ( string_free key )
         ^ 2
     } {}
     ( __args_err3 p `option '--` ( string_data key ) `' requires a value` )
-    ( string_free key )
     ^ -1
 }
 
@@ -283,7 +277,6 @@ $ `stdlib/core/vec.nu`
                 }
             }
         }
-        ( string_free tok )
     }
     ^ ok
 }

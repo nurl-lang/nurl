@@ -200,7 +200,6 @@ $ `stdlib/std/bytes.nu`
     : b _2 ( vec_set [u32] state 2 + s2 c )
     : b _3 ( vec_set [u32] state 3 + s3 d )
 
-    ( vec_free [u32] m )
 }
 
 // ── Public entry — same shape as runtime-backed `md5_bytes`. ───────
@@ -277,7 +276,6 @@ $ `stdlib/std/bytes.nu`
         = si + si 1
     }
 
-    ( vec_free [u32] state )
     ( vec_free [u32] K )
     ( vec_free [u] S )
     ^ out

@@ -70,7 +70,6 @@ $ `stdlib/ext/websocket.nu`
         }
         F _ → {}
     }
-    ( vec_free [u] carry )
 }
 
 @ main → i {

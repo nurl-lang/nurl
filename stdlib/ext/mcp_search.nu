@@ -50,7 +50,6 @@ $ `stdlib/ext/nurldoc.nu`
 @ __ms_lc s raw → String {
     : String tmp ( string_from raw )
     : String lc ( string_to_lower tmp )
-    ( string_free tmp )
     ^ lc
 }
 
@@ -272,8 +271,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = k + k 1
     }
-    ( json_free files )
-    ( string_free dir )
     ^ shown
 }
 
@@ -761,7 +758,6 @@ $ `stdlib/ext/nurldoc.nu`
         } {}
         = k + k 1
     }
-    ( json_free files )
 }
 
 // ── nurl_api: OR widening when every term together matches nothing ──
@@ -957,7 +953,6 @@ $ `stdlib/ext/nurldoc.nu`
                     }
                     ? > bn keep { ( string_push_str snip `…` ) } {}
                     ( __ms_topk_push scores texts ( __ms_api_or_cap ) sc ( string_data snip ) )
-                    ( string_free snip )
                 } {}
             }
             F _ → {}
@@ -1123,9 +1118,6 @@ $ `stdlib/ext/nurldoc.nu`
                                             ( vec_push [String] hits ( string_from ( string_data t ) ) )
                                         } {}
                                     } {}
-                                    ( string_free bstem )
-                                    ( string_free base )
-                                    ( string_free stem )
                                     ( string_free rel_lc )
                                 } {}
                             }
@@ -1416,8 +1408,7 @@ $ `stdlib/ext/nurldoc.nu`
         ( string_push_int hdr omitted )
         ( string_push_str hdr ` more matching lines omitted (per-file/total caps) — narrow the pattern or scope with 'where'.\n` )
     } {}
-    ( string_free out_clean ) ( string_free out_word )
-    ( vec_free [i] ctr ) ( string_free pat_lc )
+    ( string_free pat_lc )
     ^ hdr
 }
 
@@ -1497,7 +1488,7 @@ $ `stdlib/ext/nurldoc.nu`
         ( string_free ver )
         = ver ( __ms_latest_version regbase name )
     } {}
-    ? == ( string_len ver ) 0 { ( string_free ver ) ^ ( string_new ) } {}
+    ? == ( string_len ver ) 0 { ^ ( string_new ) } {}
     : String url ( __ms_tarball_url regbase name ( string_data ver ) )
     : ~ String md ( string_new )
     : !Response HttpErr r ( http_get ( string_data url ) )
@@ -1535,9 +1526,8 @@ $ `stdlib/ext/nurldoc.nu`
                                                     : String one ( nurldoc_render ( string_data content ) ( string_data base ) )
                                                     ( string_push_str md `\n---\n\n` )
                                                     ( string_push_str md ( string_data one ) )
-                                                    ( string_free one ) ( string_free content ) ( string_free base )
+                                                    ( string_free one ) ( string_free content )
                                                 } {}
-                                                ( string_free pnorm )
                                             } {}
                                         }
                                         F → {}
@@ -1562,7 +1552,6 @@ $ `stdlib/ext/nurldoc.nu`
     ? > ( string_len md ) ( __ms_api_out_cap ) {
         : String cut ( string_substr md 0 ( __ms_api_out_cap ) )
         ( string_push_str cut `\n… truncated — fetch the tarball for the full source.\n` )
-        ( string_free md )
         ^ cut
     } {}
     ^ md
@@ -1666,8 +1655,7 @@ $ `stdlib/ext/nurldoc.nu`
     ? & == rank 0 != 0 ( nurl_str_eq ( string_data rl_stem ) want ) { = rank 2 } {}
     ? & == rank 0 != 0 ( nurl_str_eq ( string_data base ) want ) { = rank 3 } {}
     ? & == rank 0 != 0 ( nurl_str_eq ( string_data base_stem ) want ) { = rank 4 } {}
-    ( string_free rl ) ( string_free base )
-    ( string_free rl_stem ) ( string_free base_stem )
+    ( string_free rl )
     ^ rank
 }
 
@@ -1707,7 +1695,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = k + k 1
     }
-    ( json_free files )
     ( string_free want )
     ^ best
 }
@@ -1892,7 +1879,6 @@ $ `stdlib/ext/nurldoc.nu`
         } {}
         ? != 0 ( nurl_str_eq ( string_data num2 ) want ) { = hit T } {}
         ? != 0 ( nurl_str_eq ( string_data num ) want ) { = hit T } {}
-        ( string_free num ) ( string_free num2 )
     } {}
     ? ! hit {
         : String w ( __ms_lc want )
@@ -2103,7 +2089,6 @@ $ `stdlib/ext/nurldoc.nu`
                                     }
                                     ? > bn keep { ( string_push_str snip `\n…` ) } {}
                                     ( __ms_topk_push scores texts 6 sc ( string_data snip ) )
-                                    ( string_free snip )
                                 } {}
                                 ( string_free body )
                                 = k + k 1

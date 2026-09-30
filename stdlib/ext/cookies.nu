@@ -145,8 +145,6 @@ $ `stdlib/std/time.nu`
             } {}
         } {}
     }
-    ( string_free r )
-    ( string_free cp )
     ^ ok
 }
 
@@ -172,7 +170,6 @@ $ `stdlib/std/time.nu`
             = nm ( string_trim nraw ) ( string_free nraw )
             : String vraw ( __cut_after t `=` )
             = val ( string_trim vraw ) ( string_free vraw )
-            ( string_free t )
         }
         F _ → {}
     }
@@ -230,7 +227,7 @@ $ `stdlib/std/time.nu`
                                 ? ( __keyeq key `secure` ) { = secure T } {}
                             } } } }
 
-                ( string_free seg ) ( string_free key ) ( string_free aval )
+                ( string_free key )
             }
             F _ → {}
         }
@@ -339,6 +336,5 @@ $ `stdlib/std/time.nu`
         }
         = m + m 1
     }
-    ( vec_free [i] idxs )
     ^ out
 }

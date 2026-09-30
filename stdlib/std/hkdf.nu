@@ -55,7 +55,6 @@ $ `stdlib/std/hash_sha256.nu`
         }
         = counter + counter 1
     }
-    ( vec_free [u] prev )
     ^ out
 }
 
@@ -77,7 +76,6 @@ $ `stdlib/std/hash_sha256.nu`
     : ~ i ci 0
     ~ < ci ctxlen { ( vec_push [u] hl # u ( __hk_bget context ci ) ) = ci + ci 1 }
     : ( Vec u ) okm ( hkdf_expand secret hl length )
-    ( vec_free [u] hl )
     ^ okm
 }
 

@@ -58,7 +58,6 @@ $ `stdlib/std/sort.nu`
     ( vec_extend [u] buf pubkey )
     ( bytes_push_u32_be buf # u32 v )
     : i h ( __ring_hash buf )
-    ( vec_free [u] buf )
     ^ h
 }
 

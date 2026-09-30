@@ -489,7 +489,6 @@ $ `stdlib/core/vec.nu`
         }
         = gi - gi 1
     }
-    ( vec_free [i] groups )
     ^ out
 }
 
@@ -512,7 +511,6 @@ $ `stdlib/core/vec.nu`
         = i + i 1
     }
     ? ! ok {
-        ( vec_free [i] mag )
         ^ @ !BigInt ParseErr { F @ ParseErr { BadFormat } }
     } {}
     : b fneg & neg > ( vec_len [i] mag ) 0
@@ -564,7 +562,6 @@ $ `stdlib/core/vec.nu`
         ( vec_push [u] out ?? ( vec_get [u] le j ) { T b → b F _ → # u 0 } )
         = j - j 1
     }
-    ( vec_free [u] le )
     ^ out
 }
 

@@ -451,7 +451,6 @@ $ `stdlib/std/pkey.nu`
         : i param ? == . c sig_alg 8 44 ? == . c sig_alg 9 65 87
         : ( Vec u ) ctx ( vec_new [u] )
         : b ok ( mldsa_verify param . c pubkey . c req_info ctx . c sig )
-        ( vec_free [u] ctx )
         ^ ok
     } {}
 

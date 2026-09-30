@@ -214,7 +214,6 @@ $ `stdlib/std/fmt.nu`
             }
             ( string_push_str line `}\n` )
             ( nurl_eprint ( string_data line ) )
-            ( string_free line )
         } {
             // Text: `[INFO]  msg k1=v1 k2=v2\n` (no quoting of values;
             // use JSON mode for values that may contain whitespace or
@@ -239,8 +238,6 @@ $ `stdlib/std/fmt.nu`
     : ( Vec s ) keys ( vec_new [s] )
     : ( Vec s ) vals ( vec_new [s] )
     ( __log_dispatch level msg keys vals )
-    ( vec_free [s] keys )
-    ( vec_free [s] vals )
 }
 
 @ __log_emitf i level s tmpl ( Vec s ) args → v {
@@ -250,8 +247,6 @@ $ `stdlib/std/fmt.nu`
         : ( Vec s ) keys ( vec_new [s] )
         : ( Vec s ) vals ( vec_new [s] )
         ( __log_dispatch level ( string_data r ) keys vals )
-        ( vec_free [s] keys )
-        ( vec_free [s] vals )
         ( string_free r )
     }
 }
@@ -383,8 +378,6 @@ $ `stdlib/std/fmt.nu`
     ? != n2 0 { ( vec_push [s] keys k2 ) ( vec_push [s] vals v2 ) } {}
     ? != n3 0 { ( vec_push [s] keys k3 ) ( vec_push [s] vals v3 ) } {}
     ( __log_dispatch level msg keys vals )
-    ( vec_free [s] keys )
-    ( vec_free [s] vals )
 }
 
 @ log_debug_kv1 s msg s k1 s v1 → v {

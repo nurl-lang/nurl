@@ -467,15 +467,12 @@ $ `stdlib/std/async_ffi.nu`
         ? == ek 7 {
             : i rc ( nurl_reactor_wait_read fd - 0 1 )
             ? < rc 0 {
-                ( vec_free [u] v )
                 ^ @ !UdpPacket NetErr { F # NetErr NetTimeout }
             } {}
         } {
-            ( vec_free [u] v )
             ^ @ !UdpPacket NetErr { F ( _net_err_of ek ) }
         }
     }
-    ( vec_free [u] v )
     ^ @ !UdpPacket NetErr { F # NetErr NetOther }
 }
 
@@ -501,15 +498,12 @@ $ `stdlib/std/async_ffi.nu`
         ? == ek 7 {
             : i rc ( nurl_reactor_wait_read fd - 0 1 )
             ? < rc 0 {
-                ( vec_free [u] v )
                 ^ @ !( Vec u ) NetErr { F # NetErr NetTimeout }
             } {}
         } {
-            ( vec_free [u] v )
             ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
         }
     }
-    ( vec_free [u] v )
     ^ @ !( Vec u ) NetErr { F # NetErr NetOther }
 }
 

@@ -363,11 +363,7 @@ $ `stdlib/std/bytes.nu`
         = ni + ni 1
     }
     : ( Vec u ) mac ( sha256_pure outer_input )
-    ( vec_free [u] outer_input )
     ( vec_free [u] inner )
-    ( vec_free [u] ipad )
-    ( vec_free [u] opad )
-    ( vec_free [u] kbuf )
     ^ mac
 }
 

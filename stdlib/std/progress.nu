@@ -169,7 +169,6 @@ $ `stdlib/std/term.nu`
     ( string_push_str ln `    ` )
     ? final { ( string_push_char ln 10 ) } {}
     ( __pg_write ( string_data ln ) )
-    ( string_free ln )
     ( string_free curh )
 }
 

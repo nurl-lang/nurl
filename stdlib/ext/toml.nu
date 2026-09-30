@@ -242,7 +242,6 @@ $ `stdlib/std/float.nu`
         }
     }
     ? err {
-        ( string_free out )
         ^ ( __keyresult_err ek cur )
     } {}
     ^ ( __keyresult_ok out cur )
@@ -348,7 +347,6 @@ $ `stdlib/std/float.nu`
 
     = k ( __t_digits src n txt k )
     ? < k 0 {
-        ( string_free txt )
         ^ ( __valresult_err # TomlErr TomlSyntax pos )
     } {}
 
@@ -357,7 +355,6 @@ $ `stdlib/std/float.nu`
         ( string_push_char txt 46 )
         = k ( __t_digits src n txt + k 1 )
         ? < k 0 {
-            ( string_free txt )
             ^ ( __valresult_err # TomlErr TomlSyntax pos )
         } {}
         = is_float T
@@ -377,7 +374,6 @@ $ `stdlib/std/float.nu`
             } {}
             = k ( __t_digits src n txt j )
             ? < k 0 {
-                ( string_free txt )
                 ^ ( __valresult_err # TomlErr TomlSyntax pos )
             } {}
             = is_float T
@@ -386,14 +382,12 @@ $ `stdlib/std/float.nu`
 
     ? is_float {
         : !f ParseErr fr ( float_parse ( string_data txt ) )
-        ( string_free txt )
         ?? fr {
             T fv → ^ ( __valresult_ok @ TomlValue { TFloat fv } k )
             F _ → ^ ( __valresult_err # TomlErr TomlSyntax pos )
         }
     } {}
     : !i ParseErr nr ( string_to_int txt )
-    ( string_free txt )
     ?? nr {
         T iv → ^ ( __valresult_ok @ TomlValue { TInt iv } k )
         F _ → ^ ( __valresult_err # TomlErr TomlSyntax pos )
@@ -445,7 +439,6 @@ $ `stdlib/std/float.nu`
             }
             = fk + fk 1
         }
-        ( vec_free [TomlValue] items )
         ^ ( __valresult_err ek cur )
     } {}
     ^ ( __valresult_ok @ TomlValue { TArr items } cur )
@@ -509,7 +502,6 @@ $ `stdlib/std/float.nu`
             }
             = fk + fk 1
         }
-        ( vec_free [TomlEntry] entries )
         ^ ( __valresult_err ek cur )
     } {}
     ^ ( __valresult_ok @ TomlValue { TTable entries } cur )
@@ -670,7 +662,6 @@ $ `stdlib/std/float.nu`
             }
             = fk + fk 1
         }
-        ( vec_free [String] path )
         ^ @ HeaderResult { F as_array ( vec_new [String] ) cur }
     } {}
     ^ @ HeaderResult { T as_array path cur }

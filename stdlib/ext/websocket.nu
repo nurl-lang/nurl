@@ -447,7 +447,6 @@ $ `stdlib/ext/compress.nu`
         F _ → {}
     }
     ? ! key_ok {
-        ( string_free accept )
         ^ @ !HttpResponse WsErr { F WsHandshakeBadKey }
     } {}
     : HttpResponse r ( response_new 101 )
@@ -460,7 +459,6 @@ $ `stdlib/ext/compress.nu`
         }
         F _ → {}
     }
-    ( string_free accept )
     ^ @ !HttpResponse WsErr { T r }
 }
 
@@ -530,7 +528,6 @@ $ `stdlib/ext/compress.nu`
         }
     }
     ? == status 0 {
-        ( vec_free [u] buf )
         ^ @ !( Vec u ) WsErr { F last }
     } {}
     ^ @ !( Vec u ) WsErr { T buf }
@@ -828,7 +825,6 @@ $ `stdlib/ext/compress.nu`
     ? < code 0 {
         : ( Vec u ) empty ( vec_new [u] )
         : !v WsErr r ( ws_write_frame conn T ( ws_opcode_close ) empty )
-        ( vec_free [u] empty )
         ^ r
     } {}
     ? | < code 1000 > code 4999 {
@@ -840,7 +836,6 @@ $ `stdlib/ext/compress.nu`
     : i rn ( nurl_str_len reason )
     ? > rn 0 { ( bytes_extend_str buf reason ) } {}
     : !v WsErr r ( ws_write_frame conn T ( ws_opcode_close ) buf )
-    ( vec_free [u] buf )
     ^ r
 }
 
@@ -1413,7 +1408,6 @@ $ `stdlib/ext/compress.nu`
     ? < code 0 {
         : ( Vec u ) empty ( vec_new [u] )
         : !v WsErr r ( ws_client_write_frame conn T ( ws_opcode_close ) empty )
-        ( vec_free [u] empty )
         ^ r
     } {}
     ? | < code 1000 > code 4999 {
@@ -1424,7 +1418,6 @@ $ `stdlib/ext/compress.nu`
     ( vec_push [u] buf # u & 255 code )
     ? > ( nurl_str_len reason ) 0 { ( bytes_extend_str buf reason ) } {}
     : !v WsErr r ( ws_client_write_frame conn T ( ws_opcode_close ) buf )
-    ( vec_free [u] buf )
     ^ r
 }
 
@@ -1540,7 +1533,6 @@ $ `stdlib/ext/compress.nu`
     ? found {
         ^ @ ?String { T val }
     } {
-        ( string_free val )
         ^ @ ?String { F }
     }
 }
@@ -1582,7 +1574,6 @@ $ `stdlib/ext/compress.nu`
     ? ok {
         ^ @ !( Vec u ) WsErr { T buf }
     } {
-        ( vec_free [u] buf )
         ^ @ !( Vec u ) WsErr { F err }
     }
 }

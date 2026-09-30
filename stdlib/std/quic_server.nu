@@ -167,7 +167,7 @@ $ `stdlib/std/quic_conn.nu`
                 : ( Vec u ) vn ( quic_vn_build scid dcid vers )
                 : !i NetErr w ( udp_send_addr . s sock vn from )
                 ?? w { T _ → {} F _ → {} }
-                ( vec_free [u] vn ) ( vec_free [i] vers ) ( vec_free [u] scid )
+                ( vec_free [u] vn ) ( vec_free [u] scid )
             } {}
         } {
             // A new connection: a client Initial of at least 1200 bytes (§14.1)
@@ -292,5 +292,4 @@ $ `stdlib/std/quic_conn.nu`
         ( __qs_reap s )
     }
     ( vec_free [u] from )
-    ( vec_free [u] buf )
 }

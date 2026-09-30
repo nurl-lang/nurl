@@ -458,7 +458,6 @@ $ `stdlib/ext/json.nu`
 
     ( bytes_extend_str head `Transfer-Encoding: chunked\r\n\r\n` )
     : !v NetErr wr ( tcp_write_all c head )
-    ( vec_free [u] head )
     ^ wr
 }
 
@@ -472,7 +471,6 @@ $ `stdlib/ext/json.nu`
     ( vec_extend [u] frame chunk )
     ( bytes_extend_str frame `\r\n` )
     : !v NetErr wr ( tcp_write_all c frame )
-    ( vec_free [u] frame )
     ^ wr
 }
 

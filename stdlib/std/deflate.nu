@@ -399,7 +399,6 @@ $ `stdlib/std/bytes.nu`
     ~ < k 280 { ( vec_push [i] lengths 7 ) = k + k 1 }
     ~ < k 288 { ( vec_push [i] lengths 8 ) = k + k 1 }
     : Huff h ( __infl_construct lengths 288 )
-    ( vec_free [i] lengths )
     ^ h
 }
 
@@ -408,7 +407,6 @@ $ `stdlib/std/bytes.nu`
     : ~ i k 0
     ~ < k 32 { ( vec_push [i] lengths 5 ) = k + k 1 }
     : Huff h ( __infl_construct lengths 32 )
-    ( vec_free [i] lengths )
     ^ h
 }
 
@@ -582,7 +580,6 @@ $ `stdlib/std/bytes.nu`
     ( mem_take out )  // st is released by hand: out is the only owner
     ( nurl_free # s st )
     ? != err 0 {
-        ( vec_free [u] out )
         ^ @ !Inflated DeflateErr { F ( __df_err err ) }
     } {}
     ^ @ !Inflated DeflateErr { T @ Inflated { out consumed } }
@@ -896,6 +893,5 @@ $ `stdlib/std/bytes.nu`
 @ deflate_block ( Vec u ) src → ( Vec u ) {
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) r ( deflate_block_dict empty src )
-    ( vec_free [u] empty )
     ^ r
 }

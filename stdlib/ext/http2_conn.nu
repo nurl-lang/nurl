@@ -311,7 +311,6 @@ $ `stdlib/ext/http2_hpack.nu`
     ?? read {
         T _ → { ^ ( h2_conn_new_buffered tcp carry ( h2_default_max_body_bytes ) ) }
         F e → {
-            ( vec_free [u] carry )
             ^ @ !H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) }
         }
     }
@@ -1205,7 +1204,6 @@ $ `stdlib/ext/http2_hpack.nu`
 @ __h2_send_settings_ack H2Connection c → !v H2FrameErr {
     : ( Vec u ) empty ( vec_new [u] )
     : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_settings ) ( h2_flag_ack ) 0 empty )
-    ( vec_free [u] empty )
     ^ result
 }
 
@@ -1217,7 +1215,6 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_push_u32_be payload # u32 increment )
     : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_window_update ) 0 sid payload )
-    ( vec_free [u] payload )
     ^ result
 }
 
@@ -1225,7 +1222,6 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_push_u32_be payload # u32 code )
     : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_rst_stream ) 0 sid payload )
-    ( vec_free [u] payload )
     ^ result
 }
 
@@ -1828,7 +1824,6 @@ $ `stdlib/ext/http2_hpack.nu`
                 = j + j 1
             }
             ( vec_push [Header] headers ( header_new ( string_data lower ) ( string_data . h value ) ) )
-            ( string_free lower )
         } {}
         = k + k 1
     }

@@ -530,8 +530,6 @@ simd @ __cbd_batch * i16 dst ( Vec u ) seed i n0 i count i eta → v {
             = g + g 4
         }
     }
-    ( vec_free [u] o0 ) ( vec_free [u] o1 )
-    ( vec_free [u] o2 ) ( vec_free [u] o3 )
 }
 
 // SamplePolyCBD_η (FIPS 203 Algorithm 8): each coefficient is the
@@ -1059,7 +1057,6 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
         = i + i 1
     }
 
-    ( vec_free [u] ct2 )
     ( vec_free [u] kbar )
     ( vec_free [u] rprime )
     ( vec_free [u] kprime )

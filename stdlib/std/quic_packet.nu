@@ -116,7 +116,6 @@ $ `stdlib/std/quic_varint.nu`
     : ( Vec u ) secret ? is_client ( hkdf_expand_label initial `client in` empty 32 ) ( hkdf_expand_label initial `server in` empty 32 )
     : *QuicKeys k ( quic_keys_derive 1 secret )
     ( vec_free [u] secret )
-    ( vec_free [u] empty )
     ( vec_free [u] initial )
     ^ k
 }

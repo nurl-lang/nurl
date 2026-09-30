@@ -218,7 +218,6 @@ $ `stdlib/core/errors.nu`
         : i hi ( __hex_byte_value & # i . p k 255 )
         : i lo ( __hex_byte_value & # i . p + k 1 255 )
         ? | < hi 0 < lo 0 {
-            ( vec_free [u] v )
             ^ @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } }
         } {}
         ( vec_push [u] v # u + lo * hi 16 )

@@ -162,7 +162,6 @@ $ `stdlib/net/stun.nu`
     ( string_free la )
     : String ip ( __local_ip_for ref_host ref_port )
     ? == ( string_len ip ) 0 {
-        ( string_free ip )
         ^ @ ?Candidate { F # Candidate 0 }
     } {}
     : i fam ( _ip_family ip )

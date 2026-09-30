@@ -69,7 +69,6 @@ $ `stdlib/ext/http_cli.nu`
         }
     }
     : String p ( path_join ( string_data base ) `.update-check` )
-    ( string_free base )
     ^ p
 }
 
@@ -186,7 +185,6 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str m current )
     ( string_push_str m `).\n  update:  nurl upgrade\n` )
     ( nurl_eprint ( string_data m ) )
-    ( string_free m )
 }
 
 // ── public helpers ───────────────────────────────────────────────────

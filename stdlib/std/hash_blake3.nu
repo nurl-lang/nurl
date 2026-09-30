@@ -207,7 +207,6 @@ $ `stdlib/core/vec.nu`
     : i lflags | 2 | ? == nb 1 1 0 ? root 8 0  // CHUNK_END | (CHUNK_START if 1 block) | (ROOT?)
     : ( Vec u32 ) st ( __b3_compress cv lbw counter lb_len lflags )
     : ( Vec u32 ) result ( __b3_copy st 8 )
-    ( vec_free [u32] cv )
     ( vec_free [u32] lbw )
     ( vec_free [u32] st )
     ^ result
@@ -225,7 +224,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec u32 ) st ( __b3_compress iv block 0 64 flags )
     : ( Vec u32 ) result ( __b3_copy st 8 )
     ( vec_free [u32] iv )
-    ( vec_free [u32] block )
     ( vec_free [u32] st )
     ^ result
 }

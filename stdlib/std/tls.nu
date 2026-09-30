@@ -469,7 +469,6 @@ $ `stdlib/std/async_ffi.nu`
     ( _tls_u16 rec ( vec_len [u] body ) )
     ( _tls_cat rec body )
     : b w ( _tls_sock_write . c fd rec )
-    ( vec_free [u] rec )
     ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
 
@@ -686,7 +685,6 @@ $ `stdlib/std/async_ffi.nu`
         ( _tls_cat alp alp_list )
         ( _tls_u16 ext 16 )
         ( _blk16 ext alp )
-        ( vec_free [u] alp )
     } {}
 
     // ── resumption (RFC 8446 §4.2.9 + §4.2.11) ──
@@ -723,7 +721,6 @@ $ `stdlib/std/async_ffi.nu`
         ~ < bk 32 { ( vec_push [u] psk # u 0 ) = bk + bk 1 }
         ( _tls_u16 ext 41 )
         ( _blk16 ext psk )
-        ( vec_free [u] psk )
     } {}
 
     ( _blk16 body ext )
@@ -734,7 +731,6 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_push [u] hs # u 1 )
     ( _u24 hs ( vec_len [u] body ) )
     ( _tls_cat hs body )
-    ( vec_free [u] body )
     ^ hs
 }
 
@@ -772,7 +768,7 @@ $ `stdlib/std/async_ffi.nu`
         } {}
         = p + + p 4 elen
     }
-    ? == got 0 { ( vec_free [u] found ) ^ @ !( Vec u ) TlsErr { F # TlsErr TlsHandshake } } {}
+    ? == got 0 { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsHandshake } } {}
     ^ @ !( Vec u ) TlsErr { T found }
 }
 
@@ -872,7 +868,6 @@ $ `stdlib/std/async_ffi.nu`
 @ _psk_early ( Vec u ) psk → ( Vec u ) {
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) early ( hkdf_extract empty psk )
-    ( vec_free [u] empty )
     ^ early
 }
 
@@ -889,7 +884,7 @@ $ `stdlib/std/async_ffi.nu`
     : ( Vec u ) trunc ( bytes_slice ch 0 trunc_len )
     : ( Vec u ) th ( sha256_pure trunc )
     : ( Vec u ) mac ( hmac_sha256_pure fkey th )
-    ( vec_free [u] empty ) ( vec_free [u] ehash ) ( vec_free [u] bkey )
+    ( vec_free [u] ehash ) ( vec_free [u] bkey )
     ( vec_free [u] fkey ) ( vec_free [u] trunc ) ( vec_free [u] th )
     ^ mac
 }
@@ -1072,7 +1067,6 @@ $ `stdlib/std/async_ffi.nu`
     : ( Vec u ) emptyc ( vec_new [u] )
     : ( Vec u ) fkey ( hkdf_expand_label secret `finished` emptyc 32 )
     : ( Vec u ) mac ( hmac_sha256_pure fkey thash )
-    ( vec_free [u] emptyc )
     ( vec_free [u] fkey )
     ^ mac
 }
@@ -1161,7 +1155,6 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_push [u] alert # u 2 )
     ( vec_push [u] alert # u desc )
     : !v TlsErr _w ( __send_encrypted c 21 alert )
-    ( vec_free [u] alert )
 }
 
 @ __ee_alpn ( Vec u ) msg → ( Vec u ) {
@@ -1666,7 +1659,6 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_push [u] alert # u 2 )
     ( vec_push [u] alert # u desc )
     : !v TlsErr _w ( _send_plain c 21 alert )
-    ( vec_free [u] alert )
 }
 
 @ __cli_abort * TlsConn c * CliHs hs TlsErr e → !*TlsConn TlsErr {
@@ -1848,7 +1840,6 @@ $ `stdlib/std/async_ffi.nu`
 @ tls_attach i raw s server_name → !*TlsConn TlsErr {
     : ( Vec u ) nosess ( vec_new [u] )
     : !*TlsConn TlsErr r ( __tls_handshake raw server_name `` nosess )
-    ( vec_free [u] nosess )
     ^ r
 }
 
@@ -1859,7 +1850,6 @@ $ `stdlib/std/async_ffi.nu`
 @ tls_attach_alpn i raw s server_name s alpn → !*TlsConn TlsErr {
     : ( Vec u ) nosess ( vec_new [u] )
     : !*TlsConn TlsErr r ( __tls_handshake raw server_name alpn nosess )
-    ( vec_free [u] nosess )
     ^ r
 }
 
@@ -2259,7 +2249,6 @@ $ `stdlib/std/async_ffi.nu`
             ( vec_push [u] alert # u 1 )
             ( vec_push [u] alert # u 0 )
             : !v TlsErr _w ? == . c version 12 ( __send_record_12 c 21 alert ) ( __send_encrypted c 21 alert )
-            ( vec_free [u] alert )
         } {}
         = . c closed 1
     } {}
@@ -2307,7 +2296,6 @@ $ `stdlib/std/async_ffi.nu`
         ( vec_free [u] chunk )
     }
     ( vec_free [u] a )
-    ( vec_free [u] fs )
     ^ out
 }
 
@@ -2500,7 +2488,7 @@ $ `stdlib/std/async_ffi.nu`
         }
     }
     ? | == err 1 == ( vec_len [u] spub ) 0 {
-        ( vec_free [u] srand ) ( vec_free [u] spub )
+        ( vec_free [u] srand )
         ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsHandshake )
     } {}
 

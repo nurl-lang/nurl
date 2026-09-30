@@ -58,7 +58,6 @@ $ `stdlib/dist/ring.nu`
         ( bytes_push_u64_be b # u64 ?? ( vec_get [i] amts best ) { T t → t F → 0 } )
         = out + out 1
     }
-    ( vec_free [i] used )
 }
 
 @ pncounter_encode * PNCounter c → ( Vec u ) {

@@ -32,7 +32,6 @@ $ `stdlib/ext/dchannel.nu`
     ( string_push_int line n )
     ( string_push_char line 10 )
     ( nurl_print ( string_data line ) )
-    ( string_free line )
 }
 
 // Open the shared "nums" channel of i (int) with JSON int codecs.

@@ -2033,7 +2033,6 @@ $ `stdlib/std/hash_xxh64.nu`
     ( vec_free [u] tfse )
     ( vec_free [i] wts )
     ? & ! treeless == ( vec_len [u] tree ) 0 {
-        ( vec_free [u] tree )
         ( vec_free [i] counts ) ( vec_free [i] lens ) ( vec_free [i] codes )
         ^ F
     } {}
@@ -2068,8 +2067,6 @@ $ `stdlib/std/hash_xxh64.nu`
         ( vec_extend [u] payload s2 )
         ( vec_extend [u] payload s3 )
         ( vec_extend [u] payload s4 )
-        ( vec_free [u] s1 ) ( vec_free [u] s2 )
-        ( vec_free [u] s3 ) ( vec_free [u] s4 )
     }
     : i treelen ( vec_len [u] tree )
     : i csize + treelen ( vec_len [u] payload )
@@ -2113,8 +2110,6 @@ $ `stdlib/std/hash_xxh64.nu`
         ~ < t ZS_MAX_SYMS { = . hlp2 t # i . lnp2 t = t + t 1 }
         = . wst hvalid 1
     } {}
-    ( vec_free [u] tree )
-    ( vec_free [u] payload )
     ( vec_free [i] counts )
     ( vec_free [i] lens )
     ( vec_free [i] codes )
@@ -2244,7 +2239,6 @@ $ `stdlib/std/hash_xxh64.nu`
             }
         }
         ( vec_free [i] norm )
-        ( vec_free [u] ncount )
         ( vec_free [i] defnorm )
         ^ ct
     } {}
@@ -2374,7 +2368,6 @@ $ `stdlib/std/hash_xxh64.nu`
         ( __zs_ct_free llct )
         ( __zs_ct_free ofct )
         ( __zs_ct_free mlct )
-        ( vec_free [u] tabs )
         ( vec_free [i] deffreq )
         ( vec_free [i] modeslot )
         ( vec_free [i] llc ) ( vec_free [i] mlc ) ( vec_free [i] ofc )
@@ -2388,7 +2381,6 @@ $ `stdlib/std/hash_xxh64.nu`
         ( __zs_block_header out 0 blen last )
         ( vec_extend_range [u] out src bstart blen )
     }
-    ( vec_free [u] body )
 }
 
 // Frame header. The window has to cover the largest match distance the
@@ -3018,9 +3010,6 @@ i nr0 i nr1 i nr2 → v {
     = . reps 0 r0
     = . reps 1 r1
     = . reps 2 r2
-    ( vec_free [i] tll )
-    ( vec_free [i] tml )
-    ( vec_free [i] tof )
 }
 
 // Sequence-code prices as the FSE coder will really charge them: the
@@ -3409,10 +3398,6 @@ i nr0 i nr1 i nr2 → v {
     ( vec_free [i] vcco )
     ( vec_free [i] vccm )
     ( vec_free [i] vccn )
-    ( vec_free [u] lits )
-    ( vec_free [i] sll )
-    ( vec_free [i] sml )
-    ( vec_free [i] soff )
     ^ out
 }
 

@@ -303,7 +303,7 @@ $ `stdlib/hal/blockdev.nu`
     ? ! ( blk_present ) { ^ F } {}
 
     : ( Vec u ) sec ( vec_new [u] )
-    ? ! ( __read_boot sec ) { ( vec_free [u] sec ) ^ F } {}
+    ? ! ( __read_boot sec ) { ^ F } {}
 
     : i bps ( __le16 sec 11 )
     : i spc ( fat_vb sec 13 )

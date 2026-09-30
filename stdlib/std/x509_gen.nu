@@ -164,7 +164,6 @@ $ `stdlib/std/time.nu`
     ( _xg_push2 st . t sec )
     ( string_push_char st 90 )  // 'Z'
     : ( Vec u ) b ( bytes_from_str ( string_data st ) )
-    ( string_free st )
     ^ ( _xg_tlv 23 b )
 }
 
@@ -294,7 +293,6 @@ $ `stdlib/std/time.nu`
         }
     }
     ? == ( vec_len [u] out ) 64 { ^ out } {}
-    ( vec_free [u] out )
     ^ ( vec_new [u] )
 }
 
@@ -372,7 +370,7 @@ $ `stdlib/std/time.nu`
     : ( Vec u ) serial ( _xg_rand_bytes 12 )
     : i now ( now_seconds )
     : X509SelfSigned out ( x509_selfsigned_p256_pinned scalar serial cn - now 86400 + now * days 86400 )
-    ( vec_free [u] scalar ) ( vec_free [u] serial )
+    ( vec_free [u] serial )
     ^ out
 }
 

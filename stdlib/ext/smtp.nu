@@ -252,7 +252,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_push_str line `EHLO ` )
     ( string_push_str line domain )
     : !v SmtpErr r ( __smtp_expect c ( string_data line ) 250 # SmtpErr SmtpProtocol )
-    ( string_free line )
     ^ r
 }
 
@@ -291,7 +290,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     = k 0
     ~ < k pn { ( vec_push [u] b # u ( nurl_str_get pass k ) ) = k + k 1 }
     : String tok ( b64_encode_vec b )
-    ( vec_free [u] b )
     ^ tok
 }
 
@@ -301,7 +299,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_push_str line `AUTH PLAIN ` )
     ( string_push_str line ( string_data tok ) )
     : !v SmtpErr r ( __smtp_expect c ( string_data line ) 235 # SmtpErr SmtpAuth )
-    ( string_free line )
     ( string_free tok )
     ^ r
 }
@@ -327,7 +324,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_push_str line addr )
     ( string_push_char line 62 )  // '>'
     : !v SmtpErr r ( __smtp_expect c ( string_data line ) 250 # SmtpErr SmtpProtocol )
-    ( string_free line )
     ^ r
 }
 

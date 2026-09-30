@@ -99,7 +99,7 @@ $ `stdlib/ext/env.nu`
             ( string_push_str fl ` W=` ) ( ls_pushhex8 fl ( mem_sum mf 0xC000 0xDF00 ) )
             ( string_push_str fl ` V=` ) ( ls_pushhex8 fl ( mem_sum mf 0x8000 0xA000 ) )
             ( string_push_str fl ` O=` ) ( ls_pushhex8 fl ( mem_sum mf 0xFE00 0xFEA0 ) )
-            ( string_push_char fl 10 ) ( nurl_print ( string_data fl ) ) ( string_free fl )
+            ( string_push_char fl 10 ) ( nurl_print ( string_data fl ) )
         } {}
         = fr + fr 1
     }
@@ -122,7 +122,6 @@ $ `stdlib/ext/env.nu`
         ? == 0 & a 63 { ( nurl_print ( string_data ln ) ) ( string_clear ln ) } {}
     }
     ( string_push_char ln 10 ) ( nurl_print ( string_data ln ) )
-    ( string_free ln )
     ^ 0
 }
 

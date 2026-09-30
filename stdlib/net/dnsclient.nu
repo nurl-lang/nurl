@@ -98,7 +98,6 @@ $ `stdlib/std/bytes.nu`
     ( bytes_push_u16_be out # u16 0 )  // NSCOUNT
     ( bytes_push_u16_be out # u16 0 )  // ARCOUNT
     ? ! ( __dns_push_qname out name ) {
-        ( vec_free [u] out )
         ^ @ !( Vec u ) DnsErr { F # DnsErr DnsBadName }
     } {}
     ( bytes_push_u16_be out # u16 ( dns_qtype_a ) )
@@ -176,7 +175,7 @@ $ `stdlib/std/bytes.nu`
             }
         }
     }
-    ? bad { ( string_free out ) ^ ( string_new ) } {}
+    ? bad { ^ ( string_new ) } {}
     ^ out
 }
 
@@ -257,11 +256,9 @@ $ `stdlib/std/bytes.nu`
     }
     ( string_free want )
     ? fail {
-        ( vec_free [i] out )
         ^ @ !( Vec i ) DnsErr { F # DnsErr DnsBadLabel }
     } {}
     ? == ( vec_len [i] out ) 0 {
-        ( vec_free [i] out )
         ^ @ !( Vec i ) DnsErr { F # DnsErr DnsNoAnswer }
     } {}
     ^ @ !( Vec i ) DnsErr { T out }

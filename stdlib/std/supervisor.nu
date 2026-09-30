@@ -295,9 +295,7 @@ $ `stdlib/std/panic.nu`
                 = runset nxt
             }
         }
-        ( vec_free [i] crashed )
     }
-    ( vec_free [i] runset )
     ^ ok
 }
 

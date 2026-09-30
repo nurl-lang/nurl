@@ -116,7 +116,6 @@ $ `stdlib/ext/http3_conn.nu`
     ? == kt 0 { = out ( quic_creds_new chain 0 k1 e e e 0 ) } {}
     ? == kt 1 { = out ( quic_creds_new chain 1 e k1 k3 k2 0 ) } {}
     ? == kt 2 { = out ( quic_creds_new chain 2 k1 e e e ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) ) } {}
-    ( vec_free [u] e ) ( vec_free [u] k3 ) ( vec_free [u] k2 ) ( vec_free [u] k1 ) ( vec_free [u] chain )
     ^ out
 }
 
@@ -132,7 +131,6 @@ $ `stdlib/ext/http3_conn.nu`
     : i kt ( _load_tls_creds pq_cert_path pq_key_path chain k1 k2 k3 )
     : b ok == kt 2
     ? ok { ( quic_creds_set_pq k chain ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 ) } {}
-    ( vec_free [u] k3 ) ( vec_free [u] k2 ) ( vec_free [u] k1 ) ( vec_free [u] chain )
     ^ ok
 }
 

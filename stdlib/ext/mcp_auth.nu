@@ -187,7 +187,6 @@ $ `stdlib/ext/http_response.nu`
     ( response_set_header r `WWW-Authenticate` ( string_data hv ) )
     ( response_set_header r `Access-Control-Allow-Origin` `*` )
     ( response_set_header r `Access-Control-Expose-Headers` `WWW-Authenticate` )
-    ( string_free hv )
     ^ r
 }
 
@@ -235,15 +234,11 @@ $ `stdlib/ext/http_response.nu`
         }
     } {}
     ? == 0 ( string_len host ) {
-        ( string_free scheme )
-        ( string_free host )
         ^ ( string_from fallback )
     } {}
     : String out ( string_from ( string_data scheme ) )
     ( string_push_str out `://` )
     ( string_push_str out ( string_data host ) )
-    ( string_free scheme )
-    ( string_free host )
     ^ out
 }
 
@@ -281,7 +276,6 @@ $ `stdlib/ext/http_response.nu`
                 }
                 = is_bearer & != 0 ( nurl_str_eq ( string_data low ) `bearer` )
                 == 32 ( nurl_str_at raw n 6 )
-                ( string_free low )
             } {}
             ? ! is_bearer {
                 ( string_free v )

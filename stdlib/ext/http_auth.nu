@@ -103,7 +103,6 @@ $ `stdlib/core/errors.nu`
     ? & != sep 32 != sep 9 { ^ ( string_new ) } {}
     : String tail ( string_substr header + pn 1 - hn + pn 1 )
     : String trimmed ( __strip_ows tail )
-    ( string_free tail )
     ^ trimmed
 }
 
@@ -333,5 +332,4 @@ $ `stdlib/core/errors.nu`
     } {}
 
     ( response_add_header r `Set-Cookie` ( string_data hv ) )
-    ( string_free hv )
 }

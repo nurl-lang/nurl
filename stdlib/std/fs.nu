@@ -943,7 +943,6 @@ $ `stdlib/core/posix.nu`
     : i got ( nurl_stream_read hp dst n )
     ? < got 0 {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
-        ( vec_free [u] out )
         ^ @ !( Vec u ) IoErr { F e }
     } {}
     : b _ok ( vec_set_len [u] out got )
@@ -1180,7 +1179,6 @@ $ `stdlib/core/posix.nu`
     ( string_push_str tmpl `XXXXXX` )
     : i32 fd ( mkstemp ( string_data tmpl ) )
     ? < # i fd 0 {
-        ( string_free tmpl )
         ^ @ !String IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : i _c ( close # i fd )
@@ -1201,7 +1199,6 @@ $ `stdlib/core/posix.nu`
     ( string_push_str tmpl `XXXXXX` )
     ? != # i32 0 ( nurl_fs_tempdir ( string_data tmpl ) ) {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
-        ( string_free tmpl )
         ^ @ !String IoErr { F e }
     } {}
     ^ @ !String IoErr { T tmpl }

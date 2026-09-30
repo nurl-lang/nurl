@@ -625,7 +625,6 @@ $ `stdlib/core/vec.nu`
     : ~ b done F
     ~ ! done {
         ? ( __jp_eof p ) {
-            ( string_free out )
             ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
         } {}
         : i c ( __jp_peek p )
@@ -636,7 +635,6 @@ $ `stdlib/core/vec.nu`
             ? == c 92 {
                 = . p pos + . p pos 1
                 ? ( __jp_eof p ) {
-                    ( string_free out )
                     ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                 } {}
                 : i esc ( __jp_peek p )
@@ -668,7 +666,6 @@ $ `stdlib/core/vec.nu`
                                                     // pairs the clef. The i_ conformance class pins the policy.
                                                     : i h ( __jp_read_hex4 p )
                                                     ? < h 0 {
-                                                        ( string_free out )
                                                         ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                                                     } {}
                                                     : ~ i cur h
@@ -680,7 +677,6 @@ $ `stdlib/core/vec.nu`
                                                             = . p pos + . p pos 2
                                                             : i l ( __jp_read_hex4 p )
                                                             ? < l 0 {
-                                                                ( string_free out )
                                                                 ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                                                             } {}
                                                             ? & >= l 56320 <= l 57343 {
@@ -696,7 +692,6 @@ $ `stdlib/core/vec.nu`
                                                         }
                                                     }
                                                 } {
-                                                    ( string_free out )
                                                     ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                                                 } } } } } } } } }
             } {
@@ -704,7 +699,6 @@ $ `stdlib/core/vec.nu`
                 // carry an escape falls through to this loop, so the
                 // fast path's scan never sees it.
                 ? < c 32 {
-                    ( string_free out )
                     ^ @ !String JsonError { F ( __jp_err_at p . p pos @ ParseErr { BadFormat } ) }
                 } {}
                 ( string_push_char out c )

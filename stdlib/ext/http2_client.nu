@@ -527,7 +527,6 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_push_u32_be payload # u32 code )
     : !v H2FrameErr result ( __h2c_write_frame c @ H2Frame { 3 0 sid payload } 16384 )
-    ( vec_free [u] payload )
     ^ result
 }
 
@@ -535,14 +534,12 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_push_u32_be payload # u32 amount )
     : !v H2FrameErr result ( __h2c_write_frame c @ H2Frame { 8 0 sid payload } 16384 )
-    ( vec_free [u] payload )
     ^ result
 }
 
 @ __h2c_settings_ack H2Client c → !v H2FrameErr {
     : ( Vec u ) payload ( vec_new [u] )
     : !v H2FrameErr result ( __h2c_write_frame c @ H2Frame { 4 1 0 payload } 16384 )
-    ( vec_free [u] payload )
     ^ result
 }
 

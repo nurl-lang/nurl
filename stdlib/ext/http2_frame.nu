@@ -260,7 +260,6 @@ $ `stdlib/std/net.nu`
         }
     }
     ? == status 0 {
-        ( vec_free [u] buf )
         ^ @ !( Vec u ) H2FrameErr { F last }
     } {}
     ^ @ !( Vec u ) H2FrameErr { T buf }

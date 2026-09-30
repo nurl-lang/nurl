@@ -441,6 +441,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) out ( __sn_from_mont r )
     : ( Vec u ) o ( __sn_to_be out )
     ( vec_free [i] av ) ( vec_free [i] am ) ( vec_free [i] r )
-    ( vec_free [u] e ) ( vec_free [i] tbl ) ( vec_free [i] w ) ( vec_free [i] out )
+    ( vec_free [u] e ) ( vec_free [i] w ) ( vec_free [i] out )
     ^ o
 }

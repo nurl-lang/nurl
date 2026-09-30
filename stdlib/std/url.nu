@@ -201,7 +201,6 @@ $ `stdlib/core/vec.nu`
             = pos + pos 1
         } {
             // illegal scheme char before ':' → not a scheme-prefixed URL
-            ( string_free scheme )
             ^ @ ?Url { F # Url 0 }
         }
     }
@@ -209,8 +208,8 @@ $ `stdlib/core/vec.nu`
     ? & & < + pos 2 n == ( nurl_str_at in n pos ) 58
     & == ( nurl_str_at in n + pos 1 ) 47 == ( nurl_str_at in n + pos 2 ) 47
     { = pos + pos 3 = ok_scheme T } {}
-    ? ! ok_scheme { ( string_free scheme ) ^ @ ?Url { F # Url 0 } } {}
-    ? == 0 ( string_len scheme ) { ( string_free scheme ) ^ @ ?Url { F # Url 0 } } {}
+    ? ! ok_scheme { ^ @ ?Url { F # Url 0 } } {}
+    ? == 0 ( string_len scheme ) { ^ @ ?Url { F # Url 0 } } {}
 
     // authority = [userinfo "@"] host [":" port], up to '/' '?' '#'
     : i auth_start pos
@@ -251,7 +250,6 @@ $ `stdlib/core/vec.nu`
         }
     }
     ? == 0 ( string_len host ) {
-        ( string_free scheme ) ( string_free userinfo ) ( string_free host )
         ^ @ ?Url { F # Url 0 }
     } {}
     // optional :port. A port is 0..65535 (RFC 3986 allows *DIGIT, but a
@@ -274,7 +272,6 @@ $ `stdlib/core/vec.nu`
         // small number). A bare ':' with no digits stays lenient (no port),
         // matching the prior behaviour.
         ? over {
-            ( string_free scheme ) ( string_free userinfo ) ( string_free host )
             ^ @ ?Url { F # Url 0 }
         } {}
         ? anyd { = port pv } {}

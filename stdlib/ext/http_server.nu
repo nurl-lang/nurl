@@ -848,7 +848,6 @@ $ `stdlib/ext/http2_conn.nu`
     ? < h2 0 {
         // Peer went away before sending a full first line — the same
         // silent close the HTTP/1.1 path gives an idle connection.
-        ( vec_free [u] carry )
         ^ v
     } {}
     // Connection-level response wire buffer, cleared and refilled by
@@ -1002,8 +1001,6 @@ $ `stdlib/ext/http2_conn.nu`
     ( http_response_free panic_resp )
     ( request_free req )
     ( headers_free spare )
-    ( vec_free [u] wire )
-    ( vec_free [u] carry )
 }
 
 // Decide whether the bytes at the start of a fresh connection are the

@@ -302,7 +302,6 @@ $ `stdlib/ext/http_request.nu`
                         } {}
                         ( string_free fname )
                         ( string_free fname_lc )
-                        ( string_free fvalue )
                     } {}
                     = line_start + nl 2
                 }
@@ -380,8 +379,6 @@ $ `stdlib/ext/http_request.nu`
     // first `--BOUNDARY` is ignored.
     : i first ( __find_in_buf body ( string_data marker ) mlen 0 )
     ? < first 0 {
-        ( string_free marker )
-        ( string_free inner )
         ^ parts
     } {}
 
@@ -424,8 +421,6 @@ $ `stdlib/ext/http_request.nu`
         }
     }
 
-    ( string_free marker )
-    ( string_free inner )
     ^ parts
 }
 

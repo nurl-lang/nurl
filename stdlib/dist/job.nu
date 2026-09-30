@@ -370,7 +370,6 @@ $ `stdlib/net/transport.nu`
     ? ( __job_owns_ring n ring key ) {
         : ( Vec u ) res ( _job_execute n kind payload )
         ( __job_record n tid res )
-        ( vec_free [u] res )
     } {
         : ?( Vec u ) o ( ring_owner_pk # *Ring ring key )
         ?? o {
@@ -394,7 +393,6 @@ $ `stdlib/net/transport.nu`
         : ( Vec u ) res ( _job_execute n . m kind . m payload )
         : ( Vec u ) reply ( job_build_result . m task_id res )
         ?? ( transport_send # *Transport . n transport . m submitter reply ) { T _ → {} F _ → {} }
-        ( vec_free [u] res )
         ( vec_free [u] reply )
     } {
         : ?( Vec u ) o ( ring_owner_pk # *Ring ring . m key )

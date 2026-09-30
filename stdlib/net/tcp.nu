@@ -239,7 +239,6 @@ $ `stdlib/net/tcpseg.nu`
 @ __emit_empty * Tcb c * PktBuf out i flags i seq i ack → v {
     : ( Vec u ) none ( vec_new [u] )
     ( __emit c out flags seq ack none 0 0 )
-    ( vec_free [u] none )
 }
 
 // Jacobson/Karn RTO update. Karn's rule — never sample a retransmitted

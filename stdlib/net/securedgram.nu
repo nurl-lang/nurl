@@ -287,7 +287,6 @@ $ `stdlib/net/session.nu`
     ( vec_extend [u] pkt msg1 )
     ( vec_free [u] msg1 )
     ( __send_pkt n p pkt )
-    ( vec_free [u] pkt )
     ^ @ !v NetErr { T 0 }
 }
 
@@ -304,7 +303,6 @@ $ `stdlib/net/session.nu`
     ( vec_extend [u] pkt . sealed ct )
     ( sealed_free sealed )
     ( __send_pkt n p pkt )
-    ( vec_free [u] pkt )
 }
 
 @ securedgram_send * SecureNode n ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
@@ -320,7 +318,6 @@ $ `stdlib/net/session.nu`
         ( vec_push [u] inner # u 0 )
         ( vec_extend [u] inner data )
         ( __send_inner n p inner )
-        ( vec_free [u] inner )
         ^ @ !v NetErr { T 0 }
     } {}
     ? > len ( securedgram_max_msg ) { ^ @ !v NetErr { F @ NetErr { NetWrite } } } {}
@@ -375,7 +372,6 @@ $ `stdlib/net/session.nu`
             ( vec_extend [u] pkt msg2 )
             ( vec_free [u] msg2 )
             ( __send_pkt n p pkt )
-            ( vec_free [u] pkt )
         }
         F _ → ( noise_free hs )
     }
