@@ -101,7 +101,7 @@ $ `stdlib/net/stack.nu`
 // use-after-close bug this table would otherwise invite.
 
 : TConn {
-    * Tcb tcb
+    Tcb tcb
     i local_ip
     i local_port
     i remote_ip
@@ -211,7 +211,7 @@ $ `stdlib/net/stack.nu`
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
     ( tcb_free . c tcb )
-    = . c tcb # *Tcb 0
+    = . c tcb @ Tcb { # s 0 }
     = . c used F
 }
 
@@ -232,9 +232,9 @@ $ `stdlib/net/stack.nu`
     ^ . c gen
 }
 
-@ tstack_conn_tcb * TcpStack ts i idx → *Tcb {
+@ tstack_conn_tcb * TcpStack ts i idx → Tcb {
     : *TConn c ( __tconn_ptr ts idx )
-    ? == # i c 0 { ^ # *Tcb 0 } {}
+    ? == # i c 0 { ^ @ Tcb { # s 0 } } {}
     ^ . c tcb
 }
 
@@ -242,7 +242,7 @@ $ `stdlib/net/stack.nu`
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ ( tcp_closed ) } {}
     ? ! . c used { ^ ( tcp_closed ) } {}
-    ^ . . c tcb state
+    ^ ( tcb_state . c tcb )
 }
 
 @ tstack_conn_peer_ip * TcpStack ts i idx → i {
@@ -424,9 +424,9 @@ $ `stdlib/net/stack.nu`
     // Filling in TConn's copy and not the Tcb's leaves every segment the
     // connection emits checksummed against 0.0.0.0, which the peer
     // silently drops as corrupt. That is what it did.
-    = . . c tcb remote_ip src_ip
-    = . . c tcb remote_port . s src_port
-    = . . c tcb iss ( __next_iss ts )
+    ( tcb_set_remote_ip . c tcb src_ip )
+    ( tcb_set_remote_port . c tcb . s src_port )
+    ( tcb_set_iss . c tcb ( __next_iss ts ) )
     : i r ( tcb_input . c tcb s frame now o )
     : i emitted ( __flush ts idx o now out )
     ( vec_push [i] . l pending idx )
@@ -459,8 +459,8 @@ $ `stdlib/net/stack.nu`
         : i r ( tcb_input . c tcb s frame now o )
         : i emitted ( __flush ts idx o now out )
         ( pktbuf_free o )
-        : i st . . c tcb state
-        ? . . c tcb reset {
+        : i st ( tcb_state . c tcb )
+        ? ( tcb_was_reset . c tcb ) {
             ( __conn_release ts idx )
             ^ ( __trx ( trx_reset ) 0 idx emitted )
         } {}
@@ -545,7 +545,7 @@ $ `stdlib/net/stack.nu`
     ( tcb_close . c tcb now o )
     ( __flush ts idx o now out )
     ( pktbuf_free o )
-    ? == . . c tcb state ( tcp_closed ) { ( __conn_release ts idx ) } {}
+    ? == ( tcb_state . c tcb ) ( tcp_closed ) { ( __conn_release ts idx ) } {}
 }
 
 @ tstack_abort * TcpStack ts i idx i now PktBuf out → v {
@@ -577,7 +577,7 @@ $ `stdlib/net/stack.nu`
             : i fired ( tcb_tick . c tcb now o )
             = emitted + emitted ( __flush ts k o now out )
             ( pktbuf_free o )
-            ? == . . c tcb state ( tcp_closed ) { ( __conn_release ts k ) } {}
+            ? == ( tcb_state . c tcb ) ( tcp_closed ) { ( __conn_release ts k ) } {}
         } {}
         = k + k 1
     }

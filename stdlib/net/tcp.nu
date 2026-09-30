@@ -28,6 +28,11 @@
 // minute of wall time — which is the only reason these paths get
 // tested at all.
 //
+// MEMORY. A `Tcb` (from `tcb_new`) is a handle (rcbox): every copy is
+// the same connection, and its last owner releases it, buffers and
+// all. `tcb_free` is an early release (optional). Its state is read
+// through accessors (`tcb_state`, `tcb_snd_nxt`, `tcb_fin_rcvd`, …).
+//
 // ── IN SCOPE (v1) ───────────────────────────────────────────────
 //   * Full RFC 793 state machine including TIME_WAIT (2MSL).
 //   * Retransmission with Jacobson/Karn RTO estimation and
@@ -70,6 +75,7 @@ $ `stdlib/net/inet.nu`
 $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/pktbuf.nu`
 $ `stdlib/net/tcpseg.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── states (RFC 793 §3.2) ───────────────────────────────────────
 
@@ -125,7 +131,7 @@ $ `stdlib/net/tcpseg.nu`
 // The frame path one layer down has the same problem for the same
 // reason, and uses the same type.
 
-: Tcb {
+: TcbImpl {
     i state
     i local_ip
     i local_port
@@ -165,8 +171,22 @@ $ `stdlib/net/tcpseg.nu`
     b close_requested
 }
 
-@ tcb_new → *Tcb {
-    : *Tcb c # *Tcb ( nurl_alloc Z Tcb )
+// A Tcb is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Tcb { s ctl }
+
+@ Tcb_share Tcb h → Tcb { ^ @ Tcb { # s ( rcbox_share # i . h ctl ) } }
+
+@ Tcb_drop sink Tcb h → v {
+    ( mem_forget h )
+    ( rcbox_release [TcbImpl] # i . h ctl )
+}
+
+@ __Tcb_ptr Tcb h → *TcbImpl { ^ ( rcbox_ptr [TcbImpl] # i . h ctl ) }
+
+@ tcb_new → Tcb {
+    : i c__box ( rcbox_zero [TcbImpl] )
+    : *TcbImpl c ( rcbox_ptr [TcbImpl] c__box )
     = . c state ( tcp_closed )
     = . c local_ip 0
     = . c local_port 0
@@ -201,49 +221,165 @@ $ `stdlib/net/tcpseg.nu`
     = . c fin_rcvd F
     = . c reset F
     = . c close_requested F
-    ^ c
+    ^ @ Tcb { # s c__box }
 }
 
-@ tcb_free sink * Tcb c → v {
-    ( vec_free [u] . c sndbuf )
-    ( vec_free [u] . c rcvbuf )
-    ( free c )
-}
+// Let go of `c` now rather than at the end of its owner's scope.
+@ tcb_free sink Tcb c → v {}
 
 // ── helpers ─────────────────────────────────────────────────────
 
 // Bytes queued but not yet sent.
-@ __unsent * Tcb c → i {
+@ __unsent * TcbImpl c → i {
     : i inflight ( seq_diff . c snd_nxt . c snd_una )
     : i total ( vec_len [u] . c sndbuf )
     ^ ? > - total inflight 0 - total inflight 0
 }
 
-@ tcb_send_queue_len * Tcb c → i { ^ ( vec_len [u] . c sndbuf ) }
+@ tcb_send_queue_len Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ ( vec_len [u] . c sndbuf )
+}
 
-@ tcb_recv_queue_len * Tcb c → i { ^ ( vec_len [u] . c rcvbuf ) }
+@ tcb_recv_queue_len Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ ( vec_len [u] . c rcvbuf )
+}
 
-@ tcb_is_established * Tcb c → b { ^ == . c state ( tcp_established ) }
+@ tcb_is_established Tcb c__h → b {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ == . c state ( tcp_established )
+}
 
 // A connection is "done" when it can be reaped by the owner.
-@ tcb_is_closed * Tcb c → b {
+@ tcb_is_closed Tcb c__h → b {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     ^ || == . c state ( tcp_closed ) . c reset
 }
 
-@ __emit * Tcb c PktBuf out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
+// ── what a connection's owner may look at ───────────────────────
+// Read-only views of the state machine, for the table above it (net/
+// tcpstack.nu), the socket layer, and tests. Sequence numbers are the
+// raw 32-bit values; deadlines are absolute ms, 0 when disarmed.
+@ tcb_state Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c state
+}
+
+@ tcb_snd_nxt Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c snd_nxt
+}
+
+@ tcb_rcv_nxt Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c rcv_nxt
+}
+
+@ tcb_snd_wnd Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c snd_wnd
+}
+
+@ tcb_rcv_wnd Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c rcv_wnd
+}
+
+@ tcb_mss Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c mss
+}
+
+@ tcb_srtt Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c srtt
+}
+
+@ tcb_rto_ms Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c rto_ms
+}
+
+@ tcb_rtt_seq Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c rtt_seq
+}
+
+@ tcb_rtx_count Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c rtx_count
+}
+
+@ tcb_rtx_deadline Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c rtx_deadline
+}
+
+@ tcb_probe_deadline Tcb c__h → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c probe_deadline
+}
+
+@ tcb_fin_sent Tcb c__h → b {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c fin_sent
+}
+
+@ tcb_fin_rcvd Tcb c__h → b {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c fin_rcvd
+}
+
+@ tcb_was_reset Tcb c__h → b {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    ^ . c reset
+}
+
+// A listening Tcb answers a SYN from the address and with the ISS its
+// owner gives it here (tcb_connect takes both as arguments; a passive
+// open has nowhere else to learn them — a TcpSeg carries no addresses).
+@ tcb_set_iss Tcb c__h i x → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    = . c iss x
+}
+
+@ tcb_set_remote_ip Tcb c__h i x → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    = . c remote_ip x
+}
+
+@ tcb_set_remote_port Tcb c__h i x → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    = . c remote_port x
+}
+
+// Force the peer's window or the persist deadline — how a scripted test
+// reaches the zero-window paths without a peer that misbehaves on cue.
+@ tcb_set_snd_wnd Tcb c__h i x → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    = . c snd_wnd x
+}
+
+@ tcb_set_probe_deadline Tcb c__h i x → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
+    = . c probe_deadline x
+}
+
+@ __emit * TcbImpl c PktBuf out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
     ( tcpseg_push ( pktbuf_bytes out ) . c local_ip . c remote_ip . c local_port . c remote_port
     seq ack flags . c rcv_wnd . c mss . c snd_wscale payload pay_off pay_len )
     ( pktbuf_mark out )
 }
 
-@ __emit_empty * Tcb c PktBuf out i flags i seq i ack → v {
+@ __emit_empty * TcbImpl c PktBuf out i flags i seq i ack → v {
     : ( Vec u ) none ( vec_new [u] )
     ( __emit c out flags seq ack none 0 0 )
 }
 
 // Jacobson/Karn RTO update. Karn's rule — never sample a retransmitted
 // segment — is enforced by the caller clearing rtt_seq on retransmit.
-@ __rtt_update * Tcb c i sample → v {
+@ __rtt_update * TcbImpl c i sample → v {
     ? <= sample 0 { ^ } {}
     ? == . c srtt 0 {
         = . c srtt sample
@@ -258,13 +394,14 @@ $ `stdlib/net/tcpseg.nu`
     = . c rto_ms ? < rto ( tcp_rto_min_ms ) ( tcp_rto_min_ms ) ? > rto ( tcp_rto_max_ms ) ( tcp_rto_max_ms ) rto
 }
 
-@ __arm_rtx * Tcb c i now → v {
+@ __arm_rtx * TcbImpl c i now → v {
     = . c rtx_deadline + now . c rto_ms
 }
 
 // ── open ────────────────────────────────────────────────────────
 
-@ tcb_listen * Tcb c i local_ip i local_port → v {
+@ tcb_listen Tcb c__h i local_ip i local_port → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     = . c local_ip local_ip
     = . c local_port local_port
     = . c state ( tcp_listen_st )
@@ -273,7 +410,8 @@ $ `stdlib/net/tcpseg.nu`
 // Active open. `iss` is the initial send sequence — the caller
 // supplies it because a good ISS needs entropy this layer must not
 // invent (RFC 6528); a predictable ISS is a connection-hijack vector.
-@ tcb_connect * Tcb c i local_ip i local_port i remote_ip i remote_port i iss i now PktBuf out → v {
+@ tcb_connect Tcb c__h i local_ip i local_port i remote_ip i remote_port i iss i now PktBuf out → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     = . c local_ip local_ip
     = . c local_port local_port
     = . c remote_ip remote_ip
@@ -294,7 +432,8 @@ $ `stdlib/net/tcpseg.nu`
 // Queue bytes for transmission. Returns how many were accepted — the
 // send buffer is bounded, and reporting a short write is how
 // back-pressure reaches the application instead of the heap.
-@ tcb_write * Tcb c ( Vec u ) data i off i len i max_queue → i {
+@ tcb_write Tcb c__h ( Vec u ) data i off i len i max_queue → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     ? || . c reset ! || == . c state ( tcp_established ) == . c state ( tcp_close_wait ) { ^ 0 } {}
     : i have ( vec_len [u] . c sndbuf )
     : i room ? > - max_queue have 0 - max_queue have 0
@@ -308,7 +447,8 @@ $ `stdlib/net/tcpseg.nu`
 }
 
 // Drain up to `n` received bytes into `dst`. Returns how many moved.
-@ tcb_read * Tcb c ( Vec u ) dst i n → i {
+@ tcb_read Tcb c__h ( Vec u ) dst i n → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     : i have ( vec_len [u] . c rcvbuf )
     : i take ? < n have n have
     : ~ i k 0
@@ -333,7 +473,11 @@ $ `stdlib/net/tcpseg.nu`
 
 // Emit whatever may legally be sent right now: new data within the
 // peer's window, and a FIN once the queue has drained.
-@ tcb_pump * Tcb c i now PktBuf out → i {
+@ tcb_pump Tcb c__h i now PktBuf out → i { ^ ( __tcb_pump ( __Tcb_ptr c__h ) now out ) }
+
+// tcb_pump's body, for the paths that already hold the state open
+// (tcb_input, tcb_close): one open per public call.
+@ __tcb_pump * TcbImpl c i now PktBuf out → i {
     ? . c reset { ^ 0 } {}
     : i before ( vec_len [u] ( pktbuf_bytes out ) )
     : ~ b sent_any F
@@ -377,15 +521,17 @@ $ `stdlib/net/tcpseg.nu`
 
 // Ask for a graceful close. The FIN itself leaves via tcb_pump once
 // the send queue drains — a close must never truncate queued data.
-@ tcb_close * Tcb c i now PktBuf out → v {
+@ tcb_close Tcb c__h i now PktBuf out → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     = . c close_requested T
     ? == . c state ( tcp_listen_st ) { = . c state ( tcp_closed ) ^ } {}
     ? == . c state ( tcp_syn_sent ) { = . c state ( tcp_closed ) ^ } {}
-    : i _n ( tcb_pump c now out )
+    : i _n ( __tcb_pump c now out )
 }
 
 // Abort: send RST and drop the connection.
-@ tcb_abort * Tcb c PktBuf out → v {
+@ tcb_abort Tcb c__h PktBuf out → v {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     ? || == . c state ( tcp_closed ) == . c state ( tcp_listen_st ) {
         = . c state ( tcp_closed )
         ^
@@ -408,7 +554,8 @@ $ `stdlib/net/tcpseg.nu`
 // sleep? Without this it can only poll, which on a guest with one vCPU
 // is the difference between idling and burning it. Deadlines already
 // past answer 0 — there is work now.
-@ tcb_next_timeout * Tcb c i now → i {
+@ tcb_next_timeout Tcb c__h i now → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     : ~ i best -1
     : ~ i k 0
     ~ < k 3 {
@@ -422,7 +569,8 @@ $ `stdlib/net/tcpseg.nu`
     ^ best
 }
 
-@ tcb_tick * Tcb c i now PktBuf out → i {
+@ tcb_tick Tcb c__h i now PktBuf out → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     : i before ( vec_len [u] ( pktbuf_bytes out ) )
     // TIME_WAIT expiry
     ? && == . c state ( tcp_time_wait ) && != . c tw_deadline 0 >= now . c tw_deadline {
@@ -484,7 +632,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // ── receive path ────────────────────────────────────────────────
 
-@ __accept_data * Tcb c TcpSeg s ( Vec u ) buf → i {
+@ __accept_data * TcbImpl c TcpSeg s ( Vec u ) buf → i {
     : i n . s payload_len
     ? <= n 0 { ^ 0 } {}
     : ~ i k 0
@@ -498,7 +646,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Process an ACK: advance snd_una, release acknowledged bytes, update
 // RTT/RTO, and count duplicates for fast retransmit.
-@ __process_ack * Tcb c TcpSeg s i now → v {
+@ __process_ack * TcbImpl c TcpSeg s i now → v {
     : i ack . s ack
     ? ( seq_gt ack . c snd_nxt ) { ^ } {}
     ? ( seq_lt ack . c snd_una ) { ^ } {}
@@ -541,7 +689,7 @@ $ `stdlib/net/tcpseg.nu`
     } { ( __arm_rtx c now ) }
 }
 
-@ __update_window * Tcb c TcpSeg s → v {
+@ __update_window * TcbImpl c TcpSeg s → v {
     : i w << . s window . c rcv_wscale
     // RFC 793: only accept a window update from a segment that is not
     // older than the last one used, or the window can go backwards on
@@ -561,7 +709,8 @@ $ `stdlib/net/tcpseg.nu`
 
 // Feed one parsed segment. `buf` is the buffer it was parsed from.
 // Returns bytes emitted into `out`.
-@ tcb_input * Tcb c TcpSeg s ( Vec u ) buf i now PktBuf out → i {
+@ tcb_input Tcb c__h TcpSeg s ( Vec u ) buf i now PktBuf out → i {
+    : *TcbImpl c ( __Tcb_ptr c__h )
     ? ! . s valid { ^ 0 } {}
     : i before ( vec_len [u] ( pktbuf_bytes out ) )
     : b has_rst == & . s flags 4 4
@@ -753,6 +902,6 @@ $ `stdlib/net/tcpseg.nu`
         } {}
     } {}
 
-    : i _p ( tcb_pump c now out )
+    : i _p ( __tcb_pump c now out )
     ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
 }

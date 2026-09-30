@@ -25,7 +25,7 @@ $ `stdlib/net/tcp.nu`
 
 // Deliver segment `idx` of `from` into connection `to`. Returns how
 // many bytes `to` emitted in response.
-@ hand PktBuf from i idx * Tcb to PktBuf reply i now i src_ip i dst_ip → i {
+@ hand PktBuf from i idx Tcb to PktBuf reply i now i src_ip i dst_ip → i {
     : i start ( pktbuf_start from idx )
     : i len ( pktbuf_len from idx )
     : TcpSeg sg ( tcpseg_parse ( pktbuf_bytes from ) start len src_ip dst_ip )
@@ -34,7 +34,7 @@ $ `stdlib/net/tcp.nu`
 }
 
 // Deliver every segment in `from` to `to`, then clear `from`.
-@ hand_all PktBuf from * Tcb to PktBuf reply i now i src_ip i dst_ip → i {
+@ hand_all PktBuf from Tcb to PktBuf reply i now i src_ip i dst_ip → i {
     : i n ( pktbuf_count from )
     : ~ i k 0
     : ~ i bad 0
@@ -98,21 +98,21 @@ $ `stdlib/net/tcp.nu`
     ( pb `absent wscale is -1, not 0: ` == . ps wscale -1 )
 
     // ── three-way handshake ──────────────────────────────────────
-    : *Tcb cl ( tcb_new )
-    : *Tcb sv ( tcb_new )
+    : Tcb cl ( tcb_new )
+    : Tcb sv ( tcb_new )
     : PktBuf oc ( pktbuf_new )
     : PktBuf os ( pktbuf_new )
     ( tcb_listen sv ( ip_s ) 80 )
-    = . sv iss 700000
-    = . sv remote_ip ( ip_c )
+    ( tcb_set_iss sv 700000 )
+    ( tcb_set_remote_ip sv ( ip_c ) )
     ( tcb_connect cl ( ip_c ) 12345 ( ip_s ) 80 100000 0 oc )
     ( pb `client sends one SYN: ` == ( pktbuf_count oc ) 1 )
-    ( pb `client is SYN_SENT: ` == . cl state ( tcp_syn_sent ) )
+    ( pb `client is SYN_SENT: ` == ( tcb_state cl ) ( tcp_syn_sent ) )
 
     : i _h1 ( hand_all oc sv os 1 ( ip_c ) ( ip_s ) )
-    ( pb `server is SYN_RCVD: ` == . sv state ( tcp_syn_rcvd ) )
+    ( pb `server is SYN_RCVD: ` == ( tcb_state sv ) ( tcp_syn_rcvd ) )
     ( pb `server sends SYN-ACK: ` == ( pktbuf_count os ) 1 )
-    ( pb `server learned client MSS: ` == . sv mss 1460 )
+    ( pb `server learned client MSS: ` == ( tcb_mss sv ) 1460 )
 
     : i _h2 ( hand_all os cl oc 2 ( ip_s ) ( ip_c ) )
     ( pb `client is ESTABLISHED: ` ( tcb_is_established cl ) )
@@ -120,7 +120,7 @@ $ `stdlib/net/tcp.nu`
 
     : i _h3 ( hand_all oc sv os 3 ( ip_c ) ( ip_s ) )
     ( pb `server is ESTABLISHED: ` ( tcb_is_established sv ) )
-    ( pb `handshake produced an RTT sample: ` > . cl srtt 0 )
+    ( pb `handshake produced an RTT sample: ` > ( tcb_srtt cl ) 0 )
 
     // ── data transfer ────────────────────────────────────────────
     : ( Vec u ) msg ( vec_new [u] )
@@ -145,64 +145,64 @@ $ `stdlib/net/tcp.nu`
     // The server's ACK releases the client's send buffer.
     : i _a1 ( hand_all os cl oc 12 ( ip_s ) ( ip_c ) )
     ( pb `client send queue drained by ACK: ` == ( tcb_send_queue_len cl ) 0 )
-    ( pb `retransmit timer disarmed: ` == . cl rtx_deadline 0 )
+    ( pb `retransmit timer disarmed: ` == ( tcb_rtx_deadline cl ) 0 )
 
     // ── retransmission after loss ────────────────────────────────
     ( pb `write 10 more: ` == ( tcb_write cl msg 0 10 65536 ) 10 )
     : i _p2 ( tcb_pump cl 100 oc )
     ( pb `data segment emitted: ` == ( pktbuf_count oc ) 1 )
-    ( pb `rtx timer armed on send: ` > . cl rtx_deadline 0 )
+    ( pb `rtx timer armed on send: ` > ( tcb_rtx_deadline cl ) 0 )
     // DROP it: clear the buffer without delivering.
     ( pktbuf_clear oc )
     // Bind the timing to the connection's own RTO — a hard-coded
     // millisecond here would only be testing the test's guess about
     // Jacobson's estimator, not the retransmit logic.
-    : i deadline . cl rtx_deadline
-    : i rto_before . cl rto_ms
-    : i srtt_before_loss . cl srtt
+    : i deadline ( tcb_rtx_deadline cl )
+    : i rto_before ( tcb_rto_ms cl )
+    : i srtt_before_loss ( tcb_srtt cl )
     ( pb `nothing retransmits before RTO: ` == ( tcb_tick cl - deadline 1 oc ) 0 )
     : i rtx ( tcb_tick cl deadline oc )
     ( pb `RTO fires a retransmit: ` > rtx 0 )
-    ( pb `retransmit count incremented: ` == . cl rtx_count 1 )
-    ( pb `RTO doubled on backoff: ` == . cl rto_ms * rto_before 2 )
+    ( pb `retransmit count incremented: ` == ( tcb_rtx_count cl ) 1 )
+    ( pb `RTO doubled on backoff: ` == ( tcb_rto_ms cl ) * rto_before 2 )
     ( pb `RTO respects the 200ms floor: ` >= rto_before ( tcp_rto_min_ms ) )
     // This time let it through.
     : i _d2 ( hand_all oc sv os deadline ( ip_c ) ( ip_s ) )
     ( pb `server got the retransmitted data: ` == ( tcb_recv_queue_len sv ) 10 )
     : i _a2 ( hand_all os cl oc deadline ( ip_s ) ( ip_c ) )
     ( pb `client queue drained after recovery: ` == ( tcb_send_queue_len cl ) 0 )
-    ( pb `rtx count reset by good ACK: ` == . cl rtx_count 0 )
+    ( pb `rtx count reset by good ACK: ` == ( tcb_rtx_count cl ) 0 )
     : i _dr ( tcb_read sv got 100 )
 
     // Karn's rule: the ACK that finally arrives after a retransmit
     // must NOT feed the RTT estimator — its timing is ambiguous (was
     // it the original or the copy that got through?). Sampling it
     // inflates SRTT without bound on a lossy path.
-    ( pb `retransmit cleared the RTT sample: ` == . cl rtt_seq -1 )
-    ( pb `SRTT unchanged by ambiguous ACK: ` == . cl srtt srtt_before_loss )
+    ( pb `retransmit cleared the RTT sample: ` == ( tcb_rtt_seq cl ) -1 )
+    ( pb `SRTT unchanged by ambiguous ACK: ` == ( tcb_srtt cl ) srtt_before_loss )
 
     // ── zero window → persist probe ──────────────────────────────
     // Force the peer's advertised window to zero, then queue data: it
     // must not be sent, and a probe must eventually go out.
-    = . cl snd_wnd 0
+    ( tcb_set_snd_wnd cl 0 )
     ( pb `write while window is zero: ` == ( tcb_write cl msg 0 8 65536 ) 8 )
     ( pktbuf_clear oc )
     : i _p3 ( tcb_pump cl 3000 oc )
     ( pb `zero window blocks transmission: ` == ( pktbuf_count oc ) 0 )
-    = . cl probe_deadline 3500
+    ( tcb_set_probe_deadline cl 3500 )
     : i probe ( tcb_tick cl 3600 oc )
     ( pb `persist timer emits a probe: ` > probe 0 )
     ( pb `probe is exactly one byte: ` == ( tcpseg_seq_len ( tcpseg_parse ( pktbuf_bytes oc ) ( pktbuf_start oc 0 ) ( pktbuf_len oc 0 ) ( ip_c ) ( ip_s ) ) ) 1 )
-    ( pb `probe interval backs off: ` > . cl probe_deadline 3600 )
+    ( pb `probe interval backs off: ` > ( tcb_probe_deadline cl ) 3600 )
     ( pktbuf_clear oc )
     // Window reopens → the queued data flows.
-    = . cl snd_wnd 65535
+    ( tcb_set_snd_wnd cl 65535 )
     : i _p4 ( tcb_pump cl 4000 oc )
     ( pb `reopened window releases data: ` == ( pktbuf_count oc ) 1 )
 
     // ── out-of-window segment is ACKed, not swallowed ────────────
     : ( Vec u ) oldbuf ( vec_new [u] )
-    ( tcpseg_push oldbuf ( ip_s ) ( ip_c ) 80 12345 ( seq_sub . cl rcv_nxt 5000 ) . cl snd_nxt ( tcp_ack ) 65535 0 0 empty 0 0 )
+    ( tcpseg_push oldbuf ( ip_s ) ( ip_c ) 80 12345 ( seq_sub ( tcb_rcv_nxt cl ) 5000 ) ( tcb_snd_nxt cl ) ( tcp_ack ) 65535 0 0 empty 0 0 )
     : TcpSeg oldseg ( tcpseg_parse oldbuf 0 ( vec_len [u] oldbuf ) ( ip_s ) ( ip_c ) )
     ( pktbuf_clear oc )
     : i oldn ( tcb_input cl oldseg oldbuf 5000 oc )
@@ -213,7 +213,7 @@ $ `stdlib/net/tcp.nu`
     // Distinct code path from the SYN_SENT reset above: this one goes
     // through the synchronised-state handler.
     : ( Vec u ) rst2 ( vec_new [u] )
-    ( tcpseg_push rst2 ( ip_s ) ( ip_c ) 80 12345 . cl rcv_nxt . cl snd_nxt | ( tcp_rst ) ( tcp_ack ) 0 0 0 empty 0 0 )
+    ( tcpseg_push rst2 ( ip_s ) ( ip_c ) 80 12345 ( tcb_rcv_nxt cl ) ( tcb_snd_nxt cl ) | ( tcp_rst ) ( tcp_ack ) 0 0 0 empty 0 0 )
     : TcpSeg rseg2 ( tcpseg_parse rst2 0 ( vec_len [u] rst2 ) ( ip_s ) ( ip_c ) )
     ( pb `established connection is up before RST: ` ( tcb_is_established cl ) )
     ( pktbuf_clear oc )
@@ -243,42 +243,42 @@ $ `stdlib/net/tcp.nu`
     // ── stale window update must not shrink the window ───────────
     // A reordered ACK carrying an old, smaller window would otherwise
     // stall the sender permanently (RFC 793 SND.WL1/WL2 rule).
-    : *Tcb w ( tcb_new )
+    : Tcb w ( tcb_new )
     : PktBuf ow ( pktbuf_new )
-    : *Tcb wp ( tcb_new )
+    : Tcb wp ( tcb_new )
     : PktBuf owp ( pktbuf_new )
     ( tcb_listen wp ( ip_s ) 80 )
-    = . wp iss 950000
-    = . wp remote_ip ( ip_c )
+    ( tcb_set_iss wp 950000 )
+    ( tcb_set_remote_ip wp ( ip_c ) )
     ( tcb_connect w ( ip_c ) 8888 ( ip_s ) 80 250000 0 ow )
     : i _w1 ( hand_all ow wp owp 1 ( ip_c ) ( ip_s ) )
     : i _w2 ( hand_all owp w ow 2 ( ip_s ) ( ip_c ) )
     : i _w3 ( hand_all ow wp owp 3 ( ip_c ) ( ip_s ) )
     // Fresh window update: large.
     : ( Vec u ) big ( vec_new [u] )
-    ( tcpseg_push big ( ip_s ) ( ip_c ) 80 8888 . w rcv_nxt . w snd_nxt ( tcp_ack ) 60000 0 0 empty 0 0 )
+    ( tcpseg_push big ( ip_s ) ( ip_c ) 80 8888 ( tcb_rcv_nxt w ) ( tcb_snd_nxt w ) ( tcp_ack ) 60000 0 0 empty 0 0 )
     : i _wb ( tcb_input w ( tcpseg_parse big 0 ( vec_len [u] big ) ( ip_s ) ( ip_c ) ) big 10 ow )
-    ( pb `window update applied: ` == . w snd_wnd 60000 )
+    ( pb `window update applied: ` == ( tcb_snd_wnd w ) 60000 )
     // Now a STALE segment (older seq, older ack) advertising a tiny
     // window arrives late. It must be ignored for window purposes.
     : ( Vec u ) stale ( vec_new [u] )
     // NOTE: seq must equal rcv_nxt so the segment is *acceptable* —
     // otherwise it is rejected before the window rule is ever reached
     // and this would test nothing. What makes it stale is the older ACK.
-    ( tcpseg_push stale ( ip_s ) ( ip_c ) 80 8888 . w rcv_nxt ( seq_sub . w snd_nxt 1 ) ( tcp_ack ) 1 0 0 empty 0 0 )
+    ( tcpseg_push stale ( ip_s ) ( ip_c ) 80 8888 ( tcb_rcv_nxt w ) ( seq_sub ( tcb_snd_nxt w ) 1 ) ( tcp_ack ) 1 0 0 empty 0 0 )
     : i _ws ( tcb_input w ( tcpseg_parse stale 0 ( vec_len [u] stale ) ( ip_s ) ( ip_c ) ) stale 11 ow )
-    ( pb `stale ACK does not shrink the window: ` == . w snd_wnd 60000 )
+    ( pb `stale ACK does not shrink the window: ` == ( tcb_snd_wnd w ) 60000 )
     ( tcb_free w ) ( tcb_free wp ) ( pktbuf_free ow ) ( pktbuf_free owp )
     ( vec_free [u] big ) ( vec_free [u] stale )
 
     // ── graceful close: FIN → TIME_WAIT → CLOSED ────────────────
-    : *Tcb a ( tcb_new )
-    : *Tcb b ( tcb_new )
+    : Tcb a ( tcb_new )
+    : Tcb b ( tcb_new )
     : PktBuf oa ( pktbuf_new )
     : PktBuf ob ( pktbuf_new )
     ( tcb_listen b ( ip_s ) 80 )
-    = . b iss 900000
-    = . b remote_ip ( ip_c )
+    ( tcb_set_iss b 900000 )
+    ( tcb_set_remote_ip b ( ip_c ) )
     ( tcb_connect a ( ip_c ) 5555 ( ip_s ) 80 200000 0 oa )
     : i _c1 ( hand_all oa b ob 1 ( ip_c ) ( ip_s ) )
     : i _c2 ( hand_all ob a oa 2 ( ip_s ) ( ip_c ) )
@@ -288,28 +288,28 @@ $ `stdlib/net/tcp.nu`
     ( pktbuf_clear oa ) ( pktbuf_clear ob )
     ( tcb_close a 100 oa )
     ( pb `active close sends FIN: ` == ( pktbuf_count oa ) 1 )
-    ( pb `closer is FIN_WAIT_1: ` == . a state ( tcp_fin_wait_1 ) )
+    ( pb `closer is FIN_WAIT_1: ` == ( tcb_state a ) ( tcp_fin_wait_1 ) )
     : i _f1 ( hand_all oa b ob 100 ( ip_c ) ( ip_s ) )
-    ( pb `peer is CLOSE_WAIT: ` == . b state ( tcp_close_wait ) )
-    ( pb `peer saw the FIN: ` . b fin_rcvd )
+    ( pb `peer is CLOSE_WAIT: ` == ( tcb_state b ) ( tcp_close_wait ) )
+    ( pb `peer saw the FIN: ` ( tcb_fin_rcvd b ) )
     : i _f2 ( hand_all ob a oa 100 ( ip_s ) ( ip_c ) )
-    ( pb `closer is FIN_WAIT_2: ` == . a state ( tcp_fin_wait_2 ) )
+    ( pb `closer is FIN_WAIT_2: ` == ( tcb_state a ) ( tcp_fin_wait_2 ) )
     ( pktbuf_clear ob )
     ( tcb_close b 200 ob )
     ( pb `peer sends its FIN: ` == ( pktbuf_count ob ) 1 )
-    ( pb `peer is LAST_ACK: ` == . b state ( tcp_last_ack ) )
+    ( pb `peer is LAST_ACK: ` == ( tcb_state b ) ( tcp_last_ack ) )
     : i _f3 ( hand_all ob a oa 200 ( ip_s ) ( ip_c ) )
-    ( pb `closer is TIME_WAIT: ` == . a state ( tcp_time_wait ) )
+    ( pb `closer is TIME_WAIT: ` == ( tcb_state a ) ( tcp_time_wait ) )
     : i _f4 ( hand_all oa b ob 200 ( ip_c ) ( ip_s ) )
-    ( pb `peer is CLOSED: ` == . b state ( tcp_closed ) )
+    ( pb `peer is CLOSED: ` == ( tcb_state b ) ( tcp_closed ) )
     // TIME_WAIT must persist for 2MSL, then reap itself.
     : i _t1 ( tcb_tick a 210 oa )
-    ( pb `TIME_WAIT holds before 2MSL: ` == . a state ( tcp_time_wait ) )
+    ( pb `TIME_WAIT holds before 2MSL: ` == ( tcb_state a ) ( tcp_time_wait ) )
     : i _t2 ( tcb_tick a 40000 oa )
-    ( pb `TIME_WAIT expires after 2MSL: ` == . a state ( tcp_closed ) )
+    ( pb `TIME_WAIT expires after 2MSL: ` == ( tcb_state a ) ( tcp_closed ) )
 
     // ── RST tears the connection down ────────────────────────────
-    : *Tcb r ( tcb_new )
+    : Tcb r ( tcb_new )
     : PktBuf orr ( pktbuf_new )
     ( tcb_connect r ( ip_c ) 6666 ( ip_s ) 80 300000 0 orr )
     : ( Vec u ) rstbuf ( vec_new [u] )
@@ -319,7 +319,7 @@ $ `stdlib/net/tcp.nu`
     ( pb `RST to SYN_SENT closes it: ` ( tcb_is_closed r ) )
 
     // ── give-up: endless retransmits eventually reset ────────────
-    : *Tcb g ( tcb_new )
+    : Tcb g ( tcb_new )
     : PktBuf og ( pktbuf_new )
     ( tcb_connect g ( ip_c ) 7777 ( ip_s ) 80 400000 0 og )
     : ~ i t 1000
@@ -330,7 +330,7 @@ $ `stdlib/net/tcp.nu`
         = guard + guard 1
     }
     ( pb `unanswered SYN gives up eventually: ` ( tcb_is_closed g ) )
-    ( pb `gave up within max retries: ` <= . g rtx_count + ( tcp_max_rtx ) 1 )
+    ( pb `gave up within max retries: ` <= ( tcb_rtx_count g ) + ( tcp_max_rtx ) 1 )
 
     ( tcb_free cl ) ( tcb_free sv ) ( tcb_free a ) ( tcb_free b )
     ( tcb_free r ) ( tcb_free g )

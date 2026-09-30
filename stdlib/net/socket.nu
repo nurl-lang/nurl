@@ -895,8 +895,8 @@ $ `stdlib/net/tcpstack.nu`
     // Nothing buffered. If the peer has sent its FIN, this is the end
     // of the stream rather than a stall — the whole reason the state
     // machine keeps `fin_rcvd` around after it has ACKed it.
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? && != # i c 0 . c fin_rcvd {
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? && != 0 # i . c ctl ( tcb_fin_rcvd c ) {
         = . s eof T
         = . s err 0
         ^ 0
@@ -928,8 +928,8 @@ $ `stdlib/net/tcpstack.nu`
     } {}
     // Our own FIN is out: the send side is closed and more data would
     // arrive after the end of the stream.
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? && != # i c 0 . c fin_sent {
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? && != 0 # i . c ctl ( tcb_fin_sent c ) {
         = . s err ( sock_err_write )
         ^ - 0 ( sock_err_write )
     } {}
@@ -954,8 +954,8 @@ $ `stdlib/net/tcpstack.nu`
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ? ! ( __live st s ) { ^ 0 } {}
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? == # i c 0 { ^ 0 } {}
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == 0 # i . c ctl { ^ 0 } {}
     ^ ( tcb_send_queue_len c )
 }
 
@@ -975,9 +975,9 @@ $ `stdlib/net/tcpstack.nu`
     } {}
     ? == . s kind ( sock_kind_udp ) { ^ > ( sock_udp_pending st fd ) 0 } {}
     ? ! ( __live st s ) { ^ T } {}
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? == # i c 0 { ^ T } {}
-    ^ || > ( tcb_recv_queue_len c ) 0 . c fin_rcvd
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == 0 # i . c ctl { ^ T } {}
+    ^ || > ( tcb_recv_queue_len c ) 0 ( tcb_fin_rcvd c )
 }
 
 @ sock_writable * SockTab st i fd → b {
@@ -991,9 +991,9 @@ $ `stdlib/net/tcpstack.nu`
     ? ! ( __live st s ) { ^ T } {}
     : i state ( tstack_conn_state . st ts . s idx )
     ? || == state ( tcp_syn_sent ) == state ( tcp_syn_rcvd ) { ^ F } {}
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? == # i c 0 { ^ T } {}
-    ? . c fin_sent { ^ T } {}
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == 0 # i . c ctl { ^ T } {}
+    ? ( tcb_fin_sent c ) { ^ T } {}
     ^ < ( tcb_send_queue_len c ) ( sock_send_buf_max )
 }
 
