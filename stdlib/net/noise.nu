@@ -77,7 +77,6 @@ $ `stdlib/ext/crypto.nu`
 @ __noise_hkdf ( Vec u ) ck ( Vec u ) ikm i num → ( Vec u ) {
     : ( Vec u ) info ( vec_new [u] )
     : ( Vec u ) out ?? ( hkdf_sha256 ikm ck info * num 32 ) { T x → x F _ → ( vec_new [u] ) }
-    ( vec_free [u] info )
     ^ out
 }
 
@@ -372,7 +371,6 @@ $ `stdlib/ext/crypto.nu`
     ( vec_free [u] empty )
     : ( Vec u ) k1 ( __slice out 0 32 )
     : ( Vec u ) k2 ( __slice out 32 32 )
-    ( vec_free [u] out )
     // Initiator sends with k1/recvs with k2; responder is symmetric.
     ^ ? == . h initiator 1
     @ NoiseKeys { k1 k2 }

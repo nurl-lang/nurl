@@ -72,7 +72,6 @@ $ `stdlib/core/errors.nu`
         : i hi ( __hex_value ( nurl_str_at str len i ) )
         : i lo ( __hex_value ( nurl_str_at str len + i 1 ) )
         ? | < hi 0 < lo 0 {
-            ( string_free out )
             ^ @ !String ParseErr { F @ ParseErr { BadFormat } }
         } {}
         ( string_push_char out + lo * hi 16 )
@@ -321,7 +320,6 @@ $ `stdlib/core/errors.nu`
     ?? r {
         T _ → { ^ @ !String ParseErr { T out } }
         F e → {
-            ( string_free out )
             ^ @ !String ParseErr { F e }
         }
     }
@@ -333,7 +331,6 @@ $ `stdlib/core/errors.nu`
     ?? r {
         T _ → { ^ @ !String ParseErr { T out } }
         F e → {
-            ( string_free out )
             ^ @ !String ParseErr { F e }
         }
     }
@@ -474,7 +471,6 @@ $ `stdlib/core/errors.nu`
     ?? r {
         T _ → { ^ @ !String ParseErr { T out } }
         F e → {
-            ( string_free out )
             ^ @ !String ParseErr { F e }
         }
     }

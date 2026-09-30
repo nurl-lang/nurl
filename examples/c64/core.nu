@@ -1610,7 +1610,6 @@ $ `stdlib/core/string.nu`
         ( nurl_print ( string_data row ) ) ( nurl_print `\n` )
         = r + r 1
     }
-    ( string_free row )
 }
 
 // Native helper: summarise the SID audio ring (non-zero + peak sample).

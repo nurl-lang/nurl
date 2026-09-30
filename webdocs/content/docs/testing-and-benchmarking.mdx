@@ -47,10 +47,8 @@ $ `stdlib/std/bench.nu`
     : BenchResult r ( bench_auto `vec_push` \ → v {
         : ( Vec i ) v ( vec_new [i] )
         ( vec_push [i] v 1 )
-        ( vec_free [i] v )
     } )
     ( bench_report r )
-    ( bench_result_free r )
     ^ 0
 }
 ```

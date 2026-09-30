@@ -213,7 +213,7 @@ $ `stdlib/std/hash_sha256.nu`
     : ~ i c 0
     ~ < c hlen { ? != ( __rsa_bget hprime c ) ( __rsa_bget h c ) { = ok F } {} = c + c 1 }
     ( vec_free [u] em ) ( vec_free [u] maskeddb ) ( vec_free [u] h ) ( vec_free [u] dbmask )
-    ( vec_free [u] db ) ( vec_free [u] salt ) ( vec_free [u] mprime ) ( vec_free [u] hprime )
+    ( vec_free [u] salt ) ( vec_free [u] hprime )
     ^ ok
 }
 
@@ -292,7 +292,7 @@ $ `stdlib/std/hash_sha256.nu`
     : ( Vec u ) sig ( bigint_to_bytes_be bsig k )
     ( bigint_free bm ) ( bigint_free bd ) ( bigint_free be ) ( bigint_free bn )
     ( bigint_free r ) ( bigint_free rinv ) ( bigint_free bsig )
-    ( vec_free [u] mprime ) ( vec_free [u] h ) ( vec_free [u] db )
-    ( vec_free [u] dbmask ) ( vec_free [u] em )
+    ( vec_free [u] h )
+    ( vec_free [u] dbmask )
     ^ sig
 }

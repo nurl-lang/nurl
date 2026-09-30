@@ -226,7 +226,6 @@ $ `stdlib/core/vec.nu`
     : String text ( __yaml_substr raw ind clen )
     : s traw ( string_data text )
     ? | == 1 ( nurl_str_eq traw `---` ) == 1 ( nurl_str_eq traw `...` ) {
-        ( string_free text )
         ^ 0
     } {}
     ( vec_push [YamlLine] out @ YamlLine { ind text } )
@@ -402,7 +401,6 @@ $ `stdlib/core/vec.nu`
     : String tr ( __yaml_rtrim raw )
     ( string_free raw )
     : Json j ( __yaml_resolve_plain ( string_data tr ) )
-    ( string_free tr )
     ^ @ __YFlow { j e T }
 }
 
@@ -614,7 +612,6 @@ $ `stdlib/core/vec.nu`
                     ? < rstart tn {
                         : String rests ( __yaml_substr text rstart - tn rstart )
                         = val ( __yaml_scalar_to_json p ( string_data rests ) )
-                        ( string_free rests )
                     } {
                         : i nind ( __yp_indent_at p . p cur )
                         : s ntext ( __yp_text_at p . p cur )

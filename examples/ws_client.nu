@@ -22,7 +22,6 @@ $ `stdlib/ext/websocket.nu`
     : i n ( vec_len [u] payload )
     : String s ( string_from_bytes p n )
     ( nurl_print tag ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
-    ( string_free s )
 }
 
 @ run s url → i {

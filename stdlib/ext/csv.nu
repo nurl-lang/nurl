@@ -1114,7 +1114,6 @@ $ `stdlib/std/hashmap.nu`
         } )
 
         ( __csv_permute_rows t order )
-        ( vec_free [i] keys )
         ( vec_free [i] order )
     } {}
 }
@@ -1160,7 +1159,6 @@ $ `stdlib/std/hashmap.nu`
         } )
 
         ( __csv_permute_rows t order )
-        ( vec_free [f] keys )
         ( vec_free [i] order )
     } {}
 }
@@ -1223,8 +1221,6 @@ $ `stdlib/std/hashmap.nu`
         } )
 
         ( __csv_permute_rows t order )
-        ( vec_free [i] k_off )
-        ( vec_free [i] k_len )
         ( vec_free [i] order )
     } {}
 }
@@ -1649,7 +1645,6 @@ $ `stdlib/std/hashmap.nu`
         = ri + ri 1
     }
 
-    ( vec_free [i] idx )
     ^ ( csv_table_from_string buf )
 }
 

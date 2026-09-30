@@ -1025,7 +1025,6 @@ b read_only b destructive b idempotent b open_world
         F _ → {}
     }
     ? == 0 ( nurl_str_len tool_name ) {
-        ( json_free args )
         ^ ( mcp_tool_result_error `missing tool name` )
     } {}
     : ~ i idx ( __mcp_find_tool_index r tool_name )
@@ -1040,7 +1039,6 @@ b read_only b destructive b idempotent b open_world
         : String msg ( string_from `unknown tool: ` )
         ( string_push_str msg tool_name )
         : Json out ( mcp_tool_result_error ( string_data msg ) )
-        ( string_free msg )
         ^ out
     } {}
     : *McpTool tp ( vec_data [McpTool] . r __tools )
@@ -1073,8 +1071,6 @@ b read_only b destructive b idempotent b open_world
         : ?Json e0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
         ?? e0 { T jv → { ( json_free result ) = result jv } F → {} }
     } {}
-    ( vec_free [Json] sink )
-    ( json_free args )
     ^ result
 }
 
@@ -1188,7 +1184,6 @@ b read_only b destructive b idempotent b open_world
         F _ → {}
     }
     ? == 0 ( nurl_str_len pname ) {
-        ( json_free args )
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_invalid_params
             `prompts/get requires a "name" parameter` ) }
     } {}
@@ -1198,7 +1193,6 @@ b read_only b destructive b idempotent b open_world
         : String m ( string_from `unknown prompt: ` )
         ( string_push_str m pname )
         : McpRpcErr e ( mcp_rpc_err mcp_err_invalid_params ( string_data m ) )
-        ( string_free m )
         ^ @ !Json McpRpcErr { F e }
     } {}
     : *McpPrompt pp ( vec_data [McpPrompt] . r __prompts )
@@ -1218,13 +1212,11 @@ b read_only b destructive b idempotent b open_world
     }
     ( json_free args )
     ? <= ( vec_len [Json] sink ) 0 {
-        ( vec_free [Json] sink )
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `prompt handler panicked` ) }
     } {}
     : ?Json e0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
     : Json result ?? e0 { T jv → jv F → ( json_obj_new ) }
-    ( vec_free [Json] sink )
     ^ @ !Json McpRpcErr { T result }
 }
 
@@ -1300,7 +1292,6 @@ b read_only b destructive b idempotent b open_world
     }
     ( json_free arg )
     ? <= ( vec_len [Json] sink ) 0 {
-        ( vec_free [Json] sink )
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `resource template handler panicked` ) }
     } {}
@@ -1316,7 +1307,6 @@ b read_only b destructive b idempotent b open_world
         : String m ( string_from `unknown resource: ` )
         ( string_push_str m uri )
         : McpRpcErr e ( mcp_rpc_err mcp_err_resource_not_found ( string_data m ) )
-        ( string_free m )
         ^ @ !Json McpRpcErr { F e }
     } {}
     ?? ( json_obj_get content `uri` ) {
@@ -1365,7 +1355,6 @@ b read_only b destructive b idempotent b open_world
         : String m ( string_from `unknown resource: ` )
         ( string_push_str m uri )
         : McpRpcErr e ( mcp_rpc_err mcp_err_resource_not_found ( string_data m ) )
-        ( string_free m )
         ^ @ !Json McpRpcErr { F e }
     } {}
     : *McpResource rp ( vec_data [McpResource] . r __resources )
@@ -1385,7 +1374,6 @@ b read_only b destructive b idempotent b open_world
         }
     }
     ? <= ( vec_len [Json] sink ) 0 {
-        ( vec_free [Json] sink )
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `resource handler panicked` ) }
     } {}
@@ -1460,7 +1448,6 @@ b read_only b destructive b idempotent b open_world
     }
     : i idx ( __mcp_find_completion_index r ref_type ref_id )
     ? < idx 0 {
-        ( json_free arg )
         ^ ( __mcp_completion_envelope ( json_arr_new ) )
     } {}
     : *McpCompletion cp ( vec_data [McpCompletion] . r __completions )
@@ -1585,7 +1572,6 @@ b read_only b destructive b idempotent b open_world
     : String m ( string_from `unknown method: ` )
     ( string_push_str m method )
     : McpRpcErr e ( mcp_rpc_err mcp_err_method_not_found ( string_data m ) )
-    ( string_free m )
     ^ @ !Json McpRpcErr { F e }
 }
 
@@ -1650,7 +1636,6 @@ b read_only b destructive b idempotent b open_world
     : String m ( string_from `unhandled tasks method: ` )
     ( string_push_str m method )
     : McpRpcErr e2 ( mcp_rpc_err mcp_err_method_not_found ( string_data m ) )
-    ( string_free m )
     ^ @ !Json McpRpcErr { F e2 }
 }
 

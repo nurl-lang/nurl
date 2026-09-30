@@ -131,55 +131,47 @@ iff it returns nothing, a block in expression position keeps the value
 alive. An arm whose value IS derived from the droppable still keeps it
 alive, as before.
 
-### A `:` binding, and only a `:` binding
+### Temporaries, and the release calls you no longer write
 
-The word doing the work above is **binding**. An allocating call whose
-result goes straight into another call's argument list is owned by
-nothing, so nothing frees it:
+An allocating call whose result goes straight into another call's
+argument list is a **temporary**, and it is dropped right after that
+call — unless the callee keeps it (a `sink` parameter, a position it
+stores into an aggregate or a container) or hands it back, in which case
+it leaves with the result:
 
 ```nurl
-( nurl_eprint ( nurl_str_int . resp status ) )   // leaks, every call
-: s st ( nurl_str_int . resp status )            // owned; freed at scope exit
-( nurl_eprint st )
+( nurl_eprint ( nurl_str_int . resp status ) )   // freed after the call
+: i n ( takes ( string_from `x` ) )              // likewise
 ```
 
-Both compile, and the difference used to be invisible until you ran
-under LSan. It is a leak rather than a bug in the usual sense — the
-program is correct, it just grows — which is why it survived in code
-that is otherwise well tested: `ext/http_router.nu` and
-`ext/http_middleware.nu` each leaked one such string *per HTTP request*
-until 0.46.0, in servers meant to run for months. **`--lint` now reports
-it** at the call site:
+This used to leak — `ext/http_router.nu` and `ext/http_middleware.nu`
+each lost one string per HTTP request until 0.46.0 — and `--lint` asked
+for a binding at every such call site. Neither is needed now. (For a
+number there is still a shorter answer: `( nurl_eprint_int … )` and the
+other `_int` print overloads format on the stack and allocate nothing.)
 
+The same holds for bindings: a `String`, a `Vec`, a library handle or an
+owning struct bound with `:` is dropped at the end of its scope, so the
+release call that code written before the memory model ends with —
+
+```nurl
+: String s ( string_from `x` )
+: i n ( string_len s )
+( string_free s )      // redundant: s is dropped right here anyway
+^ n
 ```
-warning: this allocation is owned by nothing - 'nurl_eprint' only reads
-         it, so nothing frees it. Bind it first (': T x ( ... )') and
-         pass the binding
-```
 
-Only when the callee provably does not take the value over: a
-destructor, a `sink` parameter, a position the callee embeds in an
-aggregate (`vec_push`, `json_obj_set`, …) and an escaping position are
-all silent, and so is a callee that hands back a *view* rather than a
-fresh handle. Regression `compiler/tests/lint_owned_temp.nu`.
+— releases exactly what the drop would. `--lint` reports it
+(`[redundant-free]`) when the call sits at the **tail** of a block —
+nothing but more such calls after it, then `^` or the `}` of the block
+that declared the binding — and `tools/fix_redundant_free.py FILE…`
+removes every one it reports. An *early* release (anything follows it)
+is left alone: it can be what keeps a peak down, and it stays legal —
+the call moves the value, and the binding's drop flag clears.
 
-For the specific case above there is now a shorter answer than binding:
-`( nurl_eprint_int . resp status )` allocates nothing at all. The `_int`
-overloads exist on both streams — `print_int` / `println_int` /
-`eprint_int` / `eprintln_int` — and format on the stack, so a diagnostic
-that prints a number never needs `nurl_str_int` and never had a string to
-own. Binding remains the general rule; not needing a string is better
-than owning one.
-
-Bind first, then use. And do **not** then also free it by hand: the
-binding already carries a drop, so an explicit `nurl_free` on top is a
-double-free. That one is now an `error:` — see §2.1b; the rest of this
-section is still advice you have to follow yourself.
-
-The same shape appears one level up in `??` matches — unwrapping result
-B *inside* result A's `T` arm means B is never reached, and never
-freed, on any path where A is `F`. Unwrap each to its own binding
-first.
+Do **not** release by hand what the compiler drops *and* keep using the
+binding's drop: an explicit `nurl_free` on an auto-dropped binding is a
+double-free, and that one is an `error:` (§2.1b).
 
 ### Conservative by construction
 

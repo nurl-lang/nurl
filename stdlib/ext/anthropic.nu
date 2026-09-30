@@ -485,8 +485,6 @@ $ `stdlib/ext/json.nu`
         : Json o ( json_obj_new )
         ( json_obj_set o `type` ( json_str_lit `tool` ) )
         ( json_obj_set o `name` ( json_str_lit ( string_data name ) ) )
-        ( string_free name )
-        ( string_free full )
         ^ @ ?Json { T o }
     } {}
 

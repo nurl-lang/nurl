@@ -849,7 +849,6 @@ $ `stdlib/core/marker.nu`
     ( string_push_str sql `PRAGMA synchronous=` )
     ( string_push_str sql mode )
     : !i SqliteErr r ( sqlite_exec db ( string_data sql ) )
-    ( string_free sql )
     ^ r
 }
 

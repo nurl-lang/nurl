@@ -295,8 +295,6 @@ $ `stdlib/core/vec.nu`
     ~ < jj nb { : ?String t ( vec_get [String] ib jj ) ?? t { T s → ( string_free s ) F → {} } = jj + jj 1 }
     ( vec_free [String] ia )
     ( vec_free [String] ib )
-    ( string_free sa )
-    ( string_free sb )
     ^ res
 }
 
@@ -362,13 +360,11 @@ $ `stdlib/core/vec.nu`
         ? >= dot 0 { = pos + dot 1 } { = more 0 }
     }
     ? != err 0 {
-        ( vec_free [i] parts )
         ^ @ PartialVer { 0 0 0 -1 }
     } {}
     : i p0 ?? ( vec_get [i] parts 0 ) { T x → x F → 0 }
     : i p1 ?? ( vec_get [i] parts 1 ) { T x → x F → 0 }
     : i p2 ?? ( vec_get [i] parts 2 ) { T x → x F → 0 }
-    ( vec_free [i] parts )
     ^ @ PartialVer { p0 p1 p2 count }
 }
 
@@ -546,14 +542,13 @@ $ `stdlib/core/vec.nu`
         } {}
     }
     : i nt ( vec_len [i] ts )
-    ? == nt 0 { ( vec_free [i] ts ) ( vec_free [i] te ) ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
+    ? == nt 0 { ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
     // hyphen range: exactly 3 tokens with the middle a lone '-'
     ? & == nt 3 ( __sv_tok_is_dash text ts te 1 ) {
         : i af ?? ( vec_get [i] ts 0 ) { T x → x F → 0 }
         : i at ?? ( vec_get [i] te 0 ) { T x → x F → 0 }
         : i bf ?? ( vec_get [i] ts 2 ) { T x → x F → 0 }
         : i bt ?? ( vec_get [i] te 2 ) { T x → x F → 0 }
-        ( vec_free [i] ts ) ( vec_free [i] te )
         ^ ( __sv_hyphen text af at bf bt )
     } {}
     // AND of comparators
@@ -572,7 +567,6 @@ $ `stdlib/core/vec.nu`
         : i m ( vec_len [SvInterval] parts )
         : ~ i j 0
         ~ < j m { ?? ( vec_get [SvInterval] parts j ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = j + j 1 }
-        ( vec_free [SvInterval] parts )
         ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq }
     } {}
     ^ @ !SvInterval SemverErr { T ( __sv_and_reduce parts ) }
@@ -607,7 +601,6 @@ $ `stdlib/core/vec.nu`
         : i m ( vec_len [SvInterval] alts )
         : ~ i j 0
         ~ < j m { ?? ( vec_get [SvInterval] alts j ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = j + j 1 }
-        ( vec_free [SvInterval] alts )
         ^ @ !VersionReq SemverErr { F # SemverErr SvBadReq }
     } {}
     ^ @ !VersionReq SemverErr { T @ VersionReq { alts } }

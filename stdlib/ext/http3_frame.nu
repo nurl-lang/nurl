@@ -130,7 +130,6 @@ $ `stdlib/std/quic_varint.nu`
     ( quic_varint_push p ( h3_setting_max_field_section_size ) )
     ( quic_varint_push p max_field_section_size )
     ( h3_push_frame out ( h3_ft_settings ) p )
-    ( vec_free [u] p )
 }
 
 // Validate a SETTINGS payload (§7.2.4): well-formed pairs, no HTTP/2

@@ -197,8 +197,6 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
     ( string_clear buf )
     ( string_push_str buf ( string_data head ) )
     ( string_push_str buf ( string_data tail ) )
-    ( string_free head )
-    ( string_free tail )
 }
 
 // Insert byte `c` at `idx`.
@@ -210,8 +208,6 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
     ( string_push_str buf ( string_data head ) )
     ( string_push_char buf c )
     ( string_push_str buf ( string_data tail ) )
-    ( string_free head )
-    ( string_free tail )
 }
 
 // Drop everything from `keep` onward (Ctrl-K).
@@ -219,7 +215,6 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
     : String head ( string_substr buf 0 keep )
     ( string_clear buf )
     ( string_push_str buf ( string_data head ) )
-    ( string_free head )
 }
 
 @ term_read_line s prompt ( Vec String ) history → ?String {
@@ -290,7 +285,6 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
     ( term_raw_disable st )
     ( nurl_print `\n` )
     ? == done 1 { ^ @ ?String { T buf } } {}
-    ( string_free buf )
     ^ @ ?String { F }
 }
 

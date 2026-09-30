@@ -59,7 +59,6 @@ $ `stdlib/core/posix.nu`  // buffered stdin bridge
         : *u dst # *u + # i ( vec_data [u] bytes ) len
         : i got ( reader dst want )
         ? | < got 0 > got want {
-            ( vec_free [u] bytes )
             ^ @ !( Vec u ) IoErr { F @ IoErr { ReadFailed } }
         } {}
         : b _set ( vec_set_len [u] bytes + len got )

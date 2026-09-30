@@ -286,8 +286,5 @@ $ `stdlib/core/vec.nu`
         ( string_push_str out ( string_data body ) )
     } {}
 
-    ( string_free header )
-    ( string_free pending )
-    ( string_free body )
     ^ out
 }

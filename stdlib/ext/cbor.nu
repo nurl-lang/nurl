@@ -90,7 +90,6 @@ $ `stdlib/std/bytes.nu`
     : ( Vec u ) out ( vec_new [u] )
     : i rc ( __cbor_enc j out 0 )
     ? != rc 0 {
-        ( vec_free [u] out )
         ^ @ !( Vec u ) CborErr { F @ CborErr { CborDepth } }
     } {}
     ^ @ !( Vec u ) CborErr { T out }
@@ -264,7 +263,6 @@ $ `stdlib/std/bytes.nu`
     : ~ i k 0
     ~ < k n { ( string_push_char s ( __cd_u8 p ) ) = k + k 1 }
     : Json j ( json_str_lit ( string_data s ) )
-    ( string_free s )
     ^ @ !Json CborErr { T j }
 }
 
@@ -275,7 +273,7 @@ $ `stdlib/std/bytes.nu`
         : !Json CborErr ev ( __cd_value p + depth 1 )
         ?? ev {
             T e → { : b _ok ( json_arr_push arr e ) }
-            F er → { ( json_free arr ) ^ @ !Json CborErr { F er } }
+            F er → { ^ @ !Json CborErr { F er } }
         }
         = k + k 1
     }
@@ -290,16 +288,16 @@ $ `stdlib/std/bytes.nu`
         ?? kv {
             T key → {
                 ? ( json_is_str key ) {} {
-                    ( json_free key ) ( json_free obj )
+                    ( json_free key )
                     ^ @ !Json CborErr { F @ CborErr { CborBadType } }
                 }
                 : !Json CborErr vv ( __cd_value p + depth 1 )
                 ?? vv {
                     T val → { : b _ok ( json_obj_set obj ( json_str_data key ) val ) ( json_free key ) }
-                    F er → { ( json_free key ) ( json_free obj ) ^ @ !Json CborErr { F er } }
+                    F er → { ( json_free key ) ^ @ !Json CborErr { F er } }
                 }
             }
-            F er → { ( json_free obj ) ^ @ !Json CborErr { F er } }
+            F er → { ^ @ !Json CborErr { F er } }
         }
         = k + k 1
     }

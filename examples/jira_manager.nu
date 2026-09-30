@@ -153,7 +153,6 @@ $ `stdlib/std/fs.nu`
 
             // Tyhjä runko (esim. 204) onnistumisella → tyhjä objekti.
             ? & < st 300 == 0 ( string_len body_owned ) {
-                ( string_free body_owned )
                 ^ @ !Json JiraErr { T ( json_obj_new ) }
             } {}
 
@@ -201,7 +200,6 @@ $ `stdlib/std/fs.nu`
     ( string_push_str ep `/rest/api/3/issue/` )
     ( string_push_str ep key )
     : !Json JiraErr r ( jira_request cfg `GET` ( string_data ep ) `` )
-    ( string_free ep )
     ^ r
 }
 
@@ -211,7 +209,6 @@ $ `stdlib/std/fs.nu`
     ( string_push_str ep key )
     ( string_push_str ep `/transitions` )
     : !Json JiraErr r ( jira_request cfg `GET` ( string_data ep ) `` )
-    ( string_free ep )
     ^ r
 }
 
@@ -258,7 +255,6 @@ $ `stdlib/std/fs.nu`
             }
             ( json_free tjson )
             ? == 0 ( string_len tid ) {
-                ( string_free tid )
                 ^ @ !Json JiraErr { F # JiraErr JiraNotFound }
             } {}
             // POST { transition: { id: <tid> } }
@@ -274,7 +270,7 @@ $ `stdlib/std/fs.nu`
             ( string_push_str ep key )
             ( string_push_str ep `/transitions` )
             : !Json JiraErr r ( jira_request cfg `POST` ( string_data ep ) ( string_data bs ) )
-            ( string_free ep ) ( string_free bs )
+            ( string_free bs )
             ^ r
         }
     }
@@ -290,7 +286,7 @@ $ `stdlib/std/fs.nu`
     ( string_push_str ep key )
     ( string_push_str ep `/assignee` )
     : !Json JiraErr r ( jira_request cfg `PUT` ( string_data ep ) ( string_data bs ) )
-    ( string_free ep ) ( string_free bs )
+    ( string_free bs )
     ^ r
 }
 
@@ -304,7 +300,7 @@ $ `stdlib/std/fs.nu`
     ( string_push_str ep key )
     ( string_push_str ep `/comment` )
     : !Json JiraErr r ( jira_request cfg `POST` ( string_data ep ) ( string_data bs ) )
-    ( string_free ep ) ( string_free bs )
+    ( string_free bs )
     ^ r
 }
 
@@ -319,7 +315,7 @@ $ `stdlib/std/fs.nu`
     ( string_push_str ep `/rest/api/3/issue/` )
     ( string_push_str ep key )
     : !Json JiraErr r ( jira_request cfg `PUT` ( string_data ep ) ( string_data bs ) )
-    ( string_free ep ) ( string_free bs )
+    ( string_free bs )
     ^ r
 }
 
@@ -359,7 +355,7 @@ $ `stdlib/std/fs.nu`
         ( string_push_str ep ( string_data ( percent_encode fields ) ) )
     } {}
     : !Json JiraErr r ( jira_request cfg `GET` ( string_data ep ) `` )
-    ( string_free ep ) ( string_free enc )
+    ( string_free enc )
     ^ r
 }
 
@@ -377,7 +373,6 @@ $ `stdlib/std/fs.nu`
         ( string_push_str jql project )
     } {}
     : !Json JiraErr r ( jira_search_issues cfg ( string_data jql ) max_results `key,status,summary` )
-    ( string_free jql )
     ^ r
 }
 
@@ -438,7 +433,6 @@ $ `stdlib/std/fs.nu`
                         T u → {
                             : String un ( __jira_json_field_str u `name` )
                             ( __jira_trans_add transitions ( string_data sname ) ( string_data un ) )
-                            ( string_free un )
                         }
                     }
                     = ui + ui 1
@@ -446,7 +440,6 @@ $ `stdlib/std/fs.nu`
             } {}
         }
     }
-    ( string_free sid ) ( string_free sname )
 }
 
 // Käsittele yhden issue-typen statukset.
@@ -504,7 +497,6 @@ $ `stdlib/std/fs.nu`
             : b _4 ( json_obj_set entry `status_transitions` transitions )
             : b _5 ( json_obj_set entry `issue_types` issue_types )
             : b _6 ( json_obj_set project_map pkey entry )
-            ( string_free pname ) ( string_free pid )
         }
     }
 }
@@ -542,7 +534,6 @@ $ `stdlib/std/fs.nu`
                             ? != 0 ( string_len pkey ) {
                                 ( __jira_map_one_project cfg project_map proj ( string_data pkey ) )
                             } {}
-                            ( string_free pkey )
                         }
                     }
                     = i + i 1
@@ -638,7 +629,6 @@ $ `stdlib/std/fs.nu`
                         : String to ( __jira_json_path_str t `to` `name` )
                         ( nurl_print `    - ` ) ( nurl_print ( string_data tn ) )
                         ( nurl_print ` -> ` ) ( nurl_print ( string_data to ) ) ( nurl_print `\n` )
-                        ( string_free tn ) ( string_free to )
                     }
                 }
                 = i + i 1
@@ -667,7 +657,6 @@ $ `stdlib/std/fs.nu`
                         ( nurl_print `    [` ) ( nurl_print ( string_data key ) ) ( nurl_print `] ` )
                         ( nurl_print ( string_data summary ) ) ( nurl_print ` - ` )
                         ( nurl_print ( string_data status ) ) ( nurl_print `\n` )
-                        ( string_free key ) ( string_free summary ) ( string_free status )
                     }
                 }
                 = i + i 1
@@ -700,7 +689,6 @@ $ `stdlib/std/fs.nu`
                     : String name ( __jira_json_field_str p `name` )
                     ( nurl_print `    [` ) ( nurl_print ( string_data key ) ) ( nurl_print `] ` )
                     ( nurl_print ( string_data name ) ) ( nurl_print `\n` )
-                    ( string_free key ) ( string_free name )
                 }
             }
             = i + i 1

@@ -25,7 +25,6 @@ $ `stdlib/std/supervisor.nu`
     ( string_push_str line msg )
     ( string_push_char line 10 )
     ( nurl_print ( string_data line ) )
-    ( string_free line )
 }
 
 @ main → i {

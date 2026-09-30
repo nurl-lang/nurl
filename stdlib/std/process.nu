@@ -580,7 +580,6 @@ $ `stdlib/core/posix.nu`
 @ process_run0 s cmd → !Output ProcessErr {
     : ( Vec s ) args ( vec_new [s] )
     : !Output ProcessErr res ( process_run cmd args `` )
-    ( vec_free [s] args )
     ^ res
 }
 
@@ -588,7 +587,6 @@ $ `stdlib/core/posix.nu`
     : ( Vec s ) args ( vec_with_cap [s] 1 )
     ( vec_push [s] args a0 )
     : !Output ProcessErr res ( process_run cmd args `` )
-    ( vec_free [s] args )
     ^ res
 }
 
@@ -597,7 +595,6 @@ $ `stdlib/core/posix.nu`
     ( vec_push [s] args a0 )
     ( vec_push [s] args a1 )
     : !Output ProcessErr res ( process_run cmd args `` )
-    ( vec_free [s] args )
     ^ res
 }
 
@@ -607,7 +604,6 @@ $ `stdlib/core/posix.nu`
     ( vec_push [s] args a1 )
     ( vec_push [s] args a2 )
     : !Output ProcessErr res ( process_run cmd args `` )
-    ( vec_free [s] args )
     ^ res
 }
 
@@ -624,7 +620,6 @@ $ `stdlib/core/posix.nu`
     ( vec_push [s] args `-c` )
     ( vec_push [s] args sh_cmd )
     : !Output ProcessErr res ( process_run `/bin/sh` args `` )
-    ( vec_free [s] args )
     ^ res
 }
 
@@ -1312,7 +1307,6 @@ $ `stdlib/core/posix.nu`
 @ process_spawn0 s cmd → !ProcChild ProcessErr {
     : ( Vec s ) args ( vec_new [s] )
     : !ProcChild ProcessErr res ( process_spawn cmd args )
-    ( vec_free [s] args )
     ^ res
 }
 
@@ -1320,7 +1314,6 @@ $ `stdlib/core/posix.nu`
     : ( Vec s ) args ( vec_with_cap [s] 1 )
     ( vec_push [s] args a0 )
     : !ProcChild ProcessErr res ( process_spawn cmd args )
-    ( vec_free [s] args )
     ^ res
 }
 
@@ -1329,7 +1322,6 @@ $ `stdlib/core/posix.nu`
     ( vec_push [s] args a0 )
     ( vec_push [s] args a1 )
     : !ProcChild ProcessErr res ( process_spawn cmd args )
-    ( vec_free [s] args )
     ^ res
 }
 

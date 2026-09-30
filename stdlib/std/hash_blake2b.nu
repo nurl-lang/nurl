@@ -129,8 +129,6 @@ $ `stdlib/std/bytes.nu`
         = i + i 1
     }
     ( vec_free [u64] iv )
-    ( vec_free [u64] v )
-    ( vec_free [u64] m )
 }
 
 @ __b2b_zeros i n → ( Vec u ) {

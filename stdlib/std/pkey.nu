@@ -50,7 +50,6 @@ $ `stdlib/std/ecdsa_p256.nu`
         = p + p 1
     }
     : !( Vec u ) ParseErr r ( b64_decode_vec ( string_data b64 ) )
-    ( string_free b64 )
     ^ r
 }
 

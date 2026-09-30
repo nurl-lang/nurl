@@ -44,7 +44,6 @@ $ `stdlib/core/io.nu`
     } {
         : String stdin_text ( read_all_stdin )
         ( string_push_str prompt ( string_data stdin_text ) )
-        ( string_free stdin_text )
     }
 
     // Reject empty prompts so we don't silently spend a token call on a
@@ -53,7 +52,6 @@ $ `stdlib/core/io.nu`
         ( nurl_print `usage: claude_chat <prompt>\n` )
         ( nurl_print `       echo "<prompt>" | claude_chat\n` )
         ( nurl_print `       set ANTHROPIC_API_KEY in the environment first\n` )
-        ( string_free prompt )
         ^ 1
     } {}
 

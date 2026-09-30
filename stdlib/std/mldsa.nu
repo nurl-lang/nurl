@@ -928,8 +928,6 @@ $ `stdlib/std/subtle.nu`
     }
     ( bytes_extend_bytes out body )
     ( bytes_extend_bytes out tail )
-    ( vec_free [u] tail )
-    ( vec_free [u] body )
 }
 
 // Unpack, with the malleability checks FIPS 204 §7.2 requires.
@@ -1524,7 +1522,6 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     : ~ i i 0
     ~ < i 32 { ( vec_push [u] rnd # u 0 ) = i + i 1 }
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
-    ( vec_free [u] rnd )
     ( vec_free [u] mp )
     ^ sig
 }
@@ -1677,7 +1674,6 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     : ~ i i 0
     ~ < i 32 { ( vec_push [u] rnd # u 0 ) = i + i 1 }
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
-    ( vec_free [u] rnd )
     ( vec_free [u] mp )
     ^ sig
 }

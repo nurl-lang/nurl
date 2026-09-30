@@ -580,7 +580,6 @@ $ `stdlib/fs/fat.nu`
                                 ( __dp_advance v p )
                                 = idx + idx 1
                             }
-                            ( vec_free [i] name )
                         }
                     }
                 }
@@ -621,21 +620,20 @@ $ `stdlib/fs/fat.nu`
     ~ T {
         ( vec_clear [i] comp )
         : i nk ( __path_next path len k comp )
-        ? == nk - 0 2 { = rc ( fe_inval ) = have F ( vec_free [i] comp ) ^ rc } {}
+        ? == nk - 0 2 { = rc ( fe_inval ) = have F ^ rc } {}
         ? < nk 0 {
             // No more components: whatever `leaf` already holds is the
             // last one. An empty leaf means the path was "/" or "".
-            ? ! have { ( vec_free [i] comp ) ^ ( fe_inval ) } {}
-            ( vec_free [i] comp )
+            ? ! have { ^ ( fe_inval ) } {}
             ^ dir
         } {}
         ? have {
             // The component we were holding is not the last one after
             // all: it must be a directory, and it becomes the parent.
             : FatEnt e ( fat_dir_find v dir leaf )
-            ? . e err { ( vec_free [i] comp ) ^ ( fe_io ) } {}
-            ? ! . e found { ( vec_free [i] comp ) ^ ( fe_noent ) } {}
-            ? == 0 & . e attr ( fat_attr_dir ) { ( vec_free [i] comp ) ^ ( fe_notdir ) } {}
+            ? . e err { ^ ( fe_io ) } {}
+            ? ! . e found { ^ ( fe_noent ) } {}
+            ? == 0 & . e attr ( fat_attr_dir ) { ^ ( fe_notdir ) } {}
             // ".." in the root of a FAT32 volume is stored as cluster 0,
             // which means "the root" — not "the fixed root region",
             // which does not exist here.
@@ -647,7 +645,6 @@ $ `stdlib/fs/fat.nu`
         = have T
         = k nk
     }
-    ( vec_free [i] comp )
     ^ dir
 }
 
@@ -662,7 +659,6 @@ $ `stdlib/fs/fat.nu`
         ^ e
     } {}
     : FatEnt e ( fat_dir_find v dir leaf )
-    ( vec_free [i] leaf )
     ^ e
 }
 
@@ -896,8 +892,6 @@ $ `stdlib/fs/fat.nu`
         }
         ? ! ( __sfn_exists v dirclus out11 ) { = ok T } { = seq + seq 1 }
     }
-    ( vec_free [i] base )
-    ( vec_free [i] ext )
     ^ ok
 }
 
@@ -1145,14 +1139,14 @@ $ `stdlib/fs/fat.nu`
 
     : ( Vec i ) leaf ( vec_new [i] )
     : i dir ( fat_resolve_parent v path leaf )
-    ? < dir 0 { ( vec_free [i] leaf ) ^ dir } {}
+    ? < dir 0 { ^ dir } {}
     : ~ FatEnt e ( fat_dir_find v dir leaf )
-    ? . e err { ( vec_free [i] leaf ) ^ ( fe_io ) } {}
+    ? . e err { ^ ( fe_io ) } {}
 
     ? ! . e found {
-        ? == 0 & flags ( fo_creat ) { ( vec_free [i] leaf ) ^ ( fe_noent ) } {}
-        ? ! . v rw { ( vec_free [i] leaf ) ^ ( fe_rofs ) } {}
-        ? > ( vec_len [i] leaf ) ( fat_name_max ) { ( vec_free [i] leaf ) ^ ( fe_nametoolong ) } {}
+        ? == 0 & flags ( fo_creat ) { ^ ( fe_noent ) } {}
+        ? ! . v rw { ^ ( fe_rofs ) } {}
+        ? > ( vec_len [i] leaf ) ( fat_name_max ) { ^ ( fe_nametoolong ) } {}
         = e ( fat_dir_create v dir leaf ( fat_attr_archive ) 0 0 )
         ( vec_free [i] leaf )
         ? ! . e found { ^ ( fe_nospc ) } {}
@@ -1315,7 +1309,6 @@ $ `stdlib/fs/fat.nu`
             = at + at chunk
         }
     }
-    ( vec_free [u] z )
     ^ ok
 }
 
@@ -1517,18 +1510,18 @@ $ `stdlib/fs/fat.nu`
     ? ( __path_is_root path ) { ^ ( fe_exist ) } {}
     : ( Vec i ) leaf ( vec_new [i] )
     : i dir ( fat_resolve_parent v path leaf )
-    ? < dir 0 { ( vec_free [i] leaf ) ^ dir } {}
+    ? < dir 0 { ^ dir } {}
     : FatEnt old ( fat_dir_find v dir leaf )
-    ? . old err { ( vec_free [i] leaf ) ^ ( fe_io ) } {}
-    ? . old found { ( vec_free [i] leaf ) ^ ( fe_exist ) } {}
+    ? . old err { ^ ( fe_io ) } {}
+    ? . old found { ^ ( fe_exist ) } {}
 
     // The cluster comes first and is zeroed before anything points at
     // it: a directory entry naming an unzeroed cluster is a directory
     // full of whatever the previous owner wrote, and every one of those
     // 32-byte runs is an entry to a reader.
     : i c ( fat_extend_chain v 0 )
-    ? == c 0 { ( vec_free [i] leaf ) ^ ( fe_nospc ) } {}
-    ? ! ( fat_zero_clus v c ) { ( vec_free [i] leaf ) ^ ( fe_io ) } {}
+    ? == c 0 { ^ ( fe_nospc ) } {}
+    ? ! ( fat_zero_clus v c ) { ^ ( fe_io ) } {}
 
     : i lba ( fat_clus_lba v c )
     : ( Vec u ) n11 ( __name11_new )
@@ -1543,7 +1536,6 @@ $ `stdlib/fs/fat.nu`
     ( vec_free [u] n11 )
     ? ! ok {
         : b _f ( fat_free_chain v c )
-        ( vec_free [i] leaf )
         ^ ( fe_io )
     } {}
 
@@ -1622,27 +1614,26 @@ $ `stdlib/fs/fat.nu`
 
     : ( Vec i ) leaf ( vec_new [i] )
     : i dir ( fat_resolve_parent v newp leaf )
-    ? < dir 0 { ( vec_free [i] leaf ) ^ dir } {}
+    ? < dir 0 { ^ dir } {}
     : FatEnt dst ( fat_dir_find v dir leaf )
-    ? . dst err { ( vec_free [i] leaf ) ^ ( fe_io ) } {}
+    ? . dst err { ^ ( fe_io ) } {}
     ? . dst found {
         // POSIX replaces the destination. A directory is never replaced
         // by a file, nor the other way round.
         : b s_dir != 0 & . src attr ( fat_attr_dir )
         : b d_dir != 0 & . dst attr ( fat_attr_dir )
-        ? != s_dir d_dir { ( vec_free [i] leaf ) ^ ? d_dir ( fe_isdir ) ( fe_notdir ) } {}
+        ? != s_dir d_dir { ^ ? d_dir ( fe_isdir ) ( fe_notdir ) } {}
         ? d_dir {
-            ? ! ( __dir_is_empty v . dst first_clus ) { ( vec_free [i] leaf ) ^ ( fe_notempty ) } {}
+            ? ! ( __dir_is_empty v . dst first_clus ) { ^ ( fe_notempty ) } {}
         } {}
         // Same file, different spelling of the same name: nothing to do
         // and nothing to destroy.
         ? && == . dst lba . src lba == . dst off . src off {
-            ( vec_free [i] leaf )
             ^ 0
         } {}
-        ? ! ( fat_dir_remove v dst ) { ( vec_free [i] leaf ) ^ ( fe_io ) } {}
+        ? ! ( fat_dir_remove v dst ) { ^ ( fe_io ) } {}
         ? > . dst first_clus 0 {
-            ? ! ( fat_free_chain v . dst first_clus ) { ( vec_free [i] leaf ) ^ ( fe_io ) } {}
+            ? ! ( fat_free_chain v . dst first_clus ) { ^ ( fe_io ) } {}
         } {}
     } {}
 

@@ -91,7 +91,6 @@ $ `stdlib/std/pbkdf2.nu`
     : ( Vec u ) out ( __sc_zeros_u 64 )
     = i 0
     ~ < i 16 { ( __sc_st out * i 4 & + ( __scg x i ) ( __scg orig i ) 4294967295 ) = i + i 1 }
-    ( vec_free [i] x ) ( vec_free [i] orig )
     ^ out
 }
 

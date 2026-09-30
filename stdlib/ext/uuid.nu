@@ -99,7 +99,6 @@ $ `stdlib/std/time.nu`
         // Skip dashes at 8, 13, 18, 23
         ? | | | == i 8 == i 13 == i 18 == i 23 {
             ? != c 45 {
-                ( vec_free [u] bytes )
                 ^ @ ?( Vec u ) { F }
             } {}
             = i + i 1
@@ -110,7 +109,6 @@ $ `stdlib/std/time.nu`
             : i low ( __uuid_hex_to_int c2 )
 
             ? | == high -1 == low -1 {
-                ( vec_free [u] bytes )
                 ^ @ ?( Vec u ) { F }
             } {}
 

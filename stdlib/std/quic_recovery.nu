@@ -353,7 +353,7 @@ $ `stdlib/std/quic_frame.nu`
         : i len ( __qr_ri . ack ints + k 1 )
         = hi - - lo gap 2
         = lo - hi len
-        ? < lo 0 { ( vec_free [i] rng ) ^ -1 } {}
+        ? < lo 0 { ^ -1 } {}
         ( vec_push [i] rng lo ) ( vec_push [i] rng hi )
         = k + k 2
     }

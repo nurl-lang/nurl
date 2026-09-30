@@ -118,7 +118,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     ( vec_push [u] out # u 156 )  // FLG 0x9C
     ( vec_extend [u] out body )
     ( __df_be32 out ( adler32 src ) )
-    ( vec_free [u] body )
     ^ @ !( Vec u ) CompressErr { T out }
 }
 
@@ -191,7 +190,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     ( vec_extend [u] out body )
     ( __df_le32 out ( crc32 src ) )
     ( __df_le32 out & n 4294967295 )
-    ( vec_free [u] body )
     ^ @ !( Vec u ) CompressErr { T out }
 }
 
@@ -280,7 +278,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
         : i remaining ? > max_out 0 - max_out ( vec_len [u] out ) -1
         ?? ( __gzip_member src pos remaining ) {
             F error → {
-                ( vec_free [u] out )
                 ^ @ !( Vec u ) CompressErr { F error }
             }
             T member → {

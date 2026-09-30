@@ -255,7 +255,6 @@ $ `stdlib/ext/http_server.nu`
         = drop T
     } {}
     ( string_free lc )
-    ( string_free name_s )
     ^ drop
 }
 

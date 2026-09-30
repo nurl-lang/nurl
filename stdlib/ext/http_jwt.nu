@@ -52,7 +52,6 @@ $ `stdlib/ext/jwt.nu`
         } {}
     } {}
     ( response_set_header r `WWW-Authenticate` ( string_data chal ) )
-    ( string_free chal )
     ^ r
 }
 

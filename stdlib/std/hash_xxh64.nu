@@ -141,6 +141,5 @@ $ `stdlib/std/bytes.nu`
         = k - k 8
     }
     : String s ( bytes_to_hex b )
-    ( vec_free [u] b )
     ^ s
 }

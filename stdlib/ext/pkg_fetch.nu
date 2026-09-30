@@ -86,7 +86,6 @@ $ `stdlib/ext/manifest.nu`
             : String text ( string_from_bytes # *u ( httpc_body_str resp ) . resp blen )
             ( httpc_resp_free resp )
             : !RegIndex RegistryFetchErr result ( registry_index_decode name text )
-            ( string_free text )
             ^ result
         }
     }
@@ -110,7 +109,6 @@ $ `stdlib/ext/manifest.nu`
                 : String sl ( _ms_line2 ( string_data sigbody ) )
                 = ok ( minisign_verify_b64 gz pubkey ( string_data sl ) )
                 ( string_free sl )
-                ( string_free sigbody )
             } {}
             ( httpc_resp_free sresp )
             ^ ok

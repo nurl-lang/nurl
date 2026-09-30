@@ -88,7 +88,6 @@ $ `stdlib/ext/websocket.nu`
         }
         F _ → {}  // Bad / truncated request — silently drop.
     }
-    ( vec_free [u] carry )
 }
 
 @ main → i {

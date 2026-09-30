@@ -79,7 +79,6 @@ $ `stdlib/std/bytes.nu`
     : ( Vec u ) out ( vec_new [u] )
     : i rc ( __mp_enc j out 0 )
     ? != rc 0 {
-        ( vec_free [u] out )
         ^ @ !( Vec u ) MsgpackErr { F @ MsgpackErr { MsgpackDepth } }
     } {}
     ^ @ !( Vec u ) MsgpackErr { T out }

@@ -435,7 +435,6 @@ $ `stdlib/std/random.nu`
     = i 0
     ~ < i 3 { ( vec_push [i] msg ?? ( vec_get [i] cs i ) { T x → { x } F → { 0 } } ) = i + i 1 }
     ( vec_free [i] cs )
-    ( vec_free [u] cb )
     ^ msg
 }
 
@@ -584,7 +583,6 @@ $ `stdlib/std/random.nu`
     ( __adrs_set_kp adrs idx )
     : ( Vec u ) sig ( __wots_sign m skseed pkseed adrs p )
     ( bytes_extend_bytes sig auth )
-    ( vec_free [u] auth )
     ^ sig
 }
 

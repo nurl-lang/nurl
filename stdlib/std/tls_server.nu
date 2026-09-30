@@ -93,6 +93,9 @@ $ `stdlib/std/aes_gcm.nu`
 // gets the winner back. Slot ids in use across the stdlib:
 //   1  TLS server ticket master (this module)
 //   2  HTTP client session cache (ext/http_pure.nu)
+//   3  SHA-256 round constants (std/hash_sha256.nu)
+//   4  X25519 niels table (std/x25519.nu)
+//   5, 6  P-256 comb tables T1, T2 (std/ecdsa_p256.nu)
 & `c` @ nurl_once_slot i id i candidate → i
 
 @ _tls_ticket_key_ensure → v {
@@ -115,7 +118,6 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) ctx ( vec_with_cap [u] 4 )
     ( _tls_u32 ctx epoch )
     : ( Vec u ) key ( hkdf_expand_label master `ticket key` ctx 32 )
-    ( vec_free [u] master ) ( vec_free [u] ctx )
     ^ key
 }
 
@@ -138,8 +140,8 @@ $ `stdlib/std/aes_gcm.nu`
     ( _tls_u32 out epoch )
     ( _tls_cat out nonce )
     ( _tls_cat out sealed )
-    ( vec_free [u] key ) ( vec_free [u] nonce ) ( vec_free [u] aad )
-    ( vec_free [u] plain ) ( vec_free [u] sealed )
+    ( vec_free [u] key ) ( vec_free [u] nonce )
+    ( vec_free [u] sealed )
     ^ out
 }
 
@@ -157,7 +159,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) ct ( bytes_slice ticket 16 n )
     : ( Vec u ) aad ( vec_new [u] )
     : ?( Vec u ) r ( aead_decrypt key nonce aad ct )
-    ( vec_free [u] key ) ( vec_free [u] nonce ) ( vec_free [u] ct ) ( vec_free [u] aad )
+    ( vec_free [u] key ) ( vec_free [u] nonce ) ( vec_free [u] ct )
     ?? r {
         F _ → ^ ( vec_new [u] )
         T plain → {
@@ -440,7 +442,7 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_push [u] out # u 48 )
     ( vec_push [u] out # u ( vec_len [u] inner ) )
     ( _tls_cat out inner )
-    ( vec_free [u] r ) ( vec_free [u] sv ) ( vec_free [u] inner )
+    ( vec_free [u] r ) ( vec_free [u] sv )
     ^ out
 }
 
@@ -473,7 +475,7 @@ $ `stdlib/std/aes_gcm.nu`
         ( _tls_u16 cvbody scheme )
         ( _tls_u16 cvbody ( vec_len [u] sig ) )
         ( _tls_cat cvbody sig )
-        ( vec_free [u] sig ) ( vec_free [u] ctx )
+        ( vec_free [u] sig )
         ^ cvbody
     } {}
     ? == keytype 1 {
@@ -532,8 +534,6 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) rec ( vec_with_cap [u] 7 )
     ( __srv_plain_rec_to rec 21 body )
     : b _w ( _tls_sock_write . c fd rec )
-    ( vec_free [u] rec )
-    ( vec_free [u] body )
     ^ ( __srv_abort c )
 }
 
@@ -900,7 +900,6 @@ $ `stdlib/std/aes_gcm.nu`
         ( vec_free [u] sh_p )
     } {}
     ? == grp 0 {
-        ( vec_free [u] cpub )
         ^ ( __srv_hs_fail h 40 )
     } {}
 
@@ -908,12 +907,10 @@ $ `stdlib/std/aes_gcm.nu`
     ? != . h ext_want 0 {
         : i xo ( __srv_find_ext ch es ee . h ext_want )
         ? < xo 0 {
-            ( vec_free [u] cpub )
             ^ ( __srv_hs_fail h 109 )
         } {}
         : i xl ( _rdint ch - xo 2 2 )
         ? > + xo xl ee {
-            ( vec_free [u] cpub )
             ^ ( __srv_hs_fail h 50 )
         } {}
         = . h ext_in_present 1
@@ -933,7 +930,6 @@ $ `stdlib/std/aes_gcm.nu`
     ? & & > ( vec_len [u] . h alpn_prefs ) 0 >= ( __srv_find_ext ch es ee 16 ) 0
     == ( vec_len [u] alpn_sel ) 0 {
         ( vec_free [u] alpn_sel )
-        ( vec_free [u] cpub )
         ^ ( __srv_hs_fail h 120 )
     } {}
     ( vec_free [u] . h alpn_sel )
@@ -994,7 +990,7 @@ $ `stdlib/std/aes_gcm.nu`
     // low-order client key_share before it can seed the key schedule.
     ? ( _all_zero ecdhe ) {
         ( vec_free [u] cpub ) ( vec_free [u] eph ) ( vec_free [u] spub )
-        ( vec_free [u] ecdhe ) ( vec_free [u] psk )
+        ( vec_free [u] ecdhe )
         ^ ( __srv_hs_fail h 47 )
     } {}
 
@@ -1037,7 +1033,6 @@ $ `stdlib/std/aes_gcm.nu`
         ( _tls_cat alp . h alpn_sel )
         ( _tls_u16 exts 16 )
         ( _blk16 exts alp )
-        ( vec_free [u] alp )
     } {}
     ( _tls_cat exts . h ext_out )
     ( _blk16 eebody exts )  // extensions length + extensions
@@ -1155,8 +1150,8 @@ $ `stdlib/std/aes_gcm.nu`
     ( _blk16 body ticket )
     ( _tls_u16 body 0 )
     : ( Vec u ) msg ( __srv_hs_wrap 4 body )
-    ( vec_free [u] nonce ) ( vec_free [u] psk ) ( vec_free [u] ticket )
-    ( vec_free [u] age_add ) ( vec_free [u] body )
+    ( vec_free [u] psk ) ( vec_free [u] ticket )
+    ( vec_free [u] age_add )
     ^ msg
 }
 
@@ -1293,7 +1288,6 @@ $ `stdlib/std/aes_gcm.nu`
 @ tls_accept i raw ( Vec u ) cert_chain ( Vec u ) priv → !*TlsConn TlsErr {
     : ( Vec u ) noalpn ( vec_new [u] )
     : !*TlsConn TlsErr r ( tls_accept_alpn raw cert_chain priv noalpn )
-    ( vec_free [u] noalpn )
     ^ r
 }
 
@@ -1308,7 +1302,6 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) ee ( vec_new [u] )
     : ( Vec u ) ed ( vec_new [u] )
     : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed 0 en 0 en alpn_prefs )
-    ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
 }
 
@@ -1323,7 +1316,6 @@ $ `stdlib/std/aes_gcm.nu`
 @ tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d → !*TlsConn TlsErr {
     : ( Vec u ) noalpn ( vec_new [u] )
     : !*TlsConn TlsErr r ( tls_accept_rsa_alpn raw cert_chain rsa_n rsa_e rsa_d noalpn )
-    ( vec_free [u] noalpn )
     ^ r
 }
 
@@ -1331,7 +1323,6 @@ $ `stdlib/std/aes_gcm.nu`
 @ tls_accept_rsa_alpn i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) alpn_prefs → !*TlsConn TlsErr {
     : ( Vec u ) ee ( vec_new [u] )
     : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d 0 ee 0 ee alpn_prefs )
-    ( vec_free [u] ee )
     ^ r
 }
 
@@ -1349,7 +1340,6 @@ $ `stdlib/std/aes_gcm.nu`
 @ tls_accept_mldsa i raw ( Vec u ) cert_chain i level ( Vec u ) sk → !*TlsConn TlsErr {
     : ( Vec u ) noalpn ( vec_new [u] )
     : !*TlsConn TlsErr r ( tls_accept_mldsa_alpn raw cert_chain level sk noalpn )
-    ( vec_free [u] noalpn )
     ^ r
 }
 
@@ -1359,7 +1349,6 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) ee ( vec_new [u] )
     : ( Vec u ) ed ( vec_new [u] )
     : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 2 sk en ee ed level en 0 en alpn_prefs )
-    ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
 }
 
@@ -1426,7 +1415,6 @@ $ `stdlib/std/aes_gcm.nu`
     ( _blk16 body ext )
     ( vec_free [u] ext )
     : ( Vec u ) hs ( __srv_hs_wrap 2 body )
-    ( vec_free [u] body )
     ^ hs
 }
 

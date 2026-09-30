@@ -266,10 +266,6 @@ $ `stdlib/ext/semver.nu`
             }
         }
         _ → {
-            ( string_free name )
-            ( string_free path )
-            ( string_free version )
-            ( string_free registry )
             ^ @ !Dep ManifestErr { F # ManifestErr ManifestBadShape }
         }
     }

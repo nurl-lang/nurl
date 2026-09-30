@@ -209,14 +209,12 @@ $ `stdlib/core/vec.nu`
     } {
         : String stdin_text ( read_all_stdin )
         ( string_push_str prompt ( string_data stdin_text ) )
-        ( string_free stdin_text )
     }
 
     ? == ( string_len prompt ) 0 {
         ( nurl_print `usage: claude_agent <prompt>\n` )
         ( nurl_print `       echo "<prompt>" | claude_agent\n` )
         ( nurl_print `       set ANTHROPIC_API_KEY in the environment first\n` )
-        ( string_free prompt )
         ^ 1
     } {}
 
@@ -228,7 +226,6 @@ $ `stdlib/core/vec.nu`
     ? == ( nurl_str_len api_key ) 0 {
         ( nurl_print `error: ANTHROPIC_API_KEY not set\n` )
         ?? key { T s → ( string_free s ) F → {} }
-        ( string_free prompt )
         ^ 1
     } {}
 

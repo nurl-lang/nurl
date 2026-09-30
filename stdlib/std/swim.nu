@@ -672,7 +672,6 @@ $ `stdlib/std/async.nu`
                 : SwimMsg ack ( __mk_msg n @ SwimMsgType { MtAck } oseq `` 0 )
                 ( __node_send n ( string_data rh ) rp ack )
                 ( swim_msg_free ack )
-                ( string_free rh )
             }
             F → ( mutex_unlock . n fwd_m )
         }

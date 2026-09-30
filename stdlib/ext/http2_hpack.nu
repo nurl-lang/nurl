@@ -603,8 +603,6 @@ $ `stdlib/ext/http2_frame.nu`
             = cur_off + cur_off . hs consumed
         }
         F e → {
-            ( string_free name )
-            ( string_free value )
             ^ @ !HpackLitResult HpackErr { F e }
         }
     }
@@ -823,7 +821,6 @@ $ `stdlib/ext/http2_frame.nu`
         }
     }
     ? ! ok {
-        ( string_free out )
         ^ @ !String HpackErr { F HpackBadHuffman }
     } {}
     ^ @ !String HpackErr { T out }

@@ -216,7 +216,6 @@ $ `stdlib/ext/regex.nu`
 @ split_csv s pats → ( Vec String ) {
     : String holder ( string_from pats )
     : ( Vec String ) parts ( string_split holder `,` )
-    ( string_free holder )
     ^ parts
 }
 

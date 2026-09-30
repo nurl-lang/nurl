@@ -123,7 +123,6 @@ $ `stdlib/core/vec.nu`
 @ mcp_stdio_spawn0 s cmd → !McpStdioClient McpStdioErr {
     : ( Vec s ) av ( vec_new [s] )
     : !McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
-    ( vec_free [s] av )
     ^ r
 }
 
@@ -131,7 +130,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec s ) av ( vec_with_cap [s] 1 )
     ( vec_push [s] av a0 )
     : !McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
-    ( vec_free [s] av )
     ^ r
 }
 
@@ -140,7 +138,6 @@ $ `stdlib/core/vec.nu`
     ( vec_push [s] av a0 )
     ( vec_push [s] av a1 )
     : !McpStdioClient McpStdioErr r ( mcp_stdio_spawn cmd av )
-    ( vec_free [s] av )
     ^ r
 }
 

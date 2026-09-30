@@ -285,7 +285,6 @@ $ `stdlib/std/fs.nu`
         ?? eo {
             T e → {
                 ? > ( string_len . e path ) 100 {
-                    ( vec_free [u] out )
                     ^ @ !( Vec u ) TarErr { F # TarErr TarPathTooLong }
                 } {}
                 : ( Vec u ) hdr ( __tar_build_header e )

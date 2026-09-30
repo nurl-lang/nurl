@@ -311,7 +311,6 @@ $ `stdlib/std/pkey.nu`
     : ( Vec u ) k3 ( vec_new [u] )
     : i keytype ( _load_tls_creds cert_path key_path cert k1 k2 k3 )
     ? < keytype 0 {
-        ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
         ^ @ !TcpListener NetErr { F ( _net_err_of - 0 keytype ) }
     } {}
     // The second identity: it has to BE an ML-DSA key — a classical key
@@ -326,21 +325,16 @@ $ `stdlib/std/pkey.nu`
         ( vec_free [u] u2 ) ( vec_free [u] u3 )
         : i pqerr ? < pqt 0 - 0 pqt ? != pqt 2 11 0
         ? != pqerr 0 {
-            ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
-            ( vec_free [u] pqcert ) ( vec_free [u] pqk )
             ^ @ !TcpListener NetErr { F ( _net_err_of pqerr ) }
         } {}
     } {}
     : i raw ( nurl_tcp_listen host port backlog )
     ? == raw 0 {
-        ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
-        ( vec_free [u] pqcert ) ( vec_free [u] pqk )
         ^ @ !TcpListener NetErr { F # NetErr NetOther }
     } {}
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
-        ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
-        ( vec_free [u] pqcert ) ( vec_free [u] pqk )
+        ( nurl_tcp_close raw )
         ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
     // The session-ticket key is drawn here, while the process is still
@@ -728,12 +722,6 @@ $ `stdlib/std/pkey.nu`
     ( tls_accept_mldsa_alpn craw cert ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 alpn )
     ( tls_accept_dual_alpn craw cert . l keytype ? == . l keytype 1 none k1 ? == . l keytype 1 k1 none k3 k2
     pqc ( mldsa_level_of_sk_len ( vec_len [u] pqk ) ) pqk alpn )
-    ( vec_free [u] none )
-    ( vec_free [u] pqc ) ( vec_free [u] pqk )
-    ( vec_free [u] k2 ) ( vec_free [u] k3 )
-    ( vec_free [u] cert )
-    ( vec_free [u] k1 )
-    ( vec_free [u] alpn )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
         T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 # i tc } }
@@ -924,7 +912,6 @@ $ `stdlib/std/pkey.nu`
         ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
     } {}
     ? == n 0 {
-        ( vec_free [u] v )
         ^ @ !( Vec u ) NetErr { F # NetErr NetClosed }
     } {}
     ( vec_set_len [u] v n )
@@ -1368,7 +1355,6 @@ $ `stdlib/std/async_ffi.nu`
             ^ @ !( Vec u ) NetErr { T v }
         } {}
         ? == n 0 {
-            ( vec_free [u] v )
             ^ @ !( Vec u ) NetErr { F # NetErr NetClosed }
         } {}
         : i ek ( nurl_tcp_err_kind raw )
@@ -1383,19 +1369,15 @@ $ `stdlib/std/async_ffi.nu`
             // ARE fibers — which is why no hosted test saw it.
             : i rc ( nurl_reactor_wait_read fd ( __wait_ms raw ) )
             ? < rc 0 {
-                ( vec_free [u] v )
                 ^ @ !( Vec u ) NetErr { F # NetErr NetTimeout }
             } {}
             ? == rc 0 {
-                ( vec_free [u] v )
                 ^ @ !( Vec u ) NetErr { F # NetErr NetTimeout }
             } {}
         } {
-            ( vec_free [u] v )
             ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
         }
     }
-    ( vec_free [u] v )
     ^ @ !( Vec u ) NetErr { F # NetErr NetOther }
 }
 

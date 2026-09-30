@@ -380,7 +380,6 @@ $ `stdlib/core/result.nu`
 
     ( json_free dup )
     ( string_free built_s )
-    ( json_free built )
 
     ^ 0
 }

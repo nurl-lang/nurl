@@ -58,7 +58,6 @@ $ `stdlib/ext/env.nu`
                         T ti → {
                             : String reg ( string_substr line 0 ti )
                             ? != 0 ( nurl_str_eq ( string_data reg ) registry ) { = keep 0 } {}
-                            ( string_free reg )
                         }
                         F → {}
                     }
@@ -99,7 +98,6 @@ $ `stdlib/ext/env.nu`
                                     ( string_free out )
                                     = out ( string_substr line + ti 1 - ( string_len line ) + ti 1 )
                                 } {}
-                                ( string_free reg )
                             }
                             F → {}
                         }
@@ -140,7 +138,6 @@ $ `stdlib/ext/env.nu`
     ( string_push_char body 10 )  // \n
     : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
     : !v IoErr _cm ( set_permissions ( string_data path ) 384 )  // 0600
-    ( string_free body )
     ( string_free path )
     ^ wr
 }

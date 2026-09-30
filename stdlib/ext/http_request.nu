@@ -1044,11 +1044,9 @@ $ `stdlib/std/simd.nu`
         }
     }
     ? == status 0 {
-        ( vec_free [u] buf )
         ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqIo }
     } {}
     ? == status 2 {
-        ( vec_free [u] buf )
         ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
     ^ @ !( Vec u ) HttpReqErr { T buf }
@@ -1137,11 +1135,9 @@ $ `stdlib/std/simd.nu`
         }
     }
     ? == status 0 {
-        ( vec_free [u] body )
         ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqMalformed }
     } {}
     ? == status 2 {
-        ( vec_free [u] body )
         ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqTooLarge }
     } {}
     ^ @ !( Vec u ) HttpReqErr { T body }
@@ -1191,7 +1187,6 @@ $ `stdlib/std/simd.nu`
         }
     }
     ? == status 0 {
-        ( string_free line )
         ^ @ !String HttpReqErr { F # HttpReqErr HttpReqIo }
     } {}
     ^ @ !String HttpReqErr { T line }

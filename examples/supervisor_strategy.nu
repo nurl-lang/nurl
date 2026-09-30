@@ -22,7 +22,6 @@ $ `stdlib/std/supervisor.nu`
     ( string_push_str l who )
     ( string_push_char l 10 )
     ( nurl_print ( string_data l ) )
-    ( string_free l )
 }
 
 @ main → i {

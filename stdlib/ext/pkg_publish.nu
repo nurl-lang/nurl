@@ -103,7 +103,6 @@ $ `stdlib/ext/http_cli.nu`
 @ __pack_has_ext s name s ext → b {
     : String ns ( string_from name )
     : b r ( string_ends_with ns ext )
-    ( string_free ns )
     ^ r
 }
 
@@ -250,7 +249,6 @@ $ `stdlib/ext/http_cli.nu`
         }
         F _ → {}
     }
-    ( string_free path )
     ^ pats
 }
 
@@ -367,8 +365,6 @@ $ `stdlib/ext/http_cli.nu`
                                     ? != sub 0 { = rc 1 } {}
                                 } {}
                             }
-                            ( string_free relpath )
-                            ( string_free full )
                         } {}
                         ( string_free nm )
                     }
@@ -380,7 +376,6 @@ $ `stdlib/ext/http_cli.nu`
         }
     }
     ( vec_free_with [String] scope \ String p → v { ( string_free p ) } )
-    ( string_free dir )
     ^ rc
 }
 
@@ -475,7 +470,6 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str hb `Content-Type: application/gzip\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request_bytes `POST` ( string_data url ) tarball ( string_data hb ) )
     ( string_free url )
-    ( string_free hb )
     ?? rr {
         F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
@@ -518,7 +512,6 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str hb `\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request `POST` ( string_data url ) `` ( string_data hb ) )
     ( string_free url )
-    ( string_free hb )
     ?? rr {
         F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
@@ -548,7 +541,6 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str hb `\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request `POST` ( string_data url ) `` ( string_data hb ) )
     ( string_free url )
-    ( string_free hb )
     ?? rr {
         F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {

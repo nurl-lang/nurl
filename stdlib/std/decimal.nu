@@ -275,8 +275,8 @@ $ `stdlib/std/bigint.nu`
         }
         = pos + pos 1
     }
-    ? bad { ( string_free digits ) ^ @ !Decimal ParseErr { F @ ParseErr { BadFormat } } } {}
-    ? == 0 + int_digits frac_digits { ( string_free digits ) ^ @ !Decimal ParseErr { F @ ParseErr { Empty } } } {}
+    ? bad { ^ @ !Decimal ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? == 0 + int_digits frac_digits { ^ @ !Decimal ParseErr { F @ ParseErr { Empty } } } {}
     : !BigInt ParseErr cr ( bigint_from_string ( string_data digits ) )
     ( string_free digits )
     ^ ?? cr {

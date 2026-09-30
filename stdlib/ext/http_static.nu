@@ -219,7 +219,6 @@ $ `stdlib/core/vec.nu`
     ?? sz {
         T _ → {}
         F _ → {
-            ( string_free full )
             ^ ( response_text 404 `not found\n` )
         }
     }
@@ -238,7 +237,6 @@ $ `stdlib/core/vec.nu`
             ^ r
         }
         F _ → {
-            ( string_free full )
             ^ ( response_text 404 `not found\n` )
         }
     }

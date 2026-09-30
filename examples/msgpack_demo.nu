@@ -110,5 +110,4 @@ $ `stdlib/ext/serde.nu`
         }
         F _ → ( nurl_print `scalar encode FAIL\n` )
     }
-    ( json_free sj )
 }

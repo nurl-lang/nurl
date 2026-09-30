@@ -394,7 +394,6 @@ $ `stdlib/net/stack.nu`
     // TO — including 127.0.0.1, whose RST must not claim to come from
     // the interface.
     : TxResult r ( stack_tx_ip4 . ts net dst_ip src_ip ( ip_proto_tcp ) dg 0 ( vec_len [u] dg ) now out )
-    ( vec_free [u] dg )
     ^ . r emitted
 }
 

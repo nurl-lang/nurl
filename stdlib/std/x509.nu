@@ -480,7 +480,7 @@ $ `stdlib/std/bytes.nu`
         }
         = k + k 1
     }
-    ? | | ! okfmt == digits 0 != octets 3 { ( string_free out ) ^ ( string_new ) } {}
+    ? | | ! okfmt == digits 0 != octets 3 { ^ ( string_new ) } {}
     ( __hex_byte out cur )
     ^ out
 }

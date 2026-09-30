@@ -108,7 +108,7 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     : i srclen ( vec_len [u] src )
     ? <= srclen 0 { ^ @ ?( Vec u ) { F } } {}
     : ( Vec u ) out ( deflate src )
-    ? >= ( vec_len [u] out ) srclen { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}  // no gain → store
+    ? >= ( vec_len [u] out ) srclen { ^ @ ?( Vec u ) { F } } {}  // no gain → store
     ^ @ ?( Vec u ) { T out }
 }
 
@@ -117,7 +117,6 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     : ( Vec u ) raw ( vec_new [u] )
     ( bytes_extend_raw raw # s + # i srcp off csize )
     : !( Vec u ) DeflateErr r ( inflate raw )
-    ( vec_free [u] raw )
     ?? r {
         F _ → ^ @ ?( Vec u ) { F }
         T out → {

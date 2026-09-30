@@ -109,19 +109,16 @@ $ `stdlib/ext/http3_qpack.nu`
         ( quic_varint_push c ( h3_st_control ) )
         ( h3_push_settings c ( h3_default_max_field_section ) )
         : i _n ( quic_conn_stream_send qc . h ctl_out c F )
-        ( vec_free [u] c )
     } {}
     ? >= . h enc_out 0 {
         : ( Vec u ) e ( vec_new [u] )
         ( quic_varint_push e ( h3_st_qpack_encoder ) )
         : i _n ( quic_conn_stream_send qc . h enc_out e F )
-        ( vec_free [u] e )
     } {}
     ? >= . h dec_out 0 {
         : ( Vec u ) d ( vec_new [u] )
         ( quic_varint_push d ( h3_st_qpack_decoder ) )
         : i _n ( quic_conn_stream_send qc . h dec_out d F )
-        ( vec_free [u] d )
     } {}
     ^ h
 }
@@ -171,7 +168,6 @@ $ `stdlib/ext/http3_qpack.nu`
     = . h failed 1
     : ( Vec u ) e ( vec_new [u] )
     ( quic_conn_close . h qc 1 code e )
-    ( vec_free [u] e )
 }
 
 // Stream error (§8.1): reset our side, stop the peer's.
@@ -197,7 +193,6 @@ $ `stdlib/ext/http3_qpack.nu`
     : ( Vec u ) f ( vec_new [u] )
     ( h3_push_frame f ( h3_ft_goaway ) p )
     : i _n ( quic_conn_stream_send . h qc . h ctl_out f F )
-    ( vec_free [u] f ) ( vec_free [u] p )
 }
 
 // ── request validation (§4.1.2, §4.3.1) ─────────────────────────
@@ -376,7 +371,6 @@ $ `stdlib/ext/http3_qpack.nu`
                 = j + j 1
             }
             ( vec_push [Header] all ( header_new ( string_data lower ) ( string_data . hh value ) ) )
-            ( string_free lower )
         }
         = k + k 1
     }
@@ -388,7 +382,6 @@ $ `stdlib/ext/http3_qpack.nu`
     : i blen ( vec_len [u] . r body )
     ? > blen 0 { ( h3_push_frame wire ( h3_ft_data ) . r body ) } {}
     : i _n ( quic_conn_stream_send . h qc . s id wire T )
-    ( vec_free [u] wire )
 }
 
 @ __h3_dispatch * H3Conn h * H3Stream s ( @ HttpResponse HttpRequest ) handler → v {

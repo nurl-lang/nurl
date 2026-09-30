@@ -552,8 +552,6 @@ $ `stdlib/std/float.nu`
             ( vec_push [f] out_im + ei + * wr oi * wi orr )
             = k + k 1
         }
-        ( vec_free [f] zr )
-        ( vec_free [f] zi )
         ^ {}
     } {}
     // odd length: the full complex transform
@@ -573,8 +571,6 @@ $ `stdlib/std/float.nu`
         ( vec_push [f] out_im ( __fget im k ) )
         = k + k 1
     }
-    ( vec_free [f] re )
-    ( vec_free [f] im )
 }
 
 // The inverse of `fft_rfft`: the n/2+1 bins of a real signal's spectrum back
@@ -612,8 +608,6 @@ $ `stdlib/std/float.nu`
         ( vec_push [f] out ( __fget re k ) )
         = k + k 1
     }
-    ( vec_free [f] re )
-    ( vec_free [f] im )
 }
 
 @ fft_irfft ( Vec f ) in_re ( Vec f ) in_im i n ( Vec f ) out → v {

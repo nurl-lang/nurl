@@ -495,7 +495,6 @@ $ `stdlib/ext/http_response.nu`
     : HttpResponse rs ( response_status_only 204 )
     ( response_set_header rs `Allow` ( string_data allow ) )
     ( vec_free_with [String] methods \ String s → v { ( string_free s ) } )
-    ( string_free allow )
     ^ rs
 }
 

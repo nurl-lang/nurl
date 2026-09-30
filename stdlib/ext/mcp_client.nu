@@ -269,7 +269,6 @@ $ `stdlib/core/vec.nu`
     ( string_push_str eh ( mcp_protocol_version ) )
     ( string_push_str eh `\r\n` )
     : !Json McpErr r ( __mcp_call_with_headers c method @ ?Json { T p } ( string_data eh ) )
-    ( string_free eh )
     ^ r
 }
 
@@ -287,7 +286,6 @@ $ `stdlib/core/vec.nu`
     ( string_push_str eh ( mcp_protocol_version ) )
     ( string_push_str eh `\r\n` )
     : !Json McpErr r ( __mcp_call_with_headers c `tools/call` @ ?Json { T params } ( string_data eh ) )
-    ( string_free eh )
     ^ r
 }
 

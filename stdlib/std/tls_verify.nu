@@ -121,7 +121,6 @@ $ `stdlib/std/x509.nu`
             // The context string is empty in TLS, per the draft.
             : ( Vec u ) ctx ( vec_new [u] )
             = ok ( mldsa_verify want . iss ec_point msg ctx sig )
-            ( vec_free [u] ctx )
         } {}
     } {}
 
@@ -281,7 +280,6 @@ $ `stdlib/std/x509.nu`
         = i + i 1
     }
     : ( Vec u ) der ?? ( b64_decode_vec ( string_data b64 ) ) { T v → v F _ → ( vec_new [u] ) }
-    ( string_free b64 )
     ^ der
 }
 
@@ -345,9 +343,9 @@ $ `stdlib/std/x509.nu`
     : ( Vec i ) starts ( vec_new [i] )
     : ( Vec i ) lens ( vec_new [i] )
     : i count ( __v_certlist cert_msg is12 starts lens )
-    ? == count 0 { ( vec_free [i] starts ) ( vec_free [i] lens ) ^ 1 } {}
+    ? == count 0 { ^ 1 } {}
     // Bound the presented chain length (defence against pathological inputs).
-    ? > count 16 { ( vec_free [i] starts ) ( vec_free [i] lens ) ^ 10 } {}
+    ? > count 16 { ^ 10 } {}
 
     : ~ i rc 0
     : i ls ?? ( vec_get [i] starts 0 ) { T x → x F _ → 0 }
@@ -407,8 +405,6 @@ $ `stdlib/std/x509.nu`
 
     ( x509_free leaf )
     ( vec_free [u] leafder )
-    ( vec_free [i] starts )
-    ( vec_free [i] lens )
     ^ rc
 }
 
@@ -419,7 +415,6 @@ $ `stdlib/std/x509.nu`
     : ( Vec i ) lens ( vec_new [i] )
     : i count ( __v_certlist cert_msg is12 starts lens )
     ? == count 0 {
-        ( vec_free [i] starts ) ( vec_free [i] lens )
         ^ ( __v_x509_none )
     } {}
     : i ls ?? ( vec_get [i] starts 0 ) { T x → x F _ → 0 }
@@ -427,8 +422,6 @@ $ `stdlib/std/x509.nu`
     : ( Vec u ) der ( bytes_slice cert_msg ls + ls ll )
     : X509 leaf ( x509_parse der )
     ( vec_free [u] der )
-    ( vec_free [i] starts )
-    ( vec_free [i] lens )
     ^ leaf
 }
 

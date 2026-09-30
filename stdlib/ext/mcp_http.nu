@@ -131,7 +131,6 @@ $ `stdlib/core/vec.nu`
     : Json id_null @ Json { JNull }
     : Json env ( mcp_response_error id_null code message )
     : HttpResponse r ( response_json 200 env )
-    ( json_free id_null )
     ( json_free env )
     ^ r
 }
@@ -237,7 +236,6 @@ $ `stdlib/core/vec.nu`
         : HttpResponse r ( response_text 200 ( string_data body ) )
         ( response_set_header r `Content-Type` `text/event-stream` )
         ( response_set_header r `Cache-Control` `no-cache` )
-        ( string_free body )
         ^ r
     } {
         : HttpResponse r ( response_json 200 resp_json )
@@ -532,7 +530,6 @@ s host i port
         F → {
             : Json nullid ( json_null )
             : Json env ( mcp_response_result nullid res )
-            ( json_free nullid )
             ^ env
         }
     }

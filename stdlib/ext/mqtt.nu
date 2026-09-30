@@ -412,8 +412,6 @@ $ `stdlib/ext/websocket.nu`
     ( _mqtt_put_varint out remlen )
     ( vec_extend [u] out vh )
     ( vec_extend [u] out pl )
-    ( vec_free [u] vh )
-    ( vec_free [u] pl )
 }
 
 // CONNACK reason code (byte 3); negative sentinel if not a CONNACK.
@@ -440,7 +438,6 @@ $ `stdlib/ext/websocket.nu`
     }
     ( vec_clear [u] v )
     ( vec_extend [u] v tmp )
-    ( vec_free [u] tmp )
 }
 
 // ── transport: raw TCP/TLS or MQTT-over-WebSocket ────────────────────
@@ -791,7 +788,6 @@ $ `stdlib/ext/websocket.nu`
 @ __mqtt_publish_plain MqttClient cl s topic s payload i qos b retain → !v MqttErr {
     : ( Vec ( Pair String String ) ) e ( vec_new [( Pair String String )] )
     : !v MqttErr r ( __mqtt_do_publish cl topic payload qos retain e )
-    ( vec_free [( Pair String String )] e )
     ^ r
 }
 
@@ -1099,7 +1095,6 @@ $ `stdlib/ext/websocket.nu`
     ( bytes_push_u16_be pkt pid )
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ?? w { T → {} F _ → {} }
-    ( vec_free [u] pkt )
 }
 
 // ── inbound QoS 2 de-duplication ─────────────────────────────────────

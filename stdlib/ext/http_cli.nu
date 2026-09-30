@@ -137,7 +137,6 @@ $ `stdlib/ext/http_cli_types.nu`
 @ __httpc_exec_t s method s url s reqfile s headers_blob i max_secs → !HttpcResp HttpcErr {
     : String tdir ( __httpc_tmpdir )
     : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
-    ( string_free tdir )
     ?? rf {
         F _ → ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
         T respfile → {
@@ -236,7 +235,6 @@ $ `stdlib/ext/http_cli_types.nu`
 @ __httpc_with_body s method s url ( Vec u ) body s headers_blob → !HttpcResp HttpcErr {
     : String tdir ( __httpc_tmpdir )
     : !String IoErr bf ( fs_tempfile ( string_data tdir ) `nurlpkg-body-` )
-    ( string_free tdir )
     ?? bf {
         F _ → ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
         T bodyfile → {
@@ -279,7 +277,6 @@ $ `stdlib/ext/http_cli_types.nu`
     // and the text path are identical on the wire.
     : String tdir ( __httpc_tmpdir )
     : !String IoErr bf ( fs_tempfile ( string_data tdir ) `nurlpkg-body-` )
-    ( string_free tdir )
     ?? bf {
         F _ → ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
         T bodyfile → {

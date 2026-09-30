@@ -188,19 +188,16 @@ $ `stdlib/ext/http3_qpack.nu`
             ( quic_varint_push cb ( h3_st_control ) )
             ( h3_push_settings cb ( h3c_default_max_field_section ) )
             : i _n ( quic_conn_stream_send c . h ctl_out cb F )
-            ( vec_free [u] cb )
         } {}
         ? >= . h enc_out 0 {
             : ( Vec u ) e ( vec_new [u] )
             ( quic_varint_push e ( h3_st_qpack_encoder ) )
             : i _n ( quic_conn_stream_send c . h enc_out e F )
-            ( vec_free [u] e )
         } {}
         ? >= . h dec_out 0 {
             : ( Vec u ) d ( vec_new [u] )
             ( quic_varint_push d ( h3_st_qpack_decoder ) )
             : i _n ( quic_conn_stream_send c . h dec_out d F )
-            ( vec_free [u] d )
         } {}
         ( quic_client_pump qc )
     } {}
@@ -229,7 +226,6 @@ $ `stdlib/ext/http3_qpack.nu`
     ? >= ( quic_conn_state . h c ) 2 { ^ } {}
     : ( Vec u ) reason ( vec_new [u] )
     ( quic_client_close . h qc 1 ( h3_err_no_error ) reason 500 )
-    ( vec_free [u] reason )
 }
 
 @ h3_client_free sink * H3Client h → v {
@@ -286,7 +282,6 @@ $ `stdlib/ext/http3_qpack.nu`
                 = j + j 1
             }
             ( vec_push [Header] all ( header_new ( string_data lower ) ( string_data . hh value ) ) )
-            ( string_free lower )
         }
         = k + k 1
     }
