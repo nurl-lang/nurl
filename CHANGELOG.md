@@ -71,6 +71,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `runtime_shutdown` destroyed a worker's run-queue lock while another
   worker could still steal from it (the join never returned).
 
+- `zstd_decode` returns a buffer the caller owns. It handed back a field
+  of its hand-managed decoder state as read — a borrow — so a caller that
+  let the result go out of scope (the memory model's normal way) leaked
+  the whole decompressed output on every call. The zstd gate now checks
+  the exact live-allocation count across round trips; its resident-size
+  reading, which one retained window buffer could swing by megabytes on
+  a CI runner, is reported but no longer judged.
+
 - The lazily built SHA-256, X25519 and P-256 tables no longer leak one
   copy when two threads build them at once; the winner is published
   through the runtime's publish-once slots.
