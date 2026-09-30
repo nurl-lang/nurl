@@ -13,6 +13,8 @@
 // children, so they run only when it ends and alternate at each yield.
 // Part 2 runs many fibers on four workers; each one's own extent must
 // catch its own panic and keep its own values, whatever the schedule.
+// Windows has no fiber backend yet (spawn is a stub, docs/ASYNC.md):
+// outputs-windows/ pins what the stubs print, as for async_basic.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/std/async.nu`

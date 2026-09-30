@@ -8,6 +8,8 @@
 // after every yield: the fiber wrote another thread's journal, and a
 // panic drain freed a Vec twice (a segfault in ~1 run of 5 under load).
 // Prints the same sum and zero live allocations on every schedule.
+// Windows has no fiber backend yet (spawn is a stub, docs/ASYNC.md):
+// outputs-windows/ pins what the stubs print, as for async_basic.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
