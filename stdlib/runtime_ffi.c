@@ -5042,6 +5042,12 @@ typedef enum {
     NF_DONE
 } NurlFiberState;
 
+/* Per-fiber recovery state (runtime_core.c: NurlRecoverCtx, which
+ * static-asserts it fits). */
+#define NURL_RCTX_WORDS 14
+void nurl__rctx_swap(void *ctx);
+void nurl__rctx_release(void *ctx);
+
 typedef struct NurlFiber {
     NurlFiberCtx     ctx;
     void            *stack_base;     /* mmap origin (guard page + usable) */
@@ -5076,6 +5082,10 @@ typedef struct NurlFiber {
     /* Pending reactor wait — activated by worker after swap-out so the
      * reactor never matches a not-yet-suspended fiber. */
     struct NurlReactorWait *pending_reactor_wait;
+    /* This fiber's recover-frame chain and panic journal, exchanged with
+     * the worker thread's around every switch (nurl__rctx_swap in
+     * runtime_core.c, which asserts the size). Zero = no extent open. */
+    void            *rctx[NURL_RCTX_WORDS];
 } NurlFiber;
 
 typedef struct NurlWorker {
@@ -5524,6 +5534,7 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
 
 static void nurl__fiber_free(NurlFiber *f) {
     if (!f) return;
+    nurl__rctx_release(f->rctx);
     if (f->joinable) {
         pthread_mutex_destroy(&f->join_m);
         pthread_cond_destroy(&f->join_c);
@@ -5886,7 +5897,11 @@ static void *nurl__worker_loop(void *arg) {
         if (!f) break;     /* shutdown */
         f->state = NF_RUNNING;
         __atomic_store_n(&w->current, f, __ATOMIC_SEQ_CST);
+        /* The fiber's recovery state in, the worker's out — and back
+         * after it suspends or ends (see NurlFiber.rctx). */
+        nurl__rctx_swap(f->rctx);
         nurl__swap_to_fiber(w, f);
+        nurl__rctx_swap(f->rctx);
         __atomic_store_n(&w->current, (NurlFiber*)NULL, __ATOMIC_SEQ_CST);
         if (f->state == NF_DONE) {
             if (f->joinable) {
@@ -6666,21 +6681,21 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     return cur->last_park_result;
 }
 
-long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait((int)fd, POLLIN, timeout_ms);
 }
 
-long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
 }
 
-long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
     short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
     if (!mask) return -1;
     return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
 }
 
-long long nurl_fiber_sleep_ms(long long ms) {
+NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
     if (ms <= 0) { nurl_fiber_yield(); return 0; }
     nurl__reactor_wait(-1, 0, ms);
     return 0;
@@ -7072,21 +7087,21 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     return cur->last_park_result;
 }
 
-long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait((int)fd, POLLIN, timeout_ms);
 }
 
-long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     return (long long)nurl__reactor_wait((int)fd, POLLOUT, timeout_ms);
 }
 
-long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
     short mask = (short)(((events & 1) ? POLLIN : 0) | ((events & 2) ? POLLOUT : 0));
     if (!mask) return -1;
     return (long long)nurl__reactor_wait((int)fd, mask, timeout_ms);
 }
 
-long long nurl_fiber_sleep_ms(long long ms) {
+NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
     if (ms <= 0) { nurl_fiber_yield(); return 0; }
     nurl__reactor_wait(-1, 0, ms);
     return 0;
@@ -7119,16 +7134,16 @@ void nurl__reactor_cleanup(void) {}
 void nurl__reactor_shutdown(void) {}
 void nurl__reactor_wake_if_started(void) {}
 
-long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_read(long long fd, long long timeout_ms) {
     (void)fd; (void)timeout_ms; return -1;
 }
-long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_write(long long fd, long long timeout_ms) {
     (void)fd; (void)timeout_ms; return -1;
 }
-long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
+NURL_TLS_FN long long nurl_reactor_wait_io(long long fd, long long events, long long timeout_ms) {
     (void)fd; (void)events; (void)timeout_ms; return -1;
 }
-long long nurl_fiber_sleep_ms(long long ms) {
+NURL_TLS_FN long long nurl_fiber_sleep_ms(long long ms) {
     /* WASI/Windows fall-through; real sleep awaits port. */
     (void)ms; return 0;
 }

@@ -16,7 +16,7 @@ v2.3).
   (§7.6); `vec_free` / `string_free` / `map_free` … remain as an explicit
   early release, never a requirement. A closure's env is owned wherever the closure is kept and
   dropped by that owner, and freeing one by hand is a compile error.
-- **Automatic cleanup includes unwind paths.** A thread-local journal
+- **Automatic cleanup includes unwind paths.** A per-fiber journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
   tracks owned strings, slices, struct fields, enum owners, `% Drop` values
   and closure environments. Compiler leak gates and selected
@@ -1308,8 +1308,13 @@ the non-returning path — never a double free).
 
 A panic `longjmp`s straight to the recover frame, skipping every
 scope-exit drop the compiler queued between (§3). Historically that
-leaked any owned allocation made inside the extent. A thread-local
-**allocation journal** closes that gap without exception tables:
+leaked any owned allocation made inside the extent. An **allocation
+journal** closes that gap without exception tables. It belongs to the
+thread outside fibers and to the fiber inside one: the scheduler hands a
+fiber its own journal and recover-frame chain on every switch, so fibers
+interleaving on a worker (or moving between workers) never see — or
+drain — each other's extents (`compiler/tests/recover_fiber_interleave.nu`,
+`fiber_migration_tls.nu`).
 
 - While a `recover` frame is active, the compiler records every owned
   auto-drop allocation it registers, in one of two forms:

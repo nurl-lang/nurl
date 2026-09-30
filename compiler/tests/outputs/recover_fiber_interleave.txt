@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+A: in extent
+C: in extent
+A: panics
+A: recovered: A's value
+C: C's value, still in use
+C: completed
+D: in inner extent
+E: in extent
+E: panics
+E: recovered
+D: inner value
+D: outer value
+D: done
+many: caught 100 kept 200
