@@ -80,7 +80,7 @@ $ `stdlib/net/stack.nu`
     ( vec_push [u] dg # u 7 )
     : ~ i now t0
     : ~ i sent_at -1
-    : *PktBuf out ( pktbuf_new )
+    : PktBuf out ( pktbuf_new )
     ~ && == sent_at -1 <= now + t0 4000 {
         ( pktbuf_clear out )
         : TxResult t ( stack_tx_ip4 st 0 dst ( ip_proto_udp ) dg 0 1 now out )
@@ -327,7 +327,7 @@ $ `stdlib/net/stack.nu`
 
     : *NetStack ls ( stack_new ( our_mac ) ( our_ip ) ( our_mask ) ( our_gw ) )
     : ( Vec u ) from_stranger ( mk_udp_frame_from ( stranger_mac ) ( stranger_ip ) )
-    : *PktBuf lout ( pktbuf_new )
+    : PktBuf lout ( pktbuf_new )
     : RxResult lr ( stack_rx ls from_stranger 1000 lout )
     ( pb `stranger's datagram accepted: ` == . lr kind ( rx_udp ) )
     ( pktbuf_clear lout )
@@ -344,7 +344,7 @@ $ `stdlib/net/stack.nu`
     : i silent ( ipv4_make 10 0 2 88 )
     : ( Vec u ) qdg ( vec_new [u] )
     ( vec_push [u] qdg # u 7 )
-    : *PktBuf qout ( pktbuf_new )
+    : PktBuf qout ( pktbuf_new )
     : TxResult q1 ( stack_tx_ip4 qs 0 silent ( ip_proto_udp ) qdg 0 1 1000 qout )
     ( pb `a silent peer displaces the datagram with an ARP request: `
     == . q1 status ( tx_arp_pending ) )

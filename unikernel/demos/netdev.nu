@@ -41,7 +41,7 @@ $ `unikernel/drivers/virtionet.nu`
 
 // Move whatever the stack has queued onto the wire, then whatever the
 // wire has for us into the stack. One turn.
-@ pump * VirtioNet nic * NetStack st * PktBuf out → i {
+@ pump * VirtioNet nic * NetStack st PktBuf out → i {
     : i n ( pktbuf_count out )
     : ~ i k 0
     ~ < k n {
@@ -79,7 +79,7 @@ $ `unikernel/drivers/virtionet.nu`
     ( nurl_print `\n` )
 
     : *NetStack st ( stack_new ( vnet_mac nic ) ( my_ip ) ( mask24 ) ( gw_ip ) )
-    : *PktBuf out ( pktbuf_new )
+    : PktBuf out ( pktbuf_new )
 
     // A UDP datagram to the gateway is the smallest thing that makes
     // the stack want a MAC address it does not have — so the first

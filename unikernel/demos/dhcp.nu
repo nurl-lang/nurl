@@ -36,7 +36,7 @@ $ `unikernel/drivers/virtionet.nu`
 // datagram from 0.0.0.0 (the shape DHCP needs before an address
 // exists), and whatever arrives is fed back to it.
 @ turn * VirtioNet nic * NetStack st * DhcpClient c i now → b {
-    : *PktBuf out ( pktbuf_new )
+    : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
         : ( Vec u ) msg ( vec_new [u] )

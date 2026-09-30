@@ -104,7 +104,7 @@ $ `stdlib/net/tcpstack.nu`
 // where each one ends" the frame path uses — and the sender's address
 // travels alongside, two integers per datagram.
 : UdpBox {
-    * PktBuf q
+    PktBuf q
     ( Vec i ) src  // stride 2: ip, port — one pair per datagram in `q`
     i head  // datagrams already delivered; `q` is drained on read
     i last_ip  // sender of the datagram the last recv returned
@@ -134,7 +134,7 @@ $ `stdlib/net/tcpstack.nu`
 
 : SockTab {
     * TcpStack ts
-    * PktBuf out  // frames waiting for the device
+    PktBuf out  // frames waiting for the device
     ( Vec i ) fds  // *Sock, as integers — NURL has no Vec of pointers
     i ephemeral  // next ephemeral port for an unbound listener
     i our_ip
@@ -403,7 +403,7 @@ $ `stdlib/net/tcpstack.nu`
 
 // Everything the stack wants to transmit, boundaries intact. BORROWED:
 // the driver walks it and then either clears it or takes it.
-@ sock_out * SockTab st → *PktBuf { ^ . st out }
+@ sock_out * SockTab st → PktBuf { ^ . st out }
 
 @ sock_pending_frames * SockTab st → i { ^ ( pktbuf_count . st out ) }
 
@@ -412,8 +412,8 @@ $ `stdlib/net/tcpstack.nu`
 // can emit more frames into the same buffer, and a loop over a vector
 // that grows underneath it is the oldest bug there is. The caller owns
 // the returned PktBuf and frees it.
-@ sock_take_out * SockTab st → *PktBuf {
-    : *PktBuf p . st out
+@ sock_take_out * SockTab st → PktBuf {
+    : PktBuf p . st out
     = . st out ( pktbuf_new )
     ^ p
 }
@@ -472,7 +472,7 @@ $ `stdlib/net/tcpstack.nu`
 // by delivering these are left for the next call, so a caller in an
 // event loop keeps its own turn bounded.
 @ sock_loopback * SockTab st i now → i {
-    : *PktBuf w ( sock_take_out st )
+    : PktBuf w ( sock_take_out st )
     : i n ( pktbuf_count w )
     : ~ i k 0
     ~ < k n {

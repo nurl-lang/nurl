@@ -230,13 +230,13 @@ $ `stdlib/net/tcpseg.nu`
     ^ || == . c state ( tcp_closed ) . c reset
 }
 
-@ __emit * Tcb c * PktBuf out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
-    ( tcpseg_push . out bytes . c local_ip . c remote_ip . c local_port . c remote_port
+@ __emit * Tcb c PktBuf out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
+    ( tcpseg_push ( pktbuf_bytes out ) . c local_ip . c remote_ip . c local_port . c remote_port
     seq ack flags . c rcv_wnd . c mss . c snd_wscale payload pay_off pay_len )
     ( pktbuf_mark out )
 }
 
-@ __emit_empty * Tcb c * PktBuf out i flags i seq i ack → v {
+@ __emit_empty * Tcb c PktBuf out i flags i seq i ack → v {
     : ( Vec u ) none ( vec_new [u] )
     ( __emit c out flags seq ack none 0 0 )
 }
@@ -273,7 +273,7 @@ $ `stdlib/net/tcpseg.nu`
 // Active open. `iss` is the initial send sequence — the caller
 // supplies it because a good ISS needs entropy this layer must not
 // invent (RFC 6528); a predictable ISS is a connection-hijack vector.
-@ tcb_connect * Tcb c i local_ip i local_port i remote_ip i remote_port i iss i now * PktBuf out → v {
+@ tcb_connect * Tcb c i local_ip i local_port i remote_ip i remote_port i iss i now PktBuf out → v {
     = . c local_ip local_ip
     = . c local_port local_port
     = . c remote_ip remote_ip
@@ -333,9 +333,9 @@ $ `stdlib/net/tcpseg.nu`
 
 // Emit whatever may legally be sent right now: new data within the
 // peer's window, and a FIN once the queue has drained.
-@ tcb_pump * Tcb c i now * PktBuf out → i {
+@ tcb_pump * Tcb c i now PktBuf out → i {
     ? . c reset { ^ 0 } {}
-    : i before ( vec_len [u] . out bytes )
+    : i before ( vec_len [u] ( pktbuf_bytes out ) )
     : ~ b sent_any F
     ? || == . c state ( tcp_established ) || == . c state ( tcp_close_wait ) == . c state ( tcp_fin_wait_1 ) {
         : ~ b more T
@@ -372,12 +372,12 @@ $ `stdlib/net/tcpseg.nu`
             ( __arm_rtx c now )
         } {}
     } {}
-    ^ - ( vec_len [u] . out bytes ) before
+    ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
 }
 
 // Ask for a graceful close. The FIN itself leaves via tcb_pump once
 // the send queue drains — a close must never truncate queued data.
-@ tcb_close * Tcb c i now * PktBuf out → v {
+@ tcb_close * Tcb c i now PktBuf out → v {
     = . c close_requested T
     ? == . c state ( tcp_listen_st ) { = . c state ( tcp_closed ) ^ } {}
     ? == . c state ( tcp_syn_sent ) { = . c state ( tcp_closed ) ^ } {}
@@ -385,7 +385,7 @@ $ `stdlib/net/tcpseg.nu`
 }
 
 // Abort: send RST and drop the connection.
-@ tcb_abort * Tcb c * PktBuf out → v {
+@ tcb_abort * Tcb c PktBuf out → v {
     ? || == . c state ( tcp_closed ) == . c state ( tcp_listen_st ) {
         = . c state ( tcp_closed )
         ^
@@ -422,8 +422,8 @@ $ `stdlib/net/tcpseg.nu`
     ^ best
 }
 
-@ tcb_tick * Tcb c i now * PktBuf out → i {
-    : i before ( vec_len [u] . out bytes )
+@ tcb_tick * Tcb c i now PktBuf out → i {
+    : i before ( vec_len [u] ( pktbuf_bytes out ) )
     // TIME_WAIT expiry
     ? && == . c state ( tcp_time_wait ) && != . c tw_deadline 0 >= now . c tw_deadline {
         = . c state ( tcp_closed )
@@ -440,7 +440,7 @@ $ `stdlib/net/tcpseg.nu`
         // Back off the probe interval, but never stop probing.
         = . c rto_ms ? >= * . c rto_ms 2 ( tcp_rto_max_ms ) ( tcp_rto_max_ms ) * . c rto_ms 2
         = . c probe_deadline + now . c rto_ms
-        ^ - ( vec_len [u] . out bytes ) before
+        ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
     } {}
     // Retransmission
     ? && != . c rtx_deadline 0 >= now . c rtx_deadline {
@@ -449,7 +449,7 @@ $ `stdlib/net/tcpseg.nu`
             ( __emit_empty c out ( tcp_rst ) . c snd_nxt . c rcv_nxt )
             = . c state ( tcp_closed )
             = . c reset T
-            ^ - ( vec_len [u] . out bytes ) before
+            ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
         } {}
         // Karn: a retransmitted segment yields no RTT sample.
         = . c rtt_seq -1
@@ -477,9 +477,9 @@ $ `stdlib/net/tcpseg.nu`
             }
         }
         ( __arm_rtx c now )
-        ^ - ( vec_len [u] . out bytes ) before
+        ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
     } {}
-    ^ - ( vec_len [u] . out bytes ) before
+    ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
 }
 
 // ── receive path ────────────────────────────────────────────────
@@ -561,9 +561,9 @@ $ `stdlib/net/tcpseg.nu`
 
 // Feed one parsed segment. `buf` is the buffer it was parsed from.
 // Returns bytes emitted into `out`.
-@ tcb_input * Tcb c TcpSeg s ( Vec u ) buf i now * PktBuf out → i {
+@ tcb_input * Tcb c TcpSeg s ( Vec u ) buf i now PktBuf out → i {
     ? ! . s valid { ^ 0 } {}
-    : i before ( vec_len [u] . out bytes )
+    : i before ( vec_len [u] ( pktbuf_bytes out ) )
     : b has_rst == & . s flags 4 4
     : b has_syn == & . s flags 2 2
     : b has_ack == & . s flags 16 16
@@ -579,7 +579,7 @@ $ `stdlib/net/tcpseg.nu`
         // a socket that was never going to answer.
         ? has_ack {
             ( __emit_empty c out ( tcp_rst ) . s ack 0 )
-            ^ - ( vec_len [u] . out bytes ) before
+            ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
         } {}
         ? has_syn {
             = . c remote_port . s src_port
@@ -595,7 +595,7 @@ $ `stdlib/net/tcpseg.nu`
             = . c state ( tcp_syn_rcvd )
             ( __emit_empty c out | ( tcp_syn ) ( tcp_ack ) . c iss . c rcv_nxt )
             ( __arm_rtx c now )
-            ^ - ( vec_len [u] . out bytes ) before
+            ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
         } {}
         ^ 0
     } {}
@@ -606,7 +606,7 @@ $ `stdlib/net/tcpseg.nu`
             // The ACK must acknowledge exactly our SYN.
             ? || ( seq_leq . s ack . c iss ) ( seq_gt . s ack . c snd_nxt ) {
                 ? ! has_rst { ( __emit_empty c out ( tcp_rst ) . s ack 0 ) } {}
-                ^ - ( vec_len [u] . out bytes ) before
+                ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
             } {}
         } {}
         ? has_rst {
@@ -636,7 +636,7 @@ $ `stdlib/net/tcpseg.nu`
                 = . c state ( tcp_syn_rcvd )
                 ( __emit_empty c out | ( tcp_syn ) ( tcp_ack ) . c iss . c rcv_nxt )
             }
-            ^ - ( vec_len [u] . out bytes ) before
+            ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
         } {}
         ^ 0
     } {}
@@ -656,7 +656,7 @@ $ `stdlib/net/tcpseg.nu`
     }
     ? ! acceptable {
         ? ! has_rst { ( __emit_empty c out ( tcp_ack ) . c snd_nxt . c rcv_nxt ) } {}
-        ^ - ( vec_len [u] . out bytes ) before
+        ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
     } {}
 
     ? has_rst {
@@ -671,7 +671,7 @@ $ `stdlib/net/tcpseg.nu`
         ( __emit_empty c out ( tcp_rst ) . c snd_nxt . c rcv_nxt )
         = . c state ( tcp_closed )
         = . c reset T
-        ^ - ( vec_len [u] . out bytes ) before
+        ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
     } {}
 
     ? ! has_ack { ^ 0 } {}
@@ -686,7 +686,7 @@ $ `stdlib/net/tcpseg.nu`
             = . c rtx_count 0
         } {
             ( __emit_empty c out ( tcp_rst ) . s ack 0 )
-            ^ - ( vec_len [u] . out bytes ) before
+            ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
         }
     } {
         ( __process_ack c s now )
@@ -701,7 +701,7 @@ $ `stdlib/net/tcpseg.nu`
     } {}
     ? && == . c state ( tcp_last_ack ) . c fin_acked {
         = . c state ( tcp_closed )
-        ^ - ( vec_len [u] . out bytes ) before
+        ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
     } {}
 
     // ── data ──
@@ -754,5 +754,5 @@ $ `stdlib/net/tcpseg.nu`
     } {}
 
     : i _p ( tcb_pump c now out )
-    ^ - ( vec_len [u] . out bytes ) before
+    ^ - ( vec_len [u] ( pktbuf_bytes out ) ) before
 }

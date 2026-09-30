@@ -25,16 +25,16 @@ $ `stdlib/net/tcp.nu`
 
 // Deliver segment `idx` of `from` into connection `to`. Returns how
 // many bytes `to` emitted in response.
-@ hand * PktBuf from i idx * Tcb to * PktBuf reply i now i src_ip i dst_ip → i {
+@ hand PktBuf from i idx * Tcb to PktBuf reply i now i src_ip i dst_ip → i {
     : i start ( pktbuf_start from idx )
     : i len ( pktbuf_len from idx )
-    : TcpSeg sg ( tcpseg_parse . from bytes start len src_ip dst_ip )
+    : TcpSeg sg ( tcpseg_parse ( pktbuf_bytes from ) start len src_ip dst_ip )
     ? ! . sg valid { ^ -1 } {}
-    ^ ( tcb_input to sg . from bytes now reply )
+    ^ ( tcb_input to sg ( pktbuf_bytes from ) now reply )
 }
 
 // Deliver every segment in `from` to `to`, then clear `from`.
-@ hand_all * PktBuf from * Tcb to * PktBuf reply i now i src_ip i dst_ip → i {
+@ hand_all PktBuf from * Tcb to PktBuf reply i now i src_ip i dst_ip → i {
     : i n ( pktbuf_count from )
     : ~ i k 0
     : ~ i bad 0
@@ -100,8 +100,8 @@ $ `stdlib/net/tcp.nu`
     // ── three-way handshake ──────────────────────────────────────
     : *Tcb cl ( tcb_new )
     : *Tcb sv ( tcb_new )
-    : *PktBuf oc ( pktbuf_new )
-    : *PktBuf os ( pktbuf_new )
+    : PktBuf oc ( pktbuf_new )
+    : PktBuf os ( pktbuf_new )
     ( tcb_listen sv ( ip_s ) 80 )
     = . sv iss 700000
     = . sv remote_ip ( ip_c )
@@ -192,7 +192,7 @@ $ `stdlib/net/tcp.nu`
     = . cl probe_deadline 3500
     : i probe ( tcb_tick cl 3600 oc )
     ( pb `persist timer emits a probe: ` > probe 0 )
-    ( pb `probe is exactly one byte: ` == ( tcpseg_seq_len ( tcpseg_parse . oc bytes ( pktbuf_start oc 0 ) ( pktbuf_len oc 0 ) ( ip_c ) ( ip_s ) ) ) 1 )
+    ( pb `probe is exactly one byte: ` == ( tcpseg_seq_len ( tcpseg_parse ( pktbuf_bytes oc ) ( pktbuf_start oc 0 ) ( pktbuf_len oc 0 ) ( ip_c ) ( ip_s ) ) ) 1 )
     ( pb `probe interval backs off: ` > . cl probe_deadline 3600 )
     ( pktbuf_clear oc )
     // Window reopens → the queued data flows.
@@ -244,9 +244,9 @@ $ `stdlib/net/tcp.nu`
     // A reordered ACK carrying an old, smaller window would otherwise
     // stall the sender permanently (RFC 793 SND.WL1/WL2 rule).
     : *Tcb w ( tcb_new )
-    : *PktBuf ow ( pktbuf_new )
+    : PktBuf ow ( pktbuf_new )
     : *Tcb wp ( tcb_new )
-    : *PktBuf owp ( pktbuf_new )
+    : PktBuf owp ( pktbuf_new )
     ( tcb_listen wp ( ip_s ) 80 )
     = . wp iss 950000
     = . wp remote_ip ( ip_c )
@@ -274,8 +274,8 @@ $ `stdlib/net/tcp.nu`
     // ── graceful close: FIN → TIME_WAIT → CLOSED ────────────────
     : *Tcb a ( tcb_new )
     : *Tcb b ( tcb_new )
-    : *PktBuf oa ( pktbuf_new )
-    : *PktBuf ob ( pktbuf_new )
+    : PktBuf oa ( pktbuf_new )
+    : PktBuf ob ( pktbuf_new )
     ( tcb_listen b ( ip_s ) 80 )
     = . b iss 900000
     = . b remote_ip ( ip_c )
@@ -310,7 +310,7 @@ $ `stdlib/net/tcp.nu`
 
     // ── RST tears the connection down ────────────────────────────
     : *Tcb r ( tcb_new )
-    : *PktBuf orr ( pktbuf_new )
+    : PktBuf orr ( pktbuf_new )
     ( tcb_connect r ( ip_c ) 6666 ( ip_s ) 80 300000 0 orr )
     : ( Vec u ) rstbuf ( vec_new [u] )
     ( tcpseg_push rstbuf ( ip_s ) ( ip_c ) 80 6666 0 ( seq_add 300000 1 ) | ( tcp_rst ) ( tcp_ack ) 0 0 0 empty 0 0 )
@@ -320,7 +320,7 @@ $ `stdlib/net/tcp.nu`
 
     // ── give-up: endless retransmits eventually reset ────────────
     : *Tcb g ( tcb_new )
-    : *PktBuf og ( pktbuf_new )
+    : PktBuf og ( pktbuf_new )
     ( tcb_connect g ( ip_c ) 7777 ( ip_s ) 80 400000 0 og )
     : ~ i t 1000
     : ~ i guard 0

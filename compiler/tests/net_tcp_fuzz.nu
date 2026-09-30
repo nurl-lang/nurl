@@ -62,7 +62,7 @@ $ `stdlib/net/tcp.nu`
         // active open and a listening socket so both entry paths get
         // hammered.
         : *Tcb c ( tcb_new )
-        : *PktBuf out ( pktbuf_new )
+        : PktBuf out ( pktbuf_new )
         ? == % round 2 0 {
             ( tcb_connect c ( ip_c ) 12345 ( ip_s ) 80 + 100000 * round 7 0 out )
         } {
@@ -120,7 +120,7 @@ $ `stdlib/net/tcp.nu`
                 : i nseg ( pktbuf_count out )
                 : ~ i si 0
                 ~ < si nseg {
-                    : TcpSeg es ( tcpseg_parse . out bytes ( pktbuf_start out si ) ( pktbuf_len out si ) ( ip_c ) ( ip_s ) )
+                    : TcpSeg es ( tcpseg_parse ( pktbuf_bytes out ) ( pktbuf_start out si ) ( pktbuf_len out si ) ( ip_c ) ( ip_s ) )
                     ? . es valid {
                         ? == & . es flags 16 16 {
                             ? ( seq_gt . es ack . c rcv_nxt ) { = no_bad_ack F } {}

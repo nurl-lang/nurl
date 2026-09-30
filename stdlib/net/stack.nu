@@ -195,7 +195,7 @@ $ `stdlib/net/pktbuf.nu`
 
 // ── receive ──────────────────────────────────────────────────────
 
-@ __rx_arp * NetStack st ( Vec u ) frame EthHdr eh i now * PktBuf out → RxResult {
+@ __rx_arp * NetStack st ( Vec u ) frame EthHdr eh i now PktBuf out → RxResult {
     : ArpPkt ap ( arp_parse frame . eh payload_off . eh payload_len )
     ? ! . ap valid {
         ( __count_drop st ( drop_foreign_arp ) )
@@ -216,7 +216,7 @@ $ `stdlib/net/pktbuf.nu`
     ? && == . ap op ( arp_op_request ) && != . st our_ip 0 == . ap target_ip . st our_ip {
         ( arp_cache_insert . st arp . ap sender_ip . ap sender_mac now )
         : i before ( pktbuf_total out )
-        ( arp_push_reply . out bytes . st our_mac . st our_ip . ap sender_mac . ap sender_ip )
+        ( arp_push_reply ( pktbuf_bytes out ) . st our_mac . st our_ip . ap sender_mac . ap sender_ip )
         ( pktbuf_mark out )
         = . st tx_frames + . st tx_frames 1
         ^ @ RxResult { ( rx_arp_handled ) 0 . ap sender_ip . st our_ip 0 0 0 0 - ( pktbuf_total out ) before }
@@ -225,7 +225,7 @@ $ `stdlib/net/pktbuf.nu`
     ^ ( __rx_drop ( drop_foreign_arp ) )
 }
 
-@ __rx_icmp * NetStack st ( Vec u ) frame Ip4Hdr ih i now * PktBuf out → RxResult {
+@ __rx_icmp * NetStack st ( Vec u ) frame Ip4Hdr ih i now PktBuf out → RxResult {
     : IcmpMsg im ( icmp_parse frame . ih payload_off . ih payload_len )
     ? ! . im valid {
         ( __count_drop st ( drop_bad_icmp ) )
@@ -242,11 +242,11 @@ $ `stdlib/net/pktbuf.nu`
     : i before ( pktbuf_total out )
     : ( Vec u ) msg ( vec_new [u] )
     ( icmp_push_echo_reply msg im frame )
-    ( eth_push_header . out bytes . ( eth_parse frame ) src . st our_mac ( ethertype_ipv4 ) )
+    ( eth_push_header ( pktbuf_bytes out ) . ( eth_parse frame ) src . st our_mac ( ethertype_ipv4 ) )
     // From the address it was sent TO — a ping to 127.0.0.1 is answered
     // by 127.0.0.1, not by whatever DHCP handed the interface.
-    ( ip4_push_header . out bytes . ih dst . ih src ( ip_proto_icmp ) ( vec_len [u] msg ) ( __next_id st ) 64 T )
-    ( vec_extend [u] . out bytes msg )
+    ( ip4_push_header ( pktbuf_bytes out ) . ih dst . ih src ( ip_proto_icmp ) ( vec_len [u] msg ) ( __next_id st ) 64 T )
+    ( vec_extend [u] ( pktbuf_bytes out ) msg )
     ( vec_free [u] msg )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
@@ -290,7 +290,7 @@ $ `stdlib/net/pktbuf.nu`
 
 // Feed one received frame. Any reply is appended to `out`; the caller
 // transmits whatever `out` gained.
-@ stack_rx * NetStack st ( Vec u ) frame i now * PktBuf out → RxResult {
+@ stack_rx * NetStack st ( Vec u ) frame i now PktBuf out → RxResult {
     = . st rx_frames + . st rx_frames 1
     : EthHdr eh ( eth_parse frame )
     ? ! . eh valid {
@@ -388,7 +388,7 @@ $ `stdlib/net/pktbuf.nu`
 // retransmit timer: one second, paid by a machine that had been
 // listening for forty milliseconds. Priming a hop while nobody is
 // waiting moves that round trip somewhere it costs nothing.
-@ stack_arp_prime * NetStack st i dst_ip i now * PktBuf out → b {
+@ stack_arp_prime * NetStack st i dst_ip i now PktBuf out → b {
     : i hop ( __next_hop st dst_ip )
     ? || ( ipv4_is_broadcast hop ) ( ipv4_is_multicast hop ) { ^ T } {}
     : ?i found ( arp_cache_lookup . st arp hop now )
@@ -396,14 +396,14 @@ $ `stdlib/net/pktbuf.nu`
     ?? found { T _m → { = known T } F → {} }
     ? known { ^ T } {}
     ? ( arp_cache_should_request . st arp hop now ) {
-        ( arp_push_request . out bytes . st our_mac . st our_ip hop )
+        ( arp_push_request ( pktbuf_bytes out ) . st our_mac . st our_ip hop )
         ( pktbuf_mark out )
         = . st tx_frames + . st tx_frames 1
     } {}
     ^ F
 }
 
-@ stack_tx_ip4 * NetStack st i src_ip i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now * PktBuf out → TxResult {
+@ stack_tx_ip4 * NetStack st i src_ip i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now PktBuf out → TxResult {
     : i src ? != src_ip 0 src_ip . st our_ip
     ? == src 0 { ^ @ TxResult { ( tx_no_address ) 0 } } {}
     : i hop ( __next_hop st dst_ip )
@@ -418,7 +418,7 @@ $ `stdlib/net/pktbuf.nu`
         ? ( arp_cache_failed . st arp hop now ) { ^ @ TxResult { ( tx_unreachable ) 0 } } {}
         ? ( arp_cache_should_request . st arp hop now ) {
             : i before ( pktbuf_total out )
-            ( arp_push_request . out bytes . st our_mac . st our_ip hop )
+            ( arp_push_request ( pktbuf_bytes out ) . st our_mac . st our_ip hop )
             ( pktbuf_mark out )
             = . st tx_frames + . st tx_frames 1
             ^ @ TxResult { ( tx_arp_pending ) - ( pktbuf_total out ) before }
@@ -426,9 +426,9 @@ $ `stdlib/net/pktbuf.nu`
         ^ @ TxResult { ( tx_arp_pending ) 0 }
     } {}
     : i before ( pktbuf_total out )
-    ( eth_push_header . out bytes dst_mac . st our_mac ( ethertype_ipv4 ) )
-    ( ip4_push_header . out bytes src dst_ip proto dg_len ( __next_id st ) 64 T )
-    ( vec_extend_range [u] . out bytes dg dg_off dg_len )
+    ( eth_push_header ( pktbuf_bytes out ) dst_mac . st our_mac ( ethertype_ipv4 ) )
+    ( ip4_push_header ( pktbuf_bytes out ) src dst_ip proto dg_len ( __next_id st ) 64 T )
+    ( vec_extend_range [u] ( pktbuf_bytes out ) dg dg_off dg_len )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
     ^ @ TxResult { ( tx_sent ) - ( pktbuf_total out ) before }
@@ -437,7 +437,7 @@ $ `stdlib/net/pktbuf.nu`
 // `src_ip` as above: zero means this interface's address, and a socket
 // bound to loopback passes 127.0.0.1 so its datagrams checksum the way
 // their receiver — itself — expects.
-@ stack_tx_udp * NetStack st i src_ip i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now * PktBuf out → TxResult {
+@ stack_tx_udp * NetStack st i src_ip i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now PktBuf out → TxResult {
     : i src ? != src_ip 0 src_ip . st our_ip
     : ( Vec u ) dg ( vec_new [u] )
     ( udp4_push dg src dst_ip src_port dst_port payload pay_off pay_len )
@@ -447,13 +447,13 @@ $ `stdlib/net/pktbuf.nu`
 
 // Broadcast a UDP datagram from 0.0.0.0 — the shape DHCP needs before
 // an address exists, which the ordinary send path cannot express.
-@ stack_tx_udp_broadcast * NetStack st i src_ip i src_port i dst_port i dst_ip ( Vec u ) payload i pay_off i pay_len * PktBuf out → i {
+@ stack_tx_udp_broadcast * NetStack st i src_ip i src_port i dst_port i dst_ip ( Vec u ) payload i pay_off i pay_len PktBuf out → i {
     : i before ( pktbuf_total out )
     : ( Vec u ) dg ( vec_new [u] )
     ( udp4_push dg src_ip dst_ip src_port dst_port payload pay_off pay_len )
-    ( eth_push_header . out bytes ( mac_broadcast ) . st our_mac ( ethertype_ipv4 ) )
-    ( ip4_push_header . out bytes src_ip dst_ip ( ip_proto_udp ) ( vec_len [u] dg ) ( __next_id st ) 64 T )
-    ( vec_extend [u] . out bytes dg )
+    ( eth_push_header ( pktbuf_bytes out ) ( mac_broadcast ) . st our_mac ( ethertype_ipv4 ) )
+    ( ip4_push_header ( pktbuf_bytes out ) src_ip dst_ip ( ip_proto_udp ) ( vec_len [u] dg ) ( __next_id st ) 64 T )
+    ( vec_extend [u] ( pktbuf_bytes out ) dg )
     ( vec_free [u] dg )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
@@ -463,6 +463,6 @@ $ `stdlib/net/pktbuf.nu`
 // Periodic maintenance: expire stale ARP entries. Returns how many
 // were reclaimed. Timers that emit frames (ARP retry) are driven by
 // the send path, so this stays cheap enough to call every turn.
-@ stack_tick * NetStack st i now * PktBuf out → i {
+@ stack_tick * NetStack st i now PktBuf out → i {
     ^ ( arp_cache_expire . st arp now )
 }

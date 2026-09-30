@@ -251,7 +251,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 // Put every frame the stack built onto the wire, then empty the buffer.
-@ __flush_frames * PktBuf out → v {
+@ __flush_frames PktBuf out → v {
     : i n ( pktbuf_count out )
     : ~ i k 0
     ~ < k n {
@@ -283,7 +283,7 @@ $ `stdlib/net/dnsclient.nu`
     : *NetStack net . sh net
     : i gw . net gateway
     ? == gw 0 { ^ v } {}
-    : *PktBuf out ( pktbuf_new )
+    : PktBuf out ( pktbuf_new )
     : i deadline + ( __ms ) 250
     : ~ b done F
     ~ && ! done < ( __ms ) deadline {
@@ -395,7 +395,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ __dhcp_turn * Shim sh * DhcpClient c i now → v {
-    : *PktBuf out ( pktbuf_new )
+    : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
         : ( Vec u ) msg ( vec_new [u] )
@@ -509,7 +509,7 @@ $ `stdlib/net/dnsclient.nu`
 
     // Out first: whatever the stack queued goes to the wire or back
     // through the door, one frame at a time.
-    : *PktBuf w ( sock_take_out st )
+    : PktBuf w ( sock_take_out st )
     : i n ( pktbuf_count w )
     : ~ i k 0
     ~ < k n {
