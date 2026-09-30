@@ -2459,6 +2459,59 @@ long long nurl_dir_sync(const char *path) {
  * load/store pair (no lock prefix); readers load relaxed as well. A
  * reader racing a live thread may therefore observe a count one behind,
  * which is exactly the latitude the RELAXED atomic already gave it. */
+/* NURL_TLS_FN marks every exported runtime function that touches a
+ * thread-local, directly or through a static helper. A fiber can suspend
+ * on one worker thread and resume on another, but the compiler assumes a
+ * function never changes threads: once such a function is inlined into a
+ * NURL function (the runtime is LTO bitcode), the thread-local's address
+ * is computed once at that function's entry and reused after every call —
+ * including a yield that moved the fiber. The fiber then read and wrote
+ * another thread's journal and return-ownership channel (a double free in
+ * a panic drain; `churn` in the recover_fiber_interleave test showed
+ * `mov %fs:0x0` hoisted across nurl_fiber_yield). Out of line, the
+ * address is computed on the thread the call runs on. The set is the
+ * transitive closure over the runtime's call graph; nurl_fiber_yield and
+ * its siblings in runtime_ffi.c were already out of line. */
+#define NURL_TLS_FN __attribute__((noinline))
+/* The few thread-locals the tiny, hot wrappers read (the return-ownership
+ * channel, the journal's "anything to do?" checks) would pay a call per use
+ * that way — +19% instructions per HTTP request. On ELF x86_64 / aarch64
+ * they are read and written with one `asm volatile` instead, which the
+ * compiler can neither hoist nor merge across a call, so those wrappers
+ * stay inline and stay fiber-safe. The variables carry fixed, hidden
+ * names (not `static`) so the assembly can name them after ThinLTO. */
+#if !defined(__wasi__) && defined(__ELF__) && defined(__x86_64__)
+#  define NURL_TLS_ASM 1
+#  define NURL_TLS_LD(T, sym) __extension__ ({ T v_; \
+       __asm__ volatile("mov %%fs:" #sym "@tpoff, %0" : "=r"(v_)); v_; })
+#  define NURL_TLS_ST(sym, v) do { __typeof__(sym) v_ = (v); \
+       __asm__ volatile("mov %0, %%fs:" #sym "@tpoff" :: "r"(v_) : "memory"); } while (0)
+#elif !defined(__wasi__) && defined(__ELF__) && defined(__aarch64__)
+#  define NURL_TLS_ASM 1
+#  define NURL__TLS_ADR(sym) "mrs %1, tpidr_el0\n\tadd %1, %1, #:tprel_hi12:" #sym \
+       ", lsl #12\n\tadd %1, %1, #:tprel_lo12_nc:" #sym "\n\t"
+#  define NURL_TLS_LD(T, sym) __extension__ ({ T v_; void *a_; \
+       __asm__ volatile(NURL__TLS_ADR(sym) "ldr %0, [%1]" : "=r"(v_), "=&r"(a_)); v_; })
+#  define NURL_TLS_ST(sym, v) do { __typeof__(sym) v_ = (v); void *a_; \
+       __asm__ volatile(NURL__TLS_ADR(sym) "str %0, [%1]" : "+r"(v_), "=&r"(a_) :: "memory"); } while (0)
+#else
+#  define NURL_TLS_ASM 0
+#  define NURL_TLS_LD(T, sym) ((T)(sym))
+#  define NURL_TLS_ST(sym, v) ((sym) = (v))
+#endif
+/* A wrapper whose thread-local accesses all go through NURL_TLS_LD/ST:
+ * inline where those are asm, out of line where they are plain C. */
+#if NURL_TLS_ASM
+#  define NURL_TLS_WRAP
+#else
+#  define NURL_TLS_WRAP NURL_TLS_FN
+#endif
+#if defined(__wasi__) && !defined(__wasm_atomics__)
+#  define NURL_TLS_HOT static
+#else
+#  define NURL_TLS_HOT __thread __attribute__((visibility("hidden"), used))
+#endif
+
 struct nurl__actr {
     unsigned long long alloc;
     unsigned long long freed;
@@ -2701,12 +2754,12 @@ static inline int   nurl__sc_push(void *p)  { (void)p; return 0; }
 /* OOM aborts inside the checked wrappers at the top of this file (see
  * "OOM is fatal, loudly") — malloc/calloc here are already the checked
  * forms via the file-wide macros. */
-void* nurl_alloc(long long bytes) {
+NURL_TLS_FN void* nurl_alloc(long long bytes) {
     nurl__actr_bump(&nurl__actr_slot()->alloc);
     void *p = nurl__sc_pop((size_t)bytes);
     return p ? p : malloc((size_t)bytes);
 }
-void* nurl_zalloc(long long bytes) {
+NURL_TLS_FN void* nurl_zalloc(long long bytes) {
     nurl__actr_bump(&nurl__actr_slot()->alloc);
     void *p = nurl__sc_pop((size_t)bytes);
     if (p) { memset(p, 0, (size_t)bytes); return p; }
@@ -2733,25 +2786,17 @@ void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)byt
 /* Dynamic string-return proof belongs to the executing thread. The compiler
  * captures it immediately after a call, before any destructor or defer can
  * publish another result. WASI without threads has one execution context. */
-#if defined(__wasi__) && !defined(__wasm_atomics__)
-static long long nurl__ret_owned;
-#else
-static __thread long long nurl__ret_owned;
-#endif
-long long nurl_ret_owned_get(void) { return nurl__ret_owned; }
-void nurl_ret_owned_set(long long proof) { nurl__ret_owned = proof; }
+NURL_TLS_HOT long long nurl__ret_owned;
+NURL_TLS_WRAP long long nurl_ret_owned_get(void) { return NURL_TLS_LD(long long, nurl__ret_owned); }
+NURL_TLS_WRAP void nurl_ret_owned_set(long long proof) { NURL_TLS_ST(nurl__ret_owned, proof); }
 
 /* Per-call ownership of a returned handle (String / Vec / owning struct or
  * enum, or an option of one), published by a callee whose paths differ
  * (docs/MEMORY.md §7.6). Kept apart from the string proof above: a caller
  * reads that one for callees that never publish it. */
-#if defined(__wasi__) && !defined(__wasm_atomics__)
-static long long nurl__ret_hown;
-#else
-static __thread long long nurl__ret_hown;
-#endif
-long long nurl_ret_hown_get(void) { return nurl__ret_hown; }
-void nurl_ret_hown_set(long long own) { nurl__ret_hown = own; }
+NURL_TLS_HOT long long nurl__ret_hown;
+NURL_TLS_WRAP long long nurl_ret_hown_get(void) { return NURL_TLS_LD(long long, nurl__ret_hown); }
+NURL_TLS_WRAP void nurl_ret_hown_set(long long own) { NURL_TLS_ST(nurl__ret_hown, own); }
 
 /* Closure environments (docs/MEMORY.md §7.4). A capturing closure's env is
  * one heap block whose first word points at a compiler-emitted descriptor:
@@ -2853,10 +2898,11 @@ typedef struct {
 } NurlJournalEntry;
 static __thread NurlJournalEntry *nurl__jrnl = NULL;
 static __thread size_t *nurl__jrnl_buckets = NULL;
-static __thread size_t nurl__jrnl_len = 0, nurl__jrnl_cap = 0;
-static __thread size_t nurl__jrnl_live = 0;
+NURL_TLS_HOT size_t nurl__jrnl_len = 0;
+static __thread size_t nurl__jrnl_cap = 0;
+NURL_TLS_HOT size_t nurl__jrnl_live = 0;
 static __thread uint64_t nurl__jrnl_sequence = 0;
-static __thread int nurl__jrnl_active = 0;
+NURL_TLS_HOT long long nurl__jrnl_active = 0;
 /* Handle-binding slot registrations (see nurl_journal_push_drop2). */
 typedef struct {
     void *slot;
@@ -2865,7 +2911,8 @@ typedef struct {
     uint64_t sequence;
 } NurlSlotEntry;
 static __thread NurlSlotEntry *nurl__jslot = NULL;
-static __thread size_t nurl__jslot_len = 0, nurl__jslot_cap = 0;
+NURL_TLS_HOT size_t nurl__jslot_len = 0;
+static __thread size_t nurl__jslot_cap = 0;
 
 static size_t nurl__jrnl_bucket(void *p) {
     uint64_t h = (uint64_t)(uintptr_t)p;
@@ -2936,13 +2983,13 @@ static void nurl__jrnl_push2_slow(void *p, void (*drop)(void*), const unsigned c
     ++nurl__jrnl_live;
 }
 static inline void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned char *flag) {
-    if (__builtin_expect(!nurl__jrnl_active, 1) || !p) return;
+    if (__builtin_expect(!NURL_TLS_LD(long long, nurl__jrnl_active), 1) || !p) return;
     nurl__jrnl_push2_slow(p, drop, flag);
 }
 
 static void nurl__jrnl_push(void *p, void (*drop)(void*)) { nurl__jrnl_push2(p, drop, NULL); }
-void nurl_journal_push(void *p) { nurl__jrnl_push(p, NULL); }
-void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
+NURL_TLS_WRAP void nurl_journal_push(void *p) { nurl__jrnl_push(p, NULL); }
+NURL_TLS_WRAP void nurl_journal_push_drop(void *slot, void (*fn)(void*)) {
     if (fn) nurl__jrnl_push(slot, fn);
 }
 /* Handle-binding slots (nurl_journal_push_drop2 / _forget_slot) live on a
@@ -2969,8 +3016,8 @@ static void nurl__jslot_push_slow(void *slot, void (*drop)(void*), const unsigne
 }
 /* An owned String / Vec / struct / container binding: `fn` drops the value
  * in `slot` on a panic if the binding's drop flag still says it owns one. */
-void nurl_journal_push_drop2(void *slot, void *flag, void (*fn)(void*)) {
-    if (__builtin_expect(!nurl__jrnl_active, 1) || !fn || !slot) return;
+NURL_TLS_WRAP void nurl_journal_push_drop2(void *slot, void *flag, void (*fn)(void*)) {
+    if (__builtin_expect(!NURL_TLS_LD(long long, nurl__jrnl_active), 1) || !fn || !slot) return;
     nurl__jslot_push_slow(slot, fn, (const unsigned char *)flag);
 }
 static void nurl__jslot_pop_nulls(void) {
@@ -3000,8 +3047,8 @@ static inline void nurl__jrnl_forget_body(void *p) {
 }
 __attribute__((noinline))
 static void nurl__jrnl_forget_slow(void *p) { nurl__jrnl_forget_body(p); }
-void nurl_journal_forget(void *p) {
-    if (__builtin_expect(!nurl__jrnl_live, 1) || !p) return;
+NURL_TLS_WRAP void nurl_journal_forget(void *p) {
+    if (__builtin_expect(!NURL_TLS_LD(size_t, nurl__jrnl_live), 1) || !p) return;
     nurl__jrnl_forget_slow(p);
 }
 
@@ -3015,8 +3062,8 @@ static void nurl__jslot_forget_slow(void *slot) {
         if (nurl__jslot[i].slot == slot) { nurl__jslot[i].slot = NULL; break; }
     nurl__jslot_pop_nulls();
 }
-void nurl_journal_forget_slot(void *slot) {
-    if (__builtin_expect(!nurl__jslot_len, 1) || !slot) return;
+NURL_TLS_WRAP void nurl_journal_forget_slot(void *slot) {
+    if (__builtin_expect(!NURL_TLS_LD(size_t, nurl__jslot_len), 1) || !slot) return;
     nurl__jslot_forget_slow(slot);
 }
 static inline void nurl__jrnl_remove(void *p) { if (nurl__jrnl_live) nurl__jrnl_forget_body(p); }
@@ -3073,7 +3120,7 @@ static void nurl__jrnl_drain(uint64_t mark) {
     }
 }
 
-void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
+NURL_TLS_FN void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }
@@ -4247,40 +4294,112 @@ static __thread NurlPanicFrame *nurl__panic_top = NULL;
  * out on nurl_panic_last_msg read, freed by the next recover. */
 static __thread char *nurl__panic_last_msg = NULL;
 
+/* ── Recovery state belongs to the fiber, not the thread ─────────────
+ * The recover-frame chain and the panic journal are thread-locals, but a
+ * recover extent is entered by a fiber, and fibers interleave on a
+ * worker thread (and migrate between workers). A fiber that parked
+ * inside its extent left its frame on the chain and its registrations in
+ * the journal; a second fiber's extent then stacked on top, and a panic
+ * in the first longjmp'd into the SECOND fiber's frame from the wrong
+ * stack after draining the second fiber's live values (a segfault; an
+ * HTTP handler that panics while another connection's handler waits on
+ * the same worker). The scheduler therefore exchanges this state with
+ * the fiber's own copy around every switch (nurl__rctx_swap, from the
+ * worker loop in runtime_ffi.c), so each fiber carries its chain and its
+ * journal. The fast paths keep reading plain thread-locals. */
+typedef struct NurlRecoverCtx {
+    NurlJournalEntry *jrnl;
+    size_t           *buckets;
+    size_t            len, cap, live;
+    uint64_t          sequence;
+    int               active;
+    NurlSlotEntry    *jslot;
+    size_t            jslot_len, jslot_cap;
+    NurlPanicFrame   *panic_top;
+    char             *last_msg;
+} NurlRecoverCtx;
+/* runtime_ffi.c reserves NURL_RCTX_WORDS pointers per fiber for it. */
+#define NURL_RCTX_WORDS 14
+_Static_assert(sizeof(NurlRecoverCtx) <= NURL_RCTX_WORDS * sizeof(void *),
+               "NurlRecoverCtx outgrew the per-fiber slot in runtime_ffi.c");
+
+#define NURL__RCTX_XCHG(field, var) do { __typeof__(var) t_ = (var); (var) = c->field; c->field = t_; } while (0)
+NURL_TLS_FN void nurl__rctx_swap(void *ctx) {
+    NurlRecoverCtx *c = (NurlRecoverCtx *)ctx;
+    NURL__RCTX_XCHG(jrnl, nurl__jrnl);
+    NURL__RCTX_XCHG(buckets, nurl__jrnl_buckets);
+    NURL__RCTX_XCHG(len, nurl__jrnl_len);
+    NURL__RCTX_XCHG(cap, nurl__jrnl_cap);
+    NURL__RCTX_XCHG(live, nurl__jrnl_live);
+    NURL__RCTX_XCHG(sequence, nurl__jrnl_sequence);
+    NURL__RCTX_XCHG(active, nurl__jrnl_active);
+    NURL__RCTX_XCHG(jslot, nurl__jslot);
+    NURL__RCTX_XCHG(jslot_len, nurl__jslot_len);
+    NURL__RCTX_XCHG(jslot_cap, nurl__jslot_cap);
+    NURL__RCTX_XCHG(panic_top, nurl__panic_top);
+    NURL__RCTX_XCHG(last_msg, nurl__panic_last_msg);
+}
+#undef NURL__RCTX_XCHG
+
+/* A finished fiber's state: its extents are all closed, so only the
+ * storage is left. */
+void nurl__rctx_release(void *ctx) {
+    NurlRecoverCtx *c = (NurlRecoverCtx *)ctx;
+    free(c->jrnl); free(c->buckets); free(c->jslot);
+    if (c->last_msg) nurl_free(c->last_msg);
+    memset(c, 0, sizeof *c);
+}
+
+/* Leaving an extent. A fiber can come back from the closure — or from the
+ * longjmp of its panic — on a different worker thread than it entered on,
+ * and the compiler assumes a function's thread never changes: an address
+ * of a thread-local computed before the call may be reused after it. So
+ * every thread-local touched after the call is reached through these
+ * out-of-line helpers, which compute it on the thread they run on. */
+__attribute__((noinline))
+static void nurl__recover_leave(NurlPanicFrame *frame) {
+    nurl__panic_top = frame->prev;
+    nurl__jrnl_active--;
+    nurl__jrnl_truncate(frame->jmark);
+}
+__attribute__((noinline))
+static void nurl__recover_caught(NurlPanicFrame *frame) {
+    nurl__recover_leave(frame);
+    nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
+    nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
+}
+__attribute__((noinline))
+static void nurl__recover_enter(NurlPanicFrame *frame) {
+    frame->jmark = nurl__jrnl_mark();
+    frame->prev  = nurl__panic_top;
+    nurl__panic_top = frame;
+    nurl__jrnl_active++;
+}
+
 /* `recover closure` entry. fn_ptr is `void(*)(void *env)`; returns 0 if
  * the closure completed, 1 if it panicked (message via _last_msg). */
-long long nurl_recover(void *fn_ptr, void *env_ptr) {
+NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     NurlPanicFrame frame;
-    frame.msg   = NULL;
-    frame.jmark = nurl__jrnl_mark();
-    frame.prev  = nurl__panic_top;
-    nurl__panic_top = &frame;
-    nurl__jrnl_active++;
+    frame.msg = NULL;
+    nurl__recover_enter(&frame);
     if (setjmp(frame.jb) == 0) {
         ((void (*)(void *))fn_ptr)(env_ptr);
-        nurl__panic_top = frame.prev;
-        nurl__jrnl_active--;
         /* Normal completion: forget anything that escaped the extent
          * (the caller's auto-drop owns it now). Values that did not
          * escape were already freed and removed by nurl_free. */
-        nurl__jrnl_truncate(frame.jmark);
+        nurl__recover_leave(&frame);
         return 0;
     }
-    nurl__panic_top = frame.prev;
-    nurl__jrnl_active--;
     /* nurl_panic already drained + freed the live entries before the
-     * longjmp; truncate defensively in case the jump came from a path
-     * that did not (it always does, but keep the invariant local). */
-    nurl__jrnl_truncate(frame.jmark);
-    nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
-    nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
+     * longjmp; the truncate in leave is defensive. */
+    nurl__recover_caught(&frame);
     return 1;
 }
 
 /* Captured panic message from the most recent recover-with-panic on
  * this thread. BORROWED — overwritten by the next panic. */
-const char *nurl_panic_last_msg(void) {
+NURL_TLS_FN const char *nurl_panic_last_msg(void) {
     return nurl__panic_last_msg ? nurl__panic_last_msg : "";
 }
 
@@ -4289,7 +4408,7 @@ const char *nurl_panic_last_msg(void) {
  * nurl_recover, plus the captured message via nurl_panic_last_msg.
  * Otherwise this is a hard-failure: print to stderr and abort, which
  * is the v0.3.0 status-quo for any unrecoverable condition. */
-void nurl_panic(const char *msg) {
+NURL_TLS_FN void nurl_panic(const char *msg) {
     if (!nurl__panic_top) {
         fprintf(stderr, "nurl panic: %s\n",
                 msg && *msg ? msg : "(no message)");
@@ -4331,15 +4450,15 @@ void nurl_panic(const char *msg) {
         *     identical to the no-frame path on native targets.
         *   - nurl_panic_last_msg always returns "". */
 
-long long nurl_recover(void *fn_ptr, void *env_ptr) {
+NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     ((void (*)(void *))fn_ptr)(env_ptr);
     return 0;
 }
 
-const char *nurl_panic_last_msg(void) { return ""; }
+NURL_TLS_FN const char *nurl_panic_last_msg(void) { return ""; }
 
-void nurl_panic(const char *msg) {
+NURL_TLS_FN void nurl_panic(const char *msg) {
     fprintf(stderr, "nurl panic (wasi: no recover): %s\n",
             msg && *msg ? msg : "(no message)");
     fflush(stderr);
@@ -4444,7 +4563,7 @@ long long nurl_call_code_at2(void *fn, long long off, void *a0, void *a1) {
  * through the thread-local buffer pointer. On targets with no JIT the
  * entry never runs generated code, so the stubs only have to link. */
 #if defined(__wasm__)
-long long nurl_call_code2_sj(void *fn, void *a0, void *a1) {
+NURL_TLS_FN long long nurl_call_code2_sj(void *fn, void *a0, void *a1) {
     (void)fn; (void)a0; (void)a1;
     return 0;
 }
@@ -4458,7 +4577,7 @@ static void nurl__code_trap(long long st) {
 }
 
 NURL__CALL_JIT
-long long nurl_call_code2_sj(void *fn, void *a0, void *a1) {
+NURL_TLS_FN long long nurl_call_code2_sj(void *fn, void *a0, void *a1) {
     if (!fn) return 0;
     jmp_buf jb;
     jmp_buf *old = nurl__code_jb;

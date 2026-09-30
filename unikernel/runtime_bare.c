@@ -153,6 +153,15 @@ typedef enum {
     NB_DONE
 } NbState;
 
+/* Per-coroutine recovery state — the recover-frame chain and the panic
+ * journal, which runtime_core.c keeps in thread-locals. Coroutines
+ * interleave on the one context, so each carries its own and the step
+ * exchanges it around every switch, as runtime_ffi.c's worker loop does
+ * (runtime_core.c: NurlRecoverCtx, which static-asserts the size). */
+#define NURL_RCTX_WORDS 14
+void nurl__rctx_swap(void *ctx);
+void nurl__rctx_release(void *ctx);
+
 typedef struct NbCoro NbCoro;
 struct NbCoro {
     nurl_ctx_t   ctx;
@@ -179,6 +188,7 @@ struct NbCoro {
     int          wake_pending;    /* an unpark that arrived before the
                                    * park — consumed by the next park   */
     int          owns_env;        /* free env after the body returns    */
+    void        *rctx[NURL_RCTX_WORDS];  /* recover chain + journal    */
 };
 
 /* An owned closure environment is a copy the spawn made with
@@ -404,6 +414,7 @@ static NbCoro *nb_coro_new(void *fn, void *env, int joinable) {
 
 static void nb_coro_free(NbCoro *c) {
     if (!c) return;
+    nurl__rctx_release(c->rctx);
     if (c->stack_base) munmap(c->stack_base, c->stack_total);
     free(c);
     nurl__bare_live_coros--;
@@ -494,7 +505,9 @@ static int nb_step_bounded(long long budget_ms) {
 
     c->state = NB_RUNNING;
     nb_current = c;
+    nurl__rctx_swap(c->rctx);
     nb_swap_to_coro(c);
+    nurl__rctx_swap(c->rctx);
     nb_current = 0;
 
     if (c->state == NB_DONE) {
