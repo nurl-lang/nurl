@@ -135,6 +135,10 @@
 // for (`%R`), or `` — while set, every exit of that function ends with the
 // drop glue of its parameter (mem_emit_drop_glue).
 : ~ s g_drop_glue_ty ``
+// 1 once the program declares a `% Drop` impl of its own (scan_impl_decl):
+// until then no type has one, and the questions that walk a struct's
+// fields looking for one answer at once.
+: ~ i g_user_drop_seen 0
 
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
@@ -23096,7 +23100,10 @@
         // from its `str` parameter, which the caller still owns, so the
         // Vec it returns is a view. Without the parameter test the rule
         // silences every allocator in the stdlib.
-        ? & & == fld_first_tt TT_DOT
+        // …and never for a library handle's own literal: its module mints
+        // an owner there — `Mutex_share` reads the block pointer out of the
+        // handle it was given and returns another owner of the block.
+        ? & & & == fld_first_tt TT_DOT ! ( __is_libh agg_ty )
         ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) fld_dot_obj )
         & > ( nurl_str_len fty ) 0
         == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
@@ -31241,9 +31248,15 @@
 // borrowed one is stored into an owner (docs/MEMORY.md §7.6) — and the
 // module keeps its layout to itself: the drop and the copy are its own
 // functions, instantiated for each concrete type the program uses.
+//
+// A plain struct is one too when its module defines `S_drop sink S x`
+// (Mutex, Cond, Semaphore: a reference-counted OS object that every copy
+// shares). There is nothing to instantiate: `S_drop` / `S_share` /
+// `S_clone` are ordinary functions, and the handle's own name is the
+// whole mangle.
 @ __libh_base s ty → s {
     : s sn ( nurl_sym_get2 g_impl_name_syms `libhs##` ty )
-    ? == 0 ( nurl_str_len sn ) { ^ sn } {}
+    ? == 0 ( nurl_str_len sn ) { ^ ( __libh_plain_base ty ) } {}
     ? == 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_drop` ) `__gsrc` ) { ^ ( nurl_str_cat `` `` ) } {}
     // A program's own `% Drop` for this instance (`% Drop ( Box i )`) wins.
     ? & != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) == 0 ( nurl_sym_len2 g_impl_name_syms `handledrop##` ty )
@@ -31253,7 +31266,43 @@
 
 @ __is_libh s ty → b {
     ? | == 0 ( nurl_str_len ty ) != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? == 0 ( nurl_sym_len2 g_impl_name_syms `libhs##` ty ) { ^ ( __libh_plain_is ty ) } {}
     ^ != 0 ( nurl_str_len ( __libh_base ty ) )
+}
+
+// The plain-struct form: `%Mutex` is a handle when `Mutex_drop` is a
+// function of this program taking its one parameter as `sink`. Decided
+// once per type — the signature scan has seen every function by the time
+// any type is asked about — and asked without allocating: every ownership
+// question about every struct type comes through here.
+@ __libh_plain_is s ty → b {
+    : i n ( nurl_str_len ty )
+    ? | | < n 2 != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    ? == 0 g_root_syms { ^ F } {}
+    ? == 0 ( nurl_sym_len2 g_impl_name_syms `libhp##` ty ) {
+        : s sname ( nurl_str_slice ty 1 - n 1 )
+        : s dname ( nurl_str_cat sname `_drop` )
+        : b is & & & != 0 ( nurl_sym_len2 g_root_syms sname `__field_count` )
+        == 0 ( nurl_sym_len2 g_root_syms sname `__variants` )
+        != 0 ( nurl_sym_len2 g_root_syms dname `__nurlfn` )
+        & ( seq ( nurl_sym_get2 g_root_syms dname `__arity` ) `1` ) ( str_contains_word ( nurl_sym_get g_fn_sink dname ) `0` )
+        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `libhp##` ty ) ? is sname `-` )
+    } {}
+    ? ( seq ( nurl_sym_get2 g_impl_name_syms `libhp##` ty ) `-` ) { ^ F } {}
+    // A program's own `% Drop` for the type wins, as for the generic form.
+    ^ ! & != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) == 0 ( nurl_sym_len2 g_impl_name_syms `handledrop##` ty )
+}
+
+@ __libh_plain_base s ty → s {
+    ? ! ( __libh_plain_is ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat ( nurl_sym_get2 g_impl_name_syms `libhp##` ty ) `` )
+}
+
+// Does handle `sn` (a generic template or a plain struct) define `sn_op`?
+@ __libh_has_op s sn s op → b {
+    : s fname ( nurl_str_cat3 sn `_` op )
+    ? != 0 ( nurl_sym_len2 g_generic_syms fname `__gsrc` ) { ^ T } {}
+    ^ & != 0 g_root_syms != 0 ( nurl_sym_len2 g_root_syms fname `__nurlfn` )
 }
 
 // The instance of `S_<op>` for handle type `ty` (`%HashMap__i64__String`
@@ -31282,7 +31331,7 @@
 // copy owning copies of the contents).
 @ __libh_copy_op s ty → s {
     : s sn ( __libh_base ty )
-    ? != 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_share` ) `__gsrc` ) { ^ ( nurl_str_cat `share` `` ) } {}
+    ? ( __libh_has_op sn `share` ) { ^ ( nurl_str_cat `share` `` ) } {}
     ^ ( nurl_str_cat `clone` `` )
 }
 
@@ -31290,8 +31339,8 @@
 // type argument that owns something copies too.
 @ __libh_clone_ok s ty i syms → b {
     : s sn ( __libh_base ty )
-    ? != 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_share` ) `__gsrc` ) { ^ T } {}
-    ? == 0 ( nurl_sym_len2 g_generic_syms ( nurl_str_cat sn `_clone` ) `__gsrc` ) { ^ F } {}
+    ? ( __libh_has_op sn `share` ) { ^ T } {}
+    ? ! ( __libh_has_op sn `clone` ) { ^ F } {}
     : i n ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
     : ~ i k 0
     ~ < k n {
@@ -31305,6 +31354,8 @@
 // Queue `S_<op>`'s instance for `ty` (once) with the generic call path's
 // dedup key, so a program that also calls it by name shares the instance.
 @ __libh_defer s ty s op → v {
+    // A plain-struct handle's functions are ordinary ones, already written.
+    ? == 0 ( nurl_sym_len2 g_impl_name_syms `libhs##` ty ) { ^ v } {}
     : s fname ( nurl_str_cat3 ( __libh_base ty ) `_` op )
     : s mangled ( __libh_fn ty op )
     : s gkey ( nurl_str_cat `__inst_` mangled )
@@ -31382,7 +31433,7 @@
 // A struct none of whose parts can be copied as a handle because one of
 // its fields is (or holds) a value with its own `% Drop`.
 @ __needs_synth_drop s ty → b {
-    ? | == 0 g_root_syms == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? | | == 0 g_user_drop_seen == 0 g_root_syms == 0 ( nurl_str_len ty ) { ^ F } {}
     ? | != ( nurl_str_get ty 0 ) 37 == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     ? | ( __is_libh ty ) ( __has_user_drop ty ) { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
@@ -31401,14 +31452,15 @@
 }
 
 // A program's own `% Drop` for `ty` (registered in the signature
-// pre-scan), as opposed to a drop the compiler supplies for a struct or a
-// handle type (`structdrop##` / `handledrop##`).
+// pre-scan), as opposed to a drop the compiler supplies for a struct, a
+// handle type or an enum (`structdrop##` / `handledrop##` / `autodrop##`).
 @ __has_user_drop s ty → b {
-    ? == 0 ( nurl_str_len ty ) { ^ F } {}
-    ? != 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty ) { ^ F } {}
-    ^ & & != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty )
+    ? | == 0 g_user_drop_seen == 0 ( nurl_str_len ty ) { ^ F } {}
+    ? == 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) { ^ F } {}
+    ^ & & & == 0 ( nurl_sym_len2 g_impl_name_syms `synthdrop##` ty )
     == 0 ( nurl_sym_len2 g_impl_name_syms `structdrop##` ty )
     == 0 ( nurl_sym_len2 g_impl_name_syms `handledrop##` ty )
+    == 0 ( nurl_sym_len2 g_impl_name_syms `autodrop##` ty )
 }
 
 // Register a handle type's drop the first time a binding of it is owned.
@@ -35395,6 +35447,7 @@
                         : s ret_ty ( scan_method_signature lex key mname mangled )
                         ( __coherence_register lex mname impl_llvm impl_nurl tname )
                         ( nurl_sym_def g_impl_name_syms key impl_mangle )
+                        ? & ( seq tname `Drop` ) ( seq mname `drop` ) { = g_user_drop_seen 1 } {}
                         ( nurl_sym_def g_impl_name_syms ( nurl_str_cat mname `__impl_seen` ) `1` )
                         ( nurl_sym_def syms mangled ret_ty )
                         ( nurl_sym_def g_fn_link_sources mangled `1` )

@@ -17,6 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped at all; it is now move-only and dropped field by field. A raw
   `s` field of a Drop type was freed by the compiler *and* by the impl (a
   double free; nested, invalid IR).
+- **A library handle's copy is an owner.** `@ S { . h p }` inside `S`'s
+  own module (a share reading the pointer out of the handle it was given)
+  was classified as a view of the parameter, so `S_share`'s result was
+  copied again when stored and one reference leaked. `arc_clone` escaped
+  only because it spelled the read through a local.
+
+### Changed
+
+- **`Mutex`, `Cond`, `Semaphore` and `Channel` release themselves.** Each
+  is now a reference-counted library handle: every copy — a thread's or a
+  fiber's closure capture, a struct field, a `Vec` element, `Mutex_share`
+  / `Channel_share` — is the same object, and the last owner destroys it
+  (a channel with whatever is still queued). `mutex_free` / `cond_free` /
+  `sem_free` / `chan_free` remain as early releases of one owner. Storing
+  one owned value into two owners is the usual compile error; store a
+  `Mutex_share`. The handles are one word now (`Mutex { s p }`); code
+  that reached into `Mutex.c` uses `mutex_raw`.
+  `compiler/tests/sync_handles_autodrop.nu`.
+- **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
+  struct whose module defines `S_drop sink S x` (and `S_share` /
+  `S_clone`) is dropped and copied like `HashMap`.
 
 ### Added
 

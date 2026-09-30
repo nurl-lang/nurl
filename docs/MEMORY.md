@@ -1613,18 +1613,25 @@ value, a reference count going up) — is a *library handle*: every
 instance is owned, dropped and copied like a `Vec`, and the module keeps
 its layout to itself. The compiler instantiates `S_drop` / `S_clone` for
 each concrete type the program uses (`HashMap_drop__i64__String`).
-`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc` and `Arc` are library
-handles; their `*_free` functions are early releases, their `*_free_with`
-hand each element to a closure instead. A program's own `% Drop` impl for
-an instance (`% Drop ( Box i )`) wins over the library's.
+`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc` and `Channel` are
+library handles; their `*_free` functions are early releases, their
+`*_free_with` hand each element to a closure instead. A program's own
+`% Drop` impl for an instance (`% Drop ( Box i )`) wins over the library's.
+
+A plain (non-generic) struct is a library handle the same way when its
+module defines `S_drop sink S x`: `S_drop` / `S_share` / `S_clone` are
+ordinary functions then, nothing is instantiated. `Mutex`, `Cond` and
+`Semaphore` are: each is one reference-counted pthread object, every copy
+of the handle (a thread closure's capture, a struct field, `Mutex_share`)
+is the same lock, and the last owner destroys it. `Channel` counts its
+owners the same way and releases what is still queued with it. A literal
+of a handle's own type is an owner even when it is built from another
+handle's pointer — that is how `S_share` mints one.
 
 **What still takes a hand.** The special cases, each an explicit call:
-synchronisation primitives shared between threads without a reference
-count (`Channel`, `Mutex`, `Cond`) — `chan_free` / `mutex_free` once every
-user is done; OS resources (files, sockets, processes), closed by their
-`*_close`; memory the program manages itself (`nurl_alloc` / `*T` blocks,
-arenas, globals kept for the program's lifetime). A value shared across
-threads is an `Arc`, which is dropped like any other handle.
+OS resources (files, sockets, processes), closed by their `*_close`;
+memory the program manages itself (`nurl_alloc` / `*T` blocks, arenas,
+globals kept for the program's lifetime); a `Thread`, joined or detached.
 
 **Panics unwind them too.** A String / Vec / owning struct / library
 handle binding is registered with the panic journal together with its drop

@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+locked 400, channel 55, shares 4, gate 2
+live allocations: steady

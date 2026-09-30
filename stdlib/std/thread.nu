@@ -15,9 +15,10 @@
 //
 // NURL-side storage:
 //
-//   * `Mutex { Cell c }` — Cell sized via `nurl_native_sizeof("pthread_mutex_t")`.
-//   * `Cond  { Cell c }` — same pattern, "pthread_cond_t".
-//   * `Thread { Cell t }` — same pattern, "pthread_t".
+//   * `Mutex { s p }` — a `[ owners ][ pthread_mutex_t ]` block, the
+//     native part sized via `nurl_native_sizeof("pthread_mutex_t")`.
+//   * `Cond  { s p }` — same pattern, "pthread_cond_t".
+//   * `Thread { s raw }` — a `nurl_native_sizeof("pthread_t")` buffer.
 //
 // API:
 //
@@ -28,26 +29,28 @@
 //   ( mutex_new )                          → Mutex
 //   ( mutex_lock     Mutex m )             → v
 //   ( mutex_unlock   Mutex m )             → v
-//   ( mutex_free     Mutex m )             → v
+//   ( mutex_free     Mutex m )             → v   (early release; optional)
 //   ( mutex_with     Mutex m ( @ v ) body) → v   (lock + run + unlock)
 //   ( cond_new )                           → Cond
 //   ( cond_wait      Cond c Mutex m )      → v   (must hold m)
 //   ( cond_signal    Cond c )              → v
 //   ( cond_broadcast Cond c )              → v
-//   ( cond_free      Cond c )              → v
+//   ( cond_free      Cond c )              → v   (early release; optional)
 //   ( sem_new        i n )                 → Semaphore  n permits
 //   ( sem_acquire    Semaphore s )         → v   block for a permit
 //   ( sem_try_acquire Semaphore s )        → b   non-blocking
 //   ( sem_release    Semaphore s )         → v   return a permit
 //   ( sem_avail      Semaphore s )         → i   free permits (diagnostic)
-//   ( sem_free       Semaphore s )         → v
+//   ( sem_free       Semaphore s )         → v   (early release; optional)
 //   ( thread_err_name ThreadErr e )        → s
 //
 // Memory model:
 //
-//   * Thread / Mutex / Cond are opaque single-pointer handles. Caller
-//     must `thread_join` (or `thread_detach`) each spawned thread once,
-//     and `mutex_free` / `cond_free` each allocator once.
+//   * Thread / Mutex / Cond / Semaphore are opaque single-pointer
+//     handles. Caller must `thread_join` (or `thread_detach`) each
+//     spawned thread once. A Mutex / Cond / Semaphore is reference
+//     counted: every copy shares the one object and the last owner
+//     destroys it — nothing to free by hand (docs/MEMORY.md §7.6).
 //   * `thread_spawn` BORROWS the closure value and the captured env it
 //     points at. The closure (and its env heap allocation) MUST OUTLIVE
 //     the worker thread — typical pattern is to hold it in a local
@@ -133,10 +136,20 @@ $ `stdlib/core/marker.nu`
 // stdlib/ext/http_server.nu's worker-pool path stash handles in a
 // malloc'd i64 array via nurl_poke / nurl_peek for batch-join later
 // — a 16-byte Cell wouldn't fit those slots.
-// Mutex / Cond don't have that constraint, so they store a full Cell.
 : Thread { s raw }
-: Mutex { Cell c }
-: Cond { Cell c }
+
+// A Mutex (a Cond) is a handle on one pthread object that every copy of
+// it shares: storing a borrowed one into a struct, a Vec or a thread's
+// closure takes another reference (`Mutex_share`), and whoever holds the
+// last one destroys the object when it goes (`Mutex_drop`) — nothing to
+// release by hand. `p` is a block laid out
+//
+//     [ i64 owners ][ pthread_mutex_t / pthread_cond_t ]
+//
+// with the native object sized at runtime (`nurl_native_sizeof`), so the
+// handle is one word whatever the platform's pthread layout is.
+: Mutex { s p }
+: Cond { s p }
 
 // Send / Sync markers (stdlib/core/marker.nu). These three are the
 // reason the marker traits exist at all: structurally a Mutex is
@@ -162,15 +175,17 @@ $ `stdlib/core/marker.nu`
 
 % Sync Thread {}
 
-// Counting semaphore built on Mutex + Cond. The permit count lives in a
-// heap cell (`* i count`) so copying a Semaphore by value — e.g.
-// capturing it in a worker closure — shares the same count, mutex, and
-// condvar across threads (same handle-sharing as Mutex/Cond).
-: Semaphore {
+// Counting semaphore built on Mutex + Cond: a handle like them. Every
+// copy — a worker closure's capture, a struct field — shares one count,
+// mutex and condvar, and the last owner releases them.
+: SemaphoreImpl {
+    i owners
+    i count
     Mutex m
     Cond c
-    * i count
 }
+
+: Semaphore { s p }
 
 // Sharing a Semaphore across threads is the entire point of one — the
 // permit count lives behind the Mutex above, so both questions are
@@ -242,31 +257,72 @@ $ `stdlib/core/marker.nu`
     ( nurl_free ptr )
 }
 
+// ── Shared pthread objects ────────────────────────────────────────
+
+& `c` @ nurl_atomic_i64_inc *u p → i
+
+& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+
+// A zeroed `[ owners ][ native ]` block with one owner.
+@ __sync_block_new s native → i {
+    : ~ i sz ( nurl_native_sizeof native )
+    ? < sz 8 { = sz 8 } {}
+    : s p ( nurl_zalloc + 8 sz )
+    : *i rc # *i p
+    = . rc 0 1
+    ^ # i p
+}
+
+// Another owner of `p`'s block.
+@ __sync_block_share s p → v {
+    ? != 0 # i p { ( nurl_atomic_i64_inc # *u p ) } {}
+}
+
+// Drop one owner of `p`'s block: T when that was the last one (the
+// caller then destroys the object and frees the block).
+@ __sync_block_release s p → b {
+    ? == 0 # i p { ^ F } {}
+    ^ <= ( nurl_atomic_i64_dec_fetch # *u p ) 0
+}
+
 // ── Mutex ─────────────────────────────────────────────────────────
 
 @ mutex_new → Mutex {
-    : Cell c ( cell_for_native `pthread_mutex_t` )
-    ? ( cell_is_null c ) {} {
-        ( pthread_mutex_init ( cell_ptr c ) # *u 0 )
-    }
-    ^ @ Mutex { c }
+    : i p ( __sync_block_new `pthread_mutex_t` )
+    ( pthread_mutex_init # *u + p 8 # *u 0 )
+    ^ @ Mutex { # s p }
+}
+
+// The pthread_mutex_t itself, for the runtime calls that take one
+// (`nurl_fiber_park_with_mutex`).
+@ mutex_raw Mutex m → *u {
+    ^ # *u + # i . m p 8
 }
 
 @ mutex_lock Mutex m → v {
-    ( pthread_mutex_lock ( cell_ptr . m c ) )
+    ( pthread_mutex_lock # *u + # i . m p 8 )
 }
 
 @ mutex_unlock Mutex m → v {
-    ( pthread_mutex_unlock ( cell_ptr . m c ) )
+    ( pthread_mutex_unlock # *u + # i . m p 8 )
 }
 
-@ mutex_free sink Mutex m → v {
-    : Cell c . m c
-    ? ( cell_is_null c ) {} {
-        ( pthread_mutex_destroy ( cell_ptr c ) )
-    }
-    ( cell_free c )
+@ Mutex_share Mutex m → Mutex {
+    ( __sync_block_share . m p )
+    ^ @ Mutex { . m p }
 }
+
+@ Mutex_drop sink Mutex m → v {
+    ( mem_forget m )
+    : s p . m p
+    ? ( __sync_block_release p ) {
+        ( pthread_mutex_destroy # *u + # i p 8 )
+        ( nurl_free p )
+    } {}
+}
+
+// Let go of `m` now rather than at the end of its owner's scope.
+@ mutex_free sink Mutex m → v {}
 
 // Run `body` while holding `m`. Releases the lock even when body returns
 // early (no panic recovery — NURL has no exception model, so an error
@@ -281,32 +337,39 @@ $ `stdlib/core/marker.nu`
 // ── Condition variable ────────────────────────────────────────────
 
 @ cond_new → Cond {
-    : Cell cell ( cell_for_native `pthread_cond_t` )
-    ? ( cell_is_null cell ) {} {
-        ( pthread_cond_init ( cell_ptr cell ) # *u 0 )
-    }
-    ^ @ Cond { cell }
+    : i p ( __sync_block_new `pthread_cond_t` )
+    ( pthread_cond_init # *u + p 8 # *u 0 )
+    ^ @ Cond { # s p }
 }
 
 @ cond_wait Cond c Mutex m → v {
-    ( pthread_cond_wait ( cell_ptr . c c ) ( cell_ptr . m c ) )
+    ( pthread_cond_wait # *u + # i . c p 8 # *u + # i . m p 8 )
 }
 
 @ cond_signal Cond c → v {
-    ( pthread_cond_signal ( cell_ptr . c c ) )
+    ( pthread_cond_signal # *u + # i . c p 8 )
 }
 
 @ cond_broadcast Cond c → v {
-    ( pthread_cond_broadcast ( cell_ptr . c c ) )
+    ( pthread_cond_broadcast # *u + # i . c p 8 )
 }
 
-@ cond_free sink Cond c → v {
-    : Cell cell . c c
-    ? ( cell_is_null cell ) {} {
-        ( pthread_cond_destroy ( cell_ptr cell ) )
-    }
-    ( cell_free cell )
+@ Cond_share Cond c → Cond {
+    ( __sync_block_share . c p )
+    ^ @ Cond { . c p }
 }
+
+@ Cond_drop sink Cond c → v {
+    ( mem_forget c )
+    : s p . c p
+    ? ( __sync_block_release p ) {
+        ( pthread_cond_destroy # *u + # i p 8 )
+        ( nurl_free p )
+    } {}
+}
+
+// Let go of `c` now rather than at the end of its owner's scope.
+@ cond_free sink Cond c → v {}
 
 // ── Semaphore ─────────────────────────────────────────────────────
 //
@@ -320,64 +383,78 @@ $ `stdlib/core/marker.nu`
 //   : Semaphore gate ( sem_new 4 )
 //   // on each worker, around the heavy section:
 //   ( sem_acquire gate )  ( do_heavy_work )  ( sem_release gate )
-//   // ... at shutdown:
-//   ( sem_free gate )
 
 @ sem_new i n → Semaphore {
-    : Mutex m ( mutex_new )
-    : Cond c ( cond_new )
-    : *i count # *i ( nurl_alloc 8 )
-    = . count 0 ? > n 0 n 0
-    ^ @ Semaphore { m c count }
+    : *SemaphoreImpl impl # *SemaphoreImpl ( nurl_alloc Z SemaphoreImpl )
+    = . impl owners 1
+    = . impl count ? > n 0 n 0
+    = . impl m ( mutex_new )
+    = . impl c ( cond_new )
+    ^ @ Semaphore { # s impl }
 }
 
 // Block until a permit is available, then take one.
 @ sem_acquire Semaphore s → v {
-    : *i cp . s count
-    ( mutex_lock . s m )
-    ~ <= . cp 0 0 {
-        ( cond_wait . s c . s m )
+    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    ( mutex_lock . impl m )
+    ~ <= . impl count 0 {
+        ( cond_wait . impl c . impl m )
     }
-    = . cp 0 - . cp 0 1
-    ( mutex_unlock . s m )
+    = . impl count - . impl count 1
+    ( mutex_unlock . impl m )
 }
 
 // Take a permit if one is free right now; never blocks. Returns T iff a
 // permit was acquired (caller must sem_release on T).
 @ sem_try_acquire Semaphore s → b {
-    : *i cp . s count
-    ( mutex_lock . s m )
+    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    ( mutex_lock . impl m )
     : ~ b ok F
-    ? > . cp 0 0 {
-        = . cp 0 - . cp 0 1
+    ? > . impl count 0 {
+        = . impl count - . impl count 1
         = ok T
     } {}
-    ( mutex_unlock . s m )
+    ( mutex_unlock . impl m )
     ^ ok
 }
 
 // Return a permit and wake one waiter.
 @ sem_release Semaphore s → v {
-    : *i cp . s count
-    ( mutex_lock . s m )
-    = . cp 0 + . cp 0 1
-    ( cond_signal . s c )
-    ( mutex_unlock . s m )
+    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    ( mutex_lock . impl m )
+    = . impl count + . impl count 1
+    ( cond_signal . impl c )
+    ( mutex_unlock . impl m )
 }
 
 // Current free-permit count. A point-in-time read (no lock held by the
 // caller) — for diagnostics, not for acquire decisions (use
 // sem_try_acquire, which is atomic).
 @ sem_avail Semaphore s → i {
-    : *i cp . s count
-    ( mutex_lock . s m )
-    : i v . cp 0
-    ( mutex_unlock . s m )
+    : *SemaphoreImpl impl # *SemaphoreImpl . s p
+    ( mutex_lock . impl m )
+    : i v . impl count
+    ( mutex_unlock . impl m )
     ^ v
 }
 
-@ sem_free sink Semaphore s → v {
-    ( mutex_free . s m )
-    ( cond_free . s c )
-    ( nurl_free # s . s count )
+@ Semaphore_share Semaphore s → Semaphore {
+    ( __sync_block_share . s p )
+    ^ @ Semaphore { . s p }
 }
+
+@ Semaphore_drop sink Semaphore s → v {
+    ( mem_forget s )
+    : s p . s p
+    ? ( __sync_block_release p ) {
+        : *SemaphoreImpl impl # *SemaphoreImpl p
+        : Mutex m . impl m
+        ( mem_take m )
+        : Cond c . impl c
+        ( mem_take c )
+        ( nurl_free p )
+    } {}
+}
+
+// Let go of `s` now rather than at the end of its owner's scope.
+@ sem_free sink Semaphore s → v {}
