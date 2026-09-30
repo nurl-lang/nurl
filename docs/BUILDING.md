@@ -508,7 +508,7 @@ instead; one that touches both runs everything.
 | stdlib symbol-collision gate | no two stdlib helpers mangle to the same symbol (`tools/check_stdlib_symbols.sh`) |
 | `nurlfmt --check` | the whole tree is in canonical format (no drift) |
 | HTTP per-request leak gate | `tools/leakcheck/run.sh` — the HTTP server serves a request burst leak-free under LSan |
-| AddressSanitizer + UndefinedBehaviorSanitizer | `build.sh --san` + the corpus under ASan/UBSan, plus a leak-pinned test set under LSan |
+| AddressSanitizer + UndefinedBehaviorSanitizer + LeakSanitizer | `build.sh --san` + the whole corpus under ASan/UBSan/LSan |
 | FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
 | unikernel (no libc, then no OS) | the corpus built with no libc at all, then the guest **booted** under QEMU on x86_64, AArch64 *and* RISC-V64 — and the x86_64 PVH image under cloud-hypervisor as a second loader |
 | Windows x86_64 (`windows-latest`) | `build.bat` — bootstrap fixed point + the Windows golden corpus (`compiler/tests/outputs-windows/`), then `nurl.bat` builds and runs a program with the bundled zig *and* with clang |

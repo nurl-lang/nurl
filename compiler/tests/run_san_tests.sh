@@ -50,17 +50,21 @@
 #  stdlib/runtime.o contains the sanitizer-instrumented code.
 #  This script DOES NOT rebuild — keep concerns separate.
 #
-#  Default behaviour skips leak detection (ASAN_OPTIONS=detect_leaks=0):
-#  some corpus programs omit cleanup to isolate the behavior under test.
-#  The compiler itself has a zero-leak gate (tools/leakgate.sh). CI also
-#  runs explicitly selected cleanup tests with LSAN_DETECT_LEAKS=1.
+#  Leak detection is ON by default (ASAN_OPTIONS=detect_leaks=1): the
+#  whole corpus runs leak-clean, so a leak is a SAN_FAIL like any other
+#  sanitizer report. It used to be off — the compiler's process-lifetime
+#  structures and tests that exit without freeing were expected to leak —
+#  until an LSan run over every test showed both expectations false: the
+#  compiler's own compile leaks nothing (tools/leakgate.sh), and the three
+#  leaks the corpus did show were compiler bugs. LSAN_DETECT_LEAKS=0
+#  turns it off for a quick memory-safety-only pass.
 #
 #  Which tests run here is decided by test_skips.sh, shared verbatim
 #  with run_tests.sh — see that file for why it is shared.
 #
 #  Environment toggles:
 #     NURL_SAN_JOBS=N     worker count (default nproc)
-#     LSAN_DETECT_LEAKS=1 enable leak detection
+#     LSAN_DETECT_LEAKS=0 disable leak detection (default on)
 #     TIMEOUT=N           per-test timeout in seconds
 #     NURL_HTTP_TESTS=1 / NURL_NET_TESTS=1   (see test_skips.sh)
 # ============================================================
@@ -144,20 +148,20 @@ mkdir -p "$WORKDIR" "$LOGDIR"
 TIMEOUT="${TIMEOUT:-120}"
 JOBS="${NURL_SAN_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
-# Leak detection off by default — see file header.
+# Leak detection on by default — see file header.
 #
-# When it IS on, drop stack roots. LSan scans the exiting thread's stack
+# When it is on, drop stack roots. LSan scans the exiting thread's stack
 # for pointers, and by the time it runs main has already returned — so a
 # dead frame that happens to still hold the pointer marks a real leak
 # "reachable". Whether it does is a property of the machine: a 12-core
 # dev box called async_chan clean and a 4-core CI runner called the same
 # binary leaky, and the leak was real. Without this the gate is a coin
-# flip that lands heads on the developer's machine. The whole pinned set
+# flip that lands heads on the developer's machine. The whole corpus
 # passes with it, so nothing here relies on a stack root.
-if [[ "${LSAN_DETECT_LEAKS:-0}" == "1" ]]; then
+if [[ "${LSAN_DETECT_LEAKS:-1}" == "1" ]]; then
     export LSAN_OPTIONS="${LSAN_OPTIONS:+${LSAN_OPTIONS}:}use_stacks=0"
 fi
-export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=${LSAN_DETECT_LEAKS:-0}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
+export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=${LSAN_DETECT_LEAKS:-1}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 
 # The one definition of "a sanitizer said something": ASan
@@ -296,10 +300,9 @@ shopt -u nullglob
 if [[ ${#tests[@]} -eq 0 ]]; then echo "ERROR: no .nu files in $SCRIPT_DIR" >&2; exit 2; fi
 declare -a names=()
 for src in "${tests[@]}"; do names+=("$(basename "$src" .nu)"); done
-# Optional filter: if test names are passed as arguments, run only those.
-# Used by the CI leak gate to run just the leak-pinned tests under
-# LSAN_DETECT_LEAKS=1 (some corpus programs omit cleanup). No args →
-# the whole corpus, exactly as before.
+# Optional filter: if test names are passed as arguments, run only those
+# (CI steps that pin a feature's tests next to its own interop checks).
+# No args → the whole corpus.
 #
 # EVERY requested name must exist. Tolerating the missing ones and
 # running the rest would let the leak gate quietly shrink — rename one
