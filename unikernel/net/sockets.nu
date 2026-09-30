@@ -376,32 +376,32 @@ $ `stdlib/net/dnsclient.nu`
 // hundred thousand rounds in the time a server takes to answer once.
 @ __dhcp_configure * Shim sh → v {
     : *NetStack net . sh net
-    : *DhcpClient c ( dhcp_client_new . net our_mac & ( __ms ) 4294967295 )
+    : DhcpClient c ( dhcp_client_new . net our_mac & ( __ms ) 4294967295 )
     : i deadline + ( __ms ) 10000
     ~ && ! ( dhcp_bound c ) < ( __ms ) deadline {
         ( __dhcp_turn sh c ( __ms ) )
     }
     ? ( dhcp_bound c ) {
-        ( stack_set_address net . c our_ip . c subnet . c router )
-        ( sock_set_our_ip . sh st . c our_ip )
-        ( sock_seed_addr . sh st . c our_ip ( __ms ) )
+        ( stack_set_address net ( dhcp_our_ip c ) ( dhcp_subnet c ) ( dhcp_router c ) )
+        ( sock_set_our_ip . sh st ( dhcp_our_ip c ) )
+        ( sock_seed_addr . sh st ( dhcp_our_ip c ) ( __ms ) )
         // Option 6 — the resolver this network says to use. Kept on
         // the shim: name resolution is a socket-layer service here,
         // exactly where getaddrinfo keeps it on a hosted machine.
-        = . sh dns_ip . c dns
+        = . sh dns_ip ( dhcp_dns c )
         ( __arp_warm sh )
     } {}
     ( dhcp_client_free c )
 }
 
-@ __dhcp_turn * Shim sh * DhcpClient c i now → v {
+@ __dhcp_turn * Shim sh DhcpClient c i now → v {
     : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
         : ( Vec u ) msg ( vec_new [u] )
-        ( dhcp_push_message msg want . c xid . c mac 0
-        ? == want ( dhcp_msg_request ) . c our_ip 0
-        ? == want ( dhcp_msg_request ) . c server_id 0 )
+        ( dhcp_push_message msg want ( dhcp_xid c ) ( dhcp_mac c ) 0
+        ? == want ( dhcp_msg_request ) ( dhcp_our_ip c ) 0
+        ? == want ( dhcp_msg_request ) ( dhcp_server_id c ) 0 )
         : i _n ( stack_tx_udp_broadcast . sh net ( dhcp_src_ip c ) ( dhcp_client_port )
         ( dhcp_server_port ) ( dhcp_dest_ip c ) msg 0 ( vec_len [u] msg ) out )
         ( vec_free [u] msg )

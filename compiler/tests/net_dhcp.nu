@@ -74,7 +74,7 @@ $ `stdlib/net/dhcp.nu`
 }
 
 @ main → i {
-    : *DhcpClient c ( dhcp_client_new ( cl_mac ) 305419896 )
+    : DhcpClient c ( dhcp_client_new ( cl_mac ) 305419896 )
     ( pb `starts unbound: ` ! ( dhcp_bound c ) )
 
     // ── INIT → SELECTING ─────────────────────────────────────────
@@ -113,7 +113,7 @@ $ `stdlib/net/dhcp.nu`
     ( pb `offer yiaddr: ` == . om yiaddr ( off_ip ) )
     ( pb `offer server id: ` == . om server_id ( srv_ip ) )
     ( pb `offer accepted: ` ( dhcp_handle c om 13000 ) )
-    ( pb `now requesting: ` == . c state ( dhcp_state_requesting ) )
+    ( pb `now requesting: ` == ( dhcp_state c ) ( dhcp_state_requesting ) )
     ( pb `not bound yet: ` ! ( dhcp_bound c ) )
     // The REQUEST is the answer to an OFFER already in hand, so it goes
     // out on the next turn — the retransmit timer starts after we have
@@ -131,19 +131,19 @@ $ `stdlib/net/dhcp.nu`
     : DhcpMsg am ( dhcp_parse ack 0 ( vec_len [u] ack ) )
     ( pb `ack accepted: ` ( dhcp_handle c am 20000 ) )
     ( pb `bound: ` ( dhcp_bound c ) )
-    ( pb `got our address: ` == . c our_ip ( off_ip ) )
-    ( pb `got subnet mask: ` == . c subnet 4294967040 )
-    ( pb `got router: ` == . c router ( srv_ip ) )
-    ( pb `got dns: ` == . c dns ( ipv4_make 10 0 2 3 ) )
-    ( pb `T1 defaults to lease/2: ` == . c t1_ms + 20000 1800000 )
-    ( pb `T2 defaults to 7/8 lease: ` == . c t2_ms + 20000 3150000 )
-    ( pb `lease deadline: ` == . c lease_ms + 20000 3600000 )
+    ( pb `got our address: ` == ( dhcp_our_ip c ) ( off_ip ) )
+    ( pb `got subnet mask: ` == ( dhcp_subnet c ) 4294967040 )
+    ( pb `got router: ` == ( dhcp_router c ) ( srv_ip ) )
+    ( pb `got dns: ` == ( dhcp_dns c ) ( ipv4_make 10 0 2 3 ) )
+    ( pb `T1 defaults to lease/2: ` == ( dhcp_t1_ms c ) + 20000 1800000 )
+    ( pb `T2 defaults to 7/8 lease: ` == ( dhcp_t2_ms c ) + 20000 3150000 )
+    ( pb `lease deadline: ` == ( dhcp_lease_ms c ) + 20000 3600000 )
     ( pb `bound is quiet: ` == ( dhcp_tick c 100000 ) 0 )
     ( pb `still quiet just before T1: ` == ( dhcp_tick c 1819999 ) 0 )
 
     // ── T1 → RENEWING ────────────────────────────────────────────
     ( pb `T1 triggers renew: ` == ( dhcp_tick c 1820000 ) ( dhcp_msg_request ) )
-    ( pb `state renewing: ` == . c state ( dhcp_state_renewing ) )
+    ( pb `state renewing: ` == ( dhcp_state c ) ( dhcp_state_renewing ) )
     ( pb `renew unicasts to server: ` == ( dhcp_dest_ip c ) ( srv_ip ) )
     ( pb `renew src is our address: ` == ( dhcp_src_ip c ) ( off_ip ) )
     ( pb `renew still counts as bound: ` ( dhcp_bound c ) )
@@ -152,29 +152,29 @@ $ `stdlib/net/dhcp.nu`
     : ( Vec u ) ack2 ( mk_reply ( dhcp_msg_ack ) 305419896 ( cl_mac ) ( off_ip ) 3600 1800 3150 )
     : DhcpMsg am2 ( dhcp_parse ack2 0 ( vec_len [u] ack2 ) )
     ( pb `renewal ack accepted: ` ( dhcp_handle c am2 1830000 ) )
-    ( pb `back to bound: ` == . c state ( dhcp_state_bound ) )
-    ( pb `lease extended: ` == . c lease_ms + 1830000 3600000 )
-    ( pb `explicit T1 honoured: ` == . c t1_ms + 1830000 1800000 )
+    ( pb `back to bound: ` == ( dhcp_state c ) ( dhcp_state_bound ) )
+    ( pb `lease extended: ` == ( dhcp_lease_ms c ) + 1830000 3600000 )
+    ( pb `explicit T1 honoured: ` == ( dhcp_t1_ms c ) + 1830000 1800000 )
 
     // ── T2 → REBINDING (server silent) ───────────────────────────
     : i _r1 ( dhcp_tick c 3630000 )  // T1 again → RENEWING
-    ( pb `renewing again at T1: ` == . c state ( dhcp_state_renewing ) )
+    ( pb `renewing again at T1: ` == ( dhcp_state c ) ( dhcp_state_renewing ) )
     : i r2 ( dhcp_tick c 4980000 )  // T2 → REBINDING
     ( pb `T2 triggers rebind: ` == r2 ( dhcp_msg_request ) )
-    ( pb `state rebinding: ` == . c state ( dhcp_state_rebinding ) )
+    ( pb `state rebinding: ` == ( dhcp_state c ) ( dhcp_state_rebinding ) )
     ( pb `rebind broadcasts: ` == ( dhcp_dest_ip c ) 4294967295 )
     ( pb `rebind keeps our address as src: ` == ( dhcp_src_ip c ) ( off_ip ) )
 
     // ── expiry → INIT ────────────────────────────────────────────
     : i _r3 ( dhcp_tick c 5430001 )
-    ( pb `expiry drops the address: ` == . c our_ip 0 )
-    ( pb `expiry returns to INIT: ` == . c state ( dhcp_state_init ) )
+    ( pb `expiry drops the address: ` == ( dhcp_our_ip c ) 0 )
+    ( pb `expiry returns to INIT: ` == ( dhcp_state c ) ( dhcp_state_init ) )
     ( pb `no longer bound: ` ! ( dhcp_bound c ) )
     ( pb `INIT re-discovers: ` == ( dhcp_tick c 5430002 ) ( dhcp_msg_discover ) )
     ( dhcp_client_free c )
 
     // ── NAK drops the claim immediately ──────────────────────────
-    : *DhcpClient c2 ( dhcp_client_new ( cl_mac ) 305419896 )
+    : DhcpClient c2 ( dhcp_client_new ( cl_mac ) 305419896 )
     : i _d ( dhcp_tick c2 0 )
     : ( Vec u ) offer2 ( mk_reply ( dhcp_msg_offer ) 305419896 ( cl_mac ) ( off_ip ) 3600 0 0 )
     : b _o ( dhcp_handle c2 ( dhcp_parse offer2 0 ( vec_len [u] offer2 ) ) 1000 )
@@ -183,8 +183,8 @@ $ `stdlib/net/dhcp.nu`
     ( pb `bound before nak: ` ( dhcp_bound c2 ) )
     : ( Vec u ) nak ( mk_reply ( dhcp_msg_nak ) 305419896 ( cl_mac ) 0 0 0 0 )
     ( pb `nak accepted: ` ( dhcp_handle c2 ( dhcp_parse nak 0 ( vec_len [u] nak ) ) 3000 ) )
-    ( pb `nak drops address at once: ` == . c2 our_ip 0 )
-    ( pb `nak returns to INIT: ` == . c2 state ( dhcp_state_init ) )
+    ( pb `nak drops address at once: ` == ( dhcp_our_ip c2 ) 0 )
+    ( pb `nak returns to INIT: ` == ( dhcp_state c2 ) ( dhcp_state_init ) )
     ( dhcp_client_free c2 )
 
     // ── codec robustness ─────────────────────────────────────────
@@ -207,12 +207,12 @@ $ `stdlib/net/dhcp.nu`
     // Zero-length lease → the client's own default, never a zero lease
     // (a zero lease would expire the address on the next tick).
     : ( Vec u ) nolease ( mk_reply ( dhcp_msg_ack ) 305419896 ( cl_mac ) ( off_ip ) 0 0 0 )
-    : *DhcpClient c3 ( dhcp_client_new ( cl_mac ) 305419896 )
+    : DhcpClient c3 ( dhcp_client_new ( cl_mac ) 305419896 )
     : i _d3 ( dhcp_tick c3 0 )
     : ( Vec u ) offer3 ( mk_reply ( dhcp_msg_offer ) 305419896 ( cl_mac ) ( off_ip ) 0 0 0 )
     : b _o3 ( dhcp_handle c3 ( dhcp_parse offer3 0 ( vec_len [u] offer3 ) ) 1000 )
     : b _a3 ( dhcp_handle c3 ( dhcp_parse nolease 0 ( vec_len [u] nolease ) ) 2000 )
-    ( pb `missing lease → 1h default: ` == . c3 lease_ms + 2000 3600000 )
+    ( pb `missing lease → 1h default: ` == ( dhcp_lease_ms c3 ) + 2000 3600000 )
     ( pb `bound with defaulted lease: ` ( dhcp_bound c3 ) )
     ( dhcp_client_free c3 )
 
@@ -229,12 +229,12 @@ $ `stdlib/net/dhcp.nu`
     : ~ i hk 0
     ~ < hk 4 {
         : i bad ? == hk 0 0 ? == hk 1 ( ipv4_make 127 0 0 1 ) ? == hk 2 ( ipv4_make 224 0 0 1 ) 4294967295
-        : *DhcpClient hc ( dhcp_client_new ( cl_mac ) 305419896 )
+        : DhcpClient hc ( dhcp_client_new ( cl_mac ) 305419896 )
         : i _ht ( dhcp_tick hc 0 )
         ( vec_free [u] hostile )
         = hostile ( mk_reply ( dhcp_msg_offer ) 305419896 ( cl_mac ) bad 3600 0 0 )
         : b took ( dhcp_handle hc ( dhcp_parse hostile 0 ( vec_len [u] hostile ) ) 1000 )
-        ? || took != . hc our_ip 0 { = refused_all F } {}
+        ? || took != ( dhcp_our_ip hc ) 0 { = refused_all F } {}
         ( dhcp_client_free hc )
         = hk + hk 1
     }
@@ -243,7 +243,7 @@ $ `stdlib/net/dhcp.nu`
     // A mask is a run of ones then a run of zeros. 255.0.255.0 is not
     // one, and taking it makes "is this destination on my link" mean
     // something nobody wrote down.
-    : *DhcpClient c4 ( dhcp_client_new ( cl_mac ) 305419896 )
+    : DhcpClient c4 ( dhcp_client_new ( cl_mac ) 305419896 )
     : i _d4 ( dhcp_tick c4 0 )
     : ( Vec u ) offer4 ( mk_reply ( dhcp_msg_offer ) 305419896 ( cl_mac ) ( off_ip ) 3600 0 0 )
     : b _o4 ( dhcp_handle c4 ( dhcp_parse offer4 0 ( vec_len [u] offer4 ) ) 1000 )
@@ -253,7 +253,7 @@ $ `stdlib/net/dhcp.nu`
     : b _m4 ( vec_set [u] ack4 252 # u 0 )  // 255.255.255.0 → 255.0.255.0
     : b _a4 ( dhcp_handle c4 ( dhcp_parse ack4 0 ( vec_len [u] ack4 ) ) 2000 )
     ( pb `bound despite the bad mask: ` ( dhcp_bound c4 ) )
-    ( pb `a non-contiguous mask falls back to /24: ` == . c4 subnet ( ipv4_mask_from_prefix 24 ) )
+    ( pb `a non-contiguous mask falls back to /24: ` == ( dhcp_subnet c4 ) ( ipv4_mask_from_prefix 24 ) )
     ( dhcp_client_free c4 )
 
     // Every option byte, fuzzed: the walk must terminate and the client
@@ -270,11 +270,11 @@ $ `stdlib/net/dhcp.nu`
         : i was ?? ( vec_get [u] hostile at ) { T x → # i x F → 0 }
         : b _f1 ( vec_set [u] hostile at # u & >> fseed 17 255 )
         : DhcpMsg fm ( dhcp_parse hostile 0 hlen )
-        : *DhcpClient fc ( dhcp_client_new ( cl_mac ) 305419896 )
+        : DhcpClient fc ( dhcp_client_new ( cl_mac ) 305419896 )
         : i _ft ( dhcp_tick fc 0 )
         : b _fh ( dhcp_handle fc fm 1000 )
-        ? && ( dhcp_bound fc ) ! ( ipv4_is_assignable . fc our_ip ) { = fuzz_ok F } {}
-        ? && ( dhcp_bound fc ) ! ( ipv4_mask_is_contiguous . fc subnet ) { = fuzz_ok F } {}
+        ? && ( dhcp_bound fc ) ! ( ipv4_is_assignable ( dhcp_our_ip fc ) ) { = fuzz_ok F } {}
+        ? && ( dhcp_bound fc ) ! ( ipv4_mask_is_contiguous ( dhcp_subnet fc ) ) { = fuzz_ok F } {}
         ( dhcp_client_free fc )
         : b _f2 ( vec_set [u] hostile at # u & was 255 )
         = fk + fk 1
