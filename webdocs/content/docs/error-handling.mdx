@@ -112,8 +112,8 @@ whole process.
 </Callout>
 
 Recover is not exception handling in the C++ sense. There is no stack
-unwinding with destructor calls. A thread-local journal tracks every owned
-allocation the runtime made since the recover point. It reclaims the
+unwinding with destructor calls. A journal — kept per fiber — tracks every
+owned allocation the runtime made since the recover point. It reclaims the
 allocations if a panic fires. So ordinary owned strings, slices, and struct
 fields do not leak across a panic. It does not catch signal faults
 (`SIGSEGV`, `SIGFPE`, and similar signals still abort the process).

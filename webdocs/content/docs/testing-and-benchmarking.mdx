@@ -103,7 +103,8 @@ wall-clock, randomness, and network dependence. Exceptions must be
 explicitly gated.
 
 `compiler/tests/run_san_tests.sh` re-runs the corpus under
-AddressSanitizer/UBSan. It checks for leaks and undefined behavior. It
+AddressSanitizer, UBSan and LeakSanitizer: every test must be free of
+memory errors, undefined behavior and leaks. It
 has its own pass/fail logic. This logic is separate from the goldens.
 
 ## Next

@@ -19,9 +19,9 @@ v2.3).
 - **Automatic cleanup includes unwind paths.** A per-fiber journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
   tracks owned strings, slices, struct fields, enum owners, `% Drop` values
-  and closure environments. Compiler leak gates and selected
-  program leak tests verify these paths. Remaining ownership limitations
-  (raw owned strings and slices cannot go to a `sink`) are described below; this is not a
+  and closure environments. Compiler leak gates and the leak-checked
+  test corpus (every test, under LeakSanitizer) verify these paths. Remaining ownership limitations
+  (owned slices, and structs whose raw `s` fields the compiler owns, cannot go to a `sink`) are described below; this is not a
   guarantee that every accepted program is memory-safe or leak-free.
 - **A borrow checker runs by default.** A diagnostic analysis pass
   catches use-after-move, alias double-free, and closures that escape
@@ -850,7 +850,8 @@ hits in practice. It deliberately does **not** cover:
 - **`recover` / panic unwind — reclaimed, not modelled.** A panic is a
   `setjmp`/`longjmp` jump to the nearest `recover` frame (no exception
   tables, no unwinding destructors). The owned allocations the `longjmp`
-  skips no longer leak: a thread-local **allocation journal** (§7.2)
+  skips no longer leak: an **allocation journal** (§7.2), per fiber —
+  the thread's own outside fibers —
   records every owned auto-drop allocation made inside a recover extent —
   raw buffers *and* `% Drop` / autodrop-enum values (whose typed
   destructor it replays) — and reclaims the still-live ones *before* the
@@ -1290,10 +1291,10 @@ bodies, auto-drop is exhaustive: owned strings, owned slices, `Drop`
 values, and **owned struct fields — including fields nested inside
 inner struct literals** — are all freed at scope exit, and a binding
 declared in a `?` / match / loop arm that *falls through* (no `^`) is
-dropped at arm end, not leaked. These behaviours are pinned leak-clean
-by the leak-verification tests `struct_nested_field_drop`, `arm_local_drop`,
-`arm_local_trailing_drop` (§6.6). Do **not** treat them as open
-limitations.
+dropped at arm end, not leaked. The leak-checked corpus holds these
+behaviours leak-clean — `struct_nested_field_drop`, `arm_local_drop` and
+`arm_local_trailing_drop` pin them specifically (§6.6). Do **not** treat
+them as open limitations.
 
 This holds with `;` **defers** in the function too: values registered
 before a defer statement (which its body may reference) are reclaimed
@@ -1367,8 +1368,8 @@ argument ownership remain tracked in [the hardening ledger](dev/V1_HARDENING.md)
 Where in the extent the allocation was made does not change that either:
 the `panic-reclaim` class (§6.6) enumerates the spellings — a `?` arm, a
 `??` arm, a loop body, two frames deep, a nested extent, a second extent
-after the first — and requires all of them to come back clean under a
-leak check stricter than the pinned tests use.
+after the first — and requires all of them to come back clean under the
+same `use_stacks=0` leak check the whole corpus runs with.
 Single-owner scalars and slices are captured *by value* by a closure, so
 they cannot
 escape a recover extent by reference and need no forget; only multi-field

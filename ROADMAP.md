@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-09-28 · Current release: **0.67.0** · Language: **Grammar
+_Last reviewed: 2026-09-30 · Current release: **0.68.0** · Language: **Grammar
 v2.7** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -166,7 +166,11 @@ A high-level map of what exists. Dates and per-feature detail are in
   the compiler through per-binding drop flags, on panic paths too;
   containers drop their elements; recursive `Drop` for boxed enum/struct
   payloads, `% Drop` user destructors, move/borrow analysis (incl.
-  interprocedural and loop-carried escape detection, consume after store). Model and known gaps:
+  interprocedural and loop-carried escape detection, consume after store).
+  Since 0.68.0 the whole test corpus runs leak-clean under LeakSanitizer
+  as a CI gate, `--lint` reports release calls the model made redundant
+  (`[redundant-free]`), and the panic journal belongs to the fiber, so
+  recover extents of interleaving fibers stay apart. Model and known gaps:
   [`docs/MEMORY.md`](docs/MEMORY.md).
 - Front-end is diagnostic-first: malformed prefix-arity programs, undefined
   identifiers, call-arity mismatches, unbalanced braces / stray top-level

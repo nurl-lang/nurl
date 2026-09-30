@@ -431,11 +431,11 @@ the source panic behavior and valid boundaries in normal, instrumented and
 split builds. Remaining lifetime and safety work is tracked in
 [the v1 ledger](dev/V1_HARDENING.md).
 
-The whole runtime corpus runs without leak detection because some examples
-intentionally omit cleanup. `tools/leakgate.sh` requires zero compiler leaks
-for the self-compile, recursive drop generation and nested field stores, in
-both module emission modes. The corpus's selected cleanup tests use
-`LSAN_DETECT_LEAKS=1`; those results are separate from memory-access coverage.
+The whole runtime corpus runs with leak detection on (`detect_leaks=1`,
+`use_stacks=0`; `LSAN_DETECT_LEAKS=0` opts out for a memory-safety-only
+pass), so a leak fails a test like a use-after-free does. `tools/leakgate.sh`
+additionally requires zero compiler leaks for the self-compile, recursive
+drop generation and nested field stores, in both module emission modes.
 
 ## Bootstrap chain
 

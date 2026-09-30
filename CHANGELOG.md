@@ -6,6 +6,92 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.68.0] — 2026-09-30
+
+### Added
+
+- **`--lint` reports release calls the memory model made redundant**
+  (`[redundant-free]`, docs/MEMORY.md "Temporaries, and the release calls
+  you no longer write"). `( string_free x )`, `( vec_free [T] x )`,
+  `( json_free j )` … at the tail of a block — only more such calls after
+  it, then `^` or the `}` of the block that declared `x` — on a local the
+  compiler drops at that same point. Only a pure release qualifies (one
+  `sink` parameter and an empty body; a hand-written destructor that also
+  frees what its fields point to does not), and only a value the scope
+  provably owns (not a parameter, alias or capture, and not a value from a
+  call that may hand back something it keeps). The editor shows it through
+  the LSP. `tools/fix_redundant_free.py FILE…` deletes every reported call.
+  `string_free`'s body is now empty, like `vec_free`'s.
+
+### Changed
+
+- **The sanitizer corpus runs with the leak check on.**
+  `compiler/tests/run_san_tests.sh` defaults to `detect_leaks=1`
+  (`use_stacks=0`; `LSAN_DETECT_LEAKS=0` opts out), and CI's corpus step
+  replaced the curated leak-pinned list: every test must now be leak-clean,
+  the compiler's own compile of it included (docs/MEMORY.md §6.6).
+
+- The stdlib and examples no longer end scopes with release calls the
+  compiler does itself: 569 removed with the new lint (515 stdlib, 54
+  examples), no behaviour change.
+
+- Removed two lints the memory model had made wrong — "owns a
+  manually-managed handle that is never released - Vec and String are not
+  auto-dropped" and "this allocation is owned by nothing". Both asked for
+  exactly the manual frees above.
+
+- **The panic journal costs nothing outside `recover`.** The compiler
+  computes which functions can run inside a recover extent and drops the
+  journal calls everywhere else; handle-slot registrations live on their
+  own stack. Self-compile 10.84e9 → 8.34e9 instructions; the test suite
+  runs in 2m28 instead of 2m50.
+
+### Fixed
+
+- **A panic in one fiber no longer reaches another fiber's recover
+  extent** (docs/MEMORY.md §7.2). The recover-frame chain and the panic
+  journal were per thread; fibers interleaving on a worker stacked their
+  extents, and a panic drained the other fiber's live values and
+  `longjmp`ed into its frame from the wrong stack (a segfault — one HTTP
+  handler panicking while another connection's handler waits on the same
+  worker). Each fiber now carries its own, on the M:N runtime and on the
+  unikernel/nolibc scheduler alike.
+
+- **Runtime thread-locals follow a fiber that moves between workers.**
+  LTO-inlined runtime accessors had the thread pointer loaded once at a
+  function's entry and reused after a yield, so a fiber resumed on another
+  worker used the old thread's journal and return-ownership channel (a
+  double free in a panic drain). Runtime functions that touch thread-local
+  state are kept out of line, and the hot ones use a single-instruction
+  TLS access on x86_64 / aarch64. This costs about 8% more instructions per
+  request in the HTTP hello-world benchmark; winning it back is planned.
+
+- Two fiber-scheduler hangs: a worker could miss the wake-up for a fiber
+  spawned just as it went idle (a `runtime_init 1` program slept forever),
+  and `runtime_shutdown` destroyed a worker's run-queue lock while another
+  worker could still steal from it (the join never returned).
+
+- The lazily built SHA-256, X25519 and P-256 tables no longer leak one
+  copy when two threads build them at once; the winner is published
+  through the runtime's publish-once slots.
+
+- A temporary argument that the callee hands back (`?? ( rw ( sh ) )`,
+  `( string_len ( fid ( sh ) ) )`) is owned per call site instead of
+  leaking; `^ ( fa t )` returning a field of the local `t` no longer
+  returns a dangling handle; named-argument calls drop their handle
+  temporaries.
+
+- Compiler leaks the leak-checked corpus found: reassigning a string
+  binding whose value came from a call that answers ownership per call
+  (the compiler's own `gen_ret` leaked this way); an owned raw string
+  placed in a returned struct literal; and a parameter a function keeps on
+  one path and returns inside a wrapped struct on another.
+
+### Packages
+
+- Sixteen packages republished for 0.67.0's memory model, plus `f5tts`
+  0.2.0 and the first release of `nurl-cov` 0.1.0 (#1145).
+
 ## [0.67.0] — 2026-09-28
 
 ### Changed
