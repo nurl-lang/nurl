@@ -65,31 +65,36 @@ you call it.
 ### `sink`
 
 ```nu
-@ give_away sink ( Vec i ) g → v { ( vec_free [i] g ) }
+@ give_away sink ( Vec i ) g → v {}   // g is dropped when give_away returns
 
 : ( Vec i ) xs ( vec_new [i] )
 ( give_away xs )     // xs is consumed; using it afterward is a compile error
 ```
 
-`sink` applies to manually-managed handles like `Vec`. If you pass a value
-the compiler already auto-drops (an owned string, an owned slice, a `Drop`
-value) to a `sink` parameter, the compiler rejects it by design. This
-prevents two different scopes from both thinking they own the same free.
+A `sink` parameter owns what it is given: the callee drops it, keeps it
+or passes it on, and the caller's binding is moved. `String`, `Vec`,
+owning structs, library handles and `Drop` values can all be passed this
+way. An owned slice, or a struct whose raw `s` fields the compiler owns,
+cannot go to a `sink` yet; the compiler rejects it rather than risk two
+owners.
 
-## Manually-managed handles
+## What you still free by hand
 
-The compiler frees most values for you. A small, explicit set is not. You
-free it by hand, the same way as C's `malloc`/`free`:
+The compiler drops `String`, `Vec`, owning structs, library handles
+(`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`), handle enums
+(`Json`, `TomlValue`) and closure environments, wherever they are kept.
+`string_free` / `vec_free` remain as an optional early release, and
+`--lint` flags one that sits where the drop would happen anyway
+(`[redundant-free]`). A hand-written free of a closure environment is a
+compile error.
 
-- `Vec` and similar container handles
-- a `sink` argument, once consumed
-- a closure environment that **escapes** its creating frame (returned,
-  stored in a container or struct field, captured by another closure, or
-  moved onto a thread)
+What stays manual is what the compiler does not own:
 
-For a closure that does not escape, the compiler reclaims its environment
-automatically. It frees the environment right after the call for an inline
-closure. It frees the environment at scope exit for a `:`-bound closure.
+- raw memory from `nurl_alloc` behind a `*T` pointer (release with
+  `nurl_free`), and a value handed over for good with `( mem_forget x )`;
+- `Channel`, `Mutex` and `Cond` (no reference count — free them when the
+  last user is done);
+- operating-system resources: files, sockets, processes.
 
 ## The borrow checker
 

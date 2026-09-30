@@ -1930,7 +1930,7 @@ on, store a copy.
 - Panic / `recover` control flow: the checker treats `recover` as an
   ordinary call and does not model panic unwind. It does not need to —
   the owned allocations a panic `longjmp` would skip are reclaimed at the
-  panic itself by a thread-local allocation journal, so they leak neither
+  panic itself by an allocation journal kept per fiber, so they leak neither
   the normal nor the unwind path (see [`docs/MEMORY.md` §7.2](MEMORY.md)).
 - **Conditional** (maybe-moved) double-frees: a value freed on only one
   arm of a `?` and then freed again is not flagged, to keep every

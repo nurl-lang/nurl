@@ -770,8 +770,11 @@ against the repaired compiler.
    correctness, and owe an account of deferred cleanup reaching a slot after
    its lexical block. Reopen it with that trade in hand, or leave it.
 
-   What remains genuinely open in A01 is the leak inventory: 86 of 992 corpus
-   programs leak under `LSAN_DETECT_LEAKS=1`, and the ledger attributes them
+   *(Closed in 0.68.0: the whole corpus is leak-clean and CI gates it. The
+   inventory below is kept as the record of how it got there.)*
+
+   What remained open in A01 was the leak inventory: 86 of 992 corpus
+   programs leaked under `LSAN_DETECT_LEAKS=1`, and the ledger attributed them
    to two root causes and one test-side habit rather than 86 defects.
    - **The closure-env class.** A closure RETURNED by a function has no
      owner: the binding path registers an env only for a closure LITERAL
@@ -881,8 +884,9 @@ against the repaired compiler.
 - `./tools/check_diag_coverage.sh` and `./tools/check_diag_anchor.sh` — does
   any test make the compiler print this message, and does it point at real
   code. Both run in CI now; the first is ~34 s with `NURL_CHECK_JOBS`.
-- `LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh` — the whole corpus
-  with leak detection on, which the default run leaves off.
+- `./compiler/tests/run_san_tests.sh` — the whole corpus with leak
+  detection on (the default since 0.68.0; `LSAN_DETECT_LEAKS=0` turns it
+  off).
 - `NURL_TEST_PWSH=/absolute/path/to/pwsh python3 tools/tests/test_compiler_runners.py`
 - **`./tools/tree_sweep.sh`, for any change that adds a diagnostic.** It
   compiles every tracked first-party `.nu` file with the baseline commit's

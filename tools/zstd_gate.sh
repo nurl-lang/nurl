@@ -252,9 +252,9 @@ done
 # ── Leaks, without LeakSanitizer ────────────────────────────────────
 #
 # Round-trip one input several hundred times in a single process and
-# watch resident size. A codec that leaks a buffer per call shows up as
-# growth proportional to the iteration count; allocator fragmentation
-# does not. (LSan's stop-the-world tracer deadlocks at exit on this
+# count the allocations still live: a codec that leaks a buffer per call
+# moves that count by one per iteration, and nothing else can move it.
+# Resident size is reported beside it. (LSan's stop-the-world tracer deadlocks at exit on this
 # class of binary, so this is the check that actually runs.)
 leak_fails=0
 leak_report=""
@@ -266,7 +266,16 @@ for pair in "text.bin 300 3" "zeros.bin 300 3" "random.bin 200 3" "text.bin 25 1
     if [ "${1:-}" != "rss" ]; then
         leak_fails=$((leak_fails + 1)); echo "  leak probe produced no reading for $lf"; continue
     fi
-    warm="$2"; mid="$3"; after="$4"
+    warm="$2"; mid="$3"; after="$4"; live_mid="${7:-}"; live_after="${8:-}"
+    # Exact first: every round trip frees what it allocates, so the count
+    # of live allocations must not move between the two readings.
+    if [ -z "$live_after" ]; then
+        leak_fails=$((leak_fails + 1)); echo "  leak probe gave no allocation count for $lf"; continue
+    fi
+    if [ "$live_after" -ne "$live_mid" ]; then
+        leak_fails=$((leak_fails + 1))
+        echo "  $((live_after - live_mid)) allocations still live after $((iters - iters / 2)) more round trips of $(basename "$lf") — a leak"
+    fi
     if [ "$warm" -le 0 ] || [ "$mid" -le 0 ] || [ "$after" -le 0 ]; then
         leak_fails=$((leak_fails + 1))
         echo "  leak probe could not read /proc (got $warm $mid $after)"
@@ -275,13 +284,10 @@ for pair in "text.bin 300 3" "zeros.bin 300 3" "random.bin 200 3" "text.bin 25 1
     first=$((mid - warm))
     second=$((after - mid))
     leak_report="$leak_report $(basename "$lf"):+${first}K/+${second}K"
-    # Two stretches of equal length. An allocator settling down grows
-    # less in the second; a leak grows at least as much. 256 KiB of
-    # slack keeps page-level noise from failing the run.
-    if [ "$second" -gt "$((first + 256))" ]; then
-        leak_fails=$((leak_fails + 1))
-        echo "  RSS grew +${first} KiB then +${second} KiB over $iters round trips of $(basename "$lf") — that is a leak, not fragmentation"
-    fi
+    # Resident size is reported, not judged: the allocation count above is
+    # exact, and RSS is a sample of what the allocator keeps mapped — at
+    # level 19 one multi-megabyte window buffer kept or returned moved it
+    # by +5.6 MiB in 12 round trips on a CI runner with no leak at all.
 done
 
 total=$((fails + enc_fails + size_fails + fuzz_fails + leak_fails))

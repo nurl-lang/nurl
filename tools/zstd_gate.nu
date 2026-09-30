@@ -19,6 +19,10 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/zstd.nu`
 
+& `libc` @ nurl_alloc_count → i
+
+& `libc` @ nurl_free_count → i
+
 @ __fail s msg → i {
     ( nurl_eprint msg )
     ( nurl_eprint `\n` )
@@ -130,12 +134,17 @@ $ `stdlib/std/zstd.nu`
 // amount in every equal-length stretch. So the readings straddle two
 // stretches of the same length and the caller compares them.
 //
-// Output: `rss <at 10%> <at 55%> <at 100%> <iters>`.
+// Output: `rss <at 10%> <at 55%> <at 100%> <iters> live <at 55%> <at 100%>`.
+// `live` is the runtime's own count of allocations not yet freed: exact,
+// where resident size is only a sample. A buffer orphaned once per round
+// trip moves it by one per iteration however small the buffer, and RSS
+// can miss that for a whole run (zstd_decode's output buffer did).
 @ __cmd_leak s inp i iters i level → i {
     ?? ( __read inp ) {
         T src → {
             : ~ i warm 0
             : ~ i mid 0
+            : ~ i live_mid 0
             : ~ i k 0
             : ~ i rc 0
             : i at_warm ? > / iters 10 1 / iters 10 1
@@ -149,9 +158,10 @@ $ `stdlib/std/zstd.nu`
                 ( vec_free [u] enc )
                 = k + k 1
                 ? == k at_warm { = warm ( __rss_kib ) } {}
-                ? == k at_mid { = mid ( __rss_kib ) } {}
+                ? == k at_mid { = mid ( __rss_kib ) = live_mid - ( nurl_alloc_count ) ( nurl_free_count ) } {}
             }
             : i after ( __rss_kib )
+            : i live_after - ( nurl_alloc_count ) ( nurl_free_count )
             : String out ( string_with_cap 48 )
             ( string_push_str out `rss ` )
             ( string_push_int out warm )
@@ -161,6 +171,10 @@ $ `stdlib/std/zstd.nu`
             ( string_push_int out after )
             ( string_push_char out 32 )
             ( string_push_int out iters )
+            ( string_push_str out ` live ` )
+            ( string_push_int out live_mid )
+            ( string_push_char out 32 )
+            ( string_push_int out live_after )
             ( string_push_char out 10 )
             ( nurl_print ( string_data out ) )
             ( string_free out )

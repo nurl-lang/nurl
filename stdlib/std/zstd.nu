@@ -1231,7 +1231,12 @@ $ `stdlib/std/hash_xxh64.nu`
         }
     }
     : i err . d err
+    // The decoder gives its output buffer up (__zs_dispose leaves it):
+    // this binding owns it from here, and the result takes it over.
+    // Read as a plain field it was a borrow, copied on the way out, and
+    // the original buffer — the whole decompressed output — leaked.
     : ( Vec u ) out . d out
+    ( mem_take out )
     : i olen . d olen
     ( __zs_dispose d )
     ? != err 0 {
