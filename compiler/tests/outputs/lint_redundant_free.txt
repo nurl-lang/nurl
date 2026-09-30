@@ -1,0 +1,7 @@
+COMPILE OK
+WARNINGS
+compiler/tests/lint_redundant_free.nu:35:5: warning: redundant 'string_free' — 's' is dropped at the end of its scope right after this call; remove it [redundant-free]
+compiler/tests/lint_redundant_free.nu:36:5: warning: redundant 'vec_free' — 'v' is dropped at the end of its scope right after this call; remove it [redundant-free]
+compiler/tests/lint_redundant_free.nu:42:16: warning: redundant 'string_free' — 's' is dropped at the end of its scope right after this call; remove it [redundant-free]
+compiler/tests/lint_redundant_free.nu:51:9: warning: redundant 'string_free' — 't' is dropped at the end of its scope right after this call; remove it [redundant-free]
+compiler/tests/lint_redundant_free.nu:121:5: warning: redundant 'vec_free' — 'r' is dropped at the end of its scope right after this call; remove it [redundant-free]

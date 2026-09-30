@@ -590,12 +590,9 @@ $ `stdlib/core/char.nu`
     ( _string_seal str )
 }
 
-@ string_free sink String str → v {
-    // The disposer: the buffer is released through the Vec view below, so
-    // the String itself is not dropped again (docs/MEMORY.md §7.6).
-    ( mem_forget str )
-    ( vec_free [u] ( __sbuf str ) )
-}
+// Releases `str` now: the `sink` parameter is dropped on the way out, as
+// vec_free's is (docs/MEMORY.md §7.6).
+@ string_free sink String str → v {}
 
 // ── Concat ──────────────────────────────────────────────────────────
 

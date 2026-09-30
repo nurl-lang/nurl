@@ -1362,33 +1362,13 @@
 // check (docs/MEMORY.md §2.7). Allocated in main().
 : ~ i g_fn_escapes 0
 
-// Per-function EMBEDDED-parameter map.
-// `g_fn_embeds[fname]` is the space-separated list of 0-based indices
-// of parameters the body stores into an aggregate literal.
-//
-// Deliberately NOT part of g_fn_escapes, which answers a different
-// question. Escape means the value outlives the whole call chain — a
-// heap container, a worker thread — so a stack reference handed to such
-// a parameter dangles and must be rejected. Embedding does not imply
-// that: `@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }` puts a closure
-// in a struct the CALLER may well consume inside the referent's own
-// scope, which is legal and has a negative control pinning it
-// (compiler/tests/ret_escape_agg_ok.nu). Folding the two together turns
-// that test red.
-//
-// What embedding does answer is OWNERSHIP: a handle stored into a
-// structure the callee built is no longer the caller's to free —
-// whether the structure is returned, kept, or dropped there. That is
-// what the unfreed-handle lint needs, and it is the only consumer.
-: ~ i g_fn_embeds 0
-
 // Per-function RETURNS-A-VIEW map. `g_fn_ret_view[fname]` is set when
 // the body builds an aggregate one of whose fields is a POINTER read
 // out of something else — `@ __sbuf String str → ( Vec u ) { ^ @ ( Vec
 // u ) { . str ctl } }` hands back a Vec over the String's own buffer.
 // The result aliases; freeing it would double-free.
 //
-// Lint-only, like g_fn_embeds, and for the same reason: the existing
+// Lint-only, and for a reason worth keeping in view: the existing
 // borrow-provenance flag (__fn_ret_borrow__) feeds auto-drop, and a
 // wrong "this is a borrow" there SKIPS a drop, which leaks. This
 // summary only ever makes a diagnostic quieter, so an over-approximation
@@ -2222,17 +2202,9 @@
 : ~ i g_lint_syms 0
 : ~ i g_lint_used 0
 : ~ i g_lint_reads 0
-// g_lint_handles — per-function roster of MANUALLY-MANAGED handles
-//                  (docs/MEMORY.md §7.4: Vec and String, the two the
-//                  compiler deliberately does not auto-drop). Rows are
-//                  "name\tline\tcol\n", same shape as `binds`.
-// g_lint_released — set of handles whose ownership provably LEFT the
-//                  binding: freed, sunk, aliased away, or returned.
-//                  Keyed "<gen> <name>" like g_lint_reads, so a name in
-//                  one function never satisfies the same name in
-//                  another.
-: ~ i g_lint_handles 0
-: ~ i g_lint_released 0
+// g_lint_fpend — the redundant-free lint's pending release calls (see
+//                  lint_free_cand).
+: ~ i g_lint_fpend 0
 : ~ i g_lint_gen 0
 // g_init_terminated — 1 while a `:` binding's own INITIALISER terminated
 // the block and the statement's remaining instructions (the store, the
@@ -2345,9 +2317,7 @@
     = g_lint_syms ( nurl_sym_new )
     = g_lint_used ( nurl_sym_new )
     = g_lint_reads ( nurl_sym_new )
-    = g_lint_handles ( nurl_sym_new )
-    = g_lint_released ( nurl_sym_new )
-    ( nurl_sym_def g_lint_handles `rows` `` )
+    = g_lint_fpend ( nurl_sym_new )
     ( nurl_sym_def g_lint_syms `top` top )
     ( nurl_sym_def g_lint_syms `fns` `` )
     ( nurl_sym_def g_lint_syms `binds` `` )
@@ -2495,66 +2465,13 @@
     {}
 }
 
-// The manually-managed handle set, exactly as docs/MEMORY.md §7.4
-// enumerates it: `String` and `Vec`. Everything else with a heap
-// interior is auto-dropped at scope exit, so it is not the caller's to
-// release and must never be reported here. Keyed on the LLVM type name
-// (`%String`, `%Vec__i64`, `%Vec__String`) because that is what is in
-// scope where a binding is recorded.
-@ lint_is_manual_handle s lty → b {
-    ? ( seq lty `%String` ) { ^ T } {}
-    ^ != 0 ( nurl_str_starts lty `%Vec__` )
-}
-
-// Record a `:` binding that owns a manually-managed handle. Re-binding
-// the same name clears any earlier release — `= s ( string_from … )`
-// after a free makes it owned again, and the new value needs its own.
-//
-// `owns` says the right-hand side PRODUCED the handle rather than
-// borrowed one: a call, or an alias copy into an IMMUTABLE binding —
-// the same `! is_mut` rule bck_let_alias uses to tell a move from the
-// cursor idiom. `: ~ ( Vec TomlEntry ) current root` is a mutable
-// working alias walking a structure whose source stays the owner; it
-// owns nothing and must never be asked to free anything.
-// `: ( Vec i ) t . scr t` — a Vec read out of a scratch struct that
-// still owns it — is a field read, neither of those, and was 21 false
-// positives in p256_field.nu alone. A diagnostic about leaks must only
-// claim ownership it can see being created.
-@ lint_note_handle i line i col s name s lty b owns → v {
-    ? & & & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
-    ( lint_is_manual_handle lty ) owns
-    { ? == ( nurl_str_get name 0 ) 95 {}
-        { : s row ( nurl_str_cat
-            ( nurl_str_cat3 name `\t` ( nurl_str_int line ) )
-            ( nurl_str_cat3 `\t` ( nurl_str_int col ) `\n` ) )
-            : s cur ( nurl_sym_get g_lint_handles `rows` )
-            ( nurl_sym_def g_lint_handles `rows` ( nurl_str_cat cur row ) )
-            ( nurl_sym_def g_lint_released
-            ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` name ) `` ) }
-    }
-    {}
-}
-
-// Ownership left `name`. Called from every site that transfers it: a
-// `*_free` destructor call, a `sink` argument, a binding-to-binding
-// alias copy, and `^`-return. Those are the transfer routes the
-// compiler already models — the same ones that produce a borrow-checker
-// `move`. A handle that reaches the end of its function without one of
-// these has nothing that could have released it.
-@ lint_note_released s name → v {
-    ? & != g_lint 0 > ( nurl_str_len name ) 0
-    { ( nurl_sym_def g_lint_released
-        ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` name ) `1` ) }
-    {}
-}
-
 // Begin a fresh per-function lint scope: bump the read generation and
 // clear the binding roster. Called at every function-body start.
 @ lint_fn_begin → v {
     ? != g_lint 0
     { = g_lint_gen + g_lint_gen 1
         ( nurl_sym_def g_lint_syms `binds` `` )
-        ( nurl_sym_def g_lint_handles `rows` `` ) }
+    }
     {}
 }
 
@@ -2596,28 +2513,6 @@
     }
 }
 
-// Parse one handle row and warn when ownership never left the binding.
-@ lint_check_handle s file s row → v {
-    : i t1 ( nurl_str_find row `\t` )
-    ? < t1 0 {} {
-        : i rl ( nurl_str_len row )
-        : s nm ( nurl_str_slice row 0 t1 )
-        : s tail ( nurl_str_slice row + t1 1 - rl + t1 1 )
-        : i t2 ( nurl_str_find tail `\t` )
-        ? < t2 0 {} {
-            : i tl ( nurl_str_len tail )
-            : s ln ( nurl_str_slice tail 0 t2 )
-            : s cl ( nurl_str_slice tail + t2 1 - tl + t2 1 )
-            : s key ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` nm )
-            ? ( seq ( nurl_sym_get g_lint_released key ) `1` ) {} {
-                ( lint_warn file ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
-                ( nurl_str_cat3 `'` nm
-                `' owns a manually-managed handle that is never released - Vec and String are not auto-dropped (docs/MEMORY.md 7.4), so free it, return it, or pass it to a 'sink'` ) )
-            }
-        }
-    }
-}
-
 // At function-body end, warn for every recorded `:` binding never read
 // in this function. Reads were tracked unconditionally (including
 // inside closures), so a binding used only by a captured closure is
@@ -2632,18 +2527,6 @@
             : s row ? < nl 0 rest ( nurl_str_slice rest 0 nl )
             = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - rl + nl 1 )
             ( lint_check_bind file row )
-        }
-        // …and for every manually-managed handle whose ownership never
-        // left. A handle is released by exactly the routes the compiler
-        // already models as a move: a `*_free` destructor, a `sink`
-        // argument, an alias copy, or a `^`-return.
-        : ~ s hrest ( nurl_sym_get g_lint_handles `rows` )
-        ~ != 0 ( nurl_str_len hrest ) {
-            : i hnl ( nurl_str_find hrest `\n` )
-            : i hrl ( nurl_str_len hrest )
-            : s hrow ? < hnl 0 hrest ( nurl_str_slice hrest 0 hnl )
-            = hrest ? < hnl 0 `` ( nurl_str_slice hrest + hnl 1 - hrl + hnl 1 )
-            ( lint_check_handle file hrow )
         }
     }
     {}
@@ -3969,20 +3852,6 @@
     // uniformly. Only consulted when --borrowck is on.
     ( bck_esc_check_return lex syms bck_line
     ( nurl_sym_get syms `__last_ident_name__` ) )
-    // Returning a handle hands it to the caller — that is a release.
-    //
-    // `__last_ident_name__` is the last identifier PARSED, not the value
-    // being returned: for `^ ( string_len s )` it is `s`, which would
-    // mark a leaked handle as released and silence the whole check. So
-    // this only fires when the function's declared return type is itself
-    // a manually-managed handle — the only case where a return can carry
-    // one out. That over-suppresses (every handle in a String-returning
-    // function is treated as possibly-returned) and never under-reports,
-    // which is the right direction for a diagnostic that must not cry
-    // wolf.
-    ? ( lint_is_manual_handle ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) )
-    { ( lint_note_released ( nurl_sym_get syms `__last_ident_name__` ) ) }
-    {}
     // Return-type agreement + enum wrap: the shared battery
     // (ret_ty_agree above — also run at the fall-off and closure-tail
     // return sites). It publishes the final type via nurl_set_last_type;
@@ -4165,6 +4034,105 @@
 // (e.g. a bind's initializer type mismatch, where the lexer has already
 // advanced to the next statement).
 : ~ i g_stmt_col 0
+
+// ── Redundant-free lint ────────────────────────────────────────────
+// `( string_free x )`, `( vec_free [T] x )`, … — a release function (one
+// `sink` parameter and an EMPTY body, so the call does nothing but drop
+// its argument; a hand-written destructor such as pkmsg_free, which also
+// frees what its fields point to, is not one) called on a local the compiler drops
+// anyway, at the TAIL of a block: nothing but more such calls follows
+// it, and then either `^` (every scope ends) or the `}` of the block x
+// was declared in. The drop at that point releases exactly what the
+// call did, so the call is noise — it survives from before the memory
+// model dropped these values. An early release (anything after it in
+// the block) is left alone: it may be what keeps a peak down.
+//
+// g_lint_fpend keys: `cand` (the release call gen_call just saw,
+// "callee line col name bdepth"), `p<depth>` (the pending tail calls of
+// the block at that borrowck depth, one such row per line), and
+// `seen <line> <col>` (warned once, whatever the monomorphs). The table
+// itself, g_lint_fpend, is declared with the other lint state.
+
+@ lint_free_cand s callee s name s bdepth s ownk → v {
+    ? | | == g_lint 0 == g_lint_recording 0 ! ( lint_in_top_file ) { ^ v } {}
+    ( nurl_sym_def g_lint_fpend `cand` ( nurl_str_cat4 callee ` `
+    ( nurl_str_cat4 ( nurl_str_int g_stmt_line ) ` ` ( nurl_str_int g_stmt_col ) ` ` )
+    ( nurl_str_cat4 name ` ` bdepth ( nurl_str_cat ` ` ownk ) ) ) )
+}
+
+@ lint_free_emit s row → v {
+    // Owned per call (`: s x ( f … )`): only f's module-end constant can
+    // say whether x owns what it holds — f may hand back a field it keeps.
+    : s ownk ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word row ) ) ) ) ) )
+    ? ! ( seq ownk `-` ) {
+        ( nurl_sym_def g_lint_fpend `deferred` ( nurl_str_cat3 ( nurl_sym_get g_lint_fpend `deferred` ) row `\n` ) )
+        ^ v } {}
+    ( lint_free_warn row )
+}
+
+@ lint_free_warn s row → v {
+    : s key ( nurl_str_cat `seen ` ( str_first_word ( str_skip_word row ) ) )
+    : s key2 ( nurl_str_cat3 key ` ` ( str_first_word ( str_skip_word ( str_skip_word row ) ) ) )
+    ? != 0 ( nurl_sym_len g_lint_fpend key2 ) { ^ v } {}
+    ( nurl_sym_def g_lint_fpend key2 `1` )
+    : s callee ( str_first_word row )
+    : s r1 ( str_skip_word row )
+    : i line ( nurl_str_to_int ( str_first_word r1 ) )
+    : s r2 ( str_skip_word r1 )
+    : i col ( nurl_str_to_int ( str_first_word r2 ) )
+    : s name ( str_first_word ( str_skip_word r2 ) )
+    ( lint_warn ( nurl_sym_get g_lint_syms `top` ) line col ( nurl_str_cat4
+    ( nurl_str_cat3 `redundant '` callee `' — '` ) name
+    `' is dropped at the end of its scope right after this call; remove it` ` [redundant-free]` ) )
+}
+
+// Module end: the deferred rows whose binding's call turned out to hand
+// back an owned value on every path (retown true, not answered per call).
+@ lint_free_resolve → v {
+    ? | == g_lint 0 == 0 g_lint_fpend { ^ v } {}
+    : ~ s rows ( nurl_sym_get g_lint_fpend `deferred` )
+    ~ != 0 ( nurl_str_len rows ) {
+        : i nl ( nurl_str_find rows `\n` )
+        : s row ( nurl_str_slice rows 0 nl )
+        = rows ( nurl_str_slice rows + nl 1 - - ( nurl_str_len rows ) nl 1 )
+        : s ownk ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word row ) ) ) ) ) )
+        ? ( seq ( nurl_sym_get g_lint_fpend ( nurl_str_cat `owned ` ownk ) ) `1` ) { ( lint_free_warn row ) } {}
+    }
+}
+
+// Flush the pending rows of the block at `depth`: every row when `^`
+// follows (all scopes end), else only those declared in this block.
+@ lint_free_flush i depth b all → v {
+    : s pk ( nurl_str_cat `p` ( nurl_str_int depth ) )
+    : ~ s rows ( nurl_sym_get g_lint_fpend pk )
+    ~ != 0 ( nurl_str_len rows ) {
+        : i nl ( nurl_str_find rows `\n` )
+        : s row ( nurl_str_slice rows 0 nl )
+        = rows ( nurl_str_slice rows + nl 1 - - ( nurl_str_len rows ) nl 1 )
+        : s bd ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word row ) ) ) ) )
+        ? | all == ( nurl_str_to_int bd ) depth { ( lint_free_emit row ) } {}
+    }
+    ( nurl_sym_def g_lint_fpend pk `` )
+}
+
+// After each statement of a block: a release call joins the tail, `^`
+// flushes it, anything else ends it.
+@ lint_free_stmt i tt s callee i line i col → v {
+    ? | | == g_lint 0 == 0 g_lint_fpend != 0 g_bck_rec_off { ^ v } {}
+    : s cand ( nurl_sym_get g_lint_fpend `cand` )
+    ( nurl_sym_def g_lint_fpend `cand` `` )
+    : s pk ( nurl_str_cat `p` ( nurl_str_int g_bck_depth ) )
+    ? == tt TT_CARET { ( lint_free_flush g_bck_depth T ) ^ v } {}
+    : s want ( nurl_str_cat4 callee ` ` ( nurl_str_int line ) ( nurl_str_cat3 ` ` ( nurl_str_int col ) ` ` ) )
+    ? & == tt TT_LPAREN != 0 ( nurl_str_starts cand want )
+    { ( nurl_sym_def g_lint_fpend pk ( nurl_str_cat3 ( nurl_sym_get g_lint_fpend pk ) cand `\n` ) ) }
+    { ( nurl_sym_def g_lint_fpend pk `` ) }
+}
+
+@ lint_free_block_exit → v {
+    ? | | == g_lint 0 == 0 g_lint_fpend != 0 g_bck_rec_off { ^ v } {}
+    ( lint_free_flush g_bck_depth F )
+}
 
 // die_stmt: like die, but anchored at the CURRENT statement's start
 // (g_stmt_line / g_stmt_col) rather than the lexer's live position. Use it
@@ -6457,6 +6425,8 @@
         ( nurl_print `@.__nurl_retown.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? lent `false` `true` ) ( nurl_print `\n` )
         : b dyn | ( __hown_dyn callee 0 ) ( __hown_dyn generic 0 )
+        ? & & != 0 g_lint != 0 g_lint_fpend & ! lent ! dyn
+        { ( nurl_sym_def g_lint_fpend ( nurl_str_cat `owned @.__nurl_retown.` number ) `1` ) } {}
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? dyn `true` `false` ) ( nurl_print `\n` )
     }
@@ -10646,32 +10616,6 @@
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
         ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
-        // Lint: an allocation owned by nothing (docs/MEMORY.md §1).
-        //
-        // `( f ( g x ) )` where `g` returns a FRESH handle and `f` only
-        // reads it leaves that handle owned by no binding, so nothing ever
-        // frees it — `( nurl_eprint ( nurl_str_int n ) )` leaks one string
-        // per call. The cure is one line: bind it, pass the binding.
-        //
-        // Only flagged when the outer callee provably does NOT take the
-        // value over: not a destructor, not a `sink` position, not one the
-        // callee embeds in an aggregate (`vec_push`, `json_obj_set`, …),
-        // not an escaping position. Those are the routes by which a fresh
-        // allocation legitimately ends its life at a call site.
-        ? & & & & != g_lint 0 == bck_arg_tt TT_LPAREN
-        ( lint_in_top_file )
-        ! | arg_pos_escapes
-        | ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-        ( str_contains_word ( nurl_sym_get g_fn_embeds fname ) ( nurl_str_int arg_idx ) )
-        == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
-        { ? | ( lint_is_manual_handle at )
-            != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
-            { ( lint_warn ( vis_current_src_file ) bck_arg_line bck_arg_col
-                ( nurl_str_cat3
-                `this allocation is owned by nothing - '` fname
-                `' only reads it, so nothing frees it. Bind it first (': T x ( ... )') and pass the binding` ) ) }
-            {} }
-        {}
         // §2.1b Freeing what the compiler already frees.
         //
         // `nurl_free` is excluded from the destructor move rule above
@@ -10739,15 +10683,6 @@
                 `', which is dropped automatically when the binding goes out of scope, so the env would be freed twice - delete this call. A closure owns its env wherever it is kept: a binding, a struct field, a returned value, a spawned fiber or thread (which runs on its own copy) - nothing needs a hand-written free (docs/MEMORY.md 7.4).` ) ) }
             {} }
         {}
-        // Ownership, not lifetime: an argument the callee stores into an
-        // aggregate belongs to that structure now, so the caller has
-        // nothing left to free. Kept apart from the escape check below
-        // on purpose — see g_fn_embeds for why folding them turns
-        // ret_escape_agg_ok red.
-        ? & ( str_contains_word ( nurl_sym_get g_fn_embeds fname ) ( nurl_str_int arg_idx ) )
-        ( is_ident_tok bck_arg_tt )
-        { ( lint_note_released bck_arg_val ) }
-        {}
         ? arg_pos_escapes
         { ( bck_esc_check_call_arg lex syms bck_arg_line
             ( nurl_sym_get syms `__last_ident_name__` ) fname )
@@ -10759,13 +10694,7 @@
             { ( bck_record_inferred_escape syms bck_arg_root ) }
             {}
             ? ( is_ident_tok bck_arg_tt )
-            { ( bck_record_inferred_escape syms bck_arg_val )
-                // The callee retains this argument past the call — a
-                // container push, a thread detach. Ownership left the
-                // binding, so the unfreed-handle lint must stop
-                // expecting a free: `( vec_push [String] v s )` is how
-                // most String handles legitimately end their life.
-                ( lint_note_released bck_arg_val ) } {} }
+            { ( bck_record_inferred_escape syms bck_arg_val ) } {} }
         {}
         // Thread-safety: a value crossing a thread boundary must be Send
         // (stdlib/core/marker.nu). Three call shapes cross one, and the
@@ -10923,7 +10852,6 @@
                 `'` bck_arg_val
                 `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
             { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) fname )
-                ( lint_note_released bck_arg_val )
                 // Auto-sink cascade: if THIS fn passes its own
                 // parameter as a sink arg to another fn, mark this
                 // parameter as auto-sink too — the caller of this fn
@@ -10962,7 +10890,17 @@
             : s uptr ( mem_udrop_ptr_of syms bck_arg_val )
             ? != 0 ( nurl_str_len uptr ) {
                 ? ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
-                { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move syms cg uptr `0` ) }
+                { ( mem_udrop_flag_set syms cg uptr `0` ) ( mem_udrop_alias_move syms cg uptr `0` )
+                    // A local this scope owns outright, handed to a release
+                    // function: a candidate for the redundant-free lint.
+                    ? & & & & & & & & != 0 g_lint == 0 g_bck_closure_depth == arg_idx 0 != 0 ( nurl_sym_len2 syms fname `__emptybody` )
+                    | ( seq ( nurl_sym_get2 syms fname `__arity` ) `1` ) ( seq ( nurl_sym_get2 syms fname `__garity` ) `1` )
+                    == 0 ( nurl_sym_len2 syms uptr `__pname` ) == 0 ( nurl_sym_len2 syms uptr `__alias` )
+                    | == 0 ( nurl_sym_len2 syms uptr `__sborrow` ) & != 0 ( nurl_str_starts ( nurl_sym_get2 syms uptr `__sborrow` ) `@` )
+                    != 0 ( nurl_sym_len2 syms uptr `__ownk` )
+                    == 0 ( nurl_sym_len2 syms uptr `__optparam` )
+                    { ( lint_free_cand fname bck_arg_val ( nurl_sym_get2 syms bck_arg_val `__bdepth` )
+                        ? == 0 ( nurl_sym_len2 syms uptr `__sborrow` ) `-` ( nurl_sym_get2 syms uptr `__ownk` ) ) } {} }
                 { : s sflag ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) )
                     // A binding that only ever borrows has nothing to hand over.
                     : s __usb ( nurl_sym_get2 syms uptr `__sborrow` )
@@ -17183,6 +17121,10 @@
             : s ls ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print ls ) ( nurl_print ` = alloca i1\n  store i1 ` ) ( nurl_print nr ) ( nurl_print `, ptr ` ) ( nurl_print ls ) ( nurl_print `\n` )
             ( __sb syms ptr ( nurl_str_cat `@` ls ) )
+            // Which module-end constant answers it — the redundant-free
+            // lint reports a release of this binding only once that says
+            // "owned" (lint_free_resolve).
+            ? != 0 g_lint { ( nurl_sym_def syms ( nurl_str_cat ptr `__ownk` ) ( nurl_sym_get syms `__last_retown_const__` ) ) } {}
             ^ v } {}
     } {}
     // A field read or a cast reads a value something else owns: borrow it.
@@ -18097,7 +18039,7 @@
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line → v {
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
     ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
-    { ( bck_stash_move rhs_val line `an alias copy` ) ( lint_note_released rhs_val ) }
+    { ( bck_stash_move rhs_val line `an alias copy` ) }
     {}
 }
 
@@ -18185,14 +18127,13 @@
         ? | ( seq nm dest ) ( str_contains_word params nm ) {} {
             ? definite
             { ( bck_stash_move nm line `an alias copy through a '?' / '??' result` ) }
-            { ( bck_stash_maybe_move nm line why ) }
-            ( lint_note_released nm ) }
+            { ( bck_stash_maybe_move nm line why ) } }
     }
 }
 
 // `= dst src` with a bare identifier on the right hands `src`'s handle
 // to `dst`, and freeing through both names double-frees. gen_assign
-// recorded this only as a lint note (`lint_note_released`), so the
+// once recorded this only as a lint note, so the
 // borrow checker never saw it and `= z a` followed by two frees
 // compiled clean.
 //
@@ -18406,6 +18347,7 @@
 }
 
 @ bck_block_exit → v {
+    ( lint_free_block_exit )
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         ? > g_bck_depth 0 { = g_bck_depth - g_bck_depth 1 } {}
         ( bck_record `endblock` `` 0 )
@@ -19558,6 +19500,8 @@
     {}
     : i tt ( nurl_lex_type lex )
     : i bck_line ( nurl_lex_line lex )
+    : i __lf_col ( nurl_lex_col lex )
+    : s __lf_callee ? & != 0 g_lint == tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
     // Record this statement's start line + col for gen_ident's cascade-aware
     // "unexpected token" diagnostic and for die_stmt (see g_stmt_line).
     = g_stmt_line bck_line
@@ -19629,6 +19573,7 @@
     // `move` rows — placed AFTER the statement's own record so the
     // consuming call itself reads the binding while still Owned.
     ( bck_flush_moves )
+    ( lint_free_stmt tt __lf_callee bck_line __lf_col )
     // Flag a bare numeric/string literal statement for the block iterator's
     // dangling-operand check. A statement whose LEADING token is a literal
     // is, under prefix notation, exactly a bare literal (operators lead
@@ -20058,10 +20003,6 @@
         ? != 0 ( nurl_str_len __av )
         { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
         {}
-        ( lint_note_handle bck_line bck_col name vt
-        & & == 0 ( nurl_str_len rhs_borrow )
-        == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
-        | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
@@ -20348,10 +20289,6 @@
             ? != 0 ( nurl_str_len __av )
             { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
             {}
-            ( lint_note_handle bck_line bck_col name vt
-            & & == 0 ( nurl_str_len rhs_borrow )
-            == 0 ( nurl_sym_len syms `__last_call_ret_view__` )
-            | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
             ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
             ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
             : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
@@ -20553,7 +20490,6 @@
         // is the canonical grow-a-String idiom, and `c1`'s handle lives
         // on in `w`. Only the `:` form was recorded, so every use of the
         // idiom read as a leak of the temporary.
-        ? ( is_ident_tok bck_rhs_tt ) { ( lint_note_released bck_rhs_val ) } {}
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_call_guard__` `` )
         ( nurl_sym_def syms `__last_phi_idents__` `` )
@@ -21079,8 +21015,6 @@
 // place rather than eight is the difference between a rule and a list
 // of the shapes someone remembered.
 @ gen_field_rhs i lex i syms i cg → s {
-    ? ( is_ident_tok ( nurl_lex_type lex ) )
-    { ( lint_note_released ( nurl_lex_val lex ) ) } {}
     // §2.3: snapshot the RHS's first token, then clear the escape
     // side-channel so the depth read after gen_expr is this RHS's own
     // and not the OBJECT expression's residue. Every field-store branch
@@ -23039,8 +22973,7 @@
         ? & & & ( is_ident_tok fld_first_tt ) ! fld_param_copy ! agg_returned != 0 ( nurl_str_len __argk )
         { ( mem_note_kept_arg syms cg fld_first_val __argk ) } {}
         ? ( is_ident_tok fld_first_tt )
-        { ( lint_note_released fld_first_val )
-            ( bck_record_embedded_param syms fld_first_val )
+        { ( bck_record_embedded_param syms fld_first_val )
             // …and it is a MOVE, which the borrow checker was not told.
             // The lint has always treated this as released; the checker
             // saw nothing, so `@ Holder { a }` followed by freeing both
@@ -26841,23 +26774,11 @@
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) ) }
 }
 
-// Record that `arg_name`, if it is one of this function's parameters,
-// was stored into an aggregate literal. Unlike the escape recorder this
-// is NOT gated on the borrow checker: the lint that consumes it runs
-// under --lint, which is independent of --borrowck.
+// A bare identifier stored into an aggregate literal: its value leaves
+// with the aggregate, so a guard it carries is retained (the stable
+// address graph must not free it at the binding's cleanup).
 @ bck_record_embedded_param i syms s arg_name → v {
     ( origin_guard_barrier ( origin_expr syms TT_IDENT arg_name ) )
-    : s pn ( nurl_sym_get syms `__fn_param_names__` )
-    : i idx ( str_word_index pn arg_name )
-    ? >= idx 0
-    { : s cur ( nurl_sym_get syms `__fn_embedded_params__` )
-        : s new ( nurl_str_int idx )
-        ? ! ( str_contains_word cur new )
-        { ( nurl_sym_def syms `__fn_embedded_params__`
-            ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
-            ( nurl_str_cat3 cur ` ` new ) ) }
-        {} }
-    {}
 }
 
 // A bare identifier stored where it outlives this expression — a struct or
@@ -29382,7 +29303,6 @@
     ( nurl_sym_def syms `__fn_inferred_escape__` `` )
     ( nurl_sym_def syms `__fn_pending_esc_impl__` `` )
     ( nurl_sym_def syms `__fn_pending_rp_impl__` `` )
-    ( nurl_sym_def syms `__fn_embedded_params__` `` )
     ( nurl_sym_def syms `__fn_inferred_keep__` `` )
     ( nurl_sym_def syms `__fn_retlend__` `` )
     ( nurl_sym_def syms `__fn_retpart__` `` )
@@ -29515,12 +29435,6 @@
     ( __merge_impls syms `__fn_pending_esc_impl__` fname `e` )
     ( __merge_impls syms `__fn_pending_rp_impl__` fname `r` )
     ( nurl_sym_def g_fn_compiled fname `1` )
-    // Publish the embedded-parameter set. Authoritative per function:
-    // the body is compiled, so the set is complete.
-    : s __em_set ( nurl_sym_get syms `__fn_embedded_params__` )
-    ? != 0 ( nurl_str_len __em_set )
-    { ( nurl_sym_def g_fn_embeds fname __em_set ) }
-    {}
     ( mem_settle_scratch syms )
     : s __rl_set ( nurl_sym_get syms `__fn_retlend__` )
     ? != 0 ( nurl_str_len __rl_set )
@@ -36580,6 +36494,14 @@
     ^ ( nurl_str_cat fname `` )
 }
 
+// `@ f … → v {}`: a body that does nothing. A `sink` parameter of such a
+// function is dropped on entry's way out, exactly as its caller would
+// have dropped it — the redundant-free lint trusts only these.
+@ scan_note_empty_body i lex i syms s fname → v {
+    ? & == ( nurl_lex_type lex ) TT_LBRACE ( seq ( nurl_lex_peek_val lex ) `}` )
+    { ( nurl_sym_def syms ( nurl_str_cat fname `__emptybody` ) `1` ) } {}
+}
+
 @ scan_fn_sigs i lex i syms → v {
     // Brace-depth tracker. A `:` struct decl body or any `@`-function body
     // contains `{ ... }`; the `@` inside a closure-shaped struct field
@@ -36776,7 +36698,7 @@
                                 ? g_saw_inout
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
-                                ? == ( nurl_lex_type lex ) TT_LBRACE { ( skip_balanced lex ) }
+                                ? == ( nurl_lex_type lex ) TT_LBRACE { ( scan_note_empty_body lex syms fname ) ( skip_balanced lex ) }
                                 { ( die_pos lex template_line template_col ( nurl_str_cat3
                                     `a generic function declaration continues with its body — '@ ` fname
                                     ` [ … ] … → <type> { … }'. This one has no '{', so the declaration after it would be read as its body.` ) ) }
@@ -36897,6 +36819,7 @@
                                     ( nurl_sym_def syms ( nurl_str_cat fname `__nurlfn` ) `1` )
                                 }
                                 {}
+                                ( scan_note_empty_body lex syms fname )
                                 ( skip_balanced lex )
                             }
                         }
@@ -39765,7 +39688,7 @@
     ( nurl_print `  --stdin             read source from stdin; <file.nu> keeps its logical path\n` )
     ( nurl_print `  --sanitize-address  mark every generated function for AddressSanitizer\n` )
     ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )
-    ( nurl_print `                      an unreleased handle, an allocation owned by nothing\n` )
+    ( nurl_print `                      a redundant release call ([redundant-free])\n` )
     ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
@@ -39885,6 +39808,7 @@
         ( resolve_pending_impls )
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
+        ( lint_free_resolve )
         ( mem_emit_env_flags )
         ( mem_emit_dtor_flags )
         ( mem_emit_scratch_flags )
@@ -40063,7 +39987,6 @@
     = g_fn_unverified ( nurl_sym_new )
     = g_type_layouts ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
-    = g_fn_embeds ( nurl_sym_new )
     = g_fn_ret_view ( nurl_sym_new )
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
@@ -40155,7 +40078,6 @@
     ( nurl_sym_free g_origin_returns )
     ( nurl_sym_free g_fn_ret_param )
     ( nurl_sym_free g_fn_ret_alias )
-    ( nurl_sym_free g_fn_embeds )
     ( nurl_sym_free g_fn_keeps )
     ( nurl_sym_free g_fn_stores )
     ( nurl_sym_free g_fn_ret_view )
@@ -40176,8 +40098,6 @@
     // no-op on a 0 handle.
     ( nurl_sym_free g_lint_syms )
     ( nurl_sym_free g_lint_reads )
-    ( nurl_sym_free g_lint_handles )
-    ( nurl_sym_free g_lint_released )
     ( nurl_sym_free g_lint_used )
     ( nurl_sym_free g_dbg_file_syms )
     ( nurl_sym_free g_dbg_type_syms )
