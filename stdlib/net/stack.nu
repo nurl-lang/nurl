@@ -122,7 +122,7 @@ $ `stdlib/net/pktbuf.nu`
     i our_ip
     i netmask
     i gateway
-    * ArpCache arp
+    ArpCache arp
     i ip_id  // IPv4 identification counter for outbound datagrams
     i rx_frames
     i tx_frames

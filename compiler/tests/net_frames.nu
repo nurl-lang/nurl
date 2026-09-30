@@ -289,7 +289,7 @@ $ `stdlib/net/stack.nu`
     ( pb `foreign arp htype rejected: ` ! . ( arp_parse rep 14 28 ) valid )
 
     // ── ARP cache with a scripted clock ──────────────────────────
-    : *ArpCache c ( arp_cache_new 4 )
+    : ArpCache c ( arp_cache_new 4 )
     ( pb `cold lookup misses: ` ?? ( arp_cache_lookup c ( peer_ip ) 1000 ) { T m → F F → T } )
     ( pb `first send asks: ` ( arp_cache_should_request c ( peer_ip ) 1000 ) )
     ( pb `immediate retry suppressed: ` ! ( arp_cache_should_request c ( peer_ip ) 1100 ) )
@@ -313,7 +313,7 @@ $ `stdlib/net/stack.nu`
         ( arp_cache_insert c ( ipv4_make 10 0 9 q ) + 1000 q 80000 )
         = q + q 1
     }
-    ( pb `cache stays bounded at max: ` == ( vec_len [ArpEntry] . c entries ) 4 )
+    ( pb `cache stays bounded at max: ` == ( arp_cache_size c ) 4 )
     ( pb `most recent insert survived: ` ?? ( arp_cache_lookup c ( ipv4_make 10 0 9 19 ) 80000 ) { T m → == m 1019 F → F } )
     ( arp_cache_free c )
 
