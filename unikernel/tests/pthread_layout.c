@@ -45,6 +45,12 @@ void nurl_closure_drop(void *env) {
                     "links no allocator\n");
     abort();
 }
+/* …and the per-coroutine recover state, exchanged around each switch:
+ * nothing here switches, recovers or panics. */
+void nurl__rctx_swap(void *ctx);
+void nurl__rctx_swap(void *ctx) { (void)ctx; }
+void nurl__rctx_release(void *ctx);
+void nurl__rctx_release(void *ctx) { (void)ctx; }
 
 int main(void) {
     int bad = 0;

@@ -59,6 +59,14 @@ void *nurl_closure_clone(void *env) { return env; }
 void  nurl_closure_drop(void *env);
 void  nurl_closure_drop(void *env) { (void)env; }
 
+/* The scheduler also exchanges each coroutine's recover chain and panic
+ * journal (runtime_core.c's thread-locals) around every switch. Nothing
+ * here recovers or panics, so there is no state to exchange. */
+void nurl__rctx_swap(void *ctx);
+void nurl__rctx_swap(void *ctx) { (void)ctx; }
+void nurl__rctx_release(void *ctx);
+void nurl__rctx_release(void *ctx) { (void)ctx; }
+
 long long nurl_fiber_spawn(void *fn, void *env);
 long long nurl_fiber_spawn_joinable(void *fn, void *env);
 void      nurl_fiber_join(long long h);
