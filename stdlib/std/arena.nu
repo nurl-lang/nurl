@@ -37,14 +37,16 @@
 //   ( arena_remaining a )      → i        bytes left in the current chunk
 //   ( arena_chunk_count a )    → i        number of live chunks (>1 ⇒ grew)
 //   ( arena_reset a )          → v        rewind to empty, keep base storage
-//   ( arena_free a )           → v        release every chunk + handle
+//   ( arena_free a )           → v        early release (optional: the last
+//                                         owner releases every chunk)
 //
 // Memory model:
 //
 //   * `Arena { s ctl }` is a single-pointer handle to a heap-allocated
 //     `ArenaImpl`. Passing an Arena by value copies the 8-byte handle
-//     — every copy shares the same chunk list + bump cursor. Same
-//     opaque-handle pattern as `Channel` and `String`.
+//     — every copy shares the same chunk list + bump cursor, and the
+//     last owner releases the chunks. Same opaque-handle pattern as
+//     `Channel` and `String`.
 //   * `arena_alloc` returns a BORROWED pointer into a chunk's buffer.
 //     Pointers are valid until `arena_reset` (invalidates ALL
 //     outstanding pointers) or `arena_free`. Never `nurl_free` a
@@ -82,6 +84,8 @@
 // into a list (`next` points at the previously-current chunk); a FIXED
 // arena has exactly one. `next` is a self-referential pointer field —
 // NURL resolves the forward reference to `ArenaChunk` itself.
+$ `stdlib/core/rcbox.nu`
+
 : ArenaChunk {
     * u data
     i used
@@ -96,6 +100,19 @@
 }
 
 : Arena { s ctl }
+
+// The chunks are raw memory: releasing them is the arena's own drop,
+// run by the last owner of the Arena handle (Arena_drop).
+% Drop ArenaImpl {
+    @ drop ArenaImpl impl → v {
+        : ~ * ArenaChunk cur . impl head
+        ~ != 0 # i cur {
+            : *ArenaChunk nxt . cur next
+            ( __arena_free_chunk cur )
+            = cur nxt
+        }
+    }
+}
 
 // ── Internal chunk helpers ───────────────────────────────────────────
 
@@ -144,17 +161,18 @@
 // ── Constructors ─────────────────────────────────────────────────────
 
 @ arena_new → Arena {
-    : *ArenaImpl impl # *ArenaImpl ( nurl_alloc Z ArenaImpl )
+    : i impl_box ( rcbox_zero [ArenaImpl] )
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] impl_box )
     = . impl head # *ArenaChunk 0
     = . impl base # *ArenaChunk 0
     = . impl chunk_sz 0
-    ^ @ Arena { # s impl }
+    ^ @ Arena { # s impl_box }
 }
 
 @ arena_with_cap i n → Arena {
     : Arena a ( arena_new )
     ? > n 0 {
-        : *ArenaImpl impl # *ArenaImpl . a ctl
+        : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
         : *ArenaChunk c ( __arena_new_chunk n )
         = . impl head c
         = . impl base c
@@ -168,7 +186,7 @@
 // chunk is created lazily on the first allocation.
 @ arena_growing i chunk_sz → Arena {
     : Arena a ( arena_new )
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     = . impl chunk_sz ? > chunk_sz 0 chunk_sz 1
     ^ a
 }
@@ -176,25 +194,25 @@
 // ── Inspectors ───────────────────────────────────────────────────────
 
 @ arena_used Arena a → i {
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     ^ ( __arena_sum_used . impl head )
 }
 
 @ arena_cap Arena a → i {
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     ^ ( __arena_sum_cap . impl head )
 }
 
 // Bytes left in the CURRENT chunk before a grow (FIXED: cap − used).
 @ arena_remaining Arena a → i {
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     : *ArenaChunk h . impl head
     ? == 0 # i h { ^ 0 } {}
     ^ - . h cap . h used
 }
 
 @ arena_chunk_count Arena a → i {
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     : ~ i n 0
     : ~ * ArenaChunk cur . impl head
     ~ != 0 # i cur {
@@ -211,7 +229,7 @@
 // underlying `nurl_alloc` itself fails.
 @ arena_alloc Arena a i n → *u {
     ? <= n 0 { ^ # *u 0 } {}
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     : *ArenaChunk h . impl head
     // Try the current head chunk first.
     ? != 0 # i h {
@@ -244,7 +262,7 @@
 // satisfy the aligned request.
 @ arena_alloc_aligned Arena a i n i align → *u {
     ? <= n 0 { ^ # *u 0 } {}
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     : *ArenaChunk h . impl head
     ? != 0 # i h {
         // Align `used` UP to `align`: `(used + align-1) & -align`. -align
@@ -290,7 +308,7 @@
 // base chunk's buffer is retained for reuse; any extra chunks a GROWING
 // arena added are released.
 @ arena_reset Arena a → v {
-    : *ArenaImpl impl # *ArenaImpl . a ctl
+    : *ArenaImpl impl ( rcbox_ptr [ArenaImpl] # i . a ctl )
     : *ArenaChunk base . impl base
     ? != 0 # i base {
         // Free every chunk from head down to (but not including) base.
@@ -308,13 +326,12 @@
 
 // Release every chunk and the impl block. After this the handle is dead
 // — do not pass it to any other arena_* function.
-@ arena_free sink Arena a → v {
-    : *ArenaImpl impl # *ArenaImpl . a ctl
-    : ~ * ArenaChunk cur . impl head
-    ~ != 0 # i cur {
-        : *ArenaChunk nxt . cur next
-        ( __arena_free_chunk cur )
-        = cur nxt
-    }
-    ( nurl_free # s impl )
+@ Arena_share Arena a → Arena { ^ @ Arena { # s ( rcbox_share # i . a ctl ) } }
+
+@ Arena_drop sink Arena a → v {
+    ( mem_forget a )
+    ( rcbox_release [ArenaImpl] # i . a ctl )
 }
+
+// Let go of `a` now rather than at the end of its owner's scope.
+@ arena_free sink Arena a → v {}

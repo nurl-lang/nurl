@@ -32,22 +32,24 @@
 //   ( rng_u01 g )                → f       uniform double in [0, 1),
 //                                          53-bit mantissa resolution.
 //   ( rng_bool g )               → b       fair coin flip.
-//   ( rng_free g )               → v       release the generator.
+//   ( rng_free g )               → v       early release (optional).
 //
-// Lifecycle (opaque-handle pattern, same as Arena / Channel / String):
+// Lifecycle (opaque-handle pattern, same as Channel / Regex / String):
 //
 //   : Rng g ( rng_seed 0x1234 )
 //   : i a ( rng_next g )          // mutates g's state in place
 //   : i b ( rng_next g )          // a != b; stream is deterministic
-//   ( rng_free g )
+//   // g is released when its owner goes
 
 $ `stdlib/std/float.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── State ────────────────────────────────────────────────────────────
 
 // 256-bit xoshiro state. Heap-allocated; `Rng` is a single-pointer
 // handle, so passing a Rng by value shares the same stream (every copy
-// advances the one underlying state).
+// advances the one underlying state), and the last owner releases it —
+// no rng_free needed.
 
 : RngImpl {
     u64 s0
@@ -86,7 +88,8 @@ $ `stdlib/std/float.nu`
 // (it would stay zero forever); SplitMix64 never emits it for any seed,
 // so no special-case is needed.
 @ rng_seed i seed → Rng {
-    : *RngImpl st # *RngImpl ( nurl_alloc Z RngImpl )
+    : i st_box ( rcbox_zero [RngImpl] )
+    : *RngImpl st ( rcbox_ptr [RngImpl] st_box )
     : ~ u64 sm # u64 seed
     = sm + sm 0x9e3779b97f4a7c15
     = . st s0 ( __splitmix_mix sm )
@@ -96,7 +99,7 @@ $ `stdlib/std/float.nu`
     = . st s2 ( __splitmix_mix sm )
     = sm + sm 0x9e3779b97f4a7c15
     = . st s3 ( __splitmix_mix sm )
-    ^ @ Rng { # s st }
+    ^ @ Rng { # s st_box }
 }
 
 // ── Core step ────────────────────────────────────────────────────────
@@ -110,7 +113,7 @@ $ `stdlib/std/float.nu`
 // would shadow the field name in `. st s0`, turning the field access
 // into a *pointer index* `st[s0]`. Distinct names keep `.` field-typed.
 @ rng_next Rng g → i {
-    : *RngImpl st # *RngImpl . g ctl
+    : *RngImpl st ( rcbox_ptr [RngImpl] # i . g ctl )
     : u64 w0 . st s0
     : u64 w1 . st s1
     : u64 w2 . st s2
@@ -193,7 +196,14 @@ $ `stdlib/std/float.nu`
 
 // ── Lifecycle ────────────────────────────────────────────────────────
 
-// Release the generator's state. The handle is dead afterwards.
-@ rng_free sink Rng g → v {
-    ( nurl_free # *u . g ctl )
+// A Rng is a library handle over its state in an rcbox: every copy is
+// the same stream, and the last owner releases it.
+@ Rng_share Rng g → Rng { ^ @ Rng { # s ( rcbox_share # i . g ctl ) } }
+
+@ Rng_drop sink Rng g → v {
+    ( mem_forget g )
+    ( rcbox_release [RngImpl] # i . g ctl )
 }
+
+// Let go of `g` now rather than at the end of its owner's scope.
+@ rng_free sink Rng g → v {}

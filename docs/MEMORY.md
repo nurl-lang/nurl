@@ -1409,10 +1409,10 @@ place drops it** — there is no escape hatch and no hand-written free:
 | Where the closure is kept | Who drops the env |
 |---|---|
 | a `:` binding | the binding, at scope exit (each iteration in a loop) |
-| a closure literal or call result passed straight to a call | the call site, right after the call |
+| a closure literal or call result passed straight to a call | the call site, right after the call — unless it went into an aggregate literal first (`( keep @ S { \ → … } )`): then the aggregate owns it |
 | a statement whose value is thrown away | that statement |
 | the result of a function returning a closure | the caller — every return path hands over an env the caller owns |
-| a struct field (literal, `= . s f …`, a returned struct) | the struct, with its other owned fields |
+| a struct field (literal, `= . s f …`, a returned struct) | the struct, with its other owned fields — its drop graph, wherever the struct goes (a `Vec`, a return, another struct); a copy of the struct copies the env |
 | a slice of closures `[( @ … ) \| …]` | the slice, element by element |
 | another closure's captures | that closure's env (nested envs form a tree) |
 | a `?` / `??` join | whatever consumes the join, like a call result |

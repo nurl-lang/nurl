@@ -6065,6 +6065,12 @@
 
 // True when `ty` (raw or lowered) is a closure VALUE,
 // `{ R (i8*, P…)*, i8* }` — a function pointer plus its env.
+// A closure's LLVM type, as a struct field's registered type spells it
+// (`{ i64 (i8*)*, i8* }`), asked without allocating.
+@ __is_closure_llty s ty → b {
+    ^ & != 0 ( nurl_str_starts ty `{ ` ) != 0 ( nurl_str_ends ty `)*, i8* }` )
+}
+
 @ __is_closure_ty s ty → b {
     ? == 0 ( nurl_str_len ty ) { ^ F } {}
     : s ll ( nurl_llty ty )
@@ -6271,9 +6277,17 @@
 // anything else is borrowed from an owner that keeps it, so the place
 // gets a clone. Returns the value to store.
 @ mem_clo_into_owner i syms i cg s ty s val i first_tt → s {
-    ? == first_tt TT_BACKSLASH { ( __clo_tmp_set `` ) ^ ( nurl_str_cat val `` ) } {}
+    // A literal's (or a closure-returning call's) env now belongs to the
+    // aggregate: it is no longer the temporary a call site releases after
+    // the call (`( keep @ S { \ → … } )` freed the env the kept S held).
+    ? == first_tt TT_BACKSLASH {
+        ( __clo_tmp_set `` )
+        ( nurl_sym_def syms `__last_closure_env__` `` )
+        ^ ( nurl_str_cat val `` )
+    } {}
     ? != 0 ( nurl_str_len ( __clo_temp_owner syms val ) )
     { ( __clo_tmp_set `` )
+        ( nurl_sym_def syms `__last_closure_env__` `` )
         ^ ( nurl_str_cat val `` ) }
     {}
     : s ll ( nurl_llty ty )
@@ -21770,6 +21784,38 @@
                 ( nurl_print `, ` ) ( nurl_print pt_ptr )
                 ( nurl_print ` ` ) ( nurl_print alloca_ptr )
                 ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+                // A String / Vec / handle field of a value this binding owns:
+                // the value it replaces is dropped, as `= x ( … )` drops what
+                // a binding held (it leaked). A field moved out was zeroed —
+                // dropping that is a no-op — and a binding that only borrows
+                // its value (flag clear) leaves the old one to its owner.
+                ? & ( __is_handle_ty ftype ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) alloca_ptr )
+                { : s __hf ( mem_udrop_flag_get syms cg alloca_ptr )
+                    : s __hv ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __hv ) ( nurl_print ` = load ` )
+                    ( nurl_print ( nurl_llty ftype ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
+                    ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
+                    ( __handle_drop_ensure ftype )
+                    ( __dropifv_request ftype )
+                    ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ftype ) ) ( nurl_print `(i1 ` ) ( nurl_print __hf )
+                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) ) ( nurl_print ` ` ) ( nurl_print __hv ) ( nurl_print `)` ) ( emit_dbg_eol ) }
+                {}
+                // …and a closure field of an owning struct (its drop graph
+                // owns the env): the closure it replaces is released.
+                ? & & ( __is_closure_ty ftype ) ( __is_owned_struct_ty pt ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) alloca_ptr )
+                { : s __cf ( mem_udrop_flag_get syms cg alloca_ptr )
+                    : s __cv ( nurl_cg_reg cg )
+                    : s __ce ( nurl_cg_reg cg )
+                    : s __cs ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __cv ) ( nurl_print ` = load ` )
+                    ( nurl_print ( nurl_llty ftype ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
+                    ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
+                    ( nurl_print `  ` ) ( nurl_print __ce ) ( nurl_print ` = extractvalue ` )
+                    ( nurl_print ( nurl_llty ftype ) ) ( nurl_print ` ` ) ( nurl_print __cv ) ( nurl_print `, 1\n` )
+                    ( nurl_print `  ` ) ( nurl_print __cs ) ( nurl_print ` = select i1 ` ) ( nurl_print __cf )
+                    ( nurl_print `, i8* ` ) ( nurl_print __ce ) ( nurl_print `, i8* null\n` )
+                    ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print __cs ) ( nurl_print `)` ) ( emit_dbg_eol ) }
+                {}
                 // A closure field is owned by the struct (docs/MEMORY.md
                 // §7.4): the new value is made owned, and when this binding
                 // owns the field the closure it replaces is released.
@@ -23295,7 +23341,10 @@
             ( nurl_str_cat3 owned_field_idxs ` ` tag )
         }
         {}
-        ? fld_is_clo
+        // (A struct dropped whole — an owning struct — drops its closure
+        // fields in its own drop graph, wherever the value goes: a Vec,
+        // a return, another struct. Only the others track them here.)
+        ? & fld_is_clo ! ( __is_owned_struct_ty agg_ty )
         { : s tag ( nurl_str_cat3 idx_str `:clo:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
             = owned_field_idxs ? == 0 ( nurl_str_len owned_field_idxs )
             ( nurl_str_cat tag `` )
@@ -23308,8 +23357,12 @@
         // in both branches so owned_field_idxs never aliases ptok (which is
         // freed by the loop-body scope-exit drop).
         // Not through a field whose type has its own `% Drop`: that value is
-        // released whole, by its impl, when this aggregate drops it.
-        ? & & != 0 g_auto_drop_strings != 0 ( nurl_str_len cur_sname ) ! ( __has_user_drop fty )
+        // released whole, by its impl, when this aggregate drops it. And only
+        // when the field IS that literal: one handed to a call inside the
+        // field's expression (`# s ( rcbox_new [I] @ I { … } )`) was the
+        // call's, and its fields are not this aggregate's to drop — they
+        // were read as paths into whatever the field holds (invalid IR).
+        ? & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len cur_sname ) ! ( __has_user_drop fty ) == fld_first_tt TT_AT
         { : ~ s sub ( nurl_sym_get syms `__last_agg_owned_fields__` )
             ~ != 0 ( nurl_str_len sub ) {
                 : s subtok ( str_first_word sub )
@@ -31560,7 +31613,9 @@
     : ~ b r F
     ~ < i fc {
         : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int i ) `__type` ) ) )
-        ? ( __type_needs_drop ft syms ) { = r T } {}
+        // A closure in a struct field is the struct's own (docs/MEMORY.md
+        // §7.4): its env goes with the struct wherever the struct goes.
+        ? | ( __is_closure_llty ft ) ( __type_needs_drop ft syms ) { = r T } {}
         = i + i 1
     }
     ^ r
@@ -31693,6 +31748,14 @@
             : s fr ( __dr ctr )
             ( nurl_print `  ` ) ( nurl_print fr ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
             ( emit_drop_value ft fr ctr syms )
+        } {}
+        // A closure field: its env (null-safe; frees what the env owns).
+        ? ( __is_closure_llty ft ) {
+            : s cf ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print cf ) ( nurl_print ` = extractvalue %` ) ( nurl_print sname ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+            : s ce ( __dr ctr )
+            ( nurl_print `  ` ) ( nurl_print ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print cf ) ( nurl_print `, 1\n` )
+            ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ce ) ( nurl_print `)\n` )
         } {}
         = i + i 1
     }
@@ -32331,6 +32394,23 @@
                 : s nx ( __dr ctr )
                 ( nurl_print `  ` ) ( nurl_print nx ) ( nurl_print ` = insertvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print cur )
                 ( nurl_print `, ` ) ( nurl_print fl ) ( nurl_print ` ` ) ( nurl_print c ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+                = cur nx
+            } {}
+            // A closure field: the copy owns a copy of the env.
+            ? ( __is_closure_llty ft ) {
+                : s f ( __dr ctr )
+                ( nurl_print `  ` ) ( nurl_print f ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print cur )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
+                : s e ( __dr ctr )
+                ( nurl_print `  ` ) ( nurl_print e ) ( nurl_print ` = extractvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print f ) ( nurl_print `, 1\n` )
+                : s ne ( __dr ctr )
+                ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = call i8* @nurl_closure_clone(i8* ` ) ( nurl_print e ) ( nurl_print `)\n` )
+                : s nf ( __dr ctr )
+                ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = insertvalue ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print f )
+                ( nurl_print `, i8* ` ) ( nurl_print ne ) ( nurl_print `, 1\n` )
+                : s nx ( __dr ctr )
+                ( nurl_print `  ` ) ( nurl_print nx ) ( nurl_print ` = insertvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print cur )
+                ( nurl_print `, ` ) ( nurl_print ft ) ( nurl_print ` ` ) ( nurl_print nf ) ( nurl_print `, ` ) ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
                 = cur nx
             } {}
             = i + i 1

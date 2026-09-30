@@ -38,7 +38,8 @@
 //   ( regex_find_all r text )       → ( Vec Match )  non-overlapping
 //   ( regex_replace  r text repl )  → String         non-overlapping replace
 //   ( regex_split    r text )       → ( Vec String ) split on matches
-//   ( regex_free     r )            → v
+//   ( regex_free     r )            → v   early release (optional: the last
+//                                        owner of a Regex releases it)
 //
 // `Match { i start, i len }` is a half-open span over the original text
 // (text bytes [start, start+len)). Use `string_substr` on the text to
@@ -54,6 +55,7 @@
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── State kinds ─────────────────────────────────────────────────────
 // 0 = Match  (accept; out1/out2 unused)
@@ -71,9 +73,10 @@ $ `stdlib/core/vec.nu`
 
 : Match { i start i len }
 
-// Regex is an opaque handle to a heap-allocated RegexImpl. Single-field
-// struct fits in i64, which is required for `! Regex ParseErr` to take
-// the narrow-enum tag-fold path.
+// Regex is an opaque handle to a RegexImpl in an rcbox: every copy is the
+// same compiled pattern, and the last owner releases it (Regex_drop) —
+// nothing to free by hand. Single-field struct fits in i64, which is
+// required for `! Regex ParseErr` to take the narrow-enum tag-fold path.
 : RegexImpl {
     ( Vec i ) states  // 4 ints/state: kind, a, out1, out2
     ( Vec i ) classes  // class store, packed
@@ -604,24 +607,29 @@ $ `stdlib/core/vec.nu`
     : i match_state ( __rx_add_state p 0 0 -1 -1 )
     ( __rx_patch_exit p ( __frag_exit frag ) match_state )
     : i start_idx ( __frag_entry frag )
-    : *RegexImpl impl # *RegexImpl ( nurl_alloc Z RegexImpl )
-    = . impl states . p states
-    = . impl classes . p classes
-    = . impl class_starts . p class_starts
-    = . impl start start_idx
-    = . impl ngroups . p ngroups
-    : Regex r @ Regex { # s impl }
+    // The parser's tables move into the pattern (the parser block is
+    // raw memory, freed below without them).
+    : ( Vec i ) states . p states
+    ( mem_take states )
+    : ( Vec i ) classes . p classes
+    ( mem_take classes )
+    : ( Vec i ) class_starts . p class_starts
+    ( mem_take class_starts )
+    : i box ( rcbox_new [RegexImpl] @ RegexImpl { states classes class_starts start_idx . p ngroups } )
+    : Regex r @ Regex { # s box }
     ( nurl_free # s p )
     ^ @ !Regex ParseErr { T r }
 }
 
-@ regex_free sink Regex r → v {
-    : *RegexImpl impl # *RegexImpl . r ctl
-    ( vec_free [i] . impl states )
-    ( vec_free [i] . impl classes )
-    ( vec_free [i] . impl class_starts )
-    ( nurl_free # s impl )
+@ Regex_share Regex r → Regex { ^ @ Regex { # s ( rcbox_share # i . r ctl ) } }
+
+@ Regex_drop sink Regex r → v {
+    ( mem_forget r )
+    ( rcbox_release [RegexImpl] # i . r ctl )
 }
+
+// Let go of `r` now rather than at the end of its owner's scope.
+@ regex_free sink Regex r → v {}
 
 // ── Match engine ────────────────────────────────────────────────────
 // Two-set NFA simulation. We store active states as a Vec[i] of state
@@ -725,14 +733,14 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __rx_nstates Regex r → i {
-    : *RegexImpl impl # *RegexImpl . r ctl
+    : *RegexImpl impl ( rcbox_ptr [RegexImpl] # i . r ctl )
     ^ / ( vec_len [i] . impl states ) 4
 }
 
 // Capture groups in the pattern. Group `k` occupies slots 2k and 2k+1;
 // slots 0 and 1 are the whole match, filled in by the caller.
 @ regex_ngroups Regex r → i {
-    : *RegexImpl impl # *RegexImpl . r ctl
+    : *RegexImpl impl ( rcbox_ptr [RegexImpl] # i . r ctl )
     ^ . impl ngroups
 }
 
@@ -781,7 +789,7 @@ $ `stdlib/core/vec.nu`
 // the winning thread's capture slots (absolute offsets, -1 for a group
 // that did not take part).
 @ __rx_run_at Regex r s text i text_len i text_pos RxScratch sc → i {
-    : *RegexImpl impl # *RegexImpl . r ctl
+    : *RegexImpl impl ( rcbox_ptr [RegexImpl] # i . r ctl )
     : ( Vec i ) states . impl states
     : ( Vec i ) classes . impl classes
     : ( Vec i ) class_starts . impl class_starts

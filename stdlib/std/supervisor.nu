@@ -25,9 +25,9 @@
 // Unlike std/panic.nu's `recover` (which frees the closure env after one
 // call), the supervisor keeps the child's closure alive across restarts —
 // so a child MAY hold captured state that persists between restarts (e.g.
-// a retry counter, a connection handle). The env is released once, at
-// `supervisor_free`. A child body must therefore be safe to run more than
-// once.
+// a retry counter, a connection handle). The env is released once, with
+// the supervisor's last owner. A child body must therefore be safe to run
+// more than once.
 //
 // ── API ──────────────────────────────────────────────────────────────
 //
@@ -36,13 +36,14 @@
 //   ( supervisor_run Supervisor s )                    → v   (spawns a fiber per child)
 //   ( supervise_one  Supervisor s i idx )              → v   (run one child's loop synchronously)
 //   ( child_restarts Supervisor s i idx )              → i
-//   ( supervisor_free Supervisor s )                   → v
+//   ( supervisor_free Supervisor s )                   → v   (early release; optional)
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/async.nu`
 $ `stdlib/std/panic.nu`
+$ `stdlib/core/rcbox.nu`
 
 : | RestartPolicy {
     RPermanent
@@ -89,6 +90,13 @@ $ `stdlib/std/panic.nu`
 
 : ChildSpec { s ctl }
 
+@ ChildSpec_share ChildSpec c → ChildSpec { ^ @ ChildSpec { # s ( rcbox_share # i . c ctl ) } }
+
+@ ChildSpec_drop sink ChildSpec c → v {
+    ( mem_forget c )
+    ( rcbox_release [ChildImpl] # i . c ctl )
+}
+
 : SupImpl {
     ( Vec ChildSpec ) children
     i max_restarts
@@ -101,41 +109,38 @@ $ `stdlib/std/panic.nu`
 : Supervisor { s ctl }
 
 @ supervisor_new i max_restarts i window_ms → Supervisor {
-    : *SupImpl sup # *SupImpl ( nurl_alloc Z SupImpl )
+    : i sup_box ( rcbox_zero [SupImpl] )
+    : *SupImpl sup ( rcbox_ptr [SupImpl] sup_box )
     = . sup children ( vec_new [ChildSpec] )
     = . sup max_restarts max_restarts
     = . sup window_ms window_ms
     = . sup base_backoff_ms 0
     = . sup max_backoff_ms 1000
     = . sup strategy 0
-    ^ @ Supervisor { # s sup }
+    ^ @ Supervisor { # s sup_box }
 }
 
 @ supervisor_set_strategy Supervisor s SupStrategy st → v {
-    : *SupImpl sup # *SupImpl . s ctl
+    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
     = . sup strategy ( __strategy_code st )
 }
 
 // Tune the per-restart backoff (default 0 = restart immediately).
 @ supervisor_set_backoff Supervisor s i base_ms i max_ms → v {
-    : *SupImpl sup # *SupImpl . s ctl
+    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
     = . sup base_backoff_ms base_ms
     = . sup max_backoff_ms max_ms
 }
 
 @ supervisor_add Supervisor s s name RestartPolicy policy ( @ v ) start → v {
-    : *SupImpl sup # *SupImpl . s ctl
-    : *ChildImpl child # *ChildImpl ( nurl_alloc Z ChildImpl )
-    = . child name ( string_from name )
-    = . child start start
-    = . child policy policy
-    = . child restarts 0
-    ( vec_push [ChildSpec] . sup children @ ChildSpec { # s child } )
+    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
+    : i box ( rcbox_new [ChildImpl] @ ChildImpl { ( string_from name ) start policy 0 } )
+    ( vec_push [ChildSpec] . sup children @ ChildSpec { # s box } )
 }
 
 @ __child_at * SupImpl sup i idx → *ChildImpl {
     ^ ?? ( vec_get [ChildSpec] . sup children idx ) {
-        T c → # *ChildImpl . c ctl
+        T c → ( rcbox_ptr [ChildImpl] # i . c ctl )
         F → # *ChildImpl 0
     }
 }
@@ -196,7 +201,7 @@ $ `stdlib/std/panic.nu`
 // Run one child's supervision loop synchronously (no fiber). Useful for
 // tests and single-child supervisors.
 @ supervise_one Supervisor s i idx → v {
-    : *SupImpl sup # *SupImpl . s ctl
+    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
     : *ChildImpl child ( __child_at sup idx )
     ( __supervise_loop sup child )
 }
@@ -264,7 +269,7 @@ $ `stdlib/std/panic.nu`
 }
 
 @ supervisor_start Supervisor s → b {
-    : *SupImpl sup # *SupImpl . s ctl
+    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
     : i n ( vec_len [ChildSpec] . sup children )
 
     : ~ ( Vec i ) runset ( vec_new [i] )
@@ -302,7 +307,7 @@ $ `stdlib/std/panic.nu`
 // Spawn a supervising fiber per child. Requires runtime_init / runtime_run
 // by the caller.
 @ supervisor_run Supervisor s → v {
-    : *SupImpl sup # *SupImpl . s ctl
+    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
     : i n ( vec_len [ChildSpec] . sup children )
     : ~ i k 0
     ~ < k n {
@@ -313,20 +318,18 @@ $ `stdlib/std/panic.nu`
 }
 
 @ child_restarts Supervisor s i idx → i {
-    : *SupImpl sup # *SupImpl . s ctl
+    : *SupImpl sup ( rcbox_ptr [SupImpl] # i . s ctl )
     : *ChildImpl child ( __child_at sup idx )
     ^ . child restarts
 }
 
-@ supervisor_free sink Supervisor s → v {
-    : *SupImpl sup # *SupImpl . s ctl
-    : ( @ v ChildSpec ) freeing \ ChildSpec c → v {
-        : *ChildImpl ci # *ChildImpl . c ctl
-        ( string_free . ci name )
-        : ( @ v ) st . ci start
-        ( nurl_closure_drop # *u st 1 )
-        ( nurl_free # s ci )
-    }
-    ( vec_free_with [ChildSpec] . sup children freeing )
-    ( nurl_free # s sup )
+@ Supervisor_share Supervisor h → Supervisor { ^ @ Supervisor { # s ( rcbox_share # i . h ctl ) } }
+
+@ Supervisor_drop sink Supervisor h → v {
+    ( mem_forget h )
+    ( rcbox_release [SupImpl] # i . h ctl )
 }
+
+// Let go of `h` now rather than at the end of its owner's scope. The
+// children's closures are released with the last owner.
+@ supervisor_free sink Supervisor h → v {}

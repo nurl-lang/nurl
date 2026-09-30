@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped at all; it is now move-only and dropped field by field. A raw
   `s` field of a Drop type was freed by the compiler *and* by the impl (a
   double free; nested, invalid IR).
+- **A closure in a struct field goes where the struct goes.** Its env was
+  released with the *binding* that built the struct (a per-binding field
+  list), so a struct moved into a `Vec` or returned held a dangling env,
+  and the struct's own drop never touched it. Closure fields are now part
+  of the struct's drop and copy (`nurl_closure_drop` / `_clone`).
+- **A closure literal inside an aggregate literal passed to a call**
+  (`( keep v @ S { \ → … } )`) was released after the call as if it were
+  the call's own temporary argument; the kept `S` read freed memory. One
+  level down (`@ Outer { ( keep v @ S { … } ) 7 }`) the inner literal's
+  owned fields were read as paths into `Outer` (invalid IR).
+- **`= . p f ( … )` releases the value the field held** when the binding
+  owns its struct: a String / Vec / handle / closure field leaked on
+  reassignment. `compiler/tests/struct_field_ownership.nu`.
 - **A library handle's copy is an owner.** `@ S { . h p }` inside `S`'s
   own module (a share reading the pointer out of the handle it was given)
   was classified as a view of the parameter, so `S_share`'s result was
@@ -35,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Mutex_share`. The handles are one word now (`Mutex { s p }`); code
   that reached into `Mutex.c` uses `mutex_raw`.
   `compiler/tests/sync_handles_autodrop.nu`.
+- **`Regex`, `Rng`, `Bitset`, `Arena`, `Supervisor`, `CircuitBreaker`, the
+  cluster `Registry` and process `Output` release themselves.** Each is a
+  library handle over state in an rcbox (`stdlib/core/rcbox.nu`: one block,
+  `[ owners ][ T ]`, the last owner drops `T` — its managed fields and its
+  own `% Drop`): every copy is the same state, as a copied pointer was, and
+  no one frees it by hand. Their `*_free` functions remain as early
+  releases. `compiler/tests/opaque_handles_autodrop.nu`.
 - **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
   struct whose module defines `S_drop sink S x` (and `S_share` /
   `S_clone`) is dropped and copied like `HashMap`.

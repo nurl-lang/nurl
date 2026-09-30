@@ -21,20 +21,16 @@
 //   ( output_stderr    Output o )                  → s    BORROWED view
 //   ( output_stdout_len Output o )                 → i
 //   ( output_stderr_len Output o )                 → i
-//   ( output_free      Output o )                  → v    cascades buffers
+//   ( output_free      Output o )                  → v    early release (optional)
 //   ( output_success   Output o )                  → b    exit_code == 0
 //
 //   ( process_err_name ProcessErr e )              → s    diagnostic
 //
 // Memory model — single-owner, LLM-friendly:
 //
-//   * Each call returns a fresh OWNED Output. The caller MUST call
-//     `output_free` exactly once on the Result-Ok path. (ProcessErr arms
-//     produced by these wrappers never carry an Output handle, so no
-//     free is necessary on the error path.)
-//   * The Output wraps a heap NurlProcResult allocated by the runtime
-//     that owns the stdout + stderr buffers. `output_free` cascades
-//     to both of them.
+//   * Each call returns a fresh OWNED Output: it (with the stdout +
+//     stderr buffers the runtime captured) is released when its last
+//     owner goes — nothing to free by hand.
 //   * `output_stdout` / `output_stderr` return BORROWED raw `s` views
 //     (NUL-terminated). Do NOT free them; copy with `string_from` if
 //     you need an owned `String` that outlives the Output.
@@ -80,12 +76,30 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/posix.nu`
+$ `stdlib/core/rcbox.nu`
 
 : | ProcessErr { ProcessNotFound ProcessExecFailed ProcessIo ProcessOther }
 
 // Output is an opaque single-field handle around the runtime's
 // NurlProcResult. Accessors below project into typed views.
+//
+// The runtime's result block (exit code, captured stdout / stderr), in an
+// rcbox: every copy of an Output is the same result, and the last owner
+// releases it (nurl_proc_free) — nothing to free by hand.
+: OutputImpl { i res }
+
+% Drop OutputImpl { @ drop OutputImpl o → v { ( nurl_proc_free . o res ) } }
+
 : Output { s raw }
+
+@ Output_share Output h → Output { ^ @ Output { # s ( rcbox_share # i . h raw ) } }
+
+@ Output_drop sink Output h → v {
+    ( mem_forget h )
+    ( rcbox_release [OutputImpl] # i . h raw )
+}
+
+@ __output_res Output o → i { ^ . ( rcbox_ptr [OutputImpl] # i . o raw ) res }
 
 // Render a ProcessErr variant name as a raw `s`. Useful for log lines
 // without a full match cascade at every call site.
@@ -109,8 +123,7 @@ $ `stdlib/core/posix.nu`
         ? == ek 3 { ^ @ !Output ProcessErr { F # ProcessErr ProcessIo } } {}
         ^ @ !Output ProcessErr { F # ProcessErr ProcessOther }
     } {}
-    : s rp # s raw
-    : Output o @ Output { rp }
+    : Output o @ Output { # s ( rcbox_new [OutputImpl] @ OutputImpl { raw } ) }
     ^ @ !Output ProcessErr { T o }
 }
 
@@ -626,32 +639,27 @@ $ `stdlib/core/posix.nu`
 // ── Accessors (borrowed views into the runtime-owned buffers) ───────
 
 @ output_exit_code Output o → i {
-    : s rp . o raw
-    : i raw # i rp
+    : i raw ( __output_res o )
     ^ ( nurl_proc_exit_code raw )
 }
 
 @ output_stdout Output o → s {
-    : s rp . o raw
-    : i raw # i rp
+    : i raw ( __output_res o )
     ^ ( nurl_proc_stdout raw )
 }
 
 @ output_stderr Output o → s {
-    : s rp . o raw
-    : i raw # i rp
+    : i raw ( __output_res o )
     ^ ( nurl_proc_stderr raw )
 }
 
 @ output_stdout_len Output o → i {
-    : s rp . o raw
-    : i raw # i rp
+    : i raw ( __output_res o )
     ^ ( nurl_proc_stdout_len raw )
 }
 
 @ output_stderr_len Output o → i {
-    : s rp . o raw
-    : i raw # i rp
+    : i raw ( __output_res o )
     ^ ( nurl_proc_stderr_len raw )
 }
 
@@ -659,11 +667,8 @@ $ `stdlib/core/posix.nu`
     ^ == 0 ( output_exit_code o )
 }
 
-@ output_free sink Output o → v {
-    : s rp . o raw
-    : i raw # i rp
-    ( nurl_proc_free raw )
-}
+// Let go of `o` now rather than at the end of its owner's scope.
+@ output_free sink Output o → v {}
 
 // ─────────────────────────────────────────────────────────────────────
 // Duplex stdio child — long-lived process with live stdin / stdout
