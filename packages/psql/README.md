@@ -91,12 +91,10 @@ $ `deps/psql/src/pg.nu`
                 T r → {
                     // r.ncols / r.nrows; ( pg_result_cell r row col ),
                     // ( pg_result_is_null r row col ), ( pg_result_col r col )
-                    ( pg_result_free r )
                 }
                 F _ → { ( nurl_eprint `query failed\n` ) }
             }
-            ( pg_close c )
-            ^ 0
+            ^ 0  // c's last owner closes the connection
         }
     }
 }
@@ -105,17 +103,21 @@ $ `deps/psql/src/pg.nu`
 API:
 
 ```
-( pg_connect host port user password database sslmode ) → !*PgConn PgErr
+( pg_connect host port user password database sslmode ) → !PgConn PgErr
 ( pg_query conn sql )                                    → !PgResult PgErr
 ( pg_result_col r col )                                  → String   // column name
 ( pg_result_cell r row col )                             → String   // text value
 ( pg_result_is_null r row col )                          → b
-( pg_result_free r )                                     → v
-( pg_close conn )                                        → v
+( pg_conn_lasterr conn )                                 → String   // last server error
+( pg_conn_tls conn )                                     → i        // 1 over TLS
+( pg_result_free r )                                     → v        // early release
+( pg_close conn )                                        → v        // early release
 ```
 
-On a `PgServerError` / `PgQuery` failure the backend message text is left
-on `conn.lasterr`.
+Nothing is released by hand: a `PgConn` is a handle whose last owner sends
+Terminate and closes the TLS session or socket, and a `PgResult` is a plain
+value. On a `PgServerError` / `PgQuery` failure the backend message text is
+`( pg_conn_lasterr conn )`.
 
 ## Limitations
 

@@ -147,7 +147,6 @@ $ `pg.nu`
         = c + c 1
     }
     ( nurl_print ( string_data hdr ) ) ( nurl_print `\n` )
-    ( string_free hdr )
 
     // Separator:  `----+-----+…`
     : String sep ( string_with_cap 80 )
@@ -160,7 +159,6 @@ $ `pg.nu`
         = c + c 1
     }
     ( nurl_print ( string_data sep ) ) ( nurl_print `\n` )
-    ( string_free sep )
 
     // Rows.
     : ~ i rr 0
@@ -181,7 +179,6 @@ $ `pg.nu`
             = c + c 1
         }
         ( nurl_print ( string_data row ) ) ( nurl_print `\n` )
-        ( string_free row )
         = rr + rr 1
     }
 
@@ -190,18 +187,16 @@ $ `pg.nu`
     ( string_push_int foot nr )
     ( string_push_str foot ? == nr 1 ` row)` ` rows)` )
     ( nurl_print ( string_data foot ) ) ( nurl_print `\n\n` )
-    ( string_free foot )
 
-    ( vec_free [u] widths ) ( vec_free [u] rjust )
 }
 
 // Run one statement and render rows / tag / error.
-@ __run_one * PgConn c s sql → v {
+@ __run_one PgConn c s sql → v {
     ?? ( pg_query c sql ) {
-        T r → { ( __print_result r ) ( pg_result_free r ) }
+        T r → { ( __print_result r ) }
         F e → {
             ( nurl_eprint `ERROR:  ` )
-            ? > ( string_len . c lasterr ) 0 { ( nurl_eprint ( string_data . c lasterr ) ) } { ( nurl_eprint ( pg_err_name e ) ) }
+            ? > ( string_len ( pg_conn_lasterr c ) ) 0 { ( nurl_eprint ( string_data ( pg_conn_lasterr c ) ) ) } { ( nurl_eprint ( pg_err_name e ) ) }
             ( nurl_eprint `\n` )
         }
     }
@@ -239,30 +234,29 @@ $ `pg.nu`
     ( nurl_print `Anything else is sent to the server as SQL (end with ';').\n` )
 }
 
-@ __conninfo * PgConn c → v {
+@ __conninfo PgConn c → v {
     ( nurl_print `You are connected to database "` )
-    ( nurl_print ( string_data . c db_name ) )
+    ( nurl_print ( string_data ( pg_conn_db_name c ) ) )
     ( nurl_print `" as user "` )
-    ( nurl_print ( string_data . c user_name ) )
+    ( nurl_print ( string_data ( pg_conn_user_name c ) ) )
     ( nurl_print `" on host "` )
-    ( nurl_print ( string_data . c host_name ) )
+    ( nurl_print ( string_data ( pg_conn_host_name c ) ) )
     ( nurl_print `"` )
-    ? == . c tls 1 { ( nurl_print ` (TLS encrypted)` ) } {}
+    ? == ( pg_conn_tls c ) 1 { ( nurl_print ` (TLS encrypted)` ) } {}
     ( nurl_print `.\n` )
 }
 
-@ __describe * PgConn c s tbl → v {
+@ __describe PgConn c s tbl → v {
     : String lit ( __quote_lit tbl )
     : String q ( string_with_cap 256 )
     ( string_push_str q `SELECT column_name AS column, data_type AS type, is_nullable AS nullable, column_default AS default FROM information_schema.columns WHERE table_name = ` )
     ( string_push_str q ( string_data lit ) )
     ( string_push_str q ` ORDER BY ordinal_position` )
     ( __run_one c ( string_data q ) )
-    ( string_free q ) ( string_free lit )
 }
 
 // Returns 1 to quit, 0 to continue. `cmd` starts with '\'.
-@ __handle_meta * PgConn c s cmd → i {
+@ __handle_meta PgConn c s cmd → i {
     ? ( nurl_str_eq cmd `\q` ) { ^ 1 } {}
     ? ( nurl_str_eq cmd `\?` ) { ( __meta_help ) ^ 0 } {}
     ? ( nurl_str_eq cmd `\conninfo` ) { ( __conninfo c ) ^ 0 } {}
@@ -285,9 +279,7 @@ $ `pg.nu`
     ? ( nurl_str_starts cmd `\d ` ) {
         : String raw ( string_from ( nurl_str_slice cmd 3 - ( nurl_str_len cmd ) 3 ) )
         : String tbl ( string_trim raw )
-        ( string_free raw )
         ( __describe c ( string_data tbl ) )
-        ( string_free tbl )
         ^ 0
     } {}
     ( nurl_eprint `invalid command: ` ) ( nurl_eprint cmd ) ( nurl_eprint `\nTry \? for help.\n` )
@@ -299,19 +291,17 @@ $ `pg.nu`
 // Process one input line. Accumulates into `buf` until a ';' terminator,
 // then executes. Meta-commands act only when no statement is pending.
 // Returns 1 to quit, 0 to continue.
-@ __process_line * PgConn c String buf String line → i {
+@ __process_line PgConn c String buf String line → i {
     : String t ( string_trim line )
     : i tl ( string_len t )
-    ? == tl 0 { ( string_free t ) ^ 0 } {}
+    ? == tl 0 { ^ 0 } {}
     ? & == ( string_len buf ) 0 == ( string_get t 0 ) 92 {
         : i q ( __handle_meta c ( string_data t ) )
-        ( string_free t )
         ^ q
     } {}
     ( string_push_str buf ( string_data t ) )
     ( string_push_char buf 32 )
     : b done ( string_ends_with t `;` )
-    ( string_free t )
     ? done {
         ( __run_one c ( string_data buf ) )
         ( string_clear buf )
@@ -319,7 +309,7 @@ $ `pg.nu`
     ^ 0
 }
 
-@ __repl * PgConn c i tty → v {
+@ __repl PgConn c i tty → v {
     : ~ String buf ( string_new )
     : ~ b running T
     ~ running {
@@ -332,17 +322,15 @@ $ `pg.nu`
             : i q ( __process_line c buf line )
             ? != q 0 { = running F } {}
         }
-        ( string_free line )
     }
-    ( string_free buf )
 }
 
-@ __banner * PgConn c → v {
+@ __banner PgConn c → v {
     ( nurl_print `psql (NURL) — pure-NURL PostgreSQL client\n` )
-    ( nurl_print `Connected to "` ) ( nurl_print ( string_data . c db_name ) )
-    ( nurl_print `" as "` ) ( nurl_print ( string_data . c user_name ) ) ( nurl_print `"` )
-    ? > ( string_len . c srv_ver ) 0 { ( nurl_print ` (server ` ) ( nurl_print ( string_data . c srv_ver ) ) ( nurl_print `)` ) } {}
-    ? == . c tls 1 { ( nurl_print ` [TLS]` ) } {}
+    ( nurl_print `Connected to "` ) ( nurl_print ( string_data ( pg_conn_db_name c ) ) )
+    ( nurl_print `" as "` ) ( nurl_print ( string_data ( pg_conn_user_name c ) ) ) ( nurl_print `"` )
+    ? > ( string_len ( pg_conn_server_version c ) ) 0 { ( nurl_print ` (server ` ) ( nurl_print ( string_data ( pg_conn_server_version c ) ) ) ( nurl_print `)` ) } {}
+    ? == ( pg_conn_tls c ) 1 { ( nurl_print ` [TLS]` ) } {}
     ( nurl_print `\nType \? for help, \q to quit.\n\n` )
 }
 
@@ -379,13 +367,11 @@ $ `pg.nu`
     ? & != at -1 | == slash -1 < at slash {
         : String usrc ( string_from url )
         : String ui ( string_substr usrc p - at p )
-        ( string_free usrc )
         : ?i colon ( string_index_of ui `:` )
         ?? colon {
             T ci2 → {
                 ( string_free . c user ) = . c user ( string_substr ui 0 ci2 )
                 ( string_free . c password ) = . c password ( string_substr ui + ci2 1 - ( string_len ui ) + ci2 1 )
-                ( string_free ui )
             }
             F _ → { ( string_free . c user ) = . c user ui }
         }
@@ -404,8 +390,6 @@ $ `pg.nu`
             ( string_free . c host ) = . c host ( string_substr hostport 0 pci )
             : String pstr ( string_substr hostport + pci 1 - ( string_len hostport ) + pci 1 )
             = . c port ( __atoi ( string_data pstr ) )
-            ( string_free pstr )
-            ( string_free hostport )
         }
         F _ → { ( string_free . c host ) = . c host hostport }
     }
@@ -420,22 +404,19 @@ $ `pg.nu`
             T sidx → {
                 : String ms ( string_substr qs + sidx 8 - ( string_len qs ) + sidx 8 )
                 = . c sslmode ( __sslmode_code ( string_data ms ) )
-                ( string_free ms )
             }
             F _ → {}
         }
-        ( string_free qs )
     } {}
-    ( string_free uall )
     ^ c
 }
 
 // Connect, and if the server demands a password we don't have, prompt for
 // one on the terminal (echo disabled) and retry once — the way psql does.
-@ __connect ConnInfo ci i tty → !*PgConn PgErr {
-    : !*PgConn PgErr cr ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) ( string_data . ci password ) ( string_data . ci database ) . ci sslmode )
+@ __connect ConnInfo ci i tty → !PgConn PgErr {
+    : !PgConn PgErr cr ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) ( string_data . ci password ) ( string_data . ci database ) . ci sslmode )
     ?? cr {
-        T c → ^ @ !*PgConn PgErr { T c }
+        T c → ^ @ !PgConn PgErr { T c }
         F e → {
             : b need ?? e { PgNeedPassword → T _ → F }
             ? & need != tty 0 {
@@ -444,9 +425,8 @@ $ `pg.nu`
                 ( string_push_str prompt ( string_data . ci user ) )
                 ( string_push_str prompt `: ` )
                 : s pw ( nurl_read_password ( string_data prompt ) )
-                ( string_free prompt )
                 ^ ( pg_connect ( string_data . ci host ) . ci port ( string_data . ci user ) pw ( string_data . ci database ) . ci sslmode )
-            } { ^ @ !*PgConn PgErr { F e } }
+            } { ^ @ !PgConn PgErr { F e } }
         }
     }
 }
@@ -468,7 +448,6 @@ $ `pg.nu`
         ( __sslmode_code ( string_data sslv ) )
         F
     }
-    ( string_free sslv )
     : String sql ( ctx_str x `command` )
     : b have_c > ( string_len sql ) 0
     // an optional postgres:// / postgresql:// URL positional overrides flags
@@ -482,19 +461,16 @@ $ `pg.nu`
         }
     } {}
 
-    // database defaults to the user name if unset (copied — both are freed)
+    // database defaults to the user name if unset (a copy: ci owns both)
     ? == ( string_len . ci database ) 0 {
-        ( string_free . ci database )
         = . ci database ( string_from ( string_data . ci user ) )
     } {}
 
     : i tty # i ( isatty # i32 0 )
-    : !*PgConn PgErr cr ( __connect ci tty )
+    : !PgConn PgErr cr ( __connect ci tty )
     ?? cr {
         F e → {
             ( nurl_eprint `psql: connection failed: ` ) ( nurl_eprint ( pg_err_name e ) ) ( nurl_eprint `\n` )
-            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password ) ( string_free . ci database )
-            ( string_free sql )
             ^ 1
         }
         T c → {
@@ -505,14 +481,10 @@ $ `pg.nu`
                 } {
                     ( __run_one c ( string_data sql ) )
                 }
-                ( string_free t )
             } {
                 ? != tty 0 { ( __banner c ) } {}
                 ( __repl c tty )
             }
-            ( pg_close c )
-            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password ) ( string_free . ci database )
-            ( string_free sql )
             ^ 0
         }
     }
