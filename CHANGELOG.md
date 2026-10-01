@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `( copy_of ( string_data ( make ) ) )` (a String the callee builds rather
   than hands back) kept the temporary for a consumer that never came — it
   leaked. `compiler/tests/temp_args_after_views.nu`.
+- **…and so is one handed to a call returning an option / result of
+  values.** `?? ( lsm_put db ( key_of k ) v ) { … }` kept the key for a
+  consumer of the `!T E` (packages/lsmdb leaked one key per put).
+  `compiler/tests/temp_arg_into_result_call.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated

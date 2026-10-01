@@ -5994,6 +5994,18 @@
     ^ & an bn
 }
 
+// `{ i1, T }` / `{ i1, T, E }` whose parts are numbers, flags or values
+// dropped as handles (Strings, Vecs, owning structs) — never raw addresses.
+@ __wrap_of_values s ty → b {
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
+    : s a ( __wrap_part ty 0 )
+    : s b ( __wrap_part ty 1 )
+    ? == 0 ( nurl_str_len a ) { ^ F } {}
+    : b an | | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` ) ( __is_handle_ty a )
+    : b bn | | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` ) ( __is_handle_ty b )
+    ^ & an bn
+}
+
 @ mem_consumer_arg_drop_safe i syms s fname i index → b {
     : s arg ( nurl_str_int index )
     ? | | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) arg )
@@ -17064,7 +17076,7 @@
         // (…or a String / Vec / struct this call builds rather than hands
         // back: `( copy_of ( string_data ( make ) ) )` — the summaries say
         // the result neither is nor views the argument.)
-        : b __dt_fresh & & ( __is_handle_ty __crt ) == 0 ( nurl_sym_len g_fn_ret_view call_name )
+        : b __dt_fresh & & | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) == 0 ( nurl_sym_len g_fn_ret_view call_name )
         == 0 ( nurl_sym_len2 syms call_name `__ret_borrow` )
         ? & | __scalar_ret __dt_fresh ( mem_consumer_arg_drop_safe syms call_name arg_idx ) {
             = owned ? == 0 ( nurl_str_len owned ) ( nurl_str_cat __dtmp `` ) ( nurl_str_cat3 owned ` ` __dtmp )
@@ -17119,9 +17131,10 @@
                 ( nurl_print `  ` ) ( nurl_print __tc3 ) ( nurl_print ` = and i1 ` ) ( nurl_print __tc ) ( nurl_print `, ` ) ( nurl_print __tln ) ( nurl_print `\n` )
                 = __tc __tc3
             } {}
-            // A call handing back a String / Vec / struct: dropped here
-            // when it provably keeps no hold on this argument.
-            : b __hret & ! __scalar_ret ( __is_handle_ty __crt )
+            // A call handing back a String / Vec / struct, or an option /
+            // result of them (`?? ( put db ( key k ) v )` — the key leaked):
+            // dropped here when it provably keeps no hold on this argument.
+            : b __hret & ! __scalar_ret | ( __is_handle_ty __crt ) ( __wrap_of_values __crt )
             ? __hret {
                 : s __tad ( nurl_cg_reg cg )
                 ( emit_sink_flag_load ( mem_argdrop_const syms call_name fname arg_idx ) __tad )
