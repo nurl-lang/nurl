@@ -215,6 +215,16 @@ mutates exactly that field of the caller's struct in place
 (`( add100 . g turns )`). `obj` must be a mutable (`: ~`) struct
 binding; the field may itself be a struct.
 
+What an `inout` parameter holds is the caller's own value, so a value
+assigned through it **replaces** the caller's: `= . h item it` and
+`= s ( string_from … )` drop the String / Vec / handle / closure they
+overwrite, exactly as the same assignment to an owned local does. A
+field the callee hands to a consumer first (`( item_free . h item )`),
+or takes with `( mem_take x )` after `: … x . h body`, is emptied in the
+caller's struct, so the store that follows releases nothing twice. A
+call that may hand the same value back (`= c ( prune c )`) leaves it
+where it is.
+
 A **`sink`** parameter consumes (takes ownership of) its argument —
 the callee owns the value, and the caller may not use the argument
 binding afterwards (the borrow checker reports a later use as a
@@ -1400,6 +1410,19 @@ explicit release: they clear the binding's drop flag, so the value is
 released once. The checker still tracks these moves — a `vec_free`d
 `Vec`, or a `sink`-consumed value, cannot be used again (§2.1).
 
+The standard library keeps nothing on this list for its users: every
+type it hands out releases itself. Opaque state lives behind a library
+handle over an rcbox (`stdlib/core/rcbox.nu`: `[ owners ][ T ]`, the last
+owner drops `T`) — `Mutex`, `Channel`, `Regex`, `Rng`, `Bitset`, the
+QUIC / HTTP/3 / HTTP/2 connection state, the dist `Ring` / `LeaseTable`,
+`ProcChild` and the rest — so every copy (a struct field, a `Vec`
+element, a closure capture, `T_share`) is the same object and the last
+one releases it. A `ProcChild`'s last owner shuts its child down as
+`proc_free` always did (pipes closed, SIGTERM, a 500 ms grace, SIGKILL,
+reaped); a lazy iterator chain (`stdlib/std/iter.nu`) is released with
+the outermost closure, consumed or not. Their `*_free` functions remain
+as optional early releases of one owner.
+
 ### 7.5 Closure environments
 
 A capturing closure `\ → … x …` is a value `{ fn, env }` whose env is one
@@ -1446,6 +1469,11 @@ a parameter: either way someone else drops it. Code that hands a raw
 from raw pointers (`*RouteImpl` and friends) own the closures stored into
 them — a field store of a closure stores a copy — and release them with
 `nurl_closure_drop` when the structure is freed.
+
+A String / Vec captured **by value** is a snapshot the body may scratch:
+it borrows the env's value, and an assignment over it is discarded when
+the closure returns (the compiler warns). The value so assigned is the
+invocation's own and is dropped then.
 
 What is not covered: a closure inside an option / result payload or an
 enum variant (those follow the manual-handle rules of the payload), and a
