@@ -107,7 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `compiler/tests/lend_back_to_same_binding.nu`.
 - **Assigning through an `inout` parameter releases what it replaces.**
   `= . h item …` and `= s ( string_from … )` through an `inout` parameter
-  left the caller's old value with no owner — every call leaked it. A field
+  left the caller's old value with no owner — every call leaked it; `= s
+  t` from a local also left t dropping the value under the caller (a use
+  after free): t's value now moves over. A field
   the callee hands to a consumer first, or takes with `mem_take`, is
   emptied in the caller's struct, so the store after it releases nothing
   twice; `mem_take` of a binding that has since been given another value

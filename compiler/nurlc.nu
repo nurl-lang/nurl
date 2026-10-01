@@ -21031,7 +21031,7 @@
         ? ( is_ident_tok bck_rhs_tt )
         { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
         { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
-        : s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
+        : ~ s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
         // A struct binding that owns fields, overwritten by a value that
         // brings the SAME owned fields (a constructor call, a literal):
         // release the old fields before the store, and the registration
@@ -21060,6 +21060,29 @@
                 ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 ` ) ( nurl_print __io_ro )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_old ) ( nurl_print `)` ) ( emit_dbg_eol )
             } {}
+        } {}
+        // …and so does the value of a local that owns one outright, assigned
+        // over it: it moves over (the local no longer drops it under the
+        // caller — that read freed memory). A cursor (`: ~ H2Connection cur
+        // c … = c cur`) may hold the caller's own value and is left as is.
+        : s __io_src ? ( is_ident_tok bck_rhs_tt ) ( mem_udrop_ptr_of syms bck_rhs_val ) ``
+        ? & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( __is_handle_ty vt )
+        & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
+        & & != 0 ( nurl_str_len __io_src ) == 0 ( nurl_sym_len2 syms __io_src `__pname` )
+        & | == 0 ( nurl_sym_len2 syms __io_src `__sborrow` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms __io_src `__sborrow` ) `@` )
+        == 0 ( nurl_sym_len2 syms __io_src `__alias` ) {
+            : s __io_old2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __io_old2 ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( __handle_drop_ensure vt )
+            ( __dropifv_request vt )
+            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 true, ` )
+            ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_old2 ) ( nurl_print `)` ) ( emit_dbg_eol )
+            : s __io_f ( mem_udrop_flag_get syms cg __io_src )
+            : s __io_l ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __io_l ) ( nurl_print ` = xor i1 ` ) ( nurl_print __io_f ) ( nurl_print `, 1\n` )
+            = store_val ( mem_emit_cloneif cg vt store_val __io_l )
+            ( mem_udrop_flag_set syms cg __io_src `0` )
         } {}
         : s __ud_borrow ( nurl_str_cat ( nurl_sym_get syms `__last_value_borrow__` ) `` )
         // `= c ( bump c )` with bump handing its argument back: the same

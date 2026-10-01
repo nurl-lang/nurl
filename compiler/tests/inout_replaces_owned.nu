@@ -43,6 +43,13 @@ $ `stdlib/std/panic.nu`
 
 @ reset_vec inout ( Vec i ) v → v { = v ( vec_new [i] ) }
 
+// A local's value moves over: the local no longer drops it (under the
+// caller, which read freed memory).
+@ set_from_local inout String s → v {
+    : String t ( string_from `from a local` )
+    = s t
+}
+
 // Takes the body out and puts an empty one in; the caller gets the body.
 @ take_body inout Holder h → ( Vec u ) {
     : ( Vec u ) moved . h body
@@ -69,11 +76,13 @@ $ `stdlib/std/panic.nu`
     ( rename . h item ) ( rename . h item )
     : ~ String s ( string_from `init` )
     ( reset_text s ) ( reset_text s )
+    : ~ String m ( string_from `init` )
+    ( set_from_local m ) ( set_from_local m )
     : ~ ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v 1 )
     ( reset_vec v ) ( reset_vec v )
     : Payload kept ( take_then_replace h )
     : ( Vec u ) body ( take_body h )
-    ^ + + + . . h item id ( string_len s ) ( vec_len [u] body ) + ( vec_len [u] . kept bytes ) * 10 ( vec_len [u] . . h pay bytes )
+    ^ + + + + . . h item id ( string_len s ) ( string_len m ) ( vec_len [u] body ) + ( vec_len [u] . kept bytes ) * 10 ( vec_len [u] . . h pay bytes )
 }
 
 @ main → i {
