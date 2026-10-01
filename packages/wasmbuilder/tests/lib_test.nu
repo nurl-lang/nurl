@@ -20,23 +20,20 @@ $ `src/build.nu`
     : ~ WbOpts opts ( wb_opts_default )
     = . opts quiet T
     : !( Vec u ) String r ( wb_build_source ( string_data src ) `kernel.nu` opts )
-    ( string_free src )
     ?? r {
         T bytes → {
             : i n ( vec_len [u] bytes )
-            ? < n 1024 { ( nurl_eprintln `FAIL: wasm suspiciously small` ) ( vec_free [u] bytes ) ^ 1 } {}
+            ? < n 1024 { ( nurl_eprintln `FAIL: wasm suspiciously small` ) ^ 1 } {}
             : ~ b magic T
             : ?u b0 ( vec_get [u] bytes 0 ) ?? b0 { T c → { ? == c 0 {} { = magic F } } F → { = magic F } }
             : ?u b1 ( vec_get [u] bytes 1 ) ?? b1 { T c → { ? == c 97 {} { = magic F } } F → { = magic F } }
             : ?u b2 ( vec_get [u] bytes 2 ) ?? b2 { T c → { ? == c 115 {} { = magic F } } F → { = magic F } }
             : ?u b3 ( vec_get [u] bytes 3 ) ?? b3 { T c → { ? == c 109 {} { = magic F } } F → { = magic F } }
-            ( vec_free [u] bytes )
             ? magic {
                 : String msg ( string_from `PASS lib_test: wb_build_source → ` )
                 ( string_push_int msg n )
                 ( string_push_str msg ` bytes of wasm\n` )
                 ( nurl_print ( string_data msg ) )
-                ( string_free msg )
                 ^ 0
             } {
                 ( nurl_eprintln `FAIL: output is not a wasm module` )
@@ -46,7 +43,6 @@ $ `src/build.nu`
         F e → {
             ( nurl_eprintln `FAIL: wb_build_source errored:` )
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
     }
