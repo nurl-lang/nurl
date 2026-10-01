@@ -93,16 +93,16 @@ $ `stdlib/std/quic_tls.nu`
     ^ out
 }
 
-@ new_server ( Vec u ) g_chain ( Vec u ) g_priv ( Vec u ) g_tp s alpn → *QuicTlsSrv {
+@ new_server ( Vec u ) g_chain ( Vec u ) g_priv ( Vec u ) g_tp s alpn → QuicTlsSrv {
     : ( Vec u ) e ( vec_new [u] )
     : ( Vec u ) prefs ( tls_alpn_pack alpn )
-    : *QuicTlsSrv s ( quic_tls_srv_new g_chain 0 g_priv e e e 0 prefs g_tp )
+    : QuicTlsSrv s ( quic_tls_srv_new g_chain 0 g_priv e e e 0 prefs g_tp )
     ( vec_free [u] prefs )
     ( vec_free [u] e )
     ^ s
 }
 
-@ feed * QuicTlsSrv s i level i off ( Vec u ) msg → i {
+@ feed QuicTlsSrv s i level i off ( Vec u ) msg → i {
     ^ ( quic_tls_srv_crypto s level off msg )
 }
 
@@ -137,7 +137,7 @@ $ `stdlib/std/quic_tls.nu`
     // ── 1. the A.2 ClientHello in three chunks, out of order ─────
     : ( Vec u ) ch ( client_hello )
     = fails + fails ( check_int `ch_len` ( vec_len [u] ch ) 241 )
-    : *QuicTlsSrv s ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s ( new_server g_chain g_priv g_tp `alpn` )
     : ( Vec u ) c1 ( bytes_slice ch 0 100 )
     : ( Vec u ) c2 ( bytes_slice ch 100 180 )
     : ( Vec u ) c3 ( bytes_slice ch 180 241 )
@@ -221,49 +221,49 @@ $ `stdlib/std/quic_tls.nu`
     = fails + fails ( check_int `after_failure_protocol_violation` ( feed s 2 0 ping ) 10 )
     ( quic_tls_srv_free s )
 
-    : *QuicTlsSrv s2 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s2 ( new_server g_chain g_priv g_tp `alpn` )
     = fails + fails ( check_int `s2_ch` ( feed s2 0 0 ch ) 0 )
     = fails + fails ( check_int `keyupdate_at_1rtt` ( feed s2 2 0 keyupdate ) 266 )
     ( quic_tls_srv_free s2 )
 
-    : *QuicTlsSrv s3 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s3 ( new_server g_chain g_priv g_tp `alpn` )
     = fails + fails ( check_int `s3_ch` ( feed s3 0 0 ch ) 0 )
     : ( Vec u ) eoed ( hx `05000000` )
     = fails + fails ( check_int `end_of_early_data_at_handshake` ( feed s3 1 0 eoed ) 266 )
     ( quic_tls_srv_free s3 )
 
-    : *QuicTlsSrv s4 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s4 ( new_server g_chain g_priv g_tp `alpn` )
     = fails + fails ( check_int `s4_ch` ( feed s4 0 0 ch ) 0 )
     = fails + fails ( check_int `second_client_hello` ( feed s4 0 241 ch ) 266 )
     ( quic_tls_srv_free s4 )
 
-    : *QuicTlsSrv s5 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s5 ( new_server g_chain g_priv g_tp `alpn` )
     = fails + fails ( check_int `client_hello_at_handshake_level` ( feed s5 1 0 ch ) 266 )
     ( quic_tls_srv_free s5 )
 
     // ── 3. ClientHello refusals ──────────────────────────────────
-    : *QuicTlsSrv s6 ( new_server g_chain g_priv g_tp `h3` )
+    : QuicTlsSrv s6 ( new_server g_chain g_priv g_tp `h3` )
     = fails + fails ( check_int `alpn_no_overlap` ( feed s6 0 0 ch ) 376 )
     ( quic_tls_srv_free s6 )
 
     : ( Vec u ) ch_no_tp ( client_hello_without 57 )
     = fails + fails ( check_int `ch_no_tp_shorter` ? < ( vec_len [u] ch_no_tp ) 241 1 0 1 )
-    : *QuicTlsSrv s7 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s7 ( new_server g_chain g_priv g_tp `alpn` )
     = fails + fails ( check_int `missing_transport_parameters` ( feed s7 0 0 ch_no_tp ) 365 )
     ( quic_tls_srv_free s7 )
     ( vec_free [u] ch_no_tp )
 
     : ( Vec u ) ch_no_alpn ( client_hello_without 16 )
-    : *QuicTlsSrv s8 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s8 ( new_server g_chain g_priv g_tp `alpn` )
     = fails + fails ( check_int `no_alpn_at_all` ( feed s8 0 0 ch_no_alpn ) 376 )
     ( quic_tls_srv_free s8 )
     ( vec_free [u] ch_no_alpn )
 
     // ── 4. buffer cap ────────────────────────────────────────────
-    : *QuicTlsSrv s9 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s9 ( new_server g_chain g_priv g_tp `alpn` )
     = fails + fails ( check_int `crypto_past_cap` ( feed s9 0 65536 ping ) 13 )
     // an in-range chunk that does not complete a message: fine
-    : *QuicTlsSrv s10 ( new_server g_chain g_priv g_tp `alpn` )
+    : QuicTlsSrv s10 ( new_server g_chain g_priv g_tp `alpn` )
     : ( Vec u ) partial ( bytes_slice ch 0 3 )
     = fails + fails ( check_int `partial_header_waits` ( feed s10 0 0 partial ) 0 )
     = fails + fails ( check_int `partial_state` ( quic_tls_srv_state s10 ) 0 )

@@ -218,7 +218,7 @@ $ `stdlib/core/rcbox.nu`
     i validated
     i bytes_recv
     i bytes_sent
-    * QuicTlsSrv tls
+    QuicTlsSrv tls
     i tls_state
     QuicKeys k_rx0
     QuicKeys k_tx0
@@ -292,7 +292,7 @@ $ `stdlib/core/rcbox.nu`
     i alpn_ok
     // ── role ──
     i is_client
-    * QuicTlsCli tlsc  // the client's TLS machine (`tls` is the server's)
+    QuicTlsCli tlsc  // the client's TLS machine (`tls` is the server's)
     ( Vec u ) token  // Retry token to put in our Initials (client)
     ( Vec u ) new_token  // the server's NEW_TOKEN, for a later connection (client)
     i retry_seen
@@ -361,7 +361,7 @@ $ `stdlib/core/rcbox.nu`
     ( quic_tp_set_active_connection_id_limit mine 4 )
     ( quic_tp_set_initial_scid mine scid )
     = . c local_tp mine
-    = . c tls # *QuicTlsSrv 0
+    = . c tls @ QuicTlsSrv { # s 0 }
     = . c tls_state 0
     = . c k_rx0 @ QuicKeys { # s 0 }
     = . c k_tx0 @ QuicKeys { # s 0 }
@@ -433,7 +433,7 @@ $ `stdlib/core/rcbox.nu`
     = . c stream_rx_window ( quic_tp_initial_max_stream_data_bidi_remote tp )
     = . c alpn_ok 0
     = . c is_client 0
-    = . c tlsc # *QuicTlsCli 0
+    = . c tlsc @ QuicTlsCli { # s 0 }
     = . c token ( vec_new [u] )
     = . c new_token ( vec_new [u] )
     = . c retry_seen 0
@@ -540,7 +540,7 @@ $ `stdlib/core/rcbox.nu`
 // T when the key exchange was X25519MLKEM768.
 @ quic_conn_is_pq * QuicConn c → b {
     ? != . c is_client 0 { ^ ( quic_tls_cli_is_pq . c tlsc ) } {}
-    ^ == ( _srv_hs_kx_group . . c tls hs ) 4588
+    ^ ( quic_tls_srv_is_pq . c tls )
 }
 
 // Handshake confirmed (§4.1.2): the server on the client's Finished,
