@@ -368,7 +368,7 @@ $ `../src/oauth.nu`
 
 // ── Online ─────────────────────────────────────────────────────────
 
-@ fetch_text * HttpClient hc s url → String {
+@ fetch_text HttpClient hc s url → String {
     ?? ( http_client_get hc url ) {
         T r → {
             : String body ( bytes_to_str . r body )
@@ -537,7 +537,7 @@ $ `../src/oauth.nu`
             ( string_free code2 )
 
             ( section `every way a token can be wrong` )
-            : *HttpClient hc ( oidc_provider_http p )
+            : HttpClient hc ( oidc_provider_http p )
             : String mintbase ( string_from base )
             ( string_push_str mintbase `/mint/` )
 

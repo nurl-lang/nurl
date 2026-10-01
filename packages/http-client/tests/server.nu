@@ -22,7 +22,6 @@ $ `../../http/src/http.nu`
         F _ → { ( string_push_str out `(none)` ) }
     }
     : HttpResponse r ( response_text 200 ( string_data out ) )
-    ( string_free out )
     ^ r
 }
 
@@ -74,7 +73,6 @@ $ `../../http/src/http.nu`
         F _ → { ( string_push_str out `(none)` ) }
     }
     : HttpResponse r ( response_text 200 ( string_data out ) )
-    ( string_free out )
     ^ r
 }
 

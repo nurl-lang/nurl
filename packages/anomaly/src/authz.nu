@@ -1596,7 +1596,7 @@ $ `deps/oauth/src/oauth.nu`
 // come from the provider's own document.
 @ __az_provider_multi → ?*OidcProvider {
     : String url ( oidc_discovery_url ( g_az_issuer ) )
-    : *HttpClient hc ( http_client_new )
+    : HttpClient hc ( http_client_new )
     : ~ String body ( string_new )
     : ~ b got F
     ?? ( http_client_get hc ( string_data url ) ) {
@@ -1610,7 +1610,6 @@ $ `deps/oauth/src/oauth.nu`
         }
         F _ → {}
     }
-    ( http_client_free hc )
     ( string_free url )
     ? got {} { ( string_free body ) ^ @ ?*OidcProvider { F } }
 

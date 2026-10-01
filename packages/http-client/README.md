@@ -18,15 +18,11 @@ facade — the mirror image of the [`http`](../http) server package.
 $ `deps/http-client/src/http_client.nu`
 
 @ main → i {
-    : *HttpClient c ( http_client_new )
+    : HttpClient c ( http_client_new )
     ?? ( http_client_get c `https://example.org/` ) {
-        T r → {
-            ( nurl_print_int ( http_client_status r ) )
-            ( http_response_free r )
-        }
+        T r → { ( nurl_print_int ( http_client_status r ) ) }
         F e → { ( nurl_eprintln ( http_client_err_name e ) ) }
     }
-    ( http_client_free c )
     ^ 0
 }
 ```
@@ -47,7 +43,7 @@ $ `deps/http-client/src/http_client.nu`
 ## Configuration
 
 ```nurl
-: *HttpClient c ( http_client_new )
+: HttpClient c ( http_client_new )
 ( http_client_set_verify c F )          // pinned / self-signed / test servers
 ( http_client_set_h3 c 1 )              // QUIC first (0: after Alt-Svc — default; 2: never)
 ( http_client_set_timeout c 5000 )      // per read/write deadline, ms (0 = none)
@@ -72,8 +68,17 @@ $ `deps/http-client/src/http_client.nu`
 
 Every call returns `!HttpResponse HttpClientErr` — the same `HttpResponse`
 the `http` server package builds, with `http_client_status`,
-`http_client_header` and `http_client_body_str` helpers, freed with
-`http_response_free`.
+`http_client_header` and `http_client_body_str` helpers, dropped with its
+binding.
+
+## Memory model
+
+`http_client_new` returns an `HttpClient` handle. Every copy of it (a
+struct field, a `Vec` element, a closure capture) is the same client, and
+its last owner closes every pooled connection and releases the pool, the
+cookie jar and the rest — there is nothing to free. `http_client_free`
+stays as an optional early release; a function-local client closes its
+connections when the function returns.
 
 ## Evidence
 

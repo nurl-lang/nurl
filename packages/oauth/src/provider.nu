@@ -58,7 +58,7 @@ $ `claims.nu`
     i min_refetch  // seconds that must pass before another JWKS fetch
     b discovered
     String last_error
-    * HttpClient http
+    HttpClient http
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ $ `claims.nu`
 // The HTTP client every request goes through — exposed so a caller can
 // set a timeout, turn off certificate verification for a test provider,
 // or pin HTTP/3.
-@ oidc_provider_http * OidcProvider p → *HttpClient { ^ . p http }
+@ oidc_provider_http * OidcProvider p → HttpClient { ^ . p http }
 
 @ oidc_provider_last_error * OidcProvider p → s { ^ ( string_data . p last_error ) }
 

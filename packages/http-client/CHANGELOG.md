@@ -8,6 +8,15 @@ instead of a `*H3Client`. An origin holds the handle while its QUIC connection
 is pooled; a QUIC attempt that does not complete is released with its binding
 instead of by an explicit free. No change to the facade's API.
 
+`HttpClient` releases itself: `http_client_new` returns an `HttpClient`
+handle (its state in an rcbox) instead of a `*HttpClient` the caller had to
+free. Every copy of the handle is the same client; its last owner closes the
+pooled connections and releases the pool, the cookie jar and the rest.
+`http_client_free` stays as an optional early release. The origin records
+are handles too — each one's drop closes the h2 / h1 connection it holds and
+says goodbye to its QUIC connection — so nothing in the package frees by hand
+any more. Callers change `*HttpClient` to `HttpClient`.
+
 ## 0.2.1
 
 `http_client_free` now takes a **`sink`** parameter.

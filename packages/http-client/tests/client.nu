@@ -29,7 +29,7 @@ $ `../src/http_client.nu`
 
 // GET `path`, assert status and that the body contains `want` (or "" to
 // skip the body check). `proto_want` 0 = any, else 1 h1 / 2 h2 / 3 h3.
-@ check_get * HttpClient c s name s scheme i port s path i status_want s want i proto_want → v {
+@ check_get HttpClient c s name s scheme i port s path i status_want s want i proto_want → v {
     : String url ( base scheme port path )
     ?? ( http_client_get c ( string_data url ) ) {
         T r → {
@@ -43,7 +43,6 @@ $ `../src/http_client.nu`
                 ( string_push_str d ` proto=` ) ( string_push_int d ( http_client_last_proto c ) )
                 ( string_push_str d ` body=[` ) ( string_push_str d ( string_data body ) ) ( string_push_str d `]` )
                 ( bad name ( string_data d ) )
-                ( string_free d )
             }
             ( string_free body )
             ( http_response_free r )
@@ -53,7 +52,7 @@ $ `../src/http_client.nu`
     ( string_free url )
 }
 
-@ check_compressed_error * HttpClient c s name s scheme i port s path b limit i proto → v {
+@ check_compressed_error HttpClient c s name s scheme i port s path b limit i proto → v {
     : String url ( base scheme port path )
     ?? ( http_client_get c ( string_data url ) ) {
         T r → { ( bad name `returned encoded content as success` ) ( http_response_free r ) }
@@ -66,7 +65,7 @@ $ `../src/http_client.nu`
     ( string_free url )
 }
 
-@ check_compressed_responses * HttpClient c s scheme i port i proto → v {
+@ check_compressed_responses HttpClient c s scheme i port i proto → v {
     ( check_get c `deflate_decode` scheme port `/deflate` 200 `lazy dog` proto )
     ( check_compressed_error c `gzip_checksum_rejected` scheme port `/gzip-bad` F proto )
     ( check_compressed_error c `gzip_format_rejected` scheme port `/gzip-wrong-format` F proto )
@@ -76,8 +75,11 @@ $ `../src/http_client.nu`
     ( check_get c `after_compression_error` scheme port `/gzip` 200 `lazy dog` proto )
 }
 
-@ run i http_port i https_port → v {
-    : *HttpClient c ( http_client_new )
+// Each client below belongs to its own function and closes its pooled
+// connections when that returns — before the next one dials the
+// (single-threaded) test servers.
+@ run_tcp i http_port i https_port → v {
+    : HttpClient c ( http_client_new )
     ( http_client_set_verify c F )  // self-signed test cert
     // TCP only for this client: the TLS server advertises HTTP/3 with
     // Alt-Svc, and these checks are about h1 / h2
@@ -151,55 +153,61 @@ $ `../src/http_client.nu`
         ( string_free s2 )
         ( check_get c `h2_cookie` `https` https_port `/readcookie` 200 `sid=abc123` 2 )
     } {}
+}
 
-    ( http_client_free c )
-
-    ? > https_port 0 {
-        // ── HTTP/3 by Alt-Svc (the default): the first request goes over
-        // TCP (h2) and brings `Alt-Svc: h3=":port"`; the next one is QUIC ──
-        : *HttpClient a ( http_client_new )
-        ( http_client_set_verify a F )
-        ( check_get a `altsvc_first_h2` `https` https_port `/` 200 `root` 2 )
-        ( check_get a `altsvc_then_h3` `https` https_port `/dest` 200 `arrived` 3 )
-        ? ( http_client_last_pq a ) { ( ok `h3_post_quantum` ) } { ( bad `h3_post_quantum` `classical kx` ) }
-        ( check_get a `h3_reuse` `https` https_port `/` 200 `root` 3 )
-        ( check_get a `h3_gzip` `https` https_port `/gzip` 200 `lazy dog` 3 )
-        ( check_compressed_responses a `https` https_port 3 )
-        ( check_get a `h3_redirect` `https` https_port `/redir1` 200 `arrived` 3 )
-        : String s3 ( base `https` https_port `/setcookie` )
-        ?? ( http_client_get a ( string_data s3 ) ) { T r → ( http_response_free r ) F _ → {} }
-        ( string_free s3 )
-        ( check_get a `h3_cookie` `https` https_port `/readcookie` 200 `sid=abc123` 3 )
-        ( check_get a `h3_user_agent` `https` https_port `/ua` 200 `nurl-http-client` 3 )
-        : String e3 ( base `https` https_port `/echo` )
-        : ( Vec u ) b3 ( bytes_from_str `hello-h3-post` )
-        ?? ( http_client_post a ( string_data e3 ) b3 `text/plain` ) {
-            T r → {
-                : String b ( http_client_body_str r )
-                ? & != 0 ( nurl_str_eq ( string_data b ) `hello-h3-post` ) == ( http_client_last_proto a ) 3 { ( ok `h3_post_echo` ) } { ( bad `h3_post_echo` ( string_data b ) ) }
-                ( string_free b ) ( http_response_free r )
-            }
-            F e → { ( bad `h3_post_echo` ( http_client_err_name e ) ) }
+// ── HTTP/3 by Alt-Svc (the default): the first request goes over TCP (h2)
+// and brings `Alt-Svc: h3=":port"`; the next one is QUIC ──
+@ run_altsvc i https_port → v {
+    : HttpClient a ( http_client_new )
+    ( http_client_set_verify a F )
+    ( check_get a `altsvc_first_h2` `https` https_port `/` 200 `root` 2 )
+    ( check_get a `altsvc_then_h3` `https` https_port `/dest` 200 `arrived` 3 )
+    ? ( http_client_last_pq a ) { ( ok `h3_post_quantum` ) } { ( bad `h3_post_quantum` `classical kx` ) }
+    ( check_get a `h3_reuse` `https` https_port `/` 200 `root` 3 )
+    ( check_get a `h3_gzip` `https` https_port `/gzip` 200 `lazy dog` 3 )
+    ( check_compressed_responses a `https` https_port 3 )
+    ( check_get a `h3_redirect` `https` https_port `/redir1` 200 `arrived` 3 )
+    : String s3 ( base `https` https_port `/setcookie` )
+    ?? ( http_client_get a ( string_data s3 ) ) { T r → ( http_response_free r ) F _ → {} }
+    ( string_free s3 )
+    ( check_get a `h3_cookie` `https` https_port `/readcookie` 200 `sid=abc123` 3 )
+    ( check_get a `h3_user_agent` `https` https_port `/ua` 200 `nurl-http-client` 3 )
+    : String e3 ( base `https` https_port `/echo` )
+    : ( Vec u ) b3 ( bytes_from_str `hello-h3-post` )
+    ?? ( http_client_post a ( string_data e3 ) b3 `text/plain` ) {
+        T r → {
+            : String b ( http_client_body_str r )
+            ? & != 0 ( nurl_str_eq ( string_data b ) `hello-h3-post` ) == ( http_client_last_proto a ) 3 { ( ok `h3_post_echo` ) } { ( bad `h3_post_echo` ( string_data b ) ) }
+            ( string_free b ) ( http_response_free r )
         }
-        ( vec_free [u] b3 )
-        ( string_free e3 )
-        ( http_client_free a )
+        F e → { ( bad `h3_post_echo` ( http_client_err_name e ) ) }
+    }
+}
 
-        // ── QUIC first: no Alt-Svc needed, the first request is HTTP/3 ──
-        : *HttpClient q ( http_client_new )
-        ( http_client_set_verify q F )
-        ( http_client_set_h3 q 1 )
-        ( check_get q `quic_first_h3` `https` https_port `/` 200 `root` 3 )
-        ( http_client_free q )
+// ── QUIC first: no Alt-Svc needed, the first request is HTTP/3 ──
+@ run_quic_first i https_port → v {
+    : HttpClient q ( http_client_new )
+    ( http_client_set_verify q F )
+    ( http_client_set_h3 q 1 )
+    ( check_get q `quic_first_h3` `https` https_port `/` 200 `root` 3 )
+}
 
-        // ── QUIC first against a port with no UDP listener: falls back to
-        // TCP and stays there ──
-        : *HttpClient f ( http_client_new )
-        ( http_client_set_verify f F )
-        ( http_client_set_h3 f 1 )
-        ( http_client_set_timeout f 1500 )
-        ( check_get f `quic_fallback_plain` `http` http_port `/` 200 `root` 1 )
-        ( http_client_free f )
+// ── QUIC first against a port with no UDP listener: falls back to TCP and
+// stays there ──
+@ run_quic_fallback i http_port → v {
+    : HttpClient f ( http_client_new )
+    ( http_client_set_verify f F )
+    ( http_client_set_h3 f 1 )
+    ( http_client_set_timeout f 1500 )
+    ( check_get f `quic_fallback_plain` `http` http_port `/` 200 `root` 1 )
+}
+
+@ run i http_port i https_port → v {
+    ( run_tcp http_port https_port )
+    ? > https_port 0 {
+        ( run_altsvc https_port )
+        ( run_quic_first https_port )
+        ( run_quic_fallback http_port )
     } {}
 }
 
