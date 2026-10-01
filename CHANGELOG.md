@@ -160,6 +160,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `sink` closure parameter takes the closure over.** A temporary handed
+  to one moves in, a binding is handed a copy, and the callee drops what it
+  took unless it returns it or captures it in a closure it returns. The
+  iterator combinators take their source and function by `sink`: a tiny
+  three-stage pipeline builds with 36 % fewer instructions (it copied the
+  chain at every stage), and `iter_free` releases early.
+  `compiler/tests/sink_closure_param.nu`.
+
 - **`Mutex`, `Cond`, `Semaphore` and `Channel` release themselves.** Each
   is now a reference-counted library handle: every copy — a thread's or a
   fiber's closure capture, a struct field, a `Vec` element, `Mutex_share`

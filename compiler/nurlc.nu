@@ -10633,14 +10633,28 @@
         : s __cle ? != 0 ( nurl_str_len __cle_tmp ) __cle_tmp
         ( nurl_sym_get syms `__last_closure_env__` )
         ( __clo_tmp_set `` )
+        // A `sink` closure parameter takes the closure over: a temporary
+        // moves in (not dropped here), anything else is handed a copy — the
+        // binding it came from keeps its own.
+        : b __clo_sink & ( __is_closure_ty at ) ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         ? != 0 ( nurl_str_len __cle )
         {  // A temporary closure (a literal, or a call's result) belongs to
             // this call site and is dropped after the call: a callee only
             // borrows its closure arguments, and one that keeps a closure
             // stores a clone (docs/MEMORY.md §7.4).
-            = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
-            ( nurl_str_cat __cle `` ) ( nurl_str_cat3 closure_envs_free ` ` __cle ) }
-        {}
+            ? __clo_sink {} {
+                = closure_envs_free ? == 0 ( nurl_str_len closure_envs_free )
+                ( nurl_str_cat __cle `` ) ( nurl_str_cat3 closure_envs_free ` ` __cle ) } }
+        { ? __clo_sink {
+                : s __csl ( nurl_llty at )
+                : s __cse ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __cse ) ( nurl_print ` = extractvalue ` ) ( nurl_print __csl ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 1\n` )
+                : s __csn ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __csn ) ( nurl_print ` = call i8* @nurl_closure_clone(i8* ` ) ( nurl_print __cse ) ( nurl_print `)\n` )
+                : s __csv ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __csv ) ( nurl_print ` = insertvalue ` ) ( nurl_print __csl ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, i8* ` ) ( nurl_print __csn ) ( nurl_print `, 1\n` )
+                = av __csv
+            } {} }
         ( nurl_sym_def syms `__last_closure_env__` `` )
         // Closure-env reclamation: a tracked `:`-bound closure passed at a
         // NON-invoke-only position escapes (the callee may store / detach /
@@ -10952,7 +10966,9 @@
         { ( nurl_sym_set_deep syms `__drop_glue_moved__` `1` ) } {}
         // (An option / result that owns nothing — `?i` — is a plain value:
         // handing it to a sink copies it, and the binding stays usable.)
-        : b __sink_plain_wrap & != 0 ( nurl_str_starts at `{ i1, ` ) == 0 ( nurl_str_len ( __wrap_twin at ) )
+        // (…and so is a closure binding: the `sink` closure parameter gets a
+        // copy of its env, gen_call above.)
+        : b __sink_plain_wrap | & != 0 ( nurl_str_starts at `{ i1, ` ) == 0 ( nurl_str_len ( __wrap_twin at ) ) ( __is_closure_ty at )
         ? & & ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
         ( is_ident_tok bck_arg_tt ) ! __sink_plain_wrap
         { : s sink_ptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
@@ -25306,8 +25322,19 @@
             : s cll ( nurl_llty var_type )
             ( nurl_print `  ` ) ( nurl_print cenv ) ( nurl_print ` = extractvalue ` ) ( nurl_print cll )
             ( nurl_print ` ` ) ( nurl_print loaded ) ( nurl_print `, 1\n` )
-            ( nurl_print `  ` ) ( nurl_print cnew ) ( nurl_print ` = call i8* @nurl_closure_clone(i8* ` )
-            ( nurl_print cenv ) ( nurl_print `)\n` )
+            // …a returned closure takes over one its binding owns (a `sink`
+            // parameter, a local): it leaves with the return, so it moves —
+            // a combinator over a temporary iterator copied the whole chain.
+            : s __cslot ( nurl_sym_get2 syms var `__envown` )
+            ? & == g_env_owns_handles 1 != 0 ( nurl_str_len __cslot ) {
+                : s __cow ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __cow ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __cslot ) ( nurl_print `\n` )
+                ( nurl_print `  ` ) ( nurl_print cnew ) ( nurl_print ` = call i8* @nurl_closure_own(i8* ` )
+                ( nurl_print cenv ) ( nurl_print `, i8* ` ) ( nurl_print __cow ) ( nurl_print `)\n` )
+                ( nurl_print `  store i8* null, i8** ` ) ( nurl_print __cslot ) ( nurl_print `\n` )
+            } {
+                ( nurl_print `  ` ) ( nurl_print cnew ) ( nurl_print ` = call i8* @nurl_closure_clone(i8* ` )
+                ( nurl_print cenv ) ( nurl_print `)\n` ) }
             ( nurl_print `  ` ) ( nurl_print cval ) ( nurl_print ` = insertvalue ` ) ( nurl_print cll )
             ( nurl_print ` ` ) ( nurl_print loaded ) ( nurl_print `, i8* ` ) ( nurl_print cnew ) ( nurl_print `, 1\n` )
             = loaded cval }
@@ -29833,6 +29860,8 @@
     // binding, escape sites remove it, the function-exit drain frees the
     // survivors.
     ( nurl_sym_def syms `__owned_closure_envs__` `` )
+    // (after the set exists: a `sink` closure parameter joins it.)
+    ( __own_sink_closure_params syms cg sink_acc )
     // Register names restart per function: no temporary outlives one.
     ( __clo_tmp_set `` )
 
@@ -30632,6 +30661,32 @@
 // Every enum parameter has a separate ownership slot. The value remains
 // readable when borrowed; only a final sink summary grants ownership. Thus an
 // inferred conditional sink releases the value on its non-consuming path too.
+// A `sink` closure parameter is this function's: its env gets an owner
+// slot like a `:` binding's, so it is dropped on the way out unless it
+// moves on (returned, or captured by a returned closure).
+@ __own_sink_closure_params i syms i cg s sinks → v {
+    : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ i index 0
+    ~ != 0 ( nurl_str_len names ) {
+        : s name ( str_first_word names ) = names ( str_skip_word names )
+        : s ty ( nurl_sym_get syms name )
+        ? & & ( __is_closure_ty ty ) ( str_contains_word sinks ( nurl_str_int index ) ) == 0 ( nurl_sym_len2 syms name `__inout` ) {
+            : s ll ( nurl_llty ty )
+            : s pptr ( nurl_sym_get2 syms name `__ptr` )
+            : ~ s val ( nurl_str_cat `%` name )
+            ? != 0 ( nurl_str_len pptr ) {
+                = val ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print val ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print pptr ) ( nurl_print `\n` )
+            } {}
+            : s env ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print env ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
+            ( mem_clo_slot_new syms cg name env )
+            ( mem_own_closure_add syms name )
+        } {}
+        = index + index 1
+    }
+}
+
 @ __own_sink_enum_params i syms i cg s fname s sinks → v {
     : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
     : ~ i index 0

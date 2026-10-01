@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+binding still usable: 11
+a binding is copied, the copy dropped by the callee
+a temporary moves in and is dropped by the callee
+wrapped: 8
+allocations for a two-level chain: 5

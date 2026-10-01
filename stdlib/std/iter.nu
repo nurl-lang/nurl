@@ -42,8 +42,10 @@
 //   advances them all. The Cell counts its owners and the last copy
 //   frees it.
 //
-//   Consumers BORROW the iterator: they drain it and leave it to its
-//   owner. `iter_free` is an optional early release (its `sink`
+//   Combinators TAKE their source and function (`sink`): a temporary —
+//   `( iter_map ( iter_range 0 n ) f )` — moves into the new iterator's
+//   env as is; a binding is copied, and stays its owner's. Consumers
+//   BORROW the iterator: they drain it and leave it to its owner. `iter_free` is an optional early release (its `sink`
 //   parameter is the drop); `cmd=1` stays accepted for callers that
 //   ended a chain that way, as a plain "end".
 //
@@ -213,7 +215,7 @@ $ `stdlib/core/cell.nu`
 }
 
 // Combinator — apply f to every element. No state of its own.
-@ iter_map [A B] ( @ ?A i ) src ( @ B A ) f → ( @ ?B i ) {
+@ iter_map [A B] sink ( @ ?A i ) src sink ( @ B A ) f → ( @ ?B i ) {
     ^ \ i cmd → ?B {
         ? == cmd 1 { ( src 1 ) ^ @ ?B { F # B 0 } } {}
         : ?A got ( src 0 )
@@ -227,7 +229,7 @@ $ `stdlib/core/cell.nu`
 // Combinator — keep elements where pred returns T. Drains upstream
 // inside a single cmd=0 call until either a matching element or
 // upstream exhaustion is reached. No state of its own.
-@ iter_filter [A] ( @ ?A i ) src ( @ b A ) pred → ( @ ?A i ) {
+@ iter_filter [A] sink ( @ ?A i ) src sink ( @ b A ) pred → ( @ ?A i ) {
     ^ \ i cmd → ?A {
         ? == cmd 1 { ( src 1 ) ^ @ ?A { F # A 0 } } {}
         : ~ b done F
@@ -250,7 +252,7 @@ $ `stdlib/core/cell.nu`
 
 // Combinator — yield at most n elements then act exhausted.
 // Cursor: how many have been taken.
-@ iter_take [A] ( @ ?A i ) src i n → ( @ ?A i ) {
+@ iter_take [A] sink ( @ ?A i ) src i n → ( @ ?A i ) {
     : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?A {
         ? == cmd 1 { ( src 1 ) ^ @ ?A { F # A 0 } } {}
@@ -270,7 +272,7 @@ $ `stdlib/core/cell.nu`
 
 // Combinator — discard the first n elements, then yield the rest.
 // Cursor: how many have been skipped.
-@ iter_skip [A] ( @ ?A i ) src i n → ( @ ?A i ) {
+@ iter_skip [A] sink ( @ ?A i ) src i n → ( @ ?A i ) {
     : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?A {
         ? == cmd 1 { ( src 1 ) ^ @ ?A { F # A 0 } } {}
@@ -300,7 +302,7 @@ $ `stdlib/core/cell.nu`
 // MEMORY: the resulting Pair fields are aliases of the upstream
 // elements — do NOT iter_collect a Pair-of-owned-types pipeline and
 // then drop both the upstream sources and the collected Vec.
-@ iter_zip [A B] ( @ ?A i ) a ( @ ?B i ) b → ( @ ?( Pair A B ) i ) {
+@ iter_zip [A B] sink ( @ ?A i ) a sink ( @ ?B i ) b → ( @ ?( Pair A B ) i ) {
     ^ \ i cmd → ?( Pair A B ) {
         ? == cmd 1 {
             ( a 1 )
@@ -323,7 +325,7 @@ $ `stdlib/core/cell.nu`
 
 // Combinator — pair each element with its 0-based index.
 // Cursor: the next index.
-@ iter_enumerate [A] ( @ ?A i ) src → ( @ ?( Pair i A ) i ) {
+@ iter_enumerate [A] sink ( @ ?A i ) src → ( @ ?( Pair i A ) i ) {
     : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?( Pair i A ) {
         ? == cmd 1 {
@@ -345,7 +347,7 @@ $ `stdlib/core/cell.nu`
 
 // Combinator — concatenate two iterators. cmd=1 ends BOTH.
 // Cursor: the phase (0 = first, 1 = second).
-@ iter_chain [A] ( @ ?A i ) a ( @ ?A i ) b → ( @ ?A i ) {
+@ iter_chain [A] sink ( @ ?A i ) a sink ( @ ?A i ) b → ( @ ?A i ) {
     : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?A {
         ? == cmd 1 {
