@@ -435,7 +435,6 @@ $ `stdlib/core/vec.nu`
                         ( string_push_str out `</h` )
                         ( string_push_str out ( string_data hn ) )
                         ( string_push_str out `>\n` )
-                        ( string_free hn )
                     } {
                         // Horizontal rule?
                         ? ( __md_is_hr lp line_len ) {
@@ -509,7 +508,6 @@ $ `stdlib/core/vec.nu`
     }
     ( __md_close_block state out )
     ? in_code { ( string_push_str out `</code></pre>\n` ) } {}
-    ( vec_free [i] state )
     ^ out
 }
 
