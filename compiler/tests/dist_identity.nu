@@ -24,7 +24,7 @@ $ `stdlib/dist/crdt.nu`
     : ( Vec u ) b ( mkpk 80 )
     : ( Vec u ) c ( mkpk 150 )
 
-    : *IdRegistry reg ( identity_new )
+    : IdRegistry reg ( identity_new )
 
     // ── monotonic, stable, never-reused ──────────────────────────
     : i ida ( identity_of reg a )

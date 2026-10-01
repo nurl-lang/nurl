@@ -69,7 +69,7 @@ $ `stdlib/dist/sim.nu`
     : ~ i i 0
     ~ < i n {
         : PNCounter c ( pncounter_new )
-        : *IdRegistry reg ( identity_new )
+        : IdRegistry reg ( identity_new )
         // register peers in rotated order (self first) to provoke divergence
         : ~ i d 0
         ~ < d n {
