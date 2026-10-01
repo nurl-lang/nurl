@@ -120,21 +120,23 @@ $ `deps/nurl-cov/src/model.nu`
 
 ?? ( gcov_read `build/tests.gcno` `build/tests.gcda` ) {
     T o → {
-        : *Cov c ( cov_new )
+        : Cov c ( cov_new )
         ( cov_add_object c o )
         : CovStat t ( cov_total c )
         ( nurl_println ( nurl_str_int . t lines_hit ) )
-        ( cov_free c )
-        ( gcov_free o )
     }
     F e → ( nurl_eprintln ( gcov_err_name e ) )
 }
 ```
 
+`GcovObj`, `LineTab` and `Cov` are handles whose last owner releases them;
+nothing is freed by hand (`gcov_free`, `linetab_free` and `cov_free` remain
+as optional early releases).
+
 | call | |
 | --- | --- |
-| `( gcov_read notes data )` → `!*GcovObj GcovErr` | parse both graphs and solve the flow |
-| `( lines_build o src )` → `*LineTab` | per-line counts and branches for one source file |
+| `( gcov_read notes data )` → `!GcovObj GcovErr` | parse both graphs and solve the flow |
+| `( lines_build o src )` → `LineTab` | per-line counts and branches for one source file |
 | `( cov_add_object c o )` | fold one object into a merged model |
 | `( cov_total c )` → `CovStat` | lines/branches/functions, found and hit |
 | `( lcov_render c )` / `( json_render c )` / `( html_render … )` → `String` | the output formats |

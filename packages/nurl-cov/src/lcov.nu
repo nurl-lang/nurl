@@ -22,7 +22,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `model.nu`
 
-@ lcov_render * Cov c → String {
+@ lcov_render Cov c → String {
     : String out ( string_with_cap 65536 )
     : i n ( cov_file_count c )
     : ~ i i 0
@@ -39,7 +39,7 @@ $ `model.nu`
     ( string_push_char out 10 )
 }
 
-@ __lc_file String out * Cov c i idx → v {
+@ __lc_file String out Cov c i idx → v {
     : CovStat s ( cov_file_stat c idx )
     ( string_push_str out `SF:` )
     ( string_push_str out ( cov_file_path c idx ) )

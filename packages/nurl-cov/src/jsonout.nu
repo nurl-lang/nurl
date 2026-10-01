@@ -54,10 +54,10 @@ $ `model.nu`
     ( string_push_int out value )
 }
 
-@ json_render * Cov c → String {
+@ json_render Cov c → String {
     : String out ( string_with_cap 65536 )
     ( string_push_str out `{"objects":` )
-    ( string_push_int out . c objects )
+    ( string_push_int out ( cov_objects c ) )
     ( string_push_str out `,"totals":` )
     : CovStat t ( cov_total c )
     ( __js_stat out t )
@@ -84,7 +84,7 @@ $ `model.nu`
     ( string_push_char out 125 )
 }
 
-@ __js_file String out * Cov c i idx → v {
+@ __js_file String out Cov c i idx → v {
     : CovStat s ( cov_file_stat c idx )
     ( string_push_str out `{"path":` )
     ( __js_str out ( cov_file_path c idx ) )

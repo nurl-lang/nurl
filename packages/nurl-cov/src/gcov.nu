@@ -26,13 +26,16 @@
 // LLVM's GCOV pass emits and what this reader implements. A file that
 // announces a different version is rejected rather than guessed at.
 //
-// Memory model: `gcov_read` returns a heap `*GcovObj`; free it with
-// `gcov_free`. Every table inside it is flat — parallel `( Vec i )` columns
-// indexed by function/block/arc number — so nothing owns anything twice.
+// Memory model: `gcov_read` returns a GcovObj handle — every copy is the
+// same object and the last owner releases it (`gcov_free` is an optional
+// early release). Every table inside it is flat — parallel `( Vec i )`
+// columns indexed by function/block/arc number — so nothing owns anything
+// twice.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/core/rcbox.nu`
 
 // Record tags, as they appear in both files.
 : i GCOV_TAG_FUNCTION 0x01000000
@@ -84,7 +87,7 @@ $ `stdlib/std/fs.nu`
 // source reaches and every corrupt one blows straight through.
 : i GCOV_MAX_LINE 16777216
 
-: GcovObj {
+: GcovObjImpl {
     String notes  // path of the .gcno that was read
     String data  // path of the .gcda, or empty when none was found
     i stamp
@@ -108,6 +111,19 @@ $ `stdlib/std/fs.nu`
     ( Vec i ) succ_next
     ( Vec i ) succ_tail
 }
+
+// A GcovObj is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: GcovObj { s ctl }
+
+@ GcovObj_share GcovObj h → GcovObj { ^ @ GcovObj { # s ( rcbox_share # i . h ctl ) } }
+
+@ GcovObj_drop sink GcovObj h → v {
+    ( mem_forget h )
+    ( rcbox_release [GcovObjImpl] # i . h ctl )
+}
+
+@ __GcovObj_ptr GcovObj h → *GcovObjImpl { ^ ( rcbox_ptr [GcovObjImpl] # i . h ctl ) }
 
 : | GcovErr {
     GcovNoNotes  // the .gcno could not be read
@@ -172,7 +188,7 @@ $ `stdlib/std/fs.nu`
 
 // ── The file table ───────────────────────────────────────────────
 
-@ __g_file_idx * GcovObj o String path → i {
+@ __g_file_idx * GcovObjImpl o String path → i {
     : i n ( vec_len [String] . o files )
     : ~ i i 0
     ~ < i n {
@@ -188,7 +204,7 @@ $ `stdlib/std/fs.nu`
 
 // ── Notes (.gcno) ────────────────────────────────────────────────
 
-@ __g_read_notes * GcovObj o ( Vec u ) buf → !v GcovErr {
+@ __g_read_notes * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
     : i len ( vec_len [u] buf )
     ? < len 12 { ^ @ !v GcovErr { F GcovTruncated } } {}
     : *u p ( vec_data [u] buf )
@@ -249,7 +265,7 @@ $ `stdlib/std/fs.nu`
 // It is allocated HERE, while the function's arcs are still the last
 // thing in the shared table, because every function's arcs live in one
 // flat array: appending later would land it after some other function's.
-@ __g_close_fn * GcovObj o i fi → v {
+@ __g_close_fn * GcovObjImpl o i fi → v {
     ? < fi 0 { ^ v } {}
     ? < ( __g_fn o fi GFN_NBLOCK ) 2 { ^ v } {}
     ( vec_push [i] . o arcs 1 )  // from the exit block
@@ -269,7 +285,7 @@ $ `stdlib/std/fs.nu`
 
 // A FUNCTION record opens a new function: identity, checksums, name,
 // source file and the line it starts on.
-@ __g_notes_function * GcovObj o * u p i body i end → i {
+@ __g_notes_function * GcovObjImpl o * u p i body i end → i {
     ? > + body 12 end { ^ -1 } {}
     : i ident ( __g_u32 p body )
     : i lcs ( __g_u32 p + body 4 )
@@ -279,14 +295,13 @@ $ `stdlib/std/fs.nu`
     : i namew ( __g_u32 p q )
     : String name ( __g_str p + q 4 namew end )
     = q + q + 4 * namew 4
-    ? > + q 4 end { ( string_free name ) ^ -1 } {}
+    ? > + q 4 end { ^ -1 } {}
     : i filew ( __g_u32 p q )
     : String file ( __g_str p + q 4 filew end )
     = q + q + 4 * filew 4
-    ? > q end { ( string_free name ) ( string_free file ) ^ -1 } {}
+    ? > q end { ^ -1 } {}
     : i line ? <= + q 4 end ( __g_u32 p q ) 0
     : i src ( __g_file_idx o file )
-    ( string_free file )
 
     : i idx / ( vec_len [i] . o fns ) GFN_W
     ( vec_push [String] . o fn_names name )
@@ -308,7 +323,7 @@ $ `stdlib/std/fs.nu`
 
 // A BLOCKS record is one word of flags per basic block; the count of words
 // IS the number of blocks. Block 0 is the entry, block 1 the exit.
-@ __g_notes_blocks * GcovObj o i fi i words → v {
+@ __g_notes_blocks * GcovObjImpl o i fi i words → v {
     ( vec_set [i] . o fns + * fi GFN_W GFN_NBLOCK words )
     : ~ i k 0
     ~ < k words { ( vec_push [i] . o blk_count 0 ) = k + k 1 }
@@ -320,7 +335,7 @@ $ `stdlib/std/fs.nu`
 // describes is not this function's, and an arc pointing outside the block
 // table makes the walk that solves the flow unable to mark where it has
 // been. It loops. So the file is refused, which is what gcov does too.
-@ __g_notes_arcs * GcovObj o i fi * u p i body i end → b {
+@ __g_notes_arcs * GcovObjImpl o i fi * u p i body i end → b {
     ? > + body 4 end { ^ T } {}
     : i nb ( __g_fn o fi GFN_NBLOCK )
     : i from ( __g_u32 p body )
@@ -351,7 +366,7 @@ $ `stdlib/std/fs.nu`
 // source file could have and -3 for a block the function does not have.
 // Neither is a record to skip: nothing else in such a file can be trusted
 // either.
-@ __g_notes_lines * GcovObj o i fi * u p i body i end → i {
+@ __g_notes_lines * GcovObjImpl o i fi * u p i body i end → i {
     ? > + body 4 end { ^ -1 } {}
     : i blk ( __g_u32 p body )
     ? >= blk ( __g_fn o fi GFN_NBLOCK ) { ^ -3 } {}
@@ -374,7 +389,6 @@ $ `stdlib/std/fs.nu`
                 ? | <= namew 0 > + q + 4 * namew 4 end { = q end } {
                     : String f ( __g_str p + q 4 namew end )
                     = src ( __g_file_idx o f )
-                    ( string_free f )
                     = q + q + 4 * namew 4
                 }
             }
@@ -385,7 +399,7 @@ $ `stdlib/std/fs.nu`
 
 // ── Data (.gcda) ─────────────────────────────────────────────────
 
-@ __g_read_data * GcovObj o ( Vec u ) buf → !v GcovErr {
+@ __g_read_data * GcovObjImpl o ( Vec u ) buf → !v GcovErr {
     : i len ( vec_len [u] buf )
     ? < len 12 { ^ @ !v GcovErr { F GcovTruncated } } {}
     : *u p ( vec_data [u] buf )
@@ -438,7 +452,7 @@ $ `stdlib/std/fs.nu`
     ^ @ !v GcovErr { T 0 }
 }
 
-@ __g_data_counters * GcovObj o i fi * u p i body i n → v {
+@ __g_data_counters * GcovObjImpl o i fi * u p i body i n → v {
     : i have ( __g_fn o fi GFN_CTR_N )
     ? == have 0 {
         ( vec_set [i] . o fns + * fi GFN_W GFN_CTR_OFF ( vec_len [i] . o counters ) )
@@ -463,20 +477,20 @@ $ `stdlib/std/fs.nu`
 
 // ── Small accessors ──────────────────────────────────────────────
 
-@ __g_fn * GcovObj o i fi i field → i {
+@ __g_fn * GcovObjImpl o i fi i field → i {
     ^ ?? ( vec_get [i] . o fns + * fi GFN_W field ) { T x → x F _ → 0 }
 }
 
-@ __g_ctr * GcovObj o i idx → i {
+@ __g_ctr * GcovObjImpl o i idx → i {
     ^ ?? ( vec_get [i] . o counters idx ) { T x → x F _ → 0 }
 }
 
-@ __g_arc * GcovObj o i ai i field → i {
+@ __g_arc * GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
 }
 
-@ __g_fn_by_ident * GcovObj o i ident → i {
-    : i n ( gcov_fn_count o )
+@ __g_fn_by_ident * GcovObjImpl o i ident → i {
+    : i n ( __gcov_fn_count o )
     : ~ i i 0
     ~ < i n {
         ? == ident ( __g_fn o i GFN_IDENT ) { ^ i } {}
@@ -485,83 +499,146 @@ $ `stdlib/std/fs.nu`
     ^ -1
 }
 
-@ gcov_fn_count * GcovObj o → i {
+@ gcov_fn_count GcovObj o__h → i { ^ ( __gcov_fn_count ( __GcovObj_ptr o__h ) ) }
+
+@ __gcov_fn_count * GcovObjImpl o → i {
     ^ / ( vec_len [i] . o fns ) GFN_W
 }
 
-@ gcov_fn_name * GcovObj o i fi → s {
+@ gcov_fn_name GcovObj o__h i fi → s {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ?? ( vec_get [String] . o fn_names fi ) { T x → ( string_data x ) F _ → `` }
 }
 
-@ gcov_fn_src * GcovObj o i fi → i { ^ ( __g_fn o fi GFN_SRC ) }
+@ gcov_fn_src GcovObj o__h i fi → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_fn o fi GFN_SRC )
+}
 
-@ gcov_fn_line * GcovObj o i fi → i { ^ ( __g_fn o fi GFN_LINE ) }
+@ gcov_fn_line GcovObj o__h i fi → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_fn o fi GFN_LINE )
+}
 
-@ gcov_fn_nblocks * GcovObj o i fi → i { ^ ( __g_fn o fi GFN_NBLOCK ) }
+@ gcov_fn_nblocks GcovObj o__h i fi → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_fn o fi GFN_NBLOCK )
+}
 
 // Where this function's blocks start in the object-wide block table. An
 // index over all blocks needs one flat numbering, and this is it.
-@ gcov_fn_blk_off * GcovObj o i fi → i { ^ ( __g_fn o fi GFN_BLK_OFF ) }
+@ gcov_fn_blk_off GcovObj o__h i fi → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_fn o fi GFN_BLK_OFF )
+}
 
-@ gcov_total_blocks * GcovObj o → i { ^ ( vec_len [i] . o blk_count ) }
+@ gcov_total_blocks GcovObj o__h → i { ^ ( __gcov_total_blocks ( __GcovObj_ptr o__h ) ) }
 
-@ gcov_total_arcs * GcovObj o → i { ^ / ( vec_len [i] . o arcs ) GARC_W }
+@ __gcov_total_blocks * GcovObjImpl o → i {
+    ^ ( vec_len [i] . o blk_count )
+}
 
-@ gcov_block_count * GcovObj o i fi i blk → i {
+@ gcov_total_arcs GcovObj o__h → i { ^ ( __gcov_total_arcs ( __GcovObj_ptr o__h ) ) }
+
+@ __gcov_total_arcs * GcovObjImpl o → i {
+    ^ / ( vec_len [i] . o arcs ) GARC_W
+}
+
+@ gcov_block_count GcovObj o__h i fi i blk → i { ^ ( __gcov_block_count ( __GcovObj_ptr o__h ) fi blk ) }
+
+@ __gcov_block_count * GcovObjImpl o i fi i blk → i {
     ^ ?? ( vec_get [i] . o blk_count + ( __g_fn o fi GFN_BLK_OFF ) blk ) {
         T x → x
         F _ → 0
     }
 }
 
-@ gcov_file_count * GcovObj o → i { ^ ( vec_len [String] . o files ) }
+@ gcov_file_count GcovObj o__h → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( vec_len [String] . o files )
+}
 
-@ gcov_runs * GcovObj o → i { ^ . o runs }
+@ gcov_runs GcovObj o__h → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ . o runs
+}
 
-@ gcov_notes_path * GcovObj o → s { ^ ( string_data . o notes ) }
+@ gcov_notes_path GcovObj o__h → s {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( string_data . o notes )
+}
 
-@ gcov_data_path * GcovObj o → s { ^ ( string_data . o data ) }
+@ gcov_data_path GcovObj o__h → s {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( string_data . o data )
+}
 
-@ gcov_file_path * GcovObj o i idx → s {
+@ gcov_file_path GcovObj o__h i idx → s {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ?? ( vec_get [String] . o files idx ) { T x → ( string_data x ) F _ → `` }
 }
 
 // The block-line rows of one function, as a half-open range over `blines`.
-@ gcov_fn_bl_first * GcovObj o i fi → i { ^ ( __g_fn o fi GFN_BL_OFF ) }
+@ gcov_fn_bl_first GcovObj o__h i fi → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_fn o fi GFN_BL_OFF )
+}
 
-@ gcov_fn_bl_end * GcovObj o i fi → i {
+@ gcov_fn_bl_end GcovObj o__h i fi → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ + ( __g_fn o fi GFN_BL_OFF ) * GBL_W ( __g_fn o fi GFN_BL_N )
 }
 
-@ gcov_bl_block * GcovObj o i row → i {
+@ gcov_bl_block GcovObj o__h i row → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ?? ( vec_get [i] . o blines + row GBL_BLOCK ) { T x → x F _ → 0 }
 }
 
-@ gcov_bl_src * GcovObj o i row → i {
+@ gcov_bl_src GcovObj o__h i row → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ?? ( vec_get [i] . o blines + row GBL_SRC ) { T x → x F _ → 0 }
 }
 
-@ gcov_bl_line * GcovObj o i row → i {
+@ gcov_bl_line GcovObj o__h i row → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ ?? ( vec_get [i] . o blines + row GBL_LINE ) { T x → x F _ → 0 }
 }
 
-@ gcov_fn_arc_first * GcovObj o i fi → i { ^ ( __g_fn o fi GFN_ARC_OFF ) }
+@ gcov_fn_arc_first GcovObj o__h i fi → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_fn o fi GFN_ARC_OFF )
+}
 
-@ gcov_fn_arc_end * GcovObj o i fi → i {
+@ gcov_fn_arc_end GcovObj o__h i fi → i { ^ ( __gcov_fn_arc_end ( __GcovObj_ptr o__h ) fi ) }
+
+@ __gcov_fn_arc_end * GcovObjImpl o i fi → i {
     ^ + ( __g_fn o fi GFN_ARC_OFF ) * GARC_W ( __g_fn o fi GFN_ARC_N )
 }
 
-@ gcov_arc_src * GcovObj o i ai → i { ^ ( __g_arc o ai GARC_SRC ) }
+@ gcov_arc_src GcovObj o__h i ai → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_arc o ai GARC_SRC )
+}
 
-@ gcov_arc_dst * GcovObj o i ai → i { ^ ( __g_arc o ai GARC_DST ) }
+@ gcov_arc_dst GcovObj o__h i ai → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_arc o ai GARC_DST )
+}
 
-@ gcov_arc_flags * GcovObj o i ai → i { ^ ( __g_arc o ai GARC_FLAGS ) }
+@ gcov_arc_flags GcovObj o__h i ai → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_arc o ai GARC_FLAGS )
+}
 
-@ gcov_arc_count * GcovObj o i ai → i { ^ ( __g_arc o ai GARC_COUNT ) }
+@ gcov_arc_count GcovObj o__h i ai → i {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
+    ^ ( __g_arc o ai GARC_COUNT )
+}
 
 // An arc the instrumenter treated as a real branch. Fake arcs (the ones
 // LLVM adds for abnormal exits) are not branches a test can take.
-@ gcov_arc_is_branch * GcovObj o i ai → b {
+@ gcov_arc_is_branch GcovObj o__h i ai → b {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ^ == 0 & ( __g_arc o ai GARC_FLAGS ) GCOV_ARC_FAKE
 }
 
@@ -588,11 +665,11 @@ $ `stdlib/std/fs.nu`
 // return the way it was entered — the two disagree, and the difference
 // shows up as a percentage that is quietly a few points wrong.
 
-@ __g_arc_field * GcovObj o i ai i field → i {
+@ __g_arc_field * GcovObjImpl o i ai i field → i {
     ^ ?? ( vec_get [i] . o arcs + ai field ) { T x → x F _ → 0 }
 }
 
-@ __g_on_tree * GcovObj o i ai → b {
+@ __g_on_tree * GcovObjImpl o i ai → b {
     ^ != 0 & ( __g_arc_field o ai GARC_FLAGS ) GCOV_ARC_ON_TREE
 }
 
@@ -621,9 +698,9 @@ $ `stdlib/std/fs.nu`
     ( vec_set [i] tail key + slot 1 )
 }
 
-@ __g_index_build * GcovObj o → v {
-    : i nblk ( gcov_total_blocks o )
-    : i narc ( gcov_total_arcs o )
+@ __g_index_build * GcovObjImpl o → v {
+    : i nblk ( __gcov_total_blocks o )
+    : i narc ( __gcov_total_arcs o )
     // These start empty from `gcov_new` so that an error path can still
     // free the object; replacing a Vec field drops the old handle on the
     // floor unless it is released first.
@@ -639,12 +716,12 @@ $ `stdlib/std/fs.nu`
     = . o succ_head ( __g_zeros nblk )
     = . o succ_tail ( __g_zeros nblk )
     = . o succ_next ( __g_zeros narc )
-    : i nfn ( gcov_fn_count o )
+    : i nfn ( __gcov_fn_count o )
     : ~ i fi 0
     ~ < fi nfn {
         : i base ( __g_fn o fi GFN_BLK_OFF )
         : i a0 ( __g_fn o fi GFN_ARC_OFF )
-        : i aend ( gcov_fn_arc_end o fi )
+        : i aend ( __gcov_fn_arc_end o fi )
         : ~ i ai a0
         ~ < ai aend {
             : i slot / ai GARC_W
@@ -660,12 +737,16 @@ $ `stdlib/std/fs.nu`
 
 // The first arc entering (`side` 0) or leaving (`side` 1) a block, as a
 // chain cursor: non-zero is an arc slot plus one, zero is the end.
-@ gcov_edge_first * GcovObj o i fi i blk i side → i {
+@ gcov_edge_first GcovObj o__h i fi i blk i side → i { ^ ( __gcov_edge_first ( __GcovObj_ptr o__h ) fi blk side ) }
+
+@ __gcov_edge_first * GcovObjImpl o i fi i blk i side → i {
     : i key + ( __g_fn o fi GFN_BLK_OFF ) blk
     ^ ? == side 0 ( __g_ix . o pred_head key ) ( __g_ix . o succ_head key )
 }
 
-@ gcov_edge_next * GcovObj o i cursor i side → i {
+@ gcov_edge_next GcovObj o__h i cursor i side → i { ^ ( __gcov_edge_next ( __GcovObj_ptr o__h ) cursor side ) }
+
+@ __gcov_edge_next * GcovObjImpl o i cursor i side → i {
     ^ ? == side 0 ( __g_ix . o pred_next - cursor 1 ) ( __g_ix . o succ_next - cursor 1 )
 }
 
@@ -713,7 +794,7 @@ $ `stdlib/std/fs.nu`
 // One walk out from `root` along the spanning tree. Each tree arc's count
 // is the excess of everything hanging off it: what the counted arcs on
 // that side could not account for.
-@ __g_propagate * GcovObj o i fi i root ( Vec i ) visited ( Vec i ) st → v {
+@ __g_propagate * GcovObjImpl o i fi i root ( Vec i ) visited ( Vec i ) st → v {
     : ~ i sp 0
     ( __g_st_push st sp root -1 0 )
     ~ >= sp 0 {
@@ -727,13 +808,13 @@ $ `stdlib/std/fs.nu`
             } {
                 ( vec_set [i] visited blk 1 )
                 ( __g_st_set st sp GST_SIDE 0 )
-                ( __g_st_set st sp GST_CUR ( gcov_edge_first o fi blk 0 ) )
+                ( __g_st_set st sp GST_CUR ( __gcov_edge_first o fi blk 0 ) )
             }
         } {
             : i cur ( __g_st st sp GST_CUR )
             ? > cur 0 {
                 : i e ( gcov_edge_arc cur )
-                ( __g_st_set st sp GST_CUR ( gcov_edge_next o cur side ) )
+                ( __g_st_set st sp GST_CUR ( __gcov_edge_next o cur side ) )
                 ? != e ( __g_st st sp GST_PRED ) {
                     ? ( __g_on_tree o e ) {
                         : i next_blk ? == side 0
@@ -751,7 +832,7 @@ $ `stdlib/std/fs.nu`
             } {
                 ? == side 0 {
                     ( __g_st_set st sp GST_SIDE 1 )
-                    ( __g_st_set st sp GST_CUR ( gcov_edge_first o fi blk 1 ) )
+                    ( __g_st_set st sp GST_CUR ( __gcov_edge_first o fi blk 1 ) )
                 } {
                     : i raw ( __g_st st sp GST_EXCESS )
                     : i excess ? < raw 0 - 0 raw raw
@@ -769,11 +850,11 @@ $ `stdlib/std/fs.nu`
     }
 }
 
-@ __g_solve_fn * GcovObj o i fi ( Vec i ) st → v {
+@ __g_solve_fn * GcovObjImpl o i fi ( Vec i ) st → v {
     : i nb ( __g_fn o fi GFN_NBLOCK )
     ? < nb 2 { ^ v } {}
     : i a0 ( __g_fn o fi GFN_ARC_OFF )
-    : i aend ( gcov_fn_arc_end o fi )
+    : i aend ( __gcov_fn_arc_end o fi )
     : i b0 ( __g_fn o fi GFN_BLK_OFF )
     : i c0 ( __g_fn o fi GFN_CTR_OFF )
     : i cn ( __g_fn o fi GFN_CTR_N )
@@ -788,7 +869,7 @@ $ `stdlib/std/fs.nu`
             ( vec_set [i] . o arcs + ai GARC_COUNT c )
             ( vec_set [i] . o arcs + ai GARC_VALID 1 )
             : i src ( __g_arc_field o ai GARC_SRC )
-            ( vec_set [i] . o blk_count + b0 src + ( gcov_block_count o fi src ) c )
+            ( vec_set [i] . o blk_count + b0 src + ( __gcov_block_count o fi src ) c )
             = ci + ci 1
         } {}
         = ai + ai GARC_W
@@ -797,7 +878,6 @@ $ `stdlib/std/fs.nu`
     : ( Vec i ) visited ( __g_zeros nb )
     : ~ i b 0
     ~ < b nb { ( __g_propagate o fi b visited st ) = b + b 1 }
-    ( vec_free [i] visited )
 
     // Every tree arc now adds to the block it leaves — except the last,
     // which is the synthetic exit-to-entry arc. The instrumenter never
@@ -816,7 +896,7 @@ $ `stdlib/std/fs.nu`
             ? < seen - ntree 1 {
                 : i src ( __g_arc_field o ai GARC_SRC )
                 ( vec_set [i] . o blk_count + b0 src
-                + ( gcov_block_count o fi src ) ( __g_arc_field o ai GARC_COUNT ) )
+                + ( __gcov_block_count o fi src ) ( __g_arc_field o ai GARC_COUNT ) )
             } {}
             = seen + seen 1
         } {}
@@ -826,19 +906,20 @@ $ `stdlib/std/fs.nu`
 
 // Without data there is nothing to solve: every counter is zero, every
 // block is zero, and the report says so.
-@ gcov_solve * GcovObj o → v {
+@ gcov_solve GcovObj o__h → v {
+    : *GcovObjImpl o ( __GcovObj_ptr o__h )
     ? ! . o has_data { ^ v } {}
     : ( Vec i ) st ( vec_new [i] )
-    : i n ( gcov_fn_count o )
+    : i n ( gcov_fn_count o__h )
     : ~ i i 0
     ~ < i n { ( __g_solve_fn o i st ) = i + i 1 }
-    ( vec_free [i] st )
 }
 
 // ── Entry points ─────────────────────────────────────────────────
 
-@ gcov_new → *GcovObj {
-    : *GcovObj o # *GcovObj ( nurl_alloc Z GcovObj )
+@ gcov_new → GcovObj {
+    : i o__box ( rcbox_zero [GcovObjImpl] )
+    : *GcovObjImpl o ( rcbox_ptr [GcovObjImpl] o__box )
     = . o notes ( string_new )
     = . o data ( string_new )
     = . o stamp 0
@@ -857,45 +938,20 @@ $ `stdlib/std/fs.nu`
     = . o succ_head ( vec_new [i] )
     = . o succ_next ( vec_new [i] )
     = . o succ_tail ( vec_new [i] )
-    ^ o
+    ^ @ GcovObj { # s o__box }
 }
 
-@ gcov_free sink * GcovObj o → v {
-    ( string_free . o notes )
-    ( string_free . o data )
-    ( __g_free_strs . o files )
-    ( __g_free_strs . o fn_names )
-    ( vec_free [i] . o fns )
-    ( vec_free [i] . o blk_count )
-    ( vec_free [i] . o arcs )
-    ( vec_free [i] . o blines )
-    ( vec_free [i] . o counters )
-    ( vec_free [i] . o pred_head )
-    ( vec_free [i] . o pred_next )
-    ( vec_free [i] . o pred_tail )
-    ( vec_free [i] . o succ_head )
-    ( vec_free [i] . o succ_next )
-    ( vec_free [i] . o succ_tail )
-    ( nurl_free # s o )
-}
-
-@ __g_free_strs ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [String] v i ) { T s → ( string_free s ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [String] v )
-}
+// Let go of `o` now rather than at the end of its owner's scope.
+@ gcov_free sink GcovObj o → v {}
 
 // Read one coverage object: the notes, and the data if it is there.
 //
 // A missing .gcda is NOT an error — it is the answer "this program was
 // built but never run", and a coverage report has to be able to say that.
 // Every counter then reads zero, which is exactly what it means.
-@ gcov_read s notes_path s data_path → !*GcovObj GcovErr {
-    : *GcovObj o ( gcov_new )
+@ gcov_read s notes_path s data_path → !GcovObj GcovErr {
+    : GcovObj h ( gcov_new )
+    : *GcovObjImpl o ( __GcovObj_ptr h )
     ( string_push_str . o notes notes_path )
     : ~ i failed 0
     : ~ GcovErr err GcovNoNotes
@@ -905,11 +961,10 @@ $ `stdlib/std/fs.nu`
                 T _ → {}
                 F e → { = failed 1 = err e }
             }
-            ( vec_free [u] nb )
         }
         F _ → { = failed 1 = err GcovNoNotes }
     }
-    ? != failed 0 { ( gcov_free o ) ^ @ !*GcovObj GcovErr { F err } } {}
+    ? != failed 0 { ^ @ !GcovObj GcovErr { F err } } {}
 
     ? ( file_exists data_path ) {
         ( string_push_str . o data data_path )
@@ -919,14 +974,13 @@ $ `stdlib/std/fs.nu`
                     T _ → {}
                     F e → { = failed 1 = err e }
                 }
-                ( vec_free [u] db )
             }
             F _ → {}
         }
     } {}
-    ? != failed 0 { ( gcov_free o ) ^ @ !*GcovObj GcovErr { F err } } {}
+    ? != failed 0 { ^ @ !GcovObj GcovErr { F err } } {}
 
     ( __g_index_build o )
-    ( gcov_solve o )
-    ^ @ !*GcovObj GcovErr { T o }
+    ( gcov_solve h )
+    ^ @ !GcovObj GcovErr { T h }
 }

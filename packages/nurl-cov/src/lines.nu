@@ -25,6 +25,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `gcov.nu`
+$ `stdlib/core/rcbox.nu`
 
 // Occurrence table stride: one row each time a block names a line.
 : i LOC_W 3
@@ -43,7 +44,7 @@ $ `gcov.nu`
 : i LFN_LINE 0
 : i LFN_FN 1
 
-: LineTab {
+: LineTabImpl {
     i src  // which of the object's source files this describes
     i maxline
     ( Vec i ) exists  // per line: 1 when some block names it
@@ -54,6 +55,45 @@ $ `gcov.nu`
     ( Vec i ) occ_next  // next occurrence on the same line, + 1
     ( Vec i ) head  // per line: first occurrence + 1
     ( Vec i ) tail  // per line: last occurrence + 1
+}
+
+// A LineTab is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: LineTab { s ctl }
+
+@ LineTab_share LineTab h → LineTab { ^ @ LineTab { # s ( rcbox_share # i . h ctl ) } }
+
+@ LineTab_drop sink LineTab h → v {
+    ( mem_forget h )
+    ( rcbox_release [LineTabImpl] # i . h ctl )
+}
+
+@ __LineTab_ptr LineTab h → *LineTabImpl { ^ ( rcbox_ptr [LineTabImpl] # i . h ctl ) }
+
+// The table's columns, lent: they live as long as the LineTab does.
+@ linetab_maxline LineTab t__h → i {
+    : *LineTabImpl t ( __LineTab_ptr t__h )
+    ^ . t maxline
+}
+
+@ linetab_exists LineTab t__h → ( Vec i ) {
+    : *LineTabImpl t ( __LineTab_ptr t__h )
+    ^ . t exists
+}
+
+@ linetab_count LineTab t__h → ( Vec i ) {
+    : *LineTabImpl t ( __LineTab_ptr t__h )
+    ^ . t count
+}
+
+@ linetab_br LineTab t__h → ( Vec i ) {
+    : *LineTabImpl t ( __LineTab_ptr t__h )
+    ^ . t br
+}
+
+@ linetab_fnrow LineTab t__h → ( Vec i ) {
+    : *LineTabImpl t ( __LineTab_ptr t__h )
+    ^ . t fnrow
 }
 
 @ __ln_at ( Vec i ) v i idx → i {
@@ -87,20 +127,12 @@ $ `gcov.nu`
 
 // ── Building the table ───────────────────────────────────────────
 
-@ linetab_free sink * LineTab t → v {
-    ( vec_free [i] . t exists )
-    ( vec_free [i] . t count )
-    ( vec_free [i] . t br )
-    ( vec_free [i] . t fnrow )
-    ( vec_free [i] . t occ )
-    ( vec_free [i] . t occ_next )
-    ( vec_free [i] . t head )
-    ( vec_free [i] . t tail )
-    ( nurl_free # s t )
-}
+// Let go of `t` now rather than at the end of its owner's scope.
+@ linetab_free sink LineTab t → v {}
 
-@ lines_build * GcovObj o i src → *LineTab {
-    : *LineTab t # *LineTab ( nurl_alloc Z LineTab )
+@ lines_build GcovObj o i src → LineTab {
+    : i t__box ( rcbox_zero [LineTabImpl] )
+    : *LineTabImpl t ( rcbox_ptr [LineTabImpl] t__box )
     = . t src src
     = . t maxline 0
     = . t exists ( vec_new [i] )
@@ -123,14 +155,14 @@ $ `gcov.nu`
         = fi + fi 1
     }
     ( __ln_resolve o t )
-    ^ t
+    ^ @ LineTab { # s t__box }
 }
 
 // Walk one function's block-line rows in BLOCK order, which is the order
 // gcov visits them and therefore the order a line's blocks are listed in.
 // The notes store them per block already, but nothing in the format
 // promises ascending order, so the rows are chained per block first.
-@ __ln_scan_fn * GcovObj o * LineTab t i fi i src → v {
+@ __ln_scan_fn GcovObj o * LineTabImpl t i fi i src → v {
     : i nb ( gcov_fn_nblocks o fi )
     ? == nb 0 { ^ v } {}
     : i first ( gcov_fn_bl_first o fi )
@@ -158,12 +190,9 @@ $ `gcov.nu`
         }
         = b + b 1
     }
-    ( vec_free [i] bhead )
-    ( vec_free [i] btail )
-    ( vec_free [i] bnext )
 }
 
-@ __ln_add_occ * LineTab t i line i fi i blk → v {
+@ __ln_add_occ * LineTabImpl t i line i fi i blk → v {
     : i slot / ( vec_len [i] . t occ ) LOC_W
     ( vec_push [i] . t occ line )
     ( vec_push [i] . t occ fi )
@@ -178,13 +207,13 @@ $ `gcov.nu`
     ? > line . t maxline { = . t maxline line } {}
 }
 
-@ __ln_occ * LineTab t i slot i field → i {
+@ __ln_occ * LineTabImpl t i slot i field → i {
     ^ ( __ln_at . t occ + * slot LOC_W field )
 }
 
 // Is (fi, blk) one of the blocks on this line? The membership test is what
 // separates traffic entering the line from traffic already inside it.
-@ __ln_on_line * LineTab t i line i fi i blk → b {
+@ __ln_on_line * LineTabImpl t i line i fi i blk → b {
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
         : i s - slot 1
@@ -194,7 +223,7 @@ $ `gcov.nu`
     ^ F
 }
 
-@ __ln_resolve * GcovObj o * LineTab t → v {
+@ __ln_resolve GcovObj o * LineTabImpl t → v {
     : ~ i line 1
     ~ <= line . t maxline {
         ? != 0 ( __ln_at . t head line ) {
@@ -205,7 +234,7 @@ $ `gcov.nu`
     }
 }
 
-@ __ln_line_count * GcovObj o * LineTab t i line → i {
+@ __ln_line_count GcovObj o * LineTabImpl t i line → i {
     : ~ i total 0
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
@@ -245,7 +274,7 @@ $ `gcov.nu`
 // all of them: zero means the decision was never reached, which reads very
 // differently from "reached, and always went the same way".
 
-@ __ln_line_branches * GcovObj o * LineTab t i line → v {
+@ __ln_line_branches GcovObj o * LineTabImpl t i line → v {
     : ~ i slot ( __ln_at . t head line )
     ~ > slot 0 {
         : i s - slot 1
@@ -274,7 +303,7 @@ $ `gcov.nu`
     }
 }
 
-@ __ln_block_last_line * GcovObj o i fi i blk → i {
+@ __ln_block_last_line GcovObj o i fi i blk → i {
     : i first ( gcov_fn_bl_first o fi )
     : i blend ( gcov_fn_bl_end o fi )
     : ~ i last -1
@@ -294,7 +323,7 @@ $ `gcov.nu`
 // was drained. When no cycle is left, the total is the number of times the
 // line went round.
 
-@ __ln_cycles * GcovObj o * LineTab t i line → i {
+@ __ln_cycles GcovObj o * LineTabImpl t i line → i {
     // Collect the line's distinct blocks as the nodes of a sub-graph.
     : ( Vec i ) nd_fn ( vec_new [i] )
     : ( Vec i ) nd_blk ( vec_new [i] )
@@ -311,8 +340,6 @@ $ `gcov.nu`
     }
     : i nn ( vec_len [i] nd_fn )
     ? < nn 2 {
-        ( vec_free [i] nd_fn )
-        ( vec_free [i] nd_blk )
         ^ 0
     } {}
 
@@ -375,19 +402,8 @@ $ `gcov.nu`
             }
             ? == drained 0 { = more F } { = total + total drained }
         }
-        ( vec_free [i] travers )
-        ( vec_free [i] incoming )
-        ( vec_free [i] st_node )
-        ( vec_free [i] st_edge )
-        ( vec_free [i] e_from )
     } {}
 
-    ( vec_free [i] nd_fn )
-    ( vec_free [i] nd_blk )
-    ( vec_free [i] e_to )
-    ( vec_free [i] e_cc )
-    ( vec_free [i] n_off )
-    ( vec_free [i] n_cnt )
     ^ total
 }
 

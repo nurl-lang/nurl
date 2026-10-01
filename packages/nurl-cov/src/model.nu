@@ -23,6 +23,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `gcov.nu`
 $ `lines.nu`
+$ `stdlib/core/rcbox.nu`
 
 : CovFn {
     String name
@@ -44,9 +45,28 @@ $ `lines.nu`
     ( Vec CovFn ) funcs
 }
 
-: Cov {
+: CovImpl {
     ( Vec CovFile ) files
     i objects  // how many coverage objects were folded in
+}
+
+// A Cov is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Cov { s ctl }
+
+@ Cov_share Cov h → Cov { ^ @ Cov { # s ( rcbox_share # i . h ctl ) } }
+
+@ Cov_drop sink Cov h → v {
+    ( mem_forget h )
+    ( rcbox_release [CovImpl] # i . h ctl )
+}
+
+@ __Cov_ptr Cov h → *CovImpl { ^ ( rcbox_ptr [CovImpl] # i . h ctl ) }
+
+// How many coverage objects were folded in.
+@ cov_objects Cov c__h → i {
+    : *CovImpl c ( __Cov_ptr c__h )
+    ^ . c objects
 }
 
 : CovStat {
@@ -58,18 +78,17 @@ $ `lines.nu`
     i funcs_hit
 }
 
-@ cov_new → *Cov {
-    : *Cov c # *Cov ( nurl_alloc Z Cov )
+@ cov_new → Cov {
+    : i c__box ( rcbox_zero [CovImpl] )
+    : *CovImpl c ( rcbox_ptr [CovImpl] c__box )
     = . c files ( vec_new [CovFile] )
     = . c objects 0
-    ^ c
+    ^ @ Cov { # s c__box }
 }
 
 // The files (and everything they hold) are dropped with their Vec.
-@ cov_free sink * Cov c → v {
-    ( vec_free [CovFile] . c files )
-    ( nurl_free # s c )
-}
+// Let go of `c` now rather than at the end of its owner's scope.
+@ cov_free sink Cov c → v {}
 
 @ __cov_at ( Vec i ) v i idx → i {
     ^ ?? ( vec_get [i] v idx ) { T x → x F _ → 0 }
@@ -83,9 +102,13 @@ $ `lines.nu`
     } {}
 }
 
-@ cov_file_count * Cov c → i { ^ ( vec_len [CovFile] . c files ) }
+@ cov_file_count Cov c__h → i {
+    : *CovImpl c ( __Cov_ptr c__h )
+    ^ ( vec_len [CovFile] . c files )
+}
 
-@ cov_file_path * Cov c i idx → s {
+@ cov_file_path Cov c__h i idx → s {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( string_data . f path )
         F _ → ``
@@ -93,7 +116,9 @@ $ `lines.nu`
 }
 
 // The row for `path`, created when this is the first object to mention it.
-@ cov_file_idx * Cov c s path → i {
+@ cov_file_idx Cov c__h s path → i { ^ ( __cov_file_idx ( __Cov_ptr c__h ) path ) }
+
+@ __cov_file_idx * CovImpl c s path → i {
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 0
     ~ < i n {
@@ -115,31 +140,31 @@ $ `lines.nu`
 
 // ── Folding one object in ────────────────────────────────────────
 
-@ cov_add_object * Cov c * GcovObj o → v {
+@ cov_add_object Cov c__h GcovObj o → v {
+    : *CovImpl c ( __Cov_ptr c__h )
     : i nf ( gcov_file_count o )
     : ~ i src 0
     ~ < src nf {
-        : *LineTab t ( lines_build o src )
+        : LineTab t ( lines_build o src )
         ( __cov_add_file c o t src )
-        ( linetab_free t )
         = src + src 1
     }
     = . c objects + 1 . c objects
 }
 
-@ __cov_add_file * Cov c * GcovObj o * LineTab t i src → v {
-    : i fidx ( cov_file_idx c ( gcov_file_path o src ) )
+@ __cov_add_file * CovImpl c GcovObj o LineTab t i src → v {
+    : i fidx ( __cov_file_idx c ( gcov_file_path o src ) )
     ?? ( vec_get [CovFile] . c files fidx ) {
         T f → {
-            : i n ( vec_len [i] . t exists )
+            : i n ( vec_len [i] ( linetab_exists t ) )
             : ~ i l 0
             ~ < l n {
-                ? != 0 ( __cov_at . t exists l ) {
+                ? != 0 ( __cov_at ( linetab_exists t ) l ) {
                     ( __cov_grow . f exists l )
                     ( __cov_grow . f count l )
                     ( vec_set [i] . f exists l 1 )
                     ( vec_set [i] . f count l
-                    + ( __cov_at . f count l ) ( __cov_at . t count l ) )
+                    + ( __cov_at . f count l ) ( __cov_at ( linetab_count t ) l ) )
                 } {}
                 = l + l 1
             }
@@ -152,16 +177,16 @@ $ `lines.nu`
 
 // Branch rows arrive grouped by line and numbered from zero within each
 // line, which is what makes them addressable across binaries.
-@ __cov_add_branches CovFile f * LineTab t → v {
-    : i n / ( vec_len [i] . t br ) LBR_W
+@ __cov_add_branches CovFile f LineTab t → v {
+    : i n / ( vec_len [i] ( linetab_br t ) ) LBR_W
     : ~ i k 0
     : ~ i line -1
     : ~ i idx 0
     ~ < k n {
-        : i l ( __cov_at . t br + * k LBR_W LBR_LINE )
+        : i l ( __cov_at ( linetab_br t ) + * k LBR_W LBR_LINE )
         ? != l line { = line l = idx 0 } {}
         ( __cov_branch_add . f branches l idx
-        ( __cov_at . t br + * k LBR_W LBR_COUNT ) )
+        ( __cov_at ( linetab_br t ) + * k LBR_W LBR_COUNT ) )
         = idx + idx 1
         = k + k 1
     }
@@ -183,12 +208,12 @@ $ `lines.nu`
 }
 
 // Block 0 is the entry block, so its count is the call count.
-@ __cov_add_funcs CovFile f * GcovObj o * LineTab t → v {
-    : i n / ( vec_len [i] . t fnrow ) LFN_W
+@ __cov_add_funcs CovFile f GcovObj o LineTab t → v {
+    : i n / ( vec_len [i] ( linetab_fnrow t ) ) LFN_W
     : ~ i k 0
     ~ < k n {
-        : i line ( __cov_at . t fnrow + * k LFN_W LFN_LINE )
-        : i fi ( __cov_at . t fnrow + * k LFN_W LFN_FN )
+        : i line ( __cov_at ( linetab_fnrow t ) + * k LFN_W LFN_LINE )
+        : i fi ( __cov_at ( linetab_fnrow t ) + * k LFN_W LFN_FN )
         ? > ( gcov_fn_nblocks o fi ) 0 {
             ( __cov_fn_add . f funcs ( gcov_fn_name o fi ) line
             ( gcov_block_count o fi 0 ) )
@@ -221,7 +246,8 @@ $ `lines.nu`
 // the package's coverage would drown the package: the number a maintainer
 // acts on is the coverage of the code they wrote.
 
-@ cov_keep_only * Cov c ( Vec String ) prefixes → v {
+@ cov_keep_only Cov c__h ( Vec String ) prefixes → v {
+    : *CovImpl c ( __Cov_ptr c__h )
     ? == 0 ( vec_len [String] prefixes ) { ^ v } {}
     : ( Vec CovFile ) keep ( vec_new [CovFile] )
     : i n ( vec_len [CovFile] . c files )
@@ -266,7 +292,8 @@ $ `lines.nu`
 }
 
 // Order the report the way a person reads it: by path.
-@ cov_sort * Cov c → v {
+@ cov_sort Cov c__h → v {
+    : *CovImpl c ( __Cov_ptr c__h )
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 1
     ~ < i n {
@@ -287,7 +314,8 @@ $ `lines.nu`
 
 // ── Reading the model back ───────────────────────────────────────
 
-@ cov_file_stat * Cov c i idx → CovStat {
+@ cov_file_stat Cov c__h i idx → CovStat {
+    : *CovImpl c ( __Cov_ptr c__h )
     : ~ i lf 0
     : ~ i lh 0
     : ~ i bf 0
@@ -328,7 +356,8 @@ $ `lines.nu`
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
-@ cov_total * Cov c → CovStat {
+@ cov_total Cov c__h → CovStat {
+    : *CovImpl c ( __Cov_ptr c__h )
     : ~ i lf 0
     : ~ i lh 0
     : ~ i bf 0
@@ -338,7 +367,7 @@ $ `lines.nu`
     : i n ( vec_len [CovFile] . c files )
     : ~ i i 0
     ~ < i n {
-        : CovStat s ( cov_file_stat c i )
+        : CovStat s ( cov_file_stat c__h i )
         = lf + lf . s lines_found
         = lh + lh . s lines_hit
         = bf + bf . s branches_found
@@ -350,49 +379,56 @@ $ `lines.nu`
     ^ @ CovStat { lf lh bf bh ff fh }
 }
 
-@ cov_max_line * Cov c i idx → i {
+@ cov_max_line Cov c__h i idx → i {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ? > ( vec_len [i] . f exists ) 0 - ( vec_len [i] . f exists ) 1 0
         F _ → 0
     }
 }
 
-@ cov_line_exists * Cov c i idx i line → b {
+@ cov_line_exists Cov c__h i idx i line → b {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → != 0 ( __cov_at . f exists line )
         F _ → F
     }
 }
 
-@ cov_line_count * Cov c i idx i line → i {
+@ cov_line_count Cov c__h i idx i line → i {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( __cov_at . f count line )
         F _ → 0
     }
 }
 
-@ cov_branch_rows * Cov c i idx → i {
+@ cov_branch_rows Cov c__h i idx → i {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → / ( vec_len [i] . f branches ) CBR_W
         F _ → 0
     }
 }
 
-@ cov_branch_field * Cov c i idx i row i field → i {
+@ cov_branch_field Cov c__h i idx i row i field → i {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( __cov_at . f branches + * row CBR_W field )
         F _ → 0
     }
 }
 
-@ cov_fn_rows * Cov c i idx → i {
+@ cov_fn_rows Cov c__h i idx → i {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ( vec_len [CovFn] . f funcs )
         F _ → 0
     }
 }
 
-@ cov_fn_name * Cov c i idx i row → s {
+@ cov_fn_name Cov c__h i idx i row → s {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) {
             T e → ( string_data . e name )
@@ -402,14 +438,16 @@ $ `lines.nu`
     }
 }
 
-@ cov_fn_line * Cov c i idx i row → i {
+@ cov_fn_line Cov c__h i idx i row → i {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) { T e → . e line F _ → 0 }
         F _ → 0
     }
 }
 
-@ cov_fn_called * Cov c i idx i row → i {
+@ cov_fn_called Cov c__h i idx i row → i {
+    : *CovImpl c ( __Cov_ptr c__h )
     ^ ?? ( vec_get [CovFile] . c files idx ) {
         T f → ?? ( vec_get [CovFn] . f funcs row ) { T e → . e called F _ → 0 }
         F _ → 0

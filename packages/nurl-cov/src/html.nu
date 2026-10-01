@@ -44,7 +44,7 @@ $ `report.nu`
     ^ `good`
 }
 
-@ html_render * Cov c i floor_tenths s title s root → String {
+@ html_render Cov c i floor_tenths s title s root → String {
     : String out ( string_with_cap 262144 )
     ( string_push_str out `<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n` )
     ( string_push_str out `<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>` )
@@ -116,7 +116,7 @@ $ `report.nu`
     ( string_push_str out ` did not.` )
 }
 
-@ __ht_file String out * Cov c i idx i floor_tenths s root → v {
+@ __ht_file String out Cov c i idx i floor_tenths s root → v {
     : CovStat s ( cov_file_stat c idx )
     : i tenths ( cov_pct_tenths . s lines_hit . s lines_found )
     ( string_push_str out `<details id="f` )
@@ -156,7 +156,6 @@ $ `report.nu`
         ( string_push_str out `</td></tr>\n` )
         = l + l 1
     }
-    ( __ht_free lines )
     ( string_push_str out `</table></details>\n` )
 }
 
@@ -164,6 +163,8 @@ $ `report.nu`
     ^ ?? ( read_file path ) {
         T text → {
             : ( Vec String ) v ( __ht_split ( string_data text ) )
+            // Not redundant yet: the compiler does not drop an arm's binding
+            // when a value-producing `??` over a call yields another value.
             ( string_free text )
             v
         }
@@ -190,16 +191,6 @@ $ `report.nu`
 @ __ht_slice s text i from i len → String {
     : *u at # *u + # i text from
     ^ ( string_from_bytes at len )
-}
-
-@ __ht_free ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [String] v i ) { T s → ( string_free s ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [String] v )
 }
 
 @ __ht_style String out → v {
