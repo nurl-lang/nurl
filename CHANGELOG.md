@@ -36,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied bitwise, so with an owning element type both Vecs released the
   same Strings — `vec_clone` of a `Vec` of owning structs crashed.
   `vec_append` still moves. `compiler/tests/wrapped_and_copied_elements.nu`.
+- **Option parameters, block-arm tails and one-field Drop structs own what
+  they hold.** A `sink ?T` parameter was never dropped (the literal option
+  type had no drop; bindings register under the `%__opt.<T>` twin and now
+  parameters do too), and returning its payload was taken for a lend. A
+  `??` / `?` arm written as a block ending in a literal yielded a borrow
+  (only an arm that IS a literal counted as owned) — the value leaked. A
+  `% Drop` impl on a one-field struct never ran its drop glue (no slot for
+  the receiver). A requested `drop__Vec__T` could be skipped (marked done
+  without being emitted). A non-owning option (`?i`) handed to a `sink`
+  no longer reads as moved. `opt_unwrap_or` consumes both arguments, so
+  the unused default is released (it leaked when the option was present).
+  `compiler/tests/owned_params_and_arm_tails.nu`.
 - **A keep is seen beside a closure argument.** `( attach srv m \ → v {} )`
   keeps `m`, but the keep was stashed before the closure argument was
   compiled and the closure body (its own function) drained it into its own
