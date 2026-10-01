@@ -11,11 +11,9 @@ $ `stdlib/core/io.nu`
         ( check ( bytes_eq request . response data ) `unary payload` )
         ( check == ( grpc_header_count . response headers `trace-bin` ) 1 `initial binary metadata` )
         ( check != ( nurl_str_eq ( grpc_header_value . response trailers `finished` ) `yes` ) 0 `trailing metadata` )
-        ( grpc_unary_response_free response )
         ^ @ !v GrpcError { T 0 }
     } {}
     : ~ GrpcCall stream \ ( grpc_call_open client path metadata opts )
-    ; { ( grpc_call_free stream ) }
     : ~ i count 0
     ? != ( nurl_str_eq mode `bidi` ) 0 {
         : ~ i k 0
@@ -23,7 +21,6 @@ $ `stdlib/core/io.nu`
             \ ( grpc_call_send stream request )
             : GrpcMessage response \ ( grpc_call_receive stream )
             ( check & . response present ( bytes_eq request . response data ) `bidi before half-close` )
-            ( grpc_message_free response )
             = k + k 1
             = count + count 1
         }
@@ -45,11 +42,9 @@ $ `stdlib/core/io.nu`
                         : ( Vec u ) expected ( vec_new [u] )
                         ( vec_extend [u] expected request ) ( vec_extend [u] expected request ) ( vec_extend [u] expected request )
                         ( check ( bytes_eq expected . response data ) `client streaming aggregation` )
-                        ( vec_free [u] expected )
                     } { ( check ( bytes_eq request . response data ) `streaming payload` ) }
                     = count + count 1
                 } { = done T }
-                ( grpc_message_free response )
             }
         }
     }
@@ -60,14 +55,13 @@ $ `stdlib/core/io.nu`
 
 @ cancelled GrpcClient client GrpcCallOptions opts ( Vec Header ) metadata ( Vec u ) request → !v GrpcError {
     : ~ GrpcCall stream \ ( grpc_call_open client `/test.Echo/Slow` metadata opts )
-    ; { ( grpc_call_free stream ) }
     \ ( grpc_call_send stream request )
     \ ( grpc_call_half_close stream )
     \ ( grpc_call_pump stream )
     \ ( grpc_call_cancel stream )
     ?? ( grpc_call_receive stream ) {
-        T message → { ( grpc_message_free message ) ( check F `cancel must fail receive` ) }
-        F error → { ( check == . error code GRPC_CANCELLED `local cancellation status` ) ( grpc_error_free error ) }
+        T message → { ( check F `cancel must fail receive` ) }
+        F error → { ( check == . error code GRPC_CANCELLED `local cancellation status` ) }
     }
     ^ @ !v GrpcError { T 0 }
 }
@@ -75,16 +69,13 @@ $ `stdlib/core/io.nu`
 @ finish_one inout GrpcCall stream ( Vec u ) request → !v GrpcError {
     : GrpcMessage first \ ( grpc_call_receive stream )
     ( check & . first present ( bytes_eq . first data request ) `multiplex reply` )
-    ( grpc_message_free first )
     : GrpcMessage end \ ( grpc_call_receive stream )
     ( check ! . end present `multiplex end` )
-    ( grpc_message_free end )
     ^ @ !v GrpcError { T 0 }
 }
 
 @ multiplex GrpcClient client GrpcCallOptions opts ( Vec Header ) metadata ( Vec u ) request → !v GrpcError {
     : ( Vec GrpcCall ) calls ( vec_new [GrpcCall] )
-    ; { ( vec_free_with [GrpcCall] calls \ GrpcCall call → v { ( grpc_call_free call ) } ) }
     : ~ i k 0
     ~ < k 12 {
         : GrpcCall opened \ ( grpc_call_open client `/test.Echo/Unary` metadata opts )
@@ -126,7 +117,7 @@ $ `stdlib/core/io.nu`
     ( grpc_client_connect_tls `localhost` ( nurl_str_to_int port_text ) T )
     ( grpc_client_connect_h2c `127.0.0.1` ( nurl_str_to_int port_text ) )
     ?? connected {
-        F e → { ( nurl_eprintln ( string_data . e message ) ) ( grpc_error_free e ) ^ 1 }
+        F e → { ( nurl_eprintln ( string_data . e message ) ) ^ 1 }
         T client → {
             : ~ GrpcCallOptions opts ( grpc_call_options )
             = . opts encoding ? != ( nurl_str_eq compression `gzip` ) 0 GRPC_GZIP GRPC_IDENTITY
@@ -134,20 +125,17 @@ $ `stdlib/core/io.nu`
             : ( Vec Header ) metadata ( grpc_metadata_new )
             : ( Vec u ) binary ( vec_new [u] )
             ( vec_push [u] binary # u 0 ) ( vec_push [u] binary # u 255 )
-            ?? ( grpc_metadata_add_binary metadata `trace-bin` binary ) { T _ → {} F e → ( grpc_error_free e ) }
-            ( vec_free [u] binary )
+            ?? ( grpc_metadata_add_binary metadata `trace-bin` binary ) { T _ → {} F e → {} }
             : ( Vec u ) request ( vec_new [u] )
             : ~ i k 0
             ~ < k size { ( vec_push [u] request # u % k 256 ) = k + k 1 }
             : !v GrpcError result ( scenario client path mode opts metadata request )
-            ( vec_free [u] request ) ( grpc_metadata_free metadata )
             ( grpc_client_close client )
             ?? result {
                 T _ → { ( check == expected 0 `expected non-OK status` ) ( nurl_print `client passed\n` ) ^ 0 }
                 F e → {
                     : i code . e code
                     ? != code expected { ( nurl_eprintln ( string_data . e message ) ) } {}
-                    ( grpc_error_free e )
                     ( check == code expected `wrong gRPC status` )
                     ( nurl_print `client passed\n` )
                     ^ 0

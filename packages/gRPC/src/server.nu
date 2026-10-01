@@ -1,4 +1,7 @@
 // Incremental gRPC server. A GrpcServer owns protocol state, never its TcpConn.
+// Its owner's drop releases it (a final best-effort flush of the HTTP/2
+// connection, then every call); nothing here is released by hand —
+// grpc_server_free and the *_free functions are optional early releases.
 // Unary, client streaming, server streaming, and bidirectional calls share
 // this event API. send accepts one complete message into a bounded queue;
 // flush writes only available HTTP/2 credit and next services the peer.
@@ -71,24 +74,19 @@ $ `stdlib/ext/http2_server.nu`
     ^ @ GrpcServerEvent { kind sid ( string_new ) ( grpc_metadata_new ) ( vec_new [u] ) code }
 }
 
-@ grpc_server_event_free sink GrpcServerEvent event → v {
-    ( string_free . event method )
-    ( grpc_metadata_free . event metadata )
-    ( vec_free [u] . event message )
-}
+// Let go of `event` now rather than at the end of its owner's scope.
+@ grpc_server_event_free sink GrpcServerEvent event → v {}
 
-@ __grpc_server_call_free sink GrpcServerCall call → v {
-    ( string_free . call method )
-    ( grpc_decoder_free . call decoder )
-    ( vec_free [u] . call outgoing )
-    ( grpc_metadata_free . call trailers )
-    ( grpc_metadata_free . call request_trailers )
-}
+// A call taken out of the table by hand (__grpc_server_prune): dropping the
+// parameter releases its parts.
+@ __grpc_server_call_free sink GrpcServerCall call → v {}
 
-@ grpc_server_free sink GrpcServer server → v {
-    ( vec_free_with [GrpcServerCall] . server calls \ GrpcServerCall call → v { ( __grpc_server_call_free call ) } )
-    ( h2_conn_free . server transport )
-}
+// The connection's last frames are flushed (best effort) and its state
+// released; the calls go with the drop glue.
+% Drop GrpcServer { @ drop GrpcServer server → v { ( h2_conn_free . server transport ) } }
+
+// Let go of `server` now rather than at the end of its owner's scope.
+@ grpc_server_free sink GrpcServer server → v {}
 
 @ __grpc_server_transport_error H2ConnErr error → GrpcError {
     ^ ?? error {
@@ -172,6 +170,8 @@ $ `stdlib/ext/http2_server.nu`
     ~ < r ( vec_len [GrpcServerCall] . server calls ) {
         : GrpcServerCall call . p r
         ? | . call cancelled & & . call output_finished . call input_ended . call end_notified {
+            // Not redundant: the table is compacted by hand, so a finished
+            // call leaves it here (vec_set_len below drops nothing).
             ( __grpc_server_call_free call )
         } {
             = . p w call
@@ -220,10 +220,9 @@ $ `stdlib/ext/http2_server.nu`
         ( vec_push [Header] headers ( grpc_header_clone . ( vec_data [Header] encoded ) k ) )
         = k + k 1
     }
-    ( grpc_metadata_free encoded )
     ?? ( grpc_headers_check_size headers max_metadata ) {
         T _ → { ^ @ !( Vec Header ) GrpcError { T headers } }
-        F e → { ( grpc_metadata_free headers ) ^ @ !( Vec Header ) GrpcError { F e } }
+        F e → { ^ @ !( Vec Header ) GrpcError { F e } }
     }
 }
 
@@ -241,7 +240,6 @@ $ `stdlib/ext/http2_server.nu`
     : i previous ( __grpc_server_write_begin server . call deadline_ns )
     : !v H2ConnErr written ( h2_stream_headers . server transport sid headers F )
     ( tcp_set_write_deadline . . server transport tcp previous )
-    ( grpc_metadata_free headers )
     ?? written { T _ → {} F e → { = . server closed T ^ @ !v GrpcError { F ( __grpc_server_transport_error e ) } } }
     = . call headers_sent T
     = . call output_encoding encoding
@@ -252,7 +250,6 @@ $ `stdlib/ext/http2_server.nu`
 @ __grpc_server_default_headers inout GrpcServer server i sid → !v GrpcError {
     : ( Vec Header ) empty ( grpc_metadata_new )
     : !v GrpcError result ( grpc_server_send_metadata server sid empty GRPC_IDENTITY )
-    ( grpc_metadata_free empty )
     ^ result
 }
 
@@ -272,7 +269,6 @@ $ `stdlib/ext/http2_server.nu`
                     : *u p ( vec_data [u] . call outgoing )
                     : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i p . call outgoing_pos - length . call outgoing_pos )
                     : !i H2ConnErr written ( h2_stream_data . server transport . call stream_id view F )
-                    ( vec_free [u] view )
                     ?? written {
                         F e → {
                             ( tcp_set_write_deadline . . server transport tcp previous )
@@ -321,7 +317,6 @@ $ `stdlib/ext/http2_server.nu`
     : i queued - ( vec_len [u] . call outgoing ) . call outgoing_pos
     ? | > n - . . server limits max_buffer queued
     > n - . . server limits max_connection_buffer ( __grpc_server_buffered server ) {
-        ( vec_free [u] frame )
         ^ @ !v GrpcError { F ( grpc_error GRPC_RESOURCE_EXHAUSTED `response queue exceeds limit` ) }
     } {}
     ? > . call outgoing_pos 0 {
@@ -332,7 +327,6 @@ $ `stdlib/ext/http2_server.nu`
         = . call outgoing_pos 0
     } {}
     ( vec_extend [u] . call outgoing frame )
-    ( vec_free [u] frame )
     ( __grpc_server_put server idx call )
     ^ ( grpc_server_flush server )
 }
@@ -344,7 +338,7 @@ $ `stdlib/ext/http2_server.nu`
     : ( Vec Header ) trailers \ ( grpc_status_headers status metadata . . server limits max_metadata )
     ? ! . initial headers_sent {
         : !v GrpcError hr ( __grpc_server_default_headers server sid )
-        ?? hr { T _ → {} F e → { ( grpc_metadata_free trailers ) ^ @ !v GrpcError { F e } } }
+        ?? hr { T _ → {} F e → { ^ @ !v GrpcError { F e } } }
     } {}
     : GrpcServerCall call ( __grpc_server_get server idx )
     ( grpc_metadata_free . call trailers )
@@ -360,12 +354,10 @@ $ `stdlib/ext/http2_server.nu`
     : GrpcStatus status ( grpc_status code message )
     : ( Vec Header ) empty ( grpc_metadata_new )
     : !( Vec Header ) GrpcError encoded ( grpc_status_headers status empty . . server limits max_metadata )
-    ( grpc_metadata_free empty )
-    ( grpc_status_free status )
     : ~ ( Vec Header ) trailers ( grpc_metadata_new )
     ?? encoded {
-        T headers → { ( grpc_metadata_free trailers ) = trailers headers }
-        F e → { ( grpc_metadata_free trailers ) ^ @ !v GrpcError { F e } }
+        T headers → { = trailers headers }
+        F e → { ^ @ !v GrpcError { F e } }
     }
     : i idx ( __grpc_server_index server sid )
     : ~ b headers_sent F
@@ -375,7 +367,7 @@ $ `stdlib/ext/http2_server.nu`
         = headers_sent . call headers_sent
         = output_finished . call output_finished
     } {}
-    ? output_finished { ( grpc_metadata_free trailers ) ^ @ !v GrpcError { T 0 } } {}
+    ? output_finished { ^ @ !v GrpcError { T 0 } } {}
     : i previous ( __grpc_server_write_begin server 0 )
     : ~ ! v H2ConnErr result @ !v H2ConnErr { T 0 }
     ? headers_sent {
@@ -393,15 +385,12 @@ $ `stdlib/ext/http2_server.nu`
         ?? ( grpc_headers_check_size headers . . server limits max_metadata ) {
             T _ → {}
             F e → {
-                ( grpc_metadata_free headers ) ( grpc_metadata_free trailers )
                 ( tcp_set_write_deadline . . server transport tcp previous )
                 ^ @ !v GrpcError { F e }
             }
         }
         = result ( h2_stream_headers . server transport sid headers T )
-        ( grpc_metadata_free headers )
     }
-    ( grpc_metadata_free trailers )
     ( tcp_set_write_deadline . . server transport tcp previous )
     ?? result { T _ → {} F e → { = . server closed T ^ @ !v GrpcError { F ( __grpc_server_transport_error e ) } } }
     ? >= idx 0 {
@@ -427,12 +416,10 @@ $ `stdlib/ext/http2_server.nu`
             : String part ( string_substr value start - k start )
             : String trimmed ( string_trim part )
             ? != 0 ( nurl_str_eq ( string_data trimmed ) `gzip` ) { = found T } {}
-            ( string_free trimmed ) ( string_free part )
             = start + k 1
         } {}
         = k + k 1
     }
-    ( string_free value )
     ^ found
 }
 
@@ -451,7 +438,6 @@ $ `stdlib/ext/http2_server.nu`
     ? | != ( grpc_header_count headers `content-type` ) 1 ! ( grpc_content_type content_type ) {
         = error_code GRPC_INTERNAL = error_message `unsupported gRPC content-type` = http_status 415
     } {}
-    ( string_free content_type )
     ? | != ( grpc_header_count headers `te` ) 1
     == 0 ( nurl_str_eq ( grpc_header_value headers `te` ) `trailers` ) {
         = error_code GRPC_INVALID_ARGUMENT = error_message `gRPC requires te: trailers`
@@ -465,16 +451,15 @@ $ `stdlib/ext/http2_server.nu`
     : ~ i encoding GRPC_IDENTITY
     ?? ( grpc_encoding ( grpc_header_value headers `grpc-encoding` ) ) {
         T value → { = encoding value }
-        F e → { = error_code . e code = error_message `unsupported grpc-encoding` ( grpc_error_free e ) }
+        F e → { = error_code . e code = error_message `unsupported grpc-encoding` }
     }
     : ~ i deadline_ns 0
     ? == ( grpc_header_count headers `grpc-timeout` ) 1 {
         : String timeout ( string_from ( grpc_header_value headers `grpc-timeout` ) )
         : !i GrpcError parsed ( grpc_timeout_ns timeout )
-        ( string_free timeout )
         ?? parsed {
             T duration → { = deadline_ns ( grpc_deadline_after ( monotonic_ns ) duration ) }
-            F e → { = error_code . e code = error_message `invalid grpc-timeout` ( grpc_error_free e ) }
+            F e → { = error_code . e code = error_message `invalid grpc-timeout` }
         }
     } {}
     ? & > deadline_ns 0 >= ( monotonic_ns ) deadline_ns {
@@ -482,17 +467,16 @@ $ `stdlib/ext/http2_server.nu`
     } {}
     : ~ ( Vec Header ) metadata ( grpc_metadata_new )
     ?? ( grpc_metadata_decode headers . . server limits max_metadata ) {
-        T value → { ( grpc_metadata_free metadata ) = metadata value }
-        F e → { = error_code . e code = error_message `invalid request metadata` ( grpc_error_free e ) }
+        T value → { = metadata value }
+        F e → { = error_code . e code = error_message `invalid request metadata` }
     }
     ? != error_code GRPC_OK {
-        ( grpc_metadata_free metadata )
         \ ( __grpc_server_reject server sid error_code error_message http_status )
         ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid error_code ) }
     } {}
     : !GrpcDecoder GrpcError dr ( grpc_decoder . . server limits max_message . . server limits max_buffer encoding )
     ?? dr {
-        F e → { ( grpc_metadata_free metadata ) ^ @ !GrpcServerEvent GrpcError { F e } }
+        F e → { ^ @ !GrpcServerEvent GrpcError { F e } }
         T decoder → {
             : GrpcServerCall call @ GrpcServerCall { sid ( string_from method ) decoder deadline_ns
                 . event end_stream F F F F ( __grpc_accept_gzip ( grpc_header_value headers `grpc-accept-encoding` ) )
@@ -534,7 +518,6 @@ $ `stdlib/ext/http2_server.nu`
                 F e → {
                     : i code . e code
                     : !v GrpcError rejected ( __grpc_server_reject server . call stream_id code ( string_data . e message ) 200 )
-                    ( grpc_error_free e )
                     \ rejected
                     ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) . call stream_id code ) }
                 }
@@ -545,7 +528,6 @@ $ `stdlib/ext/http2_server.nu`
                                 ( grpc_server_event_message ) . call stream_id ( string_clone . call method )
                                 ( grpc_metadata_new ) . message data GRPC_OK } }
                     } {}
-                    ( grpc_message_free message )
                 }
             }
             ? . call input_ended {
@@ -554,7 +536,6 @@ $ `stdlib/ext/http2_server.nu`
                     F e → {
                         : i code . e code
                         : !v GrpcError rejected ( __grpc_server_reject server . call stream_id code ( string_data . e message ) 200 )
-                        ( grpc_error_free e )
                         \ rejected
                         ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) . call stream_id code ) }
                     }
@@ -608,7 +589,6 @@ $ `stdlib/ext/http2_server.nu`
                 F e → {
                     : i code . e code
                     : !v GrpcError rejected ( __grpc_server_reject server sid code ( string_data . e message ) 200 )
-                    ( grpc_error_free e )
                     \ rejected
                     ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid code ) }
                 }
@@ -623,7 +603,6 @@ $ `stdlib/ext/http2_server.nu`
                 F e → {
                     : i code . e code
                     : !v GrpcError rejected ( __grpc_server_reject server sid code ( string_data . e message ) 200 )
-                    ( grpc_error_free e )
                     \ rejected
                     ^ @ !GrpcServerEvent GrpcError { T ( __grpc_server_event ( grpc_server_event_cancelled ) sid code ) }
                 }
@@ -654,7 +633,6 @@ $ `stdlib/ext/http2_server.nu`
         F e → { ^ @ !GrpcServerEvent GrpcError { F e } }
         T event → {
             ? != . event kind ( grpc_server_event_control ) { ^ @ !GrpcServerEvent GrpcError { T event } } {}
-            ( grpc_server_event_free event )
         }
     }
     \ ( grpc_server_flush server )
@@ -683,7 +661,6 @@ $ `stdlib/ext/http2_server.nu`
         }
         T event → {
             : !GrpcServerEvent GrpcError received ( __grpc_server_receive server event )
-            ( h2_event_free event )
             ^ received
         }
     }

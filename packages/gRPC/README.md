@@ -21,29 +21,34 @@ $ `deps/grpc/src/client.nu`
 
 @ echo GrpcClient client ( Vec u ) request → !v GrpcError {
     : ( Vec Header ) metadata ( grpc_metadata_new )
-    ; { ( grpc_metadata_free metadata ) }
     : ~ GrpcCallOptions options ( grpc_call_options )
     = . options timeout_ns 5000000000
     : GrpcUnaryResponse reply \ ( grpc_unary client
         `/example.Echo/Unary` request metadata options )
     // Decode reply.data with stdlib/ext/protobuf.nu and the service schema.
-    ( grpc_unary_response_free reply )
     ^ @ !v GrpcError { T 0 }
 }
 ```
 
+Nothing is released by hand: metadata, replies, messages, statuses, errors
+and events are values their owner drops, a `GrpcClient` is a handle whose
+last owner (the client binding and every call opened on it) disconnects the
+transport it opened, a dropped `GrpcCall` cancels an unfinished call, and a
+dropped `GrpcServer` flushes and releases its HTTP/2 state. The `*_free`
+functions and `grpc_client_close` remain as optional early releases.
+
 `grpc_client_connect_tls(host, port, verify)` verifies certificates when
 `verify` is true and requires ALPN `h2`. `SSL_CERT_FILE` selects a private CA
 bundle. `grpc_client_connect_h2c(host, port)` explicitly selects cleartext
-HTTP/2 prior knowledge. Release calls before `grpc_client_close(client)`.
+HTTP/2 prior knowledge. Each call holds a share of its client, so the
+transport stays up until the client and its last call are gone.
 
 For streaming, open a `GrpcCall` with `grpc_call_open(client, path, metadata,
 options)`, send borrowed payloads with `grpc_call_send`, and finish the request
 side with `grpc_call_half_close`. `grpc_call_receive` returns an owned
 `GrpcMessage`: `present = true` includes an actual message, even when its
 payload is empty. `present = false` means successful completion. A non-OK
-status returns `GrpcError` after any preceding response messages. Free each
-message with `grpc_message_free` and the call with `grpc_call_free`.
+status returns `GrpcError` after any preceding response messages.
 
 Requests and responses may overlap: bidirectional calls can receive before
 half-closing. A client and its calls have one owner and one driver; concurrent
@@ -55,7 +60,7 @@ Call options specify the deadline duration in nanoseconds (`0` means no
 deadline), send/receive message limits, metadata limit, and `GRPC_IDENTITY` or
 `GRPC_GZIP` request compression. Default message size is 4 MiB; default metadata
 size is 8 KiB. Limits apply to both compressed and decompressed message bytes.
-`grpc_call_cancel` cancels one call; freeing an unfinished call cancels it too.
+`grpc_call_cancel` cancels one call; dropping an unfinished call cancels it too.
 
 ## Server
 
@@ -71,15 +76,16 @@ bounded defaults. Events carry a stream ID and one of:
 - `grpc_server_event_control`: transport progress; the driver continues.
 - `grpc_server_event_closed`: the connection has ended.
 
-Free events with `grpc_server_event_free`. Send initial metadata with
+Send initial metadata with
 `grpc_server_send_metadata`, messages with `grpc_server_send`, and finish with
 `grpc_server_finish(server, stream_id, status, trailing_metadata)`. Finishing
 queues mandatory status trailers after pending messages; errors may finish
 without messages. `grpc_server_flush` advances queued writes without reading.
 Application handlers decide method routing, cardinality, authorization and
 protobuf schema rules. Stop application work on cancellation, and keep slow
-work out of the connection's driver. Free the server, then close its borrowed
-TCP connection.
+work out of the connection's driver. The server never owns its TCP
+connection: let the server go (its drop flushes the HTTP/2 connection), then
+close the socket.
 
 For scheduled messages or application work, `grpc_server_next_until(server,
 deadline_ns)` uses an absolute monotonic polling deadline and returns a control
@@ -102,7 +108,7 @@ padded/unpadded Base64 and comma-joined binary values on the wire. Duplicate
 metadata is preserved. Reserved transport keys cannot be injected through
 application metadata.
 
-`GrpcError` owns its message; release it with `grpc_error_free`. All 17 status
+`GrpcError` owns its message (dropped with it). All 17 status
 codes are available as `GRPC_*` constants. `GrpcStatus` also carries optional
 serialized `google.rpc.Status` details. The library checks that a details code
 agrees with `grpc-status`. Status messages use UTF-8 percent encoding; malformed
