@@ -61,7 +61,7 @@ $ `packages/nwasm/src/interp.nu`
 // hands the second run freed memory. It did, and the guest reported
 // it the way a machine with no allocator debugging can: a garbled
 // error, then "not a wasm module", then #GP.
-@ __run_wasm * Module m s src → WcRun {
+@ __run_wasm Module m s src → WcRun {
     : ~ i ok 0
     : ( Vec u ) out ( vec_new [u] )
     : ~ String err ( string_new )
@@ -71,7 +71,7 @@ $ `packages/nwasm/src/interp.nu`
             ( string_free err )
             = err ( string_from `nurlc.wasm has no _start export` )
         } {
-            : *Interp it ( interp_new m )
+            : Interp it ( interp_new m )
             ( interp_capture it )
             // The compiler reads its input through WASI path_open,
             // which resolves against a PREOPEN. "." is the initfs
@@ -84,9 +84,9 @@ $ `packages/nwasm/src/interp.nu`
             ( interp_flush it )
             ? ( interp_trapped it ) {
                 ( string_free err )
-                = err ( bytes_to_str . it trapmsg )
+                = err ( bytes_to_str ( interp_trapmsg it ) )
             } {
-                ? != . it exit_code 0 {
+                ? != ( interp_exit_code it ) 0 {
                     ( string_free err )
                     = err ( bytes_to_str ( interp_stderr_bytes it ) )
                 } {
@@ -113,10 +113,10 @@ $ `packages/nwasm/src/interp.nu`
             ( nurl_print ( nurl_str_int ( vec_len [u] wasm ) ) )
             ( nurl_print `\n` )
             // decode once; `wasm` belongs to the module from here on
-            : *Module m ( module_decode wasm )
-            ? ! . m ok {
+            : Module m ( module_decode wasm )
+            ? ! ( module_ok m ) {
                 ( nurl_print `nurlc.wasm did not decode: ` )
-                : String dm ( bytes_to_str . m err )
+                : String dm ( bytes_to_str ( module_err m ) )
                 ( nurl_print ( string_data dm ) )
                 ( nurl_print `\n` )
                 ( string_free dm )

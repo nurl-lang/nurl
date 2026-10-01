@@ -491,10 +491,10 @@ $ `token.nu`
 // exit 0 + partial on stdout — with the pipe replaced by
 // interp_capture and the module file replaced by the bytes we already
 // hold, so nothing here touches a filesystem or spawns anything.
-// CONSUMES `wasm`: module_decode stores the handle as the module's
-// byte image (`. m code`) and module_free frees it — the caller must
-// not free it again (that double free cost a debugging round as a
-// heap corruption that crashed a LATER hmac on the same fiber).
+// CONSUMES `wasm`: module_decode takes it over as the module's byte
+// image, released with the module — the caller must not free it again
+// (that double free cost a debugging round as a heap corruption that
+// crashed a LATER hmac on the same fiber).
 // The module is decoded per chunk rather than cached: worker threads
 // share one handler closure, a shared decoded-module table would be a
 // data race, and the decode is a straight single pass over bytes that
@@ -503,19 +503,16 @@ $ `token.nu`
     : ~ i v 0
     : ~ i ok 0
     : ~ String err ( string_new )
-    : *Module m ( module_decode wasm )
-    ? ! . m ok {
-        : String dm ( bytes_to_str . m err )
-        ( string_free err )
+    : Module m ( module_decode wasm )
+    ? ! ( module_ok m ) {
+        : String dm ( bytes_to_str ( module_err m ) )
         = err ( string_concat ( string_from `wasm module did not decode: ` ) ( string_from ( string_data dm ) ) )
-        ( string_free dm )
     } {
         : i fidx ( module_export_func m `_start` )
         ? < fidx 0 {
-            ( string_free err )
             = err ( string_from `wasm module has no _start export (not a WASI command)` )
         } {
-            : *Interp it ( interp_new m )
+            : Interp it ( interp_new m )
             ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
             ( interp_capture it )
             ( interp_push_arg it `kernel.wasm` )
@@ -527,31 +524,23 @@ $ `token.nu`
             ( exec_func it fidx )
             ( interp_flush it )
             ? ( interp_trapped it ) {
-                : String tm ( bytes_to_str . it trapmsg )
-                ( string_free err )
+                : String tm ( bytes_to_str ( interp_trapmsg it ) )
                 = err ( string_concat ( string_from `wasm trap: ` ) ( string_from ( string_data tm ) ) )
-                ( string_free tm )
             } {
-                ? != . it exit_code 0 {
+                ? != ( interp_exit_code it ) 0 {
                     : String se ( bytes_to_str ( interp_stderr_bytes it ) )
-                    ( string_free err )
                     = err ( string_trim se )
-                    ( string_free se )
                     ? == ( string_len err ) 0 {
-                        ( string_free err )
                         = err ( string_from `wasm module exited non-zero with no message` )
                     } {}
                 } {
                     : String so ( bytes_to_str ( interp_stdout_bytes it ) )
                     = ok 1
                     = v ( nurl_str_to_int ( string_data so ) )
-                    ( string_free so )
                 }
             }
-            ( interp_free it )
         }
     }
-    ( module_free m )
     ^ @ WasmRun { ok v err }
 }
 

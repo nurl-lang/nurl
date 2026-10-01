@@ -23,8 +23,6 @@ $ `stdlib/std/dns.nu`
             : String ports ( string_substr addr + colon 1 - ( string_len addr ) + colon 1 )
             : i port ( nurl_str_to_int ( string_data ports ) )
             ( nurl_print `listening on port > 0: ` ) ( nurl_println ? > port 0 `yes` `no` )
-            ( string_free ports )
-            ( string_free addr )
 
             ?? ( tcp_connect `127.0.0.1` port ) {
                 F e → { ( nurl_print `connect: ERR ` ) ( nurl_println ( net_err_name e ) ) = rc 1 }
@@ -61,15 +59,12 @@ $ `stdlib/std/dns.nu`
                             : i ready ( tcp_wait_io c T T 0 )
                             ( nurl_println ? == ready 1 `combined readiness: yes` `combined readiness: no` )
                             ? != ready 1 { = rc 1 } {}
-                            ( vec_free [u] probe )
                             ?? ( tcp_write_str c `ping over wasm\n` ) { T _ → {} F e → { ( nurl_println `write: ERR` ) = rc 1 } }
                             ?? ( tcp_read_chunk sc 64 ) {
                                 T bytes → {
                                     ( nurl_print `server read: ` )
                                     : String got ( bytes_to_str bytes )
                                     ( nurl_print ( string_data got ) )
-                                    ( string_free got )
-                                    ( vec_free [u] bytes )
                                 }
                                 F e → { ( nurl_print `read: ERR ` ) ( nurl_println ( net_err_name e ) ) = rc 1 }
                             }
@@ -88,10 +83,6 @@ $ `stdlib/std/dns.nu`
         T ips → {
             ( nurl_print `dns localhost count > 0: ` )
             ( nurl_println ? > ( vec_len [String] ips ) 0 `yes` `no` )
-            : i n ( vec_len [String] ips )
-            : ~ i k 0
-            ~ < k n { ?? ( vec_get [String] ips k ) { T x → ( string_free x ) F → {} } = k + k 1 }
-            ( vec_free [String] ips )
         }
         F e → { ( nurl_println `dns: ERR` ) = rc 1 }
     }

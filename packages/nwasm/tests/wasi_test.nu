@@ -30,18 +30,16 @@ $ `src/interp.nu`
     : !( Vec u ) ParseErr dr ( bytes_from_hex hex )
     ?? dr {
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? . m ok {
-                : *Interp it ( interp_new m )
+            : Module m ( module_decode bytes )
+            ? ( module_ok m ) {
+                : Interp it ( interp_new m )
                 ? != 0 ( nurl_str_len dir ) { ( interp_set_preopen it dir dir ) } {}
                 ( interp_push_arg it label )
                 ( exec_func it ( module_export_func m `_start` ) )
                 ? ( interp_trapped it ) { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` trapped\n` ) = fail 1 } {}
                 ? ! ( interp_exited it ) { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` no proc_exit\n` ) = fail 1 } {}
-                ? != 0 . it exit_code { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` nonzero exit\n` ) = fail 1 } {}
-                ( interp_free it )
+                ? != 0 ( interp_exit_code it ) { ( nurl_print `FAIL: ` ) ( nurl_print label ) ( nurl_print ` nonzero exit\n` ) = fail 1 } {}
             } { ( nurl_print `FAIL: decode\n` ) = fail 1 }
-            ( module_free m )
         }
         F → { ( nurl_print `FAIL: hex\n` ) = fail 1 }
     }
@@ -52,29 +50,27 @@ $ `src/interp.nu`
     // Mirror the CLI's engine-mode switches so the suite exercises the
     // same tier the user runs: JIT on by default, NURL_NWASM_JIT=0 keeps
     // the pure interpreter, PIN=0 unpins, GUARD=0 keeps bounds checks.
-    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
-    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
-    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
+    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
+    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
+    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
     : ~ i fails 0
     // ── case 1: fd_write + proc_exit(42) ──
     : !( Vec u ) ParseErr dr ( bytes_from_hex ( wasm_wasi ) )
     ?? dr {
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? . m ok {
+            : Module m ( module_decode bytes )
+            ? ( module_ok m ) {
                 : i fidx ( module_export_func m `_start` )
-                : *Interp it ( interp_new m )
+                : Interp it ( interp_new m )
                 ( interp_push_arg it `wasitest` )
                 ( exec_func it fidx )
                 // the module writes "hi from wasi" to stdout above this line
                 ? ( interp_trapped it ) { ( nurl_print `FAIL: trapped\n` ) = fails + fails 1 } {}
                 ? ! ( interp_exited it ) { ( nurl_print `FAIL: did not call proc_exit\n` ) = fails + fails 1 } {}
-                ( nurl_print `exit_code 42:    ` ) ( nurl_println_int . it exit_code )
-                ( nurl_print ? == . it exit_code 42 ` == ` ` != ` ) ( nurl_print `42\n` )
-                ? != . it exit_code 42 { = fails + fails 1 } {}
-                ( interp_free it )
+                ( nurl_print `exit_code 42:    ` ) ( nurl_println_int ( interp_exit_code it ) )
+                ( nurl_print ? == ( interp_exit_code it ) 42 ` == ` ` != ` ) ( nurl_print `42\n` )
+                ? != ( interp_exit_code it ) 42 { = fails + fails 1 } {}
             } { ( nurl_print `FAIL: module did not decode\n` ) = fails + fails 1 }
-            ( module_free m )
         }
         F → { ( nurl_print `FAIL: hex parse\n` ) = fails + fails 1 }
     }
@@ -95,9 +91,9 @@ $ `src/interp.nu`
     : !( Vec u ) ParseErr dr3 ( bytes_from_hex ( wasm_wasi ) )
     ?? dr3 {
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? . m ok {
-                : *Interp it ( interp_new m )
+            : Module m ( module_decode bytes )
+            ? ( module_ok m ) {
+                : Interp it ( interp_new m )
                 ( interp_capture it )
                 ( interp_push_arg it `wasitest` )
                 ( exec_func it ( module_export_func m `_start` ) )
@@ -108,10 +104,7 @@ $ `src/interp.nu`
                 ( nurl_print ? != okc 0 `== ` `!= ` )
                 ( nurl_print `"hi from wasi\\n"\n` )
                 ? == okc 0 { = fails + fails 1 } {}
-                ( string_free gs )
-                ( interp_free it )
             } { ( nurl_print `FAIL: module did not decode (capture case)\n` ) = fails + fails 1 }
-            ( module_free m )
         }
         F → { ( nurl_print `FAIL: hex parse (capture case)\n` ) = fails + fails 1 }
     }

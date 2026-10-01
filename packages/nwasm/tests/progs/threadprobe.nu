@@ -23,7 +23,6 @@ $ `stdlib/std/thread.nu`
             : ( Vec i ) v ( vec_new [i] )
             : ~ i k 0
             ~ < k 20000 { ( vec_push [i] v k ) = sum + sum 1 = k + k 1 }
-            ( vec_free [i] v )
             = r + r 1
         }
         ( mutex_lock m )
@@ -44,6 +43,6 @@ $ `stdlib/std/thread.nu`
     ~ < j n { ?? ( vec_get [Thread] ths j ) { T t → ( thread_join t ) F → {} } = j + j 1 }
     ( nurl_print `threads: ` ) ( nurl_println ( nurl_str_int n ) )
     ( nurl_print `total: ` ) ( nurl_println ( nurl_str_int ( nurl_peek # s total 0 ) ) )
-    ( nurl_free # s total ) ( mutex_free m )
+    ( nurl_free # s total )
     ^ 0
 }

@@ -27,25 +27,23 @@ $ `src/interp.nu`
     : ~ i r -999999
     ?? dr {
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? . m ok {
+            : Module m ( module_decode bytes )
+            ? ( module_ok m ) {
                 : i fidx ( module_export_func m export )
                 ? >= fidx 0 {
-                    : *Interp it ( interp_new m )
+                    : Interp it ( interp_new m )
                     ( interp_run_start it )
                     ( exec_func it fidx )
                     ? want_trap {
                         = r ? ( interp_trapped it ) 1 0
                     } {
                         ? ! ( interp_trapped it ) {
-                            : i n ( vec_len [i] . it vs )
-                            ? > n 0 { = r ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 } } {}
+                            : i n ( vec_len [i] ( interp_stack it ) )
+                            ? > n 0 { = r ?? ( vec_get [i] ( interp_stack it ) - n 1 ) { T x → x F → 0 } } {}
                         } {}
                     }
-                    ( interp_free it )
                 } {}
-            } { ( nurl_print `decode failed: ` ) ( nurl_print ( string_data ( bytes_to_str . m err ) ) ) ( nurl_print `\n` ) }
-            ( module_free m )
+            } { ( nurl_print `decode failed: ` ) ( nurl_print ( string_data ( bytes_to_str ( module_err m ) ) ) ) ( nurl_print `\n` ) }
         }
         F → {}
     }
@@ -68,9 +66,9 @@ $ `src/interp.nu`
     // Mirror the CLI's engine-mode switches so the suite exercises the
     // same tier the user runs: JIT on by default, NURL_NWASM_JIT=0 keeps
     // the pure interpreter, PIN=0 unpins, GUARD=0 keeps bounds checks.
-    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
-    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
-    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
+    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
+    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
+    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
     // rmw.add twice into the same cell, then read it back
     ( ck `add 5+37:       ` ( ev0 `addload` ) 42 )
     // cmpxchg: the mismatching one leaves the cell, the matching one swaps
