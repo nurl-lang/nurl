@@ -9,12 +9,12 @@ schedule. Pure NURL; the `gpu` package for fitting many series at once.
 ```
 $ `arima/src/arima.nu`
 
-: *ArimaModel m ( arima_fit y ( arima_spec_seasonal 0 1 1 0 1 1 12 ) )   // CSS-ML
+: ArimaModel m ( arima_fit y ( arima_spec_seasonal 0 1 1 0 1 1 12 ) )   // CSS-ML
 : ArimaForecast fc ( arima_forecast m 12 )        // means and standard errors
 : ArimaUpdate u ( arima_update m y_new )          // one Kalman step: innovation, variance, z
 : Json report ( arima_coef m )                    // coefficients, σ², loglik, AIC, AICc, BIC, se
 : String saved ( arima_to_json m )                // bit-exact, state included
-: *ArimaModel best ( arima_auto y 12 )            // stepwise order selection by AICc
+: ArimaModel best ( arima_auto y 12 )            // stepwise order selection by AICc
 ```
 
 ## What it computes
@@ -172,34 +172,37 @@ on a CUDA device.
 ( arima_spec p d q )                          → ArimaSpec
 ( arima_spec_seasonal p d q P D Q s )         → ArimaSpec   (mean on when d + D = 0)
 ( arima_spec_with_mean spec on )              → ArimaSpec
-( arima_fit y spec )                          → *ArimaModel  CSS-ML
-( arima_fit_method y spec ARIMA_CSS|ARIMA_ML ) → *ArimaModel
-( arima_auto y s )                            → *ArimaModel  s = season, 0 = none
-( arima_auto_d y s d D )                      → *ArimaModel  with the differences given
-( arima_forecast m h )                        → ArimaForecast { mean se }   (arima_forecast_free)
+( arima_fit y spec )                          → ArimaModel   CSS-ML
+( arima_fit_method y spec ARIMA_CSS|ARIMA_ML ) → ArimaModel
+( arima_auto y s )                            → ArimaModel   s = season, 0 = none
+( arima_auto_d y s d D )                      → ArimaModel   with the differences given
+( arima_forecast m h )                        → ArimaForecast { mean se }
 ( arima_update m y )                          → ArimaUpdate { predicted innovation variance z }   NaN y = a gap
 ( arima_restart m )                           the state back to a fresh fit's; replay with arima_update
 ( arima_restart_at m t0 )                     the same, the regressors' clock at row t0 of the fit's origin
-( arima_clone m )                             → *ArimaModel  deep copy, state included
-( arima_fit_harmonic y periods k spec method ) → *ArimaModel  Fourier terms of `periods` (rows), k harmonics each, ARIMA on the rest
-( arima_auto_harmonic y periods k s )         → *ArimaModel  the same, the residual order searched (s = its season, 0 = none)
-( arima_fit_regress y periods k trend spec method ) → *ArimaModel  the regressors in full: Fourier terms and, with `trend`, a linear drift
-( arima_auto_regress y periods k trend s )    → *ArimaModel  the same, the residual order searched
+( arima_clone m )                             → ArimaModel   deep copy, state included
+( arima_fit_harmonic y periods k spec method ) → ArimaModel   Fourier terms of `periods` (rows), k harmonics each, ARIMA on the rest
+( arima_auto_harmonic y periods k s )         → ArimaModel   the same, the residual order searched (s = its season, 0 = none)
+( arima_fit_regress y periods k trend spec method ) → ArimaModel   the regressors in full: Fourier terms and, with `trend`, a linear drift
+( arima_auto_regress y periods k trend s )    → ArimaModel   the same, the residual order searched
 ( arima_coef m )                              → Json
-( arima_to_json m ) / ( arima_from_json s )   → String / ?*ArimaModel
+( arima_to_json m ) / ( arima_from_json s )   → String / ?ArimaModel
 ( arima_phi m ) ( arima_theta m ) ( arima_sphi m ) ( arima_stheta m ) ( arima_mu m )
 ( arima_sigma2 m ) ( arima_loglik m ) ( arima_aic m ) ( arima_aicc m ) ( arima_n m ) ( arima_converged m )
-( arima_fit_many series spec method )         → ( Vec *ArimaModel )   (arima_models_free)
-( arima_fit_many_gpu series spec method )     → ( Vec *ArimaModel )   src/arima_gpu.nu
+( arima_fit_many series spec method )         → ( Vec ArimaModel )
+( arima_fit_many_gpu series spec method )     → ( Vec ArimaModel )   src/arima_gpu.nu
 ( arima_difference y d D s ) ( arima_kpss x ) ( arima_ndiffs y ) ( arima_nsdiffs y s d ) ( arima_acf x k )
-( arima_free m )
+( arima_evals m ) ( arima_se m ) ( arima_spec_of m )
+( arima_xk m ) ( arima_xcoef m ) ( arima_xt m ) ( arima_xtr m )   the regressors
+( arima_free m )                              early release (optional)
 ```
 
-`ArimaModel` fields a caller may read: `spec`, `sigma2`, `loglik`,
-`aic`, `aicc`, `bic`, `n` (points absorbed), `n_fit`, `n_used`
-(differenced points in the likelihood), `method`, `converged`,
-`iterations`, `evals`, `se`, and after an update `last_innovation`,
-`last_variance`, `last_predicted`.
+An `ArimaModel` is a handle on the model's state: every copy of it is the
+same model (stepping one steps them all — `arima_clone` makes an
+independent one), and its last owner releases it. Nothing is freed by
+hand; `arima_free` / `arima_forecast_free` / `arima_models_free` are
+optional early releases. The state is read through the accessors above
+(`arima_se` and `arima_xcoef` lend vectors valid while the model is).
 
 ## CLI
 

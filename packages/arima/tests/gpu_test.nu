@@ -41,10 +41,10 @@ $ `src/arima_gpu.nu`
     ^ y
 }
 
-@ same_model * ArimaModel a * ArimaModel b → b {
+@ same_model ArimaModel a ArimaModel b → b {
     ? != ( f64_to_bits ( arima_loglik a ) ) ( f64_to_bits ( arima_loglik b ) ) { ^ F } {}
     ? != ( f64_to_bits ( arima_sigma2 a ) ) ( f64_to_bits ( arima_sigma2 b ) ) { ^ F } {}
-    ? != . a evals . b evals { ^ F } {}
+    ? != ( arima_evals a ) ( arima_evals b ) { ^ F } {}
     : ( Vec f ) pa ( arima_phi a )
     : ( Vec f ) pb ( arima_phi b )
     : ~ i k 0
@@ -54,7 +54,7 @@ $ `src/arima_gpu.nu`
     = k 0
     ~ < k ( vec_len [f] ta ) { ? != ( f64_to_bits ( _ar_at ta k ) ) ( f64_to_bits ( _ar_at tb k ) ) { ^ F } {} = k + k 1 }
     = k 0
-    ~ < k ( vec_len [f] . a se ) { ? != ( f64_to_bits ( _ar_at . a se k ) ) ( f64_to_bits ( _ar_at . b se k ) ) { ^ F } {} = k + k 1 }
+    ~ < k ( vec_len [f] ( arima_se a ) ) { ? != ( f64_to_bits ( _ar_at ( arima_se a ) k ) ) ( f64_to_bits ( _ar_at ( arima_se b ) k ) ) { ^ F } {} = k + k 1 }
     ^ T
 }
 
@@ -65,31 +65,28 @@ $ `src/arima_gpu.nu`
     ( vec_push [( Vec f )] series ( sim 1200 0.8 -0.2 23 ) )
     : ArimaSpec sp ( arima_spec_with_mean ( arima_spec 1 0 1 ) T )
     : i t0 ( now_ms )
-    : ( Vec * ArimaModel ) dev ( arima_fit_many_gpu series sp method )
+    : ( Vec ArimaModel ) dev ( arima_fit_many_gpu series sp method )
     : i dt - ( now_ms ) t0
     : i t1 ( now_ms )
-    : ( Vec * ArimaModel ) cpu ( arima_fit_many series sp method )
+    : ( Vec ArimaModel ) cpu ( arima_fit_many series sp method )
     : i dc - ( now_ms ) t1
     : ~ b same T
     : ~ i i 0
     ~ < i 3 {
-        ?? ( vec_get [* ArimaModel] dev i ) {
-            T md → { ?? ( vec_get [* ArimaModel] cpu i ) { T mc → { ? ( same_model md mc ) {} { = same F } } F _ → { = same F } } }
+        ?? ( vec_get [ArimaModel] dev i ) {
+            T md → { ?? ( vec_get [ArimaModel] cpu i ) { T mc → { ? ( same_model md mc ) {} { = same F } } F _ → { = same F } } }
             F _ → { = same F }
         }
         = i + i 1
     }
     : String l ( string_from label )
     ( string_push_str l `: device and CPU fits are bit-identical (device ` )
-    : String ds ( string_new ) ( string_push_int ds dt ) ( string_push_str l ( string_data ds ) ) ( string_free ds )
+    : String ds ( string_new ) ( string_push_int ds dt ) ( string_push_str l ( string_data ds ) )
     ( string_push_str l ` ms, cpu ` )
-    : String cs ( string_new ) ( string_push_int cs dc ) ( string_push_str l ( string_data cs ) ) ( string_free cs )
+    : String cs ( string_new ) ( string_push_int cs dc ) ( string_push_str l ( string_data cs ) )
     ( string_push_str l ` ms)` )
     ( check same ( string_data l ) )
-    ( string_free l )
-    ?? ( vec_get [* ArimaModel] dev 0 ) { T md → { ( check . md converged `gpu: the device fit converged` ) } F _ → {} }
-    ( arima_models_free dev ) ( arima_models_free cpu )
-    ( vec_free_with [( Vec f )] series \ ( Vec f ) v → v { ( vec_free [f] v ) } )
+    ?? ( vec_get [ArimaModel] dev 0 ) { T md → { ( check ( arima_converged md ) `gpu: the device fit converged` ) } F _ → {} }
 }
 
 @ main → i {

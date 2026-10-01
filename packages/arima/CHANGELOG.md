@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** `ArimaModel` is a handle over an rcbox
+instead of a `*ArimaModel` pointer: the fits, `arima_auto*`, `arima_clone`,
+`arima_from_json` (`?ArimaModel`) and `arima_fit_many*` (`( Vec ArimaModel )`)
+return it, every copy is the same model, and the last owner releases it.
+`arima_free`, `arima_forecast_free` and `arima_models_free` are optional
+early releases. Callers change `*ArimaModel` to `ArimaModel`; code that read
+fields directly uses the accessors, now with `arima_evals`, `arima_se`,
+`arima_xk`, `arima_xcoef`, `arima_xt` and `arima_xtr` beside the existing
+ones. The regressors' coefficients are copied into the model rather than
+adopted. The GPU evaluator drives gpukit's self-releasing kit.
+
 ## 0.4.2
 
 The fallback lane no longer frees its closure's environment by hand (NURL 0.67.0 closure ownership, #1141). Needs NURL 0.67.0: the job views it hands its workers rely on the compiler treating hand-managed stores as views (#1143).

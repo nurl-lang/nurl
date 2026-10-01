@@ -77,24 +77,20 @@ $ `src/arima.nu`
     ( check & == ( vec_len [f] d2 ) 2 ( near ( _ar_at d2 1 ) 1.0 0.0 ) `algebra: second differences` )
     : ( Vec f ) ds ( arima_difference y 0 1 2 )
     ( check & == ( vec_len [f] ds ) 2 & ( near ( _ar_at ds 0 ) 5.0 0.0 ) ( near ( _ar_at ds 1 ) 7.0 0.0 ) `algebra: a seasonal difference at lag 2` )
-    ( vec_free [f] y ) ( vec_free [f] d1 ) ( vec_free [f] d2 ) ( vec_free [f] ds )
 
     // (1 − B)(1 − B⁴) = 1 − B − B⁴ + B⁵ → δ = (1, 0, 0, 1, −1)
     : ( Vec f ) delta ( _ar_delta 1 1 4 )
     ( check & == ( vec_len [f] delta ) 5 & & ( near ( _ar_at delta 0 ) 1.0 0.0 ) ( near ( _ar_at delta 3 ) 1.0 0.0 ) ( near ( _ar_at delta 4 ) -1.0 0.0 ) `algebra: differencing polynomial` )
-    ( vec_free [f] delta )
 
     // (1 − 0.5B)(1 − 0.6B¹²) → φ' = 0.5 at 1, 0.6 at 12, −0.3 at 13
     : ( Vec f ) phi ( vec_zeroed [f] 1 ) ( vec_set [f] phi 0 0.5 )
     : ( Vec f ) sphi ( vec_zeroed [f] 1 ) ( vec_set [f] sphi 0 0.6 )
     : ( Vec f ) full ( _ar_expand_ar phi sphi 12 )
     ( check & == ( vec_len [f] full ) 13 & & ( near ( _ar_at full 0 ) 0.5 0.0 ) ( near ( _ar_at full 11 ) 0.6 0.0 ) ( near ( _ar_at full 12 ) -0.3 0.000000000001 ) `algebra: seasonal AR expansion` )
-    ( vec_free [f] full )
     : ( Vec f ) th ( vec_zeroed [f] 1 ) ( vec_set [f] th 0 -0.4 )
     : ( Vec f ) sth ( vec_zeroed [f] 1 ) ( vec_set [f] sth 0 -0.5 )
     : ( Vec f ) fma ( _ar_expand_ma th sth 12 )
     ( check & == ( vec_len [f] fma ) 13 & ( near ( _ar_at fma 11 ) -0.5 0.0 ) ( near ( _ar_at fma 12 ) 0.2 0.000000000001 ) `algebra: seasonal MA expansion` )
-    ( vec_free [f] fma ) ( vec_free [f] phi ) ( vec_free [f] sphi ) ( vec_free [f] th ) ( vec_free [f] sth )
 
     // transform round trip
     : ( Vec f ) c ( vec_zeroed [f] 2 ) ( vec_set [f] c 0 0.5 ) ( vec_set [f] c 1 -0.3 )
@@ -104,7 +100,6 @@ $ `src/arima.nu`
     ( check & ( near ( _ar_at back 0 ) 0.5 0.000000001 ) ( near ( _ar_at back 1 ) -0.3 0.000000001 ) `algebra: transform round trip` )
     ( vec_set [f] c 0 1.5 ) ( vec_set [f] c 1 0.0 )
     ( check ! ( _ar_invpartrans c raw 0 ) `algebra: a non-stationary polynomial has none` )
-    ( vec_free [f] c ) ( vec_free [f] raw ) ( vec_free [f] back )
 
     // the closed-form stationary covariance equals the doubling recursion's
     : ( Vec f ) ar2 ( vec_zeroed [f] 13 ) ( vec_set [f] ar2 0 0.5 ) ( vec_set [f] ar2 11 0.6 ) ( vec_set [f] ar2 12 -0.3 )
@@ -122,9 +117,8 @@ $ `src/arima.nu`
         = k + k 1
     }
     : String wl ( string_from `algebra: the two stationary covariances agree (worst ` )
-    : String ws ( fmt worst ) ( string_push_str wl ( string_data ws ) ) ( string_free ws ) ( string_push_str wl `)` )
+    : String ws ( fmt worst ) ( string_push_str wl ( string_data ws ) ) ( string_push_str wl `)` )
     ( check < worst 0.000000001 ( string_data wl ) )
-    ( string_free wl )
     // the O(r²) first column equals the full covariance's
     : ( Vec f ) col ( vec_zeroed [f] . s1 r )
     ( check ( _ar_init_col . s1 r . s1 phi . s1 theta col ) `algebra: the first column solves` )
@@ -153,15 +147,11 @@ $ `src/arima.nu`
     : ArimaLik lk3 ( _ar_lik_ml_from ssq3 sl3 300 )
     : ArimaLik lk4 ( _ar_filter_arma . s1 phi . s1 theta col yy 0.0 )
     : String cl ( string_from `algebra: the Chandrasekhar likelihood equals the covariance filter's (` )
-    : String c1 ( fmt . lk3 loglik ) ( string_push_str cl ( string_data c1 ) ) ( string_free c1 )
+    : String c1 ( fmt . lk3 loglik ) ( string_push_str cl ( string_data c1 ) )
     ( string_push_str cl ` vs ` )
-    : String c2 ( fmt . lk4 loglik ) ( string_push_str cl ( string_data c2 ) ) ( string_free c2 )
+    : String c2 ( fmt . lk4 loglik ) ( string_push_str cl ( string_data c2 ) )
     ( string_push_str cl `)` )
     ( check & . lk4 ok ( near . lk3 loglik . lk4 loglik * 0.000000001 ( float_abs . lk3 loglik ) ) ( string_data cl ) )
-    ( string_free cl )
-    ( _ar_ss_free s3 ) ( vec_free [f] delta0 ) ( vec_free [f] yy ) ( vec_free [f] col )
-    ( _ar_ss_free s1 ) ( _ar_ss_free s2 )
-    ( vec_free [f] ar2 ) ( vec_free [f] ma2 ) ( vec_free [f] nod )
 }
 
 // ── oracle ────────────────────────────────────────────────────────────
@@ -181,12 +171,9 @@ $ `src/arima.nu`
                         }
                         = c + c 1
                     }
-                    ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
-                    ( json_free cases )
                 }
                 F _ → { ( check F `oracle: fixture parses` ) }
             }
-            ( string_free txt )
         }
         F _ → { ( check F `oracle: fixture file present` ) }
     }
@@ -199,13 +186,12 @@ $ `src/arima.nu`
     : b mean ?? ( json_obj_get cs `trend` ) { T tv → == ( nurl_str_eq ( json_str_data tv ) `c` ) 1 F _ → F }
     : ArimaSpec sp ( arima_spec_with_mean ( arima_spec_seasonal ( jarr_i order 0 ) ( jarr_i order 1 ) ( jarr_i order 2 ) ( jarr_i sorder 0 ) ( jarr_i sorder 1 ) ( jarr_i sorder 2 ) ( jarr_i sorder 3 ) ) mean )
     : i t0 ( now_ms )
-    : *ArimaModel m ( arima_fit y sp )
+    : ArimaModel m ( arima_fit y sp )
     : i dt - ( now_ms ) t0
     : String label ( string_from `oracle ` )
     ( string_push_str label nm )
     : String l1 ( string_clone label ) ( string_push_str l1 `: converged` )
-    ( check . m converged ( string_data l1 ) )
-    ( string_free l1 )
+    ( check ( arima_converged m ) ( string_data l1 ) )
     // coefficients, in statsmodels' naming
     : Json params ?? ( json_obj_get cs `params` ) { T p → p F _ → cs }
     : ~ b coef_ok T
@@ -238,15 +224,12 @@ $ `src/arima.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
     : String l2 ( string_clone label ) ( string_push_str l2 `: coefficients match statsmodels (worst ` )
-    : String w ( fmt worst ) ( string_push_str l2 ( string_data w ) ) ( string_free w ) ( string_push_str l2 `)` )
+    : String w ( fmt worst ) ( string_push_str l2 ( string_data w ) ) ( string_push_str l2 `)` )
     ( check coef_ok ( string_data l2 ) )
-    ( string_free l2 )
     : f llf ( jf cs `llf` )
     : String l3 ( string_clone label ) ( string_push_str l3 `: log-likelihood matches` )
     ( check ( near ( arima_loglik m ) llf 0.01 ) ( string_data l3 ) )
-    ( string_free l3 )
     // forecasts
     : Json fj ?? ( json_obj_get cs `forecast` ) { T a → a F _ → cs }
     : Json sj ?? ( json_obj_get cs `forecast_se` ) { T a → a F _ → cs }
@@ -262,15 +245,9 @@ $ `src/arima.nu`
     }
     : String l4 ( string_clone label ) ( string_push_str l4 `: forecast means and standard errors match` )
     ( check fc_ok ( string_data l4 ) )
-    ( string_free l4 )
     : String l5 ( string_clone label ) ( string_push_str l5 `: fit took ` )
-    : String dts ( string_new ) ( string_push_int dts dt ) ( string_push_str l5 ( string_data dts ) ) ( string_free dts ) ( string_push_str l5 ` ms` )
+    : String dts ( string_new ) ( string_push_int dts dt ) ( string_push_str l5 ( string_data dts ) ) ( string_push_str l5 ` ms` )
     ( check < dt 2000 ( string_data l5 ) )
-    ( string_free l5 )
-    ( arima_forecast_free fc )
-    ( arima_free m )
-    ( vec_free [f] y )
-    ( string_free label )
 }
 
 // "ar.L2" → 2, "ma.S.L12" → 12
@@ -311,7 +288,7 @@ $ `src/arima.nu`
     : ( Vec f ) head ( vec_zeroed [f] 390 )
     : ~ i t 0
     ~ < t 390 { ( vec_set [f] head t ( _ar_at y t ) ) = t + t 1 }
-    : *ArimaModel m ( arima_fit head ( arima_spec 1 0 1 ) )
+    : ArimaModel m ( arima_fit head ( arima_spec 1 0 1 ) )
     ( check == ( arima_n m ) 390 `stream: n counts the fitted points` )
     : ~ b pred_ok T
     : ~ b var_ok T
@@ -323,7 +300,6 @@ $ `src/arima.nu`
         ? == ( f64_to_bits . u predicted ) ( f64_to_bits ( _ar_at . fc mean 0 ) ) {} { = pred_ok F }
         ? ( near . u variance * ( _ar_at . fc se 0 ) ( _ar_at . fc se 0 ) 0.000000001 ) {} { = var_ok F }
         ? ( near . u z / . u innovation ( float_sqrt . u variance ) 0.000000001 ) {} { = z_ok F }
-        ( arima_forecast_free fc )
         = t + t 1
     }
     ( check pred_ok `stream: an update measures against the forecast just made` )
@@ -331,9 +307,8 @@ $ `src/arima.nu`
     ( check z_ok `stream: z = innovation / √variance` )
     ( check == ( arima_n m ) 400 `stream: n counts the updates` )
     // the streamed model's state equals the state of a filter run over all 400 at once
-    : *ArimaModel m2 ( arima_fit head ( arima_spec 1 0 1 ) )
+    : ArimaModel m2 ( arima_fit head ( arima_spec 1 0 1 ) )
     : String js ( arima_to_json m2 )
-    ( arima_free m2 )
     ?? ( arima_from_json ( string_data js ) ) {
         T m3 → {
             = t 390
@@ -348,12 +323,9 @@ $ `src/arima.nu`
                 = k + k 1
             }
             ( check same `stream: a model reloaded from JSON streams on bit-for-bit` )
-            ( arima_forecast_free fa ) ( arima_forecast_free fb )
-            ( arima_free m3 )
         }
         F _ → { ( check F `stream: JSON reload` ) }
     }
-    ( string_free js )
     // round trip of everything
     : String j1 ( arima_to_json m )
     ?? ( arima_from_json ( string_data j1 ) ) {
@@ -361,15 +333,12 @@ $ `src/arima.nu`
             : String j2 ( arima_to_json m4 )
             ( check ( string_eq j1 j2 ) `stream: JSON round trip is exact` )
             ( check == ( f64_to_bits ( arima_loglik m4 ) ) ( f64_to_bits ( arima_loglik m ) ) `stream: log-likelihood survives the trip` )
-            ( string_free j2 )
-            ( arima_free m4 )
         }
         F _ → { ( check F `stream: JSON round trip` ) }
     }
-    ( string_free j1 )
-    ?? ( arima_from_json `{"format":"other"}` ) { T mx → { ( check F `stream: a foreign document is refused` ) ( arima_free mx ) } F _ → { ( check T `stream: a foreign document is refused` ) } }
+    ?? ( arima_from_json `{"format":"other"}` ) { T mx → { ( check F `stream: a foreign document is refused` ) } F _ → { ( check T `stream: a foreign document is refused` ) } }
     // restart + replay: the state after the 400 points equals the streamed one
-    : *ArimaModel m5 ( arima_clone m )
+    : ArimaModel m5 ( arima_clone m )
     ( arima_restart m5 )
     ( check == ( arima_n m5 ) 0 `stream: a restarted model has absorbed nothing` )
     ( check == ( arima_n m ) 400 `stream: cloning then restarting the clone leaves the original alone` )
@@ -378,10 +347,8 @@ $ `src/arima.nu`
     : String j5 ( arima_to_json m5 )
     : String j6 ( arima_to_json m )
     ( check ( string_eq j5 j6 ) `stream: restart + replay reproduces the streamed state bit for bit` )
-    ( string_free j5 ) ( string_free j6 )
-    ( arima_free m5 )
     // a missing observation: the clock ticks, the uncertainty grows, nothing is learned
-    : *ArimaModel m6 ( arima_clone m )
+    : ArimaModel m6 ( arima_clone m )
     : ArimaForecast f2 ( arima_forecast m6 2 )
     : ArimaUpdate um ( arima_update m6 ( float_nan ) )
     ( check & ( float_is_nan . um innovation ) ( float_is_nan . um z ) `stream: a NaN observation answers with NaN innovation and z` )
@@ -390,14 +357,9 @@ $ `src/arima.nu`
     ( check == ( f64_to_bits ( _ar_at . f1 mean 0 ) ) ( f64_to_bits ( _ar_at . f2 mean 1 ) ) `stream: after the gap the next forecast is the two-step forecast from before it` )
     ( check == ( f64_to_bits ( _ar_at . f1 se 0 ) ) ( f64_to_bits ( _ar_at . f2 se 1 ) ) `stream: with the two-step forecast's standard error` )
     ( check == ( arima_n m6 ) 401 `stream: the gap counts as a step` )
-    ( arima_forecast_free f1 ) ( arima_forecast_free f2 )
-    ( arima_free m6 )
     // CSS alone lands near ML
-    : *ArimaModel mc ( arima_fit_method head ( arima_spec 1 0 1 ) ARIMA_CSS )
+    : ArimaModel mc ( arima_fit_method head ( arima_spec 1 0 1 ) ARIMA_CSS )
     ( check ( near ( _ar_at ( arima_phi mc ) 0 ) ( _ar_at ( arima_phi m ) 0 ) 0.1 ) `stream: CSS lands near ML` )
-    ( arima_free mc )
-    ( arima_free m )
-    ( vec_free [f] head ) ( vec_free [f] y )
 }
 
 // ── harmonic ──────────────────────────────────────────────────────────
@@ -423,17 +385,16 @@ $ `src/arima.nu`
     ( vec_push [i] periods 1440 )
     ( vec_push [i] periods 10080 )
     : i t0 ( now_ms )
-    : *ArimaModel m ( arima_auto_harmonic head periods 3 0 )
+    : ArimaModel m ( arima_auto_harmonic head periods 3 0 )
     : i dt - ( now_ms ) t0
     : String tl ( string_from `harmonic: two periods of 1 440 and 10 080 rows fitted on 11 000 points in ` )
     ( string_push_int tl dt ) ( string_push_str tl ` ms` )
     ( check < dt 5000 ( string_data tl ) )
-    ( string_free tl )
     ( check == ( arima_n m ) 11000 `harmonic: the fit absorbed every point` )
-    ( check == . m xk 3 `harmonic: three harmonics per period` )
+    ( check == ( arima_xk m ) 3 `harmonic: three harmonics per period` )
     // the day's first sine weight is the 5 the series was made with
-    ( check ( near ( _ar_at . m xcoef 1 ) 5.0 0.15 ) `harmonic: the day's amplitude is recovered` )
-    ( check ( near ( _ar_at . m xcoef 8 ) 2.0 0.15 ) `harmonic: the week's amplitude is recovered` )
+    ( check ( near ( _ar_at ( arima_xcoef m ) 1 ) 5.0 0.15 ) `harmonic: the day's amplitude is recovered` )
+    ( check ( near ( _ar_at ( arima_xcoef m ) 8 ) 2.0 0.15 ) `harmonic: the week's amplitude is recovered` )
     // forecasts follow the seasonal a day ahead, and the naive does not
     : ArimaForecast fc ( arima_forecast m 1000 )
     : ~ f e_model 0.0
@@ -446,13 +407,11 @@ $ `src/arima.nu`
         = k + k 1
     }
     : String sl ( string_from `harmonic: a thousand steps ahead the model's error is a fraction of the naive's (` )
-    : String s1 ( fmt / e_model 1000.0 ) ( string_push_str sl ( string_data s1 ) ) ( string_free s1 )
+    : String s1 ( fmt / e_model 1000.0 ) ( string_push_str sl ( string_data s1 ) )
     ( string_push_str sl ` vs ` )
-    : String s2 ( fmt / e_naive 1000.0 ) ( string_push_str sl ( string_data s2 ) ) ( string_free s2 )
+    : String s2 ( fmt / e_naive 1000.0 ) ( string_push_str sl ( string_data s2 ) )
     ( string_push_str sl `)` )
     ( check < e_model * 0.4 e_naive ( string_data sl ) )
-    ( string_free sl )
-    ( arima_forecast_free fc )
     // streaming keeps the phase: updates over the held-out rows are judged against the seasonal
     : ~ f worst_z 0.0
     = k 0
@@ -463,20 +422,17 @@ $ `src/arima.nu`
         = k + k 1
     }
     ( check < worst_z 5.0 `harmonic: no held-out reading is a surprise past five sigma` )
-    ( check == . m xt 12000 `harmonic: the regressors' clock counts the rows` )
+    ( check == ( arima_xt m ) 12000 `harmonic: the regressors' clock counts the rows` )
     // the JSON carries the terms and the clock; a copy restarted at the fit's origin replays to the same state
     : String j1 ( arima_to_json m )
     ?? ( arima_from_json ( string_data j1 ) ) {
         T m2 → {
             : String j2 ( arima_to_json m2 )
             ( check ( string_eq j1 j2 ) `harmonic: JSON round trip is exact` )
-            ( string_free j2 )
-            ( arima_free m2 )
         }
         F _ → { ( check F `harmonic: JSON parses back` ) }
     }
-    ( string_free j1 )
-    : *ArimaModel m3 ( arima_clone m )
+    : ArimaModel m3 ( arima_clone m )
     ( arima_restart_at m3 0 )
     = k 0
     ~ < k n { : ArimaUpdate _u ( arima_update m3 ( _ar_at y k ) ) = k + k 1 }
@@ -484,17 +440,13 @@ $ `src/arima.nu`
     : ArimaForecast fb ( arima_forecast m3 3 )
     ( check == ( f64_to_bits ( _ar_at . fa mean 2 ) ) ( f64_to_bits ( _ar_at . fb mean 2 ) ) `harmonic: a restart at the origin and a replay reach the streamed forecast bit for bit` )
     : f next1 ( _ar_at . fa mean 0 )
-    ( arima_forecast_free fa ) ( arima_forecast_free fb )
     // a restart elsewhere keeps the phase through t0
-    : *ArimaModel m4 ( arima_clone m )
+    : ArimaModel m4 ( arima_clone m )
     ( arima_restart_at m4 6000 )
     = k 6000
     ~ < k n { : ArimaUpdate _u ( arima_update m4 ( _ar_at y k ) ) = k + k 1 }
     : ArimaForecast fd ( arima_forecast m4 1 )
     ( check ( near ( _ar_at . fd mean 0 ) next1 0.05 ) `harmonic: a replay from the middle, phased by t0, forecasts the same next value` )
-    ( arima_forecast_free fd )
-    ( arima_free m3 ) ( arima_free m4 ) ( arima_free m )
-    ( vec_free [i] periods ) ( vec_free [f] head ) ( vec_free [f] y ) ( vec_free [f] noise )
 }
 
 // ── drift ─────────────────────────────────────────────────────────────
@@ -511,9 +463,9 @@ $ `src/arima.nu`
     = t 0
     ~ < t 380 { ( vec_set [f] head t ( _ar_at y t ) ) = t + t 1 }
     : ( Vec i ) none ( vec_new [i] )
-    : *ArimaModel m ( arima_auto_regress head none 0 T 0 )
-    ( check == . m xtr 1 `drift: the trend is a regressor` )
-    ( check ( near ( _ar_at . m xcoef 1 ) 0.5 0.01 ) `drift: the slope is recovered` )
+    : ArimaModel m ( arima_auto_regress head none 0 T 0 )
+    ( check == ( arima_xtr m ) 1 `drift: the trend is a regressor` )
+    ( check ( near ( _ar_at ( arima_xcoef m ) 1 ) 0.5 0.01 ) `drift: the slope is recovered` )
     : ArimaForecast fc ( arima_forecast m 20 )
     : ~ f e_drift 0.0
     : ~ f e_naive 0.0
@@ -525,21 +477,15 @@ $ `src/arima.nu`
         = k + k 1
     }
     ( check < e_drift * 0.4 e_naive `drift: twenty steps ahead the drift model's error is a fraction of the naive's` )
-    ( arima_forecast_free fc )
     : String j1 ( arima_to_json m )
     ?? ( arima_from_json ( string_data j1 ) ) {
         T m2 → {
-            ( check == . m2 xtr 1 `drift: the JSON carries the trend` )
+            ( check == ( arima_xtr m2 ) 1 `drift: the JSON carries the trend` )
             : String j2 ( arima_to_json m2 )
             ( check ( string_eq j1 j2 ) `drift: JSON round trip is exact` )
-            ( string_free j2 )
-            ( arima_free m2 )
         }
         F _ → { ( check F `drift: JSON parses back` ) }
     }
-    ( string_free j1 )
-    ( arima_free m )
-    ( vec_free [i] none ) ( vec_free [f] head ) ( vec_free [f] y ) ( vec_free [f] noise )
 }
 
 // ── select ────────────────────────────────────────────────────────────
@@ -554,24 +500,20 @@ $ `src/arima.nu`
     ( check > ( arima_kpss walk ) 0.463 `select: KPSS rejects a random walk` )
     ( check == ( arima_ndiffs walk ) 1 `select: a walk needs one difference` )
     ( check == ( arima_ndiffs noise ) 0 `select: noise needs none` )
-    ( vec_free [f] walk )
-    ( vec_free [f] noise )
 
     : ( Vec f ) y ( sim_ar1 600 0.7 77 )
-    : *ArimaModel truth ( arima_fit y ( arima_spec_with_mean ( arima_spec 1 0 0 ) T ) )
-    : *ArimaModel best ( arima_auto y 0 )
-    : ArimaSpec bs . best spec
+    : ArimaModel truth ( arima_fit y ( arima_spec_with_mean ( arima_spec 1 0 0 ) T ) )
+    : ArimaModel best ( arima_auto y 0 )
+    : ArimaSpec bs ( arima_spec_of best )
     : String sl ( string_from `select: the search does at least as well as the true order (found ` )
-    : String s1 ( fmt ( arima_aicc best ) ) ( string_push_str sl ( string_data s1 ) ) ( string_free s1 )
+    : String s1 ( fmt ( arima_aicc best ) ) ( string_push_str sl ( string_data s1 ) )
     ( string_push_str sl ` vs ` )
-    : String s2 ( fmt ( arima_aicc truth ) ) ( string_push_str sl ( string_data s2 ) ) ( string_free s2 )
+    : String s2 ( fmt ( arima_aicc truth ) ) ( string_push_str sl ( string_data s2 ) )
     ( string_push_str sl `; order ` ) ( string_push_int sl . bs p ) ( string_push_str sl `,` ) ( string_push_int sl . bs d ) ( string_push_str sl `,` ) ( string_push_int sl . bs q )
     ( string_push_str sl ? . bs mean ` mean)` ` no mean)` )
     ( check <= ( arima_aicc best ) + ( arima_aicc truth ) 0.01 ( string_data sl ) )
-    ( string_free sl )
     ( check | > . bs p 0 > . bs q 0 `select: and finds a dynamic model` )
     ( check == . bs d 0 `select: no difference for a stationary AR(1)` )
-    ( arima_free best ) ( arima_free truth ) ( vec_free [f] y )
 
     ?? ( read_file `tests/fixtures/statsmodels_cases.json` ) {
         T txt → {
@@ -582,22 +524,18 @@ $ `src/arima.nu`
                             : ( Vec f ) air ?? ( json_obj_get cs `y` ) { T a → ( jvec a ) F _ → ( vec_new [f] ) }
                             ( check == ( arima_ndiffs air ) 1 `select: log airline needs one difference` )
                             ( check == ( arima_nsdiffs air 12 1 ) 1 `select: and one seasonal difference` )
-                            : *ArimaModel known ( arima_fit air ( arima_spec_seasonal 0 1 1 0 1 1 12 ) )
+                            : ArimaModel known ( arima_fit air ( arima_spec_seasonal 0 1 1 0 1 1 12 ) )
                             : i t0 ( now_ms )
-                            : *ArimaModel found ( arima_auto air 12 )
+                            : ArimaModel found ( arima_auto air 12 )
                             : i dt - ( now_ms ) t0
                             ( check <= ( arima_aicc found ) + ( arima_aicc known ) 0.01 `select: airline search matches or beats (0,1,1)(0,1,1)` )
                             ( check < dt 20000 `select: airline search under 20 s` )
-                            ( arima_free known ) ( arima_free found )
-                            ( vec_free [f] air )
                         }
                         F _ → {}
                     }
-                    ( json_free cases )
                 }
                 F _ → {}
             }
-            ( string_free txt )
         }
         F _ → {}
     }
@@ -612,26 +550,25 @@ $ `src/arima.nu`
     ( vec_push [( Vec f )] series ( sim_ar1 900 0.8 13 ) )
     : ArimaSpec sp ( arima_spec 1 0 1 )
     : i t0 ( now_ms )
-    : ( Vec * ArimaModel ) ms ( arima_fit_many series sp ARIMA_ML )
+    : ( Vec ArimaModel ) ms ( arima_fit_many series sp ARIMA_ML )
     : i dt - ( now_ms ) t0
-    ( check == ( vec_len [* ArimaModel] ms ) 3 `many: three models back` )
+    ( check == ( vec_len [ArimaModel] ms ) 3 `many: three models back` )
     : ~ b same T
     : ~ i i 0
     ~ < i 3 {
         ?? ( vec_get [( Vec f )] series i ) {
             T y → {
-                : *ArimaModel alone ( arima_fit y sp )
-                ?? ( vec_get [* ArimaModel] ms i ) {
+                : ArimaModel alone ( arima_fit y sp )
+                ?? ( vec_get [ArimaModel] ms i ) {
                     T mm → {
                         ? == ( f64_to_bits ( arima_loglik mm ) ) ( f64_to_bits ( arima_loglik alone ) ) {} { = same F }
                         ? == ( f64_to_bits ( _ar_at ( arima_phi mm ) 0 ) ) ( f64_to_bits ( _ar_at ( arima_phi alone ) 0 ) ) {} { = same F }
                         ? == ( f64_to_bits ( _ar_at ( arima_theta mm ) 0 ) ) ( f64_to_bits ( _ar_at ( arima_theta alone ) 0 ) ) {} { = same F }
-                        ? == . mm evals . alone evals {} { = same F }
-                        ? == ( f64_to_bits ( _ar_at . mm se 0 ) ) ( f64_to_bits ( _ar_at . alone se 0 ) ) {} { = same F }
+                        ? == ( arima_evals mm ) ( arima_evals alone ) {} { = same F }
+                        ? == ( f64_to_bits ( _ar_at ( arima_se mm ) 0 ) ) ( f64_to_bits ( _ar_at ( arima_se alone ) 0 ) ) {} { = same F }
                     }
                     F _ → { = same F }
                 }
-                ( arima_free alone )
             }
             F _ → {}
         }
@@ -639,8 +576,6 @@ $ `src/arima.nu`
     }
     ( check same `many: each model is bit-identical to its own fit` )
     ( check < dt 5000 `many: batch fit under 5 s` )
-    ( arima_models_free ms )
-    ( vec_free_with [( Vec f )] series \ ( Vec f ) v → v { ( vec_free [f] v ) } )
 }
 
 @ main → i {

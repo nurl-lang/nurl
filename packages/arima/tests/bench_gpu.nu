@@ -31,19 +31,17 @@ $ `src/arima_gpu.nu`
     : ~ i k 0
     ~ < k K { ( vec_push [( Vec f )] series ( sim n + 0.3 * 0.002 # f k 0.3 + 100 k ) ) = k + k 1 }
     : i t0 ( now_ms )
-    : ( Vec * ArimaModel ) dev ( arima_fit_many_gpu series sp ARIMA_ML )
+    : ( Vec ArimaModel ) dev ( arima_fit_many_gpu series sp ARIMA_ML )
     : i dt - ( now_ms ) t0
     : i t1 ( now_ms )
-    : ( Vec * ArimaModel ) cpu ( arima_fit_many series sp ARIMA_ML )
+    : ( Vec ArimaModel ) cpu ( arima_fit_many series sp ARIMA_ML )
     : i dc - ( now_ms ) t1
     : i t2 ( now_ms )
     = k 0
-    ~ < k K { ?? ( vec_get [( Vec f )] series k ) { T y → { : *ArimaModel m ( arima_fit y sp ) ( arima_free m ) } F _ → {} } = k + k 1 }
+    ~ < k K { ?? ( vec_get [( Vec f )] series k ) { T y → { : ArimaModel m ( arima_fit y sp ) } F _ → {} } = k + k 1 }
     : i ds - ( now_ms ) t2
     ( nurl_print `K=` ) ( nurl_print_int K ) ( nurl_print ` n=` ) ( nurl_print_int n )
     ( nurl_print ` device ms=` ) ( nurl_print_int dt ) ( nurl_print ` cpu-threads ms=` ) ( nurl_print_int dc ) ( nurl_print ` one-by-one ms=` ) ( nurl_print_int ds ) ( nurl_print `\n` )
-    ( arima_models_free dev ) ( arima_models_free cpu )
-    ( vec_free_with [( Vec f )] series \ ( Vec f ) v → v { ( vec_free [f] v ) } )
 }
 
 @ main → i {
