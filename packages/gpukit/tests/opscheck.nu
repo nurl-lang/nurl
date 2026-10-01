@@ -19,7 +19,6 @@ $ `src/devops.nu`
         = k + k 1
     }
     ( nurl_print ( string_data o ) ) ( nurl_print `\n` )
-    ( string_free o )
 }
 
 @ fill i n f base f step → ( Vec f ) {
@@ -37,23 +36,20 @@ $ `src/devops.nu`
 }
 
 // Device buffer pre-loaded with fill(n, base, step).
-@ dbuf * GpuKit kit i dt i n f base f step → GkBuf {
+@ dbuf GpuKit kit i dt i n f base f step → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n dt )
     : ( Vec f ) h ( fill n base step )
     ( gk_dbuf_upload kit b h )
-    ( vec_free [f] h )
     ^ b
 }
 
 // Download `b` and print it under `tag`+`op`.
-@ show * GpuKit kit s tag s op GkBuf b → v {
+@ show GpuKit kit s tag s op GkBuf b → v {
     : ( Vec f ) out ( zeros ( gk_buf_len b ) )
     ( gk_dbuf_download kit b out )
     : String nm ( string_from tag )
     ( string_push_str nm op )
     ( pv ( string_data nm ) out )
-    ( string_free nm )
-    ( vec_free [f] out )
 }
 
 @ i3 i a i b i c → ( Vec i ) {
@@ -68,7 +64,7 @@ $ `src/devops.nu`
     ^ v
 }
 
-@ run_float * GpuKit kit i dt s tag → v {
+@ run_float GpuKit kit i dt s tag → v {
     // ── ew_bc: (2,3,4) + broadcast (3,1)  /  * scalar ────────────────
     : GkBuf a ( dbuf kit dt 24 0.0 1.0 )
     : GkBuf b3 ( dbuf kit dt 3 1.0 10.0 )  // [1,11,21] as (1,3,1)
@@ -183,7 +179,6 @@ $ `src/devops.nu`
     : GkBuf dd ( gk_dbuf_new kit 30 dt )
     : ( Vec f ) hz ( zeros 30 )
     ( gk_dbuf_upload kit dd hz )
-    ( vec_free [f] hz )
     ( gkd_copy_ax kit dd ss 2 2 3 5 1 )
     ( show kit tag `_copyax` dd )
     : GkBuf sl ( gk_dbuf_new kit 12 dt )
@@ -210,7 +205,6 @@ $ `src/devops.nu`
     ( show kit tag `_bilac` bly )
     ( gkd_resize_bilinear kit bly blx 1 3 4 5 7 0 )
     ( show kit tag `_bilhc` bly )
-    ( gk_dbuf_free blx ) ( gk_dbuf_free bly )
 
     // ── expandlast: (3,1) → (3,4) ───────────────────────────────────
     : GkBuf xx ( dbuf kit dt 3 1.0 2.0 )
@@ -237,38 +231,14 @@ $ `src/devops.nu`
     ( vec_push [i] htok 1 ) ( vec_push [i] htok 5 ) ( vec_push [i] htok 2 )
     ( vec_push [i] htok 7 ) ( vec_push [i] htok 3 ) ( vec_push [i] htok 4 )
     ( gk_dbuf_upload_i kit et htok )
-    ( vec_free [i] htok )
     : GkBuf eo ( gk_dbuf_new kit 4 dt )
     ( gkd_eos_gather kit eo ed et 2 3 2 )
     ( show kit tag `_eosg` eo )
 
-    ( gk_dbuf_free a ) ( gk_dbuf_free b3 ) ( gk_dbuf_free o24 ) ( gk_dbuf_free sc )
-    ( gk_dbuf_free ba ) ( gk_dbuf_free bb ) ( gk_dbuf_free by ) ( gk_dbuf_free bs )
-    ( gk_dbuf_free gd ) ( gk_dbuf_free gix ) ( gk_dbuf_free gy )
-    ( gk_dbuf_free su ) ( gk_dbuf_free sy )
-    ( gk_dbuf_free ga ) ( gk_dbuf_free gb ) ( gk_dbuf_free gc ) ( gk_dbuf_free gyy )
-    ( gk_dbuf_free cx ) ( gk_dbuf_free cw ) ( gk_dbuf_free cb ) ( gk_dbuf_free cy ) ( gk_dbuf_free cy2 )
-    ( gk_dbuf_free tx ) ( gk_dbuf_free tw ) ( gk_dbuf_free tb ) ( gk_dbuf_free ty )
-    ( gk_dbuf_free py )
-    ( gk_dbuf_free nx ) ( gk_dbuf_free nsc ) ( gk_dbuf_free nb ) ( gk_dbuf_free nm )
-    ( gk_dbuf_free nv ) ( gk_dbuf_free ny )
-    ( gk_dbuf_free ex ) ( gk_dbuf_free ey )
-    ( gk_dbuf_free lsc ) ( gk_dbuf_free lbi ) ( gk_dbuf_free ly )
-    ( gk_dbuf_free sx ) ( gk_dbuf_free sy2 )
-    ( gk_dbuf_free ss ) ( gk_dbuf_free dd ) ( gk_dbuf_free sl )
-    ( gk_dbuf_free pm )
-    ( gk_dbuf_free rx ) ( gk_dbuf_free ry )
-    ( gk_dbuf_free xx ) ( gk_dbuf_free xy )
-    ( gk_dbuf_free r2 )
-    ( gk_dbuf_free am ) ( gk_dbuf_free ai )
-    ( gk_dbuf_free ed ) ( gk_dbuf_free et ) ( gk_dbuf_free eo )
-    ( vec_free [i] od ) ( vec_free [i] astr ) ( vec_free [i] bstr ) ( vec_free [i] zstr )
-    ( vec_free [i] hix )
-    ( vec_free [i] pdims ) ( vec_free [i] pperm )
 }
 
 // GK_I64 coverage: exact upload/download roundtrip + movement kernels.
-@ run_i64 * GpuKit kit → v {
+@ run_i64 GpuKit kit → v {
     : GkBuf b ( gk_dbuf_new kit 6 GK_I64 )
     : ( Vec i ) h ( vec_with_cap [i] 6 )
     ( vec_push [i] h 5 ) ( vec_push [i] h -3 ) ( vec_push [i] h 7 )
@@ -286,7 +256,6 @@ $ `src/devops.nu`
         = k + k 1
     }
     ( pv `i64_roundtrip` pf )
-    ( vec_free [f] pf )
     // slice_ax on i64: view (1,6,1) take sz 3 from off 2
     : GkBuf slc ( gk_dbuf_new kit 3 GK_I64 )
     ( gkd_slice_ax kit slc b 1 3 1 6 2 )
@@ -301,17 +270,11 @@ $ `src/devops.nu`
         = k + k 1
     }
     ( pv `i64_sliceax` pf2 )
-    ( vec_free [f] pf2 )
-    ( vec_free [i] sh )
-    ( vec_free [i] back )
-    ( vec_free [i] h )
-    ( gk_dbuf_free slc )
-    ( gk_dbuf_free b )
 }
 
 // Fail-closed guards: every call below is INVALID and must return F
 // without touching the device. Prints guards|<returned-F count>,<expected>.
-@ run_guards * GpuKit kit → v {
+@ run_guards GpuKit kit → v {
     : ~ i pass 0
     : i want 9
     : GkBuf a ( dbuf kit GK_F32 6 0.0 1.0 )
@@ -340,24 +303,19 @@ $ `src/devops.nu`
     // 9: download into a too-short host vector
     : ( Vec f ) short ( zeros 3 )
     ? ( gk_dbuf_download kit a short ) {} { = pass + pass 1 }
-    ( vec_free [f] short )
     : ( Vec f ) gout ( zeros 2 )
     ( vec_set [f] gout 0 # f pass )
     ( vec_set [f] gout 1 # f want )
     ( pv `guards` gout )
-    ( vec_free [f] gout )
-    ( gk_dbuf_free a ) ( gk_dbuf_free o ) ( gk_dbuf_free a64 )
-    ( vec_free [i] d23 ) ( vec_free [i] d22 ) ( vec_free [i] s31 ) ( vec_free [i] s41 )
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open 0 )
-    ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ( gk_close kit ) ^ 0 }
+    : GpuKit kit ( gk_open 0 )
+    ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ^ 0 }
     ( nurl_print `backend|` ) ( nurl_print ( gk_backend kit ) ) ( nurl_print `\n` )
     ( run_float kit GK_F32 `f32` )
     ( run_float kit GK_F64 `f64` )
     ( run_i64 kit )
     ( run_guards kit )
-    ( gk_close kit )
     ^ 0
 }

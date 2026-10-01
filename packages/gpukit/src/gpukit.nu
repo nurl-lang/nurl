@@ -13,7 +13,6 @@
 //     ( gpu_launch k (gpu_grid n 256) 256 args )
 //     ( gpu_sync g )
 //     ( gpu_download (# *u (vec_data [f] out)) b_out )
-//     ( gpu_free b_x ) …                             // free each buffer
 //
 // `gpukit` collapses that to a list of typed bindings and one `gk_run`:
 //
@@ -23,25 +22,36 @@
 //     ( vec_push [GkArg] call ( gk_i64   n  ) )      // long long scalar
 //     ( vec_push [GkArg] call ( gk_out_f out) )      // output double[]
 //     ( gk_run kit src `my_kernel` ( gk_grid n 256 ) 256 call )
-//     ( vec_free [GkArg] call )
 //
 // gk_run compiles-and-caches the kernel by name, allocates a device buffer per
 // buffer binding, uploads inputs, builds the arg vector in binding order,
-// launches, syncs, downloads outputs, and frees every device buffer. Kernel
+// launches, syncs, downloads outputs, and lets every device buffer go. Kernel
 // sources are cached on the kit, so a hot path compiles each kernel once.
 //
 // gpukit adds no numerics of its own — it only marshals — so a kernel runs
 // bit-for-bit the same through gk_run as through hand-written gpu_* calls, and
 // the gpu package's CUDA / CPU-backend / pure equivalence is preserved.
 //
-// Memory: `GpuKit` carries a stable kernel-cache Vec, so it is passed by value
-// and mutated across calls (like an ArgParser). Free it with `gk_close`, which
-// releases the cached kernels and the device.
+// Memory: a `GpuKit` is a handle on the kit's state (an rcbox): every copy of
+// it — a struct field, a Vec element, a capture — is the same kit, and its
+// LAST owner releases the cached kernels, the device-memory pool and the
+// device. Every GkBuf the kit hands out (dev.nu) holds the kit too, so the
+// device outlives its memory whichever order the owners go in. Nothing is
+// released by hand; `gk_close` is an optional early release of one owner.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/core/rcbox.nu`
 $ `deps/gpu/src/gpu.nu`
+
+// The device-memory pool's process-wide counters and switches (see the
+// pool section below).
+: ~ i g_pool_n 0  // rows, every kit's pools together
+: ~ b g_pool_on T
+: ~ i g_pool_idle 0  // bytes currently held idle
+: ~ i g_pool_max -1  // budget in bytes; <0 = not set yet, 0 = unlimited
+: ~ i g_pool_clock 0  // LRU stamp source
 
 // A single argument to a kernel launch.
 //   kind 0 = input buffer   1 = output buffer   2 = scalar
@@ -59,25 +69,64 @@ $ `deps/gpu/src/gpu.nu`
     i ns  // device time in those launches (CUDA events)
 }
 
-: GpuKit {
+// The kit's state. The pool is five parallel columns, one row per device
+// block the kit allocated (in use by a GkBuf, or idle): the blocks
+// themselves (owned — dropping a row frees its memory) and the plain
+// columns a scan reads.
+: GpuKitImpl {
     Gpu gpu
     b ok
     ( Vec GkKernelEntry ) cache
+    ( Vec GpuBuffer ) pbuf
+    ( Vec i ) pdptr
+    ( Vec i ) pbytes
+    ( Vec i ) pinuse
+    ( Vec i ) pstamp
+    GpuTimer ev0  // the profiler's event pair (gk_prof)
+    GpuTimer ev1
 }
+
+// The process-wide pool counters (gk_pool_count / gk_pool_idle_bytes) sum
+// every kit's pool; a kit that goes takes its rows out of them. Its
+// fields — the pool's blocks, the cached kernels, the timers, the device —
+// are released by the compiler after this (drop glue).
+% Drop GpuKitImpl {
+    @ drop GpuKitImpl x → v {
+        = g_pool_n - g_pool_n ( vec_len [i] . x pdptr )
+        : ~ i k 0
+        ~ < k ( vec_len [i] . x pdptr ) {
+            ? == ( __gk_col . x pinuse k ) 0 { = g_pool_idle - g_pool_idle ( __gk_col . x pbytes k ) } {}
+            = k + k 1
+        }
+    }
+}
+
+// A GpuKit is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same kit, and the last owner releases it.
+: GpuKit { s ctl }
+
+@ GpuKit_share GpuKit h → GpuKit { ^ @ GpuKit { # s ( rcbox_share # i . h ctl ) } }
+
+@ GpuKit_drop sink GpuKit h → v {
+    ( mem_forget h )
+    ( rcbox_release [GpuKitImpl] # i . h ctl )
+}
+
+@ _GpuKit_ptr GpuKit h → *GpuKitImpl { ^ ( rcbox_ptr [GpuKitImpl] # i . h ctl ) }
+
+@ __gk_col ( Vec i ) v i k → i { ^ . ( vec_data [i] v ) k }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
 // Open device `ordinal` (CUDA when present, else the gpu package's CPU
-// backend). Returns a heap `*GpuKit` so it can be held as a long-lived
-// singleton (its kernel cache persists across calls). Check `gk_ok`; even a
-// failed open is safe to `gk_close`.
-@ gk_open i ordinal → *GpuKit {
+// backend). The kit is a long-lived handle (its kernel cache and pool
+// persist across calls). Check `gk_ok`; a failed open is still a kit.
+@ gk_open i ordinal → GpuKit {
     : Gpu g ( gpu_open ordinal )
-    : *GpuKit kit # *GpuKit ( nurl_malloc Z GpuKit )
-    = . kit gpu g
-    = . kit ok ( gpu_ok g )
-    = . kit cache ( vec_new [GkKernelEntry] )
-    ^ kit
+    : b ok ( gpu_ok g )
+    ^ @ GpuKit { # s ( rcbox_new [GpuKitImpl] @ GpuKitImpl { g ok ( vec_new [GkKernelEntry] )
+            ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( gpu_timer_none ) ( gpu_timer_none ) } ) }
 }
 
 // Open the device a caller who does not care should get: $NURL_GPU_DEVICE
@@ -86,30 +135,49 @@ $ `deps/gpu/src/gpu.nu`
 // one is whichever the driver enumerates first — a 4 GB GTX 970 in front of a
 // 24 GB RTX 4090, say, where a model that fits on one fails to allocate on the
 // other. Prefer this everywhere the ordinal is not a user choice.
-@ gk_open_best → *GpuKit { ^ ( gk_open ( gpu_best_device ) ) }
+@ gk_open_best → GpuKit { ^ ( gk_open ( gpu_best_device ) ) }
 
-@ gk_ok * GpuKit kit → b { ^ . kit ok }
+@ gk_ok GpuKit kit__h → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ . kit ok
+}
+
+// The kit's device, for the gpu package's own calls (graphs, timers):
+// another owner of it, so it stays valid however long it is kept.
+@ gk_gpu GpuKit kit__h → Gpu {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ . kit gpu
+}
 
 // "cuda" or "cpu".
-@ gk_backend * GpuKit kit → s { ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` } }
+@ gk_backend GpuKit kit → s { ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` } }
 
-@ gk_device_name * GpuKit kit → s { ^ ( gpu_name . kit gpu ) }
+@ gk_device_name GpuKit kit__h → s {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ ( gpu_name . kit gpu )
+}
 
 // Make the kit's device current on the CALLING thread — see
 // gpu_bind_thread. A single-threaded program never needs it; anything
 // that hands device work to a pool or a fiber runtime does.
-@ gk_bind_thread * GpuKit kit → b {
-    ? ( gk_ok kit ) {} { ^ F }
+@ gk_bind_thread GpuKit kit__h → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? . kit ok {} { ^ F }
     ^ ( gpu_bind_thread . kit gpu )
 }
 
 // Free / total device memory in bytes; 0 means the backend cannot say.
 // CUDA asks the driver; the CPU backends report host RAM.
-@ gk_mem_free * GpuKit kit → i { ^ ( gpu_mem_free . kit gpu ) }
+@ gk_mem_free GpuKit kit__h → i {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ ( gpu_mem_free . kit gpu )
+}
 
-@ gk_mem_total * GpuKit kit → i { ^ ( gpu_mem_total . kit gpu ) }
+@ gk_mem_total GpuKit kit__h → i {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ ( gpu_mem_total . kit gpu )
+}
 
-// Release every cached kernel, close the device, and free the kit.
 // ── Device-memory pool ────────────────────────────────────────────────
 //
 // cuMemAlloc and cuMemFree are not cheap and they SYNCHRONISE: measured
@@ -118,25 +186,23 @@ $ `deps/gpu/src/gpu.nu`
 // so the allocator alone was ~100 ms per frame in lingbot-map, a third
 // of the frame, with the device idle for all of it.
 //
-// So gk_dbuf_free does not return memory to the driver; it marks the
-// block reusable, and the next gk_dbuf_new of the SAME byte size takes
-// it back. Exact-size matching, deliberately: a size-class allocator
-// would hand out a bigger block than asked for, and every gkd_* wrapper
-// validates element counts EXACTLY and fails closed on a mismatch.
+// So a GkBuf's last owner does not return its memory to the driver; it
+// marks the block reusable, and the next gk_dbuf_new of the SAME byte
+// size takes it back. Exact-size matching, deliberately: a size-class
+// allocator would hand out a bigger block than asked for, and every
+// gkd_* wrapper validates element counts EXACTLY and fails closed on a
+// mismatch.
 //
-// The table is (dptr, bytes, inuse) triples in one raw array, scanned
-// linearly — a forward pass settles into a few dozen distinct sizes, so
-// the scan is shorter than the work it saves by three orders of
-// magnitude.
+// Each kit keeps its own table — a row per block it allocated, in use or
+// idle, scanned linearly: a forward pass settles into a few dozen
+// distinct sizes, so the scan is shorter than the work it saves by three
+// orders of magnitude. The table owns the blocks, so they go with the
+// kit, in the kit's own context: a pointer can never be handed out of a
+// context that is gone (which a process-global table once did — a TTS
+// server that switched models answered its first request after the
+// switch with sixteen seconds of digital zero).
 //
-// A pooled block is only ever handed back to a free() that names both
-// its pointer AND its byte size, so a VIEW into another buffer (a
-// different pointer, or the same pointer with a different length) never
-// matches and falls through to the driver — which is what it does today.
-// An identity view freed while its parent lives would corrupt the pool,
-// but that same call already double-frees without one.
-//
-// gk_pool F turns caching off (blocks freed after that go straight to
+// gk_pool F turns caching off (blocks released after that go straight to
 // the driver); gk_pool_release hands every idle block back, which is
 // also what gk_dbuf_new does before reporting an out-of-memory.
 //
@@ -152,29 +218,24 @@ $ `deps/gpu/src/gpu.nu`
 // the idle total over the budget evicts the least recently used idle
 // blocks until it fits. Blocks in use are never touched, and a pool
 // under its budget behaves exactly as before.
-: ~ i g_pool_mem 0  // *u — four i64 per entry: dptr, bytes, inuse, stamp
-: ~ i g_pool_n 0
-: ~ i g_pool_cap 0
-: ~ b g_pool_on T
-: ~ i g_pool_idle 0  // bytes currently held idle
-: ~ i g_pool_max -1  // budget in bytes; <0 = not set yet, 0 = unlimited
-: ~ i g_pool_clock 0  // LRU stamp source
+// (the pool counters live at the top of the file, beside the kit's state)
 
 @ gk_pool b on → v { = g_pool_on on }
 
 @ gk_pool_enabled → b { ^ g_pool_on }
 
-// Entries, and how many of them are idle — for tests and for anyone
+// Blocks the pools hold, in use or idle — for tests and for anyone
 // wondering where the VRAM went.
 @ gk_pool_count → i { ^ g_pool_n }
 
-// Bytes the pool is holding that nothing is using.
+// Bytes the pools are holding that nothing is using.
 @ gk_pool_idle_bytes → i { ^ g_pool_idle }
 
 // Cap the idle side at `bytes` (0 = unlimited). Trims immediately.
-@ gk_pool_budget * GpuKit kit i bytes → v {
+@ gk_pool_budget GpuKit kit__h i bytes → v {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     = g_pool_max ? < bytes 0 { 0 } { bytes }
-    ( __gk_pool_trim )
+    ( __gk_pool_trim kit )
 }
 
 @ gk_pool_budget_bytes → i { ^ ? < g_pool_max 0 { 0 } { g_pool_max } }
@@ -182,191 +243,134 @@ $ `deps/gpu/src/gpu.nu`
 // The budget a caller who never sets one gets: $NURL_GK_POOL_MAX (bytes)
 // when set, else a quarter of the device's memory — enough that a steady
 // shape mix never evicts, small enough that a drifting one cannot eat the
-// card. Resolved once, on the first free, when a kit exists to ask.
-@ _gk_pool_default * GpuKit kit → v {
+// card. Resolved once, on the first allocation.
+@ _gk_pool_default * GpuKitImpl kit → v {
     ? >= g_pool_max 0 { ^ } {}
     : ~ i fromenv 0
     ?? ( env_get `NURL_GK_POOL_MAX` ) {
-        T ev → { = fromenv ( nurl_str_to_int ( string_data ev ) ) ( string_free ev ) }
+        T ev → { = fromenv ( nurl_str_to_int ( string_data ev ) ) }
         F → {}
     }
     ? > fromenv 0 { = g_pool_max fromenv ^ } {}
-    : i tot ( gk_mem_total kit )
+    : i tot ( gpu_mem_total . kit gpu )
     = g_pool_max ? > tot 0 { / tot 4 } { 0 }
 }
 
-@ __gk_pool_reserve i want → b {
-    ? <= want g_pool_cap { ^ T } {}
-    : ~ i ncap * 2 g_pool_cap
-    ? < ncap want { = ncap want } {}
-    ? < ncap 16 { = ncap 16 } {}
-    : *u nb ( nurl_alloc * ncap 32 )
-    ? == # i nb 0 { ^ F } {}
-    : ~ i k 0
-    ~ < k * g_pool_n 4 {
-        ( nurl_poke nb k ( nurl_peek # *u g_pool_mem k ) )
-        = k + k 1
-    }
-    ? != g_pool_mem 0 { ( nurl_free # s g_pool_mem ) } {}
-    = g_pool_mem # i nb
-    = g_pool_cap ncap
-    ^ T
-}
-
-// Drop entry `k`, moving the last one into its slot.
-@ __gk_pool_drop i k → v {
-    : *u m # *u g_pool_mem
-    : i last - g_pool_n 1
+// Drop row `k`: the last row moves into its slot, and the block that was
+// there goes with the row (freed to the driver).
+@ __gk_pool_drop * GpuKitImpl kit i k → v {
+    : i last - ( vec_len [i] . kit pdptr ) 1
     ? < k last {
-        : i d * k 4
-        : i sfrom * last 4
-        : ~ i j 0
-        ~ < j 4 { ( nurl_poke m + d j ( nurl_peek m + sfrom j ) ) = j + j 1 }
+        : b _a ( vec_swap [GpuBuffer] . kit pbuf k last )
+        : b _b ( vec_swap [i] . kit pdptr k last )
+        : b _c ( vec_swap [i] . kit pbytes k last )
+        : b _d ( vec_swap [i] . kit pinuse k last )
+        : b _e ( vec_swap [i] . kit pstamp k last )
     } {}
-    = g_pool_n last
+    : ?GpuBuffer _gone ( vec_pop [GpuBuffer] . kit pbuf )
+    : ?i _f ( vec_pop [i] . kit pdptr )
+    : ?i _g ( vec_pop [i] . kit pbytes )
+    : ?i _h ( vec_pop [i] . kit pinuse )
+    : ?i _i ( vec_pop [i] . kit pstamp )
+    = g_pool_n - g_pool_n 1
 }
 
 // Evict least-recently-idled blocks until the idle side is inside the
 // budget. Called on every give, and whenever the budget changes.
-@ __gk_pool_trim → v {
+@ __gk_pool_trim * GpuKitImpl kit → v {
     ? > g_pool_max 0 {} { ^ }
     ~ > g_pool_idle g_pool_max {
-        : *u m # *u g_pool_mem
+        : i n ( vec_len [i] . kit pdptr )
+        : *i inuse ( vec_data [i] . kit pinuse )
+        : *i stamp ( vec_data [i] . kit pstamp )
         : ~ i best - 0 1
         : ~ i beststamp 0
         : ~ i k 0
-        ~ < k g_pool_n {
-            : i o * k 4
-            ? == ( nurl_peek m + o 2 ) 0 {
-                : i st ( nurl_peek m + o 3 )
-                ? | < best 0 < st beststamp { = best k = beststamp st } {}
+        ~ < k n {
+            ? == . inuse k 0 {
+                ? | < best 0 < . stamp k beststamp { = best k = beststamp . stamp k } {}
             } {}
             = k + k 1
         }
         ? < best 0 { ^ } {}
-        : i o2 * best 4
-        : i dptr ( nurl_peek m o2 )
-        : i bytes ( nurl_peek m + o2 1 )
-        ( gpu_free @ GpuBuffer { dptr bytes } )
-        = g_pool_idle - g_pool_idle bytes
-        ( __gk_pool_drop best )
+        = g_pool_idle - g_pool_idle ( __gk_col . kit pbytes best )
+        ( __gk_pool_drop kit best )
     }
 }
 
-// An idle block of exactly `bytes`, marked in-use — or 0.
-@ _gk_pool_take i bytes → i {
+// An idle block of exactly `bytes`, marked in-use — its device pointer,
+// or 0.
+@ _gk_pool_take * GpuKitImpl kit i bytes → i {
     ? g_pool_on {} { ^ 0 }
-    : *u m # *u g_pool_mem
+    : i n ( vec_len [i] . kit pdptr )
+    : *i by ( vec_data [i] . kit pbytes )
+    : *i inuse ( vec_data [i] . kit pinuse )
     : ~ i k 0
-    ~ < k g_pool_n {
-        : i o * k 4
-        ? & == ( nurl_peek m + o 1 ) bytes == ( nurl_peek m + o 2 ) 0 {
-            ( nurl_poke m + o 2 1 )
+    ~ < k n {
+        ? & == . by k bytes == . inuse k 0 {
+            : b _s ( vec_set [i] . kit pinuse k 1 )
             = g_pool_idle - g_pool_idle bytes
-            ^ ( nurl_peek m o )
+            ^ ( __gk_col . kit pdptr k )
         } {}
         = k + k 1
     }
     ^ 0
 }
 
-// Record a fresh driver allocation as in-use.
-@ _gk_pool_add i dptr i bytes → v {
-    ? & g_pool_on != dptr 0 {} { ^ }
-    ? ( __gk_pool_reserve + g_pool_n 1 ) {} { ^ }
-    : *u m # *u g_pool_mem
-    : i o * g_pool_n 4
-    ( nurl_poke m o dptr )
-    ( nurl_poke m + o 1 bytes )
-    ( nurl_poke m + o 2 1 )
-    ( nurl_poke m + o 3 0 )
+// A fresh driver allocation joins the table, in use.
+@ _gk_pool_add * GpuKitImpl kit GpuBuffer gb → v {
+    ( vec_push [i] . kit pdptr . gb dptr )
+    ( vec_push [i] . kit pbytes . gb bytes )
+    ( vec_push [i] . kit pinuse 1 )
+    ( vec_push [i] . kit pstamp 0 )
+    ( vec_push [GpuBuffer] . kit pbuf gb )
     = g_pool_n + g_pool_n 1
 }
 
-// Mark a block idle. F when it is not one of ours — the caller then
-// frees it through the driver, as before.
-@ _gk_pool_give i dptr i bytes → b {
-    ? g_pool_on {} { ^ F }
-    : *u m # *u g_pool_mem
+// The last owner of the block at `dptr` let go of it: idle in the pool,
+// or — with the pool off — straight back to the driver.
+@ _gk_pool_give * GpuKitImpl kit i dptr → v {
+    : i n ( vec_len [i] . kit pdptr )
+    : *i dp ( vec_data [i] . kit pdptr )
+    : *i inuse ( vec_data [i] . kit pinuse )
     : ~ i k 0
-    ~ < k g_pool_n {
-        : i o * k 4
-        ? & & == ( nurl_peek m o ) dptr == ( nurl_peek m + o 1 ) bytes
-        == ( nurl_peek m + o 2 ) 1 {
-            ( nurl_poke m + o 2 0 )
-            = g_pool_clock + g_pool_clock 1
-            ( nurl_poke m + o 3 g_pool_clock )
-            = g_pool_idle + g_pool_idle bytes
-            ( __gk_pool_trim )
-            ^ T
+    ~ < k n {
+        ? & == . dp k dptr == . inuse k 1 {
+            ? g_pool_on {
+                : b _s ( vec_set [i] . kit pinuse k 0 )
+                = g_pool_clock + g_pool_clock 1
+                : b _t ( vec_set [i] . kit pstamp k g_pool_clock )
+                = g_pool_idle + g_pool_idle ( __gk_col . kit pbytes k )
+                ( __gk_pool_trim kit )
+            } { ( __gk_pool_drop kit k ) }
+            ^
         } {}
         = k + k 1
     }
-    ^ F
 }
 
 // Hand every idle block back to the driver and drop it from the table.
 // In-use blocks stay — this is a trim, not a reset.
-@ gk_pool_release * GpuKit kit → v {
-    ? == g_pool_mem 0 { ^ } {}
-    : *u m # *u g_pool_mem
-    : ~ i keep 0
-    : ~ i k 0
-    ~ < k g_pool_n {
-        : i o * k 4
-        : i dptr ( nurl_peek m o )
-        : i bytes ( nurl_peek m + o 1 )
-        ? == ( nurl_peek m + o 2 ) 0 {
-            ( gpu_free @ GpuBuffer { dptr bytes } )
-        } {
-            : i d * keep 4
-            ( nurl_poke m d dptr )
-            ( nurl_poke m + d 1 bytes )
-            ( nurl_poke m + d 2 1 )
-            ( nurl_poke m + d 3 0 )
-            = keep + keep 1
-        }
-        = k + k 1
-    }
-    = g_pool_n keep
-    = g_pool_idle 0
+@ gk_pool_release GpuKit kit__h → v {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ( _gk_pool_release kit )
 }
 
-// Every device pointer in the pool belongs to the CONTEXT that allocated it,
-// and closing the kit destroys that context. An entry left behind is a
-// pointer into a dead context — and the driver does not complain about one:
-// the next gk_dbuf_new hands it out, the upload reports success, the kernel
-// writes nowhere, and the program produces SILENCE rather than an error.
-// (Found exactly that way: a TTS server that switched models answered its
-// first request after the switch with sixteen seconds of digital zero, and
-// every request after it correctly.)
-//
-// gk_pool_release frees what is idle while the context is still alive; this
-// forgets the rest, which the context teardown reclaims anyway.
-@ __gk_pool_forget → v {
-    = g_pool_n 0
-    = g_pool_idle 0
+@ _gk_pool_release * GpuKitImpl kit → v {
+    : ~ i k - ( vec_len [i] . kit pdptr ) 1
+    ~ >= k 0 {
+        ? == ( __gk_col . kit pinuse k ) 0 {
+            = g_pool_idle - g_pool_idle ( __gk_col . kit pbytes k )
+            ( __gk_pool_drop kit k )
+        } {}
+        = k - k 1
+    }
 }
 
-@ gk_close * GpuKit kit → v {
-    ( gk_pool_release kit )
-    ( __gk_pool_forget )
-    : i n ( vec_len [GkKernelEntry] . kit cache )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → {
-                ( gpu_kernel_free . e kernel )
-                ( string_free . e name )
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [GkKernelEntry] . kit cache )
-    ? . kit ok { ( gpu_close . kit gpu ) } {}
-    ( nurl_free kit )
-}
+// Let go of `kit` now rather than at the end of its owner's scope: the
+// device closes with the kit's last owner — which includes every GkBuf
+// still alive from it.
+@ gk_close sink GpuKit kit → v {}
 
 // Grid size for `n` threads at the given block size (re-export of gpu_grid).
 @ gk_grid i n i block → i { ^ ( gpu_grid n block ) }
@@ -425,9 +429,9 @@ $ `deps/gpu/src/gpu.nu`
 // `name` reuse the cached kernel. A failed compile returns a not-ok kernel
 // and is not cached (so a fixed source can be retried).
 // The cache SLOT for `name`, compiling on a miss; -1 when the compile
-// failed. Callers that only want the kernel use _gk_get_kernel; the slot
-// itself is what the profiler accumulates into.
-@ _gk_kernel_slot * GpuKit kit s src s name → i {
+// failed. A launch borrows the slot's kernel in place (_gk_slot_launch);
+// the slot is also what the profiler accumulates into.
+@ _gk_kernel_slot * GpuKitImpl kit s src s name → i {
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {
@@ -445,36 +449,41 @@ $ `deps/gpu/src/gpu.nu`
     ^ n
 }
 
-@ _gk_slot_kernel * GpuKit kit i slot → GpuKernel {
+// Launch the kernel in cache slot `slot`, borrowed in place (no copy of
+// the handle per launch). Nonzero = the gpu_launch error, or 1 for an
+// empty slot.
+@ _gk_slot_launch * GpuKitImpl kit i slot i grid i block ( Vec i ) args → i {
     ?? ( vec_get [GkKernelEntry] . kit cache slot ) {
-        T e → { ^ . e kernel }
-        F _ → { ^ @ GpuKernel { 0 0 } }
+        T e → { ^ ( gpu_launch . e kernel grid block args ) }
+        F _ → { ^ 1 }
     }
 }
 
-@ _gk_get_kernel * GpuKit kit s src s name → GpuKernel {
-    : i slot ( _gk_kernel_slot kit src name )
-    ? < slot 0 { ^ @ GpuKernel { 0 0 } } {}
-    ^ ( _gk_slot_kernel kit slot )
+// Kernels in the kit's cache (each compiled once, by name).
+@ gk_kernel_count GpuKit kit__h → i {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ ( vec_len [GkKernelEntry] . kit cache )
 }
 
 // Warm the cache: compile `src` (entry `name`) into the kit now and report
 // whether it succeeded, so a long-lived caller can detect a bad kernel at
 // setup instead of on the first launch.
-@ gk_compile * GpuKit kit s src s name → b {
-    ? ( gk_ok kit ) {} { ^ F }
-    ^ ( gpu_kernel_ok ( _gk_get_kernel kit src name ) )
+@ gk_compile GpuKit kit__h s src s name → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? . kit ok {} { ^ F }
+    ^ >= ( _gk_kernel_slot kit src name ) 0
 }
 
 // ── The workhorse ─────────────────────────────────────────────────────
 
-// Compile-cached, marshal, launch, sync, download, free. `call` lists the
+// Compile-cached, marshal, launch, sync, download. `call` lists the
 // kernel's arguments in declaration order (buffers and scalars interleaved
 // exactly as the kernel signature expects). Returns F on any device error.
-@ gk_run * GpuKit kit s src s name i grid i block ( Vec GkArg ) call → b {
-    ? ( gk_ok kit ) {} { ^ F }
-    : GpuKernel kn ( _gk_get_kernel kit src name )
-    ? ( gpu_kernel_ok kn ) {} { ^ F }
+@ gk_run GpuKit kit__h s src s name i grid i block ( Vec GkArg ) call → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? . kit ok {} { ^ F }
+    : i slot ( _gk_kernel_slot kit src name )
+    ? < slot 0 { ^ F } {}
 
     : i nc ( vec_len [GkArg] call )
     : ( Vec i ) args ( vec_new [i] )
@@ -503,7 +512,7 @@ $ `deps/gpu/src/gpu.nu`
         = k + k 1
     }
 
-    ? ok { ? == ( gpu_launch kn grid block args ) 0 {} { = ok F } } {}
+    ? ok { ? == ( _gk_slot_launch kit slot grid block args ) 0 {} { = ok F } } {}
     ? ok { ? == ( gpu_sync . kit gpu ) 0 {} { = ok F } } {}
 
     // download outputs
@@ -531,14 +540,6 @@ $ `deps/gpu/src/gpu.nu`
         }
     } {}
 
-    // free every device buffer
-    : ~ i j 0
-    ~ < j nb {
-        ?? ( vec_get [GpuBuffer] bufs j ) { T db → { ( gpu_free db ) } F _ → {} }
-        = j + j 1
-    }
-    ( vec_free [i] args )
-    ( vec_free [GpuBuffer] bufs )
-    ( vec_free [i] buf_arg )
+    // the device buffers go with `bufs`
     ^ ok
 }

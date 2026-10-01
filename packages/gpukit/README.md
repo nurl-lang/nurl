@@ -4,7 +4,7 @@ One dependency for running compute on the GPU without the marshalling
 boilerplate. The [`gpu`](../gpu) package is the low-level interface — open a
 device, JIT-compile a CUDA-C kernel (NVRTC, or the host-C++ CPU backend),
 allocate device buffers, upload/download, build the argument vector, compute a
-grid, launch, sync, free. Every GPU-using package re-writes the same ~35 lines
+grid, launch, sync. Every GPU-using package re-writes the same ~35 lines
 of that dance for each kernel. `gpukit` is that glue, as a facade.
 
 ## Before / after
@@ -22,7 +22,6 @@ Hand-marshalled (the pattern in onnx / anomaly today):
 ( gpu_launch k (gpu_grid n 256) 256 args )
 ( gpu_sync g )
 ( gpu_download (# *u (vec_data [f] out)) b_out )
-( gpu_free b_x ) ( gpu_free b_out ) ( vec_free [i] args )
 ```
 
 With gpukit:
@@ -33,12 +32,11 @@ With gpukit:
 ( vec_push [GkArg] call ( gk_i64   n  ) )
 ( vec_push [GkArg] call ( gk_out_f out ) )
 ( gk_run kit src `my_kernel` ( gk_grid n 256 ) 256 call )
-( vec_free [GkArg] call )
 ```
 
 `gk_run` compiles-and-caches the kernel by name, allocates a device buffer per
 buffer binding, uploads inputs, marshals the args in binding order, launches,
-syncs, downloads outputs, and frees every device buffer.
+syncs and downloads outputs; the device buffers go with the call.
 
 ## Ready-made kernels
 
@@ -51,7 +49,7 @@ For the common cases you don't write a kernel at all:
 ( gk_matmul_f kit c a b m k n )          // C[m×n] = A[m×k]·B[k×n]
 : ?f s ( gk_reduce_sum_f kit x )         // Σ x
 : ?f d ( gk_dot_f kit a b )              // a·b
-( gk_close kit )
+// nothing to close: the kit goes with its last owner
 ```
 
 ## API
@@ -64,7 +62,8 @@ Lifecycle:
 | `( gk_open_best )` → `GpuKit` | the device a caller who does not care should get: `$NURL_GPU_DEVICE`, else highest compute capability, memory breaking ties |
 | `( gk_ok kit )` → `b`, `( gk_backend kit )` → `s`, `( gk_device_name kit )` → `s` | |
 | `( gk_bind_thread kit )` → `b` | make the device current on THIS thread (CUDA contexts are thread-local) |
-| `( gk_close kit )` | free cached kernels + close the device |
+| `( gk_close kit )` | early release (optional): the kit — cached kernels, pool, device — goes with its last owner |
+| `( gk_gpu kit )` → `Gpu` | the kit's device, for the gpu package's own calls (graphs, timers) |
 | `( gk_grid n block )` → `i` | grid size for `n` threads |
 
 Bindings (`f` is a C `double`, `i` a C `long long`):
@@ -80,7 +79,7 @@ Workhorse:
 
 | Call | |
 | --- | --- |
-| `( gk_run kit src name grid block call )` → `b` | compile-cached, marshal, launch, sync, download, free |
+| `( gk_run kit src name grid block call )` → `b` | compile-cached, marshal, launch, sync, download |
 
 The `call` is a `Vec GkArg` listing the kernel's arguments in declaration
 order (buffers and scalars interleaved exactly as the signature expects).
@@ -94,9 +93,9 @@ Three things matter more than any individual kernel, and all three are
 handled here rather than in every caller:
 
 **Memory is pooled.** `cuMemAlloc`/`cuMemFree` synchronise and cost
-~315 us per 12 MB pair on a 4090. `gk_dbuf_free` retires a block for
-reuse by the next `gk_dbuf_new` of the same size instead of returning it
-to the driver — a forward pass that allocates its scratch per layer was
+~315 us per 12 MB pair on a 4090. A `GkBuf`'s last owner retires its
+block for reuse by the next `gk_dbuf_new` of the same size instead of
+returning it to the driver — a forward pass that allocates its scratch per layer was
 otherwise spending a third of its time in the allocator with the device
 idle. `gk_pool F` turns it off; `gk_pool_release kit` hands idle blocks
 back, which is also what an allocation failure does before reporting
@@ -171,14 +170,24 @@ bit-identical to a strictly sequential accumulation.
 
 ## Memory
 
-`GpuKit` carries a stable kernel-cache Vec, so it is passed by value and
-mutated across calls (like an `ArgParser`). Free it with `gk_close`.
+Nothing is released by hand. A `GpuKit` is a handle: every copy of it (a
+struct field, a Vec element, a capture) is the same kit, and its last owner
+releases the cached kernels, the memory pool and the device. A `GkBuf`
+holds its block and the kit it came from: its last owner — the buffer, a
+copy, a view (`gk_buf_view`) — hands the block back to the kit's pool, and
+the device stays open until every buffer from it is gone, whatever order
+the owners go in. `gk_dbuf_free` and `gk_close` remain as optional early
+releases of one owner.
 
 ## Device-resident buffers (`src/dev.nu`)
 
 `gk_run` marshals host↔device per call; chained pipelines want data to
 STAY on the device. `GkBuf` is an element-typed device allocation
-(`GK_F32` | `GK_F64`) with `gk_dbuf_new/_free/_upload/_download`, and
+(`GK_F32` | `GK_F64` | `GK_I64`) with `gk_dbuf_new/_upload/_download`
+(`. b dptr`, `. b n`, `. b dtype` are plain fields), views that hold their
+block (`gk_buf_view b off n`, `gk_buf_view_as b byte_off n dtype`), an
+empty buffer (`gk_buf_none dtype`) and an unowned wrapper over foreign
+device memory (`gk_buf_wrap dptr n dtype`), and
 `gk_run_dev` launches a cached kernel over raw device args with zero
 copies. Ready-made dtype-generic kernels: `gkd_add/sub/mul/div`
 (1-element scalar broadcast via the same kernel), `gkd_relu/sigmoid/

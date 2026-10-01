@@ -29,7 +29,7 @@ $ `gpukit.nu`
     ^ s
 }
 
-@ __gk_ew * GpuKit kit s name s op ( Vec f ) out ( Vec f ) a ( Vec f ) b → b {
+@ __gk_ew GpuKit kit s name s op ( Vec f ) out ( Vec f ) a ( Vec f ) b → b {
     : i n ( vec_len [f] out )
     : String src ( __gk_ew_src name op )
     : ( Vec GkArg ) call ( vec_new [GkArg] )
@@ -38,24 +38,22 @@ $ `gpukit.nu`
     ( vec_push [GkArg] call ( gk_out_f out ) )
     ( vec_push [GkArg] call ( gk_i64 n ) )
     : b r ( gk_run kit ( string_data src ) name ( gk_grid n 256 ) 256 call )
-    ( vec_free [GkArg] call )
-    ( string_free src )
     ^ r
 }
 
-@ gk_add_f * GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_add` `+` out a b ) }
+@ gk_add_f GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_add` `+` out a b ) }
 
-@ gk_sub_f * GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_sub` `-` out a b ) }
+@ gk_sub_f GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_sub` `-` out a b ) }
 
-@ gk_mul_f * GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_mul` `*` out a b ) }
+@ gk_mul_f GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_mul` `*` out a b ) }
 
-@ gk_div_f * GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_div` `/` out a b ) }
+@ gk_div_f GpuKit kit ( Vec f ) out ( Vec f ) a ( Vec f ) b → b { ^ ( __gk_ew kit `gk_div` `/` out a b ) }
 
 // ── Unary map: out[i] = <expr>, with `x` bound to in[i] ────────────────
 // `kname` is the CUDA entry name (a valid C identifier, stable per `expr` so
 // caching works). `expr` is C over the local `double x`, e.g. `x*x`,
 // `1.0/(1.0+exp(-x))`, `x>0.0?x:0.0`.
-@ gk_map_f * GpuKit kit s kname ( Vec f ) out ( Vec f ) in s expr → b {
+@ gk_map_f GpuKit kit s kname ( Vec f ) out ( Vec f ) in s expr → b {
     : i n ( vec_len [f] out )
     : String src ( string_from `extern "C" __global__ void ` )
     ( string_push_str src kname )
@@ -69,8 +67,6 @@ $ `gpukit.nu`
     ( vec_push [GkArg] call ( gk_out_f out ) )
     ( vec_push [GkArg] call ( gk_i64 n ) )
     : b r ( gk_run kit ( string_data src ) kname ( gk_grid n 256 ) 256 call )
-    ( vec_free [GkArg] call )
-    ( string_free src )
     ^ r
 }
 
@@ -135,7 +131,7 @@ $ `gpukit.nu`
     ^ src
 }
 
-@ gk_matmul_f * GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
+@ gk_matmul_f GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     : String src ? on_cpu ( __gk_matmul_src_cpu ) ( __gk_matmul_src_gpu )
     : s entry ? on_cpu `gk_matmul_tiled` `gk_matmul`
@@ -150,8 +146,6 @@ $ `gpukit.nu`
     ( vec_push [GkArg] call ( gk_i64 k ) )
     ( vec_push [GkArg] call ( gk_i64 n ) )
     : b r ( gk_run kit ( string_data src ) entry ( gk_grid tiles 256 ) 256 call )
-    ( vec_free [GkArg] call )
-    ( string_free src )
     ^ r
 }
 
@@ -171,7 +165,7 @@ $ `gpukit.nu`
 }
 
 // Sum of `x`. None on a device error.
-@ gk_reduce_sum_f * GpuKit kit ( Vec f ) x → ?f {
+@ gk_reduce_sum_f GpuKit kit ( Vec f ) x → ?f {
     : i n ( vec_len [f] x )
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
     : i threads ( _gk_partial_threads n )
@@ -185,8 +179,6 @@ $ `gpukit.nu`
     ( vec_push [GkArg] call ( gk_i64 n ) )
     : i blocks / threads 256
     : b ok ( gk_run kit ( string_data src ) `gk_reduce_sum` blocks 256 call )
-    ( vec_free [GkArg] call )
-    ( string_free src )
     : ~ f acc 0.0
     ? ok {
         : ~ i k 0
@@ -195,12 +187,11 @@ $ `gpukit.nu`
             = k + k 1
         }
     } {}
-    ( vec_free [f] partial )
     ? ok { ^ @ ?f { T acc } } { ^ @ ?f { F } }
 }
 
 // Dot product a·b (equal lengths assumed). None on a device error.
-@ gk_dot_f * GpuKit kit ( Vec f ) a ( Vec f ) b → ?f {
+@ gk_dot_f GpuKit kit ( Vec f ) a ( Vec f ) b → ?f {
     : i n ( vec_len [f] a )
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
     : i threads ( _gk_partial_threads n )
@@ -215,8 +206,6 @@ $ `gpukit.nu`
     ( vec_push [GkArg] call ( gk_i64 n ) )
     : i blocks / threads 256
     : b ok ( gk_run kit ( string_data src ) `gk_dot` blocks 256 call )
-    ( vec_free [GkArg] call )
-    ( string_free src )
     : ~ f acc 0.0
     ? ok {
         : ~ i k 0
@@ -225,6 +214,5 @@ $ `gpukit.nu`
             = k + k 1
         }
     } {}
-    ( vec_free [f] partial )
     ? ok { ^ @ ?f { T acc } } { ^ @ ?f { F } }
 }

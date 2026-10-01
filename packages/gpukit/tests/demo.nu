@@ -50,10 +50,9 @@ $ `src/kernels.nu`
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_eprintln `gpukit: no device (open failed)` )
-        ( gk_close kit )
         ^ 1
     }
     ( nurl_eprint `gpukit demo on ` )
@@ -79,7 +78,6 @@ $ `src/kernels.nu`
     }
     ( __ck `add ran` ( gk_add_f kit out a b ) )
     ( __ck `add == host` ( __eq_vec out want ) )
-    ( vec_free [f] want )
 
     // elementwise mul
     : ( Vec f ) wm ( vec_new [f] )
@@ -94,7 +92,6 @@ $ `src/kernels.nu`
     }
     ( __ck `mul ran` ( gk_mul_f kit out a b ) )
     ( __ck `mul == host` ( __eq_vec out wm ) )
-    ( vec_free [f] wm )
 
     // unary map: x*x
     : ( Vec f ) wsq ( vec_new [f] )
@@ -102,13 +99,11 @@ $ `src/kernels.nu`
     ~ < k N { : ~ f av 0.0 ?? ( vec_get [f] a k ) { T v → { = av v } F _ → {} } ( vec_push [f] wsq * av av ) = k + k 1 }
     ( __ck `map ran` ( gk_map_f kit `gk_sq` out a `x*x` ) )
     ( __ck `map x*x == host` ( __eq_vec out wsq ) )
-    ( vec_free [f] wsq )
 
     // kernel cache: a second identical call must reuse (still correct)
     ( __ck `map cached rerun` ( gk_map_f kit `gk_sq` out a `x*x` ) )
     : ( Vec f ) wsq2 ( __seq_map_sq a )
     ( __ck `map cached == host` ( __eq_vec out wsq2 ) )
-    ( vec_free [f] wsq2 )
 
     // matmul: 3x4 · 4x2 = 3x2, checked exactly against a host loop
     : i M 3
@@ -120,10 +115,6 @@ $ `src/kernels.nu`
     ( __ck `matmul ran` ( gk_matmul_f kit mc ma mb M K Nn ) )
     : ( Vec f ) hm ( __host_matmul ma mb M K Nn )
     ( __ck `matmul == host` ( __eq_vec mc hm ) )
-    ( vec_free [f] hm )
-    ( vec_free [f] ma )
-    ( vec_free [f] mb )
-    ( vec_free [f] mc )
 
     // reduce sum + dot (tolerance)
     : ~ f host_sum 0.0
@@ -157,17 +148,11 @@ $ `src/kernels.nu`
     ( vec_push [GkArg] call ( gk_i64 7 ) )
     ( vec_push [GkArg] call ( gk_i64 N ) )
     ( __ck `gk_run custom kernel` ( gk_run kit ( string_data src ) `wsum` ( gk_grid N 256 ) 256 call ) )
-    ( vec_free [GkArg] call )
-    ( string_free src )
     : ( Vec f ) wcustom ( vec_new [f] )
     = k 0
     ~ < k N { : ~ f av 0.0 ?? ( vec_get [f] a k ) { T v → { = av v } F _ → {} } ( vec_push [f] wcustom + * av 5.0 7.0 ) = k + k 1 }
     ( __ck `gk_run == host` ( __eq_vec out wcustom ) )
-    ( vec_free [f] wcustom )
 
-    ( vec_free [f] a )
-    ( vec_free [f] b )
-    ( vec_free [f] out )
     ( gk_close kit )
 
     : String sm ( string_from `PASS ` )
@@ -175,7 +160,6 @@ $ `src/kernels.nu`
     ( string_push_str sm ` / FAIL ` )
     ( string_push_int sm g_fail )
     ( nurl_eprintln ( string_data sm ) )
-    ( string_free sm )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }

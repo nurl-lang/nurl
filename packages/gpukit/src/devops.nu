@@ -22,13 +22,10 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `dev.nu`
 
-// Launch + tidy: run the cached kernel, then free the arg vector and the
-// source/name buffers every op wrapper builds per call.
-@ __gkd_launch * GpuKit kit String src String kname i grid ( Vec i ) args → b {
+// Launch the cached kernel. The arg vector and the source/name buffers
+// every op wrapper builds per call are handed in and go with this call.
+@ __gkd_launch GpuKit kit sink String src sink String kname i grid sink ( Vec i ) args → b {
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) grid 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
@@ -55,7 +52,7 @@ $ `dev.nu`
 // ── Gemm: Y[M×N] = alpha·A[M×K]·B(ᵀ) + beta·bias ─────────────────────
 // bias is broadcast over rows; pass hasb 0 to skip it (c is ignored).
 
-@ gkd_gemm * GpuKit kit GkBuf y GkBuf a GkBuf b GkBuf c i hasb i m i n i k f alpha f beta i transb → b {
+@ gkd_gemm GpuKit kit GkBuf y GkBuf a GkBuf b GkBuf c i hasb i m i n i k f alpha f beta i transb → b {
     ? & & ( __gkd_isfloat y ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . y dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? & & > m 0 > n 0 > k 0 {} { ^ F }
@@ -117,7 +114,6 @@ $ `dev.nu`
     ? smem {
         : String body ( _gkd_smem_body tn . y dtype transb 0 ? big { 1 } { 0 } )
         ( string_push_str src ( string_data body ) )
-        ( string_free body )
     } {
         ? gemv {
             ( string_push_str src `enum{CH=1024};__shared__ ` )
@@ -134,7 +130,6 @@ $ `dev.nu`
             ( string_push_str src `for(long long j=0;j<cnt;j++)` )
             : String mac ( _gkd_mac . y dtype `acc` `sa[j]` `sb[j]` )
             ( string_push_str src ( string_data mac ) )
-            ( string_free mac )
             ( string_push_str src `}__syncthreads();}` )
             ( string_push_str src `if(threadIdx.x==0){` )
             ( string_push_str src tn ) ( string_push_str src ` bias=(C!=0)?C[c]:0;` )
@@ -143,7 +138,6 @@ $ `dev.nu`
             ? tiled {
                 : String body ( _gkd_gemm_tiled tn . y dtype )
                 ( string_push_str src ( string_data body ) )
-                ( string_free body )
             } {
                 ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
                 ( string_push_str src `if(idx<M*N){long long r=idx/N,c=idx%N;` )
@@ -186,7 +180,7 @@ $ `dev.nu`
 // X[Cin,H,W] * W[Cout,Cin,kh,kw] (+ bias[Cout] when hasb) → Y[Cout,OH,OW].
 // Out-of-range taps are skipped (zero padding); ph/pw are the begin pads.
 
-@ gkd_conv2d * GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw → b {
+@ gkd_conv2d GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw → b {
     ? & & ( __gkd_isfloat y ) ( gk_buf_ok x ) ( gk_buf_ok w ) {} { ^ F }
     ? & == . y dtype . x dtype == . x dtype . w dtype {} { ^ F }
     ? & & & > cin 0 > h 0 > wd 0 > cout 0 {} { ^ F }
@@ -323,7 +317,7 @@ $ `dev.nu`
 // special case and keeps its specialised fast kernel; this one is a
 // plain one-thread-per-output body, because dilated layers in the models
 // that need them are a handful of small feature maps, not the hot path.
-@ gkd_conv2d_dil * GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw i dh i dw → b {
+@ gkd_conv2d_dil GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw i dh i dw → b {
     ? & == dh 1 == dw 1 {
         ^ ( gkd_conv2d kit y x w bias hasb cin h wd cout kh kw oh ow ph pw sh sw )
     } {}
@@ -385,7 +379,7 @@ $ `dev.nu`
 // Gather form: Y[oc,oy,ox] = bias + Σ X[ic,iy,ix]·W[ic,oc,ky,kx] where
 // iy = (oy + ph − ky)/sh taken only when it divides evenly and is in range.
 
-@ gkd_convtranspose2d * GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw → b {
+@ gkd_convtranspose2d GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw → b {
     ? & & ( __gkd_isfloat y ) ( gk_buf_ok x ) ( gk_buf_ok w ) {} { ^ F }
     ? & == . y dtype . x dtype == . x dtype . w dtype {} { ^ F }
     ? & & & > cin 0 > h 0 > wd 0 > cout 0 {} { ^ F }
@@ -455,7 +449,7 @@ $ `dev.nu`
 
 // ── 2-D max pool, NCHW; padding taps are ignored (−inf) ──────────────
 
-@ gkd_maxpool2d * GpuKit kit GkBuf y GkBuf x i c i h i wd i kh i kw i oh i ow i sh i sw i ph i pw → b {
+@ gkd_maxpool2d GpuKit kit GkBuf y GkBuf x i c i h i wd i kh i kw i oh i ow i sh i sw i ph i pw → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & & & > c 0 > h 0 > wd 0 & > kh 0 > kw 0 {} { ^ F }
@@ -496,7 +490,7 @@ $ `dev.nu`
 // ── BatchNormalization (inference), per channel over C×HW ────────────
 // Y = scale·(X−mean)/sqrt(var+eps) + B.
 
-@ gkd_batchnorm * GpuKit kit GkBuf y GkBuf x GkBuf sc GkBuf bb GkBuf mean GkBuf var i c i hw f eps → b {
+@ gkd_batchnorm GpuKit kit GkBuf y GkBuf x GkBuf sc GkBuf bb GkBuf mean GkBuf var i c i hw f eps → b {
     ? & & ( __gkd_isfloat y ) ( gk_buf_ok x ) & ( gk_buf_ok sc ) ( gk_buf_ok bb ) {} { ^ F }
     ? & ( gk_buf_ok mean ) ( gk_buf_ok var ) {} { ^ F }
     ? & == . y dtype . x dtype == . x dtype . sc dtype {} { ^ F }
@@ -534,7 +528,7 @@ $ `dev.nu`
 
 // ── LeakyRelu / Clip / Erf (elementwise with scalar params) ──────────
 
-@ gkd_leakyrelu * GpuKit kit GkBuf y GkBuf x f alpha → b {
+@ gkd_leakyrelu GpuKit kit GkBuf y GkBuf x f alpha → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? & == . y dtype . x dtype == . y n . x n {} { ^ F }
     : i n . y n
@@ -555,7 +549,7 @@ $ `dev.nu`
     ^ ( __gkd_launch kit src kname ( gk_grid n 256 ) args )
 }
 
-@ gkd_clip * GpuKit kit GkBuf y GkBuf x f lo f hi → b {
+@ gkd_clip GpuKit kit GkBuf y GkBuf x f lo f hi → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? & == . y dtype . x dtype == . y n . x n {} { ^ F }
     : i n . y n
@@ -578,7 +572,7 @@ $ `dev.nu`
     ^ ( __gkd_launch kit src kname ( gk_grid n 256 ) args )
 }
 
-@ gkd_erf * GpuKit kit GkBuf y GkBuf x → b {
+@ gkd_erf GpuKit kit GkBuf y GkBuf x → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? & == . y dtype . x dtype == . y n . x n {} { ^ F }
     ? == . y dtype GK_F32 { ^ ( gkd_map kit `erf` `erff(x)` y x ) } {}
@@ -588,7 +582,7 @@ $ `dev.nu`
 // ── LayerNormalization over the last axis ────────────────────────────
 // Per (outer) row of `ax` elements: y = (x−mean)/sqrt(var+eps)·sc + bi.
 
-@ gkd_layernorm * GpuKit kit GkBuf y GkBuf x GkBuf sc GkBuf bi i outer i ax f eps → b {
+@ gkd_layernorm GpuKit kit GkBuf y GkBuf x GkBuf sc GkBuf bi i outer i ax f eps → b {
     ? & & ( __gkd_isfloat y ) ( gk_buf_ok x ) & ( gk_buf_ok sc ) ( gk_buf_ok bi ) {} { ^ F }
     ? & == . y dtype . x dtype == . x dtype . sc dtype {} { ^ F }
     ? == . sc dtype . bi dtype {} { ^ F }
@@ -701,7 +695,7 @@ $ `dev.nu`
 // 100 KB an Ada SM can carve out, so three blocks stay resident.
 : i GKD_ATTN_SMEM 33792
 
-@ gkd_attention_ok * GpuKit kit i hd → b {
+@ gkd_attention_ok GpuKit kit i hd → b {
     ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
     ? & > hd 0 == % hd 16 0 {} { ^ F }
     // The register tile is sized for exactly QT*DT = 16 accumulators per
@@ -712,9 +706,9 @@ $ `dev.nu`
 }
 
 // Unmasked: every key is visible to every query.
-@ gkd_attention * GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v
+@ gkd_attention GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v
 i heads i n i nkv i hd f scale → b {
-    ^ ( gkd_attention_masked kit o q k v @ GkBuf { 0 0 . o dtype } heads n nkv hd 1 scale )
+    ^ ( gkd_attention_masked kit o q k v ( gk_buf_none . o dtype ) heads n nkv hd 1 scale )
 }
 
 // With a per-key additive bias: `mask` holds (heads/hpb) rows of `nkv`
@@ -726,7 +720,7 @@ i heads i n i nkv i hd f scale → b {
 // padding. Pass a zero GkBuf (dptr 0) for `mask` to run unmasked — the
 // kernel is then character-for-character the one gkd_attention has
 // always generated, so nothing already compiled is invalidated.
-@ gkd_attention_masked * GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v GkBuf mask
+@ gkd_attention_masked GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v GkBuf mask
 i heads i n i nkv i hd i hpb f scale → b {
     ? & & ( __gkd_isfloat o ) ( gk_buf_ok q ) & ( gk_buf_ok k ) ( gk_buf_ok v ) {} { ^ F }
     ? & & == . o dtype . q dtype == . q dtype . k dtype == . k dtype . v dtype {} { ^ F }
@@ -924,7 +918,7 @@ i heads i n i nkv i hd i hpb f scale → b {
 // to the same sequence permuted through the head-major entry.
 // gkd_attention_ok answers for this entry too (the tile constraint is
 // the same).
-@ gkd_attention_batch * GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v GkBuf mask
+@ gkd_attention_batch GpuKit kit GkBuf o GkBuf q GkBuf k GkBuf v GkBuf mask
 i batch i heads i n i nkv i hd f scale → b {
     ? & & ( __gkd_isfloat o ) ( gk_buf_ok q ) & ( gk_buf_ok k ) ( gk_buf_ok v ) {} { ^ F }
     ? & & == . o dtype . q dtype == . q dtype . k dtype == . k dtype . v dtype {} { ^ F }
@@ -1087,7 +1081,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ^ ( __gkd_launch kit src kname * * batch heads ( _gkd_ceil n bq ) args )
 }
 
-@ gkd_softmax_ax * GpuKit kit GkBuf y GkBuf x i outer i ax i inner → b {
+@ gkd_softmax_ax GpuKit kit GkBuf y GkBuf x i outer i ax i inner → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & & > outer 0 > ax 0 > inner 0 {} { ^ F }
@@ -1126,7 +1120,7 @@ i batch i heads i n i nkv i hd f scale → b {
 
 // Copy `src` into a concat output along an axis viewed as (outer, src_ax,
 // inner); the slot starts at `off` in the output's axis of size dst_ax.
-@ gkd_copy_ax * GpuKit kit GkBuf dst GkBuf src i outer i src_ax i inner i dst_ax i off → b {
+@ gkd_copy_ax GpuKit kit GkBuf dst GkBuf src i outer i src_ax i inner i dst_ax i off → b {
     ? & ( gk_buf_ok dst ) ( gk_buf_ok src ) {} { ^ F }
     ? == . dst dtype . src dtype {} { ^ F }
     ? & & > outer 0 > src_ax 0 > inner 0 {} { ^ F }
@@ -1156,7 +1150,7 @@ i batch i heads i n i nkv i hd f scale → b {
 
 // Extract a contiguous axis slice into a fresh tensor: viewing src as
 // (outer, src_ax, inner), dst[o,a,i] = src[o, soff+a, i] for a in [0,sz).
-@ gkd_slice_ax * GpuKit kit GkBuf dst GkBuf src i outer i sz i inner i src_ax i soff → b {
+@ gkd_slice_ax GpuKit kit GkBuf dst GkBuf src i outer i sz i inner i src_ax i soff → b {
     ? & ( gk_buf_ok dst ) ( gk_buf_ok src ) {} { ^ F }
     ? == . dst dtype . src dtype {} { ^ F }
     ? & & > outer 0 > sz 0 > inner 0 {} { ^ F }
@@ -1187,7 +1181,7 @@ i batch i heads i n i nkv i hd f scale → b {
 // General N-D (≤6) transpose: output axis k reads input axis perm[k].
 // `dims` are the INPUT dims; both vecs hold ndim (≤6) entries and perm
 // must be a permutation of 0..ndim−1.
-@ gkd_perm * GpuKit kit GkBuf y GkBuf x ( Vec i ) dims ( Vec i ) perm → b {
+@ gkd_perm GpuKit kit GkBuf y GkBuf x ( Vec i ) dims ( Vec i ) perm → b {
     ? & ( gk_buf_ok y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     : i nd ( vec_len [i] dims )
@@ -1343,7 +1337,7 @@ i batch i heads i n i nkv i hd f scale → b {
 //
 // Edge taps are clamped, so a coordinate that lands on the last row or
 // column interpolates with itself rather than reading past the end.
-@ gkd_resize_bilinear * GpuKit kit GkBuf y GkBuf x i c i h i wd i oh i ow i align → b {
+@ gkd_resize_bilinear GpuKit kit GkBuf y GkBuf x i c i h i wd i oh i ow i align → b {
     ? & ( gk_buf_ok y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? ( __gkd_isfloat y ) {} { ^ F }
@@ -1384,7 +1378,7 @@ i batch i heads i n i nkv i hd f scale → b {
     ^ ( __gkd_launch kit src kname ( gk_grid * * c oh ow 256 ) args )
 }
 
-@ gkd_resize_nn * GpuKit kit GkBuf y GkBuf x i c i h i wd i oh i ow i sh i sw → b {
+@ gkd_resize_nn GpuKit kit GkBuf y GkBuf x i c i h i wd i oh i ow i sh i sw → b {
     ? & ( gk_buf_ok y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & & & > c 0 > h 0 > wd 0 & > oh 0 > ow 0 {} { ^ F }
@@ -1414,7 +1408,7 @@ i batch i heads i n i nkv i hd f scale → b {
 }
 
 // Expand the last axis: input (outer,1) → (outer,rep), Y[o,r] = X[o].
-@ gkd_expandlast * GpuKit kit GkBuf y GkBuf x i outer i rep → b {
+@ gkd_expandlast GpuKit kit GkBuf y GkBuf x i outer i rep → b {
     ? & ( gk_buf_ok y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & > outer 0 > rep 0 {} { ^ F }
@@ -1437,7 +1431,7 @@ i batch i heads i n i nkv i hd f scale → b {
 // ── Reductions / index selection ─────────────────────────────────────
 
 // L2 norm along the last axis: input (outer, ax) → output (outer).
-@ gkd_reducel2 * GpuKit kit GkBuf y GkBuf x i outer i ax → b {
+@ gkd_reducel2 GpuKit kit GkBuf y GkBuf x i outer i ax → b {
     ? & ( __gkd_isfloat y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
     ? & > outer 0 > ax 0 {} { ^ F }
@@ -1464,7 +1458,7 @@ i batch i heads i n i nkv i hd f scale → b {
 
 // ArgMax along the last axis: input (outer, ax) in any element type →
 // GK_I64 indices (outer). Ties resolve to the first maximum.
-@ gkd_argmax * GpuKit kit GkBuf y GkBuf x i outer i ax → b {
+@ gkd_argmax GpuKit kit GkBuf y GkBuf x i outer i ax → b {
     ? & & ( gk_buf_ok y ) ( gk_buf_ok x ) == . y dtype GK_I64 {} { ^ F }
     ? & > outer 0 > ax 0 {} { ^ F }
     ? & == . x n * outer ax == . y n outer {} { ^ F }
@@ -1490,7 +1484,7 @@ i batch i heads i n i nkv i hd f scale → b {
 // EOS read-out (CLIP): given per-row token ids `tok` [B,L] (GK_I64) and
 // features `data` [B,L,D], select each row's max-id token's features →
 // Y [B,D]. One thread per output element.
-@ gkd_eos_gather * GpuKit kit GkBuf y GkBuf data GkBuf tok i bsz i l i d → b {
+@ gkd_eos_gather GpuKit kit GkBuf y GkBuf data GkBuf tok i bsz i l i d → b {
     ? & & & ( __gkd_isfloat y ) ( gk_buf_ok data ) ( gk_buf_ok tok ) == . tok dtype GK_I64 {} { ^ F }
     ? == . y dtype . data dtype {} { ^ F }
     ? & & > bsz 0 > l 0 > d 0 {} { ^ F }
