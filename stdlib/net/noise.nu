@@ -19,6 +19,9 @@
 // + recv); the datagram session (counter nonce, replay window) and the
 // UDP/roaming layer sit above it (later Phase-0 commits).
 //
+// A Handshake is a handle: every copy is the same handshake state, and its
+// last owner releases it (noise_free is an early release, optional).
+//
 // Message layout (no payloads):
 //   msg1 (init→resp): e(32) | enc(s_static)(48) | enc("")(16)  = 96 bytes
 //   msg2 (resp→init): e(32) | enc("")(16)                      = 48 bytes
@@ -27,6 +30,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/ext/crypto.nu`
+$ `stdlib/core/rcbox.nu`
 
 : | NoiseErr {
     NoiseBadMsg  // truncated / wrong-length handshake message
@@ -185,7 +189,7 @@ $ `stdlib/ext/crypto.nu`
 
 // ── HandshakeState ───────────────────────────────────────────────────
 
-: Handshake {
+: HandshakeImpl {
     s sym  // *SymState
     ( Vec u ) s_priv  // our static private
     ( Vec u ) s_pub  // our static public
@@ -197,13 +201,35 @@ $ `stdlib/ext/crypto.nu`
     i initiator
 }
 
-@ __hs_sym * Handshake h → *SymState { ^ # *SymState . h sym }
+// A Handshake is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same handshake, and the last owner releases it.
+: Handshake { s ctl }
+
+@ Handshake_share Handshake h → Handshake { ^ @ Handshake { # s ( rcbox_share # i . h ctl ) } }
+
+@ Handshake_drop sink Handshake h → v {
+    ( mem_forget h )
+    ( rcbox_release [HandshakeImpl] # i . h ctl )
+}
+
+@ __Handshake_ptr Handshake h → *HandshakeImpl { ^ ( rcbox_ptr [HandshakeImpl] # i . h ctl ) }
+
+// The symmetric state is a raw block of its own: releasing it is the
+// handshake's drop, run by its last owner (the key Vecs go after it).
+% Drop HandshakeImpl {
+    @ drop HandshakeImpl h → v {
+        ? != # i . h sym 0 { ( __sym_free # *SymState . h sym ) } {}
+    }
+}
+
+@ __hs_sym * HandshakeImpl h → *SymState { ^ # *SymState . h sym }
 
 // Initialise. `rs` is the remote static public key (required for the
 // initiator; pass the responder's own static public for the responder so
 // the IK pre-message hashes identically on both sides). `psk` is 32 bytes.
-@ noise_init i is_initiator CryptoKeypair static_kp ( Vec u ) rs ( Vec u ) psk → *Handshake {
-    : *Handshake h # *Handshake ( nurl_alloc Z Handshake )
+@ noise_init i is_initiator CryptoKeypair static_kp ( Vec u ) rs ( Vec u ) psk → Handshake {
+    : i h__box ( rcbox_zero [HandshakeImpl] )
+    : *HandshakeImpl h ( rcbox_ptr [HandshakeImpl] h__box )
     : *SymState sym ( __sym_new `Noise_IKpsk2_25519_ChaChaPoly_SHA256` )
     = . h sym # s sym
     = . h s_priv ( __slice . static_kp sk 0 32 )
@@ -219,22 +245,13 @@ $ `stdlib/ext/crypto.nu`
     // responder passed its own static public as `rs` here, so both hash
     // the same 32 bytes.
     ( __sym_mix_hash sym . h rs )
-    ^ h
+    ^ @ Handshake { # s h__box }
 }
 
-@ noise_free sink * Handshake h → v {
-    ( __sym_free ( __hs_sym h ) )
-    ( vec_free [u] . h s_priv )
-    ( vec_free [u] . h s_pub )
-    ( vec_free [u] . h e_priv )
-    ( vec_free [u] . h e_pub )
-    ( vec_free [u] . h rs )
-    ( vec_free [u] . h re )
-    ( vec_free [u] . h psk )
-    ( nurl_free # s h )
-}
+// Let go of `h` now rather than at the end of its owner's scope.
+@ noise_free sink Handshake h → v {}
 
-@ __hs_gen_ephemeral * Handshake h → v {
+@ __hs_gen_ephemeral * HandshakeImpl h → v {
     ?? ( x25519_keygen ) {
         T kp → {
             ( vec_free [u] . h e_priv )
@@ -248,8 +265,16 @@ $ `stdlib/ext/crypto.nu`
     }
 }
 
+// The remote static public key, lent: the responder learns it from
+// message 1 (it is who is calling).
+@ noise_remote_static Handshake h__h → ( Vec u ) {
+    : *HandshakeImpl h ( __Handshake_ptr h__h )
+    ^ . h rs
+}
+
 // Initiator → message 1: e, es, s, ss + empty payload.
-@ noise_write_msg1 * Handshake h → ( Vec u ) {
+@ noise_write_msg1 Handshake h__h → ( Vec u ) {
+    : *HandshakeImpl h ( __Handshake_ptr h__h )
     : *SymState sym ( __hs_sym h )
     ( __hs_gen_ephemeral h )
     : ( Vec u ) out ( __slice . h e_pub 0 32 )  // e
@@ -274,7 +299,8 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // Responder ← message 1.
-@ noise_read_msg1 * Handshake h ( Vec u ) msg → !v NoiseErr {
+@ noise_read_msg1 Handshake h__h ( Vec u ) msg → !v NoiseErr {
+    : *HandshakeImpl h ( __Handshake_ptr h__h )
     ? < ( vec_len [u] msg ) 96 { ^ @ !v NoiseErr { F @ NoiseErr { NoiseBadMsg } } } {}
     : *SymState sym ( __hs_sym h )
     : ( Vec u ) re ( __slice msg 0 32 )  // e
@@ -307,7 +333,8 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // Responder → message 2: e, ee, se, psk + empty payload.
-@ noise_write_msg2 * Handshake h → ( Vec u ) {
+@ noise_write_msg2 Handshake h__h → ( Vec u ) {
+    : *HandshakeImpl h ( __Handshake_ptr h__h )
     : *SymState sym ( __hs_sym h )
     ( __hs_gen_ephemeral h )
     : ( Vec u ) out ( __slice . h e_pub 0 32 )  // e
@@ -329,7 +356,8 @@ $ `stdlib/ext/crypto.nu`
 }
 
 // Initiator ← message 2.
-@ noise_read_msg2 * Handshake h ( Vec u ) msg → !v NoiseErr {
+@ noise_read_msg2 Handshake h__h ( Vec u ) msg → !v NoiseErr {
+    : *HandshakeImpl h ( __Handshake_ptr h__h )
     ? < ( vec_len [u] msg ) 48 { ^ @ !v NoiseErr { F @ NoiseErr { NoiseBadMsg } } } {}
     : *SymState sym ( __hs_sym h )
     : ( Vec u ) re ( __slice msg 0 32 )  // e
@@ -364,7 +392,8 @@ $ `stdlib/ext/crypto.nu`
     ( vec_free [u] . k recv )
 }
 
-@ noise_split * Handshake h → NoiseKeys {
+@ noise_split Handshake h__h → NoiseKeys {
+    : *HandshakeImpl h ( __Handshake_ptr h__h )
     : *SymState sym ( __hs_sym h )
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) out ( __noise_hkdf . sym ck empty 2 )

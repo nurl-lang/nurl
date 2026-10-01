@@ -40,12 +40,12 @@ $ `stdlib/net/session.nu`
 }
 
 // open + check accept AND plaintext == expected; frees the result.
-@ open_eq * NoiseSession rx i ctr ( Vec u ) ad Sealed s ( Vec u ) expect → b {
+@ open_eq NoiseSession rx i ctr ( Vec u ) ad Sealed s ( Vec u ) expect → b {
     : ?( Vec u ) r ( session_open rx ctr ad . s ct )
     ^ ?? r { T pt → { : b ok ( veq pt expect ) ( vec_free [u] pt ) ok } F → F }
 }
 
-@ open_rejected * NoiseSession rx i ctr ( Vec u ) ad ( Vec u ) ct → b {
+@ open_rejected NoiseSession rx i ctr ( Vec u ) ad ( Vec u ) ct → b {
     : ?( Vec u ) r ( session_open rx ctr ad ct )
     ^ ?? r { T pt → { ( vec_free [u] pt ) F } F → T }  // T = correctly rejected
 }
@@ -55,8 +55,8 @@ $ `stdlib/net/session.nu`
     : CryptoKeypair rkp ?? ( x25519_keygen ) { T k → k F _ → @ CryptoKeypair { ( vec_new [u] ) ( vec_new [u] ) } }
     : CryptoKeypair ikp ?? ( x25519_keygen ) { T k → k F _ → @ CryptoKeypair { ( vec_new [u] ) ( vec_new [u] ) } }
     : ( Vec u ) psk ( k32 9 )
-    : *Handshake ih ( noise_init T ikp . rkp pk psk )
-    : *Handshake rh ( noise_init F rkp . rkp pk psk )
+    : Handshake ih ( noise_init T ikp . rkp pk psk )
+    : Handshake rh ( noise_init F rkp . rkp pk psk )
     : ( Vec u ) m1 ( noise_write_msg1 ih )
     : !v NoiseErr _r1 ( noise_read_msg1 rh m1 )
     : ( Vec u ) m2 ( noise_write_msg2 rh )
@@ -64,8 +64,8 @@ $ `stdlib/net/session.nu`
     : NoiseKeys ik ( noise_split ih )
     : NoiseKeys rk ( noise_split rh )
 
-    : *NoiseSession tx ( session_new ik )  // initiator sends
-    : *NoiseSession rx ( session_new rk )  // responder receives
+    : NoiseSession tx ( session_new ik )  // initiator sends
+    : NoiseSession rx ( session_new rk )  // responder receives
     : ( Vec u ) ad ( vec_new [u] )
 
     : ( Vec u ) p0 ( mkpt `frame-0` )

@@ -48,6 +48,11 @@
 // net/transport routes anything larger over the relay leg, where TCP
 // owns segmentation and retransmission. That is a routing decision,
 // not an error.
+//
+// Memory: each peer's state is a PeerState handle in the node's list; it
+// owns its pending Handshake and its NoiseSession (both handles) and its
+// reassembly, and goes with the list. The SecureNode itself is closed by
+// securedgram_close (it owns the socket).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -56,6 +61,7 @@ $ `stdlib/std/udp.nu`
 $ `stdlib/ext/crypto.nu`
 $ `stdlib/net/noise.nu`
 $ `stdlib/net/session.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
@@ -87,18 +93,31 @@ $ `stdlib/net/session.nu`
 
 @ __u64 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u64_be v off ) { T x → # i x F → 0 } }
 
-: PeerState {
+: PeerStateImpl {
     ( Vec u ) pubkey
     String ehost
     i eport
     i local_index  // we assigned; the peer echoes it in datagrams to us
     i remote_index  // the peer assigned; we put it in datagrams to them
-    s hs  // *Handshake during the handshake, else 0
-    s session  // *NoiseSession once established, else 0
+    Handshake hs  // during the handshake, else a null handle
+    NoiseSession session  // once established, else a null handle
     i established
     i tx_msg_id  // last chunked-message id sent to this peer
     ( Vec s ) partials  // *Partial — messages mid-reassembly, oldest first
 }
+
+// A PeerState is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same peer, and the last owner releases it.
+: PeerState { s ctl }
+
+@ PeerState_share PeerState h → PeerState { ^ @ PeerState { # s ( rcbox_share # i . h ctl ) } }
+
+@ PeerState_drop sink PeerState h → v {
+    ( mem_forget h )
+    ( rcbox_release [PeerStateImpl] # i . h ctl )
+}
+
+@ __PeerState_ptr PeerState h → *PeerStateImpl { ^ ( rcbox_ptr [PeerStateImpl] # i . h ctl ) }
 
 // One message mid-reassembly. `chunks` holds a *ChunkBox per index
 // (0 = not yet arrived) so out-of-order arrival needs no sorting and a
@@ -149,12 +168,42 @@ $ `stdlib/net/session.nu`
     ( nurl_free # s q )
 }
 
+// The partial messages are raw blocks the Vec only points at: releasing
+// them is the peer's own drop, run by its last owner (the key, the endpoint,
+// the handshake and the session go after it).
+% Drop PeerStateImpl {
+    @ drop PeerStateImpl p → v {
+        : i qn ( vec_len [s] . p partials )
+        : ~ i qk 0
+        ~ < qk qn {
+            : s qp ?? ( vec_get [s] . p partials qk ) { T x → x F → # s 0 }
+            ? != # i qp 0 { ( __partial_free # *Partial qp ) } {}
+            = qk + qk 1
+        }
+    }
+}
+
+// A peer at `host:port` with no handshake or session yet.
+@ __peer_new ( Vec u ) pubkey s host i port i local_index → PeerState {
+    : i p__box ( rcbox_zero [PeerStateImpl] )
+    : *PeerStateImpl p ( rcbox_ptr [PeerStateImpl] p__box )
+    = . p pubkey ( __cpy pubkey )
+    = . p ehost ( string_from host )
+    = . p eport port
+    = . p local_index local_index
+    = . p remote_index 0
+    = . p established 0
+    = . p tx_msg_id 0
+    = . p partials ( vec_new [s] )
+    ^ @ PeerState { # s p__box }
+}
+
 : SecureNode {
     UdpSocket sock
     ( Vec u ) s_priv
     ( Vec u ) s_pub
     ( Vec u ) psk
-    ( Vec s ) peers  // *PeerState pointers
+    ( Vec PeerState ) peers
     i next_index
 }
 
@@ -168,7 +217,7 @@ $ `stdlib/net/session.nu`
             = . n s_priv ( __cpy . static sk )
             = . n s_pub ( __cpy . static pk )
             = . n psk ( __cpy psk )
-            = . n peers ( vec_new [s] )
+            = . n peers ( vec_new [PeerState] )
             = . n next_index 1
             @ !*SecureNode NetErr { T n }
         }
@@ -198,46 +247,41 @@ $ `stdlib/net/session.nu`
 @ securedgram_local_addr * SecureNode n → String { ^ ( udp_local_addr . n sock ) }
 
 @ securedgram_add_peer * SecureNode n ( Vec u ) pubkey s host i port → v {
-    : *PeerState p # *PeerState ( nurl_alloc Z PeerState )
-    = . p pubkey ( __cpy pubkey )
-    = . p ehost ( string_from host )
-    = . p eport port
-    = . p local_index . n next_index
+    ( vec_push [PeerState] . n peers ( __peer_new pubkey host port . n next_index ) )
     = . n next_index + . n next_index 1
-    = . p remote_index 0
-    = . p hs # s 0
-    = . p session # s 0
-    = . p established 0
-    = . p tx_msg_id 0
-    = . p partials ( vec_new [s] )
-    ( vec_push [s] . n peers # s p )
 }
 
+// The peer with this pubkey (its state, borrowed from the node's list), or 0.
 @ __find_pk * SecureNode n ( Vec u ) pk → s {
-    : i cnt ( vec_len [s] . n peers )
+    : i cnt ( vec_len [PeerState] . n peers )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k cnt {
-        : s pp ?? ( vec_get [s] . n peers k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PeerState p # *PeerState pp
-            ? ( __veq . p pubkey pk ) { = found pp } {}
-        } {}
+        ?? ( vec_get [PeerState] . n peers k ) {
+            T ps → {
+                : *PeerStateImpl p ( __PeerState_ptr ps )
+                ? ( __veq . p pubkey pk ) { = found # s p } {}
+            }
+            F → {}
+        }
         = k + k 1
     }
     ^ found
 }
 
+// The peer that assigned local index `idx` (borrowed), or 0.
 @ __find_idx * SecureNode n i idx → s {
-    : i cnt ( vec_len [s] . n peers )
+    : i cnt ( vec_len [PeerState] . n peers )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k cnt {
-        : s pp ?? ( vec_get [s] . n peers k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PeerState p # *PeerState pp
-            ? == . p local_index idx { = found pp } {}
-        } {}
+        ?? ( vec_get [PeerState] . n peers k ) {
+            T ps → {
+                : *PeerStateImpl p ( __PeerState_ptr ps )
+                ? == . p local_index idx { = found # s p } {}
+            }
+            F → {}
+        }
         = k + k 1
     }
     ^ found
@@ -245,7 +289,7 @@ $ `stdlib/net/session.nu`
 
 // Update a peer's endpoint from a "host:port" source string (last ':' is
 // the port separator — fine for IPv4 and "[v6]:port"). The roaming rule.
-@ __roam * PeerState p String src → v {
+@ __roam * PeerStateImpl p String src → v {
     : s cs ( string_data src )
     : i n ( string_len src )
     : *u sp # *u cs
@@ -268,7 +312,7 @@ $ `stdlib/net/session.nu`
     = . p eport port
 }
 
-@ __send_pkt * SecureNode n * PeerState p ( Vec u ) pkt → v {
+@ __send_pkt * SecureNode n * PeerStateImpl p ( Vec u ) pkt → v {
     : !i NetErr r ( udp_send_to . n sock pkt ( string_data . p ehost ) . p eport )
     ?? r { T _ → {} F _ → {} }
 }
@@ -277,10 +321,13 @@ $ `stdlib/net/session.nu`
 @ securedgram_connect * SecureNode n ( Vec u ) peer_pk → !v NetErr {
     : s pp ( __find_pk n peer_pk )
     ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
-    : *PeerState p # *PeerState pp
-    : *Handshake hs ( noise_init T ( __node_kp n ) . p pubkey . n psk )
-    = . p hs # s hs
+    : *PeerStateImpl p # *PeerStateImpl pp
+    : Handshake hs ( noise_init T ( __node_kp n ) . p pubkey . n psk )
     : ( Vec u ) msg1 ( noise_write_msg1 hs )
+    // A field store through the state pointer drops nothing: let go of a
+    // handshake still pending from an earlier connect first.
+    ( noise_free . p hs )
+    = . p hs hs
     : ( Vec u ) pkt ( vec_new [u] )
     ( vec_push [u] pkt # u 1 )
     ( bytes_push_u32_be pkt # u32 . p local_index )
@@ -291,10 +338,9 @@ $ `stdlib/net/session.nu`
 }
 
 // Seal one inner frame and put it on the wire. BORROWS `inner`.
-@ __send_inner * SecureNode n * PeerState p ( Vec u ) inner → v {
-    : *NoiseSession sess # *NoiseSession . p session
+@ __send_inner * SecureNode n * PeerStateImpl p ( Vec u ) inner → v {
     : ( Vec u ) ad ( vec_new [u] )
-    : Sealed sealed ( session_seal sess ad inner )
+    : Sealed sealed ( session_seal . p session ad inner )
     ( vec_free [u] ad )
     : ( Vec u ) pkt ( vec_new [u] )
     ( vec_push [u] pkt # u 4 )
@@ -308,7 +354,7 @@ $ `stdlib/net/session.nu`
 @ securedgram_send * SecureNode n ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
     : s pp ( __find_pk n peer_pk )
     ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
-    : *PeerState p # *PeerState pp
+    : *PeerStateImpl p # *PeerStateImpl pp
     ? == . p established 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
     : i len ( vec_len [u] data )
     : i cb ( securedgram_chunk_bytes )
@@ -347,24 +393,25 @@ $ `stdlib/net/session.nu`
     ? < ( vec_len [u] buf ) 101 { ^ v } {}
     : i sender_index ( __sdg_u32 buf 1 )
     : ( Vec u ) msg1 ( __slc buf 5 96 )
-    : *Handshake hs ( noise_init F ( __node_kp n ) . n s_pub . n psk )
+    : Handshake hs ( noise_init F ( __node_kp n ) . n s_pub . n psk )
     : !v NoiseErr r1 ( noise_read_msg1 hs msg1 )
     ( vec_free [u] msg1 )
     ?? r1 {
         T _ → {
-            : s pp ( __find_pk n . hs rs )
-            ? == # i pp 0 { ( noise_free hs ) ^ v } {}
-            : *PeerState p # *PeerState pp
+            : s pp ( __find_pk n ( noise_remote_static hs ) )
+            ? == # i pp 0 { ^ v } {}
+            : *PeerStateImpl p # *PeerStateImpl pp
             ( __roam p src )
             = . p remote_index sender_index
             : ( Vec u ) msg2 ( noise_write_msg2 hs )
             : NoiseKeys keys ( noise_split hs )
-            : *NoiseSession sess ( session_new keys )
+            : NoiseSession sess ( session_new keys )
             ( noise_keys_free keys )
-            ? != # i . p session 0 { ( session_free # *NoiseSession . p session ) } {}
-            = . p session # s sess
+            // The session a re-handshake replaces goes now: a field store
+            // through the state pointer drops nothing.
+            ( session_free . p session )
+            = . p session sess
             = . p established 1
-            ( noise_free hs )
             : ( Vec u ) pkt ( vec_new [u] )
             ( vec_push [u] pkt # u 2 )
             ( bytes_push_u32_be pkt # u32 . p local_index )
@@ -373,7 +420,7 @@ $ `stdlib/net/session.nu`
             ( vec_free [u] msg2 )
             ( __send_pkt n p pkt )
         }
-        F _ → ( noise_free hs )
+        F _ → {}
     }
 }
 
@@ -385,22 +432,23 @@ $ `stdlib/net/session.nu`
     : ( Vec u ) msg2 ( __slc buf 9 48 )
     : s pp ( __find_idx n our_index )
     ? == # i pp 0 { ( vec_free [u] msg2 ) ^ v } {}
-    : *PeerState p # *PeerState pp
-    ? == # i . p hs 0 { ( vec_free [u] msg2 ) ^ v } {}
-    : *Handshake hs # *Handshake . p hs
-    : !v NoiseErr r2 ( noise_read_msg2 hs msg2 )
+    : *PeerStateImpl p # *PeerStateImpl pp
+    ? == 0 # i . . p hs ctl { ( vec_free [u] msg2 ) ^ v } {}
+    : !v NoiseErr r2 ( noise_read_msg2 . p hs msg2 )
     ( vec_free [u] msg2 )
     ?? r2 {
         T _ → {
             ( __roam p src )
             = . p remote_index resp_index
-            : NoiseKeys keys ( noise_split hs )
-            : *NoiseSession sess ( session_new keys )
+            : NoiseKeys keys ( noise_split . p hs )
+            : NoiseSession sess ( session_new keys )
             ( noise_keys_free keys )
-            = . p session # s sess
+            // Field stores through the state pointer drop nothing: the
+            // replaced session and the finished handshake go here.
+            ( session_free . p session )
+            = . p session sess
             = . p established 1
-            ( noise_free hs )
-            = . p hs # s 0
+            ( noise_free . p hs )
         }
         F _ → {}
     }
@@ -424,14 +472,13 @@ $ `stdlib/net/session.nu`
     : i counter ( __u64 buf 5 )
     : ( Vec u ) ct ( __slc buf 13 - ( vec_len [u] buf ) 13 )
     : s pp ( __find_idx n recv_index )
-    : *PeerState p # *PeerState pp
+    : *PeerStateImpl p # *PeerStateImpl pp
     ? | == # i pp 0 == . p established 0 {
         ( vec_free [u] ct )
         ^ @ ?RecvData { F # RecvData 0 }
     } {}
-    : *NoiseSession sess # *NoiseSession . p session
     : ( Vec u ) ad ( vec_new [u] )
-    : ?( Vec u ) opened ( session_open sess counter ad ct )
+    : ?( Vec u ) opened ( session_open . p session counter ad ct )
     ( vec_free [u] ad )
     ( vec_free [u] ct )
     ^ ?? opened {
@@ -444,7 +491,7 @@ $ `stdlib/net/session.nu`
 }
 
 // The framing byte inside the AEAD (see the header). CONSUMES `pt`.
-@ __handle_inner * PeerState p ( Vec u ) pt → ?RecvData {
+@ __handle_inner * PeerStateImpl p ( Vec u ) pt → ?RecvData {
     : i len ( vec_len [u] pt )
     ? < len 1 { ( vec_free [u] pt ) ^ @ ?RecvData { F # RecvData 0 } } {}
     : i tag ?? ( vec_get [u] pt 0 ) { T x → # i x F → 255 }
@@ -473,7 +520,7 @@ $ `stdlib/net/session.nu`
 // worst case, never a crash: a chunk that disagrees with its own
 // header is dropped, and the partial table cannot grow past
 // __sdg_max_partials in-flight messages (oldest evicted).
-@ __sdg_reasm * PeerState p i msg_id i idx i cnt ( Vec u ) body → ?( Vec u ) {
+@ __sdg_reasm * PeerStateImpl p i msg_id i idx i cnt ( Vec u ) body → ?( Vec u ) {
     : i cb ( securedgram_chunk_bytes )
     : i blen ( vec_len [u] body )
     : i max_cnt / + ( securedgram_max_msg ) - cb 1 cb
@@ -568,31 +615,8 @@ $ `stdlib/net/session.nu`
     }
 }
 
-@ __peer_free sink * PeerState p → v {
-    : i qn ( vec_len [s] . p partials )
-    : ~ i qk 0
-    ~ < qk qn {
-        : s qp ?? ( vec_get [s] . p partials qk ) { T x → x F → # s 0 }
-        ? != # i qp 0 { ( __partial_free # *Partial qp ) } {}
-        = qk + qk 1
-    }
-    ( vec_free [s] . p partials )
-    ( vec_free [u] . p pubkey )
-    ( string_free . p ehost )
-    ? != # i . p hs 0 { ( noise_free # *Handshake . p hs ) } {}
-    ? != # i . p session 0 { ( session_free # *NoiseSession . p session ) } {}
-    ( nurl_free # s p )
-}
-
 @ securedgram_close * SecureNode n → v {
-    : i cnt ( vec_len [s] . n peers )
-    : ~ i k 0
-    ~ < k cnt {
-        : s pp ?? ( vec_get [s] . n peers k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { ( __peer_free # *PeerState pp ) } {}
-        = k + k 1
-    }
-    ( vec_free [s] . n peers )
+    ( vec_free [PeerState] . n peers )
     ( udp_close . n sock )
     ( vec_free [u] . n s_priv )
     ( vec_free [u] . n s_pub )

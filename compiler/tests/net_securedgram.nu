@@ -64,19 +64,9 @@ $ `stdlib/net/securedgram.nu`
 
 // A bare PeerState with only what __sdg_reasm touches — the hand-fed
 // hostile cases go straight at the reassembler.
-@ mk_peer → *PeerState {
-    : *PeerState p # *PeerState ( nurl_alloc Z PeerState )
-    = . p pubkey ( vec_new [u] )
-    = . p ehost ( string_new )
-    = . p eport 0
-    = . p local_index 0
-    = . p remote_index 0
-    = . p hs # s 0
-    = . p session # s 0
-    = . p established 0
-    = . p tx_msg_id 0
-    = . p partials ( vec_new [s] )
-    ^ p
+@ mk_peer → PeerState {
+    : ( Vec u ) nopk ( vec_new [u] )
+    ^ ( __peer_new nopk `` 0 0 )
 }
 
 // One chunk of `whole` as __sdg_reasm wants it fed.
@@ -95,7 +85,8 @@ $ `stdlib/net/securedgram.nu`
     : i cb ( securedgram_chunk_bytes )
 
     // ── the reassembler, fed by hand ────────────────────────────
-    : *PeerState hp ( mk_peer )
+    : PeerState peer ( mk_peer )
+    : *PeerStateImpl hp ( __PeerState_ptr peer )
     : ( Vec u ) m2 ( pattern + * 2 cb 0 )  // exactly 2 full chunks... minus nothing: 2*cb → last chunk full-size is LEGAL? cnt=2, last must be 1..cb → cb ok
     // out of order: idx 1 first, then idx 0 completes
     : ?( Vec u ) r1 ( __sdg_reasm hp 7 1 2 ( chunk_of m2 1 2 ) )
@@ -131,7 +122,6 @@ $ `stdlib/net/securedgram.nu`
     ( pb `oldest partial evicted:   ` ?? e6 { T w → { ( vec_free [u] w ) F } F → T } )
     ( vec_free [u] m2 )
     ( vec_free [u] m3 )
-    ( __peer_free hp )
 
     // ── two real nodes over loopback ────────────────────────────
     : CryptoKeypair akp ?? ( x25519_keygen ) { T k → k F _ → @ CryptoKeypair { ( vec_new [u] ) ( vec_new [u] ) } }

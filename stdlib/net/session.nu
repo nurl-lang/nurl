@@ -6,17 +6,20 @@
 // + duplicates via a WireGuard-style sliding window (accepts reordering
 // within the window — important on lossy/mobile UDP).
 //
-//   ( session_new NoiseKeys k )                  → *NoiseSession  (copies keys)
-//   ( session_seal *NoiseSession (Vec u) ad (Vec u) pt ) → Sealed { counter, ct }
-//   ( session_open *NoiseSession i counter (Vec u) ad (Vec u) ct ) → ?(Vec u)
+//   ( session_new NoiseKeys k )                  → NoiseSession  (copies keys)
+//   ( session_seal NoiseSession (Vec u) ad (Vec u) pt ) → Sealed { counter, ct }
+//   ( session_open NoiseSession i counter (Vec u) ad (Vec u) ct ) → ?(Vec u)
 //        None = AEAD auth failure OR replay/duplicate/too-old.
-//   ( session_free *NoiseSession )               → v
+//   ( session_free NoiseSession )                → v  (early release; optional:
+//        a NoiseSession is a handle, every copy is the same session, and
+//        its last owner releases it)
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/crypto.nu`
 $ `stdlib/net/noise.nu`
+$ `stdlib/core/rcbox.nu`
 
-: NoiseSession {
+: NoiseSessionImpl {
     ( Vec u ) send_key
     ( Vec u ) recv_key
     i send_n
@@ -24,27 +27,38 @@ $ `stdlib/net/noise.nu`
     i recv_mask  // 64-bit window; bit 0 = recv_max, bit k = recv_max-k
 }
 
+// A NoiseSession is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same session, and the last owner releases it.
+: NoiseSession { s ctl }
+
+@ NoiseSession_share NoiseSession h → NoiseSession { ^ @ NoiseSession { # s ( rcbox_share # i . h ctl ) } }
+
+@ NoiseSession_drop sink NoiseSession h → v {
+    ( mem_forget h )
+    ( rcbox_release [NoiseSessionImpl] # i . h ctl )
+}
+
+@ __NoiseSession_ptr NoiseSession h → *NoiseSessionImpl { ^ ( rcbox_ptr [NoiseSessionImpl] # i . h ctl ) }
+
 @ __vcopy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
     ( vec_extend [u] o v )
     ^ o
 }
 
-@ session_new NoiseKeys k → *NoiseSession {
-    : *NoiseSession s # *NoiseSession ( nurl_alloc Z NoiseSession )
+@ session_new NoiseKeys k → NoiseSession {
+    : i s__box ( rcbox_zero [NoiseSessionImpl] )
+    : *NoiseSessionImpl s ( rcbox_ptr [NoiseSessionImpl] s__box )
     = . s send_key ( __vcopy . k send )
     = . s recv_key ( __vcopy . k recv )
     = . s send_n 0
     = . s recv_max - 0 1
     = . s recv_mask 0
-    ^ s
+    ^ @ NoiseSession { # s s__box }
 }
 
-@ session_free sink * NoiseSession s → v {
-    ( vec_free [u] . s send_key )
-    ( vec_free [u] . s recv_key )
-    ( nurl_free # s s )
-}
+// Let go of `s` now rather than at the end of its owner's scope.
+@ session_free sink NoiseSession s → v {}
 
 : Sealed {
     i counter
@@ -53,7 +67,8 @@ $ `stdlib/net/noise.nu`
 
 @ sealed_free sink Sealed s → v { ( vec_free [u] . s ct ) }
 
-@ session_seal * NoiseSession s ( Vec u ) ad ( Vec u ) pt → Sealed {
+@ session_seal NoiseSession s__h ( Vec u ) ad ( Vec u ) pt → Sealed {
+    : *NoiseSessionImpl s ( __NoiseSession_ptr s__h )
     : i ctr . s send_n
     : ( Vec u ) nonce ( noise_nonce ctr )
     : ( Vec u ) ct ?? ( chacha20poly1305_encrypt . s send_key nonce ad pt )
@@ -66,7 +81,7 @@ $ `stdlib/net/noise.nu`
 // Sliding-window replay check + commit. Returns T (accept) only for a
 // counter not already seen and not older than the 64-wide window. Mutates
 // the window on accept. Call ONLY after a successful AEAD decrypt.
-@ __replay_ok * NoiseSession s i c → b {
+@ __replay_ok * NoiseSessionImpl s i c → b {
     : i mx . s recv_max
     ? > c mx {
         : i shift - c mx
@@ -83,7 +98,8 @@ $ `stdlib/net/noise.nu`
     ^ T
 }
 
-@ session_open * NoiseSession s i counter ( Vec u ) ad ( Vec u ) ct → ?( Vec u ) {
+@ session_open NoiseSession s__h i counter ( Vec u ) ad ( Vec u ) ct → ?( Vec u ) {
+    : *NoiseSessionImpl s ( __NoiseSession_ptr s__h )
     : ( Vec u ) nonce ( noise_nonce counter )
     : !( Vec u ) CryptoErr dr ( chacha20poly1305_decrypt . s recv_key nonce ad ct )
     ( vec_free [u] nonce )
