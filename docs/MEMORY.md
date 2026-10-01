@@ -1601,6 +1601,12 @@ value is `alwaysinline`: a `simd` clone passes a `<4 x i64>` in a ymm
 register where a baseline callee expects it in memory, and only inlining
 makes the two agree (at `-O0` as well as `-O2`).
 
+**Options and results that own memory are handles too**, wherever they
+sit — a `:` binding (through its `%__opt.<T>` twin), a struct field, a
+`Vec` element: dropping one releases the payload when present (a
+result's error when not), and copying one copies that. The payload of a
+None literal is released where the literal is built.
+
 **Enums that own memory are handles.** An enum whose payloads own a
 `String`, a `Vec` or a boxed struct — `Json`, `TomlValue` — is dropped,
 copied and moved like a `String` when every payload can be copied.

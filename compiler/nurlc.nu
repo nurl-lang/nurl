@@ -31204,6 +31204,20 @@
     ^ ( nurl_str_cat `` `` )
 }
 
+// An option / result type `{ i1, … }` that owns something (a String, Vec,
+// owning struct or library handle payload — or a result's error) is
+// dropped and copied through its registration twin `%__opt.<T>`
+// (__udrop_regty) wherever it sits: a struct field, a Vec element, not only
+// a binding. Its own name in drop / clone function names is the twin's,
+// prefixed `w` — the literal type is not an identifier, and a function over
+// the twin type is a different function. `` when it owns nothing.
+@ __wrap_twin s ty → s {
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s sv ( __udrop_regty ty )
+    ? != 0 ( nurl_str_starts sv `%__opt.` ) { ^ sv } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
 @ __udrop_regty s ty → s {
     : s p ( __opt_payload ty )
     // A result owns its error as well: `! v E` with E a String / Vec /
@@ -31481,6 +31495,7 @@
 // values handled as freely aliased handles (docs/MEMORY.md §7.6).
 @ __is_value_handle s ty → b {
     ? ( seq ty `%String` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ & != 0 ( nurl_str_len ( __wrap_twin ty ) ) ( __clone_supported ty g_root_syms ) } {}
     ? ( __is_libh ty ) { ^ ( __libh_clone_ok ty g_root_syms ) } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ T } {}
     ^ | ( __is_owned_struct_ty ty ) ( __is_handle_enum ty )
@@ -31587,6 +31602,8 @@
 @ __drop_mangle s ty → s {
     ? & != 0 ( nurl_str_len ty ) == ( nurl_str_get ty 0 ) 37
     { ^ ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 ) } {}
+    : s tw ( __wrap_twin ty )
+    ? != 0 ( nurl_str_len tw ) { ^ ( nurl_str_cat `w` ( nurl_str_slice tw 1 - ( nurl_str_len tw ) 1 ) ) } {}
     ^ ( nurl_str_cat ty `` )
 }
 
@@ -31613,6 +31630,8 @@
     // A `%dyn.Trait` object owns its heap box (and, via the vtable, the boxed
     // value's own resources) — always droppable.
     ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ T } {}
+    // An option / result owning its payload (or error): __wrap_twin.
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) { ^ != 0 ( nurl_str_len ( __wrap_twin ty ) ) } {}
     ? != ( nurl_str_get ty 0 ) 37 { ^ F } {}
     ? == ( nurl_str_get ty - ( nurl_str_len ty ) 1 ) 42 { ^ F } {}
     ? ( __is_libh ty ) { ^ T } {}
@@ -31677,6 +31696,15 @@
 // drop_ptr thunk for owned elements); a struct / enum delegates to its
 // generated drop__ function.
 @ emit_drop_value s ty s valreg inout i ctr i syms → v {
+    // An option / result value: its own drop, which looks at the tag (the
+    // twin's drop takes the named twin type — a different LLVM type).
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        ? == 0 ( nurl_str_len ( __wrap_twin ty ) ) { ^ v } {}
+        ( gen_drop_for_type ty syms )
+        ( nurl_print `  call void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ( __drop_mangle ty ) ) ) )
+        ( nurl_print `(` ) ( nurl_print ty ) ( nurl_print ` ` ) ( nurl_print valreg ) ( nurl_print `)\n` )
+        ^ v
+    } {}
     // Dynamic trait object: delegate to the synthesized `%dyn.<T>` destructor
     // (runs the vtable slot-0 drop on the boxed value, then frees the box).
     ? != 0 ( nurl_str_starts ty `%dyn.` ) {
@@ -31875,6 +31903,28 @@
     ( __park_append g_impl_name_syms `__pending_drop_types__` ty )
 }
 
+// `define void @<fname>(<ll> %v)` for an option / result laid out as `ll`:
+// the payload when the tag says present, a result's error otherwise —
+// the payload and error types are twin `sv`'s.
+@ emit_opt_drop_fn s fname s ll s sv i syms → v {
+    : s pt ( nurl_sym_get2 g_impl_name_syms `optof##` sv )
+    : s et ( nurl_sym_get2 g_impl_name_syms `opterr##` sv )
+    : ~ i ctr 0
+    ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn fname ) )
+    ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v) {\nentry:\n  %t = extractvalue ` ) ( nurl_print ll )
+    ( nurl_print ` %v, 0\n  br i1 %t, label %d, label %e\nd:\n` )
+    ? != 0 ( nurl_str_len pt ) {
+        ( nurl_print `  %p = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` %v, 1\n` )
+        ( emit_drop_value pt `%p` ctr syms )
+    } {}
+    ( nurl_print `  br label %x\ne:\n` )
+    ? != 0 ( nurl_str_len et ) {
+        ( nurl_print `  %q = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` %v, 2\n` )
+        ( emit_drop_value et `%q` ctr syms )
+    } {}
+    ( nurl_print `  br label %x\nx:\n  ret void\n}\n` )
+}
+
 @ emit_pending_drop_graphs i syms → v {
     : ~ s rest ( nurl_sym_get g_impl_name_syms `__pending_drop_types__` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -31886,23 +31936,16 @@
     : ~ s orest ( nurl_sym_get g_impl_name_syms `__pending_opt_drops__` )
     ~ != 0 ( nurl_str_len orest ) {
         : s sv ( str_first_word orest ) = orest ( str_skip_word orest )
-        : s pt ( nurl_sym_get2 g_impl_name_syms `optof##` sv )
-        : s et ( nurl_sym_get2 g_impl_name_syms `opterr##` sv )
-        : ~ i ctr 0
         ( nurl_print sv ) ( nurl_print ` = type ` ) ( nurl_print ( nurl_sym_get2 g_impl_name_syms `optlay##` sv ) ) ( nurl_print `\n` )
-        ( nurl_print `define void @` ) ( nurl_print ( llvm_source_fn ( nurl_str_cat `drop__` ( __drop_mangle sv ) ) ) )
-        ( nurl_print `(` ) ( nurl_print sv ) ( nurl_print ` %v) {\nentry:\n  %t = extractvalue ` ) ( nurl_print sv )
-        ( nurl_print ` %v, 0\n  br i1 %t, label %d, label %e\nd:\n` )
-        ? != 0 ( nurl_str_len pt ) {
-            ( nurl_print `  %p = extractvalue ` ) ( nurl_print sv ) ( nurl_print ` %v, 1\n` )
-            ( emit_drop_value pt `%p` ctr syms )
-        } {}
-        ( nurl_print `  br label %x\ne:\n` )
-        ? != 0 ( nurl_str_len et ) {
-            ( nurl_print `  %q = extractvalue ` ) ( nurl_print sv ) ( nurl_print ` %v, 2\n` )
-            ( emit_drop_value et `%q` ctr syms )
-        } {}
-        ( nurl_print `  br label %x\nx:\n  ret void\n}\n` )
+        ( emit_opt_drop_fn ( nurl_str_cat `drop__` ( __drop_mangle sv ) ) sv sv syms )
+    }
+    // …and an option / result held in a struct field or a Vec element
+    // (gen_drop_for_type): the same drop over the literal type.
+    : ~ s wrest ( nurl_sym_get g_impl_name_syms `__pending_wrap_drops__` )
+    ~ != 0 ( nurl_str_len wrest ) {
+        : s wm ( str_first_word wrest ) = wrest ( str_skip_word wrest )
+        : s wty ( nurl_sym_get2 g_impl_name_syms `wraplit##` wm )
+        ( emit_opt_drop_fn ( nurl_str_cat `drop__` ( __drop_mangle wty ) ) wty ( __wrap_twin wty ) syms )
     }
     // Drop glue of `% Drop` impls (mem_emit_drop_glue): the struct's
     // compiler-owned fields, dropped after the impl ran.
@@ -31978,6 +32021,15 @@
 
 @ __clone_supported_calc s ty i syms → b {
     ? ( __is_libh ty ) { ^ ( __libh_clone_ok ty syms ) } {}
+    // An option / result: its payload and its error copy.
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s tw ( __wrap_twin ty )
+        ? == 0 ( nurl_str_len tw ) { ^ T } {}
+        : s wp ( nurl_sym_get2 g_impl_name_syms `optof##` tw )
+        : s we ( nurl_sym_get2 g_impl_name_syms `opterr##` tw )
+        ? & != 0 ( nurl_str_len wp ) ! ( __clone_supported wp syms ) { ^ F } {}
+        ^ | == 0 ( nurl_str_len we ) ( __clone_supported we syms )
+    } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) {
         : s elem ( __vec_elem_llvm ty )
         ^ | ! ( __type_needs_drop elem syms ) ( __clone_supported elem syms )
@@ -32383,6 +32435,32 @@
         ^ v
     } {}
     ? ( __is_handle_enum ty ) { ( gen_clone_enum ty m ll syms ) ^ v } {}
+    // An option / result: copy the payload when present, a result's error
+    // when not.
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s tw ( __wrap_twin ty )
+        : s wp ( nurl_sym_get2 g_impl_name_syms `optof##` tw )
+        : s we ( nurl_sym_get2 g_impl_name_syms `opterr##` tw )
+        ? != 0 ( nurl_str_len wp ) { ( gen_clone_for_type wp syms ) } {}
+        ? != 0 ( nurl_str_len we ) { ( gen_clone_for_type we syms ) } {}
+        ( nurl_print `define linkonce_odr ` ) ( nurl_print ll ) ( nurl_print ` @__nurl_clone_` ) ( nurl_print m )
+        ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v) {\nentry:\n  %t = extractvalue ` ) ( nurl_print ll )
+        ( nurl_print ` %v, 0\n  br i1 %t, label %s, label %n\ns:\n` )
+        ? != 0 ( nurl_str_len wp ) {
+            : s pl ( nurl_llty wp )
+            ( nurl_print `  %p = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` %v, 1\n  %pc = call ` ) ( nurl_print pl )
+            ( nurl_print ` @__nurl_clone_` ) ( nurl_print ( __drop_mangle wp ) ) ( nurl_print `(` ) ( nurl_print pl ) ( nurl_print ` %p)\n  %ps = insertvalue ` )
+            ( nurl_print ll ) ( nurl_print ` %v, ` ) ( nurl_print pl ) ( nurl_print ` %pc, 1\n  ret ` ) ( nurl_print ll ) ( nurl_print ` %ps\n` )
+        } { ( nurl_print `  ret ` ) ( nurl_print ll ) ( nurl_print ` %v\n` ) }
+        ( nurl_print `n:\n` )
+        ? != 0 ( nurl_str_len we ) {
+            : s el ( nurl_llty we )
+            ( nurl_print `  %e = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` %v, 2\n  %ec = call ` ) ( nurl_print el )
+            ( nurl_print ` @__nurl_clone_` ) ( nurl_print ( __drop_mangle we ) ) ( nurl_print `(` ) ( nurl_print el ) ( nurl_print ` %e)\n  %es = insertvalue ` )
+            ( nurl_print ll ) ( nurl_print ` %v, ` ) ( nurl_print el ) ( nurl_print ` %ec, 2\n  ret ` ) ( nurl_print ll ) ( nurl_print ` %es\n}\n` )
+        } { ( nurl_print `  ret ` ) ( nurl_print ll ) ( nurl_print ` %v\n}\n` ) }
+        ^ v
+    } {}
     ? ( __is_owned_struct_ty ty ) {
         : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
         : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
@@ -32546,6 +32624,14 @@
     ? != 0 ( nurl_sym_len g_impl_name_syms donekey ) { ^ v } {}
     ( nurl_sym_def g_impl_name_syms donekey `1` )
     ? | ( seq ty `%String` ) ( __is_libh ty ) { ( emit_drop_handle_fn ty syms ) ^ v } {}
+    // An option / result: its twin's drop (emit_drop_value calls it).
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s tw ( __wrap_twin ty )
+        ( __handle_drop_ensure tw )
+        ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `wraplit##` mangle ) ty )
+        ( __park_append g_impl_name_syms `__pending_wrap_drops__` mangle )
+        ^ v
+    } {}
     ? != 0 ( nurl_str_starts ty `%Vec__` ) {
         : s elem ( __vec_elem_llvm ty )
         ? ( __type_needs_drop elem syms ) {

@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the call's own temporary argument; the kept `S` read freed memory. One
   level down (`@ Outer { ( keep v @ S { … } ) 7 }`) the inner literal's
   owned fields were read as paths into `Outer` (invalid IR).
+- **Options and results in struct fields and `Vec` elements release
+  their payloads.** Only a `:` binding of one did (through its
+  `%__opt.<T>` twin); `S { ?String a … }`, `( Vec ?T )` and a result
+  field leaked the payload. They are now part of the drop and copy graphs.
+- **`vec_clone`, `vec_extend`, `vec_extend_range` copy what the elements
+  own** (`mem_dup`; the same loop as before for plain elements). They
+  copied bitwise, so with an owning element type both Vecs released the
+  same Strings — `vec_clone` of a `Vec` of owning structs crashed.
+  `vec_append` still moves. `compiler/tests/wrapped_and_copied_elements.nu`.
 - **A None literal's payload is released where it is built.** Dropping an
   option releases the payload only when present, so `@ ?S { F @ S {
   ( string_new ) … } }` leaked whatever the payload owned (unless someone
