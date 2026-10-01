@@ -22368,7 +22368,7 @@
                     ( nurl_print ` to ` ) ( nurl_print ( nurl_llty f0_typ ) ) ( nurl_print `\n` )
                     ( nurl_print `  ` ) ( nurl_print res )
                     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty dt ) )
-                    ( nurl_print ` undef, ` ) ( nurl_print ( nurl_llty f0_typ ) )
+                    ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty f0_typ ) )
                     ( nurl_print ` ` ) ( nurl_print pv_p ) ( nurl_print `, 0\n` )
                     ( nurl_set_last_type dt )
                     ^ res
@@ -22441,6 +22441,10 @@
                         // through to legacy insertvalue (preserves prior
                         // behaviour for anon / partially-known types).
                         : b f0_unknown == 0 ( nurl_str_len f0_ty )
+                        // The other fields are zero, not undef: `# T 0` is the
+                        // "nothing here" payload (`@ ?T { F # T 0 }`), and a
+                        // drop that reads it must find null handles, not
+                        // whatever the register held (a garbage free under ASan).
                         ? f0_is_ptr
                         { : s pv ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print pv )
@@ -22448,14 +22452,14 @@
                             ( nurl_print ` to ` ) ( nurl_print ( nurl_llty f0_ty ) ) ( nurl_print `\n` )
                             ( nurl_print `  ` ) ( nurl_print res )
                             ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty dt ) )
-                            ( nurl_print ` undef, ` ) ( nurl_print ( nurl_llty f0_ty ) )
+                            ( nurl_print ` zeroinitializer, ` ) ( nurl_print ( nurl_llty f0_ty ) )
                             ( nurl_print ` ` ) ( nurl_print pv ) ( nurl_print `, 0\n` )
                             ( nurl_set_last_type dt )
                             ^ res }
                         { ? | f0_is_i64 f0_unknown
                             { ( nurl_print `  ` ) ( nurl_print res )
                                 ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty dt ) )
-                                ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                                ( nurl_print ` zeroinitializer, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
                                 ( nurl_set_last_type dt )
                                 ^ res }
                             {  // f0 is neither pointer, i64, nor unknown —
@@ -23451,8 +23455,10 @@
         {}
         // A None's payload that owns something (`@ ?S { F @ S { ( string_new
         // ) } }`) leaked: released here, and the slot left zero. Not when
-        // the literal lends a parameter's value (the caller still owns it).
-        ? & & & opt_is_none == idx 1 != 0 g_auto_drop_strings & ( __is_handle_ty fty ) ! & agg_moves_fields ( seq fld_lent `1` ) {
+        // the literal lends a parameter's value (the caller still owns it),
+        // nor for a cast (`F # T 0`): that owns nothing.
+        ? & & & & opt_is_none == idx 1 != 0 g_auto_drop_strings & ( __is_handle_ty fty ) ! & agg_moves_fields ( seq fld_lent `1` )
+        != fld_first_tt TT_HASH {
             ( __handle_drop_ensure fty )
             ( __dropifv_request fty )
             ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle fty ) ) ( nurl_print `(i1 true, ` )
