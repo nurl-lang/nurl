@@ -133,7 +133,7 @@ $ `stdlib/net/tcpstack.nu`
 }
 
 : SockTab {
-    * TcpStack ts
+    TcpStack ts
     PktBuf out  // frames waiting for the device
     ( Vec i ) fds  // *Sock, as integers — NURL has no Vec of pointers
     i ephemeral  // next ephemeral port for an unbound listener
@@ -160,7 +160,7 @@ $ `stdlib/net/tcpstack.nu`
 // be.
 @ __fd_base → i { ^ 3 }
 
-@ sock_new * TcpStack ts i our_ip → *SockTab {
+@ sock_new TcpStack ts i our_ip → *SockTab {
     : *SockTab st # *SockTab ( nurl_alloc Z SockTab )
     = . st ts ts
     = . st out ( pktbuf_new )
@@ -493,7 +493,7 @@ $ `stdlib/net/tcpstack.nu`
 // every connect to 127.0.0.1 — before the second attempt finds the
 // answer the stack had all along.
 @ sock_seed_self * SockTab st i now → v {
-    : NetStack net . . st ts net
+    : NetStack net ( tstack_net . st ts )
     ? == ( stack_our_ip net ) 0 { ^ } {}
     ( sock_seed_addr st ( stack_our_ip net ) now )
 }
@@ -502,7 +502,7 @@ $ `stdlib/net/tcpstack.nu`
 // 127.0.0.1 is ours whatever DHCP later says, and a loopback frame has
 // to find a MAC for it before the interface has an address at all.
 @ sock_seed_addr * SockTab st i ip i now → v {
-    : NetStack net . . st ts net
+    : NetStack net ( tstack_net . st ts )
     ( arp_cache_insert ( stack_arp net ) ip ( stack_our_mac net ) now )
 }
 
@@ -712,7 +712,7 @@ $ `stdlib/net/tcpstack.nu`
     } {}
     // A socket bound to loopback sends FROM loopback; an unbound one
     // passes 0 and gets the interface's address.
-    : TxResult t ( stack_tx_udp . . st ts net . s local_ip ip . s local_port port src off len now . st out )
+    : TxResult t ( stack_tx_udp ( tstack_net . st ts ) . s local_ip ip . s local_port port src off len now . st out )
     ? == . t status ( tx_sent ) {
         = . s err 0
         ^ len

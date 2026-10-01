@@ -63,7 +63,7 @@ $ `stdlib/net/tcpstack.nu`
 // it answers into `back`. One frame at a time, which is what a device
 // does — the buffer carries its own boundaries (net/pktbuf.nu), so
 // nothing here has to re-parse a header to find out where a frame ends.
-@ deliver_all * TcpStack dst PktBuf wire i now PktBuf back → i {
+@ deliver_all TcpStack dst PktBuf wire i now PktBuf back → i {
     : i n ( pktbuf_count wire )
     : ~ i k 0
     ~ < k n {
@@ -83,7 +83,7 @@ $ `stdlib/net/tcpstack.nu`
 // other buffer the exchange produces. Vec is outside auto-drop
 // (docs/MEMORY.md §7.4), so saying who frees what is the whole
 // contract, and a caller that also freed it would double-free.
-@ settle * TcpStack a * TcpStack b PktBuf from_a i now i rounds → i {
+@ settle TcpStack a TcpStack b PktBuf from_a i now i rounds → i {
     : ~ i crossed 0
     : ~ PktBuf wire from_a
     : ~ i side 0
@@ -104,8 +104,8 @@ $ `stdlib/net/tcpstack.nu`
 @ main → i {
     : NetStack na ( stack_new ( mac_a ) ( ip_a ) ( mask24 ) ( ip_gw ) )
     : NetStack nb ( stack_new ( mac_b ) ( ip_b ) ( mask24 ) ( ip_gw ) )
-    : *TcpStack a ( tstack_new na 1000 )
-    : *TcpStack b ( tstack_new nb 500000 )
+    : TcpStack a ( tstack_new na 1000 )
+    : TcpStack b ( tstack_new nb 500000 )
 
     // ── B listens ────────────────────────────────────────────────
     : i lst ( tstack_listen b ( ip_b ) 80 4 )
@@ -188,7 +188,7 @@ $ `stdlib/net/tcpstack.nu`
     : PktBuf back ( pktbuf_new )
     ( deliver_all b w6 5000 back )
     ( pb `a SYN to a closed port is refused: ` > ( pktbuf_count back ) 0 )
-    ( pb `B counted it: ` == 1 . b no_conn )
+    ( pb `B counted it: ` == 1 ( tstack_no_conn b ) )
     // …and A's connection dies on the RST rather than retrying forever.
     : PktBuf w7 ( pktbuf_new )
     ( deliver_all a back 5000 w7 )

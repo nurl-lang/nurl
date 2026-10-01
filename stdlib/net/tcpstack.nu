@@ -35,6 +35,11 @@
 //     the peer's MAC is known. It is not queued — TCP already owns a
 //     retransmit timer, and using it is both less code and more honest
 //     than a second queue with its own drop policy.
+//
+// MEMORY. A `TcpStack` (from `tstack_new`) is a handle (rcbox): every
+// copy is the same table, and its last owner releases it — every
+// connection, listener and Tcb in it, and its own owner's share of the
+// NetStack it was given. `tstack_free` is an early release (optional).
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/net/inet.nu`
@@ -43,6 +48,7 @@ $ `stdlib/net/tcpseg.nu`
 $ `stdlib/net/tcp.nu`
 $ `stdlib/net/pktbuf.nu`
 $ `stdlib/net/stack.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── rx outcomes ──────────────────────────────────────────────────
 //
@@ -121,7 +127,7 @@ $ `stdlib/net/stack.nu`
     i gen
 }
 
-: TcpStack {
+: TcpStackImpl {
     NetStack net
     ( Vec i ) conns  // *TConn, as integers — NURL has no Vec of pointers
     ( Vec i ) listeners  // *TListener, likewise
@@ -131,57 +137,98 @@ $ `stdlib/net/stack.nu`
     i no_conn
 }
 
-@ __tconn_ptr * TcpStack ts i idx → *TConn {
+// A TcpStack is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: TcpStack { s ctl }
+
+@ TcpStack_share TcpStack h → TcpStack { ^ @ TcpStack { # s ( rcbox_share # i . h ctl ) } }
+
+@ TcpStack_drop sink TcpStack h → v {
+    ( mem_forget h )
+    ( rcbox_release [TcpStackImpl] # i . h ctl )
+}
+
+@ __TcpStack_ptr TcpStack h → *TcpStackImpl { ^ ( rcbox_ptr [TcpStackImpl] # i . h ctl ) }
+
+// The connection and listener blocks are raw memory (the table keeps
+// them as integers): releasing them, and the Tcb each connection holds,
+// is the table's own drop. Its NetStack and vectors are dropped after.
+% Drop TcpStackImpl {
+    @ drop TcpStackImpl ts → v {
+        : i n ( vec_len [i] . ts conns )
+        : ~ i k 0
+        ~ < k n {
+            : *TConn c # *TConn ?? ( vec_get [i] . ts conns k ) { T p → p F → 0 }
+            ? != # i c 0 {
+                // A released slot holds a null Tcb; letting go of one is
+                // a no-op, so every slot is released the same way.
+                ( tcb_free . c tcb )
+                ( nurl_free # s c )
+            } {}
+            = k + k 1
+        }
+        : i m ( vec_len [i] . ts listeners )
+        : ~ i j 0
+        ~ < j m {
+            : *TListener l # *TListener ?? ( vec_get [i] . ts listeners j ) { T p → p F → 0 }
+            ? != # i l 0 {
+                ( vec_free [i] . l pending )
+                ( nurl_free # s l )
+            } {}
+            = j + j 1
+        }
+    }
+}
+
+@ __tconn_ptr * TcpStackImpl ts i idx → *TConn {
     ^ # *TConn ?? ( vec_get [i] . ts conns idx ) { T p → p F → 0 }
 }
 
-@ __tlisten_ptr * TcpStack ts i idx → *TListener {
+@ __tlisten_ptr * TcpStackImpl ts i idx → *TListener {
     ^ # *TListener ?? ( vec_get [i] . ts listeners idx ) { T p → p F → 0 }
 }
 
-@ tstack_new NetStack net i iss_seed → *TcpStack {
-    : *TcpStack ts # *TcpStack ( nurl_alloc Z TcpStack )
-    = . ts net net
+@ tstack_new NetStack net i iss_seed → TcpStack {
+    : i ts__box ( rcbox_zero [TcpStackImpl] )
+    : *TcpStackImpl ts ( rcbox_ptr [TcpStackImpl] ts__box )
+    // Another owner of the stack, not a view of the caller's: this table
+    // sends through it for as long as the table lives.
+    = . ts net ( NetStack_share net )
     = . ts conns ( vec_new [i] )
     = . ts listeners ( vec_new [i] )
     = . ts iss iss_seed
     = . ts ephemeral 49152
     = . ts rst_sent 0
     = . ts no_conn 0
-    ^ ts
+    ^ @ TcpStack { # s ts__box }
 }
 
-@ tstack_free sink * TcpStack ts → v {
-    : i n ( vec_len [i] . ts conns )
-    : ~ i k 0
-    ~ < k n {
-        : *TConn c ( __tconn_ptr ts k )
-        ? != # i c 0 {
-            ? . c used { ( tcb_free . c tcb ) } {}
-            ( nurl_free # s c )
-        } {}
-        = k + k 1
-    }
-    ( vec_free [i] . ts conns )
-    : i m ( vec_len [i] . ts listeners )
-    : ~ i j 0
-    ~ < j m {
-        : *TListener l ( __tlisten_ptr ts j )
-        ? != # i l 0 {
-            ( vec_free [i] . l pending )
-            ( nurl_free # s l )
-        } {}
-        = j + j 1
-    }
-    ( vec_free [i] . ts listeners )
-    ( nurl_free # s ts )
+// Let go of `ts` now rather than at the end of its owner's scope.
+@ tstack_free sink TcpStack ts → v {}
+
+// The IPv4 stack this table sends through, lent: the socket layer
+// routes UDP and seeds ARP through the same one.
+@ tstack_net TcpStack ts__h → NetStack {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
+    ^ . ts net
+}
+
+// Segments that matched no connection, and the RSTs sent for them.
+@ tstack_no_conn TcpStack ts__h → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
+    ^ . ts no_conn
+}
+
+@ tstack_rst_sent TcpStack ts__h → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
+    ^ . ts rst_sent
 }
 
 // Take a free slot, or grow the table. The freed slots keep their
 // allocation so an index that was handed out and closed can still be
 // looked up and rejected by generation, rather than pointing at
 // whatever was allocated next.
-@ __conn_alloc * TcpStack ts → i {
+@ __conn_alloc * TcpStackImpl ts → i {
     : i n ( vec_len [i] . ts conns )
     : ~ i k 0
     ~ < k n {
@@ -206,7 +253,7 @@ $ `stdlib/net/stack.nu`
     ^ n
 }
 
-@ __conn_release * TcpStack ts i idx → v {
+@ __conn_release * TcpStackImpl ts i idx → v {
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
@@ -219,45 +266,52 @@ $ `stdlib/net/stack.nu`
 // pairs and every lookup goes through here, so a read on a closed
 // connection is an error rather than a read of the next connection to
 // take that slot.
-@ tstack_conn_live * TcpStack ts i idx i gen → b {
+@ tstack_conn_live TcpStack ts__h i idx i gen → b {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     ? || < idx 0 >= idx ( vec_len [i] . ts conns ) { ^ F } {}
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ F } {}
     ^ && . c used == . c gen gen
 }
 
-@ tstack_conn_gen * TcpStack ts i idx → i {
+@ tstack_conn_gen TcpStack ts__h i idx → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ 0 } {}
     ^ . c gen
 }
 
-@ tstack_conn_tcb * TcpStack ts i idx → Tcb {
+@ tstack_conn_tcb TcpStack ts__h i idx → Tcb {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ @ Tcb { # s 0 } } {}
     ^ . c tcb
 }
 
-@ tstack_conn_state * TcpStack ts i idx → i {
+@ tstack_conn_state TcpStack ts__h i idx → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ ( tcp_closed ) } {}
     ? ! . c used { ^ ( tcp_closed ) } {}
     ^ ( tcb_state . c tcb )
 }
 
-@ tstack_conn_peer_ip * TcpStack ts i idx → i {
+@ tstack_conn_peer_ip TcpStack ts__h i idx → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ 0 } {}
     ^ . c remote_ip
 }
 
-@ tstack_conn_peer_port * TcpStack ts i idx → i {
+@ tstack_conn_peer_port TcpStack ts__h i idx → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ 0 } {}
     ^ . c remote_port
 }
 
-@ tstack_conn_local_port * TcpStack ts i idx → i {
+@ tstack_conn_local_port TcpStack ts__h i idx → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ 0 } {}
     ^ . c local_port
@@ -265,7 +319,8 @@ $ `stdlib/net/stack.nu`
 
 // ── listeners ────────────────────────────────────────────────────
 
-@ tstack_listen * TcpStack ts i local_ip i port i backlog → i {
+@ tstack_listen TcpStack ts__h i local_ip i port i backlog → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : i n ( vec_len [i] . ts listeners )
     : ~ i slot -1
     : ~ i k 0
@@ -290,7 +345,8 @@ $ `stdlib/net/stack.nu`
     ^ slot
 }
 
-@ tstack_listener_close * TcpStack ts i idx → v {
+@ tstack_listener_close TcpStack ts__h i idx → v {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TListener l ( __tlisten_ptr ts idx )
     ? == # i l 0 { ^ } {}
     ( vec_clear [i] . l pending )
@@ -299,7 +355,8 @@ $ `stdlib/net/stack.nu`
 
 // Hand back the next connection this listener has completed, or -1.
 // A connection is only offered once — it moves out of `pending` here.
-@ tstack_accept * TcpStack ts i idx → i {
+@ tstack_accept TcpStack ts__h i idx → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TListener l ( __tlisten_ptr ts idx )
     ? == # i l 0 { ^ -1 } {}
     ? ! . l used { ^ -1 } {}
@@ -309,7 +366,8 @@ $ `stdlib/net/stack.nu`
     ^ c
 }
 
-@ tstack_pending_count * TcpStack ts i idx → i {
+@ tstack_pending_count TcpStack ts__h i idx → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TListener l ( __tlisten_ptr ts idx )
     ? == # i l 0 { ^ 0 } {}
     ^ ( vec_len [i] . l pending )
@@ -321,7 +379,7 @@ $ `stdlib/net/stack.nu`
 // datagram per SEGMENT, which is why PktBuf carries end offsets at all:
 // TCP has no length field of its own and concatenating segments into
 // one buffer is irreversible.
-@ __flush * TcpStack ts i idx PktBuf o i now PktBuf out → i {
+@ __flush * TcpStackImpl ts i idx PktBuf o i now PktBuf out → i {
     : *TConn c ( __tconn_ptr ts idx )
     : i nseg ( pktbuf_count o )
     : ~ i emitted 0
@@ -346,7 +404,7 @@ $ `stdlib/net/stack.nu`
 
 // ── receive ──────────────────────────────────────────────────────
 
-@ __find_conn * TcpStack ts i local_ip i local_port i remote_ip i remote_port → i {
+@ __find_conn * TcpStackImpl ts i local_ip i local_port i remote_ip i remote_port → i {
     : i n ( vec_len [i] . ts conns )
     : ~ i k 0
     ~ < k n {
@@ -359,7 +417,7 @@ $ `stdlib/net/stack.nu`
     ^ -1
 }
 
-@ __find_listener * TcpStack ts i local_ip i port → i {
+@ __find_listener * TcpStackImpl ts i local_ip i port → i {
     : i n ( vec_len [i] . ts listeners )
     : ~ i k 0
     ~ < k n {
@@ -375,7 +433,7 @@ $ `stdlib/net/stack.nu`
 // RFC 793: a segment that belongs to no connection is answered with a
 // RST, unless it IS a RST — which would loop forever between two hosts
 // that each think the other is confused.
-@ __send_rst * TcpStack ts i src_ip i dst_ip TcpSeg s i now PktBuf out → i {
+@ __send_rst * TcpStackImpl ts i src_ip i dst_ip TcpSeg s i now PktBuf out → i {
     ? == & . s flags 4 4 { ^ 0 } {}
     = . ts rst_sent + . ts rst_sent 1
     : ( Vec u ) dg ( vec_new [u] )
@@ -399,7 +457,7 @@ $ `stdlib/net/stack.nu`
 
 // A SYN to a listening port. The listener stays listening; a new
 // connection is created in SYN_RCVD and queued for accept.
-@ __passive_open * TcpStack ts i lidx i local_ip i local_port TcpSeg s i src_ip i now ( Vec u ) frame PktBuf o PktBuf out → TRx {
+@ __passive_open * TcpStackImpl ts i lidx i local_ip i local_port TcpSeg s i src_ip i now ( Vec u ) frame PktBuf o PktBuf out → TRx {
     : *TListener l ( __tlisten_ptr ts lidx )
     ? >= ( vec_len [i] . l pending ) . l backlog {
         // The backlog is full. Dropping the SYN is what a listening
@@ -433,7 +491,7 @@ $ `stdlib/net/stack.nu`
     ^ ( __trx ( trx_accepted ) 0 idx emitted )
 }
 
-@ __next_iss * TcpStack ts → i {
+@ __next_iss * TcpStackImpl ts → i {
     // A per-connection ISS that advances. RFC 793's clock-driven ISS is
     // about old-duplicate protection across incarnations; TIME_WAIT
     // covers that here, and a monotone step keeps the unit tests
@@ -445,7 +503,8 @@ $ `stdlib/net/stack.nu`
 // Feed one frame in. Non-TCP frames are handed to stack.nu and their
 // verdict passed straight through, so a caller can run one loop for
 // everything rather than two that disagree about which is authoritative.
-@ tstack_rx * TcpStack ts ( Vec u ) frame i now PktBuf out → TRx {
+@ tstack_rx TcpStack ts__h ( Vec u ) frame i now PktBuf out → TRx {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : RxResult rr ( stack_rx . ts net frame now out )
     ? != . rr kind ( rx_tcp ) { ^ ( __trx_other rr ) } {}
     : TcpSeg s ( tcpseg_parse frame . rr payload_off . rr payload_len . rr src_ip . rr dst_ip )
@@ -492,7 +551,7 @@ $ `stdlib/net/stack.nu`
 
 // ── active open ──────────────────────────────────────────────────
 
-@ __next_ephemeral * TcpStack ts → i {
+@ __next_ephemeral * TcpStackImpl ts → i {
     = . ts ephemeral + . ts ephemeral 1
     ? > . ts ephemeral 65535 { = . ts ephemeral 49152 } {}
     ^ . ts ephemeral
@@ -502,7 +561,8 @@ $ `stdlib/net/stack.nu`
 // `tstack_conn_state` (or waits for the socket layer's wakeup) for
 // ESTABLISHED. A SYN that could not be framed because ARP has not
 // resolved yet is NOT an error — the retransmit timer will send it.
-@ tstack_connect * TcpStack ts i remote_ip i remote_port i local_port i now PktBuf out → i {
+@ tstack_connect TcpStack ts__h i remote_ip i remote_port i local_port i now PktBuf out → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : i idx ( __conn_alloc ts )
     : *TConn c ( __tconn_ptr ts idx )
     = . c local_ip ( stack_our_ip . ts net )
@@ -518,7 +578,8 @@ $ `stdlib/net/stack.nu`
 
 // ── the rest of the socket surface, as pure logic ────────────────
 
-@ tstack_write * TcpStack ts i idx ( Vec u ) data i off i len i now PktBuf out → i {
+@ tstack_write TcpStack ts__h i idx ( Vec u ) data i off i len i now PktBuf out → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ -1 } {}
     ? ! . c used { ^ -1 } {}
@@ -530,14 +591,16 @@ $ `stdlib/net/stack.nu`
     ^ n
 }
 
-@ tstack_read * TcpStack ts i idx ( Vec u ) dst i n → i {
+@ tstack_read TcpStack ts__h i idx ( Vec u ) dst i n → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ -1 } {}
     ? ! . c used { ^ -1 } {}
     ^ ( tcb_read . c tcb dst n )
 }
 
-@ tstack_close * TcpStack ts i idx i now PktBuf out → v {
+@ tstack_close TcpStack ts__h i idx i now PktBuf out → v {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
@@ -548,7 +611,8 @@ $ `stdlib/net/stack.nu`
     ? == ( tcb_state . c tcb ) ( tcp_closed ) { ( __conn_release ts idx ) } {}
 }
 
-@ tstack_abort * TcpStack ts i idx i now PktBuf out → v {
+@ tstack_abort TcpStack ts__h i idx i now PktBuf out → v {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
@@ -565,7 +629,8 @@ $ `stdlib/net/stack.nu`
 // ARP cache's own expiry. Returns the number of frames emitted, so a
 // caller that wants to know whether the loop did anything does not have
 // to diff the output buffer.
-@ tstack_tick * TcpStack ts i now PktBuf out → i {
+@ tstack_tick TcpStack ts__h i now PktBuf out → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     ( stack_tick . ts net now out )
     : i n ( vec_len [i] . ts conns )
     : ~ i emitted 0
@@ -588,7 +653,8 @@ $ `stdlib/net/stack.nu`
 // is. An event loop that has nothing else to do sleeps until this
 // rather than spinning — the difference between a guest that idles and
 // one that burns its only vCPU.
-@ tstack_next_timeout * TcpStack ts i now → i {
+@ tstack_next_timeout TcpStack ts__h i now → i {
+    : *TcpStackImpl ts ( __TcpStack_ptr ts__h )
     : i n ( vec_len [i] . ts conns )
     : ~ i best -1
     : ~ i k 0

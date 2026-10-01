@@ -70,7 +70,7 @@ $ `stdlib/net/socket.nu`
 
 @ main → i {
     : NetStack net ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
-    : *TcpStack ts ( tstack_new net 1000 )
+    : TcpStack ts ( tstack_new net 1000 )
     : *SockTab st ( sock_new ts ( lo_ip ) )
     : ( Vec u ) scratch ( vec_new [u] )
 
@@ -281,7 +281,7 @@ $ `stdlib/net/socket.nu`
     // its own MAC without asking, and a second stack — cache empty,
     // seeded instead — completes a connect in the same millisecond.
     : NetStack net2 ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
-    : *TcpStack ts2 ( tstack_new net2 7000 )
+    : TcpStack ts2 ( tstack_new net2 7000 )
     : *SockTab st2 ( sock_new ts2 ( lo_ip ) )
     ( sock_seed_self st2 7000 )
     : i l2 ( sock_listen st2 0 8443 4 )
@@ -309,7 +309,7 @@ $ `stdlib/net/socket.nu`
     // orphan an established one nobody holds an fd for), and that the
     // same accept succeeds once an fd is free.
     : NetStack net3 ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
-    : *TcpStack ts3 ( tstack_new net3 7000 )
+    : TcpStack ts3 ( tstack_new net3 7000 )
     : *SockTab st3 ( sock_new ts3 ( lo_ip ) )
     ( sock_seed_self st3 7000 )
     ( pb `the default ceiling is a POSIX-shaped 1024: ` == ( sock_max_fds st3 ) 1024 )

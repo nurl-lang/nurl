@@ -99,7 +99,7 @@ $ `stdlib/net/dnsclient.nu`
 
 : Shim {
     NetStack net
-    * TcpStack ts
+    TcpStack ts
     * SockTab st
     ( Vec i ) peer  // cached "ip:port" per fd slot — see nurl_tcp_peer_addr
     // The waiter registry: who is parked on which fd. Three parallel
