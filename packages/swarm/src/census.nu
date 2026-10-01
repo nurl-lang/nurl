@@ -21,6 +21,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/dist/ring.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ census_hello_t → i { ^ 3 }
 
@@ -42,7 +43,9 @@ $ `stdlib/dist/ring.nu`
 
 : Hello { i id i role i want ( Vec u ) pubkey }
 
-@ hello_free sink Hello h → v { ( vec_free [u] . h pubkey ) }
+// A Hello owns only its pubkey, which its owner drops; this lets go of it
+// now rather than at the end of the owner's scope (optional).
+@ hello_free sink Hello h → v {}
 
 @ hello_decode ( Vec u ) buf → Hello {
     : i id ?? ( bytes_read_u64_be buf 1 ) { T x → # i x F → 0 }
@@ -61,48 +64,51 @@ $ `stdlib/dist/ring.nu`
 
 : Member { ( Vec u ) pubkey i id }
 
-: Roster { ( Vec s ) members }  // *Member
+: RosterImpl { ( Vec Member ) members }
 
-@ roster_new → *Roster {
-    : *Roster r # *Roster ( nurl_alloc Z Roster )
-    = . r members ( vec_new [s] )
-    ^ r
+// A Roster is a handle on its member list in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same roster, and the last owner releases it.
+: Roster { s ctl }
+
+@ Roster_share Roster h → Roster { ^ @ Roster { # s ( rcbox_share # i . h ctl ) } }
+
+@ Roster_drop sink Roster h → v {
+    ( mem_forget h )
+    ( rcbox_release [RosterImpl] # i . h ctl )
 }
 
-@ roster_free sink * Roster r → v {
-    : i n ( vec_len [s] . r members )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *Member m # *Member pp ( vec_free [u] . m pubkey ) ( nurl_free # s m ) } {}
-        = k + k 1
-    }
-    ( vec_free [s] . r members )
-    ( nurl_free # s r )
+@ __Roster_ptr Roster h → *RosterImpl { ^ ( rcbox_ptr [RosterImpl] # i . h ctl ) }
+
+@ roster_new → Roster {
+    ^ @ Roster { # s ( rcbox_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
 }
 
-@ roster_has * Roster r ( Vec u ) pubkey → b {
-    : i n ( vec_len [s] . r members )
+// Let go of `r` now rather than at the end of its owner's scope (optional).
+@ roster_free sink Roster r → v {}
+
+@ roster_has Roster r__h ( Vec u ) pubkey → b {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    : i n ( vec_len [Member] . r members )
     : ~ b found F : ~ i k 0
     ~ & ! found < k n {
-        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *Member m # *Member pp ? ( bytes_eq . m pubkey pubkey ) { = found T } {} } {}
+        ?? ( vec_get [Member] . r members k ) { T m → { ? ( bytes_eq . m pubkey pubkey ) { = found T } {} } F → {} }
         = k + k 1
     }
     ^ found
 }
 
-@ roster_count * Roster r → i { ^ ( vec_len [s] . r members ) }
+@ roster_count Roster r__h → i {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    ^ ( vec_len [Member] . r members )
+}
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
-@ roster_add * Roster r Ring ring ( Vec u ) pubkey i id i vnodes → b {
-    ? ( roster_has r pubkey ) { ^ F } {}
-    : *Member m # *Member ( nurl_alloc Z Member )
+@ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes → b {
+    ? ( roster_has r__h pubkey ) { ^ F } {}
+    : *RosterImpl r ( __Roster_ptr r__h )
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )
     ( vec_extend [u] cp pubkey )
-    = . m pubkey cp
-    = . m id id
-    ( vec_push [s] . r members # s m )
+    ( vec_push [Member] . r members @ Member { cp id } )
     ( ring_add_member ring pubkey vnodes )
     ^ T
 }
