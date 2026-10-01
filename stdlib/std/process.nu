@@ -699,25 +699,43 @@ $ `stdlib/core/rcbox.nu`
 //
 //   ( proc_wait         ProcChild p )           → i      blocks
 //   ( proc_kill         ProcChild p i sig )     → i      0 ok / -1 err
-//   ( proc_free         ProcChild p )           → v      reaps child
+//   ( proc_free         ProcChild p )           → v      early release (optional)
 //
 // Memory model:
-//   * `proc_read_line` returns a freshly-OWNED `String` on Some — the
-//     caller MUST `string_free` it. None means timeout (peer still alive,
-//     `proc_eof` = false) OR EOF (peer closed, `proc_eof` = true).
-//   * `proc_read_chunk` returns a freshly-OWNED `( Vec u )` on Ok — the
-//     caller MUST `vec_free` it. It BLOCKS until the child produces
-//     bytes (one read(2)-worth, at most `max`); an EMPTY Vec means EOF
-//     (child closed stdout). Bytes already buffered by a previous
-//     `proc_read_line` call are served first, so the two read styles
-//     interleave safely. POSIX only — Win32/WASI return ProcessOther
-//     (use `proc_read_line` there).
-//   * `proc_free` cascades: closes stdin/stdout, SIGTERMs an unwaited
-//     child (then SIGKILL after ~500ms), reaps via waitpid, frees the
-//     handle.
+//   * A ProcChild releases itself: every copy of it (a struct field, a
+//     Vec element, a closure capture, `ProcChild_share`) is the same
+//     child, and when its last owner goes the child is shut down —
+//     stdin/stdout closed, an unwaited child SIGTERMed (then SIGKILLed),
+//     reaped with waitpid, the handle freed. A child `proc_wait` already
+//     reaped is not signalled. Nothing to free by hand; `proc_free` lets
+//     go of one owner early.
+//   * `proc_read_line` returns a freshly-OWNED `String` on Some. None
+//     means timeout (peer still alive, `proc_eof` = false) OR EOF (peer
+//     closed, `proc_eof` = true).
+//   * `proc_read_chunk` returns a freshly-OWNED `( Vec u )` on Ok. It
+//     BLOCKS until the child produces bytes (one read(2)-worth, at most
+//     `max`); an EMPTY Vec means EOF (child closed stdout). Bytes already
+//     buffered by a previous `proc_read_line` call are served first, so
+//     the two read styles interleave safely. POSIX only — Win32/WASI
+//     return ProcessOther (use `proc_read_line` there).
 //   * Args Vec is BORROWED — element pointers must outlive the spawn call.
 
+// The runtime's child block (NurlProcChild below: pid, pipes, read
+// buffers), in an rcbox. Its drop is what `proc_free` used to do by hand.
+: ProcChildImpl { i raw }
+
+% Drop ProcChildImpl { @ drop ProcChildImpl x → v { ( __proc_shutdown . x raw ) } }
+
 : ProcChild { s raw }
+
+@ ProcChild_share ProcChild h → ProcChild { ^ @ ProcChild { # s ( rcbox_share # i . h raw ) } }
+
+@ ProcChild_drop sink ProcChild h → v {
+    ( mem_forget h )
+    ( rcbox_release [ProcChildImpl] # i . h raw )
+}
+
+@ __proc_raw ProcChild p → i { ^ . ( rcbox_ptr [ProcChildImpl] # i . p raw ) raw }
 
 @ __proc_spawn_dispatch i raw → !ProcChild ProcessErr {
     ? == raw 0 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessOther } } {}
@@ -729,8 +747,7 @@ $ `stdlib/core/rcbox.nu`
         ? == ek 3 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessIo } } {}
         ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessOther }
     } {}
-    : s rp # s raw
-    : ProcChild p @ ProcChild { rp }
+    : ProcChild p @ ProcChild { # s ( rcbox_new [ProcChildImpl] @ ProcChildImpl { raw } ) }
     ^ @ !ProcChild ProcessErr { T p }
 }
 
@@ -765,7 +782,10 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // scratch_reserve / line_reserve / drain_line — translated from C
-// §16b's static helpers verbatim.
+// §16b's static helpers verbatim. A buffer's first growth is a
+// nurl_alloc, not realloc(NULL, n), as a Vec's is: the child's drop
+// releases both with nurl_free, so they are nurl_alloc blocks (counted,
+// and recycled by the runtime's small-allocation cache).
 
 @ __pc_scratch_reserve s c i want → v {
     : i cap ( nurl_peek c 11 )
@@ -773,8 +793,11 @@ $ `stdlib/core/rcbox.nu`
         : ~ i newcap ? > cap 0 cap 1024
         ~ < newcap want { = newcap * newcap 2 }
         : s old # s ( nurl_peek c 9 )
-        : s p ( nurl_realloc old newcap )
-        ( nurl_poke c 9 # i p )
+        ? == 0 # i old {
+            ( nurl_poke c 9 # i ( nurl_alloc newcap ) )
+        } {
+            ( nurl_poke c 9 # i ( nurl_realloc old newcap ) )
+        }
         ( nurl_poke c 11 newcap )
     }
 }
@@ -785,8 +808,11 @@ $ `stdlib/core/rcbox.nu`
         : ~ i newcap ? > cap 0 cap 256
         ~ < newcap + want 1 { = newcap * newcap 2 }
         : s old # s ( nurl_peek c 12 )
-        : s p ( nurl_realloc old newcap )
-        ( nurl_poke c 12 # i p )
+        ? == 0 # i old {
+            ( nurl_poke c 12 # i ( nurl_alloc newcap ) )
+        } {
+            ( nurl_poke c 12 # i ( nurl_realloc old newcap ) )
+        }
         ( nurl_poke c 14 newcap )
     }
 }
@@ -1331,14 +1357,12 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ proc_pid ProcChild p → i {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ^ ( nurl_proc_spawn_pid raw )
 }
 
 @ proc_write ProcChild p s buf i n → i {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
         ^ ( __proc_write_posix raw buf n )
     } {}
@@ -1359,8 +1383,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ proc_close_stdin ProcChild p → v {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
         ( __proc_close_stdin_posix raw )
     } {
@@ -1369,24 +1392,21 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ proc_eof ProcChild p → b {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ^ != 0 ( nurl_proc_spawn_eof raw )
 }
 
 @ proc_last_io_err ProcChild p → i {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ^ ( nurl_proc_spawn_last_io_err raw )
 }
 
 // Read one '\n'-delimited line from the child's stdout. Returns:
-//   * Some(String)  — a fresh OWNED line (newline stripped). Free with string_free.
+//   * Some(String)  — a fresh OWNED line (newline stripped).
 //   * None on timeout (proc_eof = false) OR EOF (proc_eof = true).
 // `timeout_ms <= 0` blocks until a full line arrives or EOF/error.
 @ proc_read_line ProcChild p i timeout_ms → ?String {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     : s view ? != ( posix_const `O_NONBLOCK` ) -1
     ( __proc_read_line_posix raw timeout_ms )
     ( nurl_proc_spawn_read_line raw timeout_ms )
@@ -1398,14 +1418,13 @@ $ `stdlib/core/rcbox.nu`
 // Blocking raw-byte read from the child's stdout — the incremental
 // dual of proc_write. Blocks until the child produces output (or EOF),
 // then returns ONE read(2)-worth of bytes, at most `max`. Returns:
-//   * Ok(Vec u)  — fresh OWNED bytes; caller MUST vec_free. EMPTY ⇒ EOF
+//   * Ok(Vec u)  — fresh OWNED bytes. EMPTY ⇒ EOF
 //     (proc_eof = true from then on).
 //   * Err(ProcessIo) on a hard pipe error (errno via proc_last_io_err).
 // Bytes buffered by an earlier proc_read_line are served first.
 // POSIX only; Win32/WASI return ProcessOther (use proc_read_line).
 @ proc_read_chunk ProcChild p i max → !( Vec u ) ProcessErr {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
         ^ ( __proc_read_chunk_posix raw max )
     } {}
@@ -1423,8 +1442,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ proc_wait ProcChild p → i {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
         ^ ( __proc_wait_posix raw )
     } {}
@@ -1432,20 +1450,23 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ proc_kill ProcChild p i sig → i {
-    : s rp . p raw
-    : i raw # i rp
+    : i raw ( __proc_raw p )
     ? != ( posix_const `O_NONBLOCK` ) -1 {
         ^ ( __proc_kill_posix raw sig )
     } {}
     ^ ( nurl_proc_spawn_kill raw sig )
 }
 
-@ proc_free sink ProcChild p → v {
-    : s rp . p raw
-    : i raw # i rp
+// The child's shutdown, run by its last owner: close the pipes, stop
+// and reap a child nobody waited for, free the block.
+@ __proc_shutdown i raw → v {
     ? != ( posix_const `O_NONBLOCK` ) -1 {
         ( __proc_free_posix raw )
     } {
         ( nurl_proc_spawn_free raw )
     }
 }
+
+// Let go of `p` now rather than at the end of its owner's scope; the
+// last owner shuts the child down.
+@ proc_free sink ProcChild p → v {}
