@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+?? ( vec_get ( mk ) 0 ): 0
+: ?i o ( vec_get ( mk ) 0 ): 0
+( vec_len ( mk ) ): 0
+bound then vec_get: 0
+len_of: steady
+copy_of: steady (0 allocations left over after 20 calls)
+sum (want 240): 240

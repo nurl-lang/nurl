@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `? on { = w ( wrap base ) = base w } {}`: the arm's value was copied for a
   join no statement consumes, and the copy leaked on every run (packages/http's
   middleware layers). `compiler/tests/closure_arm_tail_assign.nu`.
+- **A temporary handed to a call that cannot point into it is dropped after
+  the call.** `( vec_get [i] ( mk ) 0 )` (a `?i` holds no address) and
+  `( copy_of ( string_data ( make ) ) )` (a String the callee builds rather
+  than hands back) kept the temporary for a consumer that never came — it
+  leaked. `compiler/tests/temp_args_after_views.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated

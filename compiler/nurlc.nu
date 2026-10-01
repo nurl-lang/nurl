@@ -5983,6 +5983,17 @@
 // A scalar may carry an address. Parameter provenance therefore vetoes a
 // temporary drop independently of the LLVM return type. Sink, retention and
 // unverified-call facts apply per position, including named arguments.
+// `{ i1, T }` / `{ i1, T, E }` whose parts are all numbers or flags.
+@ __wrap_of_numbers s ty → b {
+    ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ^ F } {}
+    : s a ( __wrap_part ty 0 )
+    : s b ( __wrap_part ty 1 )
+    ? == 0 ( nurl_str_len a ) { ^ F } {}
+    : b an | | > ( int_width a ) 0 ( seq a `double` ) ( seq a `float` )
+    : b bn | | | == 0 ( nurl_str_len b ) > ( int_width b ) 0 ( seq b `double` ) ( seq b `float` )
+    ^ & an bn
+}
+
 @ mem_consumer_arg_drop_safe i syms s fname i index → b {
     : s arg ( nurl_str_int index )
     ? | | ( str_contains_word ( nurl_sym_get g_fn_sink fname ) arg )
@@ -16983,7 +16994,10 @@
     ( nurl_sym_def syms `__argtmp_one__` `` )
     ( nurl_sym_def syms `__argtmp_part__` `` )
     : s __crt ( nurl_sym_get syms call_name )
-    : b __scalar_ret | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` )
+    // (An option / result of numbers holds no address either: `( vec_get [i]
+    // ( mk ) 0 )` cannot hand back a pointer into the temporary — deferred
+    // for a consumer that never came, the Vec leaked.)
+    : b __scalar_ret | | | | ( seq __crt `void` ) ( seq __crt `i64` ) ( seq __crt `i1` ) ( __wrap_of_numbers __crt )
     | | | ( seq __crt `i32` ) ( seq __crt `double` ) ( seq __crt `i8` ) ( seq __crt `float` )
     // A trait object boxed right in the argument: its box is freed after
     // the call unless the callee keeps the argument (argdrop).
@@ -17047,7 +17061,12 @@
     // between may have made it in a branch this point does not follow.
     ? & != 0 ( nurl_str_len __dtmp ) != arg_tt TT_LPAREN { ( nurl_sym_def syms `__deferred_temps__` `` ) } {}
     ? & != 0 ( nurl_str_len __dtmp ) == arg_tt TT_LPAREN {
-        ? & __scalar_ret ( mem_consumer_arg_drop_safe syms call_name arg_idx ) {
+        // (…or a String / Vec / struct this call builds rather than hands
+        // back: `( copy_of ( string_data ( make ) ) )` — the summaries say
+        // the result neither is nor views the argument.)
+        : b __dt_fresh & & ( __is_handle_ty __crt ) == 0 ( nurl_sym_len g_fn_ret_view call_name )
+        == 0 ( nurl_sym_len2 syms call_name `__ret_borrow` )
+        ? & | __scalar_ret __dt_fresh ( mem_consumer_arg_drop_safe syms call_name arg_idx ) {
             = owned ? == 0 ( nurl_str_len owned ) ( nurl_str_cat __dtmp `` ) ( nurl_str_cat3 owned ` ` __dtmp )
             ( nurl_sym_def syms `__deferred_temps__` `` )
         } {}
