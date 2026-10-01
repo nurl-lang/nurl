@@ -8,16 +8,23 @@
 // call that consumes it takes its fields along, as a bare argument to that
 // call would.
 //
-// Positive cases error; the controls (the holder still alive, a call that
-// only reads the literal, a holder kept in a Vec) do not.
+// The holder may be a binding the literal was bound to, the struct a field
+// store wrote into, a holder of the holder, or the name the holder was
+// handed on to. Positive cases error; the controls (the holder still alive,
+// a call that only reads the literal, a holder kept in a Vec, a read while
+// the handed-on name holds it) do not.
 
 $ `stdlib/core/vec.nu`
 
 : Hold { ( Vec i ) v }
 
+: Outer { Hold h }
+
 @ keep sink Hold h → i { ^ ( vec_len [i] . h v ) }
 
 @ peek Hold h → i { ^ ( vec_len [i] . h v ) }
+
+@ keep_outer sink Outer o → i { ^ ( vec_len [i] . . o h v ) }
 
 @ mk → ( Vec i ) {
     : ( Vec i ) v ( vec_new [i] )
@@ -49,6 +56,42 @@ $ `stdlib/core/vec.nu`
     ^ + ( peek t ) ( vec_len [i] a )
 }
 
+// POSITIVE — stored by a field store, then the holder consumed
+@ field_store_consumed → i {
+    : ( Vec i ) a ( mk )
+    : ~ Hold s @ Hold { ( mk ) }
+    = . s v a
+    : i n ( keep s )
+    ^ + n ( vec_len [i] a )
+}
+
+// POSITIVE — the holder is itself held, and that one is consumed
+@ outer_consumed → i {
+    : ( Vec i ) a ( mk )
+    : Hold t @ Hold { a }
+    : Outer o @ Outer { t }
+    : i n ( keep_outer o )
+    ^ + n ( vec_len [i] a )
+}
+
+// POSITIVE — the holder handed on to another name, which is consumed
+@ handed_on_consumed → i {
+    : ( Vec i ) a ( mk )
+    : Hold t @ Hold { a }
+    : Hold u t
+    : i n ( keep u )
+    ^ + n ( vec_len [i] a )
+}
+
+// CONTROL — handed on, read while the new name still holds it
+@ handed_on_alive → i {
+    : ( Vec i ) a ( mk )
+    : Hold t @ Hold { a }
+    : Hold u t
+    : i m ( vec_len [i] a )
+    ^ + m ( keep u )
+}
+
 // CONTROL — the holder still holds it
 @ holder_alive → i {
     : ( Vec i ) a ( mk )
@@ -73,5 +116,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ main → i {
-    ^ + + + + + ( holder_consumed ) ( literal_consumed ) ( holder_replaced ) ( holder_alive ) ( literal_read ) ( holder_kept )
+    : i x + + + ( holder_consumed ) ( literal_consumed ) ( holder_replaced ) ( field_store_consumed )
+    : i y + + + ( outer_consumed ) ( handed_on_consumed ) ( handed_on_alive ) ( holder_alive )
+    ^ + + + x y ( literal_read ) ( holder_kept )
 }

@@ -18388,11 +18388,24 @@
 // borrow, not a move. Distinguishing borrow from move in the general
 // case is the job of a later reference-surface phase; until then the
 // immutability of the destination is the heuristic.
-@ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line → v {
+@ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line s dest → v {
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
     ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
-    { ( bck_stash_move rhs_val line `an alias copy` ) }
+    { ( bck_stash_move rhs_val line `an alias copy` )
+        // What was stored in `a`'s value is in `b`'s now.
+        ( bck_stash_xfer rhs_val dest line ) }
     {}
+}
+
+// Stash a handover of `src`'s whole value to `dst` (`: T b a`): bindings
+// stored in it are held by `dst` from here (an `xfer` row, recorded before
+// `src`'s move so the move does not take them along).
+@ bck_stash_xfer s src s dst i line → v {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        : s cur ( nurl_sym_get g_bck `pxfers` )
+        : s add ( nurl_str_cat4 src ` ` dst ( nurl_str_cat ` ` ( nurl_str_int line ) ) )
+        ( nurl_sym_set g_bck `pxfers` ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
+    } {}
 }
 
 // The aggregate-literal companion of bck_let_alias: `@ T { a }` hands
@@ -18621,6 +18634,15 @@
         // reads in the accumulator — clear them so `move` rows, which
         // carry no reads, are not mislabelled.
         ( nurl_sym_set g_bck `reads` `` )
+        // Handovers first: a move must not take along what moved on.
+        : ~ s xrest ( nurl_sym_get g_bck `pxfers` )
+        ( nurl_sym_set g_bck `pxfers` `` )
+        ~ != 0 ( nurl_str_len xrest ) {
+            : s xs ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+            : s xd ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+            : s xl ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+            ( bck_record2 `xfer` xs ( nurl_str_to_int xl ) ( nurl_str_cat `=` xd ) `0` )
+        }
         ~ != 0 ( nurl_str_len rest ) {
             : s nm ( str_first_word rest )
             = rest ( str_skip_word rest )
@@ -19015,7 +19037,7 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : b __pend | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` )
+    : b __pend | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) | | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` )
     : s w2 ? | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
     ( seq kind `maybemove` ) __pend
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
@@ -19052,10 +19074,17 @@
 // owner — is dead with it. `: H t @ H { a }` then `( consume t )` then
 // `( vec_len a )` read freed memory and compiled clean.
 @ bck_kill_stored_in s st i oid i line b replaced → s {
-    : ~ s out ( nurl_str_cat st `` )
     : s ois ( nurl_str_int oid )
     : s oname ( nurl_sym_get2 g_bck `rv_` ois )
     : s ocause ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` oname ( nurl_str_int line ) ) )
+    : s head ? replaced ( nurl_str_cat3 `assigning '` oname `' a new value` )
+    ? == 0 ( nurl_str_len ocause ) ( nurl_str_cat3 `the end of '` oname `'` ) ( nurl_str_cat ocause `` )
+    ^ ( bck_kill_stored_in_d st oid line head ( nurl_str_cat3 `'` oname `'` ) 0 )
+}
+
+@ bck_kill_stored_in_d s st i oid i line s head s chain i depth → s {
+    : ~ s out ( nurl_str_cat st `` )
+    : s ois ( nurl_str_int oid )
     : ~ s rest ( nurl_sym_get g_bck ( bck_sx_key ois ) )
     ~ != 0 ( nurl_str_len rest ) {
         : s ys ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -19064,11 +19093,12 @@
             = out ( bck_st_set out y BCK_MOVED )
             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` ys ) ( nurl_str_int line ) )
             : s yname ( nurl_sym_get2 g_bck `rv_` ys )
-            : s how ? replaced ( nurl_str_cat3 `assigning '` oname `' a new value — the old one held it` )
-            ? == 0 ( nurl_str_len ocause )
-            ( nurl_str_cat3 `the end of '` oname `', which held it` )
-            ( nurl_str_cat4 ocause ` (it was stored in '` oname `')` )
+            : s how ( nurl_str_cat4 head ` (it was stored in ` chain `)` )
             ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` yname ( nurl_str_int line ) ) how )
+            // …and what was stored in IT goes too (`: Outer o @ Outer { t }`
+            // with `a` in `t`): stored in 't' in 'o'.
+            ? & < depth 8 ( bck_has_stored_in y )
+            { = out ( bck_kill_stored_in_d out y line head ( nurl_str_cat4 `'` yname `' in ` chain ) + depth 1 ) } {}
         } {}
     }
     ^ out
@@ -19372,6 +19402,25 @@
             ( bck_join ( bck_st_get st qvid ) BCK_MOVED ) )
             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` qvn )
             ( bck_field rec 3 ) )
+            = p + p 1
+            = done T
+        } {}
+        ? & ! done ( seq kind `xfer` ) {
+            // `: T b a`: what `a`'s value held, `b` holds now.
+            : s xsn ( bck_field rec 1 )
+            : s xd5 ( bck_field rec 5 )
+            : s xdn ( nurl_str_slice xd5 1 - ( nurl_str_len xd5 ) 1 )
+            : ~ s xrest ( nurl_sym_get g_bck ( bck_sx_key xsn ) )
+            ~ != 0 ( nurl_str_len xrest ) {
+                : s ys ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+                ? ( seq ( nurl_sym_get g_bck ( bck_so_key ys ) ) xsn ) {
+                    ( nurl_sym_set g_bck ( bck_so_key ys ) xdn )
+                    : s dk ( bck_sx_key xdn )
+                    : s dl ( nurl_sym_get g_bck dk )
+                    ? ! ( str_contains_word dl ys )
+                    { ( nurl_sym_set g_bck dk ? == 0 ( nurl_str_len dl ) ( nurl_str_cat ys `` ) ( nurl_str_cat3 dl ` ` ys ) ) } {}
+                } {}
+            }
             = p + p 1
             = done T
         } {}
@@ -20473,7 +20522,7 @@
         ? != 0 ( nurl_str_len __av )
         { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
         {}
-        ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
+        ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
         ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
@@ -20760,7 +20809,7 @@
             ? != 0 ( nurl_str_len __av )
             { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
             {}
-            ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
+            ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
             ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
             : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
             // A `?`-ternary whose live arms are all fresh owned slices
@@ -21670,6 +21719,16 @@
     } {
         ? & ( is_ident_tok __fs_tt ) ! __fs_putback { ( mem_note_kept syms cg __fs_val ! manual ) } {}
     }
+    // `= . s f a`: `a`'s handle lives in `s` from here (the borrow checker's
+    // stored-in-owner relation, bck_kill_stored_in) — a struct binding's
+    // field the compiler drops, not memory managed by hand.
+    ? & & & & ( is_ident_tok __fs_tt ) ! manual ! indirect ! __fs_putback != 0 ( nurl_str_len __fs_obj ) {
+        : s __fslt ( nurl_sym_get syms __fs_val )
+        : i __fspi ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) __fs_val )
+        ? & & ( bck_is_heap_lty __fslt ) ( __is_handle_ty __fslt )
+        | < __fspi 0 ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fspi ) )
+        { ( bck_stash_store __fs_val __fs_line ( nurl_str_cat `=` __fs_obj ) `0` `store` ) } {}
+    } {}
     // A pointer/slice store hands the address to backing storage. The caller
     // cannot release an input merely because this function returns a scalar.
     // Capture the destination before the RHS can perform another field store.

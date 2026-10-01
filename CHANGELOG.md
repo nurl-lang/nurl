@@ -44,7 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   freed memory and compiled clean; so did a read after `= t …` replaced the
   holder, or after a literal went to a call consuming it (`( keep @ Hold {
   a } )`). Each is now a use-after-move error naming what took the value;
-  reading `a` while the holder still holds it stays legal.
+  reading `a` while the holder still holds it stays legal. The holder may be
+  the struct a field store wrote into (`= . s v a`), a holder of the holder,
+  or the name it was handed on to (`: Hold u t`).
   `compiler/tests/borrow_stored_owner_gone.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
