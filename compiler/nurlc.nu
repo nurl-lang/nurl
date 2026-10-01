@@ -18416,8 +18416,10 @@
 // flagged; a second CONSUME is, under --strict-borrowck.
 @ bck_agg_field_alias i syms s name i line → v {
     : s lty ( nurl_sym_get syms name )
+    // (A `sink` parameter is this function's own and moves in as a local.)
+    : i pi ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) name )
     ? & ( bck_is_heap_lty lty )
-    ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) name )
+    | < pi 0 ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
     {  // The aggregate owns it from here: a bound / returned literal at
         // once, one built as an argument when its callee keeps it. (Only
         // a value the aggregate drops: a struct of plain words — a device
@@ -23381,10 +23383,14 @@
         // A parameter in a literal this function keeps to itself (`: H2Frame
         // f @ H2Frame { … payload }`) is copied: its caller still owns the
         // value, and frees it after the call. Only a returned literal takes
-        // a parameter over.
-        : b fld_param_copy & & & & ( is_ident_tok fld_first_tt ) ! agg_returned ! agg_nested_wrap
-        >= ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val ) 0
+        // a parameter over. (A `sink` parameter is this function's own, and
+        // moves in as a local does — `rcbox_new [T] @ T { a b }` in a
+        // constructor copied every Vec it was handed, then dropped it.)
+        : i __fpc_i ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val )
+        : b fld_param_copy & & & & & ( is_ident_tok fld_first_tt ) ! agg_returned ! agg_nested_wrap
+        >= __fpc_i 0
         ( __clone_supported ( nurl_sym_get syms fld_first_val ) syms )
+        ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpc_i ) )
         ? fld_param_copy { = fld_lent ( nurl_str_cat `1` `` ) } {}
         // A parameter handed back wrapped (`^ @ ?T { T p }`, `^ @ !T E { T p }`)
         // comes back exactly as `^ p` does: the caller's own value, lent
@@ -27461,7 +27467,9 @@
 // constant); otherwise the call only reads it and this binding still owns
 // it. A parameter is recorded as kept as for a store.
 @ mem_note_kept_arg i syms i cg s name s kflag → v {
-    ? >= ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) name ) 0
+    // (A `sink` parameter is this function's own: as for a local.)
+    : i pi ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) name )
+    ? & >= pi 0 ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
     { ( mem_note_kept syms cg name T ) ^ v } {}
     : s eo ( nurl_sym_get2 syms name `__enum_owner` )
     ? & != 0 ( nurl_str_len eo ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) eo )

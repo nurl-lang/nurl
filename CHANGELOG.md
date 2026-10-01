@@ -186,6 +186,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `sink` parameter placed in a literal moves in instead of being
+  copied.** `rcbox_new [T] @ T { a b }` in a library-handle constructor
+  copied every Vec / String it was handed and then dropped the original
+  (9 → 5 allocations per construction in
+  `compiler/tests/sink_param_into_literal.nu`). A literal passed to a call
+  that only reads it leaves the parameter its owner, as for a local.
 - **A `sink` closure parameter takes the closure over.** A temporary handed
   to one moves in, a binding is handed a copy, and the callee drops what it
   took unless it returns it or captures it in a closure it returns. The
