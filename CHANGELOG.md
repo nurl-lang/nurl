@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied bitwise, so with an owning element type both Vecs released the
   same Strings — `vec_clone` of a `Vec` of owning structs crashed.
   `vec_append` still moves. `compiler/tests/wrapped_and_copied_elements.nu`.
+- **A ternary choosing a parameter before `^` no longer makes the result an
+  alias of it.** `^` did not clear the join channel that `:` and `=`
+  clear, so `= . c max ? > max 0 max 64 … ^ @ S { … }` read as "may return
+  argument 0" and the caller's binding never dropped the value.
+  `compiler/tests/return_after_param_ternary.nu`.
 - **A None literal's payload is released where it is built.** Dropping an
   option releases the payload only when present, so `@ ?S { F @ S {
   ( string_new ) … } }` leaked whatever the payload owned (unless someone

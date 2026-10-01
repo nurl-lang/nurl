@@ -3444,6 +3444,13 @@
     ( nurl_sym_def syms `__last_call_forward__` `` )
     ( nurl_sym_def syms `__last_call_ref_args__` `` )
     ( nurl_sym_def syms `__last_call_param_args__` `` )
+    // …and the join channel: a ternary that selected a parameter in an
+    // EARLIER statement (`= . c max ? > max 0 max 64`) made the result of
+    // `^ @ S { … }` read as "may be that argument", so the caller's binding
+    // did not own it (`:` and `=` already clear these before their RHS).
+    ( nurl_sym_def syms `__last_phi_idents__` `` )
+    ( nurl_sym_def syms `__last_phi_cause__` `` )
+    ( nurl_sym_def syms `__last_phi_definite__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): snapshot whether
     // this return is a bare identifier (`^ p`) so the post-gen_operand
     // check can tell a direct parameter passthrough from a derived
