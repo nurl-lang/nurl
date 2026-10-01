@@ -67,8 +67,8 @@ $ `stdlib/hal/virtio.nu`
 : VirtioNet {
     i base
     i mac  // read from config space, big-endian in the wire sense
-    * Virtq rx
-    * Virtq tx
+    Virtq rx
+    Virtq tx
     ( Vec i ) rxbuf  // one *(Vec u) per descriptor, as an integer
     ( Vec i ) txbuf
     i rx_posted
@@ -104,7 +104,7 @@ $ `stdlib/hal/virtio.nu`
 
 @ __buf_phys ( Vec u ) v → i { ^ # i ( vec_data [u] v ) }
 
-@ __vq_phys * Virtq q i off → i { ^ + # i ( vec_data [u] . q mem ) off }
+@ __vq_phys Virtq q i off → i { ^ + # i ( vec_data [u] ( virtq_mem q ) ) off }
 
 // Find the first virtio-net device the command line names, bring it
 // up, and hand back a driver with both queues live. A null pointer
@@ -158,7 +158,7 @@ $ `stdlib/hal/virtio.nu`
     ^ nic
 }
 
-@ __queue_live i base i qidx * Virtq q i qs → b {
+@ __queue_live i base i qidx Virtq q i qs → b {
     ^ ( virtio_queue_setup base qidx qs
     ( __vq_phys q ( vq_desc_off ) )
     ( __vq_phys q ( vq_avail_off qs ) )
@@ -188,7 +188,7 @@ $ `stdlib/hal/virtio.nu`
 @ __rx_refill * VirtioNet nic → i {
     : ~ i added 0
     : ~ i tries 0
-    : i limit . . nic rx qsize
+    : i limit ( virtq_qsize . nic rx )
     ~ && < tries limit > ( virtq_num_free . nic rx ) 0 {
         = tries + tries 1
         : ( Vec u ) b ( __buf_new ( vnet_buf_len ) )

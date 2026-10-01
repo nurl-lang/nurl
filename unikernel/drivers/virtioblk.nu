@@ -56,7 +56,7 @@ $ `stdlib/hal/virtio.nu`
 
 : VirtioBlk {
     i base
-    * Virtq q
+    Virtq q
     ( Vec u ) hdr
     ( Vec u ) st
     i capacity  // in 512-byte sectors
@@ -84,7 +84,7 @@ $ `stdlib/hal/virtio.nu`
 
 @ __phys ( Vec u ) v → i { ^ # i ( vec_data [u] v ) }
 
-@ __vq_phys * Virtq q i off → i { ^ + # i ( vec_data [u] . q mem ) off }
+@ __vq_phys Virtq q i off → i { ^ + # i ( vec_data [u] ( virtq_mem q ) ) off }
 
 // Find the first virtio-blk device the command line names and bring it
 // up. A null pointer means there is no such device — a fact about the

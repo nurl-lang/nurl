@@ -41,10 +41,20 @@
 // from the device forever. Every comparison here is therefore done on
 // the 16-bit difference, never on raw magnitudes — the same discipline
 // as TCP sequence numbers in net/tcpseg.nu.
+//
+// ── MEMORY ──────────────────────────────────────────────────────
+//
+// A `Virtq` (from `virtq_new`) is a handle (rcbox): every copy is the
+// same queue, and its last owner releases the ring region with it.
+// `virtq_free` is an early release (optional) — a driver that has just
+// reset its device lets go of the ring there rather than whenever its
+// own owner goes. (`virtq_num_free` is something else: the count of
+// free descriptors.)
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── descriptor flags (virtio 1.1 §2.6.5) ────────────────────────
 
@@ -86,7 +96,7 @@ $ `stdlib/std/bytes.nu`
 
 // ── the queue ───────────────────────────────────────────────────
 
-: Virtq {
+: VirtqImpl {
     i qsize
     ( Vec u ) mem  // the whole ring region
     i free_head  // head of the driver-side free descriptor list
@@ -95,10 +105,24 @@ $ `stdlib/std/bytes.nu`
     i avail_shadow  // our own copy of avail.idx (the device may not be trusted)
 }
 
+// A Virtq is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Virtq { s ctl }
+
+@ Virtq_share Virtq h → Virtq { ^ @ Virtq { # s ( rcbox_share # i . h ctl ) } }
+
+@ Virtq_drop sink Virtq h → v {
+    ( mem_forget h )
+    ( rcbox_release [VirtqImpl] # i . h ctl )
+}
+
+@ __Virtq_ptr Virtq h → *VirtqImpl { ^ ( rcbox_ptr [VirtqImpl] # i . h ctl ) }
+
 // `qsize` must be a power of two, 1..32768 (spec §2.6). Returns a
 // queue whose descriptors are all on the free list.
-@ virtq_new i qsize → *Virtq {
-    : *Virtq q # *Virtq ( nurl_alloc Z Virtq )
+@ virtq_new i qsize → Virtq {
+    : i q__box ( rcbox_zero [VirtqImpl] )
+    : *VirtqImpl q ( rcbox_ptr [VirtqImpl] q__box )
     = . q qsize qsize
     = . q mem ( vec_with_cap [u] ( vq_layout_size qsize ) )
     : ~ i k 0
@@ -113,13 +137,11 @@ $ `stdlib/std/bytes.nu`
         ( __vq_set_next q d ? == d - qsize 1 ( vq_null ) + d 1 )
         = d + d 1
     }
-    ^ q
+    ^ @ Virtq { # s q__box }
 }
 
-@ virtq_free sink * Virtq q → v {
-    ( vec_free [u] . q mem )
-    ( free q )
-}
+// Let go of `q` now rather than at the end of its owner's scope.
+@ virtq_free sink Virtq q → v {}
 
 // Is `n` a power of two in the range the spec allows?
 @ virtq_size_valid i n → b {
@@ -127,18 +149,32 @@ $ `stdlib/std/bytes.nu`
     ^ == & n - n 1 0
 }
 
+@ virtq_qsize Virtq q__h → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ . q qsize
+}
+
+// The ring region itself, laid out as above — what the device reads and
+// writes: a driver hands the device its address (`vec_data`), and a mock
+// device in a test writes completions into it. The Virtq's own buffer,
+// lent.
+@ virtq_mem Virtq q__h → ( Vec u ) {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ . q mem
+}
+
 // ── raw field accessors ─────────────────────────────────────────
 
-@ __vq_w16 * Virtq q i off i val → v {
+@ __vq_w16 * VirtqImpl q i off i val → v {
     : b _a ( vec_set [u] . q mem off # u & val 255 )
     : b _b ( vec_set [u] . q mem + off 1 # u & >> val 8 255 )
 }
 
-@ __vq_r16 * Virtq q i off → i {
+@ __vq_r16 * VirtqImpl q i off → i {
     ^ ?? ( bytes_read_u16_le . q mem off ) { T x → # i x F → 0 }
 }
 
-@ __vq_w32 * Virtq q i off i val → v {
+@ __vq_w32 * VirtqImpl q i off i val → v {
     : ~ i k 0
     ~ < k 4 {
         : b _s ( vec_set [u] . q mem + off k # u & >> val * 8 k 255 )
@@ -146,11 +182,11 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-@ __vq_r32 * Virtq q i off → i {
+@ __vq_r32 * VirtqImpl q i off → i {
     ^ ?? ( bytes_read_u32_le . q mem off ) { T x → # i x F → 0 }
 }
 
-@ __vq_w64 * Virtq q i off i val → v {
+@ __vq_w64 * VirtqImpl q i off i val → v {
     : ~ i k 0
     ~ < k 8 {
         : b _s ( vec_set [u] . q mem + off k # u & >> val * 8 k 255 )
@@ -158,45 +194,79 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-@ __vq_r64 * Virtq q i off → i {
+@ __vq_r64 * VirtqImpl q i off → i {
     ^ ?? ( bytes_read_u64_le . q mem off ) { T x → # i x F → 0 }
 }
 
 @ __vq_desc_base i idx → i { ^ * 16 idx }
 
-@ __vq_set_next * Virtq q i idx i next → v {
+@ __vq_set_next * VirtqImpl q i idx i next → v {
     ( __vq_w16 q + ( __vq_desc_base idx ) 14 next )
 }
 
-@ virtq_desc_addr * Virtq q i idx → i { ^ ( __vq_r64 q ( __vq_desc_base idx ) ) }
+@ virtq_desc_addr Virtq q__h i idx → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ ( __vq_r64 q ( __vq_desc_base idx ) )
+}
 
-@ virtq_desc_len * Virtq q i idx → i { ^ ( __vq_r32 q + ( __vq_desc_base idx ) 8 ) }
+@ virtq_desc_len Virtq q__h i idx → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ ( __vq_r32 q + ( __vq_desc_base idx ) 8 )
+}
 
-@ virtq_desc_flags * Virtq q i idx → i { ^ ( __vq_r16 q + ( __vq_desc_base idx ) 12 ) }
+@ virtq_desc_flags Virtq q__h i idx → i { ^ ( __vq_desc_flags ( __Virtq_ptr q__h ) idx ) }
 
-@ virtq_desc_next * Virtq q i idx → i { ^ ( __vq_r16 q + ( __vq_desc_base idx ) 14 ) }
+@ __vq_desc_flags * VirtqImpl q i idx → i {
+    ^ ( __vq_r16 q + ( __vq_desc_base idx ) 12 )
+}
 
-@ virtq_avail_flags * Virtq q → i { ^ ( __vq_r16 q ( vq_avail_off . q qsize ) ) }
+@ virtq_desc_next Virtq q__h i idx → i { ^ ( __vq_desc_next ( __Virtq_ptr q__h ) idx ) }
 
-@ virtq_set_avail_flags * Virtq q i flags → v {
+@ __vq_desc_next * VirtqImpl q i idx → i {
+    ^ ( __vq_r16 q + ( __vq_desc_base idx ) 14 )
+}
+
+@ virtq_avail_flags Virtq q__h → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ ( __vq_r16 q ( vq_avail_off . q qsize ) )
+}
+
+@ virtq_set_avail_flags Virtq q__h i flags → v {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
     ( __vq_w16 q ( vq_avail_off . q qsize ) flags )
 }
 
-@ virtq_avail_idx * Virtq q → i { ^ ( __vq_r16 q + ( vq_avail_off . q qsize ) 2 ) }
+@ virtq_avail_idx Virtq q__h → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ ( __vq_r16 q + ( vq_avail_off . q qsize ) 2 )
+}
 
-@ virtq_avail_ring * Virtq q i slot → i {
+@ virtq_avail_ring Virtq q__h i slot → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
     ^ ( __vq_r16 q + + ( vq_avail_off . q qsize ) 4 * 2 slot )
 }
 
-@ virtq_used_flags * Virtq q → i { ^ ( __vq_r16 q ( vq_used_off . q qsize ) ) }
+@ virtq_used_flags Virtq q__h → i { ^ ( __vq_used_flags ( __Virtq_ptr q__h ) ) }
 
-@ virtq_used_idx * Virtq q → i { ^ ( __vq_r16 q + ( vq_used_off . q qsize ) 2 ) }
+@ __vq_used_flags * VirtqImpl q → i {
+    ^ ( __vq_r16 q ( vq_used_off . q qsize ) )
+}
 
-@ virtq_used_id * Virtq q i slot → i {
+@ virtq_used_idx Virtq q__h → i { ^ ( __vq_used_idx ( __Virtq_ptr q__h ) ) }
+
+@ __vq_used_idx * VirtqImpl q → i {
+    ^ ( __vq_r16 q + ( vq_used_off . q qsize ) 2 )
+}
+
+@ virtq_used_id Virtq q__h i slot → i { ^ ( __vq_used_id ( __Virtq_ptr q__h ) slot ) }
+
+@ __vq_used_id * VirtqImpl q i slot → i {
     ^ ( __vq_r32 q + + ( vq_used_off . q qsize ) 4 * 8 slot )
 }
 
-@ virtq_used_len * Virtq q i slot → i {
+@ virtq_used_len Virtq q__h i slot → i { ^ ( __vq_used_len ( __Virtq_ptr q__h ) slot ) }
+
+@ __vq_used_len * VirtqImpl q i slot → i {
     ^ ( __vq_r32 q + + + ( vq_used_off . q qsize ) 4 * 8 slot 4 )
 }
 
@@ -218,11 +288,13 @@ $ `stdlib/std/bytes.nu`
 // ── descriptor allocation ───────────────────────────────────────
 
 // Take one descriptor off the free list.
-@ virtq_alloc_desc * Virtq q → ?i {
+@ virtq_alloc_desc Virtq q__h → ?i { ^ ( __vq_alloc_desc ( __Virtq_ptr q__h ) ) }
+
+@ __vq_alloc_desc * VirtqImpl q → ?i {
     ? <= . q num_free 0 { ^ @ ?i { F 0 } } {}
     : i head . q free_head
     ? == head ( vq_null ) { ^ @ ?i { F 0 } } {}
-    = . q free_head ( virtq_desc_next q head )
+    = . q free_head ( __vq_desc_next q head )
     = . q num_free - . q num_free 1
     ^ @ ?i { T head }
 }
@@ -231,13 +303,14 @@ $ `stdlib/std/bytes.nu`
 // chain — not just its head — is what the device hands back, so
 // freeing only the head leaks every continuation descriptor and the
 // queue silently runs dry after a few thousand packets.
-@ virtq_free_chain * Virtq q i head → i {
+@ virtq_free_chain Virtq q__h i head → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
     : ~ i idx head
     : ~ i n 0
     : ~ b more T
     ~ && more < n . q qsize {
-        : i nxt ( virtq_desc_next q idx )
-        : i flags ( virtq_desc_flags q idx )
+        : i nxt ( __vq_desc_next q idx )
+        : i flags ( __vq_desc_flags q idx )
         ( __vq_set_next q idx . q free_head )
         = . q free_head idx
         = . q num_free + . q num_free 1
@@ -247,14 +320,19 @@ $ `stdlib/std/bytes.nu`
     ^ n
 }
 
-@ virtq_num_free * Virtq q → i { ^ . q num_free }
+@ virtq_num_free Virtq q__h → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ . q num_free
+}
 
 // ── publishing buffers ──────────────────────────────────────────
 
 // Describe one buffer segment into descriptor `idx`. `addr` is the
 // address the DEVICE will use, i.e. a physical address — translation
 // is the driver's job (identity-mapped in the unikernel's v1).
-@ virtq_desc_set * Virtq q i idx i addr i len i flags i next → v {
+@ virtq_desc_set Virtq q__h i idx i addr i len i flags i next → v { ( __vq_desc_set ( __Virtq_ptr q__h ) idx addr len flags next ) }
+
+@ __vq_desc_set * VirtqImpl q i idx i addr i len i flags i next → v {
     ( __vq_w64 q ( __vq_desc_base idx ) addr )
     ( __vq_w32 q + ( __vq_desc_base idx ) 8 len )
     ( __vq_w16 q + ( __vq_desc_base idx ) 12 flags )
@@ -267,7 +345,9 @@ $ `stdlib/std/bytes.nu`
 // or the device may read a slot we have not filled in. On a real target
 // a write barrier belongs between the two; here the sequence is at
 // least correct in program order, and the driver adds the fence.
-@ virtq_avail_push * Virtq q i head → v {
+@ virtq_avail_push Virtq q__h i head → v { ( __vq_avail_push ( __Virtq_ptr q__h ) head ) }
+
+@ __vq_avail_push * VirtqImpl q i head → v {
     : i slot % . q avail_shadow . q qsize
     ( __vq_w16 q + + ( vq_avail_off . q qsize ) 4 * 2 slot head )
     = . q avail_shadow ( vq_idx_add . q avail_shadow 1 )
@@ -276,11 +356,12 @@ $ `stdlib/std/bytes.nu`
 
 // Convenience: allocate, describe and publish a single-segment buffer.
 // Returns the descriptor index, or None when the queue is full.
-@ virtq_add_single * Virtq q i addr i len b device_writes → ?i {
-    ^ ?? ( virtq_alloc_desc q ) {
+@ virtq_add_single Virtq q__h i addr i len b device_writes → ?i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ ?? ( __vq_alloc_desc q ) {
         T d → {
-            ( virtq_desc_set q d addr len ? device_writes ( vq_desc_write ) 0 ( vq_null ) )
-            ( virtq_avail_push q d )
+            ( __vq_desc_set q d addr len ? device_writes ( vq_desc_write ) 0 ( vq_null ) )
+            ( __vq_avail_push q d )
             @ ?i { T d }
         }
         F → @ ?i { F 0 }
@@ -290,18 +371,21 @@ $ `stdlib/std/bytes.nu`
 // ── reaping completions ─────────────────────────────────────────
 
 // Has the device completed anything we have not consumed?
-@ virtq_has_used * Virtq q → b {
-    ^ ( vq_idx_lt . q last_used ( virtq_used_idx q ) )
+@ virtq_has_used Virtq q__h → b { ^ ( __vq_has_used ( __Virtq_ptr q__h ) ) }
+
+@ __vq_has_used * VirtqImpl q → b {
+    ^ ( vq_idx_lt . q last_used ( __vq_used_idx q ) )
 }
 
 // Consume one completion. Returns the chain head; the caller reads the
 // written length with `virtq_last_used_len` before the next call.
 // Does NOT free the chain — the caller may still need the buffer, and
 // freeing is a separate, explicit step.
-@ virtq_get_used * Virtq q → ?i {
-    ? ! ( virtq_has_used q ) { ^ @ ?i { F 0 } } {}
+@ virtq_get_used Virtq q__h → ?i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ? ! ( __vq_has_used q ) { ^ @ ?i { F 0 } } {}
     : i slot % . q last_used . q qsize
-    : i id ( virtq_used_id q slot )
+    : i id ( __vq_used_id q slot )
     // A device that reports an out-of-range id is broken or hostile;
     // refusing it keeps a bad id out of the free list, where it would
     // corrupt the descriptor table on the next allocation.
@@ -312,15 +396,17 @@ $ `stdlib/std/bytes.nu`
 
 // Bytes the device wrote for the completion most recently returned by
 // `virtq_get_used`.
-@ virtq_last_used_len * Virtq q → i {
+@ virtq_last_used_len Virtq q__h → i {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
     : i slot % ( vq_idx_add . q last_used 65535 ) . q qsize
-    ^ ( virtq_used_len q slot )
+    ^ ( __vq_used_len q slot )
 }
 
 // Should the driver kick the device after publishing? The device sets
 // NO_NOTIFY when it is already polling; honouring it is a pure
 // throughput win, and getting it wrong the other way (never notifying)
 // stalls the queue.
-@ virtq_needs_notify * Virtq q → b {
-    ^ != & ( virtq_used_flags q ) ( vq_used_no_notify ) ( vq_used_no_notify )
+@ virtq_needs_notify Virtq q__h → b {
+    : *VirtqImpl q ( __Virtq_ptr q__h )
+    ^ != & ( __vq_used_flags q ) ( vq_used_no_notify ) ( vq_used_no_notify )
 }
