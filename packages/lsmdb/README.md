@@ -70,7 +70,7 @@ The **memtable** is a skip list over one byte arena: keys and values are
 appended to a single growable buffer and a node is a row of integers
 (offsets, lengths, sequence, kind) plus its forward links. Nothing is
 allocated per node, so the arena can grow under a node without
-invalidating it, and dropping a memtable is a handful of frees.
+invalidating it, and dropping a memtable is a handful of Vec drops.
 
 An **SSTable** is what a memtable becomes when it stops changing:
 
@@ -160,27 +160,30 @@ values round-trip byte for byte.
 ```nurl
 $ `lsmdb.nu`
 
-: !*Lsm String opened ( lsm_open `/var/db/things` )
+: !Lsm String opened ( lsm_open `/var/db/things` )
 ?? opened {
     T db → {
         : ( Vec u ) k ( bytes_from_str `hello` )
         : ( Vec u ) v ( bytes_from_str `world` )
-        ?? ( lsm_put db k v ) { T _ → {} F e → { ( string_free e ) } }
+        ?? ( lsm_put db k v ) { T _ → {} F e → { ( nurl_eprintln ( string_data e ) ) } }
 
         ?? ( lsm_get db k ) {
-            T g → { ? == . g found 1 { ( write_bytes . g val ) } {} ( lsm_get_free g ) }
-            F e → { ( string_free e ) }
+            T g → { ? == . g found 1 { ( write_bytes . g val ) } {} }
+            F e → { ( nurl_eprintln ( string_data e ) ) }
         }
-        ( vec_free [u] k ) ( vec_free [u] v )
-        ( lsm_close db )
-    }
-    F e → { ( string_free e ) }
+    }   // db's last owner closes the database here
+    F e → { ( nurl_eprintln ( string_data e ) ) }
 }
 ```
 
+Nothing is released by hand. An `Lsm` is a handle: every copy (a struct
+field, a Vec element, a closure capture) is the same open database, and
+its last owner closes it — the log, every table file, the memtable.
+`LsmGet` and `LsmScan` are plain values.
+
 | | |
 | --- | --- |
-| `( lsm_open dir )` | `!*Lsm String` — creates, recovers and replays |
+| `( lsm_open dir )` | `!Lsm String` — creates, recovers and replays |
 | `( lsm_put db key val )` | `!v String` — durable on return |
 | `( lsm_del db key )` | `!v String` |
 | `( lsm_get db key )` | `!LsmGet String` — `.found`, `.seq`, `.val` |
@@ -189,7 +192,7 @@ $ `lsmdb.nu`
 | `( lsm_flush db )` / `( lsm_compact db )` | `!i String` |
 | `( lsm_stats db )` | `LsmStats` |
 | `( lsm_set_durable db F )` | batch mode; pair with `( lsm_sync db )` |
-| `( lsm_close db )` | |
+| `( lsm_close db )` | early release (optional) |
 
 Keys and values are `( Vec u )` — arbitrary bytes, borrowed by the store
 (it copies what it keeps). The empty key is rejected.

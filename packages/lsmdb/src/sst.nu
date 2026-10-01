@@ -32,13 +32,18 @@
 // filter, and every get pulls exactly the one block it needs. A table
 // larger than RAM is an ordinary table.
 //
-//   ( sst_create path )            → !*SstWriter String
+//   ( sst_create path )            → !SstWriter String
 //   ( sst_add w key val seq kind ) → !v String     keys must arrive sorted
 //   ( sst_finish w )               → !i String     entries written
-//   ( sst_open path )              → !*SstReader String
+//   ( sst_open path )              → !SstReader String
 //   ( sst_get r key snap )         → !SstHit String
 //   ( sst_cursor r ) / ( sc_seek ) / ( sc_next ) / ( sc_valid ) …
-//   ( sst_close r ) / ( sc_free c )
+//   ( sst_close r ) / ( sc_free c )  early release (optional)
+//
+// SstWriter, SstReader and SstCursor are handles: every copy is the same
+// object, and the last owner releases it — a writer or reader closes its
+// file, a cursor lets go of the reader it walks (it holds a share, so a
+// table outlives every cursor over it).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -46,6 +51,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/deflate.nu`
 $ `memtable.nu`
+$ `stdlib/core/rcbox.nu`
 
 : i SST_BLOCK 4096
 : i SST_HDR 17  // u32 klen + u32 vlen + u64 seq + u8 kind
@@ -109,7 +115,7 @@ $ `memtable.nu`
 
 // ── writer ──────────────────────────────────────────────────────────
 
-: SstWriter {
+: SstWriterImpl {
     File f
     ( Vec u ) buf  // current block payload
     ( Vec u ) index  // index payload so far
@@ -125,11 +131,26 @@ $ `memtable.nu`
     Crc32 crc
 }
 
-@ sst_create s path → !*SstWriter String {
+// A writer nobody finished (a failed flush) still closes its file.
+% Drop SstWriterImpl { @ drop SstWriterImpl w → v { ( file_close . w f ) } }
+
+: SstWriter { s ctl }
+
+@ SstWriter_share SstWriter h → SstWriter { ^ @ SstWriter { # s ( rcbox_share # i . h ctl ) } }
+
+@ SstWriter_drop sink SstWriter h → v {
+    ( mem_forget h )
+    ( rcbox_release [SstWriterImpl] # i . h ctl )
+}
+
+@ __SstWriter_ptr SstWriter h → *SstWriterImpl { ^ ( rcbox_ptr [SstWriterImpl] # i . h ctl ) }
+
+@ sst_create s path → !SstWriter String {
     : !File IoErr fr ( file_create path )
     ?? fr {
         T f → {
-            : *SstWriter w # *SstWriter ( nurl_alloc Z SstWriter )
+            : i w__box ( rcbox_zero [SstWriterImpl] )
+            : *SstWriterImpl w ( rcbox_ptr [SstWriterImpl] w__box )
             = . w f f
             = . w buf ( vec_with_cap [u] + SST_BLOCK 1024 )
             = . w index ( vec_new [u] )
@@ -143,27 +164,26 @@ $ `memtable.nu`
             = . w lastklen 0
             = . w failed 0
             = . w crc ( crc32_ctx )
-            ^ @ !*SstWriter String { T w }
+            ^ @ !SstWriter String { T @ SstWriter { # s w__box } }
         }
         F _ → {
             : String msg ( string_from `lsmdb: cannot create table ` )
             ( string_push_str msg path )
-            ^ @ !*SstWriter String { F msg }
+            ^ @ !SstWriter String { F msg }
         }
     }
 }
 
-@ __sstw_free sink * SstWriter w → v {
-    ( crc32_ctx_free . w crc )
-    ( vec_free [u] . w buf )
-    ( vec_free [u] . w index )
-    ( vec_free [i] . w hashes )
-    ( nurl_free # s w )
+// The table file is finished with (written out, or given up on): close
+// it now, so the reader that opens it next sees every byte.
+@ __sstw_close * SstWriterImpl w → v {
+    ( file_close . w f )
+    = . w f @ File { # s 0 }
 }
 
 // Close the current block: append its CRC trailer, write it, and record
 // (last key, offset, payload length) in the index.
-@ __sst_flush_block * SstWriter w → !v String {
+@ __sst_flush_block * SstWriterImpl w → !v String {
     : i plen ( vec_len [u] . w buf )
     ? == plen 0 { ^ @ !v String { T 0 } } {}
     : i crc ( crc32_ctx_hash . w crc . w buf )
@@ -193,7 +213,8 @@ $ `memtable.nu`
 
 // Append one entry. Keys must arrive in the package's total order —
 // the memtable walk and the compaction merge both produce exactly that.
-@ sst_add * SstWriter w ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
+@ sst_add SstWriter w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
+    : *SstWriterImpl w ( __SstWriter_ptr w__h )
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
     ( bytes_push_u32_le . w buf # u32 kl )
@@ -213,7 +234,7 @@ $ `memtable.nu`
     ^ @ !v String { T 0 }
 }
 
-@ __sst_write_tail * SstWriter w ( Vec u ) payload → !i String {
+@ __sst_write_tail * SstWriterImpl w ( Vec u ) payload → !i String {
     : i at . w off
     : i crc ( crc32_ctx_hash . w crc payload )
     ( bytes_push_u32_le payload # u32 crc )
@@ -227,9 +248,10 @@ $ `memtable.nu`
 // Flush the tail block, emit the filter, the index and the footer, then
 // fsync. When this returns the table is durable and self-describing;
 // only after that may a manifest name it.
-@ sst_finish * SstWriter w → !i String {
+@ sst_finish SstWriter w__h → !i String {
+    : *SstWriterImpl w ( __SstWriter_ptr w__h )
     : !v String fb ( __sst_flush_block w )
-    ?? fb { T _ → {} F e → { ( file_close . w f ) ( __sstw_free w ) ^ @ !i String { F e } } }
+    ?? fb { T _ → {} F e → { ( __sstw_close w ) ^ @ !i String { F e } } }
 
     : i nkeys ( vec_len [i] . w hashes )
     : i nbits ( __bloom_bits nkeys )
@@ -246,7 +268,6 @@ $ `memtable.nu`
         = h + h 1
     }
     ( vec_extend [u] bloom bits )
-    ( vec_free [u] bits )
 
     : ( Vec u ) idx ( vec_new [u] )
     ( bytes_push_u32_le idx # u32 . w nblocks )
@@ -254,18 +275,16 @@ $ `memtable.nu`
     : i idx_payload ( vec_len [u] idx )
 
     : !i String ir ( __sst_write_tail w idx )
-    ( vec_free [u] idx )
     : ~ i index_off 0
     ?? ir { T o → { = index_off o } F e → {
-            ( vec_free [u] bloom ) ( file_close . w f ) ( __sstw_free w )
+            ( __sstw_close w )
             ^ @ !i String { F e } } }
 
     : i bloom_payload ( vec_len [u] bloom )
     : !i String br ( __sst_write_tail w bloom )
-    ( vec_free [u] bloom )
     : ~ i bloom_off 0
     ?? br { T o → { = bloom_off o } F e → {
-            ( file_close . w f ) ( __sstw_free w )
+            ( __sstw_close w )
             ^ @ !i String { F e } } }
 
     : ( Vec u ) foot ( vec_with_cap [u] SST_FOOTER )
@@ -277,20 +296,18 @@ $ `memtable.nu`
     ( bytes_push_u64_le foot # u64 . w maxseq )
     ( bytes_extend_str foot ( __sst_magic ) )
     : !v IoErr fw ( file_write_chunk . w f foot )
-    ( vec_free [u] foot )
     : i n . w count
     : ~ b ok T
     ?? fw { T _ → {} F _ → { = ok F } }
     ?? ( file_sync . w f ) { T _ → {} F _ → { = ok F } }
-    ( file_close . w f )
-    ( __sstw_free w )
+    ( __sstw_close w )
     ? ok {} { ^ @ !i String { F ( string_from `lsmdb: table write failed (disk full?)` ) } }
     ^ @ !i String { T n }
 }
 
 // ── reader ──────────────────────────────────────────────────────────
 
-: SstReader {
+: SstReaderImpl {
     File f
     String path
     ( Vec u ) ikeys  // concatenated per-block last keys
@@ -312,6 +329,22 @@ $ `memtable.nu`
     ( Vec i ) cache_bi  // which block each slot holds, -1 = empty
 }
 
+// The open table file is the reader's one raw resource; its last owner
+// closes it (the index, the filter and the block cache go with the drop
+// glue).
+% Drop SstReaderImpl { @ drop SstReaderImpl r → v { ( file_close . r f ) } }
+
+: SstReader { s ctl }
+
+@ SstReader_share SstReader h → SstReader { ^ @ SstReader { # s ( rcbox_share # i . h ctl ) } }
+
+@ SstReader_drop sink SstReader h → v {
+    ( mem_forget h )
+    ( rcbox_release [SstReaderImpl] # i . h ctl )
+}
+
+@ __SstReader_ptr SstReader h → *SstReaderImpl { ^ ( rcbox_ptr [SstReaderImpl] # i . h ctl ) }
+
 : SstHit {
     i found
     i kind
@@ -319,7 +352,8 @@ $ `memtable.nu`
     ( Vec u ) val
 }
 
-@ sst_hit_free sink SstHit h → v { ( vec_free [u] . h val ) }
+// Let go of `h` now rather than at the end of its owner's scope.
+@ sst_hit_free sink SstHit h → v {}
 
 @ __sst_err s path s what → String {
     : String msg ( string_from `lsmdb: ` )
@@ -332,20 +366,17 @@ $ `memtable.nu`
 // Read `n` bytes at `off` and prove them against their CRC trailer.
 // Returns the payload only. A checksum mismatch is an error — never
 // data: a torn or rotted block must not surface as a value.
-@ __sst_read_verified * SstReader r i off i plen → !( Vec u ) String {
+@ __sst_read_verified * SstReaderImpl r i off i plen → !( Vec u ) String {
     : !( Vec u ) IoErr rr ( file_read_at . r f off + plen 4 )
     ?? rr {
         T raw → {
             ? != ( vec_len [u] raw ) + plen 4 {
-                ( vec_free [u] raw )
                 ^ @ !( Vec u ) String { F ( __sst_err ( string_data . r path ) `truncated block (file shorter than its index says)` ) }
             } {}
             : i want ?? ( bytes_read_u32_le raw plen ) { T x → # i x F _ → 0 }
             : ( Vec u ) payload ( _mt_slice raw 0 plen )
-            ( vec_free [u] raw )
             : i got ( crc32_ctx_hash . r crc payload )
             ? == got want { ^ @ !( Vec u ) String { T payload } } {}
-            ( vec_free [u] payload )
             ^ @ !( Vec u ) String { F ( __sst_err ( string_data . r path ) `CHECKSUM MISMATCH — block is corrupt` ) }
         }
         F _ → {
@@ -354,13 +385,17 @@ $ `memtable.nu`
     }
 }
 
-@ sst_open s path → !*SstReader String {
+@ sst_open s path → !SstReader String {
     : !File IoErr fr ( file_open path )
     : ~ File f @ File { # s 0 }
     ?? fr { T h → { = f h } F _ → {
-            ^ @ !*SstReader String { F ( __sst_err path `cannot open table` ) } } }
+            ^ @ !SstReader String { F ( __sst_err path `cannot open table` ) } } }
 
-    : *SstReader r # *SstReader ( nurl_alloc Z SstReader )
+    // The handle first: every early return below lets go of it, and its
+    // drop closes the file.
+    : i r__box ( rcbox_zero [SstReaderImpl] )
+    : SstReader rh @ SstReader { # s r__box }
+    : *SstReaderImpl r ( rcbox_ptr [SstReaderImpl] r__box )
     = . r f f
     = . r path ( string_from path )
     = . r ikeys ( vec_new [u] )
@@ -389,21 +424,17 @@ $ `memtable.nu`
 
     : !i IoErr sr ( file_seek f 0 FS_SEEK_END )
     ?? sr { T sz → { = . r filesize sz } F _ → {
-            ( sst_close r )
-            ^ @ !*SstReader String { F ( __sst_err path `cannot size table` ) } } }
+            ^ @ !SstReader String { F ( __sst_err path `cannot size table` ) } } }
     ? < . r filesize SST_FOOTER {
-        ( sst_close r )
-        ^ @ !*SstReader String { F ( __sst_err path `too short to be a table` ) }
+        ^ @ !SstReader String { F ( __sst_err path `too short to be a table` ) }
     } {}
 
     : !( Vec u ) IoErr foot ( file_read_at f - . r filesize SST_FOOTER SST_FOOTER )
     : ~ ( Vec u ) fb ( vec_new [u] )
-    ?? foot { T v → { ( vec_free [u] fb ) = fb v } F _ → {
-            ( sst_close r )
-            ^ @ !*SstReader String { F ( __sst_err path `cannot read footer` ) } } }
+    ?? foot { T v → { = fb v } F _ → {
+            ^ @ !SstReader String { F ( __sst_err path `cannot read footer` ) } } }
     ? != ( vec_len [u] fb ) SST_FOOTER {
-        ( vec_free [u] fb ) ( sst_close r )
-        ^ @ !*SstReader String { F ( __sst_err path `short footer` ) }
+        ^ @ !SstReader String { F ( __sst_err path `short footer` ) }
     } {}
     : s magic ( __sst_magic )
     : ~ b good T
@@ -414,8 +445,7 @@ $ `memtable.nu`
         = mi + mi 1
     }
     ? good {} {
-        ( vec_free [u] fb ) ( sst_close r )
-        ^ @ !*SstReader String { F ( __sst_err path `not an lsmdb table (bad magic)` ) }
+        ^ @ !SstReader String { F ( __sst_err path `not an lsmdb table (bad magic)` ) }
     }
     : i index_off ?? ( bytes_read_u64_le fb 0 ) { T x → # i x F _ → 0 }
     : i index_len ?? ( bytes_read_u32_le fb 8 ) { T x → # i x F _ → 0 }
@@ -423,29 +453,25 @@ $ `memtable.nu`
     : i bloom_len ?? ( bytes_read_u32_le fb 20 ) { T x → # i x F _ → 0 }
     = . r nentries ?? ( bytes_read_u64_le fb 24 ) { T x → # i x F _ → 0 }
     = . r maxseq ?? ( bytes_read_u64_le fb 32 ) { T x → # i x F _ → 0 }
-    ( vec_free [u] fb )
 
     : !( Vec u ) String ir ( __sst_read_verified r index_off index_len )
     : ~ ( Vec u ) idx ( vec_new [u] )
-    ?? ir { T v → { ( vec_free [u] idx ) = idx v } F e → {
-            ( sst_close r ) ^ @ !*SstReader String { F e } } }
+    ?? ir { T v → { = idx v } F e → { ^ @ !SstReader String { F e } } }
     : !v String pr ( __sst_parse_index r idx )
-    ( vec_free [u] idx )
-    ?? pr { T _ → {} F e → { ( sst_close r ) ^ @ !*SstReader String { F e } } }
+    ?? pr { T _ → {} F e → { ^ @ !SstReader String { F e } } }
 
     : !( Vec u ) String br ( __sst_read_verified r bloom_off bloom_len )
     ?? br {
         T bl → {
             = . r nbits ?? ( bytes_read_u32_le bl 0 ) { T x → # i x F _ → 0 }
             ( vec_extend_range [u] . r bloom bl 8 - ( vec_len [u] bl ) 8 )
-            ( vec_free [u] bl )
         }
-        F e → { ( sst_close r ) ^ @ !*SstReader String { F e } }
+        F e → { ^ @ !SstReader String { F e } }
     }
-    ^ @ !*SstReader String { T r }
+    ^ @ !SstReader String { T rh }
 }
 
-@ __sst_parse_index * SstReader r ( Vec u ) idx → !v String {
+@ __sst_parse_index * SstReaderImpl r ( Vec u ) idx → !v String {
     : i n ( vec_len [u] idx )
     ? < n 4 { ^ @ !v String { F ( __sst_err ( string_data . r path ) `malformed index` ) } } {}
     : i nb ?? ( bytes_read_u32_le idx 0 ) { T x → # i x F _ → 0 }
@@ -470,38 +496,47 @@ $ `memtable.nu`
     ^ @ !v String { T 0 }
 }
 
-@ sst_close * SstReader r → v {
-    ( crc32_ctx_free . r crc )
-    ( vec_free_with [( Vec u )] . r cache \ ( Vec u ) b → v { ( vec_free [u] b ) } )
-    ( vec_free [i] . r cache_bi )
-    ( file_close . r f )
-    ( string_free . r path )
-    ( vec_free [u] . r ikeys )
-    ( vec_free [i] . r ikoff )
-    ( vec_free [i] . r iklen )
-    ( vec_free [i] . r iboff )
-    ( vec_free [i] . r iblen )
-    ( vec_free [u] . r bloom )
-    ( nurl_free # s r )
+// Let go of `r` now rather than at the end of its owner's scope.
+@ sst_close sink SstReader r → v {}
+
+@ sst_entries SstReader r__h → i {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
+    ^ . r nentries
 }
 
-@ sst_entries * SstReader r → i { ^ . r nentries }
+@ sst_maxseq SstReader r__h → i {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
+    ^ . r maxseq
+}
 
-@ sst_maxseq * SstReader r → i { ^ . r maxseq }
+@ sst_blocks SstReader r__h → i {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
+    ^ . r nblocks
+}
 
-@ sst_blocks * SstReader r → i { ^ . r nblocks }
+@ sst_filesize SstReader r__h → i {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
+    ^ . r filesize
+}
 
-@ sst_filesize * SstReader r → i { ^ . r filesize }
+@ sst_reads SstReader r__h → i {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
+    ^ . r reads
+}
 
-@ sst_reads * SstReader r → i { ^ . r reads }
+@ sst_filtered SstReader r__h → i {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
+    ^ . r filtered
+}
 
-@ sst_filtered * SstReader r → i { ^ . r filtered }
-
-@ sst_hits * SstReader r → i { ^ . r hits }
+@ sst_hits SstReader r__h → i {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
+    ^ . r hits
+}
 
 // First block whose LAST key >= probe, or nblocks if the probe is past
 // the end of the table. Binary search over the index.
-@ __sst_find_block * SstReader r * u kp i klen → i {
+@ __sst_find_block * SstReaderImpl r * u kp i klen → i {
     : *u ip ( vec_data [u] . r ikeys )
     : ~ i lo 0
     : ~ i hi . r nblocks
@@ -522,7 +557,7 @@ $ `memtable.nu`
 // workload with locality) costs one verification per block rather than
 // one per key: at ~100 entries to a 4 KiB block, that is the difference
 // between checksumming 4 KiB per read and 40 bytes.
-@ __sst_load_block * SstReader r i bi → !( Vec u ) String {
+@ __sst_load_block * SstReaderImpl r i bi → !( Vec u ) String {
     : i slot % bi SST_CACHE
     ? == ( _mt_iat . r cache_bi slot ) bi {
         ?? ( vec_get [( Vec u )] . r cache slot ) {
@@ -537,10 +572,7 @@ $ `memtable.nu`
     : !( Vec u ) String rr ( __sst_read_verified r ( _mt_iat . r iboff bi ) ( _mt_iat . r iblen bi ) )
     ?? rr {
         T blk → {
-            ?? ( vec_get [( Vec u )] . r cache slot ) {
-                T old → { ( vec_free [u] old ) }
-                F _ → {}
-            }
+            // vec_set drops the block the slot held before
             : b _ok ( vec_set [( Vec u )] . r cache slot ( vec_clone [u] blk ) )
             : b _ok2 ( vec_set [i] . r cache_bi slot bi )
             ^ @ !( Vec u ) String { T blk }
@@ -566,7 +598,8 @@ $ `memtable.nu`
 // The newest version of `key` with seq <= snap. `found` is 0 when the
 // table has nothing for the key; a tombstone comes back as found=1 with
 // kind=MT_DEL, which the store must honour as "deleted here, stop".
-@ sst_get * SstReader r ( Vec u ) key i snap → !SstHit String {
+@ sst_get SstReader r__h ( Vec u ) key i snap → !SstHit String {
+    : *SstReaderImpl r ( __SstReader_ptr r__h )
     : i klen ( vec_len [u] key )
     : *u kp ( vec_data [u] key )
     ? ( __bloom_test . r bloom . r nbits ( lsm_key_hash kp 0 klen ) ) {} {
@@ -597,14 +630,12 @@ $ `memtable.nu`
                         } {
                             ? & == c 0 <= seq snap {
                                 : ( Vec u ) val ( _mt_slice blk + koff kl vl )
-                                ( vec_free [u] blk )
                                 ^ @ !SstHit String { T @ SstHit { 1 kind seq val } }
                             } {}
                         }
                         = pos + pos total
                     }
                 }
-                ( vec_free [u] blk )
                 // Ran off the end of the block still inside (or before)
                 // the key's run: the older versions continue in the next
                 // block. This is the boundary case the last-key index is
@@ -619,8 +650,8 @@ $ `memtable.nu`
 
 // ── cursor (ordered iteration, one block resident at a time) ────────
 
-: SstCursor {
-    * SstReader r
+: SstCursorImpl {
+    SstReader r  // a share: the table stays open while a cursor walks it
     ( Vec u ) blk
     i bi
     i pos
@@ -634,9 +665,23 @@ $ `memtable.nu`
     String err
 }
 
-@ sst_cursor * SstReader r → *SstCursor {
-    : *SstCursor c # *SstCursor ( nurl_alloc Z SstCursor )
-    = . c r r
+: SstCursor { s ctl }
+
+@ SstCursor_share SstCursor h → SstCursor { ^ @ SstCursor { # s ( rcbox_share # i . h ctl ) } }
+
+@ SstCursor_drop sink SstCursor h → v {
+    ( mem_forget h )
+    ( rcbox_release [SstCursorImpl] # i . h ctl )
+}
+
+// Package-shared (one underscore): the merge in lsmdb.nu opens each
+// cursor once per step and reads its head in place.
+@ _SstCursor_ptr SstCursor h → *SstCursorImpl { ^ ( rcbox_ptr [SstCursorImpl] # i . h ctl ) }
+
+@ sst_cursor SstReader r → SstCursor {
+    : i c__box ( rcbox_zero [SstCursorImpl] )
+    : *SstCursorImpl c ( rcbox_ptr [SstCursorImpl] c__box )
+    = . c r ( SstReader_share r )
     = . c blk ( vec_new [u] )
     = . c bi 0
     = . c pos 0
@@ -648,36 +693,61 @@ $ `memtable.nu`
     = . c koff 0
     = . c failed 0
     = . c err ( string_new )
-    ^ c
+    ^ @ SstCursor { # s c__box }
 }
 
-@ sc_free sink * SstCursor c → v {
-    ( vec_free [u] . c blk )
-    ( string_free . c err )
-    ( nurl_free # s c )
+// Let go of `c` now rather than at the end of its owner's scope.
+@ sc_free sink SstCursor c → v {}
+
+@ sc_valid SstCursor c__h → b {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ == . c valid 1
 }
 
-@ sc_valid * SstCursor c → b { ^ == . c valid 1 }
+@ sc_failed SstCursor c__h → b {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ == . c failed 1
+}
 
-@ sc_failed * SstCursor c → b { ^ == . c failed 1 }
+@ sc_err SstCursor c__h → s {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ ( string_data . c err )
+}
 
-@ sc_err * SstCursor c → s { ^ ( string_data . c err ) }
+@ sc_seq SstCursor c__h → i {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ . c seq
+}
 
-@ sc_seq * SstCursor c → i { ^ . c seq }
+@ sc_kind SstCursor c__h → i {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ . c kind
+}
 
-@ sc_kind * SstCursor c → i { ^ . c kind }
+@ sc_klen SstCursor c__h → i {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ . c kl
+}
 
-@ sc_klen * SstCursor c → i { ^ . c kl }
+@ sc_kptr SstCursor c__h → *u {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ ( vec_data [u] . c blk )
+}
 
-@ sc_kptr * SstCursor c → *u { ^ ( vec_data [u] . c blk ) }
+@ sc_koff SstCursor c__h → i {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ^ . c koff
+}
 
-@ sc_koff * SstCursor c → i { ^ . c koff }
+@ sc_key SstCursor c__h → ( Vec u ) { ^ ( _sc_key ( _SstCursor_ptr c__h ) ) }
 
-@ sc_key * SstCursor c → ( Vec u ) { ^ ( _mt_slice . c blk . c koff . c kl ) }
+@ sc_val SstCursor c__h → ( Vec u ) { ^ ( _sc_val ( _SstCursor_ptr c__h ) ) }
 
-@ sc_val * SstCursor c → ( Vec u ) { ^ ( _mt_slice . c blk + . c koff . c kl . c vl ) }
+@ _sc_key * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk . c koff . c kl ) }
 
-@ __sc_fail * SstCursor c String e → v {
+@ _sc_val * SstCursorImpl c → ( Vec u ) { ^ ( _mt_slice . c blk + . c koff . c kl . c vl ) }
+
+@ __sc_fail * SstCursorImpl c sink String e → v {
     = . c failed 1
     = . c valid 0
     ( string_free . c err )
@@ -685,7 +755,7 @@ $ `memtable.nu`
 }
 
 // Decode the entry the cursor's `pos` points at.
-@ __sc_decode * SstCursor c → b {
+@ __sc_decode * SstCursorImpl c → b {
     : i total ( __sst_entry_len . c blk . c pos )
     ? == total 0 { ^ F } {}
     = . c kl ?? ( bytes_read_u32_le . c blk . c pos ) { T x → # i x F _ → 0 }
@@ -697,10 +767,10 @@ $ `memtable.nu`
     ^ T
 }
 
-@ __sc_load * SstCursor c i bi → b {
-    : *SstReader rr . c r
+@ __sc_load * SstCursorImpl c i bi → b {
+    : *SstReaderImpl rr ( __SstReader_ptr . c r )
     ? >= bi . rr nblocks { = . c valid 0 ^ F } {}
-    : !( Vec u ) String br ( __sst_load_block . c r bi )
+    : !( Vec u ) String br ( __sst_load_block rr bi )
     ?? br {
         T blk → {
             ( vec_free [u] . c blk )
@@ -713,12 +783,18 @@ $ `memtable.nu`
     }
 }
 
-@ sc_first * SstCursor c → v {
+@ sc_first SstCursor c__h → v {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
     = . c valid 0
     : b _ok ( __sc_load c 0 )
 }
 
-@ sc_next * SstCursor c → v {
+@ sc_next SstCursor c__h → v {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
+    ( _sc_next c )
+}
+
+@ _sc_next * SstCursorImpl c → v {
     ? == . c valid 1 {} { ^ }
     = . c pos + . c pos + SST_HDR + . c kl . c vl
     ? ( __sc_decode c ) {} {
@@ -727,18 +803,19 @@ $ `memtable.nu`
 }
 
 // Position at the first entry >= (key, snap).
-@ sc_seek * SstCursor c ( Vec u ) key i snap → v {
+@ sc_seek SstCursor c__h ( Vec u ) key i snap → v {
+    : *SstCursorImpl c ( _SstCursor_ptr c__h )
     = . c valid 0
     : i klen ( vec_len [u] key )
     : *u kp ( vec_data [u] key )
-    : i bi ( __sst_find_block . c r kp klen )
+    : i bi ( __sst_find_block ( __SstReader_ptr . c r ) kp klen )
     ? ( __sc_load c bi ) {} { ^ }
     : ~ b searching T
     ~ searching {
         ? == . c valid 1 {} { = searching F }
         ? searching {
             : i cc ( lsm_bytes_cmp_raw ( vec_data [u] . c blk ) . c koff . c kl kp 0 klen )
-            ? | > cc 0 & == cc 0 <= . c seq snap { = searching F } { ( sc_next c ) }
+            ? | > cc 0 & == cc 0 <= . c seq snap { = searching F } { ( _sc_next c ) }
         } {}
     }
 }

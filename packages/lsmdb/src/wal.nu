@@ -18,13 +18,17 @@
 // therefore stops at the first record that is short, over-long or fails
 // its CRC, keeps everything before it, and reports the truncation.
 //
-//   ( wal_open path )                  → !*Wal String     append mode
+//   ( wal_open path )                  → !Wal String      append mode
 //   ( wal_append w key val seq kind )  → !v String
 //   ( wal_sync w )                     → !v String        durability point
 //   ( wal_bytes w )                    → i
-//   ( wal_close w )                    → v
+//   ( wal_reopen w path )              → !v String        close, open again
+//   ( wal_close w )                    → v                early release (optional)
 //   ( wal_replay path m )              → !WalStat String  → memtable
 //   ( wal_reset path )                 → !v String        truncate to empty
+//
+// A Wal is a handle: every copy is the same log, and the last owner
+// closes its file.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -33,13 +37,29 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/deflate.nu`
 $ `memtable.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Wal {
+: WalImpl {
     File f
     ( Vec u ) buf
     i bytes
     Crc32 crc
 }
+
+// The log file is the one part the compiler does not manage: the last
+// owner closes it (the buffer and the CRC table go with the drop glue).
+% Drop WalImpl { @ drop WalImpl w → v { ( file_close . w f ) } }
+
+: Wal { s ctl }
+
+@ Wal_share Wal h → Wal { ^ @ Wal { # s ( rcbox_share # i . h ctl ) } }
+
+@ Wal_drop sink Wal h → v {
+    ( mem_forget h )
+    ( rcbox_release [WalImpl] # i . h ctl )
+}
+
+@ __Wal_ptr Wal h → *WalImpl { ^ ( rcbox_ptr [WalImpl] # i . h ctl ) }
 
 : WalStat {
     i records
@@ -48,35 +68,55 @@ $ `memtable.nu`
     i bytes
 }
 
-@ wal_open s path → !*Wal String {
+@ __wal_open_err s path → String {
+    : String msg ( string_from `lsmdb: cannot open the write-ahead log ` )
+    ( string_push_str msg path )
+    ^ msg
+}
+
+@ wal_open s path → !Wal String {
     : !File IoErr fr ( file_append path )
     ?? fr {
         T f → {
-            : *Wal w # *Wal ( nurl_alloc Z Wal )
+            : i w__box ( rcbox_zero [WalImpl] )
+            : *WalImpl w ( rcbox_ptr [WalImpl] w__box )
             = . w f f
             = . w buf ( vec_with_cap [u] 256 )
             = . w bytes ?? ( file_size path ) { T n → n F _ → 0 }
             = . w crc ( crc32_ctx )
-            ^ @ !*Wal String { T w }
+            ^ @ !Wal String { T @ Wal { # s w__box } }
         }
-        F _ → {
-            : String msg ( string_from `lsmdb: cannot open the write-ahead log ` )
-            ( string_push_str msg path )
-            ^ @ !*Wal String { F msg }
-        }
+        F _ → { ^ @ !Wal String { F ( __wal_open_err path ) } }
     }
 }
 
-@ wal_bytes * Wal w → i { ^ . w bytes }
-
-@ wal_close * Wal w → v {
-    ( crc32_ctx_free . w crc )
-    ( file_close . w f )
-    ( vec_free [u] . w buf )
-    ( nurl_free # s w )
+@ wal_bytes Wal w__h → i {
+    : *WalImpl w ( __Wal_ptr w__h )
+    ^ . w bytes
 }
 
-@ wal_append * Wal w ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
+// Close the log file and open `path` again for appending — what a flush
+// does once it has reset the log. If the reopen fails the log stays
+// closed, and every append after it is an error rather than a lost write.
+@ wal_reopen Wal w__h s path → !v String {
+    : *WalImpl w ( __Wal_ptr w__h )
+    ( file_close . w f )
+    = . w f @ File { # s 0 }
+    ?? ( file_append path ) {
+        T f → {
+            = . w f f
+            = . w bytes ?? ( file_size path ) { T n → n F _ → 0 }
+            ^ @ !v String { T 0 }
+        }
+        F _ → { ^ @ !v String { F ( __wal_open_err path ) } }
+    }
+}
+
+// Let go of `w` now rather than at the end of its owner's scope.
+@ wal_close sink Wal w → v {}
+
+@ wal_append Wal w__h ( Vec u ) key ( Vec u ) val i seq i kind → !v String {
+    : *WalImpl w ( __Wal_ptr w__h )
     : i kl ( vec_len [u] key )
     : i vl ? == kind MT_PUT ( vec_len [u] val ) 0
     ( vec_clear [u] . w buf )
@@ -94,7 +134,6 @@ $ `memtable.nu`
     ( bytes_push_u32_le rec # u32 plen )
     ( vec_extend [u] rec . w buf )
     : !v IoErr wr ( file_write_chunk . w f rec )
-    ( vec_free [u] rec )
     ?? wr {
         T _ → { = . w bytes + . w bytes + plen 8 ^ @ !v String { T 0 } }
         F _ → { ^ @ !v String { F ( string_from `lsmdb: write-ahead log append failed (disk full?)` ) } }
@@ -103,7 +142,8 @@ $ `memtable.nu`
 
 // The durability point. Returning from here means the OS has the bytes
 // on the device — everything appended so far survives a power cut.
-@ wal_sync * Wal w → !v String {
+@ wal_sync Wal w__h → !v String {
+    : *WalImpl w ( __Wal_ptr w__h )
     ?? ( file_sync . w f ) {
         T _ → { ^ @ !v String { T 0 } }
         F _ → { ^ @ !v String { F ( string_from `lsmdb: cannot fsync the write-ahead log` ) } }
@@ -121,7 +161,6 @@ $ `memtable.nu`
         T _ → {
             : String parent ( path_dirname path )
             ?? ( dir_sync ( string_data parent ) ) { T _ → {} F _ → {} }
-            ( string_free parent )
             ^ @ !v String { T 0 }
         }
         F _ → { ^ @ !v String { F ( string_from `lsmdb: cannot truncate the torn tail of the write-ahead log` ) } }
@@ -141,13 +180,13 @@ $ `memtable.nu`
 
 // Replay every intact record into `m`. A missing log is an empty one —
 // a database that has never been written to is not an error.
-@ wal_replay s path * MemTable m → !WalStat String {
+@ wal_replay s path MemTable m → !WalStat String {
     ? ( file_exists path ) {} {
         ^ @ !WalStat String { T @ WalStat { 0 0 0 0 } }
     }
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     : ~ ( Vec u ) data ( vec_new [u] )
-    ?? rr { T v → { ( vec_free [u] data ) = data v } F _ → {
+    ?? rr { T v → { = data v } F _ → {
             ^ @ !WalStat String { F ( string_from `lsmdb: cannot read the write-ahead log` ) } } }
 
     : i n ( vec_len [u] data )
@@ -176,18 +215,14 @@ $ `memtable.nu`
                             : ( Vec u ) key ( _mt_slice payload 13 kl )
                             : ( Vec u ) val ( _mt_slice payload + 17 kl vl )
                             ( mt_put m key val seq kind )
-                            ( vec_free [u] key )
-                            ( vec_free [u] val )
                             = records + records 1
                             ? > seq maxseq { = maxseq seq } {}
                             = pos + pos + 8 plen
                         }
                     }
                 }
-                ( vec_free [u] payload )
             }
         }
     }
-    ( vec_free [u] data )
     ^ @ !WalStat String { T @ WalStat { records maxseq truncated pos } }
 }
