@@ -35,7 +35,7 @@ $ `mel.nu`
     : ( Vec f ) env ( vec_with_cap [f] full )
     : ~ i k 0
     ~ < k full { ( vec_push [f] acc 0.0 ) ( vec_push [f] env 0.0 ) = k + k 1 }
-    : *FftPlan p ( fft_plan n_fft )
+    : FftPlan p ( fft_plan n_fft )
     : ( Vec f ) fr ( vec_with_cap [f] n_bins )
     : ( Vec f ) fi ( vec_with_cap [f] n_bins )
     : ( Vec f ) x ( vec_new [f] )
@@ -61,7 +61,6 @@ $ `mel.nu`
         }
         = t + t 1
     }
-    ( fft_free p )
     ( vec_free [f] win )
     ( vec_free [f] fr )
     ( vec_free [f] fi )

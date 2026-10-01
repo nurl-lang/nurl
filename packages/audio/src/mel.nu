@@ -141,7 +141,7 @@ $ `stdlib/std/float.nu`
 
 // |STFT|², row-major frames × (n_fft/2+1). `x` is already padded; the caller
 // owns the plan (an STFT runs the same length thousands of times).
-@ stft_power * FftPlan p ( Vec f ) x ( Vec f ) window i n_fft i hop → ( Vec f ) {
+@ stft_power FftPlan p ( Vec f ) x ( Vec f ) window i n_fft i hop → ( Vec f ) {
     : i n ( vec_len [f] x )
     : i n_bins + / n_fft 2 1
     : i frames ? >= n n_fft + 1 / - n n_fft hop 0
@@ -187,9 +187,8 @@ $ `stdlib/std/float.nu`
     : i n_bins + / n_fft 2 1
     : ( Vec f ) win ( hann_periodic n_fft )
     : ( Vec f ) padded ( reflect_pad x / n_fft 2 )
-    : *FftPlan p ( fft_plan n_fft )
+    : FftPlan p ( fft_plan n_fft )
     : ( Vec f ) pw ( stft_power p padded win n_fft hop )
-    ( fft_free p )
     ( vec_free [f] win )
     ( vec_free [f] padded )
     : i frames / ( vec_len [f] pw ) n_bins
@@ -351,9 +350,8 @@ $ `stdlib/std/float.nu`
     : i n_bins + / n_fft 2 1
     : ( Vec f ) win ( hann_periodic n_fft )
     : ( Vec f ) padded ( reflect_pad x / n_fft 2 )
-    : *FftPlan p ( fft_plan n_fft )
+    : FftPlan p ( fft_plan n_fft )
     : ( Vec f ) pw ( stft_power p padded win n_fft hop )
-    ( fft_free p )
     ( vec_free [f] win )
     ( vec_free [f] padded )
     : i frames / ( vec_len [f] pw ) n_bins
