@@ -927,14 +927,29 @@ $ `stdlib/core/rcbox.nu`
     : b _r2 ( vec_set_len [i] . t row_lens row_w )
 }
 
-// Build a table from a freshly-allocated String. Consumes `content`
-// (the table takes ownership of the buffer).
-@ csv_table_from_string String content → CSVTable {
-    : CSVTable h ( csv_table_new )
+// Build a table from a String. Consumes `content`: the table takes the
+// buffer over (its cells are views into it), so a caller that wants to
+// keep the text passes a copy.
+@ csv_table_from_string sink String content → CSVTable {
+    ^ ( __csv_table_build content -1 ( csv_dialect_default ) )
+}
+
+// The table is built around `content` as a literal, so the buffer moves
+// into it; the cells are then parsed in place.
+@ __csv_table_build sink String content i typed_float_col CSVDialect dia → CSVTable {
+    : CSVTable h @ CSVTable { # s ( rcbox_new [CSVTableImpl] @ CSVTableImpl {
+            content ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( vec_new [u] ) ( vec_new [f] ) typed_float_col
+        } ) }
     : *CSVTableImpl t ( __CSVTable_ptr h )
-    ( string_free . t content )
-    = . t content content
-    ( __csv_parse_content t ( csv_dialect_default ) )
+    ? >= typed_float_col 0 {
+        // Pre-reserve typed_floats to a generous estimate (newline count
+        // gives an upper bound for body rows; +2 padding for the
+        // headerless edge cases the parser handles).
+        : i nl_n ( nurl_count_byte # s ( string_data . t content ) ( string_len . t content ) 10 )
+        ( vec_reserve [f] . t typed_floats + nl_n 2 )
+    } {}
+    ( __csv_parse_content t dia )
     ^ h
 }
 
@@ -942,19 +957,8 @@ $ `stdlib/core/rcbox.nu`
 // values land in `t.typed_floats[r]` for body row r; downstream
 // filters / aggregates use `csv_table_filter_typed_float_gt` (and
 // friends) which read the cache instead of re-parsing per row.
-@ csv_table_from_string_typed_f String content i typed_float_col → CSVTable {
-    : CSVTable h ( csv_table_new )
-    : *CSVTableImpl t ( __CSVTable_ptr h )
-    ( string_free . t content )
-    = . t content content
-    = . t typed_float_col typed_float_col
-    // Pre-reserve typed_floats to a generous estimate (newline count
-    // gives an upper bound for body rows; +2 padding for the
-    // headerless edge cases the parser handles).
-    : i nl_n ( nurl_count_byte # s ( string_data . t content ) ( string_len . t content ) 10 )
-    ( vec_reserve [f] . t typed_floats + nl_n 2 )
-    ( __csv_parse_content t ( csv_dialect_default ) )
-    ^ h
+@ csv_table_from_string_typed_f sink String content i typed_float_col → CSVTable {
+    ^ ( __csv_table_build content typed_float_col ( csv_dialect_default ) )
 }
 
 @ csv_table_load_typed_f s path i typed_float_col → CSVTable {
@@ -965,13 +969,8 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ csv_table_from_string_dialect String content CSVDialect dia → CSVTable {
-    : CSVTable h ( csv_table_new )
-    : *CSVTableImpl t ( __CSVTable_ptr h )
-    ( string_free . t content )
-    = . t content content
-    ( __csv_parse_content t dia )
-    ^ h
+@ csv_table_from_string_dialect sink String content CSVDialect dia → CSVTable {
+    ^ ( __csv_table_build content -1 dia )
 }
 
 // Load a CSV file using the default dialect. Returns the null table
