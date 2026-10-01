@@ -89,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Mutex_share`. The handles are one word now (`Mutex { s p }`); code
   that reached into `Mutex.c` uses `mutex_raw`.
   `compiler/tests/sync_handles_autodrop.nu`.
+- **`DStore` (dchannel) releases itself**, its queues with it: an rcbox
+  handle (the registered handlers' captures share it) whose entries hold
+  rcbox `DQ` queue handles instead of raw pointers.
 - **The MCP task store releases itself, and a server keeps its own share.**
   `McpTaskStore` is an rcbox handle whose drop frees its tasks; the server
   holds a `McpTaskStore_share` instead of a hand-managed view cell, so the

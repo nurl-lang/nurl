@@ -48,7 +48,7 @@
 //   Server (host the queues):
 //     ( dstore_new i default_cap )                    → DStore
 //     ( dstore_declare DStore s s name i cap )         → v
-//     ( dstore_free DStore s )                         → v
+//     ( dstore_free DStore s )                         → v   early release (optional)
 //     ( dchan_register DStore s Registry r )           → v
 //     ( dchan_serve s host i port DStore s )           → !v NetErr
 //
@@ -70,6 +70,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/cluster.nu`
+$ `stdlib/core/rcbox.nu`
 
 // Wire fn-ids registered on the cluster Registry.
 @ __wire_send → s { ^ `dchan/send` }
@@ -82,9 +83,10 @@ $ `stdlib/ext/cluster.nu`
 
 // ── Server: bounded, thread-safe per-name Json queues ────────────────
 //
-// A DQueue is heap-allocated and referenced by pointer from the store's
-// entry Vec, so its scalar `closed` flag is shared by every accessor
-// (a by-value copy would not propagate the mutation). `cap` 0 = unbounded.
+// A DQueue lives in an rcbox referenced from the store's entry Vec, so
+// its scalar `closed` flag is shared by every accessor (a by-value copy
+// would not propagate the mutation), and it goes with the store's last
+// owner. `cap` 0 = unbounded.
 
 : DQueue {
     Mutex m
@@ -93,38 +95,56 @@ $ `stdlib/ext/cluster.nu`
     i closed
 }
 
-: DStoreEntry {
-    String name
-    s q  // *DQueue
+: DQ { s ctl }
+
+@ DQ_share DQ h → DQ { ^ @ DQ { # s ( rcbox_share # i . h ctl ) } }
+
+@ DQ_drop sink DQ h → v {
+    ( mem_forget h )
+    ( rcbox_release [DQueue] # i . h ctl )
 }
 
-: DStore {
+: DStoreEntry {
+    String name
+    DQ q
+}
+
+: DStoreImpl {
     Mutex m
     ( Vec DStoreEntry ) entries
     i default_cap
 }
 
-@ dstore_new i default_cap → DStore {
-    ^ @ DStore { ( mutex_new ) ( vec_new [DStoreEntry] ) default_cap }
+// A handle on the store in an rcbox: every copy — the caller's, the ones
+// the registered handlers capture — is the same set of queues, and the
+// last owner releases them.
+: DStore { s ctl }
+
+@ DStore_share DStore h → DStore { ^ @ DStore { # s ( rcbox_share # i . h ctl ) } }
+
+@ DStore_drop sink DStore h → v {
+    ( mem_forget h )
+    ( rcbox_release [DStoreImpl] # i . h ctl )
 }
 
-@ __dq_new i cap → *DQueue {
-    : *DQueue q # *DQueue ( nurl_alloc Z DQueue )
-    = . q m ( mutex_new )
-    = . q items ( vec_new [Json] )
-    = . q cap cap
-    = . q closed 0
-    ^ q
+@ __ds DStore h → *DStoreImpl { ^ ( rcbox_ptr [DStoreImpl] # i . h ctl ) }
+
+@ dstore_new i default_cap → DStore {
+    ^ @ DStore { # s ( rcbox_new [DStoreImpl] @ DStoreImpl { ( mutex_new ) ( vec_new [DStoreEntry] ) default_cap } ) }
+}
+
+@ __dq_new i cap → DQ {
+    ^ @ DQ { # s ( rcbox_new [DQueue] @ DQueue { ( mutex_new ) ( vec_new [Json] ) cap 0 } ) }
 }
 
 // Find an entry index by name. Caller must hold the store mutex.
 @ __dstore_find DStore s s name → i {
-    : i n ( vec_len [DStoreEntry] . s entries )
+    : i n ( vec_len [DStoreEntry] . ( __ds s ) entries )
     : ~ i found - 0 1
     : ~ b done F
     : ~ i k 0
     ~ & ! done < k n {
-        : ?DStoreEntry ek ( vec_get [DStoreEntry] . s entries k )
+        : ?DStoreEntry ek ( vec_get [DStoreEntry] . ( __ds s ) entries k )
         ?? ek {
             T e → {
                 ? != 0 ( nurl_str_eq ( string_data . e name ) name ) {
@@ -144,43 +164,28 @@ $ `stdlib/ext/cluster.nu`
 @ __dstore_get_or_create DStore s s name → *DQueue {
     : i idx ( __dstore_find s name )
     ? >= idx 0 {
-        : ?DStoreEntry ek ( vec_get [DStoreEntry] . s entries idx )
-        ^ ?? ek {
-            T e → # *DQueue . e q
-            F → ( __dq_new . s default_cap )  // unreachable
-        }
+        : ?DStoreEntry ek ( vec_get [DStoreEntry] . ( __ds s ) entries idx )
+        ?? ek { T e → { ^ ( rcbox_ptr [DQueue] # i . . e q ctl ) } F → {} }
     } {}
-    : *DQueue q ( __dq_new . s default_cap )
-    : DStoreEntry e @ DStoreEntry { ( string_from name ) # s q }
-    ( vec_push [DStoreEntry] . s entries e )
+    : DQ h ( __dq_new . ( __ds s ) default_cap )
+    : *DQueue q ( rcbox_ptr [DQueue] # i . h ctl )
+    ( vec_push [DStoreEntry] . ( __ds s ) entries @ DStoreEntry { ( string_from name ) h } )
     ^ q
 }
 
 // Pre-create a channel with an explicit capacity (otherwise channels are
 // created lazily at default_cap on first use).
 @ dstore_declare DStore s s name i cap → v {
-    ( mutex_lock . s m )
+    ( mutex_lock . ( __ds s ) m )
     ? < ( __dstore_find s name ) 0 {
-        : DStoreEntry e @ DStoreEntry { ( string_from name ) # s ( __dq_new cap ) }
-        ( vec_push [DStoreEntry] . s entries e )
+        : DStoreEntry e @ DStoreEntry { ( string_from name ) ( __dq_new cap ) }
+        ( vec_push [DStoreEntry] . ( __ds s ) entries e )
     } {}
-    ( mutex_unlock . s m )
+    ( mutex_unlock . ( __ds s ) m )
 }
 
-@ __dq_free sink * DQueue q → v {
-    ( vec_free_with [Json] . q items \ Json j → v { ( json_free j ) } )
-    ( mutex_free . q m )
-    ( nurl_free # s q )
-}
-
-@ dstore_free sink DStore s → v {
-    ( vec_free_with [DStoreEntry] . s entries
-    \ DStoreEntry e → v {
-        ( string_free . e name )
-        ( __dq_free # *DQueue . e q )
-    } )
-    ( mutex_free . s m )
-}
+// Let go of `s` now rather than at the end of its owner's scope.
+@ dstore_free sink DStore s → v {}
 
 // ── Server: result-envelope helpers ──────────────────────────────────
 
@@ -197,9 +202,9 @@ $ `stdlib/ext/cluster.nu`
     : s name ?? chj { T x → ( json_as_str x ) F → `` }
     : ?Json vj ( json_obj_get args `v` )  // borrow
 
-    ( mutex_lock . store m )
+    ( mutex_lock . ( __ds store ) m )
     : *DQueue q ( __dstore_get_or_create store name )
-    ( mutex_unlock . store m )
+    ( mutex_unlock . ( __ds store ) m )
 
     ( mutex_lock . q m )
     : Json res ? != 0 . q closed {
@@ -223,9 +228,9 @@ $ `stdlib/ext/cluster.nu`
     : ?Json chj ( json_obj_get args `ch` )
     : s name ?? chj { T x → ( json_as_str x ) F → `` }
 
-    ( mutex_lock . store m )
+    ( mutex_lock . ( __ds store ) m )
     : *DQueue q ( __dstore_get_or_create store name )
-    ( mutex_unlock . store m )
+    ( mutex_unlock . ( __ds store ) m )
 
     ( mutex_lock . q m )
     : Json res ? > ( vec_len [Json] . q items ) 0 {
@@ -247,9 +252,9 @@ $ `stdlib/ext/cluster.nu`
     : ?Json chj ( json_obj_get args `ch` )
     : s name ?? chj { T x → ( json_as_str x ) F → `` }
 
-    ( mutex_lock . store m )
+    ( mutex_lock . ( __ds store ) m )
     : *DQueue q ( __dstore_get_or_create store name )
-    ( mutex_unlock . store m )
+    ( mutex_unlock . ( __ds store ) m )
 
     ( mutex_lock . q m )
     = . q closed 1
@@ -261,9 +266,9 @@ $ `stdlib/ext/cluster.nu`
     : ?Json chj ( json_obj_get args `ch` )
     : s name ?? chj { T x → ( json_as_str x ) F → `` }
 
-    ( mutex_lock . store m )
+    ( mutex_lock . ( __ds store ) m )
     : *DQueue q ( __dstore_get_or_create store name )
-    ( mutex_unlock . store m )
+    ( mutex_unlock . ( __ds store ) m )
 
     ( mutex_lock . q m )
     : i n ( vec_len [Json] . q items )
