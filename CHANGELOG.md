@@ -105,6 +105,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and written back (`take_data`) is still the caller's: only a payload of
   an option binding answers per call whether it held its field.
   `compiler/tests/lend_back_to_same_binding.nu`.
+- **Assigning through an `inout` parameter releases what it replaces.**
+  `= . h item …` and `= s ( string_from … )` through an `inout` parameter
+  left the caller's old value with no owner — every call leaked it. A field
+  the callee hands to a consumer first, or takes with `mem_take`, is
+  emptied in the caller's struct, so the store after it releases nothing
+  twice; `mem_take` of a binding that has since been given another value
+  leaves the field in place. `compiler/tests/inout_replaces_owned.nu`.
 
 ### Changed
 

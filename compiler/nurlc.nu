@@ -9036,6 +9036,33 @@
     ? != 0 ( nurl_str_len up ) {
         ( mem_udrop_flag_set syms cg up `1` )
         ( __sb syms up `` )
+        // x read a struct's field (`: ( Vec u ) moved . s body`): the
+        // struct is the container that gave it up, so the field is emptied
+        // there — a later `= . s body …` then replaces nothing x owns. Only
+        // while x still holds that value (asked by the identity of its first
+        // buffer): x may have been given another one since, inside a closure
+        // the bookkeeping here does not see.
+        : ~ s __tf ( nurl_sym_get2 syms up `__fsrc` )
+        ? != 0 ( nurl_str_len __tf ) {
+            : s __tfp ( str_first_word __tf ) = __tf ( str_skip_word __tf )
+            : s __tfs ( str_first_word __tf ) = __tf ( str_skip_word __tf )
+            : s __tfi ( str_first_word __tf ) = __tf ( str_skip_word __tf )
+            : s __tft ( str_first_word __tf )
+            : s __tll ( nurl_llty __tft )
+            : s __txv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __txv ) ( nurl_print ` = load ` ) ( nurl_print __tll ) ( nurl_print `, ptr ` ) ( nurl_print up ) ( nurl_print `\n` )
+            : s __txk ( mem_handle_key cg __tft __txv )
+            : s __tfg ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __tfg ) ( nurl_print ` = getelementptr ` ) ( nurl_print __tfs ) ( nurl_print `, ptr ` ) ( nurl_print __tfp ) ( nurl_print `, i32 0, i32 ` ) ( nurl_print __tfi ) ( nurl_print `\n` )
+            : s __tfv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __tfv ) ( nurl_print ` = load ` ) ( nurl_print __tll ) ( nurl_print `, ptr ` ) ( nurl_print __tfg ) ( nurl_print `\n` )
+            : s __tfk ( mem_handle_key cg __tft __tfv )
+            ? & != 0 ( nurl_str_len __txk ) != 0 ( nurl_str_len __tfk ) {
+                : s __tsame ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __tsame ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __txk ) ( nurl_print `, ` ) ( nurl_print __tfk ) ( nurl_print `\n` )
+                ( mem_zero_field cg __tfp __tfs __tfi __tft __tsame )
+            } {}
+        } {}
         ( nurl_sym_def syms ( nurl_str_cat up `__fsrc` ) `` )
         ( nurl_sym_def syms ( nurl_str_cat up `__alias` ) `` )
         ( nurl_sym_def syms ( nurl_str_cat up `__alias_part` ) `` )
@@ -11078,7 +11105,8 @@
             // its drop glue releases: mem_emit_drop_glue.)
             : b fr_glue & != 0 ( nurl_str_len g_drop_glue_ty )
             ( seq fr_ptr ( nurl_sym_get2 syms ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) `__ptr` ) )
-            ? & ( __is_handle_ty fr_fty ) | | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) fr_ptr ) != 0 ( nurl_sym_len2 syms fr_ptr `__vget` ) fr_glue {
+            // (…and in an `inout` parameter, the caller's own struct.)
+            ? & ( __is_handle_ty fr_fty ) | | | ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) fr_ptr ) != 0 ( nurl_sym_len2 syms fr_ptr `__vget` ) fr_glue ( __is_inout_ptr syms fr_ptr ) {
                 : b fr_decl | ( str_contains_word callee_sink ( nurl_str_int arg_idx ) ) __cl_call
                 : ~ s zc ( nurl_str_cat `1` `` )
                 ? ! fr_decl {
@@ -20989,6 +21017,22 @@
         // the new one by the `:` binding's rule. A borrowed right-hand side
         // might alias the old value, so the old value is left alone then.
         : s __ud_ptr ( mem_udrop_ptr_of syms name )
+        // An `inout` parameter is the caller's binding (§2.4): a fresh value
+        // assigned over it replaces the caller's, which is dropped. A call
+        // that may hand back that same value (a lend) leaves it alone.
+        ? & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( __is_handle_ty vt )
+        | == bck_rhs_tt TT_AT & == bck_rhs_tt TT_LPAREN == 0 ( nurl_sym_len syms `__last_value_borrow__` ) {
+            : s __io_ro ? == bck_rhs_tt TT_AT ( nurl_str_cat `true` `` ) ( mem_call_retown syms cg )
+            ? != 0 ( nurl_str_len __io_ro ) {
+                : s __io_old ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __io_old ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                ( __handle_drop_ensure vt )
+                ( __dropifv_request vt )
+                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle vt ) ) ( nurl_print `(i1 ` ) ( nurl_print __io_ro )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print __io_old ) ( nurl_print `)` ) ( emit_dbg_eol )
+            } {}
+        } {}
         : s __ud_borrow ( nurl_str_cat ( nurl_sym_get syms `__last_value_borrow__` ) `` )
         // `= c ( bump c )` with bump handing its argument back: the same
         // value returns to the same binding — nothing to drop or re-own.
@@ -21864,8 +21908,11 @@
                 // a binding held (it leaked). A field moved out was zeroed —
                 // dropping that is a no-op — and a binding that only borrows
                 // its value (flag clear) leaves the old one to its owner.
-                ? & ( __is_handle_ty ftype ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) alloca_ptr )
-                { : s __hf ( mem_udrop_flag_get syms cg alloca_ptr )
+                // An `inout` parameter is the caller's binding, lent for the
+                // call to be written (§2.4): its fields are the caller's own.
+                : b __fs_inout & != 0 ( nurl_str_len obj_name ) ( seq ( nurl_sym_get2 syms obj_name `__inout` ) `1` )
+                ? & ( __is_handle_ty ftype ) | __fs_inout ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) alloca_ptr )
+                { : s __hf ? __fs_inout ( nurl_str_cat `true` `` ) ( mem_udrop_flag_get syms cg alloca_ptr )
                     : s __hv ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __hv ) ( nurl_print ` = load ` )
                     ( nurl_print ( nurl_llty ftype ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
@@ -21877,8 +21924,8 @@
                 {}
                 // …and a closure field of an owning struct (its drop graph
                 // owns the env): the closure it replaces is released.
-                ? & & ( __is_closure_ty ftype ) ( __is_owned_struct_ty pt ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) alloca_ptr )
-                { : s __cf ( mem_udrop_flag_get syms cg alloca_ptr )
+                ? & & ( __is_closure_ty ftype ) ( __is_owned_struct_ty pt ) | __fs_inout ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) alloca_ptr )
+                { : s __cf ? __fs_inout ( nurl_str_cat `true` `` ) ( mem_udrop_flag_get syms cg alloca_ptr )
                     : s __cv ( nurl_cg_reg cg )
                     : s __ce ( nurl_cg_reg cg )
                     : s __cs ( nurl_cg_reg cg )
@@ -32324,6 +32371,13 @@
 // `val` (type `ty`), copied when `cond` (`1` or an i1) holds.
 // Zero field `idx` (type `fty`) of the struct `sty` in alloca `ptr` when
 // `cond` (`1` or an i1) holds — its value has been taken over.
+// Is `p` the incoming pointer of an `inout` parameter (`%name`)?
+@ __is_inout_ptr i syms s p → b {
+    ? | < ( nurl_str_len p ) 2 != ( nurl_str_get p 0 ) 37 { ^ F } {}
+    : s n ( nurl_str_slice p 1 - ( nurl_str_len p ) 1 )
+    ^ & ( seq ( nurl_sym_get2 syms n `__inout` ) `1` ) ( seq ( nurl_sym_get2 syms n `__ptr` ) p )
+}
+
 @ mem_zero_field i cg s ptr s sty s idx s fty s cond → v {
     : s g ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = getelementptr ` ) ( nurl_print sty ) ( nurl_print `, ` )
