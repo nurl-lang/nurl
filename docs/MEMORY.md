@@ -1670,9 +1670,12 @@ of a handle's own type is an owner even when it is built from another
 handle's pointer — that is how `S_share` mints one.
 
 **What still takes a hand.** The special cases, each an explicit call:
-OS resources (files, sockets, processes), closed by their `*_close`;
-memory the program manages itself (`nurl_alloc` / `*T` blocks, arenas,
-globals kept for the program's lifetime); a `Thread`, joined or detached.
+files and sockets, closed by their `*_close`; memory the program manages
+itself (`nurl_alloc` / `*T` blocks, arenas, globals kept for the program's
+lifetime). A child process and a thread are released by their last owner:
+the child shut down as `proc_free` always did, the thread detached unless
+it was joined or detached already (`thread_join` / `thread_detach` settle
+it once, through any copy).
 
 **Panics unwind them too.** A String / Vec / owning struct / library
 handle binding is registered with the panic journal together with its drop

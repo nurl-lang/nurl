@@ -171,6 +171,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one else holds this" and share or release without a locked
   read-modify-write (`nurl_rc_share` / `nurl_rc_release`); a loop creating,
   sharing and dropping handles ran 7–23 % fewer cycles.
+- **`Thread` releases itself.** A handle whose last owner detaches the
+  thread unless it was joined or detached, and frees it; a discarded
+  `( thread_spawn … )` leaked its `pthread_t` and never detached. The first
+  `thread_join` / `thread_detach` through any copy settles the thread; a
+  second join returns -1 (it was a use after free). `@ Thread { # s 0 }` is
+  the null handle. `compiler/tests/thread_handle_autodrop.nu`.
 - **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
   struct whose module defines `S_drop sink S x` (and `S_share` /
   `S_clone`) is dropped and copied like `HashMap`.
