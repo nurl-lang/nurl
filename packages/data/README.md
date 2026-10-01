@@ -6,8 +6,8 @@ layer the training stack was missing — grad/nn build the graph, this feeds
 it.
 
 ```
-: *DataSet ds   ( data_new x y n d l )        // x: n·d, y: n·l (l may be 0)
-: *DataLoader dl ( dl_new ds 32 F 42 )         // batch 32, no drop-last, seed 42
+: DataSet ds    ( data_new x y n d l )        // x: n·d, y: n·l (l may be 0)
+: DataLoader dl  ( dl_new ds 32 F 42 )         // batch 32, no drop-last, seed 42
 : ( Vec f ) bx ( vec_new [f] )
 : ( Vec f ) by ( vec_new [f] )
 : ~ i rows ( dl_next dl bx by )                // fills bx/by, returns row count
@@ -17,6 +17,11 @@ it.
 }
 ( dl_reset dl 43 )                             // next epoch, new permutation
 ```
+
+Nothing is released by hand: `DataSet`, `NdfStream` and `DataLoader` are
+handles whose last owner releases them (an `NdfStream` closes its file), and
+a loader holds a share of its source. `data_free` / `ndf_close` / `dl_free`
+remain as optional early releases.
 
 ## What it does
 

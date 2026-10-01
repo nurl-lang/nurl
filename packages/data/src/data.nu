@@ -15,16 +15,21 @@
 // [0,n) into contiguous, exactly-once slices — shard s of N gets
 // [s·n/N, (s+1)·n/N).
 //
-//   ( data_new x y n d l )                → *DataSet   (takes ownership of x,y)
-//   ( dl_new ds batch drop_last seed )    → *DataLoader
-//   ( dl_new_shard ds batch drop_last seed nshards shard ) → *DataLoader
+//   ( data_new x y n d l )                → DataSet    (takes ownership of x,y)
+//   ( dl_new ds batch drop_last seed )    → DataLoader
+//   ( dl_new_shard ds batch drop_last seed nshards shard ) → DataLoader
 //   ( dl_next dl bx by )                  → i          (rows; 0 = end)
 //   ( dl_reset dl seed )                  → v          (next epoch)
 //   ( dl_num_batches dl )                 → i
 //   ( data_save_ndf path ds )             → !v String
-//   ( ndf_open path )                     → !*NdfStream String
-//   ( dl_stream st batch drop_last seed )                → *DataLoader
-//   ( dl_stream_shard st batch drop_last seed nshards shard ) → *DataLoader
+//   ( ndf_open path )                     → !NdfStream String
+//   ( dl_stream st batch drop_last seed )                → DataLoader
+//   ( dl_stream_shard st batch drop_last seed nshards shard ) → DataLoader
+//
+// DataSet, NdfStream and DataLoader are handles: every copy is the same
+// object, and the last owner releases it — an NdfStream closes its file. A
+// loader holds a share of its source, so the source outlives every loader
+// over it. data_free / ndf_close / dl_free are optional early releases.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
@@ -33,6 +38,7 @@ $ `stdlib/std/rng.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __data_gf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → x F → 0.0 } }
 
@@ -40,7 +46,7 @@ $ `stdlib/std/floatbits.nu`
 
 // ── dataset ────────────────────────────────────────────────────────────
 
-: DataSet {
+: DataSetImpl {
     ( Vec f ) x  // n·d features, row-major
     ( Vec f ) y  // n·l labels (empty when l == 0)
     i n
@@ -48,34 +54,54 @@ $ `stdlib/std/floatbits.nu`
     i l
 }
 
-// Take ownership of x (n·d) and y (n·l); data_free releases both.
-@ data_new ( Vec f ) x ( Vec f ) y i n i d i l → *DataSet {
-    : *DataSet ds # *DataSet ( nurl_alloc Z DataSet )
+// A DataSet is a handle: every copy (each loader over it holds one) is the
+// same data, and the last owner releases it.
+: DataSet { s ctl }
+
+@ DataSet_share DataSet h → DataSet { ^ @ DataSet { # s ( rcbox_share # i . h ctl ) } }
+
+@ DataSet_drop sink DataSet h → v {
+    ( mem_forget h )
+    ( rcbox_release [DataSetImpl] # i . h ctl )
+}
+
+@ __DataSet_ptr DataSet h → *DataSetImpl { ^ ( rcbox_ptr [DataSetImpl] # i . h ctl ) }
+
+// Take ownership of x (n·d) and y (n·l).
+@ data_new sink ( Vec f ) x sink ( Vec f ) y i n i d i l → DataSet {
+    : i ds__box ( rcbox_zero [DataSetImpl] )
+    : *DataSetImpl ds ( rcbox_ptr [DataSetImpl] ds__box )
     = . ds x x
     = . ds y y
     = . ds n n
     = . ds d d
     = . ds l l
-    ^ ds
+    ^ @ DataSet { # s ds__box }
 }
 
-@ data_free sink * DataSet ds → v {
-    ( vec_free [f] . ds x )
-    ( vec_free [f] . ds y )
-    ( nurl_free # s ds )
+// Let go of `ds` now rather than at the end of its owner's scope.
+@ data_free sink DataSet ds → v {}
+
+@ data_n DataSet ds__h → i {
+    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+    ^ . ds n
 }
 
-@ data_n * DataSet ds → i { ^ . ds n }
+@ data_d DataSet ds__h → i {
+    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+    ^ . ds d
+}
 
-@ data_d * DataSet ds → i { ^ . ds d }
-
-@ data_l * DataSet ds → i { ^ . ds l }
+@ data_l DataSet ds__h → i {
+    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+    ^ . ds l
+}
 
 // ── .ndf on-disk format ────────────────────────────────────────────────
 // bytes:  'N' 'D' 'F' '1' | u64 n | u64 d | u64 l | rows((d+l) f64 LE)…
 : i __NDF_HDR 28
 
-: NdfStream {
+: NdfStreamImpl {
     File f
     i n
     i d
@@ -83,7 +109,22 @@ $ `stdlib/std/floatbits.nu`
     i data_off
 }
 
-@ data_save_ndf s path * DataSet ds → !v String {
+// The open file is the stream's one raw resource: its last owner closes it.
+% Drop NdfStreamImpl { @ drop NdfStreamImpl st → v { ( file_close . st f ) } }
+
+: NdfStream { s ctl }
+
+@ NdfStream_share NdfStream h → NdfStream { ^ @ NdfStream { # s ( rcbox_share # i . h ctl ) } }
+
+@ NdfStream_drop sink NdfStream h → v {
+    ( mem_forget h )
+    ( rcbox_release [NdfStreamImpl] # i . h ctl )
+}
+
+@ __NdfStream_ptr NdfStream h → *NdfStreamImpl { ^ ( rcbox_ptr [NdfStreamImpl] # i . h ctl ) }
+
+@ data_save_ndf s path DataSet ds__h → !v String {
+    : *DataSetImpl ds ( __DataSet_ptr ds__h )
     : ( Vec u ) out ( vec_new [u] )
     ( vec_push [u] out # u 78 ) ( vec_push [u] out # u 68 )
     ( vec_push [u] out # u 70 ) ( vec_push [u] out # u 49 )
@@ -102,21 +143,25 @@ $ `stdlib/std/floatbits.nu`
     }
     : ~ b wok T
     ?? ( write_file_bytes path out ) { T _ → {} F _ → { = wok F } }
-    ( vec_free [u] out )
     ? wok { ^ @ !v String { T } }
     ^ @ !v String { F ( string_from `data: cannot write .ndf` ) }
 }
 
-@ ndf_open s path → !*NdfStream String {
+@ ndf_open s path → !NdfStream String {
     : !File IoErr fr ( file_open path )
     : ~ File fh @ File { # s 0 }
-    ?? fr { T h → { = fh h } F _ → { ^ @ !*NdfStream String { F ( string_from `data: cannot open .ndf` ) } } }
+    ?? fr { T h → { = fh h } F _ → { ^ @ !NdfStream String { F ( string_from `data: cannot open .ndf` ) } } }
+    // The handle first: an early return below lets go of it, and its drop
+    // closes the file.
+    : i st__box ( rcbox_zero [NdfStreamImpl] )
+    : NdfStream sh @ NdfStream { # s st__box }
+    : *NdfStreamImpl st ( rcbox_ptr [NdfStreamImpl] st__box )
+    = . st f fh
     : !( Vec u ) IoErr hr ( file_read_at fh 0 __NDF_HDR )
     ?? hr {
         T hb → {
             ? >= ( vec_len [u] hb ) __NDF_HDR {} {
-                ( vec_free [u] hb ) ( file_close fh )
-                ^ @ !*NdfStream String { F ( string_from `data: truncated .ndf header` ) }
+                ^ @ !NdfStream String { F ( string_from `data: truncated .ndf header` ) }
             }
             : ~ b magic T
             ? == ?? ( vec_get [u] hb 0 ) { T x → x F → # u 0 } # u 78 {} { = magic F }
@@ -124,48 +169,52 @@ $ `stdlib/std/floatbits.nu`
             ? == ?? ( vec_get [u] hb 2 ) { T x → x F → # u 0 } # u 70 {} { = magic F }
             ? == ?? ( vec_get [u] hb 3 ) { T x → x F → # u 0 } # u 49 {} { = magic F }
             ? magic {} {
-                ( vec_free [u] hb ) ( file_close fh )
-                ^ @ !*NdfStream String { F ( string_from `data: bad .ndf magic` ) }
+                ^ @ !NdfStream String { F ( string_from `data: bad .ndf magic` ) }
             }
-            : i n # i ?? ( bytes_read_u64_le hb 4 ) { T v → v F → # u64 0 }
-            : i d # i ?? ( bytes_read_u64_le hb 12 ) { T v → v F → # u64 0 }
-            : i l # i ?? ( bytes_read_u64_le hb 20 ) { T v → v F → # u64 0 }
-            ( vec_free [u] hb )
-            : *NdfStream st # *NdfStream ( nurl_alloc Z NdfStream )
-            = . st f fh
-            = . st n n
-            = . st d d
-            = . st l l
+            = . st n # i ?? ( bytes_read_u64_le hb 4 ) { T v → v F → # u64 0 }
+            = . st d # i ?? ( bytes_read_u64_le hb 12 ) { T v → v F → # u64 0 }
+            = . st l # i ?? ( bytes_read_u64_le hb 20 ) { T v → v F → # u64 0 }
             = . st data_off __NDF_HDR
-            ^ @ !*NdfStream String { T st }
+            ^ @ !NdfStream String { T sh }
         }
         F _ → {
-            ( file_close fh )
-            ^ @ !*NdfStream String { F ( string_from `data: cannot read .ndf header` ) }
+            ^ @ !NdfStream String { F ( string_from `data: cannot read .ndf header` ) }
         }
     }
-    ^ @ !*NdfStream String { F ( string_from `data: cannot read .ndf header` ) }
+    ^ @ !NdfStream String { F ( string_from `data: cannot read .ndf header` ) }
 }
 
-@ ndf_close * NdfStream st → v {
-    ( file_close . st f )
-    ( nurl_free # s st )
+// Let go of `st` now rather than at the end of its owner's scope (the
+// last owner closes the file).
+@ ndf_close sink NdfStream st → v {}
+
+@ ndf_n NdfStream st__h → i {
+    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+    ^ . st n
 }
 
-@ ndf_n * NdfStream st → i { ^ . st n }
+@ ndf_d NdfStream st__h → i {
+    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+    ^ . st d
+}
 
-@ ndf_d * NdfStream st → i { ^ . st d }
-
-@ ndf_l * NdfStream st → i { ^ . st l }
+@ ndf_l NdfStream st__h → i {
+    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+    ^ . st l
+}
 
 // Read example `idx`: append its d features to x_out and l labels to y_out.
-@ ndf_read_row * NdfStream st i idx ( Vec f ) x_out ( Vec f ) y_out → b {
+@ ndf_read_row NdfStream st__h i idx ( Vec f ) x_out ( Vec f ) y_out → b {
+    ^ ( __ndf_read_row ( __NdfStream_ptr st__h ) idx x_out y_out )
+}
+
+@ __ndf_read_row * NdfStreamImpl st i idx ( Vec f ) x_out ( Vec f ) y_out → b {
     : i rowf + . st d . st l
     : i off + . st data_off * idx * rowf 8
     : !( Vec u ) IoErr rr ( file_read_at . st f off * rowf 8 )
     ?? rr {
         T b → {
-            ? >= ( vec_len [u] b ) * rowf 8 {} { ( vec_free [u] b ) ^ F }
+            ? >= ( vec_len [u] b ) * rowf 8 {} { ^ F }
             : ~ i c 0
             ~ < c . st d {
                 ( vec_push [f] x_out ?? ( bytes_read_f64_le b * c 8 ) { T v → v F → 0.0 } )
@@ -176,7 +225,6 @@ $ `stdlib/std/floatbits.nu`
                 ( vec_push [f] y_out ?? ( bytes_read_f64_le b * + . st d c 8 ) { T v → v F → 0.0 } )
                 = c + c 1
             }
-            ( vec_free [u] b )
             ^ T
         }
         F _ → { ^ F }
@@ -199,7 +247,6 @@ $ `stdlib/std/floatbits.nu`
         ( vec_set [i] idx j a )
         = k - k 1
     }
-    ( rng_free g )
 }
 
 // The shard's absolute example range [base, base+count) of [0,n).
@@ -207,9 +254,9 @@ $ `stdlib/std/floatbits.nu`
 
 // ── loader ─────────────────────────────────────────────────────────────
 
-: DataLoader {
-    * DataSet ds  // in-memory source (0 when streaming)
-    * NdfStream st  // streaming source (0 when in-memory)
+: DataLoaderImpl {
+    DataSet ds  // in-memory source (a null handle when streaming)
+    NdfStream st  // streaming source (a null handle when in-memory)
     i n  // examples in this shard
     i d
     i l
@@ -222,13 +269,28 @@ $ `stdlib/std/floatbits.nu`
     i last_rows
 }
 
-@ __dl_make * DataSet ds * NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → *DataLoader {
+// A DataLoader is a handle: every copy is the same loader (one cursor
+// through the epoch), and the last owner releases it — and with it its
+// share of the dataset or stream it reads.
+: DataLoader { s ctl }
+
+@ DataLoader_share DataLoader h → DataLoader { ^ @ DataLoader { # s ( rcbox_share # i . h ctl ) } }
+
+@ DataLoader_drop sink DataLoader h → v {
+    ( mem_forget h )
+    ( rcbox_release [DataLoaderImpl] # i . h ctl )
+}
+
+@ __DataLoader_ptr DataLoader h → *DataLoaderImpl { ^ ( rcbox_ptr [DataLoaderImpl] # i . h ctl ) }
+
+@ __dl_make DataSet ds NdfStream st i n i d i l i batch b drop_last i seed i nshards i shard → DataLoader {
     : i base ( __data_shard_base n nshards shard )
     : i end ( __data_shard_base n nshards + shard 1 )
     : i cnt - end base
-    : *DataLoader dl # *DataLoader ( nurl_alloc Z DataLoader )
-    = . dl ds ds
-    = . dl st st
+    : i dl__box ( rcbox_zero [DataLoaderImpl] )
+    : *DataLoaderImpl dl ( rcbox_ptr [DataLoaderImpl] dl__box )
+    = . dl ds ( DataSet_share ds )
+    = . dl st ( NdfStream_share st )
     = . dl n cnt
     = . dl d d
     = . dl l l
@@ -243,39 +305,45 @@ $ `stdlib/std/floatbits.nu`
     ~ < k cnt { ( vec_push [i] idx + base k ) = k + k 1 }
     = . dl idx idx
     ? . dl shuffle { ( __data_shuffle . dl idx seed ) } {}
-    ^ dl
+    ^ @ DataLoader { # s dl__box }
 }
 
 // Full in-memory dataset (one shard). seed <= 0 disables shuffling.
-@ dl_new * DataSet ds i batch b drop_last i seed → *DataLoader {
-    ^ ( __dl_make ds # *NdfStream 0 . ds n . ds d . ds l batch drop_last seed 1 0 )
+@ dl_new DataSet ds__h i batch b drop_last i seed → DataLoader {
+    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+    ^ ( __dl_make ds__h @ NdfStream { # s 0 } . ds n . ds d . ds l batch drop_last seed 1 0 )
 }
 
-@ dl_new_shard * DataSet ds i batch b drop_last i seed i nshards i shard → *DataLoader {
-    ^ ( __dl_make ds # *NdfStream 0 . ds n . ds d . ds l batch drop_last seed nshards shard )
+@ dl_new_shard DataSet ds__h i batch b drop_last i seed i nshards i shard → DataLoader {
+    : *DataSetImpl ds ( __DataSet_ptr ds__h )
+    ^ ( __dl_make ds__h @ NdfStream { # s 0 } . ds n . ds d . ds l batch drop_last seed nshards shard )
 }
 
 // Streaming dataset (one shard).
-@ dl_stream * NdfStream st i batch b drop_last i seed → *DataLoader {
-    ^ ( __dl_make # *DataSet 0 st . st n . st d . st l batch drop_last seed 1 0 )
+@ dl_stream NdfStream st__h i batch b drop_last i seed → DataLoader {
+    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+    ^ ( __dl_make @ DataSet { # s 0 } st__h . st n . st d . st l batch drop_last seed 1 0 )
 }
 
-@ dl_stream_shard * NdfStream st i batch b drop_last i seed i nshards i shard → *DataLoader {
-    ^ ( __dl_make # *DataSet 0 st . st n . st d . st l batch drop_last seed nshards shard )
+@ dl_stream_shard NdfStream st__h i batch b drop_last i seed i nshards i shard → DataLoader {
+    : *NdfStreamImpl st ( __NdfStream_ptr st__h )
+    ^ ( __dl_make @ DataSet { # s 0 } st__h . st n . st d . st l batch drop_last seed nshards shard )
 }
 
 // Reshuffle for the next epoch and rewind. The permutation is a pure
 // function of `seed` — idx is reset to the ordered shard range [base,
 // base+n) BEFORE the shuffle, so the same seed always yields the same
 // order regardless of the loader's prior state.
-@ dl_reset * DataLoader dl i seed → v {
+@ dl_reset DataLoader dl__h i seed → v {
+    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
     : ~ i k 0
     ~ < k . dl n { ( vec_set [i] . dl idx k + . dl base k ) = k + k 1 }
     ? > seed 0 { ( __data_shuffle . dl idx seed ) } {}
     = . dl pos 0
 }
 
-@ dl_num_batches * DataLoader dl → i {
+@ dl_num_batches DataLoader dl__h → i {
+    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
     : i b . dl batch
     ? <= b 0 { ^ 0 } {}
     ? . dl drop_last { ^ / . dl n b } {}
@@ -285,7 +353,8 @@ $ `stdlib/std/floatbits.nu`
 // Emit the next batch into bx (rows·d) and by (rows·l), overwriting them.
 // Returns the row count (0 at end-of-epoch; the last batch may be partial
 // unless drop_last).
-@ dl_next * DataLoader dl ( Vec f ) bx ( Vec f ) by → i {
+@ dl_next DataLoader dl__h ( Vec f ) bx ( Vec f ) by → i {
+    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
     : i rem - . dl n . dl pos
     ? <= rem 0 { = . dl last_rows 0 ^ 0 } {}
     : ~ i rows . dl batch
@@ -295,17 +364,20 @@ $ `stdlib/std/floatbits.nu`
     : b _cy ( vec_set_len [f] by 0 )
     : i d . dl d
     : i l . dl l
+    // The source, opened once per batch (only the one that is set is read).
+    : b inmem != 0 # i . . dl ds ctl
+    : *DataSetImpl ds ( __DataSet_ptr . dl ds )
+    : *NdfStreamImpl st ( __NdfStream_ptr . dl st )
     : ~ i k 0
     ~ < k rows {
         : i ex ( __data_gi . dl idx + . dl pos k )
-        ? != # i . dl ds 0 {
-            : *DataSet ds . dl ds
+        ? inmem {
             : ~ i c 0
             ~ < c d { ( vec_push [f] bx ( __data_gf . ds x + * ex d c ) ) = c + c 1 }
             = c 0
             ~ < c l { ( vec_push [f] by ( __data_gf . ds y + * ex l c ) ) = c + c 1 }
         } {
-            : b _r ( ndf_read_row . dl st ex bx by )
+            : b _r ( __ndf_read_row st ex bx by )
         }
         = k + k 1
     }
@@ -314,9 +386,10 @@ $ `stdlib/std/floatbits.nu`
     ^ rows
 }
 
-@ dl_last_rows * DataLoader dl → i { ^ . dl last_rows }
-
-@ dl_free sink * DataLoader dl → v {
-    ( vec_free [i] . dl idx )
-    ( nurl_free # s dl )
+@ dl_last_rows DataLoader dl__h → i {
+    : *DataLoaderImpl dl ( __DataLoader_ptr dl__h )
+    ^ . dl last_rows
 }
+
+// Let go of `dl` now rather than at the end of its owner's scope.
+@ dl_free sink DataLoader dl → v {}

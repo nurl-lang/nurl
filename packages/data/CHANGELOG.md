@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `DataSet`, `NdfStream` and `DataLoader` are handles instead of `*T`
+  pointers: every copy is the same object, and the last owner releases it —
+  an `NdfStream` closes its file. A loader holds a share of its dataset or
+  stream, so the source can no longer be freed out from under it.
+  `data_new` → `DataSet`, `dl_new` / `dl_new_shard` / `dl_stream` /
+  `dl_stream_shard` → `DataLoader`, `ndf_open` → `!NdfStream String`; every
+  function that took `* DataSet` / `* NdfStream` / `* DataLoader` takes the
+  handle.
+- `data_new` takes `x` and `y` as `sink` (it always took ownership).
+- `data_free`, `ndf_close` and `dl_free` are optional early releases.
+- `dl_next` opens its source once per batch (−0.5 % instructions on a
+  50 000 × 16 epoch benchmark).
+
 ## 0.1.1
 
 `data_free`, `dl_free` now take a **`sink`** parameter.

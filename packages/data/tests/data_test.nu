@@ -24,7 +24,7 @@ $ `src/data.nu`
 @ gi ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → x F → 0 } }
 
 // dataset of n examples, d=2 features [i, i*10], l=1 label [i] (the id).
-@ mkds i n → *DataSet {
+@ mkds i n → DataSet {
     : ( Vec f ) x ( vec_new [f] )
     : ( Vec f ) y ( vec_new [f] )
     : ~ i i2 0
@@ -38,7 +38,7 @@ $ `src/data.nu`
 
 // Run a whole epoch, appending each emitted example's id (y[0]) to `ids`.
 // Also asserts x[0] == id (feature/label stay aligned per row).
-@ epoch_ids * DataLoader dl ( Vec i ) ids * u okal → v {
+@ epoch_ids DataLoader dl ( Vec i ) ids * u okal → v {
     : ( Vec f ) bx ( vec_new [f] )
     : ( Vec f ) by ( vec_new [f] )
     : ~ i rows ( dl_next dl bx by )
@@ -52,7 +52,6 @@ $ `src/data.nu`
         }
         = rows ( dl_next dl bx by )
     }
-    ( vec_free [f] bx ) ( vec_free [f] by )
 }
 
 @ sorted_covers ( Vec i ) ids i n → b {
@@ -68,8 +67,7 @@ $ `src/data.nu`
         = k + k 1
     }
     = k 0
-    ~ < k n { ? == ( gi seen k ) 1 {} { ( vec_free [i] seen ) ^ F } = k + k 1 }
-    ( vec_free [i] seen )
+    ~ < k n { ? == ( gi seen k ) 1 {} { ^ F } = k + k 1 }
     ^ T
 }
 
@@ -82,12 +80,12 @@ $ `src/data.nu`
 
 @ main → i {
     : i N 10
-    : *DataSet ds ( mkds N )
+    : DataSet ds ( mkds N )
     : *u okal ( nurl_alloc 8 )
     ( nurl_poke okal 0 1 )
 
     // ── determinism + coverage (batch 3, no drop_last) ──
-    : *DataLoader dl ( dl_new ds 3 F 42 )
+    : DataLoader dl ( dl_new ds 3 F 42 )
     ( check == ( dl_num_batches dl ) 4 `num_batches = ceil(10/3) = 4` )
     : ( Vec i ) e1 ( vec_new [i] )
     ( epoch_ids dl e1 okal )
@@ -109,72 +107,59 @@ $ `src/data.nu`
     ( epoch_ids dl e3 okal )
     ( check == ( ids_eq e1 e3 ) F `different seed → different order` )
     ( check ( sorted_covers e3 N ) `reshuffled epoch still covers once` )
-    ( dl_free dl )
 
     // ── drop_last ──
-    : *DataLoader dl2 ( dl_new ds 3 T 42 )
+    : DataLoader dl2 ( dl_new ds 3 T 42 )
     ( check == ( dl_num_batches dl2 ) 3 `drop_last num_batches = floor(10/3) = 3` )
     : ( Vec i ) ed ( vec_new [i] )
     ( epoch_ids dl2 ed okal )
     ( check == ( vec_len [i] ed ) 9 `drop_last yields 9 rows (last partial dropped)` )
-    ( dl_free dl2 )
 
     // ── no shuffle (seed <= 0) → identity order ──
-    : *DataLoader dl3 ( dl_new ds 4 F 0 )
+    : DataLoader dl3 ( dl_new ds 4 F 0 )
     : ( Vec i ) en ( vec_new [i] )
     ( epoch_ids dl3 en okal )
     : ~ b ident T
     = k 0
     ~ < k N { ? == ( gi en k ) k {} { = ident F } = k + k 1 }
     ( check ident `seed<=0 → identity (no shuffle)` )
-    ( dl_free dl3 )
 
     // ── sharding: 3 shards partition [0,10) once ──
     : ( Vec i ) allsh ( vec_new [i] )
     : ~ i sh 0
     ~ < sh 3 {
-        : *DataLoader dls ( dl_new_shard ds 2 F 0 3 sh )
+        : DataLoader dls ( dl_new_shard ds 2 F 0 3 sh )
         : ( Vec i ) es ( vec_new [i] )
         ( epoch_ids dls es okal )
         : ~ i j 0
         ~ < j ( vec_len [i] es ) { ( vec_push [i] allsh ( gi es j ) ) = j + j 1 }
-        ( vec_free [i] es )
-        ( dl_free dls )
         = sh + sh 1
     }
     ( check ( sorted_covers allsh N ) `3 shards partition the dataset exactly once` )
-    ( vec_free [i] allsh )
 
     // ── streaming round-trip: streamed batches == in-memory batches ──
     : s ndfp `/tmp/nurl_data_test.ndf`
     : ~ b saveok F
-    ?? ( data_save_ndf ndfp ds ) { T _ → { = saveok T } F e → { ( string_free e ) } }
+    ?? ( data_save_ndf ndfp ds ) { T _ → { = saveok T } F _ → {} }
     ( check saveok `dataset saves to .ndf` )
     // in-memory order for seed 7
-    : *DataLoader dlm ( dl_new ds 3 F 7 )
+    : DataLoader dlm ( dl_new ds 3 F 7 )
     : ( Vec i ) mem ( vec_new [i] )
     ( epoch_ids dlm mem okal )
-    ( dl_free dlm )
     ?? ( ndf_open ndfp ) {
         T st → {
             ( check & & == ( ndf_n st ) N == ( ndf_d st ) 2 == ( ndf_l st ) 1 `.ndf header round-trips (n/d/l)` )
-            : *DataLoader dlst ( dl_stream st 3 F 7 )
+            : DataLoader dlst ( dl_stream st 3 F 7 )
             : ( Vec i ) strm ( vec_new [i] )
             ( epoch_ids dlst strm okal )
             ( check == ( nurl_peek okal 0 ) 1 `streamed rows stay feature/label-aligned` )
             ( check ( ids_eq mem strm ) `streamed batches == in-memory batches (same seed)` )
             ( check ( sorted_covers strm N ) `streamed epoch covers once` )
-            ( vec_free [i] strm )
-            ( dl_free dlst )
-            ( ndf_close st )
         }
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) = g_fail + g_fail 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) = g_fail + g_fail 1 }
     }
-    ( vec_free [i] mem )
 
-    ( vec_free [i] e1 ) ( vec_free [i] e2 ) ( vec_free [i] e3 ) ( vec_free [i] ed ) ( vec_free [i] en )
     ( nurl_free okal )
-    ( data_free ds )
     ( nurl_print `data_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0
