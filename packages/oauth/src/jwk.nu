@@ -11,14 +11,13 @@
 //
 //   ( jwks_parse text )              → ( Vec JwkKey )   (empty on garbage)
 //   ( jwks_from_json doc )           → ( Vec JwkKey )
-//   ( jwks_free ks )                 → v
 //   ( jwks_select ks kid alg )       → i   index, or -1
 //   ( jwk_ec_point jk )              → ( Vec u )  0x04‖X‖Y
 //   ( jwk_thumbprint jk )            → String     RFC 7638, base64url
 //
 // A `JwkKey` is a plain value struct: the strings and vectors are owned
 // by the vector that holds it, so `vec_data` + `. data k` hands out a
-// BORROW that must not be freed — only `jwks_free` frees.
+// BORROW; the keys go with the vector.
 //
 // Key selection follows RFC 7515 §4.1.4 and the OIDC core rules: a `kid`
 // in the token header must match a `kid` in the set; a key that declares
@@ -76,29 +75,12 @@ $ `stdlib/ext/json.nu`
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
-@ jwk_free sink JwkKey jk → v {
-    ( string_free . jk kty )
-    ( string_free . jk kid )
-    ( string_free . jk alg )
-    ( string_free . jk crv )
-    ( string_free . jk usage )
-    ( vec_free [u] . jk n )
-    ( vec_free [u] . jk e )
-    ( vec_free [u] . jk x )
-    ( vec_free [u] . jk y )
-    ( vec_free [u] . jk oct )
-}
-
-@ jwks_free sink ( Vec JwkKey ) ks → v {
-    ( vec_free_with [JwkKey] ks \ JwkKey jk → v { ( jwk_free jk ) } )
-}
-
 // Append one JWK object to `out`. Returns F (and appends nothing) when
 // the node is not an object with a `kty`.
 @ jwk_push_json ( Vec JwkKey ) out Json j → b {
     ? ! ( json_is_obj j ) { ^ F } {}
     : String kty ( __jwk_str j `kty` )
-    ? == 0 ( string_len kty ) { ( string_free kty ) ^ F } {}
+    ? == 0 ( string_len kty ) { ^ F } {}
     : JwkKey jk @ JwkKey {
         kty
         ( __jwk_str j `kid` )
@@ -142,7 +124,6 @@ $ `stdlib/ext/json.nu`
     ?? ( json_parse text ) {
         T doc → {
             : ( Vec JwkKey ) ks ( jwks_from_json doc )
-            ( json_free doc )
             ^ ks
         }
         F _ → { ^ ( vec_new [JwkKey] ) }
@@ -270,7 +251,6 @@ $ `stdlib/ext/json.nu`
     ( string_push_char out 34 )
     : String enc ( b64_url_encode_vec raw )
     ( string_push_str out ( string_data enc ) )
-    ( string_free enc )
     ( string_push_char out 34 )
 }
 
@@ -310,10 +290,7 @@ $ `stdlib/ext/json.nu`
     }
     ( string_push_char canon 125 )  // '}'
     : ( Vec u ) msg ( bytes_from_str ( string_data canon ) )
-    ( string_free canon )
     : ( Vec u ) h ( sha256_pure msg )
-    ( vec_free [u] msg )
     : String out ( b64_url_encode_vec h )
-    ( vec_free [u] h )
     ^ out
 }

@@ -13,10 +13,10 @@
 //   nonce  it answers the authorization request WE started (replay)
 //   sub    there is a subject at all — the user this token identifies
 //
-// `OidcPolicy` is the heap-owned statement of what this relying party
+// `OidcPolicy` is the statement (a handle) of what this relying party
 // will accept; `claims_check` applies it and names the first failure.
 //
-//   : *OidcPolicy pol ( oidc_policy_new issuer client_id )
+//   : OidcPolicy pol ( oidc_policy_new issuer client_id )
 //   ( oidc_policy_set_leeway pol 60 )
 //   ?? ( claims_check claims pol ( now_seconds ) ) {
 //       T e → ( nurl_eprintln ( claim_err_desc e ) )
@@ -31,6 +31,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── What can be wrong with a claim set ─────────────────────────────
 
@@ -105,7 +106,7 @@ $ `stdlib/ext/json.nu`
 
 // A claim that is either a string or an array of strings — `aud`, and
 // the shape most providers use for groups and roles. Always an owned
-// vector of owned Strings (free with claims_strings_free).
+// vector of owned Strings.
 @ claims_string_list Json c s key → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     ?? ( json_obj_get c key ) {
@@ -135,10 +136,6 @@ $ `stdlib/ext/json.nu`
     ^ out
 }
 
-@ claims_strings_free sink ( Vec String ) v → v {
-    ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
-}
-
 @ __cl_list_has ( Vec String ) list s want → b {
     : i n ( vec_len [String] list )
     : *String data ( vec_data [String] list )
@@ -154,7 +151,6 @@ $ `stdlib/ext/json.nu`
 @ claims_has_audience Json c s aud → b {
     : ( Vec String ) list ( claims_string_list c `aud` )
     : b found ( __cl_list_has list aud )
-    ( claims_strings_free list )
     ^ found
 }
 
@@ -162,20 +158,29 @@ $ `stdlib/ext/json.nu`
 @ claims_scopes Json c → ( Vec String ) {
     : String sc ( claims_str c `scope` )
     : ( Vec String ) out ( string_split sc ` ` )
-    ( string_free sc )
     ^ out
 }
 
 @ claims_has_scope Json c s scope → b {
     : ( Vec String ) list ( claims_scopes c )
     : b found ( __cl_list_has list scope )
-    ( claims_strings_free list )
     ^ found
+}
+
+// Replace a String field's text in place. A handle's state is reached
+// through a pointer, and a store through a pointer does not release the
+// String it overwrites; clearing and refilling the same buffer leaves
+// nothing behind (and reuses the allocation). Setting a field to its own
+// text is a no-op, not a clear.
+@ _oauth_set_str String dst s v → v {
+    ? == # i v # i ( string_data dst ) { ^ } {}
+    ( string_clear dst )
+    ( string_push_str dst v )
 }
 
 // ── Policy ─────────────────────────────────────────────────────────
 
-: OidcPolicy {
+: OidcPolicyImpl {
     String issuer  // expected `iss`; empty = do not check (never for OIDC)
     String audience  // our client id, expected in `aud`; empty = skip
     String nonce  // the nonce we sent with the authorization request
@@ -187,8 +192,22 @@ $ `stdlib/ext/json.nu`
     b allow_symmetric  // permit HS* (only with a configured shared secret)
 }
 
-@ oidc_policy_new s issuer s audience → *OidcPolicy {
-    : *OidcPolicy p # *OidcPolicy ( nurl_malloc Z OidcPolicy )
+// An OidcPolicy is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: OidcPolicy { s ctl }
+
+@ OidcPolicy_share OidcPolicy h → OidcPolicy { ^ @ OidcPolicy { # s ( rcbox_share # i . h ctl ) } }
+
+@ OidcPolicy_drop sink OidcPolicy h → v {
+    ( mem_forget h )
+    ( rcbox_release [OidcPolicyImpl] # i . h ctl )
+}
+
+@ _OidcPolicy_ptr OidcPolicy h → *OidcPolicyImpl { ^ ( rcbox_ptr [OidcPolicyImpl] # i . h ctl ) }
+
+@ oidc_policy_new s issuer s audience → OidcPolicy {
+    : i p__box ( rcbox_zero [OidcPolicyImpl] )
+    : *OidcPolicyImpl p ( rcbox_ptr [OidcPolicyImpl] p__box )
     = . p issuer ( string_from issuer )
     = . p audience ( string_from audience )
     = . p nonce ( string_new )
@@ -198,55 +217,65 @@ $ `stdlib/ext/json.nu`
     = . p require_sub T
     = . p require_exp T
     = . p allow_symmetric F
-    ^ p
+    ^ @ OidcPolicy { # s p__box }
 }
 
-@ oidc_policy_free sink * OidcPolicy p → v {
-    ( string_free . p issuer )
-    ( string_free . p audience )
-    ( string_free . p nonce )
-    ( string_free . p algs )
-    ( nurl_free # s p )
+// Let go of `p` now rather than at the end of its owner's scope.
+@ oidc_policy_free sink OidcPolicy p → v {}
+
+@ oidc_policy_set_issuer OidcPolicy p__h s issuer → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    ( _oauth_set_str . p issuer issuer )
 }
 
-@ oidc_policy_set_issuer * OidcPolicy p s issuer → v {
-    ( string_free . p issuer )
-    = . p issuer ( string_from issuer )
+@ oidc_policy_set_audience OidcPolicy p__h s audience → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    ( _oauth_set_str . p audience audience )
 }
 
-@ oidc_policy_set_audience * OidcPolicy p s audience → v {
-    ( string_free . p audience )
-    = . p audience ( string_from audience )
+@ oidc_policy_set_nonce OidcPolicy p__h s nonce → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    ( _oauth_set_str . p nonce nonce )
 }
 
-@ oidc_policy_set_nonce * OidcPolicy p s nonce → v {
-    ( string_free . p nonce )
-    = . p nonce ( string_from nonce )
+@ oidc_policy_set_algs OidcPolicy p__h s algs → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    ( _oauth_set_str . p algs algs )
 }
 
-@ oidc_policy_set_algs * OidcPolicy p s algs → v {
-    ( string_free . p algs )
-    = . p algs ( string_from algs )
+@ oidc_policy_set_leeway OidcPolicy p__h i secs → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    = . p leeway secs
 }
 
-@ oidc_policy_set_leeway * OidcPolicy p i secs → v { = . p leeway secs }
+@ oidc_policy_set_max_age OidcPolicy p__h i secs → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    = . p max_age secs
+}
 
-@ oidc_policy_set_max_age * OidcPolicy p i secs → v { = . p max_age secs }
+@ oidc_policy_require_sub OidcPolicy p__h b on → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    = . p require_sub on
+}
 
-@ oidc_policy_require_sub * OidcPolicy p b on → v { = . p require_sub on }
+@ oidc_policy_require_exp OidcPolicy p__h b on → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    = . p require_exp on
+}
 
-@ oidc_policy_require_exp * OidcPolicy p b on → v { = . p require_exp on }
-
-@ oidc_policy_allow_symmetric * OidcPolicy p b on → v { = . p allow_symmetric on }
+@ oidc_policy_allow_symmetric OidcPolicy p__h b on → v {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
+    = . p allow_symmetric on
+}
 
 // Is `alg` inside the policy's allowlist? An empty allowlist means "any
 // algorithm the verifier supports", which still excludes HS* unless the
 // caller deliberately allowed symmetric keys.
-@ oidc_policy_alg_allowed * OidcPolicy p s alg → b {
+@ oidc_policy_alg_allowed OidcPolicy p__h s alg → b {
+    : *OidcPolicyImpl p ( _OidcPolicy_ptr p__h )
     ? == 0 ( string_len . p algs ) { ^ T } {}
     : ( Vec String ) list ( string_split . p algs ` ` )
     : b found ( __cl_list_has list alg )
-    ( claims_strings_free list )
     ^ found
 }
 
@@ -255,7 +284,8 @@ $ `stdlib/ext/json.nu`
 // None = every check passed. `now` is epoch seconds — passed in, not
 // read here, so a test (or a caller with its own time source) is
 // deterministic.
-@ claims_check Json c * OidcPolicy pol i now → ?ClaimErr {
+@ claims_check Json c OidcPolicy pol__h i now → ?ClaimErr {
+    : *OidcPolicyImpl pol ( _OidcPolicy_ptr pol__h )
     ? ( json_is_obj c ) {} { ^ @ ?ClaimErr { T ClNotObject } }
     : i leeway . pol leeway
 
@@ -279,7 +309,6 @@ $ `stdlib/ext/json.nu`
     ? > ( string_len . pol issuer ) 0 {
         : String iss ( claims_str c `iss` )
         : b same ( string_eq iss . pol issuer )
-        ( string_free iss )
         ? same {} { ^ @ ?ClaimErr { T ClIssuer } }
     } {}
 
@@ -290,7 +319,6 @@ $ `stdlib/ext/json.nu`
         // OIDC core §3.1.3.7: when azp is present it must be our client.
         : String azp ( claims_str c `azp` )
         : b azp_bad & > ( string_len azp ) 0 == 0 ( nurl_str_eq ( string_data azp ) want )
-        ( string_free azp )
         ? azp_bad { ^ @ ?ClaimErr { T ClAuthorizedParty } } {}
     } {}
 
@@ -298,7 +326,6 @@ $ `stdlib/ext/json.nu`
     ? > ( string_len . pol nonce ) 0 {
         : String nonce ( claims_str c `nonce` )
         : b same ( string_eq nonce . pol nonce )
-        ( string_free nonce )
         ? same {} { ^ @ ?ClaimErr { T ClNonce } }
     } {}
 
@@ -306,7 +333,6 @@ $ `stdlib/ext/json.nu`
     ? . pol require_sub {
         : String sub ( claims_str c `sub` )
         : b empty == 0 ( string_len sub )
-        ( string_free sub )
         ? empty { ^ @ ?ClaimErr { T ClNoSubject } } {}
     } {}
 
@@ -321,8 +347,8 @@ $ `stdlib/ext/json.nu`
     ^ @ ?ClaimErr { F }
 }
 
-@ claims_check_now Json c * OidcPolicy pol → ?ClaimErr {
-    ^ ( claims_check c pol ( now_seconds ) )
+@ claims_check_now Json c OidcPolicy pol__h → ?ClaimErr {
+    ^ ( claims_check c pol__h ( now_seconds ) )
 }
 
 // ── The identity ───────────────────────────────────────────────────
@@ -340,7 +366,7 @@ $ `stdlib/ext/json.nu`
     Json claims  // everything else the provider said, owned
 }
 
-// Takes OWNERSHIP of `claims`; freed by oidc_identity_free.
+// Takes OWNERSHIP of `claims`, which goes with the identity.
 @ oidc_identity_from_claims Json claims → OidcIdentity {
     ^ @ OidcIdentity {
         ( claims_str claims `sub` )
@@ -356,15 +382,8 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ oidc_identity_free sink OidcIdentity id → v {
-    ( string_free . id subject )
-    ( string_free . id issuer )
-    ( string_free . id email )
-    ( string_free . id name )
-    ( string_free . id username )
-    ( string_free . id picture )
-    ( json_free . id claims )
-}
+// Let go of `id` now rather than at the end of its owner's scope.
+@ oidc_identity_free sink OidcIdentity id → v {}
 
 // Any other claim, by name — the provider-specific half of the profile.
 @ oidc_identity_claim OidcIdentity id s key → String {

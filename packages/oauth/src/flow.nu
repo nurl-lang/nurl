@@ -39,10 +39,11 @@ $ `errors.nu`
 $ `claims.nu`
 $ `pkce.nu`
 $ `provider.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Client configuration ───────────────────────────────────────────
 
-: OauthConfig {
+: OauthConfigImpl {
     String client_id
     String client_secret  // empty = a public client (PKCE only)
     String redirect_uri
@@ -52,8 +53,22 @@ $ `provider.nu`
     b basic_auth  // client_secret_basic instead of client_secret_post
 }
 
-@ oauth_config_new s client_id s redirect_uri s scope → *OauthConfig {
-    : *OauthConfig c # *OauthConfig ( nurl_malloc Z OauthConfig )
+// An OauthConfig is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: OauthConfig { s ctl }
+
+@ OauthConfig_share OauthConfig h → OauthConfig { ^ @ OauthConfig { # s ( rcbox_share # i . h ctl ) } }
+
+@ OauthConfig_drop sink OauthConfig h → v {
+    ( mem_forget h )
+    ( rcbox_release [OauthConfigImpl] # i . h ctl )
+}
+
+@ __OauthConfig_ptr OauthConfig h → *OauthConfigImpl { ^ ( rcbox_ptr [OauthConfigImpl] # i . h ctl ) }
+
+@ oauth_config_new s client_id s redirect_uri s scope → OauthConfig {
+    : i c__box ( rcbox_zero [OauthConfigImpl] )
+    : *OauthConfigImpl c ( rcbox_ptr [OauthConfigImpl] c__box )
     = . c client_id ( string_from client_id )
     = . c client_secret ( string_new )
     = . c redirect_uri ( string_from redirect_uri )
@@ -61,35 +76,28 @@ $ `provider.nu`
     = . c audience ( string_new )
     = . c prompt ( string_new )
     = . c basic_auth F
-    ^ c
+    ^ @ OauthConfig { # s c__box }
 }
 
-@ oauth_config_free sink * OauthConfig c → v {
-    ( string_free . c client_id )
-    ( string_free . c client_secret )
-    ( string_free . c redirect_uri )
-    ( string_free . c scope )
-    ( string_free . c audience )
-    ( string_free . c prompt )
-    ( nurl_free # s c )
+@ oauth_config_set_secret OauthConfig c__h s secret → v {
+    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
+    ( _oauth_set_str . c client_secret secret )
 }
 
-@ oauth_config_set_secret * OauthConfig c s secret → v {
-    ( string_free . c client_secret )
-    = . c client_secret ( string_from secret )
+@ oauth_config_set_audience OauthConfig c__h s audience → v {
+    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
+    ( _oauth_set_str . c audience audience )
 }
 
-@ oauth_config_set_audience * OauthConfig c s audience → v {
-    ( string_free . c audience )
-    = . c audience ( string_from audience )
+@ oauth_config_set_prompt OauthConfig c__h s prompt → v {
+    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
+    ( _oauth_set_str . c prompt prompt )
 }
 
-@ oauth_config_set_prompt * OauthConfig c s prompt → v {
-    ( string_free . c prompt )
-    = . c prompt ( string_from prompt )
+@ oauth_config_set_basic_auth OauthConfig c__h b on → v {
+    : *OauthConfigImpl c ( __OauthConfig_ptr c__h )
+    = . c basic_auth on
 }
-
-@ oauth_config_set_basic_auth * OauthConfig c b on → v { = . c basic_auth on }
 
 // ── Form / query encoding ──────────────────────────────────────────
 
@@ -104,8 +112,6 @@ $ `provider.nu`
         ( string_push_str q ( string_data ek ) )
         ( string_push_char q 61 )  // '='
         ( string_push_str q ( string_data ev ) )
-        ( string_free ek )
-        ( string_free ev )
     } {}
 }
 
@@ -114,7 +120,9 @@ $ `provider.nu`
 // The URL to send the user's browser to. `state` and `nonce` are the
 // values the caller minted (pkce.nu) and must remember: state is
 // compared on the way back, nonce is compared inside the ID token.
-@ oauth_authorize_url * OidcProvider p * OauthConfig cfg s state s nonce Pkce pk → String {
+@ oauth_authorize_url OidcProvider p__h OauthConfig cfg__h s state s nonce Pkce pk → String {
+    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String q ( string_with_cap 512 )
     ( __oaf_kv q `response_type` `code` )
     ( __oaf_kv q `client_id` ( string_data . cfg client_id ) )
@@ -134,7 +142,6 @@ $ `provider.nu`
         ( string_push_char out 63 )  // '?'
     }
     ( string_push_str out ( string_data q ) )
-    ( string_free q )
     ^ out
 }
 
@@ -145,13 +152,6 @@ $ `provider.nu`
     String state
     String error
     String error_description
-}
-
-@ callback_params_free sink CallbackParams cb → v {
-    ( string_free . cb code )
-    ( string_free . cb state )
-    ( string_free . cb error )
-    ( string_free . cb error_description )
 }
 
 @ __oaf_param ( Vec UrlParam ) ps s key → String {
@@ -177,7 +177,6 @@ $ `provider.nu`
         ( __oaf_param ps `error` )
         ( __oaf_param ps `error_description` )
     }
-    ( url_params_free ps )
     ^ cb
 }
 
@@ -189,21 +188,17 @@ $ `provider.nu`
     // The provider said no (`error=access_denied`, …). Read the detail
     // from `oauth_callback_parse` when you want to show it.
     ? > ( string_len . cb error ) 0 {
-        ( callback_params_free cb )
         ^ @ !String OauthErr { F OaServer }
     } {}
     ? > ( nurl_str_len expected_state ) 0 {
         ? == 1 ( nurl_str_eq ( string_data . cb state ) expected_state ) {} {
-            ( callback_params_free cb )
             ^ @ !String OauthErr { F OaState }
         }
     } {}
     ? == 0 ( string_len . cb code ) {
-        ( callback_params_free cb )
         ^ @ !String OauthErr { F OaBadResponse }
     } {}
     : String code ( string_from ( string_data . cb code ) )
-    ( callback_params_free cb )
     ^ @ !String OauthErr { T code }
 }
 
@@ -218,14 +213,6 @@ $ `provider.nu`
     String scope  // what the provider actually granted
     i expires_in  // seconds, −1 when the provider said nothing
     i obtained_at  // our clock when the response arrived
-}
-
-@ token_set_free sink TokenSet t → v {
-    ( string_free . t access_token )
-    ( string_free . t id_token )
-    ( string_free . t refresh_token )
-    ( string_free . t token_type )
-    ( string_free . t scope )
 }
 
 @ token_set_access_token TokenSet t → s { ^ ( string_data . t access_token ) }
@@ -268,7 +255,7 @@ $ `provider.nu`
 
 // Add whichever client authentication the config asks for: the secret in
 // the body, or an Authorization header the caller then sends.
-@ __oaf_auth_header * OauthConfig cfg → String {
+@ __oaf_auth_header * OauthConfigImpl cfg → String {
     : String out ( string_new )
     ? & . cfg basic_auth > ( string_len . cfg client_secret ) 0 {
         : String ek ( url_percent_encode ( string_data . cfg client_id ) )
@@ -280,14 +267,12 @@ $ `provider.nu`
         : String enc ( b64_encode ( string_data pair ) )
         ( string_push_str out `Basic ` )
         ( string_push_str out ( string_data enc ) )
-        ( string_free ek ) ( string_free es )
-        ( string_free pair ) ( string_free enc )
     } {}
     ^ out
 }
 
 // POST a form to the token endpoint and read the token response.
-@ __oaf_token_request * OidcProvider p * OauthConfig cfg String form → !TokenSet OauthErr {
+@ __oaf_token_request * OidcProviderImpl p * OauthConfigImpl cfg String form → !TokenSet OauthErr {
     ? == 0 ( string_len . p token_endpoint ) {
         ( _oidc_err p `no token_endpoint — run discovery or set one` )
         ^ @ !TokenSet OauthErr { F OaConfig }
@@ -299,15 +284,12 @@ $ `provider.nu`
     ? > ( string_len auth ) 0 {
         ( vec_push [Header] hs ( header_new `authorization` ( string_data auth ) ) )
     } {}
-    ( string_free auth )
     : ( Vec u ) body ( bytes_from_str ( string_data form ) )
     : !HttpResponse HttpClientErr rr ( http_client_request . p http `POST` ( string_data . p token_endpoint ) hs body )
-    ( vec_free [u] body )
     ?? rr {
         T r → {
             : i status ( http_client_status r )
             : !Json JsonError pj ( json_parse_bytes . r body )
-            ( http_response_free r )
             ?? pj {
                 T j → {
                     // An OAuth error response is JSON too (RFC 6749 §5.2),
@@ -323,20 +305,14 @@ $ `provider.nu`
                             ( string_push_str msg ( string_data desc ) )
                         } {}
                         ( _oidc_err p ( string_data msg ) )
-                        ( string_free msg ) ( string_free desc ) ( string_free oerr )
-                        ( json_free j )
                         ^ @ !TokenSet OauthErr { F OaServer }
                     } {}
-                    ( string_free oerr )
                     ? & >= status 200 < status 300 {} {
                         ( _oidc_err_status p `token endpoint` status )
-                        ( json_free j )
                         ^ @ !TokenSet OauthErr { F OaHttpStatus }
                     }
                     : TokenSet ts ( __oaf_token_set_from_json j )
-                    ( json_free j )
                     ? == 0 ( string_len . ts access_token ) {
-                        ( token_set_free ts )
                         ( _oidc_err p `token response carries no access_token` )
                         ^ @ !TokenSet OauthErr { F OaBadResponse }
                     } {}
@@ -357,7 +333,9 @@ $ `provider.nu`
 
 // Exchange the authorization code for tokens. `verifier` is the PKCE
 // secret whose challenge went out with the authorization request.
-@ oauth_exchange_code * OidcProvider p * OauthConfig cfg s code s verifier → !TokenSet OauthErr {
+@ oauth_exchange_code OidcProvider p__h OauthConfig cfg__h s code s verifier → !TokenSet OauthErr {
+    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String form ( string_with_cap 512 )
     ( __oaf_kv form `grant_type` `authorization_code` )
     ( __oaf_kv form `code` code )
@@ -368,12 +346,13 @@ $ `provider.nu`
         ( __oaf_kv form `client_secret` ( string_data . cfg client_secret ) )
     }
     : !TokenSet OauthErr r ( __oaf_token_request p cfg form )
-    ( string_free form )
     ^ r
 }
 
 // A new access token from a refresh token — no user interaction.
-@ oauth_refresh * OidcProvider p * OauthConfig cfg s refresh_token → !TokenSet OauthErr {
+@ oauth_refresh OidcProvider p__h OauthConfig cfg__h s refresh_token → !TokenSet OauthErr {
+    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String form ( string_with_cap 512 )
     ( __oaf_kv form `grant_type` `refresh_token` )
     ( __oaf_kv form `refresh_token` refresh_token )
@@ -383,13 +362,14 @@ $ `provider.nu`
         ( __oaf_kv form `client_secret` ( string_data . cfg client_secret ) )
     }
     : !TokenSet OauthErr r ( __oaf_token_request p cfg form )
-    ( string_free form )
     ^ r
 }
 
 // The machine grant: this service authenticating as itself, with no user
 // behind it (RFC 6749 §4.4).
-@ oauth_client_credentials * OidcProvider p * OauthConfig cfg → !TokenSet OauthErr {
+@ oauth_client_credentials OidcProvider p__h OauthConfig cfg__h → !TokenSet OauthErr {
+    : *OauthConfigImpl cfg ( __OauthConfig_ptr cfg__h )
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String form ( string_with_cap 512 )
     ( __oaf_kv form `grant_type` `client_credentials` )
     ( __oaf_kv form `client_id` ( string_data . cfg client_id ) )
@@ -399,7 +379,6 @@ $ `provider.nu`
         ( __oaf_kv form `client_secret` ( string_data . cfg client_secret ) )
     }
     : !TokenSet OauthErr r ( __oaf_token_request p cfg form )
-    ( string_free form )
     ^ r
 }
 
@@ -407,7 +386,8 @@ $ `provider.nu`
 
 // The profile as the provider will state it right now, fetched with the
 // access token (OIDC core §5.3). Returns the owned claims object.
-@ oauth_userinfo * OidcProvider p s access_token → !Json OauthErr {
+@ oauth_userinfo OidcProvider p__h s access_token → !Json OauthErr {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ? == 0 ( string_len . p userinfo_endpoint ) {
         ( _oidc_err p `no userinfo_endpoint — run discovery or set one` )
         ^ @ !Json OauthErr { F OaConfig }
@@ -418,20 +398,16 @@ $ `provider.nu`
     : ( Vec Header ) hs ( vec_new [Header] )
     ( vec_push [Header] hs ( header_new `authorization` ( string_data auth ) ) )
     ( vec_push [Header] hs ( header_new `accept` `application/json` ) )
-    ( string_free auth )
     : ( Vec u ) body ( vec_new [u] )
     : !HttpResponse HttpClientErr rr ( http_client_request . p http `GET` ( string_data . p userinfo_endpoint ) hs body )
-    ( vec_free [u] body )
     ?? rr {
         T r → {
             : i status ( http_client_status r )
             ? & >= status 200 < status 300 {} {
                 ( _oidc_err_status p `userinfo` status )
-                ( http_response_free r )
                 ^ @ !Json OauthErr { F OaHttpStatus }
             }
             : !Json JsonError pj ( json_parse_bytes . r body )
-            ( http_response_free r )
             ?? pj {
                 T j → { ^ @ !Json OauthErr { T j } }
                 F _ → {
@@ -451,16 +427,15 @@ $ `provider.nu`
 // from a signed token — for a provider whose access tokens are opaque.
 // The `sub` MUST match the ID token's when both are in play (OIDC core
 // §5.3.2); with no ID token in hand, pass "" to skip that.
-@ oauth_userinfo_identity * OidcProvider p s access_token s expect_sub → !OidcIdentity OauthErr {
-    ?? ( oauth_userinfo p access_token ) {
+@ oauth_userinfo_identity OidcProvider p__h s access_token s expect_sub → !OidcIdentity OauthErr {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ?? ( oauth_userinfo p__h access_token ) {
         T j → {
             ? > ( nurl_str_len expect_sub ) 0 {
                 : String sub ( claims_str j `sub` )
                 : b same == 1 ( nurl_str_eq ( string_data sub ) expect_sub )
-                ( string_free sub )
                 ? same {} {
                     ( _oidc_err p `userinfo sub does not match the ID token` )
-                    ( json_free j )
                     ^ @ !OidcIdentity OauthErr { F OaClaims }
                 }
             } {}

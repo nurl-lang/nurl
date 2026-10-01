@@ -93,15 +93,12 @@ $ `jwk.nu`
 @ __jws_json_seg s token i a i b → !Json OauthErr {
     : String seg ( __jws_slice token a b )
     : !( Vec u ) ParseErr dec ( b64_url_decode_vec ( string_data seg ) )
-    ( string_free seg )
     ?? dec {
         T raw → {
             : !Json JsonError pj ( json_parse_bytes raw )
-            ( vec_free [u] raw )
             ?? pj {
                 T j → {
                     ? ( json_is_obj j ) {} {
-                        ( json_free j )
                         ^ @ !Json OauthErr { F OaBadToken }
                     }
                     ^ @ !Json OauthErr { T j }
@@ -116,23 +113,19 @@ $ `jwk.nu`
 @ jws_header_json s token → !Json OauthErr {
     : ( Vec i ) slots ( vec_new [i] )
     ? ( __jws_dots token slots ) {} {
-        ( vec_free [i] slots )
         ^ @ !Json OauthErr { F OaBadToken }
     }
     : i d0 ?? ( vec_get [i] slots 0 ) { T v → v F _ → 0 }
-    ( vec_free [i] slots )
     ^ ( __jws_json_seg token 0 d0 )
 }
 
 @ jws_payload_unverified s token → !Json OauthErr {
     : ( Vec i ) slots ( vec_new [i] )
     ? ( __jws_dots token slots ) {} {
-        ( vec_free [i] slots )
         ^ @ !Json OauthErr { F OaBadToken }
     }
     : i d0 ?? ( vec_get [i] slots 0 ) { T v → v F _ → 0 }
     : i d1 ?? ( vec_get [i] slots 1 ) { T v → v F _ → 0 }
-    ( vec_free [i] slots )
     ^ ( __jws_json_seg token + d0 1 d1 )
 }
 
@@ -154,7 +147,6 @@ $ `jwk.nu`
     ?? ( jws_header_json token ) {
         T h → {
             : String out ( _jws_json_str h key )
-            ( json_free h )
             ^ out
         }
         F _ → { ^ ( string_new ) }
@@ -206,7 +198,6 @@ $ `jwk.nu`
     } {}
     : ( Vec u ) di ( __jws_rsa_di alg )
     : b ok ( rsa_pkcs1_verify . jk n . jk e sig di digest )
-    ( vec_free [u] di )
     ^ ok
 }
 
@@ -214,7 +205,7 @@ $ `jwk.nu`
     : i width ? == 1 ( nurl_str_eq alg `ES384` ) 48 32
     ? != ( vec_len [u] sig ) * 2 width { ^ F } {}
     : ( Vec u ) point ( jwk_ec_point jk )
-    ? == 0 ( vec_len [u] point ) { ( vec_free [u] point ) ^ F } {}
+    ? == 0 ( vec_len [u] point ) { ^ F } {}
     : ( Vec u ) r ( bytes_slice sig 0 width )
     : ( Vec u ) s ( bytes_slice sig width * 2 width )
     : ~ b ok F
@@ -223,9 +214,6 @@ $ `jwk.nu`
     } {
         = ok ( ecdsa_p256_verify point r s digest )
     }
-    ( vec_free [u] point )
-    ( vec_free [u] r )
-    ( vec_free [u] s )
     ^ ok
 }
 
@@ -236,12 +224,10 @@ $ `jwk.nu`
 @ jws_verify_with_key JwkKey jk s token → !Json OauthErr {
     : ( Vec i ) slots ( vec_new [i] )
     ? ( __jws_dots token slots ) {} {
-        ( vec_free [i] slots )
         ^ @ !Json OauthErr { F OaBadToken }
     }
     : i d0 ?? ( vec_get [i] slots 0 ) { T v → v F _ → 0 }
     : i d1 ?? ( vec_get [i] slots 1 ) { T v → v F _ → 0 }
-    ( vec_free [i] slots )
 
     // 1. header → alg
     : !Json OauthErr hj ( __jws_json_seg token 0 d0 )
@@ -249,27 +235,22 @@ $ `jwk.nu`
     : ~ b crit F
     ?? hj {
         T h → {
-            ( string_free alg )
             = alg ( _jws_json_str h `alg` )
             // RFC 7515 §4.1.11: a `crit` member names extensions the
             // verifier MUST understand. We implement none, so any `crit`
             // at all is a refusal — never a silent ignore.
             ? ( json_obj_has h `crit` ) { = crit T } {}
-            ( json_free h )
         }
-        F e → { ( string_free alg ) ^ @ !Json OauthErr { F # OauthErr e } }
+        F e → { ^ @ !Json OauthErr { F # OauthErr e } }
     }
     ? crit {
-        ( string_free alg )
         ^ @ !Json OauthErr { F OaAlgNotAllowed }
     } {}
     : s algp ( string_data alg )
     ? ( jws_alg_supported algp ) {} {
-        ( string_free alg )
         ^ @ !Json OauthErr { F OaAlgNotAllowed }
     }
     ? ( jwk_matches jk `` algp ) {} {
-        ( string_free alg )
         ^ @ !Json OauthErr { F OaNoKey }
     }
 
@@ -277,7 +258,6 @@ $ `jwk.nu`
     : String signing ( __jws_slice token 0 d1 )
     : String sig64 ( __jws_slice token + d1 1 ( nurl_str_len token ) )
     : !( Vec u ) ParseErr sd ( b64_url_decode_vec ( string_data sig64 ) )
-    ( string_free sig64 )
     : ~ b ok F
     ?? sd {
         T sig → {
@@ -286,7 +266,6 @@ $ `jwk.nu`
                 ? > ( vec_len [u] . jk oct ) 0 {
                     : ( Vec u ) mac ( hmac_sha256_pure . jk oct msg )
                     = ok ( constant_time_eq_vec mac sig )
-                    ( vec_free [u] mac )
                 } {}
             } {
                 : ( Vec u ) digest ( __jws_digest algp msg )
@@ -301,15 +280,10 @@ $ `jwk.nu`
                         = ok ( __jws_check_rsa jk algp sig digest )
                     }
                 }
-                ( vec_free [u] digest )
             }
-            ( vec_free [u] msg )
-            ( vec_free [u] sig )
         }
         F _ → {}
     }
-    ( string_free signing )
-    ( string_free alg )
     ? ok {} { ^ @ !Json OauthErr { F OaBadSignature } }
 
     // 3. claims
