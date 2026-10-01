@@ -57,16 +57,16 @@ $ `stdlib/std/quic_packet.nu`
     : ( Vec u ) dcid ( hx `8394c8f03e515708` )
     : ( Vec u ) initial ( quic_initial_secret dcid )
     = fails + fails ( check `initial_secret` initial `7db5df06e7a69e432496adedb00851923595221596ae2ae9fb8115c1e9ed0a44` )
-    : *QuicKeys ck ( quic_initial_keys dcid T )
-    = fails + fails ( check `client_initial_secret` . ck secret `c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea` )
-    = fails + fails ( check `client_key` . ck key `1f369613dd76d5467730efcbe3b1a22d` )
-    = fails + fails ( check `client_iv` . ck iv `fa044b2f42a3fd3b46fb255c` )
-    = fails + fails ( check `client_hp` . ck hp `9f50449e04a0e810283a1e9933adedd2` )
-    : *QuicKeys sk ( quic_initial_keys dcid F )
-    = fails + fails ( check `server_initial_secret` . sk secret `3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b` )
-    = fails + fails ( check `server_key` . sk key `cf3a5331653c364c88f0f379b6067e37` )
-    = fails + fails ( check `server_iv` . sk iv `0ac1493ca1905853b0bba03e` )
-    = fails + fails ( check `server_hp` . sk hp `c206b8d9b9f0f37644430b490eeaa314` )
+    : QuicKeys ck ( quic_initial_keys dcid T )
+    = fails + fails ( check `client_initial_secret` ( quic_keys_secret ck ) `c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea` )
+    = fails + fails ( check `client_key` ( quic_keys_key ck ) `1f369613dd76d5467730efcbe3b1a22d` )
+    = fails + fails ( check `client_iv` ( quic_keys_iv ck ) `fa044b2f42a3fd3b46fb255c` )
+    = fails + fails ( check `client_hp` ( quic_keys_hp ck ) `9f50449e04a0e810283a1e9933adedd2` )
+    : QuicKeys sk ( quic_initial_keys dcid F )
+    = fails + fails ( check `server_initial_secret` ( quic_keys_secret sk ) `3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b` )
+    = fails + fails ( check `server_key` ( quic_keys_key sk ) `cf3a5331653c364c88f0f379b6067e37` )
+    = fails + fails ( check `server_iv` ( quic_keys_iv sk ) `0ac1493ca1905853b0bba03e` )
+    = fails + fails ( check `server_hp` ( quic_keys_hp sk ) `c206b8d9b9f0f37644430b490eeaa314` )
 
     // ── A.2 client Initial: protect ──────────────────────────────
     : ( Vec u ) payload ( client_initial_payload )
@@ -82,8 +82,8 @@ $ `stdlib/std/quic_packet.nu`
     = fails + fails ( check `client_packet_tail` cpkt_tail `e221af44860018ab0856972e194cd934` )
 
     // ── A.2 client Initial: unprotect (server side) ──────────────
-    : *QuicHdr ph ( quic_hdr_parse cpkt 0 0 )
-    ? == # i ph 0 { ( nurl_print `client_parse: FAIL (null)\n` ) = fails + fails 1 } {
+    : QuicHdr ph ( quic_hdr_parse cpkt 0 0 )
+    ? < . ph ptype 0 { ( nurl_print `client_parse: FAIL (refused)\n` ) = fails + fails 1 } {
         = fails + fails ( check_int `client_parse_type` . ph ptype 0 )
         = fails + fails ( check_int `client_parse_version` . ph version 1 )
         = fails + fails ( check_int `client_parse_dcid_len` . ph dcid_len 8 )
@@ -92,7 +92,7 @@ $ `stdlib/std/quic_packet.nu`
         = fails + fails ( check_int `client_parse_end` . ph end 1200 )
         : ( Vec u ) pdcid ( quic_hdr_dcid ph cpkt )
         = fails + fails ( check `client_parse_dcid` pdcid `8394c8f03e515708` )
-        : *QuicKeys srk ( quic_initial_keys pdcid T )
+        : QuicKeys srk ( quic_initial_keys pdcid T )
         : i pn_len ( quic_hp_remove srk cpkt . ph pn_off )
         = fails + fails ( check_int `client_unprotect_pn_len` pn_len 4 )
         : i pn ( quic_pn_decode ( quic_pn_read cpkt . ph pn_off pn_len ) pn_len -1 )
@@ -114,7 +114,6 @@ $ `stdlib/std/quic_packet.nu`
         ( vec_free [u] hdr )
         ( quic_keys_free srk )
         ( vec_free [u] pdcid )
-        ( quic_hdr_free ph )
     }
 
     // ── A.3 server Initial ───────────────────────────────────────
@@ -131,24 +130,23 @@ $ `stdlib/std/quic_packet.nu`
     : ( Vec u ) rtoken ( hx `746f6b656e` )
     : ( Vec u ) retry ( quic_retry_build rdcid rscid dcid rtoken )
     = fails + fails ( check `retry_packet` retry `ff000000010008f067a5502a4262b5746f6b656e04a265ba2eff4d829058fb3f0f2496ba` )
-    : *QuicHdr rh ( quic_hdr_parse retry 0 0 )
-    ? == # i rh 0 { ( nurl_print `retry_parse: FAIL (null)\n` ) = fails + fails 1 } {
+    : QuicHdr rh ( quic_hdr_parse retry 0 0 )
+    ? < . rh ptype 0 { ( nurl_print `retry_parse: FAIL (refused)\n` ) = fails + fails 1 } {
         = fails + fails ( check_int `retry_parse_type` . rh ptype 3 )
         : ( Vec u ) tok ( quic_hdr_token rh retry )
         = fails + fails ( check `retry_parse_token` tok `746f6b656e` )
         ( vec_free [u] tok )
-        ( quic_hdr_free rh )
     }
 
     // ── A.5 ChaCha20-Poly1305 short header ───────────────────────
     : ( Vec u ) csecret ( hx `9ac312a7f877468ebe69422748ad00a15443f18203a07d6060f688f30f21632b` )
-    : *QuicKeys cc ( quic_keys_derive 2 csecret )
-    = fails + fails ( check `chacha_key` . cc key `c6d98ff3441c3fe1b2182094f69caa2ed4b716b65488960a7a984979fb23e1c8` )
-    = fails + fails ( check `chacha_iv` . cc iv `e0459b3474bdd0e44a41c144` )
-    = fails + fails ( check `chacha_hp` . cc hp `25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4` )
-    : *QuicKeys ccu ( quic_keys_update cc )
-    = fails + fails ( check `chacha_ku` . ccu secret `1223504755036d556342ee9361d253421a826c9ecdf3c7148684b36b714881f9` )
-    : ( Vec u ) nonce ( quic_nonce . cc iv 654360564 )
+    : QuicKeys cc ( quic_keys_derive 2 csecret )
+    = fails + fails ( check `chacha_key` ( quic_keys_key cc ) `c6d98ff3441c3fe1b2182094f69caa2ed4b716b65488960a7a984979fb23e1c8` )
+    = fails + fails ( check `chacha_iv` ( quic_keys_iv cc ) `e0459b3474bdd0e44a41c144` )
+    = fails + fails ( check `chacha_hp` ( quic_keys_hp cc ) `25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4` )
+    : QuicKeys ccu ( quic_keys_update cc )
+    = fails + fails ( check `chacha_ku` ( quic_keys_secret ccu ) `1223504755036d556342ee9361d253421a826c9ecdf3c7148684b36b714881f9` )
+    : ( Vec u ) nonce ( quic_nonce ( quic_keys_iv cc ) 654360564 )
     = fails + fails ( check `chacha_nonce` nonce `e0459b3474bdd0e46d417eb0` )
     : ( Vec u ) shortHdr ( quic_short_hdr_build empty 0 654360564 3 )
     = fails + fails ( check `chacha_header` shortHdr `4200bff4` )
@@ -156,8 +154,8 @@ $ `stdlib/std/quic_packet.nu`
     : ( Vec u ) spk ( quic_packet_protect cc shortHdr 654360564 3 ping )
     = fails + fails ( check `chacha_packet` spk `4cfe4189655e5cd55c41f69080575d7999c25a5bfb` )
     // and back
-    : *QuicHdr sh ( quic_hdr_parse spk 0 0 )
-    ? == # i sh 0 { ( nurl_print `chacha_parse: FAIL (null)\n` ) = fails + fails 1 } {
+    : QuicHdr sh ( quic_hdr_parse spk 0 0 )
+    ? < . sh ptype 0 { ( nurl_print `chacha_parse: FAIL (refused)\n` ) = fails + fails 1 } {
         = fails + fails ( check_int `chacha_parse_type` . sh ptype 4 )
         : i pl ( quic_hp_remove cc spk . sh pn_off )
         = fails + fails ( check_int `chacha_unprotect_pn_len` pl 3 )
@@ -173,7 +171,6 @@ $ `stdlib/std/quic_packet.nu`
         }
         ( vec_free [u] b2 )
         ( vec_free [u] h2 )
-        ( quic_hdr_free sh )
     }
 
     // ── varint + packet number codec (RFC 9000 §16 / App. A) ─────

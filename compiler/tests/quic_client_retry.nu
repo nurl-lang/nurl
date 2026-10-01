@@ -61,11 +61,11 @@ $ `stdlib/std/quic_conn.nu`
 
 // A Version Negotiation packet for the client's first Initial.
 @ vn_for ( Vec u ) initial ( Vec i ) versions → ( Vec u ) {
-    : *QuicHdr h ( quic_hdr_parse initial 0 8 )
+    : QuicHdr h ( quic_hdr_parse initial 0 8 )
     : ( Vec u ) dcid ( quic_hdr_dcid h initial )
     : ( Vec u ) scid ( quic_hdr_scid h initial )
     : ( Vec u ) vn ( quic_vn_build scid dcid versions )
-    ( vec_free [u] scid ) ( vec_free [u] dcid ) ( quic_hdr_free h )
+    ( vec_free [u] scid ) ( vec_free [u] dcid )
     ^ vn
 }
 
@@ -82,13 +82,12 @@ $ `stdlib/std/quic_conn.nu`
     : ( Vec u ) d1 ( vec_new [u] )
     ( label_int `initial_datagrams` ( drain c 1000 d1 ) )
     ( label_int `initial_len` ( vec_len [u] d1 ) )
-    : *QuicHdr h1 ( quic_hdr_parse d1 0 8 )
+    : QuicHdr h1 ( quic_hdr_parse d1 0 8 )
     ( label `initial_type` ? == . h1 ptype 0 `Initial` `OTHER` )
     ( label_int `initial_dcid_len` . h1 dcid_len )
     ( label_int `initial_token_len` . h1 token_len )
     : ( Vec u ) odcid ( quic_hdr_dcid h1 d1 )
     : ( Vec u ) cscid ( quic_hdr_scid h1 d1 )
-    ( quic_hdr_free h1 )
     ( label `odcid_is_ours` ? ( bytes_eq odcid ( quic_conn_odcid c ) ) `T` `F` )
 
     // a Retry from the server: new SCID, a token, the tag over our ODCID
@@ -110,14 +109,14 @@ $ `stdlib/std/quic_conn.nu`
     : ( Vec u ) d2 ( vec_new [u] )
     ( label_int `retried_datagrams` ( drain c 1004 d2 ) )
     ( label_int `retried_len` ( vec_len [u] d2 ) )
-    : *QuicHdr h2 ( quic_hdr_parse d2 0 8 )
+    : QuicHdr h2 ( quic_hdr_parse d2 0 8 )
     : ( Vec u ) d2dcid ( quic_hdr_dcid h2 d2 )
     : ( Vec u ) d2tok ( quic_hdr_token h2 d2 )
     ( label `retried_dcid_is_retry_scid` ? ( bytes_eq d2dcid rscid ) `T` `F` )
     ( label `retried_carries_token` ? ( bytes_eq d2tok token ) `T` `F` )
     // the packet number continues (§17.2.5.3): remove header protection
     // with the Initial keys of the new DCID and read it
-    : *QuicKeys k ( quic_initial_keys rscid T )
+    : QuicKeys k ( quic_initial_keys rscid T )
     : ( Vec u ) pkt ( bytes_slice d2 0 . h2 end )
     : i pn_len ( quic_hp_remove k pkt . h2 pn_off )
     : i pn ( quic_pn_read pkt . h2 pn_off pn_len )
@@ -136,7 +135,7 @@ $ `stdlib/std/quic_conn.nu`
         F → { ( label `retried_crypto_at_0` `NO-DECRYPT` ) }
     }
     ( vec_free [u] body ) ( vec_free [u] hdr ) ( vec_free [u] pkt ) ( quic_keys_free k )
-    ( vec_free [u] d2tok ) ( vec_free [u] d2dcid ) ( quic_hdr_free h2 )
+    ( vec_free [u] d2tok ) ( vec_free [u] d2dcid )
     // a second Retry is ignored (§17.2.5.2)
     : ( Vec u ) rscid2 ( hx `b1b2b3b4b5b6b7b8` )
     : ( Vec u ) retry2 ( quic_retry_build cscid rscid2 odcid token )

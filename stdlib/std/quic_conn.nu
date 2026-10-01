@@ -207,14 +207,14 @@ $ `stdlib/std/quic_recovery.nu`
     i bytes_sent
     * QuicTlsSrv tls
     i tls_state
-    * QuicKeys k_rx0
-    * QuicKeys k_tx0
-    * QuicKeys k_rx1
-    * QuicKeys k_tx1
-    * QuicKeys k_rx2
-    * QuicKeys k_tx2
-    * QuicKeys k_rx2_prev
-    * QuicKeys k_rx2_next
+    QuicKeys k_rx0
+    QuicKeys k_tx0
+    QuicKeys k_rx1
+    QuicKeys k_tx1
+    QuicKeys k_rx2
+    QuicKeys k_tx2
+    QuicKeys k_rx2_prev
+    QuicKeys k_rx2_next
     i key_phase
     i key_update_pn
     i keys0_dropped
@@ -350,14 +350,14 @@ $ `stdlib/std/quic_recovery.nu`
     = . c local_tp mine
     = . c tls # *QuicTlsSrv 0
     = . c tls_state 0
-    = . c k_rx0 # *QuicKeys 0
-    = . c k_tx0 # *QuicKeys 0
-    = . c k_rx1 # *QuicKeys 0
-    = . c k_tx1 # *QuicKeys 0
-    = . c k_rx2 # *QuicKeys 0
-    = . c k_tx2 # *QuicKeys 0
-    = . c k_rx2_prev # *QuicKeys 0
-    = . c k_rx2_next # *QuicKeys 0
+    = . c k_rx0 @ QuicKeys { # s 0 }
+    = . c k_tx0 @ QuicKeys { # s 0 }
+    = . c k_rx1 @ QuicKeys { # s 0 }
+    = . c k_tx1 @ QuicKeys { # s 0 }
+    = . c k_rx2 @ QuicKeys { # s 0 }
+    = . c k_tx2 @ QuicKeys { # s 0 }
+    = . c k_rx2_prev @ QuicKeys { # s 0 }
+    = . c k_rx2_next @ QuicKeys { # s 0 }
     = . c key_phase 0
     = . c key_update_pn -1
     = . c keys0_dropped 0
@@ -891,7 +891,7 @@ $ `stdlib/std/quic_recovery.nu`
 // ── receive: keys per space ──────────────────────────────────────
 
 @ __qc_install_handshake_keys * QuicConn c → v {
-    ? != # i . c k_tx1 0 { ^ } {}
+    ? != 0 # i . . c k_tx1 ctl { ^ } {}
     ? != . c is_client 0 {
         : i cipher ( quic_tls_cli_cipher . c tlsc )
         = . c k_tx1 ( quic_keys_derive cipher ( quic_tls_cli_c_hs . c tlsc ) )
@@ -907,7 +907,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // The client's 1-RTT keys, once the server Finished has verified.
 @ __qc_install_app_keys * QuicConn c → v {
-    ? != # i . c k_tx2 0 { ^ } {}
+    ? != 0 # i . . c k_tx2 ctl { ^ } {}
     : i cipher ( quic_tls_cli_cipher . c tlsc )
     = . c k_tx2 ( quic_keys_derive cipher ( quic_tls_cli_c_ap . c tlsc ) )
     = . c k_rx2 ( quic_keys_derive cipher ( quic_tls_cli_s_ap . c tlsc ) )
@@ -1026,8 +1026,8 @@ $ `stdlib/std/quic_recovery.nu`
         ? != . c keys0_dropped 0 { ^ } {}
         = . c keys0_dropped 1
         ( quic_keys_free . c k_rx0 ) ( quic_keys_free . c k_tx0 )
-        = . c k_rx0 # *QuicKeys 0
-        = . c k_tx0 # *QuicKeys 0
+        = . c k_rx0 @ QuicKeys { # s 0 }
+        = . c k_tx0 @ QuicKeys { # s 0 }
         ( vec_clear [u] . c crypto_out0 ) ( vec_clear [u] . c retx0 )
         ( quic_rec_discard_space . c rec 0 )
         ^
@@ -1035,8 +1035,8 @@ $ `stdlib/std/quic_recovery.nu`
     ? != . c keys1_dropped 0 { ^ } {}
     = . c keys1_dropped 1
     ( quic_keys_free . c k_rx1 ) ( quic_keys_free . c k_tx1 )
-    = . c k_rx1 # *QuicKeys 0
-    = . c k_tx1 # *QuicKeys 0
+    = . c k_rx1 @ QuicKeys { # s 0 }
+    = . c k_tx1 @ QuicKeys { # s 0 }
     ( vec_clear [u] . c crypto_out1 ) ( vec_clear [u] . c retx1 )
     ( quic_rec_discard_space . c rec 1 )
 }
@@ -1292,7 +1292,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── receive: packets ─────────────────────────────────────────────
 
-@ __qc_rx_keys * QuicConn c i space → *QuicKeys {
+@ __qc_rx_keys * QuicConn c i space → QuicKeys {
     ? == space 0 { ^ . c k_rx0 } {}
     ? == space 1 { ^ . c k_rx1 } {}
     ^ . c k_rx2
@@ -1300,7 +1300,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // Does this packet's DCID name us? Initial packets may still carry the
 // client's original DCID (it learns ours from the ServerHello packet).
-@ __qc_is_ours * QuicConn c ( Vec u ) pkt * QuicHdr h → b {
+@ __qc_is_ours * QuicConn c ( Vec u ) pkt QuicHdr h → b {
     : i dl . h dcid_len
     : ( Vec u ) d ( quic_hdr_dcid h pkt )
     ? & == . h ptype 0 ( bytes_eq d . c odcid ) { ( vec_free [u] d ) ^ T } {}
@@ -1321,7 +1321,7 @@ $ `stdlib/std/quic_recovery.nu`
 // of the server's has been processed (a Retry counts): if version 1 is listed the packet is
 // a fake and ignored; otherwise there is no version in common and the
 // attempt is abandoned — the connection closes with no packet sent.
-@ __qc_on_vn * QuicConn c ( Vec u ) dgram * QuicHdr h → v {
+@ __qc_on_vn * QuicConn c ( Vec u ) dgram QuicHdr h → v {
     ? | | | == . c is_client 0 >= . c largest_rx0 0 != . c tls_state 0 != . c retry_seen 0 { ^ } {}
     : ~ i p . h pn_off
     : ~ b has1 F
@@ -1341,7 +1341,7 @@ $ `stdlib/std/quic_recovery.nu`
 // new DCID (new Initial keys), its token rides in every Initial, the
 // ClientHello goes again, and packet numbers continue (§17.2.5.3). A
 // Retry that fails its tag or repeats our own DCID is discarded.
-@ __qc_on_retry * QuicConn c ( Vec u ) dgram i off * QuicHdr h → v {
+@ __qc_on_retry * QuicConn c ( Vec u ) dgram i off QuicHdr h → v {
     ? | | | == . c is_client 0 != . c retry_seen 0 >= . c largest_rx0 0 != . c tls_state 0 { ^ } {}
     : i n . h end
     ? < - n off 16 { ^ } {}
@@ -1375,25 +1375,25 @@ $ `stdlib/std/quic_recovery.nu`
 // One packet out of a datagram. Returns the offset after it, or -1 to
 // stop processing the datagram.
 @ __qc_recv_packet * QuicConn c ( Vec u ) dgram i off → i {
-    : *QuicHdr h ( quic_hdr_parse dgram off 8 )
-    ? == # i h 0 { ^ -1 } {}
+    : QuicHdr h ( quic_hdr_parse dgram off 8 )
+    ? < . h ptype 0 { ^ -1 } {}
     : i ptype . h ptype
     : i end . h end
-    ? == ptype 5 { ( __qc_on_vn c dgram h ) ( quic_hdr_free h ) ^ -1 } {}
-    ? & != ptype 4 != . h version 1 { ( quic_hdr_free h ) ^ -1 } {}
-    ? ! ( __qc_is_ours c dgram h ) { ( quic_hdr_free h ) ^ end } {}
+    ? == ptype 5 { ( __qc_on_vn c dgram h ) ^ -1 } {}
+    ? & != ptype 4 != . h version 1 { ^ -1 } {}
+    ? ! ( __qc_is_ours c dgram h ) { ^ end } {}
     // a Retry is never coalesced with anything else (§17.2.5.1)
-    ? == ptype 3 { ( __qc_on_retry c dgram off h ) ( quic_hdr_free h ) ^ -1 } {}
-    ? == ptype 1 { ( quic_hdr_free h ) ^ end } {}
+    ? == ptype 3 { ( __qc_on_retry c dgram off h ) ^ -1 } {}
+    ? == ptype 1 { ^ end } {}
     : i space ? == ptype 0 0 ? == ptype 2 1 2
     // 1-RTT before the client's Finished: dropped (see the header).
-    ? & == space 2 < . c tls_state 2 { ( quic_hdr_free h ) ^ end } {}
-    : *QuicKeys keys ( __qc_rx_keys c space )
-    ? == # i keys 0 { ( quic_hdr_free h ) ^ end } {}
+    ? & == space 2 < . c tls_state 2 { ^ end } {}
+    : QuicKeys keys ( __qc_rx_keys c space )
+    ? == 0 # i . keys ctl { ^ end } {}
     : ( Vec u ) pkt ( bytes_slice dgram off end )
     : i pn_off - . h pn_off off
     : i pn_len ( quic_hp_remove keys pkt pn_off )
-    ? < pn_len 0 { ( vec_free [u] pkt ) ( quic_hdr_free h ) ^ end } {}
+    ? < pn_len 0 { ( vec_free [u] pkt ) ^ end } {}
     : i b0 ( __qc_bget pkt 0 )
     : i pn ( quic_pn_decode ( quic_pn_read pkt pn_off pn_len ) pn_len ( __qc_largest_rx c space ) )
     : ( Vec u ) hdr ( bytes_slice pkt 0 + pn_off pn_len )
@@ -1406,11 +1406,11 @@ $ `stdlib/std/quic_recovery.nu`
         ? == phase . c key_phase {
             ?? ( quic_open keys pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T } F → {} }
             // an old-phase packet after an update
-            ? & ! opened != # i . c k_rx2_prev 0 {
+            ? & ! opened != 0 # i . . c k_rx2_prev ctl {
                 ?? ( quic_open . c k_rx2_prev pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T } F → {} }
             } {}
         } {
-            ? == # i . c k_rx2_next 0 { = . c k_rx2_next ( quic_keys_update . c k_rx2 ) } {}
+            ? == 0 # i . . c k_rx2_next ctl { = . c k_rx2_next ( quic_keys_update . c k_rx2 ) } {}
             ?? ( quic_open . c k_rx2_next pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T = phase_flip T } F → {} }
         }
     } {
@@ -1419,7 +1419,7 @@ $ `stdlib/std/quic_recovery.nu`
     // the server's SCID from its first authenticated Initial is the DCID
     // we send to from now on (§7.2)
     : ( Vec u ) srv_scid ? & & opened == space 0 == . c dcid_learned 0 ( quic_hdr_scid h dgram ) ( vec_new [u] )
-    ( vec_free [u] body ) ( vec_free [u] hdr ) ( vec_free [u] pkt ) ( quic_hdr_free h )
+    ( vec_free [u] body ) ( vec_free [u] hdr ) ( vec_free [u] pkt )
     ? ! opened { ( vec_free [u] payload ) ( vec_free [u] srv_scid ) ^ end } {}
     ? & == space 0 == . c dcid_learned 0 {
         = . c dcid_learned 1
@@ -1435,8 +1435,8 @@ $ `stdlib/std/quic_recovery.nu`
         ( quic_keys_free . c k_rx2_prev )
         = . c k_rx2_prev . c k_rx2
         = . c k_rx2 . c k_rx2_next
-        = . c k_rx2_next # *QuicKeys 0
-        : *QuicKeys ntx ( quic_keys_update . c k_tx2 )
+        = . c k_rx2_next @ QuicKeys { # s 0 }
+        : QuicKeys ntx ( quic_keys_update . c k_tx2 )
         ( quic_keys_free . c k_tx2 )
         = . c k_tx2 ntx
         = . c key_phase ? == . c key_phase 0 1 0
@@ -1505,14 +1505,13 @@ $ `stdlib/std/quic_recovery.nu`
     : i __la_before . c last_activity
     // first Initial: learn the peer's SCID
     ? == ( vec_len [u] . c dcid ) 0 {
-        : *QuicHdr h ( quic_hdr_parse dgram 0 8 )
-        ? != # i h 0 {
+        : QuicHdr h ( quic_hdr_parse dgram 0 8 )
+        ? >= . h ptype 0 {
             ? == . h ptype 0 {
                 : ( Vec u ) sc ( quic_hdr_scid h dgram )
                 ( bytes_extend_bytes . c dcid sc )
                 ( vec_free [u] sc )
             } {}
-            ( quic_hdr_free h )
         } {}
     } {}
     : ~ i off 0
@@ -1535,7 +1534,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── send ─────────────────────────────────────────────────────────
 
-@ __qc_tx_keys * QuicConn c i space → *QuicKeys {
+@ __qc_tx_keys * QuicConn c i space → QuicKeys {
     ? == space 0 { ^ . c k_tx0 } {}
     ? == space 1 { ^ . c k_tx1 } {}
     ^ . c k_tx2
@@ -1818,7 +1817,7 @@ $ `stdlib/std/quic_recovery.nu`
         ? > room 0 { = ae1 ( __qc_build_payload c 1 room pay1 rt1 ) } {}
         ? > ( vec_len [u] pay1 ) 0 { = has1 1 = used + used + + hdr_long 16 ( vec_len [u] pay1 ) } {}
     } {}
-    ? & ( __qc_space_wants_send c 2 ) != # i . c k_tx2 0 {
+    ? & ( __qc_space_wants_send c 2 ) != 0 # i . . c k_tx2 ctl {
         ? >= . c tls_state 2 {
             : i room - - budget used + hdr_short 16
             ? > room 0 { = ae2 ( __qc_build_payload c 2 room pay2 rt2 ) } {}

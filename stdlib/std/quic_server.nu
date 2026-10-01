@@ -152,8 +152,8 @@ $ `stdlib/std/quic_conn.nu`
 @ __qs_dispatch * QuicServer s ( Vec u ) dgram ( Vec u ) from i now → v {
     : i n ( vec_len [u] dgram )
     ? < n 1 { ^ } {}
-    : *QuicHdr h ( quic_hdr_parse dgram 0 ( quic_conn_scid_len ) )
-    ? == # i h 0 { ^ } {}
+    : QuicHdr h ( quic_hdr_parse dgram 0 ( quic_conn_scid_len ) )
+    ? < . h ptype 0 { ^ } {}
     : ( Vec u ) dcid ( quic_hdr_dcid h dgram )
     : ~ * QuicConn c # *QuicConn 0
     ? >= ( vec_len [u] dcid ) 8 { = c # *QuicConn ( __qs_map_get . s by_cid ( __qs_key dcid 0 ) ) } {}
@@ -183,7 +183,6 @@ $ `stdlib/std/quic_conn.nu`
         }
     } {}
     ( vec_free [u] dcid )
-    ( quic_hdr_free h )
     ? == # i c 0 { ^ } {}
     : i before ( quic_conn_state c )
     ( quic_conn_recv c dgram from now )
