@@ -42,7 +42,6 @@ $ `src/mlp.nu`
     : ~ i k 0
     ~ < k * 3 8 { ? > ( fabs ( _mlp_fget . m1 w k ) ) bound { = inb F } {} = k + k 1 }
     ( check inb `init within the Glorot bound` )
-    ( mlp_free m2 ) ( mlp_free m3 )
 
     // ── XOR regression (the classic non-linear sanity check) ──────────
     // 4 points, target 1 output; a 2-8-1 net must drive MSE ~0.
@@ -66,7 +65,6 @@ $ `src/mlp.nu`
     : f xor_mse ( mlp_mse xm X 4 2 Y )
     ( check < xor_mse 0.01 `XOR fits (mse < 0.01)` )
     ( check > . tr n_iter 0 `training ran epochs` )
-    ( vec_free [i] xsz )
 
     // ── prediction agrees with mlp_mse's forward ──────────────────────
     : ( Vec f ) p1 ( vec_new [f] )
@@ -74,7 +72,6 @@ $ `src/mlp.nu`
     : ( Vec f ) o1 ( mlp_predict xm p1 )
     : f v10 ( _mlp_fget o1 0 )
     ( check & > v10 0.8 < v10 1.2 `predict(1,0) ≈ 1` )
-    ( vec_free [f] p1 ) ( vec_free [f] o1 )
 
     // ── save / load: bit-exact round-trip ─────────────────────────────
     : String js ( mlp_save xm )
@@ -94,17 +91,13 @@ $ `src/mlp.nu`
             ( check bits_eq `save/load: every weight bit-exact` )
             : f lm_mse ( mlp_mse lm X 4 2 Y )
             ( check == ( f64_to_bits lm_mse ) ( f64_to_bits xor_mse ) `save/load: identical predictions` )
-            ( mlp_free lm )
         }
         F → { ( check F `save/load: parses back` ) }
     }
-    ( string_free js )
     ?? ( mlp_load `{"broken":1}` ) {
-        T bm → { ( check F `malformed JSON rejected` ) ( mlp_free bm ) }
+        T bm → { ( check F `malformed JSON rejected` ) }
         F → { ( check T `malformed JSON rejected` ) }
     }
-    ( vec_free [f] X ) ( vec_free [f] Y )
-    ( mlp_free xm )
 
     // ── autoencoder: reconstruct a 1-D manifold in 3-D ────────────────
     // Points (t, 2t, 3t) — a 3-16-2-16-3 AE must compress through the
@@ -118,7 +111,6 @@ $ `src/mlp.nu`
         ( vec_push [f] A t ) ( vec_push [f] A * 2.0 t ) ( vec_push [f] A * 3.0 t )
         = r + r 1
     }
-    ( rng_free g )
     : ( Vec i ) asz ( vec_new [i] )
     ( vec_push [i] asz 3 ) ( vec_push [i] asz 16 ) ( vec_push [i] asz 2 )
     ( vec_push [i] asz 16 ) ( vec_push [i] asz 3 )
@@ -150,9 +142,6 @@ $ `src/mlp.nu`
     }
     ( check < eon / eoff 10.0 `off-manifold error ≫ on-manifold (10×)` )
     ( check . atr stopped_early `AE early-stops before max_iter` )
-    ( vec_free [f] onp ) ( vec_free [f] offp )
-    ( vec_free [f] ron ) ( vec_free [f] roff )
-    ( mlp_free ae )
 
     // ── restarts rescue a dead-bottleneck init ────────────────────────
     // Seed 4 alone collapses this bottleneck (every unit's pre-activation
@@ -165,12 +154,9 @@ $ `src/mlp.nu`
     : MlpFit solo ( mlp_fit asz A 300 3 A 3 rcfg 1 )
     : f solo_mse ( mlp_mse . solo model A 300 3 A )
     ( check > solo_mse 0.1 `seed 4 alone collapses (dead bottleneck)` )
-    ( mlp_free . solo model )
     : MlpFit resc ( mlp_fit asz A 300 3 A 3 rcfg 3 )
     : f resc_mse ( mlp_mse . resc model A 300 3 A )
     ( check < resc_mse 0.01 `3 restarts rescue it (mse < 1e-2)` )
-    ( mlp_free . resc model )
-    ( vec_free [f] A ) ( vec_free [i] asz )
 
     // ── MinMax scaler ─────────────────────────────────────────────────
     : ( Vec f ) S ( vec_new [f] )
@@ -188,15 +174,9 @@ $ `src/mlp.nu`
     ?? ( minmax_load ( string_data ms ) ) {
         T lmm → {
             ( check == ( f64_to_bits ( _mlp_fget . lmm hi 0 ) ) ( f64_to_bits 10.0 ) `minmax save/load` )
-            ( minmax_free lmm )
         }
         F → { ( check F `minmax save/load` ) }
     }
-    ( string_free ms )
-    ( minmax_free mm )
-    ( vec_free [f] S )
-    ( vec_free [i] sz )
-    ( mlp_free m1 )
 
     ? == g_fail 0 { ( nurl_print `ALL PASS\n` ) ^ 0 } { ( nurl_print `FAILURES\n` ) ^ 1 }
 }

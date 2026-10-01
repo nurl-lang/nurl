@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** An `Mlp` and a `MinMax` are owning structs
+whose buffers are released with their owner; `mlp_free` / `minmax_free` are
+optional early releases. The training loops no longer free their scratch by
+hand, and the grad engine (`mlp_fit_grad`) drives grad's self-releasing
+`GTape` / `Opt` handles.
+
 ## 0.3.7
 
 `minmax_free`, `mlp_free` now take a **`sink`** parameter.

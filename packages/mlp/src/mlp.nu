@@ -30,6 +30,10 @@
 // stored as its bit pattern (i64) — exact, platform-independent restore
 // (nurl_str_float renders ~6 significant digits, so decimal text would
 // silently perturb a trained model).
+//
+// Memory: an Mlp and a MinMax are owning structs — their buffers go with
+// their owner, nothing is freed by hand (mlp_free / minmax_free are
+// optional early releases).
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -162,7 +166,6 @@ $ `stdlib/ext/json.nu`
         }
         = l + l 1
     }
-    ( rng_free g )
     ^ @ Mlp { nl sz woff boff aoff nw nb na w b
         ( __zeros nw ) ( __zeros nw ) ( __zeros nb ) ( __zeros nb ) }
 }
@@ -171,18 +174,9 @@ $ `stdlib/ext/json.nu`
     ^ @ MlpCfg { 0.001 0.0001 500 0 T 0.1 10 0.0001 42 F }
 }
 
-@ mlp_free sink Mlp m → v {
-    ( vec_free [i] . m sizes )
-    ( vec_free [i] . m w_off )
-    ( vec_free [i] . m b_off )
-    ( vec_free [i] . m a_off )
-    ( vec_free [f] . m w )
-    ( vec_free [f] . m b )
-    ( vec_free [f] . m mw )
-    ( vec_free [f] . m vw )
-    ( vec_free [f] . m mb )
-    ( vec_free [f] . m vb )
-}
+// Let go of `m` now rather than at the end of its owner's scope. An Mlp
+// owns its layout, weights and Adam state, and releases them with its owner.
+@ mlp_free sink Mlp m → v {}
 
 // ── Forward pass ──────────────────────────────────────────────────────
 
@@ -234,7 +228,6 @@ $ `stdlib/ext/json.nu`
     : ( Vec f ) out ( vec_with_cap [f] dout )
     : ~ i k 0
     ~ < k dout { ( vec_push [f] out ( _mlp_fget acts + oa k ) ) = k + k 1 }
-    ( vec_free [f] acts )
     ^ out
 }
 
@@ -260,7 +253,6 @@ $ `stdlib/ext/json.nu`
         }
         = r + r 1
     }
-    ( vec_free [f] acts )
     ^ / se # f * n dout
 }
 
@@ -495,14 +487,6 @@ $ `stdlib/ext/json.nu`
         = c3 0
         ~ < c3 . m n_b { ( vec_set [f] . m b c3 ( _mlp_fget best_b c3 ) ) = c3 + c3 1 }
     } {}
-    ( vec_free [f] best_w )
-    ( vec_free [f] best_b )
-    ( vec_free [f] acts )
-    ( vec_free [f] deltas )
-    ( vec_free [f] gw )
-    ( vec_free [f] gb )
-    ( vec_free [i] idx )
-    ( rng_free g )
     ^ @ MlpTrain { epoch train_loss best stopped }
 }
 
@@ -534,11 +518,9 @@ $ `stdlib/ext/json.nu`
         : Mlp m ( mlp_new sizes . c seed )
         : MlpTrain tr ( mlp_train m X n d Y dout c )
         ? < . tr best_val . best_tr best_val {
-            ( mlp_free best_m )
             = best_m m
             = best_tr tr
         } {
-            ( mlp_free m )
         }
         = r + r 1
     }
@@ -603,7 +585,6 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `w` ( __floats_to_bits_json . m w ) )
     ( json_obj_set o `b` ( __floats_to_bits_json . m b ) )
     : String s ( json_stringify o )
-    ( json_free o )
     ^ s
 }
 
@@ -619,13 +600,12 @@ $ `stdlib/ext/json.nu`
             ? ?? szj { T _ → F F → T } { = ok F } {}
             ? ?? wj { T _ → F F → T } { = ok F } {}
             ? ?? bj { T _ → F F → T } { = ok F } {}
-            ? ! ok { ( json_free root ) ^ @ ?Mlp { F } } {}
+            ? ! ok { ^ @ ?Mlp { F } } {}
             : ( Vec i ) sizes ?? szj { T j → ( __json_ints j ) F → ( vec_new [i] ) }
             ? < ( vec_len [i] sizes ) 2 {
-                ( vec_free [i] sizes ) ( json_free root ) ^ @ ?Mlp { F }
+                ^ @ ?Mlp { F }
             } {}
             : Mlp m ( mlp_new sizes 0 )
-            ( vec_free [i] sizes )
             : ( Vec f ) w ?? wj { T j → ( __bits_json_to_floats j ) F → ( vec_new [f] ) }
             : ( Vec f ) b ?? bj { T j → ( __bits_json_to_floats j ) F → ( vec_new [f] ) }
             ? & == ( vec_len [f] w ) . m n_w == ( vec_len [f] b ) . m n_b {
@@ -633,11 +613,8 @@ $ `stdlib/ext/json.nu`
                 ~ < k . m n_w { ( vec_set [f] . m w k ( _mlp_fget w k ) ) = k + k 1 }
                 = k 0
                 ~ < k . m n_b { ( vec_set [f] . m b k ( _mlp_fget b k ) ) = k + k 1 }
-                ( vec_free [f] w ) ( vec_free [f] b ) ( json_free root )
                 ^ @ ?Mlp { T m }
             } {
-                ( vec_free [f] w ) ( vec_free [f] b ) ( json_free root )
-                ( mlp_free m )
                 ^ @ ?Mlp { F }
             }
         }
@@ -695,7 +672,6 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `lo` ( __floats_to_bits_json . mm lo ) )
     ( json_obj_set o `hi` ( __floats_to_bits_json . mm hi ) )
     : String s ( json_stringify o )
-    ( json_free o )
     ^ s
 }
 
@@ -706,18 +682,14 @@ $ `stdlib/ext/json.nu`
             : i d ?? ( json_obj_get root `n_cols` ) { T j → ( json_as_int j ) F → 0 }
             : ( Vec f ) lo ?? ( json_obj_get root `lo` ) { T j → ( __bits_json_to_floats j ) F → ( vec_new [f] ) }
             : ( Vec f ) hi ?? ( json_obj_get root `hi` ) { T j → ( __bits_json_to_floats j ) F → ( vec_new [f] ) }
-            ( json_free root )
             ? & & > d 0 == ( vec_len [f] lo ) d == ( vec_len [f] hi ) d {
                 ^ @ ?MinMax { T @ MinMax { d lo hi } }
             } {
-                ( vec_free [f] lo ) ( vec_free [f] hi )
                 ^ @ ?MinMax { F }
             }
         }
     }
 }
 
-@ minmax_free sink MinMax mm → v {
-    ( vec_free [f] . mm lo )
-    ( vec_free [f] . mm hi )
-}
+// Let go of `mm` now rather than at the end of its owner's scope.
+@ minmax_free sink MinMax mm → v {}

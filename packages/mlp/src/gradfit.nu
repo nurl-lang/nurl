@@ -37,7 +37,7 @@ $ `deps/tensor/src/tensor.nu`
 
 // Layer l's weights as a tape parameter in matmul layout: tape[i*fout+j] =
 // m.w[wo + j*fin + i] (mlp stores [fout,fin] rows).
-@ _gf_wparam * GTape tp Mlp m i l → GVar {
+@ _gf_wparam GTape tp Mlp m i l → GVar {
     : i fin ( _mlp_iget . m sizes l )
     : i fout ( _mlp_iget . m sizes + l 1 )
     : i wo ( _mlp_iget . m w_off l )
@@ -55,11 +55,10 @@ $ `deps/tensor/src/tensor.nu`
     ( vec_push [i] shp fin ) ( vec_push [i] shp fout )
     : Tensor t ( tensor_of TE_F64 shp wt )
     : GVar p ( grad_param tp t )
-    ( tensor_free t )
     ^ p
 }
 
-@ _gf_bparam * GTape tp Mlp m i l → GVar {
+@ _gf_bparam GTape tp Mlp m i l → GVar {
     : i fout ( _mlp_iget . m sizes + l 1 )
     : i bo ( _mlp_iget . m b_off l )
     : ( Vec f ) bv ( vec_with_cap [f] fout )
@@ -69,12 +68,11 @@ $ `deps/tensor/src/tensor.nu`
     ( vec_push [i] shp fout )
     : Tensor t ( tensor_of TE_F64 shp bv )
     : GVar p ( grad_param tp t )
-    ( tensor_free t )
     ^ p
 }
 
 // Rows idx[from..to) of the row-major table `X` (n×d) as a [count,d] const.
-@ _gf_rows_const * GTape tp ( Vec f ) X i d ( Vec i ) idx i from i to → GVar {
+@ _gf_rows_const GTape tp ( Vec f ) X i d ( Vec i ) idx i from i to → GVar {
     : i cnt - to from
     : ( Vec f ) buf ( vec_with_cap [f] * cnt d )
     : ~ i k from
@@ -88,12 +86,11 @@ $ `deps/tensor/src/tensor.nu`
     ( vec_push [i] shp cnt ) ( vec_push [i] shp d )
     : Tensor t ( tensor_of TE_F64 shp buf )
     : GVar v ( grad_const tp t )
-    ( tensor_free t )
     ^ v
 }
 
 // The network forward on the tape: relu hidden layers, linear output.
-@ _gf_forward * GTape tp GVar xb ( Vec GVar ) ws ( Vec GVar ) bs i nl → GVar {
+@ _gf_forward GTape tp GVar xb ( Vec GVar ) ws ( Vec GVar ) bs i nl → GVar {
     : ~ GVar h xb
     : ~ i l 0
     ~ < l nl {
@@ -107,7 +104,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // Copy the (tape-layout) trained values back into the Mlp struct.
-@ _gf_write_back Mlp m * GTape tp ( Vec GVar ) ws ( Vec GVar ) bs i nl → v {
+@ _gf_write_back Mlp m GTape tp ( Vec GVar ) ws ( Vec GVar ) bs i nl → v {
     : ~ i l 0
     ~ < l nl {
         : i fin ( _mlp_iget . m sizes l )
@@ -135,7 +132,7 @@ $ `deps/tensor/src/tensor.nu`
 
 // Snapshot every parameter's current tape value into one flat buffer
 // (tape layout, params in ws-then-bs order) — the best-weights store.
-@ _gf_snapshot * GTape tp ( Vec GVar ) ws ( Vec GVar ) bs i nl ( Vec f ) dst → v {
+@ _gf_snapshot GTape tp ( Vec GVar ) ws ( Vec GVar ) bs i nl ( Vec f ) dst → v {
     ( vec_clear [f] dst )
     : ~ i l 0
     ~ < l nl {
@@ -158,7 +155,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // Restore a snapshot into the live tape parameters.
-@ _gf_restore * GTape tp ( Vec GVar ) ws ( Vec GVar ) bs i nl ( Vec f ) src → v {
+@ _gf_restore GTape tp ( Vec GVar ) ws ( Vec GVar ) bs i nl ( Vec f ) src → v {
     : ~ i off 0
     : ~ i l 0
     ~ < l nl {
@@ -206,7 +203,7 @@ $ `deps/tensor/src/tensor.nu`
     ? > bsz n_train { = bsz n_train } {}
     // The tape: parameters (and the fixed validation batch) live below the
     // mark; every episode above it is dropped by tape_reset_to.
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : ( Vec GVar ) ws ( vec_new [GVar] )
     : ( Vec GVar ) bs2 ( vec_new [GVar] )
     : ~ i l 0
@@ -215,7 +212,7 @@ $ `deps/tensor/src/tensor.nu`
         ( vec_push [GVar] bs2 ( _gf_bparam tp m l ) )
         = l + l 1
     }
-    : *Opt o ( opt_adam_new . cfg lr )
+    : Opt o ( opt_adam_new . cfg lr )
     = l 0
     ~ < l nl {
         ( opt_add o tp ?? ( vec_get [GVar] ws l ) { T x → x F → @ GVar { -1 } } 0.0 )
@@ -302,10 +299,6 @@ $ `deps/tensor/src/tensor.nu`
     }
     ? & . cfg early_stop have_best { ( _gf_restore tp ws bs2 nl best ) } {}
     ( _gf_write_back m tp ws bs2 nl )
-    ( vec_free [f] best )
-    ( vec_free [GVar] ws ) ( vec_free [GVar] bs2 )
-    ( opt_free o ) ( tape_free tp )
-    ( vec_free [i] idx ) ( rng_free g )
     ^ @ MlpTrain { epoch train_loss bestc stopped }
 }
 
@@ -322,11 +315,9 @@ $ `deps/tensor/src/tensor.nu`
         : Mlp m ( mlp_new sizes . c seed )
         : MlpTrain tr ( mlp_train_grad m X n d Y dout c )
         ? < . tr best_val . best_tr best_val {
-            ( mlp_free best_m )
             = best_m m
             = best_tr tr
         } {
-            ( mlp_free m )
         }
         = r + r 1
     }
