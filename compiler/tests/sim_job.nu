@@ -28,7 +28,7 @@ $ `stdlib/dist/sim.nu`
     ^ e
 }
 
-@ node ( Vec s ) nodes i i → *JobNode { ^ # *JobNode ?? ( vec_get [s] nodes i ) { T x → x F → # s 0 } }
+@ node ( Vec JobNode ) nodes i i → JobNode { ^ ?? ( vec_get [JobNode] nodes i ) { T x → x F → ( job_node_new ( transport_none ) # s 0 ( vec_new [u] ) -1 ) } }
 
 // task kind 0: result = (sum of payload bytes) & 255, as a 1-byte vector
 @ sum_handler → ( @ ( Vec u ) ( Vec u ) ) {
@@ -44,33 +44,33 @@ $ `stdlib/dist/sim.nu`
 }
 
 // map a pubkey back to its node index (-1 if none)
-@ pk_to_idx ( Vec s ) nodes i nn ( Vec u ) target → i {
+@ pk_to_idx ( Vec JobNode ) nodes i nn ( Vec u ) target → i {
     : ~ i found -1
     : ~ i k 0
-    ~ & == found -1 < k nn { ? ( veq . ( node nodes k ) self_pk target ) { = found k } {} = k + k 1 }
+    ~ & == found -1 < k nn { ? ( veq ( job_node_self_pk ( node nodes k ) ) target ) { = found k } {} = k + k 1 }
     ^ found
 }
 
 // current owning node index for a key (via the shared ring)
-@ owner_idx_of * Ring ring ( Vec s ) nodes i nn ( Vec u ) key → i {
+@ owner_idx_of * Ring ring ( Vec JobNode ) nodes i nn ( Vec u ) key → i {
     : ~ i idx -1
     ?? ( ring_owner_pk ring key ) { T o → { = idx ( pk_to_idx nodes nn o ) ( vec_free [u] o ) } F → {} }
     ^ idx
 }
 
 // submitter side over the bus: route a SUBMIT to the key's current owner.
-@ submit_over_bus * SimNet net * Ring ring ( Vec s ) nodes i nn i submitter i tid i kind ( Vec u ) key ( Vec u ) payload i now → v {
+@ submit_over_bus * SimNet net * Ring ring ( Vec JobNode ) nodes i nn i submitter i tid i kind ( Vec u ) key ( Vec u ) payload i now → v {
     : i oidx ( owner_idx_of ring nodes nn key )
     ? < oidx 0 { ^ v } {}
-    : *JobNode sn ( node nodes submitter )
-    : ( Vec u ) msg ( job_build_submit tid kind . sn self_pk key payload )
+    : JobNode sn ( node nodes submitter )
+    : ( Vec u ) msg ( job_build_submit tid kind ( job_node_self_pk sn ) key payload )
     ( sim_send net submitter oidx msg now )
     ( vec_free [u] msg )
 }
 
 // deliver every due message: owner executes a SUBMIT and replies a RESULT
 // (forwarding if the ring moved); a RESULT is recorded idempotently.
-@ deliver_due * SimNet net * Ring ring ( Vec s ) nodes i nn i now → v {
+@ deliver_due * SimNet net * Ring ring ( Vec JobNode ) nodes i nn i now → v {
     : ( Vec s ) due ( sim_due net now )
     : i dn ( vec_len [s] due )
     : ~ i k 0
@@ -80,7 +80,7 @@ $ `stdlib/dist/sim.nu`
             : *SimMsg sm # *SimMsg mp
             : JobMsg m ( jobmsg_decode . sm bytes )
             ? == . m mtype ( job_submit_t ) {
-                : *JobNode dn2 ( node nodes . sm dst )
+                : JobNode dn2 ( node nodes . sm dst )
                 ? ( job_owns dn2 . m key ) {
                     : ( Vec u ) res ( _job_execute dn2 . m kind . m payload )
                     : i sidx ( pk_to_idx nodes nn . m submitter )
@@ -106,27 +106,26 @@ $ `stdlib/dist/sim.nu`
     ( vec_free [s] due )
 }
 
-@ make_nodes * Ring ring i nn → ( Vec s ) {
-    : ( Vec s ) nodes ( vec_new [s] )
+@ make_nodes * Ring ring i nn → ( Vec JobNode ) {
+    : ( Vec JobNode ) nodes ( vec_new [JobNode] )
     : ~ i i 0
     ~ < i nn {
         : ( Vec u ) selfpk ( pk i )
-        : *JobNode n ( job_node_new # s 0 # s ring selfpk i )  // transport=0; pure paths only
+        : JobNode n ( job_node_new ( transport_none ) # s ring selfpk i )  // no transport; pure paths only
         ( job_register n 0 ( sum_handler ) )
         ( vec_free [u] selfpk )
-        ( vec_push [s] nodes # s n )
+        ( vec_push [JobNode] nodes n )
         = i + i 1
     }
     ^ nodes
 }
 
-@ free_nodes ( Vec s ) nodes i nn → v {
-    : ~ i i 0 ~ < i nn { ( job_node_free ( node nodes i ) ) = i + i 1 }
-    ( vec_free [s] nodes )
+@ free_nodes ( Vec JobNode ) nodes i nn → v {
+    ( vec_free [JobNode] nodes )
 }
 
 // find a key (bytes4 s,s,s,s) whose owner is NOT `avoid`; returns the seed.
-@ find_key_not_owned_by * Ring ring ( Vec s ) nodes i nn i avoid → i {
+@ find_key_not_owned_by * Ring ring ( Vec JobNode ) nodes i nn i avoid → i {
     : ~ i found -1
     : ~ i s 1
     ~ & == found -1 < s 200 {
@@ -147,12 +146,12 @@ $ `stdlib/dist/sim.nu`
 
     // ── (1) job completes across 40% packet loss, via retry ──────────
     : *SimNet net ( sim_net_new nn 24680 40 1 2 )
-    : ( Vec s ) nodes ( make_nodes ring nn )
+    : ( Vec JobNode ) nodes ( make_nodes ring nn )
     : i kseed ( find_key_not_owned_by ring nodes nn 0 )
     ( pb `found a key owned by a remote node: ` >= kseed 0 )
     : ( Vec u ) key ( bytes4 kseed kseed kseed kseed )
     : ( Vec u ) pl ( bytes4 1 2 3 4 )  // sum = 10
-    : *JobNode s0 ( node nodes 0 )
+    : JobNode s0 ( node nodes 0 )
     : i tid ( _job_unique s0 )
     : ~ i now 0
     : ~ i r 0
@@ -169,12 +168,12 @@ $ `stdlib/dist/sim.nu`
 
     // ── (2) partition isolates submitter from owner; heal completes ──
     : *SimNet net2 ( sim_net_new nn 13579 0 1 0 )  // no random drop; clean partition
-    : ( Vec s ) nd ( make_nodes ring nn )
+    : ( Vec JobNode ) nd ( make_nodes ring nn )
     : i kseed2 ( find_key_not_owned_by ring nd nn 0 )
     : ( Vec u ) key2 ( bytes4 kseed2 kseed2 kseed2 kseed2 )
     : i oidx ( owner_idx_of ring nd nn key2 )
     ( sim_partition net2 0 oidx )  // cut submitter↔owner both ways
-    : *JobNode sn0 ( node nd 0 )
+    : JobNode sn0 ( node nd 0 )
     : i tid2 ( _job_unique sn0 )
     : ~ i now2 0
     : ~ i r2 0

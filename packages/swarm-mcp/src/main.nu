@@ -66,11 +66,11 @@ $ `cudakernel.nu`
 // ── node bundle (the cluster coordinator/worker state) ───────────
 
 : Swarm {
-    s transport  // *Transport
+    Transport transport
     s ring  // *Ring
     s gpu_ring  // *Ring — the GPU capability domain (cap_gpu workers only)
     s roster  // *Roster
-    s job  // *JobNode
+    JobNode job
     ( Vec u ) self_pk
     i self_id
     i role
@@ -82,11 +82,11 @@ $ `cudakernel.nu`
 
 @ swarm_new RelayClient rc i id i role i caps s token → *Swarm {
     : ( Vec u ) me ( pk_from_id id )
-    : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
+    : Transport tr ( transport_open # s 0 rc 1 )
     : *Ring ring ( ring_new )
     : *Ring gring ( ring_new )
     : *Roster roster ( roster_new )
-    : *JobNode jn ( job_node_new # s tr # s ring me id )
+    : JobNode jn ( job_node_new tr # s ring me id )
     // GPU wasm chunks route/own/forward on the GPU capability ring — every
     // node scopes the kind the same way, so mid-flight re-homing stays inside
     // the domain (dist/job job_set_ring).
@@ -95,11 +95,11 @@ $ `cudakernel.nu`
     // references them: same ring, same key -> same owner.
     ( job_set_ring jn ( kind_blob ) # s gring )
     : *Swarm sw # *Swarm ( nurl_alloc Z Swarm )
-    = . sw transport # s tr
+    = . sw transport tr
     = . sw ring # s ring
     = . sw gpu_ring # s gring
     = . sw roster # s roster
-    = . sw job # s jn
+    = . sw job jn
     = . sw self_pk me
     = . sw self_id id
     = . sw role role
@@ -115,11 +115,11 @@ $ `cudakernel.nu`
 }
 
 @ swarm_free sink * Swarm sw → v {
-    ( job_node_free # *JobNode . sw job )
+    ( job_node_free . sw job )
     ( ring_free # *Ring . sw ring )
     ( ring_free # *Ring . sw gpu_ring )
     ( roster_free # *Roster . sw roster )
-    ( transport_free # *Transport . sw transport )
+    ( transport_free . sw transport )
     ( vec_free [u] . sw self_pk )
     ( vec_free [u] . sw group )
     ( vec_free [u] . sw key )
@@ -127,7 +127,7 @@ $ `cudakernel.nu`
 }
 
 @ swarm_join_group * Swarm sw → v {
-    ?? ( transport_group_join # *Transport . sw transport . sw group ) { T _ → {} F _ → {} }
+    ?? ( transport_group_join . sw transport . sw group ) { T _ → {} F _ → {} }
 }
 
 @ swarm_announce * Swarm sw i want → v {
@@ -139,7 +139,7 @@ $ `cudakernel.nu`
 @ swarm_announce_ok * Swarm sw i want → b {
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk . sw self_caps )
     : ~ b ok F
-    ?? ( transport_broadcast # *Transport . sw transport . sw group msg ) { T _ → { = ok T } F _ → {} }
+    ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → { = ok T } F _ → {} }
     ( vec_free [u] msg )
     ^ ok
 }
@@ -157,11 +157,11 @@ $ `cudakernel.nu`
             // under the old epoch are stale and will re-seed once
             = . sw epoch + . sw epoch 1
         } {}
-        ( transport_add_peer # *Transport . sw transport . h pubkey )
+        ( transport_add_peer . sw transport . h pubkey )
     } {}
     ? & == . h want 1 ! ( bytes_eq . h pubkey . sw self_pk ) {
         : ( Vec u ) reply ( hello_build . sw self_id . sw role 0 . sw self_pk . sw self_caps )
-        ?? ( transport_send # *Transport . sw transport . h pubkey reply ) { T _ → {} F _ → {} }
+        ?? ( transport_send . sw transport . h pubkey reply ) { T _ → {} F _ → {} }
         ( vec_free [u] reply )
     } {}
 }
@@ -200,7 +200,7 @@ $ `cudakernel.nu`
 @ swarm_pump * Swarm sw i max → v {
     : ~ b more T
     ~ more {
-        ?? ( transport_recv # *Transport . sw transport max ) {
+        ?? ( transport_recv . sw transport max ) {
             T tm → {
                 : i b0 ?? ( vec_get [u] . tm payload 0 ) { T x → # i x F → 255 }
                 ? == b0 ( census_hello_t ) {
@@ -209,8 +209,8 @@ $ `cudakernel.nu`
                     ( hello_free h )
                 } {
                     : JobMsg m ( jobmsg_decode . tm payload )
-                    ? == . m mtype ( job_submit_t ) { ( job_on_submit # *JobNode . sw job m ) } {}
-                    ? == . m mtype ( job_result_t ) { ( job_on_result # *JobNode . sw job m ) } {}
+                    ? == . m mtype ( job_submit_t ) { ( job_on_submit . sw job m ) } {}
+                    ? == . m mtype ( job_result_t ) { ( job_on_result . sw job m ) } {}
                     ( jobmsg_free m )
                 }
                 ( transport_msg_free tm )
@@ -343,10 +343,10 @@ $ `cudakernel.nu`
                 // a worker chewing on a long chunk still announces itself —
                 // otherwise the coordinator's liveness clock cannot tell it
                 // from a dead node (the handler runs inside this pump loop).
-                ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler_ka . sw key \ → v { : b _ok ( swarm_announce_ok sw 1 ) } ) )
-                ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
-                ( job_register # *JobNode . sw job ( kind_blob ) ( blob_handler . sw key ) )
-                ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
+                ( job_register . sw job ( kind_kernel ) ( kernel_handler_ka . sw key \ → v { : b _ok ( swarm_announce_ok sw 1 ) } ) )
+                ( job_register . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
+                ( job_register . sw job ( kind_blob ) ( blob_handler . sw key ) )
+                ? != gpu 0 { ( job_register . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
                 ( swarm_join_group sw )
                 ( swarm_announce sw 1 )
                 ( nurl_flush_stdout )
@@ -393,7 +393,7 @@ $ `cudakernel.nu`
         : ( Vec u ) rkey ( chunk_key i )
         : ( Vec u ) payload ( chunk_payload op dtype . c lo . c hi expr )
         : ( Vec u ) tagged ( token_tag . sw key payload )
-        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_kernel ) rkey tagged ) )
+        ( vec_push [i] tids ( job_submit . sw job ( kind_kernel ) rkey tagged ) )
         ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         = i + i 1
     }
@@ -415,7 +415,7 @@ $ `cudakernel.nu`
         : ( Vec u ) rkey ( chunk_key i )
         : ( Vec u ) payload ( wasm_chunk_payload . c lo . c hi wasm )
         : ( Vec u ) tagged ( token_tag . sw key payload )
-        ( vec_push [i] tids ( job_submit # *JobNode . sw job kind rkey tagged ) )
+        ( vec_push [i] tids ( job_submit . sw job kind rkey tagged ) )
         ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         = i + i 1
     }
@@ -523,7 +523,7 @@ $ `cudakernel.nu`
         : ( Vec u ) payload ( wasm_gpu_chunk_payload mode . c lo . c hi kbins params slice wasm )
         : ( Vec u ) tagged ( token_tag . sw key payload )
         : ( Vec u ) owner ( __cj_gpu_owner sw rkey )
-        : i tid ( job_submit # *JobNode . sw job ( kind_wasm_gpu ) rkey tagged )
+        : i tid ( job_submit . sw job ( kind_wasm_gpu ) rkey tagged )
         : *ChunkJob cj # *ChunkJob ( nurl_alloc Z ChunkJob )
         = . cj kind ( kind_wasm_gpu )
         = . cj payload tagged
@@ -546,7 +546,7 @@ $ `cudakernel.nu`
 @ __cj_dispatch * Swarm sw i kind i idx ( Vec u ) tagged i now → *ChunkJob {
     : ( Vec u ) rkey ( chunk_key_salted idx 0 )
     : ( Vec u ) owner ( __cj_owner sw kind rkey )
-    : i tid ( job_submit # *JobNode . sw job kind rkey tagged )
+    : i tid ( job_submit . sw job kind rkey tagged )
     : *ChunkJob cj # *ChunkJob ( nurl_alloc Z ChunkJob )
     = . cj kind kind
     = . cj payload tagged
@@ -607,7 +607,7 @@ $ `cudakernel.nu`
 // other than the one that just failed (bounded probes), resubmit the retained
 // payload there, and refresh the plan. No ring mutation — steering only.
 @ __cj_redispatch * Swarm sw * ChunkJob cj → v {
-    : *JobNode jn # *JobNode . sw job
+    : JobNode jn . sw job
     : ~ i s + . cj salt 1
     : ~ ( Vec u ) newkey ( chunk_key_salted . cj idx s )
     : ~ ( Vec u ) newowner ( __cj_owner sw . cj kind newkey )
@@ -646,7 +646,7 @@ $ `cudakernel.nu`
         : ( Vec u ) slice ? hasdata ( bytes_slice data * . c lo 8 * . c hi 8 ) ( vec_new [u] )
         : ( Vec u ) payload ( wasm_gpu_chunk_payload mode . c lo . c hi kbins params slice wasm )
         : ( Vec u ) tagged ( token_tag . sw key payload )
-        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm_gpu ) rkey tagged ) )
+        ( vec_push [i] tids ( job_submit . sw job ( kind_wasm_gpu ) rkey tagged ) )
         ( vec_free [u] rkey ) ( vec_free [u] slice ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         = i + i 1
     }
@@ -659,7 +659,7 @@ $ `cudakernel.nu`
     : i n ( vec_len [i] tids )
     : ~ b all T : ~ i k 0
     ~ & all < k n {
-        ? ! ( job_has # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) { = all F } {}
+        ? ! ( job_has . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) { = all F } {}
         = k + k 1
     }
     ^ all
@@ -682,7 +682,7 @@ $ `cudakernel.nu`
     : ~ i nfail 0
     : ~ i k 0
     ~ < k n {
-        ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
+        ?? ( job_await . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
             T r → {
                 ?? ( token_untag . sw key r ) {
                     T body → {
@@ -738,7 +738,7 @@ $ `cudakernel.nu`
     : i n ( vec_len [i] tids )
     : ~ i k 0
     ~ < k n {
-        ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
+        ?? ( job_await . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
             T r → {
                 ?? ( token_untag . sw key r ) {
                     T body → {
@@ -1144,13 +1144,13 @@ $ `cudakernel.nu`
                 : ( Vec u ) bb ( ds_block_bytes d b )
                 : ( Vec u ) sp ( blob_seed_payload h bb )
                 : ( Vec u ) tg ( token_tag . sw key sp )
-                : i stid ( job_submit # *JobNode . sw job ( kind_blob ) rkey tg )
+                : i stid ( job_submit . sw job ( kind_blob ) rkey tg )
                 = nseeded + nseeded 1
                 // confirm THIS block before sending the next
                 : ~ i r 0
-                ~ & < r 600 ! ( job_has # *JobNode . sw job stid ) { ( swarm_pump sw 100 ) = r + r 1 }
+                ~ & < r 600 ! ( job_has . sw job stid ) { ( swarm_pump sw 100 ) = r + r 1 }
                 : ~ b okseed F
-                ?? ( job_await # *JobNode . sw job stid ) {
+                ?? ( job_await . sw job stid ) {
                     T rr → {
                         ?? ( token_untag . sw key rr ) {
                             T bd → { ? == ?? ( vec_get [u] bd 0 ) { T x → # i x F → 0 } 1 { = okseed T } {} ( vec_free [u] bd ) }
@@ -1189,7 +1189,7 @@ $ `cudakernel.nu`
             }
             : ( Vec u ) payload ( wasm_gpu_chunk_payload_blobs mode clo chi kbins params bs . d dtype hashes wasm )
             : ( Vec u ) tagged ( token_tag . sw key payload )
-            ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm_gpu ) rkey tagged ) )
+            ( vec_push [i] tids ( job_submit . sw job ( kind_wasm_gpu ) rkey tagged ) )
             ( blob_manifest_free hashes )
             ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         } {}
@@ -1335,7 +1335,7 @@ $ `cudakernel.nu`
     : ~ String out ( string_new )
     : ~ i k 0
     ~ & == ( string_len out ) 0 < k n {
-        ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
+        ?? ( job_await . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
             T r → {
                 ?? ( token_untag . sw key r ) {
                     T body → {
@@ -1399,7 +1399,7 @@ $ `cudakernel.nu`
 // worker death mid-task instead of erroring out.
 @ __task_ft_refresh * Task t → v {
     : *Swarm sw ( mcp_swarm )
-    : *JobNode jn # *JobNode . sw job
+    : JobNode jn . sw job
     : i n ( vec_len [s] . t chunkjobs )
     : i now ( now_ms )
     : ~ i pending 0

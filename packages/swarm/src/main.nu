@@ -60,10 +60,10 @@ $ `work.nu`
 // ── node bundle ───────────────────────────────────────────────────
 
 : Swarm {
-    s transport  // *Transport
+    Transport transport
     s ring  // *Ring
     s roster  // *Roster
-    s job  // *JobNode
+    JobNode job
     ( Vec u ) self_pk
     i self_id
     i role
@@ -72,15 +72,15 @@ $ `work.nu`
 
 @ swarm_new RelayClient rc i id i role → *Swarm {
     : ( Vec u ) me ( pk_from_id id )
-    : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
+    : Transport tr ( transport_open # s 0 rc 1 )
     : *Ring ring ( ring_new )
     : *Roster roster ( roster_new )
-    : *JobNode jn ( job_node_new # s tr # s ring me id )
+    : JobNode jn ( job_node_new tr # s ring me id )
     : *Swarm sw # *Swarm ( nurl_alloc Z Swarm )
-    = . sw transport # s tr
+    = . sw transport tr
     = . sw ring # s ring
     = . sw roster # s roster
-    = . sw job # s jn
+    = . sw job jn
     = . sw self_pk me
     = . sw self_id id
     = . sw role role
@@ -91,24 +91,24 @@ $ `work.nu`
 }
 
 @ swarm_free sink * Swarm sw → v {
-    ( job_node_free # *JobNode . sw job )
+    ( job_node_free . sw job )
     ( ring_free # *Ring . sw ring )
     ( roster_free # *Roster . sw roster )
-    ( transport_free # *Transport . sw transport )
+    ( transport_free . sw transport )
     ( vec_free [u] . sw self_pk )
     ( vec_free [u] . sw group )
     ( nurl_free # s sw )
 }
 
 @ swarm_join_group * Swarm sw → v {
-    ?? ( transport_group_join # *Transport . sw transport . sw group ) { T _ → {} F _ → {} }
+    ?? ( transport_group_join . sw transport . sw group ) { T _ → {} F _ → {} }
 }
 
 // Announce ourselves to the group. `want` asks hearers to reply so a newcomer
 // learns the existing members.
 @ swarm_announce * Swarm sw i want → v {
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk )
-    ?? ( transport_broadcast # *Transport . sw transport . sw group msg ) { T _ → {} F _ → {} }
+    ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → {} F _ → {} }
     ( vec_free [u] msg )
 }
 
@@ -117,12 +117,12 @@ $ `work.nu`
     // owns no keys.
     ? == . h role ( role_worker ) {
         ( roster_add # *Roster . sw roster # *Ring . sw ring . h pubkey . h id ( swarm_vnodes ) )
-        ( transport_add_peer # *Transport . sw transport . h pubkey )
+        ( transport_add_peer . sw transport . h pubkey )
     } {}
     // Reply to a discovery request unless it is our own broadcast echoed back.
     ? & == . h want 1 ! ( bytes_eq . h pubkey . sw self_pk ) {
         : ( Vec u ) reply ( hello_build . sw self_id . sw role 0 . sw self_pk )
-        ?? ( transport_send # *Transport . sw transport . h pubkey reply ) { T _ → {} F _ → {} }
+        ?? ( transport_send . sw transport . h pubkey reply ) { T _ → {} F _ → {} }
         ( vec_free [u] reply )
     } {}
 }
@@ -131,7 +131,7 @@ $ `work.nu`
 @ swarm_pump * Swarm sw i max → v {
     : ~ b more T
     ~ more {
-        ?? ( transport_recv # *Transport . sw transport max ) {
+        ?? ( transport_recv . sw transport max ) {
             T tm → {
                 : i b0 ?? ( vec_get [u] . tm payload 0 ) { T x → # i x F → 255 }
                 ? == b0 ( census_hello_t ) {
@@ -140,8 +140,8 @@ $ `work.nu`
                     ( hello_free h )
                 } {
                     : JobMsg m ( jobmsg_decode . tm payload )
-                    ? == . m mtype ( job_submit_t ) { ( job_on_submit # *JobNode . sw job m ) } {}
-                    ? == . m mtype ( job_result_t ) { ( job_on_result # *JobNode . sw job m ) } {}
+                    ? == . m mtype ( job_submit_t ) { ( job_on_submit . sw job m ) } {}
+                    ? == . m mtype ( job_result_t ) { ( job_on_result . sw job m ) } {}
                     ( jobmsg_free m )
                 }
                 ( transport_msg_free tm )
@@ -176,8 +176,8 @@ $ `work.nu`
 }
 
 @ swarm_register_handlers * Swarm sw → v {
-    ( job_register # *JobNode . sw job ( kind_primes ) ( primes_handler ) )
-    ( job_register # *JobNode . sw job ( kind_sumsq ) ( sumsq_handler ) )
+    ( job_register . sw job ( kind_primes ) ( primes_handler ) )
+    ( job_register . sw job ( kind_sumsq ) ( sumsq_handler ) )
 }
 
 @ run_worker s host i port i id i rounds → i {
@@ -243,7 +243,7 @@ $ `work.nu`
                 : *Chunk c # *Chunk cp
                 : ( Vec u ) key ( chunk_key i )
                 : ( Vec u ) payload ( chunk_payload . c lo . c hi )
-                ( vec_push [i] tids ( job_submit # *JobNode . sw job kind key payload ) )
+                ( vec_push [i] tids ( job_submit . sw job kind key payload ) )
                 ( vec_free [u] key ) ( vec_free [u] payload )
                 = i + i 1
             }
@@ -255,7 +255,7 @@ $ `work.nu`
                 ( swarm_pump sw 200 )
                 : ~ b all T : ~ i j 0
                 ~ < j nchunks {
-                    ? ! ( job_has # *JobNode . sw job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) { = all F } {}
+                    ? ! ( job_has . sw job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) { = all F } {}
                     = j + j 1
                 }
                 = done all
@@ -266,7 +266,7 @@ $ `work.nu`
             : ~ i got 0
             : ~ i j 0
             ~ < j nchunks {
-                ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) {
+                ?? ( job_await . sw job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) {
                     T r → { = total + total ( result_decode r ) = got + got 1 ( vec_free [u] r ) }
                     F → {}
                 }

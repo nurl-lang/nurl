@@ -1,5 +1,5 @@
 // dist_job.nu — offline test for stdlib/dist/job.nu (§7.5 Phase 11 keystone).
-// Deterministic, no sockets (transport handle is 0; the owned-key path and all
+// Deterministic, no sockets (transport_none; the owned-key path and all
 // pure logic never touch it): JobMsg codec, in-process submit→execute→await,
 // idempotent result recording, and owner recomputation across a ring change
 // (the re-home target).
@@ -59,7 +59,7 @@ $ `stdlib/dist/job.nu`
     // ── in-process submit → execute → await (node owns the key) ──
     : *Ring ring ( ring_new )
     ( ring_add_member ring a 32 )  // single member ⇒ owns every key
-    : *JobNode n ( job_node_new # s 0 # s ring a 0 )
+    : JobNode n ( job_node_new ( transport_none ) # s ring a 0 )
     ( job_register n 0 ( sum_handler ) )
     ( pb `owns key (single-member ring): ` ( job_owns n key ) )
     : i tid ( job_submit n 0 key pl )  // sum(1,2,3,4)=10
@@ -90,7 +90,7 @@ $ `stdlib/dist/job.nu`
     : ( Vec u ) c ( mkpk 150 )
     : *Ring r3 ( ring_new )
     ( ring_add_member r3 a 32 ) ( ring_add_member r3 b 32 ) ( ring_add_member r3 c 32 )
-    : *JobNode n2 ( job_node_new # s 0 # s r3 a 1 )
+    : JobNode n2 ( job_node_new ( transport_none ) # s r3 a 1 )
     : ( Vec u ) k2 ( bytes4 200 13 13 13 )
     : ~ ( Vec u ) owner1 ( vec_new [u] )
     ?? ( job_owner_pk n2 k2 ) { T o → { ( vec_free [u] owner1 ) = owner1 o } F → {} }
@@ -110,7 +110,7 @@ $ `stdlib/dist/job.nu`
     // to the other member — the two domains are independent.
     : *Ring r4 ( ring_new )
     ( ring_add_member r4 a 32 ) ( ring_add_member r4 b 32 ) ( ring_add_member r4 c 32 )
-    : *JobNode n3 ( job_node_new # s 0 # s r4 a 2 )
+    : JobNode n3 ( job_node_new ( transport_none ) # s r4 a 2 )
     ( job_register n3 7 ( sum_handler ) )
     : ~ ( Vec u ) k3 ( bytes4 0 0 0 0 )
     : ~ i probe 0

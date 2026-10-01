@@ -43,7 +43,7 @@ $ `stdlib/dist/identity.nu`
             : i crep ( identity_stable_id self_pk )
             ?? ( relay_register rc self_pk ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 300 )
-            : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
+            : Transport tr ( transport_open # s 0 rc 1 )
             : ( Vec u ) g ( group_id )
             ?? ( transport_group_join tr g ) { T _ → {} F _ → {} }
 

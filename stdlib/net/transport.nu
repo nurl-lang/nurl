@@ -26,12 +26,17 @@
 //
 // Broadcast uses the relay's group multicast (one uplink → N downlinks), the
 // bandwidth shape group audio needs.
+//
+// A Transport is a handle: every copy (a job node's, a membership loop's) is
+// the same transport, and its last owner releases it — transport_free is an
+// early release, optional. It does not close the legs it was opened over.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/crypto.nu`
 $ `stdlib/net/securedgram.nu`
 $ `stdlib/net/relay.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── path modes ───────────────────────────────────────────────────
 @ mode_none → i { ^ 0 }
@@ -102,11 +107,44 @@ $ `stdlib/net/relay.nu`
 
 // ── transport handle ─────────────────────────────────────────────
 
-: Transport {
+: TransportImpl {
     s node  // *SecureNode for the direct leg, or 0 if direct disabled
     RelayClient relay  // relay client (valid only when has_relay == 1)
     i has_relay
     ( Vec s ) peers  // *PeerPath
+}
+
+// A Transport is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Transport { s ctl }
+
+@ Transport_share Transport h → Transport { ^ @ Transport { # s ( rcbox_share # i . h ctl ) } }
+
+@ Transport_drop sink Transport h → v {
+    ( mem_forget h )
+    ( rcbox_release [TransportImpl] # i . h ctl )
+}
+
+@ __Transport_ptr Transport h → *TransportImpl { ^ ( rcbox_ptr [TransportImpl] # i . h ctl ) }
+
+// The peer paths are raw blocks the Vec only points at: releasing them is
+// the transport's own drop, run by its last owner (the Vec goes after it).
+// The legs are the caller's: the secure node and the relay connection are
+// closed by whoever opened them.
+% Drop TransportImpl {
+    @ drop TransportImpl t → v {
+        : i n ( vec_len [s] . t peers )
+        : ~ i k 0
+        ~ < k n {
+            : s pp ?? ( vec_get [s] . t peers k ) { T x → x F → # s 0 }
+            ? != # i pp 0 {
+                : *PeerPath p # *PeerPath pp
+                ( vec_free [u] . p pubkey )
+                ( nurl_free # s p )
+            } {}
+            = k + k 1
+        }
+    }
 }
 
 : TransportMsg {
@@ -117,16 +155,17 @@ $ `stdlib/net/relay.nu`
 @ transport_msg_free sink TransportMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
 
 // Open over both legs. `node` may be 0 (relay-only peer with no UDP path).
-@ transport_open s node RelayClient relay i has_relay → s {
-    : *Transport t # *Transport ( nurl_alloc Z Transport )
+@ transport_open s node RelayClient relay i has_relay → Transport {
+    : i t__box ( rcbox_zero [TransportImpl] )
+    : *TransportImpl t ( rcbox_ptr [TransportImpl] t__box )
     = . t node node
     = . t relay relay
     = . t has_relay has_relay
     = . t peers ( vec_new [s] )
-    ^ # s t
+    ^ @ Transport { # s t__box }
 }
 
-@ __tp_find * Transport t ( Vec u ) pk → s {
+@ __tp_find * TransportImpl t ( Vec u ) pk → s {
     : i n ( vec_len [s] . t peers )
     : ~ s found # s 0
     : ~ i k 0
@@ -141,8 +180,13 @@ $ `stdlib/net/relay.nu`
     ^ found
 }
 
+// No transport: for a node whose messages ride another bus (dist/sim's
+// simulator, an offline test) and which never sends through this one.
+@ transport_none → Transport { ^ @ Transport { # s 0 } }
+
 // Register a peer; it starts on the relay leg (or none if no relay).
-@ transport_add_peer * Transport t ( Vec u ) pubkey → v {
+@ transport_add_peer Transport t__h ( Vec u ) pubkey → v {
+    : *TransportImpl t ( __Transport_ptr t__h )
     ? != # i ( __tp_find t pubkey ) 0 { ^ v } {}
     : *PeerPath p # *PeerPath ( nurl_alloc Z PeerPath )
     = . p pubkey ( __tcpy pubkey )
@@ -155,7 +199,8 @@ $ `stdlib/net/relay.nu`
 // Begin a direct path to a peer at a known endpoint (e.g. a candidate from
 // the rendezvous service): register it with securedgram and start the
 // handshake. Stays on relay until the first direct datagram promotes it.
-@ transport_try_direct * Transport t ( Vec u ) pubkey s host i port → !v NetErr {
+@ transport_try_direct Transport t__h ( Vec u ) pubkey s host i port → !v NetErr {
+    : *TransportImpl t ( __Transport_ptr t__h )
     ? == # i . t node 0 { ^ @ !v NetErr { F # NetErr NetOther } } {}
     : *SecureNode node # *SecureNode . t node
     ( securedgram_add_peer node pubkey host port )
@@ -163,7 +208,8 @@ $ `stdlib/net/relay.nu`
 }
 
 // Send an opaque payload to a peer over whichever leg is currently chosen.
-@ transport_send * Transport t ( Vec u ) pubkey ( Vec u ) payload → !v NetErr {
+@ transport_send Transport t__h ( Vec u ) pubkey ( Vec u ) payload → !v NetErr {
+    : *TransportImpl t ( __Transport_ptr t__h )
     : s pp ( __tp_find t pubkey )
     // Unknown peer: no direct path is known (it was never added / no
     // candidate), so reach it over the relay if one is configured. The seam's
@@ -194,18 +240,21 @@ $ `stdlib/net/relay.nu`
 }
 
 // Broadcast to a group via the relay's multicast fanout (one uplink → N).
-@ transport_broadcast * Transport t ( Vec u ) group_id ( Vec u ) payload → !v NetErr {
+@ transport_broadcast Transport t__h ( Vec u ) group_id ( Vec u ) payload → !v NetErr {
+    : *TransportImpl t ( __Transport_ptr t__h )
     ? == . t has_relay 1 { ^ ( relay_broadcast . t relay group_id payload ) } {}
     ^ @ !v NetErr { F # NetErr NetOther }
 }
 
 // Join / leave a multicast group on the relay.
-@ transport_group_join * Transport t ( Vec u ) group_id → !v NetErr {
+@ transport_group_join Transport t__h ( Vec u ) group_id → !v NetErr {
+    : *TransportImpl t ( __Transport_ptr t__h )
     ? == . t has_relay 1 { ^ ( relay_group_join . t relay group_id ) } {}
     ^ @ !v NetErr { F # NetErr NetOther }
 }
 
-@ transport_group_leave * Transport t ( Vec u ) group_id → !v NetErr {
+@ transport_group_leave Transport t__h ( Vec u ) group_id → !v NetErr {
+    : *TransportImpl t ( __Transport_ptr t__h )
     ? == . t has_relay 1 { ^ ( relay_group_leave . t relay group_id ) } {}
     ^ @ !v NetErr { F # NetErr NetOther }
 }
@@ -213,7 +262,8 @@ $ `stdlib/net/relay.nu`
 // Receive one message, polling the direct leg first (promoting the peer's
 // path on direct data) then the relay leg. None if neither had a message
 // this round — callers loop.
-@ transport_recv * Transport t i max → ?TransportMsg {
+@ transport_recv Transport t__h i max → ?TransportMsg {
+    : *TransportImpl t ( __Transport_ptr t__h )
     : ~ ? TransportMsg out @ ?TransportMsg { F # TransportMsg 0 }
     : ~ b got F
     ? != # i . t node 0 {
@@ -242,18 +292,5 @@ $ `stdlib/net/relay.nu`
     ^ out
 }
 
-@ transport_free sink * Transport t → v {
-    : i n ( vec_len [s] . t peers )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . t peers k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PeerPath p # *PeerPath pp
-            ( vec_free [u] . p pubkey )
-            ( nurl_free # s p )
-        } {}
-        = k + k 1
-    }
-    ( vec_free [s] . t peers )
-    ( nurl_free # s t )
-}
+// Let go of `t` now rather than at the end of its owner's scope.
+@ transport_free sink Transport t → v {}

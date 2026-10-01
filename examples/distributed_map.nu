@@ -74,9 +74,9 @@ $ `stdlib/dist/job.nu`
             : ( Vec u ) me ( pk_for id )
             ?? ( relay_register rc me ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 250 )
-            : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
+            : Transport tr ( transport_open # s 0 rc 1 )
             : *Ring ring ( make_ring )
-            : *JobNode jn ( job_node_new # s tr # s ring me id )
+            : JobNode jn ( job_node_new tr # s ring me id )
             ( job_register jn 0 ( wordcount_handler ) )
             ( nurl_print `worker ` ) ( nurl_print_int id ) ( nurl_print ` ready\n` )
             // blocking pump (recv honours the socket timeout outside fibers)
@@ -95,9 +95,9 @@ $ `stdlib/dist/job.nu`
             : ( Vec u ) me ( pk_for 99 )
             ?? ( relay_register rc me ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 250 )
-            : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
+            : Transport tr ( transport_open # s 0 rc 1 )
             : *Ring ring ( make_ring )
-            : *JobNode jn ( job_node_new # s tr # s ring me 99 )
+            : JobNode jn ( job_node_new tr # s ring me 99 )
 
             : ( Vec i ) tids ( vec_new [i] )
             : ~ i i 0

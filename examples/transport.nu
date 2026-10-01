@@ -37,7 +37,7 @@ $ `stdlib/net/transport.nu`
             ( relay_set_timeout rc 3000 )
 
             // relay-only transport (no direct UDP leg in this demo)
-            : *Transport t # *Transport ( transport_open # s 0 rc 1 )
+            : Transport t ( transport_open # s 0 rc 1 )
 
             : ( Vec u ) g ( group_id )
             ?? ( transport_group_join t g ) { T _ → {} F _ → {} }
