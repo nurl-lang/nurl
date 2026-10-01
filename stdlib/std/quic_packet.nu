@@ -56,8 +56,8 @@ $ `stdlib/std/quic_varint.nu`
     ( Vec u ) key
     ( Vec u ) iv
     ( Vec u ) hp
-    * AesGcmKey aead
-    * AesGcmKey hpk
+    AesGcmKey aead
+    AesGcmKey hpk
 }
 
 @ quic_keys_derive i cipher ( Vec u ) secret → *QuicKeys {
@@ -74,8 +74,8 @@ $ `stdlib/std/quic_varint.nu`
         = . k aead ( aes_gcm_key_new . k key )
         = . k hpk ( aes_gcm_key_new . k hp )
     } {
-        = . k aead # *AesGcmKey 0
-        = . k hpk # *AesGcmKey 0
+        = . k aead @ AesGcmKey { # s 0 }
+        = . k hpk @ AesGcmKey { # s 0 }
     }
     ^ k
 }

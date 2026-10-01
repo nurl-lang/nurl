@@ -15,11 +15,16 @@
 // ~1200 bytes per call, where the per-call key setup the one-shot API
 // pays is a large fraction of the work; TLS records use it too):
 //
-//   ( aes_gcm_key_new key )                 → *AesGcmKey   (16 or 32 B key; 0 on a bad length)
+//   ( aes_gcm_key_new key )                 → AesGcmKey  (16 or 32 B key; a null key —
+//                                                         aes_gcm_key_ok F — on a bad length)
+//   ( aes_gcm_key_ok k )                    → b
 //   ( aes_gcm_seal   k nonce aad pt )       → ( Vec u )  ct||tag
 //   ( aes_gcm_open   k nonce aad ct_tag )   → ?( Vec u )
 //   ( aes_block_encrypt k block16 )         → ( Vec u )  one raw AES block (header protection)
-//   ( aes_gcm_key_free k )                  → v
+//   ( aes_gcm_key_free k )                  → v          early release (optional)
+//
+// An AesGcmKey is a library handle (docs/MEMORY.md §7.6): every copy is
+// the same prepared key, and the last owner releases it.
 //
 // ── Why this file looks the way it does ───────────────────────────
 //
@@ -59,6 +64,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __aes_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
@@ -727,18 +733,45 @@ $ `stdlib/std/bytes.nu`
 // Everything that depends only on the key: the bitsliced round keys,
 // the round count, and the GHASH subkey H = E_K(0^128). Built once by
 // `aes_gcm_key_new`, reused by every seal/open/block call, released by
-// `aes_gcm_key_free`. The per-call scratch (counter blocks, keystream)
-// is still allocated per call — it is per message, not per key.
-: AesGcmKey {
+// its last owner. The per-call scratch (counter blocks, keystream) is
+// still allocated per call — it is per message, not per key.
+: AesGcmKeyImpl {
     s skey
     i nr
     s hsub
 }
 
-@ aes_gcm_key_new ( Vec u ) key → *AesGcmKey {
+// The round keys and H are raw buffers: releasing them is the key's own
+// drop, run by the last owner of the handle (AesGcmKey_drop).
+% Drop AesGcmKeyImpl {
+    @ drop AesGcmKeyImpl k → v {
+        ( nurl_free . k skey )
+        ( nurl_free . k hsub )
+    }
+}
+
+// A handle on the key state in an rcbox (stdlib/core/rcbox.nu): every
+// copy is the same key, and the last owner releases it. `ctl` 0 is the
+// null key a bad key length gets.
+: AesGcmKey { s ctl }
+
+@ AesGcmKey_share AesGcmKey h → AesGcmKey { ^ @ AesGcmKey { # s ( rcbox_share # i . h ctl ) } }
+
+@ AesGcmKey_drop sink AesGcmKey h → v {
+    ( mem_forget h )
+    ( rcbox_release [AesGcmKeyImpl] # i . h ctl )
+}
+
+@ __AesGcmKey_ptr AesGcmKey h → *AesGcmKeyImpl { ^ ( rcbox_ptr [AesGcmKeyImpl] # i . h ctl ) }
+
+// F for the null key `aes_gcm_key_new` returns on a bad key length.
+@ aes_gcm_key_ok AesGcmKey h → b { ^ != 0 # i . h ctl }
+
+@ aes_gcm_key_new ( Vec u ) key → AesGcmKey {
     : i klen ( vec_len [u] key )
-    ? & != klen 16 != klen 32 { ^ # *AesGcmKey 0 } {}
-    : *AesGcmKey k # *AesGcmKey ( nurl_alloc Z AesGcmKey )
+    ? & != klen 16 != klen 32 { ^ @ AesGcmKey { # s 0 } } {}
+    : i k__box ( rcbox_zero [AesGcmKeyImpl] )
+    : *AesGcmKeyImpl k ( rcbox_ptr [AesGcmKeyImpl] k__box )
     : i nr ( __aes_nr key )
     : ( Vec u ) rk ( __aes_expand key )
     = . k skey ( __skey_bitslice rk nr )
@@ -757,21 +790,18 @@ $ `stdlib/std/bytes.nu`
     ( nurl_free # s hb )
     ( nurl_free # s zb )
     ( nurl_free q )
-    ^ k
+    ^ @ AesGcmKey { # s k__box }
 }
 
-@ aes_gcm_key_free sink * AesGcmKey k → v {
-    ? == # i k 0 { ^ } {}
-    ( nurl_free . k skey )
-    ( nurl_free . k hsub )
-    ( nurl_free # s k )
-}
+// Let go of `k` now rather than at the end of its owner's scope.
+@ aes_gcm_key_free sink AesGcmKey k → v {}
 
 // One raw AES block: the 16 bytes of `block` encrypted under the key.
 // QUIC header protection (RFC 9001 §5.4.3) is AES-ECB of the 16-byte
 // sample; the four-block core runs with slot 0 live and the rest zero.
-@ aes_block_encrypt * AesGcmKey k ( Vec u ) block → ( Vec u ) {
-    ? | == # i k 0 != ( vec_len [u] block ) 16 { ^ ( vec_new [u] ) } {}
+@ aes_block_encrypt AesGcmKey k__h ( Vec u ) block → ( Vec u ) {
+    ? | == 0 # i . k__h ctl != ( vec_len [u] block ) 16 { ^ ( vec_new [u] ) } {}
+    : *AesGcmKeyImpl k ( __AesGcmKey_ptr k__h )
     : s q ( nurl_zalloc 64 )
     : *u inb # *u ( nurl_zalloc 64 )
     : *u outb # *u ( nurl_zalloc 64 )
@@ -795,7 +825,7 @@ $ `stdlib/std/bytes.nu`
 // The first four-block call carries J0 = nonce ‖ 0x00000001 in slot 0
 // (its ciphertext masks the tag) and counters 2..4 in slots 1..3, so no
 // block of the core is wasted; every later call is four counters.
-@ __gcm_run * AesGcmKey k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing * u tagp → ( Vec u ) {
+@ __gcm_run * AesGcmKeyImpl k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing * u tagp → ( Vec u ) {
     : s skey . k skey
     : i nr . k nr
     : s q ( nurl_zalloc 64 )
@@ -855,12 +885,12 @@ $ `stdlib/std/bytes.nu`
 // AES-GCM seal under a prepared key: ciphertext with the 16-byte tag
 // appended. Nonce must be 12 bytes; the plaintext cap is GCM's
 // 2^39−256 bits = 2^36−32 bytes.
-@ aes_gcm_seal * AesGcmKey k ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
-    ? | == # i k 0 != ( vec_len [u] nonce ) 12 { ^ ( vec_new [u] ) } {}
+@ aes_gcm_seal AesGcmKey k__h ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+    ? | == 0 # i . k__h ctl != ( vec_len [u] nonce ) 12 { ^ ( vec_new [u] ) } {}
     ? > ( vec_len [u] pt ) 68719476704 { ^ ( vec_new [u] ) } {}
     : i n ( vec_len [u] pt )
     : *u tagp # *u ( nurl_zalloc 16 )
-    : ( Vec u ) ct ( __gcm_run k nonce aad ( vec_data [u] pt ) n 1 tagp )
+    : ( Vec u ) ct ( __gcm_run ( __AesGcmKey_ptr k__h ) nonce aad ( vec_data [u] pt ) n 1 tagp )
     : ~ i ti 0
     ~ < ti 16 { ( vec_push [u] ct . tagp ti ) = ti + ti 1 }
     ( nurl_free # s tagp )
@@ -870,14 +900,14 @@ $ `stdlib/std/bytes.nu`
 // AES-GCM open under a prepared key: `ct_tag` is ciphertext followed by
 // its 16-byte tag. The tag is verified BEFORE the plaintext is handed
 // back, and the comparison is a constant-time OR-accumulate.
-@ aes_gcm_open * AesGcmKey k ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
-    ? | == # i k 0 != ( vec_len [u] nonce ) 12 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+@ aes_gcm_open AesGcmKey k__h ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
+    ? | == 0 # i . k__h ctl != ( vec_len [u] nonce ) 12 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i total ( vec_len [u] ct_tag )
     ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16
     : *u ctp ( vec_data [u] ct_tag )
     : *u tagp # *u ( nurl_zalloc 16 )
-    : ( Vec u ) pt ( __gcm_run k nonce aad ctp ctlen 0 tagp )
+    : ( Vec u ) pt ( __gcm_run ( __AesGcmKey_ptr k__h ) nonce aad ctp ctlen 0 tagp )
     : ~ i diff 0
     : ~ i i 0
     ~ < i 16 { = diff | diff ^^ # i . tagp i # i . ctp + ctlen i = i + i 1 }
@@ -888,17 +918,13 @@ $ `stdlib/std/bytes.nu`
 
 // One-shot seal/open: a context for this call only.
 @ __gcm_seal ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
-    : *AesGcmKey k ( aes_gcm_key_new key )
-    : ( Vec u ) ct ( aes_gcm_seal k nonce aad pt )
-    ( aes_gcm_key_free k )
-    ^ ct
+    : AesGcmKey k ( aes_gcm_key_new key )
+    ^ ( aes_gcm_seal k nonce aad pt )
 }
 
 @ __gcm_open ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct_tag → ?( Vec u ) {
-    : *AesGcmKey k ( aes_gcm_key_new key )
-    : ?( Vec u ) r ( aes_gcm_open k nonce aad ct_tag )
-    ( aes_gcm_key_free k )
-    ^ r
+    : AesGcmKey k ( aes_gcm_key_new key )
+    ^ ( aes_gcm_open k nonce aad ct_tag )
 }
 
 // AES-128-GCM seal: returns ciphertext with the 16-byte tag appended.
