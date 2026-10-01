@@ -33,10 +33,13 @@
 // length thousands of times; making it pay for the setup each frame would be
 // the whole cost of the transform.
 //
-//   ( fft_plan n )                     → *FftPlan     (any n ≥ 1)
+//   ( fft_plan n )                     → FftPlan      (any n ≥ 1)
 //   ( fft_exec p re im )               → v            in-place forward
 //   ( fft_exec_inv p re im )           → v            in-place inverse (1/N scaled)
-//   ( fft_free p )                     → v
+//   ( fft_free p )                     → v            early release (optional)
+//
+// An FftPlan is a library handle (docs/MEMORY.md §7.6): every copy is the
+// same plan, and the last owner releases it.
 //
 //   ( fft_forward re im )              → v            plan on the fly, one shot
 //   ( fft_inverse re im )              → v
@@ -49,10 +52,11 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
+$ `stdlib/core/rcbox.nu`
 
 : f FFT_PI 3.14159265358979323846
 
-: FftPlan {
+: FftPlanImpl {
     i n  // the transform length asked for
     b pow2  // n is a power of two → straight radix-2
     i m  // Bluestein: the padded power-of-two length (≥ 2n−1)
@@ -66,10 +70,24 @@ $ `stdlib/std/float.nu`
     ( Vec f ) bim
     ( Vec f ) tre  // scratch: n entries (mixed-radix), m entries (Bluestein)
     ( Vec f ) tim
-    i half  // rfft: a *FftPlan for n/2, as an address (0 = none) — a real
+    FftPlan half  // rfft: the plan for n/2 (`ctl` 0 = none) — a real
     ( Vec f ) hre  // signal of even length folds into a HALF-length complex
     ( Vec f ) him  // transform; hre/him hold e^(−2πi k/n) for the untangle
 }
+
+// A handle on the plan in an rcbox (stdlib/core/rcbox.nu): every copy is
+// the same plan, and the last owner releases it — the n/2 sub-plan with
+// it, as a field.
+: FftPlan { s ctl }
+
+@ FftPlan_share FftPlan h → FftPlan { ^ @ FftPlan { # s ( rcbox_share # i . h ctl ) } }
+
+@ FftPlan_drop sink FftPlan h → v {
+    ( mem_forget h )
+    ( rcbox_release [FftPlanImpl] # i . h ctl )
+}
+
+@ __FftPlan_ptr FftPlan h → *FftPlanImpl { ^ ( rcbox_ptr [FftPlanImpl] # i . h ctl ) }
 
 @ fft_is_pow2 i n → b {
     ? < n 1 { ^ F } {}
@@ -193,7 +211,7 @@ $ `stdlib/std/float.nu`
 // The twiddle w_nsub^(j·k) comes out of the level's table by index (j·k mod
 // nsub), maintained incrementally — no multiply, no modulo in the inner loop.
 // The j = 0 term is w^0 = 1 and is the loop's starting value, not a multiply.
-@ __fft_mixed * FftPlan p ( Vec f ) re ( Vec f ) im i base i nsub i depth → v {
+@ __fft_mixed * FftPlanImpl p ( Vec f ) re ( Vec f ) im i base i nsub i depth → v {
     ? <= nsub 1 { ^ {} } {}
     : i fp ( __fgeti . p fac depth )
     ? <= fp 1 { ^ {} } {}
@@ -271,15 +289,17 @@ $ `stdlib/std/float.nu`
     ^ / * FFT_PI # f j2 # f n
 }
 
-@ fft_plan i n → *FftPlan {
+@ fft_plan i n → FftPlan {
     ^ ( __fft_plan_impl n T )
 }
 
 // `want_half`: whether to also build the n/2 sub-plan an rfft of even n uses.
 // The sub-plan never needs one of its own — only fft_rfft folds — so the
 // recursion is exactly one level deep.
-@ __fft_plan_impl i n b want_half → *FftPlan {
-    : *FftPlan p # *FftPlan ( nurl_alloc Z FftPlan )
+@ __fft_plan_impl i n b want_half → FftPlan {
+    : i p__box ( rcbox_zero [FftPlanImpl] )
+    : *FftPlanImpl p ( rcbox_ptr [FftPlanImpl] p__box )
+    : FftPlan h @ FftPlan { # s p__box }
     = . p n n
     = . p pow2 ( fft_is_pow2 n )
     = . p m 0
@@ -293,11 +313,11 @@ $ `stdlib/std/float.nu`
     = . p bim ( vec_new [f] )
     = . p tre ( vec_new [f] )
     = . p tim ( vec_new [f] )
-    = . p half 0
+    = . p half @ FftPlan { # s 0 }
     = . p hre ( vec_new [f] )
     = . p him ( vec_new [f] )
     ? & want_half & == 0 % n 2 >= n 4 {
-        = . p half # i ( __fft_plan_impl / n 2 F )
+        = . p half ( __fft_plan_impl / n 2 F )
         : ~ i hk 0
         ~ <= hk / n 2 {
             : f ha / * * -2.0 FFT_PI # f hk # f n
@@ -306,7 +326,7 @@ $ `stdlib/std/float.nu`
             = hk + hk 1
         }
     } {}
-    ? . p pow2 { ^ p } {}
+    ? . p pow2 { ^ h } {}
 
     // Smooth n → mixed radix: one twiddle table per recursion level (the
     // sub-length shrinks by one factor per level), plus n entries of scratch.
@@ -332,7 +352,7 @@ $ `stdlib/std/float.nu`
             ( vec_push [f] . p tim 0.0 )
             = d + d 1
         }
-        ^ p
+        ^ h
     } {}
 
     // Bluestein. m ≥ 2n−1, a power of two.
@@ -371,25 +391,11 @@ $ `stdlib/std/float.nu`
         = j + j 1
     }
     ( __fft_radix2 . p bre . p bim m -1.0 )
-    ^ p
+    ^ h
 }
 
-@ fft_free sink * FftPlan p → v {
-    ? != . p half 0 { ( fft_free # *FftPlan . p half ) } {}
-    ( vec_free [f] . p hre )
-    ( vec_free [f] . p him )
-    ( vec_free [i] . p fac )
-    ( vec_free [i] . p woff )
-    ( vec_free [f] . p wre )
-    ( vec_free [f] . p wim )
-    ( vec_free [f] . p cre )
-    ( vec_free [f] . p cim )
-    ( vec_free [f] . p bre )
-    ( vec_free [f] . p bim )
-    ( vec_free [f] . p tre )
-    ( vec_free [f] . p tim )
-    ( nurl_free # s p )
-}
+// Let go of `p` now rather than at the end of its owner's scope.
+@ fft_free sink FftPlan p → v {}
 
 // ── execute ─────────────────────────────────────────────────────────
 
@@ -400,7 +406,7 @@ $ `stdlib/std/float.nu`
 // forward transform comes out wrong while ifft(fft(x)) == x keeps passing.
 // (It did exactly that here, which is why the test compares against numpy and
 // not only against itself.)
-@ __fft_bluestein * FftPlan p ( Vec f ) re ( Vec f ) im → v {
+@ __fft_bluestein * FftPlanImpl p ( Vec f ) re ( Vec f ) im → v {
     : i n . p n
     : i m . p m
     : ~ i j 0
@@ -451,7 +457,11 @@ $ `stdlib/std/float.nu`
 }
 
 // Forward DFT, in place. `re` and `im` must both hold exactly n values.
-@ fft_exec * FftPlan p ( Vec f ) re ( Vec f ) im → v {
+@ fft_exec FftPlan p__h ( Vec f ) re ( Vec f ) im → v {
+    ( __fft_exec ( __FftPlan_ptr p__h ) re im )
+}
+
+@ __fft_exec * FftPlanImpl p ( Vec f ) re ( Vec f ) im → v {
     ? . p pow2 { ^ ( __fft_radix2 re im . p n -1.0 ) } {}
     ? > ( vec_len [i] . p fac ) 0 { ^ ( __fft_mixed p re im 0 . p n 0 ) } {}
     ( __fft_bluestein p re im )
@@ -464,14 +474,18 @@ $ `stdlib/std/float.nu`
 // One identity instead of a second transform with the signs flipped: there is
 // no separate inverse to keep in step with the forward, and no chance of the
 // two drifting apart.
-@ fft_exec_inv * FftPlan p ( Vec f ) re ( Vec f ) im → v {
+@ fft_exec_inv FftPlan p__h ( Vec f ) re ( Vec f ) im → v {
+    ( __fft_exec_inv ( __FftPlan_ptr p__h ) re im )
+}
+
+@ __fft_exec_inv * FftPlanImpl p ( Vec f ) re ( Vec f ) im → v {
     : i n . p n
     : ~ i k 0
     ~ < k n {
         ( vec_set [f] im k - 0.0 ( __fget im k ) )
         = k + k 1
     }
-    ( fft_exec p re im )
+    ( __fft_exec p re im )
     : f inv / 1.0 # f n
     = k 0
     ~ < k n {
@@ -485,15 +499,13 @@ $ `stdlib/std/float.nu`
 // Plans on the fly. Fine for a one-off; for an STFT, build the plan once.
 
 @ fft_forward ( Vec f ) re ( Vec f ) im → v {
-    : *FftPlan p ( fft_plan ( vec_len [f] re ) )
+    : FftPlan p ( fft_plan ( vec_len [f] re ) )
     ( fft_exec p re im )
-    ( fft_free p )
 }
 
 @ fft_inverse ( Vec f ) re ( Vec f ) im → v {
-    : *FftPlan p ( fft_plan ( vec_len [f] re ) )
+    : FftPlan p ( fft_plan ( vec_len [f] re ) )
     ( fft_exec_inv p re im )
-    ( fft_free p )
 }
 
 // Real input → the n/2+1 bins that are not redundant. `out_re` / `out_im` are
@@ -512,18 +524,18 @@ $ `stdlib/std/float.nu`
 // Half the transform is half the work, whatever path the half-length takes —
 // radix-2, mixed-radix or Bluestein.
 @ fft_rfft ( Vec f ) x ( Vec f ) out_re ( Vec f ) out_im → v {
-    : *FftPlan p ( fft_plan ( vec_len [f] x ) )
+    : FftPlan p ( fft_plan ( vec_len [f] x ) )
     ( fft_rfft_plan p x out_re out_im )
-    ( fft_free p )
 }
 
 // The same, with a plan the caller keeps — an STFT runs this once per frame.
-@ fft_rfft_plan * FftPlan p ( Vec f ) x ( Vec f ) out_re ( Vec f ) out_im → v {
+@ fft_rfft_plan FftPlan p__h ( Vec f ) x ( Vec f ) out_re ( Vec f ) out_im → v {
+    : *FftPlanImpl p ( __FftPlan_ptr p__h )
     : i n . p n
     ( vec_clear [f] out_re )
     ( vec_clear [f] out_im )
-    ? != . p half 0 {
-        : *FftPlan hp # *FftPlan . p half
+    ? != 0 # i . . p half ctl {
+        : *FftPlanImpl hp ( __FftPlan_ptr . p half )
         : i h / n 2
         : ( Vec f ) zr ( vec_with_cap [f] h )
         : ( Vec f ) zi ( vec_with_cap [f] h )
@@ -533,7 +545,7 @@ $ `stdlib/std/float.nu`
             ( vec_push [f] zi ( __fget x + * 2 t 1 ) )
             = t + t 1
         }
-        ( fft_exec hp zr zi )
+        ( __fft_exec hp zr zi )
         : ~ i k 0
         ~ <= k h {
             : i kk % k h
@@ -563,7 +575,7 @@ $ `stdlib/std/float.nu`
         ( vec_push [f] im 0.0 )
         = k + k 1
     }
-    ( fft_exec p re im )
+    ( __fft_exec p re im )
     : i nb + / n 2 1
     = k 0
     ~ < k nb {
@@ -584,7 +596,8 @@ $ `stdlib/std/float.nu`
 // in the file rather than two that could drift apart. `out` is cleared and
 // filled with n samples; the imaginary part of the result is zero to rounding
 // and is dropped.
-@ fft_irfft_plan * FftPlan p ( Vec f ) in_re ( Vec f ) in_im ( Vec f ) out → v {
+@ fft_irfft_plan FftPlan p__h ( Vec f ) in_re ( Vec f ) in_im ( Vec f ) out → v {
+    : *FftPlanImpl p ( __FftPlan_ptr p__h )
     : i n . p n
     : i h / n 2
     : ( Vec f ) re ( vec_with_cap [f] n )
@@ -601,7 +614,7 @@ $ `stdlib/std/float.nu`
         ( vec_push [f] im - 0.0 ( __fget in_im - n k ) )
         = k + k 1
     }
-    ( fft_exec_inv p re im )
+    ( __fft_exec_inv p re im )
     ( vec_clear [f] out )
     = k 0
     ~ < k n {
@@ -611,7 +624,6 @@ $ `stdlib/std/float.nu`
 }
 
 @ fft_irfft ( Vec f ) in_re ( Vec f ) in_im i n ( Vec f ) out → v {
-    : *FftPlan p ( fft_plan n )
+    : FftPlan p ( fft_plan n )
     ( fft_irfft_plan p in_re in_im out )
-    ( fft_free p )
 }

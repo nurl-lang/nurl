@@ -161,7 +161,7 @@ $ `stdlib/std/float.nu`
         ( vec_set [f] i0 j b )
         = j + j 1
     }
-    : *FftPlan p ( fft_plan n )
+    : FftPlan p ( fft_plan n )
     ( fft_exec p re im )
     ( fft_exec_inv p re im )
     ( fft_free p )
