@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_stored_owner_gone.nu:33: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 32 by keep (it was stored in 't'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^ + n ( vec_len [i] a )
+compiler/tests/borrow_stored_owner_gone.nu:40: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 39 by keep (in a literal it was handed). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^ + n ( vec_len [i] a )
+compiler/tests/borrow_stored_owner_gone.nu:49: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 48 by assigning 't' a new value — the old one held it. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^ + ( peek t ) ( vec_len [i] a )
+error: compilation aborted — 3 borrow-checker violations (re-run with --no-borrowck to bypass)

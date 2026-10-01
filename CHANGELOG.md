@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when a later call on the same line reads it (`: i n ( give a ) ^ + n (
   vec_len [i] a )` said "consumed by vec_len").
   `compiler/tests/borrow_moved_cause_same_line.nu`.
+- **A binding placed in a literal lives as long as the value holding it.**
+  `: Hold t @ Hold { a }` then `( keep t )` then `( vec_len [i] a )` read
+  freed memory and compiled clean; so did a read after `= t …` replaced the
+  holder, or after a literal went to a call consuming it (`( keep @ Hold {
+  a } )`). Each is now a use-after-move error naming what took the value;
+  reading `a` while the holder still holds it stays legal.
+  `compiler/tests/borrow_stored_owner_gone.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
