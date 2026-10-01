@@ -47,7 +47,6 @@ $ `src/wasmkernel.nu`
     ( check ! ( bytes_eq h0 h1 ) `manifest: distinct blocks differ` )
     : String hx ( blob_hex h0 )
     ( check == ( string_len hx ) 64 `hex: 64 chars` )
-    ( string_free hx )
 
     // ── cache store / append / corruption ────────────────────────────
     : ( Vec u ) small ( mkbytes 4096 42 )
@@ -62,7 +61,6 @@ $ `src/wasmkernel.nu`
     : ( Vec u ) missing ( blob_hash wrong )
     : ( Vec u ) out2 ( vec_new [u] )
     ( check ! ( blob_append missing out2 ) `append: miss reported` )
-    ( vec_free [u] out ) ( vec_free [u] out2 ) ( vec_free [u] wrong ) ( vec_free [u] missing )
 
     // ── the seed handler (HMAC round-trip) ───────────────────────────
     : ( Vec u ) key ( token_key `blob-test-token` )
@@ -74,7 +72,7 @@ $ `src/wasmkernel.nu`
     : ( Vec u ) r ( h tagged )
     : ~ i seed_ok 0
     ?? ( token_untag key r ) {
-        T body → { = seed_ok ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 } ( vec_free [u] body ) }
+        T body → { = seed_ok ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 } }
         F → {}
     }
     ( check == seed_ok 1 `seed handler: ok result` )
@@ -85,13 +83,10 @@ $ `src/wasmkernel.nu`
     : ( Vec u ) r2 ( h forged )
     : ~ i forged_ok 1
     ?? ( token_untag key r2 ) {
-        T body → { = forged_ok ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 } ( vec_free [u] body ) }
+        T body → { = forged_ok ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 } }
         F → {}
     }
     ( check == forged_ok 0 `seed handler: forged payload rejected` )
-    ( vec_free [u] sp ) ( vec_free [u] tagged ) ( vec_free [u] r )
-    ( vec_free [u] forged ) ( vec_free [u] r2 ) ( vec_free [u] badkey )
-    ( vec_free [u] small2 ) ( vec_free [u] sh2 )
 
     // ── payload v4 round-trip ────────────────────────────────────────
     : ( Vec i ) params ( vec_new [i] )
@@ -118,11 +113,6 @@ $ `src/wasmkernel.nu`
     : ( Vec u ) trunc ( bytes_slice p4 0 30 )
     : GpuChunk ct ( wasm_gpu_chunk_decode trunc )
     ( check == . ct ok 0 `v4: truncated frame rejected` )
-    ( gpu_chunk_free ct )
-    ( vec_free [u] trunc )
-    ( gpu_chunk_free c )
-    ( blob_manifest_free hashes )
-    ( vec_free [u] p4 ) ( vec_free [u] wasm ) ( vec_free [i] params )
 
     // ── v4 slice assembly from the cache ─────────────────────────────
     // two cached 4 KiB "blocks" cannot be real 8 MiB grid blocks, so test
@@ -138,8 +128,6 @@ $ `src/wasmkernel.nu`
     ( check == ( vec_len [u] . ac data ) * 8 192 `assemble: exact take (8·(hi−lo))` )
     : ( Vec u ) expect ( bytes_slice small 64 1600 )
     ( check ( bytes_eq . ac data expect ) `assemble: correct window (skip honoured)` )
-    ( vec_free [u] expect )
-    ( gpu_chunk_free ac )
     // a chunk referencing an uncached hash must fail
     : ( Vec ( Vec u ) ) mh ( vec_new [( Vec u )] )
     : ( Vec u ) ghost ( mkbytes 100 77 )
@@ -147,15 +135,7 @@ $ `src/wasmkernel.nu`
     : ( Vec u ) mp ( wasm_gpu_chunk_payload_blobs 0 0 10 0 nop 0 1 mh aw )
     : ~ GpuChunk mc ( wasm_gpu_chunk_decode mp )
     ( check ! ( gpu_chunk_assemble mc ) `assemble: missing block FAILS the chunk` )
-    ( gpu_chunk_free mc )
-    ( vec_free [u] ghost ) ( vec_free [u] mp )
-    ( blob_manifest_free mh )
-    ( blob_manifest_free ah )
-    ( vec_free [u] ap ) ( vec_free [u] aw ) ( vec_free [i] nop )
 
-    ( vec_free [u] small ) ( vec_free [u] sh )
-    ( blob_manifest_free m1 ) ( blob_manifest_free m2 )
-    ( vec_free [u] data ) ( vec_free [u] key )
     // the handler closure's env is manual (factory-returned closure)
 
     ? == g_fail 0 { ( nurl_print `ALL PASS\n` ) ^ 0 } { ( nurl_print `FAILURES\n` ) ^ 1 }

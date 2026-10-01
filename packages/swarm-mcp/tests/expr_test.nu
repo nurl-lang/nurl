@@ -10,24 +10,22 @@ $ `src/expr.nu`
 // Parse `src`, evaluate at x; -999999 marks a parse error.
 @ ev s src i x → i {
     : ( Vec u ) b ( bytes_from_str src )
-    : *EParser p # *EParser ( nurl_alloc Z EParser )
+    : EParser p ( eparser_new )
     : i root ( expr_parse b p )
-    : b okp . p ok
+    : b okp ( eparser_ok p )
     : ~ i r -999999
     ? okp { = r ( expr_eval p root x ) } {}
-    ( eparser_free p ) ( vec_free [u] b )
     ^ r
 }
 
 // Float evaluate `src` at x (x cast to double inside).
 @ evf s src f x → f {
     : ( Vec u ) b ( bytes_from_str src )
-    : *EParser p # *EParser ( nurl_alloc Z EParser )
+    : EParser p ( eparser_new )
     : i root ( expr_parse b p )
-    : b okp . p ok
+    : b okp ( eparser_ok p )
     : ~ f r -999.0
     ? okp { = r ( expr_eval_f p root x ) } {}
-    ( eparser_free p ) ( vec_free [u] b )
     ^ r
 }
 

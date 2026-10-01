@@ -170,12 +170,9 @@ $ `token.nu`
     ( Vec u ) wasm
 }
 
-@ gpu_chunk_free sink GpuChunk c → v {
-    ( vec_free [i] . c params )
-    ( vec_free [u] . c data )
-    ( blob_manifest_free . c blobs )
-    ( vec_free [u] . c wasm )
-}
+// A GpuChunk owns only Vecs, which its owner drops; this lets go of them
+// now rather than at the end of the owner's scope (optional).
+@ gpu_chunk_free sink GpuChunk c → v {}
 
 @ wasm_gpu_chunk_decode ( Vec u ) body → GpuChunk {
     : ( Vec i ) params ( vec_new [i] )
@@ -217,7 +214,6 @@ $ `token.nu`
                     ( vec_push [( Vec u )] blobs ( bytes_slice body + hstart * k 32 + hstart * + k 1 32 ) )
                     = k + k 1
                 }
-                ( vec_free [u] wasm )
                 = wasm ( bytes_slice body hend ( vec_len [u] body ) )
                 = ok 1
             } {}
@@ -246,10 +242,8 @@ $ `token.nu`
                 = k + k 1
             }
             ? > dlen 0 {
-                ( vec_free [u] data )
                 = data ( bytes_slice body dstart + dstart dlen )
             } {}
-            ( vec_free [u] wasm )
             = wasm ( bytes_slice body + dstart dlen ( vec_len [u] body ) )
             = ok 1
         } {}
@@ -284,7 +278,6 @@ $ `token.nu`
         ( vec_free [u] . c data )
         = . c data ( bytes_slice whole skip + skip take )
     } { = bok F }
-    ( vec_free [u] whole )
     ^ bok
 }
 
@@ -345,8 +338,7 @@ $ `token.nu`
     // In-process engine: the runtime is compiled into this binary, so
     // there is nothing to probe and nothing that can be missing.
     : String ext ( __wasm_external )
-    ? == ( string_len ext ) 0 { ( string_free ext ) ^ ( string_new ) } {}
-    ( string_free ext )
+    ? == ( string_len ext ) 0 { ^ ( string_new ) } {}
     : String rt ( __wasm_runtime )
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `--version` )
@@ -354,18 +346,13 @@ $ `token.nu`
     ?? ( process_run ( string_data rt ) args `` ) {
         T o → {
             ? == ( output_exit_code o ) 0 {} {
-                ( string_free out )
                 = out ( string_concat ( string_from `'` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `' is not a working wasm runtime (it exited non-zero on --version)` ) ) )
             }
-            ( output_free o )
         }
         F e → {
-            ( string_free out )
             = out ( string_concat ( string_from `no wasm runtime: could not execute '` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `'` ) ) )
         }
     }
-    ( vec_free [s] args )
-    ( string_free rt )
     ^ out
 }
 
@@ -381,13 +368,9 @@ $ `token.nu`
         T o → {
             : String h ( string_from ( output_stdout o ) )
             ? ( string_contains h `--allow-gpu` ) { = ok T } {}
-            ( string_free h )
-            ( output_free o )
         }
         F e → {}
     }
-    ( vec_free [s] args )
-    ( string_free rt )
     ^ ok
 }
 
@@ -465,23 +448,16 @@ $ `token.nu`
                 // string_trim BORROWS its argument, so the intermediate
                 // String must be bound and freed — inline it leaked.
                 : String rerr ( string_from ( output_stderr out ) )
-                ( string_free err )
                 = err ( string_trim rerr )
-                ( string_free rerr )
                 ? == ( string_len err ) 0 {
-                    ( string_free err )
                     = err ( string_from `wasm runtime exited non-zero with no message` )
                 } {}
             }
-            ( output_free out )
         }
         F e → {
-            ( string_free err )
             = err ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `' — put a wasm runtime on PATH or set $NURL_WASM_RUNTIME (the pure-NURL 'nurlpkg install nwasm' is a drop-in)` ) ) )
         }
     }
-    ( string_free rt )
-    ( vec_free [s] args )
     ^ @ WasmRun { ok v err }
 }
 
@@ -555,7 +531,7 @@ $ `token.nu`
         : ~ i run_ok 0
         : ~ String why ( string_new )
         ?? ( token_untag key p ) {
-            F → { ( string_free why ) = why ( string_from `payload failed the cluster HMAC check (wrong --token?)` ) }
+            F → { = why ( string_from `payload failed the cluster HMAC check (wrong --token?)` ) }
             T body → {
                 : i lo ?? ( bytes_read_u64_be body 0 ) { T x → # i x F → 0 }
                 : i hi ?? ( bytes_read_u64_be body 8 ) { T x → # i x F → 0 }
@@ -568,7 +544,6 @@ $ `token.nu`
                     : WasmRun wr ( __wasm_run_inproc wasm lo hi 0 )
                     = run_ok . wr ok
                     = partial . wr value
-                    ( string_free why )
                     = why . wr err
                 } {
                     // External runtime ($NURL_WASM_RUNTIME): the CLI contract needs
@@ -581,13 +556,8 @@ $ `token.nu`
                     : WasmRun wr ( __wasm_run path lo hi 0 )
                     = run_ok . wr ok
                     = partial . wr value
-                    ( string_free why )
                     = why . wr err
-                    ( string_free hex ) ( string_free path )
-                    ( vec_free [u] wasm )
                 }
-                ( string_free ext )
-                ( vec_free [u] body )
             }
         }
         // result wire: [ok:1][partial:8] — the coordinator counts failed
@@ -598,9 +568,7 @@ $ `token.nu`
         ( vec_push [u] r # u run_ok )
         ( bytes_push_u64_be r # u64 partial )
         ? == run_ok 0 { ( chunk_err_push r ( string_data why ) ) } {}
-        ( string_free why )
         : ( Vec u ) out ( token_tag key r )
-        ( vec_free [u] r )
         ^ out
     }
 }
@@ -637,7 +605,6 @@ $ `token.nu`
         ( string_push_str outp `/swarmo_` )
         : String rh ( __hex_u64 ( rand_u64 ) )
         ( string_push_str outp ( string_data rh ) )
-        ( string_free rh )
         ( string_push_str outp `.bin` )
     } {}
     // the chunk's dataset slice → a temp in-file the module reads back
@@ -648,7 +615,6 @@ $ `token.nu`
         ( string_push_str inp `/swarmi_` )
         : String rh2 ( __hex_u64 ( rand_u64 ) )
         ( string_push_str inp ( string_data rh2 ) )
-        ( string_free rh2 )
         ( string_push_str inp `.bin` )
         ?? ( write_file_bytes ( string_data inp ) . c data ) { T _ → {} F e → { = inp_ok F } }
     } {}
@@ -699,8 +665,6 @@ $ `token.nu`
     : ~ ( Vec u ) outb ( vec_new [u] )
     : ~ String gerr ( string_new )
     ? ! inp_ok {
-        ( string_free rt ) ( vec_free [s] args ) ( vec_free [i] offs ) ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free tmp )
-        ( string_free gerr )
         ^ @ GpuOut { 0 0 outb ( string_from `could not stage the chunk's input data in $TMPDIR` ) }
     } {}
     ?? ( process_run ( string_data rt ) args `` ) {
@@ -711,10 +675,9 @@ $ `token.nu`
                         T bts → {
                             : i want ? == . c mode ( gpu_mode_shuffle_reduce ) * 16 + . c kbins 1 ? == . c mode ( gpu_mode_shuffle_map ) * 16 - . c hi . c lo * 8 ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) . c kbins - . c hi . c lo
                             ? == ( vec_len [u] bts ) want {
-                                ( vec_free [u] outb )
                                 = outb bts
                                 = ok 1
-                            } { ( vec_free [u] bts ) }
+                            } {}
                         }
                         F e → {}
                     }
@@ -723,32 +686,24 @@ $ `token.nu`
                     = scalar ( nurl_str_to_int ( output_stdout out ) )
                 }
                 ? == ok 0 {
-                    ( string_free gerr )
                     = gerr ( string_from `the module ran but wrote a short or unreadable output file` )
                 } {}
             } {
                 // Bound and freed for the same reason as the CPU path:
                 // string_trim borrows, an inline temp leaks.
                 : String gserr ( string_from ( output_stderr out ) )
-                ( string_free gerr )
                 = gerr ( string_trim gserr )
-                ( string_free gserr )
                 ? == ( string_len gerr ) 0 {
-                    ( string_free gerr )
                     = gerr ( string_from `the GPU module exited non-zero with no message` )
                 } {}
             }
-            ( output_free out )
         }
         F e → {
-            ( string_free gerr )
             = gerr ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data rt ) ) ( string_from `' — a --gpu worker needs the pure-NURL nwasm on PATH or in $NURL_WASM_RUNTIME` ) ) )
         }
     }
     ? vecmode { ?? ( file_delete ( string_data outp ) ) { T _ → {} F _ → {} } } {}
     ? hasdata { ?? ( file_delete ( string_data inp ) ) { T _ → {} F _ → {} } } {}
-    ( vec_free [s] args ) ( vec_free [i] offs )
-    ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free rt ) ( string_free tmp )
     ^ @ GpuOut { ok scalar outb gerr }
 }
 
@@ -763,7 +718,7 @@ $ `token.nu`
         : ~ ( Vec u ) outb ( vec_new [u] )
         : ~ String why ( string_new )
         ?? ( token_untag key p ) {
-            F → { ( string_free why ) = why ( string_from `payload failed the cluster HMAC check (wrong --token?)` ) }
+            F → { = why ( string_from `payload failed the cluster HMAC check (wrong --token?)` ) }
             T body → {
                 : ~ GpuChunk c ( wasm_gpu_chunk_decode body )
                 = mode . c mode
@@ -777,17 +732,11 @@ $ `token.nu`
                     : GpuOut r ( __wasm_run_gpu path c )
                     = run_ok . r ok
                     = scalar . r scalar
-                    ( vec_free [u] outb )
                     = outb . r bytes
-                    ( string_free why )
                     = why . r err
-                    ( string_free hex ) ( string_free path )
                 } {
-                    ( string_free why )
                     = why ( string_from `a dataset block this chunk needs is missing or failed its hash check` )
                 }
-                ( gpu_chunk_free c )
-                ( vec_free [u] body )
             }
         }
         : ( Vec u ) r ( vec_new [u] )
@@ -799,10 +748,7 @@ $ `token.nu`
             ( vec_extend [u] r outb )
         }
         ? == run_ok 0 { ( chunk_err_push r ( string_data why ) ) } {}
-        ( string_free why )
-        ( vec_free [u] outb )
         : ( Vec u ) out ( token_tag key r )
-        ( vec_free [u] r )
         ^ out
     }
 }

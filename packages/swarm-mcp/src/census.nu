@@ -21,6 +21,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/dist/ring.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ census_hello_t → i { ^ 3 }
 
@@ -50,7 +51,9 @@ $ `stdlib/dist/ring.nu`
 
 : Hello { i id i role i want ( Vec u ) pubkey i caps }
 
-@ hello_free sink Hello h → v { ( vec_free [u] . h pubkey ) }
+// A Hello owns only its pubkey, which its owner drops; this lets go of it
+// now rather than at the end of the owner's scope (optional).
+@ hello_free sink Hello h → v {}
 
 @ hello_decode ( Vec u ) buf → Hello {
     : i id ?? ( bytes_read_u64_be buf 1 ) { T x → # i x F → 0 }
@@ -75,46 +78,56 @@ $ `stdlib/dist/ring.nu`
 // Eviction is self-healing — a worker that comes back re-announces and rejoins.
 : Member { ( Vec u ) pubkey i id i caps i last_ms }
 
-: Roster { ( Vec s ) members }  // *Member
+: RosterImpl { ( Vec Member ) members }
 
-@ roster_new → *Roster {
-    : *Roster r # *Roster ( nurl_alloc Z Roster )
-    = . r members ( vec_new [s] )
-    ^ r
+// A Roster is a handle on its member list in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same roster, and the last owner releases it.
+: Roster { s ctl }
+
+@ Roster_share Roster h → Roster { ^ @ Roster { # s ( rcbox_share # i . h ctl ) } }
+
+@ Roster_drop sink Roster h → v {
+    ( mem_forget h )
+    ( rcbox_release [RosterImpl] # i . h ctl )
 }
 
-@ roster_free sink * Roster r → v {
-    : i n ( vec_len [s] . r members )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *Member m # *Member pp ( vec_free [u] . m pubkey ) ( nurl_free # s m ) } {}
-        = k + k 1
-    }
-    ( vec_free [s] . r members )
-    ( nurl_free # s r )
+@ __Roster_ptr Roster h → *RosterImpl { ^ ( rcbox_ptr [RosterImpl] # i . h ctl ) }
+
+@ roster_new → Roster {
+    ^ @ Roster { # s ( rcbox_new [RosterImpl] @ RosterImpl { ( vec_new [Member] ) } ) }
 }
 
-@ roster_has * Roster r ( Vec u ) pubkey → b {
-    : i n ( vec_len [s] . r members )
-    : ~ b found F : ~ i k 0
-    ~ & ! found < k n {
-        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *Member m # *Member pp ? ( bytes_eq . m pubkey pubkey ) { = found T } {} } {}
+// Let go of `r` now rather than at the end of its owner's scope (optional).
+@ roster_free sink Roster r → v {}
+
+// Index of the member with `pubkey`, -1 if none.
+@ __roster_find * RosterImpl r ( Vec u ) pubkey → i {
+    : i n ( vec_len [Member] . r members )
+    : ~ i found -1 : ~ i k 0
+    ~ & == found -1 < k n {
+        ?? ( vec_get [Member] . r members k ) { T m → { ? ( bytes_eq . m pubkey pubkey ) { = found k } {} } F → {} }
         = k + k 1
     }
     ^ found
 }
 
-@ roster_count * Roster r → i { ^ ( vec_len [s] . r members ) }
+@ roster_has Roster r__h ( Vec u ) pubkey → b {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    ^ >= ( __roster_find r pubkey ) 0
+}
+
+@ roster_count Roster r__h → i {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    ^ ( vec_len [Member] . r members )
+}
 
 // How many members advertise every capability bit in `mask`.
-@ roster_count_caps * Roster r i mask → i {
-    : i n ( vec_len [s] . r members )
+@ roster_count_caps Roster r__h i mask → i {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    : i n ( vec_len [Member] . r members )
     : ~ i c 0 : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *Member m # *Member pp ? == & . m caps mask mask { = c + c 1 } {} } {}
+        ?? ( vec_get [Member] . r members k ) { T m → { ? == & . m caps mask mask { = c + c 1 } {} } F → {} }
         = k + k 1
     }
     ^ c
@@ -122,32 +135,24 @@ $ `stdlib/dist/ring.nu`
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
 // `now` is the caller's clock (ms); the member's liveness stamp starts there.
-@ roster_add * Roster r Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
-    ? ( roster_has r pubkey ) { ^ F } {}
-    : *Member m # *Member ( nurl_alloc Z Member )
+@ roster_add Roster r__h Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    ? >= ( __roster_find r pubkey ) 0 { ^ F } {}
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )
     ( vec_extend [u] cp pubkey )
-    = . m pubkey cp
-    = . m id id
-    = . m caps caps
-    = . m last_ms now
-    ( vec_push [s] . r members # s m )
+    ( vec_push [Member] . r members @ Member { cp id caps now } )
     ( ring_add_member ring pubkey vnodes )
     ^ T
 }
 
 // Refresh a member's liveness stamp (a re-heard HELLO). Unknown pubkey: no-op.
-@ roster_touch * Roster r ( Vec u ) pubkey i now → v {
-    : i n ( vec_len [s] . r members )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *Member m # *Member pp
-            ? ( bytes_eq . m pubkey pubkey ) { = . m last_ms now = k n } {}
-        } {}
-        = k + k 1
-    }
+// The stamp is written in place, through the element's slot.
+@ roster_touch Roster r__h ( Vec u ) pubkey i now → v {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    : i k ( __roster_find r pubkey )
+    ? < k 0 { ^ v } {}
+    : *Member m # *Member + # i ( vec_data [Member] . r members ) * k Z Member
+    = . m last_ms now
 }
 
 // Drop every member silent for longer than `ttl_ms` and return their pubkeys
@@ -159,41 +164,31 @@ $ `stdlib/dist/ring.nu`
 // worker hears no HELLO of its own, so without the exemption it would time
 // itself out of its own ring and stop owning — and therefore stop executing —
 // every key it holds.
-@ roster_expire * Roster r i now i ttl_ms ( Vec u ) exempt → ( Vec ( Vec u ) ) {
+@ roster_expire Roster r__h i now i ttl_ms ( Vec u ) exempt → ( Vec ( Vec u ) ) {
+    : *RosterImpl r ( __Roster_ptr r__h )
     : ( Vec ( Vec u ) ) gone ( vec_new [( Vec u )] )
-    : ( Vec s ) keep ( vec_new [s] )
-    : i n ( vec_len [s] . r members )
+    // An evicted member leaves the list (vec_remove hands it over, in order);
+    // its pubkey moves into `gone`.
     : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *Member m # *Member pp
-            ? & > - now . m last_ms ttl_ms ! ( bytes_eq . m pubkey exempt ) {
-                ( vec_push [( Vec u )] gone . m pubkey )
-                ( nurl_free # s m )
-            } { ( vec_push [s] keep pp ) }
-        } {}
-        = k + k 1
+    ~ < k ( vec_len [Member] . r members ) {
+        : b evict ?? ( vec_get [Member] . r members k ) { T m → & > - now . m last_ms ttl_ms ! ( bytes_eq . m pubkey exempt ) F → F }
+        ? evict {
+            ?? ( vec_remove [Member] . r members k ) { T m → { ( vec_push [( Vec u )] gone . m pubkey ) } F → {} }
+        } { = k + k 1 }
     }
-    ( vec_free [s] . r members )
-    = . r members keep
     ^ gone
 }
 
 // True when `pubkey` is a live roster member (the coordinator's liveness test
 // for the worker a chunk was routed to).
-@ roster_is_live * Roster r ( Vec u ) pubkey → b { ^ ( roster_has r pubkey ) }
+@ roster_is_live Roster r ( Vec u ) pubkey → b { ^ ( roster_has r pubkey ) }
 
 // Read-only view of member k: its node id, capability bits and last-heard
 // stamp. Out of range → id 0. Used by the status tool, so an operator (or the
 // model) can see the cluster the coordinator believes it has.
 : MemberView { i id i caps i last_ms }
 
-@ roster_view * Roster r i k → MemberView {
-    : i n ( vec_len [s] . r members )
-    ? | < k 0 >= k n { ^ @ MemberView { 0 0 0 } } {}
-    : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
-    ? == # i pp 0 { ^ @ MemberView { 0 0 0 } } {}
-    : *Member m # *Member pp
-    ^ @ MemberView { . m id . m caps . m last_ms }
+@ roster_view Roster r__h i k → MemberView {
+    : *RosterImpl r ( __Roster_ptr r__h )
+    ^ ?? ( vec_get [Member] . r members k ) { T m → @ MemberView { . m id . m caps . m last_ms } F → @ MemberView { 0 0 0 } }
 }
