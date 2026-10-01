@@ -113,7 +113,6 @@ $ `view.nu`
             ? & & & >= n 4 == 112 # i . p 0 == 108 # i . p 1 == 121 # i . p 2 {} {
                 ( nurl_print `ply: ` ) ( nurl_print path )
                 ( nurl_print ` does not start with 'ply'\n` )
-                ( vec_free [u] b )
                 ^ 1
             }
             // print up to and including the end_header line; a header is
@@ -134,13 +133,11 @@ $ `view.nu`
                         ( nurl_print ( nurl_str_int - n + k 1 ) )
                         ( nurl_print ` bytes\n` )
                     } {}
-                    ( string_free line )
                     = ls + k 1
                 } {}
                 = k + k 1
             }
             ? == done 0 { ( nurl_print `ply: no end_header in the first 8 KB\n` ) } {}
-            ( vec_free [u] b )
             ^ ? == done 1 0 1
         }
     }

@@ -24,7 +24,6 @@ $ `src/ply.nu`
     ?? ( ply_create out ascii `writecheck` ) {
         F e → {
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             ^ 1
         }
         T w → {

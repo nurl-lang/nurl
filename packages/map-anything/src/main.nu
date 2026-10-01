@@ -572,7 +572,7 @@ $ `src/sky.nu`
         }
     } {}
 
-    : ~ * PlyW ply # *PlyW 0
+    : ~ PlyW ply @ PlyW { # s 0 }
     ?? ( ply_create . o out . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
         F e → {
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )

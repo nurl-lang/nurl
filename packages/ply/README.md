@@ -31,6 +31,11 @@ The layout is `x,y,z` float32 + `red,green,blue` uchar — 15 bytes a
 vertex in `binary_little_endian`, one line a vertex in `ascii`. MeshLab,
 CloudCompare, Blender and f3d all open it.
 
+A `PlyW` is a handle: copies are the same writer and nothing is freed by
+hand. A writer whose last owner lets go of it without `ply_finish` is
+finished then (flushed, count patched, closed) — call `ply_finish` to
+learn whether the file can be trusted.
+
 ## The viewer
 
 One self-contained WebGL2 page, compiled into the binary (an installed
