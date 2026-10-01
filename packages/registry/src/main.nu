@@ -191,7 +191,7 @@ $ `src/service.nu`
         ? == rc 0 {
             ( reg_service_config ( string_data data ) ( string_data dbp ) ( string_data pepper )
             ( string_data base ) ( string_data ghid ) ( string_data ghsec ) )
-            : *HttpApp app ( http_app_new )
+            : HttpApp app ( http_app_new )
             ( http_app_use_router app ( reg_service_router ) )
             // The publish endpoint accepts tarballs up to 16 MiB — the
             // wire contract the Worker set. head stays at the default.
@@ -209,7 +209,6 @@ $ `src/service.nu`
             }
             ( string_free cert )
             ( string_free key )
-            ( http_app_free app )
         } {}
 
         ( string_free host )

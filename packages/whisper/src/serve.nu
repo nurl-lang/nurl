@@ -754,7 +754,7 @@ $ `src/run.nu`
     ? > ( nurl_str_len g_srv_token ) 0 { ( nurl_free g_srv_token ) } {}
     = g_srv_token ( strdup token )
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     // One inference runs one model on one GPU; a second concurrent request
     // would serialise on the model mutex anyway, so a single worker is the
     // honest shape (a WebSocket stream holds its worker for the connection's

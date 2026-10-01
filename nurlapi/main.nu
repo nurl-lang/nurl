@@ -5696,7 +5696,7 @@ s combined_stdout s combined_stderr → v {
             // one thing the facade cannot know about, the compile gate,
             // goes in through `http_app_use`.
             //
-            : *HttpApp app ( http_app_new )
+            : HttpApp app ( http_app_new )
             ( http_app_use_router app r )
             ( http_app_workers app workers )
             ( http_app_idle_ms app 5000 )
@@ -5722,8 +5722,6 @@ s combined_stdout s combined_stderr → v {
             : i rc ( http_app_listen app `0.0.0.0` port )
             ( gate_free )
             ( mcp_server_free msrv )
-            // http_app_free frees the router it adopted.
-            ( http_app_free app )
             ^ rc
         }
         {}

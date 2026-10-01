@@ -9,7 +9,7 @@
 //
 // `HttpApp` collapses that into one object:
 //
-//     : *HttpApp a ( http_app_new )
+//     : HttpApp a ( http_app_new )
 //     ( http_app_get a `/health` \ HttpRequest req Params p → HttpResponse {
 //         ^ ( response_text 200 `ok` )
 //     } )
@@ -23,11 +23,12 @@
 // `response_json`, `Router`, `Params`, the auth/jwt/multipart helpers, etc.
 // are all in scope for the handler bodies.
 //
-// Memory model: `http_app_new` returns a heap `*HttpApp` (mutable across the
-// registration calls); free it with `http_app_free`. The embedded `Router`
-// holds a stable Vec handle, so route registrations through `. a router`
-// accumulate correctly. `http_app_listen` MOVES the bound listener into the
-// server and stops it on return.
+// Memory model: `http_app_new` returns an `HttpApp` handle (mutable across
+// the registration calls); every copy of it is the same app, and its last
+// owner releases it — nothing to free (`http_app_free` is an optional early
+// release). The embedded `Router` holds a stable Vec handle, so route
+// registrations through `. a router` accumulate correctly. `http_app_listen`
+// MOVES the bound listener into the server and stops it on return.
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/signal.nu`
@@ -41,8 +42,9 @@ $ `stdlib/std/udp.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/tls_server.nu`
 $ `stdlib/ext/http3_server.nu`
+$ `stdlib/core/rcbox.nu`
 
-: HttpApp {
+: HttpAppImpl {
     Router router
     i idle_ms  // keep-alive idle timeout (ms) for the server
     i workers  // 0 → single-threaded server_run; >0 → server_run_pool(n)
@@ -67,6 +69,20 @@ $ `stdlib/ext/http3_server.nu`
     ( Vec HttpMiddleware ) mw
 }
 
+// An HttpApp is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it — the
+// router, the strings and the middleware are dropped with it.
+: HttpApp { s ctl }
+
+@ HttpApp_share HttpApp h → HttpApp { ^ @ HttpApp { # s ( rcbox_share # i . h ctl ) } }
+
+@ HttpApp_drop sink HttpApp h → v {
+    ( mem_forget h )
+    ( rcbox_release [HttpAppImpl] # i . h ctl )
+}
+
+@ __HttpApp_ptr HttpApp h → *HttpAppImpl { ^ ( rcbox_ptr [HttpAppImpl] # i . h ctl ) }
+
 // A user middleware, boxed so it can live in a Vec — a closure is not
 // spellable as a generic type argument.
 : HttpMiddleware {
@@ -75,8 +91,9 @@ $ `stdlib/ext/http3_server.nu`
 
 // ── Construction / teardown ───────────────────────────────────────────
 
-@ http_app_new → *HttpApp {
-    : *HttpApp a # *HttpApp ( nurl_malloc Z HttpApp )
+@ http_app_new → HttpApp {
+    : i a__box ( rcbox_zero [HttpAppImpl] )
+    : *HttpAppImpl a ( rcbox_ptr [HttpAppImpl] a__box )
     = . a router ( router_new )
     = . a mw ( vec_new [HttpMiddleware] )
     = . a idle_ms 5000
@@ -95,17 +112,11 @@ $ `stdlib/ext/http3_server.nu`
     = . a http3 1
     = . a pq_cert ( string_new )
     = . a pq_key ( string_new )
-    ^ a
+    ^ @ HttpApp { # s a__box }
 }
 
-@ http_app_free sink * HttpApp a → v {
-    ( router_free . a router )
-    ( string_free . a webroot )
-    ( string_free . a pq_cert )
-    ( string_free . a pq_key )
-    ( vec_free [HttpMiddleware] . a mw )
-    ( nurl_free a )
-}
+// Let go of `a` now rather than at the end of its owner's scope.
+@ http_app_free sink HttpApp a → v {}
 
 // ── Configuration (each returns v; call before http_app_listen) ───────────
 
@@ -139,9 +150,11 @@ $ `stdlib/ext/http3_server.nu`
 // grow ordering questions faster than they earn them, and a chain is
 // already expressible by composing inside the one closure.
 //
-// The wrapper must outlive `http_app_listen` and is yours to free; the
-// handler it RETURNS is freed by the facade with its own layers.
-@ http_app_use * HttpApp a ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) f → v {
+// The app keeps its own copy of the wrapper (a stored closure is a
+// clone), and the handler it RETURNS is the facade's, released with its
+// own layers — nothing to free on either side.
+@ http_app_use HttpApp a__h ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) f → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( vec_clear [HttpMiddleware] . a mw )
     ( vec_push [HttpMiddleware] . a mw @ HttpMiddleware { f } )
 }
@@ -151,11 +164,17 @@ $ `stdlib/ext/http3_server.nu`
 // keep-alive lifetime, so at most `n` clients are in flight at once —
 // prefer http_app_async for servers that must scale past a handful of
 // concurrent connections.
-@ http_app_workers * HttpApp a i n → v { = . a workers n }
+@ http_app_workers HttpApp a__h i n → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a workers n
+}
 
 // HTTP/3 on TLS listeners: on by default. `http_app_set_http3 a 0` keeps
 // a TLS listener TCP-only (no UDP socket, no Alt-Svc).
-@ http_app_set_http3 * HttpApp a i on → v { = . a http3 on }
+@ http_app_set_http3 HttpApp a__h i on → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a http3 on
+}
 
 // A second, post-quantum identity for `http_app_listen_tls`: an ML-DSA
 // (44 / 65 / 87) certificate chain and PKCS#8 key, served BESIDE the
@@ -170,7 +189,8 @@ $ `stdlib/ext/http3_server.nu`
 //
 // To serve ONLY an ML-DSA certificate, hand it to `http_app_listen_tls`
 // directly — the key form is auto-detected.
-@ http_app_set_pq_cert * HttpApp a s cert s key → v {
+@ http_app_set_pq_cert HttpApp a__h s cert s key → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( string_free . a pq_cert )
     = . a pq_cert ( string_from cert )
     ( string_free . a pq_key )
@@ -183,28 +203,44 @@ $ `stdlib/ext/http3_server.nu`
 // on the reactor instead of pinning a thread, for both plaintext and TLS
 // listeners. This is the scaling mode; it overrides http_app_workers.
 // Handlers must not assume a bounded number of concurrent invocations.
-@ http_app_async * HttpApp a i n → v {
+@ http_app_async HttpApp a__h i n → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     = . a use_async T
     = . a async_workers n
 }
 
 // Keep-alive idle timeout in milliseconds (0 = server default).
-@ http_app_idle_ms * HttpApp a i ms → v { = . a idle_ms ms }
+@ http_app_idle_ms HttpApp a__h i ms → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a idle_ms ms
+}
 
 // Request body byte cap (parser rejects larger with 413). The stdlib
 // default is 10 MiB — raise it for upload endpoints, lower it for
 // API-only servers.
-@ http_app_body_max * HttpApp a i bytes → v { = . a body_max bytes }
+@ http_app_body_max HttpApp a__h i bytes → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a body_max bytes
+}
 
 // Request head byte cap (default 8 KiB).
-@ http_app_head_max * HttpApp a i bytes → v { = . a head_max bytes }
+@ http_app_head_max HttpApp a__h i bytes → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a head_max bytes
+}
 
 // Per-connection keep-alive request cap (0 = close after one request).
-@ http_app_max_keepalive * HttpApp a i n → v { = . a max_keepalive n }
+@ http_app_max_keepalive HttpApp a__h i n → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a max_keepalive n
+}
 
 // Per-request wall-clock budget in ms; overrun sends a stock 504 and
 // closes the connection (0 = disabled).
-@ http_app_request_timeout * HttpApp a i ms → v { = . a req_timeout_ms ms }
+@ http_app_request_timeout HttpApp a__h i ms → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a req_timeout_ms ms
+}
 
 // DEPRECATED (0.3.2): panic→500 is an unconditional guarantee of the
 // stdlib server itself — its keep-alive loop wraps every handler call
@@ -213,20 +249,30 @@ $ `stdlib/ext/http3_server.nu`
 // that wrapper here, which cost a throwaway 500-response build and a
 // second `recover` on EVERY request for zero added safety. The knob
 // is kept for API compatibility and is a no-op.
-@ http_app_recover * HttpApp a b on → v {}
+@ http_app_recover HttpApp a b on → v {}
 
 // Log every request (method path → status) to stderr.
-@ http_app_logging * HttpApp a → v { = . a log_requests T }
+@ http_app_logging HttpApp a__h → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a log_requests T
+}
 
 // Permissive CORS: reflect `*`, answer OPTIONS preflight with 204.
-@ http_app_cors * HttpApp a → v { = . a cors T }
+@ http_app_cors HttpApp a__h → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a cors T
+}
 
 // Suppress the startup banner on stderr.
-@ http_app_quiet * HttpApp a → v { = . a quiet T }
+@ http_app_quiet HttpApp a__h → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    = . a quiet T
+}
 
 // Serve files from `dir` for any GET/HEAD the router leaves unmatched
 // (404). Path traversal is rejected by the underlying serve_static.
-@ http_app_static_dir * HttpApp a s dir → v {
+@ http_app_static_dir HttpApp a__h s dir → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( string_free . a webroot )
     = . a webroot ( string_from dir )
     = . a has_static T
@@ -234,27 +280,33 @@ $ `stdlib/ext/http3_server.nu`
 
 // ── Route registration (thin over the router) ─────────────────────────
 
-@ http_app_get * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+@ http_app_get HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_get . a router pattern handler )
 }
 
-@ http_app_post * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+@ http_app_post HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_post . a router pattern handler )
 }
 
-@ http_app_put * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+@ http_app_put HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_put . a router pattern handler )
 }
 
-@ http_app_patch * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+@ http_app_patch HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_patch . a router pattern handler )
 }
 
-@ http_app_delete * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+@ http_app_delete HttpApp a__h s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_delete . a router pattern handler )
 }
 
-@ http_app_route * HttpApp a s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+@ http_app_route HttpApp a__h s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_any . a router method pattern handler )
 }
 
@@ -266,18 +318,22 @@ $ `stdlib/ext/http3_server.nu`
 // returns (a streamed response is that connection's last — do not
 // close the conn inside the handler). One hook per process: dispatch
 // on `. req path` / `. req method` inside it.
-@ http_app_stream * HttpApp a ( @ b TcpConn HttpRequest ) f → v {
+@ http_app_stream HttpApp a ( @ b TcpConn HttpRequest ) f → v {
     ( server_set_stream f )
 }
 
 // The embedded router, for advanced use (mounting sub-routers, tests).
-@ http_app_router * HttpApp a → Router { ^ . a router }
+@ http_app_router HttpApp a__h → Router {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
+    ^ . a router
+}
 
-// Adopt a pre-built router as the app's router, freeing the default empty
-// one. For servers that assemble their routes elsewhere (e.g. a
+// Adopt a pre-built router as the app's router, releasing the default
+// empty one. For servers that assemble their routes elsewhere (e.g. a
 // `*_service_router → Router` that stays testable without a socket): build
 // the router, hand it to the app, and let the facade own the serving glue.
-@ http_app_use_router * HttpApp a Router r → v {
+@ http_app_use_router HttpApp a__h Router r → v {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     ( router_free . a router )
     = . a router r
 }
@@ -293,7 +349,7 @@ $ `stdlib/ext/http3_server.nu`
 
 // Router first; on a 404 for GET/HEAD with static enabled, fall through to
 // file serving (which itself returns a clean 404 when the file is absent).
-@ __httpapp_route_and_static * HttpApp a HttpRequest req → HttpResponse {
+@ __httpapp_route_and_static * HttpAppImpl a HttpRequest req → HttpResponse {
     : HttpResponse resp ( router_handle . a router req )
     ? & . a has_static & == 404 . resp status ( __httpapp_is_get_or_head req ) {
         ( http_response_free resp )
@@ -309,7 +365,7 @@ $ `stdlib/ext/http3_server.nu`
 // `recover` and turns a panic into a 500, so the facade adds no wrapper
 // of its own.
 
-@ __httpapp_banner * HttpApp a s scheme s host i port → v {
+@ __httpapp_banner * HttpAppImpl a s scheme s host i port → v {
     ? . a quiet { ^ v } {}
     ( nurl_eprint `http: serving ` )
     ( nurl_eprint scheme )
@@ -319,7 +375,6 @@ $ `stdlib/ext/http3_server.nu`
     : String ps ( string_new )
     ( string_push_int ps port )
     ( nurl_eprintln ( string_data ps ) )
-    ( string_free ps )
 }
 
 @ __httpapp_run_result ! v NetErr rr → i {
@@ -335,7 +390,7 @@ $ `stdlib/ext/http3_server.nu`
 
 // Resolve the app's limit knobs (-1 = keep the stdlib default) into a
 // concrete HttpLimits for the server.
-@ __httpapp_limits * HttpApp a → HttpLimits {
+@ __httpapp_limits * HttpAppImpl a → HttpLimits {
     : ~ i bm . a body_max
     ? < bm 0 { = bm ( http_req_body_default_max ) } {}
     : ~ i hm . a head_max
@@ -362,7 +417,7 @@ $ `stdlib/ext/http3_server.nu`
 // `cert` / `key` are the TLS listener's PEM paths ("" for plaintext): with
 // them, and `http3` on, the same host:port is bound over UDP and served as
 // HTTP/3 by the same handler on its own thread.
-@ __httpapp_serve * HttpApp a TcpListener listener s scheme s host i port s cert s key → i {
+@ __httpapp_serve * HttpAppImpl a TcpListener listener s scheme s host i port s cert s key → i {
     ( signal_install_shutdown listener )
     // Each middleware layer is held in its own binding so every closure
     // env can be released after the server returns (closures have no
@@ -425,7 +480,6 @@ $ `stdlib/ext/http3_server.nu`
                     ( string_push_int ps port )
                     ( nurl_eprint ( string_data ps ) ) ( nurl_eprint ` — ` )
                     ( nurl_eprintln ( net_err_name e ) )
-                    ( string_free ps )
                 }
                 T us → {
                     = h3_sock us
@@ -485,7 +539,8 @@ $ `stdlib/ext/http3_server.nu`
 
 // Bind host:port and serve until the listener is closed (SIGINT/SIGTERM or
 // error). Returns a process exit code (0 clean, 1 on bind/serve error).
-@ http_app_listen * HttpApp a s host i port → i {
+@ http_app_listen HttpApp a__h s host i port → i {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
         T listener → { ^ ( __httpapp_serve a listener `http` host port `` `` ) }
@@ -498,7 +553,6 @@ $ `stdlib/ext/http3_server.nu`
             ( nurl_eprint ( string_data ps ) )
             ( nurl_eprint ` — ` )
             ( nurl_eprintln ( net_err_name e ) )
-            ( string_free ps )
             ^ 1
         }
     }
@@ -507,7 +561,8 @@ $ `stdlib/ext/http3_server.nu`
 // Same, over TLS. `cert`/`key` are PEM paths (EC, RSA or ML-DSA leaf,
 // auto-detected; a fullchain PEM is accepted for `cert`). With
 // `http_app_set_pq_cert` an ML-DSA pair is served beside this one.
-@ http_app_listen_tls * HttpApp a s host i port s cert s key → i {
+@ http_app_listen_tls HttpApp a__h s host i port s cert s key → i {
+    : *HttpAppImpl a ( __HttpApp_ptr a__h )
     // Advertise HTTP/2 and HTTP/1.1 over ALPN (RFC 7301), h2 preferred:
     // an HTTP/2-capable client (browsers, curl, oha) gets HTTP/2, anything
     // else HTTP/1.1, over the same listener and the same routes. The
@@ -528,7 +583,6 @@ $ `stdlib/ext/http3_server.nu`
             ( nurl_eprint ( string_data ps ) )
             ( nurl_eprint ` — ` )
             ( nurl_eprintln ( net_err_name e ) )
-            ( string_free ps )
             ^ 1
         }
     }

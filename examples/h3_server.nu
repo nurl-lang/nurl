@@ -19,7 +19,7 @@ $ `stdlib/core/string.nu`
 $ `packages/http/src/http.nu`
 
 @ main → i {
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_get a `/` \ HttpRequest req Params params → HttpResponse {
         : String body ( string_from `hello over ` )
         ( string_push_str body ( string_data . req version ) )
@@ -36,6 +36,5 @@ $ `packages/http/src/http.nu`
     } {
         = rc ( http_app_listen_tls a `0.0.0.0` ( nurl_str_to_int ( nurl_argv 1 ) ) ( nurl_argv 2 ) ( nurl_argv 3 ) )
     }
-    ( http_app_free a )
     ^ rc
 }

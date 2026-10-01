@@ -578,10 +578,9 @@ $ `src/service.nu`
     ( test_migration )
     ( test_ops )
     ( test_identity )
-    : *HttpApp app ( ag_build_app 1 T )
+    : HttpApp app ( ag_build_app 1 T )
     : Router r ( http_app_router app )
     ( test_rest r )
-    ( http_app_free app )
     ( test_mcp )
     ( ag_service_shutdown )
 

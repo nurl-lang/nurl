@@ -160,10 +160,9 @@ $ `service.nu`
     ( string_free s_port_disp )
     ( nurl_print `\n` )
 
-    : *HttpApp app ( pki_build_app )
+    : HttpApp app ( pki_build_app )
     : i rc ( http_app_listen app ( string_data s_host ) port )
 
-    ( http_app_free app )
     ( string_free s_host )
     ( string_free ca_cert )
     ( string_free ca_key )

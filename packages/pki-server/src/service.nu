@@ -851,8 +851,8 @@ $ `ui.nu`
 
 // ── App Setup ─────────────────────────────────────────────────────────
 
-@ pki_build_app → *HttpApp {
-    : *HttpApp a ( http_app_new )
+@ pki_build_app → HttpApp {
+    : HttpApp a ( http_app_new )
     ( http_app_workers a 8 )
     ( http_app_logging a )
 

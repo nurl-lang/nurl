@@ -253,8 +253,8 @@ $ `api.nu`
 
 // The whole HTTP app. Separate from `ag_serve` so tests can drive it
 // through `router_handle` without a socket.
-@ ag_build_app i workers b quiet → *HttpApp {
-    : *HttpApp a ( http_app_new )
+@ ag_build_app i workers b quiet → HttpApp {
+    : HttpApp a ( http_app_new )
     ( http_app_workers a workers )
     ( http_app_cors a )
     ( http_app_body_max a 1048576 )
@@ -273,9 +273,8 @@ $ `api.nu`
 }
 
 @ ag_serve s host i port i workers b quiet → i {
-    : *HttpApp a ( ag_build_app workers quiet )
+    : HttpApp a ( ag_build_app workers quiet )
     : i rc ( http_app_listen a host port )
-    ( http_app_free a )
     ( ag_service_shutdown )
     ^ rc
 }

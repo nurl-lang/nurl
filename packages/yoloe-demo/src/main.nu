@@ -746,7 +746,7 @@ $ `index_html_data.nu`
                             ( nurl_print ` ms\n` )
 
                             // HTTP app
-                            : *HttpApp a ( http_app_new )
+                            : HttpApp a ( http_app_new )
                             ( http_app_get a `/` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_index rq pp ) } )
                             ( http_app_get a `/health` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_health rq pp ) } )
                             ( http_app_post a `/detect` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_detect rq pp ) } )
@@ -779,7 +779,6 @@ $ `index_html_data.nu`
                                 ( nurl_print `  (camera needs localhost or --tls)\n` )
                                 = rc ( http_app_listen a ( string_data host ) port )
                             }
-                            ( http_app_free a )
                         } { = rc 1 }
                         ( rt_close e )
                     }

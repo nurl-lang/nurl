@@ -18,16 +18,14 @@ and have everything a handler needs in scope.
 $ `deps/http/src/http.nu`
 
 @ main → i {
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_get a `/` \ HttpRequest req Params p → HttpResponse {
         ^ ( response_text 200 `hello` )
     } )
     ( http_app_get a `/hi/:name` \ HttpRequest req Params p → HttpResponse {
         : String o ( string_from `hi ` )
-        ?? ( params_get p `name` ) { T n → { ( string_push_str o ( string_data n ) ) ( string_free n ) } F j → { ( string_free j ) } }
-        : HttpResponse r ( response_text 200 ( string_data o ) )
-        ( string_free o )
-        ^ r
+        ?? ( params_get p `name` ) { T n → { ( string_push_str o ( string_data n ) ) } F _ → {} }
+        ^ ( response_text 200 ( string_data o ) )
     } )
     ^ ( http_app_listen a `127.0.0.1` 8080 )   // blocks; returns an exit code
 }
@@ -72,7 +70,7 @@ Construction & serving:
 
 | Call | Effect |
 | --- | --- |
-| `( http_app_new )` → `*HttpApp` | create an app (free with `http_app_free`) |
+| `( http_app_new )` → `HttpApp` | create an app (a handle: released by its last owner; `http_app_free` is an optional early release) |
 | `( http_app_listen a host port )` → `i` | bind + serve until closed (SIGINT/SIGTERM/error); HTTP/1.1 and HTTP/2 (prior knowledge) on the same port |
 | `( http_app_listen_tls a host port cert key )` → `i` | same, over TLS (PEM paths; EC, RSA or ML-DSA leaf, auto-detected); ALPN `h2 http/1.1`, so HTTP/2-capable clients get HTTP/2; **HTTP/3 (QUIC) on the same port over UDP**, announced with `Alt-Svc` on the TCP responses |
 | `( http_app_set_http3 a 0 )` → `v` | keep a TLS listener TCP-only (no UDP socket, no Alt-Svc); default 1 |
@@ -145,11 +143,9 @@ without a socket) drops onto the facade with one seam:
 @ my_service_router → Router { ... router_post r `/x` h ... ^ r }
 
 @ my_serve s host i port → i {
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_use_router a ( my_service_router ) )   // adopt the routes
-    : i rc ( http_app_listen a host port )            // facade owns the glue
-    ( http_app_free a )
-    ^ rc
+    ^ ( http_app_listen a host port )                 // facade owns the glue
 }
 ```
 
@@ -157,9 +153,12 @@ The `anomaly` package's HTTP service is served exactly this way.
 
 ## Memory model
 
-`http_app_new` returns a heap `*HttpApp`, mutable across the registration
-calls; free it with `http_app_free`. The embedded `Router` holds a stable
-`Vec` handle, so registrations accumulate correctly. `http_app_listen`
+`http_app_new` returns an `HttpApp` handle, mutable across the registration
+calls. Every copy of the handle (a struct field, a `Vec` element, a closure
+capture) is the same app, and its last owner releases it — router, strings
+and middleware with it — so there is nothing to free; `http_app_free` stays
+as an optional early release. The embedded `Router` holds a stable `Vec`
+handle, so registrations accumulate correctly. `http_app_listen`
 **moves** the bound listener into the server and stops it on return.
 
 ## Tests

@@ -338,7 +338,7 @@ $ `service.nu`
                                 }
                                 ? < workers 1 { = workers 1 } {}
                                 : b quiet ( args_present p `quiet` )
-                                : *HttpApp a ( mmd_build_app workers quiet )
+                                : HttpApp a ( mmd_build_app workers quiet )
                                 ? ! quiet {
                                     ( nurl_eprint `mermaid-server ` )
                                     ( nurl_eprint MMD_VERSION )
@@ -352,7 +352,6 @@ $ `service.nu`
                                     ( string_free b )
                                 } {}
                                 = rc ( http_app_listen a ( string_data host ) port )
-                                ( http_app_free a )
                                 ( string_free host )
                             }
                         }

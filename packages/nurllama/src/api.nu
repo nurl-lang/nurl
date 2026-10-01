@@ -920,7 +920,7 @@ i npredict f temp i topk f topp i seed → b {
     ( __api_set_histpath ( string_data hp ) )
     ( string_free hp )
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_workers a 1 )
     ( http_app_body_max a 4194304 )
     ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_root rq ps ) } )

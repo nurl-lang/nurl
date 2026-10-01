@@ -6009,7 +6009,7 @@ $ `stdlib/std/thread.nu`
 // router itself is still built by anomaly_service_router, so every route
 // stays drivable without a socket in the test suite.
 @ anomaly_serve s host i port → i {
-    : *HttpApp app ( http_app_new )
+    : HttpApp app ( http_app_new )
     ( http_app_use_router app ( anomaly_service_router ) )
     // One request per connection. The handlers share the store through
     // the file system with no lock between them, so the server stays
@@ -6051,7 +6051,6 @@ $ `stdlib/std/thread.nu`
         ( nurl_eprintln `anomaly: data-source scheduler OFF (sources run only by hand)` )
     }
     : i rc ( http_app_listen app host port )
-    ( http_app_free app )
     = g_an_lock 0
     ^ rc
 }

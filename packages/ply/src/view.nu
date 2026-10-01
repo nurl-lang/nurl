@@ -119,7 +119,7 @@ $ `viewer_html_data.nu`
     = . st cloud blob
     = g_vw # i st
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_get a `/` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_index rq pp ) } )
     ( http_app_get a `/cloud` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_cloud rq pp ) } )
     ( http_app_quiet a )
@@ -179,6 +179,5 @@ $ `viewer_html_data.nu`
     } {
         = rc ( http_app_listen a ( string_data ( string_from host ) ) port )
     }
-    ( http_app_free a )
     ^ ? == rc 0 0 1
 }

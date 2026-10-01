@@ -616,8 +616,8 @@ tpl.addEventListener("change", render);
 
 // Build the router for the whole service. Exposed separately from
 // `mmd_serve` so the tests can drive it without opening a socket.
-@ mmd_build_app i workers b quiet → *HttpApp {
-    : *HttpApp a ( http_app_new )
+@ mmd_build_app i workers b quiet → HttpApp {
+    : HttpApp a ( http_app_new )
     ( http_app_workers a workers )
     ( http_app_cors a )
     ( http_app_body_max a 4194304 )
