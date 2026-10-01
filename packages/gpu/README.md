@@ -99,8 +99,8 @@ backend (ROCm/HIP, OpenCL, a CPU fallback) slots in behind the same names.
 | `gpu_ok Gpu → b` / `gpu_name Gpu → s` | status / device name |
 | `gpu_compile Gpu s src s name → GpuKernel` | NVRTC compile + load `extern "C" __global__` entry |
 | `gpu_alloc Gpu i bytes → GpuBuffer` | device allocation |
-| `gpu_host_alloc i bytes → *u` | host staging buffer (+ `gpu_host_{set,get}_{f32,i32}`) |
-| `gpu_upload GpuBuffer *u host → i` | host → device |
+| `gpu_host_alloc i bytes → GpuHost` | host staging buffer (+ `gpu_host_{set,get}_{f32,i32}`, `gpu_host_ptr` for the raw address) |
+| `gpu_upload GpuBuffer *u host → i` | host → device (`( gpu_host_ptr h )` for a GpuHost) |
 | `gpu_upload_batch ( Vec GpuCopy ) items → i` | many host spans → many device buffers in ONE streamed pass through the pinned staging pair (a model's thousand tensors: PCIe-bound, not driver-bound); `GpuCopy { i dptr i host i bytes }`, `host` is the pointer as `# i` |
 | `gpu_download *u host GpuBuffer → i` | device → host |
 | `gpu_arg_buffer/_i32/_i64/_f32 → i` | encode one kernel argument |
@@ -108,7 +108,18 @@ backend (ROCm/HIP, OpenCL, a CPU fallback) slots in behind the same names.
 | `gpu_grid i n i block → i` | ceil-div grid size |
 | `gpu_sync Gpu → i` | block until work completes |
 | `gpu_bind_thread Gpu → b` | make the device current on THIS thread (CUDA contexts are thread-local; no-op T elsewhere) |
-| `gpu_free` / `gpu_kernel_free` / `gpu_close` | release |
+| `gpu_buffer_view i dptr i bytes → GpuBuffer` | an unowned view of device memory something else keeps alive |
+| `gpu_timer_new` / `gpu_graph_end` → `GpuTimer` / `GpuGraph` | CUDA events / executable graphs |
+| `gpu_free` / `gpu_kernel_free` / `gpu_host_free` / `gpu_timer_free` / `gpu_graph_free` / `gpu_close` | early release (optional) |
+
+Nothing is released by hand. Every handle (`Gpu`, `GpuBuffer`,
+`GpuKernel`, `GpuHost`, `GpuTimer`, `GpuGraph`) is a small value struct
+whose raw fields (`. b dptr`, `. k func`, …) read for free and whose
+`own` field holds the resource: every copy of it — a struct field, a
+`Vec` element — is the same resource, and its LAST owner releases it
+exactly as the explicit free did (device memory freed, module unloaded,
+event / graph destroyed, the context's retain released). Each resource
+also holds its context, so a buffer may outlive the `Gpu` it came from.
 
 ## Example
 
@@ -124,18 +135,17 @@ $ `gpu.nu`
 
     : i n 1024
     : i bytes * n 4
-    : *u ha ( gpu_host_alloc bytes )      // fill ha, hb with gpu_host_set_f32 ...
+    : GpuHost ha ( gpu_host_alloc bytes )  // fill ha, hb with gpu_host_set_f32 ...
     : GpuBuffer da ( gpu_alloc g bytes )
-    ( gpu_upload da ha )                   // ... db, dc likewise
+    ( gpu_upload da ( gpu_host_ptr ha ) )  // ... db, dc likewise
 
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gpu_arg_buffer da ) )   // a, b, c, then:
     ( vec_push [i] args ( gpu_arg_i32 n ) )
     ( gpu_launch k ( gpu_grid n 256 ) 256 args )
     ( gpu_sync g )
-    ( gpu_download hc dc )
-    ( gpu_close g )
-    ^ 0
+    ( gpu_download ( gpu_host_ptr hc ) dc )
+    ^ 0                                    // everything above goes with its owner
 }
 ```
 

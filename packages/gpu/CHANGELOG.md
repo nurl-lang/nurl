@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** Every handle is a small value struct
+whose raw fields still read for free (`. b dptr`, `. b bytes`, `. k func`,
+`. g dev`) and whose new `own` field holds the resource behind it:
+`Gpu { ordinal dev ctx own }`, `GpuKernel { module func own }`,
+`GpuBuffer { dptr bytes own }`. Every copy of one — a struct field, a Vec
+element, a capture — is the same resource, and its LAST owner releases it
+exactly as the explicit free did: device memory freed (CUDA, host RAM, or
+the WebGPU buffer), the CUDA module unloaded, the event or graph destroyed,
+and — with the context's last owner — the pinned staging pair given back
+and the primary-context retain released. Every resource holds its context,
+so a buffer may outlive the `Gpu` it came from and a context can no longer
+be released under live memory. `gpu_close`, `gpu_free`, `gpu_kernel_free`,
+`gpu_host_free`, `gpu_timer_free` and `gpu_graph_free` are optional early
+releases of one owner.
+
+API changes:
+
+- `gpu_host_alloc i bytes → GpuHost` (was `*u`): `GpuHost { ptr bytes own }`,
+  released with its last owner. `gpu_host_{set,get}_{f32,i32}` take the
+  `GpuHost`; `gpu_host_ptr h` is the raw address for `gpu_upload` /
+  `gpu_download`; `gpu_host_none` is the not-allocated placeholder.
+- `gpu_timer_new → GpuTimer` (was an `i` event); `gpu_timer_mark` /
+  `gpu_timer_ns` take `GpuTimer`s; `gpu_timer_none`, `gpu_timer_ok`.
+- `gpu_graph_end → GpuGraph` (was an `i` exec); `gpu_graph_launch` takes
+  it; `gpu_graph_none`, `gpu_graph_ok`.
+- `gpu_buffer_view dptr bytes` — an unowned `GpuBuffer` over memory
+  something else keeps alive (what `@ GpuBuffer { dptr bytes }` was used
+  for); `gpu_kernel_none` — the not-compiled kernel.
+- `gpu_name` no longer leaks the device name on every call: it is read once
+  at `gpu_open` and lives with the context (borrowed, as before).
+
 ## 0.13.1
 
 Hand-written frees of the worker closures' environments removed; the environments are owned and dropped by NURL 0.67.0 (#1141).

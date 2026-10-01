@@ -7,10 +7,20 @@
 // backend (ROCm/HIP, OpenCL, a CPU fallback) can slot in behind the same
 // names without touching callers.
 //
-// Handles are small value structs (by-value is fine — they wrap opaque
-// i64 device handles, no owned NURL heap state). Kernel arguments are
-// passed as a `Vec i` of i64-encoded values built with the gpu_arg_*
-// encoders; gpu_launch lays them out as the void** array CUDA expects.
+// Handles are small value structs: the opaque i64 device handles are
+// plain fields (read them freely — `. b dptr` costs nothing), and each
+// carries an `own` handle on the resource behind it. Nothing is released
+// by hand: every copy of a Gpu / GpuKernel / GpuBuffer / GpuHost /
+// GpuTimer / GpuGraph (a struct field, a Vec element, a capture) is the
+// same resource, and its LAST owner releases it exactly as the explicit
+// free did — device memory freed, the module unloaded, the event or graph
+// destroyed, the context's retain released. Every resource also holds the
+// context it lives in, so a context outlives its memory whichever order
+// the owners go in. gpu_close / gpu_free / gpu_kernel_free / gpu_host_free
+// / gpu_timer_free / gpu_graph_free remain as optional early releases of
+// one owner. Kernel arguments are passed as a `Vec i` of i64-encoded
+// values built with the gpu_arg_* encoders; gpu_launch lays them out as
+// the void** array CUDA expects.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -20,6 +30,7 @@ $ `stdlib/std/hash.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
+$ `stdlib/core/rcbox.nu`
 $ `cuda.nu`
 $ `cpu.nu`
 
@@ -101,10 +112,81 @@ $ `cpu.nu`
     ^ != 0 ( nurl_str_eq v `webgpu` )
 }
 
+// ── ownership ─────────────────────────────────────────────────────
+// A context retain taken by gpu_open, in an rcbox (stdlib/core/rcbox.nu):
+// its last owner — the Gpu and everything allocated, compiled or created
+// through it — gives back the pinned staging pair (it lives in this
+// context) and releases the retain, which is what gpu_close did by hand.
+// `name` caches the device name gpu_name hands out.
+: GpuCtxImpl { i dev i backend String name }
+
+% Drop GpuCtxImpl { @ drop GpuCtxImpl x → v { ( __gpu_ctx_release . x dev . x backend ) } }
+
+: GpuCtx { s ctl }
+
+@ GpuCtx_share GpuCtx h → GpuCtx { ^ @ GpuCtx { # s ( rcbox_share # i . h ctl ) } }
+
+@ GpuCtx_drop sink GpuCtx h → v {
+    ( mem_forget h )
+    ( rcbox_release [GpuCtxImpl] # i . h ctl )
+}
+
+@ __gpu_ctx_release i dev i backend → v {
+    ? == backend 0 {
+        ( gpu_staging_free )
+        : i _r ( cuda_ctx_destroy_dev dev )
+    } {}
+}
+
+// One device-side resource: `h` is the raw handle and `kind` says how to
+// give it back, on the backend that made it. Holding the context keeps
+// the context alive for as long as the resource is.
+: i GPU_RES_MEM 1  // device memory (cuMemFree / host RAM / GPUBuffer)
+: i GPU_RES_MODULE 2  // a loaded module (cuModuleUnload)
+: i GPU_RES_EVENT 3  // a CUDA event (cuEventDestroy)
+: i GPU_RES_GRAPH 4  // an executable graph (cuGraphExecDestroy)
+: i GPU_RES_HOST 5  // host staging memory (nurl_free)
+
+: GpuResImpl { i kind i h i backend GpuCtx ctx }
+
+% Drop GpuResImpl { @ drop GpuResImpl x → v { ( __gpu_res_release . x kind . x h . x backend ) } }
+
+: GpuRes { s ctl }
+
+@ GpuRes_share GpuRes h → GpuRes { ^ @ GpuRes { # s ( rcbox_share # i . h ctl ) } }
+
+@ GpuRes_drop sink GpuRes h → v {
+    ( mem_forget h )
+    ( rcbox_release [GpuResImpl] # i . h ctl )
+}
+
+@ __gpu_res_release i kind i h i backend → v {
+    ? == kind GPU_RES_HOST { ( nurl_free # *u h ) ^ } {}
+    ? == kind GPU_RES_MEM {
+        ? == backend 3 { ( wgpu_free h ) ^ } {}
+        ? != backend 0 { ( cpu_free h ) ^ } {}
+        : i _r ( cuda_free h )
+        ^
+    } {}
+    ? != backend 0 { ^ } {}  // modules / events / graphs are CUDA's alone
+    ? == kind GPU_RES_MODULE { : i _u ( cuda_module_unload h ) ^ } {}
+    ? == kind GPU_RES_EVENT { ( cuda_event_free h ) ^ } {}
+    ? == kind GPU_RES_GRAPH { ( cuda_graph_free h ) } {}
+}
+
 // ── handle types ──────────────────────────────────────────────────
-: Gpu { i ordinal i dev i ctx }  // an initialised device + context
-: GpuKernel { i module i func }  // a compiled, loaded __global__ fn
-: GpuBuffer { i dptr i bytes }  // a device-memory allocation
+: Gpu { i ordinal i dev i ctx GpuCtx own }  // an initialised device + context
+: GpuKernel { i module i func GpuRes own }  // a compiled, loaded __global__ fn
+: GpuBuffer { i dptr i bytes GpuRes own }  // a device-memory allocation
+
+// The owner of raw handle `h` made through `g` (none for a 0 handle: a
+// failed allocation, compile or create owns nothing).
+@ __gpu_res Gpu g i kind i h → GpuRes {
+    ? == h 0 { ^ @ GpuRes { # s 0 } } {}
+    ^ @ GpuRes { # s ( rcbox_new [GpuResImpl] @ GpuResImpl { kind h __gpu_backend ( GpuCtx_share . g own ) } ) }
+}
+
+@ __gpu_nores → GpuRes { ^ @ GpuRes { # s 0 } }
 
 // ── device lifecycle ──────────────────────────────────────────────
 
@@ -159,42 +241,63 @@ $ `cpu.nu`
     ^ best
 }
 
+// A Gpu on a backend with no driver context (CPU / static / WebGPU, or a
+// failed open): `dev` is the backend marker, `ctx` 1 when usable. A usable
+// one still gets an owner block — the same bookkeeping on every backend,
+// so the sanitized (CPU) builds exercise exactly what CUDA runs; its
+// release has nothing to give back.
+@ __gpu_noctx i ordinal i dev i ctx → Gpu {
+    ? == ctx 0 { ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s 0 } } } {}
+    : i box ( rcbox_new [GpuCtxImpl] @ GpuCtxImpl { dev - 0 dev ( string_new ) } )
+    ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s box } }
+}
+
 @ gpu_open i ordinal → Gpu {
     ? ( __force_webgpu ) {
         // probe: wgpu_pipeline of a known kernel returns >0 when the JS
         // host has WebGPU up. 0 → no adapter / host missing.
         ? <= ( wgpu_pipeline `osigmoid` ) 0 {
             ( nurl_eprint `[gpu/webgpu] no WebGPU host / adapter (wgpu_pipeline failed)\n` )
-            ^ @ Gpu { ordinal - 0 4 0 }
+            ^ ( __gpu_noctx ordinal - 0 4 0 )
         } {}
         = __gpu_backend 3
-        ^ @ Gpu { ordinal - 0 4 1 }
+        ^ ( __gpu_noctx ordinal - 0 4 1 )
     } {}
     ? ( __force_static ) {
         ? == # i ( nurl_static_kernel `gemm` ) 0 {
             ( nurl_eprint `[gpu/static] no static kernels linked into this binary (kernels_static.c missing)\n` )
-            ^ @ Gpu { ordinal - 0 3 0 }
+            ^ ( __gpu_noctx ordinal - 0 3 0 )
         } {}
         = __gpu_backend 2
-        ^ @ Gpu { ordinal - 0 3 1 }
+        ^ ( __gpu_noctx ordinal - 0 3 1 )
     } {}
-    ? ( __force_cpu ) { = __gpu_backend 1 ^ @ Gpu { ordinal - 0 2 1 } } {}
+    ? ( __force_cpu ) { = __gpu_backend 1 ^ ( __gpu_noctx ordinal - 0 2 1 ) } {}
     ( cuda_init )
     : i dev ( cuda_device ordinal )
-    ? < dev 0 { = __gpu_backend 1 ^ @ Gpu { ordinal - 0 2 1 } } {}
+    ? < dev 0 { = __gpu_backend 1 ^ ( __gpu_noctx ordinal - 0 2 1 ) } {}
     : i ctx ( cuda_ctx_create dev )
-    ? == ctx 0 { = __gpu_backend 1 ^ @ Gpu { ordinal - 0 2 1 } } {}
+    ? == ctx 0 { = __gpu_backend 1 ^ ( __gpu_noctx ordinal - 0 2 1 ) } {}
     = __gpu_backend 0
-    ^ @ Gpu { ordinal dev ctx }
+    // the name is read once, here, and lives with the context
+    : s raw ( cuda_device_name dev )
+    : String nm ( string_from raw )
+    ( nurl_free raw )
+    : i box ( rcbox_new [GpuCtxImpl] @ GpuCtxImpl { dev 0 nm } )
+    ^ @ Gpu { ordinal dev ctx @ GpuCtx { # s box } }
 }
 
 @ gpu_ok Gpu g → b { ^ != . g ctx 0 }
 
 // Human-readable device name (e.g. "NVIDIA GeForce RTX 4090", or "CPU").
+// Borrowed: valid while `g` (or anything made through it) is alive.
 @ gpu_name Gpu g → s {
     ? == __gpu_backend 3 { ^ `WebGPU (WGSL compute)` } {}
     ? == __gpu_backend 2 { ^ `CPU (static kernels)` } {}
-    ? == __gpu_backend 1 { ^ `CPU (host C++)` } { ^ ( cuda_device_name . g dev ) }
+    ? == __gpu_backend 1 { ^ `CPU (host C++)` } {}
+    : i box # i . . g own ctl
+    ? == box 0 { ^ `CUDA device` } {}
+    : *GpuCtxImpl c ( rcbox_ptr [GpuCtxImpl] box )
+    ^ ( string_data . c name )
 }
 
 // Device memory: free and total bytes as the driver reports them. On the
@@ -253,17 +356,15 @@ $ `cpu.nu`
     ^ ( __gpu_meminfo_line `MemTotal:` )
 }
 
-// Closing the device also gives back the pinned staging pair: it was
-// allocated in this context, and a program that opens the device again
-// (a server that unloads its model when idle) would otherwise hand the
-// next upload two host buffers the driver no longer knows — a segfault
-// inside the first cuMemcpyHtoDAsync, found exactly that way.
-@ gpu_close Gpu g → v {
-    ? == __gpu_backend 0 {
-        ( gpu_staging_free )
-        ( cuda_ctx_destroy_dev . g dev )
-    } {}
-}
+// Let go of `g` now rather than at the end of its owner's scope. The
+// context goes when its last owner does — this Gpu, its copies, and every
+// buffer, kernel, timer and graph made through it — and with it the
+// pinned staging pair: that was allocated in this context, and a program
+// that opens the device again (a server that unloads its model when idle)
+// would otherwise hand the next upload two host buffers the driver no
+// longer knows — a segfault inside the first cuMemcpyHtoDAsync, found
+// exactly that way.
+@ gpu_close sink Gpu g → v {}
 
 // Block until all submitted work on the context completes. 0 == success.
 // The CPU backend runs kernels synchronously, so there is nothing to await.
@@ -281,58 +382,75 @@ $ `cpu.nu`
 }
 
 // ── Timers (CUDA backend only; every other backend reports 0) ─────────
-// A begin/end pair of events recorded on the launch stream. Timing a
-// launch from the host measures the launch; these measure the GPU. The
-// handle is 0 when the backend has no events, and every call below is a
-// no-op on a 0 handle, so a caller need not branch on the backend.
-@ gpu_timer_new Gpu g → i {
-    ? != __gpu_backend 0 { ^ 0 } {}
-    ^ ( cuda_event_create )
+// A timer is one event recorded on the launch stream; a begin/end pair
+// of them brackets the work between. Timing a launch from the host
+// measures the launch; these measure the GPU. `ev` is 0 when the backend
+// has no events, and every call below is a no-op on a 0 timer, so a
+// caller need not branch on the backend. The event is destroyed with the
+// timer's last owner.
+: GpuTimer { i ev GpuRes own }
+
+@ gpu_timer_new Gpu g → GpuTimer {
+    ? != __gpu_backend 0 { ^ ( gpu_timer_none ) } {}
+    : i ev ( cuda_event_create )
+    ^ @ GpuTimer { ev ( __gpu_res g GPU_RES_EVENT ev ) }
 }
 
-@ gpu_timer_mark Gpu g i ev → v {
-    ? | != __gpu_backend 0 == ev 0 { ^ } {}
-    : i _r ( cuda_event_record ev )
+// A timer that is not there — the placeholder for "not made yet".
+@ gpu_timer_none → GpuTimer { ^ @ GpuTimer { 0 ( __gpu_nores ) } }
+
+@ gpu_timer_ok GpuTimer t → b { ^ != . t ev 0 }
+
+@ gpu_timer_mark Gpu g GpuTimer t → v {
+    ? | != __gpu_backend 0 == . t ev 0 { ^ } {}
+    : i _r ( cuda_event_record . t ev )
 }
 
 // Nanoseconds between two marks. Blocks until the end event has
 // completed on the device, so it is a measurement point, not free.
-@ gpu_timer_ns Gpu g i start i end → i {
-    ? | | != __gpu_backend 0 == start 0 == end 0 { ^ 0 } {}
-    : i _s ( cuda_event_sync end )
-    : i bits ( cuda_event_elapsed_bits start end )
+@ gpu_timer_ns Gpu g GpuTimer start GpuTimer end → i {
+    ? | | != __gpu_backend 0 == . start ev 0 == . end ev 0 { ^ 0 } {}
+    : i _s ( cuda_event_sync . end ev )
+    : i bits ( cuda_event_elapsed_bits . start ev . end ev )
     : f ms # f ( bits_to_f32 bits )
     ^ # i * ms 1000000.0
 }
 
-@ gpu_timer_free Gpu g sink i ev → v {
-    ? | != __gpu_backend 0 == ev 0 { ^ } {}
-    ( cuda_event_free ev )
-}
+// Let go of `t` now rather than at the end of its owner's scope.
+@ gpu_timer_free sink GpuTimer t → v {}
 
 // ── CUDA Graphs (CUDA backend only; every other backend reports F/0) ──
 // Capture the launches between begin and end, then replay them all with
 // ONE gpu_graph_launch — same kernels, same argument values, same order,
 // bit-identical results. Callers must not sync between begin and end.
+// The executable graph is destroyed with its last owner.
+: GpuGraph { i exec GpuRes own }
+
 @ gpu_graph_begin Gpu g → b {
     ? != __gpu_backend 0 { ^ F } {}
     ^ == ( cuda_graph_begin ) 0
 }
 
-// The executable-graph handle, or 0 when capture/instantiation failed.
-@ gpu_graph_end Gpu g → i {
-    ? != __gpu_backend 0 { ^ 0 } {}
-    ^ ( cuda_graph_end )
+// The executable graph; not ok (gpu_graph_ok F) when capture or
+// instantiation failed, or on a backend without graphs.
+@ gpu_graph_end Gpu g → GpuGraph {
+    ? != __gpu_backend 0 { ^ ( gpu_graph_none ) } {}
+    : i exec ( cuda_graph_end )
+    ^ @ GpuGraph { exec ( __gpu_res g GPU_RES_GRAPH exec ) }
 }
 
-@ gpu_graph_launch Gpu g i exec → i {
-    ? != __gpu_backend 0 { ^ 1 } {}
-    ^ ( cuda_graph_launch exec )
+// A graph that is not there — the placeholder for "not captured yet".
+@ gpu_graph_none → GpuGraph { ^ @ GpuGraph { 0 ( __gpu_nores ) } }
+
+@ gpu_graph_ok GpuGraph x → b { ^ != . x exec 0 }
+
+@ gpu_graph_launch Gpu g GpuGraph x → i {
+    ? | != __gpu_backend 0 == . x exec 0 { ^ 1 } {}
+    ^ ( cuda_graph_launch . x exec )
 }
 
-@ gpu_graph_free sink i exec → v {
-    ? != __gpu_backend 0 {} { ( cuda_graph_free exec ) }
-}
+// Let go of `x` now rather than at the end of its owner's scope.
+@ gpu_graph_free sink GpuGraph x → v {}
 
 // ── kernels ───────────────────────────────────────────────────────
 
@@ -447,24 +565,24 @@ $ `cpu.nu`
         : i pid ( wgpu_pipeline name )
         ? <= pid 0 {
             ( nurl_eprint `[gpu/webgpu] no WGSL kernel named: ` ) ( nurl_eprint name ) ( nurl_eprint `\n` )
-            ^ @ GpuKernel { 0 0 }
+            ^ ( gpu_kernel_none )
         } {}
-        ^ @ GpuKernel { 0 pid }
+        ^ @ GpuKernel { 0 pid ( __gpu_nores ) }
     } {}
     ? == __gpu_backend 2 {
         : *u f ( nurl_static_kernel name )
         ? == # i f 0 {
             ( nurl_eprint `[gpu/static] kernel not in the linked set: ` ) ( nurl_eprint name ) ( nurl_eprint `\n` )
-            ^ @ GpuKernel { 0 0 }
+            ^ ( gpu_kernel_none )
         } {}
-        ^ @ GpuKernel { 0 # i f }
+        ^ @ GpuKernel { 0 # i f ( __gpu_nores ) }
     } {}
     ? == __gpu_backend 1 {
         : *u h ( cpu_compile src name )
-        ? == # i h 0 { ^ @ GpuKernel { 0 0 } } {}
+        ? == # i h 0 { ^ ( gpu_kernel_none ) } {}
         : i fn ( cpu_function h )
-        ? == fn 0 { ( cpu_module_free h ) ^ @ GpuKernel { 0 0 } } {}
-        ^ @ GpuKernel { # i h fn }
+        ? == fn 0 { ( cpu_module_free h ) ^ ( gpu_kernel_none ) } {}
+        ^ @ GpuKernel { # i h fn ( __gpu_nores ) }
     } {}
     // CUDA: serve the compiled module from the on-disk cache when the
     // source hash matches, so a process start costs a file read instead
@@ -531,7 +649,7 @@ $ `cpu.nu`
     }
     ? cached {} {
         : *u ptx ( cuda_compile src name )
-        ? == # i ptx 0 { ^ @ GpuKernel { 0 0 } } {}
+        ? == # i ptx 0 { ^ ( gpu_kernel_none ) } {}
         ? ( __gpu_cache_off ) {} {
             // store the PTX text INCLUDING its NUL, so a cache hit can
             // hand the bytes straight to cuModuleLoadData
@@ -548,46 +666,70 @@ $ `cpu.nu`
         = mod ( cuda_module_load ptx )
         ( nurl_free ptx )  // the module keeps its own copy of the PTX
     }
-    ? == mod 0 { ^ @ GpuKernel { 0 0 } } {}
+    ? == mod 0 { ^ ( gpu_kernel_none ) } {}
     : i fn ( cuda_function mod name )
-    ^ @ GpuKernel { mod fn }
+    ^ @ GpuKernel { mod fn ( __gpu_res g GPU_RES_MODULE mod ) }
 }
 
 @ gpu_kernel_ok GpuKernel k → b { ^ != . k func 0 }
 
-@ gpu_kernel_free sink GpuKernel k → v {
-    ? >= __gpu_backend 2 { ^ {} } {}
-    ? == __gpu_backend 1 { ( cpu_module_free # *u . k module ) } { ( cuda_module_unload . k module ) }
-}
+// A kernel that is not there (gpu_kernel_ok F): what a failed compile
+// returns, and a placeholder for "not compiled yet".
+@ gpu_kernel_none → GpuKernel { ^ @ GpuKernel { 0 0 ( __gpu_nores ) } }
+
+// Let go of `k` now rather than at the end of its owner's scope. A CPU
+// backend module is never dlclose'd (see cpu_module_free); a CUDA one is
+// unloaded with the kernel's last owner.
+@ gpu_kernel_free sink GpuKernel k → v {}
 
 // ── host (pinned-free) staging buffers ────────────────────────────
-// Plain host memory to stage data for upload / receive on download.
-// f32 is the GPU-native element type; these address it at 4-byte stride.
+// Plain host memory to stage data for upload / receive on download,
+// released with its last owner. f32 is the GPU-native element type;
+// these address it at 4-byte stride. `ptr` is the memory itself, for
+// gpu_upload / gpu_download and anything that wants the raw address —
+// valid while the GpuHost is.
+: GpuHost { * u ptr i bytes GpuRes own }
 
-@ gpu_host_alloc i bytes → *u { ^ ( nurl_alloc bytes ) }
+@ gpu_host_alloc i bytes → GpuHost {
+    : *u p ( nurl_alloc bytes )
+    : i box ( rcbox_new [GpuResImpl] @ GpuResImpl { GPU_RES_HOST # i p __gpu_backend @ GpuCtx { # s 0 } } )
+    ^ @ GpuHost { p bytes @ GpuRes { # s box } }
+}
 
-@ gpu_host_free sink * u buf → v { ( nurl_free buf ) }
+// No buffer — the placeholder for "not allocated yet".
+@ gpu_host_none → GpuHost { ^ @ GpuHost { # *u 0 0 ( __gpu_nores ) } }
 
-@ gpu_host_set_f32 * u buf i idx f v → v { ( nurl_poke_f32 buf idx v ) }
+@ gpu_host_ptr GpuHost h → *u { ^ . h ptr }
 
-@ gpu_host_get_f32 * u buf i idx → f { ^ ( nurl_peek_f32 buf idx ) }
+@ gpu_host_bytes GpuHost h → i { ^ . h bytes }
 
-@ gpu_host_set_i32 * u buf i idx i v → v { ( nurl_poke_i32 buf idx v ) }
+// Let go of `h` now rather than at the end of its owner's scope.
+@ gpu_host_free sink GpuHost h → v {}
 
-@ gpu_host_get_i32 * u buf i idx → i { ^ # i ( nurl_peek_i32 buf idx ) }
+@ gpu_host_set_f32 GpuHost h i idx f v → v { ( nurl_poke_f32 . h ptr idx v ) }
+
+@ gpu_host_get_f32 GpuHost h i idx → f { ^ ( nurl_peek_f32 . h ptr idx ) }
+
+@ gpu_host_set_i32 GpuHost h i idx i v → v { ( nurl_poke_i32 . h ptr idx v ) }
+
+@ gpu_host_get_i32 GpuHost h i idx → i { ^ # i ( nurl_peek_i32 . h ptr idx ) }
 
 // ── device memory ─────────────────────────────────────────────────
 
+// Device memory, freed with the buffer's last owner. dptr 0 = the
+// allocation failed (an empty buffer owns nothing).
 @ gpu_alloc Gpu g i bytes → GpuBuffer {
-    ? == __gpu_backend 3 { ^ @ GpuBuffer { ( wgpu_alloc bytes ) bytes } } {}
-    : i dptr ? != __gpu_backend 0 ( cpu_malloc bytes ) ( cuda_malloc bytes )
-    ^ @ GpuBuffer { dptr bytes }
+    : i dptr ? == __gpu_backend 3 ( wgpu_alloc bytes ) ? != __gpu_backend 0 ( cpu_malloc bytes ) ( cuda_malloc bytes )
+    ^ @ GpuBuffer { dptr bytes ( __gpu_res g GPU_RES_MEM dptr ) }
 }
 
-@ gpu_free sink GpuBuffer b → v {
-    ? == __gpu_backend 3 { ( wgpu_free . b dptr ) } {
-        ? != __gpu_backend 0 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
-}
+// A view of `bytes` of device memory at `dptr` that owns nothing — a
+// sub-range of a live buffer, or memory something else allocated. The
+// caller keeps the memory alive for as long as the view is used.
+@ gpu_buffer_view i dptr i bytes → GpuBuffer { ^ @ GpuBuffer { dptr bytes ( __gpu_nores ) } }
+
+// Let go of `b` now rather than at the end of its owner's scope.
+@ gpu_free sink GpuBuffer b → v {}
 
 // ── pinned staging for large uploads (CUDA) ─────────────────────────
 //
@@ -813,7 +955,7 @@ $ `cpu.nu`
     : ~ i k 0
     ~ & == rc 0 < k ( vec_len [GpuCopy] items ) {
         ?? ( vec_get [GpuCopy] items k ) {
-            T c → { = rc ( gpu_upload @ GpuBuffer { . c dptr . c bytes } # *u . c host ) }
+            T c → { = rc ( gpu_upload ( gpu_buffer_view . c dptr . c bytes ) # *u . c host ) }
             F → {}
         }
         = k + k 1
