@@ -4084,7 +4084,7 @@
 // ── Redundant-free lint ────────────────────────────────────────────
 // `( string_free x )`, `( vec_free [T] x )`, … — a release function (one
 // `sink` parameter and an EMPTY body, so the call does nothing but drop
-// its argument; a hand-written destructor such as pkmsg_free, which also
+// its argument; a hand-written destructor, which also
 // frees what its fields point to, is not one) called on a local the compiler drops
 // anyway, at the TAIL of a block: nothing but more such calls follows
 // it, and then either `^` (every scope ends) or the `}` of the block x
