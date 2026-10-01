@@ -33,13 +33,22 @@ $ `pb.nu`
 
 // A tensor: name, shape, element count, ONNX data_type, and host data —
 // f32 (4-byte) for FLOAT(1) weights, or i64 (8-byte) for INT64(7) shape /
-// size / anchor tensors. host == 0 for a graph value placeholder.
+// size / anchor tensors, as bytes. `host` is empty for a graph value
+// placeholder. Every field is owned: an OTensor (and the OGraph holding
+// it) is released with its owner.
 : OTensor {
     String name
     ( Vec i ) dims
     i nelem
     i dtype  // ONNX DataType: 1=FLOAT, 7=INT64
-    i host  // *u as i64 (0 = no data)
+    ( Vec u ) host  // the values, little-endian (empty = no data)
+}
+
+// The host data's address (0 when there is none) — for an upload or a
+// peek; valid while the tensor is.
+@ otensor_host_ptr OTensor t → i {
+    ? == ( vec_len [u] . t host ) 0 { ^ 0 } {}
+    ^ # i ( vec_data [u] . t host )
 }
 
 : OGraph {
@@ -121,10 +130,10 @@ $ `pb.nu`
         : ProtoTag tag ( pb_tag r )
         : i fld . tag number
         : i wt . tag wire
-        ? == fld 1 { ( string_free name ) = name ( pb_string r ) }  // name
+        ? == fld 1 { = name ( pb_string r ) }  // name
         ? == fld 2 { = fv # f ( bits_to_f32 ( pb_i32 r ) ) }  // f (float, wire 5)
         ? == fld 3 { = iv ( pb_varint r ) }  // i (int, varint)
-        ? == fld 4 { ( string_free sv ) = sv ( pb_string r ) }  // s (string/bytes)
+        ? == fld 4 { = sv ( pb_string r ) }  // s (string/bytes)
         ? == fld 8 {  // ints: packed or single
             ? == wt 2 {
                 : ~ PReader is ( pb_packed r )
@@ -142,8 +151,8 @@ $ `pb.nu`
             : ~ PReader ts ( pb_submsg r )
             : OTensor t ( __parse_tensor ts )
             ( pb_absorb r ts )
-            ? & == . t dtype 7 != . t host 0 {
-                : *u h # *u . t host
+            ? & == . t dtype 7 != ( otensor_host_ptr t ) 0 {
+                : *u h # *u ( otensor_host_ptr t )
                 : ~ i q 0
                 ~ < q . t nelem {
                     ( vec_push [i] ints ( nurl_peek # s h q ) )
@@ -151,9 +160,6 @@ $ `pb.nu`
                 }
             } {}
             = iv . t nelem
-            ( string_free . t name )
-            ( vec_free [i] . t dims )
-            ? != . t host 0 { ( nurl_free # s # *u . t host ) } {}
         }
         { ( pb_skip r tag ) }
     }
@@ -171,7 +177,7 @@ $ `pb.nu`
         : i fld . tag number
         ? == fld 1 { ( vec_push [String] ins ( pb_string r ) ) }  // input
         ? == fld 2 { ( vec_push [String] outs ( pb_string r ) ) }  // output
-        ? == fld 4 { ( string_free op ) = op ( pb_string r ) }  // op_type
+        ? == fld 4 { = op ( pb_string r ) }  // op_type
         ? == fld 5 {
             : ~ PReader sub ( pb_submsg r )
             ( vec_push [OAttr] attrs ( __parse_attr sub ) )
@@ -205,7 +211,7 @@ $ `pb.nu`
             } { ( vec_push [i] dims ( pb_varint r ) ) }
         }
         ? == fld 2 { = dtype ( pb_varint r ) }  // data_type
-        ? == fld 8 { ( string_free name ) = name ( pb_string r ) }  // name
+        ? == fld 8 { = name ( pb_string r ) }  // name
         ? == fld 4 {  // float_data (packed f32)
             ? == wt 2 { = raw ( pb_bytes r ) = have_raw T } { ( pb_skip r tag ) }
         }
@@ -222,30 +228,28 @@ $ `pb.nu`
         { ( pb_skip r tag ) }
     }
     : i nelem ( __nelem dims )
-    : ~ i host 0
+    : ~ ( Vec u ) host ( vec_new [u] )
     // int64_data field (no raw block): materialise the varints as the
     // same 8-byte LE host block the raw path produces.
     ? & & ! have_raw > ( vec_len [i] i64vals ) 0 == dtype 7 {
         : i nv ( vec_len [i] i64vals )
-        : *u h64 ( nurl_alloc * nv 8 )
+        = host ( vec_with_cap [u] * nv 8 )
+        : *u h64 # *u ( vec_data [u] host )
         : ~ i q 0
         ~ < q nv {
             ( nurl_poke h64 q ?? ( vec_get [i] i64vals q ) { T x → x F _ → 0 } )
             = q + q 1
         }
-        = host # i h64
+        : b _l ( vec_set_len [u] host * nv 8 )
     } {}
-    ( vec_free [i] i64vals )
     ? & have_raw > ( slice_len [u] raw ) 0 {
-        ? == dtype 7 {  // INT64: 8-byte LE values
-            : *u h ( nurl_alloc * nelem 8 )
-            ( slice_i64_into raw h nelem )
-            = host # i h
-        } {  // FLOAT (default): f32
-            : *u h ( nurl_alloc * nelem 4 )
-            ( slice_f32_into raw h nelem )
-            = host # i h
-        }
+        // written in place, then the length committed: no zero-fill pass
+        // over a weight block that is overwritten anyway
+        : i esz ? == dtype 7 { 8 } { 4 }  // INT64: 8-byte LE values; FLOAT (default): f32
+        = host ( vec_with_cap [u] * nelem esz )
+        : *u h # *u ( vec_data [u] host )
+        ? == dtype 7 { ( slice_i64_into raw h nelem ) } { ( slice_f32_into raw h nelem ) }
+        : b _l ( vec_set_len [u] host * nelem esz )
     } {}
     ^ @ OTensor { name dims nelem dtype host }
 }
@@ -265,7 +269,7 @@ $ `pb.nu`
     : ~ String name ( string_new )
     ~ ( pb_more r ) {
         : ProtoTag tag ( pb_tag r )
-        ? == . tag number 1 { ( string_free name ) = name ( pb_string r ) } { ( pb_skip r tag ) }
+        ? == . tag number 1 { = name ( pb_string r ) } { ( pb_skip r tag ) }
     }
     ^ name
 }
@@ -295,7 +299,7 @@ $ `pb.nu`
             // The real model input is the FIRST entry; keep it, ignore the rest.
             : ~ PReader s ( pb_submsg r )
             : String nm ( __parse_valueinfo_name s )
-            ? == ( string_len inp ) 0 { ( string_free inp ) = inp nm } { ( string_free nm ) }
+            ? == ( string_len inp ) 0 { = inp nm } {}
             ( pb_absorb r s )
         }
         ? == fld 12 {
@@ -304,8 +308,8 @@ $ `pb.nu`
             // seg model can return its mask prototypes.
             : ~ PReader s ( pb_submsg r )
             : String onm ( __parse_valueinfo_name s )
-            ? == ( string_len outp ) 0 { ( string_free outp ) = outp onm }
-            { ? == ( string_len outp1 ) 0 { ( string_free outp1 ) = outp1 onm } { ( string_free onm ) } }
+            ? == ( string_len outp ) 0 { = outp onm }
+            { ? == ( string_len outp1 ) 0 { = outp1 onm } {} }
             ( pb_absorb r s )
         }
         { ( pb_skip r tag ) }
@@ -332,13 +336,11 @@ $ `pb.nu`
         : ProtoTag tag ( pb_tag r )
         ? == . tag number 7 {
             : ~ PReader s ( pb_submsg r )
-            ( graph_free g )
             = g ( __parse_graph s )
             ( pb_absorb r s )
         } { ( pb_skip r tag ) }
     }
     ? ( pb_failed r ) {
-        ( graph_free g )
         ^ @ !OGraph ProtoError { F ( pb_err r ) }
     } {}
     ^ @ !OGraph ProtoError { T g }
@@ -370,52 +372,8 @@ $ `pb.nu`
 
 // ── Teardown ──────────────────────────────────────────────────────────
 
-// Free everything a parsed graph owns: every node (op string, input /
-// output name vectors, attributes incl. their strings and int vectors),
-// every initializer (name, dims, host data buffer), and the graph's
-// input/output name strings. The OGraph value itself is by-value — after
-// graph_free it must not be used again.
-@ __attr_free sink OAttr a → v {
-    ( string_free . a name )
-    ( string_free . a s )
-    ( vec_free [i] . a ints )
-}
-
-@ __node_free sink ONode n → v {
-    ( string_free . n op_type )
-    ( vec_free_with [String] . n inputs \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] . n outputs \ String x → v { ( string_free x ) } )
-    : i na ( vec_len [OAttr] . n attrs )
-    : ~ i k 0
-    ~ < k na {
-        ?? ( vec_get [OAttr] . n attrs k ) { T a → { ( __attr_free a ) } F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [OAttr] . n attrs )
-}
-
-@ __otensor_free sink OTensor t → v {
-    ( string_free . t name )
-    ( vec_free [i] . t dims )
-    ? != . t host 0 { ( nurl_free # *u . t host ) } {}
-}
-
-@ graph_free sink OGraph g → v {
-    : i nn ( vec_len [ONode] . g nodes )
-    : ~ i k 0
-    ~ < k nn {
-        ?? ( vec_get [ONode] . g nodes k ) { T n → { ( __node_free n ) } F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [ONode] . g nodes )
-    : i ni ( vec_len [OTensor] . g inits )
-    = k 0
-    ~ < k ni {
-        ?? ( vec_get [OTensor] . g inits k ) { T t → { ( __otensor_free t ) } F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [OTensor] . g inits )
-    ( string_free . g input_name )
-    ( string_free . g output_name )
-    ( string_free . g output1_name )
-}
+// Let go of `g` now rather than at the end of its owner's scope. An OGraph
+// owns everything it holds — every node (op string, input / output names,
+// attributes), every initializer (name, dims, host data) and the graph's
+// names — and releases them with its last owner.
+@ graph_free sink OGraph g → v {}

@@ -113,26 +113,24 @@ $ `src/model.nu`
     ?? ( vec_get [String] av 1 ) {
         T pathstr → {
             ?? ( read_file_bytes ( string_data pathstr ) ) {
-                T bytes → { ( vec_free [u] mb ) = mb bytes = have T }
+                T bytes → { = mb bytes = have T }
                 F _ → {}
             }
         }
         F _ → {}
     }
-    ( vec_free_with [String] av \ String x → v { ( string_free x ) } )
-    ? ! have { ( p `usage: parse_dump <model.onnx>\n` ) ( vec_free [u] mb ) ^ 1 } {}
+    ? ! have { ( p `usage: parse_dump <model.onnx>\n` ) ^ 1 } {}
     : ~ OGraph g ( onnx_empty_graph )
     : ~ b bad F
     : ~ ProtoError perr @ ProtoError { ProtoTruncated 0 }
     ?? ( onnx_parse_checked mb ) {
-        T parsed → { ( graph_free g ) = g parsed }
+        T parsed → { = g parsed }
         F e → { = bad T = perr e }
     }
-    ( vec_free [u] mb )
     ? bad {
         ( p `parse-error=` ) ( p ( proto_error_name . perr code ) )
         ( p ` offset=` ) ( pi . perr offset ) ( p `\n` )
-        ( graph_free g ) ^ 3
+        ^ 3
     } {}
     ( p `input=` ) ( pstr . g input_name ) ( p `\n` )
     ( p `output=` ) ( pstr . g output_name ) ( p `\n` )
@@ -149,6 +147,5 @@ $ `src/model.nu`
         ?? ( vec_get [OTensor] . g inits k ) { T t → ( __dump_init t k ) F _ → {} }
         = k + k 1
     }
-    ( graph_free g )
     ^ 0
 }

@@ -59,7 +59,6 @@ $ `src/runtime.nu`
                 ( nurl_poke_i32 host k ( nurl_peek_i32 src k ) )
                 = k + k 1
             }
-            ( vec_free [u] bytes )
             ( nurl_poke pcell 0 n )
             ^ host
         }
@@ -67,19 +66,17 @@ $ `src/runtime.nu`
     }
 }
 
-@ dump_out * Engine e RTensor t s path → i {
+@ dump_out Engine e RTensor t s path → i {
     ? > . t nelem 0 {} { ( nurl_print `EMPTY output\n` ) ^ 1 }
-    : *u host ( rt_download e t )
+    : GpuHost host ( rt_download e t )
     : i nb * . t nelem 4
     : ( Vec u ) out ( vec_with_cap [u] nb )
     : *u dst ( vec_data [u] out )
     : ~ i k 0
-    ~ < k . t nelem { ( nurl_poke_i32 dst k ( nurl_peek_i32 host k ) ) = k + k 1 }
+    ~ < k . t nelem { ( nurl_poke_i32 dst k ( nurl_peek_i32 ( gpu_host_ptr host ) k ) ) = k + k 1 }
     : b _lok ( vec_set_len [u] out nb )
     : ~ i rc 0
     ?? ( write_file_bytes path out ) { T _ → {} F _ → { = rc 1 } }
-    ( vec_free [u] out )
-    ( nurl_free host )
     ( nurl_print path ) ( nurl_print ` ` )
     ( nurl_print ( nurl_str_int . t nelem ) ) ( nurl_print ` floats\n` )
     ^ rc
@@ -100,12 +97,12 @@ $ `src/runtime.nu`
 @ main → i {
     : String mode ( args 1 )
     : String mp ( args 2 )
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
+    : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes ( string_data mp ) ) {
         T mb → { = g ( onnx_parse mb ) }
         F _ → { ( nurl_print `model read fail\n` ) ^ 1 }
     }
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ( rt_ok e ) {} { ( nurl_print `no device\n` ) ^ 1 }
     : ~ i rc 0
     ? ( nurl_str_eq ( string_data mode ) `img` ) {
@@ -172,6 +169,5 @@ $ `src/runtime.nu`
             }
         }
     }
-    ( rt_close e )
     ^ rc
 }
