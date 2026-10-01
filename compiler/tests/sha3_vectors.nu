@@ -125,7 +125,7 @@ $ `stdlib/core/string.nu`
     // ── Piecewise absorb == one-shot absorb.
     // Pieces of 1, 7 and 200 bytes cross lane and rate boundaries at
     // every alignment the fast path can see.
-    : *Sha3 pa ( sha3_new 136 6 )
+    : Sha3 pa ( sha3_new 136 6 )
     : ~ i off 0
     : ~ i step 1
     : i seqn ( vec_len [u] seq )
@@ -146,7 +146,7 @@ $ `stdlib/core/string.nu`
     // ── Chunked squeeze == one-shot squeeze.
     // Three bytes at a time is exactly how FIPS 203 §7.3 samples the
     // public matrix, and 400 bytes crosses two rate boundaries.
-    : *Sha3 px ( shake128_init )
+    : Sha3 px ( shake128_init )
     ( sha3_absorb px abc )
     : ( Vec u ) acc ( vec_new [u] )
     : ~ i got 0

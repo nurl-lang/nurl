@@ -94,7 +94,7 @@ $ `stdlib/core/string.nu`
     : *u bp ( vec_data [u] bad )
     = . bp 0 # u ^^ # i . bp 0 1
     : ( Vec u ) got ( mlkem_decaps level ( mlkem_dk ks ) bad )
-    : *Sha3 j ( shake256_init )
+    : Sha3 j ( shake256_init )
     ( sha3_absorb j z )
     ( sha3_absorb j bad )
     : ( Vec u ) want ( sha3_squeeze j 32 )

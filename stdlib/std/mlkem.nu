@@ -397,7 +397,7 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
 }
 
 @ __sample_ntt * i16 r i off ( Vec u ) rho i x1 i x2 → v {
-    : *Sha3 xof ( shake128_init )
+    : Sha3 xof ( shake128_init )
     ( sha3_absorb xof rho )
     : ( Vec u ) idx ( vec_new [u] )
     ( vec_push [u] idx # u x1 )
@@ -438,7 +438,7 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
 // squeezing, and it is still far cheaper than four separate sponges:
 // the four share one permutation, and the permutation is the cost.
 @ __sample_ntt_x4 * i16 r ( Vec u ) rho i k b transposed i c0 → v {
-    : *Sha3x4 xof ( shake128x4_init )
+    : Sha3x4 xof ( shake128x4_init )
     ( sha3x4_absorb xof rho rho rho rho )
     : ( Vec u ) x0 ( __mat_idx k transposed + c0 0 )
     : ( Vec u ) x1 ( __mat_idx k transposed + c0 1 )
@@ -476,7 +476,7 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
 
 // PRF_η (FIPS 203 §4.1): SHAKE256(s ‖ b, 64η).
 @ __mlkem_prf ( Vec u ) seed i nonce i eta → ( Vec u ) {
-    : *Sha3 h ( shake256_init )
+    : Sha3 h ( shake256_init )
     ( sha3_absorb h seed )
     : ( Vec u ) nb ( vec_new [u] )
     ( vec_push [u] nb # u nonce )
@@ -493,7 +493,7 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
 // lockstep the four-way sponge wants; a short batch clamps the spare
 // lanes to the last real nonce and discards them.
 @ __mlkem_prf_x4 ( Vec u ) seed i n0 i n1 i n2 i n3 i eta ( Vec u ) o0 ( Vec u ) o1 ( Vec u ) o2 ( Vec u ) o3 → v {
-    : *Sha3x4 h ( shake256x4_init )
+    : Sha3x4 h ( shake256x4_init )
     ( sha3x4_absorb h seed seed seed seed )
     : ( Vec u ) b0 ( vec_new [u] ) ( vec_push [u] b0 # u n0 )
     : ( Vec u ) b1 ( vec_new [u] ) ( vec_push [u] b1 # u n1 )
@@ -1018,7 +1018,7 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     ( vec_free [u] g )
 
     // K̄ ← J(z ‖ c, 32)
-    : *Sha3 j ( shake256_init )
+    : Sha3 j ( shake256_init )
     ( sha3_absorb j z )
     ( sha3_absorb j ct )
     : ( Vec u ) kbar ( sha3_squeeze j 32 )

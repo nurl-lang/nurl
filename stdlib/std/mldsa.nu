@@ -602,7 +602,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 @ __poly_uniform * i32 r i off ( Vec u ) rho i x1 i x2 → v {
-    : *Sha3 xof ( shake128_init )
+    : Sha3 xof ( shake128_init )
     ( sha3_absorb xof rho )
     : ( Vec u ) idx ( vec_new [u] )
     ( vec_push [u] idx # u x1 )
@@ -634,7 +634,7 @@ $ `stdlib/std/subtle.nu`
 // different number of them, so the loop runs until the last lane has
 // its 256 coefficients. See stdlib/std/hash_sha3x4.nu.
 @ __poly_uniform_x4 * i32 r ( Vec u ) rho i l i c0 → v {
-    : *Sha3x4 xof ( shake128x4_init )
+    : Sha3x4 xof ( shake128x4_init )
     ( sha3x4_absorb xof rho rho rho rho )
     : ( Vec u ) x0 ( __md_a_idx l + c0 0 )
     : ( Vec u ) x1 ( __md_a_idx l + c0 1 )
@@ -739,7 +739,7 @@ $ `stdlib/std/subtle.nu`
         : i m1 ? < + g 1 count + g 1 - count 1
         : i m2 ? < + g 2 count + g 2 - count 1
         : i m3 ? < + g 3 count + g 3 - count 1
-        : *Sha3x4 h ( shake256x4_init )
+        : Sha3x4 h ( shake256x4_init )
         ( sha3x4_absorb h rhop rhop rhop rhop )
         : ( Vec u ) b0 ( vec_new [u] ) ( vec_push [u] b0 # u & + n0 g 255 ) ( vec_push [u] b0 # u & >> + n0 g 8 255 )
         : ( Vec u ) b1 ( vec_new [u] ) ( vec_push [u] b1 # u & + n0 m1 255 ) ( vec_push [u] b1 # u & >> + n0 m1 8 255 )
@@ -776,7 +776,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 @ __poly_uniform_eta * i32 r i off ( Vec u ) rhop i nonce i eta → v {
-    : *Sha3 xof ( shake256_init )
+    : Sha3 xof ( shake256_init )
     ( sha3_absorb xof rhop )
     : ( Vec u ) nb ( vec_new [u] )
     ( vec_push [u] nb # u & nonce 255 )
@@ -819,7 +819,7 @@ $ `stdlib/std/subtle.nu`
         : i m1 ? < + g 1 count + g 1 - count 1
         : i m2 ? < + g 2 count + g 2 - count 1
         : i m3 ? < + g 3 count + g 3 - count 1
-        : *Sha3x4 h ( shake256x4_init )
+        : Sha3x4 h ( shake256x4_init )
         ( sha3x4_absorb h rhop rhop rhop rhop )
         : i n0 + kappa g
         : i n1 + kappa m1
@@ -848,7 +848,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 @ __poly_uniform_gamma1 * i32 r i off ( Vec u ) rhop i nonce i g1 i zbits → v {
-    : *Sha3 xof ( shake256_init )
+    : Sha3 xof ( shake256_init )
     ( sha3_absorb xof rhop )
     : ( Vec u ) nb ( vec_new [u] )
     ( vec_push [u] nb # u & nonce 255 )
@@ -867,7 +867,7 @@ $ `stdlib/std/subtle.nu`
 @ __poly_challenge * i32 c i off ( Vec u ) ctilde i tau → v {
     : ~ i i 0
     ~ < i 256 { = . c + off i # i32 0 = i + i 1 }
-    : *Sha3 xof ( shake256_init )
+    : Sha3 xof ( shake256_init )
     ( sha3_absorb xof ctilde )
     : ( Vec u ) sb ( sha3_squeeze xof 8 )
     : *u sp ( vec_data [u] sb )
@@ -1174,7 +1174,7 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
     : *i32 ap ( vec_data [i32] a )
 
     // ρ'' ← H(K ‖ rnd ‖ μ, 64)
-    : *Sha3 hr ( shake256_init )
+    : Sha3 hr ( shake256_init )
     ( sha3_absorb hr kk )
     ( sha3_absorb hr rnd )
     ( sha3_absorb hr mu )
@@ -1229,7 +1229,7 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
         // c~ ← H(μ ‖ w1Encode(w1), λ/4) ; c ← SampleInBall(c~)
         : ( Vec u ) w1enc ( vec_new [u] )
         ( __pack_w1 w1p k . p wbits w1enc )
-        : *Sha3 hc ( shake256_init )
+        : Sha3 hc ( shake256_init )
         ( sha3_absorb hc mu )
         ( sha3_absorb hc w1enc )
         : ( Vec u ) ctilde ( sha3_squeeze hc . p lam )
@@ -1335,7 +1335,7 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
 // μ ← H(tr ‖ M', 64) — the message representative, bound to the public
 // key through tr so a signature cannot be transplanted onto another key.
 @ __mldsa_mu ( Vec u ) tr ( Vec u ) mprime → ( Vec u ) {
-    : *Sha3 h ( shake256_init )
+    : Sha3 h ( shake256_init )
     ( sha3_absorb h tr )
     ( sha3_absorb h mprime )
     : ( Vec u ) mu ( sha3_squeeze h 64 )
@@ -1449,7 +1449,7 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
         }
         : ( Vec u ) w1enc ( vec_new [u] )
         ( __pack_w1 w1p k . p wbits w1enc )
-        : *Sha3 hc ( shake256_init )
+        : Sha3 hc ( shake256_init )
         ( sha3_absorb hc mu )
         ( sha3_absorb hc w1enc )
         : ( Vec u ) c2 ( sha3_squeeze hc . p lam )

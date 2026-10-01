@@ -56,7 +56,7 @@ $ `stdlib/std/hash_sha3x4.nu`
     : ( Vec u ) d2 ( __mk inlen 140 )
     : ( Vec u ) d3 ( __mk inlen 211 )
 
-    : *Sha3x4 hx ( sha3x4_new rate dom )
+    : Sha3x4 hx ( sha3x4_new rate dom )
     ( sha3x4_absorb hx d0 d1 d2 d3 )
     : ( Vec u ) o0 ( vec_new [u] )
     : ( Vec u ) o1 ( vec_new [u] )
@@ -65,13 +65,13 @@ $ `stdlib/std/hash_sha3x4.nu`
     ( sha3x4_squeeze hx outlen o0 o1 o2 o3 )
     ( sha3x4_free hx )
 
-    : *Sha3 s0 ( sha3_new rate dom ) ( sha3_absorb s0 d0 )
+    : Sha3 s0 ( sha3_new rate dom ) ( sha3_absorb s0 d0 )
     : ( Vec u ) e0 ( sha3_squeeze s0 outlen ) ( sha3_free s0 )
-    : *Sha3 s1 ( sha3_new rate dom ) ( sha3_absorb s1 d1 )
+    : Sha3 s1 ( sha3_new rate dom ) ( sha3_absorb s1 d1 )
     : ( Vec u ) e1 ( sha3_squeeze s1 outlen ) ( sha3_free s1 )
-    : *Sha3 s2 ( sha3_new rate dom ) ( sha3_absorb s2 d2 )
+    : Sha3 s2 ( sha3_new rate dom ) ( sha3_absorb s2 d2 )
     : ( Vec u ) e2 ( sha3_squeeze s2 outlen ) ( sha3_free s2 )
-    : *Sha3 s3 ( sha3_new rate dom ) ( sha3_absorb s3 d3 )
+    : Sha3 s3 ( sha3_new rate dom ) ( sha3_absorb s3 d3 )
     : ( Vec u ) e3 ( sha3_squeeze s3 outlen ) ( sha3_free s3 )
 
     : b ok & & & ( __eq o0 e0 ) ( __eq o1 e1 ) ( __eq o2 e2 ) ( __eq o3 e3 )
@@ -99,7 +99,7 @@ $ `stdlib/std/hash_sha3x4.nu`
     : ( Vec u ) b0 ( __mk 100 7 ) : ( Vec u ) b1 ( __mk 100 55 )
     : ( Vec u ) b2 ( __mk 100 103 ) : ( Vec u ) b3 ( __mk 100 164 )
 
-    : *Sha3x4 h ( shake128x4_init )
+    : Sha3x4 h ( shake128x4_init )
     ( sha3x4_absorb h a0 a1 a2 a3 )
     ( sha3x4_absorb h b0 b1 b2 b3 )
     : ( Vec u ) o0 ( vec_new [u] ) : ( Vec u ) o1 ( vec_new [u] )
@@ -109,9 +109,9 @@ $ `stdlib/std/hash_sha3x4.nu`
     ( sha3x4_squeeze h 160 o0 o1 o2 o3 )
     ( sha3x4_free h )
 
-    : *Sha3 r0 ( shake128_init ) ( sha3_absorb r0 a0 ) ( sha3_absorb r0 b0 )
+    : Sha3 r0 ( shake128_init ) ( sha3_absorb r0 a0 ) ( sha3_absorb r0 b0 )
     : ( Vec u ) e0 ( sha3_squeeze r0 200 ) ( sha3_free r0 )
-    : *Sha3 r3 ( shake128_init ) ( sha3_absorb r3 a3 ) ( sha3_absorb r3 b3 )
+    : Sha3 r3 ( shake128_init ) ( sha3_absorb r3 a3 ) ( sha3_absorb r3 b3 )
     : ( Vec u ) e3 ( sha3_squeeze r3 200 ) ( sha3_free r3 )
 
     ( __report `pieces+resume  ` & ( __eq o0 e0 ) ( __eq o3 e3 ) )
@@ -128,7 +128,7 @@ $ `stdlib/std/hash_sha3x4.nu`
 @ __case_unequal → v {
     : ( Vec u ) d0 ( __mk 32 1 ) : ( Vec u ) d1 ( __mk 33 2 )
     : ( Vec u ) d2 ( __mk 32 3 ) : ( Vec u ) d3 ( __mk 32 4 )
-    : *Sha3x4 h ( shake256x4_init )
+    : Sha3x4 h ( shake256x4_init )
     ( sha3x4_absorb h d0 d1 d2 d3 )
     : ( Vec u ) o0 ( vec_new [u] ) : ( Vec u ) o1 ( vec_new [u] )
     : ( Vec u ) o2 ( vec_new [u] ) : ( Vec u ) o3 ( vec_new [u] )

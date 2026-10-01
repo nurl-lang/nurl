@@ -31,12 +31,16 @@
 //
 // API — mirrors stdlib/std/hash_sha3.nu, four at a time:
 //
-//   ( shake128x4_init )                  → *Sha3x4    rate 168
-//   ( shake256x4_init )                  → *Sha3x4    rate 136
-//   ( sha3x4_new i rate i dom )          → *Sha3x4
+//   ( shake128x4_init )                  → Sha3x4    rate 168
+//   ( shake256x4_init )                  → Sha3x4    rate 136
+//   ( sha3x4_new i rate i dom )          → Sha3x4
 //   ( sha3x4_absorb h d0 d1 d2 d3 )      → v
 //   ( sha3x4_squeeze h n o0 o1 o2 o3 )   → v
-//   ( sha3x4_free h )                    → v
+//   ( sha3x4_free h )                    → v   early release (optional: the
+//                                              last owner releases it)
+//
+// A Sha3x4 is a library handle (docs/MEMORY.md §7.6), like Sha3: every
+// copy is the same four sponges, and nothing frees it by hand.
 //
 // The four inputs to one `sha3x4_absorb` must be THE SAME LENGTH, and
 // the four outputs of one `sha3x4_squeeze` are the same length too.
@@ -55,6 +59,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/hash_sha3.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── The permutation, four ways ─────────────────────────────────────
 //
@@ -179,7 +184,10 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
 
 // The public surface, explicit since `pub` on shake256x4_block put the
 // file in strict mode — the same set the header comment documents.
-pub : Sha3x4 {
+//
+// The state behind the handle. `pub` only because the rcbox instance
+// (`RcBox Sha3x4Impl`) is checked for visibility outside this file.
+pub : Sha3x4Impl {
     ( Vec u64 ) st  // 25 lanes x 4 ways, way W of lane L at L*4 + W
     ( Vec u64 ) scr  // 100-lane ping-pong buffer
     ( Vec u64 ) rc  // the 24 iota constants, shared by all four
@@ -189,35 +197,38 @@ pub : Sha3x4 {
     b squeezing
 }
 
-pub @ sha3x4_new i rate i dom → *Sha3x4 {
-    : *Sha3x4 h # *Sha3x4 ( nurl_alloc Z Sha3x4 )
+// A Sha3x4 is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+pub : Sha3x4 { s ctl }
+
+pub @ Sha3x4_share Sha3x4 h → Sha3x4 { ^ @ Sha3x4 { # s ( rcbox_share # i . h ctl ) } }
+
+pub @ Sha3x4_drop sink Sha3x4 h → v {
+    ( mem_forget h )
+    ( rcbox_release [Sha3x4Impl] # i . h ctl )
+}
+
+@ __Sha3x4_ptr Sha3x4 h → *Sha3x4Impl { ^ ( rcbox_ptr [Sha3x4Impl] # i . h ctl ) }
+
+pub @ sha3x4_new i rate i dom → Sha3x4 {
     : ( Vec u64 ) st ( vec_with_cap [u64] 100 )
     : b _l ( vec_set_len [u64] st 100 )
     : *u64 sp ( vec_data [u64] st )
     : ~ i i 0
     ~ < i 100 { = . sp i # u64 0 = i + i 1 }
-    = . h st st
     : ( Vec u64 ) scr ( vec_with_cap [u64] 100 )
     : b _l2 ( vec_set_len [u64] scr 100 )
-    = . h scr scr
-    = . h rc ( keccak_round_constants )
-    = . h rate rate
-    = . h pos 0
-    = . h dom dom
-    = . h squeezing F
-    ^ h
+    // Built whole and moved into the box, as sha3_new does: every field
+    // is written, so the block needs no zeroing first.
+    ^ @ Sha3x4 { # s ( rcbox_new [Sha3x4Impl] @ Sha3x4Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
 }
 
-pub @ sha3x4_free sink * Sha3x4 h → v {
-    ( vec_free [u64] . h st )
-    ( vec_free [u64] . h scr )
-    ( vec_free [u64] . h rc )
-    ( nurl_free # s h )
-}
+// Let go of `h` now rather than at the end of its owner's scope.
+pub @ sha3x4_free sink Sha3x4 h → v {}
 
-pub @ shake128x4_init → *Sha3x4 { ^ ( sha3x4_new 168 31 ) }
+pub @ shake128x4_init → Sha3x4 { ^ ( sha3x4_new 168 31 ) }
 
-pub @ shake256x4_init → *Sha3x4 { ^ ( sha3x4_new 136 31 ) }
+pub @ shake256x4_init → Sha3x4 { ^ ( sha3x4_new 136 31 ) }
 
 // ── The one-block special case ─────────────────────────────────────
 //
@@ -323,7 +334,7 @@ pub @ shake256x4_block * u64 st * u64 scr * u64 rc * u p0 * u p1 * u p2 * u p3 i
     = . sp idx ^^ . sp idx x
 }
 
-@ __k4_permute * Sha3x4 h → v {
+@ __k4_permute * Sha3x4Impl h → v {
     ( __kf1600x4 ( vec_data [u64] . h st ) ( vec_data [u64] . h scr )
     ( vec_data [u64] . h rc ) )
 }
@@ -335,7 +346,8 @@ pub @ shake256x4_block * u64 st * u64 scr * u64 rc * u p0 * u p1 * u p2 * u p3 i
 // is 32-66 bytes against 24 rounds of permutation per 168-byte block),
 // and four interleaved ways make the aligned case rarer than it looks.
 // Correctness first where it costs nothing.
-pub @ sha3x4_absorb * Sha3x4 h ( Vec u ) d0 ( Vec u ) d1 ( Vec u ) d2 ( Vec u ) d3 → v {
+pub @ sha3x4_absorb Sha3x4 h__h ( Vec u ) d0 ( Vec u ) d1 ( Vec u ) d2 ( Vec u ) d3 → v {
+    : *Sha3x4Impl h ( __Sha3x4_ptr h__h )
     ? . h squeezing { ^ v } {}
     : i n ( vec_len [u] d0 )
     // Equal lengths are the contract. Silently absorbing the shortest
@@ -375,7 +387,7 @@ pub @ sha3x4_absorb * Sha3x4 h ( Vec u ) d0 ( Vec u ) d1 ( Vec u ) d2 ( Vec u ) 
 }
 
 // pad10*1 with the domain byte, in all four ways at once.
-@ __k4_pad * Sha3x4 h → v {
+@ __k4_pad * Sha3x4Impl h → v {
     ? . h squeezing { ^ v } {}
     : *u64 sp ( vec_data [u64] . h st )
     : i pos . h pos
@@ -415,7 +427,8 @@ pub @ sha3x4_absorb * Sha3x4 h ( Vec u ) d0 ( Vec u ) d1 ( Vec u ) d2 ( Vec u ) 
     = . p + off 7 # u & # i >> w # u64 56 255
 }
 
-pub @ sha3x4_squeeze * Sha3x4 h i n ( Vec u ) o0 ( Vec u ) o1 ( Vec u ) o2 ( Vec u ) o3 → v {
+pub @ sha3x4_squeeze Sha3x4 h__h i n ( Vec u ) o0 ( Vec u ) o1 ( Vec u ) o2 ( Vec u ) o3 → v {
+    : *Sha3x4Impl h ( __Sha3x4_ptr h__h )
     ? ! . h squeezing { ( __k4_pad h ) } {}
     ? <= n 0 { ^ v } {}
     // Grow all four to their final length up front, then write through

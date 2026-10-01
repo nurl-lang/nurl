@@ -189,7 +189,7 @@ $ `stdlib/std/random.nu`
 // are which pieces go in and how many bytes come out.
 
 @ __slh_shake ( Vec u ) a ( Vec u ) b ( Vec u ) c i outlen → ( Vec u ) {
-    : *Sha3 h ( shake256_init )
+    : Sha3 h ( shake256_init )
     ( sha3_absorb h a )
     ( sha3_absorb h b )
     ( sha3_absorb h c )
