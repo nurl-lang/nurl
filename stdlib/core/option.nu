@@ -35,7 +35,11 @@
     ^ ?? o { T → F F → T }
 }
 
-@ opt_unwrap_or [A] ? A o A default → A {
+// Takes both — the one not returned is dropped here, as Rust's unwrap_or
+// does. (Borrowing them leaked the caller's default whenever the option
+// was present: the result was a borrow of whichever argument it was, and
+// the temporary default had no owner left.)
+@ opt_unwrap_or [A] sink ? A o sink A default → A {
     ^ ?? o { T v → v F → default }
 }
 

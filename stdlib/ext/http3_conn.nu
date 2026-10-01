@@ -4,8 +4,10 @@
 // HTTP/1.1 and HTTP/2 paths call, and the response written back as
 // HEADERS + DATA + FIN.
 //
-//   ( h3_conn_new qc body_max )                 → *H3Conn   opens our control / QPACK streams, sends SETTINGS
-//   ( h3_conn_free h )                          → v
+//   ( h3_conn_new qc body_max )                 → H3Conn    opens our control / QPACK streams, sends SETTINGS
+//                                                           (one more owner of `qc`)
+//   ( h3_conn_free h )                          → v         early release (optional: the last owner
+//                                                           of an H3Conn releases it)
 //   ( h3_conn_on_readable h handler )           → v         drain `quic_conn_take_readable`, run requests
 //   ( h3_conn_goaway h )                        → v         GOAWAY: no new requests (shutdown)
 //
@@ -25,6 +27,7 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http3_frame.nu`
 $ `stdlib/ext/http3_qpack.nu`
+$ `stdlib/core/rcbox.nu`
 
 : H3Stream {
     i id
@@ -69,8 +72,8 @@ $ `stdlib/ext/http3_qpack.nu`
     ( nurl_free # s s )
 }
 
-: H3Conn {
-    * QuicConn qc
+: H3ConnImpl {
+    QuicConn qc
     ( Vec i ) streams
     i ctl_out
     i enc_out
@@ -85,11 +88,37 @@ $ `stdlib/ext/http3_qpack.nu`
     i failed
 }
 
+// An H3Conn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: H3Conn { s ctl }
+
+// The streams are raw H3Stream blocks (as integers): releasing them is
+// the connection's own drop; the QuicConn it shares goes with the fields.
+% Drop H3ConnImpl {
+    @ drop H3ConnImpl h → v {
+        : ~ i k 0
+        ~ < k ( vec_len [i] . h streams ) {
+            ( __h3_stream_free # *H3Stream ( __h3_ri . h streams k ) )
+            = k + k 1
+        }
+    }
+}
+
+@ H3Conn_share H3Conn h → H3Conn { ^ @ H3Conn { # s ( rcbox_share # i . h ctl ) } }
+
+@ H3Conn_drop sink H3Conn h → v {
+    ( mem_forget h )
+    ( rcbox_release [H3ConnImpl] # i . h ctl )
+}
+
+@ __H3Conn_ptr H3Conn h → *H3ConnImpl { ^ ( rcbox_ptr [H3ConnImpl] # i . h ctl ) }
+
 @ h3_default_max_field_section → i { ^ 65536 }
 
-@ h3_conn_new * QuicConn qc i body_max → *H3Conn {
-    : *H3Conn h # *H3Conn ( nurl_alloc Z H3Conn )
-    = . h qc qc
+@ h3_conn_new QuicConn qc i body_max → H3Conn {
+    : i h__box ( rcbox_zero [H3ConnImpl] )
+    : *H3ConnImpl h ( rcbox_ptr [H3ConnImpl] h__box )
+    = . h qc ( QuicConn_share qc )
     = . h streams ( vec_new [i] )
     = . h peer_control -1
     = . h peer_qenc -1
@@ -120,25 +149,17 @@ $ `stdlib/ext/http3_qpack.nu`
         ( quic_varint_push d ( h3_st_qpack_decoder ) )
         : i _n ( quic_conn_stream_send qc . h dec_out d F )
     } {}
-    ^ h
+    ^ @ H3Conn { # s h__box }
 }
 
-@ h3_conn_free sink * H3Conn h → v {
-    ? == # i h 0 { ^ } {}
-    : ~ i k 0
-    ~ < k ( vec_len [i] . h streams ) {
-        ( __h3_stream_free # *H3Stream ?? ( vec_get [i] . h streams k ) { T x → x F → 0 } )
-        = k + k 1
-    }
-    ( vec_free [i] . h streams )
-    ( nurl_free # s h )
-}
+// Let go of `h` now rather than at the end of its owner's scope.
+@ h3_conn_free sink H3Conn h → v {}
 
 @ __h3_ri ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 }
 }
 
-@ __h3_stream_get * H3Conn h i id → *H3Stream {
+@ __h3_stream_get * H3ConnImpl h i id → *H3Stream {
     : ~ i k 0
     ~ < k ( vec_len [i] . h streams ) {
         : *H3Stream s # *H3Stream ( __h3_ri . h streams k )
@@ -148,7 +169,7 @@ $ `stdlib/ext/http3_qpack.nu`
     ^ # *H3Stream 0
 }
 
-@ __h3_stream_drop * H3Conn h i id → v {
+@ __h3_stream_drop * H3ConnImpl h i id → v {
     : ~ i k 0
     ~ < k ( vec_len [i] . h streams ) {
         : *H3Stream s # *H3Stream ( __h3_ri . h streams k )
@@ -163,7 +184,7 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 // Connection error: application close with an HTTP/3 code.
-@ __h3_fail * H3Conn h i code → v {
+@ __h3_fail * H3ConnImpl h i code → v {
     ? != . h failed 0 { ^ } {}
     = . h failed 1
     : ( Vec u ) e ( vec_new [u] )
@@ -171,13 +192,14 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 // Stream error (§8.1): reset our side, stop the peer's.
-@ __h3_stream_error * H3Conn h * H3Stream s i code → v {
+@ __h3_stream_error * H3ConnImpl h * H3Stream s i code → v {
     ( quic_conn_stream_reset . h qc . s id code )
     ( quic_conn_stream_stop_sending . h qc . s id code )
     = . s done 1
 }
 
-@ h3_conn_goaway * H3Conn h → v {
+@ h3_conn_goaway H3Conn h__h → v {
+    : *H3ConnImpl h ( __H3Conn_ptr h__h )
     ? | != . h goaway_sent 0 < . h ctl_out 0 { ^ } {}
     = . h goaway_sent 1
     : ( Vec u ) p ( vec_new [u] )
@@ -348,7 +370,7 @@ $ `stdlib/ext/http3_qpack.nu`
     ^ T
 }
 
-@ __h3_send_response * H3Conn h * H3Stream s HttpResponse r → v {
+@ __h3_send_response * H3ConnImpl h * H3Stream s HttpResponse r → v {
     : ( Vec Header ) all ( vec_new [Header] )
     : String st ( __h3_status_str . r status )
     ( vec_push [Header] all ( header_new `:status` ( string_data st ) ) )
@@ -384,7 +406,7 @@ $ `stdlib/ext/http3_qpack.nu`
     : i _n ( quic_conn_stream_send . h qc . s id wire T )
 }
 
-@ __h3_dispatch * H3Conn h * H3Stream s ( @ HttpResponse HttpRequest ) handler → v {
+@ __h3_dispatch * H3ConnImpl h * H3Stream s ( @ HttpResponse HttpRequest ) handler → v {
     : HttpRequest req ( __h3_to_request s )
     : HttpResponse resp ( handler req )
     ( __h3_send_response h s resp )
@@ -397,12 +419,11 @@ $ `stdlib/ext/http3_qpack.nu`
 
 // One frame of a request stream; F when the loop must stop (waiting
 // for more bytes, or the stream / connection is finished).
-@ __h3_request_frame * H3Conn h * H3Stream s b fin * H3FrameHead fh → b {
+@ __h3_request_frame * H3ConnImpl h * H3Stream s b fin H3FrameHead fh → b {
 
     : i ft . fh ftype
     : i flen . fh length
     : i hl . fh head_len
-    ( h3_frame_head_free fh )
     // frames that may never appear on a request stream (§7.2)
     ? | | | | == ft ( h3_ft_settings ) == ft ( h3_ft_goaway ) == ft ( h3_ft_max_push_id ) == ft ( h3_ft_cancel_push ) == ft ( h3_ft_push_promise ) { ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ F } {}
     ? & == ft ( h3_ft_data ) == . s state 0 { ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ F } {}
@@ -454,11 +475,11 @@ $ `stdlib/ext/http3_qpack.nu`
 
 // Process what has arrived on a request stream. `fin` says the peer
 // has finished sending.
-@ __h3_request_stream * H3Conn h * H3Stream s b fin ( @ HttpResponse HttpRequest ) handler → v {
+@ __h3_request_stream * H3ConnImpl h * H3Stream s b fin ( @ HttpResponse HttpRequest ) handler → v {
     : ~ b more T
     ~ & & more == . s done 0 == . h failed 0 {
-        : *H3FrameHead fh ( h3_frame_peek . s buf 0 )
-        ? == # i fh 0 {
+        : H3FrameHead fh ( h3_frame_peek . s buf 0 )
+        ? < . fh ftype 0 {
             ? & fin > ( vec_len [u] . s buf ) 0 { ( __h3_fail h ( h3_err_frame_error ) ) } {}
             = more F
         } {
@@ -474,14 +495,13 @@ $ `stdlib/ext/http3_qpack.nu`
 
 // ── the peer's unidirectional streams ───────────────────────────
 
-@ __h3_control_stream * H3Conn h * H3Stream s b fin → v {
+@ __h3_control_stream * H3ConnImpl h * H3Stream s b fin → v {
     ~ & == . h failed 0 T {
-        : *H3FrameHead fh ( h3_frame_peek . s buf 0 )
-        ? == # i fh 0 { ? fin { ( __h3_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
+        : H3FrameHead fh ( h3_frame_peek . s buf 0 )
+        ? < . fh ftype 0 { ? fin { ( __h3_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
         : i ft . fh ftype
         : i flen . fh length
         : i hl . fh head_len
-        ( h3_frame_head_free fh )
         ? & == . h peer_settings 0 != ft ( h3_ft_settings ) { ? ( h3_type_is_reserved ft ) {} { ( __h3_fail h ( h3_err_missing_settings ) ) ^ } } {}
         ? & != . h peer_settings 0 == ft ( h3_ft_settings ) { ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ } {}
         ? | | == ft ( h3_ft_data ) == ft ( h3_ft_headers ) == ft ( h3_ft_push_promise ) { ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ } {}
@@ -506,7 +526,7 @@ $ `stdlib/ext/http3_qpack.nu`
     }
 }
 
-@ __h3_qpack_stream * H3Conn h * H3Stream s b fin b encoder → v {
+@ __h3_qpack_stream * H3ConnImpl h * H3Stream s b fin b encoder → v {
     ~ & == . h failed 0 > ( vec_len [u] . s buf ) 0 {
         : i r ? encoder ( qpack_encoder_instruction . s buf 0 ) ( qpack_decoder_instruction . s buf 0 )
         ? == r -1 { ? fin { ( __h3_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
@@ -519,7 +539,7 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 // Classify a unidirectional stream by its first varint (§6.2).
-@ __h3_classify * H3Conn h * H3Stream s → v {
+@ __h3_classify * H3ConnImpl h * H3Stream s → v {
     : i t ( quic_varint_read . s buf 0 )
     ? < t 0 { ^ } {}
     : i tl ( quic_varint_len_at . s buf 0 )
@@ -555,8 +575,8 @@ $ `stdlib/ext/http3_qpack.nu`
 
 // ── the entry point ──────────────────────────────────────────────
 
-@ __h3_on_stream * H3Conn h i id ( @ HttpResponse HttpRequest ) handler → v {
-    : *QuicConn qc . h qc
+@ __h3_on_stream * H3ConnImpl h i id ( @ HttpResponse HttpRequest ) handler → v {
+    : QuicConn qc . h qc
     : ~ * H3Stream s ( __h3_stream_get h id )
     : b uni != & id 2 0
     ? == # i s 0 {
@@ -601,7 +621,8 @@ $ `stdlib/ext/http3_qpack.nu`
     & == . s kind ( h3_kind_ignored ) fin { ( __h3_stream_drop h id ) } {}
 }
 
-@ h3_conn_on_readable * H3Conn h ( @ HttpResponse HttpRequest ) handler → v {
+@ h3_conn_on_readable H3Conn h__h ( @ HttpResponse HttpRequest ) handler → v {
+    : *H3ConnImpl h ( __H3Conn_ptr h__h )
     : ( Vec i ) ids ( quic_conn_take_readable . h qc )
     : ~ i k 0
     ~ & < k ( vec_len [i] ids ) == . h failed 0 {

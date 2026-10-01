@@ -331,7 +331,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     ( vec_free [f] zeros )
     ? != up 0 {
         ( nurl_poke fail 0 1 )
-        ( vec_free [i] idx ) ( rng_free g2 )
+        ( vec_free [i] idx )
         ^ @ MlpTrain { 0 0.0 0.0 F }
     } {}
     : ( Vec f ) best_w ( vec_with_cap [f] . m n_w )
@@ -518,7 +518,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     ? != gerr 0 {
         ( nurl_poke fail 0 1 )
         ( vec_free [f] best_w ) ( vec_free [f] best_b ) ( vec_free [f] od )
-        ( vec_free [i] idx ) ( rng_free g2 )
+        ( vec_free [i] idx )
         ^ @ MlpTrain { 0 0.0 0.0 F }
     } {}
     // Restore the best weights (early stopping keeps the best epoch, not
@@ -539,7 +539,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     = derr + derr ( gpu_download # *u ( vec_data [f] . m vb ) . cx bvb )
     ? != derr 0 { ( nurl_poke fail 0 1 ) } {}
     ( vec_free [f] best_w ) ( vec_free [f] best_b ) ( vec_free [f] od )
-    ( vec_free [i] idx ) ( rng_free g2 )
+    ( vec_free [i] idx )
     ^ @ MlpTrain { epoch train_loss best stopped }
 }
 

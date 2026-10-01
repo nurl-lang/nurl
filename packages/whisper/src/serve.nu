@@ -66,22 +66,38 @@ $ `src/run.nu`
 // Who may touch g_srv_w: a request holds `g_srv_busy` from acquire to
 // release, a WebSocket stream for the life of the connection, and the
 // reaper only ever closes a model nobody holds. One mutex over the three
-// counters; nothing waits on it for longer than a load.
+// counters; nothing waits on it for longer than a load. It sits in a
+// WhSync block the server allocates once and keeps for the process (the
+// reaper outlives any one scope, as the handlers do), reached through one
+// module global.
 : ~ s g_srv_dir ``  // the model argument, kept for the reloads
 : ~ i g_srv_unload_ms 0  // 0 = the model stays for the process's life
 : ~ i g_srv_idle_since 0  // monotonic_ns when the last holder let go
 : ~ i g_srv_busy 0  // requests + streams holding the model right now
-: ~ i g_srv_mu_ptr 0
-: ~ i g_srv_mu_bytes 0
+: ~ i g_srv_sync 0  // *WhSync as an address (0 = never served)
 : ~ i g_srv_loads 0  // (re)loads so far — 1 is the load before the port opened
 : ~ i g_srv_unloads 0
 : ~ i g_srv_load_ms 0  // the last load's wall time
 
-@ __srv_mu → Mutex { ^ @ Mutex { @ Cell { # s g_srv_mu_ptr g_srv_mu_bytes } } }
+: WhSync {
+    Mutex m  // guards g_srv_w, g_srv_busy, the idle clock and the load counters
+}
 
-@ __srv_lock → v { ? != g_srv_mu_ptr 0 { ( mutex_lock ( __srv_mu ) ) } {} }
+@ __srv_sync → *WhSync { ^ # *WhSync g_srv_sync }
 
-@ __srv_unlock → v { ? != g_srv_mu_ptr 0 { ( mutex_unlock ( __srv_mu ) ) } {} }
+@ __srv_lock → v {
+    ? != g_srv_sync 0 {
+        : *WhSync q ( __srv_sync )
+        ( mutex_lock . q m )
+    } {}
+}
+
+@ __srv_unlock → v {
+    ? != g_srv_sync 0 {
+        : *WhSync q ( __srv_sync )
+        ( mutex_unlock . q m )
+    } {}
+}
 
 // Open the model at g_srv_dir into g_srv_w. Called under the lock. The
 // tokenizer is not rebuilt: it was made once, before the port opened, and
@@ -716,11 +732,10 @@ $ `src/run.nu`
     = g_srv_busy 0
     = g_srv_loads 1
     = g_srv_unloads 0
-    ? == g_srv_mu_ptr 0 {
-        : Mutex mu ( mutex_new )
-        : Cell mc . mu c
-        = g_srv_mu_ptr # i . mc ptr
-        = g_srv_mu_bytes . mc bytes
+    ? == g_srv_sync 0 {
+        : *WhSync qs # *WhSync ( nurl_alloc Z WhSync )
+        = . qs m ( mutex_new )
+        = g_srv_sync # i qs
     } {}
     ? > unload_s 0 {
         : ( @ v ) reaper \ → v { ( __srv_reaper ) }

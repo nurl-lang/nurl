@@ -5,11 +5,11 @@
 // the response comes back the same way and is handed over as the
 // `HttpResponse` the HTTP/1.1 and HTTP/2 clients produce.
 //
-//   ( h3_client_connect host port server_name verify timeout_ms ) → *H3Client
-//                                            0 when the name does not resolve or no socket could be
-//                                            bound; otherwise `h3_client_connected` says whether the
-//                                            QUIC handshake completed (with ALPN "h3") and
-//                                            `h3_client_close_code` why not
+//   ( h3_client_connect host port server_name verify timeout_ms ) → H3Client
+//                                            null (`== 0 # i . cl ctl`) when the name does not resolve
+//                                            or no socket could be bound; otherwise `h3_client_connected`
+//                                            says whether the QUIC handshake completed (with ALPN "h3")
+//                                            and `h3_client_close_code` why not
 //   ( h3_client_connected cl )            → b
 //   ( h3_client_alive cl )                → b     still usable for requests (not closing, no GOAWAY, no failure)
 //   ( h3_client_is_pq cl )                → b     the key exchange was X25519MLKEM768
@@ -21,7 +21,8 @@
 //                                            with the HTTP/3 code) · 4 response too large · 5 refused
 //                                            (the server's GOAWAY or a stream reset)
 //   ( h3_client_close cl )                → v     H3_NO_ERROR application close, driven to the peer
-//   ( h3_client_free cl )                 → v
+//   ( h3_client_free cl )                 → v     early release (optional): the last owner of an
+//                                                 H3Client closes its socket
 //   ( h3_client_set_body_max cl n )       → v     response body cap (default 64 MiB)
 //   ( h3_client_last_refusal cl )         → i     the HTTP/3 code of the server's last stream reset (-1 none)
 //
@@ -46,6 +47,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http3_frame.nu`
 $ `stdlib/ext/http3_qpack.nu`
+$ `stdlib/core/rcbox.nu`
 
 : H3CStream {
     i id
@@ -59,9 +61,9 @@ $ `stdlib/ext/http3_qpack.nu`
     i err  // H3ClientErr code once the stream failed (0 none)
 }
 
-: H3Client {
-    * QuicClient qc
-    * QuicConn c
+: H3ClientImpl {
+    QuicClient qc
+    QuicConn c
     ( Vec i ) streams
     i ctl_out
     i enc_out
@@ -76,6 +78,32 @@ $ `stdlib/ext/http3_qpack.nu`
     i goaway_id  // the server's GOAWAY: request streams ≥ this were not processed (-1 none)
     i last_refusal  // the HTTP/3 code of the last RESET_STREAM / STOP_SENDING the server sent on a request (-1 none)
 }
+
+// An H3Client is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same client, and the last owner releases it.
+: H3Client { s ctl }
+
+// The streams are raw H3CStream blocks (as integers): releasing them is
+// the client's own drop; the QUIC client (and with it the socket) goes
+// with the fields.
+% Drop H3ClientImpl {
+    @ drop H3ClientImpl h → v {
+        : ~ i k 0
+        ~ < k ( vec_len [i] . h streams ) {
+            ( __h3c_stream_free # *H3CStream ( __h3c_ri . h streams k ) )
+            = k + k 1
+        }
+    }
+}
+
+@ H3Client_share H3Client h → H3Client { ^ @ H3Client { # s ( rcbox_share # i . h ctl ) } }
+
+@ H3Client_drop sink H3Client h → v {
+    ( mem_forget h )
+    ( rcbox_release [H3ClientImpl] # i . h ctl )
+}
+
+@ __H3Client_ptr H3Client h → *H3ClientImpl { ^ ( rcbox_ptr [H3ClientImpl] # i . h ctl ) }
 
 @ h3c_default_max_field_section → i { ^ 65536 }
 
@@ -113,7 +141,7 @@ $ `stdlib/ext/http3_qpack.nu`
     ?? ( vec_get [i] v k ) { T x → x F → 0 }
 }
 
-@ __h3c_stream_get * H3Client h i id → *H3CStream {
+@ __h3c_stream_get * H3ClientImpl h i id → *H3CStream {
     : ~ i k 0
     ~ < k ( vec_len [i] . h streams ) {
         : *H3CStream s # *H3CStream ( __h3c_ri . h streams k )
@@ -123,7 +151,7 @@ $ `stdlib/ext/http3_qpack.nu`
     ^ # *H3CStream 0
 }
 
-@ __h3c_stream_drop * H3Client h i id → v {
+@ __h3c_stream_drop * H3ClientImpl h i id → v {
     : ( Vec i ) keep ( vec_new [i] )
     : ~ i k 0
     ~ < k ( vec_len [i] . h streams ) {
@@ -136,7 +164,7 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 // A connection error: close with the HTTP/3 code (application close).
-@ __h3c_fail * H3Client h i code → v {
+@ __h3c_fail * H3ClientImpl h i code → v {
     ? != . h failed 0 { ^ } {}
     = . h failed 1
     : ( Vec u ) reason ( vec_new [u] )
@@ -148,21 +176,22 @@ $ `stdlib/ext/http3_qpack.nu`
 // The transport parameters an HTTP/3 client advertises: the server may
 // open no bidirectional stream (§6.1) and three unidirectional ones
 // (control + 2 QPACK).
-@ __h3c_tp → *QuicTp {
-    : *QuicTp tp ( quic_client_default_tp )
-    = . tp initial_max_streams_bidi 0
-    = . tp initial_max_streams_uni 3
+@ __h3c_tp → QuicTp {
+    : QuicTp tp ( quic_client_default_tp )
+    ( quic_tp_set_initial_max_streams_bidi tp 0 )
+    ( quic_tp_set_initial_max_streams_uni tp 3 )
     ^ tp
 }
 
-@ h3_client_connect s host i port s server_name i verify i timeout_ms → *H3Client {
-    : *QuicTp tp ( __h3c_tp )
-    : *QuicClient qc ( quic_client_connect host port server_name `h3` tp verify timeout_ms )
+@ h3_client_connect s host i port s server_name i verify i timeout_ms → H3Client {
+    : QuicTp tp ( __h3c_tp )
+    : QuicClient qc ( quic_client_connect host port server_name `h3` tp verify timeout_ms )
     ( quic_tp_free tp )
-    ? == # i qc 0 { ^ # *H3Client 0 } {}
-    : *H3Client h # *H3Client ( nurl_alloc Z H3Client )
+    ? == 0 # i . qc ctl { ^ @ H3Client { # s 0 } } {}
+    : i h__box ( rcbox_zero [H3ClientImpl] )
+    : *H3ClientImpl h ( rcbox_ptr [H3ClientImpl] h__box )
+    = . h c ( QuicConn_share ( quic_client_conn qc ) )
     = . h qc qc
-    = . h c ( quic_client_conn qc )
     = . h streams ( vec_new [i] )
     = . h ctl_out -1
     = . h enc_out -1
@@ -176,10 +205,10 @@ $ `stdlib/ext/http3_qpack.nu`
     = . h failed 0
     = . h goaway_id -1
     = . h last_refusal -1
-    ? ( quic_client_connected qc ) {
+    ? ( quic_client_connected . h qc ) {
         // our unidirectional streams: control (type 0x00 + SETTINGS),
         // QPACK encoder (0x02) and decoder (0x03), each just its type byte
-        : *QuicConn c . h c
+        : QuicConn c . h c
         = . h ctl_out ( quic_conn_open_uni c )
         = . h enc_out ( quic_conn_open_uni c )
         = . h dec_out ( quic_conn_open_uni c )
@@ -199,46 +228,54 @@ $ `stdlib/ext/http3_qpack.nu`
             ( quic_varint_push d ( h3_st_qpack_decoder ) )
             : i _n ( quic_conn_stream_send c . h dec_out d F )
         } {}
-        ( quic_client_pump qc )
+        ( quic_client_pump . h qc )
     } {}
-    ^ h
+    ^ @ H3Client { # s h__box }
 }
 
-@ h3_client_connected * H3Client h → b { ^ ( quic_client_connected . h qc ) }
+@ h3_client_connected H3Client h__h → b {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
+    ^ ( quic_client_connected . h qc )
+}
 
-@ h3_client_alive * H3Client h → b {
+@ h3_client_alive H3Client h__h → b {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
     ? != . h failed 0 { ^ F } {}
     ? >= . h goaway_id 0 { ^ F } {}
     ^ == ( quic_conn_state . h c ) 1
 }
 
-@ h3_client_is_pq * H3Client h → b { ^ ( quic_conn_is_pq . h c ) }
+@ h3_client_is_pq H3Client h__h → b {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
+    ^ ( quic_conn_is_pq . h c )
+}
 
-@ h3_client_close_code * H3Client h → i { ^ ( quic_conn_close_code . h c ) }
+@ h3_client_close_code H3Client h__h → i {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
+    ^ ( quic_conn_close_code . h c )
+}
 
-@ h3_client_set_body_max * H3Client h i n → v { = . h body_max n }
+@ h3_client_set_body_max H3Client h__h i n → v {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
+    = . h body_max n
+}
 
 // The HTTP/3 error code of the server's last RESET_STREAM / STOP_SENDING
 // on a request stream (-1 none) — why a request was refused.
-@ h3_client_last_refusal * H3Client h → i { ^ . h last_refusal }
+@ h3_client_last_refusal H3Client h__h → i {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
+    ^ . h last_refusal
+}
 
-@ h3_client_close * H3Client h → v {
+@ h3_client_close H3Client h__h → v {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
     ? >= ( quic_conn_state . h c ) 2 { ^ } {}
     : ( Vec u ) reason ( vec_new [u] )
     ( quic_client_close . h qc 1 ( h3_err_no_error ) reason 500 )
 }
 
-@ h3_client_free sink * H3Client h → v {
-    ? == # i h 0 { ^ } {}
-    : ~ i k 0
-    ~ < k ( vec_len [i] . h streams ) {
-        ( __h3c_stream_free # *H3CStream ( __h3c_ri . h streams k ) )
-        = k + k 1
-    }
-    ( vec_free [i] . h streams )
-    ( quic_client_free . h qc )
-    ( nurl_free # s h )
-}
+// Let go of `h` now rather than at the end of its owner's scope.
+@ h3_client_free sink H3Client h → v {}
 
 // ── the request ──────────────────────────────────────────────────
 
@@ -305,11 +342,10 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 // One frame of the response stream; F when the loop must stop.
-@ __h3c_response_frame * H3Client h * H3CStream s b fin * H3FrameHead fh → b {
+@ __h3c_response_frame * H3ClientImpl h * H3CStream s b fin H3FrameHead fh → b {
     : i ft . fh ftype
     : i flen . fh length
     : i hl . fh head_len
-    ( h3_frame_head_free fh )
     ? | | | == ft ( h3_ft_settings ) == ft ( h3_ft_goaway ) == ft ( h3_ft_max_push_id ) == ft ( h3_ft_cancel_push ) { ( __h3c_fail h ( h3_err_frame_unexpected ) ) = . s err 3 ^ F } {}
     // PUSH_PROMISE with push never enabled (§7.2.5)
     ? == ft ( h3_ft_push_promise ) { ( __h3c_fail h ( h3_err_id_error ) ) = . s err 3 ^ F } {}
@@ -384,11 +420,11 @@ $ `stdlib/ext/http3_qpack.nu`
     ^ T
 }
 
-@ __h3c_response_stream * H3Client h * H3CStream s b fin → v {
+@ __h3c_response_stream * H3ClientImpl h * H3CStream s b fin → v {
     : ~ b more T
     ~ & & more == . s done 0 == . h failed 0 {
-        : *H3FrameHead fh ( h3_frame_peek . s buf 0 )
-        ? == # i fh 0 {
+        : H3FrameHead fh ( h3_frame_peek . s buf 0 )
+        ? < . fh ftype 0 {
             ? & fin > ( vec_len [u] . s buf ) 0 { ( __h3c_fail h ( h3_err_frame_error ) ) = . s err 3 } {}
             = more F
         } {
@@ -404,14 +440,13 @@ $ `stdlib/ext/http3_qpack.nu`
 
 // ── the server's unidirectional streams ─────────────────────────
 
-@ __h3c_control_stream * H3Client h * H3CStream s b fin → v {
+@ __h3c_control_stream * H3ClientImpl h * H3CStream s b fin → v {
     ~ & == . h failed 0 T {
-        : *H3FrameHead fh ( h3_frame_peek . s buf 0 )
-        ? == # i fh 0 { ? fin { ( __h3c_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
+        : H3FrameHead fh ( h3_frame_peek . s buf 0 )
+        ? < . fh ftype 0 { ? fin { ( __h3c_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
         : i ft . fh ftype
         : i flen . fh length
         : i hl . fh head_len
-        ( h3_frame_head_free fh )
         ? & == . h peer_settings 0 != ft ( h3_ft_settings ) { ? ( h3_type_is_reserved ft ) {} { ( __h3c_fail h ( h3_err_missing_settings ) ) ^ } } {}
         ? & != . h peer_settings 0 == ft ( h3_ft_settings ) { ( __h3c_fail h ( h3_err_frame_unexpected ) ) ^ } {}
         ? | | | == ft ( h3_ft_data ) == ft ( h3_ft_headers ) == ft ( h3_ft_push_promise ) == ft ( h3_ft_max_push_id ) { ( __h3c_fail h ( h3_err_frame_unexpected ) ) ^ } {}
@@ -442,7 +477,7 @@ $ `stdlib/ext/http3_qpack.nu`
     }
 }
 
-@ __h3c_qpack_stream * H3Client h * H3CStream s b fin b encoder → v {
+@ __h3c_qpack_stream * H3ClientImpl h * H3CStream s b fin b encoder → v {
     ~ & == . h failed 0 > ( vec_len [u] . s buf ) 0 {
         : i r ? encoder ( qpack_encoder_instruction . s buf 0 ) ( qpack_decoder_instruction . s buf 0 )
         ? == r -1 { ? fin { ( __h3c_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
@@ -455,7 +490,7 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 // Classify a server unidirectional stream by its first varint (§6.2).
-@ __h3c_classify * H3Client h * H3CStream s → v {
+@ __h3c_classify * H3ClientImpl h * H3CStream s → v {
     : i t ( quic_varint_read . s buf 0 )
     ? < t 0 { ^ } {}
     : i tl ( quic_varint_len_at . s buf 0 )
@@ -488,8 +523,8 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 // Everything that arrived on stream `id`.
-@ __h3c_on_stream * H3Client h i id → v {
-    : *QuicConn c . h c
+@ __h3c_on_stream * H3ClientImpl h i id → v {
+    : QuicConn c . h c
     : ~ * H3CStream s ( __h3c_stream_get h id )
     : b uni != & id 2 0
     ? == # i s 0 {
@@ -528,9 +563,10 @@ $ `stdlib/ext/http3_qpack.nu`
 
 @ __h3c_now → i { ^ / ( monotonic_ns ) 1000000 }
 
-@ h3_client_request * H3Client h s method s scheme s authority s path ( Vec Header ) headers ( Vec u ) body i timeout_ms → !HttpResponse i {
-    ? ! ( h3_client_alive h ) { ^ @ !HttpResponse i { F 1 } } {}
-    : *QuicConn c . h c
+@ h3_client_request H3Client h__h s method s scheme s authority s path ( Vec Header ) headers ( Vec u ) body i timeout_ms → !HttpResponse i {
+    : *H3ClientImpl h ( __H3Client_ptr h__h )
+    ? ! ( h3_client_alive h__h ) { ^ @ !HttpResponse i { F 1 } } {}
+    : QuicConn c . h c
     : i sid ( quic_conn_open_bidi c )
     ? < sid 0 { ^ @ !HttpResponse i { F 1 } } {}
     : *H3CStream s ( __h3c_stream_new sid 0 )

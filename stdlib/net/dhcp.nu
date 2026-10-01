@@ -28,6 +28,11 @@
 // reply is matched against it AND against our MAC in the chaddr field.
 // A reply with a foreign xid is another guest's lease landing in our
 // broadcast domain — accepting it means fighting over an address.
+//
+// MEMORY — a `DhcpClient` is a handle (rcbox): every copy is the same
+// client, and its last owner releases it. `dhcp_client_free` is an
+// early release (optional). What the client learned is read through
+// accessors (`dhcp_our_ip`, `dhcp_subnet`, `dhcp_router`, …).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -36,6 +41,7 @@ $ `stdlib/net/inet.nu`
 $ `stdlib/net/eth.nu`
 $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/udp4.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── constants ────────────────────────────────────────────────────
 
@@ -242,7 +248,7 @@ $ `stdlib/net/udp4.nu`
 
 // ── client state machine ─────────────────────────────────────────
 
-: DhcpClient {
+: DhcpClientImpl {
     i state
     i mac
     i xid
@@ -259,8 +265,22 @@ $ `stdlib/net/udp4.nu`
     i sends
 }
 
-@ dhcp_client_new i mac i xid → *DhcpClient {
-    : *DhcpClient c # *DhcpClient ( nurl_alloc Z DhcpClient )
+// A DhcpClient is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: DhcpClient { s ctl }
+
+@ DhcpClient_share DhcpClient h → DhcpClient { ^ @ DhcpClient { # s ( rcbox_share # i . h ctl ) } }
+
+@ DhcpClient_drop sink DhcpClient h → v {
+    ( mem_forget h )
+    ( rcbox_release [DhcpClientImpl] # i . h ctl )
+}
+
+@ __DhcpClient_ptr DhcpClient h → *DhcpClientImpl { ^ ( rcbox_ptr [DhcpClientImpl] # i . h ctl ) }
+
+@ dhcp_client_new i mac i xid → DhcpClient {
+    : i c__box ( rcbox_zero [DhcpClientImpl] )
+    : *DhcpClientImpl c ( rcbox_ptr [DhcpClientImpl] c__box )
     = . c state ( dhcp_state_init )
     = . c mac mac
     = . c xid xid
@@ -275,19 +295,23 @@ $ `stdlib/net/udp4.nu`
     = . c next_send_ms 0
     = . c backoff_ms ( dhcp_retry_base_ms )
     = . c sends 0
-    ^ c
+    ^ @ DhcpClient { # s c__box }
 }
 
-@ dhcp_client_free sink * DhcpClient c → v { ( free c ) }
+// Let go of `c` now rather than at the end of its owner's scope.
+@ dhcp_client_free sink DhcpClient c → v {}
 
-@ dhcp_bound * DhcpClient c → b {
+@ __dhcp_bound * DhcpClientImpl c → b {
     ^ || || == . c state ( dhcp_state_bound ) == . c state ( dhcp_state_renewing ) == . c state ( dhcp_state_rebinding )
 }
+
+@ dhcp_bound DhcpClient c__h → b { ^ ( __dhcp_bound ( __DhcpClient_ptr c__h ) ) }
 
 // What the caller should transmit now, if anything: 0 = nothing,
 // otherwise a DHCP message type. Advances retransmit backoff and the
 // lease timers. Call it on every event-loop turn.
-@ dhcp_tick * DhcpClient c i now → i {
+@ dhcp_tick DhcpClient c__h i now → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
     ? == . c state ( dhcp_state_init ) {
         = . c state ( dhcp_state_selecting )
         = . c next_send_ms + now ( dhcp_retry_base_ms )
@@ -297,7 +321,7 @@ $ `stdlib/net/udp4.nu`
     } {}
     // Lease expiry outranks everything: an expired address must not be
     // used for another packet, so we fall all the way back to INIT.
-    ? && ( dhcp_bound c ) >= now . c lease_ms {
+    ? && ( __dhcp_bound c ) >= now . c lease_ms {
         = . c state ( dhcp_state_init )
         = . c our_ip 0
         = . c server_id 0
@@ -351,7 +375,8 @@ $ `stdlib/net/udp4.nu`
 // Every reply is matched on xid AND chaddr: a foreign xid is another
 // client's lease arriving in the same broadcast domain, and honouring
 // it means two guests claiming one address.
-@ dhcp_handle * DhcpClient c DhcpMsg m i now → b {
+@ dhcp_handle DhcpClient c__h DhcpMsg m i now → b {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
     ? ! . m valid { ^ F } {}
     ? != . m op ( dhcp_op_reply ) { ^ F } {}
     ? != . m xid . c xid { ^ F } {}
@@ -419,12 +444,74 @@ $ `stdlib/net/udp4.nu`
 
 // The destination for a message in the current state: RENEWING
 // unicasts to the leasing server, everything else broadcasts.
-@ dhcp_dest_ip * DhcpClient c → i {
+@ dhcp_dest_ip DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
     ? && == . c state ( dhcp_state_renewing ) != . c server_id 0 { ^ . c server_id } {}
     ^ 4294967295
 }
 
-@ dhcp_src_ip * DhcpClient c → i {
+@ dhcp_src_ip DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
     ? || == . c state ( dhcp_state_renewing ) == . c state ( dhcp_state_rebinding ) { ^ . c our_ip } {}
     ^ 0
+}
+
+// ── what the client has learned ──────────────────────────────────
+// Read by the code that builds its messages and configures the stack
+// once the lease is bound. Addresses are host-order IPv4; deadlines are
+// absolute milliseconds on the caller's clock.
+
+@ dhcp_state DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c state
+}
+
+@ dhcp_mac DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c mac
+}
+
+@ dhcp_xid DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c xid
+}
+
+@ dhcp_our_ip DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c our_ip
+}
+
+@ dhcp_server_id DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c server_id
+}
+
+@ dhcp_subnet DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c subnet
+}
+
+@ dhcp_router DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c router
+}
+
+@ dhcp_dns DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c dns
+}
+
+@ dhcp_lease_ms DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c lease_ms
+}
+
+@ dhcp_t1_ms DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c t1_ms
+}
+
+@ dhcp_t2_ms DhcpClient c__h → i {
+    : *DhcpClientImpl c ( __DhcpClient_ptr c__h )
+    ^ . c t2_ms
 }

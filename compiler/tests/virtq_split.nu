@@ -39,38 +39,38 @@ $ `stdlib/hal/virtq.nu`
 
 @ mock_free sink * MockDev d → v { ( free d ) }
 
-@ mock_has_work * MockDev d * Virtq q → b {
+@ mock_has_work * MockDev d Virtq q → b {
     ^ ( vq_idx_lt . d last_avail ( virtq_avail_idx q ) )
 }
 
 // Returns the chain head it completed, or -1 when idle.
-@ mock_service * MockDev d * Virtq q i written → i {
+@ mock_service * MockDev d Virtq q i written → i {
     ? ! ( mock_has_work d q ) { ^ -1 } {}
-    : i slot % . d last_avail . q qsize
+    : i slot % . d last_avail ( virtq_qsize q )
     : i head ( virtq_avail_ring q slot )
     = . d last_avail ( vq_idx_add . d last_avail 1 )
     // Walk the chain the way a device does, counting its segments.
     : ~ i idx head
     : ~ i n 0
     : ~ b more T
-    ~ && more < n . q qsize {
+    ~ && more < n ( virtq_qsize q ) {
         = n + n 1
         ? == & ( virtq_desc_flags q idx ) ( vq_desc_next ) ( vq_desc_next ) {
             = idx ( virtq_desc_next q idx )
         } { = more F }
     }
     // Publish into used: slot = used.idx % qsize, then bump used.idx.
-    : i uslot % ( virtq_used_idx q ) . q qsize
-    : i ubase + + ( vq_used_off . q qsize ) 4 * 8 uslot
+    : i uslot % ( virtq_used_idx q ) ( virtq_qsize q )
+    : i ubase + + ( vq_used_off ( virtq_qsize q ) ) 4 * 8 uslot
     : ~ i k 0
     ~ < k 4 {
-        : b _a ( vec_set [u] . q mem + ubase k # u & >> head * 8 k 255 )
-        : b _b ( vec_set [u] . q mem + + ubase 4 k # u & >> written * 8 k 255 )
+        : b _a ( vec_set [u] ( virtq_mem q ) + ubase k # u & >> head * 8 k 255 )
+        : b _b ( vec_set [u] ( virtq_mem q ) + + ubase 4 k # u & >> written * 8 k 255 )
         = k + k 1
     }
     : i nidx ( vq_idx_add ( virtq_used_idx q ) 1 )
-    : b _c ( vec_set [u] . q mem + ( vq_used_off . q qsize ) 2 # u & nidx 255 )
-    : b _d ( vec_set [u] . q mem + ( vq_used_off . q qsize ) 3 # u & >> nidx 8 255 )
+    : b _c ( vec_set [u] ( virtq_mem q ) + ( vq_used_off ( virtq_qsize q ) ) 2 # u & nidx 255 )
+    : b _d ( vec_set [u] ( virtq_mem q ) + ( vq_used_off ( virtq_qsize q ) ) 3 # u & >> nidx 8 255 )
     ^ head
 }
 
@@ -89,7 +89,7 @@ $ `stdlib/hal/virtq.nu`
     ( pb `total covers the used ring: ` == ( vq_layout_size 8 ) + ( vq_used_off 8 ) 70 )
 
     // ── free list ────────────────────────────────────────────────
-    : *Virtq q ( virtq_new 8 )
+    : Virtq q ( virtq_new 8 )
     ( pb `all 8 descriptors free: ` == ( virtq_num_free q ) 8 )
     ( pb `ring starts zeroed: ` && == ( virtq_avail_idx q ) 0 == ( virtq_used_idx q ) 0 )
     : ~ i taken 0
@@ -217,20 +217,20 @@ $ `stdlib/hal/virtq.nu`
     // A broken or malicious device reporting id >= qsize must not be
     // let through: that id would go onto the free list and corrupt the
     // descriptor table on the next allocation.
-    : i ubase + + ( vq_used_off . q qsize ) 4 * 8 % ( virtq_used_idx q ) . q qsize
-    : b _h1 ( vec_set [u] . q mem ubase # u 99 )
-    : b _h2 ( vec_set [u] . q mem + ubase 1 # u 0 )
-    : b _h3 ( vec_set [u] . q mem + ubase 2 # u 0 )
-    : b _h4 ( vec_set [u] . q mem + ubase 3 # u 0 )
+    : i ubase + + ( vq_used_off ( virtq_qsize q ) ) 4 * 8 % ( virtq_used_idx q ) ( virtq_qsize q )
+    : b _h1 ( vec_set [u] ( virtq_mem q ) ubase # u 99 )
+    : b _h2 ( vec_set [u] ( virtq_mem q ) + ubase 1 # u 0 )
+    : b _h3 ( vec_set [u] ( virtq_mem q ) + ubase 2 # u 0 )
+    : b _h4 ( vec_set [u] ( virtq_mem q ) + ubase 3 # u 0 )
     : i bad_idx ( vq_idx_add ( virtq_used_idx q ) 1 )
-    : b _h5 ( vec_set [u] . q mem + ( vq_used_off . q qsize ) 2 # u & bad_idx 255 )
-    : b _h6 ( vec_set [u] . q mem + ( vq_used_off . q qsize ) 3 # u & >> bad_idx 8 255 )
+    : b _h5 ( vec_set [u] ( virtq_mem q ) + ( vq_used_off ( virtq_qsize q ) ) 2 # u & bad_idx 255 )
+    : b _h6 ( vec_set [u] ( virtq_mem q ) + ( vq_used_off ( virtq_qsize q ) ) 3 # u & >> bad_idx 8 255 )
     ( pb `out-of-range used id refused: ` ?? ( virtq_get_used q ) { T d → F F → T } )
     ( pb `free list not corrupted: ` == ( virtq_num_free q ) 8 )
 
     // ── notification suppression ────────────────────────────────
     ( pb `notify needed by default: ` ( virtq_needs_notify q ) )
-    : b _n1 ( vec_set [u] . q mem ( vq_used_off . q qsize ) # u ( vq_used_no_notify ) )
+    : b _n1 ( vec_set [u] ( virtq_mem q ) ( vq_used_off ( virtq_qsize q ) ) # u ( vq_used_no_notify ) )
     ( pb `device NO_NOTIFY honoured: ` ! ( virtq_needs_notify q ) )
     ( virtq_set_avail_flags q ( vq_avail_no_interrupt ) )
     ( pb `avail NO_INTERRUPT set (polling driver): ` == ( virtq_avail_flags q ) ( vq_avail_no_interrupt ) )

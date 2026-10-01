@@ -12,6 +12,7 @@
 // main returns the number of failed checks (0 = all pass).
 // requires: live
 
+$ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 
 // Shared state for the live concurrency test (module-level mutables, the
@@ -48,23 +49,21 @@ $ `stdlib/std/thread.nu`
             = it + it 1
         }
     }
-    : s thandles ( nurl_alloc * n_threads 8 )
+    : ( Vec Thread ) thandles ( vec_new [Thread] )
     : ~ i j 0
     ~ < j n_threads {
         : !Thread ThreadErr r ( thread_spawn worker )
         ?? r {
-            T t → { ( nurl_poke thandles j # i . t raw ) }
-            F _ → { ( nurl_poke thandles j 0 ) }
+            T t → { ( vec_push [Thread] thandles t ) }
+            F _ → {}
         }
         = j + j 1
     }
     = j 0
-    ~ < j n_threads {
-        : i traw ( nurl_peek thandles j )
-        ? != traw 0 { ( thread_join @ Thread { # s traw } ) } {}
+    ~ < j ( vec_len [Thread] thandles ) {
+        ?? ( vec_get [Thread] thandles j ) { T t → { ( thread_join t ) } F _ → {} }
         = j + j 1
     }
-    ( nurl_free thandles )
 }
 
 @ main → i {

@@ -10,7 +10,7 @@
 //   87     ML-DSA-87   2592   4896        4627      AES-256
 //
 // API — the three operations:
-//   ( mldsa_keygen i level )                        → *MldsaKeys
+//   ( mldsa_keygen i level )                        → MldsaKeys
 //   ( mldsa_sign i level ( Vec u ) sk
 //                ( Vec u ) msg ( Vec u ) ctx )      → ( Vec u )  signature
 //   ( mldsa_verify i level ( Vec u ) pk ( Vec u ) msg
@@ -26,15 +26,19 @@
 // API — the deterministic and internal forms, which FIPS 204 defines
 // and NIST's ACVP vectors exercise. Production callers want the three
 // above.
-//   ( mldsa_keygen_derand level ( Vec u ) xi )      → *MldsaKeys
+//   ( mldsa_keygen_derand level ( Vec u ) xi )      → MldsaKeys
 //   ( mldsa_sign_internal level ( Vec u ) sk
 //         ( Vec u ) mprime ( Vec u ) rnd )          → ( Vec u )
 //   ( mldsa_verify_internal level ( Vec u ) pk
 //         ( Vec u ) mprime ( Vec u ) sig )          → b
 //
-// Accessors, sizes and cleanup:
-//   ( mldsa_pk *MldsaKeys ) ( mldsa_sk *MldsaKeys ) ( mldsa_keys_free … )
+// Accessors and sizes:
+//   ( mldsa_pk MldsaKeys ) ( mldsa_sk MldsaKeys )   the keys' own bytes, lent
 //   ( mldsa_pk_len level ) ( mldsa_sk_len level ) ( mldsa_sig_len level )
+//   ( mldsa_keys_free k )                           early release (optional)
+//
+// MldsaKeys is a library handle (docs/MEMORY.md §7.6): every copy is the
+// same key pair, and the last owner releases it.
 //
 // ── On timing ──────────────────────────────────────────────────────
 //
@@ -56,6 +60,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hash_sha512.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/subtle.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Parameters ─────────────────────────────────────────────────────
 //
@@ -602,7 +607,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 @ __poly_uniform * i32 r i off ( Vec u ) rho i x1 i x2 → v {
-    : *Sha3 xof ( shake128_init )
+    : Sha3 xof ( shake128_init )
     ( sha3_absorb xof rho )
     : ( Vec u ) idx ( vec_new [u] )
     ( vec_push [u] idx # u x1 )
@@ -634,7 +639,7 @@ $ `stdlib/std/subtle.nu`
 // different number of them, so the loop runs until the last lane has
 // its 256 coefficients. See stdlib/std/hash_sha3x4.nu.
 @ __poly_uniform_x4 * i32 r ( Vec u ) rho i l i c0 → v {
-    : *Sha3x4 xof ( shake128x4_init )
+    : Sha3x4 xof ( shake128x4_init )
     ( sha3x4_absorb xof rho rho rho rho )
     : ( Vec u ) x0 ( __md_a_idx l + c0 0 )
     : ( Vec u ) x1 ( __md_a_idx l + c0 1 )
@@ -739,7 +744,7 @@ $ `stdlib/std/subtle.nu`
         : i m1 ? < + g 1 count + g 1 - count 1
         : i m2 ? < + g 2 count + g 2 - count 1
         : i m3 ? < + g 3 count + g 3 - count 1
-        : *Sha3x4 h ( shake256x4_init )
+        : Sha3x4 h ( shake256x4_init )
         ( sha3x4_absorb h rhop rhop rhop rhop )
         : ( Vec u ) b0 ( vec_new [u] ) ( vec_push [u] b0 # u & + n0 g 255 ) ( vec_push [u] b0 # u & >> + n0 g 8 255 )
         : ( Vec u ) b1 ( vec_new [u] ) ( vec_push [u] b1 # u & + n0 m1 255 ) ( vec_push [u] b1 # u & >> + n0 m1 8 255 )
@@ -776,7 +781,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 @ __poly_uniform_eta * i32 r i off ( Vec u ) rhop i nonce i eta → v {
-    : *Sha3 xof ( shake256_init )
+    : Sha3 xof ( shake256_init )
     ( sha3_absorb xof rhop )
     : ( Vec u ) nb ( vec_new [u] )
     ( vec_push [u] nb # u & nonce 255 )
@@ -819,7 +824,7 @@ $ `stdlib/std/subtle.nu`
         : i m1 ? < + g 1 count + g 1 - count 1
         : i m2 ? < + g 2 count + g 2 - count 1
         : i m3 ? < + g 3 count + g 3 - count 1
-        : *Sha3x4 h ( shake256x4_init )
+        : Sha3x4 h ( shake256x4_init )
         ( sha3x4_absorb h rhop rhop rhop rhop )
         : i n0 + kappa g
         : i n1 + kappa m1
@@ -848,7 +853,7 @@ $ `stdlib/std/subtle.nu`
 }
 
 @ __poly_uniform_gamma1 * i32 r i off ( Vec u ) rhop i nonce i g1 i zbits → v {
-    : *Sha3 xof ( shake256_init )
+    : Sha3 xof ( shake256_init )
     ( sha3_absorb xof rhop )
     : ( Vec u ) nb ( vec_new [u] )
     ( vec_push [u] nb # u & nonce 255 )
@@ -867,7 +872,7 @@ $ `stdlib/std/subtle.nu`
 @ __poly_challenge * i32 c i off ( Vec u ) ctilde i tau → v {
     : ~ i i 0
     ~ < i 256 { = . c + off i # i32 0 = i + i 1 }
-    : *Sha3 xof ( shake256_init )
+    : Sha3 xof ( shake256_init )
     ( sha3_absorb xof ctilde )
     : ( Vec u ) sb ( sha3_squeeze xof 8 )
     : *u sp ( vec_data [u] sb )
@@ -988,23 +993,39 @@ MldsaParams p ( Vec u ) out → v {
 
 // ── Key generation ─────────────────────────────────────────────────
 
-: MldsaKeys {
+: MldsaKeysImpl {
     ( Vec u ) pk
     ( Vec u ) sk
 }
 
-@ mldsa_pk * MldsaKeys h → ( Vec u ) { ^ . h pk }
+// A MldsaKeys is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: MldsaKeys { s ctl }
 
-@ mldsa_sk * MldsaKeys h → ( Vec u ) { ^ . h sk }
+@ MldsaKeys_share MldsaKeys h → MldsaKeys { ^ @ MldsaKeys { # s ( rcbox_share # i . h ctl ) } }
 
-@ mldsa_keys_free sink * MldsaKeys h → v {
-    ( vec_free [u] . h pk )
-    ( vec_free [u] . h sk )
-    ( nurl_free # s h )
+@ MldsaKeys_drop sink MldsaKeys h → v {
+    ( mem_forget h )
+    ( rcbox_release [MldsaKeysImpl] # i . h ctl )
 }
 
+@ __MldsaKeys_ptr MldsaKeys h → *MldsaKeysImpl { ^ ( rcbox_ptr [MldsaKeysImpl] # i . h ctl ) }
+
+@ mldsa_pk MldsaKeys h__h → ( Vec u ) {
+    : *MldsaKeysImpl h ( __MldsaKeys_ptr h__h )
+    ^ . h pk
+}
+
+@ mldsa_sk MldsaKeys h__h → ( Vec u ) {
+    : *MldsaKeysImpl h ( __MldsaKeys_ptr h__h )
+    ^ . h sk
+}
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ mldsa_keys_free sink MldsaKeys h → v {}
+
 // ML-DSA.KeyGen_internal (Algorithm 6).
-simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
+simd @ mldsa_keygen_derand i level ( Vec u ) xi → MldsaKeys {
     : MldsaParams p ( __mldsa_params level )
     : i k . p k
     : i l . p l
@@ -1075,9 +1096,7 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
     : ( Vec u ) sk ( vec_with_cap [u] ( mldsa_sk_len level ) )
     ( __pack_sk rho kk tr s1p s2p t0p p sk )
 
-    : *MldsaKeys h # *MldsaKeys ( nurl_alloc Z MldsaKeys )
-    = . h pk pk
-    = . h sk sk
+    : MldsaKeys h @ MldsaKeys { # s ( rcbox_new [MldsaKeysImpl] @ MldsaKeysImpl { pk sk } ) }
 
     ( vec_free [u] tr )
     ( vec_free [i32] t0 ) ( vec_free [i32] t1 )
@@ -1089,9 +1108,9 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
     ^ h
 }
 
-@ mldsa_keygen i level → *MldsaKeys {
+@ mldsa_keygen i level → MldsaKeys {
     : ( Vec u ) xi ( rand_bytes 32 )
-    : *MldsaKeys h ( mldsa_keygen_derand level xi )
+    : MldsaKeys h ( mldsa_keygen_derand level xi )
     ( vec_free [u] xi )
     ^ h
 }
@@ -1174,7 +1193,7 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
     : *i32 ap ( vec_data [i32] a )
 
     // ρ'' ← H(K ‖ rnd ‖ μ, 64)
-    : *Sha3 hr ( shake256_init )
+    : Sha3 hr ( shake256_init )
     ( sha3_absorb hr kk )
     ( sha3_absorb hr rnd )
     ( sha3_absorb hr mu )
@@ -1229,7 +1248,7 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
         // c~ ← H(μ ‖ w1Encode(w1), λ/4) ; c ← SampleInBall(c~)
         : ( Vec u ) w1enc ( vec_new [u] )
         ( __pack_w1 w1p k . p wbits w1enc )
-        : *Sha3 hc ( shake256_init )
+        : Sha3 hc ( shake256_init )
         ( sha3_absorb hc mu )
         ( sha3_absorb hc w1enc )
         : ( Vec u ) ctilde ( sha3_squeeze hc . p lam )
@@ -1335,7 +1354,7 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
 // μ ← H(tr ‖ M', 64) — the message representative, bound to the public
 // key through tr so a signature cannot be transplanted onto another key.
 @ __mldsa_mu ( Vec u ) tr ( Vec u ) mprime → ( Vec u ) {
-    : *Sha3 h ( shake256_init )
+    : Sha3 h ( shake256_init )
     ( sha3_absorb h tr )
     ( sha3_absorb h mprime )
     : ( Vec u ) mu ( sha3_squeeze h 64 )
@@ -1449,7 +1468,7 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
         }
         : ( Vec u ) w1enc ( vec_new [u] )
         ( __pack_w1 w1p k . p wbits w1enc )
-        : *Sha3 hc ( shake256_init )
+        : Sha3 hc ( shake256_init )
         ( sha3_absorb hc mu )
         ( sha3_absorb hc w1enc )
         : ( Vec u ) c2 ( sha3_squeeze hc . p lam )

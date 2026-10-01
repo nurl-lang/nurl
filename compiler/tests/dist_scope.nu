@@ -29,7 +29,7 @@ $ `stdlib/dist/replicator.nu`
     : ( Vec u ) c ( mkpk 150 )
     : ( Vec u ) d ( mkpk 220 )
 
-    : *Ring r ( ring_new )
+    : Ring r ( ring_new )
     ( ring_add_member r a 32 ) ( ring_add_member r b 32 )
     ( ring_add_member r c 32 ) ( ring_add_member r d 32 )
 
@@ -44,9 +44,9 @@ $ `stdlib/dist/replicator.nu`
     ( pb `at least one non-replica excluded: ` == nrep 2 )  // 4 members, 2 replicas ⇒ 2 excluded
 
     // ── digest detects divergence; anti-entropy converges ────────
-    : *PNCounter repA ( pncounter_new )
+    : PNCounter repA ( pncounter_new )
     ( pncounter_inc repA 0 5 )
-    : *PNCounter repB ( pncounter_new )
+    : PNCounter repB ( pncounter_new )
     ( pncounter_inc repB 1 7 )
     : ( Vec u ) ea0 ( pncounter_encode repA )
     : ( Vec u ) eb0 ( pncounter_encode repB )
@@ -76,7 +76,7 @@ $ `stdlib/dist/replicator.nu`
     ( pb `fan-out still R after the change: ` == ( replica_fanout r key 2 ) 2 )
 
     // freshly-promoted replica starts empty, pulls the live state, converges
-    : *PNCounter fresh ( pncounter_new )
+    : PNCounter fresh ( pncounter_new )
     : ( Vec u ) live ( pncounter_encode repA )  // a surviving replica's state
     : ( Vec u ) fresh0 ( pncounter_encode fresh )
     ( pb `new replica empty diverges: ` ! ( crdt_in_sync fresh0 live ) )

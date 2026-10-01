@@ -41,7 +41,7 @@ $ `unikernel/drivers/virtionet.nu`
 
 // Move whatever the stack has queued onto the wire, then whatever the
 // wire has for us into the stack. One turn.
-@ pump * VirtioNet nic * NetStack st * PktBuf out → i {
+@ pump * VirtioNet nic NetStack st PktBuf out → i {
     : i n ( pktbuf_count out )
     : ~ i k 0
     ~ < k n {
@@ -78,8 +78,8 @@ $ `unikernel/drivers/virtionet.nu`
     ( nurl_print ? != ( vnet_mac nic ) 0 `yes` `no` )
     ( nurl_print `\n` )
 
-    : *NetStack st ( stack_new ( vnet_mac nic ) ( my_ip ) ( mask24 ) ( gw_ip ) )
-    : *PktBuf out ( pktbuf_new )
+    : NetStack st ( stack_new ( vnet_mac nic ) ( my_ip ) ( mask24 ) ( gw_ip ) )
+    : PktBuf out ( pktbuf_new )
 
     // A UDP datagram to the gateway is the smallest thing that makes
     // the stack want a MAC address it does not have — so the first
@@ -96,7 +96,7 @@ $ `unikernel/drivers/virtionet.nu`
     : ~ i rounds 0
     ~ && ! resolved < rounds 2000 {
         ( pump nic st out )
-        = resolved ?? ( arp_cache_lookup . st arp ( gw_ip ) ( ms ) ) { T _m → T F → F }
+        = resolved ?? ( arp_cache_lookup ( stack_arp st ) ( gw_ip ) ( ms ) ) { T _m → T F → F }
         = rounds + rounds 1
     }
     ( nurl_print `gateway MAC learned over the wire: ` )
@@ -115,7 +115,7 @@ $ `unikernel/drivers/virtionet.nu`
     } {}
 
     ( nurl_print `frames received: ` )
-    ( nurl_print ? > . st rx_frames 0 `yes` `no` )
+    ( nurl_print ? > ( stack_rx_frames st ) 0 `yes` `no` )
     ( nurl_print `\n` )
 
     ( vec_free [u] payload )

@@ -6,8 +6,8 @@ $ `stdlib/ext/csv.nu`
     : i t0 ( monotonic_ns )
 
     ( nurl_print `Loading test_data.csv...\n` )
-    : *CSVTable tbl ( csv_table_load `test_data.csv` )
-    ? == # i tbl 0 {
+    : CSVTable tbl ( csv_table_load `test_data.csv` )
+    ? ! ( csv_table_ok tbl ) {
         ( nurl_print `ERROR: failed to load test_data.csv\n` )
         ^ 1
     } {}
@@ -88,7 +88,7 @@ $ `stdlib/ext/csv.nu`
     ( vec_push [String] cols ( string_from `date` ) )
     ( vec_push [String] cols ( string_from `text_words` ) )
     : i tsel ( monotonic_ns )
-    : *CSVTable proj ( csv_table_select_cols tbl cols )
+    : CSVTable proj ( csv_table_select_cols tbl cols )
     ( nurl_print `Selected ` ) ( nurl_print ( nurl_str_int ( csv_table_n_rows proj ) ) )
     ( nurl_print ` rows in ` ) ( nurl_print ( nurl_str_int ( elapsed_ms_since tsel ) ) ) ( nurl_print `ms\n` )
 

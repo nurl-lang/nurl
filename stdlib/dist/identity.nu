@@ -29,9 +29,13 @@
 //     Feed dist/crdt.nu / dist/replicator.nu REPLICA IDS FROM THIS: a CRDT
 //     merge aligns replicas by id, so two nodes that meet peers in different
 //     orders must still agree on each replica's id or the value corrupts.
+//
+// An IdRegistry is a handle: every copy is the same registry, and its last
+// owner releases it (identity_free is an early release, optional).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __id_veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a )
@@ -58,31 +62,53 @@ $ `stdlib/core/vec.nu`
     i live  // 1 = active, 0 = retired (tombstone; id still bound here)
 }
 
-: IdRegistry {
+: IdRegistryImpl {
     ( Vec s ) entries  // *IdEntry
     i next_id  // monotonic high-water mark — never decreases
 }
 
-@ identity_new → *IdRegistry {
-    : *IdRegistry r # *IdRegistry ( nurl_alloc Z IdRegistry )
+// An IdRegistry is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: IdRegistry { s ctl }
+
+@ IdRegistry_share IdRegistry h → IdRegistry { ^ @ IdRegistry { # s ( rcbox_share # i . h ctl ) } }
+
+@ IdRegistry_drop sink IdRegistry h → v {
+    ( mem_forget h )
+    ( rcbox_release [IdRegistryImpl] # i . h ctl )
+}
+
+@ __IdRegistry_ptr IdRegistry h → *IdRegistryImpl { ^ ( rcbox_ptr [IdRegistryImpl] # i . h ctl ) }
+
+// The entries are raw blocks the Vec only points at: releasing them is the
+// registry's own drop, run by its last owner (the Vec goes after it).
+% Drop IdRegistryImpl {
+    @ drop IdRegistryImpl r → v {
+        : i n ( vec_len [s] . r entries )
+        : ~ i k 0
+        ~ < k n {
+            : s pp ?? ( vec_get [s] . r entries k ) { T x → x F → # s 0 }
+            ? != # i pp 0 { : *IdEntry e # *IdEntry pp ( vec_free [u] . e pubkey ) ( nurl_free # s e ) } {}
+            = k + k 1
+        }
+    }
+}
+
+@ identity_new → IdRegistry {
+    : i r__box ( rcbox_zero [IdRegistryImpl] )
+    : *IdRegistryImpl r ( rcbox_ptr [IdRegistryImpl] r__box )
     = . r entries ( vec_new [s] )
     = . r next_id 0
-    ^ r
+    ^ @ IdRegistry { # s r__box }
 }
 
-@ identity_free sink * IdRegistry r → v {
-    : i n ( vec_len [s] . r entries )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . r entries k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *IdEntry e # *IdEntry pp ( vec_free [u] . e pubkey ) ( nurl_free # s e ) } {}
-        = k + k 1
-    }
-    ( vec_free [s] . r entries )
-    ( nurl_free # s r )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ identity_free sink IdRegistry r → v {}
 
-@ identity_count * IdRegistry r → i { ^ ( vec_len [s] . r entries ) }
+@ identity_count IdRegistry r__h → i {
+    : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
+    ^ ( vec_len [s] . r entries )
+}
 
 // A globally STABLE replica id derived purely from the pubkey (FNV-1a/64). No
 // registry, no coordination: every node computes the SAME id for a given
@@ -104,7 +130,7 @@ $ `stdlib/core/vec.nu`
     ^ h
 }
 
-@ __id_find * IdRegistry r ( Vec u ) pubkey → s {
+@ __id_find * IdRegistryImpl r ( Vec u ) pubkey → s {
     : i n ( vec_len [s] . r entries )
     : ~ s found # s 0
     : ~ i k 0
@@ -123,7 +149,8 @@ $ `stdlib/core/vec.nu`
 // a known pubkey (even a retired one) returns its existing id and is marked
 // live again (a rejoin resumes its own slot). A new pubkey never reuses a
 // retired id — next_id only grows.
-@ identity_of * IdRegistry r ( Vec u ) pubkey → i {
+@ identity_of IdRegistry r__h ( Vec u ) pubkey → i {
+    : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
     : s pp ( __id_find r pubkey )
     ? != # i pp 0 {
         : *IdEntry e # *IdEntry pp
@@ -140,11 +167,15 @@ $ `stdlib/core/vec.nu`
 }
 
 // Has this pubkey ever been assigned an id (without allocating one)?
-@ identity_known * IdRegistry r ( Vec u ) pubkey → b { ^ != # i ( __id_find r pubkey ) 0 }
+@ identity_known IdRegistry r__h ( Vec u ) pubkey → b {
+    : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
+    ^ != # i ( __id_find r pubkey ) 0
+}
 
 // Reverse lookup: the pubkey bound to a replica id (copied), or None. Resolves
 // retired (tombstoned) ids too, so stale gossip remains interpretable.
-@ identity_pubkey * IdRegistry r i id → ?( Vec u ) {
+@ identity_pubkey IdRegistry r__h i id → ?( Vec u ) {
+    : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
     : i n ( vec_len [s] . r entries )
     : ~ ? ( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
     : ~ b got F
@@ -163,13 +194,15 @@ $ `stdlib/core/vec.nu`
 // Retire a pubkey's slot (it left). The binding is kept as a tombstone — the
 // id is never reassigned, and a later identity_of on the same pubkey revives
 // it. No-op for an unknown pubkey.
-@ identity_retire * IdRegistry r ( Vec u ) pubkey → v {
+@ identity_retire IdRegistry r__h ( Vec u ) pubkey → v {
+    : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
     : s pp ( __id_find r pubkey )
     ? != # i pp 0 { : *IdEntry e # *IdEntry pp = . e live 0 } {}
 }
 
 // Is the id currently live (not retired)? Unknown ids report not-live.
-@ identity_is_live * IdRegistry r i id → b {
+@ identity_is_live IdRegistry r__h i id → b {
+    : *IdRegistryImpl r ( __IdRegistry_ptr r__h )
     : i n ( vec_len [s] . r entries )
     : ~ b live F : ~ i k 0
     ~ & ! live < k n {

@@ -16,6 +16,12 @@
 // what lets the whole stack run under a scripted clock in a unit test
 // on the host, and unmodified inside a unikernel against virtio-net.
 //
+// MEMORY. A `NetStack` (from `stack_new`) is a handle (rcbox): every
+// copy is the same stack — the TCP table above it keeps one — and its
+// last owner releases it with its ARP cache. `stack_free` is an early
+// release (optional). The configuration and counters are read through
+// accessors (`stack_our_ip`, `stack_arp`, `stack_rx_frames`, …).
+//
 // WHAT IT HANDLES (v1)
 //   * ARP: answers requests for our address, learns from replies to
 //     our own requests, resolves destinations before sending.
@@ -43,6 +49,7 @@ $ `stdlib/net/arp.nu`
 $ `stdlib/net/icmp.nu`
 $ `stdlib/net/udp4.nu`
 $ `stdlib/net/pktbuf.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── rx outcomes ──────────────────────────────────────────────────
 
@@ -117,20 +124,34 @@ $ `stdlib/net/pktbuf.nu`
 
 // ── the stack ────────────────────────────────────────────────────
 
-: NetStack {
+: NetStackImpl {
     i our_mac
     i our_ip
     i netmask
     i gateway
-    * ArpCache arp
+    ArpCache arp
     i ip_id  // IPv4 identification counter for outbound datagrams
     i rx_frames
     i tx_frames
     ( Vec i ) drops  // indexed by drop reason
 }
 
-@ stack_new i mac i ip i netmask i gateway → *NetStack {
-    : *NetStack st # *NetStack ( nurl_alloc Z NetStack )
+// A NetStack is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: NetStack { s ctl }
+
+@ NetStack_share NetStack h → NetStack { ^ @ NetStack { # s ( rcbox_share # i . h ctl ) } }
+
+@ NetStack_drop sink NetStack h → v {
+    ( mem_forget h )
+    ( rcbox_release [NetStackImpl] # i . h ctl )
+}
+
+@ __NetStack_ptr NetStack h → *NetStackImpl { ^ ( rcbox_ptr [NetStackImpl] # i . h ctl ) }
+
+@ stack_new i mac i ip i netmask i gateway → NetStack {
+    : i st__box ( rcbox_zero [NetStackImpl] )
+    : *NetStackImpl st ( rcbox_ptr [NetStackImpl] st__box )
     = . st our_mac mac
     = . st our_ip ip
     = . st netmask netmask
@@ -142,31 +163,69 @@ $ `stdlib/net/pktbuf.nu`
     = . st drops ( vec_with_cap [i] ( n_drop_reasons ) )
     : ~ i k 0
     ~ < k ( n_drop_reasons ) { ( vec_push [i] . st drops 0 ) = k + k 1 }
-    ^ st
+    ^ @ NetStack { # s st__box }
 }
 
-@ stack_free sink * NetStack st → v {
-    ( arp_cache_free . st arp )
-    ( vec_free [i] . st drops )
-    ( free st )
-}
+// Let go of `st` now rather than at the end of its owner's scope.
+@ stack_free sink NetStack st → v {}
 
 // DHCP hands the address over once the lease is bound.
-@ stack_set_address * NetStack st i ip i netmask i gateway → v {
+@ stack_set_address NetStack st__h i ip i netmask i gateway → v {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
     = . st our_ip ip
     = . st netmask netmask
     = . st gateway gateway
 }
 
-@ stack_drop_count * NetStack st i reason → i {
+// The interface as configured, and its frame counters.
+@ stack_our_mac NetStack st__h → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
+    ^ . st our_mac
+}
+
+@ stack_our_ip NetStack st__h → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
+    ^ . st our_ip
+}
+
+@ stack_netmask NetStack st__h → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
+    ^ . st netmask
+}
+
+@ stack_gateway NetStack st__h → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
+    ^ . st gateway
+}
+
+@ stack_rx_frames NetStack st__h → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
+    ^ . st rx_frames
+}
+
+@ stack_tx_frames NetStack st__h → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
+    ^ . st tx_frames
+}
+
+// The neighbour table, lent: the stack's own ArpCache (a socket layer
+// seeds it, a test reads what was learned).
+@ stack_arp NetStack st__h → ArpCache {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
+    ^ . st arp
+}
+
+@ stack_drop_count NetStack st__h i reason → i { ^ ( __drop_count ( __NetStack_ptr st__h ) reason ) }
+
+@ __drop_count * NetStackImpl st i reason → i {
     ^ ?? ( vec_get [i] . st drops reason ) { T x → x F → 0 }
 }
 
-@ __count_drop * NetStack st i reason → v {
-    : b _ok ( vec_set [i] . st drops reason + ( stack_drop_count st reason ) 1 )
+@ __count_drop * NetStackImpl st i reason → v {
+    : b _ok ( vec_set [i] . st drops reason + ( __drop_count st reason ) 1 )
 }
 
-@ __next_id * NetStack st → i {
+@ __next_id * NetStackImpl st → i {
     : i id . st ip_id
     = . st ip_id & + id 1 65535
     ^ id
@@ -178,7 +237,7 @@ $ `stdlib/net/pktbuf.nu`
 // 127.0.0.0/8 is this machine, whatever address the interface has —
 // `ipv4_is_loopback` lives in net/inet.nu with the rest of the address
 // predicates, because the DHCP client needs the same question answered.
-@ __next_hop * NetStack st i dst → i {
+@ __next_hop * NetStackImpl st i dst → i {
     // A datagram for ourselves goes to our own MAC, so it comes back
     // through the same door every other frame does. Loopback is not a
     // special case in the stack — it is a destination that happens to
@@ -195,7 +254,7 @@ $ `stdlib/net/pktbuf.nu`
 
 // ── receive ──────────────────────────────────────────────────────
 
-@ __rx_arp * NetStack st ( Vec u ) frame EthHdr eh i now * PktBuf out → RxResult {
+@ __rx_arp * NetStackImpl st ( Vec u ) frame EthHdr eh i now PktBuf out → RxResult {
     : ArpPkt ap ( arp_parse frame . eh payload_off . eh payload_len )
     ? ! . ap valid {
         ( __count_drop st ( drop_foreign_arp ) )
@@ -216,7 +275,7 @@ $ `stdlib/net/pktbuf.nu`
     ? && == . ap op ( arp_op_request ) && != . st our_ip 0 == . ap target_ip . st our_ip {
         ( arp_cache_insert . st arp . ap sender_ip . ap sender_mac now )
         : i before ( pktbuf_total out )
-        ( arp_push_reply . out bytes . st our_mac . st our_ip . ap sender_mac . ap sender_ip )
+        ( arp_push_reply ( pktbuf_bytes out ) . st our_mac . st our_ip . ap sender_mac . ap sender_ip )
         ( pktbuf_mark out )
         = . st tx_frames + . st tx_frames 1
         ^ @ RxResult { ( rx_arp_handled ) 0 . ap sender_ip . st our_ip 0 0 0 0 - ( pktbuf_total out ) before }
@@ -225,7 +284,7 @@ $ `stdlib/net/pktbuf.nu`
     ^ ( __rx_drop ( drop_foreign_arp ) )
 }
 
-@ __rx_icmp * NetStack st ( Vec u ) frame Ip4Hdr ih i now * PktBuf out → RxResult {
+@ __rx_icmp * NetStackImpl st ( Vec u ) frame Ip4Hdr ih i now PktBuf out → RxResult {
     : IcmpMsg im ( icmp_parse frame . ih payload_off . ih payload_len )
     ? ! . im valid {
         ( __count_drop st ( drop_bad_icmp ) )
@@ -242,11 +301,11 @@ $ `stdlib/net/pktbuf.nu`
     : i before ( pktbuf_total out )
     : ( Vec u ) msg ( vec_new [u] )
     ( icmp_push_echo_reply msg im frame )
-    ( eth_push_header . out bytes . ( eth_parse frame ) src . st our_mac ( ethertype_ipv4 ) )
+    ( eth_push_header ( pktbuf_bytes out ) . ( eth_parse frame ) src . st our_mac ( ethertype_ipv4 ) )
     // From the address it was sent TO — a ping to 127.0.0.1 is answered
     // by 127.0.0.1, not by whatever DHCP handed the interface.
-    ( ip4_push_header . out bytes . ih dst . ih src ( ip_proto_icmp ) ( vec_len [u] msg ) ( __next_id st ) 64 T )
-    ( vec_extend [u] . out bytes msg )
+    ( ip4_push_header ( pktbuf_bytes out ) . ih dst . ih src ( ip_proto_icmp ) ( vec_len [u] msg ) ( __next_id st ) 64 T )
+    ( vec_extend [u] ( pktbuf_bytes out ) msg )
     ( vec_free [u] msg )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
@@ -276,7 +335,7 @@ $ `stdlib/net/pktbuf.nu`
 //     the ROUTER's MAC and the IP source is a host behind it: binding
 //     those two together records a next hop that is not one, and the
 //     entry outlives whatever made it look right.
-@ __learn_sender * NetStack st i src_ip i src_mac i now → v {
+@ __learn_sender * NetStackImpl st i src_ip i src_mac i now → v {
     ? == . st our_ip 0 { ^ v } {}
     ? == . st netmask 0 { ^ v } {}
     ? ( mac_is_broadcast src_mac ) { ^ v } {}
@@ -290,7 +349,8 @@ $ `stdlib/net/pktbuf.nu`
 
 // Feed one received frame. Any reply is appended to `out`; the caller
 // transmits whatever `out` gained.
-@ stack_rx * NetStack st ( Vec u ) frame i now * PktBuf out → RxResult {
+@ stack_rx NetStack st__h ( Vec u ) frame i now PktBuf out → RxResult {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
     = . st rx_frames + . st rx_frames 1
     : EthHdr eh ( eth_parse frame )
     ? ! . eh valid {
@@ -388,7 +448,8 @@ $ `stdlib/net/pktbuf.nu`
 // retransmit timer: one second, paid by a machine that had been
 // listening for forty milliseconds. Priming a hop while nobody is
 // waiting moves that round trip somewhere it costs nothing.
-@ stack_arp_prime * NetStack st i dst_ip i now * PktBuf out → b {
+@ stack_arp_prime NetStack st__h i dst_ip i now PktBuf out → b {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
     : i hop ( __next_hop st dst_ip )
     ? || ( ipv4_is_broadcast hop ) ( ipv4_is_multicast hop ) { ^ T } {}
     : ?i found ( arp_cache_lookup . st arp hop now )
@@ -396,14 +457,18 @@ $ `stdlib/net/pktbuf.nu`
     ?? found { T _m → { = known T } F → {} }
     ? known { ^ T } {}
     ? ( arp_cache_should_request . st arp hop now ) {
-        ( arp_push_request . out bytes . st our_mac . st our_ip hop )
+        ( arp_push_request ( pktbuf_bytes out ) . st our_mac . st our_ip hop )
         ( pktbuf_mark out )
         = . st tx_frames + . st tx_frames 1
     } {}
     ^ F
 }
 
-@ stack_tx_ip4 * NetStack st i src_ip i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now * PktBuf out → TxResult {
+@ stack_tx_ip4 NetStack st__h i src_ip i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now PktBuf out → TxResult {
+    ^ ( __tx_ip4 ( __NetStack_ptr st__h ) src_ip dst_ip proto dg dg_off dg_len now out )
+}
+
+@ __tx_ip4 * NetStackImpl st i src_ip i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now PktBuf out → TxResult {
     : i src ? != src_ip 0 src_ip . st our_ip
     ? == src 0 { ^ @ TxResult { ( tx_no_address ) 0 } } {}
     : i hop ( __next_hop st dst_ip )
@@ -418,7 +483,7 @@ $ `stdlib/net/pktbuf.nu`
         ? ( arp_cache_failed . st arp hop now ) { ^ @ TxResult { ( tx_unreachable ) 0 } } {}
         ? ( arp_cache_should_request . st arp hop now ) {
             : i before ( pktbuf_total out )
-            ( arp_push_request . out bytes . st our_mac . st our_ip hop )
+            ( arp_push_request ( pktbuf_bytes out ) . st our_mac . st our_ip hop )
             ( pktbuf_mark out )
             = . st tx_frames + . st tx_frames 1
             ^ @ TxResult { ( tx_arp_pending ) - ( pktbuf_total out ) before }
@@ -426,9 +491,9 @@ $ `stdlib/net/pktbuf.nu`
         ^ @ TxResult { ( tx_arp_pending ) 0 }
     } {}
     : i before ( pktbuf_total out )
-    ( eth_push_header . out bytes dst_mac . st our_mac ( ethertype_ipv4 ) )
-    ( ip4_push_header . out bytes src dst_ip proto dg_len ( __next_id st ) 64 T )
-    ( vec_extend_range [u] . out bytes dg dg_off dg_len )
+    ( eth_push_header ( pktbuf_bytes out ) dst_mac . st our_mac ( ethertype_ipv4 ) )
+    ( ip4_push_header ( pktbuf_bytes out ) src dst_ip proto dg_len ( __next_id st ) 64 T )
+    ( vec_extend_range [u] ( pktbuf_bytes out ) dg dg_off dg_len )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
     ^ @ TxResult { ( tx_sent ) - ( pktbuf_total out ) before }
@@ -437,23 +502,25 @@ $ `stdlib/net/pktbuf.nu`
 // `src_ip` as above: zero means this interface's address, and a socket
 // bound to loopback passes 127.0.0.1 so its datagrams checksum the way
 // their receiver — itself — expects.
-@ stack_tx_udp * NetStack st i src_ip i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now * PktBuf out → TxResult {
+@ stack_tx_udp NetStack st__h i src_ip i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now PktBuf out → TxResult {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
     : i src ? != src_ip 0 src_ip . st our_ip
     : ( Vec u ) dg ( vec_new [u] )
     ( udp4_push dg src dst_ip src_port dst_port payload pay_off pay_len )
-    : TxResult r ( stack_tx_ip4 st src dst_ip ( ip_proto_udp ) dg 0 ( vec_len [u] dg ) now out )
+    : TxResult r ( __tx_ip4 st src dst_ip ( ip_proto_udp ) dg 0 ( vec_len [u] dg ) now out )
     ^ r
 }
 
 // Broadcast a UDP datagram from 0.0.0.0 — the shape DHCP needs before
 // an address exists, which the ordinary send path cannot express.
-@ stack_tx_udp_broadcast * NetStack st i src_ip i src_port i dst_port i dst_ip ( Vec u ) payload i pay_off i pay_len * PktBuf out → i {
+@ stack_tx_udp_broadcast NetStack st__h i src_ip i src_port i dst_port i dst_ip ( Vec u ) payload i pay_off i pay_len PktBuf out → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
     : i before ( pktbuf_total out )
     : ( Vec u ) dg ( vec_new [u] )
     ( udp4_push dg src_ip dst_ip src_port dst_port payload pay_off pay_len )
-    ( eth_push_header . out bytes ( mac_broadcast ) . st our_mac ( ethertype_ipv4 ) )
-    ( ip4_push_header . out bytes src_ip dst_ip ( ip_proto_udp ) ( vec_len [u] dg ) ( __next_id st ) 64 T )
-    ( vec_extend [u] . out bytes dg )
+    ( eth_push_header ( pktbuf_bytes out ) ( mac_broadcast ) . st our_mac ( ethertype_ipv4 ) )
+    ( ip4_push_header ( pktbuf_bytes out ) src_ip dst_ip ( ip_proto_udp ) ( vec_len [u] dg ) ( __next_id st ) 64 T )
+    ( vec_extend [u] ( pktbuf_bytes out ) dg )
     ( vec_free [u] dg )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
@@ -463,6 +530,7 @@ $ `stdlib/net/pktbuf.nu`
 // Periodic maintenance: expire stale ARP entries. Returns how many
 // were reclaimed. Timers that emit frames (ARP retry) are driven by
 // the send path, so this stays cheap enough to call every turn.
-@ stack_tick * NetStack st i now * PktBuf out → i {
+@ stack_tick NetStack st__h i now PktBuf out → i {
+    : *NetStackImpl st ( __NetStack_ptr st__h )
     ^ ( arp_cache_expire . st arp now )
 }

@@ -3,11 +3,28 @@
 // decoded with the checks §7.4 / §18.2 require of a server reading a
 // client's, and encoded for a server's own.
 //
-//   ( quic_tp_new )                        → *QuicTp   RFC defaults (§18.2)
-//   ( quic_tp_free tp )                    → v
-//   ( quic_tp_decode bytes from_client )   → *QuicTp   0 when the encoding or a value is invalid
-//                                                       (the caller closes with TRANSPORT_PARAMETER_ERROR)
+//   ( quic_tp_new )                        → QuicTp    RFC defaults (§18.2)
+//   ( quic_tp_free tp )                    → v         early release (optional: the last
+//                                                      owner of a QuicTp releases it)
+//   ( quic_tp_decode bytes from_client )   → QuicTp    null (`== 0 # i . tp ctl`) when the encoding
+//                                                      or a value is invalid (the caller closes
+//                                                      with TRANSPORT_PARAMETER_ERROR)
 //   ( quic_tp_encode tp is_server )        → ( Vec u )
+//
+// Fields, each a getter and a setter (`quic_tp_set_<name> tp v`):
+//
+//   quic_tp_max_idle_timeout · quic_tp_max_udp_payload_size · quic_tp_initial_max_data
+//   quic_tp_initial_max_stream_data_bidi_local · _bidi_remote · quic_tp_initial_max_stream_data_uni
+//   quic_tp_initial_max_streams_bidi · quic_tp_initial_max_streams_uni
+//   quic_tp_ack_delay_exponent · quic_tp_max_ack_delay · quic_tp_disable_active_migration
+//   quic_tp_active_connection_id_limit · quic_tp_max_datagram_frame_size       → i
+//
+//   quic_tp_original_dcid · quic_tp_initial_scid · quic_tp_retry_scid ·
+//   quic_tp_stateless_reset_token → ( Vec u ) BORROWED, with quic_tp_has_<name> → b;
+//   quic_tp_set_<name> tp bytes marks it present and copies the bytes.
+//
+// A QuicTp is a handle: every copy is the same parameters (a connection
+// shares its listener's template), and the last owner releases them.
 //
 // Presence of the connection-ID parameters is tracked with `has_*`
 // flags; the numeric parameters carry their default when absent.
@@ -30,8 +47,9 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/quic_varint.nu`
+$ `stdlib/core/rcbox.nu`
 
-: QuicTp {
+: QuicTpImpl {
     i max_idle_timeout
     i max_udp_payload_size
     i initial_max_data
@@ -55,8 +73,22 @@ $ `stdlib/std/quic_varint.nu`
     i max_datagram_frame_size
 }
 
-@ quic_tp_new → *QuicTp {
-    : *QuicTp t # *QuicTp ( nurl_alloc Z QuicTp )
+// A QuicTp is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicTp { s ctl }
+
+@ QuicTp_share QuicTp h → QuicTp { ^ @ QuicTp { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicTp_drop sink QuicTp h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicTpImpl] # i . h ctl )
+}
+
+@ __QuicTp_ptr QuicTp h → *QuicTpImpl { ^ ( rcbox_ptr [QuicTpImpl] # i . h ctl ) }
+
+@ quic_tp_new → QuicTp {
+    : i t__box ( rcbox_zero [QuicTpImpl] )
+    : *QuicTpImpl t ( rcbox_ptr [QuicTpImpl] t__box )
     = . t max_idle_timeout 0
     = . t max_udp_payload_size 65527
     = . t initial_max_data 0
@@ -78,22 +110,218 @@ $ `stdlib/std/quic_varint.nu`
     = . t has_stateless_reset_token 0
     = . t stateless_reset_token ( vec_new [u] )
     = . t max_datagram_frame_size 0
-    ^ t
+    ^ @ QuicTp { # s t__box }
 }
 
-@ quic_tp_free sink * QuicTp t → v {
-    ? == # i t 0 { ^ } {}
-    ( vec_free [u] . t original_dcid )
-    ( vec_free [u] . t initial_scid )
-    ( vec_free [u] . t retry_scid )
-    ( vec_free [u] . t stateless_reset_token )
-    ( nurl_free # s t )
+// Let go of `t` now rather than at the end of its owner's scope.
+@ quic_tp_free sink QuicTp t → v {}
+
+// ── fields ──────────────────────────────────────────────────────
+
+@ quic_tp_max_idle_timeout QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t max_idle_timeout
 }
 
-@ __qtp_fail * QuicTp t → *QuicTp {
-    ( quic_tp_free t )
-    ^ # *QuicTp 0
+@ quic_tp_set_max_idle_timeout QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t max_idle_timeout v
 }
+
+@ quic_tp_max_udp_payload_size QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t max_udp_payload_size
+}
+
+@ quic_tp_set_max_udp_payload_size QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t max_udp_payload_size v
+}
+
+@ quic_tp_initial_max_data QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t initial_max_data
+}
+
+@ quic_tp_set_initial_max_data QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t initial_max_data v
+}
+
+@ quic_tp_initial_max_stream_data_bidi_local QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t initial_max_stream_data_bidi_local
+}
+
+@ quic_tp_set_initial_max_stream_data_bidi_local QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t initial_max_stream_data_bidi_local v
+}
+
+@ quic_tp_initial_max_stream_data_bidi_remote QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t initial_max_stream_data_bidi_remote
+}
+
+@ quic_tp_set_initial_max_stream_data_bidi_remote QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t initial_max_stream_data_bidi_remote v
+}
+
+@ quic_tp_initial_max_stream_data_uni QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t initial_max_stream_data_uni
+}
+
+@ quic_tp_set_initial_max_stream_data_uni QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t initial_max_stream_data_uni v
+}
+
+@ quic_tp_initial_max_streams_bidi QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t initial_max_streams_bidi
+}
+
+@ quic_tp_set_initial_max_streams_bidi QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t initial_max_streams_bidi v
+}
+
+@ quic_tp_initial_max_streams_uni QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t initial_max_streams_uni
+}
+
+@ quic_tp_set_initial_max_streams_uni QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t initial_max_streams_uni v
+}
+
+@ quic_tp_ack_delay_exponent QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t ack_delay_exponent
+}
+
+@ quic_tp_set_ack_delay_exponent QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t ack_delay_exponent v
+}
+
+@ quic_tp_max_ack_delay QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t max_ack_delay
+}
+
+@ quic_tp_set_max_ack_delay QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t max_ack_delay v
+}
+
+@ quic_tp_disable_active_migration QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t disable_active_migration
+}
+
+@ quic_tp_set_disable_active_migration QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t disable_active_migration v
+}
+
+@ quic_tp_active_connection_id_limit QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t active_connection_id_limit
+}
+
+@ quic_tp_set_active_connection_id_limit QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t active_connection_id_limit v
+}
+
+@ quic_tp_max_datagram_frame_size QuicTp t__h → i {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t max_datagram_frame_size
+}
+
+@ quic_tp_set_max_datagram_frame_size QuicTp t__h i v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t max_datagram_frame_size v
+}
+
+// The connection-ID parameters: present or not, and their bytes
+// (BORROWED). Setting one marks it present.
+
+@ quic_tp_has_original_dcid QuicTp t__h → b {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ != . t has_original_dcid 0
+}
+
+@ quic_tp_original_dcid QuicTp t__h → ( Vec u ) {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t original_dcid
+}
+
+@ quic_tp_set_original_dcid QuicTp t__h ( Vec u ) v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t has_original_dcid 1
+    ( vec_clear [u] . t original_dcid )
+    ( bytes_extend_bytes . t original_dcid v )
+}
+
+@ quic_tp_has_initial_scid QuicTp t__h → b {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ != . t has_initial_scid 0
+}
+
+@ quic_tp_initial_scid QuicTp t__h → ( Vec u ) {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t initial_scid
+}
+
+@ quic_tp_set_initial_scid QuicTp t__h ( Vec u ) v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t has_initial_scid 1
+    ( vec_clear [u] . t initial_scid )
+    ( bytes_extend_bytes . t initial_scid v )
+}
+
+@ quic_tp_has_retry_scid QuicTp t__h → b {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ != . t has_retry_scid 0
+}
+
+@ quic_tp_retry_scid QuicTp t__h → ( Vec u ) {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t retry_scid
+}
+
+@ quic_tp_set_retry_scid QuicTp t__h ( Vec u ) v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t has_retry_scid 1
+    ( vec_clear [u] . t retry_scid )
+    ( bytes_extend_bytes . t retry_scid v )
+}
+
+@ quic_tp_has_stateless_reset_token QuicTp t__h → b {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ != . t has_stateless_reset_token 0
+}
+
+@ quic_tp_stateless_reset_token QuicTp t__h → ( Vec u ) {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    ^ . t stateless_reset_token
+}
+
+@ quic_tp_set_stateless_reset_token QuicTp t__h ( Vec u ) v → v {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
+    = . t has_stateless_reset_token 1
+    ( vec_clear [u] . t stateless_reset_token )
+    ( bytes_extend_bytes . t stateless_reset_token v )
+}
+
+// No parameters: the decoder's refusal. The half-decoded QuicTp is
+// released by its binding.
+@ __qtp_fail → QuicTp { ^ @ QuicTp { # s 0 } }
 
 // A varint value that must fill exactly `len` bytes at `off`.
 @ __qtp_int ( Vec u ) buf i off i len → i {
@@ -102,122 +330,123 @@ $ `stdlib/std/quic_varint.nu`
     ^ ( quic_varint_read buf off )
 }
 
-@ quic_tp_decode ( Vec u ) buf b from_client → *QuicTp {
-    : *QuicTp t ( quic_tp_new )
+@ quic_tp_decode ( Vec u ) buf b from_client → QuicTp {
+    : QuicTp h ( quic_tp_new )
+    : *QuicTpImpl t ( __QuicTp_ptr h )
     : i n ( vec_len [u] buf )
     // 64 bits of "seen" for ids 0..63; anything above is unknown anyway.
     : ~ i seen 0
     : ~ i off 0
     ~ < off n {
         : i id ( quic_varint_read buf off )
-        ? < id 0 { ^ ( __qtp_fail t ) } {}
+        ? < id 0 { ^ ( __qtp_fail ) } {}
         = off + off ( quic_varint_len_at buf off )
         : i len ( quic_varint_read buf off )
-        ? < len 0 { ^ ( __qtp_fail t ) } {}
+        ? < len 0 { ^ ( __qtp_fail ) } {}
         = off + off ( quic_varint_len_at buf off )
-        ? > + off len n { ^ ( __qtp_fail t ) } {}
+        ? > + off len n { ^ ( __qtp_fail ) } {}
         ? < id 64 {
             : i bit << 1 id
-            ? != & seen bit 0 { ^ ( __qtp_fail t ) } {}
+            ? != & seen bit 0 { ^ ( __qtp_fail ) } {}
             = seen | seen bit
         } {}
         ? == id 0 {
-            ? from_client { ^ ( __qtp_fail t ) } {}
-            ? > len 20 { ^ ( __qtp_fail t ) } {}
+            ? from_client { ^ ( __qtp_fail ) } {}
+            ? > len 20 { ^ ( __qtp_fail ) } {}
             = . t has_original_dcid 1
             ( bytes_extend_raw . t original_dcid # s + # i ( vec_data [u] buf ) off len )
         } {}
         ? == id 1 {
             : i v ( __qtp_int buf off len )
-            ? < v 0 { ^ ( __qtp_fail t ) } {}
+            ? < v 0 { ^ ( __qtp_fail ) } {}
             = . t max_idle_timeout v
         } {}
         ? == id 2 {
-            ? from_client { ^ ( __qtp_fail t ) } {}
-            ? != len 16 { ^ ( __qtp_fail t ) } {}
+            ? from_client { ^ ( __qtp_fail ) } {}
+            ? != len 16 { ^ ( __qtp_fail ) } {}
             = . t has_stateless_reset_token 1
             ( bytes_extend_raw . t stateless_reset_token # s + # i ( vec_data [u] buf ) off len )
         } {}
         ? == id 3 {
             : i v ( __qtp_int buf off len )
-            ? | < v 1200 > v 65527 { ^ ( __qtp_fail t ) } {}
+            ? | < v 1200 > v 65527 { ^ ( __qtp_fail ) } {}
             = . t max_udp_payload_size v
         } {}
         ? == id 4 {
             : i v ( __qtp_int buf off len )
-            ? < v 0 { ^ ( __qtp_fail t ) } {}
+            ? < v 0 { ^ ( __qtp_fail ) } {}
             = . t initial_max_data v
         } {}
         ? == id 5 {
             : i v ( __qtp_int buf off len )
-            ? < v 0 { ^ ( __qtp_fail t ) } {}
+            ? < v 0 { ^ ( __qtp_fail ) } {}
             = . t initial_max_stream_data_bidi_local v
         } {}
         ? == id 6 {
             : i v ( __qtp_int buf off len )
-            ? < v 0 { ^ ( __qtp_fail t ) } {}
+            ? < v 0 { ^ ( __qtp_fail ) } {}
             = . t initial_max_stream_data_bidi_remote v
         } {}
         ? == id 7 {
             : i v ( __qtp_int buf off len )
-            ? < v 0 { ^ ( __qtp_fail t ) } {}
+            ? < v 0 { ^ ( __qtp_fail ) } {}
             = . t initial_max_stream_data_uni v
         } {}
         ? == id 8 {
             : i v ( __qtp_int buf off len )
-            ? | < v 0 > v 1152921504606846976 { ^ ( __qtp_fail t ) } {}
+            ? | < v 0 > v 1152921504606846976 { ^ ( __qtp_fail ) } {}
             = . t initial_max_streams_bidi v
         } {}
         ? == id 9 {
             : i v ( __qtp_int buf off len )
-            ? | < v 0 > v 1152921504606846976 { ^ ( __qtp_fail t ) } {}
+            ? | < v 0 > v 1152921504606846976 { ^ ( __qtp_fail ) } {}
             = . t initial_max_streams_uni v
         } {}
         ? == id 10 {
             : i v ( __qtp_int buf off len )
-            ? | < v 0 > v 20 { ^ ( __qtp_fail t ) } {}
+            ? | < v 0 > v 20 { ^ ( __qtp_fail ) } {}
             = . t ack_delay_exponent v
         } {}
         ? == id 11 {
             : i v ( __qtp_int buf off len )
-            ? | < v 0 >= v 16384 { ^ ( __qtp_fail t ) } {}
+            ? | < v 0 >= v 16384 { ^ ( __qtp_fail ) } {}
             = . t max_ack_delay v
         } {}
         ? == id 12 {
-            ? != len 0 { ^ ( __qtp_fail t ) } {}
+            ? != len 0 { ^ ( __qtp_fail ) } {}
             = . t disable_active_migration 1
         } {}
         ? == id 13 {
-            ? from_client { ^ ( __qtp_fail t ) } {}
+            ? from_client { ^ ( __qtp_fail ) } {}
             // A server's preferred_address is 4+2+16+2+1+cid+16 bytes; this
             // endpoint never uses one, so it is checked for shape and skipped.
-            ? < len 41 { ^ ( __qtp_fail t ) } {}
+            ? < len 41 { ^ ( __qtp_fail ) } {}
         } {}
         ? == id 14 {
             : i v ( __qtp_int buf off len )
-            ? < v 2 { ^ ( __qtp_fail t ) } {}
+            ? < v 2 { ^ ( __qtp_fail ) } {}
             = . t active_connection_id_limit v
         } {}
         ? == id 15 {
-            ? > len 20 { ^ ( __qtp_fail t ) } {}
+            ? > len 20 { ^ ( __qtp_fail ) } {}
             = . t has_initial_scid 1
             ( bytes_extend_raw . t initial_scid # s + # i ( vec_data [u] buf ) off len )
         } {}
         ? == id 16 {
-            ? from_client { ^ ( __qtp_fail t ) } {}
-            ? > len 20 { ^ ( __qtp_fail t ) } {}
+            ? from_client { ^ ( __qtp_fail ) } {}
+            ? > len 20 { ^ ( __qtp_fail ) } {}
             = . t has_retry_scid 1
             ( bytes_extend_raw . t retry_scid # s + # i ( vec_data [u] buf ) off len )
         } {}
         ? == id 32 {
             : i v ( __qtp_int buf off len )
-            ? < v 0 { ^ ( __qtp_fail t ) } {}
+            ? < v 0 { ^ ( __qtp_fail ) } {}
             = . t max_datagram_frame_size v
         } {}
         = off + off len
     }
-    ? == . t has_initial_scid 0 { ^ ( __qtp_fail t ) } {}
-    ^ t
+    ? == . t has_initial_scid 0 { ^ ( __qtp_fail ) } {}
+    ^ h
 }
 
 @ __qtp_push_int ( Vec u ) out i id i v → v {
@@ -236,7 +465,8 @@ $ `stdlib/std/quic_varint.nu`
 // connection IDs are written when their `has_*` flag is set. A server
 // writes original_destination_connection_id, stateless_reset_token and
 // retry_source_connection_id; a client never does.
-@ quic_tp_encode * QuicTp t b is_server → ( Vec u ) {
+@ quic_tp_encode QuicTp t__h b is_server → ( Vec u ) {
+    : *QuicTpImpl t ( __QuicTp_ptr t__h )
     : ( Vec u ) out ( vec_with_cap [u] 128 )
     ? & is_server != . t has_original_dcid 0 { ( __qtp_push_bytes out 0 . t original_dcid ) } {}
     ? > . t max_idle_timeout 0 { ( __qtp_push_int out 1 . t max_idle_timeout ) } {}

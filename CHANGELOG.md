@@ -6,6 +6,211 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
+  `Vec` element or a struct field had its impl replaced by a generated
+  field-by-field drop of the same name, so the program's destructor never
+  ran — anywhere in the program. A struct holding a Drop value was not
+  dropped at all; it is now move-only and dropped field by field. A raw
+  `s` field of a Drop type was freed by the compiler *and* by the impl (a
+  double free; nested, invalid IR).
+- **A closure in a struct field goes where the struct goes.** Its env was
+  released with the *binding* that built the struct (a per-binding field
+  list), so a struct moved into a `Vec` or returned held a dangling env,
+  and the struct's own drop never touched it. Closure fields are now part
+  of the struct's drop and copy (`nurl_closure_drop` / `_clone`).
+- **A closure literal inside an aggregate literal passed to a call**
+  (`( keep v @ S { \ → … } )`) was released after the call as if it were
+  the call's own temporary argument; the kept `S` read freed memory. One
+  level down (`@ Outer { ( keep v @ S { … } ) 7 }`) the inner literal's
+  owned fields were read as paths into `Outer` (invalid IR).
+- **Options and results in struct fields and `Vec` elements release
+  their payloads.** Only a `:` binding of one did (through its
+  `%__opt.<T>` twin); `S { ?String a … }`, `( Vec ?T )` and a result
+  field leaked the payload. They are now part of the drop and copy graphs.
+- **`vec_clone`, `vec_extend`, `vec_extend_range` copy what the elements
+  own** (`mem_dup`; the same loop as before for plain elements). They
+  copied bitwise, so with an owning element type both Vecs released the
+  same Strings — `vec_clone` of a `Vec` of owning structs crashed.
+  `vec_append` still moves. `compiler/tests/wrapped_and_copied_elements.nu`.
+- **A private type passed as a type argument is judged where it is
+  written.** A strict module's private `Impl` in `rcbox_new [Impl]` was
+  rejected inside the generic instance's body, so state structs had to be
+  `pub`. `compiler/tests/private_type_argument.nu`.
+- **Option parameters, block-arm tails and one-field Drop structs own what
+  they hold.** A `sink ?T` parameter was never dropped (the literal option
+  type had no drop; bindings register under the `%__opt.<T>` twin and now
+  parameters do too), and returning its payload was taken for a lend. A
+  `??` / `?` arm written as a block ending in a literal yielded a borrow
+  (only an arm that IS a literal counted as owned) — the value leaked. A
+  `% Drop` impl on a one-field struct never ran its drop glue (no slot for
+  the receiver). A requested `drop__Vec__T` could be skipped (marked done
+  without being emitted). A non-owning option (`?i`) handed to a `sink`
+  no longer reads as moved. `opt_unwrap_or` consumes both arguments, so
+  the unused default is released (it leaked when the option was present).
+  `compiler/tests/owned_params_and_arm_tails.nu`.
+- **A keep is seen beside a closure argument.** `( attach srv m \ → v {} )`
+  keeps `m`, but the keep was stashed before the closure argument was
+  compiled and the closure body (its own function) drained it into its own
+  statement list, so freeing `m` afterwards — a double free — compiled
+  clean. The suggested fix in that diagnostic is now `( mem_dup x )`.
+  `compiler/tests/borrow_keep_beside_closure_arg.nu`.
+- **A ternary choosing a parameter before `^` no longer makes the result an
+  alias of it.** `^` did not clear the join channel that `:` and `=`
+  clear, so `= . c max ? > max 0 max 64 … ^ @ S { … }` read as "may return
+  argument 0" and the caller's binding never dropped the value.
+  `compiler/tests/return_after_param_ternary.nu`.
+- **A None literal's payload is released where it is built.** Dropping an
+  option releases the payload only when present, so `@ ?S { F @ S {
+  ( string_new ) … } }` leaked whatever the payload owned (unless someone
+  read a None's payload and freed it by hand — `parse_basic_auth`'s early
+  exits needed exactly that). `compiler/tests/option_none_payload.nu`.
+- **`= . p f ( … )` releases the value the field held** when the binding
+  owns its struct: a String / Vec / handle / closure field leaked on
+  reassignment. `compiler/tests/struct_field_ownership.nu`.
+- **A library handle's copy is an owner.** `@ S { . h p }` inside `S`'s
+  own module (a share reading the pointer out of the handle it was given)
+  was classified as a view of the parameter, so `S_share`'s result was
+  copied again when stored and one reference leaked. `arc_clone` escaped
+  only because it spelled the read through a local.
+- **A `! T E` with an Err path like `F # E Closed` hands its Ok payload
+  over.** The cast reads the variant's global, which the "builds a view of
+  something else" rule took for a pointer read: every such function counted
+  as returning a view, and every Ok payload leaked. Only a pointer field
+  makes a view now. `compiler/tests/result_err_variant_owns_ok.nu`.
+- **A value found inside a borrowed enum parameter is lent back** (the
+  `toml_get` / `toml_get_path` shape). A field taken out of a cursor over a
+  bound `vec_get` element (`: ?E e ( vec_get … ) ?? e { T ev → ^ @ ?V { T .
+  ev value } }`) counted as moved out of an owned struct, so callers dropped
+  the table's own value; a returned option now owns its payload exactly
+  when the cursor did (answered per call), and another literal copies what
+  was lent. An auto-dropped enum parameter's registration no longer reads
+  as ownership unless the parameter is a `sink`. Both had been hidden by
+  the view rule above. `compiler/tests/lend_through_enum_param.nu`.
+- **A NURL function named like an FFI symbol must have its signature.** It
+  defines that symbol for the whole program (how the unikernel supplies
+  `nurl_tcp_*`), so a program's own `@ round i x i q → i` beside
+  std/float.nu's `& `m` @ round f x → f` replaced libm's `round` for
+  `float_round` too, and the first error was an arity complaint inside
+  std/float.nu. Now the definition (or the declaration, whichever comes
+  second) is reported with both signatures.
+  `compiler/tests/diag_ffi_defined_other_sig.nu`.
+- **A value lent back to the binding it came from stays that binding's.**
+  `= c ( prune c )`, prune handing back a cursor over its parameter, made
+  `c` a borrower of its own value, which then had no owner
+  (`_h2_prune_closed`). A field taken out of a slot copy that is replaced
+  and written back (`take_data`) is still the caller's: only a payload of
+  an option binding answers per call whether it held its field.
+  `compiler/tests/lend_back_to_same_binding.nu`.
+- **Assigning through an `inout` parameter releases what it replaces.**
+  `= . h item …` and `= s ( string_from … )` through an `inout` parameter
+  left the caller's old value with no owner — every call leaked it; `= s
+  t` from a local also left t dropping the value under the caller (a use
+  after free): t's value now moves over. A field
+  the callee hands to a consumer first, or takes with `mem_take`, is
+  emptied in the caller's struct, so the store after it releases nothing
+  twice; `mem_take` of a binding that has since been given another value
+  leaves the field in place. `compiler/tests/inout_replaces_owned.nu`.
+- **A local holding a unit variant owns it.** `: ~ ResolveErr failure
+  ResolveConflict … ^ @ !( Vec LockPkg ) ResolveErr { F failure }` read the
+  variant like a global, so the binding borrowed it and `resolve_registry`
+  counted as lending on every path — no caller dropped its lock list.
+  `compiler/tests/unit_variant_local_owns.nu`.
+- **A value assigned over a by-value capture is released when the closure
+  returns.** The snapshot borrows the env's value; a fresh String / Vec
+  assigned over it (a discarded write, already warned about) leaked on
+  every call. `compiler/tests/closure_snapshot_assign_released.nu`.
+- **A child process gets its SIGTERM grace period.** Shutting a child
+  down polled `waitpid` 50 times back to back, so a child that did not exit
+  at once was SIGKILLed within microseconds; the polls are now 10 ms apart.
+- **A thread's or fiber's closure takes over the captures its spawner is
+  done with.** `: String url …` per iteration captured by `thread_spawn \ →
+  v { … url … }` was dropped at the end of the iteration while the thread
+  still read it — a use after free unless the body released the capture by
+  hand. An owning String / Vec / handle binding the rest of the function
+  never names again (and that no loop around the closure captures again)
+  now moves into the env; one still named later stays shared, as before.
+  `thread_spawn_owned` is checked as a detaching spawn (Send) too.
+  `compiler/tests/thread_closure_takes_dead_captures.nu`.
+- **A join handed to a keeping parameter moves the owned value it picked.**
+  `( vec_push v ? c ( string_from a ) ( string_from b ) )` — an argument or
+  a literal field built from a `?` / `??` join was always taken for a lend:
+  the keeper got a copy and the original leaked on every call. The join's
+  per-arm ownership now decides. `compiler/tests/join_into_keeper_moves.nu`.
+- **A literal built as an argument releases what it made after the call.**
+  `( use @ P { ( string_from x ) 1 } )`, `( api @ ?Json { T a } )`: the
+  literal's fresh fields and copies of borrowed ones had no owner once the
+  call returned — every call leaked them. They are dropped after the call
+  unless the callee keeps or consumes the argument; a field that IS a
+  binding's value stays that binding's. `compiler/tests/literal_args_release.nu`.
+- **Returning from every arm of a match over a borrow returns an owned
+  value.** `?? ( vec_get v 0 ) { T l → { ^ ( string_from … ) } … }` left
+  the scrutinee's borrow on the "last value" channel, and the implicit-
+  return rule (for a body that falls off its end) marked the function a
+  lender though no path fell off — callers never dropped its results.
+  `compiler/tests/returns_inside_borrowed_match.nu`.
+- **A returned option whose payload is lent on some runs answers per call.**
+  A payload of a call's `?T` (borrowed when the callee lent it) returned as
+  `^ @ ?T { T v }` was copied always while the function counted as a
+  lender; the copy leaked. Now the caller owns the result exactly when the
+  function did. `compiler/tests/wrap_of_maybe_lent_payload.nu`.
+
+### Changed
+
+- **`Mutex`, `Cond`, `Semaphore` and `Channel` release themselves.** Each
+  is now a reference-counted library handle: every copy — a thread's or a
+  fiber's closure capture, a struct field, a `Vec` element, `Mutex_share`
+  / `Channel_share` — is the same object, and the last owner destroys it
+  (a channel with whatever is still queued). `mutex_free` / `cond_free` /
+  `sem_free` / `chan_free` remain as early releases of one owner. Storing
+  one owned value into two owners is the usual compile error; store a
+  `Mutex_share`. The handles are one word now (`Mutex { s p }`); code
+  that reached into `Mutex.c` uses `mutex_raw`.
+  `compiler/tests/sync_handles_autodrop.nu`.
+- **`DStore` (dchannel) releases itself**, its queues with it: an rcbox
+  handle (the registered handlers' captures share it) whose entries hold
+  rcbox `DQ` queue handles instead of raw pointers.
+- **The MCP task store releases itself, and a server keeps its own share.**
+  `McpTaskStore` is an rcbox handle whose drop frees its tasks; the server
+  holds a `McpTaskStore_share` instead of a hand-managed view cell, so the
+  store outlives neither side.
+- **`Regex`, `Rng`, `Bitset`, `Arena`, `Supervisor`, `CircuitBreaker`, the
+  cluster `Registry` and process `Output` release themselves.** Each is a
+  library handle over state in an rcbox (`stdlib/core/rcbox.nu`: one block,
+  `[ owners ][ T ]`, the last owner drops `T` — its managed fields and its
+  own `% Drop`): every copy is the same state, as a copied pointer was, and
+  no one frees it by hand. Their `*_free` functions remain as early
+  releases. `compiler/tests/opaque_handles_autodrop.nu`.
+- **`Cell` releases itself.** Its block carries an owner count in front of
+  the bytes: `Cell_share` is another owner (a thread's capture, a struct
+  field), and the last owner frees it. `cell_free` remains as an early
+  release of one owner.
+- **A sole owner skips the locked owner-count update.** rcbox handles,
+  `Cell`, `Bitset`, `Channel` and the sync handles read a count of 1 as "no
+  one else holds this" and share or release without a locked
+  read-modify-write (`nurl_rc_share` / `nurl_rc_release`); a loop creating,
+  sharing and dropping handles ran 7–23 % fewer cycles.
+- **`Thread` releases itself.** A handle whose last owner detaches the
+  thread unless it was joined or detached, and frees it; a discarded
+  `( thread_spawn … )` leaked its `pthread_t` and never detached. The first
+  `thread_join` / `thread_detach` through any copy settles the thread; a
+  second join returns -1 (it was a use after free). `@ Thread { # s 0 }` is
+  the null handle. `compiler/tests/thread_handle_autodrop.nu`.
+- **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
+  struct whose module defines `S_drop sink S x` (and `S_share` /
+  `S_clone`) is dropped and copied like `HashMap`.
+
+### Added
+
+- **Drop glue** (docs/MEMORY.md §7.6). After a `% Drop` impl returns, the
+  compiler drops the fields it manages (`String`, `Vec`, library handles,
+  Drop values), so a destructor only releases what the language cannot
+  see. Fields the impl freed by hand, and a value handed to a disposer,
+  are skipped. `compiler/tests/drop_impl_semantics.nu`.
+
 ## [0.68.0] — 2026-09-30
 
 ### Added

@@ -41,6 +41,15 @@
 // An fd holds both, so an operation on a closed connection whose slot
 // has been recycled is refused rather than silently addressed to
 // whoever moved in — the use-after-close a bare index would invite.
+//
+// ── memory ───────────────────────────────────────────────────────
+//
+// A `SockTab` (from `sock_new`) is a handle (rcbox): every copy is the
+// same table, and its last owner releases it — every fd still open,
+// UDP mailboxes included, its output buffer, and its share of the
+// TcpStack it was given. `sock_free` is an early release (optional).
+// Closing an fd (`sock_close`) is protocol, not memory: it sends the
+// FIN and frees the slot for reuse.
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/net/pktbuf.nu`
@@ -50,6 +59,7 @@ $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/tcp.nu`
 $ `stdlib/net/stack.nu`
 $ `stdlib/net/tcpstack.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── error codes ──────────────────────────────────────────────────
 //
@@ -104,7 +114,7 @@ $ `stdlib/net/tcpstack.nu`
 // where each one ends" the frame path uses — and the sender's address
 // travels alongside, two integers per datagram.
 : UdpBox {
-    * PktBuf q
+    PktBuf q
     ( Vec i ) src  // stride 2: ip, port — one pair per datagram in `q`
     i head  // datagrams already delivered; `q` is drained on read
     i last_ip  // sender of the datagram the last recv returned
@@ -132,13 +142,45 @@ $ `stdlib/net/tcpstack.nu`
     i opts  // UDP: setsockopt bits, recorded and answered
 }
 
-: SockTab {
-    * TcpStack ts
-    * PktBuf out  // frames waiting for the device
+: SockTabImpl {
+    TcpStack ts
+    PktBuf out  // frames waiting for the device
     ( Vec i ) fds  // *Sock, as integers — NURL has no Vec of pointers
     i ephemeral  // next ephemeral port for an unbound listener
     i our_ip
     i max_fds  // the ceiling; 0 means "no ceiling"
+}
+
+// A SockTab is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: SockTab { s ctl }
+
+@ SockTab_share SockTab h → SockTab { ^ @ SockTab { # s ( rcbox_share # i . h ctl ) } }
+
+@ SockTab_drop sink SockTab h → v {
+    ( mem_forget h )
+    ( rcbox_release [SockTabImpl] # i . h ctl )
+}
+
+@ __SockTab_ptr SockTab h → *SockTabImpl { ^ ( rcbox_ptr [SockTabImpl] # i . h ctl ) }
+
+// The Sock blocks (and a UDP socket's mailbox) are raw memory the table
+// keeps as integers: releasing them is the table's own drop. Its
+// TcpStack, output buffer and fd vector are dropped after.
+% Drop SockTabImpl {
+    @ drop SockTabImpl st → v {
+        : i n ( vec_len [i] . st fds )
+        : ~ i k 0
+        ~ < k n {
+            : *Sock s # *Sock ?? ( vec_get [i] . st fds k ) { T p → p F → 0 }
+            ? != # i s 0 {
+                // A UDP socket still open at teardown owns its mailbox.
+                ? && . s used == . s kind ( sock_kind_udp ) { ( __udp_box_free . s udp ) } {}
+                ( nurl_free # s s )
+            } {}
+            = k + k 1
+        }
+    }
 }
 
 // How many sockets may be open at once. A hosted program has this
@@ -160,48 +202,45 @@ $ `stdlib/net/tcpstack.nu`
 // be.
 @ __fd_base → i { ^ 3 }
 
-@ sock_new * TcpStack ts i our_ip → *SockTab {
-    : *SockTab st # *SockTab ( nurl_alloc Z SockTab )
-    = . st ts ts
+@ sock_new TcpStack ts i our_ip → SockTab {
+    : i st__box ( rcbox_zero [SockTabImpl] )
+    : *SockTabImpl st ( rcbox_ptr [SockTabImpl] st__box )
+    // Another owner of the table, not a view of the caller's: every fd
+    // operation goes through it for as long as this table lives.
+    = . st ts ( TcpStack_share ts )
     = . st out ( pktbuf_new )
     = . st fds ( vec_new [i] )
     = . st ephemeral 32768
     = . st our_ip our_ip
     = . st max_fds ( sock_default_max_fds )
-    ^ st
+    ^ @ SockTab { # s st__box }
 }
 
-@ sock_free sink * SockTab st → v {
-    : i n ( vec_len [i] . st fds )
-    : ~ i k 0
-    ~ < k n {
-        : *Sock s ( __sock_at st k )
-        ? != # i s 0 {
-            // A UDP socket still open at teardown owns its mailbox.
-            ? && . s used == . s kind ( sock_kind_udp ) {
-                : *UdpBox b # *UdpBox . s udp
-                ? != # i b 0 {
-                    ( pktbuf_free . b q )
-                    ( vec_free [i] . b src )
-                    ( nurl_free # s b )
-                } {}
-            } {}
-            ( nurl_free # s s )
-        } {}
-        = k + k 1
-    }
-    ( vec_free [i] . st fds )
-    ( pktbuf_free . st out )
-    ( nurl_free # s st )
+// Let go of `st` now rather than at the end of its owner's scope.
+@ sock_free sink SockTab st → v {}
+
+// A UDP socket's mailbox: raw memory holding a PktBuf and a Vec.
+@ __udp_box_free i addr → v {
+    : *UdpBox b # *UdpBox addr
+    ? == # i b 0 { ^ } {}
+    ( pktbuf_free . b q )
+    ( vec_free [i] . b src )
+    ( nurl_free # s b )
 }
 
-@ __sock_at * SockTab st i slot → *Sock {
+// The connection table under the fds, lent.
+@ sock_tcpstack SockTab st__h → TcpStack {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ^ . st ts
+}
+
+@ __sock_at * SockTabImpl st i slot → *Sock {
     ^ # *Sock ?? ( vec_get [i] . st fds slot ) { T p → p F → 0 }
 }
 
 // The Sock behind an fd, or a null pointer. Bounds and the used flag
 // are checked here so no caller has to.
-@ __sock * SockTab st i fd → *Sock {
+@ __sock * SockTabImpl st i fd → *Sock {
     : i slot - fd ( __fd_base )
     ? || < slot 0 >= slot ( vec_len [i] . st fds ) { ^ # *Sock 0 } {}
     : *Sock s ( __sock_at st slot )
@@ -243,21 +282,29 @@ $ `stdlib/net/tcpstack.nu`
 // The ceiling, and a way to raise or remove it (0 = no ceiling). A
 // machine that knows how much memory it has knows this number better
 // than the default does.
-@ sock_set_max_fds * SockTab st i n → v { = . st max_fds ? > n 0 n 0 }
+@ sock_set_max_fds SockTab st__h i n → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    = . st max_fds ? > n 0 n 0
+}
 
-@ sock_max_fds * SockTab st → i { ^ . st max_fds }
+@ sock_max_fds SockTab st__h → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ^ . st max_fds
+}
 
 // Would one more socket fit? Asked BEFORE anything irreversible
 // happens — `sock_accept` in particular checks it before dequeuing a
 // pending connection, so a refusal leaves that connection in the
 // backlog for the next call instead of orphaning an established one
 // nobody holds an fd for.
-@ sock_can_open * SockTab st → b {
+@ sock_can_open SockTab st__h → b { ^ ( __sock_can_open ( __SockTab_ptr st__h ) ) }
+
+@ __sock_can_open * SockTabImpl st → b {
     ? <= . st max_fds 0 { ^ T } {}
-    ^ < ( sock_open_count st ) . st max_fds
+    ^ < ( __sock_open_count st ) . st max_fds
 }
 
-@ __alloc_fd_unbounded * SockTab st → i {
+@ __alloc_fd_unbounded * SockTabImpl st → i {
     : i n ( vec_len [i] . st fds )
     : ~ i k 0
     ~ < k n {
@@ -277,8 +324,8 @@ $ `stdlib/net/tcpstack.nu`
 // -1 when the table is full. Every caller turns that into the error its
 // own operation reports, because "too many open files" arrives at a
 // NURL program through whatever `accept` or `listen` answers.
-@ __alloc_fd * SockTab st → i {
-    ? ! ( sock_can_open st ) { ^ -1 } {}
+@ __alloc_fd * SockTabImpl st → i {
+    ? ! ( __sock_can_open st ) { ^ -1 } {}
     ^ ( __alloc_fd_unbounded st )
 }
 
@@ -292,63 +339,74 @@ $ `stdlib/net/tcpstack.nu`
 // error that cannot be allocated is not an error the caller receives.
 // These handles are transient — every caller closes one immediately —
 // so the exemption is bounded by the number of failures in flight.
-@ sock_err_fd * SockTab st i err → i {
+@ sock_err_fd SockTab st__h i err → i { ^ ( __sock_err_fd ( __SockTab_ptr st__h ) err ) }
+
+@ __sock_err_fd * SockTabImpl st i err → i {
     : i fd ( __alloc_fd_unbounded st )
     : *Sock s ( __sock st fd )
     = . s err err
     ^ fd
 }
 
-@ sock_err * SockTab st i fd → i {
+@ sock_err SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ ( sock_err_other ) } {}
     ^ . s err
 }
 
-@ sock_clear_err * SockTab st i fd → v {
+@ sock_clear_err SockTab st__h i fd → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
     = . s err 0
 }
 
-@ sock_set_nonblock * SockTab st i fd b on → v {
+@ sock_set_nonblock SockTab st__h i fd b on → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
     = . s nonblock on
 }
 
-@ sock_is_nonblock * SockTab st i fd → b {
+@ sock_is_nonblock SockTab st__h i fd → b {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ F } {}
     ^ . s nonblock
 }
 
-@ sock_set_timeout * SockTab st i fd i ms → v {
+@ sock_set_timeout SockTab st__h i fd i ms → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
     = . s timeout_ms ms
 }
 
-@ sock_timeout * SockTab st i fd → i {
+@ sock_timeout SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ^ . s timeout_ms
 }
 
 // Absolute deadlines remain sans-IO: the socket ABI supplies now_ns.
-@ sock_set_write_deadline * SockTab st i fd i ns → v {
+@ sock_set_write_deadline SockTab st__h i fd i ns → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock socket ( __sock st fd )
     ? == # i socket 0 { ^ } {}
     = . socket write_deadline_ns ? > ns 0 ns 0
 }
 
-@ sock_write_deadline * SockTab st i fd → i {
+@ sock_write_deadline SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock socket ( __sock st fd )
     ? == # i socket 0 { ^ 0 } {}
     ^ . socket write_deadline_ns
 }
 
-@ sock_write_wait_ms * SockTab st i fd i now_ns → i {
+@ sock_write_wait_ms SockTab st__h i fd i now_ns → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock socket ( __sock st fd )
     ? == # i socket 0 { ^ 0 } {}
     : ~ i ms ? > . socket timeout_ms 0 . socket timeout_ms -1
@@ -363,37 +421,43 @@ $ `stdlib/net/tcpstack.nu`
     ^ ms
 }
 
-@ sock_kind * SockTab st i fd → i {
+@ sock_kind SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ ( sock_kind_free ) } {}
     ^ . s kind
 }
 
-@ sock_ref * SockTab st i fd → v {
+@ sock_ref SockTab st__h i fd → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
     = . s refs + . s refs 1
 }
 
-@ sock_local_ip * SockTab st i fd → i {
+@ sock_local_ip SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ^ . s local_ip
 }
 
-@ sock_local_port * SockTab st i fd → i {
+@ sock_local_port SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ^ . s local_port
 }
 
-@ sock_peer_ip * SockTab st i fd → i {
+@ sock_peer_ip SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ^ . s peer_ip
 }
 
-@ sock_peer_port * SockTab st i fd → i {
+@ sock_peer_port SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ^ . s peer_port
@@ -403,17 +467,29 @@ $ `stdlib/net/tcpstack.nu`
 
 // Everything the stack wants to transmit, boundaries intact. BORROWED:
 // the driver walks it and then either clears it or takes it.
-@ sock_out * SockTab st → *PktBuf { ^ . st out }
+@ sock_out SockTab st__h → PktBuf {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ^ . st out
+}
 
-@ sock_pending_frames * SockTab st → i { ^ ( pktbuf_count . st out ) }
+@ sock_pending_frames SockTab st__h → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ^ ( pktbuf_count . st out )
+}
 
 // Hand the pending frames to the caller and install a fresh buffer.
 // A driver MUST take rather than iterate in place: delivering a frame
 // can emit more frames into the same buffer, and a loop over a vector
 // that grows underneath it is the oldest bug there is. The caller owns
-// the returned PktBuf and frees it.
-@ sock_take_out * SockTab st → *PktBuf {
-    : *PktBuf p . st out
+// the returned PktBuf; its last owner releases it.
+@ sock_take_out SockTab st__h → PktBuf { ^ ( __sock_take_out ( __SockTab_ptr st__h ) ) }
+
+@ __sock_take_out * SockTabImpl st → PktBuf {
+    : PktBuf p . st out
+    // The table gives the buffer up — the slot gets a fresh one next —
+    // so `p` owns it from here (a field read through a pointer is
+    // otherwise a view of the table's own).
+    ( mem_take p )
     = . st out ( pktbuf_new )
     ^ p
 }
@@ -422,7 +498,9 @@ $ `stdlib/net/tcpstack.nu`
 // driver can count what it delivered; every socket-visible effect is
 // observable through the fd operations, so nothing here has to be
 // wired to a callback.
-@ sock_rx * SockTab st ( Vec u ) frame i now → i {
+@ sock_rx SockTab st__h ( Vec u ) frame i now → i { ^ ( __sock_rx ( __SockTab_ptr st__h ) frame now ) }
+
+@ __sock_rx * SockTabImpl st ( Vec u ) frame i now → i {
     : TRx r ( tstack_rx . st ts frame now . st out )
     ? && == . r result ( trx_other ) == . r kind ( rx_udp ) {
         ( __udp_deliver st frame r )
@@ -435,7 +513,7 @@ $ `stdlib/net/tcpstack.nu`
 // host owes the sender, and this stack does not send it yet — dropping
 // it silently is at least honest about that, where inventing a reply
 // would not be.
-@ __udp_deliver * SockTab st ( Vec u ) frame TRx r → v {
+@ __udp_deliver * SockTabImpl st ( Vec u ) frame TRx r → v {
     : i n ( vec_len [i] . st fds )
     : ~ i k 0
     ~ < k n {
@@ -445,7 +523,7 @@ $ `stdlib/net/tcpstack.nu`
         || == . s local_ip 0 == . s local_ip . r dst_ip {
             : *UdpBox b # *UdpBox . s udp
             ? != # i b 0 {
-                ( vec_extend_range [u] . . b q bytes frame . r payload_off . r payload_len )
+                ( vec_extend_range [u] ( pktbuf_bytes . b q ) frame . r payload_off . r payload_len )
                 // …_empty, not _mark: a zero-length datagram is a
                 // datagram, and it has to arrive as one.
                 ( pktbuf_mark_empty . b q )
@@ -458,9 +536,15 @@ $ `stdlib/net/tcpstack.nu`
     }
 }
 
-@ sock_tick * SockTab st i now → i { ^ ( tstack_tick . st ts now . st out ) }
+@ sock_tick SockTab st__h i now → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ^ ( tstack_tick . st ts now . st out )
+}
 
-@ sock_next_timeout * SockTab st i now → i { ^ ( tstack_next_timeout . st ts now ) }
+@ sock_next_timeout SockTab st__h i now → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ^ ( tstack_next_timeout . st ts now )
+}
 
 // The device that is not a device: every complete frame goes straight
 // back in. That is what 127.0.0.1 is — a stack configured on a
@@ -471,14 +555,15 @@ $ `stdlib/net/tcpstack.nu`
 // Returns the number of frames looped. Runs ONE round: frames produced
 // by delivering these are left for the next call, so a caller in an
 // event loop keeps its own turn bounded.
-@ sock_loopback * SockTab st i now → i {
-    : *PktBuf w ( sock_take_out st )
+@ sock_loopback SockTab st__h i now → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    : PktBuf w ( __sock_take_out st )
     : i n ( pktbuf_count w )
     : ~ i k 0
     ~ < k n {
         : ( Vec u ) f ( vec_new [u] )
         ( pktbuf_copy_to f w k )
-        : i _r ( sock_rx st f now )
+        : i _r ( __sock_rx st f now )
         ( vec_free [u] f )
         = k + k 1
     }
@@ -492,31 +577,37 @@ $ `stdlib/net/tcpstack.nu`
 // connection waits a full retransmit timeout — a second of latency on
 // every connect to 127.0.0.1 — before the second attempt finds the
 // answer the stack had all along.
-@ sock_seed_self * SockTab st i now → v {
-    : *NetStack net . . st ts net
-    ? == . net our_ip 0 { ^ } {}
-    ( sock_seed_addr st . net our_ip now )
+@ sock_seed_self SockTab st__h i now → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    : NetStack net ( tstack_net . st ts )
+    ? == ( stack_our_ip net ) 0 { ^ } {}
+    ( __sock_seed_addr st ( stack_our_ip net ) now )
 }
 
 // The same, for an address we answer to that is not the interface's:
 // 127.0.0.1 is ours whatever DHCP later says, and a loopback frame has
 // to find a MAC for it before the interface has an address at all.
-@ sock_seed_addr * SockTab st i ip i now → v {
-    : *NetStack net . . st ts net
-    ( arp_cache_insert . net arp ip . net our_mac now )
+@ sock_seed_addr SockTab st__h i ip i now → v { ( __sock_seed_addr ( __SockTab_ptr st__h ) ip now ) }
+
+@ __sock_seed_addr * SockTabImpl st i ip i now → v {
+    : NetStack net ( tstack_net . st ts )
+    ( arp_cache_insert ( stack_arp net ) ip ( stack_our_mac net ) now )
 }
 
 // The address the socket layer reports as local. DHCP changes it after
 // the fact, and an fd table that kept the boot-time answer would hand
 // out a source address the peer cannot reply to.
-@ sock_set_our_ip * SockTab st i ip → v { = . st our_ip ip }
+@ sock_set_our_ip SockTab st__h i ip → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    = . st our_ip ip
+}
 
 // ── binding ──────────────────────────────────────────────────────
 
 // Is `port` already bound — in THIS protocol's port space? TCP and UDP
 // have separate ones, and a check that pooled them would refuse a DNS
 // client on 53 because something was listening on TCP 53.
-@ __port_taken_kind * SockTab st i kind i port → b {
+@ __port_taken_kind * SockTabImpl st i kind i port → b {
     : i n ( vec_len [i] . st fds )
     : ~ i k 0
     ~ < k n {
@@ -529,7 +620,7 @@ $ `stdlib/net/tcpstack.nu`
     ^ F
 }
 
-@ __next_free_port * SockTab st → i {
+@ __next_free_port * SockTabImpl st → i {
     : ~ i tries 0
     ~ < tries 16384 {
         : i p . st ephemeral
@@ -551,20 +642,21 @@ $ `stdlib/net/tcpstack.nu`
 // Always returns an fd, even on failure, with the error recorded on
 // it: that is the socket ABI's shape, and the caller closes the handle
 // either way.
-@ sock_listen * SockTab st i ip i port i backlog → i {
+@ sock_listen SockTab st__h i ip i port i backlog → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     ? || < port 0 > port 65535 {
-        ^ ( sock_err_fd st ( sock_err_bind ) )
+        ^ ( __sock_err_fd st ( sock_err_bind ) )
     } {}
     : i p ? == port 0 ( __next_free_port st ) port
-    ? == p 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    ? == p 0 { ^ ( __sock_err_fd st ( sock_err_bind ) ) } {}
     ? && != port 0 ( __port_taken_kind st ( sock_kind_listener ) p ) {
-        ^ ( sock_err_fd st ( sock_err_addr_in_use ) )
+        ^ ( __sock_err_fd st ( sock_err_addr_in_use ) )
     } {}
     : i lidx ( tstack_listen . st ts ip p backlog )
-    ? < lidx 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
-    ? ! ( sock_can_open st ) {
+    ? < lidx 0 { ^ ( __sock_err_fd st ( sock_err_bind ) ) } {}
+    ? ! ( __sock_can_open st ) {
         ( tstack_listener_close . st ts lidx )
-        ^ ( sock_err_fd st ( sock_err_other ) )
+        ^ ( __sock_err_fd st ( sock_err_other ) )
     } {}
     : i fd ( __alloc_fd st )
     : *Sock s ( __sock st fd )
@@ -579,7 +671,8 @@ $ `stdlib/net/tcpstack.nu`
 // is waiting. A listener that has been shut down answers
 // `- sock_err_accept` instead, so a thread parked on it wakes up and
 // stops rather than waiting for a connection that will never come.
-@ sock_accept * SockTab st i lfd → i {
+@ sock_accept SockTab st__h i lfd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock l ( __sock st lfd )
     ? == # i l 0 { ^ - 0 ( sock_err_other ) } {}
     ? != . l kind ( sock_kind_listener ) {
@@ -601,7 +694,7 @@ $ `stdlib/net/tcpstack.nu`
     // and a listener with a pending connection stays readable, so a
     // reactor would hand the loop straight back and spin. A hard error
     // stops that, and the connection is still there when an fd frees.
-    ? ! ( sock_can_open st ) {
+    ? ! ( __sock_can_open st ) {
         = . l err ( sock_err_accept )
         ^ - 0 ( sock_err_accept )
     } {}
@@ -626,13 +719,15 @@ $ `stdlib/net/tcpstack.nu`
 // Wake anything waiting on this fd and refuse further use of it. The
 // listener half of this is how a server is stopped from another
 // context; the connection half makes a parked reader give up.
-@ sock_shutdown * SockTab st i fd → v {
+@ sock_shutdown SockTab st__h i fd → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
     = . s shut T
 }
 
-@ sock_is_shutdown * SockTab st i fd → b {
+@ sock_is_shutdown SockTab st__h i fd → b {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ F } {}
     ^ . s shut
@@ -646,14 +741,15 @@ $ `stdlib/net/tcpstack.nu`
 // `again` when the mailbox is empty, and readiness an event loop can
 // ask about.
 
-@ sock_udp_bind * SockTab st i ip i port → i {
-    ? || < port 0 > port 65535 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+@ sock_udp_bind SockTab st__h i ip i port → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ? || < port 0 > port 65535 { ^ ( __sock_err_fd st ( sock_err_bind ) ) } {}
     : i p ? == port 0 ( __next_free_port st ) port
-    ? == p 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    ? == p 0 { ^ ( __sock_err_fd st ( sock_err_bind ) ) } {}
     ? && != port 0 ( __port_taken_kind st ( sock_kind_udp ) p ) {
-        ^ ( sock_err_fd st ( sock_err_addr_in_use ) )
+        ^ ( __sock_err_fd st ( sock_err_addr_in_use ) )
     } {}
-    ? ! ( sock_can_open st ) { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
+    ? ! ( __sock_can_open st ) { ^ ( __sock_err_fd st ( sock_err_other ) ) } {}
     : i fd ( __alloc_fd st )
     : *Sock s ( __sock st fd )
     : *UdpBox b # *UdpBox ( nurl_alloc Z UdpBox )
@@ -670,14 +766,16 @@ $ `stdlib/net/tcpstack.nu`
     ^ fd
 }
 
-@ __udp_box * SockTab st i fd → *UdpBox {
+@ __udp_box * SockTabImpl st i fd → *UdpBox {
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ # *UdpBox 0 } {}
     ? != . s kind ( sock_kind_udp ) { ^ # *UdpBox 0 } {}
     ^ # *UdpBox . s udp
 }
 
-@ sock_udp_pending * SockTab st i fd → i {
+@ sock_udp_pending SockTab st__h i fd → i { ^ ( __sock_udp_pending ( __SockTab_ptr st__h ) fd ) }
+
+@ __sock_udp_pending * SockTabImpl st i fd → i {
     : *UdpBox b ( __udp_box st fd )
     ? == # i b 0 { ^ 0 } {}
     ^ - ( pktbuf_count . b q ) . b head
@@ -686,7 +784,8 @@ $ `stdlib/net/tcpstack.nu`
 // Set a default peer. UDP's `connect` filters nothing here — it
 // records where `sock_udp_send` goes, which is the half of the POSIX
 // contract a caller can actually observe on a host with one address.
-@ sock_udp_connect * SockTab st i fd i ip i port → i {
+@ sock_udp_connect SockTab st__h i fd i ip i port → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
     ? != . s kind ( sock_kind_udp ) { ^ - 0 ( sock_err_other ) } {}
@@ -696,13 +795,16 @@ $ `stdlib/net/tcpstack.nu`
     ^ 0
 }
 
-@ sock_udp_is_connected * SockTab st i fd → b {
+@ sock_udp_is_connected SockTab st__h i fd → b {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ F } {}
     ^ . s connected
 }
 
-@ sock_udp_send_to * SockTab st i fd i ip i port ( Vec u ) src i off i len i now → i {
+@ sock_udp_send_to SockTab st__h i fd i ip i port ( Vec u ) src i off i len i now → i { ^ ( __sock_udp_send_to ( __SockTab_ptr st__h ) fd ip port src off len now ) }
+
+@ __sock_udp_send_to * SockTabImpl st i fd i ip i port ( Vec u ) src i off i len i now → i {
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
     ? != . s kind ( sock_kind_udp ) { ^ - 0 ( sock_err_write ) } {}
@@ -712,7 +814,7 @@ $ `stdlib/net/tcpstack.nu`
     } {}
     // A socket bound to loopback sends FROM loopback; an unbound one
     // passes 0 and gets the interface's address.
-    : TxResult t ( stack_tx_udp . . st ts net . s local_ip ip . s local_port port src off len now . st out )
+    : TxResult t ( stack_tx_udp ( tstack_net . st ts ) . s local_ip ip . s local_port port src off len now . st out )
     ? == . t status ( tx_sent ) {
         = . s err 0
         ^ len
@@ -724,21 +826,23 @@ $ `stdlib/net/tcpstack.nu`
     ^ - 0 ( sock_err_again )
 }
 
-@ sock_udp_send * SockTab st i fd ( Vec u ) src i off i len i now → i {
+@ sock_udp_send SockTab st__h i fd ( Vec u ) src i off i len i now → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
     ? ! . s connected {
         = . s err ( sock_err_write )
         ^ - 0 ( sock_err_write )
     } {}
-    ^ ( sock_udp_send_to st fd . s peer_ip . s peer_port src off len now )
+    ^ ( __sock_udp_send_to st fd . s peer_ip . s peer_port src off len now )
 }
 
 // Take the next datagram into `dst`, truncating to `max` — which is
 // what recvfrom(2) does, and the reason a caller passes a buffer at
 // least as large as the MTU. The sender's address is readable with
 // `sock_udp_last_ip` / `sock_udp_last_port` until the next recv.
-@ sock_udp_recv_from * SockTab st i fd ( Vec u ) dst i max → i {
+@ sock_udp_recv_from SockTab st__h i fd ( Vec u ) dst i max → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
     ? . s shut {
@@ -758,7 +862,7 @@ $ `stdlib/net/tcpstack.nu`
     : i start ( pktbuf_start . b q idx )
     : i n ( pktbuf_len . b q idx )
     : i take ? < max n max n
-    ? > take 0 { ( vec_extend_range [u] dst . . b q bytes start take ) } {}
+    ? > take 0 { ( vec_extend_range [u] dst ( pktbuf_bytes . b q ) start take ) } {}
     = . b last_ip ?? ( vec_get [i] . b src * idx 2 ) { T x → x F → 0 }
     = . b last_port ?? ( vec_get [i] . b src + * idx 2 1 ) { T x → x F → 0 }
     = . b head + idx 1
@@ -774,13 +878,15 @@ $ `stdlib/net/tcpstack.nu`
     ^ take
 }
 
-@ sock_udp_last_ip * SockTab st i fd → i {
+@ sock_udp_last_ip SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *UdpBox b ( __udp_box st fd )
     ? == # i b 0 { ^ 0 } {}
     ^ . b last_ip
 }
 
-@ sock_udp_last_port * SockTab st i fd → i {
+@ sock_udp_last_port SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *UdpBox b ( __udp_box st fd )
     ? == # i b 0 { ^ 0 } {}
     ^ . b last_port
@@ -792,7 +898,8 @@ $ `stdlib/net/tcpstack.nu`
 // program that sets them run, and `sock_udp_opts` is how a future
 // driver reads what it was asked for. Nothing here pretends a
 // multicast datagram left the machine.
-@ sock_udp_setopt * SockTab st i fd i bit → i {
+@ sock_udp_setopt SockTab st__h i fd i bit → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
     ? != . s kind ( sock_kind_udp ) { ^ - 0 ( sock_err_other ) } {}
@@ -800,7 +907,8 @@ $ `stdlib/net/tcpstack.nu`
     ^ 0
 }
 
-@ sock_udp_opts * SockTab st i fd → i {
+@ sock_udp_opts SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ^ . s opts
@@ -812,14 +920,15 @@ $ `stdlib/net/tcpstack.nu`
 // connection is NOT established yet — `sock_status` says when it is.
 // A SYN that could not be framed because ARP has not resolved is not
 // an error: TCP's own retransmit timer sends it.
-@ sock_connect * SockTab st i ip i port i local_port i now → i {
-    ? || <= port 0 > port 65535 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
+@ sock_connect SockTab st__h i ip i port i local_port i now → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
+    ? || <= port 0 > port 65535 { ^ ( __sock_err_fd st ( sock_err_other ) ) } {}
     // Before the connection exists, not after: a SYN sent for a socket
     // that cannot be created is a connection the peer accepts and this
     // machine has forgotten about.
-    ? ! ( sock_can_open st ) { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
+    ? ! ( __sock_can_open st ) { ^ ( __sock_err_fd st ( sock_err_other ) ) } {}
     : i cidx ( tstack_connect . st ts ip port local_port now . st out )
-    ? < cidx 0 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
+    ? < cidx 0 { ^ ( __sock_err_fd st ( sock_err_other ) ) } {}
     : i fd ( __alloc_fd st )
     : *Sock s ( __sock st fd )
     = . s kind ( sock_kind_conn )
@@ -832,7 +941,7 @@ $ `stdlib/net/tcpstack.nu`
     ^ fd
 }
 
-@ __live * SockTab st * Sock s → b {
+@ __live * SockTabImpl st * Sock s → b {
     ? != . s kind ( sock_kind_conn ) { ^ F } {}
     ^ ( tstack_conn_live . st ts . s idx . s gen )
 }
@@ -842,7 +951,8 @@ $ `stdlib/net/tcpstack.nu`
 // a RST, or a retransmit timer that ran out of patience — because a
 // peer's FIN leaves the connection in CLOSE_WAIT, alive and readable,
 // until the application closes its side.
-@ sock_status * SockTab st i fd → i {
+@ sock_status SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ ( sock_conn_failed ) } {}
     ? ! ( __live st s ) { ^ ? . s eof ( sock_conn_ready ) ( sock_conn_failed ) } {}
@@ -853,7 +963,8 @@ $ `stdlib/net/tcpstack.nu`
     ^ ( sock_conn_ready )
 }
 
-@ sock_state * SockTab st i fd → i {
+@ sock_state SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ ( tcp_closed ) } {}
     ? ! ( __live st s ) { ^ ( tcp_closed ) } {}
@@ -870,7 +981,8 @@ $ `stdlib/net/tcpstack.nu`
 //         DIFFERENT thing from an error, which is why it is not an
 //         error code.
 //   < 0   `- err`
-@ sock_read * SockTab st i fd ( Vec u ) dst i max → i {
+@ sock_read SockTab st__h i fd ( Vec u ) dst i max → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
     ? != . s kind ( sock_kind_conn ) {
@@ -895,8 +1007,8 @@ $ `stdlib/net/tcpstack.nu`
     // Nothing buffered. If the peer has sent its FIN, this is the end
     // of the stream rather than a stall — the whole reason the state
     // machine keeps `fin_rcvd` around after it has ACKed it.
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? && != # i c 0 . c fin_rcvd {
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? && != 0 # i . c ctl ( tcb_fin_rcvd c ) {
         = . s eof T
         = . s err 0
         ^ 0
@@ -910,7 +1022,8 @@ $ `stdlib/net/tcpstack.nu`
 // the buffer is full, exactly as `send(2)` on a non-blocking socket.
 // Zero accepted with bytes offered is reported as `- sock_err_again`
 // so a caller never spins on a full buffer mistaking it for progress.
-@ sock_write * SockTab st i fd ( Vec u ) src i off i len i now → i {
+@ sock_write SockTab st__h i fd ( Vec u ) src i off i len i now → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
     ? != . s kind ( sock_kind_conn ) {
@@ -928,8 +1041,8 @@ $ `stdlib/net/tcpstack.nu`
     } {}
     // Our own FIN is out: the send side is closed and more data would
     // arrive after the end of the stream.
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? && != # i c 0 . c fin_sent {
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? && != 0 # i . c ctl ( tcb_fin_sent c ) {
         = . s err ( sock_err_write )
         ^ - 0 ( sock_err_write )
     } {}
@@ -950,12 +1063,13 @@ $ `stdlib/net/tcpstack.nu`
 // Bytes queued for transmission and not yet acknowledged. A caller
 // that wants "everything is on the wire" waits for this to reach 0
 // rather than assuming a return from `sock_write` means delivery.
-@ sock_send_queue * SockTab st i fd → i {
+@ sock_send_queue SockTab st__h i fd → i {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ 0 } {}
     ? ! ( __live st s ) { ^ 0 } {}
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? == # i c 0 { ^ 0 } {}
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == 0 # i . c ctl { ^ 0 } {}
     ^ ( tcb_send_queue_len c )
 }
 
@@ -966,21 +1080,23 @@ $ `stdlib/net/tcpstack.nu`
 // discover the error, and a readiness predicate that answers "not
 // ready" for a connection that will never be ready is a hang.
 
-@ sock_readable * SockTab st i fd → b {
+@ sock_readable SockTab st__h i fd → b {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ T } {}
     ? . s shut { ^ T } {}
     ? == . s kind ( sock_kind_listener ) {
         ^ > ( tstack_pending_count . st ts . s idx ) 0
     } {}
-    ? == . s kind ( sock_kind_udp ) { ^ > ( sock_udp_pending st fd ) 0 } {}
+    ? == . s kind ( sock_kind_udp ) { ^ > ( __sock_udp_pending st fd ) 0 } {}
     ? ! ( __live st s ) { ^ T } {}
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? == # i c 0 { ^ T } {}
-    ^ || > ( tcb_recv_queue_len c ) 0 . c fin_rcvd
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == 0 # i . c ctl { ^ T } {}
+    ^ || > ( tcb_recv_queue_len c ) 0 ( tcb_fin_rcvd c )
 }
 
-@ sock_writable * SockTab st i fd → b {
+@ sock_writable SockTab st__h i fd → b {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ T } {}
     ? . s shut { ^ T } {}
@@ -991,9 +1107,9 @@ $ `stdlib/net/tcpstack.nu`
     ? ! ( __live st s ) { ^ T } {}
     : i state ( tstack_conn_state . st ts . s idx )
     ? || == state ( tcp_syn_sent ) == state ( tcp_syn_rcvd ) { ^ F } {}
-    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
-    ? == # i c 0 { ^ T } {}
-    ? . c fin_sent { ^ T } {}
+    : Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == 0 # i . c ctl { ^ T } {}
+    ? ( tcb_fin_sent c ) { ^ T } {}
     ^ < ( tcb_send_queue_len c ) ( sock_send_buf_max )
 }
 
@@ -1008,7 +1124,8 @@ $ `stdlib/net/tcpstack.nu`
 // Release the fd. The CONNECTION may outlive it — a FIN has to be
 // acknowledged and TIME_WAIT has to elapse — which is precisely why
 // the connection table reclaims by timer and the fd table does not.
-@ sock_close * SockTab st i fd i now → v {
+@ sock_close SockTab st__h i fd i now → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
     // Closed is closed, whoever else still holds a reference. A pooled
@@ -1022,12 +1139,7 @@ $ `stdlib/net/tcpstack.nu`
     = . s refs - . s refs 1
     ? > . s refs 0 { ^ } {}
     ? == . s kind ( sock_kind_udp ) {
-        : *UdpBox b # *UdpBox . s udp
-        ? != # i b 0 {
-            ( pktbuf_free . b q )
-            ( vec_free [i] . b src )
-            ( nurl_free # s b )
-        } {}
+        ( __udp_box_free . s udp )
         = . s udp 0
     } {}
     ? == . s kind ( sock_kind_listener ) {
@@ -1046,7 +1158,8 @@ $ `stdlib/net/tcpstack.nu`
 // buys on a hosted socket. The peer sees a reset, not an orderly
 // close, which is the honest signal when the application is refusing
 // to continue.
-@ sock_abort * SockTab st i fd i now → v {
+@ sock_abort SockTab st__h i fd i now → v {
+    : *SockTabImpl st ( __SockTab_ptr st__h )
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
     ? && == . s kind ( sock_kind_conn ) ( __live st s ) {
@@ -1059,7 +1172,9 @@ $ `stdlib/net/tcpstack.nu`
 
 // ── statistics ───────────────────────────────────────────────────
 
-@ sock_open_count * SockTab st → i {
+@ sock_open_count SockTab st__h → i { ^ ( __sock_open_count ( __SockTab_ptr st__h ) ) }
+
+@ __sock_open_count * SockTabImpl st → i {
     : i n ( vec_len [i] . st fds )
     : ~ i live 0
     : ~ i k 0

@@ -111,9 +111,7 @@ $ `stdlib/ext/update_check.nu`
                     F → { = done 1 }
                 }
             }
-            : i rc ( proc_wait ch )
-            ( proc_free ch )
-            ^ rc
+            ^ ( proc_wait ch )
         }
         F e → {
             ( nurl_eprint `nurl upgrade: could not run the installer: ` )

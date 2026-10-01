@@ -12,9 +12,14 @@
 // Nodes are integer indices 0..n-1. Messages carry opaque bytes (the real
 // PkMsg / JobMsg / CRDT encodings). The harness routes a node's real encoded
 // output through this bus instead of a socket.
+//
+// SimNet and SimMsg are handles: every copy is the same bus / message, and
+// the last owner releases it (sim_net_free / sim_msg_free are early
+// releases, optional). sim_due hands the due messages over in a Vec.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __sim_cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
@@ -22,17 +27,53 @@ $ `stdlib/core/vec.nu`
     ^ o
 }
 
-: SimMsg {
+: SimMsgImpl {
     i src
     i dst
     i at  // virtual delivery time
     ( Vec u ) bytes
 }
 
-@ sim_msg_free sink * SimMsg m → v { ( vec_free [u] . m bytes ) ( nurl_free # s m ) }
+// A SimMsg is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same message, and the last owner releases it.
+: SimMsg { s ctl }
 
-: SimNet {
-    ( Vec s ) inflight  // *SimMsg, not yet delivered
+@ SimMsg_share SimMsg h → SimMsg { ^ @ SimMsg { # s ( rcbox_share # i . h ctl ) } }
+
+@ SimMsg_drop sink SimMsg h → v {
+    ( mem_forget h )
+    ( rcbox_release [SimMsgImpl] # i . h ctl )
+}
+
+@ __SimMsg_ptr SimMsg h → *SimMsgImpl { ^ ( rcbox_ptr [SimMsgImpl] # i . h ctl ) }
+
+// Let go of `m` now rather than at the end of its owner's scope.
+@ sim_msg_free sink SimMsg m → v {}
+
+@ sim_msg_src SimMsg m__h → i {
+    : *SimMsgImpl m ( __SimMsg_ptr m__h )
+    ^ . m src
+}
+
+@ sim_msg_dst SimMsg m__h → i {
+    : *SimMsgImpl m ( __SimMsg_ptr m__h )
+    ^ . m dst
+}
+
+// The virtual time it is (was) due.
+@ sim_msg_at SimMsg m__h → i {
+    : *SimMsgImpl m ( __SimMsg_ptr m__h )
+    ^ . m at
+}
+
+// The payload, lent (the message owns it).
+@ sim_msg_bytes SimMsg m__h → ( Vec u ) {
+    : *SimMsgImpl m ( __SimMsg_ptr m__h )
+    ^ . m bytes
+}
+
+: SimNetImpl {
+    ( Vec SimMsg ) inflight  // not yet delivered
     i n  // node count
     i seed  // LCG state (deterministic RNG)
     i drop_pct  // 0..100 per-message drop probability
@@ -43,9 +84,23 @@ $ `stdlib/core/vec.nu`
     i dropped  // counter (dropped or partitioned away)
 }
 
-@ sim_net_new i n i seed i drop_pct i latency i jitter → *SimNet {
-    : *SimNet net # *SimNet ( nurl_alloc Z SimNet )
-    = . net inflight ( vec_new [s] )
+// A SimNet is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: SimNet { s ctl }
+
+@ SimNet_share SimNet h → SimNet { ^ @ SimNet { # s ( rcbox_share # i . h ctl ) } }
+
+@ SimNet_drop sink SimNet h → v {
+    ( mem_forget h )
+    ( rcbox_release [SimNetImpl] # i . h ctl )
+}
+
+@ __SimNet_ptr SimNet h → *SimNetImpl { ^ ( rcbox_ptr [SimNetImpl] # i . h ctl ) }
+
+@ sim_net_new i n i seed i drop_pct i latency i jitter → SimNet {
+    : i net__box ( rcbox_zero [SimNetImpl] )
+    : *SimNetImpl net ( rcbox_ptr [SimNetImpl] net__box )
+    = . net inflight ( vec_new [SimMsg] )
     = . net n n
     = . net seed seed
     = . net drop_pct drop_pct
@@ -58,42 +113,49 @@ $ `stdlib/core/vec.nu`
     : ~ i k 0
     ~ < k tot { ( vec_push [i] reach 1 ) = k + k 1 }
     = . net reach reach
-    ^ net
+    ^ @ SimNet { # s net__box }
 }
 
-@ sim_net_free sink * SimNet net → v {
-    : i m ( vec_len [s] . net inflight )
-    : ~ i k 0
-    ~ < k m { : s pp ?? ( vec_get [s] . net inflight k ) { T x → x F → # s 0 } ? != # i pp 0 { ( sim_msg_free # *SimMsg pp ) } {} = k + k 1 }
-    ( vec_free [s] . net inflight )
-    ( vec_free [i] . net reach )
-    ( nurl_free # s net )
-}
+// Let go of `net` now rather than at the end of its owner's scope.
+@ sim_net_free sink SimNet net → v {}
 
 // LCG (Knuth MMIX constants); wraps in i64. Returns a non-negative pseudo-int.
-@ _sim_rand * SimNet net → i {
+@ __sim_rand * SimNetImpl net → i {
     = . net seed + * . net seed 6364136223846793005 1442695040888963407
     : i r . net seed
     ^ ? < r 0 - 0 r r
 }
 
-@ __sim_chance * SimNet net i pct → b { ^ < % ( _sim_rand net ) 100 pct }
+@ _sim_rand SimNet net__h → i {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    ^ ( __sim_rand net )
+}
 
-@ sim_reachable * SimNet net i a i b → b {
+@ __sim_chance * SimNetImpl net i pct → b { ^ < % ( __sim_rand net ) 100 pct }
+
+@ __sim_reachable * SimNetImpl net i a i b → b {
     ^ == ?? ( vec_get [i] . net reach + * a . net n b ) { T x → x F → 0 } 1
 }
 
-@ sim_partition * SimNet net i a i b → v {
+@ sim_reachable SimNet net__h i a i b → b {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    ^ ( __sim_reachable net a b )
+}
+
+@ sim_partition SimNet net__h i a i b → v {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
     ( vec_set [i] . net reach + * a . net n b 0 )
     ( vec_set [i] . net reach + * b . net n a 0 )
 }
 
-@ sim_heal * SimNet net i a i b → v {
+@ sim_heal SimNet net__h i a i b → v {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
     ( vec_set [i] . net reach + * a . net n b 1 )
     ( vec_set [i] . net reach + * b . net n a 1 )
 }
 // Heal every link (e.g. after a full partition scenario).
-@ sim_heal_all * SimNet net → v {
+@ sim_heal_all SimNet net__h → v {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
     : i tot * . net n . net n
     : ~ i k 0
     ~ < k tot { ( vec_set [i] . net reach k 1 ) = k + k 1 }
@@ -102,41 +164,55 @@ $ `stdlib/core/vec.nu`
 // Submit a message src→dst at virtual time `now`. Silently lost if the link is
 // partitioned or it loses the drop roll; otherwise scheduled for now + latency
 // + a random jitter (which reorders deliveries). Bytes are copied.
-@ sim_send * SimNet net i src i dst ( Vec u ) bytes i now → v {
-    ? ! ( sim_reachable net src dst ) { = . net dropped + . net dropped 1 ^ v } {}
+@ sim_send SimNet net__h i src i dst ( Vec u ) bytes i now → v {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    ? ! ( __sim_reachable net src dst ) { = . net dropped + . net dropped 1 ^ v } {}
     ? & > . net drop_pct 0 ( __sim_chance net . net drop_pct ) { = . net dropped + . net dropped 1 ^ v } {}
-    : i extra ? > . net jitter 0 % ( _sim_rand net ) . net jitter 0
-    : *SimMsg m # *SimMsg ( nurl_alloc Z SimMsg )
+    : i extra ? > . net jitter 0 % ( __sim_rand net ) . net jitter 0
+    : i m__box ( rcbox_zero [SimMsgImpl] )
+    : *SimMsgImpl m ( rcbox_ptr [SimMsgImpl] m__box )
     = . m src src
     = . m dst dst
     = . m at + + now . net latency extra
     = . m bytes ( __sim_cpy bytes )
-    ( vec_push [s] . net inflight # s m )
+    ( vec_push [SimMsg] . net inflight @ SimMsg { # s m__box } )
 }
 
-// Pop all messages whose delivery time has arrived (at <= now). Caller owns
-// the returned *SimMsg list — read src/dst/bytes, then free each with
-// sim_msg_free and the container with vec_free [s].
-@ sim_due * SimNet net i now → ( Vec s ) {
-    : ( Vec s ) due ( vec_new [s] )
-    : ( Vec s ) keep ( vec_new [s] )
-    : i m ( vec_len [s] . net inflight )
+// Take every message whose delivery time has arrived (at <= now), in
+// submission order. The caller owns the returned messages: read them with
+// sim_msg_src / sim_msg_dst / sim_msg_bytes; they go with the Vec.
+@ sim_due SimNet net__h i now → ( Vec SimMsg ) {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    : ( Vec SimMsg ) due ( vec_new [SimMsg] )
+    : ( Vec SimMsg ) keep ( vec_new [SimMsg] )
+    : i m ( vec_len [SimMsg] . net inflight )
     : ~ i k 0
     ~ < k m {
-        : s pp ?? ( vec_get [s] . net inflight k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *SimMsg msg # *SimMsg pp
-            ? <= . msg at now { ( vec_push [s] due pp ) = . net delivered + . net delivered 1 } { ( vec_push [s] keep pp ) }
-        } {}
+        ?? ( vec_get [SimMsg] . net inflight k ) {
+            T msg → {
+                : *SimMsgImpl mp ( __SimMsg_ptr msg )
+                ? <= . mp at now { ( vec_push [SimMsg] due msg ) = . net delivered + . net delivered 1 } { ( vec_push [SimMsg] keep msg ) }
+            }
+            F → {}
+        }
         = k + k 1
     }
-    ( vec_free [s] . net inflight )
+    ( vec_free [SimMsg] . net inflight )
     = . net inflight keep
     ^ due
 }
 
-@ sim_inflight_count * SimNet net → i { ^ ( vec_len [s] . net inflight ) }
+@ sim_inflight_count SimNet net__h → i {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    ^ ( vec_len [SimMsg] . net inflight )
+}
 
-@ sim_delivered * SimNet net → i { ^ . net delivered }
+@ sim_delivered SimNet net__h → i {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    ^ . net delivered
+}
 
-@ sim_dropped * SimNet net → i { ^ . net dropped }
+@ sim_dropped SimNet net__h → i {
+    : *SimNetImpl net ( __SimNet_ptr net__h )
+    ^ . net dropped
+}

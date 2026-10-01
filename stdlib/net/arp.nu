@@ -16,6 +16,10 @@
 // caller queues the packet, and the INCOMPLETE entry rate-limits
 // retries to one per `arp_retry_ms`.
 //
+// MEMORY — an `ArpCache` is a handle (rcbox): every copy is the same
+// table, and its last owner releases it. `arp_cache_free` is an early
+// release (optional).
+//
 // SECURITY NOTE — deliberate, not an oversight: this cache updates
 // only from replies to requests we sent, and from requests addressed
 // to our own IP (the standard "he's asking for me, so learn him" case
@@ -28,6 +32,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/net/inet.nu`
 $ `stdlib/net/eth.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── constants ────────────────────────────────────────────────────
 
@@ -132,24 +137,42 @@ $ `stdlib/net/eth.nu`
     i retries
 }
 
-: ArpCache {
+: ArpCacheImpl {
     ( Vec ArpEntry ) entries
     i max
 }
 
-@ arp_cache_new i max → *ArpCache {
-    : *ArpCache c # *ArpCache ( nurl_alloc Z ArpCache )
+// An ArpCache is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: ArpCache { s ctl }
+
+@ ArpCache_share ArpCache h → ArpCache { ^ @ ArpCache { # s ( rcbox_share # i . h ctl ) } }
+
+@ ArpCache_drop sink ArpCache h → v {
+    ( mem_forget h )
+    ( rcbox_release [ArpCacheImpl] # i . h ctl )
+}
+
+@ __ArpCache_ptr ArpCache h → *ArpCacheImpl { ^ ( rcbox_ptr [ArpCacheImpl] # i . h ctl ) }
+
+@ arp_cache_new i max → ArpCache {
+    : i c__box ( rcbox_zero [ArpCacheImpl] )
+    : *ArpCacheImpl c ( rcbox_ptr [ArpCacheImpl] c__box )
     = . c entries ( vec_new [ArpEntry] )
     = . c max ? > max 0 max 64
-    ^ c
+    ^ @ ArpCache { # s c__box }
 }
 
-@ arp_cache_free sink * ArpCache c → v {
-    ( vec_free [ArpEntry] . c entries )
-    ( free c )
+// Let go of `c` now rather than at the end of its owner's scope.
+@ arp_cache_free sink ArpCache c → v {}
+
+// Slots the table holds, live or not — never more than `max`.
+@ arp_cache_size ArpCache c__h → i {
+    : *ArpCacheImpl c ( __ArpCache_ptr c__h )
+    ^ ( vec_len [ArpEntry] . c entries )
 }
 
-@ __arp_find * ArpCache c i ip → i {
+@ __arp_find * ArpCacheImpl c i ip → i {
     : i n ( vec_len [ArpEntry] . c entries )
     : ~ i k 0
     ~ < k n {
@@ -164,7 +187,8 @@ $ `stdlib/net/eth.nu`
 }
 
 // Resolved MAC for `ip`, if the entry is present and unexpired.
-@ arp_cache_lookup * ArpCache c i ip i now → ?i {
+@ arp_cache_lookup ArpCache c__h i ip i now → ?i {
+    : *ArpCacheImpl c ( __ArpCache_ptr c__h )
     : i idx ( __arp_find c ip )
     ? < idx 0 { ^ @ ?i { F 0 } } {}
     : ArpEntry e ?? ( vec_get [ArpEntry] . c entries idx ) {
@@ -179,7 +203,7 @@ $ `stdlib/net/eth.nu`
 // Evict the oldest slot when the table is full. A fixed-size table is
 // the point: an unbounded cache is a remote memory-exhaustion vector,
 // and a unikernel's whole heap is its budget.
-@ __arp_slot * ArpCache c i now → i {
+@ __arp_slot * ArpCacheImpl c i now → i {
     : i n ( vec_len [ArpEntry] . c entries )
     : ~ i k 0
     ~ < k n {
@@ -214,7 +238,8 @@ $ `stdlib/net/eth.nu`
 
 // Record a resolved binding. Called for replies we asked for and for
 // requests addressed to us — never for arbitrary observed traffic.
-@ arp_cache_insert * ArpCache c i ip i mac i now → v {
+@ arp_cache_insert ArpCache c__h i ip i mac i now → v {
+    : *ArpCacheImpl c ( __ArpCache_ptr c__h )
     : ~ i idx ( __arp_find c ip )
     ? < idx 0 { = idx ( __arp_slot c now ) } {}
     : b _ok ( vec_set [ArpEntry] . c entries idx @ ArpEntry {
@@ -231,7 +256,8 @@ $ `stdlib/net/eth.nu`
 // Returns T at most once per `arp_retry_ms` per destination, and stops
 // after `arp_max_retries` — the rate limit lives in the cache rather
 // than in the caller precisely so every send path inherits it.
-@ arp_cache_should_request * ArpCache c i ip i now → b {
+@ arp_cache_should_request ArpCache c__h i ip i now → b {
+    : *ArpCacheImpl c ( __ArpCache_ptr c__h )
     : i idx ( __arp_find c ip )
     ? < idx 0 {
         : i slot ( __arp_slot c now )
@@ -263,7 +289,8 @@ $ `stdlib/net/eth.nu`
 
 // Has resolution of `ip` failed for good? The send path turns this
 // into a "host unreachable" error instead of queueing forever.
-@ arp_cache_failed * ArpCache c i ip i now → b {
+@ arp_cache_failed ArpCache c__h i ip i now → b {
+    : *ArpCacheImpl c ( __ArpCache_ptr c__h )
     : i idx ( __arp_find c ip )
     ? < idx 0 { ^ F } {}
     : ArpEntry e ?? ( vec_get [ArpEntry] . c entries idx ) {
@@ -275,7 +302,8 @@ $ `stdlib/net/eth.nu`
 
 // Drop expired entries. Optional hygiene — lookup already treats an
 // expired entry as absent — but it frees slots for new destinations.
-@ arp_cache_expire * ArpCache c i now → i {
+@ arp_cache_expire ArpCache c__h i now → i {
+    : *ArpCacheImpl c ( __ArpCache_ptr c__h )
     : i n ( vec_len [ArpEntry] . c entries )
     : ~ i freed 0
     : ~ i k 0

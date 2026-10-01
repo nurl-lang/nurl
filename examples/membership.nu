@@ -23,8 +23,8 @@ $ `stdlib/net/failuredetector.nu`
 
 // Send a membership message (PING/ACK/PING-REQ + gossip) to a peer pubkey
 // over the transport — direct or relayed, the FD neither knows nor cares.
-@ send_msg * Transport tr ( Vec u ) dst i mtype i seq * PkMemberTable tbl → v {
-    : ( Vec s ) g ( pktable_gossip tbl 6 )
+@ send_msg Transport tr ( Vec u ) dst i mtype i seq PkMemberTable tbl → v {
+    : ( Vec PkMember ) g ( pktable_gossip tbl 6 )
     : PkMsg m @ PkMsg { mtype seq ( vec_new [u] ) g }
     : ( Vec u ) wire ( pkmsg_encode m )
     ?? ( transport_send tr dst wire ) { T _ → {} F _ → {} }
@@ -32,22 +32,21 @@ $ `stdlib/net/failuredetector.nu`
 }
 
 // Perform one FD action on the wire.
-@ do_action * Transport tr FdAction a * PkMemberTable tbl → v {
+@ do_action Transport tr FdAction a PkMemberTable tbl → v {
     ? == . a kind ( fd_do_ping ) { ( send_msg tr . a target ( pk_ping ) . a seq tbl ) } {}
     ? == . a kind ( fd_do_preq ) {
         // ask each relay to probe the target on our behalf
-        : i n ( vec_len [s] . a relays )
+        : i n ( vec_len [PkMember] . a relays )
         : ~ i k 0
         ~ < k n {
-            : s pp ?? ( vec_get [s] . a relays k ) { T x → x F → # s 0 }
-            ? != # i pp 0 { : *PkMember rm # *PkMember pp ( send_msg tr . rm pubkey ( pk_pingreq ) . a seq tbl ) } {}
+            ?? ( vec_get [PkMember] . a relays k ) { T rm → ( send_msg tr . rm pubkey ( pk_pingreq ) . a seq tbl ) F → {} }
             = k + k 1
         }
     } {}
 }
 
 // Drain inbound messages, feeding acks/gossip to the FD and answering pings.
-@ pump * Transport tr * FdState fd * PkMemberTable tbl ( Vec u ) self_pk i now → v {
+@ pump Transport tr FdState fd PkMemberTable tbl ( Vec u ) self_pk i now → v {
     : ~ b more T
     ~ more {
         ?? ( transport_recv tr 50 ) {
@@ -76,10 +75,10 @@ $ `stdlib/net/failuredetector.nu`
             : ( Vec u ) self_pk ( my_pk )
             ?? ( relay_register rc self_pk ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 200 )
-            : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
-            : *PkMemberTable tbl ( pktable_new self_pk 2000000000 8000000000 3 8 )
+            : Transport tr ( transport_open # s 0 rc 1 )
+            : PkMemberTable tbl ( pktable_new self_pk 2000000000 8000000000 3 8 )
             // ( transport_add_peer + pktable_apply for each known peer … )
-            : *FdState fd ( fd_new # s tbl 1000000000 300000000 2000000000 3 )
+            : FdState fd ( fd_new tbl 1000000000 300000000 2000000000 3 )
 
             : ~ i ticks 0
             ~ < ticks 3 {
@@ -88,7 +87,7 @@ $ `stdlib/net/failuredetector.nu`
                 ( do_action tr a tbl )
                 ( fd_action_free a )
                 ( pump tr fd tbl self_pk now )
-                : ( Vec s ) dead ( fd_sweep fd now )
+                : ( Vec PkMember ) dead ( fd_sweep fd now )
                 ( _pk_dead_free dead )
                 ( sleep_ms 200 )
                 = ticks + ticks 1

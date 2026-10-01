@@ -682,12 +682,11 @@ $ `stdlib/std/csr.nu`
         ( vec_free [u] . ca pubkey )
         = . ca pubkey ( p256_ecdh_keygen scalar )
     } {
-        : *MldsaKeys ks ( mldsa_keygen alg )
+        : MldsaKeys ks ( mldsa_keygen alg )
         ( vec_free [u] . ca ml_pk )
         = . ca ml_pk ( bytes_slice ( mldsa_pk ks ) 0 ( mldsa_pk_len alg ) )
         ( vec_free [u] . ca ml_sk )
         = . ca ml_sk ( bytes_slice ( mldsa_sk ks ) 0 ( mldsa_sk_len alg ) )
-        ( mldsa_keys_free ks )
     }
 
     : ( Vec u ) pubk ( pki_ca_public ca )
@@ -844,12 +843,11 @@ $ `stdlib/std/csr.nu`
         ( vec_free [u] dev_pub )
         = dev_pub ( p256_ecdh_keygen dev_sk )
     } {
-        : *MldsaKeys ks ( mldsa_keygen . ca alg )
+        : MldsaKeys ks ( mldsa_keygen . ca alg )
         ( vec_free [u] dev_sk )
         = dev_sk ( bytes_slice ( mldsa_sk ks ) 0 ( mldsa_sk_len . ca alg ) )
         ( vec_free [u] dev_pub )
         = dev_pub ( bytes_slice ( mldsa_pk ks ) 0 ( mldsa_pk_len . ca alg ) )
-        ( mldsa_keys_free ks )
     }
 
     : ( Vec u ) serial ( _pki_rand_bytes 12 )

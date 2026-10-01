@@ -309,11 +309,7 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     ~ < k nv {
         ?? ( vec_get [VerCfg] . m versions k ) {
-            T vc → {
-                : ~ VerCfg c vc
-                = . c vname ( string_from ( string_data . vc vname ) )
-                ( vec_push [VerCfg] out c )
-            }
+            T vc → { ( vec_push [VerCfg] out ( mem_dup vc ) ) }
             F _ → {}
         }
         = k + k 1

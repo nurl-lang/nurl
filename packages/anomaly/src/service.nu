@@ -4354,9 +4354,11 @@ $ `stdlib/std/thread.nu`
 // the GPU singleton and the authorization layer see one request at a
 // time, exactly as under the single-threaded server. 0 = no pool (tests
 // drive the router directly), and the release/acquire pair is a no-op.
+// The global holds the server's Mutex handle as a word; cast back, it is
+// lent to the caller, and the server's own binding releases it.
 : ~ i g_an_lock 0
 
-@ __an_lock → Mutex { ^ @ Mutex { @ Cell { # s g_an_lock 0 } } }
+@ __an_lock → Mutex { ^ # Mutex g_an_lock }
 
 @ __an_lock_acquire → v { ? != g_an_lock 0 { ( mutex_lock ( __an_lock ) ) } {} }
 
@@ -6025,8 +6027,7 @@ $ `stdlib/std/thread.nu`
     // still run one at a time, but a handler that waits on a job can step
     // aside while it does, and the others are served meanwhile.
     : Mutex lock ( mutex_new )
-    : Cell lcell . lock c
-    = g_an_lock # i . lcell ptr
+    = g_an_lock # i lock
     ( http_app_workers app 4 )
     : ( @ ( @ HttpResponse HttpRequest ) ( @ HttpResponse HttpRequest ) ) serial
     \ ( @ HttpResponse HttpRequest ) inner → ( @ HttpResponse HttpRequest ) {
@@ -6052,6 +6053,5 @@ $ `stdlib/std/thread.nu`
     : i rc ( http_app_listen app host port )
     ( http_app_free app )
     = g_an_lock 0
-    ( mutex_free lock )
     ^ rc
 }

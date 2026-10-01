@@ -122,7 +122,7 @@ $ `stdlib/dist/ring.nu`
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
 // `now` is the caller's clock (ms); the member's liveness stamp starts there.
-@ roster_add * Roster r * Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
+@ roster_add * Roster r Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
     ? ( roster_has r pubkey ) { ^ F } {}
     : *Member m # *Member ( nurl_alloc Z Member )
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )

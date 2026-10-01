@@ -15,9 +15,14 @@
 // replica the same way without coordination, or distinct replicas collide into
 // one slot and the value silently corrupts. Merge is the gossip primitive: on
 // receiving a peer's CRDT, merge it into the local one.
+//
+// PNCounter and OrSet are handles: every copy is the same replica, and its
+// last owner releases it (pncounter_free / orset_free are early releases,
+// optional). LwwReg is a plain value.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ════════════════════════════════════════════════════════════════
 // PNCounter — per-replica increments and decrements; value = Σinc − Σdec.
@@ -27,27 +32,38 @@ $ `stdlib/core/vec.nu`
 // when replicas are discovered in different orders on different nodes.
 // ════════════════════════════════════════════════════════════════
 
-: PNCounter {
+: PNCounterImpl {
     ( Vec i ) inc_id  // replica ids that have incremented
     ( Vec i ) inc_amt  // inc_amt[k] = total increments by replica inc_id[k]
     ( Vec i ) dec_id
     ( Vec i ) dec_amt
 }
 
-@ pncounter_new → *PNCounter {
-    : *PNCounter c # *PNCounter ( nurl_alloc Z PNCounter )
+// A PNCounter is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: PNCounter { s ctl }
+
+@ PNCounter_share PNCounter h → PNCounter { ^ @ PNCounter { # s ( rcbox_share # i . h ctl ) } }
+
+@ PNCounter_drop sink PNCounter h → v {
+    ( mem_forget h )
+    ( rcbox_release [PNCounterImpl] # i . h ctl )
+}
+
+@ __PNCounter_ptr PNCounter h → *PNCounterImpl { ^ ( rcbox_ptr [PNCounterImpl] # i . h ctl ) }
+
+@ pncounter_new → PNCounter {
+    : i c__box ( rcbox_zero [PNCounterImpl] )
+    : *PNCounterImpl c ( rcbox_ptr [PNCounterImpl] c__box )
     = . c inc_id ( vec_new [i] )
     = . c inc_amt ( vec_new [i] )
     = . c dec_id ( vec_new [i] )
     = . c dec_amt ( vec_new [i] )
-    ^ c
+    ^ @ PNCounter { # s c__box }
 }
 
-@ pncounter_free sink * PNCounter c → v {
-    ( vec_free [i] . c inc_id ) ( vec_free [i] . c inc_amt )
-    ( vec_free [i] . c dec_id ) ( vec_free [i] . c dec_amt )
-    ( nurl_free # s c )
-}
+// Let go of `c` now rather than at the end of its owner's scope.
+@ pncounter_free sink PNCounter c → v {}
 
 @ __pn_at ( Vec i ) v i idx → i { ^ ?? ( vec_get [i] v idx ) { T x → x F → 0 } }
 
@@ -68,11 +84,20 @@ $ `stdlib/core/vec.nu`
     ? >= j 0 { ( vec_set [i] amts j + ( __pn_at amts j ) amt ) } { ( vec_push [i] ids id ) ( vec_push [i] amts amt ) }
 }
 
-@ pncounter_inc * PNCounter c i replica i amt → v { ( __pn_bump . c inc_id . c inc_amt replica amt ) }
+@ pncounter_inc PNCounter c__h i replica i amt → v {
+    : *PNCounterImpl c ( __PNCounter_ptr c__h )
+    ( __pn_bump . c inc_id . c inc_amt replica amt )
+}
 
-@ pncounter_dec * PNCounter c i replica i amt → v { ( __pn_bump . c dec_id . c dec_amt replica amt ) }
+@ pncounter_dec PNCounter c__h i replica i amt → v {
+    : *PNCounterImpl c ( __PNCounter_ptr c__h )
+    ( __pn_bump . c dec_id . c dec_amt replica amt )
+}
 
-@ pncounter_value * PNCounter c → i { ^ - ( __pn_sum . c inc_amt ) ( __pn_sum . c dec_amt ) }
+@ pncounter_value PNCounter c__h → i {
+    : *PNCounterImpl c ( __PNCounter_ptr c__h )
+    ^ - ( __pn_sum . c inc_amt ) ( __pn_sum . c dec_amt )
+}
 
 // merge src (ids,amts) into dst, taking the max per replica id (insert if new)
 @ __pn_max_into ( Vec i ) dids ( Vec i ) damts ( Vec i ) sids ( Vec i ) samts → v {
@@ -85,8 +110,32 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
 }
+// The sparse columns, lent — what dist/replicator.nu's codec reads and
+// fills: replica ids and their grow-only totals, increments and decrements.
+@ pncounter_inc_ids PNCounter c__h → ( Vec i ) {
+    : *PNCounterImpl c ( __PNCounter_ptr c__h )
+    ^ . c inc_id
+}
+
+@ pncounter_inc_amts PNCounter c__h → ( Vec i ) {
+    : *PNCounterImpl c ( __PNCounter_ptr c__h )
+    ^ . c inc_amt
+}
+
+@ pncounter_dec_ids PNCounter c__h → ( Vec i ) {
+    : *PNCounterImpl c ( __PNCounter_ptr c__h )
+    ^ . c dec_id
+}
+
+@ pncounter_dec_amts PNCounter c__h → ( Vec i ) {
+    : *PNCounterImpl c ( __PNCounter_ptr c__h )
+    ^ . c dec_amt
+}
+
 // Merge a peer's counter into this one (idempotent, commutative).
-@ pncounter_merge * PNCounter a * PNCounter b → v {
+@ pncounter_merge PNCounter a__h PNCounter b__h → v {
+    : *PNCounterImpl a ( __PNCounter_ptr a__h )
+    : *PNCounterImpl b ( __PNCounter_ptr b__h )
     ( __pn_max_into . a inc_id . a inc_amt . b inc_id . b inc_amt )
     ( __pn_max_into . a dec_id . a dec_amt . b dec_id . b dec_amt )
 }
@@ -129,27 +178,50 @@ $ `stdlib/core/vec.nu`
     i seq
 }
 
-: OrSet {
+: OrSetImpl {
     ( Vec s ) adds  // *OrTag
     ( Vec s ) tombs  // *OrTag
     i next_seq  // this replica's local tag counter
 }
 
-@ orset_new → *OrSet {
-    : *OrSet s # *OrSet ( nurl_alloc Z OrSet )
+// An OrSet is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: OrSet { s ctl }
+
+@ OrSet_share OrSet h → OrSet { ^ @ OrSet { # s ( rcbox_share # i . h ctl ) } }
+
+@ OrSet_drop sink OrSet h → v {
+    ( mem_forget h )
+    ( rcbox_release [OrSetImpl] # i . h ctl )
+}
+
+@ __OrSet_ptr OrSet h → *OrSetImpl { ^ ( rcbox_ptr [OrSetImpl] # i . h ctl ) }
+
+@ orset_new → OrSet {
+    : i s__box ( rcbox_zero [OrSetImpl] )
+    : *OrSetImpl s ( rcbox_ptr [OrSetImpl] s__box )
     = . s adds ( vec_new [s] )
     = . s tombs ( vec_new [s] )
     = . s next_seq 0
-    ^ s
+    ^ @ OrSet { # s s__box }
 }
 
-@ __orset_free_vec ( Vec s ) v → v {
+@ __orset_free_tags ( Vec s ) v → v {
     : i n ( vec_len [s] v ) : ~ i k 0
     ~ < k n { : s pp ?? ( vec_get [s] v k ) { T x → x F → # s 0 } ? != # i pp 0 { ( nurl_free pp ) } {} = k + k 1 }
-    ( vec_free [s] v )
 }
 
-@ orset_free sink * OrSet s → v { ( __orset_free_vec . s adds ) ( __orset_free_vec . s tombs ) ( nurl_free # s s ) }
+// The tags are raw blocks the two Vecs only point at: releasing them is
+// the set's own drop, run by its last owner (the Vecs go after it).
+% Drop OrSetImpl {
+    @ drop OrSetImpl x → v {
+        ( __orset_free_tags . x adds )
+        ( __orset_free_tags . x tombs )
+    }
+}
+
+// Let go of `s` now rather than at the end of its owner's scope.
+@ orset_free sink OrSet s → v {}
 
 @ __tag_in ( Vec s ) v i elem i replica i seq → b {
     : i n ( vec_len [s] v ) : ~ b found F : ~ i k 0
@@ -171,13 +243,15 @@ $ `stdlib/core/vec.nu`
 }
 
 // Add an element under this replica's id (gets a fresh unique tag).
-@ orset_add * OrSet s i replica i elem → v {
+@ orset_add OrSet s__h i replica i elem → v {
+    : *OrSetImpl s ( __OrSet_ptr s__h )
     ( __tag_push . s adds elem replica . s next_seq )
     = . s next_seq + . s next_seq 1
 }
 
 // Remove an element: tombstone every currently-observed add-tag for it.
-@ orset_remove * OrSet s i elem → v {
+@ orset_remove OrSet s__h i elem → v {
+    : *OrSetImpl s ( __OrSet_ptr s__h )
     : i n ( vec_len [s] . s adds ) : ~ i k 0
     ~ < k n {
         : s pp ?? ( vec_get [s] . s adds k ) { T x → x F → # s 0 }
@@ -192,7 +266,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // Present iff some add-tag for the element is not tombstoned.
-@ orset_contains * OrSet s i elem → b {
+@ orset_contains OrSet s__h i elem → b {
+    : *OrSetImpl s ( __OrSet_ptr s__h )
     : i n ( vec_len [s] . s adds ) : ~ b found F : ~ i k 0
     ~ & ! found < k n {
         : s pp ?? ( vec_get [s] . s adds k ) { T x → x F → # s 0 }
@@ -216,8 +291,22 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
 }
+// The add-tags and tombstones (*OrTag each), lent — what
+// dist/replicator.nu's codec reads and fills. The set owns the tags.
+@ orset_adds OrSet s__h → ( Vec s ) {
+    : *OrSetImpl s ( __OrSet_ptr s__h )
+    ^ . s adds
+}
+
+@ orset_tombs OrSet s__h → ( Vec s ) {
+    : *OrSetImpl s ( __OrSet_ptr s__h )
+    ^ . s tombs
+}
+
 // Merge a peer's set (union adds, union tombs) — idempotent, commutative.
-@ orset_merge * OrSet a * OrSet b → v {
+@ orset_merge OrSet a__h OrSet b__h → v {
+    : *OrSetImpl a ( __OrSet_ptr a__h )
+    : *OrSetImpl b ( __OrSet_ptr b__h )
     ( __merge_tags . a adds . b adds )
     ( __merge_tags . a tombs . b tombs )
 }

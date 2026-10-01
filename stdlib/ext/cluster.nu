@@ -77,6 +77,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Errors ───────────────────────────────────────────────────────────
 
@@ -144,26 +145,21 @@ $ `stdlib/ext/http_server.nu`
     ^ @ Registry { ( vec_new [RpcEntry] ) }
 }
 
-@ __rpc_entry_free sink RpcEntry e → v {
-    : *RpcImpl impl # *RpcImpl . e ctl
-    ( string_free . impl name )
-    // The heap block owns the handler closure stored into it (a stored
-    // closure is a clone — docs/MEMORY.md §7.4); release it with the block.
-    : ( @ !Json ClusterErr Json ) h . impl handler
-    ( nurl_closure_drop # *u h 1 )
-    ( nurl_free # s impl )
+// An entry's block owns its name and the handler closure stored into it
+// (a stored closure is a clone — docs/MEMORY.md §7.4); the last owner of
+// the entry releases them with the block.
+@ RpcEntry_share RpcEntry h → RpcEntry { ^ @ RpcEntry { # s ( rcbox_share # i . h ctl ) } }
+
+@ RpcEntry_drop sink RpcEntry h → v {
+    ( mem_forget h )
+    ( rcbox_release [RpcImpl] # i . h ctl )
 }
 
-@ registry_free sink Registry r → v {
-    ( vec_free_with [RpcEntry] . r entries
-    \ RpcEntry e → v { ( __rpc_entry_free e ) } )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ registry_free sink Registry r → v {}
 
 @ registry_register Registry r s name ( @ !Json ClusterErr Json ) handler → v {
-    : *RpcImpl impl # *RpcImpl ( nurl_alloc Z RpcImpl )
-    = . impl name ( string_from name )
-    = . impl handler handler
-    : RpcEntry e @ RpcEntry { # s impl }
+    : RpcEntry e @ RpcEntry { # s ( rcbox_new [RpcImpl] @ RpcImpl { ( string_from name ) handler } ) }
     ( vec_push [RpcEntry] . r entries e )
 }
 
@@ -181,7 +177,7 @@ $ `stdlib/ext/http_server.nu`
         : ?RpcEntry ek ( vec_get [RpcEntry] . r entries k )
         ?? ek {
             T e → {
-                : *RpcImpl impl # *RpcImpl . e ctl
+                : *RpcImpl impl ( rcbox_ptr [RpcImpl] # i . e ctl )
                 ? != 0 ( nurl_str_eq ( string_data . impl name ) name ) {
                     = found k
                     = done T
@@ -203,7 +199,7 @@ $ `stdlib/ext/http_server.nu`
     : ?RpcEntry ek ( vec_get [RpcEntry] . r entries idx )
     ^ ?? ek {
         T e → {
-            : *RpcImpl impl # *RpcImpl . e ctl
+            : *RpcImpl impl ( rcbox_ptr [RpcImpl] # i . e ctl )
             . impl handler
         }
         F → miss
@@ -442,34 +438,41 @@ $ `stdlib/ext/http_server.nu`
 : CircuitBreaker { s ctl }
 
 @ cb_new i threshold i cooldown_ms → CircuitBreaker {
-    : *CbImpl impl # *CbImpl ( nurl_alloc Z CbImpl )
+    : i impl_box ( rcbox_zero [CbImpl] )
+    : *CbImpl impl ( rcbox_ptr [CbImpl] impl_box )
     = . impl threshold threshold
     = . impl cooldown_ms cooldown_ms
     = . impl fails 0
     = . impl opened_at_ns - 0 1
-    ^ @ CircuitBreaker { # s impl }
+    ^ @ CircuitBreaker { # s impl_box }
 }
 
-@ cb_free sink CircuitBreaker cb → v {
-    ( nurl_free . cb ctl )
+@ CircuitBreaker_share CircuitBreaker h → CircuitBreaker { ^ @ CircuitBreaker { # s ( rcbox_share # i . h ctl ) } }
+
+@ CircuitBreaker_drop sink CircuitBreaker h → v {
+    ( mem_forget h )
+    ( rcbox_release [CbImpl] # i . h ctl )
 }
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ cb_free sink CircuitBreaker h → v {}
 
 // True if a call may proceed: closed, or open-but-cooled-down (half-open).
 @ cb_allow CircuitBreaker cb → b {
-    : *CbImpl impl # *CbImpl . cb ctl
+    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
     ? < . impl opened_at_ns 0 { ^ T } {}
     : i elapsed_ms / - ( monotonic_ns ) . impl opened_at_ns 1000000
     ^ >= elapsed_ms . impl cooldown_ms
 }
 
 @ cb_record_success CircuitBreaker cb → v {
-    : *CbImpl impl # *CbImpl . cb ctl
+    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
     = . impl fails 0
     = . impl opened_at_ns - 0 1
 }
 
 @ cb_record_failure CircuitBreaker cb → v {
-    : *CbImpl impl # *CbImpl . cb ctl
+    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
     = . impl fails + . impl fails 1
     ? >= . impl fails . impl threshold {
         = . impl opened_at_ns ( monotonic_ns )
@@ -478,12 +481,12 @@ $ `stdlib/ext/http_server.nu`
 
 // Introspection (tests / metrics): consecutive failure count + open flag.
 @ cb_fails CircuitBreaker cb → i {
-    : *CbImpl impl # *CbImpl . cb ctl
+    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
     ^ . impl fails
 }
 
 @ cb_is_open CircuitBreaker cb → b {
-    : *CbImpl impl # *CbImpl . cb ctl
+    : *CbImpl impl ( rcbox_ptr [CbImpl] # i . cb ctl )
     ^ >= . impl opened_at_ns 0
 }
 

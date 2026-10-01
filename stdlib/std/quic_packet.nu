@@ -6,10 +6,13 @@
 // Keys (one direction, one encryption level):
 //
 //   ( quic_initial_secret dcid )                 → ( Vec u )  HKDF-Extract(initial_salt, dcid)
-//   ( quic_initial_keys dcid is_client )         → *QuicKeys  "client in" / "server in" → key/iv/hp
-//   ( quic_keys_derive cipher secret )           → *QuicKeys  cipher 1 = AES-128-GCM, 2 = ChaCha20-Poly1305
-//   ( quic_keys_update k )                       → *QuicKeys  next key phase: secret' = Expand-Label(secret, "quic ku") (§6)
-//   ( quic_keys_free k )                         → v
+//   ( quic_initial_keys dcid is_client )         → QuicKeys   "client in" / "server in" → key/iv/hp
+//   ( quic_keys_derive cipher secret )           → QuicKeys   cipher 1 = AES-128-GCM, 2 = ChaCha20-Poly1305
+//   ( quic_keys_update k )                       → QuicKeys   next key phase: secret' = Expand-Label(secret, "quic ku") (§6)
+//   ( quic_keys_free k )                         → v          early release (optional: the last owner
+//                                                              of a QuicKeys releases it)
+//   ( quic_keys_cipher k ) → i · ( quic_keys_secret k ) · ( quic_keys_key k ) · ( quic_keys_iv k ) ·
+//   ( quic_keys_hp k ) → ( Vec u ) BORROWED
 //
 // Protection:
 //
@@ -24,8 +27,7 @@
 //
 // Headers (§17.2 / §17.3):
 //
-//   ( quic_hdr_parse pkt off short_dcid_len )    → *QuicHdr   0 on a malformed header; fields below
-//   ( quic_hdr_free h )                          → v
+//   ( quic_hdr_parse pkt off short_dcid_len )    → QuicHdr    ptype -1 on a malformed header; fields below
 //   ( quic_long_hdr_build ptype dcid scid token length pn pn_len ) → ( Vec u )
 //   ( quic_short_hdr_build dcid key_phase pn pn_len )              → ( Vec u )
 //   ( quic_retry_tag odcid retry_without_tag )   → ( Vec u )  16-byte Retry Integrity Tag (§5.8)
@@ -34,6 +36,10 @@
 //
 // Packet types (`ptype`): 0 Initial · 1 0-RTT · 2 Handshake · 3 Retry ·
 // 4 short header (1-RTT) · 5 Version Negotiation (parse only).
+//
+// A QuicHdr is a plain value — offsets into the packet it was parsed
+// from, read as fields (`. h pn_off`) — so parsing one allocates nothing
+// and there is nothing to release.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -41,6 +47,7 @@ $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/aes_gcm.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/quic_varint.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __qp_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
@@ -50,18 +57,41 @@ $ `stdlib/std/quic_varint.nu`
 
 // ── Keys ─────────────────────────────────────────────────────────
 
-: QuicKeys {
+: QuicKeysImpl {
     i cipher
     ( Vec u ) secret
     ( Vec u ) key
     ( Vec u ) iv
     ( Vec u ) hp
-    * AesGcmKey aead
-    * AesGcmKey hpk
+    AesGcmKey aead
+    AesGcmKey hpk
 }
 
-@ quic_keys_derive i cipher ( Vec u ) secret → *QuicKeys {
-    : *QuicKeys k # *QuicKeys ( nurl_alloc Z QuicKeys )
+// A QuicKeys is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same keys, and the last owner releases them.
+: QuicKeys { s ctl }
+
+// The AES key schedules are raw memory (std/aes_gcm.nu): releasing them
+// is the keys' own drop; the byte strings go with the fields after it.
+% Drop QuicKeysImpl {
+    @ drop QuicKeysImpl k → v {
+        ( aes_gcm_key_free . k aead )
+        ( aes_gcm_key_free . k hpk )
+    }
+}
+
+@ QuicKeys_share QuicKeys h → QuicKeys { ^ @ QuicKeys { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicKeys_drop sink QuicKeys h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicKeysImpl] # i . h ctl )
+}
+
+@ __QuicKeys_ptr QuicKeys h → *QuicKeysImpl { ^ ( rcbox_ptr [QuicKeysImpl] # i . h ctl ) }
+
+@ quic_keys_derive i cipher ( Vec u ) secret → QuicKeys {
+    : i k__box ( rcbox_zero [QuicKeysImpl] )
+    : *QuicKeysImpl k ( rcbox_ptr [QuicKeysImpl] k__box )
     : i klen ? == cipher 1 16 32
     : ( Vec u ) empty ( vec_new [u] )
     = . k cipher cipher
@@ -74,30 +104,48 @@ $ `stdlib/std/quic_varint.nu`
         = . k aead ( aes_gcm_key_new . k key )
         = . k hpk ( aes_gcm_key_new . k hp )
     } {
-        = . k aead # *AesGcmKey 0
-        = . k hpk # *AesGcmKey 0
+        = . k aead @ AesGcmKey { # s 0 }
+        = . k hpk @ AesGcmKey { # s 0 }
     }
-    ^ k
+    ^ @ QuicKeys { # s k__box }
 }
 
-@ quic_keys_free sink * QuicKeys k → v {
-    ? == # i k 0 { ^ } {}
-    ( vec_free [u] . k secret )
-    ( vec_free [u] . k key )
-    ( vec_free [u] . k iv )
-    ( vec_free [u] . k hp )
-    ( aes_gcm_key_free . k aead )
-    ( aes_gcm_key_free . k hpk )
-    ( nurl_free # s k )
+// Let go of `k` now rather than at the end of its owner's scope.
+@ quic_keys_free sink QuicKeys k → v {}
+
+@ quic_keys_cipher QuicKeys k__h → i {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
+    ^ . k cipher
+}
+
+@ quic_keys_secret QuicKeys k__h → ( Vec u ) {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
+    ^ . k secret
+}
+
+@ quic_keys_key QuicKeys k__h → ( Vec u ) {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
+    ^ . k key
+}
+
+@ quic_keys_iv QuicKeys k__h → ( Vec u ) {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
+    ^ . k iv
+}
+
+@ quic_keys_hp QuicKeys k__h → ( Vec u ) {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
+    ^ . k hp
 }
 
 // Key update (RFC 9001 §6.1): the next secret is derived from the
 // current one; the header-protection key does NOT change.
-@ quic_keys_update * QuicKeys k → *QuicKeys {
+@ quic_keys_update QuicKeys k__h → QuicKeys {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) next ( hkdf_expand_label . k secret `quic ku` empty 32 )
     ( vec_free [u] empty )
-    : *QuicKeys n ( quic_keys_derive . k cipher next )
+    : QuicKeys n ( quic_keys_derive . k cipher next )
     ( vec_free [u] next )
     ^ n
 }
@@ -110,11 +158,11 @@ $ `stdlib/std/quic_varint.nu`
 }
 
 // Initial packets are always AES-128-GCM (§5.2).
-@ quic_initial_keys ( Vec u ) dcid b is_client → *QuicKeys {
+@ quic_initial_keys ( Vec u ) dcid b is_client → QuicKeys {
     : ( Vec u ) initial ( quic_initial_secret dcid )
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) secret ? is_client ( hkdf_expand_label initial `client in` empty 32 ) ( hkdf_expand_label initial `server in` empty 32 )
-    : *QuicKeys k ( quic_keys_derive 1 secret )
+    : QuicKeys k ( quic_keys_derive 1 secret )
     ( vec_free [u] secret )
     ( vec_free [u] initial )
     ^ k
@@ -134,14 +182,16 @@ $ `stdlib/std/quic_varint.nu`
     ^ n
 }
 
-@ quic_seal * QuicKeys k i pn ( Vec u ) header ( Vec u ) payload → ( Vec u ) {
+@ quic_seal QuicKeys k__h i pn ( Vec u ) header ( Vec u ) payload → ( Vec u ) {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
     : ( Vec u ) nonce ( quic_nonce . k iv pn )
     : ( Vec u ) out ? == . k cipher 1 ( aes_gcm_seal . k aead nonce header payload ) ( aead_encrypt . k key nonce header payload )
     ( vec_free [u] nonce )
     ^ out
 }
 
-@ quic_open * QuicKeys k i pn ( Vec u ) header ( Vec u ) ct_tag → ?( Vec u ) {
+@ quic_open QuicKeys k__h i pn ( Vec u ) header ( Vec u ) ct_tag → ?( Vec u ) {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
     : ( Vec u ) nonce ( quic_nonce . k iv pn )
     : ?( Vec u ) out ? == . k cipher 1 ( aes_gcm_open . k aead nonce header ct_tag ) ( aead_decrypt . k key nonce header ct_tag )
     ( vec_free [u] nonce )
@@ -149,7 +199,8 @@ $ `stdlib/std/quic_varint.nu`
 }
 
 // Header-protection mask from a 16-byte sample (§5.4.3 / §5.4.4).
-@ quic_hp_mask * QuicKeys k ( Vec u ) sample → ( Vec u ) {
+@ quic_hp_mask QuicKeys k__h ( Vec u ) sample → ( Vec u ) {
+    : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
     ? == . k cipher 1 {
         : ( Vec u ) block ( aes_block_encrypt . k hpk sample )
         : ( Vec u ) m ( bytes_slice block 0 5 )
@@ -172,9 +223,9 @@ $ `stdlib/std/quic_varint.nu`
     ^ ( bytes_slice pkt + pn_off 4 + pn_off 20 )
 }
 
-@ quic_hp_apply * QuicKeys k ( Vec u ) pkt i pn_off i pn_len → v {
+@ quic_hp_apply QuicKeys k__h ( Vec u ) pkt i pn_off i pn_len → v {
     : ( Vec u ) sample ( __qp_sample pkt pn_off )
-    : ( Vec u ) mask ( quic_hp_mask k sample )
+    : ( Vec u ) mask ( quic_hp_mask k__h sample )
     : i b0 ( __qp_bget pkt 0 )
     : i lowmask ? != & b0 128 0 15 31
     : b _f ( vec_set [u] pkt 0 # u ^^ b0 & ( __qp_bget mask 0 ) lowmask )
@@ -187,10 +238,10 @@ $ `stdlib/std/quic_varint.nu`
     ( vec_free [u] sample )
 }
 
-@ quic_hp_remove * QuicKeys k ( Vec u ) pkt i pn_off → i {
+@ quic_hp_remove QuicKeys k__h ( Vec u ) pkt i pn_off → i {
     ? < ( vec_len [u] pkt ) + pn_off 20 { ^ -1 } {}
     : ( Vec u ) sample ( __qp_sample pkt pn_off )
-    : ( Vec u ) mask ( quic_hp_mask k sample )
+    : ( Vec u ) mask ( quic_hp_mask k__h sample )
     : i b0 ( __qp_bget pkt 0 )
     : i lowmask ? != & b0 128 0 15 31
     : i nb0 ^^ b0 & ( __qp_bget mask 0 ) lowmask
@@ -217,12 +268,12 @@ $ `stdlib/std/quic_varint.nu`
 // Seal + header-protect in one go. `header` must already end with the
 // `pn_len`-byte packet number and (for long headers) carry a Length
 // that counts pn_len + payload + 16.
-@ quic_packet_protect * QuicKeys k ( Vec u ) header i pn i pn_len ( Vec u ) payload → ( Vec u ) {
-    : ( Vec u ) ct ( quic_seal k pn header payload )
+@ quic_packet_protect QuicKeys k__h ( Vec u ) header i pn i pn_len ( Vec u ) payload → ( Vec u ) {
+    : ( Vec u ) ct ( quic_seal k__h pn header payload )
     : ( Vec u ) pkt ( bytes_slice header 0 ( vec_len [u] header ) )
     ( bytes_extend_bytes pkt ct )
     ( vec_free [u] ct )
-    ( quic_hp_apply k pkt - ( vec_len [u] header ) pn_len pn_len )
+    ( quic_hp_apply k__h pkt - ( vec_len [u] header ) pn_len pn_len )
     ^ pkt
 }
 
@@ -243,39 +294,37 @@ $ `stdlib/std/quic_varint.nu`
     i end
 }
 
-@ quic_hdr_free sink * QuicHdr h → v {
-    ? == # i h 0 { ^ } {}
-    ( nurl_free # s h )
-}
+// What quic_hdr_parse returns for bytes that are not a header.
+@ __qp_hdr_bad → QuicHdr { ^ @ QuicHdr { -1 0 0 0 0 0 0 0 0 0 0 0 } }
 
-@ quic_hdr_dcid * QuicHdr h ( Vec u ) pkt → ( Vec u ) {
+@ quic_hdr_dcid QuicHdr h ( Vec u ) pkt → ( Vec u ) {
     ^ ( bytes_slice pkt . h dcid_off + . h dcid_off . h dcid_len )
 }
 
-@ quic_hdr_scid * QuicHdr h ( Vec u ) pkt → ( Vec u ) {
+@ quic_hdr_scid QuicHdr h ( Vec u ) pkt → ( Vec u ) {
     ^ ( bytes_slice pkt . h scid_off + . h scid_off . h scid_len )
 }
 
-@ quic_hdr_token * QuicHdr h ( Vec u ) pkt → ( Vec u ) {
+@ quic_hdr_token QuicHdr h ( Vec u ) pkt → ( Vec u ) {
     ^ ( bytes_slice pkt . h token_off + . h token_off . h token_len )
 }
 
 // Parse one packet header starting at `off` (a datagram may coalesce
 // several). Stops before the packet number, which is still protected.
 // `short_dcid_len` is the length of the connection IDs this endpoint
-// issues (a short header carries no length byte). Returns 0 when the
-// bytes are not a well-formed header: too short, a connection ID over
+// issues (a short header carries no length byte). Returns ptype -1 when
+// the bytes are not a well-formed header: too short, a connection ID over
 // 20 bytes, a Length that runs past the datagram, a cleared fixed bit.
-@ quic_hdr_parse ( Vec u ) pkt i off i short_dcid_len → *QuicHdr {
+@ quic_hdr_parse ( Vec u ) pkt i off i short_dcid_len → QuicHdr {
     : i n ( vec_len [u] pkt )
-    ? >= off n { ^ # *QuicHdr 0 } {}
+    ? >= off n { ^ ( __qp_hdr_bad ) } {}
     : i b0 ( __qp_bget pkt off )
-    : *QuicHdr h # *QuicHdr ( nurl_alloc Z QuicHdr )
+    : ~ QuicHdr h @ QuicHdr { 0 0 0 0 0 0 0 0 0 0 0 0 }
     = . h first b0
     ? == & b0 128 0 {
         // Short header: first byte, DCID, packet number, payload to the end.
-        ? == & b0 64 0 { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
-        ? > + + off 1 short_dcid_len n { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+        ? == & b0 64 0 { ^ ( __qp_hdr_bad ) } {}
+        ? > + + off 1 short_dcid_len n { ^ ( __qp_hdr_bad ) } {}
         = . h ptype 4
         = . h version 1
         = . h dcid_off + off 1
@@ -284,19 +333,19 @@ $ `stdlib/std/quic_varint.nu`
         = . h end n
         ^ h
     } {}
-    ? > + off 7 n { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+    ? > + off 7 n { ^ ( __qp_hdr_bad ) } {}
     : i ver | | | << ( __qp_bget pkt + off 1 ) 24 << ( __qp_bget pkt + off 2 ) 16 << ( __qp_bget pkt + off 3 ) 8 ( __qp_bget pkt + off 4 )
     = . h version ver
     : i dlen ( __qp_bget pkt + off 5 )
     = . h dcid_off + off 6
     = . h dcid_len dlen
     : i p1 + + off 6 dlen
-    ? > + p1 1 n { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+    ? > + p1 1 n { ^ ( __qp_hdr_bad ) } {}
     : i slen ( __qp_bget pkt p1 )
     = . h scid_off + p1 1
     = . h scid_len slen
     : ~ i p + + p1 1 slen
-    ? > p n { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+    ? > p n { ^ ( __qp_hdr_bad ) } {}
     ? == ver 0 {
         // Version Negotiation: the rest is a list of versions.
         = . h ptype 5
@@ -304,13 +353,13 @@ $ `stdlib/std/quic_varint.nu`
         = . h end n
         ^ h
     } {}
-    ? | > dlen 20 > slen 20 { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
-    ? == & b0 64 0 { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+    ? | > dlen 20 > slen 20 { ^ ( __qp_hdr_bad ) } {}
+    ? == & b0 64 0 { ^ ( __qp_hdr_bad ) } {}
     : i ptype & >> b0 4 3
     = . h ptype ptype
     ? == ptype 3 {
         // Retry: token to the end minus the 16-byte integrity tag.
-        ? < - n p 16 { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+        ? < - n p 16 { ^ ( __qp_hdr_bad ) } {}
         = . h token_off p
         = . h token_len - - n p 16
         = . h pn_off n
@@ -319,17 +368,17 @@ $ `stdlib/std/quic_varint.nu`
     } {}
     ? == ptype 0 {
         : i tl ( quic_varint_read pkt p )
-        ? < tl 0 { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+        ? < tl 0 { ^ ( __qp_hdr_bad ) } {}
         = p + p ( quic_varint_len_at pkt p )
-        ? > + p tl n { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+        ? > + p tl n { ^ ( __qp_hdr_bad ) } {}
         = . h token_off p
         = . h token_len tl
         = p + p tl
     } {}
     : i len ( quic_varint_read pkt p )
-    ? < len 0 { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+    ? < len 0 { ^ ( __qp_hdr_bad ) } {}
     = p + p ( quic_varint_len_at pkt p )
-    ? > + p len n { ( nurl_free # s h ) ^ # *QuicHdr 0 } {}
+    ? > + p len n { ^ ( __qp_hdr_bad ) } {}
     = . h length len
     = . h pn_off p
     = . h end + p len

@@ -34,14 +34,14 @@ $ `stdlib/std/thread.nu`
         ( nurl_poke # s total 0 + ( nurl_peek # s total 0 ) sum )
         ( mutex_unlock m )
     }
-    : ( Vec s ) ths ( vec_new [s] )
+    : ( Vec Thread ) ths ( vec_new [Thread] )
     : ~ i i 0
-    ~ < i 4 { ?? ( thread_spawn body ) { T t → { ( vec_push [s] ths . t raw ) } F e → { ( nurl_println `spawn failed` ) } } = i + i 1 }
-    : i n ( vec_len [s] ths )
+    ~ < i 4 { ?? ( thread_spawn body ) { T t → { ( vec_push [Thread] ths t ) } F e → { ( nurl_println `spawn failed` ) } } = i + i 1 }
+    : i n ( vec_len [Thread] ths )
     : ~ i j 0
-    ~ < j n { ?? ( vec_get [s] ths j ) { T r → ( thread_join @ Thread { r } ) F → {} } = j + j 1 }
+    ~ < j n { ?? ( vec_get [Thread] ths j ) { T t → ( thread_join t ) F → {} } = j + j 1 }
     ( nurl_print `threads=` ) ( nurl_print ( nurl_str_int n ) )
     ( nurl_print ` total=` ) ( nurl_println ( nurl_str_int ( nurl_peek # s total 0 ) ) )
-    ( vec_free [s] ths ) ( nurl_free # s total ) ( mutex_free m )
+    ( nurl_free # s total ) ( mutex_free m )
     ^ 0
 }

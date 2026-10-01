@@ -310,7 +310,7 @@ $ `module.nu`
     i next_tid  // owner only: thread ids handed to wasi.thread-spawn
     ( Vec s ) thread_holders  // owner only: *TStart, keeping spawn closures alive
     ( Vec i ) thread_kids  // owner only: live child *Interp, for memory.grow
-    ( Vec i ) thread_joins  // owner only: host Thread handles, joined before free
+    ( Vec Thread ) thread_joins  // owner only: host threads, joined before free
     i tstart_fidx  // cached export index of `wasi_thread_start` (-2 = not looked up)
     i sp_global  // cached global index of `__stack_pointer` (-2 = not looked up)
 }
@@ -444,7 +444,7 @@ inline @ __mem_base * Interp it → i {
     = . it next_tid 1
     = . it thread_holders ( vec_new [s] )
     = . it thread_kids ( vec_new [i] )
-    = . it thread_joins ( vec_new [i] )
+    = . it thread_joins ( vec_new [Thread] )
     = . it tstart_fidx -2
     = . it sp_global -2
     // copy global initial values
@@ -543,7 +543,7 @@ inline @ __mem_base * Interp it → i {
         ( __thread_unregister it )
         ( vec_free [i] . it vs )
         ( vec_free [i] . it thread_kids )
-        ( vec_free [i] . it thread_joins )
+        ( vec_free [Thread] . it thread_joins )
         ( vec_free [i] . it globals )
         ( vec_free [i] . it nethandles )
         ( vec_free [i] . it netkinds )
@@ -567,14 +567,13 @@ inline @ __mem_base * Interp it → i {
     // own join only proves the thread's BODY finished; the host thread is
     // still inside the interpreter for a moment after that, and it reads
     // this Interp's memory and table.
-    : i tjn ( vec_len [i] . it thread_joins )
+    : i tjn ( vec_len [Thread] . it thread_joins )
     : ~ i tji 0
     ~ < tji tjn {
-        : i raw ?? ( vec_get [i] . it thread_joins tji ) { T x → x F → 0 }
-        ? != raw 0 { ( thread_join @ Thread { # s raw } ) } {}
+        ?? ( vec_get [Thread] . it thread_joins tji ) { T t → { ( thread_join t ) } F → {} }
         = tji + tji 1
     }
-    ( vec_free [i] . it thread_joins )
+    ( vec_free [Thread] . it thread_joins )
     ( interp_net_close_all it )
     ( vec_free [i] . it nethandles )
     ( vec_free [i] . it netkinds )
@@ -728,7 +727,7 @@ inline @ __mem_base * Interp it → i {
     = . it next_tid 0
     = . it thread_holders ( vec_new [s] )
     = . it thread_kids ( vec_new [i] )
-    = . it thread_joins ( vec_new [i] )
+    = . it thread_joins ( vec_new [Thread] )
     = . it tstart_fidx -2
     = . it sp_global -2
     // Mutable globals are per-instance, which is precisely what gives the
@@ -7483,7 +7482,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ?? ( thread_spawn . th f ) {
         T t → {
             ( __atom_lock )
-            ( vec_push [i] . ho thread_joins # i . t raw )
+            ( vec_push [Thread] . ho thread_joins t )
             ( __atom_unlock )
             ( __push it tid )
         }

@@ -20,14 +20,18 @@
 //   ( shake256_pure ( Vec u ) data i outlen ) → ( Vec u )
 //
 // API — streaming sponge, absorb then squeeze:
-//   ( sha3_new i rate i domain )      → *Sha3
-//   ( shake128_init )                 → *Sha3     rate 168
-//   ( shake256_init )                 → *Sha3     rate 136
-//   ( sha3_absorb *Sha3 h ( Vec u ) ) → v         any piece size, any count
-//   ( sha3_squeeze *Sha3 h i n )      → ( Vec u ) call repeatedly; the
+//   ( sha3_new i rate i domain )      → Sha3
+//   ( shake128_init )                 → Sha3      rate 168
+//   ( shake256_init )                 → Sha3      rate 136
+//   ( sha3_absorb Sha3 h ( Vec u ) )  → v         any piece size, any count
+//   ( sha3_squeeze Sha3 h i n )       → ( Vec u ) call repeatedly; the
 //                                                 stream continues where
 //                                                 the last call stopped
-//   ( sha3_free *Sha3 h )             → v
+//   ( sha3_free Sha3 h )              → v         early release (optional:
+//                                                 the last owner releases it)
+//
+// A Sha3 is a library handle (docs/MEMORY.md §7.6): every copy is the
+// same sponge, and nothing frees it by hand.
 //
 // The first `sha3_squeeze` closes absorption (pad10*1 with the domain
 // byte) automatically; absorbing after that is a programming error and
@@ -40,6 +44,7 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Keccak-f[1600] ─────────────────────────────────────────────────
 //
@@ -187,7 +192,9 @@ pub @ keccak_round_constants → ( Vec u64 ) {
 // mode when hash_sha3x4.nu needed `keccak_round_constants`; everything
 // marked here is what the header comment already documented as the API,
 // and everything left unmarked is now genuinely private to this file.
-pub : Sha3 {
+//
+// The state behind the handle.
+: Sha3Impl {
     ( Vec u64 ) st  // 25 lanes
     ( Vec u64 ) scr  // 25-lane ping-pong buffer for the permutation
     ( Vec u64 ) rc  // ι constants
@@ -197,34 +204,38 @@ pub : Sha3 {
     b squeezing  // T once pad10*1 has been applied
 }
 
+// A Sha3 is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+pub : Sha3 { s ctl }
+
+pub @ Sha3_share Sha3 h → Sha3 { ^ @ Sha3 { # s ( rcbox_share # i . h ctl ) } }
+
+pub @ Sha3_drop sink Sha3 h → v {
+    ( mem_forget h )
+    ( rcbox_release [Sha3Impl] # i . h ctl )
+}
+
+@ __Sha3_ptr Sha3 h → *Sha3Impl { ^ ( rcbox_ptr [Sha3Impl] # i . h ctl ) }
+
 // A sponge with an explicit rate and domain byte. `rate` is the block
 // size in bytes (200 - 2·capacity/8); `dom` is 6 for the SHA-3 digests
 // and 31 for the SHAKE XOFs.
-pub @ sha3_new i rate i dom → *Sha3 {
-    : *Sha3 h # *Sha3 ( nurl_alloc Z Sha3 )
+pub @ sha3_new i rate i dom → Sha3 {
     : ( Vec u64 ) st ( vec_with_cap [u64] 25 )
     : b _l ( vec_set_len [u64] st 25 )
     : *u64 sp ( vec_data [u64] st )
     : ~ i i 0
     ~ < i 25 { = . sp i # u64 0 = i + i 1 }
-    = . h st st
     : ( Vec u64 ) scr ( vec_with_cap [u64] 25 )
     : b _s ( vec_set_len [u64] scr 25 )
-    = . h scr scr
-    = . h rc ( keccak_round_constants )
-    = . h rate rate
-    = . h pos 0
-    = . h dom dom
-    = . h squeezing F
-    ^ h
+    // Built whole and moved into the box: every field is written, so the
+    // block needs no zeroing first (rcbox_zero's memset showed up in a
+    // sponge-per-call profile).
+    ^ @ Sha3 { # s ( rcbox_new [Sha3Impl] @ Sha3Impl { st scr ( keccak_round_constants ) rate 0 dom F } ) }
 }
 
-pub @ sha3_free sink * Sha3 h → v {
-    ( vec_free [u64] . h st )
-    ( vec_free [u64] . h scr )
-    ( vec_free [u64] . h rc )
-    ( nurl_free # s h )
-}
+// Let go of `h` now rather than at the end of its owner's scope.
+pub @ sha3_free sink Sha3 h → v {}
 
 // XOR `n` bytes at `p` into the state at byte offset `pos`, permuting
 // whenever a full rate block has gone in.
@@ -243,7 +254,7 @@ pub @ sha3_free sink * Sha3 h → v {
 // sponge's own work is a load and an xor. `>> pos 3` and `& pos 7` are
 // exactly equal to `/ pos 8` and `% pos 8` for a non-negative `pos`,
 // and are one instruction each.
-@ __sha3_absorb_raw * Sha3 h * u p i n → v {
+@ __sha3_absorb_raw * Sha3Impl h * u p i n → v {
     : *u64 sp ( vec_data [u64] . h st )
     : i rate . h rate
     : ~ i off 0
@@ -298,7 +309,8 @@ pub @ sha3_free sink * Sha3 h → v {
     = . h pos pos
 }
 
-pub @ sha3_absorb * Sha3 h ( Vec u ) data → v {
+pub @ sha3_absorb Sha3 h__h ( Vec u ) data → v {
+    : *Sha3Impl h ( __Sha3_ptr h__h )
     ? . h squeezing { ^ v } {}
     : i n ( vec_len [u] data )
     ? <= n 0 { ^ v } {}
@@ -307,7 +319,7 @@ pub @ sha3_absorb * Sha3 h ( Vec u ) data → v {
 
 // pad10*1 with the domain byte, then permute so the first squeeze reads
 // a fresh block.
-@ __sha3_pad * Sha3 h → v {
+@ __sha3_pad * Sha3Impl h → v {
     ? . h squeezing { ^ v } {}
     : *u64 sp ( vec_data [u64] . h st )
     : i pos . h pos
@@ -324,7 +336,8 @@ pub @ sha3_absorb * Sha3 h ( Vec u ) data → v {
 // same stream, so ( squeeze h 3 ) three times and ( squeeze h 9 ) once
 // return the same nine bytes — the property ML-KEM's rejection sampler
 // depends on.
-pub @ sha3_squeeze * Sha3 h i n → ( Vec u ) {
+pub @ sha3_squeeze Sha3 h__h i n → ( Vec u ) {
+    : *Sha3Impl h ( __Sha3_ptr h__h )
     ? ! . h squeezing { ( __sha3_pad h ) } {}
     : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
     ? <= n 0 { ^ out } {}
@@ -365,7 +378,7 @@ pub @ sha3_squeeze * Sha3 h i n → ( Vec u ) {
 // ── One-shot entries ───────────────────────────────────────────────
 
 @ __sha3_oneshot ( Vec u ) data i rate i dom i outlen → ( Vec u ) {
-    : *Sha3 h ( sha3_new rate dom )
+    : Sha3 h ( sha3_new rate dom )
     ( sha3_absorb h data )
     : ( Vec u ) out ( sha3_squeeze h outlen )
     ( sha3_free h )
@@ -384,6 +397,6 @@ pub @ shake128_pure ( Vec u ) data i outlen → ( Vec u ) { ^ ( __sha3_oneshot d
 
 pub @ shake256_pure ( Vec u ) data i outlen → ( Vec u ) { ^ ( __sha3_oneshot data 136 31 outlen ) }
 
-pub @ shake128_init → *Sha3 { ^ ( sha3_new 168 31 ) }
+pub @ shake128_init → Sha3 { ^ ( sha3_new 168 31 ) }
 
-pub @ shake256_init → *Sha3 { ^ ( sha3_new 136 31 ) }
+pub @ shake256_init → Sha3 { ^ ( sha3_new 136 31 ) }

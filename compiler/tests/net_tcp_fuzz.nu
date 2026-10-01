@@ -61,15 +61,15 @@ $ `stdlib/net/tcp.nu`
         // A fresh connection every few rounds, alternating between an
         // active open and a listening socket so both entry paths get
         // hammered.
-        : *Tcb c ( tcb_new )
-        : *PktBuf out ( pktbuf_new )
+        : Tcb c ( tcb_new )
+        : PktBuf out ( pktbuf_new )
         ? == % round 2 0 {
             ( tcb_connect c ( ip_c ) 12345 ( ip_s ) 80 + 100000 * round 7 0 out )
         } {
             ( tcb_listen c ( ip_c ) 12345 )
-            = . c iss + 500000 * round 13
-            = . c remote_ip ( ip_s )
-            = . c remote_port 80
+            ( tcb_set_iss c + 500000 * round 13 )
+            ( tcb_set_remote_ip c ( ip_s ) )
+            ( tcb_set_remote_port c 80 )
         }
 
         : ~ i step 0
@@ -82,8 +82,8 @@ $ `stdlib/net/tcp.nu`
             // exercise the interesting paths) and from anywhere in the
             // 32-bit space (to probe the rejection paths).
             : i near & >> r 28 1
-            : i sq ? == near 1 ( seq_add . c rcv_nxt - & >> r 4 7 3 ) & r 4294967295
-            : i ak ? == near 1 ( seq_add . c snd_nxt - & >> r 8 7 3 ) & >> r 3 4294967295
+            : i sq ? == near 1 ( seq_add ( tcb_rcv_nxt c ) - & >> r 4 7 3 ) & r 4294967295
+            : i ak ? == near 1 ( seq_add ( tcb_snd_nxt c ) - & >> r 8 7 3 ) & >> r 3 4294967295
             : i fl & >> r 12 63
             : i wn & >> r 16 65535
             : i plen % & >> r 24 15 9
@@ -106,8 +106,8 @@ $ `stdlib/net/tcp.nu`
                 } {}
             } {}
 
-            : b was_reset . c reset
-            : i snd_nxt_before . c snd_nxt
+            : b was_reset ( tcb_was_reset c )
+            : i snd_nxt_before ( tcb_snd_nxt c )
             : TcpSeg sg ( tcpseg_parse sb 0 ( vec_len [u] sb ) ( ip_s ) ( ip_c ) )
             ? . sg valid {
                 = accepted + accepted 1
@@ -120,34 +120,34 @@ $ `stdlib/net/tcp.nu`
                 : i nseg ( pktbuf_count out )
                 : ~ i si 0
                 ~ < si nseg {
-                    : TcpSeg es ( tcpseg_parse . out bytes ( pktbuf_start out si ) ( pktbuf_len out si ) ( ip_c ) ( ip_s ) )
+                    : TcpSeg es ( tcpseg_parse ( pktbuf_bytes out ) ( pktbuf_start out si ) ( pktbuf_len out si ) ( ip_c ) ( ip_s ) )
                     ? . es valid {
                         ? == & . es flags 16 16 {
-                            ? ( seq_gt . es ack . c rcv_nxt ) { = no_bad_ack F } {}
+                            ? ( seq_gt . es ack ( tcb_rcv_nxt c ) ) { = no_bad_ack F } {}
                         } {}
                     } {}
                     = si + si 1
                 }
 
                 // (4) the state must stay in the RFC 793 set.
-                ? || < . c state 0 > . c state 10 { = state_sane F } {}
+                ? || < ( tcb_state c ) 0 > ( tcb_state c ) 10 { = state_sane F } {}
 
                 // (5) reset ⇒ CLOSED, always. Checked as the pairing
                 // rather than as "never re-establishes", because the
                 // latter is vacuous while the pairing holds — and it is
                 // the pairing that a future edit could break.
-                ? && . c reset != . c state ( tcp_closed ) { = no_resurrect F } {}
+                ? && ( tcb_was_reset c ) != ( tcb_state c ) ( tcp_closed ) { = no_resurrect F } {}
                 ? && was_reset ( tcb_is_established c ) { = no_resurrect F } {}
 
                 // (3) in-order-only delivery bounds the receive queue.
-                ? > ( tcb_recv_queue_len c ) . c rcv_wnd { = rcvq_bounded F } {}
+                ? > ( tcb_recv_queue_len c ) ( tcb_rcv_wnd c ) { = rcvq_bounded F } {}
             } {}
             ( vec_free [u] sb )
 
             // Interleave timer work — retransmits and probes have to
             // survive hostile input too.
             : i _t ( tcb_tick c + 2000 * step 100 out )
-            ? || < . c state 0 > . c state 10 { = state_sane F } {}
+            ? || < ( tcb_state c ) 0 > ( tcb_state c ) 10 { = state_sane F } {}
             = step + step 1
         }
         ( tcb_free c )

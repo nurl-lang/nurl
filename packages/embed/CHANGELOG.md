@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Follows the stdlib's one-word `Mutex` / `Cond` handles: the model
+queue's lock and its two conditions live in one block the server
+allocates once and keeps for the process (the model thread and the
+`--unload-after` ticker outlive any one scope), reached through a single
+module global, instead of six globals holding the words of each
+primitive's former `Cell`. Behaviour is unchanged.
+
 ## 0.4.0
 
 The server learns to let go of the weights, and the load path stops

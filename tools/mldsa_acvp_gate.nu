@@ -120,7 +120,7 @@ $ `stdlib/std/mldsa.nu`
         ~ < ti ( json_arr_len ts ) {
             : Json tc ?? ( json_arr_get ts ti ) { T v → { v } F → { ( json_null ) } }
             : ( Vec u ) xi ( __hexv ( __str tc `seed` ) )
-            : *MldsaKeys ks ( mldsa_keygen_derand level xi )
+            : MldsaKeys ks ( mldsa_keygen_derand level xi )
             ? & ( __eqhex ( mldsa_pk ks ) ( __str tc `pk` ) ) ( __eqhex ( mldsa_sk ks ) ( __str tc `sk` ) )
             { = kp + kp 1 } { = kf + kf 1 }
             ( mldsa_keys_free ks )

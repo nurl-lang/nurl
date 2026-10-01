@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+joined 4/4, shared joins 0 -1 -1, no thread -1
+bodies run: 189
+live allocations: steady

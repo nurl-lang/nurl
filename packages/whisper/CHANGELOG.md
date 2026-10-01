@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Follows the stdlib's one-word `Mutex` handle: the lock over the model
+lease (the loaded model, the in-flight count, the idle clock) lives in
+one block the server allocates once and keeps for the process (the
+`--unload-after` reaper outlives any one scope), reached through a
+single module global, instead of two globals holding the words of the
+mutex's former `Cell`. Behaviour is unchanged.
+
 ## 1.2.0
 
 The server learns to let go of the model, and loading it stops paying for

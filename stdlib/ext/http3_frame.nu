@@ -2,8 +2,7 @@
 // `type(varint) length(varint) payload`, stream types are one varint,
 // SETTINGS are `id(varint) value(varint)` pairs. Pure codec.
 //
-//   ( h3_frame_peek buf off )            → *H3FrameHead   0 when the header is not complete yet
-//   ( h3_frame_head_free h )             → v
+//   ( h3_frame_peek buf off )            → H3FrameHead    ftype -1 when the header is not complete yet
 //   ( h3_push_frame out ftype payload )  → v
 //   ( h3_push_settings out max_field_section_size ) → v   the SETTINGS this endpoint sends
 //   ( h3_settings_parse payload )        → i        0 ok · else H3_SETTINGS_ERROR (reserved H2 ids, dup)
@@ -15,6 +14,10 @@
 // types: 0x0 control · 0x1 push · 0x2 QPACK encoder · 0x3 QPACK decoder.
 // Settings: 0x1 QPACK_MAX_TABLE_CAPACITY · 0x6 MAX_FIELD_SECTION_SIZE ·
 // 0x7 QPACK_BLOCKED_STREAMS; 0x2–0x5 are HTTP/2's and forbidden.
+//
+// An H3FrameHead is a plain value (type, payload length, header length,
+// read as fields), so peeking at a frame allocates nothing and there is
+// nothing to release.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -94,24 +97,15 @@ $ `stdlib/std/quic_varint.nu`
     i head_len
 }
 
-@ h3_frame_head_free sink * H3FrameHead h → v {
-    ? == # i h 0 { ^ } {}
-    ( nurl_free # s h )
-}
-
-// The frame header at `off`, if all of it has arrived.
-@ h3_frame_peek ( Vec u ) buf i off → *H3FrameHead {
+// The frame header at `off`, if all of it has arrived (ftype -1 if not).
+@ h3_frame_peek ( Vec u ) buf i off → H3FrameHead {
     : i t ( quic_varint_read buf off )
-    ? < t 0 { ^ # *H3FrameHead 0 } {}
+    ? < t 0 { ^ @ H3FrameHead { -1 0 0 } } {}
     : i tl ( quic_varint_len_at buf off )
     : i l ( quic_varint_read buf + off tl )
-    ? < l 0 { ^ # *H3FrameHead 0 } {}
+    ? < l 0 { ^ @ H3FrameHead { -1 0 0 } } {}
     : i ll ( quic_varint_len_at buf + off tl )
-    : *H3FrameHead h # *H3FrameHead ( nurl_alloc Z H3FrameHead )
-    = . h ftype t
-    = . h length l
-    = . h head_len + tl ll
-    ^ h
+    ^ @ H3FrameHead { t l + tl ll }
 }
 
 @ h3_push_frame ( Vec u ) out i ftype ( Vec u ) payload → v {

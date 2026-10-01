@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+The ML-DSA key pair drawn for a new CA or a device certificate is an `MldsaKeys` value, not a `*MldsaKeys`: `stdlib/std/mldsa.nu` made it a self-releasing handle that its last owner drops. The two `mldsa_keys_free` calls at the end of those blocks are gone — the block's end releases the keys at the same point. No change in behaviour.
+
 ## 0.3.2
 
 `pki_ca_free`, `pki_cert_free`, `pki_cert_info_free`, `pki_revoked_free` now take a **`sink`** parameter.

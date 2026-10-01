@@ -4032,6 +4032,38 @@ long long nurl_atomic_i64_dec_fetch(void *p) {
 #endif
 }
 
+/* Owner counts of library handles (stdlib/core/rcbox.nu, Cell): a count
+ * of 1 read by an owner means it is the ONLY owner — nobody else holds a
+ * reference that could share or release concurrently — so it may skip the
+ * locked read-modify-write. _share returns p's count before the share;
+ * _release returns 1 when the caller was the last owner and must free.
+ * A count read as 1 was written by this thread or published to it with
+ * the reference itself (acquire), so freeing then is ordered after every
+ * other owner's last access, as with the atomic decrement. */
+long long nurl_rc_share(void *p) {
+    if (!p) return 0;
+    long long *c = (long long *)p;
+#ifdef _WIN32
+    if (*(volatile long long *)c == 1) { *(volatile long long *)c = 2; return 1; }
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)c, 1);
+#else
+    if (__atomic_load_n(c, __ATOMIC_RELAXED) == 1) { __atomic_store_n(c, 2, __ATOMIC_RELAXED); return 1; }
+    return __atomic_fetch_add(c, 1, __ATOMIC_SEQ_CST);
+#endif
+}
+
+long long nurl_rc_release(void *p) {
+    if (!p) return 0;
+    long long *c = (long long *)p;
+#ifdef _WIN32
+    if (*(volatile long long *)c == 1) { MemoryBarrier(); return 1; }
+    return (long long)InterlockedExchangeAdd64((volatile LONG64*)c, -1) == 1;
+#else
+    if (__atomic_load_n(c, __ATOMIC_ACQUIRE) == 1) return 1;
+    return __atomic_sub_fetch(c, 1, __ATOMIC_SEQ_CST) <= 0;
+#endif
+}
+
 /* Publish-once slots for stdlib singletons (a TLS ticket master, a
  * session cache): the first caller to publish a non-zero value into
  * slot `id` wins and every caller gets the winner's value back, so a

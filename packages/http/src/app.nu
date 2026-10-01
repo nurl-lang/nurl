@@ -397,9 +397,9 @@ $ `stdlib/ext/http3_server.nu`
     } {}
     // ── HTTP/3 beside a TLS listener ──
     : ~ b h3_on F
-    : ~ * H3Server h3 # *H3Server 0
-    : ~ * QuicCreds h3_creds # *QuicCreds 0
-    : ~ * QuicTp h3_tp # *QuicTp 0
+    : ~ H3Server h3 @ H3Server { # s 0 }
+    : ~ QuicCreds h3_creds @ QuicCreds { # s 0 }
+    : ~ QuicTp h3_tp @ QuicTp { # s 0 }
     : ~ UdpSocket h3_sock @ UdpSocket { # s 0 }
     : ~ ( @ v ) h3_thread_body \ → v {}
     : ~ b h3_thread_ok F
@@ -411,13 +411,12 @@ $ `stdlib/ext/http3_server.nu`
         // already loaded the same files, so a failure here is a
         // filesystem race, and it is reported the same way as the
         // primary pair rather than served half-configured.
-        ? & != # i h3_creds 0 > ( string_len . a pq_cert ) 0 {
+        ? & != 0 # i . h3_creds ctl > ( string_len . a pq_cert ) 0 {
             ? ( http3_creds_add_pq h3_creds ( string_data . a pq_cert ) ( string_data . a pq_key ) ) {} {
-                ( quic_creds_free h3_creds )
-                = h3_creds # *QuicCreds 0
+                = h3_creds @ QuicCreds { # s 0 }
             }
         } {}
-        ? == # i h3_creds 0 { ( nurl_eprintln `http: HTTP/3 off — certificate or key could not be loaded for QUIC` ) } {
+        ? == 0 # i . h3_creds ctl { ( nurl_eprintln `http: HTTP/3 off — certificate or key could not be loaded for QUIC` ) } {
             ?? ( udp_bind host port ) {
                 F e → {
                     ( nurl_eprint `http: HTTP/3 off — cannot bind UDP ` )
@@ -431,12 +430,12 @@ $ `stdlib/ext/http3_server.nu`
                 T us → {
                     = h3_sock us
                     = h3_tp ( http3_default_tp )
-                    = . h3_tp max_idle_timeout . a idle_ms
+                    ( quic_tp_set_max_idle_timeout h3_tp . a idle_ms )
                     : ( Vec u ) alpn ( tls_alpn_pack `h3` )
                     : HttpLimits lim ( __httpapp_limits a )
                     = h3 ( http3_server_new h3_sock h3_creds alpn h3_tp base . lim body_default_max )
                     ( vec_free [u] alpn )
-                    : *H3Server h3p h3
+                    : H3Server h3p ( H3Server_share h3 )
                     = h3_thread_body \ → v { ( http3_server_run h3p ) }
                     ?? ( thread_spawn h3_thread_body ) {
                         T t → { = h3_thread t = h3_thread_ok T = h3_on T }
@@ -473,9 +472,8 @@ $ `stdlib/ext/http3_server.nu`
         ( http3_server_stop h3 )
         ? h3_thread_ok { : i _j ( thread_join h3_thread ) } {}
     } {}
-    ? != # i h3 0 { ( http3_server_free h3 ) } {}
-    ? != # i h3_tp 0 { ( quic_tp_free h3_tp ) } {}
-    ? != # i h3_creds 0 { ( quic_creds_free h3_creds ) } {}
+    // the listener's state goes before its socket does
+    ( http3_server_free h3 )
     ? != # i . h3_sock raw 0 { ( udp_close h3_sock ) } {}
     ? has_log {} {}
     // The handler the user middleware RETURNED is the facade's to free —

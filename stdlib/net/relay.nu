@@ -35,12 +35,17 @@
 // server_run_async idiom in ext/http_server.nu. Path-upgrade (start relayed,
 // punch in the background, promote to direct, demote when direct goes quiet)
 // is wired at the transport seam in Phase 4 — this module is the relay leg.
+//
+// A RelayServer is a handle: every copy is the same server, and its last
+// owner releases its client and group tables (relay_server_free is an early
+// release, optional). The listener is closed by relay_server_stop.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/async.nu`
+$ `stdlib/core/rcbox.nu`
 
 // runtime client dial (the listen/accept/read/write/close ops are nurlc
 // builtins reached via std/net.nu; only the dial needs an extern decl).
@@ -268,24 +273,71 @@ $ `stdlib/std/async.nu`
     ( Vec s ) members  // *RelayEntry, NON-owning (entries owned via clients)
 }
 
-: RelayServer {
+: RelayServerImpl {
     TcpListener lst
     ( Vec s ) clients  // *RelayEntry
     ( Vec s ) groups  // *GroupEntry
     i verbose  // 1 = log peer connect/disconnect to stdout
 }
 
+// A RelayServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same server, and the last owner releases it.
+: RelayServer { s ctl }
+
+@ RelayServer_share RelayServer h → RelayServer { ^ @ RelayServer { # s ( rcbox_share # i . h ctl ) } }
+
+@ RelayServer_drop sink RelayServer h → v {
+    ( mem_forget h )
+    ( rcbox_release [RelayServerImpl] # i . h ctl )
+}
+
+@ __RelayServer_ptr RelayServer h → *RelayServerImpl { ^ ( rcbox_ptr [RelayServerImpl] # i . h ctl ) }
+
+// Client entries and groups are raw blocks the Vecs only point at (a group's
+// member list points at client entries and owns none of them): releasing
+// them is the server's own drop, run by its last owner (the Vecs go after).
+% Drop RelayServerImpl {
+    @ drop RelayServerImpl rs → v {
+        : i n ( vec_len [s] . rs clients )
+        : ~ i k 0
+        ~ < k n {
+            : s pp ?? ( vec_get [s] . rs clients k ) { T x → x F → # s 0 }
+            ? != # i pp 0 {
+                : *RelayEntry e # *RelayEntry pp
+                ( vec_free [u] . e pubkey )
+                ( nurl_free # s e )
+            } {}
+            = k + k 1
+        }
+        : i gn ( vec_len [s] . rs groups )
+        : ~ i gi 0
+        ~ < gi gn {
+            : s gp ?? ( vec_get [s] . rs groups gi ) { T x → x F → # s 0 }
+            ? != # i gp 0 {
+                : *GroupEntry g # *GroupEntry gp
+                ( vec_free [u] . g gid )
+                ( vec_free [s] . g members )
+                ( nurl_free # s g )
+            } {}
+            = gi + gi 1
+        }
+    }
+}
+
 @ relay_server_start s host i port → !RelayServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RelayServer NetErr out ?? lr {
-        T l → @ !RelayServer NetErr { T @ RelayServer { l ( vec_new [s] ) ( vec_new [s] ) 0 } }
+        T l → @ !RelayServer NetErr { T @ RelayServer { # s ( rcbox_new [RelayServerImpl] @ RelayServerImpl { l ( vec_new [s] ) ( vec_new [s] ) 0 } ) } }
         F e → @ !RelayServer NetErr { F e }
     }
     ^ out
 }
 
 // Enable/disable connect/disconnect logging (off by default).
-@ relay_server_set_verbose * RelayServer rs i v → v { = . rs verbose v }
+@ relay_server_set_verbose RelayServer rs__h i v → v {
+    : *RelayServerImpl rs ( __RelayServer_ptr rs__h )
+    = . rs verbose v
+}
 
 // Log a short, readable peer id (first 4 pubkey bytes as hex) with a sign.
 @ __relay_log s sign ( Vec u ) pk → v {
@@ -298,7 +350,7 @@ $ `stdlib/std/async.nu`
     ( vec_free [u] head )
 }
 
-@ __relay_register_conn * RelayServer rs TcpConn c ( Vec u ) pk → s {
+@ __relay_register_conn * RelayServerImpl rs TcpConn c ( Vec u ) pk → s {
     : *RelayEntry e # *RelayEntry ( nurl_alloc Z RelayEntry )
     = . e pubkey ( __rcpy pk )
     = . e conn c
@@ -308,7 +360,7 @@ $ `stdlib/std/async.nu`
     ^ # s e
 }
 
-@ __relay_find * RelayServer rs ( Vec u ) pk → s {
+@ __relay_find * RelayServerImpl rs ( Vec u ) pk → s {
     : i n ( vec_len [s] . rs clients )
     : ~ s found # s 0
     : ~ i k 0
@@ -336,7 +388,7 @@ $ `stdlib/std/async.nu`
 
 // ── group multicast tables ───────────────────────────────────────
 
-@ __relay_group_find * RelayServer rs ( Vec u ) gid → s {
+@ __relay_group_find * RelayServerImpl rs ( Vec u ) gid → s {
     : i n ( vec_len [s] . rs groups )
     : ~ s found # s 0
     : ~ i k 0
@@ -351,7 +403,7 @@ $ `stdlib/std/async.nu`
     ^ found
 }
 
-@ __relay_group_ensure * RelayServer rs ( Vec u ) gid → s {
+@ __relay_group_ensure * RelayServerImpl rs ( Vec u ) gid → s {
     : s ex ( __relay_group_find rs gid )
     ? != # i ex 0 { ^ ex } {}
     : *GroupEntry g # *GroupEntry ( nurl_alloc Z GroupEntry )
@@ -375,7 +427,7 @@ $ `stdlib/std/async.nu`
     = . g members keep
 }
 
-@ __relay_group_join * RelayServer rs s entry_ptr ( Vec u ) gid → v {
+@ __relay_group_join * RelayServerImpl rs s entry_ptr ( Vec u ) gid → v {
     ? == # i entry_ptr 0 { ^ v } {}
     : s gp ( __relay_group_ensure rs gid )
     : *GroupEntry g # *GroupEntry gp
@@ -389,14 +441,14 @@ $ `stdlib/std/async.nu`
     ? ! have { ( vec_push [s] . g members entry_ptr ) } {}
 }
 
-@ __relay_group_leave * RelayServer rs s entry_ptr ( Vec u ) gid → v {
+@ __relay_group_leave * RelayServerImpl rs s entry_ptr ( Vec u ) gid → v {
     : s gp ( __relay_group_find rs gid )
     ? == # i gp 0 { ^ v } {}
     : *GroupEntry g # *GroupEntry gp
     ( __grp_remove_member g entry_ptr )
 }
 
-@ __relay_drop_from_groups * RelayServer rs s entry_ptr → v {
+@ __relay_drop_from_groups * RelayServerImpl rs s entry_ptr → v {
     : i gn ( vec_len [s] . rs groups )
     : ~ i gi 0
     ~ < gi gn {
@@ -408,7 +460,7 @@ $ `stdlib/std/async.nu`
 
 // Fan an opaque payload to every live member of a group except the sender,
 // as a DELIVER carrying the sender's pubkey as src. One uplink → N down.
-@ __relay_group_fanout * RelayServer rs s sender_ptr ( Vec u ) gid ( Vec u ) payload → v {
+@ __relay_group_fanout * RelayServerImpl rs s sender_ptr ( Vec u ) gid ( Vec u ) payload → v {
     ? == # i sender_ptr 0 { ^ v } {}
     : s gp ( __relay_group_find rs gid )
     ? == # i gp 0 { ^ v } {}
@@ -430,7 +482,7 @@ $ `stdlib/std/async.nu`
     }
 }
 
-@ __relay_handle_conn * RelayServer rs TcpConn c → v {
+@ __relay_handle_conn * RelayServerImpl rs TcpConn c → v {
     : ~ s self_entry # s 0
     : ~ b done F
     ~ ! done {
@@ -483,7 +535,7 @@ $ `stdlib/std/async.nu`
     ( tcp_close_conn c )
 }
 
-@ __relay_accept_loop * RelayServer rs → v {
+@ __relay_accept_loop * RelayServerImpl rs → v {
     : TcpListener lst . rs lst
     : ~ b done F
     ~ ! done {
@@ -498,7 +550,8 @@ $ `stdlib/std/async.nu`
 // Run the relay: one accept fiber, a handler fiber per connection. Blocks
 // in runtime_run until the listener is closed (relay_server_stop) and every
 // in-flight conn fiber drains.
-@ relay_server_run * RelayServer rs → v {
+@ relay_server_run RelayServer rs__h → v {
+    : *RelayServerImpl rs ( __RelayServer_ptr rs__h )
     ( tcp_listener_retain . rs lst )
     : ( @ v ) accept_fiber \ → v { ( __relay_accept_loop rs ) }
     ( spawn accept_fiber )
@@ -506,36 +559,13 @@ $ `stdlib/std/async.nu`
     ( tcp_listener_release . rs lst )
 }
 
-@ relay_server_stop * RelayServer rs → v { ( tcp_close_listener . rs lst ) }
-
-@ relay_server_free sink * RelayServer rs → v {
-    : i n ( vec_len [s] . rs clients )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . rs clients k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *RelayEntry e # *RelayEntry pp
-            ( vec_free [u] . e pubkey )
-            ( nurl_free # s e )
-        } {}
-        = k + k 1
-    }
-    ( vec_free [s] . rs clients )
-    : i gn ( vec_len [s] . rs groups )
-    : ~ i gi 0
-    ~ < gi gn {
-        : s gp ?? ( vec_get [s] . rs groups gi ) { T x → x F → # s 0 }
-        ? != # i gp 0 {
-            : *GroupEntry g # *GroupEntry gp
-            ( vec_free [u] . g gid )
-            ( vec_free [s] . g members )
-            ( nurl_free # s g )
-        } {}
-        = gi + gi 1
-    }
-    ( vec_free [s] . rs groups )
-    ( nurl_free # s rs )
+@ relay_server_stop RelayServer rs__h → v {
+    : *RelayServerImpl rs ( __RelayServer_ptr rs__h )
+    ( tcp_close_listener . rs lst )
 }
+
+// Let go of `rs` now rather than at the end of its owner's scope.
+@ relay_server_free sink RelayServer rs → v {}
 
 // ════════════════════════════════════════════════════════════════
 // Relay CLIENT — dial, register, send/recv opaque datagrams.

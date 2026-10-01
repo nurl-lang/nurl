@@ -31,7 +31,6 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
-$ `stdlib/core/cell.nu`
 $ `deps/http/src/http.nu`
 $ `deps/audio/src/wav.nu`
 $ `deps/audio/src/mp3.nu`
@@ -75,6 +74,13 @@ $ `ui.nu`
 : ~ i g_f5_load_ms 0
 
 // ── the queue ───────────────────────────────────────────────────────
+//
+// One job per waiting request, linked through the jobs themselves — a
+// module global holds one word, so the queue is two pointers, and its
+// lock and two conditions sit in an F5Sync block the server allocates
+// once and keeps for the process (the model thread and the ticker
+// outlive any one scope, as the handlers do). The submitting fiber owns
+// the job; the model thread only fills it in.
 
 : F5Job {
     i next
@@ -104,23 +110,15 @@ $ `ui.nu`
 
 : ~ b g_q_stop F
 
-: ~ i g_q_m_ptr 0
+: F5Sync {
+    Mutex m  // guards the queue, g_q_stop and the idle clock
+    Cond req  // a job was queued, the server is stopping, or a ticker wake
+    Cond done  // a job was finished
+}
 
-: ~ i g_q_m_bytes 0
+: ~ i g_q_sync 0  // *F5Sync as an address (0 = never served)
 
-: ~ i g_q_req_ptr 0
-
-: ~ i g_q_req_bytes 0
-
-: ~ i g_q_done_ptr 0
-
-: ~ i g_q_done_bytes 0
-
-@ __f5s_qm → Mutex { ^ @ Mutex { @ Cell { # s g_q_m_ptr g_q_m_bytes } } }
-
-@ __f5s_qreq → Cond { ^ @ Cond { @ Cell { # s g_q_req_ptr g_q_req_bytes } } }
-
-@ __f5s_qdone → Cond { ^ @ Cond { @ Cell { # s g_q_done_ptr g_q_done_bytes } } }
+@ __f5s_sync → *F5Sync { ^ # *F5Sync g_q_sync }
 
 // ── the voice cache ─────────────────────────────────────────────────
 //
@@ -297,8 +295,9 @@ $ `ui.nu`
 // ── the model thread ────────────────────────────────────────────────
 
 @ __f5s_submit * F5Job j → b {
-    ? != g_q_m_ptr 0 {} { ^ F }
-    ( mutex_lock ( __f5s_qm ) )
+    ? != g_q_sync 0 {} { ^ F }
+    : *F5Sync q ( __f5s_sync )
+    ( mutex_lock . q m )
     ? == g_q_tail 0 {
         = g_q_head # i j
         = g_q_tail # i j
@@ -307,9 +306,9 @@ $ `ui.nu`
         = . t next # i j
         = g_q_tail # i j
     }
-    ( cond_signal ( __f5s_qreq ) )
-    ~ ! . j done { ( cond_wait ( __f5s_qdone ) ( __f5s_qm ) ) }
-    ( mutex_unlock ( __f5s_qm ) )
+    ( cond_signal . q req )
+    ~ ! . j done { ( cond_wait . q done . q m ) }
+    ( mutex_unlock . q m )
     ^ . j ok
 }
 
@@ -367,11 +366,12 @@ $ `ui.nu`
         ( nurl_eprintln `f5tts: the model thread cannot bind the device context` )
         ^
     }
+    : *F5Sync q ( __f5s_sync )
     : ~ b run T
     ~ run {
-        ( mutex_lock ( __f5s_qm ) )
+        ( mutex_lock . q m )
         ~ & == g_q_head 0 ! g_q_stop {
-            ( cond_wait ( __f5s_qreq ) ( __f5s_qm ) )
+            ( cond_wait . q req . q m )
             // a ticker wake with nothing queued: is it time to let go?
             ? & & == g_q_head 0 > g_f5_unload_ms 0 ( f5_loaded # *F5Model g_f5_model ) {
                 ? >= ( elapsed_ms_since g_f5_idle_since ) g_f5_unload_ms {
@@ -387,29 +387,30 @@ $ `ui.nu`
             } {}
         }
         ? == g_q_head 0 {
-            ( mutex_unlock ( __f5s_qm ) )
+            ( mutex_unlock . q m )
             = run F
         } {
             : *F5Job j # *F5Job g_q_head
             = g_q_head . j next
             ? == g_q_head 0 { = g_q_tail 0 } {}
-            ( mutex_unlock ( __f5s_qm ) )
+            ( mutex_unlock . q m )
             ( __f5s_run_job j )
-            ( mutex_lock ( __f5s_qm ) )
+            ( mutex_lock . q m )
             = g_f5_idle_since ( monotonic_ns )
             = . j done T
-            ( cond_broadcast ( __f5s_qdone ) )
-            ( mutex_unlock ( __f5s_qm ) )
+            ( cond_broadcast . q done )
+            ( mutex_unlock . q m )
         }
     }
 }
 
 @ __f5s_ticker → v {
+    : *F5Sync q ( __f5s_sync )
     ~ T {
         ( sleep_ms 200 )
-        ( mutex_lock ( __f5s_qm ) )
-        ( cond_broadcast ( __f5s_qreq ) )
-        ( mutex_unlock ( __f5s_qm ) )
+        ( mutex_lock . q m )
+        ( cond_broadcast . q req )
+        ( mutex_unlock . q m )
     }
 }
 
@@ -814,18 +815,14 @@ s host i port s token i device i unload_s → i {
     = g_vc_ptrs # i ( vec_new [i] )
     = g_vc_rms # i ( vec_new [f] )
 
-    : Mutex qm ( mutex_new )
-    : Cond qreq ( cond_new )
-    : Cond qdone ( cond_new )
-    : Cell qmc . qm c
-    = g_q_m_ptr # i . qmc ptr
-    = g_q_m_bytes . qmc bytes
-    : Cell qrc . qreq c
-    = g_q_req_ptr # i . qrc ptr
-    = g_q_req_bytes . qrc bytes
-    : Cell qdc . qdone c
-    = g_q_done_ptr # i . qdc ptr
-    = g_q_done_bytes . qdc bytes
+    ? == g_q_sync 0 {
+        : *F5Sync qs # *F5Sync ( nurl_alloc Z F5Sync )
+        = . qs m ( mutex_new )
+        = . qs req ( cond_new )
+        = . qs done ( cond_new )
+        = g_q_sync # i qs
+    } {}
+    : *F5Sync q ( __f5s_sync )
     : ( @ v ) modelfn \ → v { ( __f5s_model_loop ) }
     ?? ( thread_spawn modelfn ) {
         T th → { ( thread_detach th ) }
@@ -876,10 +873,10 @@ s host i port s token i device i unload_s → i {
     ( string_free msg )
 
     : i rc ( http_app_listen a host port )
-    ( mutex_lock qm )
+    ( mutex_lock . q m )
     = g_q_stop T
-    ( cond_broadcast qreq )
-    ( mutex_unlock qm )
+    ( cond_broadcast . q req )
+    ( mutex_unlock . q m )
     ^ rc
 }
 

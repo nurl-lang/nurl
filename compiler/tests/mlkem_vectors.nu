@@ -57,7 +57,7 @@ $ `stdlib/core/string.nu`
 @ kg_case s label i level s d s z s ekd s dkd → b {
     : ( Vec u ) dv ( hexv d )
     : ( Vec u ) zv ( hexv z )
-    : *MlkemKeys ks ( mlkem_keygen_derand level dv zv )
+    : MlkemKeys ks ( mlkem_keygen_derand level dv zv )
     : b ok1 ( eq_digest ( mlkem_ek ks ) ekd )
     : b ok2 ( eq_digest ( mlkem_dk ks ) dkd )
     // The declared sizes are part of the standard, so check them too.
@@ -81,8 +81,8 @@ $ `stdlib/core/string.nu`
         ( vec_push [u] m # u % + * i 13 5 251 )
         = i + i 1
     }
-    : *MlkemKeys ks ( mlkem_keygen_derand level d z )
-    : *MlkemEncap en ( mlkem_encaps_derand level ( mlkem_ek ks ) m )
+    : MlkemKeys ks ( mlkem_keygen_derand level d z )
+    : MlkemEncap en ( mlkem_encaps_derand level ( mlkem_ek ks ) m )
     : b oklen == ( vec_len [u] ( mlkem_ct en ) ) ( mlkem_ct_len level )
     : ( Vec u ) ss ( mlkem_decaps level ( mlkem_dk ks ) ( mlkem_ct en ) )
     : b okrt ( bytes_eq ss ( mlkem_ss en ) )
@@ -94,7 +94,7 @@ $ `stdlib/core/string.nu`
     : *u bp ( vec_data [u] bad )
     = . bp 0 # u ^^ # i . bp 0 1
     : ( Vec u ) got ( mlkem_decaps level ( mlkem_dk ks ) bad )
-    : *Sha3 j ( shake256_init )
+    : Sha3 j ( shake256_init )
     ( sha3_absorb j z )
     ( sha3_absorb j bad )
     : ( Vec u ) want ( sha3_squeeze j 32 )
@@ -129,7 +129,7 @@ $ `stdlib/core/string.nu`
     // ACVP encapsulation, ML-KEM-768: ek and m verbatim.
     : ( Vec u ) ek768 ( hexv `9c6839354086919bc7b8a547ff18b523075fd1706856400952489e4cd13ed8b17a817a3076e0947b860ec9558bd9d3c94df5418a7a7301763999c09996715ce32aacfef767a44969925949cc9b8120cb78953bcf6fb8282427cb3f4cbbc50ab23274493a8ba7e5c09088160fda731b55980867912bac53125b27073bb502afac5e74973e0f3601dc50ce08cc7f3fa44ce331a43f9673be745295e693077264a8e238f0a912c0a59c44d561e2a8bd831541fe869b3110b051100db3517f87510ecad8651ce4998bb648002ba41a5351fa2a4ed94a58cb707214a59f8876176cf82fceb99364971c7c0896e8b62c0544463ff101983c2045981ccd9173eb33ba18483ed915bd11ea950db3a8787c105263242e3a64c748b8b1a5947880c5bf3896e08b4b9916a39fd70c2ff8bd041a2b18e251d16a276e38100a613ea96a86cb3652dcc83f2d31cd9f8b79e42541a66752d191436cf5b5d8350ee7835cdb122855392c1da5c33fda12ad1028f2806861a2ab9c63785fd11e220346322c250936ab819254734a8dc9241971ac90cda6696adb90d1e327dc977841aba38324c8fb2092784942003a0808e5546d034592f03bacc19e3138c9070ccea80a933d536c49e4771091af8a70207d474574c64b9f1c8e47224174061117e98c18897a7b1b3c4478c6558c321a89a84b6c508947cb61c89204fbca43bcaa1d688f768b02e50babebf0c5fb8962b2355973c4193fa92e0ce4b9f8473e154828c986bf63e1cd985c6f0462c9b4374594d226c5e99b8a844978db8dd2839e27138aacf75e917635cec4b407a54f184c22f62981b9f4552fb334ff2b7ff68b470fd61b993c32581cc0f39881a5a6a769a60297f4b0579acbf52a8abb143885886245ca2636e20498959e4f2857ab96706e6409c4164ba88c7193e568e4446120215a6d8499c6b4bc559628a9f481c7db51e2e10df1f4339a647b4ccc0405b79f70a90ca9a8ad07789222ba6e66c3aff42b61baa637af15126c88b2e210a7cad9cb08cbb5123a7f9bb4ad63daaea6b43f9aaba561212823cb898a676c967b2d64f4b6333439f8993bd7b19687248926e077a9700431a59157b9668ee022b6d31343f15c08f14488877dfb30a552c06f96a16f354b9a3f19090b32a043b43256ba5b1088b56a4125588c8746d4099ea21c4f33ad8c5c7c32286dee2ca76fc2651d57aee9d847824ac609b5bfd5c87316c2afe0e153d6326af89987ecb70cf0a0a77fa000e0e0acc2685e2317429c3a7513f42873cb98f669703ae9146919226db58d6c2b93b6f50c7cdab677b505945a0f2523886c1b82a6a7cc7eba9251096d88360d7ef6473acbcd359a0d20414b95c209b2413b1483a3a061386377b28e3896bcd8c5e2692681cc803e1694efb6ce353082ffca4079ea9bb7b2025bcb68990466ed2803ab11516d80325dc4cde3da9e020653e084c45f837c88711df3aa6075741c1283121c8b1c691013969a62b2563e556206cf0810848691c7c408d018617a7300ad943e189a9b44512ef13b669831392f1329e2ac7c623aa044223079139b7f1c213e93682ed86165468377d40884310163a5539f27745e667adf506896ba933b002e4d50b2497ecff09d0bbca4f7e6f9db9e10c643d23701bd6385e163cf71c1e919a6e20a` )
     : ( Vec u ) m768 ( hexv `4e77596168711e913965d8175ac3bd76aab08b7f9385a02ae883cf6c6e17dd81` )
-    : *MlkemEncap en768 ( mlkem_encaps_derand 768 ek768 m768 )
+    : MlkemEncap en768 ( mlkem_encaps_derand 768 ek768 m768 )
     = all & all ( report `encaps-768      ` & ( eq_digest ( mlkem_ct en768 ) `684da17d93e27520cb78ae6169c020d73ef770e6fa89589cc7d653a76a8b1751` ) ( eq_hex ( mlkem_ss en768 ) `79d74f6c6c2d916bec47bd828fd9b67295a37f54927fab1263c0d122f1c6f1ed` ) )
     ( mlkem_encap_free en768 )
     ( vec_free [u] m768 )

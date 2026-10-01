@@ -40,7 +40,7 @@ $ `pttvoice/proto.nu`
 
 // Drain + play every inbound voice frame currently available. Returns how many
 // frames were played.
-@ pump_playback * Transport tr s dec s play → i {
+@ pump_playback Transport tr s dec s play → i {
     : ~ i played 0
     : ~ b more T
     ~ more {
@@ -80,7 +80,7 @@ $ `pttvoice/proto.nu`
             : ( Vec u ) self_pk ( pk_for + 1 sid )
             ?? ( relay_register rc self_pk ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 200 )
-            : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
+            : Transport tr ( transport_open # s 0 rc 1 )
             : ( Vec u ) g ( group_id )
             ?? ( transport_group_join tr g ) { T _ → {} F _ → {} }
             : ( Vec u ) target ( pk_for + 1 tid )

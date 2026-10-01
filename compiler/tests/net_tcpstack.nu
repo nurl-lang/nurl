@@ -63,7 +63,7 @@ $ `stdlib/net/tcpstack.nu`
 // it answers into `back`. One frame at a time, which is what a device
 // does — the buffer carries its own boundaries (net/pktbuf.nu), so
 // nothing here has to re-parse a header to find out where a frame ends.
-@ deliver_all * TcpStack dst * PktBuf wire i now * PktBuf back → i {
+@ deliver_all TcpStack dst PktBuf wire i now PktBuf back → i {
     : i n ( pktbuf_count wire )
     : ~ i k 0
     ~ < k n {
@@ -83,13 +83,13 @@ $ `stdlib/net/tcpstack.nu`
 // other buffer the exchange produces. Vec is outside auto-drop
 // (docs/MEMORY.md §7.4), so saying who frees what is the whole
 // contract, and a caller that also freed it would double-free.
-@ settle * TcpStack a * TcpStack b * PktBuf from_a i now i rounds → i {
+@ settle TcpStack a TcpStack b PktBuf from_a i now i rounds → i {
     : ~ i crossed 0
-    : ~ * PktBuf wire from_a
+    : ~ PktBuf wire from_a
     : ~ i side 0
     : ~ i k 0
     ~ && < k rounds > ( pktbuf_count wire ) 0 {
-        : *PktBuf back ( pktbuf_new )
+        : PktBuf back ( pktbuf_new )
         : i n ? == side 0 ( deliver_all b wire now back ) ( deliver_all a wire now back )
         = crossed + crossed n
         ( pktbuf_free wire )
@@ -102,10 +102,10 @@ $ `stdlib/net/tcpstack.nu`
 }
 
 @ main → i {
-    : *NetStack na ( stack_new ( mac_a ) ( ip_a ) ( mask24 ) ( ip_gw ) )
-    : *NetStack nb ( stack_new ( mac_b ) ( ip_b ) ( mask24 ) ( ip_gw ) )
-    : *TcpStack a ( tstack_new na 1000 )
-    : *TcpStack b ( tstack_new nb 500000 )
+    : NetStack na ( stack_new ( mac_a ) ( ip_a ) ( mask24 ) ( ip_gw ) )
+    : NetStack nb ( stack_new ( mac_b ) ( ip_b ) ( mask24 ) ( ip_gw ) )
+    : TcpStack a ( tstack_new na 1000 )
+    : TcpStack b ( tstack_new nb 500000 )
 
     // ── B listens ────────────────────────────────────────────────
     : i lst ( tstack_listen b ( ip_b ) 80 4 )
@@ -116,7 +116,7 @@ $ `stdlib/net/tcpstack.nu`
     // A has never spoken to B, so ARP has not resolved. What goes on
     // the wire is an ARP request, NOT the SYN — and the connection is
     // nonetheless open, waiting on its own retransmit timer.
-    : *PktBuf w1 ( pktbuf_new )
+    : PktBuf w1 ( pktbuf_new )
     : i ca ( tstack_connect a ( ip_b ) 80 0 1000 w1 )
     ( pb `connection allocated: ` >= ca 0 )
     ( pb `A is in SYN_SENT: ` == ( tstack_conn_state a ca ) ( tcp_syn_sent ) )
@@ -125,11 +125,11 @@ $ `stdlib/net/tcpstack.nu`
 
     // ARP resolves.
     ( settle a b w1 1000 4 )
-    ( pb `A resolved B's MAC: ` ?? ( arp_cache_lookup . na arp ( ip_b ) 1000 ) { T m → == m ( mac_b ) F → F } )
+    ( pb `A resolved B's MAC: ` ?? ( arp_cache_lookup ( stack_arp na ) ( ip_b ) 1000 ) { T m → == m ( mac_b ) F → F } )
 
     // The retransmit timer sends the SYN that ARP held up. This is the
     // whole argument for not queueing it: TCP already owns this timer.
-    : *PktBuf w2 ( pktbuf_new )
+    : PktBuf w2 ( pktbuf_new )
     ( tstack_tick a 2100 w2 )
     ( pb `the RTO resent the SYN: ` > ( pktbuf_count w2 ) 0 )
     ( settle a b w2 2100 6 )
@@ -147,7 +147,7 @@ $ `stdlib/net/tcpstack.nu`
     // ── data, both ways ──────────────────────────────────────────
     : ( Vec u ) msg ( vec_new [u] )
     ( bytes_extend_str msg `GET /unikernel HTTP/1.0` )
-    : *PktBuf w3 ( pktbuf_new )
+    : PktBuf w3 ( pktbuf_new )
     : i wrote ( tstack_write a ca msg 0 ( vec_len [u] msg ) 3000 w3 )
     ( pb `A queued the request: ` == wrote ( vec_len [u] msg ) )
     ( settle a b w3 3000 6 )
@@ -159,7 +159,7 @@ $ `stdlib/net/tcpstack.nu`
 
     : ( Vec u ) reply ( vec_new [u] )
     ( bytes_extend_str reply `HTTP/1.0 200 OK` )
-    : *PktBuf w4 ( pktbuf_new )
+    : PktBuf w4 ( pktbuf_new )
     ( tstack_write b cb reply 0 ( vec_len [u] reply ) 3100 w4 )
     ( settle b a w4 3100 6 )
     : ( Vec u ) got2 ( vec_new [u] )
@@ -171,7 +171,7 @@ $ `stdlib/net/tcpstack.nu`
     // The case a table keyed on anything less than the four-tuple gets
     // wrong: same source address, same destination port, different
     // source port.
-    : *PktBuf w5 ( pktbuf_new )
+    : PktBuf w5 ( pktbuf_new )
     : i ca2 ( tstack_connect a ( ip_b ) 80 0 4000 w5 )
     ( settle a b w5 4000 8 )
     ( pb `the second connection is ESTABLISHED: ` == ( tstack_conn_state a ca2 ) ( tcp_established ) )
@@ -183,30 +183,30 @@ $ `stdlib/net/tcpstack.nu`
     ( pb `the first is still ESTABLISHED: ` == ( tstack_conn_state b cb ) ( tcp_established ) )
 
     // ── a segment for nothing gets a RST ─────────────────────────
-    : *PktBuf w6 ( pktbuf_new )
+    : PktBuf w6 ( pktbuf_new )
     : i cx ( tstack_connect a ( ip_b ) 9999 0 5000 w6 )
-    : *PktBuf back ( pktbuf_new )
+    : PktBuf back ( pktbuf_new )
     ( deliver_all b w6 5000 back )
     ( pb `a SYN to a closed port is refused: ` > ( pktbuf_count back ) 0 )
-    ( pb `B counted it: ` == 1 . b no_conn )
+    ( pb `B counted it: ` == 1 ( tstack_no_conn b ) )
     // …and A's connection dies on the RST rather than retrying forever.
-    : *PktBuf w7 ( pktbuf_new )
+    : PktBuf w7 ( pktbuf_new )
     ( deliver_all a back 5000 w7 )
     ( pb `A gave up on the refused connection: ` != ( tstack_conn_state a cx ) ( tcp_syn_sent ) )
     ( pb `the RST drew no reply: ` == 0 ( pktbuf_count w7 ) )
 
     // ── orderly close ────────────────────────────────────────────
-    : *PktBuf w8 ( pktbuf_new )
+    : PktBuf w8 ( pktbuf_new )
     ( tstack_close a ca 6000 w8 )
     ( settle a b w8 6000 8 )
     ( pb `B saw the FIN: ` || == ( tstack_conn_state b cb ) ( tcp_close_wait ) == ( tstack_conn_state b cb ) ( tcp_closed ) )
-    : *PktBuf w9 ( pktbuf_new )
+    : PktBuf w9 ( pktbuf_new )
     ( tstack_close b cb 6100 w9 )
     ( settle b a w9 6100 8 )
     ( pb `A reached TIME_WAIT: ` || == ( tstack_conn_state a ca ) ( tcp_time_wait ) == ( tstack_conn_state a ca ) ( tcp_closed ) )
     // 2MSL later the connection is reclaimed by the timer, not by a
     // caller remembering to.
-    : *PktBuf w10 ( pktbuf_new )
+    : PktBuf w10 ( pktbuf_new )
     ( tstack_tick a + 6100 ( tcp_2msl_ms ) w10 )
     ( pb `TIME_WAIT expired into CLOSED: ` == ( tstack_conn_state a ca ) ( tcp_closed ) )
     ( pb `and the slot is reusable: ` ! ( tstack_conn_live a ca ( tstack_conn_gen a ca ) ) )

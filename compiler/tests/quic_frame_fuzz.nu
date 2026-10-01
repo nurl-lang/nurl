@@ -207,11 +207,11 @@ $ `stdlib/std/quic_frame.nu`
     ~ < it 8000 {
         : i n ( rnd 48 )
         : ( Vec u ) buf ( rnd_bytes n )
-        : *QuicFrame f ( quic_frame_parse buf 0 )
-        ? != # i f 0 {
+        : QuicFrame f ( quic_frame_parse buf 0 )
+        ? != 0 # i . f ctl {
             = parsed_ok + parsed_ok 1
-            ? | <= . f next 0 > . f next n { = bad + bad 1 } {}
-            ? > ( vec_len [u] . f bytes ) . f next { = bad + bad 1 } {}
+            ? | <= ( quic_frame_next f ) 0 > ( quic_frame_next f ) n { = bad + bad 1 } {}
+            ? > ( vec_len [u] ( quic_frame_bytes f ) ) ( quic_frame_next f ) { = bad + bad 1 } {}
             ( quic_frame_free f )
         } { = parsed_bad + parsed_bad 1 }
         ( vec_free [u] buf )
@@ -235,14 +235,14 @@ $ `stdlib/std/quic_frame.nu`
         : i off ( vec_len [u] out )
         ( build_random out )
         : i end ( vec_len [u] out )
-        : *QuicFrame f ( quic_frame_parse out off )
-        ? == # i f 0 { = bad + bad 1 } {
-            ? != . f ftype built_type { = bad + bad 1 } {}
-            ? != . f a built_a { = bad + bad 1 } {}
-            ? != . f b built_b { = bad + bad 1 } {}
-            ? != . f c built_c { = bad + bad 1 } {}
-            ? != . f d built_d { = bad + bad 1 } {}
-            ? != . f next end { = bad + bad 1 } {}
+        : QuicFrame f ( quic_frame_parse out off )
+        ? == 0 # i . f ctl { = bad + bad 1 } {
+            ? != ( quic_frame_type f ) built_type { = bad + bad 1 } {}
+            ? != ( quic_frame_a f ) built_a { = bad + bad 1 } {}
+            ? != ( quic_frame_b f ) built_b { = bad + bad 1 } {}
+            ? != ( quic_frame_c f ) built_c { = bad + bad 1 } {}
+            ? != ( quic_frame_d f ) built_d { = bad + bad 1 } {}
+            ? != ( quic_frame_next f ) end { = bad + bad 1 } {}
             = roundtrips + roundtrips 1
             ( quic_frame_free f )
         }
@@ -255,11 +255,11 @@ $ `stdlib/std/quic_frame.nu`
             : i cut + off ( rnd - end off )
             : b _ok ( vec_set_len [u] out cut )
         }
-        : *QuicFrame g ( quic_frame_parse out off )
-        ? != # i g 0 {
+        : QuicFrame g ( quic_frame_parse out off )
+        ? != 0 # i . g ctl {
             = mut_ok + mut_ok 1
-            ? | <= . g next off > . g next ( vec_len [u] out ) { = bad + bad 1 } {}
-            ? > ( vec_len [u] . g bytes ) - . g next off { = bad + bad 1 } {}
+            ? | <= ( quic_frame_next g ) off > ( quic_frame_next g ) ( vec_len [u] out ) { = bad + bad 1 } {}
+            ? > ( vec_len [u] ( quic_frame_bytes g ) ) - ( quic_frame_next g ) off { = bad + bad 1 } {}
             ( quic_frame_free g )
         } { = mut_bad + mut_bad 1 }
         ( vec_free [u] out )

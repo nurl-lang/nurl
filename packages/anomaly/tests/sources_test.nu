@@ -1309,7 +1309,6 @@ b,2.5`
     ( json_free . d2 body )
     ( string_free path )
     ( string_free id )
-    ( router_free r )
 }
 
 // `string_contains` takes a String, and a String built inline is never
@@ -1346,7 +1345,6 @@ b,2.5`
     ( test_wide st )
     : Router rh ( anomaly_service_router )
     ( test_http rh )
-    ( router_free rh )
     ( test_due )
     ( test_routes )
 

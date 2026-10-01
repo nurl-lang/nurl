@@ -214,8 +214,8 @@ $ `stdlib/ext/http3_qpack.nu`
     // ── HTTP/3 frames + SETTINGS ─────────────────────────────────
     : ( Vec u ) fr ( vec_new [u] )
     ( h3_push_settings fr 65536 )
-    : *H3FrameHead fh ( h3_frame_peek fr 0 )
-    ? == # i fh 0 { ( nurl_print `settings_peek: FAIL\n` ) = fails + fails 1 } {
+    : H3FrameHead fh ( h3_frame_peek fr 0 )
+    ? < . fh ftype 0 { ( nurl_print `settings_peek: FAIL\n` ) = fails + fails 1 } {
         = fails + fails ( check_int `settings_type` . fh ftype 4 )
         = fails + fails ( check_int `settings_head_len` . fh head_len 2 )
         : ( Vec u ) pay ( bytes_slice fr . fh head_len + . fh head_len . fh length )
@@ -224,7 +224,6 @@ $ `stdlib/ext/http3_qpack.nu`
         = fails + fails ( check_int `settings_mfs` ( h3_settings_get pay 6 ) 65536 )
         = fails + fails ( check_int `settings_absent` ( h3_settings_get pay 9 ) -1 )
         ( vec_free [u] pay )
-        ( h3_frame_head_free fh )
     }
     ( vec_free [u] fr )
     : ( Vec u ) h2s ( hx `0201` )
@@ -235,8 +234,8 @@ $ `stdlib/ext/http3_qpack.nu`
     = fails + fails ( check_int `settings_truncated_rejected` ( h3_settings_parse trunc ) 265 )
     ( vec_free [u] trunc ) ( vec_free [u] dup ) ( vec_free [u] h2s )
     : ( Vec u ) partial ( hx `01` )
-    : *H3FrameHead ph ( h3_frame_peek partial 0 )
-    = fails + fails ( check_int `frame_head_incomplete` # i ph 0 )
+    : H3FrameHead ph ( h3_frame_peek partial 0 )
+    = fails + fails ( check_int `frame_head_incomplete` ? < . ph ftype 0 0 1 0 )
     ( vec_free [u] partial )
     = fails + fails ( check_int `reserved_0x21` ? ( h3_type_is_reserved 33 ) 1 0 1 )
     = fails + fails ( check_int `reserved_0x40` ? ( h3_type_is_reserved 64 ) 1 0 1 )

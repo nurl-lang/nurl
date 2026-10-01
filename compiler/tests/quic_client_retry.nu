@@ -38,7 +38,7 @@ $ `stdlib/std/quic_conn.nu`
 
 // Every datagram the connection wants to send right now, concatenated
 // — the hybrid ClientHello spans two Initials. `first` gets the first.
-@ drain * QuicConn c i now ( Vec u ) first → i {
+@ drain QuicConn c i now ( Vec u ) first → i {
     : ~ i n 0
     : ~ i more 1
     ~ != more 0 {
@@ -52,43 +52,42 @@ $ `stdlib/std/quic_conn.nu`
     ^ n
 }
 
-@ fresh_client * QuicTp tp → *QuicConn {
+@ fresh_client QuicTp tp → QuicConn {
     : ( Vec u ) peer ( udp_addr_new )
-    : *QuicConn c ( quic_conn_new_client peer `localhost` `h3` tp 0 1000 )
+    : QuicConn c ( quic_conn_new_client peer `localhost` `h3` tp 0 1000 )
     ( vec_free [u] peer )
     ^ c
 }
 
 // A Version Negotiation packet for the client's first Initial.
 @ vn_for ( Vec u ) initial ( Vec i ) versions → ( Vec u ) {
-    : *QuicHdr h ( quic_hdr_parse initial 0 8 )
+    : QuicHdr h ( quic_hdr_parse initial 0 8 )
     : ( Vec u ) dcid ( quic_hdr_dcid h initial )
     : ( Vec u ) scid ( quic_hdr_scid h initial )
     : ( Vec u ) vn ( quic_vn_build scid dcid versions )
-    ( vec_free [u] scid ) ( vec_free [u] dcid ) ( quic_hdr_free h )
+    ( vec_free [u] scid ) ( vec_free [u] dcid )
     ^ vn
 }
 
 @ run_retry → v {
-    : *QuicTp tp ( quic_tp_new )
-    = . tp initial_max_data 65536
-    = . tp initial_max_stream_data_bidi_local 16384
-    = . tp initial_max_stream_data_bidi_remote 16384
-    = . tp initial_max_stream_data_uni 16384
-    = . tp initial_max_streams_bidi 4
-    = . tp initial_max_streams_uni 3
-    : *QuicConn c ( fresh_client tp )
+    : QuicTp tp ( quic_tp_new )
+    ( quic_tp_set_initial_max_data tp 65536 )
+    ( quic_tp_set_initial_max_stream_data_bidi_local tp 16384 )
+    ( quic_tp_set_initial_max_stream_data_bidi_remote tp 16384 )
+    ( quic_tp_set_initial_max_stream_data_uni tp 16384 )
+    ( quic_tp_set_initial_max_streams_bidi tp 4 )
+    ( quic_tp_set_initial_max_streams_uni tp 3 )
+    : QuicConn c ( fresh_client tp )
     : ( Vec u ) peer ( udp_addr_new )
     : ( Vec u ) d1 ( vec_new [u] )
     ( label_int `initial_datagrams` ( drain c 1000 d1 ) )
     ( label_int `initial_len` ( vec_len [u] d1 ) )
-    : *QuicHdr h1 ( quic_hdr_parse d1 0 8 )
+    : QuicHdr h1 ( quic_hdr_parse d1 0 8 )
     ( label `initial_type` ? == . h1 ptype 0 `Initial` `OTHER` )
     ( label_int `initial_dcid_len` . h1 dcid_len )
     ( label_int `initial_token_len` . h1 token_len )
     : ( Vec u ) odcid ( quic_hdr_dcid h1 d1 )
     : ( Vec u ) cscid ( quic_hdr_scid h1 d1 )
-    ( quic_hdr_free h1 )
     ( label `odcid_is_ours` ? ( bytes_eq odcid ( quic_conn_odcid c ) ) `T` `F` )
 
     // a Retry from the server: new SCID, a token, the tag over our ODCID
@@ -110,14 +109,14 @@ $ `stdlib/std/quic_conn.nu`
     : ( Vec u ) d2 ( vec_new [u] )
     ( label_int `retried_datagrams` ( drain c 1004 d2 ) )
     ( label_int `retried_len` ( vec_len [u] d2 ) )
-    : *QuicHdr h2 ( quic_hdr_parse d2 0 8 )
+    : QuicHdr h2 ( quic_hdr_parse d2 0 8 )
     : ( Vec u ) d2dcid ( quic_hdr_dcid h2 d2 )
     : ( Vec u ) d2tok ( quic_hdr_token h2 d2 )
     ( label `retried_dcid_is_retry_scid` ? ( bytes_eq d2dcid rscid ) `T` `F` )
     ( label `retried_carries_token` ? ( bytes_eq d2tok token ) `T` `F` )
     // the packet number continues (§17.2.5.3): remove header protection
     // with the Initial keys of the new DCID and read it
-    : *QuicKeys k ( quic_initial_keys rscid T )
+    : QuicKeys k ( quic_initial_keys rscid T )
     : ( Vec u ) pkt ( bytes_slice d2 0 . h2 end )
     : i pn_len ( quic_hp_remove k pkt . h2 pn_off )
     : i pn ( quic_pn_read pkt . h2 pn_off pn_len )
@@ -136,7 +135,7 @@ $ `stdlib/std/quic_conn.nu`
         F → { ( label `retried_crypto_at_0` `NO-DECRYPT` ) }
     }
     ( vec_free [u] body ) ( vec_free [u] hdr ) ( vec_free [u] pkt ) ( quic_keys_free k )
-    ( vec_free [u] d2tok ) ( vec_free [u] d2dcid ) ( quic_hdr_free h2 )
+    ( vec_free [u] d2tok ) ( vec_free [u] d2dcid )
     // a second Retry is ignored (§17.2.5.2)
     : ( Vec u ) rscid2 ( hx `b1b2b3b4b5b6b7b8` )
     : ( Vec u ) retry2 ( quic_retry_build cscid rscid2 odcid token )
@@ -159,12 +158,12 @@ $ `stdlib/std/quic_conn.nu`
 }
 
 @ run_vn → v {
-    : *QuicTp tp ( quic_tp_new )
-    = . tp initial_max_data 65536
-    = . tp initial_max_streams_bidi 4
+    : QuicTp tp ( quic_tp_new )
+    ( quic_tp_set_initial_max_data tp 65536 )
+    ( quic_tp_set_initial_max_streams_bidi tp 4 )
     : ( Vec u ) peer ( udp_addr_new )
     // lists version 1: a fake, ignored
-    : *QuicConn c1 ( fresh_client tp )
+    : QuicConn c1 ( fresh_client tp )
     : ( Vec u ) i1 ( vec_new [u] )
     : i _n1 ( drain c1 1000 i1 )
     : ( Vec i ) v1 ( vec_new [i] )
@@ -174,7 +173,7 @@ $ `stdlib/std/quic_conn.nu`
     ( label_int `vn_with_v1_state` ( quic_conn_state c1 ) )
     ( vec_free [u] vn1 ) ( vec_free [i] v1 ) ( vec_free [u] i1 ) ( quic_conn_free c1 )
     // no version in common: the attempt ends, nothing more is sent
-    : *QuicConn c2 ( fresh_client tp )
+    : QuicConn c2 ( fresh_client tp )
     : ( Vec u ) i2 ( vec_new [u] )
     : i _n2 ( drain c2 1000 i2 )
     : ( Vec i ) v2 ( vec_new [i] )

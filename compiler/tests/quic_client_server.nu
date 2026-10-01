@@ -50,8 +50,7 @@ $ `stdlib/ext/http3_server.nu`
 
 // The server's application: echo every bidirectional stream back, FIN
 // for FIN.
-@ on_event i cp i ev → v {
-    : *QuicConn c # *QuicConn cp
+@ on_event QuicConn c i ev → v {
     ? == ev 1 {
         : ( Vec u ) want ( bytes_from_str `echo` )
         ? ( bytes_eq ( quic_conn_alpn c ) want ) { = g_server_alpn_ok 1 } {}
@@ -85,15 +84,15 @@ $ `stdlib/ext/http3_server.nu`
     ?? ( write_file cp ( string_data . cert cert_pem ) ) { T _ → {} F _ → { ( label `cert_write` `FAIL` ) } }
     ?? ( write_file kp ( string_data . cert key_pem ) ) { T _ → {} F _ → { ( label `key_write` `FAIL` ) } }
     ( x509_selfsigned_free cert )
-    : *QuicCreds creds ( http3_creds_load cp kp )
-    ? == # i creds 0 { ( label `creds` `FAIL` ) ^ } {}
+    : QuicCreds creds ( http3_creds_load cp kp )
+    ? == 0 # i . creds ctl { ( label `creds` `FAIL` ) ^ } {}
     : !UdpSocket NetErr sr ( udp_bind `127.0.0.1` 18962 )
     ?? sr {
         T sock → {
             : ( Vec u ) prefs ( tls_alpn_pack `echo` )
-            : *QuicTp stp ( http3_default_tp )
-            : ( @ v i i ) ev \ i cp i e → v { ( on_event cp e ) }
-            : *QuicServer srv ( quic_server_new sock creds prefs stp ev )
+            : QuicTp stp ( http3_default_tp )
+            : ( @ v QuicConn i ) ev \ QuicConn c i e → v { ( on_event c e ) }
+            : QuicServer srv ( quic_server_new sock creds prefs stp ev )
             : ( @ v ) server \ → v { ( quic_server_run srv ) }
             : !Thread ThreadErr st ( thread_spawn server )
             ?? st {
@@ -138,10 +137,10 @@ $ `stdlib/ext/http3_server.nu`
 
 // verify = 0: the self-signed leaf is accepted; everything else is checked.
 @ client_round → v {
-    : *QuicTp tp ( quic_client_default_tp )
-    : *QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 0 5000 )
-    ? == # i cl 0 { ( label `connect` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}
-    : *QuicConn c ( quic_client_conn cl )
+    : QuicTp tp ( quic_client_default_tp )
+    : QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 0 5000 )
+    ? == 0 # i . cl ctl { ( label `connect` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}
+    : QuicConn c ( quic_client_conn cl )
     ( label `connect` ? ( quic_client_connected cl ) `OK` `FAIL` )
     ? ( quic_client_connected cl ) {
         : ( Vec u ) want ( bytes_from_str `echo` )
@@ -191,10 +190,10 @@ $ `stdlib/ext/http3_server.nu`
 // verify = 1: a self-signed certificate is not trusted; the handshake
 // must fail with CRYPTO_ERROR(bad_certificate) and open no stream.
 @ client_round_verify → v {
-    : *QuicTp tp ( quic_client_default_tp )
-    : *QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 1 5000 )
-    ? == # i cl 0 { ( label `verify_selfsigned` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}
-    : *QuicConn c ( quic_client_conn cl )
+    : QuicTp tp ( quic_client_default_tp )
+    : QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 1 5000 )
+    ? == 0 # i . cl ctl { ( label `verify_selfsigned` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}
+    : QuicConn c ( quic_client_conn cl )
     ? ( quic_client_connected cl ) {
         ( label `verify_selfsigned` `ACCEPTED` )
     } {

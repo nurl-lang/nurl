@@ -115,7 +115,7 @@ $ `stdlib/core/errors.nu`
             : i n ( string_len creds64 )
             ? == n 0 {
                 ( string_free creds64 )
-                ^ @ ?BasicAuth { F @ BasicAuth { ( string_new ) ( string_new ) } }
+                ^ @ ?BasicAuth { F # BasicAuth 0 }
             } {}
             : !String ParseErr dec ( b64_decode ( string_data creds64 ) )
             ( string_free creds64 )
@@ -134,18 +134,18 @@ $ `stdlib/core/errors.nu`
                         }
                         F _ → {
                             ( string_free raw )
-                            ^ @ ?BasicAuth { F @ BasicAuth { ( string_new ) ( string_new ) } }
+                            ^ @ ?BasicAuth { F # BasicAuth 0 }
                         }
                     }
                 }
                 F _ → {
-                    ^ @ ?BasicAuth { F @ BasicAuth { ( string_new ) ( string_new ) } }
+                    ^ @ ?BasicAuth { F # BasicAuth 0 }
                 }
             }
         }
         F empty → {
             ( string_free empty )
-            ^ @ ?BasicAuth { F @ BasicAuth { ( string_new ) ( string_new ) } }
+            ^ @ ?BasicAuth { F # BasicAuth 0 }
         }
     }
 }

@@ -26,7 +26,7 @@
 // both.
 //
 // API:
-//   ( slhdsa_keygen i set )                          → *SlhKeys
+//   ( slhdsa_keygen i set )                          → SlhKeys
 //   ( slhdsa_sign i set ( Vec u ) sk
 //                 ( Vec u ) msg ( Vec u ) ctx )      → ( Vec u )
 //   ( slhdsa_verify i set ( Vec u ) pk ( Vec u ) msg
@@ -34,7 +34,12 @@
 //
 // Deterministic and internal forms, which FIPS 205 defines and NIST's
 // ACVP vectors exercise:
-//   ( slhdsa_keygen_derand set skseed skprf pkseed ) → *SlhKeys
+//   ( slhdsa_keygen_derand set skseed skprf pkseed ) → SlhKeys
+//   ( slhdsa_pk k ) ( slhdsa_sk k )                  the keys' own bytes, lent
+//   ( slhdsa_keys_free k )                           early release (optional)
+//
+// SlhKeys is a library handle (docs/MEMORY.md §7.6): every copy is the
+// same key pair, and the last owner releases it.
 //   ( slhdsa_sign_internal set sk msg addrnd )       → ( Vec u )
 //   ( slhdsa_verify_internal set pk msg sig )        → b
 //
@@ -52,6 +57,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha3.nu`
 $ `stdlib/std/hash_sha3x4.nu`
 $ `stdlib/std/random.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Parameters ─────────────────────────────────────────────────────
 //
@@ -189,7 +195,7 @@ $ `stdlib/std/random.nu`
 // are which pieces go in and how many bytes come out.
 
 @ __slh_shake ( Vec u ) a ( Vec u ) b ( Vec u ) c i outlen → ( Vec u ) {
-    : *Sha3 h ( shake256_init )
+    : Sha3 h ( shake256_init )
     ( sha3_absorb h a )
     ( sha3_absorb h b )
     ( sha3_absorb h c )
@@ -952,22 +958,38 @@ $ `stdlib/std/random.nu`
 
 // ── Keys, signing, verification ────────────────────────────────────
 
-: SlhKeys {
+: SlhKeysImpl {
     ( Vec u ) pk
     ( Vec u ) sk
 }
 
-@ slhdsa_pk * SlhKeys h → ( Vec u ) { ^ . h pk }
+// A SlhKeys is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: SlhKeys { s ctl }
 
-@ slhdsa_sk * SlhKeys h → ( Vec u ) { ^ . h sk }
+@ SlhKeys_share SlhKeys h → SlhKeys { ^ @ SlhKeys { # s ( rcbox_share # i . h ctl ) } }
 
-@ slhdsa_keys_free sink * SlhKeys h → v {
-    ( vec_free [u] . h pk )
-    ( vec_free [u] . h sk )
-    ( nurl_free # s h )
+@ SlhKeys_drop sink SlhKeys h → v {
+    ( mem_forget h )
+    ( rcbox_release [SlhKeysImpl] # i . h ctl )
 }
 
-@ slhdsa_keygen_derand i set ( Vec u ) skseed ( Vec u ) skprf ( Vec u ) pkseed → *SlhKeys {
+@ __SlhKeys_ptr SlhKeys h → *SlhKeysImpl { ^ ( rcbox_ptr [SlhKeysImpl] # i . h ctl ) }
+
+@ slhdsa_pk SlhKeys h__h → ( Vec u ) {
+    : *SlhKeysImpl h ( __SlhKeys_ptr h__h )
+    ^ . h pk
+}
+
+@ slhdsa_sk SlhKeys h__h → ( Vec u ) {
+    : *SlhKeysImpl h ( __SlhKeys_ptr h__h )
+    ^ . h sk
+}
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ slhdsa_keys_free sink SlhKeys h → v {}
+
+@ slhdsa_keygen_derand i set ( Vec u ) skseed ( Vec u ) skprf ( Vec u ) pkseed → SlhKeys {
     : SlhParams p ( __slh_params set )
     : ( Vec u ) adrs ( __adrs_new )
     ( __adrs_set_layer adrs - . p d 1 )
@@ -982,18 +1004,15 @@ $ `stdlib/std/random.nu`
     ( bytes_extend_bytes sk pkseed )
     ( bytes_extend_bytes sk root )
     ( vec_free [u] root )
-    : *SlhKeys h # *SlhKeys ( nurl_alloc Z SlhKeys )
-    = . h pk pk
-    = . h sk sk
-    ^ h
+    ^ @ SlhKeys { # s ( rcbox_new [SlhKeysImpl] @ SlhKeysImpl { pk sk } ) }
 }
 
-@ slhdsa_keygen i set → *SlhKeys {
+@ slhdsa_keygen i set → SlhKeys {
     : SlhParams p ( __slh_params set )
     : ( Vec u ) a ( rand_bytes . p n )
     : ( Vec u ) b2 ( rand_bytes . p n )
     : ( Vec u ) c ( rand_bytes . p n )
-    : *SlhKeys h ( slhdsa_keygen_derand set a b2 c )
+    : SlhKeys h ( slhdsa_keygen_derand set a b2 c )
     ( vec_free [u] c ) ( vec_free [u] b2 ) ( vec_free [u] a )
     ^ h
 }

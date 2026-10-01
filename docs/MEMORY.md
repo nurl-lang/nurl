@@ -215,6 +215,16 @@ mutates exactly that field of the caller's struct in place
 (`( add100 . g turns )`). `obj` must be a mutable (`: ~`) struct
 binding; the field may itself be a struct.
 
+What an `inout` parameter holds is the caller's own value, so a value
+assigned through it **replaces** the caller's: `= . h item it` and
+`= s ( string_from … )` drop the String / Vec / handle / closure they
+overwrite, exactly as the same assignment to an owned local does. A
+field the callee hands to a consumer first (`( item_free . h item )`),
+or takes with `( mem_take x )` after `: … x . h body`, is emptied in the
+caller's struct, so the store that follows releases nothing twice. A
+call that may hand the same value back (`= c ( prune c )`) leaves it
+where it is.
+
 A **`sink`** parameter consumes (takes ownership of) its argument —
 the callee owns the value, and the caller may not use the argument
 binding afterwards (the borrow checker reports a later use as a
@@ -1400,6 +1410,19 @@ explicit release: they clear the binding's drop flag, so the value is
 released once. The checker still tracks these moves — a `vec_free`d
 `Vec`, or a `sink`-consumed value, cannot be used again (§2.1).
 
+The standard library keeps nothing on this list for its users: every
+type it hands out releases itself. Opaque state lives behind a library
+handle over an rcbox (`stdlib/core/rcbox.nu`: `[ owners ][ T ]`, the last
+owner drops `T`) — `Mutex`, `Channel`, `Regex`, `Rng`, `Bitset`, the
+QUIC / HTTP/3 / HTTP/2 connection state, the dist `Ring` / `LeaseTable`,
+`ProcChild` and the rest — so every copy (a struct field, a `Vec`
+element, a closure capture, `T_share`) is the same object and the last
+one releases it. A `ProcChild`'s last owner shuts its child down as
+`proc_free` always did (pipes closed, SIGTERM, a 500 ms grace, SIGKILL,
+reaped); a lazy iterator chain (`stdlib/std/iter.nu`) is released with
+the outermost closure, consumed or not. Their `*_free` functions remain
+as optional early releases of one owner.
+
 ### 7.5 Closure environments
 
 A capturing closure `\ → … x …` is a value `{ fn, env }` whose env is one
@@ -1409,10 +1432,10 @@ place drops it** — there is no escape hatch and no hand-written free:
 | Where the closure is kept | Who drops the env |
 |---|---|
 | a `:` binding | the binding, at scope exit (each iteration in a loop) |
-| a closure literal or call result passed straight to a call | the call site, right after the call |
+| a closure literal or call result passed straight to a call | the call site, right after the call — unless it went into an aggregate literal first (`( keep @ S { \ → … } )`): then the aggregate owns it |
 | a statement whose value is thrown away | that statement |
 | the result of a function returning a closure | the caller — every return path hands over an env the caller owns |
-| a struct field (literal, `= . s f …`, a returned struct) | the struct, with its other owned fields |
+| a struct field (literal, `= . s f …`, a returned struct) | the struct, with its other owned fields — its drop graph, wherever the struct goes (a `Vec`, a return, another struct); a copy of the struct copies the env |
 | a slice of closures `[( @ … ) \| …]` | the slice, element by element |
 | another closure's captures | that closure's env (nested envs form a tree) |
 | a `?` / `??` join | whatever consumes the join, like a call result |
@@ -1447,6 +1470,18 @@ from raw pointers (`*RouteImpl` and friends) own the closures stored into
 them — a field store of a closure stores a copy — and release them with
 `nurl_closure_drop` when the structure is freed.
 
+A closure a thread or a fiber runs (a literal handed to `thread_spawn` /
+`spawn`, or a binding the function later hands to one) takes over the
+String / Vec / handle bindings it captured that the rest of the function
+never names again and that no loop around it captures again: they move
+into its env, and the runtime's copy owns its own. A captured binding still
+named later — a Vec the threads fill for the spawner — stays shared.
+
+A String / Vec captured **by value** is a snapshot the body may scratch:
+it borrows the env's value, and an assignment over it is discarded when
+the closure returns (the compiler warns). The value so assigned is the
+invocation's own and is dropped then.
+
 What is not covered: a closure inside an option / result payload or an
 enum variant (those follow the manual-handle rules of the payload), and a
 generic container instantiated with a closure element type (`Vec` of
@@ -1474,6 +1509,18 @@ way it goes:
   a `release sink T x` that frees `x`'s parts by hand — never drops that
   parameter itself; otherwise the drop would call the Drop impl again. The
   compiler learns this from the Drop impl, at module end.
+- **Drop glue.** A Drop impl releases what only it knows how to (a raw
+  `s` buffer, an OS resource); the fields the compiler manages — `String`,
+  `Vec`, library handles, values with a `% Drop` of their own — are dropped
+  after it returns, as a Rust `Drop`'s fields are (`drop_glue__<T>`). A
+  field the impl released by hand is emptied in the parameter and skipped;
+  an impl that hands its value to a disposer leaves the fields to it. A
+  raw `s` field of a Drop type is the impl's alone: the compiler does not
+  free it as an owned struct field.
+- A `% Drop` type is dropped by its impl wherever it lives — a local, a
+  `Vec` element, a struct field. A struct holding one is **move-only** (it
+  cannot be copied, so it is not a handle) and gets a compiler-written
+  drop that drops its fields, running the impl of each Drop one.
 
 Before the flags, `: T b a` registered both bindings and dropped the value
 twice, a `sink` parameter rejected Drop values outright, and a reassigned
@@ -1589,6 +1636,12 @@ value is `alwaysinline`: a `simd` clone passes a `<4 x i64>` in a ymm
 register where a baseline callee expects it in memory, and only inlining
 makes the two agree (at `-O0` as well as `-O2`).
 
+**Options and results that own memory are handles too**, wherever they
+sit — a `:` binding (through its `%__opt.<T>` twin), a struct field, a
+`Vec` element: dropping one releases the payload when present (a
+result's error when not), and copying one copies that. The payload of a
+None literal is released where the literal is built.
+
 **Enums that own memory are handles.** An enum whose payloads own a
 `String`, a `Vec` or a boxed struct — `Json`, `TomlValue` — is dropped,
 copied and moved like a `String` when every payload can be copied.
@@ -1601,18 +1654,28 @@ value, a reference count going up) — is a *library handle*: every
 instance is owned, dropped and copied like a `Vec`, and the module keeps
 its layout to itself. The compiler instantiates `S_drop` / `S_clone` for
 each concrete type the program uses (`HashMap_drop__i64__String`).
-`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc` and `Arc` are library
-handles; their `*_free` functions are early releases, their `*_free_with`
-hand each element to a closure instead. A program's own `% Drop` impl for
-an instance (`% Drop ( Box i )`) wins over the library's.
+`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc` and `Channel` are
+library handles; their `*_free` functions are early releases, their
+`*_free_with` hand each element to a closure instead. A program's own
+`% Drop` impl for an instance (`% Drop ( Box i )`) wins over the library's.
+
+A plain (non-generic) struct is a library handle the same way when its
+module defines `S_drop sink S x`: `S_drop` / `S_share` / `S_clone` are
+ordinary functions then, nothing is instantiated. `Mutex`, `Cond` and
+`Semaphore` are: each is one reference-counted pthread object, every copy
+of the handle (a thread closure's capture, a struct field, `Mutex_share`)
+is the same lock, and the last owner destroys it. `Channel` counts its
+owners the same way and releases what is still queued with it. A literal
+of a handle's own type is an owner even when it is built from another
+handle's pointer — that is how `S_share` mints one.
 
 **What still takes a hand.** The special cases, each an explicit call:
-synchronisation primitives shared between threads without a reference
-count (`Channel`, `Mutex`, `Cond`) — `chan_free` / `mutex_free` once every
-user is done; OS resources (files, sockets, processes), closed by their
-`*_close`; memory the program manages itself (`nurl_alloc` / `*T` blocks,
-arenas, globals kept for the program's lifetime). A value shared across
-threads is an `Arc`, which is dropped like any other handle.
+files and sockets, closed by their `*_close`; memory the program manages
+itself (`nurl_alloc` / `*T` blocks, arenas, globals kept for the program's
+lifetime). A child process and a thread are released by their last owner:
+the child shut down as `proc_free` always did, the thread detached unless
+it was joined or detached already (`thread_join` / `thread_detach` settle
+it once, through any copy).
 
 **Panics unwind them too.** A String / Vec / owning struct / library
 handle binding is registered with the panic journal together with its drop

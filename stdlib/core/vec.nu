@@ -76,9 +76,8 @@
 //                                                a longer n zero-fills the
 //                                                new tail in one memset
 //   ( vec_shrink_to_fit [A] v )    → v          release unused capacity
-//   ( vec_extend [A] dst src )     → v          bitwise copy of src's elements
-//                                                onto dst (trivial element types
-//                                                only — same caveat as vec_map)
+//   ( vec_extend [A] dst src )     → v          copies of src's elements onto
+//                                                dst (deep for owned elements)
 //   ( vec_append [A] dst src )     → v          MOVE every element of src onto
 //                                                dst; src is consumed (any A)
 //
@@ -111,17 +110,10 @@
 //   ( vec_all  [A] v pred )        → b          short-circuit on first F
 //
 //   Clone (mirrors the vec_free / vec_free_with split):
-//   ( vec_clone [A] v )            → ( Vec A )  bitwise shallow copy;
-//                                                trivial elements only
-//   ( vec_clone_with [A] v clone ) → ( Vec A )  deep copy; clone : (@ A A)
-//                                                runs per element. Use for
-//                                                Vec[String] / nested Vec.
-//
-// A bare `vec_clone` over an owned element type aliases every heap
-// pointer and double-frees at scope exit — the same trap as bare
-// `vec_free` over Vec[String]. Use `vec_clone_with` whenever the element
-// owns heap storage; pass a closure that returns an independently-owned
-// element (e.g. wrap `string_clone` in a `\`).
+//   ( vec_clone [A] v )            → ( Vec A )  a copy owning copies of the
+//                                                elements (deep for String,
+//                                                Vec, owning structs)
+//   ( vec_clone_with [A] v clone ) → ( Vec A )  copy via clone : (@ A A)
 
 : Vec [A] { s ctl }
 
@@ -575,8 +567,7 @@
     }
 }
 
-// Append `src[off .. off+n)` to `dst` (bitwise), with the same
-// trivial-element-type rule as vec_extend below.
+// Append copies of `src[off .. off+n)` to `dst`, as vec_extend below.
 //
 // The whole-vector form makes a caller who has only a sub-range build a
 // temporary Vec to pass it — a full copy of the data, plus an
@@ -604,18 +595,36 @@
     : *A sdata # *A ( nurl_peek sctl 0 )
     : ~ i i 0
     ~ < i cnt {
-        = . ddata + dlen i . sdata + start i
+        = . ddata + dlen i ( mem_dup . sdata + start i )
         = i + i 1
     }
     ( nurl_poke dctl 1 + dlen cnt )
 }
 
-// Append every element of `src` to `dst` (bitwise). Like vec_map, this
-// is safe only for trivial element types (i, f, b, raw s, slice). For
-// owned element types the caller must clone manually with vec_each +
-// vec_push and an explicit element clone, otherwise the dst would alias
-// src's heap buffers and break the single-owner invariant.
+// Append a copy of every element of `src` to `dst`: an element that owns
+// something (a String, a Vec, an owning struct) is copied deep
+// (`mem_dup`), anything else as is — so `src` keeps its elements. To MOVE
+// them instead, use vec_append.
 @ vec_extend [A] ( Vec A ) dst ( Vec A ) src → v {
+    : s sctl . src ctl
+    : i n ( __vec_len_raw sctl )
+    ? > n 0 {
+        : s dctl . dst ctl
+        : i dlen ( __vec_len_raw dctl )
+        ( __vec_grow [A] dctl + dlen n )
+        : *A ddata # *A ( nurl_peek dctl 0 )
+        : *A sdata # *A ( nurl_peek sctl 0 )
+        : ~ i i 0
+        ~ < i n {
+            = . ddata + dlen i ( mem_dup . sdata i )
+            = i + i 1
+        }
+        ( nurl_poke dctl 1 + dlen n )
+    } {}
+}
+
+// The elements themselves, bitwise: vec_append's move.
+@ __vec_extend_move [A] ( Vec A ) dst ( Vec A ) src → v {
     : s sctl . src ctl
     : i n ( __vec_len_raw sctl )
     ? > n 0 {
@@ -638,7 +647,7 @@
 // the vec_extend for element types that own something — one memcpy-shaped
 // loop and one free, where extend-then-free would drop what it just copied.
 @ vec_append [A] ( Vec A ) dst sink ( Vec A ) src → v {
-    ( vec_extend [A] dst src )
+    ( __vec_extend_move [A] dst src )
     // The elements live in `dst` now; `src` leaves empty.
     ( nurl_poke . src ctl 1 0 )
 }
@@ -683,12 +692,10 @@
 
 // ── Clone ───────────────────────────────────────────────────────────
 
-// Shallow bitwise copy: a fresh Vec with the same length whose elements
-// are copied verbatim. Safe ONLY for trivial element types (i, f, b,
-// raw s pointers, fat-ptr slices). For an owned element type this would
-// alias every heap buffer across two Vecs and double-free at scope exit
-// — use `vec_clone_with` instead. Mirrors the `vec_free` / `vec_free_with`
-// split: bare = trivial, `_with` = owned.
+// A copy of `v` owning copies of its elements: an element that owns
+// something (a String, a Vec, an owning struct) is copied deep
+// (`mem_dup`), anything else as is. `vec_clone_with` is for a copy made
+// some other way than the element type's own.
 @ vec_clone [A] ( Vec A ) v → ( Vec A ) {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
@@ -698,7 +705,7 @@
         : *A dst ( vec_data [A] out )
         : ~ i i 0
         ~ < i len {
-            = . dst i . src i
+            = . dst i ( mem_dup . src i )
             = i + i 1
         }
         : b _ok ( vec_set_len [A] out len )

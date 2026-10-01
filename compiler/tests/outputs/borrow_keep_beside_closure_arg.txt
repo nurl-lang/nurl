@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_keep_beside_closure_arg.nu:26: error: 'm' is consumed here, but its value was stored into an owner at line 25 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'm' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup m ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
+    ( mutex_free m )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)

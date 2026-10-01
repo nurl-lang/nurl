@@ -43,9 +43,9 @@ $ `stdlib/std/quic_tp.nu`
 // Decode `hex` as a client's parameters and expect rejection.
 @ expect_reject s label s hex → i {
     : ( Vec u ) b ( hx hex )
-    : *QuicTp t ( quic_tp_decode b T )
+    : QuicTp t ( quic_tp_decode b T )
     ( vec_free [u] b )
-    ? == # i t 0 {
+    ? == 0 # i . t ctl {
         ( nurl_print label ) ( nurl_print `: PASS\n` )
         ^ 0
     } {
@@ -65,29 +65,29 @@ $ `stdlib/std/quic_tp.nu`
     // 39 00 32 | 04 08 ffffffffffffffff | 05 04 8000ffff | 07 04 8000ffff |
     // 08 01 10 | 01 04 80007530 | 09 01 10 | 0f 08 8394c8f03e515708 | 06 04 8000ffff
     : ( Vec u ) a2 ( hx `0408ffffffffffffffff05048000ffff07048000ffff0801100104800075300901100f088394c8f03e51570806048000ffff` )
-    : *QuicTp t ( quic_tp_decode a2 T )
-    ? == # i t 0 { ( nurl_print `a2_decode: FAIL (rejected)\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `a2_initial_max_data` . t initial_max_data 4611686018427387903 )
-        = fails + fails ( check_int `a2_bidi_local` . t initial_max_stream_data_bidi_local 65535 )
-        = fails + fails ( check_int `a2_bidi_remote` . t initial_max_stream_data_bidi_remote 65535 )
-        = fails + fails ( check_int `a2_uni` . t initial_max_stream_data_uni 65535 )
-        = fails + fails ( check_int `a2_streams_bidi` . t initial_max_streams_bidi 16 )
-        = fails + fails ( check_int `a2_streams_uni` . t initial_max_streams_uni 16 )
-        = fails + fails ( check_int `a2_idle` . t max_idle_timeout 30000 )
-        = fails + fails ( check_hex `a2_initial_scid` . t initial_scid `8394c8f03e515708` )
+    : QuicTp t ( quic_tp_decode a2 T )
+    ? == 0 # i . t ctl { ( nurl_print `a2_decode: FAIL (rejected)\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `a2_initial_max_data` ( quic_tp_initial_max_data t ) 4611686018427387903 )
+        = fails + fails ( check_int `a2_bidi_local` ( quic_tp_initial_max_stream_data_bidi_local t ) 65535 )
+        = fails + fails ( check_int `a2_bidi_remote` ( quic_tp_initial_max_stream_data_bidi_remote t ) 65535 )
+        = fails + fails ( check_int `a2_uni` ( quic_tp_initial_max_stream_data_uni t ) 65535 )
+        = fails + fails ( check_int `a2_streams_bidi` ( quic_tp_initial_max_streams_bidi t ) 16 )
+        = fails + fails ( check_int `a2_streams_uni` ( quic_tp_initial_max_streams_uni t ) 16 )
+        = fails + fails ( check_int `a2_idle` ( quic_tp_max_idle_timeout t ) 30000 )
+        = fails + fails ( check_hex `a2_initial_scid` ( quic_tp_initial_scid t ) `8394c8f03e515708` )
         // defaults for what was absent
-        = fails + fails ( check_int `a2_default_udp_payload` . t max_udp_payload_size 65527 )
-        = fails + fails ( check_int `a2_default_ack_exp` . t ack_delay_exponent 3 )
-        = fails + fails ( check_int `a2_default_max_ack_delay` . t max_ack_delay 25 )
-        = fails + fails ( check_int `a2_default_cid_limit` . t active_connection_id_limit 2 )
-        = fails + fails ( check_int `a2_no_odcid` . t has_original_dcid 0 )
+        = fails + fails ( check_int `a2_default_udp_payload` ( quic_tp_max_udp_payload_size t ) 65527 )
+        = fails + fails ( check_int `a2_default_ack_exp` ( quic_tp_ack_delay_exponent t ) 3 )
+        = fails + fails ( check_int `a2_default_max_ack_delay` ( quic_tp_max_ack_delay t ) 25 )
+        = fails + fails ( check_int `a2_default_cid_limit` ( quic_tp_active_connection_id_limit t ) 2 )
+        = fails + fails ( check_int `a2_no_odcid` ? ( quic_tp_has_original_dcid t ) 1 0 0 )
         // re-encode as the client would: same set, canonical order
         : ( Vec u ) enc ( quic_tp_encode t F )
-        : *QuicTp t2 ( quic_tp_decode enc T )
-        ? == # i t2 0 { ( nurl_print `a2_reencode: FAIL\n` ) = fails + fails 1 } {
-            = fails + fails ( check_int `a2_reencode_max_data` . t2 initial_max_data 4611686018427387903 )
-            = fails + fails ( check_int `a2_reencode_idle` . t2 max_idle_timeout 30000 )
-            = fails + fails ( check_hex `a2_reencode_scid` . t2 initial_scid `8394c8f03e515708` )
+        : QuicTp t2 ( quic_tp_decode enc T )
+        ? == 0 # i . t2 ctl { ( nurl_print `a2_reencode: FAIL\n` ) = fails + fails 1 } {
+            = fails + fails ( check_int `a2_reencode_max_data` ( quic_tp_initial_max_data t2 ) 4611686018427387903 )
+            = fails + fails ( check_int `a2_reencode_idle` ( quic_tp_max_idle_timeout t2 ) 30000 )
+            = fails + fails ( check_hex `a2_reencode_scid` ( quic_tp_initial_scid t2 ) `8394c8f03e515708` )
             ( quic_tp_free t2 )
         }
         ( vec_free [u] enc )
@@ -96,45 +96,42 @@ $ `stdlib/std/quic_tp.nu`
     ( vec_free [u] a2 )
 
     // ── a server's set round-trips, including the server-only ids ──
-    : *QuicTp st ( quic_tp_new )
-    = . st max_idle_timeout 30000
-    = . st max_udp_payload_size 1350
-    = . st initial_max_data 1048576
-    = . st initial_max_stream_data_bidi_local 262144
-    = . st initial_max_stream_data_bidi_remote 262144
-    = . st initial_max_stream_data_uni 262144
-    = . st initial_max_streams_bidi 100
-    = . st initial_max_streams_uni 3
-    = . st ack_delay_exponent 3
-    = . st max_ack_delay 25
-    = . st disable_active_migration 1
-    = . st active_connection_id_limit 4
-    = . st has_original_dcid 1
+    : QuicTp st ( quic_tp_new )
+    ( quic_tp_set_max_idle_timeout st 30000 )
+    ( quic_tp_set_max_udp_payload_size st 1350 )
+    ( quic_tp_set_initial_max_data st 1048576 )
+    ( quic_tp_set_initial_max_stream_data_bidi_local st 262144 )
+    ( quic_tp_set_initial_max_stream_data_bidi_remote st 262144 )
+    ( quic_tp_set_initial_max_stream_data_uni st 262144 )
+    ( quic_tp_set_initial_max_streams_bidi st 100 )
+    ( quic_tp_set_initial_max_streams_uni st 3 )
+    ( quic_tp_set_ack_delay_exponent st 3 )
+    ( quic_tp_set_max_ack_delay st 25 )
+    ( quic_tp_set_disable_active_migration st 1 )
+    ( quic_tp_set_active_connection_id_limit st 4 )
     : ( Vec u ) tmp1 ( hx `8394c8f03e515708` )
-    ( bytes_extend_bytes . st original_dcid tmp1 )
+    ( quic_tp_set_original_dcid st tmp1 )
     ( vec_free [u] tmp1 )
-    = . st has_initial_scid 1
     : ( Vec u ) tmp2 ( hx `f067a5502a4262b5` )
-    ( bytes_extend_bytes . st initial_scid tmp2 )
+    ( quic_tp_set_initial_scid st tmp2 )
     ( vec_free [u] tmp2 )
-    = . st has_stateless_reset_token 1
     : ( Vec u ) tmp3 ( hx `000102030405060708090a0b0c0d0e0f` )
-    ( bytes_extend_bytes . st stateless_reset_token tmp3 )
+    ( quic_tp_set_stateless_reset_token st tmp3 )
     ( vec_free [u] tmp3 )
     : ( Vec u ) senc ( quic_tp_encode st T )
     = fails + fails ( check_hex `server_encode` senc `00088394c8f03e5157080104800075300210000102030405060708090a0b0c0d0e0f03024546040480100000050480040000060480040000070480040000080240640901030c000e01040f08f067a5502a4262b5` )
-    : *QuicTp sdec ( quic_tp_decode senc F )
-    ? == # i sdec 0 { ( nurl_print `server_decode: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `server_decode_odcid` . sdec has_original_dcid 1 )
-        = fails + fails ( check_hex `server_decode_token` . sdec stateless_reset_token `000102030405060708090a0b0c0d0e0f` )
-        = fails + fails ( check_int `server_decode_migration` . sdec disable_active_migration 1 )
-        = fails + fails ( check_int `server_decode_cid_limit` . sdec active_connection_id_limit 4 )
-        = fails + fails ( check_int `server_decode_udp` . sdec max_udp_payload_size 1350 )
+    : QuicTp sdec ( quic_tp_decode senc F )
+    ? == 0 # i . sdec ctl { ( nurl_print `server_decode: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `server_decode_odcid` ? ( quic_tp_has_original_dcid sdec ) 1 0 1 )
+        = fails + fails ( check_hex `server_decode_token` ( quic_tp_stateless_reset_token sdec ) `000102030405060708090a0b0c0d0e0f` )
+        = fails + fails ( check_int `server_decode_migration` ( quic_tp_disable_active_migration sdec ) 1 )
+        = fails + fails ( check_int `server_decode_cid_limit` ( quic_tp_active_connection_id_limit sdec ) 4 )
+        = fails + fails ( check_int `server_decode_udp` ( quic_tp_max_udp_payload_size sdec ) 1350 )
         ( quic_tp_free sdec )
     }
     // the same bytes read as a CLIENT's must be refused (server-only ids)
-    : *QuicTp wrong ( quic_tp_decode senc T )
-    = fails + fails ( check_int `server_set_from_client_rejected` ? == # i wrong 0 1 0 1 )
+    : QuicTp wrong ( quic_tp_decode senc T )
+    = fails + fails ( check_int `server_set_from_client_rejected` ? == 0 # i . wrong ctl 1 0 1 )
     ( quic_tp_free wrong )
     ( vec_free [u] senc )
     ( quic_tp_free st )
@@ -158,23 +155,23 @@ $ `stdlib/std/quic_tp.nu`
 
     // ── still accepted: boundary values and unknown ids ──────────
     : ( Vec u ) ok1 ( hx `030244b00a01140b0480003fff0e01020f08c1c2c3c4c5c6c7c8` )
-    : *QuicTp t3 ( quic_tp_decode ok1 T )
-    ? == # i t3 0 { ( nurl_print `accept_boundaries: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `accept_udp_1200` . t3 max_udp_payload_size 1200 )
-        = fails + fails ( check_int `accept_ack_exp_20` . t3 ack_delay_exponent 20 )
-        = fails + fails ( check_int `accept_max_ack_delay_16383` . t3 max_ack_delay 16383 )
+    : QuicTp t3 ( quic_tp_decode ok1 T )
+    ? == 0 # i . t3 ctl { ( nurl_print `accept_boundaries: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `accept_udp_1200` ( quic_tp_max_udp_payload_size t3 ) 1200 )
+        = fails + fails ( check_int `accept_ack_exp_20` ( quic_tp_ack_delay_exponent t3 ) 20 )
+        = fails + fails ( check_int `accept_max_ack_delay_16383` ( quic_tp_max_ack_delay t3 ) 16383 )
         ( quic_tp_free t3 )
     }
     ( vec_free [u] ok1 )
     // GREASE id 0x1b (27) with an arbitrary body, and a 2-byte id
     : ( Vec u ) ok2 ( hx `1b03aabbcc4aca000f08c1c2c3c4c5c6c7c8` )
-    : *QuicTp t4 ( quic_tp_decode ok2 T )
-    = fails + fails ( check_int `accept_unknown_ids` ? != # i t4 0 1 0 1 )
+    : QuicTp t4 ( quic_tp_decode ok2 T )
+    = fails + fails ( check_int `accept_unknown_ids` ? != 0 # i . t4 ctl 1 0 1 )
     ( quic_tp_free t4 )
     ( vec_free [u] ok2 )
     : ( Vec u ) ok3 ( hx ( minimal_client ) )
-    : *QuicTp t5 ( quic_tp_decode ok3 T )
-    = fails + fails ( check_int `accept_minimal` ? != # i t5 0 1 0 1 )
+    : QuicTp t5 ( quic_tp_decode ok3 T )
+    = fails + fails ( check_int `accept_minimal` ? != 0 # i . t5 ctl 1 0 1 )
     ( quic_tp_free t5 )
     ( vec_free [u] ok3 )
 

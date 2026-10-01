@@ -1107,7 +1107,6 @@ $ `src/service.nu`
     ( test_scratch r )
     ( test_oidc r )
 
-    ( router_free r )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
     ( string_free root )

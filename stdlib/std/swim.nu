@@ -28,6 +28,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/rng.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/async.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Member state ─────────────────────────────────────────────────────
 
@@ -222,11 +223,13 @@ $ `stdlib/std/async.nu`
 
 // ── Member table + failure detector ──────────────────────────────────
 //
-// Heap-allocated (pointer-shared) so the protocol loop and any inspector
-// observe one mutable view; every op takes the lock. `members` excludes
-// self — self is represented by `self_*` and emitted into gossip on demand.
+// A MemberTable is a handle, so the protocol loop and any inspector
+// observe one mutable view; every op takes the lock, and the last owner
+// releases it (mtable_free is an early release, optional). `members`
+// excludes self — self is represented by `self_*` and emitted into gossip
+// on demand.
 
-: MemberTable {
+: MemberTableImpl {
     Mutex m
     ( Vec Member ) members
     String self_host
@@ -236,8 +239,22 @@ $ `stdlib/std/async.nu`
     i suspect_timeout_ms
 }
 
-@ mtable_new s self_host i self_port i suspect_timeout_ms → *MemberTable {
-    : *MemberTable t # *MemberTable ( nurl_alloc Z MemberTable )
+// A MemberTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same table, and the last owner releases it.
+: MemberTable { s ctl }
+
+@ MemberTable_share MemberTable h → MemberTable { ^ @ MemberTable { # s ( rcbox_share # i . h ctl ) } }
+
+@ MemberTable_drop sink MemberTable h → v {
+    ( mem_forget h )
+    ( rcbox_release [MemberTableImpl] # i . h ctl )
+}
+
+@ __MemberTable_ptr MemberTable h → *MemberTableImpl { ^ ( rcbox_ptr [MemberTableImpl] # i . h ctl ) }
+
+@ mtable_new s self_host i self_port i suspect_timeout_ms → MemberTable {
+    : i t__box ( rcbox_zero [MemberTableImpl] )
+    : *MemberTableImpl t ( rcbox_ptr [MemberTableImpl] t__box )
     = . t m ( mutex_new )
     = . t members ( vec_new [Member] )
     = . t self_host ( string_from self_host )
@@ -245,16 +262,11 @@ $ `stdlib/std/async.nu`
     = . t self_incarnation 0
     = . t rng ( rng_seed ( monotonic_ns ) )
     = . t suspect_timeout_ms suspect_timeout_ms
-    ^ t
+    ^ @ MemberTable { # s t__box }
 }
 
-@ mtable_free sink * MemberTable t → v {
-    ( vec_free_with [Member] . t members \ Member mm → v { ( member_free mm ) } )
-    ( mutex_free . t m )
-    ( string_free . t self_host )
-    ( rng_free . t rng )
-    ( nurl_free # s t )
-}
+// Let go of `t` now rather than at the end of its owner's scope.
+@ mtable_free sink MemberTable t → v {}
 
 @ __member_copy Member m → Member {
     ^ @ Member { ( string_from ( string_data . m host ) ) . m port . m incarnation . m state . m last_change_ms }
@@ -265,7 +277,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Index of (host,port) in members, or -1. Caller holds the lock.
-@ __mtable_find * MemberTable t s host i port → i {
+@ __mtable_find * MemberTableImpl t s host i port → i {
     : i n ( vec_len [Member] . t members )
     : ~ i found - 0 1
     : ~ b done F
@@ -287,7 +299,8 @@ $ `stdlib/std/async.nu`
 // Merge one membership update under SWIM precedence. Returns T if the
 // local view changed in a way worth re-gossiping (state transition, new
 // member, or self-refutation). `up` is BORROWED (caller still owns it).
-@ mtable_apply * MemberTable t Member up → b {
+@ mtable_apply MemberTable t__h Member up → b {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : s uh ( string_data . up host )
     : i up_port . up port
@@ -332,7 +345,8 @@ $ `stdlib/std/async.nu`
 
 // Locally mark a member Suspect after a failed probe (keeps its current
 // incarnation — a refutation must out-number it). Returns T if changed.
-@ mtable_suspect * MemberTable t s host i port → b {
+@ mtable_suspect MemberTable t__h s host i port → b {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : i idx ( __mtable_find t host port )
     ? < idx 0 { ( mutex_unlock . t m ) ^ F } {}
@@ -349,7 +363,8 @@ $ `stdlib/std/async.nu`
 
 // Promote Suspect → Dead once the suspicion has aged past the timeout.
 // Returns the newly-dead members (owned copies) for gossip dissemination.
-@ mtable_sweep * MemberTable t → ( Vec Member ) {
+@ mtable_sweep MemberTable t__h → ( Vec Member ) {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : ( Vec Member ) dead ( vec_new [Member] )
     : i now ( monotonic_ns )
@@ -376,7 +391,8 @@ $ `stdlib/std/async.nu`
 }
 
 // Self as an Alive member snapshot (for gossip + join).
-@ mtable_self * MemberTable t → Member {
+@ mtable_self MemberTable t__h → Member {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : Member s @ Member { ( string_from ( string_data . t self_host ) ) . t self_port . t self_incarnation @ MemberState { MAlive } ( monotonic_ns ) }
     ( mutex_unlock . t m )
@@ -385,7 +401,8 @@ $ `stdlib/std/async.nu`
 
 // Pick a random member that is worth probing (Alive or Suspect). None
 // when the table has no such member. Returns an owned copy.
-@ mtable_pick_probe * MemberTable t → ?Member {
+@ mtable_pick_probe MemberTable t__h → ?Member {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : ( Vec i ) cand ( vec_new [i] )
     : i n ( vec_len [Member] . t members )
@@ -415,7 +432,8 @@ $ `stdlib/std/async.nu`
 
 // Up to `k` random members other than (host,port) — the indirect-probe
 // relays. Owned copies.
-@ mtable_pick_relays * MemberTable t i k s ex_host i ex_port → ( Vec Member ) {
+@ mtable_pick_relays MemberTable t__h i k s ex_host i ex_port → ( Vec Member ) {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : ( Vec i ) cand ( vec_new [i] )
     : i n ( vec_len [Member] . t members )
@@ -451,9 +469,10 @@ $ `stdlib/std/async.nu`
 }
 
 // Gossip sample: self (Alive) plus up to `max` random members. Owned.
-@ mtable_gossip * MemberTable t i max → ( Vec Member ) {
+@ mtable_gossip MemberTable t__h i max → ( Vec Member ) {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     : ( Vec Member ) g ( vec_new [Member] )
-    ( vec_push [Member] g ( mtable_self t ) )
+    ( vec_push [Member] g ( mtable_self t__h ) )
     ( mutex_lock . t m )
     : i n ( vec_len [Member] . t members )
     : ~ i taken 0
@@ -470,7 +489,8 @@ $ `stdlib/std/async.nu`
     ^ g
 }
 
-@ mtable_count * MemberTable t → i {
+@ mtable_count MemberTable t__h → i {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : i n ( vec_len [Member] . t members )
     ( mutex_unlock . t m )
@@ -478,7 +498,8 @@ $ `stdlib/std/async.nu`
 }
 
 // All members (excluding self) as owned copies — for inspection / UIs.
-@ mtable_snapshot * MemberTable t → ( Vec Member ) {
+@ mtable_snapshot MemberTable t__h → ( Vec Member ) {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : ( Vec Member ) out ( vec_new [Member] )
     : i n ( vec_len [Member] . t members )
@@ -495,7 +516,8 @@ $ `stdlib/std/async.nu`
 }
 
 // State of (host,port) as a code (0/1/2), or -1 if unknown. For tests.
-@ mtable_state_of * MemberTable t s host i port → i {
+@ mtable_state_of MemberTable t__h s host i port → i {
+    : *MemberTableImpl t ( __MemberTable_ptr t__h )
     ( mutex_lock . t m )
     : i idx ( __mtable_find t host port )
     : i st ? < idx 0 - 0 1 ?? ( vec_get [Member] . t members idx ) { T mm → ( __state_code . mm state ) F → - 0 1 }
@@ -513,7 +535,9 @@ $ `stdlib/std/async.nu`
 // but driven by a follow-up.)
 //
 // Two fibers: a receiver (answer PINGs, record ACKs, merge gossip) and
-// the failure detector. Heap-allocated so both fibers share one node.
+// the failure detector. A SwimNode is a handle: both fibers hold it, so
+// the node lives until swim_stop ends them and its last owner lets go —
+// then its socket is closed (swim_node_free is an early release, optional).
 
 // A pending indirect probe this node is relaying on a peer's behalf: it
 // PINGed `target` with `probe_seq`; when that ACK arrives it forwards an
@@ -527,8 +551,8 @@ $ `stdlib/std/async.nu`
     i created_ms
 }
 
-: SwimNode {
-    * MemberTable table
+: SwimNodeImpl {
+    MemberTable table
     UdpSocket sock
     String host
     i port
@@ -543,12 +567,32 @@ $ `stdlib/std/async.nu`
     i running
 }
 
-@ swim_node_new s host i port i period_ms i ping_timeout_ms i suspect_timeout_ms → !*SwimNode NetErr {
+// A SwimNode is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same node, and the last owner releases it.
+: SwimNode { s ctl }
+
+@ SwimNode_share SwimNode h → SwimNode { ^ @ SwimNode { # s ( rcbox_share # i . h ctl ) } }
+
+@ SwimNode_drop sink SwimNode h → v {
+    ( mem_forget h )
+    ( rcbox_release [SwimNodeImpl] # i . h ctl )
+}
+
+@ __SwimNode_ptr SwimNode h → *SwimNodeImpl { ^ ( rcbox_ptr [SwimNodeImpl] # i . h ctl ) }
+
+// The node bound its socket itself: its last owner closes it (the table,
+// the locks and the lists are the compiler's, dropped after this).
+% Drop SwimNodeImpl {
+    @ drop SwimNodeImpl n → v { ( udp_close . n sock ) }
+}
+
+@ swim_node_new s host i port i period_ms i ping_timeout_ms i suspect_timeout_ms → !SwimNode NetErr {
     : !UdpSocket NetErr sr ( udp_bind host port )
     ^ ?? sr {
         T sock → {
             ( udp_set_timeout sock 500 )
-            : *SwimNode n # *SwimNode ( nurl_alloc Z SwimNode )
+            : i n__box ( rcbox_zero [SwimNodeImpl] )
+            : *SwimNodeImpl n ( rcbox_ptr [SwimNodeImpl] n__box )
             = . n table ( mtable_new host port suspect_timeout_ms )
             = . n sock sock
             = . n host ( string_from host )
@@ -562,28 +606,22 @@ $ `stdlib/std/async.nu`
             = . n fwd_m ( mutex_new )
             = . n fwd ( vec_new [FwdEntry] )
             = . n running 1
-            @ !*SwimNode NetErr { T n }
+            @ !SwimNode NetErr { T @ SwimNode { # s n__box } }
         }
-        F e → @ !*SwimNode NetErr { F # NetErr e }
+        F e → @ !SwimNode NetErr { F # NetErr e }
     }
 }
 
-@ __node_table * SwimNode n → *MemberTable { ^ . n table }
-
-@ swim_table * SwimNode n → *MemberTable { ^ ( __node_table n ) }
-
-@ swim_node_free sink * SwimNode n → v {
-    ( mtable_free ( __node_table n ) )
-    ( udp_close . n sock )
-    ( mutex_free . n ack_m )
-    ( vec_free [i] . n acked )
-    ( vec_free_with [FwdEntry] . n fwd \ FwdEntry e → v { ( string_free . e req_host ) } )
-    ( mutex_free . n fwd_m )
-    ( string_free . n host )
-    ( nurl_free # s n )
+// The node's membership table: another owner of the same table.
+@ swim_table SwimNode n__h → MemberTable {
+    : *SwimNodeImpl n ( __SwimNode_ptr n__h )
+    ^ ( MemberTable_share . n table )
 }
 
-@ __node_send * SwimNode n s host i port SwimMsg m → v {
+// Let go of `n` now rather than at the end of its owner's scope.
+@ swim_node_free sink SwimNode n → v {}
+
+@ __node_send * SwimNodeImpl n s host i port SwimMsg m → v {
     : ( Vec u ) bytes ( swim_msg_encode m )
     : !i NetErr r ( udp_send_to . n sock bytes host port )
     ?? r { T _ → {} F _ → {} }
@@ -591,24 +629,24 @@ $ `stdlib/std/async.nu`
 }
 
 // Build a message of `ty` carrying a fresh gossip sample.
-@ __mk_msg * SwimNode n SwimMsgType ty i seq s th i tp → SwimMsg {
-    : ( Vec Member ) g ( mtable_gossip ( __node_table n ) 6 )
+@ __mk_msg * SwimNodeImpl n SwimMsgType ty i seq s th i tp → SwimMsg {
+    : ( Vec Member ) g ( mtable_gossip . n table 6 )
     ^ @ SwimMsg { ty seq ( string_from ( string_data . n host ) ) . n port ( string_from th ) tp g }
 }
 
-@ __apply_gossip * SwimNode n ( Vec Member ) g → v {
+@ __apply_gossip * SwimNodeImpl n ( Vec Member ) g → v {
     : i gn ( vec_len [Member] g )
     : ~ i k 0
     ~ < k gn {
         ?? ( vec_get [Member] g k ) {
-            T mm → { : b _c ( mtable_apply ( __node_table n ) mm ) }
+            T mm → { : b _c ( mtable_apply . n table mm ) }
             F → {}
         }
         = k + k 1
     }
 }
 
-@ __handle * SwimNode n SwimMsg m → v {
+@ __handle * SwimNodeImpl n SwimMsg m → v {
     ( __apply_gossip n . m gossip )
     : i ty ( _mtype_code . m mtype )
     ? == ty 1 {  // PING → ACK (echo seq)
@@ -647,7 +685,7 @@ $ `stdlib/std/async.nu`
 // A target's ACK to one of our relayed probes (`probe_seq`) → forward an
 // ACK carrying the requester's original seq back to them, and drop the
 // pending entry. No-op when `seq` matches no pending relay.
-@ __try_forward_ack * SwimNode n i seq → v {
+@ __try_forward_ack * SwimNodeImpl n i seq → v {
     ( mutex_lock . n fwd_m )
     : i nn ( vec_len [FwdEntry] . n fwd )
     : ~ i idx - 0 1
@@ -680,7 +718,7 @@ $ `stdlib/std/async.nu`
 
 // Drop relayed probes older than 2× the ping timeout (the target never
 // answered) so the pending list can't grow without bound.
-@ __prune_fwd * SwimNode n → v {
+@ __prune_fwd * SwimNodeImpl n → v {
     ( mutex_lock . n fwd_m )
     : i now / ( monotonic_ns ) 1000000
     : i cutoff * . n ping_timeout_ms 2
@@ -696,7 +734,7 @@ $ `stdlib/std/async.nu`
     ( mutex_unlock . n fwd_m )
 }
 
-@ __recv_loop * SwimNode n → v {
+@ __recv_loop * SwimNodeImpl n → v {
     ~ != 0 . n running {
         : !UdpPacket NetErr r ( udp_recv_from . n sock 2048 )
         ?? r {
@@ -713,7 +751,7 @@ $ `stdlib/std/async.nu`
     }
 }
 
-@ __got_ack * SwimNode n i seq → b {
+@ __got_ack * SwimNodeImpl n i seq → b {
     ( mutex_lock . n ack_m )
     : i nn ( vec_len [i] . n acked )
     : ~ b found F
@@ -730,10 +768,10 @@ $ `stdlib/std/async.nu`
 // Returns T if any relay reports back an ACK within the ping timeout (the
 // target is alive via some path). F when no relay answers — or when there
 // are no relays to ask.
-@ __indirect_probe * SwimNode n String thost i tport → b {
+@ __indirect_probe * SwimNodeImpl n String thost i tport → b {
     = . n seq_ctr + . n seq_ctr 1
     : i iseq . n seq_ctr
-    : ( Vec Member ) relays ( mtable_pick_relays ( __node_table n ) . n indirect_k ( string_data thost ) tport )
+    : ( Vec Member ) relays ( mtable_pick_relays . n table . n indirect_k ( string_data thost ) tport )
     : i rn ( vec_len [Member] relays )
     : ~ i ri 0
     ~ < ri rn {
@@ -759,10 +797,10 @@ $ `stdlib/std/async.nu`
     ^ iok
 }
 
-@ __fd_loop * SwimNode n → v {
+@ __fd_loop * SwimNodeImpl n → v {
     ~ != 0 . n running {
         ( sleep_ms . n period_ms )
-        : ?Member tgt ( mtable_pick_probe ( __node_table n ) )
+        : ?Member tgt ( mtable_pick_probe . n table )
         ?? tgt {
             T mm → {
                 = . n seq_ctr + . n seq_ctr 1
@@ -784,14 +822,14 @@ $ `stdlib/std/async.nu`
                     // can't cause a false positive.
                     : b iok ( __indirect_probe n . mm host . mm port )
                     ? ! iok {
-                        : b _s ( mtable_suspect ( __node_table n ) ( string_data . mm host ) . mm port )
+                        : b _s ( mtable_suspect . n table ( string_data . mm host ) . mm port )
                     } {}
                 } {}
                 ( member_free mm )
             }
             F → {}
         }
-        : ( Vec Member ) dead ( mtable_sweep ( __node_table n ) )
+        : ( Vec Member ) dead ( mtable_sweep . n table )
         ( vec_free_with [Member] dead \ Member d → v { ( member_free d ) } )
         ( __prune_fwd n )
         ( mutex_lock . n ack_m )
@@ -802,7 +840,8 @@ $ `stdlib/std/async.nu`
 
 // Announce ourselves to a seed node (it learns us via the JOIN's gossip
 // and replies with its own membership).
-@ swim_join * SwimNode n s seed_host i seed_port → v {
+@ swim_join SwimNode n__h s seed_host i seed_port → v {
+    : *SwimNodeImpl n ( __SwimNode_ptr n__h )
     : SwimMsg j ( __mk_msg n @ SwimMsgType { MtJoin } 0 `` 0 )
     ( __node_send n seed_host seed_port j )
     ( swim_msg_free j )
@@ -810,9 +849,17 @@ $ `stdlib/std/async.nu`
 
 // Spawn the receiver + failure-detector fibers. Requires runtime_init /
 // runtime_run by the caller.
-@ swim_run * SwimNode n → v {
-    ( spawn \ → v { ( __recv_loop n ) } )
-    ( spawn \ → v { ( __fd_loop n ) } )
+@ swim_run SwimNode n → v {
+    // Each fiber owns a share of the node and lets go of it when its loop
+    // ends (a closure that releases a capture takes it over), so the
+    // caller's handle may go at any time: the node outlives both loops.
+    : SwimNode rn ( SwimNode_share n )
+    ( spawn \ → v { ( __recv_loop ( __SwimNode_ptr rn ) ) ( swim_node_free rn ) } )
+    : SwimNode fn ( SwimNode_share n )
+    ( spawn \ → v { ( __fd_loop ( __SwimNode_ptr fn ) ) ( swim_node_free fn ) } )
 }
 
-@ swim_stop * SwimNode n → v { = . n running 0 }
+@ swim_stop SwimNode n__h → v {
+    : *SwimNodeImpl n ( __SwimNode_ptr n__h )
+    = . n running 0
+}

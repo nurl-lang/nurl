@@ -5,12 +5,13 @@
 // the socket, the loop and the clock, and the application (HTTP/3 in
 // `ext/http3_conn.nu` / `ext/http3_client.nu`) talks to streams.
 //
-//   ( quic_conn_new_server scid odcid peer creds alpn_prefs tp now ) → *QuicConn
-//   ( quic_conn_new_client peer server_name alpn tp verify now )     → *QuicConn  the ClientHello is queued;
+//   ( quic_conn_new_server scid odcid peer creds alpn_prefs tp now ) → QuicConn
+//   ( quic_conn_new_client peer server_name alpn tp verify now )     → QuicConn   the ClientHello is queued;
 //                                                                                  `alpn` = "h3" (preference list);
 //                                                                                  verify = 1 checks the certificate chain
 //                                                                                  + hostname (std/tls_verify.nu)
-//   ( quic_conn_free c )                                 → v
+//   ( quic_conn_free c )                                 → v        early release (optional: the last
+//                                                                   owner of a QuicConn releases it)
 //   ( quic_conn_recv c dgram from now )                  → v        one UDP datagram (coalesced packets)
 //   ( quic_conn_send c now )                             → ( Vec u ) OWNED next datagram, empty when nothing to send
 //   ( quic_conn_on_timeout c now )                       → v
@@ -18,6 +19,8 @@
 //   ( quic_conn_state c )                                → i        0 handshaking · 1 established · 2 closing · 3 draining · 4 closed
 //   ( quic_conn_close c app code reason )                → v        start closing (app = 1 for an application error)
 //   ( quic_conn_alpn c ) · ( quic_conn_peer c ) · ( quic_conn_cids c )  BORROWED
+//   ( quic_conn_retired_cids c )                         → ( Vec u ) BORROWED ids the peer retired, until
+//                                                                   ( quic_conn_clear_retired_cids c )
 //
 // Streams (ids per RFC 9000 §2.1; the server's own streams are odd):
 //
@@ -52,6 +55,7 @@ $ `stdlib/std/quic_tp.nu`
 $ `stdlib/std/quic_rxbuf.nu`
 $ `stdlib/std/quic_tls.nu`
 $ `stdlib/std/quic_recovery.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── error codes (RFC 9000 §20.1) ─────────────────────────────────
 @ quic_err_no_error → i { ^ 0 }
@@ -79,8 +83,10 @@ $ `stdlib/std/quic_recovery.nu`
 // 204 secret key, ml_level its parameter set). `pq_chain` / `pq_sk` /
 // `pq_level` are an optional SECOND identity — an ML-DSA leaf served
 // beside the classical one to clients whose signature_algorithms list
-// it (`quic_creds_set_pq`, the tls_accept_dual_alpn inputs).
-: QuicCreds {
+// it (`quic_creds_set_pq`, the tls_accept_dual_alpn inputs). A QuicCreds
+// is shared by every connection of a listener; quic_creds_free is an
+// early release (optional: the last owner releases it).
+: QuicCredsImpl {
     ( Vec u ) cert_chain
     i keytype
     ( Vec u ) ec_priv
@@ -93,8 +99,22 @@ $ `stdlib/std/quic_recovery.nu`
     ( Vec u ) pq_sk
 }
 
-@ quic_creds_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → *QuicCreds {
-    : *QuicCreds k # *QuicCreds ( nurl_alloc Z QuicCreds )
+// A QuicCreds is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicCreds { s ctl }
+
+@ QuicCreds_share QuicCreds h → QuicCreds { ^ @ QuicCreds { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicCreds_drop sink QuicCreds h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicCredsImpl] # i . h ctl )
+}
+
+@ __QuicCreds_ptr QuicCreds h → *QuicCredsImpl { ^ ( rcbox_ptr [QuicCredsImpl] # i . h ctl ) }
+
+@ quic_creds_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → QuicCreds {
+    : i k__box ( rcbox_zero [QuicCredsImpl] )
+    : *QuicCredsImpl k ( rcbox_ptr [QuicCredsImpl] k__box )
     = . k cert_chain ( bytes_slice cert_chain 0 ( vec_len [u] cert_chain ) )
     = . k keytype keytype
     = . k ec_priv ( bytes_slice ec_priv 0 ( vec_len [u] ec_priv ) )
@@ -105,11 +125,12 @@ $ `stdlib/std/quic_recovery.nu`
     = . k pq_chain ( vec_new [u] )
     = . k pq_level 0
     = . k pq_sk ( vec_new [u] )
-    ^ k
+    ^ @ QuicCreds { # s k__box }
 }
 
 // Park an ML-DSA identity beside the classical one (copies).
-@ quic_creds_set_pq * QuicCreds k ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+@ quic_creds_set_pq QuicCreds k__h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+    : *QuicCredsImpl k ( __QuicCreds_ptr k__h )
     ( vec_clear [u] . k pq_chain )
     ( bytes_extend_bytes . k pq_chain pq_chain )
     ( vec_clear [u] . k pq_sk )
@@ -117,19 +138,14 @@ $ `stdlib/std/quic_recovery.nu`
     = . k pq_level pq_level
 }
 
-@ quic_creds_free sink * QuicCreds k → v {
-    ? == # i k 0 { ^ } {}
-    ( vec_free [u] . k cert_chain ) ( vec_free [u] . k ec_priv )
-    ( vec_free [u] . k rsa_n ) ( vec_free [u] . k rsa_e ) ( vec_free [u] . k rsa_d )
-    ( vec_free [u] . k pq_chain ) ( vec_free [u] . k pq_sk )
-    ( nurl_free # s k )
-}
+// Let go of `k` now rather than at the end of its owner's scope.
+@ quic_creds_free sink QuicCreds k → v {}
 
 // ── streams ──────────────────────────────────────────────────────
 
 : QuicStream {
     i id
-    * QuicRxBuf rx
+    QuicRxBuf rx
     i rx_window
     i rx_max_data
     i rx_fin_off
@@ -158,7 +174,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . s id id
     // Our own unidirectional stream has no receive side.
     : b has_rx ! & local ! ( __qc_stream_is_bidi id )
-    = . s rx ? has_rx ( quic_rxbuf_new rx_window ) # *QuicRxBuf 0
+    ? has_rx { = . s rx ( quic_rxbuf_new rx_window ) } { = . s rx @ QuicRxBuf { # s 0 } }
     = . s rx_window rx_window
     = . s rx_max_data rx_window
     = . s rx_fin_off -1
@@ -188,7 +204,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── the connection ───────────────────────────────────────────────
 
-: QuicConn {
+: QuicConnImpl {
     i state
     i now
     ( Vec u ) scid
@@ -196,6 +212,7 @@ $ `stdlib/std/quic_recovery.nu`
     ( Vec u ) odcid
     ( Vec u ) peer
     ( Vec u ) cids
+    ( Vec u ) retired_cids  // issued ids the peer retired, until the listener unroutes them
     ( Vec i ) cid_seqs
     i cid_next_seq
     i cid_extra_issued
@@ -205,16 +222,16 @@ $ `stdlib/std/quic_recovery.nu`
     i validated
     i bytes_recv
     i bytes_sent
-    * QuicTlsSrv tls
+    QuicTlsSrv tls
     i tls_state
-    * QuicKeys k_rx0
-    * QuicKeys k_tx0
-    * QuicKeys k_rx1
-    * QuicKeys k_tx1
-    * QuicKeys k_rx2
-    * QuicKeys k_tx2
-    * QuicKeys k_rx2_prev
-    * QuicKeys k_rx2_next
+    QuicKeys k_rx0
+    QuicKeys k_tx0
+    QuicKeys k_rx1
+    QuicKeys k_tx1
+    QuicKeys k_rx2
+    QuicKeys k_tx2
+    QuicKeys k_rx2_prev
+    QuicKeys k_rx2_next
     i key_phase
     i key_update_pn
     i keys0_dropped
@@ -233,7 +250,7 @@ $ `stdlib/std/quic_recovery.nu`
     i ack_needed1
     i ack_needed2
     i ae_since_ack2
-    * QuicRecovery rec
+    QuicRecovery rec
     i crypto_sent0
     i crypto_sent1
     i crypto_sent2
@@ -244,8 +261,8 @@ $ `stdlib/std/quic_recovery.nu`
     ( Vec u ) retx1
     ( Vec u ) retx2
     ( Vec u ) ctl2
-    * QuicTp local_tp
-    * QuicTp peer_tp
+    QuicTp local_tp
+    QuicTp peer_tp
     i max_data_local
     i data_recv
     i data_consumed
@@ -279,7 +296,7 @@ $ `stdlib/std/quic_recovery.nu`
     i alpn_ok
     // ── role ──
     i is_client
-    * QuicTlsCli tlsc  // the client's TLS machine (`tls` is the server's)
+    QuicTlsCli tlsc  // the client's TLS machine (`tls` is the server's)
     ( Vec u ) token  // Retry token to put in our Initials (client)
     ( Vec u ) new_token  // the server's NEW_TOKEN, for a later connection (client)
     i retry_seen
@@ -289,6 +306,33 @@ $ `stdlib/std/quic_recovery.nu`
     i verify
     i peer_closed  // the close code / reason came from the peer's CONNECTION_CLOSE
 }
+
+// A QuicConn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same connection (the listener's table, the HTTP/3
+// layer on top), and the last owner releases it.
+: QuicConn { s ctl }
+
+// The streams are raw QuicStream blocks (as integers): releasing them is
+// the connection's own drop. Keys, TLS machine, recovery state, transport
+// parameters and buffers go with the fields after it.
+% Drop QuicConnImpl {
+    @ drop QuicConnImpl c → v {
+        : ~ i k 0
+        ~ < k ( vec_len [i] . c streams ) {
+            ( __qc_stream_free # *QuicStream ( __qc_ri . c streams k ) )
+            = k + k 1
+        }
+    }
+}
+
+@ QuicConn_share QuicConn h → QuicConn { ^ @ QuicConn { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicConn_drop sink QuicConn h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicConnImpl] # i . h ctl )
+}
+
+@ __QuicConn_ptr QuicConn h → *QuicConnImpl { ^ ( rcbox_ptr [QuicConnImpl] # i . h ctl ) }
 
 @ quic_conn_default_idle_ms → i { ^ 30000 }
 
@@ -301,7 +345,7 @@ $ `stdlib/std/quic_recovery.nu`
 @ quic_conn_default_max_streams_uni → i { ^ 3 }
 
 // Did this endpoint open stream `id`? (server: odd ids; client: even)
-@ __qc_is_local * QuicConn c i id → b { ^ == & id 1 ? != . c is_client 0 0 1 }
+@ __qc_is_local * QuicConnImpl c i id → b { ^ == & id 1 ? != . c is_client 0 0 1 }
 
 @ __qc_rand i n → ( Vec u ) {
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
@@ -313,8 +357,9 @@ $ `stdlib/std/quic_recovery.nu`
 
 // Everything both roles share: `tp` is the caller's template (limits);
 // the connection IDs, keys and the TLS machine are the role's to add.
-@ __qc_new_common ( Vec u ) scid ( Vec u ) peer * QuicTp tp i now → *QuicConn {
-    : *QuicConn c # *QuicConn ( nurl_alloc Z QuicConn )
+@ __qc_new_common ( Vec u ) scid ( Vec u ) peer QuicTp tp i now → QuicConn {
+    : i c__box ( rcbox_zero [QuicConnImpl] )
+    : *QuicConnImpl c ( rcbox_ptr [QuicConnImpl] c__box )
     = . c state 0
     = . c now now
     = . c scid ( bytes_slice scid 0 ( vec_len [u] scid ) )
@@ -322,6 +367,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . c odcid ( vec_new [u] )
     = . c peer ( bytes_slice peer 0 ( vec_len [u] peer ) )
     = . c cids ( bytes_slice scid 0 ( vec_len [u] scid ) )
+    = . c retired_cids ( vec_new [u] )
     = . c cid_seqs ( vec_new [i] )
     ( vec_push [i] . c cid_seqs 0 )
     = . c cid_next_seq 1
@@ -333,32 +379,31 @@ $ `stdlib/std/quic_recovery.nu`
     = . c bytes_recv 0
     = . c bytes_sent 0
     // our transport parameters
-    : *QuicTp mine ( quic_tp_new )
-    = . mine max_idle_timeout . tp max_idle_timeout
-    = . mine max_udp_payload_size . tp max_udp_payload_size
-    = . mine initial_max_data . tp initial_max_data
-    = . mine initial_max_stream_data_bidi_local . tp initial_max_stream_data_bidi_local
-    = . mine initial_max_stream_data_bidi_remote . tp initial_max_stream_data_bidi_remote
-    = . mine initial_max_stream_data_uni . tp initial_max_stream_data_uni
-    = . mine initial_max_streams_bidi . tp initial_max_streams_bidi
-    = . mine initial_max_streams_uni . tp initial_max_streams_uni
-    = . mine ack_delay_exponent 3
-    = . mine max_ack_delay 25
-    = . mine disable_active_migration 1
-    = . mine active_connection_id_limit 4
-    = . mine has_initial_scid 1
-    ( bytes_extend_bytes . mine initial_scid scid )
+    : QuicTp mine ( quic_tp_new )
+    ( quic_tp_set_max_idle_timeout mine ( quic_tp_max_idle_timeout tp ) )
+    ( quic_tp_set_max_udp_payload_size mine ( quic_tp_max_udp_payload_size tp ) )
+    ( quic_tp_set_initial_max_data mine ( quic_tp_initial_max_data tp ) )
+    ( quic_tp_set_initial_max_stream_data_bidi_local mine ( quic_tp_initial_max_stream_data_bidi_local tp ) )
+    ( quic_tp_set_initial_max_stream_data_bidi_remote mine ( quic_tp_initial_max_stream_data_bidi_remote tp ) )
+    ( quic_tp_set_initial_max_stream_data_uni mine ( quic_tp_initial_max_stream_data_uni tp ) )
+    ( quic_tp_set_initial_max_streams_bidi mine ( quic_tp_initial_max_streams_bidi tp ) )
+    ( quic_tp_set_initial_max_streams_uni mine ( quic_tp_initial_max_streams_uni tp ) )
+    ( quic_tp_set_ack_delay_exponent mine 3 )
+    ( quic_tp_set_max_ack_delay mine 25 )
+    ( quic_tp_set_disable_active_migration mine 1 )
+    ( quic_tp_set_active_connection_id_limit mine 4 )
+    ( quic_tp_set_initial_scid mine scid )
     = . c local_tp mine
-    = . c tls # *QuicTlsSrv 0
+    = . c tls @ QuicTlsSrv { # s 0 }
     = . c tls_state 0
-    = . c k_rx0 # *QuicKeys 0
-    = . c k_tx0 # *QuicKeys 0
-    = . c k_rx1 # *QuicKeys 0
-    = . c k_tx1 # *QuicKeys 0
-    = . c k_rx2 # *QuicKeys 0
-    = . c k_tx2 # *QuicKeys 0
-    = . c k_rx2_prev # *QuicKeys 0
-    = . c k_rx2_next # *QuicKeys 0
+    = . c k_rx0 @ QuicKeys { # s 0 }
+    = . c k_tx0 @ QuicKeys { # s 0 }
+    = . c k_rx1 @ QuicKeys { # s 0 }
+    = . c k_tx1 @ QuicKeys { # s 0 }
+    = . c k_rx2 @ QuicKeys { # s 0 }
+    = . c k_tx2 @ QuicKeys { # s 0 }
+    = . c k_rx2_prev @ QuicKeys { # s 0 }
+    = . c k_rx2_next @ QuicKeys { # s 0 }
     = . c key_phase 0
     = . c key_update_pn -1
     = . c keys0_dropped 0
@@ -388,14 +433,14 @@ $ `stdlib/std/quic_recovery.nu`
     = . c retx1 ( vec_new [u] )
     = . c retx2 ( vec_new [u] )
     = . c ctl2 ( vec_new [u] )
-    = . c peer_tp # *QuicTp 0
-    = . c max_data_local . tp initial_max_data
+    = . c peer_tp @ QuicTp { # s 0 }
+    = . c max_data_local ( quic_tp_initial_max_data tp )
     = . c data_recv 0
     = . c data_consumed 0
     = . c max_data_peer 0
     = . c data_sent 0
-    = . c max_streams_bidi_local . tp initial_max_streams_bidi
-    = . c max_streams_uni_local . tp initial_max_streams_uni
+    = . c max_streams_bidi_local ( quic_tp_initial_max_streams_bidi tp )
+    = . c max_streams_uni_local ( quic_tp_initial_max_streams_uni tp )
     = . c peer_bidi_opened 0
     = . c peer_uni_opened 0
     = . c peer_bidi_closed 0
@@ -406,7 +451,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . c next_local_uni 3
     = . c streams ( vec_new [i] )
     = . c readable ( vec_new [i] )
-    = . c idle_timeout . tp max_idle_timeout
+    = . c idle_timeout ( quic_tp_max_idle_timeout tp )
     = . c last_activity now
     = . c handshake_done_sent 0
     = . c confirmed 0
@@ -418,10 +463,10 @@ $ `stdlib/std/quic_recovery.nu`
     = . c close_sent 0
     = . c close_pkts_since 0
     = . c max_udp 1200
-    = . c stream_rx_window . tp initial_max_stream_data_bidi_remote
+    = . c stream_rx_window ( quic_tp_initial_max_stream_data_bidi_remote tp )
     = . c alpn_ok 0
     = . c is_client 0
-    = . c tlsc # *QuicTlsCli 0
+    = . c tlsc @ QuicTlsCli { # s 0 }
     = . c token ( vec_new [u] )
     = . c new_token ( vec_new [u] )
     = . c retry_seen 0
@@ -430,20 +475,20 @@ $ `stdlib/std/quic_recovery.nu`
     = . c server_name ( vec_new [u] )
     = . c verify 0
     = . c peer_closed 0
-    ^ c
+    ^ @ QuicConn { # s c__box }
 }
 
 // The transport parameters this server sends: `tp` is the caller's
 // template (limits); the connection IDs are filled in here.
-@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer * QuicCreds creds ( Vec u ) alpn_prefs * QuicTp tp i now → *QuicConn {
-    : *QuicConn c ( __qc_new_common scid peer tp now )
+@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer QuicCreds creds__h ( Vec u ) alpn_prefs QuicTp tp i now → QuicConn {
+    : *QuicCredsImpl creds ( __QuicCreds_ptr creds__h )
+    : QuicConn h ( __qc_new_common scid peer tp now )
+    : *QuicConnImpl c ( __QuicConn_ptr h )
     ( bytes_extend_bytes . c odcid odcid )
-    : *QuicTp mine . c local_tp
-    = . mine has_original_dcid 1
-    ( bytes_extend_bytes . mine original_dcid odcid )
-    = . mine has_stateless_reset_token 1
+    : QuicTp mine . c local_tp
+    ( quic_tp_set_original_dcid mine odcid )
     : ( Vec u ) tok ( __qc_rand 16 )
-    ( bytes_extend_bytes . mine stateless_reset_token tok )
+    ( quic_tp_set_stateless_reset_token mine tok )
     ( vec_free [u] tok )
     : ( Vec u ) tpb ( quic_tp_encode mine T )
     = . c tls ( quic_tls_srv_new . creds cert_chain . creds keytype . creds ec_priv . creds rsa_n . creds rsa_e . creds rsa_d . creds ml_level alpn_prefs tpb )
@@ -451,7 +496,7 @@ $ `stdlib/std/quic_recovery.nu`
     ( vec_free [u] tpb )
     = . c k_rx0 ( quic_initial_keys odcid T )
     = . c k_tx0 ( quic_initial_keys odcid F )
-    ^ c
+    ^ h
 }
 
 // A client connection to `peer` (a udp_addr): the ClientHello is built
@@ -459,10 +504,11 @@ $ `stdlib/std/quic_recovery.nu`
 // The DCID we choose (`odcid`, 8 random bytes) keys the Initial packets
 // until the server's first Initial tells us its SCID (§7.2); the server
 // must echo it back as original_destination_connection_id (§7.3).
-@ quic_conn_new_client ( Vec u ) peer s server_name s alpn * QuicTp tp i verify i now → *QuicConn {
+@ quic_conn_new_client ( Vec u ) peer s server_name s alpn QuicTp tp i verify i now → QuicConn {
     : ( Vec u ) scid ( __qc_rand 8 )
     : ( Vec u ) dcid ( __qc_rand 8 )
-    : *QuicConn c ( __qc_new_common scid peer tp now )
+    : QuicConn h ( __qc_new_common scid peer tp now )
+    : *QuicConnImpl c ( __QuicConn_ptr h )
     = . c is_client 1
     ( bytes_extend_bytes . c dcid dcid )
     ( bytes_extend_bytes . c odcid dcid )
@@ -485,75 +531,94 @@ $ `stdlib/std/quic_recovery.nu`
     ( __qc_tls_pump c )
     ( vec_free [u] dcid )
     ( vec_free [u] scid )
-    ^ c
+    ^ h
 }
 
-@ quic_conn_free sink * QuicConn c → v {
-    ? == # i c 0 { ^ } {}
-    ( vec_free [u] . c scid ) ( vec_free [u] . c dcid ) ( vec_free [u] . c odcid )
-    ( vec_free [u] . c peer ) ( vec_free [u] . c cids ) ( vec_free [i] . c cid_seqs )
-    ( vec_free [u] . c peer_cids ) ( vec_free [i] . c peer_cid_seqs )
-    ( quic_tls_srv_free . c tls )
-    ( quic_tls_cli_free . c tlsc )
-    ( vec_free [u] . c token ) ( vec_free [u] . c new_token )
-    ( vec_free [u] . c retry_scid ) ( vec_free [u] . c server_name )
-    ( quic_keys_free . c k_rx0 ) ( quic_keys_free . c k_tx0 )
-    ( quic_keys_free . c k_rx1 ) ( quic_keys_free . c k_tx1 )
-    ( quic_keys_free . c k_rx2 ) ( quic_keys_free . c k_tx2 )
-    ( quic_keys_free . c k_rx2_prev ) ( quic_keys_free . c k_rx2_next )
-    ( vec_free [i] . c rx_ranges0 ) ( vec_free [i] . c rx_ranges1 ) ( vec_free [i] . c rx_ranges2 )
-    ( quic_rec_free . c rec )
-    ( vec_free [u] . c crypto_out0 ) ( vec_free [u] . c crypto_out1 ) ( vec_free [u] . c crypto_out2 )
-    ( vec_free [u] . c retx0 ) ( vec_free [u] . c retx1 ) ( vec_free [u] . c retx2 )
-    ( vec_free [u] . c ctl2 )
-    ( quic_tp_free . c local_tp ) ( quic_tp_free . c peer_tp )
-    : ~ i k 0
-    ~ < k ( vec_len [i] . c streams ) {
-        ( __qc_stream_free # *QuicStream ?? ( vec_get [i] . c streams k ) { T x → x F → 0 } )
-        = k + k 1
-    }
-    ( vec_free [i] . c streams ) ( vec_free [i] . c readable )
-    ( vec_free [u] . c close_reason )
-    ( nurl_free # s c )
+// Let go of `c` now rather than at the end of its owner's scope.
+@ quic_conn_free sink QuicConn c → v {}
+
+@ quic_conn_state QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c state
 }
 
-@ quic_conn_state * QuicConn c → i { ^ . c state }
-
-@ quic_conn_alpn * QuicConn c → ( Vec u ) {
+@ quic_conn_alpn QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ? != . c is_client 0 { ^ ( quic_tls_cli_alpn . c tlsc ) } {}
     ^ ( quic_tls_srv_alpn . c tls )
 }
 
-@ quic_conn_is_client * QuicConn c → b { ^ != . c is_client 0 }
+@ quic_conn_is_client QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c is_client 0
+}
 
 // T when the key exchange was X25519MLKEM768.
-@ quic_conn_is_pq * QuicConn c → b {
+@ quic_conn_is_pq QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ? != . c is_client 0 { ^ ( quic_tls_cli_is_pq . c tlsc ) } {}
-    ^ == . . . c tls hs kx_group 4588
+    ^ ( quic_tls_srv_is_pq . c tls )
 }
 
 // Handshake confirmed (§4.1.2): the server on the client's Finished,
 // the client on HANDSHAKE_DONE.
-@ quic_conn_confirmed * QuicConn c → b { ^ != . c confirmed 0 }
+@ quic_conn_confirmed QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c confirmed 0
+}
 
 // The code the connection is closing / closed with (-1 none); with
 // `quic_conn_close_is_app` telling an application error from a
 // transport one.
-@ quic_conn_close_code * QuicConn c → i { ^ . c close_code }
+@ quic_conn_close_code QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c close_code
+}
 
-@ quic_conn_close_is_app * QuicConn c → b { ^ != . c close_app 0 }
+@ quic_conn_close_is_app QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c close_app 0
+}
 
 // T when the close was the peer's (its CONNECTION_CLOSE), F when ours.
-@ quic_conn_closed_by_peer * QuicConn c → b { ^ != . c peer_closed 0 }
+@ quic_conn_closed_by_peer QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c peer_closed 0
+}
 
 // BORROWED: the reason phrase of the close (ours or the peer's).
-@ quic_conn_close_reason * QuicConn c → ( Vec u ) { ^ . c close_reason }
+@ quic_conn_close_reason QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c close_reason
+}
 
-@ quic_conn_new_token * QuicConn c → ( Vec u ) { ^ . c new_token }
+@ quic_conn_new_token QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c new_token
+}
 
-@ quic_conn_peer * QuicConn c → ( Vec u ) { ^ . c peer }
+@ quic_conn_peer QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c peer
+}
 
-@ quic_conn_cids * QuicConn c → ( Vec u ) { ^ . c cids }
+@ quic_conn_cids QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c cids
+}
+
+// BORROWED: ids this endpoint issued that the peer has since retired
+// (8 bytes each) — still in a listener's routing table until it calls
+// quic_conn_clear_retired_cids.
+@ quic_conn_retired_cids QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c retired_cids
+}
+
+@ quic_conn_clear_retired_cids QuicConn c__h → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ( vec_clear [u] . c retired_cids )
+}
 
 @ quic_conn_scid_len → i { ^ 8 }
 
@@ -570,7 +635,7 @@ $ `stdlib/std/quic_recovery.nu`
 // Enter the closing state with a transport (`app` = 0) or application
 // (`app` = 1) error. The CONNECTION_CLOSE goes out with the next
 // `quic_conn_send`; the state lasts 3 PTOs (§10.2).
-@ __qc_fail * QuicConn c i app i code i frame_type → v {
+@ __qc_fail * QuicConnImpl c i app i code i frame_type → v {
     ? >= . c state 2 { ^ } {}
     = . c state 2
     = . c close_app app
@@ -581,7 +646,8 @@ $ `stdlib/std/quic_recovery.nu`
     = . c close_deadline + . c now * 3 ( quic_rec_pto . c rec )
 }
 
-@ quic_conn_close * QuicConn c i app i code ( Vec u ) reason → v {
+@ quic_conn_close QuicConn c__h i app i code ( Vec u ) reason → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ( vec_clear [u] . c close_reason )
     ( bytes_extend_bytes . c close_reason reason )
     ( __qc_fail c app code 0 )
@@ -589,7 +655,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── streams: lookup / open ───────────────────────────────────────
 
-@ __qc_stream_get * QuicConn c i id → *QuicStream {
+@ __qc_stream_get * QuicConnImpl c i id → *QuicStream {
     : ~ i k 0
     ~ < k ( vec_len [i] . c streams ) {
         : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
@@ -602,7 +668,7 @@ $ `stdlib/std/quic_recovery.nu`
 // The peer's stream `id`: open it (and every lower one of its kind not
 // yet seen) unless it is beyond the limit we advertised. Returns the
 // stream, or 0 with the connection failed.
-@ __qc_peer_stream * QuicConn c i id → *QuicStream {
+@ __qc_peer_stream * QuicConnImpl c i id → *QuicStream {
     : *QuicStream s ( __qc_stream_get c id )
     ? != # i s 0 { ^ s } {}
     : b bidi ( __qc_stream_is_bidi id )
@@ -615,8 +681,8 @@ $ `stdlib/std/quic_recovery.nu`
         // it was opened and later released — treat as closed: no state
         ^ # *QuicStream 0
     } {}
-    : i window ? bidi . . c local_tp initial_max_stream_data_bidi_remote . . c local_tp initial_max_stream_data_uni
-    : i tx_max ? bidi ? != # i . c peer_tp 0 . . c peer_tp initial_max_stream_data_bidi_local 0 0
+    : i window ? bidi ( quic_tp_initial_max_stream_data_bidi_remote . c local_tp ) ( quic_tp_initial_max_stream_data_uni . c local_tp )
+    : i tx_max ? bidi ? != 0 # i . . c peer_tp ctl ( quic_tp_initial_max_stream_data_bidi_local . c peer_tp ) 0 0
     : ~ i i opened
     ~ <= i idx {
         : i nid | << i 2 & id 3
@@ -628,14 +694,15 @@ $ `stdlib/std/quic_recovery.nu`
     ^ ( __qc_stream_get c id )
 }
 
-@ __qc_mark_readable * QuicConn c * QuicStream s → v {
+@ __qc_mark_readable * QuicConnImpl c * QuicStream s → v {
     ? != . s readable 0 { ^ } {}
     = . s readable 1
     ( vec_push [i] . c readable . s id )
 }
 
 // Put ids back in front of the readable queue (the listener peeked).
-@ _qc_requeue_readable * QuicConn c ( Vec i ) ids → v {
+@ _qc_requeue_readable QuicConn c__h ( Vec i ) ids → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : ~ i k 0
     ~ < k ( vec_len [i] ids ) {
         : *QuicStream s ( __qc_stream_get c ( __qc_ri ids k ) )
@@ -644,10 +711,16 @@ $ `stdlib/std/quic_recovery.nu`
     }
 }
 
-@ quic_conn_odcid * QuicConn c → ( Vec u ) { ^ . c odcid }
+@ quic_conn_odcid QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c odcid
+}
 
-@ quic_conn_take_readable * QuicConn c → ( Vec i ) {
+@ quic_conn_take_readable QuicConn c__h → ( Vec i ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    // The queue moves out (the connection starts an empty one).
     : ( Vec i ) out . c readable
+    ( mem_take out )
     = . c readable ( vec_new [i] )
     : ~ i k 0
     ~ < k ( vec_len [i] out ) {
@@ -660,9 +733,10 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── streams: application side ────────────────────────────────────
 
-@ quic_conn_stream_recv * QuicConn c i id i max → ( Vec u ) {
+@ quic_conn_stream_recv QuicConn c__h i id i max → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
-    ? | == # i s 0 == # i . s rx 0 { ^ ( vec_new [u] ) } {}
+    ? | == # i s 0 == 0 # i . . s rx ctl { ^ ( vec_new [u] ) } {}
     ? >= . s rx_reset_err 0 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) out ( quic_rxbuf_read . s rx max )
     : i n ( vec_len [u] out )
@@ -676,8 +750,8 @@ $ `stdlib/std/quic_recovery.nu`
             ( quic_push_max_stream_data . c ctl2 id . s rx_max_data )
         } {}
         // connection window likewise
-        ? < - . c max_data_local . c data_consumed / . . c local_tp initial_max_data 2 {
-            = . c max_data_local + . c data_consumed . . c local_tp initial_max_data
+        ? < - . c max_data_local . c data_consumed / ( quic_tp_initial_max_data . c local_tp ) 2 {
+            = . c max_data_local + . c data_consumed ( quic_tp_initial_max_data . c local_tp )
             ( quic_push_max_data . c ctl2 . c max_data_local )
         } {}
     } {}
@@ -685,31 +759,35 @@ $ `stdlib/std/quic_recovery.nu`
     ^ out
 }
 
-@ quic_conn_stream_fin * QuicConn c i id → b {
+@ quic_conn_stream_fin QuicConn c__h i id → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
-    ? | == # i s 0 == # i . s rx 0 { ^ F } {}
+    ? | == # i s 0 == 0 # i . . s rx ctl { ^ F } {}
     ? < . s rx_fin_off 0 { ^ F } {}
     ^ == ( quic_rxbuf_consumed . s rx ) . s rx_fin_off
 }
 
-@ quic_conn_stream_reset_err * QuicConn c i id → i {
+@ quic_conn_stream_reset_err QuicConn c__h i id → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ -1 } {}
     ^ . s rx_reset_err
 }
 
-@ quic_conn_stream_stop_err * QuicConn c i id → i {
+@ quic_conn_stream_stop_err QuicConn c__h i id → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ -1 } {}
     ^ . s tx_stop_err
 }
 
-@ quic_conn_open_uni * QuicConn c → i {
+@ quic_conn_open_uni QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : i idx >> . c next_local_uni 2
     ? >= idx . c max_streams_uni_peer { ^ -1 } {}
     : i id . c next_local_uni
     = . c next_local_uni + id 4
-    : i tx_max ? != # i . c peer_tp 0 . . c peer_tp initial_max_stream_data_uni 0
+    : i tx_max ? != 0 # i . . c peer_tp ctl ( quic_tp_initial_max_stream_data_uni . c peer_tp ) 0
     : *QuicStream s ( __qc_stream_new id 0 tx_max T )
     ( vec_push [i] . c streams # i s )
     ^ id
@@ -717,20 +795,22 @@ $ `stdlib/std/quic_recovery.nu`
 
 // A bidirectional stream of our own. Needs the peer's transport
 // parameters (the handshake), like the flow-control limit it obeys.
-@ quic_conn_open_bidi * QuicConn c → i {
-    ? == # i . c peer_tp 0 { ^ -1 } {}
+@ quic_conn_open_bidi QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ? == 0 # i . . c peer_tp ctl { ^ -1 } {}
     : i idx >> . c next_local_bidi 2
     ? >= idx . c max_streams_bidi_peer { ^ -1 } {}
     : i id . c next_local_bidi
     = . c next_local_bidi + id 4
-    : *QuicStream s ( __qc_stream_new id . . c local_tp initial_max_stream_data_bidi_local . . c peer_tp initial_max_stream_data_bidi_remote T )
+    : *QuicStream s ( __qc_stream_new id ( quic_tp_initial_max_stream_data_bidi_local . c local_tp ) ( quic_tp_initial_max_stream_data_bidi_remote . c peer_tp ) T )
     ( vec_push [i] . c streams # i s )
     ^ id
 }
 
 // Buffer `data` (and a FIN) for sending. Everything is accepted up to
 // 4 MB of unsent bytes per stream; flow control applies at send time.
-@ quic_conn_stream_send * QuicConn c i id ( Vec u ) data b fin → i {
+@ quic_conn_stream_send QuicConn c__h i id ( Vec u ) data b fin → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ -1 } {}
     ? | != . s tx_done 0 != . s tx_fin 0 { ^ -1 } {}
@@ -746,7 +826,8 @@ $ `stdlib/std/quic_recovery.nu`
     ^ take
 }
 
-@ quic_conn_stream_reset * QuicConn c i id i err → v {
+@ quic_conn_stream_reset QuicConn c__h i id i err → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? | == # i s 0 != . s tx_done 0 { ^ } {}
     ? >= . s tx_reset_err 0 { ^ } {}
@@ -755,14 +836,16 @@ $ `stdlib/std/quic_recovery.nu`
     ( vec_clear [u] . s tx_buf )
 }
 
-@ quic_conn_stream_stop_sending * QuicConn c i id i err → v {
+@ quic_conn_stream_stop_sending QuicConn c__h i id i err → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
-    ? | == # i s 0 == # i . s rx 0 { ^ } {}
+    ? | == # i s 0 == 0 # i . . s rx ctl { ^ } {}
     ? != . s rx_done 0 { ^ } {}
     ( quic_push_stop_sending . c ctl2 id err )
 }
 
-@ quic_conn_stream_done * QuicConn c i id → v {
+@ quic_conn_stream_done QuicConn c__h i id → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ } {}
     = . s app_done 1
@@ -772,7 +855,7 @@ $ `stdlib/std/quic_recovery.nu`
 // Release streams both sides are done with; credit the peer's stream
 // limit for its streams (MAX_STREAMS keeps `max_streams_*_local` open
 // slots ahead of what has been closed).
-@ __qc_stream_gc * QuicConn c → v {
+@ __qc_stream_gc * QuicConnImpl c → v {
     : ( Vec i ) keep ( vec_new [i] )
     : ~ i k 0
     ~ < k ( vec_len [i] . c streams ) {
@@ -783,14 +866,14 @@ $ `stdlib/std/quic_recovery.nu`
             ? ! ( __qc_is_local c . s id ) {
                 ? ( __qc_stream_is_bidi . s id ) {
                     = . c peer_bidi_closed + . c peer_bidi_closed 1
-                    : i want + . c peer_bidi_closed . . c local_tp initial_max_streams_bidi
+                    : i want + . c peer_bidi_closed ( quic_tp_initial_max_streams_bidi . c local_tp )
                     ? > want . c max_streams_bidi_local {
                         = . c max_streams_bidi_local want
                         ( quic_push_max_streams . c ctl2 T want )
                     } {}
                 } {
                     = . c peer_uni_closed + . c peer_uni_closed 1
-                    : i want + . c peer_uni_closed . . c local_tp initial_max_streams_uni
+                    : i want + . c peer_uni_closed ( quic_tp_initial_max_streams_uni . c local_tp )
                     ? > want . c max_streams_uni_local {
                         = . c max_streams_uni_local want
                         ( quic_push_max_streams . c ctl2 F want )
@@ -807,20 +890,20 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── receive: packet-number bookkeeping ───────────────────────────
 
-@ __qc_rx_ranges * QuicConn c i space → ( Vec i ) {
+@ __qc_rx_ranges * QuicConnImpl c i space → ( Vec i ) {
     ? == space 0 { ^ . c rx_ranges0 } {}
     ? == space 1 { ^ . c rx_ranges1 } {}
     ^ . c rx_ranges2
 }
 
-@ __qc_largest_rx * QuicConn c i space → i {
+@ __qc_largest_rx * QuicConnImpl c i space → i {
     ? == space 0 { ^ . c largest_rx0 } {}
     ? == space 1 { ^ . c largest_rx1 } {}
     ^ . c largest_rx2
 }
 
 // Is `pn` already in the received set?
-@ __qc_rx_seen * QuicConn c i space i pn → b {
+@ __qc_rx_seen * QuicConnImpl c i space i pn → b {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     : ~ i k 0
     ~ < k ( vec_len [i] r ) {
@@ -832,7 +915,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // Record `pn`; ranges are kept sorted descending [hi, lo] pairs as an
 // ACK frame wants them, at most 32 ranges (older ones fall off).
-@ __qc_rx_record * QuicConn c i space i pn → v {
+@ __qc_rx_record * QuicConnImpl c i space i pn → v {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     : ( Vec i ) out ( vec_new [i] )
     : ~ b placed F
@@ -869,7 +952,7 @@ $ `stdlib/std/quic_recovery.nu`
 }
 
 // Build an ACK frame for `space` from the received ranges.
-@ __qc_push_ack * QuicConn c i space ( Vec u ) out → v {
+@ __qc_push_ack * QuicConnImpl c i space ( Vec u ) out → v {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     ? == ( vec_len [i] r ) 0 { ^ } {}
     : i largest ( __qc_ri r 1 )
@@ -893,8 +976,8 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── receive: keys per space ──────────────────────────────────────
 
-@ __qc_install_handshake_keys * QuicConn c → v {
-    ? != # i . c k_tx1 0 { ^ } {}
+@ __qc_install_handshake_keys * QuicConnImpl c → v {
+    ? != 0 # i . . c k_tx1 ctl { ^ } {}
     ? != . c is_client 0 {
         : i cipher ( quic_tls_cli_cipher . c tlsc )
         = . c k_tx1 ( quic_keys_derive cipher ( quic_tls_cli_c_hs . c tlsc ) )
@@ -909,30 +992,30 @@ $ `stdlib/std/quic_recovery.nu`
 }
 
 // The client's 1-RTT keys, once the server Finished has verified.
-@ __qc_install_app_keys * QuicConn c → v {
-    ? != # i . c k_tx2 0 { ^ } {}
+@ __qc_install_app_keys * QuicConnImpl c → v {
+    ? != 0 # i . . c k_tx2 ctl { ^ } {}
     : i cipher ( quic_tls_cli_cipher . c tlsc )
     = . c k_tx2 ( quic_keys_derive cipher ( quic_tls_cli_c_ap . c tlsc ) )
     = . c k_rx2 ( quic_keys_derive cipher ( quic_tls_cli_s_ap . c tlsc ) )
 }
 
 // The peer's transport parameters, once the TLS layer has them.
-@ __qc_apply_peer_tp * QuicConn c → v {
-    ? != # i . c peer_tp 0 { ^ } {}
-    : *QuicTp p ? != . c is_client 0 ( quic_tp_decode ( quic_tls_cli_server_tp . c tlsc ) F ) ( quic_tp_decode ( quic_tls_srv_client_tp . c tls ) T )
-    ? == # i p 0 { ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 ) ^ } {}
+@ __qc_apply_peer_tp * QuicConnImpl c → v {
+    ? != 0 # i . . c peer_tp ctl { ^ } {}
+    : QuicTp p ? != . c is_client 0 ( quic_tp_decode ( quic_tls_cli_server_tp . c tlsc ) F ) ( quic_tp_decode ( quic_tls_srv_client_tp . c tls ) T )
+    ? == 0 # i . p ctl { ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 ) ^ } {}
     // §7.3: initial_source_connection_id must be the SCID of the peer's
     // first packet — the DCID we send to.
-    : ~ b ok ( bytes_eq . p initial_scid . c dcid )
+    : ~ b ok ( bytes_eq ( quic_tp_initial_scid p ) . c dcid )
     ? != . c is_client 0 {
         // ... and a server proves it saw our first Initial: the DCID we
         // chose comes back as original_destination_connection_id, and
         // after a Retry that packet's SCID as retry_source_connection_id
         // (a retry_source_connection_id with no Retry is as wrong).
-        ? | == . p has_original_dcid 0 ! ( bytes_eq . p original_dcid . c odcid ) { = ok F } {}
+        ? | ! ( quic_tp_has_original_dcid p ) ! ( bytes_eq ( quic_tp_original_dcid p ) . c odcid ) { = ok F } {}
         ? != . c retry_seen 0 {
-            ? | == . p has_retry_scid 0 ! ( bytes_eq . p retry_scid . c retry_scid ) { = ok F } {}
-        } { ? != . p has_retry_scid 0 { = ok F } {} }
+            ? | ! ( quic_tp_has_retry_scid p ) ! ( bytes_eq ( quic_tp_retry_scid p ) . c retry_scid ) { = ok F } {}
+        } { ? ( quic_tp_has_retry_scid p ) { = ok F } {} }
     } {}
     ? ! ok {
         ( quic_tp_free p )
@@ -940,14 +1023,14 @@ $ `stdlib/std/quic_recovery.nu`
         ^
     } {}
     = . c peer_tp p
-    = . c max_data_peer . p initial_max_data
-    = . c max_streams_bidi_peer . p initial_max_streams_bidi
-    = . c max_streams_uni_peer . p initial_max_streams_uni
-    ( quic_rec_set_peer . c rec . p max_ack_delay . p ack_delay_exponent )
-    : ~ i idle . . c local_tp max_idle_timeout
-    ? > . p max_idle_timeout 0 { ? | == idle 0 < . p max_idle_timeout idle { = idle . p max_idle_timeout } {} } {}
+    = . c max_data_peer ( quic_tp_initial_max_data p )
+    = . c max_streams_bidi_peer ( quic_tp_initial_max_streams_bidi p )
+    = . c max_streams_uni_peer ( quic_tp_initial_max_streams_uni p )
+    ( quic_rec_set_peer . c rec ( quic_tp_max_ack_delay p ) ( quic_tp_ack_delay_exponent p ) )
+    : ~ i idle ( quic_tp_max_idle_timeout . c local_tp )
+    ? > ( quic_tp_max_idle_timeout p ) 0 { ? | == idle 0 < ( quic_tp_max_idle_timeout p ) idle { = idle ( quic_tp_max_idle_timeout p ) } {} } {}
     = . c idle_timeout idle
-    : i mu ? < . p max_udp_payload_size 1350 . p max_udp_payload_size 1350
+    : i mu ? < ( quic_tp_max_udp_payload_size p ) 1350 ( quic_tp_max_udp_payload_size p ) 1350
     = . c max_udp mu
     // streams opened before the parameters arrived (none for a server —
     // client data waits for 1-RTT — but keep the invariant)
@@ -955,7 +1038,7 @@ $ `stdlib/std/quic_recovery.nu`
     ~ < k ( vec_len [i] . c streams ) {
         : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
         ? ( __qc_stream_is_bidi . s id ) {
-            = . s tx_max_data ? ( __qc_is_local c . s id ) . p initial_max_stream_data_bidi_remote . p initial_max_stream_data_bidi_local
+            = . s tx_max_data ? ( __qc_is_local c . s id ) ( quic_tp_initial_max_stream_data_bidi_remote p ) ( quic_tp_initial_max_stream_data_bidi_local p )
         } {}
         = k + k 1
     }
@@ -963,7 +1046,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // Drain the TLS layer's outputs into the CRYPTO queues and react to
 // its state changes.
-@ __qc_tls_pump * QuicConn c → v {
+@ __qc_tls_pump * QuicConnImpl c → v {
     ? != . c is_client 0 { ( __qc_tls_pump_client c ) ^ } {}
     : ( Vec u ) o0 ( quic_tls_srv_take_out . c tls 0 )
     ( bytes_extend_bytes . c crypto_out0 o0 ) ( vec_free [u] o0 )
@@ -995,7 +1078,7 @@ $ `stdlib/std/quic_recovery.nu`
 // Finished verified — the handshake is then complete (streams may
 // open, 1-RTT data flows both ways) but confirmed only on the server's
 // HANDSHAKE_DONE (§4.1.2), which is when the Handshake keys go.
-@ __qc_tls_pump_client * QuicConn c → v {
+@ __qc_tls_pump_client * QuicConnImpl c → v {
     : ( Vec u ) o0 ( quic_tls_cli_take_out . c tlsc 0 )
     ( bytes_extend_bytes . c crypto_out0 o0 ) ( vec_free [u] o0 )
     : ( Vec u ) o1 ( quic_tls_cli_take_out . c tlsc 1 )
@@ -1024,13 +1107,13 @@ $ `stdlib/std/quic_recovery.nu`
     } {}
 }
 
-@ __qc_drop_keys * QuicConn c i space → v {
+@ __qc_drop_keys * QuicConnImpl c i space → v {
     ? == space 0 {
         ? != . c keys0_dropped 0 { ^ } {}
         = . c keys0_dropped 1
         ( quic_keys_free . c k_rx0 ) ( quic_keys_free . c k_tx0 )
-        = . c k_rx0 # *QuicKeys 0
-        = . c k_tx0 # *QuicKeys 0
+        = . c k_rx0 @ QuicKeys { # s 0 }
+        = . c k_tx0 @ QuicKeys { # s 0 }
         ( vec_clear [u] . c crypto_out0 ) ( vec_clear [u] . c retx0 )
         ( quic_rec_discard_space . c rec 0 )
         ^
@@ -1038,8 +1121,8 @@ $ `stdlib/std/quic_recovery.nu`
     ? != . c keys1_dropped 0 { ^ } {}
     = . c keys1_dropped 1
     ( quic_keys_free . c k_rx1 ) ( quic_keys_free . c k_tx1 )
-    = . c k_rx1 # *QuicKeys 0
-    = . c k_tx1 # *QuicKeys 0
+    = . c k_rx1 @ QuicKeys { # s 0 }
+    = . c k_tx1 @ QuicKeys { # s 0 }
     ( vec_clear [u] . c crypto_out1 ) ( vec_clear [u] . c retx1 )
     ( quic_rec_discard_space . c rec 1 )
 }
@@ -1047,8 +1130,8 @@ $ `stdlib/std/quic_recovery.nu`
 // More connection IDs for the peer (§5.1.1), each with a reset token:
 // up to two extra, never more than its active_connection_id_limit allows
 // (the initial one counts; the default limit of 2 leaves room for one).
-@ __qc_issue_cids * QuicConn c → v {
-    : i limit ? != # i . c peer_tp 0 . . c peer_tp active_connection_id_limit 2
+@ __qc_issue_cids * QuicConnImpl c → v {
+    : i limit ? != 0 # i . . c peer_tp ctl ( quic_tp_active_connection_id_limit . c peer_tp ) 2
     : ~ i want - limit 1
     ? > want 2 { = want 2 } {}
     ~ < . c cid_extra_issued want {
@@ -1066,41 +1149,41 @@ $ `stdlib/std/quic_recovery.nu`
 // ── receive: frames ──────────────────────────────────────────────
 
 // Returns 0 to continue, 1 when the connection has failed.
-@ __qc_on_stream_frame * QuicConn c * QuicFrame f → i {
-    : i id . f a
+@ __qc_on_stream_frame * QuicConnImpl c QuicFrame f → i {
+    : i id ( quic_frame_a f )
     ? ( __qc_is_local c id ) {
-        ? ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) . f ftype ) ^ 1 } {}
-        ? >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) . f ftype ) ^ 1 } {}
+        ? ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
+        ? >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
     } {}
     : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
     ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
-    ? == # i . s rx 0 { ( __qc_fail c 0 ( quic_err_stream_state ) . f ftype ) ^ 1 } {}
-    : i off . f b
-    : i len . f c
+    ? == 0 # i . . s rx ctl { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
+    : i off ( quic_frame_b f )
+    : i len ( quic_frame_c f )
     : i end + off len
     // §4.1 flow control on the stream, then on the connection
-    ? > end . s rx_max_data { ( __qc_fail c 0 ( quic_err_flow_control ) . f ftype ) ^ 1 } {}
+    ? > end . s rx_max_data { ( __qc_fail c 0 ( quic_err_flow_control ) ( quic_frame_type f ) ) ^ 1 } {}
     : i prev_high ( quic_rxbuf_highest . s rx )
     ? > end prev_high {
         : i grow - end prev_high
-        ? > + . c data_recv grow . c max_data_local { ( __qc_fail c 0 ( quic_err_flow_control ) . f ftype ) ^ 1 } {}
+        ? > + . c data_recv grow . c max_data_local { ( __qc_fail c 0 ( quic_err_flow_control ) ( quic_frame_type f ) ) ^ 1 } {}
         = . c data_recv + . c data_recv grow
     } {}
     // final size consistency (§4.5)
-    ? != . f d 0 {
-        ? & >= . s rx_fin_off 0 != . s rx_fin_off end { ( __qc_fail c 0 ( quic_err_final_size ) . f ftype ) ^ 1 } {}
-        ? < end prev_high { ( __qc_fail c 0 ( quic_err_final_size ) . f ftype ) ^ 1 } {}
+    ? != ( quic_frame_d f ) 0 {
+        ? & >= . s rx_fin_off 0 != . s rx_fin_off end { ( __qc_fail c 0 ( quic_err_final_size ) ( quic_frame_type f ) ) ^ 1 } {}
+        ? < end prev_high { ( __qc_fail c 0 ( quic_err_final_size ) ( quic_frame_type f ) ) ^ 1 } {}
         = . s rx_fin_off end
     } {
-        ? & >= . s rx_fin_off 0 > end . s rx_fin_off { ( __qc_fail c 0 ( quic_err_final_size ) . f ftype ) ^ 1 } {}
+        ? & >= . s rx_fin_off 0 > end . s rx_fin_off { ( __qc_fail c 0 ( quic_err_final_size ) ( quic_frame_type f ) ) ^ 1 } {}
     }
-    ? ! ( quic_rxbuf_add . s rx off . f bytes ) { ( __qc_fail c 0 ( quic_err_flow_control ) . f ftype ) ^ 1 } {}
-    ? | > ( quic_rxbuf_avail . s rx ) 0 != . f d 0 { ( __qc_mark_readable c s ) } {}
+    ? ! ( quic_rxbuf_add . s rx off ( quic_frame_bytes f ) ) { ( __qc_fail c 0 ( quic_err_flow_control ) ( quic_frame_type f ) ) ^ 1 } {}
+    ? | > ( quic_rxbuf_avail . s rx ) 0 != ( quic_frame_d f ) 0 { ( __qc_mark_readable c s ) } {}
     ^ 0
 }
 
-@ __qc_on_frame * QuicConn c i space * QuicFrame f → i {
-    : i ft . f ftype
+@ __qc_on_frame * QuicConnImpl c i space QuicFrame f → i {
+    : i ft ( quic_frame_type f )
     ? | == ft 0 == ft 1 { ^ 0 } {}
     ? | == ft 2 == ft 3 {
         ? < ( quic_rec_on_ack . c rec space f . c now ) 0 { ( __qc_fail c 0 10 ft ) ^ 1 } {}
@@ -1112,7 +1195,7 @@ $ `stdlib/std/quic_recovery.nu`
         ^ 0
     } {}
     ? == ft 6 {
-        : i rc ? != . c is_client 0 ( quic_tls_cli_crypto . c tlsc space . f a . f bytes ) ( quic_tls_srv_crypto . c tls space . f a . f bytes )
+        : i rc ? != . c is_client 0 ( quic_tls_cli_crypto . c tlsc space ( quic_frame_a f ) ( quic_frame_bytes f ) ) ( quic_tls_srv_crypto . c tls space ( quic_frame_a f ) ( quic_frame_bytes f ) )
         ? != rc 0 { ( __qc_fail c 0 rc ft ) ^ 1 } {}
         ( __qc_tls_pump c )
         ^ ? >= . c state 2 1 0
@@ -1121,20 +1204,20 @@ $ `stdlib/std/quic_recovery.nu`
         // NEW_TOKEN: a server may not receive one (§19.7); a client keeps
         // the newest for a later connection to this server.
         ? == . c is_client 0 { ( __qc_fail c 0 10 ft ) ^ 1 } {}
-        ? == ( vec_len [u] . f bytes ) 0 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
+        ? == ( vec_len [u] ( quic_frame_bytes f ) ) 0 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
         ( vec_clear [u] . c new_token )
-        ( bytes_extend_bytes . c new_token . f bytes )
+        ( bytes_extend_bytes . c new_token ( quic_frame_bytes f ) )
         ^ 0
     } {}
     ? ( quic_frame_is_stream ft ) { ^ ( __qc_on_stream_frame c f ) } {}
     ? == ft 4 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         ? & ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
-        ? == # i . s rx 0 { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
-        : i final . f c
+        ? == 0 # i . . s rx ctl { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
+        : i final ( quic_frame_c f )
         ? & >= . s rx_fin_off 0 != . s rx_fin_off final { ( __qc_fail c 0 ( quic_err_final_size ) ft ) ^ 1 } {}
         ? < final ( quic_rxbuf_highest . s rx ) { ( __qc_fail c 0 ( quic_err_final_size ) ft ) ^ 1 } {}
         ? > final . s rx_max_data { ( __qc_fail c 0 ( quic_err_flow_control ) ft ) ^ 1 } {}
@@ -1142,57 +1225,57 @@ $ `stdlib/std/quic_recovery.nu`
         ? > + . c data_recv grow . c max_data_local { ( __qc_fail c 0 ( quic_err_flow_control ) ft ) ^ 1 } {}
         = . c data_recv + . c data_recv grow
         = . s rx_fin_off final
-        ? < . s rx_reset_err 0 { = . s rx_reset_err . f b } {}
+        ? < . s rx_reset_err 0 { = . s rx_reset_err ( quic_frame_b f ) } {}
         ( __qc_mark_readable c s )
         ^ 0
     } {}
     ? == ft 5 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         // receive-only for us: the peer's unidirectional streams
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id ? ( __qc_stream_is_bidi id ) . c next_local_bidi . c next_local_uni { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
         ? < . s tx_stop_err 0 {
-            = . s tx_stop_err . f b
-            ? < . s tx_reset_err 0 { = . s tx_reset_err . f b = . s tx_reset_sent 0 ( vec_clear [u] . s tx_buf ) } {}
+            = . s tx_stop_err ( quic_frame_b f )
+            ? < . s tx_reset_err 0 { = . s tx_reset_err ( quic_frame_b f ) = . s tx_reset_sent 0 ( vec_clear [u] . s tx_buf ) } {}
             ( __qc_mark_readable c s )
         } {}
         ^ 0
     } {}
-    ? == ft 16 { ? > . f a . c max_data_peer { = . c max_data_peer . f a } {} ^ 0 } {}
+    ? == ft 16 { ? > ( quic_frame_a f ) . c max_data_peer { = . c max_data_peer ( quic_frame_a f ) } {} ^ 0 } {}
     ? == ft 17 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id ? ( __qc_stream_is_bidi id ) . c next_local_bidi . c next_local_uni { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
-        ? > . f b . s tx_max_data { = . s tx_max_data . f b } {}
+        ? > ( quic_frame_b f ) . s tx_max_data { = . s tx_max_data ( quic_frame_b f ) } {}
         ^ 0
     } {}
     ? | == ft 18 == ft 19 {
-        ? > . f a 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
-        ? == ft 18 { ? > . f a . c max_streams_bidi_peer { = . c max_streams_bidi_peer . f a } {} }
-        { ? > . f a . c max_streams_uni_peer { = . c max_streams_uni_peer . f a } {} }
+        ? > ( quic_frame_a f ) 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
+        ? == ft 18 { ? > ( quic_frame_a f ) . c max_streams_bidi_peer { = . c max_streams_bidi_peer ( quic_frame_a f ) } {} }
+        { ? > ( quic_frame_a f ) . c max_streams_uni_peer { = . c max_streams_uni_peer ( quic_frame_a f ) } {} }
         ^ 0
     } {}
     ? == ft 20 { ^ 0 } {}
     ? == ft 21 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ^ 0
     } {}
     ? | == ft 22 == ft 23 {
-        ? > . f a 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
+        ? > ( quic_frame_a f ) 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
         ^ 0
     } {}
     ? == ft 24 {
         // the peer chose a zero-length connection id: it may not then send us more
         ? == ( vec_len [u] . c dcid ) 0 { ( __qc_fail c 0 10 ft ) ^ 1 } {}
-        : i seq . f a
-        : i rpt . f b
-        : i cl . f c
-        : ( Vec u ) cid ( bytes_slice . f bytes 0 cl )
+        : i seq ( quic_frame_a f )
+        : i rpt ( quic_frame_b f )
+        : i cl ( quic_frame_c f )
+        : ( Vec u ) cid ( bytes_slice ( quic_frame_bytes f ) 0 cl )
         // known sequence number: must repeat the same id
         : ~ i k 0
         : ~ b known F
@@ -1234,20 +1317,19 @@ $ `stdlib/std/quic_recovery.nu`
             ? >= ( __qc_ri . c peer_cid_seqs k ) . c peer_cid_retire_prior { = active + active 1 } {}
             = k + k 1
         }
-        ? > active . . c local_tp active_connection_id_limit { ( __qc_fail c 0 ( quic_err_connection_id_limit ) ft ) ^ 1 } {}
+        ? > active ( quic_tp_active_connection_id_limit . c local_tp ) { ( __qc_fail c 0 ( quic_err_connection_id_limit ) ft ) ^ 1 } {}
         ^ 0
     } {}
     ? == ft 25 {
-        : i seq . f a
+        : i seq ( quic_frame_a f )
         ? >= seq . c cid_next_seq { ( __qc_fail c 0 10 ft ) ^ 1 } {}
         // retiring the id this very packet arrived on is a violation
         : ~ i k 0
         ~ < k ( vec_len [i] . c cid_seqs ) {
             ? == ( __qc_ri . c cid_seqs k ) seq {
                 : ( Vec u ) that ( bytes_slice . c cids * k 8 + * k 8 8 )
-                : b same ( bytes_eq that . c scid )
-                ( vec_free [u] that )
-                ? same { ( __qc_fail c 0 10 ft ) ^ 1 } {}
+                ? ( bytes_eq that . c scid ) { ( __qc_fail c 0 10 ft ) ^ 1 } {}
+                ( bytes_extend_bytes . c retired_cids that )
                 : ?i _r ( vec_remove [i] . c cid_seqs k )
                 : ( Vec u ) rest ( bytes_slice . c cids + * k 8 8 ( vec_len [u] . c cids ) )
                 : b _t ( vec_set_len [u] . c cids * k 8 )
@@ -1261,7 +1343,7 @@ $ `stdlib/std/quic_recovery.nu`
         }
         ^ 0
     } {}
-    ? == ft 26 { ( quic_push_path_response . c ctl2 . f bytes ) ^ 0 } {}
+    ? == ft 26 { ( quic_push_path_response . c ctl2 ( quic_frame_bytes f ) ) ^ 0 } {}
     ? == ft 27 { ^ 0 } {}
     ? | == ft 28 == ft 29 {
         // the peer is closing: drain (§10.2.2); its code and reason are
@@ -1269,12 +1351,12 @@ $ `stdlib/std/quic_recovery.nu`
         ? < . c state 3 {
             = . c state 3
             = . c close_deadline + . c now * 3 ( quic_rec_pto . c rec )
-            = . c close_code . f a
+            = . c close_code ( quic_frame_a f )
             = . c close_app ? == ft 29 1 0
-            = . c close_frame_type ? == ft 28 . f b 0
+            = . c close_frame_type ? == ft 28 ( quic_frame_b f ) 0
             = . c peer_closed 1
             ( vec_clear [u] . c close_reason )
-            ( bytes_extend_bytes . c close_reason . f bytes )
+            ( bytes_extend_bytes . c close_reason ( quic_frame_bytes f ) )
         } {}
         ^ 1
     } {}
@@ -1295,7 +1377,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── receive: packets ─────────────────────────────────────────────
 
-@ __qc_rx_keys * QuicConn c i space → *QuicKeys {
+@ __qc_rx_keys * QuicConnImpl c i space → QuicKeys {
     ? == space 0 { ^ . c k_rx0 } {}
     ? == space 1 { ^ . c k_rx1 } {}
     ^ . c k_rx2
@@ -1303,7 +1385,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // Does this packet's DCID name us? Initial packets may still carry the
 // client's original DCID (it learns ours from the ServerHello packet).
-@ __qc_is_ours * QuicConn c ( Vec u ) pkt * QuicHdr h → b {
+@ __qc_is_ours * QuicConnImpl c ( Vec u ) pkt QuicHdr h → b {
     : i dl . h dcid_len
     : ( Vec u ) d ( quic_hdr_dcid h pkt )
     ? & == . h ptype 0 ( bytes_eq d . c odcid ) { ( vec_free [u] d ) ^ T } {}
@@ -1324,7 +1406,7 @@ $ `stdlib/std/quic_recovery.nu`
 // of the server's has been processed (a Retry counts): if version 1 is listed the packet is
 // a fake and ignored; otherwise there is no version in common and the
 // attempt is abandoned — the connection closes with no packet sent.
-@ __qc_on_vn * QuicConn c ( Vec u ) dgram * QuicHdr h → v {
+@ __qc_on_vn * QuicConnImpl c ( Vec u ) dgram QuicHdr h → v {
     ? | | | == . c is_client 0 >= . c largest_rx0 0 != . c tls_state 0 != . c retry_seen 0 { ^ } {}
     : ~ i p . h pn_off
     : ~ b has1 F
@@ -1344,7 +1426,7 @@ $ `stdlib/std/quic_recovery.nu`
 // new DCID (new Initial keys), its token rides in every Initial, the
 // ClientHello goes again, and packet numbers continue (§17.2.5.3). A
 // Retry that fails its tag or repeats our own DCID is discarded.
-@ __qc_on_retry * QuicConn c ( Vec u ) dgram i off * QuicHdr h → v {
+@ __qc_on_retry * QuicConnImpl c ( Vec u ) dgram i off QuicHdr h → v {
     ? | | | == . c is_client 0 != . c retry_seen 0 >= . c largest_rx0 0 != . c tls_state 0 { ^ } {}
     : i n . h end
     ? < - n off 16 { ^ } {}
@@ -1377,26 +1459,26 @@ $ `stdlib/std/quic_recovery.nu`
 
 // One packet out of a datagram. Returns the offset after it, or -1 to
 // stop processing the datagram.
-@ __qc_recv_packet * QuicConn c ( Vec u ) dgram i off → i {
-    : *QuicHdr h ( quic_hdr_parse dgram off 8 )
-    ? == # i h 0 { ^ -1 } {}
+@ __qc_recv_packet * QuicConnImpl c ( Vec u ) dgram i off → i {
+    : QuicHdr h ( quic_hdr_parse dgram off 8 )
+    ? < . h ptype 0 { ^ -1 } {}
     : i ptype . h ptype
     : i end . h end
-    ? == ptype 5 { ( __qc_on_vn c dgram h ) ( quic_hdr_free h ) ^ -1 } {}
-    ? & != ptype 4 != . h version 1 { ( quic_hdr_free h ) ^ -1 } {}
-    ? ! ( __qc_is_ours c dgram h ) { ( quic_hdr_free h ) ^ end } {}
+    ? == ptype 5 { ( __qc_on_vn c dgram h ) ^ -1 } {}
+    ? & != ptype 4 != . h version 1 { ^ -1 } {}
+    ? ! ( __qc_is_ours c dgram h ) { ^ end } {}
     // a Retry is never coalesced with anything else (§17.2.5.1)
-    ? == ptype 3 { ( __qc_on_retry c dgram off h ) ( quic_hdr_free h ) ^ -1 } {}
-    ? == ptype 1 { ( quic_hdr_free h ) ^ end } {}
+    ? == ptype 3 { ( __qc_on_retry c dgram off h ) ^ -1 } {}
+    ? == ptype 1 { ^ end } {}
     : i space ? == ptype 0 0 ? == ptype 2 1 2
     // 1-RTT before the client's Finished: dropped (see the header).
-    ? & == space 2 < . c tls_state 2 { ( quic_hdr_free h ) ^ end } {}
-    : *QuicKeys keys ( __qc_rx_keys c space )
-    ? == # i keys 0 { ( quic_hdr_free h ) ^ end } {}
+    ? & == space 2 < . c tls_state 2 { ^ end } {}
+    : QuicKeys keys ( __qc_rx_keys c space )
+    ? == 0 # i . keys ctl { ^ end } {}
     : ( Vec u ) pkt ( bytes_slice dgram off end )
     : i pn_off - . h pn_off off
     : i pn_len ( quic_hp_remove keys pkt pn_off )
-    ? < pn_len 0 { ( vec_free [u] pkt ) ( quic_hdr_free h ) ^ end } {}
+    ? < pn_len 0 { ( vec_free [u] pkt ) ^ end } {}
     : i b0 ( __qc_bget pkt 0 )
     : i pn ( quic_pn_decode ( quic_pn_read pkt pn_off pn_len ) pn_len ( __qc_largest_rx c space ) )
     : ( Vec u ) hdr ( bytes_slice pkt 0 + pn_off pn_len )
@@ -1409,11 +1491,11 @@ $ `stdlib/std/quic_recovery.nu`
         ? == phase . c key_phase {
             ?? ( quic_open keys pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T } F → {} }
             // an old-phase packet after an update
-            ? & ! opened != # i . c k_rx2_prev 0 {
+            ? & ! opened != 0 # i . . c k_rx2_prev ctl {
                 ?? ( quic_open . c k_rx2_prev pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T } F → {} }
             } {}
         } {
-            ? == # i . c k_rx2_next 0 { = . c k_rx2_next ( quic_keys_update . c k_rx2 ) } {}
+            ? == 0 # i . . c k_rx2_next ctl { = . c k_rx2_next ( quic_keys_update . c k_rx2 ) } {}
             ?? ( quic_open . c k_rx2_next pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T = phase_flip T } F → {} }
         }
     } {
@@ -1422,7 +1504,7 @@ $ `stdlib/std/quic_recovery.nu`
     // the server's SCID from its first authenticated Initial is the DCID
     // we send to from now on (§7.2)
     : ( Vec u ) srv_scid ? & & opened == space 0 == . c dcid_learned 0 ( quic_hdr_scid h dgram ) ( vec_new [u] )
-    ( vec_free [u] body ) ( vec_free [u] hdr ) ( vec_free [u] pkt ) ( quic_hdr_free h )
+    ( vec_free [u] body ) ( vec_free [u] hdr ) ( vec_free [u] pkt )
     ? ! opened { ( vec_free [u] payload ) ( vec_free [u] srv_scid ) ^ end } {}
     ? & == space 0 == . c dcid_learned 0 {
         = . c dcid_learned 1
@@ -1438,8 +1520,8 @@ $ `stdlib/std/quic_recovery.nu`
         ( quic_keys_free . c k_rx2_prev )
         = . c k_rx2_prev . c k_rx2
         = . c k_rx2 . c k_rx2_next
-        = . c k_rx2_next # *QuicKeys 0
-        : *QuicKeys ntx ( quic_keys_update . c k_tx2 )
+        = . c k_rx2_next @ QuicKeys { # s 0 }
+        : QuicKeys ntx ( quic_keys_update . c k_tx2 )
         ( quic_keys_free . c k_tx2 )
         = . c k_tx2 ntx
         = . c key_phase ? == . c key_phase 0 1 0
@@ -1457,18 +1539,18 @@ $ `stdlib/std/quic_recovery.nu`
     : ~ i ack_eliciting 0
     : ~ i stop 0
     ~ & == stop 0 < p ( vec_len [u] payload ) {
-        : *QuicFrame f ( quic_frame_parse payload p )
-        ? == # i f 0 {
+        : QuicFrame f ( quic_frame_parse payload p )
+        ? == 0 # i . f ctl {
             : i ft ( quic_varint_read payload p )
             ( __qc_fail c 0 ( quic_err_frame_encoding ) ? < ft 0 0 ft )
             = stop 1
         } {
-            ? ! ( quic_frame_allowed . f ftype ptype ) {
-                ( __qc_fail c 0 10 . f ftype )
+            ? ! ( quic_frame_allowed ( quic_frame_type f ) ptype ) {
+                ( __qc_fail c 0 10 ( quic_frame_type f ) )
                 = stop 1
             } {
-                ? ( quic_frame_is_ack_eliciting . f ftype ) { = ack_eliciting 1 } {}
-                = p . f next
+                ? ( quic_frame_is_ack_eliciting ( quic_frame_type f ) ) { = ack_eliciting 1 } {}
+                = p ( quic_frame_next f )
                 ? != ( __qc_on_frame c space f ) 0 { = stop 1 } {}
             }
             ( quic_frame_free f )
@@ -1488,7 +1570,8 @@ $ `stdlib/std/quic_recovery.nu`
     ^ end
 }
 
-@ quic_conn_recv * QuicConn c ( Vec u ) dgram ( Vec u ) from i now → v {
+@ quic_conn_recv QuicConn c__h ( Vec u ) dgram ( Vec u ) from i now → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     ? >= . c state 3 {
         // draining / closed: nothing is processed
@@ -1508,14 +1591,13 @@ $ `stdlib/std/quic_recovery.nu`
     : i __la_before . c last_activity
     // first Initial: learn the peer's SCID
     ? == ( vec_len [u] . c dcid ) 0 {
-        : *QuicHdr h ( quic_hdr_parse dgram 0 8 )
-        ? != # i h 0 {
+        : QuicHdr h ( quic_hdr_parse dgram 0 8 )
+        ? >= . h ptype 0 {
             ? == . h ptype 0 {
                 : ( Vec u ) sc ( quic_hdr_scid h dgram )
                 ( bytes_extend_bytes . c dcid sc )
                 ( vec_free [u] sc )
             } {}
-            ( quic_hdr_free h )
         } {}
     } {}
     : ~ i off 0
@@ -1538,37 +1620,37 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── send ─────────────────────────────────────────────────────────
 
-@ __qc_tx_keys * QuicConn c i space → *QuicKeys {
+@ __qc_tx_keys * QuicConnImpl c i space → QuicKeys {
     ? == space 0 { ^ . c k_tx0 } {}
     ? == space 1 { ^ . c k_tx1 } {}
     ^ . c k_tx2
 }
 
-@ __qc_next_pn * QuicConn c i space → i {
+@ __qc_next_pn * QuicConnImpl c i space → i {
     ? == space 0 { ^ . c next_pn0 } {}
     ? == space 1 { ^ . c next_pn1 } {}
     ^ . c next_pn2
 }
 
-@ __qc_bump_pn * QuicConn c i space → v {
+@ __qc_bump_pn * QuicConnImpl c i space → v {
     ? == space 0 { = . c next_pn0 + . c next_pn0 1 ^ } {}
     ? == space 1 { = . c next_pn1 + . c next_pn1 1 ^ } {}
     = . c next_pn2 + . c next_pn2 1
 }
 
-@ __qc_crypto_out * QuicConn c i space → ( Vec u ) {
+@ __qc_crypto_out * QuicConnImpl c i space → ( Vec u ) {
     ? == space 0 { ^ . c crypto_out0 } {}
     ? == space 1 { ^ . c crypto_out1 } {}
     ^ . c crypto_out2
 }
 
-@ __qc_crypto_sent * QuicConn c i space → i {
+@ __qc_crypto_sent * QuicConnImpl c i space → i {
     ? == space 0 { ^ . c crypto_sent0 } {}
     ? == space 1 { ^ . c crypto_sent1 } {}
     ^ . c crypto_sent2
 }
 
-@ __qc_retx * QuicConn c i space → ( Vec u ) {
+@ __qc_retx * QuicConnImpl c i space → ( Vec u ) {
     ? == space 0 { ^ . c retx0 } {}
     ? == space 1 { ^ . c retx1 } {}
     ^ . c retx2
@@ -1581,15 +1663,15 @@ $ `stdlib/std/quic_recovery.nu`
     : ~ i used 0
     : ~ i p 0
     ~ < p ( vec_len [u] src ) {
-        : *QuicFrame f ( quic_frame_parse src p )
-        ? == # i f 0 { : b _t ( vec_set_len [u] src p ) = p ( vec_len [u] src ) } {
-            : i fl - . f next p
+        : QuicFrame f ( quic_frame_parse src p )
+        ? == 0 # i . f ctl { : b _t ( vec_set_len [u] src p ) = p ( vec_len [u] src ) } {
+            : i fl - ( quic_frame_next f ) p
             ? > fl - room used { ( quic_frame_free f ) = p ( vec_len [u] src ) } {
-                : ( Vec u ) piece ( bytes_slice src p . f next )
+                : ( Vec u ) piece ( bytes_slice src p ( quic_frame_next f ) )
                 ( bytes_extend_bytes dst piece )
                 ( vec_free [u] piece )
                 = used + used fl
-                = p . f next
+                = p ( quic_frame_next f )
                 ( quic_frame_free f )
             }
         }
@@ -1609,7 +1691,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // Append the reserved ACK when it is due or the packet has other frames;
 // returns the packet's ack-eliciting flag unchanged.
-@ __qc_finish_ack * QuicConn c i space ( Vec u ) out ( Vec u ) ackbuf b due i ae → i {
+@ __qc_finish_ack * QuicConnImpl c i space ( Vec u ) out ( Vec u ) ackbuf b due i ae → i {
     ? & > ( vec_len [u] ackbuf ) 0 | due > ( vec_len [u] out ) 0 {
         ( bytes_extend_bytes out ackbuf )
         ? == space 0 { = . c ack_needed0 0 } {}
@@ -1620,7 +1702,7 @@ $ `stdlib/std/quic_recovery.nu`
     ^ ae
 }
 
-@ __qc_build_payload * QuicConn c i space i room ( Vec u ) out ( Vec u ) retx → i {
+@ __qc_build_payload * QuicConnImpl c i space i room ( Vec u ) out ( Vec u ) retx → i {
     : ~ i ae 0
     : ~ i left room
     // CONNECTION_CLOSE, alone (§10.2.3)
@@ -1752,7 +1834,7 @@ $ `stdlib/std/quic_recovery.nu`
 }
 
 // Is there anything to send in `space`?
-@ __qc_space_wants_send * QuicConn c i space → b {
+@ __qc_space_wants_send * QuicConnImpl c i space → b {
     ? == # i ( __qc_tx_keys c space ) 0 { ^ F } {}
     ? == . c state 2 { ^ == . c close_sent 0 } {}
     : i need ? == space 0 . c ack_needed0 ? == space 1 . c ack_needed1 . c ack_needed2
@@ -1774,7 +1856,8 @@ $ `stdlib/std/quic_recovery.nu`
     ^ F
 }
 
-@ quic_conn_send * QuicConn c i now → ( Vec u ) {
+@ quic_conn_send QuicConn c__h i now → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     : ( Vec u ) dgram ( vec_new [u] )
     ? >= . c state 3 { ^ dgram } {}
@@ -1821,7 +1904,7 @@ $ `stdlib/std/quic_recovery.nu`
         ? > room 0 { = ae1 ( __qc_build_payload c 1 room pay1 rt1 ) } {}
         ? > ( vec_len [u] pay1 ) 0 { = has1 1 = used + used + + hdr_long 16 ( vec_len [u] pay1 ) } {}
     } {}
-    ? & ( __qc_space_wants_send c 2 ) != # i . c k_tx2 0 {
+    ? & ( __qc_space_wants_send c 2 ) != 0 # i . . c k_tx2 ctl {
         ? >= . c tls_state 2 {
             : i room - - budget used + hdr_short 16
             ? > room 0 { = ae2 ( __qc_build_payload c 2 room pay2 rt2 ) } {}
@@ -1886,7 +1969,8 @@ $ `stdlib/std/quic_recovery.nu`
 
 // ── timers ───────────────────────────────────────────────────────
 
-@ quic_conn_next_timeout * QuicConn c → i {
+@ quic_conn_next_timeout QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ? >= . c state 2 { ^ . c close_deadline } {}
     : ~ i best 0
     : i lt ( quic_rec_next_timeout . c rec )
@@ -1902,7 +1986,8 @@ $ `stdlib/std/quic_recovery.nu`
     ^ best
 }
 
-@ quic_conn_on_timeout * QuicConn c i now → v {
+@ quic_conn_on_timeout QuicConn c__h i now → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     ? >= . c state 2 {
         ? >= now . c close_deadline { = . c state 4 } {}

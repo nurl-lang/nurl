@@ -23,9 +23,13 @@
 //
 // Idempotency keys are i64 (dist/job task_ids are i64); resource keys are
 // opaque bytes (the same key dist/ring shards on). Pure + deterministic.
+//
+// A LeaseTable is a handle: every copy is the same table, and its last owner
+// releases it (lease_free is an early release, optional).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __ls_veq ( Vec u ) a ( Vec u ) b → b {
     : i n ( vec_len [u] a )
@@ -52,29 +56,48 @@ $ `stdlib/core/vec.nu`
     ( Vec i ) applied  // idempotency keys (task_ids) already admitted
 }
 
-: LeaseTable {
+: LeaseTableImpl {
     ( Vec s ) entries  // *LeaseEntry
 }
 
-@ lease_new → *LeaseTable {
-    : *LeaseTable t # *LeaseTable ( nurl_alloc Z LeaseTable )
-    = . t entries ( vec_new [s] )
-    ^ t
+// A LeaseTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: LeaseTable { s ctl }
+
+@ LeaseTable_share LeaseTable h → LeaseTable { ^ @ LeaseTable { # s ( rcbox_share # i . h ctl ) } }
+
+@ LeaseTable_drop sink LeaseTable h → v {
+    ( mem_forget h )
+    ( rcbox_release [LeaseTableImpl] # i . h ctl )
 }
 
-@ lease_free sink * LeaseTable t → v {
-    : i n ( vec_len [s] . t entries )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . t entries k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *LeaseEntry e # *LeaseEntry pp ( vec_free [u] . e key ) ( vec_free [i] . e applied ) ( nurl_free # s e ) } {}
-        = k + k 1
+@ __LeaseTable_ptr LeaseTable h → *LeaseTableImpl { ^ ( rcbox_ptr [LeaseTableImpl] # i . h ctl ) }
+
+// The entries are raw blocks the Vec only points at: releasing them is the
+// table's own drop, run by its last owner (the Vec goes after it).
+% Drop LeaseTableImpl {
+    @ drop LeaseTableImpl t → v {
+        : i n ( vec_len [s] . t entries )
+        : ~ i k 0
+        ~ < k n {
+            : s pp ?? ( vec_get [s] . t entries k ) { T x → x F → # s 0 }
+            ? != # i pp 0 { : *LeaseEntry e # *LeaseEntry pp ( vec_free [u] . e key ) ( vec_free [i] . e applied ) ( nurl_free # s e ) } {}
+            = k + k 1
+        }
     }
-    ( vec_free [s] . t entries )
-    ( nurl_free # s t )
 }
 
-@ __lease_find * LeaseTable t ( Vec u ) key → s {
+@ lease_new → LeaseTable {
+    : i t__box ( rcbox_zero [LeaseTableImpl] )
+    : *LeaseTableImpl t ( rcbox_ptr [LeaseTableImpl] t__box )
+    = . t entries ( vec_new [s] )
+    ^ @ LeaseTable { # s t__box }
+}
+
+// Let go of `t` now rather than at the end of its owner's scope.
+@ lease_free sink LeaseTable t → v {}
+
+@ __lease_find * LeaseTableImpl t ( Vec u ) key → s {
     : i n ( vec_len [s] . t entries )
     : ~ s found # s 0
     : ~ i k 0
@@ -94,7 +117,8 @@ $ `stdlib/core/vec.nu`
 }
 
 // The current (highest admitted) epoch for a key; 0 if never seen.
-@ lease_token * LeaseTable t ( Vec u ) key → i {
+@ lease_token LeaseTable t__h ( Vec u ) key → i {
+    : *LeaseTableImpl t ( __LeaseTable_ptr t__h )
     : s pp ( __lease_find t key )
     ? == # i pp 0 { ^ 0 } {}
     : *LeaseEntry e # *LeaseEntry pp
@@ -108,7 +132,8 @@ $ `stdlib/core/vec.nu`
 //   * else advance the key's epoch to `epoch`, and REFUSE if `idem` was
 //     already admitted (duplicate delivery / the same task already ran);
 //   * else record `idem` and admit (T).
-@ lease_admit * LeaseTable t ( Vec u ) key i epoch i idem → b {
+@ lease_admit LeaseTable t__h ( Vec u ) key i epoch i idem → b {
+    : *LeaseTableImpl t ( __LeaseTable_ptr t__h )
     : s pp ( __lease_find t key )
     ? == # i pp 0 {
         : *LeaseEntry e # *LeaseEntry ( nurl_alloc Z LeaseEntry )

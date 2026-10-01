@@ -3,7 +3,7 @@ $ `stdlib/core/string.nu`
 
 @ main → v {
     : String content ( string_from `name,note\n"alice","hello\nworld"\n"bob","hi"\n` )
-    : *CSVReader r ( csv_reader_new content )
+    : CSVReader r ( csv_reader_new content )
 
     : ~ i count 0
     : ~ b done F
@@ -28,6 +28,6 @@ $ `stdlib/core/string.nu`
     }
 
     ( nurl_print `Total rows: ` ) ( nurl_print ( nurl_str_int count ) ) ( nurl_print `\n` )
-    ( csv_reader_free r )  // a raw reader handle: released by hand
+    ( csv_reader_free r )  // early release (optional: the reader releases itself)
     ( string_free content )
 }

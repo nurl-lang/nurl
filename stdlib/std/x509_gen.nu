@@ -488,7 +488,7 @@ $ `stdlib/std/time.nu`
 
 // Convenience wrapper: fresh key, serial and signing randomness.
 @ x509_selfsigned_mldsa i level s cn i days → X509SelfSigned {
-    : *MldsaKeys ks ( mldsa_keygen level )
+    : MldsaKeys ks ( mldsa_keygen level )
     : ( Vec u ) serial ( _xg_rand_bytes 12 )
     : ( Vec u ) rnd ( _xg_rand_bytes 32 )
     : i now ( now_seconds )

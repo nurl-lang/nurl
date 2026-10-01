@@ -5,7 +5,9 @@
 // unused high bits of the last limb stay clear and `bitset_count` /
 // `bitset_all` can treat every stored word at face value. Storage is a
 // flat `nurl_zalloc` buffer of `ceil(nbits/64)` words, peeked/poked by
-// word index. No element ownership — `bitset_free` is the whole story.
+// word index, behind an owner count: a Bitset is a library handle — every
+// copy is the same bits, and the last owner releases them (docs/MEMORY.md
+// §7.6). `bitset_clone` makes an independent copy.
 //
 //   ( bitset_new      i nbits )          → Bitset
 //   ( bitset_nbits    Bitset bs )        → i
@@ -25,7 +27,7 @@
 //   ( bitset_xor_with Bitset a Bitset b ) → v  a ^= b
 //   ( bitset_clone    Bitset bs )        → Bitset
 //   ( bitset_each_set Bitset bs ( @ v i ) f ) → v   set indices, ascending
-//   ( bitset_free     Bitset bs )        → v
+//   ( bitset_free     Bitset bs )        → v   early release (optional)
 //
 // NURL has no native XOR or NOT operator, so this module uses the
 // identities  a^b = (a|b) - (a&b)  and  ~m = -1 - m  (two's complement),
@@ -36,8 +38,14 @@
 @ bitset_new i nbits → Bitset {
     : i nb ? > nbits 0 nbits 0
     : i nw / + nb 63 64
-    : s w ? > nw 0 ( nurl_zalloc * nw 8 ) # s 0
-    ^ @ Bitset { w nb nw }
+    // `[ owners ][ word 0 ] …`; `words` points at word 0.
+    : ~ i w 0
+    ? > nw 0 {
+        : s blk ( nurl_zalloc * + nw 1 8 )
+        ( nurl_poke blk 0 1 )
+        = w + # i blk 8
+    } {}
+    ^ @ Bitset { # s w nb nw }
 }
 
 @ bitset_nbits Bitset bs → i { ^ . bs nbits }
@@ -203,6 +211,24 @@
     }
 }
 
-@ bitset_free sink Bitset bs → v {
-    ? != 0 # i . bs words { ( nurl_free . bs words ) } {}
+// Owner count: a count of 1 skips the locked RMW (stdlib/core/rcbox.nu).
+& `c` @ nurl_rc_share *u p → i
+
+& `c` @ nurl_rc_release *u p → i
+
+@ Bitset_share Bitset bs → Bitset {
+    : i w # i . bs words
+    ? != 0 w { : i _old ( nurl_rc_share # *u - w 8 ) } {}
+    ^ @ Bitset { . bs words . bs nbits . bs nwords }
 }
+
+@ Bitset_drop sink Bitset bs → v {
+    ( mem_forget bs )
+    : i w # i . bs words
+    ? != 0 w {
+        ? != 0 ( nurl_rc_release # *u - w 8 ) { ( nurl_free # s - w 8 ) } {}
+    } {}
+}
+
+// Let go of `bs` now rather than at the end of its owner's scope.
+@ bitset_free sink Bitset bs → v {}

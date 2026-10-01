@@ -41,14 +41,16 @@
 //   ( mcp_stdio_response_error_code    Json r ) → i
 //   ( mcp_stdio_response_error_message Json r ) → s
 //
-//   ( mcp_stdio_free McpStdioClient c )            → v
+//   ( mcp_stdio_free McpStdioClient c )            → v    early release (optional)
 //   ( mcp_stdio_err_name McpStdioErr e )           → s
 //
 // Memory model — single-owner, LLM-friendly:
 //
 //   * `mcp_stdio_spawn` returns an OWNED McpStdioClient that wraps the
-//     child handle. Caller MUST `mcp_stdio_free` exactly once on the
-//     Ok arm. Free reaps the child (SIGTERM then SIGKILL fallback).
+//     child handle (a ProcChild): when its last owner goes, the server
+//     is shut down and reaped (stdin/stdout closed, SIGTERM then SIGKILL
+//     fallback) — nothing to free by hand. Every copy of the client
+//     talks to the same server.
 //   * `params` / `args` Json values are CONSUMED by the call.
 //   * `mcp_stdio_call` returns the full JSON-RPC response on success;
 //     server-reported `error` envelopes ARE the Ok arm — distinguish
@@ -141,9 +143,8 @@ $ `stdlib/core/vec.nu`
     ^ r
 }
 
-@ mcp_stdio_free sink McpStdioClient c → v {
-    ( proc_free . c child )
-}
+// Let go of `c` now rather than at the end of its owner's scope.
+@ mcp_stdio_free sink McpStdioClient c → v {}
 
 // ── Envelope construction ───────────────────────────────────────────
 

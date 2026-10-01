@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Follows the stdlib's HTTP/3 client handle: `h3_client_connect` now returns an
+`H3Client` value (a handle that releases itself when its last owner goes)
+instead of a `*H3Client`. An origin holds the handle while its QUIC connection
+is pooled; a QUIC attempt that does not complete is released with its binding
+instead of by an explicit free. No change to the facade's API.
+
 ## 0.2.1
 
 `http_client_free` now takes a **`sink`** parameter.

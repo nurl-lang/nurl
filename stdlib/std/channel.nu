@@ -42,17 +42,19 @@
 //   ( chan_close    [A] ( Channel A ) ch )      → v      wakes blocked recvs (threads + fibers)
 //   ( chan_len      [A] ( Channel A ) ch )      → i      queue depth (snapshot)
 //   ( chan_is_closed [A] ( Channel A ) ch )     → b
-//   ( chan_free     [A] ( Channel A ) ch )      → v      releases queue + mutex + cond + waiter list
+//   ( chan_free     [A] ( Channel A ) ch )      → v      early release of this owner (optional)
+//   ( Channel_share [A] ( Channel A ) ch )      → ( Channel A )   another owner
 //
 // Memory model:
 //
-//   * `Channel[A]` is an opaque single-pointer handle (`{ s ctl }`);
-//     copying the handle by value shares the same heap-allocated
-//     `ChannelImpl[A]`, which is exactly what producer/consumer threads
-//     AND fibers need.
-//   * Caller MUST call `chan_close` before `chan_free` to wake every
-//     blocked receiver — otherwise a `chan_recv` waiter would deadlock
-//     on a freed cond+mutex pair OR a parked fiber would never resume.
+//   * `Channel[A]` is an opaque single-pointer handle (`{ s ctl }`) on
+//     a reference-counted `ChannelImpl[A]`: every copy (a thread's or a
+//     fiber's capture, a struct field) is the same channel, which is
+//     exactly what producer/consumer threads AND fibers need, and the
+//     last owner to go releases it with anything still queued. Nothing
+//     to free by hand.
+//   * `chan_close` wakes every blocked receiver; a receiver holds its
+//     own copy, so the channel outlives it.
 //   * Closed channel: send returns F (caller's value is dropped — the
 //     slot is not freed since we don't know what it points at); recv
 //     drains remaining items, then returns None.
@@ -71,7 +73,6 @@
 //   // main:
 //   ( chan_send [i] ch 42 )
 //   ( chan_close [i] ch )
-//   ( chan_free [i] ch )
 
 $ `stdlib/std/thread.nu`
 $ `stdlib/core/vec.nu`
@@ -88,6 +89,7 @@ $ `stdlib/std/async_ffi.nu`
 // ── Internal heap-allocated state ──────────────────────────────────
 
 : ChannelImpl [A] {
+    i owners  // copies of the handle alive (Channel_share / Channel_drop)
     Mutex m
     Cond c
     ( Vec A ) q  // FIFO: push back, pop front
@@ -96,6 +98,9 @@ $ `stdlib/std/async_ffi.nu`
     ( Vec i ) select_waiters  // raw SelectWaiter* of threads in a `?? {}` select
 }
 
+// A handle every copy of which is the same channel: the producer's and
+// the consumer's copies (a thread closure's capture, a struct field)
+// share it, and the last one to go releases it and anything still queued.
 : Channel [A] { s ctl }
 
 // Type-erased view of ChannelImpl[A]. Every field of ChannelImpl[A] is
@@ -112,6 +117,7 @@ $ `stdlib/std/async_ffi.nu`
 // INVARIANT: ChannelRaw's field order + count MUST mirror
 // ChannelImpl[A] exactly. The select_basic test catches drift.
 : ChannelRaw {
+    i owners
     Mutex m
     Cond c
     ( Vec i ) q
@@ -136,6 +142,7 @@ $ `stdlib/std/async_ffi.nu`
 
 @ chan_new [A] → ( Channel A ) {
     : *( ChannelImpl A ) impl # *( ChannelImpl A ) ( nurl_alloc Z ( ChannelImpl A ) )
+    = . impl owners 1
     = . impl m ( mutex_new )
     = . impl c ( cond_new )
     = . impl q ( vec_new [A] )
@@ -199,10 +206,8 @@ $ `stdlib/std/async_ffi.nu`
             // swap-out completes, so a concurrent sender sees the
             // queued waiter on a stable PARKED state.
             ( vec_push [i] . impl recv_fibers fcur )
-            // Mutex.c is a Cell over pthread_mutex_t (PURIFY Phase 6
-            // batch 1). cell_ptr returns *u directly into the mutex
-            // bytes — the C side casts back to pthread_mutex_t*.
-            : *u mptr ( cell_ptr . . impl m c )
+            // The pthread_mutex_t itself — the C side casts it back.
+            : *u mptr ( mutex_raw . impl m )
             : i mraw # i mptr
             ( nurl_fiber_park_with_mutex mraw )
             // Re-acquire the mutex on resume and loop the predicate.
@@ -278,15 +283,35 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── Cleanup ────────────────────────────────────────────────────────
 
-@ chan_free [A] sink ( Channel A ) ch → v {
-    : *( ChannelImpl A ) impl # *( ChannelImpl A ) . ch ctl
-    ( vec_free [A] . impl q )
-    ( vec_free [i] . impl recv_fibers )
-    ( vec_free [i] . impl select_waiters )
-    ( cond_free . impl c )
-    ( mutex_free . impl m )
-    ( nurl_free # s impl )
+@ Channel_share [A] ( Channel A ) ch → ( Channel A ) {
+    : i _old ( nurl_rc_share # *u . ch ctl )
+    ^ @ ( Channel A ) { . ch ctl }
 }
+
+// The last owner releases the channel and whatever is still queued in it.
+@ Channel_drop [A] sink ( Channel A ) ch → v {
+    ( mem_forget ch )
+    : s p . ch ctl
+    ? == 0 # i p {} {
+        ? != 0 ( nurl_rc_release # *u p ) {
+            : *( ChannelImpl A ) impl # *( ChannelImpl A ) p
+            : ( Vec A ) q . impl q
+            ( mem_take q )
+            : ( Vec i ) rf . impl recv_fibers
+            ( mem_take rf )
+            : ( Vec i ) sw . impl select_waiters
+            ( mem_take sw )
+            : Mutex m . impl m
+            ( mem_take m )
+            : Cond c . impl c
+            ( mem_take c )
+            ( nurl_free p )
+        } {}
+    }
+}
+
+// Let go of `ch` now rather than at the end of its owner's scope.
+@ chan_free [A] sink ( Channel A ) ch → v {}
 
 // ── select (`?? {}`) machinery ─────────────────────────────────────
 //
@@ -322,8 +347,10 @@ $ `stdlib/std/async_ffi.nu`
 
 @ select_waiter_free sink i wp → v {
     : *SelectWaiter w # *SelectWaiter wp
-    ( cond_free . w c )
-    ( mutex_free . w m )
+    : Cond c . w c
+    ( mem_take c )
+    : Mutex m . w m
+    ( mem_take m )
     ( nurl_free # s w )
 }
 

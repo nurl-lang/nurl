@@ -1,10 +1,9 @@
 // Test: stdlib/std/iter.nu — lazy ( Iter A ) ≡ (@ ? A i) chain with auto-drop
 //
-// Single closure carries both advance (cmd=0) and free (cmd=1) paths.
-// Constructors allocate state via nurl_zalloc and free it via cmd=1.
-// Combinators cascade cmd=1 to upstream. Consumers auto-issue cmd=1
-// after exhaustion. Result: state buffers do NOT leak. Closure envs
-// are still per-pipeline (constant overhead).
+// Every constructor, combinator and consumer once over, on temporaries:
+// each chain is dropped (envs and cursors) when the call it was passed to
+// returns. The abandoned `ab` at the end goes through the optional early
+// release, iter_free.
 
 $ `stdlib/std/iter.nu`
 

@@ -12,14 +12,14 @@ $ `stdlib/dist/replicator.nu`
 
 @ main → i {
     // ── PNCounter codec + anti-entropy ───────────────────────────
-    : *PNCounter a ( pncounter_new )
+    : PNCounter a ( pncounter_new )
     ( pncounter_inc a 0 5 ) ( pncounter_dec a 0 2 )  // value 3
     : ( Vec u ) ab ( pncounter_encode a )
-    : *PNCounter a2 ( pncounter_decode ab )
+    : PNCounter a2 ( pncounter_decode ab )
     ( pb `pncounter round-trips (3): ` == ( pncounter_value a2 ) 3 )
     ( pncounter_free a2 ) ( vec_free [u] ab )
 
-    : *PNCounter b ( pncounter_new )
+    : PNCounter b ( pncounter_new )
     ( pncounter_inc b 1 10 )  // value 10
     // A learns B and B learns A by exchanging encoded state
     : ( Vec u ) be ( pncounter_encode b )
@@ -44,17 +44,17 @@ $ `stdlib/dist/replicator.nu`
     ( vec_free [u] nb )
 
     // ── OrSet codec + anti-entropy add-wins ──────────────────────
-    : *OrSet sa ( orset_new )
+    : OrSet sa ( orset_new )
     ( orset_add sa 0 7 ) ( orset_add sa 0 8 )
     : ( Vec u ) sab ( orset_encode sa )
-    : *OrSet sa2 ( orset_decode sab )
+    : OrSet sa2 ( orset_decode sab )
     ( pb `orset round-trips (has 7): ` ( orset_contains sa2 7 ) )
     ( pb `orset round-trips (has 8): ` ( orset_contains sa2 8 ) )
     ( pb `orset round-trips (no 9): ` ! ( orset_contains sa2 9 ) )
     ( orset_free sa2 ) ( vec_free [u] sab )
 
     // anti-entropy add-wins: B observes A's 7, A removes 7, B re-adds 7
-    : *OrSet sb ( orset_new )
+    : OrSet sb ( orset_new )
     : ( Vec u ) e1 ( orset_encode sa )
     ( orset_merge_bytes sb e1 ) ( vec_free [u] e1 )  // B sees {7,8}
     ( orset_remove sa 7 )  // A removes 7

@@ -40,8 +40,8 @@ $ `stdlib/net/noise.nu`
     : ( Vec u ) psk ( fill32 66 )
 
     // initiator knows the responder's static public; responder passes its own.
-    : *Handshake ih ( noise_init T ikp . rkp pk psk )
-    : *Handshake rh ( noise_init F rkp . rkp pk psk )
+    : Handshake ih ( noise_init T ikp . rkp pk psk )
+    : Handshake rh ( noise_init F rkp . rkp pk psk )
 
     : ( Vec u ) m1 ( noise_write_msg1 ih )
     : !v NoiseErr r1 ( noise_read_msg1 rh m1 )
@@ -52,7 +52,7 @@ $ `stdlib/net/noise.nu`
     ( pb `msg2 verified: ` ?? r2 { T _ → T F _ → F } )
 
     // responder learned initiator's static (IK)
-    ( pb `responder learned init static: ` ( veq . rh rs . ikp pk ) )
+    ( pb `responder learned init static: ` ( veq ( noise_remote_static rh ) . ikp pk ) )
 
     : NoiseKeys ik ( noise_split ih )
     : NoiseKeys rk ( noise_split rh )

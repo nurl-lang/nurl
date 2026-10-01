@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+empty Ok, leaked: 0
+filled Ok, leaked: 0
+Err, leaked: 0
+option, leaked: 0

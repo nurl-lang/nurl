@@ -75,12 +75,12 @@ $ `stdlib/net/stack.nu`
 // which is exactly the bug that hid here: the ARP resolved in 0.3 ms
 // and the SYN-ACK it displaced left 856 ms after that, measured on a
 // Firecracker tap with no DHCP and no slirp in the picture.
-@ answer_delay_ms * NetStack st i dst i t0 → i {
+@ answer_delay_ms NetStack st i dst i t0 → i {
     : ( Vec u ) dg ( vec_new [u] )
     ( vec_push [u] dg # u 7 )
     : ~ i now t0
     : ~ i sent_at -1
-    : *PktBuf out ( pktbuf_new )
+    : PktBuf out ( pktbuf_new )
     ~ && == sent_at -1 <= now + t0 4000 {
         ( pktbuf_clear out )
         : TxResult t ( stack_tx_ip4 st 0 dst ( ip_proto_udp ) dg 0 1 now out )
@@ -289,7 +289,7 @@ $ `stdlib/net/stack.nu`
     ( pb `foreign arp htype rejected: ` ! . ( arp_parse rep 14 28 ) valid )
 
     // ── ARP cache with a scripted clock ──────────────────────────
-    : *ArpCache c ( arp_cache_new 4 )
+    : ArpCache c ( arp_cache_new 4 )
     ( pb `cold lookup misses: ` ?? ( arp_cache_lookup c ( peer_ip ) 1000 ) { T m → F F → T } )
     ( pb `first send asks: ` ( arp_cache_should_request c ( peer_ip ) 1000 ) )
     ( pb `immediate retry suppressed: ` ! ( arp_cache_should_request c ( peer_ip ) 1100 ) )
@@ -313,7 +313,7 @@ $ `stdlib/net/stack.nu`
         ( arp_cache_insert c ( ipv4_make 10 0 9 q ) + 1000 q 80000 )
         = q + q 1
     }
-    ( pb `cache stays bounded at max: ` == ( vec_len [ArpEntry] . c entries ) 4 )
+    ( pb `cache stays bounded at max: ` == ( arp_cache_size c ) 4 )
     ( pb `most recent insert survived: ` ?? ( arp_cache_lookup c ( ipv4_make 10 0 9 19 ) 80000 ) { T m → == m 1019 F → F } )
     ( arp_cache_free c )
 
@@ -325,9 +325,9 @@ $ `stdlib/net/stack.nu`
     // is how long it took, because the whole defect was invisible to a
     // golden that kept only the frame.
 
-    : *NetStack ls ( stack_new ( our_mac ) ( our_ip ) ( our_mask ) ( our_gw ) )
+    : NetStack ls ( stack_new ( our_mac ) ( our_ip ) ( our_mask ) ( our_gw ) )
     : ( Vec u ) from_stranger ( mk_udp_frame_from ( stranger_mac ) ( stranger_ip ) )
-    : *PktBuf lout ( pktbuf_new )
+    : PktBuf lout ( pktbuf_new )
     : RxResult lr ( stack_rx ls from_stranger 1000 lout )
     ( pb `stranger's datagram accepted: ` == . lr kind ( rx_udp ) )
     ( pktbuf_clear lout )
@@ -340,11 +340,11 @@ $ `stdlib/net/stack.nu`
     // answers it three milliseconds later; and the datagram itself does
     // not leave until the caller retries, which for TCP is a
     // retransmit timer away. Delta-t 1000, for a resolution that took 3.
-    : *NetStack qs ( stack_new ( our_mac ) ( our_ip ) ( our_mask ) ( our_gw ) )
+    : NetStack qs ( stack_new ( our_mac ) ( our_ip ) ( our_mask ) ( our_gw ) )
     : i silent ( ipv4_make 10 0 2 88 )
     : ( Vec u ) qdg ( vec_new [u] )
     ( vec_push [u] qdg # u 7 )
-    : *PktBuf qout ( pktbuf_new )
+    : PktBuf qout ( pktbuf_new )
     : TxResult q1 ( stack_tx_ip4 qs 0 silent ( ip_proto_udp ) qdg 0 1 1000 qout )
     ( pb `a silent peer displaces the datagram with an ARP request: `
     == . q1 status ( tx_arp_pending ) )
@@ -369,7 +369,7 @@ $ `stdlib/net/stack.nu`
     ( pb `off-subnet datagram accepted: ` == . fr kind ( rx_udp ) )
     ( pktbuf_clear lout )
     ( pb `off-subnet sender is NOT learned: `
-    ?? ( arp_cache_lookup . ls arp ( far_ip ) 1000 ) { T m → F F → T } )
+    ?? ( arp_cache_lookup ( stack_arp ls ) ( far_ip ) 1000 ) { T m → F F → T } )
 
     ( pktbuf_free lout )
     ( vec_free [u] from_stranger ) ( vec_free [u] from_far )

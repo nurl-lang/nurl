@@ -41,13 +41,13 @@ $ `stdlib/std/quic_frame.nu`
 
 // Parse `buf` from 0 and expect failure.
 @ expect_bad s label ( Vec u ) buf → i {
-    : *QuicFrame f ( quic_frame_parse buf 0 )
-    ? == # i f 0 {
+    : QuicFrame f ( quic_frame_parse buf 0 )
+    ? == 0 # i . f ctl {
         ( nurl_print label ) ( nurl_print `: PASS\n` )
         ^ 0
     } {
         ( nurl_print label ) ( nurl_print `: FAIL (parsed type ` )
-        ( nurl_print ( nurl_str_int . f ftype ) ) ( nurl_print `)\n` )
+        ( nurl_print ( nurl_str_int ( quic_frame_type f ) ) ) ( nurl_print `)\n` )
         ( quic_frame_free f )
         ^ 1
     }
@@ -61,15 +61,15 @@ $ `stdlib/std/quic_frame.nu`
     : ( Vec u ) data ( hx `48656c6c6f` )
     ( quic_push_stream out 4 1000 data T )
     = fails + fails ( check_hex `stream_encode` out `0f0443e80548656c6c6f` )
-    : *QuicFrame f1 ( quic_frame_parse out 0 )
-    ? == # i f1 0 { ( nurl_print `stream_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `stream_type` . f1 ftype 15 )
-        = fails + fails ( check_int `stream_id` . f1 a 4 )
-        = fails + fails ( check_int `stream_off` . f1 b 1000 )
-        = fails + fails ( check_int `stream_len` . f1 c 5 )
-        = fails + fails ( check_int `stream_fin` . f1 d 1 )
-        = fails + fails ( check_hex `stream_data` . f1 bytes `48656c6c6f` )
-        = fails + fails ( check_int `stream_next` . f1 next ( vec_len [u] out ) )
+    : QuicFrame f1 ( quic_frame_parse out 0 )
+    ? == 0 # i . f1 ctl { ( nurl_print `stream_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `stream_type` ( quic_frame_type f1 ) 15 )
+        = fails + fails ( check_int `stream_id` ( quic_frame_a f1 ) 4 )
+        = fails + fails ( check_int `stream_off` ( quic_frame_b f1 ) 1000 )
+        = fails + fails ( check_int `stream_len` ( quic_frame_c f1 ) 5 )
+        = fails + fails ( check_int `stream_fin` ( quic_frame_d f1 ) 1 )
+        = fails + fails ( check_hex `stream_data` ( quic_frame_bytes f1 ) `48656c6c6f` )
+        = fails + fails ( check_int `stream_next` ( quic_frame_next f1 ) ( vec_len [u] out ) )
         ( quic_frame_free f1 )
     }
     ( vec_clear [u] out )
@@ -79,14 +79,14 @@ $ `stdlib/std/quic_frame.nu`
     ( quic_push_stream out 8 0 data F )
     ( quic_push_ping out )
     = fails + fails ( check_hex `stream0_encode` out `0a080548656c6c6f01` )
-    : *QuicFrame f2 ( quic_frame_parse out 0 )
-    ? == # i f2 0 { ( nurl_print `stream0_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `stream0_type` . f2 ftype 10 )
-        = fails + fails ( check_int `stream0_off` . f2 b 0 )
-        : *QuicFrame f3 ( quic_frame_parse out . f2 next )
-        ? == # i f3 0 { ( nurl_print `ping_parse: FAIL\n` ) = fails + fails 1 } {
-            = fails + fails ( check_int `ping_type` . f3 ftype 1 )
-            = fails + fails ( check_int `ping_next` . f3 next ( vec_len [u] out ) )
+    : QuicFrame f2 ( quic_frame_parse out 0 )
+    ? == 0 # i . f2 ctl { ( nurl_print `stream0_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `stream0_type` ( quic_frame_type f2 ) 10 )
+        = fails + fails ( check_int `stream0_off` ( quic_frame_b f2 ) 0 )
+        : QuicFrame f3 ( quic_frame_parse out ( quic_frame_next f2 ) )
+        ? == 0 # i . f3 ctl { ( nurl_print `ping_parse: FAIL\n` ) = fails + fails 1 } {
+            = fails + fails ( check_int `ping_type` ( quic_frame_type f3 ) 1 )
+            = fails + fails ( check_int `ping_next` ( quic_frame_next f3 ) ( vec_len [u] out ) )
             ( quic_frame_free f3 )
         }
         ( quic_frame_free f2 )
@@ -95,10 +95,10 @@ $ `stdlib/std/quic_frame.nu`
 
     // ── STREAM without length: data runs to the end of the packet ──
     : ( Vec u ) nolen ( hx `0804616263` )
-    : *QuicFrame f4 ( quic_frame_parse nolen 0 )
-    ? == # i f4 0 { ( nurl_print `stream_nolen_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `stream_nolen_len` . f4 c 3 )
-        = fails + fails ( check_hex `stream_nolen_data` . f4 bytes `616263` )
+    : QuicFrame f4 ( quic_frame_parse nolen 0 )
+    ? == 0 # i . f4 ctl { ( nurl_print `stream_nolen_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `stream_nolen_len` ( quic_frame_c f4 ) 3 )
+        = fails + fails ( check_hex `stream_nolen_data` ( quic_frame_bytes f4 ) `616263` )
         ( quic_frame_free f4 )
     }
 
@@ -110,14 +110,14 @@ $ `stdlib/std/quic_frame.nu`
     ( vec_push [i] ranges 3 )
     ( quic_push_ack out 100 5 10 ranges 7 8 9 )
     = fails + fails ( check_hex `ack_encode` out `03406405020a01020003070809` )
-    : *QuicFrame f5 ( quic_frame_parse out 0 )
-    ? == # i f5 0 { ( nurl_print `ack_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `ack_largest` . f5 a 100 )
-        = fails + fails ( check_int `ack_delay` . f5 b 5 )
-        = fails + fails ( check_int `ack_first_range` . f5 c 10 )
-        = fails + fails ( check_int `ack_ecn_flag` . f5 d 1 )
-        = fails + fails ( check_int `ack_ints_len` ( vec_len [i] . f5 ints ) 7 )
-        = fails + fails ( check_int `ack_ints_ce` ?? ( vec_get [i] . f5 ints 6 ) { T x → x F → -1 } 9 )
+    : QuicFrame f5 ( quic_frame_parse out 0 )
+    ? == 0 # i . f5 ctl { ( nurl_print `ack_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `ack_largest` ( quic_frame_a f5 ) 100 )
+        = fails + fails ( check_int `ack_delay` ( quic_frame_b f5 ) 5 )
+        = fails + fails ( check_int `ack_first_range` ( quic_frame_c f5 ) 10 )
+        = fails + fails ( check_int `ack_ecn_flag` ( quic_frame_d f5 ) 1 )
+        = fails + fails ( check_int `ack_ints_len` ( vec_len [i] ( quic_frame_ints f5 ) ) 7 )
+        = fails + fails ( check_int `ack_ints_ce` ?? ( vec_get [i] ( quic_frame_ints f5 ) 6 ) { T x → x F → -1 } 9 )
         ( quic_frame_free f5 )
     }
     ( vec_free [i] ranges )
@@ -133,10 +133,10 @@ $ `stdlib/std/quic_frame.nu`
     // ── CRYPTO ───────────────────────────────────────────────────
     ( quic_push_crypto out 300 data )
     = fails + fails ( check_hex `crypto_encode` out `06412c0548656c6c6f` )
-    : *QuicFrame f6 ( quic_frame_parse out 0 )
-    ? == # i f6 0 { ( nurl_print `crypto_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `crypto_off` . f6 a 300 )
-        = fails + fails ( check_int `crypto_len` . f6 b 5 )
+    : QuicFrame f6 ( quic_frame_parse out 0 )
+    ? == 0 # i . f6 ctl { ( nurl_print `crypto_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `crypto_off` ( quic_frame_a f6 ) 300 )
+        = fails + fails ( check_int `crypto_len` ( quic_frame_b f6 ) 5 )
         ( quic_frame_free f6 )
     }
     ( vec_clear [u] out )
@@ -149,12 +149,12 @@ $ `stdlib/std/quic_frame.nu`
     : ( Vec u ) token ( hx `000102030405060708090a0b0c0d0e0f` )
     ( quic_push_new_connection_id out 7 3 cid token )
     = fails + fails ( check_hex `ncid_encode` out `180703080102030405060708000102030405060708090a0b0c0d0e0f` )
-    : *QuicFrame f7 ( quic_frame_parse out 0 )
-    ? == # i f7 0 { ( nurl_print `ncid_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `ncid_seq` . f7 a 7 )
-        = fails + fails ( check_int `ncid_retire` . f7 b 3 )
-        = fails + fails ( check_int `ncid_len` . f7 c 8 )
-        = fails + fails ( check_int `ncid_bytes` ( vec_len [u] . f7 bytes ) 24 )
+    : QuicFrame f7 ( quic_frame_parse out 0 )
+    ? == 0 # i . f7 ctl { ( nurl_print `ncid_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `ncid_seq` ( quic_frame_a f7 ) 7 )
+        = fails + fails ( check_int `ncid_retire` ( quic_frame_b f7 ) 3 )
+        = fails + fails ( check_int `ncid_len` ( quic_frame_c f7 ) 8 )
+        = fails + fails ( check_int `ncid_bytes` ( vec_len [u] ( quic_frame_bytes f7 ) ) 24 )
         ( quic_frame_free f7 )
     }
     ( vec_clear [u] out )
@@ -172,21 +172,21 @@ $ `stdlib/std/quic_frame.nu`
     : ( Vec u ) reason ( hx `6279` )
     ( quic_push_connection_close out 10 6 reason )
     = fails + fails ( check_hex `close_encode` out `1c0a06026279` )
-    : *QuicFrame f8 ( quic_frame_parse out 0 )
-    ? == # i f8 0 { ( nurl_print `close_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `close_code` . f8 a 10 )
-        = fails + fails ( check_int `close_frame_type` . f8 b 6 )
-        = fails + fails ( check_int `close_app_flag` . f8 c 0 )
-        = fails + fails ( check_hex `close_reason` . f8 bytes `6279` )
+    : QuicFrame f8 ( quic_frame_parse out 0 )
+    ? == 0 # i . f8 ctl { ( nurl_print `close_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `close_code` ( quic_frame_a f8 ) 10 )
+        = fails + fails ( check_int `close_frame_type` ( quic_frame_b f8 ) 6 )
+        = fails + fails ( check_int `close_app_flag` ( quic_frame_c f8 ) 0 )
+        = fails + fails ( check_hex `close_reason` ( quic_frame_bytes f8 ) `6279` )
         ( quic_frame_free f8 )
     }
     ( vec_clear [u] out )
     ( quic_push_application_close out 256 reason )
     = fails + fails ( check_hex `appclose_encode` out `1d4100026279` )
-    : *QuicFrame f9 ( quic_frame_parse out 0 )
-    ? == # i f9 0 { ( nurl_print `appclose_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `appclose_code` . f9 a 256 )
-        = fails + fails ( check_int `appclose_app_flag` . f9 c 1 )
+    : QuicFrame f9 ( quic_frame_parse out 0 )
+    ? == 0 # i . f9 ctl { ( nurl_print `appclose_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `appclose_code` ( quic_frame_a f9 ) 256 )
+        = fails + fails ( check_int `appclose_app_flag` ( quic_frame_c f9 ) 1 )
         ( quic_frame_free f9 )
     }
     ( vec_clear [u] out )
@@ -196,13 +196,13 @@ $ `stdlib/std/quic_frame.nu`
     ( quic_push_max_streams out F 3 )
     ( quic_push_streams_blocked out F 3 )
     = fails + fails ( check_hex `max_streams_encode` out `12406413031703` )
-    : *QuicFrame f10 ( quic_frame_parse out 0 )
-    ? == # i f10 0 { ( nurl_print `max_streams_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `max_streams_bidi_val` . f10 a 100 )
-        = fails + fails ( check_int `max_streams_bidi_flag` . f10 b 1 )
-        : *QuicFrame f11 ( quic_frame_parse out . f10 next )
-        ? == # i f11 0 { ( nurl_print `max_streams_uni_parse: FAIL\n` ) = fails + fails 1 } {
-            = fails + fails ( check_int `max_streams_uni_flag` . f11 b 0 )
+    : QuicFrame f10 ( quic_frame_parse out 0 )
+    ? == 0 # i . f10 ctl { ( nurl_print `max_streams_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `max_streams_bidi_val` ( quic_frame_a f10 ) 100 )
+        = fails + fails ( check_int `max_streams_bidi_flag` ( quic_frame_b f10 ) 1 )
+        : QuicFrame f11 ( quic_frame_parse out ( quic_frame_next f10 ) )
+        ? == 0 # i . f11 ctl { ( nurl_print `max_streams_uni_parse: FAIL\n` ) = fails + fails 1 } {
+            = fails + fails ( check_int `max_streams_uni_flag` ( quic_frame_b f11 ) 0 )
             ( quic_frame_free f11 )
         }
         ( quic_frame_free f10 )
@@ -215,17 +215,17 @@ $ `stdlib/std/quic_frame.nu`
     ( quic_push_path_challenge out eight )
     ( quic_push_handshake_done out )
     = fails + fails ( check_hex `misc_encode` out `00000000001a00010203040506071e` )
-    : *QuicFrame f12 ( quic_frame_parse out 0 )
-    ? == # i f12 0 { ( nurl_print `padding_parse: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `padding_type` . f12 ftype 0 )
-        = fails + fails ( check_int `padding_run_next` . f12 next 5 )
-        : *QuicFrame f13 ( quic_frame_parse out . f12 next )
-        ? == # i f13 0 { ( nurl_print `path_challenge_parse: FAIL\n` ) = fails + fails 1 } {
-            = fails + fails ( check_int `path_challenge_type` . f13 ftype 26 )
-            = fails + fails ( check_hex `path_challenge_data` . f13 bytes `0001020304050607` )
-            : *QuicFrame f14 ( quic_frame_parse out . f13 next )
-            ? == # i f14 0 { ( nurl_print `hsdone_parse: FAIL\n` ) = fails + fails 1 } {
-                = fails + fails ( check_int `hsdone_type` . f14 ftype 30 )
+    : QuicFrame f12 ( quic_frame_parse out 0 )
+    ? == 0 # i . f12 ctl { ( nurl_print `padding_parse: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `padding_type` ( quic_frame_type f12 ) 0 )
+        = fails + fails ( check_int `padding_run_next` ( quic_frame_next f12 ) 5 )
+        : QuicFrame f13 ( quic_frame_parse out ( quic_frame_next f12 ) )
+        ? == 0 # i . f13 ctl { ( nurl_print `path_challenge_parse: FAIL\n` ) = fails + fails 1 } {
+            = fails + fails ( check_int `path_challenge_type` ( quic_frame_type f13 ) 26 )
+            = fails + fails ( check_hex `path_challenge_data` ( quic_frame_bytes f13 ) `0001020304050607` )
+            : QuicFrame f14 ( quic_frame_parse out ( quic_frame_next f13 ) )
+            ? == 0 # i . f14 ctl { ( nurl_print `hsdone_parse: FAIL\n` ) = fails + fails 1 } {
+                = fails + fails ( check_int `hsdone_type` ( quic_frame_type f14 ) 30 )
                 ( quic_frame_free f14 )
             }
             ( quic_frame_free f13 )

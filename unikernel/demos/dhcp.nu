@@ -35,15 +35,15 @@ $ `unikernel/drivers/virtionet.nu`
 // One turn: whatever the client wants to send goes out as a broadcast
 // datagram from 0.0.0.0 (the shape DHCP needs before an address
 // exists), and whatever arrives is fed back to it.
-@ turn * VirtioNet nic * NetStack st * DhcpClient c i now → b {
-    : *PktBuf out ( pktbuf_new )
+@ turn * VirtioNet nic NetStack st DhcpClient c i now → b {
+    : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
         : ( Vec u ) msg ( vec_new [u] )
-        ( dhcp_push_message msg want . c xid . c mac
+        ( dhcp_push_message msg want ( dhcp_xid c ) ( dhcp_mac c )
         ? == want ( dhcp_msg_request ) 0 0
-        ? == want ( dhcp_msg_request ) . c our_ip 0
-        ? == want ( dhcp_msg_request ) . c server_id 0 )
+        ? == want ( dhcp_msg_request ) ( dhcp_our_ip c ) 0
+        ? == want ( dhcp_msg_request ) ( dhcp_server_id c ) 0 )
         : i _n ( stack_tx_udp_broadcast st ( dhcp_src_ip c ) ( dhcp_client_port )
         ( dhcp_server_port ) ( dhcp_dest_ip c ) msg 0 ( vec_len [u] msg ) out )
         ( vec_free [u] msg )
@@ -89,8 +89,8 @@ $ `unikernel/drivers/virtionet.nu`
     // No address yet — that is the point. The stack accepts a
     // broadcast reply before it owns an address, which is the one
     // exception `stack_rx` documents and the reason DHCP works at all.
-    : *NetStack st ( stack_new ( vnet_mac nic ) 0 0 0 )
-    : *DhcpClient c ( dhcp_client_new ( vnet_mac nic ) & ( ms ) 4294967295 )
+    : NetStack st ( stack_new ( vnet_mac nic ) 0 0 0 )
+    : DhcpClient c ( dhcp_client_new ( vnet_mac nic ) & ( ms ) 4294967295 )
 
     // Bounded by the CLOCK, not by a round count. The client's
     // retransmit backoff is measured in seconds and a busy loop gets
@@ -107,16 +107,16 @@ $ `unikernel/drivers/virtionet.nu`
     ( nurl_print ? ( dhcp_bound c ) `yes` `no` )
     ( nurl_print `\n` )
     ? ( dhcp_bound c ) {
-        ( stack_set_address st . c our_ip . c subnet . c router )
-        : String ip ( ipv4_str . c our_ip )
-        : String gw ( ipv4_str . c router )
+        ( stack_set_address st ( dhcp_our_ip c ) ( dhcp_subnet c ) ( dhcp_router c ) )
+        : String ip ( ipv4_str ( dhcp_our_ip c ) )
+        : String gw ( ipv4_str ( dhcp_router c ) )
         ( nurl_print `address: ` ) ( nurl_print ( string_data ip ) ) ( nurl_print `\n` )
         ( nurl_print `gateway: ` ) ( nurl_print ( string_data gw ) ) ( nurl_print `\n` )
         ( nurl_print `netmask is a real one: ` )
-        ( nurl_print ? != . c subnet 0 `yes` `no` )
+        ( nurl_print ? != ( dhcp_subnet c ) 0 `yes` `no` )
         ( nurl_print `\n` )
         ( nurl_print `lease has a deadline: ` )
-        ( nurl_print ? > . c lease_ms 0 `yes` `no` )
+        ( nurl_print ? > ( dhcp_lease_ms c ) 0 `yes` `no` )
         ( nurl_print `\n` )
         ( string_free ip )
         ( string_free gw )

@@ -13,11 +13,11 @@ $ `stdlib/dist/sim.nu`
 
 @ pk i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u + id k ) = k + k 1 } ^ v }
 
-@ node ( Vec s ) tables i i → *PkMemberTable { ^ # *PkMemberTable ?? ( vec_get [s] tables i ) { T x → x F → # s 0 } }
+@ node ( Vec PkMemberTable ) tables i i → PkMemberTable { ^ ?? ( vec_get [PkMemberTable] tables i ) { T x → x F → ( pktable_new ( vec_new [u] ) 0 0 0 0 ) } }
 
 // build a node's gossip snapshot and submit it to a peer over the bus
-@ send_gossip * SimNet net i src * PkMemberTable t i peer i now → v {
-    : ( Vec s ) g ( pktable_gossip t 16 )
+@ send_gossip SimNet net i src PkMemberTable t i peer i now → v {
+    : ( Vec PkMember ) g ( pktable_gossip t 16 )
     : PkMsg m @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
     : ( Vec u ) bytes ( pkmsg_encode m )
     ( sim_send net src peer bytes now )
@@ -25,26 +25,26 @@ $ `stdlib/dist/sim.nu`
 }
 
 // deliver every due message, applying its gossip to the destination table
-@ deliver_due * SimNet net ( Vec s ) tables i now → v {
-    : ( Vec s ) due ( sim_due net now )
-    : i dn ( vec_len [s] due )
+@ deliver_due SimNet net ( Vec PkMemberTable ) tables i now → v {
+    : ( Vec SimMsg ) due ( sim_due net now )
+    : i dn ( vec_len [SimMsg] due )
     : ~ i k 0
     ~ < k dn {
-        : s mp ?? ( vec_get [s] due k ) { T x → x F → # s 0 }
-        ? != # i mp 0 {
-            : *SimMsg msg # *SimMsg mp
-            : PkMsg pm ( pkmsg_decode . msg bytes )
-            ( pktable_apply_gossip ( node tables . msg dst ) pm now )
-            ( pkmsg_free pm )
-            ( sim_msg_free msg )
-        } {}
+        ?? ( vec_get [SimMsg] due k ) {
+            T msg → {
+                : PkMsg pm ( pkmsg_decode ( sim_msg_bytes msg ) )
+                ( pktable_apply_gossip ( node tables ( sim_msg_dst msg ) ) pm now )
+                ( pkmsg_free pm )
+            }
+            F → {}
+        }
         = k + k 1
     }
-    ( vec_free [s] due )
+    ( vec_free [SimMsg] due )
 }
 
 // run `rounds` gossip ticks; node `dead_idx` is gone (never gossips)
-@ run_rounds * SimNet net ( Vec s ) tables i rounds i dead_idx i now0 → i {
+@ run_rounds SimNet net ( Vec PkMemberTable ) tables i rounds i dead_idx i now0 → i {
     : ~ i now now0
     : ~ i r 0
     ~ < r rounds {
@@ -63,35 +63,34 @@ $ `stdlib/dist/sim.nu`
     ^ now
 }
 
-@ knows_dead ( Vec s ) tables i idx ( Vec u ) deadpk → b { ^ == ( pktable_state_of ( node tables idx ) deadpk ) ( pk_dead ) }
+@ knows_dead ( Vec PkMemberTable ) tables i idx ( Vec u ) deadpk → b { ^ == ( pktable_state_of ( node tables idx ) deadpk ) ( pk_dead ) }
 
-@ make_tables → ( Vec s ) {
-    : ( Vec s ) tables ( vec_new [s] )
+@ make_tables → ( Vec PkMemberTable ) {
+    : ( Vec PkMemberTable ) tables ( vec_new [PkMemberTable] )
     : ~ i i 0
     ~ < i 4 {
         : ( Vec u ) selfpk ( pk i )
-        : *PkMemberTable t ( pktable_new selfpk 1000 5000 3 8 )
+        : PkMemberTable t ( pktable_new selfpk 1000 5000 3 8 )
         ( vec_free [u] selfpk )
         // bootstrap: every node knows the other three, alive @ incarnation 1
         : ~ i j 0
         ~ < j 4 { ? != j i { : ( Vec u ) p ( pk j ) ( pktable_apply t p ( pk_alive ) 1 0 ) ( vec_free [u] p ) } {} = j + j 1 }
-        ( vec_push [s] tables # s t )
+        ( vec_push [PkMemberTable] tables t )
         = i + i 1
     }
     ^ tables
 }
 
-@ free_tables ( Vec s ) tables → v {
-    : ~ i i 0 ~ < i 4 { ( pktable_free ( node tables i ) ) = i + i 1 }
-    ( vec_free [s] tables )
+@ free_tables ( Vec PkMemberTable ) tables → v {
+    ( vec_free [PkMemberTable] tables )
 }
 
 @ main → i {
     : ( Vec u ) dead3 ( pk 3 )
 
     // ── (1) convergence under 30% loss + reorder ─────────────────
-    : *SimNet net ( sim_net_new 4 12345 30 1 3 )
-    : ( Vec s ) tables ( make_tables )
+    : SimNet net ( sim_net_new 4 12345 30 1 3 )
+    : ( Vec PkMemberTable ) tables ( make_tables )
     // node 0 detects node 3 dead (incarnation 2 outranks the bootstrap alive)
     ( pktable_apply ( node tables 0 ) dead3 ( pk_dead ) 2 0 )
     ( pb `before gossip only node 0 knows 3 dead: ` & ( knows_dead tables 0 dead3 ) ! ( knows_dead tables 1 dead3 ) )
@@ -102,9 +101,9 @@ $ `stdlib/dist/sim.nu`
     ( free_tables tables ) ( sim_net_free net )
 
     // ── (2) partition isolates node 2, heal reconverges ──────────
-    : *SimNet net2 ( sim_net_new 4 777 0 1 0 )  // no random drop; clean partition
+    : SimNet net2 ( sim_net_new 4 777 0 1 0 )  // no random drop; clean partition
     ( sim_partition net2 2 0 ) ( sim_partition net2 2 1 ) ( sim_partition net2 2 3 )
-    : ( Vec s ) tb ( make_tables )
+    : ( Vec PkMemberTable ) tb ( make_tables )
     ( pktable_apply ( node tb 0 ) dead3 ( pk_dead ) 2 0 )
     : i now2 ( run_rounds net2 tb 25 3 0 )
     ( pb `partition: nodes 0,1 learn 3 dead: ` & ( knows_dead tb 0 dead3 ) ( knows_dead tb 1 dead3 ) )

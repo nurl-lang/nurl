@@ -19,7 +19,7 @@
 // API (this revision):
 //
 //   ( router_new )                                       → Router
-//   ( router_free Router r )                             → v
+//   ( router_free Router r )                             → v   early release (optional)
 //
 //   ( router_get    Router r s pattern handler )         → v
 //   ( router_post   Router r s pattern handler )         → v
@@ -83,6 +83,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Params (path captures) ────────────────────────────────────────────
 //
@@ -150,16 +151,14 @@ $ `stdlib/ext/http_response.nu`
 
 : Route { s ctl }
 
-@ __route_free sink Route route → v {
-    : *RouteImpl impl # *RouteImpl . route ctl
-    ( string_free . impl method )
-    ( string_free . impl pattern )
-    // The router owns the handler closure registered via router_any (a
-    // stored closure is a clone — docs/MEMORY.md §7.4); release it with
-    // the route.
-    : ( @ HttpResponse HttpRequest Params ) h . impl handler
-    ( nurl_closure_drop # *u h 1 )
-    ( nurl_free # s impl )
+// A route's block (in an rcbox) owns its method, pattern and the handler
+// closure registered via router_any (a stored closure is a clone —
+// docs/MEMORY.md §7.4); the last owner of the Route releases them.
+@ Route_share Route h → Route { ^ @ Route { # s ( rcbox_share # i . h ctl ) } }
+
+@ Route_drop sink Route h → v {
+    ( mem_forget h )
+    ( rcbox_release [RouteImpl] # i . h ctl )
 }
 
 // ── Router ────────────────────────────────────────────────────────────
@@ -172,25 +171,19 @@ $ `stdlib/ext/http_response.nu`
     ^ @ Router { ( vec_new [Route] ) }
 }
 
-@ router_free sink Router r → v {
-    ( vec_free_with [Route] . r routes \ Route route → v { ( __route_free route ) } )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ router_free sink Router r → v {}
 
 @ router_count Router r → i {
     ^ ( vec_len [Route] . r routes )
 }
 
 // Register a (method, pattern, handler) tuple. Both `method` and
-// `pattern` are copied into freshly-owned Strings; the closure handle
-// (16 bytes) is captured by value. All three live inside a heap-
-// allocated `RouteImpl`; the `Route` handle stored in the vec is a
-// single pointer.
+// `pattern` are copied into freshly-owned Strings and the closure is
+// copied (a stored closure is a clone). All three live inside the route's
+// rcbox; the `Route` handle stored in the vec is a single pointer.
 @ router_any Router r s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
-    : *RouteImpl impl # *RouteImpl ( nurl_alloc Z RouteImpl )
-    = . impl method ( string_from method )
-    = . impl pattern ( string_from pattern )
-    = . impl handler handler
-    : Route route @ Route { # s impl }
+    : Route route @ Route { # s ( rcbox_new [RouteImpl] @ RouteImpl { ( string_from method ) ( string_from pattern ) handler } ) }
     ( vec_push [Route] . r routes route )
 }
 
@@ -383,7 +376,7 @@ $ `stdlib/ext/http_response.nu`
     : ~ i k 0
     ~ < k n {
         : Route route . data k
-        : *RouteImpl impl # *RouteImpl . route ctl
+        : *RouteImpl impl ( rcbox_ptr [RouteImpl] # i . route ctl )
         : s rmethod ( string_data . impl method )
         : b method_ok
         | | != 0 ( nurl_str_eq rmethod `*` )
@@ -433,7 +426,7 @@ $ `stdlib/ext/http_response.nu`
     : ~ i k 0
     ~ < k n {
         : Route route . data k
-        : *RouteImpl impl # *RouteImpl . route ctl
+        : *RouteImpl impl ( rcbox_ptr [RouteImpl] # i . route ctl )
         : s pattern ( string_data . impl pattern )
         // Skip root-level catch-alls ("/*path", "/*anything") — they
         // match every URL by design and would otherwise advertise GET

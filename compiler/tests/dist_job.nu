@@ -1,5 +1,5 @@
 // dist_job.nu — offline test for stdlib/dist/job.nu (§7.5 Phase 11 keystone).
-// Deterministic, no sockets (transport handle is 0; the owned-key path and all
+// Deterministic, no sockets (transport_none; the owned-key path and all
 // pure logic never touch it): JobMsg codec, in-process submit→execute→await,
 // idempotent result recording, and owner recomputation across a ring change
 // (the re-home target).
@@ -57,9 +57,9 @@ $ `stdlib/dist/job.nu`
     ( vec_free [u] sub ) ( vec_free [u] rp )
 
     // ── in-process submit → execute → await (node owns the key) ──
-    : *Ring ring ( ring_new )
+    : Ring ring ( ring_new )
     ( ring_add_member ring a 32 )  // single member ⇒ owns every key
-    : *JobNode n ( job_node_new # s 0 # s ring a 0 )
+    : JobNode n ( job_node_new ( transport_none ) ring a 0 )
     ( job_register n 0 ( sum_handler ) )
     ( pb `owns key (single-member ring): ` ( job_owns n key ) )
     : i tid ( job_submit n 0 key pl )  // sum(1,2,3,4)=10
@@ -88,9 +88,9 @@ $ `stdlib/dist/job.nu`
     // ── owner recompute across a ring change (re-home target) ────
     : ( Vec u ) b ( mkpk 80 )
     : ( Vec u ) c ( mkpk 150 )
-    : *Ring r3 ( ring_new )
+    : Ring r3 ( ring_new )
     ( ring_add_member r3 a 32 ) ( ring_add_member r3 b 32 ) ( ring_add_member r3 c 32 )
-    : *JobNode n2 ( job_node_new # s 0 # s r3 a 1 )
+    : JobNode n2 ( job_node_new ( transport_none ) r3 a 1 )
     : ( Vec u ) k2 ( bytes4 200 13 13 13 )
     : ~ ( Vec u ) owner1 ( vec_new [u] )
     ?? ( job_owner_pk n2 k2 ) { T o → { ( vec_free [u] owner1 ) = owner1 o } F → {} }
@@ -108,9 +108,9 @@ $ `stdlib/dist/job.nu`
     // kind 7 to a self-only ring: the same key then executes locally under
     // kind 7 (capability domain owns it) while the main ring still routes it
     // to the other member — the two domains are independent.
-    : *Ring r4 ( ring_new )
+    : Ring r4 ( ring_new )
     ( ring_add_member r4 a 32 ) ( ring_add_member r4 b 32 ) ( ring_add_member r4 c 32 )
-    : *JobNode n3 ( job_node_new # s 0 # s r4 a 2 )
+    : JobNode n3 ( job_node_new ( transport_none ) r4 a 2 )
     ( job_register n3 7 ( sum_handler ) )
     : ~ ( Vec u ) k3 ( bytes4 0 0 0 0 )
     : ~ i probe 0
@@ -120,12 +120,12 @@ $ `stdlib/dist/job.nu`
         = k3 ( bytes4 probe 42 42 42 )
     }
     ( pb `found a key not owned on the main ring: ` ! ( job_owns n3 k3 ) )
-    : *Ring gring ( ring_new )
+    : Ring gring ( ring_new )
     ( ring_add_member gring a 32 )  // the capability domain: just this node
     // Set kind 7 to the main ring first, then REPLACE with the domain ring —
     // the local execute below proves replacement took effect.
-    ( job_set_ring n3 7 # s r4 )
-    ( job_set_ring n3 7 # s gring )
+    ( job_set_ring n3 7 r4 )
+    ( job_set_ring n3 7 gring )
     : i tid3 ( job_submit n3 7 k3 pl )  // scoped ring: self owns → runs locally
     ( pb `kind-scoped submit executes locally: ` ( job_has n3 tid3 ) )
     ( pb `kind-scoped result is sum=10: ` ?? ( job_await n3 tid3 ) { T r → { : b ok == ?? ( vec_get [u] r 0 ) { T x → # i x F → -1 } 10 ( vec_free [u] r ) ok } F → F } )

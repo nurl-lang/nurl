@@ -8,9 +8,10 @@
 // the connection derives packet keys with `quic_keys_derive`.
 //
 //   ( quic_tls_srv_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs tp )
-//                                         → *QuicTlsSrv   `tp` = encoded quic_transport_parameters body
+//                                         → QuicTlsSrv    `tp` = encoded quic_transport_parameters body
 //   ( quic_tls_srv_set_pq s pq_chain pq_level pq_sk ) → v   optional ML-DSA identity beside the classical one
-//   ( quic_tls_srv_free s )               → v
+//   ( quic_tls_srv_free s )               → v             early release (optional: the last owner
+//                                                          of a QuicTlsSrv releases it)
 //   ( quic_tls_srv_crypto s level off data ) → i          0 ok, else a QUIC transport error code:
 //                                                          0x100+alert (CRYPTO_ERROR), 0x0a PROTOCOL_VIOLATION,
 //                                                          0x0d CRYPTO_BUFFER_EXCEEDED
@@ -21,6 +22,7 @@
 //   ( quic_tls_srv_client_tp s )          → ( Vec u )     BORROWED body of the client's transport parameters
 //   ( quic_tls_srv_cipher s )             → i             quic_packet cipher id: 1 AES-128-GCM, 2 ChaCha20-Poly1305
 //   ( quic_tls_srv_alpn s )               → ( Vec u )     BORROWED selected ALPN
+//   ( quic_tls_srv_is_pq s )              → b             the key exchange was X25519MLKEM768
 //   secrets (BORROWED, valid once state ≥ 1): quic_tls_srv_c_hs / _s_hs / _c_ap / _s_ap
 //
 // What this refuses (each an h3spec "QUIC servers" case, RFC 9001 §4.1.3
@@ -35,6 +37,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/tls_server.nu`
 $ `stdlib/std/quic_rxbuf.nu`
+$ `stdlib/core/rcbox.nu`
 
 // RFC 9000 §7.5 asks for at least 4096 bytes of buffering per level; a
 // ClientHello with a hybrid key share is ~1.3 KB, a post-quantum
@@ -47,7 +50,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 // The next complete handshake message ([type][u24 len][body]) from the
 // contiguous prefix, or an empty Vec when none is complete yet.
-@ __qt_rx_take * QuicRxBuf r → ( Vec u ) {
+@ __qt_rx_take QuicRxBuf r → ( Vec u ) {
     : i avail ( quic_rxbuf_avail r )
     ? < avail 4 { ^ ( vec_new [u] ) } {}
     : i mlen | | << ( quic_rxbuf_peek_u8 r 1 ) 16 << ( quic_rxbuf_peek_u8 r 2 ) 8 ( quic_rxbuf_peek_u8 r 3 )
@@ -55,11 +58,11 @@ $ `stdlib/std/quic_rxbuf.nu`
     ^ ( quic_rxbuf_read r + 4 mlen )
 }
 
-: QuicTlsSrv {
-    * SrvHs hs
-    * QuicRxBuf rx0
-    * QuicRxBuf rx1
-    * QuicRxBuf rx2
+: QuicTlsSrvImpl {
+    SrvHs hs
+    QuicRxBuf rx0
+    QuicRxBuf rx1
+    QuicRxBuf rx2
     i state
     i seen_ch
     ( Vec u ) out0
@@ -67,8 +70,22 @@ $ `stdlib/std/quic_rxbuf.nu`
     ( Vec u ) out2
 }
 
-@ quic_tls_srv_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs ( Vec u ) tp → *QuicTlsSrv {
-    : *QuicTlsSrv s # *QuicTlsSrv ( nurl_alloc Z QuicTlsSrv )
+// A QuicTlsSrv is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicTlsSrv { s ctl }
+
+@ QuicTlsSrv_share QuicTlsSrv h → QuicTlsSrv { ^ @ QuicTlsSrv { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicTlsSrv_drop sink QuicTlsSrv h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicTlsSrvImpl] # i . h ctl )
+}
+
+@ __QuicTlsSrv_ptr QuicTlsSrv h → *QuicTlsSrvImpl { ^ ( rcbox_ptr [QuicTlsSrvImpl] # i . h ctl ) }
+
+@ quic_tls_srv_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs ( Vec u ) tp → QuicTlsSrv {
+    : i s__box ( rcbox_zero [QuicTlsSrvImpl] )
+    : *QuicTlsSrvImpl s ( rcbox_ptr [QuicTlsSrvImpl] s__box )
     = . s hs ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs )
     // EncryptedExtensions carries quic_transport_parameters (0x0039).
     : ( Vec u ) ext ( vec_with_cap [u] + 4 ( vec_len [u] tp ) )
@@ -84,31 +101,26 @@ $ `stdlib/std/quic_rxbuf.nu`
     = . s out0 ( vec_new [u] )
     = . s out1 ( vec_new [u] )
     = . s out2 ( vec_new [u] )
-    ^ s
+    ^ @ QuicTlsSrv { # s s__box }
 }
 
 // A second, ML-DSA identity for this handshake — chosen over the
 // classical one when the ClientHello's signature_algorithms lists its
 // scheme (`_srv_hs_set_pq` / `__srv_pick_cert` in std/tls_server.nu).
-@ quic_tls_srv_set_pq * QuicTlsSrv s ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+@ quic_tls_srv_set_pq QuicTlsSrv s__h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
     ( _srv_hs_set_pq . s hs pq_chain pq_level pq_sk )
 }
 
-@ quic_tls_srv_free sink * QuicTlsSrv s → v {
-    ? == # i s 0 { ^ } {}
-    ( _srv_hs_free . s hs )
-    ( quic_rxbuf_free . s rx0 )
-    ( quic_rxbuf_free . s rx1 )
-    ( quic_rxbuf_free . s rx2 )
-    ( vec_free [u] . s out0 )
-    ( vec_free [u] . s out1 )
-    ( vec_free [u] . s out2 )
-    ( nurl_free # s s )
+// Let go of `s` now rather than at the end of its owner's scope.
+@ quic_tls_srv_free sink QuicTlsSrv s → v {}
+
+@ quic_tls_srv_state QuicTlsSrv s__h → i {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ . s state
 }
 
-@ quic_tls_srv_state * QuicTlsSrv s → i { ^ . s state }
-
-@ __qt_rx_of * QuicTlsSrv s i level → *QuicRxBuf {
+@ __qt_rx_of * QuicTlsSrvImpl s i level → QuicRxBuf {
     ? == level 0 { ^ . s rx0 } {}
     ? == level 1 { ^ . s rx1 } {}
     ^ . s rx2
@@ -122,7 +134,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 @ quic_err_crypto i alert → i { ^ + 256 alert }
 
 // Handle one complete handshake message at `level`.
-@ __qt_message * QuicTlsSrv s i level ( Vec u ) m → i {
+@ __qt_message * QuicTlsSrvImpl s i level ( Vec u ) m → i {
     : i mtype ( __qt_bget m 0 )
     // Messages QUIC forbids outright (RFC 9001 §4.1.3, §8.3, §6).
     ? | == mtype 24 == mtype 5 { ^ ( quic_err_crypto 10 ) } {}
@@ -133,9 +145,9 @@ $ `stdlib/std/quic_rxbuf.nu`
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
         // QUIC has no other way to agree on an application protocol
         // (RFC 9001 §8.1): no ALPN at all is no_application_protocol too.
-        ? == ( vec_len [u] . . s hs alpn_sel ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
-        ( bytes_extend_bytes . s out0 . . s hs out_sh )
-        ( bytes_extend_bytes . s out1 . . s hs out_hs )
+        ? == ( vec_len [u] ( _srv_hs_alpn_sel . s hs ) ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
+        ( bytes_extend_bytes . s out0 ( _srv_hs_out_sh . s hs ) )
+        ( bytes_extend_bytes . s out1 ( _srv_hs_out_hs . s hs ) )
         = . s state 1
         ^ 0
     } {}
@@ -143,7 +155,7 @@ $ `stdlib/std/quic_rxbuf.nu`
         ? | != mtype 20 != . s state 1 { ^ ( quic_err_crypto 10 ) } {}
         : i rc ( _srv_hs_client_finished . s hs m )
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
-        ( bytes_extend_bytes . s out2 . . s hs out_ticket )
+        ( bytes_extend_bytes . s out2 ( _srv_hs_out_ticket . s hs ) )
         = . s state 2
         ^ 0
     } {}
@@ -154,10 +166,11 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 // Feed CRYPTO frame bytes. Returns 0, or the transport error code the
 // connection must close with.
-@ quic_tls_srv_crypto * QuicTlsSrv s i level i off ( Vec u ) data → i {
+@ quic_tls_srv_crypto QuicTlsSrv s__h i level i off ( Vec u ) data → i {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
     ? == . s state 3 { ^ ( quic_err_protocol_violation ) } {}
     ? | < level 0 > level 2 { ^ ( quic_err_protocol_violation ) } {}
-    : *QuicRxBuf r ( __qt_rx_of s level )
+    : QuicRxBuf r ( __qt_rx_of s level )
     ? ! ( quic_rxbuf_add r off data ) { ^ ( quic_err_crypto_buffer_exceeded ) } {}
     ~ T {
         : ( Vec u ) m ( __qt_rx_take r )
@@ -170,29 +183,60 @@ $ `stdlib/std/quic_rxbuf.nu`
 }
 
 // OWNED: the bytes queued for CRYPTO frames at `level`, cleared here.
-@ quic_tls_srv_take_out * QuicTlsSrv s i level → ( Vec u ) {
+@ quic_tls_srv_take_out QuicTlsSrv s__h i level → ( Vec u ) {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
     : ( Vec u ) src ? == level 0 . s out0 ? == level 1 . s out1 . s out2
     : ( Vec u ) out ( bytes_slice src 0 ( vec_len [u] src ) )
     ( vec_clear [u] src )
     ^ out
 }
 
-@ quic_tls_srv_client_tp * QuicTlsSrv s → ( Vec u ) { ^ . . s hs ext_in }
+@ quic_tls_srv_client_tp QuicTlsSrv s__h → ( Vec u ) {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ( _srv_hs_ext_in . s hs )
+}
 
-@ quic_tls_srv_alpn * QuicTlsSrv s → ( Vec u ) { ^ . . s hs alpn_sel }
+@ quic_tls_srv_alpn QuicTlsSrv s__h → ( Vec u ) {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ( _srv_hs_alpn_sel . s hs )
+}
 
-@ quic_tls_srv_cipher * QuicTlsSrv s → i { ^ ? == . . s hs cipher 1 1 2 }
+// T when the key exchange was X25519MLKEM768.
+@ quic_tls_srv_is_pq QuicTlsSrv s__h → b {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ == ( _srv_hs_kx_group . s hs ) 4588
+}
+
+@ quic_tls_srv_cipher QuicTlsSrv s__h → i {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ? == ( _srv_hs_cipher . s hs ) 1 1 2
+}
 
 // The CertificateVerify scheme this handshake signs with (see tls_cv_scheme).
-@ quic_tls_srv_sig_scheme * QuicTlsSrv s → i { ^ ( _srv_hs_sig_scheme . s hs ) }
+@ quic_tls_srv_sig_scheme QuicTlsSrv s__h → i {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ( _srv_hs_sig_scheme . s hs )
+}
 
-@ quic_tls_srv_c_hs * QuicTlsSrv s → ( Vec u ) { ^ . . s hs c_hs }
+@ quic_tls_srv_c_hs QuicTlsSrv s__h → ( Vec u ) {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ( _srv_hs_c_hs . s hs )
+}
 
-@ quic_tls_srv_s_hs * QuicTlsSrv s → ( Vec u ) { ^ . . s hs s_hs }
+@ quic_tls_srv_s_hs QuicTlsSrv s__h → ( Vec u ) {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ( _srv_hs_s_hs . s hs )
+}
 
-@ quic_tls_srv_c_ap * QuicTlsSrv s → ( Vec u ) { ^ . . s hs c_ap }
+@ quic_tls_srv_c_ap QuicTlsSrv s__h → ( Vec u ) {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ( _srv_hs_c_ap . s hs )
+}
 
-@ quic_tls_srv_s_ap * QuicTlsSrv s → ( Vec u ) { ^ . . s hs s_ap }
+@ quic_tls_srv_s_ap QuicTlsSrv s__h → ( Vec u ) {
+    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    ^ ( _srv_hs_s_ap . s hs )
+}
 
 // ── client role ──────────────────────────────────────────────────
 //
@@ -204,9 +248,10 @@ $ `stdlib/std/quic_rxbuf.nu`
 // quic_transport_parameters and the EncryptedExtensions must carry the
 // server's (missing_extension otherwise).
 //
-//   ( quic_tls_cli_new server_name alpn tp )  → *QuicTlsCli  `alpn` = "h3" (a space-separated preference
+//   ( quic_tls_cli_new server_name alpn tp )  → QuicTlsCli   `alpn` = "h3" (a space-separated preference
 //                                                            list); `tp` = encoded client transport parameters
-//   ( quic_tls_cli_free s )                   → v
+//   ( quic_tls_cli_free s )                   → v            early release (optional: the last owner
+//                                                            of a QuicTlsCli releases it)
 //   ( quic_tls_cli_crypto s level off data )  → i            0 ok, else a QUIC transport error code (as the server)
 //   ( quic_tls_cli_state s )                  → i            0 awaiting ServerHello · 1 awaiting the server
 //                                                            flight · 2 handshake complete (Finished queued) · 3 failed
@@ -224,19 +269,33 @@ $ `stdlib/std/quic_rxbuf.nu`
 // flight at Handshake, anything but NewSessionTicket at 1-RTT, and a
 // handshake that ends without an ALPN (§8.1).
 
-: QuicTlsCli {
-    * CliHs hs
-    * QuicRxBuf rx0
-    * QuicRxBuf rx1
-    * QuicRxBuf rx2
+: QuicTlsCliImpl {
+    CliHs hs
+    QuicRxBuf rx0
+    QuicRxBuf rx1
+    QuicRxBuf rx2
     i state
     ( Vec u ) out0
     ( Vec u ) out1
     ( Vec u ) out2
 }
 
-@ quic_tls_cli_new s server_name s alpn ( Vec u ) tp → *QuicTlsCli {
-    : *QuicTlsCli s # *QuicTlsCli ( nurl_alloc Z QuicTlsCli )
+// A QuicTlsCli is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicTlsCli { s ctl }
+
+@ QuicTlsCli_share QuicTlsCli h → QuicTlsCli { ^ @ QuicTlsCli { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicTlsCli_drop sink QuicTlsCli h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicTlsCliImpl] # i . h ctl )
+}
+
+@ __QuicTlsCli_ptr QuicTlsCli h → *QuicTlsCliImpl { ^ ( rcbox_ptr [QuicTlsCliImpl] # i . h ctl ) }
+
+@ quic_tls_cli_new s server_name s alpn ( Vec u ) tp → QuicTlsCli {
+    : i s__box ( rcbox_zero [QuicTlsCliImpl] )
+    : *QuicTlsCliImpl s ( rcbox_ptr [QuicTlsCliImpl] s__box )
     : ( Vec u ) nosess ( vec_new [u] )
     = . s hs ( _cli_hs_new server_name alpn nosess )
     ( vec_free [u] nosess )
@@ -256,34 +315,28 @@ $ `stdlib/std/quic_rxbuf.nu`
     = . s rx1 ( quic_rxbuf_new ( quic_crypto_rx_cap ) )
     = . s rx2 ( quic_rxbuf_new ( quic_crypto_rx_cap ) )
     = . s state 0
-    = . s out0 ( bytes_slice . . s hs out_ch 0 ( vec_len [u] . . s hs out_ch ) )
+    = . s out0 ( bytes_slice ( _cli_hs_out_ch . s hs ) 0 ( vec_len [u] ( _cli_hs_out_ch . s hs ) ) )
     = . s out1 ( vec_new [u] )
     = . s out2 ( vec_new [u] )
-    ^ s
+    ^ @ QuicTlsCli { # s s__box }
 }
 
-@ quic_tls_cli_free sink * QuicTlsCli s → v {
-    ? == # i s 0 { ^ } {}
-    ( _cli_hs_free . s hs )
-    ( quic_rxbuf_free . s rx0 )
-    ( quic_rxbuf_free . s rx1 )
-    ( quic_rxbuf_free . s rx2 )
-    ( vec_free [u] . s out0 )
-    ( vec_free [u] . s out1 )
-    ( vec_free [u] . s out2 )
-    ( nurl_free # s s )
+// Let go of `s` now rather than at the end of its owner's scope.
+@ quic_tls_cli_free sink QuicTlsCli s → v {}
+
+@ quic_tls_cli_state QuicTlsCli s__h → i {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ . s state
 }
 
-@ quic_tls_cli_state * QuicTlsCli s → i { ^ . s state }
-
-@ __qtc_rx_of * QuicTlsCli s i level → *QuicRxBuf {
+@ __qtc_rx_of * QuicTlsCliImpl s i level → QuicRxBuf {
     ? == level 0 { ^ . s rx0 } {}
     ? == level 1 { ^ . s rx1 } {}
     ^ . s rx2
 }
 
 // Handle one complete handshake message at `level`.
-@ __qtc_message * QuicTlsCli s i level ( Vec u ) m → i {
+@ __qtc_message * QuicTlsCliImpl s i level ( Vec u ) m → i {
     : i mtype ( __qt_bget m 0 )
     ? | == mtype 24 == mtype 5 { ^ ( quic_err_crypto 10 ) } {}
     ? == level 0 {
@@ -291,7 +344,7 @@ $ `stdlib/std/quic_rxbuf.nu`
         : i rc ( _cli_hs_server_hello . s hs m )
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
         // TLS 1.2 has no place in QUIC (RFC 9001 §4.2)
-        ? == . . s hs version 12 { = . s state 3 ^ ( quic_err_crypto 70 ) } {}
+        ? == ( _cli_hs_version . s hs ) 12 { = . s state 3 ^ ( quic_err_crypto 70 ) } {}
         = . s state 1
         ^ 0
     } {}
@@ -299,11 +352,11 @@ $ `stdlib/std/quic_rxbuf.nu`
         ? != . s state 1 { ^ ( quic_err_crypto 10 ) } {}
         : i rc ( _cli_hs_message . s hs m )
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
-        ? == . . s hs state 3 {
+        ? == ( _cli_hs_state . s hs ) 3 {
             // QUIC has no other way to agree on an application protocol
             // (RFC 9001 §8.1): no ALPN at all is no_application_protocol.
-            ? == ( vec_len [u] . . s hs alpn_sel ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
-            ( bytes_extend_bytes . s out1 . . s hs out_fin )
+            ? == ( vec_len [u] ( _cli_hs_alpn_sel . s hs ) ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
+            ( bytes_extend_bytes . s out1 ( _cli_hs_out_fin . s hs ) )
             = . s state 2
         } {}
         ^ 0
@@ -317,10 +370,11 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 // Feed CRYPTO frame bytes. Returns 0, or the transport error code the
 // connection must close with.
-@ quic_tls_cli_crypto * QuicTlsCli s i level i off ( Vec u ) data → i {
+@ quic_tls_cli_crypto QuicTlsCli s__h i level i off ( Vec u ) data → i {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
     ? == . s state 3 { ^ ( quic_err_protocol_violation ) } {}
     ? | < level 0 > level 2 { ^ ( quic_err_protocol_violation ) } {}
-    : *QuicRxBuf r ( __qtc_rx_of s level )
+    : QuicRxBuf r ( __qtc_rx_of s level )
     ? ! ( quic_rxbuf_add r off data ) { ^ ( quic_err_crypto_buffer_exceeded ) } {}
     ~ T {
         : ( Vec u ) m ( __qt_rx_take r )
@@ -333,7 +387,8 @@ $ `stdlib/std/quic_rxbuf.nu`
 }
 
 // OWNED: the bytes queued for CRYPTO frames at `level`, cleared here.
-@ quic_tls_cli_take_out * QuicTlsCli s i level → ( Vec u ) {
+@ quic_tls_cli_take_out QuicTlsCli s__h i level → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
     : ( Vec u ) src ? == level 0 . s out0 ? == level 1 . s out1 . s out2
     : ( Vec u ) out ( bytes_slice src 0 ( vec_len [u] src ) )
     ( vec_clear [u] src )
@@ -341,30 +396,61 @@ $ `stdlib/std/quic_rxbuf.nu`
 }
 
 // The ClientHello once more, for a fresh Initial after a Retry.
-@ quic_tls_cli_client_hello * QuicTlsCli s → ( Vec u ) { ^ . . s hs out_ch }
+@ quic_tls_cli_client_hello QuicTlsCli s__h → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_out_ch . s hs )
+}
 
-@ quic_tls_cli_server_tp * QuicTlsCli s → ( Vec u ) { ^ . . s hs ext_in }
+@ quic_tls_cli_server_tp QuicTlsCli s__h → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_ext_in . s hs )
+}
 
-@ quic_tls_cli_alpn * QuicTlsCli s → ( Vec u ) { ^ . . s hs alpn_sel }
+@ quic_tls_cli_alpn QuicTlsCli s__h → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_alpn_sel . s hs )
+}
 
-@ quic_tls_cli_cipher * QuicTlsCli s → i { ^ ? == . . s hs cipher 1 1 2 }
+@ quic_tls_cli_cipher QuicTlsCli s__h → i {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ? == ( _cli_hs_cipher . s hs ) 1 1 2
+}
 
 // T when the key exchange was X25519MLKEM768.
-@ quic_tls_cli_is_pq * QuicTlsCli s → b { ^ == . . s hs kx_group 4588 }
+@ quic_tls_cli_is_pq QuicTlsCli s__h → b {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ == ( _cli_hs_kx_group . s hs ) 4588
+}
 
 // The CertificateVerify scheme the server signed with (see tls_cv_scheme).
-@ quic_tls_cli_sig_scheme * QuicTlsCli s → i { ^ . . s hs cv_scheme }
+@ quic_tls_cli_sig_scheme QuicTlsCli s__h → i {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_cv_scheme . s hs )
+}
 
-@ quic_tls_cli_verify * QuicTlsCli s s server_name → i {
-    ? != . . s hs resumed 0 { ^ 0 } {}
-    : i rc ( tls_cert_verify . . s hs cert_msg . . s hs cv_scheme . . s hs cv_sig . . s hs th_cert server_name )
+@ quic_tls_cli_verify QuicTlsCli s__h s server_name → i {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ? != ( _cli_hs_resumed . s hs ) 0 { ^ 0 } {}
+    : i rc ( tls_cert_verify ( _cli_hs_cert_msg . s hs ) ( _cli_hs_cv_scheme . s hs ) ( _cli_hs_cv_sig . s hs ) ( _cli_hs_th_cert . s hs ) server_name )
     ^ ? == rc 0 0 42
 }
 
-@ quic_tls_cli_c_hs * QuicTlsCli s → ( Vec u ) { ^ . . s hs c_hs }
+@ quic_tls_cli_c_hs QuicTlsCli s__h → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_c_hs . s hs )
+}
 
-@ quic_tls_cli_s_hs * QuicTlsCli s → ( Vec u ) { ^ . . s hs s_hs }
+@ quic_tls_cli_s_hs QuicTlsCli s__h → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_s_hs . s hs )
+}
 
-@ quic_tls_cli_c_ap * QuicTlsCli s → ( Vec u ) { ^ . . s hs c_ap }
+@ quic_tls_cli_c_ap QuicTlsCli s__h → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_c_ap . s hs )
+}
 
-@ quic_tls_cli_s_ap * QuicTlsCli s → ( Vec u ) { ^ . . s hs s_ap }
+@ quic_tls_cli_s_ap QuicTlsCli s__h → ( Vec u ) {
+    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    ^ ( _cli_hs_s_ap . s hs )
+}

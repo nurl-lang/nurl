@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ffi_defined_other_sig_rev.nu:7:1: error: FFI symbol 'nurl_test_sig_fn' is defined by the NURL function '@ nurl_test_sig_fn' at compiler/tests/diag_ffi_defined_other_sig_rev.nu:5 with a different signature: this declaration says 'double(double)', the definition is 'i64(i64, i64)'. A NURL function with an FFI symbol's name defines that symbol for the whole program, so every call to the C function — the standard library's included — would reach it with the wrong ABI. Rename the NURL function.
+& `c` @ nurl_test_sig_fn f x → f
+^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

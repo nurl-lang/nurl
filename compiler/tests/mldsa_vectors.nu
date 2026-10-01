@@ -77,7 +77,7 @@ $ `stdlib/core/string.nu`
 // ── ACVP key generation: seed → pk, dk (pinned by digest) ──────────
 @ kg_case s label i level s seed s pkd s skd → b {
     : ( Vec u ) xi ( hexv seed )
-    : *MldsaKeys ks ( mldsa_keygen_derand level xi )
+    : MldsaKeys ks ( mldsa_keygen_derand level xi )
     : b ok1 ( eq_digest ( mldsa_pk ks ) pkd )
     : b ok2 ( eq_digest ( mldsa_sk ks ) skd )
     : b ok3 == ( vec_len [u] ( mldsa_pk ks ) ) ( mldsa_pk_len level )
@@ -98,7 +98,7 @@ $ `stdlib/core/string.nu`
     ~ < i 48 { ( vec_push [u] msg # u % + * i 11 5 251 ) = i + i 1 }
     ( bytes_extend_str ctx `nurl-test` )
 
-    : *MldsaKeys ks ( mldsa_keygen_derand level xi )
+    : MldsaKeys ks ( mldsa_keygen_derand level xi )
     : ( Vec u ) sig ( mldsa_sign level ( mldsa_sk ks ) msg ctx )
     : b oklen == ( vec_len [u] sig ) ( mldsa_sig_len level )
     : b okv ( mldsa_verify level ( mldsa_pk ks ) msg ctx sig )
@@ -167,7 +167,7 @@ $ `stdlib/core/string.nu`
     = i 0
     ~ < i 16 { ( vec_push [u] msg # u % + * i 5 1 251 ) = i + i 1 }
 
-    : *MldsaKeys ks ( mldsa_keygen_derand level xi )
+    : MldsaKeys ks ( mldsa_keygen_derand level xi )
     : ( Vec u ) good ( mldsa_sign level ( mldsa_sk ks ) msg ctx )
     : b okgood ( mldsa_verify level ( mldsa_pk ks ) msg ctx good )
 
@@ -242,7 +242,7 @@ $ `stdlib/core/string.nu`
     ~ < i 64 { ( vec_push [u] msg # u % + * i 3 9 251 ) = i + i 1 }
     ( bytes_extend_str ctx `ph` )
 
-    : *MldsaKeys ks ( mldsa_keygen_derand level xi )
+    : MldsaKeys ks ( mldsa_keygen_derand level xi )
     : ~ b ok T
     // Every one of the twelve approved hashes round-trips.
     : ~ i a 1

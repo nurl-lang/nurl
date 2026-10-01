@@ -5,6 +5,17 @@ All notable changes to `pqc` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Builds against the self-releasing key handles of `stdlib/std/mlkem.nu`
+  and `stdlib/std/mldsa.nu`: `MlkemKeys`, `MlkemEncap` and `MldsaKeys` are
+  values, not `*T` pointers, and the last owner releases them. `keygen`,
+  `encaps`, `sign-keygen`, `bench` and `kat` no longer free their keys by
+  hand — a binding in a `bench` loop is released at the end of each
+  iteration, as the explicit free did. No change in output.
+
 ## [0.2.2] — 2026-09-06
 
 ### Fixed

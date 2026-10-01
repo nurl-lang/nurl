@@ -107,8 +107,8 @@ $ `stdlib/ext/compress.nu`
 // origin negotiated: 0 nothing yet, 1 HTTP/1.1, 2 HTTP/2, 3 HTTP/3. For
 // h2 the pooled connection is the multiplexed H2Client; for h1 it is one
 // idle keep-alive HttpConn, present only while `has_h1` is 1; for h3 it
-// is the QUIC connection in H3Client, beside whatever TCP connection
-// the origin still holds.
+// is the QUIC connection in an H3Client handle (present only while
+// `has_h3` is 1), beside whatever TCP connection the origin still holds.
 : HcOrigin {
     String key  // "scheme://host:port"
     String host
@@ -118,7 +118,7 @@ $ `stdlib/ext/compress.nu`
     i has_h2 H2Client h2
     i has_h1 HttpConn h1
     i pq  // 1 = the TLS key exchange for this origin was post-quantum
-    i has_h3 * H3Client h3
+    i has_h3 H3Client h3
     i alt_h3_port  // the port an Alt-Svc named for h3 (0 none seen)
     i alt_h3_until  // ... valid until this wall-clock second
     i h3_failed  // 1 = a QUIC attempt failed here; TCP from now on
@@ -266,6 +266,8 @@ $ `stdlib/ext/compress.nu`
     = . o proto 0
 }
 
+// The origin record is hand-managed memory, so the H3Client it holds is
+// handed back here: the release closes the QUIC socket.
 @ __hc_origin_drop_h3 * HcOrigin o → v {
     ? != . o has_h3 0 {
         ( h3_client_close . o h3 )
@@ -431,13 +433,15 @@ $ `stdlib/ext/compress.nu`
 @ __hc_h3_connect * HttpClient c * HcOrigin o → v {
     : i port ? > . o alt_h3_port 0 . o alt_h3_port . o port
     : i tmo ? > . c timeout_ms 0 . c timeout_ms 10000
-    : *H3Client cl ( h3_client_connect ( string_data . o host ) port ( string_data . o host ) . c verify tmo )
-    ? == # i cl 0 { = . o h3_failed 1 ^ } {}
-    ? ! ( h3_client_connected cl ) { ( h3_client_free cl ) = . o h3_failed 1 ^ } {}
+    : H3Client cl ( h3_client_connect ( string_data . o host ) port ( string_data . o host ) . c verify tmo )
+    // a null handle: the name did not resolve or no socket was bound; a
+    // handshake that did not complete is released with `cl`
+    ? == 0 # i . cl ctl { = . o h3_failed 1 ^ } {}
+    ? ! ( h3_client_connected cl ) { = . o h3_failed 1 ^ } {}
     ? > . c body_max 0 { ( h3_client_set_body_max cl . c body_max ) } {}
+    = . o pq ? ( h3_client_is_pq cl ) 1 0
     = . o has_h3 1
     = . o h3 cl
-    = . o pq ? ( h3_client_is_pq cl ) 1 0
 }
 
 // One request over the origin's QUIC connection. `user` is borrowed —

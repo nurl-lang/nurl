@@ -38,7 +38,13 @@
 //
 // Cell views are NOT NUL-terminated — they are raw byte pointers into
 // the content (or escape) buffer. Combine with `csv_table_view_len`
-// for length. Borrows are valid until `csv_table_free`.
+// for length. Borrows are valid while the table lives.
+//
+// Memory: CSVReader and CSVTable are library handles (docs/MEMORY.md
+// §7.6) — every copy is the same reader / table, and the last owner
+// releases it. `csv_reader_free` / `csv_table_free` are early releases
+// (optional). A failed `csv_table_load*` returns the null table:
+// test it with `csv_table_ok`.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -47,6 +53,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 $ `stdlib/std/hashmap.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Dialect ────────────────────────────────────────────────────────
 
@@ -79,34 +86,40 @@ $ `stdlib/std/hashmap.nu`
 
 // ── CSVReader (per-row stream) ─────────────────────────────────────
 
-: CSVReader {
+: CSVReaderImpl {
     String content
     i pos
     CSVDialect dialect
 }
 
-@ csv_reader_new String content → *CSVReader {
-    : *CSVReader r # *CSVReader ( nurl_malloc Z CSVReader )
-    = . r content ( string_from ( string_data content ) )
-    = . r pos 0
-    = . r dialect ( csv_dialect_default )
-    ^ r
+// A CSVReader is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: CSVReader { s ctl }
+
+@ CSVReader_share CSVReader h → CSVReader { ^ @ CSVReader { # s ( rcbox_share # i . h ctl ) } }
+
+@ CSVReader_drop sink CSVReader h → v {
+    ( mem_forget h )
+    ( rcbox_release [CSVReaderImpl] # i . h ctl )
 }
 
-@ csv_reader_new_dialect String content CSVDialect dia → *CSVReader {
-    : *CSVReader r # *CSVReader ( nurl_malloc Z CSVReader )
-    = . r content ( string_from ( string_data content ) )
-    = . r pos 0
-    = . r dialect dia
-    ^ r
+@ __CSVReader_ptr CSVReader h → *CSVReaderImpl { ^ ( rcbox_ptr [CSVReaderImpl] # i . h ctl ) }
+
+@ csv_reader_new String content → CSVReader {
+    ^ ( csv_reader_new_dialect content ( csv_dialect_default ) )
 }
 
-@ csv_reader_free sink * CSVReader r → v {
-    ( string_free . r content )
-    ( nurl_free r )
+// The reader scans its own copy of `content`.
+@ csv_reader_new_dialect String content CSVDialect dia → CSVReader {
+    ^ @ CSVReader { # s ( rcbox_new [CSVReaderImpl] @ CSVReaderImpl { ( string_from ( string_data content ) ) 0 dia } ) }
 }
 
-@ csv_reader_next * CSVReader r → ?( Vec String ) {
+// Let go of `r` now rather than at the end of its owner's scope.
+@ csv_reader_free sink CSVReader r → v {}
+
+@ csv_reader_next CSVReader r__h → ?( Vec String ) { ^ ( __csv_reader_next ( __CSVReader_ptr r__h ) ) }
+
+@ __csv_reader_next * CSVReaderImpl r → ?( Vec String ) {
     : i clen ( string_len . r content )
     : ~ i p . r pos
     ? >= p clen { ^ @ ?( Vec String ) { F # ( Vec String ) 0 } } {}
@@ -204,7 +217,7 @@ $ `stdlib/std/hashmap.nu`
         : *String rp ( vec_data [String] row )
         ? == ( string_len . rp 0 ) 0 {
             ( _csv_row_free row )
-            ^ ( csv_reader_next r )
+            ^ ( __csv_reader_next r )
         } {}
     } {}
 
@@ -215,21 +228,22 @@ $ `stdlib/std/hashmap.nu`
 
 : CSVDictReader {
     ( Vec String ) header
-    * CSVReader reader
+    CSVReader reader
 }
 
-@ csv_dict_reader_new * CSVReader r → *CSVDictReader {
+// The dict reader keeps its own share of `r`: it reads on from where `r`
+// stands, and the caller's handle stays valid.
+@ csv_dict_reader_new CSVReader r → *CSVDictReader {
     : ?( Vec String ) h_opt ( csv_reader_next r )
     : ( Vec String ) h ( opt_unwrap_or [( Vec String )] h_opt ( vec_new [String] ) )
     : *CSVDictReader dr # *CSVDictReader ( nurl_malloc Z CSVDictReader )
     = . dr header h
-    = . dr reader r
+    = . dr reader ( CSVReader_share r )
     ^ dr
 }
 
 @ csv_dict_reader_next * CSVDictReader dr → ?( HashMap s String ) {
-    : *CSVReader r . dr reader
-    : ?( Vec String ) row_opt ( csv_reader_next r )
+    : ?( Vec String ) row_opt ( csv_reader_next . dr reader )
     ?? row_opt {
         T row → {
             : ( HashMap s String ) map ( map_new [s String] )
@@ -402,7 +416,7 @@ $ `stdlib/std/hashmap.nu`
 
 // ── CSVTable: arena-backed bulk container ──────────────────────────
 
-: CSVTable {
+: CSVTableImpl {
     String content
     ( Vec String ) headers
     ( Vec i ) flat_cells  // [off0,len0,off1,len1,...]
@@ -423,36 +437,62 @@ $ `stdlib/std/hashmap.nu`
     i typed_float_col
 }
 
-@ csv_table_new → *CSVTable {
-    : *CSVTable t # *CSVTable ( nurl_malloc Z CSVTable )
-    = . t content ( string_new )
-    = . t headers ( vec_new [String] )
-    = . t flat_cells ( vec_new [i] )
-    = . t row_starts ( vec_new [i] )
-    = . t row_lens ( vec_new [i] )
-    = . t escape_buf ( vec_new [u] )
-    = . t typed_floats ( vec_new [f] )
-    = . t typed_float_col - 0 1
-    ^ t
+// A CSVTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: CSVTable { s ctl }
+
+@ CSVTable_share CSVTable h → CSVTable { ^ @ CSVTable { # s ( rcbox_share # i . h ctl ) } }
+
+@ CSVTable_drop sink CSVTable h → v {
+    ( mem_forget h )
+    ( rcbox_release [CSVTableImpl] # i . h ctl )
 }
 
-@ csv_table_free sink * CSVTable t → v {
-    ( string_free . t content )
-    ( _csv_row_free . t headers )
-    ( vec_free [i] . t flat_cells )
-    ( vec_free [i] . t row_starts )
-    ( vec_free [i] . t row_lens )
-    ( vec_free [u] . t escape_buf )
-    ( vec_free [f] . t typed_floats )
-    ( nurl_free t )
+@ __CSVTable_ptr CSVTable h → *CSVTableImpl { ^ ( rcbox_ptr [CSVTableImpl] # i . h ctl ) }
+
+@ csv_table_new → CSVTable {
+    ^ @ CSVTable { # s ( rcbox_new [CSVTableImpl] @ CSVTableImpl {
+            ( string_new ) ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( vec_new [u] ) ( vec_new [f] ) - 0 1
+        } ) }
 }
 
-@ csv_table_n_rows * CSVTable t → i { ^ ( vec_len [i] . t row_starts ) }
+// F for the null table a failed `csv_table_load*` returns.
+@ csv_table_ok CSVTable t → b { ^ != 0 # i . t ctl }
 
-@ csv_table_n_cols * CSVTable t → i { ^ ( vec_len [String] . t headers ) }
+// The table's own header Strings, lent (valid while the table lives).
+@ csv_table_headers CSVTable t__h → ( Vec String ) {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    ^ . t headers
+}
 
-@ csv_table_n_cells_in_row * CSVTable t i row → i {
-    : i nr ( csv_table_n_rows t )
+// The pre-parsed float column of a `*_typed_f` load (see P3b below),
+// lent, and the column it caches (-1: no cache).
+@ csv_table_typed_floats CSVTable t__h → ( Vec f ) {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    ^ . t typed_floats
+}
+
+@ csv_table_typed_float_col CSVTable t__h → i {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    ^ . t typed_float_col
+}
+
+// Let go of `t` now rather than at the end of its owner's scope.
+@ csv_table_free sink CSVTable t → v {}
+
+@ csv_table_n_rows CSVTable t__h → i { ^ ( __csv_n_rows ( __CSVTable_ptr t__h ) ) }
+
+@ __csv_n_rows * CSVTableImpl t → i { ^ ( vec_len [i] . t row_starts ) }
+
+@ csv_table_n_cols CSVTable t__h → i {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    ^ ( vec_len [String] . t headers )
+}
+
+@ csv_table_n_cells_in_row CSVTable t__h i row → i {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i nr ( __csv_n_rows t )
     ? | < row 0 >= row nr { ^ 0 } {}
     : *i rlp ( vec_data [i] . t row_lens )
     ^ . rlp row
@@ -465,8 +505,10 @@ $ `stdlib/std/hashmap.nu`
 // embedded `""` escapes — the materialized bytes live in
 // `t.escape_buf` at index `-off - 1`. Unquoted cells and quoted cells
 // without escapes both stay zero-copy into `t.content`.
-@ csv_table_view * CSVTable t i row i col → s {
-    : i nr ( csv_table_n_rows t )
+@ csv_table_view CSVTable t__h i row i col → s { ^ ( __csv_view ( __CSVTable_ptr t__h ) row col ) }
+
+@ __csv_view * CSVTableImpl t i row i col → s {
+    : i nr ( __csv_n_rows t )
     ? | < row 0 >= row nr { ^ # s 0 } {}
     : *i rsp ( vec_data [i] . t row_starts )
     : *i rlp ( vec_data [i] . t row_lens )
@@ -485,8 +527,10 @@ $ `stdlib/std/hashmap.nu`
     ^ # s + # i eb esc_off
 }
 
-@ csv_table_view_len * CSVTable t i row i col → i {
-    : i nr ( csv_table_n_rows t )
+@ csv_table_view_len CSVTable t__h i row i col → i { ^ ( __csv_view_len ( __CSVTable_ptr t__h ) row col ) }
+
+@ __csv_view_len * CSVTableImpl t i row i col → i {
+    : i nr ( __csv_n_rows t )
     ? | < row 0 >= row nr { ^ 0 } {}
     : *i rsp ( vec_data [i] . t row_starts )
     : *i rlp ( vec_data [i] . t row_lens )
@@ -499,15 +543,19 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // Owned String copy of (row, col). One per call; caller frees.
-@ csv_table_get * CSVTable t i row i col → ?String {
-    : s view ( csv_table_view t row col )
+@ csv_table_get CSVTable t__h i row i col → ?String { ^ ( __csv_get ( __CSVTable_ptr t__h ) row col ) }
+
+@ __csv_get * CSVTableImpl t i row i col → ?String {
+    : s view ( __csv_view t row col )
     ? == # i view 0 { ^ @ ?String { F # String 0 } } {}
-    : i len ( csv_table_view_len t row col )
+    : i len ( __csv_view_len t row col )
     ^ @ ?String { T ( string_from_bytes # *u view len ) }
 }
 
 // Index of a column by header name (case-sensitive). None if absent.
-@ csv_table_col_index * CSVTable t s name → ?i {
+@ csv_table_col_index CSVTable t__h s name → ?i { ^ ( __csv_col_index ( __CSVTable_ptr t__h ) name ) }
+
+@ __csv_col_index * CSVTableImpl t s name → ?i {
     : ( Vec String ) hs . t headers
     : i n ( vec_len [String] hs )
     : *String hp ( vec_data [String] hs )
@@ -523,20 +571,22 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // Borrowed `s` view by column name. `# s 0` (NULL) on miss.
-@ csv_table_view_by_name * CSVTable t i row s name → s {
-    : ?i col_opt ( csv_table_col_index t name )
+@ csv_table_view_by_name CSVTable t__h i row s name → s {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : ?i col_opt ( __csv_col_index t name )
     ?? col_opt {
-        T col → { ^ ( csv_table_view t row col ) }
+        T col → { ^ ( __csv_view t row col ) }
         F → { ^ # s 0 }
     }
 }
 
 // Owned String by column name. None if column missing or row out of
 // range. Caller frees.
-@ csv_table_get_by_name * CSVTable t i row s name → ?String {
-    : ?i col_opt ( csv_table_col_index t name )
+@ csv_table_get_by_name CSVTable t__h i row s name → ?String {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : ?i col_opt ( __csv_col_index t name )
     ?? col_opt {
-        T col → { ^ ( csv_table_get t row col ) }
+        T col → { ^ ( __csv_get t row col ) }
         F → { ^ @ ?String { F # String 0 } }
     }
 }
@@ -556,8 +606,9 @@ $ `stdlib/std/hashmap.nu`
 // Unparseable cells coerce to 0 / 0.0 (matches `csv_table_sort_by_*`
 // semantics). Out-of-range `col` yields a Vec of zeros (no error).
 
-@ csv_table_extract_col_i64 * CSVTable t i col → ( Vec i ) {
-    : i n ( csv_table_n_rows t )
+@ csv_table_extract_col_i64 CSVTable t__h i col → ( Vec i ) {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     : ( Vec i ) out ( vec_with_cap [i] n )
     ? <= n 0 { ^ out } {}
     ( vec_reserve [i] out n )
@@ -593,8 +644,9 @@ $ `stdlib/std/hashmap.nu`
     ^ out
 }
 
-@ csv_table_extract_col_f64 * CSVTable t i col → ( Vec f ) {
-    : i n ( csv_table_n_rows t )
+@ csv_table_extract_col_f64 CSVTable t__h i col → ( Vec f ) {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     : ( Vec f ) out ( vec_with_cap [f] n )
     ? <= n 0 { ^ out } {}
     ( vec_reserve [f] out n )
@@ -646,7 +698,7 @@ $ `stdlib/std/hashmap.nu`
 //   • per-row C scanner `nurl_csv_scan_row_pairs`: 1 M FFI calls +
 //     transfer copy from C buffer to flat_cells via vec_push brought
 //     back the per-cell FFI cost.
-@ __csv_parse_content * CSVTable t CSVDialect dia → v {
+@ __csv_parse_content * CSVTableImpl t CSVDialect dia → v {
     : *u cd # *u ( string_data . t content )
     : i clen ( string_len . t content )
     : i delim . dia delimiter
@@ -875,64 +927,67 @@ $ `stdlib/std/hashmap.nu`
     : b _r2 ( vec_set_len [i] . t row_lens row_w )
 }
 
-// Build a table from a freshly-allocated String. Consumes `content`
-// (the table takes ownership of the buffer).
-@ csv_table_from_string String content → *CSVTable {
-    : *CSVTable t ( csv_table_new )
-    ( string_free . t content )
-    = . t content content
-    ( __csv_parse_content t ( csv_dialect_default ) )
-    ^ t
+// Build a table from a String. Consumes `content`: the table takes the
+// buffer over (its cells are views into it), so a caller that wants to
+// keep the text passes a copy.
+@ csv_table_from_string sink String content → CSVTable {
+    ^ ( __csv_table_build content -1 ( csv_dialect_default ) )
+}
+
+// The table is built around `content` as a literal, so the buffer moves
+// into it; the cells are then parsed in place.
+@ __csv_table_build sink String content i typed_float_col CSVDialect dia → CSVTable {
+    : CSVTable h @ CSVTable { # s ( rcbox_new [CSVTableImpl] @ CSVTableImpl {
+            content ( vec_new [String] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( vec_new [u] ) ( vec_new [f] ) typed_float_col
+        } ) }
+    : *CSVTableImpl t ( __CSVTable_ptr h )
+    ? >= typed_float_col 0 {
+        // Pre-reserve typed_floats to a generous estimate (newline count
+        // gives an upper bound for body rows; +2 padding for the
+        // headerless edge cases the parser handles).
+        : i nl_n ( nurl_count_byte # s ( string_data . t content ) ( string_len . t content ) 10 )
+        ( vec_reserve [f] . t typed_floats + nl_n 2 )
+    } {}
+    ( __csv_parse_content t dia )
+    ^ h
 }
 
 // P3b: load + pre-parse ONE float column in one byte-walk. The parsed
 // values land in `t.typed_floats[r]` for body row r; downstream
 // filters / aggregates use `csv_table_filter_typed_float_gt` (and
 // friends) which read the cache instead of re-parsing per row.
-@ csv_table_from_string_typed_f String content i typed_float_col → *CSVTable {
-    : *CSVTable t ( csv_table_new )
-    ( string_free . t content )
-    = . t content content
-    = . t typed_float_col typed_float_col
-    // Pre-reserve typed_floats to a generous estimate (newline count
-    // gives an upper bound for body rows; +2 padding for the
-    // headerless edge cases the parser handles).
-    : i nl_n ( nurl_count_byte # s ( string_data . t content ) ( string_len . t content ) 10 )
-    ( vec_reserve [f] . t typed_floats + nl_n 2 )
-    ( __csv_parse_content t ( csv_dialect_default ) )
-    ^ t
+@ csv_table_from_string_typed_f sink String content i typed_float_col → CSVTable {
+    ^ ( __csv_table_build content typed_float_col ( csv_dialect_default ) )
 }
 
-@ csv_table_load_typed_f s path i typed_float_col → *CSVTable {
+@ csv_table_load_typed_f s path i typed_float_col → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ # *CSVTable 0 }
+        F e → { ^ @ CSVTable { # s 0 } }
         T content → { ^ ( csv_table_from_string_typed_f content typed_float_col ) }
     }
 }
 
-@ csv_table_from_string_dialect String content CSVDialect dia → *CSVTable {
-    : *CSVTable t ( csv_table_new )
-    ( string_free . t content )
-    = . t content content
-    ( __csv_parse_content t dia )
-    ^ t
+@ csv_table_from_string_dialect sink String content CSVDialect dia → CSVTable {
+    ^ ( __csv_table_build content -1 dia )
 }
 
-// Load a CSV file using the default dialect. Returns NULL on read
-// failure (use file_exists / read_file separately for diagnostics).
-@ csv_table_load s path → *CSVTable {
+// Load a CSV file using the default dialect. Returns the null table
+// (csv_table_ok F) on read failure (use file_exists / read_file
+// separately for diagnostics).
+@ csv_table_load s path → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ # *CSVTable 0 }
+        F e → { ^ @ CSVTable { # s 0 } }
         T content → { ^ ( csv_table_from_string content ) }
     }
 }
 
-@ csv_table_load_dialect s path CSVDialect dia → *CSVTable {
+@ csv_table_load_dialect s path CSVDialect dia → CSVTable {
     : !String IoErr res ( read_file path )
     ?? res {
-        F e → { ^ # *CSVTable 0 }
+        F e → { ^ @ CSVTable { # s 0 } }
         T content → { ^ ( csv_table_from_string_dialect content dia ) }
     }
 }
@@ -991,7 +1046,8 @@ $ `stdlib/std/hashmap.nu`
 // Write the table to `path` using `dia`. Returns T on success, F if
 // the file could not be opened. Cells are emitted as raw byte ranges
 // from `content` (zero-copy) unless RFC 4180 quoting is required.
-@ csv_table_write * CSVTable t s path CSVDialect dia → b {
+@ csv_table_write CSVTable t__h s path CSVDialect dia → b {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
     : *v fh ( nurl_file_open path `w` )
     ? == # i fh 0 { ^ F } {}
     : i delim . dia delimiter
@@ -1014,7 +1070,7 @@ $ `stdlib/std/hashmap.nu`
     ? crlf { ( nurl_file_write_byte fh 13 ) } {}
     ( nurl_file_write_byte fh 10 )
 
-    : i nr ( csv_table_n_rows t )
+    : i nr ( __csv_n_rows t )
     : *u cd # *u ( string_data . t content )
     : *u eb ( vec_data [u] . t escape_buf )
     : *i fcp ( vec_data [i] . t flat_cells )
@@ -1051,7 +1107,7 @@ $ `stdlib/std/hashmap.nu`
 // content are never touched, never copied.
 
 // Permute (row_starts, row_lens) in place by `order`.
-@ __csv_permute_rows * CSVTable t ( Vec i ) order → v {
+@ __csv_permute_rows * CSVTableImpl t ( Vec i ) order → v {
     : i n ( vec_len [i] order )
     : ( Vec i ) new_starts ( vec_with_cap [i] n )
     : ( Vec i ) new_lens ( vec_with_cap [i] n )
@@ -1074,8 +1130,9 @@ $ `stdlib/std/hashmap.nu`
 // Numeric int sort: 1 parse per row + i64 sort over a permutation.
 // Parses cell at `col` as a signed decimal integer; unparseable cells
 // compare as 0.
-@ csv_table_sort_by_int * CSVTable t i col b asc → v {
-    : i n ( csv_table_n_rows t )
+@ csv_table_sort_by_int CSVTable t__h i col b asc → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     ? > n 1 {
         : b ascending asc
         : ( Vec i ) keys ( vec_with_cap [i] n )
@@ -1119,8 +1176,9 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // Numeric float sort. Unparseable cells compare as 0.0.
-@ csv_table_sort_by_float * CSVTable t i col b asc → v {
-    : i n ( csv_table_n_rows t )
+@ csv_table_sort_by_float CSVTable t__h i col b asc → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     ? > n 1 {
         : b ascending asc
         : ( Vec f ) keys ( vec_with_cap [f] n )
@@ -1165,8 +1223,9 @@ $ `stdlib/std/hashmap.nu`
 
 // String sort by raw bytes (memcmp + tiebreak by length). Out-of-range
 // cells sort to the end.
-@ csv_table_sort_by_string * CSVTable t i col b asc → v {
-    : i n ( csv_table_n_rows t )
+@ csv_table_sort_by_string CSVTable t__h i col b asc → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     ? > n 1 {
         : b ascending asc
         // Two parallel arrays: per-row byte pointer + length. Avoids
@@ -1227,37 +1286,23 @@ $ `stdlib/std/hashmap.nu`
 
 // Filter in place: keep rows for which `pred` returns T. Predicate
 // receives the source table + row index; reads cells via
-// csv_table_view / csv_table_view_len (or directly via cached
-// data pointers for hot loops — see the per-call HOT-PATH note below).
+// csv_table_view / csv_table_view_len.
 //
-// HOT-PATH PERF NOTE: each `csv_table_view` call internally does
-// three `vec_data` FFI calls (rsp, rlp, fcp) — non-inlinable without
-// LTO, ~30 ns each. For million-row predicates, prefetch the data
-// pointers OUTSIDE the call and capture them into the closure:
-//
-//     : *i fcp ( vec_data [i] . t flat_cells )
-//     : *i rsp ( vec_data [i] . t row_starts )
-//     : *i rlp ( vec_data [i] . t row_lens )
-//     : *u cd  # *u ( string_data . t content )
-//     ( csv_table_filter t \ *CSVTable tt i row → b {
-//         : i row_first . rsp row
-//         : i cell_idx + row_first MY_COL
-//         : i off . fcp * cell_idx 2
-//         : i len . fcp + * cell_idx 2 1
-//         : *u v # *u + # i cd off
-//         ... } )
-//
-// Pointers are valid for the duration of the filter call: filter only
-// rewrites the row index Vecs, never reloads flat_cells/content.
-@ csv_table_filter * CSVTable t ( @ b * CSVTable i ) pred → v {
-    : i n ( csv_table_n_rows t )
+// HOT-PATH PERF NOTE: the predicate is a closure call per row, and each
+// cell it reads goes through csv_table_view's bounds checks. For
+// million-row filters on one column, the typed filters below
+// (csv_table_filter_float_gt, csv_table_filter_str_contains, …) run the
+// loop inside this module with the table's data pointers hoisted.
+@ csv_table_filter CSVTable t__h ( @ b CSVTable i ) pred → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     : ( Vec i ) new_starts ( vec_new [i] )
     : ( Vec i ) new_lens ( vec_new [i] )
     : *i rsp ( vec_data [i] . t row_starts )
     : *i rlp ( vec_data [i] . t row_lens )
     : ~ i ri 0
     ~ < ri n {
-        ? ( pred t ri ) {
+        ? ( pred t__h ri ) {
             ( vec_push [i] new_starts . rsp ri )
             ( vec_push [i] new_lens . rlp ri )
         } {}
@@ -1288,8 +1333,9 @@ $ `stdlib/std/hashmap.nu`
 // Both are no-ops when `col` is out of range. Negative cell offsets
 // (`""`-escaped cells in `escape_buf`) are honoured.
 
-@ csv_table_filter_float_gt * CSVTable t i col f threshold → v {
-    : i n ( csv_table_n_rows t )
+@ csv_table_filter_float_gt CSVTable t__h i col f threshold → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     ? > n 0 {
         : *u cd # *u ( string_data . t content )
         : *u eb ( vec_data [u] . t escape_buf )
@@ -1331,8 +1377,9 @@ $ `stdlib/std/hashmap.nu`
 // the float check skip the substring scan entirely. Saves ~30-40 ms
 // on the 1 M-row × 8-col compare/test_data.csv bench (where 85 % of
 // rows fail the float check) vs chaining two separate filter helpers.
-@ csv_table_filter_float_gt_and_str_contains * CSVTable t i col_f f threshold i col_s s needle → v {
-    : i n ( csv_table_n_rows t )
+@ csv_table_filter_float_gt_and_str_contains CSVTable t__h i col_f f threshold i col_s s needle → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     ? > n 0 {
         : i nlen ( nurl_str_len needle )
         : *u cd # *u ( string_data . t content )
@@ -1388,8 +1435,9 @@ $ `stdlib/std/hashmap.nu`
 // cleared, since the row-index alignment with row_starts is gone
 // once row_starts is narrowed). Subsequent filters chain via
 // row_starts/row_lens narrowing as usual.
-@ csv_table_filter_typed_float_gt * CSVTable t f threshold → v {
-    : i n ( csv_table_n_rows t )
+@ csv_table_filter_typed_float_gt CSVTable t__h f threshold → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     ? > n 0 {
         : i tf_n ( vec_len [f] . t typed_floats )
         ? == tf_n n {
@@ -1420,8 +1468,9 @@ $ `stdlib/std/hashmap.nu`
     } {}
 }
 
-@ csv_table_filter_str_contains * CSVTable t i col s needle → v {
-    : i n ( csv_table_n_rows t )
+@ csv_table_filter_str_contains CSVTable t__h i col s needle → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i n ( __csv_n_rows t )
     ? > n 0 {
         : i nlen ( nurl_str_len needle )
         : *u cd # *u ( string_data . t content )
@@ -1460,8 +1509,9 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // In-place truncate to first `n` rows.
-@ csv_table_truncate * CSVTable t i n → v {
-    : i nr ( csv_table_n_rows t )
+@ csv_table_truncate CSVTable t__h i n → v {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i nr ( __csv_n_rows t )
     : ~ i keep n
     ? < keep 0 { = keep 0 } {}
     ? < keep nr {
@@ -1474,8 +1524,9 @@ $ `stdlib/std/hashmap.nu`
 
 // First row whose cell at `col` matches `target` byte-for-byte. None
 // if no match.
-@ csv_table_find_first * CSVTable t i col s target → ?i {
-    : i nr ( csv_table_n_rows t )
+@ csv_table_find_first CSVTable t__h i col s target → ?i {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
+    : i nr ( __csv_n_rows t )
     : i tlen ( nurl_str_len target )
     : *u cd # *u ( string_data . t content )
     : *u eb ( vec_data [u] . t escape_buf )
@@ -1506,9 +1557,10 @@ $ `stdlib/std/hashmap.nu`
 
 // All row indices whose cell at `col` matches `target`. Caller frees
 // the returned Vec.
-@ csv_table_find_all * CSVTable t i col s target → ( Vec i ) {
+@ csv_table_find_all CSVTable t__h i col s target → ( Vec i ) {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
     : ( Vec i ) out ( vec_new [i] )
-    : i nr ( csv_table_n_rows t )
+    : i nr ( __csv_n_rows t )
     : i tlen ( nurl_str_len target )
     : *u cd # *u ( string_data . t content )
     : *u eb ( vec_data [u] . t escape_buf )
@@ -1538,9 +1590,10 @@ $ `stdlib/std/hashmap.nu`
 }
 
 // Count rows whose cell at `col` equals `target`.
-@ csv_table_count_where * CSVTable t i col s target → i {
+@ csv_table_count_where CSVTable t__h i col s target → i {
+    : *CSVTableImpl t ( __CSVTable_ptr t__h )
     : ~ i count 0
-    : i nr ( csv_table_n_rows t )
+    : i nr ( __csv_n_rows t )
     : i tlen ( nurl_str_len target )
     : *u cd # *u ( string_data . t content )
     : *u eb ( vec_data [u] . t escape_buf )
@@ -1575,14 +1628,15 @@ $ `stdlib/std/hashmap.nu`
 // given order). Missing column names are silently skipped. Cells are
 // materialized into a fresh content buffer via the writer + parser —
 // O(n_rows × n_selected_cols) bytes copied.
-@ csv_table_select_cols * CSVTable src ( Vec String ) cols → *CSVTable {
+@ csv_table_select_cols CSVTable src__h ( Vec String ) cols → CSVTable {
+    : *CSVTableImpl src ( __CSVTable_ptr src__h )
     : i ncols ( vec_len [String] cols )
     : ( Vec i ) idx ( vec_with_cap [i] ncols )
     : *String cp ( vec_data [String] cols )
     : ~ i ci 0
     ~ < ci ncols {
         : String name . cp ci
-        : ?i col_opt ( csv_table_col_index src ( string_data name ) )
+        : ?i col_opt ( __csv_col_index src ( string_data name ) )
         ?? col_opt {
             T col → ( vec_push [i] idx col )
             F → {}
@@ -1616,7 +1670,7 @@ $ `stdlib/std/hashmap.nu`
     }
     ( string_push_char buf 10 )
 
-    : i nr ( csv_table_n_rows src )
+    : i nr ( __csv_n_rows src )
     : *u cd # *u ( string_data . src content )
     : *u eb ( vec_data [u] . src escape_buf )
     : *i fcp ( vec_data [i] . src flat_cells )
@@ -1703,7 +1757,7 @@ $ `stdlib/std/hashmap.nu`
 // Parse the whole content into a nested vector of rows.
 @ csv_parse String content → !( Vec ( Vec String ) ) ParseErr {
     : ( Vec ( Vec String ) ) rows ( vec_new [( Vec String )] )
-    : *CSVReader r ( csv_reader_new content )
+    : CSVReader r ( csv_reader_new content )
     : ~ b done F
     ~ ! done {
         : ?( Vec String ) row_opt ( csv_reader_next r )
@@ -1712,13 +1766,12 @@ $ `stdlib/std/hashmap.nu`
             F → { = done T }
         }
     }
-    ( csv_reader_free r )
     ^ @ !( Vec ( Vec String ) ) ParseErr { T rows }
 }
 
 @ csv_parse_dialect String content CSVDialect dia → !( Vec ( Vec String ) ) ParseErr {
     : ( Vec ( Vec String ) ) rows ( vec_new [( Vec String )] )
-    : *CSVReader r ( csv_reader_new_dialect content dia )
+    : CSVReader r ( csv_reader_new_dialect content dia )
     : ~ b done F
     ~ ! done {
         : ?( Vec String ) row_opt ( csv_reader_next r )
@@ -1727,7 +1780,6 @@ $ `stdlib/std/hashmap.nu`
             F → { = done T }
         }
     }
-    ( csv_reader_free r )
     ^ @ !( Vec ( Vec String ) ) ParseErr { T rows }
 }
 

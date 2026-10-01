@@ -98,9 +98,9 @@ $ `stdlib/net/dnsclient.nu`
 & `c` @ nurl_fiber_spawn *u fn *u env → i
 
 : Shim {
-    * NetStack net
-    * TcpStack ts
-    * SockTab st
+    NetStack net
+    TcpStack ts
+    SockTab st
     ( Vec i ) peer  // cached "ip:port" per fd slot — see nurl_tcp_peer_addr
     // The waiter registry: who is parked on which fd. Three parallel
     // vectors rather than a vector of structs, because a Vec of
@@ -251,7 +251,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 // Put every frame the stack built onto the wire, then empty the buffer.
-@ __flush_frames * PktBuf out → v {
+@ __flush_frames PktBuf out → v {
     : i n ( pktbuf_count out )
     : ~ i k 0
     ~ < k n {
@@ -280,10 +280,10 @@ $ `stdlib/net/dnsclient.nu`
 // not answer, costs the deadline once and nothing afterwards. The
 // address still works; the first client just pays the second again.
 @ __arp_warm * Shim sh → v {
-    : *NetStack net . sh net
-    : i gw . net gateway
+    : NetStack net . sh net
+    : i gw ( stack_gateway net )
     ? == gw 0 { ^ v } {}
-    : *PktBuf out ( pktbuf_new )
+    : PktBuf out ( pktbuf_new )
     : i deadline + ( __ms ) 250
     : ~ b done F
     ~ && ! done < ( __ms ) deadline {
@@ -375,33 +375,33 @@ $ `stdlib/net/dnsclient.nu`
 // backoff is measured in seconds and a busy loop gets through a
 // hundred thousand rounds in the time a server takes to answer once.
 @ __dhcp_configure * Shim sh → v {
-    : *NetStack net . sh net
-    : *DhcpClient c ( dhcp_client_new . net our_mac & ( __ms ) 4294967295 )
+    : NetStack net . sh net
+    : DhcpClient c ( dhcp_client_new ( stack_our_mac net ) & ( __ms ) 4294967295 )
     : i deadline + ( __ms ) 10000
     ~ && ! ( dhcp_bound c ) < ( __ms ) deadline {
         ( __dhcp_turn sh c ( __ms ) )
     }
     ? ( dhcp_bound c ) {
-        ( stack_set_address net . c our_ip . c subnet . c router )
-        ( sock_set_our_ip . sh st . c our_ip )
-        ( sock_seed_addr . sh st . c our_ip ( __ms ) )
+        ( stack_set_address net ( dhcp_our_ip c ) ( dhcp_subnet c ) ( dhcp_router c ) )
+        ( sock_set_our_ip . sh st ( dhcp_our_ip c ) )
+        ( sock_seed_addr . sh st ( dhcp_our_ip c ) ( __ms ) )
         // Option 6 — the resolver this network says to use. Kept on
         // the shim: name resolution is a socket-layer service here,
         // exactly where getaddrinfo keeps it on a hosted machine.
-        = . sh dns_ip . c dns
+        = . sh dns_ip ( dhcp_dns c )
         ( __arp_warm sh )
     } {}
     ( dhcp_client_free c )
 }
 
-@ __dhcp_turn * Shim sh * DhcpClient c i now → v {
-    : *PktBuf out ( pktbuf_new )
+@ __dhcp_turn * Shim sh DhcpClient c i now → v {
+    : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
         : ( Vec u ) msg ( vec_new [u] )
-        ( dhcp_push_message msg want . c xid . c mac 0
-        ? == want ( dhcp_msg_request ) . c our_ip 0
-        ? == want ( dhcp_msg_request ) . c server_id 0 )
+        ( dhcp_push_message msg want ( dhcp_xid c ) ( dhcp_mac c ) 0
+        ? == want ( dhcp_msg_request ) ( dhcp_our_ip c ) 0
+        ? == want ( dhcp_msg_request ) ( dhcp_server_id c ) 0 )
         : i _n ( stack_tx_udp_broadcast . sh net ( dhcp_src_ip c ) ( dhcp_client_port )
         ( dhcp_server_port ) ( dhcp_dest_ip c ) msg 0 ( vec_len [u] msg ) out )
         ( vec_free [u] msg )
@@ -425,7 +425,7 @@ $ `stdlib/net/dnsclient.nu`
     ( pktbuf_free out )
 }
 
-@ __tab → *SockTab { ^ . ( __shim ) st }
+@ __tab → SockTab { ^ . ( __shim ) st }
 
 // ── the waiter registry ──────────────────────────────────────────
 //
@@ -499,17 +499,17 @@ $ `stdlib/net/dnsclient.nu`
     : *Shim sh ( __shim )
     : EthHdr eh ( eth_parse f )
     ? ! . eh valid { ^ T } {}
-    ^ == . eh dst . . sh net our_mac
+    ^ == . eh dst ( stack_our_mac . sh net )
 }
 
 @ __drive i now → i {
     : *Shim sh ( __shim )
-    : *SockTab st . sh st
+    : SockTab st . sh st
     : ~ i moved 0
 
     // Out first: whatever the stack queued goes to the wire or back
     // through the door, one frame at a time.
-    : *PktBuf w ( sock_take_out st )
+    : PktBuf w ( sock_take_out st )
     : i n ( pktbuf_count w )
     : ~ i k 0
     ~ < k n {
@@ -548,7 +548,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ __ready i fd i for_write → b {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ? == for_write 2 { ^ | ( sock_readable st fd ) ( sock_writable st fd ) } {}
     ? != for_write 0 { ^ ( sock_writable st fd ) } {}
     ^ ( sock_readable st fd )
@@ -642,7 +642,7 @@ $ `stdlib/net/dnsclient.nu`
 // The blocking/non-blocking decision, in one place. Returns 1 when the
 // caller should retry the operation, 0 when it should report `err`.
 @ __should_retry i fd i for_write → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ? ( sock_is_nonblock st fd ) { ^ 0 } {}
     : i tmo ? != for_write 0 ( sock_write_wait_ms st fd ( monotonic_ns ) ) ( __block_ms ( sock_timeout st fd ) )
     ? == tmo 0 { ^ 0 } {}
@@ -730,7 +730,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_tcp_listen s host i port i backlog → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     : i ip ( __resolve host )
     ? < ip 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
     ? && != ip 0 != ip ( __lo_ip ) { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
@@ -738,7 +738,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_tcp_accept i listener → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ~ T {
         : i fd ( sock_accept st listener )
         ? >= fd 0 { ^ fd } {}
@@ -755,7 +755,7 @@ $ `stdlib/net/dnsclient.nu`
 // carrying the error, which is the contract every caller of
 // `tcp_connect` is written against.
 @ nurl_tcp_connect s host i port → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     : i ip ( __resolve host )
     ? < ip 0 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
     : i fd ( sock_connect st ip port 0 ( __ms ) )
@@ -779,7 +779,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_tcp_read i conn s buf i cap → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ? <= cap 0 { ^ 0 } {}
     ~ T {
         : ( Vec u ) tmp ( vec_new [u] )
@@ -799,7 +799,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_tcp_write i conn s buf i len → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ? <= len 0 { ^ 0 } {}
     : ( Vec u ) src ( vec_new [u] )
     ( bytes_extend_raw src buf len )
@@ -850,7 +850,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_tcp_read_nowait i conn s buf i len → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     : b previous ( sock_is_nonblock st conn )
     ( sock_set_nonblock st conn T )
     : i got ( nurl_tcp_read conn buf len )
@@ -859,7 +859,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_tcp_write_nowait i conn s buf i len → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ? == ( sock_write_wait_ms st conn ( monotonic_ns ) ) 0 { ^ -1 } {}
     : b previous ( sock_is_nonblock st conn )
     ( sock_set_nonblock st conn T )
@@ -913,7 +913,7 @@ $ `stdlib/net/dnsclient.nu`
 // port 0: the stack picked the port and this is how the program that
 // asked finds out.
 @ nurl_tcp_local_addr i handle → s {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ^ ( __addr_string ( sock_local_ip st handle ) ( sock_local_port st handle ) )
 }
 
@@ -969,7 +969,7 @@ $ `stdlib/net/dnsclient.nu`
 // side ever blocks.
 
 @ nurl_udp_bind s host i port → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     : i ip ( __resolve host )
     // An empty host means "any address", the way `udp_bind \`\` 0` spells
     // a wildcard bind.
@@ -1002,14 +1002,14 @@ $ `stdlib/net/dnsclient.nu`
 @ nurl_udp_set_timeout i handle i ms → v { ( sock_set_timeout ( __tab ) handle ms ) }
 
 @ nurl_udp_connect i handle s host i port → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     : i ip ( __resolve host )
     ? < ip 0 { ^ -1 } {}
     ? < ( sock_udp_connect st handle ip port ) 0 { ^ -1 } {}
     ^ 0
 }
 
-@ __udp_send * SockTab st i handle i ip i port s buf i n → i {
+@ __udp_send SockTab st i handle i ip i port s buf i n → i {
     // NOT `n <= 0 → 0`. A zero-length datagram is a datagram: it is
     // sent, it arrives, and the receiver reads 0 bytes — which is a
     // different fact from "nothing has arrived yet". Short-circuiting
@@ -1031,7 +1031,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_udp_send_to i handle s buf i n s host i port → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     : i ip ( __resolve host )
     ? < ip 0 {
         ^ -1
@@ -1044,7 +1044,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ __udp_recv i handle s buf i n → i {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ? <= n 0 { ^ 0 } {}
     ~ T {
         : ( Vec u ) tmp ( vec_new [u] )
@@ -1109,7 +1109,7 @@ $ `stdlib/net/dnsclient.nu`
     : i got ( __udp_recv handle buf cap )
     ? < got 0 { ^ got } {}
     ? != # i addr_out 0 {
-        : *SockTab st ( __tab )
+        : SockTab st ( __tab )
         ( __udp_addr_put addr_out ( sock_udp_last_ip st handle ) ( sock_udp_last_port st handle ) )
     } {}
     ^ got
@@ -1238,7 +1238,7 @@ $ `stdlib/net/dnsclient.nu`
 }
 
 @ nurl_udp_local_addr i handle → s {
-    : *SockTab st ( __tab )
+    : SockTab st ( __tab )
     ^ ( __addr_string ( sock_local_ip st handle ) ( sock_local_port st handle ) )
 }
 
@@ -1313,7 +1313,7 @@ $ `stdlib/net/dnsclient.nu`
 @ __dns_query * Shim sh s host → s {
     : i dns . sh dns_ip
     ? == dns 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : *SockTab st . sh st
+    : SockTab st . sh st
     : i fd ( sock_udp_bind st 0 0 )
     ? < fd 0 { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s out ( nurl_str_cat `` `` )
