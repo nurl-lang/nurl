@@ -1,4 +1,6 @@
-// Test: iter_zip + iter_enumerate (lazy, auto-drop via cmd=1 cascade).
+// Test: iter_zip + iter_enumerate (lazy, auto-drop). Each binding releases
+// its chain at scope exit; the `( x 1 )` calls are the plain "end" command,
+// kept to check that it stays accepted.
 //
 // Iterates manually with cmd=0 / cmd=1 because passing compound types
 // like ( Pair i i ) through generic call type-args (`[A]`) and through
@@ -107,7 +109,7 @@ $ `stdlib/std/iter.nu`
     ( nurl_print `\n` )
     ( vec_free [s] words )
 
-    // ── iter_enumerate abandon mid-stream (manual iter_free cascades) ──
+    // ── iter_enumerate abandoned mid-stream (cmd=1 ends it; the binding releases it) ──
     : ( @ ?( Pair i i ) i ) ab ( iter_enumerate [i] ( iter_range 0 1000000 ) )
     : ?( Pair i i ) a1 ( ab 0 )
     ?? a1 {

@@ -12,12 +12,9 @@
 //
 //      A SINGLE closure that takes a command:
 //        cmd = 0 → advance, return Some(next) / None when exhausted
-//        cmd = 1 → release this iterator's state buffer (and recursively
-//                  any upstream chain), return None
-//
-//      Constructors allocate their state via `nurl_zalloc` and bake the
-//      release path into the same closure body, so consumers can free
-//      the entire chain with one call.
+//        cmd = 1 → end: this iterator, and every iterator it reads from,
+//                  reports exhausted from then on; returns None. It
+//                  releases nothing — releasing is the owner's drop.
 //
 //      Why one closure with a command rather than a {next,free} struct?
 //      A struct `{ (@ ? A) nxt, (@ v) fr }` would make `( Iter A )` a
@@ -28,12 +25,27 @@
 //      undefined LLVM types `%A`, `%B`. The single-closure form
 //      sidesteps the issue entirely.
 //
-//      State buffers are RELEASED by `cmd=1`. Closure ENV blocks
-//      (~16 B for constructors, ~40 B per combinator) are not yet
-//      auto-freed — the compiler's RC infrastructure is dormant. The
-//      env leak is **constant per pipeline**, not per element, so it
-//      does not grow with workload size and is acceptable for CLI- and
-//      data-processing-scale code.
+// Memory model — nothing to release by hand:
+//
+//   An iterator is an ordinary closure value that owns what it uses. Its
+//   cursor (the one word that changes as it advances) sits in a `Cell`
+//   the closure captures, and a combinator's closure captures the
+//   iterators it reads from; an env keeps its own copy of a captured
+//   closure, so the envs of a chain form a tree (docs/MEMORY.md §7.5).
+//   Dropping the outermost closure — its binding leaving scope, a
+//   temporary after the call it was passed to, the struct that holds it —
+//   releases the whole chain, every env and every cursor, whether the
+//   chain was drained, half consumed or never started.
+//
+//   Copies of an iterator (the copy a combinator's env or a struct field
+//   keeps) share its cursor, as copies of a pointer did: advancing one
+//   advances them all. The Cell counts its owners and the last copy
+//   frees it.
+//
+//   Consumers BORROW the iterator: they drain it and leave it to its
+//   owner. `iter_free` is an optional early release (its `sink`
+//   parameter is the drop); `cmd=1` stays accepted for callers that
+//   ended a chain that way, as a plain "end".
 //
 // Lazy API:
 //   Constructors:
@@ -51,7 +63,7 @@
 //     ( iter_zip   [A B] a b )          → ( Iter ( Pair A B ) )   pair-wise
 //     ( iter_enumerate [A] src )        → ( Iter ( Pair i A ) )   index + value
 //
-//   Consumers (Iter → result, consume + auto-release):
+//   Consumers (Iter → result, borrow and drain):
 //     ( iter_each   [A] src f )         → v            f : (@ v A)
 //     ( iter_fold   [A B] src init f )  → B            f : (@ B B A)
 //     ( iter_collect [A] src )          → ( Vec A )    materialise
@@ -61,8 +73,8 @@
 //     ( iter_all    [A] src pred )      → b            short-circuit
 //     ( iter_find   [A] src pred )      → ? A          first match
 //
-//   Manual release (only when abandoning a chain without consuming):
-//     ( iter_free [A] src )             → v            (calls cmd=1)
+//   Early release (optional — dropping the iterator releases it anyway):
+//     ( iter_free [A] src )             → v
 //
 // Example pipeline — sum of squares of even numbers in [0..n):
 //   : (@ b i) is_even \ i x → b { ^ == 0 % x 2 }
@@ -70,8 +82,8 @@
 //   : i s ( iter_sum_i ( iter_map [i i]
 //                          ( iter_filter [i] ( iter_range 0 n ) is_even )
 //                          sq ) )
-//   // No state leak: iter_sum_i issues cmd=1 to the outer iter,
-//   // which cascades down the chain freeing every state buffer.
+//   // Nothing to free: the chain is a temporary of the iter_sum_i call
+//   // and is dropped, envs and cursors alike, when that call returns.
 //
 // SOURCE-MUTATION CAVEAT: an iterator borrows its source. Mutating the
 // source (e.g. vec_push during iteration) is undefined — same rule as
@@ -79,14 +91,12 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/pair.nu`
+$ `stdlib/core/cell.nu`
 
-// ─── Public manual-release wrapper ────────────────────────────────
-// Use only when you abandon a chain mid-stream without running it
-// through a consumer. Consumers all call cmd=1 internally.
+// ─── Early release (optional) ─────────────────────────────────────
+// Let go of a chain now rather than when its owner goes out of scope.
 
-@ iter_free [A] sink ( @ ?A i ) src → v {
-    ( src 1 )
-}
+@ iter_free [A] sink ( @ ?A i ) src → v {}
 
 // ─── Eager ranges (return Vec[i]) ─────────────────────────────────
 
@@ -129,83 +139,80 @@ $ `stdlib/core/pair.nu`
 }
 
 // ─── Lazy iterator chain ──────────────────────────────────────────
+//
+// A cursor is one word in a Cell: `cell_ptr_as` once per call, then a
+// plain load and store. Bounds, steps and counts are captured by value.
+// cmd=1 moves a constructor's cursor to its end, and every combinator
+// passes it on, so the whole chain ends.
 
 // Constructor — ascending integer iterator over [from..to).
-// State layout: [cur, lim] (16 bytes).
+// Cursor: the next value.
 @ iter_range i from i to → ( @ ?i i ) {
-    : s st ( nurl_zalloc 16 )
-    ( nurl_poke st 0 from )
-    ( nurl_poke st 1 to )
+    : Cell st ( cell_zero 8 )
+    : *i c0 ( cell_ptr_as [i] st )
+    = . c0 0 from
     ^ \ i cmd → ?i {
-        ? == cmd 1 { ( nurl_free st ) ^ @ ?i { F 0 } } {}
-        : i cur ( nurl_peek st 0 )
-        : i lim ( nurl_peek st 1 )
-        ? >= cur lim { ^ @ ?i { F 0 } } {}
-        ( nurl_poke st 0 + cur 1 )
+        : *i c ( cell_ptr_as [i] st )
+        ? == cmd 1 { = . c 0 to ^ @ ?i { F 0 } } {}
+        : i cur . c 0
+        ? >= cur to { ^ @ ?i { F 0 } } {}
+        = . c 0 + cur 1
         ^ @ ?i { T cur }
     }
 }
 
 // Constructor — strided integer iterator. Direction picked from sign
 // of step. step == 0 produces an empty iterator (safe, no hang).
-// State layout: [cur, lim, step] (24 bytes).
+// Cursor: the next value.
 @ iter_range_step i from i to i step → ( @ ?i i ) {
-    : s st ( nurl_zalloc 24 )
-    ( nurl_poke st 0 from )
-    ( nurl_poke st 1 to )
-    ( nurl_poke st 2 step )
+    : Cell st ( cell_zero 8 )
+    : *i c0 ( cell_ptr_as [i] st )
+    = . c0 0 from
     ^ \ i cmd → ?i {
-        ? == cmd 1 { ( nurl_free st ) ^ @ ?i { F 0 } } {}
-        : i cur ( nurl_peek st 0 )
-        : i lim ( nurl_peek st 1 )
-        : i step ( nurl_peek st 2 )
+        : *i c ( cell_ptr_as [i] st )
+        ? == cmd 1 { = . c 0 to ^ @ ?i { F 0 } } {}
         ? == step 0 { ^ @ ?i { F 0 } } {}
-        : ~ b at_end F
-        ? > step 0 {
-            ? >= cur lim { = at_end T } {}
-        } {
-            ? <= cur lim { = at_end T } {}
-        }
+        : i cur . c 0
+        : b at_end ? > step 0 >= cur to <= cur to
         ? at_end { ^ @ ?i { F 0 } } {}
-        ( nurl_poke st 0 + cur step )
+        = . c 0 + cur step
         ^ @ ?i { T cur }
     }
 }
 
-// Constructor — borrowing iterator over a Vec[A]. Captures the Vec
-// handle and length at construction time; do not mutate the Vec while
-// iterating. The Vec itself is NOT freed by the iterator.
-// State layout: [idx] (8 bytes).
+// Constructor — borrowing iterator over a Vec[A]. Lends the Vec handle
+// and captures its length at construction time; do not mutate the Vec
+// while iterating. The Vec itself is NOT freed by the iterator.
+// Cursor: the next index.
 @ iter_from_vec [A] ( Vec A ) v → ( @ ?A i ) {
-    : s st ( nurl_zalloc 8 )
-    ( nurl_poke st 0 0 )
+    : Cell st ( cell_zero 8 )
     : i n ( vec_len [A] v )
     ^ \ i cmd → ?A {
-        ? == cmd 1 { ( nurl_free st ) ^ @ ?A { F # A 0 } } {}
-        : i idx ( nurl_peek st 0 )
+        : *i c ( cell_ptr_as [i] st )
+        ? == cmd 1 { = . c 0 n ^ @ ?A { F # A 0 } } {}
+        : i idx . c 0
         ? >= idx n { ^ @ ?A { F # A 0 } } {}
-        ( nurl_poke st 0 + idx 1 )
+        = . c 0 + idx 1
         ^ ( vec_get [A] v idx )
     }
 }
 
 // Constructor — repeat a single value n times. Trivial element types
 // only (i, f, b, raw s, slice) — owned types like String would alias.
-// State layout: [k] (8 bytes).
+// Cursor: how many have been yielded.
 @ iter_repeat [A] A x i n → ( @ ?A i ) {
-    : s st ( nurl_zalloc 8 )
-    ( nurl_poke st 0 0 )
+    : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?A {
-        ? == cmd 1 { ( nurl_free st ) ^ @ ?A { F # A 0 } } {}
-        : i k ( nurl_peek st 0 )
+        : *i c ( cell_ptr_as [i] st )
+        ? == cmd 1 { = . c 0 n ^ @ ?A { F # A 0 } } {}
+        : i k . c 0
         ? >= k n { ^ @ ?A { F # A 0 } } {}
-        ( nurl_poke st 0 + k 1 )
+        = . c 0 + k 1
         ^ @ ?A { T x }
     }
 }
 
-// Combinator — apply f to every element. No own state; cmd=1 cascades
-// to upstream.
+// Combinator — apply f to every element. No state of its own.
 @ iter_map [A B] ( @ ?A i ) src ( @ B A ) f → ( @ ?B i ) {
     ^ \ i cmd → ?B {
         ? == cmd 1 { ( src 1 ) ^ @ ?B { F # B 0 } } {}
@@ -219,7 +226,7 @@ $ `stdlib/core/pair.nu`
 
 // Combinator — keep elements where pred returns T. Drains upstream
 // inside a single cmd=0 call until either a matching element or
-// upstream exhaustion is reached. cmd=1 cascades to upstream.
+// upstream exhaustion is reached. No state of its own.
 @ iter_filter [A] ( @ ?A i ) src ( @ b A ) pred → ( @ ?A i ) {
     ^ \ i cmd → ?A {
         ? == cmd 1 { ( src 1 ) ^ @ ?A { F # A 0 } } {}
@@ -242,18 +249,18 @@ $ `stdlib/core/pair.nu`
 }
 
 // Combinator — yield at most n elements then act exhausted.
-// State layout: [taken] (8 bytes).
+// Cursor: how many have been taken.
 @ iter_take [A] ( @ ?A i ) src i n → ( @ ?A i ) {
-    : s st ( nurl_zalloc 8 )
-    ( nurl_poke st 0 0 )
+    : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?A {
-        ? == cmd 1 { ( src 1 ) ( nurl_free st ) ^ @ ?A { F # A 0 } } {}
-        : i taken ( nurl_peek st 0 )
+        ? == cmd 1 { ( src 1 ) ^ @ ?A { F # A 0 } } {}
+        : *i c ( cell_ptr_as [i] st )
+        : i taken . c 0
         ? >= taken n { ^ @ ?A { F # A 0 } } {}
         : ?A got ( src 0 )
         ?? got {
             T x → {
-                ( nurl_poke st 0 + taken 1 )
+                = . c 0 + taken 1
                 ^ @ ?A { T x }
             }
             F → { ^ @ ?A { F # A 0 } }
@@ -262,23 +269,23 @@ $ `stdlib/core/pair.nu`
 }
 
 // Combinator — discard the first n elements, then yield the rest.
-// State layout: [skipped] (8 bytes).
+// Cursor: how many have been skipped.
 @ iter_skip [A] ( @ ?A i ) src i n → ( @ ?A i ) {
-    : s st ( nurl_zalloc 8 )
-    ( nurl_poke st 0 0 )
+    : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?A {
-        ? == cmd 1 { ( src 1 ) ( nurl_free st ) ^ @ ?A { F # A 0 } } {}
+        ? == cmd 1 { ( src 1 ) ^ @ ?A { F # A 0 } } {}
+        : *i c ( cell_ptr_as [i] st )
         : ~ b done F
         : ~ ? A out @ ?A { F # A 0 }
         ~ ! done {
-            : i sk ( nurl_peek st 0 )
+            : i sk . c 0
             ? >= sk n {
                 = out ( src 0 )
                 = done T
             } {
                 : ?A got ( src 0 )
                 ?? got {
-                    T x → { ( nurl_poke st 0 + sk 1 ) }
+                    T x → { = . c 0 + sk 1 }
                     F → { = done T }
                 }
             }
@@ -288,8 +295,7 @@ $ `stdlib/core/pair.nu`
 }
 
 // Combinator — pair-wise zip. Yields ( Pair A B ) until either source
-// exhausts. cmd=1 cascades to BOTH inputs.
-// State layout: none.
+// exhausts. No state of its own; cmd=1 ends BOTH inputs.
 //
 // MEMORY: the resulting Pair fields are aliases of the upstream
 // elements — do NOT iter_collect a Pair-of-owned-types pipeline and
@@ -315,23 +321,21 @@ $ `stdlib/core/pair.nu`
     }
 }
 
-// Combinator — pair each element with its 0-based index. cmd=1 frees
-// the index counter and cascades upstream.
-// State layout: [idx] (8 bytes).
+// Combinator — pair each element with its 0-based index.
+// Cursor: the next index.
 @ iter_enumerate [A] ( @ ?A i ) src → ( @ ?( Pair i A ) i ) {
-    : s st ( nurl_zalloc 8 )
-    ( nurl_poke st 0 0 )
+    : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?( Pair i A ) {
         ? == cmd 1 {
             ( src 1 )
-            ( nurl_free st )
             ^ @ ?( Pair i A ) { F # ( Pair i A ) 0 }
         } {}
         : ?A got ( src 0 )
         ?? got {
             T x → {
-                : i k ( nurl_peek st 0 )
-                ( nurl_poke st 0 + k 1 )
+                : *i c ( cell_ptr_as [i] st )
+                : i k . c 0
+                = . c 0 + k 1
                 ^ @ ?( Pair i A ) { T ( pair_new [i A] k x ) }
             }
             F → { ^ @ ?( Pair i A ) { F # ( Pair i A ) 0 } }
@@ -339,31 +343,29 @@ $ `stdlib/core/pair.nu`
     }
 }
 
-// Combinator — concatenate two iterators. cmd=1 cascades to BOTH.
-// State layout: [phase] (8 bytes; 0 = first, 1 = second).
+// Combinator — concatenate two iterators. cmd=1 ends BOTH.
+// Cursor: the phase (0 = first, 1 = second).
 @ iter_chain [A] ( @ ?A i ) a ( @ ?A i ) b → ( @ ?A i ) {
-    : s st ( nurl_zalloc 8 )
-    ( nurl_poke st 0 0 )
+    : Cell st ( cell_zero 8 )
     ^ \ i cmd → ?A {
         ? == cmd 1 {
             ( a 1 )
             ( b 1 )
-            ( nurl_free st )
             ^ @ ?A { F # A 0 }
         } {}
-        : i phase ( nurl_peek st 0 )
-        ? == phase 0 {
+        : *i c ( cell_ptr_as [i] st )
+        ? == . c 0 0 {
             : ?A got ( a 0 )
             ?? got {
                 T x → { ^ @ ?A { T x } }
-                F → { ( nurl_poke st 0 1 ) }
+                F → { = . c 0 1 }
             }
         } {}
         ^ ( b 0 )
     }
 }
 
-// ─── Consumers (consume + auto-release) ───────────────────────────
+// ─── Consumers (borrow the iterator and drain it) ─────────────────
 
 @ iter_each [A] ( @ ?A i ) src ( @ v A ) f → v {
     : ~ b done F
@@ -374,7 +376,6 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
 }
 
 @ iter_fold [A B] ( @ ?A i ) src B init ( @ B B A ) f → B {
@@ -387,7 +388,6 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
     ^ acc
 }
 
@@ -401,7 +401,6 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
     ^ out
 }
 
@@ -415,7 +414,6 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
     ^ n
 }
 
@@ -429,7 +427,6 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
     ^ sum
 }
 
@@ -448,7 +445,6 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
     ^ found
 }
 
@@ -467,7 +463,6 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
     ^ ok
 }
 
@@ -486,6 +481,5 @@ $ `stdlib/core/pair.nu`
             F → { = done T }
         }
     }
-    ( src 1 )
     ^ out
 }
