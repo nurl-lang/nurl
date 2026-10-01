@@ -98,6 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   std/float.nu. Now the definition (or the declaration, whichever comes
   second) is reported with both signatures.
   `compiler/tests/diag_ffi_defined_other_sig.nu`.
+- **A value lent back to the binding it came from stays that binding's.**
+  `= c ( prune c )`, prune handing back a cursor over its parameter, made
+  `c` a borrower of its own value, which then had no owner
+  (`_h2_prune_closed`). A field taken out of a slot copy that is replaced
+  and written back (`take_data`) is still the caller's: only a payload of
+  an option binding answers per call whether it held its field.
+  `compiler/tests/lend_back_to_same_binding.nu`.
 
 ### Changed
 

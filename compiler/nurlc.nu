@@ -16804,6 +16804,17 @@
 // local) b borrows too; a borrowing call (vec_get, an accessor) lends;
 // anything else — a constructor, a literal — is fresh.
 // The `@.__nurl_retown.N` constant of the call just emitted, or ``.
+// Is every word of `ws` (at least one) `w`?
+@ __words_all_equal s ws s w → b {
+    : ~ s rest ( nurl_str_cat ws `` )
+    ? == 0 ( nurl_str_len rest ) { ^ F } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s x ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( seq x w ) { ^ F } {}
+    }
+    ^ T
+}
+
 @ mem_call_retown_const i syms → s {
     : ~ s cn ( nurl_sym_get syms `__last_call_name__` )
     : ~ s gn ``
@@ -20983,9 +20994,16 @@
         // value returns to the same binding — nothing to drop or re-own.
         // Whether it does is known at module end (mem_call_retown): until
         // then the old value's drop and the new flag are both gated on it.
+        // …also when bump is known only to lend: what it may lend is this
+        // binding's own value and nothing else (`= c ( prune c )`, prune
+        // handing back a cursor over its parameter). Taken for a borrow,
+        // c ended up owning nothing and its value leaked.
+        : b __ud_self_lend & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __ud_borrow )
+        & ( str_contains_word ( nurl_sym_get syms `__last_phi_idents__` ) name )
+        ( __words_all_equal ( nurl_sym_get syms `__last_call_lend_idents__` ) name )
         : ~ s __ud_ro ``
         : ~ s __ud_of ``
-        ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN ( __is_handle_ty vt ) == 0 ( nurl_str_len __ud_borrow )
+        ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN ( __is_handle_ty vt ) | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
             ? != 0 ( nurl_str_len __ud_ro ) {
                 = __ud_of ( mem_udrop_flag_get syms cg __ud_ptr )
@@ -20995,7 +21013,7 @@
             } {}
         } {}
         : b __ud_same F
-        ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) == 0 ( nurl_str_len __ud_borrow ) ! __ud_same
+        ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend ! __ud_same
         { ( mem_udrop_hand_over syms cg __ud_ptr vt )
             ( mem_emit_user_drop_one syms cg __ud_ptr vt ) }
         {}
@@ -23190,23 +23208,34 @@
             { ( mem_udrop_takeover_opt syms cg fs_ptr )
                 : s __tk ( mem_udrop_flag_get syms cg fs_ptr )
                 ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty __tk )
-                // …exactly when the struct held it: a cursor over a borrowed
-                // element (`: ?E e ( vec_get … ) ?? e { T ev → ^ @ ?V { T .
-                // ev value } }`) holds nothing, and its field is still lent.
-                // A wrap answers per call (its payload is the whole value);
-                // any other literal copies what was lent.
-                : s __tl ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print __tl ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tk ) ( nurl_print `, 1\n` )
-                ? & agg_returned agg_is_wrap {
-                    : s __self ( nurl_sym_get syms `__fn_self_name__` )
-                    : s __kv ( nurl_cg_reg cg )
-                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag __self __self ) ) ) __kv )
-                    : s __cc ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print __cc ) ( nurl_print ` = and i1 ` ) ( nurl_print __kv ) ( nurl_print `, ` ) ( nurl_print __tl ) ( nurl_print `\n` )
-                    ( mem_hown_mark_dyn syms )
-                    = fval ( mem_emit_cloneif cg fty fval ( mem_hown_static syms cg __cc ) )
-                    ( nurl_sym_set_deep syms `__agg_take_own__` __tk )
-                } { = fval ( mem_emit_cloneif cg fty fval __tl ) }
+                // A payload of an option binding holds its field exactly when
+                // the option did: a cursor over a borrowed element (`: ?E e (
+                // vec_get … ) ?? e { T ev → ^ @ ?V { T . ev value } }`) holds
+                // nothing, and its field is still lent. A wrap answers per
+                // call (its payload is the whole value); any other literal
+                // copies what was lent. (A struct binding's field is taken as
+                // before: `out . s body` replaced in s and s put back is the
+                // table handing that body over.)
+                : ~ b __tk_payload F
+                : ~ s __tka ( nurl_sym_get2 syms fs_ptr `__alias` )
+                ~ != 0 ( nurl_str_len __tka ) {
+                    : s __tkw ( str_first_word __tka ) = __tka ( str_skip_word __tka )
+                    ? & == 0 ( nurl_sym_len2 syms __tkw `__pname` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms __tkw `__udty` ) `%__opt.` ) { = __tk_payload T } {}
+                }
+                ? __tk_payload {
+                    : s __tl ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __tl ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tk ) ( nurl_print `, 1\n` )
+                    ? & agg_returned agg_is_wrap {
+                        : s __self ( nurl_sym_get syms `__fn_self_name__` )
+                        : s __kv ( nurl_cg_reg cg )
+                        ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag __self __self ) ) ) __kv )
+                        : s __cc ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __cc ) ( nurl_print ` = and i1 ` ) ( nurl_print __kv ) ( nurl_print `, ` ) ( nurl_print __tl ) ( nurl_print `\n` )
+                        ( mem_hown_mark_dyn syms )
+                        = fval ( mem_emit_cloneif cg fty fval ( mem_hown_static syms cg __cc ) )
+                        ( nurl_sym_set_deep syms `__agg_take_own__` __tk )
+                    } { = fval ( mem_emit_cloneif cg fty fval __tl ) }
+                } {}
                 = fld_lent `` } {}
         } {}
         // A literal nested in a returned one lends the same way (`^ @
