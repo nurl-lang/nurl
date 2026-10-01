@@ -95,7 +95,7 @@ $ `src/loader.nu`
             } {}
 
             // partials set
-            : ~ * TplSet t ( tset_new )
+            : TplSet t ( tset_new )
             ? have {
                 ?? ( args_value p `partials` ) {
                     T pv → {
@@ -127,9 +127,6 @@ $ `src/loader.nu`
                 }
             } {}
 
-            ( tset_free t )
-            ( json_free ctx )
-            ( string_free tsrc )
         }
     } {
         ( nurl_eprint `template: ` ) ( nurl_eprintln ( args_error p ) )
@@ -137,7 +134,5 @@ $ `src/loader.nu`
         = rc 2
     }
 
-    ( args_free p )
-    ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }

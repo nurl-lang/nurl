@@ -73,7 +73,7 @@ nurlpkg publish</pre>`
 
 // Render one embedded template with the shared chrome partial in scope.
 @ __reg_render s tsrc Json ctx → String {
-    : *TplSet ts ( tset_new )
+    : TplSet ts ( tset_new )
     ( tset_add ts `head` ( __reg_tpl_head ) )
     : ~ String out ( string_new )
     ?? ( tpl_render_with ts tsrc ctx ) {
@@ -90,7 +90,6 @@ nurlpkg publish</pre>`
             ( string_free err )
         }
     }
-    ( tset_free ts )
     ^ out
 }
 
