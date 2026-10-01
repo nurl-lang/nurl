@@ -12,7 +12,7 @@ $ `stdlib/dist/lease.nu`
 @ mkkey i id → ( Vec u ) { : ( Vec u ) v ( vec_new [u] ) ( vec_push [u] v # u id ) ( vec_push [u] v # u 9 ) ^ v }
 
 // run the effect iff admitted; bump the shared effect counter via a *i cell
-@ effect * LeaseTable t ( Vec u ) key i epoch i idem * i log → v {
+@ effect LeaseTable t ( Vec u ) key i epoch i idem * i log → v {
     ? ( lease_admit t key epoch idem ) { = . log 0 + . log 0 1 } {}
 }
 
@@ -20,7 +20,7 @@ $ `stdlib/dist/lease.nu`
     : ( Vec u ) k ( mkkey 1 )
 
     // ── split ownership, NEW owner acts first (token 2 then stale 1) ──
-    : *LeaseTable t1 ( lease_new )
+    : LeaseTable t1 ( lease_new )
     : *i log1 # *i ( nurl_alloc 8 ) = . log1 0 0
     // task idem=100. B (new owner, epoch 2) acts; then A (old owner, epoch 1)
     ( effect t1 k 2 100 log1 )  // B: admitted → effect
@@ -30,7 +30,7 @@ $ `stdlib/dist/lease.nu`
 
     // ── split ownership, OLD owner acts first (token 1 then 2) ──────
     : ( Vec u ) k2 ( mkkey 1 )
-    : *LeaseTable t2 ( lease_new )
+    : LeaseTable t2 ( lease_new )
     : *i log2 # *i ( nurl_alloc 8 ) = . log2 0 0
     ( effect t2 k2 1 100 log2 )  // A: admitted (first) → effect
     ( effect t2 k2 2 100 log2 )  // B: epoch 2 >= 1 advances, but idem 100 already applied → deduped
@@ -47,7 +47,7 @@ $ `stdlib/dist/lease.nu`
     ( vec_free [u] k2 ) ( nurl_free # s log2 ) ( lease_free t2 )
 
     // ── pure path is unaffected: never touches the lease table ──────
-    : *LeaseTable t3 ( lease_new )
+    : LeaseTable t3 ( lease_new )
     // (a pure handler simply does not call lease_admit — the table stays empty)
     : ( Vec u ) k7 ( mkkey 7 )
     ( pb `pure tasks leave the lease table empty: ` == ( lease_token t3 k7 ) 0 )

@@ -49,7 +49,7 @@ $ `stdlib/dist/sim.nu`
 
 // resource side: deliver every due EXECUTE, admit via the lease, and return how
 // many effects were actually performed in this batch.
-@ deliver_exec SimNet net * LeaseTable lease i now → i {
+@ deliver_exec SimNet net LeaseTable lease i now → i {
     : ( Vec SimMsg ) due ( sim_due net now )
     : i dn ( vec_len [SimMsg] due )
     : ~ i ran 0
@@ -76,7 +76,7 @@ $ `stdlib/dist/sim.nu`
 
 // run `rounds`: old owner dispatches iff `old_on`, new owner iff `new_on`;
 // both retry every round (at-least-once); count total effects performed.
-@ run_window SimNet net * LeaseTable lease ( Vec u ) key i e_old i e_new i idem i r_idx b old_on b new_on i rounds i now0 → i {
+@ run_window SimNet net LeaseTable lease ( Vec u ) key i e_old i e_new i idem i r_idx b old_on b new_on i rounds i now0 → i {
     : ~ i now now0
     : ~ i total 0
     : ~ i r 0
@@ -99,7 +99,7 @@ $ `stdlib/dist/sim.nu`
 
     // ── (A) old-first: idempotency dedups the new owner ──────────────
     : SimNet na ( sim_net_new 3 1111 0 1 0 )
-    : *LeaseTable la ( lease_new )
+    : LeaseTable la ( lease_new )
     : i a_old ( run_window na la key e_old e_new idem R T F 6 0 )  // only old, settles to admitted
     : i a_both ( run_window na la key e_old e_new idem R T T 6 6 )  // now new joins, retrying
     ( pi `A old-first: effects during old-only phase = ` a_old )
@@ -110,7 +110,7 @@ $ `stdlib/dist/sim.nu`
 
     // ── (B) new-first: stale epoch fences the old owner ──────────────
     : SimNet nb ( sim_net_new 3 2222 0 1 0 )
-    : *LeaseTable lb ( lease_new )
+    : LeaseTable lb ( lease_new )
     : i b_new ( run_window nb lb key e_old e_new idem R F T 6 0 )  // only new
     : i b_both ( run_window nb lb key e_old e_new idem R T T 6 6 )  // old joins, retrying — fenced
     ( pi `B new-first: effects during new-only phase = ` b_new )
@@ -121,7 +121,7 @@ $ `stdlib/dist/sim.nu`
 
     // ── (C) concurrent under 35% loss + reorder, both retrying ───────
     : SimNet nc ( sim_net_new 3 33330 35 1 3 )
-    : *LeaseTable lc ( lease_new )
+    : LeaseTable lc ( lease_new )
     : i c_total ( run_window nc lc key e_old e_new idem R T T 60 0 )
     ( pi `C concurrent: total effects performed      = ` c_total )
     ( pb `C concurrent: effect ran AT MOST once:      ` <= c_total 1 )
