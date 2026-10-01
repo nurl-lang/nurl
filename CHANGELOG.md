@@ -146,6 +146,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call returned — every call leaked them. They are dropped after the call
   unless the callee keeps or consumes the argument; a field that IS a
   binding's value stays that binding's. `compiler/tests/literal_args_release.nu`.
+- **Returning from every arm of a match over a borrow returns an owned
+  value.** `?? ( vec_get v 0 ) { T l → { ^ ( string_from … ) } … }` left
+  the scrutinee's borrow on the "last value" channel, and the implicit-
+  return rule (for a body that falls off its end) marked the function a
+  lender though no path fell off — callers never dropped its results.
+  `compiler/tests/returns_inside_borrowed_match.nu`.
 
 ### Changed
 

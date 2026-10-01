@@ -29879,8 +29879,12 @@
     // __last_value_borrow__ (e.g. a `?? param { … }` yielding a payload
     // view), this function returns a borrow. Mirrors the explicit-`^`
     // gen_ret. (gen_ret also sets the flag, so this only ADDS the
-    // implicit case; idempotent for explicit returns.)
-    ? != 0 ( nurl_sym_len syms `__last_value_borrow__` )
+    // implicit case; idempotent for explicit returns.) Only when the body
+    // does fall off its end with a value: a `?? ( vec_get v 0 ) { T l → {
+    // ^ ( string_from … ) } … }` whose every arm returns left the
+    // scrutinee's borrow behind, and the function — owned results on every
+    // path — was taken for a lender whose callers never dropped anything.
+    ? & & == 0 g_did_ret ! ( seq ret_ty `void` ) != 0 ( nurl_sym_len syms `__last_value_borrow__` )
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` ) ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) }
     {}
     // Auto-sink inference (critic v0.9.0 §2): merge any inferred sinks
