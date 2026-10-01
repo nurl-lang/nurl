@@ -118,9 +118,11 @@ $ `stdlib/std/thread.nu`
         ? > ( h2_frame_writer_pending writer ) 0 { = pressure T } {}
         // Readiness refers to socket bytes, not the retained frame buffer.
         // Never park in a blocking frame read while our writer needs progress.
+        // Once the response is out, the client may take it and close before
+        // this read: that is the exchange ending, not a failure.
         ? < ( vec_len [u] rx ) 65536 {
             ?? ( tcp_try_read_into tcp rx - 65536 ( vec_len [u] rx ) ) {
-                T _ → {} F _ → { = ok F }
+                T _ → {} F _ → { ? ! response_end { = ok F } {} }
             }
         } {}
         ? ( buffered_frame rx ) {
