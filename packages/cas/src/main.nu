@@ -31,7 +31,6 @@ $ `manifest.nu`
     ?? ev { T v → { ^ v } F → {} }
     : String home ( env_var_or `HOME` `.` )
     : String r ( path_join ( string_data home ) `.cas` )
-    ( string_free home )
     ^ r
 }
 
@@ -43,7 +42,6 @@ $ `manifest.nu`
 
 @ __cli_err String e → i {
     ( nurl_eprintln ( string_data e ) )
-    ( string_free e )
     ^ 1
 }
 
@@ -56,25 +54,21 @@ $ `manifest.nu`
 
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  put <file> · hash <file> · get <hash> [-o FILE] · snapshot <dir>\n  ls <manifest-hash> · checkout <manifest-hash> <dir> · verify <hash>\n` )
-        ( string_free u ) ( args_free p )
         ^ 0
     } {}
     ? ( args_present p `version` ) {
         ( nurl_print `cas 0.1.2\n` )
-        ( args_free p )
         ^ 0
     } {}
 
     ? < ( args_positional_count p ) 1 {
         ( nurl_eprintln `usage: cas <put|hash|get|snapshot|ls|checkout|verify> … (cas --help)` )
-        ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -82,11 +76,11 @@ $ `manifest.nu`
     ?? ( vec_get [String] pos 0 ) { T c → { = cmd ( string_data c ) } F → {} }
     : ~ String a1 ( string_new )
     ? >= ( args_positional_count p ) 2 {
-        ?? ( vec_get [String] pos 1 ) { T v → { ( string_free a1 ) = a1 ( string_from ( string_data v ) ) } F → {} }
+        ?? ( vec_get [String] pos 1 ) { T v → { = a1 ( string_from ( string_data v ) ) } F → {} }
     } {}
     : ~ String a2 ( string_new )
     ? >= ( args_positional_count p ) 3 {
-        ?? ( vec_get [String] pos 2 ) { T v → { ( string_free a2 ) = a2 ( string_from ( string_data v ) ) } F → {} }
+        ?? ( vec_get [String] pos 2 ) { T v → { = a2 ( string_from ( string_data v ) ) } F → {} }
     } {}
 
     // `hash` needs no store at all.
@@ -95,9 +89,7 @@ $ `manifest.nu`
         ?? r {
             T data → {
                 : String hex ( cas_hash_hex data )
-                ( vec_free [u] data )
                 ( nurl_print ( string_data hex ) ) ( nurl_print `\n` )
-                ( string_free hex )
                 ^ 0
             }
             F _ → { ^ ( __cli_err ( string_from `cas: cannot read the input file` ) ) }
@@ -106,14 +98,13 @@ $ `manifest.nu`
 
     : String root ( __cli_store_root p )
     : !Cas String co ( cas_open ( string_data root ) )
-    ( string_free root )
     ?? co {
         T c → {
             : ~ i rc 0
             ? ( nurl_str_eq cmd `put` ) {
                 : !String String r ( cas_put_file c ( string_data a1 ) )
                 ?? r {
-                    T hex → { ( nurl_print ( string_data hex ) ) ( nurl_print `\n` ) ( string_free hex ) }
+                    T hex → { ( nurl_print ( string_data hex ) ) ( nurl_print `\n` ) }
                     F e → { = rc ( __cli_err e ) }
                 }
             } {
@@ -126,11 +117,9 @@ $ `manifest.nu`
                                 T out → {
                                     : !v IoErr wr ( write_file_bytes ( string_data out ) data )
                                     ?? wr { T _ → {} F _ → { = rc ( __cli_err ( string_from `cas: cannot write the output file` ) ) } }
-                                    ( string_free out )
                                 }
                                 F → { ( __cli_write_stdout data ) }
                             }
-                            ( vec_free [u] data )
                         }
                         F e → { = rc ( __cli_err e ) }
                     }
@@ -138,7 +127,7 @@ $ `manifest.nu`
                     ? ( nurl_str_eq cmd `snapshot` ) {
                         : !String String r ( cas_snapshot c ( string_data a1 ) )
                         ?? r {
-                            T hex → { ( nurl_print ( string_data hex ) ) ( nurl_print `\n` ) ( string_free hex ) }
+                            T hex → { ( nurl_print ( string_data hex ) ) ( nurl_print `\n` ) }
                             F e → { = rc ( __cli_err e ) }
                         }
                     } {
@@ -149,7 +138,6 @@ $ `manifest.nu`
                                     ? ( manifest_is data ) { ( __cli_write_stdout data ) } {
                                         = rc ( __cli_err ( string_from `cas: that object is a blob, not a manifest` ) )
                                     }
-                                    ( vec_free [u] data )
                                 }
                                 F e → { = rc ( __cli_err e ) }
                             }
@@ -162,7 +150,6 @@ $ `manifest.nu`
                                         ( string_push_int msg nfiles )
                                         ( string_push_str msg ` file(s), all verified\n` )
                                         ( nurl_print ( string_data msg ) )
-                                        ( string_free msg )
                                     }
                                     F e → { = rc ( __cli_err e ) }
                                 }
@@ -175,7 +162,6 @@ $ `manifest.nu`
                                             ( string_push_int msg nobj )
                                             ( string_push_str msg ` object(s) proven\n` )
                                             ( nurl_print ( string_data msg ) )
-                                            ( string_free msg )
                                         }
                                         F e → { = rc ( __cli_err e ) }
                                     }
@@ -183,12 +169,9 @@ $ `manifest.nu`
                                     ( nurl_eprintln `cas: unknown command (cas --help)` )
                                     = rc 2
                                 } } } } } }
-            ( cas_free c )
-            ( string_free a1 ) ( string_free a2 ) ( args_free p )
             ^ rc
         }
         F e → {
-            ( string_free a1 ) ( string_free a2 ) ( args_free p )
             ^ ( __cli_err e )
         }
     }

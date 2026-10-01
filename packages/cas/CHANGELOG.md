@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more. `Cas` and `CasManifest` are plain
+values whose Strings and Vecs the compiler drops; `cas_free` and
+`manifest_free` stay as optional early releases, and every redundant
+`string_free` / `vec_free` in the library and the CLI is gone. Snapshot,
+verify and checkout of a 90-file tree run the same instructions (−0.05 %)
+and produce the same manifest.
+
 ## 0.1.2
 
 `--version` reported 0.1.0 while the manifest said 0.1.1.
