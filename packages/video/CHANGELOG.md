@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `VidAvi` is a handle over the opened AVI instead of a struct the caller
+  had to `vid_avi_close`: every copy is the same open file, and the last
+  owner closes it, as `vid_avi_close` did (which stays as an optional early
+  release). `vid_avi_open` builds the handle first, so its error paths
+  close the file by letting go of it. The stream metadata is read through
+  `vid_avi_fps_num`, `vid_avi_fps_den`, `vid_avi_vstream`,
+  `vid_avi_movi_off` and `vid_avi_movi_end` instead of struct fields.
+- Every `string_free` / `vec_free` / `output_free` in the library and the
+  CLI is gone; the compiler drops them.
+
 ## 0.1.0 — 2026-07-28
 
 Extracted from `lingbot-map` 0.7.0, where it was `src/video.nu`; the

@@ -82,7 +82,6 @@ $ `video.nu`
     }
     : ~ String odir ( string_from out )
     ? == ( nurl_str_len out ) 0 {
-        ( string_free odir )
         = odir ( vid_frames_dir file )
     } {}
     : ~ i rc 0
@@ -100,11 +99,9 @@ $ `video.nu`
         }
         F e → {
             ( nurl_print `video: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             = rc 1
         }
     }
-    ( string_free odir )
     ^ rc
 }
 
@@ -117,22 +114,20 @@ $ `video.nu`
     ?? ( vid_avi_open file ) {
         F e → {
             ( nurl_print `video: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             ^ 1
         }
         T av → {
             ( nurl_print `container  RIFF/AVI\n` )
             ( nurl_print `fps        ` )
-            ( nurl_print ( nurl_str_int / . av fps_num . av fps_den ) )
-            ( nurl_print ` (` ) ( nurl_print ( nurl_str_int . av fps_num ) )
-            ( nurl_print `/` ) ( nurl_print ( nurl_str_int . av fps_den ) )
+            ( nurl_print ( nurl_str_int / ( vid_avi_fps_num av ) ( vid_avi_fps_den av ) ) )
+            ( nurl_print ` (` ) ( nurl_print ( nurl_str_int ( vid_avi_fps_num av ) ) )
+            ( nurl_print `/` ) ( nurl_print ( nurl_str_int ( vid_avi_fps_den av ) ) )
             ( nurl_print `)\n` )
-            ( nurl_print `stream     ` ) ( nurl_print ( nurl_str_int . av vstream ) )
+            ( nurl_print `stream     ` ) ( nurl_print ( nurl_str_int ( vid_avi_vstream av ) ) )
             ( nurl_print ` (vids)\n` )
-            ( nurl_print `movi       ` ) ( nurl_print ( nurl_str_int . av movi_off ) )
-            ( nurl_print ` .. ` ) ( nurl_print ( nurl_str_int . av movi_end ) )
+            ( nurl_print `movi       ` ) ( nurl_print ( nurl_str_int ( vid_avi_movi_off av ) ) )
+            ( nurl_print ` .. ` ) ( nurl_print ( nurl_str_int ( vid_avi_movi_end av ) ) )
             ( nurl_print `\n` )
-            ( vid_avi_close av )
             ^ 0
         }
     }
@@ -165,11 +160,9 @@ $ `video.nu`
             }
             F e → {
                 ( nurl_print `video: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                ( string_free e )
                 = rc 1
             }
         }
-        ( string_free odir )
         ^ rc
     } {}
     ( nurl_print `video: unknown command ` ) ( nurl_print cmd ) ( nurl_print `\n` )

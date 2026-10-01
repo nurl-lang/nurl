@@ -33,9 +33,15 @@ $ `deps/video/src/video.nu`
 ( vid_frames_dir path )                   → String   <dir>/<stem>_frames
 ( vid_extract path fps outdir verbose )   → !i String   frames kept
 ( vid_avi_open path )                     → !VidAvi String
+( vid_avi_fps_num v ) / ( vid_avi_fps_den v )   → i   the declared frame rate
+( vid_avi_vstream v )                     → i        the video stream's index
+( vid_avi_movi_off v ) / ( vid_avi_movi_end v ) → i  the movi payload
 ( vid_avi_extract v outdir stride )       → !i String
-( vid_avi_close v )                       → v
+( vid_avi_close v )                       → v        early release (optional)
 ```
+
+A `VidAvi` is a handle: every copy is the same open file, and the last
+owner closes it. Nothing is released by hand.
 
 `vid_extract` is the front door: it creates `outdir`, removes exactly the
 frames a previous extraction left there (six digits + `.jpg`/`.png`,
