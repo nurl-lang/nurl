@@ -59,7 +59,7 @@ $ `stdlib/dist/sim.nu`
 }
 
 // submitter side over the bus: route a SUBMIT to the key's current owner.
-@ submit_over_bus * SimNet net * Ring ring ( Vec JobNode ) nodes i nn i submitter i tid i kind ( Vec u ) key ( Vec u ) payload i now → v {
+@ submit_over_bus SimNet net * Ring ring ( Vec JobNode ) nodes i nn i submitter i tid i kind ( Vec u ) key ( Vec u ) payload i now → v {
     : i oidx ( owner_idx_of ring nodes nn key )
     ? < oidx 0 { ^ v } {}
     : JobNode sn ( node nodes submitter )
@@ -70,40 +70,40 @@ $ `stdlib/dist/sim.nu`
 
 // deliver every due message: owner executes a SUBMIT and replies a RESULT
 // (forwarding if the ring moved); a RESULT is recorded idempotently.
-@ deliver_due * SimNet net * Ring ring ( Vec JobNode ) nodes i nn i now → v {
-    : ( Vec s ) due ( sim_due net now )
-    : i dn ( vec_len [s] due )
+@ deliver_due SimNet net * Ring ring ( Vec JobNode ) nodes i nn i now → v {
+    : ( Vec SimMsg ) due ( sim_due net now )
+    : i dn ( vec_len [SimMsg] due )
     : ~ i k 0
     ~ < k dn {
-        : s mp ?? ( vec_get [s] due k ) { T x → x F → # s 0 }
-        ? != # i mp 0 {
-            : *SimMsg sm # *SimMsg mp
-            : JobMsg m ( jobmsg_decode . sm bytes )
-            ? == . m mtype ( job_submit_t ) {
-                : JobNode dn2 ( node nodes . sm dst )
-                ? ( job_owns dn2 . m key ) {
-                    : ( Vec u ) res ( _job_execute dn2 . m kind . m payload )
-                    : i sidx ( pk_to_idx nodes nn . m submitter )
-                    : ( Vec u ) reply ( job_build_result . m task_id res )
-                    ? >= sidx 0 { ( sim_send net . sm dst sidx reply now ) } {}
-                    ( vec_free [u] res ) ( vec_free [u] reply )
-                } {
-                    // ring moved: forward to the current owner
-                    : i oidx ( owner_idx_of ring nodes nn . m key )
-                    ? & >= oidx 0 != oidx . sm dst {
-                        : ( Vec u ) fwd ( job_build_submit . m task_id . m kind . m submitter . m key . m payload )
-                        ( sim_send net . sm dst oidx fwd now )
-                        ( vec_free [u] fwd )
-                    } {}
-                }
-            } {}
-            ? == . m mtype ( job_result_t ) { ( job_on_result ( node nodes . sm dst ) m ) } {}
-            ( jobmsg_free m )
-            ( sim_msg_free sm )
-        } {}
+        ?? ( vec_get [SimMsg] due k ) {
+            T sm → {
+                : JobMsg m ( jobmsg_decode ( sim_msg_bytes sm ) )
+                ? == . m mtype ( job_submit_t ) {
+                    : JobNode dn2 ( node nodes ( sim_msg_dst sm ) )
+                    ? ( job_owns dn2 . m key ) {
+                        : ( Vec u ) res ( _job_execute dn2 . m kind . m payload )
+                        : i sidx ( pk_to_idx nodes nn . m submitter )
+                        : ( Vec u ) reply ( job_build_result . m task_id res )
+                        ? >= sidx 0 { ( sim_send net ( sim_msg_dst sm ) sidx reply now ) } {}
+                        ( vec_free [u] res ) ( vec_free [u] reply )
+                    } {
+                        // ring moved: forward to the current owner
+                        : i oidx ( owner_idx_of ring nodes nn . m key )
+                        ? & >= oidx 0 != oidx ( sim_msg_dst sm ) {
+                            : ( Vec u ) fwd ( job_build_submit . m task_id . m kind . m submitter . m key . m payload )
+                            ( sim_send net ( sim_msg_dst sm ) oidx fwd now )
+                            ( vec_free [u] fwd )
+                        } {}
+                    }
+                } {}
+                ? == . m mtype ( job_result_t ) { ( job_on_result ( node nodes ( sim_msg_dst sm ) ) m ) } {}
+                ( jobmsg_free m )
+            }
+            F → {}
+        }
         = k + k 1
     }
-    ( vec_free [s] due )
+    ( vec_free [SimMsg] due )
 }
 
 @ make_nodes * Ring ring i nn → ( Vec JobNode ) {
@@ -145,7 +145,7 @@ $ `stdlib/dist/sim.nu`
     ~ < mi nn { : ( Vec u ) mp ( pk mi ) ( ring_add_member ring mp 32 ) ( vec_free [u] mp ) = mi + mi 1 }
 
     // ── (1) job completes across 40% packet loss, via retry ──────────
-    : *SimNet net ( sim_net_new nn 24680 40 1 2 )
+    : SimNet net ( sim_net_new nn 24680 40 1 2 )
     : ( Vec JobNode ) nodes ( make_nodes ring nn )
     : i kseed ( find_key_not_owned_by ring nodes nn 0 )
     ( pb `found a key owned by a remote node: ` >= kseed 0 )
@@ -167,7 +167,7 @@ $ `stdlib/dist/sim.nu`
     ( free_nodes nodes nn ) ( sim_net_free net )
 
     // ── (2) partition isolates submitter from owner; heal completes ──
-    : *SimNet net2 ( sim_net_new nn 13579 0 1 0 )  // no random drop; clean partition
+    : SimNet net2 ( sim_net_new nn 13579 0 1 0 )  // no random drop; clean partition
     : ( Vec JobNode ) nd ( make_nodes ring nn )
     : i kseed2 ( find_key_not_owned_by ring nd nn 0 )
     : ( Vec u ) key2 ( bytes4 kseed2 kseed2 kseed2 kseed2 )

@@ -31,7 +31,7 @@ $ `stdlib/dist/sim.nu`
 @ ctr ( Vec PNCounter ) cs i i → PNCounter { ^ ?? ( vec_get [PNCounter] cs i ) { T x → x F → ( pncounter_new ) } }
 
 // each node broadcasts its encoded counter to every other node
-@ gossip_all * SimNet net ( Vec PNCounter ) cs i n i now → v {
+@ gossip_all SimNet net ( Vec PNCounter ) cs i n i now → v {
     : ~ i i 0
     ~ < i n {
         : ( Vec u ) bytes ( pncounter_encode ( ctr cs i ) )
@@ -42,20 +42,20 @@ $ `stdlib/dist/sim.nu`
     }
 }
 // deliver due deltas, merging each into the destination node's counter
-@ deliver_all * SimNet net ( Vec PNCounter ) cs i now → v {
-    : ( Vec s ) due ( sim_due net now )
-    : i dn ( vec_len [s] due )
+@ deliver_all SimNet net ( Vec PNCounter ) cs i now → v {
+    : ( Vec SimMsg ) due ( sim_due net now )
+    : i dn ( vec_len [SimMsg] due )
     : ~ i k 0
     ~ < k dn {
-        : s mp ?? ( vec_get [s] due k ) { T x → x F → # s 0 }
-        ? != # i mp 0 {
-            : *SimMsg sm # *SimMsg mp
-            ( pncounter_merge_bytes ( ctr cs . sm dst ) . sm bytes )
-            ( sim_msg_free sm )
-        } {}
+        ?? ( vec_get [SimMsg] due k ) {
+            T sm → {
+                ( pncounter_merge_bytes ( ctr cs ( sim_msg_dst sm ) ) ( sim_msg_bytes sm ) )
+            }
+            F → {}
+        }
         = k + k 1
     }
-    ( vec_free [s] due )
+    ( vec_free [SimMsg] due )
 }
 
 @ main → i {
@@ -91,7 +91,7 @@ $ `stdlib/dist/sim.nu`
     ( pi `each node's own count before gossip (=1): ` ( pncounter_value ( ctr cs 0 ) ) )
 
     // ── anti-entropy over a lossy bus, with a partition then a heal ──
-    : *SimNet net ( sim_net_new n 9001 25 1 2 )
+    : SimNet net ( sim_net_new n 9001 25 1 2 )
     : ~ i now 0
     // phase 1: node 2 partitioned away from 0 and 1
     ( sim_partition net 2 0 ) ( sim_partition net 2 1 )

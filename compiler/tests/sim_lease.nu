@@ -41,7 +41,7 @@ $ `stdlib/dist/sim.nu`
 }
 
 // dispatch an EXECUTE from `src` to the resource node `r` over the bus
-@ dispatch_exec * SimNet net i src i r ( Vec u ) key i epoch i idem i now → v {
+@ dispatch_exec SimNet net i src i r ( Vec u ) key i epoch i idem i now → v {
     : ( Vec u ) b ( build_exec key epoch idem )
     ( sim_send net src r b now )
     ( vec_free [u] b )
@@ -49,34 +49,34 @@ $ `stdlib/dist/sim.nu`
 
 // resource side: deliver every due EXECUTE, admit via the lease, and return how
 // many effects were actually performed in this batch.
-@ deliver_exec * SimNet net * LeaseTable lease i now → i {
-    : ( Vec s ) due ( sim_due net now )
-    : i dn ( vec_len [s] due )
+@ deliver_exec SimNet net * LeaseTable lease i now → i {
+    : ( Vec SimMsg ) due ( sim_due net now )
+    : i dn ( vec_len [SimMsg] due )
     : ~ i ran 0
     : ~ i k 0
     ~ < k dn {
-        : s mp ?? ( vec_get [s] due k ) { T x → x F → # s 0 }
-        ? != # i mp 0 {
-            : *SimMsg sm # *SimMsg mp
-            : i epoch # i ?? ( bytes_read_u64_be . sm bytes 0 ) { T x → x F → # u64 0 }
-            : i idem # i ?? ( bytes_read_u64_be . sm bytes 8 ) { T x → x F → # u64 0 }
-            : i klen # i ?? ( bytes_read_u16_be . sm bytes 16 ) { T x → x F → # u16 0 }
-            : ( Vec u ) key ( vec_with_cap [u] klen )
-            : ~ i j 0
-            ~ < j klen { ?? ( vec_get [u] . sm bytes + 18 j ) { T x → ( vec_push [u] key x ) F → {} } = j + j 1 }
-            ? ( lease_admit lease key epoch idem ) { = ran + ran 1 } {}
-            ( vec_free [u] key )
-            ( sim_msg_free sm )
-        } {}
+        ?? ( vec_get [SimMsg] due k ) {
+            T sm → {
+                : i epoch # i ?? ( bytes_read_u64_be ( sim_msg_bytes sm ) 0 ) { T x → x F → # u64 0 }
+                : i idem # i ?? ( bytes_read_u64_be ( sim_msg_bytes sm ) 8 ) { T x → x F → # u64 0 }
+                : i klen # i ?? ( bytes_read_u16_be ( sim_msg_bytes sm ) 16 ) { T x → x F → # u16 0 }
+                : ( Vec u ) key ( vec_with_cap [u] klen )
+                : ~ i j 0
+                ~ < j klen { ?? ( vec_get [u] ( sim_msg_bytes sm ) + 18 j ) { T x → ( vec_push [u] key x ) F → {} } = j + j 1 }
+                ? ( lease_admit lease key epoch idem ) { = ran + ran 1 } {}
+                ( vec_free [u] key )
+            }
+            F → {}
+        }
         = k + k 1
     }
-    ( vec_free [s] due )
+    ( vec_free [SimMsg] due )
     ^ ran
 }
 
 // run `rounds`: old owner dispatches iff `old_on`, new owner iff `new_on`;
 // both retry every round (at-least-once); count total effects performed.
-@ run_window * SimNet net * LeaseTable lease ( Vec u ) key i e_old i e_new i idem i r_idx b old_on b new_on i rounds i now0 → i {
+@ run_window SimNet net * LeaseTable lease ( Vec u ) key i e_old i e_new i idem i r_idx b old_on b new_on i rounds i now0 → i {
     : ~ i now now0
     : ~ i total 0
     : ~ i r 0
@@ -98,7 +98,7 @@ $ `stdlib/dist/sim.nu`
     : i idem 5000000001  // the task_id, identical across both owners (re-home)
 
     // ── (A) old-first: idempotency dedups the new owner ──────────────
-    : *SimNet na ( sim_net_new 3 1111 0 1 0 )
+    : SimNet na ( sim_net_new 3 1111 0 1 0 )
     : *LeaseTable la ( lease_new )
     : i a_old ( run_window na la key e_old e_new idem R T F 6 0 )  // only old, settles to admitted
     : i a_both ( run_window na la key e_old e_new idem R T T 6 6 )  // now new joins, retrying
@@ -109,7 +109,7 @@ $ `stdlib/dist/sim.nu`
     ( lease_free la ) ( sim_net_free na )
 
     // ── (B) new-first: stale epoch fences the old owner ──────────────
-    : *SimNet nb ( sim_net_new 3 2222 0 1 0 )
+    : SimNet nb ( sim_net_new 3 2222 0 1 0 )
     : *LeaseTable lb ( lease_new )
     : i b_new ( run_window nb lb key e_old e_new idem R F T 6 0 )  // only new
     : i b_both ( run_window nb lb key e_old e_new idem R T T 6 6 )  // old joins, retrying — fenced
@@ -120,7 +120,7 @@ $ `stdlib/dist/sim.nu`
     ( lease_free lb ) ( sim_net_free nb )
 
     // ── (C) concurrent under 35% loss + reorder, both retrying ───────
-    : *SimNet nc ( sim_net_new 3 33330 35 1 3 )
+    : SimNet nc ( sim_net_new 3 33330 35 1 3 )
     : *LeaseTable lc ( lease_new )
     : i c_total ( run_window nc lc key e_old e_new idem R T T 60 0 )
     ( pi `C concurrent: total effects performed      = ` c_total )
