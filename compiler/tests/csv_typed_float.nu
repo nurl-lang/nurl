@@ -19,17 +19,17 @@ $ `stdlib/ext/csv.nu`
 
 @ main → v {
     : String csv ( string_from `n,f,tag\n1,3.14,a\n2,-2.5,b\n3,0.0,c\n4,10.5,d\n5,7.2,e\n` )
-    : *CSVTable t ( csv_table_from_string_typed_f csv 1 )
+    : CSVTable t ( csv_table_from_string_typed_f csv 1 )
 
     // Cache should hold one double per body row in original order.
-    : i tf_len ( vec_len [f] . t typed_floats )
+    : i tf_len ( vec_len [f] ( csv_table_typed_floats t ) )
     ( nurl_print `tf_len=` ) ( nurl_println_int tf_len )
 
     // Narrow to rows where val_f > 1.0 — expect 3 survivors
     // (3.14, 10.5, 7.2). After this, cache is cleared.
     ( csv_table_filter_typed_float_gt t 1.0 )
     ( nurl_print `after_typed=` ) ( nurl_println_int ( csv_table_n_rows t ) )
-    ( nurl_print `tf_col_after=` ) ( nurl_println_int . t typed_float_col )
+    ( nurl_print `tf_col_after=` ) ( nurl_println_int ( csv_table_typed_float_col t ) )
 
     // Chain a substring filter on the tag column (col 2) — match 'd' / 'e' / 'a'.
     ( csv_table_filter_str_contains t 2 `d` )

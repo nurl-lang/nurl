@@ -3,10 +3,10 @@ $ `stdlib/core/string.nu`
 
 @ main → v {
     : String content ( string_from `name,note\n"alice","hello\nworld"\n"bob","hi"\n` )
-    : *CSVTable t ( csv_table_from_string content )
+    : CSVTable t ( csv_table_from_string content )
 
     ( nurl_print `Headers: ` )
-    : ( Vec String ) hs . t headers
+    : ( Vec String ) hs ( csv_table_headers t )
     : i nh ( vec_len [String] hs )
     : ~ i i 0
     ~ < i nh {
