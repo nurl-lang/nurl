@@ -38,7 +38,7 @@ $ `stdlib/std/quic_conn.nu`
 
 // Every datagram the connection wants to send right now, concatenated
 // — the hybrid ClientHello spans two Initials. `first` gets the first.
-@ drain * QuicConn c i now ( Vec u ) first → i {
+@ drain QuicConn c i now ( Vec u ) first → i {
     : ~ i n 0
     : ~ i more 1
     ~ != more 0 {
@@ -52,9 +52,9 @@ $ `stdlib/std/quic_conn.nu`
     ^ n
 }
 
-@ fresh_client QuicTp tp → *QuicConn {
+@ fresh_client QuicTp tp → QuicConn {
     : ( Vec u ) peer ( udp_addr_new )
-    : *QuicConn c ( quic_conn_new_client peer `localhost` `h3` tp 0 1000 )
+    : QuicConn c ( quic_conn_new_client peer `localhost` `h3` tp 0 1000 )
     ( vec_free [u] peer )
     ^ c
 }
@@ -77,7 +77,7 @@ $ `stdlib/std/quic_conn.nu`
     ( quic_tp_set_initial_max_stream_data_uni tp 16384 )
     ( quic_tp_set_initial_max_streams_bidi tp 4 )
     ( quic_tp_set_initial_max_streams_uni tp 3 )
-    : *QuicConn c ( fresh_client tp )
+    : QuicConn c ( fresh_client tp )
     : ( Vec u ) peer ( udp_addr_new )
     : ( Vec u ) d1 ( vec_new [u] )
     ( label_int `initial_datagrams` ( drain c 1000 d1 ) )
@@ -163,7 +163,7 @@ $ `stdlib/std/quic_conn.nu`
     ( quic_tp_set_initial_max_streams_bidi tp 4 )
     : ( Vec u ) peer ( udp_addr_new )
     // lists version 1: a fake, ignored
-    : *QuicConn c1 ( fresh_client tp )
+    : QuicConn c1 ( fresh_client tp )
     : ( Vec u ) i1 ( vec_new [u] )
     : i _n1 ( drain c1 1000 i1 )
     : ( Vec i ) v1 ( vec_new [i] )
@@ -173,7 +173,7 @@ $ `stdlib/std/quic_conn.nu`
     ( label_int `vn_with_v1_state` ( quic_conn_state c1 ) )
     ( vec_free [u] vn1 ) ( vec_free [i] v1 ) ( vec_free [u] i1 ) ( quic_conn_free c1 )
     // no version in common: the attempt ends, nothing more is sent
-    : *QuicConn c2 ( fresh_client tp )
+    : QuicConn c2 ( fresh_client tp )
     : ( Vec u ) i2 ( vec_new [u] )
     : i _n2 ( drain c2 1000 i2 )
     : ( Vec i ) v2 ( vec_new [i] )

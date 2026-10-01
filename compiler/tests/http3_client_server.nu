@@ -71,8 +71,8 @@ $ `stdlib/ext/http3_client.nu`
 }
 
 @ client_round → v {
-    : *H3Client cl ( h3_client_connect `127.0.0.1` 18963 `localhost` 0 5000 )
-    ? == # i cl 0 { ( label `connect` `NO-SOCKET` ) ^ } {}
+    : H3Client cl ( h3_client_connect `127.0.0.1` 18963 `localhost` 0 5000 )
+    ? == 0 # i . cl ctl { ( label `connect` `NO-SOCKET` ) ^ } {}
     ( label `connect` ? ( h3_client_connected cl ) `OK` `FAIL` )
     ? ! ( h3_client_connected cl ) { ( label_int `close_code` ( h3_client_close_code cl ) ) ( h3_client_free cl ) ^ } {}
     ( label `pq` ? ( h3_client_is_pq cl ) `T` `F` )
@@ -134,7 +134,7 @@ $ `stdlib/ext/http3_client.nu`
             : ( Vec u ) prefs ( tls_alpn_pack `h3` )
             : QuicTp stp ( http3_default_tp )
             : ( @ HttpResponse HttpRequest ) hf \ HttpRequest req → HttpResponse { ^ ( handler req ) }
-            : *H3Server srv ( http3_server_new sock creds prefs stp hf 1048576 )
+            : H3Server srv ( http3_server_new sock creds prefs stp hf 1048576 )
             : ( @ v ) server \ → v { ( http3_server_run srv ) }
             : !Thread ThreadErr st ( thread_spawn server )
             ?? st {

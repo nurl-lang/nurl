@@ -5,12 +5,13 @@
 // the socket, the loop and the clock, and the application (HTTP/3 in
 // `ext/http3_conn.nu` / `ext/http3_client.nu`) talks to streams.
 //
-//   ( quic_conn_new_server scid odcid peer creds alpn_prefs tp now ) → *QuicConn
-//   ( quic_conn_new_client peer server_name alpn tp verify now )     → *QuicConn  the ClientHello is queued;
+//   ( quic_conn_new_server scid odcid peer creds alpn_prefs tp now ) → QuicConn
+//   ( quic_conn_new_client peer server_name alpn tp verify now )     → QuicConn   the ClientHello is queued;
 //                                                                                  `alpn` = "h3" (preference list);
 //                                                                                  verify = 1 checks the certificate chain
 //                                                                                  + hostname (std/tls_verify.nu)
-//   ( quic_conn_free c )                                 → v
+//   ( quic_conn_free c )                                 → v        early release (optional: the last
+//                                                                   owner of a QuicConn releases it)
 //   ( quic_conn_recv c dgram from now )                  → v        one UDP datagram (coalesced packets)
 //   ( quic_conn_send c now )                             → ( Vec u ) OWNED next datagram, empty when nothing to send
 //   ( quic_conn_on_timeout c now )                       → v
@@ -18,6 +19,8 @@
 //   ( quic_conn_state c )                                → i        0 handshaking · 1 established · 2 closing · 3 draining · 4 closed
 //   ( quic_conn_close c app code reason )                → v        start closing (app = 1 for an application error)
 //   ( quic_conn_alpn c ) · ( quic_conn_peer c ) · ( quic_conn_cids c )  BORROWED
+//   ( quic_conn_retired_cids c )                         → ( Vec u ) BORROWED ids the peer retired, until
+//                                                                   ( quic_conn_clear_retired_cids c )
 //
 // Streams (ids per RFC 9000 §2.1; the server's own streams are odd):
 //
@@ -201,7 +204,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── the connection ───────────────────────────────────────────────
 
-: QuicConn {
+: QuicConnImpl {
     i state
     i now
     ( Vec u ) scid
@@ -209,6 +212,7 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) odcid
     ( Vec u ) peer
     ( Vec u ) cids
+    ( Vec u ) retired_cids  // issued ids the peer retired, until the listener unroutes them
     ( Vec i ) cid_seqs
     i cid_next_seq
     i cid_extra_issued
@@ -303,6 +307,33 @@ $ `stdlib/core/rcbox.nu`
     i peer_closed  // the close code / reason came from the peer's CONNECTION_CLOSE
 }
 
+// A QuicConn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same connection (the listener's table, the HTTP/3
+// layer on top), and the last owner releases it.
+: QuicConn { s ctl }
+
+// The streams are raw QuicStream blocks (as integers): releasing them is
+// the connection's own drop. Keys, TLS machine, recovery state, transport
+// parameters and buffers go with the fields after it.
+% Drop QuicConnImpl {
+    @ drop QuicConnImpl c → v {
+        : ~ i k 0
+        ~ < k ( vec_len [i] . c streams ) {
+            ( __qc_stream_free # *QuicStream ( __qc_ri . c streams k ) )
+            = k + k 1
+        }
+    }
+}
+
+@ QuicConn_share QuicConn h → QuicConn { ^ @ QuicConn { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicConn_drop sink QuicConn h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicConnImpl] # i . h ctl )
+}
+
+@ __QuicConn_ptr QuicConn h → *QuicConnImpl { ^ ( rcbox_ptr [QuicConnImpl] # i . h ctl ) }
+
 @ quic_conn_default_idle_ms → i { ^ 30000 }
 
 @ quic_conn_default_stream_window → i { ^ 262144 }
@@ -314,7 +345,7 @@ $ `stdlib/core/rcbox.nu`
 @ quic_conn_default_max_streams_uni → i { ^ 3 }
 
 // Did this endpoint open stream `id`? (server: odd ids; client: even)
-@ __qc_is_local * QuicConn c i id → b { ^ == & id 1 ? != . c is_client 0 0 1 }
+@ __qc_is_local * QuicConnImpl c i id → b { ^ == & id 1 ? != . c is_client 0 0 1 }
 
 @ __qc_rand i n → ( Vec u ) {
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
@@ -326,8 +357,9 @@ $ `stdlib/core/rcbox.nu`
 
 // Everything both roles share: `tp` is the caller's template (limits);
 // the connection IDs, keys and the TLS machine are the role's to add.
-@ __qc_new_common ( Vec u ) scid ( Vec u ) peer QuicTp tp i now → *QuicConn {
-    : *QuicConn c # *QuicConn ( nurl_alloc Z QuicConn )
+@ __qc_new_common ( Vec u ) scid ( Vec u ) peer QuicTp tp i now → QuicConn {
+    : i c__box ( rcbox_zero [QuicConnImpl] )
+    : *QuicConnImpl c ( rcbox_ptr [QuicConnImpl] c__box )
     = . c state 0
     = . c now now
     = . c scid ( bytes_slice scid 0 ( vec_len [u] scid ) )
@@ -335,6 +367,7 @@ $ `stdlib/core/rcbox.nu`
     = . c odcid ( vec_new [u] )
     = . c peer ( bytes_slice peer 0 ( vec_len [u] peer ) )
     = . c cids ( bytes_slice scid 0 ( vec_len [u] scid ) )
+    = . c retired_cids ( vec_new [u] )
     = . c cid_seqs ( vec_new [i] )
     ( vec_push [i] . c cid_seqs 0 )
     = . c cid_next_seq 1
@@ -442,14 +475,15 @@ $ `stdlib/core/rcbox.nu`
     = . c server_name ( vec_new [u] )
     = . c verify 0
     = . c peer_closed 0
-    ^ c
+    ^ @ QuicConn { # s c__box }
 }
 
 // The transport parameters this server sends: `tp` is the caller's
 // template (limits); the connection IDs are filled in here.
-@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer QuicCreds creds__h ( Vec u ) alpn_prefs QuicTp tp i now → *QuicConn {
+@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer QuicCreds creds__h ( Vec u ) alpn_prefs QuicTp tp i now → QuicConn {
     : *QuicCredsImpl creds ( __QuicCreds_ptr creds__h )
-    : *QuicConn c ( __qc_new_common scid peer tp now )
+    : QuicConn h ( __qc_new_common scid peer tp now )
+    : *QuicConnImpl c ( __QuicConn_ptr h )
     ( bytes_extend_bytes . c odcid odcid )
     : QuicTp mine . c local_tp
     ( quic_tp_set_original_dcid mine odcid )
@@ -462,7 +496,7 @@ $ `stdlib/core/rcbox.nu`
     ( vec_free [u] tpb )
     = . c k_rx0 ( quic_initial_keys odcid T )
     = . c k_tx0 ( quic_initial_keys odcid F )
-    ^ c
+    ^ h
 }
 
 // A client connection to `peer` (a udp_addr): the ClientHello is built
@@ -470,10 +504,11 @@ $ `stdlib/core/rcbox.nu`
 // The DCID we choose (`odcid`, 8 random bytes) keys the Initial packets
 // until the server's first Initial tells us its SCID (§7.2); the server
 // must echo it back as original_destination_connection_id (§7.3).
-@ quic_conn_new_client ( Vec u ) peer s server_name s alpn QuicTp tp i verify i now → *QuicConn {
+@ quic_conn_new_client ( Vec u ) peer s server_name s alpn QuicTp tp i verify i now → QuicConn {
     : ( Vec u ) scid ( __qc_rand 8 )
     : ( Vec u ) dcid ( __qc_rand 8 )
-    : *QuicConn c ( __qc_new_common scid peer tp now )
+    : QuicConn h ( __qc_new_common scid peer tp now )
+    : *QuicConnImpl c ( __QuicConn_ptr h )
     = . c is_client 1
     ( bytes_extend_bytes . c dcid dcid )
     ( bytes_extend_bytes . c odcid dcid )
@@ -496,75 +531,94 @@ $ `stdlib/core/rcbox.nu`
     ( __qc_tls_pump c )
     ( vec_free [u] dcid )
     ( vec_free [u] scid )
-    ^ c
+    ^ h
 }
 
-@ quic_conn_free sink * QuicConn c → v {
-    ? == # i c 0 { ^ } {}
-    ( vec_free [u] . c scid ) ( vec_free [u] . c dcid ) ( vec_free [u] . c odcid )
-    ( vec_free [u] . c peer ) ( vec_free [u] . c cids ) ( vec_free [i] . c cid_seqs )
-    ( vec_free [u] . c peer_cids ) ( vec_free [i] . c peer_cid_seqs )
-    ( quic_tls_srv_free . c tls )
-    ( quic_tls_cli_free . c tlsc )
-    ( vec_free [u] . c token ) ( vec_free [u] . c new_token )
-    ( vec_free [u] . c retry_scid ) ( vec_free [u] . c server_name )
-    ( quic_keys_free . c k_rx0 ) ( quic_keys_free . c k_tx0 )
-    ( quic_keys_free . c k_rx1 ) ( quic_keys_free . c k_tx1 )
-    ( quic_keys_free . c k_rx2 ) ( quic_keys_free . c k_tx2 )
-    ( quic_keys_free . c k_rx2_prev ) ( quic_keys_free . c k_rx2_next )
-    ( vec_free [i] . c rx_ranges0 ) ( vec_free [i] . c rx_ranges1 ) ( vec_free [i] . c rx_ranges2 )
-    ( quic_rec_free . c rec )
-    ( vec_free [u] . c crypto_out0 ) ( vec_free [u] . c crypto_out1 ) ( vec_free [u] . c crypto_out2 )
-    ( vec_free [u] . c retx0 ) ( vec_free [u] . c retx1 ) ( vec_free [u] . c retx2 )
-    ( vec_free [u] . c ctl2 )
-    ( quic_tp_free . c local_tp ) ( quic_tp_free . c peer_tp )
-    : ~ i k 0
-    ~ < k ( vec_len [i] . c streams ) {
-        ( __qc_stream_free # *QuicStream ?? ( vec_get [i] . c streams k ) { T x → x F → 0 } )
-        = k + k 1
-    }
-    ( vec_free [i] . c streams ) ( vec_free [i] . c readable )
-    ( vec_free [u] . c close_reason )
-    ( nurl_free # s c )
+// Let go of `c` now rather than at the end of its owner's scope.
+@ quic_conn_free sink QuicConn c → v {}
+
+@ quic_conn_state QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c state
 }
 
-@ quic_conn_state * QuicConn c → i { ^ . c state }
-
-@ quic_conn_alpn * QuicConn c → ( Vec u ) {
+@ quic_conn_alpn QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ? != . c is_client 0 { ^ ( quic_tls_cli_alpn . c tlsc ) } {}
     ^ ( quic_tls_srv_alpn . c tls )
 }
 
-@ quic_conn_is_client * QuicConn c → b { ^ != . c is_client 0 }
+@ quic_conn_is_client QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c is_client 0
+}
 
 // T when the key exchange was X25519MLKEM768.
-@ quic_conn_is_pq * QuicConn c → b {
+@ quic_conn_is_pq QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ? != . c is_client 0 { ^ ( quic_tls_cli_is_pq . c tlsc ) } {}
     ^ ( quic_tls_srv_is_pq . c tls )
 }
 
 // Handshake confirmed (§4.1.2): the server on the client's Finished,
 // the client on HANDSHAKE_DONE.
-@ quic_conn_confirmed * QuicConn c → b { ^ != . c confirmed 0 }
+@ quic_conn_confirmed QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c confirmed 0
+}
 
 // The code the connection is closing / closed with (-1 none); with
 // `quic_conn_close_is_app` telling an application error from a
 // transport one.
-@ quic_conn_close_code * QuicConn c → i { ^ . c close_code }
+@ quic_conn_close_code QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c close_code
+}
 
-@ quic_conn_close_is_app * QuicConn c → b { ^ != . c close_app 0 }
+@ quic_conn_close_is_app QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c close_app 0
+}
 
 // T when the close was the peer's (its CONNECTION_CLOSE), F when ours.
-@ quic_conn_closed_by_peer * QuicConn c → b { ^ != . c peer_closed 0 }
+@ quic_conn_closed_by_peer QuicConn c__h → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ != . c peer_closed 0
+}
 
 // BORROWED: the reason phrase of the close (ours or the peer's).
-@ quic_conn_close_reason * QuicConn c → ( Vec u ) { ^ . c close_reason }
+@ quic_conn_close_reason QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c close_reason
+}
 
-@ quic_conn_new_token * QuicConn c → ( Vec u ) { ^ . c new_token }
+@ quic_conn_new_token QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c new_token
+}
 
-@ quic_conn_peer * QuicConn c → ( Vec u ) { ^ . c peer }
+@ quic_conn_peer QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c peer
+}
 
-@ quic_conn_cids * QuicConn c → ( Vec u ) { ^ . c cids }
+@ quic_conn_cids QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c cids
+}
+
+// BORROWED: ids this endpoint issued that the peer has since retired
+// (8 bytes each) — still in a listener's routing table until it calls
+// quic_conn_clear_retired_cids.
+@ quic_conn_retired_cids QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c retired_cids
+}
+
+@ quic_conn_clear_retired_cids QuicConn c__h → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ( vec_clear [u] . c retired_cids )
+}
 
 @ quic_conn_scid_len → i { ^ 8 }
 
@@ -581,7 +635,7 @@ $ `stdlib/core/rcbox.nu`
 // Enter the closing state with a transport (`app` = 0) or application
 // (`app` = 1) error. The CONNECTION_CLOSE goes out with the next
 // `quic_conn_send`; the state lasts 3 PTOs (§10.2).
-@ __qc_fail * QuicConn c i app i code i frame_type → v {
+@ __qc_fail * QuicConnImpl c i app i code i frame_type → v {
     ? >= . c state 2 { ^ } {}
     = . c state 2
     = . c close_app app
@@ -592,7 +646,8 @@ $ `stdlib/core/rcbox.nu`
     = . c close_deadline + . c now * 3 ( quic_rec_pto . c rec )
 }
 
-@ quic_conn_close * QuicConn c i app i code ( Vec u ) reason → v {
+@ quic_conn_close QuicConn c__h i app i code ( Vec u ) reason → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ( vec_clear [u] . c close_reason )
     ( bytes_extend_bytes . c close_reason reason )
     ( __qc_fail c app code 0 )
@@ -600,7 +655,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── streams: lookup / open ───────────────────────────────────────
 
-@ __qc_stream_get * QuicConn c i id → *QuicStream {
+@ __qc_stream_get * QuicConnImpl c i id → *QuicStream {
     : ~ i k 0
     ~ < k ( vec_len [i] . c streams ) {
         : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
@@ -613,7 +668,7 @@ $ `stdlib/core/rcbox.nu`
 // The peer's stream `id`: open it (and every lower one of its kind not
 // yet seen) unless it is beyond the limit we advertised. Returns the
 // stream, or 0 with the connection failed.
-@ __qc_peer_stream * QuicConn c i id → *QuicStream {
+@ __qc_peer_stream * QuicConnImpl c i id → *QuicStream {
     : *QuicStream s ( __qc_stream_get c id )
     ? != # i s 0 { ^ s } {}
     : b bidi ( __qc_stream_is_bidi id )
@@ -639,14 +694,15 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __qc_stream_get c id )
 }
 
-@ __qc_mark_readable * QuicConn c * QuicStream s → v {
+@ __qc_mark_readable * QuicConnImpl c * QuicStream s → v {
     ? != . s readable 0 { ^ } {}
     = . s readable 1
     ( vec_push [i] . c readable . s id )
 }
 
 // Put ids back in front of the readable queue (the listener peeked).
-@ _qc_requeue_readable * QuicConn c ( Vec i ) ids → v {
+@ _qc_requeue_readable QuicConn c__h ( Vec i ) ids → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : ~ i k 0
     ~ < k ( vec_len [i] ids ) {
         : *QuicStream s ( __qc_stream_get c ( __qc_ri ids k ) )
@@ -655,10 +711,16 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ quic_conn_odcid * QuicConn c → ( Vec u ) { ^ . c odcid }
+@ quic_conn_odcid QuicConn c__h → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    ^ . c odcid
+}
 
-@ quic_conn_take_readable * QuicConn c → ( Vec i ) {
+@ quic_conn_take_readable QuicConn c__h → ( Vec i ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    // The queue moves out (the connection starts an empty one).
     : ( Vec i ) out . c readable
+    ( mem_take out )
     = . c readable ( vec_new [i] )
     : ~ i k 0
     ~ < k ( vec_len [i] out ) {
@@ -671,7 +733,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── streams: application side ────────────────────────────────────
 
-@ quic_conn_stream_recv * QuicConn c i id i max → ( Vec u ) {
+@ quic_conn_stream_recv QuicConn c__h i id i max → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? | == # i s 0 == 0 # i . . s rx ctl { ^ ( vec_new [u] ) } {}
     ? >= . s rx_reset_err 0 { ^ ( vec_new [u] ) } {}
@@ -696,26 +759,30 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
-@ quic_conn_stream_fin * QuicConn c i id → b {
+@ quic_conn_stream_fin QuicConn c__h i id → b {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? | == # i s 0 == 0 # i . . s rx ctl { ^ F } {}
     ? < . s rx_fin_off 0 { ^ F } {}
     ^ == ( quic_rxbuf_consumed . s rx ) . s rx_fin_off
 }
 
-@ quic_conn_stream_reset_err * QuicConn c i id → i {
+@ quic_conn_stream_reset_err QuicConn c__h i id → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ -1 } {}
     ^ . s rx_reset_err
 }
 
-@ quic_conn_stream_stop_err * QuicConn c i id → i {
+@ quic_conn_stream_stop_err QuicConn c__h i id → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ -1 } {}
     ^ . s tx_stop_err
 }
 
-@ quic_conn_open_uni * QuicConn c → i {
+@ quic_conn_open_uni QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : i idx >> . c next_local_uni 2
     ? >= idx . c max_streams_uni_peer { ^ -1 } {}
     : i id . c next_local_uni
@@ -728,7 +795,8 @@ $ `stdlib/core/rcbox.nu`
 
 // A bidirectional stream of our own. Needs the peer's transport
 // parameters (the handshake), like the flow-control limit it obeys.
-@ quic_conn_open_bidi * QuicConn c → i {
+@ quic_conn_open_bidi QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ? == 0 # i . . c peer_tp ctl { ^ -1 } {}
     : i idx >> . c next_local_bidi 2
     ? >= idx . c max_streams_bidi_peer { ^ -1 } {}
@@ -741,7 +809,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Buffer `data` (and a FIN) for sending. Everything is accepted up to
 // 4 MB of unsent bytes per stream; flow control applies at send time.
-@ quic_conn_stream_send * QuicConn c i id ( Vec u ) data b fin → i {
+@ quic_conn_stream_send QuicConn c__h i id ( Vec u ) data b fin → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ -1 } {}
     ? | != . s tx_done 0 != . s tx_fin 0 { ^ -1 } {}
@@ -757,7 +826,8 @@ $ `stdlib/core/rcbox.nu`
     ^ take
 }
 
-@ quic_conn_stream_reset * QuicConn c i id i err → v {
+@ quic_conn_stream_reset QuicConn c__h i id i err → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? | == # i s 0 != . s tx_done 0 { ^ } {}
     ? >= . s tx_reset_err 0 { ^ } {}
@@ -766,14 +836,16 @@ $ `stdlib/core/rcbox.nu`
     ( vec_clear [u] . s tx_buf )
 }
 
-@ quic_conn_stream_stop_sending * QuicConn c i id i err → v {
+@ quic_conn_stream_stop_sending QuicConn c__h i id i err → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? | == # i s 0 == 0 # i . . s rx ctl { ^ } {}
     ? != . s rx_done 0 { ^ } {}
     ( quic_push_stop_sending . c ctl2 id err )
 }
 
-@ quic_conn_stream_done * QuicConn c i id → v {
+@ quic_conn_stream_done QuicConn c__h i id → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     : *QuicStream s ( __qc_stream_get c id )
     ? == # i s 0 { ^ } {}
     = . s app_done 1
@@ -783,7 +855,7 @@ $ `stdlib/core/rcbox.nu`
 // Release streams both sides are done with; credit the peer's stream
 // limit for its streams (MAX_STREAMS keeps `max_streams_*_local` open
 // slots ahead of what has been closed).
-@ __qc_stream_gc * QuicConn c → v {
+@ __qc_stream_gc * QuicConnImpl c → v {
     : ( Vec i ) keep ( vec_new [i] )
     : ~ i k 0
     ~ < k ( vec_len [i] . c streams ) {
@@ -818,20 +890,20 @@ $ `stdlib/core/rcbox.nu`
 
 // ── receive: packet-number bookkeeping ───────────────────────────
 
-@ __qc_rx_ranges * QuicConn c i space → ( Vec i ) {
+@ __qc_rx_ranges * QuicConnImpl c i space → ( Vec i ) {
     ? == space 0 { ^ . c rx_ranges0 } {}
     ? == space 1 { ^ . c rx_ranges1 } {}
     ^ . c rx_ranges2
 }
 
-@ __qc_largest_rx * QuicConn c i space → i {
+@ __qc_largest_rx * QuicConnImpl c i space → i {
     ? == space 0 { ^ . c largest_rx0 } {}
     ? == space 1 { ^ . c largest_rx1 } {}
     ^ . c largest_rx2
 }
 
 // Is `pn` already in the received set?
-@ __qc_rx_seen * QuicConn c i space i pn → b {
+@ __qc_rx_seen * QuicConnImpl c i space i pn → b {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     : ~ i k 0
     ~ < k ( vec_len [i] r ) {
@@ -843,7 +915,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Record `pn`; ranges are kept sorted descending [hi, lo] pairs as an
 // ACK frame wants them, at most 32 ranges (older ones fall off).
-@ __qc_rx_record * QuicConn c i space i pn → v {
+@ __qc_rx_record * QuicConnImpl c i space i pn → v {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     : ( Vec i ) out ( vec_new [i] )
     : ~ b placed F
@@ -880,7 +952,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Build an ACK frame for `space` from the received ranges.
-@ __qc_push_ack * QuicConn c i space ( Vec u ) out → v {
+@ __qc_push_ack * QuicConnImpl c i space ( Vec u ) out → v {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     ? == ( vec_len [i] r ) 0 { ^ } {}
     : i largest ( __qc_ri r 1 )
@@ -904,7 +976,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── receive: keys per space ──────────────────────────────────────
 
-@ __qc_install_handshake_keys * QuicConn c → v {
+@ __qc_install_handshake_keys * QuicConnImpl c → v {
     ? != 0 # i . . c k_tx1 ctl { ^ } {}
     ? != . c is_client 0 {
         : i cipher ( quic_tls_cli_cipher . c tlsc )
@@ -920,7 +992,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The client's 1-RTT keys, once the server Finished has verified.
-@ __qc_install_app_keys * QuicConn c → v {
+@ __qc_install_app_keys * QuicConnImpl c → v {
     ? != 0 # i . . c k_tx2 ctl { ^ } {}
     : i cipher ( quic_tls_cli_cipher . c tlsc )
     = . c k_tx2 ( quic_keys_derive cipher ( quic_tls_cli_c_ap . c tlsc ) )
@@ -928,7 +1000,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The peer's transport parameters, once the TLS layer has them.
-@ __qc_apply_peer_tp * QuicConn c → v {
+@ __qc_apply_peer_tp * QuicConnImpl c → v {
     ? != 0 # i . . c peer_tp ctl { ^ } {}
     : QuicTp p ? != . c is_client 0 ( quic_tp_decode ( quic_tls_cli_server_tp . c tlsc ) F ) ( quic_tp_decode ( quic_tls_srv_client_tp . c tls ) T )
     ? == 0 # i . p ctl { ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 ) ^ } {}
@@ -974,7 +1046,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Drain the TLS layer's outputs into the CRYPTO queues and react to
 // its state changes.
-@ __qc_tls_pump * QuicConn c → v {
+@ __qc_tls_pump * QuicConnImpl c → v {
     ? != . c is_client 0 { ( __qc_tls_pump_client c ) ^ } {}
     : ( Vec u ) o0 ( quic_tls_srv_take_out . c tls 0 )
     ( bytes_extend_bytes . c crypto_out0 o0 ) ( vec_free [u] o0 )
@@ -1006,7 +1078,7 @@ $ `stdlib/core/rcbox.nu`
 // Finished verified — the handshake is then complete (streams may
 // open, 1-RTT data flows both ways) but confirmed only on the server's
 // HANDSHAKE_DONE (§4.1.2), which is when the Handshake keys go.
-@ __qc_tls_pump_client * QuicConn c → v {
+@ __qc_tls_pump_client * QuicConnImpl c → v {
     : ( Vec u ) o0 ( quic_tls_cli_take_out . c tlsc 0 )
     ( bytes_extend_bytes . c crypto_out0 o0 ) ( vec_free [u] o0 )
     : ( Vec u ) o1 ( quic_tls_cli_take_out . c tlsc 1 )
@@ -1035,7 +1107,7 @@ $ `stdlib/core/rcbox.nu`
     } {}
 }
 
-@ __qc_drop_keys * QuicConn c i space → v {
+@ __qc_drop_keys * QuicConnImpl c i space → v {
     ? == space 0 {
         ? != . c keys0_dropped 0 { ^ } {}
         = . c keys0_dropped 1
@@ -1058,7 +1130,7 @@ $ `stdlib/core/rcbox.nu`
 // More connection IDs for the peer (§5.1.1), each with a reset token:
 // up to two extra, never more than its active_connection_id_limit allows
 // (the initial one counts; the default limit of 2 leaves room for one).
-@ __qc_issue_cids * QuicConn c → v {
+@ __qc_issue_cids * QuicConnImpl c → v {
     : i limit ? != 0 # i . . c peer_tp ctl ( quic_tp_active_connection_id_limit . c peer_tp ) 2
     : ~ i want - limit 1
     ? > want 2 { = want 2 } {}
@@ -1077,7 +1149,7 @@ $ `stdlib/core/rcbox.nu`
 // ── receive: frames ──────────────────────────────────────────────
 
 // Returns 0 to continue, 1 when the connection has failed.
-@ __qc_on_stream_frame * QuicConn c QuicFrame f → i {
+@ __qc_on_stream_frame * QuicConnImpl c QuicFrame f → i {
     : i id ( quic_frame_a f )
     ? ( __qc_is_local c id ) {
         ? ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
@@ -1110,7 +1182,7 @@ $ `stdlib/core/rcbox.nu`
     ^ 0
 }
 
-@ __qc_on_frame * QuicConn c i space QuicFrame f → i {
+@ __qc_on_frame * QuicConnImpl c i space QuicFrame f → i {
     : i ft ( quic_frame_type f )
     ? | == ft 0 == ft 1 { ^ 0 } {}
     ? | == ft 2 == ft 3 {
@@ -1256,9 +1328,8 @@ $ `stdlib/core/rcbox.nu`
         ~ < k ( vec_len [i] . c cid_seqs ) {
             ? == ( __qc_ri . c cid_seqs k ) seq {
                 : ( Vec u ) that ( bytes_slice . c cids * k 8 + * k 8 8 )
-                : b same ( bytes_eq that . c scid )
-                ( vec_free [u] that )
-                ? same { ( __qc_fail c 0 10 ft ) ^ 1 } {}
+                ? ( bytes_eq that . c scid ) { ( __qc_fail c 0 10 ft ) ^ 1 } {}
+                ( bytes_extend_bytes . c retired_cids that )
                 : ?i _r ( vec_remove [i] . c cid_seqs k )
                 : ( Vec u ) rest ( bytes_slice . c cids + * k 8 8 ( vec_len [u] . c cids ) )
                 : b _t ( vec_set_len [u] . c cids * k 8 )
@@ -1306,7 +1377,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── receive: packets ─────────────────────────────────────────────
 
-@ __qc_rx_keys * QuicConn c i space → QuicKeys {
+@ __qc_rx_keys * QuicConnImpl c i space → QuicKeys {
     ? == space 0 { ^ . c k_rx0 } {}
     ? == space 1 { ^ . c k_rx1 } {}
     ^ . c k_rx2
@@ -1314,7 +1385,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Does this packet's DCID name us? Initial packets may still carry the
 // client's original DCID (it learns ours from the ServerHello packet).
-@ __qc_is_ours * QuicConn c ( Vec u ) pkt QuicHdr h → b {
+@ __qc_is_ours * QuicConnImpl c ( Vec u ) pkt QuicHdr h → b {
     : i dl . h dcid_len
     : ( Vec u ) d ( quic_hdr_dcid h pkt )
     ? & == . h ptype 0 ( bytes_eq d . c odcid ) { ( vec_free [u] d ) ^ T } {}
@@ -1335,7 +1406,7 @@ $ `stdlib/core/rcbox.nu`
 // of the server's has been processed (a Retry counts): if version 1 is listed the packet is
 // a fake and ignored; otherwise there is no version in common and the
 // attempt is abandoned — the connection closes with no packet sent.
-@ __qc_on_vn * QuicConn c ( Vec u ) dgram QuicHdr h → v {
+@ __qc_on_vn * QuicConnImpl c ( Vec u ) dgram QuicHdr h → v {
     ? | | | == . c is_client 0 >= . c largest_rx0 0 != . c tls_state 0 != . c retry_seen 0 { ^ } {}
     : ~ i p . h pn_off
     : ~ b has1 F
@@ -1355,7 +1426,7 @@ $ `stdlib/core/rcbox.nu`
 // new DCID (new Initial keys), its token rides in every Initial, the
 // ClientHello goes again, and packet numbers continue (§17.2.5.3). A
 // Retry that fails its tag or repeats our own DCID is discarded.
-@ __qc_on_retry * QuicConn c ( Vec u ) dgram i off QuicHdr h → v {
+@ __qc_on_retry * QuicConnImpl c ( Vec u ) dgram i off QuicHdr h → v {
     ? | | | == . c is_client 0 != . c retry_seen 0 >= . c largest_rx0 0 != . c tls_state 0 { ^ } {}
     : i n . h end
     ? < - n off 16 { ^ } {}
@@ -1388,7 +1459,7 @@ $ `stdlib/core/rcbox.nu`
 
 // One packet out of a datagram. Returns the offset after it, or -1 to
 // stop processing the datagram.
-@ __qc_recv_packet * QuicConn c ( Vec u ) dgram i off → i {
+@ __qc_recv_packet * QuicConnImpl c ( Vec u ) dgram i off → i {
     : QuicHdr h ( quic_hdr_parse dgram off 8 )
     ? < . h ptype 0 { ^ -1 } {}
     : i ptype . h ptype
@@ -1499,7 +1570,8 @@ $ `stdlib/core/rcbox.nu`
     ^ end
 }
 
-@ quic_conn_recv * QuicConn c ( Vec u ) dgram ( Vec u ) from i now → v {
+@ quic_conn_recv QuicConn c__h ( Vec u ) dgram ( Vec u ) from i now → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     ? >= . c state 3 {
         // draining / closed: nothing is processed
@@ -1548,37 +1620,37 @@ $ `stdlib/core/rcbox.nu`
 
 // ── send ─────────────────────────────────────────────────────────
 
-@ __qc_tx_keys * QuicConn c i space → QuicKeys {
+@ __qc_tx_keys * QuicConnImpl c i space → QuicKeys {
     ? == space 0 { ^ . c k_tx0 } {}
     ? == space 1 { ^ . c k_tx1 } {}
     ^ . c k_tx2
 }
 
-@ __qc_next_pn * QuicConn c i space → i {
+@ __qc_next_pn * QuicConnImpl c i space → i {
     ? == space 0 { ^ . c next_pn0 } {}
     ? == space 1 { ^ . c next_pn1 } {}
     ^ . c next_pn2
 }
 
-@ __qc_bump_pn * QuicConn c i space → v {
+@ __qc_bump_pn * QuicConnImpl c i space → v {
     ? == space 0 { = . c next_pn0 + . c next_pn0 1 ^ } {}
     ? == space 1 { = . c next_pn1 + . c next_pn1 1 ^ } {}
     = . c next_pn2 + . c next_pn2 1
 }
 
-@ __qc_crypto_out * QuicConn c i space → ( Vec u ) {
+@ __qc_crypto_out * QuicConnImpl c i space → ( Vec u ) {
     ? == space 0 { ^ . c crypto_out0 } {}
     ? == space 1 { ^ . c crypto_out1 } {}
     ^ . c crypto_out2
 }
 
-@ __qc_crypto_sent * QuicConn c i space → i {
+@ __qc_crypto_sent * QuicConnImpl c i space → i {
     ? == space 0 { ^ . c crypto_sent0 } {}
     ? == space 1 { ^ . c crypto_sent1 } {}
     ^ . c crypto_sent2
 }
 
-@ __qc_retx * QuicConn c i space → ( Vec u ) {
+@ __qc_retx * QuicConnImpl c i space → ( Vec u ) {
     ? == space 0 { ^ . c retx0 } {}
     ? == space 1 { ^ . c retx1 } {}
     ^ . c retx2
@@ -1619,7 +1691,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Append the reserved ACK when it is due or the packet has other frames;
 // returns the packet's ack-eliciting flag unchanged.
-@ __qc_finish_ack * QuicConn c i space ( Vec u ) out ( Vec u ) ackbuf b due i ae → i {
+@ __qc_finish_ack * QuicConnImpl c i space ( Vec u ) out ( Vec u ) ackbuf b due i ae → i {
     ? & > ( vec_len [u] ackbuf ) 0 | due > ( vec_len [u] out ) 0 {
         ( bytes_extend_bytes out ackbuf )
         ? == space 0 { = . c ack_needed0 0 } {}
@@ -1630,7 +1702,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ae
 }
 
-@ __qc_build_payload * QuicConn c i space i room ( Vec u ) out ( Vec u ) retx → i {
+@ __qc_build_payload * QuicConnImpl c i space i room ( Vec u ) out ( Vec u ) retx → i {
     : ~ i ae 0
     : ~ i left room
     // CONNECTION_CLOSE, alone (§10.2.3)
@@ -1762,7 +1834,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Is there anything to send in `space`?
-@ __qc_space_wants_send * QuicConn c i space → b {
+@ __qc_space_wants_send * QuicConnImpl c i space → b {
     ? == # i ( __qc_tx_keys c space ) 0 { ^ F } {}
     ? == . c state 2 { ^ == . c close_sent 0 } {}
     : i need ? == space 0 . c ack_needed0 ? == space 1 . c ack_needed1 . c ack_needed2
@@ -1784,7 +1856,8 @@ $ `stdlib/core/rcbox.nu`
     ^ F
 }
 
-@ quic_conn_send * QuicConn c i now → ( Vec u ) {
+@ quic_conn_send QuicConn c__h i now → ( Vec u ) {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     : ( Vec u ) dgram ( vec_new [u] )
     ? >= . c state 3 { ^ dgram } {}
@@ -1896,7 +1969,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── timers ───────────────────────────────────────────────────────
 
-@ quic_conn_next_timeout * QuicConn c → i {
+@ quic_conn_next_timeout QuicConn c__h → i {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     ? >= . c state 2 { ^ . c close_deadline } {}
     : ~ i best 0
     : i lt ( quic_rec_next_timeout . c rec )
@@ -1912,7 +1986,8 @@ $ `stdlib/core/rcbox.nu`
     ^ best
 }
 
-@ quic_conn_on_timeout * QuicConn c i now → v {
+@ quic_conn_on_timeout QuicConn c__h i now → v {
+    : *QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     ? >= . c state 2 {
         ? >= now . c close_deadline { = . c state 4 } {}
