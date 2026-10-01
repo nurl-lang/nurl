@@ -24,10 +24,9 @@ $ `stdlib/std/bench.nu`
     String unit
 }
 
-@ bench_row_free sink BenchRow r → v {
-    ( string_free . r name )
-    ( string_free . r unit )
-}
+// A BenchRow is a plain value: its owner drops it. This only lets go of `r`
+// now rather than at the end of its owner's scope.
+@ bench_row_free sink BenchRow r → v {}
 
 @ bench_row_name BenchRow r → s { ^ ( string_data . r name ) }
 
@@ -38,7 +37,6 @@ $ `stdlib/std/bench.nu`
     : i nspo ( bench_result_ns_per_op br )
     : i apo ( bench_result_allocs_per_op br )
     : i thpt ? > nspo 0 / * units_per_op 1000 nspo 0
-    ( bench_result_free br )
     ^ @ BenchRow { ( string_from name ) nspo apo thpt ( string_from unit ) }
 }
 
@@ -62,14 +60,11 @@ $ `stdlib/std/bench.nu`
     : String line ( string_from `  ` )
     : String nm ( __pad_right ( string_data . r name ) 16 )
     ( string_push_str line ( string_data nm ) )
-    ( string_free nm )
     : String tv ( __pad_left ( nurl_str_int . r thpt ) 8 )
     ( string_push_str line ( string_data tv ) )
-    ( string_free tv )
     ( string_push_char line 32 )
     : String u ( __pad_right ( string_data . r unit ) 8 )
     ( string_push_str line ( string_data u ) )
-    ( string_free u )
     ( string_push_str line `(` )
     ( string_push_str line ( nurl_str_int . r ns_per_op ) )
     ( string_push_str line ` ns/op, ` )
@@ -77,7 +72,6 @@ $ `stdlib/std/bench.nu`
     ( string_push_str line ` allocs/op)` )
     ( nurl_print ( string_data line ) )
     ( nurl_print `\n` )
-    ( string_free line )
 }
 
 // one JSON object per row (no trailing comma handling here — the caller

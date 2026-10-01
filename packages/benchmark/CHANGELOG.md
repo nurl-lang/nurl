@@ -2,7 +2,24 @@
 
 ## Unreleased
 
-The CSV table in the `csv sort 1M×8` setup is a `CSVTable` value, not a `*CSVTable`: `stdlib/ext/csv.nu` made it a self-releasing handle that its last owner drops. `csv_table_free` stays only as an early release, so the million-row table is gone before the timed sort allocates.
+Nothing is released by hand any more.
+
+- The CSV table in the `csv sort 1M×8` setup is a `CSVTable` value, not a
+  `*CSVTable`: `stdlib/ext/csv.nu` made it a self-releasing handle that its
+  last owner drops. The setup that parses it and extracts the sort keys is
+  its own function, so the million-row table is dropped when that returns —
+  before the timed sort allocates — with no `csv_table_free`. The CBOR
+  benchmark's source document is built the same way.
+- Every `string_free`, `vec_free`, `vec_free_with`, `json_free`, `rng_free`
+  and `bench_result_free` call (36) and the private `__bench_free_args`
+  helper are gone. `BenchRow` is a plain value its owner drops;
+  `bench_row_free` is an optional early release.
+- Same rows, same allocations per operation, leak-free under LSan. With
+  every benchmark body run a fixed number of times, the instruction counts
+  are unchanged (±0.01 %) except the CSV setup (+0.24 %, untimed): three
+  strings per generated row are dropped at the end of the loop body instead
+  of released by hand, and the compiler guards that drop with a run-time
+  ownership flag (reported upstream).
 
 ## 0.1.4
 

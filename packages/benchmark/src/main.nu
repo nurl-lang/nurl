@@ -84,7 +84,6 @@ $ `src/suite.nu`
         ( nurl_print `  benchmark --list       list the benchmark names\n` )
         ( nurl_print `  benchmark --json       emit the measurements as JSON\n\n` )
         ( nurl_print `Pure NURL, no GPU / model / network. Throughput is MB/s, M/s (millions\nof elements or iterations per second), measured with std/bench.\n` )
-        ( __bench_free_args av filters )
         ^ 0
     } {}
 
@@ -94,7 +93,6 @@ $ `src/suite.nu`
             ( nurl_print ( __bench_name i ) ) ( nurl_print `\n` )
             = i + i 1
         }
-        ( __bench_free_args av filters )
         ^ 0
     } {}
 
@@ -112,21 +110,12 @@ $ `src/suite.nu`
                 ? first { = first F } { ( nurl_print `,` ) }
                 : String j ( bench_row_json r )
                 ( nurl_print ( string_data j ) )
-                ( string_free j )
             } {
                 ( bench_row_print r )
             }
-            ( bench_row_free r )
         } {}
         = i + i 1
     }
     ? as_json { ( nurl_print `]\n` ) } {}
-
-    ( __bench_free_args av filters )
     ^ 0
-}
-
-@ __bench_free_args ( Vec String ) av ( Vec String ) filters → v {
-    ( vec_free_with [String] av \ String s → v { ( string_free s ) } )
-    ( vec_free_with [String] filters \ String s → v { ( string_free s ) } )
 }

@@ -44,7 +44,6 @@ $ `src/report.nu`
         ( vec_push [i] v ( rng_below g 1000000000 ) )
         = k + k 1
     }
-    ( rng_free g )
     ^ v
 }
 
@@ -62,7 +61,6 @@ $ `src/report.nu`
         = k + k 1
     }
     : String txt ( json_stringify arr )
-    ( json_free arr )
     ^ txt
 }
 
@@ -256,10 +254,7 @@ $ `src/report.nu`
         ( sha256_update h buf )
         : ( Vec u ) d ( sha256_final h )
         ( vec_set [i] sink 0 + ( __ipeek sink 0 ) ( vec_len [u] d ) )
-        ( vec_free [u] d )
     } )
-    ( vec_free [u] buf )
-    ( vec_free [i] sink )
     ^ r
 }
 
@@ -272,13 +267,10 @@ $ `src/report.nu`
         ?? ( json_parse ( string_data doc ) ) {
             T j → {
                 ( vec_set [i] sink 0 + ( __ipeek sink 0 ) ( json_arr_len j ) )
-                ( json_free j )
             }
             F _ → {}
         }
     } )
-    ( string_free doc )
-    ( vec_free [i] sink )
     ^ r
 }
 
@@ -291,23 +283,24 @@ $ `src/report.nu`
         : ( Vec i ) c ( vec_clone [i] base )
         ( sort_by [i] c \ i a i b → i { ^ - a b } )
         ( vec_set [i] sink 0 + ( __ipeek sink 0 ) ( __ipeek c 0 ) )
-        ( vec_free [i] c )
     } )
-    ( vec_free [i] base )
-    ( vec_free [i] sink )
     ^ r
 }
 
-@ bench_cbor_decode → BenchRow {
+// A CBOR array of `m` integers. The source document is this helper's own
+// local, so it is gone before the timed decode starts allocating.
+@ __gen_cbor_doc i m → ( Vec u ) {
     : Json doc ( json_arr_new )
     : ~ i k 0
-    ~ < k 2000 {
+    ~ < k m {
         ( json_arr_push doc ( json_int * k 3 ) )
         = k + k 1
     }
-    : ~ ( Vec u ) enc ( vec_new [u] )
-    ?? ( cbor_encode doc ) { T v → { ( vec_free [u] enc ) = enc v } F _ → {} }
-    ( json_free doc )
+    ?? ( cbor_encode doc ) { T v → { ^ v } F _ → { ^ ( vec_new [u] ) } }
+}
+
+@ bench_cbor_decode → BenchRow {
+    : ( Vec u ) enc ( __gen_cbor_doc 2000 )
     : i bytes ( vec_len [u] enc )
     : ( Vec i ) sink ( vec_new [i] )
     ( vec_push [i] sink 0 )
@@ -315,13 +308,10 @@ $ `src/report.nu`
         ?? ( cbor_decode enc ) {
             T j → {
                 ( vec_set [i] sink 0 + ( __ipeek sink 0 ) ( json_arr_len j ) )
-                ( json_free j )
             }
             F _ → {}
         }
     } )
-    ( vec_free [u] enc )
-    ( vec_free [i] sink )
     ^ r
 }
 
@@ -342,8 +332,6 @@ $ `src/report.nu`
         }
         ( vec_set [i] sink 0 + ( __ipeek sink 0 ) cps )
     } )
-    ( string_free s )
-    ( vec_free [i] sink )
     ^ r
 }
 
@@ -366,7 +354,6 @@ $ `src/report.nu`
         }
         ( vec_set [i] sink 0 + ( __ipeek sink 0 ) acc )
     } )
-    ( vec_free [i] sink )
     ^ r
 }
 
@@ -387,13 +374,13 @@ $ `src/report.nu`
         ( string_push_str o ( nurl_str_int + 2023 ( rng_below g 3 ) ) )
         ( string_push_char o 45 )
         : String mm ( __pad2 + 1 ( rng_below g 12 ) )
-        ( string_push_str o ( string_data mm ) ) ( string_free mm )
+        ( string_push_str o ( string_data mm ) )
         ( string_push_char o 45 )
         : String dd ( __pad2 + 1 ( rng_below g 28 ) )
-        ( string_push_str o ( string_data dd ) ) ( string_free dd )
+        ( string_push_str o ( string_data dd ) )
         ( string_push_char o 44 )
         : String uu ( __fmt_uuid ( rng_next g ) ( rng_next g ) )
-        ( string_push_str o ( string_data uu ) ) ( string_free uu )
+        ( string_push_str o ( string_data uu ) )
         ( string_push_char o 44 )
         ( string_push_str o `item` ) ( string_push_char o 44 )
         ( string_push_str o ( nurl_str_int * k 7 ) ) ( string_push_char o 44 )
@@ -402,7 +389,6 @@ $ `src/report.nu`
         ( string_push_char o 10 )
         = k + k 1
     }
-    ( rng_free g )
     ^ o
 }
 
@@ -411,10 +397,12 @@ $ `src/report.nu`
     ?? ( csv_table_col_index t name ) { T c → { ^ c } F → { ^ 0 } }
 }
 
-@ bench_csv_sort → BenchRow {
-    : i n 1000000
-    // --- setup (not timed): parse with the standard library's CSV reader,
-    // then extract each row's (type, date, uuid) keys ONCE into integers.
+// Setup for the csv benchmark (not timed): generate `n` rows, parse them
+// with the standard library's CSV reader, then extract each row's (type,
+// date, uuid) keys ONCE into integers. The million-row table is the bulk of
+// the setup's memory and this helper's own local, so it is gone before the
+// timed sort allocates; the keys are all the sort needs.
+@ __csv_sort_keys i n → ( Vec i ) {
     : CSVTable t ( csv_table_from_string ( __gen_csv n ) )
     : i cty ( __col t `type` )
     : i cda ( __col t `date` )
@@ -433,9 +421,12 @@ $ `src/report.nu`
         ( vec_push [i] key | | << tid 58 << dk 47 uu )
         = r0 + r0 1
     }
-    // early release: the million-row table is the bulk of this setup's
-    // memory, and the keys are all the timed sort needs
-    ( csv_table_free t )
+    ^ key
+}
+
+@ bench_csv_sort → BenchRow {
+    : i n 1000000
+    : ( Vec i ) key ( __csv_sort_keys n )
     : *i kp ( vec_data [i] key )
     : ( Vec i ) work ( vec_with_cap [i] n )
     : ~ i f 0
@@ -451,8 +442,5 @@ $ `src/report.nu`
         ( __qs_i wp 0 - n 1 )
         ( vec_set [i] sink 0 + ( __ipeek sink 0 ) . wp 0 )
     } )
-    ( vec_free [i] key )
-    ( vec_free [i] work )
-    ( vec_free [i] sink )
     ^ r
 }
