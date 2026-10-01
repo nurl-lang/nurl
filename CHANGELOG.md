@@ -76,6 +76,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was classified as a view of the parameter, so `S_share`'s result was
   copied again when stored and one reference leaked. `arc_clone` escaped
   only because it spelled the read through a local.
+- **A `! T E` with an Err path like `F # E Closed` hands its Ok payload
+  over.** The cast reads the variant's global, which the "builds a view of
+  something else" rule took for a pointer read: every such function counted
+  as returning a view, and every Ok payload leaked. Only a pointer field
+  makes a view now. `compiler/tests/result_err_variant_owns_ok.nu`.
+- **A value found inside a borrowed enum parameter is lent back** (the
+  `toml_get` / `toml_get_path` shape). A field taken out of a cursor over a
+  bound `vec_get` element (`: ?E e ( vec_get … ) ?? e { T ev → ^ @ ?V { T .
+  ev value } }`) counted as moved out of an owned struct, so callers dropped
+  the table's own value; a returned option now owns its payload exactly
+  when the cursor did (answered per call), and another literal copies what
+  was lent. An auto-dropped enum parameter's registration no longer reads
+  as ownership unless the parameter is a `sink`. Both had been hidden by
+  the view rule above. `compiler/tests/lend_through_enum_param.nu`.
 
 ### Changed
 

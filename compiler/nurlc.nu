@@ -3359,6 +3359,7 @@
     ( nurl_sym_set_deep syms `__agg_lends__` `` )
     ( nurl_sym_set_deep syms `__agg_lends_part__` `` )
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
+    ( nurl_sym_set_deep syms `__agg_take_own__` `` )
     // Cascade guard: a `^` reached here while parsing a value operand
     // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
     // scrutinee / a return value) means a preceding fixed-arity prefix
@@ -3659,7 +3660,7 @@
                 // `sink ?T` whose payload it hands back: `?? o { T v → { ^ v
                 // } … }`); a parameter it only borrows lends the caller's
                 // value back.
-                : b w_ownparam & != 0 ( nurl_sym_len2 syms w `__pname` ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) w )
+                : b w_ownparam ( __param_owned_slot syms w )
                 ? w_ownparam { = ret_owned_param T } {}
                 ? | & == 0 ( nurl_sym_len2 syms w `__pname` ) == 0 ( nurl_sym_len2 syms w `__optparam` ) w_ownparam {
                     : s wf ( mem_udrop_flag_get syms cg w )
@@ -4022,6 +4023,13 @@
     : b __rb_param & == ret_first_tt TT_DOT >= ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) ret_first_root ) 0
     ? | & __rb_read ! __rb_param != 0 ( nurl_sym_len syms `__agg_lends_part__` )
     { ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) } {}
+    // A returned wrap whose payload came out of a cursor owns it exactly
+    // when the cursor did (gen_agg_lit).
+    ? & == ret_first_tt TT_AT != 0 ( nurl_sym_len syms `__agg_take_own__` ) {
+        : s __ato ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print __ato ) ( nurl_print ` = and i1 ` ) ( nurl_print hbit ) ( nurl_print `, ` ) ( nurl_print ( nurl_sym_get syms `__agg_take_own__` ) ) ( nurl_print `\n` )
+        = hbit __ato
+    } {}
     ( mem_store_hown syms hbit )
     ( mem_save_return_proof syms cg lt skip_str_ptr | ret_is_direct_call ret_is_det_join )
     ( gen_ret_term lex syms cg lt val skip skip_str_ptr skip_user_ptr skip_struct_ptr ret_ident )
@@ -16636,6 +16644,19 @@
     }
 }
 
+// Is owner slot `ptr` a parameter this function DECLARES it takes over
+// (`sink`)? Only then does its value leave with a cursor over it. Every
+// auto-dropped enum parameter has a registered slot — holding a zero value
+// when the caller keeps it — so a registration alone says nothing.
+@ __param_owned_slot i syms s ptr → b {
+    : s pn ( nurl_sym_get2 syms ptr `__pname` )
+    ? == 0 ( nurl_str_len pn ) { ^ F } {}
+    ? ! ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) ptr ) { ^ F } {}
+    : i pi ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) pn )
+    ? < pi 0 { ^ F } {}
+    ^ ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
+}
+
 // A cursor stored or returned rather than consumed: a local it borrows
 // goes with it, but a cursor over a PARAMETER (`: cur target … ^ @ R { T
 // cur }` in a tree walk) only lends the caller's value back —
@@ -16651,7 +16672,7 @@
         // (A parameter this function owns — a `sink ?T` whose payload is
         // handed back — is no lend: its value leaves with the cursor, and
         // the return's ownership is that parameter's flag.)
-        ? & != 0 ( nurl_sym_len2 syms src `__pname` ) ! ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) src )
+        ? & != 0 ( nurl_sym_len2 syms src `__pname` ) ! ( __param_owned_slot syms src )
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
             ( __record_param_idx syms `__fn_retpart__` ( nurl_sym_get2 syms src `__pname` ) ) } {}
         ( mem_udrop_flag_set syms cg src `0` )
@@ -23167,7 +23188,25 @@
             ? & & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) fs_ptr )
             == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) ( __is_handle_ty fs_fty )
             { ( mem_udrop_takeover_opt syms cg fs_ptr )
-                ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty ( mem_udrop_flag_get syms cg fs_ptr ) )
+                : s __tk ( mem_udrop_flag_get syms cg fs_ptr )
+                ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty __tk )
+                // …exactly when the struct held it: a cursor over a borrowed
+                // element (`: ?E e ( vec_get … ) ?? e { T ev → ^ @ ?V { T .
+                // ev value } }`) holds nothing, and its field is still lent.
+                // A wrap answers per call (its payload is the whole value);
+                // any other literal copies what was lent.
+                : s __tl ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __tl ) ( nurl_print ` = xor i1 ` ) ( nurl_print __tk ) ( nurl_print `, 1\n` )
+                ? & agg_returned agg_is_wrap {
+                    : s __self ( nurl_sym_get syms `__fn_self_name__` )
+                    : s __kv ( nurl_cg_reg cg )
+                    ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag __self __self ) ) ) __kv )
+                    : s __cc ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __cc ) ( nurl_print ` = and i1 ` ) ( nurl_print __kv ) ( nurl_print `, ` ) ( nurl_print __tl ) ( nurl_print `\n` )
+                    ( mem_hown_mark_dyn syms )
+                    = fval ( mem_emit_cloneif cg fty fval ( mem_hown_static syms cg __cc ) )
+                    ( nurl_sym_set_deep syms `__agg_take_own__` __tk )
+                } { = fval ( mem_emit_cloneif cg fty fval __tl ) }
                 = fld_lent `` } {}
         } {}
         // A literal nested in a returned one lends the same way (`^ @
@@ -23202,8 +23241,12 @@
         {}
         // …or a global cast back to a pointer: `@ ( Vec u32 ) { # s g_tbl }`
         // hands out a view of a table the program keeps for its lifetime.
-        ? & == fld_first_tt TT_HASH
+        // (A pointer field only, as above: `# E Closed` reads an enum
+        // variant's global, and took every `! T E` with such an Err path
+        // for a view — its Ok payload then had no owner.)
+        ? & & == fld_first_tt TT_HASH
         != 0 ( nurl_sym_len2 syms ( nurl_sym_get syms `__last_ident_name__` ) `__global` )
+        & > ( nurl_str_len fty ) 0 == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
         { ( nurl_sym_def syms `__fn_builds_view__` `1` ) }
         {}
         // Struct-literal field checks. PLAIN structs only — enum / option /
@@ -29485,6 +29528,7 @@
     ( nurl_sym_def syms `__fn_pending_keep_impl__` `` )
     ( nurl_sym_def syms `__agg_lends__` `` )
     ( nurl_sym_def syms `__agg_lends_part__` `` )
+    ( nurl_sym_def syms `__agg_take_own__` `` )
     ( nurl_sym_def syms `__ret_agg__` `` )
     ( nurl_sym_def syms `__fn_builds_view__` `` )
     // Invoke-only inference (docs/MEMORY.md §7.4): reset the value-read
