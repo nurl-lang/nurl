@@ -108,15 +108,17 @@ $ `filter.nu`
     b fixed
 }
 
-@ __grep_pat_free sink GrepPat p → v {
-    ? . p fixed { ( string_free . p lit ) } { ( regex_free . p rx ) ( string_free . p lit ) }
-}
-
 // Case folding is done by lowering both the pattern and the line — the
 // engine has no case-insensitive mode, and lowering the input is what
 // every grep without one does.
 @ _grep_lower s text → String {
     : String out ( string_new )
+    ( _grep_lower_into out text )
+    ^ out
+}
+
+// The same, appended to `out` — a per-line loop reuses one buffer.
+@ _grep_lower_into String out s text → v {
     : i n ( nurl_str_len text )
     : ~ i i 0
     ~ < i n {
@@ -124,7 +126,6 @@ $ `filter.nu`
         ( string_push_char out ? & >= c 65 <= c 90 + c 32 c )
         = i + i 1
     }
-    ^ out
 }
 
 // Does `line` contain a match of pattern `p`? `start`/`len` receive the
@@ -228,9 +229,7 @@ $ `filter.nu`
                     : ~ s probe ( string_data line )
                     ? != 0 & flags GREP_IGNORE {
                         ( string_clear lower )
-                        : String lo ( _grep_lower ( string_data line ) )
-                        ( string_push_bytes lower # *u ( string_data lo ) ( string_len lo ) )
-                        ( string_free lo )
+                        ( _grep_lower_into lower ( string_data line ) )
                         = probe ( string_data lower )
                     } {}
                     : ~ b hit F
@@ -280,9 +279,6 @@ $ `filter.nu`
                 ( string_push_char out 10 )
             } {}
             ? == 0 & flags GREP_QUIET { ( bx_write out ) } {}
-            ( string_free out )
-            ( string_free line )
-            ( string_free lower )
             ( bufreader_close br )
             ^ ? > hits 0 0 1
         }
@@ -305,10 +301,8 @@ $ `filter.nu`
                         ~ < k n {
                             : String sub ( path_join path ( bx_at names k ) )
                             ( __grep_walk pats ( string_data sub ) flags with_name maxcount total rc )
-                            ( string_free sub )
                             = k + k 1
                         }
-                        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                     }
                     F e2 → {
                         ? == 0 & flags GREP_SILENT { ( bx_err_at path ( bx_ioerr e2 ) ) } {}
@@ -382,10 +376,8 @@ $ `filter.nu`
                         F _ → {
                             ( bx_err_at ( string_data src ) `invalid regular expression` )
                             = compiled F
-                            ( string_free src )
                         }
                     }
-                    ( string_free ere )
                 }
                 = pi + pi 1
             }
@@ -415,10 +407,7 @@ $ `filter.nu`
                 }
                 = rc ? == walkrc 2 2 ? > total 0 0 1
             }
-            ( vec_free_with [GrepPat] pats \ GrepPat p → v { ( __grep_pat_free p ) } )
         }
-        ( bx_free_lines rawpats )
     }
-    ( bx_opts_free o )
     ^ rc
 }

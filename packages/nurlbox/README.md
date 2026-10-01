@@ -119,6 +119,9 @@ And on the freestanding side, so that all of the above works in a guest:
 
 ## Memory
 
-Leak-clean under AddressSanitizer with `detect_leaks=1` across every
-applet — the manual-handle contract (`String`, `Vec`) is honoured on
-every path, including the error paths.
+Nothing is released by hand: the compiler drops every `String`, `Vec`,
+compiled `Regex` and parsed record at the end of its scope, on every path,
+including the error paths. The shell's state is a handle its `sh` run owns,
+and the FFI scratch buffers (`waitpid` status, `pipe` fds, `execvp` argv)
+are owned `Vec`s. Leak-clean under AddressSanitizer with `detect_leaks=1`
+across the whole differential suite.

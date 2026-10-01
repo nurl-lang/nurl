@@ -50,14 +50,6 @@ $ `grep.nu`
 : i SED_S_PRINT 2
 : i SED_S_ICASE 4
 
-@ __sed_cmd_free sink SedCmd c → v {
-    ? . c has_re { ( regex_free . c re ) } {}
-    ? == . c a1kind SED_ADDR_RE { ( regex_free . c a1re ) } {}
-    ? == . c a2kind SED_ADDR_RE { ( regex_free . c a2re ) } {}
-    ( string_free . c arg1 )
-    ( string_free . c arg2 )
-}
-
 // ── Script parsing ────────────────────────────────────────────────
 
 : ~ i g_sed_pos 0
@@ -107,8 +99,6 @@ $ `grep.nu`
         T r → { = out r }
         F _ → { = g_sed_bad T }
     }
-    ( string_free ere )
-    ( string_free work )
     ^ out
 }
 
@@ -144,7 +134,6 @@ $ `grep.nu`
         } {}
         = re ( __sed_compile_re pat icase )
         = kind SED_ADDR_RE
-        ( string_free pat )
         ^
     } {}
 }
@@ -248,7 +237,6 @@ $ `grep.nu`
                 }
                 = re ( __sed_compile_re pat != 0 & sflags SED_S_ICASE )
                 = has_re T
-                ( string_free pat )
             } {
                 ? == cmd 121 {  // y
                     : i delim ( __sed_at src n )
@@ -303,7 +291,6 @@ $ `grep.nu`
         }
         = i + i 1
     }
-    ( vec_free [i] stack )
 }
 
 // ── Execution ─────────────────────────────────────────────────────
@@ -312,7 +299,6 @@ $ `grep.nu`
     ? icase {
         : String lo ( _grep_lower ( string_data line ) )
         : b h ( regex_test r ( string_data lo ) )
-        ( string_free lo )
         ^ h
     } {}
     ^ ( regex_test r ( string_data line ) )
@@ -397,7 +383,6 @@ $ `grep.nu`
                     }
                     : String rep ( regex_expand ( string_data space ) slots ( string_data . c arg1 ) )
                     ( string_push_bytes out # *u ( string_data rep ) ( string_len rep ) )
-                    ( string_free rep )
                     = changed T
                 } {
                     : ~ i k2 abs
@@ -425,9 +410,6 @@ $ `grep.nu`
         ( string_clear space )
         ( string_push_bytes space # *u ( string_data out ) ( string_len out ) )
     } {}
-    ( vec_free [i] slots )
-    ( string_free out )
-    ( string_free probe )
     ^ changed
 }
 
@@ -454,7 +436,6 @@ $ `grep.nu`
     }
     ( string_clear space )
     ( string_push_bytes space # *u ( string_data out ) ( string_len out ) )
-    ( string_free out )
 }
 
 // A file whose last line has no newline must not grow one — `sed` is a
@@ -579,7 +560,6 @@ $ `grep.nu`
                                         : String rest ( string_substr space + e 1 - pn + e 1 )
                                         ( string_clear space )
                                         ( string_push_bytes space # *u ( string_data rest ) ( string_len rest ) )
-                                        ( string_free rest )
                                         = restart T
                                         = next ncmds
                                     }
@@ -656,7 +636,6 @@ $ `grep.nu`
                                     ( string_push_bytes space # *u ( string_data hold ) ( string_len hold ) )
                                     ( string_clear hold )
                                     ( string_push_bytes hold # *u ( string_data tmp ) ( string_len tmp ) )
-                                    ( string_free tmp )
                                 } {}
                                 ? & sel == k 98 {
                                     ? == ( string_len . c arg1 ) 0 { = next ncmds } {
@@ -677,7 +656,6 @@ $ `grep.nu`
                                     ?? ( read_file ( string_data . c arg1 ) ) {
                                         T txt → {
                                             ( string_push_bytes append # *u ( string_data txt ) ( string_len txt ) )
-                                            ( string_free txt )
                                         }
                                         F _ → {}
                                     }
@@ -691,7 +669,6 @@ $ `grep.nu`
                                             ~ < q sn { ( vec_push [u] bytes # u ( string_get space q ) ) = q + q 1 }
                                             ( vec_push [u] bytes # u 10 )
                                             ?? ( file_write_chunk f bytes ) { T _ → {} F _ → {} }
-                                            ( vec_free [u] bytes )
                                             ( file_close f )
                                         }
                                         F _ → {}
@@ -719,11 +696,6 @@ $ `grep.nu`
                     } { = have_space F }
                 } {}
             }
-            ( string_free space )
-            ( string_free ahead )
-            ( string_free raw )
-            ( string_free hold )
-            ( string_free append )
             ( bufreader_close br )
             ^ 0
         }
@@ -770,7 +742,6 @@ $ `grep.nu`
             ( string_push_str script ( bx_at exprs k ) )
             = k + k 1
         }
-        ( bx_free_lines exprs )
         ? == rc 0 {
             : ( Vec SedCmd ) cmds ( vec_new [SedCmd] )
             ( __sed_parse ( string_data script ) cmds )
@@ -812,13 +783,8 @@ $ `grep.nu`
                         = i + i 1
                     }
                 }
-                ( string_free out )
-                ( vec_free [i] ranges )
             }
-            ( vec_free_with [SedCmd] cmds \ SedCmd c → v { ( __sed_cmd_free c ) } )
         } {}
-        ( string_free script )
     }
-    ( bx_opts_free o )
     ^ ? != g_sed_rc 0 g_sed_rc rc
 }

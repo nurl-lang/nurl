@@ -36,8 +36,6 @@ $ `bx.nu`
     b ok  // F when the entry could not be stat'ed at all
 }
 
-@ __ent_free sink BxEnt e → v { ( string_free . e name ) }
-
 @ __ent_of s dir s name b follow → BxEnt {
     : String full ? == ( nurl_str_len dir ) 0 ( string_from name ) ( path_join dir name )
     : ~ i mode 0
@@ -64,7 +62,6 @@ $ `bx.nu`
         }
         F _ → {}
     }
-    ( string_free full )
     // ONE struct literal, so exactly one name String is ever allocated.
     // Building a blank entry first and reassigning it leaked that first
     // String: auto-drop registers a struct field at the literal that
@@ -141,16 +138,13 @@ $ `bx.nu`
     : Time t ( time_local mtime )
     : String mon ( time_format t `%b %e ` )
     ( string_push_bytes out # *u ( string_data mon ) ( string_len mon ) )
-    ( string_free mon )
     ? | > mtime + now 3600 < mtime - now 15552000 {
         ( string_push_char out 32 )
         : String y ( time_format t `%Y` )
         ( string_push_bytes out # *u ( string_data y ) ( string_len y ) )
-        ( string_free y )
     } {
         : String hm ( time_format t `%H:%M` )
         ( string_push_bytes out # *u ( string_data hm ) ( string_len hm ) )
-        ( string_free hm )
     }
 }
 
@@ -212,22 +206,18 @@ $ `bx.nu`
     : FileStat st @ FileStat { . e mode . e size . e mtime 0 . e uid . e gid . e nlink . e ino 0 0 . e blocks 0 0 0 0 0 }
     : String modes ( stat_mode_string st )
     ( string_push_bytes out # *u ( string_data modes ) ( string_len modes ) )
-    ( string_free modes )
     ( string_push_char out 32 )
     ( __push_right out ( nurl_str_int . e nlink ) 4 )
     ( string_push_char out 32 )
     : String un ( __ls_owner . e uid != 0 & flags LS_NUMERIC F )
     ( __push_left out ( string_data un ) 8 )
-    ( string_free un )
     ( string_push_char out 32 )
     : String gn ( __ls_owner . e gid != 0 & flags LS_NUMERIC T )
     ( __push_left out ( string_data gn ) 8 )
-    ( string_free gn )
     ( string_push_char out 32 )
     ? != 0 & flags LS_HUMAN {
         : String h ( bx_human . e size )
         ( __push_right out ( string_data h ) 7 )
-        ( string_free h )
     } {
         ( __push_right out ( nurl_str_int . e size ) 9 )
     }
@@ -243,15 +233,12 @@ $ `bx.nu`
             T tgt → {
                 ( string_push_str out ` -> ` )
                 ( string_push_bytes out # *u ( string_data tgt ) ( string_len tgt ) )
-                ( string_free tgt )
             }
             F _ → {}
         }
-        ( string_free full )
     } {}
     ( string_push_char out 10 )
     ( bx_write out )
-    ( string_free out )
 }
 
 @ __ls_name_only BxEnt e i flags → v {
@@ -269,7 +256,6 @@ $ `bx.nu`
     ? != sfx 0 { ( string_push_char out sfx ) } {}
     ( string_push_char out 10 )
     ( bx_write out )
-    ( string_free out )
 }
 
 // Down-then-across columns, the layout `ls` uses on a terminal.
@@ -320,7 +306,6 @@ $ `bx.nu`
         = r + r 1
     }
     ( bx_write out )
-    ( string_free out )
 }
 
 @ __ls_emit ( Vec BxEnt ) ents s dir i flags i now → v {
@@ -342,7 +327,6 @@ $ `bx.nu`
         ? != 0 & flags LS_HUMAN {
             : String h ( bx_human * total 1024 )
             ( nurl_print ( string_data h ) )
-            ( string_free h )
         } { ( nurl_print ( nurl_str_int total ) ) }
         ( nurl_print `\n` )
     } {}
@@ -362,7 +346,6 @@ $ `bx.nu`
                 T c → {
                     : i w ( nurl_str_to_int ( string_data c ) )
                     ? > w 0 { = width w } {}
-                    ( string_free c )
                 }
                 F _ → {}
             }
@@ -414,7 +397,6 @@ $ `bx.nu`
                 } {}
                 = i + i 1
             }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
             ( __ls_sort ents flags )
             ? header {
                 ( nurl_print dir )
@@ -435,7 +417,6 @@ $ `bx.nu`
                                 ( nurl_print `\n` )
                                 : i one ( __ls_dir ( string_data sub ) flags now T F )
                                 ? != one 0 { = rc 1 } {}
-                                ( string_free sub )
                             } {}
                         }
                         F _ → {}
@@ -443,7 +424,6 @@ $ `bx.nu`
                     = k + k 1
                 }
             } {}
-            ( vec_free_with [BxEnt] ents \ BxEnt x → v { ( __ent_free x ) } )
             ^ rc
         }
     }
@@ -521,10 +501,7 @@ $ `bx.nu`
             ? != one 0 { = rc 1 } {}
             = d + d 1
         }
-        ( vec_free_with [BxEnt] loose \ BxEnt x → v { ( __ent_free x ) } )
-        ( vec_free_with [String] dirs \ String x → v { ( string_free x ) } )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -584,7 +561,6 @@ $ `bx.nu`
             }
         } {}
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -612,7 +588,6 @@ $ `bx.nu`
                                 ( string_push_bytes p # *u ( string_data parent ) ( string_len parent ) )
                                 = going T
                             } {}
-                            ( string_free parent )
                         } {}
                     }
                     F e → {
@@ -621,11 +596,9 @@ $ `bx.nu`
                     }
                 }
             }
-            ( string_free p )
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -738,10 +711,8 @@ $ `bx.nu`
                             : String sub ( path_join path ( bx_at names k ) )
                             : i one ( __chmod_one ( string_data sub ) spec recurse verbose )
                             ? != one 0 { = rc 1 } {}
-                            ( string_free sub )
                             = k + k 1
                         }
-                        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                     }
                     F _ → { = rc 1 }
                 }
@@ -769,7 +740,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -797,10 +767,8 @@ $ `bx.nu`
                             : String sub ( path_join path ( bx_at names k ) )
                             : i one ( __rm_one ( string_data sub ) recurse force verbose )
                             ? != one 0 { = rc 1 } {}
-                            ( string_free sub )
                             = k + k 1
                         }
-                        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                     }
                     F e2 → {
                         ( bx_err_at path ( bx_ioerr e2 ) )
@@ -862,7 +830,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -918,7 +885,6 @@ $ `bx.nu`
                                 = rc 1
                             }
                         }
-                        ( string_free tgt )
                         ^ rc
                     }
                     F e3 → {
@@ -957,11 +923,8 @@ $ `bx.nu`
                             : String d2 ( path_join dst ( bx_at names k ) )
                             : i one ( __cp_one ( string_data s2 ) ( string_data d2 ) flags )
                             ? != one 0 { = rc 1 } {}
-                            ( string_free s2 )
-                            ( string_free d2 )
                             = k + k 1
                         }
-                        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                     }
                     F e4 → {
                         ( bx_err_at src ( bx_ioerr e4 ) )
@@ -1000,7 +963,6 @@ $ `bx.nu`
     ? ! into_dir { ^ ( string_from dst ) } {}
     : String base ( path_basename src )
     : String full ( path_join dst ( string_data base ) )
-    ( string_free base )
     ^ full
 }
 
@@ -1043,13 +1005,11 @@ $ `bx.nu`
                     : String d ( __dest_for dst src into_dir )
                     : i one ( __cp_one src ( string_data d ) flags )
                     ? != one 0 { = rc 1 } {}
-                    ( string_free d )
                     = i + i 1
                 }
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1106,12 +1066,10 @@ $ `bx.nu`
                     : i one ( __mv_one src ( string_data d ) ( bx_has o `f` ) ( bx_has o `v` ) )
                     ? != one 0 { = rc 1 } {}
                 } {}
-                ( string_free d )
                 = i + i 1
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1154,12 +1112,10 @@ $ `bx.nu`
                         ? ( bx_has o `v` ) { ( __cp_verbose ( string_data d ) src ) } {}
                     }
                 }
-                ( string_free d )
                 = i + i 1
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1249,7 +1205,6 @@ $ `bx.nu`
             }
         } {}
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1273,20 +1228,17 @@ $ `bx.nu`
                     T c → {
                         ( nurl_print ( path_str c ) )
                         ( nurl_print ? ( bx_has o `n` ) `` `\n` )
-                        ( path_free c )
                     }
                     F _ → {
                         ? ( bx_has o `v` ) { ( bx_err_at p `No such file or directory` ) } {}
                         = rc 1
                     }
                 }
-                ( path_free pp )
             } {
                 ?? ( fs_readlink p ) {
                     T t → {
                         ( nurl_print ( string_data t ) )
                         ( nurl_print ? ( bx_has o `n` ) `` `\n` )
-                        ( string_free t )
                     }
                     F _ → {
                         ? ( bx_has o `v` ) { ( bx_err_at p `Invalid argument` ) } {}
@@ -1297,7 +1249,6 @@ $ `bx.nu`
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1317,18 +1268,15 @@ $ `bx.nu`
                 T c → {
                     ( nurl_print ( path_str c ) )
                     ( nurl_print `\n` )
-                    ( path_free c )
                 }
                 F _ → {
                     ( bx_err_at ( bx_operand o i ) `No such file or directory` )
                     = rc 1
                 }
             }
-            ( path_free pp )
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1379,7 +1327,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1417,7 +1364,6 @@ $ `bx.nu`
                     }
                     F _ → {}
                 }
-                ( string_free cand )
                 = attempt + attempt 1
             }
             ? ! made {
@@ -1432,7 +1378,6 @@ $ `bx.nu`
                     } {}
                     ( nurl_print ( string_data p ) )
                     ( nurl_print `\n` )
-                    ( string_free p )
                 }
                 F e → {
                     ? ! ( bx_has o `q` ) { ( bx_err ( bx_ioerr e ) ) } {}
@@ -1440,9 +1385,6 @@ $ `bx.nu`
                 }
             }
         }
-        ( string_free prefix )
-        ( string_free dir )
     }
-    ( bx_opts_free o )
     ^ rc
 }

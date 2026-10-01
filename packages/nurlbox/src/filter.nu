@@ -29,15 +29,10 @@ $ `bx.nu`
                     ( vec_push [String] out ( string_clone line ) )
                 } { = more F }
             }
-            ( string_free line )
             ( bufreader_close br )
             ^ T
         }
     }
-}
-
-@ bx_free_lines ( Vec String ) v → v {
-    ( vec_free_with [String] v \ String x → v { ( string_free x ) } )
 }
 
 // Every operand, or `-` when there are none.
@@ -80,14 +75,10 @@ $ `bx.nu`
                     = j - j 1
                 }
                 ( bx_write out )
-                ( string_free out )
             } { = rc 1 }
-            ( bx_free_lines lines )
             = k + k 1
         }
-        ( bx_free_lines ins )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -120,16 +111,12 @@ $ `bx.nu`
                         } { = more F }
                     }
                     ( bx_write out )
-                    ( string_free out )
-                    ( string_free line )
                     ( bufreader_close br )
                 }
             }
             = k + k 1
         }
-        ( bx_free_lines ins )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -185,16 +172,12 @@ $ `bx.nu`
                         } { = more F }
                     }
                     ( bx_write out )
-                    ( string_free out )
-                    ( string_free line )
                     ( bufreader_close br )
                 }
             }
             = k + k 1
         }
-        ( bx_free_lines ins )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -259,11 +242,6 @@ $ `bx.nu`
         = i + i 1
     }
     ^ F
-}
-
-@ __cut_free sink CutList c → v {
-    ( vec_free [i] . c lo )
-    ( vec_free [i] . c hi )
 }
 
 @ ap_cut ( Vec String ) argv → i {
@@ -352,19 +330,14 @@ $ `bx.nu`
                                 } { = more F }
                             }
                             ( bx_write out )
-                            ( string_free out )
-                            ( string_free line )
                             ( bufreader_close br )
                         }
                     }
                     = k + k 1
                 }
-                ( bx_free_lines ins )
             }
-            ( __cut_free list )
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -455,11 +428,12 @@ $ `bx.nu`
             ? > nops 1 { ( __tr_expand ( bx_operand o 1 ) set2 ) } {}
             // A 256-entry table beats a search per byte, and makes -c a
             // single inversion pass instead of a special case everywhere.
-            : s inset ( nurl_zalloc 256 )
+            : ( Vec u ) inset_tab ( vec_zeroed [u] 256 )
+            : *u inset ( vec_data [u] inset_tab )
             : ~ i j 0
             ~ < j ( vec_len [u] set1 ) {
                 ?? ( vec_get [u] set1 j ) {
-                    T b → { = . # *u inset # i b # u 1 }
+                    T b → { = . inset # i b # u 1 }
                     F _ → {}
                 }
                 = j + j 1
@@ -467,24 +441,25 @@ $ `bx.nu`
             ? comp {
                 : ~ i b 0
                 ~ < b 256 {
-                    = . # *u inset b # u ? == 0 # i . # *u inset b 1 0
+                    = . inset b # u ? == 0 # i . inset b 1 0
                     = b + b 1
                 }
             } {}
             // Translation target per byte: the matching member of SET2,
             // with the last one repeated once SET2 runs out.
-            : s xlat ( nurl_zalloc 256 )
+            : ( Vec u ) xlat_tab ( vec_zeroed [u] 256 )
+            : *u xlat ( vec_data [u] xlat_tab )
             : ~ i b2 0
-            ~ < b2 256 { = . # *u xlat b2 # u b2 = b2 + b2 1 }
+            ~ < b2 256 { = . xlat b2 # u b2 = b2 + b2 1 }
             ? & ! del > ( vec_len [u] set2 ) 0 {
                 : i n2 ( vec_len [u] set2 )
                 : ~ i idx 0
                 : ~ i b 0
                 ~ < b 256 {
-                    ? != 0 # i . # *u inset b {
+                    ? != 0 # i . inset b {
                         : i pick ? < idx n2 idx - n2 1
                         ?? ( vec_get [u] set2 pick ) {
-                            T t → { = . # *u xlat b t }
+                            T t → { = . xlat b t }
                             F _ → {}
                         }
                         = idx + idx 1
@@ -503,14 +478,14 @@ $ `bx.nu`
                     : ~ i q 0
                     ~ < q cn {
                         : i c & 255 # i . p q
-                        : b inset_hit != 0 # i . # *u inset c
+                        : b inset_hit != 0 # i . inset c
                         ? & del inset_hit {} {
-                            : i outc ? del c & 255 # i . # *u xlat c
+                            : i outc ? del c & 255 # i . xlat c
                             : ~ b emit T
                             ? squeeze {
                                 // -s collapses a run only when the byte
                                 // was in the set that produced it.
-                                : b member ? del != 0 # i . # *u inset outc inset_hit
+                                : b member ? del != 0 # i . inset outc inset_hit
                                 ? & member == outc last { = emit F } {}
                             } {}
                             ? emit { ( string_push_char out outc ) } {}
@@ -520,17 +495,10 @@ $ `bx.nu`
                     }
                     ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
                 }
-                ( vec_free [u] chunk )
             }
             ( bx_write out )
-            ( string_free out )
-            ( nurl_free inset )
-            ( nurl_free xlat )
-            ( vec_free [u] set1 )
-            ( vec_free [u] set2 )
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -596,7 +564,6 @@ $ `bx.nu`
         } { = i to }
     }
     : f v ( nurl_str_to_float ( string_data piece ) )
-    ( string_free piece )
     ^ v
 }
 
@@ -670,7 +637,6 @@ $ `bx.nu`
             ? ( bx_read_lines ( bx_at ins k ) lines ) {} { = rc 1 }
             = k + k 1
         }
-        ( bx_free_lines ins )
         ? ( bx_has o `c` ) {
             : i n ( vec_len [String] lines )
             : ~ i j 1
@@ -718,11 +684,8 @@ $ `bx.nu`
                 = j + j 1
             }
             ( bx_write out )
-            ( string_free out )
         }
-        ( bx_free_lines lines )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -778,7 +741,6 @@ $ `bx.nu`
                             : String cut ( string_substr key 0 check )
                             ( string_clear key )
                             ( string_push_bytes key # *u ( string_data cut ) ( string_len cut ) )
-                            ( string_free cut )
                         } {}
                         : b same & have ( string_eq key prevkey )
                         ? same { = run + run 1 } {
@@ -794,16 +756,10 @@ $ `bx.nu`
                 }
                 ? have { ( __uniq_emit out prev run count want_dup want_uniq ) } {}
                 ( bx_write out )
-                ( string_free out )
-                ( string_free line )
-                ( string_free key )
-                ( string_free prev )
-                ( string_free prevkey )
                 ( bufreader_close br )
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -859,7 +815,6 @@ $ `bx.nu`
                     = k + k 1
                 }
             }
-            ( vec_free [u] chunk )
         }
         : i no ( vec_len [File] outs )
         : ~ i k 0
@@ -870,8 +825,6 @@ $ `bx.nu`
             }
             = k + k 1
         }
-        ( vec_free [File] outs )
     }
-    ( bx_opts_free o )
     ^ rc
 }

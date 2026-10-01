@@ -44,7 +44,6 @@ $ `bx.nu`
                         ( nurl_print `\n` )
                         = used T
                     } {}
-                    ( string_free p )
                 }
                 F _ → {}
             }
@@ -54,7 +53,6 @@ $ `bx.nu`
                 T c → {
                     ( nurl_print ( string_data c ) )
                     ( nurl_print `\n` )
-                    ( string_free c )
                 }
                 F e → {
                     ( bx_err ( bx_ioerr e ) )
@@ -63,7 +61,6 @@ $ `bx.nu`
             }
         } {}
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -78,7 +75,6 @@ $ `bx.nu`
         : i bl ( string_len base )
         ? & > bl sl ( string_ends_with base suffix ) {
             : String cut ( string_substr base 0 - bl sl )
-            ( string_free base )
             ^ cut
         } {}
     } {}
@@ -102,18 +98,15 @@ $ `bx.nu`
                     : String b ( __basename_of ( bx_operand o i ) ( bx_val o `s` ) )
                     ( nurl_print_bytes ( string_data b ) ( string_len b ) )
                     ( nurl_print ? == term 0 `` `\n` )
-                    ( string_free b )
                     = i + i 1
                 }
             } {
                 : String b ( __basename_of ( bx_operand o 0 ) ? > nops 1 ( bx_operand o 1 ) `` )
                 ( nurl_print_bytes ( string_data b ) ( string_len b ) )
                 ( nurl_print ? == term 0 `` `\n` )
-                ( string_free b )
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -131,12 +124,10 @@ $ `bx.nu`
                 : String d ( path_dirname ( bx_operand o i ) )
                 ( nurl_print ( string_data d ) )
                 ( nurl_print ? ( bx_has o `z` ) `` `\n` )
-                ( string_free d )
                 = i + i 1
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -151,7 +142,6 @@ $ `bx.nu`
         ( nurl_print sep )
         = i + i 1
     }
-    ( vec_free_with [String] all \ String x → v { ( string_free x ) } )
 }
 
 // Hand the process over to `cmd`. On success this never returns — the
@@ -159,7 +149,8 @@ $ `bx.nu`
 @ __exec_argv ( Vec String ) args i from → i {
     : i n - ( vec_len [String] args ) from
     ? <= n 0 { ^ 127 } {}
-    : s argvbuf ( nurl_zalloc * 8 + n 1 )
+    : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
+    : s argvbuf # s ( vec_data [u] argvbuf_v )
     : ~ i k 0
     ~ < k n {
         ( nurl_poke argvbuf k # i ( bx_at args + from k ) )
@@ -168,7 +159,6 @@ $ `bx.nu`
     : s cmd ( bx_at args from )
     : i32 _rc ( execvp cmd # *u argvbuf )
     : i err ( nurl_errno_get )
-    ( nurl_free argvbuf )
     ( bx_err_at cmd ? == err ( posix_const `ENOENT` ) `No such file or directory` `Permission denied` )
     ^ ? == err ( posix_const `ENOENT` ) 127 126
 }
@@ -190,7 +180,6 @@ $ `bx.nu`
                 } {}
                 = i + i 1
             }
-            ( vec_free_with [String] all \ String x → v { ( string_free x ) } )
         } {}
         ? ( bx_has o `u` ) {
             ?? ( env_unset ( bx_val o `u` ) ) { T _ → {} F _ → {} }
@@ -216,7 +205,6 @@ $ `bx.nu`
             ( __env_dump ? ( bx_has o `0` ) `` `\n` )
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -235,7 +223,6 @@ $ `bx.nu`
                     T v → {
                         ( nurl_print ( string_data v ) )
                         ( nurl_print sep )
-                        ( string_free v )
                     }
                     F _ → { = rc 1 }
                 }
@@ -243,7 +230,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -328,7 +314,6 @@ $ `bx.nu`
         ( string_push_char out ( string_get tmp - k 1 ) )
         = k - k 1
     }
-    ( string_free tmp )
 }
 
 // Unsigned division of a value whose top bit may be set, done in i64.
@@ -470,11 +455,9 @@ $ `bx.nu`
                                     ( string_push_bytes padded # *u + # i ( string_data body ) st - bn st )
                                     ( string_clear body )
                                     ( string_push_bytes body # *u ( string_data padded ) ( string_len padded ) )
-                                    ( string_free padded )
                                 } {}
                             } {}
                             ( __pf_pad out width left body )
-                            ( string_free body )
                             ? consumed { = ai + ai 1 } {}
                             = i + k 1
                         }
@@ -489,7 +472,6 @@ $ `bx.nu`
         ? & < ai n > ( __pf_conversions fmt ) 0 { = again T } {}
     }
     ( bx_write out )
-    ( string_free out )
     ^ 0
 }
 
@@ -575,31 +557,26 @@ $ `bx.nu`
         ? want_s {
             : String v ( __uname_or ( sys_uname_field SYS_SYSNAME ) `unknown` )
             ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
-            ( string_free v )
         } {}
         ? | all ( bx_has o `n` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_NODENAME ) `unknown` )
             ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
-            ( string_free v )
         } {}
         ? | all ( bx_has o `r` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_RELEASE ) `unknown` )
             ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
-            ( string_free v )
         } {}
         ? | all ( bx_has o `v` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_VERSION ) `unknown` )
             ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
-            ( string_free v )
         } {}
         ? | all ( bx_has o `m` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
             : String v ( __uname_or ( sys_uname_field SYS_MACHINE ) `unknown` )
             ( string_push_bytes out # *u ( string_data v ) ( string_len v ) )
-            ( string_free v )
         } {}
         ? ( bx_has o `p` ) {
             ? > ( string_len out ) 0 { ( string_push_char out 32 ) } {}
@@ -615,9 +592,7 @@ $ `bx.nu`
         } {}
         ( string_push_char out 10 )
         ( bx_write out )
-        ( string_free out )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -625,7 +600,6 @@ $ `bx.nu`
     : String v ( __uname_or ( sys_uname_field SYS_MACHINE ) `unknown` )
     ( nurl_print ( string_data v ) )
     ( nurl_print `\n` )
-    ( string_free v )
     ^ 0
 }
 
@@ -640,11 +614,9 @@ $ `bx.nu`
                 ? ( bx_has o `s` ) {
                     : String sh ( string_substr h 0 dot )
                     ( nurl_print ( string_data sh ) )
-                    ( string_free sh )
                 } {
                     : String dm ( string_substr h + dot 1 - ( string_len h ) + dot 1 )
                     ( nurl_print ( string_data dm ) )
-                    ( string_free dm )
                 }
             } {
                 ? ( bx_has o `s` ) { ( nurl_print ( string_data h ) ) } {}
@@ -653,9 +625,7 @@ $ `bx.nu`
             ( nurl_print ( string_data h ) )
         }
         ( nurl_print `\n` )
-        ( string_free h )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -679,7 +649,6 @@ $ `bx.nu`
     : String n ( __name_of_uid # i ( geteuid ) )
     ( nurl_print ( string_data n ) )
     ( nurl_print `\n` )
-    ( string_free n )
     ^ 0
 }
 
@@ -688,7 +657,6 @@ $ `bx.nu`
         T v → {
             ( nurl_print ( string_data v ) )
             ( nurl_print `\n` )
-            ( string_free v )
             ^ 0
         }
         F _ → {}
@@ -701,7 +669,8 @@ $ `bx.nu`
     : ( Vec i ) out ( vec_new [i] )
     : i32 n ( getgroups # i32 0 # *u 0 )
     ? <= # i n 0 { ^ out } {}
-    : s buf ( nurl_zalloc * 4 + # i n 1 )
+    : ( Vec u ) buf_v ( vec_zeroed [u] * 4 + # i n 1 )
+    : s buf # s ( vec_data [u] buf_v )
     : i32 got ( getgroups n # *u buf )
     : ~ i k 0
     ~ < k # i got {
@@ -712,7 +681,6 @@ $ `bx.nu`
         ( vec_push [i] out g )
         = k + k 1
     }
-    ( nurl_free buf )
     ^ out
 }
 
@@ -723,7 +691,6 @@ $ `bx.nu`
     : i egid # i ( getegid )
     : String primary ( __name_of_gid egid )
     ( nurl_print ( string_data primary ) )
-    ( string_free primary )
     : ( Vec i ) gs ( __group_ids )
     : i n ( vec_len [i] gs )
     : ~ i k 0
@@ -734,7 +701,6 @@ $ `bx.nu`
                     ( nurl_print ` ` )
                     : String nm ( __name_of_gid g )
                     ( nurl_print ( string_data nm ) )
-                    ( string_free nm )
                 } {}
             }
             F _ → {}
@@ -742,7 +708,6 @@ $ `bx.nu`
         = k + k 1
     }
     ( nurl_print `\n` )
-    ( vec_free [i] gs )
     ^ 0
 }
 
@@ -756,7 +721,6 @@ $ `bx.nu`
         ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
         ( string_push_char out 41 )
     } {}
-    ( string_free nm )
 }
 
 @ ap_id ( Vec String ) argv → i {
@@ -772,14 +736,12 @@ $ `bx.nu`
             ? nameform {
                 : String nm ( __name_of_uid uid )
                 ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
-                ( string_free nm )
             } { ( string_push_int out uid ) }
         } {
             ? ( bx_has o `g` ) {
                 ? nameform {
                     : String nm ( __name_of_gid gid )
                     ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
-                    ( string_free nm )
                 } { ( string_push_int out gid ) }
             } {
                 ? ( bx_has o `G` ) {
@@ -793,14 +755,12 @@ $ `bx.nu`
                                 ? nameform {
                                     : String nm ( __name_of_gid g )
                                     ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
-                                    ( string_free nm )
                                 } { ( string_push_int out g ) }
                             }
                             F _ → {}
                         }
                         = k + k 1
                     }
-                    ( vec_free [i] gs )
                 } {
                     : String un ( __name_of_uid uid )
                     ( string_push_str out `uid=` )
@@ -810,7 +770,6 @@ $ `bx.nu`
                         ( string_push_bytes out # *u ( string_data un ) ( string_len un ) )
                         ( string_push_char out 41 )
                     } {}
-                    ( string_free un )
                     ( string_push_char out 32 )
                     ( __id_pair out `gid=` gid )
                     : ( Vec i ) gs ( __group_ids )
@@ -829,13 +788,10 @@ $ `bx.nu`
                             = k + k 1
                         }
                     } {}
-                    ( vec_free [i] gs )
                 } } }
         ( string_push_char out 10 )
         ( bx_write out )
-        ( string_free out )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -884,7 +840,6 @@ $ `bx.nu`
                             ( nurl_print `\n` )
                             = found T
                         } {}
-                        ( string_free full )
                     } {}
                     = d + d 1
                 }
@@ -892,10 +847,7 @@ $ `bx.nu`
             ? ! found { = rc 1 } {}
             = i + i 1
         }
-        ( vec_free_with [String] dirs \ String x → v { ( string_free x ) } )
-        ( string_free path )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -917,7 +869,6 @@ $ `bx.nu`
                     ?? ( tz_name epoch ) {
                         T z → {
                             ( string_push_bytes out # *u ( string_data z ) ( string_len z ) )
-                            ( string_free z )
                         }
                         F _ → { ( string_push_str out `UTC` ) }
                     }
@@ -999,12 +950,8 @@ $ `bx.nu`
             : String txt ( time_format t ( string_data pre ) )
             ( bx_write txt )
             ( nurl_print `\n` )
-            ( string_free txt )
-            ( string_free pre )
-            ( string_free fmt )
         } {}
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -1038,7 +985,6 @@ $ `bx.nu`
     ( string_push_char out 27 )
     ( string_push_str out `[3J` )
     ( bx_write out )
-    ( string_free out )
     ( flush )
     ^ 0
 }

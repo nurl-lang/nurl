@@ -42,7 +42,6 @@ $ `sh.nu`
     : String base ( path_basename a0 )
     ? ( string_ends_with base `.exe` ) {
         : String cut ( string_substr base 0 - ( string_len base ) 4 )
-        ( string_free base )
         ^ cut
     } {}
     ^ base
@@ -176,7 +175,6 @@ $ `sh.nu`
         = i + i 1
     }
     ? > col 0 { ( nurl_print `\n` ) } {}
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
 }
 
 @ main → i {
@@ -209,7 +207,6 @@ $ `sh.nu`
                     // guessing at the caller's $PATH.
                     : String me2 ( path_dirname ( bx_at argv 0 ) )
                     = rc ( __install ( string_data me2 ) symlink )
-                    ( string_free me2 )
                 } { = rc ( __install dir symlink ) }
             } {
                 ? | ( bx_streq sub `--help` ) ( bx_streq sub `-h` ) {
@@ -231,7 +228,6 @@ $ `sh.nu`
                             = i + i 1
                         }
                         = rc ( bx_run_applet sub sub_argv )
-                        ( vec_free_with [String] sub_argv \ String x → v { ( string_free x ) } )
                     }
                 }
             }
@@ -239,8 +235,6 @@ $ `sh.nu`
     } {
         = rc ( bx_run_applet ( string_data me ) argv )
     }
-    ( string_free me )
-    ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }
 
@@ -262,12 +256,9 @@ $ `sh.nu`
     ?? ( path_canonical me ) {
         T c → {
             ( string_push_str self ( path_str c ) )
-            ( path_free c )
         }
         F _ → { ( string_push_str self ( bx_at argv0 0 ) ) }
     }
-    ( path_free me )
-    ( vec_free_with [String] argv0 \ String x → v { ( string_free x ) } )
     : ( Vec String ) names ( _applet_names )
     : i n ( vec_len [String] names )
     : ~ i rc 0
@@ -303,7 +294,6 @@ $ `sh.nu`
             }
             ? ok { = made + made 1 } { = rc 1 }
         }
-        ( string_free target )
         = i + i 1
     }
     ( nurl_print `nurlbox: ` )
@@ -311,7 +301,5 @@ $ `sh.nu`
     ( nurl_print ` applets installed into ` )
     ( nurl_print dir )
     ( nurl_print `\n` )
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-    ( string_free self )
     ^ rc
 }
