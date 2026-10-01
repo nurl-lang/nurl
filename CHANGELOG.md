@@ -90,6 +90,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was lent. An auto-dropped enum parameter's registration no longer reads
   as ownership unless the parameter is a `sink`. Both had been hidden by
   the view rule above. `compiler/tests/lend_through_enum_param.nu`.
+- **A NURL function named like an FFI symbol must have its signature.** It
+  defines that symbol for the whole program (how the unikernel supplies
+  `nurl_tcp_*`), so a program's own `@ round i x i q → i` beside
+  std/float.nu's `& `m` @ round f x → f` replaced libm's `round` for
+  `float_round` too, and the first error was an arity complaint inside
+  std/float.nu. Now the definition (or the declaration, whichever comes
+  second) is reported with both signatures.
+  `compiler/tests/diag_ffi_defined_other_sig.nu`.
 
 ### Changed
 

@@ -29373,6 +29373,7 @@
     // / `nurl_sym_pop` scope, so a `:` inside a closure body checks
     // against the closure's params — not the enclosing function's.
     ( nurl_sym_def syms `__fn_param_names__` `` )
+    ( nurl_sym_def syms `__fn_param_lltys__` `` )
     ( nurl_sym_def syms `__drop_glue_moved__` `` )
     // Guard against EOF too: without this, a malformed header that
     // never produces TT_ARROW (e.g. ASCII `->` instead of `→`) hangs
@@ -29436,6 +29437,8 @@
     ( nurl_sym_def syms ( nurl_str_cat fname `__opt_nurl_t` ) opt_nurl_t )
     : s lname ( llvm_source_fn fname )
     ( nurl_sym_def g_fn_link_sources fname `1` )
+    ( __check_ffi_definition lex syms fname
+    ( nurl_str_cat4 ( nurl_llty ret_ty ) `(` ( nurl_sym_get syms `__fn_param_lltys__` ) `)` ) )
     // Capture the whole function definition into the output buffer so its
     // allocas can be hoisted into the entry block before emission (see
     // emit_hoisted). Closures created mid-body buffer separately (nested
@@ -30258,6 +30261,10 @@
         : s entry ? == pconv 1
         ( nurl_str_cat4 ( nurl_llty lt ) `* %` pname `` )
         ( nurl_str_cat3 ( nurl_llty lt ) ` %` pname )
+        // …and the types alone, the shape an FFI declaration records.
+        : s tentry ? == pconv 1 ( nurl_str_cat ( nurl_llty lt ) `*` ) ( nurl_llty lt )
+        ( nurl_sym_def syms `__fn_param_lltys__` ? == pct 0 tentry
+        ( nurl_str_cat3 ( nurl_sym_get syms `__fn_param_lltys__` ) `, ` tentry ) )
         ? == pct 0
         ( nurl_set_last_type entry )
         ( nurl_set_last_type ( nurl_str_cat3 cur_params `, ` entry ) )
@@ -31002,6 +31009,33 @@
     } {}
 }
 
+// A NURL `@ f` sharing a name with an FFI symbol DEFINES that symbol for
+// the whole program (it is emitted unmangled: how the unikernel supplies
+// `nurl_tcp_*` over its own stack). Every call to the C function — the
+// stdlib's too — then reaches it, so its ABI must be the declared one: a
+// program's own `@ round i x i q → i` beside std/float.nu's `& `m` @ round
+// f x → f` turned float_round into a call with the wrong registers.
+// Called from both sides, whichever is compiled second.
+// Parameters in a scanned FFI declaration's `;`-joined type list.
+@ __ffi_param_count s pt → i {
+    ? == 0 ( nurl_str_len pt ) { ^ 0 } {}
+    : ~ i n 1
+    : ~ i k 0
+    ~ < k ( nurl_str_len pt ) { ? == ( nurl_str_get pt k ) 59 { = n + n 1 } {} = k + k 1 }
+    ^ n
+}
+
+@ __check_ffi_definition i lex i syms s fname s nsig → v {
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `llsig##` fname ) nsig )
+    : s fsig ( nurl_sym_get g_pending_impl ( nurl_str_cat `ffisig##` fname ) )
+    ? | == 0 ( nurl_str_len fsig ) ( seq fsig nsig ) { ^ v } {}
+    ( die lex ( nurl_str_cat4
+    ( nurl_str_cat3 `'@ ` fname `' is also the C symbol declared by '& … @ ` )
+    ( nurl_str_cat3 fname `' at ` ( nurl_sym_get g_pending_impl ( nurl_str_cat `ffipos##` fname ) ) )
+    ( nurl_str_cat4 `, with a different signature: the declaration says '` fsig `', this definition is '` nsig )
+    `'. A NURL function with an FFI symbol's name defines that symbol for the whole program, so every call to the C function — the standard library's included — would reach this one with the wrong ABI. Rename the function.` ) )
+}
+
 @ gen_ffi_decl i lex i syms → v {
     // Grammar v2.0+: `pub` on FFI decls is accepted at parse time
     // (forward-compat) but not enforced — FFI symbols are linker-
@@ -31163,6 +31197,18 @@
         `'. One linker symbol has ONE ABI — the first declaration is the one the module declares, so a call written against this one would be lowered against a signature the program never declared (and clang, not nurlc, would report it). Make the declarations identical, or drop this one and import the file that has it.` ) ) }
     {}
     ( nurl_sym_def syms sigkey newsig )
+    : s ffisig ( nurl_str_cat4 ( nurl_llty ret_ty ) `(` params_str `)` )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `ffisig##` fname ) ffisig )
+    ( nurl_sym_def g_pending_impl ( nurl_str_cat `ffipos##` fname )
+    ( nurl_str_cat3 ( nurl_lex_filename lex ) `:` ( nurl_str_int __ffi_line ) ) )
+    : s nsig ( nurl_sym_get g_pending_impl ( nurl_str_cat `llsig##` fname ) )
+    ? & != 0 ( nurl_str_len nsig ) ! ( seq nsig ffisig ) {
+        ( die_pos lex __ffi_line __ffi_col ( nurl_str_cat4
+        ( nurl_str_cat3 `FFI symbol '` fname `' is defined by the NURL function '@ ` )
+        ( nurl_str_cat3 fname `' at ` ( nurl_sym_get g_fn_pos_syms fname ) )
+        ( nurl_str_cat4 ` with a different signature: this declaration says '` ffisig `', the definition is '` nsig )
+        `'. A NURL function with an FFI symbol's name defines that symbol for the whole program, so every call to the C function — the standard library's included — would reach it with the wrong ABI. Rename the NURL function.` ) )
+    } {}
     ? | | is_prelude_cfn already defined_in_nurl
     {}
     { ( nurl_sym_def syms emitkey `1` )
@@ -37270,7 +37316,13 @@
                                     // a call site, so mark it ambiguous (`?`) and
                                     // let gen_call skip the check rather than
                                     // blame an innocent call.
-                                    ? & != 0 ( nurl_str_len ar_prev ) ! ( seq ar_prev ar_new )
+                                    // …or an FFI declaration of the same name with
+                                    // another count (the definition is reported
+                                    // where it is compiled, __check_ffi_definition).
+                                    : s ffi_pt ( nurl_sym_get2 syms fname `__ffi_params` )
+                                    : b ffi_differs & != 0 ( nurl_sym_len2 syms fname `__ffi_scanned` )
+                                    != ( __ffi_param_count ffi_pt ) pcount
+                                    ? | & != 0 ( nurl_str_len ar_prev ) ! ( seq ar_prev ar_new ) ffi_differs
                                     { ( nurl_sym_def syms ar_key `?` ) }
                                     { ( nurl_sym_def syms ar_key ar_new ) } }
                                 {}
@@ -37371,6 +37423,13 @@
                                 : s ret_ty ( parse_type lex )
                                 ( nurl_sym_def syms fname ret_ty )
                                 ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
+                                ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_scanned` ) `1` )
+                                // A NURL definition of this name scanned first
+                                // with another parameter count: neither count
+                                // holds at a call site (as for two definitions).
+                                : s __far ( nurl_sym_get2 syms fname `__arity` )
+                                ? & != 0 ( nurl_str_len __far ) ! ( seq __far ( nurl_str_int pct ) )
+                                { ( nurl_sym_def syms ( nurl_str_cat fname `__arity` ) `?` ) } {}
                             }
                             {}
                         }
