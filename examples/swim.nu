@@ -22,7 +22,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/std/swim.nu`
 
 @ print_view * SwimNode n i port → v {
-    : *MemberTable t ( swim_table n )
+    : MemberTable t ( swim_table n )
     : ( Vec Member ) ms ( mtable_snapshot t )
     : String line ( string_from `[:` )
     ( string_push_int line port )

@@ -17,14 +17,14 @@ $ `stdlib/std/swim.nu`
     ( nurl_print ? == st 0 `alive\n` ? == st 1 `suspect\n` ? == st 2 `dead\n` `?\n` )
 }
 
-@ apply_m * MemberTable t s host i port i inc MemberState state s label → v {
+@ apply_m MemberTable t s host i port i inc MemberState state s label → v {
     : Member up ( member_new host port inc state )
     ( pb label ( mtable_apply t up ) )
     ( member_free up )
 }
 
 @ main → i {
-    : *MemberTable t ( mtable_new `self` 7000 0 )
+    : MemberTable t ( mtable_new `self` 7000 0 )
 
     // ── add A (alive) ────────────────────────────────────────────
     ( apply_m t `A` 8001 0 @ MemberState { MAlive } `add A alive: ` )
