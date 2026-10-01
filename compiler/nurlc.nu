@@ -18562,7 +18562,10 @@
 // (borrowck_fn_end → g_deferred_bck) so every summary is final.
 @ bck_stash_pending_call s name i line s callee i argidx s cause b retains → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
-        ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` name ( nurl_str_int line ) ) cause )
+        // A definite consume on the same line names the cause: a later
+        // read there (`( keep a ) … ( vec_len a )`) must not take it over.
+        : s mck ( nurl_str_cat3 `mc_` name ( nurl_str_int line ) )
+        ? == 0 ( nurl_sym_len g_bck mck ) { ( nurl_sym_set g_bck mck cause ) } {}
         : s cur ( nurl_sym_get g_bck `ppends` )
         : s add ( nurl_str_cat3
         ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )

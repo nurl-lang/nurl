@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field counted as "the binding it casts" (the last name parsed), and the
   inner literal's fields counted as the outer one's (packages/vindex).
   `compiler/tests/nested_literal_cast_field.nu`.
+- **The use-after-move error names the call that consumed the binding** even
+  when a later call on the same line reads it (`: i n ( give a ) ^ + n (
+  vec_len [i] a )` said "consumed by vec_len").
+  `compiler/tests/borrow_moved_cause_same_line.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
