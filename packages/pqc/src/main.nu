@@ -119,13 +119,12 @@ $ `stdlib/ext/env.nu`
 // ── keygen ─────────────────────────────────────────────────────────
 
 @ __cmd_keygen i level s name → i {
-    : *MlkemKeys ks ( mlkem_keygen level )
+    : MlkemKeys ks ( mlkem_keygen level )
     : String ekp ( string_from name ) ( string_push_str ekp `.ek` )
     : String dkp ( string_from name ) ( string_push_str dkp `.dk` )
     : b a ( __write_bytes ( string_data ekp ) ( mlkem_ek ks ) `encapsulation key ->` )
     : b b2 ( __write_bytes ( string_data dkp ) ( mlkem_dk ks ) `decapsulation key ->` )
     ( string_free dkp ) ( string_free ekp )
-    ( mlkem_keys_free ks )
     ^ ? & a b2 0 1
 }
 
@@ -159,12 +158,11 @@ $ `stdlib/ext/env.nu`
                 ( vec_free [u] ek )
                 ^ 1
             } {}
-            : *MlkemEncap en ( mlkem_encaps level ek )
+            : MlkemEncap en ( mlkem_encaps level ek )
             : String hd ( __line_new `ML-KEM-` )
             ( __line_int hd level ) ( __line_end hd )
             : b ok ( __write_bytes outpath ( mlkem_ct en ) `ciphertext ->` )
             ( __print_hex `shared secret ` ( mlkem_ss en ) )
-            ( mlkem_encap_free en )
             ( vec_free [u] ek )
             ^ ? ok 0 1
         }
@@ -228,13 +226,12 @@ $ `stdlib/ext/env.nu`
 }
 
 @ __cmd_sign_keygen i level s name → i {
-    : *MldsaKeys ks ( mldsa_keygen level )
+    : MldsaKeys ks ( mldsa_keygen level )
     : String pp ( string_from name ) ( string_push_str pp `.pub` )
     : String kp2 ( string_from name ) ( string_push_str kp2 `.key` )
     : b a ( __write_bytes ( string_data pp ) ( mldsa_pk ks ) `verification key ->` )
     : b b2 ( __write_bytes ( string_data kp2 ) ( mldsa_sk ks ) `signing key ->` )
     ( string_free kp2 ) ( string_free pp )
-    ( mldsa_keys_free ks )
     ^ ? & a b2 0 1
 }
 
@@ -394,9 +391,8 @@ $ `stdlib/ext/env.nu`
     : ~ i i 0
     : ~ i sink 0
     ~ < i reps {
-        : *MlkemKeys ks ( mlkem_keygen level )
+        : MlkemKeys ks ( mlkem_keygen level )
         = sink + sink ( vec_len [u] ( mlkem_ek ks ) )
-        ( mlkem_keys_free ks )
         = i + i 1
     }
     : i t1 ( monotonic_ns )
@@ -404,13 +400,12 @@ $ `stdlib/ext/env.nu`
     ( __rate l_keygen - t1 t0 reps )
     ( __line_end l_keygen )
 
-    : *MlkemKeys ks ( mlkem_keygen level )
+    : MlkemKeys ks ( mlkem_keygen level )
     : i t2 ( monotonic_ns )
     = i 0
     ~ < i reps {
-        : *MlkemEncap en ( mlkem_encaps level ( mlkem_ek ks ) )
+        : MlkemEncap en ( mlkem_encaps level ( mlkem_ek ks ) )
         = sink + sink ( vec_len [u] ( mlkem_ct en ) )
-        ( mlkem_encap_free en )
         = i + i 1
     }
     : i t3 ( monotonic_ns )
@@ -418,7 +413,7 @@ $ `stdlib/ext/env.nu`
     ( __rate l_encaps - t3 t2 reps )
     ( __line_end l_encaps )
 
-    : *MlkemEncap en ( mlkem_encaps level ( mlkem_ek ks ) )
+    : MlkemEncap en ( mlkem_encaps level ( mlkem_ek ks ) )
     : i t4 ( monotonic_ns )
     = i 0
     ~ < i reps {
@@ -431,8 +426,6 @@ $ `stdlib/ext/env.nu`
     : String l_decaps ( __line_new `  decaps  ` )
     ( __rate l_decaps - t5 t4 reps )
     ( __line_end l_decaps )
-    ( mlkem_encap_free en )
-    ( mlkem_keys_free ks )
     ^ ? > sink 0 0 1
 }
 
@@ -460,12 +453,12 @@ $ `stdlib/ext/env.nu`
 @ __kat_one s label i level s d s z s ekd s dkd → b {
     : ( Vec u ) dv ( __hexv d )
     : ( Vec u ) zv ( __hexv z )
-    : *MlkemKeys ks ( mlkem_keygen_derand level dv zv )
+    : MlkemKeys ks ( mlkem_keygen_derand level dv zv )
     : b ok & ( __digest_is ( mlkem_ek ks ) ekd ) ( __digest_is ( mlkem_dk ks ) dkd )
 
     // Round trip, then the rejection path on a corrupted ciphertext.
     : ( Vec u ) m ( __hexv `4e77596168711e913965d8175ac3bd76aab08b7f9385a02ae883cf6c6e17dd81` )
-    : *MlkemEncap en ( mlkem_encaps_derand level ( mlkem_ek ks ) m )
+    : MlkemEncap en ( mlkem_encaps_derand level ( mlkem_ek ks ) m )
     : ( Vec u ) ss ( mlkem_decaps level ( mlkem_dk ks ) ( mlkem_ct en ) )
     : b okrt ( bytes_eq ss ( mlkem_ss en ) )
     : ( Vec u ) bad ( bytes_slice ( mlkem_ct en ) 0 ( vec_len [u] ( mlkem_ct en ) ) )
@@ -477,8 +470,7 @@ $ `stdlib/ext/env.nu`
     ( nurl_print label )
     ( nurl_print ? & & ok okrt okrej ` ok\n` ` FAIL\n` )
     ( vec_free [u] rej ) ( vec_free [u] bad ) ( vec_free [u] ss )
-    ( mlkem_encap_free en ) ( vec_free [u] m )
-    ( mlkem_keys_free ks ) ( vec_free [u] zv ) ( vec_free [u] dv )
+    ( vec_free [u] m ) ( vec_free [u] zv ) ( vec_free [u] dv )
     ^ & & ok okrt okrej
 }
 
