@@ -79,7 +79,7 @@
 //   ( mcp_task_find store id )                      → s
 //   ( mcp_task_nth store k )                        → s    live-task sweep
 //   ( mcp_task_store_sweep store now )              → i    expired dropped
-//   ( mcp_task_store_free store )                   → v
+//   ( mcp_task_store_free store )                   → v    early release (optional)
 //
 //   ( mcp_task_id tp )              → s     borrowed
 //   ( mcp_task_status tp )          → i
@@ -123,10 +123,12 @@
 //
 // ── Memory model ────────────────────────────────────────────────────
 //
-// The store owns every task and every Json inside it;
-// `mcp_task_store_free` releases all of it. Task handles (`s`) stay
-// valid until the task is swept or the store is freed. Functions taking
-// a Json CONSUME it; `mcp_task_args` is the one BORROWING accessor.
+// The store owns every task and every Json inside it; its last owner
+// releases all of it (`mcp_task_store_free` is an optional early
+// release). Task handles (`s`) stay valid until the task is swept or the
+// store is released. Functions taking a Json CONSUME it;
+// `mcp_task_args` is the one BORROWING accessor, and what
+// `mcp_task_take_input_responses` hands back is the caller's own.
 
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/json.nu`
@@ -610,6 +612,7 @@ $ `stdlib/core/rcbox.nu`
     ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ? == n 0 { ^ @ ?Json { F @ Json { JNull } } } {}
     : Json out . t input_responses
+    ( mem_take out )  // the responses leave the task: the caller owns them
     = . t input_responses ( json_obj_new )
     ^ @ ?Json { T out }
 }
