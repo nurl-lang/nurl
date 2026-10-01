@@ -117,6 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own `% Drop`): every copy is the same state, as a copied pointer was, and
   no one frees it by hand. Their `*_free` functions remain as early
   releases. `compiler/tests/opaque_handles_autodrop.nu`.
+- **`Cell` releases itself.** Its block carries an owner count in front of
+  the bytes: `Cell_share` is another owner (a thread's capture, a struct
+  field), and the last owner frees it. `cell_free` remains as an early
+  release of one owner.
 - **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
   struct whose module defines `S_drop sink S x` (and `S_share` /
   `S_clone`) is dropped and copied like `HashMap`.

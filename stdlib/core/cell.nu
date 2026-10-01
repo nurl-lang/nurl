@@ -18,11 +18,10 @@
 // to a worker is fine and SHARING one between threads is a data race.
 // Only `Arc` expresses sharing in NURL, so `( Arc Cell )` — and any
 // type that reaches a Cell through an Arc — is rejected at the thread
-// boundary, while a direct capture is accepted. Types built on Cell
-// that ARE safe to share say so with a marker impl: `Mutex`, `Cond`,
-// `Thread` and `Semaphore` in `stdlib/std/thread.nu` are all
-// `{ Cell … }` and all carry `% Send` / `% Sync`, because the pthread
-// primitives they wrap are themselves the ordering points.
+// boundary, while a direct capture is accepted. Types built on raw
+// native storage that ARE safe to share say so with a marker impl, as
+// `Mutex`, `Cond`, `Thread` and `Semaphore` in `stdlib/std/thread.nu`
+// do: the pthread primitives they wrap are themselves the ordering points.
 //
 // API:
 //
@@ -37,15 +36,17 @@
 //   ( cell_write_u8 Cell c i off i v ) → v     byte write at offset
 //   ( cell_zero_fill Cell c )      → v         memset to 0
 //   ( cell_clone Cell c )          → Cell      memcpy bytes; CAREFUL with FFI state
-//   ( cell_free Cell c )           → v         release the buffer
+//   ( cell_free Cell c )           → v         early release (optional)
 //
 // Memory model:
 //
-//   * The Cell handle is a struct `{ s ptr i bytes }` — two words.
-//     The byte pointer comes from `nurl_alloc` / `nurl_zalloc`; the
-//     size is recorded so `cell_clone` knows how much to copy and
+//   * The Cell handle is a struct `{ s ptr i bytes }` — two words — and
+//     a library handle (docs/MEMORY.md §7.6): the bytes sit behind an
+//     owner count (`[ owners ][ bytes … ]`, `ptr` at the bytes), every
+//     copy of a Cell is the same buffer, and the last owner frees it.
+//     The size is recorded so `cell_clone` knows how much to copy and
 //     `cell_read_u8` / `cell_write_u8` can bounds-check.
-//   * `cell_ptr` returns a borrowed pointer; valid until `cell_free`.
+//   * `cell_ptr` returns a borrowed pointer; valid while the Cell is.
 //   * `cell_clone` is BITWISE — it copies the bytes verbatim. For
 //     FFI state that has been initialised via a C-side init function
 //     (`pthread_mutex_init`, `pthread_cond_init`, etc.), a bitwise
@@ -88,16 +89,25 @@
 
 // ── Constructors ────────────────────────────────────────────────────
 
+& `c` @ nurl_atomic_i64_inc *u p → i
+
+& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+
+// `n` bytes behind a one-owner count; the bytes' address.
+@ __cell_block i n b zero → i {
+    : s blk ? zero ( nurl_zalloc + n 8 ) ( nurl_alloc + n 8 )
+    ( nurl_poke blk 0 1 )
+    ^ + # i blk 8
+}
+
 @ cell_new i n → Cell {
     ? <= n 0 { ^ @ Cell { # s 0 0 } } {}
-    : s p ( nurl_alloc n )
-    ^ @ Cell { p n }
+    ^ @ Cell { # s ( __cell_block n F ) n }
 }
 
 @ cell_zero i n → Cell {
     ? <= n 0 { ^ @ Cell { # s 0 0 } } {}
-    : s p ( nurl_zalloc n )
-    ^ @ Cell { p n }
+    ^ @ Cell { # s ( __cell_block n T ) n }
 }
 
 // Look up the platform sizeof for `name`, allocate that many zero
@@ -107,8 +117,21 @@
 @ cell_for_native s name → Cell {
     : i sz ( nurl_native_sizeof name )
     ? <= sz 0 { ^ @ Cell { # s 0 0 } } {}
-    : s p ( nurl_zalloc sz )
-    ^ @ Cell { p sz }
+    ^ @ Cell { # s ( __cell_block sz T ) sz }
+}
+
+@ Cell_share Cell c → Cell {
+    : i p # i . c ptr
+    ? != 0 p { ( nurl_atomic_i64_inc # *u - p 8 ) } {}
+    ^ @ Cell { . c ptr . c bytes }
+}
+
+@ Cell_drop sink Cell c → v {
+    ( mem_forget c )
+    : i p # i . c ptr
+    ? != 0 p {
+        ? <= ( nurl_atomic_i64_dec_fetch # *u - p 8 ) 0 { ( nurl_free # s - p 8 ) } {}
+    } {}
 }
 
 // ── Inspectors ──────────────────────────────────────────────────────
@@ -171,7 +194,7 @@
     : i n . c bytes
     ? <= n 0 { ^ @ Cell { # s 0 0 } } {}
     : *u src # *u . c ptr
-    : s p ( nurl_alloc n )
+    : s p # s ( __cell_block n F )
     : *u dst # *u p
     : ~ i i 0
     ~ < i n {
@@ -183,7 +206,5 @@
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
-@ cell_free sink Cell c → v {
-    : s p . c ptr
-    ? != 0 # i p { ( nurl_free p ) } {}
-}
+// Let go of `c` now rather than at the end of its owner's scope.
+@ cell_free sink Cell c → v {}
