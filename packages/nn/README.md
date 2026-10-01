@@ -17,7 +17,7 @@ builder so backward is derived, device replay (`gput`) and megakernel fusion
 
 ## Layers
 
-Every layer takes a `* GTape` and input `GVar`s and returns a `GVar`. Weights
+Every layer takes a `GTape` and input `GVar`s and returns a `GVar`. Weights
 are the caller's — register them with `grad_param` / `grad_const` (or the
 `nn_param` / `nn_const` helpers) and call `backward(loss)` once.
 

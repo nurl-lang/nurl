@@ -35,7 +35,7 @@ $ `deps/tensor/src/tensor.nu`
     ( dumpv `cosv` . bl cosv ) ( dumpv `sinv` . bl sinv )
     ( dumpv `mask` . bl mask ) ( dumpv `onehot` . bl onehot )
     ( dumpv `la` . bl la ) ( dumpv `lb` . bl lb )
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : *u pav ( nurl_alloc * 7 8 )
     : *u pbv ( nurl_alloc * 7 8 )
     : GVar loss ( build_block tp bl pav pbv )
@@ -53,15 +53,11 @@ $ `deps/tensor/src/tensor.nu`
         : String na ( string_from `gA` )
         ( string_push_str na ( nurl_str_int k ) )
         ( dumpv ( string_data na ) . ga data )
-        ( string_free na )
         : String nb ( string_from `gB` )
         ( string_push_str nb ( nurl_str_int k ) )
         ( dumpv ( string_data nb ) . gb data )
-        ( string_free nb )
         = k + k 1
     }
     ( nurl_free pav ) ( nurl_free pbv )
-    ( tape_free tp )
-    ( blk_free bl )
     ^ 0
 }

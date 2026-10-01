@@ -24,7 +24,7 @@ $ `deps/tensor/src/tensor.nu`
 
 @ main → i {
     : Blk bl ( blk_new 42 F )
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : *u pav ( nurl_alloc * 7 8 )
     : *u pbv ( nurl_alloc * 7 8 )
     : GVar loss ( build_block tp bl pav pbv )
@@ -64,8 +64,6 @@ $ `deps/tensor/src/tensor.nu`
     }
     ( check allok `all 14 adapter gradients finite and non-zero` )
     ( nurl_free pav ) ( nurl_free pbv )
-    ( tape_free tp )
-    ( blk_free bl )
     ( nurl_print `nn_block_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

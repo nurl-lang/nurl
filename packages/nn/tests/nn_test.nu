@@ -42,7 +42,7 @@ $ `deps/tensor/src/tensor.nu`
 // Build loss = mean(layer(x)) on a fresh tape with x as the sole param,
 // x taken from `xv` (perturbed by the caller). Returns the scalar loss.
 @ layer_loss i kind ( Vec f ) xv i nt i H ( Vec f ) wv ( Vec f ) bv → f {
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar x ( nn_param tp xv nt H )
     : ~ GVar out @ GVar { 0 }
     ? == kind 0 { = out ( nn_silu tp x ) } {}
@@ -65,18 +65,16 @@ $ `deps/tensor/src/tensor.nu`
         : ( Vec i ) p2 ( vec_new [i] )
         ( vec_push [i] p2 nt ) ( vec_push [i] p2 H )
         : GVar up ( g_slice tp x s2 p2 )
-        ( vec_free [i] s1 ) ( vec_free [i] p1 ) ( vec_free [i] s2 ) ( vec_free [i] p2 )
         = out ( nn_swiglu tp gate up )
     } {}
     : GVar loss ( g_mean tp out )
     : f l ( g_scalar tp loss )
-    ( tape_free tp )
     ^ l
 }
 
 // Analytic grad of mean(layer(x)) wrt x[probe], via backward.
 @ layer_grad i kind ( Vec f ) xv i nt i H ( Vec f ) wv ( Vec f ) bv i probe → f {
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar x ( nn_param tp xv nt H )
     : ~ GVar out @ GVar { 0 }
     ? == kind 0 { = out ( nn_silu tp x ) } {}
@@ -98,14 +96,12 @@ $ `deps/tensor/src/tensor.nu`
         : ( Vec i ) p2 ( vec_new [i] )
         ( vec_push [i] p2 nt ) ( vec_push [i] p2 H )
         : GVar up ( g_slice tp x s2 p2 )
-        ( vec_free [i] s1 ) ( vec_free [i] p1 ) ( vec_free [i] s2 ) ( vec_free [i] p2 )
         = out ( nn_swiglu tp gate up )
     } {}
     : GVar loss ( g_mean tp out )
     : b _b ( backward tp loss )
     : Tensor gx ( grad_of tp x )
     : f gv ( _tf . gx data probe )
-    ( tape_free tp )
     ^ gv
 }
 
@@ -119,7 +115,6 @@ $ `deps/tensor/src/tensor.nu`
     ~ < wk H { ( vec_set [f] wv wk + 1.0 ( _tf wv wk ) ) = wk + wk 1 }
     : ( Vec f ) bv ( vec_new [f] )
     ( randv g H 0.2 bv )
-    ( rng_free g )
     : f h 0.000001
     : ~ f worst 0.0
     : ~ i pk 0
@@ -137,7 +132,6 @@ $ `deps/tensor/src/tensor.nu`
         ? > e worst { = worst e } {}
         = pk + pk 1
     }
-    ( vec_free [f] xv ) ( vec_free [f] wv ) ( vec_free [f] bv )
     ( nurl_print `  ` ) ( nurl_print label )
     ( nurl_print ` worst rel ` ) ( nurl_print ( nurl_str_float worst ) ) ( nurl_print `\n` )
     ( check < worst 0.00001 label )
@@ -150,13 +144,13 @@ $ `deps/tensor/src/tensor.nu`
     ^ s
 }
 
-@ dims_eq * GTape tp GVar v i r i c → b {
+@ dims_eq GTape tp GVar v i r i c → b {
     : Tensor t ( gvar_value tp v )
     ^ & == ( vec_len [f] . t data ) * r c == ( _ti . t shape 0 ) r
 }
 
 @ shape_checks → v {
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : Rng g ( rng_seed 1 )
     : i nt 4
     : i IN 6
@@ -240,8 +234,6 @@ $ `deps/tensor/src/tensor.nu`
     : GVar onesV ( nn_ones tp V )
     : GVar ce ( nn_cross_entropy tp LG OH onesV )
     ( check & > ( g_scalar tp ce ) 0.0 == ( vec_len [f] . ( gvar_value tp ce ) data ) 1 `nn_cross_entropy → positive scalar` )
-    ( rng_free g )
-    ( tape_free tp )
 }
 
 @ main → i {
