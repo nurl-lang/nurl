@@ -42,6 +42,7 @@ $ `stdlib/std/tls_verify.nu`
 // net.nu imports THIS module and dispatches its polymorphic TcpConn
 // reads/writes to the pure TLS stack without an import cycle.
 $ `stdlib/std/async_ffi.nu`
+$ `stdlib/core/rcbox.nu`
 
 // Park the current fiber until `raw`'s socket is readable (want = 0)
 // or writable (want = 1), honouring the handle's configured timeout
@@ -1201,7 +1202,7 @@ $ `stdlib/std/async_ffi.nu`
 //     the quic_transport_parameters extension carried through
 //     `ext_out` / `ext_want` / `ext_in`.
 //
-//   ( _cli_hs_new server_name alpn sess ) → *CliHs   `alpn` = "h2 http/1.1" (empty: no ALPN);
+//   ( _cli_hs_new server_name alpn sess ) → CliHs    `alpn` = "h2 http/1.1" (empty: no ALPN);
 //                                                    `sess` = a tls_session_export blob (empty: none) —
 //                                                    a usable one becomes the pre_shared_key offer
 //   ( _cli_hs_set_ext h ext_out want )    → v        append `ext_out` (wire-framed extension(s)) to the
@@ -1217,19 +1218,23 @@ $ `stdlib/std/async_ffi.nu`
 //                                                    description. After the Finished `state` is 3 and
 //                                                    out_fin, c_ap / s_ap, res_master are set
 //   ( _cli_hs_err h )                     → TlsErr   what a failure was, in the record layer's terms
-//   ( _cli_hs_free h )                    → v
+//   ( _cli_hs_out_ch h ) … ( _cli_hs_s_ap h )         the machine's fields, read (Vecs lent)
+//   ( _cli_hs_free h )                    → v        early release (optional)
 //
 // `state`: 0 new · 1 ClientHello built (awaiting ServerHello) · 2
 // handshake secrets derived (awaiting the server flight) · 3 done ·
-// 4 failed. Every `( Vec u )` field is owned by the machine until
-// `_cli_hs_free`; a caller that wants to keep one copies (or moves) it.
+// 4 failed. A CliHs is a library handle (docs/MEMORY.md §7.6): its last
+// owner releases it, so a handshake abandoned at any step leaks nothing.
+// Every `( Vec u )` field is owned by the machine; a caller that wants to
+// keep one copies (or, in this file, moves) it.
 //
 // The certificate is NOT verified here: `cert_msg`, `cv_scheme`,
 // `cv_sig` and `th_cert` are captured for `tls_cert_verify`, exactly as
 // the record layer has always done (`__verify_conn`). A resumed
 // handshake captures nothing — the PSK authenticates the server.
 
-: CliHs {
+// The machine's state, behind the CliHs handle below.
+: CliHsImpl {
     ( Vec u ) sni  // host bytes for server_name
     ( Vec u ) alpn  // ALPN offer, wire form (tls_alpn_pack)
     ( Vec u ) ext_out  // extra ClientHello extension(s), wire-framed
@@ -1274,8 +1279,30 @@ $ `stdlib/std/async_ffi.nu`
     ( Vec u ) sh  // the ServerHello, kept only for a TLS 1.2 fallback
 }
 
-@ _cli_hs_new s server_name s alpn ( Vec u ) sess → *CliHs {
-    : *CliHs h # *CliHs ( nurl_alloc Z CliHs )
+// The live transcript hasher is the one raw part: a machine dropped
+// mid-handshake finishes it off (its Vec fields are dropped after this).
+% Drop CliHsImpl {
+    @ drop CliHsImpl h → v {
+        ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
+    }
+}
+
+// A CliHs is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: CliHs { s ctl }
+
+@ CliHs_share CliHs h → CliHs { ^ @ CliHs { # s ( rcbox_share # i . h ctl ) } }
+
+@ CliHs_drop sink CliHs h → v {
+    ( mem_forget h )
+    ( rcbox_release [CliHsImpl] # i . h ctl )
+}
+
+@ __CliHs_ptr CliHs h → *CliHsImpl { ^ ( rcbox_ptr [CliHsImpl] # i . h ctl ) }
+
+@ _cli_hs_new s server_name s alpn ( Vec u ) sess → CliHs {
+    : i h__box ( rcbox_zero [CliHsImpl] )
+    : *CliHsImpl h ( rcbox_ptr [CliHsImpl] h__box )
     = . h sni ( bytes_from_str server_name )
     = . h alpn ( tls_alpn_pack alpn )
     = . h ext_out ( vec_new [u] )
@@ -1329,48 +1356,59 @@ $ `stdlib/std/async_ffi.nu`
         ( vec_free [u] . h res_early )
         = . h res_early ( _psk_early . h tk_psk )
     } {}
-    ^ h
+    ^ @ CliHs { # s h__box }
 }
 
-@ _cli_hs_set_ext * CliHs h ( Vec u ) ext_out i want → v {
+@ _cli_hs_set_ext CliHs h__h ( Vec u ) ext_out i want → v {
+    : *CliHsImpl h ( __CliHs_ptr h__h )
     ( vec_clear [u] . h ext_out )
     ( bytes_extend_bytes . h ext_out ext_out )
     = . h ext_want want
 }
 
-@ _cli_hs_set_compat * CliHs h i on → v { = . h compat on }
-
-@ _cli_hs_free sink * CliHs h → v {
-    ? == # i h 0 { ^ } {}
-    ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
-    ( vec_free [u] . h sni )
-    ( vec_free [u] . h alpn )
-    ( vec_free [u] . h ext_out )
-    ( vec_free [u] . h ext_in )
-    ( vec_free [u] . h x_priv )
-    ( vec_free [u] . h x_pub )
-    ( vec_free [u] . h p256_priv )
-    ( vec_free [u] . h pq_dk )
-    ( vec_free [u] . h random )
-    ( vec_free [u] . h sessid )
-    ( vec_free [u] . h tk_ticket )
-    ( vec_free [u] . h tk_psk )
-    ( vec_free [u] . h res_early )
-    ( vec_free [u] . h alpn_sel )
-    ( vec_free [u] . h c_hs )
-    ( vec_free [u] . h s_hs )
-    ( vec_free [u] . h master )
-    ( vec_free [u] . h c_ap )
-    ( vec_free [u] . h s_ap )
-    ( vec_free [u] . h res_master )
-    ( vec_free [u] . h cert_msg )
-    ( vec_free [u] . h cv_sig )
-    ( vec_free [u] . h th_cert )
-    ( vec_free [u] . h out_ch )
-    ( vec_free [u] . h out_fin )
-    ( vec_free [u] . h sh )
-    ( nurl_free # s h )
+@ _cli_hs_set_compat CliHs h__h i on → v {
+    : *CliHsImpl h ( __CliHs_ptr h__h )
+    = . h compat on
 }
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ _cli_hs_free sink CliHs h → v {}
+
+// What the QUIC driver (std/quic_tls.nu) reads off the machine. Vecs are
+// the machine's own, lent.
+@ _cli_hs_state CliHs h → i { ^ . ( __CliHs_ptr h ) state }
+
+@ _cli_hs_version CliHs h → i { ^ . ( __CliHs_ptr h ) version }
+
+@ _cli_hs_cipher CliHs h → i { ^ . ( __CliHs_ptr h ) cipher }
+
+@ _cli_hs_kx_group CliHs h → i { ^ . ( __CliHs_ptr h ) kx_group }
+
+@ _cli_hs_resumed CliHs h → i { ^ . ( __CliHs_ptr h ) resumed }
+
+@ _cli_hs_cv_scheme CliHs h → i { ^ . ( __CliHs_ptr h ) cv_scheme }
+
+@ _cli_hs_out_ch CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) out_ch }
+
+@ _cli_hs_out_fin CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) out_fin }
+
+@ _cli_hs_ext_in CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) ext_in }
+
+@ _cli_hs_alpn_sel CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) alpn_sel }
+
+@ _cli_hs_cert_msg CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) cert_msg }
+
+@ _cli_hs_cv_sig CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) cv_sig }
+
+@ _cli_hs_th_cert CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) th_cert }
+
+@ _cli_hs_c_hs CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) c_hs }
+
+@ _cli_hs_s_hs CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) s_hs }
+
+@ _cli_hs_c_ap CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) c_ap }
+
+@ _cli_hs_s_ap CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) s_ap }
 
 // Discard a live transcript hasher (error paths).
 @ _trh_abort * Sha256 h → v {
@@ -1378,13 +1416,14 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] d )
 }
 
-@ __cli_hs_fail * CliHs h i err i alert → i {
+@ __cli_hs_fail * CliHsImpl h i err i alert → i {
     = . h state 4
     = . h err err
     ^ alert
 }
 
-@ _cli_hs_err * CliHs h → TlsErr {
+@ _cli_hs_err CliHs h__h → TlsErr {
+    : *CliHsImpl h ( __CliHs_ptr h__h )
     ? == . h err 2 { ^ # TlsErr TlsProtocol } {}
     ? == . h err 3 { ^ # TlsErr TlsBadCipher } {}
     ? == . h err 4 { ^ # TlsErr TlsHRR } {}
@@ -1394,7 +1433,7 @@ $ `stdlib/std/async_ffi.nu`
 // Load an exported session onto the machine as the offer for its
 // handshake. F (and nothing loaded) for an empty, malformed or expired
 // blob — the caller then simply does a full handshake.
-@ __cli_sess_load * CliHs h ( Vec u ) sess → b {
+@ __cli_sess_load * CliHsImpl h ( Vec u ) sess → b {
     : i n ( vec_len [u] sess )
     ? | < n 21 != ( _t_bget sess 0 ) 1 { ^ F } {}
     : i age_add ( _rdint sess 1 4 )
@@ -1421,7 +1460,8 @@ $ `stdlib/std/async_ffi.nu`
 
 // Fresh key shares for every group we offer and the ClientHello that
 // carries them, into `out_ch`.
-@ _cli_hs_start * CliHs h → v {
+@ _cli_hs_start CliHs h__h → v {
+    : *CliHsImpl h ( __CliHs_ptr h__h )
     ? != . h state 0 { ^ } {}
     ( vec_free [u] . h x_priv )
     = . h x_priv ( _rand_bytes 32 )
@@ -1466,7 +1506,8 @@ $ `stdlib/std/async_ffi.nu`
 // The ServerHello: cipher and version, the server's key share, and the
 // whole handshake key schedule. On success `state` is 2 and c_hs / s_hs
 // are the handshake traffic secrets.
-@ _cli_hs_server_hello * CliHs h ( Vec u ) sh → i {
+@ _cli_hs_server_hello CliHs h__h ( Vec u ) sh → i {
+    : *CliHsImpl h ( __CliHs_ptr h__h )
     ? != . h state 1 { ^ ( __cli_hs_fail h 1 10 ) } {}
     // handshake type 2, and at least the fixed part of the body
     ? | < ( vec_len [u] sh ) 42 != ( _t_bget sh 0 ) 2 { ^ ( __cli_hs_fail h 1 50 ) } {}
@@ -1556,7 +1597,8 @@ $ `stdlib/std/async_ffi.nu`
 }
 
 // One message of the server's flight, under the handshake keys.
-@ _cli_hs_message * CliHs h ( Vec u ) m → i {
+@ _cli_hs_message CliHs h__h ( Vec u ) m → i {
+    : *CliHsImpl h ( __CliHs_ptr h__h )
     ? != . h state 2 { ^ ( __cli_hs_fail h 1 10 ) } {}
     ? < ( vec_len [u] m ) 4 { ^ ( __cli_hs_fail h 1 50 ) } {}
     : i t ( _t_bget m 0 )
@@ -1661,8 +1703,8 @@ $ `stdlib/std/async_ffi.nu`
     : !v TlsErr _w ( _send_plain c 21 alert )
 }
 
-@ __cli_abort * TlsConn c * CliHs hs TlsErr e → !*TlsConn TlsErr {
-    ( _cli_hs_free hs )
+// The handshake machine is the caller's binding: it goes with that scope.
+@ __cli_abort * TlsConn c TlsErr e → !*TlsConn TlsErr {
     ( tls_close c )
     ^ @ !*TlsConn TlsErr { F e }
 }
@@ -1721,8 +1763,9 @@ $ `stdlib/std/async_ffi.nu`
     = . c tk_received_ms 0
 
     // ── ClientHello ──
-    : *CliHs hs ( _cli_hs_new server_name alpn sess )
-    ( _cli_hs_start hs )
+    : CliHs hs__h ( _cli_hs_new server_name alpn sess )
+    : *CliHsImpl hs ( __CliHs_ptr hs__h )
+    ( _cli_hs_start hs__h )
     // The offered ticket stays on the connection: a resumed handshake
     // brings no certificate and need not bring a new ticket, and
     // tls_session_export still has to hand this one on.
@@ -1735,16 +1778,16 @@ $ `stdlib/std/async_ffi.nu`
         = . c tk_received_ms . hs tk_received_ms
     } {}
     : !v TlsErr sw ( _send_plain c 22 . hs out_ch )
-    ?? sw { T _ → {} F e → { ^ ( __cli_abort c hs e ) } }
+    ?? sw { T _ → {} F e → { ^ ( __cli_abort c e ) } }
 
     // ── ServerHello ──
     : !( Vec u ) TlsErr shr ( __next_hs c )
-    : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __cli_abort c hs e ) } }
-    : i shrc ( _cli_hs_server_hello hs sh )
+    : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __cli_abort c e ) } }
+    : i shrc ( _cli_hs_server_hello hs__h sh )
     ? != shrc 0 {
         ( vec_free [u] sh )
         ( __cli_say_alert c shrc )
-        ^ ( __cli_abort c hs ( _cli_hs_err hs ) )
+        ^ ( __cli_abort c ( _cli_hs_err hs__h ) )
     } {}
     = . c version . hs version
     = . c cipher . hs cipher
@@ -1770,7 +1813,7 @@ $ `stdlib/std/async_ffi.nu`
             ( vec_free [u] . c alpn_sel )
             = . c alpn_sel sel12
         } { ( vec_free [u] sel12 ) }
-        ( _cli_hs_free hs )
+        ( _cli_hs_free hs__h )
         ^ ( __tls12_handshake c sh priv cpub random sessid ch tr )
     } {}
     ( vec_free [u] sh )
@@ -1788,16 +1831,16 @@ $ `stdlib/std/async_ffi.nu`
     ~ & == rc 0 != . hs state 3 {
         : !( Vec u ) TlsErr mr ( __next_hs c )
         ?? mr {
-            F e → { ^ ( __cli_abort c hs e ) }
+            F e → { ^ ( __cli_abort c e ) }
             T msg → {
-                = rc ( _cli_hs_message hs msg )
+                = rc ( _cli_hs_message hs__h msg )
                 ( vec_free [u] msg )
             }
         }
     }
     ? != rc 0 {
         ( __cli_say_alert c rc )
-        ^ ( __cli_abort c hs ( _cli_hs_err hs ) )
+        ^ ( __cli_abort c ( _cli_hs_err hs__h ) )
     } {}
     // what the verifier and the callers read off the connection
     ( vec_free [u] . c cert_msg )
@@ -1831,7 +1874,6 @@ $ `stdlib/std/async_ffi.nu`
     ( vec_free [u] . c res_master )
     = . c res_master . hs res_master
     = . hs res_master ( vec_new [u] )
-    ( _cli_hs_free hs )
     ^ @ !*TlsConn TlsErr { T c }
 }
 

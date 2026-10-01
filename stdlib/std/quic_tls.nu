@@ -56,7 +56,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 }
 
 : QuicTlsSrv {
-    * SrvHs hs
+    SrvHs hs
     * QuicRxBuf rx0
     * QuicRxBuf rx1
     * QuicRxBuf rx2
@@ -133,9 +133,9 @@ $ `stdlib/std/quic_rxbuf.nu`
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
         // QUIC has no other way to agree on an application protocol
         // (RFC 9001 §8.1): no ALPN at all is no_application_protocol too.
-        ? == ( vec_len [u] . . s hs alpn_sel ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
-        ( bytes_extend_bytes . s out0 . . s hs out_sh )
-        ( bytes_extend_bytes . s out1 . . s hs out_hs )
+        ? == ( vec_len [u] ( _srv_hs_alpn_sel . s hs ) ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
+        ( bytes_extend_bytes . s out0 ( _srv_hs_out_sh . s hs ) )
+        ( bytes_extend_bytes . s out1 ( _srv_hs_out_hs . s hs ) )
         = . s state 1
         ^ 0
     } {}
@@ -143,7 +143,7 @@ $ `stdlib/std/quic_rxbuf.nu`
         ? | != mtype 20 != . s state 1 { ^ ( quic_err_crypto 10 ) } {}
         : i rc ( _srv_hs_client_finished . s hs m )
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
-        ( bytes_extend_bytes . s out2 . . s hs out_ticket )
+        ( bytes_extend_bytes . s out2 ( _srv_hs_out_ticket . s hs ) )
         = . s state 2
         ^ 0
     } {}
@@ -177,22 +177,22 @@ $ `stdlib/std/quic_rxbuf.nu`
     ^ out
 }
 
-@ quic_tls_srv_client_tp * QuicTlsSrv s → ( Vec u ) { ^ . . s hs ext_in }
+@ quic_tls_srv_client_tp * QuicTlsSrv s → ( Vec u ) { ^ ( _srv_hs_ext_in . s hs ) }
 
-@ quic_tls_srv_alpn * QuicTlsSrv s → ( Vec u ) { ^ . . s hs alpn_sel }
+@ quic_tls_srv_alpn * QuicTlsSrv s → ( Vec u ) { ^ ( _srv_hs_alpn_sel . s hs ) }
 
-@ quic_tls_srv_cipher * QuicTlsSrv s → i { ^ ? == . . s hs cipher 1 1 2 }
+@ quic_tls_srv_cipher * QuicTlsSrv s → i { ^ ? == ( _srv_hs_cipher . s hs ) 1 1 2 }
 
 // The CertificateVerify scheme this handshake signs with (see tls_cv_scheme).
 @ quic_tls_srv_sig_scheme * QuicTlsSrv s → i { ^ ( _srv_hs_sig_scheme . s hs ) }
 
-@ quic_tls_srv_c_hs * QuicTlsSrv s → ( Vec u ) { ^ . . s hs c_hs }
+@ quic_tls_srv_c_hs * QuicTlsSrv s → ( Vec u ) { ^ ( _srv_hs_c_hs . s hs ) }
 
-@ quic_tls_srv_s_hs * QuicTlsSrv s → ( Vec u ) { ^ . . s hs s_hs }
+@ quic_tls_srv_s_hs * QuicTlsSrv s → ( Vec u ) { ^ ( _srv_hs_s_hs . s hs ) }
 
-@ quic_tls_srv_c_ap * QuicTlsSrv s → ( Vec u ) { ^ . . s hs c_ap }
+@ quic_tls_srv_c_ap * QuicTlsSrv s → ( Vec u ) { ^ ( _srv_hs_c_ap . s hs ) }
 
-@ quic_tls_srv_s_ap * QuicTlsSrv s → ( Vec u ) { ^ . . s hs s_ap }
+@ quic_tls_srv_s_ap * QuicTlsSrv s → ( Vec u ) { ^ ( _srv_hs_s_ap . s hs ) }
 
 // ── client role ──────────────────────────────────────────────────
 //
@@ -225,7 +225,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 // handshake that ends without an ALPN (§8.1).
 
 : QuicTlsCli {
-    * CliHs hs
+    CliHs hs
     * QuicRxBuf rx0
     * QuicRxBuf rx1
     * QuicRxBuf rx2
@@ -256,7 +256,7 @@ $ `stdlib/std/quic_rxbuf.nu`
     = . s rx1 ( quic_rxbuf_new ( quic_crypto_rx_cap ) )
     = . s rx2 ( quic_rxbuf_new ( quic_crypto_rx_cap ) )
     = . s state 0
-    = . s out0 ( bytes_slice . . s hs out_ch 0 ( vec_len [u] . . s hs out_ch ) )
+    = . s out0 ( bytes_slice ( _cli_hs_out_ch . s hs ) 0 ( vec_len [u] ( _cli_hs_out_ch . s hs ) ) )
     = . s out1 ( vec_new [u] )
     = . s out2 ( vec_new [u] )
     ^ s
@@ -291,7 +291,7 @@ $ `stdlib/std/quic_rxbuf.nu`
         : i rc ( _cli_hs_server_hello . s hs m )
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
         // TLS 1.2 has no place in QUIC (RFC 9001 §4.2)
-        ? == . . s hs version 12 { = . s state 3 ^ ( quic_err_crypto 70 ) } {}
+        ? == ( _cli_hs_version . s hs ) 12 { = . s state 3 ^ ( quic_err_crypto 70 ) } {}
         = . s state 1
         ^ 0
     } {}
@@ -299,11 +299,11 @@ $ `stdlib/std/quic_rxbuf.nu`
         ? != . s state 1 { ^ ( quic_err_crypto 10 ) } {}
         : i rc ( _cli_hs_message . s hs m )
         ? != rc 0 { = . s state 3 ^ ( quic_err_crypto rc ) } {}
-        ? == . . s hs state 3 {
+        ? == ( _cli_hs_state . s hs ) 3 {
             // QUIC has no other way to agree on an application protocol
             // (RFC 9001 §8.1): no ALPN at all is no_application_protocol.
-            ? == ( vec_len [u] . . s hs alpn_sel ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
-            ( bytes_extend_bytes . s out1 . . s hs out_fin )
+            ? == ( vec_len [u] ( _cli_hs_alpn_sel . s hs ) ) 0 { = . s state 3 ^ ( quic_err_crypto 120 ) } {}
+            ( bytes_extend_bytes . s out1 ( _cli_hs_out_fin . s hs ) )
             = . s state 2
         } {}
         ^ 0
@@ -341,30 +341,30 @@ $ `stdlib/std/quic_rxbuf.nu`
 }
 
 // The ClientHello once more, for a fresh Initial after a Retry.
-@ quic_tls_cli_client_hello * QuicTlsCli s → ( Vec u ) { ^ . . s hs out_ch }
+@ quic_tls_cli_client_hello * QuicTlsCli s → ( Vec u ) { ^ ( _cli_hs_out_ch . s hs ) }
 
-@ quic_tls_cli_server_tp * QuicTlsCli s → ( Vec u ) { ^ . . s hs ext_in }
+@ quic_tls_cli_server_tp * QuicTlsCli s → ( Vec u ) { ^ ( _cli_hs_ext_in . s hs ) }
 
-@ quic_tls_cli_alpn * QuicTlsCli s → ( Vec u ) { ^ . . s hs alpn_sel }
+@ quic_tls_cli_alpn * QuicTlsCli s → ( Vec u ) { ^ ( _cli_hs_alpn_sel . s hs ) }
 
-@ quic_tls_cli_cipher * QuicTlsCli s → i { ^ ? == . . s hs cipher 1 1 2 }
+@ quic_tls_cli_cipher * QuicTlsCli s → i { ^ ? == ( _cli_hs_cipher . s hs ) 1 1 2 }
 
 // T when the key exchange was X25519MLKEM768.
-@ quic_tls_cli_is_pq * QuicTlsCli s → b { ^ == . . s hs kx_group 4588 }
+@ quic_tls_cli_is_pq * QuicTlsCli s → b { ^ == ( _cli_hs_kx_group . s hs ) 4588 }
 
 // The CertificateVerify scheme the server signed with (see tls_cv_scheme).
-@ quic_tls_cli_sig_scheme * QuicTlsCli s → i { ^ . . s hs cv_scheme }
+@ quic_tls_cli_sig_scheme * QuicTlsCli s → i { ^ ( _cli_hs_cv_scheme . s hs ) }
 
 @ quic_tls_cli_verify * QuicTlsCli s s server_name → i {
-    ? != . . s hs resumed 0 { ^ 0 } {}
-    : i rc ( tls_cert_verify . . s hs cert_msg . . s hs cv_scheme . . s hs cv_sig . . s hs th_cert server_name )
+    ? != ( _cli_hs_resumed . s hs ) 0 { ^ 0 } {}
+    : i rc ( tls_cert_verify ( _cli_hs_cert_msg . s hs ) ( _cli_hs_cv_scheme . s hs ) ( _cli_hs_cv_sig . s hs ) ( _cli_hs_th_cert . s hs ) server_name )
     ^ ? == rc 0 0 42
 }
 
-@ quic_tls_cli_c_hs * QuicTlsCli s → ( Vec u ) { ^ . . s hs c_hs }
+@ quic_tls_cli_c_hs * QuicTlsCli s → ( Vec u ) { ^ ( _cli_hs_c_hs . s hs ) }
 
-@ quic_tls_cli_s_hs * QuicTlsCli s → ( Vec u ) { ^ . . s hs s_hs }
+@ quic_tls_cli_s_hs * QuicTlsCli s → ( Vec u ) { ^ ( _cli_hs_s_hs . s hs ) }
 
-@ quic_tls_cli_c_ap * QuicTlsCli s → ( Vec u ) { ^ . . s hs c_ap }
+@ quic_tls_cli_c_ap * QuicTlsCli s → ( Vec u ) { ^ ( _cli_hs_c_ap . s hs ) }
 
-@ quic_tls_cli_s_ap * QuicTlsCli s → ( Vec u ) { ^ . . s hs s_ap }
+@ quic_tls_cli_s_ap * QuicTlsCli s → ( Vec u ) { ^ ( _cli_hs_s_ap . s hs ) }

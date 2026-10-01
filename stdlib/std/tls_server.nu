@@ -58,6 +58,7 @@ $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/rsa.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
+$ `stdlib/core/rcbox.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
@@ -619,18 +620,21 @@ $ `stdlib/std/aes_gcm.nu`
 // can say them in its own way — an alert record, or a QUIC
 // CONNECTION_CLOSE with 0x100 + description.
 //
-//   ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs ) → *SrvHs
+//   ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs ) → SrvHs
 //   ( _srv_hs_set_ext hs want ext_out )       → v   require CH extension `want` (0 = none), append
 //                                                   `ext_out` (wire-framed extension(s)) to EE
 //   ( _srv_hs_client_hello hs ch )            → i   0 ok · alert description otherwise; fills
 //                                                   out_sh, out_hs, c_hs/s_hs, c_ap/s_ap, alpn_sel, cipher
 //   ( _srv_hs_client_finished hs fin )        → i   0 ok · 51 decrypt_error; fills res_master, out_ticket
-//   ( _srv_hs_free hs )                       → v
+//   ( _srv_hs_out_sh hs ) … ( _srv_hs_s_ap hs )       the machine's fields, read (Vecs lent)
+//   ( _srv_hs_free hs )                       → v   early release (optional)
 //
-// Every `( Vec u )` field is owned by the machine until `_srv_hs_free`;
-// a caller that wants to keep one copies it.
+// A SrvHs is a library handle (docs/MEMORY.md §7.6): its last owner
+// releases it, so a handshake abandoned at any step leaks nothing. Every
+// `( Vec u )` field is owned by the machine; a caller that wants to keep
+// one copies it.
 
-: SrvHs {
+: SrvHsImpl {
     ( Vec u ) cert_chain
     i keytype
     ( Vec u ) ec_priv
@@ -669,8 +673,30 @@ $ `stdlib/std/aes_gcm.nu`
     i pq_level
 }
 
-@ _srv_hs_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs → *SrvHs {
-    : *SrvHs h # *SrvHs ( nurl_alloc Z SrvHs )
+// The live transcript hasher is the one raw part: a machine dropped
+// mid-handshake finishes it off (its Vec fields are dropped after this).
+% Drop SrvHsImpl {
+    @ drop SrvHsImpl h → v {
+        ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
+    }
+}
+
+// A SrvHs is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: SrvHs { s ctl }
+
+@ SrvHs_share SrvHs h → SrvHs { ^ @ SrvHs { # s ( rcbox_share # i . h ctl ) } }
+
+@ SrvHs_drop sink SrvHs h → v {
+    ( mem_forget h )
+    ( rcbox_release [SrvHsImpl] # i . h ctl )
+}
+
+@ __SrvHs_ptr SrvHs h → *SrvHsImpl { ^ ( rcbox_ptr [SrvHsImpl] # i . h ctl ) }
+
+@ _srv_hs_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level ( Vec u ) alpn_prefs → SrvHs {
+    : i h__box ( rcbox_zero [SrvHsImpl] )
+    : *SrvHsImpl h ( rcbox_ptr [SrvHsImpl] h__box )
     = . h cert_chain ( bytes_slice cert_chain 0 ( vec_len [u] cert_chain ) )
     = . h keytype keytype
     = . h ec_priv ( bytes_slice ec_priv 0 ( vec_len [u] ec_priv ) )
@@ -708,7 +734,7 @@ $ `stdlib/std/aes_gcm.nu`
     = . h pq_chain ( vec_new [u] )
     = . h pq_sk ( vec_new [u] )
     = . h pq_level 0
-    ^ h
+    ^ @ SrvHs { # s h__box }
 }
 
 // Give the handshake a second, post-quantum identity: `pq_chain` is a
@@ -716,7 +742,8 @@ $ `stdlib/std/aes_gcm.nu`
 // FIPS 204 secret key at `pq_level` (44 / 65 / 87). Which of the two
 // identities a connection gets is decided per ClientHello — see
 // `__srv_pick_cert`. Copies, like the constructor.
-@ _srv_hs_set_pq * SrvHs h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+@ _srv_hs_set_pq SrvHs h__h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+    : *SrvHsImpl h ( __SrvHs_ptr h__h )
     ( vec_clear [u] . h pq_chain )
     ( bytes_extend_bytes . h pq_chain pq_chain )
     ( vec_clear [u] . h pq_sk )
@@ -724,41 +751,46 @@ $ `stdlib/std/aes_gcm.nu`
     = . h pq_level pq_level
 }
 
-@ _srv_hs_set_ext * SrvHs h i want ( Vec u ) ext_out → v {
+@ _srv_hs_set_ext SrvHs h__h i want ( Vec u ) ext_out → v {
+    : *SrvHsImpl h ( __SrvHs_ptr h__h )
     = . h ext_want want
     ( vec_clear [u] . h ext_out )
     ( bytes_extend_bytes . h ext_out ext_out )
 }
 
-@ _srv_hs_free sink * SrvHs h → v {
-    ? == # i h 0 { ^ } {}
-    ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
-    ( vec_free [u] . h cert_chain )
-    ( vec_free [u] . h ec_priv )
-    ( vec_free [u] . h rsa_n )
-    ( vec_free [u] . h rsa_e )
-    ( vec_free [u] . h rsa_d )
-    ( vec_free [u] . h alpn_prefs )
-    ( vec_free [u] . h ext_in )
-    ( vec_free [u] . h ext_out )
-    ( vec_free [u] . h alpn_sel )
-    ( vec_free [u] . h c_hs )
-    ( vec_free [u] . h s_hs )
-    ( vec_free [u] . h c_ap )
-    ( vec_free [u] . h s_ap )
-    ( vec_free [u] . h master )
-    ( vec_free [u] . h th_sf )
-    ( vec_free [u] . h res_master )
-    ( vec_free [u] . h out_sh )
-    ( vec_free [u] . h out_hs )
-    ( vec_free [u] . h out_ticket )
-    ( vec_free [u] . h pq_chain )
-    ( vec_free [u] . h pq_sk )
-    ( nurl_free # s h )
-}
+// Let go of `h` now rather than at the end of its owner's scope.
+@ _srv_hs_free sink SrvHs h → v {}
+
+// What the drivers read off the machine (std/quic_tls.nu, and the TCP
+// one below through its own pointer). Vecs are the machine's own, lent.
+@ _srv_hs_cipher SrvHs h → i { ^ . ( __SrvHs_ptr h ) cipher }
+
+@ _srv_hs_kx_group SrvHs h → i { ^ . ( __SrvHs_ptr h ) kx_group }
+
+@ _srv_hs_resumed SrvHs h → i { ^ . ( __SrvHs_ptr h ) resumed }
+
+@ _srv_hs_out_sh SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) out_sh }
+
+@ _srv_hs_out_hs SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) out_hs }
+
+@ _srv_hs_out_ticket SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) out_ticket }
+
+@ _srv_hs_ext_in SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) ext_in }
+
+@ _srv_hs_alpn_sel SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) alpn_sel }
+
+@ _srv_hs_res_master SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) res_master }
+
+@ _srv_hs_c_hs SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) c_hs }
+
+@ _srv_hs_s_hs SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) s_hs }
+
+@ _srv_hs_c_ap SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) c_ap }
+
+@ _srv_hs_s_ap SrvHs h → ( Vec u ) { ^ . ( __SrvHs_ptr h ) s_ap }
 
 // Mark the machine failed and hand back the alert description.
-@ __srv_hs_fail * SrvHs h i desc → i {
+@ __srv_hs_fail * SrvHsImpl h i desc → i {
     = . h state 3
     ^ desc
 }
@@ -785,12 +817,13 @@ $ `stdlib/std/aes_gcm.nu`
 // it mandatory for certificate authentication); it gets the classical
 // leaf and the failure it was heading for.
 // The scheme this handshake signs (or signed) its CertificateVerify with.
-@ _srv_hs_sig_scheme * SrvHs h → i {
+@ _srv_hs_sig_scheme SrvHs h__h → i {
+    : *SrvHsImpl h ( __SrvHs_ptr h__h )
     ? == . h keytype 2 { ^ ( __srv_mldsa_scheme . h ml_level ) } {}
     ^ ? == . h keytype 1 2052 1027
 }
 
-@ __srv_pick_cert * SrvHs h ( Vec u ) ch i es i ee → v {
+@ __srv_pick_cert * SrvHsImpl h ( Vec u ) ch i es i ee → v {
     ? == ( vec_len [u] . h pq_chain ) 0 { ^ } {}
     : i want ( __srv_mldsa_scheme . h pq_level )
     : i sa ( __srv_find_ext ch es ee 13 )
@@ -815,7 +848,8 @@ $ `stdlib/std/aes_gcm.nu`
     = . h ml_level . h pq_level
 }
 
-@ _srv_hs_client_hello * SrvHs h ( Vec u ) ch → i {
+@ _srv_hs_client_hello SrvHs h__h ( Vec u ) ch → i {
+    : *SrvHsImpl h ( __SrvHs_ptr h__h )
     ? != . h state 0 { ^ ( __srv_hs_fail h 10 ) } {}
     // handshake type 1, and a body at least as long as its fixed part
     ? | < ( vec_len [u] ch ) 39 != ( _t_bget ch 0 ) 1 { ^ ( __srv_hs_fail h 50 ) } {}
@@ -1106,7 +1140,8 @@ $ `stdlib/std/aes_gcm.nu`
 // the resumption master secret is derived and, when the client said it
 // can resume (§4.2.9), a NewSessionTicket message is built for the
 // caller to send first thing under the application keys.
-@ _srv_hs_client_finished * SrvHs h ( Vec u ) cf → i {
+@ _srv_hs_client_finished SrvHs h__h ( Vec u ) cf → i {
+    : *SrvHsImpl h ( __SrvHs_ptr h__h )
     ? != . h state 1 { ^ ( __srv_hs_fail h 10 ) } {}
     ? != ( _t_bget cf 0 ) 20 { ^ ( __srv_hs_fail h 10 ) } {}
     : ( Vec u ) cexp ( _finished_mac . h c_hs . h th_sf )
@@ -1206,16 +1241,17 @@ $ `stdlib/std/aes_gcm.nu`
     = . c tk_lifetime 0
     = . c tk_received_ms 0
 
-    : *SrvHs hs ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs )
-    ? > ( vec_len [u] pq_chain ) 0 { ( _srv_hs_set_pq hs pq_chain pq_level pq_sk ) } {}
+    // The machine goes with this scope, on every path out of it.
+    : SrvHs hs__h ( _srv_hs_new cert_chain keytype ec_priv rsa_n rsa_e rsa_d ml_level alpn_prefs )
+    : *SrvHsImpl hs ( __SrvHs_ptr hs__h )
+    ? > ( vec_len [u] pq_chain ) 0 { ( _srv_hs_set_pq hs__h pq_chain pq_level pq_sk ) } {}
 
     // ── ClientHello ──
     : !( Vec u ) TlsErr chr ( __srv_next_hs c )
     : ( Vec u ) ch ?? chr { T m → m F _ → ( vec_new [u] ) }
-    : i rc ( _srv_hs_client_hello hs ch )
+    : i rc ( _srv_hs_client_hello hs__h ch )
     ( vec_free [u] ch )
     ? != rc 0 {
-        ( _srv_hs_free hs )
         // no_application_protocol is said out loud (RFC 7301 §3.2);
         // every other refusal closes as it always has.
         ? == rc 120 { ^ ( __srv_abort_alert c 120 ) } {}
@@ -1224,7 +1260,7 @@ $ `stdlib/std/aes_gcm.nu`
     = . c cipher . hs cipher
     = . c kx_group . hs kx_group
     = . c resumed . hs resumed
-    = . c cv_scheme ? == . hs resumed 0 ( _srv_hs_sig_scheme hs ) 0
+    = . c cv_scheme ? == . hs resumed 0 ( _srv_hs_sig_scheme hs__h ) 0
     ( vec_free [u] . c alpn_sel )
     = . c alpn_sel ( bytes_slice . hs alpn_sel 0 ( vec_len [u] . hs alpn_sel ) )
 
@@ -1257,7 +1293,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ~ i finok 0
     ?? cfr {
         T cf → {
-            ? == ( _srv_hs_client_finished hs cf ) 0 { = finok 1 } {}
+            ? == ( _srv_hs_client_finished hs__h cf ) 0 { = finok 1 } {}
             ( vec_free [u] cf )
         }
         F _ → {}
@@ -1275,7 +1311,6 @@ $ `stdlib/std/aes_gcm.nu`
     ? & == finok 1 > ( vec_len [u] . hs out_ticket ) 0 {
         : !v TlsErr _w ( __srv_send_enc c 22 . hs out_ticket )
     } {}
-    ( _srv_hs_free hs )
 
     ? == finok 0 { ( tls_close c ) ^ @ !*TlsConn TlsErr { F # TlsErr TlsHandshake } } {}
     ^ @ !*TlsConn TlsErr { T c }

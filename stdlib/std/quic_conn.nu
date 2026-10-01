@@ -529,7 +529,7 @@ $ `stdlib/std/quic_recovery.nu`
 // T when the key exchange was X25519MLKEM768.
 @ quic_conn_is_pq * QuicConn c → b {
     ? != . c is_client 0 { ^ ( quic_tls_cli_is_pq . c tlsc ) } {}
-    ^ == . . . c tls hs kx_group 4588
+    ^ == ( _srv_hs_kx_group . . c tls hs ) 4588
 }
 
 // Handshake confirmed (§4.1.2): the server on the client's Finished,
