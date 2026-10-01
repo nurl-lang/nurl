@@ -39,7 +39,7 @@ $ `kernels.nu`
 
 : F5Model {
     GpuKit kit
-    i st  // *St — a safetensors checkpoint, 0 when this is a .pt
+    St st  // a safetensors checkpoint, st_none when this is a .pt
     i pt  // *Pt — a PyTorch pickle checkpoint, 0 when this is safetensors
     String prefix  // what every tensor name in this file starts with
     b own_kit
@@ -153,12 +153,11 @@ $ `kernels.nu`
 //   transformer.                                a bare state dict
 //
 @ f5_st_tensors * F5Model m → ( Vec StTensor ) {
-    : *St st # *St . m st
-    ^ . st tensors
+    ^ ( st_tensors . m st )
 }
 
 @ f5_src_find * F5Model m s name → i {
-    ? != . m st 0 { ^ ( st_find_tensor # *St . m st name ) } {}
+    ? ( st_is_open . m st ) { ^ ( st_find_tensor . m st name ) } {}
     ? != . m pt 0 { ^ ( pt_find # *Pt . m pt name ) } {}
     ^ -1
 }
@@ -173,7 +172,7 @@ $ `kernels.nu`
 }
 
 @ f5_src_nelems * F5Model m i idx → i {
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
             T t → { ^ . t nelems }
             F → { ^ 0 }
@@ -184,7 +183,7 @@ $ `kernels.nu`
 }
 
 @ f5_src_dim * F5Model m i idx i k → i {
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
             T t → {
                 ? == k 0 { ^ . t d0 } {}
@@ -200,7 +199,7 @@ $ `kernels.nu`
 }
 
 @ f5_src_f32 * F5Model m i idx → b {
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
             T t → { ^ == . t dtype ST_F32 }
             F → { ^ F }
@@ -213,9 +212,9 @@ $ `kernels.nu`
 }
 
 @ f5_src_ptr * F5Model m i idx → *u {
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         ?? ( vec_get [StTensor] ( f5_st_tensors m ) idx ) {
-            T t → { ^ ( st_tensor_ptr # *St . m st t ) }
+            T t → { ^ ( st_tensor_ptr . m st t ) }
             F → { ^ # *u 0 }
         }
     } {}
@@ -647,7 +646,7 @@ $ `kernels.nu`
 // told what it is about to open.
 @ f5_open s ckpt s vocab_path i device → !*F5Model String {
     : *F5Model m # *F5Model ( nurl_alloc Z F5Model )
-    = . m st 0
+    = . m st ( st_none )
     = . m pt 0
     = . m prefix ( string_new )
     : b is_pt | ( nurl_str_ends ckpt `.pt` ) | ( nurl_str_ends ckpt `.pth` ) ( nurl_str_ends ckpt `.bin` )
@@ -661,7 +660,7 @@ $ `kernels.nu`
         }
     } {
         ?? ( st_open ckpt ) {
-            T st → { = . m st # i st }
+            T st → { = . m st st }
             F e → {
                 ( nurl_free # s m )
                 ^ @ !*F5Model String { F e }
@@ -751,7 +750,7 @@ $ `kernels.nu`
     ( __f5m_freev . m wo ) ( __f5m_freev . m bo )
     ( __f5m_freev . m f1_w ) ( __f5m_freev . m f1_b )
     ( __f5m_freev . m f2_w ) ( __f5m_freev . m f2_b )
-    ? != . m st 0 { ( st_close # *St . m st ) = . m st 0 } {}
+    ? ( st_is_open . m st ) { ( st_close . m st ) = . m st ( st_none ) } {}
     ? != . m pt 0 { ( pt_close # *Pt . m pt ) = . m pt 0 } {}
     ( string_free . m prefix )
     = . m prefix ( string_new )

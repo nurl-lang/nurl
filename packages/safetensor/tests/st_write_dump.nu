@@ -16,7 +16,7 @@ $ `src/write.nu`
 }
 
 @ main → i {
-    : *StWriter w ( stw_new )
+    : StWriter w ( stw_new )
     // F32 [2,3] = [[0,0.5,1],[1.5,2,2.5]]
     : ( Vec f ) a ( vec_new [f] )
     : ~ i k 0
@@ -42,7 +42,5 @@ $ `src/write.nu`
         T _ → { ( nurl_print `wrote ok\n` ) }
         F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
     }
-    ( stw_free w )
-    ( vec_free [f] a ) ( vec_free [f] b ) ( vec_free [f] c ) ( vec_free [i] iv )
     ^ 0
 }

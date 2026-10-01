@@ -126,10 +126,10 @@ $ `deps/tokenizer/src/unigram.nu`
 // Upload one f32 tensor from the mapping to the device. On any miss or
 // dtype surprise the engine is marked broken and an empty buf returned —
 // nothing runs on a partially-loaded model.
-@ __em_up * Embed e * St s2 s name → GkBuf {
+@ __em_up * Embed e St s2 s name → GkBuf {
     : i idx ( st_find_tensor s2 name )
     ? >= idx 0 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
-    ?? ( vec_get [StTensor] . s2 tensors idx ) {
+    ?? ( vec_get [StTensor] ( st_tensors s2 ) idx ) {
         T t → {
             ? == . t dtype ST_F32 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
             : i d ( __em_carve e * . t nelems 4 )
@@ -199,7 +199,7 @@ $ `deps/tokenizer/src/unigram.nu`
     ^ s2
 }
 
-@ __em_up_layer * Embed e * St s2 i layer s suffix → GkBuf {
+@ __em_up_layer * Embed e St s2 i layer s suffix → GkBuf {
     : String nm ( __em_lname layer suffix )
     : GkBuf b ( __em_up e s2 ( string_data nm ) )
     ( string_free nm )

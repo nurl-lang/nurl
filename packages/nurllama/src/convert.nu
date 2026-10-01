@@ -67,7 +67,7 @@ $ `deps/safetensor/src/safetensor.nu`
 }
 
 : Cv {
-    ( Vec i ) sts
+    ( Vec St ) sts
     ( Vec String ) stpaths
     Json cfg
     b cfg_ok
@@ -177,13 +177,14 @@ $ `deps/safetensor/src/safetensor.nu`
 // index packed, or -1.
 @ __cv_find * Cv c s name → i {
     : ~ i k 0
-    ~ < k ( vec_len [i] . c sts ) {
-        : ~ i sti -1
-        ?? ( vec_get [i] . c sts k ) { T a → { = sti a } F → {} }
-        ? > sti 0 {
-            : i ti ( st_find_tensor # *St sti name )
-            ? >= ti 0 { ^ + * k 65536 ti } {}
-        } {}
+    ~ < k ( vec_len [St] . c sts ) {
+        ?? ( vec_get [St] . c sts k ) {
+            T a → {
+                : i ti ( st_find_tensor a name )
+                ? >= ti 0 { ^ + * k 65536 ti } {}
+            }
+            F → {}
+        }
         = k + k 1
     }
     ^ -1
@@ -193,10 +194,8 @@ $ `deps/safetensor/src/safetensor.nu`
 @ __cv_src_nelems * Cv c s name → i {
     : i h ( __cv_find c name )
     ? < h 0 { ^ 0 } {}
-    : ~ i stp 0
-    ?? ( vec_get [i] . c sts / h 65536 ) { T a → { = stp a } F → {} }
-    : *St st # *St stp
-    ?? ( vec_get [StTensor] . st tensors % h 65536 ) {
+    : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
+    ?? ( vec_get [StTensor] ( st_tensors st ) % h 65536 ) {
         T t → { ^ . t nelems }
         F → { ^ 0 }
     }
@@ -249,12 +248,10 @@ $ `deps/safetensor/src/safetensor.nu`
         ( string_push_str m hfname )
         ^ @ !v String { F m }
     } {}
-    : ~ i stp 0
-    ?? ( vec_get [i] . c sts / h 65536 ) { T a → { = stp a } F → {} }
-    : *St st # *St stp
+    : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
     : i ti % h 65536
     : ~ i ne 0
-    ?? ( vec_get [StTensor] . st tensors ti ) { T t → { = ne . t nelems } F → {} }
+    ?? ( vec_get [StTensor] ( st_tensors st ) ti ) { T t → { = ne . t nelems } F → {} }
     // ~32 MB of f32 per chunk, on row boundaries
     : ~ i rows_per / 8388608 row
     ? < rows_per 1 { = rows_per 1 } {}
@@ -300,12 +297,10 @@ $ `deps/safetensor/src/safetensor.nu`
             ^ @ !v String { F m }
         } {}
         ( string_free nm )
-        : ~ i stp 0
-        ?? ( vec_get [i] . c sts / h 65536 ) { T a → { = stp a } F → {} }
-        : *St st # *St stp
+        : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
         : i ti % h 65536
         : ~ i ne 0
-        ?? ( vec_get [StTensor] . st tensors ti ) { T t → { = ne . t nelems } F → {} }
+        ?? ( vec_get [StTensor] ( st_tensors st ) ti ) { T t → { = ne . t nelems } F → {} }
         ?? ( st_dequant_range st ti 0 ne ) {
             T raw → {
                 : !v String r ( __cv_emit sw gt raw )
@@ -604,14 +599,7 @@ $ `deps/safetensor/src/safetensor.nu`
 
 @ __cv_close * Cv c → v {
     : ~ i k 0
-    ~ < k ( vec_len [i] . c sts ) {
-        ?? ( vec_get [i] . c sts k ) {
-            T a → { ? > a 0 { ( st_close # *St a ) } {} }
-            F → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [i] . c sts )
+    ( vec_free [St] . c sts )
     ( vec_free_with [String] . c stpaths \ String t → v { ( string_free t ) } )
     ? . c cfg_ok { ( json_free . c cfg ) } {}
     ( nurl_free # s c )
@@ -632,7 +620,7 @@ $ `deps/safetensor/src/safetensor.nu`
     : i ftype ? == wt CV_Q8_0 7 ? == wt CV_F16 1 ? == wt CV_BF16 32 0
 
     : *Cv c # *Cv ( nurl_alloc Z Cv )
-    = . c sts ( vec_new [i] )
+    = . c sts ( vec_new [St] )
     = . c stpaths ( vec_new [String] )
     = . c cfg_ok F
 
@@ -706,7 +694,7 @@ $ `deps/safetensor/src/safetensor.nu`
                             : String p ( __cv_path hfdir en )
                             ?? ( st_open ( string_data p ) ) {
                                 T stp → {
-                                    ( vec_push [i] . c sts # i stp )
+                                    ( vec_push [St] . c sts stp )
                                     ( vec_push [String] . c stpaths ( string_from ( string_data p ) ) )
                                 }
                                 F e2 → {
@@ -729,7 +717,7 @@ $ `deps/safetensor/src/safetensor.nu`
             ^ 1
         }
     }
-    ? < ( vec_len [i] . c sts ) 1 {
+    ? < ( vec_len [St] . c sts ) 1 {
         ( __cv_errmsg `no model*.safetensors shards found in` hfdir )
         ( __cv_close c )
         ^ 1

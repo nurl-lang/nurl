@@ -15,7 +15,7 @@
 // F16/BF16 via floatbits' encoders (the same ones gguf uses); I64 from a
 // host i vector. stw_add_raw takes pre-encoded bytes for any other dtype.
 //
-//   ( stw_new )                          → *StWriter
+//   ( stw_new )                          → StWriter
 //   ( stw_add_f32 w name shape v )       → v        (v: Vec f, host f64)
 //   ( stw_add_f64 w name shape v )       → v
 //   ( stw_add_f16 w name shape v )       → v
@@ -24,7 +24,10 @@
 //   ( stw_add_raw w name dtype shape b ) → v        (b: Vec u, LE bytes)
 //   ( stw_finish w )                     → ( Vec u ) — the whole file
 //   ( stw_write w path )                 → !v String
-//   ( stw_free w )                       → v
+//   ( stw_free w )                       → v   early release (optional)
+//
+// A StWriter is a handle: every copy is the same writer, and the last owner
+// releases it. Nothing here is released by hand.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -32,6 +35,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `safetensor.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __stw_gf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → x F → 0.0 } }
 
@@ -48,25 +52,39 @@ $ `safetensor.nu`
 // A chunk is the typed add's own freshly built byte vec, moved in whole;
 // offsets are tracked in `dlen`, and stw_write streams the chunks out in
 // order. The on-disk bytes are identical to the old writer's.
-: StWriter {
+: StWriterImpl {
     String hdr  // building JSON, starts "{"
     ( Vec StwChunk ) chunks  // tensor bytes, one chunk per add, in order
     i dlen  // total data bytes so far (the next tensor's begin offset)
     b first  // no comma before the first entry
 }
 
-@ stw_new → *StWriter {
-    : *StWriter w # *StWriter ( nurl_alloc Z StWriter )
+// A StWriter is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same writer, and the last owner releases it.
+: StWriter { s ctl }
+
+@ StWriter_share StWriter h → StWriter { ^ @ StWriter { # s ( rcbox_share # i . h ctl ) } }
+
+@ StWriter_drop sink StWriter h → v {
+    ( mem_forget h )
+    ( rcbox_release [StWriterImpl] # i . h ctl )
+}
+
+@ __StWriter_ptr StWriter h → *StWriterImpl { ^ ( rcbox_ptr [StWriterImpl] # i . h ctl ) }
+
+@ stw_new → StWriter {
+    : i w__box ( rcbox_zero [StWriterImpl] )
+    : *StWriterImpl w ( rcbox_ptr [StWriterImpl] w__box )
     = . w hdr ( string_from `{` )
     = . w chunks ( vec_new [StwChunk] )
     = . w dlen 0
     = . w first T
-    ^ w
+    ^ @ StWriter { # s w__box }
 }
 
 // Take ownership of `cb` as the next tensor's data region and write its
 // header entry.
-@ __stw_push_chunk * StWriter w s name i dtype ( Vec i ) shape ( Vec u ) cb → v {
+@ __stw_push_chunk * StWriterImpl w s name i dtype ( Vec i ) shape ( Vec u ) cb → v {
     : i at . w dlen
     : i endo + at ( vec_len [u] cb )
     ( vec_push [StwChunk] . w chunks @ StwChunk { cb } )
@@ -76,7 +94,7 @@ $ `safetensor.nu`
 
 // Append the JSON header entry for a tensor whose bytes already sit in
 // . w data at [at, endo).
-@ __stw_entry * StWriter w s name i dtype ( Vec i ) shape i at i endo → v {
+@ __stw_entry * StWriterImpl w s name i dtype ( Vec i ) shape i at i endo → v {
     ? . w first { = . w first F } { ( string_push_str . w hdr `,` ) }
     ( string_push_str . w hdr `"` )
     ( string_push_str . w hdr name )
@@ -96,16 +114,18 @@ $ `safetensor.nu`
     ( string_push_str . w hdr `]}` )
 }
 
-// Any dtype: `bytes` is the tensor's raw little-endian payload (still
-// BORROWED — copied into a fresh chunk, the caller frees its own vec).
-@ stw_add_raw * StWriter w s name i dtype ( Vec i ) shape ( Vec u ) bytes → v {
+// Any dtype: `bytes` is the tensor's raw little-endian payload (borrowed:
+// copied into a fresh chunk, the caller keeps its own vec).
+@ stw_add_raw StWriter w__h s name i dtype ( Vec i ) shape ( Vec u ) bytes → v {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] ( vec_len [u] bytes ) )
     ( bytes_extend_bytes cb bytes )
     ( __stw_push_chunk w name dtype shape cb )
 }
 
 // F32: host f64 rounded to float32 on write.
-@ stw_add_f32 * StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
+@ stw_add_f32 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 4 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -116,7 +136,8 @@ $ `safetensor.nu`
 }
 
 // F64: host f64 exact.
-@ stw_add_f64 * StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
+@ stw_add_f64 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 8 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -127,7 +148,8 @@ $ `safetensor.nu`
 }
 
 // F16: host f64 → IEEE half (round-to-nearest-even via floatbits).
-@ stw_add_f16 * StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
+@ stw_add_f16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 2 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -138,7 +160,8 @@ $ `safetensor.nu`
 }
 
 // BF16: host f64 → bfloat16 (truncated top 16 bits of the f32).
-@ stw_add_bf16 * StWriter w s name ( Vec i ) shape ( Vec f ) v → v {
+@ stw_add_bf16 StWriter w__h s name ( Vec i ) shape ( Vec f ) v → v {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 2 ( vec_len [f] v ) )
     : ~ i k 0
     ~ < k ( vec_len [f] v ) {
@@ -149,7 +172,8 @@ $ `safetensor.nu`
 }
 
 // I64 from a host i vector.
-@ stw_add_i64 * StWriter w s name ( Vec i ) shape ( Vec i ) v → v {
+@ stw_add_i64 StWriter w__h s name ( Vec i ) shape ( Vec i ) v → v {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     : ( Vec u ) cb ( vec_with_cap [u] * 8 ( vec_len [i] v ) )
     : ~ i k 0
     ~ < k ( vec_len [i] v ) {
@@ -161,7 +185,8 @@ $ `safetensor.nu`
 
 // The whole file as one byte vector (small files / tests; a big file
 // wants stw_write, which streams the chunks and never concatenates).
-@ stw_finish * StWriter w → ( Vec u ) {
+@ stw_finish StWriter w__h → ( Vec u ) {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     ( string_push_str . w hdr `}` )
     : i hlen ( string_len . w hdr )
     : ( Vec u ) out ( vec_with_cap [u] + + 8 hlen . w dlen )
@@ -189,7 +214,8 @@ $ `safetensor.nu`
 // model's 16 GB merge briefly doubles the writer to 32 GB and is the
 // difference between finishing and the OOM killer. Zero extra copies
 // here; the on-disk bytes are identical.
-@ stw_write * StWriter w s path → !v String {
+@ stw_write StWriter w__h s path → !v String {
+    : *StWriterImpl w ( __StWriter_ptr w__h )
     ( string_push_str . w hdr `}` )
     : i hlen ( string_len . w hdr )
     : ( Vec u ) pre ( vec_new [u] )
@@ -204,7 +230,6 @@ $ `safetensor.nu`
         T _ → {}
         F _ → { = wok F }
     }
-    ( vec_free [u] pre )
     : ~ i c 0
     ~ & < c ( vec_len [StwChunk] . w chunks ) wok {
         ?? ( vec_get [StwChunk] . w chunks c ) {
@@ -222,16 +247,6 @@ $ `safetensor.nu`
     ^ @ !v String { F ( string_from `safetensor: cannot write file` ) }
 }
 
-@ stw_free sink * StWriter w → v {
-    ( string_free . w hdr )
-    : ~ i c 0
-    ~ < c ( vec_len [StwChunk] . w chunks ) {
-        ?? ( vec_get [StwChunk] . w chunks c ) {
-            T ch → { ( vec_free [u] . ch b ) }
-            F → {}
-        }
-        = c + c 1
-    }
-    ( vec_free [StwChunk] . w chunks )
-    ( nurl_free # s w )
-}
+// Let go of `w` now rather than at the end of its owner's scope.
+// Let go of `w` now rather than at the end of its owner's scope.
+@ stw_free sink StWriter w → v {}

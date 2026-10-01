@@ -1129,7 +1129,7 @@ $ `tokenizer.nu`
 // (dtype 0) writes F64, f32/mixed write F32 — either way the file holds
 // exactly what the device buffers hold, so a resume is a lossless
 // round-trip for every capture dtype.
-@ __ft_ckpt_add * StWriter so s name ( Vec f ) val i n i dtype → v {
+@ __ft_ckpt_add StWriter so s name ( Vec f ) val i n i dtype → v {
     ? == dtype 0 {
         : ( Vec i ) sh ( vec_new [i] )
         ( vec_push [i] sh n )
@@ -1139,7 +1139,7 @@ $ `tokenizer.nu`
 }
 
 @ __ft_ckpt_save s path * FtModel m i r GProg pg GpOpt go * u pids i nslot i step i dtype i wstr → b {
-    : *StWriter so ( stw_new )
+    : StWriter so ( stw_new )
     : ( Vec i ) meta ( vec_new [i] )
     ( vec_push [i] meta 1 )
     ( vec_push [i] meta step )
@@ -1217,7 +1217,7 @@ $ `tokenizer.nu`
 
 // An F64 checkpoint tensor read raw off the mapping — st_dequant narrows
 // everything through f32, which would round an f64-replay checkpoint.
-@ __ft_ckpt_vals64 * St st StTensor t → ( Vec f ) {
+@ __ft_ckpt_vals64 St st StTensor t → ( Vec f ) {
     : *u P ( st_tensor_ptr st t )
     : i n . t nelems
     : ( Vec f ) o ( vec_with_cap [f] n )
@@ -1231,7 +1231,7 @@ $ `tokenizer.nu`
 
 // One checkpoint tensor into a Vec f of exactly `want` elements, at the
 // precision the file stored (F64 raw, everything else via st_dequant).
-@ __ft_ckpt_read * St st s kind i pi i want → !( Vec f ) String {
+@ __ft_ckpt_read St st s kind i pi i want → !( Vec f ) String {
     : String nm ( __ft_ckpt_name kind pi )
     : i ti ( st_find_tensor st ( string_data nm ) )
     ( string_free nm )
@@ -1240,7 +1240,7 @@ $ `tokenizer.nu`
     }
     // fallback dtype -1: never ST_F64 (0), so a failed get cannot fall
     // into the raw-pointer path
-    : StTensor tt ?? ( vec_get [StTensor] . st tensors ti ) {
+    : StTensor tt ?? ( vec_get [StTensor] ( st_tensors st ) ti ) {
         T x → x
         F → @ StTensor { ( string_new ) -1 0 0 0 0 0 0 0 0 }
     }
@@ -1503,7 +1503,7 @@ $ `tokenizer.nu`
 // ── safetensors output (via the safetensor package's writer) ─────────
 
 // Add one F32 tensor with shape [d0] (d1==0) or [d0,d1].
-@ __ft_st_add * StWriter w s name ( Vec f ) v i d0 i d1 → v {
+@ __ft_st_add StWriter w s name ( Vec f ) v i d0 i d1 → v {
     : ( Vec i ) sh ( vec_new [i] )
     ( vec_push [i] sh d0 )
     ? > d1 0 { ( vec_push [i] sh d1 ) } {}
@@ -1514,7 +1514,7 @@ $ `tokenizer.nu`
 // Save trained adapters as a safetensors file: per slot,
 // blk.<L>.<which>.lora_a [in,r] and .lora_b [r,out], F32.
 @ ft_adapters_save s path * FtModel m FtTrain t i r → !v String {
-    : *StWriter so ( stw_new )
+    : StWriter so ( stw_new )
     : i nslot * 7 . m n_layer
     : ~ i sl 0
     : ~ i aoff 0
@@ -1597,7 +1597,7 @@ $ `tokenizer.nu`
             : ~ i r 0
             : i ti0 ( st_find_tensor st `blk.0.q.lora_a` )
             ? >= ti0 0 {
-                ?? ( vec_get [StTensor] . st tensors ti0 ) { T t → { = r . t d1 } F → {} }
+                ?? ( vec_get [StTensor] ( st_tensors st ) ti0 ) { T t → { = r . t d1 } F → {} }
             } {}
             ? & > r 0 <= r 4096 {} {
                 ( st_close st )
@@ -1668,7 +1668,7 @@ $ `tokenizer.nu`
 // does for GGUFs, so the file is a genuine HF checkpoint.
 
 // merged tape-layout [in,out] → emit [out,in] rows; q/k: NORM re-permute.
-@ __ft_emit_w * StWriter so s name FtW w b reperm i heads i hd → v {
+@ __ft_emit_w StWriter so s name FtW w b reperm i heads i hd → v {
     : i in . w rows
     : i out . w cols
     : ( Vec f ) e ( vec_with_cap [f] * out in )
@@ -1722,7 +1722,7 @@ $ `tokenizer.nu`
             F e → { ^ @ !v String { F e } }
         }
     } {}
-    : *StWriter so ( stw_new )
+    : StWriter so ( stw_new )
     // embeddings + final norm (frozen; [V,H] is already [out,in]).
     // The merge CONSUMES m.embd: once its bytes are in the writer the 3 GB
     // f64 host copy has no further reader here, and every caller merges

@@ -127,10 +127,10 @@ $ `src/tokenizer.nu`
     i gg
     // A SECOND weight source: the same model, in the container Hugging Face
     // ships it in. The GGUF still supplies the hyperparameters and the
-    // tokenizer; the tensors come from here when it is set (0 = not set).
+    // tokenizer; the tensors come from here when it is open (st_is_open).
     // This is how the safetensor reader is proven: run the same model from
     // both containers and require the logits to agree.
-    i st
+    St st
     b st_norm_add1
     i st_embd
     i embd_idx
@@ -283,7 +283,7 @@ $ `src/tokenizer.nu`
 
 @ __lm_upload * Llm m * Gguf gg s name → i {
     // A second container, when one was given: same tensor, different file.
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m name )
         ? >= d 0 { ^ d } {}
         // fall through: a tensor the safetensors file does not carry (a tied
@@ -556,12 +556,11 @@ $ `src/tokenizer.nu`
         ( string_free hf )
         ^ -1
     } {}
-    : *St st # *St . m st
-    : i ti ( st_find_tensor st ( string_data hf ) )
+    : i ti ( st_find_tensor . m st ( string_data hf ) )
     : b is_norm != 0 ( nurl_str_ends ( string_data hf ) `norm.weight` )
     ( string_free hf )
     ? < ti 0 { ^ -1 } {}
-    ?? ( st_dequant st ti ) {
+    ?? ( st_dequant . m st ti ) {
         T raw → {
             ( __lm_st_rope_permute m name raw )
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
@@ -609,7 +608,7 @@ $ `src/tokenizer.nu`
 // a bias is a single row, so the dequant cost is nil.
 @ __lm_upload_opt * Llm m * Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m ( string_data nm ) )
         ? >= d 0 {
             ( string_free nm )
@@ -731,7 +730,7 @@ $ `src/tokenizer.nu`
     = . m prof_dense_ns 0
     = . m prof_out_ns 0
     ?? ( env_get `NURLLAMA_PROF` ) { T v → { ( string_free v ) = . m prof_on T } F → {} }
-    = . m st 0
+    = . m st ( st_none )
     = . m st_embd -1
     = . m st_norm_add1 F
     = . m n_embd ( __lm_kv_i gg arch `embedding_length` 0 )
@@ -864,11 +863,11 @@ $ `src/tokenizer.nu`
     ? > ( nurl_str_len weights ) 0 {
         ?? ( st_open weights ) {
             T stp → {
-                = . m st # i stp
+                = . m st stp
                 = . m st_norm_add1 is_gemma3
-                = . m st_embd ( st_find_tensor stp `model.embed_tokens.weight` )
+                = . m st_embd ( st_find_tensor . m st `model.embed_tokens.weight` )
                 ? < . m st_embd 0 {
-                    ( st_close stp )
+                    ( st_close . m st )
                     ( nurl_free # s m )
                     ( gguf_close gg )
                     ^ ( __lm_err `nurllama: the safetensors file has no model.embed_tokens.weight` )
@@ -1224,7 +1223,7 @@ $ `src/tokenizer.nu`
         ( nurl_eprintln ( string_data pm ) )
         ( string_free pm )
     } {}
-    ? != . m st 0 { ( st_close # *St . m st ) } {}
+    ? ( st_is_open . m st ) { ( st_close . m st ) } {}
     ( vec_free [GpuBuffer] . m wbufs )  // every weight and scratch buffer
     ( vec_free [i] . m wdptr )
     ( vec_free [i] . m wbytes )
@@ -1493,8 +1492,8 @@ $ `src/tokenizer.nu`
         // decoded, out of whichever container the weights came from. A
         // safetensors row range is exact (no block quantisation), a GGUF one is
         // block-aligned — both land here as f32.
-        ? != . m st 0 {
-            ?? ( st_dequant_range # *St . m st . m st_embd * tok ne ne ) {
+        ? ( st_is_open . m st ) {
+            ?? ( st_dequant_range . m st . m st_embd * tok ne ne ) {
                 T row → {
                     : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
                     ( vec_free [u] row )

@@ -32,16 +32,16 @@ $ `src/write.nu`
 }
 
 // dtype + shape of a parsed tensor by name
-@ tinfo * St s s name * u dt * u nd * u d0 * u d1 * u ne → b {
+@ tinfo St s s name inout i dt inout i nd inout i d0 inout i d1 inout i ne → b {
     : i idx ( st_find_tensor s name )
     ? >= idx 0 {} { ^ F }
-    ?? ( vec_get [StTensor] . s tensors idx ) {
+    ?? ( vec_get [StTensor] ( st_tensors s ) idx ) {
         T t → {
-            ( nurl_poke dt 0 . t dtype )
-            ( nurl_poke nd 0 . t nd )
-            ( nurl_poke d0 0 . t d0 )
-            ( nurl_poke d1 0 . t d1 )
-            ( nurl_poke ne 0 . t nelems )
+            = dt . t dtype
+            = nd . t nd
+            = d0 . t d0
+            = d1 . t d1
+            = ne . t nelems
             ^ T
         }
         F → { ^ F }
@@ -51,7 +51,7 @@ $ `src/write.nu`
 
 @ main → i {
     // build a file with F32 [2,3], F64 [4], I64 [2,2]
-    : *StWriter w ( stw_new )
+    : StWriter w ( stw_new )
     : ( Vec f ) af ( vec_new [f] )
     : ~ i k 0
     ~ < k 6 { ( vec_push [f] af * 0.5 - # f k 2.5 ) = k + k 1 }
@@ -73,14 +73,14 @@ $ `src/write.nu`
     ?? ( st_parse_bytes bytes ) {
         T st → {
             ( check == ( st_n_tensors st ) 3 `3 tensors round-trip` )
-            : *u dt ( nurl_alloc 8 )
-            : *u nd ( nurl_alloc 8 )
-            : *u d0 ( nurl_alloc 8 )
-            : *u d1 ( nurl_alloc 8 )
-            : *u ne ( nurl_alloc 8 )
+            : ~ i dt 0
+            : ~ i nd 0
+            : ~ i d0 0
+            : ~ i d1 0
+            : ~ i ne 0
             // F32
             ( check ( tinfo st `wf32` dt nd d0 d1 ne ) `wf32 present` )
-            ( check & & & == ( nurl_peek dt 0 ) ST_F32 == ( nurl_peek nd 0 ) 2 == ( nurl_peek d0 0 ) 2 == ( nurl_peek d1 0 ) 3 `wf32 dtype/shape [2,3] F32` )
+            ( check & & & == dt ST_F32 == nd 2 == d0 2 == d1 3 `wf32 dtype/shape [2,3] F32` )
             // dequant → f32 bytes, compare bit-exact to our own f32 encoding
             ?? ( st_dequant st ( st_find_tensor st `wf32` ) ) {
                 T got → {
@@ -94,28 +94,21 @@ $ `src/write.nu`
                         = b + b 1
                     }
                     ( check eq `wf32 values bit-exact through st_dequant` )
-                    ( vec_free [u] got ) ( vec_free [u] want )
                 }
-                F e → { ( check F `wf32 dequant` ) ( string_free e ) }
+                F e → { ( check F `wf32 dequant` ) }
             }
             // F64
             ( check ( tinfo st `wf64` dt nd d0 d1 ne ) `wf64 present` )
-            ( check & & == ( nurl_peek dt 0 ) ST_F64 == ( nurl_peek nd 0 ) 1 == ( nurl_peek d0 0 ) 4 `wf64 dtype/shape [4] F64` )
+            ( check & & == dt ST_F64 == nd 1 == d0 4 `wf64 dtype/shape [4] F64` )
             // I64
             ( check ( tinfo st `wi64` dt nd d0 d1 ne ) `wi64 present` )
-            ( check & & & == ( nurl_peek dt 0 ) ST_I64 == ( nurl_peek nd 0 ) 2 == ( nurl_peek d0 0 ) 2 == ( nurl_peek ne 0 ) 4 `wi64 dtype/shape [2,2] I64` )
-            ( nurl_free dt ) ( nurl_free nd ) ( nurl_free d0 ) ( nurl_free d1 ) ( nurl_free ne )
-            ( st_close st )
+            ( check & & & == dt ST_I64 == nd 2 == d0 2 == ne 4 `wi64 dtype/shape [2,2] I64` )
         }
         F e → {
             ( nurl_print `PARSE FAILED: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             = g_fail + g_fail 1
         }
     }
-    ( vec_free [u] bytes )
-    ( stw_free w )
-    ( vec_free [f] af ) ( vec_free [f] bf ) ( vec_free [i] iv )
     ( nurl_print `st_write_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

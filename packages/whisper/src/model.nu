@@ -32,7 +32,7 @@ $ `src/kernels.nu`
     Gpu g
     WhKernels ks
     b w_half  // matrix weights live on the device as raw f16 halves
-    i st  // *St, the safetensors file (HF checkpoint) — 0 in ggml mode
+    St st  // the safetensors file (HF checkpoint) — st_none in ggml mode
     i gg  // *Gg, whisper.cpp's legacy ggml container — 0 in HF mode
     // the load's upload queue: every tensor is allocated as it is met and
     // sent in ONE streamed batch (gpu_upload_batch) once the last one is
@@ -222,12 +222,11 @@ $ `src/kernels.nu`
 
 @ __wh_probe_half * Whisper w → b {
     ? != . w gg 0 { ^ ( __wh_probe_half_gg w ) } {}
-    : *St st # *St . w st
     : ~ i seen 0
     : ~ b all16 T
     : ~ i k 0
-    ~ < k ( vec_len [StTensor] . st tensors ) {
-        ?? ( vec_get [StTensor] . st tensors k ) {
+    ~ < k ( vec_len [StTensor] ( st_tensors . w st ) ) {
+        ?? ( vec_get [StTensor] ( st_tensors . w st ) k ) {
             T t → {
                 ? ( __wh_is_matrix ( string_data . t name ) ) {
                     = seen + seen 1
@@ -262,8 +261,7 @@ $ `src/kernels.nu`
         ? & keep16 . w w_half { ^ ( __wh_queue w ( gg_ptr gg gi ) * ge 2 ) } {}
         ^ ( __wh_queue_widen w ( gg_ptr gg gi ) ge T )
     } {}
-    : *St st # *St . w st
-    : i ti ( st_find_tensor st name )
+    : i ti ( st_find_tensor . w st name )
     ? < ti 0 { ^ -1 } {}
     // A tensor that is ALREADY f32 — which is what a whisper checkpoint is —
     // needs no conversion at all: upload it straight out of the mapping.
@@ -273,25 +271,25 @@ $ `src/kernels.nu`
     // distil-large-v3 that is 378 MILLION of each, and it cost 11.3 of the
     // 11.6 seconds a transcription took — while reading the whole 1.5 GB file
     // off disk takes 0.25 s. Don't copy what you can point at.
-    ?? ( vec_get [StTensor] . st tensors ti ) {
+    ?? ( vec_get [StTensor] ( st_tensors . w st ) ti ) {
         T t → {
-            ? == . t dtype ST_F32 { ^ ( __wh_queue w ( st_tensor_ptr st t ) . t nbytes ) } {}
+            ? == . t dtype ST_F32 { ^ ( __wh_queue w ( st_tensor_ptr . w st t ) . t nbytes ) } {}
             // The checkpoint's own precision IS f16: for a matrix weight in
             // half mode there is nothing to widen — the halves are the model.
-            ? & & keep16 . w w_half == . t dtype ST_F16 { ^ ( __wh_queue w ( st_tensor_ptr st t ) . t nbytes ) } {}
+            ? & & keep16 . w w_half == . t dtype ST_F16 { ^ ( __wh_queue w ( st_tensor_ptr . w st t ) . t nbytes ) } {}
             // f16 / bf16 — which is what a whisper checkpoint actually is — go up
             // as RAW HALVES and are widened by a kernel. Half the bytes over PCIe,
             // and the widening happens where there are thousands of threads for
             // it instead of one host loop doing 378 million iterations.
             ? | == . t dtype ST_F16 == . t dtype ST_BF16 {
-                ^ ( __wh_queue_widen w ( st_tensor_ptr st t ) . t nelems == . t dtype ST_F16 )
+                ^ ( __wh_queue_widen w ( st_tensor_ptr . w st t ) . t nelems == . t dtype ST_F16 )
             } {}
         }
         F → {}
     }
     // anything else (an integer tensor) widens on the host — and goes up
     // now, its Vec does not outlive this call
-    ?? ( st_dequant st ti ) {
+    ?? ( st_dequant . w st ti ) {
         T raw → {
             : i n ( vec_len [u] raw )
             : i d ( __wh_carve w n )
@@ -529,9 +527,9 @@ $ `src/kernels.nu`
         // after this returns); only the file goes
         ( gg_release_data # *Gg . w gg )
     } {}
-    ? != . w st 0 {
-        ( st_close # *St . w st )
-        = . w st 0
+    ? ( st_is_open . w st ) {
+        ( st_close . w st )
+        = . w st ( st_none )
     } {}
 }
 
@@ -631,7 +629,7 @@ $ `src/kernels.nu`
 
     ?? ( st_open weights_path ) {
         T st → {
-            = . w st # i st
+            = . w st st
             = . w w_half ( __wh_probe_half w )
         }
         F e → {
@@ -649,7 +647,7 @@ $ `src/kernels.nu`
     ?? ( gg_open path ) {
         T gg → {
             : *Whisper w # *Whisper ( nurl_alloc Z Whisper )
-            = . w st 0
+            = . w st ( st_none )
             = . w bufs ( vec_new [i] )
             = . w bufsz ( vec_new [i] )
             = . w bufo ( vec_new [GpuBuffer] )
@@ -907,7 +905,7 @@ $ `src/kernels.nu`
     ( vec_free [i] . w kcache ) ( vec_free [i] . w vcache )
     ( vec_free [i] . w xk ) ( vec_free [i] . w xv )
     ( gpu_host_free . w logits_host )
-    ? != . w st 0 { ( st_close # *St . w st ) } {}
+    ? ( st_is_open . w st ) { ( st_close . w st ) } {}
     ? != . w gg 0 { ( gg_close # *Gg . w gg ) } {}
     ? ( gpu_ok . w g ) { ( wk_free . w ks ) ( gpu_close . w g ) } {}
     ( nurl_free # s w )
