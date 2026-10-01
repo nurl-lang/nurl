@@ -535,7 +535,9 @@ $ `stdlib/core/rcbox.nu`
 // but driven by a follow-up.)
 //
 // Two fibers: a receiver (answer PINGs, record ACKs, merge gossip) and
-// the failure detector. Heap-allocated so both fibers share one node.
+// the failure detector. A SwimNode is a handle: both fibers hold it, so
+// the node lives until swim_stop ends them and its last owner lets go —
+// then its socket is closed (swim_node_free is an early release, optional).
 
 // A pending indirect probe this node is relaying on a peer's behalf: it
 // PINGed `target` with `probe_seq`; when that ACK arrives it forwards an
@@ -549,7 +551,7 @@ $ `stdlib/core/rcbox.nu`
     i created_ms
 }
 
-: SwimNode {
+: SwimNodeImpl {
     MemberTable table
     UdpSocket sock
     String host
@@ -565,12 +567,32 @@ $ `stdlib/core/rcbox.nu`
     i running
 }
 
-@ swim_node_new s host i port i period_ms i ping_timeout_ms i suspect_timeout_ms → !*SwimNode NetErr {
+// A SwimNode is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same node, and the last owner releases it.
+: SwimNode { s ctl }
+
+@ SwimNode_share SwimNode h → SwimNode { ^ @ SwimNode { # s ( rcbox_share # i . h ctl ) } }
+
+@ SwimNode_drop sink SwimNode h → v {
+    ( mem_forget h )
+    ( rcbox_release [SwimNodeImpl] # i . h ctl )
+}
+
+@ __SwimNode_ptr SwimNode h → *SwimNodeImpl { ^ ( rcbox_ptr [SwimNodeImpl] # i . h ctl ) }
+
+// The node bound its socket itself: its last owner closes it (the table,
+// the locks and the lists are the compiler's, dropped after this).
+% Drop SwimNodeImpl {
+    @ drop SwimNodeImpl n → v { ( udp_close . n sock ) }
+}
+
+@ swim_node_new s host i port i period_ms i ping_timeout_ms i suspect_timeout_ms → !SwimNode NetErr {
     : !UdpSocket NetErr sr ( udp_bind host port )
     ^ ?? sr {
         T sock → {
             ( udp_set_timeout sock 500 )
-            : *SwimNode n # *SwimNode ( nurl_alloc Z SwimNode )
+            : i n__box ( rcbox_zero [SwimNodeImpl] )
+            : *SwimNodeImpl n ( rcbox_ptr [SwimNodeImpl] n__box )
             = . n table ( mtable_new host port suspect_timeout_ms )
             = . n sock sock
             = . n host ( string_from host )
@@ -584,27 +606,22 @@ $ `stdlib/core/rcbox.nu`
             = . n fwd_m ( mutex_new )
             = . n fwd ( vec_new [FwdEntry] )
             = . n running 1
-            @ !*SwimNode NetErr { T n }
+            @ !SwimNode NetErr { T @ SwimNode { # s n__box } }
         }
-        F e → @ !*SwimNode NetErr { F # NetErr e }
+        F e → @ !SwimNode NetErr { F # NetErr e }
     }
 }
 
 // The node's membership table: another owner of the same table.
-@ swim_table * SwimNode n → MemberTable { ^ ( MemberTable_share . n table ) }
-
-@ swim_node_free sink * SwimNode n → v {
-    ( mtable_free . n table )
-    ( udp_close . n sock )
-    ( mutex_free . n ack_m )
-    ( vec_free [i] . n acked )
-    ( vec_free_with [FwdEntry] . n fwd \ FwdEntry e → v { ( string_free . e req_host ) } )
-    ( mutex_free . n fwd_m )
-    ( string_free . n host )
-    ( nurl_free # s n )
+@ swim_table SwimNode n__h → MemberTable {
+    : *SwimNodeImpl n ( __SwimNode_ptr n__h )
+    ^ ( MemberTable_share . n table )
 }
 
-@ __node_send * SwimNode n s host i port SwimMsg m → v {
+// Let go of `n` now rather than at the end of its owner's scope.
+@ swim_node_free sink SwimNode n → v {}
+
+@ __node_send * SwimNodeImpl n s host i port SwimMsg m → v {
     : ( Vec u ) bytes ( swim_msg_encode m )
     : !i NetErr r ( udp_send_to . n sock bytes host port )
     ?? r { T _ → {} F _ → {} }
@@ -612,12 +629,12 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Build a message of `ty` carrying a fresh gossip sample.
-@ __mk_msg * SwimNode n SwimMsgType ty i seq s th i tp → SwimMsg {
+@ __mk_msg * SwimNodeImpl n SwimMsgType ty i seq s th i tp → SwimMsg {
     : ( Vec Member ) g ( mtable_gossip . n table 6 )
     ^ @ SwimMsg { ty seq ( string_from ( string_data . n host ) ) . n port ( string_from th ) tp g }
 }
 
-@ __apply_gossip * SwimNode n ( Vec Member ) g → v {
+@ __apply_gossip * SwimNodeImpl n ( Vec Member ) g → v {
     : i gn ( vec_len [Member] g )
     : ~ i k 0
     ~ < k gn {
@@ -629,7 +646,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __handle * SwimNode n SwimMsg m → v {
+@ __handle * SwimNodeImpl n SwimMsg m → v {
     ( __apply_gossip n . m gossip )
     : i ty ( _mtype_code . m mtype )
     ? == ty 1 {  // PING → ACK (echo seq)
@@ -668,7 +685,7 @@ $ `stdlib/core/rcbox.nu`
 // A target's ACK to one of our relayed probes (`probe_seq`) → forward an
 // ACK carrying the requester's original seq back to them, and drop the
 // pending entry. No-op when `seq` matches no pending relay.
-@ __try_forward_ack * SwimNode n i seq → v {
+@ __try_forward_ack * SwimNodeImpl n i seq → v {
     ( mutex_lock . n fwd_m )
     : i nn ( vec_len [FwdEntry] . n fwd )
     : ~ i idx - 0 1
@@ -701,7 +718,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Drop relayed probes older than 2× the ping timeout (the target never
 // answered) so the pending list can't grow without bound.
-@ __prune_fwd * SwimNode n → v {
+@ __prune_fwd * SwimNodeImpl n → v {
     ( mutex_lock . n fwd_m )
     : i now / ( monotonic_ns ) 1000000
     : i cutoff * . n ping_timeout_ms 2
@@ -717,7 +734,7 @@ $ `stdlib/core/rcbox.nu`
     ( mutex_unlock . n fwd_m )
 }
 
-@ __recv_loop * SwimNode n → v {
+@ __recv_loop * SwimNodeImpl n → v {
     ~ != 0 . n running {
         : !UdpPacket NetErr r ( udp_recv_from . n sock 2048 )
         ?? r {
@@ -734,7 +751,7 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __got_ack * SwimNode n i seq → b {
+@ __got_ack * SwimNodeImpl n i seq → b {
     ( mutex_lock . n ack_m )
     : i nn ( vec_len [i] . n acked )
     : ~ b found F
@@ -751,7 +768,7 @@ $ `stdlib/core/rcbox.nu`
 // Returns T if any relay reports back an ACK within the ping timeout (the
 // target is alive via some path). F when no relay answers — or when there
 // are no relays to ask.
-@ __indirect_probe * SwimNode n String thost i tport → b {
+@ __indirect_probe * SwimNodeImpl n String thost i tport → b {
     = . n seq_ctr + . n seq_ctr 1
     : i iseq . n seq_ctr
     : ( Vec Member ) relays ( mtable_pick_relays . n table . n indirect_k ( string_data thost ) tport )
@@ -780,7 +797,7 @@ $ `stdlib/core/rcbox.nu`
     ^ iok
 }
 
-@ __fd_loop * SwimNode n → v {
+@ __fd_loop * SwimNodeImpl n → v {
     ~ != 0 . n running {
         ( sleep_ms . n period_ms )
         : ?Member tgt ( mtable_pick_probe . n table )
@@ -823,7 +840,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Announce ourselves to a seed node (it learns us via the JOIN's gossip
 // and replies with its own membership).
-@ swim_join * SwimNode n s seed_host i seed_port → v {
+@ swim_join SwimNode n__h s seed_host i seed_port → v {
+    : *SwimNodeImpl n ( __SwimNode_ptr n__h )
     : SwimMsg j ( __mk_msg n @ SwimMsgType { MtJoin } 0 `` 0 )
     ( __node_send n seed_host seed_port j )
     ( swim_msg_free j )
@@ -831,9 +849,17 @@ $ `stdlib/core/rcbox.nu`
 
 // Spawn the receiver + failure-detector fibers. Requires runtime_init /
 // runtime_run by the caller.
-@ swim_run * SwimNode n → v {
-    ( spawn \ → v { ( __recv_loop n ) } )
-    ( spawn \ → v { ( __fd_loop n ) } )
+@ swim_run SwimNode n → v {
+    // Each fiber owns a share of the node and lets go of it when its loop
+    // ends (a closure that releases a capture takes it over), so the
+    // caller's handle may go at any time: the node outlives both loops.
+    : SwimNode rn ( SwimNode_share n )
+    ( spawn \ → v { ( __recv_loop ( __SwimNode_ptr rn ) ) ( swim_node_free rn ) } )
+    : SwimNode fn ( SwimNode_share n )
+    ( spawn \ → v { ( __fd_loop ( __SwimNode_ptr fn ) ) ( swim_node_free fn ) } )
 }
 
-@ swim_stop * SwimNode n → v { = . n running 0 }
+@ swim_stop SwimNode n__h → v {
+    : *SwimNodeImpl n ( __SwimNode_ptr n__h )
+    = . n running 0
+}

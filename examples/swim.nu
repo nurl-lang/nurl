@@ -21,7 +21,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/std/swim.nu`
 
-@ print_view * SwimNode n i port → v {
+@ print_view SwimNode n i port → v {
     : MemberTable t ( swim_table n )
     : ( Vec Member ) ms ( mtable_snapshot t )
     : String line ( string_from `[:` )
@@ -51,7 +51,7 @@ $ `stdlib/std/swim.nu`
     ( vec_free_with [Member] ms \ Member mm → v { ( member_free mm ) } )
 }
 
-@ printer_loop * SwimNode n i port → v {
+@ printer_loop SwimNode n i port → v {
     ~ 1 {
         ( sleep_ms 1000 )
         ( print_view n port )
@@ -72,7 +72,7 @@ $ `stdlib/std/swim.nu`
     ( runtime_init 0 )
 
     // period 500ms, ping-timeout 300ms, suspect→dead after 2s.
-    : !*SwimNode NetErr nr ( swim_node_new `127.0.0.1` port 500 300 2000 )
+    : !SwimNode NetErr nr ( swim_node_new `127.0.0.1` port 500 300 2000 )
     ?? nr {
         T n → {
             ? > argc 2 {
