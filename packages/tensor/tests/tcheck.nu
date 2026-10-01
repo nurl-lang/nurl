@@ -16,9 +16,9 @@ $ `src/ops.nu`
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ^ v
 }
 // consumes t (it is always passed a fresh arange temporary here)
-@ reshape3 Tensor t i a i b i c → Tensor {
+@ reshape3 sink Tensor t i a i b i c → Tensor {
     ?? ( tensor_reshape t ( sh3 a b c ) ) {
-        T r → { ( tensor_free t ) ^ r }
+        T r → { ^ r }
         F _ → { ^ t }
     }
 }
@@ -35,13 +35,12 @@ $ `src/ops.nu`
     ~ < k n { ? > k 0 { ( string_push_char s 44 ) } {} ( string_push_float s ( tensor_flat t k ) ) = k + k 1 }
     ( nurl_print ( string_data s ) )
     ( nurl_print `\n` )
-    ( string_free s )
 }
-// print then free (for owned temporaries)
-@ ptf s name Tensor t → v { ( pt name t ) ( tensor_free t ) }
-// unwrap ?Tensor: print+free, or report FAIL
-@ pto s name ? Tensor o → v {
-    ?? o { T t → { ( pt name t ) ( tensor_free t ) } F _ → { ( nurl_print name ) ( nurl_print `|FAIL\n` ) } }
+// print an owned temporary
+@ ptf s name sink Tensor t → v { ( pt name t ) }
+// unwrap ?Tensor: print, or report FAIL
+@ pto s name sink ? Tensor o → v {
+    ?? o { T t → { ( pt name t ) } F _ → { ( nurl_print name ) ( nurl_print `|FAIL\n` ) } }
 }
 
 @ reshape2 Tensor t i a i b → Tensor {
@@ -52,13 +51,11 @@ $ `src/ops.nu`
     // a = arange(6).reshape(2,3) = [[0,1,2],[3,4,5]]
     : Tensor a6 ( tensor_arange TE_F64 6 )
     : Tensor a ( reshape2 a6 2 3 )
-    ( tensor_free a6 )
     ( pt `a` a )
 
     // b = arange(3).reshape(1,3) — broadcasts over rows
     : Tensor b3 ( tensor_arange TE_F64 3 )
     : Tensor b ( reshape2 b3 1 3 )
-    ( tensor_free b3 )
 
     ( pto `add` ( tensor_add a b ) )
     ( pto `mul` ( tensor_mul a a ) )
@@ -67,7 +64,6 @@ $ `src/ops.nu`
     : Tensor at ( __at a )
     ( pt `aT` at )
     ( pto `matmul` ( tensor_matmul a at ) )
-    ( tensor_free at )
 
     ( ptf `sum0` ( tensor_sum a 0 F ) )
     ( ptf `sum1` ( tensor_sum a 1 F ) )
@@ -79,23 +75,17 @@ $ `src/ops.nu`
 
     : Tensor sm ( tensor_subs a 2.5 )
     ( ptf `relu` ( tensor_relu sm ) )
-    ( tensor_free sm )
     : Tensor mm ( tensor_muls a 0.1 )
     ( ptf `exp` ( tensor_exp mm ) )
-    ( tensor_free mm )
     : Tensor s2 ( tensor_subs a 2.0 )
     ( ptf `sig` ( tensor_sigmoid s2 ) )
-    ( tensor_free s2 )
 
     // 3-D permute: arange(24).reshape(2,3,4) permuted (2,0,1)
     : Tensor a24 ( tensor_arange TE_F64 24 )
     : ( Vec i ) s3 ( vec_new [i] ) ( vec_push [i] s3 2 ) ( vec_push [i] s3 3 ) ( vec_push [i] s3 4 )
     : Tensor t3 ( __one ( tensor_reshape a24 s3 ) )  // t3 adopts s3
-    ( tensor_free a24 )
     : ( Vec i ) perm ( vec_new [i] ) ( vec_push [i] perm 2 ) ( vec_push [i] perm 0 ) ( vec_push [i] perm 1 )
     ( pto `perm` ( tensor_permute t3 perm ) )
-    ( vec_free [i] perm )
-    ( tensor_free t3 )
 
     // ── M2 ──────────────────────────────────────────────────────────
     // batched matmul: A(2,2,3) · B(2,3,2) → (2,2,2)
@@ -105,14 +95,12 @@ $ `src/ops.nu`
     // broadcast batch: A(1,2,3) · B(2,3,2) → (2,2,2)
     : Tensor bmA1 ( reshape3 ( tensor_arange TE_F64 6 ) 1 2 3 )
     ( pto `bmm_bc` ( tensor_bmm bmA1 bmB ) )
-    ( tensor_free bmA ) ( tensor_free bmB ) ( tensor_free bmA1 )
 
     ( ptf `softmax1` ( tensor_softmax a 1 ) )
 
     : ( Vec i ) sl0 ( sh2 0 1 )
     : ( Vec i ) sl1 ( sh2 2 3 )
     ( pto `slice` ( tensor_slice a sl0 sl1 ) )
-    ( vec_free [i] sl0 ) ( vec_free [i] sl1 )
 
     ( pto `cat0` ( tensor_concat2 a a 0 ) )
     ( pto `cat1` ( tensor_concat2 a a 1 ) )
@@ -123,15 +111,11 @@ $ `src/ops.nu`
     // large matmul to exercise the GPU path (128x128 · 128x128); print its sum
     : Tensor big16k ( tensor_arange TE_F64 16384 )
     : Tensor big ( reshape2 big16k 128 128 )
-    ( tensor_free big16k )
     ?? ( tensor_matmul big big ) {
-        T r → { ( ptf `bigmm_sum` ( tensor_sum r -1 F ) ) ( tensor_free r ) }
+        T r → { ( ptf `bigmm_sum` ( tensor_sum r -1 F ) ) }
         F _ → { ( nurl_print `bigmm|FAIL\n` ) }
     }
-    ( tensor_free big )
 
-    ( tensor_free a )
-    ( tensor_free b )
     ( tensor_gpu_close )
     ^ 0
 }

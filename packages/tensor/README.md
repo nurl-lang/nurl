@@ -20,15 +20,14 @@ $ `deps/tensor/src/ops.nu`   // ops.nu re-exports the tensor core
 ?? ( tensor_transpose a ) {
     T at → {
         ?? ( tensor_matmul a at ) {              // a · aᵀ → ?Tensor
-            T c → { /* … use c … */ ( tensor_free c ) }
+            T c → { /* … use c … */ }
             F _ → {}
         }
-        ( tensor_free at )
     }
     F _ → {}
 }
 : Tensor col_sum ( tensor_sum a 0 F )            // reduce over axis 0
-( tensor_free half ) ( tensor_free col_sum ) ( tensor_free a )
+// nothing to free: a Tensor owns its shape and data, and goes with its owner
 ```
 
 ## The type
@@ -51,7 +50,8 @@ Creation — the `shape` vector is **adopted** (the tensor owns it):
 | `( tensor_zeros dt shape )` · `_ones` · `( tensor_full dt shape v )` | filled |
 | `( tensor_from_data dt shape data )` | from an f64 buffer (copied, rounded) |
 | `( tensor_arange dt n )` | 1-D `[0 … n-1]` |
-| `( tensor_of dt shape data )`, `( tensor_clone t )`, `( tensor_free t )` | |
+| `( tensor_of dt shape data )`, `( tensor_clone t )` | |
+| `( tensor_free t )` | early release (optional) — a Tensor is an owning struct |
 
 Queries / access: `tensor_ndim`, `tensor_size`, `tensor_dtype`, `tensor_dim`,
 `tensor_shape` (borrow), `tensor_data` (borrow), `tensor_flat` / `tensor_set_flat`.
@@ -87,7 +87,8 @@ Slicing / joining / indexing:
 `tensor_matmul` runs on the GPU via gpukit's `gk_matmul_f` for large f64
 problems (`M·N·K ≥ 100k`) and on a plain triple loop otherwise — **the results
 are identical** (the kernel accumulates in the same order). A device is opened
-lazily and shared; `tensor_gpu_close` releases it. With no GPU (or no C++
+lazily and shared (tensor holds one owner of the kit); `tensor_gpu_close` lets
+it go. With no GPU (or no C++
 compiler for the gpukit CPU backend) everything stays on the loop.
 
 ## Numerics
@@ -113,15 +114,18 @@ without numpy.
 (a gpukit `GkBuf`) and ops chain on the device with no host roundtrips:
 
 ```nurl
-: *GpuKit kit ( gk_open 0 )
+: GpuKit kit ( gk_open 0 )
 : DTensor dw ( tensor_to_device kit weights )   // upload once
 : DTensor dx ( tensor_to_device kit x )
 ?? ( dtensor_matmul kit dx dw ) { T h → {
     ?? ( dtensor_relu kit h ) { T a → {
         : Tensor out ( dtensor_to_host kit a )   // download at the end
-        ( dtensor_free a ) } F _ → {} }
-    ( dtensor_free h ) } F _ → {} }
+    } F _ → {} } } F _ → {} }
 ```
+
+A DTensor owns its shape and its device block (a gpukit `GkBuf`): it goes
+back to the kit's pool with the DTensor's last owner. Nothing is freed by
+hand; `dtensor_free` is an optional early release.
 
 Residency is explicit — nothing syncs behind your back. Ops:
 elementwise `dtensor_add/sub/mul/div` (+ scalar forms), unary

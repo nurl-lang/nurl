@@ -96,10 +96,9 @@ $ `stdlib/std/floatbits.nu`
     ^ @ Tensor { dtype shape data }
 }
 
-@ tensor_free sink Tensor t → v {
-    ( vec_free [i] . t shape )
-    ( vec_free [f] . t data )
-}
+// Let go of `t` now rather than at the end of its owner's scope (a Tensor
+// is an owning struct: its shape and data go with it).
+@ tensor_free sink Tensor t → v {}
 
 @ tensor_full i dtype ( Vec i ) shape f v → Tensor {
     : f fv ? == dtype TE_F32 { ( _t_round32 v ) } { v }
@@ -157,10 +156,10 @@ $ `stdlib/std/floatbits.nu`
 // ── Shape ops ─────────────────────────────────────────────────────────
 
 // The same data under a new shape (must have equal nelem). Data is copied so
-// the result is independent; `shape` is adopted (or freed on a size mismatch).
-@ tensor_reshape Tensor t ( Vec i ) shape → ?Tensor {
+// the result is independent; `shape` is consumed — adopted by the result, or
+// dropped on a size mismatch.
+@ tensor_reshape Tensor t sink ( Vec i ) shape → ?Tensor {
     ? == ( _t_prod shape ) ( tensor_size t ) {} {
-        ( vec_free [i] shape )
         ^ @ ?Tensor { F }
     }
     : i n ( tensor_size t )

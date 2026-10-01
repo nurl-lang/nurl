@@ -29,10 +29,10 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 
 @ dtensor_ok DTensor d → b { ^ ( gk_buf_ok . d buf ) }
 
-@ dtensor_free sink DTensor d → v {
-    ( gk_dbuf_free . d buf )
-    ( vec_free [i] . d shape )
-}
+// Let go of `d` now rather than at the end of its owner's scope: a
+// DTensor owns its shape and its device block (a GkBuf), and both go
+// with its last owner.
+@ dtensor_free sink DTensor d → v {}
 
 @ dtensor_ndim DTensor d → i { ^ ( vec_len [i] . d shape ) }
 
@@ -44,19 +44,18 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 
 // ── Residency moves ───────────────────────────────────────────────────
 
-@ tensor_to_device * GpuKit kit Tensor t → DTensor {
+@ tensor_to_device GpuKit kit Tensor t → DTensor {
     : i n ( tensor_size t )
     : GkBuf b ( gk_dbuf_new kit n ( __dt_gk . t dtype ) )
     ? ( gk_buf_ok b ) {
         ? ( gk_dbuf_upload kit b . t data ) {} {
-            ( gk_dbuf_free b )
-            ^ @ DTensor { . t dtype ( _shape_copy . t shape ) @ GkBuf { 0 0 ( __dt_gk . t dtype ) } }
+            ^ @ DTensor { . t dtype ( _shape_copy . t shape ) ( gk_buf_none ( __dt_gk . t dtype ) ) }
         }
     } {}
     ^ @ DTensor { . t dtype ( _shape_copy . t shape ) b }
 }
 
-@ dtensor_to_host * GpuKit kit DTensor d → Tensor {
+@ dtensor_to_host GpuKit kit DTensor d → Tensor {
     : i n ( dtensor_size d )
     : ( Vec f ) out ( _fvec_t n 0.0 )
     ( gk_dbuf_download kit . d buf out )
@@ -65,7 +64,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 
 // A fresh uninitialised device tensor with the same dtype as `like`,
 // adopting `shape`.
-@ __dt_new * GpuKit kit DTensor like ( Vec i ) shape i n → DTensor {
+@ __dt_new GpuKit kit DTensor like ( Vec i ) shape i n → DTensor {
     ^ @ DTensor { . like dtype shape ( gk_dbuf_new kit n ( __dt_gk . like dtype ) ) }
 }
 
@@ -85,14 +84,13 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     ^ T
 }
 
-@ __dt_binop * GpuKit kit s opname s op DTensor a DTensor b → ?DTensor {
+@ __dt_binop GpuKit kit s opname s op DTensor a DTensor b → ?DTensor {
     ? & ( dtensor_ok a ) ( dtensor_ok b ) {} { ^ @ ?DTensor { F } }
     ? == . a dtype . b dtype {} { ^ @ ?DTensor { F } }
     ? ( __dt_same_shape a b ) {
         : i n ( dtensor_size a )
         : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
         ? ( gkd_ew kit opname op . o buf . a buf . b buf ) {} {
-            ( dtensor_free o )
             ^ @ ?DTensor { F }
         }
         ^ @ ?DTensor { T o }
@@ -100,60 +98,54 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     ?? ( _t_bshape . a shape . b shape ) {
         T oshape → {
             : i nd ( vec_len [i] oshape )
-            ? <= nd 6 {} { ( vec_free [i] oshape ) ^ @ ?DTensor { F } }
+            ? <= nd 6 {} { ^ @ ?DTensor { F } }
             : ( Vec i ) ae ( _t_eff_strides . a shape nd )
             : ( Vec i ) be ( _t_eff_strides . b shape nd )
             : i total ( _t_prod oshape )
             : DTensor o ( __dt_new kit a oshape total )  // adopts oshape
             : b r ( gkd_ew_bc kit opname op . o buf . a buf . b buf oshape ae be )
-            ( vec_free [i] ae )
-            ( vec_free [i] be )
             ? r { ^ @ ?DTensor { T o } } {}
-            ( dtensor_free o )
             ^ @ ?DTensor { F }
         }
         F _ → { ^ @ ?DTensor { F } }
     }
 }
 
-@ dtensor_add * GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `add` `+` a b ) }
+@ dtensor_add GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `add` `+` a b ) }
 
-@ dtensor_sub * GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `sub` `-` a b ) }
+@ dtensor_sub GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `sub` `-` a b ) }
 
-@ dtensor_mul * GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `mul` `*` a b ) }
+@ dtensor_mul GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `mul` `*` a b ) }
 
-@ dtensor_div * GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `div` `/` a b ) }
+@ dtensor_div GpuKit kit DTensor a DTensor b → ?DTensor { ^ ( __dt_binop kit `div` `/` a b ) }
 
 // ── Scalar forms (broadcast a 1-element device operand) ───────────────
 
-@ __dt_scalar * GpuKit kit s opname s op DTensor a f v → ?DTensor {
+@ __dt_scalar GpuKit kit s opname s op DTensor a f v → ?DTensor {
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : GkBuf sc ( gk_dbuf_new kit 1 ( __dt_gk . a dtype ) )
     ? ( gk_buf_ok sc ) {} { ^ @ ?DTensor { F } }
     : ( Vec f ) hv ( _fvec_t 1 v )
     : ~ b ok ( gk_dbuf_upload kit sc hv )
-    ( vec_free [f] hv )
     : i n ( dtensor_size a )
     : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
     ? ok { = ok ( gkd_ew kit opname op . o buf . a buf sc ) } {}
-    ( gk_dbuf_free sc )
     ? ok { ^ @ ?DTensor { T o } } {}
-    ( dtensor_free o )
     ^ @ ?DTensor { F }
 }
 
-@ dtensor_adds * GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `add` `+` a v ) }
+@ dtensor_adds GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `add` `+` a v ) }
 
-@ dtensor_subs * GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `sub` `-` a v ) }
+@ dtensor_subs GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `sub` `-` a v ) }
 
-@ dtensor_muls * GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `mul` `*` a v ) }
+@ dtensor_muls GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `mul` `*` a v ) }
 
-@ dtensor_divs * GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `div` `/` a v ) }
+@ dtensor_divs GpuKit kit DTensor a f v → ?DTensor { ^ ( __dt_scalar kit `div` `/` a v ) }
 
 // ── Unary maps ────────────────────────────────────────────────────────
 
 // kind 0 relu · 1 sigmoid · 2 exp · 3 tanh · 4 sqrt · 5 log
-@ __dt_unary * GpuKit kit i kind DTensor a → ?DTensor {
+@ __dt_unary GpuKit kit i kind DTensor a → ?DTensor {
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : i n ( dtensor_size a )
     : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
@@ -165,25 +157,24 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     ? == kind 4 { = ok ( gkd_sqrt kit . o buf . a buf ) } {}
     ? == kind 5 { = ok ( gkd_log kit . o buf . a buf ) } {}
     ? ok { ^ @ ?DTensor { T o } } {}
-    ( dtensor_free o )
     ^ @ ?DTensor { F }
 }
 
-@ dtensor_relu * GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 0 a ) }
+@ dtensor_relu GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 0 a ) }
 
-@ dtensor_sigmoid * GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 1 a ) }
+@ dtensor_sigmoid GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 1 a ) }
 
-@ dtensor_exp * GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 2 a ) }
+@ dtensor_exp GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 2 a ) }
 
-@ dtensor_tanh * GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 3 a ) }
+@ dtensor_tanh GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 3 a ) }
 
-@ dtensor_sqrt * GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 4 a ) }
+@ dtensor_sqrt GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 4 a ) }
 
-@ dtensor_log * GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 5 a ) }
+@ dtensor_log GpuKit kit DTensor a → ?DTensor { ^ ( __dt_unary kit 5 a ) }
 
 // ── Matmul (2-D) ──────────────────────────────────────────────────────
 
-@ dtensor_matmul * GpuKit kit DTensor a DTensor b → ?DTensor {
+@ dtensor_matmul GpuKit kit DTensor a DTensor b → ?DTensor {
     ? & ( dtensor_ok a ) ( dtensor_ok b ) {} { ^ @ ?DTensor { F } }
     ? & == ( dtensor_ndim a ) 2 == ( dtensor_ndim b ) 2 {} { ^ @ ?DTensor { F } }
     ? == . a dtype . b dtype {} { ^ @ ?DTensor { F } }
@@ -195,7 +186,6 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     ( vec_push [i] shp M ) ( vec_push [i] shp N )
     : DTensor o ( __dt_new kit a shp * M N )
     ? ( gkd_matmul kit . o buf . a buf . b buf M K N ) {} {
-        ( dtensor_free o )
         ^ @ ?DTensor { F }
     }
     ^ @ ?DTensor { T o }
@@ -209,7 +199,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 
 @ __dt_esz i dtype → i { ? == dtype TE_F32 { ^ 4 } {} ^ 8 }
 
-@ dtensor_bmm * GpuKit kit DTensor a DTensor b → ?DTensor {
+@ dtensor_bmm GpuKit kit DTensor a DTensor b → ?DTensor {
     ? & ( dtensor_ok a ) ( dtensor_ok b ) {} { ^ @ ?DTensor { F } }
     ? == . a dtype . b dtype {} { ^ @ ?DTensor { F } }
     : i na ( dtensor_ndim a )
@@ -222,8 +212,6 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     : ( Vec i ) ba ( _t_take_head . a shape - na 2 )
     : ( Vec i ) bb ( _t_take_head . b shape - nb 2 )
     : ?( Vec i ) bso ( _t_bshape ba bb )
-    ( vec_free [i] ba )
-    ( vec_free [i] bb )
     ?? bso {
         T bshape → {
             : i ndb ( vec_len [i] bshape )
@@ -267,19 +255,14 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
                         = boff + boff * c ( _ti beff d )
                         = d + d 1
                     }
-                    : GkBuf av @ GkBuf { + . . a buf dptr * aoff esz * M K gdt }
-                    : GkBuf bv @ GkBuf { + . . b buf dptr * boff esz * K N gdt }
-                    : GkBuf yv @ GkBuf { + . . o buf dptr * * bi * M N esz * M N gdt }
+                    : GkBuf av ( gk_buf_view . a buf aoff * M K )
+                    : GkBuf bv ( gk_buf_view . b buf boff * K N )
+                    : GkBuf yv ( gk_buf_view . o buf * bi * M N * M N )
                     ? ( gkd_matmul kit yv av bv M K N ) {} { = r F }
                     = bi + bi 1
                 }
-                ( vec_free [i] bst )
-                ( vec_free [i] aeff )
-                ( vec_free [i] beff )
             }
-            ( vec_free [i] bshape )
             ? r { ^ @ ?DTensor { T o } } {}
-            ( dtensor_free o )
             ^ @ ?DTensor { F }
         }
         F _ → { ^ @ ?DTensor { F } }
@@ -317,7 +300,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     ^ T
 }
 
-@ dtensor_gather * GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
+@ dtensor_gather GpuKit kit DTensor a i axis ( Vec i ) idx → ?DTensor {
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : i nd ( dtensor_ndim a )
     ? & >= axis 0 < axis nd {} { ^ @ ?DTensor { F } }
@@ -336,16 +319,14 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     : GkBuf ixb ( gk_dbuf_new kit nidx GK_I64 )
     : ~ b r ( gk_dbuf_upload_i kit ixb idx )
     ? r { = r ( gkd_gather kit . o buf . a buf ixb outer axin inner nidx ) } {}
-    ( gk_dbuf_free ixb )
     ? r { ^ @ ?DTensor { T o } } {}
-    ( dtensor_free o )
     ^ @ ?DTensor { F }
 }
 
 // out = a with out[.., idx[g], ..] = upd[.., g, ..] along `axis`; `upd`'s
 // shape must equal a's with the axis dim replaced by len(idx). Duplicate
 // indices leave which write survives unspecified (ONNX semantics).
-@ dtensor_scatter * GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd → ?DTensor {
+@ dtensor_scatter GpuKit kit DTensor a i axis ( Vec i ) idx DTensor upd → ?DTensor {
     ? & ( dtensor_ok a ) ( dtensor_ok upd ) {} { ^ @ ?DTensor { F } }
     ? == . a dtype . upd dtype {} { ^ @ ?DTensor { F } }
     : i nd ( dtensor_ndim a )
@@ -370,9 +351,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     : GkBuf ixb ( gk_dbuf_new kit nidx GK_I64 )
     : ~ b r ( gk_dbuf_upload_i kit ixb idx )
     ? r { = r ( gkd_scatter kit . o buf . a buf ixb . upd buf outer axin inner nidx ) } {}
-    ( gk_dbuf_free ixb )
     ? r { ^ @ ?DTensor { T o } } {}
-    ( dtensor_free o )
     ^ @ ?DTensor { F }
 }
 
@@ -380,7 +359,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 // x is [Cin,H,W]; w is [Cout,Cin,kh,kw]; symmetric zero padding ph/pw;
 // output [Cout,OH,OW] with OH = (H + 2·ph − kh)/sh + 1 (floor).
 
-@ __dt_conv * GpuKit kit DTensor x DTensor w DTensor bias i hasb i ph i pw i sh i sw → ?DTensor {
+@ __dt_conv GpuKit kit DTensor x DTensor w DTensor bias i hasb i ph i pw i sh i sw → ?DTensor {
     ? & ( dtensor_ok x ) ( dtensor_ok w ) {} { ^ @ ?DTensor { F } }
     ? == . x dtype . w dtype {} { ^ @ ?DTensor { F } }
     ? & == ( dtensor_ndim x ) 3 == ( dtensor_ndim w ) 4 {} { ^ @ ?DTensor { F } }
@@ -404,22 +383,21 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     ( vec_push [i] oshape ow )
     : DTensor o ( __dt_new kit x oshape * * cout oh ow )
     ? ( gkd_conv2d kit . o buf . x buf . w buf . bias buf hasb cin h wd cout kh kw oh ow ph pw sh sw ) {} {
-        ( dtensor_free o )
         ^ @ ?DTensor { F }
     }
     ^ @ ?DTensor { T o }
 }
 
-@ dtensor_conv2d * GpuKit kit DTensor x DTensor w i ph i pw i sh i sw → ?DTensor {
+@ dtensor_conv2d GpuKit kit DTensor x DTensor w i ph i pw i sh i sw → ?DTensor {
     ^ ( __dt_conv kit x w x 0 ph pw sh sw )
 }
 
-@ dtensor_conv2d_b * GpuKit kit DTensor x DTensor w DTensor bias i ph i pw i sh i sw → ?DTensor {
+@ dtensor_conv2d_b GpuKit kit DTensor x DTensor w DTensor bias i ph i pw i sh i sw → ?DTensor {
     ^ ( __dt_conv kit x w bias 1 ph pw sh sw )
 }
 
 // Max pool over [C,H,W]: kernel kh×kw, strides sh/sw, symmetric pads.
-@ dtensor_maxpool2d * GpuKit kit DTensor x i kh i kw i sh i sw i ph i pw → ?DTensor {
+@ dtensor_maxpool2d GpuKit kit DTensor x i kh i kw i sh i sw i ph i pw → ?DTensor {
     ? ( dtensor_ok x ) {} { ^ @ ?DTensor { F } }
     ? == ( dtensor_ndim x ) 3 {} { ^ @ ?DTensor { F } }
     ? & & & > kh 0 > kw 0 > sh 0 > sw 0 {} { ^ @ ?DTensor { F } }
@@ -436,7 +414,6 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     ( vec_push [i] oshape ow )
     : DTensor o ( __dt_new kit x oshape * * c oh ow )
     ? ( gkd_maxpool2d kit . o buf . x buf c h wd kh kw oh ow sh sw ph pw ) {} {
-        ( dtensor_free o )
         ^ @ ?DTensor { F }
     }
     ^ @ ?DTensor { T o }
@@ -444,7 +421,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 
 // ── Softmax over the LAST axis ────────────────────────────────────────
 
-@ dtensor_softmax * GpuKit kit DTensor a → ?DTensor {
+@ dtensor_softmax GpuKit kit DTensor a → ?DTensor {
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : i nd ( dtensor_ndim a )
     ? > nd 0 {} { ^ @ ?DTensor { F } }
@@ -454,7 +431,6 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
     : i rows / n cols
     : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
     ? ( gkd_softmax_rows kit . o buf . a buf rows cols ) {} {
-        ( dtensor_free o )
         ^ @ ?DTensor { F }
     }
     ^ @ ?DTensor { T o }
@@ -464,7 +440,7 @@ $ `ops.nu`  // _t_bshape / _t_eff_strides / _t_batch_eff (one broadcast impl)
 
 // Sum of every element (downloads one scalar; accumulates in the buffer's
 // element type — true float32 for TE_F32).
-@ dtensor_sum * GpuKit kit DTensor a → ?f {
+@ dtensor_sum GpuKit kit DTensor a → ?f {
     ? ( dtensor_ok a ) {} { ^ @ ?f { F } }
     ^ ( gkd_sum kit . a buf )
 }
