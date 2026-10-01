@@ -67,7 +67,6 @@ $ `stdlib/std/zstd.nu`
     ( string_push_int tmp n )
     ( string_push_str out ( string_data tmp ) )
     ( __zi_pad out width ( string_len tmp ) )
-    ( string_free tmp )
 }
 
 // The literals section header: type, size format, and the two sizes.
@@ -235,7 +234,6 @@ $ `stdlib/std/zstd.nu`
             : String sz ( string_with_cap 16 )
             ( __zi_size sz blen )
             ( __zi_col out ( string_data sz ) 10 )
-            ( string_free sz )
             ? == btype 2 {
                 : i used ( __zi_literals p off blen slot )
                 ? < used 0 { = bad T } {
@@ -248,7 +246,6 @@ $ `stdlib/std/zstd.nu`
                         ( __zi_size lit # i . sp 2 )
                     } {}
                     ( __zi_col out ( string_data lit ) 26 )
-                    ( string_free lit )
                     // Sequences: the count, then the three table modes.
                     : i so + off ? >= # i . sp 0 2 + used # i . sp 2
                     + used ? == # i . sp 0 1 1 # i . sp 1
@@ -287,10 +284,8 @@ $ `stdlib/std/zstd.nu`
     }
     ? bad {
         ( string_push_str out `  (truncated or malformed past this point)\n` )
-        ( vec_free [i] slot )
         ^ -1
     } {}
-    ( vec_free [i] slot )
     ( string_push_str out `  ` )
     ( string_push_int out bno )
     ( string_push_str out ? == bno 1 ` block` ` blocks` )
@@ -351,7 +346,6 @@ $ `stdlib/std/zstd.nu`
         }
     }
     ( nurl_print ( string_data out ) )
-    ( string_free out )
     ? != rc 0 { ( nurl_eprint `zst: not a well-formed Zstandard file\n` ) } {}
     ^ rc
 }

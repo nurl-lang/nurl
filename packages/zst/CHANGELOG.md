@@ -4,6 +4,18 @@ All notable changes to `zst` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 scheme is [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Nothing is released by hand any more: every `string_free`, `vec_free`,
+  `vec_free_with` and `args_free` call (49) and the private
+  `__free_strvec` helper are gone — the compiler drops the input and
+  output buffers, report strings and the argument parser at the end of
+  their scopes. Round trips, interop with the reference CLI and every
+  error path behave as before, leak-free under LSan; compress, decompress,
+  test and inspect run the same instructions (±0.1 %).
+
 ## [0.2.0] — 2026-08-17
 
 ### Changed

@@ -35,13 +35,9 @@ $ `inspect.nu`
     ^ ?? ( vec_get [String] ps k ) { T s → ( string_data s ) F _ → `` }
 }
 
-@ __free_strvec ( Vec String ) v → v {
-    ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
-}
-
 @ __opt_int ArgParser p s name i dflt → i {
     ?? ( args_value p name ) {
-        T v → { : i n ( nurl_str_to_int ( string_data v ) ) ( string_free v ) ^ n }
+        T v → { : i n ( nurl_str_to_int ( string_data v ) ) ^ n }
         F _ → { ^ dflt }
     }
 }
@@ -128,8 +124,7 @@ $ `inspect.nu`
     : ( Vec i ) ok ( vec_new [i] )
     ( vec_push [i] ok 1 )
     : ( Vec u ) src ( __read_input inp ok )
-    ? == 0 ( __slot ok ) { ( vec_free [u] src ) ( vec_free [i] ok ) ^ 1 } {}
-    ( vec_free [i] ok )
+    ? == 0 ( __slot ok ) { ^ 1 } {}
     : ( Vec u ) out ( zstd_encode_at src level )
     : ~ i rc 0
     ? ( __write_output outp out force ) {} { = rc 1 }
@@ -140,10 +135,7 @@ $ `inspect.nu`
         ( __ratio msg ( vec_len [u] src ) ( vec_len [u] out ) )
         ( string_push_char msg 10 )
         ( nurl_eprint ( string_data msg ) )
-        ( string_free msg )
     } {}
-    ( vec_free [u] out )
-    ( vec_free [u] src )
     ^ rc
 }
 
@@ -151,8 +143,7 @@ $ `inspect.nu`
     : ( Vec i ) ok ( vec_new [i] )
     ( vec_push [i] ok 1 )
     : ( Vec u ) src ( __read_input inp ok )
-    ? == 0 ( __slot ok ) { ( vec_free [u] src ) ( vec_free [i] ok ) ^ 1 } {}
-    ( vec_free [i] ok )
+    ? == 0 ( __slot ok ) { ^ 1 } {}
     : ~ i rc 0
     ?? ( zstd_decode_limit src limit ) {
         T out → {
@@ -166,16 +157,13 @@ $ `inspect.nu`
                 ( string_push_int msg ( vec_len [u] out ) )
                 ( string_push_str msg ` bytes\n` )
                 ( nurl_eprint ( string_data msg ) )
-                ( string_free msg )
             } {}
-            ( vec_free [u] out )
         }
         F e → {
             ( __die ( nurl_str_cat3 `cannot decode: ` ( zstd_err_name e ) `` ) )
             = rc 1
         }
     }
-    ( vec_free [u] src )
     ^ rc
 }
 
@@ -183,8 +171,7 @@ $ `inspect.nu`
     : ( Vec i ) ok ( vec_new [i] )
     ( vec_push [i] ok 1 )
     : ( Vec u ) src ( __read_input inp ok )
-    ? == 0 ( __slot ok ) { ( vec_free [u] src ) ( vec_free [i] ok ) ^ 1 } {}
-    ( vec_free [i] ok )
+    ? == 0 ( __slot ok ) { ^ 1 } {}
     : ~ i rc 0
     ?? ( zstd_decode src ) {
         T out → {
@@ -195,9 +182,7 @@ $ `inspect.nu`
                 ( __ratio msg ( vec_len [u] out ) ( vec_len [u] src ) )
                 ( string_push_char msg 10 )
                 ( nurl_print ( string_data msg ) )
-                ( string_free msg )
             } {}
-            ( vec_free [u] out )
         }
         F e → {
             : String msg ( string_with_cap 64 )
@@ -205,11 +190,9 @@ $ `inspect.nu`
             ( string_push_str msg `: FAILED — ` )
             ( string_push_str msg ( zstd_err_name e ) )
             ( __die ( string_data msg ) )
-            ( string_free msg )
             = rc 1
         }
     }
-    ( vec_free [u] src )
     ^ rc
 }
 
@@ -217,10 +200,8 @@ $ `inspect.nu`
     : ( Vec i ) ok ( vec_new [i] )
     ( vec_push [i] ok 1 )
     : ( Vec u ) src ( __read_input inp ok )
-    ? == 0 ( __slot ok ) { ( vec_free [u] src ) ( vec_free [i] ok ) ^ 1 } {}
-    ( vec_free [i] ok )
+    ? == 0 ( __slot ok ) { ^ 1 } {}
     : i rc ( zst_inspect src ? ( __is_stdin inp ) `<stdin>` inp )
-    ( vec_free [u] src )
     ^ rc
 }
 
@@ -235,10 +216,9 @@ $ `inspect.nu`
     : ( Vec i ) ok ( vec_new [i] )
     ( vec_push [i] ok 1 )
     : ( Vec u ) src ( __read_input inp ok )
-    ? == 0 ( __slot ok ) { ( vec_free [u] src ) ( vec_free [i] ok ) ^ 1 } {}
-    ( vec_free [i] ok )
+    ? == 0 ( __slot ok ) { ^ 1 } {}
     : i n ( vec_len [u] src )
-    ? == n 0 { ( __die `nothing to benchmark` ) ( vec_free [u] src ) ^ 1 } {}
+    ? == n 0 { ( __die `nothing to benchmark` ) ^ 1 } {}
     : ~ i best_c 0
     : ~ i best_d 0
     : ~ i csize 0
@@ -256,11 +236,9 @@ $ `inspect.nu`
                 : i t3 ( monotonic_ns )
                 : i dd - t3 t2
                 ? | == best_d 0 < dd best_d { = best_d dd } {}
-                ( vec_free [u] dec )
             }
             F e → { ( __die ( zstd_err_name e ) ) }
         }
-        ( vec_free [u] enc )
         = r + r 1
     }
     : String out ( string_with_cap 160 )
@@ -277,8 +255,6 @@ $ `inspect.nu`
     ( string_push_int out reps )
     ( string_push_str out `)\n` )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
-    ( vec_free [u] src )
     ^ 0
 }
 
@@ -297,7 +273,6 @@ Commands:
 
 ` )
     ( nurl_print ( string_data h ) )
-    ( string_free h )
 }
 
 @ main → i {
@@ -320,12 +295,10 @@ Commands:
     }
     ? ( args_parse p argv ) {} {
         ( __die ( args_error p ) )
-        ( args_free p ) ( __free_strvec argv )
         ^ 2
     }
     ? | ( args_present p `help` ) == 0 ( args_positional_count p ) {
         ( __usage p )
-        ( args_free p ) ( __free_strvec argv )
         ^ 0
     } {}
 
@@ -344,30 +317,26 @@ Commands:
     ? | ( nurl_str_eq cmd `c` ) ( nurl_str_eq cmd `compress` ) {
         : ~ String outp ( string_new )
         ?? ( args_value p `out` ) {
-            T v → { ( string_free outp ) = outp v }
+            T v → { = outp v }
             F _ → {
                 ? | to_stdout ( __is_stdin inp ) {} {
-                    ( string_free outp )
                     = outp ( __out_name inp T )
                 }
             }
         }
         = rc ( __cmd_compress inp ( string_data outp ) level force quiet )
-        ( string_free outp )
     } {
         ? | ( nurl_str_eq cmd `d` ) ( nurl_str_eq cmd `decompress` ) {
             : ~ String outp ( string_new )
             ?? ( args_value p `out` ) {
-                T v → { ( string_free outp ) = outp v }
+                T v → { = outp v }
                 F _ → {
                     ? | to_stdout ( __is_stdin inp ) {} {
-                        ( string_free outp )
                         = outp ( __out_name inp F )
                     }
                 }
             }
             = rc ( __cmd_decompress inp ( string_data outp ) force quiet limit )
-            ( string_free outp )
         } {
             ? | ( nurl_str_eq cmd `t` ) ( nurl_str_eq cmd `test` ) {
                 ? <= npos 1 {
@@ -391,7 +360,5 @@ Commands:
                         = rc 2
                     } } } } }
 
-    ( args_free p )
-    ( __free_strvec argv )
     ^ rc
 }
