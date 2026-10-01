@@ -25,14 +25,14 @@
 // Surface:
 //   ( iforest_train data n_rows n_cols n_trees sample_size seed ) → IForest
 //       `data` is a row-major ( Vec f ) of n_rows*n_cols values. Returns a
-//       trained forest (caller owns it → iforest_free).
+//       trained forest (an owning struct: released with its owner).
 //   ( iforest_score forest point )   → f   anomaly score in (0, 1] for a
 //                                          ( Vec f ) of length n_cols.
 //   ( iforest_score_row forest data row ) → f   score row `row` of a
 //                                          row-major ( Vec f ) matrix.
 //   ( iforest_avg_path n )           → f   c(n), exported for thresholding.
 //   ( iforest_n_trees f ) / ( iforest_sample_size f ) → i   accessors.
-//   ( iforest_free forest )          → v
+//   ( iforest_free forest )          → v   early release (optional)
 //
 // The trees are stored as a flat struct-of-arrays shared across the whole
 // forest (one node arena, a root index per tree): no recursive ADTs, no
@@ -123,16 +123,16 @@ $ `stdlib/std/rng.nu`
 
 // ── Tree construction ─────────────────────────────────────────────────
 //
-// Build one subtree from the row indices `idx` (which this call OWNS and
-// frees) and return its node index. `dp` is the raw row-major data buffer;
-// reading feature q of row r is dp[r*n_cols + q].
-@ __build_node IForest fo * f dp i n_cols ( Vec i ) idx i depth i height_limit Rng g → i {
+// Build one subtree from the row indices `idx` (which this call OWNS: they
+// go when it returns — at most depth × psi indices are alive at once, a
+// few KB at the default psi of 256) and return its node index. `dp` is the
+// raw row-major data buffer; reading feature q of row r is dp[r*n_cols + q].
+@ __build_node IForest fo * f dp i n_cols sink ( Vec i ) idx i depth i height_limit Rng g → i {
     : i m ( vec_len [i] idx )
 
     // Isolated (≤1 point) or hit the depth cap → leaf.
     ? || >= depth height_limit <= m 1 {
         : i leaf ( __push_leaf fo m )
-        ( vec_free [i] idx )
         ^ leaf
     } {}
 
@@ -173,7 +173,6 @@ $ `stdlib/std/rng.nu`
     }
     ? < q 0 {
         : i leaf ( __push_leaf fo m )
-        ( vec_free [i] idx )
         ^ leaf
     } {}
 
@@ -190,10 +189,8 @@ $ `stdlib/std/rng.nu`
         = b + b 1
     }
 
-    // Reserve this internal node (children patched in after recursion), then
-    // release the parent's index list before descending.
+    // Reserve this internal node (children patched in after recursion).
     : i node ( __push_node fo q p -1 -1 m )
-    ( vec_free [i] idx )
 
     : i d1 + depth 1
     : i lc ( __build_node fo dp n_cols li d1 height_limit g )
@@ -234,7 +231,6 @@ $ `stdlib/std/rng.nu`
         ( vec_push [i] . fo roots root )
         = t + t 1
     }
-    ( rng_free g )
     ^ fo
 }
 
@@ -312,11 +308,6 @@ $ `stdlib/std/rng.nu`
 
 @ iforest_sample_size IForest fo → i { ^ . fo sample_size }
 
-@ iforest_free sink IForest fo → v {
-    ( vec_free [i] . fo roots )
-    ( vec_free [i] . fo feature )
-    ( vec_free [f] . fo split )
-    ( vec_free [i] . fo left )
-    ( vec_free [i] . fo right )
-    ( vec_free [i] . fo size )
-}
+// Let go of `fo` now rather than at the end of its owner's scope. An
+// IForest owns its node arrays and releases them with its owner.
+@ iforest_free sink IForest fo → v {}

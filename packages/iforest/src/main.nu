@@ -41,10 +41,10 @@ $ `src/iforest.nu`
 // ── Helpers ───────────────────────────────────────────────────────────
 
 // Value of an integer option, or `dflt` if it was not supplied.
-// args_value returns an OWNED ?String, so free it before returning.
+// args_value returns an OWNED ?String (dropped with its arm).
 @ __opt_int ArgParser p s name i dflt → i {
     ?? ( args_value p name ) {
-        T v → { : i n ( nurl_str_to_int ( string_data v ) ) ( string_free v ) ^ n }
+        T v → { : i n ( nurl_str_to_int ( string_data v ) ) ^ n }
         F _ → { ^ dflt }
     }
 }
@@ -53,11 +53,6 @@ $ `src/iforest.nu`
 @ __push_score_line String out f x → v {
     ( string_push_float out x )
     ( string_push_char out 10 )
-}
-
-// Drop helper for a ( Vec String ).
-@ __free_strvec ( Vec String ) v → v {
-    ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
 }
 
 // Descending by score (so sort_by yields most-anomalous first).
@@ -75,7 +70,6 @@ $ `src/iforest.nu`
 @ __parse_csv s input s delim b skip_header → Dataset {
     : String text ( string_from input )
     : ( Vec String ) lines ( string_split text `\n` )
-    ( string_free text )
 
     : ( Vec f ) data ( vec_new [f] )
     : ~ i cols -1
@@ -100,13 +94,11 @@ $ `src/iforest.nu`
                                         T x → { ( vec_push [f] rowvals x ) }
                                         F _ → {}
                                     }
-                                    ( string_free ft )
                                 }
                                 F _ → {}
                             }
                             = fi + fi 1
                         }
-                        ( __free_strvec fields )
 
                         : i nv ( vec_len [f] rowvals )
                         ? > nv 0 {
@@ -116,16 +108,13 @@ $ `src/iforest.nu`
                                 = rows + rows 1
                             } {}
                         } {}
-                        ( vec_free [f] rowvals )
                     } {}
-                    ( string_free tl )
                 }
             }
             F _ → {}
         }
         = li + li 1
     }
-    ( __free_strvec lines )
     ? < cols 0 { = cols 0 } {}
     ^ @ Dataset { data rows cols }
 }
@@ -141,7 +130,6 @@ $ `src/iforest.nu`
         = r + r 1
     }
     ( nurl_print ( string_data out ) )
-    ( string_free out )
 }
 
 // The `k` most anomalous rows, as `index<TAB>score`, highest first.
@@ -174,8 +162,6 @@ $ `src/iforest.nu`
         = j + j 1
     }
     ( nurl_print ( string_data out ) )
-    ( string_free out )
-    ( vec_free [ScoreRow] rank )
 }
 
 // ── Entry point ───────────────────────────────────────────────────────
@@ -208,7 +194,6 @@ $ `src/iforest.nu`
             ( nurl_print `unless --file is given, and prints an anomaly score in (0, 1] per row\n` )
             ( nurl_print `(higher = more anomalous).\n\n` )
             ( nurl_print ( string_data h ) )
-            ( string_free h )
         } {
             : i trees ( __opt_int p `trees` 100 )
             : i sample ( __opt_int p `sample` 256 )
@@ -218,7 +203,7 @@ $ `src/iforest.nu`
             // args_value returns an owned ?String; keep it alive so `delim`
             // (a borrowed view into it) stays valid through __parse_csv.
             : ~ String delimstr ( string_from `,` )
-            ?? ( args_value p `delim` ) { T dv → { ( string_free delimstr ) = delimstr dv } F _ → {} }
+            ?? ( args_value p `delim` ) { T dv → { = delimstr dv } F _ → {} }
             : s delim ( string_data delimstr )
             : b skip_header ( args_present p `header` )
 
@@ -228,7 +213,7 @@ $ `src/iforest.nu`
             ?? ( args_value p `file` ) {
                 T fv → {
                     ?? ( read_file ( string_data fv ) ) {
-                        T txt → { ( string_free input ) = input txt }
+                        T txt → { = input txt }
                         F _ → {
                             ( nurl_eprint `iforest: cannot read file: ` )
                             ( nurl_eprintln ( string_data fv ) )
@@ -236,10 +221,8 @@ $ `src/iforest.nu`
                             = have_input F
                         }
                     }
-                    ( string_free fv )
                 }
                 F _ → {
-                    ( string_free input )
                     = input ( read_all_stdin )
                 }
             }
@@ -256,12 +239,8 @@ $ `src/iforest.nu`
                     } {
                         ( __emit_top fo ds topk )
                     }
-                    ( iforest_free fo )
                 }
-                ( vec_free [f] . ds data )
             } {}
-            ( string_free input )
-            ( string_free delimstr )
         }
     } {
         ( nurl_eprint `iforest: ` ) ( nurl_eprintln ( args_error p ) )
@@ -269,7 +248,5 @@ $ `src/iforest.nu`
         = rc 2
     }
 
-    ( args_free p )
-    ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }
