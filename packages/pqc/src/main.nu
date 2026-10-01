@@ -44,17 +44,13 @@ $ `stdlib/ext/env.nu`
     ( nurl_eprint `pqc: ` ) ( nurl_eprint msg ) ( nurl_eprint `\n` )
 }
 
-@ __free_strvec ( Vec String ) v → v {
-    ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
-}
-
 @ __pos ( Vec String ) ps i k → s {
     ^ ?? ( vec_get [String] ps k ) { T s → ( string_data s ) F _ → `` }
 }
 
 @ __opt_int ArgParser p s name i dflt → i {
     ?? ( args_value p name ) {
-        T v → { : i n ( nurl_str_to_int ( string_data v ) ) ( string_free v ) ^ n }
+        T v → { : i n ( nurl_str_to_int ( string_data v ) ) ^ n }
         F _ → { ^ dflt }
     }
 }
@@ -107,13 +103,11 @@ $ `stdlib/ext/env.nu`
 @ __line_end String s → v {
     ( string_push_str s `\n` )
     ( nurl_print ( string_data s ) )
-    ( string_free s )
 }
 
 @ __print_hex s label ( Vec u ) v → v {
     : String h ( bytes_to_hex v )
     ( nurl_print label ) ( nurl_print ( string_data h ) ) ( nurl_print `\n` )
-    ( string_free h )
 }
 
 // ── keygen ─────────────────────────────────────────────────────────
@@ -124,7 +118,6 @@ $ `stdlib/ext/env.nu`
     : String dkp ( string_from name ) ( string_push_str dkp `.dk` )
     : b a ( __write_bytes ( string_data ekp ) ( mlkem_ek ks ) `encapsulation key ->` )
     : b b2 ( __write_bytes ( string_data dkp ) ( mlkem_dk ks ) `decapsulation key ->` )
-    ( string_free dkp ) ( string_free ekp )
     ^ ? & a b2 0 1
 }
 
@@ -155,7 +148,6 @@ $ `stdlib/ext/env.nu`
             : i level ( __level_from_ek ( vec_len [u] ek ) )
             ? == level 0 {
                 ( __die `not an ML-KEM encapsulation key (expected 800, 1184 or 1568 bytes)` )
-                ( vec_free [u] ek )
                 ^ 1
             } {}
             : MlkemEncap en ( mlkem_encaps level ek )
@@ -163,7 +155,6 @@ $ `stdlib/ext/env.nu`
             ( __line_int hd level ) ( __line_end hd )
             : b ok ( __write_bytes outpath ( mlkem_ct en ) `ciphertext ->` )
             ( __print_hex `shared secret ` ( mlkem_ss en ) )
-            ( vec_free [u] ek )
             ^ ? ok 0 1
         }
         F _e → { ( __die `cannot read encapsulation key` ) ^ 1 }
@@ -177,7 +168,6 @@ $ `stdlib/ext/env.nu`
             : i level ( __level_from_dk ( vec_len [u] dk ) )
             ? == level 0 {
                 ( __die `not an ML-KEM decapsulation key (expected 1632, 2400 or 3168 bytes)` )
-                ( vec_free [u] dk )
                 ^ 1
             } {}
             : !( Vec u ) IoErr rc ( __read_bytes ctpath )
@@ -188,17 +178,15 @@ $ `stdlib/ext/env.nu`
                         // defined; it is the one input error ML-KEM cannot
                         // absorb into implicit rejection.
                         ( __die `ciphertext length does not match this key's parameter set` )
-                        ( vec_free [u] ct ) ( vec_free [u] dk )
                         ^ 1
                     } {}
                     : ( Vec u ) ss ( mlkem_decaps level dk ct )
                     : String hd ( __line_new `ML-KEM-` )
                     ( __line_int hd level ) ( __line_end hd )
                     ( __print_hex `shared secret ` ss )
-                    ( vec_free [u] ss ) ( vec_free [u] ct ) ( vec_free [u] dk )
                     ^ 0
                 }
-                F _e → { ( __die `cannot read ciphertext` ) ( vec_free [u] dk ) ^ 1 }
+                F _e → { ( __die `cannot read ciphertext` ) ^ 1 }
             }
         }
         F _e → { ( __die `cannot read decapsulation key` ) ^ 1 }
@@ -231,7 +219,6 @@ $ `stdlib/ext/env.nu`
     : String kp2 ( string_from name ) ( string_push_str kp2 `.key` )
     : b a ( __write_bytes ( string_data pp ) ( mldsa_pk ks ) `verification key ->` )
     : b b2 ( __write_bytes ( string_data kp2 ) ( mldsa_sk ks ) `signing key ->` )
-    ( string_free kp2 ) ( string_free pp )
     ^ ? & a b2 0 1
 }
 
@@ -251,7 +238,6 @@ $ `stdlib/ext/env.nu`
             : i level ( __level_from_key ( vec_len [u] sk ) )
             ? == level 0 {
                 ( __die `not an ML-DSA signing key (expected 2560, 4032 or 4896 bytes)` )
-                ( vec_free [u] sk )
                 ^ 1
             } {}
             : !( Vec u ) IoErr rm ( __read_bytes msgpath )
@@ -262,11 +248,9 @@ $ `stdlib/ext/env.nu`
                     : String hd ( __line_new `ML-DSA-` )
                     ( __line_int hd level ) ( __line_end hd )
                     : b ok ( __write_bytes outpath sig `signature ->` )
-                    ( vec_free [u] sig ) ( vec_free [u] ctx )
-                    ( vec_free [u] msg ) ( vec_free [u] sk )
                     ^ ? ok 0 1
                 }
-                F _e → { ( __die `cannot read the file to sign` ) ( vec_free [u] sk ) ^ 1 }
+                F _e → { ( __die `cannot read the file to sign` ) ^ 1 }
             }
         }
         F _e → { ( __die `cannot read signing key` ) ^ 1 }
@@ -280,7 +264,6 @@ $ `stdlib/ext/env.nu`
             : i level ( __level_from_pub ( vec_len [u] pk ) )
             ? == level 0 {
                 ( __die `not an ML-DSA verification key (expected 1312, 1952 or 2592 bytes)` )
-                ( vec_free [u] pk )
                 ^ 1
             } {}
             : !( Vec u ) IoErr rm ( __read_bytes msgpath )
@@ -295,14 +278,12 @@ $ `stdlib/ext/env.nu`
                             ( __line_int ln level )
                             ( string_push_str ln ? ok ` valid` ` INVALID` )
                             ( __line_end ln )
-                            ( vec_free [u] ctx ) ( vec_free [u] sig )
-                            ( vec_free [u] msg ) ( vec_free [u] pk )
                             ^ ? ok 0 1
                         }
-                        F _e → { ( __die `cannot read signature` ) ( vec_free [u] msg ) ( vec_free [u] pk ) ^ 1 }
+                        F _e → { ( __die `cannot read signature` ) ^ 1 }
                     }
                 }
-                F _e → { ( __die `cannot read the signed file` ) ( vec_free [u] pk ) ^ 1 }
+                F _e → { ( __die `cannot read the signed file` ) ^ 1 }
             }
         }
         F _e → { ( __die `cannot read verification key` ) ^ 1 }
@@ -419,7 +400,6 @@ $ `stdlib/ext/env.nu`
     ~ < i reps {
         : ( Vec u ) ss ( mlkem_decaps level ( mlkem_dk ks ) ( mlkem_ct en ) )
         = sink + sink ( vec_len [u] ss )
-        ( vec_free [u] ss )
         = i + i 1
     }
     : i t5 ( monotonic_ns )
@@ -446,7 +426,6 @@ $ `stdlib/ext/env.nu`
     : ( Vec u ) d ( sha3_256_pure v )
     : String h ( bytes_to_hex d )
     : b ok != 0 ( nurl_str_eq ( string_data h ) want )
-    ( string_free h ) ( vec_free [u] d )
     ^ ok
 }
 
@@ -469,8 +448,6 @@ $ `stdlib/ext/env.nu`
 
     ( nurl_print label )
     ( nurl_print ? & & ok okrt okrej ` ok\n` ` FAIL\n` )
-    ( vec_free [u] rej ) ( vec_free [u] bad ) ( vec_free [u] ss )
-    ( vec_free [u] m ) ( vec_free [u] zv ) ( vec_free [u] dv )
     ^ & & ok okrt okrej
 }
 
@@ -499,7 +476,6 @@ $ `stdlib/ext/env.nu`
 @ __usage ArgParser p → v {
     : String u ( args_usage p )
     ( nurl_print ( string_data u ) )
-    ( string_free u )
     ( nurl_print `\ncommands:\n` )
     ( nurl_print `  keygen NAME          write NAME.ek and NAME.dk\n` )
     ( nurl_print `  encaps NAME.ek       encapsulate to a fresh shared secret\n` )
@@ -527,7 +503,6 @@ $ `stdlib/ext/env.nu`
         ? ( __check_level level ) {} { ( __die `ML-KEM level must be 512, 768 or 1024` ) ^ 2 }
         : String nm ( __opt_str p `out` ? > n 1 ( __pos ps 1 ) `mlkem` )
         : i rc ( __cmd_keygen level ( string_data nm ) )
-        ( string_free nm )
         ^ rc
     } {}
 
@@ -535,7 +510,6 @@ $ `stdlib/ext/env.nu`
         ? < n 2 { ( __die `encaps needs an encapsulation key file` ) ^ 2 } {}
         : String o ( __opt_str p `out` `mlkem.ct` )
         : i rc ( __cmd_encaps ( __pos ps 1 ) ( string_data o ) )
-        ( string_free o )
         ^ rc
     } {}
 
@@ -549,7 +523,6 @@ $ `stdlib/ext/env.nu`
         ? ( __check_sign_level sl ) {} { ( __die `ML-DSA level must be 44, 65 or 87` ) ^ 2 }
         : String nm ( __opt_str p `out` ? > n 1 ( __pos ps 1 ) `mldsa` )
         : i rc ( __cmd_sign_keygen sl ( string_data nm ) )
-        ( string_free nm )
         ^ rc
     } {}
 
@@ -560,8 +533,6 @@ $ `stdlib/ext/env.nu`
         ( string_push_str derived `.sig` )
         : String o ( __opt_str p `out` ( string_data derived ) )
         : i rc ( __cmd_sign ( __pos ps 1 ) ( __pos ps 2 ) ( string_data o ) )
-        ( string_free o )
-        ( string_free derived )
         ^ rc
     } {}
 
@@ -641,12 +612,10 @@ $ `stdlib/ext/env.nu`
     ~ < ai ac { ( vec_push [String] argv ( env_arg ai ) ) = ai + ai 1 }
     ? ( args_parse p argv ) {} {
         ( __die ( args_error p ) )
-        ( args_free p ) ( __free_strvec argv )
         ^ 2
     }
     ? | ( args_present p `help` ) == 0 ( args_positional_count p ) {
         ( __usage p )
-        ( args_free p ) ( __free_strvec argv )
         ^ 0
     } {}
 
@@ -656,9 +625,5 @@ $ `stdlib/ext/env.nu`
     : ~ i rc 0
 
     = rc ( __dispatch p ps cmd level )
-
-    // `ps` is a borrow of the parser's own vector — args_free releases it.
-    ( args_free p )
-    ( __free_strvec argv )
     ^ rc
 }

@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `encaps`, `sign-keygen`, `bench` and `kat` no longer free their keys by
   hand — a binding in a `bench` loop is released at the end of each
   iteration, as the explicit free did. No change in output.
+- Nothing is released by hand any more: every remaining `string_free`,
+  `vec_free`, `vec_free_with` and `args_free` call (49) and the private
+  `__free_strvec` helper are gone — the compiler drops key and ciphertext
+  buffers, file names, report lines and the argument parser at the end of
+  their scopes, on the error paths as on the success paths. Same output and
+  exit codes for every command and error path, leak-free under LSan (except
+  `probe` to a refused port: the standard library's `tls_connect` leaks its
+  failed socket handle, reported upstream), and the same instruction count
+  (`kat` −0.00 %, `bench` −0.02 %).
 
 ## [0.2.2] — 2026-09-06
 
