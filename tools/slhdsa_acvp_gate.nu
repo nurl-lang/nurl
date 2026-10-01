@@ -125,7 +125,7 @@ $ `stdlib/std/slhdsa.nu`
                 : ( Vec u ) a ( __hexv ( __str tc `skSeed` ) )
                 : ( Vec u ) b2 ( __hexv ( __str tc `skPrf` ) )
                 : ( Vec u ) c ( __hexv ( __str tc `pkSeed` ) )
-                : *SlhKeys k ( slhdsa_keygen_derand set a b2 c )
+                : SlhKeys k ( slhdsa_keygen_derand set a b2 c )
                 ? & ( __eqhex ( slhdsa_pk k ) ( __str tc `pk` ) ) ( __eqhex ( slhdsa_sk k ) ( __str tc `sk` ) )
                 { = kp + kp 1 } { = kf + kf 1 }
                 ( slhdsa_keys_free k )

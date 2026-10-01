@@ -106,7 +106,7 @@ $ `stdlib/core/string.nu`
     : String tag ( string_from `mldsa` )
     ( string_push_int tag level )
 
-    : *MldsaKeys ks ( mldsa_keygen level )
+    : MldsaKeys ks ( mldsa_keygen level )
     : ( Vec u ) sk ( bytes_slice ( mldsa_sk ks ) 0 ( mldsa_sk_len level ) )
     : ( Vec u ) pk ( bytes_slice ( mldsa_pk ks ) 0 ( mldsa_pk_len level ) )
     ( mldsa_keys_free ks )

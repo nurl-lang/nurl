@@ -10,7 +10,7 @@
 //   87     ML-DSA-87   2592   4896        4627      AES-256
 //
 // API — the three operations:
-//   ( mldsa_keygen i level )                        → *MldsaKeys
+//   ( mldsa_keygen i level )                        → MldsaKeys
 //   ( mldsa_sign i level ( Vec u ) sk
 //                ( Vec u ) msg ( Vec u ) ctx )      → ( Vec u )  signature
 //   ( mldsa_verify i level ( Vec u ) pk ( Vec u ) msg
@@ -26,15 +26,19 @@
 // API — the deterministic and internal forms, which FIPS 204 defines
 // and NIST's ACVP vectors exercise. Production callers want the three
 // above.
-//   ( mldsa_keygen_derand level ( Vec u ) xi )      → *MldsaKeys
+//   ( mldsa_keygen_derand level ( Vec u ) xi )      → MldsaKeys
 //   ( mldsa_sign_internal level ( Vec u ) sk
 //         ( Vec u ) mprime ( Vec u ) rnd )          → ( Vec u )
 //   ( mldsa_verify_internal level ( Vec u ) pk
 //         ( Vec u ) mprime ( Vec u ) sig )          → b
 //
-// Accessors, sizes and cleanup:
-//   ( mldsa_pk *MldsaKeys ) ( mldsa_sk *MldsaKeys ) ( mldsa_keys_free … )
+// Accessors and sizes:
+//   ( mldsa_pk MldsaKeys ) ( mldsa_sk MldsaKeys )   the keys' own bytes, lent
 //   ( mldsa_pk_len level ) ( mldsa_sk_len level ) ( mldsa_sig_len level )
+//   ( mldsa_keys_free k )                           early release (optional)
+//
+// MldsaKeys is a library handle (docs/MEMORY.md §7.6): every copy is the
+// same key pair, and the last owner releases it.
 //
 // ── On timing ──────────────────────────────────────────────────────
 //
@@ -56,6 +60,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hash_sha512.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/subtle.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Parameters ─────────────────────────────────────────────────────
 //
@@ -988,23 +993,39 @@ MldsaParams p ( Vec u ) out → v {
 
 // ── Key generation ─────────────────────────────────────────────────
 
-: MldsaKeys {
+: MldsaKeysImpl {
     ( Vec u ) pk
     ( Vec u ) sk
 }
 
-@ mldsa_pk * MldsaKeys h → ( Vec u ) { ^ . h pk }
+// A MldsaKeys is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: MldsaKeys { s ctl }
 
-@ mldsa_sk * MldsaKeys h → ( Vec u ) { ^ . h sk }
+@ MldsaKeys_share MldsaKeys h → MldsaKeys { ^ @ MldsaKeys { # s ( rcbox_share # i . h ctl ) } }
 
-@ mldsa_keys_free sink * MldsaKeys h → v {
-    ( vec_free [u] . h pk )
-    ( vec_free [u] . h sk )
-    ( nurl_free # s h )
+@ MldsaKeys_drop sink MldsaKeys h → v {
+    ( mem_forget h )
+    ( rcbox_release [MldsaKeysImpl] # i . h ctl )
 }
 
+@ __MldsaKeys_ptr MldsaKeys h → *MldsaKeysImpl { ^ ( rcbox_ptr [MldsaKeysImpl] # i . h ctl ) }
+
+@ mldsa_pk MldsaKeys h__h → ( Vec u ) {
+    : *MldsaKeysImpl h ( __MldsaKeys_ptr h__h )
+    ^ . h pk
+}
+
+@ mldsa_sk MldsaKeys h__h → ( Vec u ) {
+    : *MldsaKeysImpl h ( __MldsaKeys_ptr h__h )
+    ^ . h sk
+}
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ mldsa_keys_free sink MldsaKeys h → v {}
+
 // ML-DSA.KeyGen_internal (Algorithm 6).
-simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
+simd @ mldsa_keygen_derand i level ( Vec u ) xi → MldsaKeys {
     : MldsaParams p ( __mldsa_params level )
     : i k . p k
     : i l . p l
@@ -1075,9 +1096,7 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
     : ( Vec u ) sk ( vec_with_cap [u] ( mldsa_sk_len level ) )
     ( __pack_sk rho kk tr s1p s2p t0p p sk )
 
-    : *MldsaKeys h # *MldsaKeys ( nurl_alloc Z MldsaKeys )
-    = . h pk pk
-    = . h sk sk
+    : MldsaKeys h @ MldsaKeys { # s ( rcbox_new [MldsaKeysImpl] @ MldsaKeysImpl { pk sk } ) }
 
     ( vec_free [u] tr )
     ( vec_free [i32] t0 ) ( vec_free [i32] t1 )
@@ -1089,9 +1108,9 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → *MldsaKeys {
     ^ h
 }
 
-@ mldsa_keygen i level → *MldsaKeys {
+@ mldsa_keygen i level → MldsaKeys {
     : ( Vec u ) xi ( rand_bytes 32 )
-    : *MldsaKeys h ( mldsa_keygen_derand level xi )
+    : MldsaKeys h ( mldsa_keygen_derand level xi )
     ( vec_free [u] xi )
     ^ h
 }

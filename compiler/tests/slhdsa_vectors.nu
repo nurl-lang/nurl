@@ -50,7 +50,7 @@ $ `stdlib/core/string.nu`
     : ( Vec u ) a ( hexv ss )
     : ( Vec u ) b2 ( hexv sp )
     : ( Vec u ) c ( hexv ps )
-    : *SlhKeys k ( slhdsa_keygen_derand set a b2 c )
+    : SlhKeys k ( slhdsa_keygen_derand set a b2 c )
     : b ok1 ( eq_hex ( slhdsa_pk k ) wpk )
     : b ok2 ( eq_hex ( slhdsa_sk k ) wsk )
     : b ok3 == ( vec_len [u] ( slhdsa_pk k ) ) ( slhdsa_pk_len set )
@@ -79,7 +79,7 @@ $ `stdlib/core/string.nu`
     ~ < i 40 { ( vec_push [u] msg # u % + * i 3 1 251 ) = i + i 1 }
     ( bytes_extend_str ctx `slh` )
 
-    : *SlhKeys k ( slhdsa_keygen_derand set a b2 c )
+    : SlhKeys k ( slhdsa_keygen_derand set a b2 c )
     : ( Vec u ) sig ( slhdsa_sign_deterministic set ( slhdsa_sk k ) msg ctx )
     : b oklen == ( vec_len [u] sig ) ( slhdsa_sig_len set )
     : b okv ( slhdsa_verify set ( slhdsa_pk k ) msg ctx sig )

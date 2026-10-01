@@ -959,7 +959,7 @@ $ `stdlib/std/aes_gcm.nu`
     ? == grp 4588 {
         : ( Vec u ) cek ( bytes_slice cpub 0 1184 )
         : ( Vec u ) cx ( bytes_slice cpub 1184 1216 )
-        : *MlkemEncap en ( mlkem_encaps 768 cek )
+        : MlkemEncap en ( mlkem_encaps 768 cek )
         : ( Vec u ) sx ( x25519_base eph )
         : ( Vec u ) xs ( x25519 eph cx )
         ( vec_free [u] spub )

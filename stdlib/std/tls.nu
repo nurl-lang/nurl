@@ -1433,7 +1433,7 @@ $ `stdlib/std/async_ffi.nu`
     // ML-KEM-768 for the hybrid group. The decapsulation key stays on
     // the machine until the server's share arrives; the encapsulation
     // key travels in the ClientHello.
-    : *MlkemKeys pqkeys ( mlkem_keygen 768 )
+    : MlkemKeys pqkeys ( mlkem_keygen 768 )
     : ( Vec u ) pqpub ( bytes_slice ( mlkem_ek pqkeys ) 0 ( vec_len [u] ( mlkem_ek pqkeys ) ) )
     ( vec_free [u] . h pq_dk )
     = . h pq_dk ( bytes_slice ( mlkem_dk pqkeys ) 0 ( vec_len [u] ( mlkem_dk pqkeys ) ) )

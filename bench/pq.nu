@@ -71,21 +71,21 @@ $ `stdlib/std/slhdsa.nu`
 
 @ __mlkem768 → v {
     : BenchResult kg ( bench_auto `ML-KEM-768 keygen` \ → v {
-        : *MlkemKeys k ( mlkem_keygen 768 )
+        : MlkemKeys k ( mlkem_keygen 768 )
         = g_sink + g_sink ( vec_len [u] ( mlkem_ek k ) )
         ( mlkem_keys_free k )
     } )
     ( bench_report kg ) ( bench_result_free kg )
 
-    : *MlkemKeys ks ( mlkem_keygen 768 )
+    : MlkemKeys ks ( mlkem_keygen 768 )
     : BenchResult en ( bench_auto `ML-KEM-768 encaps` \ → v {
-        : *MlkemEncap e ( mlkem_encaps 768 ( mlkem_ek ks ) )
+        : MlkemEncap e ( mlkem_encaps 768 ( mlkem_ek ks ) )
         = g_sink + g_sink ( vec_len [u] ( mlkem_ct e ) )
         ( mlkem_encap_free e )
     } )
     ( bench_report en ) ( bench_result_free en )
 
-    : *MlkemEncap e2 ( mlkem_encaps 768 ( mlkem_ek ks ) )
+    : MlkemEncap e2 ( mlkem_encaps 768 ( mlkem_ek ks ) )
     : BenchResult de ( bench_auto `ML-KEM-768 decaps` \ → v {
         : ( Vec u ) ss ( mlkem_decaps 768 ( mlkem_dk ks ) ( mlkem_ct e2 ) )
         = g_sink + g_sink ( vec_len [u] ss )
@@ -103,7 +103,7 @@ $ `stdlib/std/slhdsa.nu`
     ( string_push_str nm `ML-DSA-` )
     ( string_push_int nm level )
 
-    : *MldsaKeys ks ( mldsa_keygen level )
+    : MldsaKeys ks ( mldsa_keygen level )
     : String snm ( string_new )
     ( string_push_str snm ( string_data nm ) )
     ( string_push_str snm ` sign` )
@@ -135,13 +135,13 @@ $ `stdlib/std/slhdsa.nu`
     : ( Vec u ) ctx ( vec_new [u] )
 
     : BenchResult kg ( bench_run `SLH-DSA-128f keygen` 20 \ → v {
-        : *SlhKeys k ( slhdsa_keygen set )
+        : SlhKeys k ( slhdsa_keygen set )
         = g_sink + g_sink ( vec_len [u] ( slhdsa_pk k ) )
         ( slhdsa_keys_free k )
     } )
     ( bench_report kg ) ( bench_result_free kg )
 
-    : *SlhKeys ks ( slhdsa_keygen set )
+    : SlhKeys ks ( slhdsa_keygen set )
     : BenchResult sg ( bench_run `SLH-DSA-128f sign` 5 \ → v {
         : ( Vec u ) sig ( slhdsa_sign set ( slhdsa_sk ks ) msg ctx )
         = g_sink + g_sink ( vec_len [u] sig )

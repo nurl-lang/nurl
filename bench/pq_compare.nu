@@ -91,22 +91,22 @@ $ `stdlib/std/slhdsa.nu`
 
     : String knm ( __opname ( string_data base ) `keygen` )
     : BenchResult kg ( bench_auto ( string_data knm ) \ → v {
-        : *MlkemKeys k ( mlkem_keygen level )
+        : MlkemKeys k ( mlkem_keygen level )
         = g_sink + g_sink ( vec_len [u] ( mlkem_ek k ) )
         ( mlkem_keys_free k )
     } )
     ( __row kg ) ( bench_result_free kg ) ( string_free knm )
 
-    : *MlkemKeys ks ( mlkem_keygen level )
+    : MlkemKeys ks ( mlkem_keygen level )
     : String enm ( __opname ( string_data base ) `encaps` )
     : BenchResult en ( bench_auto ( string_data enm ) \ → v {
-        : *MlkemEncap e ( mlkem_encaps level ( mlkem_ek ks ) )
+        : MlkemEncap e ( mlkem_encaps level ( mlkem_ek ks ) )
         = g_sink + g_sink ( vec_len [u] ( mlkem_ct e ) )
         ( mlkem_encap_free e )
     } )
     ( __row en ) ( bench_result_free en ) ( string_free enm )
 
-    : *MlkemEncap e2 ( mlkem_encaps level ( mlkem_ek ks ) )
+    : MlkemEncap e2 ( mlkem_encaps level ( mlkem_ek ks ) )
     : String dnm ( __opname ( string_data base ) `decaps` )
     : BenchResult de ( bench_auto ( string_data dnm ) \ → v {
         : ( Vec u ) ss ( mlkem_decaps level ( mlkem_dk ks ) ( mlkem_ct e2 ) )
@@ -128,13 +128,13 @@ $ `stdlib/std/slhdsa.nu`
 
     : String knm ( __opname ( string_data base ) `keygen` )
     : BenchResult kg ( bench_auto ( string_data knm ) \ → v {
-        : *MldsaKeys k ( mldsa_keygen level )
+        : MldsaKeys k ( mldsa_keygen level )
         = g_sink + g_sink ( vec_len [u] ( mldsa_pk k ) )
         ( mldsa_keys_free k )
     } )
     ( __row kg ) ( bench_result_free kg ) ( string_free knm )
 
-    : *MldsaKeys ks ( mldsa_keygen level )
+    : MldsaKeys ks ( mldsa_keygen level )
     : String snm ( __opname ( string_data base ) `sign` )
     : BenchResult sg ( bench_auto ( string_data snm ) \ → v {
         : ( Vec u ) sig ( mldsa_sign level ( mldsa_sk ks ) msg ctx )
@@ -168,13 +168,13 @@ $ `stdlib/std/slhdsa.nu`
 
     : String knm ( __opname ( string_data base ) `keygen` )
     : BenchResult kg ( bench_run ( string_data knm ) kgn \ → v {
-        : *SlhKeys k ( slhdsa_keygen set )
+        : SlhKeys k ( slhdsa_keygen set )
         = g_sink + g_sink ( vec_len [u] ( slhdsa_pk k ) )
         ( slhdsa_keys_free k )
     } )
     ( __row kg ) ( bench_result_free kg ) ( string_free knm )
 
-    : *SlhKeys ks ( slhdsa_keygen set )
+    : SlhKeys ks ( slhdsa_keygen set )
     : String snm ( __opname ( string_data base ) `sign` )
     : BenchResult sg ( bench_run ( string_data snm ) sgn \ → v {
         : ( Vec u ) sig ( slhdsa_sign set ( slhdsa_sk ks ) msg ctx )

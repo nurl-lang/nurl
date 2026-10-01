@@ -112,7 +112,7 @@ $ `stdlib/std/mlkem.nu`
             : Json tc ?? ( json_arr_get tests ti ) { T v → { v } F → { ( json_null ) } }
             : ( Vec u ) d ( __hexv ( __str tc `d` ) )
             : ( Vec u ) z ( __hexv ( __str tc `z` ) )
-            : *MlkemKeys ks ( mlkem_keygen_derand level d z )
+            : MlkemKeys ks ( mlkem_keygen_derand level d z )
             : b ok & ( __eq_hex ( mlkem_ek ks ) ( __str tc `ek` ) )
             ( __eq_hex ( mlkem_dk ks ) ( __str tc `dk` ) )
             ( __note t ok `keyGen` ( __tcid tc ) )
@@ -145,7 +145,7 @@ $ `stdlib/std/mlkem.nu`
             ? is_encap {
                 : ( Vec u ) ek ( __hexv ( __str tc `ek` ) )
                 : ( Vec u ) m ( __hexv ( __str tc `m` ) )
-                : *MlkemEncap en ( mlkem_encaps_derand level ek m )
+                : MlkemEncap en ( mlkem_encaps_derand level ek m )
                 : b ok & ( __eq_hex ( mlkem_ct en ) ( __str tc `c` ) )
                 ( __eq_hex ( mlkem_ss en ) ( __str tc `k` ) )
                 ( __note t ok `encapsulation` ( __tcid tc ) )

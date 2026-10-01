@@ -13,8 +13,8 @@
 // default, and `stdlib/std/tls.nu` offers it for exactly that reason.
 //
 // API — the three KEM operations:
-//   ( mlkem_keygen i level )                      → *MlkemKeys
-//   ( mlkem_encaps i level ( Vec u ) ek )         → *MlkemEncap   (ct, ss)
+//   ( mlkem_keygen i level )                      → MlkemKeys
+//   ( mlkem_encaps i level ( Vec u ) ek )         → MlkemEncap    (ct, ss)
 //   ( mlkem_decaps i level ( Vec u ) dk
 //                          ( Vec u ) ct )         → ( Vec u )     32-byte ss
 //
@@ -22,13 +22,17 @@
 // argument instead of drawing it. These exist because FIPS 203 defines
 // the algorithms this way and NIST's ACVP test vectors exercise them;
 // production callers want the three above.
-//   ( mlkem_keygen_derand level ( Vec u ) d ( Vec u ) z ) → *MlkemKeys
-//   ( mlkem_encaps_derand level ( Vec u ) ek ( Vec u ) m ) → *MlkemEncap
+//   ( mlkem_keygen_derand level ( Vec u ) d ( Vec u ) z ) → MlkemKeys
+//   ( mlkem_encaps_derand level ( Vec u ) ek ( Vec u ) m ) → MlkemEncap
 //
-// Accessors and cleanup:
-//   ( mlkem_ek *MlkemKeys ) ( mlkem_dk *MlkemKeys ) ( mlkem_keys_free … )
-//   ( mlkem_ct *MlkemEncap ) ( mlkem_ss *MlkemEncap ) ( mlkem_encap_free … )
+// Accessors and sizes:
+//   ( mlkem_ek MlkemKeys ) ( mlkem_dk MlkemKeys )       the keys' own bytes, lent
+//   ( mlkem_ct MlkemEncap ) ( mlkem_ss MlkemEncap )
 //   ( mlkem_ek_len level ) ( mlkem_dk_len level ) ( mlkem_ct_len level )
+//   ( mlkem_keys_free k ) ( mlkem_encap_free e )      early release (optional)
+//
+// MlkemKeys and MlkemEncap are library handles (docs/MEMORY.md §7.6):
+// every copy is the same keys, and the last owner releases them.
 //
 // Every operation is checked byte-for-byte against NIST's ACVP vectors
 // by tools/mlkem_gate.sh — keygen, encapsulation and both decapsulation
@@ -52,6 +56,7 @@ $ `stdlib/std/hash_sha3.nu`
 $ `stdlib/std/hash_sha3x4.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/subtle.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Parameters ─────────────────────────────────────────────────────
 //
@@ -900,40 +905,69 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
 
 // ── ML-KEM ─────────────────────────────────────────────────────────
 
-: MlkemKeys {
+: MlkemKeysImpl {
     ( Vec u ) ek
     ( Vec u ) dk
 }
 
-: MlkemEncap {
+: MlkemEncapImpl {
     ( Vec u ) ct
     ( Vec u ) ss
 }
 
-@ mlkem_ek * MlkemKeys h → ( Vec u ) { ^ . h ek }
+// Both are handles on their state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: MlkemKeys { s ctl }
 
-@ mlkem_dk * MlkemKeys h → ( Vec u ) { ^ . h dk }
+: MlkemEncap { s ctl }
 
-@ mlkem_ct * MlkemEncap h → ( Vec u ) { ^ . h ct }
+@ MlkemKeys_share MlkemKeys h → MlkemKeys { ^ @ MlkemKeys { # s ( rcbox_share # i . h ctl ) } }
 
-@ mlkem_ss * MlkemEncap h → ( Vec u ) { ^ . h ss }
-
-@ mlkem_keys_free sink * MlkemKeys h → v {
-    ( vec_free [u] . h ek )
-    ( vec_free [u] . h dk )
-    ( nurl_free # s h )
+@ MlkemKeys_drop sink MlkemKeys h → v {
+    ( mem_forget h )
+    ( rcbox_release [MlkemKeysImpl] # i . h ctl )
 }
 
-@ mlkem_encap_free sink * MlkemEncap h → v {
-    ( vec_free [u] . h ct )
-    ( vec_free [u] . h ss )
-    ( nurl_free # s h )
+@ __MlkemKeys_ptr MlkemKeys h → *MlkemKeysImpl { ^ ( rcbox_ptr [MlkemKeysImpl] # i . h ctl ) }
+
+@ MlkemEncap_share MlkemEncap h → MlkemEncap { ^ @ MlkemEncap { # s ( rcbox_share # i . h ctl ) } }
+
+@ MlkemEncap_drop sink MlkemEncap h → v {
+    ( mem_forget h )
+    ( rcbox_release [MlkemEncapImpl] # i . h ctl )
 }
+
+@ __MlkemEncap_ptr MlkemEncap h → *MlkemEncapImpl { ^ ( rcbox_ptr [MlkemEncapImpl] # i . h ctl ) }
+
+@ mlkem_ek MlkemKeys h__h → ( Vec u ) {
+    : *MlkemKeysImpl h ( __MlkemKeys_ptr h__h )
+    ^ . h ek
+}
+
+@ mlkem_dk MlkemKeys h__h → ( Vec u ) {
+    : *MlkemKeysImpl h ( __MlkemKeys_ptr h__h )
+    ^ . h dk
+}
+
+@ mlkem_ct MlkemEncap h__h → ( Vec u ) {
+    : *MlkemEncapImpl h ( __MlkemEncap_ptr h__h )
+    ^ . h ct
+}
+
+@ mlkem_ss MlkemEncap h__h → ( Vec u ) {
+    : *MlkemEncapImpl h ( __MlkemEncap_ptr h__h )
+    ^ . h ss
+}
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ mlkem_keys_free sink MlkemKeys h → v {}
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ mlkem_encap_free sink MlkemEncap h → v {}
 
 // ML-KEM.KeyGen_internal (Algorithm 16).
-@ mlkem_keygen_derand i level ( Vec u ) d ( Vec u ) z → *MlkemKeys {
+@ mlkem_keygen_derand i level ( Vec u ) d ( Vec u ) z → MlkemKeys {
     : MlkemParams prm ( __mlkem_params level )
-    : *MlkemKeys h # *MlkemKeys ( nurl_alloc Z MlkemKeys )
     : ( Vec u ) ek ( vec_with_cap [u] ( mlkem_ek_len level ) )
     : ( Vec u ) dk ( vec_with_cap [u] ( mlkem_dk_len level ) )
     ( __kpke_keygen prm d ek dk )
@@ -943,24 +977,21 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     ( bytes_extend_bytes dk hek )
     ( vec_free [u] hek )
     ( bytes_extend_bytes dk z )
-    = . h ek ek
-    = . h dk dk
-    ^ h
+    ^ @ MlkemKeys { # s ( rcbox_new [MlkemKeysImpl] @ MlkemKeysImpl { ek dk } ) }
 }
 
-@ mlkem_keygen i level → *MlkemKeys {
+@ mlkem_keygen i level → MlkemKeys {
     : ( Vec u ) d ( rand_bytes 32 )
     : ( Vec u ) z ( rand_bytes 32 )
-    : *MlkemKeys h ( mlkem_keygen_derand level d z )
+    : MlkemKeys h ( mlkem_keygen_derand level d z )
     ( vec_free [u] z )
     ( vec_free [u] d )
     ^ h
 }
 
 // ML-KEM.Encaps_internal (Algorithm 17).
-@ mlkem_encaps_derand i level ( Vec u ) ek ( Vec u ) m → *MlkemEncap {
+@ mlkem_encaps_derand i level ( Vec u ) ek ( Vec u ) m → MlkemEncap {
     : MlkemParams prm ( __mlkem_params level )
-    : *MlkemEncap h # *MlkemEncap ( nurl_alloc Z MlkemEncap )
     // (K, r) ← G(m ‖ H(ek))
     : ( Vec u ) gin ( vec_new [u] )
     ( bytes_extend_bytes gin m )
@@ -976,14 +1007,12 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : ( Vec u ) ct ( vec_with_cap [u] ( mlkem_ct_len level ) )
     ( __kpke_encrypt prm ek m r ct )
     ( vec_free [u] r )
-    = . h ct ct
-    = . h ss kk
-    ^ h
+    ^ @ MlkemEncap { # s ( rcbox_new [MlkemEncapImpl] @ MlkemEncapImpl { ct kk } ) }
 }
 
-@ mlkem_encaps i level ( Vec u ) ek → *MlkemEncap {
+@ mlkem_encaps i level ( Vec u ) ek → MlkemEncap {
     : ( Vec u ) m ( rand_bytes 32 )
-    : *MlkemEncap h ( mlkem_encaps_derand level ek m )
+    : MlkemEncap h ( mlkem_encaps_derand level ek m )
     ( vec_free [u] m )
     ^ h
 }

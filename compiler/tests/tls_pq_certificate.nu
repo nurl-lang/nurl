@@ -69,7 +69,7 @@ $ `stdlib/std/time.nu`
     : ( Vec u ) seed ( vec_new [u] )
     : ~ i i 0
     ~ < i 32 { ( vec_push [u] seed # u % + * i 7 3 251 ) = i + i 1 }
-    : *MldsaKeys ks ( mldsa_keygen_derand 65 seed )
+    : MldsaKeys ks ( mldsa_keygen_derand 65 seed )
     : ( Vec u ) serial ( vec_new [u] )
     = i 0
     ~ < i 12 { ( vec_push [u] serial # u + i 1 ) = i + i 1 }
