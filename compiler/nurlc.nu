@@ -23386,7 +23386,24 @@
             ? & == fld_first_tt TT_DOT >= ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) fld_dot_obj ) 0
             { ( __record_param_idx syms `__fn_retpart__` fld_dot_obj ) }
             { ? ! fld_param_lend { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } }
-        { = fval ( mem_emit_cloneif cg fty fval fld_lent ) }
+        { ? & & agg_returned agg_is_wrap == ( nurl_str_get fld_lent 0 ) 37 {
+                // A returned wrap whose payload is lent on some runs only (a
+                // payload of a call's `?T`, borrowed when the callee lent it):
+                // the function answers per call — the caller owns the result
+                // exactly when this did — and copies only where its answer is
+                // static and owned. Copied always, the copy went to callers
+                // that took the function for a lender (`__imp_array_of`).
+                : s __dself ( nurl_sym_get syms `__fn_self_name__` )
+                : s __dkv ( nurl_cg_reg cg )
+                ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_retown.` ( nurl_str_int ( retown_flag __dself __dself ) ) ) __dkv )
+                : s __dcc ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __dcc ) ( nurl_print ` = and i1 ` ) ( nurl_print __dkv ) ( nurl_print `, ` ) ( nurl_print fld_lent ) ( nurl_print `\n` )
+                ( mem_hown_mark_dyn syms )
+                = fval ( mem_emit_cloneif cg fty fval ( mem_hown_static syms cg __dcc ) )
+                : s __down ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __down ) ( nurl_print ` = xor i1 ` ) ( nurl_print fld_lent ) ( nurl_print `, 1\n` )
+                ( nurl_sym_set_deep syms `__agg_take_own__` __down )
+            } { = fval ( mem_emit_cloneif cg fty fval fld_lent ) } }
         // A literal built as a call's argument owns the fields it made or
         // copied (a fresh call's value, a copy of a borrowed one); one that
         // IS a binding's value moves in only if the callee keeps the

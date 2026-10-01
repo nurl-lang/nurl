@@ -152,6 +152,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   return rule (for a body that falls off its end) marked the function a
   lender though no path fell off — callers never dropped its results.
   `compiler/tests/returns_inside_borrowed_match.nu`.
+- **A returned option whose payload is lent on some runs answers per call.**
+  A payload of a call's `?T` (borrowed when the callee lent it) returned as
+  `^ @ ?T { T v }` was copied always while the function counted as a
+  lender; the copy leaked. Now the caller owns the result exactly when the
+  function did. `compiler/tests/wrap_of_maybe_lent_payload.nu`.
 
 ### Changed
 
