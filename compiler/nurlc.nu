@@ -18887,7 +18887,7 @@
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `'` name ? again `' is stored into a second owner here, but its value was already stored into an owner at line ` `' is consumed here, but its value was stored into an owner at line `
         ( nurl_str_cat3 sl ` (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading '`
-        ( nurl_str_cat name `' is fine; to hand a value on AND keep one in the owner, store a copy (string_clone / vec_clone).` ) ) ) )
+        ( nurl_str_cat3 name `' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup ` ( nurl_str_cat name ` ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.` ) ) ) ) )
     }
 }
 
@@ -25987,6 +25987,12 @@
     : ~ s __cl_bck_kind ( nurl_str_cat `` `` )
     : ~ s __cl_bck_pmoves ( nurl_str_cat `` `` )
     : ~ s __cl_bck_pmaybes ( nurl_str_cat `` `` )
+    // …and the stores and keeps the enclosing statement has stashed so
+    // far (`( attach srv m \ → v {} )`: `m`'s keep is stashed before the
+    // closure argument is compiled). The body's first statement drained
+    // them into the CLOSURE's list, so the enclosing function never saw
+    // that `m` had gone into an owner.
+    : ~ s __cl_bck_ppends ( nurl_str_cat `` `` )
     : ~ s __cl_bck_warnset ( nurl_str_cat `` `` )
     : ~ s __cl_bck_deferred ( nurl_str_cat `` `` )
     ? != g_borrowck 0 {
@@ -25995,6 +26001,8 @@
         = __cl_bck_kind ( nurl_sym_get g_bck `pending_kind` )
         = __cl_bck_pmoves ( nurl_sym_get g_bck `pmoves` )
         = __cl_bck_pmaybes ( nurl_sym_get g_bck `pmaybes` )
+        = __cl_bck_ppends ( nurl_sym_get g_bck `ppends` )
+        ( nurl_sym_set g_bck `ppends` `` )
         = __cl_bck_warnset ( nurl_sym_get g_bck `warnset` )
         = __cl_bck_deferred ( nurl_sym_get g_bck `deferred` )
     } {}
@@ -26037,6 +26045,7 @@
         ( nurl_sym_set g_bck `pending_kind` __cl_bck_kind )
         ( nurl_sym_set g_bck `pmoves` __cl_bck_pmoves )
         ( nurl_sym_set g_bck `pmaybes` __cl_bck_pmaybes )
+        ( nurl_sym_set g_bck `ppends` __cl_bck_ppends )
         ( nurl_sym_set g_bck `warnset` __cl_bck_warnset )
         ( nurl_sym_set g_bck `deferred` __cl_bck_deferred )
     } {}

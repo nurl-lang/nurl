@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied bitwise, so with an owning element type both Vecs released the
   same Strings — `vec_clone` of a `Vec` of owning structs crashed.
   `vec_append` still moves. `compiler/tests/wrapped_and_copied_elements.nu`.
+- **A keep is seen beside a closure argument.** `( attach srv m \ → v {} )`
+  keeps `m`, but the keep was stashed before the closure argument was
+  compiled and the closure body (its own function) drained it into its own
+  statement list, so freeing `m` afterwards — a double free — compiled
+  clean. The suggested fix in that diagnostic is now `( mem_dup x )`.
+  `compiler/tests/borrow_keep_beside_closure_arg.nu`.
 - **A ternary choosing a parameter before `^` no longer makes the result an
   alias of it.** `^` did not clear the join channel that `:` and `=`
   clear, so `= . c max ? > max 0 max 64 … ^ @ S { … }` read as "may return
@@ -67,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Mutex_share`. The handles are one word now (`Mutex { s p }`); code
   that reached into `Mutex.c` uses `mutex_raw`.
   `compiler/tests/sync_handles_autodrop.nu`.
+- **The MCP task store releases itself, and a server keeps its own share.**
+  `McpTaskStore` is an rcbox handle whose drop frees its tasks; the server
+  holds a `McpTaskStore_share` instead of a hand-managed view cell, so the
+  store outlives neither side.
 - **`Regex`, `Rng`, `Bitset`, `Arena`, `Supervisor`, `CircuitBreaker`, the
   cluster `Registry` and process `Output` release themselves.** Each is a
   library handle over state in an rcbox (`stdlib/core/rcbox.nu`: one block,

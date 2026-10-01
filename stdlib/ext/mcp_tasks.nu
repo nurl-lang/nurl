@@ -134,6 +134,7 @@ $ `stdlib/std/random.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -285,10 +286,38 @@ $ `stdlib/core/vec.nu`
     i cancel_req  // 1 once tasks/cancel was seen (cooperative signal)
 }
 
-: McpTaskStore { ( Vec s ) tasks }
+: McpTaskStoreImpl { ( Vec s ) tasks }
+
+// The tasks are blocks the store owns (a task is handed out as its block's
+// address); the store's last owner releases them with it.
+% Drop McpTaskStoreImpl {
+    @ drop McpTaskStoreImpl x → v {
+        : i n ( vec_len [s] . x tasks )
+        : ~ i k 0
+        ~ < k n {
+            ?? ( vec_get [s] . x tasks k ) { T tp → { ( __mcp_task_free tp ) } F → {} }
+            = k + k 1
+        }
+    }
+}
+
+// A handle on the store in an rcbox: every copy — the caller's, the one a
+// server keeps (mcp_server_set_task_store) — is the same task list, and
+// the last owner releases it.
+: McpTaskStore { s ctl }
+
+@ McpTaskStore_share McpTaskStore h → McpTaskStore { ^ @ McpTaskStore { # s ( rcbox_share # i . h ctl ) } }
+
+@ McpTaskStore_drop sink McpTaskStore h → v {
+    ( mem_forget h )
+    ( rcbox_release [McpTaskStoreImpl] # i . h ctl )
+}
+
+// The store's task list (its own, lent).
+@ __mts_tasks McpTaskStore h → ( Vec s ) { ^ . ( rcbox_ptr [McpTaskStoreImpl] # i . h ctl ) tasks }
 
 @ mcp_task_store_new → McpTaskStore {
-    ^ @ McpTaskStore { ( vec_new [s] ) }
+    ^ @ McpTaskStore { # s ( rcbox_new [McpTaskStoreImpl] @ McpTaskStoreImpl { ( vec_new [s] ) } ) }
 }
 
 // Hard cap on retained tasks. Every task holds its arguments and its
@@ -300,11 +329,11 @@ $ `stdlib/core/vec.nu`
 @ mcp_task_store_max → i { ^ 2048 }
 
 @ mcp_task_store_count McpTaskStore store → i {
-    ^ ( vec_len [s] . store tasks )
+    ^ ( vec_len [s] ( __mts_tasks store ) )
 }
 
 @ __mcp_task_at McpTaskStore store i k → s {
-    ^ ?? ( vec_get [s] . store tasks k ) { T x → x F → # s 0 }
+    ^ ?? ( vec_get [s] ( __mts_tasks store ) k ) { T x → x F → # s 0 }
 }
 
 @ __mcp_task_free sink s tp → v {
@@ -324,7 +353,7 @@ $ `stdlib/core/vec.nu`
 
 // Index of the eviction victim: the oldest terminal task, else index 0.
 @ __mcp_task_victim McpTaskStore store → i {
-    : i n ( vec_len [s] . store tasks )
+    : i n ( vec_len [s] ( __mts_tasks store ) )
     : ~ i k 0
     ~ < k n {
         : s pp ( __mcp_task_at store k )
@@ -340,10 +369,10 @@ $ `stdlib/core/vec.nu`
 // CONSUMES `args`. `ttl_ms` < 0 means unlimited; `poll_ms` <= 0 omits
 // the polling hint. Returns an opaque task handle (never 0).
 @ mcp_task_create McpTaskStore store s method s tool Json args i ttl_ms i poll_ms → s {
-    ? >= ( vec_len [s] . store tasks ) ( mcp_task_store_max ) {
+    ? >= ( vec_len [s] ( __mts_tasks store ) ) ( mcp_task_store_max ) {
         : i victim ( __mcp_task_victim store )
         ( __mcp_task_free ( __mcp_task_at store victim ) )
-        ( vec_remove [s] . store tasks victim )
+        ( vec_remove [s] ( __mts_tasks store ) victim )
     } {}
     : i now ( now_ms )
     : *McpTask t # *McpTask ( nurl_alloc Z McpTask )
@@ -366,7 +395,7 @@ $ `stdlib/core/vec.nu`
     = . t link 0
     = . t cancel_req 0
     : s tp # s t
-    ( vec_push [s] . store tasks tp )
+    ( vec_push [s] ( __mts_tasks store ) tp )
     ^ tp
 }
 
@@ -374,13 +403,13 @@ $ `stdlib/core/vec.nu`
 // changes as tasks are swept — this is for a server sweeping its own
 // live tasks (advancing jobs, pushing notifications), not for paging.
 @ mcp_task_nth McpTaskStore store i k → s {
-    ? | < k 0 >= k ( vec_len [s] . store tasks ) { ^ # s 0 } {}
+    ? | < k 0 >= k ( vec_len [s] ( __mts_tasks store ) ) { ^ # s 0 } {}
     ^ ( __mcp_task_at store k )
 }
 
 @ mcp_task_find McpTaskStore store s id → s {
     ? == ( nurl_str_len id ) 0 { ^ # s 0 } {}
-    : i n ( vec_len [s] . store tasks )
+    : i n ( vec_len [s] ( __mts_tasks store ) )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k n {
@@ -408,11 +437,11 @@ $ `stdlib/core/vec.nu`
 @ mcp_task_store_sweep McpTaskStore store i now → i {
     : ~ i dropped 0
     : ~ i k 0
-    ~ < k ( vec_len [s] . store tasks ) {
+    ~ < k ( vec_len [s] ( __mts_tasks store ) ) {
         : s pp ( __mcp_task_at store k )
         ? & != # i pp 0 ( __mcp_task_expired pp now ) {
             ( __mcp_task_free pp )
-            ( vec_remove [s] . store tasks k )
+            ( vec_remove [s] ( __mts_tasks store ) k )
             = dropped + dropped 1
         } {
             = k + k 1
@@ -421,15 +450,8 @@ $ `stdlib/core/vec.nu`
     ^ dropped
 }
 
-@ mcp_task_store_free sink McpTaskStore store → v {
-    : i n ( vec_len [s] . store tasks )
-    : ~ i k 0
-    ~ < k n {
-        ( __mcp_task_free ( __mcp_task_at store k ) )
-        = k + k 1
-    }
-    ( vec_free [s] . store tasks )
-}
+// Let go of `store` now rather than at the end of its owner's scope.
+@ mcp_task_store_free sink McpTaskStore store → v {}
 
 // ── Task accessors ──────────────────────────────────────────────────
 
