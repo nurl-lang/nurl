@@ -8,7 +8,7 @@
 //   ( http3_server_stop s )                                        → v
 //   ( http3_server_free s )                                        → v
 //   ( http3_creds_load cert_path key_path )                        → *QuicCreds   0 on error (EC P-256 or RSA PEM)
-//   ( http3_default_tp )                                           → *QuicTp      the limits this server advertises
+//   ( http3_default_tp )                                           → QuicTp       the limits this server advertises
 //
 // `stdlib/ext/http_server.nu` / `packages/http` call these to put HTTP/3
 // next to a TLS listener; a program that wants HTTP/3 alone calls them
@@ -73,7 +73,7 @@ $ `stdlib/ext/http3_conn.nu`
     } {}
 }
 
-@ http3_server_new UdpSocket sock * QuicCreds creds ( Vec u ) alpn_prefs * QuicTp tp ( @ HttpResponse HttpRequest ) handler i body_max → *H3Server {
+@ http3_server_new UdpSocket sock * QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ HttpResponse HttpRequest ) handler i body_max → *H3Server {
     : *H3Server s # *H3Server ( nurl_alloc Z H3Server )
     = . s h3s ( map_new [i i] )
     = . s handler handler
@@ -136,15 +136,15 @@ $ `stdlib/ext/http3_conn.nu`
 
 // Limits: 30 s idle, 1 MiB connection window, 256 KiB per stream,
 // 100 request streams, 3 unidirectional (control + 2 QPACK).
-@ http3_default_tp → *QuicTp {
-    : *QuicTp tp ( quic_tp_new )
-    = . tp max_idle_timeout 30000
-    = . tp max_udp_payload_size 1350
-    = . tp initial_max_data 1048576
-    = . tp initial_max_stream_data_bidi_local 262144
-    = . tp initial_max_stream_data_bidi_remote 262144
-    = . tp initial_max_stream_data_uni 262144
-    = . tp initial_max_streams_bidi 100
-    = . tp initial_max_streams_uni 3
+@ http3_default_tp → QuicTp {
+    : QuicTp tp ( quic_tp_new )
+    ( quic_tp_set_max_idle_timeout tp 30000 )
+    ( quic_tp_set_max_udp_payload_size tp 1350 )
+    ( quic_tp_set_initial_max_data tp 1048576 )
+    ( quic_tp_set_initial_max_stream_data_bidi_local tp 262144 )
+    ( quic_tp_set_initial_max_stream_data_bidi_remote tp 262144 )
+    ( quic_tp_set_initial_max_stream_data_uni tp 262144 )
+    ( quic_tp_set_initial_max_streams_bidi tp 100 )
+    ( quic_tp_set_initial_max_streams_uni tp 3 )
     ^ tp
 }

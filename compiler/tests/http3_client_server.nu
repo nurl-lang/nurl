@@ -132,7 +132,7 @@ $ `stdlib/ext/http3_client.nu`
     ?? sr {
         T sock → {
             : ( Vec u ) prefs ( tls_alpn_pack `h3` )
-            : *QuicTp stp ( http3_default_tp )
+            : QuicTp stp ( http3_default_tp )
             : ( @ HttpResponse HttpRequest ) hf \ HttpRequest req → HttpResponse { ^ ( handler req ) }
             : *H3Server srv ( http3_server_new sock creds prefs stp hf 1048576 )
             : ( @ v ) server \ → v { ( http3_server_run srv ) }

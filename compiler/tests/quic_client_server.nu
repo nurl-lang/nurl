@@ -91,7 +91,7 @@ $ `stdlib/ext/http3_server.nu`
     ?? sr {
         T sock → {
             : ( Vec u ) prefs ( tls_alpn_pack `echo` )
-            : *QuicTp stp ( http3_default_tp )
+            : QuicTp stp ( http3_default_tp )
             : ( @ v i i ) ev \ i cp i e → v { ( on_event cp e ) }
             : *QuicServer srv ( quic_server_new sock creds prefs stp ev )
             : ( @ v ) server \ → v { ( quic_server_run srv ) }
@@ -138,7 +138,7 @@ $ `stdlib/ext/http3_server.nu`
 
 // verify = 0: the self-signed leaf is accepted; everything else is checked.
 @ client_round → v {
-    : *QuicTp tp ( quic_client_default_tp )
+    : QuicTp tp ( quic_client_default_tp )
     : *QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 0 5000 )
     ? == # i cl 0 { ( label `connect` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}
     : *QuicConn c ( quic_client_conn cl )
@@ -191,7 +191,7 @@ $ `stdlib/ext/http3_server.nu`
 // verify = 1: a self-signed certificate is not trusted; the handshake
 // must fail with CRYPTO_ERROR(bad_certificate) and open no stream.
 @ client_round_verify → v {
-    : *QuicTp tp ( quic_client_default_tp )
+    : QuicTp tp ( quic_client_default_tp )
     : *QuicClient cl ( quic_client_connect `127.0.0.1` 18962 `localhost` `echo` tp 1 5000 )
     ? == # i cl 0 { ( label `verify_selfsigned` `NO-SOCKET` ) ( quic_tp_free tp ) ^ } {}
     : *QuicConn c ( quic_client_conn cl )

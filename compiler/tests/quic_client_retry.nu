@@ -52,7 +52,7 @@ $ `stdlib/std/quic_conn.nu`
     ^ n
 }
 
-@ fresh_client * QuicTp tp → *QuicConn {
+@ fresh_client QuicTp tp → *QuicConn {
     : ( Vec u ) peer ( udp_addr_new )
     : *QuicConn c ( quic_conn_new_client peer `localhost` `h3` tp 0 1000 )
     ( vec_free [u] peer )
@@ -70,13 +70,13 @@ $ `stdlib/std/quic_conn.nu`
 }
 
 @ run_retry → v {
-    : *QuicTp tp ( quic_tp_new )
-    = . tp initial_max_data 65536
-    = . tp initial_max_stream_data_bidi_local 16384
-    = . tp initial_max_stream_data_bidi_remote 16384
-    = . tp initial_max_stream_data_uni 16384
-    = . tp initial_max_streams_bidi 4
-    = . tp initial_max_streams_uni 3
+    : QuicTp tp ( quic_tp_new )
+    ( quic_tp_set_initial_max_data tp 65536 )
+    ( quic_tp_set_initial_max_stream_data_bidi_local tp 16384 )
+    ( quic_tp_set_initial_max_stream_data_bidi_remote tp 16384 )
+    ( quic_tp_set_initial_max_stream_data_uni tp 16384 )
+    ( quic_tp_set_initial_max_streams_bidi tp 4 )
+    ( quic_tp_set_initial_max_streams_uni tp 3 )
     : *QuicConn c ( fresh_client tp )
     : ( Vec u ) peer ( udp_addr_new )
     : ( Vec u ) d1 ( vec_new [u] )
@@ -159,9 +159,9 @@ $ `stdlib/std/quic_conn.nu`
 }
 
 @ run_vn → v {
-    : *QuicTp tp ( quic_tp_new )
-    = . tp initial_max_data 65536
-    = . tp initial_max_streams_bidi 4
+    : QuicTp tp ( quic_tp_new )
+    ( quic_tp_set_initial_max_data tp 65536 )
+    ( quic_tp_set_initial_max_streams_bidi tp 4 )
     : ( Vec u ) peer ( udp_addr_new )
     // lists version 1: a fake, ignored
     : *QuicConn c1 ( fresh_client tp )

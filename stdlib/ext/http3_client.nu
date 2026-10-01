@@ -148,15 +148,15 @@ $ `stdlib/ext/http3_qpack.nu`
 // The transport parameters an HTTP/3 client advertises: the server may
 // open no bidirectional stream (§6.1) and three unidirectional ones
 // (control + 2 QPACK).
-@ __h3c_tp → *QuicTp {
-    : *QuicTp tp ( quic_client_default_tp )
-    = . tp initial_max_streams_bidi 0
-    = . tp initial_max_streams_uni 3
+@ __h3c_tp → QuicTp {
+    : QuicTp tp ( quic_client_default_tp )
+    ( quic_tp_set_initial_max_streams_bidi tp 0 )
+    ( quic_tp_set_initial_max_streams_uni tp 3 )
     ^ tp
 }
 
 @ h3_client_connect s host i port s server_name i verify i timeout_ms → *H3Client {
-    : *QuicTp tp ( __h3c_tp )
+    : QuicTp tp ( __h3c_tp )
     : *QuicClient qc ( quic_client_connect host port server_name `h3` tp verify timeout_ms )
     ( quic_tp_free tp )
     ? == # i qc 0 { ^ # *H3Client 0 } {}

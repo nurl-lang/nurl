@@ -49,20 +49,20 @@ $ `stdlib/std/quic_conn.nu`
 // window, 256 KiB per stream, 100 bidirectional streams the server may
 // open (an HTTP/3 server opens none), 3 unidirectional (control + 2
 // QPACK).
-@ quic_client_default_tp → *QuicTp {
-    : *QuicTp tp ( quic_tp_new )
-    = . tp max_idle_timeout 30000
-    = . tp max_udp_payload_size 1350
-    = . tp initial_max_data 1048576
-    = . tp initial_max_stream_data_bidi_local 262144
-    = . tp initial_max_stream_data_bidi_remote 262144
-    = . tp initial_max_stream_data_uni 262144
-    = . tp initial_max_streams_bidi 100
-    = . tp initial_max_streams_uni 3
+@ quic_client_default_tp → QuicTp {
+    : QuicTp tp ( quic_tp_new )
+    ( quic_tp_set_max_idle_timeout tp 30000 )
+    ( quic_tp_set_max_udp_payload_size tp 1350 )
+    ( quic_tp_set_initial_max_data tp 1048576 )
+    ( quic_tp_set_initial_max_stream_data_bidi_local tp 262144 )
+    ( quic_tp_set_initial_max_stream_data_bidi_remote tp 262144 )
+    ( quic_tp_set_initial_max_stream_data_uni tp 262144 )
+    ( quic_tp_set_initial_max_streams_bidi tp 100 )
+    ( quic_tp_set_initial_max_streams_uni tp 3 )
     ^ tp
 }
 
-@ quic_client_connect s host i port s server_name s alpn * QuicTp tp i verify i timeout_ms → *QuicClient {
+@ quic_client_connect s host i port s server_name s alpn QuicTp tp i verify i timeout_ms → *QuicClient {
     : !( Vec u ) NetErr ar ( udp_addr_resolve host port )
     : ( Vec u ) peer ?? ar { T a → a F _ → ( vec_new [u] ) }
     ? == ( vec_len [u] peer ) 0 { ( vec_free [u] peer ) ^ # *QuicClient 0 } {}

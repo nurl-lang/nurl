@@ -244,8 +244,8 @@ $ `stdlib/std/quic_recovery.nu`
     ( Vec u ) retx1
     ( Vec u ) retx2
     ( Vec u ) ctl2
-    * QuicTp local_tp
-    * QuicTp peer_tp
+    QuicTp local_tp
+    QuicTp peer_tp
     i max_data_local
     i data_recv
     i data_consumed
@@ -313,7 +313,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 // Everything both roles share: `tp` is the caller's template (limits);
 // the connection IDs, keys and the TLS machine are the role's to add.
-@ __qc_new_common ( Vec u ) scid ( Vec u ) peer * QuicTp tp i now → *QuicConn {
+@ __qc_new_common ( Vec u ) scid ( Vec u ) peer QuicTp tp i now → *QuicConn {
     : *QuicConn c # *QuicConn ( nurl_alloc Z QuicConn )
     = . c state 0
     = . c now now
@@ -333,21 +333,20 @@ $ `stdlib/std/quic_recovery.nu`
     = . c bytes_recv 0
     = . c bytes_sent 0
     // our transport parameters
-    : *QuicTp mine ( quic_tp_new )
-    = . mine max_idle_timeout . tp max_idle_timeout
-    = . mine max_udp_payload_size . tp max_udp_payload_size
-    = . mine initial_max_data . tp initial_max_data
-    = . mine initial_max_stream_data_bidi_local . tp initial_max_stream_data_bidi_local
-    = . mine initial_max_stream_data_bidi_remote . tp initial_max_stream_data_bidi_remote
-    = . mine initial_max_stream_data_uni . tp initial_max_stream_data_uni
-    = . mine initial_max_streams_bidi . tp initial_max_streams_bidi
-    = . mine initial_max_streams_uni . tp initial_max_streams_uni
-    = . mine ack_delay_exponent 3
-    = . mine max_ack_delay 25
-    = . mine disable_active_migration 1
-    = . mine active_connection_id_limit 4
-    = . mine has_initial_scid 1
-    ( bytes_extend_bytes . mine initial_scid scid )
+    : QuicTp mine ( quic_tp_new )
+    ( quic_tp_set_max_idle_timeout mine ( quic_tp_max_idle_timeout tp ) )
+    ( quic_tp_set_max_udp_payload_size mine ( quic_tp_max_udp_payload_size tp ) )
+    ( quic_tp_set_initial_max_data mine ( quic_tp_initial_max_data tp ) )
+    ( quic_tp_set_initial_max_stream_data_bidi_local mine ( quic_tp_initial_max_stream_data_bidi_local tp ) )
+    ( quic_tp_set_initial_max_stream_data_bidi_remote mine ( quic_tp_initial_max_stream_data_bidi_remote tp ) )
+    ( quic_tp_set_initial_max_stream_data_uni mine ( quic_tp_initial_max_stream_data_uni tp ) )
+    ( quic_tp_set_initial_max_streams_bidi mine ( quic_tp_initial_max_streams_bidi tp ) )
+    ( quic_tp_set_initial_max_streams_uni mine ( quic_tp_initial_max_streams_uni tp ) )
+    ( quic_tp_set_ack_delay_exponent mine 3 )
+    ( quic_tp_set_max_ack_delay mine 25 )
+    ( quic_tp_set_disable_active_migration mine 1 )
+    ( quic_tp_set_active_connection_id_limit mine 4 )
+    ( quic_tp_set_initial_scid mine scid )
     = . c local_tp mine
     = . c tls # *QuicTlsSrv 0
     = . c tls_state 0
@@ -388,14 +387,14 @@ $ `stdlib/std/quic_recovery.nu`
     = . c retx1 ( vec_new [u] )
     = . c retx2 ( vec_new [u] )
     = . c ctl2 ( vec_new [u] )
-    = . c peer_tp # *QuicTp 0
-    = . c max_data_local . tp initial_max_data
+    = . c peer_tp @ QuicTp { # s 0 }
+    = . c max_data_local ( quic_tp_initial_max_data tp )
     = . c data_recv 0
     = . c data_consumed 0
     = . c max_data_peer 0
     = . c data_sent 0
-    = . c max_streams_bidi_local . tp initial_max_streams_bidi
-    = . c max_streams_uni_local . tp initial_max_streams_uni
+    = . c max_streams_bidi_local ( quic_tp_initial_max_streams_bidi tp )
+    = . c max_streams_uni_local ( quic_tp_initial_max_streams_uni tp )
     = . c peer_bidi_opened 0
     = . c peer_uni_opened 0
     = . c peer_bidi_closed 0
@@ -406,7 +405,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . c next_local_uni 3
     = . c streams ( vec_new [i] )
     = . c readable ( vec_new [i] )
-    = . c idle_timeout . tp max_idle_timeout
+    = . c idle_timeout ( quic_tp_max_idle_timeout tp )
     = . c last_activity now
     = . c handshake_done_sent 0
     = . c confirmed 0
@@ -418,7 +417,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . c close_sent 0
     = . c close_pkts_since 0
     = . c max_udp 1200
-    = . c stream_rx_window . tp initial_max_stream_data_bidi_remote
+    = . c stream_rx_window ( quic_tp_initial_max_stream_data_bidi_remote tp )
     = . c alpn_ok 0
     = . c is_client 0
     = . c tlsc # *QuicTlsCli 0
@@ -435,15 +434,13 @@ $ `stdlib/std/quic_recovery.nu`
 
 // The transport parameters this server sends: `tp` is the caller's
 // template (limits); the connection IDs are filled in here.
-@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer * QuicCreds creds ( Vec u ) alpn_prefs * QuicTp tp i now → *QuicConn {
+@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer * QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp i now → *QuicConn {
     : *QuicConn c ( __qc_new_common scid peer tp now )
     ( bytes_extend_bytes . c odcid odcid )
-    : *QuicTp mine . c local_tp
-    = . mine has_original_dcid 1
-    ( bytes_extend_bytes . mine original_dcid odcid )
-    = . mine has_stateless_reset_token 1
+    : QuicTp mine . c local_tp
+    ( quic_tp_set_original_dcid mine odcid )
     : ( Vec u ) tok ( __qc_rand 16 )
-    ( bytes_extend_bytes . mine stateless_reset_token tok )
+    ( quic_tp_set_stateless_reset_token mine tok )
     ( vec_free [u] tok )
     : ( Vec u ) tpb ( quic_tp_encode mine T )
     = . c tls ( quic_tls_srv_new . creds cert_chain . creds keytype . creds ec_priv . creds rsa_n . creds rsa_e . creds rsa_d . creds ml_level alpn_prefs tpb )
@@ -459,7 +456,7 @@ $ `stdlib/std/quic_recovery.nu`
 // The DCID we choose (`odcid`, 8 random bytes) keys the Initial packets
 // until the server's first Initial tells us its SCID (§7.2); the server
 // must echo it back as original_destination_connection_id (§7.3).
-@ quic_conn_new_client ( Vec u ) peer s server_name s alpn * QuicTp tp i verify i now → *QuicConn {
+@ quic_conn_new_client ( Vec u ) peer s server_name s alpn QuicTp tp i verify i now → *QuicConn {
     : ( Vec u ) scid ( __qc_rand 8 )
     : ( Vec u ) dcid ( __qc_rand 8 )
     : *QuicConn c ( __qc_new_common scid peer tp now )
@@ -615,8 +612,8 @@ $ `stdlib/std/quic_recovery.nu`
         // it was opened and later released — treat as closed: no state
         ^ # *QuicStream 0
     } {}
-    : i window ? bidi . . c local_tp initial_max_stream_data_bidi_remote . . c local_tp initial_max_stream_data_uni
-    : i tx_max ? bidi ? != # i . c peer_tp 0 . . c peer_tp initial_max_stream_data_bidi_local 0 0
+    : i window ? bidi ( quic_tp_initial_max_stream_data_bidi_remote . c local_tp ) ( quic_tp_initial_max_stream_data_uni . c local_tp )
+    : i tx_max ? bidi ? != 0 # i . . c peer_tp ctl ( quic_tp_initial_max_stream_data_bidi_local . c peer_tp ) 0 0
     : ~ i i opened
     ~ <= i idx {
         : i nid | << i 2 & id 3
@@ -676,8 +673,8 @@ $ `stdlib/std/quic_recovery.nu`
             ( quic_push_max_stream_data . c ctl2 id . s rx_max_data )
         } {}
         // connection window likewise
-        ? < - . c max_data_local . c data_consumed / . . c local_tp initial_max_data 2 {
-            = . c max_data_local + . c data_consumed . . c local_tp initial_max_data
+        ? < - . c max_data_local . c data_consumed / ( quic_tp_initial_max_data . c local_tp ) 2 {
+            = . c max_data_local + . c data_consumed ( quic_tp_initial_max_data . c local_tp )
             ( quic_push_max_data . c ctl2 . c max_data_local )
         } {}
     } {}
@@ -709,7 +706,7 @@ $ `stdlib/std/quic_recovery.nu`
     ? >= idx . c max_streams_uni_peer { ^ -1 } {}
     : i id . c next_local_uni
     = . c next_local_uni + id 4
-    : i tx_max ? != # i . c peer_tp 0 . . c peer_tp initial_max_stream_data_uni 0
+    : i tx_max ? != 0 # i . . c peer_tp ctl ( quic_tp_initial_max_stream_data_uni . c peer_tp ) 0
     : *QuicStream s ( __qc_stream_new id 0 tx_max T )
     ( vec_push [i] . c streams # i s )
     ^ id
@@ -718,12 +715,12 @@ $ `stdlib/std/quic_recovery.nu`
 // A bidirectional stream of our own. Needs the peer's transport
 // parameters (the handshake), like the flow-control limit it obeys.
 @ quic_conn_open_bidi * QuicConn c → i {
-    ? == # i . c peer_tp 0 { ^ -1 } {}
+    ? == 0 # i . . c peer_tp ctl { ^ -1 } {}
     : i idx >> . c next_local_bidi 2
     ? >= idx . c max_streams_bidi_peer { ^ -1 } {}
     : i id . c next_local_bidi
     = . c next_local_bidi + id 4
-    : *QuicStream s ( __qc_stream_new id . . c local_tp initial_max_stream_data_bidi_local . . c peer_tp initial_max_stream_data_bidi_remote T )
+    : *QuicStream s ( __qc_stream_new id ( quic_tp_initial_max_stream_data_bidi_local . c local_tp ) ( quic_tp_initial_max_stream_data_bidi_remote . c peer_tp ) T )
     ( vec_push [i] . c streams # i s )
     ^ id
 }
@@ -783,14 +780,14 @@ $ `stdlib/std/quic_recovery.nu`
             ? ! ( __qc_is_local c . s id ) {
                 ? ( __qc_stream_is_bidi . s id ) {
                     = . c peer_bidi_closed + . c peer_bidi_closed 1
-                    : i want + . c peer_bidi_closed . . c local_tp initial_max_streams_bidi
+                    : i want + . c peer_bidi_closed ( quic_tp_initial_max_streams_bidi . c local_tp )
                     ? > want . c max_streams_bidi_local {
                         = . c max_streams_bidi_local want
                         ( quic_push_max_streams . c ctl2 T want )
                     } {}
                 } {
                     = . c peer_uni_closed + . c peer_uni_closed 1
-                    : i want + . c peer_uni_closed . . c local_tp initial_max_streams_uni
+                    : i want + . c peer_uni_closed ( quic_tp_initial_max_streams_uni . c local_tp )
                     ? > want . c max_streams_uni_local {
                         = . c max_streams_uni_local want
                         ( quic_push_max_streams . c ctl2 F want )
@@ -918,21 +915,21 @@ $ `stdlib/std/quic_recovery.nu`
 
 // The peer's transport parameters, once the TLS layer has them.
 @ __qc_apply_peer_tp * QuicConn c → v {
-    ? != # i . c peer_tp 0 { ^ } {}
-    : *QuicTp p ? != . c is_client 0 ( quic_tp_decode ( quic_tls_cli_server_tp . c tlsc ) F ) ( quic_tp_decode ( quic_tls_srv_client_tp . c tls ) T )
-    ? == # i p 0 { ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 ) ^ } {}
+    ? != 0 # i . . c peer_tp ctl { ^ } {}
+    : QuicTp p ? != . c is_client 0 ( quic_tp_decode ( quic_tls_cli_server_tp . c tlsc ) F ) ( quic_tp_decode ( quic_tls_srv_client_tp . c tls ) T )
+    ? == 0 # i . p ctl { ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 ) ^ } {}
     // §7.3: initial_source_connection_id must be the SCID of the peer's
     // first packet — the DCID we send to.
-    : ~ b ok ( bytes_eq . p initial_scid . c dcid )
+    : ~ b ok ( bytes_eq ( quic_tp_initial_scid p ) . c dcid )
     ? != . c is_client 0 {
         // ... and a server proves it saw our first Initial: the DCID we
         // chose comes back as original_destination_connection_id, and
         // after a Retry that packet's SCID as retry_source_connection_id
         // (a retry_source_connection_id with no Retry is as wrong).
-        ? | == . p has_original_dcid 0 ! ( bytes_eq . p original_dcid . c odcid ) { = ok F } {}
+        ? | ! ( quic_tp_has_original_dcid p ) ! ( bytes_eq ( quic_tp_original_dcid p ) . c odcid ) { = ok F } {}
         ? != . c retry_seen 0 {
-            ? | == . p has_retry_scid 0 ! ( bytes_eq . p retry_scid . c retry_scid ) { = ok F } {}
-        } { ? != . p has_retry_scid 0 { = ok F } {} }
+            ? | ! ( quic_tp_has_retry_scid p ) ! ( bytes_eq ( quic_tp_retry_scid p ) . c retry_scid ) { = ok F } {}
+        } { ? ( quic_tp_has_retry_scid p ) { = ok F } {} }
     } {}
     ? ! ok {
         ( quic_tp_free p )
@@ -940,14 +937,14 @@ $ `stdlib/std/quic_recovery.nu`
         ^
     } {}
     = . c peer_tp p
-    = . c max_data_peer . p initial_max_data
-    = . c max_streams_bidi_peer . p initial_max_streams_bidi
-    = . c max_streams_uni_peer . p initial_max_streams_uni
-    ( quic_rec_set_peer . c rec . p max_ack_delay . p ack_delay_exponent )
-    : ~ i idle . . c local_tp max_idle_timeout
-    ? > . p max_idle_timeout 0 { ? | == idle 0 < . p max_idle_timeout idle { = idle . p max_idle_timeout } {} } {}
+    = . c max_data_peer ( quic_tp_initial_max_data p )
+    = . c max_streams_bidi_peer ( quic_tp_initial_max_streams_bidi p )
+    = . c max_streams_uni_peer ( quic_tp_initial_max_streams_uni p )
+    ( quic_rec_set_peer . c rec ( quic_tp_max_ack_delay p ) ( quic_tp_ack_delay_exponent p ) )
+    : ~ i idle ( quic_tp_max_idle_timeout . c local_tp )
+    ? > ( quic_tp_max_idle_timeout p ) 0 { ? | == idle 0 < ( quic_tp_max_idle_timeout p ) idle { = idle ( quic_tp_max_idle_timeout p ) } {} } {}
     = . c idle_timeout idle
-    : i mu ? < . p max_udp_payload_size 1350 . p max_udp_payload_size 1350
+    : i mu ? < ( quic_tp_max_udp_payload_size p ) 1350 ( quic_tp_max_udp_payload_size p ) 1350
     = . c max_udp mu
     // streams opened before the parameters arrived (none for a server —
     // client data waits for 1-RTT — but keep the invariant)
@@ -955,7 +952,7 @@ $ `stdlib/std/quic_recovery.nu`
     ~ < k ( vec_len [i] . c streams ) {
         : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
         ? ( __qc_stream_is_bidi . s id ) {
-            = . s tx_max_data ? ( __qc_is_local c . s id ) . p initial_max_stream_data_bidi_remote . p initial_max_stream_data_bidi_local
+            = . s tx_max_data ? ( __qc_is_local c . s id ) ( quic_tp_initial_max_stream_data_bidi_remote p ) ( quic_tp_initial_max_stream_data_bidi_local p )
         } {}
         = k + k 1
     }
@@ -1048,7 +1045,7 @@ $ `stdlib/std/quic_recovery.nu`
 // up to two extra, never more than its active_connection_id_limit allows
 // (the initial one counts; the default limit of 2 leaves room for one).
 @ __qc_issue_cids * QuicConn c → v {
-    : i limit ? != # i . c peer_tp 0 . . c peer_tp active_connection_id_limit 2
+    : i limit ? != 0 # i . . c peer_tp ctl ( quic_tp_active_connection_id_limit . c peer_tp ) 2
     : ~ i want - limit 1
     ? > want 2 { = want 2 } {}
     ~ < . c cid_extra_issued want {
@@ -1234,7 +1231,7 @@ $ `stdlib/std/quic_recovery.nu`
             ? >= ( __qc_ri . c peer_cid_seqs k ) . c peer_cid_retire_prior { = active + active 1 } {}
             = k + k 1
         }
-        ? > active . . c local_tp active_connection_id_limit { ( __qc_fail c 0 ( quic_err_connection_id_limit ) ft ) ^ 1 } {}
+        ? > active ( quic_tp_active_connection_id_limit . c local_tp ) { ( __qc_fail c 0 ( quic_err_connection_id_limit ) ft ) ^ 1 } {}
         ^ 0
     } {}
     ? == ft 25 {

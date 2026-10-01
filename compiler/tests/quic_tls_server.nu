@@ -122,16 +122,14 @@ $ `stdlib/std/quic_tls.nu`
         F _ → { ( nurl_print `key_pem: FAIL\n` ) ^ 1 }
     }
     ( x509_selfsigned_free cert )
-    : *QuicTp tp ( quic_tp_new )
-    = . tp initial_max_data 1048576
-    = . tp initial_max_streams_bidi 100
-    = . tp has_initial_scid 1
+    : QuicTp tp ( quic_tp_new )
+    ( quic_tp_set_initial_max_data tp 1048576 )
+    ( quic_tp_set_initial_max_streams_bidi tp 100 )
     : ( Vec u ) tmp1 ( hx `f067a5502a4262b5` )
-    ( bytes_extend_bytes . tp initial_scid tmp1 )
+    ( quic_tp_set_initial_scid tp tmp1 )
     ( vec_free [u] tmp1 )
-    = . tp has_original_dcid 1
     : ( Vec u ) tmp2 ( hx `8394c8f03e515708` )
-    ( bytes_extend_bytes . tp original_dcid tmp2 )
+    ( quic_tp_set_original_dcid tp tmp2 )
     ( vec_free [u] tmp2 )
     : ( Vec u ) g_tp ( quic_tp_encode tp T )
     ( quic_tp_free tp )
@@ -209,9 +207,9 @@ $ `stdlib/std/quic_tls.nu`
     = fails + fails ( check_int `alpn_len` ( vec_len [u] alpn ) 4 )
     : ( Vec u ) ctp ( quic_tls_srv_client_tp s )
     = fails + fails ( check_int `client_tp_len` ( vec_len [u] ctp ) 50 )
-    : *QuicTp dec ( quic_tp_decode ctp T )
-    ? == # i dec 0 { ( nurl_print `client_tp_decode: FAIL\n` ) = fails + fails 1 } {
-        = fails + fails ( check_int `client_tp_idle` . dec max_idle_timeout 30000 )
+    : QuicTp dec ( quic_tp_decode ctp T )
+    ? == 0 # i . dec ctl { ( nurl_print `client_tp_decode: FAIL\n` ) = fails + fails 1 } {
+        = fails + fails ( check_int `client_tp_idle` ( quic_tp_max_idle_timeout dec ) 30000 )
         ( quic_tp_free dec )
     }
 
