@@ -140,6 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a literal field built from a `?` / `??` join was always taken for a lend:
   the keeper got a copy and the original leaked on every call. The join's
   per-arm ownership now decides. `compiler/tests/join_into_keeper_moves.nu`.
+- **A literal built as an argument releases what it made after the call.**
+  `( use @ P { ( string_from x ) 1 } )`, `( api @ ?Json { T a } )`: the
+  literal's fresh fields and copies of borrowed ones had no owner once the
+  call returned — every call leaked them. They are dropped after the call
+  unless the callee keeps or consumes the argument; a field that IS a
+  binding's value stays that binding's. `compiler/tests/literal_args_release.nu`.
 
 ### Changed
 

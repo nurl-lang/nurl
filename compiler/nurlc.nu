@@ -10436,6 +10436,7 @@
         : ~ s av ( nurl_str_cat `` `` )
         : ~ s at ( nurl_str_cat `` `` )
         : ~ s arg_lent ``
+        : ~ s arg_lit_own ``
         : ~ s arg_fread ``
         : ~ b arg_had_fread F
         : ~ s arg_faddr ``
@@ -10483,7 +10484,11 @@
             ( nurl_sym_def syms `__agg_arg_call__` ? == bck_arg_tt TT_AT
             ( nurl_str_cat3 call_name ` ` ( nurl_str_int arg_idx ) ) `` )
             ( nurl_sym_def syms `__last_field_read__` `` )
+            : s __aao_saved ( nurl_sym_get syms `__agg_arg_own__` )
+            ( nurl_sym_def syms `__agg_arg_own__` `` )
             = av ( gen_operand lex syms cg )
+            = arg_lit_own ? == bck_arg_tt TT_AT ( nurl_sym_get syms `__agg_arg_own__` ) ``
+            ( nurl_sym_def syms `__agg_arg_own__` __aao_saved )
             = arg_had_fread != 0 ( nurl_sym_len syms `__last_field_read__` )
             ( nurl_sym_def syms `__agg_arg_sink__` __aas_saved )
             ( nurl_sym_def syms `__agg_arg_call__` __aac_saved )
@@ -11447,6 +11452,7 @@
         // of it, used after this call returns.
         // What this argument leaves the caller to drop after the call, and
         // whether the result is it (mem_arg_temps).
+        ( nurl_sym_def syms `__argtmp_litown__` arg_lit_own )
         ( mem_arg_temps syms cg call_name fname arg_idx bck_arg_tt at av __callee_shadowed )
         : s __at_o ( nurl_sym_get syms `__argtmp_owned__` )
         ? != 0 ( nurl_str_len __at_o ) { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps ) ( nurl_str_cat __at_o `` ) ( nurl_str_cat3 owned_arg_temps ` ` __at_o ) } {}
@@ -16971,6 +16977,40 @@
         = owned ? == 0 ( nurl_str_len owned ) ( nurl_str_cat __dbo `` ) ( nurl_str_cat3 owned ` ` __dbo )
     } {}
     ( nurl_sym_def syms `__arg_dyn_box__` `` )
+    // The fields a literal argument made or copied (gen_agg_lit): dropped
+    // after the call unless the callee consumes or keeps the argument.
+    : ~ s __lo ( nurl_sym_get syms `__argtmp_litown__` )
+    ( nurl_sym_def syms `__argtmp_litown__` `` )
+    ? & & & != 0 g_auto_drop_strings == arg_tt TT_AT ! shadowed != 0 ( nurl_str_len __lo ) {
+        : s __lsk ( nurl_cg_reg cg )
+        ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __lsk )
+        : s __lst ( nurl_cg_reg cg )
+        ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) __lst )
+        : s __lkp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print __lkp ) ( nurl_print ` = or i1 ` ) ( nurl_print __lsk ) ( nurl_print `, ` ) ( nurl_print __lst ) ( nurl_print `\n` )
+        : s __lnk ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print __lnk ) ( nurl_print ` = xor i1 ` ) ( nurl_print __lkp ) ( nurl_print `, 1\n` )
+        ~ != 0 ( nurl_str_len __lo ) {
+            : i semi ( nurl_str_find __lo `;` )
+            : s ent ? < semi 0 ( nurl_str_cat __lo `` ) ( nurl_str_slice __lo 0 semi )
+            = __lo ? < semi 0 `` ( nurl_str_slice __lo + semi 1 - - ( nurl_str_len __lo ) semi 1 )
+            : i b1 ( nurl_str_find ent `|` )
+            : s lty ( nurl_str_slice ent 0 b1 )
+            : s rest1 ( nurl_str_slice ent + b1 1 - - ( nurl_str_len ent ) b1 1 )
+            : i b2 ( nurl_str_find rest1 `|` )
+            : s lcond ( nurl_str_slice rest1 0 b2 )
+            : s lval ( nurl_str_slice rest1 + b2 1 - - ( nurl_str_len rest1 ) b2 1 )
+            : ~ s lc ( nurl_str_cat __lnk `` )
+            ? ! ( seq lcond `1` ) {
+                = lc ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print lc ) ( nurl_print ` = and i1 ` ) ( nurl_print __lnk ) ( nurl_print `, ` ) ( nurl_print lcond ) ( nurl_print `\n` )
+            } {}
+            ( __handle_drop_ensure lty )
+            ( __dropifv_request lty )
+            : s w ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval )
+            = owned ? == 0 ( nurl_str_len owned ) w ( nurl_str_cat3 owned ` ` w )
+        }
+    } {}
     // A temporary an inner call could not drop (it returned a view of
     // it: `( string_data ( mk ) )`) lives until this call is done —
     // when this call returns nothing that can point into it and
@@ -23347,6 +23387,23 @@
             { ( __record_param_idx syms `__fn_retpart__` fld_dot_obj ) }
             { ? ! fld_param_lend { ( nurl_sym_set_deep syms `__agg_lends_part__` `1` ) } {} } }
         { = fval ( mem_emit_cloneif cg fty fval fld_lent ) }
+        // A literal built as a call's argument owns the fields it made or
+        // copied (a fresh call's value, a copy of a borrowed one); one that
+        // IS a binding's value moves in only if the callee keeps the
+        // argument (mem_note_kept_arg). Published for the call: what the
+        // literal owns is dropped after it unless the callee keeps or
+        // consumes the argument (mem_arg_temps) — it leaked.
+        : b __ao_ctx & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __argk ) ! agg_returned ! agg_nested
+        : b __ao_ty & & | ( __is_handle_ty fty ) ( __is_autodrop_enum fty syms ) ! ( __is_closure_ty fty ) ! ( seq fval `zeroinitializer` )
+        : b __ao_tag & == idx 0 | agg_is_wrap != 0 ( nurl_sym_len2 syms ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) `__variants` )
+        ? & & & __ao_ctx __ao_ty != fld_first_tt TT_AT ! __ao_tag {
+            : s __aoc ? | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_HASH ( nurl_str_cat fld_lent `` ) ( nurl_str_cat `1` `` )
+            ? != 0 ( nurl_str_len __aoc ) {
+                : s __aol ( nurl_sym_get syms `__agg_arg_own__` )
+                : s __aoe ( nurl_str_cat4 fty `|` __aoc ( nurl_str_cat `|` fval ) )
+                ( nurl_sym_def syms `__agg_arg_own__` ? == 0 ( nurl_str_len __aol ) __aoe ( nurl_str_cat3 __aol `;` __aoe ) )
+            } {}
+        } {}
         // A POINTER read out of something else, stored into this
         // aggregate: the aggregate now aliases whatever that pointer
         // belongs to. `. str ctl` inside `@ ( Vec u ) { … }` is how
