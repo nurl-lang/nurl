@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `VIndex` is a handle instead of a `*VIndex` pointer: every copy is the
+  same index, and the last owner releases it. `vx_build_exact` /
+  `vx_build_ivf` → `VIndex`, `vx_load` → `!VIndex String`; `vx_search`,
+  `vx_save`, `vx_n`, `vx_dim`, `vx_nlist` take the handle.
+- The builders take `data` as `sink`: the index owns the vectors it was
+  built from (as documented), and using them after the build is now a
+  compile error instead of a vector shared with the index.
+- `vx_free` is an optional early release.
+- Search costs the same (instructions:u ±0.00 % on a 20 000 × 32
+  exact + IVF benchmark).
+
 ## 0.1.1
 
 `vx_free` now takes a **`sink`** parameter.

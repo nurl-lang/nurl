@@ -40,8 +40,6 @@ $ `src/vindex.nu`
         }
         = i2 + i2 1
     }
-    ( vec_free [f] ctr )
-    ( rng_free g )
 }
 
 // copy row `id` of `data` (dim d) into a fresh query vector
@@ -71,13 +69,17 @@ $ `src/vindex.nu`
     : i NC 10
     : ( Vec f ) data ( vec_new [f] )
     ( mkcorpus N D NC 7 data )
-    // a second copy for the IVF index (each index owns its data)
-    : ( Vec f ) data2 ( vec_new [f] )
+    // each index owns (takes) its data: build each on a copy, so `data`
+    // stays the test's own for drawing queries
+    : ( Vec f ) data1 ( vec_new [f] )
     : ~ i k 0
+    ~ < k * N D { ( vec_push [f] data1 ( gf data k ) ) = k + k 1 }
+    : ( Vec f ) data2 ( vec_new [f] )
+    = k 0
     ~ < k * N D { ( vec_push [f] data2 ( gf data k ) ) = k + k 1 }
 
     // ── cosine top-1 is the query's own row (distance 0) ──
-    : *VIndex ex ( vx_build_exact data N D VX_COSINE )
+    : VIndex ex ( vx_build_exact data1 N D VX_COSINE )
     ( check == ( vx_n ex ) N `exact index holds N vectors` )
     : ( Vec i ) ids ( vec_new [i] )
     : ( Vec f ) ds ( vec_new [f] )
@@ -88,27 +90,24 @@ $ `src/vindex.nu`
         : ( Vec f ) q ( row data qid D )
         : i got ( vx_search ex q 5 0 ids ds )
         ? & > got 0 == ( gi ids 0 ) qid {} { = self_ok F }
-        ( vec_free [f] q )
         = probe + probe 1
     }
     ( check self_ok `cosine top-1 of a corpus vector is itself` )
 
     // ── L2 top-1 likewise ──
-    : *VIndex exl ( vx_build_exact data2 N D VX_L2 )
+    : VIndex exl ( vx_build_exact data2 N D VX_L2 )
     : ( Vec f ) q0 ( row data 3 D )
     : i g0 ( vx_search exl q0 3 0 ids ds )
     ( check & > g0 0 == ( gi ids 0 ) 3 `L2 top-1 of a corpus vector is itself` )
     // and its distance is (near) zero
     ( check < ( gf ds 0 ) 0.000001 `L2 self-distance is ~0` )
-    ( vec_free [f] q0 )
-    ( vx_free exl )
 
     // ── IVF recall@10 vs exact ──
-    // fresh data copies (exact `ex` owns `data`; build ivf on a copy)
+    // fresh data copy for the IVF index
     : ( Vec f ) data3 ( vec_new [f] )
     = k 0
     ~ < k * N D { ( vec_push [f] data3 ( gf data k ) ) = k + k 1 }
-    : *VIndex ivf ( vx_build_ivf data3 N D VX_COSINE NC 12 7 )
+    : VIndex ivf ( vx_build_ivf data3 N D VX_COSINE NC 12 7 )
     ( check == ( vx_nlist ivf ) NC `IVF built NC clusters` )
     : ( Vec i ) eids ( vec_new [i] )
     : ( Vec f ) eds ( vec_new [f] )
@@ -124,7 +123,6 @@ $ `src/vindex.nu`
         : i gi2 ( vx_search ivf q 10 4 iids idsv )
         = tot + tot ge
         = hit + hit ( overlap iids eids )
-        ( vec_free [f] q )
         = qp + qp 1
     }
     : f recall / # f hit # f tot
@@ -149,16 +147,10 @@ $ `src/vindex.nu`
                 = z + z 1
             }
             ( check same `loaded index returns identical search results` )
-            ( vec_free [f] q ) ( vec_free [i] lids ) ( vec_free [f] ldsv )
-            ( vx_free lo )
         }
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) = g_fail + g_fail 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) = g_fail + g_fail 1 }
     }
-    ( vec_free [u] blob )
 
-    ( vec_free [i] ids ) ( vec_free [f] ds )
-    ( vec_free [i] eids ) ( vec_free [f] eds ) ( vec_free [i] iids ) ( vec_free [f] idsv )
-    ( vx_free ex ) ( vx_free ivf )
     ( nurl_print `vindex_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0
