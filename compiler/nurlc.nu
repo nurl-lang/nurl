@@ -22404,6 +22404,12 @@
     ( bck_save_expr_carriers syms `__last_cast_params__` source_tt source_val )
     // `# T x` of a T binding is x itself (mem_udrop_bind_flag: a cursor).
     ( nurl_sym_def syms `__last_cast_ident__` ? & ( is_ident_tok source_tt ) ( seq st dt ) ( nurl_str_cat source_val `` ) `` )
+    // Whether the value cast is a binding at all (`# s x`, `# s . h f`, a
+    // cast of such a cast) rather than something computed from one —
+    // `# s ( rcbox_new … @ T { … v } )` only READ `v` (gen_agg_lit).
+    : b __cast_direct | | ( is_ident_tok source_tt ) == source_tt TT_DOT
+    & == source_tt TT_HASH != 0 ( nurl_sym_len syms `__last_cast_direct__` )
+    ( nurl_sym_def syms `__last_cast_direct__` ? __cast_direct `1` `` )
     // `# ( Vec T ) 0` — the empty placeholder of a `F` option — holds nothing;
     // nor does a value made from an integer (`# TomlValue TBool`, a tag).
     // (Not a global holding a handle's address, `# ( Vec T ) g_tbl`: that
@@ -23436,12 +23442,20 @@
         // parameter there comes back as from the wrap itself.)
         ? & agg_moves_fields == fld_first_tt TT_AT
         { ( nurl_sym_set_deep syms `__ret_agg__` ? | agg_nested_wrap & agg_returned agg_is_wrap `2w` `2` ) } {}
+        // Only a literal nested right here is returned with this one; the
+        // bindings a literal inside a call names are that call's arguments.
+        : s __ad_before ( nurl_str_cat ( nurl_sym_get syms `__agg_direct__` ) `` )
         : ~ s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        ? != fld_first_tt TT_AT { ( nurl_sym_set_deep syms `__agg_direct__` __ad_before ) } {}
         // The binding a field IS (bare, a field of it, a cast of it) — as
         // opposed to one a call in the field merely reads: gen_ret's
         // returned-binding skip applies to the former only.
-        ? | | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_DOT == fld_first_tt TT_HASH
+        // (A cast counts when what it casts is such a binding — not a call:
+        // `@ H { # s ( rcbox_new [T] @ T { a b } ) }` named `b` last, and
+        // a returned H skipped `b`'s drop.)
+        ? | | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_DOT
+        & == fld_first_tt TT_HASH != 0 ( nurl_sym_len syms `__last_cast_direct__` )
         { : s __ad ( nurl_sym_get syms `__last_ident_name__` )
             ? != 0 ( nurl_str_len __ad )
             { ( nurl_sym_set_deep syms `__agg_direct__` ( nurl_str_cat3 ( nurl_sym_get syms `__agg_direct__` ) ` ` __ad ) ) } {} }

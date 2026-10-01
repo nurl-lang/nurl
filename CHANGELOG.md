@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can hold no address cannot, so the arm's locals are dropped under its
   ownership bit (packages/nurl-cov leaked each source file it read).
   `compiler/tests/value_arm_drops_binding.nu`.
+- **A binding a nested literal reads is not the outer literal's field.**
+  `^ @ H { # s ( rcbox_new [T] @ T { a b } ) }` skipped `b`'s drop: the cast
+  field counted as "the binding it casts" (the last name parsed), and the
+  inner literal's fields counted as the outer one's (packages/vindex).
+  `compiler/tests/nested_literal_cast_field.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
