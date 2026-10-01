@@ -121,6 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns.** The snapshot borrows the env's value; a fresh String / Vec
   assigned over it (a discarded write, already warned about) leaked on
   every call. `compiler/tests/closure_snapshot_assign_released.nu`.
+- **A child process gets its SIGTERM grace period.** Shutting a child
+  down polled `waitpid` 50 times back to back, so a child that did not exit
+  at once was SIGKILLed within microseconds; the polls are now 10 ms apart.
 
 ### Changed
 

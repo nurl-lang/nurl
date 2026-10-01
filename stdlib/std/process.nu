@@ -77,6 +77,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/core/rcbox.nu`
+$ `stdlib/std/time.nu`
 
 : | ProcessErr { ProcessNotFound ProcessExecFailed ProcessIo ProcessOther }
 
@@ -1294,8 +1295,11 @@ $ `stdlib/core/rcbox.nu`
                 ? < w 0 { = tries 50 } {}
             }
             ? == reaped 0 {
-                // 10ms sleep — simple busy-wait via repeated waitpid is
-                // acceptable for the rare ungraceful-shutdown path.
+                // The SIGTERM's grace: 50 polls 10 ms apart, then SIGKILL.
+                // (Without the sleep the polls ran back to back and every
+                // child that did not exit at once was killed within
+                // microseconds.)
+                ( sleep_ms 10 )
                 = tries + tries 1
             } {}
         }
