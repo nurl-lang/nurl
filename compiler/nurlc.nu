@@ -6323,6 +6323,14 @@
 // literal or a closure-returning call produced is fresh and moves in;
 // anything else is borrowed from an owner that keeps it, so the place
 // gets a clone. Returns the value to store.
+// Does an arm (first token `tt0`) end in an assignment — a bare `= x y`, or
+// a block whose tail statement is one? Its value is the assigned binding's,
+// not a temporary.
+@ __arm_tail_assigns i syms i tt0 → b {
+    ? == tt0 TT_EQ { ^ T } {}
+    ^ & == tt0 TT_LBRACE == ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) TT_EQ
+}
+
 @ mem_clo_into_owner i syms i cg s ty s val i first_tt → s {
     // A literal's (or a closure-returning call's) env now belongs to the
     // aggregate: it is no longer the temporary a call site releases after
@@ -12607,7 +12615,10 @@
     // A closure-valued `?` is an owned temporary (docs/MEMORY.md §7.4):
     // each arm hands the join an env of its own — a literal or a call's
     // result as is, anything borrowed as a clone.
-    ? ( __is_closure_ty tt2 ) { = tv ( mem_clo_into_owner syms cg tt2 tv t_tt0 ) } {}
+    // (Not an arm whose tail is an assignment, `{ … = base w }`: what it
+    // yields is that binding's own closure, and a copy made for a join no
+    // statement consumes leaked.)
+    ? & ( __is_closure_ty tt2 ) ! ( __arm_tail_assigns syms t_tt0 ) { = tv ( mem_clo_into_owner syms cg tt2 tv t_tt0 ) } {}
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
@@ -12767,7 +12778,7 @@
     : s e_inherited ( mem_exits_inherit e_pend0 )
     = c_exits ( mem_exits_join c_exits e_inherited )
     : s et2 ( nurl_get_last_type )
-    ? ( __is_closure_ty et2 ) { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } {}
+    ? & ( __is_closure_ty et2 ) ! ( __arm_tail_assigns syms e_tt0 ) { = ev ( mem_clo_into_owner syms cg et2 ev e_tt0 ) } {}
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
@@ -14490,7 +14501,7 @@
             } {}
             // A closure-valued `??` is an owned temporary (docs/MEMORY.md
             // §7.4): each arm hands the join an env of its own.
-            ? & == 0 g_did_ret ( __is_closure_ty arm_type )
+            ? & & == 0 g_did_ret ( __is_closure_ty arm_type ) ! ( __arm_tail_assigns syms arm_tt0 )
             { = arm_result ( mem_clo_into_owner syms cg arm_type arm_result arm_tt0 ) }
             {}
             : s arm_owner ( mem_arm_string_owner syms cg arm_type arm_tt0 arm_result arm_dup )

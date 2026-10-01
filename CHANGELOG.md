@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `?` arm ending in a closure assignment yields that binding's closure.**
+  `? on { = w ( wrap base ) = base w } {}`: the arm's value was copied for a
+  join no statement consumes, and the copy leaked on every run (packages/http's
+  middleware layers). `compiler/tests/closure_arm_tail_assign.nu`.
+
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
   field-by-field drop of the same name, so the program's destructor never
