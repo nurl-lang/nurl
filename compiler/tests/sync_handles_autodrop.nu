@@ -31,11 +31,11 @@ $ `stdlib/std/channel.nu`
 // A struct holding shares of a lock and a channel.
 : Worker { Mutex lock ( Channel String ) out i id }
 
-@ join_all ( Vec i ) raws → v {
+@ join_all ( Vec Thread ) ts → v {
     : ~ i k 0
-    ~ < k ( vec_len [i] raws ) {
-        ?? ( vec_get [i] raws k ) {
-            T r → { ( thread_join @ Thread { # s r } ) }
+    ~ < k ( vec_len [Thread] ts ) {
+        ?? ( vec_get [Thread] ts k ) {
+            T t → { ( thread_join t ) }
             F → {}
         }
         = k + k 1
@@ -46,7 +46,7 @@ $ `stdlib/std/channel.nu`
 @ locked_sum → i {
     : Mutex m ( mutex_new )
     : ~ i sum 0
-    : ( Vec i ) raws ( vec_new [i] )
+    : ( Vec Thread ) ts ( vec_new [Thread] )
     : ~ i t 0
     ~ < t 4 {
         : ( @ v ) body \ → v {
@@ -54,12 +54,12 @@ $ `stdlib/std/channel.nu`
             ~ < k 100 { ( mutex_lock m ) = g_total + g_total 1 ( mutex_unlock m ) = k + k 1 }
         }
         ?? ( thread_spawn body ) {
-            T th → { ( vec_push [i] raws # i . th raw ) }
+            T th → { ( vec_push [Thread] ts th ) }
             F e → {}
         }
         = t + t 1
     }
-    ( join_all raws )
+    ( join_all ts )
     ^ g_total
 }
 
@@ -134,7 +134,7 @@ $ `stdlib/std/channel.nu`
     : Mutex m ( mutex_new )
     = g_peak 0
     = g_active 0
-    : ( Vec i ) raws ( vec_new [i] )
+    : ( Vec Thread ) ts ( vec_new [Thread] )
     : ~ i t 0
     ~ < t 3 {
         : ( @ v ) body \ → v {
@@ -144,12 +144,12 @@ $ `stdlib/std/channel.nu`
             ( sem_release gate )
         }
         ?? ( thread_spawn body ) {
-            T th → { ( vec_push [i] raws # i . th raw ) }
+            T th → { ( vec_push [Thread] ts th ) }
             F e → {}
         }
         = t + t 1
     }
-    ( join_all raws )
+    ( join_all ts )
     ^ ? <= g_peak 2 ( sem_avail gate ) -1
 }
 

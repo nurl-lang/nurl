@@ -11,6 +11,7 @@
 // for what measuring that claim produced.)
 // requires: live
 
+$ `stdlib/core/vec.nu`
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/thread.nu`
 
@@ -44,20 +45,13 @@ $ `stdlib/std/thread.nu`
         ( arc_free [i] cl )
     }
 
-    // Spawn 8 workers. `nurl_peek` / `_poke` index by i64 slot, so
-    // an 8-slot table is 64 bytes; the slot index is `j` itself, not
-    // `j * 8` (that subtle aliasing trap is documented in §9 of the
-    // runtime — pass element indices, not byte offsets).
-    : s thandles ( nurl_alloc 64 )
+    // Spawn 8 workers, keeping their handles to join.
+    : ( Vec Thread ) thandles ( vec_new [Thread] )
     : ~ i j 0
     ~ < j 8 {
         : !Thread ThreadErr r ( thread_spawn worker )
         ?? r {
-            T t → {
-                : s tp . t raw
-                : i traw # i tp
-                ( nurl_poke thandles j traw )
-            }
+            T t → { ( vec_push [Thread] thandles t ) }
             F e → { ( nurl_print `spawn fail\n` ) }
         }
         = j + j 1
@@ -65,14 +59,10 @@ $ `stdlib/std/thread.nu`
 
     // Join all.
     = j 0
-    ~ < j 8 {
-        : i traw ( nurl_peek thandles j )
-        : s tp # s traw
-        : Thread t @ Thread { tp }
-        ( thread_join t )
+    ~ < j ( vec_len [Thread] thandles ) {
+        ?? ( vec_get [Thread] thandles j ) { T t → { ( thread_join t ) } F _ → {} }
         = j + j 1
     }
-    ( nurl_free thandles )
 
     // After every worker has arc_free'd its clone, only `base`
     // remains. count should be exactly 1.

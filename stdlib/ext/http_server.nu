@@ -1157,8 +1157,8 @@ $ `stdlib/ext/http2_conn.nu`
     // follows for its accept fiber.
     ( tcp_listener_retain . s listener )
 
-    // Storage for n thread handles, indexed by worker number.
-    : s thandles ( nurl_alloc * n_workers 8 )
+    // The workers' handles, joined below.
+    : ( Vec Thread ) thandles ( vec_with_cap [Thread] n_workers )
 
     // Worker body: identical to server_run's loop, just inlined here so
     // we don't have to make `s` a parameter (closure capture is the
@@ -1190,21 +1190,9 @@ $ `stdlib/ext/http2_conn.nu`
     ~ < j n_workers {
         : !Thread ThreadErr tr ( thread_spawn worker )
         ?? tr {
-            T t → {
-                : s tp . t raw
-                : i traw # i tp
-                // nurl_poke uses SLOT indexing (×8 stride internally);
-                // pass `j`, NOT `j * 8`. Pre-fix this overran the
-                // 8×n_workers byte buffer by writing at byte offset
-                // j*64 — survived for small worker counts thanks to
-                // malloc-arena slack, crashed once the spillover hit
-                // anything load-bearing.
-                ( nurl_poke thandles j traw )
-            }
-            F _ → {
-                // Spawn failure → leave a NULL slot so the join phase skips it.
-                ( nurl_poke thandles j 0 )
-            }
+            T t → { ( vec_push [Thread] thandles t ) }
+            // A worker that could not be spawned is simply not joined.
+            F _ → {}
         }
         = j + j 1
     }
@@ -1212,16 +1200,10 @@ $ `stdlib/ext/http2_conn.nu`
     // Block until every worker exits (i.e. listener was closed by
     // caller via server_stop, or every accept hit a fatal NetErr).
     = j 0
-    ~ < j n_workers {
-        : i traw ( nurl_peek thandles j )
-        ? != traw 0 {
-            : s tp # s traw
-            : Thread t @ Thread { tp }
-            ( thread_join t )
-        } {}
+    ~ < j ( vec_len [Thread] thandles ) {
+        ?? ( vec_get [Thread] thandles j ) { T t → { ( thread_join t ) } F _ → {} }
         = j + j 1
     }
-    ( nurl_free thandles )
     ( tcp_listener_release . s listener )
     ^ @ !v NetErr { T 0 }
 }

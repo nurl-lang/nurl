@@ -14,6 +14,7 @@
 // above, not from the test being skipped.
 // requires: live
 
+$ `stdlib/core/vec.nu`
 $ `stdlib/std/thread.nu`
 
 : ~ i shared_counter 0
@@ -52,31 +53,21 @@ $ `stdlib/std/thread.nu`
             = i + i 1
         }
     }
-    : s thandles ( nurl_alloc 64 )
+    : ( Vec Thread ) thandles ( vec_new [Thread] )
     : ~ i j 0
     ~ < j 8 {
         : !Thread ThreadErr r ( thread_spawn inc_loop )
         ?? r {
-            T t → {
-                : s tp . t raw
-                : i traw # i tp
-                // nurl_poke uses SLOT indexing (×8 stride internally);
-                // pass `j`, not `j * 8`.
-                ( nurl_poke thandles j traw )
-            }
+            T t → { ( vec_push [Thread] thandles t ) }
             F e → { ( nurl_print `spawn fail\n` ) }
         }
         = j + j 1
     }
     = j 0
-    ~ < j 8 {
-        : i traw ( nurl_peek thandles j )
-        : s tp # s traw
-        : Thread t @ Thread { tp }
-        ( thread_join t )
+    ~ < j ( vec_len [Thread] thandles ) {
+        ?? ( vec_get [Thread] thandles j ) { T t → { ( thread_join t ) } F _ → {} }
         = j + j 1
     }
-    ( nurl_free thandles )
     ( print_kv `T2 counter` shared_counter )
 
     // ── Test 3: cond_wait / cond_signal handshake ───────────────

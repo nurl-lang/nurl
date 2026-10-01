@@ -3892,20 +3892,19 @@ $ `cudakernel.nu`
     : ( @ v ) worker_body \ → v { ( node_worker relays ( string_data drh ) drp ( string_data tok ) vflag gpuflag ) }
     : ( @ v ) mcp_body \ → v { ( node_mcp relays ( string_data drh ) drp ( string_data . mhp host ) . mhp port ( string_data certp ) ( string_data keyp ) ( string_data tok ) ) }
 
-    : ( Vec s ) ths ( vec_new [s] )
-    ? relay_on { ?? ( thread_spawn relay_body ) { T t → ( vec_push [s] ths . t raw ) F _ → {} } } {}
+    : ( Vec Thread ) ths ( vec_new [Thread] )
+    ? relay_on { ?? ( thread_spawn relay_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } } {}
     ? worker_on {
         : ~ i wi 0
-        ~ < wi nworkers { ?? ( thread_spawn worker_body ) { T t → ( vec_push [s] ths . t raw ) F _ → {} } = wi + wi 1 }
+        ~ < wi nworkers { ?? ( thread_spawn worker_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } = wi + wi 1 }
     } {}
-    ? mcp_on { ?? ( thread_spawn mcp_body ) { T t → ( vec_push [s] ths . t raw ) F _ → {} } } {}
+    ? mcp_on { ?? ( thread_spawn mcp_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } } {}
 
-    : i nth ( vec_len [s] ths )
+    : i nth ( vec_len [Thread] ths )
     ? == nth 0 { ( nurl_eprintln `swarm-mcp: failed to start any role thread` ) ^ 1 } {}
     : ~ i ji 0
     ~ < ji nth {
-        : s raw ?? ( vec_get [s] ths ji ) { T x → x F → # s 0 }
-        ? != # i raw 0 { ( thread_join @ Thread { raw } ) } {}
+        ?? ( vec_get [Thread] ths ji ) { T t → { ( thread_join t ) } F → {} }
         = ji + ji 1
     }
     ^ 0

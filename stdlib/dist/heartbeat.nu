@@ -87,6 +87,9 @@ $ `stdlib/net/relay.nu`
     ? == . hb live 1 {
         ( nurl_atomic_i64_inc # *u . hb stop )  // 0 → 1: stop after current sleep
         ( thread_join . hb thr )
+        // The handle goes with the block: taken out of it, dropped here.
+        : Thread th . hb thr
+        ( mem_take th )
         = . hb live 0
     } {}
     ( nurl_free # s . hb stop )

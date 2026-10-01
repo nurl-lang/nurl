@@ -18,14 +18,16 @@
 //   * `Mutex { s p }` — a `[ owners ][ pthread_mutex_t ]` block, the
 //     native part sized via `nurl_native_sizeof("pthread_mutex_t")`.
 //   * `Cond  { s p }` — same pattern, "pthread_cond_t".
-//   * `Thread { s raw }` — a `nurl_native_sizeof("pthread_t")` buffer.
+//   * `Thread { s p }` — a `[ owners ][ settled ][ pthread_t ]` block,
+//     the pthread_t sized via `nurl_native_sizeof("pthread_t")`.
 //
 // API:
 //
 //   ( thread_spawn   ( @ v ) f )           → ! Thread ThreadErr
 //   ( thread_spawn_owned ( @ v ) f )       → ! Thread ThreadErr  (frees f's env after the body)
-//   ( thread_join    Thread t )            → i      (0 ok, -1 err)
-//   ( thread_detach  Thread t )            → v
+//   ( thread_join    Thread t )            → i      (0 ok; -1 err, or already
+//                                                      joined / detached)
+//   ( thread_detach  Thread t )            → v      (no-op once joined / detached)
 //   ( mutex_new )                          → Mutex
 //   ( mutex_lock     Mutex m )             → v
 //   ( mutex_unlock   Mutex m )             → v
@@ -47,17 +49,24 @@
 // Memory model:
 //
 //   * Thread / Mutex / Cond / Semaphore are opaque single-pointer
-//     handles. Caller must `thread_join` (or `thread_detach`) each
-//     spawned thread once. A Mutex / Cond / Semaphore is reference
-//     counted: every copy shares the one object and the last owner
-//     destroys it — nothing to free by hand (docs/MEMORY.md §7.6).
-//   * `thread_spawn` BORROWS the closure value and the captured env it
-//     points at. The closure (and its env heap allocation) MUST OUTLIVE
-//     the worker thread — typical pattern is to hold it in a local
-//     binding and `thread_join` before that binding goes out of scope.
-//     `thread_spawn_owned` is the fire-and-forget form: the env is freed
-//     by the thread when the body returns, so an inline closure can be
-//     spawned, detached and forgotten without leaking one env per spawn.
+//     handles, reference counted: every copy (a struct field, a Vec
+//     element, a closure capture, `X_share`) is the same object and the
+//     last owner releases it — nothing to free by hand (docs/MEMORY.md
+//     §7.6). A Mutex / Cond / Semaphore is destroyed then.
+//   * A Thread is joined or detached at most once, through any copy:
+//     the first `thread_join` / `thread_detach` settles it, and a later
+//     one is a no-op (`thread_join` returns -1). A thread nobody settled
+//     is DETACHED when the last copy of its handle goes — it keeps
+//     running, and its resources are reclaimed when it ends (Rust's
+//     JoinHandle). So a fire-and-forget spawn is
+//     `( thread_spawn \ → v { … } )` with the result discarded; join to
+//     wait for the body. `@ Thread { # s 0 }` is no thread — a
+//     placeholder for one not spawned (yet): joining it returns -1,
+//     detaching or dropping it does nothing.
+//   * The thread runs on its OWN copy of the closure env (the runtime
+//     clones it and drops the copy when the body returns), so the
+//     spawner's closure stays the spawner's to drop and an inline
+//     closure can be spawned without outliving anything.
 //   * The mutex passed to `cond_wait` must already be held by the
 //     calling thread; the primitive atomically releases-and-reacquires
 //     it per POSIX semantics.
@@ -129,14 +138,18 @@ $ `stdlib/core/marker.nu`
 
 // ── Opaque handles ────────────────────────────────────────────────
 
-// Thread keeps the 8-byte `{ s raw }` shape it had pre-Phase 6 — `raw`
-// is a heap pointer to a pthread_t-sized buffer (via nurl_alloc), and
-// the public-facing handle stays cast-to-i64 round-trippable. This
-// matters because compiler/tests/{thread_basic,arc_threads}.nu and
-// stdlib/ext/http_server.nu's worker-pool path stash handles in a
-// malloc'd i64 array via nurl_poke / nurl_peek for batch-join later
-// — a 16-byte Cell wouldn't fit those slots.
-: Thread { s raw }
+// A Thread is a handle on one spawned thread that every copy of it
+// shares; whoever holds the last copy settles the thread if nobody did
+// (Thread_drop detaches it) and frees the block. `p` is laid out
+//
+//     [ i64 owners ][ i64 settled ][ pthread_t ]
+//
+// with the pthread_t sized at runtime (`nurl_native_sizeof`), so the
+// handle is one word and a spawn one allocation whatever the platform's
+// pthread_t is. `settled` counts the joins and detaches asked for: the
+// one that moves it from 0 owns the thread's single join-or-detach, so
+// two copies can never join (or join and detach) the same pthread_t.
+: Thread { s p }
 
 // A Mutex (a Cond) is a handle on one pthread object that every copy of
 // it shares: storing a borrowed one into a struct, a Vec or a thread's
@@ -156,8 +169,8 @@ $ `stdlib/core/marker.nu`
 // `{ Cell c }`, and a bare Cell is a raw byte buffer with
 // unsynchronised writes — !Sync, correctly, on its own. A Mutex is the
 // thing that MAKES its contents shareable, so the derivation has to be
-// told rather than asked. Same for Cond, and for Thread, whose `s raw`
-// is a pthread_t buffer that join/detach reach from any thread.
+// told rather than asked. Same for Cond, and for Thread, whose block
+// holds a pthread_t that join/detach reach from any thread.
 //
 // Each of these is an assertion, not a proof — NURL's spelling of
 // Rust's `unsafe impl`. What backs them is the C side: every one of
@@ -197,6 +210,25 @@ $ `stdlib/core/marker.nu`
 
 // ── Thread lifecycle ──────────────────────────────────────────────
 
+// A fresh `[ owners ][ settled ][ pthread_t ]` block with one owner,
+// the thread started on it: fn(env) on its own copy of the env (the
+// runtime clones it and drops the copy when the body returns —
+// docs/MEMORY.md §7.4), so the spawner's closure stays the spawner's
+// to drop. 0 when the block or the thread could not be had.
+@ __thread_start * u fnp * u env → i {
+    : ~ i sz ( nurl_native_sizeof `pthread_t` )
+    ? < sz 8 { = sz 8 } {}
+    : s p ( nurl_zalloc + 16 sz )
+    ? == 0 # i p { ^ 0 } {}
+    : *i rc # *i p
+    = . rc 0 1
+    ? != 0 ( nurl_pthread_create_owned # *u + # i p 16 fnp env ) {
+        ( nurl_free p )
+        ^ 0
+    } {}
+    ^ # i p
+}
+
 @ thread_spawn ( @ v ) f → !Thread ThreadErr {
     // Decompose the closure into (fn_ptr, env_ptr) — pthread_create
     // calls fn_ptr(env_ptr) on the worker thread. Closure-field-extract
@@ -204,21 +236,11 @@ $ `stdlib/core/marker.nu`
     // would be parsed as a call with `#` as the function name.
     : *u fnp # *u f 0
     : *u env # *u f 1
-    : i sz ( nurl_native_sizeof `pthread_t` )
-    : s ptr ( nurl_alloc sz )
-    ? == 0 # i ptr {
+    : i p ( __thread_start fnp env )
+    ? == 0 p {
         ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
     } {}
-    : *u tp # *u ptr
-    // The thread runs on its own copy of the env (the runtime clones it
-    // and drops the copy when the body returns — docs/MEMORY.md §7.4), so
-    // the spawner's closure stays the spawner's to drop.
-    : i rc ( nurl_pthread_create_owned tp fnp env )
-    ? != rc 0 {
-        ( nurl_free ptr )
-        ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
-    } {}
-    ^ @ !Thread ThreadErr { T @ Thread { ptr } }
+    ^ @ !Thread ThreadErr { T @ Thread { # s p } }
 }
 
 // The same as `thread_spawn`: every thread now runs on its own copy of
@@ -228,33 +250,55 @@ $ `stdlib/core/marker.nu`
 @ thread_spawn_owned ( @ v ) f → !Thread ThreadErr {
     : *u fnp # *u f 0
     : *u env # *u f 1
-    : i sz ( nurl_native_sizeof `pthread_t` )
-    : s ptr ( nurl_alloc sz )
-    ? == 0 # i ptr {
+    : i p ( __thread_start fnp env )
+    ? == 0 p {
         ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
     } {}
-    : *u tp # *u ptr
-    : i rc ( nurl_pthread_create_owned tp fnp env )
-    ? != rc 0 {
-        ( nurl_free ptr )
-        ^ @ !Thread ThreadErr { F # ThreadErr ThreadCreate }
-    } {}
-    ^ @ !Thread ThreadErr { T @ Thread { ptr } }
+    ^ @ !Thread ThreadErr { T @ Thread { # s p } }
 }
 
+// Claim `p`'s one join-or-detach: T for the first caller only.
+@ __thread_claim i p → b {
+    ? == 0 p { ^ F } {}
+    ^ == 0 ( nurl_atomic_i64_inc # *u + p 8 )
+}
+
+// Wait for the thread to finish. 0 once it has; -1 when the join failed
+// or the thread was already joined or detached (through this copy of the
+// handle or another), so a second join never touches the pthread_t again.
 @ thread_join Thread t → i {
-    : s ptr . t raw
-    : *u tp # *u ptr
-    : i rc ( nurl_pthread_join_ptr tp )
-    ( nurl_free ptr )
-    ^ ? == rc 0 0 -1
+    : i p # i . t p
+    ? ( __thread_claim p ) {} { ^ -1 }
+    ? == 0 ( nurl_pthread_join_ptr # *u + p 16 ) { ^ 0 } {}
+    // Not joined (a thread joining itself): give the claim back, so the
+    // last owner still detaches it.
+    : *i st # *i + p 8
+    = . st 0 0
+    ^ -1
 }
 
+// Let the thread run on its own; it is reclaimed when it ends. A no-op
+// once the thread was joined or detached.
 @ thread_detach Thread t → v {
-    : s ptr . t raw
-    : *u tp # *u ptr
-    ( nurl_pthread_detach_ptr tp )
-    ( nurl_free ptr )
+    : i p # i . t p
+    ? ( __thread_claim p ) { ( nurl_pthread_detach_ptr # *u + p 16 ) } {}
+}
+
+@ Thread_share Thread t → Thread {
+    ( __sync_block_share . t p )
+    ^ @ Thread { . t p }
+}
+
+// The last owner detaches a thread nobody joined or detached — it keeps
+// running and is reclaimed when it ends — and frees the block.
+@ Thread_drop sink Thread t → v {
+    ( mem_forget t )
+    : s p . t p
+    ? ( __sync_block_release p ) {
+        : *i st # *i + # i p 8
+        ? == 0 . st 0 { ( nurl_pthread_detach_ptr # *u + # i p 16 ) } {}
+        ( nurl_free p )
+    } {}
 }
 
 // ── Shared pthread objects ────────────────────────────────────────
