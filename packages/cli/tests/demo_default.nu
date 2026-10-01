@@ -8,7 +8,7 @@ $ `stdlib/core/vec.nu`
 $ `src/cli.nu`
 
 @ main → i {
-    : *Cli c ( cli_new `demodef` `default-command demo` `1.0.0` )
+    : Cli c ( cli_new `demodef` `default-command demo` `1.0.0` )
     ( cli_flag_str c `host` 104 `HOST` `server host` `localhost` `DEMO_HOST` )
     ( cli_flag_int c `port` 112 `N` `server port` 5432 `` )
     ( cli_flag_bool c `verbose` 0 `chatty` )
@@ -31,6 +31,5 @@ $ `src/cli.nu`
         ^ 0
     } )
     : i rc ( cli_run c )
-    ( cli_free c )
     ^ rc
 }

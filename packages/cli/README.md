@@ -18,7 +18,7 @@ calls.
 $ `deps/cli/src/cli.nu`
 
 @ main → i {
-    : *Cli c ( cli_new `greet` `a tiny greeter` `1.0.0` )
+    : Cli c ( cli_new `greet` `a tiny greeter` `1.0.0` )
     ( cli_flag_str  c `name` 110 `NAME` `who to greet` `world` `GREET_NAME` )
     ( cli_flag_bool c `loud` 108 `shout it` )
     ( cli_cmd c `hello` `print a greeting` \ CliCtx x → i {
@@ -26,12 +26,9 @@ $ `deps/cli/src/cli.nu`
         ( nurl_print `hello, ` ) ( nurl_print ( string_data who ) )
         ? ( ctx_bool x `loud` ) { ( nurl_print `!` ) } {}
         ( nurl_print `\n` )
-        ( string_free who )
         ^ 0
     } )
-    : i rc ( cli_run c )
-    ( cli_free c )
-    ^ rc
+    ^ ( cli_run c )
 }
 ```
 
@@ -49,7 +46,7 @@ Construction & run:
 
 | Call | |
 | --- | --- |
-| `( cli_new prog about version )` → `*Cli` | create (free with `cli_free`) |
+| `( cli_new prog about version )` → `Cli` | create (a handle: released by its last owner; `cli_free` is an optional early release) |
 | `( cli_run c )` → `i` | parse argv, route to a command, return its exit code |
 
 Flags (global; resolved per command). Each takes `long`, a `short` char code
@@ -74,7 +71,7 @@ Inside a handler, read from the `CliCtx`:
 
 | Call | |
 | --- | --- |
-| `( ctx_str x name )` → `String` | value → env → default (owned; free it) |
+| `( ctx_str x name )` → `String` | value → env → default (owned by the caller) |
 | `( ctx_int x name )` → `i`, `( ctx_float x name )` → `f` | typed |
 | `( ctx_bool x name )` → `b` | flag presence |
 | `( ctx_arg x idx )` → `String` | idx-th positional after the command |

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+`Cli` releases itself: `cli_new` returns a `Cli` handle (its state in an rcbox) instead of a `*Cli` the caller had to free, and a `CliCtx`'s back-reference is one more owner of it. The last owner drops the strings, flags and commands; `cli_free` stays as an optional early release. Callers change `*Cli` to `Cli`.
+
 ## 0.3.1
 
 The command context owns its own copy of the parsed arguments, so `cli_run` releasing the parser no longer frees it twice under NURL 0.67.0's auto-drop (#1143).

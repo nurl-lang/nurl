@@ -9,13 +9,12 @@
 //
 // `Cli` collapses that into one object:
 //
-//     : *Cli c ( cli_new `greet` `a tiny greeter` `1.0.0` )
+//     : Cli c ( cli_new `greet` `a tiny greeter` `1.0.0` )
 //     ( cli_flag_str  c `name` 110 `NAME` `who to greet` `world` `` )
 //     ( cli_flag_bool c `loud` 108 `shout it` )
 //     ( cli_cmd c `hello` `print a greeting` \ CliCtx x → i {
 //         : String who ( ctx_str x `name` )
 //         ( nurl_print `hello, ` ) ( nurl_print ( string_data who ) ) ( nurl_print `\n` )
-//         ( string_free who )
 //         ^ 0
 //     } )
 //     ^ ( cli_run c )     // parse argv, route, auto --help/--version → exit code
@@ -25,9 +24,11 @@
 // widgets (tables/spinners), config-file loading, or logging — those compose
 // as their own packages.
 //
-// Memory model: `cli_new` returns a heap `*Cli`, mutable across the builder
-// calls; free it with `cli_free`. Flags and commands accumulate into its
-// Vecs. `cli_run` owns the parse and frees everything it allocates.
+// Memory model: `cli_new` returns a `Cli` handle, mutable across the builder
+// calls; every copy of it is the same CLI, and its last owner releases it —
+// nothing to free (`cli_free` is an optional early release). Flags and
+// commands accumulate into its Vecs. `cli_run` owns the parse; what it
+// allocates is dropped with it.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -37,6 +38,7 @@ $ `stdlib/std/args.nu`
 $ `stdlib/std/term.nu`
 $ `stdlib/ext/env.nu`
 $ `prompt.nu`
+$ `stdlib/core/rcbox.nu`
 
 // Flag kinds.
 //   0 = string   1 = int   2 = bool (presence)   3 = float
@@ -61,10 +63,10 @@ $ `prompt.nu`
 // this below CliCmd fails every binary that links cli. clang 18 on Linux
 // accepts the forward reference, so the ordering is belt-and-braces there
 // rather than load-bearing; keep it anyway, it costs nothing and the
-// by-pointer back-ref to Cli below stays legal in either direction.
+// back-ref (a Cli handle, one word) stays legal in either direction.
 : CliCtx {
     ArgParser parser
-    * Cli cli
+    Cli cli
     String cmdname
 }
 
@@ -74,13 +76,27 @@ $ `prompt.nu`
     ( @ i CliCtx ) handler
 }
 
-: Cli {
+: CliImpl {
     String prog
     String about
     String version
     ( Vec CliFlag ) globals
     ( Vec CliCmd ) cmds
 }
+
+// A Cli is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state (a CliCtx's back-ref is one), and the last
+// owner releases it — its strings, flags and commands are dropped with it.
+: Cli { s ctl }
+
+@ Cli_share Cli h → Cli { ^ @ Cli { # s ( rcbox_share # i . h ctl ) } }
+
+@ Cli_drop sink Cli h → v {
+    ( mem_forget h )
+    ( rcbox_release [CliImpl] # i . h ctl )
+}
+
+@ __Cli_ptr Cli h → *CliImpl { ^ ( rcbox_ptr [CliImpl] # i . h ctl ) }
 
 // ── Colour (decided once per run: stdout is a TTY and $NO_COLOR unset) ──
 
@@ -124,60 +140,19 @@ $ `prompt.nu`
 
 // ── Construction / teardown ───────────────────────────────────────────
 
-@ cli_new s prog s about s version → *Cli {
-    : *Cli c # *Cli ( nurl_malloc Z Cli )
-    = . c prog ( string_from prog )
-    = . c about ( string_from about )
-    = . c version ( string_from version )
-    = . c globals ( vec_new [CliFlag] )
-    = . c cmds ( vec_new [CliCmd] )
-    ^ c
+@ cli_new s prog s about s version → Cli {
+    ^ @ Cli { # s ( rcbox_new [CliImpl] @ CliImpl {
+            ( string_from prog ) ( string_from about ) ( string_from version )
+            ( vec_new [CliFlag] ) ( vec_new [CliCmd] )
+        } ) }
 }
 
-@ __cli_free_flags ( Vec CliFlag ) v → v {
-    : i n ( vec_len [CliFlag] v )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [CliFlag] v k ) {
-            T f → {
-                ( string_free . f long )
-                ( string_free . f metavar )
-                ( string_free . f help )
-                ( string_free . f dflt )
-                ( string_free . f env )
-            }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [CliFlag] v )
-}
-
-@ __cli_free_cmds ( Vec CliCmd ) v → v {
-    : i n ( vec_len [CliCmd] v )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [CliCmd] v k ) {
-            T cm → { ( string_free . cm name ) ( string_free . cm help ) }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [CliCmd] v )
-}
-
-@ cli_free sink * Cli c → v {
-    ( string_free . c prog )
-    ( string_free . c about )
-    ( string_free . c version )
-    ( __cli_free_flags . c globals )
-    ( __cli_free_cmds . c cmds )
-    ( nurl_free c )
-}
+// Let go of `c` now rather than at the end of its owner's scope.
+@ cli_free sink Cli c → v {}
 
 // ── Flag builders (global flags; applied across all commands) ──────────
 
-@ __cli_add_flag * Cli c s long i short s metavar s help i kind s dflt s env → v {
+@ __cli_add_flag * CliImpl c s long i short s metavar s help i kind s dflt s env → v {
     : CliFlag f @ CliFlag {
         ( string_from long ) short ( string_from metavar ) ( string_from help )
         kind ( string_from dflt ) ( string_from env )
@@ -185,31 +160,34 @@ $ `prompt.nu`
     ( vec_push [CliFlag] . c globals f )
 }
 
-@ cli_flag_bool * Cli c s long i short s help → v {
+@ cli_flag_bool Cli c__h s long i short s help → v {
+    : *CliImpl c ( __Cli_ptr c__h )
     ( __cli_add_flag c long short `` help 2 `` `` )
 }
 
-@ cli_flag_str * Cli c s long i short s metavar s help s dflt s env → v {
+@ cli_flag_str Cli c__h s long i short s metavar s help s dflt s env → v {
+    : *CliImpl c ( __Cli_ptr c__h )
     ( __cli_add_flag c long short metavar help 0 dflt env )
 }
 
-@ cli_flag_int * Cli c s long i short s metavar s help i dflt s env → v {
+@ cli_flag_int Cli c__h s long i short s metavar s help i dflt s env → v {
+    : *CliImpl c ( __Cli_ptr c__h )
     : String d ( string_new )
     ( string_push_int d dflt )
     ( __cli_add_flag c long short metavar help 1 ( string_data d ) env )
-    ( string_free d )
 }
 
-@ cli_flag_float * Cli c s long i short s metavar s help f dflt s env → v {
+@ cli_flag_float Cli c__h s long i short s metavar s help f dflt s env → v {
+    : *CliImpl c ( __Cli_ptr c__h )
     : String d ( string_new )
     ( string_push_float d dflt )
     ( __cli_add_flag c long short metavar help 3 ( string_data d ) env )
-    ( string_free d )
 }
 
 // ── Command registration ──────────────────────────────────────────────
 
-@ cli_cmd * Cli c s name s help ( @ i CliCtx ) handler → v {
+@ cli_cmd Cli c__h s name s help ( @ i CliCtx ) handler → v {
+    : *CliImpl c ( __Cli_ptr c__h )
     : CliCmd cmd @ CliCmd { ( string_from name ) ( string_from help ) handler }
     ( vec_push [CliCmd] . c cmds cmd )
 }
@@ -220,13 +198,14 @@ $ `prompt.nu`
 // a first non-option token that matches no registered command routes here
 // (and stays readable as ctx_arg 0), and a bare invocation runs it instead
 // of printing usage. Registered subcommands still win when they match.
-@ cli_default * Cli c ( @ i CliCtx ) handler → v {
+@ cli_default Cli c__h ( @ i CliCtx ) handler → v {
+    : *CliImpl c ( __Cli_ptr c__h )
     : CliCmd cmd @ CliCmd { ( string_new ) ( string_new ) handler }
     ( vec_push [CliCmd] . c cmds cmd )
 }
 
 // Index of the command named `name`, or None.
-@ __cli_find_cmd * Cli c s name → ?i {
+@ __cli_find_cmd * CliImpl c s name → ?i {
     : i n ( vec_len [CliCmd] . c cmds )
     : ~ i k 0
     ~ < k n {
@@ -244,7 +223,7 @@ $ `prompt.nu`
 // ── Context accessors (used inside handlers) ──────────────────────────
 
 // Resolve a string flag: explicit value → env fallback → default → "".
-@ __cli_fallback * Cli c s name → String {
+@ __cli_fallback * CliImpl c s name → String {
     : i n ( vec_len [CliFlag] . c globals )
     : ~ i k 0
     ~ < k n {
@@ -272,14 +251,13 @@ $ `prompt.nu`
         T v → { ^ v }
         F junk → { ( string_free junk ) }
     }
-    ^ ( __cli_fallback . x cli name )
+    ^ ( __cli_fallback ( __Cli_ptr . x cli ) name )
 }
 
 @ ctx_int CliCtx x s name → i {
     : String s ( ctx_str x name )
     : ~ i r 0
     ?? ( string_to_int s ) { T v → { = r v } F _ → {} }
-    ( string_free s )
     ^ r
 }
 
@@ -287,7 +265,6 @@ $ `prompt.nu`
     : String s ( ctx_str x name )
     : ~ f r 0.0
     ?? ( string_to_float s ) { T v → { = r v } F _ → {} }
-    ( string_free s )
     ^ r
 }
 
@@ -371,7 +348,7 @@ $ `prompt.nu`
     ~ < pw 24 { ( string_push_char out 32 ) = pw + pw 1 }
 }
 
-@ __cli_render_options * Cli c String out → v {
+@ __cli_render_options * CliImpl c String out → v {
     : String hdr ( __sgr 1 `OPTIONS` )
     ( string_push_str out ( string_data hdr ) )
     ( string_push_char out 10 )
@@ -409,7 +386,7 @@ $ `prompt.nu`
 }
 
 // Longest command name, for column alignment.
-@ __cli_cmd_width * Cli c → i {
+@ __cli_cmd_width * CliImpl c → i {
     : i n ( vec_len [CliCmd] . c cmds )
     : ~ i w 0
     : ~ i k 0
@@ -423,7 +400,7 @@ $ `prompt.nu`
     ^ w
 }
 
-@ __cli_print_help * Cli c → v {
+@ __cli_print_help * CliImpl c → v {
     : String out ( string_new )
     // header
     : String prog ( __sgr 1 ( string_data . c prog ) )
@@ -486,10 +463,9 @@ $ `prompt.nu`
     ( string_push_char out 10 )
     ( string_free tip )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
 }
 
-@ __cli_print_cmd_help * Cli c i idx → v {
+@ __cli_print_cmd_help * CliImpl c i idx → v {
     : String out ( string_new )
     ?? ( vec_get [CliCmd] . c cmds idx ) {
         T cm → {
@@ -516,11 +492,10 @@ $ `prompt.nu`
     }
     ( __cli_render_options c out )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
 }
 
 // A styled "error: <msg>" line + usage hint on stderr.
-@ __cli_err * Cli c s msg → v {
+@ __cli_err * CliImpl c s msg → v {
     : String pre ( __fg 1 `error:` )
     ( nurl_eprint ( string_data pre ) )
     ( string_free pre )
@@ -533,7 +508,7 @@ $ `prompt.nu`
 
 // ── Run ───────────────────────────────────────────────────────────────
 
-@ __cli_register_flags * Cli c ArgParser p → v {
+@ __cli_register_flags * CliImpl c ArgParser p → v {
     : i n ( vec_len [CliFlag] . c globals )
     : ~ i k 0
     ~ < k n {
@@ -555,23 +530,24 @@ $ `prompt.nu`
 // Some(rc) when it ran (or when --help short-circuited it); None when no
 // default exists. The ctx carries an EMPTY cmdname so ctx_arg/ctx_nargs
 // treat every positional as an argument.
-@ __cli_try_default * Cli c ArgParser p → ?i {
+@ __cli_try_default Cli c__h ArgParser p → ?i {
+    : *CliImpl c ( __Cli_ptr c__h )
     ?? ( __cli_find_cmd c `` ) {
         T didx → {
             ? ( args_present p `help` ) {
                 ( __cli_print_help c )
                 ^ @ ?i { T 0 }
             } {}
-            : CliCtx ctx @ CliCtx { p c ( string_new ) }
-            : i rc ( __cli_dispatch c didx ctx )
-            ( string_free . ctx cmdname )
-            ^ @ ?i { T rc }
+            // The ctx holds its own copy of the parser and one more owner
+            // of the Cli; both go with it.
+            : CliCtx ctx @ CliCtx { ( mem_dup p ) ( Cli_share c__h ) ( string_new ) }
+            ^ @ ?i { T ( __cli_dispatch c didx ctx ) }
         }
         F _ → { ^ @ ?i { F } }
     }
 }
 
-@ __cli_dispatch * Cli c i idx CliCtx ctx → i {
+@ __cli_dispatch * CliImpl c i idx CliCtx ctx → i {
     ?? ( vec_get [CliCmd] . c cmds idx ) {
         T cm → {
             : ( @ i CliCtx ) f . cm handler
@@ -581,7 +557,7 @@ $ `prompt.nu`
     }
 }
 
-@ __cli_print_version * Cli c → v {
+@ __cli_print_version * CliImpl c → v {
     ( nurl_print ( string_data . c prog ) )
     ( nurl_print ` ` )
     ( nurl_print ( string_data . c version ) )
@@ -590,7 +566,8 @@ $ `prompt.nu`
 
 // Parse the real argv, route to a subcommand, and return its exit code.
 // Handles `--help` / `--version`, unknown commands, and parse errors.
-@ cli_run * Cli c → i {
+@ cli_run Cli c__h → i {
+    : *CliImpl c ( __Cli_ptr c__h )
     ( __cli_detect_color )
 
     : ( Vec String ) argv ( env_args_list )
@@ -657,17 +634,16 @@ $ `prompt.nu`
                         ? ( args_present p `help` ) {
                             ( __cli_print_cmd_help c idx )
                         } {
-                            // The ctx drops its own copy of the parser; `p` stays
-                            // this function's (args_free below).
-                            : CliCtx ctx @ CliCtx { ( mem_dup p ) c ( string_from cmdname ) }
+                            // The ctx holds its own copy of the parser and one
+                            // more owner of the Cli; both go with it.
+                            : CliCtx ctx @ CliCtx { ( mem_dup p ) ( Cli_share c__h ) ( string_from cmdname ) }
                             = rc ( __cli_dispatch c idx ctx )
-                            ( string_free . ctx cmdname )
                         }
                     }
                     F _ → {
                         // Unmatched token: with a default handler it is a positional
                         // argument (e.g. a connection URL) — route to the default.
-                        ?? ( __cli_try_default c p ) {
+                        ?? ( __cli_try_default c__h p ) {
                             T drc → { = rc drc }
                             F _ → {
                                 : String m ( string_from `unknown command: ` )
@@ -683,7 +659,7 @@ $ `prompt.nu`
                 // No command token. A registered default runs (bare `psql` connects);
                 // otherwise `--help` (or bare invocation) prints help — the bare
                 // case is a usage error (exit 1), an explicit --help is success.
-                ?? ( __cli_try_default c p ) {
+                ?? ( __cli_try_default c__h p ) {
                     T drc → { = rc drc }
                     F _ → {
                         ( __cli_print_help c )
@@ -692,8 +668,5 @@ $ `prompt.nu`
                 }
             } } }
 
-    ( args_free p )
-    ( vec_free_with [String] toks \ String s → v { ( string_free s ) } )
-    ( vec_free_with [String] argv \ String s → v { ( string_free s ) } )
     ^ rc
 }

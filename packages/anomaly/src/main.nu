@@ -943,7 +943,7 @@ $ `src/mcp.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` ANOMALY_VERSION )
+    : Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` ANOMALY_VERSION )
     ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
     ( cli_flag_str c `org` 111 `ID` `organisation whose models to work on (default: public, the one a store with no sign-in collects into)` `` `ANOMALY_ORG` )
     ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
@@ -980,6 +980,5 @@ $ `src/mcp.nu`
 
     ( anomaly_set_actor `cli` )
     : i rc ( cli_run c )
-    ( cli_free c )
     ^ rc
 }

@@ -250,7 +250,7 @@ $ `service.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `agora` `The agents' meeting place: channels, direct mail, a task board and shared notes — one SQLite file, served as MCP and REST.` AG_VERSION )
+    : Cli c ( cli_new `agora` `The agents' meeting place: channels, direct mail, a task board and shared notes — one SQLite file, served as MCP and REST.` AG_VERSION )
     ( cli_flag_str c `db` 0 `PATH` `the SQLite file (default ~/.agora/agora.db)` `` `AGORA_DB` )
     ( cli_flag_str c `as` 0 `NAME` `act as this local agent (stdio and direct operations); @cwd in NAME = the working directory's basename` `` `AGORA_AGENT` )
     ( cli_flag_str c `addr` 0 `HOST:PORT` `serve: where to listen` AG_DEFAULT_ADDR `AGORA_ADDR` )
@@ -262,6 +262,5 @@ $ `service.nu`
     ( cli_cmd c `ops` `list the operations with their arguments` \ CliCtx x → i { ^ ( __agm_cmd_ops x ) } )
     ( cli_default c \ CliCtx x → i { ^ ( __agm_cmd_op x ) } )
     : i rc ( cli_run c )
-    ( cli_free c )
     ^ rc
 }

@@ -314,7 +314,7 @@ $ `window.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `yoloe` `promptable open-vocabulary detection & instance segmentation (pure NURL, GPU)` `0.6.11` )
+    : Cli c ( cli_new `yoloe` `promptable open-vocabulary detection & instance segmentation (pure NURL, GPU)` `0.6.11` )
     ( cli_flag_str c `model` 109 `MODEL.onnx` `YOLOE-seg export from tools/export.py (~45 MB, not bundled)` `` `` )
     ( cli_flag_str c `classes` 99 `FILE` `vocabulary, one prompt word per line` `` `` )
     ( cli_flag_str c `image` 105 `IMG` `detect/seg input (PNG, JPEG or PPM)` `` `` )
@@ -332,6 +332,5 @@ $ `window.nu`
     ( cli_cmd c `seg` `boxes + a per-object segmentation mask` \ CliCtx x → i { ^ ( __ye_cmd_still x F ) } )
     ( cli_cmd c `cam` `LIVE segmentation from a webcam` \ CliCtx x → i { ^ ( __ye_cmd_cam x ) } )
     : i rc ( cli_run c )
-    ( cli_free c )
     ^ rc
 }
