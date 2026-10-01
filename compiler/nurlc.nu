@@ -1336,6 +1336,15 @@
 // …and, for a closure that releases some captures itself, which (their
 // env field is not dropped again).
 : ~ s g_env_released ``
+// …and, for one that a thread or a fiber will run, the captures it takes
+// over from bindings the function no longer uses (gen_closure_expr).
+: ~ s g_env_moved ``
+// Set by a call compiling a closure literal as the closure a thread or a
+// fiber runs, or by a `:` binding of one (its name): read and cleared at
+// the head of gen_closure_expr.
+: ~ i g_clo_detach 0
+: ~ i g_loop_serial 0
+: ~ s g_clo_bind_name ``
 
 // Set by a `:` binding just before registering its value: the binding
 // rule stores the drop flag itself, so registration only creates it.
@@ -10423,6 +10432,7 @@
                 ( __park_append g_pending_escape `i` __im_rec ) }
             {} }
         {}
+        ? & & ( __thr_is_detach fname ) == arg_idx 0 == bck_arg_tt TT_BACKSLASH { = g_clo_detach 1 } {}
         : ~ s av ( nurl_str_cat `` `` )
         : ~ s at ( nurl_str_cat `` `` )
         : ~ s arg_lent ``
@@ -15064,6 +15074,9 @@
     : s old_bc_cenv ( nurl_sym_get syms `__loop_snap_cenv__` )
     ( nurl_sym_def syms `__loop_exit__` le )
     ( nurl_sym_def syms `__loop_check__` lcont )
+    : s old_bc_ldepth ( nurl_sym_get syms `__loop_depth__` )
+    = g_loop_serial + g_loop_serial 1
+    ( nurl_sym_def syms `__loop_depth__` ( nurl_str_int g_loop_serial ) )
     ( nurl_sym_def syms `__loop_snap_strs__` old_strs_fe )
     ( nurl_sym_def syms `__loop_snap_structs__` old_structs_fe )
     ( nurl_sym_def syms `__loop_snap_user__` old_user_fe )
@@ -15077,6 +15090,7 @@
     : s fe_iter_saved ( bck_iter_enter fe_cont )
     ( gen_block_stmts lex syms cg )
     ( bck_iter_exit fe_iter_saved )
+    ( nurl_sym_def syms `__loop_depth__` old_bc_ldepth )
     ( nurl_sym_def syms `__loop_exit__` old_bc_exit )
     ( nurl_sym_def syms `__loop_check__` old_bc_check )
     ( nurl_sym_def syms `__loop_snap_strs__` old_bc_strs )
@@ -15278,6 +15292,9 @@
         : s old_bc_cenv ( nurl_sym_get syms `__loop_snap_cenv__` )
         ( nurl_sym_def syms `__loop_exit__` le )
         ( nurl_sym_def syms `__loop_check__` lc )
+        : s old_bc_ldepth ( nurl_sym_get syms `__loop_depth__` )
+        = g_loop_serial + g_loop_serial 1
+        ( nurl_sym_def syms `__loop_depth__` ( nurl_str_int g_loop_serial ) )
         ( nurl_sym_def syms `__loop_snap_strs__` old_strs_lp )
         ( nurl_sym_def syms `__loop_snap_structs__` old_structs_lp )
         ( nurl_sym_def syms `__loop_snap_user__` old_user_lp )
@@ -15288,6 +15305,7 @@
         // the analyze walk must iterate it to a fixpoint.
         ( bck_set_block_kind `loop` )
         ( gen_block_stmts lex syms cg )
+        ( nurl_sym_def syms `__loop_depth__` old_bc_ldepth )
         ( nurl_sym_def syms `__loop_exit__` old_bc_exit )
         ( nurl_sym_def syms `__loop_check__` old_bc_check )
         ( nurl_sym_def syms `__loop_snap_strs__` old_bc_strs )
@@ -17387,6 +17405,8 @@
     ( nurl_sym_def syms ( nurl_str_cat ptr `__borrowers` ) `` )
     ( nurl_sym_def syms ( nurl_str_cat ptr `__udty` ) vt )
     ( nurl_sym_def syms ( nurl_str_cat ptr `__depth` ) ( nurl_str_int ( nurl_peek # s syms 1 ) ) )
+    // …and the innermost loop it was made in (__clo_detach_moves).
+    ( nurl_sym_def syms ( nurl_str_cat ptr `__lserial` ) ( nurl_sym_get syms `__loop_depth__` ) )
     : s cur ( nurl_sym_get syms `__user_drops__` )
     : s entry ( nurl_str_cat3 ptr ` ` vt )
     : s new ? == 0 ( nurl_str_len cur )
@@ -20066,6 +20086,7 @@
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
+        ? == bck_rhs_tt TT_BACKSLASH { = g_clo_bind_name ( nurl_str_cat name `` ) } {}
         : ~ s val ( gen_expr lex syms cg )
         // The INITIALISER terminated the block — `: i x ^ a` returns and
         // the binding is dead, an idiom the `^`-vs-`^^` warning
@@ -20355,6 +20376,7 @@
             ( nurl_sym_def syms `__last_phi_idents__` `` )
             ( nurl_sym_def syms `__last_phi_cause__` `` )
             ( nurl_sym_def syms `__last_phi_definite__` `` )
+            ? == bck_rhs_tt TT_BACKSLASH { = g_clo_bind_name ( nurl_str_cat name `` ) } {}
             : ~ s val ( gen_expr lex syms cg )
             // See the twin above: an initialiser that terminated leaves
             // this statement's remaining instructions past the block's
@@ -25080,7 +25102,7 @@
         {}
         // A String / Vec / owning struct a returned closure captured is the
         // env's own (gen_env_allocation moved or copied it in).
-        ? & & & & != 0 g_env_owns_handles ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
+        ? & & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ( __is_handle_ty vty ) ! ( __is_capture_byref var syms ) ! ( __capture_lends var syms )
         ! ( str_contains_word g_env_released var )
         { : s ht ( nurl_llty vty )
             : s hm ( __drop_mangle vty )
@@ -25196,7 +25218,7 @@
         // …and a String / Vec / owning struct captured by a returned closure
         // moves in: the env drops it (gen_env_vtable). A value the binding
         // only borrowed is copied in instead.
-        ? & & & != 0 g_env_owns_handles ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
+        ? & & & | != 0 g_env_owns_handles ( str_contains_word g_env_moved var ) ! cap_byref ( __is_handle_ty var_type ) ! ( __capture_lends var syms ) {
             : s up ( mem_udrop_ptr_of syms var )
             ? != 0 ( nurl_str_len up ) {
                 : s f ( mem_udrop_flag_get syms cg up )
@@ -25636,11 +25658,72 @@
 //
 // Matched by call name, as the thread_spawn check has always been.
 @ __thr_is_detach s fname → b {
-    ^ | | |
+    ^ | | | |
     ( seq fname `thread_spawn` )
+    ( seq fname `thread_spawn_owned` )
     ( seq fname `spawn` )
     ( seq fname `spawn_owned` )
     ( seq fname `spawn_joinable` )
+}
+
+// The captures a thread's or a fiber's closure takes over: owning String /
+// Vec / handle bindings of this frame that the rest of the function never
+// names again (a forward scan of its body) and that no loop around the
+// closure captures again (declared inside the innermost one). `: String
+// url …` per iteration, handed to `thread_spawn`, is the thread's from
+// there — dropped at the end of the iteration it was read freed memory. A
+// binding still named later (a Vec the thread fills for the spawner) stays
+// shared, as before. A closure bound to a name counts only when the rest of
+// the function hands that name to a spawn.
+@ __clo_detach_moves i lex i syms s caps b lit s bind → s {
+    ? & ! lit == 0 ( nurl_str_len bind ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s hp ( nurl_sym_get syms `__fn_hdr_pos__` )
+    ? | == 0 ( nurl_str_len hp ) ! ( seq ( nurl_sym_get syms `__fn_hdr_lex__` ) ( nurl_str_int lex ) ) { ^ ( nurl_str_cat `` `` ) } {}
+    // The innermost loop around the closure: a binding made outside it is
+    // captured again by the next iteration's closure.
+    : s ld ( nurl_sym_get syms `__loop_depth__` )
+    : s pnames ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ s cand ``
+    : ~ s rest ( nurl_str_cat caps `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s v ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s up ( mem_udrop_ptr_of syms v )
+        ? & & & & & & ( __is_handle_ty ( nurl_sym_get syms v ) ) ! ( __is_capture_byref v syms ) < ( str_word_index pnames v ) 0
+        != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__sborrow` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms up `__sborrow` ) `@` ) == 0 ( nurl_sym_len2 syms up `__alias` )
+        ( seq ( nurl_sym_get2 syms up `__lserial` ) ld )
+        { = cand ( nurl_str_cat3 cand ` ` v ) } {}
+    }
+    ? == 0 ( nurl_str_len cand ) { ^ ( nurl_str_cat `` `` ) } {}
+    : i here ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex ( nurl_str_to_int hp ) )
+    ( skip_balanced lex )
+    : i fend ( nurl_lex_cur_start lex )
+    ( nurl_lex_set_pos lex here )
+    : ~ s used ``
+    : ~ b spawned lit
+    : ~ i p2 0
+    : ~ i p1 0
+    : ~ s p1v ``
+    ~ & < ( nurl_lex_cur_start lex ) fend != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        : ~ s tv ``
+        ? ( is_ident_tok tt ) {
+            = tv ( nurl_lex_val lex )
+            ? & ( str_contains_word cand tv ) ! ( str_contains_word used tv ) { = used ( nurl_str_cat3 used ` ` tv ) } {}
+            ? & & & ! spawned == p2 TT_LPAREN ( __thr_is_detach p1v ) ( seq tv bind ) { = spawned T } {}
+        } {}
+        = p2 p1 = p1 tt = p1v tv
+        ( nurl_lex_advance lex )
+    }
+    ( nurl_lex_set_pos lex here )
+    ? ! spawned { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    = rest ( nurl_str_cat cand `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s v ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ! ( str_contains_word used v ) { = out ( nurl_str_cat3 out ` ` v ) } {}
+    }
+    ^ out
 }
 
 @ gen_closure_expr i lex i syms i cg → s {
@@ -25655,6 +25738,13 @@
     // Returned right here (`^ \ …`): the env owns its handle captures.
     : b clo_returned ( seq ( nurl_sym_get syms `__ret_clo__` ) `1` )
     ( nurl_sym_set_deep syms `__ret_clo__` `` )
+    // Run by a thread or a fiber: a literal handed straight to one, or a
+    // binding (its name) that may be (__clo_detach_moves). Read before
+    // the body can build a closure of its own.
+    : b clo_detach_lit != 0 g_clo_detach
+    = g_clo_detach 0
+    : s clo_bind_name ( nurl_str_cat g_clo_bind_name `` )
+    = g_clo_bind_name ``
 
     // Parse parameters: type name pairs before arrow
     : ~ s param_types ``
@@ -26340,6 +26430,8 @@
     ( nurl_sym_pop syms )
     ( __clo_tmp_set __outer_clo_tmp )
     = g_struct_tmp __outer_struct_tmp
+    : s clo_moved ? & > captured_count 0 ! clo_returned
+    ( __clo_detach_moves lex syms captured_vars clo_detach_lit clo_bind_name ) ``
 
     // Stop capturing and store as deferred closure function
     : s funcdef ( nurl_print_buf_stop )
@@ -26347,10 +26439,12 @@
     ? > captured_count 0
     { = g_env_owns_handles ? clo_returned 1 ? != 0 ( nurl_str_len clo_released ) 2 0
         = g_env_released clo_released
+        = g_env_moved clo_moved
         ( store_closure_func ( nurl_str_cat funcdef
         ( gen_env_vtable closure_fn_name env_struct_name captured_vars syms ) ) )
         = g_env_owns_handles 0
-        = g_env_released `` }
+        = g_env_released ``
+        = g_env_moved `` }
     { ( store_closure_func funcdef ) }
     // Restore the enclosing function's DWARF context — subsequent
     // instructions emitted by gen_stmt continue under its DISubprogram.
@@ -26390,9 +26484,11 @@
     ? > captured_count 0
     {
         = g_env_owns_handles ? clo_returned 1 ? != 0 ( nurl_str_len clo_released ) 2 0
+        = g_env_moved clo_moved
         = env_ptr ( gen_env_allocation env_struct_name captured_vars
         ( nurl_str_cat `@__cenv_vt.` closure_fn_name ) syms cg )
         = g_env_owns_handles 0
+        = g_env_moved ``
     }
     {}
 
@@ -29384,6 +29480,9 @@
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_cg_reset cg )
+    // Where this function starts, for a forward scan of its body
+    // (__clo_detach_moves).
+    : i __fn_hdr_pos ( nurl_lex_cur_start lex )
     // Read-and-clear the `simd` prefix here, at the head of the one
     // function it belongs to. Generic functions reach this path from
     // flush_deferred_instantiations long after the prefix was parsed,
@@ -29424,6 +29523,8 @@
     ? != g_dbg_override_line 0 g_dbg_override_line ( nurl_lex_line lex )
     0
     ( nurl_sym_push syms )
+    ( nurl_sym_def syms `__fn_hdr_pos__` ( nurl_str_int __fn_hdr_pos ) )
+    ( nurl_sym_def syms `__fn_hdr_lex__` ( nurl_str_int lex ) )
     ( nurl_sym_def syms `__owned_slices__` `` )
     ( nurl_sym_def syms `__slice_decls__` `` )
     = g_fn_slice_decls 0

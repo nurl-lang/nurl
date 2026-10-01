@@ -124,6 +124,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A child process gets its SIGTERM grace period.** Shutting a child
   down polled `waitpid` 50 times back to back, so a child that did not exit
   at once was SIGKILLed within microseconds; the polls are now 10 ms apart.
+- **A thread's or fiber's closure takes over the captures its spawner is
+  done with.** `: String url …` per iteration captured by `thread_spawn \ →
+  v { … url … }` was dropped at the end of the iteration while the thread
+  still read it — a use after free unless the body released the capture by
+  hand. An owning String / Vec / handle binding the rest of the function
+  never names again (and that no loop around the closure captures again)
+  now moves into the env; one still named later stays shared, as before.
+  `thread_spawn_owned` is checked as a detaching spawn (Send) too.
+  `compiler/tests/thread_closure_takes_dead_captures.nu`.
 
 ### Changed
 

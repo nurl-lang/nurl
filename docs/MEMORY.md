@@ -1470,6 +1470,13 @@ from raw pointers (`*RouteImpl` and friends) own the closures stored into
 them — a field store of a closure stores a copy — and release them with
 `nurl_closure_drop` when the structure is freed.
 
+A closure a thread or a fiber runs (a literal handed to `thread_spawn` /
+`spawn`, or a binding the function later hands to one) takes over the
+String / Vec / handle bindings it captured that the rest of the function
+never names again and that no loop around it captures again: they move
+into its env, and the runtime's copy owns its own. A captured binding still
+named later — a Vec the threads fill for the spawner — stays shared.
+
 A String / Vec captured **by value** is a snapshot the body may scratch:
 it borrows the env's value, and an assignment over it is discarded when
 the closure returns (the compiler warns). The value so assigned is the
