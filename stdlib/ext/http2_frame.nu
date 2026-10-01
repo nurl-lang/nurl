@@ -611,18 +611,21 @@ $ `stdlib/std/net.nu`
 // state: [0] flushed offset into pending, [1] failed, [2] starved — a queue
 // was refused for lack of room, so the owner owes the application a control
 // event once a flush frees some.
-: H2FrameWriter { TcpConn tcp ( Vec u ) pending ( Vec u ) head s state i max_pending }
+: H2FrameWriter { TcpConn tcp ( Vec u ) pending ( Vec u ) head ( Vec i ) state i max_pending }
 
 @ h2_frame_writer TcpConn tcp i max_pending → H2FrameWriter {
-    ^ @ H2FrameWriter { tcp ( vec_new [u] ) ( vec_with_cap [u] 9 ) ( nurl_zalloc 24 ) max_pending }
+    ^ @ H2FrameWriter { tcp ( vec_new [u] ) ( vec_with_cap [u] 9 ) ( vec_zeroed [i] 3 ) max_pending }
 }
 
-@ h2_frame_writer_free sink H2FrameWriter writer → v {
-    ( vec_free [u] . writer pending ) ( vec_free [u] . writer head ) ( nurl_free . writer state )
-}
+// The state words, in place (a Vec so that every copy of the writer shares
+// them and the writer's owner releases them).
+@ __h2w_state H2FrameWriter writer → s { ^ # s ( vec_data [i] . writer state ) }
+
+// Let go of `writer` now rather than at the end of its owner's scope.
+@ h2_frame_writer_free sink H2FrameWriter writer → v {}
 
 @ h2_frame_writer_pending H2FrameWriter writer → i {
-    ^ - ( vec_len [u] . writer pending ) ( nurl_peek . writer state 0 )
+    ^ - ( vec_len [u] . writer pending ) ( nurl_peek ( __h2w_state writer ) 0 )
 }
 
 // Conservative TLS overhead reservation (covers TLS1.2 AES explicit nonces as
@@ -636,52 +639,52 @@ $ `stdlib/std/net.nu`
 
 // The application asked for room and was refused: remember to tell it when
 // a flush makes some.
-@ h2_frame_writer_starve H2FrameWriter writer → v { ( nurl_poke . writer state 2 1 ) }
+@ h2_frame_writer_starve H2FrameWriter writer → v { ( nurl_poke ( __h2w_state writer ) 2 1 ) }
 
 @ h2_frame_writer_take_starved H2FrameWriter writer → b {
-    : i starved ( nurl_peek . writer state 2 )
-    ? != starved 0 { ( nurl_poke . writer state 2 0 ) } {}
+    : i starved ( nurl_peek ( __h2w_state writer ) 2 )
+    ? != starved 0 { ( nurl_poke ( __h2w_state writer ) 2 0 ) } {}
     ^ != starved 0
 }
 
 @ h2_frame_writer_queue H2FrameWriter writer H2Frame frame i max_frame_size → !v H2FrameErr {
-    ? != 0 ( nurl_peek . writer state 1 ) { ^ @ !v H2FrameErr { F H2FrameWriteIo } } {}
+    ? != 0 ( nurl_peek ( __h2w_state writer ) 1 ) { ^ @ !v H2FrameErr { F H2FrameWriteIo } } {}
     : i n ( vec_len [u] . frame payload )
     ? > n max_frame_size { ^ @ !v H2FrameErr { F H2FrameOversized } } {}
     ? ! ( h2_frame_writer_room writer + 9 n ) {
         ( h2_frame_writer_starve writer )
         ^ @ !v H2FrameErr { F H2FrameWouldBlock }
     } {}
-    : i offset ( nurl_peek . writer state 0 )
-    ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke . writer state 0 0 ) } {}
+    : i offset ( nurl_peek ( __h2w_state writer ) 0 )
+    ? > offset 0 { ( h2_rx_consume . writer pending offset ) ( nurl_poke ( __h2w_state writer ) 0 0 ) } {}
     ( vec_clear [u] . writer head )
     ( h2_push_frame_header . writer head n . frame frame_type . frame flags . frame stream_id )
     : !v NetErr encoded ( tcp_prepare_write2_to . writer tcp . writer pending . writer head . frame payload )
     ?? encoded {
         T _ → ^ @ !v H2FrameErr { T 0 }
         F _ → {
-            ( nurl_poke . writer state 1 1 )
+            ( nurl_poke ( __h2w_state writer ) 1 1 )
             ^ @ !v H2FrameErr { F H2FrameWriteIo }
         }
     }
 }
 
 @ h2_frame_writer_flush H2FrameWriter writer → !i H2FrameErr {
-    ? != 0 ( nurl_peek . writer state 1 ) { ^ @ !i H2FrameErr { F H2FrameWriteIo } } {}
+    ? != 0 ( nurl_peek ( __h2w_state writer ) 1 ) { ^ @ !i H2FrameErr { F H2FrameWriteIo } } {}
     ( h2_frame_writer_controls writer )
     ? == ( h2_frame_writer_pending writer ) 0 { ^ @ !i H2FrameErr { T 0 } } {}
-    : i offset ( nurl_peek . writer state 0 )
+    : i offset ( nurl_peek ( __h2w_state writer ) 0 )
     : !i NetErr sent ( tcp_try_write_wire . writer tcp . writer pending offset )
     ?? sent {
         T count → {
             : i next + offset count
             ? == next ( vec_len [u] . writer pending ) {
-                ( vec_clear [u] . writer pending ) ( nurl_poke . writer state 0 0 )
-            } { ( nurl_poke . writer state 0 next ) }
+                ( vec_clear [u] . writer pending ) ( nurl_poke ( __h2w_state writer ) 0 0 )
+            } { ( nurl_poke ( __h2w_state writer ) 0 next ) }
             ^ @ !i H2FrameErr { T count }
         }
         F _ → {
-            ( nurl_poke . writer state 1 1 )
+            ( nurl_poke ( __h2w_state writer ) 1 1 )
             ^ @ !i H2FrameErr { F H2FrameWriteIo }
         }
     }
