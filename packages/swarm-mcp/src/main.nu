@@ -289,13 +289,8 @@ $ `cudakernel.nu`
 @ node_relay s host i port i vflag → v {
     ?? ( relay_server_start host port ) {
         T rs → {
-            : *RelayServer p # *RelayServer ( nurl_alloc Z RelayServer )
-            = . p lst . rs lst
-            = . p clients . rs clients
-            = . p groups . rs groups
-            = . p verbose vflag
-            ( relay_server_run p )
-            ( relay_server_free p )
+            ( relay_server_set_verbose rs vflag )
+            ( relay_server_run rs )
         }
         F e → {
             // A requested role that cannot start is fatal for the node: a

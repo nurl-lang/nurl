@@ -32,14 +32,9 @@ $ `stdlib/net/relay.nu`
 
     ?? ( relay_server_start ( string_data host ) port ) {
         T rs → {
-            : *RelayServer p # *RelayServer ( nurl_alloc Z RelayServer )
-            = . p lst . rs lst
-            = . p clients . rs clients
-            = . p groups . rs groups
             ( nurl_print `relay listening on ` ) ( nurl_print ( string_data host ) )
             ( nurl_print `:` ) ( nurl_println_int port )
-            ( relay_server_run p )  // blocks until the listener is closed
-            ( relay_server_free p )
+            ( relay_server_run rs )  // blocks until the listener is closed
         }
         F e → ( nurl_print `relay failed to bind\n` )
     }

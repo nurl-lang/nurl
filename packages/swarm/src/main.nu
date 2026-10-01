@@ -156,19 +156,12 @@ $ `work.nu`
 @ run_relay s host i port i vflag → i {
     ?? ( relay_server_start host port ) {
         T rs → {
-            : *RelayServer p # *RelayServer ( nurl_alloc Z RelayServer )
-            = . p lst . rs lst
-            = . p clients . rs clients
-            = . p groups . rs groups
-            // `vflag` (not `verbose`): a store LHS `. p verbose` whose value-name
-            // also matched the field would be parsed as an array-index store.
-            = . p verbose vflag
+            ( relay_server_set_verbose rs vflag )
             ( nurl_print `swarm relay listening on ` ) ( nurl_print host )
             ( nurl_print `:` ) ( nurl_println_int port )
             ? == vflag 1 { ( nurl_print ` (verbose: logging peer connect/disconnect)` ) } {}
             ( nurl_print `\n` )
-            ( relay_server_run p )
-            ( relay_server_free p )
+            ( relay_server_run rs )
             ^ 0
         }
         F e → { ( nurl_print `swarm: relay failed to bind\n` ) ^ 1 }
