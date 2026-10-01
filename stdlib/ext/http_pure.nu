@@ -1177,6 +1177,7 @@ i follow i maxredir i verify s ua i timeout_ms → i {
 // response object after pumping to completion.
 @ hp_stream_body_take * HttpStreamState st → ( Vec u ) {
     : ( Vec u ) out . st body
+    ( mem_take out )  // the stream gives it up: replaced right below
     = . st body ( vec_new [u] )
     ^ out
 }
@@ -1216,6 +1217,7 @@ i follow i maxredir i verify s ua i timeout_ms → i {
     : i bl ( vec_len [u] . st body )
     ? == bl 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : ( Vec u ) out . st body
+    ( mem_take out )  // the stream gives it up: replaced right below
     = . st body ( vec_new [u] )
     ^ @ ?( Vec u ) { T out }
 }
