@@ -6,8 +6,9 @@
 // monotonic), sends the packets, and puts lost frames back on its
 // queues.
 //
-//   ( quic_rec_new max_datagram )                 → *QuicRecovery
-//   ( quic_rec_free r )                           → v
+//   ( quic_rec_new max_datagram )                 → QuicRecovery
+//   ( quic_rec_free r )                           → v    early release (optional: the last owner
+//                                                        of a QuicRecovery releases it)
 //   ( quic_rec_set_peer r max_ack_delay ack_exp ) → v    from the peer's transport parameters
 //   ( quic_rec_on_sent r space pn now size ack_eliciting frames ) → v   `frames` = retransmittable bytes, copied
 //   ( quic_rec_on_ack r space ack now )           → i    0 ok · -1 the ACK names a packet never sent
@@ -26,6 +27,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/quic_frame.nu`
+$ `stdlib/core/rcbox.nu`
 
 : QuicSentPkt {
     i pn
@@ -36,7 +38,7 @@ $ `stdlib/std/quic_frame.nu`
     ( Vec u ) frames
 }
 
-: QuicRecovery {
+: QuicRecoveryImpl {
     ( Vec i ) sent0
     ( Vec i ) sent1
     ( Vec i ) sent2
@@ -72,14 +74,38 @@ $ `stdlib/std/quic_frame.nu`
     i max_datagram
 }
 
+// A QuicRecovery is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicRecovery { s ctl }
+
+// The sent logs hold raw QuicSentPkt blocks (as integers): releasing
+// them is the recovery state's own drop; the Vecs go with the fields.
+% Drop QuicRecoveryImpl {
+    @ drop QuicRecoveryImpl r → v {
+        ( __qr_free_pkts . r sent0 )
+        ( __qr_free_pkts . r sent1 )
+        ( __qr_free_pkts . r sent2 )
+    }
+}
+
+@ QuicRecovery_share QuicRecovery h → QuicRecovery { ^ @ QuicRecovery { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicRecovery_drop sink QuicRecovery h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicRecoveryImpl] # i . h ctl )
+}
+
+@ __QuicRecovery_ptr QuicRecovery h → *QuicRecoveryImpl { ^ ( rcbox_ptr [QuicRecoveryImpl] # i . h ctl ) }
+
 @ quic_rec_kpacket_threshold → i { ^ 3 }
 
 @ quic_rec_kgranularity → i { ^ 1 }
 
 @ quic_rec_kinitial_rtt → i { ^ 333 }
 
-@ quic_rec_new i max_datagram → *QuicRecovery {
-    : *QuicRecovery r # *QuicRecovery ( nurl_alloc Z QuicRecovery )
+@ quic_rec_new i max_datagram → QuicRecovery {
+    : i r__box ( rcbox_zero [QuicRecoveryImpl] )
+    : *QuicRecoveryImpl r ( rcbox_ptr [QuicRecoveryImpl] r__box )
     = . r sent0 ( vec_new [i] )
     = . r sent1 ( vec_new [i] )
     = . r sent2 ( vec_new [i] )
@@ -117,7 +143,7 @@ $ `stdlib/std/quic_frame.nu`
     = . r ssthresh 4611686018427387903
     = . r recovery_start 0
     = . r max_datagram max_datagram
-    ^ r
+    ^ @ QuicRecovery { # s r__box }
 }
 
 @ __qr_pkt_free sink i h → v {
@@ -126,82 +152,87 @@ $ `stdlib/std/quic_frame.nu`
     ( nurl_free # s p )
 }
 
-@ __qr_free_list ( Vec i ) l → v {
+// The packets of a sent log (the Vec itself goes with its owner).
+@ __qr_free_pkts ( Vec i ) l → v {
     : ~ i k 0
     ~ < k ( vec_len [i] l ) {
         ( __qr_pkt_free ?? ( vec_get [i] l k ) { T x → x F → 0 } )
         = k + k 1
     }
-    ( vec_free [i] l )
 }
 
-@ quic_rec_free sink * QuicRecovery r → v {
-    ? == # i r 0 { ^ } {}
-    ( __qr_free_list . r sent0 )
-    ( __qr_free_list . r sent1 )
-    ( __qr_free_list . r sent2 )
-    ( vec_free [u] . r lost0 )
-    ( vec_free [u] . r lost1 )
-    ( vec_free [u] . r lost2 )
-    ( nurl_free # s r )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ quic_rec_free sink QuicRecovery r → v {}
 
-@ quic_rec_set_peer * QuicRecovery r i max_ack_delay i ack_exp → v {
+@ quic_rec_set_peer QuicRecovery r__h i max_ack_delay i ack_exp → v {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     = . r max_ack_delay max_ack_delay
     = . r ack_delay_exp ack_exp
 }
 
-@ quic_rec_set_confirmed * QuicRecovery r → v { = . r confirmed 1 }
+@ quic_rec_set_confirmed QuicRecovery r__h → v {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
+    = . r confirmed 1
+}
 
-@ quic_rec_bytes_in_flight * QuicRecovery r → i { ^ . r bytes_in_flight }
+@ quic_rec_bytes_in_flight QuicRecovery r__h → i {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
+    ^ . r bytes_in_flight
+}
 
-@ quic_rec_cwnd * QuicRecovery r → i { ^ . r cwnd }
+@ quic_rec_cwnd QuicRecovery r__h → i {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
+    ^ . r cwnd
+}
 
-@ quic_rec_srtt * QuicRecovery r → i { ^ . r smoothed_rtt }
+@ quic_rec_srtt QuicRecovery r__h → i {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
+    ^ . r smoothed_rtt
+}
 
-@ __qr_sent * QuicRecovery r i space → ( Vec i ) {
+@ __qr_sent * QuicRecoveryImpl r i space → ( Vec i ) {
     ? == space 0 { ^ . r sent0 } {}
     ? == space 1 { ^ . r sent1 } {}
     ^ . r sent2
 }
 
-@ __qr_lost * QuicRecovery r i space → ( Vec u ) {
+@ __qr_lost * QuicRecoveryImpl r i space → ( Vec u ) {
     ? == space 0 { ^ . r lost0 } {}
     ? == space 1 { ^ . r lost1 } {}
     ^ . r lost2
 }
 
-@ __qr_largest_acked * QuicRecovery r i space → i {
+@ __qr_largest_acked * QuicRecoveryImpl r i space → i {
     ? == space 0 { ^ . r largest_acked0 } {}
     ? == space 1 { ^ . r largest_acked1 } {}
     ^ . r largest_acked2
 }
 
-@ __qr_set_largest_acked * QuicRecovery r i space i v → v {
+@ __qr_set_largest_acked * QuicRecoveryImpl r i space i v → v {
     ? == space 0 { = . r largest_acked0 v ^ } {}
     ? == space 1 { = . r largest_acked1 v ^ } {}
     = . r largest_acked2 v
 }
 
-@ __qr_largest_sent * QuicRecovery r i space → i {
+@ __qr_largest_sent * QuicRecoveryImpl r i space → i {
     ? == space 0 { ^ . r largest_sent0 } {}
     ? == space 1 { ^ . r largest_sent1 } {}
     ^ . r largest_sent2
 }
 
-@ __qr_loss_time * QuicRecovery r i space → i {
+@ __qr_loss_time * QuicRecoveryImpl r i space → i {
     ? == space 0 { ^ . r loss_time0 } {}
     ? == space 1 { ^ . r loss_time1 } {}
     ^ . r loss_time2
 }
 
-@ __qr_set_loss_time * QuicRecovery r i space i v → v {
+@ __qr_set_loss_time * QuicRecoveryImpl r i space i v → v {
     ? == space 0 { = . r loss_time0 v ^ } {}
     ? == space 1 { = . r loss_time1 v ^ } {}
     = . r loss_time2 v
 }
 
-@ __qr_last_ae * QuicRecovery r i space → i {
+@ __qr_last_ae * QuicRecoveryImpl r i space → i {
     ? == space 0 { ^ . r last_ae_sent0 } {}
     ? == space 1 { ^ . r last_ae_sent1 } {}
     ^ . r last_ae_sent2
@@ -211,7 +242,8 @@ $ `stdlib/std/quic_frame.nu`
     ^ # *QuicSentPkt ?? ( vec_get [i] l k ) { T x → x F → 0 }
 }
 
-@ quic_rec_on_sent * QuicRecovery r i space i pn i now i size i ack_eliciting ( Vec u ) frames → v {
+@ quic_rec_on_sent QuicRecovery r__h i space i pn i now i size i ack_eliciting ( Vec u ) frames → v {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : *QuicSentPkt p # *QuicSentPkt ( nurl_alloc Z QuicSentPkt )
     = . p pn pn
     = . p time_ms now
@@ -235,7 +267,7 @@ $ `stdlib/std/quic_frame.nu`
 }
 
 // ── RTT (§5) ────────────────────────────────────────────────────
-@ __qr_update_rtt * QuicRecovery r i latest i ack_delay → v {
+@ __qr_update_rtt * QuicRecoveryImpl r i latest i ack_delay → v {
     = . r latest_rtt latest
     ? == . r has_rtt_sample 0 {
         = . r has_rtt_sample 1
@@ -254,18 +286,23 @@ $ `stdlib/std/quic_frame.nu`
     = . r smoothed_rtt / + * 7 . r smoothed_rtt adjusted 8
 }
 
-@ quic_rec_pto * QuicRecovery r → i {
+@ __qr_pto * QuicRecoveryImpl r → i {
     : i four_var * 4 . r rttvar
     : i g ( quic_rec_kgranularity )
     ^ + . r smoothed_rtt ? > four_var g four_var g
 }
 
+@ quic_rec_pto QuicRecovery r__h → i {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
+    ^ ( __qr_pto r )
+}
+
 // ── congestion (§7, NewReno) ───────────────────────────────────
-@ __qr_in_recovery * QuicRecovery r i sent_time → b {
+@ __qr_in_recovery * QuicRecoveryImpl r i sent_time → b {
     ^ <= sent_time . r recovery_start
 }
 
-@ __qr_on_acked_cc * QuicRecovery r * QuicSentPkt p → v {
+@ __qr_on_acked_cc * QuicRecoveryImpl r * QuicSentPkt p → v {
     ? == . p in_flight 0 { ^ } {}
     = . r bytes_in_flight - . r bytes_in_flight . p size
     ? < . r bytes_in_flight 0 { = . r bytes_in_flight 0 } {}
@@ -277,7 +314,7 @@ $ `stdlib/std/quic_frame.nu`
     }
 }
 
-@ __qr_on_congestion_event * QuicRecovery r i sent_time i now → v {
+@ __qr_on_congestion_event * QuicRecoveryImpl r i sent_time i now → v {
     ? ( __qr_in_recovery r sent_time ) { ^ } {}
     = . r recovery_start now
     = . r ssthresh / . r cwnd 2
@@ -289,7 +326,7 @@ $ `stdlib/std/quic_frame.nu`
 // Declare lost every packet in `space` that is either kPacketThreshold
 // behind the largest acknowledged or older than the time threshold;
 // queue their frames; arm the loss timer for the rest.
-@ __qr_detect_lost * QuicRecovery r i space i now → v {
+@ __qr_detect_lost * QuicRecoveryImpl r i space i now → v {
     : i la ( __qr_largest_acked r space )
     ? < la 0 { ^ } {}
     : i rtt ? > . r latest_rtt . r smoothed_rtt . r latest_rtt . r smoothed_rtt
@@ -338,7 +375,8 @@ $ `stdlib/std/quic_frame.nu`
     ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 }
 }
 
-@ quic_rec_on_ack * QuicRecovery r i space QuicFrame ack i now → i {
+@ quic_rec_on_ack QuicRecovery r__h i space QuicFrame ack i now → i {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : i largest ( quic_frame_a ack )
     ? > largest ( __qr_largest_sent r space ) { ^ -1 } {}
     // Collect the acknowledged ranges as [lo, hi] pairs.
@@ -398,7 +436,8 @@ $ `stdlib/std/quic_frame.nu`
     ^ 0
 }
 
-@ quic_rec_take_lost * QuicRecovery r i space → ( Vec u ) {
+@ quic_rec_take_lost QuicRecovery r__h i space → ( Vec u ) {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : ( Vec u ) q ( __qr_lost r space )
     : ( Vec u ) out ( bytes_slice q 0 ( vec_len [u] q ) )
     ( vec_clear [u] q )
@@ -406,7 +445,7 @@ $ `stdlib/std/quic_frame.nu`
 }
 
 // ── timers (§6.2) ─────────────────────────────────────────────
-@ __qr_has_ae_in_flight * QuicRecovery r i space → b {
+@ __qr_has_ae_in_flight * QuicRecoveryImpl r i space → b {
     : ( Vec i ) l ( __qr_sent r space )
     : ~ i k 0
     ~ < k ( vec_len [i] l ) {
@@ -418,8 +457,8 @@ $ `stdlib/std/quic_frame.nu`
 }
 
 // The PTO deadline over all spaces (0 = none armed).
-@ __qr_pto_time * QuicRecovery r → i {
-    : i base ( quic_rec_pto r )
+@ __qr_pto_time * QuicRecoveryImpl r → i {
+    : i base ( __qr_pto r )
     : i backoff << 1 . r pto_count
     : ~ i best 0
     : ~ i space 0
@@ -438,7 +477,7 @@ $ `stdlib/std/quic_frame.nu`
     ^ best
 }
 
-@ __qr_earliest_loss * QuicRecovery r → i {
+@ __qr_earliest_loss * QuicRecoveryImpl r → i {
     : ~ i best 0
     : ~ i space 0
     ~ < space 3 {
@@ -449,13 +488,15 @@ $ `stdlib/std/quic_frame.nu`
     ^ best
 }
 
-@ quic_rec_next_timeout * QuicRecovery r → i {
+@ quic_rec_next_timeout QuicRecovery r__h → i {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : i lt ( __qr_earliest_loss r )
     ? != lt 0 { ^ lt } {}
     ^ ( __qr_pto_time r )
 }
 
-@ quic_rec_on_timeout * QuicRecovery r i now → v {
+@ quic_rec_on_timeout QuicRecovery r__h i now → v {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : i lt ( __qr_earliest_loss r )
     ? & != lt 0 <= lt now {
         : ~ i space 0
@@ -480,7 +521,8 @@ $ `stdlib/std/quic_frame.nu`
     } {}
 }
 
-@ quic_rec_take_probe * QuicRecovery r → i {
+@ quic_rec_take_probe QuicRecovery r__h → i {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : i s . r probe_space
     = . r probe_space -1
     ^ s
@@ -488,7 +530,8 @@ $ `stdlib/std/quic_frame.nu`
 
 // The oldest unacknowledged ack-eliciting frames in `space`, for a
 // probe (§6.2.4: new or previously sent data).
-@ quic_rec_probe_frames * QuicRecovery r i space → ( Vec u ) {
+@ quic_rec_probe_frames QuicRecovery r__h i space → ( Vec u ) {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : ( Vec i ) l ( __qr_sent r space )
     : ~ i k 0
     ~ < k ( vec_len [i] l ) {
@@ -499,7 +542,8 @@ $ `stdlib/std/quic_frame.nu`
     ^ ( vec_new [u] )
 }
 
-@ quic_rec_discard_space * QuicRecovery r i space → v {
+@ quic_rec_discard_space QuicRecovery r__h i space → v {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     : ( Vec i ) l ( __qr_sent r space )
     : ~ i k 0
     ~ < k ( vec_len [i] l ) {
@@ -515,11 +559,13 @@ $ `stdlib/std/quic_frame.nu`
     = . r pto_count 0
 }
 
-@ quic_rec_can_send * QuicRecovery r i size → b {
+@ quic_rec_can_send QuicRecovery r__h i size → b {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     ^ <= + . r bytes_in_flight size . r cwnd
 }
 
 // The datagram size changed (the peer's max_udp_payload_size is known).
-@ quic_rec_new_max_datagram * QuicRecovery r i max_datagram → v {
+@ quic_rec_new_max_datagram QuicRecovery r__h i max_datagram → v {
+    : *QuicRecoveryImpl r ( __QuicRecovery_ptr r__h )
     = . r max_datagram max_datagram
 }

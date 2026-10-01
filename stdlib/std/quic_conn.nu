@@ -233,7 +233,7 @@ $ `stdlib/std/quic_recovery.nu`
     i ack_needed1
     i ack_needed2
     i ae_since_ack2
-    * QuicRecovery rec
+    QuicRecovery rec
     i crypto_sent0
     i crypto_sent1
     i crypto_sent2
