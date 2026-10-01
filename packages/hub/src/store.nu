@@ -48,9 +48,7 @@ $ `stdlib/ext/json.nu`
     }
     : String home ( env_var_or `HOME` `.` )
     : String base ( path_join ( string_data home ) `.nurl` )
-    ( string_free home )
     : String r ( path_join ( string_data base ) `models` )
-    ( string_free base )
     ^ r
 }
 
@@ -74,8 +72,6 @@ $ `stdlib/ext/json.nu`
     : String nm ( string_from `sha256-` )
     ( string_push_str nm hex )
     : String p ( path_join ( string_data bdir ) ( string_data nm ) )
-    ( string_free bdir )
-    ( string_free nm )
     ^ p
 }
 
@@ -83,8 +79,6 @@ $ `stdlib/ext/json.nu`
     : String mdir ( path_join ( string_data root ) `manifests` )
     : String sn ( _hub_safe_name name )
     : String p ( path_join ( string_data mdir ) ( string_data sn ) )
-    ( string_free mdir )
-    ( string_free sn )
     ^ p
 }
 
@@ -94,12 +88,8 @@ $ `stdlib/ext/json.nu`
     : String mroot ( path_join ( string_data root ) `models` )
     : String sr ( _hub_safe_name repo )
     : String rdir ( path_join ( string_data mroot ) ( string_data sr ) )
-    ( string_free mroot )
-    ( string_free sr )
     : String snaps ( path_join ( string_data rdir ) `snapshots` )
-    ( string_free rdir )
     : String d ( path_join ( string_data snaps ) rev )
-    ( string_free snaps )
     ^ d
 }
 
@@ -110,9 +100,6 @@ $ `stdlib/ext/json.nu`
     : !v IoErr r1 ( dir_create_all ( string_data b ) )
     : !v IoErr r2 ( dir_create_all ( string_data m ) )
     : !v IoErr r3 ( dir_create_all ( string_data md ) )
-    ( string_free b )
-    ( string_free m )
-    ( string_free md )
     : ~ b ok T
     ?? r1 { T _ → {} F _ → { = ok F } }
     ?? r2 { T _ → {} F _ → { = ok F } }
@@ -137,7 +124,6 @@ $ `stdlib/ext/json.nu`
                         ? == ( vec_len [u] piece ) 0 { = more F } {
                             ( sha256_update h piece )
                         }
-                        ( vec_free [u] piece )
                     }
                     F _ → { = more F }
                 }
@@ -145,7 +131,6 @@ $ `stdlib/ext/json.nu`
             ( file_close f )
             : ( Vec u ) dg ( sha256_final h )
             : String hex ( bytes_to_hex dg )
-            ( vec_free [u] dg )
             ^ @ !String String { T hex }
         }
         F _ → {
@@ -162,11 +147,9 @@ $ `stdlib/ext/json.nu`
 @ hub_manifest_read String root s name → ?Json {
     : String mp ( hub_manifest_path root name )
     : !String IoErr rr ( read_file ( string_data mp ) )
-    ( string_free mp )
     ?? rr {
         T txt → {
             : !Json JsonError pj ( json_parse ( string_data txt ) )
-            ( string_free txt )
             ?? pj {
                 T j → { ^ @ ?Json { T j } }
                 F _ → { ^ @ ?Json { F } }
@@ -180,7 +163,6 @@ $ `stdlib/ext/json.nu`
 @ hub_manifest_exists String root s name → b {
     : String mp ( hub_manifest_path root name )
     : b e ( file_exists ( string_data mp ) )
-    ( string_free mp )
     ^ e
 }
 
@@ -243,28 +225,21 @@ $ `stdlib/ext/json.nu`
                                                 }
                                                 = s2 + s2 1
                                             }
-                                            ( vec_free_with [String] shas \ String s → v { ( string_free s ) } )
-                                            ( json_free j )
                                         }
                                         F _ → {}
                                     }
-                                    ( string_free txt )
                                 }
                                 F _ → {}
                             }
-                            ( string_free mp )
                         }
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _ → {}
     }
-    ( string_free keep )
-    ( string_free mdir )
     ^ shared
 }
 
@@ -284,7 +259,7 @@ $ `stdlib/ext/json.nu`
                             T fe → {
                                 : ~ String sha ( string_new )
                                 ?? ( json_obj_get fe `sha` ) {
-                                    T sj → { ( string_free sha ) = sha ( string_from ( json_str_data sj ) ) }
+                                    T sj → { = sha ( string_from ( json_str_data sj ) ) }
                                     F → {}
                                 }
                                 ? == ( string_len sha ) 64 {
@@ -295,21 +270,16 @@ $ `stdlib/ext/json.nu`
                                             T got → {
                                                 ? ( string_eq got sha ) {} {
                                                     = ok F
-                                                    ( string_free bad )
                                                     = bad ( string_from `hub: INTEGRITY FAILURE — a blob does not hash to its recorded sha256` )
                                                 }
-                                                ( string_free got )
                                             }
-                                            F e → { = ok F ( string_free bad ) = bad e }
+                                            F e → { = ok F = bad e }
                                         }
                                     } {
                                         = ok F
-                                        ( string_free bad )
                                         = bad ( string_from `hub: a referenced blob is missing from the cache` )
                                     }
-                                    ( string_free bp )
                                 } {}
-                                ( string_free sha )
                             }
                             F → {}
                         }
@@ -318,8 +288,7 @@ $ `stdlib/ext/json.nu`
                 }
                 F → {}
             }
-            ( json_free j )
-            ? ok { ( string_free bad ) ^ @ !v String { T 0 } } {}
+            ? ok { ^ @ !v String { T 0 } } {}
             ^ @ !v String { F bad }
         }
         F → { ^ @ !v String { F ( string_from `hub: no such model in the cache` ) } }

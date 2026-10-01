@@ -38,13 +38,10 @@ $ `hf.nu`
         : s nm ( http_stream_header_name st k )
         : String low ( string_from nm )
         : String lowc ( string_to_lower low )
-        ( string_free low )
         ? ( nurl_str_eq ( string_data lowc ) want ) {
-            ( string_free out )
             = out ( string_from ( http_stream_header_value st k ) )
             = k hc
         } { = k + k 1 }
-        ( string_free lowc )
     }
     ^ out
 }
@@ -65,7 +62,6 @@ $ `hf.nu`
                             ( sha256_update h piece )
                             = total + total pn
                         }
-                        ( vec_free [u] piece )
                     }
                     F _ → { = more F }
                 }
@@ -82,21 +78,16 @@ $ `hf.nu`
     ? == ( nurl_str_len expected ) 64 {
         : String bp0 ( hub_blob_path root expected )
         ? ( file_exists ( string_data bp0 ) ) {
-            ( string_free bp0 )
             ^ @ !String String { T ( string_from expected ) }
         } {}
-        ( string_free bp0 )
     } {}
 
     // staging path: blobs/<safe-staging>.part
     : String bdir ( path_join ( string_data root ) `blobs` )
     : String sname ( _hub_safe_name staging )
     : String part0 ( path_join ( string_data bdir ) ( string_data sname ) )
-    ( string_free bdir )
-    ( string_free sname )
     : String part ( string_from ( string_data part0 ) )
     ( string_push_str part `.part` )
-    ( string_free part0 )
 
     // resume offset = existing partial size
     : ~ i off 0
@@ -112,7 +103,6 @@ $ `hf.nu`
     } {}
 
     : !HttpStream HttpErr sr ( http_stream_open `GET` url `` ( string_data hdrs ) )
-    ( string_free hdrs )
     ?? sr {
         T st → {
             : i status ( http_stream_pump_headers st )
@@ -120,7 +110,6 @@ $ `hf.nu`
             ? == status 206 { = resume T } {}
             ? | == status 200 == status 206 {} {
                 ( http_stream_close st )
-                ( string_free part )
                 : String msg ( string_from `hub: download failed (HTTP ` )
                 ( string_push_int msg status )
                 ( string_push_str msg `)` )
@@ -133,7 +122,6 @@ $ `hf.nu`
                 T v → { = total v }
                 F _ → {}
             }
-            ( string_free cl )
             ? & resume > total 0 { = total + total off } {}
 
             : *Sha256 h ( sha256_init )
@@ -147,18 +135,18 @@ $ `hf.nu`
                 : !i String rr ( __hub_rehash_part h ( string_data part ) )
                 ?? rr {
                     T n → { = done_bytes n }
-                    F e → { = failed T ( string_free ferr ) = ferr e }
+                    F e → { = failed T = ferr e }
                 }
                 ? failed {} {
                     ?? ( file_append ( string_data part ) ) {
                         T fa → { = f fa = fh_ok 1 }
-                        F _ → { = failed T ( string_free ferr ) = ferr ( string_from `hub: cannot open the staging file` ) }
+                        F _ → { = failed T = ferr ( string_from `hub: cannot open the staging file` ) }
                     }
                 }
             } {
                 ?? ( file_create ( string_data part ) ) {
                     T fa → { = f fa = fh_ok 1 }
-                    F _ → { = failed T ( string_free ferr ) = ferr ( string_from `hub: cannot create the staging file` ) }
+                    F _ → { = failed T = ferr ( string_from `hub: cannot create the staging file` ) }
                 }
             }
 
@@ -180,12 +168,10 @@ $ `hf.nu`
                                 F _ → {
                                     = failed T
                                     = more F
-                                    ( string_free ferr )
                                     = ferr ( string_from `hub: disk write failed mid-download` )
                                 }
                             }
                         } {}
-                        ( vec_free [u] piece )
                     }
                     F → { = more F }
                 }
@@ -198,7 +184,6 @@ $ `hf.nu`
                 ?? he {
                     T _ → {
                         = failed T
-                        ( string_free ferr )
                         = ferr ( string_from `hub: transfer aborted — rerun to resume from the partial file` )
                     }
                     F → {}
@@ -207,48 +192,35 @@ $ `hf.nu`
             ( http_stream_close st )
             : ( Vec u ) dg ( sha256_final h )
             ? failed {
-                ( vec_free [u] dg )
-                ( string_free part )
                 ^ @ !String String { F ferr }
             } {}
-            ( string_free ferr )
 
             ? & > total 0 != done_bytes total {
-                ( vec_free [u] dg )
-                ( string_free part )
                 ^ @ !String String { F ( string_from `hub: transfer ended short — rerun to resume from the partial file` ) }
             } {}
 
             : String hex ( bytes_to_hex dg )
-            ( vec_free [u] dg )
 
             // integrity: bytes must hash to the sha the source published
             ? & == ( nurl_str_len expected ) 64 == ( nurl_str_eq ( string_data hex ) expected ) 0 {
                 ( file_delete ( string_data part ) )
-                ( string_free part )
                 : String msg ( string_from `hub: INTEGRITY FAILURE — downloaded bytes do not match the published sha256 (` )
                 : String short ( string_substr hex 0 12 )
                 ( string_push_str msg ( string_data short ) )
-                ( string_free short )
                 ( string_push_str msg ` vs expected)` )
-                ( string_free hex )
                 ^ @ !String String { F msg }
             } {}
 
             : String bp ( hub_blob_path root ( string_data hex ) )
             : !v IoErr mv ( fs_rename ( string_data part ) ( string_data bp ) )
-            ( string_free bp )
-            ( string_free part )
             ?? mv {
                 T _ → { ^ @ !String String { T hex } }
                 F _ → {
-                    ( string_free hex )
                     ^ @ !String String { F ( string_from `hub: cannot move the finished blob into place` ) }
                 }
             }
         }
         F _ → {
-            ( string_free part )
             ^ @ !String String { F ( string_from `hub: cannot reach the download URL` ) }
         }
     }
