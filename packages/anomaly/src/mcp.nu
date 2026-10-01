@@ -44,12 +44,11 @@ $ `src/store.nu`
 
 // ── Wiring ───────────────────────────────────────────────────────────
 
-// The router the tools call back into (a shallow copy of the service
-// router, whose route table is complete by the time it is attached), the
-// static server, and the public origin for the resource-metadata URLs.
+// The router the tools call back into (a copy of the service router that
+// shares its routes, taken once the route table is complete), the static
+// server, and the public origin for the resource-metadata URLs.
 : McpWiring {
     Router router
-    b has_router
     String public_url
     b has_server
     McpServer server
@@ -61,7 +60,6 @@ $ `src/store.nu`
     ? != g_mcp_wiring 0 { ^ # *McpWiring g_mcp_wiring } {}
     : *McpWiring w # *McpWiring ( nurl_malloc Z McpWiring )
     = . w router ( router_new )
-    = . w has_router F
     = . w public_url ( string_new )
     = . w has_server F
     = g_mcp_wiring # i w
@@ -69,12 +67,14 @@ $ `src/store.nu`
 }
 
 // Called by anomaly_service_router once every route is registered. The
-// copy shares the route vector, so the router must not grow afterwards.
+// copy shares each route (a Route is a shared handle), so routes added to
+// `r` afterwards are not seen. The wiring lives in memory kept by hand, so
+// the router it held — the empty one, or an earlier service router's copy
+// and with it that router's routes — is released here.
 @ an_mcp_attach_router Router r → v {
     : *McpWiring w ( __mcp_wiring )
-    ? . w has_router {} { ( router_free . w router ) }
+    ( router_free . w router )
     = . w router @ Router { . r routes }
-    = . w has_router T
 }
 
 // `[service] public_url` — the origin clients reach the service at, when

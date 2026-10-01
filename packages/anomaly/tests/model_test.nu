@@ -47,7 +47,6 @@ $ `src/score.nu`
         ( vec_push [f] data + 8.0 ( rng_u01 g ) )
         = k + k 1
     }
-    ( rng_free g )
     ^ data
 }
 

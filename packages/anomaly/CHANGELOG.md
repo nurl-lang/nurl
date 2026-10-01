@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Follows the stdlib's self-releasing handles. The service lock is a one-word
+`Mutex` handle now: the module global holds that word and lends it back to
+the handlers and the source scheduler, and `anomaly serve`'s own binding
+releases the lock when the server returns (it used to reach into the
+Mutex's former `Cell`, which no longer exists). `Rng`, `Router` and a child
+process's `Output` release themselves too, so their `rng_free` /
+`router_free` / `output_free` calls are gone. The MCP wiring, which lives in
+memory kept by hand, now releases the router copy it replaces every time a
+service router is attached, not only the first time: a copy shares its
+routes, so a second `anomaly_service_router` (the tests build several) kept
+the first router's whole route table alive. Builds against the matching
+http-client, which follows the HTTP/3 client handle. No behaviour change.
+
 ## 0.33.4
 
 0.33.3 carried five test databases left by local test runs (`anomaly_*_test/orgs/public.db`); the package's own `.gitignore` now excludes them, which is the file `nurlpkg pack` reads. No code change.

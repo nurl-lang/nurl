@@ -40,7 +40,6 @@ $ `deps/mlp/src/mlp.nu`
     : ( Vec f ) X ( vec_with_cap [f] * n d )
     : ~ i k 0
     ~ < k * n d { ( vec_push [f] X ( rng_u01 g ) ) = k + k 1 }
-    ( rng_free g )
     : ( Vec i ) sz ( vec_new [i] )
     ( vec_push [i] sz d ) ( vec_push [i] sz 64 ) ( vec_push [i] sz 32 ) ( vec_push [i] sz 64 ) ( vec_push [i] sz d )
     : MlpCfg cfg ( mlp_cfg_default )

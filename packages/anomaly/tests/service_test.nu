@@ -1391,7 +1391,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( string_free tid )
     ( string_free csv )
 
-    ( router_free r )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
     ( string_free root )

@@ -395,7 +395,6 @@ $ `src/orgfiles.nu`
                 ? ( output_success out ) {} {
                     ( _ana_mark_crashed ( string_data dir ) ( output_exit_code out ) ( output_stderr out ) )
                 }
-                ( output_free out )
             }
             F e → { ( _ana_mark_crashed ( string_data dir ) -1 ( process_err_name e ) ) }
         }
