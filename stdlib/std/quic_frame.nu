@@ -2,9 +2,13 @@
 // frame at a time out of a decrypted packet payload, build frames into
 // a payload. Pure codec; the connection decides what a frame means.
 //
-//   ( quic_frame_parse buf off )       → *QuicFrame   0 on a malformed frame (FRAME_ENCODING_ERROR
-//                                                     for the caller); `. f next` is the offset after it
-//   ( quic_frame_free f )              → v
+//   ( quic_frame_parse buf off )       → QuicFrame    null (`== 0 # i . f ctl`) on a malformed frame
+//                                                     (FRAME_ENCODING_ERROR for the caller);
+//                                                     `( quic_frame_next f )` is the offset after it
+//   ( quic_frame_free f )              → v            early release (optional: the last owner
+//                                                     of a QuicFrame releases it)
+//   ( quic_frame_type f ) · ( quic_frame_a f ) … ( quic_frame_d f ) · ( quic_frame_next f )  → i
+//   ( quic_frame_bytes f ) → ( Vec u ) · ( quic_frame_ints f ) → ( Vec i )   BORROWED
 //   ( quic_frame_allowed ftype ptype ) → b            RFC 9000 §12.4 Table 3 (ptype as in quic_packet.nu)
 //   ( quic_frame_is_ack_eliciting ftype ) → b         everything but PADDING, ACK, CONNECTION_CLOSE
 //   ( quic_frame_type_name ftype )     → s            for logs
@@ -27,7 +31,8 @@
 //
 // One flat struct carries every frame: NURL enums take scalar payloads
 // only, and a frame is at most four integers, one byte string and one
-// integer list. Field use per type:
+// integer list. Each field has its accessor (quic_frame_<field>, the
+// type byte as quic_frame_type). Field use per type:
 //
 //   ftype   the frame type byte (STREAM: the full 0x08..0x0f value)
 //   a b c d ACK: largest, ack_delay, first_range, ecn_count(0=none, 1=present)
@@ -47,8 +52,9 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/quic_varint.nu`
+$ `stdlib/core/rcbox.nu`
 
-: QuicFrame {
+: QuicFrameImpl {
     i ftype
     i a
     i b
@@ -58,6 +64,19 @@ $ `stdlib/std/quic_varint.nu`
     ( Vec i ) ints
     i next
 }
+
+// A QuicFrame is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicFrame { s ctl }
+
+@ QuicFrame_share QuicFrame h → QuicFrame { ^ @ QuicFrame { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicFrame_drop sink QuicFrame h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicFrameImpl] # i . h ctl )
+}
+
+@ __QuicFrame_ptr QuicFrame h → *QuicFrameImpl { ^ ( rcbox_ptr [QuicFrameImpl] # i . h ctl ) }
 
 @ quic_ft_padding → i { ^ 0 }
 
@@ -109,8 +128,9 @@ $ `stdlib/std/quic_varint.nu`
 
 @ quic_frame_is_stream i ftype → b { ^ & >= ftype 8 <= ftype 15 }
 
-@ __qf_new i ftype → *QuicFrame {
-    : *QuicFrame f # *QuicFrame ( nurl_alloc Z QuicFrame )
+@ __qf_new i ftype → QuicFrame {
+    : i f__box ( rcbox_zero [QuicFrameImpl] )
+    : *QuicFrameImpl f ( rcbox_ptr [QuicFrameImpl] f__box )
     = . f ftype ftype
     = . f a 0
     = . f b 0
@@ -119,23 +139,60 @@ $ `stdlib/std/quic_varint.nu`
     = . f bytes ( vec_new [u] )
     = . f ints ( vec_new [i] )
     = . f next 0
-    ^ f
+    ^ @ QuicFrame { # s f__box }
 }
 
-@ quic_frame_free sink * QuicFrame f → v {
-    ? == # i f 0 { ^ } {}
-    ( vec_free [u] . f bytes )
-    ( vec_free [i] . f ints )
-    ( nurl_free # s f )
+// Let go of `f` now rather than at the end of its owner's scope.
+@ quic_frame_free sink QuicFrame f → v {}
+
+// ── fields ──────────────────────────────────────────────────────
+
+@ quic_frame_type QuicFrame f__h → i {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f ftype
 }
 
-@ __qf_fail * QuicFrame f → *QuicFrame {
-    ( quic_frame_free f )
-    ^ # *QuicFrame 0
+@ quic_frame_a QuicFrame f__h → i {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f a
 }
+
+@ quic_frame_b QuicFrame f__h → i {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f b
+}
+
+@ quic_frame_c QuicFrame f__h → i {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f c
+}
+
+@ quic_frame_d QuicFrame f__h → i {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f d
+}
+
+@ quic_frame_next QuicFrame f__h → i {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f next
+}
+
+@ quic_frame_bytes QuicFrame f__h → ( Vec u ) {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f bytes
+}
+
+@ quic_frame_ints QuicFrame f__h → ( Vec i ) {
+    : *QuicFrameImpl f ( __QuicFrame_ptr f__h )
+    ^ . f ints
+}
+
+// No frame: a malformed one (FRAME_ENCODING_ERROR for the caller). The
+// half-parsed frame is released by its binding.
+@ __qf_fail → QuicFrame { ^ @ QuicFrame { # s 0 } }
 
 // Read a varint at `. f next`, advancing; -1 when truncated.
-@ __qf_vi * QuicFrame f ( Vec u ) buf → i {
+@ __qf_vi * QuicFrameImpl f ( Vec u ) buf → i {
     : i v ( quic_varint_read buf . f next )
     ? < v 0 { ^ -1 } {}
     = . f next + . f next ( quic_varint_len_at buf . f next )
@@ -143,7 +200,7 @@ $ `stdlib/std/quic_varint.nu`
 }
 
 // Copy `n` bytes at `. f next` into `. f bytes`, advancing; F if short.
-@ __qf_take * QuicFrame f ( Vec u ) buf i n → b {
+@ __qf_take * QuicFrameImpl f ( Vec u ) buf i n → b {
     ? | < n 0 > + . f next n ( vec_len [u] buf ) { ^ F } {}
     ? > n 0 {
         : *u p ( vec_data [u] buf )
@@ -153,35 +210,36 @@ $ `stdlib/std/quic_varint.nu`
     ^ T
 }
 
-@ quic_frame_parse ( Vec u ) buf i off → *QuicFrame {
+@ quic_frame_parse ( Vec u ) buf i off → QuicFrame {
     : i n ( vec_len [u] buf )
-    ? | < off 0 >= off n { ^ # *QuicFrame 0 } {}
+    ? | < off 0 >= off n { ^ ( __qf_fail ) } {}
     : i ft ( quic_varint_read buf off )
-    ? < ft 0 { ^ # *QuicFrame 0 } {}
-    : *QuicFrame f ( __qf_new ft )
+    ? < ft 0 { ^ ( __qf_fail ) } {}
+    : QuicFrame h ( __qf_new ft )
+    : *QuicFrameImpl f ( __QuicFrame_ptr h )
     = . f next + off ( quic_varint_len_at buf off )
     ? == ft 0 {
         // PADDING: swallow the whole run so a 1200-byte Initial is one frame.
         ~ & < . f next n == ( __qf_bget buf . f next ) 0 { = . f next + . f next 1 }
-        ^ f
+        ^ h
     } {}
-    ? == ft 1 { ^ f } {}
+    ? == ft 1 { ^ h } {}
     ? | == ft 2 == ft 3 {
         = . f a ( __qf_vi f buf )
         = . f b ( __qf_vi f buf )
         : i count ( __qf_vi f buf )
         = . f c ( __qf_vi f buf )
-        ? | | | < . f a 0 < . f b 0 < count 0 < . f c 0 { ^ ( __qf_fail f ) } {}
-        ? > . f c . f a { ^ ( __qf_fail f ) } {}
+        ? | | | < . f a 0 < . f b 0 < count 0 < . f c 0 { ^ ( __qf_fail ) } {}
+        ? > . f c . f a { ^ ( __qf_fail ) } {}
         : ~ i smallest - . f a . f c
         : ~ i i 0
         ~ < i count {
             : i gap ( __qf_vi f buf )
             : i len ( __qf_vi f buf )
-            ? | < gap 0 < len 0 { ^ ( __qf_fail f ) } {}
+            ? | < gap 0 < len 0 { ^ ( __qf_fail ) } {}
             // Each range must fit below the previous one (§19.3.1).
             : i largest_next - - smallest gap 2
-            ? < largest_next len { ^ ( __qf_fail f ) } {}
+            ? < largest_next len { ^ ( __qf_fail ) } {}
             = smallest - largest_next len
             ( vec_push [i] . f ints gap )
             ( vec_push [i] . f ints len )
@@ -192,105 +250,105 @@ $ `stdlib/std/quic_varint.nu`
             : ~ i e 0
             ~ < e 3 {
                 : i v ( __qf_vi f buf )
-                ? < v 0 { ^ ( __qf_fail f ) } {}
+                ? < v 0 { ^ ( __qf_fail ) } {}
                 ( vec_push [i] . f ints v )
                 = e + e 1
             }
         } {}
-        ^ f
+        ^ h
     } {}
     ? == ft 4 {
         = . f a ( __qf_vi f buf )
         = . f b ( __qf_vi f buf )
         = . f c ( __qf_vi f buf )
-        ? | | < . f a 0 < . f b 0 < . f c 0 { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? | | < . f a 0 < . f b 0 < . f c 0 { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? == ft 5 {
         = . f a ( __qf_vi f buf )
         = . f b ( __qf_vi f buf )
-        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? == ft 6 {
         = . f a ( __qf_vi f buf )
         = . f b ( __qf_vi f buf )
-        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail f ) } {}
-        ? > + . f a . f b ( quic_varint_max ) { ^ ( __qf_fail f ) } {}
-        ? ! ( __qf_take f buf . f b ) { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
+        ? > + . f a . f b ( quic_varint_max ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take f buf . f b ) { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? == ft 7 {
         : i tl ( __qf_vi f buf )
-        ? <= tl 0 { ^ ( __qf_fail f ) } {}
-        ? ! ( __qf_take f buf tl ) { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? <= tl 0 { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take f buf tl ) { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? ( quic_frame_is_stream ft ) {
         = . f a ( __qf_vi f buf )
-        ? < . f a 0 { ^ ( __qf_fail f ) } {}
-        ? != & ft 4 0 { = . f b ( __qf_vi f buf ) ? < . f b 0 { ^ ( __qf_fail f ) } {} } {}
+        ? < . f a 0 { ^ ( __qf_fail ) } {}
+        ? != & ft 4 0 { = . f b ( __qf_vi f buf ) ? < . f b 0 { ^ ( __qf_fail ) } {} } {}
         : ~ i len - n . f next
-        ? != & ft 2 0 { = len ( __qf_vi f buf ) ? < len 0 { ^ ( __qf_fail f ) } {} } {}
+        ? != & ft 2 0 { = len ( __qf_vi f buf ) ? < len 0 { ^ ( __qf_fail ) } {} } {}
         = . f c len
         = . f d ? != & ft 1 0 1 0
-        ? > + . f b len ( quic_varint_max ) { ^ ( __qf_fail f ) } {}
-        ? ! ( __qf_take f buf len ) { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? > + . f b len ( quic_varint_max ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take f buf len ) { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? | | == ft 16 == ft 20 == ft 18 {
         = . f a ( __qf_vi f buf )
-        ? < . f a 0 { ^ ( __qf_fail f ) } {}
+        ? < . f a 0 { ^ ( __qf_fail ) } {}
         ? == ft 18 { = . f b 1 } {}
-        ^ f
+        ^ h
     } {}
     ? | | == ft 19 == ft 22 == ft 23 {
         = . f a ( __qf_vi f buf )
-        ? < . f a 0 { ^ ( __qf_fail f ) } {}
+        ? < . f a 0 { ^ ( __qf_fail ) } {}
         = . f b ? == ft 22 1 0
-        ^ f
+        ^ h
     } {}
     ? | == ft 17 == ft 21 {
         = . f a ( __qf_vi f buf )
         = . f b ( __qf_vi f buf )
-        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? == ft 24 {
         = . f a ( __qf_vi f buf )
         = . f b ( __qf_vi f buf )
-        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail f ) } {}
-        ? > . f b . f a { ^ ( __qf_fail f ) } {}
-        ? >= . f next n { ^ ( __qf_fail f ) } {}
+        ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
+        ? > . f b . f a { ^ ( __qf_fail ) } {}
+        ? >= . f next n { ^ ( __qf_fail ) } {}
         : i cl ( __qf_bget buf . f next )
         = . f next + . f next 1
-        ? | < cl 1 > cl 20 { ^ ( __qf_fail f ) } {}
+        ? | < cl 1 > cl 20 { ^ ( __qf_fail ) } {}
         = . f c cl
-        ? ! ( __qf_take f buf + cl 16 ) { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? ! ( __qf_take f buf + cl 16 ) { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? == ft 25 {
         = . f a ( __qf_vi f buf )
-        ? < . f a 0 { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? < . f a 0 { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? | == ft 26 == ft 27 {
-        ? ! ( __qf_take f buf 8 ) { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? ! ( __qf_take f buf 8 ) { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
     ? | == ft 28 == ft 29 {
         = . f a ( __qf_vi f buf )
-        ? < . f a 0 { ^ ( __qf_fail f ) } {}
-        ? == ft 28 { = . f b ( __qf_vi f buf ) ? < . f b 0 { ^ ( __qf_fail f ) } {} } { = . f c 1 }
+        ? < . f a 0 { ^ ( __qf_fail ) } {}
+        ? == ft 28 { = . f b ( __qf_vi f buf ) ? < . f b 0 { ^ ( __qf_fail ) } {} } { = . f c 1 }
         : i rl ( __qf_vi f buf )
-        ? < rl 0 { ^ ( __qf_fail f ) } {}
-        ? ! ( __qf_take f buf rl ) { ^ ( __qf_fail f ) } {}
-        ^ f
+        ? < rl 0 { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take f buf rl ) { ^ ( __qf_fail ) } {}
+        ^ h
     } {}
-    ? == ft 30 { ^ f } {}
+    ? == ft 30 { ^ h } {}
     // Anything else — including DATAGRAM (0x30/0x31), which this
     // endpoint has not negotiated — is unknown here.
-    ^ ( __qf_fail f )
+    ^ ( __qf_fail )
 }
 
 @ __qf_bget ( Vec u ) v i k → i {

@@ -338,19 +338,20 @@ $ `stdlib/std/quic_frame.nu`
     ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 }
 }
 
-@ quic_rec_on_ack * QuicRecovery r i space * QuicFrame ack i now → i {
-    : i largest . ack a
+@ quic_rec_on_ack * QuicRecovery r i space QuicFrame ack i now → i {
+    : i largest ( quic_frame_a ack )
     ? > largest ( __qr_largest_sent r space ) { ^ -1 } {}
     // Collect the acknowledged ranges as [lo, hi] pairs.
     : ( Vec i ) rng ( vec_new [i] )
     : ~ i hi largest
-    : ~ i lo - largest . ack c
+    : ~ i lo - largest ( quic_frame_c ack )
     ( vec_push [i] rng lo ) ( vec_push [i] rng hi )
     : ~ i k 0
-    : i nints ? != . ack d 0 - ( vec_len [i] . ack ints ) 3 ( vec_len [i] . ack ints )
+    : ( Vec i ) ints ( quic_frame_ints ack )
+    : i nints ? != ( quic_frame_d ack ) 0 - ( vec_len [i] ints ) 3 ( vec_len [i] ints )
     ~ < + k 1 nints {
-        : i gap ( __qr_ri . ack ints k )
-        : i len ( __qr_ri . ack ints + k 1 )
+        : i gap ( __qr_ri ints k )
+        : i len ( __qr_ri ints + k 1 )
         = hi - - lo gap 2
         = lo - hi len
         ? < lo 0 { ^ -1 } {}
@@ -389,7 +390,7 @@ $ `stdlib/std/quic_frame.nu`
     ( vec_free [i] rng )
     // RTT sample only when the largest acked is newly acked and ack-eliciting.
     ? & >= largest_pkt_time 0 != largest_pkt_ae 0 {
-        : i delay_ms / << . ack b . r ack_delay_exp 1000
+        : i delay_ms / << ( quic_frame_b ack ) . r ack_delay_exp 1000
         ( __qr_update_rtt r - now largest_pkt_time delay_ms )
     } {}
     ? != newly_ae 0 { = . r pto_count 0 } {}

@@ -1063,41 +1063,41 @@ $ `stdlib/std/quic_recovery.nu`
 // ── receive: frames ──────────────────────────────────────────────
 
 // Returns 0 to continue, 1 when the connection has failed.
-@ __qc_on_stream_frame * QuicConn c * QuicFrame f → i {
-    : i id . f a
+@ __qc_on_stream_frame * QuicConn c QuicFrame f → i {
+    : i id ( quic_frame_a f )
     ? ( __qc_is_local c id ) {
-        ? ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) . f ftype ) ^ 1 } {}
-        ? >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) . f ftype ) ^ 1 } {}
+        ? ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
+        ? >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
     } {}
     : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
     ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
-    ? == # i . s rx 0 { ( __qc_fail c 0 ( quic_err_stream_state ) . f ftype ) ^ 1 } {}
-    : i off . f b
-    : i len . f c
+    ? == # i . s rx 0 { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
+    : i off ( quic_frame_b f )
+    : i len ( quic_frame_c f )
     : i end + off len
     // §4.1 flow control on the stream, then on the connection
-    ? > end . s rx_max_data { ( __qc_fail c 0 ( quic_err_flow_control ) . f ftype ) ^ 1 } {}
+    ? > end . s rx_max_data { ( __qc_fail c 0 ( quic_err_flow_control ) ( quic_frame_type f ) ) ^ 1 } {}
     : i prev_high ( quic_rxbuf_highest . s rx )
     ? > end prev_high {
         : i grow - end prev_high
-        ? > + . c data_recv grow . c max_data_local { ( __qc_fail c 0 ( quic_err_flow_control ) . f ftype ) ^ 1 } {}
+        ? > + . c data_recv grow . c max_data_local { ( __qc_fail c 0 ( quic_err_flow_control ) ( quic_frame_type f ) ) ^ 1 } {}
         = . c data_recv + . c data_recv grow
     } {}
     // final size consistency (§4.5)
-    ? != . f d 0 {
-        ? & >= . s rx_fin_off 0 != . s rx_fin_off end { ( __qc_fail c 0 ( quic_err_final_size ) . f ftype ) ^ 1 } {}
-        ? < end prev_high { ( __qc_fail c 0 ( quic_err_final_size ) . f ftype ) ^ 1 } {}
+    ? != ( quic_frame_d f ) 0 {
+        ? & >= . s rx_fin_off 0 != . s rx_fin_off end { ( __qc_fail c 0 ( quic_err_final_size ) ( quic_frame_type f ) ) ^ 1 } {}
+        ? < end prev_high { ( __qc_fail c 0 ( quic_err_final_size ) ( quic_frame_type f ) ) ^ 1 } {}
         = . s rx_fin_off end
     } {
-        ? & >= . s rx_fin_off 0 > end . s rx_fin_off { ( __qc_fail c 0 ( quic_err_final_size ) . f ftype ) ^ 1 } {}
+        ? & >= . s rx_fin_off 0 > end . s rx_fin_off { ( __qc_fail c 0 ( quic_err_final_size ) ( quic_frame_type f ) ) ^ 1 } {}
     }
-    ? ! ( quic_rxbuf_add . s rx off . f bytes ) { ( __qc_fail c 0 ( quic_err_flow_control ) . f ftype ) ^ 1 } {}
-    ? | > ( quic_rxbuf_avail . s rx ) 0 != . f d 0 { ( __qc_mark_readable c s ) } {}
+    ? ! ( quic_rxbuf_add . s rx off ( quic_frame_bytes f ) ) { ( __qc_fail c 0 ( quic_err_flow_control ) ( quic_frame_type f ) ) ^ 1 } {}
+    ? | > ( quic_rxbuf_avail . s rx ) 0 != ( quic_frame_d f ) 0 { ( __qc_mark_readable c s ) } {}
     ^ 0
 }
 
-@ __qc_on_frame * QuicConn c i space * QuicFrame f → i {
-    : i ft . f ftype
+@ __qc_on_frame * QuicConn c i space QuicFrame f → i {
+    : i ft ( quic_frame_type f )
     ? | == ft 0 == ft 1 { ^ 0 } {}
     ? | == ft 2 == ft 3 {
         ? < ( quic_rec_on_ack . c rec space f . c now ) 0 { ( __qc_fail c 0 10 ft ) ^ 1 } {}
@@ -1109,7 +1109,7 @@ $ `stdlib/std/quic_recovery.nu`
         ^ 0
     } {}
     ? == ft 6 {
-        : i rc ? != . c is_client 0 ( quic_tls_cli_crypto . c tlsc space . f a . f bytes ) ( quic_tls_srv_crypto . c tls space . f a . f bytes )
+        : i rc ? != . c is_client 0 ( quic_tls_cli_crypto . c tlsc space ( quic_frame_a f ) ( quic_frame_bytes f ) ) ( quic_tls_srv_crypto . c tls space ( quic_frame_a f ) ( quic_frame_bytes f ) )
         ? != rc 0 { ( __qc_fail c 0 rc ft ) ^ 1 } {}
         ( __qc_tls_pump c )
         ^ ? >= . c state 2 1 0
@@ -1118,20 +1118,20 @@ $ `stdlib/std/quic_recovery.nu`
         // NEW_TOKEN: a server may not receive one (§19.7); a client keeps
         // the newest for a later connection to this server.
         ? == . c is_client 0 { ( __qc_fail c 0 10 ft ) ^ 1 } {}
-        ? == ( vec_len [u] . f bytes ) 0 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
+        ? == ( vec_len [u] ( quic_frame_bytes f ) ) 0 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
         ( vec_clear [u] . c new_token )
-        ( bytes_extend_bytes . c new_token . f bytes )
+        ( bytes_extend_bytes . c new_token ( quic_frame_bytes f ) )
         ^ 0
     } {}
     ? ( quic_frame_is_stream ft ) { ^ ( __qc_on_stream_frame c f ) } {}
     ? == ft 4 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         ? & ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
         ? == # i . s rx 0 { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
-        : i final . f c
+        : i final ( quic_frame_c f )
         ? & >= . s rx_fin_off 0 != . s rx_fin_off final { ( __qc_fail c 0 ( quic_err_final_size ) ft ) ^ 1 } {}
         ? < final ( quic_rxbuf_highest . s rx ) { ( __qc_fail c 0 ( quic_err_final_size ) ft ) ^ 1 } {}
         ? > final . s rx_max_data { ( __qc_fail c 0 ( quic_err_flow_control ) ft ) ^ 1 } {}
@@ -1139,57 +1139,57 @@ $ `stdlib/std/quic_recovery.nu`
         ? > + . c data_recv grow . c max_data_local { ( __qc_fail c 0 ( quic_err_flow_control ) ft ) ^ 1 } {}
         = . c data_recv + . c data_recv grow
         = . s rx_fin_off final
-        ? < . s rx_reset_err 0 { = . s rx_reset_err . f b } {}
+        ? < . s rx_reset_err 0 { = . s rx_reset_err ( quic_frame_b f ) } {}
         ( __qc_mark_readable c s )
         ^ 0
     } {}
     ? == ft 5 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         // receive-only for us: the peer's unidirectional streams
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id ? ( __qc_stream_is_bidi id ) . c next_local_bidi . c next_local_uni { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
         ? < . s tx_stop_err 0 {
-            = . s tx_stop_err . f b
-            ? < . s tx_reset_err 0 { = . s tx_reset_err . f b = . s tx_reset_sent 0 ( vec_clear [u] . s tx_buf ) } {}
+            = . s tx_stop_err ( quic_frame_b f )
+            ? < . s tx_reset_err 0 { = . s tx_reset_err ( quic_frame_b f ) = . s tx_reset_sent 0 ( vec_clear [u] . s tx_buf ) } {}
             ( __qc_mark_readable c s )
         } {}
         ^ 0
     } {}
-    ? == ft 16 { ? > . f a . c max_data_peer { = . c max_data_peer . f a } {} ^ 0 } {}
+    ? == ft 16 { ? > ( quic_frame_a f ) . c max_data_peer { = . c max_data_peer ( quic_frame_a f ) } {} ^ 0 } {}
     ? == ft 17 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id ? ( __qc_stream_is_bidi id ) . c next_local_bidi . c next_local_uni { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
-        ? > . f b . s tx_max_data { = . s tx_max_data . f b } {}
+        ? > ( quic_frame_b f ) . s tx_max_data { = . s tx_max_data ( quic_frame_b f ) } {}
         ^ 0
     } {}
     ? | == ft 18 == ft 19 {
-        ? > . f a 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
-        ? == ft 18 { ? > . f a . c max_streams_bidi_peer { = . c max_streams_bidi_peer . f a } {} }
-        { ? > . f a . c max_streams_uni_peer { = . c max_streams_uni_peer . f a } {} }
+        ? > ( quic_frame_a f ) 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
+        ? == ft 18 { ? > ( quic_frame_a f ) . c max_streams_bidi_peer { = . c max_streams_bidi_peer ( quic_frame_a f ) } {} }
+        { ? > ( quic_frame_a f ) . c max_streams_uni_peer { = . c max_streams_uni_peer ( quic_frame_a f ) } {} }
         ^ 0
     } {}
     ? == ft 20 { ^ 0 } {}
     ? == ft 21 {
-        : i id . f a
+        : i id ( quic_frame_a f )
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ^ 0
     } {}
     ? | == ft 22 == ft 23 {
-        ? > . f a 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
+        ? > ( quic_frame_a f ) 1152921504606846976 { ( __qc_fail c 0 ( quic_err_frame_encoding ) ft ) ^ 1 } {}
         ^ 0
     } {}
     ? == ft 24 {
         // the peer chose a zero-length connection id: it may not then send us more
         ? == ( vec_len [u] . c dcid ) 0 { ( __qc_fail c 0 10 ft ) ^ 1 } {}
-        : i seq . f a
-        : i rpt . f b
-        : i cl . f c
-        : ( Vec u ) cid ( bytes_slice . f bytes 0 cl )
+        : i seq ( quic_frame_a f )
+        : i rpt ( quic_frame_b f )
+        : i cl ( quic_frame_c f )
+        : ( Vec u ) cid ( bytes_slice ( quic_frame_bytes f ) 0 cl )
         // known sequence number: must repeat the same id
         : ~ i k 0
         : ~ b known F
@@ -1235,7 +1235,7 @@ $ `stdlib/std/quic_recovery.nu`
         ^ 0
     } {}
     ? == ft 25 {
-        : i seq . f a
+        : i seq ( quic_frame_a f )
         ? >= seq . c cid_next_seq { ( __qc_fail c 0 10 ft ) ^ 1 } {}
         // retiring the id this very packet arrived on is a violation
         : ~ i k 0
@@ -1258,7 +1258,7 @@ $ `stdlib/std/quic_recovery.nu`
         }
         ^ 0
     } {}
-    ? == ft 26 { ( quic_push_path_response . c ctl2 . f bytes ) ^ 0 } {}
+    ? == ft 26 { ( quic_push_path_response . c ctl2 ( quic_frame_bytes f ) ) ^ 0 } {}
     ? == ft 27 { ^ 0 } {}
     ? | == ft 28 == ft 29 {
         // the peer is closing: drain (§10.2.2); its code and reason are
@@ -1266,12 +1266,12 @@ $ `stdlib/std/quic_recovery.nu`
         ? < . c state 3 {
             = . c state 3
             = . c close_deadline + . c now * 3 ( quic_rec_pto . c rec )
-            = . c close_code . f a
+            = . c close_code ( quic_frame_a f )
             = . c close_app ? == ft 29 1 0
-            = . c close_frame_type ? == ft 28 . f b 0
+            = . c close_frame_type ? == ft 28 ( quic_frame_b f ) 0
             = . c peer_closed 1
             ( vec_clear [u] . c close_reason )
-            ( bytes_extend_bytes . c close_reason . f bytes )
+            ( bytes_extend_bytes . c close_reason ( quic_frame_bytes f ) )
         } {}
         ^ 1
     } {}
@@ -1454,18 +1454,18 @@ $ `stdlib/std/quic_recovery.nu`
     : ~ i ack_eliciting 0
     : ~ i stop 0
     ~ & == stop 0 < p ( vec_len [u] payload ) {
-        : *QuicFrame f ( quic_frame_parse payload p )
-        ? == # i f 0 {
+        : QuicFrame f ( quic_frame_parse payload p )
+        ? == 0 # i . f ctl {
             : i ft ( quic_varint_read payload p )
             ( __qc_fail c 0 ( quic_err_frame_encoding ) ? < ft 0 0 ft )
             = stop 1
         } {
-            ? ! ( quic_frame_allowed . f ftype ptype ) {
-                ( __qc_fail c 0 10 . f ftype )
+            ? ! ( quic_frame_allowed ( quic_frame_type f ) ptype ) {
+                ( __qc_fail c 0 10 ( quic_frame_type f ) )
                 = stop 1
             } {
-                ? ( quic_frame_is_ack_eliciting . f ftype ) { = ack_eliciting 1 } {}
-                = p . f next
+                ? ( quic_frame_is_ack_eliciting ( quic_frame_type f ) ) { = ack_eliciting 1 } {}
+                = p ( quic_frame_next f )
                 ? != ( __qc_on_frame c space f ) 0 { = stop 1 } {}
             }
             ( quic_frame_free f )
@@ -1578,15 +1578,15 @@ $ `stdlib/std/quic_recovery.nu`
     : ~ i used 0
     : ~ i p 0
     ~ < p ( vec_len [u] src ) {
-        : *QuicFrame f ( quic_frame_parse src p )
-        ? == # i f 0 { : b _t ( vec_set_len [u] src p ) = p ( vec_len [u] src ) } {
-            : i fl - . f next p
+        : QuicFrame f ( quic_frame_parse src p )
+        ? == 0 # i . f ctl { : b _t ( vec_set_len [u] src p ) = p ( vec_len [u] src ) } {
+            : i fl - ( quic_frame_next f ) p
             ? > fl - room used { ( quic_frame_free f ) = p ( vec_len [u] src ) } {
-                : ( Vec u ) piece ( bytes_slice src p . f next )
+                : ( Vec u ) piece ( bytes_slice src p ( quic_frame_next f ) )
                 ( bytes_extend_bytes dst piece )
                 ( vec_free [u] piece )
                 = used + used fl
-                = p . f next
+                = p ( quic_frame_next f )
                 ( quic_frame_free f )
             }
         }
