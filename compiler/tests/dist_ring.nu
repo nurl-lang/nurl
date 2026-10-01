@@ -28,7 +28,7 @@ $ `stdlib/dist/ring.nu`
     ^ v
 }
 
-@ owner_seed * Ring r ( Vec u ) key ( Vec u ) a ( Vec u ) b ( Vec u ) c → i {
+@ owner_seed Ring r ( Vec u ) key ( Vec u ) a ( Vec u ) b ( Vec u ) c → i {
     ^ ?? ( ring_owner_pk r key ) {
         T pk → { : i s ? ( veq pk a ) 1 ? ( veq pk b ) 2 ? ( veq pk c ) 3 0 ( vec_free [u] pk ) s }
         F → 0
@@ -40,7 +40,7 @@ $ `stdlib/dist/ring.nu`
     : ( Vec u ) b ( mkpk 80 )
     : ( Vec u ) c ( mkpk 150 )
 
-    : *Ring r ( ring_new )
+    : Ring r ( ring_new )
     ( ring_add_member r a 64 )
     ( ring_add_member r b 64 )
     ( ring_add_member r c 64 )
@@ -94,7 +94,7 @@ $ `stdlib/dist/ring.nu`
         = j + j 1
     }
     // rebuild a reference 3-node ring to compare pre/post removal
-    : *Ring ref ( ring_new )
+    : Ring ref ( ring_new )
     ( ring_add_member ref a 64 ) ( ring_add_member ref b 64 ) ( ring_add_member ref c 64 )
     : ~ i m 0
     ~ < m 300 {

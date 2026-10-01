@@ -93,7 +93,7 @@ $ `src/census.nu`
     ( vec_free [u] hb )
 
     // ── roster folds a worker once (idempotent ring membership) ──
-    : *Ring ring ( ring_new )
+    : Ring ring ( ring_new )
     : *Roster r ( roster_new )
     : b first ( roster_add r ring pk 42 64 )
     : b dup ( roster_add r ring pk 42 64 )

@@ -95,7 +95,7 @@ $ `stdlib/dist/ring.nu`
 @ roster_count * Roster r → i { ^ ( vec_len [s] . r members ) }
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
-@ roster_add * Roster r * Ring ring ( Vec u ) pubkey i id i vnodes → b {
+@ roster_add * Roster r Ring ring ( Vec u ) pubkey i id i vnodes → b {
     ? ( roster_has r pubkey ) { ^ F } {}
     : *Member m # *Member ( nurl_alloc Z Member )
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )

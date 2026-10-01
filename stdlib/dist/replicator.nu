@@ -219,7 +219,7 @@ $ `stdlib/dist/ring.nu`
 // Is `self_pk` in the replica set for `key` (the R members clockwise from the
 // key's position)? A node uses this to decide whether to store / accept a
 // key's state.
-@ is_replica * Ring r ( Vec u ) key i nrep ( Vec u ) self_pk → b {
+@ is_replica Ring r ( Vec u ) key i nrep ( Vec u ) self_pk → b {
     : ( Vec s ) owners ( ring_owners r key nrep )
     : i n ( vec_len [s] owners )
     : ~ b found F : ~ i k 0
@@ -237,7 +237,7 @@ $ `stdlib/dist/ring.nu`
 
 // How many replicas a key actually has (≤ nrep, ≤ distinct members) — the
 // fan-out of a delta. O(R), independent of cluster size N.
-@ replica_fanout * Ring r ( Vec u ) key i nrep → i {
+@ replica_fanout Ring r ( Vec u ) key i nrep → i {
     : ( Vec s ) owners ( ring_owners r key nrep )
     : i n ( vec_len [s] owners )
     ( vec_free [s] owners )

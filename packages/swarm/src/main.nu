@@ -61,7 +61,7 @@ $ `work.nu`
 
 : Swarm {
     Transport transport
-    s ring  // *Ring
+    Ring ring
     s roster  // *Roster
     JobNode job
     ( Vec u ) self_pk
@@ -73,12 +73,12 @@ $ `work.nu`
 @ swarm_new RelayClient rc i id i role → *Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
-    : *Ring ring ( ring_new )
+    : Ring ring ( ring_new )
     : *Roster roster ( roster_new )
-    : JobNode jn ( job_node_new tr # s ring me id )
+    : JobNode jn ( job_node_new tr ring me id )
     : *Swarm sw # *Swarm ( nurl_alloc Z Swarm )
     = . sw transport tr
-    = . sw ring # s ring
+    = . sw ring ring
     = . sw roster # s roster
     = . sw job jn
     = . sw self_pk me
@@ -92,7 +92,7 @@ $ `work.nu`
 
 @ swarm_free sink * Swarm sw → v {
     ( job_node_free . sw job )
-    ( ring_free # *Ring . sw ring )
+    ( ring_free . sw ring )
     ( roster_free # *Roster . sw roster )
     ( transport_free . sw transport )
     ( vec_free [u] . sw self_pk )
@@ -116,7 +116,7 @@ $ `work.nu`
     // Only workers join the ring; a client announcing itself is reachable but
     // owns no keys.
     ? == . h role ( role_worker ) {
-        ( roster_add # *Roster . sw roster # *Ring . sw ring . h pubkey . h id ( swarm_vnodes ) )
+        ( roster_add # *Roster . sw roster . sw ring . h pubkey . h id ( swarm_vnodes ) )
         ( transport_add_peer . sw transport . h pubkey )
     } {}
     // Reply to a discovery request unless it is our own broadcast echoed back.

@@ -35,8 +35,7 @@
 //
 // A JobNode is a handle: every copy is the same node, and its last owner
 // releases it with its handlers and results (job_node_free is an early
-// release, optional). It shares the Transport it was given; the rings stay
-// the caller's and must outlive it.
+// release, optional). It shares the Transport and the rings it is given.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -169,7 +168,7 @@ $ `stdlib/core/rcbox.nu`
 // workers). Kinds without an entry route on the node's main ring.
 : JobKindRing {
     i kind
-    s ring  // *Ring (caller-owned; not freed here)
+    Ring ring  // shared with the caller
 }
 : JobResult {
     i task_id
@@ -177,13 +176,13 @@ $ `stdlib/core/rcbox.nu`
 }
 : JobNodeImpl {
     Transport transport  // shared with the caller
-    s ring  // *Ring     (caller-owned; not freed here)
+    Ring ring  // the main ring, shared with the caller
     ( Vec u ) self_pk
     i replica  // this node's stable replica id → unique task ids
     i next_task
     ( Vec s ) handlers  // *JobHandler
     ( Vec s ) results  // *JobResult (idempotent by task_id)
-    ( Vec s ) kind_rings  // *JobKindRing (per-kind routing domains)
+    ( Vec JobKindRing ) kind_rings  // per-kind routing domains
 }
 
 // A JobNode is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -199,9 +198,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ __JobNode_ptr JobNode h → *JobNodeImpl { ^ ( rcbox_ptr [JobNodeImpl] # i . h ctl ) }
 
-// Handlers, results and kind rings are raw blocks the Vecs only point at
-// (a handler block owns the closure stored into it): releasing them is the
-// node's own drop, run by its last owner (self_pk and the Vecs go after it).
+// Handlers and results are raw blocks the Vecs only point at (a handler
+// block owns the closure stored into it): releasing them is the node's own
+// drop, run by its last owner (the transport, the rings, self_pk and the
+// Vecs go after it).
 % Drop JobNodeImpl {
     @ drop JobNodeImpl n → v {
         : i hn ( vec_len [s] . n handlers )
@@ -223,27 +223,20 @@ $ `stdlib/core/rcbox.nu`
             ? != # i pp 0 { : *JobResult jr # *JobResult pp ( vec_free [u] . jr result ) ( nurl_free # s jr ) } {}
             = j + j 1
         }
-        : i kn ( vec_len [s] . n kind_rings )
-        : ~ i q 0
-        ~ < q kn {
-            : s pp ?? ( vec_get [s] . n kind_rings q ) { T x → x F → # s 0 }
-            ? != # i pp 0 { ( nurl_free pp ) } {}
-            = q + q 1
-        }
     }
 }
 
-@ job_node_new Transport transport s ring ( Vec u ) self_pk i replica → JobNode {
+@ job_node_new Transport transport Ring ring ( Vec u ) self_pk i replica → JobNode {
     : i n__box ( rcbox_zero [JobNodeImpl] )
     : *JobNodeImpl n ( rcbox_ptr [JobNodeImpl] n__box )
     = . n transport ( Transport_share transport )
-    = . n ring ring
+    = . n ring ( Ring_share ring )
     = . n self_pk ( __job_cpy self_pk )
     = . n replica replica
     = . n next_task 0
     = . n handlers ( vec_new [s] )
     = . n results ( vec_new [s] )
-    = . n kind_rings ( vec_new [s] )
+    = . n kind_rings ( vec_new [JobKindRing] )
     ^ @ JobNode { # s n__box }
 }
 
@@ -268,40 +261,42 @@ $ `stdlib/core/rcbox.nu`
 // Scope a task kind to a routing ring (a capability domain): submit, ownership
 // and mid-flight forwarding for that kind all resolve against `ring` instead of
 // the node's main ring. EVERY node in the cluster must scope the same kind to
-// an equivalently-built ring, or forwarding re-homes across domains. The ring
-// is caller-owned (like the main ring) and must outlive the node. Setting a
-// kind twice replaces the ring (e.g. after rebuilding the domain on churn).
-@ job_set_ring JobNode n__h i kind s ring → v {
+// an equivalently-built ring, or forwarding re-homes across domains. The node
+// shares the ring (as it shares the main one). Setting a kind twice replaces
+// the ring (e.g. after rebuilding the domain on churn).
+@ job_set_ring JobNode n__h i kind Ring ring → v {
     : *JobNodeImpl n ( __JobNode_ptr n__h )
-    : i kn ( vec_len [s] . n kind_rings )
-    : ~ b done F : ~ i k 0
-    ~ & ! done < k kn {
-        : s pp ?? ( vec_get [s] . n kind_rings k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *JobKindRing kr # *JobKindRing pp
-            ? == . kr kind kind { = . kr ring ring = done T } {}
-        } {}
-        = k + k 1
+    : i at ( __job_kind_ring_idx n kind )
+    ? >= at 0 {
+        ( vec_set [JobKindRing] . n kind_rings at @ JobKindRing { kind ( Ring_share ring ) } )
+    } {
+        ( vec_push [JobKindRing] . n kind_rings @ JobKindRing { kind ( Ring_share ring ) } )
     }
-    ? ! done {
-        : *JobKindRing kr # *JobKindRing ( nurl_alloc Z JobKindRing )
-        = . kr kind kind
-        = . kr ring ring
-        ( vec_push [s] . n kind_rings # s kr )
-    } {}
 }
 
-// The routing ring for a kind: its scoped ring if set, else the main ring.
-@ __job_ring_for * JobNodeImpl n i kind → s {
-    : i kn ( vec_len [s] . n kind_rings )
-    : ~ s found # s 0
+// Index of a kind's scoped ring, or -1.
+@ __job_kind_ring_idx * JobNodeImpl n i kind → i {
+    : i kn ( vec_len [JobKindRing] . n kind_rings )
+    : ~ i found -1
     : ~ i k 0
-    ~ & == # i found 0 < k kn {
-        : s pp ?? ( vec_get [s] . n kind_rings k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *JobKindRing kr # *JobKindRing pp ? == . kr kind kind { = found . kr ring } {} } {}
+    ~ & < found 0 < k kn {
+        ?? ( vec_get [JobKindRing] . n kind_rings k ) {
+            T kr → { ? == . kr kind kind { = found k } {} }
+            F → {}
+        }
         = k + k 1
     }
-    ^ ? != # i found 0 found . n ring
+    ^ found
+}
+
+// The routing ring for a kind: its scoped ring if set, else the main ring
+// (another owner of it).
+@ __job_ring_for * JobNodeImpl n i kind → Ring {
+    ?? ( vec_get [JobKindRing] . n kind_rings ( __job_kind_ring_idx n kind ) ) {
+        T kr → { ^ ( Ring_share . kr ring ) }
+        F → {}
+    }
+    ^ ( Ring_share . n ring )
 }
 
 @ __job_handler * JobNodeImpl n i kind → s {
@@ -376,12 +371,12 @@ $ `stdlib/core/rcbox.nu`
 // The current owner pubkey for a key (from the live ring), copied or None.
 @ job_owner_pk JobNode n__h ( Vec u ) key → ?( Vec u ) {
     : *JobNodeImpl n ( __JobNode_ptr n__h )
-    ^ ( ring_owner_pk # *Ring . n ring key )
+    ^ ( ring_owner_pk . n ring key )
 }
 
 // Does this node own `key` on the given ring?
-@ __job_owns_ring * JobNodeImpl n s ring ( Vec u ) key → b {
-    : ?( Vec u ) o ( ring_owner_pk # *Ring ring key )
+@ __job_owns_ring * JobNodeImpl n Ring ring ( Vec u ) key → b {
+    : ?( Vec u ) o ( ring_owner_pk ring key )
     ^ ?? o { T pk → { : b same ( __job_veq pk . n self_pk ) ( vec_free [u] pk ) same } F → F }
 }
 
@@ -406,12 +401,12 @@ $ `stdlib/core/rcbox.nu`
 @ job_submit JobNode n__h i kind ( Vec u ) key ( Vec u ) payload → i {
     : *JobNodeImpl n ( __JobNode_ptr n__h )
     : i tid ( _job_unique n__h )
-    : s ring ( __job_ring_for n kind )
+    : Ring ring ( __job_ring_for n kind )
     ? ( __job_owns_ring n ring key ) {
         : ( Vec u ) res ( _job_execute n__h kind payload )
         ( __job_record n tid res )
     } {
-        : ?( Vec u ) o ( ring_owner_pk # *Ring ring key )
+        : ?( Vec u ) o ( ring_owner_pk ring key )
         ?? o {
             T owner → {
                 : ( Vec u ) msg ( job_build_submit tid kind . n self_pk key payload )
@@ -429,14 +424,14 @@ $ `stdlib/core/rcbox.nu`
 // to the submitter; otherwise FORWARD to the current owner (re-home).
 @ job_on_submit JobNode n__h JobMsg m → v {
     : *JobNodeImpl n ( __JobNode_ptr n__h )
-    : s ring ( __job_ring_for n . m kind )
+    : Ring ring ( __job_ring_for n . m kind )
     ? ( __job_owns_ring n ring . m key ) {
         : ( Vec u ) res ( _job_execute n__h . m kind . m payload )
         : ( Vec u ) reply ( job_build_result . m task_id res )
         ?? ( transport_send . n transport . m submitter reply ) { T _ → {} F _ → {} }
         ( vec_free [u] reply )
     } {
-        : ?( Vec u ) o ( ring_owner_pk # *Ring ring . m key )
+        : ?( Vec u ) o ( ring_owner_pk ring . m key )
         ?? o {
             T owner → {
                 ? ! ( __job_veq owner . n self_pk ) {

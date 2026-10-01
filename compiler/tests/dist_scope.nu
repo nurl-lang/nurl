@@ -29,7 +29,7 @@ $ `stdlib/dist/replicator.nu`
     : ( Vec u ) c ( mkpk 150 )
     : ( Vec u ) d ( mkpk 220 )
 
-    : *Ring r ( ring_new )
+    : Ring r ( ring_new )
     ( ring_add_member r a 32 ) ( ring_add_member r b 32 )
     ( ring_add_member r c 32 ) ( ring_add_member r d 32 )
 

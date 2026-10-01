@@ -38,7 +38,7 @@ $ `src/wasmkernel.nu`
     : ( Vec u ) self ( mkpk 3 )
     : ( Vec u ) none ( vec_new [u] )
     : *Roster r ( roster_new )
-    : *Ring ring ( ring_new )
+    : Ring ring ( ring_new )
 
     // Three workers join at t=1000.
     ( roster_add r ring a 1 8 0 1000 )

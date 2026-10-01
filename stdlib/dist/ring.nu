@@ -13,11 +13,17 @@
 // deterministic and well-distributed; ring points are kept sorted so lookup
 // is a binary search. Pure + offline-testable; the caller rebuilds the ring
 // from membership on join/leave (hysteresis to damp churn is a follow-up).
+//
+// A Ring is a handle: every copy is the same ring, and its last owner
+// releases it (ring_free is an early release, optional). The *RingPoint
+// pointers ring_owner / ring_owners hand out are the ring's, valid while
+// it lives and is not changed.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/sort.nu`
+$ `stdlib/core/rcbox.nu`
 
 @ __ring_cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
@@ -66,31 +72,53 @@ $ `stdlib/std/sort.nu`
     ( Vec u ) owner
 }
 
-: Ring {
+: RingImpl {
     ( Vec s ) points  // *RingPoint, sorted ascending by signed hash
 }
 
-@ ring_new → *Ring {
-    : *Ring r # *Ring ( nurl_alloc Z Ring )
-    = . r points ( vec_new [s] )
-    ^ r
+// A Ring is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Ring { s ctl }
+
+@ Ring_share Ring h → Ring { ^ @ Ring { # s ( rcbox_share # i . h ctl ) } }
+
+@ Ring_drop sink Ring h → v {
+    ( mem_forget h )
+    ( rcbox_release [RingImpl] # i . h ctl )
 }
 
-@ ring_free sink * Ring r → v {
-    : i n ( vec_len [s] . r points )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . r points k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *RingPoint p # *RingPoint pp ( vec_free [u] . p owner ) ( nurl_free # s p ) } {}
-        = k + k 1
+@ __Ring_ptr Ring h → *RingImpl { ^ ( rcbox_ptr [RingImpl] # i . h ctl ) }
+
+// The points are raw blocks the Vec only points at: releasing them is the
+// ring's own drop, run by its last owner (the Vec goes after it).
+% Drop RingImpl {
+    @ drop RingImpl r → v {
+        : i n ( vec_len [s] . r points )
+        : ~ i k 0
+        ~ < k n {
+            : s pp ?? ( vec_get [s] . r points k ) { T x → x F → # s 0 }
+            ? != # i pp 0 { : *RingPoint p # *RingPoint pp ( vec_free [u] . p owner ) ( nurl_free # s p ) } {}
+            = k + k 1
+        }
     }
-    ( vec_free [s] . r points )
-    ( nurl_free # s r )
 }
 
-@ ring_point_count * Ring r → i { ^ ( vec_len [s] . r points ) }
+@ ring_new → Ring {
+    : i r__box ( rcbox_zero [RingImpl] )
+    : *RingImpl r ( rcbox_ptr [RingImpl] r__box )
+    = . r points ( vec_new [s] )
+    ^ @ Ring { # s r__box }
+}
 
-@ __ring_sort * Ring r → v {
+// Let go of `r` now rather than at the end of its owner's scope.
+@ ring_free sink Ring r → v {}
+
+@ ring_point_count Ring r__h → i {
+    : *RingImpl r ( __Ring_ptr r__h )
+    ^ ( vec_len [s] . r points )
+}
+
+@ __ring_sort * RingImpl r → v {
     ( sort_by [s] . r points \ s a s b → i {
         : *RingPoint pa # *RingPoint a
         : *RingPoint pb # *RingPoint b
@@ -103,7 +131,8 @@ $ `stdlib/std/sort.nu`
 }
 
 // Place a member at `vnodes` points on the ring.
-@ ring_add_member * Ring r ( Vec u ) pubkey i vnodes → v {
+@ ring_add_member Ring r__h ( Vec u ) pubkey i vnodes → v {
+    : *RingImpl r ( __Ring_ptr r__h )
     : ~ i v 0
     ~ < v vnodes {
         : *RingPoint p # *RingPoint ( nurl_alloc Z RingPoint )
@@ -116,7 +145,8 @@ $ `stdlib/std/sort.nu`
 }
 
 // Remove all of a member's points (keys it owned re-home clockwise).
-@ ring_remove_member * Ring r ( Vec u ) pubkey → v {
+@ ring_remove_member Ring r__h ( Vec u ) pubkey → v {
+    : *RingImpl r ( __Ring_ptr r__h )
     : ( Vec s ) keep ( vec_new [s] )
     : i n ( vec_len [s] . r points )
     : ~ i k 0
@@ -133,7 +163,7 @@ $ `stdlib/std/sort.nu`
 }
 
 // First point index with hash >= kh (binary search), wrapping to 0.
-@ __ring_first_idx * Ring r i kh → i {
+@ __ring_first_idx * RingImpl r i kh → i {
     : i n ( vec_len [s] . r points )
     : ~ i lo 0
     : ~ i hi n
@@ -147,7 +177,8 @@ $ `stdlib/std/sort.nu`
 }
 
 // The *RingPoint owning `key` (0 on an empty ring). Borrowed (ring-owned).
-@ ring_owner * Ring r ( Vec u ) key → s {
+@ ring_owner Ring r__h ( Vec u ) key → s {
+    : *RingImpl r ( __Ring_ptr r__h )
     : i n ( vec_len [s] . r points )
     ? == n 0 { ^ # s 0 } {}
     : i kh ( __ring_hash key )
@@ -156,8 +187,8 @@ $ `stdlib/std/sort.nu`
 }
 
 // Owner pubkey for `key`, copied (caller frees). None on an empty ring.
-@ ring_owner_pk * Ring r ( Vec u ) key → ?( Vec u ) {
-    : s pp ( ring_owner r key )
+@ ring_owner_pk Ring r__h ( Vec u ) key → ?( Vec u ) {
+    : s pp ( ring_owner r__h key )
     ? == # i pp 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : *RingPoint p # *RingPoint pp
     ^ @ ?( Vec u ) { T ( __ring_cpy . p owner ) }
@@ -177,7 +208,8 @@ $ `stdlib/std/sort.nu`
 // The replica set for `key`: up to `nrep` DISTINCT owners clockwise from the
 // primary. Returns borrowed *RingPoint pointers (ring-owned); free only the
 // container with vec_free [s].
-@ ring_owners * Ring r ( Vec u ) key i nrep → ( Vec s ) {
+@ ring_owners Ring r__h ( Vec u ) key i nrep → ( Vec s ) {
+    : *RingImpl r ( __Ring_ptr r__h )
     : ( Vec s ) out ( vec_new [s] )
     : i n ( vec_len [s] . r points )
     ? == n 0 { ^ out } {}

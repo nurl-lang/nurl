@@ -41,7 +41,7 @@ $ `src/census.nu`
     ( hello_free hl ) ( vec_free [u] legacy ) ( vec_free [u] trunc )
 
     // ── roster: caps recorded, counted by mask ────────────────────
-    : *Ring ring ( ring_new )
+    : Ring ring ( ring_new )
     : *Roster r ( roster_new )
     : ( Vec u ) a ( mkpk 10 )
     : ( Vec u ) b ( mkpk 60 )

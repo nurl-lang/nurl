@@ -67,8 +67,8 @@ $ `cudakernel.nu`
 
 : Swarm {
     Transport transport
-    s ring  // *Ring
-    s gpu_ring  // *Ring — the GPU capability domain (cap_gpu workers only)
+    Ring ring
+    Ring gpu_ring  // the GPU capability domain (cap_gpu workers only)
     s roster  // *Roster
     JobNode job
     ( Vec u ) self_pk
@@ -83,21 +83,21 @@ $ `cudakernel.nu`
 @ swarm_new RelayClient rc i id i role i caps s token → *Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
-    : *Ring ring ( ring_new )
-    : *Ring gring ( ring_new )
+    : Ring ring ( ring_new )
+    : Ring gring ( ring_new )
     : *Roster roster ( roster_new )
-    : JobNode jn ( job_node_new tr # s ring me id )
+    : JobNode jn ( job_node_new tr ring me id )
     // GPU wasm chunks route/own/forward on the GPU capability ring — every
     // node scopes the kind the same way, so mid-flight re-homing stays inside
     // the domain (dist/job job_set_ring).
-    ( job_set_ring jn ( kind_wasm_gpu ) # s gring )
+    ( job_set_ring jn ( kind_wasm_gpu ) gring )
     // Block seeds must land on the SAME worker as the compute chunk that
     // references them: same ring, same key -> same owner.
-    ( job_set_ring jn ( kind_blob ) # s gring )
+    ( job_set_ring jn ( kind_blob ) gring )
     : *Swarm sw # *Swarm ( nurl_alloc Z Swarm )
     = . sw transport tr
-    = . sw ring # s ring
-    = . sw gpu_ring # s gring
+    = . sw ring ring
+    = . sw gpu_ring gring
     = . sw roster # s roster
     = . sw job jn
     = . sw self_pk me
@@ -116,8 +116,8 @@ $ `cudakernel.nu`
 
 @ swarm_free sink * Swarm sw → v {
     ( job_node_free . sw job )
-    ( ring_free # *Ring . sw ring )
-    ( ring_free # *Ring . sw gpu_ring )
+    ( ring_free . sw ring )
+    ( ring_free . sw gpu_ring )
     ( roster_free # *Roster . sw roster )
     ( transport_free . sw transport )
     ( vec_free [u] . sw self_pk )
@@ -149,10 +149,10 @@ $ `cudakernel.nu`
         // Every HELLO — first or heartbeat — refreshes the member's liveness
         // stamp; swarm_expire evicts the ones that stop arriving.
         ( roster_touch # *Roster . sw roster . h pubkey ( now_ms ) )
-        ? ( roster_add # *Roster . sw roster # *Ring . sw ring . h pubkey . h id ( swarm_vnodes ) . h caps ( now_ms ) ) {
+        ? ( roster_add # *Roster . sw roster . sw ring . h pubkey . h id ( swarm_vnodes ) . h caps ( now_ms ) ) {
             // A newly-heard GPU-capable worker also joins the GPU domain ring
             // (idempotent via the roster gate — a re-heard HELLO adds nothing).
-            ? == & . h caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member # *Ring . sw gpu_ring . h pubkey ( swarm_vnodes ) ) } {}
+            ? == & . h caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member . sw gpu_ring . h pubkey ( swarm_vnodes ) ) } {}
             // ring changed -> chunk keys may re-home; block seeds recorded
             // under the old epoch are stale and will re-seed once
             = . sw epoch + . sw epoch 1
@@ -184,8 +184,8 @@ $ `cudakernel.nu`
     ~ < k n {
         ?? ( vec_get [( Vec u )] gone k ) {
             T pk → {
-                ( ring_remove_member # *Ring . sw ring pk )
-                ( ring_remove_member # *Ring . sw gpu_ring pk )
+                ( ring_remove_member . sw ring pk )
+                ( ring_remove_member . sw gpu_ring pk )
                 ( vec_free [u] pk )
             }
             F → {}
@@ -466,13 +466,13 @@ $ `cudakernel.nu`
 // empty ring). GPU chunks resolve against the capability ring, everything else
 // against the general one — the same rule dist/job dispatches by.
 @ __cj_owner * Swarm sw i kind ( Vec u ) key → ( Vec u ) {
-    : *Ring r ? == kind ( kind_wasm_gpu ) # *Ring . sw gpu_ring # *Ring . sw ring
+    : Ring r ? == kind ( kind_wasm_gpu ) . sw gpu_ring . sw ring
     ^ ?? ( ring_owner_pk r key ) { T pk → pk F → ( vec_new [u] ) }
 }
 
 // Does the ring `kind` routes on still have anyone in it?
 @ __cj_ring_empty * Swarm sw i kind → b {
-    : *Ring r ? == kind ( kind_wasm_gpu ) # *Ring . sw gpu_ring # *Ring . sw ring
+    : Ring r ? == kind ( kind_wasm_gpu ) . sw gpu_ring . sw ring
     ^ == ( ring_point_count r ) 0
 }
 
