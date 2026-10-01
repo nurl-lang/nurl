@@ -129,7 +129,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 : QuicStream {
     i id
-    * QuicRxBuf rx
+    QuicRxBuf rx
     i rx_window
     i rx_max_data
     i rx_fin_off
@@ -158,7 +158,7 @@ $ `stdlib/std/quic_recovery.nu`
     = . s id id
     // Our own unidirectional stream has no receive side.
     : b has_rx ! & local ! ( __qc_stream_is_bidi id )
-    = . s rx ? has_rx ( quic_rxbuf_new rx_window ) # *QuicRxBuf 0
+    ? has_rx { = . s rx ( quic_rxbuf_new rx_window ) } { = . s rx @ QuicRxBuf { # s 0 } }
     = . s rx_window rx_window
     = . s rx_max_data rx_window
     = . s rx_fin_off -1
@@ -659,7 +659,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 @ quic_conn_stream_recv * QuicConn c i id i max → ( Vec u ) {
     : *QuicStream s ( __qc_stream_get c id )
-    ? | == # i s 0 == # i . s rx 0 { ^ ( vec_new [u] ) } {}
+    ? | == # i s 0 == 0 # i . . s rx ctl { ^ ( vec_new [u] ) } {}
     ? >= . s rx_reset_err 0 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) out ( quic_rxbuf_read . s rx max )
     : i n ( vec_len [u] out )
@@ -684,7 +684,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 @ quic_conn_stream_fin * QuicConn c i id → b {
     : *QuicStream s ( __qc_stream_get c id )
-    ? | == # i s 0 == # i . s rx 0 { ^ F } {}
+    ? | == # i s 0 == 0 # i . . s rx ctl { ^ F } {}
     ? < . s rx_fin_off 0 { ^ F } {}
     ^ == ( quic_rxbuf_consumed . s rx ) . s rx_fin_off
 }
@@ -754,7 +754,7 @@ $ `stdlib/std/quic_recovery.nu`
 
 @ quic_conn_stream_stop_sending * QuicConn c i id i err → v {
     : *QuicStream s ( __qc_stream_get c id )
-    ? | == # i s 0 == # i . s rx 0 { ^ } {}
+    ? | == # i s 0 == 0 # i . . s rx ctl { ^ } {}
     ? != . s rx_done 0 { ^ } {}
     ( quic_push_stop_sending . c ctl2 id err )
 }
@@ -1071,7 +1071,7 @@ $ `stdlib/std/quic_recovery.nu`
     } {}
     : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
     ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
-    ? == # i . s rx 0 { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
+    ? == 0 # i . . s rx ctl { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
     : i off ( quic_frame_b f )
     : i len ( quic_frame_c f )
     : i end + off len
@@ -1130,7 +1130,7 @@ $ `stdlib/std/quic_recovery.nu`
         ? & ( __qc_is_local c id ) >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
-        ? == # i . s rx 0 { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
+        ? == 0 # i . . s rx ctl { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : i final ( quic_frame_c f )
         ? & >= . s rx_fin_off 0 != . s rx_fin_off final { ( __qc_fail c 0 ( quic_err_final_size ) ft ) ^ 1 } {}
         ? < final ( quic_rxbuf_highest . s rx ) { ( __qc_fail c 0 ( quic_err_final_size ) ft ) ^ 1 } {}

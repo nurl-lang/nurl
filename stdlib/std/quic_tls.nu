@@ -47,7 +47,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 // The next complete handshake message ([type][u24 len][body]) from the
 // contiguous prefix, or an empty Vec when none is complete yet.
-@ __qt_rx_take * QuicRxBuf r → ( Vec u ) {
+@ __qt_rx_take QuicRxBuf r → ( Vec u ) {
     : i avail ( quic_rxbuf_avail r )
     ? < avail 4 { ^ ( vec_new [u] ) } {}
     : i mlen | | << ( quic_rxbuf_peek_u8 r 1 ) 16 << ( quic_rxbuf_peek_u8 r 2 ) 8 ( quic_rxbuf_peek_u8 r 3 )
@@ -57,9 +57,9 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 : QuicTlsSrv {
     SrvHs hs
-    * QuicRxBuf rx0
-    * QuicRxBuf rx1
-    * QuicRxBuf rx2
+    QuicRxBuf rx0
+    QuicRxBuf rx1
+    QuicRxBuf rx2
     i state
     i seen_ch
     ( Vec u ) out0
@@ -108,7 +108,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 @ quic_tls_srv_state * QuicTlsSrv s → i { ^ . s state }
 
-@ __qt_rx_of * QuicTlsSrv s i level → *QuicRxBuf {
+@ __qt_rx_of * QuicTlsSrv s i level → QuicRxBuf {
     ? == level 0 { ^ . s rx0 } {}
     ? == level 1 { ^ . s rx1 } {}
     ^ . s rx2
@@ -157,7 +157,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 @ quic_tls_srv_crypto * QuicTlsSrv s i level i off ( Vec u ) data → i {
     ? == . s state 3 { ^ ( quic_err_protocol_violation ) } {}
     ? | < level 0 > level 2 { ^ ( quic_err_protocol_violation ) } {}
-    : *QuicRxBuf r ( __qt_rx_of s level )
+    : QuicRxBuf r ( __qt_rx_of s level )
     ? ! ( quic_rxbuf_add r off data ) { ^ ( quic_err_crypto_buffer_exceeded ) } {}
     ~ T {
         : ( Vec u ) m ( __qt_rx_take r )
@@ -226,9 +226,9 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 : QuicTlsCli {
     CliHs hs
-    * QuicRxBuf rx0
-    * QuicRxBuf rx1
-    * QuicRxBuf rx2
+    QuicRxBuf rx0
+    QuicRxBuf rx1
+    QuicRxBuf rx2
     i state
     ( Vec u ) out0
     ( Vec u ) out1
@@ -276,7 +276,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 
 @ quic_tls_cli_state * QuicTlsCli s → i { ^ . s state }
 
-@ __qtc_rx_of * QuicTlsCli s i level → *QuicRxBuf {
+@ __qtc_rx_of * QuicTlsCli s i level → QuicRxBuf {
     ? == level 0 { ^ . s rx0 } {}
     ? == level 1 { ^ . s rx1 } {}
     ^ . s rx2
@@ -320,7 +320,7 @@ $ `stdlib/std/quic_rxbuf.nu`
 @ quic_tls_cli_crypto * QuicTlsCli s i level i off ( Vec u ) data → i {
     ? == . s state 3 { ^ ( quic_err_protocol_violation ) } {}
     ? | < level 0 > level 2 { ^ ( quic_err_protocol_violation ) } {}
-    : *QuicRxBuf r ( __qtc_rx_of s level )
+    : QuicRxBuf r ( __qtc_rx_of s level )
     ? ! ( quic_rxbuf_add r off data ) { ^ ( quic_err_crypto_buffer_exceeded ) } {}
     ~ T {
         : ( Vec u ) m ( __qt_rx_take r )

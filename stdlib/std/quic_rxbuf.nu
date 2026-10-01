@@ -3,8 +3,9 @@
 // stream): chunks arrive at any offset, in any order, possibly
 // overlapping or repeated; the reader takes the contiguous prefix.
 //
-//   ( quic_rxbuf_new cap )              → *QuicRxBuf   refuse data past `cap` bytes of stream offset
-//   ( quic_rxbuf_free r )               → v
+//   ( quic_rxbuf_new cap )              → QuicRxBuf    refuse data past `cap` bytes of stream offset
+//   ( quic_rxbuf_free r )               → v            early release (optional: the last owner
+//                                                      of a QuicRxBuf releases it)
 //   ( quic_rxbuf_add r off data )       → b            F when off+len exceeds the cap
 //   ( quic_rxbuf_avail r )              → i            bytes contiguous from the read position
 //   ( quic_rxbuf_read r n )             → ( Vec u )    OWNED, up to n bytes from the read position
@@ -21,8 +22,9 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/core/rcbox.nu`
 
-: QuicRxBuf {
+: QuicRxBufImpl {
     ( Vec u ) buf
     i base
     ( Vec i ) ranges
@@ -31,29 +33,48 @@ $ `stdlib/std/bytes.nu`
     i highest
 }
 
-@ quic_rxbuf_new i cap → *QuicRxBuf {
-    : *QuicRxBuf r # *QuicRxBuf ( nurl_alloc Z QuicRxBuf )
+// A QuicRxBuf is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicRxBuf { s ctl }
+
+@ QuicRxBuf_share QuicRxBuf h → QuicRxBuf { ^ @ QuicRxBuf { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicRxBuf_drop sink QuicRxBuf h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicRxBufImpl] # i . h ctl )
+}
+
+@ __QuicRxBuf_ptr QuicRxBuf h → *QuicRxBufImpl { ^ ( rcbox_ptr [QuicRxBufImpl] # i . h ctl ) }
+
+@ quic_rxbuf_new i cap → QuicRxBuf {
+    : i r__box ( rcbox_zero [QuicRxBufImpl] )
+    : *QuicRxBufImpl r ( rcbox_ptr [QuicRxBufImpl] r__box )
     = . r buf ( vec_new [u] )
     = . r base 0
     = . r ranges ( vec_new [i] )
     = . r consumed 0
     = . r cap cap
     = . r highest 0
-    ^ r
+    ^ @ QuicRxBuf { # s r__box }
 }
 
-@ quic_rxbuf_free sink * QuicRxBuf r → v {
-    ? == # i r 0 { ^ } {}
-    ( vec_free [u] . r buf )
-    ( vec_free [i] . r ranges )
-    ( nurl_free # s r )
+// Let go of `r` now rather than at the end of its owner's scope.
+@ quic_rxbuf_free sink QuicRxBuf r → v {}
+
+@ quic_rxbuf_consumed QuicRxBuf r__h → i {
+    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    ^ . r consumed
 }
 
-@ quic_rxbuf_consumed * QuicRxBuf r → i { ^ . r consumed }
+@ quic_rxbuf_highest QuicRxBuf r__h → i {
+    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    ^ . r highest
+}
 
-@ quic_rxbuf_highest * QuicRxBuf r → i { ^ . r highest }
-
-@ quic_rxbuf_set_cap * QuicRxBuf r i cap → v { = . r cap cap }
+@ quic_rxbuf_set_cap QuicRxBuf r__h i cap → v {
+    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    = . r cap cap
+}
 
 @ __qrb_ri ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 }
@@ -63,7 +84,8 @@ $ `stdlib/std/bytes.nu`
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
-@ quic_rxbuf_add * QuicRxBuf r i off ( Vec u ) data → b {
+@ quic_rxbuf_add QuicRxBuf r__h i off ( Vec u ) data → b {
+    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
     : i n ( vec_len [u] data )
     : i end + off n
     ? | < off 0 > end . r cap { ^ F } {}
@@ -109,7 +131,7 @@ $ `stdlib/std/bytes.nu`
     ^ T
 }
 
-@ quic_rxbuf_avail * QuicRxBuf r → i {
+@ __qrb_avail * QuicRxBufImpl r → i {
     ? == ( vec_len [i] . r ranges ) 0 { ^ 0 } {}
     : i rs ( __qrb_ri . r ranges 0 )
     : i re ( __qrb_ri . r ranges 1 )
@@ -118,13 +140,19 @@ $ `stdlib/std/bytes.nu`
     ^ - re . r consumed
 }
 
-@ quic_rxbuf_peek_u8 * QuicRxBuf r i k → i {
-    ? >= k ( quic_rxbuf_avail r ) { ^ 0 } {}
+@ quic_rxbuf_avail QuicRxBuf r__h → i {
+    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    ^ ( __qrb_avail r )
+}
+
+@ quic_rxbuf_peek_u8 QuicRxBuf r__h i k → i {
+    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    ? >= k ( __qrb_avail r ) { ^ 0 } {}
     ^ ( __qrb_bget . r buf - + . r consumed k . r base )
 }
 
 // Drop the dead prefix once it is worth a copy.
-@ __qrb_compact * QuicRxBuf r → v {
+@ __qrb_compact * QuicRxBufImpl r → v {
     : i dead - . r consumed . r base
     ? < dead 16384 { ^ } {}
     : ( Vec u ) keep ( bytes_slice . r buf dead ( vec_len [u] . r buf ) )
@@ -140,8 +168,9 @@ $ `stdlib/std/bytes.nu`
     } {}
 }
 
-@ quic_rxbuf_read * QuicRxBuf r i n → ( Vec u ) {
-    : i avail ( quic_rxbuf_avail r )
+@ quic_rxbuf_read QuicRxBuf r__h i n → ( Vec u ) {
+    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    : i avail ( __qrb_avail r )
     : i take ? < n avail n avail
     ? <= take 0 { ^ ( vec_new [u] ) } {}
     : i rel - . r consumed . r base
