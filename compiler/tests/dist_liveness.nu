@@ -24,7 +24,7 @@ $ `stdlib/net/membership.nu`
     ^ @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
 }
 // gossip carrying a node's self-heartbeat fact
-@ heartbeat_of * PkMemberTable t → PkMsg {
+@ heartbeat_of PkMemberTable t → PkMsg {
     : ( Vec s ) g ( vec_new [s] )
     ( vec_push [s] g # s ( pktable_self_fact t ) )
     ^ @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
@@ -35,7 +35,7 @@ $ `stdlib/net/membership.nu`
     : ( Vec u ) apk ( mkpk 10 )
 
     // ── B refutes a suspicion of itself ──────────────────────────
-    : *PkMemberTable bt ( pktable_new bpk 1000 5000 3 8 )
+    : PkMemberTable bt ( pktable_new bpk 1000 5000 3 8 )
     ( pb `B starts at incarnation 0: ` == ( pktable_self_incarnation bt ) 0 )
     // a peer's gossip says B is SUSPECT at inc 0 → B must refute
     : PkMsg sus ( gossip1 bpk ( pk_suspect ) 0 )
@@ -53,7 +53,7 @@ $ `stdlib/net/membership.nu`
     ( pb `incarnation now 8: ` == ( pktable_self_incarnation bt ) 8 )
 
     // ── A had B suspected; B's heartbeat reinstates it ───────────
-    : *PkMemberTable at ( pktable_new apk 1000 5000 3 8 )
+    : PkMemberTable at ( pktable_new apk 1000 5000 3 8 )
     ( pktable_apply at bpk ( pk_alive ) 0 0 )
     ( pktable_suspect at bpk 0 )
     ( pb `A locally suspects B: ` == ( pktable_state_of at bpk ) ( pk_suspect ) )

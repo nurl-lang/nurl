@@ -15,11 +15,17 @@
 // deterministic and offline-testable. The transport-driven probe loop
 // (ping / ack / ping-req over net/transport) wires these onto the overlay
 // and is exercised with the sim-NAT harness.
+//
+// A PkMemberTable is a handle: every copy (a failure detector's, a
+// heartbeat loop's) is the same table, and its last owner releases it —
+// pktable_free is an early release, optional. The *PkMember pointers
+// pktable_sweep / pktable_pick_relays hand out are the table's.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/lifeguard.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── member state ─────────────────────────────────────────────────
 @ pk_alive → i { ^ 0 }
@@ -58,7 +64,7 @@ $ `stdlib/std/lifeguard.nu`
 
 // ── member table ─────────────────────────────────────────────────
 
-: PkMemberTable {
+: PkMemberTableImpl {
     ( Vec u ) self_pk
     i self_incarnation
     ( Vec s ) members  // *PkMember (excludes self)
@@ -69,8 +75,36 @@ $ `stdlib/std/lifeguard.nu`
     i rr  // round-robin probe cursor
 }
 
-@ pktable_new ( Vec u ) self_pk i suspect_min_ns i suspect_max_ns i suspect_k i lhm_max → *PkMemberTable {
-    : *PkMemberTable t # *PkMemberTable ( nurl_alloc Z PkMemberTable )
+// A PkMemberTable is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: PkMemberTable { s ctl }
+
+@ PkMemberTable_share PkMemberTable h → PkMemberTable { ^ @ PkMemberTable { # s ( rcbox_share # i . h ctl ) } }
+
+@ PkMemberTable_drop sink PkMemberTable h → v {
+    ( mem_forget h )
+    ( rcbox_release [PkMemberTableImpl] # i . h ctl )
+}
+
+@ __PkMemberTable_ptr PkMemberTable h → *PkMemberTableImpl { ^ ( rcbox_ptr [PkMemberTableImpl] # i . h ctl ) }
+
+// The members are raw blocks the Vec only points at: releasing them is the
+// table's own drop, run by its last owner (self_pk and the Vec go after it).
+% Drop PkMemberTableImpl {
+    @ drop PkMemberTableImpl t → v {
+        : i n ( vec_len [s] . t members )
+        : ~ i k 0
+        ~ < k n {
+            : s pp ?? ( vec_get [s] . t members k ) { T x → x F → # s 0 }
+            ? != # i pp 0 { : *PkMember m # *PkMember pp ( vec_free [u] . m pubkey ) ( nurl_free # s m ) } {}
+            = k + k 1
+        }
+    }
+}
+
+@ pktable_new ( Vec u ) self_pk i suspect_min_ns i suspect_max_ns i suspect_k i lhm_max → PkMemberTable {
+    : i t__box ( rcbox_zero [PkMemberTableImpl] )
+    : *PkMemberTableImpl t ( rcbox_ptr [PkMemberTableImpl] t__box )
     = . t self_pk ( __pk_cpy self_pk )
     = . t self_incarnation 0
     = . t members ( vec_new [s] )
@@ -79,27 +113,23 @@ $ `stdlib/std/lifeguard.nu`
     = . t suspect_max_ns suspect_max_ns
     = . t suspect_k suspect_k
     = . t rr 0
-    ^ t
+    ^ @ PkMemberTable { # s t__box }
 }
 
-@ pktable_free sink * PkMemberTable t → v {
-    ( vec_free [u] . t self_pk )
-    : i n ( vec_len [s] . t members )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . t members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *PkMember m # *PkMember pp ( vec_free [u] . m pubkey ) ( nurl_free # s m ) } {}
-        = k + k 1
-    }
-    ( vec_free [s] . t members )
-    ( nurl_free # s t )
+// Let go of `t` now rather than at the end of its owner's scope.
+@ pktable_free sink PkMemberTable t → v {}
+
+@ pktable_count PkMemberTable t__h → i {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
+    ^ ( vec_len [s] . t members )
 }
 
-@ pktable_count * PkMemberTable t → i { ^ ( vec_len [s] . t members ) }
+@ lh_value_of PkMemberTable t__h → i {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
+    ^ ( lh_value . t health )
+}
 
-@ lh_value_of * PkMemberTable t → i { ^ ( lh_value . t health ) }
-
-@ __pk_find * PkMemberTable t ( Vec u ) pk → s {
+@ __pk_find * PkMemberTableImpl t ( Vec u ) pk → s {
     : i n ( vec_len [s] . t members )
     : ~ s found # s 0
     : ~ i k 0
@@ -115,7 +145,8 @@ $ `stdlib/std/lifeguard.nu`
 }
 
 // Look up a member's current state (-1 if unknown / self).
-@ pktable_state_of * PkMemberTable t ( Vec u ) pk → i {
+@ pktable_state_of PkMemberTable t__h ( Vec u ) pk → i {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : s pp ( __pk_find t pk )
     ? == # i pp 0 { ^ - 0 1 } {}
     : *PkMember m # *PkMember pp
@@ -126,7 +157,8 @@ $ `stdlib/std/lifeguard.nu`
 //   * a strictly higher incarnation always wins (and resets suspicion);
 //   * at equal incarnation, a WORSE state wins (alive < suspect < dead).
 // Self facts are ignored here (handled via refutation). Returns T if changed.
-@ pktable_apply * PkMemberTable t ( Vec u ) pk i nst i inc i now_ns → b {
+@ pktable_apply PkMemberTable t__h ( Vec u ) pk i nst i inc i now_ns → b {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     ? ( __pk_veq pk . t self_pk ) { ^ F } {}
     : s pp ( __pk_find t pk )
     ? == # i pp 0 {
@@ -160,7 +192,8 @@ $ `stdlib/std/lifeguard.nu`
 }
 
 // Begin suspecting an alive member (e.g. a probe went unanswered).
-@ pktable_suspect * PkMemberTable t ( Vec u ) pk i now_ns → b {
+@ pktable_suspect PkMemberTable t__h ( Vec u ) pk i now_ns → b {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : s pp ( __pk_find t pk )
     ? == # i pp 0 { ^ F } {}
     : *PkMember m # *PkMember pp
@@ -174,7 +207,8 @@ $ `stdlib/std/lifeguard.nu`
 }
 
 // Another node independently confirms a suspicion → converge to dead faster.
-@ pktable_confirm_suspect * PkMemberTable t ( Vec u ) pk → b {
+@ pktable_confirm_suspect PkMemberTable t__h ( Vec u ) pk → b {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : s pp ( __pk_find t pk )
     ? == # i pp 0 { ^ F } {}
     : *PkMember m # *PkMember pp
@@ -186,15 +220,16 @@ $ `stdlib/std/lifeguard.nu`
 }
 
 // Refute a suspicion locally (we heard from the member). Returns to alive.
-@ pktable_alive * PkMemberTable t ( Vec u ) pk i inc i now_ns → b {
-    ^ ( pktable_apply t pk ( pk_alive ) inc now_ns )
+@ pktable_alive PkMemberTable t__h ( Vec u ) pk i inc i now_ns → b {
+    ^ ( pktable_apply t__h pk ( pk_alive ) inc now_ns )
 }
 
 // A first-hand observation that a member is alive (we got a direct ack from
 // it). Authoritative for suspect→alive locally without needing a higher
 // incarnation; does NOT revive a dead member (that requires gossip carrying
 // a higher incarnation). Returns T if the member was revived from suspect.
-@ pktable_observe_alive * PkMemberTable t ( Vec u ) pk i now_ns → b {
+@ pktable_observe_alive PkMemberTable t__h ( Vec u ) pk i now_ns → b {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : s pp ( __pk_find t pk )
     ? == # i pp 0 { ^ F } {}
     : *PkMember m # *PkMember pp
@@ -217,12 +252,16 @@ $ `stdlib/std/lifeguard.nu`
 // guarantees is that a node which yields even occasionally always wins back
 // its liveness against a stale suspicion.)
 
-@ pktable_self_incarnation * PkMemberTable t → i { ^ . t self_incarnation }
+@ pktable_self_incarnation PkMemberTable t__h → i {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
+    ^ . t self_incarnation
+}
 
 // Refute a suspicion of THIS node: bump our incarnation past `observed_inc`
 // so the Alive fact our next heartbeat carries strictly outranks the stale
 // Suspect/Dead and reinstates us everywhere. T if a bump happened.
-@ pktable_refute * PkMemberTable t i observed_inc → b {
+@ pktable_refute PkMemberTable t__h i observed_inc → b {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     ? >= observed_inc . t self_incarnation {
         = . t self_incarnation + observed_inc 1
         ^ T
@@ -234,7 +273,8 @@ $ `stdlib/std/lifeguard.nu`
 // current incarnation, to gossip so peers refresh our liveness without
 // probing us (and, after a refute, to carry the higher incarnation that wins
 // us back). Caller owns the returned *PkMember.
-@ pktable_self_fact * PkMemberTable t → *PkMember {
+@ pktable_self_fact PkMemberTable t__h → *PkMember {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : *PkMember m # *PkMember ( nurl_alloc Z PkMember )
     = . m pubkey ( __pk_cpy . t self_pk )
     = . m state ( pk_alive )
@@ -247,7 +287,7 @@ $ `stdlib/std/lifeguard.nu`
 
 // The effective suspicion deadline for a member, with the Lifeguard
 // confirmation scaling AND this node's local-health scaling applied.
-@ __pk_suspicion * PkMemberTable t * PkMember m → Suspicion {
+@ __pk_suspicion * PkMemberTableImpl t * PkMember m → Suspicion {
     : i smin ( lh_scale . t health . t suspect_min_ns )
     : i smax ( lh_scale . t health . t suspect_max_ns )
     : Suspicion s ( suspicion_new smin smax . t suspect_k . m susp_start_ns )
@@ -261,7 +301,8 @@ $ `stdlib/std/lifeguard.nu`
 // the newly-dead members as BORROWED *PkMember pointers into the table (the
 // table still owns them) — read . m pubkey / . m incarnation, then free only
 // the returned container with _pk_dead_free.
-@ pktable_sweep * PkMemberTable t i now_ns → ( Vec s ) {
+@ pktable_sweep PkMemberTable t__h i now_ns → ( Vec s ) {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : ( Vec s ) dead ( vec_new [s] )
     : i n ( vec_len [s] . t members )
     : ~ i k 0
@@ -288,7 +329,8 @@ $ `stdlib/std/lifeguard.nu`
 
 // Round-robin pick an alive member to probe (its pubkey, copied). None if no
 // alive members. Advances the cursor.
-@ pktable_pick_probe * PkMemberTable t → ?( Vec u ) {
+@ pktable_pick_probe PkMemberTable t__h → ?( Vec u ) {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : i n ( vec_len [s] . t members )
     ? == n 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : ~ ? ( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
@@ -312,7 +354,8 @@ $ `stdlib/std/lifeguard.nu`
 
 // Pick up to k alive members (excluding `exclude`) to relay an indirect
 // ping-req through. Returns BORROWED *PkMember pointers into the table.
-@ pktable_pick_relays * PkMemberTable t i k ( Vec u ) exclude → ( Vec s ) {
+@ pktable_pick_relays PkMemberTable t__h i k ( Vec u ) exclude → ( Vec s ) {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : ( Vec s ) out ( vec_new [s] )
     : i n ( vec_len [s] . t members )
     : ~ i idx 0
@@ -329,9 +372,15 @@ $ `stdlib/std/lifeguard.nu`
 
 // Health hooks: a probe that got an ack rewards local health; a fully failed
 // probe (no direct or indirect ack) penalizes it (we might be the problem).
-@ pktable_on_probe_ok * PkMemberTable t → v { = . t health ( lh_award . t health ) }
+@ pktable_on_probe_ok PkMemberTable t__h → v {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
+    = . t health ( lh_award . t health )
+}
 
-@ pktable_on_probe_fail * PkMemberTable t → v { = . t health ( lh_penalize . t health ) }
+@ pktable_on_probe_fail PkMemberTable t__h → v {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
+    = . t health ( lh_penalize . t health )
+}
 
 // ── gossip message codec ─────────────────────────────────────────
 @ pk_ping → i { ^ 1 }
@@ -428,7 +477,8 @@ $ `stdlib/std/lifeguard.nu`
 
 // Build a gossip snapshot of up to `max` members (caller frees via the
 // PkMsg). Each entry carries pubkey/state/incarnation.
-@ pktable_gossip * PkMemberTable t i max → ( Vec s ) {
+@ pktable_gossip PkMemberTable t__h i max → ( Vec s ) {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : ( Vec s ) g ( vec_new [s] )
     : i n ( vec_len [s] . t members )
     : ~ i k 0
@@ -451,7 +501,8 @@ $ `stdlib/std/lifeguard.nu`
 }
 
 // Apply every member fact carried in a decoded message's gossip list.
-@ pktable_apply_gossip * PkMemberTable t PkMsg m i now_ns → v {
+@ pktable_apply_gossip PkMemberTable t__h PkMsg m i now_ns → v {
+    : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     : i n ( vec_len [s] . m gossip )
     : ~ i k 0
     ~ < k n {
@@ -462,9 +513,9 @@ $ `stdlib/std/lifeguard.nu`
                 // Gossip about US. If a peer thinks we're suspect/dead (e.g. it
                 // missed our pings while we were CPU-bound), REFUTE: bump our
                 // incarnation past theirs so our next heartbeat reinstates us.
-                ? != . mm state ( pk_alive ) { ( pktable_refute t . mm incarnation ) } {}
+                ? != . mm state ( pk_alive ) { ( pktable_refute t__h . mm incarnation ) } {}
             } {
-                ( pktable_apply t . mm pubkey . mm state . mm incarnation now_ns )
+                ( pktable_apply t__h . mm pubkey . mm state . mm incarnation now_ns )
             }
         } {}
         = k + k 1

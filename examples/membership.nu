@@ -23,7 +23,7 @@ $ `stdlib/net/failuredetector.nu`
 
 // Send a membership message (PING/ACK/PING-REQ + gossip) to a peer pubkey
 // over the transport — direct or relayed, the FD neither knows nor cares.
-@ send_msg Transport tr ( Vec u ) dst i mtype i seq * PkMemberTable tbl → v {
+@ send_msg Transport tr ( Vec u ) dst i mtype i seq PkMemberTable tbl → v {
     : ( Vec s ) g ( pktable_gossip tbl 6 )
     : PkMsg m @ PkMsg { mtype seq ( vec_new [u] ) g }
     : ( Vec u ) wire ( pkmsg_encode m )
@@ -32,7 +32,7 @@ $ `stdlib/net/failuredetector.nu`
 }
 
 // Perform one FD action on the wire.
-@ do_action Transport tr FdAction a * PkMemberTable tbl → v {
+@ do_action Transport tr FdAction a PkMemberTable tbl → v {
     ? == . a kind ( fd_do_ping ) { ( send_msg tr . a target ( pk_ping ) . a seq tbl ) } {}
     ? == . a kind ( fd_do_preq ) {
         // ask each relay to probe the target on our behalf
@@ -47,7 +47,7 @@ $ `stdlib/net/failuredetector.nu`
 }
 
 // Drain inbound messages, feeding acks/gossip to the FD and answering pings.
-@ pump Transport tr * FdState fd * PkMemberTable tbl ( Vec u ) self_pk i now → v {
+@ pump Transport tr FdState fd PkMemberTable tbl ( Vec u ) self_pk i now → v {
     : ~ b more T
     ~ more {
         ?? ( transport_recv tr 50 ) {
@@ -77,9 +77,9 @@ $ `stdlib/net/failuredetector.nu`
             ?? ( relay_register rc self_pk ) { T _ → {} F _ → {} }
             ( relay_set_timeout rc 200 )
             : Transport tr ( transport_open # s 0 rc 1 )
-            : *PkMemberTable tbl ( pktable_new self_pk 2000000000 8000000000 3 8 )
+            : PkMemberTable tbl ( pktable_new self_pk 2000000000 8000000000 3 8 )
             // ( transport_add_peer + pktable_apply for each known peer … )
-            : *FdState fd ( fd_new # s tbl 1000000000 300000000 2000000000 3 )
+            : FdState fd ( fd_new tbl 1000000000 300000000 2000000000 3 )
 
             : ~ i ticks 0
             ~ < ticks 3 {

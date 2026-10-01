@@ -22,7 +22,7 @@ $ `stdlib/dist/heartbeat.nu`
 
 @ main → i {
     : ( Vec u ) b ( mkpk 50 )
-    : *PkMemberTable t ( pktable_new b 1000 5000 3 8 )
+    : PkMemberTable t ( pktable_new b 1000 5000 3 8 )
 
     : ( Vec u ) p0 ( heartbeat_payload t )
     : PkMsg m0 ( pkmsg_decode p0 )

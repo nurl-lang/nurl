@@ -24,7 +24,7 @@ $ `stdlib/net/membership.nu`
     : ( Vec u ) c ( mkpk 90 )
 
     // ── SWIM merge precedence ────────────────────────────────────
-    : *PkMemberTable t ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t b ( pk_alive ) 1 0 )
     ( pb `new member alive: ` == ( pktable_state_of t b ) ( pk_alive ) )
     ( pktable_apply t b ( pk_suspect ) 1 0 )
@@ -41,7 +41,7 @@ $ `stdlib/net/membership.nu`
     ( pktable_free t )
 
     // ── lone suspicion: waits the full ceiling ───────────────────
-    : *PkMemberTable t2 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t2 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t2 b ( pk_alive ) 1 0 )
     ( pktable_suspect t2 b 0 )
     : ( Vec s ) d1 ( pktable_sweep t2 4000 )
@@ -53,7 +53,7 @@ $ `stdlib/net/membership.nu`
     ( pktable_free t2 )
 
     // ── corroborated suspicion: converges to the floor ───────────
-    : *PkMemberTable t3 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t3 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t3 b ( pk_alive ) 1 0 )
     ( pktable_suspect t3 b 0 )
     ( pktable_confirm_suspect t3 b )
@@ -65,7 +65,7 @@ $ `stdlib/net/membership.nu`
     ( pktable_free t3 )
 
     // ── unhealthy node (high LHM) is slower to accuse ────────────
-    : *PkMemberTable t4 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t4 ( pktable_new me 1000 5000 3 8 )
     ( pktable_on_probe_fail t4 )  // LHM 0→1 → timeouts ×2 (ceiling 10000)
     ( pb `LHM bumped to 1: ` == ( lh_value_of t4 ) 1 )
     ( pktable_apply t4 b ( pk_alive ) 1 0 )
@@ -78,7 +78,7 @@ $ `stdlib/net/membership.nu`
     ( pktable_free t4 )
 
     // ── round-robin probe pick over alive members ────────────────
-    : *PkMemberTable t5 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t5 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t5 b ( pk_alive ) 1 0 )
     ( pktable_apply t5 c ( pk_alive ) 1 0 )
     : ?( Vec u ) p1 ( pktable_pick_probe t5 )
@@ -93,7 +93,7 @@ $ `stdlib/net/membership.nu`
     ( pktable_free t5 )
 
     // ── gossip message codec ─────────────────────────────────────
-    : *PkMemberTable t6 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t6 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t6 b ( pk_suspect ) 7 0 )
     ( pktable_apply t6 c ( pk_alive ) 4 0 )
     : ( Vec s ) g ( pktable_gossip t6 8 )
@@ -107,7 +107,7 @@ $ `stdlib/net/membership.nu`
     ( vec_free [u] want_target )
     ( pb `gossip count 2: ` == ( vec_len [s] . dec gossip ) 2 )
     // apply the decoded gossip into a fresh table → states/incarnations land
-    : *PkMemberTable t7 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t7 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply_gossip t7 dec 0 )
     ( pb `gossip applied: b suspect: ` == ( pktable_state_of t7 b ) ( pk_suspect ) )
     ( pb `gossip applied: c alive: ` == ( pktable_state_of t7 c ) ( pk_alive ) )

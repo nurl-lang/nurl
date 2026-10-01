@@ -26,11 +26,11 @@ $ `stdlib/net/failuredetector.nu`
     : ( Vec u ) c ( mkpk 90 )
 
     // ── healthy probe: ping then ack ─────────────────────────────
-    : *PkMemberTable t1 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t1 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t1 b ( pk_alive ) 1 0 )
     ( pktable_apply t1 c ( pk_alive ) 1 0 )
     // fd: period 1000, direct-timeout 300, total-timeout 600, k 2
-    : *FdState fd1 ( fd_new # s t1 1000 300 600 2 )
+    : FdState fd1 ( fd_new t1 1000 300 600 2 )
     : FdAction a1 ( fd_tick fd1 0 )
     ( pb `t=0 emits ping: ` == . a1 kind ( fd_do_ping ) )
     ( pb `ping target is a member: ` | ( veq . a1 target b ) ( veq . a1 target c ) )
@@ -42,10 +42,10 @@ $ `stdlib/net/failuredetector.nu`
     ( fd_free fd1 ) ( pktable_free t1 )
 
     // ── escalate ping → ping-req → suspect → dead ────────────────
-    : *PkMemberTable t2 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t2 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t2 b ( pk_alive ) 1 0 )
     ( pktable_apply t2 c ( pk_alive ) 1 0 )
-    : *FdState fd2 ( fd_new # s t2 1000 300 600 2 )
+    : FdState fd2 ( fd_new t2 1000 300 600 2 )
     : FdAction p0 ( fd_tick fd2 0 )  // ping target X
     : ( Vec u ) tgt ( vec_with_cap [u] 32 ) ( vec_extend [u] tgt . p0 target )
     ( fd_action_free p0 )
@@ -72,9 +72,9 @@ $ `stdlib/net/failuredetector.nu`
     ( fd_free fd2 ) ( pktable_free t2 )
 
     // ── forced network change: a LATE ack keeps the member alive ─
-    : *PkMemberTable t3 ( pktable_new me 1000 5000 3 8 )
+    : PkMemberTable t3 ( pktable_new me 1000 5000 3 8 )
     ( pktable_apply t3 b ( pk_alive ) 1 0 )
-    : *FdState fd3 ( fd_new # s t3 1000 300 600 2 )
+    : FdState fd3 ( fd_new t3 1000 300 600 2 )
     : FdAction q0 ( fd_tick fd3 0 )  // ping b, seq known
     : i bseq . q0 seq
     ( fd_action_free q0 )
