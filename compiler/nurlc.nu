@@ -26053,7 +26053,16 @@
                 // that silent dead store (the counter-closure footgun). This
                 // is distinct from `__captured_byref` (a shared caller-frame
                 // alloca, whose writes DO persist but which cannot escape).
-                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byval` ) `1` ) }
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__captured_byval` ) `1` )
+                // The snapshot borrows the env's value; one assigned over it
+                // is this invocation's own and is dropped when it returns
+                // (it leaked).
+                ? & != 0 g_auto_drop_strings ( __is_handle_ty cap_type ) {
+                    ( __handle_drop_ensure cap_type )
+                    ( mem_own_add_user_drop body_syms cg cap_ptr cap_type )
+                    ( mem_udrop_flag_set body_syms cg cap_ptr `0` )
+                    ( __sb body_syms cap_ptr `1` )
+                } {} }
             ( origin_parameter body_syms cap_name + param_count - cap_idx 1 )
             = caps ( str_skip_word caps )
             = cap_idx + cap_idx 1

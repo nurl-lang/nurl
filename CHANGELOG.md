@@ -117,6 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant like a global, so the binding borrowed it and `resolve_registry`
   counted as lending on every path — no caller dropped its lock list.
   `compiler/tests/unit_variant_local_owns.nu`.
+- **A value assigned over a by-value capture is released when the closure
+  returns.** The snapshot borrows the env's value; a fresh String / Vec
+  assigned over it (a discarded write, already warned about) leaked on
+  every call. `compiler/tests/closure_snapshot_assign_released.nu`.
 
 ### Changed
 
