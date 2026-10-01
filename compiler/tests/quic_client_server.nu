@@ -85,8 +85,8 @@ $ `stdlib/ext/http3_server.nu`
     ?? ( write_file cp ( string_data . cert cert_pem ) ) { T _ → {} F _ → { ( label `cert_write` `FAIL` ) } }
     ?? ( write_file kp ( string_data . cert key_pem ) ) { T _ → {} F _ → { ( label `key_write` `FAIL` ) } }
     ( x509_selfsigned_free cert )
-    : *QuicCreds creds ( http3_creds_load cp kp )
-    ? == # i creds 0 { ( label `creds` `FAIL` ) ^ } {}
+    : QuicCreds creds ( http3_creds_load cp kp )
+    ? == 0 # i . creds ctl { ( label `creds` `FAIL` ) ^ } {}
     : !UdpSocket NetErr sr ( udp_bind `127.0.0.1` 18962 )
     ?? sr {
         T sock → {

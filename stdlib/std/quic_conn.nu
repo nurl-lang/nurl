@@ -52,6 +52,7 @@ $ `stdlib/std/quic_tp.nu`
 $ `stdlib/std/quic_rxbuf.nu`
 $ `stdlib/std/quic_tls.nu`
 $ `stdlib/std/quic_recovery.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── error codes (RFC 9000 §20.1) ─────────────────────────────────
 @ quic_err_no_error → i { ^ 0 }
@@ -79,8 +80,10 @@ $ `stdlib/std/quic_recovery.nu`
 // 204 secret key, ml_level its parameter set). `pq_chain` / `pq_sk` /
 // `pq_level` are an optional SECOND identity — an ML-DSA leaf served
 // beside the classical one to clients whose signature_algorithms list
-// it (`quic_creds_set_pq`, the tls_accept_dual_alpn inputs).
-: QuicCreds {
+// it (`quic_creds_set_pq`, the tls_accept_dual_alpn inputs). A QuicCreds
+// is shared by every connection of a listener; quic_creds_free is an
+// early release (optional: the last owner releases it).
+: QuicCredsImpl {
     ( Vec u ) cert_chain
     i keytype
     ( Vec u ) ec_priv
@@ -93,8 +96,22 @@ $ `stdlib/std/quic_recovery.nu`
     ( Vec u ) pq_sk
 }
 
-@ quic_creds_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → *QuicCreds {
-    : *QuicCreds k # *QuicCreds ( nurl_alloc Z QuicCreds )
+// A QuicCreds is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: QuicCreds { s ctl }
+
+@ QuicCreds_share QuicCreds h → QuicCreds { ^ @ QuicCreds { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicCreds_drop sink QuicCreds h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicCredsImpl] # i . h ctl )
+}
+
+@ __QuicCreds_ptr QuicCreds h → *QuicCredsImpl { ^ ( rcbox_ptr [QuicCredsImpl] # i . h ctl ) }
+
+@ quic_creds_new ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → QuicCreds {
+    : i k__box ( rcbox_zero [QuicCredsImpl] )
+    : *QuicCredsImpl k ( rcbox_ptr [QuicCredsImpl] k__box )
     = . k cert_chain ( bytes_slice cert_chain 0 ( vec_len [u] cert_chain ) )
     = . k keytype keytype
     = . k ec_priv ( bytes_slice ec_priv 0 ( vec_len [u] ec_priv ) )
@@ -105,11 +122,12 @@ $ `stdlib/std/quic_recovery.nu`
     = . k pq_chain ( vec_new [u] )
     = . k pq_level 0
     = . k pq_sk ( vec_new [u] )
-    ^ k
+    ^ @ QuicCreds { # s k__box }
 }
 
 // Park an ML-DSA identity beside the classical one (copies).
-@ quic_creds_set_pq * QuicCreds k ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+@ quic_creds_set_pq QuicCreds k__h ( Vec u ) pq_chain i pq_level ( Vec u ) pq_sk → v {
+    : *QuicCredsImpl k ( __QuicCreds_ptr k__h )
     ( vec_clear [u] . k pq_chain )
     ( bytes_extend_bytes . k pq_chain pq_chain )
     ( vec_clear [u] . k pq_sk )
@@ -117,13 +135,8 @@ $ `stdlib/std/quic_recovery.nu`
     = . k pq_level pq_level
 }
 
-@ quic_creds_free sink * QuicCreds k → v {
-    ? == # i k 0 { ^ } {}
-    ( vec_free [u] . k cert_chain ) ( vec_free [u] . k ec_priv )
-    ( vec_free [u] . k rsa_n ) ( vec_free [u] . k rsa_e ) ( vec_free [u] . k rsa_d )
-    ( vec_free [u] . k pq_chain ) ( vec_free [u] . k pq_sk )
-    ( nurl_free # s k )
-}
+// Let go of `k` now rather than at the end of its owner's scope.
+@ quic_creds_free sink QuicCreds k → v {}
 
 // ── streams ──────────────────────────────────────────────────────
 
@@ -434,7 +447,8 @@ $ `stdlib/std/quic_recovery.nu`
 
 // The transport parameters this server sends: `tp` is the caller's
 // template (limits); the connection IDs are filled in here.
-@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer * QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp i now → *QuicConn {
+@ quic_conn_new_server ( Vec u ) scid ( Vec u ) odcid ( Vec u ) peer QuicCreds creds__h ( Vec u ) alpn_prefs QuicTp tp i now → *QuicConn {
+    : *QuicCredsImpl creds ( __QuicCreds_ptr creds__h )
     : *QuicConn c ( __qc_new_common scid peer tp now )
     ( bytes_extend_bytes . c odcid odcid )
     : QuicTp mine . c local_tp

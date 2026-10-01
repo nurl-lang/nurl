@@ -7,7 +7,8 @@
 //   ( http3_server_run s )                                         → v   the loop (a fiber or a thread)
 //   ( http3_server_stop s )                                        → v
 //   ( http3_server_free s )                                        → v
-//   ( http3_creds_load cert_path key_path )                        → *QuicCreds   0 on error (EC P-256 or RSA PEM)
+//   ( http3_creds_load cert_path key_path )                        → QuicCreds    null (`== 0 # i . k ctl`) on error
+//                                                                                 (EC P-256, RSA or ML-DSA PEM)
 //   ( http3_default_tp )                                           → QuicTp       the limits this server advertises
 //
 // `stdlib/ext/http_server.nu` / `packages/http` call these to put HTTP/3
@@ -73,7 +74,7 @@ $ `stdlib/ext/http3_conn.nu`
     } {}
 }
 
-@ http3_server_new UdpSocket sock * QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ HttpResponse HttpRequest ) handler i body_max → *H3Server {
+@ http3_server_new UdpSocket sock QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ HttpResponse HttpRequest ) handler i body_max → *H3Server {
     : *H3Server s # *H3Server ( nurl_alloc Z H3Server )
     = . s h3s ( map_new [i i] )
     = . s handler handler
@@ -103,13 +104,13 @@ $ `stdlib/ext/http3_conn.nu`
 // The same certificate / key files the TLS listener takes, through the
 // same loader (`std/net.nu` `_load_tls_creds`: fullchain PEM; EC P-256,
 // RSA or ML-DSA key auto-detected).
-@ http3_creds_load s cert_path s key_path → *QuicCreds {
+@ http3_creds_load s cert_path s key_path → QuicCreds {
     : ( Vec u ) chain ( vec_new [u] )
     : ( Vec u ) k1 ( vec_new [u] )
     : ( Vec u ) k2 ( vec_new [u] )
     : ( Vec u ) k3 ( vec_new [u] )
     : i kt ( _load_tls_creds cert_path key_path chain k1 k2 k3 )
-    : ~ * QuicCreds out # *QuicCreds 0
+    : ~ QuicCreds out @ QuicCreds { # s 0 }
     : ( Vec u ) e ( vec_new [u] )
     // keytype 0: EC scalar in k1 · 1: RSA n in k1, d in k2, e in k3 ·
     // 2: ML-DSA secret key in k1, its length naming the parameter set
@@ -123,7 +124,7 @@ $ `stdlib/ext/http3_conn.nu`
 // side, so QUIC connections get the same per-ClientHello choice
 // (RFC 8446 §4.4.2.2). F when the files do not load or the key is not
 // an ML-DSA key — the same refusal the TCP listener makes.
-@ http3_creds_add_pq * QuicCreds k s pq_cert_path s pq_key_path → b {
+@ http3_creds_add_pq QuicCreds k s pq_cert_path s pq_key_path → b {
     : ( Vec u ) chain ( vec_new [u] )
     : ( Vec u ) k1 ( vec_new [u] )
     : ( Vec u ) k2 ( vec_new [u] )

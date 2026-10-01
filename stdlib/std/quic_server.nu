@@ -34,7 +34,7 @@ $ `stdlib/std/quic_conn.nu`
 
 : QuicServer {
     UdpSocket sock
-    * QuicCreds creds
+    QuicCreds creds
     ( Vec u ) alpn_prefs
     QuicTp tp
     ( @ v i i ) on_event
@@ -45,7 +45,7 @@ $ `stdlib/std/quic_conn.nu`
     i rejected
 }
 
-@ quic_server_new UdpSocket sock * QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ v i i ) on_event → *QuicServer {
+@ quic_server_new UdpSocket sock QuicCreds creds ( Vec u ) alpn_prefs QuicTp tp ( @ v i i ) on_event → *QuicServer {
     : *QuicServer s # *QuicServer ( nurl_alloc Z QuicServer )
     = . s sock sock
     = . s creds creds
