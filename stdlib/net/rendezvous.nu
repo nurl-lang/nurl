@@ -27,12 +27,19 @@
 // The record codec is pure and deterministic (offline-testable); the
 // server/client add TCP I/O (the per-conn handler runs as a fiber, like
 // ext/http_server's server_run_async).
+//
+// Memory: a PeerRecord and an RzServer are handles — every copy is the same
+// record / server, and the last owner releases it (peer_record_free /
+// rz_server_free are early releases, optional). An Endpoint is a plain
+// value the record's Vec owns. The server does not close its listener on
+// release: rz_server_stop does.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/async.nu`
+$ `stdlib/core/rcbox.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
 
@@ -53,45 +60,68 @@ $ `stdlib/std/async.nu`
     i port
 }
 
-: PeerRecord {
+: PeerRecordImpl {
     ( Vec u ) pubkey
-    ( Vec s ) endpoints  // *Endpoint
+    ( Vec Endpoint ) endpoints
     String relay_host
     i relay_port
 }
 
-@ endpoint_free sink * Endpoint e → v { ( string_free . e host ) ( nurl_free # s e ) }
+// A PeerRecord is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same record, and the last owner releases it.
+: PeerRecord { s ctl }
 
-@ peer_record_new ( Vec u ) pubkey s relay_host i relay_port → s {
-    : *PeerRecord r # *PeerRecord ( nurl_alloc Z PeerRecord )
+@ PeerRecord_share PeerRecord h → PeerRecord { ^ @ PeerRecord { # s ( rcbox_share # i . h ctl ) } }
+
+@ PeerRecord_drop sink PeerRecord h → v {
+    ( mem_forget h )
+    ( rcbox_release [PeerRecordImpl] # i . h ctl )
+}
+
+@ __PeerRecord_ptr PeerRecord h → *PeerRecordImpl { ^ ( rcbox_ptr [PeerRecordImpl] # i . h ctl ) }
+
+// Let go of `e` now rather than at the end of its owner's scope.
+@ endpoint_free sink Endpoint e → v {}
+
+@ peer_record_new ( Vec u ) pubkey s relay_host i relay_port → PeerRecord {
+    : i r__box ( rcbox_zero [PeerRecordImpl] )
+    : *PeerRecordImpl r ( rcbox_ptr [PeerRecordImpl] r__box )
     : ( Vec u ) pk ( vec_with_cap [u] ( vec_len [u] pubkey ) )
     ( vec_extend [u] pk pubkey )
     = . r pubkey pk
-    = . r endpoints ( vec_new [s] )
+    = . r endpoints ( vec_new [Endpoint] )
     = . r relay_host ( string_from relay_host )
     = . r relay_port relay_port
-    ^ # s r
+    ^ @ PeerRecord { # s r__box }
 }
 
-@ peer_record_add_endpoint * PeerRecord r s host i port → v {
-    : *Endpoint e # *Endpoint ( nurl_alloc Z Endpoint )
-    = . e host ( string_from host )
-    = . e port port
-    ( vec_push [s] . r endpoints # s e )
+@ peer_record_add_endpoint PeerRecord r__h s host i port → v {
+    : *PeerRecordImpl r ( __PeerRecord_ptr r__h )
+    ( vec_push [Endpoint] . r endpoints @ Endpoint { ( string_from host ) port } )
 }
 
-@ peer_record_free sink * PeerRecord r → v {
-    ( vec_free [u] . r pubkey )
-    : i n ( vec_len [s] . r endpoints )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . r endpoints k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { ( endpoint_free # *Endpoint pp ) } {}
-        = k + k 1
-    }
-    ( vec_free [s] . r endpoints )
-    ( string_free . r relay_host )
-    ( nurl_free # s r )
+// Let go of `r` now rather than at the end of its owner's scope.
+@ peer_record_free sink PeerRecord r → v {}
+
+// The record's fields, lent (the record owns them).
+@ peer_record_pubkey PeerRecord r__h → ( Vec u ) {
+    : *PeerRecordImpl r ( __PeerRecord_ptr r__h )
+    ^ . r pubkey
+}
+
+@ peer_record_endpoints PeerRecord r__h → ( Vec Endpoint ) {
+    : *PeerRecordImpl r ( __PeerRecord_ptr r__h )
+    ^ . r endpoints
+}
+
+@ peer_record_relay_host PeerRecord r__h → String {
+    : *PeerRecordImpl r ( __PeerRecord_ptr r__h )
+    ^ . r relay_host
+}
+
+@ peer_record_relay_port PeerRecord r__h → i {
+    : *PeerRecordImpl r ( __PeerRecord_ptr r__h )
+    ^ . r relay_port
 }
 
 // ── record codec ─────────────────────────────────────────────────
@@ -105,21 +135,23 @@ $ `stdlib/std/async.nu`
     ~ < k n { ( vec_push [u] b # u . sp k ) = k + k 1 }
 }
 
-@ rz_record_encode * PeerRecord r → ( Vec u ) {
+@ rz_record_encode PeerRecord r__h → ( Vec u ) {
+    : *PeerRecordImpl r ( __PeerRecord_ptr r__h )
     : ( Vec u ) b ( vec_new [u] )
     ( vec_extend [u] b . r pubkey )
     ( __rz_put_str b . r relay_host )
     ( bytes_push_u16_be b # u16 . r relay_port )
-    : i n ( vec_len [s] . r endpoints )
+    : i n ( vec_len [Endpoint] . r endpoints )
     ( bytes_push_u16_be b # u16 n )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . r endpoints k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *Endpoint e # *Endpoint pp
-            ( __rz_put_str b . e host )
-            ( bytes_push_u16_be b # u16 . e port )
-        } {}
+        ?? ( vec_get [Endpoint] . r endpoints k ) {
+            T e → {
+                ( __rz_put_str b . e host )
+                ( bytes_push_u16_be b # u16 . e port )
+            }
+            F → {}
+        }
         = k + k 1
     }
     ^ b
@@ -159,31 +191,31 @@ $ `stdlib/std/async.nu`
     ^ s
 }
 
-// Decode a record from a cursor; returns *PeerRecord.
-@ __rz_get_record * RzCursor c → s {
-    : *PeerRecord r # *PeerRecord ( nurl_alloc Z PeerRecord )
+// Decode a record from a cursor.
+@ __rz_get_record * RzCursor c → PeerRecord {
+    : i r__box ( rcbox_zero [PeerRecordImpl] )
+    : *PeerRecordImpl r ( rcbox_ptr [PeerRecordImpl] r__box )
     = . r pubkey ( __rz_take c 32 )
     = . r relay_host ( __rz_str c )
     = . r relay_port ( __rz_u16 c )
     : i n ( __rz_u16 c )
-    = . r endpoints ( vec_new [s] )
+    = . r endpoints ( vec_new [Endpoint] )
     : ~ i k 0
     ~ < k n {
-        : *Endpoint e # *Endpoint ( nurl_alloc Z Endpoint )
-        = . e host ( __rz_str c )
-        = . e port ( __rz_u16 c )
-        ( vec_push [s] . r endpoints # s e )
+        : String host ( __rz_str c )
+        : i port ( __rz_u16 c )
+        ( vec_push [Endpoint] . r endpoints @ Endpoint { host port } )
         = k + k 1
     }
-    ^ # s r
+    ^ @ PeerRecord { # s r__box }
 }
 
 // Decode a standalone record buffer (whole buffer is one record).
-@ rz_record_decode ( Vec u ) buf → s {
+@ rz_record_decode ( Vec u ) buf → PeerRecord {
     : *RzCursor c # *RzCursor ( nurl_alloc Z RzCursor )
     = . c buf buf
     = . c off 0
-    : s r ( __rz_get_record c )
+    : PeerRecord r ( __rz_get_record c )
     ( nurl_free # s c )
     ^ r
 }
@@ -205,7 +237,7 @@ $ `stdlib/std/async.nu`
     ^ f
 }
 
-@ rz_build_register * PeerRecord r → ( Vec u ) {
+@ rz_build_register PeerRecord r → ( Vec u ) {
     : ( Vec u ) body ( rz_record_encode r )
     : ( Vec u ) f ( __rz_frame ( rz_register ) body )
     ( vec_free [u] body )
@@ -220,7 +252,7 @@ $ `stdlib/std/async.nu`
     ^ f
 }
 
-@ rz_build_record_found * PeerRecord r → ( Vec u ) {
+@ rz_build_record_found PeerRecord r → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( vec_push [u] body # u 1 )
     : ( Vec u ) rec ( rz_record_encode r )
@@ -296,15 +328,28 @@ $ `stdlib/std/async.nu`
 // Rendezvous SERVER — pubkey → PeerRecord directory.
 // ════════════════════════════════════════════════════════════════
 
-: RzServer {
+: RzServerImpl {
     TcpListener lst
-    ( Vec s ) records  // *PeerRecord
+    ( Vec PeerRecord ) records
 }
+
+// An RzServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same server, and the last owner releases it.
+: RzServer { s ctl }
+
+@ RzServer_share RzServer h → RzServer { ^ @ RzServer { # s ( rcbox_share # i . h ctl ) } }
+
+@ RzServer_drop sink RzServer h → v {
+    ( mem_forget h )
+    ( rcbox_release [RzServerImpl] # i . h ctl )
+}
+
+@ __RzServer_ptr RzServer h → *RzServerImpl { ^ ( rcbox_ptr [RzServerImpl] # i . h ctl ) }
 
 @ rz_server_start s host i port → !RzServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RzServer NetErr out ?? lr {
-        T l → @ !RzServer NetErr { T @ RzServer { l ( vec_new [s] ) } }
+        T l → @ !RzServer NetErr { T @ RzServer { # s ( rcbox_new [RzServerImpl] @ RzServerImpl { l ( vec_new [PeerRecord] ) } ) } }
         F e → @ !RzServer NetErr { F e }
     }
     ^ out
@@ -323,53 +368,47 @@ $ `stdlib/std/async.nu`
     ^ e
 }
 
-@ __rz_find * RzServer rs ( Vec u ) pk → s {
-    : i n ( vec_len [s] . rs records )
-    : ~ s found # s 0
+// Index of the record for `pk`, or -1.
+@ __rz_find * RzServerImpl rs ( Vec u ) pk → i {
+    : i n ( vec_len [PeerRecord] . rs records )
+    : ~ i found -1
     : ~ i k 0
-    ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [s] . rs records k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PeerRecord r # *PeerRecord pp
-            ? ( __rz_veq . r pubkey pk ) { = found pp } {}
-        } {}
+    ~ & < found 0 < k n {
+        ?? ( vec_get [PeerRecord] . rs records k ) {
+            T r → { ? ( __rz_veq ( peer_record_pubkey r ) pk ) { = found k } {} }
+            F → {}
+        }
         = k + k 1
     }
     ^ found
 }
 
-// Insert or replace the record for a pubkey (latest registration wins).
-@ __rz_upsert * RzServer rs s newrec → v {
-    : *PeerRecord nr # *PeerRecord newrec
-    : s old ( __rz_find rs . nr pubkey )
-    ? != # i old 0 {
-        : i n ( vec_len [s] . rs records )
-        : ~ i k 0
-        ~ < k n {
-            : s pp ?? ( vec_get [s] . rs records k ) { T x → x F → # s 0 }
-            ? == # i pp old { ( vec_set [s] . rs records k newrec ) } {}
-            = k + k 1
-        }
-        ( peer_record_free # *PeerRecord old )
-    } { ( vec_push [s] . rs records newrec ) }
+// Insert or replace the record for a pubkey (latest registration wins); the
+// replaced record goes with its slot.
+@ __rz_upsert * RzServerImpl rs PeerRecord newrec → v {
+    : i k ( __rz_find rs ( peer_record_pubkey newrec ) )
+    ? >= k 0 { ( vec_set [PeerRecord] . rs records k newrec ) } { ( vec_push [PeerRecord] . rs records newrec ) }
 }
 
-@ __rz_handle_conn * RzServer rs TcpConn c → v {
+@ __rz_handle_conn * RzServerImpl rs TcpConn c → v {
     : ~ b done F
     ~ ! done {
         : ?RzFrame fr ( rz_read_frame c )
         ?? fr {
             T f → {
                 ? == . f ftype ( rz_register ) {
-                    : s nr ( rz_record_decode . f body )
+                    : PeerRecord nr ( rz_record_decode . f body )
                     ( __rz_upsert rs nr )
                     : ( Vec u ) ack ( rz_build_ok )
                     ?? ( tcp_write_all c ack ) { T _ → {} F _ → { = done T } }
                     ( vec_free [u] ack )
                 } {}
                 ? == . f ftype ( rz_lookup ) {
-                    : s found ( __rz_find rs . f body )
-                    : ( Vec u ) resp ? != # i found 0 ( rz_build_record_found # *PeerRecord found ) ( rz_build_record_notfound )
+                    : i found ( __rz_find rs . f body )
+                    : ( Vec u ) resp ?? ( vec_get [PeerRecord] . rs records found ) {
+                        T r → ( rz_build_record_found r )
+                        F → ( rz_build_record_notfound )
+                    }
                     ?? ( tcp_write_all c resp ) { T _ → {} F _ → { = done T } }
                     ( vec_free [u] resp )
                 } {}
@@ -381,7 +420,7 @@ $ `stdlib/std/async.nu`
     ( tcp_close_conn c )
 }
 
-@ __rz_accept_loop * RzServer rs → v {
+@ __rz_accept_loop * RzServerImpl rs → v {
     : TcpListener lst . rs lst
     : ~ b done F
     ~ ! done {
@@ -393,7 +432,8 @@ $ `stdlib/std/async.nu`
     }
 }
 
-@ rz_server_run * RzServer rs → v {
+@ rz_server_run RzServer rs__h → v {
+    : *RzServerImpl rs ( __RzServer_ptr rs__h )
     ( tcp_listener_retain . rs lst )
     : ( @ v ) accept_fiber \ → v { ( __rz_accept_loop rs ) }
     ( spawn accept_fiber )
@@ -401,19 +441,13 @@ $ `stdlib/std/async.nu`
     ( tcp_listener_release . rs lst )
 }
 
-@ rz_server_stop * RzServer rs → v { ( tcp_close_listener . rs lst ) }
-
-@ rz_server_free sink * RzServer rs → v {
-    : i n ( vec_len [s] . rs records )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] . rs records k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { ( peer_record_free # *PeerRecord pp ) } {}
-        = k + k 1
-    }
-    ( vec_free [s] . rs records )
-    ( nurl_free # s rs )
+@ rz_server_stop RzServer rs__h → v {
+    : *RzServerImpl rs ( __RzServer_ptr rs__h )
+    ( tcp_close_listener . rs lst )
 }
+
+// Let go of `rs` now rather than at the end of its owner's scope.
+@ rz_server_free sink RzServer rs → v {}
 
 // ════════════════════════════════════════════════════════════════
 // Rendezvous CLIENT — register self, look up peers.
@@ -433,7 +467,7 @@ $ `stdlib/std/async.nu`
 }
 
 // Publish our record; waits for the server's OK.
-@ rz_register_self RzClient rc * PeerRecord r → !v NetErr {
+@ rz_register_self RzClient rc PeerRecord r → !v NetErr {
     : ( Vec u ) f ( rz_build_register r )
     : !v NetErr wr ( tcp_write_all . rc conn f )
     ( vec_free [u] f )
@@ -449,11 +483,11 @@ $ `stdlib/std/async.nu`
     ^ out
 }
 
-// Look up a peer's record by pubkey; returns *PeerRecord (0 = not found /
-// error). Caller owns it → peer_record_free when done.
-@ rz_lookup_peer RzClient rc ( Vec u ) pubkey → s {
+// Look up a peer's record by pubkey; None when it is not registered (or
+// the exchange failed). The caller owns the record.
+@ rz_lookup_peer RzClient rc ( Vec u ) pubkey → ?PeerRecord {
     : ( Vec u ) f ( rz_build_lookup pubkey )
-    : ~ s out # s 0
+    : ~ ? PeerRecord out @ ?PeerRecord { F # PeerRecord 0 }
     ?? ( tcp_write_all . rc conn f ) {
         T _ → {
             ?? ( rz_read_frame . rc conn ) {
@@ -465,7 +499,7 @@ $ `stdlib/std/async.nu`
                             : *RzCursor cur # *RzCursor ( nurl_alloc Z RzCursor )
                             = . cur buf . fr body
                             = . cur off 1
-                            = out ( __rz_get_record cur )
+                            = out @ ?PeerRecord { T ( __rz_get_record cur ) }
                             ( nurl_free # s cur )
                         } {}
                     } {}

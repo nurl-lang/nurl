@@ -19,34 +19,34 @@ $ `stdlib/net/rendezvous.nu`
     ^ e
 }
 
-@ ep_host s pp → s { : *Endpoint e # *Endpoint pp ^ ( string_data . e host ) }
+@ ep_is ( Vec Endpoint ) eps i k s host i port → b {
+    ^ ?? ( vec_get [Endpoint] eps k ) {
+        T e → & != 0 ( nurl_str_eq ( string_data . e host ) host ) == . e port port
+        F → F
+    }
+}
 
-@ ep_port s pp → i { : *Endpoint e # *Endpoint pp ^ . e port }
-
-@ check_record s rp ( Vec u ) wantpk → v {
-    : *PeerRecord r # *PeerRecord rp
-    ( pb `  pubkey matches: ` ( veq . r pubkey wantpk ) )
-    ( pb `  relay host: ` & != 0 ( nurl_str_eq ( string_data . r relay_host ) `relay.example` ) == . r relay_port 8443 )
-    ( pb `  2 endpoints: ` == ( vec_len [s] . r endpoints ) 2 )
-    : s e0 ?? ( vec_get [s] . r endpoints 0 ) { T x → x F → # s 0 }
-    : s e1 ?? ( vec_get [s] . r endpoints 1 ) { T x → x F → # s 0 }
-    ( pb `  ep0 = 192.0.2.1:5000: ` & != 0 ( nurl_str_eq ( ep_host e0 ) `192.0.2.1` ) == ( ep_port e0 ) 5000 )
-    ( pb `  ep1 = 198.51.100.7:41000: ` & != 0 ( nurl_str_eq ( ep_host e1 ) `198.51.100.7` ) == ( ep_port e1 ) 41000 )
+@ check_record PeerRecord r ( Vec u ) wantpk → v {
+    ( pb `  pubkey matches: ` ( veq ( peer_record_pubkey r ) wantpk ) )
+    ( pb `  relay host: ` & != 0 ( nurl_str_eq ( string_data ( peer_record_relay_host r ) ) `relay.example` ) == ( peer_record_relay_port r ) 8443 )
+    : ( Vec Endpoint ) eps ( peer_record_endpoints r )
+    ( pb `  2 endpoints: ` == ( vec_len [Endpoint] eps ) 2 )
+    ( pb `  ep0 = 192.0.2.1:5000: ` ( ep_is eps 0 `192.0.2.1` 5000 ) )
+    ( pb `  ep1 = 198.51.100.7:41000: ` ( ep_is eps 1 `198.51.100.7` 41000 ) )
 }
 
 @ main → i {
     : ( Vec u ) pk ( mkpk 100 )
-    : s rp ( peer_record_new pk `relay.example` 8443 )
-    : *PeerRecord r # *PeerRecord rp
+    : PeerRecord r ( peer_record_new pk `relay.example` 8443 )
     ( peer_record_add_endpoint r `192.0.2.1` 5000 )
     ( peer_record_add_endpoint r `198.51.100.7` 41000 )
 
     // ── record codec round trip ──────────────────────────────────
     ( nurl_print `record codec:\n` )
     : ( Vec u ) enc ( rz_record_encode r )
-    : s dp ( rz_record_decode enc )
+    : PeerRecord dp ( rz_record_decode enc )
     ( check_record dp pk )
-    ( peer_record_free # *PeerRecord dp )
+    ( peer_record_free dp )
     ( vec_free [u] enc )
 
     // ── REGISTER frame carries the record ────────────────────────
@@ -54,9 +54,9 @@ $ `stdlib/net/rendezvous.nu`
     ?? ( rz_parse reg ) {
         T f → {
             ( pb `register type: ` == . f ftype ( rz_register ) )
-            : s d2 ( rz_record_decode . f body )
+            : PeerRecord d2 ( rz_record_decode . f body )
             ( nurl_print `register record:\n` ) ( check_record d2 pk )
-            ( peer_record_free # *PeerRecord d2 )
+            ( peer_record_free d2 )
             ( rz_frame_free f )
         }
         F → ( nurl_print `register parse failed\n` )
