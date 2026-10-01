@@ -95,7 +95,7 @@ $ `core.nu`
     ~ < y ph {
         : i rowpos + offset * y + sbytes 1
         : i ft ( _byte raw rowpos )
-        ? > ft 4 { ( vec_free [u] recon ) ^ -1 } {}
+        ? > ft 4 { ^ -1 } {}
         : i base + rowpos 1
         : ~ i x 0
         ~ < x sbytes {
@@ -160,7 +160,6 @@ $ `core.nu`
         }
         = j + j 1
     }
-    ( vec_free [u] recon )
     ^ need
 }
 
@@ -236,7 +235,6 @@ $ `core.nu`
     ? & hdr_ok & ( __png_depth_ok color depth ) <= interlace 1 {} { = hdr_ok F }
     ? hdr_ok {} {
         ( _img_set_err `PNG: unsupported or malformed header` )
-        ( vec_free [u] zdata ) ( vec_free [u] plte ) ( vec_free [u] trnsb )
         ^ @ ?Image { F }
     }
 
@@ -254,7 +252,6 @@ $ `core.nu`
             = k + k 2
         }
     }
-    ( vec_free [u] trnsb )
     : i tn ( vec_len [i] trns )
     // colour keys compare raw (undownscaled) samples; for depth < 16 the key
     // is stored at source precision already, so equality just works.
@@ -269,16 +266,14 @@ $ `core.nu`
     // decoder stops at the final block, so the trailing adler32 is simply
     // not read (`inflate` itself insists on consuming every byte).
     : !Inflated DeflateErr ir ( inflate_prefix_max zdata 2 0 )
-    ( vec_free [u] zdata )
     : ~ ( Vec u ) raw ( vec_new [u] )
     : ~ b infl_ok F
     ?? ir {
-        T d → { ( vec_free [u] raw ) = raw . d bytes = infl_ok T }
+        T d → { = raw . d bytes = infl_ok T }
         F _ → {}
     }
     ? infl_ok {} {
         ( _img_set_err `PNG: corrupt DEFLATE stream` )
-        ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
         ^ @ ?Image { F }
     }
 
@@ -310,11 +305,9 @@ $ `core.nu`
             } {}
             = pi0 + pi0 1
         }
-        ( vec_free [i] ax )
     }
     ? < rawlen want {
         ( _img_set_err `PNG: truncated pixel data` )
-        ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
         ^ @ ?Image { F }
     } {}
 
@@ -346,15 +339,10 @@ $ `core.nu`
             ? < used 0 { = ok F } { = off + off used }
             = pi + pi 1
         }
-        ( vec_free [i] a7 )
     }
 
-    ( vec_free [u] raw )
-    ( vec_free [u] plte )
-    ( vec_free [i] trns )
     ? ok {} {
         ( _img_set_err `PNG: malformed pixel data` )
-        ( vec_free [u] out )
         ^ @ ?Image { F }
     }
     ^ @ ?Image { T ( image_of width height outch out ) }
@@ -377,7 +365,6 @@ $ `core.nu`
     ( bytes_extend_str out type )
     ( vec_extend [u] out data )
     ( _push_u32be out ( crc32 td ) )
-    ( vec_free [u] td )
 }
 
 // Encode an image as a non-interlaced, filter-0, 8-bit PNG.
@@ -400,7 +387,6 @@ $ `core.nu`
     ( vec_push [u] ihdr 0 )
     ( vec_push [u] ihdr 0 )
     ( __png_chunk out `IHDR` ihdr )
-    ( vec_free [u] ihdr )
     // filtered scanlines (filter 0), then zlib-wrap
     : ( Vec u ) filt ( vec_with_cap [u] * h + stride 1 )
     : ~ i y 0
@@ -417,12 +403,8 @@ $ `core.nu`
     ( vec_extend [u] idat comp )
     ( _push_u32be idat ( adler32 filt ) )
     ( __png_chunk out `IDAT` idat )
-    ( vec_free [u] filt )
-    ( vec_free [u] comp )
-    ( vec_free [u] idat )
     // IEND
     : ( Vec u ) iend ( vec_new [u] )
     ( __png_chunk out `IEND` iend )
-    ( vec_free [u] iend )
     ^ out
 }

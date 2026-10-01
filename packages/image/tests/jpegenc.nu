@@ -49,13 +49,10 @@ $ `src/image.nu`
             ( string_push_str m ` max=` )
             ( string_push_int m d )
             ( puts ( string_data m ) )
-            ( string_free m )
             ? <= d tol {} { ( nurl_eprintln `FAIL self-decode diff over tolerance` ) = g_fail 1 }
-            ( image_free dec )
         }
         F _ → { ( nurl_eprintln `FAIL own decoder rejected our encode` ) = g_fail 1 }
     }
-    ( vec_free [u] enc )
 }
 
 @ main → i {
@@ -78,12 +75,8 @@ $ `src/image.nu`
             ( enc_one im ( string_data a4 ) 90 1 `422 q90` tol2 )
             : Image grey ( image_convert im 1 )
             ( enc_one grey ( string_data a5 ) 95 0 `gray q95` tol1 )
-            ( image_free grey )
-            ( image_free im )
         }
         F _ → { ( nurl_eprintln `load failed` ) = g_fail 1 }
     }
-    ( string_free a1 ) ( string_free a2 ) ( string_free a3 )
-    ( string_free a4 ) ( string_free a5 )
     ^ g_fail
 }

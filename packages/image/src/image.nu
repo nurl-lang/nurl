@@ -7,10 +7,13 @@
 //         T im → {
 //             // … use im (width/height/channels/data) …
 //             ( image_save_png `out.png` im )
-//             ( image_free im )
 //         }
 //         F _ → { ( nurl_eprintln `decode failed` ) }
 //     }
+//
+// An Image is a plain value — its pixels are a Vec the compiler drops —
+// so nothing in the package is released by hand; image_free is an
+// optional early release.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
@@ -44,7 +47,6 @@ $ `jpeg_enc.nu`
     ?? r {
         T bytes → {
             : ?Image im ( image_decode bytes )
-            ( vec_free [u] bytes )
             ^ im
         }
         F _ → {
@@ -57,7 +59,6 @@ $ `jpeg_enc.nu`
 @ image_save_png s path Image im → b {
     : ( Vec u ) enc ( png_encode im )
     : !v IoErr r ( write_file_bytes path enc )
-    ( vec_free [u] enc )
     ?? r { T _ → { ^ T } F _ → { ^ F } }
 }
 
@@ -65,13 +66,11 @@ $ `jpeg_enc.nu`
 @ image_save_jpeg s path Image im i quality → b {
     : ( Vec u ) enc ( jpeg_encode im quality )
     : !v IoErr r ( write_file_bytes path enc )
-    ( vec_free [u] enc )
     ?? r { T _ → { ^ T } F _ → { ^ F } }
 }
 
 @ image_save_ppm s path Image im → b {
     : ( Vec u ) enc ( ppm_encode im )
     : !v IoErr r ( write_file_bytes path enc )
-    ( vec_free [u] enc )
     ?? r { T _ → { ^ T } F _ → { ^ F } }
 }

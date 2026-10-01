@@ -17,8 +17,6 @@ $ `deps/image/src/image.nu`
         : Image thumb ( image_resize_area im 320 200 )   // box-average shrink
         ( image_draw_rect thumb 10 10 100 80 2 4278190335 )  // red 0xFF0000FF
         ( image_save_png `thumb.png` thumb )
-        ( image_free thumb )
-        ( image_free im )
     }
     F _ → { ( nurl_eprintln ( image_error ) ) }   // says WHY it failed
 }
@@ -27,8 +25,9 @@ $ `deps/image/src/image.nu`
 `Image` is `{ i width, i height, i channels, ( Vec u ) data }` — 8 bits per
 channel, row-major, tightly packed. Channels: 1 grey, 2 grey+alpha, 3 RGB,
 4 RGBA. `image_get`/`image_set` are bounds-checked (out-of-range reads 0,
-writes are ignored). Transform functions return a **new** image — free
-both.
+writes are ignored). Transform functions return a **new** image. An
+`Image` is a plain value whose pixels the compiler drops: nothing is
+released by hand (`image_free` is an optional early release).
 
 ## CLI
 
@@ -65,7 +64,8 @@ Shrinking box-averages (clean thumbnails), growing is bilinear. Extensions:
 
 | Call | |
 | --- | --- |
-| `( image_new w h ch )` / `( image_of w h ch data )` / `( image_free im )` | |
+| `( image_new w h ch )` / `( image_of w h ch data )` | |
+| `( image_free im )` | early release (optional) |
 | `( image_width im )` `( image_height im )` `( image_channels im )` | |
 | `( image_get im x y c )` / `( image_set im x y c v )` | per channel |
 | `( image_get_rgba im x y )` / `( image_set_rgba im x y rgba )` | packed `0xRRGGBBAA`, channel-mapped |

@@ -18,8 +18,12 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `core.nu`
 
+// The decoder's state: a plain value on jpeg_decode's stack, which every
+// stage borrows `inout`; the compiler drops its tables when the decode
+// returns. `bp` is a view of the caller's bytes (jpeg_decode's `buf`
+// outlives the decoder), not a copy.
 : Jpeg {
-    ( Vec u ) buf i len
+    * u bp i len
     i width i height i ncomp
     ( Vec i ) cid ( Vec i ) chf ( Vec i ) cvf ( Vec i ) ctq ( Vec i ) ctd ( Vec i ) cta ( Vec i ) cpred
     i hmax i vmax i restart
@@ -68,10 +72,8 @@ $ `core.nu`
     ^ z
 }
 
-@ __jpg_new ( Vec u ) buf → *Jpeg {
-    : *Jpeg j # *Jpeg ( nurl_malloc Z Jpeg )
-    = . j buf buf
-    = . j len ( vec_len [u] buf )
+@ __jpg_new ( Vec u ) buf → Jpeg {
+    : ~ Jpeg j @ Jpeg { ( vec_data [u] buf ) ( vec_len [u] buf ) }
     = . j cid ( _ivec 4 0 )
     = . j chf ( _ivec 4 1 )
     = . j cvf ( _ivec 4 1 )
@@ -104,34 +106,28 @@ $ `core.nu`
     ^ j
 }
 
-@ __jpg_free sink * Jpeg j → v {
-    ( vec_free [i] . j cid ) ( vec_free [i] . j chf ) ( vec_free [i] . j cvf )
-    ( vec_free [i] . j ctq ) ( vec_free [i] . j ctd ) ( vec_free [i] . j cta )
-    ( vec_free [i] . j cpred ) ( vec_free [i] . j qt )
-    ( vec_free [i] . j hmin ) ( vec_free [i] . j hmaxc ) ( vec_free [i] . j hptr ) ( vec_free [i] . j hvals )
-    ( vec_free [f] . j idct_a ) ( vec_free [i] . j zz )
-    ( vec_free [i] . j scomp ) ( vec_free [i] . j cbw ) ( vec_free [i] . j cbh )
-    : i ncf ( vec_len [( Vec i )] . j coefs )
-    : ~ i k 0
-    ~ < k ncf {
-        ?? ( vec_get [( Vec i )] . j coefs k ) { T cv → { ( vec_free [i] cv ) } F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [( Vec i )] . j coefs )
-    ( nurl_free j )
+// ── Bytes of the stream ───────────────────────────────────────────────
+
+// Byte `p` of the stream, 0 outside it (what _byte answers for a Vec).
+@ __jb inout Jpeg j i p → i {
+    ? & >= p 0 < p . j len {
+        : *u b . j bp
+        ^ # i . b p
+    } {}
+    ^ 0
 }
 
-// ── 16-bit big-endian at a byte position ──────────────────────────────
-@ __u16 ( Vec u ) buf i p → i { ^ + * ( _byte buf p ) 256 ( _byte buf + p 1 ) }
+// 16-bit big-endian at byte `p`.
+@ __ju16 inout Jpeg j i p → i { ^ + * ( __jb j p ) 256 ( __jb j + p 1 ) }
 
 // ── Entropy bit reader (handles 0xFF00 stuffing; stops at a marker) ────
-@ __jpg_bit * Jpeg j → i {
+@ __jpg_bit inout Jpeg j → i {
     ? > . j bcnt 0 {} {
         : i p . j bpos
         ? >= p . j len { = . j marker 217 ^ 0 } {}
-        : i b ( _byte . j buf p )
+        : i b ( __jb j p )
         ? == b 255 {
-            : i b2 ( _byte . j buf + p 1 )
+            : i b2 ( __jb j + p 1 )
             ? == b2 0 {
                 = . j bpos + p 2
                 = . j bbuf 255
@@ -149,7 +145,7 @@ $ `core.nu`
     ^ & >> . j bbuf . j bcnt 1
 }
 
-@ __jpg_receive * Jpeg j i n → i {
+@ __jpg_receive inout Jpeg j i n → i {
     : ~ i v 0
     : ~ i k 0
     ~ < k n { = v | << v 1 ( __jpg_bit j ) = k + k 1 }
@@ -162,7 +158,7 @@ $ `core.nu`
 }
 
 // Decode one Huffman symbol from table `t` (0..7 = 4 DC then 4 AC).
-@ __jpg_huff * Jpeg j i t → i {
+@ __jpg_huff inout Jpeg j i t → i {
     : i base * t 17
     : ~ i code ( __jpg_bit j )
     : ~ i len 1
@@ -181,7 +177,7 @@ $ `core.nu`
 }
 
 // ── Decode + dequantize one 8×8 block into `blk` (natural order) ──────
-@ __jpg_block * Jpeg j i comp ( Vec i ) blk → v {
+@ __jpg_block inout Jpeg j i comp ( Vec i ) blk → v {
     : ~ i k 0
     ~ < k 64 { ( vec_set [i] blk k 0 ) = k + k 1 }
     : i tq * ( _b_i . j ctq comp ) 64
@@ -215,7 +211,7 @@ $ `core.nu`
 }
 
 // ── Separable float IDCT: blk (natural) → out (8×8 row-major, 0..255) ──
-@ __jpg_idct * Jpeg j ( Vec i ) blk ( Vec f ) tmp ( Vec i ) out i ox i oy i pw → v {
+@ __jpg_idct inout Jpeg j ( Vec i ) blk ( Vec f ) tmp ( Vec i ) out i ox i oy i pw → v {
     : ( Vec f ) A . j idct_a
     // rows: tmp[y*8+x] = 0.5 * Σ_u A[u*8+x] blk[y*8+u]
     : ~ i y 0
@@ -254,11 +250,11 @@ $ `core.nu`
 }
 
 // Reset at a restart marker: drop partial bits, skip FFDn, clear predictors.
-@ __jpg_restart * Jpeg j → v {
+@ __jpg_restart inout Jpeg j → v {
     = . j bcnt 0
     = . j marker 0
     : i p . j bpos
-    ? & == ( _byte . j buf p ) 255 & >= ( _byte . j buf + p 1 ) 208 <= ( _byte . j buf + p 1 ) 215 {
+    ? & == ( __jb j p ) 255 & >= ( __jb j + p 1 ) 208 <= ( __jb j + p 1 ) 215 {
         = . j bpos + p 2
     } {}
     : ~ i c 0
@@ -267,16 +263,16 @@ $ `core.nu`
 
 // ── Segment parsers ───────────────────────────────────────────────────
 
-@ __jpg_dqt * Jpeg j i dp i dend → v {
+@ __jpg_dqt inout Jpeg j i dp i dend → v {
     : ~ i p dp
     ~ < p dend {
-        : i pqtq ( _byte . j buf p )
+        : i pqtq ( __jb j p )
         : i pq >> pqtq 4
         : i tq & pqtq 15
         = p + p 1
         : ~ i k 0
         ~ < k 64 {
-            : i val ? == pq 0 { ( _byte . j buf + p k ) } { ( __u16 . j buf + p * k 2 ) }
+            : i val ? == pq 0 { ( __jb j + p k ) } { ( __ju16 j + p * k 2 ) }
             ( vec_set [i] . j qt + * tq 64 k val )
             = k + k 1
         }
@@ -284,10 +280,10 @@ $ `core.nu`
     }
 }
 
-@ __jpg_dht * Jpeg j i dp i dend → v {
+@ __jpg_dht inout Jpeg j i dp i dend → v {
     : ~ i p dp
     ~ < p dend {
-        : i tcth ( _byte . j buf p )
+        : i tcth ( __jb j p )
         : i tc >> tcth 4
         : i th & tcth 15
         : i t + * tc 4 th
@@ -296,7 +292,7 @@ $ `core.nu`
         : ~ i total 0
         : ~ i L 1
         ~ <= L 16 {
-            : i c ( _byte . j buf + p - L 1 )
+            : i c ( __jb j + p - L 1 )
             ( vec_set [i] counts L c )
             = total + total c
             = L + L 1
@@ -322,21 +318,20 @@ $ `core.nu`
         }
         : ~ i si 0
         ~ < si total {
-            ( vec_set [i] . j hvals + * t 256 si ( _byte . j buf + p si ) )
+            ( vec_set [i] . j hvals + * t 256 si ( __jb j + p si ) )
             = si + si 1
         }
         = p + p total
-        ( vec_free [i] counts )
     }
 }
 
-@ __jpg_sof * Jpeg j i dp → b {
-    ? == ( _byte . j buf dp ) 8 {} { ^ F }
-    = . j height ( __u16 . j buf + dp 1 )
-    = . j width ( __u16 . j buf + dp 3 )
+@ __jpg_sof inout Jpeg j i dp → b {
+    ? == ( __jb j dp ) 8 {} { ^ F }
+    = . j height ( __ju16 j + dp 1 )
+    = . j width ( __ju16 j + dp 3 )
     ? & > . j width 0 > . j height 0 {} { ^ F }
     ? <= * . j width . j height 67108864 {} { ^ F }  // ≤ 64 Mpx
-    : i nc ( _byte . j buf + dp 5 )
+    : i nc ( __jb j + dp 5 )
     ? || == nc 1 == nc 3 {} { ^ F }
     = . j ncomp nc
     : ~ i hmax 1
@@ -344,14 +339,14 @@ $ `core.nu`
     : ~ i c 0
     ~ < c nc {
         : i o + dp + 6 * c 3
-        ( vec_set [i] . j cid c ( _byte . j buf o ) )
-        : i hv ( _byte . j buf + o 1 )
+        ( vec_set [i] . j cid c ( __jb j o ) )
+        : i hv ( __jb j + o 1 )
         : i h >> hv 4
         : i vv & hv 15
         ? & & >= h 1 <= h 4 & >= vv 1 <= vv 4 {} { ^ F }  // T.81 sampling range
         ( vec_set [i] . j chf c h )
         ( vec_set [i] . j cvf c vv )
-        : i tq ( _byte . j buf + o 2 )
+        : i tq ( __jb j + o 2 )
         ? <= tq 3 {} { ^ F }
         ( vec_set [i] . j ctq c tq )
         ? > h hmax { = hmax h } {}
@@ -363,14 +358,14 @@ $ `core.nu`
     ^ T
 }
 
-@ __jpg_sos * Jpeg j i dp → v {
-    : ~ i ns ( _byte . j buf dp )
+@ __jpg_sos inout Jpeg j i dp → v {
+    : ~ i ns ( __jb j dp )
     ? || < ns 1 > ns 4 { = ns 1 } {}
     = . j nscomp ns
     : ~ i s 0
     ~ < s ns {
-        : i cs ( _byte . j buf + dp + 1 * s 2 )
-        : i tdta ( _byte . j buf + dp + 2 * s 2 )
+        : i cs ( __jb j + dp + 1 * s 2 )
+        : i tdta ( __jb j + dp + 2 * s 2 )
         : ~ i ci 0
         : ~ i cc 0
         ~ < cc . j ncomp {
@@ -384,9 +379,9 @@ $ `core.nu`
     }
     // Ss / Se / (Ah<<4 | Al) — baseline writes 0 / 63 / 0 here
     : i base + dp + 1 * ns 2
-    = . j ss ( _byte . j buf base )
-    = . j se ( _byte . j buf + base 1 )
-    : i aa ( _byte . j buf + base 2 )
+    = . j ss ( __jb j base )
+    = . j se ( __jb j + base 1 )
+    : i aa ( __jb j + base 2 )
     = . j ah >> aa 4
     = . j al & aa 15
     ? > . j se 63 { = . j se 63 } {}
@@ -407,7 +402,7 @@ $ `core.nu`
 // the IDCT once, after the last scan.
 
 // Allocate the per-component coefficient grids (padded to the MCU grid).
-@ __jpg_prog_alloc * Jpeg j → v {
+@ __jpg_prog_alloc inout Jpeg j → v {
     : i mcux / + . j width - * . j hmax 8 1 * . j hmax 8
     : i mcuy / + . j height - * . j vmax 8 1 * . j vmax 8
     : ~ i c 0
@@ -421,14 +416,14 @@ $ `core.nu`
     }
 }
 
-@ __jpg_prog_restart * Jpeg j → v {
+@ __jpg_prog_restart inout Jpeg j → v {
     ( __jpg_restart j )
     = . j eobrun 0
 }
 
 // DC scan, one block. First pass (Ah=0) decodes the diff at reduced
 // precision; refinement passes append one magnitude bit.
-@ __jpg_prog_dc * Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jpg_prog_dc inout Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? == . j ah 0 {
         : i td ( _b_i . j ctd ci )
@@ -446,7 +441,7 @@ $ `core.nu`
 }
 
 // AC scan, first pass (Ah=0): run-length + size symbols with EOB runs.
-@ __jpg_prog_ac1 * Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jpg_prog_ac1 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? > . j eobrun 0 { = . j eobrun - . j eobrun 1 ^ } {}
     : i ta + 4 ( _b_i . j cta ci )
@@ -477,7 +472,7 @@ $ `core.nu`
 }
 
 // One correction bit for an already-nonzero coefficient.
-@ __jpg_prog_fix * Jpeg j ( Vec i ) cf i pos i bit → v {
+@ __jpg_prog_fix inout Jpeg j ( Vec i ) cf i pos i bit → v {
     : i cur ( _b_i cf pos )
     ? == ( __jpg_bit j ) 1 {
         ? == & cur bit 0 {
@@ -488,7 +483,7 @@ $ `core.nu`
 
 // AC scan, refinement pass (Ah>0): new coefficients arrive as ±1<<Al and
 // every already-nonzero coefficient on the way gets a correction bit.
-@ __jpg_prog_ac2 * Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jpg_prog_ac2 inout Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     : i bit << 1 . j al
     ? > . j eobrun 0 {
@@ -533,7 +528,7 @@ $ `core.nu`
 }
 
 // Route one block to the right scan kind.
-@ __jpg_prog_block * Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jpg_prog_block inout Jpeg j i ci ( Vec i ) cf i bidx → v {
     ? == . j ss 0 { ( __jpg_prog_dc j ci cf bidx ) } {
         ? == . j ah 0 { ( __jpg_prog_ac1 j ci cf bidx ) } { ( __jpg_prog_ac2 j ci cf bidx ) }
     }
@@ -541,7 +536,7 @@ $ `core.nu`
 
 // Run one progressive scan: interleaved (ns>1, MCU order) or single
 // component (its own unpadded block raster).
-@ __jpg_prog_scan * Jpeg j → v {
+@ __jpg_prog_scan inout Jpeg j → v {
     : i ns . j nscomp
     ? == ns 1 {
         : i ci ( _b_i . j scomp 0 )
@@ -608,7 +603,7 @@ $ `core.nu`
 
 // After the last scan: dequantise + IDCT every block, then share the
 // baseline upsample/colour-convert tail.
-@ __jpg_prog_finish * Jpeg j → ?Image {
+@ __jpg_prog_finish inout Jpeg j → ?Image {
     ? & & > . j width 0 > . j height 0 & > . j hmax 0 > . j vmax 0 {} { ^ @ ?Image { F } }
     : i nc . j ncomp
     : ( Vec ( Vec i ) ) planes ( vec_new [( Vec i )] )
@@ -647,8 +642,6 @@ $ `core.nu`
         ( vec_push [( Vec i )] planes plane )
         = c + c 1
     }
-    ( vec_free [i] blk )
-    ( vec_free [f] tmp )
     ^ ( __jpg_to_image j planes )
 }
 
@@ -656,16 +649,16 @@ $ `core.nu`
 
 // Walk all segments. Sequential (SOF0/SOF1) frames decode at their single
 // SOS; progressive (SOF2) frames accumulate scans until EOI, then finish.
-@ __jpg_run * Jpeg j → ?Image {
+@ __jpg_run inout Jpeg j → ?Image {
     : ~ i p 2
     : i n . j len
     : ~ b sof F
     : ~ b sawscan F
     : ~ b going T
     ~ & & going . j ok < + p 2 n {
-        ? == ( _byte . j buf p ) 255 {} { = . j ok F = going F }
+        ? == ( __jb j p ) 255 {} { = . j ok F = going F }
         ? going {
-            : i m ( _byte . j buf + p 1 )
+            : i m ( __jb j + p 1 )
             ? == m 255 { = p + p 1 } {
                 ? || == m 1 & >= m 208 <= m 215 { = p + p 2 } {  // TEM / stray RSTn
                     ? == m 216 { = p + p 2 } {  // stray SOI
@@ -673,14 +666,14 @@ $ `core.nu`
                             ? < + p 4 n {} { = . j ok F = going F }
                             ? going {
                                 : i seg + p 2
-                                : i slen ( __u16 . j buf seg )
+                                : i slen ( __ju16 j seg )
                                 : i dp + seg 2
                                 : i dend + seg slen
                                 ? || < slen 2 > dend n { = . j ok F = going F } {
                                     : ~ i np dend
                                     ? == m 219 { ( __jpg_dqt j dp dend ) } {
                                         ? == m 196 { ( __jpg_dht j dp dend ) } {
-                                            ? == m 221 { = . j restart ( __u16 . j buf dp ) } {
+                                            ? == m 221 { = . j restart ( __ju16 j dp ) } {
                                                 ? || == m 192 == m 193 {
                                                     ? || sof ! ( __jpg_sof j dp ) {
                                                         ( _img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
@@ -776,7 +769,7 @@ $ `core.nu`
     ^ ( _b_i plane + * sy pw sx )
 }
 
-@ __jpg_scan * Jpeg j → ?Image {
+@ __jpg_scan inout Jpeg j → ?Image {
     : i W . j width
     : i H . j height
     : i hmax . j hmax
@@ -835,14 +828,12 @@ $ `core.nu`
         }
         = my + my 1
     }
-    ( vec_free [i] blk )
-    ( vec_free [f] tmp )
     ^ ( __jpg_to_image j planes )
 }
 
 // Shared tail: per-component planes (padded to the MCU grid) → upsampled,
 // colour-converted Image. Frees `planes`.
-@ __jpg_to_image * Jpeg j ( Vec ( Vec i ) ) planes → ?Image {
+@ __jpg_to_image inout Jpeg j ( Vec ( Vec i ) ) planes → ?Image {
     : i W . j width
     : i H . j height
     : i hmax . j hmax
@@ -902,13 +893,6 @@ $ `core.nu`
         }
         F _ → {}
     }
-
-    : ~ i fc 0
-    ~ < fc nc {
-        ?? ( vec_get [( Vec i )] planes fc ) { T pv → { ( vec_free [i] pv ) } F _ → {} }
-        = fc + fc 1
-    }
-    ( vec_free [( Vec i )] planes )
     ^ @ ?Image { T ( image_of W H outch out ) }
 }
 
@@ -926,9 +910,8 @@ $ `core.nu`
     : i n ( vec_len [u] buf )
     ? < n 4 { ( _img_set_err `not a JPEG` ) ^ @ ?Image { F } } {}
     ? & == ( _byte buf 0 ) 255 == ( _byte buf 1 ) 216 {} { ( _img_set_err `not a JPEG` ) ^ @ ?Image { F } }
-    : *Jpeg j ( __jpg_new buf )
+    : ~ Jpeg j ( __jpg_new buf )
     : ?Image im ( __jpg_run j )
-    ( __jpg_free j )
     ?? im {
         T x → { ^ @ ?Image { T x } }
         F _ → {

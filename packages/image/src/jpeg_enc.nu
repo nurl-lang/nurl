@@ -39,7 +39,6 @@ $ `jpeg.nu`
             ( vec_push [i] out v )
         } { = p + p 1 }
     }
-    ( vec_free [u] b )
     ^ out
 }
 
@@ -95,6 +94,9 @@ $ `jpeg.nu`
 
 // ── Encoder state ─────────────────────────────────────────────────────
 
+// The encoder's state: a plain value on jpeg_encode_sub's stack, which
+// every stage borrows `inout`; the compiler drops its tables when the
+// encode returns, and the finished stream moves out.
 : JEnc {
     ( Vec u ) out
     i bbuf i bcnt
@@ -124,9 +126,8 @@ $ `jpeg.nu`
     ^ out
 }
 
-@ __jpe_new i quality → *JEnc {
-    : *JEnc e # *JEnc ( nurl_malloc Z JEnc )
-    = . e out ( vec_new [u] )
+@ __jpe_new i quality → JEnc {
+    : ~ JEnc e @ JEnc { ( vec_new [u] ) }
     = . e bbuf 0
     = . e bcnt 0
     = . e A ( _idct_basis )
@@ -135,7 +136,6 @@ $ `jpeg.nu`
     : ( Vec i ) bc ( __jpe_qbase_chroma )
     = . e qy ( __jpe_scale_q bl quality . e zz )
     = . e qc ( __jpe_scale_q bc quality . e zz )
-    ( vec_free [i] bl ) ( vec_free [i] bc )
     = . e ydc_co ( _ivec 256 0 ) = . e ydc_si ( _ivec 256 0 )
     = . e yac_co ( _ivec 256 0 ) = . e yac_si ( _ivec 256 0 )
     = . e cdc_co ( _ivec 256 0 ) = . e cdc_si ( _ivec 256 0 )
@@ -151,24 +151,12 @@ $ `jpeg.nu`
     : ( Vec i ) b4 ( __jpe_hbits_ac_c )
     : ( Vec i ) v4 ( __jpe_hvals_ac_c )
     ( __jpe_huff_build b4 v4 . e cac_co . e cac_si )
-    ( vec_free [i] b1 ) ( vec_free [i] v1 ) ( vec_free [i] b2 ) ( vec_free [i] v2 )
-    ( vec_free [i] b3 ) ( vec_free [i] b4 ) ( vec_free [i] v4 )
     ^ e
-}
-
-@ __jpe_free sink * JEnc e → v {
-    ( vec_free [i] . e qy ) ( vec_free [i] . e qc )
-    ( vec_free [i] . e ydc_co ) ( vec_free [i] . e ydc_si )
-    ( vec_free [i] . e yac_co ) ( vec_free [i] . e yac_si )
-    ( vec_free [i] . e cdc_co ) ( vec_free [i] . e cdc_si )
-    ( vec_free [i] . e cac_co ) ( vec_free [i] . e cac_si )
-    ( vec_free [f] . e A ) ( vec_free [i] . e zz )
-    ( nurl_free e )
 }
 
 // ── Bit writer (MSB first, 0xFF byte-stuffed) ─────────────────────────
 
-@ __jpe_bits * JEnc e i code i len → v {
+@ __jpe_bits inout JEnc e i code i len → v {
     : ~ i k - len 1
     ~ >= k 0 {
         = . e bbuf | << . e bbuf 1 & >> code k 1
@@ -184,7 +172,7 @@ $ `jpeg.nu`
     }
 }
 
-@ __jpe_flush_bits * JEnc e → v {
+@ __jpe_flush_bits inout JEnc e → v {
     ~ != . e bcnt 0 { ( __jpe_bits e 1 1 ) }
 }
 
@@ -200,7 +188,7 @@ $ `jpeg.nu`
 
 // px: 64 samples 0..255 (natural order). out: 64 quantised coefficients in
 // ZIGZAG order (what the entropy coder wants).
-@ __jpe_fdct_quant * JEnc e ( Vec i ) px ( Vec f ) tmp ( Vec i ) out b chroma → v {
+@ __jpe_fdct_quant inout JEnc e ( Vec i ) px ( Vec f ) tmp ( Vec i ) out b chroma → v {
     : ( Vec f ) A . e A
     // rows: tmp[y*8+u] = Σ_x (px-128) A[u*8+x]
     : ~ i y 0
@@ -236,7 +224,7 @@ $ `jpeg.nu`
 // ── Entropy-code one quantised block (zigzag order) ───────────────────
 
 // Returns the block's DC value so the caller can carry the predictor.
-@ __jpe_code_block * JEnc e ( Vec i ) zq i pred b chroma → i {
+@ __jpe_code_block inout JEnc e ( Vec i ) zq i pred b chroma → i {
     : ( Vec i ) dc_co ? chroma { . e cdc_co } { . e ydc_co }
     : ( Vec i ) dc_si ? chroma { . e cdc_si } { . e ydc_si }
     : ( Vec i ) ac_co ? chroma { . e cac_co } { . e yac_co }
@@ -279,7 +267,7 @@ $ `jpeg.nu`
     ( vec_push [u] out 255 ) ( vec_push [u] out m )
 }
 
-@ __jpe_headers * JEnc e i W i H i nc i hs i vs → v {
+@ __jpe_headers inout JEnc e i W i H i nc i hs i vs → v {
     : ( Vec u ) out . e out
     ( __jpe_marker out 216 )  // SOI
     // APP0 JFIF
@@ -335,7 +323,7 @@ $ `jpeg.nu`
 }
 
 // Emit one DHT segment; consumes (frees) bits/vals.
-@ __jpe_dht * JEnc e i class i id ( Vec i ) bits ( Vec i ) vals → v {
+@ __jpe_dht inout JEnc e i class i id ( Vec i ) bits ( Vec i ) vals → v {
     : ( Vec u ) out . e out
     : i nv ( vec_len [i] vals )
     ( __jpe_marker out 196 )
@@ -345,7 +333,6 @@ $ `jpeg.nu`
     ~ < L 16 { ( vec_push [u] out ( _b_i bits L ) ) = L + L 1 }
     : ~ i k 0
     ~ < k nv { ( vec_push [u] out ( _b_i vals k ) ) = k + k 1 }
-    ( vec_free [i] bits ) ( vec_free [i] vals )
 }
 
 // ── Planes ────────────────────────────────────────────────────────────
@@ -430,7 +417,7 @@ $ `jpeg.nu`
     : i hs ? grey { 1 } { ? == subsamp 0 { 1 } { 2 } }
     : i vs ? grey { 1 } { ? == subsamp 2 { 2 } { 1 } }
 
-    : *JEnc e ( __jpe_new quality )
+    : ~ JEnc e ( __jpe_new quality )
     ( __jpe_headers e W H nc hs vs )
 
     : i mcux / + W - * hs 8 1 * hs 8
@@ -445,7 +432,6 @@ $ `jpeg.nu`
     : i cpw * mcux 8
     : i cph * mcuy 8
     ? == nc 3 {
-        ( vec_free [i] pcb ) ( vec_free [i] pcr )
         = pcb ( __jpe_plane im 1 hs vs cpw cph )
         = pcr ( __jpe_plane im 2 hs vs cpw cph )
     } {}
@@ -490,10 +476,8 @@ $ `jpeg.nu`
     ( __jpe_flush_bits e )
     ( __jpe_marker . e out 217 )  // EOI
 
-    ( vec_free [i] py ) ( vec_free [i] pcb ) ( vec_free [i] pcr )
-    ( vec_free [i] blk ) ( vec_free [i] zq ) ( vec_free [f] tmp )
     : ( Vec u ) out . e out
-    ( __jpe_free e )
+    ( mem_take out )  // the stream leaves the encoder, not copied
     ^ out
 }
 
