@@ -18,8 +18,11 @@
 //
 // A PkMemberTable is a handle: every copy (a failure detector's, a
 // heartbeat loop's) is the same table, and its last owner releases it —
-// pktable_free is an early release, optional. The *PkMember pointers
-// pktable_sweep / pktable_pick_relays hand out are the table's.
+// pktable_free is an early release, optional. Members are PkMember values:
+// the table keeps its own in a ( Vec PkMember ), and everything it hands out
+// (pktable_gossip, pktable_sweep, pktable_pick_relays, pktable_self_fact) is
+// an owned copy, as is a decoded PkMsg's gossip — dropping the Vec (or the
+// PkMsg) releases them; pkmsg_free is an early release, optional.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -42,6 +45,18 @@ $ `stdlib/core/rcbox.nu`
     i susp_start_ns  // when suspicion began (state == suspect)
     i susp_confirms  // independent suspicion confirmations
 }
+
+// A member fact as gossip carries it: pubkey (copied), state, incarnation.
+@ __pk_fact ( Vec u ) pk i st i inc → PkMember { ^ @ PkMember { ( __pk_cpy pk ) st inc 0 0 0 } }
+
+// An owned copy of a member, every field.
+@ __pk_snap * PkMember m → PkMember {
+    ^ @ PkMember { ( __pk_cpy . m pubkey ) . m state . m incarnation . m last_ns . m susp_start_ns . m susp_confirms }
+}
+
+// The member at index k, in place: a view into the Vec's buffer, valid until
+// the Vec grows (never held across a push). k is in range.
+@ __pk_at ( Vec PkMember ) v i k → *PkMember { ^ # *PkMember + # i ( vec_data [PkMember] v ) * k Z PkMember }
 
 @ __pk_cpy ( Vec u ) v → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] ( vec_len [u] v ) )
@@ -67,7 +82,7 @@ $ `stdlib/core/rcbox.nu`
 : PkMemberTableImpl {
     ( Vec u ) self_pk
     i self_incarnation
-    ( Vec s ) members  // *PkMember (excludes self)
+    ( Vec PkMember ) members  // excludes self
     LocalHealth health
     i suspect_min_ns  // Lifeguard suspicion floor (corroborated)
     i suspect_max_ns  // Lifeguard suspicion ceiling (lone)
@@ -88,26 +103,12 @@ $ `stdlib/core/rcbox.nu`
 
 @ __PkMemberTable_ptr PkMemberTable h → *PkMemberTableImpl { ^ ( rcbox_ptr [PkMemberTableImpl] # i . h ctl ) }
 
-// The members are raw blocks the Vec only points at: releasing them is the
-// table's own drop, run by its last owner (self_pk and the Vec go after it).
-% Drop PkMemberTableImpl {
-    @ drop PkMemberTableImpl t → v {
-        : i n ( vec_len [s] . t members )
-        : ~ i k 0
-        ~ < k n {
-            : s pp ?? ( vec_get [s] . t members k ) { T x → x F → # s 0 }
-            ? != # i pp 0 { : *PkMember m # *PkMember pp ( vec_free [u] . m pubkey ) ( nurl_free # s m ) } {}
-            = k + k 1
-        }
-    }
-}
-
 @ pktable_new ( Vec u ) self_pk i suspect_min_ns i suspect_max_ns i suspect_k i lhm_max → PkMemberTable {
     : i t__box ( rcbox_zero [PkMemberTableImpl] )
     : *PkMemberTableImpl t ( rcbox_ptr [PkMemberTableImpl] t__box )
     = . t self_pk ( __pk_cpy self_pk )
     = . t self_incarnation 0
-    = . t members ( vec_new [s] )
+    = . t members ( vec_new [PkMember] )
     = . t health ( local_health_new lhm_max )
     = . t suspect_min_ns suspect_min_ns
     = . t suspect_max_ns suspect_max_ns
@@ -121,7 +122,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ pktable_count PkMemberTable t__h → i {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    ^ ( vec_len [s] . t members )
+    ^ ( vec_len [PkMember] . t members )
 }
 
 @ lh_value_of PkMemberTable t__h → i {
@@ -129,16 +130,14 @@ $ `stdlib/core/rcbox.nu`
     ^ ( lh_value . t health )
 }
 
-@ __pk_find * PkMemberTableImpl t ( Vec u ) pk → s {
-    : i n ( vec_len [s] . t members )
-    : ~ s found # s 0
+// Index of the member with pubkey pk, or -1.
+@ __pk_find * PkMemberTableImpl t ( Vec u ) pk → i {
+    : i n ( vec_len [PkMember] . t members )
+    : ~ i found -1
     : ~ i k 0
-    ~ & == # i found 0 < k n {
-        : s pp ?? ( vec_get [s] . t members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PkMember m # *PkMember pp
-            ? ( __pk_veq . m pubkey pk ) { = found pp } {}
-        } {}
+    ~ & < found 0 < k n {
+        : *PkMember m ( __pk_at . t members k )
+        ? ( __pk_veq . m pubkey pk ) { = found k } {}
         = k + k 1
     }
     ^ found
@@ -147,9 +146,9 @@ $ `stdlib/core/rcbox.nu`
 // Look up a member's current state (-1 if unknown / self).
 @ pktable_state_of PkMemberTable t__h ( Vec u ) pk → i {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : s pp ( __pk_find t pk )
-    ? == # i pp 0 { ^ - 0 1 } {}
-    : *PkMember m # *PkMember pp
+    : i idx ( __pk_find t pk )
+    ? < idx 0 { ^ - 0 1 } {}
+    : *PkMember m ( __pk_at . t members idx )
     ^ . m state
 }
 
@@ -160,19 +159,13 @@ $ `stdlib/core/rcbox.nu`
 @ pktable_apply PkMemberTable t__h ( Vec u ) pk i nst i inc i now_ns → b {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
     ? ( __pk_veq pk . t self_pk ) { ^ F } {}
-    : s pp ( __pk_find t pk )
-    ? == # i pp 0 {
-        : *PkMember m # *PkMember ( nurl_alloc Z PkMember )
-        = . m pubkey ( __pk_cpy pk )
-        = . m state nst
-        = . m incarnation inc
-        = . m last_ns now_ns
-        = . m susp_start_ns ? == nst 1 now_ns 0
-        = . m susp_confirms 0
-        ( vec_push [s] . t members # s m )
+    : i idx ( __pk_find t pk )
+    ? < idx 0 {
+        : i susp ? == nst 1 now_ns 0
+        ( vec_push [PkMember] . t members @ PkMember { ( __pk_cpy pk ) nst inc now_ns susp 0 } )
         ^ T
     } {}
-    : *PkMember m # *PkMember pp
+    : *PkMember m ( __pk_at . t members idx )
     : ~ b changed F
     ? > inc . m incarnation {
         = . m incarnation inc
@@ -194,9 +187,9 @@ $ `stdlib/core/rcbox.nu`
 // Begin suspecting an alive member (e.g. a probe went unanswered).
 @ pktable_suspect PkMemberTable t__h ( Vec u ) pk i now_ns → b {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : s pp ( __pk_find t pk )
-    ? == # i pp 0 { ^ F } {}
-    : *PkMember m # *PkMember pp
+    : i idx ( __pk_find t pk )
+    ? < idx 0 { ^ F } {}
+    : *PkMember m ( __pk_at . t members idx )
     ? == . m state 0 {
         = . m state 1
         = . m susp_start_ns now_ns
@@ -209,9 +202,9 @@ $ `stdlib/core/rcbox.nu`
 // Another node independently confirms a suspicion → converge to dead faster.
 @ pktable_confirm_suspect PkMemberTable t__h ( Vec u ) pk → b {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : s pp ( __pk_find t pk )
-    ? == # i pp 0 { ^ F } {}
-    : *PkMember m # *PkMember pp
+    : i idx ( __pk_find t pk )
+    ? < idx 0 { ^ F } {}
+    : *PkMember m ( __pk_at . t members idx )
     ? == . m state 1 {
         ? < . m susp_confirms . t suspect_k { = . m susp_confirms + . m susp_confirms 1 } {}
         ^ T
@@ -230,9 +223,9 @@ $ `stdlib/core/rcbox.nu`
 // a higher incarnation). Returns T if the member was revived from suspect.
 @ pktable_observe_alive PkMemberTable t__h ( Vec u ) pk i now_ns → b {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : s pp ( __pk_find t pk )
-    ? == # i pp 0 { ^ F } {}
-    : *PkMember m # *PkMember pp
+    : i idx ( __pk_find t pk )
+    ? < idx 0 { ^ F } {}
+    : *PkMember m ( __pk_at . t members idx )
     = . m last_ns now_ns
     ? == . m state 1 {
         = . m state 0
@@ -272,17 +265,10 @@ $ `stdlib/core/rcbox.nu`
 // Proactive "alive-but-busy" heartbeat fact: an Alive self-fact at our
 // current incarnation, to gossip so peers refresh our liveness without
 // probing us (and, after a refute, to carry the higher incarnation that wins
-// us back). Caller owns the returned *PkMember.
-@ pktable_self_fact PkMemberTable t__h → *PkMember {
+// us back). An owned PkMember.
+@ pktable_self_fact PkMemberTable t__h → PkMember {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : *PkMember m # *PkMember ( nurl_alloc Z PkMember )
-    = . m pubkey ( __pk_cpy . t self_pk )
-    = . m state ( pk_alive )
-    = . m incarnation . t self_incarnation
-    = . m last_ns 0
-    = . m susp_start_ns 0
-    = . m susp_confirms 0
-    ^ m
+    ^ ( __pk_fact . t self_pk ( pk_alive ) . t self_incarnation )
 }
 
 // The effective suspicion deadline for a member, with the Lifeguard
@@ -298,24 +284,19 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Promote any suspected member whose suspicion has expired to dead. Returns
-// the newly-dead members as BORROWED *PkMember pointers into the table (the
-// table still owns them) — read . m pubkey / . m incarnation, then free only
-// the returned container with _pk_dead_free.
-@ pktable_sweep PkMemberTable t__h i now_ns → ( Vec s ) {
+// the newly-dead members as owned copies (pubkey / incarnation / …).
+@ pktable_sweep PkMemberTable t__h i now_ns → ( Vec PkMember ) {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : ( Vec s ) dead ( vec_new [s] )
-    : i n ( vec_len [s] . t members )
+    : ( Vec PkMember ) dead ( vec_new [PkMember] )
+    : i n ( vec_len [PkMember] . t members )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . t members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PkMember m # *PkMember pp
-            ? == . m state 1 {
-                : Suspicion s ( __pk_suspicion t m )
-                ? ( suspicion_expired s now_ns ) {
-                    = . m state 2
-                    ( vec_push [s] dead pp )
-                } {}
+        : *PkMember m ( __pk_at . t members k )
+        ? == . m state 1 {
+            : Suspicion s ( __pk_suspicion t m )
+            ? ( suspicion_expired s now_ns ) {
+                = . m state 2
+                ( vec_push [PkMember] dead ( __pk_snap m ) )
             } {}
         } {}
         = k + k 1
@@ -323,29 +304,26 @@ $ `stdlib/core/rcbox.nu`
     ^ dead
 }
 
-// Free only the container returned by pktable_sweep (members stay owned by
-// the table).
-@ _pk_dead_free sink ( Vec s ) dead → v { ( vec_free [s] dead ) }
+// Let go of pktable_sweep's result now rather than at the end of its
+// owner's scope.
+@ _pk_dead_free sink ( Vec PkMember ) dead → v {}
 
 // Round-robin pick an alive member to probe (its pubkey, copied). None if no
 // alive members. Advances the cursor.
 @ pktable_pick_probe PkMemberTable t__h → ?( Vec u ) {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : i n ( vec_len [s] . t members )
+    : i n ( vec_len [PkMember] . t members )
     ? == n 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : ~ ? ( Vec u ) out @ ?( Vec u ) { F # ( Vec u ) 0 }
     : ~ b got F
     : ~ i tries 0
     ~ & ! got < tries n {
         : i idx % + . t rr tries n
-        : s pp ?? ( vec_get [s] . t members idx ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PkMember m # *PkMember pp
-            ? == . m state 0 {
-                = out @ ?( Vec u ) { T ( __pk_cpy . m pubkey ) }
-                = . t rr % + idx 1 n
-                = got T
-            } {}
+        : *PkMember m ( __pk_at . t members idx )
+        ? == . m state 0 {
+            = out @ ?( Vec u ) { T ( __pk_cpy . m pubkey ) }
+            = . t rr % + idx 1 n
+            = got T
         } {}
         = tries + tries 1
     }
@@ -353,18 +331,15 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Pick up to k alive members (excluding `exclude`) to relay an indirect
-// ping-req through. Returns BORROWED *PkMember pointers into the table.
-@ pktable_pick_relays PkMemberTable t__h i k ( Vec u ) exclude → ( Vec s ) {
+// ping-req through. Returns owned copies.
+@ pktable_pick_relays PkMemberTable t__h i k ( Vec u ) exclude → ( Vec PkMember ) {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : ( Vec s ) out ( vec_new [s] )
-    : i n ( vec_len [s] . t members )
+    : ( Vec PkMember ) out ( vec_new [PkMember] )
+    : i n ( vec_len [PkMember] . t members )
     : ~ i idx 0
-    ~ & < idx n < ( vec_len [s] out ) k {
-        : s pp ?? ( vec_get [s] . t members idx ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PkMember m # *PkMember pp
-            ? & == . m state 0 ! ( __pk_veq . m pubkey exclude ) { ( vec_push [s] out pp ) } {}
-        } {}
+    ~ & < idx n < ( vec_len [PkMember] out ) k {
+        : *PkMember m ( __pk_at . t members idx )
+        ? & == . m state 0 ! ( __pk_veq . m pubkey exclude ) { ( vec_push [PkMember] out ( __pk_snap m ) ) } {}
         = idx + idx 1
     }
     ^ out
@@ -393,16 +368,11 @@ $ `stdlib/core/rcbox.nu`
     i mtype
     i seq
     ( Vec u ) target  // ping-req: pubkey to probe (empty otherwise)
-    ( Vec s ) gossip  // *PkMember snapshots piggybacked
+    ( Vec PkMember ) gossip  // member facts piggybacked (pubkey/state/incarnation)
 }
 
-@ pkmsg_free sink PkMsg m → v {
-    ( vec_free [u] . m target )
-    : i n ( vec_len [s] . m gossip )
-    : ~ i k 0
-    ~ < k n { : s pp ?? ( vec_get [s] . m gossip k ) { T x → x F → # s 0 } ? != # i pp 0 { : *PkMember mm # *PkMember pp ( vec_free [u] . mm pubkey ) ( nurl_free # s mm ) } {} = k + k 1 }
-    ( vec_free [s] . m gossip )
-}
+// Let go of `m` now rather than at the end of its owner's scope.
+@ pkmsg_free sink PkMsg m → v {}
 
 // wire: [mtype:1][seq:4][tlen:2][target][gcount:2]
 //       [ pklen:2 pubkey  state:1  inc:4 ]*       (gossip entries)
@@ -412,89 +382,70 @@ $ `stdlib/core/rcbox.nu`
     ( bytes_push_u32_be b # u32 . m seq )
     ( bytes_push_u16_be b # u16 ( vec_len [u] . m target ) )
     ( vec_extend [u] b . m target )
-    : i gn ( vec_len [s] . m gossip )
+    : i gn ( vec_len [PkMember] . m gossip )
     ( bytes_push_u16_be b # u16 gn )
     : ~ i k 0
     ~ < k gn {
-        : s pp ?? ( vec_get [s] . m gossip k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PkMember mm # *PkMember pp
-            ( bytes_push_u16_be b # u16 ( vec_len [u] . mm pubkey ) )
-            ( vec_extend [u] b . mm pubkey )
-            ( vec_push [u] b # u . mm state )
-            ( bytes_push_u32_be b # u32 . mm incarnation )
-        } {}
+        : *PkMember mm ( __pk_at . m gossip k )
+        ( bytes_push_u16_be b # u16 ( vec_len [u] . mm pubkey ) )
+        ( vec_extend [u] b . mm pubkey )
+        ( vec_push [u] b # u . mm state )
+        ( bytes_push_u32_be b # u32 . mm incarnation )
         = k + k 1
     }
     ^ b
 }
 
-: PkCur { ( Vec u ) buf i off }
+// Readers over `b` at the cursor `off`, which they advance; a read past the
+// end yields 0 (a take, the bytes that are there).
+@ __pkc_u8 ( Vec u ) b inout i off → i { : i v ?? ( vec_get [u] b off ) { T x → # i x F → 0 } = off + off 1 ^ v }
 
-@ __pkc_u8 * PkCur c → i { : i v ?? ( vec_get [u] . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 1 ^ v }
+@ __pkc_u16 ( Vec u ) b inout i off → i { : i v ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 } = off + off 2 ^ v }
 
-@ __pkc_u16 * PkCur c → i { : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 2 ^ v }
+@ __pkc_u32 ( Vec u ) b inout i off → i { : i v ?? ( bytes_read_u32_be b off ) { T x → # i x F → 0 } = off + off 4 ^ v }
 
-@ __pkc_u32 * PkCur c → i { : i v ?? ( bytes_read_u32_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 4 ^ v }
-
-@ __pkc_take * PkCur c i n → ( Vec u ) {
+@ __pkc_take ( Vec u ) b inout i off i n → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] n )
-    : ~ i k 0
-    ~ < k n { ?? ( vec_get [u] . c buf + . c off k ) { T b → ( vec_push [u] o b ) F → {} } = k + k 1 }
-    = . c off + . c off n
+    ( vec_extend_range [u] o b off n )
+    = off + off n
     ^ o
 }
 
 @ pkmsg_decode ( Vec u ) buf → PkMsg {
-    : *PkCur c # *PkCur ( nurl_alloc Z PkCur )
-    = . c buf buf
-    = . c off 0
-    : i mtype ( __pkc_u8 c )
-    : i seq ( __pkc_u32 c )
-    : i tlen ( __pkc_u16 c )
-    : ( Vec u ) target ( __pkc_take c tlen )
-    : i gn ( __pkc_u16 c )
-    : ( Vec s ) gossip ( vec_new [s] )
+    : ~ i off 0
+    : i mtype ( __pkc_u8 buf off )
+    : i seq ( __pkc_u32 buf off )
+    : i tlen ( __pkc_u16 buf off )
+    : ( Vec u ) target ( __pkc_take buf off tlen )
+    : i gn ( __pkc_u16 buf off )
+    // An entry is at least 7 bytes on the wire: a count the rest of the
+    // buffer cannot hold reserves no more than it could.
+    : i room / - ( vec_len [u] buf ) off 7
+    : ( Vec PkMember ) gossip ( vec_with_cap [PkMember] ? < room gn room gn )
     : ~ i k 0
     ~ < k gn {
-        : i plen ( __pkc_u16 c )
-        : ( Vec u ) pk ( __pkc_take c plen )
-        : i st ( __pkc_u8 c )
-        : i inc ( __pkc_u32 c )
-        : *PkMember mm # *PkMember ( nurl_alloc Z PkMember )
-        = . mm pubkey pk
-        = . mm state st
-        = . mm incarnation inc
-        = . mm last_ns 0
-        = . mm susp_start_ns 0
-        = . mm susp_confirms 0
-        ( vec_push [s] gossip # s mm )
+        : i plen ( __pkc_u16 buf off )
+        : ( Vec u ) pk ( __pkc_take buf off plen )
+        : i st ( __pkc_u8 buf off )
+        : i inc ( __pkc_u32 buf off )
+        ( vec_push [PkMember] gossip @ PkMember { pk st inc 0 0 0 } )
         = k + k 1
     }
-    ( nurl_free # s c )
     ^ @ PkMsg { mtype seq target gossip }
 }
 
-// Build a gossip snapshot of up to `max` members (caller frees via the
+// Build a gossip snapshot of up to `max` members (owned copies; put it in a
 // PkMsg). Each entry carries pubkey/state/incarnation.
-@ pktable_gossip PkMemberTable t__h i max → ( Vec s ) {
+@ pktable_gossip PkMemberTable t__h i max → ( Vec PkMember ) {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : ( Vec s ) g ( vec_new [s] )
-    : i n ( vec_len [s] . t members )
+    : i n ( vec_len [PkMember] . t members )
+    : ~ i gn n
+    ? < max gn { = gn ? < max 0 0 max } {}
+    : ( Vec PkMember ) g ( vec_with_cap [PkMember] gn )
     : ~ i k 0
-    ~ & < k n < ( vec_len [s] g ) max {
-        : s pp ?? ( vec_get [s] . t members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PkMember m # *PkMember pp
-            : *PkMember c # *PkMember ( nurl_alloc Z PkMember )
-            = . c pubkey ( __pk_cpy . m pubkey )
-            = . c state . m state
-            = . c incarnation . m incarnation
-            = . c last_ns 0
-            = . c susp_start_ns 0
-            = . c susp_confirms 0
-            ( vec_push [s] g # s c )
-        } {}
+    ~ < k gn {
+        : *PkMember m ( __pk_at . t members k )
+        ( vec_push [PkMember] g ( __pk_fact . m pubkey . m state . m incarnation ) )
         = k + k 1
     }
     ^ g
@@ -503,21 +454,18 @@ $ `stdlib/core/rcbox.nu`
 // Apply every member fact carried in a decoded message's gossip list.
 @ pktable_apply_gossip PkMemberTable t__h PkMsg m i now_ns → v {
     : *PkMemberTableImpl t ( __PkMemberTable_ptr t__h )
-    : i n ( vec_len [s] . m gossip )
+    : i n ( vec_len [PkMember] . m gossip )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . m gossip k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PkMember mm # *PkMember pp
-            ? ( __pk_veq . mm pubkey . t self_pk ) {
-                // Gossip about US. If a peer thinks we're suspect/dead (e.g. it
-                // missed our pings while we were CPU-bound), REFUTE: bump our
-                // incarnation past theirs so our next heartbeat reinstates us.
-                ? != . mm state ( pk_alive ) { ( pktable_refute t__h . mm incarnation ) } {}
-            } {
-                ( pktable_apply t__h . mm pubkey . mm state . mm incarnation now_ns )
-            }
-        } {}
+        : *PkMember mm ( __pk_at . m gossip k )
+        ? ( __pk_veq . mm pubkey . t self_pk ) {
+            // Gossip about US. If a peer thinks we're suspect/dead (e.g. it
+            // missed our pings while we were CPU-bound), REFUTE: bump our
+            // incarnation past theirs so our next heartbeat reinstates us.
+            ? != . mm state ( pk_alive ) { ( pktable_refute t__h . mm incarnation ) } {}
+        } {
+            ( pktable_apply t__h . mm pubkey . mm state . mm incarnation now_ns )
+        }
         = k + k 1
     }
 }

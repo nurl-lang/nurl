@@ -46,12 +46,13 @@ $ `stdlib/core/rcbox.nu`
     i kind  // 0 none, 1 ping, 2 ping-req
     ( Vec u ) target  // pubkey to probe (owned copy; empty for none)
     i seq
-    ( Vec s ) relays  // ping-req: borrowed *PkMember relays (table-owned)
+    ( Vec PkMember ) relays  // ping-req: the relays (owned copies)
 }
 
-@ fd_action_free sink FdAction a → v { ( vec_free [u] . a target ) ( vec_free [s] . a relays ) }
+// Let go of `a` now rather than at the end of its owner's scope.
+@ fd_action_free sink FdAction a → v {}
 
-@ __fd_none → FdAction { ^ @ FdAction { ( fd_none ) ( vec_new [u] ) 0 ( vec_new [s] ) } }
+@ __fd_none → FdAction { ^ @ FdAction { ( fd_none ) ( vec_new [u] ) 0 ( vec_new [PkMember] ) } }
 
 : FdStateImpl {
     PkMemberTable table  // shared with the caller
@@ -122,7 +123,7 @@ $ `stdlib/core/rcbox.nu`
         } {}
         ? & == . fd probe_indirect 0 >= elapsed . fd direct_timeout_ns {
             = . fd probe_indirect 1
-            : ( Vec s ) relays ( pktable_pick_relays t . fd k_indirect . fd probe_target )
+            : ( Vec PkMember ) relays ( pktable_pick_relays t . fd k_indirect . fd probe_target )
             ^ @ FdAction { ( fd_do_preq ) ( __fd_cpy . fd probe_target ) . fd probe_seq relays }
         } {}
         ^ ( __fd_none )
@@ -139,7 +140,7 @@ $ `stdlib/core/rcbox.nu`
                 = . fd last_probe_ns now
                 ( vec_free [u] . fd probe_target )
                 = . fd probe_target ( __fd_cpy pk )
-                : FdAction a @ FdAction { ( fd_do_ping ) ( __fd_cpy pk ) . fd probe_seq ( vec_new [s] ) }
+                : FdAction a @ FdAction { ( fd_do_ping ) ( __fd_cpy pk ) . fd probe_seq ( vec_new [PkMember] ) }
                 ( vec_free [u] pk )
                 a
             }
@@ -172,8 +173,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Promote expired suspicions to dead (caller runs each tick); returns the
-// newly-dead as borrowed *PkMember (free the container with _pk_dead_free).
-@ fd_sweep FdState fd__h i now → ( Vec s ) {
+// newly-dead as owned copies.
+@ fd_sweep FdState fd__h i now → ( Vec PkMember ) {
     : *FdStateImpl fd ( __FdState_ptr fd__h )
     : PkMemberTable t . fd table
     ^ ( pktable_sweep t now )

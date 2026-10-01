@@ -17,7 +17,7 @@ $ `stdlib/dist/sim.nu`
 
 // build a node's gossip snapshot and submit it to a peer over the bus
 @ send_gossip SimNet net i src PkMemberTable t i peer i now → v {
-    : ( Vec s ) g ( pktable_gossip t 16 )
+    : ( Vec PkMember ) g ( pktable_gossip t 16 )
     : PkMsg m @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
     : ( Vec u ) bytes ( pkmsg_encode m )
     ( sim_send net src peer bytes now )

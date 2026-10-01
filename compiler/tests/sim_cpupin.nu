@@ -31,7 +31,7 @@ $ `stdlib/dist/sim.nu`
 
 // P broadcasts its membership view to B (so B can hear it is suspected).
 @ send_p_gossip SimNet net PkMemberTable tp i now → v {
-    : ( Vec s ) g ( pktable_gossip tp 16 )
+    : ( Vec PkMember ) g ( pktable_gossip tp 16 )
     : PkMsg m @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
     : ( Vec u ) bytes ( pkmsg_encode m )
     ( sim_send net 0 1 bytes now )
@@ -73,7 +73,7 @@ $ `stdlib/dist/sim.nu`
     ( send_p_gossip net tp now )
     ( send_b_heartbeat net tb now )
     ( deliver net fd tb now )
-    ? probe_on { : ( Vec s ) dead ( fd_sweep fd now ) ( _pk_dead_free dead ) } {}
+    ? probe_on { : ( Vec PkMember ) dead ( fd_sweep fd now ) ( _pk_dead_free dead ) } {}
     ^ ? == ( pktable_state_of tp bpk ) ( pk_suspect ) 1 0
 }
 

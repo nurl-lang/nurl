@@ -35,12 +35,10 @@ $ `stdlib/net/relay.nu`
 // Build the encoded heartbeat payload: a gossip message carrying just this
 // node's Alive self-fact at its current incarnation. Pure.
 @ heartbeat_payload PkMemberTable t → ( Vec u ) {
-    : ( Vec s ) g ( vec_new [s] )
-    ( vec_push [s] g # s ( pktable_self_fact t ) )
+    : ( Vec PkMember ) g ( vec_with_cap [PkMember] 1 )
+    ( vec_push [PkMember] g ( pktable_self_fact t ) )
     : PkMsg m @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
-    : ( Vec u ) bytes ( pkmsg_encode m )
-    ( pkmsg_free m )
-    ^ bytes
+    ^ ( pkmsg_encode m )
 }
 
 : Heartbeat {

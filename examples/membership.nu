@@ -24,7 +24,7 @@ $ `stdlib/net/failuredetector.nu`
 // Send a membership message (PING/ACK/PING-REQ + gossip) to a peer pubkey
 // over the transport — direct or relayed, the FD neither knows nor cares.
 @ send_msg Transport tr ( Vec u ) dst i mtype i seq PkMemberTable tbl → v {
-    : ( Vec s ) g ( pktable_gossip tbl 6 )
+    : ( Vec PkMember ) g ( pktable_gossip tbl 6 )
     : PkMsg m @ PkMsg { mtype seq ( vec_new [u] ) g }
     : ( Vec u ) wire ( pkmsg_encode m )
     ?? ( transport_send tr dst wire ) { T _ → {} F _ → {} }
@@ -36,11 +36,10 @@ $ `stdlib/net/failuredetector.nu`
     ? == . a kind ( fd_do_ping ) { ( send_msg tr . a target ( pk_ping ) . a seq tbl ) } {}
     ? == . a kind ( fd_do_preq ) {
         // ask each relay to probe the target on our behalf
-        : i n ( vec_len [s] . a relays )
+        : i n ( vec_len [PkMember] . a relays )
         : ~ i k 0
         ~ < k n {
-            : s pp ?? ( vec_get [s] . a relays k ) { T x → x F → # s 0 }
-            ? != # i pp 0 { : *PkMember rm # *PkMember pp ( send_msg tr . rm pubkey ( pk_pingreq ) . a seq tbl ) } {}
+            ?? ( vec_get [PkMember] . a relays k ) { T rm → ( send_msg tr . rm pubkey ( pk_pingreq ) . a seq tbl ) F → {} }
             = k + k 1
         }
     } {}
@@ -88,7 +87,7 @@ $ `stdlib/net/failuredetector.nu`
                 ( do_action tr a tbl )
                 ( fd_action_free a )
                 ( pump tr fd tbl self_pk now )
-                : ( Vec s ) dead ( fd_sweep fd now )
+                : ( Vec PkMember ) dead ( fd_sweep fd now )
                 ( _pk_dead_free dead )
                 ( sleep_ms 200 )
                 = ticks + ticks 1

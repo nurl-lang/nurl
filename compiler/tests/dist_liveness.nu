@@ -15,18 +15,14 @@ $ `stdlib/net/membership.nu`
 
 // a one-member gossip message: {pk, state, inc}
 @ gossip1 ( Vec u ) pk i st i inc → PkMsg {
-    : ( Vec s ) g ( vec_new [s] )
-    : *PkMember m # *PkMember ( nurl_alloc Z PkMember )
-    = . m pubkey ( cpy pk )
-    = . m state st = . m incarnation inc
-    = . m last_ns 0 = . m susp_start_ns 0 = . m susp_confirms 0
-    ( vec_push [s] g # s m )
+    : ( Vec PkMember ) g ( vec_new [PkMember] )
+    ( vec_push [PkMember] g @ PkMember { ( cpy pk ) st inc 0 0 0 } )
     ^ @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
 }
 // gossip carrying a node's self-heartbeat fact
 @ heartbeat_of PkMemberTable t → PkMsg {
-    : ( Vec s ) g ( vec_new [s] )
-    ( vec_push [s] g # s ( pktable_self_fact t ) )
+    : ( Vec PkMember ) g ( vec_new [PkMember] )
+    ( vec_push [PkMember] g ( pktable_self_fact t ) )
     ^ @ PkMsg { ( pk_ping ) 0 ( vec_new [u] ) g }
 }
 

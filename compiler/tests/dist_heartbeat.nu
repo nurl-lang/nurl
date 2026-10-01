@@ -26,19 +26,21 @@ $ `stdlib/dist/heartbeat.nu`
 
     : ( Vec u ) p0 ( heartbeat_payload t )
     : PkMsg m0 ( pkmsg_decode p0 )
-    ( pb `heartbeat is one gossip fact: ` == ( vec_len [s] . m0 gossip ) 1 )
-    : s gp ?? ( vec_get [s] . m0 gossip 0 ) { T x → x F → # s 0 }
-    : *PkMember gm # *PkMember gp
-    ( pb `heartbeat = self alive @ inc 0: ` & & ( veq . gm pubkey b ) == . gm state ( pk_alive ) == . gm incarnation 0 )
+    ( pb `heartbeat is one gossip fact: ` == ( vec_len [PkMember] . m0 gossip ) 1 )
+    ?? ( vec_get [PkMember] . m0 gossip 0 ) {
+        T gm → ( pb `heartbeat = self alive @ inc 0: ` & & ( veq . gm pubkey b ) == . gm state ( pk_alive ) == . gm incarnation 0 )
+        F → ( pb `heartbeat = self alive @ inc 0: ` F )
+    }
     ( pkmsg_free m0 ) ( vec_free [u] p0 )
 
     // after refuting a suspicion, the heartbeat carries the bumped incarnation
     ( pktable_refute t 5 )
     : ( Vec u ) p1 ( heartbeat_payload t )
     : PkMsg m1 ( pkmsg_decode p1 )
-    : s gp1 ?? ( vec_get [s] . m1 gossip 0 ) { T x → x F → # s 0 }
-    : *PkMember gm1 # *PkMember gp1
-    ( pb `heartbeat carries refuted incarnation 6: ` == . gm1 incarnation 6 )
+    ?? ( vec_get [PkMember] . m1 gossip 0 ) {
+        T gm1 → ( pb `heartbeat carries refuted incarnation 6: ` == . gm1 incarnation 6 )
+        F → ( pb `heartbeat carries refuted incarnation 6: ` F )
+    }
     ( pkmsg_free m1 ) ( vec_free [u] p1 )
 
     ( pktable_free t ) ( vec_free [u] b )
