@@ -135,6 +135,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now moves into the env; one still named later stays shared, as before.
   `thread_spawn_owned` is checked as a detaching spawn (Send) too.
   `compiler/tests/thread_closure_takes_dead_captures.nu`.
+- **A join handed to a keeping parameter moves the owned value it picked.**
+  `( vec_push v ? c ( string_from a ) ( string_from b ) )` — an argument or
+  a literal field built from a `?` / `??` join was always taken for a lend:
+  the keeper got a copy and the original leaked on every call. The join's
+  per-arm ownership now decides. `compiler/tests/join_into_keeper_moves.nu`.
 
 ### Changed
 

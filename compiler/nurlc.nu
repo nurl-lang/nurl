@@ -32503,6 +32503,17 @@
         } {}
         ^ ( nurl_str_cat `` `` )
     } {}
+    // A `?` / `??` join knows, per arm, whether what it yields is owned
+    // (`__last_join_own__`): lent only where it is not. Taken for lent
+    // always, an owned arm was copied into the keeping callee and the
+    // original leaked (`( vec_push v ? c ( string_from a ) ( string_from b
+    // ) )`).
+    ? & | == tt TT_QUEST == tt TT_QUESTQUEST != 0 ( nurl_sym_len syms `__last_join_own__` ) {
+        : s jl ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print jl ) ( nurl_print ` = xor i1 ` ) ( nurl_print ( nurl_sym_get syms `__last_join_own__` ) ) ( nurl_print `, 1\n` )
+        ( nurl_sym_def syms `__last_join_own__` `` )
+        ^ jl
+    } {}
     // A join or a block: its arms may be borrows.
     ^ ( nurl_str_cat `1` `` )
 }
