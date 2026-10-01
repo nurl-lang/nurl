@@ -44,7 +44,7 @@
 //   ( http_header_count Response r )                 → i
 //   ( http_header_name  Response r i idx )           → s      borrowed
 //   ( http_header_value Response r i idx )           → s      borrowed
-//   ( response_free Response r )                     → v
+//   ( response_free Response r )                     → v      early release (optional)
 //
 // Header blob format ("headers_blob"):
 //
@@ -67,12 +67,10 @@
 //
 // Memory model — single-owner, LLM-friendly:
 //
-//   * Each call returns a fresh OWNED Response. Caller MUST call
-//     `response_free` exactly once on the Result-Ok path. (HttpErr
-//     arms produced by these wrappers never carry a Response pointer.)
-//   * The Response wraps a heap struct allocated by the C runtime
-//     that owns its own copies of the body bytes and every header
-//     name/value pair. `response_free` cascades to all of them.
+//   * Each call returns a fresh OWNED Response, released (with the body
+//     bytes and every header name/value pair the C runtime copied) when
+//     its last owner goes — nothing to free by hand. (HttpErr arms
+//     produced by these wrappers never carry a Response.)
 //   * `http_status`, `http_body_str`, `http_header_*` return
 //     BORROWED views (raw `s` pointers) into the response. Do not
 //     free them; use `string_from` if you need a long-lived `String`
@@ -98,6 +96,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/http_pure.nu`
+$ `stdlib/core/rcbox.nu`
 
 // HttpErr tags — see stdlib/runtime.c §14 NURL_HTTP_ERR_*.
 //
@@ -108,10 +107,26 @@ $ `stdlib/ext/http_pure.nu`
 
 : Header { String name String value }
 
-// Response wraps the runtime-owned RawResponse pointer (`s ptr`).
+// Response wraps the runtime-owned RawResponse pointer, kept in an rcbox:
+// every copy of a Response is the same response, and the last owner
+// releases it (nurl_http_response_free) — nothing to free by hand.
 // All accessors go through the FFI helpers in runtime §14 so the
 // representation can change without touching call sites.
+: ResponseImpl { i res }
+
+% Drop ResponseImpl { @ drop ResponseImpl r → v { ( nurl_http_response_free . r res ) } }
+
 : Response { s raw }
+
+@ Response_share Response h → Response { ^ @ Response { # s ( rcbox_share # i . h raw ) } }
+
+@ Response_drop sink Response h → v {
+    ( mem_forget h )
+    ( rcbox_release [ResponseImpl] # i . h raw )
+}
+
+// The runtime's response block.
+@ __response_res Response r → i { ^ . ( rcbox_ptr [ResponseImpl] # i . r raw ) res }
 
 // HttpOptions bundles the per-request transport overrides that used to
 // be hardcoded inside the libcurl orchestrator. Pass one to
@@ -205,8 +220,7 @@ $ `stdlib/ext/http_pure.nu`
         ? == ek 7 { ^ @ !Response HttpErr { F # HttpErr HttpTooLarge } } {}
         ^ @ !Response HttpErr { F # HttpErr HttpOther }
     } {}
-    : s rp # s raw
-    : Response r @ Response { rp }
+    : Response r @ Response { # s ( rcbox_new [ResponseImpl] @ ResponseImpl { raw } ) }
     ^ @ !Response HttpErr { T r }
 }
 
@@ -357,26 +371,26 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 //                                 __http_dispatch above for the map).
 //
 // Strings returned here point into the response struct's owned storage
-// and are valid until `response_free`. The cast pattern is
+// and are valid while the Response is. The cast pattern is
 // `^ # s ( nurl_peek ... )` so the auto-detector sees an i64 binding at
 // fn exit and does NOT tag the @-fn's return as owned (avoiding a
 // spurious auto-drop of borrowed bytes).
 
 @ http_status Response r → i {
-    : s rp . r raw
+    : s rp # s ( __response_res r )
     : *u rawp # *u rp
     ^ ( nurl_peek rawp 0 )
 }
 
 @ http_body_str Response r → s {
-    : s rp . r raw
+    : s rp # s ( __response_res r )
     : *u rawp # *u rp
     : i bp ( nurl_peek rawp 4 )
     ^ ? == bp 0 `` # s bp
 }
 
 @ http_body_len Response r → i {
-    : s rp . r raw
+    : s rp # s ( __response_res r )
     : *u rawp # *u rp
     ^ ( nurl_peek rawp 5 )
 }
@@ -387,7 +401,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 // (package tarballs, images, compressed payloads). Caller frees with
 // `( vec_free [u] … )`.
 @ http_body_bytes Response r → ( Vec u ) {
-    : s rp . r raw
+    : s rp # s ( __response_res r )
     : *u rawp # *u rp
     : i bp ( nurl_peek rawp 4 )
     : i blen ( nurl_peek rawp 5 )
@@ -404,13 +418,13 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 }
 
 @ http_header_count Response r → i {
-    : s rp . r raw
+    : s rp # s ( __response_res r )
     : *u rawp # *u rp
     ^ ( nurl_peek rawp 2 )
 }
 
 @ http_header_name Response r i idx → s {
-    : s rp . r raw
+    : s rp # s ( __response_res r )
     : *u rawp # *u rp
     : i hc ( nurl_peek rawp 2 )
     ? || < idx 0 >= idx hc { ^ `` } {}
@@ -423,7 +437,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 }
 
 @ http_header_value Response r i idx → s {
-    : s rp . r raw
+    : s rp # s ( __response_res r )
     : *u rawp # *u rp
     : i hc ( nurl_peek rawp 2 )
     ? || < idx 0 >= idx hc { ^ `` } {}
@@ -436,11 +450,8 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
     ^ ? == vp 0 `` # s vp
 }
 
-@ response_free sink Response r → v {
-    : s rp . r raw
-    : i raw # i rp
-    ( nurl_http_response_free raw )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ response_free sink Response r → v {}
 
 // Render a HttpErr variant name. Useful for diagnostic messages without
 // a full match cascade at every call site.
