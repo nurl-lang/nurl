@@ -24,9 +24,11 @@
 //   ( rcbox_share   i p )      → i     one more owner; p back
 //   ( rcbox_release [T] i p )  → v     one owner fewer; the last drops the value
 
-& `c` @ nurl_atomic_i64_inc *u p → i
+// The owner count: one more (the old count back), one fewer (1 when the
+// caller was the last owner). A count of 1 skips the locked RMW.
+& `c` @ nurl_rc_share *u p → i
 
-& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+& `c` @ nurl_rc_release *u p → i
 
 : RcBox [T] {
     i owners
@@ -51,13 +53,13 @@
 }
 
 @ rcbox_share i p → i {
-    ? != 0 p { ( nurl_atomic_i64_inc # *u p ) } {}
+    ? != 0 p { : i _old ( nurl_rc_share # *u p ) } {}
     ^ p
 }
 
 @ rcbox_release [T] i p → v {
     ? == 0 p {} {
-        ? <= ( nurl_atomic_i64_dec_fetch # *u p ) 0 {
+        ? != 0 ( nurl_rc_release # *u p ) {
             : *( RcBox T ) b # *( RcBox T ) p
             : T v . b value
             ( mem_take v )

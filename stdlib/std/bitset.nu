@@ -211,13 +211,14 @@
     }
 }
 
-& `c` @ nurl_atomic_i64_inc *u p → i
+// Owner count: a count of 1 skips the locked RMW (stdlib/core/rcbox.nu).
+& `c` @ nurl_rc_share *u p → i
 
-& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+& `c` @ nurl_rc_release *u p → i
 
 @ Bitset_share Bitset bs → Bitset {
     : i w # i . bs words
-    ? != 0 w { ( nurl_atomic_i64_inc # *u - w 8 ) } {}
+    ? != 0 w { : i _old ( nurl_rc_share # *u - w 8 ) } {}
     ^ @ Bitset { . bs words . bs nbits . bs nwords }
 }
 
@@ -225,7 +226,7 @@
     ( mem_forget bs )
     : i w # i . bs words
     ? != 0 w {
-        ? <= ( nurl_atomic_i64_dec_fetch # *u - w 8 ) 0 { ( nurl_free # s - w 8 ) } {}
+        ? != 0 ( nurl_rc_release # *u - w 8 ) { ( nurl_free # s - w 8 ) } {}
     } {}
 }
 

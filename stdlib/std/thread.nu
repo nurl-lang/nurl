@@ -263,6 +263,11 @@ $ `stdlib/core/marker.nu`
 
 & `c` @ nurl_atomic_i64_dec_fetch *u p → i
 
+// Owner counts: a count of 1 skips the locked RMW (stdlib/core/rcbox.nu).
+& `c` @ nurl_rc_share *u p → i
+
+& `c` @ nurl_rc_release *u p → i
+
 // A zeroed `[ owners ][ native ]` block with one owner.
 @ __sync_block_new s native → i {
     : ~ i sz ( nurl_native_sizeof native )
@@ -275,14 +280,14 @@ $ `stdlib/core/marker.nu`
 
 // Another owner of `p`'s block.
 @ __sync_block_share s p → v {
-    ? != 0 # i p { ( nurl_atomic_i64_inc # *u p ) } {}
+    ? != 0 # i p { : i _old ( nurl_rc_share # *u p ) } {}
 }
 
 // Drop one owner of `p`'s block: T when that was the last one (the
 // caller then destroys the object and frees the block).
 @ __sync_block_release s p → b {
     ? == 0 # i p { ^ F } {}
-    ^ <= ( nurl_atomic_i64_dec_fetch # *u p ) 0
+    ^ != 0 ( nurl_rc_release # *u p )
 }
 
 // ── Mutex ─────────────────────────────────────────────────────────

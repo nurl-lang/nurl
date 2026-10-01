@@ -89,9 +89,11 @@
 
 // ── Constructors ────────────────────────────────────────────────────
 
-& `c` @ nurl_atomic_i64_inc *u p → i
+// The owner count: one more (the old count back), one fewer (1 when the
+// caller was the last owner). A count of 1 skips the locked RMW.
+& `c` @ nurl_rc_share *u p → i
 
-& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+& `c` @ nurl_rc_release *u p → i
 
 // `n` bytes behind a one-owner count; the bytes' address.
 @ __cell_block i n b zero → i {
@@ -122,7 +124,7 @@
 
 @ Cell_share Cell c → Cell {
     : i p # i . c ptr
-    ? != 0 p { ( nurl_atomic_i64_inc # *u - p 8 ) } {}
+    ? != 0 p { : i _old ( nurl_rc_share # *u - p 8 ) } {}
     ^ @ Cell { . c ptr . c bytes }
 }
 
@@ -130,7 +132,7 @@
     ( mem_forget c )
     : i p # i . c ptr
     ? != 0 p {
-        ? <= ( nurl_atomic_i64_dec_fetch # *u - p 8 ) 0 { ( nurl_free # s - p 8 ) } {}
+        ? != 0 ( nurl_rc_release # *u - p 8 ) { ( nurl_free # s - p 8 ) } {}
     } {}
 }
 

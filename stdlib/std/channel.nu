@@ -284,7 +284,7 @@ $ `stdlib/std/async_ffi.nu`
 // ── Cleanup ────────────────────────────────────────────────────────
 
 @ Channel_share [A] ( Channel A ) ch → ( Channel A ) {
-    ( nurl_atomic_i64_inc # *u . ch ctl )
+    : i _old ( nurl_rc_share # *u . ch ctl )
     ^ @ ( Channel A ) { . ch ctl }
 }
 
@@ -293,7 +293,7 @@ $ `stdlib/std/async_ffi.nu`
     ( mem_forget ch )
     : s p . ch ctl
     ? == 0 # i p {} {
-        ? <= ( nurl_atomic_i64_dec_fetch # *u p ) 0 {
+        ? != 0 ( nurl_rc_release # *u p ) {
             : *( ChannelImpl A ) impl # *( ChannelImpl A ) p
             : ( Vec A ) q . impl q
             ( mem_take q )

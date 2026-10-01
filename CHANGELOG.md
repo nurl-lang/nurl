@@ -155,6 +155,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the bytes: `Cell_share` is another owner (a thread's capture, a struct
   field), and the last owner frees it. `cell_free` remains as an early
   release of one owner.
+- **A sole owner skips the locked owner-count update.** rcbox handles,
+  `Cell`, `Bitset`, `Channel` and the sync handles read a count of 1 as "no
+  one else holds this" and share or release without a locked
+  read-modify-write (`nurl_rc_share` / `nurl_rc_release`); a loop creating,
+  sharing and dropping handles ran 7–23 % fewer cycles.
 - **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
   struct whose module defines `S_drop sink S x` (and `S_share` /
   `S_clone`) is dropped and copied like `HashMap`.
