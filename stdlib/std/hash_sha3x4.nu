@@ -185,9 +185,8 @@ simd @ __kf1600x4 * u64 a * u64 b * u64 rc → v {
 // The public surface, explicit since `pub` on shake256x4_block put the
 // file in strict mode — the same set the header comment documents.
 //
-// The state behind the handle. `pub` only because the rcbox instance
-// (`RcBox Sha3x4Impl`) is checked for visibility outside this file.
-pub : Sha3x4Impl {
+// The state behind the handle.
+: Sha3x4Impl {
     ( Vec u64 ) st  // 25 lanes x 4 ways, way W of lane L at L*4 + W
     ( Vec u64 ) scr  // 100-lane ping-pong buffer
     ( Vec u64 ) rc  // the 24 iota constants, shared by all four

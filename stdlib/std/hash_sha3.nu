@@ -193,9 +193,8 @@ pub @ keccak_round_constants → ( Vec u64 ) {
 // marked here is what the header comment already documented as the API,
 // and everything left unmarked is now genuinely private to this file.
 //
-// The state behind the handle. `pub` only because the rcbox instance
-// (`RcBox Sha3Impl`) is checked for visibility outside this file.
-pub : Sha3Impl {
+// The state behind the handle.
+: Sha3Impl {
     ( Vec u64 ) st  // 25 lanes
     ( Vec u64 ) scr  // 25-lane ping-pong buffer for the permutation
     ( Vec u64 ) rc  // ι constants

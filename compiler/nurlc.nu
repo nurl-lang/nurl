@@ -606,7 +606,12 @@
         // builtin), look up the recorded origin in g_vis_syms. The
         // check is a no-op for builtins (their __src_file is unset)
         // and for same-file references.
-        ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37
+        // Not for a type that reached this template as a type ARGUMENT:
+        // the instantiation site named it, where it was visible (a strict
+        // module's private `Impl` in `rcbox_zero [Impl]`, judged again inside
+        // the instance's body, was rejected).
+        ? & & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37
+        ! ( __vis_targ_exempt v )
         { ( vis_check_xref lex v `type` ) }
         {}
         ^ lt
@@ -1588,6 +1593,15 @@
 // even when `T` happens to have a field literally named `idx` (textual
 // monomorphisation otherwise loses the "this type was a tparam" signal).
 : ~ s g_mono_tparam_tys ``
+// The type arguments of the generic struct being instantiated (its field
+// types are parsed in a pseudo-file); see vis_check_xref.
+: ~ s g_vis_inst_targs ``
+
+// Did type `v` reach the template being instantiated as a type argument?
+@ __vis_targ_exempt s v → b {
+    ^ | ( str_contains_word g_mono_tparam_tys v ) ( str_contains_word g_vis_inst_targs v )
+}
+
 : ~ i g_dbg_type_syms 0  // Phase 6 type-id cache: LLVM type string
 //  (e.g. `i64`, `i8*`, `%String`) → metadata id
 //  of its DIBasicType / DIDerivedType /
@@ -28877,6 +28891,8 @@
                 ( nurl_lex_free lex_inner )
                 // Re-lex, skip outer '{', parse each field via parse_type + IDENT.
                 : i lex2 ( nurl_lex_new subst ( nurl_str_cat `<inst:` ( nurl_str_cat mangled `>` ) ) )
+                : s __saved_vta ( nurl_str_cat g_vis_inst_targs `` )
+                = g_vis_inst_targs ( nurl_str_cat ta_list `` )
                 ? == ( nurl_lex_type lex2 ) TT_LBRACE { ( nurl_lex_advance lex2 ) } {}
                 ( nurl_print `%` ) ( nurl_print mangled ) ( nurl_print ` = type { ` )
                 : ~ i first 1
@@ -28910,6 +28926,7 @@
                 }
                 ( nurl_print ` }\n\n` )
                 ( nurl_lex_free lex2 )
+                = g_vis_inst_targs __saved_vta
                 ( nurl_sym_def syms mangled ( nurl_str_cat `%` mangled ) )
                 ( nurl_sym_def syms ( nurl_str_cat mangled `__is_type` ) `1` )
                 ( nurl_sym_def syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )

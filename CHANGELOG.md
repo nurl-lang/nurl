@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copied bitwise, so with an owning element type both Vecs released the
   same Strings — `vec_clone` of a `Vec` of owning structs crashed.
   `vec_append` still moves. `compiler/tests/wrapped_and_copied_elements.nu`.
+- **A private type passed as a type argument is judged where it is
+  written.** A strict module's private `Impl` in `rcbox_new [Impl]` was
+  rejected inside the generic instance's body, so state structs had to be
+  `pub`. `compiler/tests/private_type_argument.nu`.
 - **Option parameters, block-arm tails and one-field Drop structs own what
   they hold.** A `sink ?T` parameter was never dropped (the literal option
   type had no drop; bindings register under the `%__opt.<T>` twin and now
