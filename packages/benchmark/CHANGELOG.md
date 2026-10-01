@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+The CSV table in the `csv sort 1M×8` setup is a `CSVTable` value, not a `*CSVTable`: `stdlib/ext/csv.nu` made it a self-releasing handle that its last owner drops. `csv_table_free` stays only as an early release, so the million-row table is gone before the timed sort allocates.
+
 ## 0.1.4
 
 The benchmark body's closure environment is no longer freed by hand; NURL 0.67.0 owns and drops it (#1141).

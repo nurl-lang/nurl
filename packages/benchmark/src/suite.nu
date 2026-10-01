@@ -407,7 +407,7 @@ $ `src/report.nu`
 }
 
 // unwrap a column index by name (0 if absent — the generated header has it)
-@ __col * CSVTable t s name → i {
+@ __col CSVTable t s name → i {
     ?? ( csv_table_col_index t name ) { T c → { ^ c } F → { ^ 0 } }
 }
 
@@ -415,7 +415,7 @@ $ `src/report.nu`
     : i n 1000000
     // --- setup (not timed): parse with the standard library's CSV reader,
     // then extract each row's (type, date, uuid) keys ONCE into integers.
-    : *CSVTable t ( csv_table_from_string ( __gen_csv n ) )
+    : CSVTable t ( csv_table_from_string ( __gen_csv n ) )
     : i cty ( __col t `type` )
     : i cda ( __col t `date` )
     : i cuu ( __col t `uuid` )
@@ -433,6 +433,8 @@ $ `src/report.nu`
         ( vec_push [i] key | | << tid 58 << dk 47 uu )
         = r0 + r0 1
     }
+    // early release: the million-row table is the bulk of this setup's
+    // memory, and the keys are all the timed sort needs
     ( csv_table_free t )
     : *i kp ( vec_data [i] key )
     : ( Vec i ) work ( vec_with_cap [i] n )
