@@ -12340,7 +12340,7 @@
 // parent's snapshot, not defer-snapshotted, with a destructor to run).
 // Returns the exit label, or `` when the arm has nothing to drop — then
 // the caller keeps branching straight to the join.
-@ mem_arm_exit_open i syms i cg s old_user s old_structs → s {
+@ mem_arm_exit_open i syms i cg s old_user s old_structs s hown → s {
     : s usnap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
     : ~ s udelta ``
     : ~ s urest ( nurl_sym_get syms `__user_drops__` )
@@ -12384,7 +12384,50 @@
     : s skey ( nurl_str_cat lbl `__x_sfields` )
     ( nurl_sym_set g_fn_escapes ukey udelta )
     ( nurl_sym_set g_fn_escapes skey sdelta )
+    ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) hown )
     ^ lbl
+}
+
+// The arm's ownership bit (mem_arm_hown) as the parked drops' second
+// chance: an arm whose value is consumed still drops its locals when it
+// handed over an owned value that cannot hold an address — the value is
+// then whole on its own (`T text → { : ( Vec i ) v ( f text ) v }` leaked
+// `text` on every call). `` when the value may point anywhere.
+@ mem_arm_exit_hown s ty s hown → s {
+    ? | ( seq hown `false` ) ! ( __ty_no_address ty 0 ) { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat hown `` )
+}
+
+// Can no value of type `ty` hold an address — numbers, Strings, Vecs of
+// such, options / results and plain structs of them. A view, a raw
+// pointer, an enum, a library handle or a trait object can.
+@ __ty_no_address s ty0 i depth → b {
+    ? > depth 6 { ^ F } {}
+    : s ty ( nurl_llty ty0 )
+    : i n ( nurl_str_len ty )
+    ? == 0 n { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? ( seq ty `%String` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ty_no_address ( __vec_elem_llvm ty ) + depth 1 ) } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s a ( __wrap_part ty 0 )
+        : s b ( __wrap_part ty 1 )
+        ? == 0 ( nurl_str_len a ) { ^ F } {}
+        ? ! ( __ty_no_address a + depth 1 ) { ^ F } {}
+        ^ | == 0 ( nurl_str_len b ) ( __ty_no_address b + depth 1 )
+    } {}
+    ? | | != ( nurl_str_get ty 0 ) 37 ( __is_libh ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    ? | == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ F } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+        ? ! ( __ty_no_address ft + depth 1 ) { ^ F } {}
+        = fi + fi 1
+    }
+    ^ T
 }
 
 // Emit parked exit blocks: each runs its drops when `drop` (the value
@@ -12405,7 +12448,20 @@
         : s end_label ( nurl_str_slice rec + gt 1 - ( nurl_str_len rec ) + gt 1 )
         : s ukey ( nurl_str_cat lbl `__x_udrops` )
         : s skey ( nurl_str_cat lbl `__x_sfields` )
+        : s hkey ( nurl_str_cat lbl `__x_hown` )
+        : s hown ( nurl_sym_get g_fn_escapes hkey )
         ( nurl_print lbl ) ( nurl_print `:\n` )
+        ? & ! drop != 0 ( nurl_str_len hown )
+        { : ~ s urest ( nurl_sym_get g_fn_escapes ukey )
+            ~ != 0 ( nurl_str_len urest ) {
+                : s ptr ( str_first_word urest ) = urest ( str_skip_word urest )
+                : s vt ( str_first_word urest ) = urest ( str_skip_word urest )
+                : s sf ( str_first_word urest ) = urest ( str_skip_word urest )
+                : s lv ( str_first_word urest ) = urest ( str_skip_word urest )
+                ( mem_emit_gated_drop_when cg ptr vt ? ( seq sf `-` ) `` sf ? ( seq lv `-` ) `` lv hown )
+                ( mem_journal_forget_userdrop cg ptr vt )
+            } }
+        {}
         ? drop
         { : ~ s urest ( nurl_sym_get g_fn_escapes ukey )
             ~ != 0 ( nurl_str_len urest ) {
@@ -12430,6 +12486,7 @@
         ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol )
         ( nurl_sym_set g_fn_escapes ukey `` )
         ( nurl_sym_set g_fn_escapes skey `` )
+        ( nurl_sym_set g_fn_escapes hkey `` )
     }
 }
 
@@ -12742,7 +12799,7 @@
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_t )
-                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t )
+                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t ( mem_arm_exit_hown tt2 t_hown ) )
                 ? != 0 ( nurl_str_len __tx )
                 { = tlbl ( nurl_str_cat __tx `` )
                     = t_via_exit T
@@ -12864,7 +12921,7 @@
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_e )
-                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e )
+                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e ( mem_arm_exit_hown et2 e_hown ) )
                 ? != 0 ( nurl_str_len __ex )
                 { = elbl ( nurl_str_cat __ex `` )
                     = e_via_exit T
@@ -14586,7 +14643,7 @@
                 { ( mem_defer_new_strings syms old_strs_m )
                     // Drop values and owned struct fields wait in a private
                     // exit block for the join's verdict (mem_arm_exit_open).
-                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m )
+                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m ( mem_arm_exit_hown arm_type arm_hown ) )
                     ? != 0 ( nurl_str_len __ax )
                     { = arm_lbl ( nurl_str_cat __ax `` )
                         = arm_via_exit T
@@ -17816,6 +17873,22 @@
         ( nurl_print `(` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print dv ) ( nurl_print `)` ) ( emit_dbg_eol )
         ^ v }
     {}
+    ( __dropif_request vt mangle )
+    ( nurl_print `  call void @__dropif_` ) ( nurl_print mangle ) ( nurl_print `(i1 ` ) ( nurl_print cond )
+    ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `)` ) ( emit_dbg_eol )
+}
+
+// …and only when `extra` (an i1 operand, `true` for always) holds too.
+@ mem_emit_gated_drop_when i cg s ptr s vt s sflag s live s extra → v {
+    ? ( seq extra `true` ) { ( mem_emit_gated_drop_of cg ptr vt sflag live ) ^ v } {}
+    : s mangle ( nurl_sym_get g_impl_name_syms ( nurl_str_cat `drop##` vt ) )
+    ? == 0 ( nurl_str_len mangle ) { ^ v } {}
+    : ~ s cond ( mem_drop_cond_of cg sflag live )
+    ? == 0 ( nurl_str_len cond ) { = cond ( nurl_str_cat extra `` ) } {
+        : s both ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print both ) ( nurl_print ` = and i1 ` ) ( nurl_print cond ) ( nurl_print `, ` ) ( nurl_print extra ) ( nurl_print `\n` )
+        = cond both
+    }
     ( __dropif_request vt mangle )
     ( nurl_print `  call void @__dropif_` ) ( nurl_print mangle ) ( nurl_print `(i1 ` ) ( nurl_print cond )
     ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `)` ) ( emit_dbg_eol )

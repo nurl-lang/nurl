@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values.** `?? ( lsm_put db ( key_of k ) v ) { … }` kept the key for a
   consumer of the `!T E` (packages/lsmdb leaked one key per put).
   `compiler/tests/temp_arg_into_result_call.nu`.
+- **A value-producing `??` arm drops the payload it bound.**
+  `^ ?? ( read_file p ) { T text → { : ( Vec i ) v ( f text ) v } … }`:
+  the arm's drops waited for the join's verdict, and a consumed value kept
+  them all (it might point into an arm-local). An owned value whose type
+  can hold no address cannot, so the arm's locals are dropped under its
+  ownership bit (packages/nurl-cov leaked each source file it read).
+  `compiler/tests/value_arm_drops_binding.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
