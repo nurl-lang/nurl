@@ -973,6 +973,8 @@
 : ~ i g_str_idx 0
 : ~ i g_str_syms 0  // sym handle for string-literal metadata (never pushed/popped)
 : ~ i g_did_ret 0  // set to 1 by gen_ret; checked/reset by gen_cond
+// 1 when the last cast cast a binding (gen_cast; gen_agg_lit reads it)
+: ~ i g_last_cast_direct 0
 // Names of the mutable string globals that own their buffer (each has a
 // compiler-emitted `<name>__nurlown` flag). `main` releases them on the
 // way out — nothing else can, since a global outlives every scope.
@@ -12340,7 +12342,7 @@
 // parent's snapshot, not defer-snapshotted, with a destructor to run).
 // Returns the exit label, or `` when the arm has nothing to drop — then
 // the caller keeps branching straight to the join.
-@ mem_arm_exit_open i syms i cg s old_user s old_structs s hown → s {
+@ mem_arm_exit_open i syms i cg s old_user s old_structs s ty s hown0 → s {
     : s usnap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
     : ~ s udelta ``
     : ~ s urest ( nurl_sym_get syms `__user_drops__` )
@@ -12384,7 +12386,7 @@
     : s skey ( nurl_str_cat lbl `__x_sfields` )
     ( nurl_sym_set g_fn_escapes ukey udelta )
     ( nurl_sym_set g_fn_escapes skey sdelta )
-    ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) hown )
+    ( nurl_sym_set g_fn_escapes ( nurl_str_cat lbl `__x_hown` ) ( mem_arm_exit_hown ty hown0 ) )
     ^ lbl
 }
 
@@ -12799,7 +12801,7 @@
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_t )
-                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t ( mem_arm_exit_hown tt2 t_hown ) )
+                : s __tx ( mem_arm_exit_open syms cg old_user_t old_structs_t tt2 t_hown )
                 ? != 0 ( nurl_str_len __tx )
                 { = tlbl ( nurl_str_cat __tx `` )
                     = t_via_exit T
@@ -12921,7 +12923,7 @@
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
         { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_e )
-                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e ( mem_arm_exit_hown et2 e_hown ) )
+                : s __ex ( mem_arm_exit_open syms cg old_user_e old_structs_e et2 e_hown )
                 ? != 0 ( nurl_str_len __ex )
                 { = elbl ( nurl_str_cat __ex `` )
                     = e_via_exit T
@@ -14643,7 +14645,7 @@
                 { ( mem_defer_new_strings syms old_strs_m )
                     // Drop values and owned struct fields wait in a private
                     // exit block for the join's verdict (mem_arm_exit_open).
-                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m ( mem_arm_exit_hown arm_type arm_hown ) )
+                    : s __ax ( mem_arm_exit_open syms cg old_user_m old_structs_m arm_type arm_hown )
                     ? != 0 ( nurl_str_len __ax )
                     { = arm_lbl ( nurl_str_cat __ax `` )
                         = arm_via_exit T
@@ -22408,8 +22410,8 @@
     // cast of such a cast) rather than something computed from one —
     // `# s ( rcbox_new … @ T { … v } )` only READ `v` (gen_agg_lit).
     : b __cast_direct | | ( is_ident_tok source_tt ) == source_tt TT_DOT
-    & == source_tt TT_HASH != 0 ( nurl_sym_len syms `__last_cast_direct__` )
-    ( nurl_sym_def syms `__last_cast_direct__` ? __cast_direct `1` `` )
+    & == source_tt TT_HASH == g_last_cast_direct 1
+    = g_last_cast_direct ? __cast_direct 1 0
     // `# ( Vec T ) 0` — the empty placeholder of a `F` option — holds nothing;
     // nor does a value made from an integer (`# TomlValue TBool`, a tag).
     // (Not a global holding a handle's address, `# ( Vec T ) g_tbl`: that
@@ -23444,10 +23446,12 @@
         { ( nurl_sym_set_deep syms `__ret_agg__` ? | agg_nested_wrap & agg_returned agg_is_wrap `2w` `2` ) } {}
         // Only a literal nested right here is returned with this one; the
         // bindings a literal inside a call names are that call's arguments.
-        : s __ad_before ( nurl_str_cat ( nurl_sym_get syms `__agg_direct__` ) `` )
+        // (The list only grows inside a field: cut it back to its length.)
+        : i __ad_len ( nurl_sym_len syms `__agg_direct__` )
         : ~ s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
-        ? != fld_first_tt TT_AT { ( nurl_sym_set_deep syms `__agg_direct__` __ad_before ) } {}
+        ? & != fld_first_tt TT_AT != __ad_len ( nurl_sym_len syms `__agg_direct__` )
+        { ( nurl_sym_set_deep syms `__agg_direct__` ( nurl_str_slice ( nurl_sym_get syms `__agg_direct__` ) 0 __ad_len ) ) } {}
         // The binding a field IS (bare, a field of it, a cast of it) — as
         // opposed to one a call in the field merely reads: gen_ret's
         // returned-binding skip applies to the former only.
@@ -23455,7 +23459,7 @@
         // `@ H { # s ( rcbox_new [T] @ T { a b } ) }` named `b` last, and
         // a returned H skipped `b`'s drop.)
         ? | | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_DOT
-        & == fld_first_tt TT_HASH != 0 ( nurl_sym_len syms `__last_cast_direct__` )
+        & == fld_first_tt TT_HASH == g_last_cast_direct 1
         { : s __ad ( nurl_sym_get syms `__last_ident_name__` )
             ? != 0 ( nurl_str_len __ad )
             { ( nurl_sym_set_deep syms `__agg_direct__` ( nurl_str_cat3 ( nurl_sym_get syms `__agg_direct__` ) ` ` __ad ) ) } {} }
