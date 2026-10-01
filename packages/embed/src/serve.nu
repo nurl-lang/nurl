@@ -46,7 +46,6 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/core/cell.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/url.nu`
@@ -79,11 +78,12 @@ $ `model.nu`
 // ── The model queue ───────────────────────────────────────────────────
 //
 // One job per waiting request, linked through the jobs themselves — a
-// module global cannot hold a Vec (or a Mutex) built by a call, so the
-// queue is two pointers and the synchronisation primitives are kept as
-// the two words of each one's Cell. The submitting fiber owns the job
-// and frees it once it has seen `done`; the model thread only fills it
-// in.
+// module global holds one word, so the queue is two pointers, and its
+// lock and two conditions sit in an EmSync block the server allocates
+// once and keeps for the process (the model thread and the ticker
+// outlive any one scope, as the handlers do). The submitting fiber owns
+// the job and frees it once it has seen `done`; the model thread only
+// fills it in.
 : EmJob {
     i next
     ( Vec i ) ids  // flat tokens for the whole request
@@ -97,25 +97,23 @@ $ `model.nu`
 : ~ i g_q_head 0
 : ~ i g_q_tail 0
 : ~ b g_q_stop F
-: ~ i g_q_m_ptr 0
-: ~ i g_q_m_bytes 0
-: ~ i g_q_req_ptr 0
-: ~ i g_q_req_bytes 0
-: ~ i g_q_done_ptr 0
-: ~ i g_q_done_bytes 0
+: EmSync {
+    Mutex m  // guards the queue, g_q_stop, the idle clock and g_em_reqs
+    Cond req  // a job was queued, the server is stopping, or a ticker wake
+    Cond done  // a job was finished
+}
 
-@ __em_qm → Mutex { ^ @ Mutex { @ Cell { # s g_q_m_ptr g_q_m_bytes } } }
+: ~ i g_q_sync 0  // *EmSync as an address (0 = never served)
 
-@ __em_qreq → Cond { ^ @ Cond { @ Cell { # s g_q_req_ptr g_q_req_bytes } } }
-
-@ __em_qdone → Cond { ^ @ Cond { @ Cell { # s g_q_done_ptr g_q_done_bytes } } }
+@ __em_sync → *EmSync { ^ # *EmSync g_q_sync }
 
 // Run one request's forward — the WHOLE batch, one job — on the model
 // thread and wait for it. `ids`, `offs` and `out` stay owned by the
 // caller — the job only borrows them for the length of the call, which
 // is exactly how long the caller blocks.
 @ __em_submit ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
-    ? != g_q_m_ptr 0 {} { ^ F }
+    ? != g_q_sync 0 {} { ^ F }
+    : *EmSync q ( __em_sync )
     : *EmJob j # *EmJob ( nurl_alloc Z EmJob )
     = . j next 0
     = . j ids ids
@@ -124,7 +122,7 @@ $ `model.nu`
     = . j normalize normalize
     = . j done F
     = . j ok F
-    ( mutex_lock ( __em_qm ) )
+    ( mutex_lock . q m )
     ? == g_q_tail 0 {
         = g_q_head # i j
         = g_q_tail # i j
@@ -133,9 +131,9 @@ $ `model.nu`
         = . t next # i j
         = g_q_tail # i j
     }
-    ( cond_signal ( __em_qreq ) )
-    ~ ! . j done { ( cond_wait ( __em_qdone ) ( __em_qm ) ) }
-    ( mutex_unlock ( __em_qm ) )
+    ( cond_signal . q req )
+    ~ ! . j done { ( cond_wait . q done . q m ) }
+    ( mutex_unlock . q m )
     : b r . j ok
     ( nurl_free # *u j )
     ^ r
@@ -144,11 +142,12 @@ $ `model.nu`
 // The model thread: take jobs, run them, wake the waiter.
 @ __em_model_loop → v {
     : *Embed e # *Embed g_em
+    : *EmSync q ( __em_sync )
     : ~ b run T
     ~ run {
-        ( mutex_lock ( __em_qm ) )
+        ( mutex_lock . q m )
         ~ & == g_q_head 0 ! g_q_stop {
-            ( cond_wait ( __em_qreq ) ( __em_qm ) )
+            ( cond_wait . q req . q m )
             // a ticker wake: nothing queued — is it time to let go?
             ? & & == g_q_head 0 > g_em_unload_ms 0 ( embed_loaded e ) {
                 ? >= ( elapsed_ms_since g_em_idle_since ) g_em_unload_ms {
@@ -163,13 +162,13 @@ $ `model.nu`
             } {}
         }
         ? == g_q_head 0 {
-            ( mutex_unlock ( __em_qm ) )
+            ( mutex_unlock . q m )
             = run F
         } {
             : *EmJob j # *EmJob g_q_head
             = g_q_head . j next
             ? == g_q_head 0 { = g_q_tail 0 } {}
-            ( mutex_unlock ( __em_qm ) )
+            ( mutex_unlock . q m )
             : ~ b r T
             ? ( embed_loaded e ) {} {
                 : i t0 ( monotonic_ns )
@@ -191,23 +190,24 @@ $ `model.nu`
                 }
             }
             ? r { = r ( embed_encode_batch e . j ids . j offs . j out . j normalize ) } {}
-            ( mutex_lock ( __em_qm ) )
+            ( mutex_lock . q m )
             = g_em_idle_since ( monotonic_ns )
             = . j ok r
             = . j done T
-            ( cond_broadcast ( __em_qdone ) )
-            ( mutex_unlock ( __em_qm ) )
+            ( cond_broadcast . q done )
+            ( mutex_unlock . q m )
         }
     }
 }
 
 // Five wakes a second for the model thread while --unload-after is on.
 @ __em_ticker → v {
+    : *EmSync q ( __em_sync )
     ~ T {
         ( sleep_ms 200 )
-        ( mutex_lock ( __em_qm ) )
-        ( cond_broadcast ( __em_qreq ) )
-        ( mutex_unlock ( __em_qm ) )
+        ( mutex_lock . q m )
+        ( cond_broadcast . q req )
+        ( mutex_unlock . q m )
     }
 }
 
@@ -337,9 +337,10 @@ $ `model.nu`
     }
     // one per served request, not per text in a batch — the queue mutex
     // is what makes it a count and not a race
-    ( mutex_lock ( __em_qm ) )
+    : *EmSync q ( __em_sync )
+    ( mutex_lock . q m )
     = g_em_reqs + g_em_reqs 1
-    ( mutex_unlock ( __em_qm ) )
+    ( mutex_unlock . q m )
     // The body is built as ONE string, not a Json tree. A 64-text batch
     // is ~65k floats; as json_float nodes that is 65k allocations whose
     // frees each walk the panic-unwind journal the handler's panic→500
@@ -508,18 +509,14 @@ $ `model.nu`
     = g_em_token ( strdup token )
     ? > ( nurl_str_len g_em_name ) 0 { ( nurl_free g_em_name ) } {}
     = g_em_name ( strdup name )
-    : Mutex qm ( mutex_new )
-    : Cell qmc . qm c
-    = g_q_m_ptr # i . qmc ptr
-    = g_q_m_bytes . qmc bytes
-    : Cond qreq ( cond_new )
-    : Cell qrc . qreq c
-    = g_q_req_ptr # i . qrc ptr
-    = g_q_req_bytes . qrc bytes
-    : Cond qdone ( cond_new )
-    : Cell qdc . qdone c
-    = g_q_done_ptr # i . qdc ptr
-    = g_q_done_bytes . qdc bytes
+    ? == g_q_sync 0 {
+        : *EmSync qs # *EmSync ( nurl_alloc Z EmSync )
+        = . qs m ( mutex_new )
+        = . qs req ( cond_new )
+        = . qs done ( cond_new )
+        = g_q_sync # i qs
+    } {}
+    : *EmSync q ( __em_sync )
     : ( @ v ) modelfn \ → v { ( __em_model_loop ) }
     ?? ( thread_spawn modelfn ) {
         T th → { ( thread_detach th ) }
@@ -571,10 +568,10 @@ $ `model.nu`
     ( string_free msg )
 
     : i rc ( http_app_listen a host port )
-    ( mutex_lock qm )
+    ( mutex_lock . q m )
     = g_q_stop T
-    ( cond_broadcast qreq )
-    ( mutex_unlock qm )
+    ( cond_broadcast . q req )
+    ( mutex_unlock . q m )
     = g_em 0
     ^ rc
 }
