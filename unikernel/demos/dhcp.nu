@@ -35,7 +35,7 @@ $ `unikernel/drivers/virtionet.nu`
 // One turn: whatever the client wants to send goes out as a broadcast
 // datagram from 0.0.0.0 (the shape DHCP needs before an address
 // exists), and whatever arrives is fed back to it.
-@ turn * VirtioNet nic * NetStack st DhcpClient c i now → b {
+@ turn * VirtioNet nic NetStack st DhcpClient c i now → b {
     : PktBuf out ( pktbuf_new )
     : i want ( dhcp_tick c now )
     ? != want 0 {
@@ -89,7 +89,7 @@ $ `unikernel/drivers/virtionet.nu`
     // No address yet — that is the point. The stack accepts a
     // broadcast reply before it owns an address, which is the one
     // exception `stack_rx` documents and the reason DHCP works at all.
-    : *NetStack st ( stack_new ( vnet_mac nic ) 0 0 0 )
+    : NetStack st ( stack_new ( vnet_mac nic ) 0 0 0 )
     : DhcpClient c ( dhcp_client_new ( vnet_mac nic ) & ( ms ) 4294967295 )
 
     // Bounded by the CLOCK, not by a round count. The client's

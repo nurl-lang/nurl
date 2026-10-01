@@ -98,7 +98,7 @@ $ `stdlib/net/dnsclient.nu`
 & `c` @ nurl_fiber_spawn *u fn *u env → i
 
 : Shim {
-    * NetStack net
+    NetStack net
     * TcpStack ts
     * SockTab st
     ( Vec i ) peer  // cached "ip:port" per fd slot — see nurl_tcp_peer_addr
@@ -280,8 +280,8 @@ $ `stdlib/net/dnsclient.nu`
 // not answer, costs the deadline once and nothing afterwards. The
 // address still works; the first client just pays the second again.
 @ __arp_warm * Shim sh → v {
-    : *NetStack net . sh net
-    : i gw . net gateway
+    : NetStack net . sh net
+    : i gw ( stack_gateway net )
     ? == gw 0 { ^ v } {}
     : PktBuf out ( pktbuf_new )
     : i deadline + ( __ms ) 250
@@ -375,8 +375,8 @@ $ `stdlib/net/dnsclient.nu`
 // backoff is measured in seconds and a busy loop gets through a
 // hundred thousand rounds in the time a server takes to answer once.
 @ __dhcp_configure * Shim sh → v {
-    : *NetStack net . sh net
-    : DhcpClient c ( dhcp_client_new . net our_mac & ( __ms ) 4294967295 )
+    : NetStack net . sh net
+    : DhcpClient c ( dhcp_client_new ( stack_our_mac net ) & ( __ms ) 4294967295 )
     : i deadline + ( __ms ) 10000
     ~ && ! ( dhcp_bound c ) < ( __ms ) deadline {
         ( __dhcp_turn sh c ( __ms ) )
@@ -499,7 +499,7 @@ $ `stdlib/net/dnsclient.nu`
     : *Shim sh ( __shim )
     : EthHdr eh ( eth_parse f )
     ? ! . eh valid { ^ T } {}
-    ^ == . eh dst . . sh net our_mac
+    ^ == . eh dst ( stack_our_mac . sh net )
 }
 
 @ __drive i now → i {

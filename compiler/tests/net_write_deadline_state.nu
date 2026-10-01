@@ -3,7 +3,7 @@
 $ `stdlib/net/socket.nu`
 
 @ main → i {
-    : *NetStack net ( stack_new 2199023255553 2130706433 4278190080 0 )
+    : NetStack net ( stack_new 2199023255553 2130706433 4278190080 0 )
     : *TcpStack tcp ( tstack_new net 1000 )
     : *SockTab sockets ( sock_new tcp 2130706433 )
     : i fd ( sock_listen sockets 0 0 4 )

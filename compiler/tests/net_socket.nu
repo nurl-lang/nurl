@@ -69,7 +69,7 @@ $ `stdlib/net/socket.nu`
 @ again → i { ^ - 0 ( sock_err_again ) }
 
 @ main → i {
-    : *NetStack net ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
+    : NetStack net ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
     : *TcpStack ts ( tstack_new net 1000 )
     : *SockTab st ( sock_new ts ( lo_ip ) )
     : ( Vec u ) scratch ( vec_new [u] )
@@ -102,7 +102,7 @@ $ `stdlib/net/socket.nu`
     ( pb `writing to it says "again": ` == ( sock_write st c scratch 0 4 1000 ) ( again ) )
 
     ( pump st 1000 8 )
-    ( pb `ARP resolved against ourselves: ` ?? ( arp_cache_lookup . net arp ( lo_ip ) 1000 ) { T m → == m ( lo_mac ) F → F } )
+    ( pb `ARP resolved against ourselves: ` ?? ( arp_cache_lookup ( stack_arp net ) ( lo_ip ) 1000 ) { T m → == m ( lo_mac ) F → F } )
     ( pb `but the SYN still has not gone: ` == ( sock_status st c ) ( sock_conn_pending ) )
     ( pb `nothing was queued waiting for it: ` == 0 ( sock_pending_frames st ) )
 
@@ -280,7 +280,7 @@ $ `stdlib/net/socket.nu`
     // waiting a retransmit timeout for the answer. An interface knows
     // its own MAC without asking, and a second stack — cache empty,
     // seeded instead — completes a connect in the same millisecond.
-    : *NetStack net2 ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
+    : NetStack net2 ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
     : *TcpStack ts2 ( tstack_new net2 7000 )
     : *SockTab st2 ( sock_new ts2 ( lo_ip ) )
     ( sock_seed_self st2 7000 )
@@ -308,7 +308,7 @@ $ `stdlib/net/socket.nu`
     // that it does NOT consume the pending connection (which would
     // orphan an established one nobody holds an fd for), and that the
     // same accept succeeds once an fd is free.
-    : *NetStack net3 ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
+    : NetStack net3 ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
     : *TcpStack ts3 ( tstack_new net3 7000 )
     : *SockTab st3 ( sock_new ts3 ( lo_ip ) )
     ( sock_seed_self st3 7000 )

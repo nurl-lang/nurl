@@ -41,13 +41,13 @@ $ `stdlib/net/stack.nu`
 // Move everything in `wire` into `dst` stack, returning the number of
 // frames delivered. One frame per buffer keeps the harness honest —
 // the real driver hands over one frame at a time too.
-@ deliver * NetStack dst ( Vec u ) wire i now PktBuf reply → RxResult {
+@ deliver NetStack dst ( Vec u ) wire i now PktBuf reply → RxResult {
     ^ ( stack_rx dst wire now reply )
 }
 
 @ main → i {
-    : *NetStack a ( stack_new ( mac_a ) ( ip_a ) ( mask24 ) ( ip_gw ) )
-    : *NetStack b ( stack_new ( mac_b ) ( ip_b ) ( mask24 ) ( ip_gw ) )
+    : NetStack a ( stack_new ( mac_a ) ( ip_a ) ( mask24 ) ( ip_gw ) )
+    : NetStack b ( stack_new ( mac_b ) ( ip_b ) ( mask24 ) ( ip_gw ) )
 
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_extend_str payload `hello unikernel` )
@@ -64,14 +64,14 @@ $ `stdlib/net/stack.nu`
     : RxResult r1 ( deliver b ( pktbuf_bytes w1 ) 1000 w2 )
     ( pb `B handled the ARP: ` == . r1 kind ( rx_arp_handled ) )
     ( pb `B emitted a reply: ` == ( pktbuf_count w2 ) 1 )
-    ( pb `B learned A's address: ` ?? ( arp_cache_lookup . b arp ( ip_a ) 1000 ) { T m → == m ( mac_a ) F → F } )
+    ( pb `B learned A's address: ` ?? ( arp_cache_lookup ( stack_arp b ) ( ip_a ) 1000 ) { T m → == m ( mac_a ) F → F } )
 
     // A receives the reply and learns B.
     : PktBuf w3 ( pktbuf_new )
     : RxResult r2 ( deliver a ( pktbuf_bytes w2 ) 1000 w3 )
     ( pb `A handled the ARP reply: ` == . r2 kind ( rx_arp_handled ) )
     ( pb `A emitted nothing back: ` == ( pktbuf_count w3 ) 0 )
-    ( pb `A learned B's address: ` ?? ( arp_cache_lookup . a arp ( ip_b ) 1000 ) { T m → == m ( mac_b ) F → F } )
+    ( pb `A learned B's address: ` ?? ( arp_cache_lookup ( stack_arp a ) ( ip_b ) 1000 ) { T m → == m ( mac_b ) F → F } )
 
     // ── retry: now the datagram actually goes out ────────────────
     : PktBuf w4 ( pktbuf_new )
@@ -155,7 +155,7 @@ $ `stdlib/net/stack.nu`
 
     // Once the gateway answers, the datagram leaves with the gateway's
     // MAC but 8.8.8.8 still in the IP header.
-    ( arp_cache_insert . a arp ( ip_gw ) ( mac_gw ) 2000 )
+    ( arp_cache_insert ( stack_arp a ) ( ip_gw ) ( mac_gw ) 2000 )
     : PktBuf w9 ( pktbuf_new )
     : TxResult t5 ( stack_tx_udp a 0 ( ipv4_make 8 8 8 8 ) 4000 53 payload 0 15 2000 w9 )
     ( pb `off-link send now succeeds: ` == . t5 status ( tx_sent ) )
@@ -215,7 +215,7 @@ $ `stdlib/net/stack.nu`
     ( pb `no spurious bad_udp drops: ` == ( stack_drop_count a ( drop_bad_udp ) ) 0 )
 
     // ── addressless stack (pre-DHCP) ────────────────────────────
-    : *NetStack c ( stack_new ( mac_gw ) 0 0 0 )
+    : NetStack c ( stack_new ( mac_gw ) 0 0 0 )
     : PktBuf w11 ( pktbuf_new )
     : TxResult t6 ( stack_tx_udp c 0 ( ip_a ) 68 67 payload 0 15 100 w11 )
     ( pb `no address → tx refused: ` == . t6 status ( tx_no_address ) )

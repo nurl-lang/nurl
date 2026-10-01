@@ -174,7 +174,7 @@ $ `stdlib/net/stack.nu`
 }
 
 @ main → i {
-    : *NetStack st ( stack_new ( our_mac ) ( our_ip ) ( mask24 ) ( ipv4_make 10 0 2 1 ) )
+    : NetStack st ( stack_new ( our_mac ) ( our_ip ) ( mask24 ) ( ipv4_make 10 0 2 1 ) )
     : PktBuf out ( pktbuf_new )
     : ( Vec u ) frame ( vec_new [u] )
 

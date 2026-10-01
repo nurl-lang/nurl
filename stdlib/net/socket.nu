@@ -493,17 +493,17 @@ $ `stdlib/net/tcpstack.nu`
 // every connect to 127.0.0.1 — before the second attempt finds the
 // answer the stack had all along.
 @ sock_seed_self * SockTab st i now → v {
-    : *NetStack net . . st ts net
-    ? == . net our_ip 0 { ^ } {}
-    ( sock_seed_addr st . net our_ip now )
+    : NetStack net . . st ts net
+    ? == ( stack_our_ip net ) 0 { ^ } {}
+    ( sock_seed_addr st ( stack_our_ip net ) now )
 }
 
 // The same, for an address we answer to that is not the interface's:
 // 127.0.0.1 is ours whatever DHCP later says, and a loopback frame has
 // to find a MAC for it before the interface has an address at all.
 @ sock_seed_addr * SockTab st i ip i now → v {
-    : *NetStack net . . st ts net
-    ( arp_cache_insert . net arp ip . net our_mac now )
+    : NetStack net . . st ts net
+    ( arp_cache_insert ( stack_arp net ) ip ( stack_our_mac net ) now )
 }
 
 // The address the socket layer reports as local. DHCP changes it after

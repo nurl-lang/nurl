@@ -102,8 +102,8 @@ $ `stdlib/net/tcpstack.nu`
 }
 
 @ main → i {
-    : *NetStack na ( stack_new ( mac_a ) ( ip_a ) ( mask24 ) ( ip_gw ) )
-    : *NetStack nb ( stack_new ( mac_b ) ( ip_b ) ( mask24 ) ( ip_gw ) )
+    : NetStack na ( stack_new ( mac_a ) ( ip_a ) ( mask24 ) ( ip_gw ) )
+    : NetStack nb ( stack_new ( mac_b ) ( ip_b ) ( mask24 ) ( ip_gw ) )
     : *TcpStack a ( tstack_new na 1000 )
     : *TcpStack b ( tstack_new nb 500000 )
 
@@ -125,7 +125,7 @@ $ `stdlib/net/tcpstack.nu`
 
     // ARP resolves.
     ( settle a b w1 1000 4 )
-    ( pb `A resolved B's MAC: ` ?? ( arp_cache_lookup . na arp ( ip_b ) 1000 ) { T m → == m ( mac_b ) F → F } )
+    ( pb `A resolved B's MAC: ` ?? ( arp_cache_lookup ( stack_arp na ) ( ip_b ) 1000 ) { T m → == m ( mac_b ) F → F } )
 
     // The retransmit timer sends the SYN that ARP held up. This is the
     // whole argument for not queueing it: TCP already owns this timer.

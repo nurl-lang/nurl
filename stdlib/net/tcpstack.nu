@@ -122,7 +122,7 @@ $ `stdlib/net/stack.nu`
 }
 
 : TcpStack {
-    * NetStack net
+    NetStack net
     ( Vec i ) conns  // *TConn, as integers — NURL has no Vec of pointers
     ( Vec i ) listeners  // *TListener, likewise
     i iss  // initial send sequence, advanced per connection
@@ -139,7 +139,7 @@ $ `stdlib/net/stack.nu`
     ^ # *TListener ?? ( vec_get [i] . ts listeners idx ) { T p → p F → 0 }
 }
 
-@ tstack_new * NetStack net i iss_seed → *TcpStack {
+@ tstack_new NetStack net i iss_seed → *TcpStack {
     : *TcpStack ts # *TcpStack ( nurl_alloc Z TcpStack )
     = . ts net net
     = . ts conns ( vec_new [i] )
@@ -505,7 +505,7 @@ $ `stdlib/net/stack.nu`
 @ tstack_connect * TcpStack ts i remote_ip i remote_port i local_port i now PktBuf out → i {
     : i idx ( __conn_alloc ts )
     : *TConn c ( __tconn_ptr ts idx )
-    = . c local_ip . . ts net our_ip
+    = . c local_ip ( stack_our_ip . ts net )
     = . c local_port ? > local_port 0 local_port ( __next_ephemeral ts )
     = . c remote_ip remote_ip
     = . c remote_port remote_port
