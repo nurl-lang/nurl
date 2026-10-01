@@ -100,16 +100,18 @@ $ `window.nu`
 // Run the network on one image, drawing boxes (and, when `want_masks`, the
 // per-object segmentation mask) onto `im`. When `verbose`, prints one line per
 // detection. Returns the detection count.
-@ process_frame Image im OGraph g * Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
+@ process_frame Image im OGraph g Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
     : Letterbox lb ( letterbox im 640 )
     : *u host ( img_to_nchw_norm . lb img )
     : RTensor out ( rt_run_shaped e g host ( shape4 1 3 640 640 ) )
-    : *u o ( rt_download e out )
+    : GpuHost o__h ( rt_download e out )
+    : *u o ( gpu_host_ptr o__h )
     : ~ b masks want_masks
     : ~ i proto_i 0  // proto buffer address carried as i64 (cast per use)
+    : ~ GpuHost proto_i__h ( gpu_host_none )
     ? masks {
         : RTensor proto_t ( rt_output1 e )
-        ? == . proto_t nelem 0 { = masks F } { = proto_i # i ( rt_download e proto_t ) }
+        ? == . proto_t nelem 0 { = masks F } { = proto_i__h ( rt_download e proto_t ) = proto_i # i ( gpu_host_ptr proto_i__h ) }
     } {}
     : i na 8400
     : i MH ( mask_dim )
@@ -143,8 +145,6 @@ $ `window.nu`
         }
         = k + k 1
     }
-    ( nurl_free o )
-    ? masks { ( nurl_free # *u proto_i ) } {}
     ( nurl_free host )
     ( vec_free [Detection] raw ) ( vec_free [Detection] dets )
     ^ nd
@@ -170,7 +170,7 @@ $ `window.nu`
     ?? ( img_load ( string_data ip ) ) {
         T im → {
             ( p `image ` ) ( pn ( img_w im ) ) ( p `x` ) ( pn ( img_h im ) ) ( p `\n` )
-            : *Engine e ( rt_open gpu )
+            : Engine e ( rt_open gpu )
             ? ! ( rt_ok e ) { ( p `GPU ` ) ( pn gpu ) ( p ` init / kernel compile failed (try --gpu 0)\n` ) ^ 1 } {}
             ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
             ( p `detections:\n` )
@@ -208,7 +208,7 @@ $ `window.nu`
     : i cw ( cam_w cam )
     : i ch ( cam_h cam )
 
-    : *Engine e ( rt_open gpu )
+    : Engine e ( rt_open gpu )
     ? ! ( rt_ok e ) { ( p `GPU ` ) ( pn gpu ) ( p ` init / kernel compile failed (try --gpu 0)\n` ) ( cam_close cam ) ^ 1 } {}
 
     // display mode: 2=window, 1=terminal, 0=none. A window that fails to open

@@ -39,7 +39,7 @@ $ `deps/onnx/src/runtime.nu`
 
 : Sky {
     OGraph g
-    * Engine e
+    Engine e
     b ok
 }
 
@@ -47,17 +47,14 @@ $ `deps/onnx/src/runtime.nu`
     : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes path ) {
         T mb → { = g ( onnx_parse mb ) }
-        F _ → { ^ @ Sky { g # *Engine 0 F } }
+        F _ → { ^ @ Sky { g ( rt_none ) F } }
     }
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ( rt_ok e ) {} { ^ @ Sky { g e F } }
     ^ @ Sky { g e T }
 }
 
-@ sky_free sink Sky s → v {
-    ? != # i . s e 0 { ( rt_close . s e ) } {}
-    ( graph_free . s g )
-}
+@ sky_free sink Sky s → v {}
 
 // AND "not sky" into `mask` for one view. `chw` is the fitted frame's
 // [3, h, w] planar [0,1] host buffer (pp_data), `mask` h·w bytes.
@@ -108,7 +105,8 @@ $ `deps/onnx/src/runtime.nu`
     : RTensor out ( rt_run_shaped . s e . s g inb shape )
     ( nurl_free # s inb )
     ? == . out nelem n2 {} { ^ F }
-    : *u score ( rt_download . s e out )
+    : GpuHost score__h ( rt_download . s e out )
+    : *u score ( gpu_host_ptr score__h )
 
     // min–max → u8 (truncating), as run_skyseg does
     : ~ f mn ( nurl_peek_f32 score 0 )
@@ -130,7 +128,6 @@ $ `deps/onnx/src/runtime.nu`
         = . mp j # u # i v
         = j + j 1
     }
-    ( nurl_free score )
     // back to the view's size; a pixel is sky the moment the resized
     // score leaves zero
     : Image mfull ( image_resize m8 w h )

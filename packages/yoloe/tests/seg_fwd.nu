@@ -47,13 +47,14 @@ $ `../src/image.nu`
         T im → {
             : Letterbox lb ( letterbox im 640 )
             : *u host ( img_to_nchw_norm . lb img )
-            : *Engine e ( rt_open 0 )
+            : Engine e ( rt_open 0 )
             ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
             ( nurl_print `device ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
             : RTensor out ( rt_run_shaped e g host ( shape4 1 3 640 640 ) )
             : RTensor proto ( rt_output1 e )
             ? == . proto nelem 0 { ( nurl_print `no proto output!\n` ) ^ 1 } {}
-            : *u ph ( rt_download e proto )
+            : GpuHost ph__h ( rt_download e proto )
+            : *u ph ( gpu_host_ptr ph__h )
             ( nurl_print `proto floats ` ) ( nurl_print ( nurl_str_int . proto nelem ) ) ( nurl_print `\n` )
 
             : *u gc ( nurl_alloc 8 )

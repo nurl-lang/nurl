@@ -41,12 +41,13 @@ $ `deps/onnx/src/runtime.nu`
     : *u tc ( nurl_alloc 8 )
     : *u tpe ( load_f32 ( string_data tp ) tc )
 
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
     ( nurl_print `device ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
 
     : RTensor out ( rt_run_two e g `images` img ( shape4 1 3 640 640 ) `tpe` tpe ( shape3 1 K 512 ) )
-    : *u host ( rt_download e out )
+    : GpuHost host__h ( rt_download e out )
+    : *u host ( gpu_host_ptr host__h )
     ( nurl_print `output floats ` ) ( nurl_print ( nurl_str_int . out nelem ) ) ( nurl_print `\n` )
 
     : *u gc ( nurl_alloc 8 )

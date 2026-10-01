@@ -576,7 +576,7 @@ $ `tokenizer.nu`
     ^ x
 }
 
-@ __ft_const * GTape tp ( Vec f ) v i r i c → GVar {
+@ __ft_const GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ? > r 0 { ( vec_push [i] s r ) } {}
     ( vec_push [i] s c )
@@ -595,7 +595,7 @@ $ `tokenizer.nu`
     ^ o
 }
 
-@ __ft_ones * GTape tp i n → GVar {
+@ __ft_ones GTape tp i n → GVar {
     : ( Vec f ) v ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 1.0 ) = k + k 1 }
@@ -640,7 +640,7 @@ $ `tokenizer.nu`
 // elements — row-major order already lays them out that way, which makes
 // this two reshapes around the ordinary rmsnorm. `wp` 0 (llama, qwen2)
 // returns the input untouched.
-@ __ft_head_norm * GTape tp GVar x GVar W b have i T2 i heads i hd GVar ones f eps → GVar {
+@ __ft_head_norm GTape tp GVar x GVar W b have i T2 i heads i hd GVar ones f eps → GVar {
     ? have {} { ^ x }
     : ( Vec i ) flat_s ( vec_new [i] )
     ( vec_push [i] flat_s * T2 heads )
@@ -657,7 +657,7 @@ $ `tokenizer.nu`
 }
 
 // LoRA pair registration: A [in,r] seeded small, B [r,out] zero.
-@ __ft_lora_pair * GTape tp Rng rg i in i r i out * u pids i slot → v {
+@ __ft_lora_pair GTape tp Rng rg i in i r i out * u pids i slot → v {
     : ( Vec f ) av ( vec_with_cap [f] * in r )
     : f lim / 1.0 ( float_sqrt # f in )
     : ~ i k 0
@@ -681,7 +681,7 @@ $ `tokenizer.nu`
 
 // LoRA linear over the pids-registered adapter for `slot` (the plumbing;
 // the math is nn_lora_linear).
-@ __ft_lora_lin * GTape tp GVar x GVar w0 * u pids i slot f scale → GVar {
+@ __ft_lora_lin GTape tp GVar x GVar w0 * u pids i slot f scale → GVar {
     : GVar pa @ GVar { ( nurl_peek pids * slot 2 ) }
     : GVar pb @ GVar { ( nurl_peek pids + * slot 2 1 ) }
     ^ ( nn_lora_linear tp x w0 pa pb scale )
@@ -699,7 +699,7 @@ $ `tokenizer.nu`
 // Build the full forward + next-token CE loss on `tp`. `ids` is one
 // sequence (T tokens; loss over positions 0..T-2 predicting 1..T-1).
 // `pids` must hold 2·7·n_layer i64 slots; LoRA params register FIRST.
-@ ft_graph * FtModel m * GTape tp ( Vec i ) ids i r f alpha i seed * u pids → FtG {
+@ ft_graph * FtModel m GTape tp ( Vec i ) ids i r f alpha i seed * u pids → FtG {
     : i T2 ( vec_len [i] ids )
     : i H . m n_embd
     : i hd . m head_dim
@@ -707,7 +707,7 @@ $ `tokenizer.nu`
     : i NKV . m n_kv
     : f scale / alpha # f r
     ? == . m rope_dim hd {} {
-        : GVar bad ( _g_poison tp `finetune: partial rotary not supported` )
+        : GVar bad ( grad_poison tp `finetune: partial rotary not supported` )
         ^ @ FtG { bad bad bad bad 0 }
     }
     // adapters first (stable ids for the optimizer)
@@ -917,7 +917,7 @@ $ `tokenizer.nu`
 // and an eager run upload identical bytes — what changes is only that one
 // tensor is resident at a time instead of the whole model.
 
-@ __ft_up_vec * FtModel m * Gguf gg * GProg pg i node i L s suf → b {
+@ __ft_up_vec * FtModel m * Gguf gg GProg pg i node i L s suf → b {
     : s p ( __ft_lvec gg L suf )
     ? != # i p 0 {} { ^ F }
     : *FtV pv # *FtV p
@@ -931,7 +931,7 @@ $ `tokenizer.nu`
     ^ r
 }
 
-@ __ft_up_layer * FtModel m * Gguf gg * GProg pg i node i L i slot → b {
+@ __ft_up_layer * FtModel m * Gguf gg GProg pg i node i L i slot → b {
     : s suf ( __ft_base_name slot )
     ? | | | | | | == slot 0 == slot 1 == slot 9 == slot 10 == slot 11 == slot 12 == slot 13 {
         ^ ( __ft_up_vec m gg pg node L suf )
@@ -951,7 +951,7 @@ $ `tokenizer.nu`
     ^ r
 }
 
-@ __ft_up_wout * FtModel m * Gguf gg * GProg pg i node → b {
+@ __ft_up_wout * FtModel m * Gguf gg GProg pg i node → b {
     : i oi ( gguf_find_tensor gg `output.weight` )
     ? >= oi 0 {
         : *u rb ( nurl_alloc 8 )
@@ -1037,7 +1037,7 @@ $ `tokenizer.nu`
 
 // Fill every lazy base const's device buffer. Call once, right after the
 // capture; T when every tensor landed.
-@ ft_stream_upload * FtModel m * GProg pg → b {
+@ ft_stream_upload * FtModel m GProg pg → b {
     ? . m stream {} { ^ T }
     : i n ( vec_len [i] . m lz_node )
     ? > n 0 {} { ^ F }
@@ -1138,7 +1138,7 @@ $ `tokenizer.nu`
     } { ( __ft_st_add so name val n 0 ) }
 }
 
-@ __ft_ckpt_save s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i step i dtype i wstr → b {
+@ __ft_ckpt_save s path * FtModel m i r GProg pg GpOpt go * u pids i nslot i step i dtype i wstr → b {
     : *StWriter so ( stw_new )
     : ( Vec i ) meta ( vec_new [i] )
     ( vec_push [i] meta 1 )
@@ -1267,7 +1267,7 @@ $ `tokenizer.nu`
 // caller starts fresh); a shape/meta MISMATCH also reports F after
 // printing why — resuming a different run over it would be silent ruin,
 // so the caller must treat mismatch as fatal (mismb is poked 1).
-@ __ft_ckpt_load s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i wstr * u stepb * u mismb → b {
+@ __ft_ckpt_load s path * FtModel m i r GProg pg GpOpt go * u pids i nslot i wstr * u stepb * u mismb → b {
     ( nurl_poke mismb 0 0 )
     ?? ( st_open path ) {
         T st → {
@@ -1379,7 +1379,7 @@ $ `tokenizer.nu`
     // ft_graph needs the base matrices; a prior ft_train may have dropped
     // them (they only live host-side to build the graph). Stream them back.
     ? == ( vec_len [FtW] . m wq ) 0 { : b _r ( ft_reload_base m ) } {}
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : FtG fg ( ft_graph m tp ids r alpha seed pids )
     : ( Vec f ) aflat ( vec_new [f] )
     : ( Vec f ) bflat ( vec_new [f] )
@@ -1387,12 +1387,12 @@ $ `tokenizer.nu`
         ( nurl_free pids ) ( tape_free tp )
         ^ @ FtTrain { F 0.0 0.0 aflat bflat }
     }
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     : ~ b ok ( gk_ok kit )
     : ~ f l0 0.0
     : ~ f l1 0.0
     ? ok {
-        : *GProg pg ( gput_capture_dt kit tp . fg loss dtype )
+        : GProg pg ( gput_capture_dt kit tp . fg loss dtype )
         = ok ( gput_ok pg )
         // streamed base: the capture allocated the buffers from the shapes,
         // now fill them one tensor at a time
@@ -1403,7 +1403,7 @@ $ `tokenizer.nu`
         // adapters + activations. The base streams back from the GGUF for the
         // merge (ft_reload_base). Training reads device buffers only.
         ? ok { ( tape_drop_consts tp ) ( ft_drop_base m ) } {}
-        : *GpOpt go ( gpopt_adam_new lr )
+        : GpOpt go ( gpopt_adam_new lr )
         : ~ i pi 0
         ~ < pi * 2 nslot {
             ( gpopt_add go pg @ GVar { ( nurl_peek pids pi ) } 0.0 )

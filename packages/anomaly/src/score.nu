@@ -107,7 +107,7 @@ $ `deps/gpukit/src/gpukit.nu`
         = g_ag_state -1
         ^ F
     } {}
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( gk_close kit )
         = g_ag_state -1
@@ -119,22 +119,23 @@ $ `deps/gpukit/src/gpukit.nu`
         ^ F
     }
     = g_ag_kit # i kit
+    ( mem_forget kit )  // the global holds this owner now (anom_gpu_close lets it go)
     = g_ag_state 1
     ^ T
 }
 
 // The live kit (only valid when g_ag_state == 1).
-@ __ag_kit → *GpuKit { ^ # *GpuKit g_ag_kit }
+@ __ag_kit → GpuKit { ^ # GpuKit g_ag_kit }
 
 // Public view of the kit for sibling modules (aegpu.nu shares the device —
 // __-prefixed functions are file-scoped). Only valid after anom_gpu_engine
 // reported `cuda` or `cpu`.
-@ anom_gpu_kit → *GpuKit { ^ # *GpuKit g_ag_kit }
+@ anom_gpu_kit → GpuKit { ^ # GpuKit g_ag_kit }
 
 // Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
 @ anom_gpu_close → v {
-    ? == g_ag_state 1 { ( gk_close ( __ag_kit ) ) } {}
+    ? == g_ag_state 1 { ( gk_close @ GpuKit { # s g_ag_kit } ) } {}  // the global's owner
     = g_ag_state 0
     = g_ag_kit 0
 }
@@ -192,7 +193,7 @@ $ `deps/gpukit/src/gpukit.nu`
 
     // One gk_run marshals the 7 inputs, 3 scalars and 1 output; the kernel
     // itself (anomaly_paths) is compiled once and served from the kit cache.
-    : *GpuKit kit ( __ag_kit )
+    : GpuKit kit ( __ag_kit )
     : ( Vec f ) totals ( vec_with_cap [f] n_rows )
     : *u outp # *u ( vec_data [f] totals )
     : ( Vec GkArg ) call ( vec_new [GkArg] )

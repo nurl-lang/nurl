@@ -39,7 +39,7 @@ $ `src/load.nu`
 
 : PhLin { GkBuf w GkBuf b }
 
-@ __ph_lin * Lw lw * GpuKit kit s name i rows i cols → PhLin {
+@ __ph_lin * Lw lw GpuKit kit s name i rows i cols → PhLin {
     : String nw ( string_from name )
     ( string_push_str nw `.weight` )
     : String nb ( string_from name )
@@ -55,7 +55,7 @@ $ `src/load.nu`
 @ __ph_lin_free sink PhLin l → v { ( gk_dbuf_free . l w ) ( gk_dbuf_free . l b ) }
 
 // y[m, n] = x[m, k] · w + b, the shape every layer here is.
-@ __ph_gemm * GpuKit kit GkBuf y GkBuf x PhLin l i m i n i k → b {
+@ __ph_gemm GpuKit kit GkBuf y GkBuf x PhLin l i m i n i k → b {
     ^ ( gkd_gemm kit y x . l w . l b 1 m n k 1.0 1.0 0 )
 }
 
@@ -68,7 +68,7 @@ $ `src/load.nu`
     PhLin fcr
 }
 
-@ ph_load * Lw lw * GpuKit kit → PoseH {
+@ ph_load * Lw lw GpuKit kit → PoseH {
     : ( Vec PhLin ) rs ( vec_new [PhLin] )
     : ~ i bi 0
     ~ < bi 2 {
@@ -106,7 +106,7 @@ $ `src/load.nu`
 // floats: [tx ty tz | qw? qx? ...] — exactly fc_t then fc_rot, the
 // quaternion normalised; which convention the four are in is the
 // GEOMETRY's business (src/geom.nu), not this head's.
-@ ph_forward * GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
+@ ph_forward GpuKit kit PoseH p GkBuf fin i voff i np * f out → b {
     : GkBuf patches ( ma_view fin * voff PH_DIM * np PH_DIM )
     : GkBuf a ( gk_dbuf_new kit * np PH_HID GK_F32 )
     : GkBuf t1 ( gk_dbuf_new kit * np PH_HID GK_F32 )
@@ -145,7 +145,7 @@ $ `src/load.nu`
     ? & ok ( gk_dbuf_upload kit onesb ones ) {} { = ok F }
     ( vec_free [f] ones )
     : GkBuf pooled ( gk_dbuf_new kit PH_HID GK_F32 )
-    : GkBuf nob @ GkBuf { 0 0 GK_F32 }
+    : GkBuf nob ( gk_buf_none GK_F32 )
     ? & ok ( gkd_gemm kit pooled onesb a nob 0 1 PH_HID np 1.0 0.0 0 ) {} { = ok F }
     ( gk_dbuf_free onesb )
     ( gk_dbuf_free a )
@@ -195,7 +195,7 @@ $ `src/load.nu`
     PhLin outp
 }
 
-@ sh_load * Lw lw * GpuKit kit → ScaleH {
+@ sh_load * Lw lw GpuKit kit → ScaleH {
     ^ @ ScaleH {
         ( __ph_lin lw kit `scale_head.proj` SH_HID PH_DIM )
         ( __ph_lin lw kit `scale_head.mlp.0.0` SH_HID SH_HID )
@@ -212,7 +212,7 @@ $ `src/load.nu`
 
 // The metric scale from the final scale-token feature (row `row` of the
 // final sequence). Returns exp(x) clipped to ≥ 1e-8, or -1 on error.
-@ sh_forward * GpuKit kit ScaleH s GkBuf fin i row → f {
+@ sh_forward GpuKit kit ScaleH s GkBuf fin i row → f {
     : GkBuf tokrow ( ma_view fin * row PH_DIM PH_DIM )
     : GkBuf h1 ( gk_dbuf_new kit SH_HID GK_F32 )
     : GkBuf h2 ( gk_dbuf_new kit SH_HID GK_F32 )

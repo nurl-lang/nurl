@@ -498,7 +498,7 @@ $ `src/sky.nu`
         }
         T got → { = lw got }
     }
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} {
         ( nurl_print `map-anything: no compute device (CUDA or CPU backend)\n` )
         ^ 1
@@ -551,7 +551,7 @@ $ `src/sky.nu`
 
     // sky segmentation, when asked for: the LingBot demo's skyseg.onnx,
     // fetched through hub and run through the onnx package
-    : ~ Sky sky @ Sky { @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) } # *Engine 0 F }
+    : ~ Sky sky @ Sky { @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) } ( rt_none ) F }
     ? != . o masksky 0 {
         ?? ( hub_get `https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx` ) {
             F e → {

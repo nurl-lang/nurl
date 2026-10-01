@@ -87,7 +87,7 @@ $ `src/rope.nu`
     ( gk_dbuf_free . c cos3 ) ( gk_dbuf_free . c sin3 )
 }
 
-@ __ch_const * GpuKit kit i n f v → GkBuf {
+@ __ch_const GpuKit kit i n f v → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) h ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] h n )
@@ -99,7 +99,7 @@ $ `src/rope.nu`
     ^ b
 }
 
-@ ch_load * Lw w * GpuKit kit → CamHead {
+@ ch_load * Lw w GpuKit kit → CamHead {
     : ( Vec LmBlk ) tr ( vec_new [LmBlk] )
     : ~ i i0 0
     ~ < i0 CH_DEPTH {
@@ -177,7 +177,7 @@ $ `src/rope.nu`
 
 // `maxfr` is the longest sequence this workspace will see — the caches
 // and the attention scratch are sized by it once, not grown.
-@ ch_ws_new * GpuKit kit i maxfr → ChWs {
+@ ch_ws_new GpuKit kit i maxfr → ChWs {
     : i mf ? < maxfr 1 1 maxfr
     : ( Vec LmKv ) kvs ( vec_with_cap [LmKv] * CH_ITERS CH_DEPTH )
     : ~ i c 0
@@ -211,7 +211,7 @@ $ `src/rope.nu`
     ( vec_free_with [LmKv] . w kvs \ LmKv c → v { ( lm_kv_free c ) } )
 }
 
-@ __ch_upi1 * GpuKit kit GkBuf b i v → b {
+@ __ch_upi1 GpuKit kit GkBuf b i v → b {
     : ( Vec i ) t ( vec_with_cap [i] 1 )
     ( vec_push [i] t v )
     : b r ( gk_dbuf_upload_i kit b t )
@@ -222,7 +222,7 @@ $ `src/rope.nu`
 // One frame's pose. `camtok` is the camera token (row 0) of the last
 // tapped aggregator layer, [1, 2048]; `out` receives the activated
 // 9-vector.
-@ ch_forward * GpuKit kit CamHead c ChWs ws GkBuf camtok i fidx GkBuf out → b {
+@ ch_forward GpuKit kit CamHead c ChWs ws GkBuf camtok i fidx GkBuf out → b {
     ? & == . camtok n CH_DIM == . out n CH_POSE {} { ^ F }
     // The caches were sized for a sequence this frame must fit in — an
     // index past the end would silently attend over garbage rows.

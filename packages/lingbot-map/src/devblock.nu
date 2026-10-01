@@ -92,8 +92,8 @@ $ `deps/gpukit/src/devops.nu`
 }
 
 @ lm_rope_none → LmRope {
-    ^ @ LmRope { LM_ROPE_NONE @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 }
-        @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } }
+    ^ @ LmRope { LM_ROPE_NONE ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 )
+        ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) }
 }
 
 // Scratch, sized once for the largest frame the model will see. `maxkv`
@@ -119,7 +119,7 @@ $ `deps/gpukit/src/devops.nu`
     i maxkv
 }
 
-@ lm_ws_new * GpuKit kit i n i dim i heads i hidden i maxkv i maxpos → LmWs {
+@ lm_ws_new GpuKit kit i n i dim i heads i hidden i maxkv i maxpos → LmWs {
     : i hd / dim heads
     // `att` and `kt` exist only for the composed attention fallback. On
     // a backend where gkd_attention runs, nothing ever writes a score
@@ -168,7 +168,7 @@ $ `deps/gpukit/src/devops.nu`
 // coordinate, the second by its column. One thread per
 // (head, token, axis, frequency) — each owns a disjoint pair of elements,
 // so the in-place read-then-write is safe without a barrier.
-@ lm_rope2d * GpuKit kit GkBuf x GkBuf rows GkBuf cols GkBuf cosb GkBuf sinb
+@ lm_rope2d GpuKit kit GkBuf x GkBuf rows GkBuf cols GkBuf cosb GkBuf sinb
 i heads i n i dim → b {
     ? & & ( gk_buf_ok x ) ( gk_buf_ok rows ) ( gk_buf_ok cols ) {} { ^ F }
     ? & ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
@@ -207,7 +207,7 @@ i heads i n i dim → b {
 // — (x0,x1), (x2,x3), … — and the 64-dim head is split 20 / 22 / 22
 // across the frame, row and column axes rather than in half. One thread
 // per (head, token, frequency); each owns one pair.
-@ lm_rope3d * GpuKit kit GkBuf x GkBuf fr GkBuf rw GkBuf cl GkBuf cosb GkBuf sinb
+@ lm_rope3d GpuKit kit GkBuf x GkBuf fr GkBuf rw GkBuf cl GkBuf cosb GkBuf sinb
 i heads i n i dim i nt i nh → b {
     ? & & ( gk_buf_ok x ) ( gk_buf_ok fr ) ( gk_buf_ok rw ) {} { ^ F }
     ? & & ( gk_buf_ok cl ) ( gk_buf_ok cosb ) ( gk_buf_ok sinb ) {} { ^ F }
@@ -245,7 +245,7 @@ i heads i n i dim i nt i nh → b {
 }
 
 // Apply whichever rotation `rp` selects to a [heads, n, hd] tensor.
-@ lm_rope_apply * GpuKit kit LmRope rp GkBuf x i heads i n i hd → b {
+@ lm_rope_apply GpuKit kit LmRope rp GkBuf x i heads i n i hd → b {
     ? == . rp mode LM_ROPE_NONE { ^ T } {}
     ? == . rp mode LM_ROPE_2D {
         ^ ( lm_rope2d kit x . rp pa . rp pb . rp cosb . rp sinb heads n hd )
@@ -278,11 +278,11 @@ i heads i n i dim i nt i nh → b {
 // pointer is byte-addressed, so a sub-range is just an offset — no copy,
 // and nothing to free (the parent owns the allocation).
 @ lm_view GkBuf b i off i len → GkBuf {
-    ^ @ GkBuf { + . b dptr * off ( gk_buf_esz b ) len . b dtype }
+    ^ ( gk_buf_view_as b * off ( gk_buf_esz b ) len . b dtype )
 }
 
 // y[rows, cols] += ls[cols] * b[rows, cols], the LayerScale residual.
-@ __lm_res * GpuKit kit GkBuf y GkBuf b GkBuf ls GkBuf tmp i rows i cols → b {
+@ __lm_res GpuKit kit GkBuf y GkBuf b GkBuf ls GkBuf tmp i rows i cols → b {
     : ( Vec i ) od ( _lm_i2 rows cols )
     : ( Vec i ) as ( _lm_i2 cols 1 )
     : ( Vec i ) bs ( _lm_i2 0 1 )
@@ -311,9 +311,9 @@ i heads i n i dim i nt i nh → b {
     i nvalid
 }
 
-@ lm_kv_none → LmKv { ^ @ LmKv { @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 0 0 } }
+@ lm_kv_none → LmKv { ^ @ LmKv { ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0 0 0 } }
 
-@ lm_kv_new * GpuKit kit i heads i maxkv i hd → LmKv {
+@ lm_kv_new GpuKit kit i heads i maxkv i hd → LmKv {
     ^ @ LmKv { ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
         ( gk_dbuf_new kit * heads * maxkv hd GK_F32 ) maxkv 0 0 }
 }
@@ -328,7 +328,7 @@ i heads i n i dim i nt i nh → b {
 // PLACEMENT IS THE CALLER'S BOOKKEEPING: both numbers are read here and
 // not written, because one frame passes through 24 different caches and
 // where it goes belongs to the frame, not to any one of them.
-@ lm_block_forward * GpuKit kit LmBlk w LmWs ws LmRope rp LmKv kv GkBuf x
+@ lm_block_forward GpuKit kit LmBlk w LmWs ws LmRope rp LmKv kv GkBuf x
 i n i dim i heads i hidden → b {
     : i hd / dim heads
     : i nd * n dim

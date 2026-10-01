@@ -52,6 +52,7 @@ $ `src/kernels.nu`
     i raw_cap
     ( Vec i ) cvt_raw  // raw chunks on the device (freed after the widen)
     ( Vec i ) cvt_rawsz
+    ( Vec GpuBuffer ) cvt_rawo  // their owners: clearing this frees them
     ( Vec i ) cvt_src  // per tensor: where its halves landed
     ( Vec i ) cvt_dst  // the f32 buffer the model will use
     ( Vec i ) cvt_n  // element count
@@ -137,7 +138,7 @@ $ `src/kernels.nu`
     i logits_d
     i argmax_d
     b oom  // a device allocation came back empty — see __wh_scratch
-    * u logits_host
+    GpuHost logits_host
     // scratch
     i mel_d  // 3000 × n_mels
     i c1_d  // 3000 × d_model
@@ -151,8 +152,9 @@ $ `src/kernels.nu`
     i ff_d  // 1500 × 4·d_model
     i sc_d  // n_head × 1500 × 1500 scores
     i enc_out  // 1500 × d_model — what the decoder attends to
-    ( Vec i ) bufs  // every device allocation, for the free
+    ( Vec i ) bufs  // every device allocation
     ( Vec i ) bufsz
+    ( Vec GpuBuffer ) bufo  // their owners: released with the model
 }
 
 @ __wh_err s msg → !*Whisper String {
@@ -294,7 +296,7 @@ $ `src/kernels.nu`
             : i n ( vec_len [u] raw )
             : i d ( __wh_carve w n )
             ? == d 0 { ( vec_free [u] raw ) ^ -1 } {}
-            : i _u ( gpu_upload @ GpuBuffer { d n } ( vec_data [u] raw ) )
+            : i _u ( gpu_upload ( gpu_buffer_view d n ) ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ^ d
         }
@@ -322,6 +324,7 @@ $ `src/kernels.nu`
     = . w raw_off 0
     = . w raw_cap 0
     = . w cvt_raw ( vec_new [i] )
+    = . w cvt_rawo ( vec_new [GpuBuffer] )
     = . w cvt_rawsz ( vec_new [i] )
     = . w cvt_src ( vec_new [i] )
     = . w cvt_dst ( vec_new [i] )
@@ -342,6 +345,7 @@ $ `src/kernels.nu`
         : GpuBuffer big ( gpu_alloc . w g need )
         ? == . big dptr 0 { = . w oom T ^ 0 } {}
         ( vec_push [i] . w bufs . big dptr )
+        ( vec_push [GpuBuffer] . w bufo big )
         ( vec_push [i] . w bufsz . big bytes )
         ^ . big dptr
     } {}
@@ -349,6 +353,7 @@ $ `src/kernels.nu`
         : GpuBuffer ch ( gpu_alloc . w g ( __WH_ARENA_CHUNK ) )
         ? == . ch dptr 0 { = . w oom T ^ 0 } {}
         ( vec_push [i] . w bufs . ch dptr )
+        ( vec_push [GpuBuffer] . w bufo ch )
         ( vec_push [i] . w bufsz . ch bytes )
         = . w arena_cur . ch dptr
         = . w arena_off 0
@@ -371,6 +376,7 @@ $ `src/kernels.nu`
         : GpuBuffer ch ( gpu_alloc . w g csz )
         ? == . ch dptr 0 { = . w oom T ^ 0 } {}
         ( vec_push [i] . w cvt_raw . ch dptr )
+        ( vec_push [GpuBuffer] . w cvt_rawo ch )
         ( vec_push [i] . w cvt_rawsz . ch bytes )
         = . w raw_cur . ch dptr
         = . w raw_off 0
@@ -438,15 +444,7 @@ $ `src/kernels.nu`
 }
 
 @ __wh_raw_free * Whisper w → v {
-    : ~ i k 0
-    ~ < k ( vec_len [i] . w cvt_raw ) {
-        : ~ i raw 0
-        : ~ i rsz 0
-        ?? ( vec_get [i] . w cvt_raw k ) { T x → { = raw x } F → {} }
-        ?? ( vec_get [i] . w cvt_rawsz k ) { T x → { = rsz x } F → {} }
-        ( gpu_free @ GpuBuffer { raw rsz } )
-        = k + k 1
-    }
+    ( vec_clear [GpuBuffer] . w cvt_rawo )  // the raw chunks go back
     ( vec_clear [i] . w cvt_raw )
     ( vec_clear [i] . w cvt_rawsz )
     = . w raw_cur 0
@@ -461,6 +459,7 @@ $ `src/kernels.nu`
     ( vec_free [GpuCopy] . w up_q )
     ( vec_free [i] . w cvt_raw )
     ( vec_free [i] . w cvt_rawsz )
+    ( vec_free [GpuBuffer] . w cvt_rawo )
     ( vec_free [i] . w cvt_src )
     ( vec_free [i] . w cvt_dst )
     ( vec_free [i] . w cvt_n )
@@ -615,6 +614,8 @@ $ `src/kernels.nu`
     = . w gg 0
     = . w bufs ( vec_new [i] )
     = . w bufsz ( vec_new [i] )
+    = . w bufo ( vec_new [GpuBuffer] )
+    = . w logits_host ( gpu_host_none )
     ( __wh_queue_init w )
     = . w oom F
     = . w n_mels n_mels
@@ -651,6 +652,8 @@ $ `src/kernels.nu`
             = . w st 0
             = . w bufs ( vec_new [i] )
             = . w bufsz ( vec_new [i] )
+            = . w bufo ( vec_new [GpuBuffer] )
+            = . w logits_host ( gpu_host_none )
             ( __wh_queue_init w )
             = . w oom F
             = . w gg # i gg
@@ -876,11 +879,7 @@ $ `src/kernels.nu`
 }
 
 @ wh_close * Whisper w → v {
-    : ~ i k 0
-    ~ < k ( vec_len [i] . w bufs ) {
-        ( gpu_free @ GpuBuffer { ( __wh_geti . w bufs k ) ( __wh_geti . w bufsz k ) } )
-        = k + k 1
-    }
+    ( vec_free [GpuBuffer] . w bufo )  // every device allocation
     ( vec_free [i] . w bufs )
     ( vec_free [i] . w bufsz )
     ( __wh_queue_free w )
@@ -907,7 +906,7 @@ $ `src/kernels.nu`
     ( vec_free [i] . w d_fc2_w ) ( vec_free [i] . w d_fc2_b )
     ( vec_free [i] . w kcache ) ( vec_free [i] . w vcache )
     ( vec_free [i] . w xk ) ( vec_free [i] . w xv )
-    ? != . w logits_host 0 { ( gpu_host_free . w logits_host ) } {}
+    ( gpu_host_free . w logits_host )
     ? != . w st 0 { ( st_close # *St . w st ) } {}
     ? != . w gg 0 { ( gg_close # *Gg . w gg ) } {}
     ? ( gpu_ok . w g ) { ( wk_free . w ks ) ( gpu_close . w g ) } {}
@@ -935,7 +934,7 @@ $ `src/kernels.nu`
         }
         = k + k 1
     }
-    : GpuBuffer mb @ GpuBuffer { . w mel_d * 4 ( vec_len [f] mel ) }
+    : GpuBuffer mb ( gpu_buffer_view . w mel_d * 4 ( vec_len [f] mel ) )
     : i _u ( gpu_upload mb ( vec_data [u] raw ) )
     ( vec_free [u] raw )
 
@@ -984,8 +983,9 @@ $ `src/kernels.nu`
 // The encoder states, back on the host: 1500 × d_model, row-major.
 @ wh_enc_out * Whisper w → ( Vec f ) {
     : i n * . w n_ctx_enc . w d_model
-    : *u host ( gpu_host_alloc * n 4 )
-    : GpuBuffer b @ GpuBuffer { . w enc_out * n 4 }
+    : GpuHost hb ( gpu_host_alloc * n 4 )
+    : *u host ( gpu_host_ptr hb )
+    : GpuBuffer b ( gpu_buffer_view . w enc_out * n 4 )
     : i _d ( gpu_download host b )
     : ( Vec f ) out ( vec_with_cap [f] n )
     : ~ i k 0
@@ -994,7 +994,6 @@ $ `src/kernels.nu`
         ( vec_push [f] out # f ( bits_to_f32 bits ) )
         = k + k 1
     }
-    ( gpu_host_free host )
     ^ out
 }
 
@@ -1089,12 +1088,12 @@ $ `src/kernels.nu`
 
 // The logits of the last step, on the host.
 @ wh_logits * Whisper w → ( Vec f ) {
-    : GpuBuffer b @ GpuBuffer { . w logits_d * . w n_vocab 4 }
-    : i _d ( gpu_download . w logits_host b )
+    : GpuBuffer b ( gpu_buffer_view . w logits_d * . w n_vocab 4 )
+    : i _d ( gpu_download ( gpu_host_ptr . w logits_host ) b )
     : ( Vec f ) out ( vec_with_cap [f] . w n_vocab )
     : ~ i k 0
     ~ < k . w n_vocab {
-        ( vec_push [f] out # f ( bits_to_f32 ( __wh_u32 . w logits_host * k 4 ) ) )
+        ( vec_push [f] out # f ( bits_to_f32 ( __wh_u32 ( gpu_host_ptr . w logits_host ) * k 4 ) ) )
         = k + k 1
     }
     ^ out
@@ -1105,9 +1104,9 @@ $ `src/kernels.nu`
 // exactly as they do in wh_argmax below, so the token stream is the same one.
 @ wh_argmax_dev * Whisper w → i {
     ( wk_argmax . w ks . w logits_d . w n_vocab . w argmax_d )
-    : GpuBuffer b @ GpuBuffer { . w argmax_d 4 }
-    : i _d ( gpu_download . w logits_host b )
-    ^ ( __wh_u32 . w logits_host 0 )
+    : GpuBuffer b ( gpu_buffer_view . w argmax_d 4 )
+    : i _d ( gpu_download ( gpu_host_ptr . w logits_host ) b )
+    ^ ( __wh_u32 ( gpu_host_ptr . w logits_host ) 0 )
 }
 
 // argmax — greedy decoding is what whisper does by default, and what the

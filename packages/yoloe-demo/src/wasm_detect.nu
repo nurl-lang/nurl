@@ -137,7 +137,7 @@ $ `deps/yoloe/src/mask.nu`
     ~ < ci * nc 512 { ( nurl_poke_f32 tpe ci ( nurl_peek_f32 tsrc ci ) ) = ci + ci 1 }
 
     // engine (static kernels — rt_open fails cleanly if none are linked)
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( host_status - 0 1 12 ) ^ 1 } {}
     ( host_status 2 nc )
 
@@ -178,13 +178,15 @@ $ `deps/yoloe/src/mask.nu`
                 : ( Vec i ) s3 ( vec_new [i] )
                 ( vec_push [i] s3 1 ) ( vec_push [i] s3 WD_K ) ( vec_push [i] s3 512 )
                 : RTensor out ( rt_run_two e g `images` host ( wd_shape4 1 3 640 640 ) `tpe` tpe s3 )
-                : *u o ( rt_download e out )
+                : GpuHost o__h ( rt_download e out )
+                : *u o ( gpu_host_ptr o__h )
 
                 : ~ b masks != want_masks 0
                 : ~ i proto_i 0
+                : ~ GpuHost proto_i__h ( gpu_host_none )
                 ? masks {
                     : RTensor proto_t ( rt_output1 e )
-                    ? == . proto_t nelem 0 { = masks F } { = proto_i # i ( rt_download e proto_t ) }
+                    ? == . proto_t nelem 0 { = masks F } { = proto_i__h ( rt_download e proto_t ) = proto_i # i ( gpu_host_ptr proto_i__h ) }
                 } {}
 
                 : ( Vec Detection ) raw ( wd_decode o na WD_K conf emask )
@@ -225,8 +227,6 @@ $ `deps/yoloe/src/mask.nu`
                 : i ms / - ( monotonic_ns ) t0 1000000
                 ( host_result dets_out nd ms )
 
-                ( nurl_free o )
-                ? masks { ( nurl_free # *u proto_i ) } {}
                 ( nurl_free host )
                 ( image_free . lb img )
                 ( vec_free [Detection] raw )

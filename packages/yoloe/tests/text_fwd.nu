@@ -35,13 +35,14 @@ $ `deps/onnx/src/runtime.nu`
     : ~ * u tokhost # *u 0
     ?? ( read_file_bytes ( string_data tp ) ) { T tb → = tokhost # *u ( vec_data [u] tb ) F _ → { ( nurl_print `tokens fail\n` ) ^ 1 } }
 
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
     ( nurl_print `device ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
 
     : RTensor out ( rt_run_tokens e g tokhost nrow ncol )
 
-    : *u host ( rt_download e out )
+    : GpuHost host__h ( rt_download e out )
+    : *u host ( gpu_host_ptr host__h )
     ( nurl_print `output floats ` ) ( nurl_print ( nurl_str_int . out nelem ) ) ( nurl_print `\n` )
 
     : *u gc ( nurl_alloc 8 )

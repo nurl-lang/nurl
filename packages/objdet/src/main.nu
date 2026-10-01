@@ -38,11 +38,12 @@ $ `detect.nu`
 
 // Run the detector on one image, draw boxes in place, print detections.
 // Returns the number of detections.
-@ detect_image * Engine e OGraph g Image im f conf f iou → i {
+@ detect_image Engine e OGraph g Image im f conf f iou → i {
     : Image in416 ? & == ( img_w im ) 416 == ( img_h im ) 416 im ( img_resize im 416 416 )
     : *u host ( img_to_nchw in416 )
     : RTensor out ( rt_run_shaped e g host ( shape4 1 3 416 416 ) )
-    : *u grid ( rt_download e out )
+    : GpuHost grid__h ( rt_download e out )
+    : *u grid ( gpu_host_ptr grid__h )
     : ( Vec Detection ) raw ( yolo_decode grid conf )
     : ( Vec Detection ) dets ( yolo_nms raw iou )
     : i nd ( vec_len [Detection] dets )
@@ -65,7 +66,6 @@ $ `detect.nu`
         }
         = k + k 1
     }
-    ( nurl_free grid )
     ^ nd
 }
 
@@ -100,7 +100,7 @@ $ `detect.nu`
     : OGraph g ( load_model ( string_data mp ) okc )
     ? == ( nurl_peek okc 0 ) 0 { ( p `cannot read model\n` ) ^ 1 } {}
 
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ^ 1 } {}
     ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
 

@@ -848,17 +848,17 @@ $ `deps/gpu/src/gpu.nu`
 @ wk_build Gpu g → WhKernels {
     : GpuKernel k1 ( gpu_compile g ( __wk_matvec ) `matvec` )
     : b want_warp == ( gpu_backend ) 0
-    : GpuKernel k1w ? want_warp ( gpu_compile g ( __wk_matvec_w ) `matvec_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel k1t ? want_warp ( gpu_compile g ( __wk_matvec_t ) `matvec_t` ) @ GpuKernel { 0 0 }
-    : GpuKernel k1m ? want_warp ( gpu_compile g ( __wk_matmul ) `matmul` ) @ GpuKernel { 0 0 }
+    : GpuKernel k1w ? want_warp ( gpu_compile g ( __wk_matvec_w ) `matvec_w` ) ( gpu_kernel_none )
+    : GpuKernel k1t ? want_warp ( gpu_compile g ( __wk_matvec_t ) `matvec_t` ) ( gpu_kernel_none )
+    : GpuKernel k1m ? want_warp ( gpu_compile g ( __wk_matmul ) `matmul` ) ( gpu_kernel_none )
     : ~ b warp & want_warp & & ( gpu_kernel_ok k1w ) ( gpu_kernel_ok k1t ) ( gpu_kernel_ok k1m )
     : GpuKernel k2 ( gpu_compile g ( __wk_layernorm ) `layernorm` )
-    : GpuKernel k2b ? want_warp ( gpu_compile g ( __wk_layernorm_b ) `layernorm_b` ) @ GpuKernel { 0 0 }
+    : GpuKernel k2b ? want_warp ( gpu_compile g ( __wk_layernorm_b ) `layernorm_b` ) ( gpu_kernel_none )
     : GpuKernel k3 ( gpu_compile g ( __wk_gelu ) `gelu` )
     : GpuKernel k4 ( gpu_compile g ( __wk_conv1d ) `conv1d` )
-    : GpuKernel k5f ? want_warp ( gpu_compile g ( __wk_attn_f ) `attn_f` ) @ GpuKernel { 0 0 }
-    : GpuKernel k5d ? want_warp ( gpu_compile g ( __wk_attn_d ) `attn_d` ) @ GpuKernel { 0 0 }
-    : GpuKernel k5m ? want_warp ( gpu_compile g ( __wk_attn_dm ) `attn_dm` ) @ GpuKernel { 0 0 }
+    : GpuKernel k5f ? want_warp ( gpu_compile g ( __wk_attn_f ) `attn_f` ) ( gpu_kernel_none )
+    : GpuKernel k5d ? want_warp ( gpu_compile g ( __wk_attn_d ) `attn_d` ) ( gpu_kernel_none )
+    : GpuKernel k5m ? want_warp ( gpu_compile g ( __wk_attn_dm ) `attn_dm` ) ( gpu_kernel_none )
     : GpuKernel k5 ( gpu_compile g ( __wk_attn_sc ) `attn_sc` )
     : GpuKernel k6 ( gpu_compile g ( __wk_attn_out ) `attn_out` )
     : GpuKernel k7 ( gpu_compile g ( __wk_addv ) `addv` )

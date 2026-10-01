@@ -63,7 +63,7 @@ $ `src/load.nu`
 // A conv with an optional bias, as a pair of device buffers.
 : DpConv { GkBuf w GkBuf b i hasb }
 
-@ __dp_conv * Lw lw * GpuKit kit s prefix s leaf b bias → DpConv {
+@ __dp_conv * Lw lw GpuKit kit s prefix s leaf b bias → DpConv {
     : String nw ( string_from prefix )
     ( string_push_str nw leaf )
     ( string_push_str nw `.weight` )
@@ -77,7 +77,7 @@ $ `src/load.nu`
         ( string_free nb )
         ^ @ DpConv { w b 1 }
     } {}
-    ^ @ DpConv { w @ GkBuf { 0 0 GK_F32 } 0 }
+    ^ @ DpConv { w ( gk_buf_none GK_F32 ) 0 }
 }
 
 @ __dp_conv_free sink DpConv c → v {
@@ -111,7 +111,7 @@ $ `src/load.nu`
     DpConv oc2b
 }
 
-@ __dp_rcu * Lw lw * GpuKit kit s prefix s unit → DpRcu {
+@ __dp_rcu * Lw lw GpuKit kit s prefix s unit → DpRcu {
     : String p ( string_from prefix )
     ( string_push_str p unit )
     ( string_push_char p 46 )
@@ -122,14 +122,14 @@ $ `src/load.nu`
     ^ r
 }
 
-@ __dp_fuse * Lw lw * GpuKit kit i idx b has1 → DpFuse {
+@ __dp_fuse * Lw lw GpuKit kit i idx b has1 → DpFuse {
     : String p ( string_from `depth_head.scratch.refinenet` )
     ( string_push_int p idx )
     ( string_push_char p 46 )
     : DpFuse f @ DpFuse {
         ? has1 ( __dp_rcu lw kit ( string_data p ) `resConfUnit1` )
-        @ DpRcu { @ DpConv { @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 }
-            @ DpConv { @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 } }
+        @ DpRcu { @ DpConv { ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0 }
+            @ DpConv { ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0 } }
         ( __dp_rcu lw kit ( string_data p ) `resConfUnit2` )
         ( __dp_conv lw kit ( string_data p ) `out_conv` T )
         ? has1 1 0 }
@@ -137,7 +137,7 @@ $ `src/load.nu`
     ^ f
 }
 
-@ dp_load * Lw lw * GpuKit kit → Dpt {
+@ dp_load * Lw lw GpuKit kit → Dpt {
     : ( Vec DpConv ) pj ( vec_new [DpConv] )
     : ( Vec DpConv ) rz ( vec_new [DpConv] )
     : ( Vec DpConv ) rn ( vec_new [DpConv] )
@@ -154,7 +154,7 @@ $ `src/load.nu`
             ( vec_push [DpConv] rz ( __dp_conv lw kit ( string_data rp ) `` T ) )
             ( string_free rp )
         } { ( vec_push [DpConv] rz @ DpConv {
-                @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 } ) }
+                ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0 } ) }
         : String np ( string_from `depth_head.scratch.layer` )
         ( string_push_int np + i0 1 )
         ( vec_push [DpConv] rn ( __dp_conv lw kit ( string_data np ) `_rn` F ) )
@@ -195,10 +195,10 @@ $ `src/load.nu`
 
 // ── forward ─────────────────────────────────────────────────────────
 
-@ __dp_relu * GpuKit kit GkBuf x → b { ^ ( gkd_relu kit x x ) }
+@ __dp_relu GpuKit kit GkBuf x → b { ^ ( gkd_relu kit x x ) }
 
 // A 3x3 stride-1 pad-1 convolution, the shape most of this head is.
-@ __dp_c3 * GpuKit kit GkBuf y GkBuf x DpConv c i cin i cout i h i w → b {
+@ __dp_c3 GpuKit kit GkBuf y GkBuf x DpConv c i cin i cout i h i w → b {
     ^ ( gkd_conv2d kit y x . c w . c b . c hasb cin h w cout 3 3 h w 1 1 1 1 )
 }
 
@@ -215,7 +215,7 @@ $ `src/load.nu`
 //
 // The caller's buffer is left relu'd, exactly as the reference leaves
 // its own. Both the port and the reference are done with it by then.
-@ _dp_rcu_fwd * GpuKit kit DpRcu r GkBuf x GkBuf t1 GkBuf t2 i ch i h i w → b {
+@ _dp_rcu_fwd GpuKit kit DpRcu r GkBuf x GkBuf t1 GkBuf t2 i ch i h i w → b {
     ? ( gkd_relu kit x x ) {} { ^ F }
     ? ( __dp_c3 kit t2 x . r c1 ch ch h w ) {} { ^ F }
     ? ( gkd_relu kit t1 t2 ) {} { ^ F }
@@ -246,10 +246,10 @@ $ `src/load.nu`
         }
         = k + k 1
     }
-    ^ @ GkBuf { 0 0 GK_F32 }
+    ^ ( gk_buf_none GK_F32 )
 }
 
-@ dp_pos_embed * GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspect → b {
+@ dp_pos_embed GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspect → b {
     : GkBuf hit ( __dp_pe_find cache ch h w aspect )
     ? ( gk_buf_ok hit ) { ^ ( gkd_add kit x x hit ) } {}
     : f diag ( float_sqrt + * aspect aspect 1.0 )
@@ -317,7 +317,7 @@ $ `src/load.nu`
 // `ch` is 256 for every block the real head builds, but taking it as an
 // argument rather than reading DP_FEAT lets a unit test run this at a
 // size a human can read.
-@ _dp_fuse_fwd * GpuKit kit DpFuse f GkBuf out GkBuf skip GkBuf up
+@ _dp_fuse_fwd GpuKit kit DpFuse f GkBuf out GkBuf skip GkBuf up
 GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w i oh i ow i trace i tag → b {
     ? == . f has1 1 {
         // resConfUnit1 runs on the SKIP, in place, then adds into out
@@ -345,7 +345,7 @@ GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w i oh i ow i trace i tag → b {
 // Tokens → a 2-D feature map. `src` is [P, 2048] for one tapped layer;
 // the six special tokens are dropped and the rest is transposed from
 // [patches, C] to [C, gh, gw].
-@ __dp_tokens_to_map * GpuKit kit Dpt d GkBuf src GkBuf tmp GkBuf outmap
+@ __dp_tokens_to_map GpuKit kit Dpt d GkBuf src GkBuf tmp GkBuf outmap
 i gh i gw → b {
     : i np * gh gw
     : GkBuf patches ( lm_view src * DP_SPECIAL DP_IN * np DP_IN )
@@ -362,7 +362,7 @@ i gh i gw → b {
 // re-running with one more print each time is not an option.
 : i DP_STRIDE 9973
 
-@ __dp_dump * GpuKit kit s label GkBuf b i ch i h i w → v {
+@ __dp_dump GpuKit kit s label GkBuf b i ch i h i w → v {
     : i n * ch * h w
     : ( Vec f ) hv ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] hv n )
@@ -407,7 +407,7 @@ i gh i gw → b {
 // runs once per frame against ~100 s of transformer, and a wrong
 // hand-computed scratch size fails closed in a way that is tedious to
 // chase.
-@ dp_forward * GpuKit kit Dpt d GkBuf taps i gh i gw i h i w i trace
+@ dp_forward GpuKit kit Dpt d GkBuf taps i gh i gw i h i w i trace
 GkBuf depth GkBuf conf → b {
     : i np * gh gw
     : i p + DP_SPECIAL np

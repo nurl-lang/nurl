@@ -52,7 +52,7 @@ $ `index_html_data.nu`
 // ── shared state (set once in main, read by the handlers) ───────────
 
 : DemoState {
-    i eng  // *Engine as int
+    Engine eng  // the inference engine, for the program's lifetime
     OGraph graph
     ( Vec String ) names
     i nc
@@ -222,7 +222,7 @@ $ `index_html_data.nu`
 // [1,77]; the n1 text-encoder export ends in an L2 normalize, so the
 // slot lands in exactly the space the contrastive head was traced with.
 @ yd_encode_prompt * DemoState st s text i slot → b {
-    : *Engine e # *Engine . st eng
+    : Engine e . st eng
     : ( Vec i ) row ( bpe_tokenize . st tk text 77 )
     ? != ( vec_len [i] row ) 77 { ( vec_free [i] row ) ^ F } {}
     : *u toks ( nurl_alloc * 77 8 )
@@ -235,14 +235,14 @@ $ `index_html_data.nu`
     : RTensor out ( rt_run_tokens e . st tgraph toks 1 77 )
     : ~ b ok F
     ? == . out nelem 512 {
-        : *u h ( rt_download e out )
+        : GpuHost h__h ( rt_download e out )
+        : *u h ( gpu_host_ptr h__h )
         : *u tp ( vec_data [u] . st tpe )
         : ~ i q 0
         ~ < q 512 {
             ( nurl_poke_f32 tp + * slot 512 q ( nurl_peek_f32 h q ) )
             = q + q 1
         }
-        ( nurl_free # s h )
         = ok T
     } {}
     ( nurl_free # s toks )
@@ -284,7 +284,7 @@ $ `index_html_data.nu`
 // ── inference: one frame in, masks drawn on, detection JSON out ─────
 
 @ yd_detect * DemoState st Image im f conf b want_masks ( Vec i ) flags → Json {
-    : *Engine e # *Engine . st eng
+    : Engine e . st eng
     : i t0 ( monotonic_ns )
 
     : Letterbox lb ( letterbox im 640 )
@@ -297,13 +297,15 @@ $ `index_html_data.nu`
     } {
         = out ( rt_run_shaped e . st graph host ( yd_shape4 1 3 640 640 ) )
     }
-    : *u o ( rt_download e out )
+    : GpuHost o__h ( rt_download e out )
+    : *u o ( gpu_host_ptr o__h )
 
     : ~ b masks want_masks
     : ~ i proto_i 0
+    : ~ GpuHost proto_i__h ( gpu_host_none )
     ? masks {
         : RTensor proto_t ( rt_output1 e )
-        ? == . proto_t nelem 0 { = masks F } { = proto_i # i ( rt_download e proto_t ) }
+        ? == . proto_t nelem 0 { = masks F } { = proto_i__h ( rt_download e proto_t ) = proto_i # i ( gpu_host_ptr proto_i__h ) }
     } {}
 
     : i na 8400
@@ -372,8 +374,6 @@ $ `index_html_data.nu`
     ( vec_free [u] jb )
     ( vec_free [Detection] raw )
     ( vec_free [Detection] dets )
-    ( nurl_free o )
-    ? masks { ( nurl_free # *u proto_i ) } {}
     ( nurl_free host )
     ( image_free . lb img )
     ^ root
@@ -653,7 +653,7 @@ $ `index_html_data.nu`
                     ( nurl_print `  (` ) ( nurl_print ( nurl_str_int nc ) ) ( nurl_print ` classes)\n` )
 
                     // GPU
-                    : *Engine e ( rt_open gpu )
+                    : Engine e ( rt_open gpu )
                     ? ! ( rt_ok e ) {
                         ( nurl_eprintln `yoloe-demo: GPU init / kernel compile failed (try --gpu 0)` )
                         = rc 1
@@ -661,7 +661,7 @@ $ `index_html_data.nu`
                         ( nurl_print `device   ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
 
                         : *DemoState st # *DemoState ( nurl_alloc Z DemoState )
-                        = . st eng # i e
+                        = . st eng e
                         = . st graph g
                         = . st names names
                         = . st nc nc
@@ -780,7 +780,6 @@ $ `index_html_data.nu`
                                 = rc ( http_app_listen a ( string_data host ) port )
                             }
                         } { = rc 1 }
-                        ( rt_close e )
                     }
                 }
             }

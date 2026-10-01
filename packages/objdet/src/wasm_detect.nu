@@ -51,7 +51,7 @@ $ `detect.nu`
     : OGraph g ( onnx_parse mb )
     ( host_status 1 n )
 
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( host_status - 0 1 12 ) ^ 1 } {}
     ( host_status 2 0 )
 
@@ -65,7 +65,8 @@ $ `detect.nu`
         ? == cmd 0 {
             : f conf / # f # i ( nurl_peek_i32 ctl 0 ) 1000.0
             : RTensor out ( rt_run_shaped e g nchw ( od_shape4 1 3 OD_N OD_N ) )
-            : *u grid ( rt_download e out )
+            : GpuHost grid__h ( rt_download e out )
+            : *u grid ( gpu_host_ptr grid__h )
             : ( Vec Detection ) raw ( yolo_decode grid conf )
             : ( Vec Detection ) dets ( yolo_nms raw 0.5 )
             : ~ i nd ( vec_len [Detection] dets )
@@ -87,7 +88,6 @@ $ `detect.nu`
                 = k + k 1
             }
             ( host_result dets_out nd )
-            ( nurl_free grid )
             ( vec_free [Detection] raw )
             ( vec_free [Detection] dets )
         } {

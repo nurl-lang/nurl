@@ -112,7 +112,7 @@ $ `src/tokenizer.nu`
     ( Vec i ) tq_up_shexp
     ( Vec i ) tq_down_shexp
     i rlogitsd
-    * u router_host
+    GpuHost router_host
     i moe_outd
     // batched-MoE scratch: the assignment table (expert id + weight per
     // (position, selected-expert) pair) and the expert hidden/down buffers
@@ -137,6 +137,7 @@ $ `src/tokenizer.nu`
     ( Vec u ) embd_host
     ( Vec i ) wdptr
     ( Vec i ) wbytes
+    ( Vec GpuBuffer ) wbufs  // the owners of wdptr's allocations (released with them)
     ( Vec i ) tq_attn_norm
     ( Vec i ) tq_wq
     ( Vec i ) tq_wk
@@ -185,12 +186,12 @@ $ `src/tokenizer.nu`
     i ud
     i scored
     i logitsd
-    * u logits_host
+    GpuHost logits_host
     // greedy argmax + confidence per window position (device + host)
     i amid_d
     i amprob_d
-    * u amid_h
-    * u amprob_h
+    GpuHost amid_h
+    GpuHost amprob_h
     // coarse phase profiler (NURLLAMA_PROF): sync+timer per phase
     b prof_on
     i prof_attn_ns
@@ -330,11 +331,13 @@ $ `src/tokenizer.nu`
             ( gpu_free bq )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
             ( vec_push [i] . m wdptr . br dptr )
+            ( vec_push [GpuBuffer] . m wbufs br )
             ( vec_push [i] . m wbytes . br bytes )
             = __lm_last_type gt
             ^ . br dptr
         } {}
         ( vec_push [i] . m wdptr . bq dptr )
+        ( vec_push [GpuBuffer] . m wbufs bq )
         ( vec_push [i] . m wbytes . bq bytes )
         = __lm_last_type gt
         ^ . bq dptr
@@ -352,6 +355,7 @@ $ `src/tokenizer.nu`
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
             = __lm_last_type 0
             ^ . b dptr
@@ -389,6 +393,7 @@ $ `src/tokenizer.nu`
         ^ -1
     } {}
     ( vec_push [i] . m wdptr . b dptr )
+    ( vec_push [GpuBuffer] . m wbufs b )
     ( vec_push [i] . m wbytes . b bytes )
     ^ . b dptr
 }
@@ -570,6 +575,7 @@ $ `src/tokenizer.nu`
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
             = __lm_last_type 0
             ^ . b dptr
@@ -629,6 +635,7 @@ $ `src/tokenizer.nu`
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
             ^ . b dptr
         }
@@ -876,6 +883,7 @@ $ `src/tokenizer.nu`
     } {}
 
     = . m wdptr ( vec_new [i] )
+    = . m wbufs ( vec_new [GpuBuffer] )
     = . m wbytes ( vec_new [i] )
     = . m tq_attn_norm ( vec_new [i] )
     = . m tq_wq ( vec_new [i] )
@@ -1128,8 +1136,8 @@ $ `src/tokenizer.nu`
     } {
         = . m amid_d -1
         = . m amprob_d -1
-        = . m amid_h # *u 0
-        = . m amprob_h # *u 0
+        = . m amid_h ( gpu_host_none )
+        = . m amprob_h ( gpu_host_none )
     }
     ? . m bidir {
         = . m rlogitsd ( __lm_scratch m * LM_CHUNK . m n_expert )
@@ -1153,12 +1161,12 @@ $ `src/tokenizer.nu`
             ( bytes_push_u32_le bb # u32 ( f32_to_bits # f32 bv ) )
             = bi + bi 1
         }
-        : GpuBuffer bu @ GpuBuffer { . m bias_all * nbias 4 }
+        : GpuBuffer bu ( gpu_buffer_view . m bias_all * nbias 4 )
         : i _ub ( gpu_upload bu ( vec_data [u] bb ) )
         ( vec_free [u] bb )
     } {
         = . m rlogitsd -1
-        = . m router_host # *u 0
+        = . m router_host ( gpu_host_none )
         = . m moe_outd -1
         = . m moe_expid -1
         = . m moe_wts -1
@@ -1217,11 +1225,7 @@ $ `src/tokenizer.nu`
         ( string_free pm )
     } {}
     ? != . m st 0 { ( st_close # *St . m st ) } {}
-    : ~ i k 0
-    ~ < k ( vec_len [i] . m wdptr ) {
-        ( gpu_free @ GpuBuffer { ( _lm_geti . m wdptr k ) ( _lm_geti . m wbytes k ) } )
-        = k + k 1
-    }
+    ( vec_free [GpuBuffer] . m wbufs )  // every weight and scratch buffer
     ( vec_free [i] . m wdptr )
     ( vec_free [i] . m wbytes )
     ( vec_free [i] . m tq_attn_norm )
@@ -1266,9 +1270,9 @@ $ `src/tokenizer.nu`
     ( vec_free [i] . m tq_gate_shexp )
     ( vec_free [i] . m tq_up_shexp )
     ( vec_free [i] . m tq_down_shexp )
-    ? != 0 # i . m router_host { ( gpu_host_free . m router_host ) } {}
-    ? != 0 # i . m amid_h { ( gpu_host_free . m amid_h ) } {}
-    ? != 0 # i . m amprob_h { ( gpu_host_free . m amprob_h ) } {}
+    ( gpu_host_free . m router_host )
+    ( gpu_host_free . m amid_h )
+    ( gpu_host_free . m amprob_h )
     ( vec_free [u] . m embd_host )
     ? != . m gg 0 { ( gguf_close # *Gguf . m gg ) } {}
     ( gpu_host_free . m logits_host )
@@ -1484,7 +1488,7 @@ $ `src/tokenizer.nu`
     : ~ i bi 0
     ~ < bi count {
         : i tok ( _lm_geti ids + first bi )
-        : GpuBuffer xb @ GpuBuffer { + . m xd * * bi ne 4 * ne 4 }
+        : GpuBuffer xb ( gpu_buffer_view + . m xd * * bi ne 4 * ne 4 )
         // The embedding table is never expanded: exactly this token's row is
         // decoded, out of whichever container the weights came from. A
         // safetensors row range is exact (no block quantisation), a GGUF one is
@@ -1621,8 +1625,8 @@ $ `src/tokenizer.nu`
             } {
                 // ── fallback: host routing + per-(position, expert)
                 // launches (any weight type without a batched kernel) ──
-                : GpuBuffer rb @ GpuBuffer { . m rlogitsd * * count . m n_expert 4 }
-                : i _d1 ( gpu_download . m router_host rb )
+                : GpuBuffer rb ( gpu_buffer_view . m rlogitsd * * count . m n_expert 4 )
+                : i _d1 ( gpu_download ( gpu_host_ptr . m router_host ) rb )
                 : i stride_g * . m moe_ff ( __lm_row_bytes gt_g ne )
                 : i stride_u * . m moe_ff ( __lm_row_bytes gt_u ne )
                 : i stride_d * ne ( __lm_row_bytes gt_d . m moe_ff )
@@ -1682,14 +1686,14 @@ $ `src/tokenizer.nu`
         ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
         : i last_row + . m xnd * * - count 1 ne 4
         : b _q8 ( lk_matvec_q . m ks . m tq_output . m w_output last_row . m logitsd . m n_vocab ne 1 )
-        : GpuBuffer lb @ GpuBuffer { . m logitsd * . m n_vocab 4 }
-        : i _u2 ( gpu_download . m logits_host lb )
+        : GpuBuffer lb ( gpu_buffer_view . m logitsd * . m n_vocab 4 )
+        : i _u2 ( gpu_download ( gpu_host_ptr . m logits_host ) lb )
     } {}
     ? == logits_mode 2 {
         ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
         : b _q9 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
-        : GpuBuffer lb2 @ GpuBuffer { . m logitsd * * count . m n_vocab 4 }
-        : i _u3 ( gpu_download . m logits_host lb2 )
+        : GpuBuffer lb2 ( gpu_buffer_view . m logitsd * * count . m n_vocab 4 )
+        : i _u3 ( gpu_download ( gpu_host_ptr . m logits_host ) lb2 )
     } {}
     // mode 3: greedy argmax + confidence on the DEVICE for every window
     // position, so only count·(id,prob) come back — not count·vocab.
@@ -1698,10 +1702,10 @@ $ `src/tokenizer.nu`
         ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
         : b _q10 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
         ( lk_argmax_conf . m ks . m logitsd . m amid_d . m amprob_d . m n_vocab count )
-        : GpuBuffer ib @ GpuBuffer { . m amid_d * count 4 }
-        : i _u4 ( gpu_download . m amid_h ib )
-        : GpuBuffer pb @ GpuBuffer { . m amprob_d * count 4 }
-        : i _u5 ( gpu_download . m amprob_h pb )
+        : GpuBuffer ib ( gpu_buffer_view . m amid_d * count 4 )
+        : i _u4 ( gpu_download ( gpu_host_ptr . m amid_h ) ib )
+        : GpuBuffer pb ( gpu_buffer_view . m amprob_d * count 4 )
+        : i _u5 ( gpu_download ( gpu_host_ptr . m amprob_h ) pb )
         ? . m prof_on { = . m prof_out_ns + . m prof_out_ns - ( __lm_prof_now m ) _po } {}
     } {}
 }

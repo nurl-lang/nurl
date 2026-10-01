@@ -337,7 +337,7 @@ $ `src/store.nu`
             ? > pos np2 { = pos np2 } {}
             ? < pos 0 {
                 : ~ i j 0
-                ~ < j . fc nw { ( arima_restart_at ( _fc_model_at fc j ) - ( model_seq_base mo ) . fc origin_seq ) = j + j 1 }
+                ~ < j . fc nw { ( arima_restart_at # ArimaModel ( _fc_geti . fc models j ) - ( model_seq_base mo ) . fc origin_seq ) = j + j 1 }
                 = pos 0
             } {}
             = . fc pos pos
@@ -1423,7 +1423,7 @@ $ `src/store.nu`
             F _ → {}
         }
         ( json_obj_set fo `selected` ( json_str_lit ( fc_selected_of fc j ) ) )
-        ( json_obj_set fo `model` ( arima_coef ( _fc_model_at fc j ) ) )
+        ( json_obj_set fo `model` ( arima_coef # ArimaModel ( _fc_geti . fc models j ) ) )
         ( json_arr_push fa fo )
         = j + j 1
     }
@@ -1475,7 +1475,7 @@ $ `src/store.nu`
     ~ < j nw {
         : Json fo ( json_obj_new )
         ?? ( vec_get [String] . fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
-        : *ArimaModel cm # *ArimaModel ( _fc_geti copies j )
+        : ArimaModel cm # ArimaModel ( _fc_geti copies j )
         : ArimaForecast f1 ( arima_forecast cm h )
         ( json_obj_set fo `mean` ( _an_jarr_of_floats . f1 mean ) )
         ( json_obj_set fo `se` ( _an_jarr_of_floats . f1 se ) )
@@ -1572,7 +1572,7 @@ $ `src/store.nu`
         ? & >= t o0 <= t - - len h 1 {
             = j 0
             ~ < j nw {
-                : *ArimaModel cm # *ArimaModel ( _fc_geti copies j )
+                : ArimaModel cm # ArimaModel ( _fc_geti copies j )
                 : ArimaForecast f1 ( arima_forecast cm h )
                 : f lastv . mp + * r nw j
                 : ~ i q 1
@@ -1652,7 +1652,7 @@ $ `src/store.nu`
     ^ o
 }
 
-@ model_forecast_model * Model mo i j → *ArimaModel {
+@ model_forecast_model * Model mo i j → ArimaModel {
     ^ ( _fc_model_at . mo fc j )
 }
 

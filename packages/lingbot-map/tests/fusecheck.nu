@@ -18,7 +18,7 @@ $ `src/dpthead.nu`
 
 : i FC_CH 8  // stands in for DP_FEAT; the code is channel-generic
 
-@ gen * GpuKit kit i n f phase → GkBuf {
+@ gen GpuKit kit i n f phase → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) h ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] h n )
@@ -30,7 +30,7 @@ $ `src/dpthead.nu`
     ^ b
 }
 
-@ dump * GpuKit kit s label GkBuf b i n → v {
+@ dump GpuKit kit s label GkBuf b i n → v {
     : ( Vec f ) h ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] h n )
     ? ( gk_dbuf_download kit b h ) {} { ( nurl_print `dl FAILED\n` ) ^ v }
@@ -43,14 +43,14 @@ $ `src/dpthead.nu`
     ( vec_free [f] h )
 }
 
-@ mkconv * GpuKit kit i cout i cin i k f phase → DpConv {
+@ mkconv GpuKit kit i cout i cin i k f phase → DpConv {
     ^ @ DpConv {
         ( gen kit * cout * cin * k k phase )
         ( gen kit cout + phase 0.5 ) 1 }
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
     : i h 3
     : i w 5

@@ -725,7 +725,7 @@ i h i w f cmin i stride → v {
     // caller writes the cloud into a pipeline and never learns.
     : ~ i rc 0
     : ~ i serve 0
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} {
         ( nurl_print `lingbot-map: no GPU backend — no CUDA device is visible, and this\n` )
         ( nurl_print `build has no CPU fallback compiled in.\n` )

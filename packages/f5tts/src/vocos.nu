@@ -29,7 +29,7 @@ $ `deps/audio/src/istft.nu`
 $ `kernels.nu`
 
 : Vocos {
-    * GpuKit kit
+    GpuKit kit
     i pt  // *Pt — the mmapped .bin
     b own_kit
     i dim
@@ -56,7 +56,7 @@ $ `kernels.nu`
     ^ @ !*Vocos String { F ( string_from msg ) }
 }
 
-@ __voc_nobuf → GkBuf { ^ @ GkBuf { 0 0 GK_F32 } }
+@ __voc_nobuf → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 
 @ __voc_bget ( Vec GkBuf ) v i k → GkBuf {
     ?? ( vec_get [GkBuf] v k ) { T x → { ^ x } F → { ^ ( __voc_nobuf ) } }
@@ -69,7 +69,7 @@ $ `kernels.nu`
 }
 
 @ __voc_view GkBuf b i offel i nel → GkBuf {
-    ^ @ GkBuf { + . b dptr * offel 4 nel GK_F32 }
+    ^ ( gk_buf_view_as b * offel 4 nel GK_F32 )
 }
 
 // Upload one f32 tensor out of the pickle's storage, no host copy.
@@ -199,7 +199,7 @@ $ `kernels.nu`
     ^ ok
 }
 
-@ voc_open s path * GpuKit kit → !*Vocos String {
+@ voc_open s path GpuKit kit → !*Vocos String {
     ?? ( pt_open path ) {
         T pt → {
             : *Vocos v # *Vocos ( nurl_alloc Z Vocos )

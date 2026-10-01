@@ -29,7 +29,7 @@ $ `src/devblock.nu`
 }
 
 // Host buffer → a fresh device buffer of the same length.
-@ up * GpuKit kit * f p i n → GkBuf {
+@ up GpuKit kit * f p i n → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) v ( vec_with_cap [f] n )
     : ~ i j 0
@@ -44,7 +44,7 @@ $ `src/devblock.nu`
 // host reference in src/block.nu both use [out, in]. The host side here
 // keeps the original layout on purpose — the two must disagree in memory
 // and agree in result, which is exactly what this test is checking.
-@ upt * GpuKit kit * f p i rows i cols → GkBuf {
+@ upt GpuKit kit * f p i rows i cols → GkBuf {
     : i n * rows cols
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) v ( vec_with_cap [f] n )
@@ -61,7 +61,7 @@ $ `src/devblock.nu`
     ^ b
 }
 
-@ upi * GpuKit kit * i p i n → GkBuf {
+@ upi GpuKit kit * i p i n → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_I64 )
     : ( Vec i ) v ( vec_with_cap [i] n )
     : ~ i j 0
@@ -71,7 +71,7 @@ $ `src/devblock.nu`
     ^ b
 }
 
-@ case * GpuKit kit i gw i gh i nspecial i dim i heads i hidden b qk b rope → v {
+@ case GpuKit kit i gw i gh i nspecial i dim i heads i hidden b qk b rope → v {
     : i n + nspecial * gw gh
     : i hd / dim heads
     : *f x # *f ( nurl_zalloc * 8 * n dim ) ( gen x * n dim 0.11 )
@@ -129,10 +129,10 @@ $ `src/devblock.nu`
     : LmBlk w @ LmBlk {
         ( up kit n1g dim ) ( up kit n1b dim )
         ( upt kit qw * 3 dim dim ) ( up kit qb * 3 dim )
-        ? qk ( up kit qng hd ) @ GkBuf { 0 0 GK_F32 }
-        ? qk ( up kit qnb hd ) @ GkBuf { 0 0 GK_F32 }
-        ? qk ( up kit kng hd ) @ GkBuf { 0 0 GK_F32 }
-        ? qk ( up kit knb hd ) @ GkBuf { 0 0 GK_F32 }
+        ? qk ( up kit qng hd ) ( gk_buf_none GK_F32 )
+        ? qk ( up kit qnb hd ) ( gk_buf_none GK_F32 )
+        ? qk ( up kit kng hd ) ( gk_buf_none GK_F32 )
+        ? qk ( up kit knb hd ) ( gk_buf_none GK_F32 )
         ( upt kit pw dim dim ) ( up kit pb dim )
         ( up kit ls1 dim )
         ( up kit n2g dim ) ( up kit n2b dim )
@@ -149,7 +149,7 @@ $ `src/devblock.nu`
     = . ws cosb ( up kit ct * maxpos / hd 2 )
     = . ws sinb ( up kit st * maxpos / hd 2 )
     : LmRope rp ? rope
-    @ LmRope { LM_ROPE_2D . ws rows . ws cols @ GkBuf { 0 0 GK_F32 } . ws cosb . ws sinb }
+    @ LmRope { LM_ROPE_2D . ws rows . ws cols ( gk_buf_none GK_F32 ) . ws cosb . ws sinb }
     ( lm_rope_none )
     : b ok ( lm_block_forward kit w ws rp ( lm_kv_none ) dx n dim heads hidden )
 
@@ -196,7 +196,7 @@ $ `src/devblock.nu`
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
     ( nurl_print `backend ` ) ( nurl_print ( gk_backend kit ) ) ( nurl_print `\n` )
     ( case kit 3 2 1 16 2 32 T T )  // aggregator block: qk-norm + rope

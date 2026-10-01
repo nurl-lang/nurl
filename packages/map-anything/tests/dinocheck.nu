@@ -67,7 +67,7 @@ $ `src/dino.nu`
         }
         T got → { = lw got }
     }
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __dc_die `no compute device` ) }
     : Dino d ( dn_load lw kit )
     ? ( lw_ok lw ) {} { ^ ( __dc_die ( lw_error lw ) ) }

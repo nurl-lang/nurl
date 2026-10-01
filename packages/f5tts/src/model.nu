@@ -38,7 +38,7 @@ $ `kernels.nu`
 : f F5_PI 3.14159265358979323846
 
 : F5Model {
-    * GpuKit kit
+    GpuKit kit
     i st  // *St — a safetensors checkpoint, 0 when this is a .pt
     i pt  // *Pt — a PyTorch pickle checkpoint, 0 when this is safetensors
     String prefix  // what every tensor name in this file starts with
@@ -119,7 +119,7 @@ $ `kernels.nu`
     ^ @ !*F5Model String { F ( string_from msg ) }
 }
 
-@ __f5m_nobuf → GkBuf { ^ @ GkBuf { 0 0 GK_F32 } }
+@ __f5m_nobuf → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 
 @ __f5m_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ -1 } }
@@ -910,7 +910,7 @@ $ `kernels.nu`
 // forward wants a slice of one — the third of six chunks the timestep
 // projection produced, or the second sample's rows.
 @ __f5m_view GkBuf b i offel i nel → GkBuf {
-    ^ @ GkBuf { + . b dptr * offel 4 nel GK_F32 }
+    ^ ( gk_buf_view_as b * offel 4 nel GK_F32 )
 }
 
 // ── ConvNeXt-V2, the text encoder's block ───────────────────────────
@@ -1146,7 +1146,7 @@ $ `kernels.nu`
 
 @ f5_buf_cond * F5Model m → GkBuf { ^ . m cond2 }
 
-@ f5_kit * F5Model m → *GpuKit { ^ . m kit }
+@ f5_kit * F5Model m → GpuKit { ^ . m kit }
 
 @ f5_n * F5Model m → i { ^ . m n }
 

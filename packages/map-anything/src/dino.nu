@@ -71,7 +71,7 @@ $ `src/patchembed.nu`
     ( vec_free [f] . d poscache )
 }
 
-@ dn_load * Lw w * GpuKit kit → Dino {
+@ dn_load * Lw w GpuKit kit → Dino {
     : ( Vec MaBlk ) bs ( vec_new [MaBlk] )
     : ~ i i0 0
     ~ < i0 DN_DEPTH {
@@ -183,7 +183,7 @@ $ `src/patchembed.nu`
 // the full token array: row 0 is the cls token (the aggregator's
 // per-view register), rows 1.. are the patch tokens. NO final norm — the
 // model replaces it with Identity.
-@ dn_forward * GpuKit kit Dino d MaWs ws * f img i h i w i gh i gw GkBuf tok → b {
+@ dn_forward GpuKit kit Dino d MaWs ws * f img i h i w i gh i gw GkBuf tok → b {
     : i np * gh gw
     : i n ( dn_tokens gh gw )
     : i k * 3 * DN_PATCH DN_PATCH
