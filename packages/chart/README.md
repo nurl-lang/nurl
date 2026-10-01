@@ -92,12 +92,13 @@ $ `deps/chart/src/chart.nu`
 
 : ( Vec f ) v ( vec_new [f] )
 ( vec_push [f] v 3.0 ) ( vec_push [f] v 7.0 ) ( vec_push [f] v 5.0 )
-: String s ( chart_sparkline v )      // ▃█▆  (caller frees with string_free)
+: String s ( chart_sparkline v )      // ▃█▆
 ```
 
 ### API
 
-Every renderer returns an **owned** `String`; free it with `string_free`.
+Every renderer returns an **owned** `String`; its owner drops it — nothing
+is released by hand.
 `values` is a `( Vec f )`; `labels` is a `( Vec String )` that is *borrowed*
 (never freed or retained). Widths/heights are in terminal cells.
 

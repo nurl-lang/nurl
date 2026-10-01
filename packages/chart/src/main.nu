@@ -64,7 +64,6 @@ $ `src/chart.nu`
         = i + i 1
     }
     ? > ( string_len cur ) 0 { ( vec_push [String] out ( string_clone cur ) ) } {}
-    ( string_free cur )
     ^ out
 }
 
@@ -87,7 +86,6 @@ $ `src/chart.nu`
         }
         = i + i 1
     }
-    ( vec_free_with [String] toks \ String s → v { ( string_free s ) } )
     ^ out
 }
 
@@ -140,13 +138,11 @@ $ `src/chart.nu`
                         F _ → {}
                     }
                 } {}
-                ( vec_free_with [String] toks \ String s → v { ( string_free s ) } )
             }
             F _ → {}
         }
         = li + li 1
     }
-    ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
 }
 
 // ── Flag helpers ──────────────────────────────────────────────────────
@@ -160,7 +156,6 @@ $ `src/chart.nu`
                 T n → { = out n }
                 F _ → {}
             }
-            ( string_free v )
         }
         F _ → {}
     }
@@ -169,7 +164,6 @@ $ `src/chart.nu`
 
 @ __emit String out → v {
     ( nurl_print ( string_data out ) )
-    ( string_free out )
 }
 
 // ── Help ──────────────────────────────────────────────────────────────
@@ -183,7 +177,6 @@ $ `src/chart.nu`
     ( nurl_print `  line    line/scatter plot (--width/--height)\n\n` )
     : String h ( args_usage p )
     ( nurl_print ( string_data h ) )
-    ( string_free h )
     ( nurl_print `\nNumbers are read whitespace-separated from stdin (or --file).\n` )
 }
 
@@ -227,17 +220,15 @@ $ `src/chart.nu`
             ?? ( args_value p `file` ) {
                 T fv → {
                     ?? ( read_file ( string_data fv ) ) {
-                        T txt → { ( string_free input ) = input txt }
+                        T txt → { = input txt }
                         F _ → {
                             ( nurl_eprint `chart: cannot read file: ` )
                             ( nurl_eprintln ( string_data fv ) )
                             = rc 1 = ok F
                         }
                     }
-                    ( string_free fv )
                 }
                 F _ → {
-                    ( string_free input )
                     = input ( read_all_stdin )
                 }
             }
@@ -251,7 +242,6 @@ $ `src/chart.nu`
                 ?? ( args_value p `title` ) {
                     T tv → {
                         ( nurl_print ( string_data tv ) ) ( nurl_print `\n` )
-                        ( string_free tv )
                     }
                     F _ → {}
                 }
@@ -261,8 +251,6 @@ $ `src/chart.nu`
                     : ( Vec f ) values ( vec_new [f] )
                     ( __parse_bar input labels values )
                     ( __emit ( chart_bars labels values width ) )
-                    ( vec_free_with [String] labels \ String s → v { ( string_free s ) } )
-                    ( vec_free [f] values )
                 } {
                     : ( Vec f ) values ( __parse_floats input )
                     ? == 0 ( vec_len [f] values ) {
@@ -291,10 +279,8 @@ $ `src/chart.nu`
                             }
                         }
                     }
-                    ( vec_free [f] values )
                 }
             } {}
-            ( string_free input )
         }
     } {
         ( nurl_eprint `chart: ` ) ( nurl_eprintln ( args_error p ) )
@@ -302,7 +288,5 @@ $ `src/chart.nu`
         = rc 2
     }
 
-    ( args_free p )
-    ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }
