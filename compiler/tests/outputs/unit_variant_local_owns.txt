@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+A live delta: 0
+B live delta: 0
+C live delta: 0

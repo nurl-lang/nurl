@@ -17211,6 +17211,12 @@
         { ( mem_udrop_flag_set syms cg ptr `0` ) ( __sb syms ptr `1` ) }
         ^ v }
     {}
+    // A unit variant (`: ~ ResolveErr failure ResolveConflict`) is a value
+    // that owns nothing: this binding's own, not a borrow of a global —
+    // taken for one, a result literal holding it made its function lend
+    // every result, the Ok payloads included.
+    ? & ( is_ident_tok rhs_tt ) != 0 ( nurl_sym_len2 syms rhs_val `__enum_of` )
+    { ( mem_udrop_flag_set syms cg ptr `1` ) ( __sb syms ptr `` ) ^ v } {}
     // A global, or a binding with no home of its own (an SSA parameter):
     // borrowed.
     ? ( is_ident_tok rhs_tt ) { ( mem_udrop_flag_set syms cg ptr `0` ) ( __sb syms ptr `1` ) ^ v } {}

@@ -112,6 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emptied in the caller's struct, so the store after it releases nothing
   twice; `mem_take` of a binding that has since been given another value
   leaves the field in place. `compiler/tests/inout_replaces_owned.nu`.
+- **A local holding a unit variant owns it.** `: ~ ResolveErr failure
+  ResolveConflict … ^ @ !( Vec LockPkg ) ResolveErr { F failure }` read the
+  variant like a global, so the binding borrowed it and `resolve_registry`
+  counted as lending on every path — no caller dropped its lock list.
+  `compiler/tests/unit_variant_local_owns.nu`.
 
 ### Changed
 
