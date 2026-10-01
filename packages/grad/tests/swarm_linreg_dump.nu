@@ -16,14 +16,13 @@ $ `src/grad.nu`
 $ `src/emitc.nu`
 $ `deps/tensor/src/tensor.nu`
 
-@ sc * GTape tp f v b param → GVar {
+@ sc GTape tp f v b param → GVar {
     : ( Vec f ) d ( vec_new [f] )
     ( vec_push [f] d v )
     : ( Vec i ) s ( vec_new [i] )
     ( vec_push [i] s 1 )
     : Tensor t ( tensor_from_data TE_F64 s d )
     : GVar o ? param ( grad_param tp t ) ( grad_const tp t )
-    ( tensor_free t ) ( vec_free [f] d )
     ^ o
 }
 
@@ -35,7 +34,7 @@ $ `deps/tensor/src/tensor.nu`
 
 // One example's parameter gradients via the tape (fresh episode per call).
 @ tape_grads f a f b f xf f v * u ga * u gb → v {
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar pa ( sc tp a T )
     : GVar pb ( sc tp b T )
     : GVar xl ( sc tp xf F )
@@ -47,12 +46,11 @@ $ `deps/tensor/src/tensor.nu`
     : Tensor g2 ( grad_of tp pb )
     ( nurl_poke ga 0 ( f64_to_bits ( _tf . g1 data 0 ) ) )
     ( nurl_poke gb 0 ( f64_to_bits ( _tf . g2 data 0 ) ) )
-    ( tape_free tp )
 }
 
 @ main → i {
     // ── emit the kernel from ONE symbolic episode ────────────────────
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar pa ( sc tp 0.0 T )
     : GVar pb ( sc tp 0.0 T )
     : GVar xl ( sc tp 0.5 F )
@@ -70,9 +68,6 @@ $ `deps/tensor/src/tensor.nu`
     ? ( gemit_cuda_grad tp loss pids lids lexprs T src ) {} { ( nurl_print `EMIT FAILED\n` ) ^ 1 }
     ( nurl_print `===SRC===\n` )
     ( nurl_print ( string_data src ) )
-    ( string_free src )
-    ( vec_free [i] pids ) ( vec_free [i] lids ) ( vec_free [s] lexprs )
-    ( tape_free tp )
 
     // ── the local reference: same GD, tape backward per example ─────
     : i N ( cN )

@@ -43,16 +43,15 @@ $ `deps/gpukit/src/dev.nu`
     ~ < k * fin fout { ( vec_push [f] out * lim - * 2.0 ( rng_u01 g ) 1.0 ) = k + k 1 }
 }
 
-@ param2 * GTape tp ( Vec f ) v i r i c → GVar {
+@ param2 GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ( vec_push [i] s r ) ( vec_push [i] s c )
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar p ( grad_param tp t )
-    ( tensor_free t )
     ^ p
 }
 
-@ param1 * GTape tp i n → GVar {
+@ param1 GTape tp i n → GVar {
     : ( Vec f ) v ( vec_new [f] )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 0.0 ) = k + k 1 }
@@ -60,11 +59,10 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_push [i] s n )
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar p ( grad_param tp t )
-    ( tensor_free t ) ( vec_free [f] v )
     ^ p
 }
 
-@ episode * GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
+@ episode GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
     : GVar h ( g_relu tp ( g_add tp ( g_matmul tp X W1 ) B1 ) )
     : GVar y ( g_add tp ( g_matmul tp h W2 ) B2 )
     : GVar e ( g_sub tp y X )
@@ -76,8 +74,8 @@ $ `deps/gpukit/src/dev.nu`
 
 // Train the wide AE on the device with the given capture dtype; download the
 // 4 final parameters into `outp` (flat, in id order 0..3).
-@ train_device * GpuKit kit ( Vec f ) all ( Vec f ) w1v ( Vec f ) w2v i D i H i BSZ i EP f ALPHA f LR i dtype ( Vec f ) outp → b {
-    : *GTape tp ( tape_new )
+@ train_device GpuKit kit ( Vec f ) all ( Vec f ) w1v ( Vec f ) w2v i D i H i BSZ i EP f ALPHA f LR i dtype ( Vec f ) outp → b {
+    : GTape tp ( tape_new )
     : GVar W1 ( param2 tp w1v D H )
     : GVar B1 ( param1 tp H )
     : GVar W2 ( param2 tp w2v H D )
@@ -89,11 +87,10 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_push [i] sh0 BSZ ) ( vec_push [i] sh0 D )
     : Tensor rt0 ( tensor_from_data TE_F64 sh0 r0 )
     : GVar X ( grad_const tp rt0 )
-    ( tensor_free rt0 ) ( vec_free [f] r0 )
     : GVar loss ( episode tp X W1 B1 W2 B2 ALPHA BSZ )
-    : *GProg pg ( gput_capture_dt kit tp loss dtype )
+    : GProg pg ( gput_capture_dt kit tp loss dtype )
     : ~ b ok ( gput_ok pg )
-    : *GpOpt go ( gpopt_adam_new LR )
+    : GpOpt go ( gpopt_adam_new LR )
     ( gpopt_add go pg W1 ALPHA ) ( gpopt_add go pg B1 0.0 )
     ( gpopt_add go pg W2 ALPHA ) ( gpopt_add go pg B2 0.0 )
     : ~ i ep 0
@@ -102,7 +99,6 @@ $ `deps/gpukit/src/dev.nu`
         : ~ i q 0
         ~ < q * BSZ D { ( vec_push [f] rows ( _tf all + * * ep BSZ D q ) ) = q + q 1 }
         = ok & ok ( gput_set_input pg X rows )
-        ( vec_free [f] rows )
         = ok & ok ( gput_forward pg )
         = ok & ok ( gput_backward pg )
         = ok & ok ( gpopt_step go pg )
@@ -118,7 +114,6 @@ $ `deps/gpukit/src/dev.nu`
             = pid + pid 1
         }
     } {}
-    ( gpopt_free go ) ( gput_free pg ) ( tape_free tp )
     ^ ok
 }
 
@@ -133,15 +128,13 @@ $ `deps/gpukit/src/dev.nu`
     : ( Vec f ) all ( vec_with_cap [f] * * EP BSZ D )
     : ~ i k 0
     ~ < k * * EP BSZ D { ( vec_push [f] all - * 2.0 ( rng_u01 dg ) 1.0 ) = k + k 1 }
-    ( rng_free dg )
     : Rng ig ( rng_seed 5 )
     : ( Vec f ) w1v ( vec_new [f] )
     ( glorot ig D H w1v )
     : ( Vec f ) w2v ( vec_new [f] )
     ( glorot ig H D w2v )
-    ( rng_free ig )
 
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_print `gput_mixed: SKIP (no backend)\n` )
         ( gk_close kit )
@@ -179,8 +172,6 @@ $ `deps/gpukit/src/dev.nu`
     ( check < wmix wf32 `mixed tracks the f64 reference CLOSER than pure f32` )
     ( check < wmix * 0.5 wf32 `mixed halves pure-f32 drift (>= 2x closer)` )
 
-    ( vec_free [f] pref ) ( vec_free [f] pf32 ) ( vec_free [f] pmix )
-    ( vec_free [f] all ) ( vec_free [f] w1v ) ( vec_free [f] w2v )
     ( gk_close kit )
     ( nurl_print `gput_mixed_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )

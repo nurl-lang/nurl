@@ -18,7 +18,7 @@
 //             w -= lr·√(1−β2ᵗ)/(1−β1ᵗ) · m/(√v + ε)
 //             β1 = 0.9, β2 = 0.999, ε = 1e-8 — sklearn/PyTorch defaults.
 //
-// The step counter lives behind the *Opt heap pointer, so it ADVANCES — the
+// The step counter lives behind the *OptImpl heap pointer, so it ADVANCES — the
 // frozen-Adam-t bug class (a scalar counter field on a by-value struct never
 // persists in NURL) cannot recur, and tests/opt pin the trajectory bit-for-
 // bit against a hand-computed two-step Adam.
@@ -35,12 +35,13 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `grad.nu`
 $ `deps/tensor/src/tensor.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Opt {
+: OptImpl {
     i kind  // 0 sgd · 1 adam
     f lr
     f clip  // 0 = off
-    i t  // Adam step count (advances — behind the heap pointer)
+    i t  // Adam step count (advances — shared state)
     i total  // total moment elements
     ( Vec i ) ids  // param node ids
     ( Vec f ) alphas  // per-param L2
@@ -50,40 +51,48 @@ $ `deps/tensor/src/tensor.nu`
     ( Vec f ) v  // second moments (adam)
 }
 
-@ _opt_new i kind f lr → *Opt {
-    : *Opt o # *Opt ( nurl_alloc Z Opt )
-    = . o kind kind
-    = . o lr lr
-    = . o clip 0.0
-    = . o t 0
-    = . o total 0
-    = . o ids ( vec_new [i] )
-    = . o alphas ( vec_new [f] )
-    = . o offs ( vec_new [i] )
-    = . o lens ( vec_new [i] )
-    = . o m ( vec_new [f] )
-    = . o v ( vec_new [f] )
-    ^ o
+// An Opt is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Opt { s ctl }
+
+@ Opt_share Opt h → Opt { ^ @ Opt { # s ( rcbox_share # i . h ctl ) } }
+
+@ Opt_drop sink Opt h → v {
+    ( mem_forget h )
+    ( rcbox_release [OptImpl] # i . h ctl )
 }
 
-@ opt_sgd_new f lr → *Opt { ^ ( _opt_new 0 lr ) }
+// The state, for this package's own code.
+@ _Opt_ptr Opt h → *OptImpl { ^ ( rcbox_ptr [OptImpl] # i . h ctl ) }
 
-@ opt_adam_new f lr → *Opt { ^ ( _opt_new 1 lr ) }
-
-@ opt_free sink * Opt o → v {
-    ( vec_free [i] . o ids )
-    ( vec_free [f] . o alphas )
-    ( vec_free [i] . o offs )
-    ( vec_free [i] . o lens )
-    ( vec_free [f] . o m )
-    ( vec_free [f] . o v )
-    ( nurl_free # s o )
+@ _opt_new i kind f lr → Opt {
+    ^ @ Opt { # s ( rcbox_new [OptImpl] @ OptImpl { kind lr 0.0 0 0 ( vec_new [i] ) ( vec_new [f] )
+            ( vec_new [i] ) ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) } ) }
 }
 
-@ opt_set_clip * Opt o f maxn → v { = . o clip maxn }
+@ opt_sgd_new f lr → Opt { ^ ( _opt_new 0 lr ) }
+
+@ opt_adam_new f lr → Opt { ^ ( _opt_new 1 lr ) }
+
+// Let go of `o` now rather than at the end of its owner's scope (its
+// moments and parameter lists go with its last owner).
+@ opt_free sink Opt o → v {}
+
+// Adam's step count so far (0 for SGD and before the first step).
+@ opt_t Opt o__h → i {
+    : *OptImpl o ( _Opt_ptr o__h )
+    ^ . o t
+}
+
+@ opt_set_clip Opt o__h f maxn → v {
+    : *OptImpl o ( _Opt_ptr o__h )
+    = . o clip maxn
+}
 
 // Register one tape parameter with its L2 coefficient (0 for biases).
-@ opt_add * Opt o * GTape tp GVar p f alpha → v {
+@ opt_add Opt o__h GTape tp__h GVar p f alpha → v {
+    : *OptImpl o ( _Opt_ptr o__h )
+    : *GTapeImpl tp ( _GTape_ptr tp__h )
     ? >= . p id 0 {} { ^ v }
     : *Tensor w # *Tensor ( _g_val tp . p id )
     : i n ( vec_len [f] . w data )
@@ -101,7 +110,7 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // The global L2 norm of every registered parameter's gradient (0-grads skip).
-@ _opt_gnorm * Opt o * GTape tp → f {
+@ _opt_gnorm * OptImpl o * GTapeImpl tp → f {
     : ~ f ss 0.0
     : i np ( vec_len [i] . o ids )
     : ~ i pi 0
@@ -124,7 +133,9 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 // One update step from the gradients currently on the tape.
-@ opt_step * Opt o * GTape tp → v {
+@ opt_step Opt o__h GTape tp__h → v {
+    : *OptImpl o ( _Opt_ptr o__h )
+    : *GTapeImpl tp ( _GTape_ptr tp__h )
     // global-norm clip factor (1.0 = no scaling)
     : ~ f cs 1.0
     ? > . o clip 0.0 {

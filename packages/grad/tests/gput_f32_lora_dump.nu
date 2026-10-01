@@ -32,7 +32,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_print `SKIP no backend\n` )
         ( gk_close kit )
@@ -50,12 +50,12 @@ $ `deps/gpukit/src/dev.nu`
     ( dumpv `cosv` . bl cosv ) ( dumpv `sinv` . bl sinv )
     ( dumpv `mask` . bl mask ) ( dumpv `onehot` . bl onehot )
     ( dumpv `la` . bl la ) ( dumpv `lb` . bl lb )
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : *u pav ( nurl_alloc * 7 8 )
     : *u pbv ( nurl_alloc * 7 8 )
     : GVar loss ( build_block tp bl pav pbv )
     // capture + run the whole block in FLOAT32 on the device
-    : *GProg pg ( gput_capture_dt kit tp loss 1 )
+    : GProg pg ( gput_capture_dt kit tp loss 1 )
     ? ( gput_ok pg ) {} {
         ( nurl_print `SKIP capture failed\n` )
         ^ 0
@@ -84,18 +84,12 @@ $ `deps/gpukit/src/dev.nu`
         : String an ( string_from `gA` )
         ( string_push_str an ( nurl_str_int k ) )
         ( dumpv ( string_data an ) ga )
-        ( string_free an )
         : String bn ( string_from `gB` )
         ( string_push_str bn ( nurl_str_int k ) )
         ( dumpv ( string_data bn ) gb )
-        ( string_free bn )
-        ( vec_free [f] ga ) ( vec_free [f] gb )
         = k + k 1
     }
     ( nurl_free pav ) ( nurl_free pbv )
-    ( gput_free pg )
-    ( tape_free tp )
-    ( blk_free bl )
     ( gk_close kit )
     ^ 0
 }

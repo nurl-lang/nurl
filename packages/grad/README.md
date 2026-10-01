@@ -8,14 +8,13 @@ gives the ops, `grad` gives the derivatives, everything above (MLPs, LoRA,
 distributed training) becomes composition.
 
 ```
-: *GTape tp ( tape_new )
+: GTape tp ( tape_new )
 : GVar w ( grad_param tp w0 )          // copied in; the tape owns the live copy
 : GVar x ( grad_const tp batch )       // no gradient flows into a const
 : GVar loss ( g_mse tp ( g_relu tp ( g_mul tp x w ) ) target )
 ( backward tp loss )
 : Tensor gw ( grad_of tp w )           // borrowed view of dL/dw
-...
-( tape_free tp )                       // one owner, one free
+...                                    // the tape goes with its last owner
 ```
 
 ## The tape model
@@ -27,10 +26,15 @@ no graph objects, no per-node closures (deliberately: NURL closure capture is
 the wrong tool for a hot loop), and reverse order is deterministic, which the
 bit-exactness tests rely on.
 
-**Ownership is single-owner by construction.** The tape owns every value and
-gradient tensor. `grad_param`/`grad_const` copy in; `gvar_value`/`grad_of`
-hand out borrows (never free them; invalid after `tape_free`/a reset past the
-node); `tape_free` releases everything.
+**Ownership: the tape is the arena, and nothing is freed by hand.** A
+`GTape` is a handle (every copy is the same tape) that owns every value and
+gradient tensor; its last owner releases them all. `grad_param`/`grad_const`
+copy in; `gvar_value`/`grad_of` hand out borrows (never free them; invalid
+once the tape is gone or reset past the node). `Opt`, `GProg`, `GpOpt`,
+`GpPlan` and `GpFuse` are handles the same way — device buffers, the
+captured CUDA graph and the program's hold on the kit go with the last
+owner. `tape_free`, `opt_free`, `gput_free`, `gpopt_free`, `gpfuse_free` and
+`gpfuse_close` remain as optional early releases.
 
 **The minibatch pattern** — parameters survive, episodes don't:
 
@@ -57,7 +61,7 @@ M1+M2 (this release, CPU):
 M3 optimizers (`src/opt.nu`): **SGD** and **Adam** over the tape's
 parameters, per-parameter L2 (`opt_add o tp p alpha` — weights carry alpha,
 biases 0), optional **global-norm gradient clipping** (`opt_set_clip`). The
-Adam step count lives behind the `*Opt` heap pointer so it advances — and the
+Adam step count lives in the `Opt` handle's shared state so it advances — and the
 trajectory is pinned bit-for-bit against a hand-computed reference in the
 tests, the regression guard for the frozen-Adam-t bug class. Forwards for
 matmul/bmm/broadcast/softmax/slice/concat go THROUGH the tensor package, so
@@ -71,8 +75,8 @@ input rows, replay forward + backward (one kernel launch per node), and step
 the device optimizer — only the loss scalar comes back:
 
 ```nurl
-: *GProg pg ( gput_capture kit tp loss )    // after ONE CPU-built episode
-: *GpOpt go ( gpopt_adam_new lr )
+: GProg pg ( gput_capture kit tp loss )     // after ONE CPU-built episode
+: GpOpt go ( gpopt_adam_new lr )
 ( gpopt_add go pg W1 alpha ) …               // opt.nu mirrored, on-device m/v
 ~ training {
     ( gput_set_input pg X batch_rows )       // fresh minibatch

@@ -18,14 +18,13 @@ $ `src/grad.nu`
 $ `src/emitc.nu`
 $ `deps/tensor/src/tensor.nu`
 
-@ sc * GTape tp f v b param → GVar {
+@ sc GTape tp f v b param → GVar {
     : ( Vec f ) d ( vec_new [f] )
     ( vec_push [f] d v )
     : ( Vec i ) s ( vec_new [i] )
     ( vec_push [i] s 1 )
     : Tensor t ( tensor_from_data TE_F64 s d )
     : GVar o ? param ( grad_param tp t ) ( grad_const tp t )
-    ( tensor_free t ) ( vec_free [f] d )
     ^ o
 }
 
@@ -35,7 +34,7 @@ $ `deps/tensor/src/tensor.nu`
     : f P0 0.31
     : f P1 -0.42
     : f P2 0.9
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar p0 ( sc tp P0 T )
     : GVar p1 ( sc tp P1 T )
     : GVar p2 ( sc tp P2 T )
@@ -76,8 +75,5 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print ( nurl_str_int ( f64_to_bits P0 ) ) ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_int ( f64_to_bits P1 ) ) ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_int ( f64_to_bits P2 ) ) ) ( nurl_print `\n` )
-    ( string_free src )
-    ( vec_free [i] pids ) ( vec_free [i] lids ) ( vec_free [s] lexprs )
-    ( tape_free tp )
     ^ 0
 }

@@ -43,16 +43,15 @@ $ `deps/gpukit/src/dev.nu`
     ~ < k * fin fout { ( vec_push [f] out * lim - * 2.0 ( rng_u01 g ) 1.0 ) = k + k 1 }
 }
 
-@ param2 * GTape tp ( Vec f ) v i r i c → GVar {
+@ param2 GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ( vec_push [i] s r ) ( vec_push [i] s c )
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar p ( grad_param tp t )
-    ( tensor_free t )
     ^ p
 }
 
-@ param1 * GTape tp i n → GVar {
+@ param1 GTape tp i n → GVar {
     : ( Vec f ) v ( vec_new [f] )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 0.0 ) = k + k 1 }
@@ -60,11 +59,10 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_push [i] s n )
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar p ( grad_param tp t )
-    ( tensor_free t ) ( vec_free [f] v )
     ^ p
 }
 
-@ episode * GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
+@ episode GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 f alpha i bsz → GVar {
     : GVar h ( g_relu tp ( g_add tp ( g_matmul tp X W1 ) B1 ) )
     : GVar y ( g_add tp ( g_matmul tp h W2 ) B2 )
     : GVar e ( g_sub tp y X )
@@ -85,15 +83,13 @@ $ `deps/gpukit/src/dev.nu`
     : ( Vec f ) all ( vec_with_cap [f] * * EP BSZ D )
     : ~ i k 0
     ~ < k * * EP BSZ D { ( vec_push [f] all - * 2.0 ( rng_u01 dg ) 1.0 ) = k + k 1 }
-    ( rng_free dg )
     : Rng ig ( rng_seed 5 )
     : ( Vec f ) w1v ( vec_new [f] )
     ( glorot ig D H w1v )
     : ( Vec f ) w2v ( vec_new [f] )
     ( glorot ig H D w2v )
-    ( rng_free ig )
 
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_print `gput_f32: SKIP (no backend)\n` )
         ( gk_close kit )
@@ -102,12 +98,12 @@ $ `deps/gpukit/src/dev.nu`
     ( nurl_print `backend: ` ) ( nurl_print ( gk_backend kit ) ) ( nurl_print `\n` )
 
     // reference: CPU f64 tape trained locally
-    : *GTape tpr ( tape_new )
+    : GTape tpr ( tape_new )
     : GVar rW1 ( param2 tpr w1v D H )
     : GVar rB1 ( param1 tpr H )
     : GVar rW2 ( param2 tpr w2v H D )
     : GVar rB2 ( param1 tpr D )
-    : *Opt ro ( opt_adam_new LR )
+    : Opt ro ( opt_adam_new LR )
     ( opt_add ro tpr rW1 ALPHA ) ( opt_add ro tpr rB1 0.0 )
     ( opt_add ro tpr rW2 ALPHA ) ( opt_add ro tpr rB2 0.0 )
     : i mark ( tape_mark tpr )
@@ -121,7 +117,6 @@ $ `deps/gpukit/src/dev.nu`
         ( vec_push [i] rsh BSZ ) ( vec_push [i] rsh D )
         : Tensor rt ( tensor_from_data TE_F64 rsh rows )
         : GVar X ( grad_const tpr rt )
-        ( tensor_free rt ) ( vec_free [f] rows )
         : GVar loss ( episode tpr X rW1 rB1 rW2 rB2 ALPHA BSZ )
         : b _b ( backward tpr loss )
         ( vec_push [f] rloss ( g_scalar tpr loss ) )
@@ -131,7 +126,7 @@ $ `deps/gpukit/src/dev.nu`
     }
 
     // f32 device replay: same structure captured in float32
-    : *GTape tpf ( tape_new )
+    : GTape tpf ( tape_new )
     : GVar fW1 ( param2 tpf w1v D H )
     : GVar fB1 ( param1 tpf H )
     : GVar fW2 ( param2 tpf w2v H D )
@@ -143,11 +138,10 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_push [i] rsh0 BSZ ) ( vec_push [i] rsh0 D )
     : Tensor rt0 ( tensor_from_data TE_F64 rsh0 r0 )
     : GVar Xf ( grad_const tpf rt0 )
-    ( tensor_free rt0 ) ( vec_free [f] r0 )
     : GVar lossf ( episode tpf Xf fW1 fB1 fW2 fB2 ALPHA BSZ )
-    : *GProg pg ( gput_capture_dt kit tpf lossf 1 )
+    : GProg pg ( gput_capture_dt kit tpf lossf 1 )
     ( check ( gput_ok pg ) `f32 capture succeeds` )
-    : *GpOpt go ( gpopt_adam_new LR )
+    : GpOpt go ( gpopt_adam_new LR )
     ( gpopt_add go pg fW1 ALPHA ) ( gpopt_add go pg fB1 0.0 )
     ( gpopt_add go pg fW2 ALPHA ) ( gpopt_add go pg fB2 0.0 )
     : ( Vec f ) floss ( vec_new [f] )
@@ -158,7 +152,6 @@ $ `deps/gpukit/src/dev.nu`
         : ~ i q 0
         ~ < q * BSZ D { ( vec_push [f] rows ( _tf all + * * ep BSZ D q ) ) = q + q 1 }
         = ok & ok ( gput_set_input pg Xf rows )
-        ( vec_free [f] rows )
         = ok & ok ( gput_forward pg )
         = ok & ok ( gput_backward pg )
         ( vec_push [f] floss ( gput_loss pg ) )
@@ -201,11 +194,6 @@ $ `deps/gpukit/src/dev.nu`
     ( nurl_print `  final param worst rel ` ) ( nurl_print ( nurl_str_float wp ) ) ( nurl_print `\n` )
     ( check < wp 0.01 `f32 final parameters track the f64 tape (<1e-2)` )
 
-    ( vec_free [f] rloss ) ( vec_free [f] floss )
-    ( gpopt_free go ) ( gput_free pg )
-    ( opt_free ro )
-    ( tape_free tpr ) ( tape_free tpf )
-    ( vec_free [f] w1v ) ( vec_free [f] w2v ) ( vec_free [f] all )
     ( gk_close kit )
     ( nurl_print `gput_f32_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )

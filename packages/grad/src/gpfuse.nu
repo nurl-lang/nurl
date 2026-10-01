@@ -42,8 +42,9 @@ $ `deps/tensor/src/tensor.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
+$ `stdlib/core/rcbox.nu`
 
-: GpPlan {
+: GpPlanImpl {
     b ok
     i kid  // unique plan id baked into kernel names
     i rows  // B — the fused chain's row count
@@ -63,12 +64,45 @@ $ `deps/gpukit/src/dev.nu`
     ( Vec String ) sbnames  // serial bwd kernel (empty = per-node)
 }
 
+// A GpPlan is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: GpPlan { s ctl }
+
+@ GpPlan_share GpPlan h → GpPlan { ^ @ GpPlan { # s ( rcbox_share # i . h ctl ) } }
+
+@ GpPlan_drop sink GpPlan h → v {
+    ( mem_forget h )
+    ( rcbox_release [GpPlanImpl] # i . h ctl )
+}
+
+// The state, for this package's own code.
+@ _GpPlan_ptr GpPlan h → *GpPlanImpl { ^ ( rcbox_ptr [GpPlanImpl] # i . h ctl ) }
+
+// Did the analysis find something to fuse?
+@ gpfuse_plan_ok GpPlan pl__h → b {
+    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+    ^ . pl ok
+}
+
+// The fused segments as flattened (lo, hi) inclusive node-id ranges, and
+// each segment's backward row-kernel name (empty = per-node). Borrowed:
+// valid while the plan is.
+@ gpfuse_plan_segs GpPlan pl__h → ( Vec i ) {
+    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+    ^ . pl segs
+}
+
+@ gpfuse_plan_bnames GpPlan pl__h → ( Vec String ) {
+    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+    ^ . pl bnames
+}
+
 : ~ i g_gpm_next 1
 
 // ── analysis ─────────────────────────────────────────────────────────
 
 // Is node k row-local over B rows? (see the header for the definition)
-@ _gpf_rowlocal * GProg pg i k i B → b {
+@ _gpf_rowlocal * GProgImpl pg i k i B → b {
     : GpNode nd ( _gp_node pg k )
     ? & == . nd rows B > . nd cols 0 {} { ^ F }
     : i op . nd op
@@ -126,7 +160,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // One fused-segment kernel over nodes [lo, hi].
-@ _gpf_emit_seg * GProg pg i lo i hi i B s kname String o → v {
+@ _gpf_emit_seg * GProgImpl pg i lo i hi i B s kname String o → v {
     ( string_push_str o `extern "C" __global__ void ` )
     ( string_push_str o kname )
     ( string_push_str o `(const long long* vt, long long B)\n{\n` )
@@ -158,7 +192,6 @@ $ `deps/gpukit/src/dev.nu`
         }
         = k + k 1
     }
-    ( vec_free [i] seen )
     // node stages
     = k lo
     ~ <= k hi {
@@ -201,7 +234,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // `a`-side element of a binop/unary at (s, c).
-@ _gpf_in String o * GProg pg i inid i C → v {
+@ _gpf_in String o * GProgImpl pg i inid i C → v {
     ( _gpf_t o inid )
     ( string_push_str o `[s * ` )
     ( string_push_str o ( nurl_str_int C ) )
@@ -209,7 +242,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // `b`-side element: matched shape, per-row vector, or scalar.
-@ _gpf_inb String o * GProg pg i inid i C → v {
+@ _gpf_inb String o * GProgImpl pg i inid i C → v {
     : GpNode nb ( _gp_node pg inid )
     ? & == . nb rows 0 == . nb n 1 {
         ( _gpf_t o inid )
@@ -226,7 +259,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // The per-element expression for fused node k — the EXACT per-node kernel
 // arithmetic (gp_ew_bc / gp_scal / gp_trans / gp_matmul), spelled inline.
-@ _gpf_expr * GProg pg i k String o → v {
+@ _gpf_expr * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     : i C . nd cols
@@ -257,55 +290,17 @@ $ `deps/gpukit/src/dev.nu`
 
 // ── the plan ─────────────────────────────────────────────────────────
 
-@ gpfuse_free sink * GpPlan pl → v {
-    ( vec_free [i] . pl segs )
-    ( string_free . pl src )
-    : ~ i k 0
-    ~ < k ( vec_len [String] . pl knames ) {
-        ?? ( vec_get [String] . pl knames k ) { T x → { ( string_free x ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] . pl knames )
-    = k 0
-    ~ < k ( vec_len [String] . pl bnames ) {
-        ?? ( vec_get [String] . pl bnames k ) { T x → { ( string_free x ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] . pl bnames )
-    = k 0
-    ~ < k ( vec_len [String] . pl pnames ) {
-        ?? ( vec_get [String] . pl pnames k ) { T x → { ( string_free x ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] . pl pnames )
-    ( vec_free [i] . pl pgrid )
-    ( string_free . pl fillk )
-    ( vec_free [i] . pl ssegs )
-    = k 0
-    ~ < k ( vec_len [String] . pl snames ) {
-        ?? ( vec_get [String] . pl snames k ) { T x → { ( string_free x ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] . pl snames )
-    = k 0
-    ~ < k ( vec_len [String] . pl sbnames ) {
-        ?? ( vec_get [String] . pl sbnames k ) { T x → { ( string_free x ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] . pl sbnames )
-    : GkBuf vb . pl vtab
-    ? != . vb dptr 0 { ( gk_dbuf_free vb ) } {}
-    : GkBuf gb . pl gtab
-    ? != . gb dptr 0 { ( gk_dbuf_free gb ) } {}
-    : GkBuf fb . pl ftab
-    ? != . fb dptr 0 { ( gk_dbuf_free fb ) } {}
-    ( nurl_free # s pl )
-}
+// Let go of `pl` now rather than at the end of its owner's scope. A plan
+// owns its kernel names and sources and its device tables, and releases
+// them with its last owner.
+@ gpfuse_free sink GpPlan pl → v {}
 
 // Analyze the program, emit the fused-forward kernels, upload the pointer
 // table. ok=F (with everything freed safe) when nothing fuses.
-@ gpfuse_plan * GProg pg → *GpPlan {
-    : *GpPlan pl # *GpPlan ( nurl_alloc Z GpPlan )
+@ gpfuse_plan GProg pg__h → GpPlan {
+    : *GProgImpl pg ( _GProg_ptr pg__h )
+    : i pl__box ( rcbox_zero [GpPlanImpl] )
+    : *GpPlanImpl pl ( rcbox_ptr [GpPlanImpl] pl__box )
     = . pl ok F
     = . pl kid g_gpm_next
     = g_gpm_next + g_gpm_next 1
@@ -323,7 +318,7 @@ $ `deps/gpukit/src/dev.nu`
     = . pl ssegs ( vec_new [i] )
     = . pl snames ( vec_new [String] )
     = . pl sbnames ( vec_new [String] )
-    ? . pg ok {} { ^ pl }
+    ? . pg ok {} { ^ @ GpPlan { # s pl__box } }
     // B = the most common 2-D row count among non-leaf nodes (the batch)
     : i nn ( vec_len [GpNode] . pg nodes )
     : ~ i B 0
@@ -343,7 +338,7 @@ $ `deps/gpukit/src/dev.nu`
         } {}
         = k + k 1
     }
-    ? > B 0 {} { ^ pl }
+    ? > B 0 {} { ^ @ GpPlan { # s pl__box } }
     = . pl rows B
     // maximal consecutive fusable runs (length >= 2)
     = k 0
@@ -358,7 +353,7 @@ $ `deps/gpukit/src/dev.nu`
             = k + hi 1
         } { = k + k 1 }
     }
-    ? > ( vec_len [i] . pl segs ) 0 {} { ^ pl }
+    ? > ( vec_len [i] . pl segs ) 0 {} { ^ @ GpPlan { # s pl__box } }
     // emit every segment kernel
     : i nseg / ( vec_len [i] . pl segs ) 2
     = k 0
@@ -399,9 +394,7 @@ $ `deps/gpukit/src/dev.nu`
                     ( string_push_str pn ( string_data pc ) )
                     = pgr ( gk_grid mx 256 )
                 } {}
-                ( string_free pc )
             } {}
-            ( string_free cand )
         } {}
         ( vec_push [String] . pl bnames bn )
         ( vec_push [String] . pl pnames pn )
@@ -442,7 +435,6 @@ $ `deps/gpukit/src/dev.nu`
         ? ( _gpf_emit_ser_bwd_seg pg slo shi ( string_data cand2 ) . pl src ) {
             ( string_push_str sb ( string_data cand2 ) )
         } {}
-        ( string_free cand2 )
         ( vec_push [String] . pl sbnames sb )
         = k + k 1
     }
@@ -455,18 +447,18 @@ $ `deps/gpukit/src/dev.nu`
 
     // dtype adjustment: the same substitution pass the stock kernels use
     ? == . pg dtype 1 {
-        : ~ s x ( string_data . pl src )
-        = x ( _str_replace_all x `__dadd_rn` `__fadd_rn` )
-        = x ( _str_replace_all x `__dsub_rn` `__fsub_rn` )
-        = x ( _str_replace_all x `__dmul_rn` `__fmul_rn` )
-        = x ( _str_replace_all x `__ddiv_rn` `__fdiv_rn` )
-        = x ( _str_replace_all x `exp(` `expf(` )
-        = x ( _str_replace_all x `log(` `logf(` )
-        = x ( _str_replace_all x `sqrt(` `sqrtf(` )
-        = x ( _str_replace_all x `double` `float` )
-        : String nx ( string_from x )
+        : ~ String x ( _str_replace_all ( string_data . pl src ) `__dadd_rn` `__fadd_rn` )
+        = x ( _str_replace_all ( string_data x ) `__dsub_rn` `__fsub_rn` )
+        = x ( _str_replace_all ( string_data x ) `__dmul_rn` `__fmul_rn` )
+        = x ( _str_replace_all ( string_data x ) `__ddiv_rn` `__fdiv_rn` )
+        = x ( _str_replace_all ( string_data x ) `exp(` `expf(` )
+        = x ( _str_replace_all ( string_data x ) `log(` `logf(` )
+        = x ( _str_replace_all ( string_data x ) `sqrt(` `sqrtf(` )
+        = x ( _str_replace_all ( string_data x ) `double` `float` )
+        // a field of the plan's heap state: the old source goes by hand
+        // before the new one is stored over it
         ( string_free . pl src )
-        = . pl src nx
+        = . pl src x
     } {}
     // pointer table: node id → val dptr
     : ( Vec i ) tv ( vec_new [i] )
@@ -480,7 +472,6 @@ $ `deps/gpukit/src/dev.nu`
     = . pl vtab ( gk_dbuf_new . pg kit ( vec_len [i] tv ) GK_I64 )
     : ~ b up ( gk_buf_ok . pl vtab )
     = up & up ( gk_dbuf_upload_i . pg kit . pl vtab tv )
-    ( vec_free [i] tv )
     // grad-pointer table + the (ptr, n) fill pairs
     : ( Vec i ) tg ( vec_new [i] )
     : ( Vec i ) tf2 ( vec_new [i] )
@@ -504,15 +495,13 @@ $ `deps/gpukit/src/dev.nu`
         = up & up ( gk_dbuf_upload_i . pg kit . pl ftab tf2 )
         = . pl fcnt / ( vec_len [i] tf2 ) 2
     } {}
-    ( vec_free [i] tg )
-    ( vec_free [i] tf2 )
     ? up { = . pl ok T } {}
-    ^ pl
+    ^ @ GpPlan { # s pl__box }
 }
 
 // Launches only (no sync policy) — shared by the direct path and the
 // CUDA-graph capture.
-@ _gpfuse_fwd_launches * GProg pg * GpPlan pl → b {
+@ _gpfuse_fwd_launches * GProgImpl pg * GpPlanImpl pl → b {
     : i nn ( vec_len [GpNode] . pg nodes )
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ b r T
@@ -525,7 +514,6 @@ $ `deps/gpukit/src/dev.nu`
             ( vec_push [i] a ( gk_arg_dev . pl vtab ) )
             ( vec_push [i] a ( gpu_arg_i64 . pl rows ) )
             = r ( gk_run_dev . pg kit ( string_data . pl src ) nm . pl rows 256 a )
-            ( vec_free [i] a )
             = k + ( _ti . pl segs + * si 2 1 ) 1
             = si + si 1
         } {
@@ -542,7 +530,6 @@ $ `deps/gpukit/src/dev.nu`
                 ( vec_push [i] a3 ( gk_arg_dev . pl vtab ) )
                 ( vec_push [i] a3 ( gpu_arg_i64 . pl rows ) )
                 = r ( gk_run_dev . pg kit ( string_data . pl src ) sn2 1 256 a3 )
-                ( vec_free [i] a3 )
                 = k + ( _ti . pl ssegs + * ssi 2 1 ) 1
             } {
                 = r ( _gp_fwd_node pg k )
@@ -554,7 +541,9 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // Fused forward: segments as one kernel each, everything else per-node.
-@ gpfuse_forward * GProg pg * GpPlan pl → b {
+@ gpfuse_forward GProg pg__h GpPlan pl__h → b {
+    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+    : *GProgImpl pg ( _GProg_ptr pg__h )
     ? & . pg ok . pl ok {} { ^ F }
     ( gk_autosync F )
     : b r ( _gpfuse_fwd_launches pg pl )
@@ -607,13 +596,13 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // Is ew input `inid` the same [B,c] shape as consumer `nd`?
-@ _gpf_same * GProg pg i inid i B i C → b {
+@ _gpf_same * GProgImpl pg i inid i B i C → b {
     : GpNode m ( _gp_node pg inid )
     ^ & == . m rows B == . m cols C
 }
 
 // accred wrapper: TARGET = __dadd_rn(TARGET, __dmul_rn(<sgn>, <src...>
-@ _gpf_acc_open String o * GProg pg i tid i C s sgn → v {
+@ _gpf_acc_open String o * GProgImpl pg i tid i C s sgn → v {
     ( string_push_str o `        ` )
     ( _gpf_gel o tid C )
     ( string_push_str o ` = __dadd_rn(` )
@@ -635,7 +624,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // Row-space bwd kernel body for segment [lo,hi]; stage count returned.
-@ _gpf_emit_bwd_stages * GProg pg i lo i hi i B String o ( Vec i ) vids ( Vec i ) gids → i {
+@ _gpf_emit_bwd_stages * GProgImpl pg i lo i hi i B String o ( Vec i ) vids ( Vec i ) gids → i {
     : ~ i stages 0
     : ~ i k hi
     ~ >= k lo {
@@ -830,7 +819,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // Param-space jobs of segment [lo,hi], descending consumer order, encoded
 // as (target, kind, consumer) triples — kind 0 = matmul dW, 1 = ew b-side.
-@ _gpf_param_jobs * GProg pg i lo i hi i B ( Vec i ) jobs → v {
+@ _gpf_param_jobs * GProgImpl pg i lo i hi i B ( Vec i ) jobs → v {
     : ~ i k hi
     ~ >= k lo {
         : GpNode nd ( _gp_node pg k )
@@ -859,7 +848,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // Order safety: no gradient may collect BOTH row-space and param-space
 // contributions inside one segment (the split would reorder them).
-@ _gpf_bwd_ok * GProg pg i lo i hi i B → b {
+@ _gpf_bwd_ok * GProgImpl pg i lo i hi i B → b {
     : ( Vec i ) rowt ( vec_new [i] )
     : ~ i k lo
     ~ <= k hi {
@@ -892,19 +881,17 @@ $ `deps/gpukit/src/dev.nu`
         }
         = q + q 3
     }
-    ( vec_free [i] rowt )
-    ( vec_free [i] jobs )
     ^ ok
 }
 
 // The param-space kernel: one grid-stride stage per distinct target, jobs
 // serial inside each thread — gp_bw_mm_b / gp_bw_accred element order.
 // Returns the widest target n (grid sizing); 0 when there are no jobs.
-@ _gpf_emit_param * GProg pg i lo i hi i B String body ( Vec i ) vids ( Vec i ) gids → i {
+@ _gpf_emit_param * GProgImpl pg i lo i hi i B String body ( Vec i ) vids ( Vec i ) gids → i {
     : ( Vec i ) jobs ( vec_new [i] )
     ( _gpf_param_jobs pg lo hi B jobs )
     : i nj / ( vec_len [i] jobs ) 3
-    ? > nj 0 {} { ( vec_free [i] jobs ) ^ 0 }
+    ? > nj 0 {} { ^ 0 }
     : ~ i maxn 0
     : ( Vec i ) done ( vec_new [i] )
     : ~ i q 0
@@ -1001,7 +988,6 @@ $ `deps/gpukit/src/dev.nu`
                                 ( string_push_str body ( string_data ix ) )
                             }
                         }
-                        ( string_free ix )
                         ( string_push_str body `));\n          ` )
                         ( _gpf_g body tid )
                         ( string_push_str body `[t] = g0; }\n` )
@@ -1013,21 +999,16 @@ $ `deps/gpukit/src/dev.nu`
             = q + q 1
         }
     }
-    ( vec_free [i] done )
-    ( vec_free [i] jobs )
     ^ maxn
 }
 
 // Assemble the row-space bwd kernel; F when the segment has no stages.
-@ _gpf_emit_bwd_seg * GProg pg i lo i hi i B s kname String o → b {
+@ _gpf_emit_bwd_seg * GProgImpl pg i lo i hi i B s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
     : i stages ( _gpf_emit_bwd_stages pg lo hi B body vids gids )
     ? > stages 0 {} {
-        ( string_free body )
-        ( vec_free [i] vids )
-        ( vec_free [i] gids )
         ^ F
     }
     ( string_push_str o `extern "C" __global__ void ` )
@@ -1046,22 +1027,16 @@ $ `deps/gpukit/src/dev.nu`
     }
     ( string_push_str o ( string_data body ) )
     ( string_push_str o `}\n` )
-    ( string_free body )
-    ( vec_free [i] vids )
-    ( vec_free [i] gids )
     ^ T
 }
 
 // Assemble the param-space kernel; returns the widest target n (0 = none).
-@ _gpf_emit_param_seg * GProg pg i lo i hi i B s kname String o → i {
+@ _gpf_emit_param_seg * GProgImpl pg i lo i hi i B s kname String o → i {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
     : i maxn ( _gpf_emit_param pg lo hi B body vids gids )
     ? > maxn 0 {} {
-        ( string_free body )
-        ( vec_free [i] vids )
-        ( vec_free [i] gids )
         ^ 0
     }
     ( string_push_str o `extern "C" __global__ void ` )
@@ -1079,9 +1054,6 @@ $ `deps/gpukit/src/dev.nu`
     }
     ( string_push_str o ( string_data body ) )
     ( string_push_str o `}\n` )
-    ( string_free body )
-    ( vec_free [i] vids )
-    ( vec_free [i] gids )
     ^ maxn
 }
 
@@ -1099,14 +1071,13 @@ $ `deps/gpukit/src/dev.nu`
 
 // Fused backward: one zero-fill launch, the seed, then the reverse walk
 // with row-space + param-space kernels standing in for fused segments.
-@ _gpfuse_bwd_launches * GProg pg * GpPlan pl → b {
+@ _gpfuse_bwd_launches * GProgImpl pg * GpPlanImpl pl → b {
     : ~ b r T
     ? > . pl fcnt 0 {
         : ( Vec i ) a ( vec_new [i] )
         ( vec_push [i] a ( gk_arg_dev . pl ftab ) )
         ( vec_push [i] a ( gpu_arg_i64 . pl fcnt ) )
         = r ( gk_run_dev . pg kit ( string_data . pl src ) ( string_data . pl fillk ) . pl fcnt 256 a )
-        ( vec_free [i] a )
     } {
         : i n2 ( vec_len [GpNode] . pg nodes )
         : ~ i q 0
@@ -1141,14 +1112,12 @@ $ `deps/gpukit/src/dev.nu`
             ( vec_push [i] a ( gk_arg_dev . pl gtab ) )
             ( vec_push [i] a ( gpu_arg_i64 . pl rows ) )
             = r ( gk_run_dev . pg kit ( string_data . pl src ) bn2 . pl rows 256 a )
-            ( vec_free [i] a )
             : s pn ?? ( vec_get [String] . pl pnames si ) { T x → ( string_data x ) F → `` }
             ? & r > ( nurl_str_len pn ) 0 {
                 : ( Vec i ) a2 ( vec_new [i] )
                 ( vec_push [i] a2 ( gk_arg_dev . pl vtab ) )
                 ( vec_push [i] a2 ( gk_arg_dev . pl gtab ) )
                 = r ( gk_run_dev . pg kit ( string_data . pl src ) pn ( _ti . pl pgrid si ) 256 a2 )
-                ( vec_free [i] a2 )
             } {}
             = k - ( _ti . pl segs * si 2 ) 1
         } {
@@ -1169,7 +1138,6 @@ $ `deps/gpukit/src/dev.nu`
                 ( vec_push [i] a3 ( gk_arg_dev . pl gtab ) )
                 ( vec_push [i] a3 ( gpu_arg_i64 . pl rows ) )
                 = r ( gk_run_dev . pg kit ( string_data . pl src ) sb2 1 256 a3 )
-                ( vec_free [i] a3 )
                 = k - ( _ti . pl ssegs * ssi 2 ) 1
             } {
                 = r ( _gp_bwd_node pg k )
@@ -1180,7 +1148,9 @@ $ `deps/gpukit/src/dev.nu`
     ^ r
 }
 
-@ gpfuse_backward * GProg pg * GpPlan pl → b {
+@ gpfuse_backward GProg pg__h GpPlan pl__h → b {
+    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+    : *GProgImpl pg ( _GProg_ptr pg__h )
     ? & . pg ok . pl ok {} { ^ F }
     ( gk_autosync F )
     : b r ( _gpfuse_bwd_launches pg pl )
@@ -1195,9 +1165,10 @@ $ `deps/gpukit/src/dev.nu`
 // there; the per-node path is already the optimal cpu execution. The
 // planner still builds (the bit gates run everywhere) — this is the
 // production selector.
-@ gpfuse_worthwhile * GProg pg → b {
+@ gpfuse_worthwhile GProg pg__h → b {
+    : *GProgImpl pg ( _GProg_ptr pg__h )
     ? . pg ok {} { ^ F }
-    : *GpuKit kit . pg kit
+    : GpuKit kit . pg kit
     ^ == 1 ( nurl_str_eq ( gk_backend kit ) `cuda` )
 }
 
@@ -1205,23 +1176,25 @@ $ `deps/gpukit/src/dev.nu`
 // backward + the optimizer, captured once. Per episode the host does
 // gput_set_input + gpopt_prepare + gput_episode — the identical driver
 // loop as the per-node graph, just with ~5 kernels inside instead of ~40.
-@ gpfuse_graph_capture_train * GProg pg * GpPlan pl * GpOpt go → b {
+@ gpfuse_graph_capture_train GProg pg__h GpPlan pl__h GpOpt go__h → b {
+    : *GpPlanImpl pl ( _GpPlan_ptr pl__h )
+    : *GpOptImpl go ( _GpOpt_ptr go__h )
+    : *GProgImpl pg ( _GProg_ptr pg__h )
     ? & & . pg ok . pl ok . go ok {} { ^ F }
-    ? == . pg gexec 0 {} { ^ T }
+    ? ( gpu_graph_ok . pg gexec ) { ^ T } {}
     ? ( _gpopt_ensure go pg ) {} { ^ F }
-    : *GpuKit kit . pg kit
-    ? ( gpu_graph_begin . kit gpu ) {} { ^ F }
+    : GpuKit kit . pg kit
+    ? ( gpu_graph_begin ( gk_gpu kit ) ) {} { ^ F }
     ( gk_autosync F )
     : ~ b r ( _gpfuse_fwd_launches pg pl )
     = r & r ( _gpfuse_bwd_launches pg pl )
     = r & r ( _gpopt_launches go pg )
     ( gk_autosync T )
-    : i exec ( gpu_graph_end . kit gpu )
-    ? & r != exec 0 {
+    : GpuGraph exec ( gpu_graph_end ( gk_gpu kit ) )
+    ? & r ( gpu_graph_ok exec ) {
         = . pg gexec exec
         ^ T
     } {}
-    ? != exec 0 { ( gpu_graph_free exec ) } {}
     ^ F
 }
 
@@ -1236,7 +1209,7 @@ $ `deps/gpukit/src/dev.nu`
 
 @ _gpf_smax → i { ^ 16384 }
 
-@ _gpf_in_rowseg * GpPlan pl i k → b {
+@ _gpf_in_rowseg * GpPlanImpl pl i k → b {
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ i w 0
     ~ < w nseg {
@@ -1246,7 +1219,7 @@ $ `deps/gpukit/src/dev.nu`
     ^ F
 }
 
-@ _gpf_serial_ok * GProg pg i k → b {
+@ _gpf_serial_ok * GProgImpl pg i k → b {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? <= op ( gop_const ) { ^ F }
@@ -1279,13 +1252,13 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // b-side element with the scalar-[1] broadcast collapsed to [0].
-@ _gpf_sinb String o * GProg pg i inid s ix → v {
+@ _gpf_sinb String o * GProgImpl pg i inid s ix → v {
     : GpNode nb ( _gp_node pg inid )
     ( _gpf_sel o inid ? == . nb n 1 `0` ix )
 }
 
 // Serial forward stages; node values in program order, exact expressions.
-@ _gpf_emit_ser_stages * GProg pg i lo i hi String o ( Vec i ) vids → i {
+@ _gpf_emit_ser_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids → i {
     : ~ i stages 0
     : ~ i k lo
     ~ <= k hi {
@@ -1327,7 +1300,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // The serial per-element expression at flat index e (gp_ew_bc / gp_scal /
 // gp_trans forms with the trivial layouts this class permits).
-@ _gpf_sexpr * GProg pg i k String o → v {
+@ _gpf_sexpr * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_add ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_sinb o pg . nd b `e` ) ( string_push_str o `)` ) ^ v } {}
@@ -1355,7 +1328,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // Serial backward stages hi→lo — gp_bw_reduce / gp_bw_unary / accred
 // element order, one thread, exact accumulate order per element.
-@ _gpf_emit_ser_bwd_stages * GProg pg i lo i hi String o ( Vec i ) vids ( Vec i ) gids → i {
+@ _gpf_emit_ser_bwd_stages * GProgImpl pg i lo i hi String o ( Vec i ) vids ( Vec i ) gids → i {
     : ~ i stages 0
     : ~ i k hi
     ~ >= k lo {
@@ -1478,7 +1451,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // mul/div/add/sub b-side source element (accred's scr chain, inline).
-@ _gpf_ser_bsrc * GProg pg i k String o → v {
+@ _gpf_ser_bsrc * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_mul ) {
@@ -1503,7 +1476,7 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // gp_bw_unary's accumulate expression with gi bound, serial index e.
-@ _gpf_ser_unary * GProg pg i k String o → v {
+@ _gpf_ser_unary * GProgImpl pg i k String o → v {
     : GpNode nd ( _gp_node pg k )
     : i op . nd op
     ? == op ( gop_neg ) { ( string_push_str o `__dsub_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, gi)` ) ^ v } {}
@@ -1522,13 +1495,11 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // Assemble the serial fwd kernel (T on success — always has stages).
-@ _gpf_emit_ser_seg * GProg pg i lo i hi s kname String o → b {
+@ _gpf_emit_ser_seg * GProgImpl pg i lo i hi s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : i stages ( _gpf_emit_ser_stages pg lo hi body vids )
     ? > stages 0 {} {
-        ( string_free body )
-        ( vec_free [i] vids )
         ^ F
     }
     ( string_push_str o `extern "C" __global__ void ` )
@@ -1542,21 +1513,16 @@ $ `deps/gpukit/src/dev.nu`
     }
     ( string_push_str o ( string_data body ) )
     ( string_push_str o `}\n` )
-    ( string_free body )
-    ( vec_free [i] vids )
     ^ T
 }
 
 // Assemble the serial bwd kernel (F when no reach-1 stages).
-@ _gpf_emit_ser_bwd_seg * GProg pg i lo i hi s kname String o → b {
+@ _gpf_emit_ser_bwd_seg * GProgImpl pg i lo i hi s kname String o → b {
     : String body ( string_new )
     : ( Vec i ) vids ( vec_new [i] )
     : ( Vec i ) gids ( vec_new [i] )
     : i stages ( _gpf_emit_ser_bwd_stages pg lo hi body vids gids )
     ? > stages 0 {} {
-        ( string_free body )
-        ( vec_free [i] vids )
-        ( vec_free [i] gids )
         ^ F
     }
     ( string_push_str o `extern "C" __global__ void ` )
@@ -1575,9 +1541,6 @@ $ `deps/gpukit/src/dev.nu`
     }
     ( string_push_str o ( string_data body ) )
     ( string_push_str o `}\n` )
-    ( string_free body )
-    ( vec_free [i] vids )
-    ( vec_free [i] gids )
     ^ T
 }
 
@@ -1589,29 +1552,45 @@ $ `deps/gpukit/src/dev.nu`
 // (cpu backend) or the plan is empty, every call transparently forwards
 // to the per-node path, so the loop is identical either way.
 
-: GpFuse {
+: GpFuseImpl {
     b active  // T when a worthwhile plan drives the episode
-    * GpPlan pl
+    GpPlan pl
 }
 
-@ gpfuse_open * GProg pg * GpOpt go → *GpFuse {
-    : *GpFuse s # *GpFuse ( nurl_alloc Z GpFuse )
-    = . s active F
-    = . s pl ( _gpfuse_nullplan )
-    ? & ( gpfuse_worthwhile pg ) . pg ok {} { ^ s }
-    : *GpPlan pl ( gpfuse_plan pg )
-    ? . pl ok {
-        = . s pl pl
-        = . s active ( gpfuse_graph_capture_train pg pl go )
-        // even without a graph (capture unavailable) the direct fused
-        // path still helps — mark active so the episode uses it
-        = . s active T
-    } { ( gpfuse_free pl ) }
-    ^ s
+// A GpFuse is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: GpFuse { s ctl }
+
+@ GpFuse_share GpFuse h → GpFuse { ^ @ GpFuse { # s ( rcbox_share # i . h ctl ) } }
+
+@ GpFuse_drop sink GpFuse h → v {
+    ( mem_forget h )
+    ( rcbox_release [GpFuseImpl] # i . h ctl )
 }
 
-@ _gpfuse_nullplan → *GpPlan {
-    : *GpPlan pl # *GpPlan ( nurl_alloc Z GpPlan )
+// The state, for this package's own code.
+@ _GpFuse_ptr GpFuse h → *GpFuseImpl { ^ ( rcbox_ptr [GpFuseImpl] # i . h ctl ) }
+
+@ gpfuse_open GProg pg__h GpOpt go__h → GpFuse {
+    : *GProgImpl pg ( _GProg_ptr pg__h )
+    : ~ b active F
+    : ~ GpPlan plan ( _gpfuse_nullplan )
+    ? & ( gpfuse_worthwhile pg__h ) . pg ok {
+        : GpPlan live ( gpfuse_plan pg__h )
+        ? . ( _GpPlan_ptr live ) ok {
+            : b _graph ( gpfuse_graph_capture_train pg__h live go__h )
+            // even without a graph (capture unavailable) the direct fused
+            // path still helps — mark active so the episode uses it
+            = active T
+            = plan live
+        } {}
+    } {}
+    ^ @ GpFuse { # s ( rcbox_new [GpFuseImpl] @ GpFuseImpl { active plan } ) }
+}
+
+@ _gpfuse_nullplan → GpPlan {
+    : i pl__box ( rcbox_zero [GpPlanImpl] )
+    : *GpPlanImpl pl ( rcbox_ptr [GpPlanImpl] pl__box )
     = . pl ok F
     = . pl segs ( vec_new [i] )
     = . pl src ( string_new )
@@ -1627,31 +1606,35 @@ $ `deps/gpukit/src/dev.nu`
     = . pl ssegs ( vec_new [i] )
     = . pl snames ( vec_new [String] )
     = . pl sbnames ( vec_new [String] )
-    ^ pl
+    ^ @ GpPlan { # s pl__box }
 }
 
-@ gpfuse_active * GpFuse s → b { ^ . s active }
+@ gpfuse_active GpFuse s__h → b {
+    : *GpFuseImpl s ( _GpFuse_ptr s__h )
+    ^ . s active
+}
 
 // One training episode. With a captured graph this is a single launch;
 // with a live plan it is the fused forward + backward + optimizer step;
 // otherwise the per-node forward/backward/step. Bit-identical either way.
-@ gpfuse_episode * GpFuse s * GProg pg * GpOpt go → b {
-    : *GpPlan pl . s pl
-    ? & . s active . pl ok {} {
-        ? ( gput_forward pg ) {} { ^ F }
-        ? ( gput_backward pg ) {} { ^ F }
-        ^ ( gpopt_step go pg )
+@ gpfuse_episode GpFuse s__h GProg pg__h GpOpt go__h → b {
+    : *GpFuseImpl s ( _GpFuse_ptr s__h )
+    : *GProgImpl pg ( _GProg_ptr pg__h )
+    : GpPlan pl . s pl
+    ? & . s active . ( _GpPlan_ptr pl ) ok {} {
+        ? ( gput_forward pg__h ) {} { ^ F }
+        ? ( gput_backward pg__h ) {} { ^ F }
+        ^ ( gpopt_step go__h pg__h )
     }
-    ? != . pg gexec 0 {
-        ? ( gpopt_prepare go pg ) {} { ^ F }
-        ^ ( gput_episode pg )
+    ? ( gpu_graph_ok . pg gexec ) {
+        ? ( gpopt_prepare go__h pg__h ) {} { ^ F }
+        ^ ( gput_episode pg__h )
     } {}
-    ? ( gpfuse_forward pg pl ) {} { ^ F }
-    ? ( gpfuse_backward pg pl ) {} { ^ F }
-    ^ ( gpopt_step go pg )
+    ? ( gpfuse_forward pg__h pl ) {} { ^ F }
+    ? ( gpfuse_backward pg__h pl ) {} { ^ F }
+    ^ ( gpopt_step go__h pg__h )
 }
 
-@ gpfuse_close * GpFuse s → v {
-    ( gpfuse_free . s pl )
-    ( nurl_free # s s )
-}
+// Let go of `s` now rather than at the end of its owner's scope (its plan
+// goes with its last owner).
+@ gpfuse_close sink GpFuse s → v {}
