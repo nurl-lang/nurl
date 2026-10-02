@@ -293,10 +293,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   −36 % (fixed-arity `fmt*` / `log_*fN` no longer copy their arguments;
   a suppressed `log_*fN` formats nothing).
 - **The HTTP / MCP / WebSocket / MQTT / SMTP / XML / serde stdlib releases
-  nothing by hand** (940 → 4 release calls in `stdlib/ext/http*`,
+  nothing by hand** (940 → 1 release call in `stdlib/ext/http*`,
   `mcp*`, `websocket`, `mqtt`, `smtp`, `xml`, `serde`, `cookies`,
-  `credentials`, `anthropic`; the 4 kept are marked with the compiler
-  finding they wait for). Raw state became library handles over an rcbox:
+  `credentials`, `anthropic`; the one kept, in the WebSocket reader, is
+  marked with the compiler finding it waits for). Raw state became library handles over an rcbox:
   `HttpStreamState` (was `*HttpStreamState`; new `hp_stream_body`
   accessor; the last owner closes a transport still held,
   `hp_stream_close` closes it early), `HttpConn` (a handle; the last owner
