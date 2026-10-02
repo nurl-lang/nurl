@@ -3000,6 +3000,13 @@
 @ mem_store_hown i syms s bit → v {
     : s hs ( nurl_sym_get syms `__ret_hown_slot__` )
     ? == 0 ( nurl_str_len hs ) { ^ v } {}
+    // Paths that disagree on a static answer (`^ p` lends the caller's
+    // value, `^ ( f … )` hands over a fresh one) make the function answer
+    // per call — taken for a lender throughout, its fresh results leaked,
+    // and a caller returning one over its own local dropped what it lent.
+    ? | ( seq bit `false` ) != 0 ( nurl_sym_len syms `__ret_path_lends__` ) { ( nurl_sym_set_deep syms `__hown_saw_false__` `1` ) } {
+        ( nurl_sym_set_deep syms `__hown_saw_owned__` `1` ) }
+    ? & != 0 ( nurl_sym_len syms `__hown_saw_false__` ) != 0 ( nurl_sym_len syms `__hown_saw_owned__` ) { ( mem_hown_mark_dyn syms ) } {}
     ( nurl_print `  store i1 ` ) ( nurl_print bit ) ( nurl_print `, ptr ` ) ( nurl_print hs ) ( nurl_print `\n` )
 }
 
@@ -3013,6 +3020,19 @@
 // what it holds and says whether it owns it instead of copying.
 // Do the bindings a `?` / `??` join selected (`__last_phi_idents__`) lend
 // only what a parameter holds — a parameter, or a cursor over one?
+// Does the call just made lend from (`mem_fn_lent_params`) a binding this
+// frame owns — a local, or a `sink` parameter — gone at the return?
+// (`^ ( cap body )`, cap handing `body` back on one path.)
+@ __call_lends_local i syms → b {
+    : ~ s ids ( nurl_sym_get syms `__last_call_lend_idents__` )
+    ~ != 0 ( nurl_str_len ids ) {
+        : s id ( str_first_word ids ) = ids ( str_skip_word ids )
+        : s up ( mem_udrop_ptr_of syms id )
+        ? & != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) { ^ T } {}
+    }
+    ^ F
+}
+
 @ __phi_lends_params_only i syms → b {
     : ~ s ids ( nurl_sym_get syms `__last_phi_idents__` )
     : s pnames ( nurl_sym_get syms `__fn_param_names__` )
@@ -3415,6 +3435,7 @@
     ( nurl_sym_set_deep syms `__agg_lends_part__` `` )
     ( nurl_sym_set_deep syms `__agg_direct__` `` )
     ( nurl_sym_set_deep syms `__agg_take_own__` `` )
+    ( nurl_sym_set_deep syms `__ret_path_lends__` `` )
     // Cascade guard: a `^` reached here while parsing a value operand
     // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
     // scrutinee / a return value) means a preceding fixed-arity prefix
@@ -3553,7 +3574,7 @@
         // frame's own: t is dropped on the way out, so what g lent is
         // copied (the returned-handle summary names the arguments).
         : s __crt ( nurl_get_last_type )
-        ? & & ! ( seq hbit `true` ) ( __clone_supported __crt syms ) ! ( __phi_lends_params_only syms ) {
+        ? & & ! ( seq hbit `true` ) ( __clone_supported __crt syms ) | ! ( __phi_lends_params_only syms ) ( __call_lends_local syms ) {
             : s rb ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print hbit ) ( nurl_print `, 1\n` )
             = val ( mem_emit_cloneif cg __crt val rb )
@@ -3627,6 +3648,7 @@
     ? & ( is_ident_tok ret_first_tt ) ( __is_handle_ty ( nurl_get_last_type ) ) {
         ? >= ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) ret_first_val ) 0
         { ( __record_param_idx syms `__fn_retlend__` ret_first_val )
+            ( nurl_sym_set_deep syms `__ret_path_lends__` `1` )
             : s pup ( mem_udrop_ptr_of syms ret_first_val )
             = hbit ? == 0 ( nurl_str_len pup ) ( nurl_str_cat `false` `` ) ( mem_udrop_flag_get syms cg pup ) } {}
     } {}
@@ -30479,6 +30501,8 @@
     ( nurl_sym_def syms `__fn_retlend__` `` )
     ( nurl_sym_def syms `__fn_retpart__` `` )
     ( nurl_sym_def syms `__fn_retclo__` `` )
+    ( nurl_sym_def syms `__hown_saw_false__` `` )
+    ( nurl_sym_def syms `__hown_saw_owned__` `` )
     ( nurl_sym_def syms `__fn_self_name__` fname )
     ( nurl_sym_def syms `__fn_scratch_objs__` `` )
     ( nurl_sym_def syms `__fn_inferred_store__` `` )

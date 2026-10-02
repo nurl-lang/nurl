@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A function that hands back its borrowed parameter on one path and a fresh
+  value on another answers per call** (`? short { ^ src } {} ^ ( substr … )`):
+  taken for a lender throughout, its fresh results leaked, and a caller
+  returning one over its own local read freed memory. A lent result returned
+  past the local it lends from is copied. `compiler/tests/cond_param_return.nu`.
 - **An arm whose value is made of numbers drops its locals** even when it
   ends in another `??` (stdlib noise handshakes leaked per handshake).
   `compiler/tests/nested_arm_numbers_drops_locals.nu`.
