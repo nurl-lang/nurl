@@ -17045,6 +17045,8 @@
     ? ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) p )
     { ^ ( nurl_str_cat p `` ) }
     {}
+    // A by-pointer capture the caller owns (__byref_flag_vars).
+    ? != 0 ( nurl_sym_len2 syms p `__outer_owned` ) { ^ ( nurl_str_cat p `` ) } {}
     ^ ( nurl_str_cat `` `` )
 }
 
@@ -25621,6 +25623,29 @@
     ^ T
 }
 
+// The by-pointer captures (`__is_capture_byref`) whose binding owns its
+// value under a drop flag: the env carries a pointer to that flag too, so
+// a value the closure assigns over the binding (`recover \ → v { = resp (
+// f req ) }`) drops the old one and makes the binding its owner — the
+// caller's flag, not a copy the closure cannot reach.
+@ __byref_flag_vars s captured_vars i syms → s {
+    : ~ s out ( nurl_str_cat `` `` )
+    ? == 0 g_auto_drop_strings { ^ out } {}
+    : ~ s vars ( nurl_str_cat captured_vars `` )
+    ~ != 0 ( nurl_str_len vars ) {
+        : s v ( str_first_word vars ) = vars ( str_skip_word vars )
+        ? ( __is_capture_byref v syms ) {
+            // (By the registration's own marks, visible from a closure
+            // body's scope, which starts its own list of drops.)
+            : s p ( nurl_sym_get2 syms v `__ptr` )
+            ? & & != 0 ( nurl_str_len p ) != 0 ( nurl_sym_len2 syms p `__live` ) != 0 ( nurl_sym_len2 syms p `__udty` ) {
+                = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat v `` ) ( nurl_str_cat3 out ` ` v )
+            } {}
+        } {}
+    }
+    ^ out
+}
+
 @ gen_env_struct_type s struct_name s captured_vars i syms → s {
     ? == 0 ( count_words captured_vars )
     { ^ ( nurl_str_cat `` `` ) }  // No captures
@@ -25639,6 +25664,12 @@
         ? ( __is_capture_byref var syms ) { = vt ( nurl_str_cat vt `*` ) } {}
         = ty ( nurl_str_cat ty ( nurl_str_cat `, ` vt ) )
         = vars ( str_skip_word vars )
+    }
+    // …then one `i1*` per by-pointer capture's drop flag.
+    : ~ s fvs ( __byref_flag_vars captured_vars syms )
+    ~ != 0 ( nurl_str_len fvs ) {
+        = fvs ( str_skip_word fvs )
+        = ty ( nurl_str_cat ty `, i1*` )
     }
     = ty ( nurl_str_cat ty ` }` )
     ty
@@ -25850,6 +25881,18 @@
         ( nurl_print `* ` ) ( nurl_print store_ptr ) ( nurl_print `\n` )
 
         = vars ( str_skip_word vars )
+        = field_idx + field_idx 1
+    }
+    // The drop flags of the by-pointer captures (__byref_flag_vars).
+    : ~ s fvs ( __byref_flag_vars captured_vars syms )
+    ~ != 0 ( nurl_str_len fvs ) {
+        : s fv ( str_first_word fvs ) = fvs ( str_skip_word fvs )
+        : s fl ( nurl_sym_get2 syms ( nurl_sym_get2 syms fv `__ptr` ) `__live` )
+        : s fp ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print fp ) ( nurl_print ` = getelementptr ` ) ( nurl_print struct_name )
+        ( nurl_print `, ` ) ( nurl_print struct_name ) ( nurl_print `* ` ) ( nurl_print typed_ptr )
+        ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int field_idx ) ) ( nurl_print `\n` )
+        ( nurl_print `  store i1* ` ) ( nurl_print fl ) ( nurl_print `, i1** ` ) ( nurl_print fp ) ( nurl_print `\n` )
         = field_idx + field_idx 1
     }
 
@@ -26657,6 +26700,15 @@
         //     to special-case it.
         : ~ s caps ( nurl_str_cat captured_vars `` )
         : ~ i cap_idx 1
+        // (Asked before the loop below rebinds each capture's `__ptr`.)
+        : ~ s fvs ( __byref_flag_vars captured_vars syms )
+        : ~ s fvts ``
+        : ~ s __fvr ( nurl_str_cat fvs `` )
+        ~ != 0 ( nurl_str_len __fvr ) {
+            : s __fv1 ( str_first_word __fvr ) = __fvr ( str_skip_word __fvr )
+            : s __fvt1 ( nurl_sym_get2 syms ( nurl_sym_get2 syms __fv1 `__ptr` ) `__udty` )
+            = fvts ? == 0 ( nurl_str_len fvts ) ( nurl_str_cat __fvt1 `` ) ( nurl_str_cat3 fvts ` ` __fvt1 )
+        }
         ~ != 0 ( nurl_str_len caps ) {
             : s cap_name ( str_first_word caps )
             : ~ s cap_type ( nurl_sym_get syms cap_name )
@@ -26765,6 +26817,28 @@
                 } {} }
             ( origin_parameter body_syms cap_name + param_count - cap_idx 1 )
             = caps ( str_skip_word caps )
+            = cap_idx + cap_idx 1
+        }
+        // A by-pointer capture whose binding owns its value: the body
+        // drops and owns through the caller's flag (__byref_flag_vars). It
+        // is no registration of the body's own — never dropped at its exit.
+        ~ != 0 ( nurl_str_len fvs ) {
+            : s fv ( str_first_word fvs ) = fvs ( str_skip_word fvs )
+            : s fvty ( str_first_word fvts ) = fvts ( str_skip_word fvts )
+            : s fgep ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print fgep ) ( nurl_print ` = getelementptr ` ) ( nurl_print env_struct_name )
+            ( nurl_print `, ` ) ( nurl_print env_struct_name ) ( nurl_print `* ` ) ( nurl_print typed_env )
+            ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int cap_idx ) ) ( nurl_print `\n` )
+            : s fptr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print fptr ) ( nurl_print ` = load i1*, i1** ` ) ( nurl_print fgep ) ( nurl_print `\n` )
+            : s bp ( nurl_sym_get2 body_syms fv `__ptr` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__live` ) fptr )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__outer_owned` ) `1` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__udty` ) fvty )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__sborrow` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__alias` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__borrowers` ) `` )
+            ( nurl_sym_def body_syms ( nurl_str_cat bp `__fsrc` ) `` )
             = cap_idx + cap_idx 1
         }
     }

@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value a closure assigns over a binding it captured by pointer is owned
+  by that binding** (`recover \ → v { = resp ( f req ) }`): the old value
+  was never dropped and the new one never owned — a response leaked per
+  request in the HTTP keep-alive loop. The env carries the binding's drop
+  flag. `compiler/tests/closure_assigns_captured_owner.nu`.
 - **A `sink` parameter handed back through a `??` arm moves out**
   (`^ ?? o { T v → v F → dflt }` dropped `dflt` on return and the caller got
   freed memory — `opt_unwrap_or`'s shape). `compiler/tests/sink_param_from_join.nu`.
