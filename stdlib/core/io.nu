@@ -103,8 +103,8 @@ $ `stdlib/core/posix.nu`  // buffered stdin bridge
 //
 // PURIFY (2026-05-24): reads stdin in a retry loop until `n` bytes are
 // accumulated or a read returns 0 (EOF). No more runtime-side sideband —
-// the byte count is the returned Vec's length. Caller frees via
-// `vec_free [u]`. Read failures panic instead of looking like early EOF.
+// the byte count is the returned Vec's length (the caller's, dropped with
+// its owner). Read failures panic instead of looking like early EOF.
 //
 // Reads through `nurl_stdin_read` (a buffered `fread(stdin)`) rather
 // than a raw `read(2)` on fd 0 so that it stays coherent with
@@ -123,7 +123,7 @@ $ `stdlib/core/posix.nu`  // buffered stdin bridge
         ? <= room 0 { = done T } {
             : *u at # *u + # i dst got
             : i r ( nurl_stdin_read at room )
-            ? < r 0 { ( vec_free [u] out ) ( nurl_panic `read_n_bytes: input read failed` ) ^ ( vec_new [u] ) } {}
+            ? < r 0 { ( nurl_panic `read_n_bytes: input read failed` ) ^ ( vec_new [u] ) } {}
             ? == r 0 { = done T } {
                 = got + got r
             }
