@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An arm whose value is an owned recursive enum (Json) drops its locals**:
+  the decoded RPC envelope leaked per call in stdlib cluster.
+  `compiler/tests/value_arm_recursive_enum.nu`.
 - **A function that hands back its borrowed parameter on one path and a fresh
   value on another answers per call** (`? short { ^ src } {} ^ ( substr … )`):
   taken for a lender throughout, its fresh results leaked, and a caller

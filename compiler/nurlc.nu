@@ -1269,6 +1269,7 @@
 //  data (statement list etc.); allocated in main()
 //  only when --borrowck is set
 : ~ i g_bck_depth 0  // block-nesting depth during the statement walk
+: ~ s g_noaddr_visiting ``  // enum types __ty_no_address is examining (a recursive type qualifies provisionally)
 : ~ i g_retclo_n 0  // functions with a `retclo##` summary so far (gen_call skips the lookup while 0)
 : ~ i g_clolend_n 0  // bindings that recorded a `__clolend` (mem_check_ret_clo_lend skips idents while 0)
 : ~ i g_clo_lend_set 0  // 1 while `__last_call_clo_lend_idents__` holds the last call's answer (else it is empty)
@@ -12536,6 +12537,26 @@
     ^ ( nurl_str_cat hown `` )
 }
 
+// Every payload of every variant of enum `sname` is a __ty_no_address type.
+@ __ty_no_address_enum s sname i depth → b {
+    : s vlist ( nurl_sym_get2 g_root_syms sname `__variants` )
+    : i vn ( nurl_str_len vlist )
+    : ~ i vp 0
+    ~ < vp vn {
+        : i ve ( __word_end vlist vn vp )
+        : s vname ( __span_dup vlist vp ve )
+        = vp + ve 1
+        : i pc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms vname `__paycount` ) )
+        : ~ i pi 0
+        ~ < pi pc {
+            : s pt ( nurl_sym_get g_root_syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
+            ? ! ( __ty_no_address pt depth ) { ^ F } {}
+            = pi + pi 1
+        }
+    }
+    ^ T
+}
+
 // Can no value of type `ty` hold an address — numbers, Strings, Vecs of
 // such, options / results and plain structs of them. A view, a raw
 // pointer, an enum, a library handle or a trait object can.
@@ -12557,7 +12578,19 @@
     } {}
     ? | | != ( nurl_str_get ty 0 ) 37 ( __is_libh ty ) != 0 ( nurl_str_starts ty `%dyn.` ) { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - n 1 )
-    ? | == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ F } {}
+    // An enum whose every payload is such a value (`Json`: strings, Vecs
+    // of Json, numbers) — an owned one is whole on its own.
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
+        // A type reached again through its own payloads (`Json` in `( Vec
+        // Json )`) is assumed to qualify while it is being examined.
+        ? ( str_contains_word g_noaddr_visiting ty ) { ^ T } {}
+        : s __nav_saved ( nurl_str_cat g_noaddr_visiting `` )
+        = g_noaddr_visiting ( nurl_str_cat3 g_noaddr_visiting ` ` ty )
+        : b __nav_r ( __ty_no_address_enum sname + depth 1 )
+        = g_noaddr_visiting ( nurl_str_cat __nav_saved `` )
+        ^ __nav_r
+    } {}
+    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i fi 0
     ~ < fi fc {
