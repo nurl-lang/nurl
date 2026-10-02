@@ -152,7 +152,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) payload
 }
 
-@ transport_msg_free sink TransportMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
+// Let go of `m` now rather than at the end of its owner's scope.
+@ transport_msg_free sink TransportMsg m → v {}
 
 // Open over both legs. `node` may be 0 (relay-only peer with no UDP path).
 @ transport_open s node RelayClient relay i has_relay → Transport {
@@ -274,7 +275,6 @@ $ `stdlib/core/rcbox.nu`
                 ? != # i pp 0 { : *PeerPath p # *PeerPath pp ( transport_note_direct p ) } {}
                 = out @ ?TransportMsg { T @ TransportMsg { ( __tcpy . rd peer_pubkey ) ( __tcpy . rd data ) } }
                 = got T
-                ( recvdata_free rd )
             }
             F → {}
         }
@@ -284,7 +284,6 @@ $ `stdlib/core/rcbox.nu`
             T rm → {
                 = out @ ?TransportMsg { T @ TransportMsg { ( __tcpy . rm src ) ( __tcpy . rm payload ) } }
                 = got T
-                ( relay_msg_free rm )
             }
             F → {}
         }

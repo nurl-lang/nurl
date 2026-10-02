@@ -157,53 +157,49 @@ $ `stdlib/core/rcbox.nu`
     ^ b
 }
 
-// cursor-based reader (advances an offset through a buffer)
-: RzCursor {
-    ( Vec u ) buf
-    i off
-}
-
-@ __rz_u8 * RzCursor c → i {
-    : i v ?? ( vec_get [u] . c buf . c off ) { T x → # i x F → 0 }
-    = . c off + . c off 1
+// Cursor-based reader: the buffer plus an offset the readers advance in
+// place (`inout`) — nothing to allocate, nothing to release.
+@ __rz_u8 ( Vec u ) buf inout i off → i {
+    : i v ?? ( vec_get [u] buf off ) { T x → # i x F → 0 }
+    = off + off 1
     ^ v
 }
 
-@ __rz_u16 * RzCursor c → i {
-    : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 }
-    = . c off + . c off 2
+@ __rz_u16 ( Vec u ) buf inout i off → i {
+    : i v ?? ( bytes_read_u16_be buf off ) { T x → # i x F → 0 }
+    = off + off 2
     ^ v
 }
 
-@ __rz_take * RzCursor c i n → ( Vec u ) {
+@ __rz_take ( Vec u ) buf inout i off i n → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] n )
     : ~ i k 0
-    ~ < k n { ?? ( vec_get [u] . c buf + . c off k ) { T b → ( vec_push [u] o b ) F → {} } = k + k 1 }
-    = . c off + . c off n
+    ~ < k n { ?? ( vec_get [u] buf + off k ) { T b → ( vec_push [u] o b ) F → {} } = k + k 1 }
+    = off + off n
     ^ o
 }
 
-@ __rz_str * RzCursor c → String {
-    : i n ( __rz_u16 c )
+@ __rz_str ( Vec u ) buf inout i off → String {
+    : i n ( __rz_u16 buf off )
     : String s ( string_with_cap n )
     : ~ i k 0
-    ~ < k n { ( string_push_char s ( __rz_u8 c ) ) = k + k 1 }
+    ~ < k n { ( string_push_char s ( __rz_u8 buf off ) ) = k + k 1 }
     ^ s
 }
 
-// Decode a record from a cursor.
-@ __rz_get_record * RzCursor c → PeerRecord {
+// Decode a record at `off` in `buf`.
+@ __rz_get_record ( Vec u ) buf inout i off → PeerRecord {
     : i r__box ( rcbox_zero [PeerRecordImpl] )
     : *PeerRecordImpl r ( rcbox_ptr [PeerRecordImpl] r__box )
-    = . r pubkey ( __rz_take c 32 )
-    = . r relay_host ( __rz_str c )
-    = . r relay_port ( __rz_u16 c )
-    : i n ( __rz_u16 c )
+    = . r pubkey ( __rz_take buf off 32 )
+    = . r relay_host ( __rz_str buf off )
+    = . r relay_port ( __rz_u16 buf off )
+    : i n ( __rz_u16 buf off )
     = . r endpoints ( vec_new [Endpoint] )
     : ~ i k 0
     ~ < k n {
-        : String host ( __rz_str c )
-        : i port ( __rz_u16 c )
+        : String host ( __rz_str buf off )
+        : i port ( __rz_u16 buf off )
         ( vec_push [Endpoint] . r endpoints @ Endpoint { host port } )
         = k + k 1
     }
@@ -212,12 +208,8 @@ $ `stdlib/core/rcbox.nu`
 
 // Decode a standalone record buffer (whole buffer is one record).
 @ rz_record_decode ( Vec u ) buf → PeerRecord {
-    : *RzCursor c # *RzCursor ( nurl_alloc Z RzCursor )
-    = . c buf buf
-    = . c off 0
-    : PeerRecord r ( __rz_get_record c )
-    ( nurl_free # s c )
-    ^ r
+    : ~ i off 0
+    ^ ( __rz_get_record buf off )
 }
 
 // ── frame codec ──────────────────────────────────────────────────
@@ -227,7 +219,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) body
 }
 
-@ rz_frame_free sink RzFrame fr → v { ( vec_free [u] . fr body ) }
+// Let go of `fr` now rather than at the end of its owner's scope.
+@ rz_frame_free sink RzFrame fr → v {}
 
 @ __rz_frame i ftype ( Vec u ) body → ( Vec u ) {
     : ( Vec u ) f ( vec_new [u] )
@@ -240,7 +233,6 @@ $ `stdlib/core/rcbox.nu`
 @ rz_build_register PeerRecord r → ( Vec u ) {
     : ( Vec u ) body ( rz_record_encode r )
     : ( Vec u ) f ( __rz_frame ( rz_register ) body )
-    ( vec_free [u] body )
     ^ f
 }
 
@@ -257,7 +249,6 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] body # u 1 )
     : ( Vec u ) rec ( rz_record_encode r )
     ( vec_extend [u] body rec )
-    ( vec_free [u] rec )
     : ( Vec u ) f ( __rz_frame ( rz_record ) body )
     ^ f
 }
@@ -294,7 +285,6 @@ $ `stdlib/core/rcbox.nu`
             T chunk → {
                 : i cn ( vec_len [u] chunk )
                 ? == cn 0 { = fail T } { ( vec_extend [u] buf chunk ) = got + got cn }
-                ( vec_free [u] chunk )
             }
             F _ → { = fail T }
         }
@@ -310,7 +300,6 @@ $ `stdlib/core/rcbox.nu`
         T h → {
             : i ftype ?? ( vec_get [u] h 0 ) { T x → # i x F → -1 }
             : i len ?? ( bytes_read_u32_be h 1 ) { T x → # i x F → -1 }
-            ( vec_free [u] h )
             ? & >= len 0 <= len ( __rz_max ) {
                 : ?( Vec u ) bd ( __rz_read_exact c len )
                 ?? bd {
@@ -401,7 +390,6 @@ $ `stdlib/core/rcbox.nu`
                     ( __rz_upsert rs nr )
                     : ( Vec u ) ack ( rz_build_ok )
                     ?? ( tcp_write_all c ack ) { T _ → {} F _ → { = done T } }
-                    ( vec_free [u] ack )
                 } {}
                 ? == . f ftype ( rz_lookup ) {
                     : i found ( __rz_find rs . f body )
@@ -410,9 +398,7 @@ $ `stdlib/core/rcbox.nu`
                         F → ( rz_build_record_notfound )
                     }
                     ?? ( tcp_write_all c resp ) { T _ → {} F _ → { = done T } }
-                    ( vec_free [u] resp )
                 } {}
-                ( rz_frame_free f )
             }
             F → { = done T }
         }
@@ -470,11 +456,10 @@ $ `stdlib/core/rcbox.nu`
 @ rz_register_self RzClient rc PeerRecord r → !v NetErr {
     : ( Vec u ) f ( rz_build_register r )
     : !v NetErr wr ( tcp_write_all . rc conn f )
-    ( vec_free [u] f )
     : !v NetErr out ?? wr {
         T _ → {
             ?? ( rz_read_frame . rc conn ) {
-                T fr → { : i ok ? == . fr ftype ( rz_ok ) 1 0 ( rz_frame_free fr ) ? == ok 1 @ !v NetErr { T 0 } @ !v NetErr { F # NetErr NetOther } }
+                T fr → { : i ok ? == . fr ftype ( rz_ok ) 1 0 ? == ok 1 @ !v NetErr { T 0 } @ !v NetErr { F # NetErr NetOther } }
                 F → @ !v NetErr { F # NetErr NetClosed }
             }
         }
@@ -496,21 +481,16 @@ $ `stdlib/core/rcbox.nu`
                         : i found ?? ( vec_get [u] . fr body 0 ) { T x → # i x F → 0 }
                         ? == found 1 {
                             // record body sits after the 1-byte found flag
-                            : *RzCursor cur # *RzCursor ( nurl_alloc Z RzCursor )
-                            = . cur buf . fr body
-                            = . cur off 1
-                            = out @ ?PeerRecord { T ( __rz_get_record cur ) }
-                            ( nurl_free # s cur )
+                            : ~ i off 1
+                            = out @ ?PeerRecord { T ( __rz_get_record . fr body off ) }
                         } {}
                     } {}
-                    ( rz_frame_free fr )
                 }
                 F → {}
             }
         }
         F _ → {}
     }
-    ( vec_free [u] f )
     ^ out
 }
 

@@ -306,7 +306,6 @@ $ `stdlib/core/rcbox.nu`
     // by 127.0.0.1, not by whatever DHCP handed the interface.
     ( ip4_push_header ( pktbuf_bytes out ) . ih dst . ih src ( ip_proto_icmp ) ( vec_len [u] msg ) ( __next_id st ) 64 T )
     ( vec_extend [u] ( pktbuf_bytes out ) msg )
-    ( vec_free [u] msg )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
     ^ @ RxResult { ( rx_icmp_echo ) 0 . ih src . ih dst . im id . im seq . im payload_off . im payload_len - ( pktbuf_total out ) before }
@@ -521,7 +520,6 @@ $ `stdlib/core/rcbox.nu`
     ( eth_push_header ( pktbuf_bytes out ) ( mac_broadcast ) . st our_mac ( ethertype_ipv4 ) )
     ( ip4_push_header ( pktbuf_bytes out ) src_ip dst_ip ( ip_proto_udp ) ( vec_len [u] dg ) ( __next_id st ) 64 T )
     ( vec_extend [u] ( pktbuf_bytes out ) dg )
-    ( vec_free [u] dg )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
     ^ - ( pktbuf_total out ) before

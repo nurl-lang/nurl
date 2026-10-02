@@ -65,7 +65,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) ct
 }
 
-@ sealed_free sink Sealed s → v { ( vec_free [u] . s ct ) }
+// Let go of `s` now rather than at the end of its owner's scope.
+@ sealed_free sink Sealed s → v {}
 
 @ session_seal NoiseSession s__h ( Vec u ) ad ( Vec u ) pt → Sealed {
     : *NoiseSessionImpl s ( __NoiseSession_ptr s__h )
@@ -73,7 +74,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) nonce ( noise_nonce ctr )
     : ( Vec u ) ct ?? ( chacha20poly1305_encrypt . s send_key nonce ad pt )
     { T x → x F _ → ( vec_new [u] ) }
-    ( vec_free [u] nonce )
     = . s send_n + . s send_n 1
     ^ @ Sealed { ctr ct }
 }
@@ -102,13 +102,11 @@ $ `stdlib/core/rcbox.nu`
     : *NoiseSessionImpl s ( __NoiseSession_ptr s__h )
     : ( Vec u ) nonce ( noise_nonce counter )
     : !( Vec u ) CryptoErr dr ( chacha20poly1305_decrypt . s recv_key nonce ad ct )
-    ( vec_free [u] nonce )
     ^ ?? dr {
         T pt → {
             ? ( __replay_ok s counter ) {
                 @ ?( Vec u ) { T pt }
             } {
-                ( vec_free [u] pt )
                 @ ?( Vec u ) { F # ( Vec u ) 0 }
             }
         }

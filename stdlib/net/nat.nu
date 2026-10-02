@@ -58,7 +58,7 @@ $ `stdlib/net/stun.nu`
 // plain IPv4 form — a dual-stack socket reports local v4 addresses this
 // way, but it is NOT a real IPv6 path. Consumes `h`, returns a fresh
 // String (or `h` unchanged when it isn't a mapped address).
-@ __unmap String h → String {
+@ __unmap sink String h → String {
     : i n ( string_len h )
     ? < n 7 { ^ h } {}
     : s cs ( string_data h )
@@ -71,7 +71,6 @@ $ `stdlib/net/stun.nu`
     : String v4 ( string_with_cap - n 7 )
     : ~ i j 7
     ~ < j n { ( string_push_char v4 # i . sp j ) = j + j 1 }
-    ( string_free h )
     ^ v4
 }
 
@@ -140,7 +139,6 @@ $ `stdlib/net/stun.nu`
                 T _ → {
                     : String la ( udp_local_addr sk )
                     : String h ( _addr_host la )
-                    ( string_free la )
                     h
                 }
                 F _ → ( string_from `` )
@@ -159,7 +157,6 @@ $ `stdlib/net/stun.nu`
 @ nat_host_candidate UdpSocket sock s ref_host i ref_port → ?Candidate {
     : String la ( udp_local_addr sock )
     : i app_port ( _addr_port la )
-    ( string_free la )
     : String ip ( __local_ip_for ref_host ref_port )
     ? == ( string_len ip ) 0 {
         ^ @ ?Candidate { F # Candidate 0 }
@@ -176,7 +173,6 @@ $ `stdlib/net/stun.nu`
             : String h ( string_from ( string_data . a host ) )
             : i p . a port
             : i f . a family
-            ( stun_addr_free a )
             @ ?Candidate { T @ Candidate { h p f 1 } }
         }
         F → @ ?Candidate { F # Candidate 0 }
@@ -184,42 +180,29 @@ $ `stdlib/net/stun.nu`
     ^ out
 }
 
-// ── candidate set (Vec of *Candidate) ────────────────────────────
+// ── candidate set (a Vec of Candidate values) ───────────────────────
 
-@ __box_cand Candidate c → s {
-    : *Candidate p # *Candidate ( nurl_alloc Z Candidate )
-    = . p host . c host  // moves the owned String into the heap node
-    = . p port . c port
-    = . p family . c family
-    = . p kind . c kind
-    ^ # s p
-}
-
-@ __cand_eq * Candidate a Candidate b → b {
+@ __cand_eq Candidate a Candidate b → b {
     ^ & == . a port . b port != 0 ( nurl_str_eq ( string_data . a host ) ( string_data . b host ) )
 }
 
-// Add a candidate unless an equal (host+port) one is already present; the
-// duplicate's owned String is released.
-@ __maybe_add ( Vec s ) cs Candidate c → v {
-    : i n ( vec_len [s] cs )
+// Add a candidate unless an equal (host+port) one is already present (the
+// duplicate goes with `c`).
+@ __maybe_add ( Vec Candidate ) cs Candidate c → v {
+    : i n ( vec_len [Candidate] cs )
     : ~ b dup F : ~ i k 0
     ~ & ! dup < k n {
-        : s pp ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *Candidate p # *Candidate pp
-            ? ( __cand_eq p c ) { = dup T } {}
-        } {}
+        ?? ( vec_get [Candidate] cs k ) { T p → { ? ( __cand_eq p c ) { = dup T } {} } F → {} }
         = k + k 1
     }
-    ? dup { ( string_free . c host ) } { ( vec_push [s] cs # s ( __box_cand c ) ) }
+    ? dup {} { ( vec_push [Candidate] cs c ) }
 }
 
 // Gather host + server-reflexive candidates on `sock` using one STUN
 // server (its address doubles as the route reference for the host
-// candidate). Returns a Vec s of *Candidate; free with nat_candidates_free.
-@ nat_gather UdpSocket sock s stun_host i stun_port i timeout_ms → ( Vec s ) {
-    : ( Vec s ) cs ( vec_new [s] )
+// candidate). The Vec is the caller's, dropped with its candidates.
+@ nat_gather UdpSocket sock s stun_host i stun_port i timeout_ms → ( Vec Candidate ) {
+    : ( Vec Candidate ) cs ( vec_new [Candidate] )
     : ?Candidate hc ( nat_host_candidate sock stun_host stun_port )
     ?? hc { T c → ( __maybe_add cs c ) F → {} }
     : ?Candidate sc ( nat_srflx_candidate sock stun_host stun_port timeout_ms )
@@ -227,20 +210,8 @@ $ `stdlib/net/stun.nu`
     ^ cs
 }
 
-@ nat_candidates_free sink ( Vec s ) cs → v {
-    : i n ( vec_len [s] cs )
-    : ~ i k 0
-    ~ < k n {
-        : s pp ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *Candidate p # *Candidate pp
-            ( string_free . p host )
-            ( nurl_free # s p )
-        } {}
-        = k + k 1
-    }
-    ( vec_free [s] cs )
-}
+// Let go of `cs` now rather than at the end of its owner's scope.
+@ nat_candidates_free sink ( Vec Candidate ) cs → v {}
 
 // ── NAT-type probe ───────────────────────────────────────────────
 
@@ -268,10 +239,7 @@ $ `stdlib/net/stun.nu`
 @ nat_probe UdpSocket sock s stun_a i port_a s stun_b i port_b i timeout_ms → i {
     : ?StunAddr a ( stun_query sock stun_a port_a timeout_ms )
     : ?StunAddr b ( stun_query sock stun_b port_b timeout_ms )
-    : i t ( nat_classify a b )
-    ?? a { T sa → ( stun_addr_free sa ) F → {} }
-    ?? b { T sb → ( stun_addr_free sb ) F → {} }
-    ^ t
+    ^ ( nat_classify a b )
 }
 
 // ── UDP hole punch (simultaneous open) ───────────────────────────
@@ -291,7 +259,8 @@ $ `stdlib/net/stun.nu`
     ( Vec u ) token
 }
 
-@ punch_msg_free sink PunchMsg m → v { ( vec_free [u] . m token ) }
+// Let go of `m` now rather than at the end of its owner's scope.
+@ punch_msg_free sink PunchMsg m → v {}
 
 @ nat_punch_build i kind ( Vec u ) token → ( Vec u ) {
     : ( Vec u ) m ( vec_new [u] )
@@ -355,17 +324,13 @@ $ `stdlib/net/stun.nu`
                             } {}
                             = ok T
                         } {}
-                        ( punch_msg_free pm )
                     }
                     F → {}
                 }
-                ( udp_packet_free pkt )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free [u] ping )
-    ( vec_free [u] pong )
     ^ ok
 }

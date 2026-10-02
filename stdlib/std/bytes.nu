@@ -31,10 +31,12 @@
 //   ( bytes_push_u32_le v n )   → v
 //   ( bytes_push_u64_be v n )   → v
 //   ( bytes_push_u64_le v n )   → v
+//   ( bytes_drop_front v n )    → v                 remove the first n bytes
+//                                                  in place (consume them)
 //
-// Memory model: byte buffers are owned heap allocations; free with
-// `( vec_free [u] v )`. Borrowed pointers (e.g. `bytes_data`) must not
-// outlive the Vec.
+// Memory model: byte buffers are owned heap allocations, dropped with
+// their owner (`vec_free [u]` releases one early). Borrowed pointers
+// (e.g. `bytes_data`) must not outlive the Vec.
 //
 // Example — read a file, hex-encode, write the digest back out:
 //   : ! ( Vec u ) IoErr r ( read_file_bytes `input.bin` )
@@ -42,8 +44,6 @@
 //     T v → {
 //       : String hex ( bytes_to_hex v )
 //       ( println ( string_data hex ) )
-//       ( string_free hex )
-//       ( vec_free [u] v )
 //     }
 //     F e → ( eprintln ( io_err_msg # IoErr e ) )
 //   }
@@ -488,8 +488,7 @@ $ `stdlib/core/errors.nu`
 
 // Copy the half-open range [from, to) of `v` into a fresh owned Vec[u].
 // Both bounds are clamped to [0, len]; if the resulting range is empty
-// (or inverted) the returned Vec has len 0. Caller owns the result and
-// must `( vec_free [u] out )`.
+// (or inverted) the returned Vec has len 0. The caller owns the result.
 @ bytes_slice ( Vec u ) v i from i to → ( Vec u ) {
     : i n ( vec_len [u] v )
     : ~ i lo from
@@ -508,4 +507,19 @@ $ `stdlib/core/errors.nu`
         ( bytes_extend_raw out # s + # i p lo len )
     } {}
     ^ out
+}
+
+// ── Consume ────────────────────────────────────────────────────────
+
+// Remove the first `n` bytes of `v` in place: the rest moves down and the
+// length shrinks, the buffer stays (a receive / send queue drained from
+// the front reuses it). `n` <= 0 is a no-op; `n` >= len empties `v`.
+@ bytes_drop_front ( Vec u ) v i n → v {
+    ? <= n 0 { ^ } {}
+    : i total ( vec_len [u] v )
+    ? >= n total { ( vec_clear [u] v ) ^ } {}
+    : i rest - total n
+    : *u p ( vec_data [u] v )
+    ( nurl_memmove # s p # s # *u + # i p n rest )
+    : b _ok ( vec_set_len [u] v rest )
 }

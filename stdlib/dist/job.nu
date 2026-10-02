@@ -81,11 +81,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) payload
 }
 
-@ jobmsg_free sink JobMsg m → v {
-    ( vec_free [u] . m submitter )
-    ( vec_free [u] . m key )
-    ( vec_free [u] . m payload )
-}
+// Let go of `m` now rather than at the end of its owner's scope.
+@ jobmsg_free sink JobMsg m → v {}
 
 @ __job_put_blob ( Vec u ) b ( Vec u ) blob → v {
     ( bytes_push_u16_be b # u16 ( vec_len [u] blob ) )

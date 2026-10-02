@@ -26,20 +26,20 @@ $ `stdlib/net/nat.nu`
     ^ s
 }
 
-@ show_candidates ( Vec s ) cs → v {
-    : i n ( vec_len [s] cs )
+@ show_candidates ( Vec Candidate ) cs → v {
+    : i n ( vec_len [Candidate] cs )
     ( nurl_print `candidates:\n` )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *Candidate c # *Candidate pp
-            : String ep ( endpoint_str . c host . c port )
-            ( nurl_print `  [` ) ( nurl_print ( kind_name . c kind ) ) ( nurl_print `] ` )
-            ( nurl_print ( string_data ep ) )
-            ( nurl_print ? == . c family 2 `  (IPv6)\n` `  (IPv4)\n` )
-            ( string_free ep )
-        } {}
+        ?? ( vec_get [Candidate] cs k ) {
+            T c → {
+                : String ep ( endpoint_str . c host . c port )
+                ( nurl_print `  [` ) ( nurl_print ( kind_name . c kind ) ) ( nurl_print `] ` )
+                ( nurl_print ( string_data ep ) )
+                ( nurl_print ? == . c family 2 `  (IPv6)\n` `  (IPv4)\n` )
+            }
+            F → {}
+        }
         = k + k 1
     }
 }
@@ -51,9 +51,8 @@ $ `stdlib/net/nat.nu`
     ?? sr {
         T sock → {
             // ── candidates ───────────────────────────────────────
-            : ( Vec s ) cs ( nat_gather sock `stun.l.google.com` 19302 3000 )
+            : ( Vec Candidate ) cs ( nat_gather sock `stun.l.google.com` 19302 3000 )
             ( show_candidates cs )
-            ( nat_candidates_free cs )
 
             // ── NAT-type probe (two distinct servers) ─────────────
             ( nurl_print `\nprobing NAT type …\n` )

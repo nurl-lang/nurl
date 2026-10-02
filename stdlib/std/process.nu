@@ -116,15 +116,15 @@ $ `stdlib/std/time.nu`
 // Internal: classify the runtime err_kind into a ProcessErr variant.
 @ __process_dispatch i raw → !Output ProcessErr {
     ? == raw 0 { ^ @ !Output ProcessErr { F # ProcessErr ProcessOther } } {}
+    // The result block is owned from here: an error drops it with `o`.
+    : Output o @ Output { # s ( rcbox_new [OutputImpl] @ OutputImpl { raw } ) }
     : i ek ( nurl_proc_err_kind raw )
     ? != ek 0 {
-        ( nurl_proc_free raw )
         ? == ek 1 { ^ @ !Output ProcessErr { F # ProcessErr ProcessNotFound } } {}
         ? == ek 2 { ^ @ !Output ProcessErr { F # ProcessErr ProcessExecFailed } } {}
         ? == ek 3 { ^ @ !Output ProcessErr { F # ProcessErr ProcessIo } } {}
         ^ @ !Output ProcessErr { F # ProcessErr ProcessOther }
     } {}
-    : Output o @ Output { # s ( rcbox_new [OutputImpl] @ OutputImpl { raw } ) }
     ^ @ !Output ProcessErr { T o }
 }
 
@@ -195,12 +195,13 @@ $ `stdlib/std/time.nu`
     } {}
 }
 
-// Build a NULL-terminated argv array on the heap: [cmd, args..., NULL].
-// Caller frees with nurl_free.
-@ __build_argv s cmd ( Vec s ) args → s {
+// Build a NULL-terminated argv array: [cmd, args..., NULL], the words of
+// a Vec the caller holds while execvp reads `vec_data` (the child of a
+// fork has its own copy).
+@ __build_argv s cmd ( Vec s ) args → ( Vec i ) {
     : i argc ( vec_len [s] args )
-    : i full_n + argc 2
-    : s full ( nurl_alloc * full_n 8 )
+    : ( Vec i ) argv ( vec_zeroed [i] + argc 2 )
+    : s full # s ( vec_data [i] argv )
     : *u cmd_p # *u cmd
     ( nurl_poke full 0 # i cmd_p )
     : ~ i i 0
@@ -213,7 +214,7 @@ $ `stdlib/std/time.nu`
         = i + i 1
     }
     ( nurl_poke full + argc 1 0 )
-    ^ full
+    ^ argv
 }
 
 // Heap-grown byte buffer for capturing child stdout / stderr. The
@@ -262,14 +263,14 @@ $ `stdlib/std/time.nu`
     ^ ensured
 }
 
-// Allocate the (data, len, cap) state block. Initial cap = 256 bytes.
-@ __pb_state_new → s {
-    : s st ( nurl_alloc 24 )
-    : s data ( nurl_alloc 256 )
-    ( nurl_poke st 0 # i data )
-    ( nurl_poke st 1 0 )
+// The (data, len, cap) state words, in a Vec the caller holds (the data
+// buffer itself is handed to the result struct). Initial cap = 256 bytes.
+@ __pb_state_new → ( Vec i ) {
+    : ( Vec i ) stv ( vec_zeroed [i] 3 )
+    : s st # s ( vec_data [i] stv )
+    ( nurl_poke st 0 # i ( nurl_alloc 256 ) )
     ( nurl_poke st 2 256 )
-    ^ st
+    ^ stv
 }
 
 // Drain a non-blocking fd into the pb state. Returns -1 on EOF or hard
@@ -298,8 +299,8 @@ $ `stdlib/std/time.nu`
 // always > 0 on POSIX, so a decoded value of 0 unambiguously means
 // "no bytes / exec succeeded".
 @ __read_exec_errno i fd → i {
-    : s buf ( nurl_zalloc 4 )
-    : *u up # *u buf
+    : ( Vec i ) bv ( vec_zeroed [i] 1 )
+    : *u up # *u ( vec_data [i] bv )
     : ~ i got 0
     : ~ i done 0
     ~ == done 0 {
@@ -314,18 +315,15 @@ $ `stdlib/std/time.nu`
             }
         }
     }
-    : i val ( __le32_read up 0 )
-    ( nurl_free buf )
-    ^ val
+    ^ ( __le32_read up 0 )
 }
 
 // Write the child's errno to the exec-error sideband. Best-effort.
 @ __write_exec_errno i fd i errno_val → v {
-    : s buf ( nurl_alloc 4 )
-    : *u up # *u buf
+    : ( Vec i ) bv ( vec_zeroed [i] 1 )
+    : *u up # *u ( vec_data [i] bv )
     ( __le32_write up 0 errno_val )
-    ( write fd # *u buf 4 )
-    ( nurl_free buf )
+    ( write fd up 4 )
 }
 
 // Map a child-side exec errno to NurlProcResult err_kind.
@@ -368,11 +366,13 @@ $ `stdlib/std/time.nu`
         ^ ( __process_dispatch # i r )
     } {}
 
-    // Four 2-int pipe buffers. fd values land at offsets 0 + 4 of each.
-    : s sin_p ( nurl_alloc 8 )
-    : s sout_p ( nurl_alloc 8 )
-    : s serr_p ( nurl_alloc 8 )
-    : s err_p ( nurl_alloc 8 )
+    // Four 2-int pipe buffers, 8 bytes each in one zeroed Vec. fd values
+    // land at offsets 0 + 4 of each.
+    : ( Vec i ) pipev ( vec_zeroed [i] 4 )
+    : s sin_p # s ( vec_data [i] pipev )
+    : s sout_p # s + # i sin_p 8
+    : s serr_p # s + # i sin_p 16
+    : s err_p # s + # i sin_p 24
 
     : i p1 ( pipe # *u sin_p )
     : i p2 ( pipe # *u sout_p )
@@ -392,8 +392,6 @@ $ `stdlib/std/time.nu`
         ? >= p4 0 {
             ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
         } {}
-        ( nurl_free sin_p ) ( nurl_free sout_p )
-        ( nurl_free serr_p ) ( nurl_free err_p )
         ( nurl_poke r 1 3 )  // Io
         ( nurl_poke r 2 # i ( __proc_empty_buf ) )
         ( nurl_poke r 4 # i ( __proc_empty_buf ) )
@@ -403,7 +401,7 @@ $ `stdlib/std/time.nu`
     // CLOEXEC on err_p[1] so a successful exec triggers EOF on read.
     ( __set_cloexec ( __pipe_fd err_p 1 ) )
 
-    : s full ( __build_argv cmd args )
+    : ( Vec i ) argv ( __build_argv cmd args )
 
     // stdout is block-buffered when it is a pipe or a file, so anything
     // the parent has printed but not yet written out would be inherited
@@ -416,9 +414,6 @@ $ `stdlib/std/time.nu`
         ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
         ( close ( __pipe_fd serr_p 0 ) ) ( close ( __pipe_fd serr_p 1 ) )
         ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
-        ( nurl_free sin_p ) ( nurl_free sout_p )
-        ( nurl_free serr_p ) ( nurl_free err_p )
-        ( nurl_free full )
         ( nurl_poke r 1 3 )  // Io
         ( nurl_poke r 2 # i ( __proc_empty_buf ) )
         ( nurl_poke r 4 # i ( __proc_empty_buf ) )
@@ -437,14 +432,11 @@ $ `stdlib/std/time.nu`
         ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
         ( close ( __pipe_fd serr_p 0 ) ) ( close ( __pipe_fd serr_p 1 ) )
         ( close ( __pipe_fd err_p 0 ) )
-        ( execvp cmd # *u full )
+        ( execvp cmd # *u ( vec_data [i] argv ) )
         : i e ( nurl_errno_get )
         ( __write_exec_errno ( __pipe_fd err_p 1 ) e )
         ( _exit 127 )
     } {}
-
-    // Parent: free argv (the child has its own copy via fork).
-    ( nurl_free full )
 
     // Close child-side pipe ends.
     ( close ( __pipe_fd sin_p 0 ) )
@@ -456,8 +448,6 @@ $ `stdlib/std/time.nu`
     : i sout_rfd ( __pipe_fd sout_p 0 )
     : i serr_rfd ( __pipe_fd serr_p 0 )
     : i err_rfd ( __pipe_fd err_p 0 )
-    ( nurl_free sin_p ) ( nurl_free sout_p )
-    ( nurl_free serr_p ) ( nurl_free err_p )
 
     ( __set_nonblock sout_rfd )
     ( __set_nonblock serr_rfd )
@@ -485,10 +475,14 @@ $ `stdlib/std/time.nu`
     ( signal ( posix_const `SIGPIPE` ) old_pipe )
 
     // Drain stdout + stderr in a poll loop until both report EOF.
-    : s out_state ( __pb_state_new )
-    : s err_state ( __pb_state_new )
-    : s tmp_buf ( nurl_alloc 4096 )
-    : s pollfds ( nurl_alloc 16 )
+    : ( Vec i ) out_sv ( __pb_state_new )
+    : ( Vec i ) err_sv ( __pb_state_new )
+    : s out_state # s ( vec_data [i] out_sv )
+    : s err_state # s ( vec_data [i] err_sv )
+    // A 4 KiB read buffer and two pollfd entries, in one Vec.
+    : ( Vec u ) iov ( vec_zeroed [u] 4112 )
+    : s tmp_buf # s ( vec_data [u] iov )
+    : s pollfds # s + # i tmp_buf 4096
     : ~ i out_open 1
     : ~ i err_open 1
     : ~ i io_err 0
@@ -530,9 +524,6 @@ $ `stdlib/std/time.nu`
         }
     }
 
-    ( nurl_free tmp_buf )
-    ( nurl_free pollfds )
-
     ( close sout_rfd )
     ( close serr_rfd )
 
@@ -540,8 +531,8 @@ $ `stdlib/std/time.nu`
     ( close err_rfd )
 
     // waitpid with EINTR retry.
-    : s status_buf ( nurl_alloc 4 )
-    : *u status_p # *u status_buf
+    : ( Vec i ) status_v ( vec_zeroed [i] 1 )
+    : *u status_p # *u ( vec_data [i] status_v )
     : ~ i w 0
     : ~ i wait_done 0
     ~ == wait_done 0 {
@@ -552,7 +543,6 @@ $ `stdlib/std/time.nu`
         }
     }
     : i raw_status ( __le32_read status_p 0 )
-    ( nurl_free status_buf )
 
     ( __decode_status r raw_status io_err child_errno )
 
@@ -561,8 +551,6 @@ $ `stdlib/std/time.nu`
     : i err_len ( nurl_peek err_state 1 )
     : s out_buf ( __pb_finalize out_state )
     : s err_buf ( __pb_finalize err_state )
-    ( nurl_free out_state )
-    ( nurl_free err_state )
 
     ( nurl_poke r 2 # i out_buf )
     ( nurl_poke r 3 out_len )
@@ -725,7 +713,17 @@ $ `stdlib/std/time.nu`
 // buffers), in an rcbox. Its drop is what `proc_free` used to do by hand.
 : ProcChildImpl { i raw }
 
-% Drop ProcChildImpl { @ drop ProcChildImpl x → v { ( __proc_shutdown . x raw ) } }
+// The child's shutdown, run by its last owner: close the pipes, stop and
+// reap a child nobody waited for, free the block.
+% Drop ProcChildImpl {
+    @ drop ProcChildImpl x → v {
+        ? != ( posix_const `O_NONBLOCK` ) -1 {
+            ( __proc_free_posix . x raw )
+        } {
+            ( nurl_proc_spawn_free . x raw )
+        }
+    }
+}
 
 : ProcChild { s raw }
 
@@ -740,15 +738,16 @@ $ `stdlib/std/time.nu`
 
 @ __proc_spawn_dispatch i raw → !ProcChild ProcessErr {
     ? == raw 0 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessOther } } {}
+    // The child block is owned from here: an error drops it with `p` (a
+    // failed spawn has no pid and no open pipe, so that only frees it).
+    : ProcChild p @ ProcChild { # s ( rcbox_new [ProcChildImpl] @ ProcChildImpl { raw } ) }
     : i ek ( nurl_proc_spawn_err_kind raw )
     ? != ek 0 {
-        ( nurl_proc_spawn_free raw )
         ? == ek 1 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessNotFound } } {}
         ? == ek 2 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessExecFailed } } {}
         ? == ek 3 { ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessIo } } {}
         ^ @ !ProcChild ProcessErr { F # ProcessErr ProcessOther }
     } {}
-    : ProcChild p @ ProcChild { # s ( rcbox_new [ProcChildImpl] @ ProcChildImpl { raw } ) }
     ^ @ !ProcChild ProcessErr { T p }
 }
 
@@ -772,7 +771,18 @@ $ `stdlib/std/time.nu`
 //   12 line_buf         (heap byte buffer for the most-recent line)
 //   13 line_len         (length, no trailing NUL)
 //   14 line_cap         (allocation size incl. terminator)
-//   15 reserved
+//   15 io scratch       (poll entry + read chunk, NULL until first read)
+
+// The read paths' poll(2) entry (8 bytes) and read(2) chunk (4 KiB): one
+// block per child (slot 15), made on the first read and released with the
+// child (__proc_free_posix).
+@ __pc_io s c → s {
+    : s io # s ( nurl_peek c 15 )
+    ? != # i io 0 { ^ io } {}
+    : s fresh ( nurl_alloc 4104 )
+    ( nurl_poke c 15 # i fresh )
+    ^ fresh
+}
 
 @ __pc_alloc → s {
     : s c ( nurl_zalloc 128 )
@@ -872,9 +882,11 @@ $ `stdlib/std/time.nu`
         ^ ( __proc_spawn_dispatch # i c )
     } {}
 
-    : s sin_p ( nurl_alloc 8 )
-    : s sout_p ( nurl_alloc 8 )
-    : s err_p ( nurl_alloc 8 )
+    // Three 2-int pipe buffers, 8 bytes each in one zeroed Vec.
+    : ( Vec i ) pipev ( vec_zeroed [i] 3 )
+    : s sin_p # s ( vec_data [i] pipev )
+    : s sout_p # s + # i sin_p 8
+    : s err_p # s + # i sin_p 16
 
     : i p1 ( pipe # *u sin_p )
     : i p2 ( pipe # *u sout_p )
@@ -889,7 +901,6 @@ $ `stdlib/std/time.nu`
         ? >= p3 0 {
             ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
         } {}
-        ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
         ( nurl_poke c 0 3 )  // Io
         ( nurl_poke c 1 ( nurl_errno_get ) )
         ^ ( __proc_spawn_dispatch # i c )
@@ -897,18 +908,16 @@ $ `stdlib/std/time.nu`
 
     ( __set_cloexec ( __pipe_fd err_p 1 ) )
 
-    : s full ( __build_argv cmd args )
+    : ( Vec i ) argv ( __build_argv cmd args )
 
     // See the fork in __process_run: drain the parent's pending stdout
     // so the child cannot re-emit it.
     ( nurl_flush_stdout )
     : i pid ( fork )
     ? < pid 0 {
-        ( nurl_free full )
         ( close ( __pipe_fd sin_p 0 ) ) ( close ( __pipe_fd sin_p 1 ) )
         ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
         ( close ( __pipe_fd err_p 0 ) ) ( close ( __pipe_fd err_p 1 ) )
-        ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
         ( nurl_poke c 0 3 )  // Io
         ( nurl_poke c 1 ( nurl_errno_get ) )
         ^ ( __proc_spawn_dispatch # i c )
@@ -921,13 +930,11 @@ $ `stdlib/std/time.nu`
         ( close ( __pipe_fd sin_p 0 ) ) ( close ( __pipe_fd sin_p 1 ) )
         ( close ( __pipe_fd sout_p 0 ) ) ( close ( __pipe_fd sout_p 1 ) )
         ( close ( __pipe_fd err_p 0 ) )
-        ( execvp cmd # *u full )
+        ( execvp cmd # *u ( vec_data [i] argv ) )
         : i e ( nurl_errno_get )
         ( __write_exec_errno ( __pipe_fd err_p 1 ) e )
         ( _exit 127 )
     } {}
-
-    ( nurl_free full )
     ( close ( __pipe_fd sin_p 0 ) )
     ( close ( __pipe_fd sout_p 1 ) )
     ( close ( __pipe_fd err_p 1 ) )
@@ -935,16 +942,14 @@ $ `stdlib/std/time.nu`
     : i sin_wfd ( __pipe_fd sin_p 1 )
     : i sout_rfd ( __pipe_fd sout_p 0 )
     : i err_rfd ( __pipe_fd err_p 0 )
-    ( nurl_free sin_p ) ( nurl_free sout_p ) ( nurl_free err_p )
 
     : i child_errno ( __read_exec_errno err_rfd )
     ( close err_rfd )
     ? != child_errno 0 {
         ( close sin_wfd ) ( close sout_rfd )
-        : s status_buf ( nurl_zalloc 4 )
-        : *u status_p # *u status_buf
+        : ( Vec i ) status_v ( vec_zeroed [i] 1 )
+        : *u status_p # *u ( vec_data [i] status_v )
         ( waitpid pid status_p 0 )
-        ( nurl_free status_buf )
         ( nurl_poke c 0 ( __map_exec_errno child_errno ) )
         ( nurl_poke c 1 child_errno )
         ^ ( __proc_spawn_dispatch # i c )
@@ -1016,8 +1021,8 @@ $ `stdlib/std/time.nu`
         ^ ``
     } {}
 
-    : s pollfds ( nurl_alloc 8 )
-    : s chunk ( nurl_alloc 4096 )
+    : s pollfds ( __pc_io c )
+    : s chunk # s + # i pollfds 8
     : i pollin ( posix_const `POLLIN` )
     : i pollhup ( posix_const `POLLHUP` )
     : i pollerr ( posix_const `POLLERR` )
@@ -1035,13 +1040,11 @@ $ `stdlib/std/time.nu`
             }
         }
         ? == pr 0 {
-            ( nurl_free pollfds ) ( nurl_free chunk )
             ^ ``  // timeout
         } {}
         ? < pr 0 {
             ( nurl_poke c 0 3 )  // Io
             ( nurl_poke c 1 ( nurl_errno_get ) )
-            ( nurl_free pollfds ) ( nurl_free chunk )
             ^ ``
         } {}
         : i rev ( posix_pollfd_revents # *u pollfds 0 )
@@ -1072,7 +1075,6 @@ $ `stdlib/std/time.nu`
                                 ? == re ( posix_const `EWOULDBLOCK` ) { = drain_done 1 } {
                                     ( nurl_poke c 0 3 )
                                     ( nurl_poke c 1 re )
-                                    ( nurl_free pollfds ) ( nurl_free chunk )
                                     ^ ``
                                 }
                             }
@@ -1082,7 +1084,6 @@ $ `stdlib/std/time.nu`
             }
             : i hit_eof ( nurl_peek c 3 )
             ? == 1 ( __pc_drain_line c ) {
-                ( nurl_free pollfds ) ( nurl_free chunk )
                 : s line # s ( nurl_peek c 12 )
                 ^ ? != # i line 0 line ``
             } {}
@@ -1100,10 +1101,8 @@ $ `stdlib/std/time.nu`
                     = . lp sc_len # u 0
                     ( nurl_poke c 13 sc_len )
                     ( nurl_poke c 10 0 )
-                    ( nurl_free pollfds ) ( nurl_free chunk )
                     ^ line
                 } {}
-                ( nurl_free pollfds ) ( nurl_free chunk )
                 ^ ``
             } {}
         } {}
@@ -1113,7 +1112,6 @@ $ `stdlib/std/time.nu`
             ( nurl_poke c 8 -1 )
             ( nurl_poke c 3 1 )  // eof
             ? == 1 ( __pc_drain_line c ) {
-                ( nurl_free pollfds ) ( nurl_free chunk )
                 : s line # s ( nurl_peek c 12 )
                 ^ ? != # i line 0 line ``
             } {}
@@ -1129,15 +1127,12 @@ $ `stdlib/std/time.nu`
                 = . lp sc_len # u 0
                 ( nurl_poke c 13 sc_len )
                 ( nurl_poke c 10 0 )
-                ( nurl_free pollfds ) ( nurl_free chunk )
                 ^ line
             } {}
-            ( nurl_free pollfds ) ( nurl_free chunk )
             ^ ``
         } {}
         // Loop — still no '\n' yet.
     }
-    ( nurl_free pollfds ) ( nurl_free chunk )
     ^ ``
 }
 
@@ -1175,7 +1170,7 @@ $ `stdlib/std/time.nu`
         ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) }
     } {}
 
-    : s pollfds ( nurl_alloc 8 )
+    : s pollfds ( __pc_io c )
     : i pollin ( posix_const `POLLIN` )
     ~ T {
         // 2. Block until readable or HUP; EINTR retries.
@@ -1192,7 +1187,6 @@ $ `stdlib/std/time.nu`
         ? < pr 0 {
             ( nurl_poke c 0 3 )  // Io
             ( nurl_poke c 1 ( nurl_errno_get ) )
-            ( nurl_free pollfds )
             ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessIo }
         } {}
         // 3. One read(2) — POLLIN and POLLHUP both resolve here.
@@ -1201,29 +1195,24 @@ $ `stdlib/std/time.nu`
         : i rd ( read fd_out dst max )
         ? > rd 0 {
             : b _ok ( vec_set_len [u] buf rd )
-            ( nurl_free pollfds )
             ^ @ !( Vec u ) ProcessErr { T buf }
         } {}
         ? == rd 0 {
             ( close fd_out )
             ( nurl_poke c 8 -1 )
             ( nurl_poke c 3 1 )  // eof
-            ( nurl_free pollfds )
             ^ @ !( Vec u ) ProcessErr { T buf }  // empty ⇒ EOF
         } {}
         : i re ( nurl_errno_get )
-        ( vec_free [u] buf )
         ? == re ( posix_const `EINTR` ) {} {
             ? || == re ( posix_const `EAGAIN` ) == re ( posix_const `EWOULDBLOCK` ) {} {
                 ( nurl_poke c 0 3 )  // Io
                 ( nurl_poke c 1 re )
-                ( nurl_free pollfds )
                 ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessIo }
             }
         }
         // EINTR / spurious EAGAIN: poll again.
     }
-    ( nurl_free pollfds )
     ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) }
 }
 
@@ -1233,8 +1222,8 @@ $ `stdlib/std/time.nu`
     ? != waited 0 { ^ ( nurl_peek c 2 ) } {}
     : i pid ( nurl_peek c 6 )
     ? <= pid 0 { ^ -1 } {}
-    : s status_buf ( nurl_zalloc 4 )
-    : *u status_p # *u status_buf
+    : ( Vec i ) status_v ( vec_zeroed [i] 1 )
+    : *u status_p # *u ( vec_data [i] status_v )
     : ~ i w 0
     : ~ i wait_done 0
     ~ == wait_done 0 {
@@ -1244,13 +1233,11 @@ $ `stdlib/std/time.nu`
             ? != e ( posix_const `EINTR` ) {
                 = wait_done 1
                 ( nurl_poke c 1 e )
-                ( nurl_free status_buf )
                 ^ -1
             } {}
         }
     }
     : i raw_status ( __le32_read status_p 0 )
-    ( nurl_free status_buf )
     : ~ i ec -1
     ? == 1 ( nurl_wait_is_exited raw_status ) {
         = ec ( nurl_wait_exit_status raw_status )
@@ -1285,8 +1272,8 @@ $ `stdlib/std/time.nu`
     : i waited ( nurl_peek c 4 )
     ? || <= pid 0 != waited 0 {} {
         ( kill pid ( posix_const `SIGTERM` ) )
-        : s status_buf ( nurl_zalloc 4 )
-        : *u status_p # *u status_buf
+        : ( Vec i ) status_v ( vec_zeroed [i] 1 )
+        : *u status_p # *u ( vec_data [i] status_v )
         : ~ i tries 0
         : ~ i reaped 0
         ~ < tries 50 {
@@ -1307,7 +1294,6 @@ $ `stdlib/std/time.nu`
             ( kill pid ( posix_const `SIGKILL` ) )
             ( waitpid pid status_p 0 )
         } {}
-        ( nurl_free status_buf )
         ( nurl_poke c 4 1 )  // waited
     }
 }
@@ -1324,6 +1310,8 @@ $ `stdlib/std/time.nu`
         ? != # i scratch 0 { ( nurl_free scratch ) } {}
         : s line # s ( nurl_peek c 12 )
         ? != # i line 0 { ( nurl_free line ) } {}
+        : s io # s ( nurl_peek c 15 )
+        ? != # i io 0 { ( nurl_free io ) } {}
         ( nurl_free c )
     }
 }
@@ -1459,16 +1447,6 @@ $ `stdlib/std/time.nu`
         ^ ( __proc_kill_posix raw sig )
     } {}
     ^ ( nurl_proc_spawn_kill raw sig )
-}
-
-// The child's shutdown, run by its last owner: close the pipes, stop
-// and reap a child nobody waited for, free the block.
-@ __proc_shutdown i raw → v {
-    ? != ( posix_const `O_NONBLOCK` ) -1 {
-        ( __proc_free_posix raw )
-    } {
-        ( nurl_proc_spawn_free raw )
-    }
 }
 
 // Let go of `p` now rather than at the end of its owner's scope; the

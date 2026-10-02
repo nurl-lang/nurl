@@ -227,14 +227,14 @@ $ `stdlib/std/bytes.nu`
     : ~ b fail F
     ~ && < ai an ! fail {
         : String rname ( __dns_read_name resp off )
-        ? == ( string_len rname ) 0 { ( string_free rname ) = fail T } {
+        ? == ( string_len rname ) 0 { = fail T } {
             = off ( __dns_skip_name resp off )
-            ? | < off 0 > + off 10 n { ( string_free rname ) = fail T } {
+            ? | < off 0 > + off 10 n { = fail T } {
                 : i rtype ( __dns_u16 resp off )
                 : i rdlen ( __dns_u16 resp + off 8 )
                 : i rdoff + off 10
                 = off + rdoff rdlen
-                ? | < rdlen 0 > off n { ( string_free rname ) = fail T } {
+                ? | < rdlen 0 > off n { = fail T } {
                     ? ( nurl_str_eq ( string_data rname ) ( string_data want ) ) {
                         ? && == rtype ( dns_qtype_a ) == rdlen 4 {
                             ( vec_push [i] out ?? ( bytes_read_u32_be resp rdoff ) { T x → # i x F → 0 } )
@@ -242,19 +242,16 @@ $ `stdlib/std/bytes.nu`
                             ? == rtype ( dns_qtype_cname ) {
                                 : String target ( __dns_read_name resp rdoff )
                                 ? > ( string_len target ) 0 {
-                                    ( string_free want )
                                     = want target
-                                } { ( string_free target ) }
+                                } {}
                             } {}
                         }
                     } {}
-                    ( string_free rname )
                 }
             }
         }
         = ai + ai 1
     }
-    ( string_free want )
     ? fail {
         ^ @ !( Vec i ) DnsErr { F # DnsErr DnsBadLabel }
     } {}
