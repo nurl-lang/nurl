@@ -1269,6 +1269,8 @@
 //  data (statement list etc.); allocated in main()
 //  only when --borrowck is set
 : ~ i g_bck_depth 0  // block-nesting depth during the statement walk
+: ~ i g_bck_ownerless 0  // owner-less `store` rows pending in this statement (bck_take_owner_stores)
+: ~ i g_bck_sx_gen -1  // g_bck_gen of the last function that stored a value in a binding's value (bck_has_stored_in)
 : ~ i g_bck_gen 0  // analyzed-function generation for the binding-name
 //  intern table — bumped per bck_analyze so entries
 //  from earlier functions read as misses without any
@@ -18595,6 +18597,7 @@
 // argument `argidx`). Rides the pending-call list: same row shape.
 @ bck_stash_store s name i line s callee s argidx s kind → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        ? & ( seq kind `store` ) ( seq callee `-` ) { = g_bck_ownerless + g_bck_ownerless 1 } {}
         : s cur ( nurl_sym_get g_bck `ppends` )
         : s add ( nurl_str_cat3
         ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
@@ -18635,14 +18638,16 @@
         // carry no reads, are not mislabelled.
         ( nurl_sym_set g_bck `reads` `` )
         // Handovers first: a move must not take along what moved on.
-        : ~ s xrest ( nurl_sym_get g_bck `pxfers` )
-        ( nurl_sym_set g_bck `pxfers` `` )
-        ~ != 0 ( nurl_str_len xrest ) {
-            : s xs ( str_first_word xrest ) = xrest ( str_skip_word xrest )
-            : s xd ( str_first_word xrest ) = xrest ( str_skip_word xrest )
-            : s xl ( str_first_word xrest ) = xrest ( str_skip_word xrest )
-            ( bck_record2 `xfer` xs ( nurl_str_to_int xl ) ( nurl_str_cat `=` xd ) `0` )
-        }
+        ? != 0 ( nurl_sym_len g_bck `pxfers` ) {
+            : ~ s xrest ( nurl_sym_get g_bck `pxfers` )
+            ( nurl_sym_set g_bck `pxfers` `` )
+            ~ != 0 ( nurl_str_len xrest ) {
+                : s xs ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+                : s xd ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+                : s xl ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+                ( bck_record2 `xfer` xs ( nurl_str_to_int xl ) ( nurl_str_cat `=` xd ) `0` )
+            }
+        } {}
         ~ != 0 ( nurl_str_len rest ) {
             : s nm ( str_first_word rest )
             = rest ( str_skip_word rest )
@@ -18665,6 +18670,7 @@
         // …and the calls whose move effect is not decidable yet.
         : ~ s prest ( nurl_sym_get g_bck `ppends` )
         ( nurl_sym_set g_bck `ppends` `` )
+        = g_bck_ownerless 0
         ~ != 0 ( nurl_str_len prest ) {
             : s pnm ( str_first_word prest )
             = prest ( str_skip_word prest )
@@ -18689,7 +18695,7 @@
     // (bck_agg_field_alias): those rows name it as their owner and go in
     // after the binding row — an `= t …` releases what t's old value
     // held first (bck_kill_stored_in).
-    : s held ( bck_take_owner_stores )
+    : s held ? == g_bck_ownerless 0 `` ( bck_take_owner_stores )
     ( bck_flush_moves )
     ( bck_record kind name line )
     ? != 0 ( nurl_str_len held ) { ( bck_emit_owner_stores held name ) } {}
@@ -18700,8 +18706,8 @@
 @ bck_take_owner_stores → s {
     : ~ s held ( nurl_str_cat `` `` )
     ? | == g_borrowck 0 != g_bck_rec_off 0 { ^ held } {}
+    = g_bck_ownerless 0
     : s cur ( nurl_sym_get g_bck `ppends` )
-    ? == 0 ( nurl_str_len cur ) { ^ held } {}
     : ~ s keep ``
     : ~ s rest ( nurl_str_cat cur `` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -19050,9 +19056,10 @@
     ? __pend
     { : s f5 ( bck_field rec 5 )
         // A store's owner binding (`=t`, bck_emit_owner_stores) is an id too.
-        : s f5x ? & != 0 ( nurl_str_len f5 ) == ( nurl_str_get f5 0 ) 61
-        ( nurl_str_cat `=` ( nurl_str_int ( bck_intern ( nurl_str_slice f5 1 - ( nurl_str_len f5 ) 1 ) ) ) ) ( nurl_str_cat f5 `` )
-        ^ ( nurl_str_cat4 five `\t` f5x
+        ? & != 0 ( nurl_str_len f5 ) == ( nurl_str_get f5 0 ) 61 {
+            ^ ( nurl_str_cat4 five `\t` ( nurl_str_cat `=` ( nurl_str_int ( bck_intern ( nurl_str_slice f5 1 - ( nurl_str_len f5 ) 1 ) ) ) )
+            ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) } {}
+        ^ ( nurl_str_cat4 five `\t` f5
         ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) }
     {}
     five
@@ -19066,6 +19073,8 @@
 
 // Does binding `oid` hold values other bindings were stored into?
 @ bck_has_stored_in i oid → b {
+    // Most functions store nothing in a binding's value: no key to build.
+    ? != g_bck_sx_gen g_bck_gen { ^ F } {}
     ^ != 0 ( nurl_sym_len g_bck ( bck_sx_key ( nurl_str_int oid ) ) )
 }
 
@@ -19339,218 +19348,224 @@
         // (move flushed AFTER it) reads its arg while still Owned.
         ( bck_check_moved_reads ( bck_field rec 2 )
         ( nurl_str_to_int ( bck_field rec 3 ) ) st )
-        ? ( seq kind `ret` ) {
-            : s after_defers ( bck_apply_defers st )
-            = st ( nurl_str_cat `!` `` )
-            = p hi
-            = done T
-        } {}
-        ? ( seq kind `let` ) {
-            // A `let` (re)binds the name — Owned, reviving a Moved one.
-            = st ( bck_st_set st ( nurl_str_to_int ( bck_field rec 1 ) ) BCK_OWNED )
-            = p + p 1
-            = done T
-        } {}
-        ? & ! done ( seq kind `assign` ) {
-            // `= x ...` gives x a fresh value — Owned, reviving x. Its old
-            // value, if x owned it, is dropped with whatever was stored in it.
-            : i asid ( nurl_str_to_int ( bck_field rec 1 ) )
-            ? & == BCK_OWNED ( bck_st_get st asid ) ( bck_has_stored_in asid )
-            { = st ( bck_kill_stored_in st asid ( nurl_str_to_int ( bck_field rec 3 ) ) T ) } {}
-            = st ( bck_st_set st asid BCK_OWNED )
-            = p + p 1
-            = done T
-        } {}
-        ? & ! done ( seq kind `move` ) {
-            // A consumed binding: Owned -> Moved; remember where.
-            : s mvn ( bck_field rec 1 )
-            : i mvid ( nurl_str_to_int mvn )
-            // --strict-borrowck: consuming a MAYBE-moved binding is the
-            // conditional double-free the default checker deliberately
-            // lets through (docs/MEMORY.md §6.2/§6.5): freed on one arm
-            // of a `?`, then freed again — a real double-free on the
-            // path where the first free ran. Opt-in because it also
-            // flags the mutually-exclusive-frees pattern the default
-            // no-false-positive contract protects.
-            ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvid ) {
-                ( bck_diag_maybe mvid ( nurl_str_to_int ( bck_field rec 3 ) ) )
+        // Most rows are plain statements: past their reads, nothing to do —
+        // and no dozen kind compares to find that out.
+        ? ( seq kind `expr` ) { = p + p 1 } {
+            ? ( seq kind `ret` ) {
+                : s after_defers ( bck_apply_defers st )
+                = st ( nurl_str_cat `!` `` )
+                = p hi
+                = done T
             } {}
-            ? == BCK_STORED ( bck_st_get st mvid ) { ( bck_diag_stored mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
-            ? & == BCK_OWNED ( bck_st_get st mvid ) ( bck_has_stored_in mvid )
-            { = st ( bck_kill_stored_in st mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
-            = st ( bck_st_set st mvid BCK_MOVED )
-            ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
-            ( bck_field rec 3 ) )
-            = p + p 1
-            = done T
-        } {}
-        ? & ! done ( seq kind `maybemove` ) {
-            // A binding that MAY have been consumed here: its handle is
-            // one of several a value-producing `?` / `??` could have
-            // selected, so on some paths the new owner holds it and on
-            // others it does not. That is exactly Owned ⊔ Moved, so the
-            // transition is the lattice join rather than a set — an
-            // already definitely-Moved binding stays Moved, and a second
-            // maybe-move does not walk the state back down.
-            //
-            // No diagnostic fires HERE: aliasing a handle is legal, and
-            // it is the later CONSUME of a maybe-moved binding that
-            // double-frees. The `move` arm above reports that (strict).
-            : s qvn ( bck_field rec 1 )
-            : i qvid ( nurl_str_to_int qvn )
-            = st ( bck_st_set st qvid
-            ( bck_join ( bck_st_get st qvid ) BCK_MOVED ) )
-            ( nurl_sym_set g_bck ( nurl_str_cat `ml_` qvn )
-            ( bck_field rec 3 ) )
-            = p + p 1
-            = done T
-        } {}
-        ? & ! done ( seq kind `xfer` ) {
-            // `: T b a`: what `a`'s value held, `b` holds now.
-            : s xsn ( bck_field rec 1 )
-            : s xd5 ( bck_field rec 5 )
-            : s xdn ( nurl_str_slice xd5 1 - ( nurl_str_len xd5 ) 1 )
-            : ~ s xrest ( nurl_sym_get g_bck ( bck_sx_key xsn ) )
-            ~ != 0 ( nurl_str_len xrest ) {
-                : s ys ( str_first_word xrest ) = xrest ( str_skip_word xrest )
-                ? ( seq ( nurl_sym_get g_bck ( bck_so_key ys ) ) xsn ) {
-                    ( nurl_sym_set g_bck ( bck_so_key ys ) xdn )
-                    : s dk ( bck_sx_key xdn )
-                    : s dl ( nurl_sym_get g_bck dk )
-                    ? ! ( str_contains_word dl ys )
-                    { ( nurl_sym_set g_bck dk ? == 0 ( nurl_str_len dl ) ( nurl_str_cat ys `` ) ( nurl_str_cat3 dl ` ` ys ) ) } {}
-                } {}
-            }
-            = p + p 1
-            = done T
-        } {}
-        ? & ! done | | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) {
-            // A value stored into an owner. A literal built as an argument
-            // stores only when its callee keeps (or sinks) that argument —
-            // a view handed to a reader leaves the binding its owner.
-            : s svn ( bck_field rec 1 )
-            : i svid ( nurl_str_to_int svn )
-            : s scal ( bck_field rec 5 )
-            : s saix ( bck_field rec 6 )
-            // `pendkeep` — a handle passed bare to a callee that keeps it
-            // (vec_push's element); a sink there is the `pendcall` move.
-            : b s_sink ( str_contains_word ( nurl_sym_get g_fn_sink scal ) saix )
-            // Stored into an owner that drops it (g_fn_stores) — not kept
-            // in raw memory the caller still frees by hand.
-            : b s_keep ( str_contains_word ( nurl_sym_get g_fn_stores scal ) saix )
-            : b takes ? ( seq kind `store` ) T ? ( seq kind `pendkeep` ) & s_keep ! s_sink | s_sink s_keep
-            // A literal argument whose callee CONSUMES it: the value went
-            // with it, as a bare argument to that sink would have.
-            : b s_moves & ( seq kind `pendstore` ) s_sink
-            ? & takes s_moves {
-                : i mcur ( bck_st_get st svid )
-                ? == mcur BCK_STORED { ( bck_diag_stored svid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
-                ? | == mcur BCK_OWNED == mcur BCK_UNINIT {
-                    = st ( bck_st_set st svid BCK_MOVED )
-                    ( nurl_sym_set g_bck ( nurl_str_cat `ml_` svn ) ( bck_field rec 3 ) )
-                    ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` svn ) ( bck_field rec 3 ) )
-                    ( nurl_str_cat scal ` (in a literal it was handed)` ) )
-                } {}
+            ? ( seq kind `let` ) {
+                // A `let` (re)binds the name — Owned, reviving a Moved one.
+                = st ( bck_st_set st ( nurl_str_to_int ( bck_field rec 1 ) ) BCK_OWNED )
+                = p + p 1
+                = done T
             } {}
-            ? & takes ! s_moves {
-                : i cur ( bck_st_get st svid )
-                ? == cur BCK_STORED { ( bck_diag_stored svid ( nurl_str_to_int ( bck_field rec 3 ) ) T ) } {}
-                ? | == cur BCK_OWNED == cur BCK_UNINIT {
-                    = st ( bck_st_set st svid BCK_STORED )
-                    ( nurl_sym_set g_bck ( nurl_str_cat `sl_` svn ) ( bck_field rec 3 ) )
-                    // Stored into a binding's value (`: H t @ H { a }`): it
-                    // lives as long as that value does (bck_kill_stored_in).
-                    ? == ( nurl_str_get scal 0 ) 61 {
-                        : s oids ( nurl_str_slice scal 1 - ( nurl_str_len scal ) 1 )
-                        ( nurl_sym_set g_bck ( bck_so_key svn ) oids )
-                        : s sxk ( bck_sx_key oids )
-                        : s sx ( nurl_sym_get g_bck sxk )
-                        ? ! ( str_contains_word sx svn )
-                        { ( nurl_sym_set g_bck sxk ? == 0 ( nurl_str_len sx ) ( nurl_str_cat svn `` ) ( nurl_str_cat3 sx ` ` svn ) ) } {}
+            ? & ! done ( seq kind `assign` ) {
+                // `= x ...` gives x a fresh value — Owned, reviving x. Its old
+                // value, if x owned it, is dropped with whatever was stored in it.
+                : i asid ( nurl_str_to_int ( bck_field rec 1 ) )
+                ? & == BCK_OWNED ( bck_st_get st asid ) ( bck_has_stored_in asid )
+                { = st ( bck_kill_stored_in st asid ( nurl_str_to_int ( bck_field rec 3 ) ) T ) } {}
+                = st ( bck_st_set st asid BCK_OWNED )
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done ( seq kind `move` ) {
+                // A consumed binding: Owned -> Moved; remember where.
+                : s mvn ( bck_field rec 1 )
+                : i mvid ( nurl_str_to_int mvn )
+                // --strict-borrowck: consuming a MAYBE-moved binding is the
+                // conditional double-free the default checker deliberately
+                // lets through (docs/MEMORY.md §6.2/§6.5): freed on one arm
+                // of a `?`, then freed again — a real double-free on the
+                // path where the first free ran. Opt-in because it also
+                // flags the mutually-exclusive-frees pattern the default
+                // no-false-positive contract protects.
+                ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvid ) {
+                    ( bck_diag_maybe mvid ( nurl_str_to_int ( bck_field rec 3 ) ) )
+                } {}
+                ? == BCK_STORED ( bck_st_get st mvid ) { ( bck_diag_stored mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
+                ? & == BCK_OWNED ( bck_st_get st mvid ) ( bck_has_stored_in mvid )
+                { = st ( bck_kill_stored_in st mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
+                = st ( bck_st_set st mvid BCK_MOVED )
+                ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
+                ( bck_field rec 3 ) )
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done ( seq kind `maybemove` ) {
+                // A binding that MAY have been consumed here: its handle is
+                // one of several a value-producing `?` / `??` could have
+                // selected, so on some paths the new owner holds it and on
+                // others it does not. That is exactly Owned ⊔ Moved, so the
+                // transition is the lattice join rather than a set — an
+                // already definitely-Moved binding stays Moved, and a second
+                // maybe-move does not walk the state back down.
+                //
+                // No diagnostic fires HERE: aliasing a handle is legal, and
+                // it is the later CONSUME of a maybe-moved binding that
+                // double-frees. The `move` arm above reports that (strict).
+                : s qvn ( bck_field rec 1 )
+                : i qvid ( nurl_str_to_int qvn )
+                = st ( bck_st_set st qvid
+                ( bck_join ( bck_st_get st qvid ) BCK_MOVED ) )
+                ( nurl_sym_set g_bck ( nurl_str_cat `ml_` qvn )
+                ( bck_field rec 3 ) )
+                = p + p 1
+                = done T
+            } {}
+            // (`x` starts no other kind: one byte, not a compare per row visit.)
+            ? & ! done == ( nurl_str_get kind 0 ) 120 {
+                // `: T b a`: what `a`'s value held, `b` holds now.
+                : s xsn ( bck_field rec 1 )
+                : s xd5 ( bck_field rec 5 )
+                : s xdn ( nurl_str_slice xd5 1 - ( nurl_str_len xd5 ) 1 )
+                : ~ s xrest ? == g_bck_sx_gen g_bck_gen ( nurl_sym_get g_bck ( bck_sx_key xsn ) ) ``
+                ~ != 0 ( nurl_str_len xrest ) {
+                    : s ys ( str_first_word xrest ) = xrest ( str_skip_word xrest )
+                    ? ( seq ( nurl_sym_get g_bck ( bck_so_key ys ) ) xsn ) {
+                        ( nurl_sym_set g_bck ( bck_so_key ys ) xdn )
+                        : s dk ( bck_sx_key xdn )
+                        : s dl ( nurl_sym_get g_bck dk )
+                        ? ! ( str_contains_word dl ys )
+                        { ( nurl_sym_set g_bck dk ? == 0 ( nurl_str_len dl ) ( nurl_str_cat ys `` ) ( nurl_str_cat3 dl ` ` ys ) ) } {}
+                    } {}
+                }
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done | | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) {
+                // A value stored into an owner. A literal built as an argument
+                // stores only when its callee keeps (or sinks) that argument —
+                // a view handed to a reader leaves the binding its owner.
+                : s svn ( bck_field rec 1 )
+                : i svid ( nurl_str_to_int svn )
+                : s scal ( bck_field rec 5 )
+                : s saix ( bck_field rec 6 )
+                // `pendkeep` — a handle passed bare to a callee that keeps it
+                // (vec_push's element); a sink there is the `pendcall` move.
+                : b s_sink ( str_contains_word ( nurl_sym_get g_fn_sink scal ) saix )
+                // Stored into an owner that drops it (g_fn_stores) — not kept
+                // in raw memory the caller still frees by hand.
+                : b s_keep ( str_contains_word ( nurl_sym_get g_fn_stores scal ) saix )
+                : b takes ? ( seq kind `store` ) T ? ( seq kind `pendkeep` ) & s_keep ! s_sink | s_sink s_keep
+                // A literal argument whose callee CONSUMES it: the value went
+                // with it, as a bare argument to that sink would have.
+                : b s_moves & ( seq kind `pendstore` ) s_sink
+                ? & takes s_moves {
+                    : i mcur ( bck_st_get st svid )
+                    ? == mcur BCK_STORED { ( bck_diag_stored svid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
+                    ? | == mcur BCK_OWNED == mcur BCK_UNINIT {
+                        = st ( bck_st_set st svid BCK_MOVED )
+                        ( nurl_sym_set g_bck ( nurl_str_cat `ml_` svn ) ( bck_field rec 3 ) )
+                        ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` ( nurl_sym_get2 g_bck `rv_` svn ) ( bck_field rec 3 ) )
+                        ( nurl_str_cat scal ` (in a literal it was handed)` ) )
                     } {}
                 } {}
-            } {}
-            = p + p 1
-            = done T
-        } {}
-        ? & ! done | ( seq kind `pendcall` ) ( seq kind `pendretain` ) {
-            // The call whose move effect could not be decided when it
-            // was compiled (bck_stash_pending_call). Every summary is
-            // final by the time this walk runs — the function was
-            // deferred to the end of the module precisely for this — so
-            // ask them now:
-            //   the callee SINKS that parameter   → a definite move,
-            //     exactly as if the sink set had been known inline;
-            //   the callee may RETURN its handle  → a maybe-move, the
-            //     `?`-selected-handle case in another spelling;
-            //   neither                            → nothing happened.
-            : s pvn ( bck_field rec 1 )
-            : i pvid ( nurl_str_to_int pvn )
-            : s pcal ( bck_field rec 5 )
-            : s paix ( bck_field rec 6 )
-            // A tracked raw-string owner moves only when the callee CONSUMES
-            // that parameter. Escaping is not consuming: a callee may store a
-            // borrowed pointer in a scratch container it never frees (argv for
-            // execvp), and calling that a move both strands the buffer and
-            // nulls a binding the caller still reads. The same consumption
-            // fact controls emitted IR (mem_emit_arg_flags).
-            : s psink ( nurl_sym_get g_fn_sink pcal )
-            : s palias ? ( seq kind `pendretain` ) `` ( nurl_sym_get g_fn_ret_alias pcal )
-            ? ( str_contains_word psink paix )
-            { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )
-                { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) ) } {}
-                ? == BCK_STORED ( bck_st_get st pvid ) { ( bck_diag_stored pvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
-                = st ( bck_st_set st pvid BCK_MOVED )
-                ? ( seq kind `pendretain` ) {
-                    // A later borrowing argument on this same source line
-                    // must not replace the actual retaining call's cause.
-                    : s name ( nurl_sym_get2 g_bck `rv_` pvn )
-                    ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` name ( bck_field rec 3 ) ) pcal )
+                ? & takes ! s_moves {
+                    : i cur ( bck_st_get st svid )
+                    ? == cur BCK_STORED { ( bck_diag_stored svid ( nurl_str_to_int ( bck_field rec 3 ) ) T ) } {}
+                    ? | == cur BCK_OWNED == cur BCK_UNINIT {
+                        = st ( bck_st_set st svid BCK_STORED )
+                        ( nurl_sym_set g_bck ( nurl_str_cat `sl_` svn ) ( bck_field rec 3 ) )
+                        // Stored into a binding's value (`: H t @ H { a }`): it
+                        // lives as long as that value does (bck_kill_stored_in).
+                        ? == ( nurl_str_get scal 0 ) 61 {
+                            : s oids ( nurl_str_slice scal 1 - ( nurl_str_len scal ) 1 )
+                            ( nurl_sym_set g_bck ( bck_so_key svn ) oids )
+                            = g_bck_sx_gen g_bck_gen
+                            : s sxk ( bck_sx_key oids )
+                            : s sx ( nurl_sym_get g_bck sxk )
+                            ? ! ( str_contains_word sx svn )
+                            { ( nurl_sym_set g_bck sxk ? == 0 ( nurl_str_len sx ) ( nurl_str_cat svn `` ) ( nurl_str_cat3 sx ` ` svn ) ) } {}
+                        } {}
+                    } {}
                 } {}
-                ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
-            { ? ( str_contains_word palias paix )
-                { = st ( bck_st_set st pvid
-                    ( bck_join ( bck_st_get st pvid ) BCK_MOVED ) )
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done | ( seq kind `pendcall` ) ( seq kind `pendretain` ) {
+                // The call whose move effect could not be decided when it
+                // was compiled (bck_stash_pending_call). Every summary is
+                // final by the time this walk runs — the function was
+                // deferred to the end of the module precisely for this — so
+                // ask them now:
+                //   the callee SINKS that parameter   → a definite move,
+                //     exactly as if the sink set had been known inline;
+                //   the callee may RETURN its handle  → a maybe-move, the
+                //     `?`-selected-handle case in another spelling;
+                //   neither                            → nothing happened.
+                : s pvn ( bck_field rec 1 )
+                : i pvid ( nurl_str_to_int pvn )
+                : s pcal ( bck_field rec 5 )
+                : s paix ( bck_field rec 6 )
+                // A tracked raw-string owner moves only when the callee CONSUMES
+                // that parameter. Escaping is not consuming: a callee may store a
+                // borrowed pointer in a scratch container it never frees (argv for
+                // execvp), and calling that a move both strands the buffer and
+                // nulls a binding the caller still reads. The same consumption
+                // fact controls emitted IR (mem_emit_arg_flags).
+                : s psink ( nurl_sym_get g_fn_sink pcal )
+                : s palias ? ( seq kind `pendretain` ) `` ( nurl_sym_get g_fn_ret_alias pcal )
+                ? ( str_contains_word psink paix )
+                { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )
+                    { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) ) } {}
+                    ? == BCK_STORED ( bck_st_get st pvid ) { ( bck_diag_stored pvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
+                    = st ( bck_st_set st pvid BCK_MOVED )
+                    ? ( seq kind `pendretain` ) {
+                        // A later borrowing argument on this same source line
+                        // must not replace the actual retaining call's cause.
+                        : s name ( nurl_sym_get2 g_bck `rv_` pvn )
+                        ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` name ( bck_field rec 3 ) ) pcal )
+                    } {}
                     ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
-                {} }
-            = p + p 1
-            = done T
-        } {}
-        ? & ! done ( seq kind `cond` ) {
-            : i ec ( bck_match_close p `cond` `endcond` )
-            = st ( bck_handle_cond p ec st )
-            = p + ec 1
-            = done T
-        } {}
-        ? & ! done ( seq kind `match` ) {
-            : i em ( bck_match_close p `match` `endmatch` )
-            = st ( bck_handle_match p em st )
-            = p + em 1
-            = done T
-        } {}
-        ? & ! done ( seq kind `block` ) {
-            : i eb ( bck_match_close p `block` `endblock` )
-            : s bk ( bck_field rec 1 )
-            ? ( seq bk `defer` ) {
-                // Registration arms this site; its body runs only at function exit.
-                : i flag ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` ( nurl_str_int p ) ) ) )
-                = st ( bck_st_set st flag BCK_MOVED )
-            } {
-                ? | ( seq bk `loop` ) ( seq bk `foreach` ) {
-                    // Pass the controlling `~ cond` reads (carried in the
-                    // block row's reads field) and its line so bck_loop can
-                    // re-check them against the loop's back-edge state.
-                    = st ( bck_loop + p 1 eb st ( bck_field rec 2 )
-                    ( nurl_str_to_int ( bck_field rec 3 ) ) )
+                { ? ( str_contains_word palias paix )
+                    { = st ( bck_st_set st pvid
+                        ( bck_join ( bck_st_get st pvid ) BCK_MOVED ) )
+                        ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
+                    {} }
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done ( seq kind `cond` ) {
+                : i ec ( bck_match_close p `cond` `endcond` )
+                = st ( bck_handle_cond p ec st )
+                = p + ec 1
+                = done T
+            } {}
+            ? & ! done ( seq kind `match` ) {
+                : i em ( bck_match_close p `match` `endmatch` )
+                = st ( bck_handle_match p em st )
+                = p + em 1
+                = done T
+            } {}
+            ? & ! done ( seq kind `block` ) {
+                : i eb ( bck_match_close p `block` `endblock` )
+                : s bk ( bck_field rec 1 )
+                ? ( seq bk `defer` ) {
+                    // Registration arms this site; its body runs only at function exit.
+                    : i flag ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` ( nurl_str_int p ) ) ) )
+                    = st ( bck_st_set st flag BCK_MOVED )
                 } {
-                    = st ( bck_walk_seq + p 1 eb st )
+                    ? | ( seq bk `loop` ) ( seq bk `foreach` ) {
+                        // Pass the controlling `~ cond` reads (carried in the
+                        // block row's reads field) and its line so bck_loop can
+                        // re-check them against the loop's back-edge state.
+                        = st ( bck_loop + p 1 eb st ( bck_field rec 2 )
+                        ( nurl_str_to_int ( bck_field rec 3 ) ) )
+                    } {
+                        = st ( bck_walk_seq + p 1 eb st )
+                    }
                 }
-            }
-            = p + eb 1
-            = done T
-        } {}
-        // expr / stray end-marker — reads already checked above
-        ? ! done { = p + p 1 } {}
+                = p + eb 1
+                = done T
+            } {}
+            // stray end-marker — reads already checked above
+            ? ! done { = p + p 1 } {}
+        }
     }
     st
 }
