@@ -147,8 +147,6 @@ $ `stdlib/core/rcbox.nu`
 // The render state's handle (private to this module).
 : TplR { s ctl }
 
-@ TplR_share TplR h → TplR { ^ @ TplR { # s ( rcbox_share # i . h ctl ) } }
-
 @ TplR_drop sink TplR h → v {
     ( mem_forget h )
     ( rcbox_release [TplRImpl] # i . h ctl )

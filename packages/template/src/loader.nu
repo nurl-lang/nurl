@@ -39,7 +39,6 @@ $ `src/template.nu`
                             ?? ( read_file ( string_data path ) ) {
                                 T body → {
                                     ( tset_add t ( string_data name ) ( string_data body ) )
-                                    ( string_free body )
                                     = count + count 1
                                 }
                                 F _ → {}
