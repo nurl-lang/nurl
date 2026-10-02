@@ -574,7 +574,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ !v String { T 0 }
 }
 
-@ __gws_write *GgufSImpl s ( Vec u ) bytes → !v String {
+@ __gws_write * GgufSImpl s ( Vec u ) bytes → !v String {
     ?? ( file_write_chunk . s fh bytes ) {
         T _ → { ^ @ !v String { T 0 } }
         F _ → { ^ ( __gws_err `gguf: file write failed` ) }
