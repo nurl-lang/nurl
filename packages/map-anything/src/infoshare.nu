@@ -29,7 +29,6 @@
 // through the module's own final norm (norm_intermediate=True).
 //
 //   ( is_load w kit )                        → InfoShare
-//   ( is_free ish )                          → v
 //   ( is_place kit ish X v tpv tok np )     → b   one view into the seq
 //   ( is_finish_input kit ish X nv np )     → b   fusion LN + viewpos + scale
 //   ( is_forward kit ish ws X n i7 i11 fin ) → b  16 blocks + normed taps
@@ -65,21 +64,12 @@ $ `src/load.nu`
     ( Vec f ) scaletok  // [1536] host — placed once per run
 }
 
-@ is_free sink InfoShare ish → v {
-    ( vec_free_with [MaBlk] . ish blocks \ MaBlk b → v { ( ma_blk_free b ) } )
-    ( gk_dbuf_free . ish normg ) ( gk_dbuf_free . ish normb )
-    ( gk_dbuf_free . ish fng ) ( gk_dbuf_free . ish fnb )
-    ( gk_dbuf_free . ish viewpos )
-    ( vec_free [f] . ish scaletok )
-}
-
-@ is_load * Lw w GpuKit kit → InfoShare {
+@ is_load Lw w GpuKit kit → InfoShare {
     : ( Vec MaBlk ) bs ( vec_new [MaBlk] )
     : ~ i i0 0
     ~ < i0 IS_DEPTH {
         : String p ( maw_prefix `info_sharing.self_attention_blocks` i0 )
         ( vec_push [MaBlk] bs ( maw_block w kit ( string_data p ) IS_EPS IS_DIM IS_SWH ) )
-        ( string_free p )
         = i0 + i0 1
     }
     : ( Vec f ) st ( vec_with_cap [f] IS_DIM )
@@ -136,7 +126,6 @@ $ `src/load.nu`
     : ( Vec i ) sa ( _ma_i2 IS_DIM 1 )
     : ( Vec i ) sb ( _ma_i2 0 1 )
     : b okpe ( gkd_ew_bc kit `add` `+` v0 v0 . ish viewpos od sa sb )
-    ( vec_free [i] od ) ( vec_free [i] sa ) ( vec_free [i] sb )
     ? okpe {} { ^ F }
     : GkBuf last ( ma_view x * * nv tpv IS_DIM IS_DIM )
     ^ ( gk_dbuf_upload kit last . ish scaletok )

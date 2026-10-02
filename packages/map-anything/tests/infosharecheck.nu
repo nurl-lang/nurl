@@ -43,10 +43,8 @@ $ `src/infoshare.nu`
                     = j + j 1
                 }
             } {}
-            ( vec_free [u] raw )
         }
     }
-    ( string_free p )
     ^ out
 }
 
@@ -75,9 +73,6 @@ $ `src/infoshare.nu`
         T → { = ok T }
         F → {}
     }
-    ( string_free p )
-    ( vec_free [u] out )
-    ( vec_free [f] host )
     ^ ok
 }
 
@@ -98,11 +93,10 @@ $ `src/infoshare.nu`
         ^ ( __ic_die `cannot read feats.bin / regs.bin` )
     }
 
-    : ~ * Lw lw # *Lw 0
+    : ~ Lw lw ( lw_none )
     ?? ( lw_open model ) {
         F e → {
             ( puts ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
         T got → { = lw got }
@@ -139,9 +133,6 @@ $ `src/infoshare.nu`
 
     : GkBuf x ( gk_dbuf_new kit * n IS_DIM GK_F32 )
     ? ( gk_dbuf_upload kit x hx ) {} { ^ ( __ic_die `upload failed` ) }
-    ( vec_free [f] hx )
-    ( vec_free [f] feats )
-    ( vec_free [f] regs )
 
     ? ( is_finish_input kit ish x nv np ) {} { ^ ( __ic_die `is_finish_input failed` ) }
     : MaWs ws ( ma_ws_new kit n IS_DIM IS_HEADS IS_SWH )

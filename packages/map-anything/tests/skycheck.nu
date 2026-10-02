@@ -31,7 +31,7 @@ $ `src/sky.nu`
     : i tw ( nurl_str_to_int ( nurl_argv 4 ) )
     : i th ( nurl_str_to_int ( nurl_argv 5 ) )
 
-    : ~ * Frame fr # *Frame 0
+    : ~ Frame fr # Frame 0
     ?? ( pp_open img ) {
         F e → {
             ( puts ( string_data e ) )
@@ -45,13 +45,13 @@ $ `src/sky.nu`
                 }
                 T got → { = fr got }
             }
-            ( image_free im )
         }
     }
     : Sky sky ( sky_open model )
     ? . sky ok {} { ^ ( __sc_die `cannot load skyseg.onnx` ) }
     : i hw * tw th
-    : *u mask # *u ( nurl_zalloc hw )
+    : ( Vec u ) mask__v ( vec_zeroed [u] hw )
+    : *u mask # *u ( vec_data [u] mask__v )
     : ~ i j 0
     ~ < j hw { = . mask j # u 1 = j + j 1 }
     ? ( sky_mask sky ( pp_data fr ) tw th mask ) {} { ^ ( __sc_die `sky_mask failed` ) }

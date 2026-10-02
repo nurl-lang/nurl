@@ -10,6 +10,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/ext/env.nu`
 $ `src/weights.nu`
 
 : i WC_DIM 1536
@@ -24,22 +25,20 @@ $ `src/weights.nu`
     : String m ( string_from ? ok `ok   ` `FAIL ` )
     ( string_push_str m what )
     ( puts ( string_data m ) )
-    ( string_free m )
     ? ok {} { = __wc_fails + __wc_fails 1 }
 }
 
 @ main → i {
-    : ~ s path ( __wc_default )
-    ? > ( nurl_argc ) 1 { = path ( nurl_argv 1 ) } {}
-    : !*Lw String r ( lw_open path )
-    : ~ * Lw w # *Lw 0
+    // argv[1] as a String (nurl_argv hands out a raw copy nobody released)
+    : String pathv ? > ( nurl_argc ) 1 ( env_arg 1 ) ( string_from ( __wc_default ) )
+    : s path ( string_data pathv )
+    : !Lw String r ( lw_open path )
+    : ~ Lw w ( lw_none )
     ?? r {
         F e → {
             : String m ( string_from `cannot open checkpoint: ` )
             ( string_push_str m ( string_data e ) )
             ( puts ( string_data m ) )
-            ( string_free m )
-            ( string_free e )
             ^ 1
         }
         T got → { = w got }
@@ -67,7 +66,8 @@ $ `src/weights.nu`
     // mapping bytes lw_f32_ptr exposes.
     : i n ( lw_nelems w `scale_token` )
     ( __wc_check == n WC_DIM `scale_token has 1536 elements` )
-    : *f host # *f ( nurl_alloc * n 8 )
+    : ( Vec u ) host__v ( vec_zeroed [u] * n 8 )
+    : *f host # *f ( vec_data [u] host__v )
     ( __wc_check ( lw_read w `scale_token` host n ) `lw_read scale_token` )
     : *u raw ( lw_f32_ptr w `scale_token` n )
     ( __wc_check != # i raw 0 `lw_f32_ptr sees contiguous f32` )
@@ -81,15 +81,14 @@ $ `src/weights.nu`
         = k + k 1
     }
     ( __wc_check same `lw_read == mapping bytes for all 1536 elements` )
-    ( nurl_free # s host )
 
     ( lw_close w )
 
     // A missing tensor records exactly one loud error — on a fresh handle,
     // so the message checked is the FIRST one (lw_error keeps only that).
-    : !*Lw String r2 ( lw_open path )
+    : !Lw String r2 ( lw_open path )
     ?? r2 {
-        F e → { ( string_free e ) ( __wc_check F `reopen for negative test` ) }
+        F e → { ( __wc_check F `reopen for negative test` ) }
         T w2 → {
             : b _m ( lw_require w2 `no.such.tensor` -1 -1 -1 -1 )
             ( __wc_check ! ( lw_ok w2 ) `missing tensor recorded` )

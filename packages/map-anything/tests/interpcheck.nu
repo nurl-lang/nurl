@@ -22,14 +22,16 @@ $ `src/interp.nu`
 
 @ __ic_case i oh i ow → v {
     : i ihw * IC_M IC_M
-    : *f pin # *f ( nurl_zalloc * 8 * IC_C ihw )
+    : ( Vec u ) pin__v ( vec_zeroed [u] * 8 * IC_C ihw )
+    : *f pin # *f ( vec_data [u] pin__v )
     : ~ i k 0
     ~ < k IC_C {
         : ~ i p 0
         ~ < p ihw { = . pin + * k ihw p ( __ic_val k p ) = p + p 1 }
         = k + k 1
     }
-    : *f pout # *f ( nurl_zalloc * 8 * IC_C * oh ow )
+    : ( Vec u ) pout__v ( vec_zeroed [u] * 8 * IC_C * oh ow )
+    : *f pout # *f ( vec_data [u] pout__v )
     // DINOv2's kludge: scale_factor = (out + 0.1)/37, torch then uses
     // its reciprocal for the coordinate map.
     : f rsy / # f IC_M + # f oh 0.1
@@ -46,9 +48,6 @@ $ `src/interp.nu`
         = j + j 1
     }
     ( puts ( string_data line ) )
-    ( string_free line )
-    ( nurl_free # s pin )
-    ( nurl_free # s pout )
 }
 
 @ main → i {

@@ -20,8 +20,6 @@
 // register-tiled kernel.
 //
 //   ( ma_ws_new kit n dim heads swh )       → MaWs
-//   ( ma_ws_free ws )                       → v
-//   ( ma_blk_free w )                       → v
 //   ( ma_block_forward kit w ws x n dim heads swh ) → b   x updated
 
 $ `stdlib/core/string.nu`
@@ -42,17 +40,6 @@ $ `deps/gpukit/src/devops.nu`
     GkBuf w3w GkBuf w3b  // [swh, dim] on device (transposed)
     GkBuf ls2
     f eps
-}
-
-@ ma_blk_free sink MaBlk w → v {
-    ( gk_dbuf_free . w n1g ) ( gk_dbuf_free . w n1b )
-    ( gk_dbuf_free . w qkvw ) ( gk_dbuf_free . w qkvb )
-    ( gk_dbuf_free . w pw ) ( gk_dbuf_free . w pb )
-    ( gk_dbuf_free . w ls1 )
-    ( gk_dbuf_free . w n2g ) ( gk_dbuf_free . w n2b )
-    ( gk_dbuf_free . w w12w ) ( gk_dbuf_free . w w12b )
-    ( gk_dbuf_free . w w3w ) ( gk_dbuf_free . w w3b )
-    ( gk_dbuf_free . w ls2 )
 }
 
 // Scratch, sized once for the largest token run the model will see.
@@ -95,15 +82,6 @@ $ `deps/gpukit/src/devops.nu`
         n }
 }
 
-@ ma_ws_free sink MaWs ws → v {
-    ( gk_dbuf_free . ws norm ) ( gk_dbuf_free . ws qkv )
-    ( gk_dbuf_free . ws qkvp ) ( gk_dbuf_free . ws kt )
-    ( gk_dbuf_free . ws att ) ( gk_dbuf_free . ws ctx )
-    ( gk_dbuf_free . ws ctxp ) ( gk_dbuf_free . ws branch )
-    ( gk_dbuf_free . ws hid ) ( gk_dbuf_free . ws sw1 )
-    ( gk_dbuf_free . ws sw2 ) ( gk_dbuf_free . ws scal )
-}
-
 // ── helpers ─────────────────────────────────────────────────────────
 
 @ _ma_i2 i a i b → ( Vec i ) {
@@ -137,7 +115,6 @@ $ `deps/gpukit/src/devops.nu`
     : ( Vec i ) as ( _ma_i2 cols 1 )
     : ( Vec i ) bs ( _ma_i2 0 1 )
     : b ok1 ( gkd_ew_bc kit `mul` `*` tmp b ls od as bs )
-    ( vec_free [i] od ) ( vec_free [i] as ) ( vec_free [i] bs )
     ? ok1 {} { ^ F }
     ^ ( gkd_add kit y y tmp )
 }
@@ -172,7 +149,6 @@ i n i dim i heads i swh → b {
     : ( Vec i ) qd ( _ma_i4 n 3 heads hd )
     : ( Vec i ) qp ( _ma_i4 1 2 0 3 )
     : b okp ( gkd_perm kit qkvp qkv qd qp )
-    ( vec_free [i] qd ) ( vec_free [i] qp )
     ? okp {} { ^ F }
     : GkBuf q ( ma_view qkvp 0 nd )
     : GkBuf k ( ma_view qkvp nd nd )
@@ -187,14 +163,12 @@ i n i dim i heads i swh → b {
         : ( Vec i ) kd ( _ma_i3 heads n hd )
         : ( Vec i ) kp ( _ma_i3 0 2 1 )
         : b okk ( gkd_perm kit kt k kd kp )
-        ( vec_free [i] kd ) ( vec_free [i] kp )
         ? okk {} { ^ F }
         : GkBuf att ( ma_view . ws att 0 * heads * n n )
         ? ( gkd_bmm kit att q kt heads n hd n 1 1 ) {} { ^ F }
         : ( Vec f ) sv ( vec_with_cap [f] 1 )
         ( vec_push [f] sv scale )
         : b oks ( gk_dbuf_upload kit . ws scal sv )
-        ( vec_free [f] sv )
         ? oks {} { ^ F }
         ? ( gkd_ew kit `mul` `*` att att . ws scal ) {} { ^ F }
         ? ( gkd_softmax_ax kit att att * heads n n 1 ) {} { ^ F }
@@ -204,7 +178,6 @@ i n i dim i heads i swh → b {
     : ( Vec i ) cd ( _ma_i3 heads n hd )
     : ( Vec i ) cp ( _ma_i3 1 0 2 )
     : b okc ( gkd_perm kit ctxp ctx cd cp )
-    ( vec_free [i] cd ) ( vec_free [i] cp )
     ? okc {} { ^ F }
     ? ( gkd_gemm kit branch ctxp . w pw . w pb 1 n dim dim 1.0 1.0 0 ) {} { ^ F }
     ? ( __ma_res kit x branch . w ls1 norm n dim ) {} { ^ F }

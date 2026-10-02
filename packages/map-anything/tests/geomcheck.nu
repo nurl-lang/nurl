@@ -37,10 +37,8 @@ $ `src/geom.nu`
                     = j + j 1
                 }
             } {}
-            ( vec_free [u] raw )
         }
     }
-    ( string_free p )
     ^ out
 }
 
@@ -85,10 +83,13 @@ $ `src/geom.nu`
     = . pose 5 / qz qn
     = . pose 6 / qw qn
 
-    : *f pts # *f ( nurl_zalloc * 24 n )
-    : *f depthz # *f ( nurl_zalloc * 8 n )
+    : ( Vec u ) pts__v ( vec_zeroed [u] * 24 n )
+    : *f pts # *f ( vec_data [u] pts__v )
+    : ( Vec u ) depthz__v ( vec_zeroed [u] * 8 n )
+    : *f depthz # *f ( vec_data [u] depthz__v )
     ( gm_world_points dirs depth pose GC_SCALE n pts depthz )
-    : *u mask # *u ( nurl_zalloc n )
+    : ( Vec u ) mask__v ( vec_zeroed [u] n )
+    : *u mask # *u ( vec_data [u] mask__v )
     ( gm_nonambig logits n mask )
     ( gm_edge_mask pts depthz h w mask )
 
@@ -112,7 +113,6 @@ $ `src/geom.nu`
         T → {}
         F → { ^ ( __gc_die `write pts` ) }
     }
-    ( vec_free [u] pout )
     : ( Vec u ) mout ( vec_with_cap [u] n )
     = j 0
     ~ < j n { ( vec_push [u] mout . mask j ) = j + j 1 }

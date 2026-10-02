@@ -58,7 +58,8 @@ $ `stdlib/std/sort.nu`
 // PLY writer wants. Also emits the z-depth (camera-frame z · scale)
 // into `depthz`, which the edge mask needs.
 @ gm_world_points * f dirs * f depth * f pose f scale i n * f out * f depthz → v {
-    : *f r # *f ( nurl_zalloc 72 )
+    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
+    : *f r # *f ( vec_data [u] r__v )
     ( gm_quat_to_mat . pose 3 . pose 4 . pose 5 . pose 6 r )
     : f tx . pose 0
     : f ty . pose 1
@@ -74,7 +75,6 @@ $ `stdlib/std/sort.nu`
         = . depthz j * scale cz
         = j + j 1
     }
-    ( nurl_free # s r )
 }
 
 // sigmoid(x) > 0.5  ⇔  x > 0
@@ -102,7 +102,6 @@ $ `stdlib/std/sort.nu`
     : f vlo ?? ( vec_get [f] sorted lo ) { T v → v F → 0.0 }
     : f vhi ?? ( vec_get [f] sorted hi ) { T v → v F → 0.0 }
     : f thr + vlo * frac - vhi vlo
-    ( vec_free [f] sorted )
     = j 0
     ~ < j n {
         ? > . conf j thr {} { = . mask j # u 0 }
@@ -149,7 +148,8 @@ $ `stdlib/std/sort.nu`
     : i n * h w
     // ── depth edge: maxpool(d) + maxpool(−d), relative tol 0.03 ──
     : f rtol 0.03
-    : *u dedge # *u ( nurl_zalloc n )
+    : ( Vec u ) dedge__v ( vec_zeroed [u] n )
+    : *u dedge # *u ( vec_data [u] dedge__v )
     : ~ i y 0
     ~ < y h {
         : ~ i x 0
@@ -185,8 +185,10 @@ $ `stdlib/std/sort.nu`
 
     // ── normals from the point map (4 cross products per pixel) ──
     : f tol 0.0872664625997164787  // 5° in radians
-    : *f nrm # *f ( nurl_zalloc * 24 n )
-    : *u nmask # *u ( nurl_zalloc n )
+    : ( Vec u ) nrm__v ( vec_zeroed [u] * 24 n )
+    : *f nrm # *f ( vec_data [u] nrm__v )
+    : ( Vec u ) nmask__v ( vec_zeroed [u] n )
+    : *u nmask # *u ( vec_data [u] nmask__v )
     = y 0
     ~ < y h {
         : ~ i x 0
@@ -248,7 +250,8 @@ $ `stdlib/std/sort.nu`
 
     // ── normals edge: max angle to any valid 3×3 neighbour, then a
     // second 3×3 max-pool, > 5° ──
-    : *f ang # *f ( nurl_zalloc * 8 n )
+    : ( Vec u ) ang__v ( vec_zeroed [u] * 8 n )
+    : *f ang # *f ( vec_data [u] ang__v )
     = y 0
     ~ < y h {
         : ~ i x 0
@@ -286,7 +289,8 @@ $ `stdlib/std/sort.nu`
         = y + y 1
     }
     // second max-pool (out-of-bounds ignored, as the nan-padding does)
-    : *u nedge # *u ( nurl_zalloc n )
+    : ( Vec u ) nedge__v ( vec_zeroed [u] n )
+    : *u nedge # *u ( vec_data [u] nedge__v )
     = y 0
     ~ < y h {
         : ~ i x 0
@@ -319,11 +323,6 @@ $ `stdlib/std/sort.nu`
         ? & != # i . dedge j 0 != # i . nedge j 0 { = . mask j # u 0 } {}
         = j + j 1
     }
-    ( nurl_free # s dedge )
-    ( nurl_free # s nrm )
-    ( nurl_free # s nmask )
-    ( nurl_free # s ang )
-    ( nurl_free # s nedge )
 }
 
 // ── Sim(3) alignment (windowed long-capture mode) ───────────────────
@@ -343,7 +342,8 @@ $ `stdlib/std/sort.nu`
 // Largest-eigenvalue eigenvector of a symmetric 4×4 by cyclic Jacobi.
 @ __gm_jacobi4 * f a * f evec → v {
     // V ← I
-    : *f v # *f ( nurl_zalloc 128 )
+    : ( Vec u ) v__v ( vec_zeroed [u] 128 )
+    : *f v # *f ( vec_data [u] v__v )
     : ~ i k 0
     ~ < k 4 { = . v + * k 4 k 1.0 = k + k 1 }
     : ~ i sweep 0
@@ -415,7 +415,6 @@ $ `stdlib/std/sort.nu`
     }
     = k 0
     ~ < k 4 { = . evec k . v + * k 4 best = k + k 1 }
-    ( nurl_free # s v )
 }
 
 // Fit local→global: xs, ys are [n, 3] interleaved. Fails (F) below 3
@@ -442,7 +441,8 @@ $ `stdlib/std/sort.nu`
     = mx0 / mx0 fn = mx1 / mx1 fn = mx2 / mx2 fn
     = my0 / my0 fn = my1 / my1 fn = my2 / my2 fn
     // correlation M = Σ yc xcᵀ (3×3) and var_x
-    : *f m # *f ( nurl_zalloc 72 )
+    : ( Vec u ) m__v ( vec_zeroed [u] 72 )
+    : *f m # *f ( vec_data [u] m__v )
     : ~ f varx 0.0
     = j 0
     ~ < j n {
@@ -464,7 +464,7 @@ $ `stdlib/std/sort.nu`
         = . m 8 + . m 8 * y2 x2
         = j + j 1
     }
-    ? < varx 0.000000000001 { ( nurl_free # s m ) ^ F } {}
+    ? < varx 0.000000000001 { ^ F } {}
     // Horn's N (4×4 symmetric), from M with x as "left" set:
     // q rotates x onto y: R(q)·xc ≈ yc
     : f sxx . m 0
@@ -478,7 +478,8 @@ $ `stdlib/std/sort.nu`
     : f szz . m 8
     // NOTE the index convention: m holds Σ yc xcᵀ, so m[r][c] = Σ y_r x_c;
     // Horn's S_ab = Σ x_a y_b = m[b][a] — the reads above already swap.
-    : *f nmat # *f ( nurl_zalloc 128 )
+    : ( Vec u ) nmat__v ( vec_zeroed [u] 128 )
+    : *f nmat # *f ( vec_data [u] nmat__v )
     = . nmat 0 + + sxx syy szz
     = . nmat 1 - syz szy
     = . nmat 2 - szx sxz
@@ -495,14 +496,16 @@ $ `stdlib/std/sort.nu`
     = . nmat 13 . nmat 7
     = . nmat 14 . nmat 11
     = . nmat 15 - - szz sxx syy
-    : *f q # *f ( nurl_zalloc 32 )
+    : ( Vec u ) q__v ( vec_zeroed [u] 32 )
+    : *f q # *f ( vec_data [u] q__v )
     ( __gm_jacobi4 nmat q )
     : f qw . q 0
     : f qx . q 1
     : f qy . q 2
     : f qz . q 3
     // R from the unit quaternion (w, x, y, z)
-    : *f r # *f ( nurl_zalloc 72 )
+    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
+    : *f r # *f ( vec_data [u] r__v )
     ( gm_quat_to_mat qx qy qz qw r )
     // s = Σ yc·(R xc) / var_x — recompute with R in hand
     : ~ f num 0.0
@@ -522,7 +525,6 @@ $ `stdlib/std/sort.nu`
     }
     : f s / num varx
     ? <= s 0.0 {
-        ( nurl_free # s m ) ( nurl_free # s nmat ) ( nurl_free # s q ) ( nurl_free # s r )
         ^ F
     } {}
     = . out 0 s
@@ -531,7 +533,6 @@ $ `stdlib/std/sort.nu`
     = . out 10 - my0 * s + + * . r 0 mx0 * . r 1 mx1 * . r 2 mx2
     = . out 11 - my1 * s + + * . r 3 mx0 * . r 4 mx1 * . r 5 mx2
     = . out 12 - my2 * s + + * . r 6 mx0 * . r 7 mx1 * . r 8 mx2
-    ( nurl_free # s m ) ( nurl_free # s nmat ) ( nurl_free # s q ) ( nurl_free # s r )
     ^ T
 }
 
