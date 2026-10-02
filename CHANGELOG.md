@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A field taken out of a cursor over a payload leaves the payload's slot
+  too** (`: ~ E e e0 … : V out . e f ( mem_take out )`): the payload still
+  dropped the field and the Vec handed on was freed.
+  `compiler/tests/take_field_through_cursor.nu`.
 - **A `sink` parameter assigned to an `inout` parameter moves into the
   caller's slot** (`@ put inout T slot sink T v { = slot v }`): it was still
   dropped at the callee's exit and the caller's slot read freed memory.

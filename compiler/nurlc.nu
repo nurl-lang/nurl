@@ -9148,6 +9148,26 @@
                 : s __tsame ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __tsame ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __txk ) ( nurl_print `, ` ) ( nurl_print __tfk ) ( nurl_print `\n` )
                 ( mem_zero_field cg __tfp __tfs __tfi __tft __tsame )
+                // The struct was a cursor over another binding's value (`: ~ E
+                // e e0`, e0 a `??` payload that still drops its own slot): the
+                // field goes from that slot too, or the owner frees what x
+                // now holds.
+                : ~ s __tal ( nurl_sym_get2 syms __tfp `__alias` )
+                ~ != 0 ( nurl_str_len __tal ) {
+                    : s __taw ( str_first_word __tal ) = __tal ( str_skip_word __tal )
+                    ? & ! ( seq __taw __tfp ) ( seq ( nurl_sym_get2 syms __taw `__udty` ) __tfs ) {
+                        : s __tag ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tag ) ( nurl_print ` = getelementptr ` ) ( nurl_print __tfs ) ( nurl_print `, ptr ` ) ( nurl_print __taw ) ( nurl_print `, i32 0, i32 ` ) ( nurl_print __tfi ) ( nurl_print `\n` )
+                        : s __tav ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __tav ) ( nurl_print ` = load ` ) ( nurl_print __tll ) ( nurl_print `, ptr ` ) ( nurl_print __tag ) ( nurl_print `\n` )
+                        : s __tak ( mem_handle_key cg __tft __tav )
+                        ? != 0 ( nurl_str_len __tak ) {
+                            : s __tas ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __tas ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print __txk ) ( nurl_print `, ` ) ( nurl_print __tak ) ( nurl_print `\n` )
+                            ( mem_zero_field cg __taw __tfs __tfi __tft __tas )
+                        } {}
+                    } {}
+                }
             } {}
         } {}
         ( nurl_sym_def syms ( nurl_str_cat up `__fsrc` ) `` )
