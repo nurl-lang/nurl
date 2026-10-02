@@ -73,8 +73,5 @@ $ `packages/http/src/http.nu`
     } {
         = rc ( http_app_listen a `127.0.0.1` 18080 )
     }
-    ( vec_free [u] b1k )
-    ( vec_free [u] b16k )
-    ( vec_free [u] b1m )
     ^ rc
 }

@@ -82,43 +82,37 @@ $ `stdlib/std/ecdsa_p256.nu`
 
     : ( @ v ) b_cc_seal \ → v {
         : ( Vec u ) c ( aead_encrypt key32 nonce aad pt )
-        ( vec_free [u] c )
     }
     : BenchResult r1 ( bench_auto `chacha20poly1305_seal` b_cc_seal )
     ( bench_report r1 )
     ( report_mbps `chacha20poly1305_seal` . r1 ns_per_op )
-    ( bench_result_free r1 )
 
     : ( @ v ) b_cc_open \ → v {
         ?? ( aead_decrypt key32 nonce aad sealed_cc ) {
-            T p → { ( vec_free [u] p ) }
+            T p → {}
             F _ → {}
         }
     }
     : BenchResult r2 ( bench_auto `chacha20poly1305_open` b_cc_open )
     ( bench_report r2 )
     ( report_mbps `chacha20poly1305_open` . r2 ns_per_op )
-    ( bench_result_free r2 )
 
     : ( @ v ) b_gcm_seal \ → v {
         : ( Vec u ) c ( aes128_gcm_encrypt key16 nonce aad pt )
-        ( vec_free [u] c )
     }
     : BenchResult r3 ( bench_auto `aes128_gcm_seal` b_gcm_seal )
     ( bench_report r3 )
     ( report_mbps `aes128_gcm_seal` . r3 ns_per_op )
-    ( bench_result_free r3 )
 
     : ( @ v ) b_gcm_open \ → v {
         ?? ( aes128_gcm_decrypt key16 nonce aad sealed_gcm ) {
-            T p → { ( vec_free [u] p ) }
+            T p → {}
             F _ → {}
         }
     }
     : BenchResult r4 ( bench_auto `aes128_gcm_open` b_gcm_open )
     ( bench_report r4 )
     ( report_mbps `aes128_gcm_open` . r4 ns_per_op )
-    ( bench_result_free r4 )
 
     // ── key exchange: one scalar multiply each, per handshake ──────
     ( nurl_print `Key-exchange scalar multiply (one per handshake, per group):\n\n` )
@@ -126,21 +120,17 @@ $ `stdlib/std/ecdsa_p256.nu`
 
     : ( @ v ) b_x255 \ → v {
         : ( Vec u ) pk ( x25519_base scalar )
-        ( vec_free [u] pk )
     }
     : BenchResult r5 ( bench_auto `x25519_base` b_x255 )
     ( bench_report r5 )
     ( report_ms `x25519_base` . r5 ns_per_op )
-    ( bench_result_free r5 )
 
     : ( @ v ) b_p256 \ → v {
         : ( Vec u ) pk ( p256_ecdh_keygen scalar )
-        ( vec_free [u] pk )
     }
     : BenchResult r6 ( bench_auto `p256_ecdh_keygen` b_p256 )
     ( bench_report r6 )
     ( report_ms `p256_ecdh_keygen` . r6 ns_per_op )
-    ( bench_result_free r6 )
 
     // ── certificate signatures: what chain validation is made of ──
     // A TLS client verifies one ECDSA signature per certificate in the
@@ -157,12 +147,10 @@ $ `stdlib/std/ecdsa_p256.nu`
 
     : ( @ v ) b_sign \ → v {
         : ( Vec u ) sg ( ecdsa_p256_sign scalar digest )
-        ( vec_free [u] sg )
     }
     : BenchResult r7 ( bench_auto `ecdsa_p256_sign` b_sign )
     ( bench_report r7 )
     ( report_ms `ecdsa_p256_sign` . r7 ns_per_op )
-    ( bench_result_free r7 )
 
     : ( @ v ) b_verify \ → v {
         ? ( ecdsa_p256_verify vpk sig_r sig_s digest ) {} { ( nurl_print `VERIFY BROKEN\n` ) }
@@ -170,7 +158,6 @@ $ `stdlib/std/ecdsa_p256.nu`
     : BenchResult r8 ( bench_auto `ecdsa_p256_verify` b_verify )
     ( bench_report r8 )
     ( report_ms `ecdsa_p256_verify` . r8 ns_per_op )
-    ( bench_result_free r8 )
 
     // P-384 has no signing path in the stdlib (nothing here holds a
     // P-384 key); the tuple is an OpenSSL-generated known-answer from
@@ -186,19 +173,6 @@ $ `stdlib/std/ecdsa_p256.nu`
     : BenchResult r9 ( bench_auto `ecdsa_p384_verify` b_verify384 )
     ( bench_report r9 )
     ( report_ms `ecdsa_p384_verify` . r9 ns_per_op )
-    ( bench_result_free r9 )
 
-    ( vec_free [u] digest ) ( vec_free [u] sig ) ( vec_free [u] vpk )
-    ( vec_free [u] sig_r ) ( vec_free [u] sig_s )
-    ( vec_free [u] pk384 ) ( vec_free [u] r384 ) ( vec_free [u] s384 ) ( vec_free [u] h384 )
-
-    ( vec_free [u] scalar )
-    ( vec_free [u] key32 )
-    ( vec_free [u] key16 )
-    ( vec_free [u] nonce )
-    ( vec_free [u] aad )
-    ( vec_free [u] pt )
-    ( vec_free [u] sealed_cc )
-    ( vec_free [u] sealed_gcm )
     ^ 0
 }

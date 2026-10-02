@@ -60,40 +60,33 @@ $ `stdlib/std/slhdsa.nu`
     : ( Vec u ) o ( shake128_pure buf 32 )
     : i t1 ( monotonic_ns )
     = g_sink + g_sink ( vec_len [u] o )
-    ( vec_free [u] o ) ( vec_free [u] buf )
     : String ln ( string_new )
     ( string_push_str ln `shake128 absorb              ` )
     ( string_push_int ln / * * MB 1000 1000000 - t1 t0 )
     ( string_push_str ln ` MB/s\n` )
     ( nurl_print ( string_data ln ) )
-    ( string_free ln )
 }
 
 @ __mlkem768 → v {
     : BenchResult kg ( bench_auto `ML-KEM-768 keygen` \ → v {
         : MlkemKeys k ( mlkem_keygen 768 )
         = g_sink + g_sink ( vec_len [u] ( mlkem_ek k ) )
-        ( mlkem_keys_free k )
     } )
-    ( bench_report kg ) ( bench_result_free kg )
+    ( bench_report kg )
 
     : MlkemKeys ks ( mlkem_keygen 768 )
     : BenchResult en ( bench_auto `ML-KEM-768 encaps` \ → v {
         : MlkemEncap e ( mlkem_encaps 768 ( mlkem_ek ks ) )
         = g_sink + g_sink ( vec_len [u] ( mlkem_ct e ) )
-        ( mlkem_encap_free e )
     } )
-    ( bench_report en ) ( bench_result_free en )
+    ( bench_report en )
 
     : MlkemEncap e2 ( mlkem_encaps 768 ( mlkem_ek ks ) )
     : BenchResult de ( bench_auto `ML-KEM-768 decaps` \ → v {
         : ( Vec u ) ss ( mlkem_decaps 768 ( mlkem_dk ks ) ( mlkem_ct e2 ) )
         = g_sink + g_sink ( vec_len [u] ss )
-        ( vec_free [u] ss )
     } )
-    ( bench_report de ) ( bench_result_free de )
-    ( mlkem_encap_free e2 )
-    ( mlkem_keys_free ks )
+    ( bench_report de )
 }
 
 @ __mldsa i level → v {
@@ -110,9 +103,8 @@ $ `stdlib/std/slhdsa.nu`
     : BenchResult sg ( bench_auto ( string_data snm ) \ → v {
         : ( Vec u ) sig ( mldsa_sign level ( mldsa_sk ks ) msg ctx )
         = g_sink + g_sink ( vec_len [u] sig )
-        ( vec_free [u] sig )
     } )
-    ( bench_report sg ) ( bench_result_free sg ) ( string_free snm )
+    ( bench_report sg )
 
     : ( Vec u ) sig ( mldsa_sign level ( mldsa_sk ks ) msg ctx )
     : String vnm ( string_new )
@@ -121,12 +113,8 @@ $ `stdlib/std/slhdsa.nu`
     : BenchResult vf ( bench_auto ( string_data vnm ) \ → v {
         ? ( mldsa_verify level ( mldsa_pk ks ) msg ctx sig ) { = g_sink + g_sink 1 } {}
     } )
-    ( bench_report vf ) ( bench_result_free vf ) ( string_free vnm )
+    ( bench_report vf )
 
-    ( vec_free [u] sig )
-    ( mldsa_keys_free ks )
-    ( string_free nm )
-    ( vec_free [u] ctx ) ( vec_free [u] msg )
 }
 
 @ __slhdsa128f → v {
@@ -137,27 +125,22 @@ $ `stdlib/std/slhdsa.nu`
     : BenchResult kg ( bench_run `SLH-DSA-128f keygen` 20 \ → v {
         : SlhKeys k ( slhdsa_keygen set )
         = g_sink + g_sink ( vec_len [u] ( slhdsa_pk k ) )
-        ( slhdsa_keys_free k )
     } )
-    ( bench_report kg ) ( bench_result_free kg )
+    ( bench_report kg )
 
     : SlhKeys ks ( slhdsa_keygen set )
     : BenchResult sg ( bench_run `SLH-DSA-128f sign` 5 \ → v {
         : ( Vec u ) sig ( slhdsa_sign set ( slhdsa_sk ks ) msg ctx )
         = g_sink + g_sink ( vec_len [u] sig )
-        ( vec_free [u] sig )
     } )
-    ( bench_report sg ) ( bench_result_free sg )
+    ( bench_report sg )
 
     : ( Vec u ) sig ( slhdsa_sign set ( slhdsa_sk ks ) msg ctx )
     : BenchResult vf ( bench_run `SLH-DSA-128f verify` 40 \ → v {
         ? ( slhdsa_verify set ( slhdsa_pk ks ) msg ctx sig ) { = g_sink + g_sink 1 } {}
     } )
-    ( bench_report vf ) ( bench_result_free vf )
+    ( bench_report vf )
 
-    ( vec_free [u] sig )
-    ( slhdsa_keys_free ks )
-    ( vec_free [u] ctx ) ( vec_free [u] msg )
 }
 
 @ main → v {

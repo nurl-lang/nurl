@@ -18,20 +18,18 @@ $ `stdlib/std/bench.nu`
         : String s ( string_with_cap 16 )
         : ~ i k 0
         ~ < k 16 { ( string_push_char s + 97 % k 26 ) = k + k 1 }
-        ( string_free s )
     }
     : BenchResult r1 ( bench_auto `string_build_16` b_str )
-    ( bench_report r1 ) ( bench_result_free r1 )
+    ( bench_report r1 )
 
     // 2. Vec push: 64 i64s into a growing vector (amortised reallocs).
     : ( @ v ) b_vec \ → v {
         : ( Vec i ) v ( vec_new [i] )
         : ~ i k 0
         ~ < k 64 { ( vec_push [i] v * k k ) = k + k 1 }
-        ( vec_free [i] v )
     }
     : BenchResult r2 ( bench_auto `vec_push_64` b_vec )
-    ( bench_report r2 ) ( bench_result_free r2 )
+    ( bench_report r2 )
 
     // 3. Sort: 32 descending i64s back to ascending each op.
     : ( @ i i i ) ci \ i a i b → i { ^ ( cmp_int a b ) }
@@ -40,10 +38,9 @@ $ `stdlib/std/bench.nu`
         : ~ i k 0
         ~ < k 32 { ( vec_push [i] v - 32 k ) = k + k 1 }
         ( sort_by [i] v ci )
-        ( vec_free [i] v )
     }
     : BenchResult r3 ( bench_auto `sort_32_desc` b_sort )
-    ( bench_report r3 ) ( bench_result_free r3 )
+    ( bench_report r3 )
 
     ^ 0
 }
