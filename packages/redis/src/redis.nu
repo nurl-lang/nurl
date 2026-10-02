@@ -97,7 +97,7 @@ $ `stdlib/core/rcbox.nu`
     i tls  // 0 plaintext, 1 TLS
     i raw  // raw socket fd (plaintext reads / fd the TLS layer took over)
     TcpConn tcp  // plaintext transport (writes via tcp_write_all)
-    * TlsConn tc  // TLS transport (when tls = 1)
+    TlsConn tc  // TLS transport (when tls = 1)
     ( Vec u ) rxbuf  // bytes read but not yet parsed into a reply
     String lasterr  // last server error text
     String host_name
@@ -110,7 +110,7 @@ $ `stdlib/core/rcbox.nu`
 // go with the drop glue.
 % Drop RedisConnImpl { @ drop RedisConnImpl c → v { ( __r_close_transport . c tls . c tc . c raw ) } }
 
-@ __r_close_transport i tls * TlsConn tc i raw → v {
+@ __r_close_transport i tls TlsConn tc i raw → v {
     ? == tls 1 { ( tls_close tc ) } { ( nurl_tcp_close raw ) }
 }
 
@@ -340,7 +340,7 @@ $ `stdlib/core/rcbox.nu`
     = . c tls 0
     = . c raw rawfd
     = . c tcp @ TcpConn { # s rawfd 0 0 }
-    = . c tc # *TlsConn 0
+    = . c tc @ TlsConn { # s 0 }
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_new )
     = . c host_name ( string_from host )
@@ -348,7 +348,7 @@ $ `stdlib/core/rcbox.nu`
     = . c db_index 0
 
     ? > tlsmode 0 {
-        : !*TlsConn TlsErr tr ? >= tlsmode 2 ( tls_attach_verify rawfd server_name ) ( tls_attach rawfd server_name )
+        : !TlsConn TlsErr tr ? >= tlsmode 2 ( tls_attach_verify rawfd server_name ) ( tls_attach rawfd server_name )
         ?? tr {
             T tc → { = . c tls 1 = . c tc tc }
             F _ → { ^ @ !RedisConn RedisErr { F # RedisErr RedisTls } }

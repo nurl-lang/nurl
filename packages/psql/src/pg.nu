@@ -58,7 +58,7 @@ $ `stdlib/core/rcbox.nu`
     i tls  // 0 plaintext, 1 TLS
     i raw  // raw socket handle (plaintext reads; fd the TLS layer took over)
     TcpConn tcp  // plaintext transport (writes via tcp_write_all)
-    * TlsConn tc  // TLS transport (when tls = 1)
+    TlsConn tc  // TLS transport (when tls = 1)
     ( Vec u ) rxbuf  // backend bytes not yet split into messages
     String lasterr  // last ErrorResponse / failure text
     i be_pid
@@ -76,7 +76,7 @@ $ `stdlib/core/rcbox.nu`
 // buffers and strings go with the drop glue.
 % Drop PgConnImpl { @ drop PgConnImpl c → v { ( __pg_teardown . c started . c tls . c tc . c tcp . c raw ) } }
 
-@ __pg_teardown i started i tls * TlsConn tc TcpConn tcp i raw → v {
+@ __pg_teardown i started i tls TlsConn tc TcpConn tcp i raw → v {
     ? == started 1 {
         : ( Vec u ) term ( vec_with_cap [u] 5 )
         ( vec_push [u] term # u 88 )
@@ -468,7 +468,7 @@ $ `stdlib/core/rcbox.nu`
     = . c tls 0
     = . c raw rawfd
     = . c tcp @ TcpConn { # s rawfd 0 0 }
-    = . c tc # *TlsConn 0
+    = . c tc @ TlsConn { # s 0 }
     = . c rxbuf ( vec_new [u] )
     = . c lasterr ( string_with_cap 0 )
     = . c be_pid 0
@@ -483,7 +483,7 @@ $ `stdlib/core/rcbox.nu`
     ? > sslmode 0 {
         : i resp ( __pg_ssl_request rawfd )
         ? == resp 83 {
-            : !*TlsConn TlsErr tr ? >= sslmode 3 ( tls_attach_verify rawfd host ) ( tls_attach rawfd host )
+            : !TlsConn TlsErr tr ? >= sslmode 3 ( tls_attach_verify rawfd host ) ( tls_attach rawfd host )
             ?? tr {
                 T tc → { = . c tls 1 = . c tc tc }
                 F _ → { ^ @ !PgConn PgErr { F # PgErr PgTls } }

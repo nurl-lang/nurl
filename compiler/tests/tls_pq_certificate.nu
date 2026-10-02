@@ -112,7 +112,7 @@ $ `stdlib/std/time.nu`
     : ( @ v ) server \ → v {
         : i craw ( nurl_tcp_accept g_listen )
         ? > craw 0 {
-            : !*TlsConn TlsErr ar ( tls_accept_mldsa craw chain 65 sk )
+            : !TlsConn TlsErr ar ( tls_accept_mldsa craw chain 65 sk )
             ?? ar {
                 T sc → { = g_served 1 ( tls_close sc ) }
                 F _e → {}
@@ -123,24 +123,24 @@ $ `stdlib/std/time.nu`
     ?? st {
         T t → {
             ( sleep_ms 200 )
-            : !*TlsConn TlsErr r ( tls_connect_insecure `127.0.0.1` 18912 `localhost` )
+            : !TlsConn TlsErr r ( tls_connect_insecure `127.0.0.1` 18912 `localhost` )
             ?? r {
                 T c → {
                     = all & all ( chk `handshake            ` T )
                     = all & all ( chk `group_is_pq          ` ( tls_is_post_quantum c ) )
-                    = all & all ( chk `cv_scheme_mldsa65    ` == . c cv_scheme 2309 )
+                    = all & all ( chk `cv_scheme_mldsa65    ` == ( tls_cv_scheme c ) 2309 )
 
                     // The signature the server made over this transcript,
                     // checked against the key its certificate carries.
-                    : b okcv ( tls_cv_verify . c cert_msg . c cv_scheme
-                    . c cv_sig . c th_cert )
+                    : b okcv ( tls_cv_verify ( tls_cert_msg c ) ( tls_cv_scheme c )
+                    ( tls_cv_sig c ) ( tls_th_cert c ) )
                     = all & all ( chk `cv_verifies          ` okcv )
 
                     // ...and one flipped bit must break it.
-                    : ( Vec u ) bad ( bytes_slice . c cv_sig 0 ( vec_len [u] . c cv_sig ) )
+                    : ( Vec u ) bad ( bytes_slice ( tls_cv_sig c ) 0 ( vec_len [u] ( tls_cv_sig c ) ) )
                     : *u bp ( vec_data [u] bad )
                     = . bp 64 # u ^^ # i . bp 64 1
-                    : b okbad ! ( tls_cv_verify . c cert_msg . c cv_scheme bad . c th_cert )
+                    : b okbad ! ( tls_cv_verify ( tls_cert_msg c ) ( tls_cv_scheme c ) bad ( tls_th_cert c ) )
                     = all & all ( chk `cv_rejects_tamper    ` okbad )
                     ( vec_free [u] bad )
 

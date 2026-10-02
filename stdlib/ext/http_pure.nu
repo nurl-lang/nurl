@@ -52,7 +52,7 @@ $ `stdlib/std/thread.nu`
 : HttpConn {
     i is_tls
     i fd
-    * TlsConn tc
+    TlsConn tc  // a null handle on a plaintext transport
     String skey  // "host:port" — the session-cache key for this transport
 }
 
@@ -179,7 +179,7 @@ $ `stdlib/std/thread.nu`
         // Offer the cached session, if any: an empty blob is exactly
         // the full handshake, a declined one falls back to it.
         : ( Vec u ) sess ( __hp_sess_get skey )
-        : !*TlsConn TlsErr r ? != verify 0
+        : !TlsConn TlsErr r ? != verify 0
         ( tls_connect_resume host port sni sess )
         ( tls_connect_insecure_resume host port sni sess )
         ( vec_free [u] sess )
@@ -190,14 +190,14 @@ $ `stdlib/std/thread.nu`
     } {}
     : i fd ( nurl_tcp_connect host port )
     ? <= fd 0 { ( string_free skey ) ^ @ !HttpConn i { F 1 } } {}
-    ^ @ !HttpConn i { T @ HttpConn { 0 fd # *TlsConn 0 skey } }
+    ^ @ !HttpConn i { T @ HttpConn { 0 fd @ TlsConn { # s 0 } skey } }
 }
 
 // Wrap a TLS connection the caller established itself (for instance
 // with an ALPN offer, see tls_attach_full) as an HttpConn. The session
 // ticket it receives is cached for host:port when the conn closes, like
 // the ones hp_conn_open opens.
-@ hp_conn_from_tls * TlsConn tc s host i port → HttpConn {
+@ hp_conn_from_tls TlsConn tc s host i port → HttpConn {
     ^ @ HttpConn { 1 0 tc ( __hp_sess_key host port ) }
 }
 
@@ -222,7 +222,7 @@ $ `stdlib/std/thread.nu`
 // this transport (0 = none). A deadline that fires reads back as error
 // 2 (timeout) from hp_conn_read_some / the stream state.
 @ hp_conn_set_timeout HttpConn c i ms → v {
-    : i fd ? != . c is_tls 0 . . c tc fd . c fd
+    : i fd ? != . c is_tls 0 ( tls_socket . c tc ) . c fd
     ? > fd 0 { ( nurl_tcp_set_timeout fd ms ) } {}
 }
 
@@ -232,7 +232,7 @@ $ `stdlib/std/thread.nu`
     ? != . c is_tls 0 {
         ?? ( tls_write . c tc data ) {
             T _ → ^ 0
-            F _ → ^ ? == ( nurl_tcp_err_kind . . c tc fd ) 7 2 6
+            F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 2 6
         }
     } {}
     : i fd . c fd
@@ -255,7 +255,7 @@ $ `stdlib/std/thread.nu`
 @ hp_conn_read_some HttpConn c ( Vec u ) acc → i {
     ? != . c is_tls 0 {
         ?? ( tls_read . c tc 16384 ) {
-            F _ → ^ ? == ( nurl_tcp_err_kind . . c tc fd ) 7 -2 -1
+            F _ → ^ ? == ( nurl_tcp_err_kind ( tls_socket . c tc ) ) 7 -2 -1
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ? > got 0 { ( bytes_extend_bytes acc chunk ) } {}
@@ -276,7 +276,7 @@ $ `stdlib/std/thread.nu`
 
 @ hp_conn_close HttpConn c → v {
     ? != . c is_tls 0 {
-        ? != # i . c tc 0 {
+        ? != # i . . c tc ctl 0 {
             // Keep the ticket this connection received for the next one.
             : ( Vec u ) blob ( tls_session_export . c tc )
             ? > ( vec_len [u] blob ) 0 { ( __hp_sess_put . c skey blob ) } {}
@@ -885,7 +885,7 @@ i follow i maxredir i verify s ua i timeout_ms → *HttpStreamState {
         : ?Url maybe ( url_parse ( string_data cur_url ) )
         ?? maybe {
             F _ → {
-                : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 ( string_new ) } )
+                : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 @ TlsConn { # s 0 } ( string_new ) } )
                 = . st err_kind 5
                 = . st finished 1
                 = result_p # i st
@@ -898,7 +898,7 @@ i follow i maxredir i verify s ua i timeout_ms → *HttpStreamState {
                 : !HttpConn i co ( hp_conn_open is_https ( string_data . u host ) port ( string_data . u host ) verify )
                 ?? co {
                     F e → {
-                        : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 # *TlsConn 0 ( string_new ) } )
+                        : *HttpStreamState st ( __hp_state_new @ HttpConn { 0 0 @ TlsConn { # s 0 } ( string_new ) } )
                         = . st err_kind e
                         = . st finished 1
                         = result_p # i st

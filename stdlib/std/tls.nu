@@ -10,11 +10,14 @@
 // modern TLS 1.3 server (OpenSSL, BoringSSL, nginx, the big CDNs).
 //
 // Surface:
-//   ( tls_connect host port server_name )          → !*TlsConn TlsErr  (verify-full)
-//   ( tls_connect_insecure host port server_name ) → !*TlsConn TlsErr  (no cert check)
+//   ( tls_connect host port server_name )          → !TlsConn TlsErr  (verify-full)
+//   ( tls_connect_insecure host port server_name ) → !TlsConn TlsErr  (no cert check)
 //   ( tls_write conn bytes )                       → !v TlsErr
 //   ( tls_read conn max )                          → !( Vec u ) TlsErr  ([] at EOF)
-//   ( tls_close conn )                             → v
+//   ( tls_close conn )                             → v  close_notify + close the socket
+//
+// A TlsConn is a handle: every copy is the same connection, and its last
+// owner releases it (closing the socket if tls_close has not).
 //
 // `tls_connect` is secure by default: it completes the handshake and then
 // verifies the server certificate chain (see verify.nu) against the system
@@ -119,8 +122,9 @@ $ `stdlib/core/rcbox.nu`
 
 // Live connection state. Vec fields are reassigned as keys rotate
 // (handshake → application) and as buffers are consumed.
-: TlsConn {
+: TlsConnImpl {
     i fd
+    i owns_fd  // 1 until tls_close closes the socket
     i read_nowait  // one try-read call must not park on partial records
     ( Vec u ) rxbuf  // raw socket bytes not yet split into records
     ( Vec u ) hsbuf  // decrypted handshake bytes not yet a full message
@@ -160,6 +164,84 @@ $ `stdlib/core/rcbox.nu`
     i tk_age_add  // its ticket_age_add
     i tk_lifetime  // its ticket_lifetime, seconds
     i tk_received_ms  // wall clock (ms) when it arrived
+}
+
+// The socket is the one raw part: a connection nobody tls_close'd is
+// closed by its last owner (without a close_notify — that alert is
+// tls_close's, said at a point of the caller's choosing).
+% Drop TlsConnImpl {
+    @ drop TlsConnImpl c → v {
+        ? != . c owns_fd 0 { ( nurl_tcp_close . c fd ) } {}
+    }
+}
+
+// A TlsConn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same connection, and the last owner releases it.
+: TlsConn { s ctl }
+
+@ TlsConn_share TlsConn h → TlsConn { ^ @ TlsConn { # s ( rcbox_share # i . h ctl ) } }
+
+@ TlsConn_drop sink TlsConn h → v {
+    ( mem_forget h )
+    ( rcbox_release [TlsConnImpl] # i . h ctl )
+}
+
+@ __TlsConn_ptr TlsConn h → *TlsConnImpl { ^ ( rcbox_ptr [TlsConnImpl] # i . h ctl ) }
+
+// The state in place, for the stdlib's own transport layer (std/net.nu).
+@ _tls_ptr TlsConn h → *TlsConnImpl { ^ ( rcbox_ptr [TlsConnImpl] # i . h ctl ) }
+
+// The connection as a word, for a holder that is not a handle itself
+// (std/net.nu's TcpConn keeps one): one more owner, which
+// `_tls_word_release` gives back.
+@ _tls_word TlsConn h → i { ^ ( rcbox_share # i . h ctl ) }
+
+@ _tls_word_release i w → v { ( rcbox_release [TlsConnImpl] w ) }
+
+// A connection over socket `raw`. The connection owns the socket from
+// here: tls_close closes it, or else the last owner does. A `raw` of 0 is
+// no socket (a connection state built for a test).
+@ _tls_conn_new i raw → TlsConn {
+    : i c__box ( rcbox_zero [TlsConnImpl] )
+    : *TlsConnImpl c ( rcbox_ptr [TlsConnImpl] c__box )
+    = . c fd raw
+    = . c read_nowait 0
+    = . c s_secret ( vec_new [u] )
+    = . c c_secret ( vec_new [u] )
+    = . c update_pending 0
+    = . c fatal_alert 0
+    = . c rxbuf ( vec_new [u] )
+    = . c hsbuf ( vec_new [u] )
+    = . c appbuf ( vec_new [u] )
+    = . c s_key ( vec_new [u] )
+    = . c s_iv ( vec_new [u] )
+    = . c c_key ( vec_new [u] )
+    = . c c_iv ( vec_new [u] )
+    = . c s_seq 0
+    = . c c_seq 0
+    = . c enc_read 0
+    = . c established 0
+    = . c closed 0
+    = . c cert_msg ( vec_new [u] )
+    = . c cv_sig ( vec_new [u] )
+    = . c th_cert ( vec_new [u] )
+    = . c cv_scheme 0
+    = . c cipher 0
+    = . c version 13
+    = . c kx_p256 ( vec_new [u] )
+    = . c kx_mlkem ( vec_new [u] )
+    = . c kx_group 0
+    = . c alpn_sel ( vec_new [u] )
+    = . c resumed 0
+    = . c res_master ( vec_new [u] )
+    = . c res_early ( vec_new [u] )
+    = . c tk_ticket ( vec_new [u] )
+    = . c tk_psk ( vec_new [u] )
+    = . c tk_age_add 0
+    = . c tk_lifetime 0
+    = . c tk_received_ms 0
+    = . c owns_fd ? > raw 0 1 0
+    ^ @ TlsConn { # s c__box }
 }
 
 // ── small helpers ─────────────────────────────────────────────────
@@ -258,14 +340,10 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) xpub ( bytes_slice spub 1088 1120 )
     : ( Vec u ) xs ( x25519 priv xpub )
     ? ( _all_zero xs ) {
-        ( vec_free [u] xs ) ( vec_free [u] xpub ) ( vec_free [u] ct )
         ^ ( vec_new [u] )
     } {}
     : ( Vec u ) out ( mlkem_decaps 768 dk ct )
     ( bytes_extend_bytes out xs )
-    ( vec_free [u] xs )
-    ( vec_free [u] xpub )
-    ( vec_free [u] ct )
     ^ out
 }
 
@@ -297,7 +375,7 @@ $ `stdlib/core/rcbox.nu`
 // of pinning one worker per idle keep-alive conn. Off a fiber the raw
 // blocking read is what a synchronous client wants (SO_RCVTIMEO still
 // bounds it; the reactor deadline mirrors that via __tls_io_wait).
-@ __fill * TlsConn c i n → !i TlsErr {
+@ __fill inout TlsConnImpl c i n → !i TlsErr {
     : i raw . c fd
     : b on_fiber != ( nurl_fiber_current ) 0
     ? & on_fiber == . c read_nowait 0 { ( nurl_tcp_set_nonblock raw 1 ) } {}
@@ -329,7 +407,7 @@ $ `stdlib/core/rcbox.nu`
 // tail down and shrink len — the old slice-copy allocated (and freed) a
 // fresh Vec per consumed record. The tail is empty in the common case
 // (one record per read), so the memmove is usually zero bytes.
-@ __consume * TlsConn c i n → v {
+@ __consume inout TlsConnImpl c i n → v {
     : ( Vec u ) buf . c rxbuf
     : i total ( vec_len [u] buf )
     ? >= n total { ( vec_clear [u] buf ) ^ v } {}
@@ -340,10 +418,10 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Record = type(1) ver(2) length(2) body. Returns (type, body); body is
-// an owned slice the caller frees.
+// an owned slice.
 : TlsRecord { i rtype ( Vec u ) body }
 
-@ _read_record * TlsConn c → !TlsRecord TlsErr {
+@ _read_record inout TlsConnImpl c → !TlsRecord TlsErr {
     : !i TlsErr h ( __fill c 5 )
     ?? h { T _ → {} F e → { ^ @ !TlsRecord TlsErr { F e } } }
     : i rtype ( _t_bget . c rxbuf 0 )
@@ -382,7 +460,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // AEAD-decrypt one application_data record body (ct‖tag) → inner plaintext.
-@ __decrypt_record * TlsConn c ( Vec u ) body → ?( Vec u ) {
+@ __decrypt_record inout TlsConnImpl c ( Vec u ) body → ?( Vec u ) {
     : i blen ( vec_len [u] body )
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
     ( vec_push [u] aad # u 23 )
@@ -391,8 +469,6 @@ $ `stdlib/core/rcbox.nu`
     ( _tls_u16 aad blen )
     : ( Vec u ) nonce ( _nonce . c s_iv . c s_seq )
     : ?( Vec u ) pt ( _aead_open . c cipher . c s_key nonce aad body )
-    ( vec_free [u] aad )
-    ( vec_free [u] nonce )
     = . c s_seq + . c s_seq 1
     ^ pt
 }
@@ -409,7 +485,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Encrypt + send one record of `content` under the client keys.
-@ __send_encrypted * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
+@ __send_encrypted inout TlsConnImpl c i content_type ( Vec u ) content → !v TlsErr {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( _tls_cat inner content )
     ^ ( __send_inner_encrypted c content_type inner )
@@ -417,18 +493,18 @@ $ `stdlib/core/rcbox.nu`
 
 // Same record, plaintext = bytes [lo, hi) of `head`‖`body`, assembled
 // straight from the two buffers (tls_write2's per-record step).
-@ __send_encrypted_pair * TlsConn c i content_type ( Vec u ) head ( Vec u ) body i lo i hi → !v TlsErr {
+@ __send_encrypted_pair inout TlsConnImpl c i content_type ( Vec u ) head ( Vec u ) body i lo i hi → !v TlsErr {
     : ( Vec u ) inner ( _tls_pair_slice head body lo hi )
     ^ ( __send_inner_encrypted c content_type inner )
 }
 
 // Seal `inner` (plaintext WITHOUT the type byte yet; consumed here) as
 // one TLS 1.3 record under the client write keys and send it.
-@ _tls_seal_inner_to * TlsConn c ( Vec u ) out i content_type ( Vec u ) inner → v {
+@ _tls_seal_inner_to inout TlsConnImpl c ( Vec u ) out i content_type ( Vec u ) inner → v {
     ( _tls_seal_direction_to c out 1 content_type inner )
 }
 
-@ _tls_seal_direction_to * TlsConn c ( Vec u ) out i dir i content_type ( Vec u ) inner → v {
+@ _tls_seal_direction_to inout TlsConnImpl c ( Vec u ) out i dir i content_type ( Vec u ) inner → v {
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
@@ -443,24 +519,19 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] out # u 3 )
     ( _tls_u16 out total )
     ( _tls_cat out sealed )
-    ( vec_free [u] inner )
-    ( vec_free [u] aad )
-    ( vec_free [u] nonce )
-    ( vec_free [u] sealed )
     ? == dir 0 { = . c s_seq + . c s_seq 1 } { = . c c_seq + . c c_seq 1 }
 }
 
-@ __send_inner_encrypted * TlsConn c i content_type ( Vec u ) inner → !v TlsErr {
+@ __send_inner_encrypted inout TlsConnImpl c i content_type ( Vec u ) inner → !v TlsErr {
     : ( Vec u ) record ( vec_new [u] )
     ( _tls_seal_inner_to c record content_type inner )
     : b written ( _tls_sock_write . c fd record )
-    ( vec_free [u] record )
     ? ! written { = . c closed 1 } {}
     ^ ? written @ !v TlsErr { T 0 } @ !v TlsErr { F TlsWrite }
 }
 
 // Write a plaintext record straight to the socket.
-@ _send_plain * TlsConn c i rtype ( Vec u ) body → !v TlsErr {
+@ _send_plain inout TlsConnImpl c i rtype ( Vec u ) body → !v TlsErr {
     : ( Vec u ) rec ( vec_with_cap [u] + ( vec_len [u] body ) 5 )
     ( vec_push [u] rec # u rtype )
     // legacy_record_version 0x0303 (RFC 8446 §5.1: required for every
@@ -476,7 +547,7 @@ $ `stdlib/core/rcbox.nu`
 // ── handshake-message reader ──────────────────────────────────────
 // Pull the next complete handshake message (header + body) from hsbuf,
 // decrypting more records as needed. CCS records are skipped.
-@ __next_hs * TlsConn c → !( Vec u ) TlsErr {
+@ __next_hs inout TlsConnImpl c → !( Vec u ) TlsErr {
     : ~ i need 1
     ~ == need 1 {
         : i have ( vec_len [u] . c hsbuf )
@@ -485,7 +556,6 @@ $ `stdlib/core/rcbox.nu`
             ? >= have + 4 mlen {
                 : ( Vec u ) msg ( bytes_slice . c hsbuf 0 + 4 mlen )
                 : ( Vec u ) rest ( bytes_slice . c hsbuf + 4 mlen have )
-                ( vec_free [u] . c hsbuf )
                 = . c hsbuf rest
                 ^ @ !( Vec u ) TlsErr { T msg }
             } {}
@@ -497,24 +567,19 @@ $ `stdlib/core/rcbox.nu`
             T rec → {
                 ? == . rec rtype 20 {
                     // change_cipher_spec — ignore.
-                    ( vec_free [u] . rec body )
                 } {
                     ? == . rec rtype 23 {
                         ?? ( __decrypt_record c . rec body ) {
                             T inner → {
-                                ( vec_free [u] . rec body )
                                 : i ct ( _inner_type inner )
                                 ? == ct 22 {
                                     ( _tls_cat . c hsbuf inner )
-                                    ( vec_free [u] inner )
                                 } {
-                                    ( vec_free [u] inner )
                                     ? == ct 21 { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsAlert } } {}
                                     ^ @ !( Vec u ) TlsErr { F # TlsErr TlsProtocol }
                                 }
                             }
                             F _ → {
-                                ( vec_free [u] . rec body )
                                 ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
                             }
                         }
@@ -522,9 +587,7 @@ $ `stdlib/core/rcbox.nu`
                         // plaintext handshake (ServerHello stage) or alert
                         ? == . rec rtype 22 {
                             ( _tls_cat . c hsbuf . rec body )
-                            ( vec_free [u] . rec body )
                         } {
-                            ( vec_free [u] . rec body )
                             ^ @ !( Vec u ) TlsErr { F # TlsErr TlsProtocol }
                         }
                     }
@@ -579,7 +642,6 @@ $ `stdlib/core/rcbox.nu`
     ~ < k hl { ( vec_push [u] sni # u ( _t_bget host k ) ) = k + k 1 }
     ( _tls_u16 ext 0 )
     ( _blk16 ext sni )
-    ( vec_free [u] sni )
 
     // supported_groups (0x000a): X25519MLKEM768 (0x11ec) first, then
     // x25519 (0x001d) and secp256r1 (0x0017).
@@ -597,7 +659,6 @@ $ `stdlib/core/rcbox.nu`
     ( _tls_u16 grp 23 )  // secp256r1
     ( _tls_u16 ext 10 )
     ( _blk16 ext grp )
-    ( vec_free [u] grp )
 
     // signature_algorithms (0x000d)
     // ML-DSA leads: it is the only family here a quantum adversary
@@ -620,7 +681,6 @@ $ `stdlib/core/rcbox.nu`
     ( _tls_u16 sa 1281 )  // rsa_pkcs1_sha384       0x0501
     ( _tls_u16 ext 13 )
     ( _blk16 ext sa )
-    ( vec_free [u] sa )
 
     // supported_versions (0x002b): TLS 1.3 (0x0304) then TLS 1.2 (0x0303)
     : ( Vec u ) sv ( vec_new [u] )
@@ -629,7 +689,6 @@ $ `stdlib/core/rcbox.nu`
     ( _tls_u16 sv 771 )
     ( _tls_u16 ext 43 )
     ( _blk16 ext sv )
-    ( vec_free [u] sv )
 
     // ec_point_formats (0x000b): uncompressed — some TLS 1.2 servers require it
     : ( Vec u ) epf ( vec_new [u] )
@@ -637,7 +696,6 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] epf # u 0 )
     ( _tls_u16 ext 11 )
     ( _blk16 ext epf )
-    ( vec_free [u] epf )
 
     // key_share (0x0033): a share for each group we offered, so whichever
     // one the server selects we already supplied a matching public key —
@@ -671,8 +729,6 @@ $ `stdlib/core/rcbox.nu`
     ( _tls_cat ks entry )
     ( _tls_u16 ext 51 )
     ( _blk16 ext ks )
-    ( vec_free [u] entry )
-    ( vec_free [u] ks )
 
     // application_layer_protocol_negotiation (0x0010), RFC 7301: the
     // protocols we speak, most preferred first — `alp_list` is the wire
@@ -702,7 +758,6 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] modes # u 1 )  // psk_dhe_ke
     ( _tls_u16 ext 45 )
     ( _blk16 ext modes )
-    ( vec_free [u] modes )
     // Whatever the driver asked for (QUIC: quic_transport_parameters),
     // already wire-framed.
     ( _tls_cat ext ext_extra )
@@ -725,7 +780,6 @@ $ `stdlib/core/rcbox.nu`
     } {}
 
     ( _blk16 body ext )
-    ( vec_free [u] ext )
 
     // wrap as handshake message: type=1 (client_hello) + 3-byte length
     : ( Vec u ) hs ( vec_with_cap [u] + ( vec_len [u] body ) 4 )
@@ -763,7 +817,6 @@ $ `stdlib/core/rcbox.nu`
             // key_share: group(2) ke_len(2) key_exchange
             : i klen ( _rdint msg + edata 2 2 )
             : ( Vec u ) key ( bytes_slice msg + edata 4 + + edata 4 klen )
-            ( vec_free [u] found )
             = found key
             = got 1
         } {}
@@ -839,24 +892,19 @@ $ `stdlib/core/rcbox.nu`
 // ── traffic-key derivation ────────────────────────────────────────
 // From a traffic secret, derive (key, iv) and store on the conn for the
 // given direction. dir 0 = server-read, 1 = client-write.
-@ _set_keys * TlsConn c i dir ( Vec u ) secret → v {
+@ _set_keys inout TlsConnImpl c i dir ( Vec u ) secret → v {
     : ( Vec u ) retained ( bytes_slice secret 0 ( vec_len [u] secret ) )
     : ( Vec u ) emptyc ( vec_new [u] )
     : i klen ? == . c cipher 1 16 32
     : ( Vec u ) key ( hkdf_expand_label secret `key` emptyc klen )
     : ( Vec u ) iv ( hkdf_expand_label secret `iv` emptyc 12 )
-    ( vec_free [u] emptyc )
     ? == dir 0 {
-        ( vec_free [u] . c s_secret ) = . c s_secret retained
-        ( vec_free [u] . c s_key )
-        ( vec_free [u] . c s_iv )
+        = . c s_secret retained
         = . c s_key key
         = . c s_iv iv
         = . c s_seq 0
     } {
-        ( vec_free [u] . c c_secret ) = . c c_secret retained
-        ( vec_free [u] . c c_key )
-        ( vec_free [u] . c c_iv )
+        = . c c_secret retained
         = . c c_key key
         = . c c_iv iv
         = . c c_seq 0
@@ -885,8 +933,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) trunc ( bytes_slice ch 0 trunc_len )
     : ( Vec u ) th ( sha256_pure trunc )
     : ( Vec u ) mac ( hmac_sha256_pure fkey th )
-    ( vec_free [u] ehash ) ( vec_free [u] bkey )
-    ( vec_free [u] fkey ) ( vec_free [u] trunc ) ( vec_free [u] th )
     ^ mac
 }
 
@@ -915,7 +961,8 @@ $ `stdlib/core/rcbox.nu`
 // inside the application-data stream, so it lands during the first
 // tls_read. Hand the bytes to tls_connect_resume / tls_attach_resume;
 // they are secret (they hold the PSK) and single-purpose.
-@ tls_session_export * TlsConn c → ( Vec u ) {
+@ tls_session_export TlsConn c__h → ( Vec u ) {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
     : ( Vec u ) out ( vec_new [u] )
     ? == ( vec_len [u] . c tk_ticket ) 0 { ^ out } {}
     ( vec_push [u] out # u 1 )  // format version
@@ -927,25 +974,28 @@ $ `stdlib/core/rcbox.nu`
     ^ out
 }
 
+// The runtime socket handle under the connection — for timeouts and
+// readiness polling (nurl_tcp_set_timeout, nurl_tcp_err_kind, …).
+@ tls_socket TlsConn c__h → i { ^ . ( __TlsConn_ptr c__h ) fd }
+
 // T when the handshake used a ticket (no certificate was sent; the PSK
 // authenticates the server as the one that issued it).
-@ tls_is_resumed * TlsConn c → b {
+@ tls_is_resumed TlsConn c__h → b {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
     ^ == . c resumed 1
 }
 
 // RFC 8446 §§4.6.3, 7.2: rotate the indicated sender's keys and
 // reset that direction's record sequence without retaining old generations.
-@ _tls_rotate_keys * TlsConn c i dir → v {
+@ _tls_rotate_keys inout TlsConnImpl c i dir → v {
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) next ( hkdf_expand_label ? == dir 0 . c s_secret . c c_secret `traffic upd` empty 32 )
-    ( vec_free [u] empty )
     ( _set_keys c dir next )
-    ( vec_free [u] next )
 }
 
 // Encoding joins the same FIFO as already prepared ciphertext. The KU
 // itself uses the old write keys; all subsequent records use the new ones.
-@ _tls_control_to * TlsConn c ( Vec u ) out i dir → v {
+@ _tls_control_to inout TlsConnImpl c ( Vec u ) out i dir → v {
     ? != . c fatal_alert 0 {
         : ( Vec u ) alert ( vec_new [u] )
         ( vec_push [u] alert # u 2 ) ( vec_push [u] alert # u . c fatal_alert )
@@ -962,12 +1012,11 @@ $ `stdlib/core/rcbox.nu`
     = . c update_pending 0
 }
 
-@ _tls_flush_control * TlsConn c i dir → !v TlsErr {
+@ _tls_flush_control inout TlsConnImpl c i dir → !v TlsErr {
     ? & == . c update_pending 0 == . c fatal_alert 0 { ^ @ !v TlsErr { T 0 } } {}
     : ( Vec u ) wire ( vec_new [u] )
     ( _tls_control_to c wire dir )
     : b sent ( _tls_sock_write . c fd wire )
-    ( vec_free [u] wire )
     ? ! sent { = . c closed 1 ^ @ !v TlsErr { F TlsWrite } } {}
     ^ @ !v TlsErr { T 0 }
 }
@@ -975,7 +1024,7 @@ $ `stdlib/core/rcbox.nu`
 // Blocking readers send the fatal alert before returning the error.
 // Try-read leaves it for the existing ordered writer; once encoded, reads
 // report closed. Neither path emits further application data after failure.
-@ _tls_post_fail * TlsConn c i peer i alert → !v TlsErr {
+@ _tls_post_fail inout TlsConnImpl c i peer i alert → !v TlsErr {
     = . c fatal_alert alert
     ? == . c read_nowait 0 {
         : !v TlsErr sent ( _tls_flush_control c - 1 peer )
@@ -986,7 +1035,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Post-handshake fragments are bounded and cannot cross content-type or
 // key-generation boundaries. dir identifies the peer (0 server,1 client).
-@ _tls_post_hs * TlsConn c ( Vec u ) inner i dir → !v TlsErr {
+@ _tls_post_hs inout TlsConnImpl c ( Vec u ) inner i dir → !v TlsErr {
     ? | == ( vec_len [u] inner ) 0 > + ( vec_len [u] . c hsbuf ) ( vec_len [u] inner ) 262144 {
         ^ ( _tls_post_fail c dir 50 )
     } {}
@@ -1011,9 +1060,8 @@ $ `stdlib/core/rcbox.nu`
         } {
             : ( Vec u ) msg ( bytes_slice . c hsbuf 0 + 4 mlen )
             : ( Vec u ) rest ( bytes_slice . c hsbuf + 4 mlen have )
-            ( vec_free [u] . c hsbuf ) = . c hsbuf rest
+            = . c hsbuf rest
             ( __client_take_ticket c msg )
-            ( vec_free [u] msg )
         }
     }
     ^ @ !v TlsErr { T 0 }
@@ -1021,7 +1069,7 @@ $ `stdlib/core/rcbox.nu`
 
 // NewSessionTicket body: u32 lifetime, u32 age_add, nonce<u8>, ticket<u16>,
 // extensions<u16>. PSK = HKDF-Expand-Label(res_master, "resumption", nonce, 32).
-@ __client_take_ticket * TlsConn c ( Vec u ) msg → v {
+@ __client_take_ticket inout TlsConnImpl c ( Vec u ) msg → v {
     ? == ( vec_len [u] . c res_master ) 0 { ^ } {}
     : i n ( vec_len [u] msg )
     ? < n 17 { ^ } {}
@@ -1034,8 +1082,6 @@ $ `stdlib/core/rcbox.nu`
     ? | == tlen 0 > + + tp 2 tlen n { ^ } {}
     : ( Vec u ) nonce ( bytes_slice msg 13 tp )
     : ( Vec u ) psk ( hkdf_expand_label . c res_master `resumption` nonce 32 )
-    ( vec_free [u] nonce )
-    ( vec_free [u] . c tk_ticket ) ( vec_free [u] . c tk_psk )
     = . c tk_ticket ( bytes_slice msg + tp 2 + + tp 2 tlen )
     = . c tk_psk psk
     = . c tk_age_add age_add
@@ -1068,7 +1114,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) emptyc ( vec_new [u] )
     : ( Vec u ) fkey ( hkdf_expand_label secret `finished` emptyc 32 )
     : ( Vec u ) mac ( hmac_sha256_pure fkey thash )
-    ( vec_free [u] fkey )
     ^ mac
 }
 
@@ -1078,7 +1123,7 @@ $ `stdlib/core/rcbox.nu`
 // secure, verifying entry point. The presented chain, CertificateVerify
 // signature and transcript hash are captured on the conn for the
 // verifier.
-@ tls_connect_insecure s host i port s server_name → !*TlsConn TlsErr {
+@ tls_connect_insecure s host i port s server_name → !TlsConn TlsErr {
     : i raw ( nurl_tcp_connect host port )
     ^ ( tls_attach raw server_name )
 }
@@ -1122,7 +1167,6 @@ $ `stdlib/core/rcbox.nu`
 @ _alpn_offered s list ( Vec u ) sel → b {
     : ( Vec u ) packed ( tls_alpn_pack list )
     : b r ( _alpn_offered_packed packed sel )
-    ( vec_free [u] packed )
     ^ r
 }
 
@@ -1151,7 +1195,7 @@ $ `stdlib/core/rcbox.nu`
 // Send a fatal alert (RFC 8446 §6) under the current write keys — during
 // the server flight those are the handshake keys, so the peer can read
 // it. Best effort: the connection is being torn down either way.
-@ __send_alert * TlsConn c i desc → v {
+@ __send_alert inout TlsConnImpl c i desc → v {
     : ( Vec u ) alert ( vec_with_cap [u] 2 )
     ( vec_push [u] alert # u 2 )
     ( vec_push [u] alert # u desc )
@@ -1219,7 +1263,6 @@ $ `stdlib/core/rcbox.nu`
 //                                                    out_fin, c_ap / s_ap, res_master are set
 //   ( _cli_hs_err h )                     → TlsErr   what a failure was, in the record layer's terms
 //   ( _cli_hs_out_ch h ) … ( _cli_hs_s_ap h )         the machine's fields, read (Vecs lent)
-//   ( _cli_hs_free h )                    → v        early release (optional)
 //
 // `state`: 0 new · 1 ClientHello built (awaiting ServerHello) · 2
 // handshake secrets derived (awaiting the server flight) · 3 done ·
@@ -1294,7 +1337,7 @@ $ `stdlib/core/rcbox.nu`
 
 @ _cli_hs_new s server_name s alpn ( Vec u ) sess → CliHs {
     : i h__box ( rcbox_zero [CliHsImpl] )
-    : *CliHsImpl h ( rcbox_ptr [CliHsImpl] h__box )
+    : ~ * CliHsImpl h ( rcbox_ptr [CliHsImpl] h__box )
     = . h sni ( bytes_from_str server_name )
     = . h alpn ( tls_alpn_pack alpn )
     = . h ext_out ( vec_new [u] )
@@ -1323,7 +1366,6 @@ $ `stdlib/core/rcbox.nu`
     = . h tk_age_add 0
     = . h tk_lifetime 0
     = . h tk_received_ms 0
-    = . h res_early ( vec_new [u] )
     = . h alpn_sel ( vec_new [u] )
     = . h c_hs ( vec_new [u] )
     = . h s_hs ( vec_new [u] )
@@ -1343,11 +1385,10 @@ $ `stdlib/core/rcbox.nu`
     // resumption at all), in which case the handshake is simply the
     // full one — nothing here is trusted until the ServerHello says
     // the ticket was taken.
-    ? ( __cli_sess_load h sess ) {
+    ? ( __cli_sess_load . h 0 sess ) {
         = . h offer 1
-        ( vec_free [u] . h res_early )
         = . h res_early ( _psk_early . h tk_psk )
-    } {}
+    } { = . h res_early ( vec_new [u] ) }
     ^ @ CliHs { # s h__box }
 }
 
@@ -1362,9 +1403,6 @@ $ `stdlib/core/rcbox.nu`
     : *CliHsImpl h ( __CliHs_ptr h__h )
     = . h compat on
 }
-
-// Let go of `h` now rather than at the end of its owner's scope.
-@ _cli_hs_free sink CliHs h → v {}
 
 // What the QUIC driver (std/quic_tls.nu) reads off the machine. Vecs are
 // the machine's own, lent.
@@ -1402,14 +1440,18 @@ $ `stdlib/core/rcbox.nu`
 
 @ _cli_hs_s_ap CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) s_ap }
 
-@ __cli_hs_fail * CliHsImpl h i err i alert → i {
+@ __cli_hs_fail inout CliHsImpl h i err i alert → i {
     = . h state 4
     = . h err err
     ^ alert
 }
 
 @ _cli_hs_err CliHs h__h → TlsErr {
-    : *CliHsImpl h ( __CliHs_ptr h__h )
+    : ~ * CliHsImpl h ( __CliHs_ptr h__h )
+    ^ ( __cli_hs_errk . h 0 )
+}
+
+@ __cli_hs_errk inout CliHsImpl h → TlsErr {
     ? == . h err 2 { ^ # TlsErr TlsProtocol } {}
     ? == . h err 3 { ^ # TlsErr TlsBadCipher } {}
     ? == . h err 4 { ^ # TlsErr TlsHRR } {}
@@ -1419,7 +1461,7 @@ $ `stdlib/core/rcbox.nu`
 // Load an exported session onto the machine as the offer for its
 // handshake. F (and nothing loaded) for an empty, malformed or expired
 // blob — the caller then simply does a full handshake.
-@ __cli_sess_load * CliHsImpl h ( Vec u ) sess → b {
+@ __cli_sess_load inout CliHsImpl h ( Vec u ) sess → b {
     : i n ( vec_len [u] sess )
     ? | < n 21 != ( _t_bget sess 0 ) 1 { ^ F } {}
     : i age_add ( _rdint sess 1 4 )
@@ -1435,7 +1477,6 @@ $ `stdlib/core/rcbox.nu`
     // do not offer it.
     : i age_ms - ( now_ms ) received
     ? | < age_ms 0 > age_ms * lifetime 1000 { ^ F } {}
-    ( vec_free [u] . h tk_psk ) ( vec_free [u] . h tk_ticket )
     = . h tk_psk ( bytes_slice sess 19 tp )
     = . h tk_ticket ( bytes_slice sess + tp 2 n )
     = . h tk_age_add age_add
@@ -1447,13 +1488,14 @@ $ `stdlib/core/rcbox.nu`
 // Fresh key shares for every group we offer and the ClientHello that
 // carries them, into `out_ch`.
 @ _cli_hs_start CliHs h__h → v {
-    : *CliHsImpl h ( __CliHs_ptr h__h )
+    : ~ * CliHsImpl h ( __CliHs_ptr h__h )
+    ( _cli_hs_start_in . h 0 )
+}
+
+@ _cli_hs_start_in inout CliHsImpl h → v {
     ? != . h state 0 { ^ } {}
-    ( vec_free [u] . h x_priv )
     = . h x_priv ( _rand_bytes 32 )
-    ( vec_free [u] . h x_pub )
     = . h x_pub ( x25519_base . h x_priv )
-    ( vec_free [u] . h p256_priv )
     = . h p256_priv ( _rand_bytes 32 )
     : ( Vec u ) p256pub ( p256_ecdh_keygen . h p256_priv )
     // ML-KEM-768 for the hybrid group. The decapsulation key stays on
@@ -1461,12 +1503,8 @@ $ `stdlib/core/rcbox.nu`
     // key travels in the ClientHello.
     : MlkemKeys pqkeys ( mlkem_keygen 768 )
     : ( Vec u ) pqpub ( bytes_slice ( mlkem_ek pqkeys ) 0 ( vec_len [u] ( mlkem_ek pqkeys ) ) )
-    ( vec_free [u] . h pq_dk )
     = . h pq_dk ( bytes_slice ( mlkem_dk pqkeys ) 0 ( vec_len [u] ( mlkem_dk pqkeys ) ) )
-    ( mlkem_keys_free pqkeys )
-    ( vec_free [u] . h random )
     = . h random ( _rand_bytes 32 )
-    ( vec_free [u] . h sessid )
     = . h sessid ( _rand_bytes ? != . h compat 0 32 0 )
     : ~ i obf_age 0
     ? == . h offer 1 {
@@ -1475,16 +1513,11 @@ $ `stdlib/core/rcbox.nu`
     } {}
     : ( Vec u ) noid ( vec_new [u] )
     : ( Vec u ) ch ( __build_client_hello . h sni . h x_pub p256pub pqpub . h random . h sessid . h alpn . h ext_out ? == . h offer 1 . h tk_ticket noid obf_age )
-    ( vec_free [u] noid )
-    ( vec_free [u] pqpub )
-    ( vec_free [u] p256pub )
     ? == . h offer 1 {
         : ( Vec u ) binder ( _psk_binder_over . h res_early ch - ( vec_len [u] ch ) 35 )
         ( __ch_patch_binder ch binder )
-        ( vec_free [u] binder )
     } {}
     ( sha256_update . h trh ch )
-    ( vec_free [u] . h out_ch )
     = . h out_ch ch
     = . h state 1
 }
@@ -1493,7 +1526,11 @@ $ `stdlib/core/rcbox.nu`
 // whole handshake key schedule. On success `state` is 2 and c_hs / s_hs
 // are the handshake traffic secrets.
 @ _cli_hs_server_hello CliHs h__h ( Vec u ) sh → i {
-    : *CliHsImpl h ( __CliHs_ptr h__h )
+    : ~ * CliHsImpl h ( __CliHs_ptr h__h )
+    ^ ( _cli_hs_server_hello_in . h 0 sh )
+}
+
+@ _cli_hs_server_hello_in inout CliHsImpl h ( Vec u ) sh → i {
     ? != . h state 1 { ^ ( __cli_hs_fail h 1 10 ) } {}
     // handshake type 2, and at least the fixed part of the body
     ? | < ( vec_len [u] sh ) 42 != ( _t_bget sh 0 ) 2 { ^ ( __cli_hs_fail h 1 50 ) } {}
@@ -1504,7 +1541,6 @@ $ `stdlib/core/rcbox.nu`
         // TLS 1.2: none of the 1.3 schedule applies. The hello is kept
         // for a caller that speaks 1.2 (the TCP record layer does);
         // QUIC refuses it.
-        ( vec_free [u] . h sh )
         = . h sh ( bytes_slice sh 0 ( vec_len [u] sh ) )
         ^ 0
     } {}
@@ -1512,13 +1548,13 @@ $ `stdlib/core/rcbox.nu`
     : ~ i bad 0
     : !( Vec u ) TlsErr spkr ( __parse_server_hello sh )
     ?? spkr {
-        T k → { ( vec_free [u] spub ) = spub k }
+        T k → { = spub k }
         F e → { = bad ?? e { TlsHRR → 4 TlsBadCipher → 3 _ → 1 } }
     }
     // A HelloRetryRequest is not taken up (every share is in the first
     // hello, so a server has no reason to send one): handshake_failure.
     // A suite or key_share we cannot use is illegal_parameter.
-    ? != bad 0 { ( vec_free [u] spub ) ^ ( __cli_hs_fail h bad ? == bad 4 40 47 ) } {}
+    ? != bad 0 { ^ ( __cli_hs_fail h bad ? == bad 4 40 47 ) } {}
     ( sha256_update . h trh sh )
 
     // The negotiated group is told by the server key-exchange length:
@@ -1532,15 +1568,14 @@ $ `stdlib/core/rcbox.nu`
     // is at least as strong as either half, so the handshake survives
     // ML-KEM being broken *and* survives X25519 being broken.
     : i sl ( vec_len [u] spub )
-    ? & & != sl 1120 != sl 65 != sl 32 { ( vec_free [u] spub ) ^ ( __cli_hs_fail h 2 47 ) } {}
+    ? & & != sl 1120 != sl 65 != sl 32 { ^ ( __cli_hs_fail h 2 47 ) } {}
     = . h kx_group ? == sl 1120 4588 ? == sl 65 23 29
     : ( Vec u ) ecdhe ? == sl 1120
     ( __hybrid_shared . h pq_dk . h x_priv spub )
     ? == sl 65 ( p256_ecdh_shared . h p256_priv spub ) ( x25519 . h x_priv spub )
-    ( vec_free [u] spub )
     // RFC 8446 §7.4.2 — abort if the ECDHE output is all-zero (peer sent
     // a low-order / small-subgroup point forcing a known shared secret).
-    ? ( _all_zero ecdhe ) { ( vec_free [u] ecdhe ) ^ ( __cli_hs_fail h 2 47 ) } {}
+    ? ( _all_zero ecdhe ) { ^ ( __cli_hs_fail h 2 47 ) } {}
 
     : ( Vec u ) z32 ( vec_with_cap [u] 32 )
     : ~ i zk 0
@@ -1556,16 +1591,10 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
     : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
     : ( Vec u ) th_sh ( sha256_snapshot . h trh )
-    ( vec_free [u] . h c_hs )
     = . h c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
-    ( vec_free [u] . h s_hs )
     = . h s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
     : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
-    ( vec_free [u] . h master )
     = . h master ( hkdf_extract derived2 z32 )
-    ( vec_free [u] ecdhe ) ( vec_free [u] z32 ) ( vec_free [u] empty ) ( vec_free [u] ehash )
-    ( vec_free [u] early ) ( vec_free [u] derived1 ) ( vec_free [u] hs_secret )
-    ( vec_free [u] th_sh ) ( vec_free [u] derived2 )
     = . h state 2
     ^ 0
 }
@@ -1584,7 +1613,11 @@ $ `stdlib/core/rcbox.nu`
 
 // One message of the server's flight, under the handshake keys.
 @ _cli_hs_message CliHs h__h ( Vec u ) m → i {
-    : *CliHsImpl h ( __CliHs_ptr h__h )
+    : ~ * CliHsImpl h ( __CliHs_ptr h__h )
+    ^ ( _cli_hs_message_in . h 0 m )
+}
+
+@ _cli_hs_message_in inout CliHsImpl h ( Vec u ) m → i {
     ? != . h state 2 { ^ ( __cli_hs_fail h 1 10 ) } {}
     ? < ( vec_len [u] m ) 4 { ^ ( __cli_hs_fail h 1 50 ) } {}
     : i t ( _t_bget m 0 )
@@ -1597,16 +1630,12 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) th_cv ( sha256_snapshot . h trh )
         : ( Vec u ) expect ( _finished_mac . h s_hs th_cv )
         : b okfin ( _cmp_finished m expect )
-        ( vec_free [u] th_cv )
-        ( vec_free [u] expect )
         ? okfin {} { ^ ( __cli_hs_fail h 1 51 ) }
         ( sha256_update . h trh m )
         // application traffic secrets: transcript through the server
         // Finished — also what our own Finished is computed over
         : ( Vec u ) th_sf ( sha256_snapshot . h trh )
-        ( vec_free [u] . h c_ap )
         = . h c_ap ( derive_secret . h master `c ap traffic` th_sf )
-        ( vec_free [u] . h s_ap )
         = . h s_ap ( derive_secret . h master `s ap traffic` th_sf )
         : ( Vec u ) cfin ( _finished_mac . h c_hs th_sf )
         : ( Vec u ) finmsg ( vec_with_cap [u] 36 )
@@ -1618,11 +1647,8 @@ $ `stdlib/core/rcbox.nu`
         // its PSK from this (see __client_take_ticket).
         ( sha256_update . h trh finmsg )
         : ( Vec u ) th_cf ( sha256_final . h trh )
-        ( vec_free [u] . h res_master )
         = . h res_master ( derive_secret . h master `res master` th_cf )
-        ( vec_free [u] . h out_fin )
         = . h out_fin finmsg
-        ( vec_free [u] th_sf ) ( vec_free [u] cfin ) ( vec_free [u] th_cf )
         = . h state 3
         ^ 0
     } {}
@@ -1634,13 +1660,11 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) sel ( __ee_alpn m )
         ? > ( vec_len [u] sel ) 0 {
             ? ( _alpn_offered_packed . h alpn sel ) {
-                ( vec_free [u] . h alpn_sel )
                 = . h alpn_sel sel
             } {
-                ( vec_free [u] sel )
                 ^ ( __cli_hs_fail h 1 120 )
             }
-        } { ( vec_free [u] sel ) }
+        } {}
         // The extension a driver requires (QUIC: transport parameters).
         ? != . h ext_want 0 {
             : i n ( vec_len [u] m )
@@ -1654,23 +1678,19 @@ $ `stdlib/core/rcbox.nu`
             ( vec_clear [u] . h ext_in )
             : ( Vec u ) xb ( bytes_slice m xo + xo xl )
             ( bytes_extend_bytes . h ext_in xb )
-            ( vec_free [u] xb )
         } {}
     } {}
     ? == t 11 {
-        ( vec_free [u] . h cert_msg )
         = . h cert_msg ( bytes_slice m 0 ( vec_len [u] m ) )
     } {}
     ? == t 15 {
         // CertificateVerify: the transcript through Certificate (before
         // this message), the scheme and the signature — for the verifier.
         ? < ( vec_len [u] m ) 8 { ^ ( __cli_hs_fail h 1 50 ) } {}
-        ( vec_free [u] . h th_cert )
         = . h th_cert ( sha256_snapshot . h trh )
         = . h cv_scheme ( _rdint m 4 2 )
         : i siglen ( _rdint m 6 2 )
         ? > + 8 siglen ( vec_len [u] m ) { ^ ( __cli_hs_fail h 1 50 ) } {}
-        ( vec_free [u] . h cv_sig )
         = . h cv_sig ( bytes_slice m 8 + 8 siglen )
     } {}
     ( sha256_update . h trh m )
@@ -1680,7 +1700,7 @@ $ `stdlib/core/rcbox.nu`
 // Send an alert record (RFC 8446 §6) the way the peer can read it right
 // now: under the current write keys once there are any, in the clear
 // before that. Best effort — the connection is being torn down.
-@ __cli_say_alert * TlsConn c i desc → v {
+@ __cli_say_alert inout TlsConnImpl c i desc → v {
     ? > ( vec_len [u] . c c_key ) 0 { ( __send_alert c desc ) ^ } {}
     : ( Vec u ) alert ( vec_with_cap [u] 2 )
     ( vec_push [u] alert # u 2 )
@@ -1689,9 +1709,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The handshake machine is the caller's binding: it goes with that scope.
-@ __cli_abort * TlsConn c TlsErr e → !*TlsConn TlsErr {
-    ( tls_close c )
-    ^ @ !*TlsConn TlsErr { F e }
+@ __cli_abort inout TlsConnImpl c TlsErr e → !v TlsErr {
+    ( _tls_close_in c )
+    ^ @ !v TlsErr { F e }
 }
 
 // Core client handshake over a socket: the record layer around `CliHs`.
@@ -1700,62 +1720,30 @@ $ `stdlib/core/rcbox.nu`
 // is sent. The negotiated protocol (from the server's
 // EncryptedExtensions, checked to be one we offered) is stored in
 // `c.alpn_sel`.
-@ __tls_handshake i raw s server_name s alpn ( Vec u ) sess → !*TlsConn TlsErr {
+@ __tls_handshake i raw s server_name s alpn ( Vec u ) sess → !TlsConn TlsErr {
     : i ek ( nurl_tcp_err_kind raw )
-    ? != ek 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
+    ? != ek 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     // Read timeout so an unresponsive/dead peer fails the handshake
     // cleanly instead of blocking the client forever.
     ( nurl_tcp_set_timeout raw 20000 )
-
-    // Heap-allocate the connection so field mutations (key rotation,
-    // buffer consumption) in the helpers persist across calls.
-    : *TlsConn c # *TlsConn ( nurl_alloc Z TlsConn )
-    = . c fd raw
-    = . c read_nowait 0
-    = . c s_secret ( vec_new [u] )
-    = . c c_secret ( vec_new [u] )
-    = . c update_pending 0
-    = . c fatal_alert 0
-    = . c rxbuf ( vec_new [u] )
-    = . c hsbuf ( vec_new [u] )
-    = . c appbuf ( vec_new [u] )
-    = . c s_key ( vec_new [u] )
-    = . c s_iv ( vec_new [u] )
-    = . c c_key ( vec_new [u] )
-    = . c c_iv ( vec_new [u] )
-    = . c s_seq 0
-    = . c c_seq 0
-    = . c enc_read 0
-    = . c established 0
-    = . c closed 0
-    = . c cert_msg ( vec_new [u] )
-    = . c cv_sig ( vec_new [u] )
-    = . c th_cert ( vec_new [u] )
-    = . c cv_scheme 0
-    = . c cipher 0
-    = . c version 13
-    = . c kx_p256 ( vec_new [u] )
-    = . c kx_mlkem ( vec_new [u] )
-    = . c kx_group 0
-    = . c alpn_sel ( vec_new [u] )
-    = . c resumed 0
-    = . c res_master ( vec_new [u] )
-    = . c res_early ( vec_new [u] )
-    = . c tk_ticket ( vec_new [u] )
-    = . c tk_psk ( vec_new [u] )
-    = . c tk_age_add 0
-    = . c tk_lifetime 0
-    = . c tk_received_ms 0
-
-    // ── ClientHello ──
+    : TlsConn c__h ( _tls_conn_new raw )
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    // The handshake machine goes with this scope, on every path out of it.
     : CliHs hs__h ( _cli_hs_new server_name alpn sess )
-    : *CliHsImpl hs ( __CliHs_ptr hs__h )
-    ( _cli_hs_start hs__h )
+    : ~ * CliHsImpl hs ( __CliHs_ptr hs__h )
+    : !v TlsErr r ( __cli_connect . c 0 . hs 0 )
+    ^ ?? r { T _ → @ !TlsConn TlsErr { T c__h } F e → @ !TlsConn TlsErr { F e } }
+}
+
+// The record layer around the machine: ClientHello out, the server's
+// flight in, Finished out, keys installed on `c`.
+@ __cli_connect inout TlsConnImpl c inout CliHsImpl hs → !v TlsErr {
+    // ── ClientHello ──
+    ( _cli_hs_start_in hs )
     // The offered ticket stays on the connection: a resumed handshake
     // brings no certificate and need not bring a new ticket, and
     // tls_session_export still has to hand this one on.
     ? == . hs offer 1 {
-        ( vec_free [u] . c tk_ticket ) ( vec_free [u] . c tk_psk )
         = . c tk_ticket ( bytes_slice . hs tk_ticket 0 ( vec_len [u] . hs tk_ticket ) )
         = . c tk_psk ( bytes_slice . hs tk_psk 0 ( vec_len [u] . hs tk_psk ) )
         = . c tk_age_add . hs tk_age_add
@@ -1768,11 +1756,10 @@ $ `stdlib/core/rcbox.nu`
     // ── ServerHello ──
     : !( Vec u ) TlsErr shr ( __next_hs c )
     : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __cli_abort c e ) } }
-    : i shrc ( _cli_hs_server_hello hs__h sh )
+    : i shrc ( _cli_hs_server_hello_in hs sh )
     ? != shrc 0 {
-        ( vec_free [u] sh )
         ( __cli_say_alert c shrc )
-        ^ ( __cli_abort c ( _cli_hs_err hs__h ) )
+        ^ ( __cli_abort c ( __cli_hs_errk hs ) )
     } {}
     = . c version . hs version
     = . c cipher . hs cipher
@@ -1788,20 +1775,16 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) ch ( bytes_slice . hs out_ch 0 ( vec_len [u] . hs out_ch ) )
         : ( Vec u ) tr ( bytes_slice . hs out_ch 0 ( vec_len [u] . hs out_ch ) )
         ( _tls_cat tr sh )
-        ( vec_free [u] . c kx_p256 )
         = . c kx_p256 ( bytes_slice . hs p256_priv 0 ( vec_len [u] . hs p256_priv ) )
         // ALPN under 1.2 is answered in the ServerHello itself. Without
         // this a load balancer that picked h2 there was spoken to in
         // HTTP/1.1 — and every request to it failed.
         : ( Vec u ) sel12 ( __sh_alpn sh )
         ? & > ( vec_len [u] sel12 ) 0 ( _alpn_offered_packed . hs alpn sel12 ) {
-            ( vec_free [u] . c alpn_sel )
             = . c alpn_sel sel12
-        } { ( vec_free [u] sel12 ) }
-        ( _cli_hs_free hs__h )
+        } {}
         ^ ( __tls12_handshake c sh priv cpub random sessid ch tr )
     } {}
-    ( vec_free [u] sh )
     = . c kx_group . hs kx_group
     = . c resumed . hs resumed
 
@@ -1818,27 +1801,22 @@ $ `stdlib/core/rcbox.nu`
         ?? mr {
             F e → { ^ ( __cli_abort c e ) }
             T msg → {
-                = rc ( _cli_hs_message hs__h msg )
-                ( vec_free [u] msg )
+                = rc ( _cli_hs_message_in hs msg )
             }
         }
     }
     ? != rc 0 {
         ( __cli_say_alert c rc )
-        ^ ( __cli_abort c ( _cli_hs_err hs__h ) )
+        ^ ( __cli_abort c ( __cli_hs_errk hs ) )
     } {}
     // what the verifier and the callers read off the connection
-    ( vec_free [u] . c cert_msg )
     = . c cert_msg . hs cert_msg
     = . hs cert_msg ( vec_new [u] )
-    ( vec_free [u] . c cv_sig )
     = . c cv_sig . hs cv_sig
     = . hs cv_sig ( vec_new [u] )
-    ( vec_free [u] . c th_cert )
     = . c th_cert . hs th_cert
     = . hs th_cert ( vec_new [u] )
     = . c cv_scheme . hs cv_scheme
-    ( vec_free [u] . c alpn_sel )
     = . c alpn_sel . hs alpn_sel
     = . hs alpn_sel ( vec_new [u] )
 
@@ -1848,7 +1826,6 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] ccs # u 1 )
     : !v TlsErr cw ( _send_plain c 20 ccs )
     ?? cw { T _ → {} F _ → {} }
-    ( vec_free [u] ccs )
     : !v TlsErr fw ( __send_encrypted c 22 . hs out_fin )
     ?? fw { T _ → {} F _ → {} }
 
@@ -1856,17 +1833,16 @@ $ `stdlib/core/rcbox.nu`
     ( _set_keys c 0 . hs s_ap )
     ( _set_keys c 1 . hs c_ap )
     = . c established 1
-    ( vec_free [u] . c res_master )
     = . c res_master . hs res_master
     = . hs res_master ( vec_new [u] )
-    ^ @ !*TlsConn TlsErr { T c }
+    ^ @ !v TlsErr { T 0 }
 }
 
 // Upgrade an already-connected fd to TLS (no ALPN). Insecure: does not
 // verify the certificate (see tls_attach_verify).
-@ tls_attach i raw s server_name → !*TlsConn TlsErr {
+@ tls_attach i raw s server_name → !TlsConn TlsErr {
     : ( Vec u ) nosess ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_handshake raw server_name `` nosess )
+    : !TlsConn TlsErr r ( __tls_handshake raw server_name `` nosess )
     ^ r
 }
 
@@ -1874,9 +1850,9 @@ $ `stdlib/core/rcbox.nu`
 // "h2 http/1.1"). After a successful handshake the negotiated protocol is
 // readable via tls_alpn_selected (empty if the server declined ALPN).
 // Insecure variant.
-@ tls_attach_alpn i raw s server_name s alpn → !*TlsConn TlsErr {
+@ tls_attach_alpn i raw s server_name s alpn → !TlsConn TlsErr {
     : ( Vec u ) nosess ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_handshake raw server_name alpn nosess )
+    : !TlsConn TlsErr r ( __tls_handshake raw server_name alpn nosess )
     ^ r
 }
 
@@ -1886,13 +1862,13 @@ $ `stdlib/core/rcbox.nu`
 // round trip, no signature to verify) and tls_is_resumed answers T;
 // otherwise this is exactly tls_attach. Insecure variant — see
 // tls_connect_resume for the verifying one.
-@ tls_attach_resume i raw s server_name ( Vec u ) sess → !*TlsConn TlsErr {
+@ tls_attach_resume i raw s server_name ( Vec u ) sess → !TlsConn TlsErr {
     ^ ( __tls_handshake raw server_name `` sess )
 }
 
 // Unverified connect with a resumption offer (the tls_connect_insecure
 // of resumption — pinned / self-signed / test servers).
-@ tls_connect_insecure_resume s host i port s server_name ( Vec u ) sess → !*TlsConn TlsErr {
+@ tls_connect_insecure_resume s host i port s server_name ( Vec u ) sess → !TlsConn TlsErr {
     : i raw ( nurl_tcp_connect host port )
     ^ ( tls_attach_resume raw server_name sess )
 }
@@ -1901,9 +1877,9 @@ $ `stdlib/core/rcbox.nu`
 // authenticated by the PSK (the ticket's issuer is the server verified
 // when the session was made); a declined offer falls back to the full
 // handshake and the usual chain / hostname verification.
-@ tls_connect_resume s host i port s server_name ( Vec u ) sess → !*TlsConn TlsErr {
+@ tls_connect_resume s host i port s server_name ( Vec u ) sess → !TlsConn TlsErr {
     : i raw ( nurl_tcp_connect host port )
-    : !*TlsConn TlsErr r ( tls_attach_resume raw server_name sess )
+    : !TlsConn TlsErr r ( tls_attach_resume raw server_name sess )
     ^ ( __verify_conn r server_name )
 }
 
@@ -1919,7 +1895,8 @@ $ `stdlib/core/rcbox.nu`
 // not mean getting it, and the difference is the whole point. A server
 // that has not deployed ML-KEM silently falls back to X25519, and the
 // handshake looks identical from every other angle.
-@ tls_group * TlsConn c → i {
+@ tls_group TlsConn c__h → i {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
     ^ . c kx_group
 }
 
@@ -1927,21 +1904,35 @@ $ `stdlib/core/rcbox.nu`
 // what the server signed with; on a server, what it chose to sign with
 // (ecdsa_secp256r1_sha256 0x0403, rsa_pss_rsae_sha256 0x0804, mldsa44/65/87
 // 0x0904–0x0906). 0 on a resumed handshake, which carries no certificate.
-@ tls_cv_scheme * TlsConn c → i {
+@ tls_cv_scheme TlsConn c__h → i {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
     ^ . c cv_scheme
 }
+
+// What a client captured for the verifier (lent; empty on a resumed
+// handshake): the raw Certificate message, the CertificateVerify
+// signature, and the transcript hash through the Certificate —
+// `tls_cv_verify ( tls_cert_msg c ) ( tls_cv_scheme c ) ( tls_cv_sig c )
+// ( tls_th_cert c )` re-checks the server's proof of key possession.
+@ tls_cert_msg TlsConn c__h → ( Vec u ) { ^ . ( __TlsConn_ptr c__h ) cert_msg }
+
+@ tls_cv_sig TlsConn c__h → ( Vec u ) { ^ . ( __TlsConn_ptr c__h ) cv_sig }
+
+@ tls_th_cert TlsConn c__h → ( Vec u ) { ^ . ( __TlsConn_ptr c__h ) th_cert }
 
 // T when the negotiated group carries a post-quantum component, so the
 // session's forward secrecy survives a future quantum adversary
 // recording it today.
-@ tls_is_post_quantum * TlsConn c → b {
+@ tls_is_post_quantum TlsConn c__h → b {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
     ^ == . c kx_group 4588
 }
 
 // True iff the negotiated ALPN protocol is exactly `proto` — the
 // allocation-free form of tls_alpn_selected for the per-connection
 // dispatch question ("is this h2?").
-@ tls_alpn_is * TlsConn c s proto → b {
+@ tls_alpn_is TlsConn c__h s proto → b {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
     : i n ( vec_len [u] . c alpn_sel )
     ? != n ( nurl_str_len proto ) { ^ F } {}
     : *u p ( vec_data [u] . c alpn_sel )
@@ -1953,7 +1944,8 @@ $ `stdlib/core/rcbox.nu`
     ^ T
 }
 
-@ tls_alpn_selected * TlsConn c → String {
+@ tls_alpn_selected TlsConn c__h → String {
+    : *TlsConnImpl c ( __TlsConn_ptr c__h )
     : String s ( string_new )
     : i n ( vec_len [u] . c alpn_sel )
     : ~ i k 0
@@ -1971,33 +1963,32 @@ $ `stdlib/core/rcbox.nu`
 // the connection is closed and TlsBadCert is returned.
 // TLS 1.2 verification: the ServerKeyExchange signature (authenticating
 // the ephemeral key to the leaf cert) + the certificate chain.
-@ __verify12 * TlsConn c s hostname → i {
+@ __verify12 inout TlsConnImpl c s hostname → i {
     : X509 leaf ( tls_leaf_cert . c cert_msg 1 )
-    ? ! . leaf ok { ( x509_free leaf ) ^ 2 } {}
+    ? ! . leaf ok { ^ 2 } {}
     : i sk ( tls12_ske_verify leaf . c cv_scheme . c cv_sig . c th_cert )
-    ( x509_free leaf )
     ? != sk 0 { ^ sk } {}
     ^ ( tls_chain_verify . c cert_msg 1 hostname )
 }
 
-@ tls_connect s host i port s server_name → !*TlsConn TlsErr {
-    : !*TlsConn TlsErr r ( tls_connect_insecure host port server_name )
+@ tls_connect s host i port s server_name → !TlsConn TlsErr {
+    : !TlsConn TlsErr r ( tls_connect_insecure host port server_name )
     ^ ( __verify_conn r server_name )
 }
 
 // Verifying counterpart of `tls_attach`: upgrade an already-connected
 // socket to TLS and verify the chain / hostname against the system trust
 // store (the secure default for STARTTLS-style upgrades).
-@ tls_attach_verify i raw s server_name → !*TlsConn TlsErr {
-    : !*TlsConn TlsErr r ( tls_attach raw server_name )
+@ tls_attach_verify i raw s server_name → !TlsConn TlsErr {
+    : !TlsConn TlsErr r ( tls_attach raw server_name )
     ^ ( __verify_conn r server_name )
 }
 
 // Verifying counterpart of tls_attach_alpn: offer an ALPN protocol AND
 // verify the chain / hostname. The negotiated protocol is then readable
 // with tls_alpn_selected.
-@ tls_attach_alpn_verify i raw s server_name s alpn → !*TlsConn TlsErr {
-    : !*TlsConn TlsErr r ( tls_attach_alpn raw server_name alpn )
+@ tls_attach_alpn_verify i raw s server_name s alpn → !TlsConn TlsErr {
+    : !TlsConn TlsErr r ( tls_attach_alpn raw server_name alpn )
     ^ ( __verify_conn r server_name )
 }
 
@@ -2007,14 +1998,14 @@ $ `stdlib/core/rcbox.nu`
 // `verify` is non-zero. The one-knob variants above are this with a
 // blank somewhere; an HTTP client that wants to resume a session on the
 // same connection it negotiates HTTP/2 over needs all of them at once.
-@ tls_attach_full i raw s server_name s alpn ( Vec u ) sess i verify → !*TlsConn TlsErr {
-    : !*TlsConn TlsErr r ( __tls_handshake raw server_name alpn sess )
+@ tls_attach_full i raw s server_name s alpn ( Vec u ) sess i verify → !TlsConn TlsErr {
+    : !TlsConn TlsErr r ( __tls_handshake raw server_name alpn sess )
     ? != verify 0 { ^ ( __verify_conn r server_name ) } {}
     ^ r
 }
 
 // tls_attach_full over a fresh TCP connection to host:port.
-@ tls_connect_full s host i port s server_name s alpn ( Vec u ) sess i verify → !*TlsConn TlsErr {
+@ tls_connect_full s host i port s server_name s alpn ( Vec u ) sess i verify → !TlsConn TlsErr {
     : i raw ( nurl_tcp_connect host port )
     ^ ( tls_attach_full raw server_name alpn sess verify )
 }
@@ -2022,19 +2013,20 @@ $ `stdlib/core/rcbox.nu`
 // Shared post-handshake verification used by both tls_connect and
 // tls_attach_verify: check the certificate (TLS 1.3 CertificateVerify or
 // TLS 1.2 ServerKeyExchange sig + chain + hostname) and close on failure.
-@ __verify_conn ! * TlsConn TlsErr r s server_name → !*TlsConn TlsErr {
+@ __verify_conn sink ! TlsConn TlsErr r s server_name → !TlsConn TlsErr {
     ?? r {
-        F e → { ^ @ !*TlsConn TlsErr { F e } }
-        T c → {
+        F e → { ^ @ !TlsConn TlsErr { F e } }
+        T h → {
+            : ~ * TlsConnImpl c ( __TlsConn_ptr h )
             // A resumed connection carries no certificate: the PSK it was
             // established from authenticates the server as the issuer of
             // the ticket, which was verified when that session was made.
-            : i rc ? == . c resumed 1 0 ? == . c version 12 ( __verify12 c server_name ) ( tls_cert_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert server_name )
+            : i rc ? == . c resumed 1 0 ? == . c version 12 ( __verify12 . c 0 server_name ) ( tls_cert_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert server_name )
             ? == rc 0 {
-                ^ @ !*TlsConn TlsErr { T c }
+                ^ @ !TlsConn TlsErr { T h }
             } {
-                ( tls_close c )
-                ^ @ !*TlsConn TlsErr { F # TlsErr TlsBadCert }
+                ( _tls_close_in . c 0 )
+                ^ @ !TlsConn TlsErr { F # TlsErr TlsBadCert }
             }
         }
     }
@@ -2050,11 +2042,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Cleanup paths on early/late handshake failure.
-@ __fail * TlsConn c ( Vec u ) priv ( Vec u ) cpub ( Vec u ) random ( Vec u ) sessid ( Vec u ) ch ( Vec u ) tr TlsErr e → !*TlsConn TlsErr {
-    ( vec_free [u] priv ) ( vec_free [u] cpub ) ( vec_free [u] random ) ( vec_free [u] sessid )
-    ( vec_free [u] ch ) ( vec_free [u] tr )
-    ( tls_close c )
-    ^ @ !*TlsConn TlsErr { F e }
+@ __fail inout TlsConnImpl c TlsErr e → !v TlsErr {
+    ( _tls_close_in c )
+    ^ @ !v TlsErr { F e }
 }
 
 // ── application data ──────────────────────────────────────────────
@@ -2063,7 +2053,12 @@ $ `stdlib/core/rcbox.nu`
 // same limit in 1.2): peers MUST reject anything larger, and past 65535
 // the record header's u16 length field wraps outright. Split
 // application data into ≤16384-byte records.
-@ tls_write * TlsConn c ( Vec u ) data → !v TlsErr {
+@ tls_write TlsConn c__h ( Vec u ) data → !v TlsErr {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_write_in . c 0 data )
+}
+
+@ _tls_write_in inout TlsConnImpl c ( Vec u ) data → !v TlsErr {
     ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
     ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n ( vec_len [u] data )
@@ -2078,7 +2073,6 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) part ( bytes_slice data off hi )
         : ~ ! v TlsErr w @ !v TlsErr { T 0 }
         ? == . c version 12 { = w ( __send_record_12 c 23 part ) } { = w ( __send_encrypted c 23 part ) }
-        ( vec_free [u] part )
         ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
         = off hi
     }
@@ -2115,7 +2109,12 @@ $ `stdlib/core/rcbox.nu`
 // Encode application records once for a nonblocking FIFO writer. The
 // returned bytes own their storage; advancing the sequence belongs here,
 // never in a retry of a partial socket write. No socket I/O occurs.
-@ tls_prepare_write * TlsConn c ( Vec u ) data → !( Vec u ) TlsErr {
+@ tls_prepare_write TlsConn c__h ( Vec u ) data → !( Vec u ) TlsErr {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_prepare_write_in . c 0 data )
+}
+
+@ _tls_prepare_write_in inout TlsConnImpl c ( Vec u ) data → !( Vec u ) TlsErr {
     ? | != . c closed 0 != . c established 1 {
         ^ @ !( Vec u ) TlsErr { F TlsClosed }
     } {}
@@ -2129,7 +2128,6 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) part ( bytes_slice data offset end )
         ? == . c version 12 {
             ( _tls_record12_to c wire 23 part )
-            ( vec_free [u] part )
         } { ( _tls_seal_inner_to c wire 23 part ) }
         = offset end
     }
@@ -2138,7 +2136,12 @@ $ `stdlib/core/rcbox.nu`
 
 // Pair variant of tls_prepare_write: records cut from `head`‖`body` are
 // sealed straight into `out`, the caller's ciphertext FIFO. No socket I/O.
-@ tls_prepare_write2_to * TlsConn c ( Vec u ) out ( Vec u ) head ( Vec u ) body → !v TlsErr {
+@ tls_prepare_write2_to TlsConn c__h ( Vec u ) out ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_prepare_write2_to_in . c 0 out head body )
+}
+
+@ _tls_prepare_write2_to_in inout TlsConnImpl c ( Vec u ) out ( Vec u ) head ( Vec u ) body → !v TlsErr {
     ? | != . c closed 0 != . c established 1 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n + ( vec_len [u] head ) ( vec_len [u] body )
     ? & != . c fatal_alert 0 > n 0 { ^ @ !v TlsErr { F TlsProtocol } } {}
@@ -2150,7 +2153,6 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) part ( _tls_pair_slice head body off hi )
         ? == . c version 12 {
             ( _tls_record12_to c out 23 part )
-            ( vec_free [u] part )
         } { ( _tls_seal_inner_to c out 23 part ) }
         = off hi
     }
@@ -2162,7 +2164,12 @@ $ `stdlib/core/rcbox.nu`
 // TLS 1.3 assembles each record's plaintext straight from the pair;
 // TLS 1.2 hands the AEAD a plaintext Vec, so it cuts one per record
 // (the same one bytes_slice cut before).
-@ tls_write2 * TlsConn c ( Vec u ) head ( Vec u ) body → !v TlsErr {
+@ tls_write2 TlsConn c__h ( Vec u ) head ( Vec u ) body → !v TlsErr {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_write2_in . c 0 head body )
+}
+
+@ _tls_write2_in inout TlsConnImpl c ( Vec u ) head ( Vec u ) body → !v TlsErr {
     ?? ( _tls_flush_control c 1 ) { T _ → {} F error → { ^ @ !v TlsErr { F error } } }
     ? != . c closed 0 { ^ @ !v TlsErr { F TlsClosed } } {}
     : i n + ( vec_len [u] head ) ( vec_len [u] body )
@@ -2174,7 +2181,6 @@ $ `stdlib/core/rcbox.nu`
         ? == . c version 12 {
             : ( Vec u ) part ( _tls_pair_slice head body off hi )
             = w ( __send_record_12 c 23 part )
-            ( vec_free [u] part )
         } { = w ( __send_encrypted_pair c 23 head body off hi ) }
         ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
         = off hi
@@ -2185,7 +2191,12 @@ $ `stdlib/core/rcbox.nu`
 // Read up to `max` decrypted application bytes. Returns [] on clean EOF
 // (close_notify). Post-handshake messages (tickets, key updates) are
 // consumed transparently.
-@ tls_read * TlsConn c i max → !( Vec u ) TlsErr {
+@ tls_read TlsConn c__h i max → !( Vec u ) TlsErr {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ^ ( _tls_read_in . c 0 max )
+}
+
+@ _tls_read_in inout TlsConnImpl c i max → !( Vec u ) TlsErr {
     ~ & == ( vec_len [u] . c appbuf ) 0 == . c closed 0 {
         ? != . c fatal_alert 0 { ^ @ !( Vec u ) TlsErr { F TlsProtocol } } {}
         ? != . c update_pending 0 {
@@ -2202,32 +2213,26 @@ $ `stdlib/core/rcbox.nu`
             }
             T rec → {
                 ? == . rec rtype 20 {
-                    ( vec_free [u] . rec body )
                 } {
                     ? == . c version 12 {
                         // TLS 1.2: the record type is the real content type.
                         ?? ( __decrypt_record_12 c . rec rtype . rec body ) {
                             T inner → {
-                                ( vec_free [u] . rec body )
                                 ? == . rec rtype 23 { ( _tls_cat . c appbuf inner ) } {
                                     ? == . rec rtype 21 { = . c closed 1 } {}
                                     // type 22 (post-handshake, e.g. tickets): ignore
                                 }
-                                ( vec_free [u] inner )
                             }
                             F _ → {
-                                ( vec_free [u] . rec body )
                                 ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
                             }
                         }
                     } {
                         ?? ( __decrypt_record c . rec body ) {
                             T inner → {
-                                ( vec_free [u] . rec body )
                                 : i ct ( _inner_type inner )
                                 ? == ct 23 {
                                     ? != ( vec_len [u] . c hsbuf ) 0 {
-                                        ( vec_free [u] inner )
                                         : !v TlsErr failed ( _tls_post_fail c 0 10 )
                                         ?? failed { T _ → {} F _ → {} }
                                         ^ @ !( Vec u ) TlsErr { F TlsProtocol }
@@ -2238,14 +2243,12 @@ $ `stdlib/core/rcbox.nu`
                                     ? == ct 22 {
                                         ?? ( _tls_post_hs c inner 0 ) {
                                             T _ → {}
-                                            F error → { ( vec_free [u] inner ) ^ @ !( Vec u ) TlsErr { F error } }
+                                            F error → { ^ @ !( Vec u ) TlsErr { F error } }
                                         }
                                     } {}
                                 }
-                                ( vec_free [u] inner )
                             }
                             F _ → {
-                                ( vec_free [u] . rec body )
                                 ^ @ !( Vec u ) TlsErr { F # TlsErr TlsDecrypt }
                             }
                         }
@@ -2259,12 +2262,18 @@ $ `stdlib/core/rcbox.nu`
     : i take ? < max avail max avail
     : ( Vec u ) out ( bytes_slice . c appbuf 0 take )
     : ( Vec u ) rest ( bytes_slice . c appbuf take avail )
-    ( vec_free [u] . c appbuf )
     = . c appbuf rest
     ^ @ !( Vec u ) TlsErr { T out }
 }
 
-@ tls_close * TlsConn c → v {
+// Say close_notify (best effort) and close the socket. Safe to repeat;
+// the connection's memory goes with its last owner.
+@ tls_close TlsConn c__h → v {
+    : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
+    ( _tls_close_in . c 0 )
+}
+
+@ _tls_close_in inout TlsConnImpl c → v {
     ? != . c fatal_alert 0 {
         : !v TlsErr sent ( _tls_flush_control c 1 )
         ?? sent { T _ → {} F _ → {} }
@@ -2279,24 +2288,8 @@ $ `stdlib/core/rcbox.nu`
         } {}
         = . c closed 1
     } {}
-    ( nurl_tcp_close . c fd )
-    ( vec_free [u] . c rxbuf )
-    ( vec_free [u] . c hsbuf )
-    ( vec_free [u] . c appbuf )
-    ( vec_free [u] . c s_key ) ( vec_free [u] . c s_iv )
-    ( vec_free [u] . c c_key ) ( vec_free [u] . c c_iv )
-    ( vec_free [u] . c s_secret ) ( vec_free [u] . c c_secret )
-    ( vec_free [u] . c cert_msg )
-    ( vec_free [u] . c cv_sig )
-    ( vec_free [u] . c th_cert )
-    ( vec_free [u] . c kx_p256 )
-    ( vec_free [u] . c kx_mlkem )
-    ( vec_free [u] . c alpn_sel )
-    ( vec_free [u] . c res_master )
-    ( vec_free [u] . c res_early )
-    ( vec_free [u] . c tk_ticket )
-    ( vec_free [u] . c tk_psk )
-    ( nurl_free # s c )
+    // The socket goes now; the state goes with the handle's last owner.
+    ? != . c owns_fd 0 { ( nurl_tcp_close . c fd ) = . c owns_fd 0 } {}
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2312,17 +2305,13 @@ $ `stdlib/core/rcbox.nu`
     : ~ ( Vec u ) a ( bytes_slice fs 0 ( vec_len [u] fs ) )
     ~ < ( vec_len [u] out ) outlen {
         : ( Vec u ) anew ( hmac_sha256_pure secret a )
-        ( vec_free [u] a )
         = a anew
         : ( Vec u ) cat ( bytes_slice a 0 ( vec_len [u] a ) )
         ( bytes_extend_bytes cat fs )
         : ( Vec u ) chunk ( hmac_sha256_pure secret cat )
-        ( vec_free [u] cat )
         : ~ i j 0
         ~ & < j 32 < ( vec_len [u] out ) outlen { ( vec_push [u] out # u ( _t_bget chunk j ) ) = j + j 1 }
-        ( vec_free [u] chunk )
     }
-    ( vec_free [u] a )
     ^ out
 }
 
@@ -2363,7 +2352,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Send one TLS 1.2 record of `content` (real content type `rtype`).
-@ _tls_record12_to * TlsConn c ( Vec u ) out i rtype ( Vec u ) content → v {
+@ _tls_record12_to inout TlsConnImpl c ( Vec u ) out i rtype ( Vec u ) content → v {
     : i ptlen ( vec_len [u] content )
     : ( Vec u ) aad ( __aad12 . c c_seq rtype ptlen )
     : ( Vec u ) body ( vec_new [u] )
@@ -2374,36 +2363,29 @@ $ `stdlib/core/rcbox.nu`
         : ~ i b 0
         ~ < b 8 { ( vec_push [u] body # u & >> . c c_seq * 8 - 7 b 255 ) = b + b 1 }
         ( _tls_cat body sealed )
-        ( vec_free [u] nonce )
-        ( vec_free [u] sealed )
     } {
         : ( Vec u ) nonce ( __nonce12_chacha . c c_iv . c c_seq )
         : ( Vec u ) sealed ( aead_encrypt . c c_key nonce aad content )
         ( _tls_cat body sealed )
-        ( vec_free [u] nonce )
-        ( vec_free [u] sealed )
     }
     ( vec_push [u] out # u rtype )
     ( vec_push [u] out # u 3 )
     ( vec_push [u] out # u 3 )
     ( _tls_u16 out ( vec_len [u] body ) )
     ( _tls_cat out body )
-    ( vec_free [u] aad )
-    ( vec_free [u] body )
     = . c c_seq + . c c_seq 1
 }
 
-@ __send_record_12 * TlsConn c i rtype ( Vec u ) content → !v TlsErr {
+@ __send_record_12 inout TlsConnImpl c i rtype ( Vec u ) content → !v TlsErr {
     : ( Vec u ) record ( vec_new [u] )
     ( _tls_record12_to c record rtype content )
     : b written ( _tls_sock_write . c fd record )
-    ( vec_free [u] record )
     ? ! written { = . c closed 1 } {}
     ^ ? written @ !v TlsErr { T 0 } @ !v TlsErr { F TlsWrite }
 }
 
 // Decrypt a TLS 1.2 record body (real type `rtype`) → plaintext.
-@ __decrypt_record_12 * TlsConn c i rtype ( Vec u ) body → ?( Vec u ) {
+@ __decrypt_record_12 inout TlsConnImpl c i rtype ( Vec u ) body → ?( Vec u ) {
     : ?( Vec u ) pt ? == . c cipher 1 {
         : i explen 8
         : ( Vec u ) nonce ( vec_with_cap [u] 12 )
@@ -2415,17 +2397,12 @@ $ `stdlib/core/rcbox.nu`
         : i ptlen - ( vec_len [u] ct ) 16
         : ( Vec u ) aad ( __aad12 . c s_seq rtype ptlen )
         : ?( Vec u ) r ( aes128_gcm_decrypt . c s_key nonce aad ct )
-        ( vec_free [u] nonce )
-        ( vec_free [u] ct )
-        ( vec_free [u] aad )
         r
     } {
         : ( Vec u ) nonce ( __nonce12_chacha . c s_iv . c s_seq )
         : i ptlen - ( vec_len [u] body ) 16
         : ( Vec u ) aad ( __aad12 . c s_seq rtype ptlen )
         : ?( Vec u ) r ( aead_decrypt . c s_key nonce aad body )
-        ( vec_free [u] nonce )
-        ( vec_free [u] aad )
         r
     }
     = . c s_seq + . c s_seq 1
@@ -2433,7 +2410,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Derive the TLS 1.2 key block and install client/server write keys.
-@ __tls12_setkeys * TlsConn c ( Vec u ) master ( Vec u ) crand ( Vec u ) srand → v {
+@ __tls12_setkeys inout TlsConnImpl c ( Vec u ) master ( Vec u ) crand ( Vec u ) srand → v {
     : ( Vec u ) seed ( vec_new [u] )
     ( bytes_extend_bytes seed srand )
     ( bytes_extend_bytes seed crand )
@@ -2441,35 +2418,28 @@ $ `stdlib/core/rcbox.nu`
     : i ivlen ? == . c cipher 1 4 12
     : i need + * 2 klen * 2 ivlen
     : ( Vec u ) kb ( __prf12 master `key expansion` seed need )
-    ( vec_free [u] seed )
     : ( Vec u ) ck ( bytes_slice kb 0 klen )
     : ( Vec u ) sk ( bytes_slice kb klen * 2 klen )
     : ( Vec u ) civ ( bytes_slice kb * 2 klen + * 2 klen ivlen )
     : ( Vec u ) siv ( bytes_slice kb + * 2 klen ivlen + * 2 klen * 2 ivlen )
-    ( vec_free [u] . c c_key )
-    ( vec_free [u] . c s_key )
-    ( vec_free [u] . c c_iv )
-    ( vec_free [u] . c s_iv )
     = . c c_key ck
     = . c s_key sk
     = . c c_iv civ
     = . c s_iv siv
     = . c c_seq 0
     = . c s_seq 0
-    ( vec_free [u] kb )
 }
 
 // Drive the TLS 1.2 handshake after ServerHello. Consumes all the passed
 // buffers. On success returns the established (encrypted) connection;
 // the certificate chain + ServerKeyExchange signature material are
 // captured on `c` for the verifier (cv_sig / cv_scheme / th_cert).
-@ __tls12_handshake * TlsConn c ( Vec u ) sh ( Vec u ) priv ( Vec u ) cpub ( Vec u ) random ( Vec u ) sessid ( Vec u ) ch ( Vec u ) tr → !*TlsConn TlsErr {
+@ __tls12_handshake inout TlsConnImpl c ( Vec u ) sh ( Vec u ) priv ( Vec u ) cpub ( Vec u ) random ( Vec u ) sessid ( Vec u ) ch ( Vec u ) tr → !v TlsErr {
     : ( Vec u ) srand ( bytes_slice sh 6 38 )
     // M1: we always offer TLS 1.3 in supported_versions, so negotiating 1.2
     // here means a possible forced downgrade — abort on the RFC 8446 sentinel.
     ? ( __downgrade_sentinel srand ) {
-        ( vec_free [u] srand ) ( vec_free [u] sh )
-        ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsProtocol )
+        ^ ( __fail c # TlsErr TlsProtocol )
     } {}
 
     // ── server flight 1: Certificate, ServerKeyExchange, ServerHelloDone ──
@@ -2484,19 +2454,16 @@ $ `stdlib/core/rcbox.nu`
             T msg → {
                 : i t ( _t_bget msg 0 )
                 ? == t 11 {
-                    ( vec_free [u] . c cert_msg )
                     = . c cert_msg ( bytes_slice msg 0 ( vec_len [u] msg ) )
                 } {}
                 ? == t 12 {
                     // ServerKeyExchange: curve_type(1) curve(2) pklen(1) pk sig_scheme(2) siglen(2) sig
                     = kx_curve ( _rdint msg 5 2 )
                     : i pklen ( _t_bget msg 7 )
-                    ( vec_free [u] spub )
                     = spub ( bytes_slice msg 8 + 8 pklen )
                     : i sp + 8 pklen
                     = . c cv_scheme ( _rdint msg sp 2 )
                     : i siglen ( _rdint msg + sp 2 2 )
-                    ( vec_free [u] . c cv_sig )
                     = . c cv_sig ( bytes_slice msg + sp 4 + + sp 4 siglen )
                     // signed data = client_random || server_random || ecdhe_params
                     : ( Vec u ) signed ( vec_new [u] )
@@ -2504,19 +2471,15 @@ $ `stdlib/core/rcbox.nu`
                     ( bytes_extend_bytes signed srand )
                     : ( Vec u ) eparams ( bytes_slice msg 4 + 8 pklen )
                     ( _tls_cat signed eparams )
-                    ( vec_free [u] eparams )
-                    ( vec_free [u] . c th_cert )
                     = . c th_cert signed
                 } {}
                 ? == t 14 { = done 1 } {}
                 ( _tls_cat tr msg )
-                ( vec_free [u] msg )
             }
         }
     }
     ? | == err 1 == ( vec_len [u] spub ) 0 {
-        ( vec_free [u] srand )
-        ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsHandshake )
+        ^ ( __fail c # TlsErr TlsHandshake )
     } {}
 
     // ── ECDHE + master secret ──
@@ -2530,7 +2493,6 @@ $ `stdlib/core/rcbox.nu`
     ( bytes_extend_bytes cs_seed random )
     ( bytes_extend_bytes cs_seed srand )
     : ( Vec u ) master ( __prf12 pms `master secret` cs_seed 48 )
-    ( vec_free [u] cs_seed )
     ( __tls12_setkeys c master random srand )
 
     // ── ClientKeyExchange (plaintext handshake) ──
@@ -2541,9 +2503,6 @@ $ `stdlib/core/rcbox.nu`
     ( _u24 cke + cklen 1 )
     ( vec_push [u] cke # u cklen )
     ( _tls_cat cke ckpub )
-    // ckpub is a fresh P-256 point we own; the x25519 case aliases cpub
-    // (freed with the other handshake scratch later), so only free P-256.
-    ? is_p256 { ( vec_free [u] ckpub ) } {}
     : !v TlsErr ckw ( _send_plain c 22 cke )
     ?? ckw { T _ → {} F _ → {} }
     ( _tls_cat tr cke )
@@ -2553,25 +2512,20 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] ccs # u 1 )
     : !v TlsErr cw ( _send_plain c 20 ccs )
     ?? cw { T _ → {} F _ → {} }
-    ( vec_free [u] ccs )
 
     : ( Vec u ) th_c ( sha256_pure tr )
     : ( Vec u ) cfin_vd ( __prf12 master `client finished` th_c 12 )
-    ( vec_free [u] th_c )
     : ( Vec u ) finmsg ( vec_with_cap [u] 16 )
     ( vec_push [u] finmsg # u 20 )
     ( _u24 finmsg 12 )
     ( _tls_cat finmsg cfin_vd )
-    ( vec_free [u] cfin_vd )
     : !v TlsErr fw ( __send_record_12 c 22 finmsg )
     ?? fw { T _ → {} F _ → {} }
     ( _tls_cat tr finmsg )
-    ( vec_free [u] finmsg )
 
     // ── server ChangeCipherSpec + Finished ──
     : ( Vec u ) th_s ( sha256_pure tr )
     : ( Vec u ) sfin_exp ( __prf12 master `server finished` th_s 12 )
-    ( vec_free [u] th_s )
     : ~ i serr 0
     : ~ i sdone 0
     ~ & == sdone 0 == serr 0 {
@@ -2580,11 +2534,9 @@ $ `stdlib/core/rcbox.nu`
             F _ → { = serr 1 }
             T rec → {
                 ? == . rec rtype 20 {
-                    ( vec_free [u] . rec body )
                 } {
                     ?? ( __decrypt_record_12 c . rec rtype . rec body ) {
                         T inner → {
-                            ( vec_free [u] . rec body )
                             // inner = Finished handshake msg: [20][len3][verify_data]
                             // L5: compare the 12-byte verify_data in constant
                             // time (OR-accumulate XOR diffs, no early exit).
@@ -2592,21 +2544,15 @@ $ `stdlib/core/rcbox.nu`
                             : ~ i vi 0
                             ~ < vi 12 { = diff | diff ^^ ( _t_bget inner + 4 vi ) ( _t_bget sfin_exp vi ) = vi + vi 1 }
                             ? == diff 0 { = sdone 1 } { = serr 1 }
-                            ( vec_free [u] inner )
                         }
-                        F _ → { ( vec_free [u] . rec body ) = serr 1 }
+                        F _ → { = serr 1 }
                     }
                 }
             }
         }
     }
-    ( vec_free [u] sfin_exp )
 
-    ( vec_free [u] srand ) ( vec_free [u] spub ) ( vec_free [u] pms ) ( vec_free [u] master )
-    ( vec_free [u] priv ) ( vec_free [u] cpub ) ( vec_free [u] random ) ( vec_free [u] sessid )
-    ( vec_free [u] ch ) ( vec_free [u] tr ) ( vec_free [u] sh ) ( vec_free [u] cke )
-
-    ? == serr 1 { ( tls_close c ) ^ @ !*TlsConn TlsErr { F # TlsErr TlsHandshake } } {}
+    ? == serr 1 { ( _tls_close_in c ) ^ @ !v TlsErr { F # TlsErr TlsHandshake } } {}
     = . c established 1
-    ^ @ !*TlsConn TlsErr { T c }
+    ^ @ !v TlsErr { T 0 }
 }

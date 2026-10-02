@@ -65,7 +65,7 @@ $ `stdlib/std/time.nu`
 }
 
 // One client round trip: write "ping", read the echo; returns T on echo.
-@ ping * TlsConn c → b {
+@ ping TlsConn c → b {
     : ( Vec u ) msg ( bytes_from_str `ping` )
     : ~ b ok F
     ?? ( tls_write c msg ) {
@@ -111,7 +111,7 @@ $ `stdlib/std/time.nu`
 
                     // 1. full handshake; the ticket arrives with the echo
                     : ~ ( Vec u ) sess ( vec_new [u] )
-                    : !*TlsConn TlsErr r1 ( tls_connect_insecure `127.0.0.1` 18971 `localhost` )
+                    : !TlsConn TlsErr r1 ( tls_connect_insecure `127.0.0.1` 18971 `localhost` )
                     ?? r1 {
                         T c → {
                             ( label `first_resumed` ( yn ( tls_is_resumed c ) ) )
@@ -125,7 +125,7 @@ $ `stdlib/std/time.nu`
                     }
 
                     // 2. offer the session: abbreviated handshake, data still flows
-                    : !*TlsConn TlsErr r2 ( tls_connect_resume `127.0.0.1` 18971 `localhost` sess )
+                    : !TlsConn TlsErr r2 ( tls_connect_resume `127.0.0.1` 18971 `localhost` sess )
                     ?? r2 {
                         T c → {
                             ( label `second_resumed` ( yn ( tls_is_resumed c ) ) )
@@ -143,7 +143,7 @@ $ `stdlib/std/time.nu`
                     : i last - ( vec_len [u] sess ) 1
                     : i lb ?? ( vec_get [u] sess last ) { T x → # i x F → 0 }
                     : b _s ( vec_set [u] sess last # u ^^ lb 255 )
-                    : !*TlsConn TlsErr r3 ( tls_connect_insecure_resume `127.0.0.1` 18971 `localhost` sess )
+                    : !TlsConn TlsErr r3 ( tls_connect_insecure_resume `127.0.0.1` 18971 `localhost` sess )
                     ?? r3 {
                         T c → {
                             ( label `bad_ticket_resumed` ( yn ( tls_is_resumed c ) ) )

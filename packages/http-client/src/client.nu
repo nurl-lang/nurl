@@ -354,7 +354,7 @@ $ `stdlib/core/rcbox.nu`
     ? | != . o has_h2 0 != . o has_h1 0 { ^ 0 } {}
     ? != . o is_https 0 {
         : ( Vec u ) sess ( hp_session_lookup ( string_data . o host ) . o port )
-        : !*TlsConn TlsErr tr ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify )
+        : !TlsConn TlsErr tr ( tls_connect_full ( string_data . o host ) . o port ( string_data . o host ) `h2 http/1.1` sess . c verify )
         ( vec_free [u] sess )
         ?? tr {
             F e → { ^ ?? e { TlsBadCert → 3 TlsConnect → 1 _ → 3 } }

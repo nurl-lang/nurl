@@ -353,6 +353,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streams key block and message through one hasher instead of building
   `ipad ‖ msg`: a SHA-256 / HMAC / HKDF / PBKDF2 mix runs 15 % fewer
   instructions.
+- **`TlsConn` releases itself.** The TLS client and server entry points
+  (`tls_connect*`, `tls_attach*`, `tls_accept*`) return a `TlsConn` library
+  handle (was `*TlsConn`); every copy is the same connection and its last
+  owner releases it, closing the socket if nobody called `tls_close`.
+  `tls_close` / `tls_server_close` still say close_notify and close the
+  socket at a point of the caller's choosing, but free nothing (safe to
+  repeat). Code that read the connection's fields uses accessors:
+  `tls_socket` (the runtime socket handle), `tls_cert_msg`, `tls_cv_sig`,
+  `tls_th_cert` (what the verifier was given, lent). Write the type without
+  `*`; `# *TlsConn 0` becomes `@ TlsConn { # s 0 }`. The handshake
+  machines' transcript hashes, keys and buffers are replaced through
+  `inout` and go with their owners; std/net.nu's `TcpConn` keeps one owner
+  of the connection as a word (`_tls_word`) and `tcp_close_conn` hands it
+  back.
 
 ### Added
 

@@ -337,7 +337,7 @@ $ `stdlib/ext/env.nu`
 @ __cmd_probe s host i port → i {
     ( __pad host )
     : ~ b trusted T
-    : ~ * TlsConn conn # *TlsConn 0
+    : ~ TlsConn conn @ TlsConn { # s 0 }
     ?? ( tls_connect host port host ) {
         T c → { = conn c }
         F e → {
@@ -353,7 +353,7 @@ $ `stdlib/ext/env.nu`
             }
         }
     }
-    ? == # i conn 0 {
+    ? == # i . conn ctl 0 {
         ( nurl_print `--   handshake failed\n` )
         ^ 2
     } {}
