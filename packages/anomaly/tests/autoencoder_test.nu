@@ -47,16 +47,14 @@ $ `src/dynamic.nu`
     ^ / # f g_lcg 2147483648.0
 }
 
-@ ingest2 Model mo__h f a f b2 i at → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ ingest2 Model mo f a f b2 i at → v {
     : Json j ( json_obj_new )
     ( json_obj_set j `pres` ( json_float a ) )
     ( json_obj_set j `flow` ( json_float b2 ) )
-    : !Verdict String r ( model_ingest_at mo__h j at )
-    ( json_free j )
+    : !Verdict String r ( model_ingest_at mo j at )
     ?? r {
-        T vd → { ( verdict_free vd ) }
-        F e → { ( string_free e ) }
+        T vd → {}
+        F e → {}
     }
 }
 
@@ -68,13 +66,11 @@ $ `src/dynamic.nu`
     i hits_other
 }
 
-@ probe2 Model mo__h f a f b2 → AeProbe {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ probe2 Model mo f a f b2 → AeProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `pres` ( json_float a ) )
     ( json_obj_set j `flow` ( json_float b2 ) )
-    : !Verdict String r ( model_detect_only mo__h j )
-    ( json_free j )
+    : !Verdict String r ( model_detect_only mo j )
     ?? r {
         T vd → {
             : ~ b has_ae F
@@ -99,11 +95,9 @@ $ `src/dynamic.nu`
                 = k + k 1
             }
             : AeProbe out @ AeProbe { has_ae ae_hit ae_df others }
-            ( verdict_free vd )
             ^ out
         }
         F e → {
-            ( string_free e )
             ^ @ AeProbe { F F 0.0 0 }
         }
     }
@@ -139,7 +133,6 @@ $ `src/dynamic.nu`
     : ( Vec i ) hidden ( vec_new [i] )
     : String err ( model_train_autoencoder mo__h hidden -1.0 )
     ( check == ( string_len err ) 0 `AE trains ("" error)` )
-    ( string_free err )
     : AeModel tae . mo ae
     ( check . tae trained `AE marked trained` )
     ( check > . tae filtered 0 `pre-filter dropped injected anomalies` )
@@ -158,7 +151,6 @@ $ `src/dynamic.nu`
 
     // ── persistence ──
     : f df_before . offp ae_df
-    ( model_free mo__h )
     : Model mo2__h ( model_open_at st `aemodel` + T0 * 300 60 )
     : *ModelImpl mo2 ( _Model_ptr mo2__h )
     : AeModel lae . mo2 ae
@@ -208,19 +200,13 @@ $ `src/dynamic.nu`
     ( vec_push [i] h848 8 ) ( vec_push [i] h848 4 ) ( vec_push [i] h848 8 )
     : String err848 ( model_train_autoencoder_at mo2__h h848 -1.0 + T0 * 302 60 )
     ( check == ( string_len err848 ) 0 `AE retrains with an 8-4-8 layout` )
-    ( string_free err848 )
     : ( Vec i ) hnone ( vec_new [i] )
     : String errk ( model_train_autoencoder_at mo2__h hnone -1.0 + T0 * 303 60 )
     ( check == ( string_len errk ) 0 `AE retrains with no layout given` )
-    ( string_free errk )
     : AeModel kae . mo2 ae
     : ( Vec i ) kept ( ae_hidden kae )
     ( check & == ( vec_len [i] kept ) 3 & == ( _mlp_iget kept 0 ) 8 == ( _mlp_iget kept 1 ) 4
     `an empty layout keeps the trained 8-4-8, not the 64-32-64 default` )
-    ( vec_free [i] kept )
-    ( vec_free [i] hnone )
-    ( vec_free [i] h848 )
-    ( model_free mo2__h )
 
     // ── errors ──
     : Model tiny__h ( model_open_at st `aetiny` T0 )
@@ -233,13 +219,7 @@ $ `src/dynamic.nu`
     ( check > ( string_len err2 ) 0 `too few points → error text` )
     : AeModel tae2 . tiny ae
     ( check ! . tae2 trained `failed train leaves the model untouched` )
-    ( string_free err2 )
-    ( vec_free [i] h2 )
-    ( vec_free [i] hidden )
-    ( model_free tiny__h )
 
-    ( store_free st )
-    ( string_free root )
     ( nurl_print `autoencoder_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

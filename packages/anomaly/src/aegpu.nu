@@ -208,17 +208,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     GpuBuffer bode  // eval outdiff: eval_chunk × dout
 }
 
-@ _aeg_free sink AeGpu cx → v {
-    ( gpu_free . cx bmeta ) ( gpu_free . cx bx ) ( gpu_free . cx bidx )
-    ( gpu_free . cx bw ) ( gpu_free . cx bb )
-    ( gpu_free . cx bmw ) ( gpu_free . cx bvw ) ( gpu_free . cx bmb ) ( gpu_free . cx bvb )
-    ( gpu_free . cx bgw ) ( gpu_free . cx bgb )
-    ( gpu_free . cx bacts ) ( gpu_free . cx bdeltas )
-    ( gpu_free . cx bodt ) ( gpu_free . cx bode )
-    ( gpu_kernel_free . cx kfwd ) ( gpu_kernel_free . cx kbwd ) ( gpu_kernel_free . cx kgrad )
-    ( gpu_kernel_free . cx kadam ) ( gpu_kernel_free . cx kdiff )
-}
-
 // The meta buffer content for a freshly built net.
 @ _aeg_meta Mlp m i d i dout → ( Vec i ) {
     : i nl . m n_layers
@@ -280,7 +269,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     ? != . bacts dptr 0 {} { = ok F }
     ? != . bdeltas dptr 0 {} { = ok F }
     ? ok { ? != ( gpu_upload bmeta # *u ( vec_data [i] meta ) ) 0 { = ok F } {} } {}
-    ( vec_free [i] meta )
     ^ @ AeGpu { ok g kfwd kbwd kgrad kadam kdiff bmeta bx bidx bw bb2 bmw bvw bmb bvb bgw bgb bacts bdeltas bodt bode }
 }
 
@@ -291,9 +279,9 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
 // Exactly mlp_train, with the four per-minibatch compute steps and the
 // validation forward on the device. Returns MlpTrain; the model's w/b,
 // Adam state and t are updated in place, exactly as mlp_train leaves them.
-// On ANY device error sets *fail and returns immediately (the caller
+// On ANY device error sets `fail` and returns immediately (the caller
 // discards everything and reruns on the CPU).
-@ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg * u fail → MlpTrain {
+@ _aeg_train AeGpu cx Mlp m ( Vec f ) X i n i d i dout MlpCfg cfg inout i fail → MlpTrain {
     : Rng g2 ( rng_seed . cfg seed )
     : i oa2 ( _mlp_iget . m a_off . m n_layers )
     // One shuffled split: [0, n_train) train, [n_train, n) validation.
@@ -328,10 +316,8 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     = up + up ( gpu_upload . cx bgw # *u ( vec_data [f] zeros ) )
     = up + up ( gpu_upload . cx bgb # *u ( vec_data [f] zeros ) )
     = up + up ( gpu_upload . cx bx # *u ( vec_data [f] X ) )
-    ( vec_free [f] zeros )
     ? != up 0 {
-        ( nurl_poke fail 0 1 )
-        ( vec_free [i] idx )
+        = fail 1
         ^ @ MlpTrain { 0 0.0 0.0 F }
     } {}
     : ( Vec f ) best_w ( vec_with_cap [f] . m n_w )
@@ -384,7 +370,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
             ( vec_push [i] a1 ( gpu_arg_buffer . cx bb ) )
             ( vec_push [i] a1 ( gpu_arg_buffer . cx bacts ) )
             = gerr + gerr ( gpu_launch . cx kfwd cnt 64 a1 )
-            ( vec_free [i] a1 )
             : ( Vec i ) a2 ( vec_new [i] )
             ( vec_push [i] a2 ( gpu_arg_buffer . cx bmeta ) )
             ( vec_push [i] a2 ( gpu_arg_buffer . cx bx ) )
@@ -397,7 +382,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
             ( vec_push [i] a2 ( gpu_arg_buffer . cx bdeltas ) )
             ( vec_push [i] a2 ( gpu_arg_buffer . cx bodt ) )
             = gerr + gerr ( gpu_launch . cx kbwd cnt 64 a2 )
-            ( vec_free [i] a2 )
             : ( Vec i ) a3 ( vec_new [i] )
             ( vec_push [i] a3 ( gpu_arg_buffer . cx bmeta ) )
             ( vec_push [i] a3 ( gpu_arg_i64 . m n_w ) )
@@ -408,7 +392,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
             ( vec_push [i] a3 ( gpu_arg_buffer . cx bgw ) )
             ( vec_push [i] a3 ( gpu_arg_buffer . cx bgb ) )
             = gerr + gerr ( gpu_launch . cx kgrad pgrid 256 a3 )
-            ( vec_free [i] a3 )
             // Adam scalars on the host — exactly mlp's expressions.
             = tstep + tstep 1
             : f tf # f tstep
@@ -429,7 +412,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
             ( vec_push [i] a4 ( gpu_arg_buffer . cx bgw ) )
             ( vec_push [i] a4 ( gpu_arg_buffer . cx bgb ) )
             = gerr + gerr ( gpu_launch . cx kadam pgrid 256 a4 )
-            ( vec_free [i] a4 )
             // the training-loss contribution, folded in the CPU's flat order
             = gerr + gerr ( gpu_download # *u ( vec_data [f] od ) . cx bodt )
             : ~ i s2 0
@@ -466,7 +448,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
                 ( vec_push [i] a5 ( gpu_arg_buffer . cx bb ) )
                 ( vec_push [i] a5 ( gpu_arg_buffer . cx bacts ) )
                 = gerr + gerr ( gpu_launch . cx kfwd vcnt 64 a5 )
-                ( vec_free [i] a5 )
                 : ( Vec i ) a6 ( vec_new [i] )
                 ( vec_push [i] a6 ( gpu_arg_buffer . cx bmeta ) )
                 ( vec_push [i] a6 ( gpu_arg_buffer . cx bx ) )
@@ -477,7 +458,6 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
                 ( vec_push [i] a6 ( gpu_arg_buffer . cx bacts ) )
                 ( vec_push [i] a6 ( gpu_arg_buffer . cx bode ) )
                 = gerr + gerr ( gpu_launch . cx kdiff vcnt 64 a6 )
-                ( vec_free [i] a6 )
                 = gerr + gerr ( gpu_download # *u ( vec_data [f] od ) . cx bode )
                 : ~ i s3 0
                 ~ < s3 vcnt {
@@ -516,9 +496,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
         } {}
     }
     ? != gerr 0 {
-        ( nurl_poke fail 0 1 )
-        ( vec_free [f] best_w ) ( vec_free [f] best_b ) ( vec_free [f] od )
-        ( vec_free [i] idx )
+        = fail 1
         ^ @ MlpTrain { 0 0.0 0.0 F }
     } {}
     // Restore the best weights (early stopping keeps the best epoch, not
@@ -537,9 +515,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     = derr + derr ( gpu_download # *u ( vec_data [f] . m vw ) . cx bvw )
     = derr + derr ( gpu_download # *u ( vec_data [f] . m mb ) . cx bmb )
     = derr + derr ( gpu_download # *u ( vec_data [f] . m vb ) . cx bvb )
-    ? != derr 0 { ( nurl_poke fail 0 1 ) } {}
-    ( vec_free [f] best_w ) ( vec_free [f] best_b ) ( vec_free [f] od )
-    ( vec_free [i] idx )
+    ? != derr 0 { = fail 1 } {}
     ^ @ MlpTrain { epoch train_loss best stopped }
 }
 
@@ -569,34 +545,26 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
     : ~ Mlp best_m ( mlp_new sizes . cfg seed )
     : AeGpu cx ( _aeg_open best_m n d d bsz )
     ? . cx ok {} {
-        ( _aeg_free cx )
-        ( mlp_free best_m )
         ( nurl_eprintln `anomaly: autoencoder GPU setup failed, training on the CPU` )
         ^ ( mlp_fit sizes X n d X d cfg restarts )
     }
-    : *u fail ( nurl_alloc 8 )
-    ( nurl_poke fail 0 0 )
+    : ~ i fail 0
     : ~ MlpTrain best_tr ( _aeg_train cx best_m X n d d cfg fail )
     : ~ i r 1
-    ~ & < r r2 == ( nurl_peek fail 0 ) 0 {
+    ~ & < r r2 == fail 0 {
         : ~ MlpCfg c cfg
         = . c seed + . cfg seed r
         : Mlp m ( mlp_new sizes . c seed )
         : MlpTrain tr ( _aeg_train cx m X n d d c fail )
-        ? & == ( nurl_peek fail 0 ) 0 < . tr best_val . best_tr best_val {
-            ( mlp_free best_m )
+        ? & == fail 0 < . tr best_val . best_tr best_val {
             = best_m m
             = best_tr tr
         } {
-            ( mlp_free m )
         }
         = r + r 1
     }
-    ( _aeg_free cx )
-    : i failed ( nurl_peek fail 0 )
-    ( nurl_free fail )
+    : i failed fail
     ? != failed 0 {
-        ( mlp_free best_m )
         ( nurl_eprintln `anomaly: autoencoder GPU training failed, retraining on the CPU` )
         ^ ( mlp_fit sizes X n d X d cfg restarts )
     } {}

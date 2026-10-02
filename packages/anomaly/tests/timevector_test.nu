@@ -38,15 +38,13 @@ $ `src/dynamic.nu`
     }
 }
 
-@ ingest_temp Model mo__h f temp i at → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ ingest_temp Model mo f temp i at → v {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
-    : !Verdict String r ( model_ingest_at mo__h j at )
-    ( json_free j )
+    : !Verdict String r ( model_ingest_at mo j at )
     ?? r {
-        T vd → { ( verdict_free vd ) }
-        F e → { ( string_free e ) }
+        T vd → {}
+        F e → {}
     }
 }
 
@@ -61,12 +59,10 @@ $ `src/dynamic.nu`
     i n_versions
 }
 
-@ probe Model mo__h f temp → TvProbe {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ probe Model mo f temp → TvProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
-    : !Verdict String r ( model_detect_only mo__h j )
-    ( json_free j )
+    : !Verdict String r ( model_detect_only mo j )
     ?? r {
         T vd → {
             : ~ b has_tv F
@@ -95,11 +91,9 @@ $ `src/dynamic.nu`
                 = k + k 1
             }
             : TvProbe out @ TvProbe { has_tv tv_hit tv_df st_hit st_df nv }
-            ( verdict_free vd )
             ^ out
         }
         F e → {
-            ( string_free e )
             ^ @ TvProbe { F F 0.0 F 0.0 0 }
         }
     }
@@ -174,39 +168,33 @@ $ `src/dynamic.nu`
     // sliding window exists for.
     ( check > . flat st_df . clean st_df `sequence: short_term is order-blind (reversed scores BETTER pointwise)` )
 
-    ( model_free mo__h )
 }
 
 @ test_absent Store st → v {
-    : Model mo__h ( model_open_at st `tvabsent` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( model_set_limits mo__h 20 150000 )
-    ( model_set_schedule mo__h 1000000 1000000 )
+    : Model mo ( model_open_at st `tvabsent` T0 )
+    ( model_set_limits mo 20 150000 )
+    ( model_set_schedule mo 1000000 1000000 )
     // Window far larger than the ring will ever be here.
-    : b _w ( model_set_version_window mo__h `timevector` 500 1 )
+    : b _w ( model_set_version_window mo `timevector` 500 1 )
     : ~ i k 0
     ~ < k 60 {
-        ( ingest_temp mo__h ( saw # f k ) + T0 * k 60 )
+        ( ingest_temp mo ( saw # f k ) + T0 * k 60 )
         = k + k 1
     }
-    : i used ( model_force_train_at mo__h + T0 * 61 60 )
+    : i used ( model_force_train_at mo + T0 * 61 60 )
     ( check > used 0 `absent: other versions trained` )
-    : TvProbe p ( probe mo__h 21.0 )
+    : TvProbe p ( probe mo 21.0 )
     ( check ! . p has_tv `absent: no timevector verdict when the ring < window` )
     ( check >= . p n_versions 4 `absent: the other versions still answer` )
-    ( model_free mo__h )
 }
 
 @ test_config Store st → v {
     // Round-trip: set 8/2, serialise, parse back.
-    : Model mo__h ( model_open_at st `tvcfg` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : b _w ( model_set_version_window mo__h `timevector` 8 2 )
-    : Meta mm__h ( model_metadata mo__h )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
-    : Json mj ( meta_to_json mm__h )
+    : Model mo ( model_open_at st `tvcfg` T0 )
+    : b _w ( model_set_version_window mo `timevector` 8 2 )
+    : Meta mm ( model_metadata mo )
+    : Json mj ( meta_to_json mm )
     : String ms ( json_stringify mj )
-    ( json_free mj )
     ?? ( meta_from_json_str ( string_data ms ) ) {
         T m2 → {
             : ~ i ws 0
@@ -227,12 +215,9 @@ $ `src/dynamic.nu`
             }
             ( check == ws 8 `config: window_size round-trips` )
             ( check == ss 2 `config: step_size round-trips` )
-            ( meta_free m2 )
         }
         F → { ( check F `config: metadata parses back` ) }
     }
-    ( string_free ms )
-    ( model_free mo__h )
 
     // Legacy metadata (no window fields): timevector gets 100/1, a plain
     // version 0/0 — old on-disk models keep working, upgraded in place.
@@ -243,11 +228,8 @@ $ `src/dynamic.nu`
             ( check == . tv window_size 100 `config: legacy timevector defaults to window 100` )
             ( check == . tv step_size 1 `config: legacy timevector defaults to step 1` )
             ( check == . tv window_pts 0 `config: legacy point-cap dropped for the true window` )
-            ( _an_vercfg_free tv )
             : VerCfg stv ( _an_vercfg_of_json `short_term` vo )
             ( check == . stv window_size 0 `config: plain versions stay windowless` )
-            ( _an_vercfg_free stv )
-            ( json_free vo )
         }
         F _ → { ( check F `config: legacy JSON parses` ) }
     }
@@ -259,8 +241,6 @@ $ `src/dynamic.nu`
     ( test_sequence st )
     ( test_absent st )
     ( test_config st )
-    ( store_free st )
-    ( string_free root )
     ( nurl_print `pass ` ) ( nurl_print_int g_pass )
     ( nurl_print ` fail ` ) ( nurl_println_int g_fail )
     ^ ? > g_fail 0 1 0

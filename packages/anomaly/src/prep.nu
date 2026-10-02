@@ -311,10 +311,6 @@ $ `stdlib/core/rcbox.nu`
     ^ vs
 }
 
-@ _an_vercfg_free sink VerCfg vc → v {
-    ( string_free . vc vname )
-}
-
 // An owned copy of a model's version configuration — what a fork takes
 // from its source.
 @ meta_clone_versions Meta m__h → ( Vec VerCfg ) {
@@ -385,12 +381,8 @@ $ `stdlib/core/rcbox.nu`
     ^ @ Meta { # s m__box }
 }
 
-// Let go of `m` now rather than at the end of its owner's scope.
-@ meta_free sink Meta m → v {}
-
 // Index of column `name` in the metadata, or -1.
-@ __an_col_find Meta m__h s name → i {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ __an_col_find * MetaImpl m s name → i {
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
     ~ < k n {
@@ -404,8 +396,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Column kind at index `ci` (COL_NUMERIC if somehow missing).
-@ __an_kind_at Meta m__h i ci → i {
-    : *MetaImpl m ( _Meta_ptr m__h )
+@ __an_kind_at * MetaImpl m i ci → i {
     ?? ( vec_get [i] . m kinds ci ) { T k → { ^ k } F _ → { ^ COL_NUMERIC } }
 }
 
@@ -423,7 +414,7 @@ $ `stdlib/core/rcbox.nu`
     : i n ( vec_len [i] . m kinds )
     : ~ i k 0
     ~ < k n {
-        ? == ( __an_kind_at m__h k ) COL_TIMESTAMP { ^ T } {}
+        ? == ( __an_kind_at m k ) COL_TIMESTAMP { ^ T } {}
         = k + k 1
     }
     ^ F
@@ -446,7 +437,7 @@ $ `stdlib/core/rcbox.nu`
 // when the declaration took.
 @ meta_declare_column Meta m__h s name i kind → b {
     : *MetaImpl m ( _Meta_ptr m__h )
-    ? >= ( __an_col_find m__h name ) 0 { ^ F } {}
+    ? >= ( __an_col_find m name ) 0 { ^ F } {}
     ? | | == kind COL_NUMERIC == kind COL_CATEGORICAL == kind COL_TIMESTAMP {} { ^ F }
     ( vec_push [String] . m cols ( string_from name ) )
     ( vec_push [i] . m kinds kind )
@@ -464,7 +455,6 @@ $ `stdlib/core/rcbox.nu`
     ? ( json_is_str jv ) {
         : String tmp ( string_from ( json_str_data jv ) )
         : ?f fx ( string_to_float tmp )
-        ( string_free tmp )
         ?? fx { T _ → { ^ COL_NUMERIC } F _ → {} }
         : !i ParseErr r ( time_parse_iso ( json_str_data jv ) )
         ?? r { T _ → { ^ COL_TIMESTAMP } F _ → {} }
@@ -482,7 +472,6 @@ $ `stdlib/core/rcbox.nu`
     ? ( json_is_str jv ) {
         : String tmp ( string_from ( json_str_data jv ) )
         : ?f fx ( string_to_float tmp )
-        ( string_free tmp )
         ^ fx
     } {}
     ^ @ ?f { F 0.0 }
@@ -549,7 +538,7 @@ $ `stdlib/core/rcbox.nu`
     ?? ( vec_get [String] . m cols ci ) {
         T c → {
             : s cn ( string_data c )
-            : i kind ( __an_kind_at m__h ci )
+            : i kind ( __an_kind_at m ci )
             ? == kind COL_NUMERIC {
                 ( vec_push [String] out ( string_from cn ) )
             } {}
@@ -626,7 +615,7 @@ $ `stdlib/core/rcbox.nu`
             T fname → {
                 : ~ i c 0
                 ~ & == hit 0 < c nc {
-                    ? == ( __an_kind_at m__h c ) COL_NUMERIC {
+                    ? == ( __an_kind_at m c ) COL_NUMERIC {
                         ?? ( vec_get [String] . m cols c ) {
                             T cn → { ? ( string_eq cn fname ) { = hit 1 } {} }
                             F _ → {}
@@ -647,16 +636,12 @@ $ `stdlib/core/rcbox.nu`
 // time). From now on scoring projects onto exactly this vector.
 @ meta_refresh_feats Meta m__h → v {
     : *MetaImpl m ( _Meta_ptr m__h )
-    ( vec_free_with [String] . m feats \ String x → v { ( string_free x ) } )
+    : ( Vec String ) old_feats . m feats
+    ( mem_take old_feats )  // a store through the pointer drops nothing
     = . m feats ( meta_derived_feats m__h )
 }
 
 // ── Preprocessing ─────────────────────────────────────────────────────
-
-@ enc_free sink EncPoint p → v {
-    ( vec_free_with [String] . p names \ String x → v { ( string_free x ) } )
-    ( vec_free [f] . p vals )
-}
 
 // Index of feature `name` in the encoded point, or -1.
 @ enc_find EncPoint p s name → i {
@@ -732,7 +717,7 @@ $ `stdlib/core/rcbox.nu`
 // String on success.
 @ __an_encode_col Meta m__h i ci s cn Json jv ( Vec String ) names ( Vec f ) vals b learn → String {
     : *MetaImpl m ( _Meta_ptr m__h )
-    : i kind ( __an_kind_at m__h ci )
+    : i kind ( __an_kind_at m ci )
     ? == kind COL_NUMERIC {
         : ?f fx ( __an_num_of jv )
         ?? fx {
@@ -770,7 +755,6 @@ $ `stdlib/core/rcbox.nu`
             }
             F _ → {}
         }
-        ( string_free sval )
     } {}
     ? == kind COL_TIMESTAMP {
         ? ( json_is_str jv ) {
@@ -823,7 +807,7 @@ $ `stdlib/core/rcbox.nu`
                 ? == ( nurl_str_eq cn `timestamp` ) 1 {} {
                     ?? ( json_obj_get raw cn ) {
                         T jv → {
-                            : ~ i ci ( __an_col_find m__h cn )
+                            : ~ i ci ( __an_col_find m cn )
                             ? & < ci 0 learn {
                                 = ci ( vec_len [String] . m cols )
                                 ( vec_push [String] . m cols ( string_from cn ) )
@@ -832,14 +816,11 @@ $ `stdlib/core/rcbox.nu`
                             } {}
                             : ~ String e2 ( string_new )
                             ? >= ci 0 {
-                                ( string_free e2 )
                                 = e2 ( __an_encode_col m__h ci cn jv names vals learn )
                             } {}
                             ? > ( string_len e2 ) 0 {
-                                ( string_free err )
                                 = err e2
                             } {
-                                ( string_free e2 )
                             }
                         }
                         F _ → {}
@@ -850,13 +831,9 @@ $ `stdlib/core/rcbox.nu`
         }
         = ki + ki 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ? > ( string_len err ) 0 {
-        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-        ( vec_free [f] vals )
         ^ @ !EncPoint String { F err }
     } {}
-    ( string_free err )
     ^ @ !EncPoint String { T @ EncPoint { names vals } }
 }
 
@@ -864,9 +841,8 @@ $ `stdlib/core/rcbox.nu`
 // metadata as new columns / categories appear. The reserved key
 // `timestamp` is the point's own clock and is never a feature. Numeric
 // parse failure and bad timestamps are hard errors (owned message).
-@ anomaly_preprocess Meta m__h Json raw → !EncPoint String {
-    : *MetaImpl m ( _Meta_ptr m__h )
-    ^ ( __an_preprocess m__h raw T )
+@ anomaly_preprocess Meta m Json raw → !EncPoint String {
+    ^ ( __an_preprocess m raw T )
 }
 
 // The model's columns a point does not carry — absent, or carried as
@@ -925,9 +901,8 @@ $ `stdlib/core/rcbox.nu`
 // skipped, unseen categories one-hot to all-zeros — exactly what the
 // frozen-feature projection would do with them anyway. For detect-only
 // paths that must not mutate model state.
-@ anomaly_preprocess_ro Meta m__h Json raw → !EncPoint String {
-    : *MetaImpl m ( _Meta_ptr m__h )
-    ^ ( __an_preprocess m__h raw F )
+@ anomaly_preprocess_ro Meta m Json raw → !EncPoint String {
+    ^ ( __an_preprocess m raw F )
 }
 
 // Project an encoded point onto an authoritative feature order: features
@@ -1050,7 +1025,6 @@ $ `stdlib/core/rcbox.nu`
                 }
                 = sigma / tot # f ns
             }
-            ( vec_free [f] dev )
             ? & > sigma 0.0 ( _an_finite sigma ) {
                 : f lim * ANOM_ABSURD_SIGMAS sigma
                 : *f wp ( vec_data [f] data )
@@ -1068,7 +1042,6 @@ $ `stdlib/core/rcbox.nu`
                 }
             } {}
         } {}
-        ( vec_free [f] sample )
         ( vec_push [i] counts masked )
         = total + total masked
         = c + c 1
@@ -1212,17 +1185,18 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ scaler_free sink Scaler sc → v {
-    ( vec_free [f] . sc mean )
-    ( vec_free [f] . sc inv_std )
-}
+// Let go of `sc` now rather than at the end of its owner's scope (optional:
+// the scaler's vectors are released with it).
+@ scaler_free sink Scaler sc → v {}
 
 // Persist a fitted scaler into metadata (stored as mean + std; zero
 // variance is stored as std = 1, matching its inv_std = 1).
 @ meta_set_scaler Meta m__h Scaler sc → v {
     : *MetaImpl m ( _Meta_ptr m__h )
-    ( vec_free [f] . m sc_mean )
-    ( vec_free [f] . m sc_std )
+    : ( Vec f ) old_sc_mean . m sc_mean
+    ( mem_take old_sc_mean )  // a store through the pointer drops nothing
+    : ( Vec f ) old_sc_std . m sc_std
+    ( mem_take old_sc_std )  // a store through the pointer drops nothing
     : i n ( vec_len [f] . sc mean )
     : ( Vec f ) ms ( vec_with_cap [f] n )
     : ( Vec f ) ss ( vec_with_cap [f] n )
@@ -1315,7 +1289,7 @@ $ `stdlib/core/rcbox.nu`
                 : ?f fx ( json_num_as_f e )
                 ?? fx {
                     T x → { ( vec_push [f] out x ) }
-                    F _ → { ( vec_free [f] out ) ^ @ ?( Vec f ) { F } }
+                    F _ → { ^ @ ?( Vec f ) { F } }
                 }
             }
             F _ → {}
@@ -1337,7 +1311,6 @@ $ `stdlib/core/rcbox.nu`
                 ? ( json_is_str e ) {
                     ( vec_push [String] out ( string_from ( json_str_data e ) ) )
                 } {
-                    ( vec_free_with [String] out \ String x → v { ( string_free x ) } )
                     ^ @ ?( Vec String ) { F }
                 }
             }
@@ -1365,7 +1338,7 @@ $ `stdlib/core/rcbox.nu`
     ~ < k ncol {
         ?? ( vec_get [String] . m cols k ) {
             T c → {
-                : i kind ( __an_kind_at m__h k )
+                : i kind ( __an_kind_at m k )
                 ( json_obj_set types ( string_data c ) ( json_str_lit ( __an_kind_str kind ) ) )
                 ? == kind COL_CATEGORICAL {
                     ?? ( vec_get [( Vec String )] . m cats k ) {
@@ -1511,7 +1484,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Parse metadata back from JSON. None on malformed shape (missing/mistyped
-// required fields); the partially-built Meta is freed on failure.
+// required fields).
 @ meta_from_json Json j → ?Meta {
     ? ( json_is_obj j ) {} { ^ @ ?Meta { F } }
 
@@ -1521,7 +1494,6 @@ $ `stdlib/core/rcbox.nu`
     ?? ( json_obj_get j `name` ) {
         T e → {
             ? ( json_is_str e ) {
-                ( string_free mname )
                 = mname ( string_from ( json_str_data e ) )
             } { = ok F }
         }
@@ -1530,22 +1502,17 @@ $ `stdlib/core/rcbox.nu`
     ?? ( json_obj_get j `created` ) {
         T e → {
             ? ( json_is_str e ) {
-                ( string_free mcreated )
                 = mcreated ( string_from ( json_str_data e ) )
             } { = ok F }
         }
         F _ → { = ok F }
     }
     ? ok {} {
-        ( string_free mname )
-        ( string_free mcreated )
         ^ @ ?Meta { F }
     }
 
     : Meta m__h ( meta_new ( string_data mname ) ( string_data mcreated ) )
     : *MetaImpl m ( _Meta_ptr m__h )
-    ( string_free mname )
-    ( string_free mcreated )
 
     // Columns: column_types drives order; categories fills categorical cols.
     ?? ( json_obj_get j `column_types` ) {
@@ -1574,10 +1541,9 @@ $ `stdlib/core/rcbox.nu`
                                                     : ?( Vec String ) cs ( __an_strs_of_jarr ca )
                                                     ?? cs {
                                                         T got → {
-                                                            ( vec_free [String] colcats )
                                                             = colcats got
                                                         }
-                                                        F junk → { ( vec_free [String] junk ) = ok F }
+                                                        F junk → { = ok F }
                                                     }
                                                 }
                                                 F _ → {}
@@ -1595,7 +1561,6 @@ $ `stdlib/core/rcbox.nu`
                     }
                     = k + k 1
                 }
-                ( vec_free_with [String] tkeys \ String x → v { ( string_free x ) } )
             } { = ok F }
         }
         F _ → {}
@@ -1607,10 +1572,11 @@ $ `stdlib/core/rcbox.nu`
             : ?( Vec String ) fs ( __an_strs_of_jarr fa )
             ?? fs {
                 T got → {
-                    ( vec_free_with [String] . m feats \ String x → v { ( string_free x ) } )
+                    : ( Vec String ) old_feats . m feats
+                    ( mem_take old_feats )  // a store through the pointer drops nothing
                     = . m feats got
                 }
-                F junk → { ( vec_free [String] junk ) = ok F }
+                F junk → { = ok F }
             }
         }
         F _ → {}
@@ -1623,8 +1589,8 @@ $ `stdlib/core/rcbox.nu`
                 T ma → {
                     : ?( Vec f ) mm ( __an_floats_of_jarr ma )
                     ?? mm {
-                        T got → { ( vec_free [f] . m sc_mean ) = . m sc_mean got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_sc_mean . m sc_mean ( mem_take old_sc_mean ) = . m sc_mean got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1633,8 +1599,8 @@ $ `stdlib/core/rcbox.nu`
                 T sa → {
                     : ?( Vec f ) ssv ( __an_floats_of_jarr sa )
                     ?? ssv {
-                        T got → { ( vec_free [f] . m sc_std ) = . m sc_std got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_sc_std . m sc_std ( mem_take old_sc_std ) = . m sc_std got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1651,8 +1617,8 @@ $ `stdlib/core/rcbox.nu`
             ?? ( json_obj_get fl `ref_run` ) {
                 T ra → {
                     ?? ( __an_floats_of_jarr ra ) {
-                        T got → { ( vec_free [f] . m flat_run ) = . m flat_run got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_flat_run . m flat_run ( mem_take old_flat_run ) = . m flat_run got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1660,8 +1626,8 @@ $ `stdlib/core/rcbox.nu`
             ?? ( json_obj_get fl `ref_sd` ) {
                 T sa → {
                     ?? ( __an_floats_of_jarr sa ) {
-                        T got → { ( vec_free [f] . m flat_sd ) = . m flat_sd got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_flat_sd . m flat_sd ( mem_take old_flat_sd ) = . m flat_sd got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1676,8 +1642,7 @@ $ `stdlib/core/rcbox.nu`
     ?? ( json_obj_get j `absurd_readings` ) {
         T abj → {
             ? ( json_is_obj abj ) {
-                ( vec_free [f] . m absurd_n )
-                = . m absurd_n ( vec_new [f] )
+                ( vec_clear [f] . m absurd_n )
                 : i nf2 ( vec_len [String] . m feats )
                 : ~ i ai 0
                 ~ < ai nf2 {
@@ -1713,8 +1678,7 @@ $ `stdlib/core/rcbox.nu`
     ?? ( json_obj_get j `versions` ) {
         T vers → {
             ? ( json_is_obj vers ) {
-                ( vec_free_with [VerCfg] . m versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
-                = . m versions ( vec_new [VerCfg] )
+                ( vec_clear [VerCfg] . m versions )
                 : ( Vec String ) vkeys ( json_obj_keys vers )
                 : i nvk ( vec_len [String] vkeys )
                 : ~ i vk 0
@@ -1734,7 +1698,6 @@ $ `stdlib/core/rcbox.nu`
                     }
                     = vk + vk 1
                 }
-                ( vec_free_with [String] vkeys \ String x → v { ( string_free x ) } )
             } {}
         }
         F _ → {}
@@ -1767,26 +1730,23 @@ $ `stdlib/core/rcbox.nu`
     ?? ( json_obj_get j `alias` ) {
         T av → {
             ? ( json_is_str av ) {
-                ( string_free . m alias )
-                = . m alias ( string_from ( json_str_data av ) )
+                ( string_clear . m alias )
+                ( string_push_str . m alias ( json_str_data av ) )
             } {}
         }
         F _ → {}
     }
 
     ? ok {} {
-        ( meta_free m__h )
         ^ @ ?Meta { F }
     }
     ^ @ ?Meta { T m__h }
 }
 
 // Convenience: metadata → compact JSON text (owned).
-@ meta_to_json_str Meta m__h → String {
-    : *MetaImpl m ( _Meta_ptr m__h )
-    : Json o ( meta_to_json m__h )
+@ meta_to_json_str Meta m → String {
+    : Json o ( meta_to_json m )
     : String out ( json_stringify o )
-    ( json_free o )
     ^ out
 }
 
@@ -1796,7 +1756,6 @@ $ `stdlib/core/rcbox.nu`
     ?? r {
         T j → {
             : ?Meta mm ( meta_from_json j )
-            ( json_free j )
             ^ mm
         }
         F _ → { ^ @ ?Meta { F } }
@@ -1937,7 +1896,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec String ) keys ( json_obj_keys o )
     : String allowed_s ( string_from allowed )
     : ( Vec String ) ok ( string_split allowed_s ` ` )
-    ( string_free allowed_s )
     : i nk ( vec_len [String] keys )
     : i na ( vec_len [String] ok )
     : ~ i k 0
@@ -1964,8 +1922,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] ok \ String x → v { ( string_free x ) } )
     ^ out
 }
 
@@ -1998,7 +1954,6 @@ $ `stdlib/core/rcbox.nu`
                     T vo → {
                         ? ( json_is_obj vo ) {
                             ? | replace >= ( meta_find_version m__h ( string_data vn ) ) 0 {} {
-                                ( string_free why )
                                 = why ( string_from `versions.` )
                                 ( string_push_str why ( string_data vn ) )
                                 ( string_push_str why ` is not a version of this model (it has: ` )
@@ -2014,25 +1969,19 @@ $ `stdlib/core/rcbox.nu`
                                 }
                                 : String names ( string_join have `, ` )
                                 ( string_push_str why ( string_data names ) )
-                                ( string_free names )
-                                ( vec_free_with [String] have \ String x → v { ( string_free x ) } )
                                 ( string_push_str why `). To ADD a version, send the whole list with replace_versions: true.` )
                             }
                             : String pre ( string_from `versions.` )
                             ( string_push_str pre ( string_data vn ) )
                             : String bad ( _an_unknown_keys vo ANOM_VERCFG_FIELDS ( string_data pre ) )
-                            ( string_free pre )
                             ? > ( string_len bad ) 0 {
-                                ( string_free why )
                                 = why ( string_from `unknown field ` )
                                 ( string_push_str why ( string_data bad ) )
                                 ( string_push_str why ` (a version config has: ` )
                                 ( string_push_str why ANOM_VERCFG_FIELDS )
                                 ( string_push_char why 41 )
                             } {}
-                            ( string_free bad )
                         } {
-                            ( string_free why )
                             = why ( string_from `versions.` )
                             ( string_push_str why ( string_data vn ) )
                             ( string_push_str why ` must be a JSON object` )
@@ -2045,7 +1994,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ^ why
 }
 
@@ -2103,15 +2051,15 @@ $ `stdlib/core/rcbox.nu`
                 T vc → {
                     ? ( json_obj_has vers ( string_data . vc vname ) ) {
                         ( vec_push [VerCfg] kept vc )
-                    } { ( _an_vercfg_free vc ) }
+                    } {}
                 }
                 F _ → {}
             }
             = k + k 1
         }
-        ( vec_free [VerCfg] . m versions )
+        : ( Vec VerCfg ) old_versions . m versions
+        ( mem_take old_versions )  // a store through the pointer drops nothing
         = . m versions kept
     } {}
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ^ ( vec_len [VerCfg] . m versions )
 }

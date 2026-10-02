@@ -69,12 +69,11 @@ $ `src/dynamic.nu`
     b forest_hit  // any forest version flagged it
 }
 
-@ probe_of Model mo__h ! Verdict String r → Probe {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ probe_of Model mo ! Verdict String r → Probe {
     : ~ Probe out @ Probe { F F 0.0 ( string_new ) F }
     ?? r {
         T vd → {
-            : Meta mm__h ( model_metadata mo__h )
+            : Meta mm__h ( model_metadata mo )
             : *MetaImpl mm ( _Meta_ptr mm__h )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
@@ -100,9 +99,8 @@ $ `src/dynamic.nu`
                 }
                 = k + k 1
             }
-            ( verdict_free vd )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ^ out
 }
@@ -114,18 +112,16 @@ $ `src/dynamic.nu`
     ^ j
 }
 
-@ ingest Model mo__h f temp f press i at → Probe {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ ingest Model mo f temp f press i at → Probe {
     : Json j ( point_json temp press T )
-    : !Verdict String r ( model_ingest_at mo__h j at )
-    ( json_free j )
-    ^ ( probe_of mo__h r )
+    : !Verdict String r ( model_ingest_at mo j at )
+    ^ ( probe_of mo r )
 }
 
 @ main → i {
     : ~ String root ( string_from `./anomaly_fc_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
-        T d → { ( string_free root ) = root d }
+        T d → { = root d }
         F _ → {}
     }
     : !v IoErr junk ( dir_remove_all ( string_data root ) )
@@ -141,25 +137,22 @@ $ `src/dynamic.nu`
     ~ < k 480 {
         = press + press * 0.05 ( gauss3 )
         : Probe p ( ingest mo__h + ( temp_at k ) * 0.3 ( gauss3 ) press + T0 * k 60 )
-        ( string_free . p feat )
         = k + k 1
     }
     // the version is off by default: a train leaves it untrained
     : i tr0 ( model_force_train_at mo__h + T0 * 480 60 )
     ( check > tr0 0 `forecast: the model trains` )
-    : Meta mm__h ( model_metadata mo__h )
-    : *MetaImpl mm ( _Meta_ptr mm__h )
-    ( check >= ( meta_find_version mm__h ANOM_FC_NAME ) 0 `forecast: the version exists` )
-    ( check ! ( meta_version_enabled mm__h ANOM_FC_NAME T ) `forecast: and is off by default` )
+    : Meta mm ( model_metadata mo__h )
+    ( check >= ( meta_find_version mm ANOM_FC_NAME ) 0 `forecast: the version exists` )
+    ( check ! ( meta_version_enabled mm ANOM_FC_NAME T ) `forecast: and is off by default` )
     ( check ! . ( _FcModel_ptr . mo fc ) trained `forecast: off means untrained` )
-    ( check == ( meta_version_margin mm__h ANOM_FC_NAME 0.0 ) ANOM_FC_SIGMA `forecast: default margin is the sigma count` )
+    ( check == ( meta_version_margin mm ANOM_FC_NAME 0.0 ) ANOM_FC_SIGMA `forecast: default margin is the sigma count` )
 
     // train it with the daily season
     : b _w ( model_set_version_window mo__h ANOM_FC_NAME 24 0 )
     : String err ( model_train_forecast_at mo__h + T0 * 480 60 )
     ( check == ( string_len err ) 0 `forecast: explicit training succeeds` )
-    ( string_free err )
-    ( check ( meta_version_enabled mm__h ANOM_FC_NAME F ) `forecast: training switches the version on` )
+    ( check ( meta_version_enabled mm ANOM_FC_NAME F ) `forecast: training switches the version on` )
     : FcModel fc__h ( model_forecast mo__h )
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ( check . fc trained `forecast: trained` )
@@ -188,7 +181,6 @@ $ `src/dynamic.nu`
         : Probe p ( ingest mo__h + ( temp_at k ) * 0.3 ( gauss3 ) press + T0 * k 60 )
         ? . p seen {} { = seen F }
         ? . p anomaly { = quiet F } {}
-        ( string_free . p feat )
         = k + k 1
     }
     ( check seen `forecast: a verdict on every normal point` )
@@ -204,28 +196,23 @@ $ `src/dynamic.nu`
     ( check == ( nurl_str_eq ( string_data . pa feat ) `temp` ) 1 `forecast: and the version names temp` )
     ( check <= . pa score -4.0 `forecast: the reading sits past the sigma line` )
     ( check ! . pa forest_hit `forecast: the forests, which see values and not order, let it through` )
-    ( string_free . pa feat )
 
     // a gap: the point without a temperature — no verdict for temp, the pressure still judged
     : Json jg ( point_json 0.0 press F )
     : !Verdict String rg ( model_ingest_at mo__h jg + T0 * 511 60 )
-    ( json_free jg )
     : Probe pg ( probe_of mo__h rg )
     ( check . pg seen `forecast: a point missing a feature still gets a verdict from the others` )
     ( check ! == ( nurl_str_eq ( string_data . pg feat ) `temp` ) 1 `forecast: the missing reading is a gap, not a zero` )
-    ( string_free . pg feat )
     ( check == . fc pos 512 `forecast: the gap counts as a step` )
 
     // detect_only: no state change
     : i pos_before . fc pos
     : Json jd ( point_json ( temp_at 512 ) press T )
     : !Verdict String rd ( model_detect_only mo__h jd )
-    ( json_free jd )
     : Probe pd ( probe_of mo__h rd )
     ( check . pd seen `forecast: detect_only judges` )
     ( check ! . pd anomaly `forecast: detect_only quiet on a normal reading` )
     ( check == . fc pos pos_before `forecast: detect_only leaves the states alone` )
-    ( string_free . pd feat )
 
     // the JSON round trip is exact
     : String j1 ( fc_to_json_str fc__h )
@@ -233,12 +220,9 @@ $ `src/dynamic.nu`
         T fc2 → {
             : String j2 ( fc_to_json_str fc2 )
             ( check ( string_eq j1 j2 ) `forecast: JSON round trip is exact` )
-            ( string_free j2 )
-            ( fc_free fc2 )
         }
         F _ → { ( check F `forecast: JSON parses back` ) }
     }
-    ( string_free j1 )
 
     // the scan over the stored rows agrees with the live verdicts
     : ScanOut so ( model_scan_at mo__h + T0 * 480 60 + T0 * 513 60 0 T )
@@ -267,47 +251,40 @@ $ `src/dynamic.nu`
     ( check == scan_seen nsp `forecast: the scan has a forecast verdict on every row` )
     ( check scan_flag `forecast: the scan flags the contextual point` )
     ( check == scan_hits 1 `forecast: and nothing else in the window` )
-    ( scan_free so )
 
     // reopen: the states carry on from the file (saved at the train,
     // caught up from the ring on the next judgement)
-    ( model_free mo__h )
-    : Model mo2__h ( model_open_at st `fc` + T0 * 512 60 )
-    : *ModelImpl mo2 ( _Model_ptr mo2__h )
-    : FcModel fcb__h ( model_forecast mo2__h )
+    : Model mo2 ( model_open_at st `fc` + T0 * 512 60 )
+    : FcModel fcb__h ( model_forecast mo2 )
     : *FcModelImpl fcb ( _FcModel_ptr fcb__h )
     ( check . fcb trained `forecast: reopened trained` )
     ( check == . fcb pos 512 `forecast: the file stands at the last save (the train, then every 32 rows absorbed)` )
     = press + press * 0.05 ( gauss3 )
-    : Probe pr ( ingest mo2__h + ( temp_at 512 ) * 0.3 ( gauss3 ) press + T0 * 512 60 )
+    : Probe pr ( ingest mo2 + ( temp_at 512 ) * 0.3 ( gauss3 ) press + T0 * 512 60 )
     ( check . pr seen `forecast: judges after a reopen` )
     ( check ! . pr anomaly `forecast: quiet after a reopen` )
     ( check == . fcb pos 513 `forecast: caught up with the ring before judging` )
-    ( string_free . pr feat )
 
     // the forecast itself: the next row is 513 (23.5 on the cycle)
-    ( model_forecast_sync mo2__h )
+    ( model_forecast_sync mo2 )
     : FcForecast ff ( fc_forecast fcb__h 3 )
     ( check == ( vec_len [String] . ff feats ) 2 `forecast: a forecast per watched feature` )
     : ~ f m0 0.0
     ?? ( vec_get [( Vec f )] . ff mean 0 ) { T mv → { = m0 ( _fc_getf mv 0 ) } F _ → {} }
     ( check < ( float_abs - m0 ( temp_at 513 ) ) 1.5 `forecast: the next temperature is forecast near the cycle` )
-    ( fc_forecast_free ff )
     : Json info ( fc_info_json fcb__h )
     ( check == ( _an_jint info `training_data_points` 0 ) 480 `forecast: the info block carries the fit size` )
-    ( json_free info )
 
-    : Probe pr2 ( ingest mo2__h 15.5 press + T0 * 513 60 )
+    : Probe pr2 ( ingest mo2 15.5 press + T0 * 513 60 )
     ( check . pr2 anomaly `forecast: still catches the contextual point after a reopen` )
-    ( string_free . pr2 feat )
 
     // the forecast as the API answers it: times from the ring's step, intervals
-    ( check == ( model_step mo2__h ) 60 `forecast: the ring's step is a minute` )
-    : Json fj ( model_forecast_json mo2__h 3 )
+    ( check == ( model_step mo2 ) 60 `forecast: the ring's step is a minute` )
+    : Json fj ( model_forecast_json mo2 3 )
     ( check == ( _an_jint fj `step_seconds` 0 ) 60 `forecast: the answer carries the step` )
     : ~ i t1 0
     ?? ( json_obj_get fj `times` ) { T ta → { ?? ( json_arr_get ta 0 ) { T e → { = t1 ( json_as_int e ) } F _ → {} } } F _ → {} }
-    ( check == t1 + ( model_last_ts mo2__h ) 60 `forecast: the first step's time is the newest point's plus the step` )
+    ( check == t1 + ( model_last_ts mo2 ) 60 `forecast: the first step's time is the newest point's plus the step` )
     : ~ b bands F
     ?? ( json_obj_get fj `forecasts` ) {
         T fa → {
@@ -325,10 +302,9 @@ $ `src/dynamic.nu`
         F _ → {}
     }
     ( check bands `forecast: the 95 % interval brackets the mean` )
-    ( json_free fj )
 
     // measured: over the last 60 origins the model beats carrying the last value forward
-    : Json bt ( model_forecast_backtest mo2__h 6 60 )
+    : Json bt ( model_forecast_backtest mo2 6 60 )
     ( check == ( _an_jint bt `origins` 0 ) 60 `backtest: sixty origins` )
     : ~ f skill -1.0
     : ~ f cov 0.0
@@ -346,23 +322,19 @@ $ `src/dynamic.nu`
     }
     ( check > skill 0.3 `backtest: the seasonal model beats the naive forecast on the rhythm` )
     ( check > cov 0.7 `backtest: the 95 % interval holds most one-step readings` )
-    ( json_free bt )
-    : Json bt0 ( model_forecast_backtest mo2__h 6 100000 )
+    : Json bt0 ( model_forecast_backtest mo2 6 100000 )
     ( check > ( _an_jint bt0 `origins` 0 ) 0 `backtest: more origins than rows is clamped, not refused` )
-    ( json_free bt0 )
 
     // muted while disabled: no verdict, the models kept
-    : b _off ( model_set_version_enabled mo2__h ANOM_FC_NAME F )
-    : Probe pm ( ingest mo2__h + ( temp_at 514 ) * 0.3 ( gauss3 ) press + T0 * 514 60 )
+    : b _off ( model_set_version_enabled mo2 ANOM_FC_NAME F )
+    : Probe pm ( ingest mo2 + ( temp_at 514 ) * 0.3 ( gauss3 ) press + T0 * 514 60 )
     ( check ! . pm seen `forecast: no verdict while the version is off` )
     ( check . fcb trained `forecast: the models are kept while off` )
     ( check == . fcb pos 514 `forecast: nothing absorbed while off` )
-    ( string_free . pm feat )
-    : b _on ( model_set_version_enabled mo2__h ANOM_FC_NAME T )
-    : Probe pn ( ingest mo2__h + ( temp_at 515 ) * 0.3 ( gauss3 ) press + T0 * 515 60 )
+    : b _on ( model_set_version_enabled mo2 ANOM_FC_NAME T )
+    : Probe pn ( ingest mo2 + ( temp_at 515 ) * 0.3 ( gauss3 ) press + T0 * 515 60 )
     ( check . pn seen `forecast: judging again once on` )
     ( check == . fcb pos 516 `forecast: the rows ingested while off were caught up` )
-    ( string_free . pn feat )
 
     // a model whose forecast version is untrained: the ensure fits it, the season from the step
     : Model mo3__h ( model_open_at st `ensure` T0 )
@@ -371,7 +343,6 @@ $ `src/dynamic.nu`
     ( model_set_schedule mo3__h 100000 100000 )
     : String e0 ( model_forecast_ensure_at mo3__h T0 )
     ( check > ( string_len e0 ) 0 `ensure: an untrained model has no forecast, and says so` )
-    ( string_free e0 )
     // 260 hourly rows: a temperature on the day's rhythm, a constant, a
     // calendar sine fed as data, a counter that resets, a flag
     : ( Vec Json ) recs3 ( vec_new [Json] )
@@ -389,11 +360,8 @@ $ `src/dynamic.nu`
     }
     : ImportReport ir3 ( model_import_at mo3__h recs3 + T0 * 260 3600 )
     ( check . ir3 trained `ensure: the import trains the model` )
-    ( import_report_free ir3 )
-    ( vec_free_with [Json] recs3 \ Json j → v { ( json_free j ) } )
     : String e1 ( model_forecast_ensure_at mo3__h + T0 * 260 3600 )
     ( check == ( string_len e1 ) 0 `ensure: fits the forecast version` )
-    ( string_free e1 )
     ( check == . ( _FcModel_ptr . mo3 fc ) season 24 `ensure: hourly points get the daily season` )
     ( check ( meta_version_enabled ( model_metadata mo3__h ) ANOM_FC_NAME F ) `ensure: and switches it on` )
     // features that are not readings are skipped with a reason
@@ -428,15 +396,12 @@ $ `src/dynamic.nu`
     : ~ f om 0.0
     ?? ( json_obj_get fo `forecasts` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `mean` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = om x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
     ( check < ( float_abs - om ( temp_at 201 ) ) 1.5 `origin: the next value from there is forecast on the rhythm` )
-    ( json_free fo )
     ( check == . ( _FcModel_ptr . mo3 fc ) pos 260 `origin: the live states were not moved` )
 
     // a season of -1 means none
     : b _w3 ( model_set_version_window mo3__h ANOM_FC_NAME -1 0 )
     : String e5 ( model_train_forecast_at mo3__h + T0 * 260 3600 )
-    ( string_free e5 )
     ( check == . ( _FcModel_ptr . mo3 fc ) season 0 `season: -1 is no season` )
-    ( model_free mo3__h )
 
     // a minute's step: the day is 1 440 rows, which no polynomial state
     // can carry — the season goes to Fourier terms, the fit stays quick,
@@ -456,17 +421,13 @@ $ `src/dynamic.nu`
     }
     : ImportReport ir ( model_import_at mo4__h recs + T0 * 4500 60 )
     ( check == . ir accepted 4500 `minute: 4 500 points imported` )
-    ( import_report_free ir )
-    ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
     : i tm0 ( now_ms )
     : String e4 ( model_forecast_ensure_at mo4__h + T0 * 4500 60 )
     : i tm1 - ( now_ms ) tm0
     ( check == ( string_len e4 ) 0 `minute: the forecast version fits` )
-    ( string_free e4 )
     : String tl ( string_from `minute: fitted a 1 440-row season on 2 000 rows in ` )
     ( string_push_int tl tm1 ) ( string_push_str tl ` ms` )
     ( check < tm1 20000 ( string_data tl ) )
-    ( string_free tl )
     ( check == . ( _FcModel_ptr . mo4 fc ) season 1440 `minute: the season is the day` )
     : ArimaModel am4 ( model_forecast_model mo4__h 0 )
     ( check > ( arima_xk am4 ) 0 `minute: modelled as Fourier terms` )
@@ -475,17 +436,12 @@ $ `src/dynamic.nu`
     : ~ f sk4 -1.0
     ?? ( json_obj_get bt4 `features` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `skill_vs_naive` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sk4 x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
     ( check > sk4 0.3 `minute: an hour ahead the Fourier model beats the naive forecast` )
-    ( json_free bt4 )
     // a reopen keeps the regressors' phase
-    ( model_free mo4__h )
-    : Model mo5__h ( model_open_at st `minute` + T0 * 4500 60 )
-    : *ModelImpl mo5 ( _Model_ptr mo5__h )
-    : Json fj5 ( model_forecast_json mo5__h 1 )
+    : Model mo5 ( model_open_at st `minute` + T0 * 4500 60 )
+    : Json fj5 ( model_forecast_json mo5 1 )
     : ~ f m5 0.0
     ?? ( json_obj_get fj5 `forecasts` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `mean` ) { T a → { ?? ( json_arr_get a 0 ) { T e → { ?? ( json_num_as_f e ) { T x → { = m5 x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
     ( check < ( float_abs - m5 + 20.0 * 5.0 ( sin / * 6.283185307179586 4500.0 1440.0 ) ) 1.0 `minute: after a reopen the next value is forecast on the rhythm` )
-    ( json_free fj5 )
-    ( model_free mo5__h )
 
     // a ramp with noise: the drift form, which nothing else can climb with
     : Model mo6__h ( model_open_at st `ramp` T0 )
@@ -502,12 +458,9 @@ $ `src/dynamic.nu`
         = k + k 1
     }
     : ImportReport ir6 ( model_import_at mo6__h recs6 + T0 * 300 3600 )
-    ( import_report_free ir6 )
-    ( vec_free_with [Json] recs6 \ Json j → v { ( json_free j ) } )
     : b _w6 ( model_set_version_window mo6__h ANOM_FC_NAME -1 0 )
     : String e6 ( model_train_forecast_at mo6__h + T0 * 300 3600 )
     ( check == ( string_len e6 ) 0 `drift: the ramp trains` )
-    ( string_free e6 )
     : ~ b is_drift F
     ?? ( vec_get [String] . ( _FcModel_ptr . mo6 fc ) sel 0 ) { T sn → { = is_drift ( string_contains sn `drift` ) } F _ → {} }
     ( check is_drift `drift: the holdout chooses the drift form for a ramp` )
@@ -515,16 +468,11 @@ $ `src/dynamic.nu`
     : ~ f sk6 -1.0
     ?? ( json_obj_get bt6 `features` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `skill_vs_naive` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sk6 x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }
     ( check > sk6 0.5 `drift: twelve steps ahead the drift beats the naive forecast by half` )
-    ( json_free bt6 )
-    ( model_free mo6__h )
 
     // reset drops it
-    ( model_reset mo2__h )
+    ( model_reset mo2 )
     ( check ! . fcb trained `forecast: reset drops the models` )
-    ?? ( store_load_fc st `fc` ) { T fx → { ( check F `forecast: reset removes the file` ) ( fc_free fx ) } F → { ( check T `forecast: reset removes the file` ) } }
-    ( model_free mo2__h )
-    ( store_free st )
-    ( string_free root )
+    ?? ( store_load_fc st `fc` ) { T fx → { ( check F `forecast: reset removes the file` ) } F → { ( check T `forecast: reset removes the file` ) } }
 
     : String sum ( string_from `forecast_test: ` )
     ( string_push_int sum g_pass )
@@ -532,6 +480,5 @@ $ `src/dynamic.nu`
     ( string_push_int sum g_fail )
     ( string_push_str sum ` failed` )
     ( pline ( string_data sum ) )
-    ( string_free sum )
     ^ ? > g_fail 0 1 0
 }

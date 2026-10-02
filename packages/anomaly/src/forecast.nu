@@ -190,9 +190,6 @@ $ `stdlib/core/rcbox.nu`
     = . fc unsaved 0
 }
 
-// Let go of `fc` now rather than at the end of its owner's scope.
-@ fc_free sink FcModel fc → v {}
-
 // The watched features' readings of an encoded point, NaN where the
 // point has none (a projection fills a missing feature with 0, which for
 // a forecast would be a reading).
@@ -239,11 +236,6 @@ $ `stdlib/core/rcbox.nu`
     String name
     b fixed  // ARIMA(0,1,0): the last value carried forward, as a candidate
     b trend  // a linear drift among the regressors
-}
-
-@ __fc_cand_free sink FcCand c → v {
-    ( vec_free [i] . c periods )
-    ( string_free . c name )
 }
 
 @ __fc_cand i sarima i p1 i p2 i k s name → FcCand {
@@ -319,7 +311,6 @@ $ `stdlib/core/rcbox.nu`
     : ~ i t 0
     ~ < t nfit { = . ph t . py t = t + t 1 }
     : ArimaModel m ( __fc_fit_cand head c )
-    ( vec_free [f] head )
     : ~ f err 0.0
     : ~ f nai 0.0
     : ~ i cnt 0
@@ -344,12 +335,10 @@ $ `stdlib/core/rcbox.nu`
                 = cnt + cnt 1
                 = q + q 1
             }
-            ( arima_forecast_free f1 )
             : ArimaUpdate _u ( arima_update m . py + t 1 )
             = t + t 1
         }
     } {}
-    ( arima_free m )
     ? & > cnt 0 ! bad { ^ @ FcScore { / err # f cnt / nai # f cnt } } {}
     ^ @ FcScore { ( float_inf ) ( float_inf ) }
 }
@@ -390,7 +379,6 @@ $ `stdlib/core/rcbox.nu`
         }
         F _ → {}
     }
-    ( vec_free_with [FcCand] cands \ FcCand c → v { ( __fc_cand_free c ) } )
 }
 
 // Jobs lane, lane + stride, … of the `n` at `base` (the jobs Vec's data:
@@ -484,8 +472,6 @@ $ `stdlib/core/rcbox.nu`
     ~ < k n { ( vec_push [f] dev ( float_abs - . pv k med ) ) = k + k 1 }
     ( sort_by [f] dev \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
     : ~ f spread * 1.4826 ( _fc_getf dev / n 2 )
-    ( vec_free [f] sorted )
-    ( vec_free [f] dev )
     ? > spread 0.0 {} {
         : ~ f sum 0.0
         = k 0
@@ -520,8 +506,6 @@ $ `stdlib/core/rcbox.nu`
         ~ < k nf { ? > ( _fc_getf falls k ) * 10.0 step {} { = resets F } = k + k 1 }
         ? resets { = kind 2 } {}
     } {}
-    ( vec_free [f] pos )
-    ( vec_free [f] falls )
     ^ @ FcSeries { y n T kind spread }
 }
 
@@ -546,8 +530,7 @@ $ `stdlib/core/rcbox.nu`
         = t + t 1
     }
     : FcSeries kd ( __fc_series_kind present )
-    ( vec_free [f] . kd y )
-    ( vec_free [f] present )
+    ( vec_free [f] . kd y )  // finding_pkgsweep_scalar_field_into_returned_literal
     ? > cnt 0 {
         // bridge: walk the gaps
         : ~ i last -1
@@ -605,11 +588,8 @@ $ `stdlib/core/rcbox.nu`
         } {}
         = j + j 1
     }
-    ( vec_free [i] mask )
     : i nc ( vec_len [String] cand )
     ? | == nc 0 <= - ne from ANOM_FC_MIN_FIT {
-        ( vec_free_with [String] cand \ String x → v { ( string_free x ) } )
-        ( vec_free [i] ccols )
         ^ 0
     } {}
     // the candidates' readings over the ring
@@ -620,7 +600,6 @@ $ `stdlib/core/rcbox.nu`
             T p → {
                 : ( Vec f ) row ( fc_project p cand )
                 ( vec_extend [f] hist row )
-                ( vec_free [f] row )
             }
             F _ → {}
         }
@@ -633,7 +612,6 @@ $ `stdlib/core/rcbox.nu`
     // (prep.nu, "Absurd readings").
     : ( Vec i ) fc_abs ( vec_new [i] )
     : i _fc_masked ( anomaly_mask_absurd hist ne nc fc_abs )
-    ( vec_free [i] fc_abs )
 
     // the fit jobs, one per feature worth fitting
     : ( Vec FcJob ) jobs ( vec_new [FcJob] )
@@ -714,10 +692,6 @@ $ `stdlib/core/rcbox.nu`
         } {}
         = k + k 1
     }
-    ( vec_free [i] jfeat )
-    ( vec_free [f] hist )
-    ( vec_free_with [String] cand \ String x → v { ( string_free x ) } )
-    ( vec_free [i] ccols )
     = . fc nw ( vec_len [ArimaModel] . fc models )
     = . fc trained > . fc nw 0
     = . fc pos ne
@@ -759,10 +733,6 @@ $ `stdlib/core/rcbox.nu`
     ( Vec f ) z  // per watched feature; NaN where not judged
 }
 
-@ fc_out_free sink FcOut o → v {
-    ( vec_free [f] . o z )
-}
-
 // Judge a row of readings against the models' current forecasts. With
 // `absorb` the readings are then absorbed (the live ingest: the row is
 // the ring's newest); without, the states stay (detect_only).
@@ -789,7 +759,6 @@ $ `stdlib/core/rcbox.nu`
                 : f se ( _fc_getf . f1 se 0 )
                 : f vr * se se
                 ? & > se 0.0 <= vr * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc__h j - y ( _fc_getf . f1 mean 0 ) vr ) } {}
-                ( arima_forecast_free f1 )
             }
         }
         = . pz j zj
@@ -813,12 +782,6 @@ $ `stdlib/core/rcbox.nu`
     ( Vec String ) feats
     ( Vec ( Vec f ) ) mean
     ( Vec ( Vec f ) ) se
-}
-
-@ fc_forecast_free sink FcForecast o → v {
-    ( vec_free_with [String] . o feats \ String x → v { ( string_free x ) } )
-    ( vec_free_with [( Vec f )] . o mean \ ( Vec f ) v → v { ( vec_free [f] v ) } )
-    ( vec_free_with [( Vec f )] . o se \ ( Vec f ) v → v { ( vec_free [f] v ) } )
 }
 
 @ fc_forecast FcModel fc__h i h → FcForecast {
@@ -964,12 +927,10 @@ $ `stdlib/core/rcbox.nu`
             T mo → { ( json_arr_push ms mo ) }
             F _ → {}
         }
-        ( string_free mj )
         = j + j 1
     }
     ( json_obj_set o `models` ms )
     : String out ( json_stringify o )
-    ( json_free o )
     ^ out
 }
 
@@ -985,7 +946,7 @@ $ `stdlib/core/rcbox.nu`
                     F _ → { = ok F }
                 }
             } {}
-            ? ok {} { ( json_free o ) ^ @ ?FcModel { F } }
+            ? ok {} { ^ @ ?FcModel { F } }
             : FcModel fc__h ( fc_new )
             : *FcModelImpl fc ( _FcModel_ptr fc__h )
             = . fc season ( _an_jint o `season` 0 )
@@ -1039,7 +1000,6 @@ $ `stdlib/core/rcbox.nu`
                                         T m → { ( vec_push [ArimaModel] . fc models m ) }
                                         F _ → { = good F }
                                     }
-                                    ( string_free es )
                                 }
                                 F _ → { = good F }
                             }
@@ -1072,7 +1032,6 @@ $ `stdlib/core/rcbox.nu`
                 }
                 F _ → {}
             }
-            ( json_free o )
             : i nw ( vec_len [ArimaModel] . fc models )
             ? & & good == ( vec_len [String] . fc feats ) nw == ( vec_len [i] . fc cols ) nw {} { = good F }
             // a file from before the selection: no record of it

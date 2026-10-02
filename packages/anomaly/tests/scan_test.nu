@@ -61,20 +61,17 @@ $ `src/dynamic.nu`
     ^ j
 }
 
-@ ingest Model mo__h f pres f flow f temp i at → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ ingest Model mo f pres f flow f temp i at → v {
     : Json j ( mkpoint pres flow temp )
-    : !Verdict String r ( model_ingest_at mo__h j at )
-    ( json_free j )
-    ?? r { T vd → { ( verdict_free vd ) } F e → { ( string_free e ) } }
+    : !Verdict String r ( model_ingest_at mo j at )
+    ?? r { T vd → {} F e → {} }
 }
 
 // The autoencoder's slice of a detect_only verdict.
 : AeSlice { b present b hit f df f margin }
 
-@ ae_probe Model mo__h Json j → AeSlice {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : !Verdict String r ( model_detect_only mo__h j )
+@ ae_probe Model mo Json j → AeSlice {
+    : !Verdict String r ( model_detect_only mo j )
     ?? r {
         T vd → {
             : ~ AeSlice out @ AeSlice { F F 0.0 0.0 }
@@ -91,10 +88,9 @@ $ `src/dynamic.nu`
                 }
                 = k + k 1
             }
-            ( verdict_free vd )
             ^ out
         }
-        F e → { ( string_free e ) ^ @ AeSlice { F F 0.0 0.0 } }
+        F e → { ^ @ AeSlice { F F 0.0 0.0 } }
     }
 }
 
@@ -108,9 +104,8 @@ $ `src/dynamic.nu`
     i feat
 }
 
-@ guard_probe Model mo__h Json j → GuardSlice {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : !Verdict String r ( model_detect_only mo__h j )
+@ guard_probe Model mo Json j → GuardSlice {
+    : !Verdict String r ( model_detect_only mo j )
     ?? r {
         T vd → {
             : ~ GuardSlice out @ GuardSlice { F F 0.0 0.0 -1 }
@@ -127,10 +122,9 @@ $ `src/dynamic.nu`
                 }
                 = k + k 1
             }
-            ( verdict_free vd )
             ^ out
         }
-        F e → { ( string_free e ) ^ @ GuardSlice { F F 0.0 0.0 -1 } }
+        F e → { ^ @ GuardSlice { F F 0.0 0.0 -1 } }
     }
 }
 
@@ -138,9 +132,8 @@ $ `src/dynamic.nu`
 // past its own alert line in its own margins — rather than the lowest
 // raw decision value? The two differ whenever the autoencoder (scores
 // ~1e-4) is the alarmed one and a forest (~1e-1) is merely normal.
-@ agg_follows_severity Model mo__h Json j b must_differ → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : !Verdict String r ( model_detect_only mo__h j )
+@ agg_follows_severity Model mo Json j b must_differ → b {
+    : !Verdict String r ( model_detect_only mo j )
     ?? r {
         T vd → {
             : ~ f top -1000000.0
@@ -162,25 +155,22 @@ $ `src/dynamic.nu`
             : b ok & < ( float_abs - . vd severity top ) 0.000000001 < ( float_abs - . vd score top_score ) 0.000000001
             // `must_differ`: the caller arranged the two rules to disagree.
             : b differs > ( float_abs - top_score low ) 0.000000001
-            ( verdict_free vd )
             ^ & ok | differs ! must_differ
         }
-        F e → { ( string_free e ) ^ F }
+        F e → { ^ F }
     }
 }
 
 // The aggregate verdict of one stored ring row, the slow way.
-@ detect_row Model mo__h i at → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ detect_row Model mo i at → b {
     : ~ b anom F
-    ?? ( model_point_json mo__h at ) {
+    ?? ( model_point_json mo at ) {
         T j → {
-            : !Verdict String r ( model_detect_only mo__h j )
+            : !Verdict String r ( model_detect_only mo j )
             ?? r {
-                T vd → { = anom . vd anomaly ( verdict_free vd ) }
-                F e → { ( string_free e ) }
+                T vd → { = anom . vd anomaly }
+                F e → {}
             }
-            ( json_free j )
         }
         F → {}
     }
@@ -188,9 +178,8 @@ $ `src/dynamic.nu`
 }
 
 // How many ring points the autoencoder version flags, via a scan.
-@ ae_flag_count Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : ScanOut so ( model_scan_at mo__h 0 0 0 F )
+@ ae_flag_count Model mo → i {
+    : ScanOut so ( model_scan_at mo 0 0 0 F )
     : ~ i bit -1
     : ~ i k 0
     ~ < k ( vec_len [String] . so vnames ) {
@@ -211,7 +200,6 @@ $ `src/dynamic.nu`
             = k + k 1
         }
     } {}
-    ( scan_free so )
     ^ n
 }
 
@@ -253,8 +241,6 @@ $ `src/dynamic.nu`
     ( check == ( cal_flagged_at cw ( cal_margin_for_rate cw 0.01 ) ) 0 `ties: a run at the worst end is left out when the request is nearer none` )
     ( check == ( cal_flagged_at cw ( cal_margin_for_rate cw 0.04 ) ) 50 `ties: … and taken when the request is nearer its far edge` )
     ( check >= ( cal_margin_for_rate cw 0.04 ) 0.0 `ties: margins stay non-negative` )
-    ( string_free . cv cvname ) ( vec_free [f] . cv dfs )
-    ( string_free . cw cvname ) ( vec_free [f] . cw dfs )
 }
 
 @ main → i {
@@ -281,8 +267,6 @@ $ `src/dynamic.nu`
     : ( Vec i ) hidden ( vec_new [i] )
     : String aerr ( model_train_autoencoder mo__h hidden -1.0 )
     ( check == ( string_len aerr ) 0 `autoencoder trained` )
-    ( string_free aerr )
-    ( vec_free [i] hidden )
     : AeModel ae0 . mo ae
     ( check . ae0 trained `autoencoder is live` )
     ( check > . ae0 threshold 0.0 `reconstruction threshold is positive` )
@@ -357,7 +341,6 @@ $ `src/dynamic.nu`
     : b _g5 ( model_set_version_enabled mo__h ANOM_GUARD_NAME T )
     : GuardSlice g5 ( guard_probe mo__h spike )
     ( check . g5 hit `re-enabling it costs nothing: no forest to retrain` )
-    ( json_free spike )
 
     // ── per-feature attribution ───────────────────────────────────────
     //
@@ -394,12 +377,8 @@ $ `src/dynamic.nu`
     // expected: flow was 5.0 where flow ≈ 2·pres says 3.0.
     ( check < ( float_abs - flow_value 5.0 ) 0.001 `the contribution carries the feature's raw value` )
     ( check < ( float_abs - flow_expected 3.0 ) ( float_abs - flow_expected 5.0 ) `the expected value sits nearer the manifold than the point` )
-    ( ae_contrib_free cs )
     : ( Vec AeContrib ) cs2 ( model_ae_contrib mo__h good 3 )
     ( check == ( vec_len [AeContrib] cs2 ) 3 `a clean point still reports shares` )
-    ( ae_contrib_free cs2 )
-    ( json_free bad )
-    ( json_free good )
 
     // ── the scan agrees with detect_only ──────────────────────────────
     : ScanOut sc1 ( model_scan_at mo__h 0 0 0 F )
@@ -420,43 +399,36 @@ $ `src/dynamic.nu`
     }
     ( check agree `every sampled scan verdict matches detect_only` )
     : i anoms1 . sc1 anomalies
-    ( scan_free sc1 )
 
     // ── the cache ─────────────────────────────────────────────────────
     : ScanOut sc2 ( model_scan_at mo__h 0 0 0 F )
     ( check == . sc2 hits 400 `a second scan is served entirely from cache` )
     ( check == . sc2 misses 0 `a warm scan computes nothing` )
     ( check == . sc2 anomalies anoms1 `the cached verdicts are the same verdicts` )
-    ( scan_free sc2 )
 
     // force ignores the cache but must not change the answer
     : ScanOut sc3 ( model_scan_at mo__h 0 0 0 T )
     ( check == . sc3 misses 400 `refresh recomputes everything` )
     ( check == . sc3 anomalies anoms1 `recomputing reproduces the verdicts` )
-    ( scan_free sc3 )
 
     // ── time window and limit ─────────────────────────────────────────
     : i mid + T0 * 200 60
     : ScanOut sc4 ( model_scan_at mo__h mid 0 0 F )
     ( check == . sc4 considered 200 `from= keeps the later half` )
     ( check == . sc4 hits 200 `a window reuses the full scan's cache` )
-    ( scan_free sc4 )
     : ScanOut sc5 ( model_scan_at mo__h 0 mid 0 F )
     ( check == . sc5 considered 201 `to= keeps the earlier half` )
-    ( scan_free sc5 )
     : ScanOut sc6 ( model_scan_at mo__h 0 0 50 F )
     ( check == ( vec_len [ScoredPt] . sc6 pts ) 50 `limit caps the rows returned` )
     ( check == . sc6 considered 400 `considered still reports the whole window` )
     : ~ i last_idx -1
     ?? ( vec_get [ScoredPt] . sc6 pts 49 ) { T r → { = last_idx . r sp_idx } F _ → {} }
     ( check == last_idx 399 `limit takes the NEWEST rows` )
-    ( scan_free sc6 )
 
     // ── invalidation ──────────────────────────────────────────────────
     : b _m4 ( model_set_margin mo__h `weekly` 0.02 )
     : ScanOut sc7 ( model_scan_at mo__h 0 0 0 F )
     ( check == . sc7 misses 400 `a margin edit invalidates the cache` )
-    ( scan_free sc7 )
     : b _m5 ( model_set_margin mo__h `weekly` 0.06 )
 
     : b _e1 ( model_set_version_enabled mo__h `daily` F )
@@ -472,11 +444,9 @@ $ `src/dynamic.nu`
         = k + k 1
     }
     ( check ! has_daily `a disabled version leaves the scan's version list` )
-    ( scan_free sc8 )
     : b _e2 ( model_set_version_enabled mo__h `daily` T )
 
     : ScanOut sc9 ( model_scan_at mo__h 0 0 0 F )
-    ( scan_free sc9 )
 
     // ── runs ──────────────────────────────────────────────────────────
     // A run is a maximal sequence of consecutive agreed rows: every
@@ -532,38 +502,32 @@ $ `src/dynamic.nu`
     }
     ( check contiguous `runs: numbered in order, maximal, never touching, worst inside` )
     ( check == rows_sum agreed `runs: the rows add up` )
-    ( scan_runs_free sr )
     : ScanRuns sr99 ( scan_runs scr 99 )
     ( check == ( vec_len [ScanRun] . sr99 runs ) 0 `runs: 99 votes agree nowhere` )
-    ( scan_runs_free sr99 )
-    ( scan_free scr )
     : i _u2 ( model_force_train_at mo__h + T0 * 400 60 )
     : ScanOut sc10 ( model_scan_at mo__h 0 0 0 F )
     ( check == . sc10 misses 400 `a retrain invalidates the cache` )
-    ( scan_free sc10 )
 
     // ── eviction keeps the cache aligned ──────────────────────────────
     //
     // Rows are keyed on the lifetime counter, so evicting the oldest point
     // must not shift every cached verdict onto its neighbour.
-    : Model ev__h ( model_open_at st `evict` T0 )
-    : *ModelImpl ev ( _Model_ptr ev__h )
-    ( model_set_limits ev__h 30 120 )
-    ( model_set_schedule ev__h 1000000 1000000 )
+    : Model ev ( model_open_at st `evict` T0 )
+    ( model_set_limits ev 30 120 )
+    ( model_set_schedule ev 1000000 1000000 )
     = g_lcg 23
     = k 0
     ~ < k 120 {
         : f pres + 1.0 ( lcg_u01 )
-        ( ingest ev__h pres * 2.0 pres + 20.0 ( lcg_u01 ) + T0 * k 60 )
+        ( ingest ev pres * 2.0 pres + 20.0 ( lcg_u01 ) + T0 * k 60 )
         = k + k 1
     }
-    : i _u3 ( model_force_train_at ev__h + T0 * 120 60 )
-    : ScanOut e1 ( model_scan_at ev__h 0 0 0 F )
+    : i _u3 ( model_force_train_at ev + T0 * 120 60 )
+    : ScanOut e1 ( model_scan_at ev 0 0 0 F )
     ( check == . e1 total 120 `the eviction model is at capacity` )
-    ( scan_free e1 )
     // One more point: the ring drops row 0 and gains a new tail.
-    ( ingest ev__h 1.5 3.0 20.5 + T0 * 121 60 )
-    : ScanOut e2 ( model_scan_at ev__h 0 0 0 F )
+    ( ingest ev 1.5 3.0 20.5 + T0 * 121 60 )
+    : ScanOut e2 ( model_scan_at ev 0 0 0 F )
     ( check == . e2 total 120 `still at capacity after eviction` )
     ( check == . e2 hits 119 `every surviving point keeps its cached verdict` )
     ( check == . e2 misses 1 `only the newly arrived point is scored` )
@@ -572,15 +536,13 @@ $ `src/dynamic.nu`
     ~ < k ( vec_len [ScoredPt] . e2 pts ) {
         ?? ( vec_get [ScoredPt] . e2 pts k ) {
             T r → {
-                ? != . r sp_anomaly ( detect_row ev__h . r sp_idx ) { = ev_agree F } {}
+                ? != . r sp_anomaly ( detect_row ev . r sp_idx ) { = ev_agree F } {}
             }
             F _ → {}
         }
         = k + k 7
     }
     ( check ev_agree `post-eviction cached verdicts still match their points` )
-    ( scan_free e2 )
-    ( model_free ev__h )
 
     // ── fine-tuning reaches the autoencoder ───────────────────────────
     : b _m6 ( model_set_margin mo__h `autoencoder` 0.0 )
@@ -606,7 +568,6 @@ $ `src/dynamic.nu`
         }
         = k + k 1
     }
-    ( finetune_free rep )
     ( check saw_ae `finetune reports the autoencoder version` )
     ( check > ae_new 0.0 `the autoencoder gets a positive relative margin` )
     : f stored ( meta_version_margin ( model_metadata mo__h ) `autoencoder` -1.0 )
@@ -632,7 +593,6 @@ $ `src/dynamic.nu`
     : b _ms ( model_set_margin mo__h `short_term` 0.0001 )
     ( check ( agg_follows_severity mo__h off T ) `a forest of higher severity but higher raw score is the aggregate` )
     : b _mr ( model_set_margin mo__h `short_term` st_margin )
-    ( json_free off )
 
     // Calibration reads the same numbers back without writing anything.
     : CalReport cal ( model_calibrate mo__h 0 0 )
@@ -660,11 +620,7 @@ $ `src/dynamic.nu`
         = k + k 1
     }
     ( check cal_ae `calibrate: the autoencoder is in the report` )
-    ( cal_free cal )
 
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free root )
     ( nurl_print `scan_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

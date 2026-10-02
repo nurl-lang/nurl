@@ -55,7 +55,6 @@ $ `src/store.nu`
 @ train_one ( Vec f ) scaled → VerModel {
     : VerCfg cfg @ VerCfg { ( string_from `short_term` ) 180 0 0 0 100 256 -1.0 0.1 T }
     : VerModel vm ( anom_train_version scaled 208 2 cfg )
-    ( _an_vercfg_free cfg )
     ^ vm
 }
 
@@ -83,14 +82,9 @@ $ `src/store.nu`
                 = r + r 1
             }
             ( check same `blob: all 208 scores bit-exact after reload` )
-            ( anom_vermodel_free vm2 )
         }
         F _ → { ( check F `blob: parses back` ) }
     }
-    ( vec_free [u] blob )
-    ( anom_vermodel_free vm )
-    ( scaler_free sc )
-    ( vec_free [f] data )
 }
 
 // ── 2. Corrupt / truncated blobs are rejected cleanly ─────────────────
@@ -120,15 +114,13 @@ $ `src/store.nu`
                 : ( Vec u ) part ( bytes_slice blob 0 cut )
                 = tried + tried 1
                 : ?VerModel r ( vermodel_from_bytes part )
-                ?? r { T bad → { ( anom_vermodel_free bad ) } F _ → { = rejected + rejected 1 } }
-                ( vec_free [u] part )
+                ?? r { T bad → {} F _ → { = rejected + rejected 1 } }
             }
             F _ → {}
         }
         = k + k 1
     }
     ( check == rejected tried `corrupt: every truncation rejected` )
-    ( vec_free [i] cuts )
 
     // Flip one byte inside the node arrays: must be rejected (index check)
     // — flip a root index high byte to shoot it out of range.
@@ -141,20 +133,14 @@ $ `src/store.nu`
         F _ → {}
     }
     : ?VerModel r2 ( vermodel_from_bytes mut )
-    ?? r2 { T bad → { ( anom_vermodel_free bad ) ( check F `corrupt: out-of-range index rejected` ) } F _ → { ( check T `corrupt: out-of-range index rejected` ) } }
-    ( vec_free [u] mut )
+    ?? r2 { T bad → { ( check F `corrupt: out-of-range index rejected` ) } F _ → { ( check T `corrupt: out-of-range index rejected` ) } }
 
     // Trailing garbage after a valid body: rejected.
     : ( Vec u ) padded ( vec_clone [u] blob )
     ( vec_push [u] padded # u 0 )
     : ?VerModel r3 ( vermodel_from_bytes padded )
-    ?? r3 { T bad → { ( anom_vermodel_free bad ) ( check F `corrupt: trailing garbage rejected` ) } F _ → { ( check T `corrupt: trailing garbage rejected` ) } }
-    ( vec_free [u] padded )
+    ?? r3 { T bad → { ( check F `corrupt: trailing garbage rejected` ) } F _ → { ( check T `corrupt: trailing garbage rejected` ) } }
 
-    ( vec_free [u] blob )
-    ( anom_vermodel_free vm )
-    ( scaler_free sc )
-    ( vec_free [f] data )
 }
 
 // ── 3. File store: save / load / exists / list / delete ──────────────
@@ -162,7 +148,7 @@ $ `src/store.nu`
 @ test_store → v {
     : ~ String root ( string_from `./anomaly_store_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
-        T d → { ( string_free root ) = root d }
+        T d → { = root d }
         F _ → {}
     }
     : !v IoErr junk ( dir_remove_all ( string_data root ) )
@@ -171,18 +157,16 @@ $ `src/store.nu`
 
     : ( Vec String ) empty ( store_list st )
     ( check == ( vec_len [String] empty ) 0 `store: empty list on fresh root` )
-    ( vec_free_with [String] empty \ String x → v { ( string_free x ) } )
 
     // Build a model: meta + one trained version.
-    : Meta m__h ( meta_new `sensor_a` `2026-07-03T00:00:00Z` )
-    : *MetaImpl m ( _Meta_ptr m__h )
+    : Meta m ( meta_new `sensor_a` `2026-07-03T00:00:00Z` )
     : ( Vec f ) data ( make_data )
     : Scaler sc ( scaler_fit data 208 2 )
-    ( meta_set_scaler m__h sc )
+    ( meta_set_scaler m sc )
     ( scaler_apply_matrix sc data 208 2 )
     : VerModel vm ( train_one data )
 
-    ( check ( store_save_meta st `sensor_a` m__h ) `store: meta saved` )
+    ( check ( store_save_meta st `sensor_a` m ) `store: meta saved` )
     ( check ( store_save_forest st `sensor_a` vm ) `store: forest saved` )
     ( check ( store_exists st `sensor_a` ) `store: exists` )
     ( check == ( store_exists st `nope` ) F `store: missing model absent` )
@@ -193,18 +177,14 @@ $ `src/store.nu`
         T n0 → { ( check == ( nurl_str_eq ( string_data n0 ) `sensor_a` ) 1 `store: listed name` ) }
         F _ → {}
     }
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
 
     // Reload: metadata equal, forest scores bit-exact.
     : ?Meta m2o ( store_load_meta st `sensor_a` )
     ?? m2o {
         T m2 → {
-            : String s1 ( meta_to_json_str m__h )
+            : String s1 ( meta_to_json_str m )
             : String s2 ( meta_to_json_str m2 )
             ( check ( string_eq s1 s2 ) `store: metadata survives round-trip` )
-            ( string_free s1 )
-            ( string_free s2 )
-            ( meta_free m2 )
         }
         F _ → { ( check F `store: metadata loads` ) }
     }
@@ -218,13 +198,12 @@ $ `src/store.nu`
                 = r + r 1
             }
             ( check same `store: reloaded forest scores bit-exact` )
-            ( anom_vermodel_free vm2 )
         }
         F _ → { ( check F `store: forest loads` ) }
     }
     // Missing version → None.
     : ?VerModel nov ( store_load_forest st `sensor_a` `daily` )
-    ?? nov { T bad → { ( anom_vermodel_free bad ) ( check F `store: missing version None` ) } F _ → { ( check T `store: missing version None` ) } }
+    ?? nov { T bad → { ( check F `store: missing version None` ) } F _ → { ( check T `store: missing version None` ) } }
 
     // Labels: append, replay with last write winning, withdraw, delete.
     : Label l1 @ Label { 7 100 ( string_from ANOM_LABEL_FP ) ( string_from `a` ) 1 ( string_from `n1` ) }
@@ -233,9 +212,6 @@ $ `src/store.nu`
     ( check ( store_append_label st `sensor_a` l1 ) `labels: append` )
     ( check ( store_append_label st `sensor_a` l2 ) `labels: append another` )
     ( check ( store_append_label st `sensor_a` l3 ) `labels: rewrite the first` )
-    ( label_free l1 )
-    ( label_free l2 )
-    ( label_free l3 )
     : ( Vec Label ) lls ( store_load_labels st `sensor_a` )
     ( check == ( vec_len [Label] lls ) 2 `labels: one entry per sequence` )
     : ~ b lw F
@@ -254,49 +230,38 @@ $ `src/store.nu`
         = q + q 1
     }
     ( check lw `labels: the last write wins, whole record` )
-    ( labels_free lls )
     : Label l4 @ Label { 9 102 ( string_from ANOM_LABEL_NONE ) ( string_from `b` ) 4 ( string_new ) }
     ( check ( store_append_label st `sensor_a` l4 ) `labels: withdraw` )
-    ( label_free l4 )
     : ( Vec Label ) lls2 ( store_load_labels st `sensor_a` )
     ( check == ( vec_len [Label] lls2 ) 1 `labels: none removes the entry` )
-    ( labels_free lls2 )
     ( store_delete_labels st `sensor_a` )
     : ( Vec Label ) lls3 ( store_load_labels st `sensor_a` )
     ( check == ( vec_len [Label] lls3 ) 0 `labels: deleted file loads empty` )
-    ( labels_free lls3 )
     ( check ( label_known ANOM_LABEL_FP ) `labels: false_positive is known` )
     ( check ! ( label_known `maybe` ) `labels: maybe is not` )
 
     // The ring: a point at its lifetime sequence number, the oldest
     // evicted by a range delete, the whole ring replaced.
-    : Meta pm__h ( meta_new `sensor_a` `2026-01-01T00:00:00Z` )
-    : *MetaImpl pm ( _Meta_ptr pm__h )
-    ( store_commit_point st `sensor_a` 100 `{"temp":1,"timestamp":100}` 0 pm__h )
-    ( store_commit_point st `sensor_a` 101 `{"temp":2,"timestamp":101}` 0 pm__h )
+    : Meta pm ( meta_new `sensor_a` `2026-01-01T00:00:00Z` )
+    ( store_commit_point st `sensor_a` 100 `{"temp":1,"timestamp":100}` 0 pm )
+    ( store_commit_point st `sensor_a` 101 `{"temp":2,"timestamp":101}` 0 pm )
     : ( Vec String ) pts ( store_load_points st `sensor_a` )
     ( check == ( vec_len [String] pts ) 2 `store: a point goes in at its sequence number` )
-    ( vec_free_with [String] pts \ String x → v { ( string_free x ) } )
     ( check == ( store_points_count st `sensor_a` ) 2 `store: and is counted` )
-    ( store_commit_point st `sensor_a` 102 `{"temp":3,"timestamp":102}` 101 pm__h )
+    ( store_commit_point st `sensor_a` 102 `{"temp":3,"timestamp":102}` 101 pm )
     : ( Vec String ) pts_e ( store_load_points st `sensor_a` )
     ( check == ( vec_len [String] pts_e ) 2 `store: eviction drops everything older` )
     ?? ( vec_get [String] pts_e 0 ) {
         T first → { ( check ( string_contains first `"temp":2` ) `store: and keeps the newest` ) }
         F _ → { ( check F `store: eviction leaves rows` ) }
     }
-    ( vec_free_with [String] pts_e \ String x → v { ( string_free x ) } )
     : ( Vec String ) tail ( store_load_points_tail st `sensor_a` 1 )
     ( check == ( vec_len [String] tail ) 1 `store: the tail reads only what was asked for` )
-    ( vec_free_with [String] tail \ String x → v { ( string_free x ) } )
     : ( Vec String ) one ( vec_new [String] )
     ( vec_push [String] one ( string_from `{"temp":4,"timestamp":103}` ) )
     ( store_write_points st `sensor_a` one 7 )
-    ( vec_free_with [String] one \ String x → v { ( string_free x ) } )
     : ( Vec String ) pts2 ( store_load_points st `sensor_a` )
     ( check == ( vec_len [String] pts2 ) 1 `store: the whole ring can be replaced` )
-    ( vec_free_with [String] pts2 \ String x → v { ( string_free x ) } )
-    ( meta_free pm__h )
 
     // Corrupt the stored forest: load returns None.
     : ?( Vec u ) fraw ( __st_blob_get st `sensor_a` `forest:short_term` )
@@ -304,9 +269,8 @@ $ `src/store.nu`
         T fb → {
             ( vec_set [u] fb 20 # u 254 )
             ( __st_blob_put st `sensor_a` `forest:short_term` fb )
-            ( vec_free [u] fb )
             : ?VerModel cv ( store_load_forest st `sensor_a` `short_term` )
-            ?? cv { T bad → { ( anom_vermodel_free bad ) ( check F `store: a corrupt blob is rejected` ) } F _ → { ( check T `store: a corrupt blob is rejected` ) } }
+            ?? cv { T bad → { ( check F `store: a corrupt blob is rejected` ) } F _ → { ( check T `store: a corrupt blob is rejected` ) } }
         }
         F _ → { ( check F `store: forest blob readable for tamper test` ) }
     }
@@ -315,14 +279,8 @@ $ `src/store.nu`
     ( check ( store_delete st `sensor_a` ) `store: delete` )
     ( check == ( store_exists st `sensor_a` ) F `store: gone after delete` )
 
-    ( anom_vermodel_free vm )
-    ( scaler_free sc )
-    ( vec_free [f] data )
-    ( meta_free m__h )
-    ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
 }
 
 @ main → i {
@@ -335,7 +293,6 @@ $ `src/store.nu`
     ( string_push_int summary g_fail )
     ( string_push_str summary ` failed` )
     ( pline ( string_data summary ) )
-    ( string_free summary )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }

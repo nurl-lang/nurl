@@ -55,38 +55,33 @@ $ `src/dynamic.nu`
     ^ / # f g_lcg 2147483648.0
 }
 
-@ ingest_temp Model mo__h f temp i at → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ ingest_temp Model mo f temp i at → v {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
-    : !Verdict String r ( model_ingest_at mo__h j at )
-    ( json_free j )
+    : !Verdict String r ( model_ingest_at mo j at )
     ?? r {
-        T vd → { ( verdict_free vd ) }
-        F e → { ( string_free e ) }
+        T vd → {}
+        F e → {}
     }
 }
 
 // A model with 60 points of a tight temp regime, trained.
-@ seed Model mo__h → v {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( model_set_limits mo__h 20 150000 )
-    ( model_set_schedule mo__h 10 1000 )
+@ seed Model mo → v {
+    ( model_set_limits mo 20 150000 )
+    ( model_set_schedule mo 10 1000 )
     : ~ i k 1
     ~ <= k 60 {
-        ( ingest_temp mo__h + 20.0 * 0.4 ( lcg_u01 ) + T0 * k 60 )
+        ( ingest_temp mo + 20.0 * 0.4 ( lcg_u01 ) + T0 * k 60 )
         = k + k 1
     }
-    : i _n ( model_force_train_at mo__h + T0 * 61 60 )
+    : i _n ( model_force_train_at mo + T0 * 61 60 )
 }
 
 // Does the verdict of a probe carry a slice named `vname`?
-@ has_version Model mo__h s vname → b {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ has_version Model mo s vname → b {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float 20.2 ) )
-    : !Verdict String r ( model_detect_only mo__h j )
-    ( json_free j )
+    : !Verdict String r ( model_detect_only mo j )
     ?? r {
         T vd → {
             : ~ b found F
@@ -101,21 +96,18 @@ $ `src/dynamic.nu`
                 }
                 = k + k 1
             }
-            ( verdict_free vd )
             ^ found
         }
-        F e → { ( string_free e ) ^ F }
+        F e → { ^ F }
     }
 }
 
 // Apply a JSON patch written as text; returns the error text (owned).
-@ patch_text Model mo__h s src → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ patch_text Model mo s src → String {
     : !Json JsonError r ( json_parse src )
     ?? r {
         T j → {
-            : String err ( model_apply_meta_patch mo__h j )
-            ( json_free j )
+            : String err ( model_apply_meta_patch mo j )
             ^ err
         }
         F _ → { ^ ( string_from `unparsable test patch` ) }
@@ -126,35 +118,30 @@ $ `src/dynamic.nu`
 
 @ test_patch Store st → v {
     = g_lcg 1
-    : Model mo__h ( model_open_at st `patch` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( seed mo__h )
-    : Meta mm__h ( model_metadata mo__h )
+    : Model mo ( model_open_at st `patch` T0 )
+    ( seed mo )
+    : Meta mm__h ( model_metadata mo )
     : *MetaImpl mm ( _Meta_ptr mm__h )
 
     : i before ( vec_len [VerCfg] . mm versions )
-    : String e1 ( patch_text mo__h `{"versions":{"daily":{"decision_margin":0.33}}}` )
+    : String e1 ( patch_text mo `{"versions":{"daily":{"decision_margin":0.33}}}` )
     ( check == ( string_len e1 ) 0 `patch: a one-field version object is accepted` )
-    ( string_free e1 )
     ( check ( near ( meta_version_margin mm__h `daily` -1.0 ) 0.33 ) `patch: the named field changed` )
     // The audit trail promises "every change of a version's alert line";
     // a margin set through the metadata patch is one.
-    : Json aud ( model_audit mo__h 0 )
+    : Json aud ( model_audit mo 0 )
     ( check == ( json_arr_len aud ) 1 `patch: the margin change is in the audit trail` )
     ?? ( json_arr_get aud 0 ) {
         T ent → {
             : ~ String av ( string_new )
             ?? ( json_obj_get ent `version` ) { T v → { ( string_push_str av ( json_as_str v ) ) } F _ → {} }
             ( check == ( nurl_str_eq ( string_data av ) `daily` ) 1 `patch: and it names the version` )
-            ( string_free av )
             : ~ String ac ( string_new )
             ?? ( json_obj_get ent `action` ) { T v → { ( string_push_str ac ( json_as_str v ) ) } F _ → {} }
             ( check == ( nurl_str_eq ( string_data ac ) `edit` ) 1 `patch: and the action is the edit` )
-            ( string_free ac )
         }
         F _ → { ( check F `patch: the audit entry reads back` ) }
     }
-    ( json_free aud )
     ( check == ( vec_len [VerCfg] . mm versions ) before `patch: no version was added or lost` )
     ( check == ( meta_version_margin mm__h `weekly` -1.0 ) 0.06 `patch: other versions are untouched` )
 
@@ -170,19 +157,17 @@ $ `src/dynamic.nu`
 
     // A name the model does not have is a typo far more often than a new
     // version: a partial patch refuses it and names the ones that exist.
-    : String etypo ( patch_text mo__h `{"versions":{"autoenocder":{"enabled":false}}}` )
+    : String etypo ( patch_text mo `{"versions":{"autoenocder":{"enabled":false}}}` )
     ( check > ( string_len etypo ) 0 `add: a misspelt version name is refused, not silently created` )
     ( check ( string_contains etypo `autoenocder` ) `add: and the refusal names it` )
     ( check ( string_contains etypo `replace_versions` ) `add: and says how a version IS added` )
-    ( string_free etypo )
     ( check < ( meta_find_version mm__h `autoenocder` ) 0 `add: nothing was created` )
     ( check == ( vec_len [VerCfg] . mm versions ) before `add: and the version list is as it was` )
 
     // Adding one is the whole-list flag away, which is what the JSON
     // editor sends.
-    : String e2 ( patch_text mo__h `{"versions":{"short_term":{},"daily":{},"weekly":{},"seasonal":{},"timevector":{},"range_guard":{},"flatline":{},"forecast":{},"autoencoder":{},"hourly":{"window_minutes":60,"n_estimators":150}},"replace_versions":true}` )
+    : String e2 ( patch_text mo `{"versions":{"short_term":{},"daily":{},"weekly":{},"seasonal":{},"timevector":{},"range_guard":{},"flatline":{},"forecast":{},"autoencoder":{},"hourly":{"window_minutes":60,"n_estimators":150}},"replace_versions":true}` )
     ( check == ( string_len e2 ) 0 `add: a whole-list patch may name a version the model does not have` )
-    ( string_free e2 )
     : i at_h ( meta_find_version mm__h `hourly` )
     ( check >= at_h 0 `add: the new version is in the metadata` )
     ?? ( vec_get [VerCfg] . mm versions at_h ) {
@@ -196,14 +181,13 @@ $ `src/dynamic.nu`
     }
 
     // It really trains and scores.
-    : i _n ( model_force_train_at mo__h + T0 * 62 60 )
-    ( check ( has_version mo__h `hourly` ) `add: the new version trains and scores` )
+    : i _n ( model_force_train_at mo + T0 * 62 60 )
+    ( check ( has_version mo `hourly` ) `add: the new version trains and scores` )
 
     // replace_versions: the list becomes exactly the keys given.
-    : String e3 ( patch_text mo__h
+    : String e3 ( patch_text mo
     `{"versions":{"short_term":{},"hourly":{}},"replace_versions":true}` )
     ( check == ( string_len e3 ) 0 `replace: accepted` )
-    ( string_free e3 )
     ( check == ( vec_len [VerCfg] . mm versions ) 2 `replace: only the named versions survive` )
     ( check < ( meta_find_version mm__h `daily` ) 0 `replace: an omitted version is gone` )
     ( check >= ( meta_find_version mm__h `hourly` ) 0 `replace: a named version stays` )
@@ -212,57 +196,46 @@ $ `src/dynamic.nu`
     // versions as the patch LEAVES them, so a patch may switch versions on
     // and raise the bar in one call — and may not ask for more agreement
     // than there are versions to give it.
-    : String ev1 ( patch_text mo__h `{"votes":2}` )
+    : String ev1 ( patch_text mo `{"votes":2}` )
     ( check == ( string_len ev1 ) 0 `votes: a consensus within reach is accepted` )
-    ( string_free ev1 )
     ( check == . mm votes 2 `votes: and applied` )
-    : String ev2 ( patch_text mo__h `{"votes":20}` )
+    : String ev2 ( patch_text mo `{"votes":20}` )
     ( check > ( string_len ev2 ) 0 `votes: more agreement than there are versions is refused` )
     ( check ( string_contains ev2 `versions must agree` ) `votes: and the refusal says why` )
-    ( string_free ev2 )
     ( check == . mm votes 2 `votes: a refused patch leaves it where it was` )
-    : String ev3 ( patch_text mo__h `{"votes":0}` )
+    : String ev3 ( patch_text mo `{"votes":0}` )
     ( check > ( string_len ev3 ) 0 `votes: zero is refused` )
-    ( string_free ev3 )
-    : String ev4 ( patch_text mo__h `{"votes":1}` )
+    : String ev4 ( patch_text mo `{"votes":1}` )
     ( check == ( string_len ev4 ) 0 `votes: back to one` )
-    ( string_free ev4 )
     ( check == . mm votes 1 `votes: one again` )
 
     // The schedule half of the patch.
-    : String e4 ( patch_text mo__h `{"schedule":{"below_max":25,"at_max":500}}` )
+    : String e4 ( patch_text mo `{"schedule":{"below_max":25,"at_max":500}}` )
     ( check == ( string_len e4 ) 0 `schedule: accepted` )
-    ( string_free e4 )
     ( check == . mm sched_below 25 `schedule: below_max applied` )
     ( check == . mm sched_at_max 500 `schedule: at_max applied` )
 
-    ( model_free mo__h )
-
     // Everything survived the round trip through disk.
-    : Model re__h ( model_open_at st `patch` T0 )
-    : *ModelImpl re ( _Model_ptr re__h )
-    : Meta rm__h ( model_metadata re__h )
+    : Model re ( model_open_at st `patch` T0 )
+    : Meta rm__h ( model_metadata re )
     : *MetaImpl rm ( _Meta_ptr rm__h )
     ( check == ( vec_len [VerCfg] . rm versions ) 2 `persist: the version list reloads` )
     ( check == . rm votes 1 `persist: the consensus rule reloads` )
     ( check == . rm sched_below 25 `persist: the schedule reloads` )
-    ( model_free re__h )
 }
 
 // ── Scenario 2: clamping ──────────────────────────────────────────────
 
 @ test_clamp Store st → v {
     = g_lcg 7
-    : Model mo__h ( model_open_at st `clamp` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( seed mo__h )
-    : Meta mm__h ( model_metadata mo__h )
+    : Model mo ( model_open_at st `clamp` T0 )
+    ( seed mo )
+    : Meta mm__h ( model_metadata mo )
     : *MetaImpl mm ( _Meta_ptr mm__h )
 
-    : String e ( patch_text mo__h
+    : String e ( patch_text mo
     `{"versions":{"daily":{"n_estimators":-5,"max_samples":0,"window_minutes":-60,"window_size":8,"step_size":0,"decision_margin":-1.0,"contamination":0.9}}}` )
     ( check == ( string_len e ) 0 `clamp: a nonsense config is accepted, not rejected` )
-    ( string_free e )
     : i at ( meta_find_version mm__h `daily` )
     ?? ( vec_get [VerCfg] . mm versions at ) {
         T vc → {
@@ -277,8 +250,7 @@ $ `src/dynamic.nu`
     }
 
     // 0 contamination means "auto" (-1), the same as the string spelling.
-    : String e2 ( patch_text mo__h `{"versions":{"weekly":{"contamination":0}}}` )
-    ( string_free e2 )
+    : String e2 ( patch_text mo `{"versions":{"weekly":{"contamination":0}}}` )
     : i atw ( meta_find_version mm__h `weekly` )
     ?? ( vec_get [VerCfg] . mm versions atw ) {
         T vc → { ( check < . vc contamination 0.0 `clamp: contamination 0 means auto` ) }
@@ -287,12 +259,9 @@ $ `src/dynamic.nu`
 
     // The autoencoder has no forest: its zeroed tree counts round-trip.
     : ( Vec i ) hidden ( vec_new [i] )
-    : String aerr ( model_train_autoencoder mo__h hidden -1.0 )
-    ( vec_free [i] hidden )
+    : String aerr ( model_train_autoencoder mo hidden -1.0 )
     ( check == ( string_len aerr ) 0 `clamp: the autoencoder trains` )
-    ( string_free aerr )
-    : String e3 ( patch_text mo__h `{"versions":{"autoencoder":{"decision_margin":0.07}}}` )
-    ( string_free e3 )
+    : String e3 ( patch_text mo `{"versions":{"autoencoder":{"decision_margin":0.07}}}` )
     : i ata ( meta_find_version mm__h `autoencoder` )
     ?? ( vec_get [VerCfg] . mm versions ata ) {
         T vc → {
@@ -302,7 +271,6 @@ $ `src/dynamic.nu`
         }
         F _ → { ( check F `clamp: autoencoder readable` ) }
     }
-    ( model_free mo__h )
 }
 
 // ── Scenario 3: enable / disable ──────────────────────────────────────
@@ -319,84 +287,68 @@ $ `src/dynamic.nu`
     ( check == ( has_version mo__h `weekly` ) F `toggle: a disabled version stops scoring at once` )
     : ~ b blob_gone T
     ?? ( store_load_forest . mo store `toggle` `weekly` ) {
-        T vm → { = blob_gone F ( anom_vermodel_free vm ) }
+        T vm → { = blob_gone F }
         F _ → {}
     }
     ( check blob_gone `toggle: the disabled version's forest blob is gone` )
-    ( model_free mo__h )
 
     // Re-enabling does not resurrect a stale forest: it waits for a retrain.
-    : Model re__h ( model_open_at st `toggle` T0 )
-    : *ModelImpl re ( _Model_ptr re__h )
-    ( check ( model_set_version_enabled re__h `weekly` T ) `toggle: re-enabling a known version` )
-    ( check == ( has_version re__h `weekly` ) F `toggle: re-enabled but not yet retrained = no verdict` )
-    : i _n ( model_force_train_at re__h + T0 * 62 60 )
-    ( check ( has_version re__h `weekly` ) `toggle: the retrain brings the verdict back` )
+    : Model re ( model_open_at st `toggle` T0 )
+    ( check ( model_set_version_enabled re `weekly` T ) `toggle: re-enabling a known version` )
+    ( check == ( has_version re `weekly` ) F `toggle: re-enabled but not yet retrained = no verdict` )
+    : i _n ( model_force_train_at re + T0 * 62 60 )
+    ( check ( has_version re `weekly` ) `toggle: the retrain brings the verdict back` )
 
     // The autoencoder is muted, not thrown away.
     : ( Vec i ) hidden ( vec_new [i] )
-    : String aerr ( model_train_autoencoder re__h hidden -1.0 )
-    ( vec_free [i] hidden )
+    : String aerr ( model_train_autoencoder re hidden -1.0 )
     ( check == ( string_len aerr ) 0 `toggle: the autoencoder trains` )
-    ( string_free aerr )
-    ( check ( has_version re__h `autoencoder` ) `toggle: the autoencoder scores once trained` )
-    ( check ( model_set_version_enabled re__h `autoencoder` F ) `toggle: the autoencoder version toggles` )
-    ( check == ( has_version re__h `autoencoder` ) F `toggle: a disabled autoencoder is silent` )
-    ( check ( model_set_version_enabled re__h `autoencoder` T ) `toggle: re-enabling the autoencoder` )
-    ( check ( has_version re__h `autoencoder` ) `toggle: its net was kept — no retrain needed` )
-    ( model_free re__h )
+    ( check ( has_version re `autoencoder` ) `toggle: the autoencoder scores once trained` )
+    ( check ( model_set_version_enabled re `autoencoder` F ) `toggle: the autoencoder version toggles` )
+    ( check == ( has_version re `autoencoder` ) F `toggle: a disabled autoencoder is silent` )
+    ( check ( model_set_version_enabled re `autoencoder` T ) `toggle: re-enabling the autoencoder` )
+    ( check ( has_version re `autoencoder` ) `toggle: its net was kept — no retrain needed` )
 }
 
 // ── Scenario 4: refused shapes ────────────────────────────────────────
 
 @ test_errors Store st → v {
     = g_lcg 5
-    : Model mo__h ( model_open_at st `errs` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( seed mo__h )
-    : Meta mm0__h ( model_metadata mo__h )
+    : Model mo ( model_open_at st `errs` T0 )
+    ( seed mo )
+    : Meta mm0__h ( model_metadata mo )
     : *MetaImpl mm0 ( _Meta_ptr mm0__h )
 
-    : String e1 ( patch_text mo__h `{}` )
+    : String e1 ( patch_text mo `{}` )
     ( check > ( string_len e1 ) 0 `error: an empty patch is refused` )
-    ( string_free e1 )
-    : String e2 ( patch_text mo__h `{"versions":[1,2]}` )
+    : String e2 ( patch_text mo `{"versions":[1,2]}` )
     ( check > ( string_len e2 ) 0 `error: versions must be an object` )
-    ( string_free e2 )
-    : String e3 ( patch_text mo__h `{"schedule":7}` )
+    : String e3 ( patch_text mo `{"schedule":7}` )
     ( check > ( string_len e3 ) 0 `error: schedule must be an object` )
-    ( string_free e3 )
-    : String e4 ( patch_text mo__h `{"schedule":{"below_max":0,"at_max":0}}` )
+    : String e4 ( patch_text mo `{"schedule":{"below_max":0,"at_max":0}}` )
     ( check > ( string_len e4 ) 0 `error: a non-positive schedule is refused` )
-    ( string_free e4 )
-    : String e5 ( patch_text mo__h `[1,2,3]` )
+    : String e5 ( patch_text mo `[1,2,3]` )
     ( check > ( string_len e5 ) 0 `error: the patch itself must be an object` )
-    ( string_free e5 )
 
     // A key the patch does not read is refused with its name, at every
     // level — it used to vanish while the rest of the patch went through.
-    : String e6 ( patch_text mo__h `{"schedule":{"forecast":500},"versions":{"daily":{"window_size":48}}}` )
+    : String e6 ( patch_text mo `{"schedule":{"forecast":500},"versions":{"daily":{"window_size":48}}}` )
     ( check ( string_contains e6 `schedule.forecast` ) `error: an unknown schedule key is named` )
-    ( string_free e6 )
     : ~ i daily_ws -1
     : i dat ( meta_find_version mm0__h `daily` )
     ? >= dat 0 { ?? ( vec_get [VerCfg] . mm0 versions dat ) { T dvc → { = daily_ws . dvc window_size } F _ → {} } } {}
     ( check == daily_ws 0 `error: the rest of a refused patch is not applied` )
-    : String e7 ( patch_text mo__h `{"versions":{"daily":{"window":48}}}` )
+    : String e7 ( patch_text mo `{"versions":{"daily":{"window":48}}}` )
     ( check ( string_contains e7 `versions.daily.window` ) `error: an unknown version field is named` )
-    ( string_free e7 )
-    : String e8 ( patch_text mo__h `{"alias":"x","bogus":1}` )
+    : String e8 ( patch_text mo `{"alias":"x","bogus":1}` )
     ( check ( string_contains e8 `patch.bogus` ) `error: an unknown top-level key is named` )
-    ( string_free e8 )
-    : String e9 ( patch_text mo__h `{"versions":{"daily":3}}` )
+    : String e9 ( patch_text mo `{"versions":{"daily":3}}` )
     ( check ( string_contains e9 `versions.daily must be a JSON object` ) `error: a version value that is not an object is named` )
-    ( string_free e9 )
 
     // A refused patch changes nothing.
-    : Meta mm__h ( model_metadata mo__h )
+    : Meta mm__h ( model_metadata mo )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm sched_below 10 `error: a refused patch leaves the schedule alone` )
-    ( model_free mo__h )
 }
 
 // ── Scenario 5: max_data_points is metadata, not a constant ───────────
@@ -409,56 +361,46 @@ $ `src/dynamic.nu`
 
 @ test_alias Store st → v {
     = g_lcg 31
-    : Model mo__h ( model_open_at st `aliased` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( seed mo__h )
-    : Meta mm__h ( model_metadata mo__h )
+    : Model mo ( model_open_at st `aliased` T0 )
+    ( seed mo )
+    : Meta mm__h ( model_metadata mo )
     : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == ( string_len . mm alias ) 0 `alias: a fresh model has none` )
 
-    : String e1 ( patch_text mo__h `{"alias":"Pannuhuone"}` )
+    : String e1 ( patch_text mo `{"alias":"Pannuhuone"}` )
     ( check == ( string_len e1 ) 0 `alias: a patch setting it is accepted` )
-    ( string_free e1 )
     ( check == ( nurl_str_eq ( string_data . mm alias ) `Pannuhuone` ) 1 `alias: it took the value` )
 
     // It survives a round trip through the stored metadata, which is the
     // whole point of putting it there rather than in a side table.
-    : Model mo2__h ( model_open_at st `aliased` T0 )
-    : *ModelImpl mo2 ( _Model_ptr mo2__h )
-    : Meta mm2__h ( model_metadata mo2__h )
+    : Model mo2 ( model_open_at st `aliased` T0 )
+    : Meta mm2__h ( model_metadata mo2 )
     : *MetaImpl mm2 ( _Meta_ptr mm2__h )
     ( check == ( nurl_str_eq ( string_data . mm2 alias ) `Pannuhuone` ) 1 `alias: it persists across a reopen` )
-    ( model_free mo2__h )
 
     // Editing and clearing both work; empty means "go by the name".
-    : String e2 ( patch_text mo__h `{"alias":"Boiler room"}` )
+    : String e2 ( patch_text mo `{"alias":"Boiler room"}` )
     ( check == ( string_len e2 ) 0 `alias: it can be edited` )
-    ( string_free e2 )
     ( check == ( nurl_str_eq ( string_data . mm alias ) `Boiler room` ) 1 `alias: the edit took` )
-    : String e3 ( patch_text mo__h `{"alias":""}` )
+    : String e3 ( patch_text mo `{"alias":""}` )
     ( check == ( string_len e3 ) 0 `alias: it can be cleared` )
-    ( string_free e3 )
     ( check == ( string_len . mm alias ) 0 `alias: cleared back to empty` )
 
     // A patch that names only the alias is a complete patch — the "at least
     // one key" rule has to count it, or the field is unreachable alone.
-    : String e4 ( patch_text mo__h `{"alias":"Solo"}` )
+    : String e4 ( patch_text mo `{"alias":"Solo"}` )
     ( check == ( string_len e4 ) 0 `alias: alone it is still a valid patch` )
-    ( string_free e4 )
 
     // Refusals leave it alone.
-    : String e5 ( patch_text mo__h `{"alias":42}` )
+    : String e5 ( patch_text mo `{"alias":42}` )
     ( check > ( string_len e5 ) 0 `alias: a non-string is refused` )
-    ( string_free e5 )
     ( check == ( nurl_str_eq ( string_data . mm alias ) `Solo` ) 1 `alias: a refused patch keeps the old value` )
     : String long ( string_from `{"alias":"` )
     : ~ i k 0
     ~ < k 200 { ( string_push_char long 120 ) = k + k 1 }
     ( string_push_str long `"}` )
-    : String e6 ( patch_text mo__h ( string_data long ) )
+    : String e6 ( patch_text mo ( string_data long ) )
     ( check > ( string_len e6 ) 0 `alias: an over-long alias is refused` )
-    ( string_free e6 )
-    ( string_free long )
     ( check == ( nurl_str_eq ( string_data . mm alias ) `Solo` ) 1 `alias: still the old value` )
 
     // It is published as an editable field, which is what puts it in the
@@ -474,62 +416,52 @@ $ `src/dynamic.nu`
         }
         = k + k 1
     }
-    ( json_free ef )
     ( check has_alias `alias: it is published in editable_fields` )
 
-    ( model_free mo__h )
 }
 
 @ test_maxpoints Store st → v {
     = g_lcg 11
-    : Model mo__h ( model_open_at st `maxpts` T0 )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( seed mo__h )
-    : Meta mm__h ( model_metadata mo__h )
+    : Model mo ( model_open_at st `maxpts` T0 )
+    ( seed mo )
+    : Meta mm__h ( model_metadata mo )
     : *MetaImpl mm ( _Meta_ptr mm__h )
-    ( check == ( model_n_points mo__h ) 60 `maxpts: the ring starts at 60 points` )
+    ( check == ( model_n_points mo ) 60 `maxpts: the ring starts at 60 points` )
 
     // Lowering the cap below the current fill evicts at once. Before, the
     // cap was a compile-time constant and the ring converged on it one
     // point per ingest — a model told to keep 25 kept 60 until 35 more
     // arrived.
-    : String e1 ( patch_text mo__h `{"max_data_points":25}` )
+    : String e1 ( patch_text mo `{"max_data_points":25}` )
     ( check == ( string_len e1 ) 0 `maxpts: a positive cap is accepted` )
-    ( string_free e1 )
     ( check == . mm max_points 25 `maxpts: the metadata carries the new cap` )
-    ( check == ( model_n_points mo__h ) 25 `maxpts: the ring was trimmed on the spot` )
-    ( model_free mo__h )
+    ( check == ( model_n_points mo ) 25 `maxpts: the ring was trimmed on the spot` )
 
     // The trim reached the log, and the cap reloads with the model.
-    : Model re__h ( model_open_at st `maxpts` T0 )
-    : *ModelImpl re ( _Model_ptr re__h )
-    : Meta rm__h ( model_metadata re__h )
+    : Model re ( model_open_at st `maxpts` T0 )
+    : Meta rm__h ( model_metadata re )
     : *MetaImpl rm ( _Meta_ptr rm__h )
     ( check == . rm max_points 25 `maxpts: the cap survives a reopen` )
-    ( check == ( model_n_points re__h ) 25 `maxpts: the rewritten log reloads trimmed` )
+    ( check == ( model_n_points re ) 25 `maxpts: the rewritten log reloads trimmed` )
 
     // Raising it evicts nothing.
-    : String e2 ( patch_text re__h `{"max_data_points":90}` )
+    : String e2 ( patch_text re `{"max_data_points":90}` )
     ( check == ( string_len e2 ) 0 `maxpts: raising the cap is accepted` )
-    ( string_free e2 )
-    ( check == ( model_n_points re__h ) 25 `maxpts: raising it evicts nothing` )
+    ( check == ( model_n_points re ) 25 `maxpts: raising it evicts nothing` )
 
     // Refusals: a cap of zero, and one below the warm-up minimum — which
     // would leave the model unable to ever train.
-    : String e3 ( patch_text re__h `{"max_data_points":0}` )
+    : String e3 ( patch_text re `{"max_data_points":0}` )
     ( check > ( string_len e3 ) 0 `maxpts: a non-positive cap is refused` )
-    ( string_free e3 )
-    : String e4 ( patch_text re__h `{"max_data_points":5}` )
+    : String e4 ( patch_text re `{"max_data_points":5}` )
     ( check > ( string_len e4 ) 0 `maxpts: a cap below min_points is refused` )
-    ( string_free e4 )
     ( check == . rm max_points 90 `maxpts: a refused cap leaves the old one` )
-    ( model_free re__h )
 }
 
 @ main → i {
     : ~ String root ( string_from `./anomaly_metaedit_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
-        T d → { ( string_free root ) = root d }
+        T d → { = root d }
         F _ → {}
     }
     : !v IoErr junk ( dir_remove_all ( string_data root ) )
@@ -543,10 +475,8 @@ $ `src/dynamic.nu`
     ( test_maxpoints st )
     ( test_errors st )
 
-    ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
 
     : String summary ( string_from `metaedit_test: ` )
     ( string_push_int summary g_pass )
@@ -554,7 +484,6 @@ $ `src/dynamic.nu`
     ( string_push_int summary g_fail )
     ( string_push_str summary ` failed` )
     ( pline ( string_data summary ) )
-    ( string_free summary )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }

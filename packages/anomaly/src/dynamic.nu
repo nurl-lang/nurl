@@ -86,7 +86,8 @@ $ `stdlib/core/rcbox.nu`
     ^ ? <= df 0.0 1.0 0.0
 }
 
-// A live dynamic model. Obtain with model_open, release with model_free.
+// A live dynamic model. Obtain with model_open; the last copy of the
+// handle releases it (model_free lets go early).
 : ModelImpl {
     Store store
     String mname
@@ -152,10 +153,6 @@ $ `stdlib/core/rcbox.nu`
     ^ ( store_load_audit . mo store ( string_data . mo mname ) limit )
 }
 
-@ verdict_free sink Verdict vd → v {
-    ( vec_free_with [VerVerdict] . vd versions \ VerVerdict vv → v { ( string_free . vv vvname ) } )
-}
-
 @ __an_vercfg_clone VerCfg vc → VerCfg {
     ^ @ VerCfg {
         ( string_from ( string_data . vc vname ) )
@@ -177,21 +174,15 @@ $ `stdlib/core/rcbox.nu`
     ?? r {
         T j → {
             : i ts ( _an_jint j `timestamp` 0 )
-            ( json_free j )
             ^ ts
         }
         F _ → { ^ 0 }
     }
 }
 
-@ __an_free_forests Model mo__h → v {
+@ __an_clear_forests Model mo__h → v {
     : *ModelImpl mo ( _Model_ptr mo__h )
-    ( vec_free_with [VerModel] . mo forests \ VerModel vm → v { ( anom_vermodel_free vm ) } )
-    = . mo forests ( vec_new [VerModel] )
-}
-
-@ __an_free_lines ( Vec String ) xs → v {
-    ( vec_free_with [String] xs \ String x → v { ( string_free x ) } )
+    ( vec_clear [VerModel] . mo forests )
 }
 
 // The schedule step from the current ring fill: at capacity, retrain less.
@@ -251,8 +242,6 @@ $ `stdlib/core/rcbox.nu`
                     ( string_push_str msg `, the model reopens empty` )
                 } { ( string_push_str msg `the model reopens empty` ) }
                 ( nurl_eprintln ( string_data msg ) )
-                ( string_free msg )
-                ( string_free kept )
             }
         }
     } {}
@@ -260,7 +249,6 @@ $ `stdlib/core/rcbox.nu`
         : Time t ( time_from_unix now )
         : String iso ( time_format_iso t )
         = . mo meta ( meta_new name ( string_data iso ) )
-        ( string_free iso )
         ( store_save_meta . mo store name . mo meta )
     }
     : *MetaImpl mm ( _Meta_ptr . mo meta )
@@ -315,8 +303,6 @@ $ `stdlib/core/rcbox.nu`
                                 ( string_push_int msg nfeat0 )
                                 ( string_push_str msg ` features; not loaded` )
                                 ( nurl_eprintln ( string_data msg ) )
-                                ( string_free msg )
-                                ( anom_vermodel_free vm )
                             }
                         }
                         F _ → {}
@@ -424,18 +410,16 @@ $ `stdlib/core/rcbox.nu`
 // newest stored point and an unbounded start the oldest, never a `null`
 // that says "no end" where the answer is "the end of the data". Both
 // bounds are the ones the rows were actually taken between.
-@ model_window_bounds Model mo__h i from_ts i to_ts → ( Vec i ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_window_bounds Model mo i from_ts i to_ts → ( Vec i ) {
     : ( Vec i ) w ( vec_new [i] )
-    ( vec_push [i] w ? > from_ts 0 from_ts ( model_first_ts mo__h ) )
-    ( vec_push [i] w ? > to_ts 0 to_ts ( model_last_ts mo__h ) )
+    ( vec_push [i] w ? > from_ts 0 from_ts ( model_first_ts mo ) )
+    ( vec_push [i] w ? > to_ts 0 to_ts ( model_last_ts mo ) )
     ^ w
 }
 
 // The tick the NEXT point gets on the count clock: one past the newest.
-@ model_next_tick Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ + ( model_last_ts mo__h ) ANOM_TICK
+@ model_next_tick Model mo → i {
+    ^ + ( model_last_ts mo ) ANOM_TICK
 }
 
 // "Now" for this model: the wall clock, or on the count clock the newest
@@ -447,7 +431,8 @@ $ `stdlib/core/rcbox.nu`
     ^ ( now_seconds )
 }
 
-// Let go of `mo` now rather than at the end of its owner's scope.
+// Let go of `mo` now rather than at the end of its owner's scope
+// (optional: the last copy of the handle releases the model).
 @ model_free sink Model mo → v {}
 
 // Test hook: shrink the warm-up / ring limits so eviction and scheduling
@@ -517,12 +502,9 @@ $ `stdlib/core/rcbox.nu`
                                 : ( Vec f ) row ( anomaly_project pt . mm feats )
                                 ( scaler_apply . mo sc row )
                                 ( vec_extend [f] out row )
-                                ( vec_free [f] row )
-                                ( enc_free pt )
                             }
-                            F e → { ( string_free e ) = ok F }
+                            F e → { = ok F }
                         }
-                        ( json_free j )
                     }
                     F _ → { = ok F }
                 }
@@ -532,7 +514,6 @@ $ `stdlib/core/rcbox.nu`
         = k + k 1
     }
     ? ok { ^ @ ?( Vec f ) { T out } } {}
-    ( vec_free [f] out )
     ^ @ ?( Vec f ) { F }
 }
 
@@ -633,10 +614,8 @@ $ `stdlib/core/rcbox.nu`
         ~ < b0 lo {
             : ( Vec f ) fr ( __an_fc_row mo__h b0 )
             ( fc_replay_step . mo fc copies fr noz )
-            ( vec_free [f] fr )
             = b0 + b0 1
         }
-        ( vec_free [f] noz )
     } {}
     : ~ i k lo
     ~ < k hi {
@@ -653,27 +632,21 @@ $ `stdlib/core/rcbox.nu`
                                 : ( Vec f ) row ( anomaly_project p . mm feats )
                                 ( scaler_apply . mo sc row )
                                 ( vec_extend [f] x row )
-                                ( vec_free [f] row )
                                 ? > ae_nfeat 0 {
                                     : ( Vec f ) araw ( anomaly_project p . cae feats )
                                     ( vec_extend [f] ae_x araw )
-                                    ( vec_free [f] araw )
                                 } {}
                                 ? > fc_nw 0 {
                                     : ( Vec f ) fr ( fc_project p . fc feats )
                                     : ( Vec f ) zrow ( vec_zeroed [f] fc_nw )
                                     ( fc_replay_step . mo fc copies fr zrow )
                                     ( vec_extend [f] fc_z zrow )
-                                    ( vec_free [f] zrow )
-                                    ( vec_free [f] fr )
                                     = fgot T
                                 } {}
-                                ( enc_free p )
                                 = got T
                             }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -697,8 +670,6 @@ $ `stdlib/core/rcbox.nu`
                 ~ < z fc_nw { = . gp z ( float_nan ) ( vec_push [f] fc_z ( float_nan ) ) = z + z 1 }
                 : ( Vec f ) noz ( vec_new [f] )
                 ( fc_replay_step . mo fc copies gap noz )
-                ( vec_free [f] noz )
-                ( vec_free [f] gap )
             } {}
         }
         = k + k 1
@@ -719,7 +690,6 @@ $ `stdlib/core/rcbox.nu`
             T vm → {
                 ? & > n 0 > nfeat 0 {
                     ? == . vm n_cols nfeat {
-                        ( vec_free [f] d )
                         = d ( anom_decisions vm x n nfeat )
                         : ~ i r 0
                         ~ < r n { ( vec_push [i] dok ( _mlp_iget ok r ) ) = r + r 1 }
@@ -767,14 +737,11 @@ $ `stdlib/core/rcbox.nu`
                                     ( vec_set [i] dok at 1 )
                                     = q + q 1
                                 }
-                                ( vec_free [f] got )
                                 ( vec_set_len [f] batch 0 )
                                 ( vec_set_len [i] rows 0 )
                             } {}
                             = r + r 1
                         }
-                        ( vec_free [f] batch )
-                        ( vec_free [i] rows )
                     }
                 } {}
             }
@@ -822,16 +789,14 @@ $ `stdlib/core/rcbox.nu`
 
 // The timevector tail: out of the history when one covers it, else read
 // from the ring.
-@ __an_tail_for Model mo__h Hist h__h i need i end → ?( Vec f ) {
-    : *HistImpl h ( _Hist_ptr h__h )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ? != # i . h__h ctl 0 {
-        ?? ( __an_hist_tail h__h need end ) {
+@ __an_tail_for Model mo Hist h i need i end → ?( Vec f ) {
+    ? != # i . h ctl 0 {
+        ?? ( __an_hist_tail h need end ) {
             T t → { ^ @ ?( Vec f ) { T t } }
             F → {}
         }
     } {}
-    ^ ( __an_window_tail mo__h need end )
+    ^ ( __an_window_tail mo need end )
 }
 
 // Score `p` as though it sat at ring position `end` — the point's own slot,
@@ -845,32 +810,29 @@ $ `stdlib/core/rcbox.nu`
     : AeModel cae . mo ae
     : ~ ( Vec f ) araw ( vec_new [f] )
     ? & . cae trained ! . mo ae_stale {
-        ( vec_free [f] araw )
         = araw ( anomaly_project p . cae feats )
     } {}
     : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : ~ ( Vec f ) fraw ( vec_new [f] )
     ? . fc trained {
-        ( vec_free [f] fraw )
         = fraw ( fc_project p . fc feats )
     } {}
     ^ ( __an_score_core mo__h x araw fraw end @ Hist { # s 0 } absorb )
 }
 
 // Score ring row `at` out of an encoded history that covers it.
-@ __an_score_hist Model mo__h Hist h__h i at → Verdict {
+@ __an_score_hist Model mo Hist h__h i at → Verdict {
     : *HistImpl h ( _Hist_ptr h__h )
-    : *ModelImpl mo ( _Model_ptr mo__h )
     : i r - at . h base
     : ( Vec f ) x ( __an_hist_row h__h at )
     : ( Vec f ) araw ( vec_with_cap [f] . h ae_nfeat )
     : *f ap ( vec_data [f] . h ae_x )
     : ~ i c 0
     ~ < c . h ae_nfeat { ( vec_push [f] araw . ap + * r . h ae_nfeat c ) = c + c 1 }
-    ^ ( __an_score_core mo__h x araw ( vec_new [f] ) at h__h F )
+    ^ ( __an_score_core mo x araw ( vec_new [f] ) at h__h F )
 }
 
-// The verdict of a standardised point `x` (owned, freed here) sitting at
+// The verdict of a standardised point `x` (owned) sitting at
 // ring position `end`, with `araw` its raw projection onto the
 // autoencoder's feature order (owned; empty when the AE is untrained)
 // and `fraw` its readings of the forecast version's watched features
@@ -886,9 +848,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo__h ) warm {} {
-        ( vec_free [f] x )
-        ( vec_free [f] araw )
-        ( vec_free [f] fraw )
         ^ @ Verdict { F F 0.0 0.0 vvs 0 0 }
     }
 
@@ -958,7 +917,6 @@ $ `stdlib/core/rcbox.nu`
                                     -1
                                 } )
                             } {}
-                            ( vec_free [f] tail )
                         }
                         F → {}
                         // ring shorter than the window → the version has
@@ -1060,7 +1018,6 @@ $ `stdlib/core/rcbox.nu`
                     : ~ i c 0
                     ~ < c . h fc_nw { ( vec_push [f] zrow . zp + * r . h fc_nw c ) = c + c 1 }
                     : FcPick pk ( fc_worst zrow . fc cols )
-                    ( vec_free [f] zrow )
                     ? >= . pk feat 0 { = fready T = fworst . pk worst = ffeat . pk feat } {}
                 } {}
             } {}
@@ -1072,7 +1029,6 @@ $ `stdlib/core/rcbox.nu`
                     = fready . fo ready
                     = fworst . fo worst
                     = ffeat . fo feat
-                    ( fc_out_free fo )
                     ? & absorb >= . fc unsaved ANOM_FC_SAVE_EVERY { ( __an_fc_save mo__h ) } {}
                 } {}
             } {}
@@ -1095,7 +1051,6 @@ $ `stdlib/core/rcbox.nu`
             } )
         } {}
     } {}
-    ( vec_free [f] fraw )
 
     // The autoencoder verdict: reconstruction error against the trained
     // threshold, on the point projected onto the AE's OWN frozen feature
@@ -1121,8 +1076,6 @@ $ `stdlib/core/rcbox.nu`
             -1
         } )
     } {}
-    ( vec_free [f] araw )
-    ( vec_free [f] x )
     // The model's rule, not a query's: `votes` enabled versions must have
     // flagged before the point is an anomaly. One — the default and every
     // model that has never touched the setting — is "any version alone",
@@ -1159,14 +1112,11 @@ $ `stdlib/core/rcbox.nu`
                     : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
                     ?? er {
                         T p → {
-                            ( vec_free [f] out )
                             = out ( fc_project p . fc feats )
-                            ( enc_free p )
                             = got T
                         }
-                        F e → { ( string_free e ) }
+                        F e → {}
                     }
-                    ( json_free j )
                 }
                 F _ → {}
             }
@@ -1191,7 +1141,6 @@ $ `stdlib/core/rcbox.nu`
     ~ < . fc pos t {
         : ( Vec f ) fr ( __an_fc_row mo__h . fc pos )
         ( fc_absorb . mo fc fr )
-        ( vec_free [f] fr )
     }
 }
 
@@ -1312,10 +1261,9 @@ $ `stdlib/core/rcbox.nu`
         = k + k 1
     }
     : i ng ( vec_len [i] gaps )
-    ? < ng 2 { ( vec_free [i] gaps ) ^ 0 } {}
+    ? < ng 2 { ^ 0 } {}
     ( sort_by [i] gaps \ i a i b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
     : i med ( _fc_geti gaps / ng 2 )
-    ( vec_free [i] gaps )
     ^ med
 }
 
@@ -1418,7 +1366,6 @@ $ `stdlib/core/rcbox.nu`
             ( string_push_int w step )
             ( string_push_str w ` s: the models forecast by row, and the times are the step counted from the newest point` )
             ( json_obj_set o `warning` ( json_str_lit ( string_data w ) ) )
-            ( string_free w )
         } {}
     } {}
     : Json fa ( json_arr_new )
@@ -1447,7 +1394,6 @@ $ `stdlib/core/rcbox.nu`
                         }
                         ( json_obj_set fo `lo80` ( _an_jarr_of_floats lo80 ) ) ( json_obj_set fo `hi80` ( _an_jarr_of_floats hi80 ) )
                         ( json_obj_set fo `lo95` ( _an_jarr_of_floats lo95 ) ) ( json_obj_set fo `hi95` ( _an_jarr_of_floats hi95 ) )
-                        ( vec_free [f] lo80 ) ( vec_free [f] hi80 ) ( vec_free [f] lo95 ) ( vec_free [f] hi95 )
                     }
                     F _ → {}
                 }
@@ -1460,7 +1406,6 @@ $ `stdlib/core/rcbox.nu`
         = j + j 1
     }
     ( json_obj_set o `forecasts` fa )
-    ( fc_forecast_free ff )
     ^ o
 }
 
@@ -1485,10 +1430,8 @@ $ `stdlib/core/rcbox.nu`
     ~ <= t at {
         : ( Vec f ) fr ( __an_fc_row mo__h t )
         ( fc_replay_step . mo fc copies fr noz )
-        ( vec_free [f] fr )
         = t + t 1
     }
-    ( vec_free [f] noz )
     : Json o ( json_obj_new )
     ( json_obj_set o `horizon` ( json_int h ) )
     ( _an_fc_season_json . mo fc o )
@@ -1526,8 +1469,6 @@ $ `stdlib/core/rcbox.nu`
         }
         ( json_obj_set fo `lo80` ( _an_jarr_of_floats lo80 ) ) ( json_obj_set fo `hi80` ( _an_jarr_of_floats hi80 ) )
         ( json_obj_set fo `lo95` ( _an_jarr_of_floats lo95 ) ) ( json_obj_set fo `hi95` ( _an_jarr_of_floats hi95 ) )
-        ( vec_free [f] lo80 ) ( vec_free [f] hi80 ) ( vec_free [f] lo95 ) ( vec_free [f] hi95 )
-        ( arima_forecast_free f1 )
         ( json_arr_push fa fo )
         = j + j 1
     }
@@ -1574,7 +1515,6 @@ $ `stdlib/core/rcbox.nu`
     ~ < k len {
         : ( Vec f ) fr ( __an_fc_row mo__h k )
         ( vec_extend [f] mat fr )
-        ( vec_free [f] fr )
         = k + k 1
     }
     : *f mp ( vec_data [f] mat )
@@ -1601,7 +1541,6 @@ $ `stdlib/core/rcbox.nu`
         : ~ i j 0
         ~ < j nw { ( vec_push [f] row . mp + * r nw j ) = j + j 1 }
         ( fc_replay_step . mo fc copies row noz )
-        ( vec_free [f] row )
         ? & >= t o0 <= t - - len h 1 {
             = j 0
             ~ < j nw {
@@ -1628,14 +1567,11 @@ $ `stdlib/core/rcbox.nu`
                     }
                     = q + q 1
                 }
-                ( arima_forecast_free f1 )
                 = j + j 1
             }
         } {}
         = t + t 1
     }
-    ( vec_free [f] noz )
-    ( vec_free [f] mat )
     ( json_obj_set o `origins` ( json_int no ) )
     ( json_obj_set o `season` ( json_int season ) )
     ( json_obj_set o `rows_from` ( json_int o0 ) )
@@ -1679,8 +1615,6 @@ $ `stdlib/core/rcbox.nu`
         = j + j 1
     }
     ( json_obj_set o `features` fa )
-    ( vec_free [f] s_abs ) ( vec_free [f] s_pct ) ( vec_free [f] s_nai ) ( vec_free [f] s_sea )
-    ( vec_free [i] c_abs ) ( vec_free [i] c_pct ) ( vec_free [i] c_nai ) ( vec_free [i] c_sea ) ( vec_free [i] c_cov )
     ^ o
 }
 
@@ -1697,9 +1631,8 @@ $ `stdlib/core/rcbox.nu`
 // Train the forecast version now, on the ring as it stands, and switch
 // it on. The model must have trained once (a frozen feature order).
 // Returns the error text ("" = success).
-@ model_train_forecast Model mo__h → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ ( model_train_forecast_at mo__h ( model_now mo__h ) )
+@ model_train_forecast Model mo → String {
+    ^ ( model_train_forecast_at mo ( model_now mo ) )
 }
 
 @ model_train_forecast_at Model mo__h i now → String {
@@ -1724,9 +1657,8 @@ $ `stdlib/core/rcbox.nu`
                                 ?? ( vec_get [i] . mo times k ) { T t2 → { = ts t2 } F _ → {} }
                                 ( vec_push [i] ets ts )
                             }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -1737,8 +1669,6 @@ $ `stdlib/core/rcbox.nu`
     }
     ( __an_fc_season_from_step mo__h )
     : i nw ( __an_fc_fit mo__h encs ets now )
-    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-    ( vec_free [i] ets )
     ? > nw 0 {} { ^ ( string_from `no feature to forecast: a watched feature is a numeric column with at least 30 present, not all equal readings in the fit window` ) }
     : b _on ( model_set_version_enabled mo__h ANOM_FC_NAME T )
     // The default margin is a sigma count, and it is a sigma count of the
@@ -1792,9 +1722,8 @@ $ `stdlib/core/rcbox.nu`
                                 ?? ( vec_get [i] . mo times k ) { T t2 → { = ts t2 } F _ → {} }
                                 ( vec_push [i] ets ts )
                             }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -1805,8 +1734,6 @@ $ `stdlib/core/rcbox.nu`
     }
     : i ne ( vec_len [EncPoint] encs )
     ? < ne . mo min_points {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-        ( vec_free [i] ets )
         ^ 0
     } {}
 
@@ -1830,8 +1757,6 @@ $ `stdlib/core/rcbox.nu`
     ( meta_refresh_feats . mo meta )
     : i nfeat ( vec_len [String] . mm feats )
     ? <= nfeat 0 {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-        ( vec_free [i] ets )
         ^ 0
     } {}
     : ( Vec f ) big ( vec_with_cap [f] * ne nfeat )
@@ -1841,7 +1766,6 @@ $ `stdlib/core/rcbox.nu`
             T p → {
                 : ( Vec f ) row ( anomaly_project p . mm feats )
                 ( vec_extend [f] big row )
-                ( vec_free [f] row )
             }
             F _ → {}
         }
@@ -1853,8 +1777,7 @@ $ `stdlib/core/rcbox.nu`
     // (prep.nu, "Absurd readings"). The forecast and the autoencoder mask
     // their own matrices, which are projected onto their own feature
     // orders.
-    ( vec_free [f] . mm absurd_n )
-    = . mm absurd_n ( vec_new [f] )
+    ( vec_clear [f] . mm absurd_n )
     : ( Vec i ) abs_counts ( vec_new [i] )
     : i abs_total ( anomaly_mask_absurd big ne nfeat abs_counts )
     : ~ i aci 0
@@ -1862,7 +1785,6 @@ $ `stdlib/core/rcbox.nu`
         ?? ( vec_get [i] abs_counts aci ) { T cnt → { ( vec_push [f] . mm absurd_n # f cnt ) } F _ → {} }
         = aci + aci 1
     }
-    ( vec_free [i] abs_counts )
     ? > abs_total 0 {
         : String amsg ( string_from `anomaly: model '` )
         ( string_push_str amsg ( string_data . mo mname ) )
@@ -1872,7 +1794,6 @@ $ `stdlib/core/rcbox.nu`
         ? > abs_total 1 { ( string_push_str amsg `s` ) } {}
         ( string_push_str amsg ` too far from their feature's own range to be a measurement of it; left out of this fit, still stored and still scored` )
         ( nurl_eprintln ( string_data amsg ) )
-        ( string_free amsg )
     } {}
 
     // The forecast version, when it is on: a model per numeric feature,
@@ -1880,12 +1801,12 @@ $ `stdlib/core/rcbox.nu`
     // them (a version that is off keeps what it has, muted).
     ( _an_ensure_fc_cfg mo__h )
     ? ( meta_version_enabled . mo meta ANOM_FC_NAME F ) { : i _nw ( __an_fc_fit mo__h encs ets now ) } {}
-    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
 
     // Shared scaler over the whole ring; standardise in place.
     : Scaler snew ( scaler_fit big ne nfeat )
     ( meta_set_scaler . mo meta snew )
-    ( scaler_free . mo sc )
+    : Scaler old_sc . mo sc
+    ( mem_take old_sc )  // a store through the pointer drops nothing
     = . mo sc snew
     ( scaler_apply_matrix snew big ne nfeat )
 
@@ -1893,7 +1814,7 @@ $ `stdlib/core/rcbox.nu`
     // `autoencoder` VerCfg is skipped — it has no forest (see
     // model_train_autoencoder), and training one under its name put a
     // second, empty "autoencoder" verdict beside the real one.
-    ( __an_free_forests mo__h )
+    ( __an_clear_forests mo__h )
     ( store_delete_forest . mo store ( string_data . mo mname ) `autoencoder` )
     // The range guard needs nothing but the scaler just fitted; a model
     // from before it existed gains the version here, at its next retrain,
@@ -1960,7 +1881,6 @@ $ `stdlib/core/rcbox.nu`
                             : VerModel vm ( anom_train_version wins nwin wdim vc )
                             ( store_save_forest . mo store ( string_data . mo mname ) vm )
                             ( vec_push [VerModel] . mo forests vm )
-                            ( vec_free [f] wins )
                         } {}
                         // cnt < W: too little data for one window — the
                         // version simply has no forest this round (its
@@ -1982,7 +1902,6 @@ $ `stdlib/core/rcbox.nu`
                         : VerModel vm ( anom_train_version sub cnt nfeat vc )
                         ( store_save_forest . mo store ( string_data . mo mname ) vm )
                         ( vec_push [VerModel] . mo forests vm )
-                        ( vec_free [f] sub )
                     }
                 } {}
             }
@@ -1990,8 +1909,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = vi + vi 1
     }
-    ( vec_free [f] big )
-    ( vec_free [i] ets )
 
     = . mm last_trained . mm n_seen
     = . mm trained_time ( now_seconds )
@@ -2020,10 +1937,9 @@ $ `stdlib/core/rcbox.nu`
 // that was never 0 in training is a reconstruction error thousands of
 // times the threshold, on every point. A stale net does not score; the
 // next forest retrain replaces it whether or not the schedule says so.
-@ an_ae_stale Meta mm__h AeModel ae → b {
-    : *MetaImpl mm ( _Meta_ptr mm__h )
+@ an_ae_stale Meta mm AeModel ae → b {
     ? . ae trained {} { ^ F }
-    : ( Vec String ) now ( meta_derived_feats mm__h )
+    : ( Vec String ) now ( meta_derived_feats mm )
     : i n ( vec_len [String] . ae feats )
     : ~ b stale F
     : ~ i k 0
@@ -2034,7 +1950,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] now \ String x → v { ( string_free x ) } )
     ^ stale
 }
 
@@ -2058,13 +1973,10 @@ $ `stdlib/core/rcbox.nu`
     ? & . cae trained | . mm sched_ae . mo ae_stale {} { ^ }
     : ( Vec i ) hidden ( ae_hidden cae )
     : String err ( model_train_autoencoder_at mo__h hidden . cae prefilter now )
-    ( vec_free [i] hidden )
-    ( string_free err )
 }
 
-@ model_force_train Model mo__h → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ ( model_force_train_at mo__h ( model_now mo__h ) )
+@ model_force_train Model mo → i {
+    ^ ( model_force_train_at mo ( model_now mo ) )
 }
 
 // ── The autoencoder version ───────────────────────────────────────────
@@ -2187,7 +2099,6 @@ $ `stdlib/core/rcbox.nu`
                 ^ 0
             } )
             : ~ f refrun ( _an_percentile rl ANOM_FLAT_RUN_Q )
-            ( vec_free [f] rl )
             ? < refrun 1.0 { = refrun 1.0 } {}
             // A column whose own reference already fills the guard's
             // look-back is a constant, not a sensor to watch: watching it
@@ -2223,13 +2134,13 @@ $ `stdlib/core/rcbox.nu`
                 ^ 0
             } )
             ( vec_push [f] sds ( _an_percentile wsd ANOM_FLAT_SD_Q ) )
-            ( vec_free [f] wsd )
         }
         = j + j 1
     }
-    ( vec_free [i] mask )
-    ( vec_free [f] . mm flat_run )
-    ( vec_free [f] . mm flat_sd )
+    : ( Vec f ) old_flat_run . mm flat_run
+    ( mem_take old_flat_run )  // a store through the pointer drops nothing
+    : ( Vec f ) old_flat_sd . mm flat_sd
+    ( mem_take old_flat_sd )  // a store through the pointer drops nothing
     = . mm flat_run runs
     = . mm flat_sd sds
 }
@@ -2281,18 +2192,16 @@ $ `stdlib/core/rcbox.nu`
 // reference is 0: a column that never moved in training is not expected
 // to). The larger of the two, over the features, is the verdict's
 // fraction. The collapse rule reads the newest W rows of the look-back.
-@ __an_flat_judge Model mo__h ( Vec f ) x i end Hist h__h → FlatOut {
-    : *HistImpl h ( _Hist_ptr h__h )
+@ __an_flat_judge Model mo__h ( Vec f ) x i end Hist h → FlatOut {
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
     ? ( __an_flat_fitted mo__h ) {} { ^ @ FlatOut { F 0.0 -1 } }
     : i nfeat ( vec_len [String] . mm feats )
     : i W ( _an_flat_window . mo meta )
     : i N ( _an_flat_need . mo meta )
-    ?? ( __an_tail_for mo__h h__h - N 1 end ) {
+    ?? ( __an_tail_for mo__h h - N 1 end ) {
         T tail → {
             ? == ( vec_len [f] tail ) * - N 1 nfeat {} {
-                ( vec_free [f] tail )
                 ^ @ FlatOut { F 0.0 -1 }
             }
             : *f tp ( vec_data [f] tail )
@@ -2339,7 +2248,6 @@ $ `stdlib/core/rcbox.nu`
                 }
                 = j + j 1
             }
-            ( vec_free [f] tail )
             ? < wf 0 { ^ @ FlatOut { F 0.0 -1 } } {}
             ^ @ FlatOut { T worst wf }
         }
@@ -2356,9 +2264,8 @@ $ `stdlib/core/rcbox.nu`
 // 64-32-64. Explicit by default; with `schedule.autoencoder` on, every
 // forest retrain repeats it with the same layout and pre-filter (see
 // __an_retrain_ae). Returns the error text ("" = success).
-@ model_train_autoencoder Model mo__h ( Vec i ) hidden f contamination → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ ( model_train_autoencoder_at mo__h hidden contamination ( model_now mo__h ) )
+@ model_train_autoencoder Model mo ( Vec i ) hidden f contamination → String {
+    ^ ( model_train_autoencoder_at mo hidden contamination ( model_now mo ) )
 }
 
 @ model_train_autoencoder_at Model mo__h ( Vec i ) hidden f contamination i now → String {
@@ -2371,10 +2278,8 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec i ) prev ( ae_hidden cur_ae )
         ? > ( vec_len [i] prev ) 0 {
             : String r ( model_train_autoencoder_at mo__h prev contamination now )
-            ( vec_free [i] prev )
             ^ r
         } {}
-        ( vec_free [i] prev )
     } {}
 
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
@@ -2388,9 +2293,8 @@ $ `stdlib/core/rcbox.nu`
                         : !EncPoint String er ( anomaly_preprocess . mo meta j )
                         ?? er {
                             T p → { ( vec_push [EncPoint] encs p ) }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -2401,7 +2305,6 @@ $ `stdlib/core/rcbox.nu`
     }
     : i ne ( vec_len [EncPoint] encs )
     ? < ne . mo min_points {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
         ^ ( string_from `not enough decodable data points` )
     } {}
 
@@ -2412,8 +2315,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec String ) afeats ( meta_derived_feats . mo meta )
     : i nfeat ( vec_len [String] afeats )
     ? <= nfeat 0 {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-        ( vec_free_with [String] afeats \ String x → v { ( string_free x ) } )
         ^ ( string_from `no numeric features` )
     } {}
     : ( Vec f ) raw ( vec_with_cap [f] * ne nfeat )
@@ -2423,13 +2324,11 @@ $ `stdlib/core/rcbox.nu`
             T p → {
                 : ( Vec f ) row ( anomaly_project p afeats )
                 ( vec_extend [f] raw row )
-                ( vec_free [f] row )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
 
     // A reading that cannot be a measurement of the same quantity would
     // put the net's MinMax range at 1e200 and map every real value to
@@ -2437,25 +2336,21 @@ $ `stdlib/core/rcbox.nu`
     // hole as the midpoint of what is left.
     : ( Vec i ) ae_abs ( vec_new [i] )
     : i _ae_masked ( anomaly_mask_absurd raw ne nfeat ae_abs )
-    ( vec_free [i] ae_abs )
 
     : AeTrainOut out ( ae_train_matrix raw ne nfeat afeats hidden contamination . mo min_points )
-    ( vec_free_with [String] afeats \ String x → v { ( string_free x ) } )
-    ( vec_free [f] raw )
     : ~ AeModel nae . out ae
     ? . nae trained {
         = . nae trained_at now
-        ( ae_free . mo ae )
+        : AeModel old_ae . mo ae
+        ( mem_take old_ae )  // a store through the pointer drops nothing
         = . mo ae nae
         = . mo ae_stale F
         ( __an_ensure_ae_cfg mo__h )
         ( meta_bump_epoch . mo meta )
         ( store_save_ae . mo store ( string_data . mo mname ) . mo ae )
         ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
-        ( string_free . out err )
         ^ ( string_new )
     } {
-        ( ae_free nae )
         ^ . out err
     }
 }
@@ -2476,7 +2371,6 @@ $ `stdlib/core/rcbox.nu`
             : Json rec ( json_clone raw )
             ( json_obj_set rec `timestamp` ( json_int now ) )
             : String line ( json_stringify rec )
-            ( json_free rec )
             : i seq . mm n_seen
             ( vec_push [String] . mo lines line )
             ( vec_push [i] . mo times now )
@@ -2488,7 +2382,7 @@ $ `stdlib/core/rcbox.nu`
             : ~ i evict 0
             ? > ( vec_len [String] . mo lines ) . mo max_points {
                 ?? ( vec_remove [String] . mo lines 0 ) {
-                    T old → { ( string_free old ) }
+                    T old → {}
                     F _ → {}
                 }
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
@@ -2509,7 +2403,6 @@ $ `stdlib/core/rcbox.nu`
             } {}
 
             : Verdict vd ( __an_score_enc mo__h p 1 )
-            ( enc_free p )
             ^ @ !Verdict String { T vd }
         }
         F e → { ^ @ !Verdict String { F e } }
@@ -2536,7 +2429,6 @@ $ `stdlib/core/rcbox.nu`
             : String e ( string_from `Missing columns: ` )
             ( string_push_str e ( string_data names ) )
             ( string_push_str e `. A point to score carries every column the model knows; columns it does not know are ignored.` )
-            ( string_free names )
             : ( Vec String ) nulls ( anomaly_null_cols . mo meta raw miss )
             ? > ( vec_len [String] nulls ) 0 {
                 : String nn ( string_join nulls `, ` )
@@ -2544,19 +2436,14 @@ $ `stdlib/core/rcbox.nu`
                 ( string_push_str e ( string_data nn ) )
                 ? > ( vec_len [String] nulls ) 1 { ( string_push_str e ` were given as null` ) } { ( string_push_str e ` was given as null` ) }
                 ( string_push_str e `, and a null is not a reading — send a number, or leave the column out of an ingest (where a gap is scored as the training mean and listed under "missing").` )
-                ( string_free nn )
             } {}
-            ( vec_free_with [String] nulls \ String x → v { ( string_free x ) } )
-            ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
             ^ @ !Verdict String { F e }
         } {}
-        ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
     } {}
     : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
     ?? er {
         T p → {
             : Verdict vd ( __an_score_enc mo__h p 0 )
-            ( enc_free p )
             ^ @ !Verdict String { T vd }
         }
         F e → { ^ @ !Verdict String { F e } }
@@ -2605,11 +2492,6 @@ $ `stdlib/core/rcbox.nu`
     ( Vec String ) notes
 }
 
-@ import_report_free sink ImportReport r → v {
-    ( string_free . r err )
-    ( vec_free_with [String] . r notes \ String s → v { ( string_free s ) } )
-}
-
 // The timestamp a record carries, or 0 when it names none. A number is
 // unix seconds; a string is left to the preprocessing layer, which knows
 // ISO-8601 — but a point still needs a position in the ring, so a record
@@ -2653,14 +2535,12 @@ $ `stdlib/core/rcbox.nu`
                 : !EncPoint String er ( anomaly_preprocess . mo meta rec )
                 ?? er {
                     T p → {
-                        ( enc_free p )
                         : i given ( __an_imp_ts rec )
                         : ~ i ts ? > given 0 given now
                         ? . mm count_clock { = ts tick = tick + tick ANOM_TICK } {}
                         : Json out ( json_clone rec )
                         ( json_obj_set out `timestamp` ( json_int ts ) )
                         : String line ( json_stringify out )
-                        ( json_free out )
                         ( vec_push [ImpRow] fresh @ ImpRow { ts line } )
                     }
                     F e → {
@@ -2672,7 +2552,6 @@ $ `stdlib/core/rcbox.nu`
                             ( string_push_str m ( string_data e ) )
                             ( vec_push [String] notes m )
                         } {}
-                        ( string_free e )
                     }
                 }
             }
@@ -2683,7 +2562,6 @@ $ `stdlib/core/rcbox.nu`
 
     : i accepted ( vec_len [ImpRow] fresh )
     ? > accepted 0 {} {
-        ( vec_free [ImpRow] fresh )
         ^ @ ImportReport { 0 rejected ( vec_len [String] . mo lines ) F
             ( string_from `no row could be read as a data point` ) notes }
     }
@@ -2721,7 +2599,6 @@ $ `stdlib/core/rcbox.nu`
             = b + b 1
         }
     }
-    ( vec_free_with [ImpRow] fresh \ ImpRow r → v { ( string_free . r ir_line ) } )
 
     // Ring eviction: the OLDEST go, which after a merge may well be
     // imported ones. A file bigger than the ring is a file whose tail is
@@ -2740,14 +2617,14 @@ $ `stdlib/core/rcbox.nu`
             ?? ( vec_get [i] mtimes j ) { T x → { ( vec_push [i] kt x ) } F _ → {} }
             = j + j 1
         }
-        ( __an_free_lines mlines )
-        ( vec_free [i] mtimes )
         = mlines kl
         = mtimes kt
     } {}
 
-    ( __an_free_lines . mo lines )
-    ( vec_free [i] . mo times )
+    : ( Vec String ) old_lines . mo lines
+    ( mem_take old_lines )  // a store through the pointer drops nothing
+    : ( Vec i ) old_times . mo times
+    ( mem_take old_times )
     = . mo lines mlines
     = . mo times mtimes
     = . mm n_seen + . mm n_seen accepted
@@ -2774,9 +2651,8 @@ $ `stdlib/core/rcbox.nu`
         ( string_new ) notes }
 }
 
-@ model_import Model mo__h ( Vec Json ) recs → ImportReport {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ ( model_import_at mo__h recs ( model_now mo__h ) )
+@ model_import Model mo ( Vec Json ) recs → ImportReport {
+    ^ ( model_import_at mo recs ( model_now mo ) )
 }
 
 // ── Calibration and fine-tuning ───────────────────────────────────────
@@ -2819,14 +2695,6 @@ $ `stdlib/core/rcbox.nu`
     i n_rows  // rows scored
     i agg_flagged  // rows some enabled version flagged at the current margins
     i excluded  // rows in the window left out: labelled false positives
-}
-
-@ cal_free sink CalReport rep → v {
-    ( vec_free_with [CalVer] . rep items \ CalVer x → v {
-        ( string_free . x cvname )
-        ( vec_free [f] . x dfs )
-        ( vec_free [f] . x row_df )
-    } )
 }
 
 // Round to `digits` significant decimal digits, through an exact integer
@@ -3063,7 +2931,6 @@ $ `stdlib/core/rcbox.nu`
                     = q + q 1
                 }
             } {}
-            ( verdict_free vd )
         } {}
         = k + k 1
     }
@@ -3090,8 +2957,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( vec_free [i] label_of )
-    ( labels_free labels )
     ^ @ CalReport { items from_ts to_ts n_rows agg excluded }
 }
 
@@ -3180,8 +3045,6 @@ $ `stdlib/core/rcbox.nu`
     ( _an_set_action `autotune` )
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport ft ( model_finetune_at mo__h rate 0 0 T none )
-    ( finetune_free ft )
-    ( vec_free [String] none )
     = . mm tuned_at now
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     ^ T
@@ -3199,13 +3062,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec String ) only ( vec_new [String] )
     ( vec_push [String] only ( string_from ANOM_FC_NAME ) )
     : FineTuneReport ft ( model_finetune_at mo__h ANOM_FT_RATE 0 0 T only )
-    ( finetune_free ft )
-    ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
-}
-
-@ finetune_free sink FineTuneReport rep → v {
-    ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) ( string_free . x warning ) } )
-    ( string_free . rep note )
 }
 
 // Set every enabled, trained version's margin so that a fraction `rate` of
@@ -3320,7 +3176,6 @@ $ `stdlib/core/rcbox.nu`
         : f mid * 0.5 + lo hi
         : ( Vec f ) ms ( _an_cal_margins_at cal mid )
         : i got ( _an_cal_consensus cal ms need )
-        ( vec_free [f] ms )
         ? <= got want { = lo mid } { = hi mid }
         = it + it 1
     }
@@ -3331,7 +3186,6 @@ $ `stdlib/core/rcbox.nu`
 @ _an_consensus_at CalReport cal i need f q → i {
     : ( Vec f ) ms ( _an_cal_margins_at cal q )
     : i got ( _an_cal_consensus cal ms need )
-    ( vec_free [f] ms )
     ^ got
 }
 
@@ -3353,7 +3207,6 @@ $ `stdlib/core/rcbox.nu`
     ? > need 1 {
         : ( Vec f ) mnow ( _an_cal_margins_now cal )
         = cons_before ( _an_cal_consensus cal mnow need )
-        ( vec_free [f] mnow )
         = q ( _an_consensus_q cal need rate )
         = cons_after ( _an_consensus_at cal need q )
         : i want # i ( float_round * rate # f . cal n_rows )
@@ -3440,7 +3293,6 @@ $ `stdlib/core/rcbox.nu`
     }
     : i nr . cal n_rows
     : i nex . cal excluded
-    ( cal_free cal )
     ( _an_set_action `set_margin` )
     ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex need q cons_before cons_after cnote }
 }
@@ -3485,10 +3337,9 @@ $ `stdlib/core/rcbox.nu`
 // so short_term's margin answers for the last three hours and seasonal's
 // for the last ninety days, each at the same rate. One calibration per
 // version; the report's window is the widest of them.
-@ model_finetune_own Model mo__h f rate b apply ( Vec String ) only → FineTuneReport {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_finetune_own Model mo f rate b apply ( Vec String ) only → FineTuneReport {
     : ( Vec FtVer ) items ( vec_new [FtVer] )
-    : ( Vec String ) names ( model_scan_versions mo__h )
+    : ( Vec String ) names ( model_scan_versions mo )
     : i nn ( vec_len [String] names )
     : ~ i lo 0
     : ~ b first T
@@ -3498,7 +3349,7 @@ $ `stdlib/core/rcbox.nu`
     ~ < k nn {
         ?? ( vec_get [String] names k ) {
             T nm → {
-                : i from_ts ( model_version_from mo__h ( string_data nm ) )
+                : i from_ts ( model_version_from mo ( string_data nm ) )
                 : ( Vec String ) one ( vec_new [String] )
                 ( vec_push [String] one ( string_from ( string_data nm ) ) )
                 : ~ b wanted T
@@ -3514,7 +3365,7 @@ $ `stdlib/core/rcbox.nu`
                         = q + q 1
                     }
                 } {}
-                : FineTuneReport part ( model_finetune_at mo__h rate from_ts 0 & apply wanted one )
+                : FineTuneReport part ( model_finetune_at mo rate from_ts 0 & apply wanted one )
                 : i np ( vec_len [FtVer] . part items )
                 : ~ i j 0
                 ~ < j np {
@@ -3532,14 +3383,11 @@ $ `stdlib/core/rcbox.nu`
                     }
                     = j + j 1
                 }
-                ( finetune_free part )
-                ( vec_free_with [String] one \ String x → v { ( string_free x ) } )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
     ^ @ FineTuneReport { items rate lo 0 rows apply excluded }
 }
 
@@ -3569,7 +3417,6 @@ $ `stdlib/core/rcbox.nu`
     ?? ( vec_get [i] . mo times index ) { T t → { = ts t } F _ → {} }
     : Label l @ Label { seq ts ( string_from label ) ( string_from by ) at ( string_from note ) }
     : b ok ( store_append_label . mo store ( string_data . mo mname ) l )
-    ( label_free l )
     ^ ? ok seq -1
 }
 
@@ -3631,12 +3478,10 @@ $ `stdlib/core/rcbox.nu`
     ^ ? . mm count_clock / ANOM_CAL_WINDOW ANOM_TICK ANOM_CAL_WINDOW
 }
 
-@ model_finetune Model mo__h → FineTuneReport {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : i from_ts ( model_window_from_last mo__h 0 ( model_last_span mo__h ( model_default_last mo__h ) ) )
+@ model_finetune Model mo → FineTuneReport {
+    : i from_ts ( model_window_from_last mo 0 ( model_last_span mo ( model_default_last mo ) ) )
     : ( Vec String ) none ( vec_new [String] )
-    : FineTuneReport rep ( model_finetune_at mo__h ANOM_FT_RATE from_ts 0 T none )
-    ( vec_free [String] none )
+    : FineTuneReport rep ( model_finetune_at mo ANOM_FT_RATE from_ts 0 T none )
     ^ rep
 }
 
@@ -3656,11 +3501,6 @@ $ `stdlib/core/rcbox.nu`
 : WholeTrain {
     Json margins  // version name → decision margin, as fine-tune set it
     Json notes  // strings: what could not be done, and why
-}
-
-@ whole_train_free sink WholeTrain w → v {
-    ( json_free . w margins )
-    ( json_free . w notes )
 }
 
 //
@@ -3705,8 +3545,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = vi + vi 1
     }
-    ( vec_free [i] wmins )
-    ( vec_free [i] wptss )
     ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     : Json notes ( json_arr_new )
     : ( Vec i ) layout ( vec_new [i] )
@@ -3716,17 +3554,13 @@ $ `stdlib/core/rcbox.nu`
         ( vec_push [i] layout 64 )
     }
     : String aerr ( model_train_autoencoder mo__h layout rate )
-    ( vec_free [i] layout )
     ? > ( string_len aerr ) 0 {
         : String m ( string_from `autoencoder not trained: ` )
         ( string_push_str m ( string_data aerr ) )
         ( json_arr_push notes ( json_str_lit ( string_data m ) ) )
-        ( string_free m )
     } {}
-    ( string_free aerr )
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport ft ( model_finetune_at mo__h rate 0 0 T none )
-    ( vec_free [String] none )
     : Json margins ( json_obj_new )
     : i nft ( vec_len [FtVer] . ft items )
     : ~ i k 0
@@ -3737,7 +3571,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( finetune_free ft )
     // The flatline guard keeps its configured margin (finetune leaves it
     // alone); it is reported so the list is every version that judged.
     ? & ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) ( __an_flat_fitted mo__h ) {
@@ -3857,16 +3690,6 @@ $ `stdlib/core/rcbox.nu`
     ^ @ ScanRuns { runs run_of }
 }
 
-@ scan_runs_free sink ScanRuns sr → v {
-    ( vec_free [ScanRun] . sr runs )
-    ( vec_free [i] . sr run_of )
-}
-
-@ scan_free sink ScanOut so → v {
-    ( vec_free [ScoredPt] . so pts )
-    ( vec_free_with [String] . so vnames \ String x → v { ( string_free x ) } )
-}
-
 // Does the model flag the stored row at `index`? Read from the cached
 // ring scan, so a second question about the same model costs nothing.
 // -1 when there is no such row.
@@ -3885,7 +3708,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( scan_free so )
     ^ out
 }
 
@@ -3989,7 +3811,6 @@ $ `stdlib/core/rcbox.nu`
                     = q + q 1
                 }
             } {}
-            ( verdict_free vd )
         } {}
     } {}
     : ~ i ts 0
@@ -4019,10 +3840,9 @@ $ `stdlib/core/rcbox.nu`
             : b same_epoch == . got epoch epoch
             : b same_vers ( scorecache_vnames_match got vnames )
             ? & & same_epoch same_vers == force F {
-                ( scorecache_free cache )
                 = cache got
                 = cbase . got base_seen
-            } { ( scorecache_free got ) }
+            } {}
         }
         F → {}
     }
@@ -4158,16 +3978,13 @@ $ `stdlib/core/rcbox.nu`
             = k + k 1
         }
         : b _w ( store_save_scores . mo store ( string_data . mo mname ) nc )
-        ( scorecache_free nc )
     } {}
-    ( scorecache_free cache )
 
     ^ @ ScanOut { pts vnames epoch total considered hits misses anoms }
 }
 
-@ model_scan Model mo__h i from_ts i to_ts i limit b force → ScanOut {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ ( model_scan_at mo__h from_ts to_ts limit force )
+@ model_scan Model mo i from_ts i to_ts i limit b force → ScanOut {
+    ^ ( model_scan_at mo from_ts to_ts limit force )
 }
 
 // The raw stored record at a ring index, parsed (None when out of range or
@@ -4199,10 +4016,6 @@ $ `stdlib/core/rcbox.nu`
     f ac_expected
 }
 
-@ ae_contrib_free sink ( Vec AeContrib ) xs → v {
-    ( vec_free_with [AeContrib] xs \ AeContrib c → v { ( string_free . c ac_name ) } )
-}
-
 // The `topk` features carrying the most of a point's reconstruction error,
 // largest first, with each one's share of the total. This is the answer
 // the forests structurally cannot give: the autoencoder's per-feature error
@@ -4220,7 +4033,6 @@ $ `stdlib/core/rcbox.nu`
             : ( Vec f ) araw ( anomaly_project p . cae feats )
             : ( Vec f ) errs ( ae_feature_errors cae araw )
             : ( Vec f ) recon ( ae_reconstruct cae araw )
-            ( enc_free p )
             : i d ( vec_len [f] errs )
             : ~ f tot 0.0
             : ~ i k 0
@@ -4257,7 +4069,7 @@ $ `stdlib/core/rcbox.nu`
                     ? > tot 0.0 { = share / bestv tot } {}
                     : ~ String nm ( string_new )
                     ?? ( vec_get [String] . cae feats best ) {
-                        T x → { ( string_free nm ) = nm ( string_from ( string_data x ) ) }
+                        T x → { = nm ( string_from ( string_data x ) ) }
                         F _ → {}
                     }
                     : f val ( _mlp_fget araw best )
@@ -4266,12 +4078,8 @@ $ `stdlib/core/rcbox.nu`
                     = picked + picked 1
                 }
             }
-            ( vec_free [b] taken )
-            ( vec_free [f] errs )
-            ( vec_free [f] recon )
-            ( vec_free [f] araw )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ^ out
 }
@@ -4295,8 +4103,7 @@ $ `stdlib/core/rcbox.nu`
     // the discarded points must never be mistaken for verdicts of the new
     // ones that will reuse their ring positions.
     = . fresh score_epoch + . old score_epoch 1
-    ( vec_free_with [VerCfg] . fresh versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
-    = . fresh versions ( vec_new [VerCfg] )
+    ( vec_clear [VerCfg] . fresh versions )
     : i nv ( vec_len [VerCfg] . old versions )
     : ~ i vi 0
     ~ < vi nv {
@@ -4314,12 +4121,11 @@ $ `stdlib/core/rcbox.nu`
     ( mem_take old_meta )  // a store through the model pointer drops nothing
     = . mo meta fresh__h
 
-    ( __an_free_forests mo__h )
-    ( __an_free_lines . mo lines )
-    = . mo lines ( vec_new [String] )
-    ( vec_free [i] . mo times )
-    = . mo times ( vec_new [i] )
-    ( scaler_free . mo sc )
+    ( __an_clear_forests mo__h )
+    ( vec_clear [String] . mo lines )
+    ( vec_clear [i] . mo times )
+    : Scaler old_sc . mo sc
+    ( mem_take old_sc )  // a store through the pointer drops nothing
     = . mo sc ( meta_scaler fresh__h )
     ( fc_clear . mo fc )
     ( store_delete_fc . mo store ( string_data . mo mname ) )
@@ -4327,15 +4133,14 @@ $ `stdlib/core/rcbox.nu`
 
     : ( Vec String ) none ( vec_new [String] )
     ( store_write_points . mo store ( string_data . mo mname ) none 0 )
-    ( vec_free [String] none )
     // Sequence numbers start over with the ring, so labels keyed on the
     // old ones would name rows that never were.
     ( store_delete_labels . mo store ( string_data . mo mname ) )
     ( store_save_meta . mo store ( string_data . mo mname ) fresh__h )
 }
 
-// Delete a model from the store entirely (the Model handle, if any, should
-// be freed separately with model_free).
+// Delete a model from the store entirely (an open Model handle of it goes
+// with its owner).
 @ model_delete Store st s name → b {
     ^ ( store_delete st name )
 }
@@ -4356,7 +4161,6 @@ $ `stdlib/core/rcbox.nu`
     ( json_obj_set e `from` ( json_float before ) )
     ( json_obj_set e `to` ( json_float after ) )
     : b _a ( store_append_audit . mo store ( string_data . mo mname ) e )
-    ( json_free e )
 }
 
 // Set one version's decision margin in the metadata (persisted, effective
@@ -4420,14 +4224,14 @@ $ `stdlib/core/rcbox.nu`
         ?? ( vec_get [VerModel] . mo forests k ) {
             T vm → {
                 ? == ( nurl_str_eq ( string_data . vm vname ) vname ) 1 {
-                    ( anom_vermodel_free vm )
                 } { ( vec_push [VerModel] kept vm ) }
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free [VerModel] . mo forests )
+    : ( Vec VerModel ) old_forests . mo forests
+    ( mem_take old_forests )  // a store through the pointer drops nothing
     = . mo forests kept
     ( store_delete_forest . mo store ( string_data . mo mname ) vname )
 }
@@ -4460,7 +4264,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] doomed \ String x → v { ( string_free x ) } )
 }
 
 // Turn one version on or off (persisted immediately). Disabling drops the
@@ -4615,11 +4418,9 @@ $ `stdlib/core/rcbox.nu`
     ^ n
 }
 
-@ model_apply_meta_patch Model mo__h Json patch → String {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ model_apply_meta_patch Model mo Json patch → String {
     : ( Vec String ) sink ( vec_new [String] )
-    : String r ( model_apply_meta_patch_notes mo__h patch sink )
-    ( vec_free_with [String] sink \ String x → v { ( string_free x ) } )
+    : String r ( model_apply_meta_patch_notes mo patch sink )
     ^ r
 }
 
@@ -4638,10 +4439,8 @@ $ `stdlib/core/rcbox.nu`
         : String why ( string_from `unknown field ` )
         ( string_push_str why ( string_data badtop ) )
         ( string_push_str why ` (editable: alias, clock, schedule, max_data_points, versions, votes — the same list every metadata response publishes as editable_fields; replace_versions is not a field but a flag on this patch, making versions the whole list)` )
-        ( string_free badtop )
         ^ why
     } {}
-    ( string_free badtop )
     ?? ( json_obj_get patch `schedule` ) {
         T sj0 → {
             : String bads ( _an_unknown_keys sj0 `below_max at_max autoencoder` `schedule` )
@@ -4649,10 +4448,8 @@ $ `stdlib/core/rcbox.nu`
                 : String why ( string_from `unknown field ` )
                 ( string_push_str why ( string_data bads ) )
                 ( string_push_str why ` (schedule has: below_max, at_max, autoencoder)` )
-                ( string_free bads )
                 ^ why
             } {}
-            ( string_free bads )
         }
         F _ → {}
     }
@@ -4665,7 +4462,6 @@ $ `stdlib/core/rcbox.nu`
         T vj0 → {
             : String badv ( meta_versions_patch_check . mo meta vj0 want_replace )
             ? > ( string_len badv ) 0 { ^ badv } {}
-            ( string_free badv )
         }
         F _ → {}
     }
@@ -4680,8 +4476,8 @@ $ `stdlib/core/rcbox.nu`
             ? > ( nurl_str_len araw ) ANOM_ALIAS_MAX {
                 ^ ( string_from `alias is too long (max 120 characters)` )
             } {}
-            ( string_free . mm alias )
-            = . mm alias ( string_from araw )
+            ( string_clear . mm alias )
+            ( string_push_str . mm alias araw )
             = touched T
         }
         F _ → {}
@@ -4737,7 +4533,7 @@ $ `stdlib/core/rcbox.nu`
             : ~ b trimmed F
             ~ > ( vec_len [String] . mo lines ) mx {
                 ?? ( vec_remove [String] . mo lines 0 ) {
-                    T old → { ( string_free old ) }
+                    T old → {}
                     F _ → {}
                 }
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
@@ -4773,8 +4569,6 @@ $ `stdlib/core/rcbox.nu`
                 = vk + vk 1
             }
             ? < ( meta_apply_versions_json . mo meta vj want_replace ) 0 {
-                ( vec_free_with [String] an \ String x → v { ( string_free x ) } )
-                ( vec_free [f] am )
                 ^ ( string_from `versions must be a JSON object of version configs` )
             } {}
             ( _an_set_action `edit` )
@@ -4794,8 +4588,6 @@ $ `stdlib/core/rcbox.nu`
                 }
                 = vk + vk 1
             }
-            ( vec_free_with [String] an \ String x → v { ( string_free x ) } )
-            ( vec_free [f] am )
             ( _an_patch_adjustments . mo meta vj notes )
             // A margin a reader set is a margin the first train's
             // calibration must not overwrite (model_set_margin does the

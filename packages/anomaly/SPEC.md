@@ -280,7 +280,7 @@ caller-owned handles, `( Vec f )` row-major matrices).
 | `( anomaly_preprocess raw meta )` | `( Features , Meta )` — encode one record |
 | `( scaler_fit data n_rows n_cols )` | `Scaler` |
 | `( scaler_apply scaler point )` | `( Vec f )` standardised in place |
-| `( scaler_free scaler )` | `v` |
+| `( scaler_free scaler )` | `v` — optional early release |
 
 ### 5.1b Readings that cannot be measurements
 
@@ -335,7 +335,7 @@ learn from its data is the failure nobody can see.
 | `( model_labels model )` / `( model_label_map model labels )` | the labels in force; per ring row the index of its label, −1 for none |
 | `( model_set_schedule model below_max at_max )` | `v` |
 | `( model_metadata model )` | `Meta` |
-| `( model_free model )` | `v` |
+| `( model_free model )` | `v` — optional early release; the last copy of the handle releases the model |
 
 ### 5.3 Batch (stateless) scoring
 
