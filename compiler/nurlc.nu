@@ -33232,7 +33232,9 @@
     } {}
     ? & ( is_ident_tok ht ) ( seq hv retid ) {
         : s up ( mem_udrop_ptr_of syms retid )
-        ? & != 0 ( nurl_str_len up ) > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth {
+        // (…or a `sink` parameter: this function's own, it moves out too —
+        // `^ ?? o { T v → v F → dflt }` dropped `dflt` under the caller.)
+        ? & != 0 ( nurl_str_len up ) | > ( nurl_str_to_int ( nurl_sym_get2 syms up `__depth` ) ) jdepth ( __param_owned_slot syms up ) {
             : ~ s r ( mem_udrop_flag_get syms cg up )
             ( mem_udrop_flag_set syms cg up `0` )
             // A cursor (`T s → s` over an option binding): the values it

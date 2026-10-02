@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `sink` parameter handed back through a `??` arm moves out**
+  (`^ ?? o { T v → v F → dflt }` dropped `dflt` on return and the caller got
+  freed memory — `opt_unwrap_or`'s shape). `compiler/tests/sink_param_from_join.nu`.
 - **A number from a call cannot be bound as a handle struct** (`: H h ( mk )`
   with `mk → i` reinterpreted the number as the handle's pointer and owned
   nothing). Now a compile error naming the literal to write.
