@@ -50,7 +50,7 @@ $ `stdlib/net/securedgram.nu`
 
 // Pump `node` until a transport message arrives (bounded — chunked
 // messages take several datagrams before one completes).
-@ pump * SecureNode node i tries → ?RecvData {
+@ pump SecureNode node i tries → ?RecvData {
     : ~ i t 0
     : ~ b done F
     : ~ ? RecvData out @ ?RecvData { F # RecvData 0 }
@@ -86,39 +86,39 @@ $ `stdlib/net/securedgram.nu`
 
     // ── the reassembler, fed by hand ────────────────────────────
     : PeerState peer ( mk_peer )
-    : *PeerStateImpl hp ( __PeerState_ptr peer )
+    : ~ * PeerStateImpl hp ( __PeerState_ptr peer )
     : ( Vec u ) m2 ( pattern + * 2 cb 0 )  // exactly 2 full chunks... minus nothing: 2*cb → last chunk full-size is LEGAL? cnt=2, last must be 1..cb → cb ok
     // out of order: idx 1 first, then idx 0 completes
-    : ?( Vec u ) r1 ( __sdg_reasm hp 7 1 2 ( chunk_of m2 1 2 ) )
+    : ?( Vec u ) r1 ( __sdg_reasm . hp 0 7 1 2 ( chunk_of m2 1 2 ) )
     ( pb `chunk 1 alone incomplete: ` ?? r1 { T w → { ( vec_free [u] w ) F } F → T } )
-    : ?( Vec u ) r2 ( __sdg_reasm hp 7 0 2 ( chunk_of m2 0 2 ) )
+    : ?( Vec u ) r2 ( __sdg_reasm . hp 0 7 0 2 ( chunk_of m2 0 2 ) )
     ?? r2 {
         T w → { ( pb `out-of-order completes:   ` ( veq w m2 ) ) ( vec_free [u] w ) }
         F → { ( pb `out-of-order completes:   ` F ) }
     }
     // duplicate slot: same idx twice never completes a 3-chunk message
     : ( Vec u ) m3 ( pattern + * 2 cb 5 )
-    : ?( Vec u ) d1 ( __sdg_reasm hp 8 0 3 ( chunk_of m3 0 3 ) )
-    : ?( Vec u ) d2 ( __sdg_reasm hp 8 0 3 ( chunk_of m3 0 3 ) )
+    : ?( Vec u ) d1 ( __sdg_reasm . hp 0 8 0 3 ( chunk_of m3 0 3 ) )
+    : ?( Vec u ) d2 ( __sdg_reasm . hp 0 8 0 3 ( chunk_of m3 0 3 ) )
     ( pb `duplicate idx dropped:    ` ?? d2 { T w → { ( vec_free [u] w ) F } F → T } )
     // a short NON-final chunk must be refused (never buffered)
     : ( Vec u ) shortc ( pattern 10 )
-    : ?( Vec u ) s1 ( __sdg_reasm hp 9 0 3 shortc )
+    : ?( Vec u ) s1 ( __sdg_reasm . hp 0 9 0 3 shortc )
     ( pb `short non-final refused:  ` ?? s1 { T w → { ( vec_free [u] w ) F } F → T } )
     // cnt below 2 and idx past cnt are refused
-    : ?( Vec u ) b1 ( __sdg_reasm hp 10 0 1 ( chunk_of m2 0 2 ) )
-    : ?( Vec u ) b2 ( __sdg_reasm hp 11 5 2 ( chunk_of m2 0 2 ) )
+    : ?( Vec u ) b1 ( __sdg_reasm . hp 0 10 0 1 ( chunk_of m2 0 2 ) )
+    : ?( Vec u ) b2 ( __sdg_reasm . hp 0 11 5 2 ( chunk_of m2 0 2 ) )
     ( pb `cnt/idx bounds refused:   ` && ?? b1 { T w → { ( vec_free [u] w ) F } F → T } ?? b2 { T w → { ( vec_free [u] w ) F } F → T } )
     // eviction: opening a 5th partial evicts the OLDEST (msg 7 is long
     // gone; 8 was opened first of the living) — finish msg 8 after four
     // newer ones opened; its first chunk must have been evicted, so the
     // finish opens a FRESH partial instead of completing
-    : ?( Vec u ) e1 ( __sdg_reasm hp 20 0 3 ( chunk_of m3 0 3 ) )
-    : ?( Vec u ) e2 ( __sdg_reasm hp 21 0 3 ( chunk_of m3 0 3 ) )
-    : ?( Vec u ) e3 ( __sdg_reasm hp 22 0 3 ( chunk_of m3 0 3 ) )
-    : ?( Vec u ) e4 ( __sdg_reasm hp 23 0 3 ( chunk_of m3 0 3 ) )
-    : ?( Vec u ) e5 ( __sdg_reasm hp 8 1 3 ( chunk_of m3 1 3 ) )
-    : ?( Vec u ) e6 ( __sdg_reasm hp 8 2 3 ( chunk_of m3 2 3 ) )
+    : ?( Vec u ) e1 ( __sdg_reasm . hp 0 20 0 3 ( chunk_of m3 0 3 ) )
+    : ?( Vec u ) e2 ( __sdg_reasm . hp 0 21 0 3 ( chunk_of m3 0 3 ) )
+    : ?( Vec u ) e3 ( __sdg_reasm . hp 0 22 0 3 ( chunk_of m3 0 3 ) )
+    : ?( Vec u ) e4 ( __sdg_reasm . hp 0 23 0 3 ( chunk_of m3 0 3 ) )
+    : ?( Vec u ) e5 ( __sdg_reasm . hp 0 8 1 3 ( chunk_of m3 1 3 ) )
+    : ?( Vec u ) e6 ( __sdg_reasm . hp 0 8 2 3 ( chunk_of m3 2 3 ) )
     ( pb `oldest partial evicted:   ` ?? e6 { T w → { ( vec_free [u] w ) F } F → T } )
     ( vec_free [u] m2 )
     ( vec_free [u] m3 )
@@ -127,8 +127,8 @@ $ `stdlib/net/securedgram.nu`
     : CryptoKeypair akp ?? ( x25519_keygen ) { T k → k F _ → @ CryptoKeypair { ( vec_new [u] ) ( vec_new [u] ) } }
     : CryptoKeypair bkp ?? ( x25519_keygen ) { T k → k F _ → @ CryptoKeypair { ( vec_new [u] ) ( vec_new [u] ) } }
     : ( Vec u ) psk ( k32 42 )
-    : !*SecureNode NetErr ar ( securedgram_open `127.0.0.1` 9830 akp psk )
-    : !*SecureNode NetErr br ( securedgram_open `127.0.0.1` 9831 bkp psk )
+    : !SecureNode NetErr ar ( securedgram_open `127.0.0.1` 9830 akp psk )
+    : !SecureNode NetErr br ( securedgram_open `127.0.0.1` 9831 bkp psk )
     ?? ar {
         T an → {
             ?? br {

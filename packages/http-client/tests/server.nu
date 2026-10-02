@@ -22,7 +22,6 @@ $ `../../http/src/http.nu`
         F _ → { ( string_push_str out `(none)` ) }
     }
     : HttpResponse r ( response_text 200 ( string_data out ) )
-    ( string_free out )
     ^ r
 }
 
@@ -74,7 +73,6 @@ $ `../../http/src/http.nu`
         F _ → { ( string_push_str out `(none)` ) }
     }
     : HttpResponse r ( response_text 200 ( string_data out ) )
-    ( string_free out )
     ^ r
 }
 
@@ -127,7 +125,7 @@ $ `../../http/src/http.nu`
     ^ r
 }
 
-@ routes * HttpApp a → v {
+@ routes HttpApp a → v {
     ( http_app_get a `/` \ HttpRequest req Params p → HttpResponse { ^ ( h_root req p ) } )
     ( http_app_get a `/ua` \ HttpRequest req Params p → HttpResponse { ^ ( h_ua req p ) } )
     ( http_app_get a `/redir1` \ HttpRequest req Params p → HttpResponse { ^ ( h_redir1 req p ) } )
@@ -160,7 +158,7 @@ $ `../../http/src/http.nu`
         F _ → {}
     }
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_quiet a )
     // The TLS listener keeps its UDP/QUIC twin and its Alt-Svc: the
     // client's HTTP/3 path is driven against it.
@@ -175,7 +173,6 @@ $ `../../http/src/http.nu`
     } {
         = rc ( http_app_listen a `127.0.0.1` port )
     }
-    ( http_app_free a )
     ( args_free ap )
     ^ rc
 }

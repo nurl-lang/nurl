@@ -91,7 +91,6 @@ $ `stdlib/std/time.nu`
         = sum + sum ( opt_unwrap_or [i] ( vec_get [i] v i ) 0 )
         = i + i 1
     }
-    ( vec_free [i] v )
     ^ == sum 8386560
 }
 
@@ -101,7 +100,6 @@ $ `stdlib/std/time.nu`
     : ~ i i 0
     ~ < i 200 { ( string_push_str s `ab` ) = i + i 1 }
     : b ok && == ( string_len s ) 400 == ( string_get s 399 ) 98
-    ( string_free s )
     ^ ok
 }
 
@@ -124,7 +122,6 @@ $ `stdlib/std/time.nu`
         = acc + acc ( opt_unwrap_or [i] ( vec_get [i] v i ) 0 )
         = i + i 1
     }
-    ( vec_free [i] v )
     ^ == acc 21
 }
 
@@ -162,7 +159,6 @@ $ `stdlib/std/time.nu`
 
     : String total ( mb ( nurl_mem_total ) )
     ( kv `memory` ( string_data total ) )
-    ( string_free total )
 
     // The frequency AND its provenance. A clock is exactly as
     // trustworthy as whatever told you its rate, and on this machine
@@ -173,7 +169,6 @@ $ `stdlib/std/time.nu`
     ( string_push_str clk ` kHz, from ` )
     ( string_push_str clk ( nurl_clock_source ) )
     ( kv `tsc` ( string_data clk ) )
-    ( string_free clk )
 
     : s cl ( nurl_boot_cmdline )
     ( kv `cmdline` ? > ( nurl_str_len cl ) 0 cl `(empty)` )
@@ -213,8 +208,6 @@ $ `stdlib/std/time.nu`
         ( string_push_str line ( string_data used ) )
         ( string_push_str line `\n` )
         ( nurl_print ( string_data line ) )
-        ( string_free used )
-        ( string_free line )
     }
     ^ 0
 }

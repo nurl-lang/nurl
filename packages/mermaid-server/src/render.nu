@@ -677,7 +677,6 @@ $ `layout.nu`
                     }
                     ( vec_push [MmdPt] pts pb )
                     ( __mmdr_polyline out t e lname pts )
-                    ( vec_free [MmdPt] pts )
                 }
                 ( string_push_str out `</g>` )
             }

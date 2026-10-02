@@ -9,11 +9,12 @@
 // arbitrarily (pub/sub, XRANGE, COMMAND, …), so a reply is decoded into a
 // flat node arena — a `Vec RNode` where array nodes hold the pool indices
 // of their children. One Vec plus one String per node: no nested Vecs in
-// structs beyond the child-index list, and a single linear free.
+// structs beyond the child-index list. A reply is a plain value: dropping
+// it drops the arena.
 //
 //   ( resp_encode args )            → ( Vec u )      request bytes
 //   ( resp_parse buf start )        → RespParse      one reply (or Incomplete)
-//   ( resp_reply_free reply )       → v              free a parsed reply
+//   ( resp_reply_free reply )       → v              early release (optional)
 //
 // Node walking (power users):
 //   resp_reply_root / resp_node_kind / resp_node_int / resp_node_str /
@@ -45,8 +46,8 @@ $ `stdlib/core/vec.nu`
     i consumed
 }
 
-// Mutable parse state threaded through the recursive descent (heap so the
-// recursion shares one cursor / status / arena).
+// Mutable parse state threaded through the recursive descent (an inout
+// local, so the recursion shares one cursor / status / arena).
 : RespBuilder {
     ( Vec RNode ) nodes
     i status
@@ -76,7 +77,6 @@ $ `stdlib/core/vec.nu`
             = k - k 1
             ( vec_push [u] v ?? ( vec_get [u] tmp k ) { T b → b F _ → # u 48 } )
         }
-        ( vec_free [u] tmp )
     }
 }
 
@@ -140,7 +140,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Append a leaf node to the arena; returns its index.
-@ __rb_push * RespBuilder b i kind i ival String sval → i {
+@ __rb_push inout RespBuilder b i kind i ival sink String sval → i {
     : RNode nd @ RNode { kind ival sval ( vec_new [i] ) }
     : i idx ( vec_len [RNode] . b nodes )
     ( vec_push [RNode] . b nodes nd )
@@ -148,7 +148,7 @@ $ `stdlib/core/vec.nu`
 }
 
 // Append an array node (kids already collected); returns its index.
-@ __rb_push_arr * RespBuilder b i n ( Vec i ) kids → i {
+@ __rb_push_arr inout RespBuilder b i n sink ( Vec i ) kids → i {
     : RNode nd @ RNode { 4 n ( string_new ) kids }
     : i idx ( vec_len [RNode] . b nodes )
     ( vec_push [RNode] . b nodes nd )
@@ -157,7 +157,7 @@ $ `stdlib/core/vec.nu`
 
 // Parse one value at the builder's cursor. Returns its node index, or -1
 // with b.status set to 1 (incomplete) or 2 (malformed).
-@ __resp_val * RespBuilder b ( Vec u ) buf i end → i {
+@ __resp_val inout RespBuilder b ( Vec u ) buf i end → i {
     ? != . b status 0 { ^ -1 } {}
     : i pos . b cur
     ? >= pos end { = . b status 1 ^ -1 } {}
@@ -205,7 +205,7 @@ $ `stdlib/core/vec.nu`
         : ~ i k 0
         ~ < k n {
             : i ci ( __resp_val b buf end )
-            ? != . b status 0 { ( vec_free [i] kids ) ^ -1 } {}
+            ? != . b status 0 { ^ -1 } {}
             ( vec_push [i] kids ci )
             = k + k 1
         }
@@ -217,33 +217,18 @@ $ `stdlib/core/vec.nu`
 }
 
 // Parse one reply from buf starting at `start`. On Incomplete (status 1)
-// the returned reply still owns a (partial) arena and must be freed by the
-// caller before retrying with more bytes.
+// the returned reply holds a (partial) arena; it is dropped with the
+// RespParse.
 @ resp_parse ( Vec u ) buf i start → RespParse {
-    : *RespBuilder b # *RespBuilder ( nurl_alloc Z RespBuilder )
-    = . b nodes ( vec_new [RNode] )
-    = . b status 0
-    = . b cur start
+    : ~ RespBuilder b @ RespBuilder { ( vec_new [RNode] ) 0 start }
     : i root ( __resp_val b buf ( vec_len [u] buf ) )
-    : i st . b status
-    : i cur . b cur
-    : RedisReply rep @ RedisReply { . b nodes root }
-    ( nurl_free # s b )
-    ^ @ RespParse { st rep cur }
+    : ( Vec RNode ) nodes . b nodes
+    ( mem_take nodes )  // the arena leaves the builder for the reply
+    ^ @ RespParse { . b status @ RedisReply { nodes root } . b cur }
 }
 
-@ resp_reply_free sink RedisReply r → v {
-    : i n ( vec_len [RNode] . r nodes )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [RNode] . r nodes k ) {
-            T nd → { ( string_free . nd sval ) ( vec_free [i] . nd kids ) }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [RNode] . r nodes )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ resp_reply_free sink RedisReply r → v {}
 
 // ── node accessors ─────────────────────────────────────────────────
 

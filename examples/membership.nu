@@ -28,7 +28,6 @@ $ `stdlib/net/failuredetector.nu`
     : PkMsg m @ PkMsg { mtype seq ( vec_new [u] ) g }
     : ( Vec u ) wire ( pkmsg_encode m )
     ?? ( transport_send tr dst wire ) { T _ → {} F _ → {} }
-    ( pkmsg_free m ) ( vec_free [u] wire )
 }
 
 // Perform one FD action on the wire.
@@ -55,8 +54,6 @@ $ `stdlib/net/failuredetector.nu`
                 ( fd_on_gossip fd m now )
                 ? == . m mtype ( pk_ack ) { ( fd_on_ack fd . m seq now ) } {}
                 ? == . m mtype ( pk_ping ) { ( send_msg tr . msg src ( pk_ack ) . m seq tbl ) } {}
-                ( pkmsg_free m )
-                ( transport_msg_free msg )
             }
             F → { = more F }
         }
@@ -67,7 +64,7 @@ $ `stdlib/net/failuredetector.nu`
     : i argc ( env_args_count )
     : String host ? > argc 1 ( env_arg 1 ) ( string_from `127.0.0.1` )
     : i port ? > argc 2 {
-        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) ( string_free ps ) p
+        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) p
     } 47700
 
     ?? ( relay_dial ( string_data host ) port ) {
@@ -85,20 +82,16 @@ $ `stdlib/net/failuredetector.nu`
                 : i now ( monotonic_ns )
                 : FdAction a ( fd_tick fd now )
                 ( do_action tr a tbl )
-                ( fd_action_free a )
                 ( pump tr fd tbl self_pk now )
                 : ( Vec PkMember ) dead ( fd_sweep fd now )
-                ( _pk_dead_free dead )
                 ( sleep_ms 200 )
                 = ticks + ticks 1
             }
             ( nurl_print `membership node ran (members: ` ) ( nurl_print_int ( pktable_count tbl ) ) ( nurl_print `)\n` )
 
-            ( fd_free fd ) ( pktable_free tbl ) ( transport_free tr )
-            ( vec_free [u] self_pk ) ( relay_close rc )
+            ( relay_close rc )
         }
         F e → ( nurl_print `could not reach relay\n` )
     }
-    ( string_free host )
     ^ 0
 }

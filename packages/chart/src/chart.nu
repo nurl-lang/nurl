@@ -3,9 +3,9 @@
 // Turn a list of numbers into something you can actually see in a
 // terminal: a one-line sparkline, a labelled horizontal bar chart, a
 // histogram, or a line/scatter plot drawn on a character grid. Every
-// renderer returns an owned `String` (the caller frees it with
-// `string_free`), uses only Unicode that any modern terminal renders, and
-// allocates nothing it does not free — leak-clean under ASan/LSan.
+// renderer returns an owned `String` (dropped by its owner like any other
+// value — nothing here is released by hand), uses only Unicode that any
+// modern terminal renders, and is leak-clean under ASan/LSan.
 //
 // This package lives in the NURL registry, NOT the core stdlib: charting
 // is opinionated (which glyphs, which scaling, which layout) in a way the
@@ -275,9 +275,6 @@ $ `stdlib/std/float.nu`
 
     : String body ( chart_bars labels counts width )
     ( string_push_str out ( string_data body ) )
-    ( string_free body )
-    ( vec_free_with [String] labels \ String s → v { ( string_free s ) } )
-    ( vec_free [f] counts )
     ^ out
 }
 
@@ -370,6 +367,5 @@ $ `stdlib/std/float.nu`
         = rr + rr 1
     }
 
-    ( vec_free [i] grid )
     ^ out
 }

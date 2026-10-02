@@ -42,7 +42,7 @@ $ `stdlib/std/slhdsa.nu`
 
 @ __eqhex ( Vec u ) got s want → b {
     ?? ( bytes_from_hex want ) {
-        T w → { : b ok ( bytes_eq got w ) ( vec_free [u] w ) ^ ok }
+        T w → { : b ok ( bytes_eq got w ) ^ ok }
         F _e → { ^ F }
     }
 }
@@ -63,7 +63,6 @@ $ `stdlib/std/slhdsa.nu`
     : !String IoErr rd ( read_file path )
     : String txt ?? rd { T v → { v } F _e → { ( nurl_print `cannot read vector file\n` ) ( string_new ) } }
     : Json j ?? ( json_parse ( string_data txt ) ) { T v → { v } F _e → { ( nurl_print `cannot parse vector JSON\n` ) ( json_null ) } }
-    ( string_free txt )
     ^ j
 }
 
@@ -96,7 +95,6 @@ $ `stdlib/std/slhdsa.nu`
     } {}
     ( string_push_str s `\n` )
     ( nurl_print ( string_data s ) )
-    ( string_free s )
 }
 
 @ main → i {
@@ -128,14 +126,11 @@ $ `stdlib/std/slhdsa.nu`
                 : SlhKeys k ( slhdsa_keygen_derand set a b2 c )
                 ? & ( __eqhex ( slhdsa_pk k ) ( __str tc `pk` ) ) ( __eqhex ( slhdsa_sk k ) ( __str tc `sk` ) )
                 { = kp + kp 1 } { = kf + kf 1 }
-                ( slhdsa_keys_free k )
-                ( vec_free [u] c ) ( vec_free [u] b2 ) ( vec_free [u] a )
             }
             = ti + ti 1
         }
         = gi + gi 1
     }
-    ( json_free kg )
     ( __report `keyGen` kp kf 0 ks 0 )
     = totfail + totfail kf
 
@@ -168,7 +163,6 @@ $ `stdlib/std/slhdsa.nu`
                         // the internal one signs M as given.
                         : ~ ( Vec u ) msg ( vec_new [u] )
                         ? internal {
-                            ( vec_free [u] msg )
                             = msg ( bytes_slice raw 0 ( vec_len [u] raw ) )
                         } {
                             ( vec_push [u] msg # u 0 )
@@ -187,11 +181,7 @@ $ `stdlib/std/slhdsa.nu`
                             ( string_push_str fl ? det ` deterministic` ` hedged` )
                             ( string_push_str fl `\n` )
                             ( nurl_print ( string_data fl ) )
-                            ( string_free fl )
                         }
-                        ( vec_free [u] sig ) ( vec_free [u] rnd )
-                        ( vec_free [u] msg ) ( vec_free [u] ctx )
-                        ( vec_free [u] raw ) ( vec_free [u] sk )
                     }
                 }
             }
@@ -199,7 +189,6 @@ $ `stdlib/std/slhdsa.nu`
         }
         = gi + gi 1
     }
-    ( json_free sg )
     ( __report `sigGen` sp sf sc ss2 si2 )
     = totfail + totfail sf
 
@@ -229,7 +218,6 @@ $ `stdlib/std/slhdsa.nu`
                         : ( Vec u ) ctx ( __hexv ( __str tc `context` ) )
                         : ~ ( Vec u ) msg ( vec_new [u] )
                         ? internal {
-                            ( vec_free [u] msg )
                             = msg ( bytes_slice raw 0 ( vec_len [u] raw ) )
                         } {
                             ( vec_push [u] msg # u 0 )
@@ -240,8 +228,6 @@ $ `stdlib/std/slhdsa.nu`
                         : ( Vec u ) sig ( __hexv ( __str tc `signature` ) )
                         ? == ( slhdsa_verify_internal set pk msg sig ) ( __bool tc `testPassed` )
                         { = vp + vp 1 } { = vf + vf 1 }
-                        ( vec_free [u] sig ) ( vec_free [u] msg )
-                        ( vec_free [u] ctx ) ( vec_free [u] raw ) ( vec_free [u] pk )
                     }
                 }
             }
@@ -249,7 +235,6 @@ $ `stdlib/std/slhdsa.nu`
         }
         = gi + gi 1
     }
-    ( json_free sv )
     ( __report `sigVer` vp vf vc vs vi )
     = totfail + totfail vf
 

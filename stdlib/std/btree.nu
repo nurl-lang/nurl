@@ -94,8 +94,10 @@ $ `stdlib/core/vec.nu`
     ( nurl_poke n 5 total )
 }
 
-// Free a node block (arrays + block). Entries must already be handled.
-@ __bt_node_free sink s n → v {
+// Release a node block (arrays + block): the tree's own storage, as a
+// Vec's buffer is the Vec's — what a merge empties, a root shrink drops
+// and the tree's drop tears down. Entries must already be handled.
+@ __bt_node_release sink s n → v {
     ( nurl_free # s ( nurl_peek n 0 ) )
     ( nurl_free # s ( nurl_peek n 1 ) )
     ? ( __bt_leaf n ) {} { ( nurl_free # s ( nurl_peek n 2 ) ) }
@@ -397,7 +399,7 @@ $ `stdlib/core/vec.nu`
         = m + m 1
     }
     ( nurl_poke n 3 - pn 1 )
-    ( __bt_node_free right )
+    ( __bt_node_release right )
     ( __bt_recount left )
 }
 
@@ -596,11 +598,11 @@ $ `stdlib/core/vec.nu`
             : s root2 # s ( nurl_peek ctl 0 )
             ? & == ( __bt_nkeys root2 ) 0 ! ( __bt_leaf root2 ) {
                 : s only ( __bt_kid root2 0 )
-                ( __bt_node_free root2 )
+                ( __bt_node_release root2 )
                 ( nurl_poke ctl 0 # i only )
             } {
                 ? & == ( __bt_nkeys root2 ) 0 ( __bt_leaf root2 ) {
-                    ( __bt_node_free root2 )
+                    ( __bt_node_release root2 )
                     ( nurl_poke ctl 0 0 )
                 } {}
             }
@@ -629,7 +631,7 @@ $ `stdlib/core/vec.nu`
         : ~ i c 0
         ~ <= c nk { ( __bt_drop_rec [K V] ( __bt_kid n c ) ) = c + c 1 }
     }
-    ( __bt_node_free n )
+    ( __bt_node_release n )
 }
 
 // What dropping a tree does (its owner does it at scope exit — docs/
@@ -698,7 +700,7 @@ $ `stdlib/core/vec.nu`
         : ~ i c 0
         ~ <= c nk { ( __bt_free_with_rec [K V] ( __bt_kid n c ) dk dv ) = c + c 1 }
     }
-    ( __bt_node_free n )
+    ( __bt_node_release n )
 }
 
 @ btree_free_with [K V] sink ( BTree K V ) m ( @ v K ) dk ( @ v V ) dv → v {

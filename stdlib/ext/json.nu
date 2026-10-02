@@ -921,7 +921,6 @@ $ `stdlib/core/vec.nu`
             ( __jp_skip_ws p )
             ? ! ( __jp_eof p ) {
                 : JsonError e ( __jp_err p @ ParseErr { TrailingGarbage } )
-                ( json_free j )
                 ( nurl_free # s p )
                 ^ @ !Json JsonError { F e }
             } {}
@@ -1631,7 +1630,6 @@ $ `stdlib/core/vec.nu`
                         F → { = miss T }
                     }
                 }
-                ( string_free seg )
                 = seg_start + k 1
             }
         } {}

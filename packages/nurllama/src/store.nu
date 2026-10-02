@@ -98,7 +98,7 @@ $ `stdlib/ext/json.nu`
     : !File IoErr fr ( file_open path )
     ?? fr {
         T f → {
-            : *Sha256 h ( sha256_init )
+            : Sha256 h ( sha256_init )
             : ~ b more T
             ~ more {
                 : !( Vec u ) IoErr cr ( file_read_chunk f 1048576 )

@@ -152,11 +152,11 @@ $ `deps/oauth/src/oauth.nu`
 // JWKS cache, and re-fetching a key set per request would turn every
 // authenticated call into two network round trips. The service runs
 // single-threaded (http_app_listen with no worker pool), which is the
-// condition *OidcProvider documents for going unlocked.
+// condition OidcProvider documents for going unlocked.
 //
-// Held as an address because a global cannot carry an option of a pointer;
-// 0 means "not discovered yet". Discovery happens once and the provider
-// then lives for the process, so nothing here frees it.
+// Held as the address of one share of the provider handle, kept for the
+// process (a global cannot carry a handle); 0 means "not discovered yet".
+// Discovery happens once and the provider then lives for the process.
 : ~ i g_az_prov_addr 0
 
 // ── Multi-tenant ──────────────────────────────────────────────────────
@@ -1573,17 +1573,17 @@ $ `deps/oauth/src/oauth.nu`
 
 // The provider, discovered on first use. None when discovery fails, which
 // makes every token unverifiable — a closed door, not an open one.
-@ __az_provider → ?*OidcProvider {
+@ __az_provider → ?OidcProvider {
     ? != g_az_prov_addr 0 {
-        ^ @ ?*OidcProvider { T # *OidcProvider g_az_prov_addr }
+        ^ @ ?OidcProvider { T ( OidcProvider_share # OidcProvider g_az_prov_addr ) }
     } {}
     ? g_az_multi { ^ ( __az_provider_multi ) } {}
     ?? ( oidc_provider_discover ( g_az_issuer ) ) {
         T p → {
-            = g_az_prov_addr # i p
-            ^ @ ?*OidcProvider { T p }
+            ( __az_keep_provider p )
+            ^ @ ?OidcProvider { T p }
         }
-        F _ → { ^ @ ?*OidcProvider { F } }
+        F _ → { ^ @ ?OidcProvider { F } }
     }
 }
 
@@ -1594,9 +1594,9 @@ $ `deps/oauth/src/oauth.nu`
 // token's `iss` is then measured against, and the JWKS URI. Nothing about
 // any particular provider is hardcoded — the template and the key set both
 // come from the provider's own document.
-@ __az_provider_multi → ?*OidcProvider {
+@ __az_provider_multi → ?OidcProvider {
     : String url ( oidc_discovery_url ( g_az_issuer ) )
-    : *HttpClient hc ( http_client_new )
+    : HttpClient hc ( http_client_new )
     : ~ String body ( string_new )
     : ~ b got F
     ?? ( http_client_get hc ( string_data url ) ) {
@@ -1610,9 +1610,8 @@ $ `deps/oauth/src/oauth.nu`
         }
         F _ → {}
     }
-    ( http_client_free hc )
     ( string_free url )
-    ? got {} { ( string_free body ) ^ @ ?*OidcProvider { F } }
+    ? got {} { ( string_free body ) ^ @ ?OidcProvider { F } }
 
     : ~ String tmpl ( string_new )
     : ~ String jwks ( string_new )
@@ -1633,16 +1632,23 @@ $ `deps/oauth/src/oauth.nu`
     ( string_free body )
     ? & > ( string_len tmpl ) 0 > ( string_len jwks ) 0 {} {
         ( string_free tmpl ) ( string_free jwks )
-        ^ @ ?*OidcProvider { F }
+        ^ @ ?OidcProvider { F }
     }
 
-    : *OidcProvider p ( oidc_provider_new ( g_az_issuer ) )
+    : OidcProvider p ( oidc_provider_new ( g_az_issuer ) )
     ( oidc_provider_set_jwks_uri p ( string_data jwks ) )
     ( string_free jwks )
     // tmpl backs g_az_iss_tmpl for the process's lifetime; not freed.
     = g_az_iss_tmpl ( string_data tmpl )
-    = g_az_prov_addr # i p
-    ^ @ ?*OidcProvider { T p }
+    ( __az_keep_provider p )
+    ^ @ ?OidcProvider { T p }
+}
+
+// One share of `p` stays behind g_az_prov_addr for the rest of the process.
+@ __az_keep_provider OidcProvider p → v {
+    : OidcProvider kept ( OidcProvider_share p )
+    = g_az_prov_addr # i . kept ctl
+    ( mem_forget kept )
 }
 
 // The issuer a token from tenant `tid` must carry: the provider's own
@@ -1786,7 +1792,7 @@ $ `deps/oauth/src/oauth.nu`
             ~ < attempt 2 {
                 : ~ s aud ( g_az_audience )
                 ? == attempt 1 { = aud ( g_az_client_id ) } {}
-                : *OidcPolicy pol ( oidc_policy_new ( string_data want_iss ) aud )
+                : OidcPolicy pol ( oidc_policy_new ( string_data want_iss ) aud )
                 ?? ( oidc_verify_token p pol token ) {
                     T id → {
                         = got @ ?OidcIdentity { T id }

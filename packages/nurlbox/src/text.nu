@@ -103,7 +103,6 @@ $ `bx.nu`
     }
     ? newline { ( string_push_char out 10 ) } {}
     ( bx_write out )
-    ( string_free out )
     ^ 0
 }
 
@@ -123,7 +122,6 @@ $ `bx.nu`
         ~ more {
             : ( Vec u ) chunk ( read_n_bytes 65536 )
             ? == ( vec_len [u] chunk ) 0 { = more F } { ( bx_write_bytes chunk ) }
-            ( vec_free [u] chunk )
         }
         ^ 0
     } {}
@@ -139,7 +137,6 @@ $ `bx.nu`
                 ?? ( file_read_chunk f 65536 ) {
                     T chunk → {
                         ? == ( vec_len [u] chunk ) 0 { = more F } { ( bx_write_bytes chunk ) }
-                        ( vec_free [u] chunk )
                     }
                     F e2 → {
                         ( bx_err_at path ( bx_ioerr e2 ) )
@@ -247,8 +244,6 @@ $ `bx.nu`
                     } {}
                 } { = more F }
             }
-            ( string_free line )
-            ( string_free out )
             ( bufreader_close br )
             ^ 0
         }
@@ -293,7 +288,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -321,7 +315,6 @@ $ `bx.nu`
                     = seen + seen 1
                 } { = more F }
             }
-            ( string_free line )
             ( bufreader_close br )
             ^ 0
         }
@@ -337,7 +330,6 @@ $ `bx.nu`
         : i take ? < count n count n
         ? > take 0 { ( nurl_print_bytes # s ( vec_data [u] data ) take ) } {}
     } { = rc 1 }
-    ( vec_free [u] data )
     ^ rc
 }
 
@@ -388,8 +380,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
-    ( vec_free_with [String] av \ String x → v { ( string_free x ) } )
     ^ rc
 }
 
@@ -443,9 +433,7 @@ $ `bx.nu`
                     }
                     = k + k 1
                 }
-                ( vec_free_with [String] ring \ String x → v { ( string_free x ) } )
             }
-            ( string_free line )
             ( bufreader_close br )
             ^ 0
         }
@@ -468,7 +456,6 @@ $ `bx.nu`
         : i take - n from
         ? > take 0 { ( nurl_print_bytes # s + # i ( vec_data [u] data ) from take ) } {}
     } { = rc 1 }
-    ( vec_free [u] data )
     ^ rc
 }
 
@@ -529,8 +516,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
-    ( vec_free_with [String] av \ String x → v { ( string_free x ) } )
     ^ rc
 }
 
@@ -575,7 +560,6 @@ $ `bx.nu`
                     }
                 } { = more F }
             }
-            ( string_free line )
             ( bufreader_close br )
             ^ 0
         }
@@ -686,9 +670,7 @@ $ `bx.nu`
                 ( bx_write out )
             } {}
         }
-        ( string_free out )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -729,11 +711,9 @@ $ `bx.nu`
                 }
                 ? any { ( string_push_char out 10 ) } {}
                 ( bx_write out )
-                ( string_free out )
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -761,7 +741,5 @@ $ `bx.nu`
     }
     : ~ b more T
     ~ more { ( bx_write block ) }
-    ( string_free block )
-    ( string_free unit )
     ^ 0
 }

@@ -2,7 +2,7 @@
 //
 // Parses the common YAML subset into the canonical `Json` value from
 // stdlib/ext/json.nu (YAML's data model is a superset of JSON's, so every
-// `json_*` accessor, `json_free`, and `json_stringify` work unchanged on a
+// `json_*` accessor and `json_stringify` work unchanged on a
 // parsed document) and serializes a `Json` tree back to block-style YAML.
 //
 // Handled (the pragmatic subset this module targets):
@@ -35,9 +35,9 @@
 //   ( yaml_stringify j )     → String           serialize (block style)
 //   ( yaml_err_name e )      → s                 render an error
 //
-// Ownership: yaml_parse returns an owned `Json` (free with `json_free`);
-// it BORROWS its input. yaml_stringify returns an owned `String` the
-// caller frees. Malformed structure (a tab indent, an unterminated flow
+// Ownership: yaml_parse returns an owned `Json` and yaml_stringify an
+// owned `String`, each dropped with its owner; yaml_parse BORROWS its
+// input. Malformed structure (a tab indent, an unterminated flow
 // collection, trailing un-indented junk) is reported via `YamlErr`;
 // malformed block-level quoted scalars are handled leniently (the raw
 // text is kept) rather than failing the whole parse.
@@ -245,14 +245,9 @@ $ `stdlib/core/vec.nu`
         : String line ( __yaml_substr src i ll )
         : i lerr ( __yaml_process_line line out )
         ? & == err 0 != lerr 0 { = err lerr } {}
-        ( string_free line )
         = i + j 1
     }
     ^ err
-}
-
-@ __yaml_free_lines ( Vec YamlLine ) lines → v {
-    ( vec_free_with [YamlLine] lines \ YamlLine l → v { ( string_free . l text ) } )
 }
 
 // ── Quoted-scalar scanners (shared by block + flow) ───────────────────
@@ -339,20 +334,18 @@ $ `stdlib/core/vec.nu`
 // error flag so a malformed flow collection fails the whole parse
 // rather than degrading to a string. Block-level quoted scalars stay
 // lenient (an unterminated quote keeps the raw text).
-@ __yaml_scalar_to_json * YamlParser p s text → Json {
+@ __yaml_scalar_to_json inout YamlParser p s text → Json {
     : i n ( nurl_str_len text )
     ? == n 0 { ^ @ Json { JNull } } {}
     : i c0 ( nurl_str_at text n 0 )
     ? == c0 34 {
         : __YStr r ( __yaml_scan_dquote text n 0 )
         ? . r ok { ^ @ Json { JStr . r str } } {}
-        ( string_free . r str )
         ^ @ Json { JStr ( string_from text ) }
     } {}
     ? == c0 39 {
         : __YStr r ( __yaml_scan_squote text n 0 )
         ? . r ok { ^ @ Json { JStr . r str } } {}
-        ( string_free . r str )
         ^ @ Json { JStr ( string_from text ) }
     } {}
     ? | == c0 91 == c0 123 {
@@ -399,7 +392,6 @@ $ `stdlib/core/vec.nu`
     : i e ( __yaml_flow_plain_end text n pos stop_colon )
     : String raw ( __yaml_substr text pos - e pos )
     : String tr ( __yaml_rtrim raw )
-    ( string_free raw )
     : Json j ( __yaml_resolve_plain ( string_data tr ) )
     ^ @ __YFlow { j e T }
 }
@@ -440,7 +432,7 @@ $ `stdlib/core/vec.nu`
     ? & < p n == ( nurl_str_at text n p ) 93 { ^ @ __YFlow { arr + p 1 T } } {}
     ~ & ! done ok {
         : __YFlow ev ( __yaml_flow_value text n p + depth 1 )
-        ? ! . ev ok { = ok F = done T ( json_free . ev val ) } {
+        ? ! . ev ok { = ok F = done T } {
             ( json_arr_push arr . ev val )
             = p ( __yaml_skip_sp text . ev pos n )
             ? >= p n { = ok F = done T } {
@@ -466,17 +458,15 @@ $ `stdlib/core/vec.nu`
     ~ & ! done ok {
         = p ( __yaml_skip_sp text p n )
         : __YFlow kv ( __yaml_flow_scalar text n p T )
-        ? ! . kv ok { = ok F = done T ( json_free . kv val ) } {
+        ? ! . kv ok { = ok F = done T } {
             : String keystr ( __yaml_json_as_key . kv val )
-            ( json_free . kv val )
             = p ( __yaml_skip_sp text . kv pos n )
             : b nocolon | >= p n != ( nurl_str_at text n p ) 58
-            ? nocolon { = ok F = done T ( string_free keystr ) } {
+            ? nocolon { = ok F = done T } {
                 = p ( __yaml_skip_sp text + p 1 n )
                 : __YFlow vv ( __yaml_flow_value text n p + depth 1 )
-                ? ! . vv ok { = ok F = done T ( string_free keystr ) ( json_free . vv val ) } {
+                ? ! . vv ok { = ok F = done T } {
                     ( json_obj_set obj ( string_data keystr ) . vv val )
-                    ( string_free keystr )
                     = p ( __yaml_skip_sp text . vv pos n )
                     ? >= p n { = ok F = done T } {
                         : i c ( nurl_str_at text n p )
@@ -499,35 +489,25 @@ $ `stdlib/core/vec.nu`
     : i n ( nurl_str_len text )
     : __YFlow r ( __yaml_flow_value text n 0 0 )
     ? . r ok { ^ @ !Json YamlErr { T . r val } } {}
-    ( json_free . r val )
     ^ @ !Json YamlErr { F @ YamlErr { YamlSyntax } }
 }
 
 // ── Block parser (indentation-driven, over normalized lines) ──────────
 
-@ __yp_new ( Vec YamlLine ) lines → *YamlParser {
-    : *YamlParser p # *YamlParser ( nurl_alloc Z YamlParser )
-    = . p lines lines
-    = . p count ( vec_len [YamlLine] lines )
-    = . p cur 0
-    = . p err 0
-    ^ p
-}
-
-@ __yp_indent_at * YamlParser p i idx → i {
+@ __yp_indent_at inout YamlParser p i idx → i {
     ? | < idx 0 >= idx . p count { ^ -1 } {}
     : ?YamlLine lo ( vec_get [YamlLine] . p lines idx )
     ^ ?? lo { T l → . l indent F → -1 }
 }
 
-@ __yp_text_at * YamlParser p i idx → s {
+@ __yp_text_at inout YamlParser p i idx → s {
     ? | < idx 0 >= idx . p count { ^ `` } {}
     : ?YamlLine lo ( vec_get [YamlLine] . p lines idx )
     ^ ?? lo { T l → ( string_data . l text ) F → `` }
 }
 
 // Replace line `idx` with (newind, newtext); the old line is dropped.
-@ __yp_rewrite_line * YamlParser p i idx i newind String newtext → v {
+@ __yp_rewrite_line inout YamlParser p i idx i newind String newtext → v {
     : b _s ( vec_set [YamlLine] . p lines idx @ YamlLine { newind newtext } )
 }
 
@@ -577,7 +557,7 @@ $ `stdlib/core/vec.nu`
     ^ res
 }
 
-@ __yaml_parse_node * YamlParser p i min_indent → Json {
+@ __yaml_parse_node inout YamlParser p i min_indent → Json {
     : i idx . p cur
     ? >= idx . p count { ^ @ Json { JNull } } {}
     : i ind ( __yp_indent_at p idx )
@@ -589,7 +569,7 @@ $ `stdlib/core/vec.nu`
     ^ ( __yaml_scalar_to_json p text )
 }
 
-@ __yaml_parse_map * YamlParser p i ind → Json {
+@ __yaml_parse_map inout YamlParser p i ind → Json {
     : Json obj ( json_obj_new )
     : ~ b more T
     ~ more {
@@ -603,9 +583,7 @@ $ `stdlib/core/vec.nu`
                     : i tn ( nurl_str_len text )
                     : String keyraw ( __yaml_substr text 0 col )
                     : Json keyj ( __yaml_scalar_to_json p ( string_data keyraw ) )
-                    ( string_free keyraw )
                     : String key ( __yaml_json_as_key keyj )
-                    ( json_free keyj )
                     : i rstart ( __yaml_skip_sp text + col 1 tn )
                     = . p cur + . p cur 1
                     : ~ Json val @ Json { JNull }
@@ -619,7 +597,6 @@ $ `stdlib/core/vec.nu`
                         ? seqsame { = val ( __yaml_parse_seq p ind ) } { = val ( __yaml_parse_node p + ind 1 ) }
                     }
                     ( json_obj_set obj ( string_data key ) val )
-                    ( string_free key )
                 }
             }
         }
@@ -627,7 +604,7 @@ $ `stdlib/core/vec.nu`
     ^ obj
 }
 
-@ __yaml_parse_seq * YamlParser p i ind → Json {
+@ __yaml_parse_seq inout YamlParser p i ind → Json {
     : Json arr ( json_arr_new )
     : ~ b more T
     ~ more {
@@ -661,22 +638,19 @@ $ `stdlib/core/vec.nu`
     : ( Vec YamlLine ) lines ( vec_new [YamlLine] )
     : i splerr ( __yaml_split_lines src lines )
     ? != splerr 0 {
-        ( __yaml_free_lines lines )
         ^ @ !Json YamlErr { F ( __yaml_errcode splerr ) }
     } {}
     : i nlines ( vec_len [YamlLine] lines )
     ? == nlines 0 {
-        ( __yaml_free_lines lines )
         ^ @ !Json YamlErr { T @ Json { JNull } }
     } {}
-    : *YamlParser p ( __yp_new lines )
+    // The parser is a local the block parser advances in place (`inout`);
+    // the lines move into it and go with it.
+    : ~ YamlParser p @ YamlParser { lines nlines 0 0 }
     : Json root ( __yaml_parse_node p 0 )
     : i consumed . p cur
     : i perr . p err
-    ( nurl_free # s p )
-    ( __yaml_free_lines lines )
     ? | != perr 0 < consumed nlines {
-        ( json_free root )
         ^ @ !Json YamlErr { F @ YamlErr { YamlSyntax } }
     } {}
     ^ @ !Json YamlErr { T root }

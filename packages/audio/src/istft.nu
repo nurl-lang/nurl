@@ -61,10 +61,6 @@ $ `mel.nu`
         }
         = t + t 1
     }
-    ( vec_free [f] win )
-    ( vec_free [f] fr )
-    ( vec_free [f] fi )
-    ( vec_free [f] x )
     // centred analysis: the first and last half-window were padding
     : i pad / n_fft 2
     : i outn * - frames 1 hop
@@ -76,7 +72,5 @@ $ `mel.nu`
         ( vec_push [f] out ? > e 1.0e-11 / a e 0.0 )
         = k + k 1
     }
-    ( vec_free [f] acc )
-    ( vec_free [f] env )
     ^ out
 }

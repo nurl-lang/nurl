@@ -44,7 +44,6 @@ $ `stdlib/core/string.nu`
             = pages + pages 1
             = off + off 4096
         }
-        ( vec_free [u] v )
         = b + b 1
     }
     ^ pages

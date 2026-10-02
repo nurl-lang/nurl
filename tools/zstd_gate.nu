@@ -38,14 +38,11 @@ $ `stdlib/std/zstd.nu`
                 T out → {
                     ?? ( write_file_bytes outp out ) {
                         T _ok → {}
-                        F _e → { ( vec_free [u] out ) ( vec_free [u] src ) ^ ( __fail `write failed` ) }
+                        F _e → { ^ ( __fail `write failed` ) }
                     }
-                    ( vec_free [u] out )
-                    ( vec_free [u] src )
                     ^ 0
                 }
                 F e → {
-                    ( vec_free [u] src )
                     ^ ( __fail ( zstd_err_name e ) )
                 }
             }
@@ -60,10 +57,8 @@ $ `stdlib/std/zstd.nu`
             : ( Vec u ) out ( zstd_encode_at src level )
             ?? ( write_file_bytes outp out ) {
                 T _ok → {}
-                F _e → { ( vec_free [u] out ) ( vec_free [u] src ) ^ ( __fail `write failed` ) }
+                F _e → { ^ ( __fail `write failed` ) }
             }
-            ( vec_free [u] out )
-            ( vec_free [u] src )
             ^ 0
         }
         F _e → { ^ ( __fail `read failed` ) }
@@ -79,7 +74,6 @@ $ `stdlib/std/zstd.nu`
                 T dec → {
                     ? ( vec_eq [u] src dec \ u a u b → b { ^ == a b } ) {} { = rc 1 }
                     ? != rc 0 { ( nurl_eprint `roundtrip mismatch\n` ) } {}
-                    ( vec_free [u] dec )
                 }
                 F e → {
                     ( nurl_eprint ( zstd_err_name e ) )
@@ -93,9 +87,6 @@ $ `stdlib/std/zstd.nu`
             ( string_push_int note ( vec_len [u] enc ) )
             ( string_push_char note 10 )
             ( nurl_print ( string_data note ) )
-            ( string_free note )
-            ( vec_free [u] enc )
-            ( vec_free [u] src )
             ^ rc
         }
         F _e → { ^ ( __fail `read failed` ) }
@@ -118,10 +109,19 @@ $ `stdlib/std/zstd.nu`
                 = pages + * pages 10 - ( nurl_str_get raw k ) 48
                 = k + k 1
             }
-            ( string_free s )
             ^ * pages 4
         }
         F _e → { ^ -1 }
+    }
+}
+
+// One encode + decode. A function of its own so both buffers are released
+// when it returns — before the loop below reads the live-allocation count.
+@ __round_trip ( Vec u ) src i level → b {
+    : ( Vec u ) enc ( zstd_encode_at src level )
+    ?? ( zstd_decode enc ) {
+        T _ → { ^ T }
+        F _e → { ^ F }
     }
 }
 
@@ -150,12 +150,7 @@ $ `stdlib/std/zstd.nu`
             : i at_warm ? > / iters 10 1 / iters 10 1
             : i at_mid + at_warm / - iters at_warm 2
             ~ < k iters {
-                : ( Vec u ) enc ( zstd_encode_at src level )
-                ?? ( zstd_decode enc ) {
-                    T dec → { ( vec_free [u] dec ) }
-                    F _e → { = rc 1 }
-                }
-                ( vec_free [u] enc )
+                ? ! ( __round_trip src level ) { = rc 1 } {}
                 = k + k 1
                 ? == k at_warm { = warm ( __rss_kib ) } {}
                 ? == k at_mid { = mid ( __rss_kib ) = live_mid - ( nurl_alloc_count ) ( nurl_free_count ) } {}
@@ -177,8 +172,6 @@ $ `stdlib/std/zstd.nu`
             ( string_push_int out live_after )
             ( string_push_char out 10 )
             ( nurl_print ( string_data out ) )
-            ( string_free out )
-            ( vec_free [u] src )
             ^ rc
         }
         F _e → { ^ ( __fail `read failed` ) }
@@ -192,7 +185,7 @@ $ `stdlib/std/zstd.nu`
         T src → {
             : ~ i rc 0
             ?? ( zstd_decode src ) {
-                T out → { ( vec_free [u] out ) }
+                T out → {}
                 F _e → { = rc 1 }
             }
             : ( Vec i ) st ( zstd_seq_stats )
@@ -208,9 +201,6 @@ $ `stdlib/std/zstd.nu`
             ( string_push_int o # i . sp 3 )
             ( string_push_char o 10 )
             ( nurl_print ( string_data o ) )
-            ( string_free o )
-            ( vec_free [i] st )
-            ( vec_free [u] src )
             ^ rc
         }
         F _e → { ^ ( __fail `read failed` ) }
@@ -227,8 +217,6 @@ $ `stdlib/std/zstd.nu`
             }
             ( string_push_char out 10 )
             ( nurl_print ( string_data out ) )
-            ( string_free out )
-            ( vec_free [u] src )
             ^ 0
         }
         F _e → { ^ ( __fail `read failed` ) }

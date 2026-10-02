@@ -26,6 +26,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/core/rcbox.nu`
 $ `gpukit.nu`
 $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
@@ -33,12 +34,57 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 : i GK_F32 1
 : i GK_I64 2
 
-// An element-typed device allocation. dptr 0 = failed (safe to free).
+// An element-typed device allocation: `dptr`, `n` and `dtype` are plain
+// fields (read them freely), `mem` owns the block. dptr 0 = failed or
+// empty. Every copy of a GkBuf — a struct field, a Vec element, a view
+// into it — holds the block, and its LAST owner hands it back to the
+// kit's pool (gpukit.nu): nothing is freed by hand. gk_dbuf_free is an
+// optional early release of one owner.
 : GkBuf {
     i dptr
     i n
     i dtype
+    GkMem mem
 }
+
+// The owner of one pooled block: its device pointer and the kit whose
+// pool it came from (held, so the kit — and its device — outlive it).
+: GkMemImpl { i dptr GpuKit kit }
+
+% Drop GkMemImpl { @ drop GkMemImpl x → v { ( _gk_pool_give ( _GpuKit_ptr . x kit ) . x dptr ) } }
+
+: GkMem { s ctl }
+
+@ GkMem_share GkMem h → GkMem { ^ @ GkMem { # s ( rcbox_share # i . h ctl ) } }
+
+@ GkMem_drop sink GkMem h → v {
+    ( mem_forget h )
+    ( rcbox_release [GkMemImpl] # i . h ctl )
+}
+
+@ __gk_nomem → GkMem { ^ @ GkMem { # s 0 } }
+
+// A buffer that is not there: what a failed allocation returns, and the
+// placeholder for an absent operand (a missing bias, mask, …).
+@ gk_buf_none i dtype → GkBuf { ^ @ GkBuf { 0 0 dtype ( __gk_nomem ) } }
+
+// `n` elements of `b` starting at element `off`, same dtype. The view
+// holds `b`'s block: it stays valid however long the view lives.
+@ gk_buf_view GkBuf b i off i n → GkBuf {
+    ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) n . b dtype ( GkMem_share . b mem ) }
+}
+
+// `n` elements of type `dtype` at BYTE offset `boff` into `b` — a view
+// that reinterprets (an f32 block read as i64 indices, say). Holds `b`'s
+// block like gk_buf_view.
+@ gk_buf_view_as GkBuf b i boff i n i dtype → GkBuf {
+    ^ @ GkBuf { + . b dptr boff n dtype ( GkMem_share . b mem ) }
+}
+
+// A buffer over device memory something else owns (another package's
+// allocation, a raw pointer out of a C library). It owns nothing: the
+// caller keeps the memory alive for as long as the GkBuf is used.
+@ gk_buf_wrap i dptr i n i dtype → GkBuf { ^ @ GkBuf { dptr n dtype ( __gk_nomem ) } }
 
 @ __gk_esz i dtype → i { ? == dtype GK_F32 { ^ 4 } {} ^ 8 }
 
@@ -76,86 +122,81 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
-@ gk_dbuf_new * GpuKit kit i n i dtype → GkBuf {
-    ? & ( gk_ok kit ) > n 0 {} { ^ @ GkBuf { 0 0 dtype } }
+@ gk_dbuf_new GpuKit kit__h i n i dtype → GkBuf {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? & . kit ok > n 0 {} { ^ ( gk_buf_none dtype ) }
     ( _gk_pool_default kit )
     : i bytes * n ( __gk_esz dtype )
-    // a block this size that an earlier gk_dbuf_free retired
-    : i cached ( _gk_pool_take bytes )
-    ? != cached 0 { ^ @ GkBuf { cached n dtype } } {}
-    : GpuBuffer gb ( gpu_alloc . kit gpu bytes )
-    // out of memory: the pool is holding blocks nothing is using — give
-    // them back and ask once more before reporting failure
-    ? == . gb dptr 0 {
-        ( gk_pool_release kit )
-        : GpuBuffer gb2 ( gpu_alloc . kit gpu bytes )
-        ( _gk_pool_add . gb2 dptr bytes )
-        ^ @ GkBuf { . gb2 dptr n dtype }
+    // a block this size that an earlier owner let go of
+    : ~ i dptr ( _gk_pool_take kit bytes )
+    ? == dptr 0 {
+        : ~ GpuBuffer gb ( gpu_alloc . kit gpu bytes )
+        // out of memory: the pool is holding blocks nothing is using — give
+        // them back and ask once more before reporting failure
+        ? == . gb dptr 0 {
+            ( _gk_pool_release kit )
+            = gb ( gpu_alloc . kit gpu bytes )
+        } {}
+        ? == . gb dptr 0 { ^ ( gk_buf_none dtype ) } {}
+        = dptr . gb dptr
+        ( _gk_pool_add kit gb )
     } {}
-    ( _gk_pool_add . gb dptr bytes )
-    ^ @ GkBuf { . gb dptr n dtype }
+    ^ @ GkBuf { dptr n dtype @ GkMem { # s ( rcbox_new [GkMemImpl] @ GkMemImpl { dptr ( GpuKit_share kit__h ) } ) } }
 }
 
-@ gk_dbuf_free sink GkBuf b → v {
-    ? != . b dptr 0 {
-        : i bytes * . b n ( __gk_esz . b dtype )
-        ? ( _gk_pool_give . b dptr bytes ) {} {
-            ( gpu_free @ GpuBuffer { . b dptr bytes } )
-        }
-    } {}
-}
+// Let go of `b` now rather than at the end of its owner's scope.
+@ gk_dbuf_free sink GkBuf b → v {}
 
 // Host f64 vector → device (converted to the buffer's element type: f32
 // rounds, i64 truncates like a C cast). Copies min(len(src), b.n) elements;
 // missing elements upload as 0. The direct (non-converting) f64 path is
 // taken only when src actually holds b.n elements — a short vector goes
 // through the padding stage, never out of bounds.
-@ gk_dbuf_upload * GpuKit kit GkBuf b ( Vec f ) src → b {
+@ gk_dbuf_upload GpuKit kit GkBuf b ( Vec f ) src → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
     : i m ( vec_len [f] src )
-    : GpuBuffer gb @ GpuBuffer { . b dptr * n ( __gk_esz . b dtype ) }
+    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
     ? & == . b dtype GK_F64 >= m n {
         ^ == ( gpu_upload gb # *u ( vec_data [f] src ) ) 0
     } {}
     // stage-convert on the host, then one upload
-    : *u stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
+    : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
+    : *u sp ( gpu_host_ptr stage )
     : ~ i k 0
     ~ < k n {
         : f v ? < k m { ?? ( vec_get [f] src k ) { T x → x F _ → 0.0 } } { 0.0 }
-        ? == . b dtype GK_F32 { ( gpu_host_set_f32 stage k v ) } {
-            ? == . b dtype GK_I64 { ( nurl_poke stage k # i v ) } {
-                ( nurl_poke stage k ( f64_to_bits v ) ) } }
+        ? == . b dtype GK_F32 { ( nurl_poke_f32 sp k v ) } {
+            ? == . b dtype GK_I64 { ( nurl_poke sp k # i v ) } {
+                ( nurl_poke sp k ( f64_to_bits v ) ) } }
         = k + k 1
     }
-    : i rc ( gpu_upload gb stage )
-    ( gpu_host_free stage )
-    ^ == rc 0
+    ^ == ( gpu_upload gb sp ) 0
 }
 
 // Device → host f64 vector (converted from the buffer's element type).
 // `dst` must already hold at least b.n elements (fails closed otherwise);
 // the first b.n are overwritten in place.
-@ gk_dbuf_download * GpuKit kit GkBuf b ( Vec f ) dst → b {
+@ gk_dbuf_download GpuKit kit GkBuf b ( Vec f ) dst → b {
     ? ( gk_buf_ok b ) {} { ^ F }
     : i n . b n
     ? >= ( vec_len [f] dst ) n {} { ^ F }
-    : GpuBuffer gb @ GpuBuffer { . b dptr * n ( __gk_esz . b dtype ) }
+    : GpuBuffer gb ( gpu_buffer_view . b dptr * n ( __gk_esz . b dtype ) )
     ? == . b dtype GK_F64 {
         ^ == ( gpu_download # *u ( vec_data [f] dst ) gb ) 0
     } {}
-    : *u stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
-    : i rc ( gpu_download stage gb )
+    : GpuHost stage ( gpu_host_alloc * n ( __gk_esz . b dtype ) )
+    : *u sp ( gpu_host_ptr stage )
+    : i rc ( gpu_download sp gb )
     ? == rc 0 {
         : ~ i k 0
         ~ < k n {
             ? == . b dtype GK_F32 {
-                ( vec_set [f] dst k ( gpu_host_get_f32 stage k ) )
-            } { ( vec_set [f] dst k # f ( nurl_peek stage k ) ) }
+                ( vec_set [f] dst k ( nurl_peek_f32 sp k ) )
+            } { ( vec_set [f] dst k # f ( nurl_peek sp k ) ) }
             = k + k 1
         }
     } {}
-    ( gpu_host_free stage )
     ^ == rc 0
 }
 
@@ -169,38 +210,35 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // walks every element through f64 twice (widen on read, narrow on
 // upload) and allocates two host buffers the size of the tensor to do
 // it. On a 4.6 GB model that is most of the load.
-@ gk_dbuf_upload_raw * GpuKit kit GkBuf b * u src → b {
+@ gk_dbuf_upload_raw GpuKit kit GkBuf b * u src → b {
     ? & ( gk_buf_ok b ) != # i src 0 {} { ^ F }
-    : GpuBuffer gb @ GpuBuffer { . b dptr * . b n ( __gk_esz . b dtype ) }
-    ^ == ( gpu_upload gb src ) 0
+    ^ == ( gpu_upload ( gpu_buffer_view . b dptr * . b n ( __gk_esz . b dtype ) ) src ) 0
 }
 
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make
 // a round trip through f64). Same length contracts as the f64 view.
-@ gk_dbuf_upload_i * GpuKit kit GkBuf b ( Vec i ) src → b {
+@ gk_dbuf_upload_i GpuKit kit GkBuf b ( Vec i ) src → b {
     ? & ( gk_buf_ok b ) == . b dtype GK_I64 {} { ^ F }
     : i n . b n
     : i m ( vec_len [i] src )
-    : GpuBuffer gb @ GpuBuffer { . b dptr * n 8 }
+    : GpuBuffer gb ( gpu_buffer_view . b dptr * n 8 )
     ? >= m n { ^ == ( gpu_upload gb # *u ( vec_data [i] src ) ) 0 } {}
-    : *u stage ( gpu_host_alloc * n 8 )
+    : GpuHost stage ( gpu_host_alloc * n 8 )
+    : *u sp ( gpu_host_ptr stage )
     : ~ i k 0
     ~ < k n {
         : i v ? < k m { ?? ( vec_get [i] src k ) { T x → x F _ → 0 } } { 0 }
-        ( nurl_poke stage k v )
+        ( nurl_poke sp k v )
         = k + k 1
     }
-    : i rc ( gpu_upload gb stage )
-    ( gpu_host_free stage )
-    ^ == rc 0
+    ^ == ( gpu_upload gb sp ) 0
 }
 
-@ gk_dbuf_download_i * GpuKit kit GkBuf b ( Vec i ) dst → b {
+@ gk_dbuf_download_i GpuKit kit GkBuf b ( Vec i ) dst → b {
     ? & ( gk_buf_ok b ) == . b dtype GK_I64 {} { ^ F }
     : i n . b n
     ? >= ( vec_len [i] dst ) n {} { ^ F }
-    : GpuBuffer gb @ GpuBuffer { . b dptr * n 8 }
-    ^ == ( gpu_download # *u ( vec_data [i] dst ) gb ) 0
+    ^ == ( gpu_download # *u ( vec_data [i] dst ) ( gpu_buffer_view . b dptr * n 8 ) ) 0
 }
 
 // ── Raw device launch (no marshalling) ────────────────────────────────
@@ -219,30 +257,33 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_autosync b on → v { = g_gk_autosync on }
 
-@ gk_sync * GpuKit kit → b { ^ == ( gpu_sync . kit gpu ) 0 }
+@ gk_sync GpuKit kit__h → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ == ( gpu_sync . kit gpu ) 0
+}
 
 // ── Per-kernel profiling ──────────────────────────────────────────────
 // "The model is slow" is not actionable; "78% of the frame is in three
 // kernels" is. With profiling on, every gk_run_dev launch is bracketed by
-// a CUDA event pair and the device time is accumulated into the kernel's
-// cache slot, so gk_prof_report ranks the kernels by where the time
-// actually went. Events measure the GPU, not the launch — a host clock
-// around an async launch measures neither.
+// a CUDA event pair (the kit's own, made on first use) and the device
+// time is accumulated into the kernel's cache slot, so gk_prof_report
+// ranks the kernels by where the time actually went. Events measure the
+// GPU, not the launch — a host clock around an async launch measures
+// neither.
 //
 // It is not free: each launch waits for its own end event, which
 // serialises the stream. Turn it on to find the hot kernel, off to time
 // the program.
 : ~ b g_gk_prof F
-: ~ i g_gk_ev0 0
-: ~ i g_gk_ev1 0
 
-@ gk_prof * GpuKit kit b on → v {
-    ? & on ( gk_ok kit ) {
-        ? == g_gk_ev0 0 {
-            = g_gk_ev0 ( gpu_timer_new . kit gpu )
-            = g_gk_ev1 ( gpu_timer_new . kit gpu )
-        } {}
-        = g_gk_prof != g_gk_ev0 0
+@ gk_prof GpuKit kit__h b on → v {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? & on . kit ok {
+        ? ( gpu_timer_ok . kit ev0 ) {} {
+            = . kit ev0 ( gpu_timer_new . kit gpu )
+            = . kit ev1 ( gpu_timer_new . kit gpu )
+        }
+        = g_gk_prof ( gpu_timer_ok . kit ev0 )
     } { = g_gk_prof F }
 }
 
@@ -250,33 +291,31 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // Drop every accumulated count — e.g. after a warm-up frame, so the
 // numbers describe the steady state and not the compiles.
-@ gk_prof_reset * GpuKit kit → v {
+@ gk_prof_reset GpuKit kit__h → v {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    : i base # i ( vec_data [GkKernelEntry] . kit cache )
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {
-        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
-            T e → {
-                : b _s ( vec_set [GkKernelEntry] . kit cache k
-                @ GkKernelEntry { . e name . e kernel 0 0 } )
-            }
-            F _ → {}
-        }
+        // counters only, in place — the name and the kernel stay put
+        : *GkKernelEntry e # *GkKernelEntry + base * k Z GkKernelEntry
+        = . e calls 0
+        = . e ns 0
         = k + k 1
     }
 }
 
-@ __gk_prof_add * GpuKit kit i slot i ns → v {
-    ?? ( vec_get [GkKernelEntry] . kit cache slot ) {
-        T e → {
-            : b _s ( vec_set [GkKernelEntry] . kit cache slot
-            @ GkKernelEntry { . e name . e kernel + . e calls 1 + . e ns ns } )
-        }
-        F _ → {}
-    }
+@ __gk_prof_add * GpuKitImpl kit i slot i ns → v {
+    ? & >= slot 0 < slot ( vec_len [GkKernelEntry] . kit cache ) {
+        : *GkKernelEntry e # *GkKernelEntry + # i ( vec_data [GkKernelEntry] . kit cache ) * slot Z GkKernelEntry
+        = . e calls + . e calls 1
+        = . e ns + . e ns ns
+    } {}
 }
 
 // Total device time accumulated so far, in nanoseconds.
-@ gk_prof_total * GpuKit kit → i {
+@ gk_prof_total GpuKit kit__h → i {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i total 0
     : ~ i k 0
@@ -291,7 +330,8 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 }
 
 // Kernels by device time, slowest first, with the share of the total.
-@ gk_prof_report * GpuKit kit → v {
+@ gk_prof_report GpuKit kit__h → v {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i total 0
     : ~ i k 0
@@ -353,20 +393,18 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
             = shown + shown 1
         }
     }
-    ( vec_free [i] done )
 }
 
-@ gk_run_dev * GpuKit kit s src s name i grid i block ( Vec i ) args → b {
-    ? ( gk_ok kit ) {} { ^ F }
+@ gk_run_dev GpuKit kit__h s src s name i grid i block ( Vec i ) args → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? . kit ok {} { ^ F }
     : i slot ( _gk_kernel_slot kit src name )
     ? >= slot 0 {} { ^ F }
-    : GpuKernel kn ( _gk_slot_kernel kit slot )
-    ? ( gpu_kernel_ok kn ) {} { ^ F }
-    ? g_gk_prof { ( gpu_timer_mark . kit gpu g_gk_ev0 ) } {}
-    ? == ( gpu_launch kn grid block args ) 0 {} { ^ F }
+    ? g_gk_prof { ( gpu_timer_mark . kit gpu . kit ev0 ) } {}
+    ? == ( _gk_slot_launch kit slot grid block args ) 0 {} { ^ F }
     ? g_gk_prof {
-        ( gpu_timer_mark . kit gpu g_gk_ev1 )
-        ( __gk_prof_add kit slot ( gpu_timer_ns . kit gpu g_gk_ev0 g_gk_ev1 ) )
+        ( gpu_timer_mark . kit gpu . kit ev1 )
+        ( __gk_prof_add kit slot ( gpu_timer_ns . kit gpu . kit ev0 . kit ev1 ) )
     } {}
     ? g_gk_autosync { ^ == ( gpu_sync . kit gpu ) 0 } {}
     ^ T
@@ -388,7 +426,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ^ s
 }
 
-@ gkd_ew * GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
+@ gkd_ew GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b → b {
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
     : i n . o n
@@ -405,19 +443,16 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gk_arg_dev o ) )
     ( vec_push [i] args ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid n 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
-@ gkd_add * GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `add` `+` o a b ) }
+@ gkd_add GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `add` `+` o a b ) }
 
-@ gkd_sub * GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `sub` `-` o a b ) }
+@ gkd_sub GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `sub` `-` o a b ) }
 
-@ gkd_mul * GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `mul` `*` o a b ) }
+@ gkd_mul GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `mul` `*` o a b ) }
 
-@ gkd_div * GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `div` `/` o a b ) }
+@ gkd_div GpuKit kit GkBuf o GkBuf a GkBuf b → b { ^ ( gkd_ew kit `div` `/` o a b ) }
 
 // ── Elementwise binary with full N-D stride broadcast ─────────────────
 // The output is dense row-major over `odims` (≤6 dims); each input is read
@@ -472,7 +507,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // out over `odims`; a and b read through their stride tables (entries ≥ 0,
 // 0 = broadcast). Float dtypes only.
-@ gkd_ew_bc * GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) odims ( Vec i ) astr ( Vec i ) bstr → b {
+@ gkd_ew_bc GpuKit kit s opname s op GkBuf o GkBuf a GkBuf b ( Vec i ) odims ( Vec i ) astr ( Vec i ) bstr → b {
     ? & & ( gk_buf_ok o ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . o dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? != . o dtype GK_I64 {} { ^ F }
@@ -520,9 +555,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
         = k + k 1
     }
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
@@ -530,7 +562,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // `expr` is C over the local `T x`; use the dtype-suffixed math calls via
 // the helpers below (they pick expf vs exp, …).
 
-@ gkd_map * GpuKit kit s mapname s expr GkBuf o GkBuf a → b {
+@ gkd_map GpuKit kit s mapname s expr GkBuf o GkBuf a → b {
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
     ? & == . o dtype . a dtype == . o n . a n {} { ^ F }
     : i n . o n
@@ -550,38 +582,35 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gk_arg_dev o ) )
     ( vec_push [i] args ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid n 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
-@ gkd_relu * GpuKit kit GkBuf o GkBuf a → b {
+@ gkd_relu GpuKit kit GkBuf o GkBuf a → b {
     ? == . o dtype GK_F32 { ^ ( gkd_map kit `relu` `x>0.0f?x:0.0f` o a ) } {}
     ^ ( gkd_map kit `relu` `x>0.0?x:0.0` o a )
 }
 
-@ gkd_sigmoid * GpuKit kit GkBuf o GkBuf a → b {
+@ gkd_sigmoid GpuKit kit GkBuf o GkBuf a → b {
     ? == . o dtype GK_F32 { ^ ( gkd_map kit `sigmoid` `1.0f/(1.0f+expf(-x))` o a ) } {}
     ^ ( gkd_map kit `sigmoid` `1.0/(1.0+exp(-x))` o a )
 }
 
-@ gkd_exp * GpuKit kit GkBuf o GkBuf a → b {
+@ gkd_exp GpuKit kit GkBuf o GkBuf a → b {
     ? == . o dtype GK_F32 { ^ ( gkd_map kit `exp` `expf(x)` o a ) } {}
     ^ ( gkd_map kit `exp` `exp(x)` o a )
 }
 
-@ gkd_tanh * GpuKit kit GkBuf o GkBuf a → b {
+@ gkd_tanh GpuKit kit GkBuf o GkBuf a → b {
     ? == . o dtype GK_F32 { ^ ( gkd_map kit `tanh` `tanhf(x)` o a ) } {}
     ^ ( gkd_map kit `tanh` `tanh(x)` o a )
 }
 
-@ gkd_sqrt * GpuKit kit GkBuf o GkBuf a → b {
+@ gkd_sqrt GpuKit kit GkBuf o GkBuf a → b {
     ? == . o dtype GK_F32 { ^ ( gkd_map kit `sqrt` `sqrtf(x)` o a ) } {}
     ^ ( gkd_map kit `sqrt` `sqrt(x)` o a )
 }
 
-@ gkd_log * GpuKit kit GkBuf o GkBuf a → b {
+@ gkd_log GpuKit kit GkBuf o GkBuf a → b {
     ? == . o dtype GK_F32 { ^ ( gkd_map kit `log` `logf(x)` o a ) } {}
     ^ ( gkd_map kit `log` `log(x)` o a )
 }
@@ -653,7 +682,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<clim;c++)` )
     ( string_push_str s ( string_data mac ) )
     ( string_push_str s `}}}` )
-    ( string_free mac )
     ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)C[(rb+r)*N+cb+c]=acc[r][c];}` )
     ^ s
 }
@@ -688,7 +716,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<clim;c++)` )
     ( string_push_str s ( string_data mac ) )
     ( string_push_str s `}}}` )
-    ( string_free mac )
     ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++){` )
     ( string_push_str s tn ) ( string_push_str s ` bias=(C!=0)?C[cb+c]:0;` )
     ( string_push_str s `Y[(rb+r)*N+cb+c]=alpha*acc[r][c]+beta*bias;}}` )
@@ -823,7 +850,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str s `for(int j=0;j<TN;j++)` )
     : String mac ( _gkd_mac dtype `acc[i][j]` `av[i]` `bv[j]` )
     ( string_push_str s ( string_data mac ) )
-    ( string_free mac )
     ( string_push_str s `}__syncthreads();}` )
     ( string_push_str s `for(int i=0;i<TM;i++){long long gr=rb+tr*TM+i;if(gr<M)` )
     ( string_push_str s `for(int j=0;j<TN;j++){long long gc=cb+tc*TN+j;if(gc<N){` )
@@ -837,7 +863,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ^ s
 }
 
-@ gkd_matmul * GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
+@ gkd_matmul GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
     ? & & ( gk_buf_ok c ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . c dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? & & == . a n * m k == . b n * k n == . c n * m n {} { ^ F }
@@ -853,7 +879,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ? on_cpu {
         : String body ( __gkd_mm_tiled tn . c dtype )
         ( string_push_str src ( string_data body ) )
-        ( string_free body )
     } {
         ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
         ( string_push_str src `if(idx<M*N){long long r=idx/N,cx=idx%N;` )
@@ -861,7 +886,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
         : String mac ( _gkd_mac . c dtype `s` `A[r*K+t]` `B[t*N+cx]` )
         ( string_push_str src `for(long long t=0;t<K;t++)` )
         ( string_push_str src ( string_data mac ) )
-        ( string_free mac )
         ( string_push_str src `C[idx]=s;}}` )
     }
     : i total ? on_cpu
@@ -875,9 +899,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gpu_arg_i64 k ) )
     ( vec_push [i] args ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
@@ -886,7 +907,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // 0 broadcasts its single matrix across the whole batch. Accumulation is
 // sequential over K in the element type, exactly like gkd_matmul.
 
-@ gkd_bmm * GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
+@ gkd_bmm GpuKit kit GkBuf y GkBuf a GkBuf b i batch i m i kk i n i abatch i bbatch → b {
     ? & & ( gk_buf_ok y ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . y dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? != . y dtype GK_I64 {} { ^ F }
@@ -915,7 +936,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
         ( string_push_str src `(void)total;` )
         : String body ( _gkd_smem_body tn . y dtype 0 1 0 )
         ( string_push_str src ( string_data body ) )
-        ( string_free body )
     } {
         ? on_cpu {
             // Same register tile as gkd_matmul, with the batch folded into the
@@ -942,7 +962,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
             ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<clim;c++)` )
             ( string_push_str src ( string_data mac ) )
             ( string_push_str src `}}}` )
-            ( string_free mac )
             ( string_push_str src `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)Y[(bi*M+rb+r)*N+cb+c]=acc[r][c];}` )
         } {
             ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=total)return;` )
@@ -953,7 +972,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
             : String mac ( _gkd_mac . y dtype `acc` `a[r*K+k]` `bb[k*N+c]` )
             ( string_push_str src `for(long long k=0;k<K;k++)` )
             ( string_push_str src ( string_data mac ) )
-            ( string_free mac )
             ( string_push_str src `Y[idx]=acc;}` )
         }
     }
@@ -976,9 +994,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     * batch * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN )
     ( gk_grid total 256 )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) grid 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
@@ -988,7 +1003,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // Negative indices wrap once (ONNX semantics). Out-of-range indices read
 // 0 / skip the write — never out of bounds. Any element type.
 
-@ gkd_gather * GpuKit kit GkBuf y GkBuf d GkBuf ix i outer i axin i inner i nidx → b {
+@ gkd_gather GpuKit kit GkBuf y GkBuf d GkBuf ix i outer i axin i inner i nidx → b {
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) == . ix dtype GK_I64 {} { ^ F }
     ? == . y dtype . d dtype {} { ^ F }
     ? & & & > outer 0 > axin 0 > inner 0 > nidx 0 {} { ^ F }
@@ -1014,24 +1029,20 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gpu_arg_i64 nidx ) )
     ( vec_push [i] args ( gpu_arg_i64 total ) )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
 // y = d with y[outer, ix[g], inner] = u[outer, g, inner]. When several
 // indices collide the surviving write is unspecified (ONNX leaves this
 // undefined too). `y` may be `d` itself for in-place update.
-@ gkd_scatter * GpuKit kit GkBuf y GkBuf d GkBuf ix GkBuf u i outer i ax i inner i nidx → b {
+@ gkd_scatter GpuKit kit GkBuf y GkBuf d GkBuf ix GkBuf u i outer i ax i inner i nidx → b {
     ? & & & ( gk_buf_ok y ) ( gk_buf_ok d ) ( gk_buf_ok ix ) ( gk_buf_ok u ) {} { ^ F }
     ? & & == . y dtype . d dtype == . d dtype . u dtype == . ix dtype GK_I64 {} { ^ F }
     ? & & & > outer 0 > ax 0 > inner 0 > nidx 0 {} { ^ F }
     ? & == . y n . d n == . y n * * outer ax inner {} { ^ F }
     ? & == . u n * * outer nidx inner >= . ix n nidx {} { ^ F }
     ? != . y dptr . d dptr {
-        : GpuBuffer dst @ GpuBuffer { . y dptr * . y n ( __gk_esz . y dtype ) }
-        ? == ( gpu_dtod dst . d dptr ) 0 {} { ^ F }
+        ? == ( gpu_dtod ( gpu_buffer_view . y dptr * . y n ( __gk_esz . y dtype ) ) . d dptr ) 0 {} { ^ F }
     } {}
     : s tn ( _gk_tname . y dtype )
     : String kname ( string_from ( _gk_pfx . y dtype ) )
@@ -1054,15 +1065,12 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gpu_arg_i64 nidx ) )
     ( vec_push [i] args ( gpu_arg_i64 total ) )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
 // ── Row softmax: numerically stable, one thread per row ───────────────
 
-@ gkd_softmax_rows * GpuKit kit GkBuf o GkBuf a i rows i cols → b {
+@ gkd_softmax_rows GpuKit kit GkBuf o GkBuf a i rows i cols → b {
     ? & ( gk_buf_ok o ) ( gk_buf_ok a ) {} { ^ F }
     ? & == . o dtype . a dtype == . o n * rows cols {} { ^ F }
     ? == . a n * rows cols {} { ^ F }
@@ -1088,9 +1096,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gpu_arg_i64 rows ) )
     ( vec_push [i] args ( gpu_arg_i64 cols ) )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid rows 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     ^ r
 }
 
@@ -1098,7 +1103,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // Returns the sum as f64 regardless of the buffer dtype (partials
 // accumulate in the buffer's element type).
 
-@ gkd_sum * GpuKit kit GkBuf a → ?f {
+@ gkd_sum GpuKit kit GkBuf a → ?f {
     ? ( gk_buf_ok a ) {} { ^ @ ?f { F } }
     : i n . a n
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
@@ -1120,9 +1125,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gpu_arg_i64 n ) )
     : i blocks / threads 256
     : ~ b ok ( gk_run_dev kit ( string_data src ) ( string_data kname ) blocks 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
-    ( string_free kname )
     : ~ f acc 0.0
     ? ok {
         : ( Vec f ) host ( _gk_zeros threads )
@@ -1133,8 +1135,6 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
                 = k + k 1
             }
         } { = ok F }
-        ( vec_free [f] host )
     } {}
-    ( gk_dbuf_free part )
     ? ok { ^ @ ?f { T acc } } { ^ @ ?f { F } }
 }

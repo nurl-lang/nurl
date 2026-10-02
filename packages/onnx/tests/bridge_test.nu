@@ -32,7 +32,6 @@ $ `src/tensor_bridge.nu`
             : *u host ( nurl_alloc * n 4 )
             ( vec_f32_into bytes host n )
             ( nurl_poke pcell 0 n )
-            ( vec_free [u] bytes )
             ^ host
         }
         F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
@@ -45,9 +44,9 @@ $ `src/tensor_bridge.nu`
 
 @ main → i {
     // parse the model
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
+    : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes `tests/data/tiny.onnx` ) {
-        T mb → { : OGraph parsed ( onnx_parse mb ) ( graph_free g ) = g parsed ( vec_free [u] mb ) }
+        T mb → { : OGraph parsed ( onnx_parse mb ) = g parsed }
         F _ → { ( nurl_print `cannot read tests/data/tiny.onnx\n` ) ^ 1 }
     }
 
@@ -58,32 +57,31 @@ $ `src/tensor_bridge.nu`
     : i out_n ( nurl_peek nc 0 )
     ? & == in_n 4 == out_n 3 {} { ( nurl_print `bad test data\n` ) ^ 1 }
 
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ( gk_close kit ) ^ 0 }
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ( rt_ok e ) {} { ( nurl_print `SKIP engine open failed\n` ) ^ 0 }
 
     // ── host path ─────────────────────────────────────────────────
     : RTensor oh ( rt_run_shaped e g input ( sh2b 1 4 ) )
-    : *u hostr ( rt_download e oh )
+    : GpuHost hostr ( rt_download e oh )
 
     // ── device path: DTensor input, no host staging in the run ───
     : ( Vec f ) inv ( vec_with_cap [f] 4 )
     : ~ i k 0
     ~ < k 4 { ( vec_push [f] inv # f ( nurl_peek_f32 input k ) ) = k + k 1 }
     : Tensor tin ( tensor_from_data TE_F32 ( sh2b 1 4 ) inv )
-    ( vec_free [f] inv )
     : DTensor din ( tensor_to_device kit tin )
     ( check ( dtensor_ok din ) `input uploaded as DTensor` )
 
     : RTensor od ( rt_run_dtensor e g din )
     ( check > . od nelem 0 `graph ran with a device-resident input` )
-    : *u devr ( rt_download e od )
+    : GpuHost devr ( rt_download e od )
 
     : ~ i diffs 0
     = k 0
     ~ < k 3 {
-        ? == ( nurl_f32_to_bits # f32 ( nurl_peek_f32 hostr k ) ) ( nurl_f32_to_bits # f32 ( nurl_peek_f32 devr k ) ) {} { = diffs + diffs 1 }
+        ? == ( nurl_f32_to_bits # f32 ( nurl_peek_f32 ( gpu_host_ptr hostr ) k ) ) ( nurl_f32_to_bits # f32 ( nurl_peek_f32 ( gpu_host_ptr devr ) k ) ) {} { = diffs + diffs 1 }
         = k + k 1
     }
     ( check == diffs 0 `device-input output BIT-IDENTICAL to host-input output` )
@@ -92,7 +90,7 @@ $ `src/tensor_bridge.nu`
     : ~ f mx 0.0
     = k 0
     ~ < k 3 {
-        : f d ( float_abs - ( nurl_peek_f32 devr k ) ( nurl_peek_f32 refout k ) )
+        : f d ( float_abs - ( nurl_peek_f32 ( gpu_host_ptr devr ) k ) ( nurl_peek_f32 refout k ) )
         ? > d mx { = mx d } {}
         = k + k 1
     }
@@ -101,8 +99,8 @@ $ `src/tensor_bridge.nu`
     // ── device-side postprocess: wrap output, softmax, download ──
     : DTensor dout ( dtensor_from_output kit e od )
     ( check ( dtensor_ok dout ) `output wrapped as an owned DTensor` )
-    : ~ DTensor dsm @ DTensor { TE_F32 ( vec_new [i] ) @ GkBuf { 0 0 GK_F32 } }
-    ?? ( dtensor_softmax kit dout ) { T sm → { ( dtensor_free dsm ) = dsm sm } F _ → {} }
+    : ~ DTensor dsm @ DTensor { TE_F32 ( vec_new [i] ) ( gk_buf_none GK_F32 ) }
+    ?? ( dtensor_softmax kit dout ) { T sm → { = dsm sm } F _ → {} }
     ( check ( dtensor_ok dsm ) `dtensor_softmax on the wrapped output` )
 
     // the copy must survive an engine reset (independence proof)
@@ -127,18 +125,9 @@ $ `src/tensor_bridge.nu`
     }
     ( check < mx2 0.0001 `device softmax matches host softmax (after rt_reset)` )
 
-    ( vec_free [f] es )
-    ( tensor_free hsm )
-    ( dtensor_free dsm )
-    ( dtensor_free dout )
-    ( dtensor_free din )
-    ( tensor_free tin )
-    ( gpu_host_free hostr ) ( gpu_host_free devr )
     ( nurl_free input ) ( nurl_free refout )
     ( nurl_free nc )
-    ( rt_close e )
     ( gk_close kit )
-    ( graph_free g )
 
     ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 }
     { ( nurl_print `\n` ) ( nurl_print ( nurl_str_int g_fail ) ) ( nurl_print ` FAILED\n` ) ^ 1 }

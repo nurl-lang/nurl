@@ -253,7 +253,6 @@ $ `stdlib/core/rcbox.nu`
                     F → {
                         : Json a ( json_null )
                         : Json env ( __rpc_invoke h a )
-                        ( json_free a )
                         env
                     }
                 }
@@ -270,8 +269,8 @@ $ `stdlib/core/rcbox.nu`
     : ?String ct ( header_get . req headers `Content-Type` )
     : ~ b mp F
     ?? ct {
-        T cs → { = mp ( string_contains cs `msgpack` ) ( string_free cs ) }
-        F cs → { ( string_free cs ) }
+        T cs → { = mp ( string_contains cs `msgpack` ) }
+        F cs → {}
     }
     ^ mp
 }
@@ -284,7 +283,6 @@ $ `stdlib/core/rcbox.nu`
     } {}
     : String bs ( bytes_to_str . req body )
     : !Json JsonError d ( json_parse ( string_data bs ) )
-    ( string_free bs )
     ^ ?? d { T j → @ ?Json { T j } F _ → @ ?Json { F # Json 0 } }
 }
 
@@ -294,7 +292,7 @@ $ `stdlib/core/rcbox.nu`
         : HttpResponse r ( response_new status )
         : !( Vec u ) MsgpackErr enc ( msgpack_encode env )
         ?? enc {
-            T body → { ( response_set_body_bytes r body ) ( vec_free [u] body ) }
+            T body → { ( response_set_body_bytes r body ) }
             F _ → {}
         }
         ( response_set_header r `Content-Type` `application/msgpack` )
@@ -310,10 +308,9 @@ $ `stdlib/core/rcbox.nu`
     ?? tph {
         T h → {
             : TraceParsed p ( traceparent_parse ( string_data h ) )
-            ( string_free h )
             ? != 0 . p ok { ( trace_set . p trace . p span ) } {}
         }
-        F h → { ( string_free h ) }
+        F h → {}
     }
 }
 
@@ -329,15 +326,12 @@ $ `stdlib/core/rcbox.nu`
         : HttpResponse resp ?? reqj {
             T rj → {
                 : Json env ( rpc_dispatch r rj )
-                ( json_free rj )
                 : HttpResponse rp ( __resp_send mp 200 env )
-                ( json_free env )
                 rp
             }
             F → {
                 : Json env ( __rpc_err_env `bad request` )
                 : HttpResponse rp ( __resp_send mp 400 env )
-                ( json_free env )
                 rp
             }
         }
@@ -416,7 +410,6 @@ $ `stdlib/core/rcbox.nu`
     ? <= delay 0 { ^ 0 } {}
     : Rng g ( rng_seed ( monotonic_ns ) )
     : i j ( rng_below g + delay 1 )
-    ( rng_free g )
     ^ j
 }
 
@@ -501,9 +494,8 @@ $ `stdlib/core/rcbox.nu`
     ^ @ Node { ( string_from host ) port }
 }
 
-@ node_free sink Node n → v {
-    ( string_free . n host )
-}
+// Let go of `n` now rather than at the end of its owner's scope.
+@ node_free sink Node n → v {}
 
 // Per-call total / connect budgets (ms). Retry cadence is the caller's
 // RetryPolicy (see call_remote_with / retry_default).
@@ -533,7 +525,6 @@ $ `stdlib/core/rcbox.nu`
         T rb → {
             : String rs ( json_stringify rb )
             : !Json JsonError rp ( json_parse ( string_data rs ) )
-            ( string_free rs )
             ?? rp {
                 T owned → @ !Json ClusterErr { T owned }
                 F _ → @ !Json ClusterErr { F @ ClusterErr { ClBadResp } }
@@ -566,7 +557,6 @@ $ `stdlib/core/rcbox.nu`
         ( string_push_str h `traceparent: ` )
         : String tp ( traceparent_format ( trace_current_trace ) ( trace_new_span ) )
         ( string_push_str h ( string_data tp ) )
-        ( string_free tp )
         ( string_push_str h `\r\n` )
     } {}
     ^ h
@@ -576,7 +566,6 @@ $ `stdlib/core/rcbox.nu`
     : String hdr ( __rpc_headers `application/json` )
     : !Response HttpErr r ( http_request_to `POST` url body ( string_data hdr )
     ( __cluster_timeout_ms ) ( __cluster_connect_ms ) )
-    ( string_free hdr )
     ^ r
 }
 
@@ -587,8 +576,6 @@ $ `stdlib/core/rcbox.nu`
             : String hdr ( __rpc_headers `application/msgpack` )
             : !Response HttpErr r2 ( http_request_bytes_to `POST` url body
             ( string_data hdr ) ( __cluster_timeout_ms ) ( __cluster_connect_ms ) )
-            ( string_free hdr )
-            ( vec_free [u] body )
             r2
         }
         F _ → @ !Response HttpErr { F @ HttpErr { HttpOther } }
@@ -600,7 +587,6 @@ $ `stdlib/core/rcbox.nu`
     ? mp {
         : ( Vec u ) bb ( http_body_bytes resp )
         : !Json MsgpackErr d ( msgpack_decode bb )
-        ( vec_free [u] bb )
         ^ ?? d { T j → @ ?Json { T j } F _ → @ ?Json { F # Json 0 } }
     } {}
     : !Json JsonError d ( json_parse ( http_body_str resp ) )
@@ -614,24 +600,20 @@ $ `stdlib/core/rcbox.nu`
     : ~ ! Response HttpErr rr @ !Response HttpErr { F @ HttpErr { HttpOther } }
     ? mp { = rr ( __rpc_send_mp url req ) }
     { = rr ( __rpc_send_json url ( string_data jbody ) ) }
-    ( string_free jbody )
     ^ ?? rr {
         T resp → {
             : i st ( http_status resp )
             ? != st 200 {
-                ( response_free resp )
                 @ !Json ClusterErr { F @ ClusterErr { ClBadResp } }
             } {
                 : ?Json envo ( __rpc_decode_resp mp resp )
                 : !Json ClusterErr out ?? envo {
                     T env → {
                         : !Json ClusterErr r2 ( __rpc_extract_result env )
-                        ( json_free env )
                         r2
                     }
                     F → @ !Json ClusterErr { F @ ClusterErr { ClBadResp } }
                 }
-                ( response_free resp )
                 out
             }
         }
@@ -689,9 +671,6 @@ $ `stdlib/core/rcbox.nu`
         = k + k 1
     }
 
-    ( string_free url )
-    ( json_free req )
-
     ? have_result {
         ^ @ !Json ClusterErr { T result }
     } {}
@@ -709,7 +688,6 @@ $ `stdlib/core/rcbox.nu`
 // breaker records the outcome (success closes it, failure trips it).
 @ call_remote_cb Node n s fn_id Json args RetryPolicy pol CircuitBreaker cb → !Json ClusterErr {
     ? ! ( cb_allow cb ) {
-        ( json_free args )
         ^ @ !Json ClusterErr { F @ ClusterErr { ClCircuitOpen } }
     } {}
     : !Json ClusterErr r ( call_remote_with n fn_id args pol )

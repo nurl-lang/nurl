@@ -451,21 +451,10 @@ $ `stdlib/core/rcbox.nu`
     : *TcbImpl c ( __Tcb_ptr c__h )
     : i have ( vec_len [u] . c rcvbuf )
     : i take ? < n have n have
-    : ~ i k 0
-    ~ < k take {
-        ( vec_push [u] dst ?? ( vec_get [u] . c rcvbuf k ) { T x → x F → # u 0 } )
-        = k + k 1
-    }
-    // Shift the remainder down. A ring buffer would avoid the copy;
-    // for v1 the simple form is worth more than the memmove.
-    : ( Vec u ) rest ( vec_new [u] )
-    : ~ i j take
-    ~ < j have {
-        ( vec_push [u] rest ?? ( vec_get [u] . c rcvbuf j ) { T x → x F → # u 0 } )
-        = j + j 1
-    }
-    ( vec_free [u] . c rcvbuf )
-    = . c rcvbuf rest
+    ( vec_extend_range [u] dst . c rcvbuf 0 take )
+    // Shift the remainder down in place. A ring buffer would avoid the
+    // memmove; for v1 the simple form is worth more.
+    ( bytes_drop_front . c rcvbuf take )
     ^ take
 }
 
@@ -664,16 +653,7 @@ $ `stdlib/core/rcbox.nu`
     // one sequence number but no buffer byte, so cap by what is there.
     : i have ( vec_len [u] . c sndbuf )
     : i drop ? > acked have have acked
-    ? > drop 0 {
-        : ( Vec u ) rest ( vec_new [u] )
-        : ~ i j drop
-        ~ < j have {
-            ( vec_push [u] rest ?? ( vec_get [u] . c sndbuf j ) { T x → x F → # u 0 } )
-            = j + j 1
-        }
-        ( vec_free [u] . c sndbuf )
-        = . c sndbuf rest
-    } {}
+    ( bytes_drop_front . c sndbuf drop )
     = . c snd_una ack
     ? && . c fin_sent ( seq_geq ack . c snd_nxt ) { = . c fin_acked T } {}
     // RTT sample (Karn: only when this ACK covers the timed segment

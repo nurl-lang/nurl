@@ -28,7 +28,7 @@ $ `../src/oauth.nu`
     ( args_opt ap `token-file` 102 `PATH` `read the token from a file instead` )
     ( args_opt ap `scope` 111 `SCOPE` `also require this scope` )
     ( args_opt ap `algs` 108 `LIST` `restrict the accepted algorithms` )
-    ? ( args_parse_argv ap ) {} { ( args_free ap ) ^ 2 }
+    ? ( args_parse_argv ap ) {} { ^ 2 }
 
     : String issuer ( args_value_or ap `issuer` `` )
     : String audience ( args_value_or ap `audience` `` )
@@ -36,14 +36,11 @@ $ `../src/oauth.nu`
     : String token_file ( args_value_or ap `token-file` `` )
     : String want_scope ( args_value_or ap `scope` `` )
     : String algs ( args_value_or ap `algs` `` )
-    ( args_free ap )
 
     ? > ( string_len token_file ) 0 {
         ?? ( read_file ( string_data token_file ) ) {
             T contents → {
-                ( string_free token )
                 = token ( string_trim contents )
-                ( string_free contents )
             }
             F _ → { ( nurl_eprintln `verify: cannot read the token file` ) }
         }
@@ -60,7 +57,7 @@ $ `../src/oauth.nu`
             ( nurl_eprintln ( oauth_err_name e ) )
         }
         T p → {
-            : *OidcPolicy pol ( oidc_policy_new ( string_data issuer ) ( string_data audience ) )
+            : OidcPolicy pol ( oidc_policy_new ( string_data issuer ) ( string_data audience ) )
             ? > ( string_len algs ) 0 { ( oidc_policy_set_algs pol ( string_data algs ) ) } {}
             ?? ( oidc_verify_token p pol ( string_data token ) ) {
                 F e → {
@@ -69,7 +66,6 @@ $ `../src/oauth.nu`
                     ( string_push_str m `): ` )
                     ( string_push_str m ( oidc_provider_last_error p ) )
                     ( nurl_println ( string_data m ) )
-                    ( string_free m )
                 }
                 T id → {
                     : ~ b allowed T
@@ -81,25 +77,17 @@ $ `../src/oauth.nu`
                         : String m ( string_from `VALID — ` )
                         ( string_push_str m ( string_data desc ) )
                         ( nurl_println ( string_data m ) )
-                        ( string_free m ) ( string_free desc )
                         : String pretty ( json_pretty . id claims )
                         ( nurl_println ( string_data pretty ) )
-                        ( string_free pretty )
                         = rc 0
                     } {
                         : String m ( string_from `VALID, but without the scope ` )
                         ( string_push_str m ( string_data want_scope ) )
                         ( nurl_println ( string_data m ) )
-                        ( string_free m )
                     }
-                    ( oidc_identity_free id )
                 }
             }
-            ( oidc_policy_free pol )
-            ( oidc_provider_free p )
         }
     }
-    ( string_free issuer ) ( string_free audience ) ( string_free token )
-    ( string_free token_file ) ( string_free want_scope ) ( string_free algs )
     ^ rc
 }

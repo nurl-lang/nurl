@@ -536,7 +536,7 @@ $ `model.nu`
         }
     } {}
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     // Fiber-per-connection: connections are cheap, and the one thing
     // that must not overlap — the forward — has its own lock (__em_run).
     // Hardening: bounded bodies (16 MB of JSON text is ~2000 full-length

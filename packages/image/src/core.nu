@@ -44,7 +44,9 @@ $ `stdlib/std/bytes.nu`
     ^ @ Image { w h ch data }
 }
 
-@ image_free sink Image im → v { ( vec_free [u] . im data ) }
+// Let go of `im` now rather than at the end of its owner's scope. An Image
+// is a plain value (its pixels are a Vec): nothing needs releasing by hand.
+@ image_free sink Image im → v {}
 
 @ image_width Image im → i { ^ . im width }
 
@@ -112,16 +114,16 @@ $ `stdlib/std/bytes.nu`
     ^ q
 }
 
-// Read a decimal integer starting at `p` (after skipping ws); the position
-// after the number is written into `posp[0]`.
-@ __ppm_int ( Vec u ) buf i n i p * u posp → i {
-    : ~ i q ( __ppm_skip buf n p )
+// Read a decimal integer starting at `pos` (after skipping ws); `pos` is
+// left just after the number.
+@ __ppm_int ( Vec u ) buf i n inout i pos → i {
+    : ~ i q ( __ppm_skip buf n pos )
     : ~ i val 0
     ~ & < q n & >= ( _byte buf q ) 48 <= ( _byte buf q ) 57 {
         = val + * val 10 - ( _byte buf q ) 48
         = q + q 1
     }
-    ( nurl_poke posp 0 q )
+    = pos q
     ^ val
 }
 
@@ -135,13 +137,12 @@ $ `stdlib/std/bytes.nu`
     ? == kind 54 { = ch 3 } {
         ? == kind 53 { = ch 1 } { ( _img_set_err `PPM: only binary P5/P6 supported` ) ^ @ ?Image { F } }
     }
-    : *u pc ( nurl_alloc 8 )
-    : i w ( __ppm_int buf n 2 pc )
-    : i h ( __ppm_int buf n ( nurl_peek pc 0 ) pc )
-    : i mx ( __ppm_int buf n ( nurl_peek pc 0 ) pc )
+    : ~ i pos 2
+    : i w ( __ppm_int buf n pos )
+    : i h ( __ppm_int buf n pos )
+    : i mx ( __ppm_int buf n pos )
     // pixel data starts one whitespace byte after maxval
-    : i start + ( nurl_peek pc 0 ) 1
-    ( nurl_free # s pc )
+    : i start + pos 1
     ? || <= w 0 || <= h 0 != mx 255 { ( _img_set_err `PPM: malformed header (needs maxval 255)` ) ^ @ ?Image { F } } {}
     ? || || > w 1000000 > h 1000000 > * w h 268435456 { ( _img_set_err `PPM: dimensions too large` ) ^ @ ?Image { F } } {}
     : i need * * w h ch
@@ -167,7 +168,6 @@ $ `stdlib/std/bytes.nu`
     ( string_push_int hdr h )
     ( string_push_str hdr `\n255\n` )
     ( bytes_extend_str out ( string_data hdr ) )
-    ( string_free hdr )
     : ~ i y 0
     ~ < y h {
         : ~ i x 0

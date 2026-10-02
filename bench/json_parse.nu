@@ -9,7 +9,7 @@ $ `stdlib/ext/json.nu`
     ~ > iters 0 {
         : !Json JsonError r ( json_parse src )
         ?? r {
-            T j → { = ok + ok 1 ( json_free j ) }
+            T j → { = ok + ok 1 }
             F e → {}
         }
         = iters - iters 1

@@ -28,7 +28,6 @@ $ `src/census.nu`
     ( pb `caps rides the HELLO wire:      ` ? == . h caps ( cap_gpu ) T F )
     ( pb `id/role/want unchanged by caps: ` & & == . h id 42 == . h role ( role_worker ) == . h want 1 )
     ( pb `pubkey unchanged by caps:       ` ( bytes_eq . h pubkey pk ) )
-    ( hello_free h ) ( vec_free [u] msg )
 
     // ── legacy frame (no trailing caps byte) decodes as caps=0 ────
     // Build a caps frame and TRUNCATE the tail — byte-identical to what a
@@ -38,11 +37,10 @@ $ `src/census.nu`
     : Hello hl ( hello_decode trunc )
     ( pb `legacy HELLO (no tail) → caps 0:` ? == . hl caps 0 T F )
     ( pb `legacy fields still decode:     ` & == . hl id 43 ( bytes_eq . hl pubkey pk ) )
-    ( hello_free hl ) ( vec_free [u] legacy ) ( vec_free [u] trunc )
 
     // ── roster: caps recorded, counted by mask ────────────────────
     : Ring ring ( ring_new )
-    : *Roster r ( roster_new )
+    : Roster r ( roster_new )
     : ( Vec u ) a ( mkpk 10 )
     : ( Vec u ) b ( mkpk 60 )
     : ( Vec u ) c ( mkpk 110 )
@@ -54,8 +52,5 @@ $ `src/census.nu`
     // re-adding an existing member is a no-op (idempotent HELLO)
     ( roster_add r ring a 1 8 ( cap_gpu ) 1000 )
     ( pb `re-heard HELLO is idempotent:   ` & == ( roster_count r ) 3 == ( roster_count_caps r ( cap_gpu ) ) 2 )
-    ( roster_free r ) ( ring_free ring )
-    ( vec_free [u] a ) ( vec_free [u] b ) ( vec_free [u] c )
-    ( vec_free [u] pk )
     ^ 0
 }

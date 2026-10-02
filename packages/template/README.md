@@ -24,24 +24,24 @@ $ `deps/template/src/template.nu`
 
 : Json ctx ...                            // e.g. ( json_parse src ) or built up
 ?? ( tpl_render `Hi {{ name }}!` ctx ) {
-    T html → { ... ( string_free html ) }
-    F err  → { ... ( string_free err ) }   // "template error at line L, col C: …"
+    T html → { ... }
+    F err  → { ... }   // "template error at line L, col C: …"
 }
 ```
 
 | Call | |
 | --- | --- |
 | `( tpl_render src ctx )` → `!String String` | one-shot render |
-| `( tset_new )` → `*TplSet` | named-template set (include targets) |
+| `( tset_new )` → `TplSet` | named-template set (include targets); a handle, released by its last owner |
 | `( tset_add t name src )` | register / replace (copies both) |
 | `( tset_has t name )` → `b` | |
 | `( tset_render t name ctx )` → `!String String` | render a set member |
 | `( tpl_render_with t src ctx )` → `!String String` | one-shot, includes resolve in `t` |
-| `( tset_free t )` | |
+| `( tset_free t )` | optional early release |
 | `( tset_load_dir t dir ext )` → `i` | `src/loader.nu`: load `dir/*<ext>`, named by basename; -1 when the glob fails |
 
 The context is any `Json` value; top-level lookups expect a `JObj`. The
-result and error payloads are owned Strings — free both.
+result and error payloads are owned Strings, dropped with their bindings.
 
 ## Template syntax
 
@@ -93,11 +93,14 @@ echo '{{ msg | upper }}' | template -c ctx.json
 
 ## Memory model
 
-`tpl_render`'s Ok/Err payloads are owned Strings — free them. The
-context `Json` stays caller-owned (the engine only borrows into it).
-`tset_add` copies its arguments; `tset_free` releases the set. The
-engine allocates one renderer per call and frees it before returning —
-the test suite runs clean under ASan/LSan.
+Nothing is freed by hand. `tpl_render`'s Ok/Err payloads are owned
+Strings, dropped with their bindings. The context `Json` stays
+caller-owned (the engine renders against its own copy). A `TplSet` is a
+handle: every copy (a struct field, a `Vec` element, a closure capture) is
+the same set, and its last owner releases it — `tset_free` is an optional
+early release. `tset_add` copies its arguments. The engine keeps one
+renderer per call behind a handle of its own, released when the call
+returns — the test suite runs clean under ASan/LSan.
 
 ## Tests
 

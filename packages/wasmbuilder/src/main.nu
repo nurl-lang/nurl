@@ -33,19 +33,17 @@ $ `build.nu`
 
     : String home ( wb_nurl_home )
     ( nurl_print `  NURL_HOME:    ` ) ( nurl_print ( string_data home ) ) ( nurl_print `\n` )
-    ( string_free home )
 
     : !String String nr ( wb_find_nurlc )
     ?? nr {
-        T p → { ( nurl_print `  nurlc:        ` ) ( nurl_print ( string_data p ) ) ( nurl_print `\n` ) ( string_free p ) }
-        F e → { ( nurl_print `  nurlc:        MISSING — ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) }
+        T p → { ( nurl_print `  nurlc:        ` ) ( nurl_print ( string_data p ) ) ( nurl_print `\n` ) }
+        F e → { ( nurl_print `  nurlc:        MISSING — ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) }
     }
 
     : String sdir ( wb_stdlib_dir )
     : String rc ( path_join ( string_data sdir ) `runtime.c` )
     ( nurl_print `  stdlib C src: ` ) ( nurl_print ( string_data rc ) )
     ( nurl_print ? ( file_exists ( string_data rc ) ) ` (found)\n` ` (MISSING — set $NURL_STDLIB)\n` )
-    ( string_free sdir ) ( string_free rc )
 
     // Resolve the compiler WITHOUT downloading, so --doctor stays read-only.
     : !WbCompiler String cr ( wb_find_compiler F )
@@ -53,18 +51,15 @@ $ `build.nu`
         T c → {
             ( nurl_print `  wasm cc:      ` ) ( nurl_print ( string_data . c cmd ) )
             ( nurl_print ? . c is_zig ` (zig cc)\n` ` (wasi clang)\n` )
-            ( wb_compiler_free c )
         }
         F e → {
             ( nurl_print `  wasm cc:      not found — the first build will download zig 0.16.0 into $NURL_HOME/zig\n                (` )
             ( nurl_print ( string_data e ) ) ( nurl_print `)\n` )
-            ( string_free e )
         }
     }
 
     : String cdir ( wb_cache_dir )
     ( nurl_print `  object cache: ` ) ( nurl_print ( string_data cdir ) ) ( nurl_print `\n` )
-    ( string_free cdir )
 
     ( nurl_print `\nRun a wasm module with the pure-NURL runtime: nurlpkg install nwasm && nwasm run app.wasm\n` )
     ^ 0
@@ -91,43 +86,37 @@ $ `build.nu`
 
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( string_free u ) ( args_free p )
         ^ 0
     } {}
     ? ( args_present p `version` ) {
         ( nurl_print ( __wbc_version ) ) ( nurl_print `\n` )
-        ( args_free p )
         ^ 0
     } {}
     ? ( args_present p `doctor` ) {
-        ( args_free p )
         ^ ( __wbc_doctor )
     } {}
 
     ? == ( args_positional_count p ) 1 {} {
         ( nurl_eprintln `usage: wasmbuilder <file.nu> [-o out.wasm] [--opt LEVEL] [--emit-ll] [--asyncify] [--doctor]` )
-        ( args_free p )
         ^ 2
     }
     : ( Vec String ) pos ( args_positionals p )
     : ~ String input ( string_new )
     : ?String i0 ( vec_get [String] pos 0 )
-    ?? i0 { T ip → { ( string_free input ) = input ( string_from ( string_data ip ) ) } F → {} }
+    ?? i0 { T ip → { = input ( string_from ( string_data ip ) ) } F → {} }
 
     // default output: <input minus .nu>.wasm
     : ~ String out ( args_value_or p `output` `` )
     ? == ( string_len out ) 0 {
-        ( string_free out )
         = out ( string_from ( string_data input ) )
         ? ( string_ends_with out `.nu` ) {
             : String t ( string_substr out 0 - ( string_len out ) 3 )
-            ( string_free out ) = out t
+            = out t
         } {}
         ( string_push_str out `.wasm` )
     } {}
@@ -135,7 +124,6 @@ $ `build.nu`
     : String olevel_v ( args_value_or p `opt` `2` )
     : ~ String olevel ( string_from `-O` )
     ( string_push_str olevel ( string_data olevel_v ) )
-    ( string_free olevel_v )
 
     : ~ WbOpts opts ( wb_opts_default )
     = . opts opt ( string_data olevel )
@@ -146,11 +134,11 @@ $ `build.nu`
     ? ( args_present p `no-gc-sections` ) { = . opts no_gc_sections T } {}
     ? ( args_present p `debug` ) { = . opts debug T } {}
     : ~ String objv ( string_new )
-    ?? ( args_value p `obj` ) { T v → { ( string_free objv ) = objv v = . opts extra_obj ( string_data objv ) } F _ → {} }
+    ?? ( args_value p `obj` ) { T v → { = objv v = . opts extra_obj ( string_data objv ) } F _ → {} }
     : ~ String cflv ( string_new )
-    ?? ( args_value p `cflags` ) { T v → { ( string_free cflv ) = cflv v = . opts extra_cflags ( string_data cflv ) } F _ → {} }
+    ?? ( args_value p `cflags` ) { T v → { = cflv v = . opts extra_cflags ( string_data cflv ) } F _ → {} }
     : ~ String asiv ( string_new )
-    ?? ( args_value p `asyncify-imports` ) { T v → { ( string_free asiv ) = asiv v = . opts asyncify_imports ( string_data asiv ) = . opts asyncify T } F _ → {} }
+    ?? ( args_value p `asyncify-imports` ) { T v → { = asiv v = . opts asyncify_imports ( string_data asiv ) = . opts asyncify T } F _ → {} }
     ? ( args_present p `quiet` ) { = . opts quiet T } {}
 
     : !v String r ( wb_build_file ( string_data input ) ( string_data out ) opts )
@@ -166,15 +154,12 @@ $ `build.nu`
                 ( string_push_int done sz )
                 ( string_push_str done ` bytes)` )
                 ( nurl_eprintln ( string_data done ) )
-                ( string_free done )
             }
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             = rc 1
         }
     }
-    ( string_free olevel ) ( string_free input ) ( string_free out ) ( args_free p )
     ^ rc
 }

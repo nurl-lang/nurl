@@ -23,7 +23,7 @@
 // evaluator when no kit opens.
 //
 //   ( arima_gpu_available )                         → b
-//   ( arima_fit_many_gpu series spec method )       → ( Vec *ArimaModel )
+//   ( arima_fit_many_gpu series spec method )       → ( Vec ArimaModel )
 //   ( arima_eval_gpu kit items ctxs out )           the evaluator itself
 
 $ `stdlib/core/io.nu`
@@ -164,15 +164,14 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
 }
 
 @ arima_gpu_available → b {
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     : b ok ( gk_ok kit )
-    ( gk_close kit )
     ^ ok
 }
 
 // One round on the device: the ML items in one launch, the CSS items in
 // another, each item's number folded on the host from what came back.
-@ arima_eval_gpu * GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
+@ arima_eval_gpu GpuKit kit ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v {
     : i t_start ( now_ms )
     = g_ag_rounds + g_ag_rounds 1
     // the series, each context's once
@@ -319,7 +318,6 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
         : i t_r0 ( now_ms )
         : b ran ( gk_run kit ( _ag_kernel_src ) `arima_ml` ( gk_grid nml 64 ) 64 call )
         = g_ag_t_run + g_ag_t_run - ( now_ms ) t_r0
-        ( vec_free [GkArg] call )
         : *f pssq ( vec_data [f] ssq )
         : *f pf ( vec_data [f] fout )
         : *i pmeta ( vec_data [i] meta )
@@ -340,7 +338,6 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
             = . pout k2 val
             = q + q 1
         }
-        ( vec_free [f] scratch ) ( vec_free [f] ssq ) ( vec_free [f] fout ) ( vec_free [i] okv )
         = g_ag_t_post + g_ag_t_post - ( now_ms ) + t_r0 - ( now_ms ) t_r0
     } {}
     : i ncss ( vec_len [i] css_idx )
@@ -356,7 +353,6 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
         ( vec_push [GkArg] call ( gk_out_f ssq ) )
         ( vec_push [GkArg] call ( gk_i64 ncss ) )
         : b ran ( gk_run kit ( _ag_kernel_src ) `arima_css` ( gk_grid ncss 64 ) 64 call )
-        ( vec_free [GkArg] call )
         : *f pssq ( vec_data [f] ssq )
         : *i pmeta ( vec_data [i] cmeta )
         : ~ i q 0
@@ -374,23 +370,17 @@ extern "C" __global__ void arima_css(const long long* meta, const double* series
             = . pout k2 val
             = q + q 1
         }
-        ( vec_free [f] scratch ) ( vec_free [f] ssq )
     } {}
-    ( vec_free [f] series ) ( vec_free [i] woff )
-    ( vec_free [i] ml_idx ) ( vec_free [i] meta ) ( vec_free [f] polys ) ( vec_free [f] p0s ) ( vec_free [f] mus )
-    ( vec_free [i] css_idx ) ( vec_free [i] cmeta ) ( vec_free [f] cpolys ) ( vec_free [f] cmus )
 }
 
 // K series fitted together with the device answering every round; the
 // threaded CPU evaluator when no device (nor the CPU backend) opens.
-@ arima_fit_many_gpu ( Vec ( Vec f ) ) series ArimaSpec sp i method → ( Vec * ArimaModel ) {
-    : *GpuKit kit ( gk_open_best )
+@ arima_fit_many_gpu ( Vec ( Vec f ) ) series ArimaSpec sp i method → ( Vec ArimaModel ) {
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} {
-        ( gk_close kit )
         ^ ( arima_fit_many series sp method )
     }
     ( gk_bind_thread kit )
-    : ( Vec * ArimaModel ) out ( arima_fit_many_with series sp method \ ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) vals → v { ( arima_eval_gpu kit items ctxs vals ) } )
-    ( gk_close kit )
+    : ( Vec ArimaModel ) out ( arima_fit_many_with series sp method \ ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) vals → v { ( arima_eval_gpu kit items ctxs vals ) } )
     ^ out
 }

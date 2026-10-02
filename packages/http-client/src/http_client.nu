@@ -14,15 +14,11 @@
 //     $ `deps/http-client/src/http_client.nu`
 //
 //     @ main → i {
-//         : *HttpClient c ( http_client_new )
+//         : HttpClient c ( http_client_new )
 //         ?? ( http_client_get c `https://example.org/` ) {
-//             T r → {
-//                 ( nurl_print_int . r status )
-//                 ( http_response_free r )
-//             }
+//             T r → { ( nurl_print_int . r status ) }
 //             F e → { ( nurl_eprintln ( http_client_err_name e ) ) }
 //         }
-//         ( http_client_free c )
 //         ^ 0
 //     }
 //

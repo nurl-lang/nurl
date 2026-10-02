@@ -265,9 +265,11 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Task record + store ─────────────────────────────────────────────
 //
-// Tasks live on the heap and are addressed by an opaque `s` handle so
-// that field writes (`= . t status …`) hit the real record rather than
-// a Vec-element copy. The store keeps the handles.
+// Tasks live on the heap, each in its own rcbox, and are addressed by an
+// opaque `s` handle (the address of the McpTask inside the box) so that
+// field writes (`= . t status …`) hit the real record rather than a
+// Vec-element copy. The store's list holds the boxes: a task goes when
+// it leaves the list or the store goes.
 
 : McpTask {
     String id  // 32 hex chars of CSPRNG output — unguessable (spec: security)
@@ -288,20 +290,18 @@ $ `stdlib/core/rcbox.nu`
     i cancel_req  // 1 once tasks/cancel was seen (cooperative signal)
 }
 
-: McpTaskStoreImpl { ( Vec s ) tasks }
+// One task in an rcbox (stdlib/core/rcbox.nu), as the store's list keeps
+// it; its last owner drops the McpTask and every String / Json in it.
+: McpTaskBox { s ctl }
 
-// The tasks are blocks the store owns (a task is handed out as its block's
-// address); the store's last owner releases them with it.
-% Drop McpTaskStoreImpl {
-    @ drop McpTaskStoreImpl x → v {
-        : i n ( vec_len [s] . x tasks )
-        : ~ i k 0
-        ~ < k n {
-            ?? ( vec_get [s] . x tasks k ) { T tp → { ( __mcp_task_free tp ) } F → {} }
-            = k + k 1
-        }
-    }
+@ McpTaskBox_share McpTaskBox h → McpTaskBox { ^ @ McpTaskBox { # s ( rcbox_share # i . h ctl ) } }
+
+@ McpTaskBox_drop sink McpTaskBox h → v {
+    ( mem_forget h )
+    ( rcbox_release [McpTask] # i . h ctl )
 }
+
+: McpTaskStoreImpl { ( Vec McpTaskBox ) tasks }
 
 // A handle on the store in an rcbox: every copy — the caller's, the one a
 // server keeps (mcp_server_set_task_store) — is the same task list, and
@@ -316,10 +316,10 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The store's task list (its own, lent).
-@ __mts_tasks McpTaskStore h → ( Vec s ) { ^ . ( rcbox_ptr [McpTaskStoreImpl] # i . h ctl ) tasks }
+@ __mts_tasks McpTaskStore h → ( Vec McpTaskBox ) { ^ . ( rcbox_ptr [McpTaskStoreImpl] # i . h ctl ) tasks }
 
 @ mcp_task_store_new → McpTaskStore {
-    ^ @ McpTaskStore { # s ( rcbox_new [McpTaskStoreImpl] @ McpTaskStoreImpl { ( vec_new [s] ) } ) }
+    ^ @ McpTaskStore { # s ( rcbox_new [McpTaskStoreImpl] @ McpTaskStoreImpl { ( vec_new [McpTaskBox] ) } ) }
 }
 
 // Hard cap on retained tasks. Every task holds its arguments and its
@@ -331,31 +331,21 @@ $ `stdlib/core/rcbox.nu`
 @ mcp_task_store_max → i { ^ 2048 }
 
 @ mcp_task_store_count McpTaskStore store → i {
-    ^ ( vec_len [s] ( __mts_tasks store ) )
+    ^ ( vec_len [McpTaskBox] ( __mts_tasks store ) )
 }
 
 @ __mcp_task_at McpTaskStore store i k → s {
-    ^ ?? ( vec_get [s] ( __mts_tasks store ) k ) { T x → x F → # s 0 }
+    ^ ?? ( vec_get [McpTaskBox] ( __mts_tasks store ) k ) { T b → # s ( rcbox_ptr [McpTask] # i . b ctl ) F → # s 0 }
 }
 
-@ __mcp_task_free sink s tp → v {
-    ? == # i tp 0 { ^ v } {}
-    : *McpTask t # *McpTask tp
-    ( string_free . t id )
-    ( string_free . t status_message )
-    ( string_free . t method )
-    ( string_free . t tool )
-    ( json_free . t args )
-    ( json_free . t result )
-    ( json_free . t error )
-    ( json_free . t input_requests )
-    ( json_free . t input_responses )
-    ( nurl_free tp )
+// Drop the k-th task from the list (and with it the task).
+@ __mcp_task_remove McpTaskStore store i k → v {
+    ?? ( vec_remove [McpTaskBox] ( __mts_tasks store ) k ) { T _gone → {} F _ → {} }
 }
 
 // Index of the eviction victim: the oldest terminal task, else index 0.
 @ __mcp_task_victim McpTaskStore store → i {
-    : i n ( vec_len [s] ( __mts_tasks store ) )
+    : i n ( vec_len [McpTaskBox] ( __mts_tasks store ) )
     : ~ i k 0
     ~ < k n {
         : s pp ( __mcp_task_at store k )
@@ -370,34 +360,20 @@ $ `stdlib/core/rcbox.nu`
 
 // CONSUMES `args`. `ttl_ms` < 0 means unlimited; `poll_ms` <= 0 omits
 // the polling hint. Returns an opaque task handle (never 0).
-@ mcp_task_create McpTaskStore store s method s tool Json args i ttl_ms i poll_ms → s {
-    ? >= ( vec_len [s] ( __mts_tasks store ) ) ( mcp_task_store_max ) {
-        : i victim ( __mcp_task_victim store )
-        ( __mcp_task_free ( __mcp_task_at store victim ) )
-        ( vec_remove [s] ( __mts_tasks store ) victim )
+@ mcp_task_create McpTaskStore store s method s tool sink Json args i ttl_ms i poll_ms → s {
+    ? >= ( vec_len [McpTaskBox] ( __mts_tasks store ) ) ( mcp_task_store_max ) {
+        ( __mcp_task_remove store ( __mcp_task_victim store ) )
     } {}
     : i now ( now_ms )
-    : *McpTask t # *McpTask ( nurl_alloc Z McpTask )
     // 16 CSPRNG bytes → 32 hex chars. The spec treats a task id as a
     // bearer token for server-side state, so it must not be guessable.
-    = . t id ( rand_hex_str 16 )
-    = . t status mcp_task_working
-    = . t status_message ( string_new )
-    = . t created_ms now
-    = . t updated_ms now
-    = . t ttl_ms ttl_ms
-    = . t poll_ms poll_ms
-    = . t method ( string_from method )
-    = . t tool ( string_from tool )
-    = . t args args
-    = . t result ( json_null )
-    = . t error ( json_null )
-    = . t input_requests ( json_obj_new )
-    = . t input_responses ( json_obj_new )
-    = . t link 0
-    = . t cancel_req 0
-    : s tp # s t
-    ( vec_push [s] ( __mts_tasks store ) tp )
+    : McpTaskBox b @ McpTaskBox { # s ( rcbox_new [McpTask] @ McpTask {
+            ( rand_hex_str 16 ) mcp_task_working ( string_new ) now now ttl_ms poll_ms
+            ( string_from method ) ( string_from tool ) args
+            ( json_null ) ( json_null ) ( json_obj_new ) ( json_obj_new ) 0 0
+        } ) }
+    : s tp # s ( rcbox_ptr [McpTask] # i . b ctl )
+    ( vec_push [McpTaskBox] ( __mts_tasks store ) b )
     ^ tp
 }
 
@@ -405,13 +381,13 @@ $ `stdlib/core/rcbox.nu`
 // changes as tasks are swept — this is for a server sweeping its own
 // live tasks (advancing jobs, pushing notifications), not for paging.
 @ mcp_task_nth McpTaskStore store i k → s {
-    ? | < k 0 >= k ( vec_len [s] ( __mts_tasks store ) ) { ^ # s 0 } {}
+    ? | < k 0 >= k ( vec_len [McpTaskBox] ( __mts_tasks store ) ) { ^ # s 0 } {}
     ^ ( __mcp_task_at store k )
 }
 
 @ mcp_task_find McpTaskStore store s id → s {
     ? == ( nurl_str_len id ) 0 { ^ # s 0 } {}
-    : i n ( vec_len [s] ( __mts_tasks store ) )
+    : i n ( vec_len [McpTaskBox] ( __mts_tasks store ) )
     : ~ s found # s 0
     : ~ i k 0
     ~ & == # i found 0 < k n {
@@ -439,11 +415,10 @@ $ `stdlib/core/rcbox.nu`
 @ mcp_task_store_sweep McpTaskStore store i now → i {
     : ~ i dropped 0
     : ~ i k 0
-    ~ < k ( vec_len [s] ( __mts_tasks store ) ) {
+    ~ < k ( vec_len [McpTaskBox] ( __mts_tasks store ) ) {
         : s pp ( __mcp_task_at store k )
         ? & != # i pp 0 ( __mcp_task_expired pp now ) {
-            ( __mcp_task_free pp )
-            ( vec_remove [s] ( __mts_tasks store ) k )
+            ( __mcp_task_remove store k )
             = dropped + dropped 1
         } {
             = k + k 1
@@ -488,9 +463,18 @@ $ `stdlib/core/rcbox.nu`
 
 @ __mcp_task_touch * McpTask t → v { = . t updated_ms ( now_ms ) }
 
+// A field the record replaces is taken out of it first and dropped here:
+// a store through the task pointer does not release what it overwrites.
 @ __mcp_task_set_message * McpTask t s msg → v {
-    ( string_free . t status_message )
+    : String old . t status_message
+    ( mem_take old )
     = . t status_message ( string_from msg )
+}
+
+@ __mcp_task_set_input_requests * McpTask t sink Json requests → v {
+    : Json old . t input_requests
+    ( mem_take old )
+    = . t input_requests requests
 }
 
 // Replace the status message without touching the status — a progress
@@ -511,25 +495,25 @@ $ `stdlib/core/rcbox.nu`
 // CONSUMES `result` — the CallToolResult the original request would
 // have returned. A tool-level failure (isError: true) is still a
 // COMPLETED task: `failed` is reserved for JSON-RPC protocol faults.
-@ mcp_task_complete s tp Json result → v {
+@ mcp_task_complete s tp sink Json result → v {
     : *McpTask t # *McpTask tp
     = . t status mcp_task_completed
-    ( json_free . t result )
+    : Json old . t result
+    ( mem_take old )
     = . t result result
     // A completed task has nothing outstanding.
-    ( json_free . t input_requests )
-    = . t input_requests ( json_obj_new )
+    ( __mcp_task_set_input_requests t ( json_obj_new ) )
     ( __mcp_task_touch t )
 }
 
 // CONSUMES `error` — a JSON-RPC error object ({code, message[, data]}).
-@ mcp_task_fail_error s tp Json error → v {
+@ mcp_task_fail_error s tp sink Json error → v {
     : *McpTask t # *McpTask tp
     = . t status mcp_task_failed
-    ( json_free . t error )
+    : Json old . t error
+    ( mem_take old )
     = . t error error
-    ( json_free . t input_requests )
-    = . t input_requests ( json_obj_new )
+    ( __mcp_task_set_input_requests t ( json_obj_new ) )
     ( __mcp_task_touch t )
 }
 
@@ -549,8 +533,7 @@ $ `stdlib/core/rcbox.nu`
     : *McpTask t # *McpTask tp
     = . t status mcp_task_cancelled
     = . t cancel_req 1
-    ( json_free . t input_requests )
-    = . t input_requests ( json_obj_new )
+    ( __mcp_task_set_input_requests t ( json_obj_new ) )
     ( __mcp_task_touch t )
 }
 
@@ -558,11 +541,10 @@ $ `stdlib/core/rcbox.nu`
 // keyed by identifiers unique over the task's lifetime (the spec
 // forbids reusing a key once its response has been delivered). Moves
 // the task to input_required.
-@ mcp_task_request_input s tp Json requests → v {
+@ mcp_task_request_input s tp sink Json requests → v {
     : *McpTask t # *McpTask tp
     = . t status mcp_task_input_required
-    ( json_free . t input_requests )
-    = . t input_requests requests
+    ( __mcp_task_set_input_requests t requests )
     ( __mcp_task_touch t )
 }
 
@@ -570,7 +552,7 @@ $ `stdlib/core/rcbox.nu`
 // `responses`. Keys that are not currently outstanding are IGNORED, per
 // the spec — that covers keys never issued, already-answered keys and
 // superseded ones, and it is what makes duplicate client updates safe.
-@ __mcp_task_put_input_responses s tp Json responses → i {
+@ __mcp_task_put_input_responses s tp sink Json responses → i {
     : *McpTask t # *McpTask tp
     : ~ i taken 0
     : ( Vec String ) keys ( json_obj_keys responses )
@@ -596,8 +578,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-    ( json_free responses )
     ( __mcp_task_touch t )
     ^ taken
 }
@@ -609,7 +589,6 @@ $ `stdlib/core/rcbox.nu`
     : *McpTask t # *McpTask tp
     : ( Vec String ) keys ( json_obj_keys . t input_responses )
     : i n ( vec_len [String] keys )
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ? == n 0 { ^ @ ?Json { F @ Json { JNull } } } {}
     : Json out . t input_responses
     ( mem_take out )  // the responses leave the task: the caller owns them
@@ -637,10 +616,8 @@ $ `stdlib/core/rcbox.nu`
     } {}
     : String c ( __mcp_task_iso . t created_ms )
     ( json_obj_set o `createdAt` ( json_str_lit ( string_data c ) ) )
-    ( string_free c )
     : String u ( __mcp_task_iso . t updated_ms )
     ( json_obj_set o `lastUpdatedAt` ( json_str_lit ( string_data u ) ) )
-    ( string_free u )
     ? < . t ttl_ms 0 {
         ( json_obj_set o `ttlMs` ( json_null ) )
     } {
@@ -711,7 +688,7 @@ $ `stdlib/core/rcbox.nu`
 
 // The `notifications/subscriptions/acknowledged` reply listing the task
 // ids the server agreed to push status for. CONSUMES `ids`.
-@ mcp_tasks_subscribed_notification ( Vec String ) ids → Json {
+@ mcp_tasks_subscribed_notification sink ( Vec String ) ids → Json {
     : Json arr ( json_arr_new )
     : i n ( vec_len [String] ids )
     : ~ i k 0
@@ -720,7 +697,6 @@ $ `stdlib/core/rcbox.nu`
         ?? e { T sv → ( json_arr_push arr ( json_str_lit ( string_data sv ) ) ) F → {} }
         = k + k 1
     }
-    ( vec_free_with [String] ids \ String x → v { ( string_free x ) } )
     : Json notifications ( json_obj_new )
     ( json_obj_set notifications `taskIds` arr )
     : Json params ( json_obj_new )
@@ -809,6 +785,5 @@ $ `stdlib/core/rcbox.nu`
             = out ( mcp_tasks_handle_cancel store id params )
         }
     }
-    ( json_free params )
     ^ @ ?Json { T out }
 }

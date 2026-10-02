@@ -144,16 +144,14 @@ $ `write.nu`
 @ __gg_print_owned String m → v {
     ( nurl_print ( string_data m ) )
     ( nurl_print `\n` )
-    ( string_free m )
 }
 
 @ __gg_err String e → i {
     ( nurl_eprintln ( string_data e ) )
-    ( string_free e )
     ^ 1
 }
 
-@ __gg_info * Gguf g → v {
+@ __gg_info Gguf g → v {
     : String m ( string_from `GGUF v` )
     ( string_push_int m ( gguf_version g ) )
     ( string_push_str m ` — ` )
@@ -178,11 +176,11 @@ $ `write.nu`
     ( __gg_print_owned m )
 }
 
-@ __gg_cmd_dump * Gguf g → v {
+@ __gg_cmd_dump Gguf g → v {
     ( __gg_info g )
     : ~ i k 0
     ~ < k ( gguf_n_kv g ) {
-        ?? ( vec_get [GgufKv] . g kvs k ) {
+        ?? ( vec_get [GgufKv] ( gguf_kvs g ) k ) {
             T a → { ( __gg_print_owned ( __gg_fmt_kv a ) ) }
             F → {}
         }
@@ -190,7 +188,7 @@ $ `write.nu`
     }
     = k 0
     ~ < k ( gguf_n_tensors g ) {
-        ?? ( vec_get [GgufTensor] . g tensors k ) {
+        ?? ( vec_get [GgufTensor] ( gguf_tensors g ) k ) {
             T t → { ( __gg_print_owned ( __gg_fmt_tensor t ) ) }
             F → {}
         }
@@ -201,12 +199,12 @@ $ `write.nu`
 // Deep structural verify: parse invariants already held at open; add
 // the pairwise overlap proof for every sizable tensor and count what
 // could not be sized.
-@ __gg_cmd_verify * Gguf g → i {
+@ __gg_cmd_verify Gguf g → i {
     : i nt ( gguf_n_tensors g )
     : ~ i unsized 0
     : ~ i k 0
     ~ < k nt {
-        ?? ( vec_get [GgufTensor] . g tensors k ) {
+        ?? ( vec_get [GgufTensor] ( gguf_tensors g ) k ) {
             T t → { ? < . t nbytes 0 { = unsized + unsized 1 } {} }
             F → {}
         }
@@ -216,12 +214,12 @@ $ `write.nu`
     : ~ i ova -1
     : ~ i ovb -1
     ~ < k nt {
-        ?? ( vec_get [GgufTensor] . g tensors k ) {
+        ?? ( vec_get [GgufTensor] ( gguf_tensors g ) k ) {
             T a → {
                 ? < . a nbytes 0 {} {
                     : ~ i j + k 1
                     ~ < j nt {
-                        ?? ( vec_get [GgufTensor] . g tensors j ) {
+                        ?? ( vec_get [GgufTensor] ( gguf_tensors g ) j ) {
                             T b2 → {
                                 ? < . b2 nbytes 0 {} {
                                     ? & < . a offset + . b2 offset . b2 nbytes < . b2 offset + . a offset . a nbytes {
@@ -242,12 +240,12 @@ $ `write.nu`
     }
     ? >= ova 0 {
         : ~ String m ( string_from `gguf: OVERLAP — tensors ` )
-        ?? ( vec_get [GgufTensor] . g tensors ova ) {
+        ?? ( vec_get [GgufTensor] ( gguf_tensors g ) ova ) {
             T a → { ( string_push_str m ( string_data . a name ) ) }
             F → {}
         }
         ( string_push_str m ` and ` )
-        ?? ( vec_get [GgufTensor] . g tensors ovb ) {
+        ?? ( vec_get [GgufTensor] ( gguf_tensors g ) ovb ) {
             T a → { ( string_push_str m ( string_data . a name ) ) }
             F → {}
         }
@@ -354,13 +352,12 @@ $ `write.nu`
 // Builds the reference sample: every KV type, and one tensor per
 // dequantisable ggml type with hand-picked edge values (f16 subnormal,
 // ±inf, NaN, negative quants).
-@ __st_build → *GgufW {
-    : ~ i waddr 0
+@ __st_build → GgufW {
+    : ~ GgufW w @ GgufW { # s 0 }
     ?? ( gw_new 32 ) {
-        T w2 → { = waddr # i w2 }
-        F e → { ( string_free e ) }
+        T w2 → { = w w2 }
+        F _ → {}
     }
-    : *GgufW w # *GgufW waddr
     ( gw_kv_str w `general.architecture` `selftest` )
     ( gw_kv_str w `general.name` `gguf reference sample` )
     ( gw_kv_u32 w `selftest.u32` 4000000000 )
@@ -376,54 +373,39 @@ $ `write.nu`
     ( vec_push [i] ai -7 )
     ( vec_push [i] ai 42 )
     ( gw_kv_arr_i32 w `selftest.arr_i32` ai )
-    ( vec_free [i] ai )
     : ( Vec f ) af ( vec_new [f] )
     ( vec_push [f] af 0.5 )
     ( vec_push [f] af -2.25 )
     ( gw_kv_arr_f32 w `selftest.arr_f32` af )
-    ( vec_free [f] af )
     : ( Vec String ) astr ( vec_new [String] )
     ( vec_push [String] astr ( string_from `alpha` ) )
     ( vec_push [String] astr ( string_from `beta` ) )
     ( vec_push [String] astr ( string_from `gamma` ) )
     ( gw_kv_arr_str w `selftest.arr_str` astr )
-    ( vec_free_with [String] astr \ String s → v { ( string_free s ) } )
 
     // t_f32: 8 exactly-representable values
     : ( Vec u ) bf32 ( __st_payload_f32 )
-    : !v String r1 ( gw_tensor w `t_f32` 0 2 4 2 1 1 bf32 )
-    ( vec_free [u] bf32 )
-    ?? r1 { T _ → {} F e → { ( string_free e ) } }
+    : !v String _r1 ( gw_tensor w `t_f32` 0 2 4 2 1 1 bf32 )
 
     // t_f16: 9 bit-exact edge cases incl. subnormals, ±inf, NaN, -0
     : ( Vec u ) bf16 ( __st_payload_f16 )
-    : !v String r2 ( gw_tensor w `t_f16` 1 1 9 1 1 1 bf16 )
-    ( vec_free [u] bf16 )
-    ?? r2 { T _ → {} F e → { ( string_free e ) } }
+    : !v String _r2 ( gw_tensor w `t_f16` 1 1 9 1 1 1 bf16 )
 
     // t_bf16: shift-up transport
     : ( Vec u ) bbf ( __st_payload_bf16 )
-    : !v String r3 ( gw_tensor w `t_bf16` 30 1 4 1 1 1 bbf )
-    ( vec_free [u] bbf )
-    ?? r3 { T _ → {} F e → { ( string_free e ) } }
+    : !v String _r3 ( gw_tensor w `t_bf16` 30 1 4 1 1 1 bbf )
 
     // t_q4_0: one block, d = 1.0, qs[j] = j | (15-j)<<4
     : ( Vec u ) bq4 ( __st_payload_q4_0 )
-    : !v String r4 ( gw_tensor w `t_q4_0` 2 1 32 1 1 1 bq4 )
-    ( vec_free [u] bq4 )
-    ?? r4 { T _ → {} F e → { ( string_free e ) } }
+    : !v String _r4 ( gw_tensor w `t_q4_0` 2 1 32 1 1 1 bq4 )
 
     // t_q4_1: d = 1.0, m = -8.0 — must decode identically to t_q4_0
     : ( Vec u ) bq41 ( __st_payload_q4_1 )
-    : !v String r5 ( gw_tensor w `t_q4_1` 3 1 32 1 1 1 bq41 )
-    ( vec_free [u] bq41 )
-    ?? r5 { T _ → {} F e → { ( string_free e ) } }
+    : !v String _r5 ( gw_tensor w `t_q4_1` 3 1 32 1 1 1 bq41 )
 
     // t_q8_0: d = 0.5, q = 0..30 then -56
     : ( Vec u ) bq8 ( __st_payload_q8_0 )
-    : !v String r6 ( gw_tensor w `t_q8_0` 8 1 32 1 1 1 bq8 )
-    ( vec_free [u] bq8 )
-    ?? r6 { T _ → {} F e → { ( string_free e ) } }
+    : !v String _r6 ( gw_tensor w `t_q8_0` 8 1 32 1 1 1 bq8 )
     ^ w
 }
 
@@ -461,13 +443,12 @@ $ `write.nu`
 // Success = T; the caller byte-compares the result against the
 // in-memory writer's file — the two paths must agree to the byte.
 @ __st_stream_twin s outpath → b {
-    : ~ i saddr 0
+    : ~ GgufS sw @ GgufS { # s 0 }
     ?? ( gws_create outpath 32 ) {
-        T sp → { = saddr # i sp }
-        F e → { ( string_free e ) }
+        T sp → { = sw sp }
+        F _ → {}
     }
-    ? == saddr 0 { ^ F } {}
-    : *GgufS sw # *GgufS saddr
+    ? == 0 # i . sw ctl { ^ F } {}
     ( gws_kv_str sw `general.architecture` `selftest` )
     ( gws_kv_str sw `general.name` `gguf reference sample` )
     ( gws_kv_u32 sw `selftest.u32` 4000000000 )
@@ -483,27 +464,24 @@ $ `write.nu`
     ( vec_push [i] ai -7 )
     ( vec_push [i] ai 42 )
     ( gws_kv_arr_i32 sw `selftest.arr_i32` ai )
-    ( vec_free [i] ai )
     : ( Vec f ) af ( vec_new [f] )
     ( vec_push [f] af 0.5 )
     ( vec_push [f] af -2.25 )
     ( gws_kv_arr_f32 sw `selftest.arr_f32` af )
-    ( vec_free [f] af )
     : ( Vec String ) astr ( vec_new [String] )
     ( vec_push [String] astr ( string_from `alpha` ) )
     ( vec_push [String] astr ( string_from `beta` ) )
     ( vec_push [String] astr ( string_from `gamma` ) )
     ( gws_kv_arr_str sw `selftest.arr_str` astr )
-    ( vec_free_with [String] astr \ String s2 → v { ( string_free s2 ) } )
 
     : ~ b ok T
-    ?? ( gws_tensor sw `t_f32` 0 2 4 2 1 1 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ?? ( gws_tensor sw `t_f16` 1 1 9 1 1 1 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ?? ( gws_tensor sw `t_bf16` 30 1 4 1 1 1 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ?? ( gws_tensor sw `t_q4_0` 2 1 32 1 1 1 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ?? ( gws_tensor sw `t_q4_1` 3 1 32 1 1 1 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ?? ( gws_tensor sw `t_q8_0` 8 1 32 1 1 1 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ?? ( gws_begin_data sw ) { T _ → {} F e → { ( string_free e ) = ok F } }
+    ?? ( gws_tensor sw `t_f32` 0 2 4 2 1 1 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_tensor sw `t_f16` 1 1 9 1 1 1 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_tensor sw `t_bf16` 30 1 4 1 1 1 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_tensor sw `t_q4_0` 2 1 32 1 1 1 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_tensor sw `t_q4_1` 3 1 32 1 1 1 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_tensor sw `t_q8_0` 8 1 32 1 1 1 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_begin_data sw ) { T _ → {} F _ → { = ok F } }
 
     // t_f32 arrives in ragged chunks — 13 bytes, then the rest — to
     // prove mid-tensor chunking reassembles exactly.
@@ -519,28 +497,19 @@ $ `write.nu`
         ?? ( vec_get [u] p1 k ) { T x → { ( vec_push [u] c2 x ) } F → {} }
         = k + k 1
     }
-    ?? ( gws_data sw c1 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ?? ( gws_data sw c2 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ( vec_free [u] p1 )
-    ( vec_free [u] c1 )
-    ( vec_free [u] c2 )
+    ?? ( gws_data sw c1 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_data sw c2 ) { T _ → {} F _ → { = ok F } }
     : ( Vec u ) p2 ( __st_payload_f16 )
-    ?? ( gws_data sw p2 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ( vec_free [u] p2 )
+    ?? ( gws_data sw p2 ) { T _ → {} F _ → { = ok F } }
     : ( Vec u ) p3 ( __st_payload_bf16 )
-    ?? ( gws_data sw p3 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ( vec_free [u] p3 )
+    ?? ( gws_data sw p3 ) { T _ → {} F _ → { = ok F } }
     : ( Vec u ) p4 ( __st_payload_q4_0 )
-    ?? ( gws_data sw p4 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ( vec_free [u] p4 )
+    ?? ( gws_data sw p4 ) { T _ → {} F _ → { = ok F } }
     : ( Vec u ) p5 ( __st_payload_q4_1 )
-    ?? ( gws_data sw p5 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ( vec_free [u] p5 )
+    ?? ( gws_data sw p5 ) { T _ → {} F _ → { = ok F } }
     : ( Vec u ) p6 ( __st_payload_q8_0 )
-    ?? ( gws_data sw p6 ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ( vec_free [u] p6 )
-    ?? ( gws_finish sw ) { T _ → {} F e → { ( string_free e ) = ok F } }
-    ( gws_free sw )
+    ?? ( gws_data sw p6 ) { T _ → {} F _ → { = ok F } }
+    ?? ( gws_finish sw ) { T _ → {} F _ → { = ok F } }
     ^ ok
 }
 
@@ -552,7 +521,6 @@ $ `write.nu`
     : ~ String spath ( string_new )
     ?? tf {
         T p → {
-            ( string_free spath )
             = spath p
         }
         F _ → {}
@@ -574,11 +542,9 @@ $ `write.nu`
                                 = k + k 1
                             }
                         } {}
-                        ( vec_free [u] b2 )
                     }
                     F _ → {}
                 }
-                ( vec_free [u] a )
             }
             F _ → {}
         }
@@ -590,13 +556,11 @@ $ `write.nu`
                 ( gguf_close g )
             }
             F e → {
-                ( string_free e )
                 ( __st_ck cn F `streamed file parses` )
             }
         }
         ( file_delete ( string_data spath ) )
     } {}
-    ( string_free spath )
 
     // 2. misuse: payload before begin_data, overrun, premature finish,
     //    declare after begin_data — every one a clean `gguf:` error
@@ -604,46 +568,41 @@ $ `write.nu`
     : ~ String mpath ( string_new )
     ?? tf2 {
         T p → {
-            ( string_free mpath )
             = mpath p
         }
         F _ → {}
     }
     ? > ( string_len mpath ) 0 {
-        : ~ i saddr 0
+        : ~ GgufS sw @ GgufS { # s 0 }
         ?? ( gws_create ( string_data mpath ) 32 ) {
-            T sp → { = saddr # i sp }
-            F e → { ( string_free e ) }
+            T sp → { = sw sp }
+            F _ → {}
         }
-        ? != saddr 0 {
-            : *GgufS sw # *GgufS saddr
+        ? != 0 # i . sw ctl {
             : ( Vec u ) some ( vec_new [u] )
             ( vec_push [u] some # u 1 )
             : ~ b early_rejected F
             ?? ( gws_data sw some ) {
                 T _ → {}
                 F e → {
-                    ( string_free e )
                     = early_rejected T
                 }
             }
             ( __st_ck cn early_rejected `gws_data before begin_data rejected` )
-            ?? ( gws_tensor sw `t` 0 1 8 1 1 1 ) { T _ → {} F e → { ( string_free e ) } }
+            : !v String _rt ( gws_tensor sw `t` 0 1 8 1 1 1 )
             : ~ b dup_rejected F
             ?? ( gws_tensor sw `t` 0 1 8 1 1 1 ) {
                 T _ → {}
                 F e → {
-                    ( string_free e )
                     = dup_rejected T
                 }
             }
             ( __st_ck cn dup_rejected `duplicate stream tensor rejected` )
-            ?? ( gws_begin_data sw ) { T _ → {} F e → { ( string_free e ) } }
+            : !v String _rb ( gws_begin_data sw )
             : ~ b late_declare_rejected F
             ?? ( gws_tensor sw `t2` 0 1 8 1 1 1 ) {
                 T _ → {}
                 F e → {
-                    ( string_free e )
                     = late_declare_rejected T
                 }
             }
@@ -652,7 +611,6 @@ $ `write.nu`
             ?? ( gws_finish sw ) {
                 T _ → {}
                 F e → {
-                    ( string_free e )
                     = early_finish_rejected T
                 }
             }
@@ -668,18 +626,13 @@ $ `write.nu`
             ?? ( gws_data sw big ) {
                 T _ → {}
                 F e → {
-                    ( string_free e )
                     = overrun_rejected T
                 }
             }
             ( __st_ck cn overrun_rejected `payload overrun rejected` )
-            ( vec_free [u] big )
-            ( vec_free [u] some )
-            ( gws_free sw )
         } {}
         ( file_delete ( string_data mpath ) )
     } {}
-    ( string_free mpath )
 
     // 3. quant encoders vs the dequant oracle
     // f16: exactly-representable values must round-trip bit-exactly
@@ -701,10 +654,8 @@ $ `write.nu`
                 = k + k 1
             }
             ( __st_ck cn ok `gq_f16_encode bit-exact on representable values` )
-            ( vec_free [u] enc )
         }
         F e → {
-            ( string_free e )
             ( __st_ck cn F `gq_f16_encode` )
         }
     }
@@ -727,14 +678,11 @@ $ `write.nu`
                 = k + k 1
             }
             ( __st_ck cn ok `gq_bf16_encode bit-exact on representable values` )
-            ( vec_free [u] enc )
         }
         F e → {
-            ( string_free e )
             ( __st_ck cn F `gq_bf16_encode` )
         }
     }
-    ( vec_free [u] xb )
     // Q8_0 block with amax 127 → d = 1.0 (f16-exact) → integers survive
     // the round trip untouched.
     : ( Vec u ) xq ( vec_new [u] )
@@ -753,16 +701,14 @@ $ `write.nu`
         T enc → {
             : ~ b ok == ( vec_len [u] enc ) 68
             // decode through the oracle: wrap in a writer+parser round trip
-            : ~ i waddr 0
+            : ~ GgufW w @ GgufW { # s 0 }
             ?? ( gw_new 32 ) {
-                T w2 → { = waddr # i w2 }
-                F e → { ( string_free e ) }
+                T w2 → { = w w2 }
+                F _ → {}
             }
-            ? != waddr 0 {
-                : *GgufW w # *GgufW waddr
-                ?? ( gw_tensor w `q` 8 1 64 1 1 1 enc ) { T _ → {} F e → { ( string_free e ) = ok F } }
+            ? != 0 # i . w ctl {
+                ?? ( gw_tensor w `q` 8 1 64 1 1 1 enc ) { T _ → {} F _ → { = ok F } }
                 : ( Vec u ) img ( gw_finish w )
-                ( gw_free w )
                 ?? ( gguf_parse_bytes img ) {
                     T g → {
                         ?? ( gguf_dequant_f64 g 0 ) {
@@ -777,31 +723,24 @@ $ `write.nu`
                                     }
                                     = k + k 1
                                 }
-                                ( vec_free [f] got )
                             }
                             F e → {
-                                ( string_free e )
                                 = ok F
                             }
                         }
                         ( gguf_close g )
                     }
                     F e → {
-                        ( string_free e )
                         = ok F
                     }
                 }
-                ( vec_free [u] img )
             } {}
             ( __st_ck cn ok `gq_q8_0_encode exact round trip (d=1 block + zero block)` )
-            ( vec_free [u] enc )
         }
         F e → {
-            ( string_free e )
             ( __st_ck cn F `gq_q8_0_encode` )
         }
     }
-    ( vec_free [u] xq )
     // Q8_0 error bound on pseudo-random data: |x − x̂| ≤ 0.65·d per block
     : ( Vec u ) xr ( vec_new [u] )
     : ( Vec f ) xrf ( vec_new [f] )
@@ -836,58 +775,47 @@ $ `write.nu`
                 = b2 + b2 1
             }
             ( __st_ck cn ok `gq_q8_0_encode error within 0.65·d on random data` )
-            ( vec_free [u] enc )
         }
         F e → {
-            ( string_free e )
             ( __st_ck cn F `gq_q8_0_encode random` )
         }
     }
-    ( vec_free [u] xr )
-    ( vec_free [f] xrf )
     // encoder input validation
     : ~ b q8_badlen_rejected F
     ?? ( gq_q8_0_encode xf ) {
-        T enc → { ( vec_free [u] enc ) }
-        F e → {
-            ( string_free e )
+        T _ → {}
+        F _ → {
             = q8_badlen_rejected T
         }
     }
     ( __st_ck cn q8_badlen_rejected `Q8_0 encode rejects a non-multiple-of-32 input` )
-    ( vec_free [u] xf )
 }
 
 @ __st_run → i {
     : ~ STCnt cn @ STCnt { 0 0 }
-    : *GgufW w ( __st_build )
+    : GgufW w ( __st_build )
     : !String IoErr tf ( fs_tempfile `/tmp` `gguf-selftest.` )
     : ~ String path ( string_new )
     ?? tf {
         T p → {
-            ( string_free path )
             = path p
         }
         F _ → {
             ( nurl_eprintln `selftest: cannot create a temp file under /tmp` )
-            ( gw_free w )
             ^ 1
         }
     }
     : !v String wr ( gw_write w ( string_data path ) )
-    ( gw_free w )
     ?? wr {
         T _ → {}
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             ( file_delete ( string_data path ) )
-            ( string_free path )
             ^ 1
         }
     }
 
-    : !*Gguf String orr ( gguf_open ( string_data path ) )
+    : !Gguf String orr ( gguf_open ( string_data path ) )
     : ~ i rc 0
     ?? orr {
         T g → {
@@ -910,7 +838,7 @@ $ `write.nu`
             : i ai_idx ( gguf_find_kv g `selftest.arr_i32` )
             ( __st_ck cn >= ai_idx 0 `arr_i32 present` )
             ? >= ai_idx 0 {
-                ?? ( vec_get [GgufKv] . g kvs ai_idx ) {
+                ?? ( vec_get [GgufKv] ( gguf_kvs g ) ai_idx ) {
                     T a → {
                         ( __st_ck cn == ( vec_len [i] . a ai ) 3 `arr_i32 length` )
                         : ~ i v1 0
@@ -923,7 +851,7 @@ $ `write.nu`
             : i as_idx ( gguf_find_kv g `selftest.arr_str` )
             ( __st_ck cn >= as_idx 0 `arr_str present` )
             ? >= as_idx 0 {
-                ?? ( vec_get [GgufKv] . g kvs as_idx ) {
+                ?? ( vec_get [GgufKv] ( gguf_kvs g ) as_idx ) {
                     T a → {
                         ( __st_ck cn == ( vec_len [String] . a astr ) 3 `arr_str length` )
                         : ~ b ok F
@@ -941,7 +869,7 @@ $ `write.nu`
             : i tf32 ( gguf_find_tensor g `t_f32` )
             ( __st_ck cn >= tf32 0 `t_f32 present` )
             ? >= tf32 0 {
-                ?? ( vec_get [GgufTensor] . g tensors tf32 ) {
+                ?? ( vec_get [GgufTensor] ( gguf_tensors g ) tf32 ) {
                     T t → {
                         ( __st_ck cn & == . t nd 2 & == . t d0 4 == . t d1 2 `t_f32 dims` )
                         ( __st_ck cn == . t nelems 8 `t_f32 nelems` )
@@ -954,10 +882,8 @@ $ `write.nu`
                     T got → {
                         : f32exp [f | 0.0 1.5 -2.25 3.75 100.0 -0.0078125 6.5 -7.0]
                         ( __st_ck cn ( __st_vec_eq got . f32exp 0 8 ) `t_f32 dequant values` )
-                        ( vec_free [f] got )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn F `t_f32 dequant` )
                     }
                 }
@@ -984,10 +910,8 @@ $ `write.nu`
                             = k + k 1
                         }
                         ( __st_ck cn ok `t_f16 bit-exact (incl. subnormal/inf/NaN/-0)` )
-                        ( vec_free [u] got )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn F `t_f16 dequant` )
                     }
                 }
@@ -1013,10 +937,8 @@ $ `write.nu`
                             = k + k 1
                         }
                         ( __st_ck cn ok `t_bf16 bit-exact` )
-                        ( vec_free [u] got )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn F `t_bf16 dequant` )
                     }
                 }
@@ -1040,10 +962,8 @@ $ `write.nu`
                 ?? dr {
                     T got → {
                         ( __st_ck cn ( __st_vec_eq got ( vec_data [f] q4exp ) 32 ) `t_q4_0 dequant values` )
-                        ( vec_free [f] got )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn F `t_q4_0 dequant` )
                     }
                 }
@@ -1056,15 +976,12 @@ $ `write.nu`
                 ?? dr {
                     T got → {
                         ( __st_ck cn ( __st_vec_eq got ( vec_data [f] q4exp ) 32 ) `t_q4_1 equals t_q4_0 (d=1, m=-8)` )
-                        ( vec_free [f] got )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn F `t_q4_1 dequant` )
                     }
                 }
             } { ( __st_ck cn F `t_q4_1 present` ) }
-            ( vec_free [f] q4exp )
 
             // t_q8_0: 0.5*k, last = -28
             : i tq8 ( gguf_find_tensor g `t_q8_0` )
@@ -1080,11 +997,8 @@ $ `write.nu`
                         }
                         ( vec_push [f] q8exp -28.0 )
                         ( __st_ck cn ( __st_vec_eq got ( vec_data [f] q8exp ) 32 ) `t_q8_0 dequant (incl. negative q)` )
-                        ( vec_free [f] q8exp )
-                        ( vec_free [f] got )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn F `t_q8_0 dequant` )
                     }
                 }
@@ -1095,11 +1009,9 @@ $ `write.nu`
             : !( Vec u ) String bad ( gguf_dequant g 99 )
             ?? bad {
                 T got2 → {
-                    ( vec_free [u] got2 )
                     ( __st_ck cn F `out-of-range dequant must fail` )
                 }
                 F e → {
-                    ( string_free e )
                     ( __st_ck cn T `out-of-range dequant fails cleanly` )
                 }
             }
@@ -1107,7 +1019,6 @@ $ `write.nu`
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             = rc 1
         }
     }
@@ -1117,31 +1028,30 @@ $ `write.nu`
         : !( Vec u ) IoErr br ( read_file_bytes ( string_data path ) )
         ?? br {
             T img → {
-                : !*Gguf String pr ( gguf_parse_bytes img )
+                // the Gguf keeps the buffer it parses: hand it a copy, the
+                // original is corrupted below
+                : !Gguf String pr ( gguf_parse_bytes ( vec_clone [u] img ) )
                 ?? pr {
                     T g → {
                         ( __st_ck cn == ( gguf_n_tensors g ) 6 `parse_bytes sees the same tensors` )
                         ( gguf_close g )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn F `parse_bytes` )
                     }
                 }
                 // corrupt the magic in memory → must fail
                 ( vec_set [u] img 0 # u 88 )
-                : !*Gguf String cr ( gguf_parse_bytes img )
+                : !Gguf String cr ( gguf_parse_bytes img )
                 ?? cr {
                     T g → {
                         ( gguf_close g )
                         ( __st_ck cn F `bad magic must be rejected` )
                     }
                     F e → {
-                        ( string_free e )
                         ( __st_ck cn T `bad magic rejected` )
                     }
                 }
-                ( vec_free [u] img )
             }
             F _ → { ( __st_ck cn F `re-read sample file` ) }
         }
@@ -1149,25 +1059,22 @@ $ `write.nu`
         : ( Vec u ) tiny ( vec_new [u] )
         ( vec_push [u] tiny # u 71 )
         ( vec_push [u] tiny # u 71 )
-        : !*Gguf String tr ( gguf_parse_bytes tiny )
+        : !Gguf String tr ( gguf_parse_bytes tiny )
         ?? tr {
             T g → {
                 ( gguf_close g )
                 ( __st_ck cn F `truncated buffer must be rejected` )
             }
             F e → {
-                ( string_free e )
                 ( __st_ck cn T `truncated buffer rejected` )
             }
         }
-        ( vec_free [u] tiny )
     } {}
 
     // the streaming writer + quant encoders, against the same sample
     ? == rc 0 { ( __st_stream_quant cn ( string_data path ) ) } {}
 
     ( file_delete ( string_data path ) )
-    ( string_free path )
     ? != rc 0 { ^ rc } {}
     : String m ( string_from `selftest: ` )
     ( string_push_int m . cn pass )
@@ -1190,25 +1097,20 @@ $ `write.nu`
     ( args_flag p `version` 0 `print the version` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  info <file> · dump <file> · kv <file> <key> · tensors <file>\n  verify <file> · export <file> <tensor> -o out.f32\n  gen <out.gguf> · selftest\n` )
-        ( string_free u )
-        ( args_free p )
         ^ 0
     } {}
     ? ( args_present p `version` ) {
         ( nurl_print `gguf 0.3.4\n` )
-        ( args_free p )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {
         ( nurl_eprintln `usage: gguf <info|dump|kv|tensors|verify|export|gen|selftest> … (gguf --help)` )
-        ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -1221,7 +1123,6 @@ $ `write.nu`
     ? >= ( args_positional_count p ) 2 {
         ?? ( vec_get [String] pos 1 ) {
             T v2 → {
-                ( string_free a1 )
                 = a1 ( string_from ( string_data v2 ) )
             }
             F → {}
@@ -1231,7 +1132,6 @@ $ `write.nu`
     ? >= ( args_positional_count p ) 3 {
         ?? ( vec_get [String] pos 2 ) {
             T v2 → {
-                ( string_free a2 )
                 = a2 ( string_from ( string_data v2 ) )
             }
             F → {}
@@ -1240,41 +1140,28 @@ $ `write.nu`
 
     ? ( nurl_str_eq cmd `selftest` ) {
         : i rc ( __st_run )
-        ( string_free a1 )
-        ( string_free a2 )
-        ( args_free p )
         ^ rc
     } {}
 
     ? ( nurl_str_eq cmd `gen` ) {
         ? == ( string_len a1 ) 0 {
-            ( string_free a1 )
-            ( string_free a2 )
-            ( args_free p )
             ^ ( __gg_err ( string_from `gguf: gen needs an output path` ) )
         } {}
-        : *GgufW w ( __st_build )
+        : GgufW w ( __st_build )
         : !v String wr ( gw_write w ( string_data a1 ) )
-        ( gw_free w )
         : ~ i rc 0
         ?? wr {
             T _ → {}
             F e → { = rc ( __gg_err e ) }
         }
-        ( string_free a1 )
-        ( string_free a2 )
-        ( args_free p )
         ^ rc
     } {}
 
     // every remaining command opens a file first
     ? == ( string_len a1 ) 0 {
-        ( string_free a1 )
-        ( string_free a2 )
-        ( args_free p )
         ^ ( __gg_err ( string_from `gguf: this command needs a file argument (gguf --help)` ) )
     } {}
-    : !*Gguf String orr ( gguf_open ( string_data a1 ) )
+    : !Gguf String orr ( gguf_open ( string_data a1 ) )
     : ~ i rc 0
     ?? orr {
         T g → {
@@ -1287,7 +1174,7 @@ $ `write.nu`
                     ? ( nurl_str_eq cmd `tensors` ) {
                         : ~ i k 0
                         ~ < k ( gguf_n_tensors g ) {
-                            ?? ( vec_get [GgufTensor] . g tensors k ) {
+                            ?? ( vec_get [GgufTensor] ( gguf_tensors g ) k ) {
                                 T t → { ( __gg_print_owned ( __gg_fmt_tensor t ) ) }
                                 F → {}
                             }
@@ -1302,7 +1189,7 @@ $ `write.nu`
                                 ? < idx 0 {
                                     = rc ( __gg_err ( string_from `gguf: no such metadata key` ) )
                                 } {
-                                    ?? ( vec_get [GgufKv] . g kvs idx ) {
+                                    ?? ( vec_get [GgufKv] ( gguf_kvs g ) idx ) {
                                         T a → { ( __gg_print_owned ( __gg_fmt_kv a ) ) }
                                         F → {}
                                     }
@@ -1329,11 +1216,9 @@ $ `write.nu`
                                                             }
                                                             F _ → { = rc ( __gg_err ( string_from `gguf: cannot write the output file` ) ) }
                                                         }
-                                                        ( string_free out )
                                                     }
                                                     F → { = rc ( __gg_err ( string_from `gguf: export needs -o FILE` ) ) }
                                                 }
-                                                ( vec_free [u] raw )
                                             }
                                             F e → { = rc ( __gg_err e ) }
                                         }
@@ -1351,8 +1236,5 @@ $ `write.nu`
         }
         F e → { = rc ( __gg_err e ) }
     }
-    ( string_free a1 )
-    ( string_free a2 )
-    ( args_free p )
     ^ rc
 }

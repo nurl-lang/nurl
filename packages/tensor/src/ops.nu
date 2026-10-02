@@ -23,12 +23,20 @@ $ `tensor.nu`
 //     requires gk_backend == cuda.
 //   * NURL_TENSOR_GPU=0 disables the auto-probe outright (env opt-out).
 //   * tensor_use_gpu(kit) opts IN explicitly with a caller-opened kit —
-//     any backend, the caller decided. tensor adopts it: tensor_gpu_close
-//     releases it.
+//     any backend, the caller decided. tensor holds one owner of it until
+//     tensor_gpu_close.
 //   * tensor_gpu_off() disables the route (closing an open kit);
 //     tensor_gpu_active() reports the current state.
 : ~ i g_t_gpu 0  // 0 unprobed, 1 ready, -1 unavailable/disabled
-: ~ i g_t_kit 0  // *GpuKit as an int
+// The adopted kit: one owner of it, kept in a global for as long as the
+// route is open (tensor_gpu_close lets it go).
+: ~ i g_t_kit 0
+
+@ __t_adopt GpuKit kit → v {
+    : GpuKit keep ( GpuKit_share kit )
+    = g_t_kit # i . keep ctl
+    ( mem_forget keep )  // the global holds this owner now
+}
 
 @ __t_gpu_ready → b {
     ? != g_t_gpu 0 { ^ == g_t_gpu 1 } {}
@@ -37,24 +45,25 @@ $ `tensor.nu`
         = g_t_gpu -1
         ^ F
     } {}
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? & ( gk_ok kit ) == ( nurl_str_eq ( gk_backend kit ) `cuda` ) 1 {
-        = g_t_kit # i kit
+        ( __t_adopt kit )
         = g_t_gpu 1
         ^ T
     } {}
-    ( gk_close kit )
     = g_t_gpu -1
     ^ F
 }
 
-@ __t_kit → *GpuKit { ^ # *GpuKit g_t_kit }
+// Lent: the global keeps its owner.
+@ __t_kit → GpuKit { ^ # GpuKit g_t_kit }
 
 // Opt IN with a caller-opened kit (any backend — the caller chose it).
-// tensor ADOPTS the kit: tensor_gpu_close / tensor_gpu_off releases it.
-@ tensor_use_gpu * GpuKit kit → v {
+// tensor holds the kit (one more owner of it) until tensor_gpu_close /
+// tensor_gpu_off.
+@ tensor_use_gpu GpuKit kit → v {
     ( tensor_gpu_close )
-    ? ( gk_ok kit ) { = g_t_kit # i kit = g_t_gpu 1 } { = g_t_gpu -1 }
+    ? ( gk_ok kit ) { ( __t_adopt kit ) = g_t_gpu 1 } { = g_t_gpu -1 }
 }
 
 // Disable the matmul GPU route for this process (idempotent).
@@ -66,10 +75,11 @@ $ `tensor.nu`
 // Is the route currently open?
 @ tensor_gpu_active → b { ^ == g_t_gpu 1 }
 
-// Release the tensor GPU singleton (tests call this so leak checkers are
-// happy). The next big matmul may re-probe (unlike tensor_gpu_off).
+// Let the tensor GPU singleton go (the process-lifetime owner the global
+// held). The next big matmul may re-probe (unlike tensor_gpu_off).
 @ tensor_gpu_close → v {
-    ? == g_t_gpu 1 { ( gk_close ( __t_kit ) ) } {}
+    // the global's owner, handed to the early release
+    ? != g_t_kit 0 { ( gk_close @ GpuKit { # s g_t_kit } ) } {}
     = g_t_gpu 0
     = g_t_kit 0
 }
@@ -103,7 +113,6 @@ $ `tensor.nu`
         ? | == da db | == da 1 == db 1 {
             ( vec_set [i] out od ? > da db { da } { db } )
         } {
-            ( vec_free [i] out )
             ^ @ ?( Vec i ) { F }
         }
         = d + d 1
@@ -122,7 +131,6 @@ $ `tensor.nu`
         ? & >= j 0 > ( _ti shape j ) 1 { ( vec_set [i] eff d ( _ti base j ) ) } {}
         = d + d 1
     }
-    ( vec_free [i] base )
     ^ eff
 }
 
@@ -164,7 +172,6 @@ $ `tensor.nu`
                 ( vec_push [f] out ? == rdt TE_F32 { ( _t_round32 r ) } { r } )
                 = i + i 1
             }
-            ( vec_free [i] ost ) ( vec_free [i] ae ) ( vec_free [i] be )
             ^ @ ?Tensor { T @ Tensor { rdt oshape out } }
         }
         F _ → { ^ @ ?Tensor { F } }
@@ -339,7 +346,6 @@ $ `tensor.nu`
         ( vec_push [f] out ( _tf . t data ino ) )
         = i + i 1
     }
-    ( vec_free [i] ist ) ( vec_free [i] ostr_in ) ( vec_free [i] ost )
     ^ @ ?Tensor { T @ Tensor { . t dtype oshape out } }
 }
 
@@ -406,7 +412,6 @@ $ `tensor.nu`
         ( vec_set [f] out oo ( __rstep op ( _tf out oo ) ( _tf . t data i ) ) )
         = i + i 1
     }
-    ( vec_free [i] ist ) ( vec_free [i] ost )
     ^ @ Tensor { . t dtype oshape out }
 }
 
@@ -435,7 +440,6 @@ $ `tensor.nu`
     : Tensor s ( tensor_sum t axis keepdim )
     : i cnt ? < axis 0 { ( tensor_size t ) } { ( tensor_dim t axis ) }
     : Tensor r ( tensor_divs s # f cnt )
-    ( tensor_free s )
     ^ r
 }
 
@@ -458,7 +462,6 @@ $ `tensor.nu`
         ? & >= j 0 > ( _ti shape j ) 1 { ( vec_set [i] eff d ( _ti full j ) ) } {}
         = d + d 1
     }
-    ( vec_free [i] full )
     ^ eff
 }
 
@@ -481,7 +484,6 @@ $ `tensor.nu`
     : ( Vec i ) ba ( _t_take_head . a shape - na 2 )
     : ( Vec i ) bb ( _t_take_head . b shape - nb 2 )
     : ?( Vec i ) bso ( _t_bshape ba bb )
-    ( vec_free [i] ba ) ( vec_free [i] bb )
     ?? bso {
         T bshape → {
             : i ndb ( vec_len [i] bshape )
@@ -529,7 +531,6 @@ $ `tensor.nu`
             : ~ i k 0
             ~ < k ndb { ( vec_push [i] oshape ( _ti bshape k ) ) = k + k 1 }
             ( vec_push [i] oshape M ) ( vec_push [i] oshape N )
-            ( vec_free [i] bshape ) ( vec_free [i] bst ) ( vec_free [i] aeff ) ( vec_free [i] beff )
             ^ @ ?Tensor { T @ Tensor { rdt oshape out } }
         }
         F _ → { ^ @ ?Tensor { F } }
@@ -543,7 +544,6 @@ $ `tensor.nu`
     : Tensor e ( tensor_exp sh )
     : Tensor sm ( tensor_sum e axis T )
     : Tensor r ( __unwrap ( tensor_div e sm ) )
-    ( tensor_free mx ) ( tensor_free sh ) ( tensor_free e ) ( tensor_free sm )
     ^ r
 }
 
@@ -556,7 +556,7 @@ $ `tensor.nu`
     ~ < d nd {
         : i s0 ( _ti starts d )
         : i s1 ( _ti stops d )
-        ? & >= s0 0 & <= s1 ( _ti . t shape d ) <= s0 s1 {} { ( vec_free [i] oshape ) ^ @ ?Tensor { F } }
+        ? & >= s0 0 & <= s1 ( _ti . t shape d ) <= s0 s1 {} { ^ @ ?Tensor { F } }
         ( vec_set [i] oshape d - s1 s0 )
         = d + d 1
     }
@@ -579,7 +579,6 @@ $ `tensor.nu`
         ( vec_push [f] out ( _tf . t data ino ) )
         = i + i 1
     }
-    ( vec_free [i] ist ) ( vec_free [i] ost )
     ^ @ ?Tensor { T @ Tensor { . t dtype oshape out } }
 }
 
@@ -624,7 +623,6 @@ $ `tensor.nu`
         ( vec_push [f] out v )
         = i + i 1
     }
-    ( vec_free [i] ost ) ( vec_free [i] ast ) ( vec_free [i] bst )
     ^ @ ?Tensor { T @ Tensor { rdt oshape out } }
 }
 
@@ -660,7 +658,6 @@ $ `tensor.nu`
         ? better { ( vec_set [f] best oo v ) ( vec_set [f] idx oo # f axc ) } {}
         = i + i 1
     }
-    ( vec_free [i] ist ) ( vec_free [i] ost ) ( vec_free [f] best )
     ^ @ Tensor { TE_F64 oshape idx }
 }
 

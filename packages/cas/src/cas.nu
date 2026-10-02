@@ -23,7 +23,9 @@
 //   ( cas_has c hex )                   → b
 //   ( cas_object_path c hex )           → String
 //   ( cas_hash_hex bytes )              → String   the naming function
-//   ( cas_free c )
+//   ( cas_free c )                      early release (optional)
+//
+// A Cas is a plain value (its root path); nothing is released by hand.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -37,7 +39,8 @@ $ `stdlib/std/time.nu`
     String root
 }
 
-@ cas_free sink Cas c → v { ( string_free . c root ) }
+// Let go of `c` now rather than at the end of its owner's scope.
+@ cas_free sink Cas c → v {}
 
 // The naming function: BLAKE3-256, lowercase hex.
 @ cas_hash_hex ( Vec u ) data → String {
@@ -61,7 +64,6 @@ $ `stdlib/std/time.nu`
     : String t ( path_join root `tmp` )
     : !v IoErr r1 ( dir_create_all ( string_data o ) )
     : !v IoErr r2 ( dir_create_all ( string_data t ) )
-    ( string_free o ) ( string_free t )
     : ~ b ok T
     ?? r1 { T _ → {} F _ → { = ok F } }
     ?? r2 { T _ → {} F _ → { = ok F } }
@@ -91,7 +93,6 @@ $ `stdlib/std/time.nu`
     ? ( __cas_is_hex hex ) {} { ^ F }
     : String p ( cas_object_path c hex )
     : b r ( file_exists ( string_data p ) )
-    ( string_free p )
     ^ r
 }
 
@@ -109,9 +110,7 @@ $ `stdlib/std/time.nu`
     ( string_push_char fan ( string_get hex 0 ) )
     ( string_push_char fan ( string_get hex 1 ) )
     : !v IoErr mk ( dir_create_all ( string_data fan ) )
-    ( string_free fan )
     ?? mk { T _ → {} F _ → {
-            ( string_free hex )
             ^ @ !String String { F ( string_from `cas: cannot create object directory` ) }
         } }
 
@@ -125,7 +124,6 @@ $ `stdlib/std/time.nu`
     ( string_push_str tp `.tmp` )
     : !v IoErr wr ( write_file_bytes ( string_data tp ) data )
     ?? wr { T _ → {} F _ → {
-            ( string_free tp ) ( string_free hex )
             ^ @ !String String { F ( string_from `cas: staging write failed (is the store writable?)` ) }
         } }
 
@@ -139,12 +137,10 @@ $ `stdlib/std/time.nu`
             // is a real error.
             ? ( file_exists ( string_data dst ) ) { ( file_delete ( string_data tp ) ) } {
                 ( file_delete ( string_data tp ) )
-                ( string_free tp ) ( string_free dst ) ( string_free hex )
                 ^ @ !String String { F ( string_from `cas: object rename failed` ) }
             }
         }
     }
-    ( string_free tp ) ( string_free dst )
     ^ @ !String String { T hex }
 }
 
@@ -153,7 +149,6 @@ $ `stdlib/std/time.nu`
     ?? r {
         T data → {
             : !String String pr ( cas_put c data )
-            ( vec_free [u] data )
             ^ pr
         }
         F _ → {
@@ -175,14 +170,11 @@ $ `stdlib/std/time.nu`
     }
     : String p ( cas_object_path c hex )
     : !( Vec u ) IoErr r ( read_file_bytes ( string_data p ) )
-    ( string_free p )
     ?? r {
         T data → {
             : String got ( cas_hash_hex data )
             : b match ( nurl_str_eq ( string_data got ) hex )
-            ( string_free got )
             ? match { ^ @ !( Vec u ) String { T data } } {}
-            ( vec_free [u] data )
             : String msg ( string_from `cas: INTEGRITY FAILURE — object ` )
             ( string_push_str msg hex )
             ( string_push_str msg ` does not hash to its name (corrupted or tampered)` )

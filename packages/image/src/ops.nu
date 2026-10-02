@@ -344,18 +344,21 @@ $ `core.nu`
 
 // Per-output-pixel coefficient window for one axis.
 //
-// Returns a control block: slot 0 = ksize, then per output pixel a run of
+// Returns a table: slot 0 = ksize, then per output pixel a run of
 // (1 + ksize) slots holding `xmin` followed by ksize fixed-point weights.
-// One allocation, freed by the caller.
-@ __img_coeffs i insize i outsize i filt → s {
+@ __img_coeffs i insize i outsize i filt → ( Vec i ) {
     : f scale / # f insize # f outsize
     : f fscale ? < scale 1.0 1.0 scale
     : f support * ( __img_support filt ) fscale
     : i ksize + * 2 # i ( float_ceil support ) 1
     : i stride + ksize 1
-    : s kk ( nurl_zalloc * 8 + 1 * outsize stride )
-    ( nurl_poke kk 0 ksize )
+    : ( Vec i ) tab ( vec_zeroed [i] + 1 * outsize stride )
+    : *i kk ( vec_data [i] tab )
+    = . kk 0 ksize
     : f ss / 1.0 fscale
+    // one window's float weights, reused for every output pixel
+    : ( Vec f ) wv ( vec_zeroed [f] ? > ksize 0 ksize 1 )
+    : *f w ( vec_data [f] wv )
     : ~ i xx 0
     ~ < xx outsize {
         : f center * + # f xx 0.5 scale
@@ -366,10 +369,9 @@ $ `core.nu`
         = xmax - xmax xmin
         ? < xmax 0 { = xmax 0 } {}
         : i base + 1 * xx stride
-        ( nurl_poke kk base xmin )
+        = . kk base xmin
         // Normalise in floating point, quantise after — quantising first
         // and normalising the integers is what makes a naive port drift.
-        : *f w ( nurl_zalloc * 8 ? > ksize 0 ksize 1 )
         : ~ f wsum 0.0
         : ~ i x 0
         ~ < x xmax {
@@ -381,16 +383,15 @@ $ `core.nu`
         = x 0
         ~ < x xmax {
             : f v ? != wsum 0.0 / . w x wsum 0.0
-            ( nurl_poke kk + + base 1 x ( __img_fix v ) )
+            = . kk + + base 1 x ( __img_fix v )
             = x + x 1
         }
         // ksize is the worst case; a clipped window leaves a shorter run,
         // marked by its own length so the passes know where to stop.
-        ( nurl_poke kk + base 0 + xmin * xmax 1048576 )
-        ( nurl_free # s w )
+        = . kk + base 0 + xmin * xmax 1048576
         = xx + xx 1
     }
-    ^ kk
+    ^ tab
 }
 
 @ __img_clip8 i acc → i {
@@ -409,15 +410,16 @@ $ `core.nu`
     ? | | | <= nw 0 <= nh 0 <= w 0 <= h 0 { ^ ( image_new 0 0 c ) } {}
     : i half << 1 - __IMG_PREC 1
     // horizontal pass: w → nw, height unchanged
-    : s kx ( __img_coeffs w nw filt )
-    : i ksx ( nurl_peek kx 0 )
+    : ( Vec i ) kxt ( __img_coeffs w nw filt )
+    : *i kx ( vec_data [i] kxt )
+    : i ksx . kx 0
     : Image tmp ( image_new nw h c )
     : ~ i y 0
     ~ < y h {
         : ~ i ox 0
         ~ < ox nw {
             : i base + 1 * ox + ksx 1
-            : i packed ( nurl_peek kx base )
+            : i packed . kx base
             : i xmin % packed 1048576
             : i xlen / packed 1048576
             : ~ i k 0
@@ -425,7 +427,7 @@ $ `core.nu`
                 : ~ i acc half
                 : ~ i x 0
                 ~ < x xlen {
-                    = acc + acc * ( image_get im + xmin x y k ) ( nurl_peek kx + + base 1 x )
+                    = acc + acc * ( image_get im + xmin x y k ) . kx + + base 1 x
                     = x + x 1
                 }
                 ( image_set tmp ox y k ( __img_clip8 acc ) )
@@ -435,15 +437,15 @@ $ `core.nu`
         }
         = y + y 1
     }
-    ( nurl_free kx )
     // vertical pass: h → nh
-    : s ky ( __img_coeffs h nh filt )
-    : i ksy ( nurl_peek ky 0 )
+    : ( Vec i ) kyt ( __img_coeffs h nh filt )
+    : *i ky ( vec_data [i] kyt )
+    : i ksy . ky 0
     : Image out ( image_new nw nh c )
     : ~ i oy 0
     ~ < oy nh {
         : i base + 1 * oy + ksy 1
-        : i packed ( nurl_peek ky base )
+        : i packed . ky base
         : i ymin % packed 1048576
         : i ylen / packed 1048576
         : ~ i ox 0
@@ -453,7 +455,7 @@ $ `core.nu`
                 : ~ i acc half
                 : ~ i yy 0
                 ~ < yy ylen {
-                    = acc + acc * ( image_get tmp ox + ymin yy k ) ( nurl_peek ky + + base 1 yy )
+                    = acc + acc * ( image_get tmp ox + ymin yy k ) . ky + + base 1 yy
                     = yy + yy 1
                 }
                 ( image_set out ox oy k ( __img_clip8 acc ) )
@@ -463,8 +465,6 @@ $ `core.nu`
         }
         = oy + oy 1
     }
-    ( nurl_free ky )
-    ( image_free tmp )
     ^ out
 }
 

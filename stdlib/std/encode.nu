@@ -211,7 +211,6 @@ $ `stdlib/core/errors.nu`
                 ( nurl_memcpy ( vec_data [u] v ) # *u ( string_data sv ) n )
                 : b _ok ( vec_set_len [u] v n )
             } {}
-            ( string_free sv )
             ^ @ !( Vec u ) ParseErr { T v }
         }
         F e → { ^ @ !( Vec u ) ParseErr { F e } }
@@ -228,7 +227,6 @@ $ `stdlib/core/errors.nu`
                 ( nurl_memcpy ( vec_data [u] v ) # *u ( string_data sv ) n )
                 : b _ok ( vec_set_len [u] v n )
             } {}
-            ( string_free sv )
             ^ @ !( Vec u ) ParseErr { T v }
         }
         F e → { ^ @ !( Vec u ) ParseErr { F e } }

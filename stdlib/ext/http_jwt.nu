@@ -75,7 +75,6 @@ $ `stdlib/ext/jwt.nu`
     ^ ?? vr {
         T claims → {
             : HttpResponse resp ( inner req claims )
-            ( json_free claims )
             ^ resp
         }
         F e → ( __jwt_unauthorized `invalid_token` ( __jwt_err_desc # JwtErr e ) )
@@ -88,7 +87,6 @@ $ `stdlib/ext/jwt.nu`
         ^ ?? tok {
             T t → {
                 : !Json JwtErr vr ( jwt_hs256_verify secret ( string_data t ) )
-                ( string_free t )
                 ^ ( __jwt_gate vr req inner )
             }
             F _ → ( __jwt_unauthorized `` `` )
@@ -103,7 +101,6 @@ $ `stdlib/ext/jwt.nu`
         ^ ?? tok {
             T t → {
                 : !Json JwtErr vr ( jwt_eddsa_verify pubkey ( string_data t ) )
-                ( string_free t )
                 ^ ( __jwt_gate vr req inner )
             }
             F _ → ( __jwt_unauthorized `` `` )
@@ -118,7 +115,6 @@ $ `stdlib/ext/jwt.nu`
         ^ ?? tok {
             T t → {
                 : !Json JwtErr vr ( jwt_es256_verify pubkey ( string_data t ) )
-                ( string_free t )
                 ^ ( __jwt_gate vr req inner )
             }
             F _ → ( __jwt_unauthorized `` `` )

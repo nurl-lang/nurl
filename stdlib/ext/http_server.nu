@@ -106,6 +106,7 @@
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/dos.nu`
+$ `stdlib/core/rcbox.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/panic.nu`
 $ `stdlib/core/string.nu`
@@ -140,14 +141,39 @@ $ `stdlib/ext/http2_conn.nu`
     i max_keepalive_requests
     HttpLimits limits
     i request_total_timeout_ms
-    // DoS state — raw handle to runtime-side NurlDosState (mutex-
-    // protected concurrent + per-IP counters). 0 = DoS protection
-    // disabled (the historical default; matches every constructor
-    // except `server_new_with_dos`). When non-zero, server_run_once
-    // takes the acquire/release path that rejects connections over
-    // the configured caps. Multiple workers in server_run_pool share
-    // the same state via the shared HttpServer value.
-    s dos_state
+    // DoS state — the runtime-side NurlDosState (mutex-protected
+    // concurrent + per-IP counters) behind a handle. Empty = DoS
+    // protection disabled (the historical default; matches every
+    // constructor except `server_new_with_dos`). When set,
+    // server_run_once takes the acquire/release path that rejects
+    // connections over the configured caps. Multiple workers in
+    // server_run_pool share the same state via the shared HttpServer
+    // value; the last copy of the server releases it.
+    HttpDosGate dos_state
+}
+
+// The DoS counters (stdlib/std/dos.nu keeps them in runtime-side memory
+// behind an `i`) in an rcbox: every copy of the server — each worker's,
+// the one server_stop is handed — is the same gate, and the last owner
+// releases it. Releasing it in server_stop instead would pull it from
+// under a worker still finishing its connection.
+: HttpDosGateImpl { i raw }
+
+% Drop HttpDosGateImpl { @ drop HttpDosGateImpl x → v { ( dos_state_free . x raw ) } }
+
+: HttpDosGate { s ctl }
+
+@ HttpDosGate_share HttpDosGate h → HttpDosGate { ^ @ HttpDosGate { # s ( rcbox_share # i . h ctl ) } }
+
+@ HttpDosGate_drop sink HttpDosGate h → v {
+    ( mem_forget h )
+    ( rcbox_release [HttpDosGateImpl] # i . h ctl )
+}
+
+// The runtime state, 0 when DoS protection is off.
+@ __dos_gate_raw HttpDosGate h → i {
+    ? == 0 # i . h ctl { ^ 0 } {}
+    ^ . ( rcbox_ptr [HttpDosGateImpl] # i . h ctl ) raw
 }
 
 // ── Connection upgrade hook (WebSocket etc.) ─────────────────────
@@ -230,7 +256,7 @@ $ `stdlib/ext/http2_conn.nu`
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        # s 0 }
+        @ HttpDosGate { # s 0 } }
 }
 
 @ server_new_with_timeout TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms → HttpServer {
@@ -238,25 +264,25 @@ $ `stdlib/ext/http2_conn.nu`
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        # s 0 }
+        @ HttpDosGate { # s 0 } }
 }
 
 @ server_new_full TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests → HttpServer {
     ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        # s 0 }
+        @ HttpDosGate { # s 0 } }
 }
 
 // `server_new_complete` — every knob explicit. Use when overriding
 // parser limits and/or per-request total timeout. See the struct comment
 // for what each field controls.
 @ server_new_complete TcpListener listener ( @ HttpResponse HttpRequest ) handler i idle_timeout_ms i max_keepalive_requests HttpLimits limits i request_total_timeout_ms → HttpServer {
-    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms # s 0 }
+    ^ @ HttpServer { listener handler idle_timeout_ms max_keepalive_requests limits request_total_timeout_ms @ HttpDosGate { # s 0 } }
 }
 
 // DoS-aware constructor. Allocates a NurlDosState on the runtime side
-// configured with the given caps; server_stop disposes it. All other
+// configured with the given caps; the server's last copy disposes it. All other
 // knobs use defaults — combine with the keep-alive / timeout knobs
 // after construction by directly mutating the returned struct, or
 // extend this helper if a uniform full-knob variant is needed later.
@@ -268,22 +294,18 @@ $ `stdlib/ext/http2_conn.nu`
         ( server_default_max_keepalive_requests )
         ( http_default_limits )
         ( server_default_request_total_timeout_ms )
-        # s st }
+        @ HttpDosGate { # s ( rcbox_new [HttpDosGateImpl] @ HttpDosGateImpl { st } ) } }
 }
 
 // Snapshot the current active-connection count — useful for /metrics
 // observability endpoints. Returns 0 when DoS protection is disabled.
 @ server_active_conn_count HttpServer s → i {
-    : s rp . s dos_state
-    : i raw # i rp
+    : i raw ( __dos_gate_raw . s dos_state )
     ? == raw 0 { ^ 0 } {}
     ^ ( dos_state_active raw )
 }
 
 @ server_stop HttpServer s → v {
-    : s rp . s dos_state
-    : i raw # i rp
-    ? != raw 0 { ( dos_state_free raw ) } {}
     ( tcp_close_listener . s listener )
 }
 
@@ -493,7 +515,6 @@ $ `stdlib/ext/http2_conn.nu`
             : String szline ( _bsubstr carry 0 crlf )
             ( __vec_drop_front_u carry + crlf 2 )
             : !i ParseErr szr ( _parse_hex_size szline )
-            ( string_free szline )
             ?? szr {
                 T n → {
                     ? < n 0 { = ok F } {
@@ -594,7 +615,6 @@ $ `stdlib/ext/http2_conn.nu`
             ?? more {
                 T extra → {
                     ( vec_extend [u] . req body extra )
-                    ( vec_free [u] extra )
                     ^ T
                 }
                 F _ → ^ F
@@ -612,7 +632,7 @@ $ `stdlib/ext/http2_conn.nu`
 // HTTP/1.1's keep-alive default applies and the caller may continue
 // reading further requests on the same socket.
 //
-// Frees `r` after serialise+write regardless of outcome. `wire` is the
+// `r` is the caller's (dropped by its owner). `wire` is the
 // connection-level scratch buffer (owned by _serve_keepalive_loop):
 // serialising into it instead of a fresh Vec saves an allocate/free
 // pair per response on the keep-alive hot path.
@@ -631,7 +651,6 @@ $ `stdlib/ext/http2_conn.nu`
     ( vec_clear [u] wire )
     ( response_serialize_head_to r wire )
     : !v NetErr wr ( tcp_write_all2 conn wire . r body )
-    ( http_response_free r )
     ^ wr
 }
 
@@ -735,8 +754,7 @@ $ `stdlib/ext/http2_conn.nu`
     // TCP layer). On accept: extract peer IP (best-effort —
     // tcp_peer_addr returns "ip:port"; we split on ':'). On
     // release: pass the same IP back so the counter unwinds.
-    : s ds_rp . s dos_state
-    : i ds_raw # i ds_rp
+    : i ds_raw ( __dos_gate_raw . s dos_state )
     : ~ s peer_ip ``
     // Owns the "ip" prefix (the "ip:port" truncated at the colon) whose
     // buffer `peer_ip` aliases; dropped on every exit path below, after
@@ -932,7 +950,6 @@ $ `stdlib/ext/http2_conn.nu`
                             T _ → {}
                             F p → {
                                 ( nurl_eprintln ( nurl_str_cat `[panic] HTTP handler: ` ( string_data . p msg ) ) )
-                                ( panic_info_free p )
                             }
                         }
                         : b replaced != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
@@ -946,7 +963,6 @@ $ `stdlib/ext/http2_conn.nu`
                         ? > req_timeout_ms 0 {
                             : i elapsed - ( now_ms ) req_start_ms
                             ? > elapsed req_timeout_ms {
-                                ( http_response_free resp )
                                 = final_resp ( response_text 504 `request total-timeout exceeded\n` )
                                 = timed_out T
                             } {}
@@ -998,9 +1014,6 @@ $ `stdlib/ext/http2_conn.nu`
             }
         }
     }
-    ( http_response_free panic_resp )
-    ( request_free req )
-    ( headers_free spare )
 }
 
 // Decide whether the bytes at the start of a fresh connection are the
@@ -1042,7 +1055,7 @@ $ `stdlib/ext/http2_conn.nu`
 // request-body cap comes from the same HttpLimits. A protocol error has
 // already been answered with GOAWAY inside h2_conn_serve; there is
 // nothing further to write, the caller closes the socket.
-@ __serve_h2 HttpServer s TcpConn conn ( Vec u ) carry → v {
+@ __serve_h2 HttpServer s TcpConn conn sink ( Vec u ) carry → v {
     : HttpLimits lim . s limits
     : !H2Connection H2ConnErr cr ( h2_conn_new_buffered conn carry . lim body_default_max )
     ?? cr {
@@ -1050,7 +1063,7 @@ $ `stdlib/ext/http2_conn.nu`
             : ~ H2Connection active h2c
             : !v H2ConnErr sr ( h2_conn_serve active . s handler )
             ?? sr { T _ → {} F _ → {} }
-            ( h2_conn_free active )
+            ( h2_conn_finish active )
         }
         F _ → {}
     }

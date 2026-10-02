@@ -74,7 +74,6 @@ $ `stdlib/hal/blockdev.nu`
     ~ < k ( blk_sector_size ) { ( vec_push [u] z # u 0 ) = k + k 1 }
     : i want ( blk_sector_size )
     : i wrote ( nurl_pwrite # i32 fd # *u ( vec_data [u] z ) want * - sectors 1 want )
-    ( vec_free [u] z )
     ? != wrote want { : i32 _c ( close # i32 fd ) ^ F } {}
     = g_blkfd fd
     = g_blksectors sectors

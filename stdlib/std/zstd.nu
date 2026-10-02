@@ -27,8 +27,8 @@
 // `zstd_content_size` reads the first frame's declared size without
 // decoding anything; it is absent when the producer streamed the frame.
 //
-// Inputs are BORROWED. The returned Vec is OWNED — free with
-// `vec_free [u]`.
+// Inputs are BORROWED. The returned Vec is OWNED — the caller's, dropped
+// with its owner.
 //
 // Not supported: dictionaries (`ZstdUnsupported` — a frame that names a
 // dictionary ID cannot be decoded without it, and silently producing
@@ -118,8 +118,9 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // ── Decoder state ───────────────────────────────────────────────────
 //
-// One heap struct so helpers can write to it (NURL structs pass by
-// value; a field assigned through a `*T` is the caller's field).
+// One struct, a local of zstd_decode_limit that the helpers advance in
+// place (`inout`: NURL structs pass by value, an inout parameter is the
+// caller's storage). It owns its buffers and goes with that local.
 //
 // The entropy tables are allocated once at their maximum size and
 // rewritten in place: FSE accuracy is at most 9 bits (512 entries) and
@@ -195,7 +196,7 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ res
 }
 
-@ __zs_fw_take * ZsFwd f i n → i {
+@ __zs_fw_take inout ZsFwd f i n → i {
     ? == n 0 { ^ 0 } {}
     ? > + . f bit n * . f len 8 { = . f err 1 ^ 0 } {}
     : i v ( __zs_rd_le . f src n . f bit )
@@ -203,11 +204,11 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ v
 }
 
-@ __zs_fw_rewind * ZsFwd f i n → v { = . f bit - . f bit n }
+@ __zs_fw_rewind inout ZsFwd f i n → v { = . f bit - . f bit n }
 
-@ __zs_fw_align * ZsFwd f → v { = . f bit << >> + . f bit 7 3 3 }
+@ __zs_fw_align inout ZsFwd f → v { = . f bit << >> + . f bit 7 3 3 }
 
-@ __zs_fw_bytepos * ZsFwd f → i { ^ >> . f bit 3 }
+@ __zs_fw_bytepos inout ZsFwd f → i { ^ >> . f bit 3 }
 
 // Read `n` bits from the end of a backward stream. Bits before the
 // start of the buffer read as zero, as the format requires.
@@ -263,7 +264,7 @@ $ `stdlib/std/hash_xxh64.nu`
 // The cursor-carrying form, for the paths where a struct is clearer
 // than threading an offset through: the Huffman streams and the weight
 // decoder, which read far fewer bits per call than the sequence loop.
-@ __zs_bk_take * ZsBk b i n → i {
+@ __zs_bk_take inout ZsBk b i n → i {
     ? == n 0 { ^ 0 } {}
     = . b off - . b off n
     ^ ( __zs_bits . b src . b len . b off n )
@@ -272,7 +273,7 @@ $ `stdlib/std/hash_xxh64.nu`
 // Position a backward reader at the last information bit: the final
 // byte carries a 1 bit marking the end, above 0..7 bits of padding.
 // A final byte of zero is therefore malformed.
-@ __zs_bk_start * ZsBk b → i {
+@ __zs_bk_start inout ZsBk b → i {
     ? <= . b len 0 { ^ ZSE_CORRUPT } {}
     : *u sp . b src
     : i last # i . sp - . b len 1
@@ -287,7 +288,7 @@ $ `stdlib/std/hash_xxh64.nu`
 // Read a normalized distribution. Returns the number of symbols, or -1.
 // The counts land in `freq`; a count of -1 means "less than one", a
 // symbol that still gets a cell.
-@ __zs_fse_header * ZsFwd f ( Vec i ) freq i maxlog → i {
+@ __zs_fse_header inout ZsFwd f ( Vec i ) freq i maxlog → i {
     : i log + 5 ( __zs_fw_take f 4 )
     ? > log maxlog { ^ -1 } {}
     : *i fp ( vec_data [i] freq )
@@ -405,12 +406,12 @@ $ `stdlib/std/hash_xxh64.nu`
     : *i rcp ( vec_data [i] rc )
     ~ < s nsym {
         : i b # i . bp s
-        ? > b ZS_MAX_HUF_BITS { ( vec_free [i] rc ) ^ -1 } {}
+        ? > b ZS_MAX_HUF_BITS { ^ -1 } {}
         ? > b maxb { = maxb b } {}
         = . rcp b + # i . rcp b 1
         = s + s 1
     }
-    ? == maxb 0 { ( vec_free [i] rc ) ^ -1 } {}
+    ? == maxb 0 { ^ -1 } {}
     : i size << 1 maxb
     // Codes are handed out shortest-last: the longest codes (weight 1)
     // sit at the bottom of the table.
@@ -423,8 +424,7 @@ $ `stdlib/std/hash_xxh64.nu`
         = i - i 1
     }
     : b full == # i . rip 0 size
-    ( vec_free [i] rc )
-    ? ! full { ( vec_free [i] ri ) ^ -1 } {}
+    ? ! full { ^ -1 } {}
     : *i tp ( vec_data [i] tab )
     = s 0
     ~ < s nsym {
@@ -439,7 +439,6 @@ $ `stdlib/std/hash_xxh64.nu`
         } {}
         = s + s 1
     }
-    ( vec_free [i] ri )
     ^ maxb
 }
 
@@ -475,7 +474,7 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // ── Output buffer ───────────────────────────────────────────────────
 
-@ __zs_need * ZsDec d i n → v {
+@ __zs_need inout ZsDec d i n → v {
     ? != . d err 0 { ^ v } {}
     : i want + . d olen n
     ? > want . d limit { = . d err ZSE_LARGE ^ v } {}
@@ -491,10 +490,11 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // ── Literals ────────────────────────────────────────────────────────
 
-@ __zs_lit_need * ZsDec d i n → v {
+@ __zs_lit_need inout ZsDec d i n → v {
     ? > n . d litcap {
-        ( vec_free [u] . d lit )
-        = . d lit ( vec_with_cap [u] n )
+        // The buffer's length stays 0 (writes go through its data
+        // pointer), so reserving `n` is growing it to `n`.
+        ( vec_reserve [u] . d lit n )
         = . d litcap ( vec_cap [u] . d lit )
         ? < . d litcap n { = . d err ZSE_CORRUPT } {}
     } {}
@@ -502,12 +502,11 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // Decode one Huffman-coded bitstream into the literals buffer at
 // `at`. Returns the number of symbols, or -1.
-@ __zs_huf_stream * ZsDec d i off i len i at i cap → i {
+@ __zs_huf_stream inout ZsDec d i off i len i at i cap → i {
     ? <= len 0 { ^ -1 } {}
-    : *ZsBk b ( nurl_alloc Z ZsBk )
-    = . b src # *u + # i . d src off
-    = . b len len
-    ? != ( __zs_bk_start b ) 0 { ( nurl_free # s b ) ^ -1 } {}
+    : *u bsrc # *u + # i . d src off
+    : ~ ZsBk b @ ZsBk { bsrc len 0 }
+    ? != ( __zs_bk_start b ) 0 { ^ -1 } {}
     : i maxb . d hufbits
     : i mask - << 1 maxb 1
     : *i tp ( vec_data [i] . d huf )
@@ -527,12 +526,11 @@ $ `stdlib/std/hash_xxh64.nu`
     }
     // A stream must land exactly on its own beginning.
     ? != . b off - 0 maxb { = bad T } {}
-    ( nurl_free # s b )
     ^ ? bad -1 n
 }
 
 // Decode the Huffman tree description. Returns bytes consumed, or -1.
-@ __zs_huf_table * ZsDec d i off i len → i {
+@ __zs_huf_table inout ZsDec d i off i len → i {
     ? <= len 0 { ^ -1 } {}
     : *u sp . d src
     : i header # i . sp off
@@ -554,28 +552,23 @@ $ `stdlib/std/hash_xxh64.nu`
     } {
         // Weights are themselves FSE-coded in the next `header` bytes.
         ? > + 1 header len { ^ -1 } {}
-        : *ZsFwd f ( nurl_alloc Z ZsFwd )
-        = . f src # *u + # i . d src + off 1
-        = . f len header
-        = . f bit 0
-        = . f err 0
+        : *u fsrc # *u + # i . d src + off 1
+        : ~ ZsFwd f @ ZsFwd { fsrc header 0 0 }
         : i hdr ( __zs_fse_header f . d sc2 7 )
-        ? < hdr 0 { ( nurl_free # s f ) ^ -1 } {}
+        ? < hdr 0 { ^ -1 } {}
         : i wsym & hdr 65535
         : i wlog >> hdr 16
         ? != ( __zs_fse_build . d sc3 . d sc2 . d sc1 wsym wlog ) 0 {
-            ( nurl_free # s f ) ^ -1
+            ^ -1
         } {}
         : i bp ( __zs_fw_bytepos f )
-        ( nurl_free # s f )
         : i rem - header bp
         ? <= rem 0 { ^ -1 } {}
         // Two interleaved states share one table: state1 takes the even
         // weights, state2 the odd ones.
-        : *ZsBk b ( nurl_alloc Z ZsBk )
-        = . b src # *u + # i . d src + + off 1 bp
-        = . b len rem
-        ? != ( __zs_bk_start b ) 0 { ( nurl_free # s b ) ^ -1 } {}
+        : *u bsrc # *u + # i . d src + + off 1 bp
+        : ~ ZsBk b @ ZsBk { bsrc rem 0 }
+        ? != ( __zs_bk_start b ) 0 { ^ -1 } {}
         : *i tp ( vec_data [i] . d sc3 )
         : ~ i s1 ( __zs_bk_take b wlog )
         : ~ i s2 ( __zs_bk_take b wlog )
@@ -605,7 +598,6 @@ $ `stdlib/std/hash_xxh64.nu`
                 }
             }
         }
-        ( nurl_free # s b )
         ? bad { ^ -1 } {}
         = nsym n
         = used + 1 header
@@ -618,7 +610,7 @@ $ `stdlib/std/hash_xxh64.nu`
 }
 
 // Literals section. Leaves the reader positioned after it.
-@ __zs_literals * ZsDec d * ZsFwd f → v {
+@ __zs_literals inout ZsDec d inout ZsFwd f → v {
     : *u fsp . f src
     : *u dsp . d src
     : i btype ( __zs_fw_take f 2 )
@@ -815,7 +807,7 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // One of the three sequence tables. `which`: 0 = literals lengths,
 // 1 = offsets, 2 = match lengths.
-@ __zs_seq_table * ZsDec d * ZsFwd f i which i mode → v {
+@ __zs_seq_table inout ZsDec d inout ZsFwd f i which i mode → v {
     : ( Vec i ) tab ? == which 0 . d llt ? == which 1 . d oft . d mlt
     : i maxlog ? == which 1 8 9
     : ~ i log -1
@@ -858,7 +850,7 @@ $ `stdlib/std/hash_xxh64.nu`
 // Copy `n` literals to the output, then a match of `ml` bytes from
 // `offset` back. Overlapping copies are byte by byte on purpose: an
 // offset of 1 is the format's run-length encoding.
-@ __zs_emit * ZsDec d i ll i ml i offset → v {
+@ __zs_emit inout ZsDec d i ll i ml i offset → v {
     ? > + . d litpos ll . d litlen { = . d err ZSE_CORRUPT ^ v } {}
     ( __zs_need d + ll ml )
     ? != . d err 0 { ^ v } {}
@@ -897,7 +889,7 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // The offset code carries three recent offsets in slots 1..3; a
 // sequence with no literals shifts the meaning of each slot by one.
-@ __zs_offset * ZsDec d i code i ll → i {
+@ __zs_offset inout ZsDec d i code i ll → i {
     ? > code 3 {
         : i off - code 3
         = . d rep2 . d rep1
@@ -914,7 +906,7 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ off
 }
 
-@ __zs_sequences * ZsDec d * ZsFwd f i blocklen → v {
+@ __zs_sequences inout ZsDec d inout ZsFwd f i blocklen → v {
     : ~ i nseq ( __zs_fw_take f 8 )
     ? >= nseq 128 {
         ? == nseq 255 {
@@ -941,11 +933,9 @@ $ `stdlib/std/hash_xxh64.nu`
     ( __zs_fw_align f )
     : i at ( __zs_fw_bytepos f )
     ? >= at blocklen { = . d err ZSE_CORRUPT ^ v } {}
-    : *ZsBk b ( nurl_alloc Z ZsBk )
-    = . b src # *u + # i . f src at
-    = . b len - blocklen at
+    : *u bsrc0 # *u + # i . f src at
+    : ~ ZsBk b @ ZsBk { bsrc0 - blocklen at 0 }
     ? != ( __zs_bk_start b ) 0 {
-        ( nurl_free # s b )
         = . d err ZSE_CORRUPT
         ^ v
     } {}
@@ -1016,9 +1006,6 @@ $ `stdlib/std/hash_xxh64.nu`
     }
     // The stream must be consumed exactly.
     ? & == . d err 0 != boff 0 { = . d err ZSE_CORRUPT } {}
-    ( nurl_free # s b )
-    ( vec_free [i] llx ) ( vec_free [i] mlx )
-    ( vec_free [i] llb ) ( vec_free [i] mlb )
     ? != . d err 0 { ^ v } {}
     // Whatever literals the sequences did not consume close the block.
     ? < . d litpos . d litlen {
@@ -1029,19 +1016,15 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // ── Blocks and frames ───────────────────────────────────────────────
 
-@ __zs_block * ZsDec d i blocklen → v {
-    : *ZsFwd f ( nurl_alloc Z ZsFwd )
-    = . f src # *u + # i . d src . d pos
-    = . f len blocklen
-    = . f bit 0
-    = . f err 0
+@ __zs_block inout ZsDec d i blocklen → v {
+    : *u fsrc # *u + # i . d src . d pos
+    : ~ ZsFwd f @ ZsFwd { fsrc blocklen 0 0 }
     = . d litpos 0
     ( __zs_literals d f )
     ? == . d err 0 { ( __zs_sequences d f blocklen ) } {}
-    ( nurl_free # s f )
 }
 
-@ __zs_u32 * ZsDec d i off → i {
+@ __zs_u32 inout ZsDec d i off → i {
     : *u sp . d src
     ^ | | | # i . sp off
     << # i . sp + off 1 8
@@ -1049,7 +1032,7 @@ $ `stdlib/std/hash_xxh64.nu`
     << # i . sp + off 3 24
 }
 
-@ __zs_frame * ZsDec d → v {
+@ __zs_frame inout ZsDec d → v {
     : *u sp . d src
     // Frame_Header_Descriptor
     ? >= . d pos . d srclen { = . d err ZSE_TRUNC ^ v } {}
@@ -1158,50 +1141,24 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // ── Public API ──────────────────────────────────────────────────────
 
-@ __zs_new ( Vec u ) src i limit → *ZsDec {
-    : *ZsDec d ( nurl_alloc Z ZsDec )
-    = . d src ( vec_data [u] src )
-    = . d srclen ( vec_len [u] src )
-    = . d pos 0
-    = . d out ( vec_new [u] )
-    = . d op ( vec_data [u] . d out )
-    = . d olen 0
-    = . d ocap 0
-    = . d limit limit
-    = . d framestart 0
-    = . d lit ( vec_with_cap [u] 1024 )
-    = . d litlen 0
-    = . d litcap ( vec_cap [u] . d lit )
-    = . d litpos 0
-    = . d huf ( __zs_zeros 2048 )
-    = . d hufbits 0
-    = . d llt ( __zs_zeros 512 )
-    = . d lllog -1
-    = . d oft ( __zs_zeros 256 )
-    = . d oflog -1
-    = . d mlt ( __zs_zeros 512 )
-    = . d mllog -1
-    = . d sc1 ( __zs_zeros 300 )
-    = . d sc2 ( __zs_zeros 300 )
-    = . d sc3 ( __zs_zeros 128 )
-    = . d rep0 1
-    = . d rep1 4
-    = . d rep2 8
-    = . d window 0
-    = . d err 0
-    ^ d
-}
-
-@ __zs_dispose * ZsDec d → v {
-    ( vec_free [u] . d lit )
-    ( vec_free [i] . d huf )
-    ( vec_free [i] . d llt )
-    ( vec_free [i] . d oft )
-    ( vec_free [i] . d mlt )
-    ( vec_free [i] . d sc1 )
-    ( vec_free [i] . d sc2 )
-    ( vec_free [i] . d sc3 )
-    ( nurl_free # s d )
+// A decoder over `src`: its buffers are its own (dropped with it); `out`
+// grows as frames are decoded.
+@ __zs_new ( Vec u ) src i limit → ZsDec {
+    : ( Vec u ) out ( vec_new [u] )
+    : *u op ( vec_data [u] out )
+    : ( Vec u ) lit ( vec_with_cap [u] 1024 )
+    : i litcap ( vec_cap [u] lit )
+    ^ @ ZsDec {
+        ( vec_data [u] src ) ( vec_len [u] src ) 0
+        out op 0 0 limit 0
+        lit 0 litcap 0
+        ( __zs_zeros 2048 ) 0
+        ( __zs_zeros 512 ) -1
+        ( __zs_zeros 256 ) -1
+        ( __zs_zeros 512 ) -1
+        ( __zs_zeros 300 ) ( __zs_zeros 300 ) ( __zs_zeros 128 )
+        1 4 8 0 0
+    }
 }
 
 @ zstd_decode_limit ( Vec u ) src i max_out → !( Vec u ) ZstdErr {
@@ -1213,7 +1170,7 @@ $ `stdlib/std/hash_xxh64.nu`
     ? == n 0 {
         ^ @ !( Vec u ) ZstdErr { T ( vec_new [u] ) }
     } {}
-    : *ZsDec d ( __zs_new src max_out )
+    : ~ ZsDec d ( __zs_new src max_out )
     ~ & == . d err 0 < . d pos . d srclen {
         ? > + . d pos 4 . d srclen { = . d err ZSE_TRUNC } {
             : i magic ( __zs_u32 d . d pos )
@@ -1230,24 +1187,15 @@ $ `stdlib/std/hash_xxh64.nu`
                 } { = . d err ZSE_MAGIC } }
         }
     }
-    : i err . d err
-    // The decoder gives its output buffer up (__zs_dispose leaves it):
-    // this binding owns it from here, and the result takes it over.
-    // Read as a plain field it was a borrow, copied on the way out, and
-    // the original buffer — the whole decompressed output — leaked.
-    : ( Vec u ) out . d out
-    ( mem_take out )
-    : i olen . d olen
-    ( __zs_dispose d )
-    ? != err 0 {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) ZstdErr { F ( __zs_err err ) }
+    ? != . d err 0 {
+        ^ @ !( Vec u ) ZstdErr { F ( __zs_err . d err ) }
     } {}
-    : b ok ( vec_set_len [u] out olen )
-    ? ! ok {
-        ( vec_free [u] out )
+    ? ! ( vec_set_len [u] . d out . d olen ) {
         ^ @ !( Vec u ) ZstdErr { F # ZstdErr ZstdCorrupt }
     } {}
+    // The output leaves the decoder (moved, not copied); its tables go
+    // with it.
+    : ( Vec u ) out . d out
     ^ @ !( Vec u ) ZstdErr { T out }
 }
 
@@ -1293,7 +1241,7 @@ $ `stdlib/std/hash_xxh64.nu`
     i bits  // how many are pending
 }
 
-@ __zs_bw_add * ZsBw w i val i n → v {
+@ __zs_bw_add inout ZsBw w i val i n → v {
     ? <= n 0 { ^ v } {}
     = . w acc | . w acc << & val - << 1 n 1 . w bits
     = . w bits + . w bits n
@@ -1306,7 +1254,7 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // Close the stream: a single 1 bit marks the last information bit, and
 // the rest of the byte is zero padding the decoder skips.
-@ __zs_bw_close * ZsBw w → v {
+@ __zs_bw_close inout ZsBw w → v {
     ( __zs_bw_add w 1 1 )
     ? > . w bits 0 {
         ( vec_push [u] . w buf # u & . w acc 255 )
@@ -1322,12 +1270,6 @@ $ `stdlib/std/hash_xxh64.nu`
     ( Vec i ) dnb  // per symbol: delta applied to derive the bit count
     ( Vec i ) dfs  // per symbol: offset into `next`
     i log
-}
-
-@ __zs_ct_free sink ZsCt ct → v {
-    ( vec_free [i] . ct next )
-    ( vec_free [i] . ct dnb )
-    ( vec_free [i] . ct dfs )
 }
 
 // Mirror of `__zs_fse_build`: the same spread, read the other way.
@@ -1403,8 +1345,6 @@ $ `stdlib/std/hash_xxh64.nu`
             } {} }
         = s + s 1
     }
-    ( vec_free [i] symbol )
-    ( vec_free [i] cumul )
     ^ @ ZsCt { next dnb dfs log }
 }
 
@@ -1418,7 +1358,7 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ # i . np + >> v nb # i . dfsp sym
 }
 
-@ __zs_ct_encode * ZsBw w ZsCt ct i state i sym → i {
+@ __zs_ct_encode inout ZsBw w ZsCt ct i state i sym → i {
     : *i dnbp ( vec_data [i] . ct dnb )
     : *i dfsp ( vec_data [i] . ct dfs )
     : *i np ( vec_data [i] . ct next )
@@ -1427,7 +1367,7 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ # i . np + >> state nb # i . dfsp sym
 }
 
-@ __zs_ct_flush * ZsBw w ZsCt ct i state → v {
+@ __zs_ct_flush inout ZsBw w ZsCt ct i state → v {
     ( __zs_bw_add w state . ct log )
 }
 
@@ -1489,34 +1429,23 @@ $ `stdlib/std/hash_xxh64.nu`
     ( Vec i ) shadow  // save/restore snapshot: 256+3*64 dists + 8 scalars
 }
 
-@ __zs_wst_new → *ZsWst {
-    : *ZsWst st ( nurl_alloc Z ZsWst )
-    = . st hlen ( __zs_zeros 256 )
-    = . st hvalid 0
-    = . st lldist ( __zs_zeros 64 )
-    = . st ofdist ( __zs_zeros 64 )
-    = . st mldist ( __zs_zeros 64 )
-    = . st llok 0
-    = . st ofok 0
-    = . st mlok 0
-    = . st shadow ( __zs_zeros 912 )
-    ^ st
-}
-
-@ __zs_wst_free sink * ZsWst st → v {
-    ( vec_free [i] . st hlen )
-    ( vec_free [i] . st lldist )
-    ( vec_free [i] . st ofdist )
-    ( vec_free [i] . st mldist )
-    ( vec_free [i] . st shadow )
-    ( nurl_free # s st )
+// A fresh writer state: nothing standing yet. The encoder keeps it in a
+// local the block writer advances in place (`inout`).
+@ __zs_wst_new → ZsWst {
+    ^ @ ZsWst {
+        ( __zs_zeros 256 ) 0
+        ( __zs_zeros 64 ) ( __zs_zeros 64 ) ( __zs_zeros 64 )
+        0 0 0
+        0 0 0
+        ( __zs_zeros 912 )
+    }
 }
 
 // Writing a block ADVANCES this state (a sent table becomes the
 // standing one). Trying several parses of the same block therefore
 // needs the state as it stood before each trial: save it, and either
 // commit the advance (the trial won) or put it back (it lost).
-@ __zs_wst_save * ZsWst st i slot → v {
+@ __zs_wst_save inout ZsWst st i slot → v {
     : *i sh0 ( vec_data [i] . st shadow )
     : *i sh # *i + # i sh0 * slot 3648
     : *i hl ( vec_data [i] . st hlen )
@@ -1537,7 +1466,7 @@ $ `stdlib/std/hash_xxh64.nu`
     = . sh 454 . st mlok
 }
 
-@ __zs_wst_restore * ZsWst st i slot → v {
+@ __zs_wst_restore inout ZsWst st i slot → v {
     : *i sh0 ( vec_data [i] . st shadow )
     : *i sh # *i + # i sh0 * slot 3648
     : *i hl ( vec_data [i] . st hlen )
@@ -1611,12 +1540,11 @@ $ `stdlib/std/hash_xxh64.nu`
         = s + s 1
     }
     = nodes nsym
-    ? == present 0 { ( vec_free [i] cnt ) ( vec_free [i] par ) ( vec_free [i] live ) ^ 0 } {}
+    ? == present 0 { ^ 0 } {}
     ? == present 1 {
         // A single distinct byte still needs a one-bit code.
         = s 0
         ~ < s nsym { ? > # i . cp s 0 { = . lp s 1 } {} = s + s 1 }
-        ( vec_free [i] cnt ) ( vec_free [i] par ) ( vec_free [i] live )
         ^ 1
     } {}
     : ~ i remaining present
@@ -1656,7 +1584,6 @@ $ `stdlib/std/hash_xxh64.nu`
         } {}
         = s + s 1
     }
-    ( vec_free [i] cnt ) ( vec_free [i] par ) ( vec_free [i] live )
     ^ maxb
 }
 
@@ -1711,14 +1638,12 @@ $ `stdlib/std/hash_xxh64.nu`
         } { = . cop s 0 }
         = s + s 1
     }
-    ( vec_free [i] rank )
-    ( vec_free [i] val )
 }
 
 // Flush a forward bitstream: no end marker, just zero padding. Header
 // bitstreams are read forward and their length is known, so the 1-bit
 // terminator a backward stream needs would be one bit of corruption.
-@ __zs_bw_close_fwd * ZsBw w → v {
+@ __zs_bw_close_fwd inout ZsBw w → v {
     ? > . w bits 0 {
         ( vec_push [u] . w buf # u & . w acc 255 )
         = . w acc 0
@@ -1806,7 +1731,7 @@ $ `stdlib/std/hash_xxh64.nu`
 // Write a normalized distribution — the exact inverse of the reader in
 // `__zs_fse_header`, sharing its shrinking field width and its 2-bit
 // runs of zero-probability symbols.
-@ __zs_write_ncount * ZsBw w ( Vec i ) norm i nsym i log → v {
+@ __zs_write_ncount inout ZsBw w ( Vec i ) norm i nsym i log → v {
     : *i np ( vec_data [i] norm )
     ( __zs_bw_add w - log 5 4 )
     : i size << 1 log
@@ -1860,12 +1785,9 @@ $ `stdlib/std/hash_xxh64.nu`
     ~ < k nw { : i x # i . wp k = . cp x + # i . cp x 1 = k + k 1 }
     : i log 6
     : i maxsym ( __zs_normalize counts norm alpha log )
-    ? < maxsym 1 { ( vec_free [i] counts ) ( vec_free [i] norm ) ^ F } {}
+    ? < maxsym 1 { ^ F } {}
     : ZsCt ct ( __zs_ct_build norm + maxsym 1 log )
-    : *ZsBw w ( nurl_alloc Z ZsBw )
-    = . w buf ( vec_new [u] )
-    = . w acc 0
-    = . w bits 0
+    : ~ ZsBw w @ ZsBw { ( vec_new [u] ) 0 0 }
     ( __zs_write_ncount w norm + maxsym 1 log )
     ( __zs_bw_close_fwd w )
     // Two states, even weights on the first, odd on the second, encoded
@@ -1902,11 +1824,6 @@ $ `stdlib/std/hash_xxh64.nu`
         ( vec_extend [u] tree . w buf )
         = ok T
     } {}
-    ( vec_free [u] . w buf )
-    ( nurl_free # s w )
-    ( __zs_ct_free ct )
-    ( vec_free [i] counts )
-    ( vec_free [i] norm )
     ^ ok
 }
 
@@ -1914,10 +1831,7 @@ $ `stdlib/std/hash_xxh64.nu`
 // backward replays the symbols in order.
 @ __zs_huf_stream_enc ( Vec u ) dst ( Vec u ) lits i from i to
 ( Vec i ) lens ( Vec i ) codes → i {
-    : *ZsBw w ( nurl_alloc Z ZsBw )
-    = . w buf ( vec_new [u] )
-    = . w acc 0
-    = . w bits 0
+    : ~ ZsBw w @ ZsBw { ( vec_new [u] ) 0 0 }
     : *u lp ( vec_data [u] lits )
     : *i lnp ( vec_data [i] lens )
     : *i cop ( vec_data [i] codes )
@@ -1930,14 +1844,12 @@ $ `stdlib/std/hash_xxh64.nu`
     ( __zs_bw_close w )
     : i n ( vec_len [u] . w buf )
     ( vec_extend [u] dst . w buf )
-    ( vec_free [u] . w buf )
-    ( nurl_free # s w )
     ^ n
 }
 
 // Write the literals section. Returns T when it went out Huffman-coded,
 // F when raw literals were smaller (or the tree could not be sent).
-@ __zs_lit_compress ( Vec u ) body ( Vec u ) lits * ZsWst wst → b {
+@ __zs_lit_compress ( Vec u ) body ( Vec u ) lits inout ZsWst wst → b {
     : i n ( vec_len [u] lits )
     ? < n 64 { ^ F } {}
     : ( Vec i ) counts ( __zs_zeros ZS_MAX_SYMS )
@@ -1950,12 +1862,11 @@ $ `stdlib/std/hash_xxh64.nu`
     : ~ i last 0
     : ~ i s 0
     ~ < s ZS_MAX_SYMS { ? > # i . cnp s 0 { = last s } {} = s + s 1 }
-    ? == last 0 { ( vec_free [i] counts ) ^ F } {}
+    ? == last 0 { ^ F } {}
     : ( Vec i ) lens ( __zs_zeros ZS_MAX_SYMS )
     : ( Vec i ) codes ( __zs_zeros ZS_MAX_SYMS )
     : ~ i maxb ( __zs_huf_lengths counts lens ZS_MAX_SYMS )
     ? | <= maxb 0 > maxb ZS_MAX_HUF_BITS {
-        ( vec_free [i] counts ) ( vec_free [i] lens ) ( vec_free [i] codes )
         ^ F
     } {}
     ( __zs_huf_codes lens codes ZS_MAX_SYMS maxb )
@@ -2034,11 +1945,7 @@ $ `stdlib/std/hash_xxh64.nu`
             ( vec_extend [u] tree tdir )
         } { ? okfse { ( vec_extend [u] tree tfse ) } {} }
     }
-    ( vec_free [u] tdir )
-    ( vec_free [u] tfse )
-    ( vec_free [i] wts )
     ? & ! treeless == ( vec_len [u] tree ) 0 {
-        ( vec_free [i] counts ) ( vec_free [i] lens ) ( vec_free [i] codes )
         ^ F
     } {}
     : i btype ? treeless 3 2
@@ -2115,9 +2022,6 @@ $ `stdlib/std/hash_xxh64.nu`
         ~ < t ZS_MAX_SYMS { = . hlp2 t # i . lnp2 t = t + t 1 }
         = . wst hvalid 1
     } {}
-    ( vec_free [i] counts )
-    ( vec_free [i] lens )
-    ( vec_free [i] codes )
     ^ used
 }
 
@@ -2167,7 +2071,7 @@ $ `stdlib/std/hash_xxh64.nu`
 // and spends no header bytes at all. `modeslot[0]` receives the mode.
 @ __zs_seq_ctable ( Vec u ) tabs ( Vec i ) counts i nsym i maxlog i nseq
 ( Vec i ) deffreq i defn i deflog ( Vec i ) modeslot
-* ZsWst st i which → ZsCt {
+inout ZsWst st i which → ZsCt {
     : *i mp ( vec_data [i] modeslot )
     : *i cntp ( vec_data [i] counts )
     // The standing table (what the decoder still holds), if any.
@@ -2206,15 +2110,10 @@ $ `stdlib/std/hash_xxh64.nu`
         = maxsym ( __zs_normalize counts norm nsym log )
         ? > maxsym 0 {
             = newlog log
-            : *ZsBw w ( nurl_alloc Z ZsBw )
-            = . w buf ( vec_new [u] )
-            = . w acc 0
-            = . w bits 0
+            : ~ ZsBw w @ ZsBw { ( vec_new [u] ) 0 0 }
             ( __zs_write_ncount w norm + maxsym 1 log )
             ( __zs_bw_close_fwd w )
             ( vec_extend [u] ncount . w buf )
-            ( vec_free [u] . w buf )
-            ( nurl_free # s w )
             : *i normp ( vec_data [i] norm )
             = cost_new + ( __zs_dist_cost cntp nsym normp nsym log )
             << * ( vec_len [u] ncount ) 8 4
@@ -2243,14 +2142,9 @@ $ `stdlib/std/hash_xxh64.nu`
                 = . st mlok 1
             }
         }
-        ( vec_free [i] norm )
-        ( vec_free [i] defnorm )
         ^ ct
     } {}
-    ( vec_free [i] norm )
-    ( vec_free [u] ncount )
     ? == mode 3 {
-        ( vec_free [i] defnorm )
         ^ ( __zs_ct_build prev 64 prevlog )
     } {}
     // Predefined: it becomes the standing table too — that is what the
@@ -2266,13 +2160,12 @@ $ `stdlib/std/hash_xxh64.nu`
             = . st mlok 1
         }
     }
-    ( vec_free [i] defnorm )
     ^ ( __zs_ct_build deffreq defn deflog )
 }
 
 @ __zs_write_block ( Vec u ) out ( Vec u ) src i bstart i blen i last
 ( Vec u ) lits ( Vec i ) sll ( Vec i ) sml ( Vec i ) soff
-( Vec i ) llb ( Vec i ) mlb ( Vec i ) llx ( Vec i ) mlx * ZsWst wst → v {
+( Vec i ) llb ( Vec i ) mlb ( Vec i ) llx ( Vec i ) mlx inout ZsWst wst → v {
     : i nseq ( vec_len [i] sll )
     : i nlit ( vec_len [u] lits )
     : ( Vec u ) body ( vec_with_cap [u] + blen 64 )
@@ -2332,10 +2225,7 @@ $ `stdlib/std/hash_xxh64.nu`
         : i mlmode # i . msp 0
         ( vec_push [u] body # u | | << llmode 6 << ofmode 4 << mlmode 2 )
         ( vec_extend [u] body tabs )
-        : *ZsBw w ( nurl_alloc Z ZsBw )
-        = . w buf ( vec_new [u] )
-        = . w acc 0
-        = . w bits 0
+        : ~ ZsBw w @ ZsBw { ( vec_new [u] ) 0 0 }
         // Encoded last sequence first: the decoder reads backward.
         : i lastn - nseq 1
         : i llc0 # i . llcp lastn
@@ -2368,15 +2258,6 @@ $ `stdlib/std/hash_xxh64.nu`
         ( __zs_ct_flush w llct lls )
         ( __zs_bw_close w )
         ( vec_extend [u] body . w buf )
-        ( vec_free [u] . w buf )
-        ( nurl_free # s w )
-        ( __zs_ct_free llct )
-        ( __zs_ct_free ofct )
-        ( __zs_ct_free mlct )
-        ( vec_free [i] deffreq )
-        ( vec_free [i] modeslot )
-        ( vec_free [i] llc ) ( vec_free [i] mlc ) ( vec_free [i] ofc )
-        ( vec_free [i] llcnt ) ( vec_free [i] mlcnt ) ( vec_free [i] ofcnt )
     } {}
     : i bodylen ( vec_len [u] body )
     ? < bodylen blen {
@@ -2601,7 +2482,7 @@ i attempts i at i bend i rep0 i ll ( Vec i ) out → i {
 // Relax one candidate over a run of lengths. The ML code is stepped
 // incrementally — its base table is sorted, so a length walk crosses
 // each code boundary once instead of looking every length up.
-@ __zs_opt_relax * ZsOpt o i k i cbase i off i ofprice i lmin i lmax
+@ __zs_opt_relax inout ZsOpt o i k i cbase i off i ofprice i lmin i lmax
 i nr0 i nr1 i nr2 → v {
     ? > lmin lmax { ^ v } {}
     : *i costp . o cost
@@ -2648,7 +2529,7 @@ i nr0 i nr1 i nr2 → v {
 // increasing order, so for any target length the first candidate that
 // covers it is the cheapest, and each candidate relaxes only the
 // lengths the previous one could not reach.
-@ __zs_opt_matches * ZsOpt o i k → v {
+@ __zs_opt_matches inout ZsOpt o i k → v {
     : *u p . o p
     : i bstart . o bstart
     : i n . o blen
@@ -2869,7 +2750,7 @@ i nr0 i nr1 i nr2 → v {
     } {}
 }
 
-@ __zs_opt_parse * ZsOpt o → v {
+@ __zs_opt_parse inout ZsOpt o → v {
     : *u p . o p
     : i bstart . o bstart
     : i n . o blen
@@ -2946,7 +2827,7 @@ i nr0 i nr1 i nr2 → v {
 // (lits, sll, sml, soff) form the block writer takes. The forward walk
 // replays the decoder's rep bookkeeping, so the offbase chosen here is
 // exactly what the decoder will resolve back to the same distance.
-@ __zs_opt_extract * ZsOpt o ( Vec u ) srcv ( Vec u ) lits
+@ __zs_opt_extract inout ZsOpt o ( Vec u ) srcv ( Vec u ) lits
 ( Vec i ) sll ( Vec i ) sml ( Vec i ) soff * i reps → v {
     : i n . o blen
     : i bstart . o bstart
@@ -3036,8 +2917,6 @@ i nr0 i nr1 i nr2 → v {
     : i maxsym ( __zs_normalize cnt2 norm nsym log )
     ? <= maxsym 0 {
         ( __zs_prices_16 cnt nsym price )
-        ( vec_free [i] cnt2 )
-        ( vec_free [i] norm )
         ^ v
     } {}
     : *i np ( vec_data [i] norm )
@@ -3048,14 +2927,12 @@ i nr0 i nr1 i nr2 → v {
         = . price t ? > share 0 - lt ( __zs_log2_16 share ) + lt 16
         = t + t 1
     }
-    ( vec_free [i] cnt2 )
-    ( vec_free [i] norm )
 }
 
 // Prices for pass 2: what pass 1 actually chose, counted and turned
 // into bits. Extra-bit costs are folded into each code's price so the
 // relax loop adds one number.
-@ __zs_opt_reprice * ZsOpt o ( Vec u ) lits ( Vec i ) sll ( Vec i ) sml
+@ __zs_opt_reprice inout ZsOpt o ( Vec u ) lits ( Vec i ) sll ( Vec i ) sml
 ( Vec i ) soff ( Vec i ) scratch ( Vec i ) llx ( Vec i ) mlx → v {
     : *i cnt ( vec_data [i] scratch )
     : *i litpp . o litp
@@ -3099,8 +2976,6 @@ i nr0 i nr1 i nr2 → v {
             = q + q 1
         }
     }
-    ( vec_free [i] hlens )
-    ( vec_free [i] hcnt )
     // Sequence codes.
     : *i sllp ( vec_data [i] sll )
     : *i smlp ( vec_data [i] sml )
@@ -3149,7 +3024,7 @@ i nr0 i nr1 i nr2 → v {
 // Pass-1 prices: literals from the block's own byte counts (most of
 // the win — 'e' is not priced like 'q'), sequence codes from the
 // format's predefined distributions.
-@ __zs_opt_price_static * ZsOpt o i bstart i blen ( Vec i ) scratch
+@ __zs_opt_price_static inout ZsOpt o i bstart i blen ( Vec i ) scratch
 ( Vec i ) llx ( Vec i ) mlx i variant → v {
     : *i cnt ( vec_data [i] scratch )
     : *u p . o p
@@ -3258,37 +3133,26 @@ i nr0 i nr1 i nr2 → v {
     : ( Vec i ) vccm ( __zs_zeros << cap 3 )
     : ( Vec i ) vccn ( __zs_zeros cap )
     : *i reps3p ( vec_data [i] reps3 )
-    : *ZsOpt o ( nurl_alloc Z ZsOpt )
-    = . o p p
-    = . o hp ( vec_data [i] htab )
-    = . o cp ( vec_data [i] chain )
-    = . o h3p ( vec_data [i] h3tab )
-    = . o hlog hlog
-    = . o chainmask chainmask
-    = . o attempts ? >= level 19 256 ? >= level 16 64 32
-    = . o suff ZS_OPT_SUFF
-    = . o cost ( vec_data [i] vcost )
-    = . o bln ( vec_data [i] vbln )
-    = . o bof ( vec_data [i] vbof )
-    = . o bll ( vec_data [i] vbll )
-    = . o blit ( vec_data [i] vblit )
-    = . o br0 ( vec_data [i] vbr0 )
-    = . o br1 ( vec_data [i] vbr1 )
-    = . o br2 ( vec_data [i] vbr2 )
-    = . o litp ( vec_data [i] vlitp )
-    = . o llp ( vec_data [i] vllp )
-    = . o mlp ( vec_data [i] vmlp )
-    = . o ofp ( vec_data [i] vofp )
-    = . o llbp ( vec_data [i] llb )
-    = . o mlbp ( vec_data [i] mlb )
-    = . o cco ( vec_data [i] vcco )
-    = . o ccm ( vec_data [i] vccm )
-    = . o ccn ( vec_data [i] vccn )
+    // The parse state points into the arrays above (which outlive it);
+    // a local the parser advances in place (`inout`).
+    : i attempts ? >= level 19 256 ? >= level 16 64 32
+    : ~ ZsOpt o @ ZsOpt {
+        p 0 0
+        ( vec_data [i] htab ) ( vec_data [i] chain ) ( vec_data [i] h3tab )
+        hlog chainmask attempts 0 ZS_OPT_SUFF 0
+        ( vec_data [i] vcost ) ( vec_data [i] vbln ) ( vec_data [i] vbof )
+        ( vec_data [i] vbll ) ( vec_data [i] vblit )
+        ( vec_data [i] vbr0 ) ( vec_data [i] vbr1 ) ( vec_data [i] vbr2 )
+        ( vec_data [i] vlitp ) ( vec_data [i] vllp ) ( vec_data [i] vmlp ) ( vec_data [i] vofp )
+        ( vec_data [i] llb ) ( vec_data [i] mlb )
+        ( vec_data [i] vcco ) ( vec_data [i] vccm ) ( vec_data [i] vccn )
+        0 0 0
+    }
     : ( Vec u ) lits ( vec_with_cap [u] ZS_BLOCK_MAX )
     : ( Vec i ) sll ( vec_new [i] )
     : ( Vec i ) sml ( vec_new [i] )
     : ( Vec i ) soff ( vec_new [i] )
-    : *ZsWst wst ( __zs_wst_new )
+    : ~ ZsWst wst ( __zs_wst_new )
     : ~ i rep0 1
     : ~ i rep1 4
     : ~ i rep2 8
@@ -3361,7 +3225,6 @@ i nr0 i nr1 i nr2 → v {
                     = . bestrepsp 2 # i . reps3p 2
                     ( __zs_wst_save wst 1 )
                 } {}
-                ( vec_free [u] trial )
                 = round + round 1
             }
             = seed + seed 1
@@ -3369,40 +3232,12 @@ i nr0 i nr1 i nr2 → v {
         // The winner's post-block state is what the next block builds on.
         ( __zs_wst_restore wst 1 )
         ( vec_extend [u] out bestbody )
-        ( vec_free [u] bestbody )
         = rep0 # i . bestrepsp 0
         = rep1 # i . bestrepsp 1
         = rep2 # i . bestrepsp 2
-        ( vec_free [i] bestreps )
         = pos + pos blen
     }
     ( __zs_pu32 out & ( xxh64 src ) 0xFFFFFFFF )
-    ( __zs_wst_free wst )
-    ( nurl_free # s o )
-    ( vec_free [i] htab )
-    ( vec_free [i] chain )
-    ( vec_free [i] h3tab )
-    ( vec_free [i] llx )
-    ( vec_free [i] mlx )
-    ( vec_free [i] llb )
-    ( vec_free [i] mlb )
-    ( vec_free [i] vcost )
-    ( vec_free [i] vbln )
-    ( vec_free [i] vbof )
-    ( vec_free [i] vbll )
-    ( vec_free [i] vblit )
-    ( vec_free [i] vbr0 )
-    ( vec_free [i] vbr1 )
-    ( vec_free [i] vbr2 )
-    ( vec_free [i] vlitp )
-    ( vec_free [i] vllp )
-    ( vec_free [i] vmlp )
-    ( vec_free [i] vofp )
-    ( vec_free [i] scratch )
-    ( vec_free [i] reps3 )
-    ( vec_free [i] vcco )
-    ( vec_free [i] vccm )
-    ( vec_free [i] vccn )
     ^ out
 }
 
@@ -3437,7 +3272,7 @@ i nr0 i nr1 i nr2 → v {
     : ( Vec i ) sml ( vec_new [i] )
     : ( Vec i ) soff ( vec_new [i] )
     : ( Vec i ) found ( __zs_zeros 2 )
-    : *ZsWst wst ( __zs_wst_new )
+    : ~ ZsWst wst ( __zs_wst_new )
     : *i fp ( vec_data [i] found )
     : b lazy >= level 2
     : ~ i rep0 1
@@ -3517,14 +3352,6 @@ i nr0 i nr1 i nr2 → v {
         = pos bend
     }
     ( __zs_pu32 out & ( xxh64 src ) 0xFFFFFFFF )
-    ( vec_free [i] htab )
-    ( vec_free [i] chain )
-    ( vec_free [i] llx ) ( vec_free [i] mlx )
-    ( vec_free [i] llb ) ( vec_free [i] mlb )
-    ( vec_free [u] lits )
-    ( vec_free [i] sll ) ( vec_free [i] sml ) ( vec_free [i] soff )
-    ( vec_free [i] found )
-    ( __zs_wst_free wst )
     ^ out
 }
 

@@ -75,7 +75,7 @@ $ `src/model.nu`
 // Their ids are NOT hardcoded here — they are looked up in the vocabulary the
 // checkpoint ships, because they move between whisper versions (v3 added a
 // language and every id after it shifted).
-@ __wh_special * Tok t s name → i {
+@ __wh_special Tok t s name → i {
     : ( Vec i ) ids ( tok_encode t name T )
     : ~ i id -1
     ? == 1 ( vec_len [i] ids ) {
@@ -114,7 +114,7 @@ $ `src/model.nu`
 }
 
 // One "[a --> b] text" line from a slice of the decoded ids.
-@ __wh_emit_seg * Tok t ( Vec i ) ids i from i to ( Vec VadRun ) runs f t0 f t1 ( Vec u ) out → v {
+@ __wh_emit_seg Tok t ( Vec i ) ids i from i to ( Vec VadRun ) runs f t0 f t1 ( Vec u ) out → v {
     ? <= to from { ^ {} } {}
     : ( Vec i ) seg ( vec_new [i] )
     : ~ i k from
@@ -246,7 +246,7 @@ $ `src/model.nu`
 // 20 ms) with the words — it was trained to. `win_off` places this window in
 // the condensed timeline; `runs` places the condensed timeline in the
 // recording.
-@ __wh_decode_window * Whisper w * Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs f nospeech ( Vec u ) out → b {
+@ __wh_decode_window * Whisper w Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs f nospeech ( Vec u ) out → b {
     // Language codes are lowercase by definition (<|fi|>, <|en|> …) — a
     // phone keyboard capitalizes the first letter, and "Fi" failing with
     // no explanation is a bug report waiting to happen. Normalize here,
@@ -403,7 +403,7 @@ $ `src/model.nu`
 // once and exits; `whisper serve` opens the model ONCE and runs this per
 // request — the 1.5 GB read, the f16→f32 conversion and the kernel compile
 // all happen before the first request instead of inside every one.
-@ wh_run * Whisper w * Tok t ( Vec f ) at16_in s lang i maxtok b use_vad b with_ts f nospeech ( Vec u ) out → b {
+@ wh_run * Whisper w Tok t ( Vec f ) at16_in s lang i maxtok b use_vad b with_ts f nospeech ( Vec u ) out → b {
     : ~ ( Vec f ) at16 at16_in
     // where each surviving stretch of condensed audio sits in the
     // recording — empty (identity) without VAD

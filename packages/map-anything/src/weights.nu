@@ -37,12 +37,12 @@ $ `stdlib/std/floatbits.nu`
 $ `deps/safetensor/src/safetensor.nu`
 
 : Lw {
-    * St st
+    St st
     ( Vec String ) errs
 }
 
 @ lw_open s path → !*Lw String {
-    : !*St String r ( st_open path )
+    : !St String r ( st_open path )
     ?? r {
         F e → ^ @ !*Lw String { F e }
         T st → {
@@ -69,13 +69,13 @@ $ `deps/safetensor/src/safetensor.nu`
 @ lw_ndim * Lw w s name → i {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
-    ?? ( vec_get [StTensor] . . w st tensors i0 ) { T t → ^ . t nd F → ^ 0 }
+    ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) { T t → ^ . t nd F → ^ 0 }
 }
 
 @ lw_dim * Lw w s name i axis → i {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
-    ?? ( vec_get [StTensor] . . w st tensors i0 ) {
+    ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
         T t → ^ ? == axis 0 . t d0 ? == axis 1 . t d1 ? == axis 2 . t d2 ? == axis 3 . t d3 0
         F → ^ 0
     }
@@ -84,7 +84,7 @@ $ `deps/safetensor/src/safetensor.nu`
 @ lw_nelems * Lw w s name → i {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
-    ?? ( vec_get [StTensor] . . w st tensors i0 ) { T t → ^ . t nelems F → ^ 0 }
+    ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) { T t → ^ . t nelems F → ^ 0 }
 }
 
 @ __lw_fail * Lw w String m → v {
@@ -107,7 +107,7 @@ $ `deps/safetensor/src/safetensor.nu`
 @ lw_f32_ptr * Lw w s name i n → *u {
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ # *u 0 } {}
-    ?? ( vec_get [StTensor] . . w st tensors i0 ) {
+    ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
         T t → {
             ? == . t dtype ST_F32 {} { ^ # *u 0 }
             ? == . t nelems n {} { ^ # *u 0 }
@@ -132,7 +132,7 @@ $ `deps/safetensor/src/safetensor.nu`
         ^ F
     } {}
     : ~ i have 0
-    ?? ( vec_get [StTensor] . . w st tensors i0 ) {
+    ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
         T t → { = have . t nelems }
         F → {}
     }
@@ -190,7 +190,7 @@ $ `deps/safetensor/src/safetensor.nu`
     : ~ i g1 0
     : ~ i g2 0
     : ~ i g3 0
-    ?? ( vec_get [StTensor] . . w st tensors i0 ) {
+    ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
         T t → {
             = nd . t nd
             = g0 . t d0

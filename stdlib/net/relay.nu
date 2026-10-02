@@ -98,7 +98,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) body
 }
 
-@ relay_frame_free sink RelayFrame fr → v { ( vec_free [u] . fr body ) }
+// Let go of `fr` now rather than at the end of its owner's scope.
+@ relay_frame_free sink RelayFrame fr → v {}
 
 @ __frame i ftype ( Vec u ) body → ( Vec u ) {
     : ( Vec u ) f ( vec_new [u] )
@@ -219,7 +220,6 @@ $ `stdlib/core/rcbox.nu`
             T chunk → {
                 : i cn ( vec_len [u] chunk )
                 ? == cn 0 { = fail T } { ( vec_extend [u] buf chunk ) = got + got cn = idle 0 }
-                ( vec_free [u] chunk )
             }
             F e → {
                 // NetTimeout mid-frame: the peer is still connected and more
@@ -243,7 +243,6 @@ $ `stdlib/core/rcbox.nu`
         T h → {
             : i ftype ?? ( vec_get [u] h 0 ) { T x → # i x F → -1 }
             : i len ?? ( bytes_read_u32_be h 1 ) { T x → # i x F → -1 }
-            ( vec_free [u] h )
             ? & >= len 0 <= len ( _relay_max ) {
                 : ?( Vec u ) bd ( __read_exact c len )
                 ?? bd {
@@ -346,8 +345,6 @@ $ `stdlib/core/rcbox.nu`
     : String hex ( bytes_to_hex head )
     ( nurl_print `relay: ` ) ( nurl_print sign ) ( nurl_print ` peer ` )
     ( nurl_print ( string_data hex ) ) ( nurl_print `\n` )
-    ( string_free hex )
-    ( vec_free [u] head )
 }
 
 @ __relay_register_conn * RelayServerImpl rs TcpConn c ( Vec u ) pk → s {
@@ -413,18 +410,22 @@ $ `stdlib/core/rcbox.nu`
     ^ # s g
 }
 
-// Remove an entry pointer from a group's member list (compacting copy).
+// Remove an entry pointer from a group's member list (compacted in place,
+// order kept; the list owns none of the entries it points at).
 @ __grp_remove_member * GroupEntry g s entry_ptr → v {
-    : i n ( vec_len [s] . g members )
-    : ( Vec s ) keep ( vec_new [s] )
+    : ( Vec s ) ms . g members
+    : i n ( vec_len [s] ms )
+    : ~ i keep 0
     : ~ i k 0
     ~ < k n {
-        : s mp ?? ( vec_get [s] . g members k ) { T x → x F → # s 0 }
-        ? != # i mp entry_ptr { ( vec_push [s] keep mp ) } {}
+        : s mp ?? ( vec_get [s] ms k ) { T x → x F → # s 0 }
+        ? != # i mp entry_ptr {
+            ? != keep k { : b _sw ( vec_swap [s] ms keep k ) } {}
+            = keep + keep 1
+        } {}
         = k + k 1
     }
-    ( vec_free [s] . g members )
-    = . g members keep
+    : b _cut ( vec_set_len [s] ms keep )
 }
 
 @ __relay_group_join * RelayServerImpl rs s entry_ptr ( Vec u ) gid → v {
@@ -475,7 +476,6 @@ $ `stdlib/core/rcbox.nu`
             ? == . de live 1 {
                 : ( Vec u ) out ( relay_build_deliver . se pubkey payload )
                 ( __relay_send_locked de out )
-                ( vec_free [u] out )
             } {}
         } {}
         = k + k 1
@@ -504,10 +504,7 @@ $ `stdlib/core/rcbox.nu`
                             : *RelayEntry de # *RelayEntry dp
                             : ( Vec u ) out ( relay_build_deliver . se pubkey pl )
                             ( __relay_send_locked de out )
-                            ( vec_free [u] out )
                         } {}
-                        ( vec_free [u] dst )
-                        ( vec_free [u] pl )
                     } {}
                 } {}
                 ? == ft ( relay_gjoin ) { ( __relay_group_join rs self_entry . f body ) } {}
@@ -517,11 +514,8 @@ $ `stdlib/core/rcbox.nu`
                         : ( Vec u ) gid ( relay_gsend_gid . f body )
                         : ( Vec u ) pl ( relay_gsend_payload . f body )
                         ( __relay_group_fanout rs self_entry gid pl )
-                        ( vec_free [u] gid )
-                        ( vec_free [u] pl )
                     } {}
                 } {}
-                ( relay_frame_free f )
             }
             F → { = done T }
         }
@@ -580,7 +574,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) payload
 }
 
-@ relay_msg_free sink RelayMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
+// Let go of `m` now rather than at the end of its owner's scope.
+@ relay_msg_free sink RelayMsg m → v {}
 
 @ relay_dial s host i port → !RelayClient NetErr {
     : i raw ( nurl_tcp_connect host port )
@@ -597,14 +592,12 @@ $ `stdlib/core/rcbox.nu`
 @ relay_register RelayClient rc ( Vec u ) pubkey → !v NetErr {
     : ( Vec u ) f ( relay_build_register pubkey )
     : !v NetErr r ( tcp_write_all . rc conn f )
-    ( vec_free [u] f )
     ^ r
 }
 
 @ relay_send RelayClient rc ( Vec u ) dest_pk ( Vec u ) payload → !v NetErr {
     : ( Vec u ) f ( relay_build_forward dest_pk payload )
     : !v NetErr r ( tcp_write_all . rc conn f )
-    ( vec_free [u] f )
     ^ r
 }
 
@@ -612,14 +605,12 @@ $ `stdlib/core/rcbox.nu`
 @ relay_group_join RelayClient rc ( Vec u ) group_id → !v NetErr {
     : ( Vec u ) f ( relay_build_group_join group_id )
     : !v NetErr r ( tcp_write_all . rc conn f )
-    ( vec_free [u] f )
     ^ r
 }
 
 @ relay_group_leave RelayClient rc ( Vec u ) group_id → !v NetErr {
     : ( Vec u ) f ( relay_build_group_leave group_id )
     : !v NetErr r ( tcp_write_all . rc conn f )
-    ( vec_free [u] f )
     ^ r
 }
 
@@ -629,14 +620,12 @@ $ `stdlib/core/rcbox.nu`
 @ relay_broadcast RelayClient rc ( Vec u ) group_id ( Vec u ) payload → !v NetErr {
     : ( Vec u ) f ( relay_build_group_send group_id payload )
     : !v NetErr r ( tcp_write_all . rc conn f )
-    ( vec_free [u] f )
     ^ r
 }
 
 @ relay_keepalive RelayClient rc → !v NetErr {
     : ( Vec u ) f ( relay_build_keepalive )
     : !v NetErr r ( tcp_write_all . rc conn f )
-    ( vec_free [u] f )
     ^ r
 }
 
@@ -655,7 +644,6 @@ $ `stdlib/core/rcbox.nu`
                     = out @ ?RelayMsg { T @ RelayMsg { src pl } }
                     = done T
                 } {}
-                ( relay_frame_free f )
             }
             F → { = done T }
         }

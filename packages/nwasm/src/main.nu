@@ -16,13 +16,10 @@ $ `module.nu`
 $ `interp.nu`
 
 // FuncType of an exported function (or #s 0 if unavailable). Imported funcs
-// occupy the low indices, so a defined func is m.funcs[fidx - num_import_funcs].
-@ __functype * Module m i fidx → s {
-    ? < fidx . m num_import_funcs { ^ # s 0 } {}
-    : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
-    ? == # i fp 0 { ^ # s 0 } {}
-    : *WFunc f # *WFunc fp
-    ^ ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
+// occupy the low indices and have none here; a defined func's is its type.
+@ __functype Module m i fidx → s {
+    ? < fidx ( module_num_import_funcs m ) { ^ # s 0 } {}
+    ^ ( module_func_type m fidx )
 }
 
 // valtype of parameter k / the single result (127 = i32 default if unknown).
@@ -67,20 +64,20 @@ $ `interp.nu`
     ?? fr {
         F e → { ( nurl_print `nwasm: cannot read module file\n` ) = rc 1 }
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? ! . m ok {
-                ( nurl_print `nwasm: ` ) ( nurl_print ( string_data ( bytes_to_str . m err ) ) ) ( nurl_print `\n` )
-                ( module_free m ) = rc 1
+            : Module m ( module_decode bytes )
+            ? ! ( module_ok m ) {
+                ( nurl_print `nwasm: ` ) ( nurl_print ( string_data ( bytes_to_str ( module_err m ) ) ) ) ( nurl_print `\n` )
+                = rc 1
             } {
                 : i fidx ( module_export_func m export )
                 ? < fidx 0 {
                     ( nurl_print `nwasm: no exported function '` ) ( nurl_print export ) ( nurl_print `'\n` )
-                    ( module_free m ) = rc 1
+                    = rc 1
                 } {
                     // Guard-page memory is on wherever the runtime supports it;
                     // NURL_NWASM_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
-                    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
-                    : *Interp it ( interp_new m )
+                    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
+                    : Interp it ( interp_new m )
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
                     ? != allow_net 0 { ( interp_allow_net it ) } {}
                     : s ftp ( __functype m fidx )
@@ -91,31 +88,30 @@ $ `interp.nu`
                         : String a ( env_arg k )
                         : i pty ( __param_ty ftp - k first_arg )
                         : i val ? == pty 124 ( f64_to_bits ( nurl_str_to_float ( string_data a ) ) ) ? == pty 125 ( f32_to_bits # f32 ( nurl_str_to_float ( string_data a ) ) ) ( nurl_str_to_int ( string_data a ) )
-                        ( vec_push [i] . it vs val )
-                        ( string_free a )
+                        ( vec_push [i] ( interp_stack it ) val )
                         = k + k 1
                     }
                     ( interp_run_start it )
                     // JIT on by default on capable hosts (code_alloc probes the
                     // capability); NURL_NWASM_JIT=0 keeps the pure interpreter,
                     // NURL_NWASM_PIN=0 keeps every slot in memory (A/B, debug).
-                    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
-                    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
-                    ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
+                    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
+                    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
                     ( exec_func it fidx )
                     ? ( interp_trapped it ) {
-                        ( nurl_print `nwasm: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
+                        ( nurl_print `nwasm: trap: ` ) ( nurl_print ( string_data ( bytes_to_str ( interp_trapmsg it ) ) ) ) ( nurl_print `\n` )
                         = rc 1
                     } {
                         // every result, in order, one per line, printed by its
                         // declared type (mirrors the reference CLI)
-                        : i n ( vec_len [i] . it vs )
+                        : i n ( vec_len [i] ( interp_stack it ) )
                         : ~ i nres ( __result_count ftp )
                         ? > nres n { = nres n } {}
                         ? > nres 0 {
                             : ~ i rj 0
                             ~ < rj nres {
-                                : i rv ?? ( vec_get [i] . it vs + - n nres rj ) { T x → x F → 0 }
+                                : i rv ?? ( vec_get [i] ( interp_stack it ) + - n nres rj ) { T x → x F → 0 }
                                 : i rty ( __result_ty_at ftp rj )
                                 ? == rty 124 { ( nurl_print ( nurl_str_float ( bits_to_f64 rv ) ) ) } {
                                     ? == rty 125 { ( nurl_print ( nurl_str_float # f ( bits_to_f32 rv ) ) ) } {
@@ -126,8 +122,6 @@ $ `interp.nu`
                             }
                         } { ( nurl_print `(no result)\n` ) }
                     }
-                    ( interp_free it )
-                    ( module_free m )
                 }
             }
         }
@@ -143,21 +137,21 @@ $ `interp.nu`
     ?? fr {
         F e → { ( nurl_eprintln `nwasm: cannot read module file` ) = rc 1 }
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? ! . m ok {
-                ( nurl_eprint `nwasm: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . m err ) ) )
-                ( module_free m ) = rc 1
+            : Module m ( module_decode bytes )
+            ? ! ( module_ok m ) {
+                ( nurl_eprint `nwasm: ` ) ( nurl_eprintln ( string_data ( bytes_to_str ( module_err m ) ) ) )
+                = rc 1
             } {
                 : i fidx ( module_export_func m `_start` )
                 ? < fidx 0 {
                     ( nurl_eprintln `nwasm: module has no _start export (not a WASI command)` )
-                    ( module_free m ) = rc 1
+                    = rc 1
                 } {
                     // Guard-page memory is on wherever the runtime supports it;
                     // NURL_NWASM_GUARD=0 keeps the bounds-checked Vec path (A/B, debug).
-                    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
-                    : *Interp it ( interp_new m )
-                    ? > fuel 0 { = . it fuel fuel } {}
+                    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
+                    : Interp it ( interp_new m )
+                    ? > fuel 0 { ( interp_set_fuel it fuel ) } {}
                     ? != allow_gpu 0 { ( interp_allow_gpu it ) } {}
                     ? != allow_net 0 { ( interp_allow_net it ) } {}
                     : i nd ( vec_len [String] dirs )
@@ -168,22 +162,20 @@ $ `interp.nu`
                     ~ < e ne { ?? ( vec_get [String] envs e ) { T es → ( interp_push_env it ( string_data es ) ) F → {} } = e + e 1 }
                     ( interp_push_arg it path )
                     : ~ i k prog_start
-                    ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) ( string_free a ) = k + k 1 }
+                    ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) = k + k 1 }
                     ( interp_run_start it )
                     // JIT on by default on capable hosts (code_alloc probes the
                     // capability); NURL_NWASM_JIT=0 keeps the pure interpreter,
                     // NURL_NWASM_PIN=0 keeps every slot in memory (A/B, debug).
-                    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
-                    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
-                    ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} ( string_free dv ) } F → {} }
+                    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
+                    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
+                    ?? ( env_get `NURL_NWASM_JIT_DUMP` ) { T dv → { ? != 0 ( nurl_str_eq ( string_data dv ) `1` ) { ( interp_enable_jitdump ) } {} } F → {} }
                     ( exec_func it fidx )
                     ( interp_flush it )  // _start may return without proc_exit
                     ? ( interp_trapped it ) {
-                        ( nurl_eprint `nwasm: trap: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . it trapmsg ) ) )
+                        ( nurl_eprint `nwasm: trap: ` ) ( nurl_eprintln ( string_data ( bytes_to_str ( interp_trapmsg it ) ) ) )
                         = rc 1
-                    } { = rc . it exit_code }
-                    ( interp_free it )
-                    ( module_free m )
+                    } { = rc ( interp_exit_code it ) }
                 }
             }
         }
@@ -229,11 +221,11 @@ $ `interp.nu`
         } {}
         ? & ! done != 0 ( nurl_str_eq str `--fuel` ) {
             = done T
-            ? < + k 1 argc { : String fa ( env_arg + k 1 ) = fuel ( nurl_str_to_int ( string_data fa ) ) ( string_free fa ) = k + k 2 } { = k + k 1 }
+            ? < + k 1 argc { : String fa ( env_arg + k 1 ) = fuel ( nurl_str_to_int ( string_data fa ) ) = k + k 2 } { = k + k 1 }
         } {}
         ? & ! done != 0 ( nurl_str_eq str `--invoke` ) {
             = done T
-            ? < + k 1 argc { ( string_free invoke ) = invoke ( env_arg + k 1 ) = have_invoke 1 = k + k 2 } { = k + k 1 }
+            ? < + k 1 argc { = invoke ( env_arg + k 1 ) = have_invoke 1 = k + k 2 } { = k + k 1 }
         } {}
         ? & ! done != 0 ( nurl_str_eq str `--allow-gpu` ) { = done T = allow_gpu 1 = k + k 1 } {}
         ? & ! done != 0 ( nurl_str_eq str `--allow-net` ) { = done T = allow_net 1 = k + k 1 } {}
@@ -247,7 +239,6 @@ $ `interp.nu`
                 = k argc
             }
         } {}
-        ( string_free a )
     }
     : ~ i rc 1
     ? != 0 bad_opt { ( usage ) } {
@@ -261,16 +252,6 @@ $ `interp.nu`
                         } {
                             = rc ( run_command ( string_data path ) + mi 1 argc dirs envs fuel allow_gpu allow_net )
                         }
-                        ( string_free path )
                     } } } } }
-    ( string_free invoke )
-    : i nd ( vec_len [String] dirs )
-    : ~ i fd 0
-    ~ < fd nd { ?? ( vec_get [String] dirs fd ) { T ds → ( string_free ds ) F → {} } = fd + fd 1 }
-    ( vec_free [String] dirs )
-    : i ne ( vec_len [String] envs )
-    : ~ i fe 0
-    ~ < fe ne { ?? ( vec_get [String] envs fe ) { T es → ( string_free es ) F → {} } = fe + fe 1 }
-    ( vec_free [String] envs )
     ^ rc
 }

@@ -85,19 +85,19 @@ $ `deps/iforest/src/iforest.nu`
 : f s ( iforest_score_row fo data 0 )   // score row 0 in place
 // ... or score an arbitrary point:
 : f s2 ( iforest_score fo my_point )     // my_point is a ( Vec f ) of n_cols
-( iforest_free fo )
+// nothing to free: an IForest is an owning struct, released with its owner
 ```
 
 ### Surface
 
 | Function | Result |
 | -------- | ------ |
-| `( iforest_train data n_rows n_cols n_trees sample_size seed )` | `IForest` (caller owns it) |
+| `( iforest_train data n_rows n_cols n_trees sample_size seed )` | `IForest` (an owning struct, released with its owner) |
 | `( iforest_score forest point )` | `f` — score of a `( Vec f )` of length `n_cols` |
 | `( iforest_score_row forest data row )` | `f` — score row `row` of a row-major matrix, no copy |
 | `( iforest_avg_path n )` | `f` — `c(n)`, the path-length normaliser (for custom thresholds) |
 | `( iforest_n_trees forest )` / `( iforest_sample_size forest )` | `i` |
-| `( iforest_free forest )` | `v` |
+| `( iforest_free forest )` | `v` — early release (optional) |
 
 `sample_size` (ψ) is clamped to `n_rows`; the per-tree height limit is
 `ceil(log2 ψ)`, the standard Isolation Forest setting.

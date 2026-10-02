@@ -66,7 +66,6 @@ $ `src/service.nu`
     }
     // args_parse BORROWS the token vec (copies what it keeps).
     : b parsed ( args_parse p argv )
-    ( vec_free_with [String] argv \ String sv → v { ( string_free sv ) } )
     : ~ i rc 0
     ? parsed {
         : i np ( args_positional_count p )
@@ -89,7 +88,6 @@ $ `src/service.nu`
             : ?String lo ( vec_get [String] pos 1 )
             ?? lo {
                 T l → {
-                    ( string_free login )
                     = login ( string_from ( string_data l ) )
                 }
                 F → {}
@@ -125,21 +123,14 @@ $ `src/service.nu`
                             ( nurl_eprintln `registry: cannot store token` )
                             = rc 1
                         }
-                        ( string_free token )
-                        ( string_free hash )
                     }
                 }
             }
-            ( string_free login )
-            ( string_free data )
-            ( string_free dbp )
-            ( string_free pepper )
         }
     } {
         ( nurl_eprintln ( args_error p ) )
         = rc 2
     }
-    ( args_free p )
     ^ rc
 }
 
@@ -160,17 +151,14 @@ $ `src/service.nu`
         = ai + ai 1
     }
     : b parsed ( args_parse p argv )
-    ( vec_free_with [String] argv \ String sv → v { ( string_free sv ) } )
     : ~ i rc 0
     ? parsed {
         : String host ( args_value_or p `host` `127.0.0.1` )
         : String ports ( args_value_or p `port` `8914` )
         : i port ( nurl_str_to_int ( string_data ports ) )
-        ( string_free ports )
         : String data ( args_value_or p `data` `./data` )
         : String workers_s ( args_value_or p `workers` `0` )
         : i workers ( nurl_str_to_int ( string_data workers_s ) )
-        ( string_free workers_s )
         ?? ( dir_create_all ( string_data data ) ) { T _ → {} F _ → {} }
         : String dbp ( __reg_db_path ( string_data data ) )
         : String pepper ( __reg_env_or `REG_TOKEN_PEPPER` `` )
@@ -191,7 +179,7 @@ $ `src/service.nu`
         ? == rc 0 {
             ( reg_service_config ( string_data data ) ( string_data dbp ) ( string_data pepper )
             ( string_data base ) ( string_data ghid ) ( string_data ghsec ) )
-            : *HttpApp app ( http_app_new )
+            : HttpApp app ( http_app_new )
             ( http_app_use_router app ( reg_service_router ) )
             // The publish endpoint accepts tarballs up to 16 MiB — the
             // wire contract the Worker set. head stays at the default.
@@ -200,30 +188,19 @@ $ `src/service.nu`
             ? ( args_present p `log` ) { ( http_app_logging app ) } {}
             : ~ String cert ( string_new )
             : ~ String key ( string_new )
-            ?? ( args_value p `tls-cert` ) { T v → { ( string_free cert ) = cert v } F → {} }
-            ?? ( args_value p `tls-key` ) { T v → { ( string_free key ) = key v } F → {} }
+            ?? ( args_value p `tls-cert` ) { T v → { = cert v } F → {} }
+            ?? ( args_value p `tls-key` ) { T v → { = key v } F → {} }
             ? & > ( string_len cert ) 0 > ( string_len key ) 0 {
                 = rc ( http_app_listen_tls app ( string_data host ) port ( string_data cert ) ( string_data key ) )
             } {
                 = rc ( http_app_listen app ( string_data host ) port )
             }
-            ( string_free cert )
-            ( string_free key )
-            ( http_app_free app )
         } {}
 
-        ( string_free host )
-        ( string_free data )
-        ( string_free dbp )
-        ( string_free pepper )
-        ( string_free base )
-        ( string_free ghid )
-        ( string_free ghsec )
     } {
         ( nurl_eprintln ( args_error p ) )
         = rc 2
     }
-    ( args_free p )
     ^ rc
 }
 
@@ -246,6 +223,5 @@ $ `src/service.nu`
             = rc 2
         }
     }
-    ( string_free sub )
     ^ rc
 }

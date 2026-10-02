@@ -24,6 +24,7 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
@@ -42,11 +43,6 @@ $ `filter.nu`
 }
 
 @ __shw_new → ShWord { ^ @ ShWord { ( string_new ) ( string_new ) } }
-
-@ __shw_free sink ShWord w → v {
-    ( string_free . w text )
-    ( string_free . w mask )
-}
 
 @ __shw_push ShWord w i c i q → v {
     ( string_push_char . w text c )
@@ -72,10 +68,6 @@ $ `filter.nu`
 
 @ __shw_q ShWord w i k → i { ^ ( string_get . w mask k ) }
 
-@ __shw_free_vec ( Vec ShWord ) v → v {
-    ( vec_free_with [ShWord] v \ ShWord w → v { ( __shw_free w ) } )
-}
-
 // ── Tokens ────────────────────────────────────────────────────────
 
 : i SHT_WORD 0
@@ -87,15 +79,6 @@ $ `filter.nu`
     i kind
     ShWord word  // for SHT_WORD
     String op  // for SHT_OP
-}
-
-@ __sht_free sink ShTok t → v {
-    ( __shw_free . t word )
-    ( string_free . t op )
-}
-
-@ __sht_free_vec ( Vec ShTok ) v → v {
-    ( vec_free_with [ShTok] v \ ShTok t → v { ( __sht_free t ) } )
 }
 
 @ __sh_is_op_char i c → b {
@@ -160,8 +143,6 @@ $ `filter.nu`
                     ( vec_push [String] bodies body )
                     = pi + pi 1
                 }
-                ( vec_free_with [String] pending \ String x → v { ( string_free x ) } )
-                ( vec_free [i] pending_strip )
                 = pending ( vec_new [String] )
                 = pending_strip ( vec_new [i] )
             } {
@@ -334,8 +315,6 @@ $ `filter.nu`
         ( vec_push [String] bodies ( string_new ) )
         = pj + pj 1
     }
-    ( vec_free_with [String] pending \ String x → v { ( string_free x ) } )
-    ( vec_free [i] pending_strip )
     ( vec_push [ShTok] out @ ShTok { SHT_EOF ( __shw_new ) ( string_new ) } )
     ^ ok
 }
@@ -344,8 +323,7 @@ $ `filter.nu`
 //
 // A flat arena: every node is an index into one Vec, and a parent names
 // its children by index. NURL has no cyclic ownership, and an arena is
-// the shape that needs none — the whole tree is freed by walking the Vec
-// once, in any order.
+// the shape that needs none — the whole tree goes when the Vec does.
 
 : i SH_SIMPLE 0
 : i SH_PIPE 1
@@ -388,17 +366,6 @@ $ `filter.nu`
 
 @ __shn_blank i kind → ShNode {
     ^ @ ShNode { kind -1 -1 -1 ( vec_new [i] ) ( vec_new [ShWord] ) ( vec_new [ShRedir] ) ( string_new ) }
-}
-
-@ __shn_free sink ShNode n → v {
-    ( vec_free [i] . n kids )
-    ( __shw_free_vec . n words )
-    ( vec_free_with [ShRedir] . n redirs \ ShRedir r → v { ( __shw_free . r word ) } )
-    ( string_free . n text )
-}
-
-@ __shn_free_arena ( Vec ShNode ) arena → v {
-    ( vec_free_with [ShNode] arena \ ShNode n → v { ( __shn_free n ) } )
 }
 
 @ __shn_push ( Vec ShNode ) arena ShNode n → i {
@@ -811,13 +778,14 @@ $ `filter.nu`
 
 // ── Shell state ───────────────────────────────────────────────────
 //
-// One heap block reached through a global. The alternative — threading
-// an `inout` parameter through every function — cannot work here: the
-// evaluator is mutually recursive (a command substitution runs the
-// evaluator again), and an `inout` callee must be defined before its
-// caller, which no cycle can satisfy.
+// One state per running shell, reached through a global: nearly every
+// function of the evaluator reads it, and the evaluator is mutually
+// recursive (a command substitution runs it again). ap_sh owns it — a
+// handle over an rcbox, released when ap_sh returns — and the global only
+// points at the state of the innermost shell running in this process, so
+// an in-process `sh -c …` gets its own and hands the outer one back.
 
-: ShState {
+: ShStateImpl {
     ( Vec String ) names
     ( Vec String ) values
     ( Vec String ) fnames
@@ -833,42 +801,35 @@ $ `filter.nu`
     i depth  // command-substitution nesting, for a sanity bound
 }
 
+: ShState { s ctl }
+
+@ ShState_share ShState h → ShState { ^ @ ShState { # s ( rcbox_share # i . h ctl ) } }
+
+@ ShState_drop sink ShState h → v {
+    ( mem_forget h )
+    ( rcbox_release [ShStateImpl] # i . h ctl )
+}
+
 : ~ i g_sh_state 0
 
-@ __st → *ShState { ^ # *ShState g_sh_state }
+@ __st → *ShStateImpl { ^ ( rcbox_ptr [ShStateImpl] g_sh_state ) }
 
-@ __sh_state_new → v {
-    : *ShState st # *ShState ( nurl_alloc Z ShState )
+// A fresh state (counters zero), made the current one.
+@ __sh_state_new → ShState {
+    : i p__box ( rcbox_zero [ShStateImpl] )
+    : *ShStateImpl st ( rcbox_ptr [ShStateImpl] p__box )
     = . st names ( vec_new [String] )
     = . st values ( vec_new [String] )
     = . st fnames ( vec_new [String] )
     = . st fnodes ( vec_new [i] )
     = . st params ( vec_new [String] )
     = . st argv0 ( string_from `sh` )
-    = . st status 0
-    = . st exiting 0
-    = . st exit_code 0
-    = . st brk 0
-    = . st cont 0
-    = . st returning 0
-    = . st depth 0
-    = g_sh_state # i st
-}
-
-@ __sh_state_free → v {
-    : *ShState st ( __st )
-    ( vec_free_with [String] . st names \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] . st values \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] . st fnames \ String x → v { ( string_free x ) } )
-    ( vec_free [i] . st fnodes )
-    ( vec_free_with [String] . st params \ String x → v { ( string_free x ) } )
-    ( string_free . st argv0 )
-    ( nurl_free # s st )
-    = g_sh_state 0
+    = g_sh_state p__box
+    ^ @ ShState { # s p__box }
 }
 
 @ __sh_var_index s name → i {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : i n ( vec_len [String] . st names )
     : ~ i i 0
     ~ < i n {
@@ -879,7 +840,7 @@ $ `filter.nu`
 }
 
 @ __sh_set s name s value → v {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : i idx ( __sh_var_index name )
     ? >= idx 0 {
         ?? ( vec_get [String] . st values idx ) {
@@ -898,7 +859,7 @@ $ `filter.nu`
 // A shell variable, then the environment, then the empty string — the
 // order every shell resolves in.
 @ __sh_get s name → String {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : i idx ( __sh_var_index name )
     ? >= idx 0 { ^ ( string_from ( bx_at . st values idx ) ) } {}
     ?? ( env_get name ) {
@@ -908,23 +869,17 @@ $ `filter.nu`
 }
 
 @ __sh_unset s name → v {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : i idx ( __sh_var_index name )
     ? >= idx 0 {
-        ?? ( vec_remove [String] . st names idx ) {
-            T x → { ( string_free x ) }
-            F _ → {}
-        }
-        ?? ( vec_remove [String] . st values idx ) {
-            T x → { ( string_free x ) }
-            F _ → {}
-        }
+        ( vec_remove [String] . st names idx )
+        ( vec_remove [String] . st values idx )
     } {}
     ?? ( env_unset name ) { T _ → {} F _ → {} }
 }
 
 @ __sh_func_index s name → i {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : i n ( vec_len [String] . st fnames )
     : ~ i i 0
     ~ < i n {
@@ -971,7 +926,7 @@ $ `filter.nu`
 // Positional parameters joined with a space — `$*`, and `$@` outside
 // quotes where the split puts them back apart anyway.
 @ __sh_params_joined → String {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : String out ( string_new )
     : i n ( vec_len [String] . st params )
     : ~ i i 0
@@ -1031,7 +986,6 @@ $ `filter.nu`
         ~ & < g_ari_pos n ( __sh_is_name_char ( nurl_str_get src g_ari_pos ) F ) { = g_ari_pos + g_ari_pos 1 }
         : String v ( __sh_get ( nurl_str_slice src start - g_ari_pos start ) )
         : i r ( nurl_str_to_int ( string_data v ) )
-        ( string_free v )
         ^ r
     } {}
     = g_ari_pos + g_ari_pos 1
@@ -1137,7 +1091,7 @@ $ `filter.nu`
 @ __sh_ifs → String {
     : i idx ( __sh_var_index `IFS` )
     ? >= idx 0 {
-        : *ShState st ( __st )
+        : *ShStateImpl st ( __st )
         ^ ( string_from ( bx_at . st values idx ) )
     } {}
     ^ ( string_from ( __sh_default_ifs ) )
@@ -1179,8 +1133,6 @@ $ `filter.nu`
         }
         : String v ? ( bx_streq ( string_data nm ) `@` ) ( __sh_params_joined ) ( __sh_get ( string_data nm ) )
         ( __shw_push_str acc ( nurl_str_int ( string_len v ) ) q )
-        ( string_free v )
-        ( string_free nm )
         ^
     } {}
     : String nm ( string_new )
@@ -1199,8 +1151,6 @@ $ `filter.nu`
     : ~ b unset == ( string_len value ) 0
     ? >= i to {
         ( __shw_push_str acc ( string_data value ) q )
-        ( string_free value )
-        ( string_free nm )
         ^
     } {}
     // The operator, and the word it applies to.
@@ -1222,7 +1172,6 @@ $ `filter.nu`
         = i + i 1
     }
     : String repl ( __sh_expand_to_string rest )
-    ( __shw_free rest )
     ? | == op 45 == op 61 {
         ? unset {
             ( __shw_push_str acc ( string_data repl ) q )
@@ -1235,7 +1184,7 @@ $ `filter.nu`
             ? == op 63 {
                 ? unset {
                     ( bx_err ? > ( string_len repl ) 0 ( string_data repl ) `parameter not set` )
-                    : *ShState st ( __st )
+                    : *ShStateImpl st ( __st )
                     = . st exiting 1
                     = . st exit_code 1
                 } { ( __shw_push_str acc ( string_data value ) q ) }
@@ -1243,19 +1192,15 @@ $ `filter.nu`
                 ? | == op 35 == op 37 {
                     : String cut ( __sh_strip ( string_data value ) ( string_data repl ) == op 37 greedy )
                     ( __shw_push_str acc ( string_data cut ) q )
-                    ( string_free cut )
                 } { ( __shw_push_str acc ( string_data value ) q ) }
             }
         }
     }
-    ( string_free repl )
-    ( string_free value )
-    ( string_free nm )
 }
 
 // `$?`, `$#`, `$$`, `$0`…`$9`, `$*`, and ordinary names.
 @ __sh_special s name → String {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     ? ( bx_streq name `?` ) { ^ ( string_from ( nurl_str_int . st status ) ) } {}
     ? ( bx_streq name `#` ) { ^ ( string_from ( nurl_str_int ( vec_len [String] . st params ) ) ) } {}
     ? ( bx_streq name `$` ) { ^ ( string_from ( nurl_str_int # i ( getpid ) ) ) } {}
@@ -1283,7 +1228,7 @@ $ `filter.nu`
 // One word, expanded into `acc`; `$@` splits, so completed fields go to
 // `fields` and `acc` restarts.
 @ __sh_expand_into ShWord w ShWord acc ( Vec ShWord ) fields → v {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : i n ( __shw_len w )
     : ~ i i 0
     // A leading unquoted `~` is $HOME.
@@ -1291,7 +1236,6 @@ $ `filter.nu`
         ? | == n 1 == ( __shw_at w 1 ) 47 {
             : String home ( __sh_get `HOME` )
             ( __shw_push_str acc ( string_data home ) 2 )
-            ( string_free home )
             = i 1
         } {}
     } {}
@@ -1323,8 +1267,6 @@ $ `filter.nu`
                         : i el ( string_len expr )
                         : String body ( string_substr expr 0 ? > el 1 - el 1 0 )
                         ( __shw_push_str acc ( nurl_str_int ( __sh_arith ( string_data body ) ) ) q )
-                        ( string_free body )
-                        ( string_free expr )
                         : ~ i skip + i 2
                         : ~ i d2 0
                         ~ < skip n {
@@ -1354,8 +1296,6 @@ $ `filter.nu`
                         }
                         : String captured ( __sh_capture ( string_data script ) )
                         ( __shw_push_str acc ( string_data captured ) q )
-                        ( string_free captured )
-                        ( string_free script )
                     }
                 } {
                     ? == c2 96 {
@@ -1401,8 +1341,6 @@ $ `filter.nu`
                                     }
                                     : String v ( __sh_special ( string_data nm ) )
                                     ( __shw_push_str acc ( string_data v ) q )
-                                    ( string_free v )
-                                    ( string_free nm )
                                     = i k
                                 } {
                                     ? | | | ( bx_is_digit c2 ) == c2 63 == c2 35 | == c2 36 | == c2 42 == c2 64 {
@@ -1410,8 +1348,6 @@ $ `filter.nu`
                                         ( string_push_char nm c2 )
                                         : String v ( __sh_special ( string_data nm ) )
                                         ( __shw_push_str acc ( string_data v ) q )
-                                        ( string_free v )
-                                        ( string_free nm )
                                         = i + i 2
                                     } {
                                         ( __shw_push acc c q )
@@ -1433,8 +1369,6 @@ $ `filter.nu`
                 }
                 : String captured ( __sh_capture ( string_data script ) )
                 ( __shw_push_str acc ( string_data captured ) q )
-                ( string_free captured )
-                ( string_free script )
                 = i ? < k n + k 1 n
             } {
                 ( __shw_push acc c q )
@@ -1452,8 +1386,6 @@ $ `filter.nu`
     : ( Vec ShWord ) extra ( vec_new [ShWord] )
     ( __sh_expand_into w acc extra )
     : String out ( string_clone . acc text )
-    ( __shw_free acc )
-    ( __shw_free_vec extra )
     ^ out
 }
 
@@ -1464,7 +1396,6 @@ $ `filter.nu`
     : ( Vec ShWord ) pre ( vec_new [ShWord] )
     ( __sh_expand_into w acc pre )
     ( vec_push [ShWord] pre ( __shw_clone acc ) )
-    ( __shw_free acc )
     : String ifs ( __sh_ifs )
     : i np ( vec_len [ShWord] pre )
     : ~ i p 0
@@ -1494,14 +1425,11 @@ $ `filter.nu`
                 ? | > ( __shw_len cur ) 0 & == n 0 == np 1 {
                     ( __sh_emit_field cur out )
                 } {}
-                ( __shw_free cur )
             }
             F _ → {}
         }
         = p + p 1
     }
-    ( string_free ifs )
-    ( __shw_free_vec pre )
 }
 
 // One field: globbed if it has unquoted metacharacters and matches
@@ -1518,10 +1446,8 @@ $ `filter.nu`
                         ( vec_push [String] out ( string_from ( bx_at matches k ) ) )
                         = k + k 1
                     }
-                    ( vec_free_with [String] matches \ String x → v { ( string_free x ) } )
                     ^
                 } {}
-                ( vec_free_with [String] matches \ String x → v { ( string_free x ) } )
             }
             F _ → {}
         }
@@ -1549,9 +1475,9 @@ $ `filter.nu`
         : i32 pid ( fork )
         ? < # i pid 0 { = g_sh_have_fork 0 } {
             ? == # i pid 0 { ( _exit # i32 0 ) } {}
-            : s buf ( nurl_zalloc 8 )
+            : ( Vec u ) buf_v ( vec_zeroed [u] 8 )
+            : s buf # s ( vec_data [u] buf_v )
             : i32 _w ( waitpid pid # *u buf # i32 0 )
-            ( nurl_free buf )
             = g_sh_have_fork 1
         }
     } {}
@@ -1592,7 +1518,6 @@ $ `filter.nu`
                             : i32 fd ( open ( string_data path ) # i32 SH_O_RDONLY )
                             = newfd # i fd
                             ?? ( file_delete ( string_data path ) ) { T _ → {} F _ → {} }
-                            ( string_free path )
                         }
                         F _ → {
                             ( bx_err `cannot create a temporary file for the here-document` )
@@ -1621,7 +1546,6 @@ $ `filter.nu`
                             = ok F
                         } {}
                     }
-                    ( string_free target )
                 }
                 ? & ok >= newfd 0 {
                     : i old ( __sh_save_fd . r fd )
@@ -1666,7 +1590,7 @@ $ `filter.nu`
 }
 
 @ __sh_builtin ( Vec String ) argv → i {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : s name ( bx_at argv 0 )
     : i n ( vec_len [String] argv )
     ? ( bx_streq name `:` ) { ^ 0 } {}
@@ -1675,10 +1599,8 @@ $ `filter.nu`
         ? > n 1 { ( string_push_str dest ( bx_at argv 1 ) ) } {
             : String home ( __sh_get `HOME` )
             ( string_push_bytes dest # *u ( string_data home ) ( string_len home ) )
-            ( string_free home )
         }
         ? == ( string_len dest ) 0 {
-            ( string_free dest )
             ^ 0
         } {}
         // `cd -` returns to $OLDPWD, and says where it went.
@@ -1687,13 +1609,11 @@ $ `filter.nu`
             : String old ( __sh_get `OLDPWD` )
             ( string_clear dest )
             ( string_push_bytes dest # *u ( string_data old ) ( string_len old ) )
-            ( string_free old )
             = announce T
         } {}
         : ~ String before ( string_new )
         ?? ( env_cwd ) {
             T c → {
-                ( string_free before )
                 = before c
             }
             F _ → {}
@@ -1708,18 +1628,13 @@ $ `filter.nu`
                             ( nurl_print ( string_data c2 ) )
                             ( nurl_print `\n` )
                         } {}
-                        ( string_free c2 )
                     }
                     F _ → {}
                 }
-                ( string_free before )
-                ( string_free dest )
                 ^ 0
             }
             F e → {
                 ( bx_err_at ( string_data dest ) ( bx_ioerr e ) )
-                ( string_free before )
-                ( string_free dest )
                 ^ 1
             }
         }
@@ -1742,7 +1657,6 @@ $ `filter.nu`
             } {
                 : String v ( __sh_get a )
                 ?? ( env_set a ( string_data v ) ) { T _ → {} F _ → {} }
-                ( string_free v )
             }
             = i + i 1
         }
@@ -1760,18 +1674,14 @@ $ `filter.nu`
         : i by ? > n 1 ( nurl_str_to_int ( bx_at argv 1 ) ) 1
         : ~ i k 0
         ~ & < k by > ( vec_len [String] . st params ) 0 {
-            ?? ( vec_remove [String] . st params 0 ) {
-                T x → { ( string_free x ) }
-                F _ → {}
-            }
+            ( vec_remove [String] . st params 0 )
             = k + k 1
         }
         ^ 0
     } {}
     ? ( bx_streq name `set` ) {
         ? > n 1 {
-            ( vec_free_with [String] . st params \ String x → v { ( string_free x ) } )
-            = . st params ( vec_new [String] )
+            ( vec_clear [String] . st params )
             : ~ i i 1
             // `set --` ends the option list; nothing here takes options.
             ? ( bx_streq ( bx_at argv 1 ) `--` ) { = i 2 } {}
@@ -1791,7 +1701,6 @@ $ `filter.nu`
                 = i + i 1
             }
             ( bx_write out )
-            ( string_free out )
         }
         ^ 0
     } {}
@@ -1817,12 +1726,9 @@ $ `filter.nu`
                     } { ( string_push_str val ( bx_at fields - vi 1 ) ) }
                 } {}
                 ( __sh_set ( bx_at argv vi ) ( string_data val ) )
-                ( string_free val )
                 = vi + vi 1
             }
-            ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
         } { ( __sh_set `REPLY` ( string_data line ) ) }
-        ( string_free line )
         ^ ? eof 1 0
     } {}
     ? ( bx_streq name `eval` ) {
@@ -1834,7 +1740,6 @@ $ `filter.nu`
             = i + i 1
         }
         : i r ( __sh_run_string ( string_data script ) )
-        ( string_free script )
         ^ r
     } {}
     ? | ( bx_streq name `.` ) ( bx_streq name `source` ) {
@@ -1845,7 +1750,6 @@ $ `filter.nu`
         ?? ( read_file ( bx_at argv 1 ) ) {
             T text → {
                 : i r ( __sh_run_string ( string_data text ) )
-                ( string_free text )
                 ^ r
             }
             F e → {
@@ -1907,7 +1811,7 @@ $ `filter.nu`
 // A function body, with `$1…` swapped for the call's arguments and put
 // back afterwards.
 @ __sh_call_func ( Vec ShNode ) arena i fidx ( Vec String ) argv → i {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : ( Vec String ) saved ( vec_new [String] )
     : i pn ( vec_len [String] . st params )
     : ~ i i 0
@@ -1915,8 +1819,7 @@ $ `filter.nu`
         ( vec_push [String] saved ( string_from ( bx_at . st params i ) ) )
         = i + i 1
     }
-    ( vec_free_with [String] . st params \ String x → v { ( string_free x ) } )
-    = . st params ( vec_new [String] )
+    ( vec_clear [String] . st params )
     : i an ( vec_len [String] argv )
     : ~ i k 1
     ~ < k an {
@@ -1927,8 +1830,8 @@ $ `filter.nu`
     ?? ( vec_get [i] . st fnodes fidx ) { T x → { = body x } F _ → {} }
     : i rc ? >= body 0 ( __sh_exec arena body ) 0
     = . st returning 0
-    ( vec_free_with [String] . st params \ String x → v { ( string_free x ) } )
-    = . st params saved
+    ( vec_clear [String] . st params )
+    ( vec_append [String] . st params saved )
     ^ rc
 }
 
@@ -1944,7 +1847,8 @@ $ `filter.nu`
     : i32 pid ( fork )
     ? == # i pid 0 {
         : i n ( vec_len [String] argv )
-        : s buf ( nurl_zalloc * 8 + n 1 )
+        : ( Vec u ) buf_v ( vec_zeroed [u] * 8 + n 1 )
+        : s buf # s ( vec_data [u] buf_v )
         : ~ i k 0
         ~ < k n {
             ( nurl_poke buf k # i ( bx_at argv k ) )
@@ -1957,15 +1861,15 @@ $ `filter.nu`
         ^ 127
     } {}
     ? < # i pid 0 { ^ 127 } {}
-    : s statusbuf ( nurl_zalloc 8 )
+    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
+    : s statusbuf # s ( vec_data [u] statusbuf_v )
     : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
     : i raw ( nurl_peek statusbuf 0 )
-    ( nurl_free statusbuf )
     ^ ( nurl_wait_exit_status & raw 65535 )
 }
 
 @ __sh_exec_simple ( Vec ShNode ) arena i idx → i {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : ~ i rc 0
     ?? ( vec_get [ShNode] arena idx ) {
         F _ → { ^ 0 }
@@ -2005,8 +1909,6 @@ $ `filter.nu`
                     } {}
                     = k + k 1
                 }
-                ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
-                ( vec_free_with [String] assigns \ String x → v { ( string_free x ) } )
                 ^ 0
             } {}
             : ( Vec i ) saved_fd ( vec_new [i] )
@@ -2046,10 +1948,6 @@ $ `filter.nu`
                 ( flush )
             } { = rc 1 }
             ( __sh_undo_redirs saved_fd saved_to )
-            ( vec_free [i] saved_fd )
-            ( vec_free [i] saved_to )
-            ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
-            ( vec_free_with [String] assigns \ String x → v { ( string_free x ) } )
         }
     }
     = . st status rc
@@ -2110,7 +2008,6 @@ $ `filter.nu`
                             } {}
                             ( string_clear in_path )
                             ( string_push_bytes in_path # *u ( string_data p ) ( string_len p ) )
-                            ( string_free p )
                         }
                         F _ → {
                             ( bx_err `a pipeline needs somewhere writable, and this machine has nowhere` )
@@ -2142,12 +2039,10 @@ $ `filter.nu`
                                 ?? ( read_file ( string_data p ) ) {
                                     T text → {
                                         ( string_push_bytes captured # *u ( string_data text ) ( string_len text ) )
-                                        ( string_free text )
                                     }
                                     F _ → {}
                                 }
                                 ?? ( file_delete ( string_data p ) ) { T _ → {} F _ → {} }
-                                ( string_free p )
                             }
                             F _ → {
                                 ( bx_err `a pipeline needs somewhere writable, and this machine has nowhere` )
@@ -2155,7 +2050,6 @@ $ `filter.nu`
                                 = s stages
                             }
                         }
-                        ( string_free carry )
                         = carry captured
                         = have_carry T
                     }
@@ -2168,13 +2062,11 @@ $ `filter.nu`
                 ? > ( string_len in_path ) 0 {
                     ?? ( file_delete ( string_data in_path ) ) { T _ → {} F _ → {} }
                 } {}
-                ( string_free in_path )
                 = s + s 1
             }
-            ( string_free carry )
         }
     }
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     = . st status rc
     ^ rc
 }
@@ -2192,7 +2084,8 @@ $ `filter.nu`
                 }
             } {}
             ? ! ( __sh_can_fork ) { ^ ( __sh_pipe_sequential arena idx stages ) } {}
-            : s fdbuf ( nurl_zalloc 16 )
+            : ( Vec u ) fdbuf_v ( vec_zeroed [u] 16 )
+            : s fdbuf # s ( vec_data [u] fdbuf_v )
             : ( Vec i ) pids ( vec_new [i] )
             : ~ i prev_read -1
             : ~ i s 0
@@ -2220,8 +2113,8 @@ $ `filter.nu`
                 = prev_read rfd
                 = s + s 1
             }
-            ( nurl_free fdbuf )
-            : s statusbuf ( nurl_zalloc 8 )
+            : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
+            : s statusbuf # s ( vec_data [u] statusbuf_v )
             : i np ( vec_len [i] pids )
             : ~ i k 0
             ~ < k np {
@@ -2237,11 +2130,9 @@ $ `filter.nu`
                 }
                 = k + k 1
             }
-            ( nurl_free statusbuf )
-            ( vec_free [i] pids )
         }
     }
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     = . st status rc
     ^ rc
 }
@@ -2254,7 +2145,7 @@ $ `filter.nu`
 }
 
 @ __sh_exec ( Vec ShNode ) arena i idx → i {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     ? < idx 0 { ^ 0 } {}
     ? != 0 . st exiting { ^ . st exit_code } {}
     : ~ i rc 0
@@ -2341,13 +2232,11 @@ $ `filter.nu`
                                                         ? | != 0 . st returning != 0 . st exiting { = i cnt } { = i + i 1 }
                                                     }
                                                 }
-                                                ( vec_free_with [String] items \ String x → v { ( string_free x ) } )
                                             } {
                                                 ? == k SH_CASE {
                                                     : ~ String subject ( string_new )
                                                     ?? ( vec_get [ShWord] . n words 0 ) {
                                                         T w → {
-                                                            ( string_free subject )
                                                             = subject ( __sh_expand_to_string w )
                                                         }
                                                         F _ → {}
@@ -2368,8 +2257,6 @@ $ `filter.nu`
                                                                     ? ( fs_match ( bx_at alts a ) ( string_data subject ) ) { = matched T } {}
                                                                     = a + a 1
                                                                 }
-                                                                ( vec_free_with [String] alts \ String x → v { ( string_free x ) } )
-                                                                ( string_free pat )
                                                                 ? matched {
                                                                     ?? ( vec_get [i] . n kids i ) {
                                                                         T body → { = rc ( __sh_exec arena body ) }
@@ -2381,7 +2268,6 @@ $ `filter.nu`
                                                         }
                                                         = i + i 1
                                                     }
-                                                    ( string_free subject )
                                                 } {
                                                     ? == k SH_GROUP { = rc ( __sh_exec arena . n a ) } {
                                                         ? == k SH_SUBSHELL {
@@ -2400,10 +2286,10 @@ $ `filter.nu`
                                                                     ( _exit # i32 r2 )
                                                                 } {}
                                                                 ? < # i pid 0 { = rc ( __sh_exec arena . n a ) } {
-                                                                    : s statusbuf ( nurl_zalloc 8 )
+                                                                    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
+                                                                    : s statusbuf # s ( vec_data [u] statusbuf_v )
                                                                     : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
                                                                     = rc ( nurl_wait_exit_status & ( nurl_peek statusbuf 0 ) 65535 )
-                                                                    ( nurl_free statusbuf )
                                                                 }
                                                             } {
                                                                 ( __sh_no_processes `a subshell` )
@@ -2470,10 +2356,7 @@ $ `filter.nu`
         = g_sh_pos saved_pos
         = g_sh_here saved_here
         = g_sh_perr saved_err
-        ( __shn_free_arena arena )
     }
-    ( __sht_free_vec toks )
-    ( vec_free_with [String] bodies \ String x → v { ( string_free x ) } )
     ^ rc
 }
 
@@ -2497,7 +2380,6 @@ $ `filter.nu`
                 : i32 fd ( open ( string_data path ) # i32 | | SH_O_WRONLY SH_O_CREAT SH_O_TRUNC 420 )
                 ? < # i fd 0 {
                     ( bx_err_at ( string_data path ) `cannot open` )
-                    ( string_free path )
                     ^ out
                 } {}
                 ( flush )
@@ -2510,34 +2392,30 @@ $ `filter.nu`
                     : i32 _d2 ( dup2 # i32 saved # i32 1 )
                     : i32 _c2 ( close # i32 saved )
                 } {}
-                : *ShState st0 ( __st )
+                : *ShStateImpl st0 ( __st )
                 = . st0 status rc
                 ?? ( read_file ( string_data path ) ) {
                     T text → {
                         ( string_push_bytes out # *u ( string_data text ) ( string_len text ) )
-                        ( string_free text )
                     }
                     F _ → {}
                 }
                 ?? ( file_delete ( string_data path ) ) { T _ → {} F _ → {} }
-                ( string_free path )
                 : ~ i tn ( string_len out )
                 ~ & > tn 0 == ( string_get out - tn 1 ) 10 { = tn - tn 1 }
                 : String trimmed0 ( string_substr out 0 tn )
-                ( string_free out )
                 ^ trimmed0
             }
         }
     } {}
-    : s fdbuf ( nurl_zalloc 16 )
+    : ( Vec u ) fdbuf_v ( vec_zeroed [u] 16 )
+    : s fdbuf # s ( vec_data [u] fdbuf_v )
     : i32 pr ( pipe # *u fdbuf )
     ? < # i pr 0 {
-        ( nurl_free fdbuf )
         ^ out
     } {}
     : i rfd ( __le32_at fdbuf 0 )
     : i wfd ( __le32_at fdbuf 4 )
-    ( nurl_free fdbuf )
     ( flush )
     : i32 pid ( fork )
     ? == # i pid 0 {
@@ -2549,35 +2427,33 @@ $ `filter.nu`
         ( _exit # i32 rc )
     } {}
     : i32 _c2 ( close # i32 wfd )
-    : s buf ( nurl_alloc 4096 )
+    : ( Vec u ) buf_v ( vec_zeroed [u] 4096 )
+    : s buf # s ( vec_data [u] buf_v )
     : ~ b more T
     ~ more {
         : i got ( read # i32 rfd # *u buf 4096 )
         ? <= got 0 { = more F } { ( string_push_bytes out # *u buf got ) }
     }
-    ( nurl_free buf )
     : i32 _c3 ( close # i32 rfd )
-    : s statusbuf ( nurl_zalloc 8 )
+    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
+    : s statusbuf # s ( vec_data [u] statusbuf_v )
     : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     = . st status ( nurl_wait_exit_status & ( nurl_peek statusbuf 0 ) 65535 )
-    ( nurl_free statusbuf )
     : ~ i n ( string_len out )
     ~ & > n 0 == ( string_get out - n 1 ) 10 { = n - n 1 }
     : String trimmed ( string_substr out 0 n )
-    ( string_free out )
     ^ trimmed
 }
 
 // ── The applet ────────────────────────────────────────────────────
 
 @ __sh_interactive → i {
-    : *ShState st ( __st )
+    : *ShStateImpl st ( __st )
     : ~ String line ( string_new )
     ~ == 0 . st exiting {
         ( nurl_print `$ ` )
         ( flush )
-        ( string_free line )
         = line ( read_line )
         ? & == ( string_len line ) 0 ( stdin_eof ) { = . st exiting 1 } {
             ? > ( string_len line ) 0 {
@@ -2585,13 +2461,13 @@ $ `filter.nu`
             } {}
         }
     }
-    ( string_free line )
     ^ . st exit_code
 }
 
 @ ap_sh ( Vec String ) argv → i {
-    ( __sh_state_new )
-    : *ShState st ( __st )
+    : i outer g_sh_state
+    : ShState sh ( __sh_state_new )
+    : *ShStateImpl st ( __st )
     : i n ( vec_len [String] argv )
     : ~ i rc 0
     : ~ i i 1
@@ -2629,7 +2505,6 @@ $ `filter.nu`
                                 = k + k 1
                             }
                             = rc ( __sh_run_string ( string_data text ) )
-                            ( string_free text )
                         }
                         F e → {
                             ( bx_err_at a ( bx_ioerr e ) )
@@ -2648,6 +2523,6 @@ $ `filter.nu`
         = rc ( __sh_interactive )
     } {}
     ? != 0 . st exiting { = rc . st exit_code } {}
-    ( __sh_state_free )
+    = g_sh_state outer
     ^ rc
 }

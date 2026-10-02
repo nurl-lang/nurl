@@ -185,7 +185,6 @@ $ `grep.nu`
     ? ( bx_streq ( bx_name ) `[` ) {
         ? | < n 2 ! ( bx_streq ( bx_at argv - n 1 ) `]` ) {
             ( bx_err `missing ]` )
-            ( vec_free [String] t )
             ^ 2
         } {}
         = last - n 1
@@ -201,7 +200,6 @@ $ `grep.nu`
         : b r ( __test_expr t )
         = rc ? r 0 1
     }
-    ( vec_free_with [String] t \ String x → v { ( string_free x ) } )
     ^ rc
 }
 
@@ -307,14 +305,9 @@ $ `grep.nu`
                     T m → { ? == . m start 0 { = len . m len } {} }
                     F _ → {}
                 }
-                ( regex_free r )
             }
             F _ → { = g_expr_err T }
         }
-        ( string_free bre )
-        ( string_free anchored )
-        ( string_free pat )
-        ( string_free acc )
         = acc ( string_from ( nurl_str_int len ) )
     }
     ^ acc
@@ -343,8 +336,6 @@ $ `grep.nu`
         = g_expr_pos + g_expr_pos 1
         : String b ( __expr_match t )
         : String r ( __expr_arith acc op b )
-        ( string_free acc )
-        ( string_free b )
         = acc r
     }
     ^ acc
@@ -357,8 +348,6 @@ $ `grep.nu`
         = g_expr_pos + g_expr_pos 1
         : String b ( __expr_term t )
         : String r ( __expr_arith acc op b )
-        ( string_free acc )
-        ( string_free b )
         = acc r
     }
     ^ acc
@@ -391,8 +380,6 @@ $ `grep.nu`
         ? ( bx_streq op `<=` ) { = r <= c 0 } {}
         ? ( bx_streq op `>` ) { = r > c 0 } {}
         ? ( bx_streq op `>=` ) { = r >= c 0 } {}
-        ( string_free acc )
-        ( string_free b )
         = acc ( string_from ? r `1` `0` )
     }
     ^ acc
@@ -411,10 +398,8 @@ $ `grep.nu`
         : String b ( __expr_cmp t )
         : b both & ( __expr_truthy acc ) ( __expr_truthy b )
         ? ! both {
-            ( string_free acc )
             = acc ( string_from `0` )
         } {}
-        ( string_free b )
     }
     ^ acc
 }
@@ -425,10 +410,8 @@ $ `grep.nu`
         = g_expr_pos + g_expr_pos 1
         : String b ( __expr_and t )
         ? ! ( __expr_truthy acc ) {
-            ( string_free acc )
             = acc ( string_clone b )
         } {}
-        ( string_free b )
     }
     ^ acc
 }
@@ -457,8 +440,6 @@ $ `grep.nu`
         ( nurl_print `\n` )
         = rc ? ( __expr_truthy r ) 0 1
     }
-    ( string_free r )
-    ( vec_free_with [String] t \ String x → v { ( string_free x ) } )
     ^ rc
 }
 
@@ -479,7 +460,8 @@ $ `grep.nu`
     ( flush )
     : i32 pid ( fork )
     ? == # i pid 0 {
-        : s argvbuf ( nurl_zalloc * 8 + n 1 )
+        : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
+        : s argvbuf # s ( vec_data [u] argvbuf_v )
         : ~ i k 0
         ~ < k n {
             ( nurl_poke argvbuf k # i ( bx_at cmd k ) )
@@ -490,10 +472,10 @@ $ `grep.nu`
         ^ 127
     } {}
     ? < # i pid 0 { ^ 127 } {}
-    : s statusbuf ( nurl_zalloc 8 )
+    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
+    : s statusbuf # s ( vec_data [u] statusbuf_v )
     : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
     : i raw ( nurl_peek statusbuf 0 )
-    ( nurl_free statusbuf )
     ^ ( nurl_wait_exit_status & raw 65535 )
 }
 
@@ -540,8 +522,6 @@ $ `grep.nu`
         = i + i 1
     }
     ? any { ( vec_push [String] out ( string_clone cur ) ) } {}
-    ( string_free cur )
-    ( vec_free [u] data )
 }
 
 @ ap_xargs ( Vec String ) argv → i {
@@ -585,7 +565,6 @@ $ `grep.nu`
                     }
                     : i one ( __xargs_run cmd trace )
                     ? != one 0 { = rc one } {}
-                    ( vec_free_with [String] cmd \ String x → v { ( string_free x ) } )
                     = k + k 1
                 }
             } {
@@ -609,13 +588,9 @@ $ `grep.nu`
                     }
                     : i one ( __xargs_run cmd trace )
                     ? != one 0 { = rc one } {}
-                    ( vec_free_with [String] cmd \ String x → v { ( string_free x ) } )
                 }
             }
         }
-        ( vec_free_with [String] base \ String x → v { ( string_free x ) } )
-        ( vec_free_with [String] items \ String x → v { ( string_free x ) } )
     }
-    ( bx_opts_free o )
     ^ rc
 }

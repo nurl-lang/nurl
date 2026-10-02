@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+Nothing in the package is released by hand any more.
+
+- `Roster`, `Swarm` and `EParser` are library handles over an rcbox
+  (`stdlib/core/rcbox.nu`) instead of `*Roster` / `*Swarm` / `*EParser`
+  pointers: every copy is the same object, and the last owner releases it.
+  A roster keeps its members as `( Vec Member )` values. An expression parser
+  is made with `( eparser_new )` and read with `eparser_ok` (was `. p ok`);
+  `expr_parse` / `expr_eval` / `expr_eval_f` take the handle, and the worker's
+  fold opens it once per chunk (instructions:u on a 4M-element int + float
+  fold: 9 272 503 941 → 9 268 505 971).
+- `shard` returns `( Vec Chunk )` (plain `{ lo hi }` values) instead of a
+  `( Vec s )` of raw `*Chunk`.
+- The coordinator's per-chunk retry plans are `ChunkJob` handles in a
+  `( Vec ChunkJob )`, async iterate runs are `IterRun` handles, the compiled-
+  module cache holds `WasmCached` values, and the out-cells that were 8-byte
+  `nurl_alloc` blocks are `inout i` parameters — none is freed by hand. The
+  coordinator registry (`McpState` behind its global, with its `Task` and
+  `Dataset` records) lives for the whole program and stays plain raw memory.
+- New `swarm_worker_count` / `swarm_worker_count_caps`.
+- `roster_free`, `swarm_free`, `eparser_free`, `shard_free`, `hello_free`,
+  `gpu_chunk_free`, `blob_manifest_free`, `chunkjobs_free` and
+  `relay_list_free` remain as optional early releases; the package's own code
+  and tests no longer call release functions (one documented early release of
+  the shuffle's merged partial tables remains).
+- Fixed: a member key copied by `roster_add` leaked through the roster's
+  hand-written frees (`liveness_test` was not LSan-clean); it is now.
+
 ## 0.29.0
 
 The MCP protocol layer moves onto `stdlib/ext/mcp_server.nu`. 387 lines

@@ -58,7 +58,7 @@ arguments may contain spaces: `SET phrase "hello world"`.
 $ `deps/redis/src/redis.nu`
 
 @ main → i {
-    : *RedisConn c ?? ( redis_connect `127.0.0.1` 6379 ) {
+    : RedisConn c ?? ( redis_connect `127.0.0.1` 6379 ) {
         T x → x
         F e → { ( nurl_eprint ( redis_err_name e ) ) ^ 1 }
     }
@@ -69,25 +69,27 @@ $ `deps/redis/src/redis.nu`
         T rs → {
             ? ( redis_str_is_nil rs ) { ( nurl_print `(missing)\n` ) }
                                       { ( nurl_print ( redis_str_val rs ) ) ( nurl_print `\n` ) }
-            ( redis_str_free rs )
         }
         F _ → {}
     }
-
-    ( redis_close c )
-    ^ 0
+    ^ 0  // c's last owner closes the connection
 }
 ```
+
+Nothing is released by hand: a `RedisConn` is a handle whose last owner
+closes the socket (or TLS session), and replies, `RedisStr`,
+`RedisMessage` and argument vectors are plain values. `redis_close` and the
+`*_free` functions remain as optional early releases.
 
 ### Connecting
 
 | Function | Returns |
 | --- | --- |
-| `redis_connect host port` | `!*RedisConn RedisErr` |
-| `redis_connect_tls host port server_name verify` | `!*RedisConn RedisErr` — `verify != 0` ⇒ verify-full |
+| `redis_connect host port` | `!RedisConn RedisErr` |
+| `redis_connect_tls host port server_name verify` | `!RedisConn RedisErr` — `verify != 0` ⇒ verify-full |
 | `redis_auth conn user password` | `!v RedisErr` — empty `user` ⇒ legacy single-arg AUTH |
 | `redis_select conn db` | `!v RedisErr` |
-| `redis_close conn` | `v` |
+| `redis_close conn` | `v` — early release (optional) |
 
 ### Typed commands
 
@@ -107,7 +109,7 @@ channel or pattern, then loop on `redis_next_message`, which blocks until the
 next frame arrives:
 
 ```nurl
-?? ( redis_subscribe c `news` ) { T m → ( redis_message_free m ) F _ → {} }
+?? ( redis_subscribe c `news` ) { T _ → {} F _ → {} }
 : ~ b go T
 ~ go {
     ?? ( redis_next_message c ) {
@@ -115,7 +117,6 @@ next frame arrives:
             ? ( redis_message_is_payload m )
               { ( nurl_print ( redis_message_channel m ) ) ( nurl_print `: ` )
                 ( nurl_print ( redis_message_payload m ) ) ( nurl_print `\n` ) } {}
-            ( redis_message_free m )
         }
         F _ → { = go F }
     }
@@ -126,14 +127,14 @@ A `RedisMessage` carries `redis_message_kind` (0 message · 1 subscribe ·
 2 unsubscribe · 3 pmessage · 4 psubscribe · 5 punsubscribe),
 `redis_message_channel`, `redis_message_pattern` (p* variants),
 `redis_message_payload`, `redis_message_count` (live subscription count on
-confirmations), and `redis_message_is_payload`. Release it with
-`redis_message_free`. `redis_unsubscribe` / `redis_punsubscribe` leave
+confirmations), and `redis_message_is_payload`. `redis_unsubscribe` /
+`redis_punsubscribe` leave
 subscriber mode. From the CLI, `redis -c "SUBSCRIBE chan1 chan2"` (or
 `PSUBSCRIBE pat.*`) subscribes and streams messages until interrupted.
 
 `redis_get` / `redis_hget` / `redis_echo` return a `RedisStr` (a nil-aware
-optional string): check `redis_str_is_nil`, read `redis_str_val`, release
-with `redis_str_free`. The `*_strvec` commands return an owned `Vec String`.
+optional string): check `redis_str_is_nil`, read `redis_str_val`. The
+`*_strvec` commands return an owned `Vec String`.
 
 ### Arbitrary commands
 
@@ -145,10 +146,9 @@ the raw reply tree:
 ( redis_arg a `SET` ) ( redis_arg a `k` ) ( redis_arg a `v` )
 ( redis_arg a `EX` ) ( redis_arg_i a 60 )
 ?? ( redis_command c a ) {
-    T rep → { /* walk with resp_node_* */ ( resp_reply_free rep ) }
+    T rep → { /* walk with resp_node_* */ }
     F e   → { /* RedisServerError text is ( redis_last_error c ) */ }
 }
-( redis_args_free a )
 ```
 
 The reply tree (`src/resp.nu`) is a flat node arena, so it handles arbitrary

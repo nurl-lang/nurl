@@ -1,5 +1,15 @@
 # hub changelog
 
+## Unreleased
+
+Nothing is released by hand any more. `HubRef` and `HubFile` are plain
+values whose Strings the compiler drops, so `hub_ref_free` and
+`hub_file_free` are gone (nothing outside the package called them), and
+every `string_free` / `vec_free_with` / `json_free` / `args_free` in the
+library, the CLI and the tests is removed (234 calls). Same output from
+every CLI command; instructions:u for `verify` / `ls` / `dir` on a cached
+repository within ±0.01 %.
+
 ## 0.1.4
 
 `hub --version` says 0.1.4 — the literal in main.nu had not moved with the

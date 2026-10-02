@@ -22,7 +22,8 @@
 //   : Pkce pk ( pkce_new )
 //   … authorize with ( string_data . pk challenge ) …
 //   … exchange with ( string_data . pk verifier ) …
-//   ( pkce_free pk )
+//
+// A Pkce is a plain value: its Strings go with it.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -42,7 +43,6 @@ $ `stdlib/std/hash_sha256.nu`
 @ oauth_random_token i nbytes → String {
     : ( Vec u ) raw ( rand_bytes ? > nbytes 0 nbytes 32 )
     : String out ( b64_url_encode_vec raw )
-    ( vec_free [u] raw )
     ^ out
 }
 
@@ -54,9 +54,7 @@ $ `stdlib/std/hash_sha256.nu`
 @ pkce_challenge_for s verifier → String {
     : ( Vec u ) msg ( bytes_from_str verifier )
     : ( Vec u ) h ( sha256_pure msg )
-    ( vec_free [u] msg )
     : String out ( b64_url_encode_vec h )
-    ( vec_free [u] h )
     ^ out
 }
 
@@ -64,10 +62,4 @@ $ `stdlib/std/hash_sha256.nu`
     : String verifier ( oauth_random_token 32 )
     : String challenge ( pkce_challenge_for ( string_data verifier ) )
     ^ @ Pkce { verifier challenge ( string_from `S256` ) }
-}
-
-@ pkce_free sink Pkce pk → v {
-    ( string_free . pk verifier )
-    ( string_free . pk challenge )
-    ( string_free . pk method )
 }

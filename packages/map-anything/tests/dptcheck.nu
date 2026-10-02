@@ -21,7 +21,7 @@ $ `src/dpthead.nu`
     ^ 1
 }
 
-@ __dt_up * GpuKit kit * u raw i off i n → GkBuf {
+@ __dt_up GpuKit kit * u raw i off i n → GkBuf {
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _l ( vec_set_len [f] host n )
     : *f hp ( vec_data [f] host )
@@ -38,7 +38,7 @@ $ `src/dpthead.nu`
     ^ b
 }
 
-@ __dt_dump * GpuKit kit s dir s name GkBuf b i n → b {
+@ __dt_dump GpuKit kit s dir s name GkBuf b i n → b {
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _hl ( vec_set_len [f] host n )
     ? ( gk_dbuf_download kit b host ) {} { ^ F }
@@ -98,7 +98,7 @@ $ `src/dpthead.nu`
         }
         T got → { = lw got }
     }
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __dt_die `no compute device` ) }
     : Dpt d ( dp_load lw kit )
     ? ( lw_ok lw ) {} { ^ ( __dt_die ( lw_error lw ) ) }

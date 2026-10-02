@@ -231,7 +231,7 @@ binding afterwards (the borrow checker reports a later use as a
 use-after-move):
 
 ```
-@ give_away sink ( Vec i ) g → v { ( vec_free [i] g ) }
+@ give_away sink ( Vec i ) g → v {}   // g is dropped here, by the callee
 ...
 : ( Vec i ) xs ( vec_new [i] )
 ( give_away xs )                 // xs is consumed; using it now is a move error
@@ -726,7 +726,7 @@ place the `*T` escape hatch is nudged rather than blocked.
 The check is path-aware in the one way that matters for false positives:
 the two arms of a `?` are alternatives, so a free or push in one arm does
 not make a pointer stale in the *other* (the guard-clause shape
-`? bad { ( string_free s ) ^ err } {}` is everywhere in the stdlib). At
+`? bad { ( string_free s ) ^ err } {}`). At
 the join it takes the union of the arms that actually fall through — an
 arm that returns cannot invalidate anything downstream of the `?`.
 
@@ -1450,6 +1450,12 @@ Two rules make this sound without reference counting:
   struct, captures it, spawns it or returns it keeps a copy, and the
   caller's closure stays the caller's. Spawning one closure a hundred
   times, or letting it go out of scope right after `spawn`, is correct.
+  A **`sink`** closure parameter is the exception: the callee takes the
+  closure over. A temporary handed to one moves in (the call site does not
+  drop it), a binding is handed a copy and stays its owner's, and the
+  callee drops what it took unless it moves it on — returned, or captured
+  by a closure it returns (`iter_map ( iter_range 0 n ) f` builds its chain
+  without copying it).
 - **A move clears the source on its own path only.** `: h g` / `= h g`
   hand `g`'s env to `h`, and `^ g` hands it to the caller; each binding
   has a hidden owner slot, and the move stores null into `g`'s slot on

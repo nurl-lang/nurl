@@ -84,93 +84,6 @@ $ `stdlib/ext/sqlite.nu`
 
 // ── Frees ─────────────────────────────────────────────────────────────
 
-@ ag_store_free sink AgStore st → v { ( string_free . st path ) }
-
-@ ag_agent_free sink AgAgent a → v {
-    ( string_free . a id )
-    ( string_free . a about )
-    ( string_free . a origin )
-}
-
-@ ag_agents_free sink ( Vec AgAgent ) v → v {
-    : i n ( vec_len [AgAgent] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [AgAgent] v i ) { T a → ( ag_agent_free a ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [AgAgent] v )
-}
-
-@ ag_channel_free sink AgChannel c → v {
-    ( string_free . c name )
-    ( string_free . c about )
-    ( string_free . c created_by )
-}
-
-@ ag_channels_free sink ( Vec AgChannel ) v → v {
-    : i n ( vec_len [AgChannel] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [AgChannel] v i ) { T c → ( ag_channel_free c ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [AgChannel] v )
-}
-
-@ ag_msg_free sink AgMsg m → v {
-    ( string_free . m channel )
-    ( string_free . m sender )
-    ( string_free . m body )
-}
-
-@ ag_msgs_free sink ( Vec AgMsg ) v → v {
-    : i n ( vec_len [AgMsg] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [AgMsg] v i ) { T m → ( ag_msg_free m ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [AgMsg] v )
-}
-
-@ ag_task_free sink AgTask t → v {
-    ( string_free . t title )
-    ( string_free . t body )
-    ( string_free . t tags )
-    ( string_free . t poster )
-    ( string_free . t status )
-    ( string_free . t owner )
-    ( string_free . t result )
-}
-
-@ ag_tasks_free sink ( Vec AgTask ) v → v {
-    : i n ( vec_len [AgTask] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [AgTask] v i ) { T t → ( ag_task_free t ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [AgTask] v )
-}
-
-@ ag_note_free sink AgNote n → v {
-    ( string_free . n project )
-    ( string_free . n key )
-    ( string_free . n body )
-    ( string_free . n author )
-}
-
-@ ag_notes_free sink ( Vec AgNote ) v → v {
-    : i n ( vec_len [AgNote] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [AgNote] v i ) { T x → ( ag_note_free x ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [AgNote] v )
-}
-
 // ── Connections ───────────────────────────────────────────────────────
 
 @ __ag_conn AgStore st → !Database SqliteErr {
@@ -207,7 +120,6 @@ $ `stdlib/ext/sqlite.nu`
     ? > ( string_len dir ) 0 {
         ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → {} }
     } {}
-    ( string_free dir )
     : AgStore st @ AgStore { ( string_from path ) T }
     : ~ b ok F
     ?? ( __ag_conn st ) {
@@ -230,13 +142,11 @@ $ `stdlib/ext/sqlite.nu`
                 ?? ( vec_get [String] stmts k ) {
                     T sq → {
                         ?? ( sqlite_exec db ( string_data sq ) ) { T _ → {} F _ → { = failed T } }
-                        ( string_free sq )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] stmts )
             ? & old_notes ! failed {
                 ?? ( sqlite_exec db `INSERT INTO notes (project, key, body, author, updated) SELECT '', key, body, author, updated FROM notes_v1` ) { T _ → {} F _ → { = failed T } }
                 ? failed {} { ?? ( sqlite_exec db `DROP TABLE notes_v1` ) { T _ → {} F _ → {} } }
@@ -244,7 +154,6 @@ $ `stdlib/ext/sqlite.nu`
             = ok ! failed
         }
     }
-    ( ag_store_free st )
     ^ @ AgStore { ( string_from path ) ok }
 }
 
@@ -283,7 +192,6 @@ $ `stdlib/ext/sqlite.nu`
 // Bind an owned String and free it: sqlite_bind_text copies at once.
 @ __ag_bind_str Statement q i idx String v → v {
     ?? ( sqlite_bind_text q idx v ) { T _ → {} F _ → {} }
-    ( string_free v )
 }
 
 @ __ag_bind_s Statement q i idx s v → v { ( __ag_bind_str q idx ( string_from v ) ) }
@@ -417,7 +325,6 @@ $ `stdlib/ext/sqlite.nu`
                 T q → {
                     ( __ag_bind_s q 1 token_hash )
                     ? ( __ag_row q ) {
-                        ( string_free id )
                         = id ( sqlite_column_text q 0 )
                         = found T
                     } {}
@@ -427,7 +334,6 @@ $ `stdlib/ext/sqlite.nu`
         }
     }
     ? found { ^ @ ?String { T id } } {}
-    ( string_free id )
     ^ @ ?String { F }
 }
 
@@ -470,7 +376,6 @@ $ `stdlib/ext/sqlite.nu`
                 T q → {
                     ( __ag_bind_s q 1 id )
                     ? ( __ag_row q ) {
-                        ( ag_agent_free out )
                         = out ( __ag_read_agent q )
                         = found T
                     } {}
@@ -479,7 +384,6 @@ $ `stdlib/ext/sqlite.nu`
         }
     }
     ? found { ^ @ ?AgAgent { T out } } {}
-    ( ag_agent_free out )
     ^ @ ?AgAgent { F }
 }
 
@@ -642,16 +546,6 @@ $ `stdlib/ext/sqlite.nu`
     ^ out
 }
 
-@ ag_strings_free sink ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [String] v i ) { T s → ( string_free s ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [String] v )
-}
-
 // ── Messages ──────────────────────────────────────────────────────────
 
 @ __ag_post_on Database db s channel s sender s body i reply_to i now → i {
@@ -699,8 +593,6 @@ $ `stdlib/ext/sqlite.nu`
     i remaining  // still undelivered after this batch
 }
 
-@ ag_inbox_free sink AgInbox ib → v { ( ag_msgs_free . ib msgs ) }
-
 // Everything new for `agent` — its mailbox plus the channels it follows,
 // oldest first, at most `limit` — and the cursors moved past what was
 // returned, in one transaction: two concurrent drains cannot deliver
@@ -712,7 +604,7 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ( string_free mbox ) ^ @ AgInbox { out 0 } }
+            ? ( __ag_begin db ) {} { ^ @ AgInbox { out 0 } }
             : String sql ( string_from `SELECT m.id, m.channel, m.sender, m.body, m.reply_to, m.ts` )
             ( string_push_str sql AG_INBOX_WHERE )
             ( string_push_str sql ` ORDER BY m.id LIMIT ?3` )
@@ -725,7 +617,6 @@ $ `stdlib/ext/sqlite.nu`
                     ~ ( __ag_row q ) { ( vec_push [AgMsg] out ( __ag_read_msg q ) ) }
                 }
             }
-            ( string_free sql )
             // Advance each touched channel's cursor to the last id it got.
             : i n ( vec_len [AgMsg] out )
             : ~ i i 0
@@ -757,12 +648,10 @@ $ `stdlib/ext/sqlite.nu`
                         ? ( __ag_row q ) { = remaining ( sqlite_column_int q 0 ) } {}
                     }
                 }
-                ( string_free csql )
             } {}
             ? ( __ag_commit db ) {} { ( __ag_rollback db ) }
         }
     }
-    ( string_free mbox )
     ^ @ AgInbox { out remaining }
 }
 
@@ -783,10 +672,8 @@ $ `stdlib/ext/sqlite.nu`
                     ? ( __ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
                 }
             }
-            ( string_free csql )
         }
     }
-    ( string_free mbox )
     ^ n
 }
 
@@ -822,7 +709,6 @@ $ `stdlib/ext/sqlite.nu`
                 T q → {
                     ( __ag_bind_i q 1 id )
                     ? ( __ag_row q ) {
-                        ( ag_msg_free out )
                         = out ( __ag_read_msg q )
                         = found T
                     } {}
@@ -831,7 +717,6 @@ $ `stdlib/ext/sqlite.nu`
         }
     }
     ? found { ^ @ ?AgMsg { T out } } {}
-    ( ag_msg_free out )
     ^ @ ?AgMsg { F }
 }
 
@@ -894,16 +779,11 @@ $ `stdlib/ext/sqlite.nu`
                 ( string_push_str body ` lease expired, back to open: ` )
                 ?? ( vec_get [String] titles i ) { T t → ( string_push_str body ( string_data t ) ) F _ → {} }
                 ( __ag_post_on db ( string_data mbox ) `agora` ( string_data body ) 0 now )
-                ( string_free body )
-                ( string_free mbox )
             }
             F _ → {}
         }
         = i + i 1
     }
-    ( vec_free [i] ids )
-    ( ag_strings_free owners )
-    ( ag_strings_free titles )
 }
 
 @ ag_task_post AgStore st s title s body s tags s poster i priority i now → i {
@@ -943,17 +823,14 @@ $ `stdlib/ext/sqlite.nu`
                 T q → {
                     ( __ag_bind_i q 1 id )
                     ? ( __ag_row q ) {
-                        ( ag_task_free out )
                         = out ( __ag_read_task q )
                         = found T
                     } {}
                 }
             }
-            ( string_free sql )
         }
     }
     ? found { ^ @ ?AgTask { T out } } {}
-    ( ag_task_free out )
     ^ @ ?AgTask { F }
 }
 
@@ -1005,7 +882,6 @@ $ `stdlib/ext/sqlite.nu`
                     ~ ( __ag_row q ) { ( vec_push [AgTask] out ( __ag_read_task q ) ) }
                 }
             }
-            ( string_free sql )
         }
     }
     ^ out
@@ -1050,9 +926,9 @@ $ `stdlib/ext/sqlite.nu`
                 T q → {
                     ( __ag_bind_i q 1 id )
                     ? ( __ag_row q ) {
-                        ( string_free poster ) = poster ( sqlite_column_text q 0 )
-                        ( string_free title ) = title ( sqlite_column_text q 1 )
-                        ( string_free status ) = status ( sqlite_column_text q 2 )
+                        = poster ( sqlite_column_text q 0 )
+                        = title ( sqlite_column_text q 1 )
+                        = status ( sqlite_column_text q 2 )
                         = found T
                     } {}
                 }
@@ -1080,12 +956,7 @@ $ `stdlib/ext/sqlite.nu`
                 ( string_push_str body ( string_data title ) )
                 : String mbox ( ag_mailbox ( string_data poster ) )
                 ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
-                ( string_free mbox )
-                ( string_free body )
             } {}
-            ( string_free poster )
-            ( string_free title )
-            ( string_free status )
             ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
         }
     }
@@ -1135,8 +1006,8 @@ $ `stdlib/ext/sqlite.nu`
                     ( __ag_bind_i q 1 id )
                     ( __ag_bind_s q 2 agent )
                     ? ( __ag_row q ) {
-                        ( string_free poster ) = poster ( sqlite_column_text q 0 )
-                        ( string_free title ) = title ( sqlite_column_text q 1 )
+                        = poster ( sqlite_column_text q 0 )
+                        = title ( sqlite_column_text q 1 )
                         = mine T
                     } {}
                 }
@@ -1170,11 +1041,7 @@ $ `stdlib/ext/sqlite.nu`
                 } {}
                 : String mbox ( ag_mailbox ( string_data poster ) )
                 ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
-                ( string_free mbox )
-                ( string_free body )
             } {}
-            ( string_free poster )
-            ( string_free title )
             ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
         }
     }
@@ -1208,14 +1075,12 @@ $ `stdlib/ext/sqlite.nu`
                     ( __ag_bind_i q 1 id )
                     ? ( __ag_row q ) {
                         = found T
-                        ( string_free owner ) = owner ( sqlite_column_text q 0 )
-                        ( string_free title ) = title ( sqlite_column_text q 1 )
+                        = owner ( sqlite_column_text q 0 )
+                        = title ( sqlite_column_text q 1 )
                         : String status ( sqlite_column_text q 2 )
                         : String poster ( sqlite_column_text q 3 )
                         = cancellable & != 0 ( nurl_str_eq ( string_data poster ) agent )
                         | != 0 ( nurl_str_eq ( string_data status ) `open` ) != 0 ( nurl_str_eq ( string_data status ) `claimed` )
-                        ( string_free status )
-                        ( string_free poster )
                     } {}
                 }
             }
@@ -1240,11 +1105,7 @@ $ `stdlib/ext/sqlite.nu`
                 ( string_push_str body ( string_data title ) )
                 : String mbox ( ag_mailbox ( string_data owner ) )
                 ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
-                ( string_free mbox )
-                ( string_free body )
             } {}
-            ( string_free owner )
-            ( string_free title )
             ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
         }
     }
@@ -1301,7 +1162,6 @@ $ `stdlib/ext/sqlite.nu`
                     ( __ag_bind_s q 1 project )
                     ( __ag_bind_s q 2 key )
                     ? ( __ag_row q ) {
-                        ( ag_note_free out )
                         = out ( __ag_read_note q )
                         = found T
                     } {}
@@ -1310,7 +1170,6 @@ $ `stdlib/ext/sqlite.nu`
         }
     }
     ? found { ^ @ ?AgNote { T out } } {}
-    ( ag_note_free out )
     ^ @ ?AgNote { F }
 }
 
@@ -1332,7 +1191,6 @@ $ `stdlib/ext/sqlite.nu`
                     ~ ( __ag_row q ) { ( vec_push [AgNote] out ( __ag_read_note q ) ) }
                 }
             }
-            ( string_free sql )
         }
     }
     ^ out

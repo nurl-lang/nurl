@@ -23,8 +23,6 @@ $ `stdlib/std/random.nu`
     ( bytes_extend_str buf token )
     : ( Vec u ) digest ( sha256_pure buf )
     : String hex ( bytes_to_hex digest )
-    ( vec_free [u] buf )
-    ( vec_free [u] digest )
     ^ hex
 }
 

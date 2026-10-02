@@ -22,6 +22,7 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bufio.nu`
@@ -333,13 +334,6 @@ $ `stdlib/std/bufio.nu`
 
 @ bx_ok BxOpts o → b { ^ . o ok }
 
-@ bx_opts_free sink BxOpts o → v {
-    ( vec_free_with [String] . o vals \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] . o allvals \ String x → v { ( string_free x ) } )
-    ( vec_free [i] . o allords )
-    ( vec_free_with [String] . o args \ String x → v { ( string_free x ) } )
-}
-
 // ── Inputs ────────────────────────────────────────────────────────
 //
 // Every filter takes the same shape of operand list: paths, where `-`
@@ -442,24 +436,25 @@ $ `stdlib/std/bufio.nu`
 // compiles every module ALONE and would not resolve it. So main.nu hands the
 // table over as a value at startup and sh.nu calls what it was given.
 //
-// A closure is a fat value and cannot sit in an `i` global, so one struct on
-// the heap holds it and the pointer to that fits.
+// A closure is a fat value and cannot sit in an `i` global, so an rcbox
+// holds it and the pointer to that fits. The global owns it for the life of
+// the process; installing another hook replaces it.
 
 : BxDispatch { ( @ i s ( Vec String ) ) run }
 
 : ~ i g_bx_dispatch 0
 
-@ bx_dispatch_set ( @ i s ( Vec String ) ) f → v {
-    ? == g_bx_dispatch 0 { = g_bx_dispatch # i ( nurl_alloc Z BxDispatch ) } {}
-    : *BxDispatch d # *BxDispatch g_bx_dispatch
-    = . d run f
+@ bx_dispatch_set sink ( @ i s ( Vec String ) ) f → v {
+    : i old g_bx_dispatch
+    = g_bx_dispatch ( rcbox_new [BxDispatch] @ BxDispatch { f } )
+    ( rcbox_release [BxDispatch] old )
 }
 
 // -1 when nobody installed one, which is every caller that is not the
 // multiplexer — a library used on its own has no applet table.
 @ bx_dispatch s name ( Vec String ) argv → i {
     ? == g_bx_dispatch 0 { ^ -1 } {}
-    : *BxDispatch d # *BxDispatch g_bx_dispatch
+    : *BxDispatch d ( rcbox_ptr [BxDispatch] g_bx_dispatch )
     : ( @ i s ( Vec String ) ) f . d run
     ^ ( f name argv )
 }
@@ -586,6 +581,5 @@ $ `stdlib/std/bufio.nu`
         ? ( bx_streq ( bx_at names i ) name ) { = found T } {}
         = i + i 1
     }
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
     ^ found
 }

@@ -38,8 +38,6 @@ $ `stdlib/std/deflate.nu`
     ( string_push_int out ( crc32 v ) )
     ( string_push_char out 10 )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
-    ( vec_free [u] v )
 }
 
 // crc32_update fed in two pieces must equal crc32 of the whole.
@@ -63,8 +61,6 @@ $ `stdlib/std/deflate.nu`
     ( string_push_int out c )
     ( string_push_char out 10 )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
-    ( vec_free [u] whole ) ( vec_free [u] head ) ( vec_free [u] tail )
 }
 
 @ main → i {

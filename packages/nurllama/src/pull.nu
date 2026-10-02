@@ -106,7 +106,7 @@ $ `src/store.nu`
 }
 
 // Feed the existing .part through the hasher (resume path).
-@ __nl_rehash_part * Sha256 h s path → !i String {
+@ __nl_rehash_part Sha256 h s path → !i String {
     : !File IoErr fr ( file_open path )
     ?? fr {
         T f → {
@@ -201,7 +201,7 @@ $ `src/store.nu`
             ( string_free cl )
             ? & resume > total 0 { = total + total off } {}
 
-            : *Sha256 h ( sha256_init )
+            : Sha256 h ( sha256_init )
             : ~ i done_bytes 0
             : ~ b failed F
             : ~ String ferr ( string_new )
@@ -232,7 +232,7 @@ $ `src/store.nu`
                 }
             }
 
-            : *Progress pg ( progress_new ( string_data name ) total )
+            : Progress pg ( progress_new ( string_data name ) total )
             ? > done_bytes 0 { ( progress_set pg done_bytes ) } {}
             : ~ b more ! failed
             ~ more {

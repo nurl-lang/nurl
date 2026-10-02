@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** An `IForest` is an owning struct whose node
+arrays are released with its owner; `iforest_free` is an optional early
+release. The tree builder and the CLI no longer free their own scratch.
+
 ## 0.1.4
 
 `iforest_free` now takes a **`sink`** parameter.

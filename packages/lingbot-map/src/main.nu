@@ -538,7 +538,7 @@ $ `src/preproc.nu`
 // Emit the points of one frame into the PLY writer. `rgb` is the
 // un-normalised CHW image, `dep` and `cf` are the head's outputs,
 // `kinv` and `c2w` the camera. The writer buffers and flushes itself.
-@ __lm_emit * PlyW p * f rgb * f dep * f cf * f kinv * f c2w
+@ __lm_emit PlyW p * f rgb * f dep * f cf * f kinv * f c2w
 i h i w f cmin i stride → v {
     : *f wp # *f ( nurl_zalloc 24 )
     : i plane * h w
@@ -725,7 +725,7 @@ i h i w f cmin i stride → v {
     // caller writes the cloud into a pipeline and never learns.
     : ~ i rc 0
     : ~ i serve 0
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} {
         ( nurl_print `lingbot-map: no GPU backend — no CUDA device is visible, and this\n` )
         ( nurl_print `build has no CPU fallback compiled in.\n` )
@@ -764,7 +764,7 @@ i h i w f cmin i stride → v {
             ? ( lw_ok lw ) {} {
                 ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1
             }
-            : !*PlyW String po ( ply_create . o out . o ascii `lingbot-map, pure NURL` )
+            : !PlyW String po ( ply_create . o out . o ascii `lingbot-map, pure NURL` )
             ?? po {
                 F e → {
                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1

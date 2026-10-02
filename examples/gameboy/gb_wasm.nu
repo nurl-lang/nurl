@@ -48,15 +48,14 @@ $ `examples/gameboy/core.nu`
 }
 
 @ main → i {
-    // Pull the selected ROM from the host into a scratch buffer, boot it.
+    // Pull the selected ROM from the host into a scratch buffer, boot it
+    // (cart_load copies it).
     : i n ( host_rom_size )
     ? <= n 1 { ^ 1 } {}
-    : s buf ( nurl_alloc n )
-    : *u bp # *u buf
+    : ( Vec u ) rom ( vec_with_cap [u] n )
     : ~ i i 0
-    ~ < i n { = . bp i # u ( host_rom_byte i ) = i + i 1 }
-    ( cart_load bp n )
-    ( nurl_free buf )
+    ~ < i n { ( vec_push [u] rom # u ( host_rom_byte i ) ) = i + i 1 }
+    ( cart_load ( vec_data [u] rom ) n )
 
     : *i fb ( canvas_open 160 144 )
     : ~ i running 1

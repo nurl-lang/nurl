@@ -26,8 +26,6 @@ $ `stdlib/std/thread.nu`
             : ( Vec u ) buf ( vec_with_cap [u] 5 )
             : ~ i b 0
             ~ < b 400 { ( vec_push [u] buf # u & b 255 ) = b + b 1 }
-            ( vec_free [u] buf )
-            ( vec_free_with [String] strs \ String s → v { ( string_free s ) } )
             = r + r 1
         }
         ( mutex_lock m )
@@ -42,6 +40,6 @@ $ `stdlib/std/thread.nu`
     ~ < j n { ?? ( vec_get [Thread] ths j ) { T t → ( thread_join t ) F → {} } = j + j 1 }
     ( nurl_print `threads=` ) ( nurl_print ( nurl_str_int n ) )
     ( nurl_print ` total=` ) ( nurl_println ( nurl_str_int ( nurl_peek # s total 0 ) ) )
-    ( nurl_free # s total ) ( mutex_free m )
+    ( nurl_free # s total )
     ^ 0
 }

@@ -25,6 +25,7 @@ $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
 $ `stdlib/dist/ring.nu`
 $ `stdlib/dist/job.nu`
+$ `stdlib/core/rcbox.nu`
 $ `census.nu`
 $ `work.nu`
 
@@ -59,10 +60,10 @@ $ `work.nu`
 
 // ── node bundle ───────────────────────────────────────────────────
 
-: Swarm {
+: SwarmImpl {
     Transport transport
     Ring ring
-    s roster  // *Roster
+    Roster roster
     JobNode job
     ( Vec u ) self_pk
     i self_id
@@ -70,65 +71,71 @@ $ `work.nu`
     ( Vec u ) group
 }
 
-@ swarm_new RelayClient rc i id i role → *Swarm {
+// A Swarm is a handle on the node bundle in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same node, and the last owner releases it — the
+// transport, ring, roster and job node with it.
+: Swarm { s ctl }
+
+@ Swarm_share Swarm h → Swarm { ^ @ Swarm { # s ( rcbox_share # i . h ctl ) } }
+
+@ Swarm_drop sink Swarm h → v {
+    ( mem_forget h )
+    ( rcbox_release [SwarmImpl] # i . h ctl )
+}
+
+@ __Swarm_ptr Swarm h → *SwarmImpl { ^ ( rcbox_ptr [SwarmImpl] # i . h ctl ) }
+
+@ swarm_new RelayClient rc i id i role → Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : Transport tr ( transport_open # s 0 rc 1 )
     : Ring ring ( ring_new )
-    : *Roster roster ( roster_new )
+    : Roster roster ( roster_new )
     : JobNode jn ( job_node_new tr ring me id )
-    : *Swarm sw # *Swarm ( nurl_alloc Z Swarm )
-    = . sw transport tr
-    = . sw ring ring
-    = . sw roster # s roster
-    = . sw job jn
-    = . sw self_pk me
-    = . sw self_id id
-    = . sw role role
-    = . sw group ( swarm_group_id )
     // A worker is itself a ring member; the coordinator (client) never is.
     ? == role ( role_worker ) { ( roster_add roster ring me id ( swarm_vnodes ) ) } {}
-    ^ sw
+    ^ @ Swarm { # s ( rcbox_new [SwarmImpl] @ SwarmImpl { tr ring roster jn me id role ( swarm_group_id ) } ) }
 }
 
-@ swarm_free sink * Swarm sw → v {
-    ( job_node_free . sw job )
-    ( ring_free . sw ring )
-    ( roster_free # *Roster . sw roster )
-    ( transport_free . sw transport )
-    ( vec_free [u] . sw self_pk )
-    ( vec_free [u] . sw group )
-    ( nurl_free # s sw )
+// Let go of `sw` now rather than at the end of its owner's scope (optional).
+@ swarm_free sink Swarm sw → v {}
+
+// How many workers this node has folded into its ring.
+@ swarm_worker_count Swarm sw__h → i {
+    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+    ^ ( roster_count . sw roster )
 }
 
-@ swarm_join_group * Swarm sw → v {
+@ swarm_join_group Swarm sw__h → v {
+    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ?? ( transport_group_join . sw transport . sw group ) { T _ → {} F _ → {} }
 }
 
 // Announce ourselves to the group. `want` asks hearers to reply so a newcomer
 // learns the existing members.
-@ swarm_announce * Swarm sw i want → v {
+@ swarm_announce Swarm sw__h i want → v {
+    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk )
     ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → {} F _ → {} }
-    ( vec_free [u] msg )
 }
 
-@ swarm_on_hello * Swarm sw Hello h → v {
+@ swarm_on_hello Swarm sw__h Hello h → v {
+    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     // Only workers join the ring; a client announcing itself is reachable but
     // owns no keys.
     ? == . h role ( role_worker ) {
-        ( roster_add # *Roster . sw roster . sw ring . h pubkey . h id ( swarm_vnodes ) )
+        ( roster_add . sw roster . sw ring . h pubkey . h id ( swarm_vnodes ) )
         ( transport_add_peer . sw transport . h pubkey )
     } {}
     // Reply to a discovery request unless it is our own broadcast echoed back.
     ? & == . h want 1 ! ( bytes_eq . h pubkey . sw self_pk ) {
         : ( Vec u ) reply ( hello_build . sw self_id . sw role 0 . sw self_pk )
         ?? ( transport_send . sw transport . h pubkey reply ) { T _ → {} F _ → {} }
-        ( vec_free [u] reply )
     } {}
 }
 
 // Drain inbound transport messages, dispatching census HELLO and job traffic.
-@ swarm_pump * Swarm sw i max → v {
+@ swarm_pump Swarm sw__h i max → v {
+    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     : ~ b more T
     ~ more {
         ?? ( transport_recv . sw transport max ) {
@@ -136,15 +143,12 @@ $ `work.nu`
                 : i b0 ?? ( vec_get [u] . tm payload 0 ) { T x → # i x F → 255 }
                 ? == b0 ( census_hello_t ) {
                     : Hello h ( hello_decode . tm payload )
-                    ( swarm_on_hello sw h )
-                    ( hello_free h )
+                    ( swarm_on_hello sw__h h )
                 } {
                     : JobMsg m ( jobmsg_decode . tm payload )
                     ? == . m mtype ( job_submit_t ) { ( job_on_submit . sw job m ) } {}
                     ? == . m mtype ( job_result_t ) { ( job_on_result . sw job m ) } {}
-                    ( jobmsg_free m )
                 }
-                ( transport_msg_free tm )
             }
             F → { = more F }
         }
@@ -168,7 +172,8 @@ $ `work.nu`
     }
 }
 
-@ swarm_register_handlers * Swarm sw → v {
+@ swarm_register_handlers Swarm sw__h → v {
+    : *SwarmImpl sw ( __Swarm_ptr sw__h )
     ( job_register . sw job ( kind_primes ) ( primes_handler ) )
     ( job_register . sw job ( kind_sumsq ) ( sumsq_handler ) )
 }
@@ -178,18 +183,16 @@ $ `work.nu`
         T rc → {
             : ( Vec u ) reg ( pk_from_id id )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
-            ( vec_free [u] reg )
             ( relay_set_timeout rc 250 )
-            : *Swarm sw ( swarm_new rc id ( role_worker ) )
+            : Swarm sw ( swarm_new rc id ( role_worker ) )
             ( swarm_register_handlers sw )
             ( swarm_join_group sw )
             ( swarm_announce sw 1 )  // "I'm here — existing members, identify yourselves"
             ( nurl_print `swarm worker ` ) ( nurl_print_int id ) ( nurl_print ` ready (` )
-            ( nurl_print_int ( roster_count # *Roster . sw roster ) ) ( nurl_print ` known)\n` )
+            ( nurl_print_int ( swarm_worker_count sw ) ) ( nurl_print ` known)\n` )
             // Daemon loop. rounds<=0 means run until killed.
             : ~ i t 0
             ~ | <= rounds 0 < t rounds { ( swarm_pump sw 200 ) = t + t 1 }
-            ( swarm_free sw )
             ( relay_close rc )
             ^ 0
         }
@@ -199,7 +202,7 @@ $ `work.nu`
 
 // Discover the live workers: announce, then pump a short window collecting the
 // HELLO replies that fold workers into the ring.
-@ swarm_discover * Swarm sw i rounds → v {
+@ swarm_discover Swarm sw i rounds → v {
     ( swarm_announce sw 1 )
     : ~ i t 0
     ~ < t rounds { ( swarm_pump sw 200 ) = t + t 1 }
@@ -211,16 +214,16 @@ $ `work.nu`
             : i myid ( rand_u64 )
             : ( Vec u ) reg ( pk_from_id myid )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
-            ( vec_free [u] reg )
             ( relay_set_timeout rc 250 )
-            : *Swarm sw ( swarm_new rc myid ( role_client ) )
+            : Swarm sw ( swarm_new rc myid ( role_client ) )
+            : *SwarmImpl swp ( __Swarm_ptr sw )
             ( swarm_join_group sw )
             ( swarm_discover sw 8 )
 
-            : i nworkers ( roster_count # *Roster . sw roster )
+            : i nworkers ( swarm_worker_count sw )
             ? == nworkers 0 {
                 ( nurl_print `swarm: no workers found — start some with 'swarm worker'\n` )
-                ( swarm_free sw ) ( relay_close rc )
+                ( relay_close rc )
                 ^ 1
             } {}
 
@@ -228,16 +231,14 @@ $ `work.nu`
             ( nurl_print `swarm: ` ) ( nurl_print_int nworkers ) ( nurl_print ` worker(s), ` )
             ( nurl_print_int nchunks ) ( nurl_print ` chunk(s)\n` )
 
-            : ( Vec s ) chunks ( shard lo hi nchunks )
+            : ( Vec Chunk ) chunks ( shard lo hi nchunks )
             : ( Vec i ) tids ( vec_new [i] )
             : ~ i i 0
             ~ < i nchunks {
-                : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
-                : *Chunk c # *Chunk cp
+                : Chunk c ?? ( vec_get [Chunk] chunks i ) { T x → x F → @ Chunk { 0 0 } }
                 : ( Vec u ) key ( chunk_key i )
                 : ( Vec u ) payload ( chunk_payload . c lo . c hi )
-                ( vec_push [i] tids ( job_submit . sw job kind key payload ) )
-                ( vec_free [u] key ) ( vec_free [u] payload )
+                ( vec_push [i] tids ( job_submit . swp job kind key payload ) )
                 = i + i 1
             }
 
@@ -248,7 +249,7 @@ $ `work.nu`
                 ( swarm_pump sw 200 )
                 : ~ b all T : ~ i j 0
                 ~ < j nchunks {
-                    ? ! ( job_has . sw job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) { = all F } {}
+                    ? ! ( job_has . swp job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) { = all F } {}
                     = j + j 1
                 }
                 = done all
@@ -259,8 +260,8 @@ $ `work.nu`
             : ~ i got 0
             : ~ i j 0
             ~ < j nchunks {
-                ?? ( job_await . sw job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) {
-                    T r → { = total + total ( result_decode r ) = got + got 1 ( vec_free [u] r ) }
+                ?? ( job_await . swp job ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) {
+                    T r → { = total + total ( result_decode r ) = got + got 1 }
                     F → {}
                 }
                 = j + j 1
@@ -271,9 +272,6 @@ $ `work.nu`
             ( nurl_print ` chunks returned)\n` )
             ? ! done { ( nurl_print `swarm: warning — some chunks did not return in time\n` ) } {}
 
-            ( vec_free [i] tids )
-            ( shard_free chunks )
-            ( swarm_free sw )
             ( relay_close rc )
             ^ ? done 0 1
         }
@@ -296,14 +294,12 @@ $ `work.nu`
 @ arg_int i idx → i {
     : String s ( env_arg idx )
     : i v ( nurl_str_to_int ( string_data s ) )
-    ( string_free s )
     ^ v
 }
 
 @ arg_eq i idx s lit → b {
     : String s ( env_arg idx )
     : b eq ? != 0 ( nurl_str_eq ( string_data s ) lit ) T F
-    ( string_free s )
     ^ eq
 }
 
@@ -311,7 +307,6 @@ $ `work.nu`
 @ arg_is_verbose i idx → b {
     : String s ( env_arg idx )
     : b f ? != 0 ( nurl_str_eq ( string_data s ) `--v` ) T ? != 0 ( nurl_str_eq ( string_data s ) `--verbose` ) T F
-    ( string_free s )
     ^ f
 }
 
@@ -330,7 +325,7 @@ $ `work.nu`
         : ~ i ai 2
         ~ < ai argc {
             ? ( arg_is_verbose ai ) { = vflag 1 } {
-                ? == seen 0 { ( string_free host ) = host ( env_arg ai ) = seen 1 } {
+                ? == seen 0 { = host ( env_arg ai ) = seen 1 } {
                     ? == seen 1 { = port ( arg_int ai ) = seen 2 } {}
                 }
             }
@@ -339,7 +334,6 @@ $ `work.nu`
         ? < seen 2 { ( nurl_print `usage: swarm relay <host> <port> [--v|--verbose]\n` ) = rc 1 } {
             = rc ( run_relay ( string_data host ) port vflag )
         }
-        ( string_free host )
     } {
         ? ( arg_eq 1 `worker` ) {
             ? < argc 4 { ( nurl_print `usage: swarm worker <host> <port> [id] [rounds]\n` ) = rc 1 } {
@@ -347,7 +341,6 @@ $ `work.nu`
                 : i id ? > argc 4 ( arg_int 4 ) ( rand_u64 )
                 : i rounds ? > argc 5 ( arg_int 5 ) 0
                 = rc ( run_worker ( string_data host ) ( arg_int 3 ) id rounds )
-                ( string_free host )
             }
         } {
             ? ( arg_eq 1 `submit` ) {
@@ -355,7 +348,6 @@ $ `work.nu`
                     : String host ( env_arg 2 )
                     : i kind ? ( arg_eq 4 `sumsq` ) ( kind_sumsq ) ( kind_primes )
                     = rc ( run_submit ( string_data host ) ( arg_int 3 ) kind ( arg_int 5 ) ( arg_int 6 ) )
-                    ( string_free host )
                 }
             } {
                 ( usage ) = rc 1

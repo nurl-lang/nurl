@@ -221,9 +221,7 @@ $ `stdlib/fs/fat.nu`
         = ok ( blk_write fsi 0 1 1 )
         ? ok { = ok ( blk_write bs 0 6 1 ) } {}
         ? ok { = ok ( blk_write fsi 0 7 1 ) } {}
-        ( vec_free [u] fsi )
     } {}
-    ( vec_free [u] bs )
     ? ! ok { ^ F } {}
 
     // ── the FATs ──
@@ -242,7 +240,6 @@ $ `stdlib/fs/fat.nu`
         = ok ( blk_write z 0 + + rsvd * nfats fat_secs k 1 )
         = k + k 1
     }
-    ( vec_free [u] z )
     ? ! ok { ^ F } {}
 
     // ── entries 0 and 1, and the root chain ──
@@ -266,7 +263,6 @@ $ `stdlib/fs/fat.nu`
         = ok ( blk_write f0 0 + fat_start * k fat_secs 1 )
         = k + k 1
     }
-    ( vec_free [u] f0 )
     ? ! ok { ^ F } {}
 
     // The FAT32 root directory is a cluster and must be empty, which
@@ -279,7 +275,6 @@ $ `stdlib/fs/fat.nu`
             = ok ( blk_write z2 0 + data_start k 1 )
             = k + k 1
         }
-        ( vec_free [u] z2 )
     } {}
     ? ! ok { ^ F } {}
 
@@ -302,7 +297,6 @@ $ `stdlib/fs/fat.nu`
         ( __put16 rootsec 24 33 )
         : i root_lba ? == ftype 32 data_start + rsvd * nfats fat_secs
         = ok ( blk_write rootsec 0 root_lba 1 )
-        ( vec_free [u] rootsec )
     } {}
     ? ! ok { ^ F } {}
     ^ ( blk_flush )

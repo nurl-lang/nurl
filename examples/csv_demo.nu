@@ -33,7 +33,6 @@ $ `stdlib/ext/csv.nu`
     ?? first_date {
         T s → {
             ( nurl_print `Row 0 date = ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
-            ( string_free s )
         }
         F → {}
     }
@@ -60,7 +59,6 @@ $ `stdlib/ext/csv.nu`
             ( nurl_print `Total rows matching: ` )
             ( nurl_print ( nurl_str_int ( vec_len [i] all ) ) )
             ( nurl_print ` (` ) ( nurl_print ( nurl_str_int el2 ) ) ( nurl_print `ms)\n` )
-            ( vec_free [i] all )
         }
         F → {}
     }
@@ -77,7 +75,6 @@ $ `stdlib/ext/csv.nu`
     ?? new_first {
         T s → {
             ( nurl_print `New row 0 date = ` ) ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
-            ( string_free s )
         }
         F → {}
     }
@@ -98,11 +95,6 @@ $ `stdlib/ext/csv.nu`
     ? ok {
         ( nurl_print `Wrote in ` ) ( nurl_print ( nurl_str_int ( elapsed_ms_since tw ) ) ) ( nurl_print `ms\n` )
     } { ( nurl_print `Write failed.\n` ) }
-
-    ( csv_table_free proj )
-    : ( @ v String ) sd \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] cols sd )
-    ( csv_table_free tbl )
 
     ( nurl_print `\nTotal time: ` ) ( nurl_print ( nurl_str_int ( elapsed_ms_since t0 ) ) ) ( nurl_print `ms\n` )
     ^ 0

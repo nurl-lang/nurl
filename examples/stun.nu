@@ -15,7 +15,7 @@ $ `stdlib/net/stun.nu`
     : i argc ( env_args_count )
     : String host ? > argc 1 ( env_arg 1 ) ( string_from `stun.l.google.com` )
     : i port ? > argc 2 {
-        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) ( string_free ps ) p
+        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) p
     } 19302
 
     : !UdpSocket NetErr sr ( udp_bind_any )
@@ -29,7 +29,6 @@ $ `stdlib/net/stun.nu`
                     ( nurl_print `public endpoint: ` )
                     ( nurl_print ( string_data . sa host ) )
                     ( nurl_print `:` ) ( nurl_println_int . sa port )
-                    ( stun_addr_free sa )
                 }
                 F → ( nurl_print `no STUN response (no internet / DNS / blocked)\n` )
             }
@@ -37,6 +36,5 @@ $ `stdlib/net/stun.nu`
         }
         F e → ( nurl_print `bind failed\n` )
     }
-    ( string_free host )
     ^ 0
 }

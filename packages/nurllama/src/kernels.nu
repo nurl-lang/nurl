@@ -1293,15 +1293,15 @@ $ `deps/gpu/src/gpu.nu`
     // other backend the portable kernels above stay in charge, and the
     // flag below turns the dispatch off.
     : b want_warp == ( gpu_backend ) 0
-    : GpuKernel w1 ? want_warp ( gpu_compile g ( __lk_mv_f32_w ) `mv_f32_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel w2 ? want_warp ( gpu_compile g ( __lk_mv_q4_0_w ) `mv_q4_0_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel w3 ? want_warp ( gpu_compile g ( __lk_mv_q8_0_w ) `mv_q8_0_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel w4 ? want_warp ( gpu_compile g ( __lk_mv_q4_k_w ) `mv_q4_k_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel w5 ? want_warp ( gpu_compile g ( __lk_mv_q6_k_w ) `mv_q6_k_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel w6 ? want_warp ( gpu_compile g ( __lk_mv_q5_0_w ) `mv_q5_0_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel w7 ? want_warp ( gpu_compile g ( __lk_mv_q5_1_w ) `mv_q5_1_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel w8 ? want_warp ( gpu_compile g ( __lk_mv_q5_k_w ) `mv_q5_k_w` ) @ GpuKernel { 0 0 }
-    : GpuKernel me5w ? want_warp ( gpu_compile g ( __lk_argmax_conf_w ) `argmax_conf_w` ) @ GpuKernel { 0 0 }
+    : GpuKernel w1 ? want_warp ( gpu_compile g ( __lk_mv_f32_w ) `mv_f32_w` ) ( gpu_kernel_none )
+    : GpuKernel w2 ? want_warp ( gpu_compile g ( __lk_mv_q4_0_w ) `mv_q4_0_w` ) ( gpu_kernel_none )
+    : GpuKernel w3 ? want_warp ( gpu_compile g ( __lk_mv_q8_0_w ) `mv_q8_0_w` ) ( gpu_kernel_none )
+    : GpuKernel w4 ? want_warp ( gpu_compile g ( __lk_mv_q4_k_w ) `mv_q4_k_w` ) ( gpu_kernel_none )
+    : GpuKernel w5 ? want_warp ( gpu_compile g ( __lk_mv_q6_k_w ) `mv_q6_k_w` ) ( gpu_kernel_none )
+    : GpuKernel w6 ? want_warp ( gpu_compile g ( __lk_mv_q5_0_w ) `mv_q5_0_w` ) ( gpu_kernel_none )
+    : GpuKernel w7 ? want_warp ( gpu_compile g ( __lk_mv_q5_1_w ) `mv_q5_1_w` ) ( gpu_kernel_none )
+    : GpuKernel w8 ? want_warp ( gpu_compile g ( __lk_mv_q5_k_w ) `mv_q5_k_w` ) ( gpu_kernel_none )
+    : GpuKernel me5w ? want_warp ( gpu_compile g ( __lk_argmax_conf_w ) `argmax_conf_w` ) ( gpu_kernel_none )
     : b warp & & want_warp ( gpu_kernel_ok me5w )
     & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
     & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )

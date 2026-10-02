@@ -38,8 +38,6 @@ $ `stdlib/std/hash_xxh64.nu`
     ( string_push_int out ( xxh64_seed v seed ) )
     ( string_push_char out 10 )
     ( nurl_print ( string_data out ) )
-    ( string_free out )
-    ( vec_free [u] v )
 }
 
 @ main → i {

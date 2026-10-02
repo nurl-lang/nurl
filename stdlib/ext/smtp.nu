@@ -152,7 +152,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_push_char line 13 )
     ( string_push_char line 10 )
     : !v NetErr w ( tcp_write_str . c conn ( string_data line ) )
-    ( string_free line )
     ^ ?? w {
         T _ → @ !v SmtpErr { T 0 }
         F er → @ !v SmtpErr { F ( __smtp_of_net er ) }
@@ -185,7 +184,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
                 : i cn ( vec_len [u] chunk )
                 : ~ i j 0
                 ~ < j cn { ( vec_push [u] . c rxbuf # u ( __smtp_vget chunk j ) ) = j + j 1 }
-                ( vec_free [u] chunk )
             }
             F er → { ^ @ !i SmtpErr { F ( __smtp_of_net er ) } }
         }
@@ -214,8 +212,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 
 @ smtp_close SmtpClient c → v {
     ( tcp_close_conn . c conn )
-    ( vec_free [u] . c rxbuf )
-    ( string_free . c last_reply )
 }
 
 // Wrap a connected (plain or TLS) TcpConn into an SmtpClient and read
@@ -299,7 +295,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_push_str line `AUTH PLAIN ` )
     ( string_push_str line ( string_data tok ) )
     : !v SmtpErr r ( __smtp_expect c ( string_data line ) 235 # SmtpErr SmtpAuth )
-    ( string_free tok )
     ^ r
 }
 
@@ -308,11 +303,9 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ?? r0 { T _ → {} F er → { ^ @ !v SmtpErr { F er } } }
     : String ub ( b64_encode user )
     : !v SmtpErr r1 ( __smtp_expect c ( string_data ub ) 334 # SmtpErr SmtpAuth )
-    ( string_free ub )
     ?? r1 { T _ → {} F er → { ^ @ !v SmtpErr { F er } } }
     : String pb ( b64_encode pass )
     : !v SmtpErr r2 ( __smtp_expect c ( string_data pb ) 235 # SmtpErr SmtpAuth )
-    ( string_free pb )
     ^ r2
 }
 
@@ -333,7 +326,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_push_str line addr )
     ( string_push_char line 62 )
     : !i SmtpErr r ( __smtp_cmd c ( string_data line ) )
-    ( string_free line )
     ^ ?? r {
         T code → ? | == code 250 == code 251 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
         F er → @ !v SmtpErr { F er }
@@ -352,7 +344,6 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( string_push_char ds 46 )  // '.'
     ( string_push_char ds 13 ) ( string_push_char ds 10 )
     : !v NetErr w ( tcp_write_str . c conn ( string_data ds ) )
-    ( string_free ds )
     ?? w { T _ → {} F er → { ^ @ !v SmtpErr { F ( __smtp_of_net er ) } } }
     : !i SmtpErr r2 ( __smtp_read_reply c )
     ^ ?? r2 {

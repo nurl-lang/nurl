@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `Lsm`, `MemTable`, `Wal`, `SstWriter`, `SstReader` and `SstCursor` are
+  handles instead of `*T` pointers: every copy is the same object and the
+  last owner releases it. A store, writer or reader closes its file when its
+  last owner lets go; a cursor holds a share of its table. `lsm_open`,
+  `sst_open`, `sst_create` and `wal_open` return the handle (`!Lsm String`,
+  …); every function that took `* Lsm` / `* MemTable` / … takes the handle.
+- `lsm_close`, `mt_free`, `sc_free`, `sst_close`, `wal_close`,
+  `lsm_get_free`, `lsm_scan_free` and `sst_hit_free` are optional early
+  releases.
+- New `wal_reopen w path`: a flush reopens its log in place.
+- The merge iterator opens each cursor once per step: scan and compaction
+  run 6–7 % fewer instructions, loads 2.5 % fewer.
+
 ## 0.1.1
 
 `lsm_get_free`, `lsm_scan_free`, `mt_free`, `sc_free`, `sst_hit_free` and 3 more now take a **`sink`** parameter.

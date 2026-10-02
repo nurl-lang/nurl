@@ -91,13 +91,9 @@ $ `filter.nu`
                     ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
                 }
                 ( bx_write out )
-                ( string_free out )
             } { = rc 1 }
-            ( bx_free_lines a )
-            ( bx_free_lines b )
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -137,7 +133,6 @@ $ `filter.nu`
                     }
                     ( string_push_char out 10 )
                 } { = rc 1 }
-                ( bx_free_lines lines )
                 = k + k 1
             }
         } {
@@ -194,8 +189,6 @@ $ `filter.nu`
                 } { = more F }
                 ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
             }
-            ( string_free row )
-            ( string_free line )
             : ~ i q 0
             ~ < q ni {
                 ?? ( vec_get [BufReader] rs q ) {
@@ -204,14 +197,9 @@ $ `filter.nu`
                 }
                 = q + q 1
             }
-            ( vec_free [BufReader] rs )
-            ( vec_free [i] alive )
         }
         ( bx_write out )
-        ( string_free out )
-        ( bx_free_lines ins )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -278,19 +266,14 @@ $ `filter.nu`
                                 ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
                             } { = more F }
                         }
-                        ( string_free line )
                         ( bufreader_close br )
                     }
                 }
                 = k + k 1
             }
             ( bx_write out )
-            ( string_free out )
-            ( bx_free_lines ins )
         }
     }
-    ( bx_opts_free o )
-    ( vec_free_with [String] av \ String x → v { ( string_free x ) } )
     ^ rc
 }
 
@@ -364,17 +347,13 @@ $ `filter.nu`
                             ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
                         } { = more F }
                     }
-                    ( string_free line )
                     ( bufreader_close br )
                 }
             }
             = k + k 1
         }
         ( bx_write out )
-        ( string_free out )
-        ( bx_free_lines ins )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -432,17 +411,13 @@ $ `filter.nu`
                             ? > ( string_len out ) 32768 { ( bx_write out ) ( string_clear out ) } {}
                         } { = more F }
                     }
-                    ( string_free line )
                     ( bufreader_close br )
                 }
             }
             = k + k 1
         }
         ( bx_write out )
-        ( string_free out )
-        ( bx_free_lines ins )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -503,12 +478,8 @@ $ `filter.nu`
                 = k + k 1
             }
             ( bx_write out )
-            ( string_free out )
-            ( rng_free g )
         } {}
-        ( bx_free_lines items )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -518,7 +489,6 @@ $ `filter.nu`
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp path ok )
     ? ! ok {
-        ( vec_free [u] data )
         ^ 1
     } {}
     : String out ( string_new )
@@ -551,10 +521,7 @@ $ `filter.nu`
                 = rc 1
             }
         }
-        ( vec_free [u] bytes )
     } { ( bx_write out ) }
-    ( string_free out )
-    ( vec_free [u] data )
     ^ rc
 }
 
@@ -579,7 +546,6 @@ $ `filter.nu`
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -633,7 +599,6 @@ $ `filter.nu`
                         } {}
                     } { = more F }
                 }
-                ( string_free line )
                 ( bufreader_close br )
             }
         }
@@ -645,7 +610,6 @@ $ `filter.nu`
         }
     }
     ( bx_write out )
-    ( string_free out )
     ^ rc
 }
 
@@ -714,12 +678,9 @@ $ `filter.nu`
                 } {}
                 ( string_push_char out 10 )
                 ( bx_write out )
-                ( string_free out )
             } { = rc 1 }
-            ( vec_free [u] data )
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }

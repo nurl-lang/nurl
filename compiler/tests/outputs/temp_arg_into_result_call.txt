@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+!i String: 0
+!( Vec i ) String: 0
+?String: 0
+struct of numbers: 0
+?? ( r_str ( mk k ) ): 0
+20

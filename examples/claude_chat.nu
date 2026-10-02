@@ -64,7 +64,6 @@ $ `stdlib/core/io.nu`
     }
     ? == ( nurl_str_len api_key ) 0 {
         ( nurl_print `error: ANTHROPIC_API_KEY not set\n` )
-        ?? key { T s → ( string_free s ) F → {} }
         ^ 1
     } {}
 
@@ -74,8 +73,6 @@ $ `stdlib/core/io.nu`
     `You are a helpful, concise assistant.`
     ( string_data prompt )
     1024 )
-    ( string_free prompt )
-    ?? key { T s → ( string_free s ) F → {} }
 
     ?? r {
         T resp → {
@@ -90,7 +87,6 @@ $ `stdlib/core/io.nu`
             ( nurl_print ` out=` )
             ( nurl_print ( nurl_str_int ( claude_output_tokens resp ) ) )
             ( nurl_print `]\n` )
-            ( claude_response_free resp )
             ^ 0
         }
         F e → {

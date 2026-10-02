@@ -54,7 +54,6 @@ $ `binio.nu`
                     ( string_push_bytes out # *u ( string_data line ) ( string_len line ) )
                 } { = more F }
             }
-            ( string_free line )
             ( bufreader_close br )
             ^ T
         }
@@ -101,7 +100,6 @@ $ `binio.nu`
                 ? ( __is_pid_name nm ) { ( vec_push [i] out ( nurl_str_to_int nm ) ) } {}
                 = i + i 1
             }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
             ( sort_by [i] out \ i a i b → i { ^ ( cmp_int a b ) } )
             ^ T
         }
@@ -125,9 +123,7 @@ $ `binio.nu`
     : String p ( __proc_path pid `cmdline` )
     : String raw ( string_new )
     : b ok ( __proc_read ( string_data p ) raw )
-    ( string_free p )
     ? ! ok {
-        ( string_free raw )
         ^ F
     } {}
     : i n ( string_len raw )
@@ -150,10 +146,7 @@ $ `binio.nu`
             ( string_push_bytes out # *u ( string_data comm ) cn )
             ( string_push_char out 93 )
         } {}
-        ( string_free comm )
-        ( string_free cp )
     }
-    ( string_free raw )
     ^ T
 }
 
@@ -172,14 +165,10 @@ $ `binio.nu`
             ? ( string_starts_with line `Uid:` ) {
                 : String f ( __field ( string_data line ) 1 )
                 = uid ( nurl_str_to_int ( string_data f ) )
-                ( string_free f )
                 = i n
             } { = i + e 1 }
-            ( string_free line )
         }
     } {}
-    ( string_free text )
-    ( string_free p )
     ^ uid
 }
 
@@ -207,11 +196,9 @@ $ `binio.nu`
                                 ? >= uid 0 {
                                     ?? ( fs_user_name uid ) {
                                         T nm → {
-                                            ( string_free user )
                                             = user nm
                                         }
                                         F _ → {
-                                            ( string_free user )
                                             = user ( string_from ( nurl_str_int uid ) )
                                         }
                                     }
@@ -220,7 +207,6 @@ $ `binio.nu`
                                 ( string_push_bytes out # *u ( string_data user ) ? > w 8 8 w )
                                 : ~ i pad - 8 ? > w 8 8 w
                                 ~ > pad 0 { ( string_push_char out 32 ) = pad - pad 1 }
-                                ( string_free user )
                                 ( string_push_char out 32 )
                                 ( string_push_bytes out # *u ( string_data cmd ) ( string_len cmd ) )
                                 ( string_push_char out 10 )
@@ -231,13 +217,9 @@ $ `binio.nu`
                     = i + i 1
                 }
                 ( bx_write out )
-                ( string_free out )
-                ( string_free cmd )
             }
-            ( vec_free [i] pids )
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -252,8 +234,6 @@ $ `binio.nu`
     ? & >= n 1 <= n ( vec_len [String] names ) {
         ( string_push_str out ( bx_at names - n 1 ) )
     } {}
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-    ( string_free table )
     ^ out
 }
 
@@ -272,8 +252,6 @@ $ `binio.nu`
         ? ( bx_streq ( bx_at names i ) bare ) { = found + i 1 } {}
         = i + i 1
     }
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-    ( string_free table )
     ^ found
 }
 
@@ -309,11 +287,9 @@ $ `binio.nu`
             ( string_push_str out `) ` )
             ( string_push_bytes out # *u ( string_data nm ) ( string_len nm ) )
             ( string_push_char out 10 )
-            ( string_free nm )
             = k + k 1
         }
         ( bx_write out )
-        ( string_free out )
         ^ 0
     } {}
     ? >= i n {
@@ -339,7 +315,6 @@ $ `binio.nu`
 @ __pids_named s name ( Vec i ) out → b {
     : ( Vec i ) pids ( vec_new [i] )
     ? ! ( __proc_pids pids ) {
-        ( vec_free [i] pids )
         ^ F
     } {}
     : String cmd ( string_new )
@@ -354,16 +329,12 @@ $ `binio.nu`
                     ? | ( bx_streq ( string_data first ) name ) ( bx_streq ( string_data base ) name ) {
                         ( vec_push [i] out pid )
                     } {}
-                    ( string_free base )
-                    ( string_free first )
                 } {}
             }
             F _ → {}
         }
         = i + i 1
     }
-    ( string_free cmd )
-    ( vec_free [i] pids )
     ^ T
 }
 
@@ -401,7 +372,6 @@ $ `binio.nu`
                 }
             }
         } { = rc 1 }
-        ( vec_free [i] pids )
         = i + i 1
     }
     ^ rc
@@ -435,12 +405,10 @@ $ `binio.nu`
                 = k - k 1
             }
         } {}
-        ( vec_free [i] pids )
         = i + i 1
     }
     ? any { ( string_push_char out 10 ) } {}
     ( bx_write out )
-    ( string_free out )
     ^ ? any 0 1
 }
 
@@ -458,9 +426,7 @@ $ `binio.nu`
         ? ( string_starts_with line key ) {
             : String f ( __field ( string_data line ) 1 )
             = v ( nurl_str_to_int ( string_data f ) )
-            ( string_free f )
         } {}
-        ( string_free line )
         ? >= v 0 { ^ v } {}
         = i + e 1
     }
@@ -506,11 +472,8 @@ $ `binio.nu`
             ( bx_push_right out ( nurl_str_int ? > swfree 0 swfree 0 ) 12 )
             ( string_push_char out 10 )
             ( bx_write out )
-            ( string_free out )
         }
-        ( string_free text )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -524,7 +487,6 @@ $ `binio.nu`
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp `/var/run/utmp` ok )
     ? ! ok {
-        ( vec_free [u] data )
         ^ -1
     } {}
     : i n ( vec_len [u] data )
@@ -536,27 +498,22 @@ $ `binio.nu`
         ? == kind 7 { = count + count 1 } {}
         = off + off 384
     }
-    ( vec_free [u] data )
     ^ count
 }
 
 @ ap_uptime ( Vec String ) argv → i {
     : String up ( string_new )
     ? ! ( __proc_read `/proc/uptime` up ) {
-        ( string_free up )
         ( bx_err `/proc/uptime is not readable — this machine cannot answer that` )
         ^ 1
     } {}
     : String f ( __field ( string_data up ) 0 )
     : i secs # i ( nurl_str_to_float ( string_data f ) )
-    ( string_free f )
-    ( string_free up )
     : String out ( string_new )
     ( string_push_char out 32 )
     : Time now ( time_now_local )
     : String clock ( time_format now `%H:%M:%S` )
     ( string_push_bytes out # *u ( string_data clock ) ( string_len clock ) )
-    ( string_free clock )
     ( string_push_str out ` up ` )
     : i days / secs 86400
     ? > days 0 {
@@ -588,14 +545,11 @@ $ `binio.nu`
             ? > k 0 { ( string_push_str out `, ` ) } {}
             : String lf ( __field ( string_data load ) k )
             ( string_push_bytes out # *u ( string_data lf ) ( string_len lf ) )
-            ( string_free lf )
             = k + k 1
         }
     } {}
-    ( string_free load )
     ( string_push_char out 10 )
     ( bx_write out )
-    ( string_free out )
     ^ 0
 }
 
@@ -611,7 +565,6 @@ $ `binio.nu`
 @ __mounts ( Vec MountEnt ) out → b {
     : String text ( string_new )
     ? ! ( __proc_read `/proc/mounts` text ) {
-        ( string_free text )
         ^ F
     } {}
     : i n ( string_len text )
@@ -627,19 +580,10 @@ $ `binio.nu`
                 ( __field ( string_data line ) 2 )
                 ( __field ( string_data line ) 3 )
             } )
-            ( string_free line )
         } {}
         = i + e 1
     }
-    ( string_free text )
     ^ T
-}
-
-@ __mount_free sink MountEnt m → v {
-    ( string_free . m dev )
-    ( string_free . m dir )
-    ( string_free . m kind )
-    ( string_free . m opts )
 }
 
 @ ap_mount ( Vec String ) argv → i {
@@ -652,7 +596,6 @@ $ `binio.nu`
     } {}
     : ( Vec MountEnt ) ms ( vec_new [MountEnt] )
     ? ! ( __mounts ms ) {
-        ( vec_free [MountEnt] ms )
         ^ ( __proc_no_procfs )
     } {}
     : String out ( string_new )
@@ -675,8 +618,6 @@ $ `binio.nu`
         = i + i 1
     }
     ( bx_write out )
-    ( string_free out )
-    ( vec_free_with [MountEnt] ms \ MountEnt m → v { ( __mount_free m ) } )
     ^ 0
 }
 
@@ -724,9 +665,6 @@ $ `binio.nu`
         ( bx_push_right out ( string_data a ) 10 )
         ( bx_push_right out ( string_data b ) 10 )
         ( bx_push_right out ( string_data c ) 10 )
-        ( string_free a )
-        ( string_free b )
-        ( string_free c )
     } {
         ( bx_push_right out ( nurl_str_int / total 1024 ) 10 )
         ( bx_push_right out ( nurl_str_int / used 1024 ) 10 )
@@ -754,11 +692,9 @@ $ `binio.nu`
         ?? ( path_canonical pp ) {
             T c → {
                 ( string_push_str real ( path_str c ) )
-                ( path_free c )
             }
             F _ → { ( string_push_str real path ) }
         }
-        ( path_free pp )
         : i cnt ( vec_len [MountEnt] ms )
         : ~ i i 0
         ~ < i cnt {
@@ -767,7 +703,6 @@ $ `binio.nu`
                     : i dl ( string_len . m dir )
                     ? & > dl bestlen ( string_starts_with real ( string_data . m dir ) ) {
                         = bestlen dl
-                        ( string_free best )
                         = best ( string_clone . m dev )
                     } {}
                 }
@@ -775,9 +710,7 @@ $ `binio.nu`
             }
             = i + i 1
         }
-        ( string_free real )
     } {}
-    ( vec_free_with [MountEnt] ms \ MountEnt m → v { ( __mount_free m ) } )
     ^ best
 }
 
@@ -801,7 +734,6 @@ $ `binio.nu`
                         // only the mount table knows.
                         : String dev ( __device_for p )
                         ( __df_row out ( string_data dev ) p human st )
-                        ( string_free dev )
                     }
                     F e → {
                         ( bx_err_at p ( bx_ioerr e ) )
@@ -837,11 +769,8 @@ $ `binio.nu`
                     = i + i 1
                 }
             }
-            ( vec_free_with [MountEnt] ms \ MountEnt m → v { ( __mount_free m ) } )
         }
         ( bx_write out )
-        ( string_free out )
     }
-    ( bx_opts_free o )
     ^ rc
 }

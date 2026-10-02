@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** A `Tensor` and a `DTensor` are owning
+structs: a Tensor's shape and data, and a DTensor's shape and device block
+(a gpukit `GkBuf`, which goes back to the kit's pool), are released with
+their last owner. `tensor_free` / `dtensor_free` are optional early
+releases. The device-side ops take a `GpuKit` handle instead of `*GpuKit`
+(gpukit's self-releasing kit); `tensor_use_gpu` holds one owner of the kit
+it is handed, and `tensor_gpu_close` lets it go. The per-batch views of a
+broadcast `dtensor_bmm` are gpukit views (`gk_buf_view`), which keep the
+block they look into alive.
+
+`tensor_reshape` now takes its `shape` as `sink`: it always consumed it
+(adopted by the result, dropped on a size mismatch), and the signature says
+so — which is also what lets the compiler release a shape whose reshape
+failed or whose result was dropped (a kept, non-sink parameter stored into
+an Option payload leaked).
+
 ## 0.5.0
 
 `dtensor_free` and `tensor_free` now take **`sink`** parameters.

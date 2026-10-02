@@ -68,9 +68,6 @@ $ `src/ops.nu`
     ( string_push_int lab nw ) ( string_push_char lab 95 )
     ( string_push_int lab nh )
     ( dump ( string_data lab ) out )
-    ( string_free lab )
-    ( image_free out )
-    ( image_free src )
 }
 
 @ case i w i h i ch i nw i nh → v { ( case_f 0 w h ch nw nh ) }

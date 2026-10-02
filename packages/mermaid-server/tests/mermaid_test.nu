@@ -62,7 +62,6 @@ $ `src/service.nu`
     : MmdEdge e1 ( edge_at g 1 )
     ( check != 0 ( nurl_str_eq ( string_data . e1 label ) `yes` ) `parse: pipe edge label` )
     ( check == . e1 head MMD_ARROW_POINT `parse: --> is an arrow head` )
-    ( mmd_parse_result_free r )
 }
 
 @ test_parse_shapes → v {
@@ -77,7 +76,6 @@ $ `src/service.nu`
     ( check == ( node_shape g 4 ) MMD_SHAPE_PARALLELOGRAM `parse: [/../] is a parallelogram` )
     ( check == ( node_shape g 5 ) MMD_SHAPE_TRAPEZOID `parse: [/..\\] is a trapezoid` )
     ( check == ( node_shape g 6 ) MMD_SHAPE_FLAG `parse: >..] is a flag` )
-    ( mmd_parse_result_free r )
 }
 
 @ test_parse_links → v {
@@ -96,7 +94,6 @@ $ `src/service.nu`
     : MmdEdge e7 ( edge_at g 7 )
     ( check != 0 ( nurl_str_eq ( string_data . e7 label ) `dot` ) `parse: -. text .-> label` )
     ( check == . e7 line MMD_LINE_DOTTED `parse: -. text .-> stays dotted` )
-    ( mmd_parse_result_free r )
 }
 
 // `A --- B --- C` must not read `B` as an inline link label: only a
@@ -108,7 +105,6 @@ $ `src/service.nu`
     ( check == ( mmd_node_count g ) 3 `parse: chain keeps three nodes` )
     ( check == ( mmd_edge_count g ) 2 `parse: chain makes two links` )
     ( check == ( string_len . ( edge_at g 0 ) label ) 0 `parse: --- link carries no label` )
-    ( mmd_parse_result_free r )
 }
 
 @ test_parse_groups_and_breaks → v {
@@ -117,28 +113,23 @@ $ `src/service.nu`
     : MmdGraph g . r graph
     ( check == ( mmd_edge_count g ) 5 `parse: a 2x2 group is four links` )
     ( check ( node_label_is g 4 `one\ntwo` ) `parse: <br/> becomes a newline` )
-    ( mmd_parse_result_free r )
 }
 
 @ test_parse_errors → v {
     : MmdParseResult r1 ( mmd_parse `sequenceDiagram\n  A ->> B: hi\n` )
     ( check ! . r1 ok `parse: a non-flowchart diagram is rejected` )
     ( check == . r1 line 1 `parse: rejection points at line 1` )
-    ( mmd_parse_result_free r1 )
 
     : MmdParseResult r2 ( mmd_parse `graph TD\n  A[unterminated\n` )
     ( check ! . r2 ok `parse: an unterminated shape is rejected` )
     ( check == . r2 line 2 `parse: unterminated shape points at line 2` )
-    ( mmd_parse_result_free r2 )
 
     : MmdParseResult r3 ( mmd_parse `graph TD\n  subgraph one\n  A --> B\n  end\n` )
     ( check ! . r3 ok `parse: subgraph is rejected, not silently dropped` )
-    ( mmd_parse_result_free r3 )
 
     : MmdParseResult r4 ( mmd_parse `graph TD\n  classDef big fill:#fff\n  A --> B\n` )
     ( check . r4 ok `parse: a styling statement does not fail the parse` )
     ( check == ( vec_len [String] . . r4 graph warnings ) 1 `parse: styling statement warns` )
-    ( mmd_parse_result_free r4 )
 }
 
 // ── Templates ────────────────────────────────────────────────────────
@@ -166,8 +157,6 @@ $ `src/service.nu`
     `templates: an unknown key reaches the default` )
     ( check != 0 ( nurl_str_eq ( mmd_theme_str th `node.stroke_width` `` ) `1.6` )
     `templates: a float keeps its exact spelling` )
-    ( mmd_templates_free ts )
-    ( string_free . r message )
 }
 
 // ── Layout ───────────────────────────────────────────────────────────
@@ -189,19 +178,13 @@ $ `src/service.nu`
     // A --> D crosses two layer boundaries, so it must be routed.
     ( check == ( mmd_layout_bends l 3 ) 2 `layout: a long link gets one bend per crossed layer` )
     ( check == ( mmd_layout_bends l 0 ) 0 `layout: a neighbouring link is drawn straight` )
-    ( mmd_layout_free l )
-    ( mmd_parse_result_free r )
 
     // A cycle must still terminate and rank.
     : MmdParseResult rc ( mmd_parse `graph LR\n  A --> B --> C --> A\n` )
     : MmdLayout lc ( mmd_layout . rc graph th )
     ( check == . lc ranks 3 `layout: a cycle ranks by its back edge` )
     ( check > . lc width . lc height `layout: LR is wider than it is tall` )
-    ( mmd_layout_free lc )
-    ( mmd_parse_result_free rc )
 
-    ( mmd_templates_free ts )
-    ( string_free . tr message )
 }
 
 // ── Renderer ─────────────────────────────────────────────────────────
@@ -209,7 +192,6 @@ $ `src/service.nu`
 @ test_render → v {
     : MmdTemplatesRes tr ( mmd_templates_load MMD_TSRC_DIR `.templates` )
     ( mmd_state_init . tr set )
-    ( string_free . tr message )
 
     : MmdRenderRes r ( mmd_render_source `graph TD\n  A["a & b <c>"] --> B{Q}\n  B -.-> A\n` `` )
     ( check . r ok `render: a diagram renders` )
@@ -222,28 +204,22 @@ $ `src/service.nu`
     ( check ( string_contains svg `data-id="A"` ) `render: nodes keep their mermaid id` )
     ( check > . r width 0 `render: reported width is positive` )
     ( check == . r nodes 2 `render: reports the node count` )
-    ( mmd_render_res_free r )
 
     : MmdRenderRes rd ( mmd_render_source `graph TD\n  A --> B\n` `dark` )
     ( check . rd ok `render: a named template renders` )
     ( check ( string_contains . rd svg `#0b1120` ) `render: the named template's colours are used` )
-    ( mmd_render_res_free rd )
 
     : MmdRenderRes ru ( mmd_render_source `graph TD\n  A --> B\n` `nope` )
     ( check ! . ru ok `render: an unknown template is an error` )
-    ( mmd_render_res_free ru )
 
     : MmdRenderRes re ( mmd_render_source `graph TD\n  A[oops\n` `` )
     ( check ! . re ok `render: a parse error surfaces` )
     ( check == . re line 2 `render: the parse error keeps its line` )
-    ( mmd_render_res_free re )
 
     // A self-link and a lone node must both survive the pipeline.
     : MmdRenderRes rs ( mmd_render_source `graph LR\n  A --> A\n  B\n` `` )
     ( check . rs ok `render: a self-link and a lone node render` )
-    ( mmd_render_res_free rs )
 
-    ( mmd_state_free )
 }
 
 // ── MCP ──────────────────────────────────────────────────────────────
@@ -285,21 +261,18 @@ $ `src/service.nu`
     ?? ( mcp_server_envelope srv req ) {
         T env → {
             ?? ( json_obj_get env `result` ) {
-                T res → { ( json_free out ) = out ( json_clone res ) }
+                T res → { = out ( json_clone res ) }
                 F _ → {}
             }
-            ( json_free env )
         }
         F _ → {}
     }
-    ( json_free req )
     ^ out
 }
 
 @ test_mcp → v {
     : MmdTemplatesRes tr ( mmd_templates_load MMD_TSRC_DIR `.templates` )
     ( mmd_state_init . tr set )
-    ( string_free . tr message )
 
     : McpServer srv ( mmd_mcp_server )
     ( check == ( mcp_server_tool_count srv ) 3 `mcp: three tools are advertised` )
@@ -314,26 +287,19 @@ $ `src/service.nu`
     ?? ( json_obj_get res `isError` ) { T v → v F _ → ( json_bool F ) } )
     `mcp: mermaid_render succeeds` )
     ( check != 0 ( nurl_str_starts ( json_text_of res ) `<svg` ) `mcp: mermaid_render returns SVG` )
-    ( json_free res )
 
     : Json vres ( __mmt_call srv `mermaid_validate` args )
     ( check != 0 ( nurl_str_starts ( json_text_of vres ) `ok: 2 nodes` ) `mcp: mermaid_validate counts nodes` )
-    ( json_free vres )
-    ( json_free args )
 
     : Json empty ( json_obj_new )
     : Json tres ( __mmt_call srv `mermaid_templates` empty )
     : String tlist ( string_from ( json_text_of tres ) )
     ( check ( string_contains tlist `dark` ) `mcp: mermaid_templates lists them` )
-    ( string_free tlist )
-    ( json_free tres )
 
     : Json ures ( __mmt_call srv `no_such_tool` empty )
     ( check ( json_as_bool
     ?? ( json_obj_get ures `isError` ) { T v → v F _ → ( json_bool F ) } )
     `mcp: an unknown tool is an error` )
-    ( json_free ures )
-    ( json_free empty )
 
     // The hand-rolled dispatch this replaced implemented neither
     // server/discover (mandatory since 2026-07-28) nor the version
@@ -346,14 +312,10 @@ $ `src/service.nu`
         T env → {
             ( check ?? ( json_obj_get env `result` ) { T _ → T F _ → F }
             `mcp: server/discover answers` )
-            ( json_free env )
         }
         F _ → { ( check F `mcp: server/discover answers` ) }
     }
-    ( json_free dreq )
 
-    ( mcp_server_free srv )
-    ( mmd_state_free )
 }
 
 @ main → i {
@@ -373,6 +335,5 @@ $ `src/service.nu`
     ( string_push_int sum g_fail )
     ( string_push_str sum ` failed` )
     ( nurl_println ( string_data sum ) )
-    ( string_free sum )
     ^ ? > g_fail 0 1 0
 }

@@ -30,10 +30,8 @@ $ `stdlib/std/fs.nu`
         F error → { ( nurl_eprintln ( compress_err_name error ) ) = status 1 }
         T out → {
             ?? ( write_file_bytes output out ) { T _ → {} F _ → { = status 2 } }
-            ( vec_free [u] out )
         }
     }
-    ( vec_free [u] src )
     ^ status
 }
 

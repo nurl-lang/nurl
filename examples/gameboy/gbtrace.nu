@@ -45,7 +45,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) }
     }
     : *u m2 ( mem_raw )
     : ~ i fi 0
@@ -61,7 +61,6 @@ $ `stdlib/ext/env.nu`
         ( string_push_str ln ` VRAM=` ) ( ls_pushhex8 ln ( mem_sum m2 0x8000 0xA000 ) )
         ( string_push_str ln ` OAM=` ) ( ls_pushhex8 ln ( mem_sum m2 0xFE00 0xFEA0 ) )
         ( string_push_char ln 10 ) ( nurl_print ( string_data ln ) )
-        ( string_free ln )
         = fi + fi 1
     }
     ^ 0
@@ -129,7 +128,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) }
     }
     : !( Vec u ) IoErr sr ( read_file_bytes statepath )
     ?? sr {
@@ -143,7 +142,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes rompath )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) }
     }
     ~ < g_frames fromf { ( run_one_frame ) }
     : ~ i k 0
@@ -158,7 +157,6 @@ $ `stdlib/ext/env.nu`
         ( string_push_str ln ` HL=` ) ( ls_pushhex2 ln rh ) ( ls_pushhex2 ln rl )
         ( string_push_str ln ` SP=` ) ( ls_pushhex4 ln sp )
         ( string_push_char ln 10 ) ( nurl_print ( string_data ln ) )
-        ( string_free ln )
         // Drive the REAL execution path. The previous hand-rolled
         // step/tick_timer/tick_ppu sequence here was a stale copy of an
         // older cpu_advance — it diverged (HALT never woke), so traces

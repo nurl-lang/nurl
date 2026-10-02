@@ -19,11 +19,11 @@
 //        (domain + path + Secure + unexpired), longest path first,
 //        "a=1; b=2" — or "" when none apply. Caller owns the String.
 //   ( cookie_jar_count  CookieJar j )                    → i
-//   ( cookie_jar_free   CookieJar j )                    → v
+//   ( cookie_jar_free   CookieJar j )                    → v   early release (optional)
 //
 // `now` is unix seconds (e.g. from time_now → unix); pass it explicitly
 // so expiry is deterministic and testable. Session cookies (no Expires
-// / Max-Age) live until cookie_jar_free. Domain matching follows RFC
+// / Max-Age) live as long as the jar. Domain matching follows RFC
 // 6265 §5.1.3 (host-only vs subdomain) and path matching §5.1.4.
 
 $ `stdlib/core/string.nu`
@@ -42,30 +42,8 @@ $ `stdlib/std/time.nu`
 
 @ cookie_jar_count CookieJar j → i { ^ ( vec_len [Cookie] . j cookies ) }
 
-@ __cookie_free sink Cookie c → v {
-    ( string_free . c name )
-    ( string_free . c value )
-    ( string_free . c domain )
-    ( string_free . c path )
-}
-
-@ cookie_jar_free sink CookieJar j → v {
-    : ~ i k 0
-    ~ < k ( vec_len [Cookie] . j cookies ) {
-        ?? ( vec_get [Cookie] . j cookies k ) { T c → ( __cookie_free c ) F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [Cookie] . j cookies )
-}
-
-@ __cookies_free_str_vec ( Vec String ) v → v {
-    : ~ i k 0
-    ~ < k ( vec_len [String] v ) {
-        ?? ( vec_get [String] v k ) { T s → ( string_free s ) F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [String] v )
-}
+// Let go of `j` now rather than at the end of its owner's scope.
+@ cookie_jar_free sink CookieJar j → v {}
 
 // ── small string helpers ─────────────────────────────────────────────
 
@@ -112,9 +90,9 @@ $ `stdlib/std/time.nu`
 
 @ __domain_match s host s domain b host_only → b {
     : String h ( string_with_cap 8 ) ( string_push_str h host )
-    : String hl ( string_to_lower h ) ( string_free h )
+    : String hl ( string_to_lower h )
     : String d ( string_with_cap 8 ) ( string_push_str d domain )
-    : String dl ( string_to_lower d ) ( string_free d )
+    : String dl ( string_to_lower d )
     : i hn ( string_len hl )
     : i dn ( string_len dl )
     : ~ b ok F
@@ -124,8 +102,6 @@ $ `stdlib/std/time.nu`
             ? & ( string_ends_with hl ( string_data dl ) ) & > hn dn == ( string_get hl - - hn dn 1 ) 46 { = ok T } {}
         }
     }
-    ( string_free hl )
-    ( string_free dl )
     ^ ok
 }
 
@@ -156,8 +132,7 @@ $ `stdlib/std/time.nu`
     : String sc ( string_with_cap + ( nurl_str_len setcookie ) 1 )
     ( string_push_str sc setcookie )
     : ( Vec String ) parts ( string_split sc `;` )
-    ( string_free sc )
-    ? == ( vec_len [String] parts ) 0 { ( vec_free [String] parts ) ^ @ ?Cookie { F } } {}
+    ? == ( vec_len [String] parts ) 0 { ^ @ ?Cookie { F } } {}
 
     // first part: name=value
     : ~ String nm ( string_with_cap 4 )
@@ -165,23 +140,20 @@ $ `stdlib/std/time.nu`
     ?? ( vec_get [String] parts 0 ) {
         T p0 → {
             : String t ( string_trim p0 )
-            ( string_free nm ) ( string_free val )
             : String nraw ( __cut_before t `=` )
-            = nm ( string_trim nraw ) ( string_free nraw )
+            = nm ( string_trim nraw )
             : String vraw ( __cut_after t `=` )
-            = val ( string_trim vraw ) ( string_free vraw )
+            = val ( string_trim vraw )
         }
         F _ → {}
     }
     ? == ( string_len nm ) 0 {
-        ( string_free nm ) ( string_free val )
-        ( __cookies_free_str_vec parts )
         ^ @ ?Cookie { F }
     } {}
 
     // defaults
     : String hl0 ( string_with_cap 8 ) ( string_push_str hl0 host )
-    : ~ String dom ( string_to_lower hl0 ) ( string_free hl0 )
+    : ~ String dom ( string_to_lower hl0 )
     : ~ String cpath ( __default_path path )
     : ~ i expires -1
     : ~ b host_only T
@@ -194,23 +166,22 @@ $ `stdlib/std/time.nu`
             T pp → {
                 : String seg ( string_trim pp )
                 : String kraw ( __cut_before seg `=` )
-                : String ktrim ( string_trim kraw ) ( string_free kraw )
-                : String key ( string_to_lower ktrim ) ( string_free ktrim )
+                : String ktrim ( string_trim kraw )
+                : String key ( string_to_lower ktrim )
                 : String vraw ( __cut_after seg `=` )
-                : String aval ( string_trim vraw ) ( string_free vraw )
+                : String aval ( string_trim vraw )
 
                 ? ( __keyeq key `domain` ) {
                     // strip a leading '.', lowercase
                     : i dn0 ( string_len aval )
                     : String stripped ? & > dn0 0 == ( string_get aval 0 ) 46 ( string_substr aval 1 - dn0 1 ) ( __cut_before aval `;` )
-                    : String low ( string_to_lower stripped ) ( string_free stripped )
+                    : String low ( string_to_lower stripped )
                     ? > ( string_len low ) 0 {
-                        ( string_free dom ) = dom low = host_only F
-                    } { ( string_free low ) }
+                        = dom low = host_only F
+                    } {}
                 } {
                     ? ( __keyeq key `path` ) {
                         ? & > ( string_len aval ) 0 == ( string_get aval 0 ) 47 {
-                            ( string_free cpath )
                             = cpath ( string_with_cap + ( string_len aval ) 1 )
                             ( string_push_str cpath ( string_data aval ) )
                         } {}
@@ -227,13 +198,11 @@ $ `stdlib/std/time.nu`
                                 ? ( __keyeq key `secure` ) { = secure T } {}
                             } } } }
 
-                ( string_free key )
             }
             F _ → {}
         }
         = pi + pi 1
     }
-    ( __cookies_free_str_vec parts )
 
     : Cookie c @ Cookie { nm val dom cpath expires host_only secure }
     ^ @ ?Cookie { T c }
@@ -273,7 +242,7 @@ $ `stdlib/std/time.nu`
         T c → {
             ( __jar_remove j c )
             ? & != . c expires -1 <= . c expires now {
-                ( __cookie_free c )  // already expired → deletion only
+                // already expired → deletion only
             } {
                 ( vec_push [Cookie] . j cookies c )
             }

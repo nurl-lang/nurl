@@ -135,12 +135,10 @@ $ `stdlib/std/fs.nu`
             : !v NetErr rr ( server_run srv )
 
             // Cleanup. Order matters — clear the signal slot first so a
-            // late signal doesn't dereference a freed listener handle, then
-            // free everything else.
+            // late signal doesn't dereference a closed listener handle;
+            // the router and metrics release themselves.
             ( signal_clear_shutdown )
             ( server_stop srv )
-            ( router_free r )
-            ( metrics_free m )
 
             ?? rr {
                 T _ → {

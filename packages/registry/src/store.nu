@@ -24,7 +24,7 @@ $ `stdlib/ext/registry_id.nu`
 @ reg_version_valid s version → b {
     : !Semver SemverErr pr ( semver_parse version )
     ?? pr {
-        T v → { ( semver_free v ) ^ T }
+        T v → { ^ T }
         F _ → ^ F
     }
 }
@@ -50,16 +50,14 @@ $ `stdlib/ext/registry_id.nu`
     ( string_push_str dir name )
     ?? ( dir_create_all ( string_data dir ) ) {
         T _ → {}
-        F _ → { ( string_free dir ) ^ F }
+        F _ → { ^ F }
     }
-    ( string_free dir )
     : String path ( reg_tarball_path data_dir name version )
     : ~ b ok F
     ?? ( write_file_bytes ( string_data path ) bytes ) {
         T _ → { = ok T }
         F _ → {}
     }
-    ( string_free path )
     ^ ok
 }
 
@@ -69,11 +67,9 @@ $ `stdlib/ext/registry_id.nu`
     : ~ ( Vec u ) out ( vec_new [u] )
     ?? ( read_file_bytes ( string_data path ) ) {
         T bytes → {
-            ( vec_free [u] out )
             = out bytes
         }
         F _ → {}
     }
-    ( string_free path )
     ^ out
 }

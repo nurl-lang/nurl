@@ -12,8 +12,9 @@
 // once, each on its own OS thread. The only state shared between them is
 // the loaded template set, which is built once before the listener opens
 // and is read-only from then on — no lock is needed, and none is taken on
-// the hot path. It lives behind a global pointer rather than a captured
-// closure environment so that every worker sees the same set.
+// the hot path. It lives in an rcbox behind a global rather than in a
+// captured closure environment so that every worker sees the same set; the
+// global is its one owner for the rest of the process.
 
 $ `deps/http/src/http.nu`
 $ `stdlib/ext/mcp.nu`
@@ -27,6 +28,7 @@ $ `parse.nu`
 $ `theme.nu`
 $ `layout.nu`
 $ `render.nu`
+$ `stdlib/core/rcbox.nu`
 
 // The one version string. It was two: main.nu carried MMD_VERSION for
 // the CLI banner while the MCP handshake had its own literal, and by
@@ -38,25 +40,18 @@ $ `render.nu`
 
 : ~ i g_mmd_ts 0
 
-@ mmd_state_init MmdTemplateSet ts → v {
-    : *MmdTemplateSet p # *MmdTemplateSet ( nurl_alloc Z MmdTemplateSet )
-    = . p kind . ts kind
-    = . p root . ts root
-    = . p items . ts items
-    = . p default_name . ts default_name
-    = g_mmd_ts # i p
+// Install `ts` as the set every request renders with (it moves into the
+// global's rcbox; a set installed before is released).
+@ mmd_state_init sink MmdTemplateSet ts → v {
+    : i old g_mmd_ts
+    = g_mmd_ts ( rcbox_new [MmdTemplateSet] ts )
+    ( rcbox_release [MmdTemplateSet] old )
 }
 
+// The installed set, lent: valid while it stays installed.
 @ mmd_state → MmdTemplateSet {
-    : *MmdTemplateSet p # *MmdTemplateSet g_mmd_ts
+    : *MmdTemplateSet p ( rcbox_ptr [MmdTemplateSet] g_mmd_ts )
     ^ @ MmdTemplateSet { . p kind . p root . p items . p default_name }
-}
-
-@ mmd_state_free → v {
-    ? == g_mmd_ts 0 { ^ v } {}
-    ( mmd_templates_free ( mmd_state ) )
-    ( nurl_free # s # *MmdTemplateSet g_mmd_ts )
-    = g_mmd_ts 0
 }
 
 // ── The pipeline ─────────────────────────────────────────────────────
@@ -71,20 +66,6 @@ $ `render.nu`
     i line  // parse-error position, 0 when there is none
     i col
     ( Vec String ) warnings
-}
-
-@ mmd_render_res_free sink MmdRenderRes r → v {
-    ( string_free . r svg )
-    : i n ( vec_len [String] . r warnings )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [String] . r warnings i ) {
-            T s → ( string_free s )
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ( vec_free [String] . r warnings )
 }
 
 @ __mmds_err s msg i line i col → MmdRenderRes {
@@ -111,7 +92,6 @@ $ `render.nu`
         : String m ( string_clone . pr message )
         : i ln . pr line
         : i cl . pr col
-        ( mmd_parse_result_free pr )
         ^ @ MmdRenderRes { F m 0 0 0 0 ln cl ( vec_new [String] ) }
     } {}
 
@@ -134,8 +114,6 @@ $ `render.nu`
     : i ne ( mmd_edge_count g )
     : i w . lay width
     : i h . lay height
-    ( mmd_layout_free lay )
-    ( mmd_parse_result_free pr )
     ^ @ MmdRenderRes { T svg w h nn ne 0 0 warns }
 }
 
@@ -151,7 +129,6 @@ $ `render.nu`
         ?? ( vec_get [QueryPair] pairs i ) {
             T p → {
                 ? != 0 ( nurl_str_eq ( string_data . p key ) name ) {
-                    ( string_free out )
                     = out ( string_clone . p value )
                 } {}
             }
@@ -159,7 +136,6 @@ $ `render.nu`
         }
         = i + i 1
     }
-    ( query_pairs_free pairs )
     ^ out
 }
 
@@ -173,7 +149,6 @@ $ `render.nu`
 @ __mmds_template HttpRequest req → String {
     : String q ( __mmds_query req `template` )
     ? > ( string_len q ) 0 { ^ q } {}
-    ( string_free q )
     ?? ( header_get . req headers `x-template` ) {
         T h → ^ h
         F _ → {}
@@ -201,7 +176,6 @@ $ `render.nu`
             = i + i 1
         }
         ( response_set_header resp `X-Mermaid-Warnings` ( string_data w ) )
-        ( string_free w )
     } {}
     ^ resp
 }
@@ -214,7 +188,6 @@ $ `render.nu`
         ( json_obj_set o `column` ( json_int . r col ) )
     } {}
     : HttpResponse resp ( response_json status o )
-    ( json_free o )
     ^ resp
 }
 
@@ -257,7 +230,6 @@ $ `render.nu`
 @ __mmds_h_templates HttpRequest req Params p → HttpResponse {
     : Json o ( mmd_templates_json )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
     ^ r
 }
 
@@ -266,48 +238,38 @@ $ `render.nu`
     ? == ( string_len src ) 0 {
         : MmdRenderRes e ( __mmds_err `empty diagram — send the mermaid source in the request body (POST) or in ?src= (GET)` 0 0 )
         : HttpResponse r ( __mmds_error_json e 400 )
-        ( mmd_render_res_free e )
         ^ r
     } {}
     : String tmpl ( __mmds_template req )
     : MmdRenderRes res ( mmd_render_source ( string_data src ) ( string_data tmpl ) )
-    ( string_free tmpl )
     : ~ HttpResponse out ( response_status_only 204 )
     ? . res ok {
-        ( http_response_free out )
         = out ( __mmds_svg_response res )
     } {
-        ( http_response_free out )
         = out ( __mmds_error_json res 400 )
     }
-    ( mmd_render_res_free res )
     ^ out
 }
 
 @ __mmds_h_render_get HttpRequest req Params p → HttpResponse {
     : String src ( __mmds_query req `src` )
     : HttpResponse r ( __mmds_render_common req src )
-    ( string_free src )
     ^ r
 }
 
 @ __mmds_h_render_post HttpRequest req Params p → HttpResponse {
     : String src ( __mmds_body req )
     : HttpResponse r ( __mmds_render_common req src )
-    ( string_free src )
     ^ r
 }
 
 @ __mmds_h_render_json HttpRequest req Params p → HttpResponse {
     : ~ String src ( __mmds_body req )
     ? == ( string_len src ) 0 {
-        ( string_free src )
         = src ( __mmds_query req `src` )
     } {}
     : String tmpl ( __mmds_template req )
     : MmdRenderRes res ( mmd_render_source ( string_data src ) ( string_data tmpl ) )
-    ( string_free src )
-    ( string_free tmpl )
     : ~ HttpResponse out ( response_status_only 204 )
     ? . res ok {
         : Json o ( json_obj_new )
@@ -327,14 +289,10 @@ $ `render.nu`
             = wi + wi 1
         }
         ( json_obj_set o `warnings` warr )
-        ( http_response_free out )
         = out ( response_json 200 o )
-        ( json_free o )
     } {
-        ( http_response_free out )
         = out ( __mmds_error_json res 400 )
     }
-    ( mmd_render_res_free res )
     ^ out
 }
 
@@ -366,13 +324,10 @@ $ `render.nu`
 @ __mmds_tool_render Json args → Json {
     : String src ( __mmds_arg_str args `source` )
     ? == ( string_len src ) 0 {
-        ( string_free src )
         ^ ( mcp_tool_result_error `missing required argument: source` )
     } {}
     : String tmpl ( __mmds_arg_str args `template` )
     : MmdRenderRes res ( mmd_render_source ( string_data src ) ( string_data tmpl ) )
-    ( string_free src )
-    ( string_free tmpl )
     : ~ Json out ( json_null )
     ? . res ok {
         : String body ( string_with_cap + 256 ( string_len . res svg ) )
@@ -390,9 +345,7 @@ $ `render.nu`
             = wi + wi 1
         }
         ( string_push_str body ( string_data . res svg ) )
-        ( json_free out )
         = out ( mcp_tool_result_text ( string_data body ) )
-        ( string_free body )
     } {
         : String m ( string_with_cap 128 )
         ? > . res line 0 {
@@ -403,11 +356,8 @@ $ `render.nu`
             ( string_push_str m `: ` )
         } {}
         ( string_push_str m ( string_data . res svg ) )
-        ( json_free out )
         = out ( mcp_tool_result_error ( string_data m ) )
-        ( string_free m )
     }
-    ( mmd_render_res_free res )
     ^ out
 }
 
@@ -439,18 +389,15 @@ $ `render.nu`
         = i + i 1
     }
     : Json out ( mcp_tool_result_text ( string_data body ) )
-    ( string_free body )
     ^ out
 }
 
 @ __mmds_tool_validate Json args → Json {
     : String src ( __mmds_arg_str args `source` )
     ? == ( string_len src ) 0 {
-        ( string_free src )
         ^ ( mcp_tool_result_error `missing required argument: source` )
     } {}
     : MmdParseResult pr ( mmd_parse ( string_data src ) )
-    ( string_free src )
     : ~ Json out ( json_null )
     ? . pr ok {
         : MmdGraph g . pr graph
@@ -473,9 +420,7 @@ $ `render.nu`
             }
             = wi + wi 1
         }
-        ( json_free out )
         = out ( mcp_tool_result_text ( string_data m ) )
-        ( string_free m )
     } {
         : String m ( string_with_cap 128 )
         ( string_push_str m `line ` )
@@ -484,11 +429,8 @@ $ `render.nu`
         ( string_push_int m . pr col )
         ( string_push_str m `: ` )
         ( string_push_str m ( string_data . pr message ) )
-        ( json_free out )
         = out ( mcp_tool_result_error ( string_data m ) )
-        ( string_free m )
     }
-    ( mmd_parse_result_free pr )
     ^ out
 }
 
@@ -616,8 +558,12 @@ tpl.addEventListener("change", render);
 
 // Build the router for the whole service. Exposed separately from
 // `mmd_serve` so the tests can drive it without opening a socket.
-@ mmd_build_app i workers b quiet → *HttpApp {
-    : *HttpApp a ( http_app_new )
+// `srv` answers /mcp. The dispatch closure the routes keep only views it
+// (mcp_server_http_dispatch captures its argument), so the caller keeps
+// `srv` alive for as long as the app serves — see
+// finding_pkgsweep_returned_closure_views_param.
+@ mmd_build_app i workers b quiet McpServer srv → HttpApp {
+    : HttpApp a ( http_app_new )
     ( http_app_workers a workers )
     ( http_app_cors a )
     ( http_app_body_max a 4194304 )
@@ -630,15 +576,9 @@ tpl.addEventListener("change", render);
     ( http_app_post a `/render` \ HttpRequest req Params p → HttpResponse { ^ ( __mmds_h_render_post req p ) } )
     ( http_app_post a `/render.json` \ HttpRequest req Params p → HttpResponse { ^ ( __mmds_h_render_json req p ) } )
 
-    // MCP shares the process, the port and the template set. The
-    // server is built here and captured by the routes below: its
-    // fields are all shared handles, so the captured copy IS the
-    // server, and it lives as long as the app does — this function
-    // must not drop it on the way out.
-    : McpServer srv ( mmd_mcp_server )
+    // MCP shares the process, the port and the template set.
     : ( @ HttpResponse HttpRequest ) mcph
     ( mcp_http_handler ( mcp_server_http_dispatch srv ) )
-    ( mem_forget srv )
     ( http_app_route a `POST` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )
     ( http_app_route a `GET` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )
     ( http_app_route a `DELETE` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( mcph req ) } )

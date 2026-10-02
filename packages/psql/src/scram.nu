@@ -108,8 +108,6 @@ $ `stdlib/std/encode.nu`
     }
 
     ? | == ( string_len combined ) 0 == iters 0 {
-        ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
-        ( string_free combined ) ( string_free salt_b64 )
         ^ @ ScramResult { F ( string_with_cap 0 ) ( string_with_cap 0 ) }
     } {}
 
@@ -150,13 +148,7 @@ $ `stdlib/std/encode.nu`
     : String server_sig_b64 ( b64_encode_vec server_sig )
 
     // free scratch byte vectors
-    ( vec_free [u] salt ) ( vec_free [u] salted ) ( vec_free [u] ck_lbl ) ( vec_free [u] sk_lbl )
-    ( vec_free [u] client_key ) ( vec_free [u] stored_key ) ( vec_free [u] am )
-    ( vec_free [u] client_sig ) ( vec_free [u] proof ) ( vec_free [u] server_key ) ( vec_free [u] server_sig )
     // free scratch strings (client_final + server_sig_b64 are returned)
-    ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
-    ( string_free combined ) ( string_free salt_b64 ) ( string_free cfwop )
-    ( string_free am_s ) ( string_free proof_b64 )
 
     ^ @ ScramResult { T client_final server_sig_b64 }
 }

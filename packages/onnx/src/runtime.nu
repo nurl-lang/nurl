@@ -12,25 +12,66 @@
 //
 // Tensors are N-D (shape vector); the dense path reads dims 0,1 as M,K and
 // the conv path reads NCHW from dims 1,2,3 (batch N is assumed 1).
+//
+// Memory: an Engine is a handle (an rcbox) — every copy is the same engine,
+// and its last owner releases every device block it allocated and the
+// device; rt_reset lets a run's blocks go early. Nothing is freed by hand
+// (rt_close is an optional early release). The graph a run is given is
+// BORROWED for the engine's use; the caller keeps it.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/devops.nu`
 $ `model.nu`
+$ `stdlib/core/rcbox.nu`
 
 // A device-resident tensor: name, CUdeviceptr (i64), shape, element count.
 : RTensor { String name i dptr ( Vec i ) shape i nelem }
 
-// Engine.g BORROWS the kit's device handle (gk_close releases it).
-: Engine { Gpu g * GpuKit kit ( Vec RTensor ) vals OGraph graph b ok ( Vec i ) owned b graph_set }
+// The engine's state. `g` is the kit's device (another owner of it);
+// `owned` holds every device block a run allocated (rt_reset / the
+// engine's last owner release them). The graph of the current run stays
+// the CALLER's: the engine keeps copies of the three names it needs after
+// the run, and reaches the initializers through `inits_ref` — the graph's
+// inits Vec as its raw handle word, a view valid while the run is (0 when
+// no run has installed a graph). Holding no part of the graph is what
+// lets a caller run the same graph again, on this engine or another.
+: EngineImpl {
+    Gpu g
+    GpuKit kit
+    ( Vec RTensor ) vals
+    i inits_ref
+    String input_name
+    String output_name
+    String output1_name
+    b ok
+    ( Vec GpuBuffer ) owned
+}
+
+// An Engine is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same engine, and the last owner releases it — every
+// device block it allocated, and the device.
+: Engine { s ctl }
+
+@ Engine_share Engine h → Engine { ^ @ Engine { # s ( rcbox_share # i . h ctl ) } }
+
+@ Engine_drop sink Engine h → v {
+    ( mem_forget h )
+    ( rcbox_release [EngineImpl] # i . h ctl )
+}
+
+@ __Engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
+
+// The state, for this package's other files (tensor_bridge.nu).
+@ _rt_engine_ptr Engine h → *EngineImpl { ^ ( rcbox_ptr [EngineImpl] # i . h ctl ) }
 
 // GkBuf views over an RTensor's device allocation, for the gkd_* kernels.
 // Everything on the value map is f32 except the raw token input and ArgMax
 // outputs, which the call sites view as i64 explicitly.
-@ __rt_fbuf RTensor t → GkBuf { ^ @ GkBuf { . t dptr . t nelem GK_F32 } }
+@ __rt_fbuf RTensor t → GkBuf { ^ ( gk_buf_wrap . t dptr . t nelem GK_F32 ) }
 
-@ __rt_ibuf RTensor t → GkBuf { ^ @ GkBuf { . t dptr . t nelem GK_I64 } }
+@ __rt_ibuf RTensor t → GkBuf { ^ ( gk_buf_wrap . t dptr . t nelem GK_I64 ) }
 
 @ __rt_op_fail s op → v {
     ( nurl_eprint `[onnx] kernel failed: ` )
@@ -45,23 +86,46 @@ $ `model.nu`
 // ── initializer metadata (int64 shape/size tensors stay host-side) ──
 & `c` @ nurl_peek_f32 *u base i idx → f
 
-@ __init_tensor * Engine e s name → OTensor {
-    : OGraph g . e graph
-    : i idx ( graph_find_init g name )
-    ? < idx 0 { ^ @ OTensor { ( string_new ) ( vec_new [i] ) 0 0 0 } } {}
-    ?? ( vec_get [OTensor] . g inits idx ) { T t → ^ t F _ → ^ @ OTensor { ( string_new ) ( vec_new [i] ) 0 0 0 } }
+// The current run's initializers (lent: the caller's graph holds them).
+@ __rt_inits * EngineImpl e → ( Vec OTensor ) { ^ # ( Vec OTensor ) . e inits_ref }
+
+@ __rt_init_find * EngineImpl e s name → i {
+    ? == . e inits_ref 0 { ^ -1 } {}
+    : ( Vec OTensor ) inits ( __rt_inits e )
+    : ~ i k 0
+    ~ < k ( vec_len [OTensor] inits ) {
+        ?? ( vec_get [OTensor] inits k ) {
+            T t → ? ( streq2 ( string_data . t name ) name ) { ^ k } {} F _ → {}
+        }
+        = k + k 1
+    }
+    ^ -1
 }
 
-@ __init_i64 * Engine e s name i k → i {  // k-th value of an INT64 init
-    : OTensor t ( __init_tensor e name )
-    ? == . t host 0 { ^ 0 } { ^ ( nurl_peek # *u . t host k ) }
+// The named initializer's host data address (0 when absent or empty) and
+// element count, read in place — never a copy of the tensor: these run
+// once per element in the shape-arithmetic loops, and an initializer can
+// be a weight block hundreds of megabytes long.
+@ __init_host * EngineImpl e s name → i {
+    : i idx ( __rt_init_find e name )
+    ? < idx 0 { ^ 0 } {}
+    ?? ( vec_get [OTensor] ( __rt_inits e ) idx ) { T t → { ^ ( otensor_host_ptr t ) } F _ → { ^ 0 } }
 }
 
-@ __init_i64_len * Engine e s name → i { : OTensor t ( __init_tensor e name ) ^ . t nelem }
+@ __init_i64 * EngineImpl e s name i k → i {  // k-th value of an INT64 init
+    : i h ( __init_host e name )
+    ? == h 0 { ^ 0 } { ^ ( nurl_peek # *u h k ) }
+}
 
-@ __init_f32 * Engine e s name i k → f {  // k-th value of a FLOAT init
-    : OTensor t ( __init_tensor e name )
-    ? == . t host 0 { ^ 0.0 } { ^ ( nurl_peek_f32 # *u . t host k ) }
+@ __init_i64_len * EngineImpl e s name → i {
+    : i idx ( __rt_init_find e name )
+    ? < idx 0 { ^ 0 } {}
+    ?? ( vec_get [OTensor] ( __rt_inits e ) idx ) { T t → { ^ . t nelem } F _ → { ^ 0 } }
+}
+
+@ __init_f32 * EngineImpl e s name i k → f {  // k-th value of a FLOAT init
+    : i h ( __init_host e name )
+    ? == h 0 { ^ 0.0 } { ^ ( nurl_peek_f32 # *u h k ) }
 }
 
 @ __prod ( Vec i ) v → i {
@@ -77,67 +141,64 @@ $ `model.nu`
 
 // Open a device. Kernels compile lazily on first use (gpukit caches them
 // in-process by name and on disk by source hash and architecture).
-@ rt_open i ordinal → *Engine {
-    : *Engine e # *Engine ( nurl_alloc Z Engine )
-    = . e kit ( gk_open ordinal )
-    = . e g . . e kit gpu
-    = . e vals ( vec_new [RTensor] )
-    = . e graph @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
-    = . e ok ( gk_ok . e kit )
-    = . e owned ( vec_new [i] )
-    = . e graph_set F
-    ^ e
+@ rt_open i ordinal → Engine {
+    : GpuKit kit ( gk_open ordinal )
+    : b ok ( gk_ok kit )
+    ^ @ Engine { # s ( rcbox_new [EngineImpl] @ EngineImpl { ( gk_gpu kit ) kit ( vec_new [RTensor] )
+            0 ( string_new ) ( string_new ) ( string_new ) ok ( vec_new [GpuBuffer] ) } ) }
 }
 
-// Install the caller's graph on the engine. The placeholder OGraph that
-// rt_open allocated is freed on the first install; caller graphs are
-// BORROWED (the engine never frees them).
-@ _rt_set_graph * Engine e OGraph g → v {
-    ? . e graph_set {} { ( graph_free . e graph ) }
-    = . e graph g
-    = . e graph_set T
+// Install the caller's graph for a run: its names are copied, its
+// initializers viewed (see EngineImpl). The graph stays the caller's.
+@ _rt_set_graph * EngineImpl e OGraph g → v {
+    = . e inits_ref # i . g inits
+    : String old_in . e input_name
+    ( mem_take old_in )  // the previous run's copies go
+    : String old_out . e output_name
+    ( mem_take old_out )
+    : String old_out1 . e output1_name
+    ( mem_take old_out1 )
+    = . e input_name ( string_from ( string_data . g input_name ) )
+    = . e output_name ( string_from ( string_data . g output_name ) )
+    = . e output1_name ( string_from ( string_data . g output1_name ) )
 }
 
-// Record a device allocation so rt_reset can free it. Aliased tensors
-// (Reshape/Split share or offset an existing buffer) are NOT recorded — only
-// the real gpu_alloc base pointers, so reset frees each allocation exactly
-// once with no double-free / free-of-non-base.
-@ rt_own * Engine e i dptr → i {
-    ( vec_push [i] . e owned dptr )
-    ^ dptr
+// Keep a device allocation until the next rt_reset (or the engine's last
+// owner) and hand back its address. Aliased tensors (Reshape/Split share or
+// offset an existing buffer) are NOT recorded — only the real gpu_alloc
+// blocks, so each one is released exactly once.
+@ rt_own * EngineImpl e GpuBuffer b → i {
+    : i d . b dptr
+    ( vec_push [GpuBuffer] . e owned b )
+    ^ d
 }
 
-// Free every device buffer allocated during the previous run and clear the
-// value map. Lets one Engine serve many forward passes (e.g. one text prompt
-// per call) without leaking the model's weights + activations each time.
-@ rt_reset * Engine e → v {
-    : ( Vec i ) own . e owned
-    : ~ i k 0
-    ~ < k ( vec_len [i] own ) {
-        ?? ( vec_get [i] own k ) { T d → ? > d 0 { ( gpu_free @ GpuBuffer { d 0 } ) } {} F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [i] own )
-    = . e owned ( vec_new [i] )
-    : ( Vec RTensor ) vs . e vals
-    : ~ i j 0
-    ~ < j ( vec_len [RTensor] vs ) {
-        ?? ( vec_get [RTensor] vs j ) {
-            T t → { ( string_free . t name ) ( vec_free [i] . t shape ) }
-            F _ → {}
-        }
-        = j + j 1
-    }
-    ( vec_free [RTensor] vs )
-    = . e vals ( vec_new [RTensor] )
+// Release every device buffer allocated during the previous run and clear
+// the value map. Lets one Engine serve many forward passes (e.g. one text
+// prompt per call) without holding the last pass's weights + activations.
+@ rt_reset Engine e__h → v {
+    : *EngineImpl e ( __Engine_ptr e__h )
+    ( vec_clear [GpuBuffer] . e owned )
+    ( vec_clear [RTensor] . e vals )
 }
 
-@ rt_ok * Engine e → b { ^ . e ok }
+// An engine that is not there (rt_ok F) — the placeholder for "not
+// opened (yet)".
+@ rt_none → Engine { ^ @ Engine { # s 0 } }
 
-@ rt_name * Engine e → s { ^ ( gpu_name . e g ) }
+@ rt_ok Engine e__h → b {
+    ? == 0 # i . e__h ctl { ^ F } {}
+    : *EngineImpl e ( __Engine_ptr e__h )
+    ^ . e ok
+}
+
+@ rt_name Engine e__h → s {
+    : *EngineImpl e ( __Engine_ptr e__h )
+    ^ ( gpu_name . e g )
+}
 
 // Register a device tensor under `name` with an explicit shape vector.
-@ rt_put * Engine e s name i dptr ( Vec i ) shape → v {
+@ rt_put * EngineImpl e s name i dptr sink ( Vec i ) shape → v {
     ( vec_push [RTensor] . e vals @ RTensor { ( string_from name ) dptr shape ( __prod shape ) } )
 }
 
@@ -148,7 +209,7 @@ $ `model.nu`
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v
 }
 
-@ rt_find * Engine e s name → i {
+@ rt_find * EngineImpl e s name → i {
     : ( Vec RTensor ) vs . e vals
     : ~ i k 0
     ~ < k ( vec_len [RTensor] vs ) {
@@ -158,11 +219,11 @@ $ `model.nu`
     ^ - 0 1
 }
 
-@ rt_at * Engine e i idx → RTensor {
+@ rt_at * EngineImpl e i idx → RTensor {
     ?? ( vec_get [RTensor] . e vals idx ) { T t → ^ t F _ → ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } }
 }
 // Input name of a node (k-th), as an `s`.
-@ __in * Engine e ONode n i k → RTensor {
+@ __in * EngineImpl e ONode n i k → RTensor {
     : ( Vec String ) ins . n inputs
     : i idx ( rt_find e ( string_data ?? ( vec_get [String] ins k ) { T x → x F _ → ( string_new ) } ) )
     ^ ( rt_at e idx )
@@ -187,7 +248,7 @@ $ `model.nu`
 // keeps working unchanged.
 : i RT_HOSTI - 0 1
 
-@ __hi_put * Engine e s name ( Vec i ) vals → v {
+@ __hi_put * EngineImpl e s name ( Vec i ) vals → v {
     ( rt_put e name RT_HOSTI vals )
 }
 
@@ -195,7 +256,7 @@ $ `model.nu`
 // INT64 initializer's, else empty. The returned vec is FRESH (caller
 // frees). Device tensors yield empty — float weights never alias an
 // INT64 name — so "non-empty" doubles as "this is host data".
-@ __hi_vals * Engine e s name → ( Vec i ) {
+@ __hi_vals * EngineImpl e s name → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     ? == ( nurl_str_len name ) 0 { ^ out } {}
     : i idx ( rt_find e name )
@@ -219,7 +280,7 @@ $ `model.nu`
 // Execute a node entirely on the host when its data is host-int. Returns
 // T when the node was consumed (its output registered, or deliberately
 // dropped), F when the device dispatch should have it.
-@ __rt_host_step * Engine e ONode n → b {
+@ __rt_host_step * EngineImpl e ONode n → b {
     : s op ( string_data . n op_type )
     ? ( streq2 op `Constant` ) {
         // The payload's INT64 values were folded into the `value`
@@ -251,13 +312,13 @@ $ `model.nu`
         // Value-preserving on a flat int list (Cast only ever targets
         // INT64 in these chains; a 1-D unsqueeze/squeeze is shape-talk).
         : ( Vec i ) vals ( __hi_vals e ( __rt_in_name n 0 ) )
-        ? == ( vec_len [i] vals ) 0 { ( vec_free [i] vals ) ^ F } {}
+        ? == ( vec_len [i] vals ) 0 { ^ F } {}
         ( __hi_put e ( __out_name n ) vals )
         ^ T
     } {}
     ? ( streq2 op `Gather` ) {
         : ( Vec i ) data ( __hi_vals e ( __rt_in_name n 0 ) )
-        ? == ( vec_len [i] data ) 0 { ( vec_free [i] data ) ^ F } {}
+        ? == ( vec_len [i] data ) 0 { ^ F } {}
         : ( Vec i ) idxs ( __hi_vals e ( __rt_in_name n 1 ) )
         : i dn ( vec_len [i] data )
         : ( Vec i ) vals ( vec_new [i] )
@@ -268,14 +329,12 @@ $ `model.nu`
             ( vec_push [i] vals ?? ( vec_get [i] data ix ) { T v → v F _ → 0 } )
             = k + k 1
         }
-        ( vec_free [i] data )
-        ( vec_free [i] idxs )
         ( __hi_put e ( __out_name n ) vals )
         ^ T
     } {}
     ? ( streq2 op `Concat` ) {
         : ( Vec i ) first ( __hi_vals e ( __rt_in_name n 0 ) )
-        ? == ( vec_len [i] first ) 0 { ( vec_free [i] first ) ^ F } {}
+        ? == ( vec_len [i] first ) 0 { ^ F } {}
         : ( Vec i ) vals first
         : ~ i k 1
         ~ < k ( vec_len [String] . n inputs ) {
@@ -285,7 +344,6 @@ $ `model.nu`
                 ( vec_push [i] vals ?? ( vec_get [i] part j ) { T v → v F _ → 0 } )
                 = j + j 1
             }
-            ( vec_free [i] part )
             = k + k 1
         }
         ( __hi_put e ( __out_name n ) vals )
@@ -293,7 +351,7 @@ $ `model.nu`
     } {}
     ? ( streq2 op `Slice` ) {
         : ( Vec i ) data ( __hi_vals e ( __rt_in_name n 0 ) )
-        ? == ( vec_len [i] data ) 0 { ( vec_free [i] data ) ^ F } {}
+        ? == ( vec_len [i] data ) 0 { ^ F } {}
         : ( Vec i ) starts ( __hi_vals e ( __rt_in_name n 1 ) )
         : ( Vec i ) ends ( __hi_vals e ( __rt_in_name n 2 ) )
         : i dn ( vec_len [i] data )
@@ -308,9 +366,6 @@ $ `model.nu`
             ( vec_push [i] vals ?? ( vec_get [i] data k ) { T v → v F _ → 0 } )
             = k + k 1
         }
-        ( vec_free [i] data )
-        ( vec_free [i] starts )
-        ( vec_free [i] ends )
         ( __hi_put e ( __out_name n ) vals )
         ^ T
     } {}
@@ -331,7 +386,7 @@ $ `model.nu`
     ^ o
 }
 
-@ rt_load_inits * Engine e OGraph g → v {
+@ rt_load_inits * EngineImpl e OGraph g → v {
     : ( Vec OTensor ) inits . g inits
     : ~ i k 0
     ~ < k ( vec_len [OTensor] inits ) {
@@ -339,11 +394,11 @@ $ `model.nu`
             T t → {
                 // INT64 tensors (shapes/sizes/anchor grids) stay host-side as
                 // metadata — read via __init_i64; only FLOAT weights go to GPU.
-                ? & != . t dtype 7 != . t host 0 {
+                ? & != . t dtype 7 != ( otensor_host_ptr t ) 0 {
                     : i n . t nelem
                     : GpuBuffer buf ( gpu_alloc . e g * n 4 )
-                    ( rt_own e . buf dptr )
-                    ( gpu_upload buf # *u . t host )
+                    ( rt_own e buf )
+                    ( gpu_upload buf # *u ( otensor_host_ptr t ) )
                     ( rt_put e ( string_data . t name ) . buf dptr ( __shape_copy_rt . t dims ) )
                 } {}
             } F _ → {}
@@ -354,15 +409,15 @@ $ `model.nu`
 
 // Allocate a fresh device tensor with `shape`, register under `name`,
 // return its dptr.
-@ rt_alloc_out * Engine e s name ( Vec i ) shape → i {
+@ rt_alloc_out * EngineImpl e s name sink ( Vec i ) shape → i {
     : GpuBuffer buf ( gpu_alloc . e g * ( __prod shape ) 4 )
-    ( rt_own e . buf dptr )
+    ( rt_own e buf )
     ( rt_put e name . buf dptr shape )
     ^ . buf dptr
 }
 
 // ── op handlers ───────────────────────────────────────────────────
-@ rt_gemm * Engine e ONode n → v {
+@ rt_gemm * EngineImpl e ONode n → v {
     : RTensor A ( __in e n 0 )
     : RTensor B ( __in e n 1 )
     : i transB ( node_attr_i n `transB` 0 )
@@ -375,18 +430,18 @@ $ `model.nu`
     : ~ GkBuf cb ( __rt_fbuf A )
     ? > ( vec_len [String] . n inputs ) 2 { : RTensor C ( __in e n 2 ) = cb ( __rt_fbuf C ) = hasb 1 } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape2 M N ) )
-    : GkBuf yb @ GkBuf { yd * M N GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd * M N GK_F32 )
     ? ( gkd_gemm . e kit yb ( __rt_fbuf A ) ( __rt_fbuf B ) cb hasb M N K alpha beta transB ) {} { ( __rt_op_fail `Gemm` ) }
 }
 
-@ rt_relu * Engine e ONode n → v {
+@ rt_relu * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_relu . e kit yb ( __rt_fbuf X ) ) {} { ( __rt_op_fail `Relu` ) }
 }
 
-@ rt_conv * Engine e ONode n → v {
+@ rt_conv * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor W ( __in e n 1 )
     : i Cin ( rt_dim X 1 )
@@ -424,14 +479,14 @@ $ `model.nu`
     : ~ GkBuf bb ( __rt_fbuf X )
     ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bb ( __rt_fbuf B ) = hasB 1 } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Cout OH OW ) )
-    : GkBuf yb @ GkBuf { yd * * Cout OH OW GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd * * Cout OH OW GK_F32 )
     ? ( gkd_conv2d_dil . e kit yb ( __rt_fbuf X ) ( __rt_fbuf W ) bb hasB Cin H Wd Cout kh kw OH OW ph pw sh sw dh dw ) {} { ( __rt_op_fail `Conv` ) }
 }
 
 // Transposed convolution (ConvTranspose). Weight is [Cin, Cout, kh, kw].
 // Output size per ONNX: O = stride·(I−1) + output_padding + (k−1)·dil+1
 //   − pad_begin − pad_end. The seg Proto upsample is k2/s2/p0 → O = 2·I.
-@ rt_convtranspose * Engine e ONode n → v {
+@ rt_convtranspose * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor W ( __in e n 1 )
     : i Cin ( rt_dim X 1 )
@@ -454,11 +509,11 @@ $ `model.nu`
     : ~ GkBuf bb ( __rt_fbuf X )
     ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bb ( __rt_fbuf B ) = hasB 1 } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Cout OH OW ) )
-    : GkBuf yb @ GkBuf { yd * * Cout OH OW GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd * * Cout OH OW GK_F32 )
     ? ( gkd_convtranspose2d . e kit yb ( __rt_fbuf X ) ( __rt_fbuf W ) bb hasB Cin H Wd Cout kh kw OH OW phb pwb sh sw ) {} { ( __rt_op_fail `ConvTranspose` ) }
 }
 
-@ rt_maxpool * Engine e ONode n → v {
+@ rt_maxpool * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i C ( rt_dim X 1 )
     : i H ( rt_dim X 2 )
@@ -491,11 +546,11 @@ $ `model.nu`
         = OW + / + - + Wd * 2 pw kw ex2 sw 1
     }
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 C OH OW ) )
-    : GkBuf yb @ GkBuf { yd * * C OH OW GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd * * C OH OW GK_F32 )
     ? ( gkd_maxpool2d . e kit yb ( __rt_fbuf X ) C H Wd kh kw OH OW sh sw ph pw ) {} { ( __rt_op_fail `MaxPool` ) }
 }
 
-@ rt_batchnorm * Engine e ONode n → v {
+@ rt_batchnorm * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor sc ( __in e n 1 )
     : RTensor B ( __in e n 2 )
@@ -505,15 +560,15 @@ $ `model.nu`
     : i HW / . X nelem C
     : f eps ( node_attr_f n `epsilon` 0.00001 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_batchnorm . e kit yb ( __rt_fbuf X ) ( __rt_fbuf sc ) ( __rt_fbuf B ) ( __rt_fbuf mn ) ( __rt_fbuf vr ) C HW eps ) {} { ( __rt_op_fail `BatchNormalization` ) }
 }
 
-@ rt_leakyrelu * Engine e ONode n → v {
+@ rt_leakyrelu * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : f alpha ( node_attr_f n `alpha` 0.01 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_leakyrelu . e kit yb ( __rt_fbuf X ) alpha ) {} { ( __rt_op_fail `LeakyRelu` ) }
 }
 
@@ -526,7 +581,7 @@ $ `model.nu`
 // order); Sub/Div keep `in0 op in1`. Broadcast mode is inferred from the
 // operand element count: scalar, full, per-inner (a per-anchor stride
 // vector), or per-channel.
-@ rt_binop * Engine e ONode n i op → v {
+@ rt_binop * EngineImpl e ONode n i op → v {
     : RTensor a ( __in e n 0 )
     : RTensor b ( __in e n 1 )
     : b comm | == op 0 == op 1
@@ -573,24 +628,21 @@ $ `model.nu`
         }
     }
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd nx GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd nx GK_F32 )
     ? ( gkd_ew_bc . e kit opname opc yb ( __rt_fbuf X ) ( __rt_fbuf B ) od ast bst ) {} { ( __rt_op_fail `Mul/Add/Sub/Div` ) }
-    ( vec_free [i] od )
-    ( vec_free [i] ast )
-    ( vec_free [i] bst )
 }
 
-@ rt_sigmoid * Engine e ONode n → v {
+@ rt_sigmoid * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_sigmoid . e kit yb ( __rt_fbuf X ) ) {} { ( __rt_op_fail `Sigmoid` ) }
 }
 
 // Reshape: pure reinterpret (data is contiguous) → alias the input buffer
 // under the output name with the new shape. Shape comes from the INT64
 // initializer input[1]; a -1 entry is inferred, 0 copies the input dim.
-@ rt_reshape * Engine e ONode n → v {
+@ rt_reshape * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : s shp_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
     : i nd ( __init_i64_len e shp_name )
@@ -614,7 +666,7 @@ $ `model.nu`
 // (inputs: data, starts, ends, axes[, steps]) — the shape torch 2.12 /
 // onnxsim emit for channel splits (older exports used Split, which has
 // its own handler). Negative axes normalise; ends clamp to the dim.
-@ rt_slice * Engine e ONode n → v {
+@ rt_slice * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i nd0 ( rt_ndim X )
     : s st_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
@@ -651,12 +703,12 @@ $ `model.nu`
         ~ < d nd0 { ( vec_push [i] os ? == d axis sz ( rt_dim X d ) ) = d + d 1 }
         : i prodos ( __prod os )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+        : GkBuf yb ( gk_buf_wrap yd prodos GK_F32 )
         ? ( gkd_slice_ax . e kit yb ( __rt_fbuf X ) outer sz inner dim_ax sbeg ) {} { ( __rt_op_fail `Slice` ) }
     }
 }
 
-@ rt_resize * Engine e ONode n → v {
+@ rt_resize * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i C ( rt_dim X 1 )
     : i H ( rt_dim X 2 )
@@ -674,10 +726,9 @@ $ `model.nu`
         = OH * H # i ( __init_f32 e sc_name 2 )
         = OW * W # i ( __init_f32 e sc_name 3 )
     }
-    ( vec_free [i] sz )
     ? | <= OH 0 <= OW 0 { ( __rt_op_fail `Resize` ) ^ v } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 C OH OW ) )
-    : GkBuf yb @ GkBuf { yd * * C OH OW GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd * * C OH OW GK_F32 )
     : s mode ( node_attr_s n `mode` `nearest` )
     ? ( streq2 mode `linear` ) {
         // half-pixel bilinear (align 0) — ONNX pytorch_half_pixel and
@@ -690,7 +741,7 @@ $ `model.nu`
 
 // General transpose (≤6-D): input dims + perm straight to gkd_perm (which
 // pads to its 6-D kernel with trailing 1s / identity).
-@ rt_transpose * Engine e ONode n → v {
+@ rt_transpose * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i nd ( rt_ndim X )
     : ( Vec i ) dims ( vec_new [i] )
@@ -704,14 +755,12 @@ $ `model.nu`
         = k + k 1
     }
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_perm . e kit yb ( __rt_fbuf X ) dims perm ) {} { ( __rt_op_fail `Transpose` ) }
-    ( vec_free [i] dims )
-    ( vec_free [i] perm )
 }
 
 // Softmax over `axis`, viewing the tensor as (outer, axis, inner).
-@ rt_softmax * Engine e ONode n → v {
+@ rt_softmax * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     // ONNX permits a negative `axis` (counts from the end). Normalise it to
     // a non-negative index before deriving outer/axis-length/inner, or the
@@ -727,12 +776,12 @@ $ `model.nu`
     : ~ i m + ax 1
     ~ < m ( rt_ndim X ) { = inner * inner ( rt_dim X m ) = m + m 1 }
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_softmax_ax . e kit yb ( __rt_fbuf X ) outer axn inner ) {} { ( __rt_op_fail `Softmax` ) }
 }
 
 // Concat along `axis`, viewing each input as (outer, axis_i, inner).
-@ rt_concat * Engine e ONode n → v {
+@ rt_concat * EngineImpl e ONode n → v {
     : RTensor first ( __in e n 0 )
     // negative axis counts from the end (same normalisation softmax
     // needed — torch 2.12 emits Concat axis=-1 for the level merge)
@@ -754,7 +803,7 @@ $ `model.nu`
     ~ < d ( rt_ndim first ) { ( vec_push [i] os ? == d axis sumax ( rt_dim first d ) ) = d + d 1 }
     : i prodos ( __prod os )
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd prodos GK_F32 )
     : ~ i off 0
     : ~ i ai 0
     ~ < ai nin {
@@ -777,7 +826,7 @@ $ `model.nu`
 // Split along `axis` into contiguous slices — alias each output onto the
 // input buffer at its byte offset (no copy). Sizes from the INT64 init
 // input[1] when present, else `num_outputs` equal parts.
-@ rt_split * Engine e ONode n → v {
+@ rt_split * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i axis ( node_attr_i n `axis` 1 )
     : ~ i outer 1
@@ -810,7 +859,7 @@ $ `model.nu`
             // interleaved slice (outer>1) — must copy into a fresh buffer
             : i prodos ( __prod os )
             : i od ( rt_alloc_out e onm os )
-            : GkBuf ob @ GkBuf { od prodos GK_F32 }
+            : GkBuf ob ( gk_buf_wrap od prodos GK_F32 )
             ? ( gkd_slice_ax . e kit ob ( __rt_fbuf X ) outer sz inner src_ax off ) {} { ( __rt_op_fail `Split` ) }
         }
         = off + off sz
@@ -821,7 +870,7 @@ $ `model.nu`
 // MatMul. Two cases: A[...,M,K] @ B[K,N] (2-D B) collapses leading dims
 // into M and uses Gemm; A[...,M,K] @ B[...,K,N] (matching batch dims, the
 // attention case) uses a batched matmul.
-@ rt_matmul * Engine e ONode n → v {
+@ rt_matmul * EngineImpl e ONode n → v {
     : RTensor A ( __in e n 0 )
     : RTensor B ( __in e n 1 )
     : i Kd ( rt_last A )
@@ -835,7 +884,7 @@ $ `model.nu`
         ~ < d - ( rt_ndim A ) 1 { ( vec_push [i] os ( rt_dim A d ) ) = d + d 1 }
         ( vec_push [i] os N )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        : GkBuf yb @ GkBuf { yd * * batch M N GK_F32 }
+        : GkBuf yb ( gk_buf_wrap yd * * batch M N GK_F32 )
         ? ( gkd_bmm . e kit yb ( __rt_fbuf A ) ( __rt_fbuf B ) batch M Kd N 1 1 ) {} { ( __rt_op_fail `MatMul` ) }
     } {
         : i M / . A nelem Kd
@@ -844,13 +893,13 @@ $ `model.nu`
         ~ < d - ( rt_ndim A ) 1 { ( vec_push [i] os ( rt_dim A d ) ) = d + d 1 }
         ( vec_push [i] os N )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        : GkBuf yb @ GkBuf { yd * M N GK_F32 }
+        : GkBuf yb ( gk_buf_wrap yd * M N GK_F32 )
         ? ( gkd_gemm . e kit yb ( __rt_fbuf A ) ( __rt_fbuf B ) ( __rt_fbuf A ) 0 M N Kd 1.0 0.0 0 ) {} { ( __rt_op_fail `MatMul` ) }
     }
 }
 
 // LayerNormalization over the last axis (scale = in1, bias = in2).
-@ rt_layernorm * Engine e ONode n → v {
+@ rt_layernorm * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : RTensor sc ( __in e n 1 )
     : RTensor bi ( __in e n 2 )
@@ -858,14 +907,14 @@ $ `model.nu`
     : i outer / . X nelem ax
     : f eps ( node_attr_f n `epsilon` 0.00001 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_layernorm . e kit yb ( __rt_fbuf X ) ( __rt_fbuf sc ) ( __rt_fbuf bi ) outer ax eps ) {} { ( __rt_op_fail `LayerNormalization` ) }
 }
 
-@ rt_erf * Engine e ONode n → v {
+@ rt_erf * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_erf . e kit yb ( __rt_fbuf X ) ) {} { ( __rt_op_fail `Erf` ) }
 }
 
@@ -873,15 +922,14 @@ $ `model.nu`
 // index built from (arange, argmax(tokens)) selecting each row's EOS token.
 // Rather than materialise the int64 index chain, gather directly from the
 // graph's token input: out[b,:] = data[b, argmax(tokens[b]), :].
-@ rt_gathernd * Engine e ONode n → v {
+@ rt_gathernd * EngineImpl e ONode n → v {
     : RTensor data ( __in e n 0 )
     : i B ( rt_dim data 0 )
     : i L ( rt_dim data 1 )
     : i D ( rt_dim data 2 )
-    : OGraph gr . e graph
-    : RTensor tok ( rt_at e ( rt_find e ( string_data . gr input_name ) ) )
+    : RTensor tok ( rt_at e ( rt_find e ( string_data . e input_name ) ) )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape2 B D ) )
-    : GkBuf yb @ GkBuf { yd * B D GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd * B D GK_F32 )
     ? ( gkd_eos_gather . e kit yb ( __rt_fbuf data ) ( __rt_ibuf tok ) B L D ) {} { ( __rt_op_fail `GatherND` ) }
 }
 
@@ -896,7 +944,7 @@ $ `model.nu`
 // read-out (ArgMax over token ids → Gather), which onnxsim leaves as a
 // plain ArgMax+Gather pair — the eos_gather fast path only matches the
 // old GatherND formulation.
-@ rt_argmax * Engine e ONode n → v {
+@ rt_argmax * EngineImpl e ONode n → v {
     : RTensor x ( __in e n 0 )
     : i nd0 ( rt_ndim x )
     : ~ i axis ( node_attr_i n `axis` 0 )
@@ -913,18 +961,18 @@ $ `model.nu`
         ? != keep 0 { ( vec_push [i] os 1 ) } {}
         : i prodos ( __prod os )
         : GpuBuffer buf ( gpu_alloc . e g * prodos 8 )
-        ( rt_own e . buf dptr )
+        ( rt_own e buf )
         ( rt_put e ( __out_name n ) . buf dptr os )
-        : GkBuf ob @ GkBuf { . buf dptr prodos GK_I64 }
+        : GkBuf ob ( gk_buf_wrap . buf dptr prodos GK_I64 )
         : s in0 ( string_data ?? ( vec_get [String] . n inputs 0 ) { T x2 → x2 F _ → ( string_new ) } )
         // gkd_argmax picks its kernel by the INPUT buffer's element type;
         // the raw token input is the only int64 tensor in play.
-        : GkBuf xb ? ( streq2 in0 ( string_data . . e graph input_name ) ) { ( __rt_ibuf x ) } { ( __rt_fbuf x ) }
+        : GkBuf xb ? ( streq2 in0 ( string_data . e input_name ) ) { ( __rt_ibuf x ) } { ( __rt_fbuf x ) }
         ? ( gkd_argmax . e kit ob xb outer ax ) {} { ( __rt_op_fail `ArgMax` ) }
     }
 }
 
-@ rt_gather * Engine e ONode n → v {
+@ rt_gather * EngineImpl e ONode n → v {
     : RTensor data ( __in e n 0 )
     : ~ i axis ( node_attr_i n `axis` 0 )
     ? < axis 0 { = axis + axis ( rt_ndim data ) } {}
@@ -950,8 +998,8 @@ $ `model.nu`
         ~ < r ( rt_ndim data ) { ( vec_push [i] os ( rt_dim data r ) ) = r + r 1 }
         : i prodos ( __prod os )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        : GkBuf yb @ GkBuf { yd prodos GK_F32 }
-        : GkBuf ixb @ GkBuf { . idxt dptr nidx GK_I64 }
+        : GkBuf yb ( gk_buf_wrap yd prodos GK_F32 )
+        : GkBuf ixb ( gk_buf_wrap . idxt dptr nidx GK_I64 )
         ? ( gkd_gather . e kit yb ( __rt_fbuf data ) ixb outer axis_in inner nidx ) {} { ( __rt_op_fail `Gather` ) }
     } {
         // host scalar index → slice one element along axis (axis removed);
@@ -963,14 +1011,14 @@ $ `model.nu`
         ~ < d ( rt_ndim data ) { ? != d axis { ( vec_push [i] os ( rt_dim data d ) ) } {} = d + d 1 }
         : i prodos ( __prod os )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+        : GkBuf yb ( gk_buf_wrap yd prodos GK_F32 )
         ? ( gkd_slice_ax . e kit yb ( __rt_fbuf data ) outer 1 inner axis_in s ) {} { ( __rt_op_fail `Gather` ) }
     }
 }
 
 // Einsum "bchw,bkc->bkhw": region[1,C,H,W] · text[1,K,C] -> [1,K,H,W].
 // = Gemm(text[K,C], region[C,HW]) -> [K,HW].
-@ rt_einsum * Engine e ONode n → v {
+@ rt_einsum * EngineImpl e ONode n → v {
     : s eq ( node_attr_s n `equation` `` )
     : RTensor region ( __in e n 0 )
     : RTensor text ( __in e n 1 )
@@ -980,11 +1028,11 @@ $ `model.nu`
     : i HW * H Wd
     : i Kk ( rt_dim text 1 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Kk H Wd ) )
-    : GkBuf yb @ GkBuf { yd * Kk HW GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd * Kk HW GK_F32 )
     ? ( gkd_gemm . e kit yb ( __rt_fbuf text ) ( __rt_fbuf region ) ( __rt_fbuf text ) 0 Kk HW C 1.0 0.0 0 ) {} { ( __rt_op_fail `Einsum` ) }
 }
 
-@ rt_reducel2 * Engine e ONode n → v {
+@ rt_reducel2 * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i ax ( rt_last X )
     : i outer / . X nelem ax
@@ -993,11 +1041,11 @@ $ `model.nu`
     ~ < d - ( rt_ndim X ) 1 { ( vec_push [i] os ( rt_dim X d ) ) = d + d 1 }
     ( vec_push [i] os 1 )
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    : GkBuf yb @ GkBuf { yd outer GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd outer GK_F32 )
     ? ( gkd_reducel2 . e kit yb ( __rt_fbuf X ) outer ax ) {} { ( __rt_op_fail `ReduceL2` ) }
 }
 
-@ rt_clip * Engine e ONode n → v {
+@ rt_clip * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : ~ f lo - 0.0 1000000000.0
     : ~ f hi 1000000000.0
@@ -1013,12 +1061,12 @@ $ `model.nu`
         ? > ( nurl_str_len hin ) 0 { = hi ( __init_f32 e hin 0 ) } {}
     } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd . X nelem GK_F32 )
     ? ( gkd_clip . e kit yb ( __rt_fbuf X ) lo hi ) {} { ( __rt_op_fail `Clip` ) }
 }
 
 // Expand the last axis (broadcast a (...,1) tensor to the target shape).
-@ rt_expand * Engine e ONode n → v {
+@ rt_expand * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : s shp_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
     : i nd ( __init_i64_len e shp_name )
@@ -1029,13 +1077,13 @@ $ `model.nu`
     ~ < d nd { ( vec_push [i] os ( __init_i64 e shp_name d ) ) = d + d 1 }
     : i prodos ( __prod os )
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+    : GkBuf yb ( gk_buf_wrap yd prodos GK_F32 )
     ? ( gkd_expandlast . e kit yb ( __rt_fbuf X ) outer rep ) {} { ( __rt_op_fail `Expand` ) }
 }
 
 // Unsqueeze: insert size-1 axes — pure reshape (alias). New shape from the
 // input's shape with 1s inserted at the `axes` positions.
-@ rt_unsqueeze * Engine e ONode n → v {
+@ rt_unsqueeze * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : s ax_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
     : i a0 ( __init_i64 e ax_name 0 )
@@ -1051,14 +1099,16 @@ $ `model.nu`
 }
 
 // Run the graph on a host input buffer (raw f32). `shape` is the input
-// tensor shape (e.g. [1,3,416,416]). Returns the output device tensor.
-@ rt_run_shaped * Engine e OGraph g * u input_host ( Vec i ) shape → RTensor {
-    ( rt_reset e )
+// tensor shape (e.g. [1,3,416,416]), consumed (the value map keeps it).
+// Returns the output device tensor.
+@ rt_run_shaped Engine e__h OGraph g * u input_host sink ( Vec i ) shape → RTensor {
+    : *EngineImpl e ( __Engine_ptr e__h )
+    ( rt_reset e__h )
     ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : i n ( __prod shape )
     : GpuBuffer ib ( gpu_alloc . e g * n 4 )
-    ( rt_own e . ib dptr )
+    ( rt_own e ib )
     ( gpu_upload ib input_host )
     ( rt_put e ( string_data . g input_name ) . ib dptr shape )
     ^ ( _rt_run_nodes e g )
@@ -1066,32 +1116,34 @@ $ `model.nu`
 
 // Token run: the single input is an INT64 token matrix [nrow, ncol] already
 // laid out in `tokhost` (8-byte LE). Uploaded as-is for the embedding Gather.
-@ rt_run_tokens * Engine e OGraph g * u tokhost i nrow i ncol → RTensor {
-    ( rt_reset e )
+@ rt_run_tokens Engine e__h OGraph g * u tokhost i nrow i ncol → RTensor {
+    : *EngineImpl e ( __Engine_ptr e__h )
+    ( rt_reset e__h )
     ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : GpuBuffer ib ( gpu_alloc . e g * * nrow ncol 8 )
-    ( rt_own e . ib dptr )
+    ( rt_own e ib )
     ( gpu_upload ib tokhost )
     ( rt_put e ( string_data . g input_name ) . ib dptr ( __shape2 nrow ncol ) )
     ^ ( _rt_run_nodes e g )
 }
 
 // Two-input run (e.g. image + text embeddings for a promptable model).
-@ rt_run_two * Engine e OGraph g s n1 * u h1 ( Vec i ) s1 s n2 * u h2 ( Vec i ) s2 → RTensor {
-    ( rt_reset e )
+@ rt_run_two Engine e__h OGraph g s n1 * u h1 sink ( Vec i ) s1 s n2 * u h2 sink ( Vec i ) s2 → RTensor {
+    : *EngineImpl e ( __Engine_ptr e__h )
+    ( rt_reset e__h )
     ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : GpuBuffer b1 ( gpu_alloc . e g * ( __prod s1 ) 4 )
-    ( rt_own e . b1 dptr )
+    ( rt_own e b1 )
     ( gpu_upload b1 h1 ) ( rt_put e n1 . b1 dptr s1 )
     : GpuBuffer b2 ( gpu_alloc . e g * ( __prod s2 ) 4 )
-    ( rt_own e . b2 dptr )
+    ( rt_own e b2 )
     ( gpu_upload b2 h2 ) ( rt_put e n2 . b2 dptr s2 )
     ^ ( _rt_run_nodes e g )
 }
 
-@ _rt_run_nodes * Engine e OGraph g → RTensor {
+@ _rt_run_nodes * EngineImpl e OGraph g → RTensor {
     // Chain every launch on the stream; one device sync at the end (the
     // CUDA stream serialises kernels, the CPU backend is synchronous).
     ( gk_autosync F )
@@ -1159,33 +1211,31 @@ $ `model.nu`
 }
 
 // Convenience for a 2-D (dense) input.
-@ rt_run * Engine e OGraph g * u input_host i in_rows i in_cols → RTensor {
-    ^ ( rt_run_shaped e g input_host ( __shape2 in_rows in_cols ) )
+@ rt_run Engine e__h OGraph g * u input_host i in_rows i in_cols → RTensor {
+    ^ ( rt_run_shaped e__h g input_host ( __shape2 in_rows in_cols ) )
 }
 
-// Download a device tensor into a fresh host f32 buffer (caller frees).
-@ rt_download * Engine e RTensor t → *u {
+// Download a device tensor into a fresh host f32 buffer — a GpuHost,
+// released with its last owner (`gpu_host_ptr` / `gpu_host_get_f32` read it).
+@ rt_download Engine e__h RTensor t → GpuHost {
     : i n . t nelem
-    : *u host ( gpu_host_alloc * n 4 )
-    : GpuBuffer b @ GpuBuffer { . t dptr * n 4 }
-    ( gpu_download host b )
+    : GpuHost host ( gpu_host_alloc * n 4 )
+    : i _rc ( gpu_download ( gpu_host_ptr host ) ( gpu_buffer_view . t dptr * n 4 ) )
     ^ host
 }
 
 // The model's SECOND output (segmentation proto) after a run — valid until
 // the next rt_reset. nelem 0 if the model has no second output. The value
 // map still holds it because reset only happens at the start of a run.
-@ rt_output1 * Engine e → RTensor {
-    : s nm ( string_data . . e graph output1_name )
+@ rt_output1 Engine e__h → RTensor {
+    : *EngineImpl e ( __Engine_ptr e__h )
+    : s nm ( string_data . e output1_name )
     ? == ( nurl_str_len nm ) 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } } {}
     : i oi ( rt_find e nm )
     ? < oi 0 { ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 } } { ^ ( rt_at e oi ) }
 }
 
-@ rt_close * Engine e → v {
-    ( rt_reset e )
-    ( vec_free [i] . e owned )
-    ( vec_free [RTensor] . e vals )
-    ( gk_close . e kit )  // releases the device Engine.g borrows
-    ( nurl_free # *u e )
-}
+// Let go of `e` now rather than at the end of its owner's scope. The
+// engine's last owner releases its device blocks, its value map and the
+// device (the kit).
+@ rt_close sink Engine e → v {}

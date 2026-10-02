@@ -51,8 +51,6 @@ $ `stdlib/ext/smtp.nu`
             : String date ( smtp_date_now )
             : String msg ( mime_build from to `Hello from NURL` `This message was sent by the NURL smtp client.\n` ( string_data date ) )
             : !v SmtpErr e6 ( smtp_data c ( string_data msg ) )
-            ( string_free msg )
-            ( string_free date )
             ?? e6 { T _ → {} F e → { ( smtp_close c ) ^ ( die `data` e ) } }
 
             ( smtp_quit c )
@@ -71,7 +69,5 @@ $ `stdlib/ext/smtp.nu`
     : String to ( env_var_or `SMTP_TO` `to@example.org` )
     : i port ( nurl_str_to_int ( string_data ports ) )
     : i rc ( run ( string_data host ) port ( string_data user ) ( string_data pass ) ( string_data from ) ( string_data to ) )
-    ( string_free host ) ( string_free ports ) ( string_free user )
-    ( string_free pass ) ( string_free from ) ( string_free to )
     ^ rc
 }

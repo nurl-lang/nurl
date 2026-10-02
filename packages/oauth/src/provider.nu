@@ -4,7 +4,7 @@
 // by the provider itself. `OidcProvider` is that knowledge, fetched once
 // and kept:
 //
-//   ( oidc_provider_discover issuer )   → ! *OidcProvider OauthErr
+//   ( oidc_provider_discover issuer )   → ! OidcProvider OauthErr
 //       GET <issuer>/.well-known/openid-configuration (RFC 8414 §3), and
 //       CHECK that the document's own `issuer` is the one we asked for —
 //       otherwise a redirect to an attacker's metadata would silently
@@ -27,10 +27,10 @@
 // claim that was wrong, the provider's own `error_description` — leaves
 // it in `oidc_provider_last_error`.
 //
-// THREADING: an `*OidcProvider` owns one HTTP client and one mutable key
+// THREADING: an `OidcProvider` owns one HTTP client and one mutable key
 // cache, and takes no lock. One provider per thread, or one thread that
 // owns it — sharing it across a server's worker pool is a data race, not
-// a slow path. (An `*OidcPolicy` is read-only once built and IS safe to
+// a slow path. (An `OidcPolicy` is read-only once built and IS safe to
 // share; so is a verified `OidcIdentity`, which is a value.)
 
 $ `stdlib/core/string.nu`
@@ -42,8 +42,9 @@ $ `errors.nu`
 $ `jwk.nu`
 $ `jws.nu`
 $ `claims.nu`
+$ `stdlib/core/rcbox.nu`
 
-: OidcProvider {
+: OidcProviderImpl {
     String issuer
     String authorization_endpoint
     String token_endpoint
@@ -58,13 +59,27 @@ $ `claims.nu`
     i min_refetch  // seconds that must pass before another JWKS fetch
     b discovered
     String last_error
-    * HttpClient http
+    HttpClient http
 }
+
+// An OidcProvider is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: OidcProvider { s ctl }
+
+@ OidcProvider_share OidcProvider h → OidcProvider { ^ @ OidcProvider { # s ( rcbox_share # i . h ctl ) } }
+
+@ OidcProvider_drop sink OidcProvider h → v {
+    ( mem_forget h )
+    ( rcbox_release [OidcProviderImpl] # i . h ctl )
+}
+
+@ _OidcProvider_ptr OidcProvider h → *OidcProviderImpl { ^ ( rcbox_ptr [OidcProviderImpl] # i . h ctl ) }
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
-@ oidc_provider_new s issuer → *OidcProvider {
-    : *OidcProvider p # *OidcProvider ( nurl_malloc Z OidcProvider )
+@ oidc_provider_new s issuer → OidcProvider {
+    : i p__box ( rcbox_zero [OidcProviderImpl] )
+    : *OidcProviderImpl p ( rcbox_ptr [OidcProviderImpl] p__box )
     = . p issuer ( string_from issuer )
     = . p authorization_endpoint ( string_new )
     = . p token_endpoint ( string_new )
@@ -80,106 +95,125 @@ $ `claims.nu`
     = . p discovered F
     = . p last_error ( string_new )
     = . p http ( http_client_new )
-    ^ p
+    ^ @ OidcProvider { # s p__box }
 }
 
-@ oidc_provider_free sink * OidcProvider p → v {
-    ( string_free . p issuer )
-    ( string_free . p authorization_endpoint )
-    ( string_free . p token_endpoint )
-    ( string_free . p userinfo_endpoint )
-    ( string_free . p jwks_uri )
-    ( string_free . p end_session_endpoint )
-    ( string_free . p device_authorization_endpoint )
-    ( string_free . p introspection_endpoint )
-    ( string_free . p revocation_endpoint )
-    ( string_free . p last_error )
-    ( jwks_free . p keys )
-    ( http_client_free . p http )
-    ( nurl_free # s p )
-}
+// Let go of `p` now rather than at the end of its owner's scope.
+@ oidc_provider_free sink OidcProvider p → v {}
 
 // The HTTP client every request goes through — exposed so a caller can
 // set a timeout, turn off certificate verification for a test provider,
 // or pin HTTP/3.
-@ oidc_provider_http * OidcProvider p → *HttpClient { ^ . p http }
-
-@ oidc_provider_last_error * OidcProvider p → s { ^ ( string_data . p last_error ) }
-
-@ oidc_provider_set_min_refetch * OidcProvider p i secs → v { = . p min_refetch secs }
-
-@ _oidc_err * OidcProvider p s msg → v {
-    ( string_free . p last_error )
-    = . p last_error ( string_from msg )
+@ oidc_provider_http OidcProvider p__h → HttpClient {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ^ . p http
 }
 
-@ _oidc_err2 * OidcProvider p s msg s detail → v {
-    : String out ( string_with_cap 96 )
-    ( string_push_str out msg )
-    ( string_push_str out detail )
-    ( string_free . p last_error )
-    = . p last_error out
+// What discovery found (or a setter put there); "" when unset.
+@ oidc_provider_issuer OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) issuer ) }
+
+@ oidc_provider_authorization_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) authorization_endpoint ) }
+
+@ oidc_provider_token_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) token_endpoint ) }
+
+@ oidc_provider_userinfo_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) userinfo_endpoint ) }
+
+@ oidc_provider_jwks_uri OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) jwks_uri ) }
+
+@ oidc_provider_end_session_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) end_session_endpoint ) }
+
+@ oidc_provider_device_authorization_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) device_authorization_endpoint ) }
+
+@ oidc_provider_introspection_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) introspection_endpoint ) }
+
+@ oidc_provider_revocation_endpoint OidcProvider p → s { ^ ( string_data . ( _OidcProvider_ptr p ) revocation_endpoint ) }
+
+@ oidc_provider_last_error OidcProvider p__h → s {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ^ ( string_data . p last_error )
 }
 
-@ _oidc_err_status * OidcProvider p s what i status → v {
-    : String out ( string_with_cap 96 )
-    ( string_push_str out what )
-    ( string_push_str out ` returned HTTP ` )
-    ( string_push_int out status )
-    ( string_free . p last_error )
-    = . p last_error out
+@ oidc_provider_set_min_refetch OidcProvider p__h i secs → v {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    = . p min_refetch secs
+}
+
+@ _oidc_err * OidcProviderImpl p s msg → v {
+    ( _oauth_set_str . p last_error msg )
+}
+
+@ _oidc_err2 * OidcProviderImpl p s msg s detail → v {
+    ( string_clear . p last_error )
+    ( string_push_str . p last_error msg )
+    ( string_push_str . p last_error detail )
+}
+
+@ _oidc_err_status * OidcProviderImpl p s what i status → v {
+    ( string_clear . p last_error )
+    ( string_push_str . p last_error what )
+    ( string_push_str . p last_error ` returned HTTP ` )
+    ( string_push_int . p last_error status )
 }
 
 // ── Field setters (for a provider configured by hand) ──────────────
 
-@ oidc_provider_set_jwks_uri * OidcProvider p s uri → v {
-    ( string_free . p jwks_uri )
-    = . p jwks_uri ( string_from uri )
+@ oidc_provider_set_jwks_uri OidcProvider p__h s uri → v {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ( _oauth_set_str . p jwks_uri uri )
 }
 
-@ oidc_provider_set_token_endpoint * OidcProvider p s uri → v {
-    ( string_free . p token_endpoint )
-    = . p token_endpoint ( string_from uri )
+@ oidc_provider_set_token_endpoint OidcProvider p__h s uri → v {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ( _oauth_set_str . p token_endpoint uri )
 }
 
-@ oidc_provider_set_authorization_endpoint * OidcProvider p s uri → v {
-    ( string_free . p authorization_endpoint )
-    = . p authorization_endpoint ( string_from uri )
+@ oidc_provider_set_authorization_endpoint OidcProvider p__h s uri → v {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ( _oauth_set_str . p authorization_endpoint uri )
 }
 
-@ oidc_provider_set_userinfo_endpoint * OidcProvider p s uri → v {
-    ( string_free . p userinfo_endpoint )
-    = . p userinfo_endpoint ( string_from uri )
+@ oidc_provider_set_userinfo_endpoint OidcProvider p__h s uri → v {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ( _oauth_set_str . p userinfo_endpoint uri )
+}
+
+// The cached key set becomes `ks`: the old keys are dropped from the
+// Vec, the new ones moved onto it (the field itself is not stored over —
+// a store through the pointer would not release what it overwrites).
+@ __oidc_keys_replace * OidcProviderImpl p sink ( Vec JwkKey ) ks → v {
+    ( vec_clear [JwkKey] . p keys )
+    ( vec_append [JwkKey] . p keys ks )
 }
 
 // Load a key set the caller already has (a pinned JWKS, an offline
 // verifier, a test). Replaces whatever was cached.
-@ oidc_provider_set_jwks * OidcProvider p s jwks_json → b {
+@ oidc_provider_set_jwks OidcProvider p__h s jwks_json → b {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : ( Vec JwkKey ) ks ( jwks_parse jwks_json )
-    ? == 0 ( vec_len [JwkKey] ks ) { ( jwks_free ks ) ^ F } {}
-    ( jwks_free . p keys )
-    = . p keys ks
+    ? == 0 ( vec_len [JwkKey] ks ) { ^ F } {}
+    ( __oidc_keys_replace p ks )
     = . p keys_at ( now_seconds )
     ^ T
 }
 
-@ oidc_provider_key_count * OidcProvider p → i { ^ ( vec_len [JwkKey] . p keys ) }
+@ oidc_provider_key_count OidcProvider p__h → i {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
+    ^ ( vec_len [JwkKey] . p keys )
+}
 
 // ── HTTP ───────────────────────────────────────────────────────────
 
 // GET a JSON document. Owns nothing of the caller's; the returned Json
 // is owned by the caller.
-@ __oidc_get_json * OidcProvider p s what s url → !Json OauthErr {
+@ __oidc_get_json * OidcProviderImpl p s what s url → !Json OauthErr {
     ?? ( http_client_get . p http url ) {
         T r → {
             : i status ( http_client_status r )
             ? & >= status 200 < status 300 {} {
                 ( _oidc_err_status p what status )
-                ( http_response_free r )
                 ^ @ !Json OauthErr { F OaHttpStatus }
             }
             : !Json JsonError pj ( json_parse_bytes . r body )
-            ( http_response_free r )
             ?? pj {
                 T j → { ^ @ !Json OauthErr { T j } }
                 F _ → {
@@ -197,13 +231,22 @@ $ `claims.nu`
 
 // ── Discovery ──────────────────────────────────────────────────────
 
+// A string member of the discovery document, into a String field of the
+// provider (in place; empty when absent).
+@ __oidc_adopt String dst Json doc s key → v {
+    ( string_clear dst )
+    ?? ( json_obj_get doc key ) {
+        T v → { ? ( json_is_str v ) { ( string_push_str dst ( json_str_data v ) ) } {} }
+        F _ → {}
+    }
+}
+
 // <issuer>/.well-known/openid-configuration, with exactly one slash.
 @ oidc_discovery_url s issuer → String {
     : ~ String out ( string_from issuer )
     : i n ( string_len out )
     ? & > n 0 == ( string_get out - n 1 ) 47 {
         : String trimmed ( string_substr out 0 - n 1 )
-        ( string_free out )
         = out trimmed
     } {}
     ( string_push_str out `/.well-known/openid-configuration` )
@@ -211,10 +254,10 @@ $ `claims.nu`
 }
 
 // Fetch the metadata document and adopt its endpoints. None = success.
-@ oidc_discover * OidcProvider p → ?OauthErr {
+@ oidc_discover OidcProvider p__h → ?OauthErr {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     : String url ( oidc_discovery_url ( string_data . p issuer ) )
     : !Json OauthErr dj ( __oidc_get_json p `discovery` ( string_data url ) )
-    ( string_free url )
     ?? dj {
         T doc → {
             // RFC 8414 §3.3: the document must claim the issuer we asked
@@ -222,28 +265,16 @@ $ `claims.nu`
             : String iss ( claims_str doc `issuer` )
             ? ( string_eq iss . p issuer ) {} {
                 ( _oidc_err2 p `discovery issuer mismatch: ` ( string_data iss ) )
-                ( string_free iss )
-                ( json_free doc )
                 ^ @ ?OauthErr { T OaIssuerMismatch }
             }
-            ( string_free iss )
-            ( string_free . p authorization_endpoint )
-            = . p authorization_endpoint ( claims_str doc `authorization_endpoint` )
-            ( string_free . p token_endpoint )
-            = . p token_endpoint ( claims_str doc `token_endpoint` )
-            ( string_free . p userinfo_endpoint )
-            = . p userinfo_endpoint ( claims_str doc `userinfo_endpoint` )
-            ( string_free . p jwks_uri )
-            = . p jwks_uri ( claims_str doc `jwks_uri` )
-            ( string_free . p end_session_endpoint )
-            = . p end_session_endpoint ( claims_str doc `end_session_endpoint` )
-            ( string_free . p device_authorization_endpoint )
-            = . p device_authorization_endpoint ( claims_str doc `device_authorization_endpoint` )
-            ( string_free . p introspection_endpoint )
-            = . p introspection_endpoint ( claims_str doc `introspection_endpoint` )
-            ( string_free . p revocation_endpoint )
-            = . p revocation_endpoint ( claims_str doc `revocation_endpoint` )
-            ( json_free doc )
+            ( __oidc_adopt . p authorization_endpoint doc `authorization_endpoint` )
+            ( __oidc_adopt . p token_endpoint doc `token_endpoint` )
+            ( __oidc_adopt . p userinfo_endpoint doc `userinfo_endpoint` )
+            ( __oidc_adopt . p jwks_uri doc `jwks_uri` )
+            ( __oidc_adopt . p end_session_endpoint doc `end_session_endpoint` )
+            ( __oidc_adopt . p device_authorization_endpoint doc `device_authorization_endpoint` )
+            ( __oidc_adopt . p introspection_endpoint doc `introspection_endpoint` )
+            ( __oidc_adopt . p revocation_endpoint doc `revocation_endpoint` )
             = . p discovered T
             ^ @ ?OauthErr { F }
         }
@@ -251,21 +282,19 @@ $ `claims.nu`
     }
 }
 
-@ oidc_provider_discover s issuer → !*OidcProvider OauthErr {
-    : *OidcProvider p ( oidc_provider_new issuer )
+@ oidc_provider_discover s issuer → !OidcProvider OauthErr {
+    : OidcProvider p ( oidc_provider_new issuer )
     ?? ( oidc_discover p ) {
-        T e → {
-            ( oidc_provider_free p )
-            ^ @ !*OidcProvider OauthErr { F # OauthErr e }
-        }
-        F _ → { ^ @ !*OidcProvider OauthErr { T p } }
+        T e → { ^ @ !OidcProvider OauthErr { F # OauthErr e } }
+        F _ → { ^ @ !OidcProvider OauthErr { T p } }
     }
 }
 
 // ── Key set ────────────────────────────────────────────────────────
 
 // Fetch jwks_uri and replace the cached set. None = success.
-@ oidc_fetch_jwks * OidcProvider p → ?OauthErr {
+@ oidc_fetch_jwks OidcProvider p__h → ?OauthErr {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ? == 0 ( string_len . p jwks_uri ) {
         ( _oidc_err p `no jwks_uri — run discovery or set one` )
         ^ @ ?OauthErr { T OaConfig }
@@ -274,17 +303,14 @@ $ `claims.nu`
     ?? kj {
         T doc → {
             : ( Vec JwkKey ) ks ( jwks_from_json doc )
-            ( json_free doc )
             // The fetch happened: record the time even for an empty set,
             // so a provider that answers with junk cannot be polled hard.
             = . p keys_at ( now_seconds )
             ? == 0 ( vec_len [JwkKey] ks ) {
-                ( jwks_free ks )
                 ( _oidc_err p `jwks document contains no keys` )
                 ^ @ ?OauthErr { T OaNoJwks }
             } {}
-            ( jwks_free . p keys )
-            = . p keys ks
+            ( __oidc_keys_replace p ks )
             ^ @ ?OauthErr { F }
         }
         F e → { ^ @ ?OauthErr { T # OauthErr e } }
@@ -293,9 +319,10 @@ $ `claims.nu`
 
 // Index of the key for (kid, alg), fetching or re-fetching the JWKS when
 // that is what it takes. -1 when the provider has no such key.
-@ oidc_provider_ensure_key * OidcProvider p s kid s alg → i {
+@ oidc_provider_ensure_key OidcProvider p__h s kid s alg → i {
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     ? == 0 ( vec_len [JwkKey] . p keys ) {
-        ?? ( oidc_fetch_jwks p ) { T _ → { ^ -1 } F _ → {} }
+        ?? ( oidc_fetch_jwks p__h ) { T _ → { ^ -1 } F _ → {} }
     } {}
     : i idx ( jwks_select . p keys kid alg )
     ? >= idx 0 { ^ idx } {}
@@ -307,7 +334,7 @@ $ `claims.nu`
         ( _oidc_err2 p `no key for kid ` kid )
         ^ -1
     } {}
-    ?? ( oidc_fetch_jwks p ) { T _ → { ^ -1 } F _ → {} }
+    ?? ( oidc_fetch_jwks p__h ) { T _ → { ^ -1 } F _ → {} }
     : i idx2 ( jwks_select . p keys kid alg )
     ? < idx2 0 { ( _oidc_err2 p `no key for kid ` kid ) } {}
     ^ idx2
@@ -316,7 +343,9 @@ $ `claims.nu`
 // ── Verification ───────────────────────────────────────────────────
 
 // The whole check, at an explicit `now` (epoch seconds).
-@ oidc_verify_token_at * OidcProvider p * OidcPolicy pol s token i now → !OidcIdentity OauthErr {
+@ oidc_verify_token_at OidcProvider p__h OidcPolicy pol__h s token i now → !OidcIdentity OauthErr {
+    : *OidcPolicyImpl pol ( _OidcPolicy_ptr pol__h )
+    : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     // Read the JOSE header ONCE: a token that is not a well-formed JWS
     // is malformed, which is a different answer from "the algorithm it
     // names is not one we accept".
@@ -324,14 +353,10 @@ $ `claims.nu`
     : ~ String kid ( string_new )
     ?? ( jws_header_json token ) {
         T h → {
-            ( string_free alg )
-            ( string_free kid )
             = alg ( _jws_json_str h `alg` )
             = kid ( _jws_json_str h `kid` )
-            ( json_free h )
         }
         F e → {
-            ( string_free alg ) ( string_free kid )
             ( _oidc_err p `not a well-formed JWS` )
             ^ @ !OidcIdentity OauthErr { F # OauthErr e }
         }
@@ -342,17 +367,14 @@ $ `claims.nu`
     // RFC 7515 §4.1.1: `alg` is REQUIRED in the header.
     ? == 0 ( string_len alg ) {
         ( _oidc_err p `JOSE header has no alg` )
-        ( string_free alg ) ( string_free kid )
         ^ @ !OidcIdentity OauthErr { F OaBadToken }
     } {}
     ? ( jws_alg_supported algp ) {} {
         ( _oidc_err2 p `unsupported alg: ` algp )
-        ( string_free alg ) ( string_free kid )
         ^ @ !OidcIdentity OauthErr { F OaAlgNotAllowed }
     }
-    ? ( oidc_policy_alg_allowed pol algp ) {} {
+    ? ( oidc_policy_alg_allowed pol__h algp ) {} {
         ( _oidc_err2 p `alg not in policy allowlist: ` algp )
-        ( string_free alg ) ( string_free kid )
         ^ @ !OidcIdentity OauthErr { F OaAlgNotAllowed }
     }
     // A published key set holds PUBLIC keys. Verifying an HS* token
@@ -361,14 +383,12 @@ $ `claims.nu`
     ? ( jws_alg_symmetric algp ) {
         ? . pol allow_symmetric {} {
             ( _oidc_err2 p `symmetric alg refused: ` algp )
-            ( string_free alg ) ( string_free kid )
             ^ @ !OidcIdentity OauthErr { F OaAlgNotAllowed }
         }
     } {}
 
-    : i idx ( oidc_provider_ensure_key p kidp algp )
+    : i idx ( oidc_provider_ensure_key p__h kidp algp )
     ? < idx 0 {
-        ( string_free alg ) ( string_free kid )
         ^ @ !OidcIdentity OauthErr { F OaNoKey }
     } {}
 
@@ -389,7 +409,6 @@ $ `claims.nu`
             : JwkKey jk . data k
             ?? ( jws_verify_with_key jk token ) {
                 T c → {
-                    ( json_free claims )
                     = claims c
                     = verified T
                     = more F
@@ -398,17 +417,13 @@ $ `claims.nu`
             }
         }
     }
-    ( string_free alg )
-    ( string_free kid )
     ? verified {} {
-        ( json_free claims )
         ( _oidc_err p `signature did not verify under any published key` )
         ^ @ !OidcIdentity OauthErr { F OaBadSignature }
     }
-    ?? ( claims_check claims pol now ) {
+    ?? ( claims_check claims pol__h now ) {
         T ce → {
             ( _oidc_err p ( claim_err_desc # ClaimErr ce ) )
-            ( json_free claims )
             ^ @ !OidcIdentity OauthErr { F OaClaims }
         }
         F _ → {}
@@ -416,17 +431,17 @@ $ `claims.nu`
     ^ @ !OidcIdentity OauthErr { T ( oidc_identity_from_claims claims ) }
 }
 
-@ oidc_verify_token * OidcProvider p * OidcPolicy pol s token → !OidcIdentity OauthErr {
-    ^ ( oidc_verify_token_at p pol token ( now_seconds ) )
+@ oidc_verify_token OidcProvider p__h OidcPolicy pol__h s token → !OidcIdentity OauthErr {
+    ^ ( oidc_verify_token_at p__h pol__h token ( now_seconds ) )
 }
 
 // Named for the caller's intent — the same check either way. An ID token
 // is verified against the client id in `aud`; an access token issued as
 // a JWT (RFC 9068) against the resource server's own audience.
-@ oidc_verify_id_token * OidcProvider p * OidcPolicy pol s token → !OidcIdentity OauthErr {
-    ^ ( oidc_verify_token_at p pol token ( now_seconds ) )
+@ oidc_verify_id_token OidcProvider p__h OidcPolicy pol__h s token → !OidcIdentity OauthErr {
+    ^ ( oidc_verify_token_at p__h pol__h token ( now_seconds ) )
 }
 
-@ oidc_verify_access_token * OidcProvider p * OidcPolicy pol s token → !OidcIdentity OauthErr {
-    ^ ( oidc_verify_token_at p pol token ( now_seconds ) )
+@ oidc_verify_access_token OidcProvider p__h OidcPolicy pol__h s token → !OidcIdentity OauthErr {
+    ^ ( oidc_verify_token_at p__h pol__h token ( now_seconds ) )
 }

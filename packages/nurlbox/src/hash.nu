@@ -55,13 +55,10 @@ $ `bx.nu`
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp path ok )
     ? ! ok {
-        ( vec_free [u] data )
         ^ @ ?String { F # String 0 }
     } {}
     : ( Vec u ) digest ( __hash_of kind data )
     : String hex ( __hex_of digest )
-    ( vec_free [u] digest )
-    ( vec_free [u] data )
     ^ @ ?String { T hex }
 }
 
@@ -100,15 +97,12 @@ $ `bx.nu`
                                         } {}
                                     } {}
                                     ? ! okline { = bad + bad 1 = rc 1 } {}
-                                    ( string_free got )
                                 }
                                 F _ → {
                                     = rc 1
                                     = bad + bad 1
                                 }
                             }
-                            ( string_free want )
-                            ( string_free name )
                         }
                     } {}
                 } { = more F }
@@ -119,7 +113,6 @@ $ `bx.nu`
                 ( nurl_eprint ( nurl_str_int bad ) )
                 ( nurl_eprint ` of the computed checksums did NOT match\n` )
             } {}
-            ( string_free line )
             ( bufreader_close br )
             ^ rc
         }
@@ -150,8 +143,6 @@ $ `bx.nu`
                         ( string_push_str out p )
                         ( string_push_char out 10 )
                         ( bx_write out )
-                        ( string_free out )
-                        ( string_free hex )
                     }
                     F _ → { = rc 1 }
                 }
@@ -159,7 +150,6 @@ $ `bx.nu`
             }
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -199,14 +189,12 @@ $ `bx.nu`
                 ?? ( b64_decode_vec ( string_data packed ) ) {
                     T raw → {
                         ( bx_write_bytes raw )
-                        ( vec_free [u] raw )
                     }
                     F _ → {
                         ( bx_err `invalid input` )
                         = rc 1
                     }
                 }
-                ( string_free packed )
             } {
                 : String enc ( b64_encode_vec data )
                 : i width ? ( bx_has o `w` ) ( nurl_str_to_int ( bx_val o `w` ) ) 76
@@ -225,13 +213,9 @@ $ `bx.nu`
                     }
                 }
                 ( bx_write out )
-                ( string_free out )
-                ( string_free enc )
             }
         }
-        ( vec_free [u] data )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -280,7 +264,6 @@ $ `bx.nu`
         = crc & ^^ << crc 8 tv 4294967295
         = len >> len 8
     }
-    ( vec_free [i] tbl )
     ^ & ~ crc 4294967295
 }
 
@@ -305,13 +288,10 @@ $ `bx.nu`
                 } {}
                 ( string_push_char out 10 )
                 ( bx_write out )
-                ( string_free out )
             } { = rc 1 }
-            ( vec_free [u] data )
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -342,12 +322,9 @@ $ `bx.nu`
                 } {}
                 ( string_push_char out 10 )
                 ( bx_write out )
-                ( string_free out )
             } { = rc 1 }
-            ( vec_free [u] data )
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }

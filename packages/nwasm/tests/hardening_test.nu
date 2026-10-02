@@ -23,15 +23,13 @@ $ `src/module.nu`
     : !( Vec u ) ParseErr dr ( bytes_from_hex hex )
     ?? dr {
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? . m ok {
+            : Module m ( module_decode bytes )
+            ? ( module_ok m ) {
                 ( nurl_print ` UNEXPECTEDLY ACCEPTED\n` ) = g_fail + g_fail 1
             } {
-                : String es ( bytes_to_str . m err )
+                : String es ( bytes_to_str ( module_err m ) )
                 ( nurl_print ` rejected: ` ) ( nurl_print ( string_data es ) ) ( nurl_print `\n` )
-                ( string_free es )
             }
-            ( module_free m )
         }
         F → { ( nurl_print ` (hex parse failed)\n` ) = g_fail + g_fail 1 }
     }

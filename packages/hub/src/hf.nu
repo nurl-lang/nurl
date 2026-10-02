@@ -40,18 +40,6 @@ $ `stdlib/ext/json.nu`
     b lfs
 }
 
-@ hub_ref_free sink HubRef r → v {
-    ( string_free . r url )
-    ( string_free . r repo )
-    ( string_free . r rev )
-    ( string_free . r subpath )
-}
-
-@ hub_file_free sink HubFile f → v {
-    ( string_free . f path )
-    ( string_free . f sha )
-}
-
 @ hub_hf_endpoint → String {
     : ?String ov ( env_get `HF_ENDPOINT` )
     ?? ov {
@@ -91,10 +79,8 @@ $ `stdlib/ext/json.nu`
     // strip a leading hf.co/
     : ~ String body ( string_new )
     ? != ( nurl_str_starts ref `hf.co/` ) 0 {
-        ( string_free body )
         = body ( __hub_slice ref 6 ( nurl_str_len ref ) )
     } {
-        ( string_free body )
         = body ( string_from ref )
     }
     : s bd ( string_data body )
@@ -107,17 +93,13 @@ $ `stdlib/ext/json.nu`
     : i at ( __hub_idx bd 0 64 )
     ? >= at 0 {
         // org/repo @ rev [/ subpath]
-        ( string_free repo )
         = repo ( __hub_slice bd 0 at )
         : i afterat + at 1
         : i sl ( __hub_idx bd afterat 47 )
         ? >= sl 0 {
-            ( string_free rev )
             = rev ( __hub_slice bd afterat sl )
-            ( string_free subpath )
             = subpath ( __hub_slice bd + sl 1 n )
         } {
-            ( string_free rev )
             = rev ( __hub_slice bd afterat n )
         }
     } {
@@ -126,20 +108,15 @@ $ `stdlib/ext/json.nu`
         ? >= s1 0 {
             : i s2 ( __hub_idx bd + s1 1 47 )
             ? >= s2 0 {
-                ( string_free repo )
                 = repo ( __hub_slice bd 0 s2 )
-                ( string_free subpath )
                 = subpath ( __hub_slice bd + s2 1 n )
             } {
-                ( string_free repo )
                 = repo ( string_from bd )
             }
         } {
-            ( string_free repo )
             = repo ( string_from bd )
         }
     }
-    ( string_free body )
     ^ @ HubRef { F ( string_new ) repo rev subpath }
 }
 
@@ -148,7 +125,6 @@ $ `stdlib/ext/json.nu`
     ? . r is_url { ^ ( string_from ( string_data . r url ) ) } {}
     : String ep ( hub_hf_endpoint )
     : String out ( string_from ( string_data ep ) )
-    ( string_free ep )
     ( string_push_char out 47 )
     ( string_push_str out ( string_data . r repo ) )
     ( string_push_str out `/resolve/` )
@@ -215,7 +191,7 @@ $ `stdlib/ext/json.nu`
                             ? isfile {
                                 : ~ String path ( string_new )
                                 ?? ( json_obj_get e `path` ) {
-                                    T pj → { ( string_free path ) = path ( string_from ( json_str_data pj ) ) }
+                                    T pj → { = path ( string_from ( json_str_data pj ) ) }
                                     F → {}
                                 }
                                 : ~ i size 0
@@ -229,7 +205,7 @@ $ `stdlib/ext/json.nu`
                                     T lj → {
                                         = lfs T
                                         ?? ( json_obj_get lj `oid` ) {
-                                            T oj → { ( string_free sha ) = sha ( string_from ( json_str_data oj ) ) }
+                                            T oj → { = sha ( string_from ( json_str_data oj ) ) }
                                             F → {}
                                         }
                                     }
@@ -238,8 +214,6 @@ $ `stdlib/ext/json.nu`
                                 ? > ( string_len path ) 0 {
                                     ( vec_push [HubFile] out @ HubFile { path sha size lfs } )
                                 } {
-                                    ( string_free path )
-                                    ( string_free sha )
                                 }
                             } {}
                         }
@@ -248,7 +222,6 @@ $ `stdlib/ext/json.nu`
                     = k + k 1
                 }
             } {}
-            ( json_free j )
         }
         F _ → {}
     }
@@ -259,7 +232,6 @@ $ `stdlib/ext/json.nu`
     : ( Vec HubFile ) out ( vec_new [HubFile] )
     : String ep ( hub_hf_endpoint )
     : ~ String url ( string_from ( string_data ep ) )
-    ( string_free ep )
     ( string_push_str url `/api/models/` )
     ( string_push_str url ( string_data . r repo ) )
     ( string_push_str url `/tree/` )
@@ -284,42 +256,31 @@ $ `stdlib/ext/json.nu`
                     ~ < k hc {
                         : String hn ( string_from ( http_header_name resp k ) )
                         : String hl ( string_to_lower hn )
-                        ( string_free hn )
                         ? ( nurl_str_eq ( string_data hl ) `link` ) {
-                            ( string_free next )
                             = next ( __hub_link_next ( http_header_value resp k ) )
                         } {}
-                        ( string_free hl )
                         = k + k 1
                     }
                     ? > ( string_len next ) 0 {
-                        ( string_free url )
                         = url next
                     } {
                         = more F
-                        ( string_free next )
                     }
                 } {
                     = ok F
-                    ( string_free err )
                     = err ( string_from `hub: cannot list the repository (HTTP ` )
                     ( string_push_int err st )
                     ( string_push_str err `) — check the org/repo and revision` )
                 }
-                ( response_free resp )
             }
             F _ → {
                 = ok F
-                ( string_free err )
                 = err ( string_from `hub: cannot reach Hugging Face to list the repository` )
             }
         }
     }
-    ( string_free url )
     ? ok {
-        ( string_free err )
         ^ @ !( Vec HubFile ) String { T out }
     } {}
-    ( vec_free_with [HubFile] out \ HubFile f → v { ( hub_file_free f ) } )
     ^ @ !( Vec HubFile ) String { F err }
 }

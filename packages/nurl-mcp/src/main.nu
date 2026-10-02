@@ -70,7 +70,6 @@ $ `deps/wasmbuilder/src/build.nu`
     ( string_push_char b 32 )
     ( string_push_str b suffix )
     ( mcp_log ( string_data b ) )
-    ( string_free b )
 }
 
 // ── Temp-file plumbing ──────────────────────────────────────────────
@@ -91,8 +90,6 @@ $ `deps/wasmbuilder/src/build.nu`
     : String pref ( string_from ( string_data dir ) )
     ( string_push_str pref `/nurl-mcp-` )
     : b r ? != ( nurl_str_starts path ( string_data pref ) ) 0 T F
-    ( string_free dir )
-    ( string_free pref )
     ^ r
 }
 
@@ -106,14 +103,13 @@ $ `deps/wasmbuilder/src/build.nu`
     ( string_push_int p nm_seq )
     ( string_push_str p suffix )
     = nm_seq + nm_seq 1
-    ( string_free dir )
     ^ p
 }
 
 @ nm_unlink s path → v {
     : !Output ProcessErr r ( process_run2 `rm` `-f` path )
     ?? r {
-        T o → ( output_free o )
+        T o → {}
         F e → {}
     }
 }
@@ -125,7 +121,6 @@ $ `deps/wasmbuilder/src/build.nu`
     : String ll ( string_from base )
     ( string_push_str ll `.ll` )
     ( nm_unlink ( string_data ll ) )
-    ( string_free ll )
 }
 
 // Resolve a tool's input to a .nu file path (owned String) the compiler can
@@ -144,7 +139,7 @@ $ `deps/wasmbuilder/src/build.nu`
             : !v IoErr wr ( write_file ( string_data tmp ) ( json_str_data sv ) )
             ?? wr {
                 T → { ^ @ ?String { T tmp } }
-                F e → { ( string_free tmp ) ^ @ ?String { F } }
+                F e → { ^ @ ?String { F } }
             }
         }
         F → {}
@@ -173,7 +168,6 @@ $ `deps/wasmbuilder/src/build.nu`
         ( string_push_str msg ( output_stdout o ) )
     } {}
     : Json j ( mcp_tool_result_error ( string_data msg ) )
-    ( string_free msg )
     ^ j
 }
 
@@ -182,7 +176,6 @@ $ `deps/wasmbuilder/src/build.nu`
     ( string_push_str m ( process_err_name e ) )
     ( string_push_str m ` — is "nurl"/"nurlc"/"nurlfmt" on $PATH? (install via tools/install-toolchain.sh)` )
     : Json j ( mcp_tool_result_error ( string_data m ) )
-    ( string_free m )
     ^ j
 }
 
@@ -198,15 +191,12 @@ $ `deps/wasmbuilder/src/build.nu`
         T p → {
             : !Output ProcessErr r ( process_run1 `nurlc` ( string_data p ) )
             ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
-            ( string_free p )
             ?? r {
                 T o → {
                     ? ( output_success o ) {
-                        ( output_free o )
                         ^ ( mcp_tool_result_text `OK — type-checks and passes the borrow checker.` )
                     } {
                         : Json j ( nm_fail_from_output `type / borrow check failed` o F )
-                        ( output_free o )
                         ^ j
                     }
                 }
@@ -227,17 +217,13 @@ $ `deps/wasmbuilder/src/build.nu`
             : String outp ( nm_tmp_path `-bin` )
             : !Output ProcessErr r ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
             ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
-            ( string_free p )
             ( nm_unlink_artifacts ( string_data outp ) )
-            ( string_free outp )
             ?? r {
                 T o → {
                     ? ( output_success o ) {
-                        ( output_free o )
                         ^ ( mcp_tool_result_text `OK — compiled successfully.` )
                     } {
                         : Json j ( nm_fail_from_output `build failed` o T )
-                        ( output_free o )
                         ^ j
                     }
                 }
@@ -272,7 +258,9 @@ $ `deps/wasmbuilder/src/build.nu`
 }
 
 // Write one workspace file, creating parent directories under `ws`.
-@ nm_ws_write s ws s rel s content * u okb → v {
+// F when a directory or the file could not be written.
+@ nm_ws_write s ws s rel s content → b {
+    : ~ b ok T
     : String full ( string_from ws )
     ( string_push_char full 47 )
     ( string_push_str full rel )
@@ -280,11 +268,10 @@ $ `deps/wasmbuilder/src/build.nu`
     : i sl ( nm_last_slash ( string_data full ) )
     ? > sl 0 {
         : String dir ( string_substr full 0 sl )
-        ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → { ( nurl_poke okb 0 0 ) } }
-        ( string_free dir )
+        ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → { = ok F } }
     } {}
-    ?? ( write_file ( string_data full ) content ) { T _ → {} F _ → { ( nurl_poke okb 0 0 ) } }
-    ( string_free full )
+    ?? ( write_file ( string_data full ) content ) { T _ → {} F _ → { = ok F } }
+    ^ ok
 }
 
 // Index of the last '/' in `p`, or 0.
@@ -300,10 +287,9 @@ $ `deps/wasmbuilder/src/build.nu`
     : String ws ( nm_tmp_path `-proj` )
     ?? ( dir_create_all ( string_data ws ) ) {
         T _ → {}
-        F _ → { ( string_free ws ) ^ ( mcp_tool_result_error `could not create a build workspace` ) }
+        F _ → { ^ ( mcp_tool_result_error `could not create a build workspace` ) }
     }
-    : *u okb ( nurl_alloc 8 )
-    ( nurl_poke okb 0 1 )
+    : ~ b ok T
     // ── nurl.toml with [dependencies] ──
     : String toml ( string_from `[package]
 name = "mcp_build"
@@ -332,13 +318,11 @@ version = "0.0.0"
                     }
                     = k + k 1
                 }
-                ( vec_free [String] keys )
             } {}
         }
         F → {}
     }
-    ( nm_ws_write ( string_data ws ) `nurl.toml` ( string_data toml ) okb )
-    ( string_free toml )
+    = ok & ok ( nm_ws_write ( string_data ws ) `nurl.toml` ( string_data toml ) )
     // ── source files ──
     : ~ b wrote_any F
     ?? ( json_obj_get args `files` ) {
@@ -350,30 +334,26 @@ version = "0.0.0"
                     : s rel ?? ( vec_get [String] fk k ) { T x → ( string_data x ) F → `` }
                     ? ( nm_safe_rel rel ) {
                         ?? ( json_obj_get fv rel ) {
-                            T cv → { ? ( json_is_str cv ) { ( nm_ws_write ( string_data ws ) rel ( json_str_data cv ) okb ) = wrote_any T } {} }
+                            T cv → { ? ( json_is_str cv ) { = ok & ok ( nm_ws_write ( string_data ws ) rel ( json_str_data cv ) ) = wrote_any T } {} }
                             F → {}
                         }
-                    } { ( nurl_poke okb 0 0 ) }
+                    } { = ok F }
                     = k + k 1
                 }
-                ( vec_free [String] fk )
             } {}
         }
         F → {}
     }
     ? wrote_any {} {
         ?? ( json_obj_get args `source` ) {
-            T sv → { ? ( json_is_str sv ) { ( nm_ws_write ( string_data ws ) `main.nu` ( json_str_data sv ) okb ) = wrote_any T } {} }
+            T sv → { ? ( json_is_str sv ) { = ok & ok ( nm_ws_write ( string_data ws ) `main.nu` ( json_str_data sv ) ) = wrote_any T } {} }
             F → {}
         }
     }
-    ? & wrote_any == ( nurl_peek okb 0 ) 1 {} {
-        ( nurl_free okb )
+    ? & wrote_any ok {} {
         ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
-        ( string_free ws )
         ^ ( mcp_tool_result_error `pass 'files' {path: content} or 'source', with safe relative paths` )
     }
-    ( nurl_free okb )
     // ── entry ──
     : ~ s entry `main.nu`
     ?? ( json_obj_get args `entry` ) {
@@ -382,7 +362,6 @@ version = "0.0.0"
     }
     ? ( nm_safe_rel entry ) {} {
         ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
-        ( string_free ws )
         ^ ( mcp_tool_result_error `bad 'entry' — a safe workspace-relative .nu path` )
     }
     // ── nurlpkg install (verified registry resolution) ──
@@ -390,20 +369,16 @@ version = "0.0.0"
     ( string_push_str icmd ( string_data ws ) )
     ( string_push_str icmd `' && nurlpkg install 2>&1` )
     : !Output ProcessErr ir ( process_run_shell ( string_data icmd ) )
-    ( string_free icmd )
     ?? ir {
         T io → {
-            ? ( output_success io ) { ( output_free io ) } {
+            ? ( output_success io ) {} {
                 : Json j ( nm_fail_from_output `dependency resolution failed (nurlpkg install)` io T )
-                ( output_free io )
                 ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
-                ( string_free ws )
                 ^ j
             }
         }
         F e → {
             ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
-            ( string_free ws )
             ^ ( nm_proc_err e )
         }
     }
@@ -417,13 +392,10 @@ version = "0.0.0"
     ( string_push_str ccmd ( string_data out ) )
     ( string_push_str ccmd `' 2>&1` )
     : !Output ProcessErr cr ( process_run_shell ( string_data ccmd ) )
-    ( string_free ccmd )
     ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
-    ( string_free ws )
     ?? cr {
         T co → {
             ? ( output_success co ) {
-                ( output_free co )
                 // The binary and its .ll stay on disk; the result carries
                 // their paths, never the bytes — a base64 binary in the
                 // tool result lands verbatim in the calling model's context.
@@ -440,31 +412,22 @@ version = "0.0.0"
                         : String hint ( string_from `run: ` )
                         ( string_push_str hint ( string_data out ) )
                         ( json_obj_set res `note` ( json_str_lit ( string_data hint ) ) )
-                        ( string_free hint )
-                        ( string_free ll_p )
-                        ( string_free out )
                         : String body ( json_stringify res )
-                        ( json_free res )
                         : Json j ( mcp_tool_result_text ( string_data body ) )
-                        ( string_free body )
                         ^ j
                     }
                     F _ → {
-                        ( string_free out )
                         ^ ( mcp_tool_result_error `compiled, but the binary could not be read back` )
                     }
                 }
             } {
                 : Json j ( nm_fail_from_output `build failed` co T )
-                ( output_free co )
                 ( nm_unlink ( string_data out ) )
-                ( string_free out )
                 ^ j
             }
         }
         F e → {
             ( nm_unlink ( string_data out ) )
-            ( string_free out )
             ^ ( nm_proc_err e )
         }
     }
@@ -495,17 +458,17 @@ version = "0.0.0"
 
             : ~ String outp ( string_new )
             : ?Json oj ( json_obj_get args `out` )
-            ?? oj { T ov → { ( string_free outp ) = outp ( string_from ( json_str_data ov ) ) } F → {} }
+            ?? oj { T ov → { = outp ( string_from ( json_str_data ov ) ) } F → {} }
             : ~ b tmp_out F
             ? == ( string_len outp ) 0 {
                 ? was_inline {
                     = tmp_out T
-                    ( string_free outp ) = outp ( nm_tmp_path `.wasm` )
+                    = outp ( nm_tmp_path `.wasm` )
                 } {
-                    ( string_free outp ) = outp ( string_from ( string_data p ) )
+                    = outp ( string_from ( string_data p ) )
                     ? ( string_ends_with outp `.nu` ) {
                         : String t ( string_substr outp 0 - ( string_len outp ) 3 )
-                        ( string_free outp ) = outp t
+                        = outp t
                     } {}
                     ( string_push_str outp `.wasm` )
                 }
@@ -519,7 +482,6 @@ version = "0.0.0"
             ? tmp_out { = . wopts keep_ll T } {}
             : !v String r ( wb_build_file ( string_data p ) ( string_data outp ) wopts )
             ? was_inline { ( nm_unlink ( string_data p ) ) } {}
-            ( string_free p )
             ?? r {
                 T _ → {
                     : !i IoErr szr ( file_size ( string_data outp ) )
@@ -537,13 +499,8 @@ version = "0.0.0"
                         : String hint ( string_from `run: nwasm run ` )
                         ( string_push_str hint ( string_data outp ) )
                         ( json_obj_set res `note` ( json_str_lit ( string_data hint ) ) )
-                        ( string_free hint )
-                        ( string_free ll_p )
-                        ( string_free outp )
                         : String body ( json_stringify res )
-                        ( json_free res )
                         : Json j ( mcp_tool_result_text ( string_data body ) )
-                        ( string_free body )
                         ^ j
                     } {
                         : String msg ( string_from `OK — wrote ` )
@@ -552,16 +509,12 @@ version = "0.0.0"
                         ( string_push_int msg sz )
                         ( string_push_str msg ` bytes of wasm32-wasi). Run it: nwasm run ` )
                         ( string_push_str msg ( string_data outp ) )
-                        ( string_free outp )
                         : Json j ( mcp_tool_result_text ( string_data msg ) )
-                        ( string_free msg )
                         ^ j
                     }
                 }
                 F e → {
-                    ( string_free outp )
                     : Json j ( mcp_tool_result_error ( string_data e ) )
-                    ( string_free e )
                     ^ j
                 }
             }
@@ -584,7 +537,6 @@ version = "0.0.0"
         ( string_push_str body ( output_stderr o ) )
     } {}
     : Json j ( mcp_tool_result_text ( string_data body ) )
-    ( string_free body )
     ^ j
 }
 
@@ -595,31 +547,24 @@ version = "0.0.0"
             : String outp ( nm_tmp_path `-bin` )
             : !Output ProcessErr br ( process_run2 `nurl` ( string_data p ) ( string_data outp ) )
             ? ( nm_is_temp ( string_data p ) ) { ( nm_unlink ( string_data p ) ) } {}
-            ( string_free p )
             ?? br {
                 T bo → {
                     ? ! ( output_success bo ) {
                         : Json j ( nm_fail_from_output `build failed` bo T )
-                        ( output_free bo )
                         ( nm_unlink_artifacts ( string_data outp ) )
-                        ( string_free outp )
                         ^ j
                     } {}
-                    ( output_free bo )
                     : !Output ProcessErr rr ( process_run0 ( string_data outp ) )
                     ( nm_unlink_artifacts ( string_data outp ) )
-                    ( string_free outp )
                     ?? rr {
                         T ro → {
                             : Json j ( nm_run_result ro )
-                            ( output_free ro )
                             ^ j
                         }
                         F e → { ^ ( nm_proc_err e ) }
                     }
                 }
                 F e → {
-                    ( string_free outp )
                     ^ ( nm_proc_err e )
                 }
             }
@@ -638,16 +583,13 @@ version = "0.0.0"
             : ( Vec s ) a ( vec_new [s] )
             ( vec_push [s] a `--stdin` )
             : !Output ProcessErr r ( process_run `nurlfmt` a ( json_str_data sv ) )
-            ( vec_free [s] a )
             ?? r {
                 T o → {
                     ? ( output_success o ) {
                         : Json j ( mcp_tool_result_text ( output_stdout o ) )
-                        ( output_free o )
                         ^ j
                     } {
                         : Json j ( nm_fail_from_output `format failed` o F )
-                        ( output_free o )
                         ^ j
                     }
                 }
@@ -664,11 +606,9 @@ version = "0.0.0"
                 T o → {
                     ? ( output_success o ) {
                         : Json j ( mcp_tool_result_text ( output_stdout o ) )
-                        ( output_free o )
                         ^ j
                     } {
                         : Json j ( nm_fail_from_output `format failed` o F )
-                        ( output_free o )
                         ^ j
                     }
                 }
@@ -685,20 +625,16 @@ version = "0.0.0"
 @ nm_tool_list_stdlib Json args → Json {
     : String root ( env_var_or `NURL_STDLIB` `` )
     ? == ( string_len root ) 0 {
-        ( string_free root )
         ^ ( mcp_tool_result_error `NURL_STDLIB is not set — run via the installed toolchain shims, or export it manually` )
     } {}
     : !Output ProcessErr r ( process_run3 `find` ( string_data root ) `-name` `*.nu` )
-    ( string_free root )
     ?? r {
         T o → {
             ? ( output_success o ) {
                 : Json j ( mcp_tool_result_text ( output_stdout o ) )
-                ( output_free o )
                 ^ j
             } {
                 : Json j ( nm_fail_from_output `listing failed` o T )
-                ( output_free o )
                 ^ j
             }
         }
@@ -730,7 +666,6 @@ version = "0.0.0"
             } {}
             : String root ( env_var_or `NURL_STDLIB` `` )
             ? == ( string_len root ) 0 {
-                ( string_free root )
                 ^ ( mcp_tool_result_error `NURL_STDLIB is not set` )
             } {}
             : String full ( string_with_cap 160 )
@@ -742,17 +677,12 @@ version = "0.0.0"
                 ( string_push_str full name )
             }
             ? == ( nurl_str_starts ( string_data full ) ( string_data root ) ) 0 {
-                ( string_free full )
-                ( string_free root )
                 ^ ( mcp_tool_result_error `path escapes the stdlib root` )
             } {}
             : !String IoErr rd ( read_file ( string_data full ) )
-            ( string_free full )
-            ( string_free root )
             ?? rd {
                 T contents → {
                     : Json j ( mcp_tool_result_text ( string_data contents ) )
-                    ( string_free contents )
                     ^ j
                 }
                 F e → { ^ ( mcp_tool_result_error `could not read that stdlib file` ) }
@@ -787,11 +717,9 @@ version = "0.0.0"
 @ nm_docs_root → String {
     : String explicit ( env_var_or `NURL_DOCS` `` )
     ? > ( string_len explicit ) 0 { ^ explicit } {}
-    ( string_free explicit )
     : String root ( nm_stdlib_root )
     ? == ( string_len root ) 0 { ^ root } {}
     : String d ( path_join ( string_data root ) `docs` )
-    ( string_free root )
     ^ d
 }
 
@@ -823,7 +751,6 @@ version = "0.0.0"
     }
     : String dd ( nm_docs_root )
     ? == ( string_len dd ) 0 {
-        ( string_free dd )
         ^ ( mcp_tool_result_error `neither NURL_DOCS nor NURL_STDLIB is set — run via the installed toolchain shims, or export NURL_DOCS to a docs/ directory` )
     } {}
 
@@ -833,18 +760,13 @@ version = "0.0.0"
         : ( Vec i ) hits ( vec_new [i] )
         ( vec_push [i] hits 0 )
         : String text ( msearch_docs_query ( string_data dd ) query hits )
-        ( vec_free [i] hits )
-        ( string_free dd )
         : Json r ( mcp_tool_result_text ( string_data text ) )
-        ( string_free text )
         ^ r
     } {}
 
     ? == ( nurl_str_len name ) 0 {
         : String listing ( msearch_docs_list ( string_data dd ) )
-        ( string_free dd )
         : Json r ( mcp_tool_result_text ( string_data listing ) )
-        ( string_free listing )
         ^ r
     } {}
 
@@ -853,67 +775,50 @@ version = "0.0.0"
     ? outline {
         : String o ( msearch_docs_outline ( string_data dd ) name )
         ? > ( string_len o ) 0 {
-            ( string_free dd )
             : Json r ( mcp_tool_result_text ( string_data o ) )
-            ( string_free o )
             ^ r
         } {}
-        ( string_free o )
     } {}
 
     // name= + section= — one section. A miss answers with the outline.
     ? > ( nurl_str_len section ) 0 {
         : String sec ( msearch_docs_section ( string_data dd ) name section )
         ? > ( string_len sec ) 0 {
-            ( string_free dd )
             : Json r ( mcp_tool_result_text ( string_data sec ) )
-            ( string_free sec )
             ^ r
         } {}
-        ( string_free sec )
         : String o2 ( msearch_docs_outline ( string_data dd ) name )
         ? > ( string_len o2 ) 0 {
-            ( string_free dd )
             : String msg ( string_with_cap + ( string_len o2 ) 128 )
             ( string_push_str msg `no section matches '` )
             ( string_push_str msg section )
             ( string_push_str msg `'. ` )
             ( string_push_str msg ( string_data o2 ) )
-            ( string_free o2 )
             : Json e ( mcp_tool_result_error ( string_data msg ) )
-            ( string_free msg )
             ^ e
         } {}
-        ( string_free o2 )
     } {}
 
     : String text ( msearch_docs_read ( string_data dd ) name offset )
     ? == ( string_len text ) 0 {
         // Unknown name → reply with what DOES exist, so the model's next
         // call is the right one instead of another guess.
-        ( string_free text )
         : String listing ( msearch_docs_list ( string_data dd ) )
-        ( string_free dd )
         : String msg ( string_with_cap + ( string_len listing ) 128 )
         ( string_push_str msg `no document matches '` )
         ( string_push_str msg name )
         ( string_push_str msg `'. ` )
         ( string_push_str msg ( string_data listing ) )
-        ( string_free listing )
         : Json e ( mcp_tool_result_error ( string_data msg ) )
-        ( string_free msg )
         ^ e
     } {}
-    ( string_free dd )
     : Json r ( mcp_tool_result_text ( string_data text ) )
-    ( string_free text )
     ^ r
 }
 
 @ nm_tool_api Json args → Json {
     : String root ( nm_stdlib_root )
     ? == ( string_len root ) 0 {
-        ( string_free root )
         ^ ( mcp_tool_result_error `NURL_STDLIB is not set — run via the installed toolchain shims, or export it manually` )
     } {}
     : ~ s module ``
@@ -941,9 +846,7 @@ version = "0.0.0"
     ? > ( nurl_str_len package ) 0 {
         : String rb0 ( msearch_default_registry )
         : String md0 ( msearch_api_package ( string_data rb0 ) package version )
-        ( string_free rb0 ) ( string_free root )
         ? == ( string_len md0 ) 0 {
-            ( string_free md0 )
             ^ ( mcp_tool_result_error `package not found or has no src/*.nu — check the name (see nurl_grep where='packages'); 'version' defaults to the latest` )
         } {}
         // Prepend the import + build recipe: the module headings below are
@@ -963,36 +866,27 @@ version = "0.0.0"
         ( string_push_str hint `/src/nn.nu).\n\n` )
         ( string_push_str hint ( string_data md0 ) )
         : Json r0 ( mcp_tool_result_text ( string_data hint ) )
-        ( string_free hint )
-        ( string_free md0 )
         ^ r0
     } {}
     ? > ( nurl_str_len module ) 0 {
         ? ( nm_has_dotdot module ) {
-            ( string_free root )
             ^ ( mcp_tool_result_error `bad 'module'` )
         } {}
         : String md ( msearch_api_module ( string_data root ) module )
-        ( string_free root )
         ? == ( string_len md ) 0 {
-            ( string_free md )
             ^ ( mcp_tool_result_error `module not found — 'module' is a path from nurl_list_stdlib, e.g. ext/csv.nu` )
         } {}
         : Json r ( mcp_tool_result_text ( string_data md ) )
-        ( string_free md )
         ^ r
     } {}
     ? == ( nurl_str_len query ) 0 {
-        ( string_free root )
         ^ ( mcp_tool_result_error `pass one of: 'module' (a stdlib path, e.g. ext/csv.nu), 'package' (a registry package name, e.g. nn), or 'query' (search terms). To read what a registry package exposes, use package=<name> (from a nurl_grep hit).` )
     } {}
     // No local examples corpus in an installed toolchain → "" skips it;
     // the registry fallback + exact-name footer still apply.
     : String rb ( msearch_default_registry )
     : String text ( msearch_api_query ( string_data root ) `` ( string_data rb ) query )
-    ( string_free rb ) ( string_free root )
     : Json r ( mcp_tool_result_text ( string_data text ) )
-    ( string_free text )
     ^ r
 }
 
@@ -1020,18 +914,14 @@ version = "0.0.0"
     : b w_packages | all >= ( nurl_str_find where_s `package` ) 0
     : ~ String root ( string_new )
     ? w_stdlib {
-        ( string_free root )
         = root ( nm_stdlib_root )
     } {}
     : ~ String rb ( string_new )
     ? w_packages {
-        ( string_free rb )
         = rb ( msearch_default_registry )
     } {}
     : String text ( msearch_grep pattern word ( string_data root ) `` `` ( string_data rb ) )
-    ( string_free root ) ( string_free rb )
     : Json r ( mcp_tool_result_text ( string_data text ) )
-    ( string_free text )
     ^ r
 }
 
@@ -1132,7 +1022,6 @@ version = "0.0.0"
     : McpServer srv ( mcp_server_new `nurl-mcp` ( nm_version ) )
     : String instr ( nm_instructions )
     ( mcp_server_set_instructions srv ( string_data instr ) )
-    ( string_free instr )
 
     ? ( nm_build_ok ) {
         ( mcp_server_add_tool_full srv `nurl_build`
@@ -1264,8 +1153,6 @@ version = "0.0.0"
     ? ! ok {
         : String u ( args_usage p )
         ( nurl_eprint ( string_data u ) )
-        ( string_free u )
-        ( args_free p )
         ^ 2
     } {}
 
@@ -1318,10 +1205,5 @@ version = "0.0.0"
         ( mcp_log `bye` )
     }
 
-    ( mcp_server_free srv )
-    ( args_free p )
-    ( string_free host )
-    ( string_free ports )
-    ( string_free token )
     ^ rc
 }

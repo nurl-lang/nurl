@@ -16,7 +16,7 @@
 //   ( heap_push      [A] h x cmp )    → v            O(log n)
 //   ( heap_pop       [A] h cmp )      → ? A          remove + return top, O(log n)
 //   ( heap_peek      [A] h )          → ? A          inspect top, no remove
-//   ( heap_free      [A] h )          → v            trivial element types
+//   ( heap_free      [A] h )          → v            early release (optional)
 //   ( heap_free_with [A] h drop )     → v   drop : (@ v A)
 
 $ `stdlib/core/vec.nu`
@@ -104,9 +104,8 @@ $ `stdlib/core/vec.nu`
     ^ @ ?A { T root }
 }
 
-@ heap_free [A] sink ( Heap A ) h → v {
-    ( vec_free [A] . h data )
-}
+// Early release: exactly what dropping `h` does (its elements go with it).
+@ heap_free [A] sink ( Heap A ) h → v {}
 
 @ heap_free_with [A] sink ( Heap A ) h ( @ v A ) drop → v {
     ( vec_free_with [A] . h data drop )

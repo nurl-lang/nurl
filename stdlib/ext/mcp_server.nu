@@ -297,10 +297,7 @@ $ `stdlib/ext/http_response.nu`
 // Borrowed; `json_is_null` when the failure carries none.
 @ mcp_rpc_err_get_data McpRpcErr e → Json { ^ . e __data }
 
-@ mcp_rpc_err_free sink McpRpcErr e → v {
-    ( string_free . e __message )
-    ( json_free . e __data )
-}
+@ mcp_rpc_err_free sink McpRpcErr e → v {}
 
 // ── Handler-bearing record types ──────────────────────────────────────
 
@@ -480,78 +477,7 @@ $ `stdlib/ext/http_response.nu`
     ?? ( vec_get [i] . r __ctl MCP_CTL_SERVING ) { T v → { ^ != v 0 } F → { ^ F } }
 }
 
-@ mcp_server_free sink McpServer r → v {
-    ( string_free . r __name )
-    ( string_free . r __version )
-    // Tools
-    : i tn ( vec_len [McpTool] . r __tools )
-    : *McpTool tp ( vec_data [McpTool] . r __tools )
-    : ~ i k 0
-    ~ < k tn {
-        : McpTool t . tp k
-        ( string_free . t name )
-        ( string_free . t description )
-        ( json_free . t input_schema )
-        ( json_free . t annotations )
-        = k + k 1
-    }
-    ( vec_free [McpTool] . r __tools )
-    // Prompts
-    : i pn ( vec_len [McpPrompt] . r __prompts )
-    : *McpPrompt pp ( vec_data [McpPrompt] . r __prompts )
-    = k 0
-    ~ < k pn {
-        : McpPrompt p . pp k
-        ( string_free . p name )
-        ( string_free . p description )
-        ( json_free . p arguments_schema )
-        = k + k 1
-    }
-    ( vec_free [McpPrompt] . r __prompts )
-    // Resources
-    : i rn ( vec_len [McpResource] . r __resources )
-    : *McpResource rp ( vec_data [McpResource] . r __resources )
-    = k 0
-    ~ < k rn {
-        : McpResource res . rp k
-        ( string_free . res uri )
-        ( string_free . res name )
-        ( string_free . res mime_type )
-        ( string_free . res description )
-        = k + k 1
-    }
-    ( vec_free [McpResource] . r __resources )
-    // Templates
-    : i wn ( vec_len [McpResourceTemplate] . r __templates )
-    : *McpResourceTemplate wp ( vec_data [McpResourceTemplate] . r __templates )
-    = k 0
-    ~ < k wn {
-        : McpResourceTemplate t . wp k
-        ( string_free . t uri_template )
-        ( string_free . t prefix )
-        ( string_free . t name )
-        ( string_free . t mime_type )
-        ( string_free . t description )
-        = k + k 1
-    }
-    ( vec_free [McpResourceTemplate] . r __templates )
-    // Completions
-    : i cn ( vec_len [McpCompletion] . r __completions )
-    : *McpCompletion cp ( vec_data [McpCompletion] . r __completions )
-    = k 0
-    ~ < k cn {
-        : McpCompletion c . cp k
-        ( string_free . c ref_type )
-        ( string_free . c ref_id )
-        = k + k 1
-    }
-    ( vec_free [McpCompletion] . r __completions )
-    ( vec_free [i] . r __ctl )
-    ( string_free . r __instructions )
-    ( string_free . r __cache_scope )
-    ( vec_free [McpTaskStore] . r __tasks )
-    ( vec_free [McpTaskHook] . r __task_hook )
-}
+@ mcp_server_free sink McpServer r → v {}
 
 // ── Registration guards ───────────────────────────────────────────────
 //
@@ -589,9 +515,9 @@ $ `stdlib/ext/http_response.nu`
 }
 
 // CONSUMES `name`, `description`, `schema`. Handler is borrowed.
-@ mcp_server_add_tool McpServer r s name s description Json schema ( @ Json Json ) handler → v {
+@ mcp_server_add_tool McpServer r s name s description sink Json schema ( @ Json Json ) handler → v {
     : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
-    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
+    ? != 0 ( nurl_str_len __why ) { ( __mcp_server_reject `tool` name __why ) ^ } {}
     : McpTool t @ McpTool {
         ( string_from name )
         ( string_from description )
@@ -611,10 +537,10 @@ $ `stdlib/ext/http_response.nu`
 // could destroy state, because an ABSENT destructiveHint defaults to
 // TRUE in the spec, so prefer this form for anything read-only.
 // CONSUMES `name`, `description`, `schema`.
-@ mcp_server_add_tool_full McpServer r s name s description Json schema
+@ mcp_server_add_tool_full McpServer r s name s description sink Json schema
 b read_only b destructive b idempotent b open_world ( @ Json Json ) handler → v {
     : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
-    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
+    ? != 0 ( nurl_str_len __why ) { ( __mcp_server_reject `tool` name __why ) ^ } {}
     : Json ann ( json_obj_new )
     ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
     ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
@@ -639,11 +565,11 @@ b read_only b destructive b idempotent b open_world ( @ Json Json ) handler → 
 // registration rather than a wider handler type: `( @ Json Json )` is
 // frozen API, and most tools neither need the context nor should pay
 // for it. CONSUMES `name`, `description`, `schema`.
-@ mcp_server_add_tool_ctx McpServer r s name s description Json schema
+@ mcp_server_add_tool_ctx McpServer r s name s description sink Json schema
 b read_only b destructive b idempotent b open_world
 ( @ Json Json McpCall ) handler → v {
     : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
-    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
+    ? != 0 ( nurl_str_len __why ) { ( __mcp_server_reject `tool` name __why ) ^ } {}
     : Json ann ( json_obj_new )
     ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
     ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
@@ -678,11 +604,11 @@ b read_only b destructive b idempotent b open_world
 // (`mcp_call_context`) — the identity that made it visible is the
 // identity it acts as. BORROWS `visible` and `handler`; CONSUMES
 // `name`, `description`, `schema`.
-@ mcp_server_add_tool_gated McpServer r s name s description Json schema
+@ mcp_server_add_tool_gated McpServer r s name s description sink Json schema
 b read_only b destructive b idempotent b open_world
 ( @ b Json ) visible ( @ Json Json McpCall ) handler → v {
     : s __why ( __mcp_server_open_err r ( __mcp_find_tool_index r name ) )
-    ? != 0 ( nurl_str_len __why ) { ( json_free schema ) ( __mcp_server_reject `tool` name __why ) ^ } {}
+    ? != 0 ( nurl_str_len __why ) { ( __mcp_server_reject `tool` name __why ) ^ } {}
     : Json ann ( json_obj_new )
     ( json_obj_set ann `readOnlyHint` ( json_bool read_only ) )
     ( json_obj_set ann `destructiveHint` ( json_bool destructive ) )
@@ -743,9 +669,9 @@ b read_only b destructive b idempotent b open_world
     ^ > ( vec_len [McpTaskStore] . r __tasks ) 0
 }
 
-@ mcp_server_add_prompt McpServer r s name s description Json args_schema ( @ Json Json ) handler → v {
+@ mcp_server_add_prompt McpServer r s name s description sink Json args_schema ( @ Json Json ) handler → v {
     : s __why ( __mcp_server_open_err r ( __mcp_find_prompt_index r name ) )
-    ? != 0 ( nurl_str_len __why ) { ( json_free args_schema ) ( __mcp_server_reject `prompt` name __why ) ^ } {}
+    ? != 0 ( nurl_str_len __why ) { ( __mcp_server_reject `prompt` name __why ) ^ } {}
     : McpPrompt p @ McpPrompt {
         ( string_from name )
         ( string_from description )
@@ -998,7 +924,7 @@ b read_only b destructive b idempotent b open_world
             }
             : ?Json ag ( json_obj_get p `arguments` )
             ?? ag {
-                T jag → { ( json_free args ) = args ( json_clone jag ) }
+                T jag → { = args ( json_clone jag ) }
                 F _ → {}
             }
         }
@@ -1015,7 +941,6 @@ b read_only b destructive b idempotent b open_world
         ? ! ( __mcp_tool_visible . tp0 idx . call __ctx ) { = idx -1 } {}
     } {}
     ? < idx 0 {
-        ( json_free args )
         : String msg ( string_from `unknown tool: ` )
         ( string_push_str msg tool_name )
         : Json out ( mcp_tool_result_error ( string_data msg ) )
@@ -1044,12 +969,11 @@ b read_only b destructive b idempotent b open_world
         T _ → {}
         F p → {
             ( mcp_log ( nurl_str_cat `tool handler panicked: ` ( string_data . p msg ) ) )
-            ( panic_info_free p )
         }
     }
     ? > ( vec_len [Json] sink ) 0 {
         : ?Json e0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
-        ?? e0 { T jv → { ( json_free result ) = result jv } F → {} }
+        ?? e0 { T jv → { = result jv } F → {} }
     } {}
     ^ result
 }
@@ -1096,7 +1020,6 @@ b read_only b destructive b idempotent b open_world
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
         }
         F _ → {}
     }
@@ -1157,7 +1080,7 @@ b read_only b destructive b idempotent b open_world
             }
             : ?Json ag ( json_obj_get p `arguments` )
             ?? ag {
-                T jag → { ( json_free args ) = args ( json_clone jag ) }
+                T jag → { = args ( json_clone jag ) }
                 F _ → {}
             }
         }
@@ -1169,7 +1092,6 @@ b read_only b destructive b idempotent b open_world
     } {}
     : i idx ( __mcp_find_prompt_index r pname )
     ? < idx 0 {
-        ( json_free args )
         : String m ( string_from `unknown prompt: ` )
         ( string_push_str m pname )
         : McpRpcErr e ( mcp_rpc_err mcp_err_invalid_params ( string_data m ) )
@@ -1187,10 +1109,8 @@ b read_only b destructive b idempotent b open_world
         T _ → {}
         F pi → {
             ( mcp_log ( nurl_str_cat `prompt handler panicked: ` ( string_data . pi msg ) ) )
-            ( panic_info_free pi )
         }
     }
-    ( json_free args )
     ? <= ( vec_len [Json] sink ) 0 {
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `prompt handler panicked` ) }
@@ -1267,23 +1187,19 @@ b read_only b destructive b idempotent b open_world
         F pi → {
             ( mcp_log ( nurl_str_cat `resource template handler panicked: `
             ( string_data . pi msg ) ) )
-            ( panic_info_free pi )
         }
     }
-    ( json_free arg )
     ? <= ( vec_len [Json] sink ) 0 {
         ^ @ !Json McpRpcErr { F ( mcp_rpc_err mcp_err_internal_error
             `resource template handler panicked` ) }
     } {}
     : ?Json c0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
     : Json content ?? c0 { T jv → jv F → ( json_null ) }
-    ( vec_free [Json] sink )
     // A handler that cannot serve this particular URI says so by
     // returning a null / non-object, which is a not-found rather than
     // an empty success — the shape nurlapi shipped, where a templated
     // read answered `{"contents":[]}` and looked like it had worked.
     ? ! ( json_is_obj content ) {
-        ( json_free content )
         : String m ( string_from `unknown resource: ` )
         ( string_push_str m uri )
         : McpRpcErr e ( mcp_rpc_err mcp_err_resource_not_found ( string_data m ) )
@@ -1350,7 +1266,6 @@ b read_only b destructive b idempotent b open_world
         T _ → {}
         F pi → {
             ( mcp_log ( nurl_str_cat `resource handler panicked: ` ( string_data . pi msg ) ) )
-            ( panic_info_free pi )
         }
     }
     ? <= ( vec_len [Json] sink ) 0 {
@@ -1359,7 +1274,6 @@ b read_only b destructive b idempotent b open_world
     } {}
     : ?Json c0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
     : Json content ?? c0 { T jv → jv F → ( json_null ) }
-    ( vec_free [Json] sink )
     // Ensure the content has the expected fields. If handler didn't
     // include `uri` / `mimeType`, splice them in from the registry.
     : ?Json have_uri ( json_obj_get content `uri` )
@@ -1422,7 +1336,7 @@ b read_only b destructive b idempotent b open_world
                 F _ → {}
             }
             : ?Json ag ( json_obj_get p `argument` )
-            ?? ag { T x → { ( json_free arg ) = arg ( json_clone x ) } F _ → {} }
+            ?? ag { T x → { = arg ( json_clone x ) } F _ → {} }
         }
         F _ → {}
     }
@@ -1444,17 +1358,14 @@ b read_only b destructive b idempotent b open_world
         T _ → {}
         F pi → {
             ( mcp_log ( nurl_str_cat `completion handler panicked: ` ( string_data . pi msg ) ) )
-            ( panic_info_free pi )
         }
     }
     ? > ( vec_len [Json] sink ) 0 {
         : ?Json e0 ( vec_remove [Json] sink 0 )  // the result leaves `sink`, owned
-        ?? e0 { T jv → { ( json_free values ) = values jv } F → {} }
+        ?? e0 { T jv → { = values jv } F → {} }
     } {}
-    ( vec_free [Json] sink )
-    ( json_free arg )
     // Defensive: a provider that returns a non-array gets an empty list.
-    ? ( json_is_arr values ) {} { ( json_free values ) = values ( json_arr_new ) }
+    ? ( json_is_arr values ) {} { = values ( json_arr_new ) }
     ^ ( __mcp_completion_envelope values )
 }
 
@@ -1577,7 +1488,6 @@ b read_only b destructive b idempotent b open_world
             ?? ( json_obj_get env `result` ) {
                 T res → {
                     : Json out ( json_clone res )
-                    ( json_free env )
                     ^ @ !Json McpRpcErr { T out }
                 }
                 F _ → {}
@@ -1600,14 +1510,13 @@ b read_only b destructive b idempotent b open_world
                     // gate. Dropping it leaves a correct code with no
                     // way to act on it.
                     ?? ( json_obj_get eo `data` ) {
-                        T dv → { ( json_free data ) = data ( json_clone dv ) }
+                        T dv → { = data ( json_clone dv ) }
                         F _ → {}
                     }
                 }
                 F _ → {}
             }
             : McpRpcErr e ( mcp_rpc_err_data code msg data )
-            ( json_free env )
             ^ @ !Json McpRpcErr { F e }
         }
         F _ → {}
@@ -1682,9 +1591,8 @@ b read_only b destructive b idempotent b open_world
             ?? resp_o {
                 T resp → { ( mcp_send_message resp ) }
                 // Notification — no response (per JSON-RPC 2.0 §4.1).
-                F e → { ( json_free e ) }
+                F e → {}
             }
-            ( json_free jr )
             ^ F
         }
         F _ → { ^ T }
@@ -1745,10 +1653,8 @@ b read_only b destructive b idempotent b open_world
     ? & is_modern ! ( mcp_version_supported req_ver ) {
         ? had_id {
             : Json resp ( mcp_unsupported_version_response id req_ver )
-            ( json_free id )
             ^ @ ?Json { T resp }
         } {
-            ( json_free id )
             ^ @ ?Json { F }
         }
     } {}
@@ -1766,13 +1672,10 @@ b read_only b destructive b idempotent b open_world
                 // The envelope clones the id into the response; this copy
                 // was for the error paths and has done its work.
                 : Json resp ( mcp_response_result id result )
-                ( json_free id )
                 ^ @ ?Json { T resp }
             } {
                 // Notification — caller (mcp_http_handler) maps this
                 // to a 202 Accepted with no body.
-                ( json_free result )
-                ( json_free id )
                 ^ @ ?Json { F }
             }
         }
@@ -1780,24 +1683,18 @@ b read_only b destructive b idempotent b open_world
             ? had_id {
                 : ~ Json resp ( json_null )
                 ? ( json_is_null ( mcp_rpc_err_get_data e ) ) {
-                    ( json_free resp )
                     = resp ( mcp_response_error id ( mcp_rpc_err_code e )
                     ( mcp_rpc_err_message e ) )
                 } {
-                    ( json_free resp )
                     = resp ( mcp_response_error_data id ( mcp_rpc_err_code e )
                     ( mcp_rpc_err_message e ) ( json_clone ( mcp_rpc_err_get_data e ) ) )
                 }
-                ( mcp_rpc_err_free e )
-                ( json_free id )
                 ^ @ ?Json { T resp }
             } {
                 // A notification cannot be answered, not even to say it
                 // failed (JSON-RPC 2.0 §4.1) — log and drop.
                 ( mcp_log ( nurl_str_cat `notification failed: `
                 ( mcp_rpc_err_message e ) ) )
-                ( mcp_rpc_err_free e )
-                ( json_free id )
                 ^ @ ?Json { F }
             }
         }
@@ -1874,7 +1771,6 @@ b read_only b destructive b idempotent b open_world
                         { = ok T } {}
                     } {}
                 } {}
-                ( string_free av )
             }
             F _ → {}
         }

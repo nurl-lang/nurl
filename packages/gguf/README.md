@@ -49,23 +49,24 @@ $ `deps/gguf/src/dequant.nu`
         ?? ( gguf_dequant_range g ti * token 576 576 ) {
             T row → {
                 // 576 little-endian f32s, ready to upload
-                ( vec_free [u] row )
             }
-            F e → { ( string_free e ) }
+            F e → { ( nurl_eprintln ( string_data e ) ) }
         }
-        ( gguf_close g )
     }
-    F e → {
-        ( nurl_eprintln ( string_data e ) )
-        ( string_free e )
-    }
+    F e → { ( nurl_eprintln ( string_data e ) ) }
 }
 ```
 
+A `Gguf` is a handle: every copy is the same open file, and the last owner
+unmaps it. Nothing is released by hand — `gguf_close`, `gw_free` and
+`gws_free` are optional early releases (a streaming writer that is let go
+of before `gws_finish` closes its file).
+
 | | |
 |---|---|
-| `gguf_open path` → `!*Gguf String` | mmap + parse (metadata and the tensor table only) |
-| `gguf_parse_bytes v` | the same, from a buffer you own |
+| `gguf_open path` → `!Gguf String` | mmap + parse (metadata and the tensor table only) |
+| `gguf_parse_bytes v` | the same, from a buffer (the `Gguf` keeps it) |
+| `gguf_kvs` / `gguf_tensors` | the metadata and tensor tables (borrowed) |
 | `gguf_kv_int_or` / `_f_or` / `_str_or` | metadata with a default |
 | `gguf_find_tensor` / `gguf_tensor_ptr` | locate a tensor; borrow its bytes in place |
 | `gguf_dequant g i` | whole tensor → little-endian f32 |

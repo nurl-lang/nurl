@@ -842,7 +842,7 @@ s host i port s token i device i unload_s → i {
         }
     } {}
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_async a 0 )
     ( http_app_body_max a 4194304 )
     ( http_app_head_max a 65536 )

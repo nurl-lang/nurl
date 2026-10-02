@@ -43,7 +43,6 @@ $ `lines.nu`
     : ~ i k n
     ~ < k width { ( string_push_char out 32 ) = k + k 1 }
     ( string_push_str out ( string_data tmp ) )
-    ( string_free tmp )
 }
 
 // 9 columns of count, then the line number in 5.
@@ -78,9 +77,9 @@ $ `lines.nu`
 // Render one source file's annotated listing. A file whose text cannot be
 // read still gets a listing: the counts are the part that matters, and a
 // missing source is not a reason to withhold them.
-@ gcovtext_render * GcovObj o i src → String {
+@ gcovtext_render GcovObj o i src → String {
     : s path ( gcov_file_path o src )
-    : *LineTab t ( lines_build o src )
+    : LineTab t ( lines_build o src )
 
     : String out ( string_with_cap 65536 )
     ( __gt_header out `Source:` path )
@@ -99,13 +98,13 @@ $ `lines.nu`
     // Functions starting on a line, chained so the walk below is one pass.
     // Several can share a line: a generic monomorphised four ways, or a
     // closure declared inside a call.
-    : i nfr / ( vec_len [i] . t fnrow ) LFN_W
+    : i nfr / ( vec_len [i] ( linetab_fnrow t ) ) LFN_W
     : ( Vec i ) fhead ( vec_new [i] )
     : ( Vec i ) ftail ( vec_new [i] )
     : ( Vec i ) fnext ( vec_new [i] )
     : ~ i k 0
     ~ < k nfr {
-        : i fline ( __gt_at . t fnrow + * k LFN_W LFN_LINE )
+        : i fline ( __gt_at ( linetab_fnrow t ) + * k LFN_W LFN_LINE )
         ( __gt_growto fhead fline )
         ( __gt_growto ftail fline )
         ( vec_push [i] fnext 0 )
@@ -120,8 +119,8 @@ $ `lines.nu`
 
     : ( Vec String ) lines ( __gt_source_lines path )
     : i nsrc ( vec_len [String] lines )
-    : i last ? > nsrc . t maxline nsrc . t maxline
-    : i nbr / ( vec_len [i] . t br ) LBR_W
+    : i last ? > nsrc ( linetab_maxline t ) nsrc ( linetab_maxline t )
+    : i nbr / ( vec_len [i] ( linetab_br t ) ) LBR_W
     : ~ i bcur 0
     : ~ i idx 0
     : ~ i l 1
@@ -129,11 +128,11 @@ $ `lines.nu`
         : ~ i slot ? < l ( vec_len [i] fhead ) ( __gt_at fhead l ) 0
         ~ > slot 0 {
             ( __gt_fn_header out o
-            ( __gt_at . t fnrow + * - slot 1 LFN_W LFN_FN ) )
+            ( __gt_at ( linetab_fnrow t ) + * - slot 1 LFN_W LFN_FN ) )
             = slot ( __gt_at fnext - slot 1 )
         }
-        : b has & < l ( vec_len [i] . t exists ) != 0 ( __gt_at . t exists l )
-        ( __gt_gutter out has ? has ( __gt_at . t count l ) 0 l )
+        : b has & < l ( vec_len [i] ( linetab_exists t ) ) != 0 ( __gt_at ( linetab_exists t ) l )
+        ( __gt_gutter out has ? has ( __gt_at ( linetab_count t ) l ) 0 l )
         ?? ( vec_get [String] lines - l 1 ) {
             T text → ( string_push_str out ( string_data text ) )
             F _ → {}
@@ -142,14 +141,14 @@ $ `lines.nu`
         // Branch rows arrive in ascending line order, so one cursor walks
         // them alongside the source.
         = idx 0
-        ~ & < bcur nbr == l ( __gt_at . t br + * bcur LBR_W LBR_LINE ) {
+        ~ & < bcur nbr == l ( __gt_at ( linetab_br t ) + * bcur LBR_W LBR_LINE ) {
             ( string_push_str out `branch ` )
             ( __gt_pad_int out idx 2 )
-            ? == 0 ( __gt_at . t br + * bcur LBR_W LBR_TOTAL ) {
+            ? == 0 ( __gt_at ( linetab_br t ) + * bcur LBR_W LBR_TOTAL ) {
                 ( string_push_str out ` never executed` )
             } {
                 ( string_push_str out ` taken ` )
-                ( string_push_int out ( __gt_at . t br + * bcur LBR_W LBR_COUNT ) )
+                ( string_push_int out ( __gt_at ( linetab_br t ) + * bcur LBR_W LBR_COUNT ) )
             }
             ( string_push_char out 10 )
             = idx + idx 1
@@ -158,11 +157,6 @@ $ `lines.nu`
         = l + l 1
     }
 
-    ( vec_free [i] fhead )
-    ( vec_free [i] ftail )
-    ( vec_free [i] fnext )
-    ( __gt_free_lines lines )
-    ( linetab_free t )
     ^ out
 }
 
@@ -170,7 +164,7 @@ $ `lines.nu`
 // of its body ran. "returned" counts the traffic INTO the exit block
 // rather than that block's own solved count: an abnormal exit can leave
 // the block unreachable while its incoming arcs are perfectly well known.
-@ __gt_fn_header String out * GcovObj o i fi → v {
+@ __gt_fn_header String out GcovObj o i fi → v {
     : i nb ( gcov_fn_nblocks o fi )
     : i entry ( gcov_block_count o fi 0 )
     : ~ i exitc 0
@@ -213,6 +207,8 @@ $ `lines.nu`
     ^ ?? ( read_file path ) {
         T text → {
             : ( Vec String ) v ( __gt_split_lines ( string_data text ) )
+            // Not redundant yet: the compiler does not drop an arm's binding
+            // when a value-producing `??` over a call yields another value.
             ( string_free text )
             v
         }
@@ -241,14 +237,4 @@ $ `lines.nu`
 @ __gt_slice s text i from i len → String {
     : *u at # *u + # i text from
     ^ ( string_from_bytes at len )
-}
-
-@ __gt_free_lines ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [String] v i ) { T s → ( string_free s ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [String] v )
 }

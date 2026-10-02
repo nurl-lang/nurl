@@ -16,22 +16,20 @@ $ `src/work.nu`
     : ( Vec u ) key ( token_key `test-token` )
     : ( @ ( Vec u ) ( Vec u ) ) h ( kernel_handler key )
     : ( Vec u ) eb ( bytes_from_str expr )
-    : ( Vec s ) cs ( shard lo hi n )
+    : ( Vec Chunk ) cs ( shard lo hi n )
     : ~ i acc ( red_id op )
     : ~ i k 0
     ~ < k n {
-        : *Chunk c # *Chunk ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
+        : Chunk c ?? ( vec_get [Chunk] cs k ) { T x → x F → @ Chunk { 0 0 } }
         : ( Vec u ) pl ( chunk_payload op 0 . c lo . c hi eb )
         : ( Vec u ) tagged ( token_tag key pl )
         : ( Vec u ) r ( h tagged )
         ?? ( token_untag key r ) {
-            T body → { = acc ( red_combine op acc ( result_decode body ) ) ( vec_free [u] body ) }
+            T body → { = acc ( red_combine op acc ( result_decode body ) ) }
             F → {}
         }
-        ( vec_free [u] r ) ( vec_free [u] tagged ) ( vec_free [u] pl )
         = k + k 1
     }
-    ( shard_free cs ) ( vec_free [u] eb ) ( vec_free [u] key )
     ^ acc
 }
 
@@ -41,22 +39,20 @@ $ `src/work.nu`
     : ( Vec u ) key ( token_key `test-token` )
     : ( @ ( Vec u ) ( Vec u ) ) h ( kernel_handler key )
     : ( Vec u ) eb ( bytes_from_str expr )
-    : ( Vec s ) cs ( shard lo hi n )
+    : ( Vec Chunk ) cs ( shard lo hi n )
     : ~ f acc ( red_id_f op )
     : ~ i k 0
     ~ < k n {
-        : *Chunk c # *Chunk ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
+        : Chunk c ?? ( vec_get [Chunk] cs k ) { T x → x F → @ Chunk { 0 0 } }
         : ( Vec u ) pl ( chunk_payload op 1 . c lo . c hi eb )
         : ( Vec u ) tagged ( token_tag key pl )
         : ( Vec u ) r ( h tagged )
         ?? ( token_untag key r ) {
-            T body → { = acc ( red_combine_f op acc ( bits_to_f64 ( result_decode body ) ) ) ( vec_free [u] body ) }
+            T body → { = acc ( red_combine_f op acc ( bits_to_f64 ( result_decode body ) ) ) }
             F → {}
         }
-        ( vec_free [u] r ) ( vec_free [u] tagged ) ( vec_free [u] pl )
         = k + k 1
     }
-    ( shard_free cs ) ( vec_free [u] eb ) ( vec_free [u] key )
     ^ acc
 }
 

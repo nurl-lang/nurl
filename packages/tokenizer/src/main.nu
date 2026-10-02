@@ -26,7 +26,6 @@ $ `src/hf.nu`
                 : String m ( string_new )
                 ( string_push_int m id )
                 ( nurl_print ( string_data m ) )
-                ( string_free m )
             }
             F → {}
         }
@@ -48,20 +47,16 @@ $ `src/hf.nu`
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  encode <vocab.json> <merges.txt> <text>\n  decode <vocab.json> <merges.txt> <id> [id …]\n  vocab  <vocab.json> <merges.txt> [n]\n` )
-        ( string_free u )
-        ( args_free p )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 2 {
         ( nurl_eprintln `usage: tokenizer <encode|decode|vocab> <tokenizer.json> … (tokenizer --help)` )
-        ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -84,7 +79,6 @@ $ `src/hf.nu`
                 ?? ( vec_get [String] pos 2 ) { T c → { = text ( string_data c ) } F → {} }
                 : ( Vec i ) ids ( tok_encode t text ! ( args_present p `no-special` ) )
                 ( __print_ids ids )
-                ( vec_free [i] ids )
             } {}
             ? ( nurl_str_eq cmd `decode` ) {
                 : ( Vec i ) ids ( vec_new [i] )
@@ -104,8 +98,6 @@ $ `src/hf.nu`
                 : ( Vec u ) b ( tok_decode t ids )
                 ( __tkcli_out b )
                 ( nurl_print `\n` )
-                ( vec_free [u] b )
-                ( vec_free [i] ids )
             } {}
             ? ( nurl_str_eq cmd `vocab` ) {
                 : ~ i n 20
@@ -122,22 +114,16 @@ $ `src/hf.nu`
                     ( string_push_int m k )
                     ( string_push_char m 9 )
                     ( nurl_print ( string_data m ) )
-                    ( string_free m )
                     : ( Vec u ) b ( tok_piece t k )
                     ( __tkcli_out b )
-                    ( vec_free [u] b )
                     ( nurl_print `\n` )
                     = k + k 1
                 }
             } {}
-            ( tok_free t )
-            ( args_free p )
             ^ rc
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
-            ( args_free p )
             ^ 1
         }
     }

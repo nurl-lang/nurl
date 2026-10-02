@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** `gk_open` / `gk_open_best` return a
+`GpuKit` handle instead of a `*GpuKit` pointer: every copy of it is the same
+kit, and its last owner releases the cached kernels, the device-memory pool
+and the device (`gk_close` is an optional early release). Callers change
+`*GpuKit` to `GpuKit`; code that read the kit's device (`. kit gpu`) uses
+`gk_gpu kit`.
+
+A `GkBuf` owns its block: `GkBuf { i dptr i n i dtype GkMem mem }`, where
+`dptr` / `n` / `dtype` stay plain fields and `mem` holds the block and the
+kit. Its last owner — the buffer, a copy in a struct or a Vec, a view —
+hands the block back to the pool (`gk_dbuf_free` is an optional early
+release), and the device outlives every buffer allocated on it. New:
+`gk_buf_none dtype` (the empty buffer, for `@ GkBuf { 0 0 dt }`),
+`gk_buf_view b off n` and `gk_buf_view_as b byte_off n dtype` (views that
+keep the block alive, for `@ GkBuf { + . b dptr … }`), `gk_buf_wrap dptr n
+dtype` (unowned, over device memory something else owns).
+
+The pool moved into the kit: each kit's table owns its blocks (as
+`GpuBuffer`s, freed with the kit, in the kit's own context), so a block can
+never be handed out of a context that is gone or of another device's kit.
+`gk_pool_count` / `gk_pool_idle_bytes` still sum every kit. The profiler's
+event pair is the kit's too. Requires the gpu package's self-releasing
+handles (`GpuBuffer`, `GpuKernel`, `GpuTimer`, `GpuHost`).
+
 ## 0.8.1
 
 `gk_close` now forgets the device it closed.

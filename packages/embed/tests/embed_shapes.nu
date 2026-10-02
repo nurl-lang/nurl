@@ -31,7 +31,7 @@ $ `src/model.nu`
     ^ s
 }
 
-@ __kernels * Embed e → i { ^ ( vec_len [GkKernelEntry] . . e kit cache ) }
+@ __kernels * Embed e → i { ^ ( gk_kernel_count . e kit ) }
 
 // Embed one text of `nw` words; T on success.
 @ __run * Embed e i nw ( Vec f ) out → b {

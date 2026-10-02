@@ -11,8 +11,7 @@
 //
 //   ( tar_entry_file path data )   → TarEntry      regular-file member
 //   ( tar_entry_dir  path )        → TarEntry      directory member
-//   ( tar_entry_free e )           → v
-//   ( tar_entries_free entries )   → v             free a parsed Vec
+//   ( tar_entries_free entries )   → v             early release (optional)
 //
 //   ( tar_create entries )         → ! ( Vec u ) TarErr   entries → archive bytes
 //   ( tar_parse  archive )         → ! ( Vec TarEntry ) TarErr   bytes → entries (in-memory)
@@ -87,21 +86,9 @@ $ `stdlib/std/fs.nu`
     ^ @ TarEntry { ( string_from path ) 493 0 0 53 ( vec_new [u] ) }
 }
 
-@ tar_entry_free sink TarEntry e → v {
-    ( string_free . e path )
-    ( vec_free [u] . e data )
-}
-
-@ tar_entries_free sink ( Vec TarEntry ) entries → v {
-    : i n ( vec_len [TarEntry] entries )
-    : ~ i k 0
-    ~ < k n {
-        : ?TarEntry eo ( vec_get [TarEntry] entries k )
-        ?? eo { T e → ( tar_entry_free e ) F → {} }
-        = k + k 1
-    }
-    ( vec_free [TarEntry] entries )
-}
+// Let go of `entries` now rather than at the end of its owner's scope (a
+// TarEntry is a value holding a String and a Vec: the Vec drops them).
+@ tar_entries_free sink ( Vec TarEntry ) entries → v {}
 
 // ── Low-level byte helpers ────────────────────────────────────────────
 
@@ -185,11 +172,8 @@ $ `stdlib/std/fs.nu`
         ( string_push_str full ( string_data prefix ) )
         ( string_push_char full 47 )
         ( string_push_str full ( string_data name ) )
-        ( string_free name )
-        ( string_free prefix )
         ^ full
     } {}
-    ( string_free prefix )
     ^ name
 }
 
@@ -289,7 +273,6 @@ $ `stdlib/std/fs.nu`
                 } {}
                 : ( Vec u ) hdr ( __tar_build_header e )
                 ( bytes_extend_bytes out hdr )
-                ( vec_free [u] hdr )
                 : i is_dir ? == . e typeflag 53 1 0
                 ? == is_dir 0 {
                     : i sz ( vec_len [u] . e data )
@@ -318,17 +301,14 @@ $ `stdlib/std/fs.nu`
             = done 1
         } {
             ? ! ( __tar_has_magic p base ) {
-                ( tar_entries_free out )
                 ^ @ !( Vec TarEntry ) TarErr { F # TarErr TarBadHeader }
             } {}
             ? ! ( __tar_verify_chksum p base ) {
-                ( tar_entries_free out )
                 ^ @ !( Vec TarEntry ) TarErr { F # TarErr TarBadChecksum }
             } {}
             : i size ( __tar_read_octal p + base 124 12 )
             : i dstart + base 512
             ? > + dstart size total {
-                ( tar_entries_free out )
                 ^ @ !( Vec TarEntry ) TarErr { F # TarErr TarTruncated }
             } {}
             : i mode ( __tar_read_octal p + base 100 8 )
@@ -408,7 +388,6 @@ $ `stdlib/std/fs.nu`
         F e → { ^ @ !i TarErr { F e } }
         T entries → {
             : !i TarErr result ( tar_unpack_entries entries dest )
-            ( tar_entries_free entries )
             ^ result
         }
     }
@@ -449,9 +428,7 @@ $ `stdlib/std/fs.nu`
                         }
                         F _ → { = ok F }
                     }
-                    ( string_free parent )
                 }
-                ( string_free full )
                 ? ! ok { ^ @ !i TarErr { F TarIoError } } {}
                 = count + count 1
             }

@@ -168,7 +168,6 @@ $ `stdlib/core/posix.nu`  // read / write / close / posix_const / errno
 @ unix_close_listener UnixListener l → v {
     : i _c ( close . l fd )
     : i32 _u ( unlink ( string_data . l path ) )
-    ( string_free . l path )
 }
 
 // ── connect / socketpair ────────────────────────────────────────────

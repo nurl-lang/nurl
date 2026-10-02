@@ -21,7 +21,6 @@ $ `stdlib/std/url.nu`
         T url → {
             : s scheme ( string_data . url scheme )
             ? | ! | != 0 ( nurl_str_eq scheme `http` ) != 0 ( nurl_str_eq scheme `https` ) > ( string_len . url userinfo ) 0 {
-                ( url_free url )
                 ^ @ ?String { F ( string_new ) }
             } {}
             : String out ( string_with_cap + n 2 )
@@ -32,7 +31,6 @@ $ `stdlib/std/url.nu`
             ? ipv6 { ( string_push_char out 91 ) } {}
             ( string_push_str out ( string_data host ) )
             ? ipv6 { ( string_push_char out 93 ) } {}
-            ( string_free host )
             ? & >= . url port 0 != . url port ( url_default_port scheme ) {
                 ( string_push_char out 58 )
                 ( string_push_int out . url port )
@@ -40,7 +38,6 @@ $ `stdlib/std/url.nu`
             ( string_push_str out ( string_data . url path ) )
             : i len ( string_len out )
             ? != ( nurl_str_at ( string_data out ) len - len 1 ) 47 { ( string_push_char out 47 ) } {}
-            ( url_free url )
             ^ @ ?String { T out }
         }
     }

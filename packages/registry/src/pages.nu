@@ -73,12 +73,11 @@ nurlpkg publish</pre>`
 
 // Render one embedded template with the shared chrome partial in scope.
 @ __reg_render s tsrc Json ctx → String {
-    : *TplSet ts ( tset_new )
+    : TplSet ts ( tset_new )
     ( tset_add ts `head` ( __reg_tpl_head ) )
     : ~ String out ( string_new )
     ?? ( tpl_render_with ts tsrc ctx ) {
         T html → {
-            ( string_free out )
             = out html
         }
         F err → {
@@ -87,10 +86,8 @@ nurlpkg publish</pre>`
             ( string_push_str out `<h1>template error</h1><pre>` )
             ( string_push_str out ( string_data err ) )
             ( string_push_str out `</pre>` )
-            ( string_free err )
         }
     }
-    ( tset_free ts )
     ^ out
 }
 
@@ -178,7 +175,6 @@ nurlpkg publish</pre>`
         = k + k 1
     }
     ? ! ( reg_name_valid ( string_data out ) ) {
-        ( string_free out )
         ^ ( string_new )
     } {}
     ^ out
@@ -192,13 +188,10 @@ nurlpkg publish</pre>`
     ? > ( string_len sib ) 0 {
         : String out ( string_from `/packages/` )
         ( string_push_str out ( string_data sib ) )
-        ( string_free sib )
         ^ out
     } {}
-    ( string_free sib )
     : String norm ( reg_relpath_norm url )
     ? == ( string_len norm ) 0 {
-        ( string_free norm )
         ^ ( string_new )
     } {}
     : String out ( string_from `/files/` )
@@ -207,7 +200,6 @@ nurlpkg publish</pre>`
     ( string_push_str out version )
     ( string_push_char out 47 )
     ( string_push_str out ( string_data norm ) )
-    ( string_free norm )
     ^ out
 }
 
@@ -251,8 +243,6 @@ nurlpkg publish</pre>`
             } {
                 ( string_push_str out ( string_data val ) )
             }
-            ( string_free repl )
-            ( string_free val )
             = k e
         } {
             ( string_push_char out c )
@@ -267,6 +257,5 @@ nurlpkg publish</pre>`
     ? == ( nurl_str_len md ) 0 { ^ ( string_new ) } {}
     : String html ( md_to_html md )
     : String out ( reg_readme_rewrite_links ( string_data html ) name version )
-    ( string_free html )
     ^ out
 }

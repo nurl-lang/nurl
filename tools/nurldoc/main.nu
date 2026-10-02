@@ -43,8 +43,6 @@ $ `stdlib/ext/nurldoc.nu`
         T content → {
             : String stem ( __stem path )
             : String md ( nurldoc_render ( string_data content ) ( string_data stem ) )
-            ( string_free stem )
-            ( string_free content )
             ^ md
         }
         F _ → ( string_with_cap 1 )
@@ -66,14 +64,11 @@ $ `stdlib/ext/nurldoc.nu`
     ? & < argc 3 == 1 ( nurl_path_type src ) {
         : String md ( __render_file src )
         ( nurl_print ( string_data md ) )
-        ( string_free md )
-        ( string_free a1 )
         ^ 0
     } {}
 
     ? < argc 3 {
         ( nurl_eprintln `nurldoc: directory mode needs an <out-dir>` )
-        ( string_free a1 )
         ^ 1
     } {}
     : String a2 ( env_arg 2 )
@@ -87,7 +82,6 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_str pat src )
     ( string_push_str pat `/**/*.nu` )
     : !( Vec String ) IoErr gr ( fs_glob ( string_data pat ) )
-    ( string_free pat )
     : ~ i count 0
     ?? gr {
         T files → {
@@ -112,21 +106,16 @@ $ `stdlib/ext/nurldoc.nu`
                             T _ → { = count + count 1 }
                             F _ → ( nurl_eprintln ( string_data opath ) )
                         }
-                        ( string_free opath ) ( string_free stem ) ( string_free md )
-                        ( string_free f )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] files )
         }
         F _ → ( nurl_eprintln `nurldoc: glob failed` )
     }
     ( nurl_print `nurldoc: wrote ` )
     ( nurl_print ( nurl_str_int count ) )
     ( nurl_print ` files\n` )
-    ( string_free a2 )
-    ( string_free a1 )
     ^ 0
 }

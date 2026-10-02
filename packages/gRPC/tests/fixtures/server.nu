@@ -5,11 +5,6 @@ $ `stdlib/core/io.nu`
 
 : TestCall { i id String method ( Vec u ) aggregate i count }
 
-@ test_call_free sink TestCall call → v {
-    ( string_free . call method )
-    ( vec_free [u] . call aggregate )
-}
-
 @ find_call ( Vec TestCall ) calls i id → i {
     : ~ i k 0
     ~ < k ( vec_len [TestCall] calls ) {
@@ -23,14 +18,12 @@ $ `stdlib/core/io.nu`
 @ handle inout GrpcServer server ( Vec TestCall ) calls GrpcServerEvent event i encoding → !v GrpcError {
     : i id . event stream_id
     : ( Vec Header ) empty ( grpc_metadata_new )
-    ; { ( grpc_metadata_free empty ) }
     ? == . event kind ( grpc_server_event_open ) {
         : s method ( string_data . event method )
         ? != ( nurl_str_eq method `/test.Echo/Error` ) 0 {
             : GrpcStatus status ( grpc_status GRPC_INVALID_ARGUMENT `bad % ä` )
             ?? ( proto_write_int32 . status details 1 # i32 3 ) { T _ → {} F _ → ( nurl_exit 8 ) }
             : !v GrpcError result ( grpc_server_finish server id status empty )
-            ( grpc_status_free status )
             ^ result
         } {}
         ? ! | | != ( nurl_str_eq method `/test.Echo/Unary` ) 0 != ( nurl_str_eq method `/test.Echo/ServerStream` ) 0
@@ -38,7 +31,6 @@ $ `stdlib/core/io.nu`
         | != ( nurl_str_eq method `/test.Echo/Bidi` ) 0 != ( nurl_str_eq method `/test.Echo/Slow` ) 0 {
             : GrpcStatus status ( grpc_status GRPC_UNIMPLEMENTED `unknown method` )
             : !v GrpcError result ( grpc_server_finish server id status empty )
-            ( grpc_status_free status )
             ^ result
         } {}
         \ ( grpc_server_send_metadata server id . event metadata encoding )
@@ -70,7 +62,6 @@ $ `stdlib/core/io.nu`
         : GrpcStatus status ( grpc_status GRPC_OK `` )
         \ ( grpc_metadata_add empty `finished` `yes` )
         : !v GrpcError result ( grpc_server_finish server id status empty )
-        ( grpc_status_free status )
         // The removed call is dropped here.
         ( vec_remove [TestCall] calls index )
         ^ result
@@ -84,7 +75,7 @@ $ `stdlib/core/io.nu`
 @ serve TcpConn tcp i encoding → i {
     : !GrpcServer GrpcError made ( grpc_server_new tcp ( grpc_server_limits ) )
     ?? made {
-        F e → { ( grpc_error_free e ) ^ 1 }
+        F e → { ^ 1 }
         T value → {
             : ~ GrpcServer server value
             : ( Vec TestCall ) calls ( vec_new [TestCall] )
@@ -92,20 +83,17 @@ $ `stdlib/core/io.nu`
             : ~ i result 0
             ~ ! done {
                 ?? ( grpc_server_next server ) {
-                    F e → { ( nurl_eprintln ( string_data . e message ) ) ( grpc_error_free e ) = result 1 = done T }
+                    F e → { ( nurl_eprintln ( string_data . e message ) ) = result 1 = done T }
                     T event → {
                         ? == . event kind ( grpc_server_event_closed ) { = done T } {
                             ?? ( handle server calls event encoding ) {
-                                F e → { ( nurl_eprintln ( string_data . e message ) ) ( grpc_error_free e ) = result 1 = done T }
+                                F e → { ( nurl_eprintln ( string_data . e message ) ) = result 1 = done T }
                                 T _ → {}
                             }
                         }
-                        ( grpc_server_event_free event )
                     }
                 }
             }
-            ( vec_free_with [TestCall] calls \ TestCall call → v { ( test_call_free call ) } )
-            ( grpc_server_free server )
             ^ result
         }
     }
@@ -124,7 +112,6 @@ $ `stdlib/core/io.nu`
         T listener → {
             : String address ( tcp_local_addr listener )
             ( nurl_print ( string_data address ) ) ( nurl_print `\n` ) ( flush )
-            ( string_free address )
             : ~ i result 0
             ?? ( tcp_accept listener ) {
                 T tcp → { = result ( serve tcp encoding ) ( tcp_close_conn tcp ) }

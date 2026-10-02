@@ -176,12 +176,11 @@ $ `deps/wasmbuilder/src/build.nu`
 // Build a human-readable compile error from the build API's JSON body.
 @ __build_error Json j → String {
     : ~ String msg ( __json_field j `message` )
-    ? == ( string_len msg ) 0 { ( string_free msg ) = msg ( string_from `wasm build failed` ) } {}
+    ? == ( string_len msg ) 0 { = msg ( string_from `wasm build failed` ) } {}
     : ?Json ne ( json_obj_get j `nurlc_errors` )
     ?? ne { T v → { ( string_push_str msg ` ` ) ( string_push_str msg ( string_data ( json_stringify v ) ) ) } F → {} }
     : String cs ( __json_field j `clang_stderr` )
     ? > ( string_len cs ) 0 { ( string_push_str msg ` ` ) ( string_push_str msg ( string_data cs ) ) } {}
-    ( string_free cs )
     ^ msg
 }
 
@@ -211,17 +210,15 @@ $ `deps/wasmbuilder/src/build.nu`
             ( nurl_eprint `\nswarm-mcp: falling back to the build API at ` )
             : String bu ( build_api_url )
             ( nurl_eprintln ( string_data bu ) )
-            ( string_free bu )
             : !( Vec u ) String rr ( __compile_via_api source )
             ?? rr {
-                T wasm → { ( string_free le ) ^ @ !( Vec u ) String { T wasm } }
+                T wasm → { ^ @ !( Vec u ) String { T wasm } }
                 F re → {
                     // Both paths failed: the LOCAL error is the actionable one,
                     // so lead with it and keep the remote note as context.
                     : String both ( string_concat ( string_from `local build failed: ` ) le )
                     ( string_push_str both ` — and the build-service fallback also failed: ` )
                     ( string_push_str both ( string_data re ) )
-                    ( string_free re )
                     ^ @ !( Vec u ) String { F both }
                 }
             }
@@ -237,7 +234,6 @@ $ `deps/wasmbuilder/src/build.nu`
     ( json_obj_set req `filename` ( json_str_lit `kernel.nu` ) )
     ( json_obj_set req `return_format` ( json_str_lit `binary` ) )
     : String body ( json_stringify req )
-    ( json_free req )
     : String url ( string_concat ( build_api_url ) ( string_from `/build_wasm` ) )
     : String hb ( string_new )
     ( string_push_str hb `Content-Type: application/json\r\n` )
@@ -246,7 +242,6 @@ $ `deps/wasmbuilder/src/build.nu`
     // library default is a 300 s cap, which an agent experiences as a dead
     // server. 90 s is far past a healthy build (~10 s) and still answerable.
     : !HttpcResp HttpcErr rr ( httpc_request_timeout `POST` ( string_data url ) ( string_data body ) ( string_data hb ) ( __build_api_timeout ) )
-    ( string_free body ) ( string_free hb )
     : ~ ! ( Vec u ) String out @ !( Vec u ) String { F ( string_from `internal` ) }
     ?? rr {
         F e → {
@@ -259,7 +254,6 @@ $ `deps/wasmbuilder/src/build.nu`
         }
         T resp → {
             : ( Vec u ) rb ( httpc_body_bytes resp )
-            ( httpc_resp_free resp )
             ? ( __is_wasm rb ) {
                 = out @ !( Vec u ) String { T rb }
             } {
@@ -278,15 +272,10 @@ $ `deps/wasmbuilder/src/build.nu`
                         } {
                             = out @ !( Vec u ) String { F ( __build_error j ) }
                         }
-                        ( string_free b64 )
-                        ( json_free j )
                     }
                 }
-                ( string_free txt )
-                ( vec_free [u] rb )
             }
         }
     }
-    ( string_free url )
     ^ out
 }

@@ -37,7 +37,7 @@ $ `redis.nu`
 
 @ __print_int i n → v {
     : String s ( string_new ) ( string_push_int s n )
-    ( nurl_print ( string_data s ) ) ( string_free s )
+    ( nurl_print ( string_data s ) )
 }
 
 // ── reply rendering (redis-cli style) ──────────────────────────────
@@ -68,9 +68,9 @@ $ `redis.nu`
 }
 
 // Send one already-built command, print its reply, and free args.
-@ __run_cmd * RedisConn c ( Vec String ) args → v {
+@ __run_cmd RedisConn c ( Vec String ) args → v {
     ?? ( redis_command c args ) {
-        T rep → { ( __print_node rep ( resp_reply_root rep ) 0 ) ( resp_reply_free rep ) }
+        T rep → { ( __print_node rep ( resp_reply_root rep ) 0 ) }
         F e → {
             : b srv ?? e { RedisServerError → T _ → F }
             ? srv {
@@ -80,7 +80,6 @@ $ `redis.nu`
             }
         }
     }
-    ( redis_args_free args )
 }
 
 // Case-insensitive ASCII equality (for command-name dispatch).
@@ -121,14 +120,14 @@ $ `redis.nu`
 // SUBSCRIBE / PSUBSCRIBE one or more channels, then print delivered messages
 // until the connection closes (Ctrl-C / EOF). `toks` is the whole command
 // (toks[0] = the verb, toks[1..] = channels / patterns).
-@ __subscribe_loop * RedisConn c ( Vec String ) toks i is_pattern → v {
+@ __subscribe_loop RedisConn c ( Vec String ) toks i is_pattern → v {
     : i n ( vec_len [String] toks )
     : ~ i k 1
     ~ < k n {
         : s ch ( string_data ?? ( vec_get [String] toks k ) { T x → x F _ → ( string_new ) } )
         : !RedisMessage RedisErr sr ? != is_pattern 0 ( redis_psubscribe c ch ) ( redis_subscribe c ch )
         ?? sr {
-            T m → { ( __print_msg m ) ( redis_message_free m ) }
+            T m → { ( __print_msg m ) }
             F _ → { ( nurl_eprint `(error) subscribe failed\n` ) ^ v }
         }
         = k + k 1
@@ -136,7 +135,7 @@ $ `redis.nu`
     : ~ b go T
     ~ go {
         ?? ( redis_next_message c ) {
-            T m → { ( __print_msg m ) ( redis_message_free m ) }
+            T m → { ( __print_msg m ) }
             F _ → { = go F }
         }
     }
@@ -144,10 +143,10 @@ $ `redis.nu`
 
 // Route a parsed command: SUBSCRIBE / PSUBSCRIBE enter the message loop,
 // everything else is a one-shot request/reply. Frees `toks` either way.
-@ __dispatch * RedisConn c ( Vec String ) toks → v {
+@ __dispatch RedisConn c ( Vec String ) toks → v {
     : s cmd0 ( string_data ?? ( vec_get [String] toks 0 ) { T x → x F _ → ( string_new ) } )
-    ? ( __rci_eq cmd0 `subscribe` ) { ( __subscribe_loop c toks 0 ) ( redis_args_free toks ) ^ v } {}
-    ? ( __rci_eq cmd0 `psubscribe` ) { ( __subscribe_loop c toks 1 ) ( redis_args_free toks ) ^ v } {}
+    ? ( __rci_eq cmd0 `subscribe` ) { ( __subscribe_loop c toks 0 ) ^ v } {}
+    ? ( __rci_eq cmd0 `psubscribe` ) { ( __subscribe_loop c toks 1 ) ^ v } {}
     ( __run_cmd c toks )
 }
 
@@ -175,7 +174,7 @@ $ `redis.nu`
         }
         = k + k 1
     }
-    ? == incur 1 { ( vec_push [String] out cur ) } { ( string_free cur ) }
+    ? == incur 1 { ( vec_push [String] out cur ) } {}
     ^ out
 }
 
@@ -210,13 +209,11 @@ $ `redis.nu`
     ? & != at -1 | == slash -1 < at slash {
         : String usrc ( string_from url )
         : String ui ( string_substr usrc p - at p )
-        ( string_free usrc )
         : ?i colon ( string_index_of ui `:` )
         ?? colon {
             T ci2 → {
                 ( string_free . c user ) = . c user ( string_substr ui 0 ci2 )
                 ( string_free . c password ) = . c password ( string_substr ui + ci2 1 - ( string_len ui ) + ci2 1 )
-                ( string_free ui )
             }
             F _ → { ( string_free . c password ) = . c password ui }
         }
@@ -231,21 +228,17 @@ $ `redis.nu`
             ( string_free . c host ) = . c host ( string_substr hostport 0 pci )
             : String pstr ( string_substr hostport + pci 1 - ( string_len hostport ) + pci 1 )
             = . c port ( __atoi ( string_data pstr ) )
-            ( string_free pstr )
-            ( string_free hostport )
         }
         F _ → { ( string_free . c host ) = . c host hostport }
     }
     ? != slash -1 {
         : String dstr ( string_substr uall + slash 1 - n + slash 1 )
         = . c db ( __atoi ( string_data dstr ) )
-        ( string_free dstr )
     } {}
-    ( string_free uall )
     ^ c
 }
 
-@ __connect ConnInfo ci → !*RedisConn RedisErr {
+@ __connect ConnInfo ci → !RedisConn RedisErr {
     ? > . ci tlsmode 0 {
         ^ ( redis_connect_tls ( string_data . ci host ) . ci port ( string_data . ci host ) ? >= . ci tlsmode 2 1 0 )
     } {}
@@ -285,12 +278,10 @@ $ `redis.nu`
 
     : i tty # i ( isatty # i32 0 )
 
-    : !*RedisConn RedisErr cr ( __connect ci )
+    : !RedisConn RedisErr cr ( __connect ci )
     ?? cr {
         F e → {
             ( nurl_eprint `redis: connection failed: ` ) ( nurl_eprint ( redis_err_name e ) ) ( nurl_eprint `\n` )
-            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password )
-            ( string_free oneshot )
             ^ 1
         }
         T c → {
@@ -300,7 +291,7 @@ $ `redis.nu`
                     T _ → {}
                     F _ → {
                         ( nurl_eprint `redis: AUTH failed: ` ) ( nurl_eprint ( redis_last_error c ) ) ( nurl_eprint `\n` )
-                        ( redis_close c ) ^ 1
+                        ^ 1
                     }
                 }
             } {}
@@ -311,7 +302,7 @@ $ `redis.nu`
 
             ? have_c {
                 : ( Vec String ) toks ( __tokenize ( string_data oneshot ) )
-                ? > ( vec_len [String] toks ) 0 { ( __dispatch c toks ) } { ( redis_args_free toks ) }
+                ? > ( vec_len [String] toks ) 0 { ( __dispatch c toks ) } {}
             } {
                 ? != tty 0 {
                     ( nurl_print `redis (NURL) — pure-NURL client. Type a command, or 'quit' to exit.\n` )
@@ -328,28 +319,24 @@ $ `redis.nu`
                     } {
                         : ( Vec String ) toks ( __tokenize ( string_data line ) )
                         : i tn ( vec_len [String] toks )
-                        ? == tn 0 { ( redis_args_free toks ) } {
+                        ? == tn 0 {} {
                             : s cmd0 ( string_data ?? ( vec_get [String] toks 0 ) { T x → x F _ → ( string_new ) } )
                             ? | ( nurl_str_eq cmd0 `quit` ) ( nurl_str_eq cmd0 `exit` ) {
-                                ( redis_args_free toks ) = running F
+                                = running F
                             } {
                                 ( __dispatch c toks )
                             }
                         }
                     }
-                    ( string_free line )
                 }
             }
-            ( redis_close c )
-            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password )
-            ( string_free oneshot )
             ^ 0
         }
     }
 }
 
 @ main → i {
-    : *Cli c ( cli_new `redis` `a pure-NURL Redis client (RESP2, optional pure TLS); redis://[user:pass@]host:port/db as the argument` `0.2.1` )
+    : Cli c ( cli_new `redis` `a pure-NURL Redis client (RESP2, optional pure TLS); redis://[user:pass@]host:port/db as the argument` `0.2.1` )
     ( cli_flag_str c `host` 104 `HOST` `server host` `127.0.0.1` `REDIS_HOST` )
     ( cli_flag_int c `port` 112 `PORT` `server port` 6379 `REDIS_PORT` )
     ( cli_flag_str c `password` 97 `PASSWORD` `AUTH password` `` `REDIS_PASSWORD` )
@@ -360,6 +347,5 @@ $ `redis.nu`
     ( cli_flag_str c `command` 99 `CMD` `run one command and exit (otherwise start a REPL)` `` `` )
     ( cli_default c \ CliCtx x → i { ^ ( __redis_go x ) } )
     : i rc ( cli_run c )
-    ( cli_free c )
     ^ rc
 }

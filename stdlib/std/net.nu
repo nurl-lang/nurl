@@ -114,8 +114,9 @@ $ `stdlib/std/pkey.nu`
 // ([len:1][name] entries, server order — see tls_alpn_pack), 0/0 when the
 // listener does not negotiate ALPN.
 // kind: 0 = plaintext (raw is the runtime socket handle), 1 = pure TLS
-// client, 2 = pure TLS server. For kinds 1/2 `tlsh` is the *TlsConn (as
-// i64) and reads/writes dispatch to the pure stack.
+// client, 2 = pure TLS server. For kinds 1/2 `tlsh` is one owner of the
+// TlsConn as a word (`_tls_word`; tcp_close_conn gives it back) and
+// reads/writes dispatch to the pure stack.
 : TcpConn { s raw i kind i tlsh }
 
 // Render a NetErr variant name as a raw `s` for log lines.
@@ -231,12 +232,10 @@ $ `stdlib/std/pkey.nu`
         = guard + guard 1
         : String suf ( string_substr pem pos - total pos )
         : i rel ( nurl_str_find ( string_data suf ) `-----BEGIN CERTIFICATE-----` )
-        ( string_free suf )
         ? < rel 0 { = pos total } {
             : i bi + pos rel
             : String suf2 ( string_substr pem bi - total bi )
             : i erel ( nurl_str_find ( string_data suf2 ) `-----END CERTIFICATE-----` )
-            ( string_free suf2 )
             ? < erel 0 { = pos total } {
                 : i blen + erel 25  // through the END marker (25 chars)
                 : String block ( string_substr pem bi blen )
@@ -244,11 +243,9 @@ $ `stdlib/std/pkey.nu`
                     T der → {
                         : ( Vec u ) e ( tls_cert_entry der )
                         ( bytes_extend_bytes list e )
-                        ( vec_free [u] e ) ( vec_free [u] der )
                     }
                     F _ → {}
                 }
-                ( string_free block )
                 = pos + bi blen
             }
         }
@@ -267,31 +264,28 @@ $ `stdlib/std/pkey.nu`
 @ _load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 ( Vec u ) k3 → i {
     : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
     : ( Vec u ) chain ( __net_cert_chain certpem )
-    ( string_free certpem )
-    ? == ( vec_len [u] chain ) 0 { ( vec_free [u] chain ) ^ -10 } {}
+    ? == ( vec_len [u] chain ) 0 { ^ -10 } {}
     ( bytes_extend_bytes cert_out chain )
-    ( vec_free [u] chain )
     : String keypem ?? ( read_file key_path ) { T p → p F _ → ( string_new ) }
     // EC first; on failure try RSA (the parsers reject foreign encodings).
     : ?( Vec u ) ec ?? ( ec_p256_priv_from_pem ( string_data keypem ) ) {
         T sc → @ ?( Vec u ) { T sc } F _ → @ ?( Vec u ) { F # ( Vec u ) 0 }
     }
     ?? ec {
-        T sc → { ( bytes_extend_bytes k1 sc ) ( vec_free [u] sc ) ( string_free keypem ) ^ 0 }
+        T sc → { ( bytes_extend_bytes k1 sc ) ^ 0 }
         F _ → {}
     }
     : i kt ?? ( rsa_priv_from_pem ( string_data keypem ) ) {
         T k → {
             ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 . k d )
             ( bytes_extend_bytes k3 . k e )  // public exponent — for sign-time blinding
-            ( rsa_priv_free k ) 1
+            1
         }
         F _ → ?? ( mldsa_priv_from_pem ( string_data keypem ) ) {
-            T mk → { ( bytes_extend_bytes k1 . mk sk ) ( mldsa_priv_free mk ) 2 }
+            T mk → { ( bytes_extend_bytes k1 . mk sk ) 2 }
             F _ → -11
         }
     }
-    ( string_free keypem )
     ^ kt
 }
 
@@ -322,7 +316,6 @@ $ `stdlib/std/pkey.nu`
         : ( Vec u ) u2 ( vec_new [u] )
         : ( Vec u ) u3 ( vec_new [u] )
         : i pqt ( _load_tls_creds pq_cert_path pq_key_path pqcert pqk u2 u3 )
-        ( vec_free [u] u2 ) ( vec_free [u] u3 )
         : i pqerr ? < pqt 0 - 0 pqt ? != pqt 2 11 0
         ? != pqerr 0 {
             ^ @ !TcpListener NetErr { F ( _net_err_of pqerr ) }
@@ -350,16 +343,13 @@ $ `stdlib/std/pkey.nu`
     : i kl2 ( vec_len [u] k2 )
     : i kp3 ( __net_dup k3 )
     : i kl3 ( vec_len [u] k3 )
-    ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
     : ( Vec u ) alpn ( tls_alpn_pack alpn_protocols )
     : i alpnp ( __net_dup alpn )
     : i alpnlen ( vec_len [u] alpn )
-    ( vec_free [u] alpn )
     : i pqcertp ( __net_dup pqcert )
     : i pqcertlen ( vec_len [u] pqcert )
     : i pqkp ( __net_dup pqk )
     : i pqkl ( vec_len [u] pqk )
-    ( vec_free [u] pqcert ) ( vec_free [u] pqk )
     : s rp # s raw
     ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 alpnp alpnlen pqcertp pqcertlen pqkp pqkl } }
 }
@@ -408,7 +398,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_alpn_protocol TcpConn c → String {
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ ( string_new ) } {}
-    ^ ( tls_alpn_selected # *TlsConn tp )
+    ^ ( tls_alpn_selected # TlsConn tp )
 }
 
 // True iff this conn negotiated exactly `proto` over ALPN. F for a
@@ -417,7 +407,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_alpn_is TcpConn c s proto → b {
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ F } {}
-    ^ ( tls_alpn_is # *TlsConn tp proto )
+    ^ ( tls_alpn_is # TlsConn tp proto )
 }
 
 // The key-exchange group this connection negotiated, as its IANA
@@ -432,7 +422,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_tls_group TcpConn c → i {
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ 0 } {}
-    ^ ( tls_group # *TlsConn tp )
+    ^ ( tls_group # TlsConn tp )
 }
 
 // T when this TLS connection was established from a session ticket
@@ -442,7 +432,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_tls_resumed TcpConn c → b {
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ F } {}
-    ^ ( tls_is_resumed # *TlsConn tp )
+    ^ ( tls_is_resumed # TlsConn tp )
 }
 
 // T when this connection's key exchange has a post-quantum component,
@@ -460,7 +450,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_tls_sig_scheme TcpConn c → i {
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ 0 } {}
-    ^ ( tls_cv_scheme # *TlsConn tp )
+    ^ ( tls_cv_scheme # TlsConn tp )
 }
 
 // Open a plain (unencrypted) TCP client connection. Returns a
@@ -485,10 +475,10 @@ $ `stdlib/std/pkey.nu`
 @ tcp_connect_tls s host i port s server_name i verify → !TcpConn NetErr {
     : i raw ( nurl_tcp_connect host port )
     ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
-    : !*TlsConn TlsErr r ? != verify 0 ( tls_attach_verify raw server_name ) ( tls_attach raw server_name )
+    : !TlsConn TlsErr r ? != verify 0 ( tls_attach_verify raw server_name ) ( tls_attach raw server_name )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 # i tc } }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 ( _tls_word tc ) } }
     }
 }
 
@@ -501,10 +491,10 @@ $ `stdlib/std/pkey.nu`
 @ tcp_connect_tls_alpn s host i port s server_name i verify s alpn → !TcpConn NetErr {
     : i raw ( nurl_tcp_connect host port )
     ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
-    : !*TlsConn TlsErr r ? != verify 0 ( tls_attach_alpn_verify raw server_name alpn ) ( tls_attach_alpn raw server_name alpn )
+    : !TlsConn TlsErr r ? != verify 0 ( tls_attach_alpn_verify raw server_name alpn ) ( tls_attach_alpn raw server_name alpn )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 # i tc } }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 ( _tls_word tc ) } }
     }
 }
 
@@ -516,19 +506,19 @@ $ `stdlib/std/pkey.nu`
 @ tcp_connect_tls_full s host i port s server_name i verify s alpn ( Vec u ) sess → !TcpConn NetErr {
     : i raw ( nurl_tcp_connect host port )
     ? <= raw 0 { ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake } } {}
-    : !*TlsConn TlsErr r ( tls_attach_full raw server_name alpn sess verify )
+    : !TlsConn TlsErr r ( tls_attach_full raw server_name alpn sess verify )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 # i tc } }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 1 ( _tls_word tc ) } }
     }
 }
 
 // Wrap a TLS connection the caller established itself (tls_attach_full /
 // tls_connect_full — say, to read the ALPN pick before deciding which
 // protocol stack to hand the socket to) as a client TcpConn (kind 1).
-// The TcpConn owns it from here: tcp_close_conn closes it.
-@ tcp_conn_from_tls * TlsConn tc → TcpConn {
-    ^ @ TcpConn { # s 0 1 # i tc }
+// The TcpConn holds an owner of it from here: tcp_close_conn closes it.
+@ tcp_conn_from_tls TlsConn tc → TcpConn {
+    ^ @ TcpConn { # s 0 1 ( _tls_word tc ) }
 }
 
 // The resumption session of a TLS client conn (tls_session_export): offer
@@ -537,7 +527,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_tls_session_export TcpConn c → ( Vec u ) {
     : i tp ( __conn_tlsptr c )
     ? == tp 0 { ^ ( vec_new [u] ) } {}
-    ^ ( tls_session_export # *TlsConn tp )
+    ^ ( tls_session_export # TlsConn tp )
 }
 
 // Register a per-hostname cert/key pair on a TLS listener for Server
@@ -609,11 +599,11 @@ $ `stdlib/std/pkey.nu`
 
 // ── STARTTLS registry ──────────────────────────────────────────────
 //
-// An in-place TLS upgrade (tcp_starttls) attaches a *TlsConn to an
+// An in-place TLS upgrade (tcp_starttls) attaches a TlsConn to an
 // ALREADY-connected fd (SMTP STARTTLS, etc). A TcpConn is passed BY
 // VALUE, so the upgraded `tlsh`/`kind` can't be written back into the
 // caller's copy. Because the fd is the stable identity across the
-// upgrade, the fd→*TlsConn mapping lives here instead and is consulted
+// upgrade, the fd→TlsConn mapping lives here instead and is consulted
 // by the read/write/close dispatch. The whole thing is gated on
 // g_st_n: a process that never calls tcp_starttls does ZERO lookups.
 //
@@ -671,7 +661,7 @@ $ `stdlib/std/pkey.nu`
     } {}
 }
 
-// Resolve a TcpConn's *TlsConn (as i64), or 0 if the conn is plaintext.
+// Resolve a TcpConn's TlsConn (as its word), or 0 if the conn is plaintext.
 // kinds 1/2 carry it inline in `tlsh`; a STARTTLS-upgraded kind-0 conn
 // is found via the fd registry.
 @ __conn_tlsptr TcpConn c → i {
@@ -684,10 +674,7 @@ $ `stdlib/std/pkey.nu`
 // pure TLS conn's socket fd for TLS (kinds 1/2 or STARTTLS-upgraded).
 @ __conn_fd TcpConn c → i {
     : i tp ( __conn_tlsptr c )
-    ? != tp 0 {
-        : *TlsConn tc # *TlsConn tp
-        ^ . tc fd
-    } {}
+    ? != tp 0 { ^ ( tls_socket # TlsConn tp ) } {}
     ^ # i . c raw
 }
 
@@ -703,7 +690,7 @@ $ `stdlib/std/pkey.nu`
 
 // Run the server-side pure-TLS handshake over a freshly accepted raw
 // conn handle, using the listener's parked cert/key material. Consumes
-// `craw` (the *TlsConn owns the socket on success; closed on failure).
+// `craw` (the TlsConn owns the socket on success; closed on failure).
 @ __tls_accept_handshake TcpListener l i craw → !TcpConn NetErr {
     : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
     : ( Vec u ) k1 ( __net_vecview . l kp1 . l kl1 )
@@ -718,13 +705,13 @@ $ `stdlib/std/pkey.nu`
     : ( Vec u ) pqc ( __net_vecview . l pqcertp . l pqcertlen )
     : ( Vec u ) pqk ( __net_vecview . l pqkp . l pqkl )
     : ( Vec u ) none ( vec_new [u] )
-    : !*TlsConn TlsErr r ? == . l keytype 2
+    : !TlsConn TlsErr r ? == . l keytype 2
     ( tls_accept_mldsa_alpn craw cert ( mldsa_level_of_sk_len ( vec_len [u] k1 ) ) k1 alpn )
     ( tls_accept_dual_alpn craw cert . l keytype ? == . l keytype 1 none k1 ? == . l keytype 1 k1 none k3 k2
     pqc ( mldsa_level_of_sk_len ( vec_len [u] pqk ) ) pqk alpn )
     ?? r {
         F _ → ^ @ !TcpConn NetErr { F # NetErr NetTlsHandshake }
-        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 # i tc } }
+        T tc → ^ @ !TcpConn NetErr { T @ TcpConn { # s 0 2 ( _tls_word tc ) } }
     }
 }
 
@@ -751,7 +738,7 @@ $ `stdlib/std/pkey.nu`
 
 // Complete a TLS listener's server handshake over a transport conn from
 // `tcp_accept_transport`. Consumes `c` — on success the returned conn
-// supersedes it (the *TlsConn owns the socket); on Err the socket is
+// supersedes it (the TlsConn owns the socket); on Err the socket is
 // already closed by the TLS layer. A plaintext listener returns `c`
 // unchanged. The handshake's record I/O is context-aware, so on a fiber
 // a slow client parks this fiber instead of blocking the worker.
@@ -780,13 +767,15 @@ $ `stdlib/std/pkey.nu`
         // kind 2 = pure-NURL TLS server conn: its close_notify must be
         // encrypted under the server write keys (tls_server_close);
         // tls_close's alert uses the client direction.
-        ? == . c kind 2 { ( tls_server_close # *TlsConn tp ) } { ( tls_close # *TlsConn tp ) }
+        ? == . c kind 2 { ( tls_server_close # TlsConn tp ) } { ( tls_close # TlsConn tp ) }
+        // …and the conn's owner of it goes back: the last one frees it.
+        ( _tls_word_release tp )
     } { ( nurl_tcp_close # i . c raw ) }
 }
 
 // In-place STARTTLS upgrade: run a pure TLS 1.3 handshake over an
 // already-connected plaintext TcpConn's fd, registering the resulting
-// *TlsConn against that fd so subsequent read/write/close on the SAME
+// TlsConn against that fd so subsequent read/write/close on the SAME
 // (by-value) conn transparently go through TLS. `server_name` drives
 // SNI + (when verify) certificate validation. Used by SMTP STARTTLS,
 // IMAP/POP STLS, etc. The conn keeps its identity — no new TcpConn is
@@ -795,11 +784,11 @@ $ `stdlib/std/pkey.nu`
     : i tp ( __conn_tlsptr c )
     ? != tp 0 { ^ @ !v NetErr { T 0 } } {}
     : i fd # i . c raw
-    : !*TlsConn TlsErr r ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
+    : !TlsConn TlsErr r ? verify ( tls_attach_verify fd server_name ) ( tls_attach fd server_name )
     ?? r {
         F _ → ^ @ !v NetErr { F # NetErr NetTlsHandshake }
         T tc → {
-            ( __starttls_register fd # i tc )
+            ( __starttls_register fd ( _tls_word tc ) )
             ^ @ !v NetErr { T 0 }
         }
     }
@@ -858,7 +847,7 @@ $ `stdlib/std/pkey.nu`
 // Pure-TLS read dispatch (kind 1 = client, kind 2 = server). Clean EOF
 // (tls_read returns []) is surfaced as NetClosed to match the plain path.
 @ __tls_read_net TcpConn c i max → !( Vec u ) NetErr {
-    : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
+    : TlsConn tc # TlsConn ( __conn_tlsptr c )
     : !( Vec u ) TlsErr r ? == . c kind 2 ( tls_server_read tc max ) ( tls_read tc max )
     ?? r {
         F e → {
@@ -867,7 +856,6 @@ $ `stdlib/std/pkey.nu`
         }
         T v → {
             ? == ( vec_len [u] v ) 0 {
-                ( vec_free [u] v )
                 ^ @ !( Vec u ) NetErr { F # NetErr NetClosed }
             } {}
             ^ @ !( Vec u ) NetErr { T v }
@@ -876,7 +864,7 @@ $ `stdlib/std/pkey.nu`
 }
 
 @ __tls_write_net TcpConn c ( Vec u ) bytes → !v NetErr {
-    : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
+    : TlsConn tc # TlsConn ( __conn_tlsptr c )
     : !v TlsErr r ? == . c kind 2 ( tls_server_write tc bytes ) ( tls_write tc bytes )
     ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F ? == ( nurl_tcp_err_kind ( __conn_fd c ) ) 7 # NetErr NetTimeout # NetErr NetWrite } }
 }
@@ -885,7 +873,7 @@ $ `stdlib/std/pkey.nu`
 // records straight from the two buffers (see tls_server_write2), so the
 // plaintext is never joined into one buffer first.
 @ __tls_write_net2 TcpConn c ( Vec u ) head ( Vec u ) body → !v NetErr {
-    : *TlsConn tc # *TlsConn ( __conn_tlsptr c )
+    : TlsConn tc # TlsConn ( __conn_tlsptr c )
     : !v TlsErr r ? == . c kind 2 ( tls_server_write2 tc head body ) ( tls_write2 tc head body )
     ?? r { T _ → ^ @ !v NetErr { T 0 } F _ → ^ @ !v NetErr { F ? == ( nurl_tcp_err_kind ( __conn_fd c ) ) 7 # NetErr NetTimeout # NetErr NetWrite } }
 }
@@ -907,7 +895,6 @@ $ `stdlib/std/pkey.nu`
     : s pbuf # s p
     : i n ( nurl_tcp_read raw pbuf max )
     ? < n 0 {
-        ( vec_free [u] v )
         : i ek ( nurl_tcp_err_kind raw )
         ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
     } {}
@@ -939,7 +926,6 @@ $ `stdlib/std/pkey.nu`
             T v → {
                 : i n ( vec_len [u] v )
                 ( vec_extend [u] buf v )
-                ( vec_free [u] v )
                 ^ @ !i NetErr { T n }
             }
             F e → ^ @ !i NetErr { F e }
@@ -988,7 +974,7 @@ $ `stdlib/std/pkey.nu`
 @ tcp_prepare_write TcpConn c ( Vec u ) bytes → !( Vec u ) NetErr {
     : i tls ( __conn_tlsptr c )
     ? == tls 0 { ^ @ !( Vec u ) NetErr { T ( bytes_slice bytes 0 ( vec_len [u] bytes ) ) } } {}
-    : *TlsConn state # *TlsConn tls
+    : TlsConn state # TlsConn tls
     : !( Vec u ) TlsErr result ? == . c kind 2
     ( tls_server_prepare_write state bytes ) ( tls_prepare_write state bytes )
     ?? result {
@@ -1007,7 +993,7 @@ $ `stdlib/std/pkey.nu`
         ( vec_extend [u] out body )
         ^ @ !v NetErr { T 0 }
     } {}
-    : *TlsConn state # *TlsConn tls
+    : TlsConn state # TlsConn tls
     : !v TlsErr result ? == . c kind 2
     ( tls_server_prepare_write2_to state out head body ) ( tls_prepare_write2_to state out head body )
     ?? result {
@@ -1022,11 +1008,11 @@ $ `stdlib/std/pkey.nu`
 @ tcp_prepare_control_to TcpConn c ( Vec u ) out → i {
     : i tls ( __conn_tlsptr c )
     ? == tls 0 { ^ 0 } {}
-    : *TlsConn state # *TlsConn tls
+    : ~ * TlsConnImpl state ( _tls_ptr # TlsConn tls )
     ? != . state closed 0 { ^ 0 } {}
     ? & == . state update_pending 0 == . state fatal_alert 0 { ^ 0 } {}
     : i before ( vec_len [u] out )
-    ( _tls_control_to state out ? == . c kind 2 0 1 )
+    ( _tls_control_to . state 0 out ? == . c kind 2 0 1 )
     ^ - ( vec_len [u] out ) before
 }
 
@@ -1039,7 +1025,7 @@ $ `stdlib/std/pkey.nu`
 
 @ __tcp_write_failed TcpConn c → v {
     : i tls ( __conn_tlsptr c )
-    ? != tls 0 { : *TlsConn state # *TlsConn tls = . state closed 1 } {}
+    ? != tls 0 { : *TlsConnImpl state ( _tls_ptr # TlsConn tls ) = . state closed 1 } {}
 }
 
 // Positive byte count, zero would-block, or a typed terminal error. No
@@ -1065,16 +1051,16 @@ $ `stdlib/std/pkey.nu`
     : i raw ( __conn_fd c )
     : i tls ( __conn_tlsptr c )
     ? != tls 0 {
-        : *TlsConn state # *TlsConn tls
+        : TlsConn conn # TlsConn tls
+        : *TlsConnImpl state ( _tls_ptr conn )
         : i previous . state read_nowait
         = . state read_nowait 1
-        : !( Vec u ) TlsErr result ? == . c kind 2 ( tls_server_read state max ) ( tls_read state max )
+        : !( Vec u ) TlsErr result ? == . c kind 2 ( tls_server_read conn max ) ( tls_read conn max )
         = . state read_nowait previous
         ?? result {
             T decoded → {
                 : i count ( vec_len [u] decoded )
                 ( vec_extend [u] bytes decoded )
-                ( vec_free [u] decoded )
                 ? == count 0 { ^ @ !i NetErr { F NetClosed } } {}
                 ^ @ !i NetErr { T count }
             }
@@ -1105,7 +1091,7 @@ $ `stdlib/std/pkey.nu`
 @ __tcp_buffered_read TcpConn c → b {
     : i tls ( __conn_tlsptr c )
     ? == tls 0 { ^ F } {}
-    : *TlsConn state # *TlsConn tls
+    : *TlsConnImpl state ( _tls_ptr # TlsConn tls )
     ? | != . state closed 0 | != . state fatal_alert 0 > ( vec_len [u] . state appbuf ) 0 { ^ T } {}
     : i size ( vec_len [u] . state rxbuf )
     ? < size 5 { ^ F } {}
@@ -1219,7 +1205,6 @@ $ `stdlib/std/pkey.nu`
     ? != ( __conn_tlsptr c ) 0 {
         : ( Vec u ) b ( bytes_from_str text )
         : !v NetErr r ( __tls_write_net c b )
-        ( vec_free [u] b )
         ^ r
     } {}
     : s rp . c raw

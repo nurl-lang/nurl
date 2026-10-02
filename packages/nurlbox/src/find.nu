@@ -51,7 +51,6 @@ $ `bx.nu`
         ( string_push_char out ( string_get tmp - k 1 ) )
         = k - k 1
     }
-    ( string_free tmp )
 }
 
 @ __stat_name_of i id b group → String {
@@ -76,7 +75,6 @@ $ `bx.nu`
     ? == d 65 {
         : String m ( stat_mode_string st )
         ( string_push_bytes out # *u ( string_data m ) ( string_len m ) )
-        ( string_free m )
         ^ T
     } {}
     ? == d 117 { ( string_push_int out . st uid ) ^ T } {}
@@ -84,13 +82,11 @@ $ `bx.nu`
     ? == d 85 {
         : String n ( __stat_name_of . st uid F )
         ( string_push_bytes out # *u ( string_data n ) ( string_len n ) )
-        ( string_free n )
         ^ T
     } {}
     ? == d 71 {
         : String n ( __stat_name_of . st gid T )
         ( string_push_bytes out # *u ( string_data n ) ( string_len n ) )
-        ( string_free n )
         ^ T
     } {}
     ? == d 104 { ( string_push_int out . st nlink ) ^ T } {}
@@ -107,7 +103,6 @@ $ `bx.nu`
     : Time t ( time_local secs )
     : String base ( time_format t `%Y-%m-%d %H:%M:%S` )
     ( string_push_bytes out # *u ( string_data base ) ( string_len base ) )
-    ( string_free base )
     ( string_push_char out 46 )
     : ~ i k 100000000
     ~ > k 0 {
@@ -134,7 +129,6 @@ $ `bx.nu`
             T t → {
                 ( string_push_str out ` -> ` )
                 ( string_push_bytes out # *u ( string_data t ) ( string_len t ) )
-                ( string_free t )
             }
             F _ → {}
         }
@@ -143,19 +137,16 @@ $ `bx.nu`
     : String sz ( string_from ( nurl_str_int . st size ) )
     ( string_push_bytes out # *u ( string_data sz ) ( string_len sz ) )
     : ~ i pad - 10 ( string_len sz )
-    ( string_free sz )
     ~ > pad 0 { ( string_push_char out 32 ) = pad - pad 1 }
     ( string_push_str out `\tBlocks: ` )
     : String bl ( string_from ( nurl_str_int . st blocks ) )
     ( string_push_bytes out # *u ( string_data bl ) ( string_len bl ) )
     : ~ i pad2 - 11 ( string_len bl )
-    ( string_free bl )
     ~ > pad2 0 { ( string_push_char out 32 ) = pad2 - pad2 1 }
     ( string_push_str out `IO Block: ` )
     : String io ( string_from ( nurl_str_int . st blksize ) )
     ( string_push_bytes out # *u ( string_data io ) ( string_len io ) )
     : ~ i pad3 - 7 ( string_len io )
-    ( string_free io )
     ~ > pad3 0 { ( string_push_char out 32 ) = pad3 - pad3 1 }
     ( string_push_str out ( __stat_kind_word . st mode ) )
     ( string_push_str out `\nDevice: ` )
@@ -166,7 +157,6 @@ $ `bx.nu`
     : String ino ( string_from ( nurl_str_int . st ino ) )
     ( string_push_bytes out # *u ( string_data ino ) ( string_len ino ) )
     : ~ i pad4 - 12 ( string_len ino )
-    ( string_free ino )
     ~ > pad4 0 { ( string_push_char out 32 ) = pad4 - pad4 1 }
     ( string_push_str out `Links: ` )
     ( string_push_int out . st nlink )
@@ -175,31 +165,26 @@ $ `bx.nu`
     ( string_push_char out 47 )
     : String ms ( stat_mode_string st )
     ( string_push_bytes out # *u ( string_data ms ) ( string_len ms ) )
-    ( string_free ms )
     ( string_push_str out `)  Uid: (` )
     : String uid ( string_from ( nurl_str_int . st uid ) )
     : ~ i up - 5 ( string_len uid )
     ~ > up 0 { ( string_push_char out 32 ) = up - up 1 }
     ( string_push_bytes out # *u ( string_data uid ) ( string_len uid ) )
-    ( string_free uid )
     ( string_push_char out 47 )
     : String un ( __stat_name_of . st uid F )
     : ~ i unp - 8 ( string_len un )
     ~ > unp 0 { ( string_push_char out 32 ) = unp - unp 1 }
     ( string_push_bytes out # *u ( string_data un ) ( string_len un ) )
-    ( string_free un )
     ( string_push_str out `)   Gid: (` )
     : String gid ( string_from ( nurl_str_int . st gid ) )
     : ~ i gp - 5 ( string_len gid )
     ~ > gp 0 { ( string_push_char out 32 ) = gp - gp 1 }
     ( string_push_bytes out # *u ( string_data gid ) ( string_len gid ) )
-    ( string_free gid )
     ( string_push_char out 47 )
     : String gn ( __stat_name_of . st gid T )
     : ~ i gnp - 8 ( string_len gn )
     ~ > gnp 0 { ( string_push_char out 32 ) = gnp - gnp 1 }
     ( string_push_bytes out # *u ( string_data gn ) ( string_len gn ) )
-    ( string_free gn )
     ( string_push_str out `)\nAccess: ` )
     ( __stat_timestamp out . st atime . st atime_ns )
     ( string_push_str out `\nModify: ` )
@@ -261,13 +246,11 @@ $ `bx.nu`
                         ( __stat_default out st p )
                     }
                     ( bx_write out )
-                    ( string_free out )
                 }
             }
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -285,7 +268,6 @@ $ `bx.nu`
     ? != 0 & flags DU_HUMAN {
         : String h ( bx_human * bytes_512 512 )
         ( string_push_bytes out # *u ( string_data h ) ( string_len h ) )
-        ( string_free h )
     } {
         ? != 0 & flags DU_BYTES {
             ( string_push_int out * bytes_512 512 )
@@ -301,7 +283,6 @@ $ `bx.nu`
     ( string_push_str out path )
     ( string_push_char out 10 )
     ( bx_write out )
-    ( string_free out )
 }
 
 // Returns the subtree's size in 512-byte blocks; prints as it goes.
@@ -328,10 +309,8 @@ $ `bx.nu`
                     ~ < k n {
                         : String sub ( path_join path ( bx_at names k ) )
                         = total + total ( __du_walk ( string_data sub ) flags + depth 1 maxdepth rc )
-                        ( string_free sub )
                         = k + k 1
                     }
-                    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                 }
                 F e2 → {
                     ( bx_err_at path ( bx_ioerr e2 ) )
@@ -371,7 +350,6 @@ $ `bx.nu`
         }
         ? != 0 & flags DU_TOTAL { ( __du_emit `total` grand flags ) } {}
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -463,7 +441,8 @@ $ `fileops.nu`
     ( flush )
     : i32 pid ( fork )
     ? == # i pid 0 {
-        : s argvbuf ( nurl_zalloc * 8 + n 1 )
+        : ( Vec u ) argvbuf_v ( vec_zeroed [u] * 8 + n 1 )
+        : s argvbuf # s ( vec_data [u] argvbuf_v )
         : ~ i k 0
         ~ < k n {
             : s t ( __find_tok toks + from k )
@@ -475,10 +454,10 @@ $ `fileops.nu`
         ^ F
     } {}
     ? < # i pid 0 { ^ F } {}
-    : s statusbuf ( nurl_zalloc 8 )
+    : ( Vec u ) statusbuf_v ( vec_zeroed [u] 8 )
+    : s statusbuf # s ( vec_data [u] statusbuf_v )
     : i32 _w ( waitpid pid # *u statusbuf # i32 0 )
     : i raw ( nurl_peek statusbuf 0 )
-    ( nurl_free statusbuf )
     ^ == 0 ( nurl_wait_exit_status & raw 65535 )
 }
 
@@ -487,7 +466,6 @@ $ `fileops.nu`
     ( string_push_str out path )
     ( string_push_char out term )
     ( bx_write out )
-    ( string_free out )
 }
 
 // One primary. Advances g_find_pos past it.
@@ -505,8 +483,6 @@ $ `fileops.nu`
         : String lp ( string_to_lower ( string_from pat ) )
         : String ln ( string_to_lower ( string_from . c name ) )
         : b r ( fs_match ( string_data lp ) ( string_data ln ) )
-        ( string_free lp )
-        ( string_free ln )
         ^ r
     } {}
     ? ( bx_streq t `-path` ) {
@@ -546,7 +522,6 @@ $ `fileops.nu`
             ?? ( dir_list . c path ) {
                 T names → {
                     : b e == 0 ( vec_len [String] names )
-                    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                     ^ e
                 }
                 F _ → { ^ F }
@@ -588,7 +563,6 @@ $ `fileops.nu`
             T st → {
                 : String nm ( __stat_name_of . st uid F )
                 : b r | ( bx_streq ( string_data nm ) who ) ( bx_streq ( nurl_str_int . st uid ) who )
-                ( string_free nm )
                 ^ r
             }
             F _ → { ^ F }
@@ -601,7 +575,6 @@ $ `fileops.nu`
             T st → {
                 : String nm ( __stat_name_of . st gid T )
                 : b r | ( bx_streq ( string_data nm ) who ) ( bx_streq ( nurl_str_int . st gid ) who )
-                ( string_free nm )
                 ^ r
             }
             F _ → { ^ F }
@@ -735,10 +708,8 @@ $ `fileops.nu`
                         ~ < k n {
                             : String sub ( path_join path ( bx_at names k ) )
                             ( __find_visit toks ( string_data sub ) ( bx_at names k ) + depth 1 )
-                            ( string_free sub )
                             = k + k 1
                         }
-                        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                     }
                     F e → {
                         ( bx_err_at path ( bx_ioerr e ) )
@@ -790,10 +761,7 @@ $ `fileops.nu`
         : s root ( bx_at roots r )
         : String base ( path_basename root )
         ( __find_visit toks root ( string_data base ) 0 )
-        ( string_free base )
         = r + r 1
     }
-    ( vec_free_with [String] roots \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] toks \ String x → v { ( string_free x ) } )
     ^ g_find_rc
 }

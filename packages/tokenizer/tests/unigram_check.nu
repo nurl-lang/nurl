@@ -36,26 +36,15 @@ $ `src/unigram.nu`
                                 = k + k 1
                             }
                             ( nurl_print ( string_data o ) ) ( nurl_print `\n` )
-                            ( string_free o )
-                            ( vec_free [i] ids )
-                            ( string_free line )
                             = ls + p 1
                         } {}
                         = p + p 1
                     }
-                    ( string_free corpus )
                 }
                 F _ → { ( nurl_print `corpus read fail\n` ) ^ 1 }
             }
-            ( uni_free u )
         }
-        F e → { ( nurl_print `load fail: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_print `load fail: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
     }
-    : ~ i k 0
-    ~ < k ( vec_len [String] av ) {
-        ?? ( vec_get [String] av k ) { T s2 → { ( string_free s2 ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] av )
     ^ 0
 }

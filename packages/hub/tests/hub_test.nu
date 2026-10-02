@@ -33,7 +33,6 @@ $ `src/hub.nu`
     : b okv ( streq ( string_data . r rev ) want_rev )
     : b oks ( streq ( string_data . r subpath ) want_sub )
     ( check & & okr okv oks label )
-    ( hub_ref_free r )
 }
 
 @ main → i {
@@ -50,31 +49,25 @@ $ `src/hub.nu`
     ( check . ru is_url `ref: http(s):// → is_url` )
     : String uu ( hub_resolve_url ru )
     ( check ( streq ( string_data uu ) `https://example.com/x.bin` ) `resolve: URL passes through unchanged` )
-    ( string_free uu )
-    ( hub_ref_free ru )
 
     // resolve an HF file ref to the /resolve/ URL
     : HubRef rf ( hub_ref_parse `TheOrg/TheRepo@main/model.gguf` )
     : String ur ( hub_resolve_url rf )
     ( check ( streq ( string_data ur ) `https://huggingface.co/TheOrg/TheRepo/resolve/main/model.gguf` ) `resolve: HF file ref → /resolve/ URL` )
-    ( string_free ur )
-    ( hub_ref_free rf )
 
     // ---- name safety ----
     : String sn ( _hub_safe_name `org/repo@main/a b.gguf` )
     ( check ( streq ( string_data sn ) `org_repo_main_a_b.gguf` ) `safe_name: only [A-Za-z0-9._-] survive` )
-    ( string_free sn )
 
     // ---- hub_get: an existing local path passes straight through ----
     : String here ( string_from `/tmp/hub-test-store` )
     ( dir_remove_all ( string_data here ) )
     ?? ( dir_create_all ( string_data here ) ) { T _ → {} F _ → {} }
     ?? ( hub_get ( string_data here ) ) {
-        T p → { ( check ( streq ( string_data p ) ( string_data here ) ) `hub_get: existing local dir passes through (no fetch)` ) ( string_free p ) }
+        T p → { ( check ( streq ( string_data p ) ( string_data here ) ) `hub_get: existing local dir passes through (no fetch)` ) }
         F _ → { ( check F `hub_get: existing local dir passes through (no fetch)` ) }
     }
     ( dir_remove_all ( string_data here ) )
-    ( string_free here )
 
     // ---- store: manifest round-trip + blob GC sharing ----
     : String root ( string_from `/tmp/hub-test-store` )
@@ -87,9 +80,9 @@ $ `src/hub.nu`
     : s uniqA `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
     : s uniqB `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
     // write blobs so file_exists is true
-    : String bpS ( hub_blob_path root shared ) ( write_file ( string_data bpS ) `x` ) ( string_free bpS )
-    : String bpA ( hub_blob_path root uniqA ) ( write_file ( string_data bpA ) `x` ) ( string_free bpA )
-    : String bpB ( hub_blob_path root uniqB ) ( write_file ( string_data bpB ) `x` ) ( string_free bpB )
+    : String bpS ( hub_blob_path root shared ) ( write_file ( string_data bpS ) `x` )
+    : String bpA ( hub_blob_path root uniqA ) ( write_file ( string_data bpA ) `x` )
+    : String bpB ( hub_blob_path root uniqB ) ( write_file ( string_data bpB ) `x` )
 
     // manifest A references {shared, uniqA}; B references {shared, uniqB}
     : Json ja ( json_obj_new )
@@ -98,9 +91,8 @@ $ `src/hub.nu`
     : Json e1 ( json_obj_new ) : b _e1 ( json_obj_set e1 `sha` ( json_str_lit shared ) ) : b _p1 ( json_arr_push faa e1 )
     : Json e2 ( json_obj_new ) : b _e2 ( json_obj_set e2 `sha` ( json_str_lit uniqA ) ) : b _p2 ( json_arr_push faa e2 )
     : b _jaf ( json_obj_set ja `files` faa )
-    : String ta ( json_stringify ja ) ( json_free ja )
-    : String mpA ( hub_manifest_path root `A` ) ( write_file ( string_data mpA ) ( string_data ta ) ) ( string_free mpA )
-    ( string_free ta )
+    : String ta ( json_stringify ja )
+    : String mpA ( hub_manifest_path root `A` ) ( write_file ( string_data mpA ) ( string_data ta ) )
 
     : Json jb ( json_obj_new )
     : b _jb1 ( json_obj_set jb `name` ( json_str_lit `B` ) )
@@ -108,21 +100,18 @@ $ `src/hub.nu`
     : Json e3 ( json_obj_new ) : b _e3 ( json_obj_set e3 `sha` ( json_str_lit shared ) ) : b _p3 ( json_arr_push fbb e3 )
     : Json e4 ( json_obj_new ) : b _e4 ( json_obj_set e4 `sha` ( json_str_lit uniqB ) ) : b _p4 ( json_arr_push fbb e4 )
     : b _jbf ( json_obj_set jb `files` fbb )
-    : String tb ( json_stringify jb ) ( json_free jb )
-    : String mpB ( hub_manifest_path root `B` ) ( write_file ( string_data mpB ) ( string_data tb ) ) ( string_free mpB )
-    ( string_free tb )
+    : String tb ( json_stringify jb )
+    : String mpB ( hub_manifest_path root `B` ) ( write_file ( string_data mpB ) ( string_data tb ) )
 
     // sharing rule: `shared` is referenced by B (≠A) → shared; uniqA is not
     ( check ( _hub_blob_shared root shared `A` ) `GC: shared blob is seen as shared (kept on A rm)` )
     ( check ! ( _hub_blob_shared root uniqA `A` ) `GC: unique blob is not shared (dropped on A rm)` )
 
     ( dir_remove_all ( string_data root ) )
-    ( string_free root )
 
     : String sum ( string_from `\n` )
     ( string_push_int sum g_pass ) ( string_push_str sum ` passed, ` )
     ( string_push_int sum g_fail ) ( string_push_str sum ` failed\n` )
     ( nurl_print ( string_data sum ) )
-    ( string_free sum )
     ^ ? > g_fail 0 1 0
 }

@@ -14,7 +14,7 @@
 //   ( fmt3 tmpl a b c )      → String
 //   ( fmt4 tmpl a b c d )    → String
 //
-//   ( println_fmt1 tmpl a )           → v   stdout + '\n', frees String
+//   ( println_fmt1 tmpl a )           → v   stdout + '\n'
 //   ( println_fmt2 tmpl a b )         → v
 //   ( println_fmt3 tmpl a b c )       → v
 //   ( println_fmt4 tmpl a b c d )     → v
@@ -29,8 +29,9 @@
 //   - Missing arguments emit literal `{}` so the bug is visible.
 //   - Stray `{` / `}` (not part of an above sequence) are emitted verbatim.
 //
-// `fmt`-family allocate; the print helpers free for you. When you build
-// with `fmt*` directly, the caller is responsible for `string_free`.
+// The String a `fmt*` call builds is the caller's: it is dropped with its
+// owner (docs/MEMORY.md §7.6), like any other String. The print helpers
+// build, print and drop it in one go.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -42,10 +43,14 @@ $ `stdlib/core/vec.nu`
 // into `out` keep LLVM from hoisting it, so the scan used to be
 // quadratic in template length — 9.4 ns per byte on a 512-byte
 // template. Short templates hid the cost; HTML-sized ones do not.
-@ __fmt_emit String out s tmpl ( Vec s ) args → v {
+//
+// The arguments are read where they are: the caller's `( Vec s )` (fmt),
+// or — `nfixed` >= 0 — the fixed arguments a0..a3 of fmt1..fmt4, so a
+// fixed-arity call copies nothing and a caller's temporary is only read.
+@ __fmt_emit String out s tmpl ( Vec s ) args i nfixed s a0 s a1 s a2 s a3 → v {
     : i tlen ( nurl_str_len tmpl )
     : *u tp # *u tmpl
-    : i nargs ( vec_len [s] args )
+    : i nargs ? < nfixed 0 ( vec_len [s] args ) nfixed
     : ~ i i 0
     : ~ i ai 0
     ~ < i tlen {
@@ -61,11 +66,7 @@ $ `stdlib/core/vec.nu`
                 } {
                     ? == c2 125 {
                         ? < ai nargs {
-                            : ?s got ( vec_get [s] args ai )
-                            ?? got {
-                                T sa → ( string_push_str out sa )
-                                F → {}
-                            }
+                            ( string_push_str out ( __fmt_arg args nfixed a0 a1 a2 a3 ai ) )
                             = ai + ai 1
                         } {
                             ( string_push_char out 123 )
@@ -112,112 +113,93 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// Argument `k` of a __fmt_emit call — lent: the caller's, never a copy.
+@ __fmt_arg ( Vec s ) args i nfixed s a0 s a1 s a2 s a3 i k → s {
+    ? < nfixed 0 { ^ ?? ( vec_get [s] args k ) { T x → x F → `` } } {}
+    ? == k 0 { ^ a0 } {}
+    ? == k 1 { ^ a1 } {}
+    ? == k 2 { ^ a2 } {}
+    ^ a3
+}
+
 // ── Public API ─────────────────────────────────────────────────────
 
 @ fmt s tmpl ( Vec s ) args → String {
     : String out ( string_new )
-    ( __fmt_emit out tmpl args )
+    ( __fmt_emit out tmpl args -1 `` `` `` `` )
     ^ out
 }
 
-// The fmtN helpers pass copies of their arguments through the Vec (and
-// free them here), so a caller's temporary is only read, never kept.
-@ __fmt_args_free sink ( Vec s ) v → v {
-    ( vec_free_with [s] v \ s x → v { ( nurl_free x ) } )
-}
-
 @ fmt1 s tmpl s a → String {
-    : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    : String r ( fmt tmpl v )
-    ( __fmt_args_free v )
-    ^ r
+    : String out ( string_new )
+    ( __fmt_emit out tmpl # ( Vec s ) 0 1 a `` `` `` )
+    ^ out
 }
 
 @ fmt2 s tmpl s a s b → String {
-    : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    : String r ( fmt tmpl v )
-    ( __fmt_args_free v )
-    ^ r
+    : String out ( string_new )
+    ( __fmt_emit out tmpl # ( Vec s ) 0 2 a b `` `` )
+    ^ out
 }
 
 @ fmt3 s tmpl s a s b s c → String {
-    : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( vec_push [s] v ( nurl_str_cat c `` ) )
-    : String r ( fmt tmpl v )
-    ( __fmt_args_free v )
-    ^ r
+    : String out ( string_new )
+    ( __fmt_emit out tmpl # ( Vec s ) 0 3 a b c `` )
+    ^ out
 }
 
 @ fmt4 s tmpl s a s b s c s d → String {
-    : ( Vec s ) v ( vec_with_cap [s] 4 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( vec_push [s] v ( nurl_str_cat c `` ) )
-    ( vec_push [s] v ( nurl_str_cat d `` ) )
-    : String r ( fmt tmpl v )
-    ( __fmt_args_free v )
-    ^ r
+    : String out ( string_new )
+    ( __fmt_emit out tmpl # ( Vec s ) 0 4 a b c d )
+    ^ out
 }
 
-// ── Print helpers (build, print + '\n', free) ──────────────────────
+// ── Print helpers (build, print + '\n') ────────────────────────────
 
 @ println_fmt1 s tmpl s a → v {
     : String r ( fmt1 tmpl a )
     ( nurl_print ( string_data r ) )
     ( nurl_print `\n` )
-    ( string_free r )
 }
 
 @ println_fmt2 s tmpl s a s b → v {
     : String r ( fmt2 tmpl a b )
     ( nurl_print ( string_data r ) )
     ( nurl_print `\n` )
-    ( string_free r )
 }
 
 @ println_fmt3 s tmpl s a s b s c → v {
     : String r ( fmt3 tmpl a b c )
     ( nurl_print ( string_data r ) )
     ( nurl_print `\n` )
-    ( string_free r )
 }
 
 @ println_fmt4 s tmpl s a s b s c s d → v {
     : String r ( fmt4 tmpl a b c d )
     ( nurl_print ( string_data r ) )
     ( nurl_print `\n` )
-    ( string_free r )
 }
 
 @ eprintln_fmt1 s tmpl s a → v {
     : String r ( fmt1 tmpl a )
     ( nurl_eprint ( string_data r ) )
     ( nurl_eprint `\n` )
-    ( string_free r )
 }
 
 @ eprintln_fmt2 s tmpl s a s b → v {
     : String r ( fmt2 tmpl a b )
     ( nurl_eprint ( string_data r ) )
     ( nurl_eprint `\n` )
-    ( string_free r )
 }
 
 @ eprintln_fmt3 s tmpl s a s b s c → v {
     : String r ( fmt3 tmpl a b c )
     ( nurl_eprint ( string_data r ) )
     ( nurl_eprint `\n` )
-    ( string_free r )
 }
 
 @ eprintln_fmt4 s tmpl s a s b s c s d → v {
     : String r ( fmt4 tmpl a b c d )
     ( nurl_eprint ( string_data r ) )
     ( nurl_eprint `\n` )
-    ( string_free r )
 }

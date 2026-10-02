@@ -279,7 +279,6 @@ $ `stdlib/ext/json.nu`
         = k + k 1
     }
     // Drop the now-emptied Vec; the JArr owns the moved elements.
-    ( vec_free [Json] blocks )
     : Json m ( json_obj_new )
     ( json_obj_set m `role` ( json_str_lit `user` ) )
     ( json_obj_set m `content` arr )
@@ -631,7 +630,6 @@ i max_tokens → Json {
     ?? env {
         T s → {
             : !i ParseErr p ( int_parse ( string_data s ) )
-            ( string_free s )
             ?? p {
                 T n → {
                     ? > n 0 { ^ n } {}
@@ -697,7 +695,6 @@ i thinking_budget
     model system_prompt messages tools tool_choice max_tokens
     cache_system cache_tools thinking_budget )
     : String body_str ( json_stringify body )
-    ( json_free body )
 
     : String headers ( __claude_headers api_key )
 
@@ -712,22 +709,17 @@ i thinking_budget
     ( string_data headers )
     ( __claude_timeout_ms )
     ( __claude_connect_timeout_ms ) )
-    ( string_free body_str )
-    ( string_free headers )
 
     ?? res {
         T r → {
             : i st ( http_status r )
             : String body_owned ( string_from ( http_body_str r ) )
-            ( response_free r )
 
             : !Json JsonError pj ( json_parse ( string_data body_owned ) )
-            ( string_free body_owned )
 
             ?? pj {
                 T j → {
                     ? != st 200 {
-                        ( json_free j )
                         ^ @ !Json ClaudeErr { F @ ClaudeErr { ClaudeApi } }
                     } {}
                     ^ @ !Json ClaudeErr { T j }
@@ -819,7 +811,6 @@ i thinking_budget
     cache_system cache_tools thinking_budget )
     ( json_obj_set body `stream` ( json_bool T ) )
     : String body_str ( json_stringify body )
-    ( json_free body )
 
     // Add accept: text/event-stream so the server picks the SSE format.
     : String headers ( __claude_headers api_key )
@@ -832,8 +823,6 @@ i thinking_budget
     ( string_data headers )
     ( __claude_timeout_ms )
     ( __claude_connect_timeout_ms ) )
-    ( string_free body_str )
-    ( string_free headers )
 
     ?? s {
         T st → { ^ @ !HttpStream ClaudeErr { T st } }
@@ -857,9 +846,7 @@ i thinking_budget
     api_key model system_prompt msgs tools `` max_tokens
     F F 0 )
 
-    : ( @ v Json ) drop_json \ Json e → v { ( json_free e ) }
-    ( vec_free_with [Json] msgs drop_json )
-    ( vec_free_with [Json] tools drop_json )
+    : ( @ v Json ) drop_json \ Json e → v {}
     ^ r
 }
 
@@ -940,7 +927,6 @@ i thinking_budget
                                 ?? text_j {
                                     T tx → {
                                         : String out ( string_from ( json_str_data tx ) )
-                                        ( json_free j )
                                         ^ @ ?String { T out }
                                     }
                                     F → {}
@@ -952,7 +938,6 @@ i thinking_budget
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
@@ -988,7 +973,6 @@ i thinking_budget
                                 ?? pjf {
                                     T pjs → {
                                         : String out ( string_from ( json_str_data pjs ) )
-                                        ( json_free j )
                                         ^ @ ?String { T out }
                                     }
                                     F → {}
@@ -1000,7 +984,6 @@ i thinking_budget
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
@@ -1028,7 +1011,6 @@ i thinking_budget
                     : ?i n ( json_num_as_i ij )
                     ?? n {
                         T x → {
-                            ( json_free j )
                             ^ @ ?i { T x }
                         }
                         F → {}
@@ -1036,7 +1018,6 @@ i thinking_budget
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
@@ -1061,7 +1042,6 @@ i thinking_budget
                     ?? typ {
                         T tj → {
                             : String out ( string_from ( json_str_data tj ) )
-                            ( json_free j )
                             ^ @ ?String { T out }
                         }
                         F → {}
@@ -1069,7 +1049,6 @@ i thinking_budget
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
@@ -1100,7 +1079,6 @@ i thinking_budget
                                 ?? fj {
                                     T fjs → {
                                         : String out ( string_from ( json_str_data fjs ) )
-                                        ( json_free j )
                                         ^ @ ?String { T out }
                                     }
                                     F → {}
@@ -1112,7 +1090,6 @@ i thinking_budget
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
@@ -1152,7 +1129,6 @@ i thinking_budget
                     ?? sr {
                         T srj → {
                             : String out ( string_from ( json_str_data srj ) )
-                            ( json_free j )
                             ^ @ ?String { T out }
                         }
                         F → {}
@@ -1160,7 +1136,6 @@ i thinking_budget
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
@@ -1183,7 +1158,6 @@ i thinking_budget
                     ?? fj {
                         T fjs → {
                             : String out ( string_from ( json_str_data fjs ) )
-                            ( json_free j )
                             ^ @ ?String { T out }
                         }
                         F → {}
@@ -1191,7 +1165,6 @@ i thinking_budget
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
@@ -1223,9 +1196,7 @@ i thinking_budget
     : !Json ClaudeErr r
     ( claude_messages_full api_key model system_prompt msgs tools `` max_tokens )
 
-    : ( @ v Json ) drop_json \ Json e → v { ( json_free e ) }
-    ( vec_free_with [Json] msgs drop_json )
-    ( vec_free_with [Json] tools drop_json )
+    : ( @ v Json ) drop_json \ Json e → v {}
     ^ r
 }
 
@@ -1329,9 +1300,7 @@ i thinking_budget
     ^ ( __claude_usage_int r `cache_read_input_tokens` )
 }
 
-@ claude_response_free sink Json r → v {
-    ( json_free r )
-}
+@ claude_response_free sink Json r → v {}
 
 // ── Tool-use extractors ─────────────────────────────────────────────
 

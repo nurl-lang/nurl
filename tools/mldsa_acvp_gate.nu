@@ -46,7 +46,7 @@ $ `stdlib/std/mldsa.nu`
 
 @ __eqhex ( Vec u ) got s want → b {
     ?? ( bytes_from_hex want ) {
-        T w → { : b ok ( bytes_eq got w ) ( vec_free [u] w ) ^ ok }
+        T w → { : b ok ( bytes_eq got w ) ^ ok }
         F _e → { ^ F }
     }
 }
@@ -85,7 +85,6 @@ $ `stdlib/std/mldsa.nu`
     : !String IoErr rd ( read_file path )
     : String txt ?? rd { T v → { v } F _e → { ( nurl_print `no file\n` ) ( string_new ) } }
     : Json j ?? ( json_parse ( string_data txt ) ) { T v → { v } F _e → { ( nurl_print `bad json\n` ) ( json_null ) } }
-    ( string_free txt )
     ^ j
 }
 
@@ -100,7 +99,6 @@ $ `stdlib/std/mldsa.nu`
     ( string_push_int s skip )
     ( string_push_str s ` skipped\n` )
     ( nurl_print ( string_data s ) )
-    ( string_free s )
 }
 
 @ main → i {
@@ -123,13 +121,10 @@ $ `stdlib/std/mldsa.nu`
             : MldsaKeys ks ( mldsa_keygen_derand level xi )
             ? & ( __eqhex ( mldsa_pk ks ) ( __str tc `pk` ) ) ( __eqhex ( mldsa_sk ks ) ( __str tc `sk` ) )
             { = kp + kp 1 } { = kf + kf 1 }
-            ( mldsa_keys_free ks )
-            ( vec_free [u] xi )
             = ti + ti 1
         }
         = gi + gi 1
     }
-    ( json_free kg )
     ( __report `keyGen` kp kf 0 )
     = totfail + totfail kf
 
@@ -161,7 +156,6 @@ $ `stdlib/std/mldsa.nu`
                 : ( Vec u ) rnd ? det ( __hexv `0000000000000000000000000000000000000000000000000000000000000000` ) ( __hexv ( __str tc `rnd` ) )
                 : ( Vec u ) sig ( mldsa_sign_mu level sk mu rnd )
                 ? ( __eqhex sig ( __str tc `signature` ) ) { = sp + sp 1 } { = sf + sf 1 }
-                ( vec_free [u] sig ) ( vec_free [u] rnd ) ( vec_free [u] mu ) ( vec_free [u] sk )
             } {
                 ? & ! | internal pure == 0 ( __ph_alg ( __str tc `hashAlg` ) ) { = ss + ss 1 } {
                     : ( Vec u ) sk ( __hexv ( __str tc `sk` ) )
@@ -170,7 +164,6 @@ $ `stdlib/std/mldsa.nu`
                     : ( Vec u ) ctx ( __hexv ( __str tc `context` ) )
                     : ~ ( Vec u ) mp ( vec_new [u] )
                     ? internal {
-                        ( vec_free [u] mp )
                         = mp ( bytes_slice msg 0 ( vec_len [u] msg ) )
                     } {
                         ? pure {
@@ -179,24 +172,16 @@ $ `stdlib/std/mldsa.nu`
                             ( bytes_extend_bytes mp ctx )
                             ( bytes_extend_bytes mp msg )
                         } {
-                            ( vec_free [u] mp )
                             = mp ( mldsa_ph_mprime ( __ph_alg ( __str tc `hashAlg` ) ) msg ctx )
                         }
                     }
-                    ( vec_free [u] ctx )
                     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
                     ? ( __eqhex sig ( __str tc `signature` ) ) { = sp + sp 1 } { = sf + sf 1 }
-                    ( vec_free [u] sig )
-                    ( vec_free [u] mp )
-                    ( vec_free [u] rnd )
-                    ( vec_free [u] msg )
-                    ( vec_free [u] sk )
                 } }
             = ti + ti 1
         }
         = gi + gi 1
     }
-    ( json_free sg )
     ( __report `sigGen` sp sf ss )
     = totfail + totfail sf
 
@@ -224,7 +209,6 @@ $ `stdlib/std/mldsa.nu`
                 : ( Vec u ) mu ( __hexv ( __str tc `mu` ) )
                 : ( Vec u ) sig ( __hexv ( __str tc `signature` ) )
                 ? == ( mldsa_verify_mu level pk mu sig ) ( __bool tc `testPassed` ) { = vp + vp 1 } { = vf + vf 1 }
-                ( vec_free [u] sig ) ( vec_free [u] mu ) ( vec_free [u] pk )
             } {
                 ? & ! | internal pure == 0 ( __ph_alg ( __str tc `hashAlg` ) ) { = vs + vs 1 } {
                     : ( Vec u ) pk ( __hexv ( __str tc `pk` ) )
@@ -233,7 +217,6 @@ $ `stdlib/std/mldsa.nu`
                     : ( Vec u ) ctx ( __hexv ( __str tc `context` ) )
                     : ~ ( Vec u ) mp ( vec_new [u] )
                     ? internal {
-                        ( vec_free [u] mp )
                         = mp ( bytes_slice msg 0 ( vec_len [u] msg ) )
                     } {
                         ? pure {
@@ -242,24 +225,17 @@ $ `stdlib/std/mldsa.nu`
                             ( bytes_extend_bytes mp ctx )
                             ( bytes_extend_bytes mp msg )
                         } {
-                            ( vec_free [u] mp )
                             = mp ( mldsa_ph_mprime ( __ph_alg ( __str tc `hashAlg` ) ) msg ctx )
                         }
                     }
-                    ( vec_free [u] ctx )
                     : b got ( mldsa_verify_internal level pk mp sig )
                     : b want ( __bool tc `testPassed` )
                     ? == got want { = vp + vp 1 } { = vf + vf 1 }
-                    ( vec_free [u] mp )
-                    ( vec_free [u] sig )
-                    ( vec_free [u] msg )
-                    ( vec_free [u] pk )
                 } }
             = ti + ti 1
         }
         = gi + gi 1
     }
-    ( json_free sv )
     ( __report `sigVer` vp vf vs )
     = totfail + totfail vf
 

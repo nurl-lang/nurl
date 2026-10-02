@@ -44,7 +44,6 @@ $ `stdlib/std/time.nu`
         = i + i 1
     }
 
-    ( string_free raw )
     ^ out
 }
 
@@ -82,7 +81,6 @@ $ `stdlib/std/time.nu`
         = i + i 1
     }
 
-    ( string_free raw )
     ^ out
 }
 

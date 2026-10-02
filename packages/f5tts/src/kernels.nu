@@ -490,7 +490,7 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ^ v
 }
 
-@ f5k_modln * GpuKit kit i xd i yd i scaled i shiftd i rows i d f eps → b {
+@ f5k_modln GpuKit kit i xd i yd i scaled i shiftd i rows i d f eps → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a yd )
@@ -504,7 +504,7 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ^ r
 }
 
-@ f5k_lnaff * GpuKit kit i xd i yd i wd i bd i rows i d f eps → b {
+@ f5k_lnaff GpuKit kit i xd i yd i wd i bd i rows i d f eps → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a yd )
@@ -518,7 +518,7 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ^ r
 }
 
-@ f5k_gated_add * GpuKit kit i xd i yd i gated i rows i d → b {
+@ f5k_gated_add GpuKit kit i xd i yd i gated i rows i d → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a yd )
@@ -530,7 +530,7 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ^ r
 }
 
-@ f5k_split_rope * GpuKit kit i srcd i dstd i cosd i sind i batch i n i heads i hd i dorope → b {
+@ f5k_split_rope GpuKit kit i srcd i dstd i cosd i sind i batch i n i heads i hd i dorope → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a srcd )
     ( vec_push [i] a dstd )
@@ -547,7 +547,7 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ^ r
 }
 
-@ f5k_split_rope_s * GpuKit kit i srcd i dstd i cosd i sind i batch i n i heads i hd
+@ f5k_split_rope_s GpuKit kit i srcd i dstd i cosd i sind i batch i n i heads i hd
 i dorope i stride i coff → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a srcd )
@@ -567,7 +567,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_merge * GpuKit kit i srcd i dstd i batch i n i heads i hd → b {
+@ f5k_merge GpuKit kit i srcd i dstd i batch i n i heads i hd → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a srcd )
     ( vec_push [i] a dstd )
@@ -581,7 +581,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ __f5k_act * GpuKit kit s name i xd i n → b {
+@ __f5k_act GpuKit kit s name i xd i n → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a ( gpu_arg_i64 n ) )
@@ -590,18 +590,18 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_gelu_erf * GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_gelu_erf` xd n ) }
+@ f5k_gelu_erf GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_gelu_erf` xd n ) }
 
-@ f5k_gelu_tanh * GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_gelu_tanh` xd n ) }
+@ f5k_gelu_tanh GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_gelu_tanh` xd n ) }
 
-@ f5k_silu * GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_silu` xd n ) }
+@ f5k_silu GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_silu` xd n ) }
 
-@ f5k_mish * GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_mish` xd n ) }
+@ f5k_mish GpuKit kit i xd i n → b { ^ ( __f5k_act kit `f5_mish` xd n ) }
 
 // One grouped convolution covers all three shapes this port needs:
 // depthwise (groups = channels), fully connected across channels
 // (groups = 1) and the position embedding's sixteen groups.
-@ f5k_conv1d * GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
+@ f5k_conv1d GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a yd )
@@ -623,7 +623,7 @@ i dorope i stride i coff → b {
 // The transposed-weight form. Same arguments, same result.
 // The four-position form. Same weights, same result, a quarter of the weight
 // traffic.
-@ f5k_conv1d_t4 * GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
+@ f5k_conv1d_t4 GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a yd )
@@ -642,7 +642,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_conv1d_t * GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
+@ f5k_conv1d_t GpuKit kit i xd i yd i wd i bd i batch i n i cin i cout i K i pad i groups → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a yd )
@@ -661,7 +661,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_grn * GpuKit kit i xd i gxd i meand i gammad i betad i rows i d → b {
+@ f5k_grn GpuKit kit i xd i gxd i meand i gammad i betad i rows i d → b {
     : ( Vec i ) a1 ( __f5k_a3 xd gxd ( gpu_arg_i64 rows ) )
     ( vec_push [i] a1 ( gpu_arg_i64 d ) )
     : ~ b r ( gk_run_dev kit ( __f5k_grn ) `f5_grn_gx` ( gk_grid d 256 ) 256 a1 )
@@ -684,7 +684,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_maskrows * GpuKit kit i xd i keepd i rows i d → b {
+@ f5k_maskrows GpuKit kit i xd i keepd i rows i d → b {
     : ( Vec i ) a ( __f5k_a3 xd keepd ( gpu_arg_i64 rows ) )
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_maskrows` ( gk_grid * rows d 256 ) 256 a )
@@ -692,7 +692,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_concat3 * GpuKit kit i xd i condd i txtd i outd i batch i n i mel i td → b {
+@ f5k_concat3 GpuKit kit i xd i condd i txtd i outd i batch i n i mel i td → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a xd )
     ( vec_push [i] a condd )
@@ -708,7 +708,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_cfg * GpuKit kit i predd i outd i n i d f cfg → b {
+@ f5k_cfg GpuKit kit i predd i outd i n i d f cfg → b {
     : ( Vec i ) a ( __f5k_a3 predd outd ( gpu_arg_i64 n ) )
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     ( vec_push [i] a ( gpu_arg_f32 cfg ) )
@@ -717,7 +717,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_axpy * GpuKit kit i yd i vd f a i n → b {
+@ f5k_axpy GpuKit kit i yd i vd f a i n → b {
     : ( Vec i ) ar ( __f5k_a3 yd vd ( gpu_arg_f32 a ) )
     ( vec_push [i] ar ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_axpy` ( gk_grid n 256 ) 256 ar )
@@ -725,14 +725,14 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_addinto * GpuKit kit i yd i ad i n → b {
+@ f5k_addinto GpuKit kit i yd i ad i n → b {
     : ( Vec i ) ar ( __f5k_a3 yd ad ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_addinto` ( gk_grid n 256 ) 256 ar )
     ( vec_free [i] ar )
     ^ r
 }
 
-@ f5k_scalecols * GpuKit kit i xd i gd i rows i d → b {
+@ f5k_scalecols GpuKit kit i xd i gd i rows i d → b {
     : ( Vec i ) a ( __f5k_a3 xd gd ( gpu_arg_i64 rows ) )
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_scalecols` ( gk_grid * rows d 256 ) 256 a )
@@ -740,7 +740,7 @@ i dorope i stride i coff → b {
     ^ r
 }
 
-@ f5k_dup * GpuKit kit i srcd i dstd i n i copies → b {
+@ f5k_dup GpuKit kit i srcd i dstd i n i copies → b {
     : ( Vec i ) ar ( __f5k_a3 srcd dstd ( gpu_arg_i64 n ) )
     ( vec_push [i] ar ( gpu_arg_i64 copies ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_dup` ( gk_grid * n copies 256 ) 256 ar )

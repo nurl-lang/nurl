@@ -22,7 +22,8 @@ $ `stdlib/std/random.nu`
     i family  // 1 = IPv4, 2 = IPv6
 }
 
-@ stun_addr_free sink StunAddr a → v { ( string_free . a host ) }
+// Let go of `a` now rather than at the end of its owner's scope.
+@ stun_addr_free sink StunAddr a → v {}
 
 // 0x2112A442
 @ __stun_cookie → i { ^ 554869826 }
@@ -45,11 +46,6 @@ $ `stdlib/std/random.nu`
 : StunRequest {
     ( Vec u ) txid
     ( Vec u ) msg
-}
-
-@ stun_request_free sink StunRequest r → v {
-    ( vec_free [u] . r txid )
-    ( vec_free [u] . r msg )
 }
 
 // Build a Binding request carrying the given 12-byte transaction id.
@@ -134,7 +130,6 @@ $ `stdlib/std/random.nu`
             ?? rr {
                 T pkt → {
                     : ?StunAddr a ( stun_parse . pkt data . req txid )
-                    ( udp_packet_free pkt )
                     a
                 }
                 F _ → @ ?StunAddr { F # StunAddr 0 }
@@ -142,6 +137,5 @@ $ `stdlib/std/random.nu`
         }
         F _ → @ ?StunAddr { F # StunAddr 0 }
     }
-    ( stun_request_free req )
     ^ out
 }

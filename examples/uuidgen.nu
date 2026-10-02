@@ -26,8 +26,6 @@ $ `stdlib/core/string.nu`
             } {
                 ( nurl_print `v4 round-trip: FAIL\n` )
             }
-            ( string_free f4 )
-            ( vec_free [u] b4 )
         }
         F → { ( nurl_print `v4 parse: FAIL\n` ) }
     }
@@ -37,11 +35,7 @@ $ `stdlib/core/string.nu`
     ?? pinv {
         T b → {
             ( nurl_print `invalid parse: FAIL (should have failed)\n` )
-            ( vec_free [u] b )
         }
         F → { ( nurl_print `invalid parse: OK\n` ) }
     }
-
-    ( string_free v4 )
-    ( string_free v7 )
 }

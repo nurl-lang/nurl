@@ -33,7 +33,8 @@ $ `stdlib/ext/compress.nu`
     ^ @ GrpcError { code ( string_from message ) }
 }
 
-@ grpc_error_free sink GrpcError e → v { ( string_free . e message ) }
+// Let go of `e` now rather than at the end of its owner's scope.
+@ grpc_error_free sink GrpcError e → v {}
 
 @ grpc_code_name i code → s {
     ^ ?? code {
@@ -191,14 +192,12 @@ $ `stdlib/ext/compress.nu`
             F e → ^ @ !( Vec u ) GrpcError { F ( __grpc_compression_error e ) }
             T compressed → {
                 ? > ( vec_len [u] compressed ) max_message {
-                    ( vec_free [u] compressed )
                     ^ @ !( Vec u ) GrpcError { F ( grpc_error GRPC_RESOURCE_EXHAUSTED `compressed message exceeds limit` ) }
                 } {}
                 : ( Vec u ) out ( vec_new [u] )
                 ( vec_push [u] out # u 1 )
                 ( bytes_push_u32_be out # u32 ( vec_len [u] compressed ) )
                 ( vec_extend [u] out compressed )
-                ( vec_free [u] compressed )
                 ^ @ !( Vec u ) GrpcError { T out }
             }
         }
@@ -214,7 +213,8 @@ $ `stdlib/ext/compress.nu`
 : GrpcMessage { b present ( Vec u ) data }
 : GrpcDecoder { ( Vec u ) pending i pos i max_message i max_buffer i encoding }
 
-@ grpc_message_free sink GrpcMessage message → v { ( vec_free [u] . message data ) }
+// Let go of `message` now rather than at the end of its owner's scope.
+@ grpc_message_free sink GrpcMessage message → v {}
 
 @ grpc_decoder i max_message i max_buffer i encoding → !GrpcDecoder GrpcError {
     ? | | <= max_message 0 > max_message 2147483647 < max_buffer + max_message 5 {
@@ -226,7 +226,8 @@ $ `stdlib/ext/compress.nu`
     ^ @ !GrpcDecoder GrpcError { T @ GrpcDecoder { ( vec_new [u] ) 0 max_message max_buffer encoding } }
 }
 
-@ grpc_decoder_free sink GrpcDecoder d → v { ( vec_free [u] . d pending ) }
+// Let go of `d` now rather than at the end of its owner's scope.
+@ grpc_decoder_free sink GrpcDecoder d → v {}
 
 // Atomic on error. Call next repeatedly after each feed until present=false.
 @ grpc_decoder_feed inout GrpcDecoder d ( Vec u ) bytes → !v GrpcError {
@@ -276,7 +277,6 @@ $ `stdlib/ext/compress.nu`
     ( vec_extend_range [u] body . d pending + . d pos 5 length )
     ? == flag 1 {
         : !( Vec u ) CompressErr decoded ( gzip_decompress_max body . d max_message )
-        ( vec_free [u] body )
         ?? decoded {
             F e → ^ @ !GrpcMessage GrpcError { F ( __grpc_compression_error e ) }
             T bytes → {

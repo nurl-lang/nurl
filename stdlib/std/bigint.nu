@@ -14,7 +14,7 @@
 //                                            - empty / sign-only → Empty
 //                                            - non-digit byte    → BadFormat
 //   ( bigint_clone   BigInt x )           → BigInt
-//   ( bigint_free    BigInt x )           → v
+//   ( bigint_free    BigInt x )           → v   early release (optional)
 //   ( bigint_is_zero BigInt x )           → b
 //   ( bigint_neg     BigInt x )           → BigInt
 //   ( bigint_cmp     BigInt x BigInt y )  → i   (-1 / 0 / +1, signed)
@@ -34,11 +34,9 @@
 // base-2^16 limbs; a single-limb divisor short-circuits through
 // __mag_divmod_small_inplace.
 //
-// Memory: every BigInt OWNS its limb vector. Operations BORROW their
-// arguments (never freed) and return a freshly-allocated BigInt; the
-// caller frees each BigInt it holds with `bigint_free` (mirrors the
-// `http_response_free` / `query_pairs_free` convention — plain structs
-// are not auto-dropped). bigint_to_string returns an OWNED String.
+// Memory: every BigInt OWNS its limb vector and goes with its owner.
+// Operations BORROW their arguments and return a fresh BigInt;
+// bigint_to_string returns an OWNED String.
 
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/panic.nu`
@@ -293,7 +291,6 @@ $ `stdlib/core/vec.nu`
             = . up + t2 j dd
             = t2 + t2 1
         }
-        ( vec_free [i] qv )
         // D6 add back (rare: probability ~2/base per digit): the trial
         // digit was one too large — undo by adding v once. The top-limb
         // carry wraps mod base, cancelling the outstanding borrow.
@@ -320,8 +317,6 @@ $ `stdlib/core/vec.nu`
     }
     ( __norm rem )
     ? > d 1 { : i _r ( __mag_divmod_small_inplace rem d ) } {}
-    ( vec_free [i] un )
-    ( vec_free [i] vn )
     ( __norm q )
     ^ q
 }
@@ -357,9 +352,8 @@ $ `stdlib/core/vec.nu`
     ^ @ BigInt { . x neg ( __mag_clone . x limbs ) }
 }
 
-@ bigint_free sink BigInt x → v {
-    ( vec_free [i] . x limbs )
-}
+// Its fields go with their owner; this lets go of them early (optional).
+@ bigint_free sink BigInt x → v {}
 
 @ bigint_is_zero BigInt x → b {
     ^ == ( vec_len [i] . x limbs ) 0
@@ -409,7 +403,6 @@ $ `stdlib/core/vec.nu`
 @ bigint_sub BigInt x BigInt y → BigInt {
     : BigInt ny ( bigint_neg y )
     : BigInt r ( bigint_add x ny )
-    ( bigint_free ny )
     ^ r
 }
 
@@ -425,7 +418,6 @@ $ `stdlib/core/vec.nu`
     ? ( bigint_is_zero y ) { ( panic `bigint_div: division by zero` ) } {}
     : ( Vec i ) rm ( vec_new [i] )
     : ( Vec i ) qm ( __mag_divmod . x limbs . y limbs rm )
-    ( vec_free [i] rm )
     : b neg & != . x neg . y neg > ( vec_len [i] qm ) 0
     ^ @ BigInt { neg qm }
 }
@@ -436,7 +428,6 @@ $ `stdlib/core/vec.nu`
     ? ( bigint_is_zero y ) { ( panic `bigint_rem: division by zero` ) } {}
     : ( Vec i ) rm ( vec_new [i] )
     : ( Vec i ) qm ( __mag_divmod . x limbs . y limbs rm )
-    ( vec_free [i] qm )
     : b neg & . x neg > ( vec_len [i] rm ) 0
     ^ @ BigInt { neg rm }
 }
@@ -473,7 +464,6 @@ $ `stdlib/core/vec.nu`
         : i r ( __mag_divmod_small_inplace work 10000 )
         ( vec_push [i] groups r )
     }
-    ( vec_free [i] work )
     : String out ( string_new )
     ? . x neg { ( string_push_char out 45 ) } {}
     : i ng ( vec_len [i] groups )
@@ -585,7 +575,6 @@ $ `stdlib/core/vec.nu`
 @ __mulmod BigInt a BigInt b BigInt m → BigInt {
     : BigInt t ( bigint_mul a b )
     : BigInt r ( bigint_rem t m )
-    ( bigint_free t )
     ^ r
 }
 
@@ -662,12 +651,11 @@ $ `stdlib/core/vec.nu`
         ( __bigint_cswap R0 R1 bit )
         : BigInt t1 ( __mulmod R0 R1 m )  // R1 ← R0·R1
         : BigInt t0 ( __mulmod R0 R0 m )  // R0 ← R0²
-        ( bigint_free R1 ) = R1 t1
-        ( bigint_free R0 ) = R0 t0
+        = R1 t1
+        = R0 t0
         ( __bigint_cswap R0 R1 bit )
         = i - i 1
     }
-    ( bigint_free R1 )
     ^ R0
 }
 
@@ -680,7 +668,7 @@ $ `stdlib/core/vec.nu`
     : BigInt one ( bigint_from_i 1 )
     // old_r = a mod m, normalized non-negative; r = m.
     : ~ BigInt old_r ( bigint_rem a m )
-    ? . old_r neg { : BigInt t ( bigint_add old_r m ) ( bigint_free old_r ) = old_r t } {}
+    ? . old_r neg { : BigInt t ( bigint_add old_r m ) = old_r t } {}
     : ~ BigInt r ( bigint_clone m )
     : ~ BigInt old_s ( bigint_from_i 1 )
     : ~ BigInt s ( bigint_zero )
@@ -689,22 +677,17 @@ $ `stdlib/core/vec.nu`
         // (old_r, r) ← (r, old_r − q·r)
         : BigInt qr ( bigint_mul q r )
         : BigInt nr ( bigint_sub old_r qr )
-        ( bigint_free old_r ) = old_r r = r nr
-        ( bigint_free qr )
+        = old_r r = r nr
         // (old_s, s) ← (s, old_s − q·s)
         : BigInt qs ( bigint_mul q s )
         : BigInt ns ( bigint_sub old_s qs )
-        ( bigint_free old_s ) = old_s s = s ns
-        ( bigint_free qs ) ( bigint_free q )
+        = old_s s = s ns
     }
     : ~ BigInt res ( bigint_zero )
     ? == ( bigint_cmp old_r one ) 0 {
-        ( bigint_free res )
         // res = old_s mod m, normalized into [0, m).
         : BigInt sm ( bigint_rem old_s m )
-        ? . sm neg { = res ( bigint_add sm m ) ( bigint_free sm ) } { = res sm }
+        ? . sm neg { = res ( bigint_add sm m ) } { = res sm }
     } {}
-    ( bigint_free old_r ) ( bigint_free r ) ( bigint_free old_s ) ( bigint_free s )
-    ( bigint_free one )
     ^ res
 }

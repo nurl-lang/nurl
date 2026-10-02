@@ -83,11 +83,10 @@ $ `stdlib/std/bytes.nu`
 @ _der_oid_is ( Vec u ) b DerTlv t s hexoid → b {
     : ( Vec u ) want ?? ( bytes_from_hex hexoid ) { T v → v F _ → ( vec_new [u] ) }
     : i wl ( vec_len [u] want )
-    ? != . t len wl { ( vec_free [u] want ) ^ F } {}
+    ? != . t len wl { ^ F } {}
     : ~ b eq T
     : ~ i i 0
     ~ < i wl { ? != ( __x509_bget b + . t start i ) ( __x509_bget want i ) { = eq F } {} = i + i 1 }
-    ( vec_free [u] want )
     ^ eq
 }
 
@@ -220,7 +219,6 @@ $ `stdlib/std/bytes.nu`
             ? ! ( __x509_has_nul b e ) {
                 : ( Vec u ) nm ( _der_content b e )
                 ( vec_push [String] . out sans ( bytes_to_str nm ) )
-                ( vec_free [u] nm )
             } {}
         } {}
         ? == . e tag 135 {  // [7] iPAddress, OCTET STRING (4 or 16 bytes)
@@ -318,7 +316,6 @@ $ `stdlib/std/bytes.nu`
 
     : DerTlv tbs ( _der_child der cert )
     ? != . tbs ok 1 { ^ out } {}
-    ( vec_free [u] . out tbs )
     = . out tbs ( __der_elem_bytes der tbs )
 
     // signatureAlgorithm + signatureValue (siblings of tbs)
@@ -327,7 +324,6 @@ $ `stdlib/std/bytes.nu`
     : DerTlv sigbits ( _der_next der sigalg )
     ? == . sigbits tag 3 {
         // BIT STRING: skip the leading "unused bits" byte
-        ( vec_free [u] . out sig )
         = . out sig ( bytes_slice der + . sigbits start 1 + . sigbits start . sigbits len )
     } {}
 
@@ -337,7 +333,6 @@ $ `stdlib/std/bytes.nu`
     = c ( _der_next der c )  // skip serialNumber
     = c ( _der_next der c )  // skip signature alg
     ? != . c ok 1 { ^ out } {}
-    ( vec_free [u] . out issuer )
     = . out issuer ( __der_elem_bytes der c )
     = c ( _der_next der c )  // validity
     ? != . c ok 1 { ^ out } {}
@@ -348,7 +343,6 @@ $ `stdlib/std/bytes.nu`
     = . out not_after ( __x509_time der na )
     = c ( _der_next der c )
     ? != . c ok 1 { ^ out } {}
-    ( vec_free [u] . out subject )
     = . out subject ( __der_elem_bytes der c )
     = c ( _der_next der c )  // subjectPublicKeyInfo
     ? != . c ok 1 { ^ out } {}
@@ -362,9 +356,7 @@ $ `stdlib/std/bytes.nu`
         : DerTlv rsaseq ( der_at der + . keybits start 1 )
         : DerTlv ni ( _der_child der rsaseq )
         : DerTlv ei ( _der_next der ni )
-        ( vec_free [u] . out rsa_n )
         = . out rsa_n ( _der_uint der ni )
-        ( vec_free [u] . out rsa_e )
         = . out rsa_e ( _der_uint der ei )
     } {
         ? ( _der_oid_is der keyoid `2a8648ce3d0201` ) {
@@ -375,12 +367,10 @@ $ `stdlib/std/bytes.nu`
             ? ( _der_oid_is der curve `2a8648ce3d030107` ) { = cc 256 } {}
             ? ( _der_oid_is der curve `2b81040022` ) { = cc 384 } {}
             = . out ec_curve cc
-            ( vec_free [u] . out ec_point )
             = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
         } {
             ? ( _der_oid_is der keyoid `2b6570` ) {
                 = . out key_alg 3
-                ( vec_free [u] . out ec_point )
                 = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
             } {
                 // ML-DSA: the BIT STRING holds the encoded public key
@@ -393,7 +383,6 @@ $ `stdlib/std/bytes.nu`
                 ? > ml 0 {
                     = . out key_alg 4
                     = . out ec_curve ml
-                    ( vec_free [u] . out ec_point )
                     = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
                 } {}
             }
@@ -436,10 +425,8 @@ $ `stdlib/std/bytes.nu`
             }
             = j + j 1
         }
-        ( string_free iphex )
         ^ ipok
     } {}
-    ( string_free iphex )
     : ( Vec String ) sans . cert sans
     : i n ( vec_len [String] sans )
     : ~ i i 0
@@ -533,14 +520,5 @@ $ `stdlib/std/bytes.nu`
 
 @ __lower i c → i { ^ ? & >= c 65 <= c 90 + c 32 c }
 
-@ x509_free sink X509 c → v {
-    ( vec_free [u] . c tbs )
-    ( vec_free [u] . c sig )
-    ( vec_free [u] . c rsa_n )
-    ( vec_free [u] . c rsa_e )
-    ( vec_free [u] . c ec_point )
-    ( vec_free [u] . c subject )
-    ( vec_free [u] . c issuer )
-    ( vec_free_with [String] . c sans \ String s → v { ( string_free s ) } )
-    ( vec_free_with [String] . c ip_sans \ String s → v { ( string_free s ) } )
-}
+// Its fields go with their owner; this lets go of them early (optional).
+@ x509_free sink X509 c → v {}

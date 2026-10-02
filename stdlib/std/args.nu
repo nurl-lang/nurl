@@ -293,7 +293,6 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     : b ok ( args_parse p toks )
-    ( vec_free_with [String] toks \ String s → v { ( string_free s ) } )
     ^ ok
 }
 
@@ -436,17 +435,5 @@ $ `stdlib/core/vec.nu`
 
 // ── Cleanup ───────────────────────────────────────────────────────────
 
-@ args_free sink ArgParser p → v {
-    ( string_free . p prog )
-    ( string_free . p about )
-    ( string_free . p error )
-    ( vec_free_with [String] . p longs \ String s → v { ( string_free s ) } )
-    ( vec_free [i] . p shorts )
-    ( vec_free [i] . p kinds )
-    ( vec_free_with [String] . p metavars \ String s → v { ( string_free s ) } )
-    ( vec_free_with [String] . p helps \ String s → v { ( string_free s ) } )
-    ( vec_free [i] . p counts )
-    ( vec_free [i] . p val_idx )
-    ( vec_free_with [String] . p val_str \ String s → v { ( string_free s ) } )
-    ( vec_free_with [String] . p positionals \ String s → v { ( string_free s ) } )
-}
+// Let go of `p` now rather than at the end of its owner's scope.
+@ args_free sink ArgParser p → v {}

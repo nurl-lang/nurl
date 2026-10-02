@@ -25,12 +25,12 @@ $ `deps/gpukit/src/dev.nu`
 $ `src/weights.nu`
 $ `src/devblock.nu`
 
-@ __lmw_none → GkBuf { ^ @ GkBuf { 0 0 GK_F32 } }
+@ __lmw_none → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 
 // One tensor onto the device. The staging vector is written through its
 // own data pointer — pt_read_f64 fills a raw span — so the elements are
 // copied once, not twice.
-@ lmw_upload * Lw w * GpuKit kit s name → GkBuf {
+@ lmw_upload * Lw w GpuKit kit s name → GkBuf {
     : i n ( lw_nelems w name )
     ? <= n 0 {
         : b _r ( lw_require w name -1 -1 -1 -1 )
@@ -64,7 +64,7 @@ $ `src/devblock.nu`
 // CALL time to reach it is a measured LOSS — a full memory round trip
 // over a cold weight used once. Transposing HERE costs one pass, once
 // per process, and every frame afterwards takes the tiled path.
-@ lmw_upload_t * Lw w * GpuKit kit s name i rows i cols → GkBuf {
+@ lmw_upload_t * Lw w GpuKit kit s name i rows i cols → GkBuf {
     : i n ( lw_nelems w name )
     ? | <= n 0 != n * rows cols {
         : b _r ( lw_require w name rows cols -1 -1 )
@@ -119,7 +119,7 @@ $ `src/devblock.nu`
 
 // `<prefix><leaf>` — the checkpoint's names are dotted paths and a block
 // is one prefix away from all eighteen of its tensors.
-@ __lmw_at * Lw w * GpuKit kit s prefix s leaf → GkBuf {
+@ __lmw_at * Lw w GpuKit kit s prefix s leaf → GkBuf {
     : String nm ( string_from prefix )
     ( string_push_str nm leaf )
     : GkBuf b ( lmw_upload w kit ( string_data nm ) )
@@ -128,7 +128,7 @@ $ `src/devblock.nu`
 }
 
 // The same, transposed — for the four Linear weights whose GEMM is hot.
-@ __lmw_at_t * Lw w * GpuKit kit s prefix s leaf i rows i cols → GkBuf {
+@ __lmw_at_t * Lw w GpuKit kit s prefix s leaf i rows i cols → GkBuf {
     : String nm ( string_from prefix )
     ( string_push_str nm leaf )
     : GkBuf b ( lmw_upload_t w kit ( string_data nm ) rows cols )
@@ -144,7 +144,7 @@ $ `src/devblock.nu`
 // than the checkpoint's [out, in], so `lm_block_forward` can call
 // gkd_gemm with transb=0 and get the register-tiled CPU kernel. `dim`
 // and `hidden` are the block's widths; qkv is 3*dim wide.
-@ lmw_block * Lw w * GpuKit kit s prefix b qk f eps i dim i hidden → LmBlk {
+@ lmw_block * Lw w GpuKit kit s prefix b qk f eps i dim i hidden → LmBlk {
     ^ @ LmBlk {
         ( __lmw_at w kit prefix `norm1.weight` )
         ( __lmw_at w kit prefix `norm1.bias` )

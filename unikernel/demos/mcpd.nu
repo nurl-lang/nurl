@@ -93,7 +93,6 @@ $ `stdlib/core/string.nu`
                 F → ( json_obj_new )
             }
             : Json result ( dispatch_tool name args )
-            ( json_free args )
             ^ ( mcp_response_result id result )
         }
         F → {
@@ -135,7 +134,6 @@ $ `stdlib/core/string.nu`
                             F → ( json_obj_new )
                         }
                         : Json out ( handle_tools_call id params )
-                        ( json_free params )
                         ^ @ ?Json { T out }
                     } {}
                     // Unknown method.
@@ -145,7 +143,6 @@ $ `stdlib/core/string.nu`
                     ( string_push_str msg method )
                     : Json err ( mcp_response_error id mcp_err_method_not_found
                     ( string_data msg ) )
-                    ( string_free msg )
                     ^ @ ?Json { T err }
                 }
                 F → {

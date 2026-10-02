@@ -92,8 +92,6 @@ $ `stdlib/std/net.nu`
     : ( Vec String ) out ( __dns_split_lines raw )
     ( nurl_free raw )
     ? == ( vec_len [String] out ) 0 {
-        : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
-        ( vec_free_with [String] out drop_str )
         ^ @ !( Vec String ) NetErr { F # NetErr NetOther }
     } {}
     ^ @ !( Vec String ) NetErr { T out }
@@ -104,8 +102,6 @@ $ `stdlib/std/net.nu`
     : ( Vec String ) out ( __dns_split_lines raw )
     ( nurl_free raw )
     ? == ( vec_len [String] out ) 0 {
-        : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
-        ( vec_free_with [String] out drop_str )
         ^ @ !( Vec String ) NetErr { F # NetErr NetOther }
     } {}
     ^ @ !( Vec String ) NetErr { T out }

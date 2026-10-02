@@ -50,7 +50,7 @@ $ `src/infoshare.nu`
     ^ out
 }
 
-@ __ic_dump * GpuKit kit s dir s name GkBuf b i n → b {
+@ __ic_dump GpuKit kit s dir s name GkBuf b i n → b {
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _hl ( vec_set_len [f] host n )
     ? ( gk_dbuf_download kit b host ) {} { ^ F }
@@ -107,7 +107,7 @@ $ `src/infoshare.nu`
         }
         T got → { = lw got }
     }
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __ic_die `no compute device` ) }
     : InfoShare ish ( is_load lw kit )
     ? ( lw_ok lw ) {} { ^ ( __ic_die ( lw_error lw ) ) }

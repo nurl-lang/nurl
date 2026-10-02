@@ -73,7 +73,7 @@ $ `src/load.nu`
     ( vec_free [f] . ish scaletok )
 }
 
-@ is_load * Lw w * GpuKit kit → InfoShare {
+@ is_load * Lw w GpuKit kit → InfoShare {
     : ( Vec MaBlk ) bs ( vec_new [MaBlk] )
     : ~ i i0 0
     ~ < i0 IS_DEPTH {
@@ -102,7 +102,7 @@ $ `src/load.nu`
 // Place one view's encoder output into the sequence: the dino token
 // buffer has cls at row 0 and patches at rows 1.., the sequence wants
 // patches first and cls after them.
-@ is_place * GpuKit kit GkBuf x i v i tpv GkBuf tok i np → b {
+@ is_place GpuKit kit GkBuf x i v i tpv GkBuf tok i np → b {
     : i base * v tpv
     : i rows / . x n IS_DIM
     : GkBuf patches ( ma_view tok IS_DIM * np IS_DIM )
@@ -115,7 +115,7 @@ $ `src/load.nu`
 // registers). This is the state the DPT head's hook 0 wants — snapshot
 // AFTER this and BEFORE is_mark_input, which is what the reference
 // feeds it (the view positional encoding is info_sharing-internal).
-@ is_fuse_input * GpuKit kit InfoShare ish GkBuf x i nv i np → b {
+@ is_fuse_input GpuKit kit InfoShare ish GkBuf x i nv i np → b {
     : i tpv + np 1
     : ~ i v 0
     ~ < v nv {
@@ -128,7 +128,7 @@ $ `src/load.nu`
 
 // Add view_pos_table to every view-0 token and write the scale token
 // into the last row.
-@ is_mark_input * GpuKit kit InfoShare ish GkBuf x i nv i np → b {
+@ is_mark_input GpuKit kit InfoShare ish GkBuf x i nv i np → b {
     : i tpv + np 1
     // view 0 gets the reference-view positional encoding, cls included
     : GkBuf v0 ( ma_view x 0 * tpv IS_DIM )
@@ -142,7 +142,7 @@ $ `src/load.nu`
     ^ ( gk_dbuf_upload kit last . ish scaletok )
 }
 
-@ is_finish_input * GpuKit kit InfoShare ish GkBuf x i nv i np → b {
+@ is_finish_input GpuKit kit InfoShare ish GkBuf x i nv i np → b {
     ? ( is_fuse_input kit ish x nv np ) {} { ^ F }
     ^ ( is_mark_input kit ish x nv np )
 }
@@ -150,7 +150,7 @@ $ `src/load.nu`
 // The 16 blocks. `n` is the full sequence length is_tokens(nv, np);
 // after blocks 7 and 11 the sequence is normed into i7/i11, after block
 // 15 into fin. X itself is left un-normed.
-@ is_forward * GpuKit kit InfoShare ish MaWs ws GkBuf x i nv i np
+@ is_forward GpuKit kit InfoShare ish MaWs ws GkBuf x i nv i np
 GkBuf i7 GkBuf i11 GkBuf fin → b {
     : i tpv + np 1
     : i n ( is_tokens nv np )

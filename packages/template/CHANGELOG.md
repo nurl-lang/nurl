@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+`TplSet` releases itself: `tset_new` returns a `TplSet` handle (its names and sources in an rcbox) instead of a `*TplSet` the caller had to free; every copy is the same set and the last owner releases it. `tset_free` stays as an optional early release. The renderer's per-call state lives behind a handle of its own and goes when the call returns — the engine frees nothing by hand. Callers change `*TplSet` to `TplSet`.
+
 ## 0.1.2
 
 A render owns a copy of its context instead of storing the caller's, so the caller keeps (and drops) its own (NURL 0.67.0, #1143).

@@ -241,7 +241,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
 // Open the context: buffers + the five kernels, on score.nu's device
 // singleton. Any failure → ok=F (caller falls back to mlp_fit).
 @ _aeg_open Mlp m i n i d i dout i bsz → AeGpu {
-    : Gpu g . ( __an_gpukit_ref ) gpu
+    : Gpu g ( gk_gpu ( __an_gpukit_ref ) )
     : s src ( _aeg_kernel_src )
     : GpuKernel kfwd ( gpu_compile g src `ae_fwd` )
     : GpuKernel kbwd ( gpu_compile g src `ae_bwd` )
@@ -285,7 +285,7 @@ extern "C" __global__ void ae_diff(const long long* meta, const double* Y, const
 }
 
 // score.nu's kit (only valid when the engine probe succeeded).
-@ __an_gpukit_ref → *GpuKit { ^ ( anom_gpu_kit ) }
+@ __an_gpukit_ref → GpuKit { ^ ( anom_gpu_kit ) }
 
 // ── the mirrored trainer ──────────────────────────────────────────────
 // Exactly mlp_train, with the four per-minibatch compute steps and the

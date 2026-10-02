@@ -130,7 +130,6 @@ $ `token.nu`
             F → {
                 : ( Vec u ) z ( result_encode 0 )
                 : ( Vec u ) out ( token_tag key z )
-                ( vec_free [u] z )
                 ^ out
             }
             T body → {
@@ -139,17 +138,20 @@ $ `token.nu`
                 : i lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
                 : i hi ?? ( bytes_read_u64_be body 10 ) { T x → # i x F → 0 }
                 : ( Vec u ) src ( bytes_slice body 18 ( vec_len [u] body ) )
-                : *EParser ep # *EParser ( nurl_alloc Z EParser )
+                : EParser ep ( eparser_new )
                 : i root ( expr_parse src ep )
+                // The fold opens the parser once and runs the evaluator on
+                // the pointer: one handle deref per chunk, not per element.
+                : *EParserImpl epp ( _EParser_ptr ep )
                 : ~ i acc 0
                 ? == dtype 1 {
                     // float (f64) fold: x is the integer index cast to double;
                     // the partial rides the wire as its f64 bit pattern.
                     : ~ f facc ( red_id_f op )
-                    ? . ep ok {
+                    ? ( eparser_ok ep ) {
                         : ~ i xx lo
                         ~ < xx hi {
-                            = facc ( red_fold_f op facc ( expr_eval_f ep root # f xx ) )
+                            = facc ( red_fold_f op facc ( _expr_eval_f epp root # f xx ) )
                             = xx + xx 1
                             ? == % - xx lo ( __ka_stride ) 0 { ( ka ) } {}
                         }
@@ -157,21 +159,17 @@ $ `token.nu`
                     = acc ( f64_to_bits facc )
                 } {
                     = acc ( red_id op )
-                    ? . ep ok {
+                    ? ( eparser_ok ep ) {
                         : ~ i xx lo
                         ~ < xx hi {
-                            = acc ( red_fold op acc ( expr_eval ep root xx ) )
+                            = acc ( red_fold op acc ( _expr_eval epp root xx ) )
                             = xx + xx 1
                             ? == % - xx lo ( __ka_stride ) 0 { ( ka ) } {}
                         }
                     } {}
                 }
-                ( eparser_free ep )
-                ( vec_free [u] src )
-                ( vec_free [u] body )
                 : ( Vec u ) res ( result_encode acc )
                 : ( Vec u ) out ( token_tag key res )
-                ( vec_free [u] res )
                 ^ out
             }
         }
@@ -182,29 +180,23 @@ $ `token.nu`
 
 : Chunk { i lo i hi }
 
-@ shard i lo i hi i n → ( Vec s ) {
-    : ( Vec s ) out ( vec_new [s] )
+@ shard i lo i hi i n → ( Vec Chunk ) {
+    : ( Vec Chunk ) out ( vec_new [Chunk] )
     : i total ? > hi lo - hi lo 0
     : i base / total n
     : ~ i i 0
     ~ < i n {
         : i clo + lo * i base
         : i chi ? == i - n 1 hi + lo * + i 1 base
-        : *Chunk c # *Chunk ( nurl_alloc Z Chunk )
-        = . c lo clo
-        = . c hi chi
-        ( vec_push [s] out # s c )
+        ( vec_push [Chunk] out @ Chunk { clo chi } )
         = i + i 1
     }
     ^ out
 }
 
-@ shard_free sink ( Vec s ) chunks → v {
-    : i n ( vec_len [s] chunks )
-    : ~ i k 0
-    ~ < k n { ?? ( vec_get [s] chunks k ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} } = k + k 1 }
-    ( vec_free [s] chunks )
-}
+// The chunks are plain values their Vec drops; this lets go of them now
+// rather than at the end of the owner's scope (optional).
+@ shard_free sink ( Vec Chunk ) chunks → v {}
 
 // A ring key for chunk index i: distinct chunks hash to distinct ring points.
 @ chunk_key i idx → ( Vec u ) {

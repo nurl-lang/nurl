@@ -51,7 +51,6 @@ $ `src/runner.nu`
     ( string_push_str d `, got ` )
     ( string_push_int d got )
     ( bad name ( string_data d ) )
-    ( string_free d )
 }
 
 @ is_true s name b cond → v {
@@ -80,29 +79,24 @@ $ `src/runner.nu`
                 ( nurl_eprint `build failed: ` )
                 ( nurl_eprintln ( output_stderr o ) )
             } {}
-            ( output_free o )
         }
         F e → { ( nurl_eprint `driver: ` ) ( nurl_eprintln ( process_err_name e ) ) }
     }
-    ( vec_free [s] args )
-    ( string_free driver )
-    ? ! built { ( string_free outbin ) ^ ( string_new ) } {}
+    ? ! built { ^ ( string_new ) } {}
 
     : ( Vec s ) none ( vec_new [s] )
     ?? ( process_run ( string_data outbin ) none `` ) {
-        T o → ( output_free o )
+        T o → {}
         F _ → {}
     }
-    ( vec_free [s] none )
     : String notes ( string_clone outbin )
     ( string_push_str notes `.gcno` )
-    ( string_free outbin )
     ^ notes
 }
 
 // The index of the fixture's own source among the object's files. A test
 // binary carries the stdlib too, so the fixture is one of many.
-@ fixture_src * GcovObj o → i {
+@ fixture_src GcovObj o → i {
     : i n ( gcov_file_count o )
     : ~ i i 0
     ~ < i n {
@@ -124,23 +118,23 @@ $ `src/runner.nu`
     ^ T
 }
 
-@ lt_at * LineTab t i line → i {
-    ^ ?? ( vec_get [i] . t count line ) { T x → x F _ → -1 }
+@ lt_at LineTab t i line → i {
+    ^ ?? ( vec_get [i] ( linetab_count t ) line ) { T x → x F _ → -1 }
 }
 
-@ lt_exists * LineTab t i line → b {
-    ^ ?? ( vec_get [i] . t exists line ) { T x → != 0 x F _ → F }
+@ lt_exists LineTab t i line → b {
+    ^ ?? ( vec_get [i] ( linetab_exists t ) line ) { T x → != 0 x F _ → F }
 }
 
 // Branch rows for one line, in the order the notes numbered them.
-@ br_count * LineTab t i line i idx → i {
-    : i n / ( vec_len [i] . t br ) LBR_W
+@ br_count LineTab t i line i idx → i {
+    : i n / ( vec_len [i] ( linetab_br t ) ) LBR_W
     : ~ i seen 0
     : ~ i k 0
     ~ < k n {
-        ? == line ?? ( vec_get [i] . t br + * k LBR_W LBR_LINE ) { T x → x F _ → -1 } {
+        ? == line ?? ( vec_get [i] ( linetab_br t ) + * k LBR_W LBR_LINE ) { T x → x F _ → -1 } {
             ? == seen idx {
-                ^ ?? ( vec_get [i] . t br + * k LBR_W LBR_COUNT ) { T x → x F _ → -1 }
+                ^ ?? ( vec_get [i] ( linetab_br t ) + * k LBR_W LBR_COUNT ) { T x → x F _ → -1 }
             } {}
             = seen + seen 1
         } {}
@@ -149,8 +143,8 @@ $ `src/runner.nu`
     ^ -1
 }
 
-@ check_lines * GcovObj o i src → v {
-    : *LineTab t ( lines_build o src )
+@ check_lines GcovObj o i src → v {
+    : LineTab t ( lines_build o src )
 
     // The counts the fixture's own header claims.
     ( eq_i `line 14 — classify entered twice` ( lt_at t 14 ) 2 )
@@ -175,13 +169,12 @@ $ `src/runner.nu`
     ( eq_i `line 17 — 5 is under ten` ( br_count t 17 0 ) 1 )
     ( eq_i `line 17 — nothing was ten or more` ( br_count t 17 1 ) 0 )
 
-    ( linetab_free t )
 }
 
 // Adding a line's blocks together would report line 15 as 4: the test
 // itself ran twice, and so did the two ways out of it. It ran twice.
-@ check_not_the_sum * GcovObj o i src → v {
-    : *LineTab t ( lines_build o src )
+@ check_not_the_sum GcovObj o i src → v {
+    : LineTab t ( lines_build o src )
     : ~ i blocks 0
     : ~ i blocksum 0
     : i first ( gcov_fn_bl_first o 0 )
@@ -203,10 +196,9 @@ $ `src/runner.nu`
     ( is_true `line 15 really is several blocks` > blocks 1 )
     ( is_true `and their sum is NOT the line count` != blocksum ( lt_at t 15 ) )
     ( eq_i `the line count stays 2` ( lt_at t 15 ) 2 )
-    ( linetab_free t )
 }
 
-@ check_functions * Cov c i idx → v {
+@ check_functions Cov c i idx → v {
     : i n ( cov_fn_rows c idx )
     : ~ i classify -1
     : ~ i unused -1
@@ -226,7 +218,7 @@ $ `src/runner.nu`
     ( eq_i `unused_helper is present, and was called zero times` unused 0 )
 }
 
-@ model_file_idx * Cov c → i {
+@ model_file_idx Cov c → i {
     : i n ( cov_file_count c )
     : ~ i i 0
     ~ < i n {
@@ -237,18 +229,18 @@ $ `src/runner.nu`
 }
 
 @ check_merge s notes s data → v {
-    : *Cov one ( cov_new )
-    : *Cov two ( cov_new )
+    : Cov one ( cov_new )
+    : Cov two ( cov_new )
     ?? ( gcov_read notes data ) {
-        T o → { ( cov_add_object one o ) ( gcov_free o ) }
+        T o → { ( cov_add_object one o ) }
         F _ → {}
     }
     ?? ( gcov_read notes data ) {
-        T o → { ( cov_add_object two o ) ( gcov_free o ) }
+        T o → { ( cov_add_object two o ) }
         F _ → {}
     }
     ?? ( gcov_read notes data ) {
-        T o → { ( cov_add_object two o ) ( gcov_free o ) }
+        T o → { ( cov_add_object two o ) }
         F _ → {}
     }
     : i i1 ( model_file_idx one )
@@ -264,14 +256,12 @@ $ `src/runner.nu`
         ( eq_i `nor the branch total` . s2 branches_found . s1 branches_found )
         ( check_functions one i1 )
     } {}
-    ( cov_free one )
-    ( cov_free two )
 }
 
 @ check_formats s notes s data → v {
-    : *Cov c ( cov_new )
+    : Cov c ( cov_new )
     ?? ( gcov_read notes data ) {
-        T o → { ( cov_add_object c o ) ( gcov_free o ) }
+        T o → { ( cov_add_object c o ) }
         F _ → {}
     }
     : String info ( lcov_render c )
@@ -280,14 +270,11 @@ $ `src/runner.nu`
     ( is_true `LCOV carries the uncovered line` ( string_contains info `DA:18,0` ) )
     ( is_true `LCOV carries a branch record` ( string_contains info `BRDA:15,0,0,2` ) )
     ( is_true `LCOV closes its section` ( string_contains info `end_of_record` ) )
-    ( string_free info )
 
     : String js ( json_render c )
     ( is_true `JSON reports one object` ( string_contains js `"objects":1` ) )
     ( is_true `JSON carries totals` ( string_contains js `"lines_found"` ) )
     ( is_true `JSON keys lines by number` ( string_contains js `"18":0` ) )
-    ( string_free js )
-    ( cov_free c )
 }
 
 @ check_missing_data s notes → v {
@@ -298,12 +285,10 @@ $ `src/runner.nu`
             : i src ( fixture_src o )
             ( is_true `the notes alone still name the source` >= src 0 )
             ? >= src 0 {
-                : *LineTab t ( lines_build o src )
+                : LineTab t ( lines_build o src )
                 ( eq_i `a program that never ran covers nothing` ( lt_at t 14 ) 0 )
                 ( is_true `but the line is still known to exist` ( lt_exists t 14 ) )
-                ( linetab_free t )
             } {}
-            ( gcov_free o )
         }
         F _ → ( bad `notes without data` `the reader refused to read them` )
     }
@@ -317,10 +302,9 @@ $ `src/runner.nu`
         F _ → {}
     }
     ?? ( gcov_read ( string_data junk ) `/nonexistent.gcda` ) {
-        T o → { ( bad `a junk file` `was accepted as a coverage graph` ) ( gcov_free o ) }
+        T o → { ( bad `a junk file` `was accepted as a coverage graph` ) }
         F _ → ( ok `a junk file is rejected, not misread` )
     }
-    ( string_free junk )
 }
 
 // ── Hand-built graphs, for the inputs a fuzzer finds ──────────────
@@ -411,14 +395,13 @@ $ `src/runner.nu`
 
 @ dump_bytes s path ( Vec u ) v → v {
     ?? ( write_file_bytes path v ) { T _ → {} F _ → {} }
-    ( vec_free [u] v )
 }
 
 // Reading must end in an answer or a named error, never in a crash and
 // never in a table sized from a number the file made up.
 @ expect_err s name s notes s data GcovErr want → v {
     ?? ( gcov_read notes data ) {
-        T o → { ( bad name `the file was accepted` ) ( gcov_free o ) }
+        T o → { ( bad name `the file was accepted` ) }
         F e → ? == # i e # i want { ( ok name ) } {
             ( bad name ( gcov_err_name e ) )
         }
@@ -444,7 +427,6 @@ $ `src/runner.nu`
     ?? ( gcov_read ( string_data n1 ) ( string_data d1 ) ) {
         T o → {
             ( eq_i `the same graph with a real line number is read` ( gcov_fn_count o ) 1 )
-            ( gcov_free o )
         }
         F e → ( bad `the same graph with a real line number is read` ( gcov_err_name e ) )
     }
@@ -492,17 +474,14 @@ $ `src/runner.nu`
         ( dump_bytes ( string_data n1 ) part )
         = tried + tried 1
         ?? ( gcov_read ( string_data n1 ) `/nonexistent.gcda` ) {
-            T o → ( gcov_free o )
+            T o → {}
             F _ → {}
         }
         = survived + survived 1
         = cut + cut 1
     }
-    ( vec_free [u] whole )
     ( eq_i `every truncation of a notes file is handled` survived tried )
 
-    ( string_free n1 )
-    ( string_free d1 )
 }
 
 @ main → i {
@@ -513,8 +492,6 @@ $ `src/runner.nu`
     : String notes ( build_fixture ( string_data work ) )
     ? == 0 ( string_len notes ) {
         ( nurl_eprintln `could not build the fixture with coverage instrumentation` )
-        ( string_free notes )
-        ( string_free work )
         ^ 1
     } {}
     : String data ( runner_data_path ( string_data notes ) )
@@ -527,7 +504,6 @@ $ `src/runner.nu`
                 ( check_lines o src )
                 ( check_not_the_sum o src )
             } {}
-            ( gcov_free o )
         }
         F e → ( bad `reading the object` ( gcov_err_name e ) )
     }
@@ -543,8 +519,5 @@ $ `src/runner.nu`
     ( nurl_println ( nurl_str_int g_fail ) )
 
     ?? ( dir_remove_all ( string_data work ) ) { T _ → {} F _ → {} }
-    ( string_free notes )
-    ( string_free data )
-    ( string_free work )
     ^ ? > g_fail 0 1 0
 }

@@ -160,7 +160,6 @@ $ `stdlib/std/scrypt.nu`
     ? | <= iters 0 <= keylen 0 { ^ @ !( Vec u ) CryptoErr { F CryptoArg } } {}
     : ( Vec u ) pw ( __cr_str_vec pass )
     : ( Vec u ) dk ( pbkdf2_hmac_sha256 pw salt iters keylen )
-    ( vec_free [u] pw )
     ^ @ !( Vec u ) CryptoErr { T dk }
 }
 
@@ -168,7 +167,6 @@ $ `stdlib/std/scrypt.nu`
     ? | <= iters 0 <= keylen 0 { ^ @ !( Vec u ) CryptoErr { F CryptoArg } } {}
     : ( Vec u ) pw ( __cr_str_vec pass )
     : ( Vec u ) dk ( pbkdf2_hmac_sha512 pw salt iters keylen )
-    ( vec_free [u] pw )
     ^ @ !( Vec u ) CryptoErr { T dk }
 }
 
@@ -178,7 +176,6 @@ $ `stdlib/std/scrypt.nu`
     ? <= keylen 0 { ^ @ !( Vec u ) CryptoErr { F CryptoArg } } {}
     : ( Vec u ) prk ( hkdf_extract salt ikm )
     : ( Vec u ) okm ( hkdf_expand prk info keylen )
-    ( vec_free [u] prk )
     ^ @ !( Vec u ) CryptoErr { T okm }
 }
 
@@ -188,6 +185,5 @@ $ `stdlib/std/scrypt.nu`
     ? != & n - n 1 0 { ^ @ !( Vec u ) CryptoErr { F CryptoArg } } {}
     : ( Vec u ) pw ( __cr_str_vec pass )
     : ( Vec u ) dk ( scrypt_pure pw salt n r p keylen )
-    ( vec_free [u] pw )
     ^ @ !( Vec u ) CryptoErr { T dk }
 }

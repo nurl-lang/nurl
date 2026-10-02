@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** `GTape`, `Opt`, `GProg`, `GpOpt`, `GpPlan`
+and `GpFuse` are handles over rcboxes instead of `*T` pointers: every copy
+is the same object and the last owner releases it — the tape's value,
+gradient and aux cells (a `% Drop`), the optimizer's moments, every device
+buffer of a captured program, its CUDA graph and its hold on the kit.
+`tape_free`, `opt_free`, `gput_free`, `gpopt_free`, `gpfuse_free` and
+`gpfuse_close` are optional early releases. Callers change `*GTape` (etc.)
+to `GTape`. New accessors for what callers read from the structs: `opt_t`
+(Adam's step count), `gpfuse_plan_ok`, `gpfuse_plan_segs`,
+`gpfuse_plan_bnames`; `grad_poison` lets a graph builder outside the package
+poison the tape. The captured episode is a `GpuGraph` (the gpu package's
+self-releasing graph handle), and the kernel-source rewrites hand back owned
+Strings: building the f32 / mixed sources and the fused plan's dtype pass no
+longer leak a String per substitution.
+
 ## 0.10.5
 
 The cached kernel sources are kept for the program's lifetime with `mem_forget`; under NURL 0.67.0's auto-drop the String backing them was otherwise released while the global still pointed at it (#1143).

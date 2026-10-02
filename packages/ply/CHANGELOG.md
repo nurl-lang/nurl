@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `PlyW` is a handle over an rcbox instead of a `*PlyW` pointer:
+  `ply_create` returns `!PlyW String`, and `ply_vertex` / `ply_count` /
+  `ply_flush` / `ply_finish` take the handle. Every copy is the same
+  writer; `ply_finish` still flushes, patches the count and closes, and a
+  writer whose last owner lets go of it unfinished is finished then, the
+  way a buffered writer flushes when dropped (it used to leak, file open
+  and count unpatched).
+- The viewer's state is a handle each route holds a share of, instead of
+  a raw block behind a global that was never released.
+- The ascii buffer is cleared in place on a flush instead of freed and
+  re-made: instructions:u for 2 M binary + 300 k ascii vertices −1.2 %,
+  byte-identical files.
+
 ## 0.2.3
 
 - Requires `http ^0` instead of `^0.3`. http has been 0.4.0 since #1014

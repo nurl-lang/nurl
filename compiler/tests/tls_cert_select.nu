@@ -248,7 +248,7 @@ $ `stdlib/std/net.nu`
                     = all & all ( chk `dual_handshake      ` T )
                     = all & all ( chk `dual_scheme_mldsa65 ` == ( tls_cv_scheme c ) 2309 )
                     = all & all ( chk `dual_group_is_pq    ` ( tls_is_post_quantum c ) )
-                    = all & all ( chk `dual_cv_verifies    ` ( tls_cv_verify . c cert_msg . c cv_scheme . c cv_sig . c th_cert ) )
+                    = all & all ( chk `dual_cv_verifies    ` ( tls_cv_verify ( tls_cert_msg c ) ( tls_cv_scheme c ) ( tls_cv_sig c ) ( tls_th_cert c ) ) )
                     ( tls_close c )
                 }
                 F _e → { = all ( chk `dual_handshake      ` F ) }

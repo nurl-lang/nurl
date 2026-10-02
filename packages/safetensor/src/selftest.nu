@@ -24,13 +24,11 @@ $ `src/safetensor.nu`
         : String m ( string_from `  PASS ` )
         ( string_push_str m name )
         ( nurl_print ( string_data m ) ) ( nurl_print `\n` )
-        ( string_free m )
     } {
         = __st_fail + __st_fail 1
         : String m ( string_from `  FAIL ` )
         ( string_push_str m name )
         ( nurl_print ( string_data m ) ) ( nurl_print `\n` )
-        ( string_free m )
     }
 }
 
@@ -69,24 +67,17 @@ $ `src/safetensor.nu`
     ^ d
 }
 
-// A header must be REJECTED. TAKES OWNERSHIP of `data` — every call site passes
-// a fresh `( __st_data4 )`, and a Vec handed to a call is not dropped for us.
-// (The image is freed here too; the parser borrows it, so a successful parse is
-// closed before the buffer goes away.)
+// A header must be REJECTED.
 @ __st_reject s hdr ( Vec u ) data s name → v {
     : ( Vec u ) img ( __st_image hdr data )
-    ( vec_free [u] data )
     ?? ( st_parse_bytes img ) {
         T st → {
-            ( st_close st )
             ( __ok F name )
         }
         F e → {
-            ( string_free e )
             ( __ok T name )
         }
     }
-    ( vec_free [u] img )
 }
 
 @ st_selftest → i {
@@ -112,22 +103,16 @@ $ `src/safetensor.nu`
                         = k + k 1
                     }
                     ( __ok eq `honest file: f32 values round-trip (1,2,3,4)` )
-                    ( vec_free [u] raw )
                 }
                 F e → {
-                    ( string_free e )
                     ( __ok F `honest file: dequant` )
                 }
             }
-            ( st_close st )
         }
         F e → {
-            ( string_free e )
             ( __ok F `honest file parses` )
         }
     }
-    ( vec_free [u] good )
-    ( vec_free [u] d4 )
 
     // ── every way a header can lie ─────────────────────────────────────
     // data_offsets past the end of the data region
@@ -186,15 +171,12 @@ $ `src/safetensor.nu`
     }
     ?? ( st_parse_bytes huge ) {
         T st → {
-            ( st_close st )
             ( __ok F `rejects: header length larger than the file` )
         }
         F e → {
-            ( string_free e )
             ( __ok T `rejects: header length larger than the file` )
         }
     }
-    ( vec_free [u] huge )
 
     // truncated file (fewer than 8 bytes)
     : ( Vec u ) tiny ( vec_new [u] )
@@ -202,15 +184,12 @@ $ `src/safetensor.nu`
     ( vec_push [u] tiny # u 2 )
     ?? ( st_parse_bytes tiny ) {
         T st → {
-            ( st_close st )
             ( __ok F `rejects: file shorter than the 8-byte length prefix` )
         }
         F e → {
-            ( string_free e )
             ( __ok T `rejects: file shorter than the 8-byte length prefix` )
         }
     }
-    ( vec_free [u] tiny )
 
     // ── the widening dtypes ────────────────────────────────────────────
     // F16 0x3C00 = 1.0, 0x4000 = 2.0 ; BF16 0x3F80 = 1.0, 0x4000 = 2.0
@@ -219,7 +198,6 @@ $ `src/safetensor.nu`
     ( vec_push [u] f16d # u 0 ) ( vec_push [u] f16d # u 64 )
     : ( Vec u ) f16img ( __st_image
     `{"t":{"dtype":"F16","shape":[2],"data_offsets":[0,4]}}` f16d )
-    ( vec_free [u] f16d )
     ?? ( st_parse_bytes f16img ) {
         T st → {
             ?? ( st_dequant st 0 ) {
@@ -228,28 +206,22 @@ $ `src/safetensor.nu`
                     : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
                     : f b # f ( bits_to_f32 ( _st_u32 p 4 ) )
                     ( __ok & == a 1.0 == b 2.0 `F16 widens to f32 (1.0, 2.0)` )
-                    ( vec_free [u] raw )
                 }
                 F e → {
-                    ( string_free e )
                     ( __ok F `F16 widens to f32` )
                 }
             }
-            ( st_close st )
         }
         F e → {
-            ( string_free e )
             ( __ok F `F16 file parses` )
         }
     }
-    ( vec_free [u] f16img )
 
     : ( Vec u ) bf16d ( vec_new [u] )
     ( vec_push [u] bf16d # u 128 ) ( vec_push [u] bf16d # u 63 )
     ( vec_push [u] bf16d # u 0 ) ( vec_push [u] bf16d # u 64 )
     : ( Vec u ) bfimg ( __st_image
     `{"t":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]}}` bf16d )
-    ( vec_free [u] bf16d )
     ?? ( st_parse_bytes bfimg ) {
         T st → {
             ?? ( st_dequant st 0 ) {
@@ -258,27 +230,21 @@ $ `src/safetensor.nu`
                     : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
                     : f b # f ( bits_to_f32 ( _st_u32 p 4 ) )
                     ( __ok & == a 1.0 == b 2.0 `BF16 widens to f32 (1.0, 2.0)` )
-                    ( vec_free [u] raw )
                 }
                 F e → {
-                    ( string_free e )
                     ( __ok F `BF16 widens to f32` )
                 }
             }
-            ( st_close st )
         }
         F e → {
-            ( string_free e )
             ( __ok F `BF16 file parses` )
         }
     }
-    ( vec_free [u] bfimg )
 
     // ── an element range must stay inside the tensor ───────────────────
     : ( Vec u ) rdata ( __st_data4 )
     : ( Vec u ) rimg ( __st_image
     `{"t":{"dtype":"F32","shape":[2,2],"data_offsets":[0,16]}}` rdata )
-    ( vec_free [u] rdata )
     ?? ( st_parse_bytes rimg ) {
         T st → {
             ?? ( st_dequant_range st 0 2 2 ) {
@@ -286,31 +252,24 @@ $ `src/safetensor.nu`
                     : *u p ( vec_data [u] raw )
                     : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
                     ( __ok & == 8 ( vec_len [u] raw ) == a 3.0 `element range [2,4) is exact` )
-                    ( vec_free [u] raw )
                 }
                 F e → {
-                    ( string_free e )
                     ( __ok F `element range` )
                 }
             }
             ?? ( st_dequant_range st 0 3 2 ) {
                 T raw → {
-                    ( vec_free [u] raw )
                     ( __ok F `rejects: element range running past the tensor` )
                 }
                 F e → {
-                    ( string_free e )
                     ( __ok T `rejects: element range running past the tensor` )
                 }
             }
-            ( st_close st )
         }
         F e → {
-            ( string_free e )
             ( __ok F `range file parses` )
         }
     }
-    ( vec_free [u] rimg )
 
     : String m ( string_from `safetensor selftest: ` )
     ( string_push_int m __st_pass )
@@ -318,6 +277,5 @@ $ `src/safetensor.nu`
     ( string_push_int m __st_fail )
     ( string_push_str m ` failed` )
     ( nurl_print ( string_data m ) ) ( nurl_print `\n` )
-    ( string_free m )
     ^ ? > __st_fail 0 1 0
 }

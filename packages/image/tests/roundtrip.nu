@@ -25,15 +25,10 @@ $ `src/image.nu`
             ( string_push_str meta ` ch=` )
             ( string_push_int meta ( image_channels im ) )
             ( nurl_eprintln ( string_data meta ) )
-            ( string_free meta )
             ? ( image_save_png ( string_data a2 ) im ) {} { ( nurl_eprintln `png save failed` ) = rc 1 }
             ? ( image_save_ppm ( string_data a3 ) im ) {} { ( nurl_eprintln `ppm save failed` ) = rc 1 }
-            ( image_free im )
         }
         F _ → { ( nurl_eprintln `decode failed` ) = rc 1 }
     }
-    ( string_free a1 )
-    ( string_free a2 )
-    ( string_free a3 )
     ^ rc
 }

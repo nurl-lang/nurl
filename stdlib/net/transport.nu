@@ -108,7 +108,7 @@ $ `stdlib/core/rcbox.nu`
 // ── transport handle ─────────────────────────────────────────────
 
 : TransportImpl {
-    s node  // *SecureNode for the direct leg, or 0 if direct disabled
+    s node  // a SecureNode (as its word) for the direct leg, or 0 if direct disabled
     RelayClient relay  // relay client (valid only when has_relay == 1)
     i has_relay
     ( Vec s ) peers  // *PeerPath
@@ -152,7 +152,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) payload
 }
 
-@ transport_msg_free sink TransportMsg m → v { ( vec_free [u] . m src ) ( vec_free [u] . m payload ) }
+// Let go of `m` now rather than at the end of its owner's scope.
+@ transport_msg_free sink TransportMsg m → v {}
 
 // Open over both legs. `node` may be 0 (relay-only peer with no UDP path).
 @ transport_open s node RelayClient relay i has_relay → Transport {
@@ -202,7 +203,7 @@ $ `stdlib/core/rcbox.nu`
 @ transport_try_direct Transport t__h ( Vec u ) pubkey s host i port → !v NetErr {
     : *TransportImpl t ( __Transport_ptr t__h )
     ? == # i . t node 0 { ^ @ !v NetErr { F # NetErr NetOther } } {}
-    : *SecureNode node # *SecureNode . t node
+    : SecureNode node # SecureNode . t node
     ( securedgram_add_peer node pubkey host port )
     ^ ( securedgram_connect node pubkey )
 }
@@ -232,7 +233,7 @@ $ `stdlib/core/rcbox.nu`
     ? & & == leg 2 == . t has_relay 1
     > ( vec_len [u] payload ) ( securedgram_max_msg ) { = leg 1 } {}
     ? == leg 2 {
-        : *SecureNode node # *SecureNode . t node
+        : SecureNode node # SecureNode . t node
         ^ ( securedgram_send node pubkey payload )
     } {}
     ? == leg 1 { ^ ( relay_send . t relay pubkey payload ) } {}
@@ -267,14 +268,13 @@ $ `stdlib/core/rcbox.nu`
     : ~ ? TransportMsg out @ ?TransportMsg { F # TransportMsg 0 }
     : ~ b got F
     ? != # i . t node 0 {
-        : *SecureNode node # *SecureNode . t node
+        : SecureNode node # SecureNode . t node
         ?? ( securedgram_recv node max ) {
             T rd → {
                 : s pp ( __tp_find t . rd peer_pubkey )
                 ? != # i pp 0 { : *PeerPath p # *PeerPath pp ( transport_note_direct p ) } {}
                 = out @ ?TransportMsg { T @ TransportMsg { ( __tcpy . rd peer_pubkey ) ( __tcpy . rd data ) } }
                 = got T
-                ( recvdata_free rd )
             }
             F → {}
         }
@@ -284,7 +284,6 @@ $ `stdlib/core/rcbox.nu`
             T rm → {
                 = out @ ?TransportMsg { T @ TransportMsg { ( __tcpy . rm src ) ( __tcpy . rm payload ) } }
                 = got T
-                ( relay_msg_free rm )
             }
             F → {}
         }

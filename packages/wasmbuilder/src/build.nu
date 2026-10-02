@@ -131,27 +131,22 @@ $ `toolchain.nu`
         ( vec_push [s] args nu_path )
         ? with_flag { ( vec_push [s] args `--ffi-host-imports` ) } {}
         : !Output ProcessErr r ( process_run nurlc args `` )
-        ( vec_free [s] args )
         ?? r {
             T o → {
                 ? ( output_success o ) {
                     : String ir ( string_from ( output_stdout o ) )
-                    ( output_free o )
                     ^ @ !String String { T ir }
                 } {}
                 : String se ( string_from ( output_stderr o ) )
-                ( output_free o )
                 // old-toolchain flag rejection → retry once without it.
                 // Pre-0.10.8 compilers answer either "cannot open
                 // '--ffi-host-imports'" (flag taken as a file) or a bare
                 // usage line, depending on vintage.
                 ? & with_flag | ( string_contains se `--ffi-host-imports` ) ( string_contains se `usage: nurlc` ) {
-                    ( string_free se )
                     = with_flag F
                 } {
                     : String msg ( string_from `nurlc failed:\n` )
                     ( string_push_str msg ( string_data se ) )
-                    ( string_free se )
                     ^ @ !String String { F msg }
                 }
             }
@@ -168,7 +163,7 @@ $ `toolchain.nu`
 @ __wb_ir_uses s pattern String ir → b {
     : ~ b uses F
     : !Regex ParseErr re ( regex_compile pattern )
-    ?? re { T rc → { = uses ( regex_test rc ( string_data ir ) ) ( regex_free rc ) } F _ → {} }
+    ?? re { T rc → { = uses ( regex_test rc ( string_data ir ) ) } F _ → {} }
     ^ uses
 }
 
@@ -184,17 +179,15 @@ $ `toolchain.nu`
     // 1. nurlc → IR
     : !String String nr ( wb_find_nurlc )
     : ~ String nurlc ( string_new )
-    ?? nr { T p → { ( string_free nurlc ) = nurlc p } F e → { ^ @ !v String { F e } } }
+    ?? nr { T p → { = nurlc p } F e → { ^ @ !v String { F e } } }
     ( __wb_say . opts quiet `wasmbuilder: nurlc → LLVM IR` )
     : !String String irr ( __wb_run_nurlc ( string_data nurlc ) nu_path . opts host_imports )
-    ( string_free nurlc )
     : ~ String ir ( string_new )
-    ?? irr { T i → { ( string_free ir ) = ir i } F e → { ^ @ !v String { F e } } }
+    ?? irr { T i → { = ir i } F e → { ^ @ !v String { F e } } }
 
     // 2. retarget for wasm32-wasi
     ( __wb_say . opts quiet `wasmbuilder: rewriting IR for wasm32-wasi` )
     : String ir_fixed ( wb_prepare_ir_for_wasi_opts ir . opts threads )
-    ( string_free ir )
 
     : b uses_canvas ( __wb_ir_uses `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\(` ir_fixed )
     : b uses_audio ( __wb_ir_uses `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\(` ir_fixed )
@@ -202,7 +195,7 @@ $ `toolchain.nu`
     // 3. wasm compiler + runtime objects
     : !WbCompiler String cr ( wb_find_compiler T )
     : ~ WbCompiler cc @ WbCompiler { ( string_new ) T }
-    ?? cr { T c → { ( wb_compiler_free cc ) = cc c } F e → { ( string_free ir_fixed ) ^ @ !v String { F e } } }
+    ?? cr { T c → { = cc c } F e → { ^ @ !v String { F e } } }
 
     // Does this program reach the socket layer at all? The runtime object
     // gets the `nurl_net` import bridge only then — otherwise the module
@@ -223,24 +216,21 @@ $ `toolchain.nu`
     } {}
     : !String String ror ( wb_ensure_wasm_obj_feat cc `runtime.c` ( string_data feat ) )
     : ~ String runtime_o ( string_new )
-    ?? ror { T p → { ( string_free runtime_o ) = runtime_o p } F e → {
-            ( string_free ir_fixed ) ( wb_compiler_free cc )
+    ?? ror { T p → { = runtime_o p } F e → {
             ^ @ !v String { F e }
         } }
 
     : ~ String canvas_o ( string_new )
     ? uses_canvas {
         : !String String cor ( wb_ensure_wasm_obj cc `canvas_wasm.c` )
-        ?? cor { T p → { ( string_free canvas_o ) = canvas_o p } F e → {
-                ( string_free ir_fixed ) ( wb_compiler_free cc ) ( string_free runtime_o )
+        ?? cor { T p → { = canvas_o p } F e → {
                 ^ @ !v String { F e }
             } }
     } {}
     : ~ String audio_o ( string_new )
     ? uses_audio {
         : !String String aor ( wb_ensure_wasm_obj cc `audio_wasm.c` )
-        ?? aor { T p → { ( string_free audio_o ) = audio_o p } F e → {
-                ( string_free ir_fixed ) ( wb_compiler_free cc ) ( string_free runtime_o ) ( string_free canvas_o )
+        ?? aor { T p → { = audio_o p } F e → {
                 ^ @ !v String { F e }
             } }
     } {}
@@ -249,9 +239,7 @@ $ `toolchain.nu`
     : String ll_path ( string_from out_wasm )
     ( string_push_str ll_path `.ll` )
     : !v IoErr wr ( write_file ( string_data ll_path ) ( string_data ir_fixed ) )
-    ( string_free ir_fixed )
     ?? wr { T _ → {} F _ → {
-            ( wb_compiler_free cc ) ( string_free runtime_o ) ( string_free canvas_o ) ( string_free audio_o ) ( string_free ll_path )
             ^ @ !v String { F ( string_from `could not write the intermediate .ll (is the output directory writable?)` ) }
         } }
 
@@ -330,8 +318,6 @@ $ `toolchain.nu`
     ( vec_push [s] args out_wasm )
     ( vec_push [s] args `-lm` )
     : !Output ProcessErr lr ( process_run ( string_data . cc cmd ) args `` )
-    ( vec_free [s] args )
-    ( wb_compiler_free cc ) ( string_free runtime_o ) ( string_free canvas_o ) ( string_free audio_o )
 
     : ~ b link_ok F
     : ~ String link_err ( string_new )
@@ -339,21 +325,16 @@ $ `toolchain.nu`
         T o → {
             = link_ok ( output_success o )
             ? link_ok {} {
-                ( string_free link_err )
                 = link_err ( string_from `wasm link failed:\n` )
                 ( string_push_str link_err ( output_stderr o ) )
             }
-            ( output_free o )
         }
         F _ → {
-            ( string_free link_err )
             = link_err ( string_from `could not run the wasm compiler` )
         }
     }
     ? . opts keep_ll {} { ( file_delete ( string_data ll_path ) ) }
-    ( string_free ll_path )
     ? link_ok {} { ^ @ !v String { F link_err } }
-    ( string_free link_err )
 
     // 5. optional asyncify wrap (canvas-in-browser programs). Restricted
     //    to canvas.sleep, matching the playground pipeline; any module
@@ -379,23 +360,18 @@ $ `toolchain.nu`
         ( vec_push [s] oargs ( string_data tmp_out ) )
         : String wopt ( env_var_or `NURL_WASM_OPT` `wasm-opt` )
         : !Output ProcessErr orr ( process_run ( string_data wopt ) oargs `` )
-        ( vec_free [s] oargs ) ( string_free wopt )
         ?? orr {
             T o → {
                 ? ( output_success o ) {
-                    ( output_free o )
                     : !v IoErr mv ( fs_rename ( string_data tmp_out ) out_wasm )
-                    ( string_free tmp_out )
                     ?? mv { T _ → {} F _ → { ^ @ !v String { F ( string_from `asyncify output rename failed` ) } } }
                 } {
                     : String msg ( string_from `wasm-opt --asyncify failed:\n` )
                     ( string_push_str msg ( output_stderr o ) )
-                    ( output_free o ) ( string_free tmp_out )
                     ^ @ !v String { F msg }
                 }
             }
             F _ → {
-                ( string_free tmp_out )
                 ^ @ !v String { F ( string_from `wasm-opt not found — --asyncify needs binaryen (apt install binaryen)` ) }
             }
         }
@@ -411,36 +387,31 @@ $ `toolchain.nu`
 @ wb_build_source s source s filename WbOpts opts → !( Vec u ) String {
     // temp workspace: $TMPDIR (or %TEMP%, or /tmp)/<mkstemp>.d/
     : ~ String tdir ( env_var_or `TMPDIR` `` )
-    ? == ( string_len tdir ) 0 { ( string_free tdir ) = tdir ( env_var_or `TEMP` `/tmp` ) } {}
+    ? == ( string_len tdir ) 0 { = tdir ( env_var_or `TEMP` `/tmp` ) } {}
     : !String IoErr tfr ( fs_tempfile ( string_data tdir ) `wasmbuild-` )
-    ( string_free tdir )
     : ~ String work ( string_new )
     ?? tfr { T t → {
             ( file_delete ( string_data t ) )
-            ( string_free work ) = work t
+            = work t
             ( string_push_str work `.d` )
         } F _ → { ^ @ !( Vec u ) String { F ( string_from `could not create a temp workspace` ) } } }
     : !v IoErr mk ( dir_create_all ( string_data work ) )
     ?? mk { T _ → {} F _ → {
-            ( string_free work )
             ^ @ !( Vec u ) String { F ( string_from `could not create a temp workspace` ) }
         } }
 
     : ~ String fname ( string_from ? == 0 ( nurl_str_len filename ) `main.nu` filename )
     : String nu_path ( path_join ( string_data work ) ( string_data fname ) )
     : ~ String out_name ( string_from ( string_data fname ) )
-    ( string_free fname )
     ? ( string_ends_with out_name `.nu` ) {
         : String t ( string_substr out_name 0 - ( string_len out_name ) 3 )
-        ( string_free out_name ) = out_name t
+        = out_name t
     } {}
     ( string_push_str out_name `.wasm` )
     : String out_path ( path_join ( string_data work ) ( string_data out_name ) )
-    ( string_free out_name )
 
     : !v IoErr wr ( write_file ( string_data nu_path ) source )
     ?? wr { T _ → {} F _ → {
-            ( string_free work ) ( string_free nu_path ) ( string_free out_path )
             ^ @ !( Vec u ) String { F ( string_from `could not write the temp source` ) }
         } }
 
@@ -448,7 +419,6 @@ $ `toolchain.nu`
     ?? br { T _ → {} F e → {
             ( file_delete ( string_data nu_path ) )
             ( dir_remove ( string_data work ) )
-            ( string_free work ) ( string_free nu_path ) ( string_free out_path )
             ^ @ !( Vec u ) String { F e }
         } }
 
@@ -456,7 +426,6 @@ $ `toolchain.nu`
     ( file_delete ( string_data nu_path ) )
     ( file_delete ( string_data out_path ) )
     ( dir_remove ( string_data work ) )
-    ( string_free work ) ( string_free nu_path ) ( string_free out_path )
     ?? rr {
         T bytes → { ^ @ !( Vec u ) String { T bytes } }
         F _ → { ^ @ !( Vec u ) String { F ( string_from `built .wasm could not be read back` ) } }

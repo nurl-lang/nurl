@@ -55,7 +55,7 @@ $ `src/load.nu`
 // A conv with an optional bias, as a pair of device buffers.
 : DpConv { GkBuf w GkBuf b i hasb }
 
-@ __dp_conv * Lw lw * GpuKit kit s prefix s leaf b bias → DpConv {
+@ __dp_conv * Lw lw GpuKit kit s prefix s leaf b bias → DpConv {
     : String nw ( string_from prefix )
     ( string_push_str nw leaf )
     ( string_push_str nw `.weight` )
@@ -69,7 +69,7 @@ $ `src/load.nu`
         ( string_free nb )
         ^ @ DpConv { w b 1 }
     } {}
-    ^ @ DpConv { w @ GkBuf { 0 0 GK_F32 } 0 }
+    ^ @ DpConv { w ( gk_buf_none GK_F32 ) 0 }
 }
 
 @ __dp_conv_free sink DpConv c → v {
@@ -78,7 +78,7 @@ $ `src/load.nu`
 }
 
 @ __dp_conv_none → DpConv {
-    ^ @ DpConv { @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 }
+    ^ @ DpConv { ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0 }
 }
 
 // One residual conv unit: relu → 3×3 → relu → 3×3, plus the input.
@@ -97,7 +97,7 @@ $ `src/load.nu`
     DpConv oc2b  // dense_head.1.conv2.2
 }
 
-@ __dp_rcu * Lw lw * GpuKit kit s prefix s unit → DpRcu {
+@ __dp_rcu * Lw lw GpuKit kit s prefix s unit → DpRcu {
     : String p ( string_from prefix )
     ( string_push_str p unit )
     ( string_push_char p 46 )
@@ -108,7 +108,7 @@ $ `src/load.nu`
     ^ r
 }
 
-@ __dp_fuse * Lw lw * GpuKit kit i idx b has1 → DpFuse {
+@ __dp_fuse * Lw lw GpuKit kit i idx b has1 → DpFuse {
     : String p ( string_from `dense_head.0.scratch.refinenet` )
     ( string_push_int p idx )
     ( string_push_char p 46 )
@@ -122,7 +122,7 @@ $ `src/load.nu`
     ^ f
 }
 
-@ dp_load * Lw lw * GpuKit kit → Dpt {
+@ dp_load * Lw lw GpuKit kit → Dpt {
     : ( Vec DpConv ) pj ( vec_new [DpConv] )
     : ( Vec DpConv ) rz ( vec_new [DpConv] )
     : ( Vec DpConv ) rn ( vec_new [DpConv] )
@@ -178,7 +178,7 @@ $ `src/load.nu`
 // ── forward ─────────────────────────────────────────────────────────
 
 // A 3×3 stride-1 pad-1 convolution, the shape most of this head is.
-@ __dp_c3 * GpuKit kit GkBuf y GkBuf x DpConv c i cin i cout i h i w → b {
+@ __dp_c3 GpuKit kit GkBuf y GkBuf x DpConv c i cin i cout i h i w → b {
     ^ ( gkd_conv2d kit y x . c w . c b . c hasb cin h w cout 3 3 h w 1 1 1 1 )
 }
 
@@ -187,7 +187,7 @@ $ `src/load.nu`
 // opposite of the VGGT-family head, where the inplace ReLU makes the
 // residual relu(x). Runs in place on `x` (x += branch(x)); t1/t2 are
 // scratch of the same size.
-@ _dp_rcu_fwd * GpuKit kit DpRcu r GkBuf x GkBuf t1 GkBuf t2 i ch i h i w → b {
+@ _dp_rcu_fwd GpuKit kit DpRcu r GkBuf x GkBuf t1 GkBuf t2 i ch i h i w → b {
     ? ( gkd_relu kit t1 x ) {} { ^ F }
     ? ( __dp_c3 kit t2 t1 . r c1 ch ch h w ) {} { ^ F }
     ? ( gkd_relu kit t1 t2 ) {} { ^ F }
@@ -197,7 +197,7 @@ $ `src/load.nu`
 
 // One fusion step: out (+ rcu1(skip)) → rcu2 → bilinear ×2
 // (align_corners=True) → 1×1 out_conv. `dst` is at (2h, 2w).
-@ _dp_fuse_fwd * GpuKit kit DpFuse f GkBuf out GkBuf skip GkBuf up
+@ _dp_fuse_fwd GpuKit kit DpFuse f GkBuf out GkBuf skip GkBuf up
 GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
     ? == . f has1 1 {
         ? ( _dp_rcu_fwd kit . f u1 skip t1 t2 ch h w ) {} { ^ F }
@@ -212,7 +212,7 @@ GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
 
 // One view's patch tokens out of a sequence buffer, as a [1536, gh·gw]
 // feature map.
-@ __dp_tokens_to_map * GpuKit kit GkBuf seq i voff GkBuf outmap i np → b {
+@ __dp_tokens_to_map GpuKit kit GkBuf seq i voff GkBuf outmap i np → b {
     : GkBuf patches ( ma_view seq * voff DP_IN * np DP_IN )
     : ( Vec i ) dims ( _ma_i2 np DP_IN )
     : ( Vec i ) perm ( _ma_i2 1 0 )
@@ -223,7 +223,7 @@ GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
 
 // Crop a [ch, sh, sw] map to its top-left [ch, oh, ow] corner. Rows
 // first, then columns; either step is skipped when it is a no-op.
-@ __dp_crop * GpuKit kit GkBuf dst GkBuf src GkBuf mid i chn i sh i sw i oh i ow → b {
+@ __dp_crop GpuKit kit GkBuf dst GkBuf src GkBuf mid i chn i sh i sw i oh i ow → b {
     ? & == sh oh == sw ow { ^ ( gkd_map kit `copy` `x` dst src ) } {}
     ? ( gkd_slice_ax kit mid src chn oh sw sh 0 ) {} { ^ F }
     ? == sw ow { ^ ( gkd_map kit `copy` `x` dst mid ) } {}
@@ -231,7 +231,7 @@ GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
 }
 
 // The whole head, for one view.
-@ dp_forward * GpuKit kit Dpt d GkBuf h0 GkBuf h1 GkBuf h2 GkBuf h3
+@ dp_forward GpuKit kit Dpt d GkBuf h0 GkBuf h1 GkBuf h2 GkBuf h3
 i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
     : i np * gh gw
 

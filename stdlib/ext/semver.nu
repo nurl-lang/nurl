@@ -27,11 +27,11 @@
 //   ( semver_to_string v )           → String
 //   ( semver_compare a b )           → i      (-1 / 0 / 1, build ignored)
 //   ( semver_eq a b ) / _lt / _gt    → b
-//   ( semver_free v )                → v
+//   ( semver_free v )                → v   early release (optional)
 //   ( semver_req_parse text )        → ! VersionReq SemverErr
 //   ( semver_req_matches r v )       → b
 //   ( semver_req_max_satisfying r versions ) → ? Semver   (borrows; clones the winner)
-//   ( semver_req_free r )            → v
+//   ( semver_req_free r )            → v   early release (optional)
 //
 // v1 simplification: requirement matching is pure precedence-based range
 // containment. Cargo additionally constrains how prerelease versions match
@@ -88,10 +88,8 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ semver_free sink Semver v → v {
-    ( string_free . v prerelease )
-    ( string_free . v build )
-}
+// Let go of `v` now rather than at the end of its owner's scope.
+@ semver_free sink Semver v → v {}
 
 // Build a Semver with no prerelease / build (used for range bounds).
 @ __sv_make i maj i min i pat → Semver {
@@ -172,8 +170,6 @@ $ `stdlib/core/vec.nu`
 
     // A trailing '-' or '+' with nothing after it is malformed.
     ? & >= dash 0 == ( string_len pre ) 0 {
-        ( string_free pre )
-        ( string_free bld )
         ^ @ !Semver SemverErr { F # SemverErr SvBadFormat }
     } {}
 
@@ -288,13 +284,6 @@ $ `stdlib/core/vec.nu`
         ? < na nb { = res -1 } { ? > na nb { = res 1 } {} }
     } {}
 
-    : i fa 0
-    : ~ i kk 0
-    ~ < kk na { : ?String t ( vec_get [String] ia kk ) ?? t { T s → ( string_free s ) F → {} } = kk + kk 1 }
-    : ~ i jj 0
-    ~ < jj nb { : ?String t ( vec_get [String] ib jj ) ?? t { T s → ( string_free s ) F → {} } = jj + jj 1 }
-    ( vec_free [String] ia )
-    ( vec_free [String] ib )
     ^ res
 }
 
@@ -393,11 +382,6 @@ $ `stdlib/core/vec.nu`
     ^ @ SvInterval { 0 ( __sv_make 0 0 0 ) 1 0 ( __sv_make 0 0 0 ) 0 }
 }
 
-@ __sv_free_interval SvInterval iv → v {
-    ( semver_free . iv lo )
-    ( semver_free . iv hi )
-}
-
 // X-range exclusive upper bound for a partial with <3 components:
 //   "1"   → 2.0.0     "1.2" → 1.3.0
 @ __sv_xr_hi PartialVer p → Semver {
@@ -468,7 +452,8 @@ $ `stdlib/core/vec.nu`
     ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 1 1 ( __sv_caret_hi p ) 0 } }
 }
 
-// Intersect a set of comparator intervals (AND) into one; frees the inputs.
+// Intersect a set of comparator intervals (AND) into one (the inputs stay
+// the caller's).
 @ __sv_and_reduce ( Vec SvInterval ) parts → SvInterval {
     : ~ i hl 0
     : ~ Semver lo ( __sv_make 0 0 0 )
@@ -487,7 +472,7 @@ $ `stdlib/core/vec.nu`
                         : i c ( semver_compare . iv lo lo )
                         ? > c 0 { = take T } { ? & == c 0 & == . iv lo_incl 0 == li 1 { = take T } {} }
                     }
-                    ? take { ( semver_free lo ) = lo ( semver_clone . iv lo ) = li . iv lo_incl = hl 1 } {}
+                    ? take { = lo ( semver_clone . iv lo ) = li . iv lo_incl = hl 1 } {}
                 } {}
                 ? != . iv has_hi 0 {
                     : ~ b take2 ? == hh 0 { T } { F }
@@ -495,19 +480,13 @@ $ `stdlib/core/vec.nu`
                         : i c ( semver_compare . iv hi hi )
                         ? < c 0 { = take2 T } { ? & == c 0 & == . iv hi_incl 0 == hii 1 { = take2 T } {} }
                     }
-                    ? take2 { ( semver_free hi ) = hi ( semver_clone . iv hi ) = hii . iv hi_incl = hh 1 } {}
+                    ? take2 { = hi ( semver_clone . iv hi ) = hii . iv hi_incl = hh 1 } {}
                 } {}
             }
             F _ → {}
         }
         = k + k 1
     }
-    = k 0
-    ~ < k n {
-        ?? ( vec_get [SvInterval] parts k ) { T iv → { ( __sv_free_interval iv ) } F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [SvInterval] parts )
     ^ @ SvInterval { hl lo li hh hi hii }
 }
 
@@ -562,11 +541,7 @@ $ `stdlib/core/vec.nu`
         ?? cr { T iv → { ( vec_push [SvInterval] parts iv ) } F _ → { = err 1 } }
         = k + k 1
     }
-    ( vec_free [i] ts ) ( vec_free [i] te )
     ? != err 0 {
-        : i m ( vec_len [SvInterval] parts )
-        : ~ i j 0
-        ~ < j m { ?? ( vec_get [SvInterval] parts j ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = j + j 1 }
         ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq }
     } {}
     ^ @ !SvInterval SemverErr { T ( __sv_and_reduce parts ) }
@@ -598,20 +573,13 @@ $ `stdlib/core/vec.nu`
         }
     }
     ? != err 0 {
-        : i m ( vec_len [SvInterval] alts )
-        : ~ i j 0
-        ~ < j m { ?? ( vec_get [SvInterval] alts j ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = j + j 1 }
         ^ @ !VersionReq SemverErr { F # SemverErr SvBadReq }
     } {}
     ^ @ !VersionReq SemverErr { T @ VersionReq { alts } }
 }
 
-@ semver_req_free sink VersionReq r → v {
-    : i n ( vec_len [SvInterval] . r alts )
-    : ~ i k 0
-    ~ < k n { ?? ( vec_get [SvInterval] . r alts k ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = k + k 1 }
-    ( vec_free [SvInterval] . r alts )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ semver_req_free sink VersionReq r → v {}
 
 @ __sv_interval_matches SvInterval iv Semver v → b {
     ? != . iv has_lo 0 {

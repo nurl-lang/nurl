@@ -25,6 +25,7 @@ $ `stdlib/std/x509.nu`
 $ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/pkey.nu`
 $ `stdlib/std/csr.nu`
+$ `stdlib/core/rcbox.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
@@ -70,28 +71,16 @@ $ `stdlib/std/csr.nu`
     String expires_iso
 }
 
-@ pki_cert_free sink PkiCert c → v {
-    ( string_free . c cert_pem )
-    ( string_free . c key_pem )
-    ( string_free . c serial_hex )
-    ( string_free . c expires_iso )
-}
-
 : PkiCertInfo {
     String serial_hex
     String cn
     b ok
 }
 
-@ pki_cert_info_free sink PkiCertInfo i → v {
-    ( string_free . i serial_hex )
-    ( string_free . i cn )
-}
-
 // `alg` selects which key pair below is live: 0 uses scalar/pubkey,
 // 44/65/87 use ml_sk/ml_pk. The unused pair stays empty rather than
-// being absent, so pki_ca_free has one shape to release.
-: PkiCa {
+// being absent, so there is one shape to drop.
+: PkiCaImpl {
     i alg
     ( Vec u ) scalar  // P-256 private scalar
     ( Vec u ) pubkey  // P-256 public point
@@ -102,34 +91,43 @@ $ `stdlib/std/csr.nu`
     String cn
 }
 
-@ pki_ca_new → *PkiCa {
-    : *PkiCa ca # *PkiCa ( nurl_malloc Z PkiCa )
-    = . ca alg 0
-    = . ca scalar ( vec_new [u] )
-    = . ca pubkey ( vec_new [u] )
-    = . ca ml_sk ( vec_new [u] )
-    = . ca ml_pk ( vec_new [u] )
-    = . ca cert_pem ( string_new )
-    = . ca key_pem ( string_new )
-    = . ca cn ( string_new )
-    ^ ca
+// A PkiCa is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same CA, and the last owner releases it. A load that
+// fails hands back a null handle (`pki_ca_ok` is F).
+: PkiCa { s ctl }
+
+@ PkiCa_share PkiCa h → PkiCa { ^ @ PkiCa { # s ( rcbox_share # i . h ctl ) } }
+
+@ PkiCa_drop sink PkiCa h → v {
+    ( mem_forget h )
+    ( rcbox_release [PkiCaImpl] # i . h ctl )
 }
 
-@ pki_ca_free sink * PkiCa ca → v {
-    ? == # i ca 0 { ^ v } {}
-    ( vec_free [u] . ca scalar )
-    ( vec_free [u] . ca pubkey )
-    ( vec_free [u] . ca ml_sk )
-    ( vec_free [u] . ca ml_pk )
-    ( string_free . ca cert_pem )
-    ( string_free . ca key_pem )
-    ( string_free . ca cn )
-    ( nurl_free ca )
+@ __PkiCa_ptr PkiCa h → *PkiCaImpl { ^ ( rcbox_ptr [PkiCaImpl] # i . h ctl ) }
+
+// The key pair moves in; the PEMs and the name are copied.
+@ __pki_ca_make i alg sink ( Vec u ) scalar sink ( Vec u ) pubkey sink ( Vec u ) ml_sk sink ( Vec u ) ml_pk s cert_pem s key_pem s cn → PkiCa {
+    ^ @ PkiCa { # s ( rcbox_new [PkiCaImpl] @ PkiCaImpl { alg scalar pubkey ml_sk ml_pk ( string_from cert_pem ) ( string_from key_pem ) ( string_from cn ) } ) }
 }
+
+@ __pki_ca_null → PkiCa { ^ @ PkiCa { # s 0 } }
+
+// F for the null handle a failed load returns.
+@ pki_ca_ok PkiCa ca → b { ^ != 0 # i . ca ctl }
+
+@ pki_ca_alg PkiCa ca → i { ^ . ( __PkiCa_ptr ca ) alg }
+
+@ pki_ca_cert_pem PkiCa ca → s { ^ ( string_data . ( __PkiCa_ptr ca ) cert_pem ) }
+
+@ pki_ca_key_pem PkiCa ca → s { ^ ( string_data . ( __PkiCa_ptr ca ) key_pem ) }
+
+@ pki_ca_cn PkiCa ca → s { ^ ( string_data . ( __PkiCa_ptr ca ) cn ) }
 
 // The public key as it appears in the SubjectPublicKeyInfo BIT STRING —
 // what the key identifier is computed over, and what verification needs.
-@ pki_ca_public * PkiCa ca → ( Vec u ) {
+@ pki_ca_public PkiCa ca → ( Vec u ) { ^ ( __pki_ca_pub ( __PkiCa_ptr ca ) ) }
+
+@ __pki_ca_pub * PkiCaImpl ca → ( Vec u ) {
     ? == . ca alg 0 { ^ . ca pubkey } {}
     ^ . ca ml_pk
 }
@@ -158,7 +156,6 @@ $ `stdlib/std/csr.nu`
         ? & == cmp 0 != db nbk { = cmp ? < db nbk - 0 1 1 } {}
         = k + k 1
     }
-    ( vec_free [u] nb )
     ^ & nonzero < cmp 0
 }
 
@@ -263,7 +260,6 @@ $ `stdlib/std/csr.nu`
         }
     }
     ( bytes_extend_bytes out content )
-    ( vec_free [u] content )
     ^ out
 }
 
@@ -280,7 +276,6 @@ $ `stdlib/std/csr.nu`
         = k + k 1
     }
     ? == ( vec_len [u] body ) 0 { ( vec_push [u] body # u 0 ) } {}
-    ( vec_free [u] mag )
     ^ ( _pki_tlv 2 body )
 }
 
@@ -306,7 +301,6 @@ $ `stdlib/std/csr.nu`
     : ( Vec u ) b ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( vec_push [u] b # u 0 )
     ( bytes_extend_bytes b content )
-    ( vec_free [u] content )
     ^ ( _pki_tlv 3 b )
 }
 
@@ -362,7 +356,6 @@ $ `stdlib/std/csr.nu`
     : i hh ?? ( vec_get [i] fields 3 ) { T x → x F _ → 0 }
     : i mi ?? ( vec_get [i] fields 4 ) { T x → x F _ → 0 }
     : i ss ?? ( vec_get [i] fields 5 ) { T x → x F _ → 0 }
-    ( vec_free [i] fields )
     : i year ? >= yy 50 + 1900 yy + 2000 yy
     : !i ParseErr r ( time_make year mo dd hh mi ss )
     ?? r { T v → { ^ v } F _ → { ^ - 0 1 } }
@@ -371,7 +364,6 @@ $ `stdlib/std/csr.nu`
 @ _pki_utctime i unix → ( Vec u ) {
     : String st ( pki_utctime_str unix )
     : ( Vec u ) b ( bytes_from_str ( string_data st ) )
-    ( string_free st )
     ^ ( _pki_tlv 23 b )
 }
 
@@ -399,7 +391,7 @@ $ `stdlib/std/csr.nu`
     : ( Vec u ) cnb ( bytes_from_str cn )
     : ( Vec u ) cnstr ( _pki_tlv 12 cnb )  // 0x0C UTF8String
     : ~ ( Vec u ) atv ( _pki_oid `550403` )  // 2.5.4.3 commonName
-    ( bytes_extend_bytes atv cnstr ) ( vec_free [u] cnstr )
+    ( bytes_extend_bytes atv cnstr )
     : ( Vec u ) atv_seq ( _pki_tlv 48 atv )
     : ( Vec u ) set ( _pki_tlv 49 atv_seq )
     ^ ( _pki_tlv 48 set )
@@ -419,15 +411,15 @@ $ `stdlib/std/csr.nu`
     ? != alg 0 {
         : ~ ( Vec u ) algseq ( _pki_alg_id alg )
         : ( Vec u ) mbs ( _pki_bitstring pubk )
-        ( bytes_extend_bytes algseq mbs ) ( vec_free [u] mbs )
+        ( bytes_extend_bytes algseq mbs )
         ^ ( _pki_tlv 48 algseq )
     } {}
     : ~ ( Vec u ) ealg ( _pki_oid `2a8648ce3d0201` )  // id-ecPublicKey
     : ( Vec u ) curve ( _pki_oid `2a8648ce3d030107` )  // prime256v1
-    ( bytes_extend_bytes ealg curve ) ( vec_free [u] curve )
+    ( bytes_extend_bytes ealg curve )
     : ~ ( Vec u ) ealgseq ( _pki_tlv 48 ealg )
     : ( Vec u ) bs ( _pki_bitstring pubk )
-    ( bytes_extend_bytes ealgseq bs ) ( vec_free [u] bs )
+    ( bytes_extend_bytes ealgseq bs )
     ^ ( _pki_tlv 48 ealgseq )
 }
 
@@ -439,10 +431,10 @@ $ `stdlib/std/csr.nu`
     : ~ ( Vec u ) e ( _pki_oid oid_hex )
     ? critical {
         : ( Vec u ) c ( _pki_bool_true )
-        ( bytes_extend_bytes e c ) ( vec_free [u] c )
+        ( bytes_extend_bytes e c )
     } {}
     : ( Vec u ) oct ( _pki_tlv 4 value )
-    ( bytes_extend_bytes e oct ) ( vec_free [u] oct )
+    ( bytes_extend_bytes e oct )
     ^ ( _pki_tlv 48 e )
 }
 
@@ -453,7 +445,6 @@ $ `stdlib/std/csr.nu`
 @ _pki_key_id ( Vec u ) pubk → ( Vec u ) {
     : ( Vec u ) h ( sha256_pure pubk )
     : ( Vec u ) id ( bytes_slice h 0 20 )
-    ( vec_free [u] h )
     ^ id
 }
 
@@ -477,7 +468,7 @@ $ `stdlib/std/csr.nu`
 @ _pki_eku → ( Vec u ) {
     : ~ ( Vec u ) body ( _pki_oid `2b06010505070301` )  // id-kp-serverAuth
     : ( Vec u ) ca ( _pki_oid `2b06010505070302` )  // id-kp-clientAuth
-    ( bytes_extend_bytes body ca ) ( vec_free [u] ca )
+    ( bytes_extend_bytes body ca )
     ^ ( _pki_tlv 48 body )
 }
 
@@ -493,19 +484,18 @@ $ `stdlib/std/csr.nu`
     // basicConstraints
     : ~ ( Vec u ) bc_inner ( vec_new [u] )
     ? is_ca {
-        ( vec_free [u] bc_inner )
         = bc_inner ( _pki_bool_true )
     } {}
     : ( Vec u ) bc ( _pki_ext `551d13` is_ca ( _pki_tlv 48 bc_inner ) )
-    ( bytes_extend_bytes exts_all bc ) ( vec_free [u] bc )
+    ( bytes_extend_bytes exts_all bc )
 
     // keyUsage (always critical, per RFC 5280 §4.2.1.3)
     : ( Vec u ) ku ( _pki_ext `551d0f` T ( _pki_keyusage is_ca ) )
-    ( bytes_extend_bytes exts_all ku ) ( vec_free [u] ku )
+    ( bytes_extend_bytes exts_all ku )
 
     ? ! is_ca {
         : ( Vec u ) eku ( _pki_ext `551d25` F ( _pki_eku ) )
-        ( bytes_extend_bytes exts_all eku ) ( vec_free [u] eku )
+        ( bytes_extend_bytes exts_all eku )
     } {}
 
     // subjectAltName — omitted rather than emitted empty when there is
@@ -513,18 +503,18 @@ $ `stdlib/std/csr.nu`
     ? > ( nurl_str_len cn ) 0 {
         : ( Vec u ) dns ( _pki_tlv 130 ( bytes_from_str cn ) )  // [2] dNSName
         : ( Vec u ) san ( _pki_ext `551d11` F ( _pki_tlv 48 dns ) )
-        ( bytes_extend_bytes exts_all san ) ( vec_free [u] san )
+        ( bytes_extend_bytes exts_all san )
     } {}
 
     // subjectKeyIdentifier
     : ( Vec u ) ski ( _pki_ext `551d0e` F ( _pki_tlv 4 ( _pki_key_id subject_pub ) ) )
-    ( bytes_extend_bytes exts_all ski ) ( vec_free [u] ski )
+    ( bytes_extend_bytes exts_all ski )
 
     // authorityKeyIdentifier — self-signed roots carry it too, pointing
     // at themselves, which is what lets a verifier recognise the anchor.
     : ( Vec u ) akid ( _pki_tlv 128 ( _pki_key_id issuer_pub ) )  // [0] keyIdentifier
     : ( Vec u ) aki ( _pki_ext `551d23` F ( _pki_tlv 48 akid ) )
-    ( bytes_extend_bytes exts_all aki ) ( vec_free [u] aki )
+    ( bytes_extend_bytes exts_all aki )
 
     : ( Vec u ) exts ( _pki_tlv 48 exts_all )
     ^ ( _pki_tlv 163 exts )  // 0xA3 [3] EXPLICIT
@@ -533,16 +523,14 @@ $ `stdlib/std/csr.nu`
 @ _pki_sig_der ( Vec u ) rs → ( Vec u ) {
     : ( Vec u ) rb ( bytes_slice rs 0 32 )
     : ( Vec u ) sb ( bytes_slice rs 32 64 )
-    ( vec_free [u] rs )
     : ~ ( Vec u ) body ( _pki_int rb )
     : ( Vec u ) si ( _pki_int sb )
-    ( bytes_extend_bytes body si ) ( vec_free [u] si )
+    ( bytes_extend_bytes body si )
     ^ ( _pki_tlv 48 body )
 }
 
 @ _pki_pem s label ( Vec u ) der → String {
     : String b64 ( b64_encode_vec der )
-    ( vec_free [u] der )
     : String out ( string_with_cap + ( string_len b64 ) 96 )
     ( string_push_str out `-----BEGIN ` )
     ( string_push_str out label )
@@ -558,7 +546,6 @@ $ `stdlib/std/csr.nu`
     ( string_push_str out `-----END ` )
     ( string_push_str out label )
     ( string_push_str out `-----\n` )
-    ( string_free b64 )
     ^ out
 }
 
@@ -568,16 +555,14 @@ $ `stdlib/std/csr.nu`
 // STRING: a DER ECDSA-Sig-Value for P-256, the raw FIPS 204 signature
 // for ML-DSA (which specifies no wrapper, and hashes internally — so
 // there is no digest step on that path).
-@ _pki_sign * PkiCa ca ( Vec u ) tbs → ( Vec u ) {
+@ __pki_sign * PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
     ? == . ca alg 0 {
         : ( Vec u ) h ( sha256_pure tbs )
         : ( Vec u ) rs ( ecdsa_p256_sign . ca scalar h )
-        ( vec_free [u] h )
         ^ ( _pki_sig_der rs )
     } {}
     : ( Vec u ) ctx ( vec_new [u] )
     : ( Vec u ) sig ( mldsa_sign . ca alg . ca ml_sk tbs ctx )
-    ( vec_free [u] ctx )
     ^ sig
 }
 
@@ -588,7 +573,6 @@ $ `stdlib/std/csr.nu`
     ? != alg 0 {
         : ( Vec u ) ctx ( vec_new [u] )
         : b ok ( mldsa_verify alg pubk tbs ctx sig )
-        ( vec_free [u] ctx )
         ^ ok
     } {}
     : ( Vec u ) h ( sha256_pure tbs )
@@ -598,10 +582,7 @@ $ `stdlib/std/csr.nu`
         : ( Vec u ) r ( bytes_slice rs 0 32 )
         : ( Vec u ) s ( bytes_slice rs 32 64 )
         = ok ( ecdsa_p256_verify pubk r s h )
-        ( vec_free [u] r ) ( vec_free [u] s )
     } {}
-    ( vec_free [u] rs )
-    ( vec_free [u] h )
     ^ ok
 }
 
@@ -610,37 +591,37 @@ $ `stdlib/std/csr.nu`
 // Assemble a TBSCertificate. `sub_pub` is the subject's raw public key
 // (65-byte EC point or ML-DSA pk); the CA supplies the issuer name, the
 // issuer key identifier and the signature algorithm.
-@ _pki_tbs * PkiCa ca s issuer_cn s subject_cn ( Vec u ) sub_pub ( Vec u ) serial i not_before i not_after b is_ca → ( Vec u ) {
+@ __pki_tbs * PkiCaImpl ca s issuer_cn s subject_cn ( Vec u ) sub_pub ( Vec u ) serial i not_before i not_after b is_ca → ( Vec u ) {
     : ~ ( Vec u ) tbs_body ( _pki_tlv 160 ( _pki_int1 2 ) )  // [0]{ INTEGER 2 } = v3
     : ( Vec u ) ser ( _pki_int ( bytes_slice serial 0 ( vec_len [u] serial ) ) )
-    ( bytes_extend_bytes tbs_body ser ) ( vec_free [u] ser )
+    ( bytes_extend_bytes tbs_body ser )
     : ( Vec u ) alg1 ( _pki_alg_id . ca alg )
-    ( bytes_extend_bytes tbs_body alg1 ) ( vec_free [u] alg1 )
+    ( bytes_extend_bytes tbs_body alg1 )
     : ( Vec u ) issuer ( _pki_name issuer_cn )
-    ( bytes_extend_bytes tbs_body issuer ) ( vec_free [u] issuer )
+    ( bytes_extend_bytes tbs_body issuer )
     : ~ ( Vec u ) val ( _pki_utctime not_before )
     : ( Vec u ) na ( _pki_utctime not_after )
-    ( bytes_extend_bytes val na ) ( vec_free [u] na )
+    ( bytes_extend_bytes val na )
     : ( Vec u ) val_seq ( _pki_tlv 48 val )
-    ( bytes_extend_bytes tbs_body val_seq ) ( vec_free [u] val_seq )
+    ( bytes_extend_bytes tbs_body val_seq )
     : ( Vec u ) subject ( _pki_name subject_cn )
-    ( bytes_extend_bytes tbs_body subject ) ( vec_free [u] subject )
+    ( bytes_extend_bytes tbs_body subject )
     : ( Vec u ) pub_copy ( bytes_slice sub_pub 0 ( vec_len [u] sub_pub ) )
     : ( Vec u ) spki ( _pki_spki . ca alg pub_copy )
-    ( bytes_extend_bytes tbs_body spki ) ( vec_free [u] spki )
-    : ( Vec u ) exts ( _pki_extensions subject_cn is_ca sub_pub ( pki_ca_public ca ) )
-    ( bytes_extend_bytes tbs_body exts ) ( vec_free [u] exts )
+    ( bytes_extend_bytes tbs_body spki )
+    : ( Vec u ) exts ( _pki_extensions subject_cn is_ca sub_pub ( __pki_ca_pub ca ) )
+    ( bytes_extend_bytes tbs_body exts )
     ^ ( _pki_tlv 48 tbs_body )
 }
 
 // Certificate ::= SEQ { tbsCertificate, signatureAlgorithm, signature }
-@ _pki_wrap_cert * PkiCa ca ( Vec u ) tbs → ( Vec u ) {
-    : ( Vec u ) sig ( _pki_sign ca tbs )
+@ __pki_wrap_cert * PkiCaImpl ca ( Vec u ) tbs → ( Vec u ) {
+    : ( Vec u ) sig ( __pki_sign ca tbs )
     : ~ ( Vec u ) cert_body tbs
     : ( Vec u ) alg2 ( _pki_alg_id . ca alg )
-    ( bytes_extend_bytes cert_body alg2 ) ( vec_free [u] alg2 )
+    ( bytes_extend_bytes cert_body alg2 )
     : ( Vec u ) sig_bs ( _pki_bitstring sig )
-    ( bytes_extend_bytes cert_body sig_bs ) ( vec_free [u] sig_bs )
+    ( bytes_extend_bytes cert_body sig_bs )
     ^ ( _pki_tlv 48 cert_body )
 }
 
@@ -649,71 +630,63 @@ $ `stdlib/std/csr.nu`
     ? != alg 0 {
         : ~ ( Vec u ) body ( _pki_int1 0 )
         : ( Vec u ) algid ( _pki_alg_id alg )
-        ( bytes_extend_bytes body algid ) ( vec_free [u] algid )
+        ( bytes_extend_bytes body algid )
         : ( Vec u ) inner ( _pki_tlv 4 ( bytes_slice sk 0 ( vec_len [u] sk ) ) )
         : ( Vec u ) outer ( _pki_tlv 4 inner )
-        ( bytes_extend_bytes body outer ) ( vec_free [u] outer )
+        ( bytes_extend_bytes body outer )
         ^ ( _pki_pem `PRIVATE KEY` ( _pki_tlv 48 body ) )
     } {}
     : ~ ( Vec u ) key_body ( _pki_int1 1 )
     : ( Vec u ) sk_oct ( _pki_tlv 4 ( bytes_slice sk 0 32 ) )
-    ( bytes_extend_bytes key_body sk_oct ) ( vec_free [u] sk_oct )
+    ( bytes_extend_bytes key_body sk_oct )
     : ( Vec u ) crv ( _pki_tlv 160 ( _pki_oid `2a8648ce3d030107` ) )
-    ( bytes_extend_bytes key_body crv ) ( vec_free [u] crv )
+    ( bytes_extend_bytes key_body crv )
     : ( Vec u ) pub_bs ( _pki_tlv 161 ( _pki_bitstring ( bytes_slice pubk 0 ( vec_len [u] pubk ) ) ) )
-    ( bytes_extend_bytes key_body pub_bs ) ( vec_free [u] pub_bs )
+    ( bytes_extend_bytes key_body pub_bs )
     ^ ( _pki_pem `EC PRIVATE KEY` ( _pki_tlv 48 key_body ) )
 }
 
-@ pki_generate_ca s cn i validity_days i alg → *PkiCa {
-    : *PkiCa ca ( pki_ca_new )
-    = . ca alg alg
-    ( string_free . ca cn )
-    = . ca cn ( string_from cn )
-
+@ pki_generate_ca s cn i validity_days i alg → PkiCa {
+    : ~ ( Vec u ) scalar ( vec_new [u] )
+    : ~ ( Vec u ) pubkey ( vec_new [u] )
+    : ~ ( Vec u ) ml_sk ( vec_new [u] )
+    : ~ ( Vec u ) ml_pk ( vec_new [u] )
     ? == alg 0 {
-        : ~ ( Vec u ) scalar ( _pki_rand_bytes 32 )
-        ~ ! ( _pki_scalar_ok scalar ) {
-            ( vec_free [u] scalar )
-            = scalar ( _pki_rand_bytes 32 )
-        }
-        ( vec_free [u] . ca scalar )
-        = . ca scalar scalar
-        ( vec_free [u] . ca pubkey )
-        = . ca pubkey ( p256_ecdh_keygen scalar )
+        = scalar ( _pki_rand_bytes 32 )
+        ~ ! ( _pki_scalar_ok scalar ) { = scalar ( _pki_rand_bytes 32 ) }
+        = pubkey ( p256_ecdh_keygen scalar )
     } {
         : MldsaKeys ks ( mldsa_keygen alg )
-        ( vec_free [u] . ca ml_pk )
-        = . ca ml_pk ( bytes_slice ( mldsa_pk ks ) 0 ( mldsa_pk_len alg ) )
-        ( vec_free [u] . ca ml_sk )
-        = . ca ml_sk ( bytes_slice ( mldsa_sk ks ) 0 ( mldsa_sk_len alg ) )
+        = ml_pk ( bytes_slice ( mldsa_pk ks ) 0 ( mldsa_pk_len alg ) )
+        = ml_sk ( bytes_slice ( mldsa_sk ks ) 0 ( mldsa_sk_len alg ) )
     }
+    // The certificate is signed by the CA it describes: build the CA
+    // first, then fill its two PEMs in place.
+    : PkiCa h ( __pki_ca_make alg scalar pubkey ml_sk ml_pk `` `` cn )
+    : *PkiCaImpl ca ( __PkiCa_ptr h )
 
-    : ( Vec u ) pubk ( pki_ca_public ca )
+    : ( Vec u ) pubk ( __pki_ca_pub ca )
     : ( Vec u ) serial ( _pki_rand_bytes 12 )
     : i now ( now_seconds )
-    : ( Vec u ) tbs ( _pki_tbs ca cn cn pubk serial - now 86400 + now * validity_days 86400 T )
-    : ( Vec u ) cert_der ( _pki_wrap_cert ca tbs )
-    ( vec_free [u] serial )
-
-    ( string_free . ca cert_pem )
-    = . ca cert_pem ( _pki_pem `CERTIFICATE` cert_der )
-    ( string_free . ca key_pem )
-    = . ca key_pem ( _pki_priv_pem alg ? == alg 0 . ca scalar . ca ml_sk pubk )
-    ^ ca
+    : ( Vec u ) tbs ( __pki_tbs ca cn cn pubk serial - now 86400 + now * validity_days 86400 T )
+    : ( Vec u ) cert_der ( __pki_wrap_cert ca tbs )
+    : String cert_pem ( _pki_pem `CERTIFICATE` cert_der )
+    : String key_pem ( _pki_priv_pem alg ? == alg 0 . ca scalar . ca ml_sk pubk )
+    ( string_push_str . ca cert_pem ( string_data cert_pem ) )
+    ( string_push_str . ca key_pem ( string_data key_pem ) )
+    ^ h
 }
 
-// Rebuild a CA handle from a stored cert + key pair. Returns 0 when the
-// pair does not parse, does not agree on the algorithm, or when the
-// private key does not match the certificate's public key — a mismatch
-// would otherwise produce certificates nothing can verify.
-@ _pki_ca_from_pem s cert_pem s key_pem s ca_cn → *PkiCa {
+// Rebuild a CA handle from a stored cert + key pair. Returns a null
+// handle when the pair does not parse, does not agree on the algorithm,
+// or when the private key does not match the certificate's public key —
+// a mismatch would otherwise produce certificates nothing can verify.
+@ _pki_ca_from_pem s cert_pem s key_pem s ca_cn → PkiCa {
     : !( Vec u ) ParseErr der_r ( pem_to_der cert_pem )
     : ( Vec u ) der ?? der_r { T v → v F _ → ( vec_new [u] ) }
-    ? == ( vec_len [u] der ) 0 { ( vec_free [u] der ) ^ # *PkiCa 0 } {}
+    ? == ( vec_len [u] der ) 0 { ^ ( __pki_ca_null ) } {}
     : X509 x ( x509_parse der )
-    ( vec_free [u] der )
-    ? ! . x ok { ( x509_free x ) ^ # *PkiCa 0 } {}
+    ? ! . x ok { ^ ( __pki_ca_null ) } {}
 
     ? == . x key_alg 4 {
         : i level . x ec_curve
@@ -722,131 +695,81 @@ $ `stdlib/std/csr.nu`
             T mk → {
                 : ~ b good & == . mk level level == ( vec_len [u] . mk sk ) ( mldsa_sk_len level )
                 ? good { = good == ( vec_len [u] . x ec_point ) ( mldsa_pk_len level ) } {}
-                ? ! good {
-                    ( mldsa_priv_free mk ) ( x509_free x )
-                    ^ # *PkiCa 0
-                } {}
-                : *PkiCa ca ( pki_ca_new )
-                = . ca alg level
-                ( vec_free [u] . ca ml_sk )
-                = . ca ml_sk ( bytes_slice . mk sk 0 ( vec_len [u] . mk sk ) )
-                ( vec_free [u] . ca ml_pk )
-                = . ca ml_pk ( bytes_slice . x ec_point 0 ( vec_len [u] . x ec_point ) )
-                ( mldsa_priv_free mk )
-                ( string_free . ca cert_pem )
-                = . ca cert_pem ( string_from cert_pem )
-                ( string_free . ca key_pem )
-                = . ca key_pem ( string_from key_pem )
-                ( string_free . ca cn )
-                = . ca cn ( string_from ca_cn )
+                ? ! good { ^ ( __pki_ca_null ) } {}
+                : ( Vec u ) ml_pk ( bytes_slice . x ec_point 0 ( vec_len [u] . x ec_point ) )
                 // The stored certificate is self-signed: re-check it
                 // rather than trust that the two files belong together.
-                ? ! ( _pki_verify_sig level . ca ml_pk . x tbs . x sig ) {
-                    ( x509_free x ) ( pki_ca_free ca )
-                    ^ # *PkiCa 0
-                } {}
-                ( x509_free x )
-                ^ ca
+                ? ! ( _pki_verify_sig level ml_pk . x tbs . x sig ) { ^ ( __pki_ca_null ) } {}
+                : ( Vec u ) ml_sk ( bytes_slice . mk sk 0 ( vec_len [u] . mk sk ) )
+                ^ ( __pki_ca_make level ( vec_new [u] ) ( vec_new [u] ) ml_sk ml_pk cert_pem key_pem ca_cn )
             }
             F _ → {}
         }
-        ( x509_free x )
-        ^ # *PkiCa 0
+        ^ ( __pki_ca_null )
     } {}
 
-    ? != . x key_alg 2 { ( x509_free x ) ^ # *PkiCa 0 } {}
+    ? != . x key_alg 2 { ^ ( __pki_ca_null ) } {}
     : !( Vec u ) ParseErr sk_r ( ec_p256_priv_from_pem key_pem )
     : ( Vec u ) scalar ?? sk_r { T v → v F _ → ( vec_new [u] ) }
-    ? != ( vec_len [u] scalar ) 32 {
-        ( vec_free [u] scalar ) ( x509_free x )
-        ^ # *PkiCa 0
-    } {}
+    ? != ( vec_len [u] scalar ) 32 { ^ ( __pki_ca_null ) } {}
     : ( Vec u ) derived ( p256_ecdh_keygen scalar )
-    ? ! ( bytes_eq derived . x ec_point ) {
-        ( vec_free [u] derived ) ( vec_free [u] scalar ) ( x509_free x )
-        ^ # *PkiCa 0
-    } {}
-    ( x509_free x )
-    : *PkiCa ca ( pki_ca_new )
-    = . ca alg 0
-    ( vec_free [u] . ca scalar )
-    = . ca scalar scalar
-    ( vec_free [u] . ca pubkey )
-    = . ca pubkey derived
-    ( string_free . ca cert_pem )
-    = . ca cert_pem ( string_from cert_pem )
-    ( string_free . ca key_pem )
-    = . ca key_pem ( string_from key_pem )
-    ( string_free . ca cn )
-    = . ca cn ( string_from ca_cn )
-    ^ ca
+    ? ! ( bytes_eq derived . x ec_point ) { ^ ( __pki_ca_null ) } {}
+    ^ ( __pki_ca_make 0 scalar derived ( vec_new [u] ) ( vec_new [u] ) cert_pem key_pem ca_cn )
 }
 
 // Load the CA, or mint one when either half is missing. An existing CA
-// that fails to load returns 0 instead of being silently replaced:
-// overwriting a live CA key would invalidate every certificate ever
-// issued under it, so that has to be an operator decision.
-@ pki_load_or_create_ca s ca_cert_path s ca_key_path s ca_cn i alg → *PkiCa {
+// that fails to load returns a null handle instead of being silently
+// replaced: overwriting a live CA key would invalidate every certificate
+// ever issued under it, so that has to be an operator decision.
+@ pki_load_or_create_ca s ca_cert_path s ca_key_path s ca_cn i alg → PkiCa {
     ? & ( file_exists ca_cert_path ) ( file_exists ca_key_path ) {
         : !String IoErr cr ( read_file ca_cert_path )
         : !String IoErr kr ( read_file ca_key_path )
-        : ~ * PkiCa out # *PkiCa 0
         ?? cr {
             T cert_str → {
                 ?? kr {
-                    T key_str → {
-                        = out ( _pki_ca_from_pem ( string_data cert_str ) ( string_data key_str ) ca_cn )
-                        ( string_free key_str )
-                    }
+                    T key_str → { ^ ( _pki_ca_from_pem ( string_data cert_str ) ( string_data key_str ) ca_cn ) }
                     F _ → {}
                 }
-                ( string_free cert_str )
             }
             F _ → {}
         }
-        ^ out
+        ^ ( __pki_ca_null )
     } {}
 
-    : *PkiCa new_ca ( pki_generate_ca ca_cn 3650 alg )
+    : PkiCa new_ca ( pki_generate_ca ca_cn 3650 alg )
     // A CA that only exists in memory is worse than none: the next
     // restart would mint a different one and orphan everything issued
     // in between, so an unwritable key is a startup failure.
     : ~ b saved F
-    ?? ( write_file ca_cert_path ( string_data . new_ca cert_pem ) ) {
+    ?? ( write_file ca_cert_path ( pki_ca_cert_pem new_ca ) ) {
         T _ → {
-            ?? ( write_file ca_key_path ( string_data . new_ca key_pem ) ) {
+            ?? ( write_file ca_key_path ( pki_ca_key_pem new_ca ) ) {
                 T _ → { = saved T }
                 F _ → {}
             }
         }
         F _ → {}
     }
-    ? ! saved {
-        ( pki_ca_free new_ca )
-        ^ # *PkiCa 0
-    } {}
+    ? ! saved { ^ ( __pki_ca_null ) } {}
     // The private key must not be world- or group-readable.
     : !v IoErr _cm ( set_permissions ca_key_path 384 )
     ^ new_ca
 }
 
-@ pki_issue_device_cert * PkiCa ca s device_id i validity_days → PkiCert {
+@ pki_issue_device_cert PkiCa ca__h s device_id i validity_days → PkiCert {
+    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
     : ~ ( Vec u ) dev_sk ( vec_new [u] )
     : ~ ( Vec u ) dev_pub ( vec_new [u] )
     ? == . ca alg 0 {
-        ( vec_free [u] dev_sk )
         = dev_sk ( _pki_rand_bytes 32 )
         ~ ! ( _pki_scalar_ok dev_sk ) {
-            ( vec_free [u] dev_sk )
             = dev_sk ( _pki_rand_bytes 32 )
         }
-        ( vec_free [u] dev_pub )
         = dev_pub ( p256_ecdh_keygen dev_sk )
     } {
         : MldsaKeys ks ( mldsa_keygen . ca alg )
-        ( vec_free [u] dev_sk )
         = dev_sk ( bytes_slice ( mldsa_sk ks ) 0 ( mldsa_sk_len . ca alg ) )
-        ( vec_free [u] dev_pub )
         = dev_pub ( bytes_slice ( mldsa_pk ks ) 0 ( mldsa_pk_len . ca alg ) )
     }
 
@@ -856,13 +779,9 @@ $ `stdlib/std/csr.nu`
     : i not_after + now * validity_days 86400
     : String expires_iso ( pki_iso_timestamp not_after )
 
-    : ( Vec u ) tbs ( _pki_tbs ca ( string_data . ca cn ) device_id dev_pub serial - now 86400 not_after F )
-    : ( Vec u ) cert_der ( _pki_wrap_cert ca tbs )
+    : ( Vec u ) tbs ( __pki_tbs ca ( string_data . ca cn ) device_id dev_pub serial - now 86400 not_after F )
+    : ( Vec u ) cert_der ( __pki_wrap_cert ca tbs )
     : String key_pem ( _pki_priv_pem . ca alg dev_sk dev_pub )
-
-    ( vec_free [u] dev_sk )
-    ( vec_free [u] dev_pub )
-    ( vec_free [u] serial )
 
     ^ @ PkiCert {
         ( _pki_pem `CERTIFICATE` cert_der )
@@ -892,19 +811,19 @@ $ `stdlib/std/csr.nu`
     ? == . csr key_alg 3 {
         : ~ ( Vec u ) algseq ( _pki_tlv 48 ( _pki_oid `2b6570` ) )  // Ed25519
         : ( Vec u ) bs ( _pki_bitstring pubk )
-        ( bytes_extend_bytes algseq bs ) ( vec_free [u] bs )
+        ( bytes_extend_bytes algseq bs )
         ^ ( _pki_tlv 48 algseq )
     } {}
     ? == . csr key_alg 1 {
         : ~ ( Vec u ) ralg ( _pki_oid `2a864886f70d010101` )  // rsaEncryption
         : ( Vec u ) nullp ( _pki_tlv 5 ( vec_new [u] ) )
-        ( bytes_extend_bytes ralg nullp ) ( vec_free [u] nullp )
+        ( bytes_extend_bytes ralg nullp )
         : ~ ( Vec u ) ralgseq ( _pki_tlv 48 ralg )
         : ~ ( Vec u ) rk ( _pki_int pubk )
         : ( Vec u ) re ( _pki_int ( bytes_slice . csr rsa_e 0 ( vec_len [u] . csr rsa_e ) ) )
-        ( bytes_extend_bytes rk re ) ( vec_free [u] re )
+        ( bytes_extend_bytes rk re )
         : ( Vec u ) rbs ( _pki_bitstring ( _pki_tlv 48 rk ) )
-        ( bytes_extend_bytes ralgseq rbs ) ( vec_free [u] rbs )
+        ( bytes_extend_bytes ralgseq rbs )
         ^ ( _pki_tlv 48 ralgseq )
     } {}
     ^ ( _pki_spki ? == . csr key_alg 4 ( _pki_csr_mldsa_level csr ) 0 pubk )
@@ -913,21 +832,18 @@ $ `stdlib/std/csr.nu`
 // Issue an X.509 certificate from a verified PKCS#10 CSR. The subject
 // key comes from the CSR untouched — the requester's algorithm need not
 // match the CA's — while the signature is always the CA's.
-@ pki_issue_cert_from_csr * PkiCa ca s csr_pem i validity_days → !PkiCert String {
+@ pki_issue_cert_from_csr PkiCa ca__h s csr_pem i validity_days → !PkiCert String {
+    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
     : !( Vec u ) ParseErr dr ( pem_to_der csr_pem )
     : ( Vec u ) der ?? dr { T v → v F _ → ( vec_new [u] ) }
     ? == ( vec_len [u] der ) 0 {
-        ( vec_free [u] der )
         ^ @ !PkiCert String { F ( string_from `Malformed or invalid CSR PEM` ) }
     } {}
     : Csr csr ( csr_parse der )
-    ( vec_free [u] der )
     ? ! . csr ok {
-        ( csr_free csr )
         ^ @ !PkiCert String { F ( string_from `Invalid PKCS#10 CSR structure` ) }
     } {}
     ? ! ( csr_verify csr ) {
-        ( csr_free csr )
         ^ @ !PkiCert String { F ( string_from `CSR self-signature verification failed` ) }
     } {}
     ? == . csr key_alg 4 {
@@ -935,13 +851,11 @@ $ `stdlib/std/csr.nu`
         : ~ b bad == lvl 0
         ? ! bad { = bad != ( vec_len [u] . csr pubkey ) ( mldsa_pk_len lvl ) } {}
         ? bad {
-            ( csr_free csr )
             ^ @ !PkiCert String { F ( string_from `CSR ML-DSA key does not match its signature parameter set` ) }
         } {}
     } {}
     : String subject_cn ( pki_sanitize_id ( string_data . csr cn ) )
     ? == ( string_len subject_cn ) 0 {
-        ( string_free subject_cn ) ( csr_free csr )
         ^ @ !PkiCert String { F ( string_from `CSR subject CN is empty or contains disallowed characters` ) }
     } {}
 
@@ -955,28 +869,24 @@ $ `stdlib/std/csr.nu`
     // certificate keeps whatever algorithm the requester generated.
     : ~ ( Vec u ) tbs_body ( _pki_tlv 160 ( _pki_int1 2 ) )
     : ( Vec u ) ser ( _pki_int ( bytes_slice serial 0 ( vec_len [u] serial ) ) )
-    ( bytes_extend_bytes tbs_body ser ) ( vec_free [u] ser )
+    ( bytes_extend_bytes tbs_body ser )
     : ( Vec u ) alg1 ( _pki_alg_id . ca alg )
-    ( bytes_extend_bytes tbs_body alg1 ) ( vec_free [u] alg1 )
+    ( bytes_extend_bytes tbs_body alg1 )
     : ( Vec u ) issuer ( _pki_name ( string_data . ca cn ) )
-    ( bytes_extend_bytes tbs_body issuer ) ( vec_free [u] issuer )
+    ( bytes_extend_bytes tbs_body issuer )
     : ~ ( Vec u ) val ( _pki_utctime - now 86400 )
     : ( Vec u ) na ( _pki_utctime not_after )
-    ( bytes_extend_bytes val na ) ( vec_free [u] na )
+    ( bytes_extend_bytes val na )
     : ( Vec u ) val_seq ( _pki_tlv 48 val )
-    ( bytes_extend_bytes tbs_body val_seq ) ( vec_free [u] val_seq )
+    ( bytes_extend_bytes tbs_body val_seq )
     : ( Vec u ) subject ( _pki_name ( string_data subject_cn ) )
-    ( bytes_extend_bytes tbs_body subject ) ( vec_free [u] subject )
+    ( bytes_extend_bytes tbs_body subject )
     : ( Vec u ) spki ( _pki_spki_from_csr csr )
-    ( bytes_extend_bytes tbs_body spki ) ( vec_free [u] spki )
-    : ( Vec u ) exts ( _pki_extensions ( string_data subject_cn ) F . csr pubkey ( pki_ca_public ca ) )
-    ( bytes_extend_bytes tbs_body exts ) ( vec_free [u] exts )
+    ( bytes_extend_bytes tbs_body spki )
+    : ( Vec u ) exts ( _pki_extensions ( string_data subject_cn ) F . csr pubkey ( __pki_ca_pub ca ) )
+    ( bytes_extend_bytes tbs_body exts )
     : ( Vec u ) tbs ( _pki_tlv 48 tbs_body )
-    : ( Vec u ) cert_der ( _pki_wrap_cert ca tbs )
-
-    ( vec_free [u] serial )
-    ( string_free subject_cn )
-    ( csr_free csr )
+    : ( Vec u ) cert_der ( __pki_wrap_cert ca tbs )
 
     : PkiCert out @ PkiCert {
         ( _pki_pem `CERTIFICATE` cert_der )
@@ -992,14 +902,14 @@ $ `stdlib/std/csr.nu`
 // Full check of a leaf against this CA: parses, enforces the validity
 // window, matches the expected CN against the SANs and verifies the
 // issuer signature with the CA's algorithm.
-@ pki_verify_cert * PkiCa ca s cert_pem s expected_cn → b {
+@ pki_verify_cert PkiCa ca__h s cert_pem s expected_cn → b {
+    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
     : !( Vec u ) ParseErr dr ( pem_to_der cert_pem )
     : ( Vec u ) der ?? dr { T v → v F _ → ( vec_new [u] ) }
-    ? == ( vec_len [u] der ) 0 { ( vec_free [u] der ) ^ F } {}
+    ? == ( vec_len [u] der ) 0 { ^ F } {}
 
     : X509 x ( x509_parse der )
     ? ! . x ok {
-        ( x509_free x ) ( vec_free [u] der )
         ^ F
     } {}
 
@@ -1007,20 +917,16 @@ $ `stdlib/std/csr.nu`
     : Time t ( time_from_unix ( now_seconds ) )
     : i now_int + * 10000000000 . t year + * 100000000 . t month + * 1000000 . t day + * 10000 . t hour + * 100 . t min . t sec
     ? | < now_int . x not_before > now_int . x not_after {
-        ( x509_free x ) ( vec_free [u] der )
         ^ F
     } {}
 
     ? > ( nurl_str_len expected_cn ) 0 {
         ? ! ( x509_matches_host x expected_cn ) {
-            ( x509_free x ) ( vec_free [u] der )
             ^ F
         } {}
     } {}
 
-    : b ok ( _pki_verify_sig . ca alg ( pki_ca_public ca ) . x tbs . x sig )
-    ( x509_free x )
-    ( vec_free [u] der )
+    : b ok ( _pki_verify_sig . ca alg ( __pki_ca_pub ca ) . x tbs . x sig )
     ^ ok
 }
 
@@ -1028,32 +934,27 @@ $ `stdlib/std/csr.nu`
     : !( Vec u ) ParseErr dr ( pem_to_der cert_pem )
     : ( Vec u ) der ?? dr { T v → v F _ → ( vec_new [u] ) }
     ? == ( vec_len [u] der ) 0 {
-        ( vec_free [u] der )
         ^ @ PkiCertInfo { ( string_new ) ( string_new ) F }
     } {}
 
     : DerTlv cert ( der_at der 0 )
     ? | != . cert ok 1 != . cert tag 48 {
-        ( vec_free [u] der )
         ^ @ PkiCertInfo { ( string_new ) ( string_new ) F }
     } {}
 
     : DerTlv tbs ( _der_child der cert )
     ? | != . tbs ok 1 != . tbs tag 48 {
-        ( vec_free [u] der )
         ^ @ PkiCertInfo { ( string_new ) ( string_new ) F }
     } {}
 
     : ~ DerTlv c ( _der_child der tbs )
     ? & == . c ok 1 == . c tag 160 { = c ( _der_next der c ) } {}  // skip version
     ? | != . c ok 1 != . c tag 2 {
-        ( vec_free [u] der )
         ^ @ PkiCertInfo { ( string_new ) ( string_new ) F }
     } {}
 
     : ( Vec u ) serial_bytes ( _der_uint der c )
     : String serial_hex ( _pki_bytes_to_hex serial_bytes )
-    ( vec_free [u] serial_bytes )
 
     // The CN is only ever used to name a directory, so it is sanitised
     // at the point it is read rather than at each use site.
@@ -1062,13 +963,11 @@ $ `stdlib/std/csr.nu`
     ? . x ok {
         ? > ( vec_len [String] . x sans ) 0 {
             ?? ( vec_get [String] . x sans 0 ) {
-                T sv → { ( string_free cn ) = cn ( pki_sanitize_id ( string_data sv ) ) }
+                T sv → { = cn ( pki_sanitize_id ( string_data sv ) ) }
                 F _ → {}
             }
         } {}
     } {}
-    ( x509_free x )
-    ( vec_free [u] der )
 
     ^ @ PkiCertInfo {
         serial_hex
@@ -1079,26 +978,27 @@ $ `stdlib/std/csr.nu`
 
 // ── CRL (Certificate Revocation List) ─────────────────────────────────
 
-@ pki_generate_crl * PkiCa ca ( Vec String ) revoked_serials ( Vec i ) revoked_times → String {
+@ pki_generate_crl PkiCa ca__h ( Vec String ) revoked_serials ( Vec i ) revoked_times → String {
+    : *PkiCaImpl ca ( __PkiCa_ptr ca__h )
     : i now ( now_seconds )
     : i next_update + now * 30 86400  // 30 days CRL validity
 
     // TBSCertList
     : ~ ( Vec u ) tbs ( vec_new [u] )
     : ( Vec u ) v2 ( _pki_int1 1 )  // v2
-    ( bytes_extend_bytes tbs v2 ) ( vec_free [u] v2 )
+    ( bytes_extend_bytes tbs v2 )
 
     : ( Vec u ) alg1 ( _pki_alg_id . ca alg )
-    ( bytes_extend_bytes tbs alg1 ) ( vec_free [u] alg1 )
+    ( bytes_extend_bytes tbs alg1 )
 
     : ( Vec u ) issuer ( _pki_name ( string_data . ca cn ) )
-    ( bytes_extend_bytes tbs issuer ) ( vec_free [u] issuer )
+    ( bytes_extend_bytes tbs issuer )
 
     : ( Vec u ) this_up ( _pki_utctime now )
-    ( bytes_extend_bytes tbs this_up ) ( vec_free [u] this_up )
+    ( bytes_extend_bytes tbs this_up )
 
     : ( Vec u ) next_up ( _pki_utctime next_update )
-    ( bytes_extend_bytes tbs next_up ) ( vec_free [u] next_up )
+    ( bytes_extend_bytes tbs next_up )
 
     : i num_revoked ( vec_len [String] revoked_serials )
     ? > num_revoked 0 {
@@ -1113,9 +1013,9 @@ $ `stdlib/std/csr.nu`
                         T r_time → {
                             : ~ ( Vec u ) entry_body ( _pki_int_hex ( string_data s_hex ) )
                             : ( Vec u ) r_date ( _pki_utctime r_time )
-                            ( bytes_extend_bytes entry_body r_date ) ( vec_free [u] r_date )
+                            ( bytes_extend_bytes entry_body r_date )
                             : ( Vec u ) entry_seq ( _pki_tlv 48 entry_body )
-                            ( bytes_extend_bytes rev_seq_body entry_seq ) ( vec_free [u] entry_seq )
+                            ( bytes_extend_bytes rev_seq_body entry_seq )
                         }
                         F _ → {}
                     }
@@ -1125,17 +1025,17 @@ $ `stdlib/std/csr.nu`
             = k + k 1
         }
         : ( Vec u ) rev_seq ( _pki_tlv 48 rev_seq_body )
-        ( bytes_extend_bytes tbs rev_seq ) ( vec_free [u] rev_seq )
+        ( bytes_extend_bytes tbs rev_seq )
     } {}
 
     : ( Vec u ) tbs_der ( _pki_tlv 48 tbs )
-    : ( Vec u ) sig ( _pki_sign ca tbs_der )
+    : ( Vec u ) sig ( __pki_sign ca tbs_der )
 
     : ~ ( Vec u ) crl_body tbs_der
     : ( Vec u ) alg2 ( _pki_alg_id . ca alg )
-    ( bytes_extend_bytes crl_body alg2 ) ( vec_free [u] alg2 )
+    ( bytes_extend_bytes crl_body alg2 )
     : ( Vec u ) sig_bs ( _pki_bitstring sig )
-    ( bytes_extend_bytes crl_body sig_bs ) ( vec_free [u] sig_bs )
+    ( bytes_extend_bytes crl_body sig_bs )
     : ( Vec u ) crl_der ( _pki_tlv 48 crl_body )
 
     ^ ( _pki_pem `X509 CRL` crl_der )
@@ -1145,11 +1045,6 @@ $ `stdlib/std/csr.nu`
 : PkiRevoked {
     ( Vec String ) serials
     ( Vec i ) times
-}
-
-@ pki_revoked_free sink PkiRevoked r → v {
-    ( vec_free_with [String] . r serials \ String s → v { ( string_free s ) } )
-    ( vec_free [i] . r times )
 }
 
 // Read the revoked set out of index.txt. Fields are
@@ -1175,7 +1070,7 @@ $ `stdlib/std/csr.nu`
                                 : ~ String ser ( string_new )
                                 : ~ i when - 0 1
                                 ?? ( vec_get [String] parts 3 ) {
-                                    T sv → { ( string_free ser ) = ser ( pki_normalise_serial ( string_data sv ) ) }
+                                    T sv → { = ser ( pki_normalise_serial ( string_data sv ) ) }
                                     F _ → {}
                                 }
                                 ?? ( vec_get [String] parts 2 ) {
@@ -1185,17 +1080,14 @@ $ `stdlib/std/csr.nu`
                                 ? & > ( string_len ser ) 0 >= when 0 {
                                     ( vec_push [String] serials ser )
                                     ( vec_push [i] times when )
-                                } { ( string_free ser ) }
+                                } {}
                             } {}
-                            ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
                         } {}
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
-            ( string_free content )
         }
         F _ → {}
     }
@@ -1207,7 +1099,7 @@ $ `stdlib/std/csr.nu`
 // the file-level invalidation alone is not a check, it is a side effect.
 @ pki_is_revoked s index_file_path s serial_hex → b {
     : String want ( pki_normalise_serial serial_hex )
-    ? == ( string_len want ) 0 { ( string_free want ) ^ F } {}
+    ? == ( string_len want ) 0 { ^ F } {}
     : PkiRevoked rev ( pki_read_revoked index_file_path )
     : ~ b found F
     : i n ( vec_len [String] . rev serials )
@@ -1219,15 +1111,13 @@ $ `stdlib/std/csr.nu`
         }
         = k + k 1
     }
-    ( pki_revoked_free rev )
-    ( string_free want )
     ^ found
 }
 
 // `serial_hex` and `cn` must already have been through
 // pki_normalise_serial / pki_sanitize_id — this appends them to a
 // tab-separated file, where a raw tab or newline would forge records.
-@ pki_record_revocation s index_file_path s crl_file_path * PkiCa ca s serial_hex s cn → String {
+@ pki_record_revocation s index_file_path s crl_file_path PkiCa ca__h s serial_hex s cn → String {
     : i now ( now_seconds )
     : PkiRevoked rev ( pki_read_revoked index_file_path )
 
@@ -1257,17 +1147,14 @@ $ `stdlib/std/csr.nu`
         ( string_push_str entry cn )
         ( string_push_str entry `\n` )
         : !v IoErr _app ( append_file index_file_path ( string_data entry ) )
-        ( string_free entry )
-        ( string_free now_utc )
     } {}
 
-    : String crl_pem ( pki_generate_crl ca . rev serials . rev times )
+    : String crl_pem ( pki_generate_crl ca__h . rev serials . rev times )
     : !v IoErr _wr ( write_file crl_file_path ( string_data crl_pem ) )
-    ( pki_revoked_free rev )
     ^ crl_pem
 }
 
-@ pki_load_crl s crl_file_path * PkiCa ca s index_file_path → String {
+@ pki_load_crl s crl_file_path PkiCa ca__h s index_file_path → String {
     ? ( file_exists crl_file_path ) {
         : !String IoErr r ( read_file crl_file_path )
         ?? r {
@@ -1277,9 +1164,8 @@ $ `stdlib/std/csr.nu`
     } {}
 
     : PkiRevoked rev ( pki_read_revoked index_file_path )
-    : String crl_pem ( pki_generate_crl ca . rev serials . rev times )
+    : String crl_pem ( pki_generate_crl ca__h . rev serials . rev times )
     : !v IoErr _wr ( write_file crl_file_path ( string_data crl_pem ) )
-    ( pki_revoked_free rev )
     ^ crl_pem
 }
 
@@ -1289,7 +1175,7 @@ $ `stdlib/std/csr.nu`
 // path — a CN lifted out of a submitted certificate is attacker-chosen.
 @ pki_invalidate_initial_cert s initial_dir s device_id → b {
     : String safe ( pki_sanitize_id device_id )
-    ? == ( string_len safe ) 0 { ( string_free safe ) ^ F } {}
+    ? == ( string_len safe ) 0 { ^ F } {}
 
     : String cert_path ( string_from initial_dir )
     ( string_push_char cert_path 47 )  // '/'
@@ -1297,27 +1183,21 @@ $ `stdlib/std/csr.nu`
     ( string_push_char cert_path 47 )  // '/'
     ( string_push_str cert_path ( string_data safe ) )
     ( string_push_str cert_path `.crt` )
-    ( string_free safe )
 
     // Only ever rewrite a file that is already there: a revocation must
     // not be able to create files at paths of its own choosing.
     ? ! ( file_exists ( string_data cert_path ) ) {
-        ( string_free cert_path )
         ^ F
     } {}
 
     : ( Vec u ) rand ( _pki_rand_bytes 20 )
     : String rand_hex ( _pki_bytes_to_hex rand )
-    ( vec_free [u] rand )
 
     : String inv ( string_from `-----BEGIN CERTIFICATE-----\nREVOKED!!!\n` )
     ( string_push_str inv ( string_data rand_hex ) )
     ( string_push_str inv `\n-----END CERTIFICATE-----\n` )
-    ( string_free rand_hex )
 
     : !v IoErr wr ( write_file ( string_data cert_path ) ( string_data inv ) )
-    ( string_free cert_path )
-    ( string_free inv )
 
     ?? wr {
         T _ → { ^ T }

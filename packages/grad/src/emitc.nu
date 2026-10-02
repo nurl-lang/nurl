@@ -39,7 +39,7 @@ $ `deps/tensor/src/tensor.nu`
 // The C expression bound to leaf node `k`: `p[j]` for the j-th parameter,
 // the caller's expression for a data leaf, else the leaf's recorded VALUE
 // as a literal (a frozen scalar const).
-@ __ec_leaf * GTape tp i k ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs String o → v {
+@ __ec_leaf * GTapeImpl tp i k ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs String o → v {
     : ~ i j 0
     ~ < j ( vec_len [i] pids ) {
         ? == ( _ti pids j ) k {
@@ -64,15 +64,16 @@ $ `deps/tensor/src/tensor.nu`
 
 // Emit the whole device function. `has_v` picks the dataset-bearing
 // signature compute_iterate uses. F on any non-scalar node / unknown op.
-@ gemit_cuda_grad * GTape tp GVar loss ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs b has_v String out → b {
-    ? & ( tape_ok tp ) >= . loss id 0 {} { ^ F }
+@ gemit_cuda_grad GTape tp__h GVar loss ( Vec i ) pids ( Vec i ) lids ( Vec s ) lexprs b has_v String out → b {
+    : *GTapeImpl tp ( _GTape_ptr tp__h )
+    ? & ( tape_ok tp__h ) >= . loss id 0 {} { ^ F }
     : i top . loss id
     // scalar check + need/reach sets (grad.nu's rules)
     : ( Vec i ) need ( vec_new [i] )
     : ~ i k 0
     ~ <= k top {
         : *Tensor tv # *Tensor ( _g_val tp k )
-        ? == ( vec_len [f] . tv data ) 1 {} { ( vec_free [i] need ) ^ F }
+        ? == ( vec_len [f] . tv data ) 1 {} { ^ F }
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
         : ~ i nv 0
         ? == . nd op ( gop_param ) { = nv 1 } {
@@ -152,7 +153,7 @@ $ `deps/tensor/src/tensor.nu`
         ( string_push_str out `;\n` )
         = k + k 1
     }
-    ? ok {} { ( vec_free [i] need ) ( vec_free [i] reach ) ^ F }
+    ? ok {} { ^ F }
     // ── backward ──
     = k 0
     ~ <= k top {
@@ -243,7 +244,5 @@ $ `deps/tensor/src/tensor.nu`
         = j + j 1
     }
     ( string_push_str out `}\n` )
-    ( vec_free [i] need )
-    ( vec_free [i] reach )
     ^ T
 }

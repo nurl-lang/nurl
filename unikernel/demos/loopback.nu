@@ -56,7 +56,6 @@ $ `stdlib/std/time.nu`
                 T got → {
                     ( nurl_print `loopback round trip: ` )
                     ( nurl_print ? == ( vec_len [u] got ) 4 `YES\n` `NO\n` )
-                    ( vec_free [u] got )
                 }
                 F e → {
                     ( nurl_print `read failed: ` ) ( nurl_print ( net_err_name e ) ) ( nurl_print `\n` )

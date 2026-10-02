@@ -170,7 +170,7 @@ lsmdb compact                        # merge tables, reclaim space
 #   [dependencies]
 #   lsmdb = "^0"
 #   $ `deps/lsmdb/src/lsmdb.nu`
-#   : !*Lsm String db ( lsm_open `/var/db/things` )
+#   : !Lsm String db ( lsm_open `/var/db/things` )   # closed when it goes
 ```
 
 Opening a table reads only its index and filter, and a get reads exactly

@@ -12,7 +12,7 @@
 //
 //   ?? ( oidc_provider_discover `https://accounts.example.com` ) {
 //       T p → {
-//           : *OauthConfig cfg ( oauth_config_new client_id redirect scope )
+//           : OauthConfig cfg ( oauth_config_new client_id redirect scope )
 //           : Pkce pk ( pkce_new )
 //           : String state ( oauth_state_new )
 //           : String nonce ( oauth_nonce_new )
@@ -24,7 +24,7 @@
 //                   ?? ( oauth_exchange_code p cfg ( string_data code )
 //                            ( string_data . pk verifier ) ) {
 //                       T ts → {
-//                           : *OidcPolicy pol ( oidc_policy_new issuer client_id )
+//                           : OidcPolicy pol ( oidc_policy_new issuer client_id )
 //                           ( oidc_policy_set_nonce pol ( string_data nonce ) )
 //                           ?? ( oidc_verify_id_token p pol ( token_set_id_token ts ) ) {
 //                               T id → { /* . id subject — the user */ }

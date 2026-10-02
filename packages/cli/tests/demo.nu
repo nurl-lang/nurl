@@ -12,8 +12,6 @@ $ `src/cli.nu`
     ? loud { ( string_push_char msg 33 ) } {}
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
-    ( string_free msg )
-    ( string_free who )
     ^ 0
 }
 
@@ -31,7 +29,6 @@ $ `src/cli.nu`
     ( string_push_int out sum )
     ( nurl_print ( string_data out ) )
     ( nurl_print `\n` )
-    ( string_free out )
     ^ 0
 }
 
@@ -42,7 +39,6 @@ $ `src/cli.nu`
     ( nurl_print `port=` )
     ( nurl_print ( string_data o ) )
     ( nurl_print `\n` )
-    ( string_free o )
     ^ 0
 }
 
@@ -53,8 +49,6 @@ $ `src/cli.nu`
     ( nurl_print `bytes=` )
     ( nurl_print ( string_data o ) )
     ( nurl_print `\n` )
-    ( string_free o )
-    ( string_free s )
     ^ 0
 }
 
@@ -67,12 +61,11 @@ $ `src/cli.nu`
     } {
         ( nurl_print `aborted\n` )
     }
-    ( string_free what )
     ^ 0
 }
 
 @ main → i {
-    : *Cli c ( cli_new `demo` `cli facade demo` `1.0.0` )
+    : Cli c ( cli_new `demo` `cli facade demo` `1.0.0` )
     ( cli_flag_str c `name` 110 `NAME` `who to greet` `world` `DEMO_NAME` )
     ( cli_flag_bool c `loud` 108 `shout the greeting` )
     ( cli_flag_int c `port` 112 `PORT` `a port number` 8080 `DEMO_PORT` )
@@ -82,6 +75,5 @@ $ `src/cli.nu`
     ( cli_cmd c `wc` `count bytes on stdin` \ CliCtx x → i { ^ ( cmd_wc x ) } )
     ( cli_cmd c `rm` `delete with confirmation` \ CliCtx x → i { ^ ( cmd_rm x ) } )
     : i rc ( cli_run c )
-    ( cli_free c )
     ^ rc
 }

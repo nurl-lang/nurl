@@ -22,13 +22,11 @@ $ `../src/oauth.nu`
         : String m ( string_from `  ok   ` )
         ( string_push_str m label )
         ( nurl_println ( string_data m ) )
-        ( string_free m )
     } {
         = g_fail + g_fail 1
         : String m ( string_from `  FAIL ` )
         ( string_push_str m label )
         ( nurl_println ( string_data m ) )
-        ( string_free m )
     }
 }
 
@@ -41,7 +39,6 @@ $ `../src/oauth.nu`
         ( string_push_str m want )
         ( string_push_char m 34 )
         ( nurl_println ( string_data m ) )
-        ( string_free m )
     }
     ( ok same label )
 }
@@ -57,18 +54,14 @@ $ `../src/oauth.nu`
 @ test_pkce_vector → v {
     : String ch ( pkce_challenge_for `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk` )
     ( ok_str ( string_data ch ) `E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM` `PKCE S256 matches RFC 7636 B` )
-    ( string_free ch )
     : Pkce pk ( pkce_new )
     ( ok == ( string_len . pk verifier ) 43 `fresh verifier is 43 chars (256 bits)` )
     : String again ( pkce_challenge_for ( string_data . pk verifier ) )
     ( ok ( string_eq again . pk challenge ) `challenge is S256 of the verifier` )
     ( ok_str ( string_data . pk method ) `S256` `method is S256, never plain` )
-    ( string_free again )
-    ( pkce_free pk )
     : String s1 ( oauth_state_new )
     : String s2 ( oauth_state_new )
     ( ok ! ( string_eq s1 s2 ) `two states differ` )
-    ( string_free s1 ) ( string_free s2 )
 }
 
 @ test_jwks_offline → v {
@@ -89,39 +82,33 @@ $ `../src/oauth.nu`
     : String tp1 ( jwk_thumbprint k0 )
     : String tp2 ( jwk_thumbprint k0 )
     ( ok & == ( string_len tp1 ) 43 ( string_eq tp1 tp2 ) `thumbprint is stable, 43 chars` )
-    ( string_free tp1 ) ( string_free tp2 )
     : ( Vec u ) pt ( jwk_ec_point k0 )
     ( ok == ( vec_len [u] pt ) 65 `EC point is 0x04‖X‖Y` )
-    ( vec_free [u] pt )
-    ( jwks_free ks )
     : ( Vec JwkKey ) empty ( jwks_parse `not json at all` )
     ( ok == ( vec_len [JwkKey] empty ) 0 `garbage JWKS yields no keys` )
-    ( jwks_free empty )
 }
 
 @ test_callback_offline → v {
     ?? ( oauth_callback_code `code=abc123&state=st-1` `st-1` ) {
         T c → {
             ( ok_str ( string_data c ) `abc123` `callback yields the code` )
-            ( string_free c )
         }
         F _ → { ( ok F `callback yields the code` ) }
     }
     ?? ( oauth_callback_code `code=abc123&state=WRONG` `st-1` ) {
-        T c → { ( string_free c ) ( ok F `state mismatch is rejected` ) }
+        T c → { ( ok F `state mismatch is rejected` ) }
         F e → { ( ok_str ( oauth_err_name e ) `OaState` `state mismatch is rejected` ) }
     }
     ?? ( oauth_callback_code `error=access_denied&error_description=user+said+no&state=st-1` `st-1` ) {
-        T c → { ( string_free c ) ( ok F `provider error surfaces` ) }
+        T c → { ( ok F `provider error surfaces` ) }
         F e → { ( ok_str ( oauth_err_name e ) `OaServer` `provider error surfaces` ) }
     }
     : CallbackParams cb ( oauth_callback_parse `error=access_denied&error_description=user+said+no` )
     ( ok_str ( string_data . cb error_description ) `user said no` `error_description is form-decoded` )
-    ( callback_params_free cb )
 }
 
 @ test_policy_offline → v {
-    : *OidcPolicy pol ( oidc_policy_new `https://iss.example` `client-1` )
+    : OidcPolicy pol ( oidc_policy_new `https://iss.example` `client-1` )
     ( ok ( oidc_policy_alg_allowed pol `ES256` ) `empty allowlist allows any supported alg` )
     ( oidc_policy_set_algs pol `RS256 ES256` )
     ( ok ( oidc_policy_alg_allowed pol `ES256` ) `allowlist admits a listed alg` )
@@ -166,11 +153,9 @@ $ `../src/oauth.nu`
                 T e → { ( ok_str ( claim_err_desc # ClaimErr e ) `wrong issuer` `iss is enforced` ) }
                 F _ → { ( ok F `iss is enforced` ) }
             }
-            ( json_free claims )
         }
         F _ → { ( ok F `policy fixture parses` ) }
     }
-    ( oidc_policy_free pol )
 }
 
 @ test_claims_shapes → v {
@@ -183,9 +168,7 @@ $ `../src/oauth.nu`
             ( ok ! ( claims_has_scope c `admin` ) `scope rejects what was not granted` )
             : ( Vec String ) gs ( claims_string_list c `groups` )
             ( ok == ( vec_len [String] gs ) 2 `string list claim reads an array` )
-            ( claims_strings_free gs )
             ( ok ( claims_bool c `email_verified` ) `boolean claim reads` )
-            ( json_free c )
         }
         F _ → { ( ok F `claim shapes fixture parses` ) }
     }
@@ -214,7 +197,6 @@ $ `../src/oauth.nu`
     : i n ( nurl_str_len token )
     : String whole ( string_from token )
     : String out ( string_substr whole 0 - n 1 )
-    ( string_free whole )
     : i last ( nurl_str_get token - n 1 )
     ( string_push_char out ? == last 65 66 65 )  // 'A' ↔ 'B'
     ^ out
@@ -237,21 +219,17 @@ $ `../src/oauth.nu`
             ( ok T `RS256 verifies (OpenSSL vector)` )
             : String sub ( claims_str c `sub` )
             ( ok_str ( string_data sub ) `rsa-user` `RS256 claims are readable` )
-            ( string_free sub )
-            ( json_free c )
         }
     }
     ?? ( jws_verify_with_key jk ( ps256_token ) ) {
         F e → { ( ok F `PS256 verifies (OpenSSL vector)` ) ( nurl_eprintln ( oauth_err_name e ) ) }
-        T c → { ( ok T `PS256 verifies (OpenSSL vector)` ) ( json_free c ) }
+        T c → { ( ok T `PS256 verifies (OpenSSL vector)` ) }
     }
     : String bad ( flip_last ( rs256_token ) )
     ?? ( jws_verify_with_key jk ( string_data bad ) ) {
-        T c → { ( json_free c ) ( ok F `a one-character edit breaks RS256` ) }
+        T c → { ( ok F `a one-character edit breaks RS256` ) }
         F e → { ( ok_str ( oauth_err_name e ) `OaBadSignature` `a one-character edit breaks RS256` ) }
     }
-    ( string_free bad )
-    ( jwks_free ks )
 }
 
 // EdDSA and HS256 as round trips: sign here with the stdlib, verify
@@ -268,7 +246,6 @@ $ `../src/oauth.nu`
     ( string_push_str out ( string_data p64 ) )
     ( string_push_char out 46 )
     ( string_push_str out ( string_data s64 ) )
-    ( string_free h64 ) ( string_free p64 ) ( string_free s64 )
     ^ out
 }
 
@@ -279,16 +256,14 @@ $ `../src/oauth.nu`
     ( string_push_str signing ( string_data h64 ) )
     ( string_push_char signing 46 )
     ( string_push_str signing ( string_data p64 ) )
-    ( string_free h64 ) ( string_free p64 )
     : ( Vec u ) msg ( bytes_from_str ( string_data signing ) )
-    ( string_free signing )
     ^ msg
 }
 
 @ test_eddsa_offline → v {
     : ~ ( Vec u ) seed ( vec_new [u] )
     ?? ( bytes_from_hex `9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60` ) {
-        T v → { ( vec_free [u] seed ) = seed v }
+        T v → { = seed v }
         F _ → {}
     }
     : ( Vec u ) pk ( ed25519_pubkey_pure seed )
@@ -297,10 +272,8 @@ $ `../src/oauth.nu`
     ( string_push_str jwks `{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"ed1","alg":"EdDSA","x":"` )
     ( string_push_str jwks ( string_data x64 ) )
     ( string_push_str jwks `"}]}` )
-    ( string_free x64 )
 
     : ( Vec JwkKey ) ks ( jwks_parse ( string_data jwks ) )
-    ( string_free jwks )
     ( ok == ( jwks_select ks `ed1` `EdDSA` ) 0 `an OKP key serves EdDSA` )
     ( ok == ( jwks_select ks `ed1` `ES256` ) -1 `... and nothing else` )
 
@@ -316,20 +289,13 @@ $ `../src/oauth.nu`
         T c → {
             : String sub ( claims_str c `sub` )
             ( ok_str ( string_data sub ) `ed-user` `EdDSA round trip verifies` )
-            ( string_free sub )
-            ( json_free c )
         }
     }
     : String bad ( flip_last ( string_data token ) )
     ?? ( jws_verify_with_key jk ( string_data bad ) ) {
-        T c → { ( json_free c ) ( ok F `a one-character edit breaks EdDSA` ) }
+        T c → { ( ok F `a one-character edit breaks EdDSA` ) }
         F e → { ( ok_str ( oauth_err_name e ) `OaBadSignature` `a one-character edit breaks EdDSA` ) }
     }
-    ( string_free bad )
-    ( string_free token )
-    ( vec_free [u] msg ) ( vec_free [u] sig )
-    ( vec_free [u] pk ) ( vec_free [u] seed )
-    ( jwks_free ks )
 }
 
 @ test_hs256_offline → v {
@@ -339,9 +305,7 @@ $ `../src/oauth.nu`
     ( string_push_str jwks `{"keys":[{"kty":"oct","kid":"h1","alg":"HS256","k":"` )
     ( string_push_str jwks ( string_data k64 ) )
     ( string_push_str jwks `"}]}` )
-    ( string_free k64 )
     : ( Vec JwkKey ) ks ( jwks_parse ( string_data jwks ) )
-    ( string_free jwks )
     ( ok == ( jwks_select ks `h1` `HS256` ) 0 `an oct key serves HS256` )
     ( ok == ( jwks_select ks `h1` `RS256` ) -1 `... and never an asymmetric alg` )
 
@@ -357,32 +321,25 @@ $ `../src/oauth.nu`
         T c → {
             : String sub ( claims_str c `sub` )
             ( ok_str ( string_data sub ) `hs-user` `HS256 round trip verifies` )
-            ( string_free sub )
-            ( json_free c )
         }
     }
-    ( string_free token )
-    ( vec_free [u] msg ) ( vec_free [u] mac ) ( vec_free [u] secret )
-    ( jwks_free ks )
 }
 
 // ── Online ─────────────────────────────────────────────────────────
 
-@ fetch_text * HttpClient hc s url → String {
+@ fetch_text HttpClient hc s url → String {
     ?? ( http_client_get hc url ) {
         T r → {
             : String body ( bytes_to_str . r body )
-            ( http_response_free r )
             ^ body
         }
         F _ → { ^ ( string_new ) }
     }
 }
 
-@ expect_verify_err * OidcProvider p * OidcPolicy pol s token s want s label → v {
+@ expect_verify_err OidcProvider p OidcPolicy pol s token s want s label → v {
     ?? ( oidc_verify_token p pol token ) {
         T id → {
-            ( oidc_identity_free id )
             ( ok F label )
         }
         F e → { ( ok_str ( oauth_err_name e ) want label ) }
@@ -395,15 +352,15 @@ $ `../src/oauth.nu`
         F e → { ( ok F `discovery` ) ( nurl_eprintln ( oauth_err_name e ) ) }
         T p → {
             ( ok T `discovery succeeds` )
-            ( ok_str ( string_data . p issuer ) base `issuer round-trips` )
-            ( ok > ( string_len . p token_endpoint ) 0 `token_endpoint discovered` )
-            ( ok > ( string_len . p jwks_uri ) 0 `jwks_uri discovered` )
+            ( ok_str ( oidc_provider_issuer p ) base `issuer round-trips` )
+            ( ok > ( nurl_str_len ( oidc_provider_token_endpoint p ) ) 0 `token_endpoint discovered` )
+            ( ok > ( nurl_str_len ( oidc_provider_jwks_uri p ) ) 0 `jwks_uri discovered` )
             ?? ( oidc_fetch_jwks p ) {
                 T _ → { ( ok F `JWKS fetch` ) }
                 F _ → { ( ok == ( oidc_provider_key_count p ) 2 `JWKS fetch yields both published keys` ) }
             }
 
-            : *OauthConfig cfg ( oauth_config_new `test-client` `http://127.0.0.1:1/cb` `openid profile` )
+            : OauthConfig cfg ( oauth_config_new `test-client` `http://127.0.0.1:1/cb` `openid profile` )
             : Pkce pk ( pkce_new )
             : String state ( oauth_state_new )
             : String nonce ( oauth_nonce_new )
@@ -415,7 +372,6 @@ $ `../src/oauth.nu`
             ( ok ( string_contains url ( string_data . pk challenge ) ) `authorize URL carries the challenge` )
             ( ok ( string_contains url `redirect_uri=http%3A%2F%2F127.0.0.1%3A1%2Fcb` ) `redirect_uri is percent-encoded` )
             ( ok ( string_contains url `scope=openid%20profile` ) `scope is percent-encoded` )
-            ( string_free url )
 
             ( section `token exchange` )
             // The provider's stateless code carries the challenge and
@@ -425,7 +381,7 @@ $ `../src/oauth.nu`
             ( string_push_char code 46 )
             ( string_push_str code ( string_data nonce ) )
 
-            : *OidcPolicy pol ( oidc_policy_new base `test-client` )
+            : OidcPolicy pol ( oidc_policy_new base `test-client` )
             ( oidc_policy_set_nonce pol ( string_data nonce ) )
 
             ?? ( oauth_exchange_code p cfg ( string_data code ) ( string_data . pk verifier ) ) {
@@ -458,16 +414,13 @@ $ `../src/oauth.nu`
                             : String want ( string_from `user-42@` )
                             ( string_push_str want base )
                             ( ok ( string_eq key want ) `identity key is sub@issuer` )
-                            ( string_free key ) ( string_free want )
                             : String desc ( oidc_identity_describe id )
                             ( ok ( string_contains desc `Test User` ) `describe renders the profile` )
-                            ( string_free desc )
-                            ( oidc_identity_free id )
                         }
                     }
 
                     ( section `the access token as a credential` )
-                    : *OidcPolicy apol ( oidc_policy_new base `test-api` )
+                    : OidcPolicy apol ( oidc_policy_new base `test-api` )
                     ?? ( oidc_verify_access_token p apol ( token_set_access_token ts ) ) {
                         F e → {
                             ( ok F `access token verifies for the API audience` )
@@ -477,25 +430,21 @@ $ `../src/oauth.nu`
                             ( ok T `access token verifies for the API audience` )
                             ( ok ( oidc_identity_has_scope id `read:things` ) `granted scope is visible` )
                             ( ok ! ( oidc_identity_has_scope id `write:things` ) `ungranted scope is not` )
-                            ( oidc_identity_free id )
                         }
                     }
                     // The same token must NOT pass for a different audience.
-                    : *OidcPolicy wrong ( oidc_policy_new base `some-other-api` )
+                    : OidcPolicy wrong ( oidc_policy_new base `some-other-api` )
                     ( expect_verify_err p wrong ( token_set_access_token ts ) `OaClaims` `a token for another audience is refused` )
-                    ( oidc_policy_free wrong )
-                    ( oidc_policy_free apol )
 
                     ( section `userinfo` )
                     ?? ( oauth_userinfo_identity p ( token_set_access_token ts ) `user-42` ) {
                         F _ → { ( ok F `userinfo identity` ) }
                         T id → {
                             ( ok_str ( string_data . id subject ) `user-42` `userinfo identity` )
-                            ( oidc_identity_free id )
                         }
                     }
                     ?? ( oauth_userinfo_identity p ( token_set_access_token ts ) `somebody-else` ) {
-                        T id → { ( oidc_identity_free id ) ( ok F `userinfo sub is cross-checked` ) }
+                        T id → { ( ok F `userinfo sub is cross-checked` ) }
                         F e → { ( ok_str ( oauth_err_name e ) `OaClaims` `userinfo sub is cross-checked` ) }
                     }
 
@@ -504,15 +453,13 @@ $ `../src/oauth.nu`
                         F _ → { ( ok F `refresh grant` ) }
                         T ts2 → {
                             ( ok > ( string_len . ts2 access_token ) 0 `refresh grant returns a new token` )
-                            ( token_set_free ts2 )
                         }
                     }
                     ?? ( oauth_refresh p cfg `rt-nope` ) {
-                        T ts2 → { ( token_set_free ts2 ) ( ok F `a bad refresh token is refused` ) }
+                        T ts2 → { ( ok F `a bad refresh token is refused` ) }
                         F e → { ( ok_str ( oauth_err_name e ) `OaServer` `a bad refresh token is refused` ) }
                     }
 
-                    ( token_set_free ts )
                 }
             }
 
@@ -522,7 +469,6 @@ $ `../src/oauth.nu`
                 T ts → {
                     ( ok > ( string_len . ts access_token ) 0 `client_credentials returns a token` )
                     ( ok == ( string_len . ts id_token ) 0 `machine grant carries no ID token` )
-                    ( token_set_free ts )
                 }
             }
 
@@ -531,13 +477,12 @@ $ `../src/oauth.nu`
             ( string_push_str code2 ( string_data . pk challenge ) )
             ( string_push_str code2 `.n` )
             ?? ( oauth_exchange_code p cfg ( string_data code2 ) `a-different-verifier` ) {
-                T ts → { ( token_set_free ts ) ( ok F `the wrong verifier is rejected` ) }
+                T ts → { ( ok F `the wrong verifier is rejected` ) }
                 F e → { ( ok_str ( oauth_err_name e ) `OaServer` `the wrong verifier is rejected` ) }
             }
-            ( string_free code2 )
 
             ( section `every way a token can be wrong` )
-            : *HttpClient hc ( oidc_provider_http p )
+            : HttpClient hc ( oidc_provider_http p )
             : String mintbase ( string_from base )
             ( string_push_str mintbase `/mint/` )
 
@@ -577,7 +522,7 @@ $ `../src/oauth.nu`
             ( string_push_str u_nk `nokid` )
             : String t_nk ( fetch_text hc ( string_data u_nk ) )
             // (minted outside an authorization request, so no nonce)
-            : *OidcPolicy nopol ( oidc_policy_new base `test-client` )
+            : OidcPolicy nopol ( oidc_policy_new base `test-client` )
             ?? ( oidc_verify_token p nopol ( string_data t_nk ) ) {
                 F e → {
                     ( ok F `a token with no kid verifies against the right key` )
@@ -585,30 +530,12 @@ $ `../src/oauth.nu`
                 }
                 T id → {
                     ( ok_str ( string_data . id subject ) `user-42` `a token with no kid verifies against the right key` )
-                    ( oidc_identity_free id )
                 }
             }
-            ( oidc_policy_free nopol )
-            ( string_free u_nk ) ( string_free t_nk )
 
             ( expect_verify_err p pol `not.a.token` `OaBadToken` `garbage is refused` )
             ( expect_verify_err p pol `` `OaBadToken` `an empty token is refused` )
 
-            ( string_free u_exp ) ( string_free t_exp )
-            ( string_free u_bad ) ( string_free t_bad )
-            ( string_free u_aud ) ( string_free t_aud )
-            ( string_free u_kid ) ( string_free t_kid )
-            ( string_free u_none ) ( string_free t_none )
-            ( string_free u_hs ) ( string_free t_hs )
-            ( string_free mintbase )
-
-            ( oidc_policy_free pol )
-            ( string_free code )
-            ( string_free state )
-            ( string_free nonce )
-            ( pkce_free pk )
-            ( oauth_config_free cfg )
-            ( oidc_provider_free p )
         }
     }
 }
@@ -616,16 +543,14 @@ $ `../src/oauth.nu`
 @ main → i {
     : ArgParser ap ( args_new `client` `oauth package test` )
     ( args_opt ap `port` 112 `N` `provider port on 127.0.0.1` )
-    ? ( args_parse_argv ap ) {} { ( args_free ap ) ^ 2 }
+    ? ( args_parse_argv ap ) {} { ^ 2 }
     : ~ i port 0
     ?? ( args_value ap `port` ) {
         T v → {
             ?? ( string_to_int v ) { T x → { = port x } F _ → {} }
-            ( string_free v )
         }
         F _ → {}
     }
-    ( args_free ap )
 
     ( section `offline: PKCE` )
     ( test_pkce_vector )
@@ -648,7 +573,6 @@ $ `../src/oauth.nu`
         : String base ( string_from `http://127.0.0.1:` )
         ( string_push_int base port )
         ( run_online ( string_data base ) )
-        ( string_free base )
     } {}
 
     ( nurl_println `` )
@@ -658,6 +582,5 @@ $ `../src/oauth.nu`
     ( string_push_int sum g_fail )
     ( string_push_str sum ` failed` )
     ( nurl_println ( string_data sum ) )
-    ( string_free sum )
     ^ ? > g_fail 0 1 0
 }

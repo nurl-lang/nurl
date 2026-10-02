@@ -51,7 +51,6 @@ $ `stdlib/std/time.nu`
             : i elapsed / - ( monotonic_ns ) start 1000000
             ( nurl_print_int elapsed )
             ( tcp_set_write_deadline conn 0 )
-            ( vec_free [u] payload )
             ( tcp_close_conn conn )
             ^ result
         }

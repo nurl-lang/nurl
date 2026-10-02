@@ -243,11 +243,9 @@ $ `stdlib/ext/compress.nu`
 
 // ── Free helpers ─────────────────────────────────────────────────────
 
-@ ws_frame_free sink WsFrame f → v { ( vec_free [u] . f payload ) }
+@ ws_message_free sink WsMessage m → v {}
 
-@ ws_message_free sink WsMessage m → v { ( vec_free [u] . m payload ) }
-
-@ ws_close_info_free sink WsCloseInfo c → v { ( string_free . c reason ) }
+@ ws_close_info_free sink WsCloseInfo c → v {}
 
 // ── Handshake (RFC 6455 §4) ───────────────────────────────────────────
 
@@ -328,7 +326,6 @@ $ `stdlib/ext/compress.nu`
     ?? upg {
         T uv → {
             : b ok ( __ws_str_eq_ci uv `websocket` )
-            ( string_free uv )
             ? ! ok { ^ F } {}
         }
         F _ → { ^ F }
@@ -337,14 +334,13 @@ $ `stdlib/ext/compress.nu`
     ?? conn {
         T cv → {
             : b ok ( __ws_token_present cv `Upgrade` )
-            ( string_free cv )
             ? ! ok { ^ F } {}
         }
         F _ → { ^ F }
     }
     : ?String key ( header_get . req headers `Sec-WebSocket-Key` )
     ?? key {
-        T kv → { ( string_free kv ) }
+        T kv → {}
         F _ → { ^ F }
     }
     ^ T
@@ -363,8 +359,6 @@ $ `stdlib/ext/compress.nu`
     ( bytes_extend_str input ( __ws_guid ) )
     : ( Vec u ) digest ( sha1_bytes input )
     : String out ( b64_encode_vec digest )
-    ( vec_free [u] digest )
-    ( vec_free [u] input )
     ^ out
 }
 
@@ -377,7 +371,6 @@ $ `stdlib/ext/compress.nu`
     ^ ?? r {
         T s → {
             : b ok == 16 ( string_len s )
-            ( string_free s )
             ok
         }
         F _ → F
@@ -399,14 +392,13 @@ $ `stdlib/ext/compress.nu`
     } {}
     : ?String host ( header_get . req headers `Host` )
     ?? host {
-        T h → { ( string_free h ) }
+        T h → {}
         F _ → { ^ @ !HttpResponse WsErr { F WsHandshakeMissingHost } }
     }
     : ?String upg ( header_get . req headers `Upgrade` )
     : b upg_ok ?? upg {
         T uv → {
             : b ok ( __ws_str_eq_ci uv `websocket` )
-            ( string_free uv )
             ok
         }
         F _ → F
@@ -416,7 +408,6 @@ $ `stdlib/ext/compress.nu`
     : b conn_ok ?? conn {
         T cv → {
             : b ok ( __ws_token_present cv `Upgrade` )
-            ( string_free cv )
             ok
         }
         F _ → F
@@ -426,7 +417,6 @@ $ `stdlib/ext/compress.nu`
     : b ver_ok ?? ver {
         T vv → {
             : b ok ( __ws_str_eq_ci vv `13` )
-            ( string_free vv )
             ok
         }
         F _ → F
@@ -438,11 +428,9 @@ $ `stdlib/ext/compress.nu`
     ?? key {
         T kv → {
             ? ( __ws_key_is_valid kv ) {
-                ( string_free accept )
                 = accept ( ws_accept_key ( string_data kv ) )
                 = key_ok T
             } {}
-            ( string_free kv )
         }
         F _ → {}
     }
@@ -476,8 +464,6 @@ $ `stdlib/ext/compress.nu`
         T resp → {
             : ( Vec u ) wire ( response_serialize resp )
             : !v NetErr wr ( tcp_write_all conn wire )
-            ( vec_free [u] wire )
-            ( http_response_free resp )
             ?? wr {
                 T _ → { ^ @ !v WsErr { T 0 } }
                 F _ → { ^ @ !v WsErr { F WsHandshakeWriteFailed } }
@@ -518,7 +504,6 @@ $ `stdlib/ext/compress.nu`
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ( vec_extend [u] buf chunk )
-                ( vec_free [u] chunk )
                 = remaining - remaining got
             }
             F e → {
@@ -591,7 +576,6 @@ $ `stdlib/ext/compress.nu`
                 = len7 & b1 127
                 = ok T
             }
-            ( vec_free [u] hdr )
         }
         F e → { = err e }
     }
@@ -625,7 +609,6 @@ $ `stdlib/ext/compress.nu`
                 : i e0 # i . ep 0
                 : i e1 # i . ep 1
                 = payload_len + << e0 8 e1
-                ( vec_free [u] eb )
             }
             F e → { ^ @ !WsFrame WsErr { F e } }
         }
@@ -646,13 +629,11 @@ $ `stdlib/ext/compress.nu`
                 // RFC 6455 §5.2: top byte MUST be 0 (high-bit clear so
                 // the value fits in i63). Lower 56 bits go into payload_len.
                 ? != e0 0 {
-                    ( vec_free [u] eb )
                     ^ @ !WsFrame WsErr { F WsFrameTooLarge }
                 } {}
                 : i hi + << e1 48 + << e2 40 + << e3 32 << e4 24
                 : i lo + + << e5 16 << e6 8 e7
                 = payload_len + hi lo
-                ( vec_free [u] eb )
             }
             F e → { ^ @ !WsFrame WsErr { F e } }
         }
@@ -709,7 +690,6 @@ $ `stdlib/ext/compress.nu`
             = m1 # i . mp 1
             = m2 # i . mp 2
             = m3 # i . mp 3
-            ( vec_free [u] mb )
         }
         F e → { ^ @ !( Vec u ) WsErr { F e } }
     }
@@ -786,7 +766,6 @@ $ `stdlib/ext/compress.nu`
     ?? sr {
         T out → {
             : !v NetErr wr ( tcp_write_all conn out )
-            ( vec_free [u] out )
             ?? wr {
                 T _ → { ^ @ !v WsErr { T 0 } }
                 F _ → { ^ @ !v WsErr { F WsWriteFailed } }
@@ -801,7 +780,6 @@ $ `stdlib/ext/compress.nu`
 @ ws_send_text TcpConn conn s text → !v WsErr {
     : ( Vec u ) buf ( bytes_from_str text )
     : !v WsErr r ( ws_write_frame conn T ( ws_opcode_text ) buf )
-    ( vec_free [u] buf )
     ^ r
 }
 
@@ -996,7 +974,6 @@ $ `stdlib/ext/compress.nu`
                     // first frame of a data message. RSV1 on a control frame
                     // or on a continuation frame is a protocol error.
                     ? & rsv1f | ( __ws_opcode_is_control op ) == op 0 {
-                        ( vec_free [u] pl )
                         = err WsProtocolReservedBit
                         = done T
                     } {
@@ -1012,11 +989,9 @@ $ `stdlib/ext/compress.nu`
                                     T _ → {}
                                     F we → { = err we = done T }
                                 }
-                                ( vec_free [u] pl )
                             } {
                                 ? == op 10 {
                                     // Pong → ignore
-                                    ( vec_free [u] pl )
                                 } {
                                     ? == op 8 {
                                         // Close — validate the payload before
@@ -1031,7 +1006,6 @@ $ `stdlib/ext/compress.nu`
                                         // bytes MUST be valid UTF-8.
                                         : i pln ( vec_len [u] pl )
                                         ? == pln 1 {
-                                            ( vec_free [u] pl )
                                             = err WsInvalidCloseCode
                                             = done T
                                         } {
@@ -1061,7 +1035,6 @@ $ `stdlib/ext/compress.nu`
                                                     { = code_bad T } {}
                                                 } {}
                                                 ? code_bad {
-                                                    ( vec_free [u] pl )
                                                     = err WsInvalidCloseCode
                                                     = done T
                                                 } {
@@ -1074,30 +1047,25 @@ $ `stdlib/ext/compress.nu`
                                                             = ck + ck 1
                                                         }
                                                         : b ru_ok ( ws_validate_utf8 rbytes )
-                                                        ( vec_free [u] rbytes )
                                                         ? ! ru_ok {
-                                                            ( vec_free [u] pl )
                                                             = err WsInvalidUtf8
                                                             = done T
                                                         } {
-                                                            ( vec_free [u] pl )
                                                             = err WsClosedByPeer
                                                             = done T
                                                         }
                                                     } {
-                                                        ( vec_free [u] pl )
                                                         = err WsClosedByPeer
                                                         = done T
                                                     }
                                                 }
                                             } {
                                                 // pln == 0 → clean close.
-                                                ( vec_free [u] pl )
                                                 = err WsClosedByPeer
                                                 = done T
                                             }
                                         }
-                                    } { ( vec_free [u] pl ) }
+                                    } {}
                                 }
                             }
                         } {
@@ -1105,12 +1073,10 @@ $ `stdlib/ext/compress.nu`
                             ? == op 0 {
                                 // Continuation
                                 ? == kind 0 {
-                                    ( vec_free [u] pl )
                                     = err WsProtocolBadContinuation
                                     = done T
                                 } {
                                     ( vec_extend [u] acc pl )
-                                    ( vec_free [u] pl )
                                     ? > ( vec_len [u] acc ) . lim max_message_bytes {
                                         = err WsMessageTooLarge
                                         = done T
@@ -1123,7 +1089,6 @@ $ `stdlib/ext/compress.nu`
                                                 = err WsInvalidUtf8
                                                 = done T
                                             } {
-                                                ( vec_free [u] msg_payload )
                                                 = msg_payload acc
                                                 = acc ( vec_new [u] )
                                                 = have_message T
@@ -1136,7 +1101,6 @@ $ `stdlib/ext/compress.nu`
                                 // Text or binary opener — first frame of a
                                 // message carries the RSV1 compressed bit.
                                 ? != kind 0 {
-                                    ( vec_free [u] pl )
                                     = err WsProtocolBadFragmentation
                                     = done T
                                 } {
@@ -1146,11 +1110,9 @@ $ `stdlib/ext/compress.nu`
                                         // validation when compressed (validated
                                         // post-inflation by the deflate reader).
                                         ? & & == op 1 ! rsv1f ! ( ws_validate_utf8 pl ) {
-                                            ( vec_free [u] pl )
                                             = err WsInvalidUtf8
                                             = done T
                                         } {
-                                            ( vec_free [u] msg_payload )
                                             = msg_payload pl
                                             = kind op
                                             = have_message T
@@ -1159,7 +1121,6 @@ $ `stdlib/ext/compress.nu`
                                     } {
                                         // First fragment of a chain
                                         ( vec_extend [u] acc pl )
-                                        ( vec_free [u] pl )
                                         = kind op
                                         ? > ( vec_len [u] acc ) . lim max_message_bytes {
                                             = err WsMessageTooLarge
@@ -1175,11 +1136,9 @@ $ `stdlib/ext/compress.nu`
             }
         }
     }
-    ( vec_free [u] acc )
     ? have_message {
         ^ @ !WsMessage WsErr { T @ WsMessage { kind compressed msg_payload } }
     } {
-        ( vec_free [u] msg_payload )
         ^ @ !WsMessage WsErr { F err }
     }
 }
@@ -1224,7 +1183,6 @@ $ `stdlib/ext/compress.nu`
         ?? mr {
             T msg → {
                 : !v WsErr hr ( handler msg )
-                ( ws_message_free msg )
                 ?? hr {
                     T _ → {}
                     F he → { = last he = done T }
@@ -1373,7 +1331,6 @@ $ `stdlib/ext/compress.nu`
     ?? sr {
         T out → {
             : !v NetErr wr ( tcp_write_all conn out )
-            ( vec_free [u] out )
             ?? wr {
                 T _ → { ^ @ !v WsErr { T 0 } }
                 F _ → { ^ @ !v WsErr { F WsWriteFailed } }
@@ -1388,7 +1345,6 @@ $ `stdlib/ext/compress.nu`
 @ ws_client_send_text TcpConn conn s text → !v WsErr {
     : ( Vec u ) buf ( bytes_from_str text )
     : !v WsErr r ( ws_client_write_frame conn T ( ws_opcode_text ) buf )
-    ( vec_free [u] buf )
     ^ r
 }
 
@@ -1435,7 +1391,6 @@ $ `stdlib/ext/compress.nu`
         ?? mr {
             T msg → {
                 : !v WsErr hr ( handler msg )
-                ( ws_message_free msg )
                 ?? hr {
                     T _ → {}
                     F he → { = last he = done T }
@@ -1517,7 +1472,6 @@ $ `stdlib/ext/compress.nu`
                 ~ & > ve vs | == & 255 # i . p - ve 1 32 == & 255 # i . p - ve 1 9 {
                     = ve - ve 1
                 }
-                ( string_free val )
                 = val ( string_new )
                 : ~ i vi vs
                 ~ < vi ve {
@@ -1556,7 +1510,6 @@ $ `stdlib/ext/compress.nu`
                     : *u op ( vec_data [u] one )
                     : i bv & 255 # i . op 0
                     ( vec_push [u] buf # u bv )
-                    ( vec_free [u] one )
                     : i bn ( vec_len [u] buf )
                     ? >= bn 4 {
                         : *u bp ( vec_data [u] buf )
@@ -1599,7 +1552,6 @@ $ `stdlib/ext/compress.nu`
         = bi + bi 1
     }
     : String key64 ( b64_encode_vec nonce )
-    ( vec_free [u] nonce )
     // Build and send the request head.
     : ( Vec u ) req ( vec_new [u] )
     ( bytes_extend_str req `GET ` )
@@ -1619,11 +1571,9 @@ $ `stdlib/ext/compress.nu`
     }
     ( bytes_extend_str req `\r\n` )
     : !v NetErr wr ( tcp_write_all conn req )
-    ( vec_free [u] req )
     ?? wr {
         T _ → {}
         F _ → {
-            ( string_free key64 )
             ^ @ !v WsErr { F WsConnectFailed }
         }
     }
@@ -1632,30 +1582,23 @@ $ `stdlib/ext/compress.nu`
     ?? hr {
         T head → {
             ? ! ( __ws_status_101 head ) {
-                ( vec_free [u] head )
-                ( string_free key64 )
                 ^ @ !v WsErr { F WsClientBadStatus }
             } {}
             : String expect ( ws_accept_key ( string_data key64 ) )
-            ( string_free key64 )
             : ?String got ( __ws_head_get_value head `Sec-WebSocket-Accept` )
-            ( vec_free [u] head )
             : ~ b accept_ok F
             ?? got {
                 T gv → {
                     = accept_ok != 0 ( nurl_str_eq ( string_data gv ) ( string_data expect ) )
-                    ( string_free gv )
                 }
                 F _ → {}
             }
-            ( string_free expect )
             ? ! accept_ok {
                 ^ @ !v WsErr { F WsClientBadAccept }
             } {}
             ^ @ !v WsErr { T 0 }
         }
         F e → {
-            ( string_free key64 )
             ^ @ !v WsErr { F e }
         }
     }
@@ -1671,10 +1614,7 @@ $ `stdlib/ext/compress.nu`
     String path
 }
 
-@ ws_url_free sink WsUrl u → v {
-    ( string_free . u host )
-    ( string_free . u path )
-}
+@ ws_url_free sink WsUrl u → v {}
 
 // Parse "ws://host[:port][/path]" or "wss://host[:port][/path]". Default
 // port is 80 (ws) / 443 (wss); default path is "/". None on a bad scheme
@@ -1690,11 +1630,10 @@ $ `stdlib/ext/compress.nu`
             : ~ b ok F
             ? == 1 ( nurl_str_eq sch `wss` ) { = tls T = ok T } {}
             ? == 1 ( nurl_str_eq sch `ws` ) { = tls F = ok T } {}
-            ? ! ok { ( url_free u ) ^ @ ?WsUrl { F # WsUrl 0 } } {}
+            ? ! ok { ^ @ ?WsUrl { F # WsUrl 0 } } {}
             : i port ( url_port_or_default u )
             : String host ( string_from ( string_data . u host ) )
             : String path ( url_request_target u )
-            ( url_free u )
             ^ @ ?WsUrl { T @ WsUrl { tls host port path } }
         }
         F _ → @ ?WsUrl { F # WsUrl 0 }
@@ -1728,10 +1667,9 @@ $ `stdlib/ext/compress.nu`
     ?? pu {
         T u → {
             ?? ( __ws_open_conn u ) {
-                F _ → { ( ws_url_free u ) ^ @ !WsClient WsErr { F WsConnectFailed } }
+                F _ → { ^ @ !WsClient WsErr { F WsConnectFailed } }
                 T conn → {
                     : !v WsErr hsr ( ws_client_handshake conn ( string_data . u host ) ( string_data . u path ) subprotocol )
-                    ( ws_url_free u )
                     ?? hsr {
                         T _ → { ^ @ !WsClient WsErr { T @ WsClient { conn } } }
                         F e → {
@@ -1777,7 +1715,7 @@ $ `stdlib/ext/compress.nu`
 //       ( ws_deflate_parse_extensions s value )         → ?WsDeflateConfig
 //     Context lifecycle (owns two heap z_streams — free it):
 //       ( ws_deflate_make WsDeflateConfig cfg b is_server ) → ! WsDeflate WsErr
-//       ( ws_deflate_free WsDeflate d )                     → v
+//       ( ws_deflate_free WsDeflate d )                     → v   early release (optional)
 //     Server-side messaging:
 //       ( ws_send_text_deflate   WsDeflate TcpConn s )           → ! v WsErr
 //       ( ws_send_binary_deflate WsDeflate TcpConn ( Vec u ) )   → ! v WsErr
@@ -1977,7 +1915,6 @@ $ `stdlib/ext/compress.nu`
             : !ZInflate CompressErr inr ( raw_inflate_new 15 )
             ?? inr {
                 F _ → {
-                    ( raw_deflate_free deflater )
                     ^ @ !WsDeflate WsErr { F WsOther }
                 }
                 T inflater → {
@@ -1988,10 +1925,7 @@ $ `stdlib/ext/compress.nu`
     }
 }
 
-@ ws_deflate_free sink WsDeflate d → v {
-    ( raw_deflate_free . d deflater )
-    ( raw_inflate_free . d inflater )
-}
+@ ws_deflate_free sink WsDeflate d → v {}
 
 @ __ws_compresserr_to_wserr CompressErr e → WsErr {
     ^ ?? e {
@@ -2037,7 +1971,6 @@ $ `stdlib/ext/compress.nu`
         T out → {
             ( __ws_set_rsv1 out )
             : !v NetErr wr ( tcp_write_all conn out )
-            ( vec_free [u] out )
             ?? wr {
                 T _ → { ^ @ !v WsErr { T 0 } }
                 F _ → { ^ @ !v WsErr { F WsWriteFailed } }
@@ -2073,7 +2006,6 @@ $ `stdlib/ext/compress.nu`
             ? . d deflate_no_takeover { ( raw_deflate_reset . d deflater ) } {}
             ( _ws_strip_deflate_tail comp )
             : !v WsErr r ( __ws_write_deflated_frame conn opcode comp client )
-            ( vec_free [u] comp )
             ^ r
         }
     }
@@ -2082,7 +2014,6 @@ $ `stdlib/ext/compress.nu`
 @ ws_send_text_deflate WsDeflate d TcpConn conn s text → !v WsErr {
     : ( Vec u ) buf ( bytes_from_str text )
     : !v WsErr r ( _ws_send_message_deflate d conn ( ws_opcode_text ) buf F )
-    ( vec_free [u] buf )
     ^ r
 }
 
@@ -2093,7 +2024,6 @@ $ `stdlib/ext/compress.nu`
 @ ws_client_send_text_deflate WsDeflate d TcpConn conn s text → !v WsErr {
     : ( Vec u ) buf ( bytes_from_str text )
     : !v WsErr r ( _ws_send_message_deflate d conn ( ws_opcode_text ) buf T )
-    ( vec_free [u] buf )
     ^ r
 }
 
@@ -2106,7 +2036,7 @@ $ `stdlib/ext/compress.nu`
 // Inflate a compressed WsMessage in place, validating UTF-8 for text after
 // decompression. The decompressed size is capped at lim.max_message_bytes
 // (decompression-bomb guard). Frees the original compressed payload.
-@ _ws_inflate_message WsDeflate d WsLimits lim WsMessage msg → !WsMessage WsErr {
+@ _ws_inflate_message WsDeflate d WsLimits lim sink WsMessage msg → !WsMessage WsErr {
     ? ! . msg compressed { ^ @ !WsMessage WsErr { T msg } } {}
     : i op . msg opcode
     : ( Vec u ) comp . msg payload
@@ -2117,17 +2047,13 @@ $ `stdlib/ext/compress.nu`
     ( vec_push [u] framed # u 255 )
     ( vec_push [u] framed # u 255 )
     : !( Vec u ) CompressErr ir ( raw_inflate_block . d inflater framed . lim max_message_bytes )
-    ( vec_free [u] framed )
     ? . d inflate_no_takeover { ( raw_inflate_reset . d inflater ) } {}
     ?? ir {
         F e → {
-            ( vec_free [u] comp )
             ^ @ !WsMessage WsErr { F ( __ws_compresserr_to_wserr e ) }
         }
         T plain → {
-            ( vec_free [u] comp )
             ? & == op 1 ! ( ws_validate_utf8 plain ) {
-                ( vec_free [u] plain )
                 ^ @ !WsMessage WsErr { F WsInvalidUtf8 }
             } {}
             ^ @ !WsMessage WsErr { T @ WsMessage { op F plain } }
@@ -2164,7 +2090,6 @@ $ `stdlib/ext/compress.nu`
         ?? mr {
             T msg → {
                 : !v WsErr hr ( handler msg )
-                ( ws_message_free msg )
                 ?? hr {
                     T _ → {}
                     F he → { = last he = done T }
@@ -2232,7 +2157,6 @@ $ `stdlib/ext/compress.nu`
                             }
                             F _ → {}
                         }
-                        ( string_free ev )
                     }
                     F _ → {}
                 }
@@ -2240,12 +2164,9 @@ $ `stdlib/ext/compress.nu`
             ? negotiated {
                 : String hv ( ws_deflate_response_header agreed )
                 ( response_set_header resp `Sec-WebSocket-Extensions` ( string_data hv ) )
-                ( string_free hv )
             } {}
             : ( Vec u ) wire ( response_serialize resp )
             : !v NetErr wr ( tcp_write_all conn wire )
-            ( vec_free [u] wire )
-            ( http_response_free resp )
             ?? wr {
                 F _ → { ^ @ !WsDeflate WsErr { F WsHandshakeWriteFailed } }
                 T _ → {
@@ -2283,7 +2204,6 @@ $ `stdlib/ext/compress.nu`
         = bi + bi 1
     }
     : String key64 ( b64_encode_vec nonce )
-    ( vec_free [u] nonce )
     : ( Vec u ) req ( vec_new [u] )
     ( bytes_extend_str req `GET ` )
     ( bytes_extend_str req path )
@@ -2296,7 +2216,6 @@ $ `stdlib/ext/compress.nu`
     ( bytes_extend_str req `Sec-WebSocket-Extensions: ` )
     ( bytes_extend_str req ( string_data offer ) )
     ( bytes_extend_str req `\r\n` )
-    ( string_free offer )
     ?? subprotocol {
         T sp → {
             ( bytes_extend_str req `Sec-WebSocket-Protocol: ` )
@@ -2307,44 +2226,34 @@ $ `stdlib/ext/compress.nu`
     }
     ( bytes_extend_str req `\r\n` )
     : !v NetErr wr ( tcp_write_all conn req )
-    ( vec_free [u] req )
     ?? wr {
         T _ → {}
         F _ → {
-            ( string_free key64 )
             ^ @ !WsDeflateConfig WsErr { F WsConnectFailed }
         }
     }
     : !( Vec u ) WsErr hr ( __ws_read_http_head conn )
     ?? hr {
         F e → {
-            ( string_free key64 )
             ^ @ !WsDeflateConfig WsErr { F e }
         }
         T head → {
             ? ! ( __ws_status_101 head ) {
-                ( vec_free [u] head )
-                ( string_free key64 )
                 ^ @ !WsDeflateConfig WsErr { F WsClientBadStatus }
             } {}
             : String expect ( ws_accept_key ( string_data key64 ) )
-            ( string_free key64 )
             : ?String got ( __ws_head_get_value head `Sec-WebSocket-Accept` )
             : ~ b accept_ok F
             ?? got {
                 T gv → {
                     = accept_ok != 0 ( nurl_str_eq ( string_data gv ) ( string_data expect ) )
-                    ( string_free gv )
                 }
                 F _ → {}
             }
-            ( string_free expect )
             ? ! accept_ok {
-                ( vec_free [u] head )
                 ^ @ !WsDeflateConfig WsErr { F WsClientBadAccept }
             } {}
             : ?String ext ( __ws_head_get_value head `Sec-WebSocket-Extensions` )
-            ( vec_free [u] head )
             : ~ WsDeflateConfig result @ WsDeflateConfig { F F F 15 15 }
             ?? ext {
                 T ev → {
@@ -2353,7 +2262,6 @@ $ `stdlib/ext/compress.nu`
                         T c → { = result c }
                         F _ → {}
                     }
-                    ( string_free ev )
                 }
                 F _ → {}
             }
@@ -2374,12 +2282,10 @@ $ `stdlib/ext/compress.nu`
         T u → {
             : ?TcpConn copt ( __ws_open_conn u )
             ? ?? copt { T _ → 0 F _ → 1 } {
-                ( ws_url_free u )
                 ^ @ !WsDeflateConn WsErr { F WsConnectFailed }
             } {}
             : TcpConn conn ?? copt { T c → c F _ → @ TcpConn { # s 0 0 0 } }
             : !WsDeflateConfig WsErr hsr ( ws_client_handshake_deflate conn ( string_data . u host ) ( string_data . u path ) subprotocol cfg )
-            ( ws_url_free u )
             ?? hsr {
                 F e → {
                     ( tcp_close_conn conn )

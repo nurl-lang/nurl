@@ -254,6 +254,5 @@ $ `stdlib/core/vec.nu`
         }
         = i - i 1
     }
-    ( vec_free [i] cps )
     ^ out
 }

@@ -69,15 +69,13 @@ $ `stdlib/core/vec.nu`
                 ? ( string_contains line `c"` ) {
                     : String e ( string_replace line ( __wb_ir_at_sentinel ) ( __wb_ir_at_esc ) )
                     : String m ( string_replace e `@` ( __wb_ir_at_mask ) )
-                    ( string_free e )
-                    ( string_push_str out ( string_data m ) ) ( string_free m )
+                    ( string_push_str out ( string_data m ) )
                 } { ( string_push_str out ( string_data line ) ) }
             }
             F → {}
         }
         = i + i 1
     }
-    ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
     ^ out
 }
 
@@ -126,7 +124,6 @@ $ `stdlib/core/vec.nu`
     : String pat ( string_from `@` ) ( string_push_str pat name ) ( string_push_char pat 40 )
     : ~ String out ( string_new )
     : ?i pos_o ( string_index_of ir ( string_data pat ) )
-    ( string_free pat )
     ?? pos_o {
         T pos → {
             : i n ( string_len ir )
@@ -135,7 +132,7 @@ $ `stdlib/core/vec.nu`
             : ~ i le pos
             ~ & < le n != ( string_get ir le ) 10 { = le + le 1 }
             : String line ( string_substr ir ls - le ls )
-            ? ( string_starts_with line `declare ` ) { ( string_free out ) = out line } { ( string_free line ) }
+            ? ( string_starts_with line `declare ` ) { = out line } {}
         }
         F _ → {}
     }
@@ -152,7 +149,7 @@ $ `stdlib/core/vec.nu`
             ? > at 8 {
                 : String raw ( string_substr line 8 - at 8 )
                 : String t ( string_trim raw )
-                ( string_free raw ) ( string_free out ) = out t
+                = out t
             } {}
         }
         F _ → {}
@@ -185,7 +182,6 @@ $ `stdlib/core/vec.nu`
                             ~ & < next n | == ( string_get t next ) 32 == ( string_get t next ) 9 { = next + next 1 }
                             : String rest ( string_substr t next - n next )
                             : b continues | | == ( string_get t next ) 42 == ( string_get t next ) 40 ( string_starts_with rest `addrspace(` )
-                            ( string_free rest )
                             ? continues {} { = done T }
                         } {}
                     }
@@ -195,16 +191,13 @@ $ `stdlib/core/vec.nu`
         ? done {} { = k + k 1 }
     }
     : String out ( string_substr t 0 k )
-    ( string_free t )
     ^ out
 }
 
 @ __wb_ir_push_param ( Vec String ) out String line i first i end → v {
     : String raw ( string_substr line first - end first )
     : String ty ( __wb_ir_param_type raw )
-    ( string_free raw )
     ? | == ( string_len ty ) 0 != 0 ( nurl_str_eq ( string_data ty ) `...` ) {
-        ( string_free ty )
     } { ( vec_push [String] out ty ) }
 }
 
@@ -406,7 +399,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec String ) pms ( __wb_ir_decl_params decl )
     : String out ( string_new )
     ? == ( string_len ret ) 0 {
-        ( string_free ret ) ( vec_free_with [String] pms \ String s → v { ( string_free s ) } )
         ^ out
     } {}
     : s r ( string_data ret )
@@ -433,8 +425,6 @@ $ `stdlib/core/vec.nu`
         }
     }
     ( string_push_str out `\n}` )
-    ( string_free ret )
-    ( vec_free_with [String] pms \ String s → v { ( string_free s ) } )
     ^ out
 }
 
@@ -453,16 +443,16 @@ $ `stdlib/core/vec.nu`
     //    can't corrupt emitted-IR data (see note above). Restored at the
     //    end of the function.
     : String masked ( __wb_mask_ir_str_consts res )
-    ( string_free res ) = res masked
+    = res masked
 
     // 1. Rename main definition robustly.
     : String r1 ( string_replace res ` @main(` ` @__main_argc_argv(` )
-    ( string_free res ) = res r1
+    = res r1
 
     // 2. Prepend WASM triple and datalayout.
     : String head ( string_from `target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"\ntarget triple = "wasm32-unknown-wasi"\n` )
     : String r3 ( string_concat head res )
-    ( string_free res ) ( string_free head ) = res r3
+    = res r3
 
     : String shims ( string_from `\n; ── wasm32 libc ABI shims ──\n` )
     : ( Vec String ) shimmed ( vec_new [String] )
@@ -501,9 +491,9 @@ $ `stdlib/core/vec.nu`
                 : ( Vec String ) parts ( string_split entry `:` )
                 ? == ( vec_len [String] parts ) 3 {
                     : ~ String name ( string_new ) : ~ String ret ( string_new ) : ~ String pms ( string_new )
-                    : ?String n_o ( vec_get [String] parts 0 ) ?? n_o { T s → { ( string_free name ) = name ( string_from ( string_data s ) ) } F → {} }
-                    : ?String r_o ( vec_get [String] parts 1 ) ?? r_o { T s → { ( string_free ret ) = ret ( string_from ( string_data s ) ) } F → {} }
-                    : ?String p_o ( vec_get [String] parts 2 ) ?? p_o { T s → { ( string_free pms ) = pms ( string_from ( string_data s ) ) } F → {} }
+                    : ?String n_o ( vec_get [String] parts 0 ) ?? n_o { T s → { = name ( string_from ( string_data s ) ) } F → {} }
+                    : ?String r_o ( vec_get [String] parts 1 ) ?? r_o { T s → { = ret ( string_from ( string_data s ) ) } F → {} }
+                    : ?String p_o ( vec_get [String] parts 2 ) ?? p_o { T s → { = pms ( string_from ( string_data s ) ) } F → {} }
 
                     : String pat ( string_from `@` ) ( string_push_str pat ( string_data name ) ) ( string_push_char pat 40 )
 
@@ -527,15 +517,14 @@ $ `stdlib/core/vec.nu`
                             : String decl ( __wb_ir_decl_line res ( string_data name ) )
                             ? > ( string_len decl ) 0 {
                                 : String d_ret ( __wb_ir_decl_ret decl )
-                                ? > ( string_len d_ret ) 0 { ( string_free ir_ret ) = ir_ret d_ret } { ( string_free d_ret ) }
+                                ? > ( string_len d_ret ) 0 { = ir_ret d_ret } {}
                                 : ( Vec String ) d_pms ( __wb_ir_decl_params decl )
                                 // A count mismatch means the table and the IR
                                 // disagree about the function — trust the table
                                 // rather than emit a call with the wrong arity.
                                 ? == ( vec_len [String] d_pms ) ( string_len pms ) {
-                                    ( vec_free_with [String] ir_pms \ String s → v { ( string_free s ) } )
                                     = ir_pms d_pms
-                                } { ( vec_free_with [String] d_pms \ String s → v { ( string_free s ) } ) }
+                                } {}
                                 // Drop the declaration now: the shim below defines
                                 // this symbol, and clang rejects a `declare` +
                                 // `define` pair for one name. (Step 2 keeps the
@@ -543,14 +532,13 @@ $ `stdlib/core/vec.nu`
                                 // last line has no trailing newline.)
                                 : String decl_nl ( string_from ( string_data decl ) ) ( string_push_char decl_nl 10 )
                                 : String d_stripped ( string_replace res ( string_data decl_nl ) `` )
-                                ( string_free res ) = res d_stripped ( string_free decl_nl )
+                                = res d_stripped
                             } {}
-                            ( string_free decl )
 
                             // 1. Rename ALL occurrences (including the original
                             // `declare X @<libc>(...)` line emitted by nurlc).
                             : String tmp ( string_replace res ( string_data pat ) ( string_data sname ) )
-                            ( string_free res ) = res tmp
+                            = res tmp
                             ( vec_push [String] shimmed ( string_from ( string_data name ) ) )
 
                             // 2. Strip the renamed declaration line. After step 1, the IR
@@ -591,7 +579,7 @@ $ `stdlib/core/vec.nu`
                                                 ? < le rn { = le + le 1 } {}
                                                 : String full_line ( string_substr res pos - le pos )
                                                 : String tmp2 ( string_replace res ( string_data full_line ) `` )
-                                                ( string_free res ) = res tmp2 ( string_free full_line )
+                                                = res tmp2
                                             } F _ → {
                                                 : ?i op ( string_index_of res ( string_data one_decl ) )
                                                 ?? op { T pos2 → {
@@ -601,14 +589,12 @@ $ `stdlib/core/vec.nu`
                                                         ? < le2 rn2 { = le2 + le2 1 } {}
                                                         : String full_line2 ( string_substr res pos2 - le2 pos2 )
                                                         : String tmp3 ( string_replace res ( string_data full_line2 ) `` )
-                                                        ( string_free res ) = res tmp3 ( string_free full_line2 )
+                                                        = res tmp3
                                                     } F _ → {} }
                                             } }
-                                        ( string_free two_decl ) ( string_free one_decl )
                                     } F → {} }
                                 = ti + ti 1
                             }
-                            ( vec_free [s] types )
 
                             // 3. Build shim definition. We've already gated emission on
                             // `already_shimmed=F` above, so always emit here — the prior
@@ -618,19 +604,12 @@ $ `stdlib/core/vec.nu`
                             // Without the body, wasm-ld fails with `undefined symbol:
                             // __nurl_<fn>_shim`. Tracked separately by `shimmed` Vec.
                             ( __wb_emit_libc_shim shims ( string_data name ) r_char pms ir_ret ir_pms )
-                            ( string_free ir_ret )
-                            ( vec_free_with [String] ir_pms \ String s → v { ( string_free s ) } )
                         } {}
-                        ( string_free sname )
                     } {}
-                    ( string_free pat ) ( string_free name ) ( string_free ret ) ( string_free pms )
                 } {}
-                ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
             } F → {} }
         = idx + idx 1
     }
-    ( vec_free_with [String] entries \ String s → v { ( string_free s ) } )
-    ( string_free slist ) ( vec_free_with [String] shimmed \ String s → v { ( string_free s ) } )
 
     // POSIX-only fns that wasi-sysroot doesn't ship at all. The stdlib
     // (std/fs.nu mmap path, std/process.nu fork+exec, std/signal.nu)
@@ -729,7 +708,7 @@ $ `stdlib/core/vec.nu`
                     : String repl_name ( string_from `__nurl_` ) ( string_push_str repl_name name ) ( string_push_str repl_name `_stub` )
                     : String repl ( string_from ` @` ) ( string_push_str repl ( string_data repl_name ) ) ( string_push_char repl 40 )
                     : String tmp ( string_replace res ( string_data needle ) ( string_data repl ) )
-                    ( string_free res ) = res tmp ( string_free repl )
+                    = res tmp
 
                     // 2. Drop the renamed `declare <ret> @__nurl_<name>_stub(...)`
                     //    line. Without this, clang errors "invalid redefinition" —
@@ -755,28 +734,21 @@ $ `stdlib/core/vec.nu`
                                 : String decl_nl ( string_from ( string_data decl ) )
                                 ( string_push_char decl_nl 10 )
                                 : String tmp2 ( string_replace res ( string_data decl_nl ) `` )
-                                ( string_free res ) = res tmp2
-                                ( string_free decl_nl )
+                                = res tmp2
                             } {}
-                            ( string_free decl )
 
                             ? > ( string_len body ) 0 {
                                 ( string_push_str shims `define internal ` )
                                 ( string_push_str shims ( string_data body ) )
                                 ( string_push_str shims `\n` )
                             } {}
-                            ( string_free body )
                         } F _ → {} }
-                    ( string_free repl_name )
                 } {}
-                ( string_free needle )
             } F _ → {} }
         = pi + pi 1
     }
-    ( vec_free [s] posix_names ) ( vec_free [s] posix_sent )
 
     : String joined ( string_concat res shims )
-    ( string_free res ) ( string_free shims )
 
     // Mark every remaining `declare` as a potential host import. This
     // reproduces wasm-ld's `--allow-undefined` semantics WITHOUT the
@@ -792,7 +764,6 @@ $ `stdlib/core/vec.nu`
     // `@llvm.*` intrinsic declares are skipped — they lower in the
     // backend and must not be turned into imports.
     : ( Vec String ) jlines ( string_split joined `\n` )
-    ( string_free joined )
     : ~ String marked ( string_with_cap 1024 )
     : i jn ( vec_len [String] jlines )
     : ~ i ji 0
@@ -816,14 +787,12 @@ $ `stdlib/core/vec.nu`
                         ( string_push_str marked ( string_data snm ) )
                         ( string_push_str marked `"` )
                     } {}
-                    ( string_free snm )
                 } {}
             }
             F → {}
         }
         = ji + ji 1
     }
-    ( vec_free_with [String] jlines \ String s → v { ( string_free s ) } )
     ( string_push_char marked 10 )
 
     // Keep `main` visible as an alias of the renamed entry. zig's debug
@@ -838,8 +807,6 @@ $ `stdlib/core/vec.nu`
     // Restore step 0, innermost first: masked `@`s, then the escaped
     // occurrences of the token that were already in the program's data.
     : String unmasked ( string_replace marked ( __wb_ir_at_mask ) `@` )
-    ( string_free marked )
     : String final ( string_replace unmasked ( __wb_ir_at_esc ) ( __wb_ir_at_sentinel ) )
-    ( string_free unmasked )
     ^ final
 }

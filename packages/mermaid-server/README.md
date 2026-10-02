@@ -219,7 +219,9 @@ transport on both `/mcp` and `--stdio`.
 
 ## Memory
 
-The template set is built once, before the listener opens, and is read-only
-while serving — so the worker pool needs no lock on the render path. Each
-request's parse, layout and render are independent and reclaim everything
-they allocate; verified leak-free under ASan/LSan across a request loop.
+Nothing is released by hand. The template set is built once, before the
+listener opens, installed in an rcbox the process keeps, and read-only while
+serving — so the worker pool needs no lock on the render path. Each
+request's parse, layout and render results are plain values the compiler
+drops; the parser's cursor is a local, not a heap block. Verified leak-free
+under ASan/LSan across a request loop and a SIGTERM shutdown.

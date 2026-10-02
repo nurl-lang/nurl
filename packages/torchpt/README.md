@@ -88,8 +88,9 @@ kernel as-is.
 ## API
 
 ```
-( pt_open path )                       → !*Pt String
-( pt_close p )                         → v
+( pt_open path )                       → !Pt String
+( pt_close p )                         → v      early release (optional)
+( pt_none ) / ( pt_is_open p )         → an empty slot, and the test for one
 ( pt_n_tensors p )                     → i
 ( pt_name p idx )                      → s      BORROWED
 ( pt_find p name )                     → i      -1 when absent
@@ -102,6 +103,10 @@ kernel as-is.
 ( pt_dequant_range p idx first count ) → !( Vec u ) String
 ( pt_read_f64 p idx first count dst )  → b      into an f64 buffer
 ```
+
+A `Pt` is a handle: every copy is the same open checkpoint, and the last
+owner unmaps it. A parsed pickle (`Pk`) is a handle the same way. Nothing
+is released by hand.
 
 Every dtype widens on demand: `f64`, `f32`, `f16`, `bf16`, `i64`, `i32`,
 `i16`, `i8`, `u8`, `bool`.

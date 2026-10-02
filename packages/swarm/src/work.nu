@@ -98,29 +98,23 @@ $ `stdlib/std/bytes.nu`
 
 : Chunk { i lo i hi }
 
-@ shard i lo i hi i n → ( Vec s ) {
-    : ( Vec s ) out ( vec_new [s] )
+@ shard i lo i hi i n → ( Vec Chunk ) {
+    : ( Vec Chunk ) out ( vec_new [Chunk] )
     : i total ? > hi lo - hi lo 0
     : i base / total n
     : ~ i i 0
     ~ < i n {
         : i clo + lo * i base
         : i chi ? == i - n 1 hi + lo * + i 1 base
-        : *Chunk c # *Chunk ( nurl_alloc Z Chunk )
-        = . c lo clo
-        = . c hi chi
-        ( vec_push [s] out # s c )
+        ( vec_push [Chunk] out @ Chunk { clo chi } )
         = i + i 1
     }
     ^ out
 }
 
-@ shard_free sink ( Vec s ) chunks → v {
-    : i n ( vec_len [s] chunks )
-    : ~ i k 0
-    ~ < k n { ?? ( vec_get [s] chunks k ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} } = k + k 1 }
-    ( vec_free [s] chunks )
-}
+// The chunks are plain values their Vec drops; this lets go of them now
+// rather than at the end of the owner's scope (optional).
+@ shard_free sink ( Vec Chunk ) chunks → v {}
 
 // A ring key for chunk index i: 8 BE bytes so distinct chunks hash to distinct
 // ring points (FNV-1a/64 in ring_owner) and spread across the worker set.

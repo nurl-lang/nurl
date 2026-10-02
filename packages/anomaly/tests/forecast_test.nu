@@ -164,10 +164,10 @@ $ `src/dynamic.nu`
     : ~ b named T
     ?? ( vec_get [String] . fc feats 0 ) { T f0 → { ? == ( nurl_str_eq ( string_data f0 ) `temp` ) 1 {} { = named F } } F _ → { = named F } }
     ( check named `forecast: the first watched feature is temp` )
-    : *ArimaModel am0 ( model_forecast_model mo 0 )
+    : ArimaModel am0 ( model_forecast_model mo 0 )
     : ArimaSpec sp0 ( arima_spec_of am0 )
     // the holdout may prefer a plain ARIMA that follows the rhythm over twelve steps; what matters is that it does
-    ( check | | | > . sp0 P 0 > . sp0 Q 0 > . am0 xk 0 < ( _fc_getf . fc sel_mae 0 ) * 0.5 ( _fc_getf . fc sel_naive 0 ) `forecast: the temperature's model follows the rhythm (a seasonal form, or a plain one at half the naive error)` )
+    ( check | | | > . sp0 P 0 > . sp0 Q 0 > ( arima_xk am0 ) 0 < ( _fc_getf . fc sel_mae 0 ) * 0.5 ( _fc_getf . fc sel_naive 0 ) `forecast: the temperature's model follows the rhythm (a seasonal form, or a plain one at half the naive error)` )
     : ~ b selected F
     ?? ( vec_get [String] . fc sel 0 ) { T sn → { = selected > ( string_len sn ) 0 } F _ → {} }
     ( check selected `forecast: the holdout chose a form and named it` )
@@ -458,9 +458,9 @@ $ `src/dynamic.nu`
     ( check < tm1 20000 ( string_data tl ) )
     ( string_free tl )
     ( check == . . mo4 fc season 1440 `minute: the season is the day` )
-    : *ArimaModel am4 ( model_forecast_model mo4 0 )
-    ( check > . am4 xk 0 `minute: modelled as Fourier terms` )
-    ( check == . . am4 spec s 0 `minute: over a plain ARMA` )
+    : ArimaModel am4 ( model_forecast_model mo4 0 )
+    ( check > ( arima_xk am4 ) 0 `minute: modelled as Fourier terms` )
+    ( check == . ( arima_spec_of am4 ) s 0 `minute: over a plain ARMA` )
     : Json bt4 ( model_forecast_backtest mo4 60 100 )
     : ~ f sk4 -1.0
     ?? ( json_obj_get bt4 `features` ) { T fa → { ?? ( json_arr_get fa 0 ) { T f0 → { ?? ( json_obj_get f0 `skill_vs_naive` ) { T e → { ?? ( json_num_as_f e ) { T x → { = sk4 x } F _ → {} } } F _ → {} } } F _ → {} } } F _ → {} }

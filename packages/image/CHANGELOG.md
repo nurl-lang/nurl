@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `Image` is a plain value whose pixels the compiler drops; `image_free` is
+  an optional early release (empty). Every `image_free` / `vec_free` /
+  `string_free` / `args_free` in the library, the CLI and the tests is gone.
+- The JPEG decoder and encoder keep their state in a plain value on the
+  stack, borrowed `inout` by every stage, instead of a `nurl_malloc` block
+  freed by hand (`__jpg_free` / `__jpe_free` are gone); the decoder reads the
+  caller's bytes through a view instead of a Vec handle per byte, and the
+  encoder's output moves out instead of being copied. Byte-identical
+  output; JPEG decode and encode stay within ±1 % of their instruction
+  counts (2000×1500).
+- The bicubic / Lanczos coefficient tables are Vecs instead of raw blocks,
+  and the per-pixel scratch window is allocated once per axis instead of
+  once per output pixel (−7.4 % instructions on a bicubic + Lanczos run,
+  identical pixels). PPM header parsing and the CLI's `WxH` parser use
+  `inout` integers instead of heap cells.
+
 ## 0.7.1
 
 PNG: the zlib stream is decoded as a prefix, so the trailing adler32 no longer fails every file with "corrupt DEFLATE stream" (broken since NURL 0.65.0). JPEG: a corrupt DC category above 16 is rejected instead of panicking on a shift (#1143).

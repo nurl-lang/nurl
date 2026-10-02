@@ -35,13 +35,26 @@ $ `stdlib/std/x509_gen.nu`
 $ `deps/http/src/http.nu`
 $ `viewer_html_data.nu`
 
-: VwState {
+$ `stdlib/core/rcbox.nu`
+
+// What the handlers serve, set up once. A handle over an rcbox: each
+// route's closure holds a share, and the app's last owner releases it.
+: VwStateImpl {
     String page
     String name
     ( Vec u ) cloud
 }
 
-: ~ i g_vw 0
+: VwState { s ctl }
+
+@ VwState_share VwState h → VwState { ^ @ VwState { # s ( rcbox_share # i . h ctl ) } }
+
+@ VwState_drop sink VwState h → v {
+    ( mem_forget h )
+    ( rcbox_release [VwStateImpl] # i . h ctl )
+}
+
+@ __VwState_ptr VwState h → *VwStateImpl { ^ ( rcbox_ptr [VwStateImpl] # i . h ctl ) }
 
 // The page as compiled in. `--page FILE` reads from disk instead, which is
 // the only way to iterate on the viewer without rebuilding.
@@ -62,8 +75,8 @@ $ `viewer_html_data.nu`
     ^ out
 }
 
-@ h_vw_index HttpRequest req Params p → HttpResponse {
-    : *VwState st # *VwState g_vw
+@ h_vw_index VwState h HttpRequest req Params p → HttpResponse {
+    : *VwStateImpl st ( __VwState_ptr h )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
     // the page is regenerated on every build; never let a browser keep one
@@ -72,8 +85,8 @@ $ `viewer_html_data.nu`
     ^ r
 }
 
-@ h_vw_cloud HttpRequest req Params p → HttpResponse {
-    : *VwState st # *VwState g_vw
+@ h_vw_cloud VwState h HttpRequest req Params p → HttpResponse {
+    : *VwStateImpl st ( __VwState_ptr h )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/octet-stream` )
     // the page shows this instead of the URL, so the window says which
@@ -92,15 +105,13 @@ $ `viewer_html_data.nu`
         F _e → {
             ( nurl_print `ply: cannot read ` ) ( nurl_print path )
             ( nurl_print `\n` )
-            ( vec_free [u] blob )
             ^ 1
         }
-        T b → { ( vec_free [u] blob ) = blob b }
+        T b → { = blob b }
     }
     ? < ( vec_len [u] blob ) 16 {
         ( nurl_print `ply: ` ) ( nurl_print path )
         ( nurl_print ` is not a PLY file (too short)\n` )
-        ( vec_free [u] blob )
         ^ 1
     } {}
     // "ply" — checked here rather than in the browser so the error names
@@ -109,19 +120,15 @@ $ `viewer_html_data.nu`
     ? & & == 112 # i . magic 0 == 108 # i . magic 1 == 121 # i . magic 2 {} {
         ( nurl_print `ply: ` ) ( nurl_print path )
         ( nurl_print ` does not start with 'ply' — not a point cloud\n` )
-        ( vec_free [u] blob )
         ^ 1
     }
 
-    : *VwState st # *VwState ( nurl_alloc Z VwState )
-    = . st page ( vw_page page_override )
-    = . st name ( path_basename path )
-    = . st cloud blob
-    = g_vw # i st
+    : i nbytes ( vec_len [u] blob )
+    : VwState st @ VwState { # s ( rcbox_new [VwStateImpl] @ VwStateImpl { ( vw_page page_override ) ( path_basename path ) blob } ) }
 
-    : *HttpApp a ( http_app_new )
-    ( http_app_get a `/` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_index rq pp ) } )
-    ( http_app_get a `/cloud` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_cloud rq pp ) } )
+    : HttpApp a ( http_app_new )
+    ( http_app_get a `/` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_index st rq pp ) } )
+    ( http_app_get a `/cloud` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_cloud st rq pp ) } )
     ( http_app_quiet a )
     // A small worker pool, not a single thread: one browser opens the
     // page and the cloud concurrently, a second machine on the LAN
@@ -140,7 +147,7 @@ $ `viewer_html_data.nu`
         ? != tls 0 { ( nurl_print `  (self-signed — accept the browser warning once)` ) } {}
         ( nurl_print `\ncloud   ` ) ( nurl_print path )
         ( nurl_print `  ` )
-        ( nurl_print ( nurl_str_int / ( vec_len [u] blob ) 1048576 ) )
+        ( nurl_print ( nurl_str_int / nbytes 1048576 ) )
         ( nurl_print ` MB\nCtrl-C to stop\n` )
     } {}
 
@@ -154,18 +161,17 @@ $ `viewer_html_data.nu`
         : ~ String kp ( string_new )
         : ~ i certok 1
         ?? ( fs_tempfile `/tmp` `ply-cert-` ) {
-            T pth → { ( string_free cp ) = cp pth }
+            T pth → { = cp pth }
             F _ → { = certok 0 }
         }
         ?? ( fs_tempfile `/tmp` `ply-key-` ) {
-            T pth → { ( string_free kp ) = kp pth }
+            T pth → { = kp pth }
             F _ → { = certok 0 }
         }
         ? != certok 0 {
             ?? ( write_file ( string_data cp ) ( string_data . cert cert_pem ) ) { T _ → {} F _ → { = certok 0 } }
             ?? ( write_file ( string_data kp ) ( string_data . cert key_pem ) ) { T _ → {} F _ → { = certok 0 } }
         } {}
-        ( x509_selfsigned_free cert )
         ? != certok 0 {
             = rc ( http_app_listen_tls a ( string_data ( string_from host ) ) port ( string_data cp ) ( string_data kp ) )
         } {
@@ -174,11 +180,8 @@ $ `viewer_html_data.nu`
         }
         ( unlink ( string_data cp ) )
         ( unlink ( string_data kp ) )
-        ( string_free cp )
-        ( string_free kp )
     } {
         = rc ( http_app_listen a ( string_data ( string_from host ) ) port )
     }
-    ( http_app_free a )
     ^ ? == rc 0 0 1
 }

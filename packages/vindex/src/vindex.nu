@@ -11,14 +11,17 @@
 // distance), so the same top-k machinery serves both. The index serialises
 // to one .vix byte blob and loads back to identical results.
 //
-//   ( vx_build_exact data n dim metric )              → *VIndex
-//   ( vx_build_ivf data n dim metric nlist niter seed ) → *VIndex
+//   ( vx_build_exact data n dim metric )              → VIndex
+//   ( vx_build_ivf data n dim metric nlist niter seed ) → VIndex
 //   ( vx_search idx q k nprobe out_ids out_dists )    → i   (results found)
-//   ( vx_free idx )                                   → v
+//   ( vx_free idx )                                   → v   early release (optional)
 //   ( vx_save idx )                                   → ( Vec u )
-//   ( vx_load bytes )                                 → !*VIndex String
+//   ( vx_load bytes )                                 → !VIndex String
 //
 // metric: VX_COSINE (0) or VX_L2 (1).
+//
+// A builder takes ownership of `data` (sink). A VIndex is a handle: every
+// copy is the same index, and the last owner releases it.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
@@ -27,6 +30,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/rng.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/core/rcbox.nu`
 
 : i VX_COSINE 0
 
@@ -36,7 +40,7 @@ $ `stdlib/std/floatbits.nu`
 
 @ __vx_gi ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → x F → 0 } }
 
-: VIndex {
+: VIndexImpl {
     ( Vec f ) data  // n·dim, row-major
     ( Vec f ) norm  // n L2 norms (for cosine)
     i n
@@ -47,6 +51,34 @@ $ `stdlib/std/floatbits.nu`
     ( Vec f ) cnorm  // nlist norms
     ( Vec i ) list_off  // nlist+1 CSR offsets into members
     ( Vec i ) members  // n vector ids grouped by cluster
+}
+
+: VIndex { s ctl }
+
+@ VIndex_share VIndex h → VIndex { ^ @ VIndex { # s ( rcbox_share # i . h ctl ) } }
+
+@ VIndex_drop sink VIndex h → v {
+    ( mem_forget h )
+    ( rcbox_release [VIndexImpl] # i . h ctl )
+}
+
+@ __VIndex_ptr VIndex h → *VIndexImpl { ^ ( rcbox_ptr [VIndexImpl] # i . h ctl ) }
+
+// The index built from its parts, as a handle.
+@ __vx_make sink ( Vec f ) data sink ( Vec f ) nrm i n i dim i metric i nlist sink ( Vec f ) cent sink ( Vec f ) cnrm sink ( Vec i ) loff sink ( Vec i ) members → VIndex {
+    : i idx__box ( rcbox_zero [VIndexImpl] )
+    : *VIndexImpl idx ( rcbox_ptr [VIndexImpl] idx__box )
+    = . idx data data
+    = . idx norm nrm
+    = . idx n n
+    = . idx dim dim
+    = . idx metric metric
+    = . idx nlist nlist
+    = . idx cent cent
+    = . idx cnorm cnrm
+    = . idx list_off loff
+    = . idx members members
+    ^ @ VIndex { # s idx__box }
 }
 
 // L2 norm of the dim-vector at data[off..].
@@ -83,7 +115,7 @@ $ `stdlib/std/floatbits.nu`
 
 // Score of stored vector `id` against query q (with precomputed qnorm for
 // cosine). Smaller = nearer.
-@ __vx_score * VIndex idx i id ( Vec f ) q f qnorm → f {
+@ __vx_score * VIndexImpl idx i id ( Vec f ) q f qnorm → f {
     ? == . idx metric VX_L2 { ^ ( __vx_l2 . idx data id . idx dim q ) } {}
     : f dn * ( __vx_gf . idx norm id ) qnorm
     ? > dn 0.0 {} { ^ 1.0 }
@@ -124,21 +156,10 @@ $ `stdlib/std/floatbits.nu`
 
 // ── build: exact ────────────────────────────────────────────────────────
 
-@ vx_build_exact ( Vec f ) data i n i dim i metric → *VIndex {
-    : *VIndex idx # *VIndex ( nurl_alloc Z VIndex )
-    = . idx data data
-    = . idx n n
-    = . idx dim dim
-    = . idx metric metric
-    = . idx nlist 0
+@ vx_build_exact sink ( Vec f ) data i n i dim i metric → VIndex {
     : ( Vec f ) nrm ( vec_new [f] )
     ( __vx_fill_norms data n dim nrm )
-    = . idx norm nrm
-    = . idx cent ( vec_new [f] )
-    = . idx cnorm ( vec_new [f] )
-    = . idx list_off ( vec_new [i] )
-    = . idx members ( vec_new [i] )
-    ^ idx
+    ^ ( __vx_make data nrm n dim metric 0 ( vec_new [f] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] ) )
 }
 
 // ── build: IVF-flat (k-means coarse quantiser + inverted lists) ─────────
@@ -160,19 +181,12 @@ $ `stdlib/std/floatbits.nu`
     ^ best
 }
 
-@ vx_build_ivf ( Vec f ) data i n i dim i metric i nlist i niter i seed → *VIndex {
-    : *VIndex idx # *VIndex ( nurl_alloc Z VIndex )
-    = . idx data data
-    = . idx n n
-    = . idx dim dim
-    = . idx metric metric
+@ vx_build_ivf sink ( Vec f ) data i n i dim i metric i nlist i niter i seed → VIndex {
     : ~ i nl nlist
     ? > nl n { = nl n } {}
     ? < nl 1 { = nl 1 } {}
-    = . idx nlist nl
     : ( Vec f ) nrm ( vec_new [f] )
     ( __vx_fill_norms data n dim nrm )
-    = . idx norm nrm
     // init centroids: nl distinct-ish random rows
     : ( Vec f ) cent ( vec_with_cap [f] * nl dim )
     : Rng g ( rng_seed ? > seed 0 seed 1 )
@@ -184,7 +198,6 @@ $ `stdlib/std/floatbits.nu`
         ~ < j dim { ( vec_push [f] cent ( __vx_gf data + off j ) ) = j + j 1 }
         = c + c 1
     }
-    ( rng_free g )
     // Lloyd iterations
     : ( Vec i ) assign ( vec_with_cap [i] n )
     : ~ i k 0
@@ -220,7 +233,6 @@ $ `stdlib/std/floatbits.nu`
             } {}
             = c + c 1
         }
-        ( vec_free [f] sum ) ( vec_free [i] cnt )
         = it + it 1
     }
     // final assignment + inverted lists (CSR)
@@ -250,21 +262,17 @@ $ `stdlib/std/floatbits.nu`
         ( vec_set [i] fillp a + p 1 )
         = k + k 1
     }
-    ( vec_free [i] fillp ) ( vec_free [i] cnt ) ( vec_free [i] assign )
     : ( Vec f ) cnrm ( vec_new [f] )
     ( __vx_fill_norms cent nl dim cnrm )
-    = . idx cent cent
-    = . idx cnorm cnrm
-    = . idx list_off loff
-    = . idx members members
-    ^ idx
+    ^ ( __vx_make data nrm n dim metric nl cent cnrm loff members )
 }
 
 // ── search ──────────────────────────────────────────────────────────────
 
 // Fill out_ids/out_dists (cleared first) with the k nearest of query q.
 // nprobe is ignored for an exact index. Returns the number found.
-@ vx_search * VIndex idx ( Vec f ) q i k i nprobe ( Vec i ) out_ids ( Vec f ) out_dists → i {
+@ vx_search VIndex idx__h ( Vec f ) q i k i nprobe ( Vec i ) out_ids ( Vec f ) out_dists → i {
+    : *VIndexImpl idx ( __VIndex_ptr idx__h )
     : b _c1 ( vec_set_len [i] out_ids 0 )
     : b _c2 ( vec_set_len [f] out_dists 0 )
     : f qn ( __vx_norm q 0 . idx dim )
@@ -304,32 +312,34 @@ $ `stdlib/std/floatbits.nu`
         }
         = pi + pi 1
     }
-    ( vec_free [i] cids ) ( vec_free [f] cds )
     ^ ( vec_len [i] out_ids )
 }
 
-@ vx_n * VIndex idx → i { ^ . idx n }
-
-@ vx_dim * VIndex idx → i { ^ . idx dim }
-
-@ vx_nlist * VIndex idx → i { ^ . idx nlist }
-
-@ vx_free sink * VIndex idx → v {
-    ( vec_free [f] . idx data )
-    ( vec_free [f] . idx norm )
-    ( vec_free [f] . idx cent )
-    ( vec_free [f] . idx cnorm )
-    ( vec_free [i] . idx list_off )
-    ( vec_free [i] . idx members )
-    ( nurl_free # s idx )
+@ vx_n VIndex idx__h → i {
+    : *VIndexImpl idx ( __VIndex_ptr idx__h )
+    ^ . idx n
 }
+
+@ vx_dim VIndex idx__h → i {
+    : *VIndexImpl idx ( __VIndex_ptr idx__h )
+    ^ . idx dim
+}
+
+@ vx_nlist VIndex idx__h → i {
+    : *VIndexImpl idx ( __VIndex_ptr idx__h )
+    ^ . idx nlist
+}
+
+// Let go of `idx` now rather than at the end of its owner's scope.
+@ vx_free sink VIndex idx → v {}
 
 // ── serialisation (.vix) ────────────────────────────────────────────────
 // 'V' 'I' 'X' '1' | u64 n | u64 dim | u64 metric | u64 nlist |
 //   data(n·dim f64) | [nlist>0: cent(nlist·dim f64) | list_off(nlist+1 i64)
 //   | members(n i64)]
 
-@ vx_save * VIndex idx → ( Vec u ) {
+@ vx_save VIndex idx__h → ( Vec u ) {
+    : *VIndexImpl idx ( __VIndex_ptr idx__h )
     : ( Vec u ) o ( vec_new [u] )
     ( vec_push [u] o # u 86 ) ( vec_push [u] o # u 73 )
     ( vec_push [u] o # u 88 ) ( vec_push [u] o # u 49 )
@@ -350,14 +360,14 @@ $ `stdlib/std/floatbits.nu`
     ^ o
 }
 
-@ vx_load ( Vec u ) b → !*VIndex String {
-    ? >= ( vec_len [u] b ) 36 {} { ^ @ !*VIndex String { F ( string_from `vindex: truncated .vix` ) } }
+@ vx_load ( Vec u ) b → !VIndex String {
+    ? >= ( vec_len [u] b ) 36 {} { ^ @ !VIndex String { F ( string_from `vindex: truncated .vix` ) } }
     : ~ b magic T
     ? == ?? ( vec_get [u] b 0 ) { T x → x F → # u 0 } # u 86 {} { = magic F }
     ? == ?? ( vec_get [u] b 1 ) { T x → x F → # u 0 } # u 73 {} { = magic F }
     ? == ?? ( vec_get [u] b 2 ) { T x → x F → # u 0 } # u 88 {} { = magic F }
     ? == ?? ( vec_get [u] b 3 ) { T x → x F → # u 0 } # u 49 {} { = magic F }
-    ? magic {} { ^ @ !*VIndex String { F ( string_from `vindex: bad .vix magic` ) } }
+    ? magic {} { ^ @ !VIndex String { F ( string_from `vindex: bad .vix magic` ) } }
     : i n # i ?? ( bytes_read_u64_le b 4 ) { T v → v F → # u64 0 }
     : i dim # i ?? ( bytes_read_u64_le b 12 ) { T v → v F → # u64 0 }
     : i metric # i ?? ( bytes_read_u64_le b 20 ) { T v → v F → # u64 0 }
@@ -366,15 +376,8 @@ $ `stdlib/std/floatbits.nu`
     : ( Vec f ) data ( vec_with_cap [f] * n dim )
     : ~ i k 0
     ~ < k * n dim { ( vec_push [f] data ?? ( bytes_read_f64_le b off ) { T v → v F → 0.0 } ) = off + off 8 = k + k 1 }
-    : *VIndex idx # *VIndex ( nurl_alloc Z VIndex )
-    = . idx data data
-    = . idx n n
-    = . idx dim dim
-    = . idx metric metric
-    = . idx nlist nlist
     : ( Vec f ) nrm ( vec_new [f] )
     ( __vx_fill_norms data n dim nrm )
-    = . idx norm nrm
     : ( Vec f ) cent ( vec_new [f] )
     : ( Vec f ) cnorm ( vec_new [f] )
     : ( Vec i ) loff ( vec_new [i] )
@@ -388,9 +391,5 @@ $ `stdlib/std/floatbits.nu`
         ~ < k n { ( vec_push [i] members # i ?? ( bytes_read_u64_le b off ) { T v → v F → # u64 0 } ) = off + off 8 = k + k 1 }
         ( __vx_fill_norms cent nlist dim cnorm )
     } {}
-    = . idx cent cent
-    = . idx cnorm cnorm
-    = . idx list_off loff
-    = . idx members members
-    ^ @ !*VIndex String { T idx }
+    ^ @ !VIndex String { T ( __vx_make data nrm n dim metric nlist cent cnorm loff members ) }
 }

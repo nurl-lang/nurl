@@ -261,7 +261,6 @@ $ `stdlib/std/float.nu`
         ? . kr ok {
             ^ ( __valresult_ok @ TomlValue { TStr . kr key } . kr pos )
         } {
-            ( string_free . kr key )
             ^ ( __valresult_err . kr err . kr pos )
         }
     } {}
@@ -422,7 +421,6 @@ $ `stdlib/std/float.nu`
                         } {}
                     }
                 } {
-                    ( toml_value_free . vr value )
                     = err T = ek . vr err = done T
                 }
             }
@@ -434,7 +432,7 @@ $ `stdlib/std/float.nu`
         ~ < fk nfree {
             : ?TomlValue iv ( vec_get [TomlValue] items fk )
             ?? iv {
-                T v → ( toml_value_free v )
+                T v → {}
                 F _ → {}
             }
             = fk + fk 1
@@ -462,7 +460,6 @@ $ `stdlib/std/float.nu`
             ? . kr ok {
                 = cur ( __t_skip_inline src n . kr pos )
                 ? != ( __t_get src cur n ) 61 {
-                    ( string_free . kr key )
                     = err T = done T
                 } {
                     = cur + cur 1
@@ -477,13 +474,10 @@ $ `stdlib/std/float.nu`
                             } {}
                         }
                     } {
-                        ( string_free . kr key )
-                        ( toml_value_free . vr value )
                         = err T = ek . vr err = done T
                     }
                 }
             } {
-                ( string_free . kr key )
                 = err T = ek . kr err = done T
             }
         }
@@ -495,8 +489,6 @@ $ `stdlib/std/float.nu`
             : ?TomlEntry ek0 ( vec_get [TomlEntry] entries fk )
             ?? ek0 {
                 T e → {
-                    ( string_free . e key )
-                    ( toml_value_free . e value )
                 }
                 F _ → {}
             }
@@ -647,7 +639,6 @@ $ `stdlib/std/float.nu`
                 } { = err T = done T }
             }
         } {
-            ( string_free . kr key )
             = err T = done T
         }
     }
@@ -657,7 +648,7 @@ $ `stdlib/std/float.nu`
         ~ < fk nfree {
             : ?String sk ( vec_get [String] path fk )
             ?? sk {
-                T sv → ( string_free sv )
+                T sv → {}
                 F _ → {}
             }
             = fk + fk 1
@@ -690,14 +681,12 @@ $ `stdlib/std/float.nu`
                     }
                 } { = err T = ek # TomlErr TomlSyntax }
                 // Both branches own hr.path, even the empty failure payload.
-                ( vec_free_with [String] . hr path \ String component → v { ( string_free component ) } )
                 = pos . hr pos
             } {
                 : KeyResult kr ( __t_parse_key src n pos )
                 ? . kr ok {
                     : i ap ( __t_skip_inline src n . kr pos )
                     ? != ( __t_get src ap n ) 61 {
-                        ( string_free . kr key )
                         = err T = ek # TomlErr TomlSyntax = pos ap
                     } {
                         : ValueResult vr ( __t_parse_value src n + ap 1 )
@@ -705,20 +694,16 @@ $ `stdlib/std/float.nu`
                             ( vec_push [TomlEntry] current @ TomlEntry { . kr key . vr value } )
                             = pos . vr pos
                         } {
-                            ( string_free . kr key )
-                            ( toml_value_free . vr value )
                             = err T = ek . vr err = pos . vr pos
                         }
                     }
                 } {
-                    ( string_free . kr key )
                     = err T = ek . kr err = pos . kr pos
                 }
             }
         }
     }
     ? err {
-        ( toml_value_free @ TomlValue { TTable root } )
         ^ @ !TomlValue TomlErr { F ek }
     } {}
     ^ @ !TomlValue TomlErr { T @ TomlValue { TTable root } }
@@ -768,7 +753,6 @@ $ `stdlib/std/float.nu`
             = j + j 1
         }
         : ?TomlValue nx ( toml_get cur ( string_data seg ) )
-        ( string_free seg )
         ?? nx {
             T v2 → = cur v2
             F _ → = ok F

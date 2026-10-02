@@ -212,7 +212,7 @@ $ `src/authz.nu`
     // Approval now lives in the registry, not in a config list, so the
     // tenant is admitted the way the dashboard admits one.
     ( az_seed_allowed `aaaaaaaa-1111-2222-3333-444444444444` T0 )
-    : *OidcProvider fake ( oidc_provider_new `https://id.example/organizations/v2.0` )
+    : OidcProvider fake ( oidc_provider_new `https://id.example/organizations/v2.0` )
     : b _j ( oidc_provider_set_jwks fake `{"keys":[]}` )
     = g_az_prov_addr # i fake
     = g_az_iss_tmpl `https://id.example/{tenantid}/v2.0`

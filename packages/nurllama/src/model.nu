@@ -59,7 +59,7 @@ $ `src/tokenizer.nu`
 : Llm {
     Gpu g
     LlmKernels ks
-    * Tok tok
+    Tok tok
     i n_embd
     i n_layer
     i n_head
@@ -112,7 +112,7 @@ $ `src/tokenizer.nu`
     ( Vec i ) tq_up_shexp
     ( Vec i ) tq_down_shexp
     i rlogitsd
-    * u router_host
+    GpuHost router_host
     i moe_outd
     // batched-MoE scratch: the assignment table (expert id + weight per
     // (position, selected-expert) pair) and the expert hidden/down buffers
@@ -124,19 +124,20 @@ $ `src/tokenizer.nu`
     // all layers' expert bias as f32 on the device (n_layer · n_expert),
     // read at offset L · n_expert by the on-device router
     i bias_all
-    i gg
+    Gguf gg
     // A SECOND weight source: the same model, in the container Hugging Face
     // ships it in. The GGUF still supplies the hyperparameters and the
-    // tokenizer; the tensors come from here when it is set (0 = not set).
+    // tokenizer; the tensors come from here when it is open (st_is_open).
     // This is how the safetensor reader is proven: run the same model from
     // both containers and require the logits to agree.
-    i st
+    St st
     b st_norm_add1
     i st_embd
     i embd_idx
     ( Vec u ) embd_host
     ( Vec i ) wdptr
     ( Vec i ) wbytes
+    ( Vec GpuBuffer ) wbufs  // the owners of wdptr's allocations (released with them)
     ( Vec i ) tq_attn_norm
     ( Vec i ) tq_wq
     ( Vec i ) tq_wk
@@ -185,12 +186,12 @@ $ `src/tokenizer.nu`
     i ud
     i scored
     i logitsd
-    * u logits_host
+    GpuHost logits_host
     // greedy argmax + confidence per window position (device + host)
     i amid_d
     i amprob_d
-    * u amid_h
-    * u amprob_h
+    GpuHost amid_h
+    GpuHost amprob_h
     // coarse phase profiler (NURLLAMA_PROF): sync+timer per phase
     b prof_on
     i prof_attn_ns
@@ -224,14 +225,14 @@ $ `src/tokenizer.nu`
     ^ k
 }
 
-@ __lm_kv_i * Gguf g s arch s suffix i def → i {
+@ __lm_kv_i Gguf g s arch s suffix i def → i {
     : String k ( __lm_key arch suffix )
     : i v ( gguf_kv_int_or g ( string_data k ) def )
     ( string_free k )
     ^ v
 }
 
-@ __lm_kv_f * Gguf g s arch s suffix f def → f {
+@ __lm_kv_f Gguf g s arch s suffix f def → f {
     : String k ( __lm_key arch suffix )
     : f v ( gguf_kv_f_or g ( string_data k ) def )
     ( string_free k )
@@ -280,9 +281,9 @@ $ `src/tokenizer.nu`
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
 
-@ __lm_upload * Llm m * Gguf gg s name → i {
+@ __lm_upload * Llm m Gguf gg s name → i {
     // A second container, when one was given: same tensor, different file.
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m name )
         ? >= d 0 { ^ d } {}
         // fall through: a tensor the safetensors file does not carry (a tied
@@ -295,7 +296,7 @@ $ `src/tokenizer.nu`
     : ~ i nb -1
     : ~ i addr 0
     : ~ i ne0 0
-    ?? ( vec_get [GgufTensor] . gg tensors ti ) {
+    ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) {
         T t → {
             = gt . t gtype
             = nb . t nbytes
@@ -330,11 +331,13 @@ $ `src/tokenizer.nu`
             ( gpu_free bq )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
             ( vec_push [i] . m wdptr . br dptr )
+            ( vec_push [GpuBuffer] . m wbufs br )
             ( vec_push [i] . m wbytes . br bytes )
             = __lm_last_type gt
             ^ . br dptr
         } {}
         ( vec_push [i] . m wdptr . bq dptr )
+        ( vec_push [GpuBuffer] . m wbufs bq )
         ( vec_push [i] . m wbytes . bq bytes )
         = __lm_last_type gt
         ^ . bq dptr
@@ -352,6 +355,7 @@ $ `src/tokenizer.nu`
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
             = __lm_last_type 0
             ^ . b dptr
@@ -375,10 +379,10 @@ $ `src/tokenizer.nu`
 }
 
 // The row count (ne1) of a tensor, or -1 when it is absent.
-@ __lm_tensor_rows * Gguf gg s name → i {
+@ __lm_tensor_rows Gguf gg s name → i {
     : i ti ( gguf_find_tensor gg name )
     ? < ti 0 { ^ -1 } {}
-    ?? ( vec_get [GgufTensor] . gg tensors ti ) { T t → { ^ . t d1 } F → { ^ -1 } }
+    ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) ti ) { T t → { ^ . t d1 } F → { ^ -1 } }
 }
 
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
@@ -389,6 +393,7 @@ $ `src/tokenizer.nu`
         ^ -1
     } {}
     ( vec_push [i] . m wdptr . b dptr )
+    ( vec_push [GpuBuffer] . m wbufs b )
     ( vec_push [i] . m wbytes . b bytes )
     ^ . b dptr
 }
@@ -551,12 +556,11 @@ $ `src/tokenizer.nu`
         ( string_free hf )
         ^ -1
     } {}
-    : *St st # *St . m st
-    : i ti ( st_find_tensor st ( string_data hf ) )
+    : i ti ( st_find_tensor . m st ( string_data hf ) )
     : b is_norm != 0 ( nurl_str_ends ( string_data hf ) `norm.weight` )
     ( string_free hf )
     ? < ti 0 { ^ -1 } {}
-    ?? ( st_dequant st ti ) {
+    ?? ( st_dequant . m st ti ) {
         T raw → {
             ( __lm_st_rope_permute m name raw )
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
@@ -570,6 +574,7 @@ $ `src/tokenizer.nu`
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
             = __lm_last_type 0
             ^ . b dptr
@@ -601,9 +606,9 @@ $ `src/tokenizer.nu`
 // Optional per-layer tensor: device pointer, or -1 when the model has
 // none (biases are architecture-dependent). Always uploaded as f32 —
 // a bias is a single row, so the dequant cost is nil.
-@ __lm_upload_opt * Llm m * Gguf gg i layer s suffix → i {
+@ __lm_upload_opt * Llm m Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
-    ? != . m st 0 {
+    ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m ( string_data nm ) )
         ? >= d 0 {
             ( string_free nm )
@@ -629,6 +634,7 @@ $ `src/tokenizer.nu`
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
             ^ . b dptr
         }
@@ -639,7 +645,7 @@ $ `src/tokenizer.nu`
     }
 }
 
-@ __lm_upload_layer * Llm m * Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
+@ __lm_upload_layer * Llm m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
     : String nm ( __lm_tname layer suffix )
     : i d ( __lm_upload m gg ( string_data nm ) )
     ( string_free nm )
@@ -688,13 +694,11 @@ $ `src/tokenizer.nu`
 
 @ llm_open_st s path s weights i want_ctx → !*Llm String {
     ( __lm_lp_start )
-    : !*Gguf String gr ( gguf_open path )
-    : ~ i ggaddr 0
-    ?? gr {
-        T gg → { = ggaddr # i gg }
+    : ~ Gguf gg ( gguf_none )
+    ?? ( gguf_open path ) {
+        T g0 → { = gg g0 }
         F e → { ^ @ !*Llm String { F e } }
     }
-    : *Gguf gg # *Gguf ggaddr
     ( __lm_lp `gguf_open` )
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
     : b is_gemma3 != 0 ( nurl_str_eq arch `gemma3` )
@@ -724,7 +728,8 @@ $ `src/tokenizer.nu`
     = . m prof_dense_ns 0
     = . m prof_out_ns 0
     ?? ( env_get `NURLLAMA_PROF` ) { T v → { ( string_free v ) = . m prof_on T } F → {} }
-    = . m st 0
+    = . m st ( st_none )
+    = . m gg ( gguf_none )
     = . m st_embd -1
     = . m st_norm_add1 F
     = . m n_embd ( __lm_kv_i gg arch `embedding_length` 0 )
@@ -820,7 +825,7 @@ $ `src/tokenizer.nu`
 
     // tokenizer first (it copies out of gg)
     ( __lm_lp `kv+cfg` )
-    : !*Tok String tr ( tok_new gg )
+    : !Tok String tr ( tok_new gg )
     ?? tr {
         T t → { = . m tok t }
         F e → {
@@ -857,11 +862,11 @@ $ `src/tokenizer.nu`
     ? > ( nurl_str_len weights ) 0 {
         ?? ( st_open weights ) {
             T stp → {
-                = . m st # i stp
+                = . m st stp
                 = . m st_norm_add1 is_gemma3
-                = . m st_embd ( st_find_tensor stp `model.embed_tokens.weight` )
+                = . m st_embd ( st_find_tensor . m st `model.embed_tokens.weight` )
                 ? < . m st_embd 0 {
-                    ( st_close stp )
+                    ( st_close . m st )
                     ( nurl_free # s m )
                     ( gguf_close gg )
                     ^ ( __lm_err `nurllama: the safetensors file has no model.embed_tokens.weight` )
@@ -876,6 +881,7 @@ $ `src/tokenizer.nu`
     } {}
 
     = . m wdptr ( vec_new [i] )
+    = . m wbufs ( vec_new [GpuBuffer] )
     = . m wbytes ( vec_new [i] )
     = . m tq_attn_norm ( vec_new [i] )
     = . m tq_wq ( vec_new [i] )
@@ -1073,7 +1079,7 @@ $ `src/tokenizer.nu`
     // The mapping stays open for the model's lifetime — the embedding
     // rows are dequantised straight out of it per step (see llm_eval).
     // llm_close unmaps.
-    = . m gg # i gg
+    = . m gg gg
     ? ok {} {
         ( llm_close m )
         ? __lm_alloc_failed {
@@ -1128,8 +1134,8 @@ $ `src/tokenizer.nu`
     } {
         = . m amid_d -1
         = . m amprob_d -1
-        = . m amid_h # *u 0
-        = . m amprob_h # *u 0
+        = . m amid_h ( gpu_host_none )
+        = . m amprob_h ( gpu_host_none )
     }
     ? . m bidir {
         = . m rlogitsd ( __lm_scratch m * LM_CHUNK . m n_expert )
@@ -1153,12 +1159,12 @@ $ `src/tokenizer.nu`
             ( bytes_push_u32_le bb # u32 ( f32_to_bits # f32 bv ) )
             = bi + bi 1
         }
-        : GpuBuffer bu @ GpuBuffer { . m bias_all * nbias 4 }
+        : GpuBuffer bu ( gpu_buffer_view . m bias_all * nbias 4 )
         : i _ub ( gpu_upload bu ( vec_data [u] bb ) )
         ( vec_free [u] bb )
     } {
         = . m rlogitsd -1
-        = . m router_host # *u 0
+        = . m router_host ( gpu_host_none )
         = . m moe_outd -1
         = . m moe_expid -1
         = . m moe_wts -1
@@ -1216,12 +1222,8 @@ $ `src/tokenizer.nu`
         ( nurl_eprintln ( string_data pm ) )
         ( string_free pm )
     } {}
-    ? != . m st 0 { ( st_close # *St . m st ) } {}
-    : ~ i k 0
-    ~ < k ( vec_len [i] . m wdptr ) {
-        ( gpu_free @ GpuBuffer { ( _lm_geti . m wdptr k ) ( _lm_geti . m wbytes k ) } )
-        = k + k 1
-    }
+    ? ( st_is_open . m st ) { ( st_close . m st ) } {}
+    ( vec_free [GpuBuffer] . m wbufs )  // every weight and scratch buffer
     ( vec_free [i] . m wdptr )
     ( vec_free [i] . m wbytes )
     ( vec_free [i] . m tq_attn_norm )
@@ -1266,11 +1268,11 @@ $ `src/tokenizer.nu`
     ( vec_free [i] . m tq_gate_shexp )
     ( vec_free [i] . m tq_up_shexp )
     ( vec_free [i] . m tq_down_shexp )
-    ? != 0 # i . m router_host { ( gpu_host_free . m router_host ) } {}
-    ? != 0 # i . m amid_h { ( gpu_host_free . m amid_h ) } {}
-    ? != 0 # i . m amprob_h { ( gpu_host_free . m amprob_h ) } {}
+    ( gpu_host_free . m router_host )
+    ( gpu_host_free . m amid_h )
+    ( gpu_host_free . m amprob_h )
     ( vec_free [u] . m embd_host )
-    ? != . m gg 0 { ( gguf_close # *Gguf . m gg ) } {}
+    ? ( gguf_is_open . m gg ) { ( gguf_close . m gg ) } {}
     ( gpu_host_free . m logits_host )
     ( lk_free . m ks )
     ( tok_free . m tok )
@@ -1278,7 +1280,7 @@ $ `src/tokenizer.nu`
     ( nurl_free # s m )
 }
 
-@ llm_tok * Llm m → *Tok { ^ . m tok }
+@ llm_tok * Llm m → Tok { ^ . m tok }
 
 @ llm_n_vocab * Llm m → i { ^ . m n_vocab }
 
@@ -1484,13 +1486,13 @@ $ `src/tokenizer.nu`
     : ~ i bi 0
     ~ < bi count {
         : i tok ( _lm_geti ids + first bi )
-        : GpuBuffer xb @ GpuBuffer { + . m xd * * bi ne 4 * ne 4 }
+        : GpuBuffer xb ( gpu_buffer_view + . m xd * * bi ne 4 * ne 4 )
         // The embedding table is never expanded: exactly this token's row is
         // decoded, out of whichever container the weights came from. A
         // safetensors row range is exact (no block quantisation), a GGUF one is
         // block-aligned — both land here as f32.
-        ? != . m st 0 {
-            ?? ( st_dequant_range # *St . m st . m st_embd * tok ne ne ) {
+        ? ( st_is_open . m st ) {
+            ?? ( st_dequant_range . m st . m st_embd * tok ne ne ) {
                 T row → {
                     : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
                     ( vec_free [u] row )
@@ -1498,7 +1500,7 @@ $ `src/tokenizer.nu`
                 F e → { ( string_free e ) }
             }
         } {
-            ?? ( gguf_dequant_range # *Gguf . m gg . m embd_idx * tok ne ne ) {
+            ?? ( gguf_dequant_range . m gg . m embd_idx * tok ne ne ) {
                 T row → {
                     : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
                     ( vec_free [u] row )
@@ -1621,8 +1623,8 @@ $ `src/tokenizer.nu`
             } {
                 // ── fallback: host routing + per-(position, expert)
                 // launches (any weight type without a batched kernel) ──
-                : GpuBuffer rb @ GpuBuffer { . m rlogitsd * * count . m n_expert 4 }
-                : i _d1 ( gpu_download . m router_host rb )
+                : GpuBuffer rb ( gpu_buffer_view . m rlogitsd * * count . m n_expert 4 )
+                : i _d1 ( gpu_download ( gpu_host_ptr . m router_host ) rb )
                 : i stride_g * . m moe_ff ( __lm_row_bytes gt_g ne )
                 : i stride_u * . m moe_ff ( __lm_row_bytes gt_u ne )
                 : i stride_d * ne ( __lm_row_bytes gt_d . m moe_ff )
@@ -1682,14 +1684,14 @@ $ `src/tokenizer.nu`
         ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
         : i last_row + . m xnd * * - count 1 ne 4
         : b _q8 ( lk_matvec_q . m ks . m tq_output . m w_output last_row . m logitsd . m n_vocab ne 1 )
-        : GpuBuffer lb @ GpuBuffer { . m logitsd * . m n_vocab 4 }
-        : i _u2 ( gpu_download . m logits_host lb )
+        : GpuBuffer lb ( gpu_buffer_view . m logitsd * . m n_vocab 4 )
+        : i _u2 ( gpu_download ( gpu_host_ptr . m logits_host ) lb )
     } {}
     ? == logits_mode 2 {
         ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
         : b _q9 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
-        : GpuBuffer lb2 @ GpuBuffer { . m logitsd * * count . m n_vocab 4 }
-        : i _u3 ( gpu_download . m logits_host lb2 )
+        : GpuBuffer lb2 ( gpu_buffer_view . m logitsd * * count . m n_vocab 4 )
+        : i _u3 ( gpu_download ( gpu_host_ptr . m logits_host ) lb2 )
     } {}
     // mode 3: greedy argmax + confidence on the DEVICE for every window
     // position, so only count·(id,prob) come back — not count·vocab.
@@ -1698,10 +1700,10 @@ $ `src/tokenizer.nu`
         ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
         : b _q10 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
         ( lk_argmax_conf . m ks . m logitsd . m amid_d . m amprob_d . m n_vocab count )
-        : GpuBuffer ib @ GpuBuffer { . m amid_d * count 4 }
-        : i _u4 ( gpu_download . m amid_h ib )
-        : GpuBuffer pb @ GpuBuffer { . m amprob_d * count 4 }
-        : i _u5 ( gpu_download . m amprob_h pb )
+        : GpuBuffer ib ( gpu_buffer_view . m amid_d * count 4 )
+        : i _u4 ( gpu_download ( gpu_host_ptr . m amid_h ) ib )
+        : GpuBuffer pb ( gpu_buffer_view . m amprob_d * count 4 )
+        : i _u5 ( gpu_download ( gpu_host_ptr . m amprob_h ) pb )
         ? . m prof_on { = . m prof_out_ns + . m prof_out_ns - ( __lm_prof_now m ) _po } {}
     } {}
 }

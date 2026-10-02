@@ -29,8 +29,8 @@
 // ETags, legacy APIs) — both are collision-broken and MUST NOT be used
 // to authenticate data or hash secrets.
 //
-// Ownership: every returned `( Vec u )` / `String` is owned — the caller
-// frees it (`vec_free [u]` / `string_free`) or lets auto-drop run.
+// Ownership: every returned `( Vec u )` / `String` is owned, and goes
+// with its owner.
 //
 // Example — verifying a webhook signature:
 //   : String want ( hmac_sha256_hex secret payload )
@@ -63,8 +63,6 @@ $ `stdlib/std/hash_blake3.nu`
     : ( Vec u ) data ( __hash_str_to_bytes str )
     : ( Vec u ) digest ( sha256_pure data )
     : String out ( bytes_to_hex digest )
-    ( vec_free [u] digest )
-    ( vec_free [u] data )
     ^ out
 }
 
@@ -73,9 +71,6 @@ $ `stdlib/std/hash_blake3.nu`
     : ( Vec u ) m ( __hash_str_to_bytes msg )
     : ( Vec u ) digest ( hmac_sha256_pure k m )
     : String out ( bytes_to_hex digest )
-    ( vec_free [u] digest )
-    ( vec_free [u] m )
-    ( vec_free [u] k )
     ^ out
 }
 
@@ -86,7 +81,6 @@ $ `stdlib/std/hash_blake3.nu`
 @ sha1_hex ( Vec u ) data → String {
     : ( Vec u ) digest ( sha1_bytes data )
     : String out ( bytes_to_hex digest )
-    ( vec_free [u] digest )
     ^ out
 }
 
@@ -99,7 +93,6 @@ $ `stdlib/std/hash_blake3.nu`
 @ blake3_hex ( Vec u ) data → String {
     : ( Vec u ) digest ( blake3_bytes data )
     : String out ( bytes_to_hex digest )
-    ( vec_free [u] digest )
     ^ out
 }
 
@@ -118,7 +111,6 @@ $ `stdlib/std/hash_blake3.nu`
 @ sha512_hex ( Vec u ) data → String {
     : ( Vec u ) digest ( sha512_bytes data )
     : String out ( bytes_to_hex digest )
-    ( vec_free [u] digest )
     ^ out
 }
 
@@ -129,7 +121,6 @@ $ `stdlib/std/hash_blake3.nu`
 @ md5_hex ( Vec u ) data → String {
     : ( Vec u ) digest ( md5_bytes data )
     : String out ( bytes_to_hex digest )
-    ( vec_free [u] digest )
     ^ out
 }
 
@@ -140,6 +131,5 @@ $ `stdlib/std/hash_blake3.nu`
 @ hmac_sha512_hex ( Vec u ) key ( Vec u ) msg → String {
     : ( Vec u ) digest ( hmac_sha512_bytes key msg )
     : String out ( bytes_to_hex digest )
-    ( vec_free [u] digest )
     ^ out
 }

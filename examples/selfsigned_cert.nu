@@ -61,14 +61,10 @@ $ `stdlib/std/pkey.nu`
                     ? ( ecdsa_p256_verify . x ec_point r s h )
                     { ( nurl_print `  ECDSA-P256/SHA-256 self-signature: verifies\n` ) = rc 0 }
                     { ( nurl_print `  self-signature: FAILED\n` ) }
-                    ( vec_free [u] r ) ( vec_free [u] s )
                 } { ( nurl_print `  signature DER: malformed\n` ) }
-                ( vec_free [u] rs ) ( vec_free [u] h )
             } { ( nurl_print `parse FAILED\n` ) }
-            ( x509_free x ) ( vec_free [u] der )
         }
         F _ → { ( nurl_print `pem decode FAILED\n` ) }
     }
-    ( x509_selfsigned_free c )
     ^ rc
 }

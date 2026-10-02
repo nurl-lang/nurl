@@ -23,30 +23,24 @@ $ `src/census.nu`
 
 // Sum a workload over a sharded range — the exact thing the coordinator does.
 @ shard_sum_primes i lo i hi i n → i {
-    : ( Vec s ) cs ( shard lo hi n )
+    : ( Vec Chunk ) cs ( shard lo hi n )
     : ~ i total 0
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
-        : *Chunk c # *Chunk pp
-        = total + total ( count_primes . c lo . c hi )
+        ?? ( vec_get [Chunk] cs k ) { T c → { = total + total ( count_primes . c lo . c hi ) } F → {} }
         = k + k 1
     }
-    ( shard_free cs )
     ^ total
 }
 
 @ shard_sum_sumsq i lo i hi i n → i {
-    : ( Vec s ) cs ( shard lo hi n )
+    : ( Vec Chunk ) cs ( shard lo hi n )
     : ~ i total 0
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] cs k ) { T x → x F → # s 0 }
-        : *Chunk c # *Chunk pp
-        = total + total ( sum_squares . c lo . c hi )
+        ?? ( vec_get [Chunk] cs k ) { T c → { = total + total ( sum_squares . c lo . c hi ) } F → {} }
         = k + k 1
     }
-    ( shard_free cs )
     ^ total
 }
 
@@ -76,10 +70,8 @@ $ `src/census.nu`
     : ( Vec u ) cp ( chunk_payload 1234 5678 )
     ( pb `chunk lo: ` == ( chunk_lo cp ) 1234 )
     ( pb `chunk hi: ` == ( chunk_hi cp ) 5678 )
-    ( vec_free [u] cp )
     : ( Vec u ) rb ( result_encode 999999 )
     ( pb `result rt: ` == ( result_decode rb ) 999999 )
-    ( vec_free [u] rb )
 
     // ── census HELLO codec round-trips ───────────────────────────
     : ( Vec u ) pk ( pk_demo 3 )
@@ -89,20 +81,15 @@ $ `src/census.nu`
     ( pb `hello role: ` == . h role ( role_worker ) )
     ( pb `hello want: ` == . h want 1 )
     ( pb `hello pk:   ` ( bytes_eq . h pubkey pk ) )
-    ( hello_free h )
-    ( vec_free [u] hb )
 
     // ── roster folds a worker once (idempotent ring membership) ──
     : Ring ring ( ring_new )
-    : *Roster r ( roster_new )
+    : Roster r ( roster_new )
     : b first ( roster_add r ring pk 42 64 )
     : b dup ( roster_add r ring pk 42 64 )
     ( pb `roster add first: ` first )
     ( pb `roster dedup:     ` ! dup )
     ( pb `roster count==1:  ` == ( roster_count r ) 1 )
-    ( roster_free r )
-    ( ring_free ring )
-    ( vec_free [u] pk )
 
     ^ 0
 }

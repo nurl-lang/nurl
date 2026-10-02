@@ -32,12 +32,12 @@ $ `stdlib/core/vec.nu`
 $ `deps/torchpt/src/torchpt.nu`
 
 : Lw {
-    * Pt pt
+    Pt pt
     ( Vec String ) errs
 }
 
 @ lw_open s path → !*Lw String {
-    : !*Pt String r ( pt_open path )
+    : !Pt String r ( pt_open path )
     ?? r {
         F e → ^ @ !*Lw String { F e }
         T pt → {

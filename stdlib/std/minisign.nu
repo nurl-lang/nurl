@@ -82,20 +82,15 @@ $ `stdlib/std/hash_blake2b.nu`
                     // 'D' → prehashed: Ed25519 over BLAKE2b-512(message)
                     : ( Vec u ) h ( blake2b512_pure message )
                     = ok ( ed25519_verify_pure pk h sg )
-                    ( vec_free [u] h )
                 } {
                     ? == sa1 100 {
                         // 'd' → legacy: Ed25519 over the raw message
                         = ok ( ed25519_verify_pure pk message sg )
                     } {}
                 }
-                ( vec_free [u] pk )
-                ( vec_free [u] sg )
             } {}
         } {}
     } {}
-    ( vec_free [u] pubv )
-    ( vec_free [u] sig )
     ^ ok
 }
 
@@ -118,7 +113,5 @@ $ `stdlib/std/hash_blake2b.nu`
     : String pl ( _ms_line2 pubfile )
     : String sl ( _ms_line2 sigfile )
     : b r ( minisign_verify_b64 message ( string_data pl ) ( string_data sl ) )
-    ( string_free pl )
-    ( string_free sl )
     ^ r
 }

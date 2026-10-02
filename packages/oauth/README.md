@@ -19,7 +19,7 @@ $ `deps/oauth/src/oauth.nu`
 ```nurl
 ?? ( oidc_provider_discover `https://accounts.example.com` ) {
     T p → {
-        : *OauthConfig cfg ( oauth_config_new `my-client` `http://127.0.0.1:8765/callback` `openid profile email` )
+        : OauthConfig cfg ( oauth_config_new `my-client` `http://127.0.0.1:8765/callback` `openid profile email` )
         : Pkce pk ( pkce_new )
         : String state ( oauth_state_new )
         : String nonce ( oauth_nonce_new )
@@ -44,7 +44,7 @@ $ `deps/oauth/src/oauth.nu`
 **Believe a token** — and turn it into a person:
 
 ```nurl
-: *OidcPolicy pol ( oidc_policy_new `https://accounts.example.com` `my-client` )
+: OidcPolicy pol ( oidc_policy_new `https://accounts.example.com` `my-client` )
 ( oidc_policy_set_nonce pol ( string_data nonce ) )
 
 ?? ( oidc_verify_id_token p pol ( token_set_id_token ts ) ) {
@@ -52,7 +52,6 @@ $ `deps/oauth/src/oauth.nu`
         ( nurl_println ( string_data . id subject ) )   // "248289761001"
         ( nurl_println ( string_data . id email ) )     // "jane@example.com"
         : String groups ( oidc_identity_claim id `tenant` )   // anything else
-        ( oidc_identity_free id )
     }
     F e → { /* ( oauth_err_name e ) + ( oidc_provider_last_error p ) says why */ }
 }
@@ -171,10 +170,20 @@ header of the attacker's choosing.
 The suite (95 in-process assertions + 10 over curl) is clean under
 AddressSanitizer + UndefinedBehaviorSanitizer with LeakSanitizer on.
 
+## Memory
+
+Nothing is released by hand. `OidcProvider`, `OidcPolicy` and
+`OauthConfig` are handles: every copy (a struct field, a closure
+capture, `OidcProvider_share`) is the same object, and the last owner
+releases it. `OidcIdentity`, `TokenSet`, `Pkce` and `JwkKey` are plain
+values whose Strings go with them. `oidc_provider_free`,
+`oidc_policy_free` and `oidc_identity_free` remain as optional early
+releases.
+
 ## Threading
 
-An `*OidcProvider` owns an HTTP client and a mutable key cache and takes
-no lock: one per thread, or one thread that owns it. An `*OidcPolicy` is
+An `OidcProvider` owns an HTTP client and a mutable key cache and takes
+no lock: one per thread, or one thread that owns it. An `OidcPolicy` is
 read-only once built and is safe to share, as is a verified
 `OidcIdentity` — it is a value with no back-reference to the provider.
 

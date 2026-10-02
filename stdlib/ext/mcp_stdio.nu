@@ -173,9 +173,7 @@ $ `stdlib/core/vec.nu`
     // Build & write the request line.
     : Json req ( __mcp_stdio_envelope id method params )
     : String body ( json_stringify req )
-    ( json_free req )
     : i wn ( proc_write_line . c child ( string_data body ) )
-    ( string_free body )
     ? < wn 0 {
         // A failed write almost always means the child exited and
         // closed its stdin read-end (EPIPE). Disambiguate: if its
@@ -202,7 +200,7 @@ $ `stdlib/core/vec.nu`
         // servers, which is what callers actually want.
         : ?String drop ( proc_read_line . c child 50 )
         ?? drop {
-            T s → ( string_free s )
+            T s → {}
             F _ → {}
         }
         ? ( proc_eof . c child ) {
@@ -223,7 +221,6 @@ $ `stdlib/core/vec.nu`
         ?? line_o {
             T line → {
                 : !Json JsonError pj ( json_parse ( string_data line ) )
-                ( string_free line )
                 ?? pj {
                     T j → {
                         // Match on id field. Only return when ids align so we
@@ -238,15 +235,13 @@ $ `stdlib/core/vec.nu`
                                             ^ @ !Json McpStdioErr { T j }
                                         } {
                                             // Different id — skip and keep reading.
-                                            ( json_free j )
                                         }
                                     }
-                                    F _ → ( json_free j )
+                                    F _ → {}
                                 }
                             }
                             F _ → {
                                 // No id ⇒ server-initiated notification. Drop it.
-                                ( json_free j )
                             }
                         }
                     }
@@ -328,7 +323,6 @@ $ `stdlib/core/vec.nu`
     ?? r {
         T resp → {
             : ( Vec Json ) tools ( __mcp_stdio_extract_array resp `tools` )
-            ( json_free resp )
             ^ @ !( Vec Json ) McpStdioErr { T tools }
         }
         F e → ^ @ !( Vec Json ) McpStdioErr { F e }
@@ -340,7 +334,6 @@ $ `stdlib/core/vec.nu`
     ?? r {
         T resp → {
             : ( Vec Json ) ps ( __mcp_stdio_extract_array resp `prompts` )
-            ( json_free resp )
             ^ @ !( Vec Json ) McpStdioErr { T ps }
         }
         F e → ^ @ !( Vec Json ) McpStdioErr { F e }
@@ -352,7 +345,6 @@ $ `stdlib/core/vec.nu`
     ?? r {
         T resp → {
             : ( Vec Json ) rs ( __mcp_stdio_extract_array resp `resources` )
-            ( json_free resp )
             ^ @ !( Vec Json ) McpStdioErr { T rs }
         }
         F e → ^ @ !( Vec Json ) McpStdioErr { F e }

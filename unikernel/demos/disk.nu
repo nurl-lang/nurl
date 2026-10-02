@@ -43,7 +43,6 @@ $ `stdlib/std/fs.nu`
     ?? ( read_file ( counter_path ) ) {
         T txt → {
             : i n ?? ( string_to_int txt ) { T v → v F _ → 0 }
-            ( string_free txt )
             ^ n
         }
         F _ → 0
@@ -60,7 +59,6 @@ $ `stdlib/std/fs.nu`
         T _ → ( say `counter written: yes` )
         F _ → ( say `counter written: no` )
     }
-    ( string_free next )
 
     // A long name with two dots — the case an 8.3-only filesystem
     // mangles and this one stores whole.
@@ -88,7 +86,6 @@ $ `stdlib/std/fs.nu`
         T _ → ( say `big write: yes` )
         F _ → ( say `big write: no` )
     }
-    ( string_free big )
     ( kvn `big size` ?? ( file_size `/big.txt` ) { T n → n F _ → - 0 1 } )
 
     // The directory, as any program would list it — opendir/readdir,
@@ -104,7 +101,6 @@ $ `stdlib/std/fs.nu`
                 }
                 = j + j 1
             }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
         }
         F _ → ( say `root entries=FAILED` )
     }

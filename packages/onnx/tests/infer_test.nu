@@ -41,7 +41,7 @@ $ `src/runtime.nu`
 
 @ main → i {
     : ~ b have_model F
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
+    : ~ OGraph g ( onnx_empty_graph )
     ?? ( read_file_bytes `tests/data/tiny.onnx` ) {
         T mb → { = g ( onnx_parse mb ) = have_model T } F _ → {}
     }
@@ -67,20 +67,18 @@ $ `src/runtime.nu`
     ?? ( read_file_bytes `tests/data/malformed_length.onnx` ) {
         T bad → {
             ?? ( onnx_parse_checked bad ) {
-                T ok → { ( check F `malformed model is rejected` ) ( graph_free ok ) }
+                T ok → { ( check F `malformed model is rejected` ) }
                 F _ → ( check T `malformed model is rejected` )
             }
             // The historical entry point degrades to an empty graph.
             : OGraph empty ( onnx_parse bad )
             ( check == ( vec_len [ONode] . empty nodes ) 0 `onnx_parse yields an empty graph` )
-            ( graph_free empty )
-            ( vec_free [u] bad )
         }
         F _ → ( check F `cannot read tests/data/malformed_length.onnx` )
     }
 
     ( nurl_print `[infer]\n` )
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( nurl_print `  skip (no CUDA device / kernel compile)\n` )
         ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 } { ( nurl_print `\nFAIL\n` ) ^ 1 } } {}
 
@@ -88,7 +86,7 @@ $ `src/runtime.nu`
     : *u input ( load_f32t `tests/data/tiny.in.f32` ncell )
     : i in_n ( nurl_peek ncell 0 )
     : RTensor out ( rt_run e g input 1 in_n )
-    : *u host ( rt_download e out )
+    : GpuHost host ( rt_download e out )
     : i out_n . out nelem
     ( check == out_n 3 `output is length 3` )
 
@@ -97,13 +95,12 @@ $ `src/runtime.nu`
     : ~ i bad 0
     : ~ i j 0
     ~ < j 3 {
-        : ~ f d - ( nurl_peek_f32 host j ) ( nurl_peek_f32 exp j )
+        : ~ f d - ( nurl_peek_f32 ( gpu_host_ptr host ) j ) ( nurl_peek_f32 exp j )
         ? < d 0.0 { = d - 0.0 d } {}
         ? > d 0.001 { = bad + bad 1 } {}
         = j + j 1
     }
     ( check == bad 0 `GPU output matches onnxruntime reference` )
-    ( rt_close e )
 
     ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 }
     { ( nurl_print `\n` ) ( nurl_print ( nurl_str_int g_fail ) ) ( nurl_print ` FAILED\n` ) ^ 1 }

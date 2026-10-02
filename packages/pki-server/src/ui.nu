@@ -36,7 +36,6 @@ $ `stdlib/core/string.nu`
 @ _ui_push_esc String out s raw → v {
     : String e ( ui_html_escape raw )
     ( string_push_str out ( string_data e ) )
-    ( string_free e )
 }
 
 // Base layout wrapper
@@ -87,7 +86,6 @@ $ `stdlib/core/string.nu`
     ( string_push_str out `    </footer>\n` )
     ( string_push_str out `  </div>\n` )
     ( string_push_str out `</body>\n</html>\n` )
-    ( string_free body )
     ^ out
 }
 

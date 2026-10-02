@@ -9,13 +9,8 @@
 //   ./nurl.sh examples/supervisor_strategy.nu
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
 $ `stdlib/std/supervisor.nu`
-
-@ mk0 → *i {
-    : *i p # *i ( nurl_alloc Z i )
-    ( nurl_poke p 0 0 )
-    ^ p
-}
 
 @ say s who → v {
     : String l ( string_from `  starting ` )
@@ -25,7 +20,8 @@ $ `stdlib/std/supervisor.nu`
 }
 
 @ main → i {
-    : *i fails ( mk0 )
+    // A one-slot Vec: the closure's copy and this one are the same buffer.
+    : ( Vec i ) fails ( vec_zeroed [i] 1 )
     : Supervisor sup ( supervisor_new 5 100000 )
     ( supervisor_set_strategy sup @ SupStrategy { OneForAll } )
 
@@ -33,8 +29,8 @@ $ `stdlib/std/supervisor.nu`
     \ → v { ( say `db` ) } )
     ( supervisor_add sup `config` @ RestartPolicy { RTransient }
     \ → v {
-        : i n + 1 ( nurl_peek fails 0 )
-        ( nurl_poke fails 0 n )
+        : i n + 1 ?? ( vec_get [i] fails 0 ) { T x → x F → 0 }
+        : b _s ( vec_set [i] fails 0 n )
         ? == n 1 { ( nurl_print `  config CRASHED — one-for-all restarts the group\n` ) ( panic `config` ) }
         { ( say `config` ) }
     } )
@@ -45,7 +41,5 @@ $ `stdlib/std/supervisor.nu`
     : b stable ( supervisor_start sup )
     ( nurl_print ? stable `group is up.\n` `gave up (restart intensity exceeded).\n` )
 
-    ( supervisor_free sup )
-    ( nurl_free # s fails )
     ^ 0
 }

@@ -19,7 +19,7 @@
 //
 //   ( mcp_client_new s endpoint i timeout_ms )
 //                                  → McpClient   borrowed endpoint
-//   ( mcp_client_free McpClient c ) → v
+//   ( mcp_client_free McpClient c ) → v   early release (optional)
 //
 //   ( mcp_call McpClient c s method ( ? Json ) params )
 //                                  → ! Json McpErr     full response
@@ -82,9 +82,7 @@ $ `stdlib/core/vec.nu`
     ^ @ McpClient { ( string_from endpoint ) ito }
 }
 
-@ mcp_client_free sink McpClient c → v {
-    ( string_free . c endpoint )
-}
+@ mcp_client_free sink McpClient c → v {}
 
 // ── McpErr ────────────────────────────────────────────────────────────
 
@@ -132,7 +130,7 @@ $ `stdlib/core/vec.nu`
 @ __mcp_call_with_headers McpClient c s method ? Json params s extra_headers → !Json McpErr {
     : i n ( string_len . c endpoint )
     ? == n 0 {
-        ?? params { T p → ( json_free p ) F _ → {} }
+        ?? params { T p → {} F _ → {} }
         ^ @ !Json McpErr { F @ McpErr { McpAuth } }
     } {}
 
@@ -142,7 +140,6 @@ $ `stdlib/core/vec.nu`
     : i id ( now_ms )
     : Json req ( __mcp_request_envelope id method params )
     : String body ( json_stringify req )
-    ( json_free req )
 
     : String hdrs ( string_from `Content-Type: application/json\r\nAccept: application/json\r\n` )
     ( string_push_str hdrs extra_headers )
@@ -154,8 +151,6 @@ $ `stdlib/core/vec.nu`
     ( string_data hdrs )
     . c timeout_ms
     0 )
-    ( string_free hdrs )
-    ( string_free body )
 
     ?? hr {
         T resp → {
@@ -163,7 +158,6 @@ $ `stdlib/core/vec.nu`
             ? & >= status 200 < status 300 {
                 : s body_view ( http_body_str resp )
                 : !Json JsonError pr ( json_parse body_view )
-                ( response_free resp )
                 ?? pr {
                     T j → {
                         // Validate jsonrpc field (lenient — many servers omit it).
@@ -172,7 +166,6 @@ $ `stdlib/core/vec.nu`
                     F _ → ^ @ !Json McpErr { F @ McpErr { McpJson } }
                 }
             } {
-                ( response_free resp )
                 ^ @ !Json McpErr { F @ McpErr { McpHttp } }
             }
         }
@@ -311,7 +304,6 @@ $ `stdlib/core/vec.nu`
                 }
                 F _ → {}
             }
-            ( json_free resp )
             ^ modern
         }
         F _ → { ^ F }
@@ -351,7 +343,6 @@ $ `stdlib/core/vec.nu`
     ?? r {
         T resp → {
             : ( Vec Json ) tools ( _extract_array_field resp `tools` )
-            ( json_free resp )
             ^ @ !( Vec Json ) McpErr { T tools }
         }
         F e → ^ @ !( Vec Json ) McpErr { F e }
@@ -363,7 +354,6 @@ $ `stdlib/core/vec.nu`
     ?? r {
         T resp → {
             : ( Vec Json ) ps ( _extract_array_field resp `prompts` )
-            ( json_free resp )
             ^ @ !( Vec Json ) McpErr { T ps }
         }
         F e → ^ @ !( Vec Json ) McpErr { F e }
@@ -375,7 +365,6 @@ $ `stdlib/core/vec.nu`
     ?? r {
         T resp → {
             : ( Vec Json ) rs ( _extract_array_field resp `resources` )
-            ( json_free resp )
             ^ @ !( Vec Json ) McpErr { T rs }
         }
         F e → ^ @ !( Vec Json ) McpErr { F e }

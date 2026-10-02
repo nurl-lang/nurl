@@ -138,10 +138,10 @@ $ `stdlib/core/rcbox.nu`
                 = . fd next_seq + . fd next_seq 1
                 = . fd probe_start_ns now
                 = . fd last_probe_ns now
-                ( vec_free [u] . fd probe_target )
-                = . fd probe_target ( __fd_cpy pk )
+                // The new target goes into the old target's buffer.
+                ( vec_clear [u] . fd probe_target )
+                ( vec_extend [u] . fd probe_target pk )
                 : FdAction a @ FdAction { ( fd_do_ping ) ( __fd_cpy pk ) . fd probe_seq ( vec_new [PkMember] ) }
-                ( vec_free [u] pk )
                 a
             }
             F → ( __fd_none )

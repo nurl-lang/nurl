@@ -61,32 +61,29 @@ $ `deps/gpukit/src/dev.nu`
 // loss = sum((X·W)²) with X a const and W a param. `lazy` picks how X is
 // declared; the graph is otherwise identical.
 @ run_once b lazy i dtype * u out → b {
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : ( Vec f ) wv ( wvals )
     : ( Vec i ) ws ( shape2 3 2 )
     : Tensor wt ( tensor_from_data TE_F64 ws wv )
     : GVar W ( grad_param tp wt )
-    ( tensor_free wt ) ( vec_free [f] wv )
     : ( Vec f ) xv ( xvals )
     : ~ GVar X @ GVar { -1 }
     ? lazy {
         : ( Vec i ) xs ( shape2 3 3 )
         = X ( grad_const_lazy tp xs TE_F64 )
-        ( vec_free [i] xs )
     } {
         : ( Vec i ) xs ( shape2 3 3 )
         : Tensor xt ( tensor_from_data TE_F64 xs xv )
         = X ( grad_const tp xt )
-        ( tensor_free xt )
     }
     : GVar y ( g_matmul tp X W )
     : GVar loss ( g_sum tp ( g_mul tp y y ) )
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
-        ( vec_free [f] xv ) ( tape_free tp ) ( gk_close kit )
+        ( gk_close kit )
         ^ F
     }
-    : *GProg pg ( gput_capture_dt kit tp loss dtype )
+    : GProg pg ( gput_capture_dt kit tp loss dtype )
     : ~ b ok ( gput_ok pg )
     // the lazy const's values arrive AFTER the capture, straight into the
     // buffer the capture sized from its shape
@@ -101,12 +98,8 @@ $ `deps/gpukit/src/dev.nu`
         = ok ( gput_grad pg W gw )
         ( nurl_poke out 1 ( f64_to_bits ( gf gw 0 ) ) )
         ( nurl_poke out 2 ( f64_to_bits ( gf gw 5 ) ) )
-        ( vec_free [f] gw )
     } {}
-    ( gput_free pg )
     ( gk_close kit )
-    ( vec_free [f] xv )
-    ( tape_free tp )
     ^ ok
 }
 

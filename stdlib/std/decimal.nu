@@ -41,7 +41,8 @@ $ `stdlib/std/bigint.nu`
 
 : | DecErr { DecDivZero }
 
-@ dec_free sink Decimal d → v { ( bigint_free . d coeff ) }
+// Let go of `d` now rather than at the end of its owner's scope.
+@ dec_free sink Decimal d → v {}
 
 @ dec_clone Decimal d → Decimal { ^ @ Decimal { ( bigint_clone . d coeff ) . d scale } }
 
@@ -64,11 +65,9 @@ $ `stdlib/std/bigint.nu`
     : ~ i k 0
     ~ < k d {
         : BigInt nx ( bigint_mul acc ten )
-        ( bigint_free acc )
         = acc nx
         = k + k 1
     }
-    ( bigint_free ten )
     ^ acc
 }
 
@@ -77,7 +76,6 @@ $ `stdlib/std/bigint.nu`
 @ __dec_scaleup BigInt c i delta → BigInt {
     : BigInt p ( __dec_pow10 delta )
     : BigInt r ( bigint_mul c p )
-    ( bigint_free p )
     ^ r
 }
 
@@ -86,7 +84,6 @@ $ `stdlib/std/bigint.nu`
     : BigInt two ( bigint_from_i 2 )
     : BigInt r ( bigint_rem x two )
     : b odd ! ( bigint_is_zero r )
-    ( bigint_free two ) ( bigint_free r )
     ^ odd
 }
 
@@ -97,7 +94,6 @@ $ `stdlib/std/bigint.nu`
     : BigInt r ( bigint_rem num den )
     : BigInt twor ( bigint_add r r )  // 2·remainder
     : i c ( bigint_cmp twor den )
-    ( bigint_free r ) ( bigint_free twor )
     // 2r > den → round up; 2r < den → round down (keep q);
     // 2r == den (exactly half) → round to even.
     : ~ b bump F
@@ -107,7 +103,6 @@ $ `stdlib/std/bigint.nu`
     ? bump {
         : BigInt one ( bigint_from_i 1 )
         : BigInt res ( bigint_add q one )
-        ( bigint_free one ) ( bigint_free q )
         ^ res
     } {}
     ^ q
@@ -124,7 +119,6 @@ $ `stdlib/std/bigint.nu`
     : BigInt ca ( __dec_scaleup . a coeff - s . a scale )
     : BigInt cb ( __dec_scaleup . b coeff - s . b scale )
     : BigInt sum ( bigint_add ca cb )
-    ( bigint_free ca ) ( bigint_free cb )
     ^ @ Decimal { sum s }
 }
 
@@ -133,7 +127,6 @@ $ `stdlib/std/bigint.nu`
     : BigInt ca ( __dec_scaleup . a coeff - s . a scale )
     : BigInt cb ( __dec_scaleup . b coeff - s . b scale )
     : BigInt diff ( bigint_sub ca cb )
-    ( bigint_free ca ) ( bigint_free cb )
     ^ @ Decimal { diff s }
 }
 
@@ -147,7 +140,6 @@ $ `stdlib/std/bigint.nu`
     : BigInt ca ( __dec_scaleup . a coeff - s . a scale )
     : BigInt cb ( __dec_scaleup . b coeff - s . b scale )
     : i c ( bigint_cmp ca cb )
-    ( bigint_free ca ) ( bigint_free cb )
     ^ c
 }
 
@@ -167,7 +159,6 @@ $ `stdlib/std/bigint.nu`
     : BigInt mag ? neg ( bigint_neg c0 ) ( bigint_clone c0 )
     : BigInt rq ( __dec_round_div mag div )
     : BigInt coeff ? neg ( bigint_neg rq ) ( bigint_clone rq )
-    ( bigint_free div ) ( bigint_free mag ) ( bigint_free rq )
     ^ @ Decimal { coeff target }
 }
 
@@ -181,15 +172,12 @@ $ `stdlib/std/bigint.nu`
     ~ & going > s 0 {
         : BigInt r ( bigint_rem c ten )
         : b divisible ( bigint_is_zero r )
-        ( bigint_free r )
         ? divisible {
             : BigInt q ( bigint_div c ten )
-            ( bigint_free c )
             = c q
             = s - s 1
         } { = going F }
     }
-    ( bigint_free ten )
     ^ @ Decimal { c s }
 }
 
@@ -207,8 +195,6 @@ $ `stdlib/std/bigint.nu`
     : BigInt q ( __dec_round_div aN aD )
     : b rneg != negN negD
     : BigInt coeff ? rneg ( bigint_neg q ) ( bigint_clone q )
-    ( bigint_free num ) ( bigint_free den )
-    ( bigint_free aN ) ( bigint_free aD ) ( bigint_free q )
     ^ @ !Decimal DecErr { T @ Decimal { coeff scale } }
 }
 
@@ -227,7 +213,6 @@ $ `stdlib/std/bigint.nu`
     ? == scale 0 {
         : ~ i k dstart
         ~ < k ssn { ( string_push_char out ( nurl_str_at ss ssn k ) ) = k + k 1 }
-        ( string_free signed )
         ^ out
     } {}
     ? > dlen scale {
@@ -247,7 +232,6 @@ $ `stdlib/std/bigint.nu`
         : ~ i k dstart
         ~ < k ssn { ( string_push_char out ( nurl_str_at ss ssn k ) ) = k + k 1 }
     }
-    ( string_free signed )
     ^ out
 }
 
@@ -278,7 +262,6 @@ $ `stdlib/std/bigint.nu`
     ? bad { ^ @ !Decimal ParseErr { F @ ParseErr { BadFormat } } } {}
     ? == 0 + int_digits frac_digits { ^ @ !Decimal ParseErr { F @ ParseErr { Empty } } } {}
     : !BigInt ParseErr cr ( bigint_from_string ( string_data digits ) )
-    ( string_free digits )
     ^ ?? cr {
         T coeff → @ !Decimal ParseErr { T @ Decimal { coeff frac_digits } }
         F e → @ !Decimal ParseErr { F e }

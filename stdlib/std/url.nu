@@ -48,28 +48,11 @@ $ `stdlib/core/vec.nu`
 
 : UrlParam { String key String val }
 
-@ url_free sink Url u → v {
-    ( string_free . u scheme )
-    ( string_free . u userinfo )
-    ( string_free . u host )
-    ( string_free . u path )
-    ( string_free . u query )
-    ( string_free . u fragment )
-}
+// Let go of `u` now rather than at the end of its owner's scope.
+@ url_free sink Url u → v {}
 
-@ url_params_free sink ( Vec UrlParam ) ps → v {
-    : i n ( vec_len [UrlParam] ps )
-    : ~ i k 0
-    ~ < k n {
-        : ?UrlParam p ( vec_get [UrlParam] ps k )
-        ?? p {
-            T pp → { ( string_free . pp key ) ( string_free . pp val ) }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [UrlParam] ps )
-}
+// Let go of `ps` now rather than at the end of its owner's scope.
+@ url_params_free sink ( Vec UrlParam ) ps → v {}
 
 // ── ASCII helpers ──────────────────────────────────────────────────
 
@@ -372,7 +355,6 @@ $ `stdlib/core/vec.nu`
             } {}
             : String key ( __url_form_decode ( string_data kraw ) )
             : String val ( __url_form_decode ( string_data vraw ) )
-            ( string_free kraw ) ( string_free vraw )
             ( vec_push [UrlParam] out @ UrlParam { key val } )
         } {}
         = start + e 1

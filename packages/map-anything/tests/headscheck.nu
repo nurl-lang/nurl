@@ -21,10 +21,10 @@ $ `src/heads.nu`
     ^ 1
 }
 
-@ __hc_read_up * GpuKit kit s dir s name i n → GkBuf {
+@ __hc_read_up GpuKit kit s dir s name i n → GkBuf {
     : String p ( string_from dir )
     ( string_push_str p name )
-    : ~ GkBuf out @ GkBuf { 0 0 GK_F32 }
+    : ~ GkBuf out ( gk_buf_none GK_F32 )
     ?? ( read_file_bytes ( string_data p ) ) {
         F → {}
         T raw → {
@@ -95,7 +95,7 @@ $ `src/heads.nu`
         }
         T got → { = lw got }
     }
-    : *GpuKit kit ( gk_open_best )
+    : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ^ ( __hc_die `no compute device` ) }
     : PoseH ph ( ph_load lw kit )
     : ScaleH sh ( sh_load lw kit )

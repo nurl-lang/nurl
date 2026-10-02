@@ -27,10 +27,10 @@ $ `deps/gpukit/src/devops.nu`
 $ `src/weights.nu`
 $ `src/devblock.nu`
 
-@ __maw_none → GkBuf { ^ @ GkBuf { 0 0 GK_F32 } }
+@ __maw_none → GkBuf { ^ ( gk_buf_none GK_F32 ) }
 
 // One tensor onto the device, layout unchanged.
-@ maw_upload * Lw w * GpuKit kit s name → GkBuf {
+@ maw_upload * Lw w GpuKit kit s name → GkBuf {
     : i n ( lw_nelems w name )
     ? <= n 0 {
         : b _r ( lw_require w name -1 -1 -1 -1 )
@@ -56,7 +56,7 @@ $ `src/devblock.nu`
 
 // Upload a [rows, cols] tensor TRANSPOSED, as [cols, rows] — straight
 // out of the mapping, permuted on the device.
-@ maw_upload_t * Lw w * GpuKit kit s name i rows i cols → GkBuf {
+@ maw_upload_t * Lw w GpuKit kit s name i rows i cols → GkBuf {
     : i n ( lw_nelems w name )
     ? | <= n 0 != n * rows cols {
         : b _r ( lw_require w name rows cols -1 -1 )
@@ -105,7 +105,7 @@ $ `src/devblock.nu`
     ^ b
 }
 
-@ __maw_at * Lw w * GpuKit kit s prefix s leaf → GkBuf {
+@ __maw_at * Lw w GpuKit kit s prefix s leaf → GkBuf {
     : String nm ( string_from prefix )
     ( string_push_str nm leaf )
     : GkBuf b ( maw_upload w kit ( string_data nm ) )
@@ -113,7 +113,7 @@ $ `src/devblock.nu`
     ^ b
 }
 
-@ __maw_at_t * Lw w * GpuKit kit s prefix s leaf i rows i cols → GkBuf {
+@ __maw_at_t * Lw w GpuKit kit s prefix s leaf i rows i cols → GkBuf {
     : String nm ( string_from prefix )
     ( string_push_str nm leaf )
     : GkBuf b ( maw_upload_t w kit ( string_data nm ) rows cols )
@@ -126,7 +126,7 @@ $ `src/devblock.nu`
 // in this model share this exact layout; only `eps` could ever differ,
 // and in this checkpoint both use 1e-6 (encoder blocks are built with
 // partial(LayerNorm, eps=1e-6), the info_sharing blocks likewise).
-@ maw_block * Lw w * GpuKit kit s prefix f eps i dim i swh → MaBlk {
+@ maw_block * Lw w GpuKit kit s prefix f eps i dim i swh → MaBlk {
     ^ @ MaBlk {
         ( __maw_at w kit prefix `norm1.weight` )
         ( __maw_at w kit prefix `norm1.bias` )

@@ -43,7 +43,7 @@ $ `stdlib/ext/http_cli.nu`
     : ?String ev ( env_get `OS` )
     : ~ b w F
     ?? ev {
-        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) ( string_free e ) }
+        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) }
         F → {}
     }
     ^ w
@@ -56,10 +56,9 @@ $ `stdlib/ext/http_cli.nu`
     ?? ev { T e → { ^ e } F → {} }
     : ~ String home ( string_new )
     ? ( wb_is_windows )
-    { ( string_free home ) = home ( env_var_or `USERPROFILE` `.` ) }
-    { ( string_free home ) = home ( env_var_or `HOME` `.` ) }
+    { = home ( env_var_or `USERPROFILE` `.` ) }
+    { = home ( env_var_or `HOME` `.` ) }
     : String p ( path_join ( string_data home ) `.nurl` )
-    ( string_free home )
     ^ p
 }
 
@@ -71,12 +70,10 @@ $ `stdlib/ext/http_cli.nu`
     : ?String ev ( env_get `NURL_STDLIB` )
     ?? ev { T e → {
             : String p ( path_join ( string_data e ) `stdlib` )
-            ( string_free e )
             ^ p
         } F → {} }
     : String home ( wb_nurl_home )
     : String p ( path_join ( string_data home ) `stdlib` )
-    ( string_free home )
     ^ p
 }
 
@@ -87,7 +84,6 @@ $ `stdlib/ext/http_cli.nu`
     ?? r {
         T o → {
             : b ok ( output_success o )
-            ( output_free o )
             ^ ok
         }
         F _ → { ^ F }
@@ -109,11 +105,9 @@ $ `stdlib/ext/http_cli.nu`
     ? ( wb_is_windows ) {
         : String c2 ( string_from ( string_data cand ) )
         ( string_push_str c2 `.bat` )
-        ( string_free cand ) = cand c2
+        = cand c2
     } {}
-    ( string_free home ) ( string_free bindir )
     ? ( file_exists ( string_data cand ) ) { ^ @ !String String { T cand } } {}
-    ( string_free cand )
     ? ( __wb_runs `nurlc` `--version` ) { ^ @ !String String { T ( string_from `nurlc` ) } } {}
     ^ @ !String String { F ( string_from `nurlc not found — install the NURL toolchain first: curl -fsSL https://nurl-lang.org/install.sh | sh (then add $HOME/.nurl/bin to PATH), or set $NURLC` ) }
 }
@@ -127,7 +121,9 @@ $ `stdlib/ext/http_cli.nu`
     b is_zig
 }
 
-@ wb_compiler_free sink WbCompiler c → v { ( string_free . c cmd ) }
+// Let go of `c` now rather than at the end of its owner's scope (optional:
+// a WbCompiler is a plain value whose String drops with it).
+@ wb_compiler_free sink WbCompiler c → v {}
 
 // Probe a zig binary: `zig version` must run and exit 0.
 @ __wb_zig_ok s zig → b { ^ ( __wb_runs zig `version` ) }
@@ -141,9 +137,7 @@ $ `stdlib/ext/http_cli.nu`
     : String home ( wb_nurl_home )
     : ~ String cand ( path_join ( string_data home ) `zig` )
     : String cand2 ( path_join ( string_data cand ) ? ( wb_is_windows ) `zig.exe` `zig` )
-    ( string_free cand ) ( string_free home )
     ? ( file_exists ( string_data cand2 ) ) { ^ @ !WbCompiler String { T @ WbCompiler { cand2 T } } } {}
-    ( string_free cand2 )
 
     // 3. a zig on PATH
     ? ( __wb_zig_ok `zig` ) { ^ @ !WbCompiler String { T @ WbCompiler { ( string_from `zig` ) T } } } {}
@@ -155,7 +149,7 @@ $ `stdlib/ext/http_cli.nu`
     // 5. provision a pinned zig into $NURL_HOME/zig
     : ?String nodl ( env_get `NURL_WASM_NO_DOWNLOAD` )
     : ~ b may_download allow_download
-    ?? nodl { T n → { ? > ( string_len n ) 0 { = may_download F } {} ( string_free n ) } F → {} }
+    ?? nodl { T n → { ? > ( string_len n ) 0 { = may_download F } {} } F → {} }
     ? may_download {
         : !String String pz ( __wb_provision_zig )
         ?? pz {
@@ -175,27 +169,23 @@ $ `stdlib/ext/http_cli.nu`
     ? ( wb_is_windows ) {
         : String pa ( env_var_or `PROCESSOR_ARCHITECTURE` `AMD64` )
         : b arm ( nurl_str_eq ( string_data pa ) `ARM64` )
-        ( string_free pa )
         ^ @ !String String { T ( string_from ? arm `aarch64-windows` `x86_64-windows` ) }
     } {}
     : !Output ProcessErr mr ( process_run1 `uname` `-m` )
     : !Output ProcessErr sr ( process_run1 `uname` `-s` )
     : ~ String machine ( string_new )
     : ~ String sysname ( string_new )
-    ?? mr { T o → { ( string_free machine ) = machine ( string_from ( output_stdout o ) ) ( output_free o ) } F _ → {} }
-    ?? sr { T o → { ( string_free sysname ) = sysname ( string_from ( output_stdout o ) ) ( output_free o ) } F _ → {} }
+    ?? mr { T o → { = machine ( string_from ( output_stdout o ) ) } F _ → {} }
+    ?? sr { T o → { = sysname ( string_from ( output_stdout o ) ) } F _ → {} }
     : String m ( string_trim machine )
     : String sy ( string_trim sysname )
-    ( string_free machine ) ( string_free sysname )
     ? == ( string_len m ) 0 {
-        ( string_free m ) ( string_free sy )
         ^ @ !String String { F ( string_from `could not detect platform (uname failed)` ) }
     } {}
     : ~ String key ( string_new )
     // zig names: x86_64 / aarch64. uname may say arm64 (macOS).
     ? ( nurl_str_eq ( string_data m ) `arm64` ) { ( string_push_str key `aarch64` ) } { ( string_push_str key ( string_data m ) ) }
     ( string_push_str key ? ( nurl_str_eq ( string_data sy ) `Darwin` ) `-macos` `-linux` )
-    ( string_free m ) ( string_free sy )
     ^ @ !String String { T key }
 }
 
@@ -207,33 +197,26 @@ $ `stdlib/ext/http_cli.nu`
     ?? r1 { T o → {
             ? ( output_success o ) {
                 : String out ( string_from ( output_stdout o ) )
-                ( output_free o )
                 : String hex ( __wb_first_token out )
-                ( string_free out )
                 ^ @ !String String { T hex }
-            } { ( output_free o ) }
+            } {}
         } F _ → {} }
     : !Output ProcessErr r2 ( process_run3 `shasum` `-a` `256` path )
     ?? r2 { T o → {
             ? ( output_success o ) {
                 : String out ( string_from ( output_stdout o ) )
-                ( output_free o )
                 : String hex ( __wb_first_token out )
-                ( string_free out )
                 ^ @ !String String { T hex }
-            } { ( output_free o ) }
+            } {}
         } F _ → {} }
     // Windows: certutil prints the hex (possibly spaced) on the 2nd line.
     : !Output ProcessErr r3 ( process_run3 `certutil` `-hashfile` path `SHA256` )
     ?? r3 { T o → {
             ? ( output_success o ) {
                 : String out ( string_from ( output_stdout o ) )
-                ( output_free o )
                 : String hex ( __wb_certutil_hex out )
-                ( string_free out )
                 ? > ( string_len hex ) 0 { ^ @ !String String { T hex } } {}
-                ( string_free hex )
-            } { ( output_free o ) }
+            } {}
         } F _ → {} }
     ^ @ !String String { F ( string_from `no sha256 tool found (tried sha256sum, shasum, certutil)` ) }
 }
@@ -245,7 +228,6 @@ $ `stdlib/ext/http_cli.nu`
     : i n ( string_len t )
     ~ & < e n & != ( string_get t e ) 32 & != ( string_get t e ) 9 != ( string_get t e ) 10 { = e + e 1 }
     : String tok ( string_substr t 0 e )
-    ( string_free t )
     ^ tok
 }
 
@@ -259,7 +241,6 @@ $ `stdlib/ext/http_cli.nu`
         ?? lo { T line → {
                 : String c ( string_replace line ` ` `` )
                 : String ct ( string_trim c )
-                ( string_free c )
                 : ~ b all_hex > ( string_len ct ) 0
                 : ~ i k 0
                 ~ < k ( string_len ct ) {
@@ -269,12 +250,11 @@ $ `stdlib/ext/http_cli.nu`
                     = k + k 1
                 }
                 ? & all_hex == ( string_len ct ) 64 {
-                    ( string_free hex ) = hex ( string_to_lower ct )
-                } { ( string_free ct ) }
+                    = hex ( string_to_lower ct )
+                } {}
             } F → {} }
         = i + i 1
     }
-    ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
     ^ hex
 }
 
@@ -285,7 +265,7 @@ $ `stdlib/ext/http_cli.nu`
 @ __wb_provision_zig → !String String {
     : !String String pk ( __wb_zig_platform_key )
     : ~ String key ( string_new )
-    ?? pk { T k → { ( string_free key ) = key k } F e → { ^ @ !String String { F e } } }
+    ?? pk { T k → { = key k } F e → { ^ @ !String String { F e } } }
 
     ( nurl_eprintln `wasmbuilder: no zig found — downloading zig 0.16.0 (one-time, sha256-verified) into $NURL_HOME/zig ...` )
 
@@ -296,7 +276,6 @@ $ `stdlib/ext/http_cli.nu`
     ?? ir {
         T resp → {
             ? != ( httpc_status resp ) 200 {
-                ( httpc_resp_free resp ) ( string_free key )
                 ^ @ !String String { F ( string_from `zig download index fetch failed (non-200 from ziglang.org)` ) }
             } {}
             : !Json JsonError jr ( json_parse ( httpc_body_str resp ) )
@@ -308,34 +287,28 @@ $ `stdlib/ext/http_cli.nu`
                             ?? po { T pj → {
                                     : ?Json tb ( json_obj_get pj `tarball` )
                                     : ?Json sh ( json_obj_get pj `shasum` )
-                                    ?? tb { T t → { ( string_free tarball ) = tarball ( string_from ( json_str_data t ) ) } F → {} }
-                                    ?? sh { T sv → { ( string_free shasum ) = shasum ( string_from ( json_str_data sv ) ) } F → {} }
+                                    ?? tb { T t → { = tarball ( string_from ( json_str_data t ) ) } F → {} }
+                                    ?? sh { T sv → { = shasum ( string_from ( json_str_data sv ) ) } F → {} }
                                 } F → {} }
                         } F → {} }
-                    ( json_free root )
                 }
                 F _ → {}
             }
-            ( httpc_resp_free resp )
         }
         F _ → {
-            ( string_free key )
             ^ @ !String String { F ( string_from `could not reach ziglang.org (curl missing or offline). Install zig 0.16.0 manually and set $NURL_ZIG, or re-install the toolchain (Linux releases bundle zig).` ) }
         }
     }
     ? | == ( string_len tarball ) 0 == ( string_len shasum ) 0 {
         : String msg ( string_from `zig 0.16.0 has no build for platform ` )
         ( string_push_str msg ( string_data key ) )
-        ( string_free key ) ( string_free tarball ) ( string_free shasum )
         ^ @ !String String { F msg }
     } {}
-    ( string_free key )
 
     // 2. download the archive next to its final home.
     : String home ( wb_nurl_home )
     : !v IoErr hd ( dir_create_all ( string_data home ) )
     ?? hd { T _ → {} F _ → {
-            ( string_free home ) ( string_free tarball ) ( string_free shasum )
             ^ @ !String String { F ( string_from `cannot create $NURL_HOME` ) }
         } }
     : String arch_name ( path_basename ( string_data tarball ) )
@@ -344,21 +317,15 @@ $ `stdlib/ext/http_cli.nu`
     ?? dl {
         T resp → {
             ? != ( httpc_status resp ) 200 {
-                ( httpc_resp_free resp )
-                ( string_free home ) ( string_free tarball ) ( string_free shasum ) ( string_free arch_name ) ( string_free arch_path )
                 ^ @ !String String { F ( string_from `zig archive download failed (non-200)` ) }
             } {}
             : ( Vec u ) body ( httpc_body_bytes resp )
-            ( httpc_resp_free resp )
             : !v IoErr wr ( write_file_bytes ( string_data arch_path ) body )
-            ( vec_free [u] body )
             ?? wr { T _ → {} F _ → {
-                    ( string_free home ) ( string_free tarball ) ( string_free shasum ) ( string_free arch_name ) ( string_free arch_path )
                     ^ @ !String String { F ( string_from `could not write zig archive under $NURL_HOME` ) }
                 } }
         }
         F _ → {
-            ( string_free home ) ( string_free tarball ) ( string_free shasum ) ( string_free arch_name ) ( string_free arch_path )
             ^ @ !String String { F ( string_from `zig archive download failed (network)` ) }
         }
     }
@@ -368,24 +335,20 @@ $ `stdlib/ext/http_cli.nu`
     ?? hh {
         T got → {
             : b ok ( string_eq got shasum )
-            ? ok { ( string_free got ) } {
+            ? ok {} {
                 ( file_delete ( string_data arch_path ) )
                 : String msg ( string_from `zig archive sha256 MISMATCH (expected ` )
                 ( string_push_str msg ( string_data shasum ) )
                 ( string_push_str msg `, got ` )
                 ( string_push_str msg ( string_data got ) )
                 ( string_push_str msg `) — refusing to install` )
-                ( string_free got )
-                ( string_free home ) ( string_free tarball ) ( string_free shasum ) ( string_free arch_name ) ( string_free arch_path )
                 ^ @ !String String { F msg }
             }
         }
         F e → {
-            ( string_free home ) ( string_free tarball ) ( string_free shasum ) ( string_free arch_name ) ( string_free arch_path )
             ^ @ !String String { F e }
         }
     }
-    ( string_free shasum ) ( string_free tarball )
 
     // 4. unpack ("tar -xf" everywhere: GNU/bsdtar handle .tar.xz, Windows
     //    10+ bsdtar handles the .zip) and rename the versioned top-level
@@ -394,13 +357,10 @@ $ `stdlib/ext/http_cli.nu`
     ( vec_push [s] targs `-xf` ) ( vec_push [s] targs ( string_data arch_path ) )
     ( vec_push [s] targs `-C` ) ( vec_push [s] targs ( string_data home ) )
     : !Output ProcessErr tr ( process_run `tar` targs `` )
-    ( vec_free [s] targs )
     : ~ b tar_ok F
-    ?? tr { T o → { = tar_ok ( output_success o ) ( output_free o ) } F _ → {} }
+    ?? tr { T o → { = tar_ok ( output_success o ) } F _ → {} }
     ( file_delete ( string_data arch_path ) )
-    ( string_free arch_path )
     ? tar_ok {} {
-        ( string_free home ) ( string_free arch_name )
         ^ @ !String String { F ( string_from `could not unpack the zig archive (is 'tar' with xz support installed?)` ) }
     }
 
@@ -408,29 +368,22 @@ $ `stdlib/ext/http_cli.nu`
     : ~ String topdir ( string_from ( string_data arch_name ) )
     ? ( string_ends_with topdir `.tar.xz` ) {
         : String t ( string_substr topdir 0 - ( string_len topdir ) 7 )
-        ( string_free topdir ) = topdir t
+        = topdir t
     } {
         ? ( string_ends_with topdir `.zip` ) {
             : String t ( string_substr topdir 0 - ( string_len topdir ) 4 )
-            ( string_free topdir ) = topdir t
+            = topdir t
         } {}
     }
-    ( string_free arch_name )
     : String from ( path_join ( string_data home ) ( string_data topdir ) )
     : String dest ( path_join ( string_data home ) `zig` )
-    ( string_free topdir )
     : !v IoErr mv ( fs_rename ( string_data from ) ( string_data dest ) )
-    ( string_free from )
     ?? mv { T _ → {} F _ → {
-            ( string_free home ) ( string_free dest )
             ^ @ !String String { F ( string_from `could not move the unpacked zig into $NURL_HOME/zig` ) }
         } }
-    ( string_free home )
 
     : String zbin ( path_join ( string_data dest ) ? ( wb_is_windows ) `zig.exe` `zig` )
-    ( string_free dest )
     ? ( file_exists ( string_data zbin ) ) {} {
-        ( string_free zbin )
         ^ @ !String String { F ( string_from `zig unpacked but $NURL_HOME/zig/zig is missing` ) }
     }
     ( nurl_eprintln `wasmbuilder: zig installed.` )
@@ -444,7 +397,6 @@ $ `stdlib/ext/http_cli.nu`
     : String home ( wb_nurl_home )
     : String b ( path_join ( string_data home ) `build` )
     : String c ( path_join ( string_data b ) `wasmbuilder` )
-    ( string_free home ) ( string_free b )
     ^ c
 }
 
@@ -474,7 +426,6 @@ $ `stdlib/ext/http_cli.nu`
     ( vec_push [String] seen ( string_from name ) )
     : String p ( path_join dir name )
     : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
     ?? r {
         F _ → {}
         T src → {
@@ -504,14 +455,12 @@ $ `stdlib/ext/http_cli.nu`
                             ? >= q 0 {
                                 : String inc ( string_substr src st q )
                                 ( wb_tu_text dir ( string_data inc ) seen out )
-                                ( string_free inc )
                                 = pos + st q
                             } { = pos st }
                         } { = pos k }
                     }
                 }
             }
-            ( string_free src )
         }
     }
 }
@@ -527,30 +476,20 @@ $ `stdlib/ext/http_cli.nu`
         : String msg ( string_from `stdlib C source not found: ` )
         ( string_push_str msg ( string_data csrc ) )
         ( string_push_str msg ` (is the toolchain installed? set $NURL_STDLIB)` )
-        ( string_free csrc ) ( string_free sdir )
         ^ @ !String String { F msg }
     }
     : ( Vec String ) seen ( vec_new [String] )
     : String tu ( string_new )
     ( wb_tu_text ( string_data sdir ) src_c seen tu )
-    ( string_free sdir )
-    : i nseen ( vec_len [String] seen )
-    : ~ i fk 0
-    ~ < fk nseen { ?? ( vec_get [String] seen fk ) { T x → ( string_free x ) F _ → {} } = fk + fk 1 }
-    ( vec_free [String] seen )
     ? == ( string_len tu ) 0 {
-        ( string_free tu ) ( string_free csrc )
         ^ @ !String String { F ( string_from `could not read the stdlib C source` ) }
     } {}
     : String hex ( sha256_hex ( string_data tu ) )
-    ( string_free tu )
     : String tag ( string_substr hex 0 16 )
-    ( string_free hex )
 
     : String cdir ( wb_cache_dir )
     : !v IoErr mk ( dir_create_all ( string_data cdir ) )
     ?? mk { T _ → {} F _ → {
-            ( string_free cdir ) ( string_free csrc ) ( string_free tag )
             ^ @ !String String { F ( string_from `could not create the wasmbuilder cache dir under $NURL_HOME/build` ) }
         } }
 
@@ -558,17 +497,14 @@ $ `stdlib/ext/http_cli.nu`
     : ~ String oname ( string_from src_c )
     ? ( string_ends_with oname `.c` ) {
         : String t ( string_substr oname 0 - ( string_len oname ) 2 )
-        ( string_free oname ) = oname t
+        = oname t
     } {}
     ( string_push_str oname `-` )
     ( string_push_str oname ( string_data tag ) )
     ? > ( nurl_str_len feat ) 0 { ( string_push_char oname 45 ) ( string_push_str oname feat ) } {}
     ( string_push_str oname `.wasm.o` )
-    ( string_free tag )
     : String opath ( path_join ( string_data cdir ) ( string_data oname ) )
-    ( string_free cdir ) ( string_free oname )
     ? ( file_exists ( string_data opath ) ) {
-        ( string_free csrc )
         ^ @ !String String { T opath }
     } {}
 
@@ -593,23 +529,19 @@ $ `stdlib/ext/http_cli.nu`
     ( vec_push [s] args `-o` )
     ( vec_push [s] args ( string_data opath ) )
     : !Output ProcessErr r ( process_run ( string_data . cc cmd ) args `` )
-    ( vec_free [s] args )
     ?? r {
         T o → {
             ? ( output_success o ) {
-                ( output_free o ) ( string_free csrc )
                 ^ @ !String String { T opath }
             } {
                 : String msg ( string_from `wasm runtime compile failed for ` )
                 ( string_push_str msg ( string_data csrc ) )
                 ( string_push_str msg `:\n` )
                 ( string_push_str msg ( output_stderr o ) )
-                ( output_free o ) ( string_free csrc ) ( string_free opath )
                 ^ @ !String String { F msg }
             }
         }
         F _ → {
-            ( string_free csrc ) ( string_free opath )
             ^ @ !String String { F ( string_from `could not run the wasm compiler` ) }
         }
     }

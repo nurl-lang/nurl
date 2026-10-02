@@ -37,7 +37,6 @@ $ `../src/oauth.nu`
     ? == 1 ( nurl_str_eq path `/whoami` ) {
         : String key ( oidc_identity_key id )
         : HttpResponse r ( response_text 200 ( string_data key ) )
-        ( string_free key )
         ^ r
     } {}
     ? == 1 ( nurl_str_eq path `/me` ) {
@@ -48,7 +47,6 @@ $ `../src/oauth.nu`
         ( json_obj_set out `name` ( json_str_lit ( string_data . id name ) ) )
         ( json_obj_set out `expires_at` ( json_int . id expires_at ) )
         : HttpResponse r ( response_json 200 out )
-        ( json_free out )
         ^ r
     } {}
     ^ ( response_text 404 `not found\n` )
@@ -60,15 +58,13 @@ $ `../src/oauth.nu`
     ( args_opt ap `audience` 97 `AUD` `this API's audience, required in aud` )
     ( args_opt ap `scope` 111 `SCOPE` `require this scope on every request` )
     ( args_opt ap `port` 112 `N` `bind port on 127.0.0.1 (default 8080)` )
-    ? ( args_parse_argv ap ) {} { ( args_free ap ) ^ 2 }
+    ? ( args_parse_argv ap ) {} { ^ 2 }
     : String issuer ( args_value_or ap `issuer` `` )
     : String audience ( args_value_or ap `audience` `` )
     : String scope ( args_value_or ap `scope` `` )
     : String port_s ( args_value_or ap `port` `8080` )
-    ( args_free ap )
     : ~ i port 8080
     ?? ( string_to_int port_s ) { T x → { = port x } F _ → {} }
-    ( string_free port_s )
 
     ? == 0 ( string_len issuer ) {
         ( nurl_eprintln `protected-api: --issuer is required` )
@@ -82,7 +78,7 @@ $ `../src/oauth.nu`
     ?? ( oidc_provider_discover ( string_data issuer ) ) {
         F e → { ( nurl_eprintln ( oauth_err_name e ) ) }
         T p → {
-            : *OidcPolicy pol ( oidc_policy_new ( string_data issuer ) ( string_data audience ) )
+            : OidcPolicy pol ( oidc_policy_new ( string_data issuer ) ( string_data audience ) )
             ?? ( tcp_listen `127.0.0.1` port ) {
                 F _ → { ( nurl_eprintln `protected-api: cannot bind` ) }
                 T l → {
@@ -97,10 +93,7 @@ $ `../src/oauth.nu`
                     }
                 }
             }
-            ( oidc_policy_free pol )
-            ( oidc_provider_free p )
         }
     }
-    ( string_free issuer ) ( string_free audience ) ( string_free scope )
     ^ rc
 }

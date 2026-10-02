@@ -85,7 +85,6 @@ $ `stdlib/core/vec.nu`
     // to another call is owned by nothing and leaks (docs/MEMORY.md §1).
     : String src ( string_from raw )
     : String up ( string_to_upper src )
-    ( string_free src )
     : s u ( string_data up )
     : ~ i d - 0 1
     ? != 0 ( nurl_str_eq u `TD` ) { = d MMD_DIR_TD } {}
@@ -93,7 +92,6 @@ $ `stdlib/core/vec.nu`
     ? != 0 ( nurl_str_eq u `LR` ) { = d MMD_DIR_LR } {}
     ? != 0 ( nurl_str_eq u `BT` ) { = d MMD_DIR_BT } {}
     ? != 0 ( nurl_str_eq u `RL` ) { = d MMD_DIR_RL } {}
-    ( string_free up )
     ^ d
 }
 
@@ -134,44 +132,6 @@ $ `stdlib/core/vec.nu`
         ( vec_new [MmdEdge] )
         ( vec_new [String] )
     }
-}
-
-@ mmd_graph_free sink MmdGraph g → v {
-    : i nn ( vec_len [MmdNode] . g nodes )
-    : ~ i i 0
-    ~ < i nn {
-        ?? ( vec_get [MmdNode] . g nodes i ) {
-            T n → {
-                ( string_free . n id )
-                ( string_free . n label )
-            }
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ( vec_free [MmdNode] . g nodes )
-
-    : i ne ( vec_len [MmdEdge] . g edges )
-    : ~ i k 0
-    ~ < k ne {
-        ?? ( vec_get [MmdEdge] . g edges k ) {
-            T e → ( string_free . e label )
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [MmdEdge] . g edges )
-
-    : i nw ( vec_len [String] . g warnings )
-    : ~ i w 0
-    ~ < w nw {
-        ?? ( vec_get [String] . g warnings w ) {
-            T s → ( string_free s )
-            F _ → {}
-        }
-        = w + w 1
-    }
-    ( vec_free [String] . g warnings )
 }
 
 @ mmd_node_count MmdGraph g → i { ^ ( vec_len [MmdNode] . g nodes ) }
@@ -217,7 +177,7 @@ $ `stdlib/core/vec.nu`
             : MmdNode nd @ MmdNode { . old id label shape T }
             ( vec_set [MmdNode] . g nodes idx nd )
         }
-        F _ → ( string_free label )
+        F _ → {}
     }
 }
 

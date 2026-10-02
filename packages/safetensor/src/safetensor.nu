@@ -18,13 +18,20 @@
 // are addressed straight out of the mapping, so inspecting a multi-GB model
 // costs no RAM.
 //
-//   ( st_open path )                → !*St String
+//   ( st_open path )                → !St String
+//   ( st_parse_bytes data )         → !St String   (keeps `data`)
 //   ( st_n_tensors s )              → i
+//   ( st_tensors s )                → ( Vec StTensor )   (borrowed)
 //   ( st_find_tensor s name )       → i        (-1 = absent)
 //   ( st_tensor_ptr s t )           → *u       (into the mapping)
 //   ( st_dequant s idx )            → !( Vec u ) String   — f32 bytes
 //   ( st_dequant_range s idx first count ) → !( Vec u ) String
-//   ( st_close s )                  → v
+//   ( st_close s )                  → v        early release (optional)
+//   ( st_none ) / ( st_is_open s )  → St / b   an empty slot, and the test for one
+//
+// An St is a handle: every copy is the same open file, and the last owner
+// unmaps it (or lets go of the buffer it was parsed from). Nothing here is
+// released by hand.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -33,6 +40,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── dtypes ──────────────────────────────────────────────────────────
 // Our own codes; the file spells them as strings.
@@ -107,26 +115,49 @@ $ `stdlib/ext/json.nu`
     i nbytes
 }
 
-: St {
+: StImpl {
     * u map
     i map_size
     b from_mmap
-    ( Vec u ) buf
+    ( Vec u ) buf  // the bytes `map` points into, when they are not a mapping
     ( Vec StTensor ) tensors
     i data_off  // absolute offset of the tensor-data region
     i data_size
 }
 
-@ __st_errs s msg → !*St String {
-    ^ @ !*St String { F ( string_from msg ) }
+// The mapping is the raw resource: its last owner unmaps it, as st_close
+// did. The tensor table and the buffer go with the drop glue.
+% Drop StImpl {
+    @ drop StImpl s → v {
+        ? . s from_mmap { : i32 _u ( munmap . s map . s map_size ) } {}
+    }
+}
+
+// An St is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same open file, and the last owner releases it.
+: St { s ctl }
+
+@ St_share St h → St { ^ @ St { # s ( rcbox_share # i . h ctl ) } }
+
+@ St_drop sink St h → v {
+    ( mem_forget h )
+    ( rcbox_release [StImpl] # i . h ctl )
+}
+
+@ __St_ptr St h → *StImpl { ^ ( rcbox_ptr [StImpl] # i . h ctl ) }
+
+// An St that holds no file — for a slot that may be empty (a model whose
+// checkpoint is some other format). st_is_open tells the two apart.
+@ st_none → St { ^ @ St { # s 0 } }
+
+@ st_is_open St s → b { ^ != 0 # i . s ctl }
+
+@ __st_errs s msg → !St String {
+    ^ @ !St String { F ( string_from msg ) }
 }
 
 @ __st_err_vec s msg → !( Vec u ) String {
     ^ @ !( Vec u ) String { F ( string_from msg ) }
-}
-
-@ __st_free_tensors ( Vec StTensor ) v → v {
-    ( vec_free_with [StTensor] v \ StTensor t → v { ( string_free . t name ) } )
 }
 
 // ── parse ───────────────────────────────────────────────────────────
@@ -175,7 +206,11 @@ $ `stdlib/ext/json.nu`
     ^ n
 }
 
-@ __st_parse * u p i n → !*St String {
+// Parse the container at p[0, n). `keep` is what p points into when that is
+// not a mapping (the St holds it for as long as the tensors are read);
+// st_open hands in an empty Vec for a mapping, which it owns until this
+// succeeds.
+@ __st_parse * u p i n sink ( Vec u ) keep → !St String {
     ? < n 8 { ^ ( __st_errs `safetensor: file too small (< 8 bytes)` ) } {}
     : i hlen ( __st_hdr_len p )
     // hlen is attacker-chosen: it must be positive, and 8 + hlen must fit in
@@ -197,7 +232,6 @@ $ `stdlib/ext/json.nu`
         = k + k 1
     }
     : !Json JsonError jr ( json_parse ( string_data hdr ) )
-    ( string_free hdr )
     : ~ Json root ( json_null )
     ?? jr {
         T j → { = root j }
@@ -205,23 +239,16 @@ $ `stdlib/ext/json.nu`
             : String m ( json_format_error e )
             : String msg ( string_from `safetensor: header is not valid JSON: ` )
             ( string_push_str msg ( string_data m ) )
-            ( string_free m )
-            ^ @ !*St String { F msg }
+            ^ @ !St String { F msg }
         }
     }
     ? ( json_is_obj root ) {} {
-        ( json_free root )
         ^ ( __st_errs `safetensor: header JSON is not an object` )
     }
 
-    : *St s # *St ( nurl_alloc Z St )
-    = . s tensors ( vec_new [StTensor] )
-    = . s data_off data_off
-    = . s data_size data_size
-    = . s map p
-    = . s map_size n
-    = . s from_mmap F
-    = . s buf ( vec_new [u] )
+    // The handle first: a rejected header lets go of it (and of `keep`).
+    : St h @ St { # s ( rcbox_new [StImpl] @ StImpl { p n F keep ( vec_new [StTensor] ) data_off data_size } ) }
+    : *StImpl s ( __St_ptr h )
 
     : ( Vec String ) keys ( json_obj_keys root )
     : ~ b ok T
@@ -237,7 +264,6 @@ $ `stdlib/ext/json.nu`
                         T e → {
                             ? ( json_is_obj e ) {} {
                                 = ok F
-                                ( string_free err )
                                 = err ( string_from `safetensor: tensor entry is not an object` )
                             }
                             ? ok {
@@ -248,7 +274,6 @@ $ `stdlib/ext/json.nu`
                                 }
                                 ? < dt 0 {
                                     = ok F
-                                    ( string_free err )
                                     = err ( string_from `safetensor: unknown or missing dtype for tensor '` )
                                     ( string_push_str err key )
                                     ( string_push_str err `'` )
@@ -263,14 +288,12 @@ $ `stdlib/ext/json.nu`
                                         T sh → {
                                             ? ( json_is_arr sh ) {} {
                                                 = ok F
-                                                ( string_free err )
                                                 = err ( string_from `safetensor: shape is not an array` )
                                             }
                                             ? ok {
                                                 = nd ( json_arr_len sh )
                                                 ? > nd 4 {
                                                     = ok F
-                                                    ( string_free err )
                                                     = err ( string_from `safetensor: more than 4 dimensions` )
                                                 } {}
                                                 ? ok {
@@ -280,7 +303,6 @@ $ `stdlib/ext/json.nu`
                                                     ? > nd 3 { = d3 ( __st_dim sh 3 ) } {}
                                                     ? | | | < d0 0 < d1 0 < d2 0 < d3 0 {
                                                         = ok F
-                                                        ( string_free err )
                                                         = err ( string_from `safetensor: shape dimension is not a non-negative integer` )
                                                     } {}
                                                 } {}
@@ -288,7 +310,6 @@ $ `stdlib/ext/json.nu`
                                         }
                                         F → {
                                             = ok F
-                                            ( string_free err )
                                             = err ( string_from `safetensor: tensor has no shape` )
                                         }
                                     }
@@ -303,13 +324,11 @@ $ `stdlib/ext/json.nu`
                                                 = b ( __st_dim off 1 )
                                             } {
                                                 = ok F
-                                                ( string_free err )
                                                 = err ( string_from `safetensor: data_offsets is not a 2-element array` )
                                             }
                                         }
                                         F → {
                                             = ok F
-                                            ( string_free err )
                                             = err ( string_from `safetensor: tensor has no data_offsets` )
                                         }
                                     }
@@ -329,7 +348,6 @@ $ `stdlib/ext/json.nu`
                                     // check that turns a lying header into a clean error.
                                     ? | | | | | < ne 0 < nb 0 < a 0 < b a > b data_size != - b a nb {
                                         = ok F
-                                        ( string_free err )
                                         = err ( string_from `safetensor: tensor '` )
                                         ( string_push_str err key )
                                         ( string_push_str err `' has data_offsets outside the file or the wrong extent for its dtype/shape` )
@@ -348,29 +366,21 @@ $ `stdlib/ext/json.nu`
         }
         = ki + ki 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-    ( json_free root )
-    ? ok {} {
-        ( __st_free_tensors . s tensors )
-        ( vec_free [u] . s buf )
-        ( nurl_free # s s )
-        ^ @ !*St String { F err }
-    }
-    ( string_free err )
-    ^ @ !*St String { T s }
+    ? ok {} { ^ @ !St String { F err } }
+    ^ @ !St String { T h }
 }
 
 // ── open / close ────────────────────────────────────────────────────
 
 // mmap-backed where the platform has it (POSIX), a whole-file read where it
 // does not (wasm, win32) — correct everywhere, lazy where it matters.
-@ st_open s path → !*St String {
+@ st_open s path → !St String {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
         ? < # i fd 0 {
             : String m ( string_from `safetensor: cannot open ` )
             ( string_push_str m path )
-            ^ @ !*St String { F m }
+            ^ @ !St String { F m }
         } {}
         : i sz ( lseek fd 0 # i32 2 )
         ? < sz 8 {
@@ -380,67 +390,61 @@ $ `stdlib/ext/json.nu`
         : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 ( posix_const `MAP_PRIVATE` ) fd 0 )
         : i _c ( close # i fd )
         ? == # i m -1 { ^ ( __st_errs `safetensor: mmap failed` ) } {}
-        : !*St String r ( __st_parse m sz )
+        : !St String r ( __st_parse m sz ( vec_new [u] ) )
         ?? r {
-            T s → {
+            T st → {
+                // from here on the St owns the mapping
+                : *StImpl s ( __St_ptr st )
                 = . s from_mmap T
-                ^ @ !*St String { T s }
+                ^ @ !St String { T st }
             }
             F e → {
                 : i32 _u ( munmap m sz )
-                ^ @ !*St String { F e }
+                ^ @ !St String { F e }
             }
         }
     } {
-        : !( Vec u ) IoErr r ( read_file_bytes path )
-        ?? r {
-            T data → {
-                : !*St String pr ( __st_parse ( vec_data [u] data ) ( vec_len [u] data ) )
-                ?? pr {
-                    T s → {
-                        // adopt the file buffer (St is manually managed — no
-                        // auto-drop reaches its fields)
-                        ( vec_free [u] . s buf )
-                        = . s buf data
-                        ^ @ !*St String { T s }
-                    }
-                    F e → {
-                        ( vec_free [u] data )
-                        ^ @ !*St String { F e }
-                    }
-                }
-            }
+        // no mmap: the St keeps the file's bytes its tensors point into
+        ?? ( read_file_bytes path ) {
+            T data → { ^ ( __st_parse ( vec_data [u] data ) ( vec_len [u] data ) data ) }
             F _ → {
                 : String m ( string_from `safetensor: cannot read ` )
                 ( string_push_str m path )
-                ^ @ !*St String { F m }
+                ^ @ !St String { F m }
             }
         }
     }
 }
 
-// Parse an in-memory image. BORROWS `data` — the caller keeps the vec alive
-// until st_close and frees it afterwards.
-@ st_parse_bytes ( Vec u ) data → !*St String {
-    ^ ( __st_parse ( vec_data [u] data ) ( vec_len [u] data ) )
+// Parse an in-memory image. The St keeps `data` (its tensors point into it).
+@ st_parse_bytes sink ( Vec u ) data → !St String {
+    ^ ( __st_parse ( vec_data [u] data ) ( vec_len [u] data ) data )
 }
 
-@ st_close * St s → v {
-    ( __st_free_tensors . s tensors )
-    ? . s from_mmap {
-        : i32 _u ( munmap . s map . s map_size )
-    } {}
-    ( vec_free [u] . s buf )
-    ( nurl_free # s s )
-}
+// Let go of `s` now rather than at the end of its owner's scope; the last
+// owner unmaps the file.
+@ st_close sink St s → v {}
 
 // ── accessors ───────────────────────────────────────────────────────
 
-@ st_n_tensors * St s → i { ^ ( vec_len [StTensor] . s tensors ) }
+@ st_n_tensors St s__h → i {
+    : *StImpl s ( __St_ptr s__h )
+    ^ ( vec_len [StTensor] . s tensors )
+}
 
-@ st_data_size * St s → i { ^ . s data_size }
+// The tensor table (borrowed: valid while the St is).
+@ st_tensors St s__h → ( Vec StTensor ) {
+    : *StImpl s ( __St_ptr s__h )
+    ^ . s tensors
+}
 
-@ st_find_tensor * St s s name → i {
+@ st_data_size St s__h → i {
+    : *StImpl s ( __St_ptr s__h )
+    ^ . s data_size
+}
+
+@ st_find_tensor St s__h s name → i {
+    : *StImpl s ( __St_ptr s__h )
     : ~ i k 0
     : i n ( vec_len [StTensor] . s tensors )
     ~ < k n {
@@ -453,9 +457,10 @@ $ `stdlib/ext/json.nu`
     ^ -1
 }
 
-// The tensor's bytes, straight out of the mapping. Borrowed: valid until
-// st_close.
-@ st_tensor_ptr * St s StTensor t → *u {
+// The tensor's bytes, straight out of the mapping. Borrowed: valid while
+// the St (any copy of it) is.
+@ st_tensor_ptr St s__h StTensor t → *u {
+    : *StImpl s ( __St_ptr s__h )
     ^ # *u + # i . s map . t offset
 }
 
@@ -518,7 +523,8 @@ $ `stdlib/ext/json.nu`
 // Elements [first, first+count) of tensor `idx`, as f32 BYTES (4 per
 // element) — the same shape of result gguf_dequant returns, so a caller can
 // upload it to the device without knowing which container it came from.
-@ st_dequant_range * St s i idx i first i count → !( Vec u ) String {
+@ st_dequant_range St s__h i idx i first i count → !( Vec u ) String {
+    : *StImpl s ( __St_ptr s__h )
     ? | < idx 0 >= idx ( vec_len [StTensor] . s tensors ) {
         ^ ( __st_err_vec `safetensor: tensor index out of range` )
     } {}
@@ -560,7 +566,8 @@ $ `stdlib/ext/json.nu`
     ^ @ !( Vec u ) String { T out }
 }
 
-@ st_dequant * St s i idx → !( Vec u ) String {
+@ st_dequant St s__h i idx → !( Vec u ) String {
+    : *StImpl s ( __St_ptr s__h )
     ? | < idx 0 >= idx ( vec_len [StTensor] . s tensors ) {
         ^ ( __st_err_vec `safetensor: tensor index out of range` )
     } {}
@@ -569,5 +576,5 @@ $ `stdlib/ext/json.nu`
         T t → { = ne . t nelems }
         F → {}
     }
-    ^ ( st_dequant_range s idx 0 ne )
+    ^ ( st_dequant_range s__h idx 0 ne )
 }

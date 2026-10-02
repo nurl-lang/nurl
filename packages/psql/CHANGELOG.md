@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `PgConn` is a handle instead of a `*PgConn` pointer: every copy is the
+  same connection, and the last owner does what `pg_close` did — a
+  best-effort Terminate (once the startup message went out), then closes
+  the TLS session or the socket. `pg_connect` → `!PgConn PgErr`; a failed
+  connect or login releases its connection with the error. `pg_query`
+  takes the handle.
+- New lent accessors replace reaching into the struct: `pg_conn_lasterr`,
+  `pg_conn_tls`, `pg_conn_server_version`, `pg_conn_db_name`,
+  `pg_conn_user_name`, `pg_conn_host_name`.
+- `pg_close` and `pg_result_free` are optional early releases; every
+  redundant release in the library and the CLI is gone.
+- Fixed: each server ErrorResponse leaked the previous `lasterr` text.
+
 ## 0.3.2
 
 `pg_result_free` now takes a **`sink`** parameter.

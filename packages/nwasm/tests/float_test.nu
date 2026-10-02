@@ -26,23 +26,21 @@ $ `src/interp.nu`
     : ~ i r -999999
     ?? dr {
         T bytes → {
-            : *Module m ( module_decode bytes )
-            ? . m ok {
+            : Module m ( module_decode bytes )
+            ? ( module_ok m ) {
                 : i fidx ( module_export_func m export )
                 ? >= fidx 0 {
-                    : *Interp it ( interp_new m )
+                    : Interp it ( interp_new m )
                     : i na ( vec_len [i] args )
                     : ~ i k 0
-                    ~ < k na { ( vec_push [i] . it vs ?? ( vec_get [i] args k ) { T x → x F → 0 } ) = k + k 1 }
+                    ~ < k na { ( vec_push [i] ( interp_stack it ) ?? ( vec_get [i] args k ) { T x → x F → 0 } ) = k + k 1 }
                     ( exec_func it fidx )
                     ? ! ( interp_trapped it ) {
-                        : i n ( vec_len [i] . it vs )
-                        ? > n 0 { = r ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 } } {}
+                        : i n ( vec_len [i] ( interp_stack it ) )
+                        ? > n 0 { = r ?? ( vec_get [i] ( interp_stack it ) - n 1 ) { T x → x F → 0 } } {}
                     } {}
-                    ( interp_free it )
                 } {}
             } {}
-            ( module_free m )
         }
         F → {}
     }
@@ -50,11 +48,11 @@ $ `src/interp.nu`
 }
 
 @ run1 s hex s export i x → i {
-    : ( Vec i ) a ( vec_new [i] ) ( vec_push [i] a x ) : i r ( ev hex export a ) ( vec_free [i] a ) ^ r
+    : ( Vec i ) a ( vec_new [i] ) ( vec_push [i] a x ) : i r ( ev hex export a ) ^ r
 }
 
 @ run2 s hex s export i x i y → i {
-    : ( Vec i ) a ( vec_new [i] ) ( vec_push [i] a x ) ( vec_push [i] a y ) : i r ( ev hex export a ) ( vec_free [i] a ) ^ r
+    : ( Vec i ) a ( vec_new [i] ) ( vec_push [i] a x ) ( vec_push [i] a y ) : i r ( ev hex export a ) ^ r
 }
 
 @ pi s label i a i b → v {
@@ -66,9 +64,9 @@ $ `src/interp.nu`
     // Mirror the CLI's engine-mode switches so the suite exercises the
     // same tier the user runs: JIT on by default, NURL_NWASM_JIT=0 keeps
     // the pure interpreter, PIN=0 unpins, GUARD=0 keeps bounds checks.
-    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} ( string_free jv ) } F → { ( interp_enable_jit ) } }
-    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} ( string_free pv ) } F → {} }
-    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} ( string_free gv ) } F → {} }
+    ?? ( env_get `NURL_NWASM_JIT` ) { T jv → { ? == 0 ( nurl_str_eq ( string_data jv ) `0` ) { ( interp_enable_jit ) } {} } F → { ( interp_enable_jit ) } }
+    ?? ( env_get `NURL_NWASM_PIN` ) { T pv → { ? != 0 ( nurl_str_eq ( string_data pv ) `0` ) { ( interp_disable_pin ) } {} } F → {} }
+    ?? ( env_get `NURL_NWASM_GUARD` ) { T gv → { ? != 0 ( nurl_str_eq ( string_data gv ) `0` ) { ( interp_disable_guard ) } {} } F → {} }
     // bit patterns: 1.5, 2.25, 3.75, 3.375, 2.0, sqrt2, 7.9, 7.0
     // f64.add(1.5, 2.25) → 3.75
     ( pi `fadd 1.5+2.25:  ` ( run2 ( wasm_fadd ) `fadd` 4609434218613702656 4612248968380809216 ) 4615626668101337088 )

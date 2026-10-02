@@ -33,9 +33,8 @@ Hello there
   against Hugging Face `tokenizers` on a multilingual corpus:
 
   ```
-  ( uni_load `tokenizer.json` )        → !*Unigram String
+  ( uni_load `tokenizer.json` )        → !Unigram String
   ( uni_encode u `text…` T ids )       → ids incl. <s> … </s>
-  ( uni_free u )
   ```
 
 **Special tokens are parsed inline.** A chat template writes
@@ -43,10 +42,14 @@ Hello there
 has to come back as its own single id. Tokenised as ordinary pieces they
 shred into a dozen tokens and the model answers a question nobody asked.
 
+**Nothing is released by hand.** A `Tok` (every engine but Unigram) and a
+`Unigram` are handles: every copy is the same tokenizer, and the last
+owner releases it. `tok_free` / `uni_free` are optional early releases.
+
 ## Loader-agnostic by construction
 
 `tok_build` takes the **parts** — pieces, scores, token types, merge
-rules — so a vocabulary can arrive from anywhere without the engine
+rules; the vectors become the tokenizer's — so a vocabulary can arrive from anywhere without the engine
 learning about file formats:
 
 | where it comes from | who loads it |

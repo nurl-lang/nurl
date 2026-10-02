@@ -51,8 +51,9 @@
 //
 // Memory: each peer's state is a PeerState handle in the node's list; it
 // owns its pending Handshake and its NoiseSession (both handles) and its
-// reassembly, and goes with the list. The SecureNode itself is closed by
-// securedgram_close (it owns the socket).
+// reassembly, and goes with the list. A SecureNode is a handle too:
+// securedgram_close closes its socket at a point of the caller's choosing,
+// and its last owner releases the rest (closing the socket if nobody did).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -103,7 +104,7 @@ $ `stdlib/core/rcbox.nu`
     NoiseSession session  // once established, else a null handle
     i established
     i tx_msg_id  // last chunked-message id sent to this peer
-    ( Vec s ) partials  // *Partial — messages mid-reassembly, oldest first
+    ( Vec Partial ) partials  // messages mid-reassembly, oldest first
 }
 
 // A PeerState is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -119,21 +120,19 @@ $ `stdlib/core/rcbox.nu`
 
 @ __PeerState_ptr PeerState h → *PeerStateImpl { ^ ( rcbox_ptr [PeerStateImpl] # i . h ctl ) }
 
-// One message mid-reassembly. `chunks` holds a *ChunkBox per index
-// (0 = not yet arrived) so out-of-order arrival needs no sorting and a
-// duplicate is a filled slot, not a corruption. The box exists because
-// a Vec handle is a by-value struct: parking one in a `( Vec s )` slot
-// means boxing it, not casting it.
-: ChunkBox {
-    ( Vec u ) v
-}
-
+// One message mid-reassembly. Every chunk but the last is exactly
+// securedgram_chunk_bytes long, so chunk `idx` has its place at
+// idx * chunk_bytes in `data` (sized for the whole message on its first
+// chunk): out-of-order arrival needs no sorting and no per-chunk buffer,
+// and `have` marks the slots filled, so a duplicate is a filled slot,
+// not a corruption.
 : Partial {
     i msg_id
     i cnt
     i got
     i bytes
-    ( Vec s ) chunks
+    ( Vec u ) data
+    ( Vec u ) have  // one byte per chunk: 1 once it arrived
 }
 
 // The plaintext bytes one chunk carries. 1152 + the 9-byte inner
@@ -152,35 +151,21 @@ $ `stdlib/core/rcbox.nu`
 
 @ __sdg_max_partials → i { ^ 4 }
 
-@ __partial_free sink * Partial q → v {
-    : i n ( vec_len [s] . q chunks )
-    : ~ i k 0
-    ~ < k n {
-        : s cp ?? ( vec_get [s] . q chunks k ) { T x → x F → # s 0 }
-        ? != # i cp 0 {
-            : *ChunkBox cbx # *ChunkBox cp
-            ( vec_free [u] . cbx v )
-            ( nurl_free cp )
-        } {}
-        = k + k 1
-    }
-    ( vec_free [s] . q chunks )
-    ( nurl_free # s q )
+// Partial `k` of a peer's list, in place.
+@ __partial_at ( Vec Partial ) l i k → *Partial {
+    ^ # *Partial + # i ( vec_data [Partial] l ) * k Z Partial
 }
 
-// The partial messages are raw blocks the Vec only points at: releasing
-// them is the peer's own drop, run by its last owner (the key, the endpoint,
-// the handshake and the session go after it).
-% Drop PeerStateImpl {
-    @ drop PeerStateImpl p → v {
-        : i qn ( vec_len [s] . p partials )
-        : ~ i qk 0
-        ~ < qk qn {
-            : s qp ?? ( vec_get [s] . p partials qk ) { T x → x F → # s 0 }
-            ? != # i qp 0 { ( __partial_free # *Partial qp ) } {}
-            = qk + qk 1
-        }
-    }
+// A peer's handshake and session are replaced through `inout`, so the
+// one replaced is released (a store through a raw pointer drops nothing).
+@ __peer_set_hs inout PeerStateImpl p sink Handshake hs → v { = . p hs hs }
+
+// Install the session a handshake produced (a re-handshake's predecessor
+// goes); `done_hs` also lets go of the initiator's finished handshake.
+@ __peer_establish inout PeerStateImpl p sink NoiseSession sess b done_hs → v {
+    = . p session sess
+    = . p established 1
+    ? done_hs { = . p hs @ Handshake { # s 0 } } {}
 }
 
 // A peer at `host:port` with no handshake or session yet.
@@ -194,12 +179,13 @@ $ `stdlib/core/rcbox.nu`
     = . p remote_index 0
     = . p established 0
     = . p tx_msg_id 0
-    = . p partials ( vec_new [s] )
+    = . p partials ( vec_new [Partial] )
     ^ @ PeerState { # s p__box }
 }
 
-: SecureNode {
+: SecureNodeImpl {
     UdpSocket sock
+    i open  // 1 until securedgram_close closes the socket
     ( Vec u ) s_priv
     ( Vec u ) s_pub
     ( Vec u ) psk
@@ -207,30 +193,46 @@ $ `stdlib/core/rcbox.nu`
     i next_index
 }
 
-@ securedgram_open s host i port CryptoKeypair static ( Vec u ) psk → !*SecureNode NetErr {
+// A SecureNode is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: SecureNode { s ctl }
+
+@ SecureNode_share SecureNode h → SecureNode { ^ @ SecureNode { # s ( rcbox_share # i . h ctl ) } }
+
+@ SecureNode_drop sink SecureNode h → v {
+    ( mem_forget h )
+    ( rcbox_release [SecureNodeImpl] # i . h ctl )
+}
+
+@ __SecureNode_ptr SecureNode h → *SecureNodeImpl { ^ ( rcbox_ptr [SecureNodeImpl] # i . h ctl ) }
+
+// The socket is the one raw part: a node nobody closed is closed by its
+// last owner (the keys and the peers go with the fields after it).
+% Drop SecureNodeImpl {
+    @ drop SecureNodeImpl n → v {
+        ? != . n open 0 { ( udp_close . n sock ) } {}
+    }
+}
+
+@ securedgram_open s host i port CryptoKeypair static ( Vec u ) psk → !SecureNode NetErr {
     : !UdpSocket NetErr sr ( udp_bind host port )
     ^ ?? sr {
         T sock → {
             ( udp_set_timeout sock 500 )
-            : *SecureNode n # *SecureNode ( nurl_alloc Z SecureNode )
-            = . n sock sock
-            = . n s_priv ( __cpy . static sk )
-            = . n s_pub ( __cpy . static pk )
-            = . n psk ( __cpy psk )
-            = . n peers ( vec_new [PeerState] )
-            = . n next_index 1
-            @ !*SecureNode NetErr { T n }
+            @ !SecureNode NetErr { T @ SecureNode { # s ( rcbox_new [SecureNodeImpl] @ SecureNodeImpl {
+                        sock 1 ( __cpy . static sk ) ( __cpy . static pk ) ( __cpy psk ) ( vec_new [PeerState] ) 1 } ) } }
         }
-        F e → @ !*SecureNode NetErr { F # NetErr e }
+        F e → @ !SecureNode NetErr { F # NetErr e }
     }
 }
 
-@ __node_kp * SecureNode n → CryptoKeypair { ^ @ CryptoKeypair { . n s_priv . n s_pub } }
+@ __node_kp * SecureNodeImpl n → CryptoKeypair { ^ @ CryptoKeypair { . n s_priv . n s_pub } }
 
 // Re-bind the local socket (network change / roaming). Sessions + peer
 // state survive; the peer learns our new source on the next datagram via
 // its own roaming rule.
-@ securedgram_rebind * SecureNode n s host i port → !v NetErr {
+@ securedgram_rebind SecureNode n__h s host i port → !v NetErr {
+    : *SecureNodeImpl n ( __SecureNode_ptr n__h )
     : !UdpSocket NetErr sr ( udp_bind host port )
     ^ ?? sr {
         T sock → {
@@ -244,15 +246,19 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Local endpoint ("host:port") — for telling a peer where to reach us.
-@ securedgram_local_addr * SecureNode n → String { ^ ( udp_local_addr . n sock ) }
+@ securedgram_local_addr SecureNode n__h → String {
+    : *SecureNodeImpl n ( __SecureNode_ptr n__h )
+    ^ ( udp_local_addr . n sock )
+}
 
-@ securedgram_add_peer * SecureNode n ( Vec u ) pubkey s host i port → v {
+@ securedgram_add_peer SecureNode n__h ( Vec u ) pubkey s host i port → v {
+    : *SecureNodeImpl n ( __SecureNode_ptr n__h )
     ( vec_push [PeerState] . n peers ( __peer_new pubkey host port . n next_index ) )
     = . n next_index + . n next_index 1
 }
 
 // The peer with this pubkey (its state, borrowed from the node's list), or 0.
-@ __find_pk * SecureNode n ( Vec u ) pk → s {
+@ __find_pk * SecureNodeImpl n ( Vec u ) pk → s {
     : i cnt ( vec_len [PeerState] . n peers )
     : ~ s found # s 0
     : ~ i k 0
@@ -270,7 +276,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The peer that assigned local index `idx` (borrowed), or 0.
-@ __find_idx * SecureNode n i idx → s {
+@ __find_idx * SecureNodeImpl n i idx → s {
     : i cnt ( vec_len [PeerState] . n peers )
     : ~ s found # s 0
     : ~ i k 0
@@ -289,7 +295,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Update a peer's endpoint from a "host:port" source string (last ':' is
 // the port separator — fine for IPv4 and "[v6]:port"). The roaming rule.
-@ __roam * PeerStateImpl p String src → v {
+@ __roam inout PeerStateImpl p String src → v {
     : s cs ( string_data src )
     : i n ( string_len src )
     : *u sp # *u cs
@@ -307,54 +313,51 @@ $ `stdlib/core/rcbox.nu`
         ? & >= c 48 <= c 57 { = port + * port 10 - c 48 } {}
         = d + d 1
     }
-    ( string_free . p ehost )
     = . p ehost host
     = . p eport port
 }
 
-@ __send_pkt * SecureNode n * PeerStateImpl p ( Vec u ) pkt → v {
+@ __send_pkt * SecureNodeImpl n inout PeerStateImpl p ( Vec u ) pkt → v {
     : !i NetErr r ( udp_send_to . n sock pkt ( string_data . p ehost ) . p eport )
     ?? r { T _ → {} F _ → {} }
 }
 
 // Initiate a handshake to a known peer (send msg1).
-@ securedgram_connect * SecureNode n ( Vec u ) peer_pk → !v NetErr {
+@ securedgram_connect SecureNode n__h ( Vec u ) peer_pk → !v NetErr {
+    : *SecureNodeImpl n ( __SecureNode_ptr n__h )
     : s pp ( __find_pk n peer_pk )
     ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
-    : *PeerStateImpl p # *PeerStateImpl pp
+    : ~ * PeerStateImpl p # *PeerStateImpl pp
     : Handshake hs ( noise_init T ( __node_kp n ) . p pubkey . n psk )
     : ( Vec u ) msg1 ( noise_write_msg1 hs )
-    // A field store through the state pointer drops nothing: let go of a
-    // handshake still pending from an earlier connect first.
-    ( noise_free . p hs )
-    = . p hs hs
+    // replaces (and so releases) a handshake still pending from an
+    // earlier connect
+    ( __peer_set_hs . p 0 hs )
     : ( Vec u ) pkt ( vec_new [u] )
     ( vec_push [u] pkt # u 1 )
     ( bytes_push_u32_be pkt # u32 . p local_index )
     ( vec_extend [u] pkt msg1 )
-    ( vec_free [u] msg1 )
-    ( __send_pkt n p pkt )
+    ( __send_pkt n . p 0 pkt )
     ^ @ !v NetErr { T 0 }
 }
 
 // Seal one inner frame and put it on the wire. BORROWS `inner`.
-@ __send_inner * SecureNode n * PeerStateImpl p ( Vec u ) inner → v {
+@ __send_inner * SecureNodeImpl n inout PeerStateImpl p ( Vec u ) inner → v {
     : ( Vec u ) ad ( vec_new [u] )
     : Sealed sealed ( session_seal . p session ad inner )
-    ( vec_free [u] ad )
     : ( Vec u ) pkt ( vec_new [u] )
     ( vec_push [u] pkt # u 4 )
     ( bytes_push_u32_be pkt # u32 . p remote_index )
     ( bytes_push_u64_be pkt # u64 . sealed counter )
     ( vec_extend [u] pkt . sealed ct )
-    ( sealed_free sealed )
     ( __send_pkt n p pkt )
 }
 
-@ securedgram_send * SecureNode n ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
+@ securedgram_send SecureNode n__h ( Vec u ) peer_pk ( Vec u ) data → !v NetErr {
+    : *SecureNodeImpl n ( __SecureNode_ptr n__h )
     : s pp ( __find_pk n peer_pk )
     ? == # i pp 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
-    : *PeerStateImpl p # *PeerStateImpl pp
+    : ~ * PeerStateImpl p # *PeerStateImpl pp
     ? == . p established 0 { ^ @ !v NetErr { F @ NetErr { NetOther } } } {}
     : i len ( vec_len [u] data )
     : i cb ( securedgram_chunk_bytes )
@@ -363,7 +366,7 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) inner ( vec_with_cap [u] + len 1 )
         ( vec_push [u] inner # u 0 )
         ( vec_extend [u] inner data )
-        ( __send_inner n p inner )
+        ( __send_inner n . p 0 inner )
         ^ @ !v NetErr { T 0 }
     } {}
     ? > len ( securedgram_max_msg ) { ^ @ !v NetErr { F @ NetErr { NetWrite } } } {}
@@ -381,74 +384,59 @@ $ `stdlib/core/rcbox.nu`
         ( bytes_push_u16_be inner # u16 cnt )
         : ~ i j 0
         ~ < j take { ( vec_push [u] inner # u ?? ( vec_get [u] data + off j ) { T x → # i x F → 0 } ) = j + j 1 }
-        ( __send_inner n p inner )
-        ( vec_free [u] inner )
+        ( __send_inner n . p 0 inner )
         = idx + idx 1
     }
     ^ @ !v NetErr { T 0 }
 }
 
 // Responder side: process a handshake init, reply with msg2, establish.
-@ __handle_init * SecureNode n String src ( Vec u ) buf → v {
+@ __handle_init * SecureNodeImpl n String src ( Vec u ) buf → v {
     ? < ( vec_len [u] buf ) 101 { ^ v } {}
     : i sender_index ( __sdg_u32 buf 1 )
     : ( Vec u ) msg1 ( __slc buf 5 96 )
     : Handshake hs ( noise_init F ( __node_kp n ) . n s_pub . n psk )
     : !v NoiseErr r1 ( noise_read_msg1 hs msg1 )
-    ( vec_free [u] msg1 )
     ?? r1 {
         T _ → {
             : s pp ( __find_pk n ( noise_remote_static hs ) )
             ? == # i pp 0 { ^ v } {}
-            : *PeerStateImpl p # *PeerStateImpl pp
-            ( __roam p src )
+            : ~ * PeerStateImpl p # *PeerStateImpl pp
+            ( __roam . p 0 src )
             = . p remote_index sender_index
             : ( Vec u ) msg2 ( noise_write_msg2 hs )
             : NoiseKeys keys ( noise_split hs )
             : NoiseSession sess ( session_new keys )
-            ( noise_keys_free keys )
-            // The session a re-handshake replaces goes now: a field store
-            // through the state pointer drops nothing.
-            ( session_free . p session )
-            = . p session sess
-            = . p established 1
+            ( __peer_establish . p 0 sess F )
             : ( Vec u ) pkt ( vec_new [u] )
             ( vec_push [u] pkt # u 2 )
             ( bytes_push_u32_be pkt # u32 . p local_index )
             ( bytes_push_u32_be pkt # u32 sender_index )
             ( vec_extend [u] pkt msg2 )
-            ( vec_free [u] msg2 )
-            ( __send_pkt n p pkt )
+            ( __send_pkt n . p 0 pkt )
         }
         F _ → {}
     }
 }
 
 // Initiator side: process the handshake response, establish.
-@ __handle_resp * SecureNode n String src ( Vec u ) buf → v {
+@ __handle_resp * SecureNodeImpl n String src ( Vec u ) buf → v {
     ? < ( vec_len [u] buf ) 57 { ^ v } {}
     : i resp_index ( __sdg_u32 buf 1 )
     : i our_index ( __sdg_u32 buf 5 )
     : ( Vec u ) msg2 ( __slc buf 9 48 )
     : s pp ( __find_idx n our_index )
-    ? == # i pp 0 { ( vec_free [u] msg2 ) ^ v } {}
-    : *PeerStateImpl p # *PeerStateImpl pp
-    ? == 0 # i . . p hs ctl { ( vec_free [u] msg2 ) ^ v } {}
+    ? == # i pp 0 { ^ v } {}
+    : ~ * PeerStateImpl p # *PeerStateImpl pp
+    ? == 0 # i . . p hs ctl { ^ v } {}
     : !v NoiseErr r2 ( noise_read_msg2 . p hs msg2 )
-    ( vec_free [u] msg2 )
     ?? r2 {
         T _ → {
-            ( __roam p src )
+            ( __roam . p 0 src )
             = . p remote_index resp_index
             : NoiseKeys keys ( noise_split . p hs )
             : NoiseSession sess ( session_new keys )
-            ( noise_keys_free keys )
-            // Field stores through the state pointer drop nothing: the
-            // replaced session and the finished handshake go here.
-            ( session_free . p session )
-            = . p session sess
-            = . p established 1
-            ( noise_free . p hs )
+            ( __peer_establish . p 0 sess T )
         }
         F _ → {}
     }
@@ -459,54 +447,47 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) data
 }
 
-@ recvdata_free sink RecvData r → v {
-    ( vec_free [u] . r peer_pubkey )
-    ( vec_free [u] . r data )
-}
+// The data goes with its owner; this lets go of it early (optional).
+@ recvdata_free sink RecvData r → v {}
 
 // Transport: decrypt, roam, deliver. None on a non-data / unauthenticated
 // datagram.
-@ __handle_data * SecureNode n String src ( Vec u ) buf → ?RecvData {
+@ __handle_data * SecureNodeImpl n String src ( Vec u ) buf → ?RecvData {
     ? < ( vec_len [u] buf ) 13 { ^ @ ?RecvData { F # RecvData 0 } } {}
     : i recv_index ( __sdg_u32 buf 1 )
     : i counter ( __u64 buf 5 )
     : ( Vec u ) ct ( __slc buf 13 - ( vec_len [u] buf ) 13 )
     : s pp ( __find_idx n recv_index )
-    : *PeerStateImpl p # *PeerStateImpl pp
+    : ~ * PeerStateImpl p # *PeerStateImpl pp
     ? | == # i pp 0 == . p established 0 {
-        ( vec_free [u] ct )
         ^ @ ?RecvData { F # RecvData 0 }
     } {}
     : ( Vec u ) ad ( vec_new [u] )
     : ?( Vec u ) opened ( session_open . p session counter ad ct )
-    ( vec_free [u] ad )
-    ( vec_free [u] ct )
     ^ ?? opened {
         T pt → {
-            ( __roam p src )
-            ( __handle_inner p pt )
+            ( __roam . p 0 src )
+            ( __handle_inner . p 0 pt )
         }
         F → @ ?RecvData { F # RecvData 0 }
     }
 }
 
 // The framing byte inside the AEAD (see the header). CONSUMES `pt`.
-@ __handle_inner * PeerStateImpl p ( Vec u ) pt → ?RecvData {
+@ __handle_inner inout PeerStateImpl p ( Vec u ) pt → ?RecvData {
     : i len ( vec_len [u] pt )
-    ? < len 1 { ( vec_free [u] pt ) ^ @ ?RecvData { F # RecvData 0 } } {}
+    ? < len 1 { ^ @ ?RecvData { F # RecvData 0 } } {}
     : i tag ?? ( vec_get [u] pt 0 ) { T x → # i x F → 255 }
     ? == tag 0 {
         : ( Vec u ) body ( __slc pt 1 - len 1 )
-        ( vec_free [u] pt )
         ^ @ ?RecvData { T @ RecvData { ( __cpy . p pubkey ) body } }
     } {}
-    ? != tag 1 { ( vec_free [u] pt ) ^ @ ?RecvData { F # RecvData 0 } } {}
-    ? < len 10 { ( vec_free [u] pt ) ^ @ ?RecvData { F # RecvData 0 } } {}
+    ? != tag 1 { ^ @ ?RecvData { F # RecvData 0 } } {}
+    ? < len 10 { ^ @ ?RecvData { F # RecvData 0 } } {}
     : i msg_id ( __sdg_u32 pt 1 )
     : i idx ?? ( bytes_read_u16_be pt 5 ) { T x → # i x F → 0 }
     : i cnt ?? ( bytes_read_u16_be pt 7 ) { T x → # i x F → 0 }
     : ( Vec u ) body ( __slc pt 9 - len 9 )
-    ( vec_free [u] pt )
     : ?( Vec u ) whole ( __sdg_reasm p msg_id idx cnt body )
     ^ ?? whole {
         T w → @ ?RecvData { T @ RecvData { ( __cpy . p pubkey ) w } }
@@ -520,7 +501,7 @@ $ `stdlib/core/rcbox.nu`
 // worst case, never a crash: a chunk that disagrees with its own
 // header is dropped, and the partial table cannot grow past
 // __sdg_max_partials in-flight messages (oldest evicted).
-@ __sdg_reasm * PeerStateImpl p i msg_id i idx i cnt ( Vec u ) body → ?( Vec u ) {
+@ __sdg_reasm inout PeerStateImpl p i msg_id i idx i cnt ( Vec u ) body → ?( Vec u ) {
     : i cb ( securedgram_chunk_bytes )
     : i blen ( vec_len [u] body )
     : i max_cnt / + ( securedgram_max_msg ) - cb 1 cb
@@ -530,75 +511,51 @@ $ `stdlib/core/rcbox.nu`
     // every chunk but the last is exactly full; the last is 1..cb
     ? && < idx - cnt 1 != blen cb { = bad T } {}
     ? && == idx - cnt 1 | == blen 0 > blen cb { = bad T } {}
-    ? bad { ( vec_free [u] body ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    ? bad { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     // find (or open) the partial for this msg_id
-    : ~ s qp # s 0
-    : i qn ( vec_len [s] . p partials )
+    : ~ i qi -1
+    : i qn ( vec_len [Partial] . p partials )
     : ~ i qk 0
-    ~ & == # i qp 0 < qk qn {
-        : s c ?? ( vec_get [s] . p partials qk ) { T x → x F → # s 0 }
-        ? != # i c 0 { ? == . # *Partial c msg_id msg_id { = qp c } {} } {}
+    ~ & < qi 0 < qk qn {
+        ? == . ( __partial_at . p partials qk ) msg_id msg_id { = qi qk } {}
         = qk + qk 1
     }
-    ? == # i qp 0 {
+    ? < qi 0 {
         ? >= qn ( __sdg_max_partials ) {
             // full: the OLDEST in-flight message pays for the new one
-            : s old ?? ( vec_get [s] . p partials 0 ) { T x → x F → # s 0 }
-            ? != # i old 0 { ( __partial_free # *Partial old ) } {}
-            ( vec_remove [s] . p partials 0 )
+            : ?Partial oldest ( vec_remove [Partial] . p partials 0 )
         } {}
-        : *Partial q # *Partial ( nurl_alloc Z Partial )
-        = . q msg_id msg_id
-        = . q cnt cnt
-        = . q got 0
-        = . q bytes 0
-        = . q chunks ( vec_new [s] )
-        : ~ i z 0
-        ~ < z cnt { ( vec_push [s] . q chunks # s 0 ) = z + z 1 }
-        ( vec_push [s] . p partials # s q )
-        = qp # s q
+        : ( Vec u ) data ( vec_with_cap [u] * cnt cb )
+        : ( Vec u ) have ( vec_with_cap [u] cnt )
+        : b _h ( vec_resize_zeroed [u] have cnt )
+        ( vec_push [Partial] . p partials @ Partial { msg_id cnt 0 0 data have } )
+        = qi - ( vec_len [Partial] . p partials ) 1
     } {}
-    : *Partial q # *Partial qp
+    : *Partial q ( __partial_at . p partials qi )
     // a chunk whose cnt disagrees with the one that opened the entry
     // is not the same message, whatever its id claims
-    ? != . q cnt cnt { ( vec_free [u] body ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-    : s slot ?? ( vec_get [s] . q chunks idx ) { T x → x F → # s 0 }
-    ? != # i slot 0 { ( vec_free [u] body ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-    : *ChunkBox nb # *ChunkBox ( nurl_alloc Z ChunkBox )
-    = . nb v body
-    : b _w ( vec_set [s] . q chunks idx # s nb )
+    ? != . q cnt cnt { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : *u hp ( vec_data [u] . q have )
+    ? != # i . hp idx 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    = . hp idx # u 1
+    // its place in the message; the last chunk also fixes the length
+    : i at * idx cb
+    ? > + at blen ( vec_len [u] . q data ) { : b _d ( vec_resize_zeroed [u] . q data + at blen ) } {}
+    ( nurl_memcpy # s + # i ( vec_data [u] . q data ) at # s ( vec_data [u] body ) blen )
     = . q got + . q got 1
     = . q bytes + . q bytes blen
     ? < . q got . q cnt { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-    // complete: splice in index order, drop the partial
-    : ( Vec u ) whole ( vec_with_cap [u] . q bytes )
-    : ~ i a 0
-    ~ < a cnt {
-        : s cp ?? ( vec_get [s] . q chunks a ) { T x → x F → # s 0 }
-        ? != # i cp 0 {
-            : *ChunkBox cbx # *ChunkBox cp
-            ( vec_extend [u] whole . cbx v )
-        } {}
-        = a + a 1
-    }
-    // remove q from the partials list, then free it
-    : i pn2 ( vec_len [s] . p partials )
-    : ~ i r 0
-    : ~ i found -1
-    ~ & < r pn2 < found 0 {
-        : s c2 ?? ( vec_get [s] . p partials r ) { T x → x F → # s 0 }
-        ? == c2 qp { = found r } {}
-        = r + r 1
-    }
-    ? >= found 0 { ( vec_remove [s] . p partials found ) } {}
-    ( __partial_free q )
+    // complete: the message leaves the partials list with its bytes
+    : ( Vec u ) whole ( bytes_slice . q data 0 . q bytes )
+    : ?Partial done ( vec_remove [Partial] . p partials qi )
     ^ @ ?( Vec u ) { T whole }
 }
 
 // Receive one datagram and process it. Returns app data (with the sender's
 // pubkey) for a transport packet; None for a handshake packet, a dropped
 // packet, or a recv timeout — callers loop.
-@ securedgram_recv * SecureNode n i max → ?RecvData {
+@ securedgram_recv SecureNode n__h i max → ?RecvData {
+    : *SecureNodeImpl n ( __SecureNode_ptr n__h )
     : !UdpPacket NetErr rr ( udp_recv_from . n sock max )
     ^ ?? rr {
         T pkt → {
@@ -608,18 +565,14 @@ $ `stdlib/core/rcbox.nu`
             ? == ty 2 { ( __handle_resp n . pkt peer . pkt data ) @ ?RecvData { F # RecvData 0 } }
             ? == ty 4 { ( __handle_data n . pkt peer . pkt data ) }
             @ ?RecvData { F # RecvData 0 }
-            ( udp_packet_free pkt )
             out
         }
         F _ → @ ?RecvData { F # RecvData 0 }
     }
 }
 
-@ securedgram_close * SecureNode n → v {
-    ( vec_free [PeerState] . n peers )
-    ( udp_close . n sock )
-    ( vec_free [u] . n s_priv )
-    ( vec_free [u] . n s_pub )
-    ( vec_free [u] . n psk )
-    ( nurl_free # s n )
+// Close the node's socket now; its keys and peers go with its last owner.
+@ securedgram_close SecureNode n__h → v {
+    : *SecureNodeImpl n ( __SecureNode_ptr n__h )
+    ? != . n open 0 { ( udp_close . n sock ) = . n open 0 } {}
 }

@@ -36,9 +36,7 @@ $ `stdlib/std/subtle.nu`
     : ( Vec u ) m ( bytes_from_str label )
     : ( Vec u ) tb ( bytes_from_str token )
     ( bytes_extend_bytes m tb )
-    ( vec_free [u] tb )
     : ( Vec u ) h ( sha256_pure m )
-    ( vec_free [u] m )
     ^ h
 }
 
@@ -57,7 +55,6 @@ $ `stdlib/std/subtle.nu`
     : ~ i k 0
     ~ < k tl { ?? ( vec_get [u] mac k ) { T x → ( vec_push [u] out x ) F → {} } = k + k 1 }
     ( vec_extend [u] out payload )
-    ( vec_free [u] mac )
     ^ out
 }
 
@@ -72,10 +69,7 @@ $ `stdlib/std/subtle.nu`
     : ( Vec u ) payload ( bytes_slice tagged tl n )
     : ( Vec u ) mac_full ( hmac_sha256_pure key payload )
     : ( Vec u ) mac ( bytes_slice mac_full 0 tl )
-    ( vec_free [u] mac_full )
     : b ok ( constant_time_eq_vec tag mac )
-    ( vec_free [u] tag ) ( vec_free [u] mac )
     ? ok { ^ @ ?( Vec u ) { T payload } } {}
-    ( vec_free [u] payload )
     ^ @ ?( Vec u ) { F # ( Vec u ) 0 }
 }

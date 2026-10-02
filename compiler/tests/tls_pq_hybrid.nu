@@ -77,7 +77,7 @@ $ `stdlib/std/time.nu`
             ?? st {
                 T t → {
                     ( sleep_ms 200 )
-                    : !*TlsConn TlsErr r ( tls_connect_insecure `127.0.0.1` 18911 `localhost` )
+                    : !TlsConn TlsErr r ( tls_connect_insecure `127.0.0.1` 18911 `localhost` )
                     ?? r {
                         T c → {
                             ( label `client_handshake` `OK` )

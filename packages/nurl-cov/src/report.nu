@@ -34,7 +34,7 @@ $ `model.nu`
 @ report_colour_wanted → b {
     ? ! ( term_is_tty 1 ) { ^ F } {}
     ^ ?? ( env_get `NO_COLOR` ) {
-        T v → { : b empty == 0 ( string_len v ) ( string_free v ) empty }
+        T v → { : b empty == 0 ( string_len v ) empty }
         F _ → T
     }
 }
@@ -70,7 +70,6 @@ $ `model.nu`
     ( string_push_char tmp 47 )
     ( string_push_int tmp found )
     ( __rep_pad_left out ( string_data tmp ) width )
-    ( string_free tmp )
 }
 
 // Tenths of a percent, printed as "87.5%". Keeping the arithmetic in
@@ -82,7 +81,6 @@ $ `model.nu`
     ( string_push_int tmp % tenths 10 )
     ( string_push_char tmp 37 )
     ( __rep_pad_left out ( string_data tmp ) width )
-    ( string_free tmp )
 }
 
 // Coverage graphs name their sources absolutely, because the compiler
@@ -112,10 +110,9 @@ $ `model.nu`
     : *u at # *u + # i path - n - width 3
     : String tail ( string_from_bytes at - width 3 )
     ( string_push_str out ( string_data tail ) )
-    ( string_free tail )
 }
 
-@ report_render * Cov c RepStyle st s root → String {
+@ report_render Cov c RepStyle st s root → String {
     : String out ( string_with_cap 16384 )
     ( __rep_pad_right out `File` REP_NAME_W )
     ( __rep_pad_left out `lines` 12 )
@@ -163,7 +160,7 @@ $ `model.nu`
 
 // The lines nothing ran, collapsed into ranges. This is the part of a
 // coverage report that is actionable: it names the work.
-@ report_uncovered * Cov c s root → String {
+@ report_uncovered Cov c s root → String {
     : String out ( string_with_cap 8192 )
     : i n ( cov_file_count c )
     : ~ i i 0
@@ -184,7 +181,7 @@ $ `model.nu`
     ^ out
 }
 
-@ __rep_ranges String out * Cov c i idx → v {
+@ __rep_ranges String out Cov c i idx → v {
     : i last ( cov_max_line c idx )
     : ~ i start -1
     : ~ i prev -1
@@ -219,7 +216,7 @@ $ `model.nu`
 
 // A function nothing called at all is a stronger signal than a run of
 // cold lines, and it is worth naming.
-@ __rep_dead_funcs String out * Cov c i idx → v {
+@ __rep_dead_funcs String out Cov c i idx → v {
     : i n ( cov_fn_rows c idx )
     : ~ b any F
     : ~ i k 0

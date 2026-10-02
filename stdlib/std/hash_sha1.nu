@@ -157,7 +157,6 @@ $ `stdlib/std/bytes.nu`
         ( __sha1_transform state tail toff )
         = toff + toff 64
     }
-    ( vec_free [u] tail )
 
     // Serialise state[0..5] as 20 big-endian bytes.
     : ( Vec u ) out ( vec_with_cap [u] 20 )

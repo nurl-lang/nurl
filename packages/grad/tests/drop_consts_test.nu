@@ -28,18 +28,16 @@ $ `deps/tensor/src/tensor.nu`
 }
 
 @ main → i {
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     // param W [2,2], const X [2,2]; loss = sum((X·W)^2)
     : ( Vec f ) wv ( vec_new [f] )
     ( vec_push [f] wv 0.5 ) ( vec_push [f] wv -0.3 ) ( vec_push [f] wv 0.2 ) ( vec_push [f] wv 0.8 )
     : Tensor wt ( mkt wv 2 2 )
     : GVar W ( grad_param tp wt )
-    ( tensor_free wt )
     : ( Vec f ) xv ( vec_new [f] )
     ( vec_push [f] xv 1.0 ) ( vec_push [f] xv 2.0 ) ( vec_push [f] xv 3.0 ) ( vec_push [f] xv 4.0 )
     : Tensor xt ( mkt xv 2 2 )
     : GVar X ( grad_const tp xt )
-    ( tensor_free xt )
     : GVar y ( g_matmul tp X W )
     : GVar loss ( g_sum tp ( g_mul tp y y ) )
     ( check ( backward tp loss ) `backward runs` )
@@ -64,7 +62,6 @@ $ `deps/tensor/src/tensor.nu`
     ( check T `second drop_consts does not crash` )
 
     // clean teardown after drop (null-guarded free path)
-    ( tape_free tp )
     ( check T `tape_free after drop_consts is clean` )
 
     ( nurl_print `drop_consts_test: ` ) ( nurl_print_int g_pass )

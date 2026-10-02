@@ -62,11 +62,17 @@ before anything else noticed.
 
 | | |
 |---|---|
-| `st_open` / `st_close` | mmap-backed; a whole-file read where mmap does not exist (wasm, win32) |
+| `st_open` | mmap-backed; a whole-file read where mmap does not exist (wasm, win32) |
+| `st_parse_bytes` | an in-memory image; the `St` keeps the buffer |
+| `st_tensors` / `st_n_tensors` | the tensor table (name, dtype, shape, extent) |
 | `st_find_tensor` | by name, `-1` when absent |
 | `st_tensor_ptr` | the bytes, straight out of the mapping — no copy |
 | `st_dequant` | the tensor as **f32**, whatever it was stored as |
 | `st_dequant_range` | elements `[first, first+count)` — **exact**, because safetensors has no block quantisation, so a single row of a 262 144-row embedding table can be read without touching the rest |
+
+An `St` is a handle: every copy is the same open file, and the last owner
+unmaps it — nothing is closed by hand (`st_close` is an optional early
+release). The writer (`stw_new` … `stw_write`) is a handle the same way.
 
 Every dtype widens to f32 on demand: **F64, F32, F16, BF16**, the signed
 and unsigned integers, and BOOL.

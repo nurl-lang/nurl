@@ -24,7 +24,6 @@ $ `stdlib/ext/nurldoc.nu`
             ( string_push_char cut ( nurl_str_get path k ) )
             = k + k 1
         }
-        ( string_free out )
         ^ cut
     } {}
     ^ out
@@ -51,7 +50,6 @@ $ `stdlib/ext/nurldoc.nu`
 @ reg_relpath_norm s rel → String {
     : String raw ( string_from rel )
     : ( Vec String ) segs ( string_split raw `/` )
-    ( string_free raw )
     : String out ( string_new )
     : i n ( vec_len [String] segs )
     : ~ i k 0
@@ -70,15 +68,12 @@ $ `stdlib/ext/nurldoc.nu`
                     ( string_push_str out sd )
                     = first F
                 } {}
-                ( string_free seg )
             }
             F → {}
         }
         = k + k 1
     }
-    ( vec_free [String] segs )
     ? bad {
-        ( string_free out )
         ^ ( string_new )
     } {}
     ^ out
@@ -93,7 +88,6 @@ $ `stdlib/ext/nurldoc.nu`
         F _ → ^ out
         T raw → {
             : !( Vec TarEntry ) TarErr tr ( tar_parse raw )
-            ( vec_free [u] raw )
             ?? tr {
                 F _ → ^ out
                 T ents → {
@@ -107,18 +101,15 @@ $ `stdlib/ext/nurldoc.nu`
                                 ? & ! found == . e typeflag 48 {
                                     : String norm ( __rx_member_norm ( string_data . e path ) )
                                     ? != 0 ( nurl_str_eq ( string_data norm ) relpath ) {
-                                        ( vec_free [u] out )
                                         = out ( vec_clone [u] . e data )
                                         = found T
                                     } {}
-                                    ( string_free norm )
                                 } {}
                             }
                             F → {}
                         }
                         = k + k 1
                     }
-                    ( tar_entries_free ents )
                 }
             }
         }
@@ -134,7 +125,6 @@ $ `stdlib/ext/nurldoc.nu`
         F _ → ^ out
         T raw → {
             : !( Vec TarEntry ) TarErr tr ( tar_parse raw )
-            ( vec_free [u] raw )
             ?? tr {
                 F _ → ^ out
                 T ents → {
@@ -148,18 +138,15 @@ $ `stdlib/ext/nurldoc.nu`
                                 ? & ! found == . e typeflag 48 {
                                     : String norm ( __rx_member_norm ( string_data . e path ) )
                                     ? ( __rx_str_eq_ci ( string_data norm ) `readme.md` ) {
-                                        ( string_free out )
                                         = out ( bytes_to_str . e data )
                                         = found T
                                     } {}
-                                    ( string_free norm )
                                 } {}
                             }
                             F → {}
                         }
                         = k + k 1
                     }
-                    ( tar_entries_free ents )
                 }
             }
         }
@@ -177,7 +164,6 @@ $ `stdlib/ext/nurldoc.nu`
         F _ → ^ arr
         T raw → {
             : !( Vec TarEntry ) TarErr tr ( tar_parse raw )
-            ( vec_free [u] raw )
             ?? tr {
                 F _ → ^ arr
                 T ents → {
@@ -193,14 +179,12 @@ $ `stdlib/ext/nurldoc.nu`
                                     : b _p ( json_obj_set row `path` ( json_str_lit ( string_data norm ) ) )
                                     : b _s ( json_obj_set row `size` ( json_int ( vec_len [u] . e data ) ) )
                                     : b _r ( json_arr_push arr row )
-                                    ( string_free norm )
                                 } {}
                             }
                             F → {}
                         }
                         = k + k 1
                     }
-                    ( tar_entries_free ents )
                 }
             }
         }
@@ -213,11 +197,9 @@ $ `stdlib/ext/nurldoc.nu`
 @ __rx_targz_pkg_str ( Vec u ) gz s path → String {
     : ( Vec u ) manifest ( reg_targz_member gz `nurl.toml` )
     ? == ( vec_len [u] manifest ) 0 {
-        ( vec_free [u] manifest )
         ^ ( string_new )
     } {}
     : String text ( bytes_to_str manifest )
-    ( vec_free [u] manifest )
     : ~ String out ( string_new )
     ?? ( toml_parse ( string_data text ) ) {
         T root → {
@@ -227,7 +209,6 @@ $ `stdlib/ext/nurldoc.nu`
                     : ?String rs ( toml_as_str tv )
                     ?? rs {
                         T sv → {
-                            ( string_free out )
                             = out sv
                         }
                         F → {}
@@ -235,11 +216,9 @@ $ `stdlib/ext/nurldoc.nu`
                 }
                 F → {}
             }
-            ( toml_value_free root )
         }
         F _ → {}
     }
-    ( string_free text )
     ^ out
 }
 
@@ -296,14 +275,11 @@ $ `stdlib/ext/nurldoc.nu`
     ? == ( string_len raw ) 0 {
         : String md ( reg_targz_readme gz )
         ? > ( string_len md ) 0 {
-            ( string_free raw )
             = raw ( __rx_readme_first_para md )
         } {}
-        ( string_free md )
     } {}
     ? <= ( string_len raw ) 500 { ^ raw } {}
     : String cut ( string_substr raw 0 500 )
-    ( string_free raw )
     ^ cut
 }
 
@@ -331,7 +307,6 @@ $ `stdlib/ext/nurldoc.nu`
         F _ → ^ md
         T raw → {
             : !( Vec TarEntry ) TarErr tr ( tar_parse raw )
-            ( vec_free [u] raw )
             ?? tr {
                 F _ → ^ md
                 T ents → {
@@ -349,16 +324,13 @@ $ `stdlib/ext/nurldoc.nu`
                                         : String one ( nurldoc_render ( string_data content ) ( string_data base ) )
                                         ? > ( string_len md ) 0 { ( string_push_str md `\n\n---\n\n` ) } {}
                                         ( string_push_str md ( string_data one ) )
-                                        ( string_free one ) ( string_free content ) ( string_free base )
                                     } {}
-                                    ( string_free norm )
                                 } {}
                             }
                             F → {}
                         }
                         = k + k 1
                     }
-                    ( tar_entries_free ents )
                 }
             }
         }

@@ -95,12 +95,13 @@ $ `decode.nu`
             : Letterbox lb ( letterbox im 640 )
             : *u host ( img_to_nchw_norm . lb img )
 
-            : *Engine e ( rt_open 0 )
+            : Engine e ( rt_open 0 )
             ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ^ 1 } {}
             ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
 
             : RTensor out ( rt_run_two e g `images` host ( shape4 1 3 640 640 ) `tpe` tpe ( shape3 1 nc 512 ) )
-            : *u o ( rt_download e out )
+            : GpuHost o__h ( rt_download e out )
+            : *u o ( gpu_host_ptr o__h )
 
             : ( Vec Detection ) raw ( yolo_decode o 8400 nc 0.25 )
             : ( Vec Detection ) dets ( yolo_nms raw 0.5 )

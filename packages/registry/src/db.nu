@@ -88,13 +88,11 @@ $ `stdlib/ext/sqlite.nu`
                 ?? so {
                     T sq → {
                         ?? ( sqlite_exec db ( string_data sq ) ) { T _ → {} F _ → { = failed T } }
-                        ( string_free sq )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] stmts )
             // Migration for pre-description databases: SQLite has no
             // ADD COLUMN IF NOT EXISTS, so the duplicate-column failure
             // on a fresh DB (whose CREATE already carries it) is ignored.
@@ -140,7 +138,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String lv ( string_from login )
             ?? ( sqlite_bind_text st 1 lv ) { T _ → {} F _ → {} }
-            ( string_free lv )
             ? ( __reg_row st ) { = uid ( sqlite_column_int st 0 ) } {}
         }
         F _ → {}
@@ -158,7 +155,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String lv ( string_from login )
             ?? ( sqlite_bind_text st 1 lv ) { T _ → {} F _ → {} }
-            ( string_free lv )
             ?? ( sqlite_bind_int st 2 now ) { T _ → {} F _ → {} }
             ? ( __reg_run st ) { = uid ( sqlite_last_insert_rowid db ) } {}
         }
@@ -176,7 +172,6 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_bind_int st 1 github_id ) { T _ → {} F _ → {} }
             : String lv ( string_from login )
             ?? ( sqlite_bind_text st 2 lv ) { T _ → {} F _ → {} }
-            ( string_free lv )
             ?? ( sqlite_bind_int st 3 now ) { T _ → {} F _ → {} }
             ? ! ( __reg_run st ) { ^ -1 } {}
         }
@@ -200,7 +195,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             ?? ( sqlite_bind_int st 1 uid ) { T _ → {} F _ → {} }
             ? ( __reg_row st ) {
-                ( string_free out )
                 = out ( sqlite_column_text st 0 )
             } {}
         }
@@ -216,10 +210,8 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_bind_int st 1 uid ) { T _ → {} F _ → {} }
             : String hv ( string_from token_hash )
             ?? ( sqlite_bind_text st 2 hv ) { T _ → {} F _ → {} }
-            ( string_free hv )
             : String nv ( string_from label )
             ?? ( sqlite_bind_text st 3 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             ?? ( sqlite_bind_int st 4 now ) { T _ → {} F _ → {} }
             ^ ( __reg_run st )
         }
@@ -235,7 +227,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String hv ( string_from token_hash )
             ?? ( sqlite_bind_text st 1 hv ) { T _ → {} F _ → {} }
-            ( string_free hv )
             ? ( __reg_row st ) {
                 = uid ( sqlite_column_int st 0 )
                 = tid ( sqlite_column_int st 1 )
@@ -263,7 +254,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String hv ( string_from token_hash )
             ?? ( sqlite_bind_text st 1 hv ) { T _ → {} F _ → {} }
-            ( string_free hv )
             ? ( __reg_run st ) {
                 ? > ( sqlite_changes db ) 0 { = deleted T } {}
             } {}
@@ -282,7 +272,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             ? ( __reg_row st ) { = uid ( sqlite_column_int st 0 ) } {}
         }
         F _ → {}
@@ -295,12 +284,10 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             ?? ( sqlite_bind_int st 2 owner_uid ) { T _ → {} F _ → {} }
             ?? ( sqlite_bind_int st 3 now ) { T _ → {} F _ → {} }
             : String dv ( string_from description )
             ?? ( sqlite_bind_text st 4 dv ) { T _ → {} F _ → {} }
-            ( string_free dv )
             ^ ( __reg_run st )
         }
         F _ → ^ F
@@ -313,10 +300,8 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String dv ( string_from description )
             ?? ( sqlite_bind_text st 1 dv ) { T _ → {} F _ → {} }
-            ( string_free dv )
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 2 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             ^ ( __reg_run st )
         }
         F _ → ^ F
@@ -329,10 +314,8 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             : String vv ( string_from version )
             ?? ( sqlite_bind_text st 2 vv ) { T _ → {} F _ → {} }
-            ( string_free vv )
             ? ( __reg_row st ) { = found T } {}
         }
         F _ → {}
@@ -346,13 +329,10 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             : String vv ( string_from version )
             ?? ( sqlite_bind_text st 2 vv ) { T _ → {} F _ → {} }
-            ( string_free vv )
             : String cv ( string_from checksum )
             ?? ( sqlite_bind_text st 3 cv ) { T _ → {} F _ → {} }
-            ( string_free cv )
             ?? ( sqlite_bind_int st 4 publisher_uid ) { T _ → {} F _ → {} }
             ?? ( sqlite_bind_int st 5 now ) { T _ → {} F _ → {} }
             ^ ( __reg_run st )
@@ -366,16 +346,12 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             : String vv ( string_from version )
             ?? ( sqlite_bind_text st 2 vv ) { T _ → {} F _ → {} }
-            ( string_free vv )
             : String dn ( string_from dep_name )
             ?? ( sqlite_bind_text st 3 dn ) { T _ → {} F _ → {} }
-            ( string_free dn )
             : String dr ( string_from dep_req )
             ?? ( sqlite_bind_text st 4 dr ) { T _ → {} F _ → {} }
-            ( string_free dr )
             ^ ( __reg_run st )
         }
         F _ → ^ F
@@ -392,10 +368,8 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_bind_int st 1 yv ) { T _ → {} F _ → {} }
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 2 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             : String vv ( string_from version )
             ?? ( sqlite_bind_text st 3 vv ) { T _ → {} F _ → {} }
-            ( string_free vv )
             ? ( __reg_run st ) {
                 ? > ( sqlite_changes db ) 0 { = changed T } {}
             } {}
@@ -414,10 +388,8 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             : String vv ( string_from version )
             ?? ( sqlite_bind_text st 2 vv ) { T _ → {} F _ → {} }
-            ( string_free vv )
             : ~ b more T
             ~ more {
                 ? ( __reg_row st ) {
@@ -427,8 +399,6 @@ $ `stdlib/ext/sqlite.nu`
                     : b _a ( json_obj_set dobj `name` ( json_str_lit ( string_data dn ) ) )
                     : b _b ( json_obj_set dobj `req` ( json_str_lit ( string_data dr ) ) )
                     : b _c ( json_arr_push arr dobj )
-                    ( string_free dn )
-                    ( string_free dr )
                 } { = more F }
             }
         }
@@ -447,7 +417,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             : ~ b more T
             ~ more {
                 ? ( __reg_row st ) {
@@ -460,8 +429,6 @@ $ `stdlib/ext/sqlite.nu`
                     : b _c ( json_obj_set vobj `yanked` ( json_bool != yk 0 ) )
                     : b _d ( json_obj_set vobj `deps` ( reg_db_deps_json db name ( string_data ver ) ) )
                     : b _e ( json_arr_push varr vobj )
-                    ( string_free ver )
-                    ( string_free sum )
                     = count + count 1
                 } { = more F }
             }
@@ -469,14 +436,12 @@ $ `stdlib/ext/sqlite.nu`
         F _ → {}
     }
     ? == count 0 {
-        ( json_free varr )
         ^ ( string_new )
     } {}
     : Json root ( json_obj_new )
     : b _a ( json_obj_set root `name` ( json_str_lit name ) )
     : b _b ( json_obj_set root `versions` varr )
     : String out ( json_stringify root )
-    ( json_free root )
     ^ out
 }
 
@@ -511,7 +476,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String pat ( __reg_like_pattern q )
             ?? ( sqlite_bind_text st 1 pat ) { T _ → {} F _ → {} }
-            ( string_free pat )
             ?? ( sqlite_bind_int st 2 limit ) { T _ → {} F _ → {} }
             : ~ b more T
             ~ more {
@@ -524,13 +488,10 @@ $ `stdlib/ext/sqlite.nu`
                     } {
                         : String lv ( sqlite_column_text st 1 )
                         : b _c ( json_obj_set row `version` ( json_str_lit ( string_data lv ) ) )
-                        ( string_free lv )
                     }
                     : String dsc ( sqlite_column_text st 2 )
                     : b _e ( json_obj_set row `description` ( json_str_lit ( string_data dsc ) ) )
-                    ( string_free dsc )
                     : b _d ( json_arr_push arr row )
-                    ( string_free nm )
                 } { = more F }
             }
         }
@@ -559,7 +520,6 @@ $ `stdlib/ext/sqlite.nu`
     : b _a ( json_obj_set root `packages` ( json_int pkgs ) )
     : b _b ( json_obj_set root `versions` ( json_int vers ) )
     : String out ( json_stringify root )
-    ( json_free root )
     ^ out
 }
 
@@ -575,7 +535,6 @@ $ `stdlib/ext/sqlite.nu`
     ? >= owner_uid 0 {
         : String ol ( reg_db_login_of db owner_uid )
         : b _b ( json_obj_set root `owner` ( json_str_lit ( string_data ol ) ) )
-        ( string_free ol )
     } {
         : b _c ( json_obj_set root `owner` ( json_null ) )
     }
@@ -587,7 +546,6 @@ $ `stdlib/ext/sqlite.nu`
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
-            ( string_free nv )
             : ~ b more T
             ~ more {
                 ? ( __reg_row st ) {
@@ -602,14 +560,11 @@ $ `stdlib/ext/sqlite.nu`
                     : Time pt ( time_from_unix pubts )
                     : String dt ( time_format pt `%Y-%m-%d` )
                     : b _f2 ( json_obj_set row `date` ( json_str_lit ( string_data dt ) ) )
-                    ( string_free dt )
                     : b _g ( json_arr_push varr row )
                     ? & ! have_latest == yk 0 {
                         : b _h ( json_obj_set root `latest` ( json_str_lit ( string_data ver ) ) )
                         = have_latest T
                     } {}
-                    ( string_free ver )
-                    ( string_free lg )
                 } { = more F }
             }
         }

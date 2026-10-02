@@ -46,7 +46,6 @@ $ `deps/tensor/src/tensor.nu`
         = k + k 1
     }
     : Tensor t ( tensor_from_data TE_F64 ( vec_clone [i] shape ) v )
-    ( vec_free [f] v )
     ^ t
 }
 
@@ -59,7 +58,7 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print `\n` )
 }
 
-@ dumpg s name * GTape tp GVar v → v {
+@ dumpg s name GTape tp GVar v → v {
     ( nurl_print `grad ` )
     ( nurl_print name )
     : Tensor g ( grad_of tp v )
@@ -105,7 +104,7 @@ $ `deps/tensor/src/tensor.nu`
     ( dump `X` xt ) ( dump `T` tt ) ( dump `W1` w1t ) ( dump `b1` b1t )
     ( dump `W2` w2t ) ( dump `b2` b2t ) ( dump `A` at ) ( dump `Q` qt ) ( dump `P` pt )
 
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar w1 ( grad_param tp w1t )
     : GVar b1 ( grad_param tp b1t )
     : GVar w2 ( grad_param tp w2t )
@@ -115,10 +114,6 @@ $ `deps/tensor/src/tensor.nu`
     : GVar x ( grad_const tp xt )
     : GVar t ( grad_const tp tt )
     : GVar q ( grad_const tp qt )
-    ( tensor_free xt ) ( tensor_free tt ) ( tensor_free w1t ) ( tensor_free b1t )
-    ( tensor_free w2t ) ( tensor_free b2t ) ( tensor_free at ) ( tensor_free qt ) ( tensor_free pt )
-    ( vec_free [i] sx ) ( vec_free [i] stt ) ( vec_free [i] sw1 ) ( vec_free [i] sb1 )
-    ( vec_free [i] sw2 ) ( vec_free [i] sb2 ) ( vec_free [i] sa ) ( vec_free [i] sq ) ( vec_free [i] sp )
 
     : GVar h ( g_relu tp ( g_add tp ( g_matmul tp x w1 ) b1 ) )
     : GVar sm ( g_softmax tp ( g_add tp ( g_matmul tp h w2 ) b2 ) 1 )
@@ -126,11 +121,9 @@ $ `deps/tensor/src/tensor.nu`
     : GVar bt2 ( g_tanh tp ( g_transpose tp a ) )
     : ( Vec i ) rs ( sh2 2 6 )
     : GVar c ( g_reshape tp bt2 rs )
-    ( vec_free [i] rs )
     : ( Vec i ) st1 ( sh2 0 1 )
     : ( Vec i ) sp1 ( sh2 2 5 )
     : GVar d ( g_slice tp c st1 sp1 )
-    ( vec_free [i] st1 ) ( vec_free [i] sp1 )
     : GVar e ( g_concat tp d ( g_muls tp d 0.5 ) 0 )
     : GVar l2 ( g_mean tp ( g_mul tp e e ) )
     : GVar g3 ( g_bmm tp q p )
@@ -142,6 +135,5 @@ $ `deps/tensor/src/tensor.nu`
     ( nurl_print `\n` )
     ( dumpg `W1` tp w1 ) ( dumpg `b1` tp b1 ) ( dumpg `W2` tp w2 ) ( dumpg `b2` tp b2 )
     ( dumpg `A` tp a ) ( dumpg `P` tp p )
-    ( tape_free tp )
     ^ 0
 }

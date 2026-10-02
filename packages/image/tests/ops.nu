@@ -53,7 +53,6 @@ $ `src/image.nu`
     ( check & ( px_eq cl 1 1 im 1 1 ) == ( image_width cl ) 4 `clone equal` )
     ( image_set cl 1 1 0 9 )
     ( check ! ( px_eq cl 1 1 im 1 1 ) `clone is a deep copy` )
-    ( image_free cl )
 
     : Image gr ( image_convert im 1 )
     // luma of (80,70,3) = (77*80+150*70+29*3+128)>>8 = (6160+10500+87+128)>>8 = 65
@@ -62,28 +61,22 @@ $ `src/image.nu`
     ( check & == ( image_channels ga ) 2 & == ( image_get ga 2 1 0 ) 65 == ( image_get ga 2 1 1 ) 255 `grey→grey+alpha adds a=255` )
     : Image rgba ( image_convert im 4 )
     ( check & == ( image_channels rgba ) 4 & ( px_eq rgba 2 1 im 2 1 ) == ( image_get rgba 2 1 3 ) 255 `rgb→rgba keeps pixels` )
-    ( image_free gr ) ( image_free ga ) ( image_free rgba )
 
     // ── crop ──────────────────────────────────────────────────────────
     : Image cr ( image_crop im 1 1 2 2 )
     ( check & & == ( image_width cr ) 2 == ( image_height cr ) 2 ( px_eq cr 0 0 im 1 1 ) `crop copies the window` )
-    ( image_free cr )
     : Image cr2 ( image_crop im 3 2 5 5 )
     ( check & & == ( image_width cr2 ) 1 == ( image_height cr2 ) 1 ( px_eq cr2 0 0 im 3 2 ) `crop clips to the raster` )
-    ( image_free cr2 )
     : Image cr3 ( image_crop im 10 10 2 2 )
     ( check == * ( image_width cr3 ) ( image_height cr3 ) 0 `fully-outside crop is 0×0` )
-    ( image_free cr3 )
 
     // ── flips and rotations ───────────────────────────────────────────
     : Image fh ( image_flip_h im )
     ( check ( px_eq fh 0 1 im 3 1 ) `flip_h mirrors x` )
     : Image fh2 ( image_flip_h fh )
     ( check ( px_eq fh2 1 2 im 1 2 ) `flip_h twice is identity` )
-    ( image_free fh ) ( image_free fh2 )
     : Image fv ( image_flip_v im )
     ( check ( px_eq fv 2 0 im 2 2 ) `flip_v mirrors y` )
-    ( image_free fv )
 
     : Image r90 ( image_rot90 im )
     // CW: src(x,y) → dst(H-1-y, x); src(3,0) → dst(2,3)
@@ -96,27 +89,22 @@ $ `src/image.nu`
     : Image r90x4b ( image_rot90 r90x4a )
     : Image r90x4 ( image_rot90 r90x4b )
     ( check & ( px_eq r90x4 1 2 im 1 2 ) ( px_eq r90x4 3 0 im 3 0 ) `rot90 four times is identity` )
-    ( image_free r90 ) ( image_free r180 ) ( image_free r270 )
-    ( image_free r90x4a ) ( image_free r90x4b ) ( image_free r90x4 )
 
     // ── resize ────────────────────────────────────────────────────────
     : Image n2 ( image_resize_nearest im 8 6 )
     ( check & ( px_eq n2 0 0 im 0 0 ) & ( px_eq n2 7 5 im 3 2 ) ( px_eq n2 4 2 im 2 1 ) `nearest 2× picks source pixels` )
-    ( image_free n2 )
 
     // bilinear on a constant image stays constant
     : Image flat ( image_new 5 4 3 )
     ( image_fill flat 2864434431 )  // 0xAABBCCFF
     : Image fb ( image_resize flat 13 9 )
     ( check & == ( image_get fb 6 4 0 ) 170 & == ( image_get fb 6 4 1 ) 187 == ( image_get fb 12 8 2 ) 204 `bilinear keeps a constant image constant` )
-    ( image_free flat ) ( image_free fb )
 
     // bilinear 2× of a 2-px gradient: centres interpolate 25/75%
     : Image g2 ( image_new 2 1 1 )
     ( image_set g2 0 0 0 0 ) ( image_set g2 1 0 0 200 )
     : Image g4 ( image_resize g2 4 1 )
     ( check & & == ( image_get g4 0 0 0 ) 0 == ( image_get g4 1 0 0 ) 50 & == ( image_get g4 2 0 0 ) 150 == ( image_get g4 3 0 0 ) 200 `bilinear interpolates pixel centres` )
-    ( image_free g2 ) ( image_free g4 )
 
     // area 2× shrink averages each 2×2 block exactly
     : Image big ( image_new 4 2 1 )
@@ -124,7 +112,6 @@ $ `src/image.nu`
     ( image_set big 2 0 0 100 ) ( image_set big 3 0 0 100 ) ( image_set big 2 1 0 200 ) ( image_set big 3 1 0 204 )
     : Image sm ( image_resize_area big 2 1 )
     ( check & == ( image_get sm 0 0 0 ) 25 == ( image_get sm 1 0 0 ) 151 `area shrink is the exact block mean` )
-    ( image_free big ) ( image_free sm )
 
     // ── fill / rect / line ────────────────────────────────────────────
     : Image cv ( image_new 8 8 3 )
@@ -139,7 +126,6 @@ $ `src/image.nu`
     ( check & & == ( image_get cv 0 0 1 ) 255 == ( image_get cv 4 4 1 ) 255 & == ( image_get cv 7 7 1 ) 255 == ( image_get cv 4 5 1 ) 0 `draw_line diagonal` )
     ( image_draw_line cv -5 3 30 3 255 )  // clipped horizontal: must not crash
     ( check == ( image_get_rgba cv 7 3 ) 255 `draw_line clips per pixel` )
-    ( image_free cv )
 
     // ── blit ──────────────────────────────────────────────────────────
     : Image bg ( image_new 6 6 3 )
@@ -155,14 +141,11 @@ $ `src/image.nu`
     ( check == ( image_get bg 2 3 0 ) 150 `blit source-over blends` )
     ( image_blit bg sp 5 5 )  // clipped bottom-right
     ( check == ( image_get bg 5 5 0 ) 200 `blit clips` )
-    ( image_free sp )
     // 3-channel source overwrites
     : Image sp3 ( image_new 2 2 3 )
     ( image_blit bg sp3 0 0 )
     ( check == ( image_get bg 0 0 0 ) 0 `blit without alpha overwrites` )
-    ( image_free sp3 ) ( image_free bg )
 
-    ( image_free im )
     ? == g_fail 0 { ( puts `== ops: PASS` ) } { ( puts `== ops: FAIL` ) }
     ^ g_fail
 }

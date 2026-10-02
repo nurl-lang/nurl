@@ -99,7 +99,7 @@ $ `src/rope.nu`
     ( vec_free_with [LmKv] . a kv \ LmKv c → v { ( lm_kv_free c ) } )
 }
 
-@ ag_load * Lw w * GpuKit kit → Agg {
+@ ag_load * Lw w GpuKit kit → Agg {
     : ( Vec LmBlk ) fb ( vec_new [LmBlk] )
     : ( Vec LmBlk ) gb ( vec_new [LmBlk] )
     : ~ i i0 0
@@ -196,7 +196,7 @@ $ `src/rope.nu`
 
 // Allocate the 24 global-block caches for a sequence of `nframes`
 // frames of `p` tokens. Call once, before the first frame.
-@ ag_kv_alloc * GpuKit kit Agg a i nframes i p i kvscale i kvwindow → v {
+@ ag_kv_alloc GpuKit kit Agg a i nframes i p i kvscale i kvwindow → v {
     : i hd / AG_DIM AG_HEADS
     : i rows ( ag_kv_rows nframes p kvscale kvwindow )
     : ~ i i0 0
@@ -211,7 +211,7 @@ $ `src/rope.nu`
 // Runs over all 24 caches before any of them is written, because the
 // frame passes through them one after another and the rows have to be
 // out of the way before the first write, not the last.
-@ ag_kv_evict * GpuKit kit Agg a i fidx i p i kvscale i kvwindow → b {
+@ ag_kv_evict GpuKit kit Agg a i fidx i p i kvscale i kvwindow → b {
     : i ns ( ag_kv_evicted fidx kvscale kvwindow )
     ? == ns 0 { ^ T } {}
     : i hd / AG_DIM AG_HEADS
@@ -305,7 +305,7 @@ $ `src/rope.nu`
 // leaving them to the caller was a bug worth the comment: uninitialised
 // device memory made the very first block produce NaN, and a NaN 72
 // blocks deep says nothing about where it came from.
-@ ag_setup_rope2 * GpuKit kit LmWs ws i hd i maxpos → b {
+@ ag_setup_rope2 GpuKit kit LmWs ws i hd i maxpos → b {
     : i half / hd 2
     : i tn * maxpos half
     : *f hc # *f ( nurl_zalloc * 8 tn )
@@ -325,7 +325,7 @@ $ `src/rope.nu`
     ^ ok
 }
 
-@ __ag_upi * GpuKit kit GkBuf b * i p i n → b {
+@ __ag_upi GpuKit kit GkBuf b * i p i n → b {
     : ( Vec i ) v ( vec_with_cap [i] n )
     : b _sl ( vec_set_len [i] v n )
     : *i vp ( vec_data [i] v )
@@ -344,7 +344,7 @@ $ `src/rope.nu`
 //
 // Where this frame's rows go in the caches, and how much of them is
 // live, follows from `fidx` alone — see ag_kv_woff / ag_kv_nvalid.
-@ ag_forward_one * GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
+@ ag_forward_one GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
 * f img i h i w i gh i gw i fidx i nscale i kvscale i kvwindow
 i stopat * i taps GkBuf out → b {
     : i np * gh gw
@@ -394,7 +394,7 @@ i stopat * i taps GkBuf out → b {
         ^ F
     }
     : LmRope rp2 @ LmRope { LM_ROPE_2D . ws rows . ws cols
-        @ GkBuf { 0 0 GK_F32 } . ws cosb . ws sinb }
+        ( gk_buf_none GK_F32 ) . ws cosb . ws sinb }
     : LmRope rp3 @ LmRope { LM_ROPE_3D bfr brw bcl . a cos3 . a sin3 }
 
     // 24 alternating pairs; four of them are tapped
@@ -435,6 +435,5 @@ i stopat * i taps GkBuf out → b {
         = i0 + i0 1
     }
     ( gk_dbuf_free fcopy )
-    ( gk_dbuf_free bfr ) ( gk_dbuf_free brw ) ( gk_dbuf_free bcl )
-    ^ ok
+    ^ ok  // bfr / brw / bcl went into rp3, and go with it
 }

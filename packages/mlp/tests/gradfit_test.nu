@@ -41,7 +41,6 @@ $ `src/gradfit.nu`
         = se + se * e e
         = k + k 1
     }
-    ( vec_free [f] x ) ( vec_free [f] y )
     ^ / se # f d
 }
 
@@ -62,7 +61,6 @@ $ `src/gradfit.nu`
     : i p95i # i * 0.95 # f n
     : f thr ( _mlp_fget mses p95i )
     ( nurl_poke thrb 0 ( f64_to_bits thr ) )
-    ( vec_free [f] mses )
     : ( Vec i ) flags ( vec_new [i] )
     = r 0
     ~ < r no {
@@ -97,12 +95,10 @@ $ `src/gradfit.nu`
         ( vec_push [f] O - * 4.0 ( rng_u01 g ) 2.0 )
         = r + r 1
     }
-    ( rng_free g )
     // minmax on train, applied to both (the recipe)
     : MinMax mm ( minmax_fit X N D )
     ( minmax_apply mm X N )
     ( minmax_apply mm O NO )
-    ( minmax_free mm )
     : ( Vec i ) sz ( vec_new [i] )
     ( vec_push [i] sz D ) ( vec_push [i] sz 64 ) ( vec_push [i] sz 32 )
     ( vec_push [i] sz 64 ) ( vec_push [i] sz D )
@@ -156,10 +152,7 @@ $ `src/gradfit.nu`
     : ~ f ratio / mseg mseh
     ? < ratio 1.0 { = ratio / mseh mseg } {}
     ( check < ratio 5.0 `train MSEs within 5× of each other` )
-    ( vec_free [i] flh ) ( vec_free [i] flg )
     ( nurl_free mb1 ) ( nurl_free tb1 ) ( nurl_free mb2 ) ( nurl_free tb2 )
-    ( mlp_free mh ) ( mlp_free mg )
-    ( vec_free [f] X ) ( vec_free [f] O ) ( vec_free [i] sz )
 
     ( nurl_print `gradfit_test: ` )
     ( nurl_print_int g_pass )

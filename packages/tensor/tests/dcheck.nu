@@ -23,31 +23,26 @@ $ `src/ops.nu`
     ~ < k n { ? > k 0 { ( string_push_char s 44 ) } {} ( string_push_float s ( tensor_flat t k ) ) = k + k 1 }
     ( nurl_print ( string_data s ) )
     ( nurl_print `\n` )
-    ( string_free s )
 }
 
 // download + print (name = tag+suffix, built and freed here)
-@ dshow * GpuKit kit s tag s sfx DTensor d → v {
+@ dshow GpuKit kit s tag s sfx DTensor d → v {
     : String nm ( string_from tag )
     ( string_push_str nm sfx )
     : Tensor h ( dtensor_to_host kit d )
     ( dpt ( string_data nm ) h )
-    ( tensor_free h )
-    ( string_free nm )
 }
 
-@ dun ? DTensor o → DTensor {
-    ?? o { T d → { ^ d } F _ → { ( nurl_print `OP FAIL\n` ) ^ @ DTensor { TE_F64 ( vec_new [i] ) @ GkBuf { 0 0 0 } } } }
+@ dun sink ? DTensor o → DTensor {
+    ?? o { T d → { ^ d } F _ → { ( nurl_print `OP FAIL\n` ) ^ @ DTensor { TE_F64 ( vec_new [i] ) ( gk_buf_none 0 ) } } }
 }
 
-@ run_dtype * GpuKit kit i dt s tag → v {
+@ run_dtype GpuKit kit i dt s tag → v {
     // a = arange(6).reshape(2,3), w = arange(12).reshape(3,4)
     : Tensor a6 ( tensor_arange dt 6 )
     : Tensor a ?? ( tensor_reshape a6 ( dsh2 2 3 ) ) { T r → r F _ → ( tensor_clone a6 ) }
-    ( tensor_free a6 )
     : Tensor w12 ( tensor_arange dt 12 )
     : Tensor w ?? ( tensor_reshape w12 ( dsh2 3 4 ) ) { T r → r F _ → ( tensor_clone w12 ) }
-    ( tensor_free w12 )
 
     : DTensor da ( tensor_to_device kit a )
     : DTensor dw ( tensor_to_device kit w )
@@ -75,11 +70,9 @@ $ `src/ops.nu`
     : Tensor bg8k ( tensor_arange dt 8192 )
     : Tensor bgs ( tensor_muls bg8k 0.001 )
     : Tensor ba ?? ( tensor_reshape bgs ( dsh2 128 64 ) ) { T r → r F _ → ( tensor_clone bgs ) }
-    ( tensor_free bg8k )
     : Tensor bg6k ( tensor_arange dt 6144 )
     : Tensor bgs2 ( tensor_muls bg6k 0.0005 )
     : Tensor bb ?? ( tensor_reshape bgs2 ( dsh2 64 96 ) ) { T r → r F _ → ( tensor_clone bgs2 ) }
-    ( tensor_free bg6k )
     : DTensor dba ( tensor_to_device kit ba )
     : DTensor dbb ( tensor_to_device kit bb )
     : DTensor bmm ( dun ( dtensor_matmul kit dba dbb ) )
@@ -90,8 +83,6 @@ $ `src/ops.nu`
         }
         F _ → { ( nurl_print `bigmm FAIL\n` ) }
     }
-    ( dtensor_free dba ) ( dtensor_free dbb ) ( dtensor_free bmm )
-    ( tensor_free ba ) ( tensor_free bb ) ( tensor_free bgs ) ( tensor_free bgs2 )
 
     ?? ( dtensor_sum kit s2 ) {
         T s → {
@@ -101,10 +92,6 @@ $ `src/ops.nu`
         F _ → { ( nurl_print `sum FAIL\n` ) }
     }
 
-    ( dtensor_free da ) ( dtensor_free dw ) ( dtensor_free mm ) ( dtensor_free ms ) ( dtensor_free sh )
-    ( dtensor_free th ) ( dtensor_free sc ) ( dtensor_free sm ) ( dtensor_free neg )
-    ( dtensor_free rl ) ( dtensor_free s2 )
-    ( tensor_free a ) ( tensor_free w )
 }
 
 @ dsh3 i a i b i c → ( Vec i ) {
@@ -120,23 +107,19 @@ $ `src/ops.nu`
 }
 
 // arange(n)·mul + add, reshaped (adopts `shape`), uploaded to the device.
-@ mkdev * GpuKit kit i dt i n f mul f add0 ( Vec i ) shape → DTensor {
+@ mkdev GpuKit kit i dt i n f mul f add0 ( Vec i ) shape → DTensor {
     : Tensor t0 ( tensor_arange dt n )
     : Tensor t1 ( tensor_muls t0 mul )
-    ( tensor_free t0 )
     : Tensor t2 ( tensor_adds t1 add0 )
-    ( tensor_free t1 )
     : Tensor t ?? ( tensor_reshape t2 shape ) { T r → r F _ → ( tensor_clone t2 ) }
-    ( tensor_free t2 )
     : DTensor d ( tensor_to_device kit t )
-    ( tensor_free t )
     ^ d
 }
 
 // M5 ops: broadcast elementwise, batched matmul (uniform / broadcast /
 // general), gather/scatter, conv2d, maxpool2d. Inputs mirror the gpukit
 // opscheck battery so the references are shared shapes.
-@ run_m5 * GpuKit kit i dt s tag → v {
+@ run_m5 GpuKit kit i dt s tag → v {
     // broadcast add: (2,3) + (3,)  and outer (2,1)+(1,3)
     : DTensor x23 ( mkdev kit dt 6 1.0 0.0 ( dsh2 2 3 ) )
     : DTensor y3 ( mkdev kit dt 3 10.0 1.0 ( dsh2 1 3 ) )
@@ -168,7 +151,6 @@ $ `src/ops.nu`
     : DTensor upd ( mkdev kit dt 18 1.0 100.0 ( dsh3 2 3 3 ) )
     : DTensor sct ( dun ( dtensor_scatter kit gd 1 idx upd ) )
     ( dshow kit tag `_scatter` sct )
-    ( vec_free [i] idx )
 
     // conv2d: x(2,4,4)·0.25, w(3,2,3,3)·0.125−1, bias(3), pad 1 stride 1
     : DTensor cx ( mkdev kit dt 32 0.25 0.0 ( dsh3 2 4 4 ) )
@@ -183,22 +165,15 @@ $ `src/ops.nu`
     : DTensor pl ( dun ( dtensor_maxpool2d kit cx 2 2 2 2 0 0 ) )
     ( dshow kit tag `_pool` pl )
 
-    ( dtensor_free cx ) ( dtensor_free cw ) ( dtensor_free cb ) ( dtensor_free cv )
-    ( dtensor_free cnb ) ( dtensor_free pl )
-    ( dtensor_free x23 ) ( dtensor_free y3 ) ( dtensor_free bca ) ( dtensor_free p21 )
-    ( dtensor_free q13 ) ( dtensor_free bo )
-    ( dtensor_free bA ) ( dtensor_free bB ) ( dtensor_free bm ) ( dtensor_free bS )
-    ( dtensor_free bm2 ) ( dtensor_free gA ) ( dtensor_free gB ) ( dtensor_free bm3 )
-    ( dtensor_free gd ) ( dtensor_free gth ) ( dtensor_free upd ) ( dtensor_free sct )
 }
 
 // Fail-closed guards: every call is INVALID and must return F. Prints
 // guards|1|<F count>,<expected>.
-@ ck_f ? DTensor o * u cnt → v {
-    ?? o { T d → { ( dtensor_free d ) } F _ → { ( nurl_poke cnt 0 + ( nurl_peek cnt 0 ) 1 ) } }
+@ ck_f sink ? DTensor o * u cnt → v {
+    ?? o { T _d → {} F _ → { ( nurl_poke cnt 0 + ( nurl_peek cnt 0 ) 1 ) } }
 }
 
-@ run_guards * GpuKit kit → v {
+@ run_guards GpuKit kit → v {
     : i want 5
     : *u cnt ( nurl_alloc 8 )
     ( nurl_poke cnt 0 0 )
@@ -226,14 +201,10 @@ $ `src/ops.nu`
     ( nurl_print ( nurl_str_int want ) )
     ( nurl_print `\n` )
     ( nurl_free cnt )
-    ( vec_free [i] ix )
-    ( vec_free [i] ix2 )
-    ( dtensor_free a ) ( dtensor_free b ) ( dtensor_free w )
-    ( dtensor_free a64 ) ( dtensor_free x1 )
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ( gk_close kit ) ^ 0 }
     ( nurl_print `backend|` ) ( nurl_print ( gk_backend kit ) ) ( nurl_print `\n` )
     ( run_dtype kit TE_F32 `f32` )

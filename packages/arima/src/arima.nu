@@ -33,14 +33,19 @@
 //
 // Surface (see README.md for the story):
 //   ( arima_spec p d q ) / ( arima_spec_seasonal p d q P D Q s ) → ArimaSpec
-//   ( arima_fit y spec )              → *ArimaModel    CSS-ML, the default
-//   ( arima_fit_method y spec m )     → *ArimaModel    m = ARIMA_CSS | ARIMA_ML
-//   ( arima_auto y s )                → *ArimaModel    stepwise order search by AICc
+//   ( arima_fit y spec )              → ArimaModel     CSS-ML, the default
+//   ( arima_fit_method y spec m )     → ArimaModel     m = ARIMA_CSS | ARIMA_ML
+//   ( arima_auto y s )                → ArimaModel     stepwise order search by AICc
 //   ( arima_forecast m h )            → ArimaForecast  h means and standard errors
 //   ( arima_update m y )              → ArimaStep      one observation in: innovation, variance, z
 //   ( arima_coef m )                  → Json           coefficients, σ², log-likelihood, AIC…
 //   ( arima_to_json m ) / ( arima_from_json s ) persistence, bit-exact
-//   ( arima_free m )
+//   ( arima_free m )                  early release (optional)
+//
+// Memory: an ArimaModel is a handle on the model's state (an rcbox) —
+// every copy is the same model, stepped by any of them — released with
+// its last owner. An ArimaForecast is an owning struct. Nothing is freed
+// by hand.
 //
 // Pure NURL, no dependencies beyond the stdlib; `src/arima_gpu.nu` adds
 // batched fitting on a GPU through the `gpu` package for the case of many
@@ -53,6 +58,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/rcbox.nu`
 
 : i ARIMA_CSS 0
 : i ARIMA_ML 1
@@ -204,8 +210,6 @@ $ `stdlib/ext/json.nu`
     : *f pp ( vec_data [f] prod )
     = k 0
     ~ < k np { = . pp k - 0.0 . pp k = k + k 1 }
-    ( vec_free [f] a )
-    ( vec_free [f] b )
     ^ prod
 }
 
@@ -213,7 +217,6 @@ $ `stdlib/ext/json.nu`
 @ _ar_expand_ma ( Vec f ) theta ( Vec f ) stheta i s → ( Vec f ) {
     : ( Vec f ) b ( __ar_seasonal_spread stheta s )
     : ( Vec f ) prod ( __ar_poly_mul theta b )
-    ( vec_free [f] b )
     ^ prod
 }
 
@@ -226,8 +229,6 @@ $ `stdlib/ext/json.nu`
         : ( Vec f ) one ( vec_zeroed [f] 1 )
         ( vec_set [f] one 0 -1.0 )
         : ( Vec f ) nxt ( __ar_poly_mul poly one )
-        ( vec_free [f] poly )
-        ( vec_free [f] one )
         = poly nxt
         = k + k 1
     }
@@ -236,8 +237,6 @@ $ `stdlib/ext/json.nu`
         : ( Vec f ) one ( vec_zeroed [f] s )
         ( vec_set [f] one - s 1 -1.0 )
         : ( Vec f ) nxt ( __ar_poly_mul poly one )
-        ( vec_free [f] poly )
-        ( vec_free [f] one )
         = poly nxt
         = k + k 1
     }
@@ -259,7 +258,6 @@ $ `stdlib/ext/json.nu`
         : *f o ( vec_data [f] nxt )
         : ~ i t 1
         ~ < t n { = . o - t 1 - . c t . c - t 1 = t + t 1 }
-        ( vec_free [f] cur )
         = cur nxt
         = k + k 1
     }
@@ -271,7 +269,6 @@ $ `stdlib/ext/json.nu`
         : *f o ( vec_data [f] nxt )
         : ~ i t s
         ~ < t n { = . o - t s - . c t . c - t s = t + t 1 }
-        ( vec_free [f] cur )
         = cur nxt
         = k + k 1
     }
@@ -311,7 +308,6 @@ $ `stdlib/ext/json.nu`
         ~ < k j { = . o k . w k = k + k 1 }
         = j + j 1
     }
-    ( vec_free [f] work )
     ^ out
 }
 
@@ -347,8 +343,6 @@ $ `stdlib/ext/json.nu`
             = j + j 1
         }
     } {}
-    ( vec_free [f] nw )
-    ( vec_free [f] work )
     ^ ok
 }
 
@@ -366,12 +360,8 @@ $ `stdlib/ext/json.nu`
     ^ @ ArimaCoef { ( vec_zeroed [f] . sp p ) ( vec_zeroed [f] . sp q ) ( vec_zeroed [f] . sp P ) ( vec_zeroed [f] . sp Q ) 0.0 }
 }
 
-@ _ar_coef_free sink ArimaCoef c → v {
-    ( vec_free [f] . c phi )
-    ( vec_free [f] . c theta )
-    ( vec_free [f] . c sphi )
-    ( vec_free [f] . c stheta )
-}
+// Let go of `c` now (an owning struct: its vectors go with it).
+@ _ar_coef_free sink ArimaCoef c → v {}
 
 @ __ar_coef_clone ArimaCoef c → ArimaCoef {
     ^ @ ArimaCoef { ( __ar_vec_copy . c phi ) ( __ar_vec_copy . c theta ) ( __ar_vec_copy . c sphi ) ( __ar_vec_copy . c stheta ) . c mu }
@@ -414,7 +404,6 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     ~ < k . sp q { = . pt k - 0.0 . pt k = k + k 1 }
     ? ( _ar_invpartrans nth raw off ) {} { = ok F }
-    ( vec_free [f] nth )
     = off + off . sp q
     ? ( _ar_invpartrans . c sphi raw off ) {} { = ok F }
     = off + off . sp P
@@ -423,7 +412,6 @@ $ `stdlib/ext/json.nu`
     = k 0
     ~ < k . sp Q { = . ps k - 0.0 . ps k = k + k 1 }
     ? ( _ar_invpartrans nst raw off ) {} { = ok F }
-    ( vec_free [f] nst )
     = off + off . sp Q
     ? . sp mean { ( vec_set [f] raw off . c mu ) } {}
     ^ ok
@@ -459,19 +447,9 @@ $ `stdlib/ext/json.nu`
     ^ != . fz 1 0.0
 }
 
-@ _ar_ss_free sink ArimaSS ss → v {
-    ( vec_free [f] . ss phi )
-    ( vec_free [f] . ss theta )
-    ( vec_free [f] . ss delta )
-    ( vec_free [f] . ss a )
-    ( vec_free [f] . ss pm )
-    ( vec_free [f] . ss scratch )
-    ( vec_free [f] . ss scratch2 )
-    ( vec_free [f] . ss pz )
-    ( vec_free [f] . ss prev )
-    ( vec_free [f] . ss kg )
-    ( vec_free [f] . ss fz )
-}
+// Let go of `ss` now — what a state stored in a model's heap block is
+// handed to before a new one is written over it.
+@ _ar_ss_free sink ArimaSS ss → v {}
 
 // Build the form from expanded polynomials (ar: "1 − Σ φ B^k" φ's; ma:
 // "1 + Σ θ B^k" θ's) and the differencing δ.
@@ -829,8 +807,6 @@ $ `stdlib/ext/json.nu`
             = k + k 1
         }
     } {}
-    ( vec_free [f] M )
-    ( vec_free [f] rhs )
     ^ ok
 }
 
@@ -863,8 +839,6 @@ $ `stdlib/ext/json.nu`
     : ( Vec f ) gamma ( vec_zeroed [f] r )
     : ( Vec f ) psi ( vec_zeroed [f] r )
     : b ok ( _ar_autocov ar ma r gamma psi )
-    ( vec_free [f] ar )
-    ( vec_free [f] ma )
     ? ok {
         : *f pg ( vec_data [f] gamma )
         : *f pp ( vec_data [f] psi )
@@ -926,11 +900,7 @@ $ `stdlib/ext/json.nu`
             }
             = i + i 1
         }
-        ( vec_free [f] A )
-        ( vec_free [f] B )
     } {}
-    ( vec_free [f] gamma )
-    ( vec_free [f] psi )
     : ~ i i r
     ~ < i rd { = . P + * i rd i ARIMA_KAPPA = i + i 1 }
     ^ ok
@@ -1020,10 +990,6 @@ $ `stdlib/ext/json.nu`
     }
     = i r
     ~ < i rd { = . P + * i rd i ARIMA_KAPPA = i + i 1 }
-    ( vec_free [f] A )
-    ( vec_free [f] X )
-    ( vec_free [f] T1 )
-    ( vec_free [f] T2 )
     ^ ok
 }
 
@@ -1064,10 +1030,8 @@ $ `stdlib/ext/json.nu`
     ^ @ ArimaArma { r phi th }
 }
 
-@ _ar_arma_free sink ArimaArma a → v {
-    ( vec_free [f] . a phi )
-    ( vec_free [f] . a theta )
-}
+// Let go of `a` now (an owning struct).
+@ _ar_arma_free sink ArimaArma a → v {}
 
 // The first column of the stationary covariance, P e₀, in O(r²): the
 // four terms of _ar_init_cov applied to the unit vector instead of
@@ -1091,8 +1055,6 @@ $ `stdlib/ext/json.nu`
     : ( Vec f ) gamma ( vec_zeroed [f] r )
     : ( Vec f ) psi ( vec_zeroed [f] r )
     : b ok ( _ar_autocov ar ma r gamma psi )
-    ( vec_free [f] ar )
-    ( vec_free [f] ma )
     ? ok {
         : *f pg ( vec_data [f] gamma )
         : *f pp ( vec_data [f] psi )
@@ -1134,12 +1096,7 @@ $ `stdlib/ext/json.nu`
             = . po i v
             = i + i 1
         }
-        ( vec_free [f] xv )
-        ( vec_free [f] yv )
-        ( vec_free [f] bv )
     } {}
-    ( vec_free [f] gamma )
-    ( vec_free [f] psi )
     ^ ok
 }
 
@@ -1230,10 +1187,6 @@ $ `stdlib/ext/json.nu`
         }
         = t + t 1
     }
-    ( vec_free [f] av )
-    ( vec_free [f] kv )
-    ( vec_free [f] wv )
-    ( vec_free [f] ov )
     ? ok {} { ^ @ ArimaLik { F 0.0 0.0 0 } }
     ^ ( _ar_lik_ml_from ssq sumlog n )
 }
@@ -1242,15 +1195,11 @@ $ `stdlib/ext/json.nu`
     : ( Vec f ) ar ( _ar_expand_ar . c phi . c sphi . sp s )
     : ( Vec f ) ma ( _ar_expand_ma . c theta . c stheta . sp s )
     : ArimaArma am ( _ar_arma_new ar ma )
-    ( vec_free [f] ar )
-    ( vec_free [f] ma )
     : ( Vec f ) col ( vec_zeroed [f] . am r )
     : ~ ArimaLik out @ ArimaLik { F 0.0 0.0 0 }
     ? ( _ar_init_col . am r . am phi . am theta col ) {
         = out ( _ar_filter_arma . am phi . am theta col w . c mu )
     } {}
-    ( vec_free [f] col )
-    ( _ar_arma_free am )
     ^ out
 }
 
@@ -1334,12 +1283,7 @@ $ `stdlib/ext/json.nu`
             = t + t 1
         }
         = out ( _ar_lik_css_from ssq - n nc )
-        ( vec_free [f] e )
-        ( vec_free [i] ari )
-        ( vec_free [i] mai )
     } {}
-    ( vec_free [f] ar )
-    ( vec_free [f] ma )
     ^ out
 }
 
@@ -1445,8 +1389,6 @@ $ `stdlib/ext/json.nu`
         ~ < l ( vec_len [Thread] ts ) { ?? ( vec_get [Thread] ts l ) { T t → { : i _j ( thread_join t ) } F _ → {} } = l + l 1 }
         = l 0
         ~ < l ( vec_len [i] lanes ) { ( nurl_free # s ( _ar_geti lanes l ) ) = l + l 1 }
-        ( vec_free [Thread] ts )
-        ( vec_free [i] lanes )
     } {
         : ~ i k 0
         ~ < k n { ( __ar_job_run # *ArimaJob ( _ar_geti jobs k ) ) = k + k 1 }
@@ -1458,7 +1400,6 @@ $ `stdlib/ext/json.nu`
     : i n ( vec_len [i] jobs )
     : ~ i k 0
     ~ < k n { ( nurl_free # s ( _ar_geti jobs k ) ) = k + k 1 }
-    ( vec_free [i] jobs )
 }
 
 // A state-space form at a parameter point, prepared for a device: the
@@ -1826,7 +1767,6 @@ $ `stdlib/ext/json.nu`
     = . st f0 . st fn
     = i 0
     ~ < i k { = . pg i . pgn i = i + i 1 }
-    ( vec_free [f] gn )
     = . st iter + . st iter 1
     : ~ b stop F
     ? | < df * ARIMA_TOL + 1.0 ( float_abs . st f0 ) < smax 0.000000001 {
@@ -1857,8 +1797,9 @@ $ `stdlib/ext/json.nu`
         : ( Vec f ) vals ( vec_zeroed [f] ( vec_len [( Vec f )] reqs ) )
         ( __ar_eval_batch o reqs vals )
         = done ( __ar_bfgs_absorb st vals )
+        // vals rode in the batch's jobs (hand-managed blocks that release
+        // nothing they point at), which took it over: it goes here
         ( vec_free [f] vals )
-        ( vec_free_with [( Vec f )] reqs \ ( Vec f ) v → v { ( vec_free [f] v ) } )
     }
     ( __ar_copy_into raw . st raw )
     : ArimaOpt out @ ArimaOpt { . st converged . st f0 . st iter }
@@ -1868,7 +1809,7 @@ $ `stdlib/ext/json.nu`
 
 // ── The model ─────────────────────────────────────────────────────────
 
-: ArimaModel {
+: ArimaModelImpl {
     ArimaSpec spec
     ArimaCoef coef
     f sigma2
@@ -1895,23 +1836,30 @@ $ `stdlib/ext/json.nu`
     i xtr  // 1 when a linear trend (drift) is among the regressors
 }
 
+// An ArimaModel is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: ArimaModel { s ctl }
+
+@ ArimaModel_share ArimaModel h → ArimaModel { ^ @ ArimaModel { # s ( rcbox_share # i . h ctl ) } }
+
+@ ArimaModel_drop sink ArimaModel h → v {
+    ( mem_forget h )
+    ( rcbox_release [ArimaModelImpl] # i . h ctl )
+}
+// The state, for this package's own code.
+@ _ArimaModel_ptr ArimaModel h → *ArimaModelImpl { ^ ( rcbox_ptr [ArimaModelImpl] # i . h ctl ) }
 // Does the model carry regressors at all?
-@ __ar_has_x * ArimaModel m → b {
+@ __ar_has_x * ArimaModelImpl m → b {
     ^ > ( vec_len [f] . m xcoef ) 0
 }
 
-@ arima_free sink * ArimaModel m → v {
-    ( _ar_coef_free . m coef )
-    ( _ar_ss_free . m ss )
-    ( vec_free [f] . m se )
-    ( vec_free [i] . m xper )
-    ( vec_free [f] . m xcoef )
-    ( nurl_free # s m )
-}
+// Let go of `m` now rather than at the end of its owner's scope. The
+// model's last owner releases its coefficients, state and statistics.
+@ arima_free sink ArimaModel m → v {}
 
 // The deterministic seasonal at row `t`: the intercept and the Fourier
 // terms of every period (0.0 when the model has none).
-@ __ar_fourier * ArimaModel m i t → f {
+@ __ar_fourier * ArimaModelImpl m i t → f {
     ? ( __ar_has_x m ) {} { ^ 0.0 }
     : *f c ( vec_data [f] . m xcoef )
     : *i per ( vec_data [i] . m xper )
@@ -1935,29 +1883,100 @@ $ `stdlib/ext/json.nu`
     ^ mu
 }
 
-@ arima_spec_of * ArimaModel m → ArimaSpec { ^ . m spec }
+@ arima_spec_of ArimaModel m__h → ArimaSpec {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m spec
+}
 
-@ arima_sigma2 * ArimaModel m → f { ^ . m sigma2 }
+@ arima_sigma2 ArimaModel m__h → f {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m sigma2
+}
 
-@ arima_loglik * ArimaModel m → f { ^ . m loglik }
+@ arima_loglik ArimaModel m__h → f {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m loglik
+}
 
-@ arima_aic * ArimaModel m → f { ^ . m aic }
+@ arima_aic ArimaModel m__h → f {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m aic
+}
 
-@ arima_aicc * ArimaModel m → f { ^ . m aicc }
+@ arima_aicc ArimaModel m__h → f {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m aicc
+}
 
-@ arima_n * ArimaModel m → i { ^ . m n }
+@ arima_n ArimaModel m__h → i {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m n
+}
 
-@ arima_converged * ArimaModel m → b { ^ . m converged }
+@ arima_converged ArimaModel m__h → b {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m converged
+}
 
-@ arima_phi * ArimaModel m → ( Vec f ) { : ArimaCoef c . m coef ^ . c phi }
+// Objective evaluations the fit took.
+@ arima_evals ArimaModel m__h → i {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m evals
+}
 
-@ arima_theta * ArimaModel m → ( Vec f ) { : ArimaCoef c . m coef ^ . c theta }
+// Standard errors, coefficient order (may hold NaN). Borrowed: valid
+// while the model is.
+@ arima_se ArimaModel m__h → ( Vec f ) {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m se
+}
 
-@ arima_sphi * ArimaModel m → ( Vec f ) { : ArimaCoef c . m coef ^ . c sphi }
+// The regressors (see arima_fit_regress): harmonics per period, the
+// coefficients (borrowed), the next observation's row, 1 with a trend.
+@ arima_xk ArimaModel m__h → i {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m xk
+}
 
-@ arima_stheta * ArimaModel m → ( Vec f ) { : ArimaCoef c . m coef ^ . c stheta }
+@ arima_xcoef ArimaModel m__h → ( Vec f ) {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m xcoef
+}
 
-@ arima_mu * ArimaModel m → f { : ArimaCoef c . m coef ^ . c mu }
+@ arima_xt ArimaModel m__h → i {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m xt
+}
+
+@ arima_xtr ArimaModel m__h → i {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    ^ . m xtr
+}
+
+@ arima_phi ArimaModel m__h → ( Vec f ) {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    : ArimaCoef c . m coef ^ . c phi
+}
+
+@ arima_theta ArimaModel m__h → ( Vec f ) {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    : ArimaCoef c . m coef ^ . c theta
+}
+
+@ arima_sphi ArimaModel m__h → ( Vec f ) {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    : ArimaCoef c . m coef ^ . c sphi
+}
+
+@ arima_stheta ArimaModel m__h → ( Vec f ) {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    : ArimaCoef c . m coef ^ . c stheta
+}
+
+@ arima_mu ArimaModel m__h → f {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    : ArimaCoef c . m coef ^ . c mu
+}
 
 // The full state-space form for the coefficients, with the differencing
 // folded in, at its diffuse start.
@@ -1966,16 +1985,13 @@ $ `stdlib/ext/json.nu`
     : ( Vec f ) ma ( _ar_expand_ma . c theta . c stheta . sp s )
     : ( Vec f ) delta ( _ar_delta . sp d . sp D . sp s )
     : ArimaSS ss ( _ar_ss_new ar ma delta )
-    ( vec_free [f] ar )
-    ( vec_free [f] ma )
-    ( vec_free [f] delta )
     : b _ok ( _ar_init_cov ss )
     ^ ss
 }
 
 // Run the full model over the raw series to reach its end state. The
 // mean is removed on the way in (the state holds y − μ).
-@ __ar_run_full * ArimaModel m ( Vec f ) y → v {
+@ __ar_run_full * ArimaModelImpl m ( Vec f ) y → v {
     : i n ( vec_len [f] y )
     : *f py ( vec_data [f] y )
     : ArimaCoef mc . m coef
@@ -1992,7 +2008,7 @@ $ `stdlib/ext/json.nu`
 
 // Numerical Hessian of −loglik over the natural coefficients at the
 // optimum → standard errors. NaN where the curvature is not positive.
-@ __ar_stderr * ArimaModel m ( Vec f ) w → ( Vec f ) {
+@ __ar_stderr * ArimaModelImpl m ( Vec f ) w → ( Vec f ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     ? == k 0 { ^ ( vec_zeroed [f] 0 ) } {}
@@ -2015,9 +2031,8 @@ $ `stdlib/ext/json.nu`
     ( nurl_free # s wo )
     ( _ar_jobs_run jobs par )
     ( _ar_jobs_free jobs )
-    ( vec_free_with [( Vec f )] pts \ ( Vec f ) v → v { ( vec_free [f] v ) } )
     : ( Vec f ) se ( __ar_hessian_fold m vals )
-    ( vec_free [f] vals )
+    ( vec_free [f] vals )  // handed to the jobs above, which release nothing
     ^ se
 }
 
@@ -2029,7 +2044,7 @@ $ `stdlib/ext/json.nu`
 
 // The stencil of the Hessian of −loglik over the natural coefficients at
 // the model's optimum: four points per (i ≤ j) pair, natural coordinates.
-@ __ar_hessian_points * ArimaModel m → ( Vec ( Vec f ) ) {
+@ __ar_hessian_points * ArimaModelImpl m → ( Vec ( Vec f ) ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     : ( Vec f ) x ( _ar_natural_of_coef sp . m coef )
@@ -2056,13 +2071,12 @@ $ `stdlib/ext/json.nu`
         }
         = i + i 1
     }
-    ( vec_free [f] x )
     ^ pts
 }
 
 // The stencil's values → standard errors (NaN where the curvature is
 // not positive, or the Hessian is singular).
-@ __ar_hessian_fold * ArimaModel m ( Vec f ) vals → ( Vec f ) {
+@ __ar_hessian_fold * ArimaModelImpl m ( Vec f ) vals → ( Vec f ) {
     : ArimaSpec sp . m spec
     : i k ( __ar_ncoef sp )
     : ( Vec f ) se ( vec_zeroed [f] k )
@@ -2148,9 +2162,6 @@ $ `stdlib/ext/json.nu`
         = . pse i ? & ok > vii 0.0 ( float_sqrt vii ) / 0.0 0.0
         = i + i 1
     }
-    ( vec_free [f] x )
-    ( vec_free [f] Hm )
-    ( vec_free [f] inv )
     ^ se
 }
 
@@ -2204,7 +2215,7 @@ $ `stdlib/ext/json.nu`
     ^ x
 }
 
-@ arima_fit_method ( Vec f ) y ArimaSpec sp0 i method → *ArimaModel {
+@ arima_fit_method ( Vec f ) y ArimaSpec sp0 i method → ArimaModel {
     ^ ( __ar_fit_cond y sp0 method 0 T )
 }
 
@@ -2212,7 +2223,7 @@ $ `stdlib/ext/json.nu`
 // order; the search passes the largest order it screens); without
 // `with_se` the model has neither standard errors nor a filtered state —
 // a screened candidate, judged by its AICc and discarded.
-@ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → *ArimaModel {
+@ __ar_fit_cond ( Vec f ) y ArimaSpec sp0 i method i ncond b with_se → ArimaModel {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : ( Vec f ) w ( arima_difference y . sp d . sp D . sp s )
     : ( Vec f ) raw ( __ar_raw_start w sp )
@@ -2230,20 +2241,20 @@ $ `stdlib/ext/json.nu`
         = opt opt2
         = iters + iters . opt2 iterations
     } {}
-    : *ArimaModel m ( __ar_model_from_raw y w sp method ncond raw . opt converged iters . o evals with_se with_se )
-    ( vec_free [f] raw )
-    ( vec_free [f] w )
+    : ArimaModel m ( __ar_model_from_raw y w sp method ncond raw . opt converged iters . o evals with_se with_se )
+    ( vec_free [f] w )  // stored in the hand-managed objective block `o`
     ( nurl_free # s o )
     ^ m
 }
 
 // The model at an optimum: coefficients, statistics, standard errors,
 // and the full state filtered over the raw series.
-@ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i ncond ( Vec f ) raw b converged i iters i evals b with_se b with_state → *ArimaModel {
+@ __ar_model_from_raw ( Vec f ) y ( Vec f ) w ArimaSpec sp i method i ncond ( Vec f ) raw b converged i iters i evals b with_se b with_state → ArimaModel {
     : i k ( __ar_ncoef sp )
     : ArimaCoef c ( _ar_coef_of_raw sp raw )
     : ArimaLik lk ? == method ARIMA_CSS ( __ar_loglik_css sp c w ncond ) ( __ar_loglik_ml sp c w )
-    : *ArimaModel m # *ArimaModel ( nurl_malloc Z ArimaModel )
+    : i m__box ( rcbox_zero [ArimaModelImpl] )
+    : *ArimaModelImpl m ( rcbox_ptr [ArimaModelImpl] m__box )
     = . m spec sp
     = . m coef c
     = . m sigma2 . lk sigma2
@@ -2274,7 +2285,7 @@ $ `stdlib/ext/json.nu`
     // weekly season the cost of the fit itself over again — and a
     // candidate the search will discard has no use for a state.
     ? with_state { ( __ar_run_full m y ) } {}
-    ^ m
+    ^ @ ArimaModel { # s m__box }
 }
 
 // The starting parameters for a fit: zeros, the mean at the sample mean.
@@ -2381,7 +2392,7 @@ $ `stdlib/ext/json.nu`
 
 // Fit `series` (each a raw series) under `sp` by `method`, the
 // evaluations batched through `evaluator`.
-@ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @ v ( Vec ArimaEvalItem ) ( Vec ArimaCtx ) ( Vec f ) ) evaluator → ( Vec * ArimaModel ) {
+@ arima_fit_many_with ( Vec ( Vec f ) ) series ArimaSpec sp0 i method ( @ v ( Vec ArimaEvalItem ) ( Vec ArimaCtx ) ( Vec f ) ) evaluator → ( Vec ArimaModel ) {
     : ArimaSpec sp ( arima_spec_with_mean sp0 . sp0 mean )
     : i K ( vec_len [( Vec f )] series )
     // Per-model state lives on the heap, addressed through these.
@@ -2401,7 +2412,6 @@ $ `stdlib/ext/json.nu`
                 : ( Vec f ) raw ( __ar_raw_start w sp )
                 : *ArimaFitState f # *ArimaFitState ( nurl_malloc Z ArimaFitState )
                 = . f st ( __ar_bfgs_new raw )
-                ( vec_free [f] raw )
                 = . f stage 0
                 = . f iters 0
                 = . f evals 0
@@ -2433,7 +2443,6 @@ $ `stdlib/ext/json.nu`
                 }
                 = . f req_n nr
                 = . f evals + . f evals nr
-                ( vec_free [( Vec f )] reqs )
                 ? > nr 0 { = active T } {}
             } {}
             = i + i 1
@@ -2449,7 +2458,6 @@ $ `stdlib/ext/json.nu`
                 = i + i 1
             }
             ( evaluator items ctxs vals )
-            ( vec_free [ArimaCtx] ctxs )
             : *f pv ( vec_data [f] vals )
             = i 0
             ~ < i K {
@@ -2473,15 +2481,12 @@ $ `stdlib/ext/json.nu`
                             = . cx method ARIMA_ML
                         } { = . f stage 2 }
                     } {}
-                    ( vec_free [f] mine )
                 } {}
                 = i + i 1
             }
-            ( vec_free [f] vals )
         } {}
-        ( vec_free_with [ArimaEvalItem] items \ ArimaEvalItem it → v { ( vec_free [f] . it raw ) } )
     }
-    : ( Vec * ArimaModel ) out ( vec_new [* ArimaModel] )
+    : ( Vec ArimaModel ) out ( vec_new [ArimaModel] )
     = i 0
     ~ < i K {
         : *ArimaFitState f # *ArimaFitState ( _ar_geti fsp i )
@@ -2489,7 +2494,7 @@ $ `stdlib/ext/json.nu`
         ?? ( vec_get [( Vec f )] series i ) {
             T y → {
                 : *ArimaBfgs st . f st
-                ( vec_push [* ArimaModel] out ( __ar_model_from_raw y . cx w sp method 0 . st raw . f converged . f iters . f evals F T ) )
+                ( vec_push [ArimaModel] out ( __ar_model_from_raw y . cx w sp method 0 . st raw . f converged . f iters . f evals F T ) )
                 ( __ar_bfgs_free st )
             }
             F _ → {}
@@ -2508,8 +2513,9 @@ $ `stdlib/ext/json.nu`
         = . cx method method
         ( vec_push [ArimaCtx] hctx @ ArimaCtx { . cx sp . cx w . cx method . cx ncond } )
         ( vec_push [i] hat ( vec_len [ArimaEvalItem] hitems ) )
-        ?? ( vec_get [* ArimaModel] out i ) {
-            T mm → {
+        ?? ( vec_get [ArimaModel] out i ) {
+            T mmh → {
+                : *ArimaModelImpl mm ( _ArimaModel_ptr mmh )
                 : ( Vec ( Vec f ) ) pts ( __ar_hessian_points mm )
                 : i np ( vec_len [( Vec f )] pts )
                 : ~ i q 0
@@ -2517,7 +2523,6 @@ $ `stdlib/ext/json.nu`
                     ?? ( vec_get [( Vec f )] pts q ) { T pt → { ( vec_push [ArimaEvalItem] hitems @ ArimaEvalItem { i pt 1 } ) } F _ → {} }
                     = q + q 1
                 }
-                ( vec_free [( Vec f )] pts )
                 ( vec_push [i] hn np )
             }
             F _ → { ( vec_push [i] hn 0 ) }
@@ -2529,8 +2534,9 @@ $ `stdlib/ext/json.nu`
     : *f phv ( vec_data [f] hvals )
     = i 0
     ~ < i K {
-        ?? ( vec_get [* ArimaModel] out i ) {
-            T mm → {
+        ?? ( vec_get [ArimaModel] out i ) {
+            T mmh → {
+                : *ArimaModelImpl mm ( _ArimaModel_ptr mmh )
                 : i np ( _ar_geti hn i )
                 : i at ( _ar_geti hat i )
                 : ( Vec f ) mine ( vec_zeroed [f] np )
@@ -2539,7 +2545,6 @@ $ `stdlib/ext/json.nu`
                 ~ < q np { = . pm q . phv + at q = q + q 1 }
                 ( vec_free [f] . mm se )
                 = . mm se ( __ar_hessian_fold mm mine )
-                ( vec_free [f] mine )
             }
             F _ → {}
         }
@@ -2548,10 +2553,6 @@ $ `stdlib/ext/json.nu`
         ( nurl_free # s cx )
         = i + i 1
     }
-    ( vec_free_with [ArimaEvalItem] hitems \ ArimaEvalItem it → v { ( vec_free [f] . it raw ) } )
-    ( vec_free [f] hvals ) ( vec_free [i] hat ) ( vec_free [i] hn ) ( vec_free [ArimaCtx] hctx )
-    ( vec_free [i] ctxp )
-    ( vec_free [i] fsp )
     ^ out
 }
 
@@ -2560,15 +2561,15 @@ $ `stdlib/ext/json.nu`
 }
 
 // K series fitted together on the CPU's threads.
-@ arima_fit_many ( Vec ( Vec f ) ) series ArimaSpec sp i method → ( Vec * ArimaModel ) {
+@ arima_fit_many ( Vec ( Vec f ) ) series ArimaSpec sp i method → ( Vec ArimaModel ) {
     ^ ( arima_fit_many_with series sp method \ ( Vec ArimaEvalItem ) items ( Vec ArimaCtx ) ctxs ( Vec f ) out → v { ( arima_eval_cpu items ctxs out ) } )
 }
 
-@ arima_models_free sink ( Vec * ArimaModel ) ms → v {
-    ( vec_free_with [* ArimaModel] ms \ * ArimaModel m → v { ( arima_free m ) } )
-}
+// Let go of `ms` now rather than at the end of its owner's scope (each
+// model goes with its last owner).
+@ arima_models_free sink ( Vec ArimaModel ) ms → v {}
 
-@ arima_fit ( Vec f ) y ArimaSpec sp → *ArimaModel {
+@ arima_fit ( Vec f ) y ArimaSpec sp → ArimaModel {
     ^ ( arima_fit_method y sp ARIMA_ML )
 }
 
@@ -2579,14 +2580,13 @@ $ `stdlib/ext/json.nu`
     ( Vec f ) se
 }
 
-@ arima_forecast_free sink ArimaForecast fc → v {
-    ( vec_free [f] . fc mean )
-    ( vec_free [f] . fc se )
-}
+// Let go of `fc` now rather than at the end of its owner's scope.
+@ arima_forecast_free sink ArimaForecast fc → v {}
 
 // h steps ahead from the model's current state: means and standard
 // errors (σ² applied). The state is left where it was.
-@ arima_forecast * ArimaModel m i h → ArimaForecast {
+@ arima_forecast ArimaModel m__h i h → ArimaForecast {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ( Vec f ) mean ( vec_zeroed [f] h )
     : ( Vec f ) se ( vec_zeroed [f] h )
     : ArimaSS ss . m ss
@@ -2615,8 +2615,6 @@ $ `stdlib/ext/json.nu`
     ~ < i . ss rd { = . A i . A0 i = i + i 1 }
     = i 0
     ~ < i * . ss rd . ss rd { = . P i . P0 i = i + i 1 }
-    ( vec_free [f] a0 )
-    ( vec_free [f] p0 )
     ^ @ ArimaForecast { mean se }
 }
 
@@ -2636,7 +2634,8 @@ $ `stdlib/ext/json.nu`
 // restart. The answer then carries what the model predicted and the
 // variance it would have judged an observation by; innovation and z are
 // NaN, because there was nothing to be surprised by.
-@ arima_update * ArimaModel m f y → ArimaUpdate {
+@ arima_update ArimaModel m__h f y → ArimaUpdate {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
     = . m n + . m n 1
@@ -2674,15 +2673,16 @@ $ `stdlib/ext/json.nu`
 // state after n points is the state a fit over them would have left —
 // which is how a caller replays a stored history through a model whose
 // state has moved past it.
-@ arima_restart * ArimaModel m → v {
-    ( arima_restart_at m 0 )
+@ arima_restart ArimaModel m__h → v {
+    ( arima_restart_at m__h 0 )
 }
 
 // The same, with the regressors' clock set: `t0` is the row the next
 // observation has, counted from the fit's origin (negative for rows
 // before it) — a replay that begins elsewhere than the fit did keeps the
 // seasonal's phase. A model without regressors ignores it.
-@ arima_restart_at * ArimaModel m i t0 → v {
+@ arima_restart_at ArimaModel m__h i t0 → v {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     ( _ar_ss_free . m ss )
     = . m ss ( __ar_full_ss . m spec . m coef )
     = . m n 0
@@ -2694,8 +2694,10 @@ $ `stdlib/ext/json.nu`
 
 // A deep copy: coefficients, fit statistics, standard errors and the
 // state, so the copy can be stepped without moving the original.
-@ arima_clone * ArimaModel m → *ArimaModel {
-    : *ArimaModel c # *ArimaModel ( nurl_malloc Z ArimaModel )
+@ arima_clone ArimaModel m__h → ArimaModel {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
+    : i c__box ( rcbox_zero [ArimaModelImpl] )
+    : *ArimaModelImpl c ( rcbox_ptr [ArimaModelImpl] c__box )
     = . c spec . m spec
     = . c coef ( __ar_coef_clone . m coef )
     = . c sigma2 . m sigma2
@@ -2721,7 +2723,7 @@ $ `stdlib/ext/json.nu`
     = . c xcoef ( __ar_vec_copy . m xcoef )
     = . c xt . m xt
     = . c xtr . m xtr
-    ^ c
+    ^ @ ArimaModel { # s c__box }
 }
 
 @ __ar_veci_copy ( Vec i ) src → ( Vec i ) {
@@ -2751,13 +2753,13 @@ $ `stdlib/ext/json.nu`
 // and attach the terms to the model: its updates and forecasts carry
 // them, its state and statistics are the residual model's. `t = 0` is
 // the first row of `y`.
-@ arima_fit_harmonic ( Vec f ) y ( Vec i ) periods i k ArimaSpec sp i method → *ArimaModel {
+@ arima_fit_harmonic ( Vec f ) y ( Vec i ) periods i k ArimaSpec sp i method → ArimaModel {
     ^ ( arima_fit_regress y periods k F sp method )
 }
 
 // The same with the residual model's order chosen by the stepwise
 // search (`s` its season, 0 for none — the periods carry the long ones).
-@ arima_auto_harmonic ( Vec f ) y ( Vec i ) periods i k i s → *ArimaModel {
+@ arima_auto_harmonic ( Vec f ) y ( Vec i ) periods i k i s → ArimaModel {
     ^ ( arima_auto_regress y periods k F s )
 }
 
@@ -2766,30 +2768,28 @@ $ `stdlib/ext/json.nu`
 // fixed amount a row is ARIMA(0,1,0) with drift exactly, and without the
 // term the order search has only a unit root to climb with. Everything
 // is least squares first, the ARIMA on the residuals after.
-@ arima_fit_regress ( Vec f ) y ( Vec i ) periods i k b trend ArimaSpec sp i method → *ArimaModel {
+@ arima_fit_regress ( Vec f ) y ( Vec i ) periods i k b trend ArimaSpec sp i method → ArimaModel {
     : ( Vec f ) coef ( __ar_fourier_ols y periods k trend )
     : ( Vec f ) res ( __ar_fourier_residuals y periods k trend coef )
-    : *ArimaModel m ( arima_fit_method res sp method )
-    ( __ar_attach_fourier m periods k trend coef ( vec_len [f] y ) )
-    ( vec_free [f] res )
+    : ArimaModel m ( arima_fit_method res sp method )
+    ( __ar_attach_fourier ( _ArimaModel_ptr m ) periods k trend coef ( vec_len [f] y ) )
     ^ m
 }
 
-@ arima_auto_regress ( Vec f ) y ( Vec i ) periods i k b trend i s → *ArimaModel {
+@ arima_auto_regress ( Vec f ) y ( Vec i ) periods i k b trend i s → ArimaModel {
     : ( Vec f ) coef ( __ar_fourier_ols y periods k trend )
     : ( Vec f ) res ( __ar_fourier_residuals y periods k trend coef )
-    : *ArimaModel m ( arima_auto res s )
-    ( __ar_attach_fourier m periods k trend coef ( vec_len [f] y ) )
-    ( vec_free [f] res )
+    : ArimaModel m ( arima_auto res s )
+    ( __ar_attach_fourier ( _ArimaModel_ptr m ) periods k trend coef ( vec_len [f] y ) )
     ^ m
 }
 
-@ __ar_attach_fourier * ArimaModel m ( Vec i ) periods i k b trend ( Vec f ) coef i n → v {
+@ __ar_attach_fourier * ArimaModelImpl m ( Vec i ) periods i k b trend ( Vec f ) coef i n → v {
     ( vec_free [i] . m xper )
     ( vec_free [f] . m xcoef )
     = . m xper ( __ar_veci_copy periods )
     = . m xk ? > ( vec_len [i] periods ) 0 k 0
-    = . m xcoef coef
+    = . m xcoef ( __ar_vec_copy coef )  // the model's own: `coef` stays the caller's
     = . m xt n
     = . m xtr ? trend 1 0
 }
@@ -2846,8 +2846,6 @@ $ `stdlib/ext/json.nu`
         = t + t 1
     }
     ? ( _ar_solve M b nc ) {} { ( __ar_fill b 0.0 ) }
-    ( vec_free [f] M )
-    ( vec_free [f] row )
     ^ b
 }
 
@@ -2869,7 +2867,6 @@ $ `stdlib/ext/json.nu`
         = . po t - . py t mu
         = t + t 1
     }
-    ( vec_free [f] row )
     ^ res
 }
 
@@ -2916,7 +2913,6 @@ $ `stdlib/ext/json.nu`
         = k + k 1
     }
     = lrv / lrv # f n
-    ( vec_free [f] e )
     ? > lrv 0.0 {} { ^ 0.0 }
     ^ / eta * # f n * # f n lrv
 }
@@ -2930,12 +2926,10 @@ $ `stdlib/ext/json.nu`
     ~ & going < d 2 {
         ? > ( arima_kpss cur ) 0.463 {
             : ( Vec f ) nxt ( arima_difference cur 1 0 0 )
-            ( vec_free [f] cur )
             = cur nxt
             = d + d 1
         } { = going F }
     }
-    ( vec_free [f] cur )
     ^ d
 }
 
@@ -2968,33 +2962,29 @@ $ `stdlib/ext/json.nu`
     ? | < s 2 < ( vec_len [f] y ) * 3 s { ^ 0 } {}
     : ( Vec f ) w ( arima_difference y d 0 0 )
     : f r ( arima_acf w s )
-    ( vec_free [f] w )
     ^ ? > r 0.5 1 0
 }
 
-@ __ar_try ( Vec f ) y ArimaSpec sp i method i ncond → *ArimaModel {
+@ __ar_try ( Vec f ) y ArimaSpec sp i method i ncond → ArimaModel {
     ^ ( __ar_fit_cond y sp method ncond F )
 }
 
 // Is the candidate worth a look: within the bounds, not already tried.
-@ __ar_auto_step ( Vec f ) y ArimaSpec cand * ArimaModel best ( Vec i ) tried i max_pq i max_PQ i method i ncond → *ArimaModel {
+// Hands back the better of `best` and the candidate; the other goes.
+@ __ar_auto_step ( Vec f ) y ArimaSpec cand sink ArimaModel best ( Vec i ) tried i max_pq i max_PQ i method i ncond → ArimaModel {
     ? | | | | | < . cand p 0 < . cand q 0 > . cand p max_pq > . cand q max_pq < . cand P 0 < . cand Q 0 { ^ best } {}
     ? | > . cand P max_PQ > . cand Q max_PQ { ^ best } {}
     : i key + + + + * . cand p 1000000 * . cand q 10000 * . cand P 100 * . cand Q 10 ? . cand mean 1 0
     ? ( vec_contains [i] tried key \ i a i b → b { ^ == a b } ) { ^ best } {}
     ( vec_push [i] tried key )
-    : *ArimaModel m ( __ar_try y cand method ncond )
-    ? & . m converged < . m aicc . best aicc {
-        ( arima_free best )
-        ^ m
-    } {}
-    ( arima_free m )
+    : ArimaModel m ( __ar_try y cand method ncond )
+    ? & ( arima_converged m ) < ( arima_aicc m ) ( arima_aicc best ) { ^ m } {}
     ^ best
 }
 
 // Stepwise search; `s` is the season (0 = none), d and D chosen by the
 // tests above. Returns the best model found.
-@ arima_auto ( Vec f ) y i s → *ArimaModel {
+@ arima_auto ( Vec f ) y i s → ArimaModel {
     : i d ( arima_ndiffs y )
     : i D ( arima_nsdiffs y s d )
     ^ ( arima_auto_d y s d D )
@@ -3012,7 +3002,7 @@ $ `stdlib/ext/json.nu`
 : i ARIMA_SCREEN_N 150
 : i ARIMA_SCREEN_S 12
 
-@ arima_auto_d ( Vec f ) y i s i d i D → *ArimaModel {
+@ arima_auto_d ( Vec f ) y i s i d i D → ArimaModel {
     : b seasonal > s 1
     : i max_pq 5
     : i max_PQ ? seasonal 2 0
@@ -3022,7 +3012,7 @@ $ `stdlib/ext/json.nu`
     // every screened candidate conditions on the largest order in play
     : i ncond + max_pq * s max_PQ
     : ( Vec i ) tried ( vec_new [i] )
-    : ~ * ArimaModel best ( __ar_try y ( arima_spec_with_mean ( arima_spec_seasonal 2 d 2 ? seasonal 1 0 D ? seasonal 1 0 s ) mean0 ) method ncond )
+    : ~ ArimaModel best ( __ar_try y ( arima_spec_with_mean ( arima_spec_seasonal 2 d 2 ? seasonal 1 0 D ? seasonal 1 0 s ) mean0 ) method ncond )
     ( vec_push [i] tried + + + + * 2 1000000 * 2 10000 * ? seasonal 1 0 100 * ? seasonal 1 0 10 ? mean0 1 0 )
     = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 0 d 0 0 D 0 s ) mean0 ) best tried max_pq max_PQ method ncond )
     = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal 1 d 0 ? seasonal 1 0 D 0 s ) mean0 ) best tried max_pq max_PQ method ncond )
@@ -3031,8 +3021,8 @@ $ `stdlib/ext/json.nu`
     : ~ i rounds 0
     ~ & improved < rounds 30 {
         = improved F
-        : ArimaSpec b . best spec
-        : f before . best aicc
+        : ArimaSpec b ( arima_spec_of best )
+        : f before ( arima_aicc best )
         = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal + . b p 1 d . b q . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
         = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal - . b p 1 d . b q . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
         = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d + . b q 1 . b P D . b Q s ) . b mean ) best tried max_pq max_PQ method ncond )
@@ -3046,15 +3036,12 @@ $ `stdlib/ext/json.nu`
         ? == + d D 0 {
             = best ( __ar_auto_step y ( arima_spec_with_mean ( arima_spec_seasonal . b p d . b q . b P D . b Q s ) ! . b mean ) best tried max_pq max_PQ method ncond )
         } {}
-        ? < . best aicc before { = improved T } {}
+        ? < ( arima_aicc best ) before { = improved T } {}
         = rounds + rounds 1
     }
-    ( vec_free [i] tried )
     // The chosen order fitted in full — exactly where the screening was
     // approximate, and with its standard errors and state either way.
-    : *ArimaModel exact ( arima_fit_method y . best spec ARIMA_ML )
-    ( arima_free best )
-    ^ exact
+    ^ ( arima_fit_method y ( arima_spec_of best ) ARIMA_ML )
 }
 
 // ── Reporting ─────────────────────────────────────────────────────────
@@ -3082,7 +3069,8 @@ $ `stdlib/ext/json.nu`
 }
 
 // Coefficients and fit statistics as JSON, for a report or a table.
-@ arima_coef * ArimaModel m → Json {
+@ arima_coef ArimaModel m__h → Json {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : Json o ( json_obj_new )
     : ArimaCoef mc . m coef
     ( json_obj_set o `order` ( __ar_jspec . m spec ) )
@@ -3174,7 +3162,8 @@ $ `stdlib/ext/json.nu`
     ^ 0
 }
 
-@ arima_to_json * ArimaModel m → String {
+@ arima_to_json ArimaModel m__h → String {
+    : *ArimaModelImpl m ( _ArimaModel_ptr m__h )
     : Json o ( json_obj_new )
     : ArimaCoef mc . m coef
     : ArimaSS ss . m ss
@@ -3218,11 +3207,10 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `last_variance` ( __ar_jbit . m last_variance ) )
     ( json_obj_set o `last_predicted` ( __ar_jbit . m last_predicted ) )
     : String s ( json_stringify o )
-    ( json_free o )
     ^ s
 }
 
-@ arima_from_json s src → ?*ArimaModel {
+@ arima_from_json s src → ?ArimaModel {
     ?? ( json_parse src ) {
         T o → {
             : ~ b ok ( json_is_obj o )
@@ -3232,7 +3220,7 @@ $ `stdlib/ext/json.nu`
                     F _ → { = ok F }
                 }
             } {}
-            ? ok {} { ( json_free o ) ^ @ ?*ArimaModel { F } }
+            ? ok {} { ^ @ ?ArimaModel { F } }
             : Json so ?? ( json_obj_get o `order` ) { T x → x F _ → o }
             : ArimaSpec sp @ ArimaSpec { ( __ar_jint so `p` ) ( __ar_jint so `d` ) ( __ar_jint so `q` ) ( __ar_jint so `P` ) ( __ar_jint so `D` ) ( __ar_jint so `Q` ) ( __ar_jint so `s` ) ?? ( json_obj_get so `mean` ) { T mv → ( json_as_bool mv ) F _ → F } }
             : ( Vec f ) phi ?? ( json_obj_get o `phi` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
@@ -3240,7 +3228,8 @@ $ `stdlib/ext/json.nu`
             : ( Vec f ) sphi ?? ( json_obj_get o `seasonal_phi` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
             : ( Vec f ) sth ?? ( json_obj_get o `seasonal_theta` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
             : ArimaCoef c @ ArimaCoef { phi th sphi sth ( __ar_unbit o `mu` ) }
-            : *ArimaModel m # *ArimaModel ( nurl_malloc Z ArimaModel )
+            : i m__box ( rcbox_zero [ArimaModelImpl] )
+            : *ArimaModelImpl m ( rcbox_ptr [ArimaModelImpl] m__box )
             = . m spec sp
             = . m coef c
             = . m sigma2 ( __ar_unbit o `sigma2` )
@@ -3260,7 +3249,6 @@ $ `stdlib/ext/json.nu`
                 T a → {
                     : ( Vec f ) av ( __ar_unbits a )
                     ? == ( vec_len [f] av ) . fss rd { ( __ar_copy_into . fss a av ) } {}
-                    ( vec_free [f] av )
                 }
                 F _ → {}
             }
@@ -3268,7 +3256,6 @@ $ `stdlib/ext/json.nu`
                 T a → {
                     : ( Vec f ) pv ( __ar_unbits a )
                     ? == ( vec_len [f] pv ) * . fss rd . fss rd { ( __ar_copy_into . fss pm pv ) ( __ar_copy_into . fss prev pv ) } {}
-                    ( vec_free [f] pv )
                 }
                 F _ → {}
             }
@@ -3281,7 +3268,6 @@ $ `stdlib/ext/json.nu`
                         = . fz 0 ( __ar_unbit o `steady_f` )
                         = . fz 1 1.0
                     } {}
-                    ( vec_free [f] gv )
                 }
                 F _ → {}
             }
@@ -3318,9 +3304,8 @@ $ `stdlib/ext/json.nu`
                 }
                 F _ → {}
             }
-            ( json_free o )
-            ^ @ ?*ArimaModel { T m }
+            ^ @ ?ArimaModel { T @ ArimaModel { # s m__box } }
         }
-        F _ → { ^ @ ?*ArimaModel { F } }
+        F _ → { ^ @ ?ArimaModel { F } }
     }
 }

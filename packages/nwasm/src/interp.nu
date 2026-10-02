@@ -21,6 +21,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/core/rcbox.nu`
 $ `module.nu`
 
 // round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
@@ -232,8 +233,8 @@ $ `module.nu`
 // `append` = O_APPEND: every write lands at the end regardless of pos.
 : WFd { i kind ( Vec u ) data i pos ( Vec u ) host ( Vec u ) name b writable b dirty b append }
 
-: Interp {
-    s mod  // *Module
+: InterpImpl {
+    s mod  // *ModuleImpl
     ( Vec i ) vs  // value stack
     ( Vec u ) mem  // linear memory (bytes)
     i mem_pages  // current size in 64 KiB pages
@@ -306,18 +307,33 @@ $ `module.nu`
     // instantiating Interp (0 in it), and the host-side tables that must
     // stay common (file descriptors, socket handles, captured output) are
     // reached through it; `__host` is that hop.
-    s owner  // *Interp of the instantiating thread, 0 when this IS it
+    s owner  // *InterpImpl of the instantiating thread, 0 when this IS it
     i next_tid  // owner only: thread ids handed to wasi.thread-spawn
-    ( Vec s ) thread_holders  // owner only: *TStart, keeping spawn closures alive
-    ( Vec i ) thread_kids  // owner only: live child *Interp, for memory.grow
+    ( Vec i ) thread_kids  // owner only: live child *InterpImpl, for memory.grow
     ( Vec Thread ) thread_joins  // owner only: host threads, joined before free
     i tstart_fidx  // cached export index of `wasi_thread_start` (-2 = not looked up)
     i sp_global  // cached global index of `__stack_pointer` (-2 = not looked up)
+    // The module this instance runs, held so it outlives every user of `mod`
+    // (owner only; a thread borrows its owner's).
+    Module modh
 }
 
-// One spawned thread's closure, heap-held so it outlives the host call
-// that created it (thread_spawn borrows the closure and its captures).
-: TStart { ( @ v ) f }
+// An Interp is a handle on its instance state in an rcbox
+// (stdlib/core/rcbox.nu): every copy is the same instance, and the last owner
+// releases it. A spawned thread's instance is not one of these: it is a raw
+// *InterpImpl made and released by the thread that runs it (see
+// __wasi_thread_spawn), because it shares its owner's memory, table and
+// argv by handle and must never drop them.
+: Interp { s ctl }
+
+@ Interp_share Interp h → Interp { ^ @ Interp { # s ( rcbox_share # i . h ctl ) } }
+
+@ Interp_drop sink Interp h → v {
+    ( mem_forget h )
+    ( rcbox_release [InterpImpl] # i . h ctl )
+}
+
+@ __Interp_ptr Interp h → *InterpImpl { ^ ( rcbox_ptr [InterpImpl] # i . h ctl ) }
 
 // One activation record on the explicit call stack: the function, its locals,
 // its control stack, and the instruction cursor [pos, end) — pos/end are
@@ -368,13 +384,18 @@ $ `module.nu`
 @ interp_disable_guard → v { = g_guard 0 }
 
 // The linear memory's base address, whichever representation is live.
-inline @ __mem_base * Interp it → i {
+inline @ __mem_base * InterpImpl it → i {
     ? != 0 . it mem_raw { ^ . it mem_raw } { ^ # i ( vec_data [u] . it mem ) }
 }
 
-@ interp_new * Module m → *Interp {
-    : *Interp it # *Interp ( nurl_alloc Z Interp )
+// Instantiate `m`. The instance holds a share of the module, so the module
+// lives as long as any instance of it.
+@ interp_new Module m__h → Interp {
+    : *ModuleImpl m ( _Module_ptr m__h )
+    : i it__box ( rcbox_zero [InterpImpl] )
+    : *InterpImpl it ( rcbox_ptr [InterpImpl] it__box )
     = . it mod # s m
+    = . it modh ( Module_share m__h )
     = . it pfuncs ( vec_new [s] )
     = . it vs ( vec_new [i] )
     // Linear memory is ONE zero-filled block of the declared minimum.
@@ -442,7 +463,6 @@ inline @ __mem_base * Interp it → i {
     = . it caperr ( vec_new [u] )
     = . it owner # s 0
     = . it next_tid 1
-    = . it thread_holders ( vec_new [s] )
     = . it thread_kids ( vec_new [i] )
     = . it thread_joins ( vec_new [Thread] )
     = . it tstart_fidx -2
@@ -511,7 +531,7 @@ inline @ __mem_base * Interp it → i {
             = di + di 1
         }
     } {}
-    ^ it
+    ^ @ Interp { # s it__box }
 }
 
 // Allocate a fresh file-descriptor record of the given kind.
@@ -535,90 +555,79 @@ inline @ __mem_base * Interp it → i {
     ( nurl_free # s f )
 }
 
-@ interp_free sink * Interp it → v {
-    // A spawned thread owns only what interp_thread_new made for it: the
-    // memory, table, argv/envp and every host table belong to the Interp
-    // that instantiated, and are freed exactly once, there.
-    ? != # i . it owner 0 {
-        ( __thread_unregister it )
-        ( vec_free [i] . it vs )
-        ( vec_free [i] . it thread_kids )
-        ( vec_free [Thread] . it thread_joins )
-        ( vec_free [i] . it globals )
-        ( vec_free [i] . it nethandles )
-        ( vec_free [i] . it netkinds )
-        ( vec_free [s] . it fds )
-        ( vec_free [s] . it thread_holders )
-        ( vec_free [u] . it trapmsg )
-        ~ != 0 . it jit_ctx_free { : *i cb # *i . it jit_ctx_free = . it jit_ctx_free . cb 0 ( nurl_free # s cb ) }
-        ? != 0 . it jit_slab { ( nurl_free # s . it jit_slab ) = . it jit_slab 0 } {}
-        ? != 0 . it jit_spcell { ( nurl_free # s . it jit_spcell ) = . it jit_spcell 0 } {}
-        ? != 0 . it jit_co_env { ( nurl_closure_drop # *u . it jit_co_env ) = . it jit_co_env 0 } {}
-        ( vec_free [u] . it capout )
-        ( vec_free [u] . it caperr )
-        : i tpn ( vec_len [s] . it pfuncs )
-        : ~ i tpi 0
-        ~ < tpi tpn { ?? ( vec_get [s] . it pfuncs tpi ) { T pp → ( __pf_free pp ) F → {} } = tpi + tpi 1 }
-        ( vec_free [s] . it pfuncs )
-        ( nurl_free # s it )
-        ^ v
-    } {}
-    // Wait for the threads before dropping what they run on. The guest's
-    // own join only proves the thread's BODY finished; the host thread is
-    // still inside the interpreter for a moment after that, and it reads
-    // this Interp's memory and table.
-    : i tjn ( vec_len [Thread] . it thread_joins )
-    : ~ i tji 0
-    ~ < tji tjn {
-        ?? ( vec_get [Thread] . it thread_joins tji ) { T t → { ( thread_join t ) } F → {} }
-        = tji + tji 1
+// The JIT's lazily made raw state: the free list of call contexts, the
+// slab, the anchor block and the call-out bridge's copy of its env.
+@ __jit_state_free i ctxs i slab i spcell i coenv → v {
+    : ~ i cb ctxs
+    ~ != 0 cb { : *i c # *i cb : i nx . c 0 ( nurl_free # s cb ) = cb nx }
+    ? != 0 slab { ( nurl_free # s slab ) } {}
+    ? != 0 spcell { ( nurl_free # s spcell ) } {}
+    ? != 0 coenv { ( nurl_closure_drop # *u coenv ) } {}
+}
+
+@ __free_args ( Vec s ) args → v {
+    : i n ( vec_len [s] args )
+    : ~ i k 0
+    ~ < k n { ?? ( vec_get [s] args k ) { T pp → ? != # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = k + k 1 }
+}
+
+@ __free_pfuncs ( Vec s ) pfs → v {
+    : i n ( vec_len [s] pfs )
+    : ~ i k 0
+    ~ < k n { ?? ( vec_get [s] pfs k ) { T pp → ( __pf_free pp ) F → {} } = k + k 1 }
+}
+
+// The raw parts of an instance — the *Arg / *WFd / *PFunc records behind its
+// tables, the guard reservation, the JIT state, the guest's open sockets —
+// released by its last owner (Interp_drop); its Vecs and its module handle
+// are dropped after this returns. Threads first: the guest's own join only
+// proves the thread's BODY finished, and the host thread is still inside
+// the interpreter for a moment after that, reading this memory and table.
+% Drop InterpImpl {
+    @ drop InterpImpl it → v {
+        : i tjn ( vec_len [Thread] . it thread_joins )
+        : ~ i tji 0
+        ~ < tji tjn {
+            ?? ( vec_get [Thread] . it thread_joins tji ) { T t → { ( thread_join t ) } F → {} }
+            = tji + tji 1
+        }
+        ( __net_close_handles . it nethandles . it netkinds )
+        ? != 0 . it mem_raw {
+            ( nurl_guard_mem_del # *u . it mem_raw )
+            ( nurl_vmem_release # *u . it mem_raw ( __vmem_span ) )
+        } {}
+        ( __free_args . it argv )
+        ( __free_args . it envp )
+        : i fn ( vec_len [s] . it fds )
+        : ~ i fi 0
+        ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
+        ( __free_pfuncs . it pfuncs )
+        ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env )
     }
+}
+
+// Let go of `it` now rather than at the end of its owner's scope.
+@ interp_free sink Interp it → v {}
+
+// A spawned thread's instance, released by the thread that ran it. It owns
+// only what __interp_thread_new made for it: the memory, table, argv/envp and
+// every host table belong to the instance that instantiated, and are released
+// exactly once, there.
+@ __interp_thread_free * InterpImpl it → v {
+    ( __thread_unregister it )
+    ( vec_free [i] . it vs )
+    ( vec_free [i] . it thread_kids )
     ( vec_free [Thread] . it thread_joins )
-    ( interp_net_close_all it )
+    ( vec_free [i] . it globals )
     ( vec_free [i] . it nethandles )
     ( vec_free [i] . it netkinds )
-    : i thn ( vec_len [s] . it thread_holders )
-    : ~ i thi 0
-    ~ < thi thn { ?? ( vec_get [s] . it thread_holders thi ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} } = thi + thi 1 }
-    ( vec_free [s] . it thread_holders )
-    ( vec_free [i] . it thread_kids )
-    ( vec_free [i] . it vs )
-    ( vec_free [u] . it mem )
-    ? != 0 . it mem_raw {
-        ( nurl_guard_mem_del # *u . it mem_raw )
-        ( nurl_vmem_release # *u . it mem_raw ( __vmem_span ) )
-        = . it mem_raw 0
-    } {}
-    ( vec_free [i] . it globals )
-    ( vec_free [i] . it table )
-    ( vec_free [i] . it data_dropped )
-    ( vec_free [i] . it elem_dropped )
-    : i an ( vec_len [s] . it argv )
-    : ~ i ai 0
-    ~ < ai an { ?? ( vec_get [s] . it argv ai ) { T pp → ? != # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ai + ai 1 }
-    ( vec_free [s] . it argv )
-    : i en ( vec_len [s] . it envp )
-    : ~ i ei 0
-    ~ < ei en { ?? ( vec_get [s] . it envp ei ) { T pp → ? != # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ei + ei 1 }
-    ( vec_free [s] . it envp )
-    : i fn ( vec_len [s] . it fds )
-    : ~ i fi 0
-    ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
     ( vec_free [s] . it fds )
     ( vec_free [u] . it trapmsg )
+    ( __jit_state_free . it jit_ctx_free . it jit_slab . it jit_spcell . it jit_co_env )
     ( vec_free [u] . it capout )
     ( vec_free [u] . it caperr )
-    : i pn ( vec_len [s] . it pfuncs )
-    : ~ i pi 0
-    ~ < pi pn { ?? ( vec_get [s] . it pfuncs pi ) { T pp → ( __pf_free pp ) F → {} } = pi + pi 1 }
+    ( __free_pfuncs . it pfuncs )
     ( vec_free [s] . it pfuncs )
-    // Tier-6/7 state is allocated lazily on the owner; free it here too
-    // (the thread branch above frees the same fields, but a child never
-    // JITs, so before this the owner leaked them all).
-    ~ != 0 . it jit_ctx_free { : *i ocb # *i . it jit_ctx_free = . it jit_ctx_free . ocb 0 ( nurl_free # s ocb ) }
-    ? != 0 . it jit_slab { ( nurl_free # s . it jit_slab ) = . it jit_slab 0 } {}
-    ? != 0 . it jit_spcell { ( nurl_free # s . it jit_spcell ) = . it jit_spcell 0 } {}
-    ? != 0 . it jit_co_env { ( nurl_closure_drop # *u . it jit_co_env ) = . it jit_co_env 0 } {}
     ( nurl_free # s it )
 }
 
@@ -627,31 +636,71 @@ inline @ __mem_base * Interp it → i {
 // host program that runs a module as a function call wants the
 // module's output back as a VALUE, not interleaved into its own
 // console. Enable before exec_func; read the buffers after it.
-@ interp_capture * Interp it → v { = . it cap T }
+@ interp_capture Interp it__h → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    = . it cap T
+}
 
-// The captured bytes — BORROWED views into the Interp (valid until
-// interp_free; do not free). Raw bytes, exactly as the module wrote
-// them: a NUL neither truncates nor terminates.
-@ interp_stdout_bytes * Interp it → ( Vec u ) { ^ . it capout }
+// The captured bytes — the Interp's own buffers, lent (valid while the
+// Interp lives). Raw bytes, exactly as the module wrote them: a NUL
+// neither truncates nor terminates.
+@ interp_stdout_bytes Interp it__h → ( Vec u ) {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    ^ . it capout
+}
 
-@ interp_stderr_bytes * Interp it → ( Vec u ) { ^ . it caperr }
+@ interp_stderr_bytes Interp it__h → ( Vec u ) {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    ^ . it caperr
+}
 
 // Did the guest trap? Did it call proc_exit? The two halves of `halt`.
 // Both can be set: a trap while unwinding an exiting module leaves the
 // trap visible, which is what an embedder wants to report.
-@ interp_trapped * Interp it → b { ^ != 0 & . it halt 1 }
+@ __interp_trapped * InterpImpl it → b { ^ != 0 & . it halt 1 }
 
-@ interp_exited * Interp it → b { ^ != 0 & . it halt 2 }
+@ interp_trapped Interp it__h → b { ^ ( __interp_trapped ( __Interp_ptr it__h ) ) }
+
+@ __interp_exited * InterpImpl it → b { ^ != 0 & . it halt 2 }
+
+@ interp_exited Interp it__h → b { ^ ( __interp_exited ( __Interp_ptr it__h ) ) }
+
+// The trap message (empty unless interp_trapped) — the Interp's own bytes, lent.
+@ interp_trapmsg Interp it__h → ( Vec u ) {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    ^ . it trapmsg
+}
+
+// The guest's proc_exit code (0 when it returned from _start instead).
+@ interp_exit_code Interp it__h → i {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    ^ . it exit_code
+}
+
+// The value stack, lent: push an invoked export's arguments here before
+// exec_func, and read its results off the top after it.
+@ interp_stack Interp it__h → ( Vec i ) {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    ^ . it vs
+}
+
+// Meter execution: at most `n` predecoded records, then trap (--fuel).
+@ interp_set_fuel Interp it__h i n → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    = . it fuel n
+}
 
 // Append a program argument (copied from a NUL-terminated host string).
-@ interp_push_arg * Interp it s str → v {
+@ interp_push_arg Interp it__h s str → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
     : *Arg a # *Arg ( nurl_alloc Z Arg )
     = . a bytes ( bytes_from_str str )
     ( vec_push [s] . it argv # s a )
 }
 
 // Append an environment entry ("NAME=VALUE", copied).
-@ interp_push_env * Interp it s str → v {
+@ interp_push_env Interp it__h s str → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
     : *Arg a # *Arg ( nurl_alloc Z Arg )
     = . a bytes ( bytes_from_str str )
     ( vec_push [s] . it envp # s a )
@@ -661,17 +710,24 @@ inline @ __mem_base * Interp it → i {
 // imports hand the guest raw host pointers into linear memory and forward them
 // to libcuda, so they are only safe for trusted compute — the embedder must
 // opt in explicitly (the CLI does so with --allow-gpu).
-@ interp_allow_gpu * Interp it → v { = . it gpu_ok T }
+@ interp_allow_gpu Interp it__h → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    = . it gpu_ok T
+}
 
 // Enable the module "nurl_net" socket bridge — the guest's TCP/UDP/DNS
 // calls become this process's. Off by default for the same reason the
 // GPU bridge is: it is the guest reaching the network through us (the
 // CLI opts in with --allow-net).
-@ interp_allow_net * Interp it → v { = . it net_ok T }
+@ interp_allow_net Interp it__h → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    = . it net_ok T
+}
 
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
-@ interp_set_preopen * Interp it s host_path s guest_name → v {
+@ interp_set_preopen Interp it__h s host_path s guest_name → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
     : *WFd f # *WFd ( __mkfd 2 )
     ( vec_free [u] . f host ) = . f host ( bytes_from_str host_path )
     ( vec_free [u] . f name ) = . f name ( bytes_from_str guest_name )
@@ -684,20 +740,23 @@ inline @ __mem_base * Interp it → i {
 // that instantiated it. File descriptors, socket handles and captured
 // output are per-INSTANCE in wasm terms but per-PROCESS in the guest's:
 // a file opened by one thread has to be the same fd in another.
-@ __host * Interp it → *Interp {
+@ __host * InterpImpl it → *InterpImpl {
     ? == # i . it owner 0 { ^ it } {}
-    ^ # *Interp . it owner
+    ^ # *InterpImpl . it owner
 }
 
 // A fresh Interp for a spawned thread: its own stacks and globals over
 // the owner's memory, table and module. The shared Vecs are copied by
 // HANDLE — safe because a threaded module's memory is allocated at its
-// maximum up front and never moves — and `interp_free` on a thread
-// releases only what the thread itself owns.
-@ interp_thread_new * Interp parent → *Interp {
-    : *Interp ho ( __host parent )
-    : *Module m # *Module . ho mod
-    : *Interp it # *Interp ( nurl_alloc Z Interp )
+// maximum up front and never moves — and `__interp_thread_free` releases
+// only what the thread itself owns.
+@ __interp_thread_new * InterpImpl parent → *InterpImpl {
+    : *InterpImpl ho ( __host parent )
+    : *ModuleImpl m # *ModuleImpl . ho mod
+    // Zeroed: the fields not set below (mem_raw, the JIT state, the module
+    // handle) must read as "none" — mem_raw is the memory base's selector and
+    // __interp_thread_free releases whatever JIT state is non-zero.
+    : *InterpImpl it # *InterpImpl ( nurl_zalloc Z InterpImpl )
     = . it mod . ho mod
     = . it vs ( vec_new [i] )
     = . it mem . ho mem
@@ -725,7 +784,6 @@ inline @ __mem_base * Interp it → i {
     = . it caperr ( vec_new [u] )
     = . it owner # s ho
     = . it next_tid 0
-    = . it thread_holders ( vec_new [s] )
     = . it thread_kids ( vec_new [i] )
     = . it thread_joins ( vec_new [Thread] )
     = . it tstart_fidx -2
@@ -758,7 +816,7 @@ inline @ __mem_base * Interp it → i {
 
 // Publish a new memory size to every Interp in the group. Called with the
 // atomics lock held.
-@ __mem_publish * Interp ho i pages i bytes → v {
+@ __mem_publish * InterpImpl ho i pages i bytes → v {
     = . ho mem_pages pages
     = . ho mem_bytes bytes
     : i n ( vec_len [i] . ho thread_kids )
@@ -766,7 +824,7 @@ inline @ __mem_base * Interp it → i {
     ~ < k n {
         : i kp ?? ( vec_get [i] . ho thread_kids k ) { T x → x F → 0 }
         ? != kp 0 {
-            : *Interp kid # *Interp # s kp
+            : *InterpImpl kid # *InterpImpl # s kp
             = . kid mem_pages pages
             = . kid mem_bytes bytes
         } {}
@@ -775,9 +833,9 @@ inline @ __mem_base * Interp it → i {
 }
 
 // Leave the group (the thread is done with its Interp).
-@ __thread_unregister * Interp it → v {
+@ __thread_unregister * InterpImpl it → v {
     ? == # i . it owner 0 { ^ v } {}
-    : *Interp ho ( __host it )
+    : *InterpImpl ho ( __host it )
     ( __atom_lock )
     : i n ( vec_len [i] . ho thread_kids )
     : ~ i k 0
@@ -788,14 +846,15 @@ inline @ __mem_base * Interp it → i {
     ( __atom_unlock )
 }
 
-@ interp_run_start * Interp it → v {
-    : *Module m # *Module . it mod
-    ? >= . m start_func 0 { ( exec_func it . m start_func ) } {}
+@ interp_run_start Interp it__h → v {
+    : *InterpImpl it ( __Interp_ptr it__h )
+    : *ModuleImpl m # *ModuleImpl . it mod
+    ? >= . m start_func 0 { ( __exec_func it . m start_func ) } {}
 }
 
-@ __push * Interp it i v → v { ( vec_push [i] . it vs v ) }
+@ __push * InterpImpl it i v → v { ( vec_push [i] . it vs v ) }
 
-@ __pop * Interp it → i {
+@ __pop * InterpImpl it → i {
     : i n ( vec_len [i] . it vs )
     ? <= n 0 { ( __trap it `value stack underflow` ) ^ 0 } {}
     : i v ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 }
@@ -803,10 +862,10 @@ inline @ __mem_base * Interp it → i {
     ^ v
 }
 
-@ __vsh * Interp it → i { ^ ( vec_len [i] . it vs ) }
+@ __vsh * InterpImpl it → i { ^ ( vec_len [i] . it vs ) }
 
 // Truncate the value stack back to height h.
-@ __vtrunc * Interp it i h → v {
+@ __vtrunc * InterpImpl it i h → v {
     ~ > ( vec_len [i] . it vs ) h { ( vec_pop [i] . it vs ) }
 }
 
@@ -814,7 +873,7 @@ inline @ __mem_base * Interp it → i {
 @ __w32 i v → i { : i lo & v 4294967295 ^ ? != 0 & lo 2147483648 | lo -4294967296 lo }
 
 // Read n little-endian bytes from the cursor into an i (zero-extended).
-@ __read_le * Wc c i n → i {
+@ __read_le inout Wc c i n → i {
     : ~ i bits 0
     : ~ i k 0
     ~ < k n { = bits | bits << ( wc_u8 c ) * 8 k = k + k 1 }
@@ -824,7 +883,7 @@ inline @ __mem_base * Interp it → i {
 // ── immediate skipping (for matching `end`) ──────────────────────
 // Advance `c` past the immediates of the instruction whose opcode is `op`.
 
-@ __skip_imm * Wc c i op → v {
+@ __skip_imm inout Wc c i op → v {
     // block / loop / if : block type = signed LEB (s33: void / valtype / type index)
     ? | == op 2 | == op 3 == op 4 { ( wc_sleb c ) ^ v } {}
     // br / br_if / call / local.* / global.* / table.get/set / ref.func : one uleb
@@ -884,7 +943,7 @@ inline @ __mem_base * Interp it → i {
 // single valtype, non-negative = an index into the type section (multi-value).
 
 // Parameter count of a block type.
-@ __bt_params * Module m i bt → i {
+@ __bt_params * ModuleImpl m i bt → i {
     ? < bt 0 { ^ 0 } {}
     : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
     ? == # i tp 0 { ^ 0 } {}
@@ -893,7 +952,7 @@ inline @ __mem_base * Interp it → i {
 }
 
 // Result count of a block type.
-@ __bt_results * Module m i bt → i {
+@ __bt_results * ModuleImpl m i bt → i {
     ? == bt -64 { ^ 0 } {}
     ? < bt 0 { ^ 1 } {}
     : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
@@ -905,7 +964,7 @@ inline @ __mem_base * Interp it → i {
 // ── arithmetic helpers ───────────────────────────────────────────
 
 // Set the trap flag with a message (the uniform way every trap is raised).
-@ __trap * Interp it s msg → v {
+@ __trap * InterpImpl it s msg → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     = . it trapmsg ( bytes_from_str msg )
@@ -914,25 +973,25 @@ inline @ __mem_base * Interp it → i {
 // wasm div/rem semantics: divide-by-zero traps; signed div overflow
 // (minv / −1, where minv = INT32_MIN or INT64_MIN) traps; signed rem by −1 is
 // defined as 0 (also dodging the host SIGFPE on INT_MIN % −1).
-@ __div_s * Interp it i a i b i minv → i {
+@ __div_s * InterpImpl it i a i b i minv → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ? & == a minv == b -1 { ( __trap it `integer overflow` ) ^ 0 } {}
     ^ / a b
 }
 
-@ __rem_s * Interp it i a i b → i {
+@ __rem_s * InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ? == b -1 { ^ 0 } {}
     ^ % a b
 }
 
 // Unsigned variants over already-nonnegative operands (u32 zero-extended).
-@ __div_u * Interp it i a i b → i {
+@ __div_u * InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ^ / a b
 }
 
-@ __rem_u * Interp it i a i b → i {
+@ __rem_u * InterpImpl it i a i b → i {
     ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
     ^ % a b
 }
@@ -1003,7 +1062,7 @@ inline @ __mem_base * Interp it → i {
 // Trapping float→int truncation core (wasm's two distinct traps): NaN →
 // `invalid conversion to integer`; trunc(x) outside [lo, hi) → `integer
 // overflow`. Returns the integral value as f64.
-@ __trunc_ck * Interp it b isnan f x f lo f hi → f {
+@ __trunc_ck * InterpImpl it b isnan f x f lo f hi → f {
     ? isnan { ( __trap it `invalid conversion to integer` ) ^ 0.0 } {}
     : f t ( trunc x )
     ? ! & >= t lo < t hi { ( __trap it `integer overflow` ) ^ 0.0 } {}
@@ -1086,7 +1145,7 @@ inline @ __mem_base * Interp it → i {
 // sign-extension it will never reach from that site, and declines. Forcing
 // it was 9.5 % off the benchmark corpus, 24 % off nbody and matmul, 19 %
 // off sieve.
-inline @ __mem_load * Interp it i ea i n i signed → i {
+inline @ __mem_load * InterpImpl it i ea i n i signed → i {
     ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap_oob it `memory load out of bounds` ea n )
         ^ 0
@@ -1119,7 +1178,7 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
 // independent locations, and guests rely on it — two malloc headers, two
 // struct fields, a length beside a flag. The symptom is a heap that grows
 // a wrong size field and hands out a wild pointer somewhere else.
-@ __mem_store_bytes * Interp it i ea i n i val → v {
+@ __mem_store_bytes * InterpImpl it i ea i n i val → v {
     : *u mb # *u ( __mem_base it )
     : ~ i k 0
     ~ < k n {
@@ -1129,7 +1188,7 @@ inline @ __mem_load * Interp it i ea i n i signed → i {
 }
 
 // Write the low n bytes of val little-endian to mem[ea].
-inline @ __mem_store * Interp it i ea i n i val → v {
+inline @ __mem_store * InterpImpl it i ea i n i val → v {
     ? | < ea 0 > + ea n . it mem_bytes {
         ( __trap_oob it `memory store out of bounds` ea n )
         ^ v
@@ -1156,8 +1215,8 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // Grow linear memory by `delta` pages. Returns the old page count, or −1 when
 // the declared maximum (or the wasm32 hard limit of 65536 pages) would be
 // exceeded — the value memory.grow pushes.
-@ __mem_grow * Interp it i delta → i {
-    : *Module m # *Module . it mod
+@ __mem_grow * InterpImpl it i delta → i {
+    : *ModuleImpl m # *ModuleImpl . it mod
     : ~ i limit 65536
     ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
     // A shared memory already owns its maximum: growing is only raising
@@ -1171,7 +1230,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
     // which is exactly what the guest allocator uses as its new arena.)
     ? != . m mem_shared 0 {
         ( __atom_lock )
-        : *Interp ho ( __host it )
+        : *InterpImpl ho ( __host it )
         : i old . ho mem_pages
         ? == delta 0 { ( __atom_unlock ) ^ old } {}
         ? | < delta 0 > + old delta limit { ( __atom_unlock ) ^ -1 } {}
@@ -1201,7 +1260,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // the function's results are left on top. Recurses for `call`.
 
 // Dispatch an imported function to the WASI host layer (no frame needed).
-@ __call_import * Interp it * Module m i fidx → v {
+@ __call_import * InterpImpl it * ModuleImpl m i fidx → v {
     : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
     ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
 }
@@ -1212,7 +1271,7 @@ inline @ __mem_store * Interp it i ea i n i val → v {
 // one flat array, locals first, stack slots after; the driver copies call
 // arguments straight from the caller's slots, so only the outermost frame
 // touches the value stack.
-@ __frame_new * Interp it * Module m i fidx i ret_dst → s {
+@ __frame_new * InterpImpl it * ModuleImpl m i fidx i ret_dst → s {
     : s pins ( __pfunc_for it m fidx )
     ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *PFunc pfc # *PFunc pins
@@ -1930,13 +1989,13 @@ inline @ __fr_setpos s tp i v → v {
 // One structural walk of the body collecting the distinct constants. Every
 // other opcode is stepped over by `__skip_imm`, the same routine the decoder
 // already trusts for immediate layout, so this cannot desynchronise.
-@ __const_pool * Module m * WFunc f ( Vec i ) kv → v {
+@ __const_pool * ModuleImpl m * WFunc f ( Vec i ) kv → v {
     // Pool entry 0 is the address-fusion zero. Every load record carries a
     // second address operand (see `__fuse_addr`); an access with nothing
     // folded into it names this slot, so the arm adds a slot that is always
     // zero instead of testing whether it has an index at all.
     ( __kintern kv 0 )
-    : *Wc c ( wc_new . m code )
+    : ~ Wc c ( wc_new . m code )
     = . c pos . f code_start
     = . c len . f code_end
     ~ < . c pos . f code_end {
@@ -1953,7 +2012,7 @@ inline @ __fr_setpos s tp i v → v {
         // every immediate encoding it walks past.
         ? <= . c pos p0 { = . c pos + p0 1 } {}
     }
-    ( wc_free c )
+
 }
 
 // Bind height `h` to the constant `cv`: the pool slot when the pre-scan
@@ -2175,7 +2234,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ F
 }
 
-@ __wrap_skippable * Module m * Wc c → b {
+@ __wrap_skippable * ModuleImpl m inout Wc c → b {
     ? >= . c pos . c len { ^ F } {}
     : i nx # i ?? ( vec_get [u] . m code . c pos ) { T x → x F → # u 0 }
     ? ( __insens_binop nx ) { ^ T } {}
@@ -2183,7 +2242,7 @@ inline @ __fr_setpos s tp i v → v {
     // one interposed push: i32.const (sleb) or local.get (uleb), then the
     // consumer — the wrap's value is its first operand
     ? | == nx 65 == nx 32 {
-        : *Wc pk ( wc_new . m code )
+        : ~ Wc pk ( wc_new . m code )
         = . pk pos + . c pos 1
         = . pk len . c len
         ? == nx 65 { : i _v ( wc_sleb pk ) } { : i _v ( wc_uleb pk ) }
@@ -2192,13 +2251,13 @@ inline @ __fr_setpos s tp i v → v {
             : i n2 # i ?? ( vec_get [u] . m code . pk pos ) { T x → x F → # u 0 }
             = ok ( __insens_binop n2 )
         } {}
-        ( wc_free pk )
+
         ^ ok
     } {}
     ^ F
 }
 
-@ __predecode * Module m * WFunc f → s {
+@ __predecode * ModuleImpl m * WFunc f → s {
     : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
     = . pf code ( vec_new [i] )
     = . pf aux ( vec_new [i] )
@@ -2224,7 +2283,7 @@ inline @ __fr_setpos s tp i v → v {
     : ( Vec s ) open ( vec_new [s] )
     // the function body behaves as one enclosing block returning the results
     ( vec_push [s] open ( __pblk_new 0 0 0 nresults 1 -1 ) )
-    : *Wc c ( wc_new . m code )
+    : ~ Wc c ( wc_new . m code )
     = . c pos . f code_start
     = . c len . f code_end
     : ~ i h 0
@@ -2364,7 +2423,7 @@ inline @ __fr_setpos s tp i v → v {
                                             : i fi ( wc_uleb c )
                                             ? != 0 live {
                                                 ( __vflush pf vm SB h live byte )
-                                                : s ct ( module_func_type m fi )
+                                                : s ct ( _module_func_type m fi )
                                                 : ~ i cp 0
                                                 : ~ i cr 0
                                                 ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
@@ -2547,9 +2606,7 @@ inline @ __fr_setpos s tp i v → v {
     : i on ( vec_len [s] open )
     : ~ i ok 0
     ~ < ok on { ?? ( vec_get [s] open ok ) { T pp → ( __pblk_free pp ) F → {} } = ok + ok 1 }
-    ( vec_free [s] open )
-    ( vec_free [i] vm )
-    ( wc_free c )
+
     // Past the slot cap the packed operand fields would wrap, so the body is
     // replaced by a single trap: the module still loads and still decodes,
     // and says so cleanly if the function is ever called. The frame is
@@ -2587,7 +2644,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ # s pf
 }
 // Get-or-build the PFunc for defined function `fidx`.
-@ __pfunc_for * Interp it * Module m i fidx → s {
+@ __pfunc_for * InterpImpl it * ModuleImpl m i fidx → s {
     : i di - fidx . m num_import_funcs
     // Bound first: `di` comes from a call record, i.e. straight out of the
     // module, so a hostile index must not be allowed to grow the cache.
@@ -2605,7 +2662,7 @@ inline @ __fr_setpos s tp i v → v {
 
 // On trap: append a wasm backtrace (innermost first) to the trap message,
 // naming frames from the module's name section when present.
-@ __trap_backtrace * Interp it * Module m s top → v {
+@ __trap_backtrace * InterpImpl it * ModuleImpl m s top → v {
     : ( Vec u ) msg . it trapmsg
     : ~ s pp top
     : ~ i shown 0
@@ -2613,9 +2670,8 @@ inline @ __fr_setpos s tp i v → v {
         ? != # i pp 0 {
             : *Frame fr # *Frame pp
             ( __msg_push_str msg `\n  at ` )
-            : ( Vec u ) nm ( module_func_name m . fr fidx )
+            : ( Vec u ) nm ( _module_func_name m . fr fidx )
             ? > ( vec_len [u] nm ) 0 { ( __msg_push_vec msg nm ) } { ( __msg_push_str msg `<unknown>` ) }
-            ( vec_free [u] nm )
             ( __msg_push_str msg ` (func ` )
             ( __msg_push_int msg . fr fidx )
             ( __msg_push_str msg `, +` )
@@ -3415,9 +3471,9 @@ inline @ __fr_setpos s tp i v → v {
 
 // Argument/result window of a call record: nargs*65536+nres (or -1 when
 // the type cannot be resolved — the walker then treats it as a full read).
-@ __jit_call_win * Module m i op i a → i {
+@ __jit_call_win * ModuleImpl m i op i a → i {
     : ~ s ct # s 0
-    ? | == op 50 == op 210 { = ct ( module_func_type m a ) } {
+    ? | == op 50 == op 210 { = ct ( _module_func_type m a ) } {
         ? == op 170 { = ct ?? ( vec_get [s] . m types a ) { T x → x F → # s 0 } } {} }
     ? == # i ct 0 { ^ -1 } {}
     : *FuncType cf # *FuncType ct
@@ -3427,7 +3483,7 @@ inline @ __fr_setpos s tp i v → v {
 // Is slot s provably dead at record `start` — overwritten before any
 // read on every path? DFS over the record CFG; anything the walker does
 // not understand counts as a read.
-@ __jit_slot_dead * Module m ( Vec i ) auxv ( Vec i ) code i n i start i s → i {
+@ __jit_slot_dead * ModuleImpl m ( Vec i ) auxv ( Vec i ) code i n i start i s → i {
     ? | < start 0 >= start n { ^ 1 } {}  // fell off the end: the trailing RET reads nothing
     : ( Vec i ) seen ( vec_new [i] )
     : ~ i z 0
@@ -3490,8 +3546,6 @@ inline @ __fr_setpos s tp i v → v {
             }
         }
     }
-    ( vec_free [i] seen )
-    ( vec_free [i] stk )
     ^ dead
 }
 
@@ -3688,7 +3742,7 @@ inline @ __fr_setpos s tp i v → v {
 // A reusable 7-word JIT call context from the per-Interp freelist (word 0
 // links the free chain). This replaces a Vec per call-out — the profile
 // showed vec_new/push/grow/free dominating recursive guest calls.
-@ __jit_ctx_get * Interp it → *i {
+@ __jit_ctx_get * InterpImpl it → *i {
     : i h . it jit_ctx_free
     ? != h 0 {
         : *i b # *i h
@@ -3698,7 +3752,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ # *i ( nurl_zalloc 64 )
 }
 
-@ __jit_ctx_put * Interp it * i b → v {
+@ __jit_ctx_put * InterpImpl it * i b → v {
     = . b 0 . it jit_ctx_free
     = . it jit_ctx_free # i b
 }
@@ -4070,23 +4124,23 @@ inline @ __fr_setpos s tp i v → v {
 // cd[6] on entry, and the result status is written back there: 0 = done,
 // 1 = trap/halt recorded (the code exits with status 11, "already
 // recorded", which every driver maps to a plain trapped return).
-@ __jit_inline_co * Interp it → v {
+@ __jit_inline_co * InterpImpl it → v {
     : *i cd # *i . it jit_cur_cd
     : i st . cd 6
-    : *Module m # *Module . it mod
+    : *ModuleImpl m # *ModuleImpl . it mod
     : i tr ( __jit_callout it m st cd )
     // memory.grow moved the guest memory: the emitted code reloads its
     // base/limit registers from these words after the call returns
     = . cd 1 ( __mem_base it )
     = . cd 2 . it mem_bytes
-    = . cd 6 ? != 0 tr 1 ? | ( interp_trapped it ) != 0 . it halt 1 0
+    = . cd 6 ? != 0 tr 1 ? | ( __interp_trapped it ) != 0 . it halt 1 0
 }
 
 // Lazy tier-6 state: the frame slab, its top-of-stack cell and the
 // direct-call table, sized once per Interp. 4 MiB of slots; a frame that
 // does not fit returns status 8 and the driver bridges to the
 // interpreter, so deep recursion degrades instead of trapping.
-@ __jit_state_init * Interp it * Module m → v {
+@ __jit_state_init * InterpImpl it * ModuleImpl m → v {
     ? != 0 . it jit_slab { ^ v } {}
     : i bytes 16777216
     = . it jit_slab # i ( nurl_zalloc bytes )
@@ -4334,7 +4388,6 @@ inline @ __fr_setpos s tp i v → v {
             = pk + pk 1
         }
     }
-    ( vec_free [i] upf )
     // The xmm winners: xmm-dominant slots never read at a fused or
     // partial-width integer site (plain integer accesses go through
     // movq; a slot picked above had ex = 0, so no overlap with pins).
@@ -4366,7 +4419,7 @@ inline @ __fr_setpos s tp i v → v {
     ^ pins
 }
 
-@ __jit_try * Interp it * Module m * PFunc pf i fidx9 → v {
+@ __jit_try * InterpImpl it * ModuleImpl m * PFunc pf i fidx9 → v {
     ? != # i . pf jit 0 { ^ v } {}  // already tried (handle or -1)
     ? == 0 ( __jit_ok pf ) { = . pf jit # s -1 ^ v } {}
     ( __jit_state_init it m )
@@ -4635,7 +4688,7 @@ inline @ __fr_setpos s tp i v → v {
                                             // frame's slots, so they only need the memory round trip when
                                             // one overlaps the argument/result window. xmm pins are
                                             // caller-saved: they always sync and reload.
-                                            : s ctw ( module_func_type m a )
+                                            : s ctw ( _module_func_type m a )
                                             : ~ i wargs 0
                                             : ~ i wres 0
                                             ? != # i ctw 0 {
@@ -4673,7 +4726,7 @@ inline @ __fr_setpos s tp i v → v {
                                                 ? >= a nimp {
                                                     // a one-parameter callee takes arg0 in rdx on the direct
                                                     // path (the memory copy still backs the call-out fallback)
-                                                    : s ct9 ( module_func_type m a )
+                                                    : s ct9 ( _module_func_type m a )
                                                     ? != # i ct9 0 {
                                                         : *FuncType ctt9 # *FuncType ct9
                                                         ? == 1 ( vec_len [i] . ctt9 params ) { ( __jit_ldrdx_m buf pmap xmap cvals b raxslot ) } {}
@@ -5047,7 +5100,7 @@ inline @ __fr_setpos s tp i v → v {
 // to read.
 // Handle one pending call-out (the request is in cd; `st` says which
 // kind). Returns 0 to continue, 1 when a trap/halt was recorded.
-@ __jit_callout * Interp it * Module m i st * i cd → i {
+@ __jit_callout * InterpImpl it * ModuleImpl m i st * i cd → i {
     : ~ i callee . cd 4
     : i argbase . cd 5
     : *i jrb # *i . cd 0
@@ -5058,8 +5111,8 @@ inline @ __fr_setpos s tp i v → v {
         : ~ i fbk 0
         ~ < fbk fpops { ( __push it . jrb + fc7 fbk ) = fbk + fbk 1 }
         ( __exec_fc it callee argbase )
-        ? & != 0 & fdd 1 ! ( interp_trapped it ) { = . jrb fc7 ( __pop it ) } {}
-        ^ ? | ( interp_trapped it ) != 0 . it halt 1 0
+        ? & != 0 & fdd 1 ! ( __interp_trapped it ) { = . jrb fc7 ( __pop it ) } {}
+        ^ ? | ( __interp_trapped it ) != 0 . it halt 1 0
     } {}
     ? == st 18 {  // memory.grow: realloc on the host side, result to the dst slot
         // the dst is a dword store into cd[7] — mask off whatever an
@@ -5073,7 +5126,7 @@ inline @ __fr_setpos s tp i v → v {
         = callee ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
         ? < callee 0 { ( __trap it `call_indirect: null table element` ) ^ 1 } {}
         : s want ?? ( vec_get [s] . m types & . cd 7 4294967295 ) { T x → x F → # s 0 }
-        : s have ( module_func_type m callee )
+        : s have ( _module_func_type m callee )
         ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ^ 1 } {}
         ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ^ 1 } {}
     } {}
@@ -5081,7 +5134,7 @@ inline @ __fr_setpos s tp i v → v {
         // jrb is the raw args pointer (the entry passed it as the frame
         // base, argbase 0). g_jit off for the subtree — the slab stays
         // full for exactly as long as this call is running.
-        : s ct20 ( module_func_type m callee )
+        : s ct20 ( _module_func_type m callee )
         : ~ i cp20 0
         : ~ i cr20 0
         ? != # i ct20 0 { : *FuncType ctt20 # *FuncType ct20 = cp20 ( vec_len [i] . ctt20 params ) = cr20 ( vec_len [i] . ctt20 results ) } {}
@@ -5089,9 +5142,9 @@ inline @ __fr_setpos s tp i v → v {
         ~ < ak20 cp20 { ( __push it . jrb + argbase ak20 ) = ak20 + ak20 1 }
         : i sg20 g_jit
         = g_jit 0
-        ( exec_func it callee )
+        ( __exec_func it callee )
         = g_jit sg20
-        ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
+        ? | ( __interp_trapped it ) != 0 . it halt { ^ 1 } {}
         : ~ i rk20 cr20
         ~ > rk20 0 { = rk20 - rk20 1 = . jrb + argbase rk20 ( __pop it ) }
         ^ 0
@@ -5100,10 +5153,10 @@ inline @ __fr_setpos s tp i v → v {
     // recorded; the halt check in the resume walk sees it.
     : i tr ( __jit_callee it m callee jrb argbase )
     ? != 0 tr { ^ 1 } {}
-    ^ ? | ( interp_trapped it ) != 0 . it halt 1 0
+    ^ ? | ( __interp_trapped it ) != 0 . it halt 1 0
 }
 
-@ __jit_run * Interp it * Module m * PFunc pfj i argsp → i {
+@ __jit_run * InterpImpl it * ModuleImpl m * PFunc pfj i argsp → i {
     : s jh . pfj jit
     : *i cd ( __jit_ctx_get it )
     : *i spc # *i . it jit_spcell
@@ -5129,11 +5182,11 @@ inline @ __fr_setpos s tp i v → v {
 // interpreter driver, no value-stack traffic; anything else (imports,
 // non-templatable bodies, or past the recursion cap) falls back to the
 // interpreter. Returns 0 on success, non-zero on trap/halt.
-@ __jit_callee * Interp it * Module m i callee * i caller_rbase i argbase → i {
+@ __jit_callee * InterpImpl it * ModuleImpl m i callee * i caller_rbase i argbase → i {
     // imports and the depth cap take the interpreter's bridge
     ? < callee . m num_import_funcs {
         ( __rdo_import it m callee argbase caller_rbase )
-        ^ ? ( interp_trapped it ) 1 0
+        ^ ? ( __interp_trapped it ) 1 0
     } {}
     : ~ s cpins ? == callee . it jit_lc_fidx # s . it jit_lc_pf # s 0
     ? == # i cpins 0 {
@@ -5157,14 +5210,14 @@ inline @ __fr_setpos s tp i v → v {
     : s jh . pfc jit
     ? | == # i jh 0 == # i jh -1 {
         // not JIT-able: interpret it, bridging args/results through the vs
-        : s ct ( module_func_type m callee )
+        : s ct ( _module_func_type m callee )
         : ~ i cp 0
         : ~ i cr 0
         ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
         : ~ i ak 0
         ~ < ak cp { ( __push it . caller_rbase + argbase ak ) = ak + ak 1 }
-        ( exec_func it callee )
-        ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
+        ( __exec_func it callee )
+        ? | ( __interp_trapped it ) != 0 . it halt { ^ 1 } {}
         : ~ i rk cr
         ~ > rk 0 { = rk - rk 1 = . caller_rbase + argbase rk ( __pop it ) }
         ^ 0
@@ -5179,9 +5232,9 @@ inline @ __fr_setpos s tp i v → v {
         : ~ i ak2 0
         : i np . pfc nparams
         ~ < ak2 np { ( __push it . caller_rbase + argbase ak2 ) = ak2 + ak2 1 }
-        ( exec_func it callee )
-        ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
-        : s ct2 ( module_func_type m callee )
+        ( __exec_func it callee )
+        ? | ( __interp_trapped it ) != 0 . it halt { ^ 1 } {}
+        : s ct2 ( _module_func_type m callee )
         : ~ i cr2 0
         ? != # i ct2 0 { : *FuncType ctt2 # *FuncType ct2 = cr2 ( vec_len [i] . ctt2 results ) } {}
         : ~ i rk2 cr2
@@ -5192,13 +5245,13 @@ inline @ __fr_setpos s tp i v → v {
     ? == st 4 { ( __trap it `integer divide by zero` ) ^ 1 } {}
     ? == st 10 { ( __trap it `integer overflow` ) ^ 1 } {}
     ? == st 1 { ( __trap it `memory access out of bounds` ) ^ 1 } {}
-    ? | ( interp_trapped it ) != 0 . it halt { ^ 1 } {}
+    ? | ( __interp_trapped it ) != 0 . it halt { ^ 1 } {}
     ^ 0
 }
 
-@ exec_func * Interp it i fidx → v {
+@ __exec_func * InterpImpl it i fidx → v {
     ? != 0 . it halt { ^ v } {}
-    : *Module m # *Module . it mod
+    : *ModuleImpl m # *ModuleImpl . it mod
     // Imported functions occupy the low indices → dispatch to the host (WASI).
     ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
     // The activation stack is the frames themselves: `prev` links each to
@@ -5244,7 +5297,7 @@ inline @ __fr_setpos s tp i v → v {
                 ? == status 10 { ( __trap it `integer overflow` ) ( __frame_recycle fr0 ) ^ v } {}
                 ? == status 11 { ( __frame_recycle fr0 ) ^ v } {}  // trap/halt already recorded by an inline call-out
                 ? != 0 status { ( __trap it `memory access out of bounds` ) ( __frame_recycle fr0 ) ^ v } {}
-                ? | ( interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}
+                ? | ( __interp_trapped it ) != 0 . it halt { ( __frame_recycle fr0 ) ^ v } {}
                 // outermost: the entry wrote the results back to the args area
                 : i nres . pfj nresults
                 : ~ i rk 0
@@ -5561,7 +5614,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             : i cfi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? < cfi 0 { ( __trap it `call_indirect: null table element` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : s want ?? ( vec_get [s] . m types ra ) { T x → x F → # s 0 }
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : s have ( module_func_type m cfi )
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                : s have ( _module_func_type m cfi )
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) ( __fr_setpos tp r0 ) = pc pend } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         ( __fr_setpos tp pc )
@@ -5588,7 +5641,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             : ~ i bk 0
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ~ < bk pops { ( __push it . rbase + rc bk ) = bk + bk 1 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ( __exec_fc it ra rb )
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            ? & != 0 & dd 1 ! ( __interp_trapped it ) { = . rbase rc ( __pop it ) } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ? == op 174 {  // __R_ATOM
@@ -5597,7 +5650,7 @@ inline @ __fr_setpos s tp i v → v {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : ~ i bk 0
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ~ < bk pops { ( __push it . rbase + rc bk ) = bk + bk 1 }
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ( __exec_atomic it ra rb )
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? & != 0 & dd 1 ! ( interp_trapped it ) { = . rbase rc ( __pop it ) } {}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ? & != 0 & dd 1 ! ( __interp_trapped it ) { = . rbase rc ( __pop it ) } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? != 0 . it halt { ( __fr_setpos tp r0 ) = pc pend } {}
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             } {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ? == op 205 {  // __R_LOADSHL64: dst = mem64[(x<<k) w32 + off]
@@ -5713,7 +5766,7 @@ inline @ __fr_setpos s tp i v → v {
             = tp cp2
         } {}
     }
-    ? ( interp_trapped it ) { ( __trap_backtrace it m tp ) } {}
+    ? ( __interp_trapped it ) { ( __trap_backtrace it m tp ) } {}
     : ~ s cw tp
     ~ != # i cw 0 {
         : *Frame cf # *Frame cw
@@ -5723,6 +5776,8 @@ inline @ __fr_setpos s tp i v → v {
     }
     = . it fuel ? < fuel0 0 -1 ? < fuel 0 0 fuel
 }
+
+@ exec_func Interp it__h i fidx → v { ( __exec_func ( __Interp_ptr it__h ) fidx ) }
 
 // Perform a call from the register driver: `argbase` is the caller slot of
 // the first argument (and the destination of the results). Imports bridge
@@ -5734,7 +5789,7 @@ inline @ __fr_setpos s tp i v → v {
 // the first execution, so the per-call cost is the freelist pop, the
 // argument copy and the chain link — no lookups, no nested call on the
 // pooled path. Returns the new frame, or 0 on trap.
-@ __rdo_call * Interp it * Module m s caller i callee i argbase * i caller_rbase * i rpb i rec0 → s {
+@ __rdo_call * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase * i rpb i rec0 → s {
     : ~ s cpins # s . rpb + rec0 4
     ? == # i cpins 0 {
         = cpins ( __pfunc_for it m callee )
@@ -5777,7 +5832,7 @@ inline @ __fr_setpos s tp i v → v {
 // The import bridge (its own record since the predecoder knows), and the
 // dynamic spelling call_indirect still needs: resolve at run time, bridge
 // imports through the value stack.
-@ __rdo_dyn * Interp it * Module m s caller i callee i argbase * i caller_rbase → s {
+@ __rdo_dyn * InterpImpl it * ModuleImpl m s caller i callee i argbase * i caller_rbase → s {
     ? < callee . m num_import_funcs {
         ( __rdo_import it m callee argbase caller_rbase )
         ^ # s 0
@@ -5799,15 +5854,15 @@ inline @ __fr_setpos s tp i v → v {
     ^ nf
 }
 
-@ __rdo_import * Interp it * Module m i callee i argbase * i caller_rbase → v {
-    : s wt ( module_func_type m callee )
+@ __rdo_import * InterpImpl it * ModuleImpl m i callee i argbase * i caller_rbase → v {
+    : s wt ( _module_func_type m callee )
     : ~ i np 0
     : ~ i nr 0
     ? != # i wt 0 { : *FuncType wft # *FuncType wt = np ( vec_len [i] . wft params ) = nr ( vec_len [i] . wft results ) } {}
     : ~ i ak 0
     ~ < ak np { ( __push it . caller_rbase + argbase ak ) = ak + ak 1 }
     ( __call_import it m callee )
-    ? ! ( interp_trapped it ) {
+    ? ! ( __interp_trapped it ) {
         : ~ i rk nr
         ~ > rk 0 { = rk - rk 1 = . caller_rbase + argbase rk ( __pop it ) }
     } {}
@@ -5820,7 +5875,7 @@ inline @ __fr_setpos s tp i v → v {
 // register for the frame's slot base. `op` here is the wasm opcode: each
 // arm passes its own literal, so the arm keeps only the one branch it
 // needs.
-@ __rdiv * Interp it i op i a i b → i {
+@ __rdiv * InterpImpl it i op i a i b → i {
     ? == op 127 { ^ ( __div_s it a b -9223372036854775808 ) } {}
     ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __udiv64 a b ) } {}  // i64.div_u
     ? == op 129 { ^ ( __rem_s it a b ) } {}
@@ -5969,7 +6024,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // The int↔float conversions (0xa7..0xbf). Reinterpret (0xbc..0xbf) is the
 // identity because a value already lives as its bit pattern; the trapping
 // truncations report through `it` and their result is then dead.
-@ __convert * Interp it i op i ab → i {
+@ __convert * InterpImpl it i op i ab → i {
     ? == op 167 { ^ ( __w32 ab ) } {}  // i32.wrap_i64
     ? == op 172 { ^ ( __w32 ab ) } {}  // i64.extend_i32_s
     ? == op 173 { ^ & ab 4294967295 } {}  // i64.extend_i32_u
@@ -6033,9 +6088,9 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ^ eq
 }
 
-@ __m_get_u32 * Interp it i a → i { ^ & ( __mem_load it a 4 0 ) 4294967295 }
+@ __m_get_u32 * InterpImpl it i a → i { ^ & ( __mem_load it a 4 0 ) 4294967295 }
 
-@ __m_put_u32 * Interp it i a i val → v { ( __mem_store it a 4 val ) }
+@ __m_put_u32 * InterpImpl it i a i val → v { ( __mem_store it a 4 val ) }
 
 // Overwrite/extend a file fd's buffer at byte offset `at` (gap zero-filled —
 // the file-semantics core shared by fd_write and fd_pwrite).
@@ -6049,7 +6104,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Write `len` bytes of memory at `ptr` to fd: 1 stdout, 2 stderr, else a file
 // descriptor's buffer at its current position (flushed to disk on close/sync).
-@ __wasi_write_bytes * Interp it i fd i ptr i len → v {
+@ __wasi_write_bytes * InterpImpl it i fd i ptr i len → v {
     ? <= len 0 { ^ v } {}
     // A write cannot cover more bytes than linear memory holds; a larger length
     // is a hostile iovec — trap rather than pre-allocate gigabytes for it.
@@ -6062,14 +6117,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
             // An embedder asked for the output as a value: raw bytes,
             // appended, NULs preserved — bytes_to_str would truncate at
             // the first NUL a binary-printing module emits.
-            : *Interp hoc ( __host it )
+            : *InterpImpl hoc ( __host it )
             : ( Vec u ) dst ? == fd 2 . hoc caperr . hoc capout
             : ~ i c 0
             ~ < c len { ( vec_push [u] dst # u ?? ( vec_get [u] buf c ) { T x → # i x F → 0 } ) = c + c 1 }
         } {
             : String s ( bytes_to_str buf )
             ? == fd 2 { ( nurl_eprint ( string_data s ) ) } { ( nurl_print ( string_data s ) ) }
-            ( string_free s )
         }
     } {
         : s fp ( __fd_at it fd )
@@ -6080,16 +6134,15 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
             = . f pos + at len
         } {}
     }
-    ( vec_free [u] buf )
 }
 
-@ __wasi_proc_exit * Interp it → v {
+@ __wasi_proc_exit * InterpImpl it → v {
     = . it exit_code ( __pop it )
     = . it halt | . it halt 2
-    ( interp_flush it )
+    ( __interp_flush it )
 }
 
-@ __wasi_fd_write * Interp it → v {
+@ __wasi_fd_write * InterpImpl it → v {
     : i nwritten ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
@@ -6100,7 +6153,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : i maxio . it mem_bytes
     : ~ i total 0
     : ~ i i 0
-    ~ & & ! ( interp_trapped it ) < i iovs_len <= i maxio {
+    ~ & & ! ( __interp_trapped it ) < i iovs_len <= i maxio {
         : i bufp ( __m_get_u32 it + iovs * i 8 )
         : i buflen ( __m_get_u32 it + + iovs * i 8 4 )
         ( __wasi_write_bytes it fd bufp buflen )
@@ -6118,14 +6171,14 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Fetch the fd record for descriptor `fd`, or #s 0 if out of range / closed.
-@ __fd_at * Interp it i fd → s {
-    : *Interp ho ( __host it )
+@ __fd_at * InterpImpl it i fd → s {
+    : *InterpImpl ho ( __host it )
     ? | < fd 0 >= fd ( vec_len [s] . ho fds ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . ho fds fd ) { T x → x F → # s 0 }
 }
 
 // Read `len` bytes of linear memory at `ptr` into a fresh byte vector.
-@ __mem_slice * Interp it i ptr i len → ( Vec u ) {
+@ __mem_slice * InterpImpl it i ptr i len → ( Vec u ) {
     // Clamp to memory size: a slice can never be longer than linear memory, so
     // a bogus guest length cannot force a multi-gigabyte allocation. Bytes past
     // the end still trap in __mem_load, so this only bounds the up-front cap.
@@ -6151,21 +6204,12 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Is `path` a directory on the host? (opendir succeeds ⇔ directory.)
 @ __is_dir s path → b {
     : !( Vec String ) IoErr r ( dir_list path )
-    ^ ?? r {
-        T names → {
-            : i n ( vec_len [String] names )
-            : ~ i k 0
-            ~ < k n { ?? ( vec_get [String] names k ) { T nm → ( string_free nm ) F → {} } = k + k 1 }
-            ( vec_free [String] names )
-            ^ T
-        }
-        F e → F
-    }
+    ^ ?? r { T names → T F e → F }
 }
 
 // Join a dir fd's host path + "/" + `len` guest bytes at `ptr` into an owned
 // String; #s 0 (as String data) is never returned — the caller checked the fd.
-@ __join_path * Interp it * WFd d i ptr i len → String {
+@ __join_path * InterpImpl it * WFd d i ptr i len → String {
     : ( Vec u ) full ( vec_new [u] )
     : i hn ( vec_len [u] . d host )
     : ~ i k 0
@@ -6175,15 +6219,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : i rn ( vec_len [u] rel )
     : ~ i j 0
     ~ < j rn { ( vec_push [u] full ?? ( vec_get [u] rel j ) { T x → x F → # u 0 } ) = j + j 1 }
-    ( vec_free [u] rel )
     : String hs ( bytes_to_str full )
-    ( vec_free [u] full )
     ^ hs
 }
 
 // The dir fd record for `fd`, or #s 0 unless it is a directory (preopen or
 // opened) — the base every path_* call resolves against.
-@ __dirfd_at * Interp it i fd → s {
+@ __dirfd_at * InterpImpl it i fd → s {
     : s dp ( __fd_at it fd )
     ? == # i dp 0 { ^ # s 0 } {}
     : *WFd d # *WFd dp
@@ -6196,7 +6238,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // oflags: 1 CREAT, 2 DIRECTORY, 4 EXCL, 8 TRUNC. fdflags: 1 APPEND.
 // rights bit 6 (fd_write) makes the fd writable. Files are slurped into a
 // buffer; writes are flushed on close/sync/exit.
-@ __wasi_path_open * Interp it → v {
+@ __wasi_path_open * InterpImpl it → v {
     : i ofd_p ( __pop it )
     : i fdflags ( __pop it )
     ( __pop it )  // fs_rights_inheriting (i64 cell)
@@ -6221,28 +6263,26 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
         ? ( __is_dir ( string_data hs ) ) {
             : *WFd nf # *WFd ( __mkfd 4 )
             ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-            : *Interp ho1 ( __host it )
+            : *InterpImpl ho1 ( __host it )
             ( __m_put_u32 it ofd_p ( vec_len [s] . ho1 fds ) )
             ( vec_push [s] . ho1 fds # s nf )
         } { = rc ? != 0 ( nurl_file_exists ( string_data hs ) ) 54 44 }  // ENOTDIR / ENOENT
-        ( string_free hs )
         ( __push it rc )
         ^ v
     } {}
     : i exists ( nurl_file_exists ( string_data hs ) )
-    ? & & != creat 0 != excl 0 != exists 0 { ( string_free hs ) ( __push it 20 ) ^ v } {}  // EEXIST
+    ? & & != creat 0 != excl 0 != exists 0 { ( __push it 20 ) ^ v } {}  // EEXIST
     ? & != exists 0 ( __is_dir ( string_data hs ) ) {
         // an existing directory opened without O_DIRECTORY: readable as a dir fd
         : *WFd nf # *WFd ( __mkfd 4 )
         ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-        : *Interp ho2 ( __host it )
+        : *InterpImpl ho2 ( __host it )
         ( __m_put_u32 it ofd_p ( vec_len [s] . ho2 fds ) )
         ( vec_push [s] . ho2 fds # s nf )
-        ( string_free hs )
         ( __push it 0 )
         ^ v
     } {}
-    ? & == exists 0 == creat 0 { ( string_free hs ) ( __push it 44 ) ^ v } {}  // ENOENT
+    ? & == exists 0 == creat 0 { ( __push it 44 ) ^ v } {}  // ENOENT
     : *WFd nf # *WFd ( __mkfd 3 )
     ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
     ? & != exists 0 == trunc 0 {
@@ -6263,19 +6303,17 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ? & != creat 0 == exists 0 {
         : ( Vec u ) empty ( vec_new [u] )
         : !v IoErr cr ( write_file_bytes ( string_data hs ) empty )
-        ( vec_free [u] empty )
         ?? cr { T x → {} F e → { = rc ( __ioerr_errno e ) } }
-        ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
+        ? != rc 0 { ( __freefd # s nf ) ( __push it rc ) ^ v } {}
     } {}
-    : *Interp ho3 ( __host it )
+    : *InterpImpl ho3 ( __host it )
     ( __m_put_u32 it ofd_p ( vec_len [s] . ho3 fds ) )
     ( vec_push [s] . ho3 fds # s nf )
-    ( string_free hs )
     ( __push it 0 )
 }
 
 // fd_pread / fd_pwrite: positioned I/O that leaves the fd offset untouched.
-@ __wasi_fd_pread * Interp it → v {
+@ __wasi_fd_pread * InterpImpl it → v {
     : i nread_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
@@ -6290,7 +6328,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
-    ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
+    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ~ i c 0
@@ -6306,7 +6344,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_pwrite * Interp it → v {
+@ __wasi_fd_pwrite * InterpImpl it → v {
     : i nwritten_p ( __pop it )
     : i offset ( __pop it )
     : i iovs_len ( __pop it )
@@ -6320,12 +6358,11 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : ~ i at offset
     : ~ i total 0
     : ~ i iv 0
-    ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
+    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ( Vec u ) chunk ( __mem_slice it bufp buflen )
         ( __fd_put_at f at chunk )
-        ( vec_free [u] chunk )
         = at + at buflen
         = total + total buflen
         = iv + iv 1
@@ -6337,7 +6374,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // path_create_directory / path_remove_directory / path_unlink_file /
 // path_rename / path_filestat_get — the host-directory mutations, resolved
 // against a dir fd exactly like path_open.
-@ __wasi_path_create_directory * Interp it → v {
+@ __wasi_path_create_directory * InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
@@ -6345,11 +6382,10 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ? == # i dp 0 { ( __push it 8 ) ^ v } {}
     : String hs ( __join_path it # *WFd dp path_p path_len )
     : !v IoErr r ( dir_create ( string_data hs ) )
-    ( string_free hs )
     ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
 }
 
-@ __wasi_path_remove_directory * Interp it → v {
+@ __wasi_path_remove_directory * InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
@@ -6357,11 +6393,10 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ? == # i dp 0 { ( __push it 8 ) ^ v } {}
     : String hs ( __join_path it # *WFd dp path_p path_len )
     : i rc ( nurl_dir_remove ( string_data hs ) )
-    ( string_free hs )
     ( __push it ? == rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
 }
 
-@ __wasi_path_unlink_file * Interp it → v {
+@ __wasi_path_unlink_file * InterpImpl it → v {
     : i path_len ( __pop it )
     : i path_p ( __pop it )
     : i dirfd ( __pop it )
@@ -6369,11 +6404,10 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ? == # i dp 0 { ( __push it 8 ) ^ v } {}
     : String hs ( __join_path it # *WFd dp path_p path_len )
     : i32 rc ( unlink ( string_data hs ) )
-    ( string_free hs )
     ( __push it ? == # i rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
 }
 
-@ __wasi_path_rename * Interp it → v {
+@ __wasi_path_rename * InterpImpl it → v {
     : i new_len ( __pop it )
     : i new_p ( __pop it )
     : i new_dirfd ( __pop it )
@@ -6386,13 +6420,12 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : String os ( __join_path it # *WFd odp old_p old_len )
     : String ns ( __join_path it # *WFd ndp new_p new_len )
     : !v IoErr r ( fs_rename ( string_data os ) ( string_data ns ) )
-    ( string_free os ) ( string_free ns )
     ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
 }
 
 // path_filestat_get(dirfd, flags, path_ptr, path_len, st_p): 64-byte filestat —
 // filetype at +16, size at +32 (the fields programs actually read).
-@ __wasi_path_filestat_get * Interp it → v {
+@ __wasi_path_filestat_get * InterpImpl it → v {
     : i st_p ( __pop it )
     : i path_len ( __pop it )
     : i path_p ( __pop it )
@@ -6416,7 +6449,6 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
             F e → { = rc ( __ioerr_errno e ) }
         }
     }
-    ( string_free hs )
     ( __push it rc )
 }
 
@@ -6424,7 +6456,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // entry = 24-byte header (d_next u64, d_ino u64, d_namlen u32, d_type u8+pad)
 // + name. A partially-written final entry with bufused == buf_len tells libc
 // to enlarge and retry, per the ABI.
-@ __wasi_fd_readdir * Interp it → v {
+@ __wasi_fd_readdir * InterpImpl it → v {
     : i bufused_p ( __pop it )
     : i cookie ( __pop it )
     : i buf_len ( __pop it )
@@ -6450,7 +6482,6 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
                 // d_type: probe the joined path (3 dir / 4 regular)
                 : String sub ( __join_path2 hostdir ( string_data nm ) )
                 : i dtype ? ( __is_dir ( string_data sub ) ) 3 4
-                ( string_free sub )
                 // serialize header + name, truncating at buf_len
                 : ( Vec u ) ent ( vec_with_cap [u] + 24 nlen )
                 ( __ent_put64 ent + idx 1 )  // d_next
@@ -6467,16 +6498,11 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
                     = used + used 1
                     = w + w 1
                 }
-                ( vec_free [u] ent )
                 ? < w en { = full T } {}  // buffer exhausted mid-entry
                 = idx + idx 1
             }
-            : ~ i fi 0
-            ~ < fi n { ?? ( vec_get [String] names fi ) { T nm → ( string_free nm ) F → {} } = fi + fi 1 }
-            ( vec_free [String] names )
         }
     }
-    ( string_free hostdir )
     ( __m_put_u32 it bufused_p used )
     ( __push it rc )
 }
@@ -6501,11 +6527,10 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : ~ i k 0
     ~ < k nl { ( vec_push [u] full # u ( nurl_str_get name k ) ) = k + k 1 }
     : String out ( bytes_to_str full )
-    ( vec_free [u] full )
     ^ out
 }
 
-@ __wasi_fd_read * Interp it → v {
+@ __wasi_fd_read * InterpImpl it → v {
     : i nread_p ( __pop it )
     : i iovs_len ( __pop it )
     : i iovs ( __pop it )
@@ -6518,7 +6543,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : i maxio . it mem_bytes
     : ~ i total 0
     : ~ i iv 0
-    ~ & & ! ( interp_trapped it ) < iv iovs_len <= iv maxio {
+    ~ & & ! ( __interp_trapped it ) < iv iovs_len <= iv maxio {
         : i bufp ( __m_get_u32 it + iovs * iv 8 )
         : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
         : ~ i c 0
@@ -6534,7 +6559,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_seek * Interp it → v {
+@ __wasi_fd_seek * InterpImpl it → v {
     : i noff_p ( __pop it )
     : i whence ( __pop it )
     : i offset ( __pop it )
@@ -6550,7 +6575,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_args_sizes_get * Interp it → v {
+@ __wasi_args_sizes_get * InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i argc_p ( __pop it )
     : i argc ( vec_len [s] . it argv )
@@ -6566,7 +6591,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_args_get * Interp it → v {
+@ __wasi_args_get * InterpImpl it → v {
     : i buf_p ( __pop it )
     : i argv_p ( __pop it )
     : i argc ( vec_len [s] . it argv )
@@ -6585,7 +6610,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_prestat_get * Interp it → v {
+@ __wasi_fd_prestat_get * InterpImpl it → v {
     : i buf ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6597,7 +6622,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_prestat_dir_name * Interp it → v {
+@ __wasi_fd_prestat_dir_name * InterpImpl it → v {
     : i plen ( __pop it )
     : i pptr ( __pop it )
     : i fd ( __pop it )
@@ -6615,7 +6640,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // opened 4)→directory(3), file→regular(4).
 @ __filetype_of i kind → i { ^ ? | == kind 2 == kind 4 3 ? == kind 3 4 2 }
 
-@ __wasi_fd_fdstat_get * Interp it → v {
+@ __wasi_fd_fdstat_get * InterpImpl it → v {
     : i stat_p ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6630,7 +6655,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_fd_filestat_get * Interp it → v {
+@ __wasi_fd_filestat_get * InterpImpl it → v {
     : i st_p ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6657,7 +6682,6 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
         : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
         : ~ i rc 0
         ?? wr { T x → { = . f dirty F } F e → { = rc ( __ioerr_errno e ) } }
-        ( string_free hs )
         ^ rc
     } {}
     ^ 0
@@ -6665,14 +6689,16 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Flush every open dirty file — called on proc_exit and when _start returns,
 // so buffered writes are never lost to a missing fd_close.
-@ interp_flush * Interp it → v {
-    : *Interp ho ( __host it )
+@ __interp_flush * InterpImpl it → v {
+    : *InterpImpl ho ( __host it )
     : i n ( vec_len [s] . ho fds )
     : ~ i k 3
     ~ < k n { ?? ( vec_get [s] . ho fds k ) { T pp → ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
 }
 
-@ __wasi_fd_close * Interp it → v {
+@ interp_flush Interp it__h → v { ( __interp_flush ( __Interp_ptr it__h ) ) }
+
+@ __wasi_fd_close * InterpImpl it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     : ~ i rc 0
@@ -6684,7 +6710,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it rc )
 }
 
-@ __wasi_fd_sync * Interp it → v {
+@ __wasi_fd_sync * InterpImpl it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
@@ -6692,7 +6718,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // fd_tell(fd, off_p): current offset as u64.
-@ __wasi_fd_tell * Interp it → v {
+@ __wasi_fd_tell * InterpImpl it → v {
     : i off_p ( __pop it )
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
@@ -6704,7 +6730,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // environ_sizes_get / environ_get: the entries pushed via interp_push_env
 // (the host environment is NOT inherited — capability-style, like --env).
-@ __wasi_environ_sizes_get * Interp it → v {
+@ __wasi_environ_sizes_get * InterpImpl it → v {
     : i bufsz_p ( __pop it )
     : i cnt_p ( __pop it )
     : i n ( vec_len [s] . it envp )
@@ -6720,7 +6746,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __wasi_environ_get * Interp it → v {
+@ __wasi_environ_get * InterpImpl it → v {
     : i buf_p ( __pop it )
     : i envv_p ( __pop it )
     : i n ( vec_len [s] . it envp )
@@ -6741,7 +6767,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // clock_time_get(id, precision, time_ptr): realtime (0) from the wall clock,
 // everything else from the monotonic clock. Nanoseconds.
-@ __wasi_clock_time_get * Interp it → v {
+@ __wasi_clock_time_get * InterpImpl it → v {
     : i t_p ( __pop it )
     ( __pop it )  // precision (i64)
     : i id ( __pop it )
@@ -6762,7 +6788,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // clock_id(16) timeout(24) precision(32) flags(40) — flag bit 0 means
 // the timeout is ABSOLUTE — and for an fd subscription fd(16).
 // Event is 32 bytes: userdata(0) error(8) type(10) nbytes(16) flags(24).
-@ __wasi_poll_oneoff * Interp it → v {
+@ __wasi_poll_oneoff * InterpImpl it → v {
     : i nev_p ( __pop it )
     : i nsubs ( __pop it )
     : i out ( __pop it )
@@ -6771,7 +6797,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : ~ i nev 0
     : ~ i sleep_ns -1  // shortest clock wait seen, -1 = none
     : ~ i k 0
-    ~ & < k nsubs ! ( interp_trapped it ) {
+    ~ & < k nsubs ! ( __interp_trapped it ) {
         : i sub + in * k 48
         : i userdata ( __mem_load it sub 8 0 )
         : i tag ( __mem_load it + sub 8 1 0 )
@@ -6826,7 +6852,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // random_get(buf, len): real OS entropy via the runtime CSPRNG.
-@ __wasi_random_get * Interp it → v {
+@ __wasi_random_get * InterpImpl it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
     // The destination buffer lives in linear memory, so a length larger than
@@ -6839,7 +6865,6 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
         ( nurl_rand_fill # *u ( vec_data [u] tmp ) len )
         : ~ i k 0
         ~ < k len { ( __mem_store it + buf k 1 ?? ( vec_get [u] tmp k ) { T x → # i x F → 0 } ) = k + k 1 }
-        ( vec_free [u] tmp )
     } {}
     ( __push it 0 )
 }
@@ -6847,7 +6872,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // An out-of-bounds access says WHICH address and against what bound: with
 // threads those two numbers separate "the guest computed a wild pointer"
 // from "this thread's view of the memory size is behind the others".
-@ __trap_oob * Interp it s what i ea i n → v {
+@ __trap_oob * InterpImpl it s what i ea i n → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     : String m ( string_from what )
@@ -6861,11 +6886,10 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( string_push_int m . it mem_pages )
     ( string_push_char m 41 )
     = . it trapmsg ( bytes_from_str ( string_data m ) )
-    ( string_free m )
 }
 
 // Trap with a message that carries a dynamic name (import module/field).
-@ __trap_named * Interp it s prefix ( Vec u ) name → v {
+@ __trap_named * InterpImpl it s prefix ( Vec u ) name → v {
     = . it halt | . it halt 1
     ( vec_free [u] . it trapmsg )
     : ( Vec u ) msg ( bytes_from_str prefix )
@@ -6889,89 +6913,89 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Host base address of the guest linear memory (recomputed per call — a
 // memory.grow between host calls may relocate the backing).
-@ __gpu_base * Interp it → i { ^ ( __mem_base it ) }
+@ __gpu_base * InterpImpl it → i { ^ ( __mem_base it ) }
 
 // Guest offset → host pointer (NULL stays NULL).
-@ __gpu_ptr * Interp it i off → *u {
+@ __gpu_ptr * InterpImpl it i off → *u {
     : i o & off 4294967295
     ? == o 0 { ^ # *u 0 } {}
     ^ # *u + ( __gpu_base it ) o
 }
 
-@ __cu_init * Interp it → v {
+@ __cu_init * InterpImpl it → v {
     : i flags ( __pop it )
     ( __push it # i ( cuInit # i32 flags ) )
 }
 
-@ __cu_device_get_count * Interp it → v {
+@ __cu_device_get_count * InterpImpl it → v {
     : i count ( __pop it )
     ( __push it # i ( cuDeviceGetCount ( __gpu_ptr it count ) ) )
 }
 
-@ __cu_device_get * Interp it → v {
+@ __cu_device_get * InterpImpl it → v {
     : i ordinal ( __pop it )
     : i device ( __pop it )
     ( __push it # i ( cuDeviceGet ( __gpu_ptr it device ) # i32 ordinal ) )
 }
 
-@ __cu_device_get_name * Interp it → v {
+@ __cu_device_get_name * InterpImpl it → v {
     : i dev ( __pop it )
     : i len ( __pop it )
     : i name ( __pop it )
     ( __push it # i ( cuDeviceGetName ( __gpu_ptr it name ) # i32 len # i32 dev ) )
 }
 
-@ __cu_ctx_create * Interp it → v {
+@ __cu_ctx_create * InterpImpl it → v {
     : i dev ( __pop it )
     : i flags ( __pop it )
     : i pctx ( __pop it )
     ( __push it # i ( cuCtxCreate ( __gpu_ptr it pctx ) # i32 flags # i32 dev ) )
 }
 
-@ __cu_ctx_destroy * Interp it → v {
+@ __cu_ctx_destroy * InterpImpl it → v {
     : i ctx ( __pop it )
     ( __push it # i ( cuCtxDestroy ctx ) )
 }
 
-@ __cu_ctx_sync * Interp it → v { ( __push it # i ( cuCtxSynchronize ) ) }
+@ __cu_ctx_sync * InterpImpl it → v { ( __push it # i ( cuCtxSynchronize ) ) }
 
-@ __cu_module_load * Interp it → v {
+@ __cu_module_load * InterpImpl it → v {
     : i image ( __pop it )
     : i module ( __pop it )
     ( __push it # i ( cuModuleLoadData ( __gpu_ptr it module ) ( __gpu_ptr it image ) ) )
 }
 
-@ __cu_module_unload * Interp it → v {
+@ __cu_module_unload * InterpImpl it → v {
     : i module ( __pop it )
     ( __push it # i ( cuModuleUnload module ) )
 }
 
-@ __cu_module_get_function * Interp it → v {
+@ __cu_module_get_function * InterpImpl it → v {
     : i name ( __pop it )
     : i hmod ( __pop it )
     : i hfunc ( __pop it )
     ( __push it # i ( cuModuleGetFunction ( __gpu_ptr it hfunc ) hmod # s ( __gpu_ptr it name ) ) )
 }
 
-@ __cu_mem_alloc * Interp it → v {
+@ __cu_mem_alloc * InterpImpl it → v {
     : i bytesize ( __pop it )
     : i dptr ( __pop it )
     ( __push it # i ( cuMemAlloc ( __gpu_ptr it dptr ) bytesize ) )
 }
 
-@ __cu_mem_free * Interp it → v {
+@ __cu_mem_free * InterpImpl it → v {
     : i dptr ( __pop it )
     ( __push it # i ( cuMemFree dptr ) )
 }
 
-@ __cu_memcpy_htod * Interp it → v {
+@ __cu_memcpy_htod * InterpImpl it → v {
     : i n ( __pop it )
     : i src ( __pop it )
     : i dst ( __pop it )
     ( __push it # i ( cuMemcpyHtoD dst ( __gpu_ptr it src ) n ) )
 }
 
-@ __cu_memcpy_dtoh * Interp it → v {
+@ __cu_memcpy_dtoh * InterpImpl it → v {
     : i n ( __pop it )
     : i src ( __pop it )
     : i dst ( __pop it )
@@ -6989,7 +7013,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // ignores the rest, and each translated entry is a valid host address.
 @ __GPU_MAX_ARGS → i { ^ 64 }
 
-@ __cu_launch_kernel * Interp it → v {
+@ __cu_launch_kernel * InterpImpl it → v {
     : i extra ( __pop it )
     : i params ( __pop it )
     : i stream ( __pop it )
@@ -7018,7 +7042,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it rc )
 }
 
-@ __cu_get_error_name * Interp it → v {
+@ __cu_get_error_name * InterpImpl it → v {
     // Writes a HOST const char* into the guest out-slot — unusable as a guest
     // offset. Write NULL so cuda_error_name falls back to a static string;
     // diagnostics only, never on the compute path.
@@ -7028,7 +7052,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it 0 )
 }
 
-@ __nvrtc_create * Interp it → v {
+@ __nvrtc_create * InterpImpl it → v {
     : i incs ( __pop it )
     : i headers ( __pop it )
     : i nh ( __pop it )
@@ -7042,7 +7066,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // a host copy of the array is built with every entry translated (guest offset
 // → host address). nopt bounds the array exactly; entries past guest memory
 // (a hostile/broken module) become NULL rather than wild host pointers.
-@ __nvrtc_compile * Interp it → v {
+@ __nvrtc_compile * InterpImpl it → v {
     : i opts ( __pop it )
     : i nopt ( __pop it )
     : i prog ( __pop it )
@@ -7068,37 +7092,37 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __push it rc )
 }
 
-@ __nvrtc_ptx_size * Interp it → v {
+@ __nvrtc_ptx_size * InterpImpl it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTXSize prog ( __gpu_ptr it sz ) ) )
 }
 
-@ __nvrtc_get_ptx * Interp it → v {
+@ __nvrtc_get_ptx * InterpImpl it → v {
     : i ptx ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTX prog ( __gpu_ptr it ptx ) ) )
 }
 
-@ __nvrtc_log_size * Interp it → v {
+@ __nvrtc_log_size * InterpImpl it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLogSize prog ( __gpu_ptr it sz ) ) )
 }
 
-@ __nvrtc_get_log * Interp it → v {
+@ __nvrtc_get_log * InterpImpl it → v {
     : i log ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLog prog ( __gpu_ptr it log ) ) )
 }
 
-@ __nvrtc_destroy * Interp it → v {
+@ __nvrtc_destroy * InterpImpl it → v {
     : i prog ( __pop it )
     ( __push it # i ( nvrtcDestroyProgram ( __gpu_ptr it prog ) ) )
 }
 
 // GPU host-import dispatch (module "env"). Returns T if handled.
-@ __gpu_dispatch * Interp it ( Vec u ) field → b {
+@ __gpu_dispatch * InterpImpl it ( Vec u ) field → b {
     ? ( __feq field `cuInit` ) { ( __cu_init it ) ^ T } {}
     ? ( __feq field `cuDeviceGetCount` ) { ( __cu_device_get_count it ) ^ T } {}
     ? ( __feq field `cuDeviceGet` ) { ( __cu_device_get it ) ^ T } {}
@@ -7150,7 +7174,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 //     dereference on demand. An index can only miss.
 
 // Guest (ptr,len) span → host pointer; 0 when it leaves linear memory.
-@ __net_span * Interp it i off i len → s {
+@ __net_span * InterpImpl it i off i len → s {
     : i o & off 4294967295
     : i n . it mem_bytes
     ? | < len 0 > + o len n { ^ # s 0 } {}
@@ -7160,7 +7184,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Guest pointer to a NUL-terminated string → host `s`. A string with no
 // terminator inside linear memory reads as empty rather than running off
 // the end of the buffer.
-@ __net_cstr * Interp it i off → s {
+@ __net_cstr * InterpImpl it i off → s {
     : i o & off 4294967295
     : i n . it mem_bytes
     ? >= o n { ^ `` } {}
@@ -7178,7 +7202,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // answer the byte count — the import ABI for every host call that
 // produces text (addresses, DNS answers), because the host cannot
 // allocate inside the guest's linear memory.
-@ __net_put_str * Interp it i off i cap s src → i {
+@ __net_put_str * InterpImpl it i off i cap s src → i {
     ? == # i src 0 { ^ 0 } {}
     : i n ( nurl_str_len src )
     : ~ i m n
@@ -7190,7 +7214,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Same, for an OWNED host string: copied out, then freed.
-@ __net_put_owned * Interp it i off i cap s src → i {
+@ __net_put_owned * InterpImpl it i off i cap s src → i {
     ? == # i src 0 { ^ 0 } {}
     : i n ( __net_put_str it off cap src )
     ( nurl_free src )
@@ -7205,9 +7229,9 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // to somebody else. That surfaced far away as a wild pointer inside the
 // guest's own frame parser. The critical sections here are table-only —
 // no blocking host call happens while the lock is held.
-@ __net_reg * Interp it0 i h i kind → i {
+@ __net_reg * InterpImpl it0 i h i kind → i {
     ? == h 0 { ^ 0 } {}
-    : *Interp it ( __host it0 )
+    : *InterpImpl it ( __host it0 )
     ( __atom_lock )
     : i n ( vec_len [i] . it nethandles )
     : ~ i slot 0
@@ -7229,8 +7253,8 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Guest index → host handle; 0 for anything the guest made up.
-@ __net_h * Interp it0 i idx → i {
-    : *Interp it ( __host it0 )
+@ __net_h * InterpImpl it0 i idx → i {
+    : *InterpImpl it ( __host it0 )
     ? <= idx 0 { ^ 0 } {}
     ( __atom_lock )
     : ~ i h 0
@@ -7242,8 +7266,8 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 }
 
 // Retire an index — the host handle is already closed by the caller.
-@ __net_drop * Interp it0 i idx → v {
-    : *Interp it ( __host it0 )
+@ __net_drop * InterpImpl it0 i idx → v {
+    : *InterpImpl it ( __host it0 )
     ( __atom_lock )
     ? | <= idx 0 >= idx ( vec_len [i] . it nethandles ) { ( __atom_unlock ) ^ v } {}
     ( vec_set [i] . it nethandles idx 0 )
@@ -7254,22 +7278,26 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Close every socket the guest left open. A wasm module that exits (or
 // traps) mid-flight would otherwise leak the host's descriptors, which
 // matters most for the embedded case: swarm-mcp runs kernels in-process.
-@ interp_net_close_all * Interp it → v {
-    : i n ( vec_len [i] . it nethandles )
+@ __interp_net_close_all * InterpImpl it → v { ( __net_close_handles . it nethandles . it netkinds ) }
+
+@ __net_close_handles ( Vec i ) hs ( Vec i ) kinds → v {
+    : i n ( vec_len [i] hs )
     : ~ i k 1
     ~ < k n {
-        : i h ?? ( vec_get [i] . it nethandles k ) { T v → v F → 0 }
+        : i h ?? ( vec_get [i] hs k ) { T v → v F → 0 }
         ? != h 0 {
-            : i kind ?? ( vec_get [i] . it netkinds k ) { T v → v F → 0 }
+            : i kind ?? ( vec_get [i] kinds k ) { T v → v F → 0 }
             ? == kind 2 { ( nurl_udp_close h ) } { ( nurl_tcp_close h ) }
-            ( vec_set [i] . it nethandles k 0 )
-            ( vec_set [i] . it netkinds k 0 )
+            ( vec_set [i] hs k 0 )
+            ( vec_set [i] kinds k 0 )
         } {}
         = k + k 1
     }
 }
 
-@ __net_dispatch * Interp it ( Vec u ) field → b {
+@ interp_net_close_all Interp it__h → v { ( __interp_net_close_all ( __Interp_ptr it__h ) ) }
+
+@ __net_dispatch * InterpImpl it ( Vec u ) field → b {
     // ── TCP ──
     ? ( __feq field `tcp_listen` ) {
         : i backlog ( __pop it ) : i port ( __pop it ) : i hp ( __pop it )
@@ -7443,13 +7471,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // the host sets the new instance's exported `__stack_pointer` from it
 // before the first call. Without the export the spawn is refused rather
 // than letting two threads share one stack.
-@ __wasi_thread_spawn * Interp it → v {
+@ __wasi_thread_spawn * InterpImpl it → v {
     : i start_arg ( __pop it )
-    : *Interp ho ( __host it )
-    : *Module m # *Module . ho mod
+    : *InterpImpl ho ( __host it )
+    : *ModuleImpl m # *ModuleImpl . ho mod
     ? == . ho tstart_fidx -2 {
-        = . ho tstart_fidx ( module_export_func m `wasi_thread_start` )
-        = . ho sp_global ( module_export_global m `__stack_pointer` )
+        = . ho tstart_fidx ( _module_export_func m `wasi_thread_start` )
+        = . ho sp_global ( _module_export_global m `__stack_pointer` )
     } {}
     : i fidx . ho tstart_fidx
     : i spg . ho sp_global
@@ -7460,26 +7488,24 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     : i tid . ho next_tid
     = . ho next_tid + tid 1
     ( __atom_unlock )
-    : *TStart th # *TStart ( nurl_alloc Z TStart )
-    = . th f \ → v {
-        : *Interp child ( interp_thread_new ho )
+    // The runtime runs the thread on its own copy of this closure's env, so
+    // nothing here has to outlive the spawn.
+    : ( @ v ) body \ → v {
+        : *InterpImpl child ( __interp_thread_new ho )
         ( vec_set [i] . child globals spg stack_top )
         ( vec_push [i] . child vs tid )
         ( vec_push [i] . child vs start_arg )
-        ( exec_func child fidx )
+        ( __exec_func child fidx )
         // A trap kills only this thread, so it has to be reported here or
         // it is silent: the guest's join just never completes.
-        ? ( interp_trapped child ) {
+        ? ( __interp_trapped child ) {
             ( nurl_eprint `nwasm: thread trap: ` )
             ( nurl_eprintln ( string_data ( bytes_to_str . child trapmsg ) ) )
         } {}
-        ( interp_flush child )
-        ( interp_free child )
+        ( __interp_flush child )
+        ( __interp_thread_free child )
     }
-    ( __atom_lock )
-    ( vec_push [s] . ho thread_holders # s th )
-    ( __atom_unlock )
-    ?? ( thread_spawn . th f ) {
+    ?? ( thread_spawn body ) {
         T t → {
             ( __atom_lock )
             ( vec_push [Thread] . ho thread_joins t )
@@ -7490,7 +7516,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     }
 }
 
-@ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
+@ __wasi_dispatch * InterpImpl it ( Vec u ) mod ( Vec u ) field → v {
     ? ( __feq mod `wasi` ) {
         ? ( __feq field `thread-spawn` ) { ( __wasi_thread_spawn it ) ^ v } {}
         ( __trap_named it `unsupported wasi import: ` field ) ^ v
@@ -7552,25 +7578,25 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 // Callers bounds-check dst/src/n before calling (memory.copy / memory.fill
 // / memory.init do it up front, spec-style); these just move the bytes.
 // nurl_memmove is the overlap-safe one — memory.copy allows aliasing.
-@ __mem_copy * Interp it i dst i src i n → v {
+@ __mem_copy * InterpImpl it i dst i src i n → v {
     ? <= n 0 { ^ v } {}
     : s base # s ( __mem_base it )
     ( nurl_memmove # s + # i base dst # s + # i base src n )
 }
 
-@ __mem_fill * Interp it i dst i val i n → v {
+@ __mem_fill * InterpImpl it i dst i val i n → v {
     ? <= n 0 { ^ v } {}
     : s base # s ( __mem_base it )
     ( nurl_memset # s + # i base dst & val 255 n )
 }
 
 // The *DataSeg / *ElemSeg at segment index k (#s 0 if out of range).
-@ __data_at * Module m i k → s {
+@ __data_at * ModuleImpl m i k → s {
     ? | < k 0 >= k ( vec_len [s] . m datas ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . m datas k ) { T x → x F → # s 0 }
 }
 
-@ __elem_at * Module m i k → s {
+@ __elem_at * ModuleImpl m i k → s {
     ? | < k 0 >= k ( vec_len [s] . m elems ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . m elems k ) { T x → x F → # s 0 }
 }
@@ -7615,7 +7641,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // Natural alignment is required by the spec: an unaligned atomic traps
 // rather than being emulated.
-@ __atom_check * Interp it i ea i w → b {
+@ __atom_check * InterpImpl it i ea i w → b {
     ? != 0 % ea w { ( __trap it `unaligned atomic access` ) ^ F } {}
     ? | < ea 0 > + ea w . it mem_bytes { ( __trap it `atomic access out of bounds` ) ^ F } {}
     ^ T
@@ -7638,7 +7664,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
 
 // 0 = woken, 1 = the value had already changed, 2 = timed out.
 // `timeout` is nanoseconds, negative for "no timeout".
-@ __atom_wait * Interp it i ea i w i expected i timeout → i {
+@ __atom_wait * InterpImpl it i ea i w i expected i timeout → i {
     ( __atom_lock )
     : i cur ( __mem_load it ea w 0 )
     ? != cur ( __atom_mask expected w ) { ( __atom_unlock ) ^ 1 } {}
@@ -7689,7 +7715,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ^ 5  // rmw: 2 pops, 1 push
 }
 
-@ __exec_atomic * Interp it i sub i off → v {
+@ __exec_atomic * InterpImpl it i sub i off → v {
     ? == sub 3 { ^ v } {}  // atomic.fence — the lock is the fence
     ? == sub 0 {  // memory.atomic.notify
         : i count ( __pop it )
@@ -7757,13 +7783,13 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ( __trap it `unsupported atomic opcode` )
 }
 
-@ __exec_fc * Interp it i sub i bop → v {
+@ __exec_fc * InterpImpl it i sub i bop → v {
     ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
         : i didx bop
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
-        : *Module m # *Module . it mod
+        : *ModuleImpl m # *ModuleImpl . it mod
         : s dp ( __data_at m didx )
         : i dropped ?? ( vec_get [i] . it data_dropped didx ) { T x → x F → 1 }
         ? | == # i dp 0 & == dropped 1 > n 0 { ( __trap it `memory.init: dropped or bad data segment` ) ^ v } {}
@@ -7805,7 +7831,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
-        : *Module m # *Module . it mod
+        : *ModuleImpl m # *ModuleImpl . it mod
         : s ep ( __elem_at m eidx )
         : i dropped ?? ( vec_get [i] . it elem_dropped eidx ) { T x → x F → 1 }
         ? | == # i ep 0 & == dropped 1 > n 0 { ( __trap it `table.init: dropped or bad element segment` ) ^ v } {}
@@ -7842,7 +7868,7 @@ inline @ __rcmp i op i a i b → i {  // the internal compare codes, i32 then i6
     ? == sub 15 {  // table.grow: [init n] → old size, or −1 past the maximum
         : i n ( __u32 ( __pop it ) )
         : i init ( __pop it )
-        : *Module m # *Module . it mod
+        : *ModuleImpl m # *ModuleImpl . it mod
         : i old ( vec_len [i] . it table )
         : ~ i limit 10000000
         ? > . m table_max 0 { = limit . m table_max } {}

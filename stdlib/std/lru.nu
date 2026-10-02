@@ -215,11 +215,13 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     : s ctl . c ctl
     ^ ?? ( __lru_idx_get . c index key ) {
         T slot → {
-            ?? ( vec_get [String] . c keys slot ) {
-                T k → { ( __lru_idx_remove . c index ( string_data k ) ) ( string_free k ) }
+            // The slot gives its key and value up, as an eviction does: the
+            // key is dropped here, the value handed back.
+            ?? ( vec_replace [String] . c keys slot # String 0 ) {
+                T k → ( __lru_idx_remove . c index ( string_data k ) )
                 F _ → {}
             }
-            : ?V val ( vec_get [V] . c vals slot )
+            : ?V val ( vec_replace [V] . c vals slot # V 0 )
             ( __lru_detach [V] c slot )
             ( vec_push [i] . c freelist slot )
             ( __lru_set_count ctl - ( __lru_count ctl ) 1 )
@@ -244,30 +246,19 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
     }
 }
 
-@ __lru_free_arrays [V] ( LruCache V ) c → v {
-    ( vec_free [String] . c keys )
-    ( vec_free [V] . c vals )
-    ( vec_free [i] . c prev )
-    ( vec_free [i] . c nxt )
-    ( vec_free [i] . c freelist )
-    ( map_free [s i] . c index )
-    ( vec_free [i] . c meta )
-}
+// Early release: exactly what dropping `c` does — the key and value
+// arrays drop their (live) entries.
+@ lru_free [V] sink ( LruCache V ) c → v {}
 
-// Early release; the key and value arrays drop their (live) entries.
-@ lru_free [V] sink ( LruCache V ) c → v {
-    ( __lru_free_arrays [V] c )
-}
-
+// Release with `drop` run on every live value; the rest of the cache (the
+// keys, the arrays) goes with `c`.
 @ lru_free_with [V] sink ( LruCache V ) c ( @ v V ) drop → v {
     : ~ i cur ( __lru_head . c ctl )
     ~ >= cur 0 {
         : i nx ( __lru_gi . c nxt cur )
-        ?? ( vec_get [String] . c keys cur ) { T k → ( string_free k ) F _ → {} }
         ?? ( vec_get [V] . c vals cur ) { T v → ( drop v ) F _ → {} }
         = cur nx
     }
-    // `drop` took every value: the arrays release only their buffers.
-    ( vec_set_len [V] . c vals 0 )
-    ( __lru_free_arrays [V] c )
+    // `drop` took every value: the value array releases only its buffer.
+    : b _n ( vec_set_len [V] . c vals 0 )
 }

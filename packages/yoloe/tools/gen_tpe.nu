@@ -71,7 +71,7 @@ $ `../src/bpe.nu`
     : i nc ( vec_len [String] names )
     ? == nc 0 { ( p `no names\n` ) ^ 1 } {}
 
-    : *Engine e ( rt_open 0 )
+    : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( p `gpu/kernels failed\n` ) ^ 1 } {}
     ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
 
@@ -88,7 +88,8 @@ $ `../src/bpe.nu`
         ( vec_free [i] row )
 
         : RTensor out ( rt_run_tokens e g # *u ( vec_data [u] tb ) 1 77 )
-        : *u feat ( rt_download e out )
+        : GpuHost feat__h ( rt_download e out )
+        : *u feat ( gpu_host_ptr feat__h )
         : i fn . out nelem
         // the download buffer is raw f32 little-endian: copy its bytes verbatim,
         // 8 bytes (one i64 word) at a time (512 floats = 256 words).

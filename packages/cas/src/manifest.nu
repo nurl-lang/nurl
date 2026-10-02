@@ -46,11 +46,9 @@ $ `cas.nu`
     ^ @ CasManifest { ( vec_new [String] ) ( vec_new [i] ) ( vec_new [String] ) }
 }
 
-@ manifest_free sink CasManifest m → v {
-    ( vec_free_with [String] . m hashes \ String s → v { ( string_free s ) } )
-    ( vec_free [i] . m sizes )
-    ( vec_free_with [String] . m paths \ String s → v { ( string_free s ) } )
-}
+// A plain value: its Vecs (and their Strings) are dropped with it. Let go
+// of `m` now rather than at the end of its owner's scope.
+@ manifest_free sink CasManifest m → v {}
 
 @ manifest_len CasManifest m → i { ^ ( vec_len [String] . m paths ) }
 
@@ -119,17 +117,14 @@ $ `cas.nu`
                 : String sz ( string_with_cap 24 )
                 ( string_push_int sz ( manifest_size m idx ) )
                 ( bytes_extend_str out ( string_data sz ) )
-                ( string_free sz )
                 ( vec_push [u] out # u 32 )
                 ( bytes_extend_str out ( string_data p ) )
                 ( vec_push [u] out # u 10 )
-                ( string_free h ) ( string_free p )
             }
             F → {}
         }
         = j + j 1
     }
-    ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
     ^ out
 }
 
@@ -184,7 +179,7 @@ $ `cas.nu`
                 = k + k 1
             }
             = pos + pos 64
-            ? != ?? ( vec_get [u] data pos ) { T x → # i x F _ → 0 } 32 { = bad T ( string_free hex ) } {
+            ? != ?? ( vec_get [u] data pos ) { T x → # i x F _ → 0 } 32 { = bad T } {
                 = pos + pos 1
                 : ~ i size 0
                 : ~ b any F
@@ -193,7 +188,7 @@ $ `cas.nu`
                     = any T
                     = pos + pos 1
                 }
-                ? | ! any != ?? ( vec_get [u] data pos ) { T x → # i x F _ → 0 } 32 { = bad T ( string_free hex ) } {
+                ? | ! any != ?? ( vec_get [u] data pos ) { T x → # i x F _ → 0 } 32 { = bad T } {
                     = pos + pos 1
                     : String p ( string_with_cap 64 )
                     : ~ b nl F
@@ -205,13 +200,11 @@ $ `cas.nu`
                     ? & nl > ( string_len p ) 0 {
                         ( manifest_add m ( string_data hex ) size ( string_data p ) )
                     } { = bad T }
-                    ( string_free p ) ( string_free hex )
                 }
             }
         }
     }
     ? bad {
-        ( manifest_free m )
         ^ @ !CasManifest String { F ( string_from `cas: malformed manifest entry` ) }
     } {}
     ^ @ !CasManifest String { T m }
@@ -226,12 +219,9 @@ $ `cas.nu`
     : CasManifest m ( manifest_new )
     : String prefix ( string_new )
     : !v String wr ( __cas_walk c dir ( string_data prefix ) m )
-    ( string_free prefix )
-    ?? wr { T _ → {} F e → { ( manifest_free m ) ^ @ !String String { F e } } }
+    ?? wr { T _ → {} F e → { ^ @ !String String { F e } } }
     : ( Vec u ) enc ( manifest_encode m )
-    ( manifest_free m )
     : !String String pr ( cas_put c enc )
-    ( vec_free [u] enc )
     ^ pr
 }
 
@@ -254,9 +244,8 @@ $ `cas.nu`
                             : !( Vec String ) IoErr dp ( dir_list ( string_data full ) )
                             ?? dp {
                                 T inner → {
-                                    ( vec_free_with [String] inner \ String s → v { ( string_free s ) } )
                                     : !v String rr ( __cas_walk c ( string_data full ) ( string_data sub ) m )
-                                    ?? rr { T _ → {} F e → { = failed T ( string_free errmsg ) = errmsg e } }
+                                    ?? rr { T _ → {} F e → { = failed T = errmsg e } }
                                 }
                                 F _ → {
                                     : !( Vec u ) IoErr fr ( read_file_bytes ( string_data full ) )
@@ -264,34 +253,28 @@ $ `cas.nu`
                                         T bytes → {
                                             : i sz ( vec_len [u] bytes )
                                             : !String String pr ( cas_put c bytes )
-                                            ( vec_free [u] bytes )
                                             ?? pr {
                                                 T hex → {
                                                     ( manifest_add m ( string_data hex ) sz ( string_data sub ) )
-                                                    ( string_free hex )
                                                 }
-                                                F e → { = failed T ( string_free errmsg ) = errmsg e }
+                                                F e → { = failed T = errmsg e }
                                             }
                                         }
                                         F _ → {
                                             = failed T
-                                            ( string_free errmsg )
                                             = errmsg ( string_from `cas: cannot read ` )
                                             ( string_push_str errmsg ( string_data full ) )
                                         }
                                     }
                                 }
                             }
-                            ( string_free full ) ( string_free sub )
                         }
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
             ? failed { ^ @ !v String { F errmsg } } {}
-            ( string_free errmsg )
             ^ @ !v String { T }
         }
         F _ → {
@@ -308,9 +291,8 @@ $ `cas.nu`
 @ cas_checkout Cas c s manifest_hex s dest → !i String {
     : !( Vec u ) String mr ( cas_get c manifest_hex )
     : ~ ( Vec u ) mb ( vec_new [u] )
-    ?? mr { T v → { ( vec_free [u] mb ) = mb v } F e → { ^ @ !i String { F e } } }
+    ?? mr { T v → { = mb v } F e → { ^ @ !i String { F e } } }
     : !CasManifest String dr ( manifest_decode mb )
-    ( vec_free [u] mb )
     ?? dr {
         T m → {
             : ~ i written 0
@@ -323,7 +305,7 @@ $ `cas.nu`
                 : String p ( manifest_path m k )
                 // reject absolute / parent-escaping paths on the way OUT
                 ? | ( string_starts_with p `/` ) | ( string_contains p `../` ) ( string_starts_with p `..` )
-                { = failed T ( string_free errmsg ) = errmsg ( string_from `cas: manifest path escapes the checkout root` ) }
+                { = failed T = errmsg ( string_from `cas: manifest path escapes the checkout root` ) }
                 {
                     : !( Vec u ) String gr ( cas_get c ( string_data hex ) )
                     ?? gr {
@@ -331,29 +313,22 @@ $ `cas.nu`
                             : String full ( path_join dest ( string_data p ) )
                             : String parent ( path_dirname ( string_data full ) )
                             ( dir_create_all ( string_data parent ) )
-                            ( string_free parent )
                             : !v IoErr wr ( write_file_bytes ( string_data full ) bytes )
-                            ( vec_free [u] bytes )
                             ?? wr {
                                 T _ → { = written + written 1 }
                                 F _ → {
                                     = failed T
-                                    ( string_free errmsg )
                                     = errmsg ( string_from `cas: cannot write ` )
                                     ( string_push_str errmsg ( string_data full ) )
                                 }
                             }
-                            ( string_free full )
                         }
-                        F e → { = failed T ( string_free errmsg ) = errmsg e }
+                        F e → { = failed T = errmsg e }
                     }
                 }
-                ( string_free hex ) ( string_free p )
                 = k + k 1
             }
-            ( manifest_free m )
             ? failed { ^ @ !i String { F errmsg } } {}
-            ( string_free errmsg )
             ^ @ !i String { T written }
         }
         F e → { ^ @ !i String { F e } }
@@ -366,13 +341,11 @@ $ `cas.nu`
 @ cas_verify Cas c s hex → !i String {
     : !( Vec u ) String r ( cas_get c hex )
     : ~ ( Vec u ) data ( vec_new [u] )
-    ?? r { T v → { ( vec_free [u] data ) = data v } F e → { ^ @ !i String { F e } } }
+    ?? r { T v → { = data v } F e → { ^ @ !i String { F e } } }
     ? ( manifest_is data ) {} {
-        ( vec_free [u] data )
         ^ @ !i String { T 1 }
     }
     : !CasManifest String dr ( manifest_decode data )
-    ( vec_free [u] data )
     ?? dr {
         T m → {
             : ~ i proven 1
@@ -388,20 +361,15 @@ $ `cas.nu`
                         : i sz ( manifest_size m k )
                         ? == ( vec_len [u] bytes ) sz { = proven + proven 1 } {
                             = failed T
-                            ( string_free errmsg )
                             = errmsg ( string_from `cas: size mismatch for ` )
                             ( string_push_str errmsg ( string_data h ) )
                         }
-                        ( vec_free [u] bytes )
                     }
-                    F e → { = failed T ( string_free errmsg ) = errmsg e }
+                    F e → { = failed T = errmsg e }
                 }
-                ( string_free h )
                 = k + k 1
             }
-            ( manifest_free m )
             ? failed { ^ @ !i String { F errmsg } } {}
-            ( string_free errmsg )
             ^ @ !i String { T proven }
         }
         F e → { ^ @ !i String { F e } }

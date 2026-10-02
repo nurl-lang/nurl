@@ -934,7 +934,7 @@ $ `src/imptime.nu`
 // GET `url`; Ok(body) on a 2xx, Err(why) otherwise — the status and the
 // first line of the body, which is where a WFS puts its exception text.
 @ wfs_fetch s url → !String String {
-    : *HttpClient hc ( http_client_new )
+    : HttpClient hc ( http_client_new )
     ( http_client_set_timeout hc WFS_TIMEOUT_MS )
     ( http_client_set_body_max hc WFS_BODY_MAX )
     ( http_client_set_user_agent hc `anomaly-wfs/1.0` )
@@ -970,7 +970,6 @@ $ `src/imptime.nu`
             ( string_push_str text ( http_client_err_name e ) )
         }
     }
-    ( http_client_free hc )
     ? ok { ^ @ !String String { T text } } {}
     ^ @ !String String { F text }
 }

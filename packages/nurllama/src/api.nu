@@ -288,7 +288,7 @@ $ `stdlib/ext/uuid.nu`
 @ __api_generate TcpConn c s model String prompt s field b stream
 i npredict f temp i topk f topp i seed → b {
     : *Llm m # *Llm g_api_llm
-    : *Tok t ( llm_tok m )
+    : Tok t ( llm_tok m )
     : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
     : i nprompt ( vec_len [i] ids )
     ? > nprompt ( llm_n_ctx m ) {
@@ -612,7 +612,7 @@ i npredict f temp i topk f topp i seed → b {
 // return the decoded text (no streaming — the web UI wants one reply).
 // Diffusion models denoise a block; others sample autoregressively.
 @ __web_gen_reply * Llm m ( Vec i ) ids i npredict f temp i seed → String {
-    : *Tok t ( llm_tok m )
+    : Tok t ( llm_tok m )
     : String out ( string_new )
     ? > ( vec_len [i] ids ) ( llm_n_ctx m ) { ^ out } {}
     ? ( llm_is_diffusion m ) {
@@ -678,7 +678,7 @@ i npredict f temp i topk f topp i seed → b {
     } {}
     ( string_free lerr )
     : *Llm m # *Llm g_api_llm
-    : *Tok t ( llm_tok m )
+    : Tok t ( llm_tok m )
     // message list = stored history + the new user turn
     : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
     : ~ i k 0
@@ -920,7 +920,7 @@ i npredict f temp i topk f topp i seed → b {
     ( __api_set_histpath ( string_data hp ) )
     ( string_free hp )
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_workers a 1 )
     ( http_app_body_max a 4194304 )
     ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_root rq ps ) } )

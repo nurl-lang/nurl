@@ -78,11 +78,9 @@ $ `stdlib/std/random.nu`
     : String s ( string_from `00-0000000000000000` )
     : String th ( trace_hex16 tid )
     ( string_push_str s ( string_data th ) )
-    ( string_free th )
     ( string_push_char s 45 )  // '-'
     : String sh ( trace_hex16 sid )
     ( string_push_str s ( string_data sh ) )
-    ( string_free sh )
     ( string_push_str s `-01` )
     ^ s
 }

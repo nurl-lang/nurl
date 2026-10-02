@@ -29,7 +29,6 @@ $ `stdlib/std/hash_sha512.nu`
     ( vec_push [u] seed # u & blockidx 255 )
 
     : ~ ( Vec u ) u ( hmac_sha256_pure password seed )
-    ( vec_free [u] seed )
 
     // accumulator t starts as a copy of U_1
     : ( Vec u ) t ( vec_with_cap [u] 32 )
@@ -39,7 +38,6 @@ $ `stdlib/std/hash_sha512.nu`
     : ~ i n 1
     ~ < n iters {
         : ( Vec u ) un ( hmac_sha256_pure password u )
-        ( vec_free [u] u )
         = u un
         : ~ i xi 0
         ~ < xi 32 {
@@ -49,7 +47,6 @@ $ `stdlib/std/hash_sha512.nu`
         }
         = n + n 1
     }
-    ( vec_free [u] u )
     ^ t
 }
 
@@ -62,7 +59,6 @@ $ `stdlib/std/hash_sha512.nu`
         : i take ? > - dklen generated 32 32 - dklen generated
         : ~ i bi 0
         ~ < bi take { ( vec_push [u] out # u ( __pb_bget blk bi ) ) = bi + bi 1 }
-        ( vec_free [u] blk )
         = generated + generated take
         = blockidx + blockidx 1
     }
@@ -81,7 +77,6 @@ $ `stdlib/std/hash_sha512.nu`
     ( vec_push [u] seed # u & blockidx 255 )
 
     : ~ ( Vec u ) u ( hmac_sha512_pure password seed )
-    ( vec_free [u] seed )
 
     : ( Vec u ) t ( vec_with_cap [u] 64 )
     : ~ i ti 0
@@ -90,7 +85,6 @@ $ `stdlib/std/hash_sha512.nu`
     : ~ i n 1
     ~ < n iters {
         : ( Vec u ) un ( hmac_sha512_pure password u )
-        ( vec_free [u] u )
         = u un
         : ~ i xi 0
         ~ < xi 64 {
@@ -100,7 +94,6 @@ $ `stdlib/std/hash_sha512.nu`
         }
         = n + n 1
     }
-    ( vec_free [u] u )
     ^ t
 }
 
@@ -113,7 +106,6 @@ $ `stdlib/std/hash_sha512.nu`
         : i take ? > - dklen generated 64 64 - dklen generated
         : ~ i bi 0
         ~ < bi take { ( vec_push [u] out # u ( __pb_bget blk bi ) ) = bi + bi 1 }
-        ( vec_free [u] blk )
         = generated + generated take
         = blockidx + blockidx 1
     }

@@ -72,7 +72,7 @@ $ `deps/gpukit/src/devops.nu`
     i maxn
 }
 
-@ ma_ws_new * GpuKit kit i n i dim i heads i swh → MaWs {
+@ ma_ws_new GpuKit kit i n i dim i heads i swh → MaWs {
     : i hd / dim heads
     // `att` and `kt` exist only for the composed attention fallback; on
     // a backend where gkd_attention runs, nothing writes a score matrix.
@@ -128,11 +128,11 @@ $ `deps/gpukit/src/devops.nu`
 // pointer is byte-addressed, so a sub-range is just an offset — no copy,
 // and nothing to free (the parent owns the allocation).
 @ ma_view GkBuf b i off i len → GkBuf {
-    ^ @ GkBuf { + . b dptr * off ( gk_buf_esz b ) len . b dtype }
+    ^ ( gk_buf_view_as b * off ( gk_buf_esz b ) len . b dtype )
 }
 
 // y[rows, cols] += ls[cols] * b[rows, cols], the LayerScale residual.
-@ __ma_res * GpuKit kit GkBuf y GkBuf b GkBuf ls GkBuf tmp i rows i cols → b {
+@ __ma_res GpuKit kit GkBuf y GkBuf b GkBuf ls GkBuf tmp i rows i cols → b {
     : ( Vec i ) od ( _ma_i2 rows cols )
     : ( Vec i ) as ( _ma_i2 cols 1 )
     : ( Vec i ) bs ( _ma_i2 0 1 )
@@ -147,7 +147,7 @@ $ `deps/gpukit/src/devops.nu`
 // Transformer block over `n` tokens; `x` is [n, dim], updated in place.
 // `swh` is the SwiGLU hidden width (4096 for every block in this model;
 // w12 produces 2·swh and w3 consumes swh).
-@ ma_block_forward * GpuKit kit MaBlk w MaWs ws GkBuf x
+@ ma_block_forward GpuKit kit MaBlk w MaWs ws GkBuf x
 i n i dim i heads i swh → b {
     : i hd / dim heads
     : i nd * n dim

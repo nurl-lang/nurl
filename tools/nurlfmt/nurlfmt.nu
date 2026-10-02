@@ -73,7 +73,6 @@ $ `tools/nurlfmt/format.nu`
             } {}
         } { ( nurl_print out_view ) }
     }
-    ( string_free out )
     ^ rc
 }
 
@@ -82,7 +81,6 @@ $ `tools/nurlfmt/format.nu`
         F _ → { ( nurl_eprintln `nurlfmt: cannot read stdin` ) ^ 2 }
         T body → {
             : i rc ( __run_body `<stdin>` body check_mode F )
-            ( string_free body )
             ^ rc
         }
     }
@@ -98,7 +96,6 @@ $ `tools/nurlfmt/format.nu`
         }
         T body → {
             : i rc ( __run_body path body check_mode write_mode )
-            ( string_free body )
             ^ rc
         }
     }
@@ -180,6 +177,5 @@ $ `tools/nurlfmt/format.nu`
             }
         }
     } {}
-    ( vec_free_with [String] paths \ String path → v { ( string_free path ) } )
     ^ rc
 }

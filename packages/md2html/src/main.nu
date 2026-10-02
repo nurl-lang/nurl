@@ -108,7 +108,6 @@ $ `src/markdown.nu`
                 }
                 ( string_free body )
             } {}
-            ( string_free input )
         }
     } {
         ( nurl_eprint `md2html: ` ) ( nurl_eprintln ( args_error p ) )
@@ -116,7 +115,5 @@ $ `src/markdown.nu`
         = rc 2
     }
 
-    ( args_free p )
-    ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }

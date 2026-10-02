@@ -5,7 +5,7 @@
 // API (this revision):
 //
 //   ( parse_basic_auth  HttpRequest req ) → ? BasicAuth   OWNED user/pass
-//   ( basic_auth_free   BasicAuth ba )    → v
+//   ( basic_auth_free   BasicAuth ba )    → v   early release (optional)
 //   ( parse_bearer_auth HttpRequest req ) → ? String      OWNED token
 //
 //   ( request_cookie HttpRequest req s name )           → ? String
@@ -46,10 +46,7 @@ $ `stdlib/core/errors.nu`
     String pass
 }
 
-@ basic_auth_free sink BasicAuth ba → v {
-    ( string_free . ba user )
-    ( string_free . ba pass )
-}
+@ basic_auth_free sink BasicAuth ba → v {}
 
 // Lowercase-compare first `n` bytes of `s` against a literal prefix
 // (which is itself lowercase). Returns T iff `s[..n]` matches `prefix`
@@ -111,14 +108,11 @@ $ `stdlib/core/errors.nu`
     ?? got {
         T h → {
             : String creds64 ( __after_scheme h `basic` )
-            ( string_free h )
             : i n ( string_len creds64 )
             ? == n 0 {
-                ( string_free creds64 )
                 ^ @ ?BasicAuth { F # BasicAuth 0 }
             } {}
             : !String ParseErr dec ( b64_decode ( string_data creds64 ) )
-            ( string_free creds64 )
             ?? dec {
                 T raw → {
                     // Split on the first ':' — RFC 7617 §2 — anything after is
@@ -129,11 +123,9 @@ $ `stdlib/core/errors.nu`
                             : i rn ( string_len raw )
                             : String user ( string_substr raw 0 idx )
                             : String pass ( string_substr raw + idx 1 - rn + idx 1 )
-                            ( string_free raw )
                             ^ @ ?BasicAuth { T @ BasicAuth { user pass } }
                         }
                         F _ → {
-                            ( string_free raw )
                             ^ @ ?BasicAuth { F # BasicAuth 0 }
                         }
                     }
@@ -144,7 +136,6 @@ $ `stdlib/core/errors.nu`
             }
         }
         F empty → {
-            ( string_free empty )
             ^ @ ?BasicAuth { F # BasicAuth 0 }
         }
     }
@@ -157,16 +148,13 @@ $ `stdlib/core/errors.nu`
     ?? got {
         T h → {
             : String token ( __after_scheme h `bearer` )
-            ( string_free h )
             : i n ( string_len token )
             ? == n 0 {
-                ( string_free token )
                 ^ @ ?String { F }
             } {}
             ^ @ ?String { T token }
         }
         F empty → {
-            ( string_free empty )
             ^ @ ?String { F }
         }
     }
@@ -247,14 +235,11 @@ $ `stdlib/core/errors.nu`
             }
             ? have_hit {
                 : String value ( string_substr h hit_v_start hit_v_len )
-                ( string_free h )
                 ^ @ ?String { T value }
             } {}
-            ( string_free h )
             ^ @ ?String { F }
         }
         F empty → {
-            ( string_free empty )
             ^ @ ?String { F }
         }
     }

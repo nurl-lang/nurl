@@ -39,18 +39,14 @@ $ `src/arima.nu`
                             T c0 → {
                                 : String t ( string_trim c0 )
                                 ?? ( string_to_float t ) { T x → { ( vec_push [f] out x ) } F _ → {} }
-                                ( string_free t )
                             }
                             F _ → {}
                         }
-                        ( vec_free_with [String] cells \ String s → v { ( string_free s ) } )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
-            ( string_free txt )
         }
         F _ → { ( nurl_eprint `arima: cannot read ` ) ( nurl_eprintln path ) }
     }
@@ -64,11 +60,10 @@ $ `src/arima.nu`
     : ~ i k 0
     ~ < k 4 {
         : ~ i v 0
-        ? < k n { ?? ( vec_get [String] parts k ) { T p → { : String t ( string_trim p ) ?? ( string_to_int t ) { T x → { = v x } F _ → {} } ( string_free t ) } F _ → {} } } {}
+        ? < k n { ?? ( vec_get [String] parts k ) { T p → { : String t ( string_trim p ) ?? ( string_to_int t ) { T x → { = v x } F _ → {} } } F _ → {} } } {}
         ( vec_push [i] out v )
         = k + k 1
     }
-    ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
 }
 
 @ arg_after ( Vec String ) args s flag → String {
@@ -98,7 +93,7 @@ $ `src/arima.nu`
     ^ F
 }
 
-@ report * ArimaModel m i h → v {
+@ report ArimaModel m i h → v {
     : Json o ( arima_coef m )
     ? > h 0 {
         : ArimaForecast fc ( arima_forecast m h )
@@ -106,12 +101,9 @@ $ `src/arima.nu`
         ( json_obj_set fo `mean` ( _ar_jarr . fc mean ) )
         ( json_obj_set fo `se` ( _ar_jarr . fc se ) )
         ( json_obj_set o `forecast` fo )
-        ( arima_forecast_free fc )
     } {}
     : String s ( json_pretty o )
     ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
-    ( string_free s )
-    ( json_free o )
 }
 
 @ main → i {
@@ -124,35 +116,25 @@ $ `src/arima.nu`
     ? < ( vec_len [f] y ) 10 { ( nurl_eprintln `arima: need at least ten numbers` ) ^ 2 } {}
     : String hs ( arg_after args `--horizon` )
     : i h ?? ( string_to_int hs ) { T x → x F _ → 0 }
-    ( string_free hs )
     ? == ( nurl_str_eq ( string_data cmd ) `fit` ) 1 {
         : String os ( arg_after args `--order` )
-        ? == ( string_len os ) 0 { ( string_free os ) ^ ( usage ) } {}
+        ? == ( string_len os ) 0 { ^ ( usage ) } {}
         : ( Vec i ) o ( vec_new [i] )
         ( ints_of os o )
-        ( string_free os )
         : String ss ( arg_after args `--seasonal` )
         : ( Vec i ) so ( vec_new [i] )
         ( ints_of ss so )
-        ( string_free ss )
         : ArimaSpec sp ( arima_spec_with_mean ( arima_spec_seasonal ( vec_get_i o 0 ) ( vec_get_i o 1 ) ( vec_get_i o 2 ) ( vec_get_i so 0 ) ( vec_get_i so 1 ) ( vec_get_i so 2 ) ( vec_get_i so 3 ) ) ( has_flag args `--mean` ) )
-        : *ArimaModel m ( arima_fit_method y sp ? ( has_flag args `--css` ) ARIMA_CSS ARIMA_ML )
+        : ArimaModel m ( arima_fit_method y sp ? ( has_flag args `--css` ) ARIMA_CSS ARIMA_ML )
         ( report m h )
-        ( arima_free m )
-        ( vec_free [i] o ) ( vec_free [i] so )
     } {
         ? == ( nurl_str_eq ( string_data cmd ) `auto` ) 1 {
             : String ss ( arg_after args `--season` )
             : i s ?? ( string_to_int ss ) { T x → x F _ → 0 }
-            ( string_free ss )
-            : *ArimaModel m ( arima_auto y s )
+            : ArimaModel m ( arima_auto y s )
             ( report m h )
-            ( arima_free m )
         } { ^ ( usage ) }
     }
-    ( vec_free [f] y )
-    ( string_free cmd ) ( string_free file )
-    ( vec_free_with [String] args \ String s → v { ( string_free s ) } )
     ^ 0
 }
 

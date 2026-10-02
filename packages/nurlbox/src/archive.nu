@@ -87,18 +87,14 @@ $ `bx.nu`
                                         = rc 1
                                     }
                                 }
-                                ( string_free target )
                             }
                         }
-                        ( vec_free [u] outbytes )
                     }
                 }
             } { = rc 1 }
-            ( vec_free [u] data )
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -128,10 +124,8 @@ $ `bx.nu`
                         ~ < k n {
                             : String sub ( path_join path ( bx_at names k ) )
                             ( __tar_collect ( string_data sub ) entries rc )
-                            ( string_free sub )
                             = k + k 1
                         }
-                        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
                     }
                     F e2 → {
                         ( bx_err_at path ( bx_ioerr e2 ) )
@@ -185,7 +179,6 @@ $ `bx.nu`
                     }
                     : String modes ( stat_mode_string st )
                     ( string_push_bytes out # *u ( string_data modes ) ( string_len modes ) )
-                    ( string_free modes )
                     ( string_push_str out ` 0/0 ` )
                     ( string_push_int out . e size )
                     ( string_push_char out 32 )
@@ -198,7 +191,6 @@ $ `bx.nu`
         = i + i 1
     }
     ( bx_write out )
-    ( string_free out )
 }
 
 @ ap_tar ( Vec String ) argv → i {
@@ -248,7 +240,6 @@ $ `bx.nu`
                             ?? ( gzip_compress raw ) {
                                 T z → {
                                     = wrote ( __tar_emit file z )
-                                    ( vec_free [u] z )
                                 }
                                 F e → {
                                     ( bx_err ( compress_err_name e ) )
@@ -257,14 +248,12 @@ $ `bx.nu`
                             }
                         } { = wrote ( __tar_emit file raw ) }
                         ? ! wrote { = rc 1 } {}
-                        ( vec_free [u] raw )
                     }
                     F e2 → {
                         ( bx_err ( tar_err_name e2 ) )
                         = rc 1
                     }
                 }
-                ( tar_entries_free entries )
             } {
                 : ~ b ok T
                 : ( Vec u ) raw ( bx_slurp file ok )
@@ -279,7 +268,7 @@ $ `bx.nu`
                     : ~ b have T
                     ? | gz looks_gz {
                         ?? ( gzip_decompress raw ) {
-                            T d → { ( vec_extend [u] plain d ) ( vec_free [u] d ) }
+                            T d → { ( vec_extend [u] plain d ) }
                             F e → {
                                 ( bx_err ( compress_err_name e ) )
                                 = rc 1
@@ -307,18 +296,13 @@ $ `bx.nu`
                                         }
                                     }
                                 }
-                                ( tar_entries_free entries )
                             }
                         }
                     } {}
-                    ( vec_free [u] plain )
                 }
-                ( vec_free [u] raw )
             }
         }
     }
-    ( bx_opts_free o )
-    ( vec_free_with [String] av \ String x → v { ( string_free x ) } )
     ^ rc
 }
 

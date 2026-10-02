@@ -29,7 +29,6 @@ $ `image.nu`
     ? || ( string_ends_with low `.jpg` ) ( string_ends_with low `.jpeg` ) { = f 2 } {}
     ? ( string_ends_with low `.ppm` ) { = f 3 } {}
     ? ( string_ends_with low `.pgm` ) { = f 4 } {}
-    ( string_free low )
     ^ f
 }
 
@@ -41,14 +40,13 @@ $ `image.nu`
     ? == fmt 4 {
         : Image g ( image_convert im 1 )
         : b ok ( image_save_ppm path g )
-        ( image_free g )
         ^ ok
     } {}
     ^ F
 }
 
-// Parse `WxH` / `Wx` / `xH`; scaled dims land in wh[0], wh[1] (0 = derive).
-@ __img_parse_wh String spec * u wh → b {
+// Parse `WxH` / `Wx` / `xH`; scaled dims land in ow, oh (0 = derive).
+@ __img_parse_wh String spec inout i ow inout i oh → b {
     : i n ( string_len spec )
     : ~ i w 0
     : ~ i h 0
@@ -73,8 +71,8 @@ $ `image.nu`
         = k2 + k2 1
     }
     ? & == w 0 == h 0 { ^ F } {}
-    ( nurl_poke wh 0 w )
-    ( nurl_poke wh 1 h )
+    = ow w
+    = oh h
     ^ T
 }
 
@@ -94,15 +92,12 @@ $ `image.nu`
                         ( string_push_str m `RGBA` )
                     } } }
             ( puts ( string_data m ) )
-            ( string_free m )
-            ( image_free im )
             ^ 0
         }
         F _ → {
             : String em ( string_from `img: cannot decode — ` )
             ( string_push_str em ( image_error ) )
             ( nurl_eprintln ( string_data em ) )
-            ( string_free em )
             ^ 1
         }
     }
@@ -114,7 +109,6 @@ $ `image.nu`
     ( args_flag p `help` 104 `show usage` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     : i npos ( args_positional_count p )
@@ -122,9 +116,7 @@ $ `image.nu`
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  img info <file>\n  img convert <in> <out> [-q N]\n  img resize <in> <out> <W>x<H> [-q N]   (800x600, 800x, x600)\n` )
-        ( string_free u )
         : b washelp ( args_present p `help` )
-        ( args_free p )
         ^ ? washelp { 0 } { 2 }
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -140,7 +132,6 @@ $ `image.nu`
                 F _ → { = rc 2 }
             }
         } { ( nurl_eprintln `usage: img info <file>` ) = rc 2 }
-        ( args_free p )
         ^ rc
     } {}
 
@@ -148,13 +139,11 @@ $ `image.nu`
     : b is_rsz ( nurl_str_eq cmds `resize` )
     ? || is_conv is_rsz {} {
         ( nurl_eprintln `img: unknown command (info / convert / resize)` )
-        ( args_free p )
         ^ 2
     }
     : i want ? is_conv { 3 } { 4 }
     ? >= npos want {} {
         ( nurl_eprintln ? is_conv { `usage: img convert <in> <out> [-q N]` } { `usage: img resize <in> <out> <W>x<H> [-q N]` } )
-        ( args_free p )
         ^ 2
     }
 
@@ -173,14 +162,12 @@ $ `image.nu`
         ? & >= c 48 <= c 57 { = quality + * quality 10 - c 48 } {}
         = qk + qk 1
     }
-    ( string_free qs )
     ? || < quality 1 > quality 100 { = quality 90 } {}
 
     : ~ i outfmt 0
     ?? ( vec_get [String] pos 2 ) { T v → { = outfmt ( __img_fmt_of v ) } F _ → {} }
     ? > outfmt 0 {} {
         ( nurl_eprintln `img: cannot tell the output format — use .png / .jpg / .ppm / .pgm` )
-        ( args_free p )
         ^ 2
     }
 
@@ -191,15 +178,14 @@ $ `image.nu`
             ? is_conv {
                 = saved ( __img_save outfmt outpath im quality )
             } {
-                : *u wh ( nurl_alloc 16 )
                 : ~ b whok F
+                : ~ i nw 0
+                : ~ i nh 0
                 ?? ( vec_get [String] pos 3 ) {
-                    T spec → { = whok ( __img_parse_wh spec wh ) }
+                    T spec → { = whok ( __img_parse_wh spec nw nh ) }
                     F _ → {}
                 }
                 ? whok {
-                    : ~ i nw ( nurl_peek wh 0 )
-                    : ~ i nh ( nurl_peek wh 1 )
                     : i ow ( image_width im )
                     : i oh ( image_height im )
                     // derive the missing dimension, keeping aspect
@@ -210,14 +196,11 @@ $ `image.nu`
                     // box-average when shrinking, bilinear when growing
                     : Image rs ? & <= nw ow <= nh oh { ( image_resize_area im nw nh ) } { ( image_resize im nw nh ) }
                     = saved ( __img_save outfmt outpath rs quality )
-                    ( image_free rs )
                 } {
                     ( nurl_eprintln `img: bad size — use 800x600, 800x or x600` )
                     = size_err T
                 }
-                ( nurl_free # s wh )
             }
-            ( image_free im )
             ? size_err { = rc 2 } {
                 ? saved {} {
                     ( nurl_eprintln `img: could not process/write output` )
@@ -229,10 +212,8 @@ $ `image.nu`
             : String em ( string_from `img: cannot decode input — ` )
             ( string_push_str em ( image_error ) )
             ( nurl_eprintln ( string_data em ) )
-            ( string_free em )
             = rc 1
         }
     }
-    ( args_free p )
     ^ rc
 }

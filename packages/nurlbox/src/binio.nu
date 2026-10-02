@@ -186,7 +186,6 @@ $ `bx.nu`
                 }
                 ( string_clear prev )
                 ( string_push_bytes prev # *u ( string_data line ) ( string_len line ) )
-                ( string_free line )
                 = off + off take
             }
             ? != addr_kind 110 {
@@ -194,12 +193,8 @@ $ `bx.nu`
                 ( string_push_char out 10 )
             } {}
             ( bx_write out )
-            ( string_free out )
-            ( string_free prev )
         }
-        ( vec_free [u] data )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -295,18 +290,13 @@ $ `bx.nu`
                 }
                 ( string_clear prev )
                 ( string_push_bytes prev # *u ( string_data line ) ( string_len line ) )
-                ( string_free line )
                 = off + off take
             }
             ( bx_push_hex out end ? canonical 8 7 F )
             ( string_push_char out 10 )
             ( bx_write out )
-            ( string_free out )
-            ( string_free prev )
         }
-        ( vec_free [u] data )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -361,7 +351,6 @@ $ `bx.nu`
                     }
                 }
                 ( bx_write out )
-                ( string_free out )
             } {
                 : i total ( vec_len [u] data )
                 : *u pt ( vec_data [u] data )
@@ -401,12 +390,9 @@ $ `bx.nu`
                     = off + off take
                 }
                 ( bx_write out )
-                ( string_free out )
             }
         }
-        ( vec_free [u] data )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -430,7 +416,6 @@ $ `bx.nu`
         ( string_push_char out ( string_get tmp - k 1 ) )
         = k - k 1
     }
-    ( string_free tmp )
 }
 
 @ ap_cmp ( Vec String ) argv → i {
@@ -492,7 +477,6 @@ $ `bx.nu`
                     = i + i 1
                 }
                 ( bx_write out )
-                ( string_free out )
                 ? & ! differ & != na nb < cap 0 {
                     = differ T
                     ? ! quiet {
@@ -504,11 +488,8 @@ $ `bx.nu`
                 } {}
                 = rc ? differ 1 0
             } { = rc 2 }
-            ( vec_free [u] a )
-            ( vec_free [u] b )
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -564,14 +545,10 @@ $ `bx.nu`
                     = k + k 1
                 }
                 ( bx_write out )
-                ( string_free out )
-                ( string_free run )
             } { = rc 1 }
-            ( vec_free [u] data )
             = i + i 1
         }
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -593,7 +570,6 @@ $ `bx.nu`
         ( string_push_char out ( string_get tmp - q 1 ) )
         = q - q 1
     }
-    ( string_free tmp )
 }
 
 @ __split_write s prefix i index i width b numeric ( Vec u ) data i from i len → i {
@@ -614,8 +590,6 @@ $ `bx.nu`
             = rc 1
         }
     }
-    ( vec_free [u] piece )
-    ( string_free name )
     ^ rc
 }
 
@@ -676,9 +650,7 @@ $ `bx.nu`
                 }
             }
         }
-        ( vec_free [u] data )
     }
-    ( bx_opts_free o )
     ^ rc
 }
 
@@ -733,14 +705,11 @@ $ `bx.nu`
     : i seek ? > ( nurl_str_len seek_s ) 0 ( bx_count seek_s ) 0
     ? <= bs 0 {
         ( bx_err `invalid block size` )
-        ( __dd_free inf_s outf_s bs_str count_str skip_str seek_str status_s conv_s )
         ^ 1
     } {}
     : ~ b ok T
     : ( Vec u ) data ( bx_slurp ? > ( nurl_str_len inf ) 0 inf `-` ok )
     ? ! ok {
-        ( vec_free [u] data )
-        ( __dd_free inf_s outf_s bs_str count_str skip_str seek_str status_s conv_s )
         ^ 1
     } {}
     : i n ( vec_len [u] data )
@@ -776,7 +745,6 @@ $ `bx.nu`
                     ( vec_push [u] final # u ? < q on & 255 # i . op q 0 )
                     = q + q 1
                 }
-                ( vec_free [u] old )
             } {
                 : ~ i q 0
                 ~ < q * seek bs { ( vec_push [u] final # u 0 ) = q + q 1 }
@@ -790,7 +758,6 @@ $ `bx.nu`
                 = rc 1
             }
         }
-        ( vec_free [u] final )
     } { ( bx_write_bytes outbuf ) }
     ? ! ( bx_streq status `none` ) {
         ( flush )
@@ -803,19 +770,5 @@ $ `bx.nu`
         ( nurl_eprint ( nurl_str_int partial ) )
         ( nurl_eprint ` records out\n` )
     } {}
-    ( vec_free [u] outbuf )
-    ( vec_free [u] data )
-    ( __dd_free inf_s outf_s bs_str count_str skip_str seek_str status_s conv_s )
     ^ rc
-}
-
-@ __dd_free sink String a sink String b sink String c sink String d sink String e sink String f sink String g sink String h → v {
-    ( string_free a )
-    ( string_free b )
-    ( string_free c )
-    ( string_free d )
-    ( string_free e )
-    ( string_free f )
-    ( string_free g )
-    ( string_free h )
 }

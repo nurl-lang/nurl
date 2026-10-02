@@ -33,16 +33,15 @@ $ `deps/gpukit/src/dev.nu`
     ~ < k n { ( vec_push [f] out * lim - * 2.0 ( rng_u01 g ) 1.0 ) = k + k 1 }
 }
 
-@ param2 * GTape tp ( Vec f ) v i r i c → GVar {
+@ param2 GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ( vec_push [i] s r ) ( vec_push [i] s c )
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar p ( grad_param tp t )
-    ( tensor_free t )
     ^ p
 }
 
-@ param1 * GTape tp i n → GVar {
+@ param1 GTape tp i n → GVar {
     : ( Vec f ) v ( vec_new [f] )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 0.0 ) = k + k 1 }
@@ -50,12 +49,11 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_push [i] s n )
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar p ( grad_param tp t )
-    ( tensor_free t ) ( vec_free [f] v )
     ^ p
 }
 
 // One AE episode: X const already on the tape as `xid`.
-@ episode * GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 GVar W3 GVar B3 f alpha i bsz → GVar {
+@ episode GTape tp GVar X GVar W1 GVar B1 GVar W2 GVar B2 GVar W3 GVar B3 f alpha i bsz → GVar {
     : GVar h1 ( g_relu tp ( g_add tp ( g_matmul tp X W1 ) B1 ) )
     : GVar h2 ( g_relu tp ( g_add tp ( g_matmul tp h1 W2 ) B2 ) )
     : GVar y ( g_add tp ( g_matmul tp h2 W3 ) B3 )
@@ -75,7 +73,7 @@ $ `deps/gpukit/src/dev.nu`
     : i EPISODES 360
     : f ALPHA 0.0001
     : f LR 0.001
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_print `gput_bench: SKIP (no compute backend)\n` )
         ( gk_close kit )
@@ -88,7 +86,6 @@ $ `deps/gpukit/src/dev.nu`
     : ( Vec f ) all ( vec_with_cap [f] * * EPISODES BSZ D )
     : ~ i k 0
     ~ < k * * EPISODES BSZ D { ( vec_push [f] all ( rng_u01 dg ) ) = k + k 1 }
-    ( rng_free dg )
     : Rng ig ( rng_seed 11 )
     : ( Vec f ) w1v ( vec_new [f] )
     ( glorot ig D H1 w1v )
@@ -96,17 +93,16 @@ $ `deps/gpukit/src/dev.nu`
     ( glorot ig H1 H2 w2v )
     : ( Vec f ) w3v ( vec_new [f] )
     ( glorot ig H2 D w3v )
-    ( rng_free ig )
 
     // — CPU path —
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar W1 ( param2 tp w1v D H1 )
     : GVar B1 ( param1 tp H1 )
     : GVar W2 ( param2 tp w2v H1 H2 )
     : GVar B2 ( param1 tp H2 )
     : GVar W3 ( param2 tp w3v H2 D )
     : GVar B3 ( param1 tp D )
-    : *Opt co ( opt_adam_new LR )
+    : Opt co ( opt_adam_new LR )
     ( opt_add co tp W1 ALPHA ) ( opt_add co tp B1 0.0 )
     ( opt_add co tp W2 ALPHA ) ( opt_add co tp B2 0.0 )
     ( opt_add co tp W3 ALPHA ) ( opt_add co tp B3 0.0 )
@@ -123,7 +119,6 @@ $ `deps/gpukit/src/dev.nu`
         ( vec_push [i] rsh BSZ ) ( vec_push [i] rsh D )
         : Tensor rt ( tensor_from_data TE_F64 rsh rows )
         : GVar X ( grad_const tp rt )
-        ( tensor_free rt ) ( vec_free [f] rows )
         : GVar loss ( episode tp X W1 B1 W2 B2 W3 B3 ALPHA BSZ )
         : b bk ( backward tp loss )
         ? bk {} { ( nurl_print `cpu episode failed\n` ) }
@@ -136,7 +131,7 @@ $ `deps/gpukit/src/dev.nu`
     : i t1 ( monotonic_ns )
 
     // — device path —
-    : *GTape tp2 ( tape_new )
+    : GTape tp2 ( tape_new )
     : GVar W1d ( param2 tp2 w1v D H1 )
     : GVar B1d ( param1 tp2 H1 )
     : GVar W2d ( param2 tp2 w2v H1 H2 )
@@ -150,15 +145,14 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_push [i] rsh0 BSZ ) ( vec_push [i] rsh0 D )
     : Tensor rt0 ( tensor_from_data TE_F64 rsh0 rows0 )
     : GVar Xd ( grad_const tp2 rt0 )
-    ( tensor_free rt0 ) ( vec_free [f] rows0 )
     : GVar lossd ( episode tp2 Xd W1d B1d W2d B2d W3d B3d ALPHA BSZ )
-    : *GProg pg ( gput_capture kit tp2 lossd )
+    : GProg pg ( gput_capture kit tp2 lossd )
     ? ( gput_ok pg ) {} {
         ( nurl_print `gput_bench: capture failed\n` )
-        ( gput_free pg ) ( gk_close kit )
+        ( gk_close kit )
         ^ 1
     }
-    : *GpOpt go ( gpopt_adam_new LR )
+    : GpOpt go ( gpopt_adam_new LR )
     ( gpopt_add go pg W1d ALPHA ) ( gpopt_add go pg B1d 0.0 )
     ( gpopt_add go pg W2d ALPHA ) ( gpopt_add go pg B2d 0.0 )
     ( gpopt_add go pg W3d ALPHA ) ( gpopt_add go pg B3d 0.0 )
@@ -172,7 +166,6 @@ $ `deps/gpukit/src/dev.nu`
         : ~ i q 0
         ~ < q * BSZ D { ( vec_push [f] rows ( _tf all + * * ep2 BSZ D q ) ) = q + q 1 }
         = devok & devok ( gput_set_input pg Xd rows )
-        ( vec_free [f] rows )
         = devok & devok ( gput_forward pg )
         = devok & devok ( gput_backward pg )
         ? == ep2 0 { = dfirst ( gput_loss pg ) } {}
@@ -191,7 +184,7 @@ $ `deps/gpukit/src/dev.nu`
     : ~ f gfirst 0.0
     : ~ f glast 0.0
     ? devok {
-        : *GTape tp3 ( tape_new )
+        : GTape tp3 ( tape_new )
         : GVar W1g ( param2 tp3 w1v D H1 )
         : GVar B1g ( param1 tp3 H1 )
         : GVar W2g ( param2 tp3 w2v H1 H2 )
@@ -205,10 +198,9 @@ $ `deps/gpukit/src/dev.nu`
         ( vec_push [i] rshg BSZ ) ( vec_push [i] rshg D )
         : Tensor rtg ( tensor_from_data TE_F64 rshg rows0g )
         : GVar Xg ( grad_const tp3 rtg )
-        ( tensor_free rtg ) ( vec_free [f] rows0g )
         : GVar lossg ( episode tp3 Xg W1g B1g W2g B2g W3g B3g ALPHA BSZ )
-        : *GProg pgg ( gput_capture kit tp3 lossg )
-        : *GpOpt gog ( gpopt_adam_new LR )
+        : GProg pgg ( gput_capture kit tp3 lossg )
+        : GpOpt gog ( gpopt_adam_new LR )
         ( gpopt_add gog pgg W1g ALPHA ) ( gpopt_add gog pgg B1g 0.0 )
         ( gpopt_add gog pgg W2g ALPHA ) ( gpopt_add gog pgg B2g 0.0 )
         ( gpopt_add gog pgg W3g ALPHA ) ( gpopt_add gog pgg B3g 0.0 )
@@ -222,7 +214,6 @@ $ `deps/gpukit/src/dev.nu`
                 : ~ i q 0
                 ~ < q * BSZ D { ( vec_push [f] rows ( _tf all + * * ep3 BSZ D q ) ) = q + q 1 }
                 = gok & gok ( gput_set_input pgg Xg rows )
-                ( vec_free [f] rows )
                 = gok & gok ( gpopt_prepare gog pgg )
                 = gok & gok ( gput_episode pgg )
                 ? == ep3 0 { = gfirst ( gput_loss pgg ) } {}
@@ -231,9 +222,6 @@ $ `deps/gpukit/src/dev.nu`
             }
             = t5 ( monotonic_ns )
         } {}
-        ( gpopt_free gog )
-        ( gput_free pgg )
-        ( tape_free tp3 )
     } {}
 
     // — MEGAKERNEL path: fused row/param kernels (+ graph when available) —
@@ -245,7 +233,7 @@ $ `deps/gpukit/src/dev.nu`
     : ~ f mlast 0.0
     : ~ i msegs 0
     ? devok {
-        : *GTape tp4 ( tape_new )
+        : GTape tp4 ( tape_new )
         : GVar W1m ( param2 tp4 w1v D H1 )
         : GVar B1m ( param1 tp4 H1 )
         : GVar W2m ( param2 tp4 w2v H1 H2 )
@@ -259,16 +247,15 @@ $ `deps/gpukit/src/dev.nu`
         ( vec_push [i] rshm BSZ ) ( vec_push [i] rshm D )
         : Tensor rtm ( tensor_from_data TE_F64 rshm rows0m )
         : GVar Xm ( grad_const tp4 rtm )
-        ( tensor_free rtm ) ( vec_free [f] rows0m )
         : GVar lossm ( episode tp4 Xm W1m B1m W2m B2m W3m B3m ALPHA BSZ )
-        : *GProg pgm ( gput_capture kit tp4 lossm )
-        : *GpOpt gom ( gpopt_adam_new LR )
+        : GProg pgm ( gput_capture kit tp4 lossm )
+        : GpOpt gom ( gpopt_adam_new LR )
         ( gpopt_add gom pgm W1m ALPHA ) ( gpopt_add gom pgm B1m 0.0 )
         ( gpopt_add gom pgm W2m ALPHA ) ( gpopt_add gom pgm B2m 0.0 )
         ( gpopt_add gom pgm W3m ALPHA ) ( gpopt_add gom pgm B3m 0.0 )
-        : *GpPlan plm ( gpfuse_plan pgm )
-        = msegs / ( vec_len [i] . plm segs ) 2
-        ? & & ( gput_ok pgm ) . plm ok ( gpfuse_worthwhile pgm ) {
+        : GpPlan plm ( gpfuse_plan pgm )
+        = msegs / ( vec_len [i] ( gpfuse_plan_segs plm ) ) 2
+        ? & & ( gput_ok pgm ) ( gpfuse_plan_ok plm ) ( gpfuse_worthwhile pgm ) {
             = mok T
             = mgraph ( gpfuse_graph_capture_train pgm plm gom )
             = t6 ( monotonic_ns )
@@ -278,7 +265,6 @@ $ `deps/gpukit/src/dev.nu`
                 : ~ i q 0
                 ~ < q * BSZ D { ( vec_push [f] rows ( _tf all + * * ep4 BSZ D q ) ) = q + q 1 }
                 = mok & mok ( gput_set_input pgm Xm rows )
-                ( vec_free [f] rows )
                 ? mgraph {
                     = mok & mok ( gpopt_prepare gom pgm )
                     = mok & mok ( gput_episode pgm )
@@ -293,10 +279,6 @@ $ `deps/gpukit/src/dev.nu`
             }
             = t7 ( monotonic_ns )
         } {}
-        ( gpfuse_free plm )
-        ( gpopt_free gom )
-        ( gput_free pgm )
-        ( tape_free tp4 )
     } {}
 
     : i cms / - t1 t0 1000000
@@ -345,12 +327,6 @@ $ `deps/gpukit/src/dev.nu`
     } {
         ( nurl_print `megakernel:    skipped (no launch latency to remove on this backend)\n` )
     }
-    ( gpopt_free go )
-    ( gput_free pg )
-    ( opt_free co )
-    ( tape_free tp ) ( tape_free tp2 )
-    ( vec_free [f] w1v ) ( vec_free [f] w2v ) ( vec_free [f] w3v )
-    ( vec_free [f] all )
     ( gk_close kit )
     ^ ? agree 0 1
 }

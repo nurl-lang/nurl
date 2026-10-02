@@ -33,7 +33,7 @@
 //   ( router_count  Router r )                           → i
 //
 //   ( params_new )                                       → Params
-//   ( params_free Params p )                             → v
+//   ( params_free Params p )                             → v   early release (optional)
 //   ( params_get  Params p s key )                       → ? String
 //   ( params_count Params p )                            → i
 //
@@ -101,9 +101,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ Params { ( vec_new [QueryPair] ) }
 }
 
-@ params_free sink Params p → v {
-    ( query_pairs_free . p entries )
-}
+@ params_free sink Params p → v {}
 
 @ params_count Params p → i {
     ^ ( vec_len [QueryPair] . p entries )
@@ -388,11 +386,9 @@ $ `stdlib/core/rcbox.nu`
             ? ( __match_pattern pattern req_path params ) {
                 : ( @ HttpResponse HttpRequest Params ) f . impl handler
                 : HttpResponse resp ( f req params )
-                ( params_free params )
                 ? is_head { ( __strip_body_for_head resp ) } {}
                 ^ resp
             } {
-                ( params_free params )
             }
         } {}
         = k + k 1
@@ -409,7 +405,6 @@ $ `stdlib/core/rcbox.nu`
     : String cl ( string_new )
     ( string_push_int cl body_len )
     ( response_set_header resp `Content-Length` ( string_data cl ) )
-    ( string_free cl )
     ( vec_clear [u] . resp body )
 }
 
@@ -456,14 +451,12 @@ $ `stdlib/core/rcbox.nu`
                 ? ( nurl_str_eq rmethod `GET` ) { = have_get T } {}
             } {}
         } {}
-        ( params_free params )
         = k + k 1
     }
 
     // No pattern matched → standard 404 (preserves the same response
     // contract callers wrap around router_handle).
     ? ! matched {
-        ( vec_free_with [String] methods \ String s → v { ( string_free s ) } )
         ^ ( response_text 404 `not found\n` )
     } {}
 
@@ -487,7 +480,6 @@ $ `stdlib/core/rcbox.nu`
 
     : HttpResponse rs ( response_status_only 204 )
     ( response_set_header rs `Allow` ( string_data allow ) )
-    ( vec_free_with [String] methods \ String s → v { ( string_free s ) } )
     ^ rs
 }
 

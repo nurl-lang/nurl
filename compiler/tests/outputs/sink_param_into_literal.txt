@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+constructor, live: 0
+constructor, allocations per round: 5
+bound, live: 0
+read-only call, live: 0
+one branch, live: 0
+2360

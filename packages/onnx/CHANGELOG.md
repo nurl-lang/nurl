@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** `rt_open` returns an `Engine` handle
+instead of a `*Engine` pointer: every copy is the same engine, and its last
+owner releases every device block it allocated (now kept as `GpuBuffer`s),
+its value map and the device (the kit); `rt_reset` lets a run's blocks go
+early, `rt_close` is an optional early release. The graph a run is handed
+stays the caller's: the engine keeps copies of its input / output names and
+views its initializers for the run, and holds no part of it (so one graph
+runs on any number of engines, and no free is needed for it). The input
+shapes `rt_run_shaped` / `rt_run_two` are given are `sink` — they always
+were adopted by the value map. `rt_download` returns a `GpuHost` (released with its owner;
+`gpu_host_ptr` / `gpu_host_get_f32` read it) instead of a `*u` the caller
+freed. `OGraph` and `OTensor` are owning structs — an initializer's host
+data is a `( Vec u )` now (`otensor_host_ptr` for its address) — so
+`graph_free` is an optional early release. New: `rt_none` (an engine that is
+not there, `rt_ok` F). Callers change `*Engine` to `Engine`.
+
 ## 0.9.0
 
 The package's own protobuf decoder is gone. `stdlib/ext/protobuf.nu` — the

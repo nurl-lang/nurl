@@ -257,7 +257,9 @@ $ `stdlib/core/rcbox.nu`
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
-    ( tcb_free . c tcb )
+    // The slot gives its Tcb up (dropped here) and keeps a null one.
+    : Tcb gone . c tcb
+    ( mem_take gone )
     = . c tcb @ Tcb { # s 0 }
     = . c used F
 }
@@ -447,7 +449,6 @@ $ `stdlib/core/rcbox.nu`
         ( tcpseg_push dg dst_ip src_ip . s dst_port . s src_port 0
         ( seq_add . s seq ( tcpseg_seq_len s ) ) 20 0 0 -1 empty 0 0 )
     }
-    ( vec_free [u] empty )
     // The refusal comes from the address the offending segment was sent
     // TO — including 127.0.0.1, whose RST must not claim to come from
     // the interface.
@@ -517,7 +518,6 @@ $ `stdlib/core/rcbox.nu`
         : i before ( tcb_recv_queue_len . c tcb )
         : i r ( tcb_input . c tcb s frame now o )
         : i emitted ( __flush ts idx o now out )
-        ( pktbuf_free o )
         : i st ( tcb_state . c tcb )
         ? ( tcb_was_reset . c tcb ) {
             ( __conn_release ts idx )
@@ -539,11 +539,9 @@ $ `stdlib/core/rcbox.nu`
         : i lidx ( __find_listener ts . rr dst_ip . s dst_port )
         ? >= lidx 0 {
             : TRx res ( __passive_open ts lidx . rr dst_ip . s dst_port s . rr src_ip now frame o out )
-            ( pktbuf_free o )
             ^ res
         } {}
     } {}
-    ( pktbuf_free o )
     = . ts no_conn + . ts no_conn 1
     : i em ( __send_rst ts . rr src_ip . rr dst_ip s now out )
     ^ ( __trx ( trx_no_conn ) 0 -1 em )
@@ -572,7 +570,6 @@ $ `stdlib/core/rcbox.nu`
     : PktBuf o ( pktbuf_new )
     ( tcb_connect . c tcb . c local_ip . c local_port remote_ip remote_port ( __next_iss ts ) now o )
     ( __flush ts idx o now out )
-    ( pktbuf_free o )
     ^ idx
 }
 
@@ -587,7 +584,6 @@ $ `stdlib/core/rcbox.nu`
     : PktBuf o ( pktbuf_new )
     ( tcb_pump . c tcb now o )
     ( __flush ts idx o now out )
-    ( pktbuf_free o )
     ^ n
 }
 
@@ -607,7 +603,6 @@ $ `stdlib/core/rcbox.nu`
     : PktBuf o ( pktbuf_new )
     ( tcb_close . c tcb now o )
     ( __flush ts idx o now out )
-    ( pktbuf_free o )
     ? == ( tcb_state . c tcb ) ( tcp_closed ) { ( __conn_release ts idx ) } {}
 }
 
@@ -619,7 +614,6 @@ $ `stdlib/core/rcbox.nu`
     : PktBuf o ( pktbuf_new )
     ( tcb_abort . c tcb o )
     ( __flush ts idx o now out )
-    ( pktbuf_free o )
     ( __conn_release ts idx )
 }
 
@@ -641,7 +635,6 @@ $ `stdlib/core/rcbox.nu`
             : PktBuf o ( pktbuf_new )
             : i fired ( tcb_tick . c tcb now o )
             = emitted + emitted ( __flush ts k o now out )
-            ( pktbuf_free o )
             ? == ( tcb_state . c tcb ) ( tcp_closed ) { ( __conn_release ts k ) } {}
         } {}
         = k + k 1

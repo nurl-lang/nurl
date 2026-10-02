@@ -44,8 +44,6 @@ $ `stdlib/std/hash_sha256.nu`
         ~ < ii ( vec_len [u] info ) { ( vec_push [u] input # u ( __hk_bget info ii ) ) = ii + ii 1 }
         ( vec_push [u] input # u & counter 255 )
         : ( Vec u ) t ( hmac_sha256_pure prk input )
-        ( vec_free [u] input )
-        ( vec_free [u] prev )
         = prev t
         : ~ i j 0
         ~ & < j 32 < generated length {

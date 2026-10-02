@@ -7,9 +7,8 @@ $ `stdlib/ext/protobuf.nu`
 
 @ grpc_metadata_new → ( Vec Header ) { ^ ( vec_new [Header] ) }
 
-@ grpc_metadata_free sink ( Vec Header ) metadata → v {
-    ( vec_free_with [Header] metadata \ Header h → v { ( header_free h ) } )
-}
+// Let go of `metadata` now rather than at the end of its owner's scope.
+@ grpc_metadata_free sink ( Vec Header ) metadata → v {}
 
 @ grpc_header_count ( Vec Header ) headers s name → i {
     : ~ i count 0
@@ -71,11 +70,9 @@ $ `stdlib/ext/protobuf.nu`
 @ grpc_metadata_add ( Vec Header ) metadata s key s value → !v GrpcError {
     : Header h ( header_new key value )
     ? | ! ( grpc_metadata_key . h name ) ( grpc_metadata_reserved . h name ) {
-        ( header_free h )
         ^ @ !v GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid or reserved metadata key` ) }
     } {}
     ? | ( string_ends_with . h name `-bin` ) ! ( grpc_metadata_ascii . h value ) {
-        ( header_free h )
         ^ @ !v GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `use grpc_metadata_add_binary for binary metadata` ) }
     } {}
     ( vec_push [Header] metadata h )
@@ -85,7 +82,6 @@ $ `stdlib/ext/protobuf.nu`
 @ grpc_metadata_add_binary ( Vec Header ) metadata s key ( Vec u ) value → !v GrpcError {
     : String name ( string_from key )
     ? | | ! ( grpc_metadata_key name ) ( grpc_metadata_reserved name ) ! ( string_ends_with name `-bin` ) {
-        ( string_free name )
         ^ @ !v GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `binary metadata requires a nonreserved -bin key` ) }
     } {}
     ( vec_push [Header] metadata @ Header { name ( bytes_to_str value ) } )
@@ -137,7 +133,6 @@ $ `stdlib/ext/protobuf.nu`
     : ~ i n ( string_len padded )
     ~ & > n 0 == ( string_get padded - n 1 ) 61 { = n - n 1 }
     : String result ( string_substr padded 0 n )
-    ( string_free padded )
     ^ result
 }
 
@@ -150,7 +145,6 @@ $ `stdlib/ext/protobuf.nu`
         : Header h . ( vec_data [Header] metadata ) header_index
         = header_index + header_index 1
         ? | ! ( grpc_metadata_key . h name ) ( grpc_metadata_reserved . h name ) {
-            ( grpc_metadata_free out )
             ^ @ !( Vec Header ) GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `invalid or reserved metadata key` ) }
         } {}
         : b binary ( string_ends_with . h name `-bin` )
@@ -160,7 +154,6 @@ $ `stdlib/ext/protobuf.nu`
             // overflow even when the caller supplies an unusually large cap.
             : i groups / wire_size 3
             ? > groups / remaining 4 {
-                ( grpc_metadata_free out )
                 ^ @ !( Vec Header ) GrpcError { F ( grpc_error GRPC_RESOURCE_EXHAUSTED `metadata exceeds limit` ) }
             } {}
             : i tail % wire_size 3
@@ -168,13 +161,12 @@ $ `stdlib/ext/protobuf.nu`
         } {}
         ?? ( __grpc_metadata_charge remaining ( string_len . h name ) wire_size ) {
             T _ → {}
-            F e → { ( grpc_metadata_free out ) ^ @ !( Vec Header ) GrpcError { F e } }
+            F e → { ^ @ !( Vec Header ) GrpcError { F e } }
         }
         ? binary {
             ( vec_push [Header] out @ Header { ( string_clone . h name ) ( __grpc_base64 . h value ) } )
         } {
             ? ! ( grpc_metadata_ascii . h value ) {
-                ( grpc_metadata_free out )
                 ^ @ !( Vec Header ) GrpcError { F ( grpc_error GRPC_INVALID_ARGUMENT `non-ASCII metadata value` ) }
             } {}
             ( vec_push [Header] out ( grpc_header_clone h ) )
@@ -201,16 +193,13 @@ $ `stdlib/ext/protobuf.nu`
             // HTTP field validation excludes NUL; make that explicit here for
             // direct callers so a C-string decoder cannot truncate metadata.
             ? != ( string_len part ) ( nurl_str_len ( string_data part ) ) {
-                ( string_free part )
                 ^ @ !v GrpcError { F ( grpc_error GRPC_INTERNAL `invalid binary metadata` ) }
             } {}
             : !String ParseErr decoded ( b64_decode ( string_data part ) )
-            ( string_free part )
             ?? decoded {
                 F _ → ^ @ !v GrpcError { F ( grpc_error GRPC_INTERNAL `invalid binary metadata` ) }
                 T value → {
                     ? > ( string_len value ) - remaining overhead {
-                        ( string_free value )
                         ^ @ !v GrpcError { F ( grpc_error GRPC_RESOURCE_EXHAUSTED `decoded metadata exceeds limit` ) }
                     } {}
                     = remaining - remaining + overhead ( string_len value )
@@ -235,7 +224,7 @@ $ `stdlib/ext/protobuf.nu`
         ? & ! ( grpc_metadata_reserved . h name ) ( grpc_metadata_key . h name ) {
             ? ( string_ends_with . h name `-bin` ) {
                 ?? ( __grpc_decode_binary out h remaining ) {
-                    F e → { ( grpc_metadata_free out ) ^ @ !( Vec Header ) GrpcError { F e } }
+                    F e → { ^ @ !( Vec Header ) GrpcError { F e } }
                     T _ → {}
                 }
             } {
@@ -243,7 +232,6 @@ $ `stdlib/ext/protobuf.nu`
                 ? ( grpc_metadata_ascii . h value ) {
                     : i size + + ( string_len . h name ) ( string_len . h value ) 32
                     ? > size remaining {
-                        ( grpc_metadata_free out )
                         ^ @ !( Vec Header ) GrpcError { F ( grpc_error GRPC_RESOURCE_EXHAUSTED `decoded metadata exceeds limit` ) }
                     } {}
                     = remaining - remaining size
@@ -293,10 +281,8 @@ $ `stdlib/ext/protobuf.nu`
     ^ @ GrpcStatus { code ( string_from message ) ( vec_new [u] ) }
 }
 
-@ grpc_status_free sink GrpcStatus status → v {
-    ( string_free . status message )
-    ( vec_free [u] . status details )
-}
+// Let go of `status` now rather than at the end of its owner's scope.
+@ grpc_status_free sink GrpcStatus status → v {}
 
 @ __grpc_details_validate i code ( Vec u ) details → !v ProtoError {
     : ~ ProtoReader r \ ( proto_reader details )
@@ -339,21 +325,17 @@ $ `stdlib/ext/protobuf.nu`
     ? > code 16 { = code GRPC_UNKNOWN } {}
     : String encoded ( string_from ( grpc_header_value headers `grpc-message` ) )
     : String message ( grpc_message_decode encoded )
-    ( string_free encoded )
     ? == ( grpc_header_count headers `grpc-status-details-bin` ) 1 {
         ? == code GRPC_OK {
-            ( string_free message )
             ^ @ !GrpcStatus GrpcError { F ( grpc_error GRPC_INTERNAL `OK status cannot carry error details` ) }
         } {}
         ?? ( b64_decode_vec ( grpc_header_value headers `grpc-status-details-bin` ) ) {
             F _ → {
-                ( string_free message )
                 ^ @ !GrpcStatus GrpcError { F ( grpc_error GRPC_INTERNAL `invalid status details` ) }
             }
             T details → {
                 ?? ( __grpc_details_validate code details ) {
                     F _ → {
-                        ( string_free message ) ( vec_free [u] details )
                         ^ @ !GrpcStatus GrpcError { F ( grpc_error GRPC_INTERNAL `status details disagree with grpc-status` ) }
                     }
                     T _ → ^ @ !GrpcStatus GrpcError { T @ GrpcStatus { code message details } }
@@ -410,8 +392,8 @@ $ `stdlib/ext/protobuf.nu`
     : ~ ( Vec Header ) out ( grpc_metadata_new )
     ? > ( vec_len [Header] metadata ) 0 {
         ?? ( grpc_metadata_encode metadata metadata_limit ) {
-            T encoded → { ( grpc_metadata_free out ) = out encoded }
-            F e → { ( grpc_metadata_free out ) ^ @ !( Vec Header ) GrpcError { F e } }
+            T encoded → { = out encoded }
+            F e → { ^ @ !( Vec Header ) GrpcError { F e } }
         }
     } {}
     : String code ( string_new )
@@ -421,10 +403,9 @@ $ `stdlib/ext/protobuf.nu`
     ? > ( vec_len [u] . status details ) 0 {
         : String bytes ( bytes_to_str . status details )
         ( vec_push [Header] out @ Header { ( string_from `grpc-status-details-bin` ) ( __grpc_base64 bytes ) } )
-        ( string_free bytes )
     } {}
     ?? ( grpc_headers_check_size out limit ) {
-        F e → { ( grpc_metadata_free out ) ^ @ !( Vec Header ) GrpcError { F e } }
+        F e → { ^ @ !( Vec Header ) GrpcError { F e } }
         T _ → ^ @ !( Vec Header ) GrpcError { T out }
     }
 }

@@ -5,12 +5,17 @@ The retrieval middle between embeddings and generation — the RAG piece.
 `vindex` is what finds the right vectors in between.
 
 ```
-: *VIndex ix ( vx_build_ivf vecs n dim VX_COSINE 256 20 42 )  // k-means, 256 lists
+: VIndex ix ( vx_build_ivf vecs n dim VX_COSINE 256 20 42 )   // k-means, 256 lists
 : ( Vec i ) ids ( vec_new [i] )
 : ( Vec f ) dists ( vec_new [f] )
 : i found ( vx_search ix query 10 8 ids dists )               // top-10, probe 8 lists
 // ids[0..found) are the nearest document rows, dists ascending
 ```
+
+A builder takes ownership of the vectors it indexes (`vecs` is moved into
+the index). A `VIndex` is a handle: every copy is the same index and its
+last owner releases it — nothing is freed by hand (`vx_free` remains as an
+optional early release).
 
 ## Two indexes, one search
 

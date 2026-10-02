@@ -64,6 +64,5 @@ connectivity check before trying anything that costs something.` )
             = rc 1
         }
     }
-    ( mcp_server_free srv )
     ^ rc
 }

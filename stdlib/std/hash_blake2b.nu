@@ -128,7 +128,6 @@ $ `stdlib/std/bytes.nu`
         ( vec_set [u64] h i ^^ ( __b2b_vu64 h i ) ^^ ( __b2b_vu64 v i ) ( __b2b_vu64 v + i 8 ) )
         = i + i 1
     }
-    ( vec_free [u64] iv )
 }
 
 @ __b2b_zeros i n → ( Vec u ) {
@@ -147,7 +146,6 @@ $ `stdlib/std/bytes.nu`
     ? == n 0 {
         : ( Vec u ) blk ( __b2b_zeros 128 )
         ( __b2b_compress h blk 0 # u64 0 1 sigma )
-        ( vec_free [u] blk )
     } {
         : ~ i off 0
         : ~ u64 t # u64 0
@@ -167,7 +165,6 @@ $ `stdlib/std/bytes.nu`
                     = j + j 1
                 }
                 ( __b2b_compress h blk 0 t 1 sigma )
-                ( vec_free [u] blk )
                 = done T
             }
         }
@@ -176,7 +173,5 @@ $ `stdlib/std/bytes.nu`
     : ( Vec u ) out ( vec_with_cap [u] 64 )
     : ~ i i 0
     ~ < i 8 { ( bytes_push_u64_le out ( __b2b_vu64 h i ) ) = i + i 1 }
-    ( vec_free [u64] h )
-    ( vec_free [u] sigma )
     ^ out
 }

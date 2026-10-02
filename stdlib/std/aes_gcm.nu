@@ -148,7 +148,6 @@ $ `stdlib/core/rcbox.nu`
         ( vec_push [u] w # u ^^ ( __aes_bget w - n 13 ) t3 )
         = n + n 4
     }
-    ( vec_free [u] rcon )
     ^ w
 }
 
@@ -192,7 +191,6 @@ $ `stdlib/core/rcbox.nu`
         ( vec_push [u] w # u ^^ ( __aes_bget w - n 29 ) t3 )
         = n + n 4
     }
-    ( vec_free [u] rcon )
     ^ w
 }
 
@@ -290,11 +288,14 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Round keys in bitsliced form: 8 words per round, the same key material
-// replicated into all four block slots. Runs once per key. The caller
-// owns the returned buffer and frees it with `nurl_free`.
-@ __skey_bitslice ( Vec u ) rk i nr → s {
-    : s sk ( nurl_zalloc * 8 * 8 + nr 1 )
-    : s q ( nurl_zalloc 64 )
+// replicated into all four block slots, plus 16 spare bytes at the end
+// (`__hsub_at`) for the GHASH subkey. Runs once per key; `q` is the
+// caller's 8-word scratch.
+@ __hsub_at i nr → i { ^ * 64 + nr 1 }
+
+@ __skey_bitslice ( Vec u ) rk i nr s q → ( Vec u ) {
+    : ( Vec u ) skv ( vec_zeroed [u] + ( __hsub_at nr ) 16 )
+    : s sk # s ( vec_data [u] skv )
     : *u rkp ( vec_data [u] rk )
     : ~ i r 0
     ~ <= r nr {
@@ -313,8 +314,7 @@ $ `stdlib/core/rcbox.nu`
         ~ < k 8 { ( nurl_poke sk + base k ( nurl_peek q k ) ) = k + k 1 }
         = r + r 1
     }
-    ( nurl_free q )
-    ^ sk
+    ^ skv
 }
 
 // ── The block cipher ─────────────────────────────────────────────
@@ -705,19 +705,20 @@ $ `stdlib/core/rcbox.nu`
 
 // The GCM tag over AAD ‖ ciphertext ‖ lengths, masked with E_K(J0).
 // `hp` is the 16-byte hash subkey H, `ekp` the 16-byte E_K(J0); the tag
-// is written to the 16 bytes at `out`.
-@ __gcm_tag_raw * u hp * u ekp * u aadp i aadlen * u ctp i ctlen * u out → v {
+// is written to the 16 bytes at `out`. `scr` is 32 bytes of the caller's
+// zeroed scratch: the GHASH state, then the length block.
+@ __gcm_tag_raw * u hp * u ekp * u aadp i aadlen * u ctp i ctlen * u out s scr → v {
     : u64 h1 ( __be64_pad hp 0 8 )
     : u64 h0 ( __be64_pad hp 8 8 )
     : u64 h0r ( __rev64 h0 )
     : u64 h1r ( __rev64 h1 )
     : u64 h2 ^^ h0 h1
     : u64 h2r ^^ h0r h1r
-    : s ystate ( nurl_zalloc 16 )
+    : s ystate scr
     ? > aadlen 0 { ( __ghash_blocks ystate h0 h1 h0r h1r h2 h2r aadp aadlen ) } {}
     ? > ctlen 0 { ( __ghash_blocks ystate h0 h1 h0r h1r h2 h2r ctp ctlen ) } {}
     // Length block: [len(AAD)*8]_64 ‖ [len(C)*8]_64.
-    : *u lenb # *u ( nurl_zalloc 16 )
+    : *u lenb # *u + # i scr 16
     ( __st64be lenb 0 # u64 * aadlen 8 )
     ( __st64be lenb 8 # u64 * ctlen 8 )
     ( __ghash_blocks ystate h0 h1 h0r h1r h2 h2r lenb 16 )
@@ -725,29 +726,18 @@ $ `stdlib/core/rcbox.nu`
     ( __st64be out 8 # u64 ( nurl_peek ystate 0 ) )
     : ~ i k 0
     ~ < k 16 { = . out k # u ^^ # i . out k # i . ekp k = k + k 1 }
-    ( nurl_free # s lenb )
-    ( nurl_free ystate )
 }
 
 // ── Per-key context ──────────────────────────────────────────────
 // Everything that depends only on the key: the bitsliced round keys,
-// the round count, and the GHASH subkey H = E_K(0^128). Built once by
-// `aes_gcm_key_new`, reused by every seal/open/block call, released by
-// its last owner. The per-call scratch (counter blocks, keystream) is
-// still allocated per call — it is per message, not per key.
+// the round count, and the GHASH subkey H = E_K(0^128) (the last 16
+// bytes of `skey`, at __hsub_at nr). Built once by `aes_gcm_key_new`,
+// reused by every seal/open/block call, released by its last owner. The
+// per-call scratch (counter blocks, keystream, GHASH state) lives in the
+// output's spare capacity — it is per message, not per key.
 : AesGcmKeyImpl {
-    s skey
+    ( Vec u ) skey
     i nr
-    s hsub
-}
-
-// The round keys and H are raw buffers: releasing them is the key's own
-// drop, run by the last owner of the handle (AesGcmKey_drop).
-% Drop AesGcmKeyImpl {
-    @ drop AesGcmKeyImpl k → v {
-        ( nurl_free . k skey )
-        ( nurl_free . k hsub )
-    }
 }
 
 // A handle on the key state in an rcbox (stdlib/core/rcbox.nu): every
@@ -770,27 +760,20 @@ $ `stdlib/core/rcbox.nu`
 @ aes_gcm_key_new ( Vec u ) key → AesGcmKey {
     : i klen ( vec_len [u] key )
     ? & != klen 16 != klen 32 { ^ @ AesGcmKey { # s 0 } } {}
-    : i k__box ( rcbox_zero [AesGcmKeyImpl] )
-    : *AesGcmKeyImpl k ( rcbox_ptr [AesGcmKeyImpl] k__box )
     : i nr ( __aes_nr key )
     : ( Vec u ) rk ( __aes_expand key )
-    = . k skey ( __skey_bitslice rk nr )
-    = . k nr nr
-    ( vec_free [u] rk )
+    // One scratch block: the cipher's 8 words, then the all-zero input
+    // and the output of one four-block call.
+    : ( Vec u ) scr ( vec_zeroed [u] 192 )
+    : s q # s ( vec_data [u] scr )
+    : ( Vec u ) skey ( __skey_bitslice rk nr q )
     // H = E_K(0): slot 0 of one four-block call on an all-zero input.
-    : s q ( nurl_zalloc 64 )
-    : *u zb # *u ( nurl_zalloc 64 )
-    : *u hb # *u ( nurl_zalloc 64 )
-    ( __aes_ct64_enc4 zb hb . k skey nr q )
-    : s h ( nurl_zalloc 16 )
-    : *u hp # *u h
-    : ~ i i 0
-    ~ < i 16 { = . hp i . hb i = i + i 1 }
-    = . k hsub h
-    ( nurl_free # s hb )
-    ( nurl_free # s zb )
-    ( nurl_free q )
-    ^ @ AesGcmKey { # s k__box }
+    : *u zb # *u + # i q 64
+    : *u hb # *u + # i q 128
+    : *u skp ( vec_data [u] skey )
+    ( __aes_ct64_enc4 zb hb # s skp nr q )
+    ( nurl_memcpy # s + # i skp ( __hsub_at nr ) # s hb 16 )
+    ^ @ AesGcmKey { # s ( rcbox_new [AesGcmKeyImpl] @ AesGcmKeyImpl { skey nr } ) }
 }
 
 // Let go of `k` now rather than at the end of its owner's scope.
@@ -802,18 +785,17 @@ $ `stdlib/core/rcbox.nu`
 @ aes_block_encrypt AesGcmKey k__h ( Vec u ) block → ( Vec u ) {
     ? | == 0 # i . k__h ctl != ( vec_len [u] block ) 16 { ^ ( vec_new [u] ) } {}
     : *AesGcmKeyImpl k ( __AesGcmKey_ptr k__h )
-    : s q ( nurl_zalloc 64 )
-    : *u inb # *u ( nurl_zalloc 64 )
-    : *u outb # *u ( nurl_zalloc 64 )
+    // the cipher's 8 words, then the input and output blocks
+    : ( Vec u ) scr ( vec_zeroed [u] 192 )
+    : s q # s ( vec_data [u] scr )
+    : *u inb # *u + # i q 64
+    : *u outb # *u + # i q 128
     : ~ i i 0
     ~ < i 16 { = . inb i # u ( __aes_bget block i ) = i + i 1 }
-    ( __aes_ct64_enc4 inb outb . k skey . k nr q )
+    ( __aes_ct64_enc4 inb outb # s ( vec_data [u] . k skey ) . k nr q )
     : ( Vec u ) out ( vec_with_cap [u] 16 )
     = i 0
     ~ < i 16 { ( vec_push [u] out . outb i ) = i + i 1 }
-    ( nurl_free # s outb )
-    ( nurl_free # s inb )
-    ( nurl_free q )
     ^ out
 }
 
@@ -825,12 +807,30 @@ $ `stdlib/core/rcbox.nu`
 // The first four-block call carries J0 = nonce ‖ 0x00000001 in slot 0
 // (its ciphertext masks the tag) and counters 2..4 in slots 1..3, so no
 // block of the core is wasted; every later call is four counters.
-@ __gcm_run * AesGcmKeyImpl k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing * u tagp → ( Vec u ) {
-    : s skey . k skey
+//
+// The per-call scratch is the returned Vec's spare capacity, 16-aligned
+// past room for the 16-byte tag a seal appends (so that append never
+// regrows the record): the cipher's 8 words [0, 64), the counter blocks
+// [64, 128), the keystream [128, 192), E_K(J0) [192, 208), the tag
+// [208, 224), and the GHASH state and length block [224, 256). One
+// allocation per call where there were eight.
+@ __gcm_scratch → i { ^ 256 }
+
+@ __gcm_scr_at i n → i { ^ & + n 31 -16 }
+
+@ __gcm_run * AesGcmKeyImpl k ( Vec u ) nonce ( Vec u ) aad * u inp i n i sealing → ( Vec u ) {
+    : *u skp ( vec_data [u] . k skey )
+    : s skey # s skp
     : i nr . k nr
-    : s q ( nurl_zalloc 64 )
-    : *u cb # *u ( nurl_zalloc 64 )
-    : *u kb # *u ( nurl_zalloc 64 )
+    : ( Vec u ) out ( vec_with_cap [u] + ( __gcm_scr_at n ) ( __gcm_scratch ) )
+    : b _ol ( vec_set_len [u] out n )
+    : *u op ( vec_data [u] out )
+    : s scr # s + # i op ( __gcm_scr_at n )
+    ( nurl_memset scr 0 ( __gcm_scratch ) )
+    : s q scr
+    : *u cb # *u + # i scr 64
+    : *u kb # *u + # i scr 128
+    : *u tagp # *u + # i scr 208
 
     // The counter blocks all carry the same nonce; only the last four
     // bytes change, so the nonce is written once and left alone.
@@ -844,13 +844,10 @@ $ `stdlib/core/rcbox.nu`
     // Batch 1: counters 1 (= J0), 2, 3, 4.
     ( __ctr_fill cb 1 )
     ( __aes_ct64_enc4 cb kb skey nr q )
-    : *u ej0 # *u ( nurl_zalloc 16 )
+    : *u ej0 # *u + # i scr 192
     : ~ i hi 0
     ~ < hi 16 { = . ej0 hi . kb hi = hi + hi 1 }
 
-    : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
-    : b _ol ( vec_set_len [u] out n )
-    : *u op ( vec_data [u] out )
     : i lim0 ? < n 48 n 48
     : ~ i j 0
     ~ < j lim0 {
@@ -873,12 +870,7 @@ $ `stdlib/core/rcbox.nu`
     }
 
     : *u ctp ? == sealing 1 op inp
-    ( __gcm_tag_raw # *u . k hsub ej0 ( vec_data [u] aad ) ( vec_len [u] aad ) ctp n tagp )
-
-    ( nurl_free # s ej0 )
-    ( nurl_free # s kb )
-    ( nurl_free # s cb )
-    ( nurl_free q )
+    ( __gcm_tag_raw # *u + # i skp ( __hsub_at nr ) ej0 ( vec_data [u] aad ) ( vec_len [u] aad ) ctp n tagp # s + # i scr 224 )
     ^ out
 }
 
@@ -889,11 +881,9 @@ $ `stdlib/core/rcbox.nu`
     ? | == 0 # i . k__h ctl != ( vec_len [u] nonce ) 12 { ^ ( vec_new [u] ) } {}
     ? > ( vec_len [u] pt ) 68719476704 { ^ ( vec_new [u] ) } {}
     : i n ( vec_len [u] pt )
-    : *u tagp # *u ( nurl_zalloc 16 )
-    : ( Vec u ) ct ( __gcm_run ( __AesGcmKey_ptr k__h ) nonce aad ( vec_data [u] pt ) n 1 tagp )
-    : ~ i ti 0
-    ~ < ti 16 { ( vec_push [u] ct . tagp ti ) = ti + ti 1 }
-    ( nurl_free # s tagp )
+    : ( Vec u ) ct ( __gcm_run ( __AesGcmKey_ptr k__h ) nonce aad ( vec_data [u] pt ) n 1 )
+    // the tag the run left in the scratch, appended within capacity
+    ( bytes_extend_raw ct # s + # i ( vec_data [u] ct ) + ( __gcm_scr_at n ) 208 16 )
     ^ ct
 }
 
@@ -906,13 +896,12 @@ $ `stdlib/core/rcbox.nu`
     ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16
     : *u ctp ( vec_data [u] ct_tag )
-    : *u tagp # *u ( nurl_zalloc 16 )
-    : ( Vec u ) pt ( __gcm_run ( __AesGcmKey_ptr k__h ) nonce aad ctp ctlen 0 tagp )
+    : ( Vec u ) pt ( __gcm_run ( __AesGcmKey_ptr k__h ) nonce aad ctp ctlen 0 )
+    : *u tagp # *u + # i ( vec_data [u] pt ) + ( __gcm_scr_at ctlen ) 208
     : ~ i diff 0
     : ~ i i 0
     ~ < i 16 { = diff | diff ^^ # i . tagp i # i . ctp + ctlen i = i + i 1 }
-    ( nurl_free # s tagp )
-    ? != diff 0 { ( vec_free [u] pt ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    ? != diff 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     ^ @ ?( Vec u ) { T pt }
 }
 

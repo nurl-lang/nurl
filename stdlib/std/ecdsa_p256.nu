@@ -29,7 +29,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 @ __hx s h → BigInt {
     : ( Vec u ) v ?? ( bytes_from_hex h ) { T x → x F _ → ( vec_new [u] ) }
     : BigInt r ( bigint_from_bytes_be v )
-    ( vec_free [u] v )
     ^ r
 }
 
@@ -50,14 +49,12 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 @ __fmul BigInt a BigInt b BigInt p → BigInt {
     : BigInt t ( bigint_mul a b )
     : BigInt r ( bigint_rem t p )
-    ( bigint_free t )
     ^ r
 }
 
 @ __fadd BigInt a BigInt b BigInt p → BigInt {
     : BigInt t ( bigint_add a b )
     : BigInt r ( bigint_rem t p )
-    ( bigint_free t )
     ^ r
 }
 
@@ -65,8 +62,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : BigInt t1 ( bigint_add a p )
     : BigInt t2 ( bigint_sub t1 b )
     : BigInt r ( bigint_rem t2 p )
-    ( bigint_free t1 )
-    ( bigint_free t2 )
     ^ r
 }
 
@@ -92,10 +87,7 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         : BigInt rhs ( __fadd rhs0 b p )
         : BigInt lhs ( __fsqr y p )
         = ok == ( bigint_cmp lhs rhs ) 0
-        ( bigint_free x2 ) ( bigint_free x3 ) ( bigint_free three )
-        ( bigint_free tx ) ( bigint_free rhs0 ) ( bigint_free rhs ) ( bigint_free lhs )
     } {}
-    ( bigint_free zero )
     ^ ok
 }
 
@@ -103,7 +95,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 @ __big_to_limbs8 BigInt x → ( Vec i ) {
     : ( Vec u ) be ( bigint_to_bytes_be x 32 )
     : ( Vec i ) out ( __p256_be32_to_limbs be 0 )
-    ( vec_free [u] be )
     ^ out
 }
 
@@ -190,7 +181,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
             ( _p256_to_mont_d scr mx xl )
             ( _p256_to_mont_d scr my yl )
             ( _p256_atbl_put tbl s mx my )
-            ( vec_free [i] xl ) ( vec_free [i] yl )
             = s + s 1
         }
         // Two first callers may both build: publish-once slots 5 / 6 pick
@@ -202,9 +192,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         ? == t 0 { = g_p256_comb_tbl won } { = g_p256_comb_tbl2 won }
         = t + t 1
     }
-    ( vec_free [u] tbytes )
-    ( vec_free [i] mx ) ( vec_free [i] my )
-    ( _p256_scr_free scr )
 }
 
 @ __p256_comb_tbl_mont → ( Vec i ) {
@@ -282,9 +269,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : ( Vec u ) out ( vec_with_cap [u] 64 )
     ( _p256_limbs_to_be out . acc x )
     ( _p256_limbs_to_be out . acc y )
-    ( p256pt_free acc )
-    ( vec_free [i] ex ) ( vec_free [i] ey ) ( vec_free [i] onem ) ( vec_free [i] zinv )
-    ( _p256_scr_free scr )
     ^ out
 }
 
@@ -292,7 +276,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : ( Vec i ) bxl ( __big_to_limbs8 bx )
     : ( Vec i ) byl ( __big_to_limbs8 by )
     : ( Vec u ) out ( p256ct_scalarmult scalar bxl byl )
-    ( vec_free [i] bxl ) ( vec_free [i] byl )
     ^ out
 }
 
@@ -309,7 +292,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : ( Vec u ) out ( vec_with_cap [u] 65 )
     ( vec_push [u] out # u 4 )
     ( bytes_extend_bytes out xy )
-    ( vec_free [u] xy )
     ^ out
 }
 
@@ -327,17 +309,11 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     // M3: reject an off-curve / out-of-field peer point (invalid-curve attack)
     // before scalar-multiplying our private key into it.
     ? ! ( __on_curve qx qy p b ) {
-        ( vec_free [u] qxb ) ( vec_free [u] qyb )
-        ( bigint_free qx ) ( bigint_free qy )
-        ( bigint_free p ) ( bigint_free n ) ( bigint_free b )
         ^ ( vec_new [u] )
     } {}
     // Constant-time scalar · peer; take the 32-byte X (first half of X‖Y).
     : ( Vec u ) xy ( __p256_mul_affine scalar qx qy )
     : ( Vec u ) out ( bytes_slice xy 0 32 )
-    ( vec_free [u] qxb ) ( vec_free [u] qyb )
-    ( bigint_free qx ) ( bigint_free qy )
-    ( bigint_free p ) ( bigint_free n ) ( bigint_free b ) ( vec_free [u] xy )
     ^ out
 }
 
@@ -379,8 +355,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         ( _p256_to_mont_d scr . pt x xl )
         ( _p256_to_mont_d scr . pt y yl )
         ( _p256_one_mont_d scr . pt z )
-        ( vec_free [i] xl )
-        ( vec_free [i] yl )
     }
     ^ pt
 }
@@ -394,22 +368,15 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : ( Vec u ) w ( p256n_inv_be sb )
     : ( Vec u ) u1 ( p256n_mulmod_be zb w )
     : ( Vec u ) u2 ( p256n_mulmod_be rb w )
-    ( vec_free [u] w )
     : ( Vec u ) a1 ( p256ct_scalarmult_base u1 )
     : ( Vec u ) a2 ( __p256_mul_affine u2 qx qy )
-    ( vec_free [u] u1 )
-    ( vec_free [u] u2 )
     : P256Scratch scr ( _p256_scr_new )
     : P256Pt P1 ( __p256_affine_to_pt scr a1 )
     : P256Pt P2 ( __p256_affine_to_pt scr a2 )
-    ( vec_free [u] a1 )
-    ( vec_free [u] a2 )
     : ( Vec i ) aplain ( _p256_a_plain )
     : ( Vec i ) am ( _p256_to_mont_s scr aplain )
-    ( vec_free [i] aplain )
     : ( Vec i ) b3plain ( _p256_b3_plain )
     : ( Vec i ) b3m ( _p256_to_mont_s scr b3plain )
-    ( vec_free [i] b3plain )
     ( p256ct_padd_d scr P1 P1 P2 am b3m )
     : ~ b result F
     // R = ∞ (Z = 0) rejects; otherwise r =? x(R) mod n, as bytes.
@@ -418,18 +385,11 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         ( _p256_inv_d scr zinv . P1 z )
         ( _p256_mul_d scr . P1 x . P1 x zinv )
         ( _p256_from_mont_d scr . P1 x . P1 x )
-        ( vec_free [i] zinv )
         : ( Vec u ) xb ( vec_with_cap [u] 32 )
         ( _p256_limbs_to_be xb . P1 x )
         : ( Vec u ) xr ( p256n_reduce_be xb )
         = result ( bytes_eq xr rb )
-        ( vec_free [u] xr )
     } {}
-    ( p256pt_free P1 )
-    ( p256pt_free P2 )
-    ( vec_free [i] am )
-    ( vec_free [i] b3m )
-    ( _p256_scr_free scr )
     ^ result
 }
 
@@ -438,11 +398,9 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
 // coordinate byte length. It consumes p / nn / cb.
 @ __ecdsa_verify BigInt p BigInt nn BigInt cb i clen ( Vec u ) point ( Vec u ) r ( Vec u ) s ( Vec u ) hash → b {
     ? != ( vec_len [u] point ) + 1 * 2 clen {
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free cb )
         ^ F
     } {}
     ? != ?? ( vec_get [u] point 0 ) { T x → # i x F _ → 0 } 4 {
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free cb )
         ^ F
     } {}
 
@@ -452,9 +410,6 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : BigInt qy ( bigint_from_bytes_be qyb )
     // M3: reject a public key that is off-curve or out of field range.
     ? ! ( __on_curve qx qy p cb ) {
-        ( vec_free [u] qxb ) ( vec_free [u] qyb )
-        ( bigint_free qx ) ( bigint_free qy )
-        ( bigint_free p ) ( bigint_free nn ) ( bigint_free cb )
         ^ F
     } {}
 
@@ -492,12 +447,7 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
         ? == clen 32
         { = result ( __p256_verify_core zb rb sb qx qy ) }
         { = result ( p384_ecdsa_verify_core zb rb sb qxb qyb ) }
-        ( vec_free [u] rb ) ( vec_free [u] sb )
     } {}
-    ( vec_free [u] qxb ) ( vec_free [u] qyb )
-    ( bigint_free qx ) ( bigint_free qy )
-    ( bigint_free p ) ( bigint_free nn ) ( bigint_free br ) ( bigint_free bs )
-    ( bigint_free one ) ( bigint_free cb )
     ^ result
 }
 
@@ -552,26 +502,25 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
     : BigInt zmod ( bigint_rem z n )
     : ( Vec u ) priv32 ( bigint_to_bytes_be x 32 )
     : ( Vec u ) b2o ( bigint_to_bytes_be zmod 32 )
-    ( bigint_free zmod )
 
     // RFC 6979 §3.2 step b/c/d/e/f: V=0x01.., K=0x00.., two HMAC mixes.
     : ~ ( Vec u ) V ( __ec_bytes_fill 1 32 )
     : ~ ( Vec u ) K ( __ec_bytes_fill 0 32 )
     : ( Vec u ) m1 ( __ec_hmac_msg V 0 priv32 b2o )
     : ( Vec u ) k1 ( hmac_sha256_pure K m1 )
-    ( vec_free [u] K ) ( vec_free [u] m1 ) = K k1
-    : ( Vec u ) v1 ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V v1
+    = K k1
+    : ( Vec u ) v1 ( hmac_sha256_pure K V ) = V v1
     : ( Vec u ) m2 ( __ec_hmac_msg V 1 priv32 b2o )
     : ( Vec u ) k2 ( hmac_sha256_pure K m2 )
-    ( vec_free [u] K ) ( vec_free [u] m2 ) = K k2
-    : ( Vec u ) v2 ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V v2
+    = K k2
+    : ( Vec u ) v2 ( hmac_sha256_pure K V ) = V v2
 
     : BigInt one ( bigint_from_i 1 )
     : ~ ( Vec u ) sig ( vec_new [u] )
     : ~ b done F
     ~ ! done {
         // T = HMAC(K, V); qlen == hlen == 256 so one block IS the candidate.
-        : ( Vec u ) vt ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V vt
+        : ( Vec u ) vt ( hmac_sha256_pure K V ) = V vt
         : BigInt k ( bigint_from_bytes_be V )
         : ~ b valid T
         ? < ( bigint_cmp k one ) 0 { = valid F } {}
@@ -580,30 +529,24 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
             // k·G — fixed-base comb (G is the generator), constant-time.
             : ( Vec u ) Rxy ( p256ct_scalarmult_base V )
             : ( Vec u ) Rxb ( bytes_slice Rxy 0 32 )
-            ( vec_free [u] Rxy )
             // r = R.x mod n, and the scalar arithmetic s = k⁻¹·(z + r·d)
             // mod n, all on the fixed-width Montgomery GF(n) field
             // (stdlib/std/p256_scalar.nu) rather than the generic bigint —
             // the k⁻¹ Fermat inverse alone was ~half a handshake's crypto.
             // priv32 is d, b2o is z mod n (both 32-byte big-endian).
             : ( Vec u ) r ( p256n_reduce_be Rxb )
-            ( vec_free [u] Rxb )
             // identity result → X = 0 → r ≡ 0, retried below (no inf branch).
             ? ( __ec_zero32 r ) {
                 = valid F
-                ( vec_free [u] r )
             } {
                 : ( Vec u ) kinv ( p256n_inv_be V )
                 : ( Vec u ) rd ( p256n_mulmod_be r priv32 )
                 : ( Vec u ) zrd ( p256n_addmod_be b2o rd )
                 : ( Vec u ) s ( p256n_mulmod_be kinv zrd )
-                ( vec_free [u] kinv ) ( vec_free [u] rd ) ( vec_free [u] zrd )
                 ? ( __ec_zero32 s ) {
                     = valid F
-                    ( vec_free [u] r ) ( vec_free [u] s )
                 } {
                     ( bytes_extend_bytes sig r ) ( bytes_extend_bytes sig s )
-                    ( vec_free [u] r ) ( vec_free [u] s )
                     = done T
                 }
             }
@@ -614,14 +557,10 @@ $ `stdlib/std/p384_field.nu`  // fixed-width P-384 verify core (public path)
             ( bytes_extend_bytes mz V )
             ( vec_push [u] mz # u 0 )
             : ( Vec u ) kn ( hmac_sha256_pure K mz )
-            ( vec_free [u] K ) ( vec_free [u] mz ) = K kn
-            : ( Vec u ) vn ( hmac_sha256_pure K V ) ( vec_free [u] V ) = V vn
+            = K kn
+            : ( Vec u ) vn ( hmac_sha256_pure K V ) = V vn
         } {}
-        ( bigint_free k )
     }
 
-    ( bigint_free n ) ( bigint_free p ) ( bigint_free x ) ( bigint_free z )
-    ( bigint_free one )
-    ( vec_free [u] V ) ( vec_free [u] K ) ( vec_free [u] priv32 ) ( vec_free [u] b2o )
     ^ sig
 }

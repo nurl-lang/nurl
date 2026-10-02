@@ -92,7 +92,6 @@ $ `stdlib/core/rcbox.nu`
     ( _tls_u16 ext 57 )
     ( _blk16 ext tp )
     ( _srv_hs_set_ext . s hs 57 ext )
-    ( vec_free [u] ext )
     = . s rx0 ( quic_rxbuf_new ( quic_crypto_rx_cap ) )
     = . s rx1 ( quic_rxbuf_new ( quic_crypto_rx_cap ) )
     = . s rx2 ( quic_rxbuf_new ( quic_crypto_rx_cap ) )
@@ -120,7 +119,7 @@ $ `stdlib/core/rcbox.nu`
     ^ . s state
 }
 
-@ __qt_rx_of * QuicTlsSrvImpl s i level → QuicRxBuf {
+@ __qt_rx_of inout QuicTlsSrvImpl s i level → QuicRxBuf {
     ? == level 0 { ^ . s rx0 } {}
     ? == level 1 { ^ . s rx1 } {}
     ^ . s rx2
@@ -134,7 +133,7 @@ $ `stdlib/core/rcbox.nu`
 @ quic_err_crypto i alert → i { ^ + 256 alert }
 
 // Handle one complete handshake message at `level`.
-@ __qt_message * QuicTlsSrvImpl s i level ( Vec u ) m → i {
+@ __qt_message inout QuicTlsSrvImpl s i level ( Vec u ) m → i {
     : i mtype ( __qt_bget m 0 )
     // Messages QUIC forbids outright (RFC 9001 §4.1.3, §8.3, §6).
     ? | == mtype 24 == mtype 5 { ^ ( quic_err_crypto 10 ) } {}
@@ -167,16 +166,15 @@ $ `stdlib/core/rcbox.nu`
 // Feed CRYPTO frame bytes. Returns 0, or the transport error code the
 // connection must close with.
 @ quic_tls_srv_crypto QuicTlsSrv s__h i level i off ( Vec u ) data → i {
-    : *QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
+    : ~ * QuicTlsSrvImpl s ( __QuicTlsSrv_ptr s__h )
     ? == . s state 3 { ^ ( quic_err_protocol_violation ) } {}
     ? | < level 0 > level 2 { ^ ( quic_err_protocol_violation ) } {}
-    : QuicRxBuf r ( __qt_rx_of s level )
+    : QuicRxBuf r ( __qt_rx_of . s 0 level )
     ? ! ( quic_rxbuf_add r off data ) { ^ ( quic_err_crypto_buffer_exceeded ) } {}
     ~ T {
         : ( Vec u ) m ( __qt_rx_take r )
-        ? == ( vec_len [u] m ) 0 { ( vec_free [u] m ) ^ 0 } {}
-        : i rc ( __qt_message s level m )
-        ( vec_free [u] m )
+        ? == ( vec_len [u] m ) 0 { ^ 0 } {}
+        : i rc ( __qt_message . s 0 level m )
         ? != rc 0 { = . s state 3 ^ rc } {}
     }
     ^ 0
@@ -298,14 +296,12 @@ $ `stdlib/core/rcbox.nu`
     : *QuicTlsCliImpl s ( rcbox_ptr [QuicTlsCliImpl] s__box )
     : ( Vec u ) nosess ( vec_new [u] )
     = . s hs ( _cli_hs_new server_name alpn nosess )
-    ( vec_free [u] nosess )
     // ClientHello carries quic_transport_parameters (0x0039); the
     // EncryptedExtensions must bring the server's back.
     : ( Vec u ) ext ( vec_with_cap [u] + 4 ( vec_len [u] tp ) )
     ( _tls_u16 ext 57 )
     ( _blk16 ext tp )
     ( _cli_hs_set_ext . s hs ext 57 )
-    ( vec_free [u] ext )
     // no TLS compatibility mode in QUIC (RFC 9001 §8.4): an empty
     // legacy_session_id — Google's and Cloudflare's servers refuse the
     // 32-byte one with illegal_parameter (UNEXPECTED_COMPATIBILITY_MODE)
@@ -329,14 +325,14 @@ $ `stdlib/core/rcbox.nu`
     ^ . s state
 }
 
-@ __qtc_rx_of * QuicTlsCliImpl s i level → QuicRxBuf {
+@ __qtc_rx_of inout QuicTlsCliImpl s i level → QuicRxBuf {
     ? == level 0 { ^ . s rx0 } {}
     ? == level 1 { ^ . s rx1 } {}
     ^ . s rx2
 }
 
 // Handle one complete handshake message at `level`.
-@ __qtc_message * QuicTlsCliImpl s i level ( Vec u ) m → i {
+@ __qtc_message inout QuicTlsCliImpl s i level ( Vec u ) m → i {
     : i mtype ( __qt_bget m 0 )
     ? | == mtype 24 == mtype 5 { ^ ( quic_err_crypto 10 ) } {}
     ? == level 0 {
@@ -371,16 +367,15 @@ $ `stdlib/core/rcbox.nu`
 // Feed CRYPTO frame bytes. Returns 0, or the transport error code the
 // connection must close with.
 @ quic_tls_cli_crypto QuicTlsCli s__h i level i off ( Vec u ) data → i {
-    : *QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
+    : ~ * QuicTlsCliImpl s ( __QuicTlsCli_ptr s__h )
     ? == . s state 3 { ^ ( quic_err_protocol_violation ) } {}
     ? | < level 0 > level 2 { ^ ( quic_err_protocol_violation ) } {}
-    : QuicRxBuf r ( __qtc_rx_of s level )
+    : QuicRxBuf r ( __qtc_rx_of . s 0 level )
     ? ! ( quic_rxbuf_add r off data ) { ^ ( quic_err_crypto_buffer_exceeded ) } {}
     ~ T {
         : ( Vec u ) m ( __qt_rx_take r )
-        ? == ( vec_len [u] m ) 0 { ( vec_free [u] m ) ^ 0 } {}
-        : i rc ( __qtc_message s level m )
-        ( vec_free [u] m )
+        ? == ( vec_len [u] m ) 0 { ^ 0 } {}
+        : i rc ( __qtc_message . s 0 level m )
         ? != rc 0 { = . s state 3 ^ rc } {}
     }
     ^ 0

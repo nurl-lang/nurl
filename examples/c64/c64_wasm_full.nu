@@ -1725,20 +1725,19 @@ $ `stdlib/core/string.nu`
 }
 
 // Pull a fixed-size ROM bank from the host into a NURL buffer.
-@ pull_rom i bank i n → s {
-    : s buf ( nurl_alloc n )
-    : *u bp # *u buf
+@ pull_rom i bank i n → ( Vec u ) {
+    : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ i i 0
-    ~ < i n { = . bp i # u ( host_rom_byte bank i ) = i + i 1 }
+    ~ < i n { ( vec_push [u] buf # u ( host_rom_byte bank i ) ) = i + i 1 }
     ^ buf
 }
 
 @ main → i {
     ( c64_alloc )
     // Load the three ROMs from the host, then cold-boot.
-    : s kbuf ( pull_rom 0 8192 ) ( load_kernal # *u kbuf 8192 ) ( nurl_free kbuf )
-    : s bbuf ( pull_rom 1 8192 ) ( load_basic # *u bbuf 8192 ) ( nurl_free bbuf )
-    : s cbuf ( pull_rom 2 4096 ) ( load_chargen # *u cbuf 4096 ) ( nurl_free cbuf )
+    : ( Vec u ) kbuf ( pull_rom 0 8192 ) ( load_kernal ( vec_data [u] kbuf ) 8192 )
+    : ( Vec u ) bbuf ( pull_rom 1 8192 ) ( load_basic ( vec_data [u] bbuf ) 8192 )
+    : ( Vec u ) cbuf ( pull_rom 2 4096 ) ( load_chargen ( vec_data [u] cbuf ) 4096 )
     ( c64_boot )
 
     : *i fb ( canvas_open 384 272 )
@@ -1752,22 +1751,18 @@ $ `stdlib/core/string.nu`
         // A .prg queued by the host? Pull it in and autostart it.
         : i pn ( host_prg_pending )
         ? > pn 0 {
-            : s pb ( nurl_alloc pn )
-            : *u pp # *u pb
+            : ( Vec u ) pb ( vec_with_cap [u] pn )
             : ~ i k 0
-            ~ < k pn { = . pp k # u ( host_prg_byte k ) = k + k 1 }
-            ( prg_autostart # *u pb pn )
-            ( nurl_free pb )
+            ~ < k pn { ( vec_push [u] pb # u ( host_prg_byte k ) ) = k + k 1 }
+            ( prg_autostart ( vec_data [u] pb ) pn )
         } {}
         // A .d64 queued by the host? Attach it (drive 8) and autostart.
         : i dn ( host_disk_pending )
         ? > dn 0 {
-            : s db ( nurl_alloc dn )
-            : *u dp # *u db
+            : ( Vec u ) db ( vec_with_cap [u] dn )
             : ~ i j 0
-            ~ < j dn { = . dp j # u ( host_disk_byte j ) = j + j 1 }
-            ( disk_attach # *u db dn )
-            ( nurl_free db )
+            ~ < j dn { ( vec_push [u] db # u ( host_disk_byte j ) ) = j + j 1 }
+            ( disk_attach ( vec_data [u] db ) dn )
             ( disk_autostart )
         } {}
         ( run_one_frame )  // also rasterises the frame (framebuffer + collisions)

@@ -87,16 +87,6 @@ $ `runner.nu`
     ^ argv
 }
 
-@ __free_strs ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [String] v i ) { T s → ( string_free s ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [String] v )
-}
-
 @ __opt_or ArgParser p s name s dflt → String {
     ^ ?? ( args_value p name ) { T v → v F _ → ( string_from dflt ) }
 }
@@ -143,7 +133,7 @@ $ `runner.nu`
 
 // ── Collecting ───────────────────────────────────────────────────
 
-@ __collect * Cov c s dir → i {
+@ __collect Cov c s dir → i {
     : ( Vec String ) notes ( runner_objects dir )
     : i n ( vec_len [String] notes )
     : ~ i ok 0
@@ -155,7 +145,6 @@ $ `runner.nu`
                 ?? ( gcov_read ( string_data np ) ( string_data dp ) ) {
                     T o → {
                         ( cov_add_object c o )
-                        ( gcov_free o )
                         = ok + ok 1
                     }
                     F e → {
@@ -165,13 +154,11 @@ $ `runner.nu`
                         ( nurl_eprintln ( gcov_err_name e ) )
                     }
                 }
-                ( string_free dp )
             }
             F _ → {}
         }
         = i + i 1
     }
-    ( __free_strs notes )
     ^ ok
 }
 
@@ -185,13 +172,11 @@ $ `runner.nu`
         ?? ( vec_get [String] given k ) {
             T v → {
                 ( vec_push [String] out ( __abs ( string_data v ) ) )
-                ( string_free v )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free [String] given )
     ? > ( vec_len [String] out ) 0 { ^ out } {}
     ( vec_push [String] out ( __abs `src` ) )
     ^ out
@@ -205,6 +190,8 @@ $ `runner.nu`
     ^ ?? ( env_cwd ) {
         T cwd → {
             : String out ( string_clone cwd )
+            // Not redundant yet: the compiler does not drop an arm's binding
+            // when a value-producing `??` over a call yields another value.
             ( string_free cwd )
             ? ! ( string_ends_with out `/` ) { ( string_push_char out 47 ) } {}
             ( string_push_str out rel )
@@ -216,7 +203,7 @@ $ `runner.nu`
 
 // ── Output ───────────────────────────────────────────────────────
 
-@ __emit ArgParser p * Cov c i floor_tenths → b {
+@ __emit ArgParser p Cov c i floor_tenths → b {
     : String root ?? ( env_cwd ) { T d → d F _ → ( string_new ) }
     : ~ b ok T
     ? ! ( args_present p `quiet` ) {
@@ -224,20 +211,16 @@ $ `runner.nu`
         : RepStyle st ( report_style colour floor_tenths )
         : String table ( report_render c st ( string_data root ) )
         ( nurl_print ( string_data table ) )
-        ( string_free table )
     } {}
     ? ( args_present p `uncovered` ) {
         : String u ( report_uncovered c ( string_data root ) )
         ( nurl_print `\n` )
         ( nurl_print ( string_data u ) )
-        ( string_free u )
     } {}
     ?? ( args_value p `lcov` ) {
         T f → {
             : String body ( lcov_render c )
             ? ! ( __write_out ( string_data f ) body `LCOV` ) { = ok F } {}
-            ( string_free body )
-            ( string_free f )
         }
         F _ → {}
     }
@@ -245,8 +228,6 @@ $ `runner.nu`
         T f → {
             : String body ( html_render c floor_tenths `NURL coverage` ( string_data root ) )
             ? ! ( __write_out ( string_data f ) body `HTML report` ) { = ok F } {}
-            ( string_free body )
-            ( string_free f )
         }
         F _ → {}
     }
@@ -254,16 +235,13 @@ $ `runner.nu`
         T f → {
             : String body ( json_render c )
             ? ! ( __write_out ( string_data f ) body `JSON` ) { = ok F } {}
-            ( string_free body )
-            ( string_free f )
         }
         F _ → {}
     }
-    ( string_free root )
     ^ ok
 }
 
-@ __gate * Cov c i floor_tenths → b {
+@ __gate Cov c i floor_tenths → b {
     ? <= floor_tenths 0 { ^ T } {}
     : CovStat t ( cov_total c )
     : i got ( cov_pct_tenths . t lines_hit . t lines_found )
@@ -283,7 +261,6 @@ $ `runner.nu`
     ( string_push_int s % tenths 10 )
     ( string_push_char s 37 )
     ( nurl_eprint ( string_data s ) )
-    ( string_free s )
 }
 
 // ── Subcommands ──────────────────────────────────────────────────
@@ -295,8 +272,6 @@ $ `runner.nu`
         ( nurl_eprint `nurl-cov: no test directory: ` )
         ( nurl_eprintln ( string_data testdir ) )
         ( nurl_eprintln `nurl-cov: point --tests at one, or run 'nurl-cov report <dir>'` )
-        ( string_free testdir )
-        ( string_free workdir )
         ^ 2
     } {}
     ?? ( dir_create_all ( string_data workdir ) ) { T _ → {} F _ → {} }
@@ -308,9 +283,6 @@ $ `runner.nu`
     ? == 0 ( vec_len [String] tests ) {
         ( nurl_eprint `nurl-cov: no .nu tests in ` )
         ( nurl_eprintln ( string_data testdir ) )
-        ( __free_strs tests )
-        ( string_free testdir )
-        ( string_free workdir )
         ^ 2
     } {}
 
@@ -328,27 +300,15 @@ $ `runner.nu`
     ? > . r broken 0 { = rc 2 } {}
     ? & == rc 0 > . r failed 0 { = rc 1 } {}
 
-    : *Cov c ( cov_new )
+    : Cov c ( cov_new )
     : i objects ( __collect c ( string_data workdir ) )
     ? == objects 0 {
         ( nurl_eprintln `nurl-cov: no coverage graphs were produced` )
-        ( cov_free c )
-        ( runresult_free r )
-        ( __free_strs tests )
-        ( string_free driver )
-        ( string_free testdir )
-        ( string_free workdir )
         ^ 2
     } {}
     : i out ( __finish p c )
     ? & == rc 0 != out 0 { = rc out } {}
 
-    ( cov_free c )
-    ( runresult_free r )
-    ( __free_strs tests )
-    ( string_free driver )
-    ( string_free testdir )
-    ( string_free workdir )
     ^ rc
 }
 
@@ -356,7 +316,6 @@ $ `runner.nu`
     : String s ( string_with_cap 24 )
     ( string_push_int s n )
     ( nurl_eprint ( string_data s ) )
-    ( string_free s )
 }
 
 @ __report_runs RunResult r → v {
@@ -394,11 +353,10 @@ $ `runner.nu`
     }
 }
 
-@ __finish ArgParser p * Cov c → i {
+@ __finish ArgParser p Cov c → i {
     : b all ( args_present p `all` )
     : ( Vec String ) keep ( __prefixes p all )
     ( cov_keep_only c keep )
-    ( __free_strs keep )
     ( cov_sort c )
     ? == 0 ( cov_file_count c ) {
         ( nurl_eprintln `nurl-cov: nothing left after filtering — try --all or --include` )
@@ -406,7 +364,7 @@ $ `runner.nu`
     } {}
     : ~ i floor_tenths 0
     ?? ( args_value p `fail-under` ) {
-        T v → { = floor_tenths ( __pct_tenths ( string_data v ) ) ( string_free v ) }
+        T v → { = floor_tenths ( __pct_tenths ( string_data v ) ) }
         F _ → {}
     }
     ? ! ( __emit p c floor_tenths ) { ^ 2 } {}
@@ -415,16 +373,14 @@ $ `runner.nu`
 }
 
 @ __cmd_report ArgParser p String dir → i {
-    : *Cov c ( cov_new )
+    : Cov c ( cov_new )
     : i objects ( __collect c ( string_data dir ) )
     ? == objects 0 {
         ( nurl_eprint `nurl-cov: no .gcno coverage graphs in ` )
         ( nurl_eprintln ( string_data dir ) )
-        ( cov_free c )
         ^ 2
     } {}
     : i rc ( __finish p c )
-    ( cov_free c )
     ^ rc
 }
 
@@ -434,14 +390,12 @@ $ `runner.nu`
     ? ( string_ends_with target `.gcno` ) {
         ( vec_push [String] notes ( string_clone target ) )
     } {
-        ( __free_strs notes )
         = notes ( runner_objects ( string_data target ) )
     }
     : i n ( vec_len [String] notes )
     ? == 0 n {
         ( nurl_eprint `nurl-cov: no coverage graphs at ` )
         ( nurl_eprintln ( string_data target ) )
-        ( __free_strs notes )
         ^ 2
     } {}
     : ~ i rc 0
@@ -457,10 +411,8 @@ $ `runner.nu`
                         ~ < k nf {
                             : String text ( gcovtext_render o k )
                             ( nurl_print ( string_data text ) )
-                            ( string_free text )
                             = k + k 1
                         }
-                        ( gcov_free o )
                     }
                     F e → {
                         ( nurl_eprint `nurl-cov: ` )
@@ -468,13 +420,11 @@ $ `runner.nu`
                         = rc 2
                     }
                 }
-                ( string_free dp )
             }
             F _ → {}
         }
         = i + i 1
     }
-    ( __free_strs notes )
     ^ rc
 }
 
@@ -523,7 +473,6 @@ $ `runner.nu`
                         }
                     }
                 }
-                ( string_free cmd )
             }
         }
     } {
@@ -532,7 +481,5 @@ $ `runner.nu`
         ( nurl_eprintln `try 'nurl-cov --help'` )
         = rc 2
     }
-    ( args_free p )
-    ( __free_strs argv )
     ^ rc
 }

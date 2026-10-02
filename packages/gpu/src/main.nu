@@ -47,9 +47,9 @@ $ `gpu.nu`
     ? ! ( gpu_kernel_ok k ) { ( say `  compile FAILED` ) ^ 1 } {}
 
     : i bytes * n 4
-    : *u ha ( gpu_host_alloc bytes )
-    : *u hb ( gpu_host_alloc bytes )
-    : *u hc ( gpu_host_alloc bytes )
+    : GpuHost ha ( gpu_host_alloc bytes )
+    : GpuHost hb ( gpu_host_alloc bytes )
+    : GpuHost hc ( gpu_host_alloc bytes )
     : ~ i i 0
     ~ < i n {
         ( gpu_host_set_f32 ha i # f i )
@@ -60,8 +60,8 @@ $ `gpu.nu`
     : GpuBuffer da ( gpu_alloc g bytes )
     : GpuBuffer db ( gpu_alloc g bytes )
     : GpuBuffer dc ( gpu_alloc g bytes )
-    ( gpu_upload da ha )
-    ( gpu_upload db hb )
+    ( gpu_upload da ( gpu_host_ptr ha ) )
+    ( gpu_upload db ( gpu_host_ptr hb ) )
 
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gpu_arg_buffer da ) )
@@ -73,7 +73,7 @@ $ `gpu.nu`
     : i r ( gpu_launch k ( gpu_grid n block ) block args )
     ? != r 0 { ( say `  launch FAILED` ) ^ 1 } {}
     ( gpu_sync g )
-    ( gpu_download hc dc )
+    ( gpu_download ( gpu_host_ptr hc ) dc )
 
     : ~ i bad 0
     : ~ i j 0
@@ -82,9 +82,6 @@ $ `gpu.nu`
         = j + j 1
     }
     : i c7 # i ( gpu_host_get_f32 hc 7 )
-    ( gpu_free da ) ( gpu_free db ) ( gpu_free dc )
-    ( gpu_host_free ha ) ( gpu_host_free hb ) ( gpu_host_free hc )
-    ( gpu_kernel_free k )
 
     ? == bad 0 {
         ( nurl_print `  OK — ` ) ( nurl_print ( nurl_str_int n ) )
@@ -105,8 +102,8 @@ $ `gpu.nu`
 
     : f alpha 2.5
     : i bytes * n 4
-    : *u hx ( gpu_host_alloc bytes )
-    : *u hy ( gpu_host_alloc bytes )
+    : GpuHost hx ( gpu_host_alloc bytes )
+    : GpuHost hy ( gpu_host_alloc bytes )
     : ~ i i 0
     ~ < i n {
         ( gpu_host_set_f32 hx i # f i )
@@ -116,8 +113,8 @@ $ `gpu.nu`
 
     : GpuBuffer dx ( gpu_alloc g bytes )
     : GpuBuffer dy ( gpu_alloc g bytes )
-    ( gpu_upload dx hx )
-    ( gpu_upload dy hy )
+    ( gpu_upload dx ( gpu_host_ptr hx ) )
+    ( gpu_upload dy ( gpu_host_ptr hy ) )
 
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gpu_arg_f32 alpha ) )
@@ -129,7 +126,7 @@ $ `gpu.nu`
     : i r ( gpu_launch k ( gpu_grid n block ) block args )
     ? != r 0 { ( say `  launch FAILED` ) ^ 1 } {}
     ( gpu_sync g )
-    ( gpu_download hy dy )
+    ( gpu_download ( gpu_host_ptr hy ) dy )
 
     : ~ i bad 0
     : ~ i j 0
@@ -138,9 +135,6 @@ $ `gpu.nu`
         ? ! ( approx ( gpu_host_get_f32 hy j ) want ) { = bad + bad 1 } {}
         = j + j 1
     }
-    ( gpu_free dx ) ( gpu_free dy )
-    ( gpu_host_free hx ) ( gpu_host_free hy )
-    ( gpu_kernel_free k )
 
     ? == bad 0 {
         ( say `  OK — verified vs CPU` )
@@ -179,7 +173,6 @@ $ `gpu.nu`
     = fails + fails ( demo_vadd g n )
     = fails + fails ( demo_saxpy g n )
 
-    ( gpu_close g )
     ? == fails 0 {
         ( say `\nAll GPU kernels verified. ✓` )
         ^ 0

@@ -38,14 +38,11 @@ $ `stdlib/ext/env.nu`
                 }
                 = k + k 1
             }
-            : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
-            ( vec_free_with [String] ips drop_str )
         }
         F e → {
             ( nurl_print `resolve failed\n` )
             = rc 1
         }
     }
-    ( string_free name )
     ^ rc
 }

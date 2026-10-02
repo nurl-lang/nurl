@@ -48,24 +48,6 @@ $ `stdlib/std/sort.nu`
     ^ @ MmdTheme { ( string_from name ) ( string_new ) ( vec_new [MmdKV] ) }
 }
 
-@ mmd_theme_free sink MmdTheme t → v {
-    ( string_free . t name )
-    ( string_free . t desc )
-    : i n ( vec_len [MmdKV] . t kv )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [MmdKV] . t kv i ) {
-            T e → {
-                ( string_free . e key )
-                ( string_free . e val )
-            }
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ( vec_free [MmdKV] . t kv )
-}
-
 // Last write wins, so a `[node.diamond]` table may restate a key set in
 // `[node]`.
 @ mmd_theme_set MmdTheme t s key s val → v {
@@ -140,7 +122,6 @@ $ `stdlib/std/sort.nu`
         ( string_push_str k key )
         = out ( mmd_theme_str t ( string_data k ) deflt )
     }
-    ( string_free k )
     ^ out
 }
 
@@ -184,7 +165,6 @@ $ `stdlib/std/sort.nu`
                     T ev → {
                         : String part ( __mmdt_scalar ev )
                         ( string_push_str out ( string_data part ) )
-                        ( string_free part )
                     }
                     F _ → {}
                 }
@@ -206,7 +186,6 @@ $ `stdlib/std/sort.nu`
                     T ent → {
                         : String key ( __mmdt_join prefix ( string_data . ent key ) )
                         ( __mmdt_flatten t ( string_data key ) . ent value )
-                        ( string_free key )
                     }
                     F _ → {}
                 }
@@ -216,27 +195,22 @@ $ `stdlib/std/sort.nu`
         TFloat _ → {
             : String sv ( __mmdt_scalar v )
             ( mmd_theme_set t prefix ( string_data sv ) )
-            ( string_free sv )
         }
         TStr _ → {
             : String sv ( __mmdt_scalar v )
             ( mmd_theme_set t prefix ( string_data sv ) )
-            ( string_free sv )
         }
         TInt _ → {
             : String sv ( __mmdt_scalar v )
             ( mmd_theme_set t prefix ( string_data sv ) )
-            ( string_free sv )
         }
         TBool _ → {
             : String sv ( __mmdt_scalar v )
             ( mmd_theme_set t prefix ( string_data sv ) )
-            ( string_free sv )
         }
         TArr _ → {
             : String sv ( __mmdt_scalar v )
             ( mmd_theme_set t prefix ( string_data sv ) )
-            ( string_free sv )
         }
     }
 }
@@ -254,7 +228,6 @@ $ `stdlib/std/sort.nu`
     ?? ( toml_parse src ) {
         T root → {
             ( __mmdt_flatten t `` root )
-            ( toml_value_free root )
             : s nm ( mmd_theme_str t `name` `` )
             ? > ( nurl_str_len nm ) 0 {
                 ( string_clear . t name )
@@ -286,25 +259,6 @@ $ `stdlib/std/sort.nu`
     String root
     ( Vec MmdTemplate ) items
     String default_name
-}
-
-@ mmd_templates_free sink MmdTemplateSet ts → v {
-    ( string_free . ts root )
-    ( string_free . ts default_name )
-    : i n ( vec_len [MmdTemplate] . ts items )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [MmdTemplate] . ts items i ) {
-            T tp → {
-                ( string_free . tp name )
-                ( string_free . tp path )
-                ( mmd_theme_free . tp theme )
-            }
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ( vec_free [MmdTemplate] . ts items )
 }
 
 @ mmd_templates_count MmdTemplateSet ts → i { ^ ( vec_len [MmdTemplate] . ts items ) }
@@ -383,7 +337,6 @@ $ `stdlib/std/sort.nu`
                             ?? ( read_file ( string_data full ) ) {
                                 T src → {
                                     : MmdThemeRes tr ( mmd_theme_parse ( string_data stem ) ( string_data src ) )
-                                    ( string_free src )
                                     : MmdTheme th . tr theme
                                     ? . tr ok {
                                         : MmdTemplate tp @ MmdTemplate {
@@ -395,40 +348,27 @@ $ `stdlib/std/sort.nu`
                                             = explicit ( vec_len [MmdTemplate] . ts items )
                                         } {}
                                         ( vec_push [MmdTemplate] . ts items tp )
-                                        ( string_free . tr message )
                                     } {
-                                        ( mmd_theme_free th )
                                         : String m ( string_with_cap 96 )
                                         ( string_push_str m ( string_data full ) )
                                         ( string_push_str m `: ` )
                                         ( string_push_str m ( string_data . tr message ) )
-                                        ( string_free . tr message )
-                                        ( string_free full )
-                                        ( string_free stem )
-                                        ( string_free fname )
-                                        ( __mmdt_free_names names i n )
-                                        ( mmd_templates_free ts )
                                         ^ @ MmdTemplatesRes { F ( __mmdt_empty_set MMD_TSRC_DIR root ) m }
                                     }
                                 }
                                 F _ → {}
                             }
-                            ( string_free full )
-                            ( string_free stem )
                         } {}
-                        ( string_free fname )
                     }
                     F _ → {}
                 }
                 = i + i 1
             }
-            ( vec_free [String] names )
 
             ? == ( vec_len [MmdTemplate] . ts items ) 0 {
                 : String m ( string_with_cap 128 )
                 ( string_push_str m `no *.toml templates in ` )
                 ( string_push_str m root )
-                ( mmd_templates_free ts )
                 ^ @ MmdTemplatesRes { F ( __mmdt_empty_set MMD_TSRC_DIR root ) m }
             } {}
 
@@ -450,23 +390,9 @@ $ `stdlib/std/sort.nu`
             ( string_push_str m ` (` )
             ( string_push_str m ( io_err_msg e ) )
             ( string_push_str m `)` )
-            ( mmd_templates_free ts )
             ^ @ MmdTemplatesRes { F ( __mmdt_empty_set MMD_TSRC_DIR root ) m }
         }
     }
-}
-
-// Free the tail of a name vector abandoned on an error path.
-@ __mmdt_free_names ( Vec String ) names i from i n → v {
-    : ~ i k + from 1
-    ~ < k n {
-        ?? ( vec_get [String] names k ) {
-            T s → ( string_free s )
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [String] names )
 }
 
 // The one entry point a caller needs: load a template set from `root`

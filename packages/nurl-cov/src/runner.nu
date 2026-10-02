@@ -42,22 +42,21 @@ $ `stdlib/ext/env.nu`
     i broken  // tests that would not build or would not run
 }
 
-// The tests (names and details) are dropped with their Vec.
-@ runresult_free sink RunResult r → v {
-    ( vec_free [RunOne] . r tests )
-}
+// A plain value: the tests (names and details) are dropped with their
+// Vec. Let go of `r` now rather than at the end of its owner's scope.
+@ runresult_free sink RunResult r → v {}
 
 // The build driver, in the order `nurlpkg test` looks for one: an explicit
 // override, then a checkout you are standing in, then the installed tool.
 @ runner_driver → String {
     ?? ( env_get `NURL_CC` ) {
-        T v → ? > ( string_len v ) 0 { ^ v } { ( string_free v ) }
+        T v → ? > ( string_len v ) 0 { ^ v } {}
         F _ → {}
     }
     ? ( file_exists `./nurl.sh` ) { ^ ( string_from `./nurl.sh` ) } {}
     ? ( file_exists `../../nurl.sh` ) { ^ ( string_from `../../nurl.sh` ) } {}
     ?? ( env_get `NURL` ) {
-        T v → ? > ( string_len v ) 0 { ^ v } { ( string_free v ) }
+        T v → ? > ( string_len v ) 0 { ^ v } {}
         F _ → {}
     }
     ^ ( string_from `nurl` )
@@ -76,13 +75,11 @@ $ `stdlib/ext/env.nu`
                         ? ( string_ends_with e `.nu` ) {
                             ( vec_push [String] out ( string_clone e ) )
                         } {}
-                        ( string_free e )
                     }
                     F _ → {}
                 }
                 = i + i 1
             }
-            ( vec_free [String] names )
         }
         F _ → {}
     }
@@ -145,14 +142,12 @@ $ `stdlib/ext/env.nu`
                 ( string_push_str detail ( output_stderr o ) )
                 ( __run_hint detail )
             } {}
-            ( output_free o )
         }
         F e → {
             ( string_push_str detail `could not run the build driver: ` )
             ( string_push_str detail ( process_err_name e ) )
         }
     }
-    ( vec_free [s] args )
 
     ? built {
         : ( Vec s ) none ( vec_new [s] )
@@ -161,17 +156,14 @@ $ `stdlib/ext/env.nu`
                 = ran T
                 = code ( output_exit_code o )
                 ? != code 0 { ( string_push_str detail ( output_stderr o ) ) } {}
-                ( output_free o )
             }
             F e → {
                 ( string_push_str detail `built, but would not run: ` )
                 ( string_push_str detail ( process_err_name e ) )
             }
         }
-        ( vec_free [s] none )
     } {}
 
-    ( string_free outbin )
     ^ @ RunOne { ( string_clone stem ) built ran code detail }
 }
 
@@ -203,8 +195,6 @@ $ `stdlib/ext/env.nu`
                 ? & . r ran != 0 . r code { = failed + failed 1 } {}
                 ? & . r built ! . r ran { = broken + broken 1 } {}
                 ( vec_push [RunOne] rows r )
-                ( string_free full )
-                ( string_free stem )
             }
             F _ → {}
         }
@@ -233,15 +223,12 @@ $ `stdlib/ext/env.nu`
                         ? | ( string_ends_with e `.gcno` ) ( string_ends_with e `.gcda` ) {
                             : String full ( __run_join dir ( string_data e ) )
                             ?? ( file_delete ( string_data full ) ) { T _ → {} F _ → {} }
-                            ( string_free full )
                         } {}
-                        ( string_free e )
                     }
                     F _ → {}
                 }
                 = i + i 1
             }
-            ( vec_free [String] names )
         }
         F _ → {}
     }
@@ -261,13 +248,11 @@ $ `stdlib/ext/env.nu`
                         ? ( string_ends_with e `.gcno` ) {
                             ( vec_push [String] out ( __run_join dir ( string_data e ) ) )
                         } {}
-                        ( string_free e )
                     }
                     F _ → {}
                 }
                 = i + i 1
             }
-            ( vec_free [String] names )
         }
         F _ → {}
     }
@@ -282,7 +267,6 @@ $ `stdlib/ext/env.nu`
         : *u at # *u + # i notes 0
         : String stem ( string_from_bytes at - n 5 )
         ( string_push_str out ( string_data stem ) )
-        ( string_free stem )
     } {
         ( string_push_str out notes )
     }

@@ -20,11 +20,12 @@
 // (`with_oidc_scope`), because that is a different answer: re-
 // authenticating will not help, asking for more scope will.
 //
-// `id` is BORROWED by the handler — the middleware frees it (and the
+// `id` is BORROWED by the handler — the middleware drops it (and the
 // claims behind it) once the handler returns.
 //
-// The wrapper closure lives as long as the app that routes to it, the
-// same as with_jwt_* / with_cors_default: build it once at startup.
+// The wrapper closure holds a share of the provider and the policy, and
+// lives as long as the app that routes to it, the same as with_jwt_* /
+// with_cors_default: build it once at startup.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/http_request.nu`
@@ -79,7 +80,6 @@ $ `provider.nu`
         } {}
     } {}
     ( response_set_header r `WWW-Authenticate` ( string_data chal ) )
-    ( string_free chal )
     ^ r
 }
 
@@ -94,38 +94,34 @@ $ `provider.nu`
         ( string_push_char chal 34 )
     } {}
     ( response_set_header r `WWW-Authenticate` ( string_data chal ) )
-    ( string_free chal )
     ^ r
 }
 
 // Verify the request's bearer token directly — for a handler that wants
 // the identity without being wrapped, or for a protocol other than HTTP
 // routing (a WebSocket upgrade, an MCP session).
-@ oidc_request_identity * OidcProvider p * OidcPolicy pol HttpRequest req → !OidcIdentity OauthErr {
+@ oidc_request_identity OidcProvider p OidcPolicy pol HttpRequest req → !OidcIdentity OauthErr {
     ?? ( parse_bearer_auth req ) {
         T t → {
             : !OidcIdentity OauthErr r ( oidc_verify_token p pol ( string_data t ) )
-            ( string_free t )
             ^ r
         }
         F _ → {
-            ( _oidc_err p `no bearer token` )
+            ( _oidc_err ( _OidcProvider_ptr p ) `no bearer token` )
             ^ @ !OidcIdentity OauthErr { F OaBadToken }
         }
     }
 }
 
 // Only run `inner` for an authenticated caller.
-@ with_oidc_bearer * OidcProvider p * OidcPolicy pol ( @ HttpResponse HttpRequest OidcIdentity ) inner → ( @ HttpResponse HttpRequest ) {
+@ with_oidc_bearer OidcProvider p OidcPolicy pol ( @ HttpResponse HttpRequest OidcIdentity ) inner → ( @ HttpResponse HttpRequest ) {
     : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
         ?? ( parse_bearer_auth req ) {
             T t → {
                 : !OidcIdentity OauthErr vr ( oidc_verify_token p pol ( string_data t ) )
-                ( string_free t )
                 ^ ?? vr {
                     T id → {
                         : HttpResponse resp ( inner req id )
-                        ( oidc_identity_free id )
                         ^ resp
                     }
                     F e → ( _oidc_unauthorized ( oauth_err_bearer_code # OauthErr e ) ( oidc_provider_last_error p ) )
@@ -138,20 +134,17 @@ $ `provider.nu`
 }
 
 // Authenticated AND carrying `scope`.
-@ with_oidc_scope * OidcProvider p * OidcPolicy pol s scope ( @ HttpResponse HttpRequest OidcIdentity ) inner → ( @ HttpResponse HttpRequest ) {
+@ with_oidc_scope OidcProvider p OidcPolicy pol s scope ( @ HttpResponse HttpRequest OidcIdentity ) inner → ( @ HttpResponse HttpRequest ) {
     : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
         ?? ( parse_bearer_auth req ) {
             T t → {
                 : !OidcIdentity OauthErr vr ( oidc_verify_token p pol ( string_data t ) )
-                ( string_free t )
                 ^ ?? vr {
                     T id → {
                         ? ( oidc_identity_has_scope id scope ) {
                             : HttpResponse resp ( inner req id )
-                            ( oidc_identity_free id )
                             ^ resp
                         } {
-                            ( oidc_identity_free id )
                             ^ ( _oidc_forbidden scope )
                         }
                     }

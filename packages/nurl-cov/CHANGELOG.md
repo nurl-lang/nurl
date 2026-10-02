@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `GcovObj`, `LineTab` and `Cov` are handles instead of `*T` pointers:
+  every copy is the same object and the last owner releases it.
+  `gcov_read` → `!GcovObj GcovErr`, `gcov_new` → `GcovObj`, `lines_build`
+  → `LineTab`, `cov_new` → `Cov`; every function that took the pointer
+  takes the handle. New lent accessors for code outside the modules:
+  `linetab_maxline`, `linetab_exists`, `linetab_count`, `linetab_br`,
+  `linetab_fnrow`, `cov_objects`.
+- `gcov_free`, `linetab_free`, `cov_free` and `runresult_free` are optional
+  early releases; every redundant release in the library, the CLI and the
+  tests is gone. `nurl-cov gcov` on a 940 KB notes file runs 9.8 % fewer
+  instructions, `nurl-cov report` 16.7 % fewer (same output).
+
 ## 0.1.0
 
 First release: a test-coverage mapper for NURL, reading the compiler's

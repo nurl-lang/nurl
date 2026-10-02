@@ -10,6 +10,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pointer read as an argument of the call that mutates its container is
+  not reported stale** (`( vec_push out . op k )` reads `op` before the push).
+  `compiler/tests/stale_borrow_read_in_mutating_call.nu`.
+- **An arm whose value is an owned recursive enum (Json) drops its locals**:
+  the decoded RPC envelope leaked per call in stdlib cluster.
+  `compiler/tests/value_arm_recursive_enum.nu`.
+- **A function that hands back its borrowed parameter on one path and a fresh
+  value on another answers per call** (`? short { ^ src } {} ^ ( substr … )`):
+  taken for a lender throughout, its fresh results leaked, and a caller
+  returning one over its own local read freed memory. A lent result returned
+  past the local it lends from is copied. `compiler/tests/cond_param_return.nu`.
+- **An arm whose value is made of numbers drops its locals** even when it
+  ends in another `??` (stdlib noise handshakes leaked per handshake).
+  `compiler/tests/nested_arm_numbers_drops_locals.nu`.
+- **A cursor reassigned on one path takes its source's value along only where
+  it still holds it** (`: ~ V sk body … ? c { = sk … } {} … ^ @ R { sk }`
+  leaked `body` — stdlib pkey). `compiler/tests/cursor_reassigned_returned.nu`.
+- **A value a closure assigns over a binding it captured by pointer is owned
+  by that binding** (`recover \ → v { = resp ( f req ) }`): the old value
+  was never dropped and the new one never owned — a response leaked per
+  request in the HTTP keep-alive loop. The env carries the binding's drop
+  flag. `compiler/tests/closure_assigns_captured_owner.nu`.
+- **A `sink` parameter handed back through a `??` arm moves out**
+  (`^ ?? o { T v → v F → dflt }` dropped `dflt` on return and the caller got
+  freed memory — `opt_unwrap_or`'s shape). `compiler/tests/sink_param_from_join.nu`.
+- **A number from a call cannot be bound as a handle struct** (`: H h ( mk )`
+  with `mk → i` reinterpreted the number as the handle's pointer and owned
+  nothing). Now a compile error naming the literal to write.
+  `compiler/tests/diag_number_into_handle.nu`.
+- **Reassigning an option binding inside the `??` arm that matched it drops
+  the old value** (or hands it to the payload cursor still reading it):
+  `?? cur { T c → { = cur ( next ) } }` leaked the old value every iteration
+  (the pooled keep-alive client loop). `compiler/tests/option_reassign_in_own_arm.nu`.
+- **A literal built from a pointer parameter's field and handed straight to a
+  call no longer makes the function a view** (`( flush @ Fh { . w fh } )`):
+  every caller took its fresh error String for a borrow and never dropped it
+  (packages/gguf). `compiler/tests/call_arg_literal_not_view.nu`.
+- **A field of an owned local struct placed in a returned option / result
+  leaves the struct's other fields to be dropped** (`^ @ ?V { T . x a }`
+  leaked `x`'s other fields once per call — stdlib zstd).
+  `compiler/tests/field_into_returned_wrap.nu`.
+- **A parameter a function only borrows, stored into a field of a struct of
+  its own, is copied** (`= . a f v`, `a` a local), as the literal
+  `@ A { v }` copies it. Taken over, the caller handed its value in and the
+  local freed it at return while the caller still read it.
+  `compiler/tests/field_store_param_copied.nu`.
+- **A field taken out of a cursor over a payload leaves the payload's slot
+  too** (`: ~ E e e0 … : V out . e f ( mem_take out )`): the payload still
+  dropped the field and the Vec handed on was freed.
+  `compiler/tests/take_field_through_cursor.nu`.
+- **A `sink` parameter assigned to an `inout` parameter moves into the
+  caller's slot** (`@ put inout T slot sink T v { = slot v }`): it was still
+  dropped at the callee's exit and the caller's slot read freed memory.
+  `compiler/tests/sink_param_into_inout.nu`.
+- **A `?` arm ending in a closure assignment yields that binding's closure.**
+  `? on { = w ( wrap base ) = base w } {}`: the arm's value was copied for a
+  join no statement consumes, and the copy leaked on every run (packages/http's
+  middleware layers). `compiler/tests/closure_arm_tail_assign.nu`.
+- **A temporary handed to a call that cannot point into it is dropped after
+  the call.** `( vec_get [i] ( mk ) 0 )` (a `?i` holds no address) and
+  `( copy_of ( string_data ( make ) ) )` (a String the callee builds rather
+  than hands back) kept the temporary for a consumer that never came — it
+  leaked. `compiler/tests/temp_args_after_views.nu`.
+- **…and so is one handed to a call returning an option / result of
+  values.** `?? ( lsm_put db ( key_of k ) v ) { … }` kept the key for a
+  consumer of the `!T E` (packages/lsmdb leaked one key per put).
+  `compiler/tests/temp_arg_into_result_call.nu`. The same for a call
+  returning a struct of plain numbers (`( arima_update ( model_at t j ) y )`
+  kept the model's share — packages/anomaly).
+- **A value-producing `??` arm drops the payload it bound.**
+  `^ ?? ( read_file p ) { T text → { : ( Vec i ) v ( f text ) v } … }`:
+  the arm's drops waited for the join's verdict, and a consumed value kept
+  them all (it might point into an arm-local). An owned value whose type
+  can hold no address cannot, so the arm's locals are dropped under its
+  ownership bit (packages/nurl-cov leaked each source file it read).
+  `compiler/tests/value_arm_drops_binding.nu`.
+- **A binding a nested literal reads is not the outer literal's field.**
+  `^ @ H { # s ( rcbox_new [T] @ T { a b } ) }` skipped `b`'s drop: the cast
+  field counted as "the binding it casts" (the last name parsed), and the
+  inner literal's fields counted as the outer one's (packages/vindex).
+  `compiler/tests/nested_literal_cast_field.nu`.
+- **The use-after-move error names the call that consumed the binding** even
+  when a later call on the same line reads it (`: i n ( give a ) ^ + n (
+  vec_len [i] a )` said "consumed by vec_len").
+  `compiler/tests/borrow_moved_cause_same_line.nu`.
+- **A binding placed in a literal lives as long as the value holding it.**
+  `: Hold t @ Hold { a }` then `( keep t )` then `( vec_len [i] a )` read
+  freed memory and compiled clean; so did a read after `= t …` replaced the
+  holder, or after a literal went to a call consuming it (`( keep @ Hold {
+  a } )`). Each is now a use-after-move error naming what took the value;
+  reading `a` while the holder still holds it stays legal. The holder may be
+  the struct a field store wrote into (`= . s v a`), a holder of the holder,
+  or the name it was handed on to (`: Hold u t`).
+  `compiler/tests/borrow_stored_owner_gone.nu`.
+- **A library handle rebuilt from a word and returned (`^ # H w`) is a view**
+  of whatever holds the word, as binding it (`: H m # H w`) is. A cast from
+  an integer counted as a value made from a number, so every caller released
+  the table's handle (packages/anomaly's forecast model table: a
+  use-after-free). An owner is built with a literal (`@ H { # s w }`) or a
+  share. `compiler/tests/return_cast_word_is_view.nu`.
+- **A parameter in a literal nested in a returned option is taken over**, as
+  in a literal returned bare. `^ @ ?B { T @ B { shape v } }` lent `shape`
+  back like a whole payload, so the caller took the result for borrowed and
+  the fresh `v` leaked (packages/tensor). `compiler/tests/wrap_nested_param_taken.nu`.
+- **A closure that borrows a value cannot be returned past the scope that
+  drops it.** A closure capturing a parameter its function does not take
+  over only views the caller's value (docs/MEMORY.md §4); returned on past
+  the caller's own local (`^ ( first v )`, a binding of it, a helper that
+  lends on, an implicit return) it read freed memory with no diagnostic —
+  stdlib's `mcp_server_http_dispatch` has this shape. Now a compile error
+  that names the value and the cure (`sink`).
+  `compiler/tests/diag_returned_closure_lends_local.nu`.
+
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
   field-by-field drop of the same name, so the program's destructor never
@@ -160,6 +273,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`File`, `BufReader`, `Progress`, `Heartbeat`, `Zip` / `ZipArchive`,
+  `DChannel`, `CSVWriter` / `CSVDictWriter` / `CSVDictReader` release
+  themselves.** Each is a library handle over an rcbox: every copy is the
+  same object, and the last owner releases it — a `File`'s or a writer's
+  last owner closes its file (a `File` dropped without `file_close` leaked
+  its FILE*), a `Heartbeat`'s stops and joins its thread. `file_close`,
+  `bufreader_close`, `csv_writer_close`, `heartbeat_stop` act now and are
+  optional; `zip_close`, `dchan_free`, `csv_dict_reader_free` are early
+  releases. `File` gained `file_raw` / `file_from_raw` (code that read
+  `. f raw` uses `file_raw`); `Progress` gained `progress_cur` /
+  `progress_tty`; `progress_done` no longer frees. Write the types without
+  `*` (`heartbeat_start` → `Heartbeat`, `progress_new` → `Progress`,
+  `csv_writer_new` → `CSVWriter`).
+- **`nat_gather` returns `( Vec Candidate )`** (values instead of raw
+  `*Candidate` blocks); a `Ring` keeps its points as values (`ring_owner` /
+  `ring_owners` still hand out `*RingPoint` pointers into it).
+- **The standard library frees nothing by hand** outside container and
+  Drop implementations (core / data formats / compression / filesystems /
+  network stack / dist / package tooling): decoder cursors and scratch
+  states (zstd, deflate, msgpack, CBOR, YAML, regex parser, FAT directory
+  cursor, job / replicator / rendezvous decoders) are locals advanced in
+  place (`inout`) instead of `nurl_alloc`'d blocks; queues are drained in
+  place (new `bytes_drop_front`). The `*_free` functions of owning values
+  (manifest, lockfile, semver, registry index, URL, path, swim, tar
+  entries, …) are early releases; `crc32_ctx_free`, `tar_entry_free`,
+  `lock_pkg_free`, `idxdep_free`, `idxversion_free`, `stun_request_free`
+  and `nat_candidates_free` (no callers) are gone. zstd level-3 round trip
+  −22 % instructions, level 19 −2 %, deflate+gzip −5 %, zip −5 %, `fmt2`
+  −36 % (fixed-arity `fmt*` / `log_*fN` no longer copy their arguments;
+  a suppressed `log_*fN` formats nothing).
+- **The HTTP / MCP / WebSocket / MQTT / SMTP / XML / serde stdlib releases
+  nothing by hand** (940 → 1 release call in `stdlib/ext/http*`,
+  `mcp*`, `websocket`, `mqtt`, `smtp`, `xml`, `serde`, `cookies`,
+  `credentials`, `anthropic`; the one kept, in the WebSocket reader, is
+  marked with the compiler finding it waits for). Raw state became library handles over an rcbox:
+  `HttpStreamState` (was `*HttpStreamState`; new `hp_stream_body`
+  accessor; the last owner closes a transport still held,
+  `hp_stream_close` closes it early), `HttpConn` (a handle; the last owner
+  closes it, `hp_conn_close` is idempotent), `HttpStream` holds the state
+  (`http_stream_close` optional), `H2Client` (its 16-word peek/poke state
+  block became fields; `h2_client_close` an optional early release,
+  `h2_client_disconnect` closes the TcpConn; new `h2_client_tcp`), the
+  HTTP/3 stream tables, MCP tasks, and the HTTP server's DoS state (the
+  server's last copy releases it, no longer `server_stop`). New
+  `h2_conn_finish` (the final flush `h2_conn_free` did). Consumed
+  arguments are `sink`: HTTP/2 client bodies, `h2_conn_new_buffered`'s
+  carry, `mcp_server_add_*` schemas, MCP task Json. Every `*_free` of
+  these modules is an optional early release; unused `url_split_free`,
+  `query_pair_free`, `ws_frame_free`, `hpack_string_free` were removed.
+  HTTP server CPU per request (instructions:u, `bench/http_server.nu`,
+  oha 100k keep-alive): HTTP/1.1 −3.1 %, HTTP/2 −2.1 %.
+- **A `sink` parameter placed in a literal moves in instead of being
+  copied.** `rcbox_new [T] @ T { a b }` in a library-handle constructor
+  copied every Vec / String it was handed and then dropped the original
+  (9 → 5 allocations per construction in
+  `compiler/tests/sink_param_into_literal.nu`). A literal passed to a call
+  that only reads it leaves the parameter its owner, as for a local.
+- **A `sink` closure parameter takes the closure over.** A temporary handed
+  to one moves in, a binding is handed a copy, and the callee drops what it
+  took unless it returns it or captures it in a closure it returns. The
+  iterator combinators take their source and function by `sink`: a tiny
+  three-stage pipeline builds with 36 % fewer instructions (it copied the
+  chain at every stage), and `iter_free` releases early.
+  `compiler/tests/sink_closure_param.nu`.
+
 - **`Mutex`, `Cond`, `Semaphore` and `Channel` release themselves.** Each
   is now a reference-counted library handle: every copy — a thread's or a
   fiber's closure capture, a struct field, a `Vec` element, `Mutex_share`
@@ -202,6 +380,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
   struct whose module defines `S_drop sink S x` (and `S_share` /
   `S_clone`) is dropped and copied like `HashMap`.
+- **`Sha256` and `Blake3` streams release themselves.** `sha256_init` /
+  `blake3_init` return a library handle (`Sha256` / `Blake3`, was `*Sha256`
+  / `*Blake3`); `sha256_final` / `blake3_final` leave the stream spent
+  instead of freeing it, and the last owner releases it (`sha256_free` /
+  `blake3_free` are early releases). Code naming the type drops the `*`.
+  A SHA-256 stream is now one block of words (state, schedule, partial
+  block and a snapshot area) — 5 allocations per stream instead of 6–7, and
+  `sha256_snapshot` no longer clones the stream — and `hmac_sha256_pure`
+  streams key block and message through one hasher instead of building
+  `ipad ‖ msg`: a SHA-256 / HMAC / HKDF / PBKDF2 mix runs 15 % fewer
+  instructions.
+- **`TlsConn` releases itself.** The TLS client and server entry points
+  (`tls_connect*`, `tls_attach*`, `tls_accept*`) return a `TlsConn` library
+  handle (was `*TlsConn`); every copy is the same connection and its last
+  owner releases it, closing the socket if nobody called `tls_close`.
+  `tls_close` / `tls_server_close` still say close_notify and close the
+  socket at a point of the caller's choosing, but free nothing (safe to
+  repeat). Code that read the connection's fields uses accessors:
+  `tls_socket` (the runtime socket handle), `tls_cert_msg`, `tls_cv_sig`,
+  `tls_th_cert` (what the verifier was given, lent). Write the type without
+  `*`; `# *TlsConn 0` becomes `@ TlsConn { # s 0 }`. The handshake
+  machines' transcript hashes, keys and buffers are replaced through
+  `inout` and go with their owners; std/net.nu's `TcpConn` keeps one owner
+  of the connection as a word (`_tls_word`) and `tcp_close_conn` hands it
+  back.
+- **`SecureNode` (net/securedgram) releases itself.** `securedgram_open`
+  returns a `SecureNode` handle (was `*SecureNode`); `securedgram_close`
+  closes the socket and frees nothing, and the last owner releases the
+  keys and peers (closing the socket if nobody did). A partial message is
+  one buffer at its chunks' places instead of a box per chunk.
+  `noise_keys_free` and `recvdata_free` are optional early releases.
 
 ### Added
 

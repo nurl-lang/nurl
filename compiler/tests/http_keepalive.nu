@@ -97,22 +97,22 @@ $ `stdlib/ext/http_server.nu`
 // One exchange on `conn`; prints status/body/err, returns the released
 // transport (none when the response made it single-use).
 @ exchange s name HttpConn conn s method s target i body_max → ?HttpConn {
-    : *HttpStreamState st ( hp_stream_open_on conn method `127.0.0.1` 18951 0 target # *u 0 0 `` `nurl-test` )
+    : HttpStreamState st ( hp_stream_open_on conn method `127.0.0.1` 18951 0 target # *u 0 0 `` `nurl-test` )
     ( hp_stream_set_body_max st body_max )
-    ~ == . st finished 0 { ( hp_stream_pump st ) }
+    ~ == ( hp_stream_finished st ) 0 { ( hp_stream_pump st ) }
     : String v ( string_new )
-    ? != . st err_kind 0 {
+    ? != ( hp_stream_err_kind st ) 0 {
         ( string_push_str v `err=` )
-        ( string_push_int v . st err_kind )
+        ( string_push_int v ( hp_stream_err_kind st ) )
     } {
-        ( string_push_int v . st status )
+        ( string_push_int v ( hp_stream_status st ) )
         ( string_push_str v ` body=[` )
-        : i bl ( vec_len [u] . st body )
+        : i bl ( vec_len [u] ( hp_stream_body st ) )
         ? > bl 20 {
             ( string_push_int v bl )
             ( string_push_str v ` bytes` )
         } {
-            : String b ( string_from_bytes ( vec_data [u] . st body ) bl )
+            : String b ( string_from_bytes ( vec_data [u] ( hp_stream_body st ) ) bl )
             ( string_push_str v ( string_data b ) )
             ( string_free b )
         }
@@ -192,12 +192,12 @@ $ `stdlib/ext/http_server.nu`
                     T c → {
                         : String tg ( string_from `/n` )
                         ( string_push_int tg k )
-                        : *HttpStreamState st ( hp_stream_open_on c `GET` `127.0.0.1` 18952 0 ( string_data tg ) # *u 0 0 `` `nurl-test` )
-                        ~ == . st finished 0 { ( hp_stream_pump st ) }
+                        : HttpStreamState st ( hp_stream_open_on c `GET` `127.0.0.1` 18952 0 ( string_data tg ) # *u 0 0 `` `nurl-test` )
+                        ~ == ( hp_stream_finished st ) 0 { ( hp_stream_pump st ) }
                         : String v ( string_new )
-                        ( string_push_int v . st status )
+                        ( string_push_int v ( hp_stream_status st ) )
                         ( string_push_str v ` ` )
-                        : String b ( string_from_bytes ( vec_data [u] . st body ) ( vec_len [u] . st body ) )
+                        : String b ( string_from_bytes ( vec_data [u] ( hp_stream_body st ) ) ( vec_len [u] ( hp_stream_body st ) ) )
                         ( string_push_str v ( string_data b ) )
                         : String nm ( string_from `server_req` )
                         ( string_push_int nm k )

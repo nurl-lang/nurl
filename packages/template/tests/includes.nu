@@ -17,7 +17,7 @@ $ `src/loader.nu`
     }
 }
 
-@ render_eq * TplSet t s name s cj s want → b {
+@ render_eq TplSet t s name s cj s want → b {
     : ~ Json ctx ( json_null )
     ? > ( nurl_str_len cj ) 0 {
         ?? ( json_parse cj ) { T j → { = ctx j } F e → {} }
@@ -42,7 +42,7 @@ $ `src/loader.nu`
 
 @ main → i {
     : ~ i rc 0
-    : *TplSet t ( tset_new )
+    : TplSet t ( tset_new )
 
     ( tset_add t `head` `<h1>{{ title }}</h1>` )
     ( tset_add t `page` `{% include 'head' %}<p>{{ body }}</p>` )
@@ -116,19 +116,16 @@ $ `src/loader.nu`
     ( json_free c3 )
     = rc + rc ( report `render-with` withok )
 
-    ( tset_free t )
-
     // tset_load_dir over a scratch directory
     : s tdir `/tmp/nurl_tpl_loader_test`
     ?? ( dir_create_all tdir ) { T _ → {} F _ → {} }
     ?? ( write_file `/tmp/nurl_tpl_loader_test/hello.html` `Hello {{ who }}` ) { T _ → {} F _ → {} }
     ?? ( write_file `/tmp/nurl_tpl_loader_test/bye.html` `Bye {{ who }}` ) { T _ → {} F _ → {} }
-    : *TplSet t2 ( tset_new )
+    : TplSet t2 ( tset_new )
     : i nl ( tset_load_dir t2 tdir `.html` )
     = rc + rc ( report `load-dir-count` == nl 2 )
     = rc + rc ( report `load-dir-render`
     ( render_eq t2 `hello` `{"who":"you"}` `Hello you` ) )
-    ( tset_free t2 )
 
     ? == rc 0 { ( nurl_print `includes: all PASS\n` ) } {
         ( nurl_print `includes: FAILURES\n` )

@@ -2,7 +2,7 @@
 // untrusted-input parsers. Usage: `parse_harness <which> <file>`.
 //
 // It reads `file` (raw bytes for binary formats, a C-string for text
-// formats), feeds it to the selected parser, and frees whatever came back.
+// formats), feeds it to the selected parser, and drops whatever came back.
 // The ONLY acceptable outcomes are a parsed value or a graceful parse error
 // — never a crash, out-of-bounds access, UB, or a hang. Built with
 // ASan+UBSan and driven over mutated inputs by fuzz_parsers.sh, any
@@ -38,22 +38,18 @@ $ `stdlib/std/x509.nu`
     ? != 0 ( nurl_str_eq which `x509` ) {
         : ( Vec u ) b ( __fuzz_bytes path )
         : X509 c ( x509_parse b )
-        ( x509_free c )
-        ( vec_free [u] b )
         ^ 0
     } {}
     ? != 0 ( nurl_str_eq which `cbor` ) {
         : ( Vec u ) b ( __fuzz_bytes path )
         : !Json CborErr r ( cbor_decode b )
-        ?? r { T j → ( json_free j ) F _ → {} }
-        ( vec_free [u] b )
+        ?? r { T _ → {} F _ → {} }
         ^ 0
     } {}
     ? != 0 ( nurl_str_eq which `msgpack` ) {
         : ( Vec u ) b ( __fuzz_bytes path )
         : !Json MsgpackErr r ( msgpack_decode b )
-        ?? r { T j → ( json_free j ) F _ → {} }
-        ( vec_free [u] b )
+        ?? r { T _ → {} F _ → {} }
         ^ 0
     } {}
 
@@ -61,25 +57,25 @@ $ `stdlib/std/x509.nu`
     ? != 0 ( nurl_str_eq which `json` ) {
         : s src ( nurl_read_file path )
         : !Json JsonError r ( json_parse src )
-        ?? r { T j → ( json_free j ) F _ → {} }
+        ?? r { T _ → {} F _ → {} }
         ^ 0
     } {}
     ? != 0 ( nurl_str_eq which `yaml` ) {
         : s src ( nurl_read_file path )
         : !Json YamlErr r ( yaml_parse src )
-        ?? r { T j → ( json_free j ) F _ → {} }
+        ?? r { T _ → {} F _ → {} }
         ^ 0
     } {}
     ? != 0 ( nurl_str_eq which `xml` ) {
         : s src ( nurl_read_file path )
         : !Xml XmlErr r ( xml_parse src )
-        ?? r { T x → ( xml_free x ) F _ → {} }
+        ?? r { T _ → {} F _ → {} }
         ^ 0
     } {}
     ? != 0 ( nurl_str_eq which `toml` ) {
         : s src ( nurl_read_file path )
         : !TomlValue TomlErr r ( toml_parse src )
-        ?? r { T t → ( toml_value_free t ) F _ → {} }
+        ?? r { T _ → {} F _ → {} }
         ^ 0
     } {}
 

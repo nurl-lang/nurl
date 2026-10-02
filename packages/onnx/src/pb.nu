@@ -113,7 +113,6 @@ $ `stdlib/ext/protobuf.nu`
         = k + k 1
     }
     : String out ( bytes_to_str tmp )
-    ( vec_free [u] tmp )
     ^ out
 }
 

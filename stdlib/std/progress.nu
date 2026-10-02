@@ -5,11 +5,14 @@
 // throttled single-line bar on stderr, and stays COMPLETELY SILENT when
 // stderr is not a tty — CI logs never fill with carriage returns.
 //
-//   ( progress_new label total )   → *Progress   total ≤ 0: indeterminate
+//   ( progress_new label total )   → Progress    total ≤ 0: indeterminate
 //   ( progress_add p n )           → v           advance by n units
 //   ( progress_set p cur )         → v           set absolute position AND
 //                                                rebase the rate (resume)
-//   ( progress_done p )            → v           final render + newline; FREES p
+//   ( progress_done p )            → v           final render + newline (the
+//                                                bar goes with its last owner)
+//   ( progress_cur p )             → i           units counted so far
+//   ( progress_tty p )             → b           T when the bar renders
 //   ( progress_human n )           → String      "3.4 MB" (pure; unit-testable)
 //
 // Rendering: at most every 100 ms (monotonic clock), width-fitted to
@@ -38,8 +41,9 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/term.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Progress {
+: ProgressImpl {
     String label
     i total
     i cur
@@ -55,6 +59,19 @@ $ `stdlib/std/term.nu`
     i w_ns
     i rate
 }
+
+// A Progress is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Progress { s ctl }
+
+@ Progress_share Progress h → Progress { ^ @ Progress { # s ( rcbox_share # i . h ctl ) } }
+
+@ Progress_drop sink Progress h → v {
+    ( mem_forget h )
+    ( rcbox_release [ProgressImpl] # i . h ctl )
+}
+
+@ __Progress_ptr Progress h → *ProgressImpl { ^ ( rcbox_ptr [ProgressImpl] # i . h ctl ) }
 
 // "1023 B" · "3.4 KB" · "42.5 MB" · "1.2 GB" — one decimal above bytes.
 @ progress_human i n → String {
@@ -87,8 +104,9 @@ $ `stdlib/std/term.nu`
     ^ out
 }
 
-@ progress_new s label i total → *Progress {
-    : *Progress p # *Progress ( nurl_alloc Z Progress )
+@ progress_new s label i total → Progress {
+    : i p__box ( rcbox_zero [ProgressImpl] )
+    : *ProgressImpl p ( rcbox_ptr [ProgressImpl] p__box )
     = . p label ( string_from label )
     = . p total total
     = . p cur 0
@@ -101,7 +119,7 @@ $ `stdlib/std/term.nu`
     = . p w_cur 0
     = . p w_ns now
     = . p rate 0
-    ^ p
+    ^ @ Progress { # s p__box }
 }
 
 @ __pg_write s raw → v {
@@ -109,7 +127,7 @@ $ `stdlib/std/term.nu`
     ? > n 0 { : i _w ( write 2 # *u raw n ) } {}
 }
 
-@ __pg_render * Progress p b final → v {
+@ __pg_render * ProgressImpl p b final → v {
     : String ln ( string_new )
     ( string_push_char ln 13 )
     ( string_push_str ln ( string_data . p label ) )
@@ -142,7 +160,6 @@ $ `stdlib/std/term.nu`
         ( string_push_str ln ( string_data curh ) )
         ( string_push_str ln ` / ` )
         ( string_push_str ln ( string_data toth ) )
-        ( string_free toth )
     } {
         ( string_push_str ln ( string_data curh ) )
     }
@@ -164,18 +181,16 @@ $ `stdlib/std/term.nu`
         ( string_push_str ln `  ` )
         ( string_push_str ln ( string_data rh ) )
         ( string_push_str ln `/s` )
-        ( string_free rh )
     } {}
     ( string_push_str ln `    ` )
     ? final { ( string_push_char ln 10 ) } {}
     ( __pg_write ( string_data ln ) )
-    ( string_free curh )
 }
 
 // Fold one sample into the moving average. alpha = 1/8 over the 100 ms
 // render cadence ≈ a 0.8 s time constant: responsive enough to show a
 // stall, smooth enough not to jitter on chunk boundaries.
-@ __pg_sample * Progress p i now → v {
+@ __pg_sample * ProgressImpl p i now → v {
     : i dt - now . p w_ns
     ? <= dt 0 { ^ v } {}
     : i db - . p cur . p w_cur
@@ -185,7 +200,7 @@ $ `stdlib/std/term.nu`
     = . p w_ns now
 }
 
-@ __pg_tick * Progress p → v {
+@ __pg_tick * ProgressImpl p → v {
     ? . p tty {} { ^ v }
     : i now ( monotonic_ns )
     ? > - now . p last_ns 100000000 {
@@ -195,7 +210,8 @@ $ `stdlib/std/term.nu`
     } {}
 }
 
-@ progress_add * Progress p i n → v {
+@ progress_add Progress p__h i n → v {
+    : *ProgressImpl p ( __Progress_ptr p__h )
     = . p cur + . p cur n
     ( __pg_tick p )
 }
@@ -204,7 +220,8 @@ $ `stdlib/std/term.nu`
 // this is resuming a partial transfer: those bytes came off the disk,
 // not the network, so counting them as throughput is what produced the
 // "starts at gigabytes per second, then falls forever" display.
-@ progress_set * Progress p i cur → v {
+@ progress_set Progress p__h i cur → v {
+    : *ProgressImpl p ( __Progress_ptr p__h )
     : i now ( monotonic_ns )
     = . p cur cur
     = . p base_cur cur
@@ -215,10 +232,21 @@ $ `stdlib/std/term.nu`
     ( __pg_tick p )
 }
 
-// Final render (100 % state) + newline, then FREES p — the handle is
-// dead after this. Still silent when stderr is not a tty.
-@ progress_done * Progress p → v {
+// Units counted so far.
+@ progress_cur Progress p__h → i {
+    : *ProgressImpl p ( __Progress_ptr p__h )
+    ^ . p cur
+}
+
+// T when the bar renders (stderr is a tty).
+@ progress_tty Progress p__h → b {
+    : *ProgressImpl p ( __Progress_ptr p__h )
+    ^ . p tty
+}
+
+// Final render (100 % state) + newline. Still silent when stderr is not
+// a tty. The bar itself goes with its last owner.
+@ progress_done Progress p__h → v {
+    : *ProgressImpl p ( __Progress_ptr p__h )
     ? . p tty { ( __pg_render p T ) } {}
-    ( string_free . p label )
-    ( nurl_free # s p )
 }

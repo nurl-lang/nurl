@@ -75,8 +75,6 @@ $ `token.nu`
     : String hex ( blob_hex hash )
     : String p ( __blob_cache_path hex )
     : b have ( file_exists ( string_data p ) )
-    ( string_free hex )
-    ( string_free p )
     ^ have
 }
 
@@ -86,7 +84,6 @@ $ `token.nu`
 @ blob_store ( Vec u ) hash ( Vec u ) bytes → b {
     : ( Vec u ) real ( blob_hash bytes )
     : b match ( bytes_eq real hash )
-    ( vec_free [u] real )
     ? match {} { ^ F }
     : String hex ( blob_hex hash )
     : String p ( __blob_cache_path hex )
@@ -94,8 +91,6 @@ $ `token.nu`
     ? ( file_exists ( string_data p ) ) {} {
         ?? ( write_file_bytes ( string_data p ) bytes ) { T _ → {} F _ → { = okw F } }
     }
-    ( string_free hex )
-    ( string_free p )
     ^ okw
 }
 
@@ -112,13 +107,9 @@ $ `token.nu`
                 ( vec_extend [u] out bytes )
                 = okr T
             } {}
-            ( vec_free [u] real )
-            ( vec_free [u] bytes )
         }
         F _ → {}
     }
-    ( string_free hex )
-    ( string_free p )
     ^ okr
 }
 
@@ -145,17 +136,13 @@ $ `token.nu`
                     : ( Vec u ) hash ( bytes_slice body 0 32 )
                     : ( Vec u ) bytes ( bytes_slice body 32 ( vec_len [u] body ) )
                     ? ( blob_store hash bytes ) { = ok 1 } {}
-                    ( vec_free [u] hash )
-                    ( vec_free [u] bytes )
                 } {}
-                ( vec_free [u] body )
             }
         }
         : ( Vec u ) r ( vec_new [u] )
         ( vec_push [u] r # u ok )
         ( bytes_push_u64_be r # u64 0 )
         : ( Vec u ) out ( token_tag key r )
-        ( vec_free [u] r )
         ^ out
     }
 }
@@ -173,18 +160,11 @@ $ `token.nu`
         : i end ? < + off bb n { + off bb } { n }
         : ( Vec u ) block ( bytes_slice data off end )
         ( vec_push [( Vec u )] out ( blob_hash block ) )
-        ( vec_free [u] block )
         = off end
     }
     ^ out
 }
 
-@ blob_manifest_free sink ( Vec ( Vec u ) ) m → v {
-    : i n ( vec_len [( Vec u )] m )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [( Vec u )] m k ) { T h → { ( vec_free [u] h ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [( Vec u )] m )
-}
+// A manifest is a Vec of Vecs its owner drops, hashes included; this lets
+// go of it now rather than at the end of the owner's scope (optional).
+@ blob_manifest_free sink ( Vec ( Vec u ) ) m → v {}

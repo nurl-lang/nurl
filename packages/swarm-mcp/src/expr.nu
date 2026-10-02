@@ -29,13 +29,16 @@
 //
 // Tokens are kept in two parallel int vectors; the parser builds a flat
 // stride-4 node arena (tag,a,b,c) and returns the root index — the resp.nu
-// arena pattern, so nesting needs no per-node allocation. Float literals carry
+// arena pattern, so nesting needs no per-node allocation. An EParser is a
+// handle (rcbox): `( eparser_new )`, then `expr_parse`, `eparser_ok`,
+// `expr_eval` / `expr_eval_f`; its last owner releases it. Float literals carry
 // the f64 bit pattern (via floatbits) in the value slot, so the all-int arena
 // holds them losslessly; the float evaluator reinterprets them back.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── token kinds ──────────────────────────────────────────────────
 // 0 END · 1 INT(val) · 2 X · 3 + · 4 - · 5 * · 6 / · 7 % · 8 < · 9 <= ·
@@ -110,7 +113,6 @@ $ `stdlib/std/floatbits.nu`
                                     = ok F
                                 } } }
                     }
-                    ( vec_free [u] word )
                 } {
                     // operators + punctuation
                     : i c2 ? < + i 1 n ?? ( vec_get [u] src + i 1 ) { T x → # i x F → 0 } 0
@@ -140,7 +142,7 @@ $ `stdlib/std/floatbits.nu`
 
 // ── parser → flat node arena ─────────────────────────────────────
 
-: EParser {
+: EParserImpl {
     ( Vec i ) tk
     ( Vec i ) tv
     i pos
@@ -148,14 +150,40 @@ $ `stdlib/std/floatbits.nu`
     b ok
 }
 
-@ __ep_kind * EParser p → i { ^ ?? ( vec_get [i] . p tk . p pos ) { T x → x F → 0 } }
+// An EParser is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same parser, and the last owner releases it.
+: EParser { s ctl }
 
-@ __ep_val * EParser p → i { ^ ?? ( vec_get [i] . p tv . p pos ) { T x → x F → 0 } }
+@ EParser_share EParser h → EParser { ^ @ EParser { # s ( rcbox_share # i . h ctl ) } }
 
-@ __ep_adv * EParser p → v { = . p pos + . p pos 1 }
+@ EParser_drop sink EParser h → v {
+    ( mem_forget h )
+    ( rcbox_release [EParserImpl] # i . h ctl )
+}
+
+// The parser in place. One underscore: shared with work.nu, whose fold opens
+// the handle once per chunk and evaluates on the pointer.
+@ _EParser_ptr EParser h → *EParserImpl { ^ ( rcbox_ptr [EParserImpl] # i . h ctl ) }
+
+// A parser with nothing parsed yet (eparser_ok is F until expr_parse succeeds).
+@ eparser_new → EParser {
+    ^ @ EParser { # s ( rcbox_new [EParserImpl] @ EParserImpl { ( vec_new [i] ) ( vec_new [i] ) 0 ( vec_new [i] ) F } ) }
+}
+
+// Did the last expr_parse accept its source?
+@ eparser_ok EParser p__h → b {
+    : *EParserImpl p ( _EParser_ptr p__h )
+    ^ . p ok
+}
+
+@ __ep_kind * EParserImpl p → i { ^ ?? ( vec_get [i] . p tk . p pos ) { T x → x F → 0 } }
+
+@ __ep_val * EParserImpl p → i { ^ ?? ( vec_get [i] . p tv . p pos ) { T x → x F → 0 } }
+
+@ __ep_adv * EParserImpl p → v { = . p pos + . p pos 1 }
 
 // Push a node, return its index.
-@ __ep_node * EParser p i tag i a i b i c → i {
+@ __ep_node * EParserImpl p i tag i a i b i c → i {
     : i idx / ( vec_len [i] . p arena ) 4
     ( vec_push [i] . p arena tag )
     ( vec_push [i] . p arena a )
@@ -165,11 +193,11 @@ $ `stdlib/std/floatbits.nu`
 }
 
 // Expect+consume a token kind; flag an error if it is not there.
-@ __ep_expect * EParser p i kind → v {
+@ __ep_expect * EParserImpl p i kind → v {
     ? == ( __ep_kind p ) kind { ( __ep_adv p ) } { = . p ok F }
 }
 
-@ __ep_primary * EParser p → i {
+@ __ep_primary * EParserImpl p → i {
     : i k ( __ep_kind p )
     ? == k 1 { : i v ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 0 v 0 0 ) } {}  // INT
     ? == k 24 { : i bits ( __ep_val p ) ( __ep_adv p ) ^ ( __ep_node p 20 bits 0 0 ) } {}  // FLT (f64 bits)
@@ -201,12 +229,12 @@ $ `stdlib/std/floatbits.nu`
     ^ 0
 }
 
-@ __ep_unary * EParser p → i {
+@ __ep_unary * EParserImpl p → i {
     ? == ( __ep_kind p ) 4 { ( __ep_adv p ) ^ ( __ep_node p 2 ( __ep_unary p ) 0 0 ) } {}  // -unary → NEG
     ^ ( __ep_primary p )
 }
 
-@ __ep_muldiv * EParser p → i {
+@ __ep_muldiv * EParserImpl p → i {
     : ~ i a ( __ep_unary p )
     ~ & . p ok | == ( __ep_kind p ) 5 | == ( __ep_kind p ) 6 == ( __ep_kind p ) 7 {
         : i op ( __ep_kind p )
@@ -217,7 +245,7 @@ $ `stdlib/std/floatbits.nu`
     ^ a
 }
 
-@ __ep_addsub * EParser p → i {
+@ __ep_addsub * EParserImpl p → i {
     : ~ i a ( __ep_muldiv p )
     ~ & . p ok | == ( __ep_kind p ) 3 == ( __ep_kind p ) 4 {
         : i op ( __ep_kind p )
@@ -228,7 +256,7 @@ $ `stdlib/std/floatbits.nu`
     ^ a
 }
 
-@ __ep_compare * EParser p → i {
+@ __ep_compare * EParserImpl p → i {
     : i a ( __ep_addsub p )
     : i k ( __ep_kind p )
     ? & . p ok & >= k 8 <= k 13 {
@@ -239,7 +267,7 @@ $ `stdlib/std/floatbits.nu`
     ^ a
 }
 
-@ __ep_logic * EParser p → i {
+@ __ep_logic * EParserImpl p → i {
     : ~ i a ( __ep_compare p )
     ~ & . p ok | == ( __ep_kind p ) 14 == ( __ep_kind p ) 15 {
         : i op ( __ep_kind p )
@@ -250,7 +278,7 @@ $ `stdlib/std/floatbits.nu`
     ^ a
 }
 
-@ __ep_expr * EParser p → i {
+@ __ep_expr * EParserImpl p → i {
     : i cond ( __ep_logic p )
     ? & . p ok == ( __ep_kind p ) 16 {  // cond ? then : else
         ( __ep_adv p )
@@ -262,12 +290,14 @@ $ `stdlib/std/floatbits.nu`
     ^ cond
 }
 
-// Parse `src` → (arena, root). On any error, ok=0; the caller checks it.
-// The arena is returned via the EParser; the root index via the return value.
-@ expr_parse ( Vec u ) src * EParser p → i {
-    = . p tk ( vec_new [i] )
-    = . p tv ( vec_new [i] )
-    = . p arena ( vec_new [i] )
+// Parse `src` → (arena, root). On any error, ok=0; the caller checks it
+// (eparser_ok). The arena stays in the EParser; the root index is the return
+// value. A parser can be reused: each parse starts from empty vectors.
+@ expr_parse ( Vec u ) src EParser p__h → i {
+    : *EParserImpl p ( _EParser_ptr p__h )
+    ( vec_clear [i] . p tk )
+    ( vec_clear [i] . p tv )
+    ( vec_clear [i] . p arena )
     = . p pos 0
     = . p ok ( expr_tokenize src . p tk . p tv )
     ? ! . p ok { ^ 0 } {}
@@ -277,22 +307,20 @@ $ `stdlib/std/floatbits.nu`
     ^ root
 }
 
-// Frees the parser's arena/token vectors AND the struct itself.
-@ eparser_free sink * EParser p → v {
-    ( vec_free [i] . p tk )
-    ( vec_free [i] . p tv )
-    ( vec_free [i] . p arena )
-    ( nurl_free # s p )
-}
+// Let go of `p` now rather than at the end of its owner's scope (optional).
+@ eparser_free sink EParser p → v {}
 
 // ── evaluator ────────────────────────────────────────────────────
 // Reads the arena through the parser pointer (a borrow), so evaluating does
 // not move the arena field out of the parser — the worker evaluates the same
-// parsed expression for every x in its sub-range.
+// parsed expression for every x in its sub-range. The public expr_eval /
+// expr_eval_f open the handle once; the recursion runs on the pointer.
 
-@ __ar * EParser p i node i off → i { ^ ?? ( vec_get [i] . p arena + * node 4 off ) { T x → x F → 0 } }
+@ __ar * EParserImpl p i node i off → i { ^ ?? ( vec_get [i] . p arena + * node 4 off ) { T x → x F → 0 } }
 
-@ expr_eval * EParser p i node i x → i {
+inline @ expr_eval EParser p__h i node i x → i { ^ ( _expr_eval ( _EParser_ptr p__h ) node x ) }
+
+@ _expr_eval * EParserImpl p i node i x → i {
     : i tag ( __ar p node 0 )
     : i a ( __ar p node 1 )
     : i b ( __ar p node 2 )
@@ -300,24 +328,24 @@ $ `stdlib/std/floatbits.nu`
     ? == tag 0 { ^ a } {}
     ? == tag 20 { ^ # i ( bits_to_f64 a ) } {}  // FLT literal in int mode → truncate
     ? == tag 1 { ^ x } {}
-    ? == tag 2 { ^ - 0 ( expr_eval p a x ) } {}
-    ? == tag 3 { ^ + ( expr_eval p a x ) ( expr_eval p b x ) } {}
-    ? == tag 4 { ^ - ( expr_eval p a x ) ( expr_eval p b x ) } {}
-    ? == tag 5 { ^ * ( expr_eval p a x ) ( expr_eval p b x ) } {}
-    ? == tag 6 { : i d ( expr_eval p b x ) ? == d 0 { ^ 0 } { ^ / ( expr_eval p a x ) d } } {}
-    ? == tag 7 { : i d ( expr_eval p b x ) ? == d 0 { ^ 0 } { ^ % ( expr_eval p a x ) d } } {}
-    ? == tag 8 { ^ ? < ( expr_eval p a x ) ( expr_eval p b x ) 1 0 } {}
-    ? == tag 9 { ^ ? <= ( expr_eval p a x ) ( expr_eval p b x ) 1 0 } {}
-    ? == tag 10 { ^ ? > ( expr_eval p a x ) ( expr_eval p b x ) 1 0 } {}
-    ? == tag 11 { ^ ? >= ( expr_eval p a x ) ( expr_eval p b x ) 1 0 } {}
-    ? == tag 12 { ^ ? == ( expr_eval p a x ) ( expr_eval p b x ) 1 0 } {}
-    ? == tag 13 { ^ ? != ( expr_eval p a x ) ( expr_eval p b x ) 1 0 } {}
-    ? == tag 14 { ^ ? & != ( expr_eval p a x ) 0 != ( expr_eval p b x ) 0 1 0 } {}
-    ? == tag 15 { ^ ? | != ( expr_eval p a x ) 0 != ( expr_eval p b x ) 0 1 0 } {}
-    ? == tag 16 { ? != ( expr_eval p a x ) 0 { ^ ( expr_eval p b x ) } { ^ ( expr_eval p c x ) } } {}
-    ? == tag 17 { : i va ( expr_eval p a x ) : i vb ( expr_eval p b x ) ^ ? < va vb va vb } {}
-    ? == tag 18 { : i va ( expr_eval p a x ) : i vb ( expr_eval p b x ) ^ ? > va vb va vb } {}
-    ? == tag 19 { : i va ( expr_eval p a x ) ^ ? < va 0 - 0 va va } {}
+    ? == tag 2 { ^ - 0 ( _expr_eval p a x ) } {}
+    ? == tag 3 { ^ + ( _expr_eval p a x ) ( _expr_eval p b x ) } {}
+    ? == tag 4 { ^ - ( _expr_eval p a x ) ( _expr_eval p b x ) } {}
+    ? == tag 5 { ^ * ( _expr_eval p a x ) ( _expr_eval p b x ) } {}
+    ? == tag 6 { : i d ( _expr_eval p b x ) ? == d 0 { ^ 0 } { ^ / ( _expr_eval p a x ) d } } {}
+    ? == tag 7 { : i d ( _expr_eval p b x ) ? == d 0 { ^ 0 } { ^ % ( _expr_eval p a x ) d } } {}
+    ? == tag 8 { ^ ? < ( _expr_eval p a x ) ( _expr_eval p b x ) 1 0 } {}
+    ? == tag 9 { ^ ? <= ( _expr_eval p a x ) ( _expr_eval p b x ) 1 0 } {}
+    ? == tag 10 { ^ ? > ( _expr_eval p a x ) ( _expr_eval p b x ) 1 0 } {}
+    ? == tag 11 { ^ ? >= ( _expr_eval p a x ) ( _expr_eval p b x ) 1 0 } {}
+    ? == tag 12 { ^ ? == ( _expr_eval p a x ) ( _expr_eval p b x ) 1 0 } {}
+    ? == tag 13 { ^ ? != ( _expr_eval p a x ) ( _expr_eval p b x ) 1 0 } {}
+    ? == tag 14 { ^ ? & != ( _expr_eval p a x ) 0 != ( _expr_eval p b x ) 0 1 0 } {}
+    ? == tag 15 { ^ ? | != ( _expr_eval p a x ) 0 != ( _expr_eval p b x ) 0 1 0 } {}
+    ? == tag 16 { ? != ( _expr_eval p a x ) 0 { ^ ( _expr_eval p b x ) } { ^ ( _expr_eval p c x ) } } {}
+    ? == tag 17 { : i va ( _expr_eval p a x ) : i vb ( _expr_eval p b x ) ^ ? < va vb va vb } {}
+    ? == tag 18 { : i va ( _expr_eval p a x ) : i vb ( _expr_eval p b x ) ^ ? > va vb va vb } {}
+    ? == tag 19 { : i va ( _expr_eval p a x ) ^ ? < va 0 - 0 va va } {}
     ^ 0
 }
 
@@ -327,7 +355,9 @@ $ `stdlib/std/floatbits.nu`
 // f64 bit pattern and are reinterpreted back. Div/mod by zero → 0.0; mod is the
 // truncated remainder (a − b·trunc(a/b)), matching the int evaluator's rule.
 
-@ expr_eval_f * EParser p i node f x → f {
+inline @ expr_eval_f EParser p__h i node f x → f { ^ ( _expr_eval_f ( _EParser_ptr p__h ) node x ) }
+
+@ _expr_eval_f * EParserImpl p i node f x → f {
     : i tag ( __ar p node 0 )
     : i a ( __ar p node 1 )
     : i b ( __ar p node 2 )
@@ -335,23 +365,23 @@ $ `stdlib/std/floatbits.nu`
     ? == tag 0 { ^ # f a } {}  // INT literal → double
     ? == tag 20 { ^ ( bits_to_f64 a ) } {}  // FLT literal
     ? == tag 1 { ^ x } {}
-    ? == tag 2 { ^ - 0.0 ( expr_eval_f p a x ) } {}
-    ? == tag 3 { ^ + ( expr_eval_f p a x ) ( expr_eval_f p b x ) } {}
-    ? == tag 4 { ^ - ( expr_eval_f p a x ) ( expr_eval_f p b x ) } {}
-    ? == tag 5 { ^ * ( expr_eval_f p a x ) ( expr_eval_f p b x ) } {}
-    ? == tag 6 { : f d ( expr_eval_f p b x ) ? == d 0.0 { ^ 0.0 } { ^ / ( expr_eval_f p a x ) d } } {}
-    ? == tag 7 { : f d ( expr_eval_f p b x ) ? == d 0.0 { ^ 0.0 } { : f aa ( expr_eval_f p a x ) ^ - aa * d # f # i / aa d } } {}
-    ? == tag 8 { ^ ? < ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
-    ? == tag 9 { ^ ? <= ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
-    ? == tag 10 { ^ ? > ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
-    ? == tag 11 { ^ ? >= ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
-    ? == tag 12 { ^ ? == ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
-    ? == tag 13 { ^ ? != ( expr_eval_f p a x ) ( expr_eval_f p b x ) 1.0 0.0 } {}
-    ? == tag 14 { ^ ? & != ( expr_eval_f p a x ) 0.0 != ( expr_eval_f p b x ) 0.0 1.0 0.0 } {}
-    ? == tag 15 { ^ ? | != ( expr_eval_f p a x ) 0.0 != ( expr_eval_f p b x ) 0.0 1.0 0.0 } {}
-    ? == tag 16 { ? != ( expr_eval_f p a x ) 0.0 { ^ ( expr_eval_f p b x ) } { ^ ( expr_eval_f p c x ) } } {}
-    ? == tag 17 { : f va ( expr_eval_f p a x ) : f vb ( expr_eval_f p b x ) ^ ? < va vb va vb } {}
-    ? == tag 18 { : f va ( expr_eval_f p a x ) : f vb ( expr_eval_f p b x ) ^ ? > va vb va vb } {}
-    ? == tag 19 { : f va ( expr_eval_f p a x ) ^ ? < va 0.0 - 0.0 va va } {}
+    ? == tag 2 { ^ - 0.0 ( _expr_eval_f p a x ) } {}
+    ? == tag 3 { ^ + ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) } {}
+    ? == tag 4 { ^ - ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) } {}
+    ? == tag 5 { ^ * ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) } {}
+    ? == tag 6 { : f d ( _expr_eval_f p b x ) ? == d 0.0 { ^ 0.0 } { ^ / ( _expr_eval_f p a x ) d } } {}
+    ? == tag 7 { : f d ( _expr_eval_f p b x ) ? == d 0.0 { ^ 0.0 } { : f aa ( _expr_eval_f p a x ) ^ - aa * d # f # i / aa d } } {}
+    ? == tag 8 { ^ ? < ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 9 { ^ ? <= ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 10 { ^ ? > ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 11 { ^ ? >= ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 12 { ^ ? == ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 13 { ^ ? != ( _expr_eval_f p a x ) ( _expr_eval_f p b x ) 1.0 0.0 } {}
+    ? == tag 14 { ^ ? & != ( _expr_eval_f p a x ) 0.0 != ( _expr_eval_f p b x ) 0.0 1.0 0.0 } {}
+    ? == tag 15 { ^ ? | != ( _expr_eval_f p a x ) 0.0 != ( _expr_eval_f p b x ) 0.0 1.0 0.0 } {}
+    ? == tag 16 { ? != ( _expr_eval_f p a x ) 0.0 { ^ ( _expr_eval_f p b x ) } { ^ ( _expr_eval_f p c x ) } } {}
+    ? == tag 17 { : f va ( _expr_eval_f p a x ) : f vb ( _expr_eval_f p b x ) ^ ? < va vb va vb } {}
+    ? == tag 18 { : f va ( _expr_eval_f p a x ) : f vb ( _expr_eval_f p b x ) ^ ? > va vb va vb } {}
+    ? == tag 19 { : f va ( _expr_eval_f p a x ) ^ ? < va 0.0 - 0.0 va va } {}
     ^ 0.0
 }

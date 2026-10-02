@@ -63,13 +63,6 @@ $ `theme.nu`
     i ranks
 }
 
-@ mmd_layout_free sink MmdLayout l → v {
-    ( vec_free [MmdBox] . l boxes )
-    ( vec_free [MmdPt] . l route )
-    ( vec_free [i] . l route_start )
-    ( vec_free [i] . l route_len )
-}
-
 @ mmd_layout_box MmdLayout l i idx → MmdBox {
     ?? ( vec_get [MmdBox] . l boxes idx ) {
         T b → ^ b
@@ -275,8 +268,6 @@ $ `theme.nu`
         }
         = qi + qi 1
     }
-    ( vec_free [i] queue )
-    ( vec_free [i] indeg )
     ^ rank
 }
 
@@ -337,7 +328,6 @@ $ `theme.nu`
         ( __mmdl_put members + from + j 1 cur_node )
         = a + a 1
     }
-    ( vec_free [i] key )
 
     : ~ i m2 0
     ~ < m2 count {
@@ -419,9 +409,7 @@ $ `theme.nu`
         ? == ( __mmdl_get color s0 ) 0 { ( __mmdl_dfs g color back s0 ) } {}
         = s0 + s0 1
     }
-    ( vec_free [i] color )
     : ( Vec i ) rank ( __mmdl_ranks g back )
-    ( vec_free [i] back )
 
     : ~ i nranks 0
     : ~ i r0 0
@@ -502,7 +490,6 @@ $ `theme.nu`
         }
         = k + k 1
     }
-    ( vec_free [i] chain )
     : i nv ( vec_len [i] vrank )
 
     // 4. Ordering.
@@ -694,22 +681,6 @@ $ `theme.nu`
 
     : i width + * 2 pad ? horizontal main_extent cross_extent
     : i height + * 2 pad ? horizontal cross_extent main_extent
-
-    ( vec_free [i] wv )
-    ( vec_free [i] hv )
-    ( vec_free [i] rank )
-    ( vec_free [i] vrank )
-    ( vec_free [i] vcross )
-    ( vec_free [i] vmain )
-    ( vec_free [i] sa )
-    ( vec_free [i] sb )
-    ( vec_free [i] route_nodes )
-    ( vec_free [i] members )
-    ( vec_free [i] rank_from )
-    ( vec_free [i] order )
-    ( vec_free [i] centre )
-    ( vec_free [i] rank_pos )
-    ( vec_free [i] rank_thick )
 
     ^ @ MmdLayout {
         boxes

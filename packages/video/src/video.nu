@@ -27,15 +27,21 @@
 //   ( vid_is_video path )        → b        the extension is a video's
 //   ( vid_frames_dir path )      → String   <dir>/<stem>_frames
 //   ( vid_avi_open path )        → !VidAvi String
+//   ( vid_avi_fps_num v ) ( vid_avi_fps_den v ) ( vid_avi_vstream v )
+//   ( vid_avi_movi_off v ) ( vid_avi_movi_end v )  → i  stream metadata
 //   ( vid_avi_extract v outdir stride ) → !i String
-//   ( vid_avi_close v )          → v
+//   ( vid_avi_close v )          → v        early release (optional)
 //   ( vid_extract path fps outdir verbose ) → !i String
+//
+// A VidAvi is a handle: every copy is the same open file, and the last
+// owner closes it. Nothing here is released by hand.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/process.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── what is a video ─────────────────────────────────────────────────
 
@@ -84,14 +90,13 @@ $ `stdlib/std/process.nu`
     ~ < k dot { ( string_push_char stem ( nurl_str_at bd bl k ) ) = k + k 1 }
     ( string_push_str stem `_frames` )
     : String out ( path_join ( string_data d ) ( string_data stem ) )
-    ( string_free d ) ( string_free base ) ( string_free stem )
     ^ out
 }
 
 // ── RIFF / AVI (MJPEG) ──────────────────────────────────────────────
 
-: VidAvi {
-    File f
+: VidAviImpl {
+    File f  // closed by its last owner (the drop glue), as vid_avi_close did
     i fsize
     i fps_num  // dwRate of the vids stream
     i fps_den  // dwScale
@@ -99,6 +104,30 @@ $ `stdlib/std/process.nu`
     i movi_off  // where the movi LIST's payload starts
     i movi_end
 }
+
+// An opened AVI is a handle: every copy is the same open file, and the
+// last owner closes it. vid_avi_close is an optional early release.
+: VidAvi { s ctl }
+
+@ VidAvi_share VidAvi h → VidAvi { ^ @ VidAvi { # s ( rcbox_share # i . h ctl ) } }
+
+@ VidAvi_drop sink VidAvi h → v {
+    ( mem_forget h )
+    ( rcbox_release [VidAviImpl] # i . h ctl )
+}
+
+@ __VidAvi_ptr VidAvi h → *VidAviImpl { ^ ( rcbox_ptr [VidAviImpl] # i . h ctl ) }
+
+// The stream's declared frame rate, fps_num / fps_den (dwRate / dwScale).
+@ vid_avi_fps_num VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v fps_num }
+
+@ vid_avi_fps_den VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v fps_den }
+// Index of the video stream (the NN of its 'NNdc' chunks).
+@ vid_avi_vstream VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v vstream }
+// The movi LIST's payload: [movi_off, movi_end) in the file.
+@ vid_avi_movi_off VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v movi_off }
+
+@ vid_avi_movi_end VidAvi h → i { : *VidAviImpl v ( __VidAvi_ptr h ) ^ . v movi_end }
 
 @ __vd_u32 ( Vec u ) b i off → i {
     : *u p ( vec_data [u] b )
@@ -132,19 +161,21 @@ $ `stdlib/std/process.nu`
         F _e → { ^ @ !VidAvi String { F ( string_from `cannot open the video` ) } }
         T fh → { = f fh }
     }
+    // The handle first: every way out below lets go of it, and its drop
+    // closes the file.
+    : i v__box ( rcbox_zero [VidAviImpl] )
+    : VidAvi av @ VidAvi { # s v__box }
+    : *VidAviImpl v ( rcbox_ptr [VidAviImpl] v__box )
+    = . v f f
     // RIFF....AVI<space>
     : ~ b hdr_ok F
     ?? ( __vd_read_at f 0 12 ) {
         T b → {
             ? & ( __vd_fourcc b 0 82 73 70 70 ) ( __vd_fourcc b 8 65 86 73 32 ) { = hdr_ok T } {}
-            ( vec_free [u] b )
         }
         F _e → {}
     }
-    ? hdr_ok {} {
-        ( file_close f )
-        ^ @ !VidAvi String { F ( string_from `not an AVI (no RIFF/AVI header)` ) }
-    }
+    ? hdr_ok {} { ^ @ !VidAvi String { F ( string_from `not an AVI (no RIFF/AVI header)` ) } }
 
     : ~ i fps_num 0
     : ~ i fps_den 1
@@ -173,7 +204,6 @@ $ `stdlib/std/process.nu`
                                 = movi_end + + off 8 sz
                                 = into F
                             } {}
-                            ( vec_free [u] t )
                         }
                     }
                     ? & ! bad into { = off + off 12 } {}
@@ -191,28 +221,33 @@ $ `stdlib/std/process.nu`
                                     } {}
                                 } {}
                                 = nstreams + nstreams 1
-                                ( vec_free [u] sh )
                             }
                         }
                     } {}
                     // chunks are word-aligned
                     = skip + sz % sz 2
                 }
-                ( vec_free [u] h )
             }
         }
         ? > skip 0 { = off + + off 8 skip } {}
     }
     ? | | bad < vstream 0 == movi_off 0 {
-        ( file_close f )
         ^ @ !VidAvi String { F ( string_from `no video stream found in the AVI` ) }
     } {}
     ? < fps_den 1 { = fps_den 1 } {}
     ? < fps_num 1 { = fps_num 25 = fps_den 1 } {}
-    ^ @ !VidAvi String { T @ VidAvi { f fsize fps_num fps_den vstream movi_off movi_end } }
+    = . v fsize fsize
+    = . v fps_num fps_num
+    = . v fps_den fps_den
+    = . v vstream vstream
+    = . v movi_off movi_off
+    = . v movi_end movi_end
+    ^ @ !VidAvi String { T av }
 }
 
-@ vid_avi_close VidAvi v → v { ( file_close . v f ) }
+// Let go of `v` now rather than at the end of its owner's scope; the last
+// owner's drop closes the file.
+@ vid_avi_close sink VidAvi v → v {}
 
 // The fourcc of this stream's compressed-video chunks: 'NNdc' where NN
 // is the stream index in decimal.
@@ -230,7 +265,8 @@ $ `stdlib/std/process.nu`
 
 // Extract every `stride`-th video frame as a JPEG file into `outdir`,
 // stopping the numbering at what was kept. Returns the kept count.
-@ vid_avi_extract VidAvi v s outdir i stride → !i String {
+@ vid_avi_extract VidAvi v__h s outdir i stride → !i String {
+    : *VidAviImpl v ( __VidAvi_ptr v__h )
     : ~ i off . v movi_off
     : ~ i seen 0
     : ~ i kept 0
@@ -259,7 +295,6 @@ $ `stdlib/std/process.nu`
                                         : ~ i pad ( string_len dgt )
                                         ~ < pad 6 { ( string_push_char name 48 ) = pad + pad 1 }
                                         ( string_push_str name ( string_data dgt ) )
-                                        ( string_free dgt )
                                         ( string_push_str name `.jpg` )
                                         : String fp ( path_join outdir ( string_data name ) )
                                         ?? ( write_file_bytes ( string_data fp ) jb ) {
@@ -270,12 +305,10 @@ $ `stdlib/std/process.nu`
                                                 ( string_push_str err ( string_data fp ) )
                                             }
                                         }
-                                        ( string_free fp ) ( string_free name )
                                     } {
                                         = bad T
                                         ( string_push_str err `the AVI's video chunks are not JPEG (fccHandler is not MJPG) — re-encode, or install ffmpeg` )
                                     }
-                                    ( vec_free [u] jb )
                                 }
                             }
                         } {}
@@ -283,14 +316,12 @@ $ `stdlib/std/process.nu`
                     } {}
                     = off + + off 8 + sz % sz 2
                 }
-                ( vec_free [u] h )
             }
         }
     }
     ? bad {
         ^ @ !i String { F err }
     } {}
-    ( string_free err )
     ^ @ !i String { T kept }
 }
 
@@ -317,15 +348,12 @@ $ `stdlib/std/process.nu`
                 ( string_push_str err `ffmpeg failed:\n` )
                 ( string_push_str err ( output_stderr o ) )
             } {}
-            ( output_free o )
         }
         F _e → {
             ( string_push_str err `this container needs ffmpeg to decode, and ffmpeg is not on PATH.\nInstall it (apt install ffmpeg), or record MJPEG (an .avi), which this\npackage reads by itself.` )
         }
     }
-    ( vec_free [s] args ) ( string_free pat ) ( string_free vf )
     ? != rc 0 { ^ @ !i String { F err } } {}
-    ( string_free err )
     // count what landed
     : ~ i n 0
     ?? ( dir_list outdir ) {
@@ -338,7 +366,6 @@ $ `stdlib/std/process.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _e → {}
     }
@@ -371,7 +398,6 @@ $ `stdlib/std/process.nu`
                             ? digits {
                                 : String fp ( path_join outdir nd )
                                 : i32 _u ( unlink ( string_data fp ) )
-                                ( string_free fp )
                             } {}
                         } {}
                     }
@@ -379,7 +405,6 @@ $ `stdlib/std/process.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _e → {}
     }
@@ -405,8 +430,8 @@ $ `stdlib/std/process.nu`
         ?? ( vid_avi_open path ) {
             T av → {
                 // stride = round(src_fps / want), floor 1
-                : i num . av fps_num
-                : i den . av fps_den
+                : i num ( vid_avi_fps_num av )
+                : i den ( vid_avi_fps_den av )
                 : ~ i stride / + * 2 num * want den * 2 * want den
                 ? < stride 1 { = stride 1 } {}
                 ? != verbose 0 {
@@ -416,14 +441,11 @@ $ `stdlib/std/process.nu`
                     ( nurl_print ( nurl_str_int stride ) )
                     ( nurl_print `. frame (MJPEG, decoded in NURL)\n` )
                 } {}
-                : !i String r ( vid_avi_extract av outdir stride )
-                ( vid_avi_close av )
-                ^ r
+                ^ ( vid_avi_extract av outdir stride )
             }
             F e → {
                 // Not an AVI we can read — if ffmpeg exists it may still
                 // cope (odd AVIs: DV, uncompressed, h264-in-avi).
-                ( string_free e )
                 ^ ( __vd_ffmpeg path outdir want )
             }
         }

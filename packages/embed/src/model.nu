@@ -76,7 +76,7 @@ $ `deps/tokenizer/src/unigram.nu`
 }
 
 : Embed {
-    * GpuKit kit
+    GpuKit kit
     EmbedCfg cfg
     GkBuf wemb
     GkBuf pemb
@@ -84,7 +84,7 @@ $ `deps/tokenizer/src/unigram.nu`
     GkBuf elnw
     GkBuf elnb
     ( Vec EmbedLayer ) layers
-    * Unigram tok
+    Unigram tok
     b has_tok
     b ok
     // the weights as a lease: `loaded` says whether kit + weights exist
@@ -98,6 +98,7 @@ $ `deps/tokenizer/src/unigram.nu`
     // allocations for BGE-M3's 389 tensors, and ~20 frees on an unload)
     ( Vec i ) arena
     ( Vec i ) arenasz
+    ( Vec GpuBuffer ) arenao  // the chunks' owners: clearing this frees them
     i arena_cur
     i arena_off
     i arena_cap
@@ -125,18 +126,18 @@ $ `deps/tokenizer/src/unigram.nu`
 // Upload one f32 tensor from the mapping to the device. On any miss or
 // dtype surprise the engine is marked broken and an empty buf returned —
 // nothing runs on a partially-loaded model.
-@ __em_up * Embed e * St s2 s name → GkBuf {
+@ __em_up * Embed e St s2 s name → GkBuf {
     : i idx ( st_find_tensor s2 name )
-    ? >= idx 0 {} { = . e ok F ^ @ GkBuf { 0 0 GK_F32 } }
-    ?? ( vec_get [StTensor] . s2 tensors idx ) {
+    ? >= idx 0 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
+    ?? ( vec_get [StTensor] ( st_tensors s2 ) idx ) {
         T t → {
-            ? == . t dtype ST_F32 {} { = . e ok F ^ @ GkBuf { 0 0 GK_F32 } }
+            ? == . t dtype ST_F32 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
             : i d ( __em_carve e * . t nelems 4 )
-            ? == d 0 { = . e ok F ^ @ GkBuf { 0 0 GK_F32 } }
+            ? == d 0 { = . e ok F ^ ( gk_buf_none GK_F32 ) }
             ( vec_push [GpuCopy] . e up_q @ GpuCopy { d # i ( st_tensor_ptr s2 t ) * . t nelems 4 } )
-            ^ @ GkBuf { d . t nelems GK_F32 }
+            ^ ( gk_buf_wrap d . t nelems GK_F32 )
         }
-        F → { = . e ok F ^ @ GkBuf { 0 0 GK_F32 } }
+        F → { = . e ok F ^ ( gk_buf_none GK_F32 ) }
     }
 }
 
@@ -149,16 +150,18 @@ $ `deps/tokenizer/src/unigram.nu`
 @ __em_carve * Embed e i bytes → i {
     : i need * / + bytes 255 256 256
     ? > need ( __EM_ARENA_CHUNK ) {
-        : GpuBuffer big ( gpu_alloc . . e kit gpu need )
+        : GpuBuffer big ( gpu_alloc ( gk_gpu . e kit ) need )
         ? == . big dptr 0 { ^ 0 } {}
         ( vec_push [i] . e arena . big dptr )
+        ( vec_push [GpuBuffer] . e arenao big )
         ( vec_push [i] . e arenasz . big bytes )
         ^ . big dptr
     } {}
     ? > + . e arena_off need . e arena_cap {
-        : GpuBuffer ch ( gpu_alloc . . e kit gpu ( __EM_ARENA_CHUNK ) )
+        : GpuBuffer ch ( gpu_alloc ( gk_gpu . e kit ) ( __EM_ARENA_CHUNK ) )
         ? == . ch dptr 0 { ^ 0 } {}
         ( vec_push [i] . e arena . ch dptr )
+        ( vec_push [GpuBuffer] . e arenao ch )
         ( vec_push [i] . e arenasz . ch bytes )
         = . e arena_cur . ch dptr
         = . e arena_off 0
@@ -170,15 +173,7 @@ $ `deps/tokenizer/src/unigram.nu`
 }
 
 @ __em_arena_free * Embed e → v {
-    : ~ i k 0
-    ~ < k ( vec_len [i] . e arena ) {
-        : ~ i d 0
-        : ~ i n 0
-        ?? ( vec_get [i] . e arena k ) { T x → { = d x } F → {} }
-        ?? ( vec_get [i] . e arenasz k ) { T x → { = n x } F → {} }
-        ( gpu_free @ GpuBuffer { d n } )
-        = k + k 1
-    }
+    ( vec_clear [GpuBuffer] . e arenao )  // the chunks go back
     ( vec_clear [i] . e arena )
     ( vec_clear [i] . e arenasz )
     = . e arena_cur 0
@@ -204,7 +199,7 @@ $ `deps/tokenizer/src/unigram.nu`
     ^ s2
 }
 
-@ __em_up_layer * Embed e * St s2 i layer s suffix → GkBuf {
+@ __em_up_layer * Embed e St s2 i layer s suffix → GkBuf {
     : String nm ( __em_lname layer suffix )
     : GkBuf b ( __em_up e s2 ( string_data nm ) )
     ( string_free nm )
@@ -229,12 +224,13 @@ $ `deps/tokenizer/src/unigram.nu`
     = . e ok T
     = . e has_tok F
     = . e loaded F
-    = . e kit # *GpuKit 0
+    = . e kit # GpuKit 0
     = . e dir ( string_from dir )
     = . e gpu gpu
     = . e layers ( vec_new [EmbedLayer] )
     = . e arena ( vec_new [i] )
     = . e arenasz ( vec_new [i] )
+    = . e arenao ( vec_new [GpuBuffer] )
     = . e arena_cur 0
     = . e arena_off 0
     = . e arena_cap 0
@@ -313,14 +309,14 @@ $ `deps/tokenizer/src/unigram.nu`
         = . e kit ( gk_open gpu )
         ? & ( gk_ok . e kit ) != 0 ( nurl_str_eq ( gk_backend . e kit ) `cuda` ) {} {
             ( gk_close . e kit )
-            = . e kit # *GpuKit 0
+            = . e kit # GpuKit 0
             ^ @ !v String { F ( string_from `embed: --gpu: not a usable CUDA device ordinal (note: CUDA order is fastest-first, not nvidia-smi's PCI order)` ) }
         }
     } {
         = . e kit ( gk_open_best )
         ? ( gk_ok . e kit ) {} {
             ( gk_close . e kit )
-            = . e kit # *GpuKit 0
+            = . e kit # GpuKit 0
             ^ @ !v String { F ( string_from `embed: no compute device (CUDA or CPU backend)` ) }
         }
     }
@@ -387,13 +383,13 @@ $ `deps/tokenizer/src/unigram.nu`
 // config, tokenizer, the model dir for the reload. Idempotent.
 @ embed_unload * Embed e → v {
     ? . e loaded {} {
-        ? != # i . e kit 0 { ( gk_close . e kit ) = . e kit # *GpuKit 0 } {}
+        ? != # i . e kit 0 { ( gk_close . e kit ) = . e kit # GpuKit 0 } {}
         ^ {}
     }
     ( __em_arena_free e )
     ( vec_clear [EmbedLayer] . e layers )
     ( gk_close . e kit )
-    = . e kit # *GpuKit 0
+    = . e kit # GpuKit 0
     = . e loaded F
 }
 
@@ -439,6 +435,7 @@ $ `deps/tokenizer/src/unigram.nu`
     ( vec_free [EmbedLayer] . e layers )
     ( vec_free [i] . e arena )
     ( vec_free [i] . e arenasz )
+    ( vec_free [GpuBuffer] . e arenao )
     ( vec_free [GpuCopy] . e up_q )
     ( string_free . e dir )
     ? . e has_tok { ( uni_free . e tok ) } {}

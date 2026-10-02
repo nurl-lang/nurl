@@ -26,7 +26,7 @@
 //   ( xml_set_attr x name val )  → v              set/replace (builder)
 //   ( xml_add_child x child )    → v              append (CONSUMES child)
 //   ( xml_stringify x )          → String         serialize (entity-encoded)
-//   ( xml_free x )               → v
+//   ( xml_free x )               → v   early release (optional)
 //
 //   ( xml_err_name e )           → s
 //
@@ -377,17 +377,12 @@ $ `stdlib/core/vec.nu`
 }
 
 @ xml_add_child Xml x Xml child → v {
-    ? == . x kind 1 { ( vec_push [Xml] . x children child ) } { ( xml_free child ) }
+    ? == . x kind 1 { ( vec_push [Xml] . x children child ) } {}
 }
 
 // ── Free ──────────────────────────────────────────────────────────────
 
-@ xml_free sink Xml x → v {
-    ( string_free . x text )
-    ( string_free . x tag )
-    ( vec_free_with [XmlAttr] . x attrs \ XmlAttr a → v { ( string_free . a name ) ( string_free . a value ) } )
-    ( vec_free_with [Xml] . x children \ Xml c → v { ( xml_free c ) } )
-}
+@ xml_free sink Xml x → v {}
 
 // ── Serialize ─────────────────────────────────────────────────────────
 
@@ -480,21 +475,18 @@ $ `stdlib/core/vec.nu`
                 : String aname ( __xml_substr src nstart - p nstart )
                 = p ( __xml_skip_ws src p n )
                 ? != ( nurl_str_at src n p ) 61 {  // '='
-                    ( string_free aname )
                     = done T
                 } {
                     = p + p 1
                     = p ( __xml_skip_ws src p n )
                     : i q ( nurl_str_at src n p )
                     ? & != q 34 != q 39 {  // not a quote
-                        ( string_free aname )
                         = done T
                     } {
                         = p + p 1
                         : i vstart p
                         ~ & < p n != ( nurl_str_at src n p ) q { = p + p 1 }
                         ? >= p n {
-                            ( string_free aname )
                             = done T
                         } {
                             : String aval ( __xml_decode_text src vstart - p vstart )
@@ -526,8 +518,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec XmlAttr ) attrs ( vec_new [XmlAttr] )
     : i close ( __xml_parse_attrs src p n attrs )
     ? < close 0 {
-        ( string_free tag )
-        ( vec_free_with [XmlAttr] attrs \ XmlAttr a → v { ( string_free . a name ) ( string_free . a value ) } )
         ^ @ __XmlNode { ( __xml_empty ) pos -1 }
     } {}
     : ( Vec Xml ) children ( vec_new [Xml] )
@@ -548,7 +538,7 @@ $ `stdlib/core/vec.nu`
                 // Vecs — and nobody else will free it. Left alone it
                 // leaked once per element: every child loop ends on a
                 // `</` that comes back as an empty node.
-                ? <= . nd ok 0 { ( xml_free . nd node ) } {}
+                ? <= . nd ok 0 {} {}
                 ? < . nd ok 0 {
                     = cerr T
                     = cdone T
@@ -571,9 +561,6 @@ $ `stdlib/core/vec.nu`
             }
         }
         ? cerr {
-            ( string_free tag )
-            ( vec_free_with [XmlAttr] attrs \ XmlAttr a → v { ( string_free . a name ) ( string_free . a value ) } )
-            ( vec_free_with [Xml] children \ Xml c → v { ( xml_free c ) } )
             ^ @ __XmlNode { ( __xml_empty ) pos -1 }
         } {}
         : i gt ( __xml_find_lit src cp n `>` )
@@ -612,7 +599,6 @@ $ `stdlib/core/vec.nu`
     ? != ( nurl_str_at src n p ) 60 { ^ @ !Xml XmlErr { F @ XmlErr { XmlSyntax } } } {}
     : __XmlNode nd ( __xml_parse_element src p n 0 )
     ? < . nd ok 0 {
-        ( xml_free . nd node )
         ^ @ !Xml XmlErr { F @ XmlErr { XmlSyntax } }
     } {}
     ^ @ !Xml XmlErr { T . nd node }

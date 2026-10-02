@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+arm block yields a Vec: 0
+arm yields a call: 0
+nested in ?: 0
+arm yields its binding: 0
+498

@@ -25,7 +25,9 @@
 //   ( tset_new ) / ( tset_add t n s )   named-template set (enables include)
 //   ( tset_render t name ctx )          → !String String
 //   ( tpl_render_with t src ctx )       → !String String   one-shot + includes
-//   ( tset_free t )
+//
+// A TplSet is a handle: every copy is the same set, and its last owner
+// releases it — nothing to free (`tset_free` is an optional early release).
 //
 // The error payload is an owned String: "template error at line L, col C: …".
 // Known limits (v0.1): `}}`/`%}` inside a string literal ends the tag;
@@ -35,22 +37,34 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Template set (named templates, include targets) ─────────────────
 
-: TplSet {
+: TplSetImpl {
     ( Vec String ) names
     ( Vec String ) srcs
 }
 
-@ tset_new → *TplSet {
-    : *TplSet t # *TplSet ( nurl_alloc Z TplSet )
-    = . t names ( vec_new [String] )
-    = . t srcs ( vec_new [String] )
-    ^ t
+// A TplSet is a handle on its names and sources in an rcbox
+// (stdlib/core/rcbox.nu): every copy is the same set, and the last owner
+// releases it.
+: TplSet { s ctl }
+
+@ TplSet_share TplSet h → TplSet { ^ @ TplSet { # s ( rcbox_share # i . h ctl ) } }
+
+@ TplSet_drop sink TplSet h → v {
+    ( mem_forget h )
+    ( rcbox_release [TplSetImpl] # i . h ctl )
 }
 
-@ __tset_find * TplSet t s name → i {
+@ __TplSet_ptr TplSet h → *TplSetImpl { ^ ( rcbox_ptr [TplSetImpl] # i . h ctl ) }
+
+@ tset_new → TplSet {
+    ^ @ TplSet { # s ( rcbox_new [TplSetImpl] @ TplSetImpl { ( vec_new [String] ) ( vec_new [String] ) } ) }
+}
+
+@ __tset_find * TplSetImpl t s name → i {
     : i n ( vec_len [String] . t names )
     : ~ i k 0
     : ~ i found - 0 1
@@ -65,10 +79,11 @@ $ `stdlib/ext/json.nu`
 }
 
 // Register (or replace) a named template. Copies both arguments.
-@ tset_add * TplSet t s name s tsrc → v {
+@ tset_add TplSet t__h s name s tsrc → v {
+    : *TplSetImpl t ( __TplSet_ptr t__h )
     : i idx ( __tset_find t name )
     ? >= idx 0 {
-        ?? ( vec_get [String] . t srcs idx ) { T old → { ( string_free old ) } F _ → {} }
+        // vec_set drops the source it replaces
         : b _r ( vec_set [String] . t srcs idx ( string_from tsrc ) )
     } {
         ( vec_push [String] . t names ( string_from name ) )
@@ -76,22 +91,20 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ tset_has * TplSet t s name → b {
-    ^ >= ( __tset_find t name ) 0
+@ tset_has TplSet t s name → b {
+    ^ >= ( __tset_find ( __TplSet_ptr t ) name ) 0
 }
 
-@ tset_free sink * TplSet t → v {
-    : ( @ v String ) sdrop \ String x → v { ( string_free x ) }
-    ( vec_free_with [String] . t names sdrop )
-    ( vec_free_with [String] . t srcs sdrop )
-    ( nurl_free # s t )
-}
+// Let go of `t` now rather than at the end of its owner's scope.
+@ tset_free sink TplSet t → v {}
 
 // ── Renderer state ───────────────────────────────────────────────────
 //
 // Heap-allocated so the mutually recursive block renderer can mutate
 // `pos` and the scope stack without threading state through returns
-// (same shape as ext/json.nu's JsonParser). One TplR lives per render.
+// (same shape as ext/json.nu's JsonParser). One TplR lives per render,
+// in an rcbox behind a handle the entry point holds: its strings and
+// vectors are dropped with the handle. `src` is the caller's text, a view.
 //
 // Value slots A and B hold the result of expression evaluation
 // (kind: 0 null/missing, 1 bool, 2 number, 3 string, 4 array, 5 object).
@@ -99,11 +112,11 @@ $ `stdlib/ext/json.nu`
 // needs no bare Json field; all nodes are borrows into `ctxv[0]`, a copy of
 // the caller's context that the render owns.
 
-: TplR {
+: TplRImpl {
     s src
     i len
     i pos
-    i setp  // *TplSet as an integer; 0 = no set (include fails)
+    i setp  // *TplSetImpl as an integer; 0 = no set (include fails)
     i depth  // include nesting guard
     i tag_a  // {% elif %} expression span, handed to the if-handler
     i tag_b
@@ -131,8 +144,19 @@ $ `stdlib/ext/json.nu`
     ( Vec Json ) vb_node
 }
 
-@ __tpl_new s tsrc i sp Json jctx → *TplR {
-    : *TplR r # *TplR ( nurl_alloc Z TplR )
+// The render state's handle (private to this module).
+: TplR { s ctl }
+
+@ TplR_drop sink TplR h → v {
+    ( mem_forget h )
+    ( rcbox_release [TplRImpl] # i . h ctl )
+}
+
+@ __TplR_ptr TplR h → *TplRImpl { ^ ( rcbox_ptr [TplRImpl] # i . h ctl ) }
+
+@ __tpl_new s tsrc i sp Json jctx → TplR {
+    : i r__box ( rcbox_zero [TplRImpl] )
+    : *TplRImpl r ( rcbox_ptr [TplRImpl] r__box )
     = . r src tsrc
     = . r len ( nurl_str_len tsrc )
     = . r pos 0
@@ -163,28 +187,11 @@ $ `stdlib/ext/json.nu`
     = . r vb_num 0.0
     = . r vb_str ( string_with_cap 32 )
     = . r vb_node ( vec_new [Json] )
-    ^ r
-}
-
-@ __tpl_free sink * TplR r b free_out → v {
-    ( string_free . r err )
-    ( string_free . r key )
-    ( string_free . r va_str )
-    ( string_free . r vb_str )
-    ? free_out { ( string_free . r out ) } {}
-    : ( @ v String ) sdrop \ String x → v { ( string_free x ) }
-    ( vec_free_with [String] . r sc_names sdrop )
-    ( vec_free [Json] . r sc_vals )
-    ( vec_free [Json] . r ctxv )
-    ( vec_free [Json] . r va_node )
-    ( vec_free [Json] . r vb_node )
-    ( vec_free [i] . r lp_idx )
-    ( vec_free [i] . r lp_len )
-    ( nurl_free # s r )
+    ^ @ TplR { # s r__box }
 }
 
 // Record the first failure; later ones are ignored (the first is the cause).
-@ __tpl_fail * TplR r i fpos s msg → v {
+@ __tpl_fail * TplRImpl r i fpos s msg → v {
     ? . r failed {} {
         = . r failed T
         = . r err_pos fpos
@@ -192,7 +199,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ __tpl_errmsg * TplR r → String {
+@ __tpl_errmsg * TplRImpl r → String {
     : ~ i p . r err_pos
     ? > p . r len { = p . r len } {}
     : ~ i line 1
@@ -215,7 +222,7 @@ $ `stdlib/ext/json.nu`
 
 // ── Byte helpers ─────────────────────────────────────────────────────
 
-@ __tpl_at * TplR r i k → i {
+@ __tpl_at * TplRImpl r i k → i {
     ? | < k 0 >= k . r len { ^ - 0 1 } {}
     : *u bp # *u . r src
     ^ & 255 # i . bp k
@@ -245,14 +252,14 @@ $ `stdlib/ext/json.nu`
     ^ F
 }
 
-@ __tpl_ws * TplR r i k i bnd → i {
+@ __tpl_ws * TplRImpl r i k i bnd → i {
     : ~ i j k
     ~ & < j bnd ( __tpl_is_ws ( __tpl_at r j ) ) { = j + j 1 }
     ^ j
 }
 
 // First index >= from where src[j] == c1 and src[j+1] == c2; -1 if none.
-@ __tpl_find2 * TplR r i from i c1 i c2 → i {
+@ __tpl_find2 * TplRImpl r i from i c1 i c2 → i {
     : ~ i j from
     : ~ i found - 0 1
     ~ & < j - . r len 1 < found 0 {
@@ -262,7 +269,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Does span [a,b) equal the literal `lit`?
-@ __tpl_kw_is * TplR r i a i bnd s lit → b {
+@ __tpl_kw_is * TplRImpl r i a i bnd s lit → b {
     : i n ( nurl_str_len lit )
     ? != - bnd a n { ^ F } {}
     : *u lp # *u lit
@@ -275,14 +282,14 @@ $ `stdlib/ext/json.nu`
 }
 
 // Does span [a,b) begin with the literal `lit`?
-@ __tpl_span_starts * TplR r i a i bnd s lit → b {
+@ __tpl_span_starts * TplRImpl r i a i bnd s lit → b {
     : i n ( nurl_str_len lit )
     ? < - bnd a n { ^ F } {}
     ^ ( __tpl_kw_is r a + a n lit )
 }
 
 // Does span [a,a+n) equal the String `nm`?
-@ __tpl_seg_eq * TplR r i a i n String nm → b {
+@ __tpl_seg_eq * TplRImpl r i a i n String nm → b {
     ? != ( string_len nm ) n { ^ F } {}
     : s nd ( string_data nm )
     : *u np # *u nd
@@ -295,7 +302,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // scratch key := src[a, a+n)
-@ __tpl_key_set * TplR r i a i n → v {
+@ __tpl_key_set * TplRImpl r i a i n → v {
     ( string_clear . r key )
     : ~ i k 0
     ~ < k n {
@@ -305,7 +312,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Parse span [a,b) as a non-negative decimal integer; -1 when not one.
-@ __tpl_span_int * TplR r i a i bnd → i {
+@ __tpl_span_int * TplRImpl r i a i bnd → i {
     ? >= a bnd { ^ - 0 1 } {}
     : ~ i k a
     : ~ i acc 0
@@ -341,7 +348,7 @@ $ `stdlib/ext/json.nu`
 // root context object. Numeric segments index into arrays. Returns a
 // BORROW into the context; F = missing anywhere along the path.
 
-@ __tpl_resolve * TplR r i pa i pb → ?Json {
+@ __tpl_resolve * TplRImpl r i pa i pb → ?Json {
     : ~ i sp pa
     : ~ Json cur ( json_null )
     : ~ b have F
@@ -412,7 +419,7 @@ $ `stdlib/ext/json.nu`
 
 // ── Expression evaluation (value slots) ──────────────────────────────
 
-@ __tpl_slot_reset * TplR r → v {
+@ __tpl_slot_reset * TplRImpl r → v {
     = . r va_kind 0
     = . r va_bool F
     = . r va_num 0.0
@@ -421,7 +428,7 @@ $ `stdlib/ext/json.nu`
     ( vec_clear [Json] . r va_node )
 }
 
-@ __tpl_slot_a_to_b * TplR r → v {
+@ __tpl_slot_a_to_b * TplRImpl r → v {
     = . r vb_kind . r va_kind
     = . r vb_bool . r va_bool
     = . r vb_num . r va_num
@@ -434,7 +441,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ __tpl_slot_from_node * TplR r Json node → v {
+@ __tpl_slot_from_node * TplRImpl r Json node → v {
     ? ( json_is_null node ) { = . r va_kind 0 } {
         ? ( json_is_bool node ) {
             = . r va_kind 1
@@ -460,7 +467,7 @@ $ `stdlib/ext/json.nu`
 
 // Evaluate one primary (path / literal / loop.*) from span [a,bnd) into
 // slot A. Sets e_end to one past the consumed token.
-@ __tpl_eval_primary * TplR r i a i bnd → v {
+@ __tpl_eval_primary * TplRImpl r i a i bnd → v {
     ( __tpl_slot_reset r )
     : i k ( __tpl_ws r a bnd )
     ? >= k bnd { ( __tpl_fail r a `empty expression` ) } {
@@ -542,7 +549,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ __tpl_truthy_a * TplR r → b {
+@ __tpl_truthy_a * TplRImpl r → b {
     : i kd . r va_kind
     ? == kd 1 { ^ . r va_bool } {}
     ? == kd 2 { ^ != . r va_num 0.0 } {}
@@ -555,7 +562,7 @@ $ `stdlib/ext/json.nu`
     ^ == kd 5
 }
 
-@ __tpl_eq_ab * TplR r → b {
+@ __tpl_eq_ab * TplRImpl r → b {
     ? != . r va_kind . r vb_kind { ^ F } {}
     : i kd . r va_kind
     ? == kd 0 { ^ T } {}
@@ -566,7 +573,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Full condition: [not] primary [(==|!=) primary]
-@ __tpl_truth * TplR r i a i bnd → b {
+@ __tpl_truth * TplRImpl r i a i bnd → b {
     : i k ( __tpl_ws r a bnd )
     : ~ i tn k
     ~ & < tn bnd ( __tpl_is_pathb ( __tpl_at r tn ) ) { = tn + tn 1 }
@@ -596,7 +603,7 @@ $ `stdlib/ext/json.nu`
 
 // ── Output tag: {{ expr | filters }} ─────────────────────────────────
 
-@ __tpl_apply_filter * TplR r i fa i fe → v {
+@ __tpl_apply_filter * TplRImpl r i fa i fe → v {
     ? ( __tpl_kw_is r fa fe `raw` ) { = . r va_raw T } {
         ? ( __tpl_kw_is r fa fe `upper` ) {
             ? | == . r va_kind 3 == . r va_kind 2 {
@@ -644,7 +651,7 @@ $ `stdlib/ext/json.nu`
                     } } } } }
 }
 
-@ __tpl_emit_a * TplR r → v {
+@ __tpl_emit_a * TplRImpl r → v {
     : i kd . r va_kind
     ? == kd 1 {
         ? . r va_bool { ( string_push_str . r out `true` ) } { ( string_push_str . r out `false` ) }
@@ -667,7 +674,7 @@ $ `stdlib/ext/json.nu`
                 } {} } } }
 }
 
-@ __tpl_out_tag * TplR r i a i bnd → v {
+@ __tpl_out_tag * TplRImpl r i a i bnd → v {
     ( __tpl_eval_primary r a bnd )
     ? . r failed {} {
         : ~ i k . r e_end
@@ -695,7 +702,7 @@ $ `stdlib/ext/json.nu`
 
 // {% if e %} … {% elif e %} … {% else %} … {% end %}
 // Skipping is rendering with emit=F, so nesting stays balanced.
-@ __tpl_do_if * TplR r i ea i eb b emit → v {
+@ __tpl_do_if * TplRImpl r i ea i eb b emit → v {
     : ~ b cond F
     ? emit { = cond ( __tpl_truth r ea eb ) } {}
     : ~ b handled cond
@@ -719,7 +726,7 @@ $ `stdlib/ext/json.nu`
 // {% for NAME in PATH %} … {% end %}
 // The body span is re-scanned once per item; the loop variable and a
 // loop frame (index/len) are pushed for the duration.
-@ __tpl_do_for * TplR r i ea i eb b emit → v {
+@ __tpl_do_for * TplRImpl r i ea i eb b emit → v {
     ? == emit F {
         : i t ( __tpl_run r F )
         ? & != t 1 == . r failed F {
@@ -791,7 +798,7 @@ $ `stdlib/ext/json.nu`
 
 // {% include 'name' %} — renders a set member in the current context and
 // scope. Only reached with emit=T (skip mode skips the tag wholesale).
-@ __tpl_do_include * TplR r i a i bnd → v {
+@ __tpl_do_include * TplRImpl r i a i bnd → v {
     : i k ( __tpl_ws r a bnd )
     : i qc ( __tpl_at r k )
     ? | == qc 39 == qc 34 {
@@ -808,7 +815,7 @@ $ `stdlib/ext/json.nu`
                     ( __tpl_fail r k `include depth limit exceeded (cycle?)` )
                 } {
                     ( __tpl_key_set r + k 1 - e + k 1 )
-                    : *TplSet t # *TplSet . r setp
+                    : *TplSetImpl t # *TplSetImpl . r setp
                     : i idx ( __tset_find t ( string_data . r key ) )
                     ? < idx 0 { ( __tpl_fail r k `include: template not found` ) } {
                         : ~ s isrc # s 0
@@ -846,7 +853,7 @@ $ `stdlib/ext/json.nu`
 // terminator. Returns 0 = EOF, 1 = {% end %}, 2 = {% else %},
 // 3 = {% elif %} (expression span left in tag_a/tag_b).
 
-@ __tpl_run * TplR r b emit → i {
+@ __tpl_run * TplRImpl r b emit → i {
     : ~ i term - 0 1
     ~ & == term - 0 1 == . r failed F {
         : i p0 . r pos
@@ -921,18 +928,17 @@ $ `stdlib/ext/json.nu`
 // ── Entry points ─────────────────────────────────────────────────────
 
 @ __tpl_render_ptr i sp s tsrc Json jctx → !String String {
-    : *TplR r ( __tpl_new tsrc sp jctx )
+    : TplR h ( __tpl_new tsrc sp jctx )
+    : *TplRImpl r ( __TplR_ptr h )
     : i term ( __tpl_run r T )
     ? & != term 0 == . r failed F {
         ( __tpl_fail r . r pos `'{% end %}' or '{% else %}' without an open block` )
     } {}
-    ? . r failed {
-        : String m ( __tpl_errmsg r )
-        ( __tpl_free r T )
-        ^ @ !String String { F m }
-    } {}
+    ? . r failed { ^ @ !String String { F ( __tpl_errmsg r ) } } {}
+    // The output leaves the state (which goes with `h`) for the caller.
     : String rendered . r out
-    ( __tpl_free r F )
+    ( mem_take rendered )
+    = . r out # String 0
     ^ @ !String String { T rendered }
 }
 
@@ -943,12 +949,13 @@ $ `stdlib/ext/json.nu`
 }
 
 // Same, with a TplSet so `{% include 'name' %}` resolves.
-@ tpl_render_with * TplSet t s tsrc Json jctx → !String String {
-    ^ ( __tpl_render_ptr # i t tsrc jctx )
+@ tpl_render_with TplSet t s tsrc Json jctx → !String String {
+    ^ ( __tpl_render_ptr # i ( __TplSet_ptr t ) tsrc jctx )
 }
 
 // Render a named member of the set.
-@ tset_render * TplSet t s name Json jctx → !String String {
+@ tset_render TplSet t__h s name Json jctx → !String String {
+    : *TplSetImpl t ( __TplSet_ptr t__h )
     : i idx ( __tset_find t name )
     ? < idx 0 {
         : String m ( string_from `template not found: ` )

@@ -34,7 +34,7 @@
 //     reinterpretation — NURL has no unsigned JSON number type.
 //
 // Ownership: msgpack_encode returns an owned `Vec[u]`; msgpack_decode
-// returns an owned `Json` (free with json_free). Both BORROW their input.
+// returns an owned `Json` (dropped with its owner). Both BORROW their input.
 
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/string.nu`
@@ -246,27 +246,17 @@ $ `stdlib/std/bytes.nu`
 // ── Decoder ─────────────────────────────────────────────────────────
 
 // Cursor over the input buffer. `data` is a borrowed pointer into the
-// caller's Vec — valid for the whole msgpack_decode call.
+// caller's Vec — valid for the whole msgpack_decode call. The cursor is a
+// local of msgpack_decode that the readers advance in place (`inout`):
+// nothing to allocate, nothing to release.
 : MsgpackDec { s data i len i pos }
 
-@ __md_new ( Vec u ) v → *MsgpackDec {
-    : *MsgpackDec p # *MsgpackDec ( nurl_alloc Z MsgpackDec )
-    = . p data # s ( vec_data [u] v )
-    = . p len ( vec_len [u] v )
-    = . p pos 0
-    ^ p
-}
-
-@ __md_free sink * MsgpackDec p → v {
-    ( nurl_free # s p )
-}
-
-@ __md_remaining * MsgpackDec p → i {
+@ __md_remaining inout MsgpackDec p → i {
     ^ - . p len . p pos
 }
 
 // Read one byte (0..255) and advance. Caller has checked availability.
-@ __md_u8 * MsgpackDec p → i {
+@ __md_u8 inout MsgpackDec p → i {
     : *u d # *u . p data
     : i idx . p pos
     : i bb & 255 # i . d idx
@@ -276,7 +266,7 @@ $ `stdlib/std/bytes.nu`
 
 // Read `nbytes` big-endian into an unsigned accumulator. Caller has
 // checked availability.
-@ __md_read_len * MsgpackDec p i nbytes → i {
+@ __md_read_len inout MsgpackDec p i nbytes → i {
     : ~ i val 0
     : ~ i k 0
     ~ < k nbytes {
@@ -287,28 +277,24 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ msgpack_decode ( Vec u ) v → !Json MsgpackErr {
-    : *MsgpackDec p ( __md_new v )
+    : ~ MsgpackDec p @ MsgpackDec { # s ( vec_data [u] v ) ( vec_len [u] v ) 0 }
     : !Json MsgpackErr r ( __md_value p 0 )
     ?? r {
         T jv → {
             // A msgpack document is exactly one value — trailing bytes
             // mean a malformed input.
             ? > ( __md_remaining p ) 0 {
-                ( json_free jv )
-                ( __md_free p )
                 ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackOther } }
             } {}
-            ( __md_free p )
             ^ @ !Json MsgpackErr { T jv }
         }
         F e → {
-            ( __md_free p )
             ^ @ !Json MsgpackErr { F e }
         }
     }
 }
 
-@ __md_value * MsgpackDec p i depth → !Json MsgpackErr {
+@ __md_value inout MsgpackDec p i depth → !Json MsgpackErr {
     ? > depth MP_MAX_DEPTH {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackDepth } }
     } {}
@@ -357,14 +343,14 @@ $ `stdlib/std/bytes.nu`
     ^ @ MsgpackErr { MsgpackBadType }
 }
 
-@ __md_read_uint * MsgpackDec p i nbytes → !Json MsgpackErr {
+@ __md_read_uint inout MsgpackDec p i nbytes → !Json MsgpackErr {
     ? < ( __md_remaining p ) nbytes {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
     ^ @ !Json MsgpackErr { T ( json_int ( __md_read_len p nbytes ) ) }
 }
 
-@ __md_read_int * MsgpackDec p i nbytes → !Json MsgpackErr {
+@ __md_read_int inout MsgpackDec p i nbytes → !Json MsgpackErr {
     ? < ( __md_remaining p ) nbytes {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
@@ -380,21 +366,21 @@ $ `stdlib/std/bytes.nu`
     ^ @ !Json MsgpackErr { T ( json_int val ) }
 }
 
-@ __md_read_f32 * MsgpackDec p → !Json MsgpackErr {
+@ __md_read_f32 inout MsgpackDec p → !Json MsgpackErr {
     ? < ( __md_remaining p ) 4 {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
     ^ @ !Json MsgpackErr { T ( json_float ( nurl_f32_from_bits ( __md_read_len p 4 ) ) ) }
 }
 
-@ __md_read_f64 * MsgpackDec p → !Json MsgpackErr {
+@ __md_read_f64 inout MsgpackDec p → !Json MsgpackErr {
     ? < ( __md_remaining p ) 8 {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
     ^ @ !Json MsgpackErr { T ( json_float ( nurl_f64_from_bits ( __md_read_len p 8 ) ) ) }
 }
 
-@ __md_read_str * MsgpackDec p i len → !Json MsgpackErr {
+@ __md_read_str inout MsgpackDec p i len → !Json MsgpackErr {
     ? < ( __md_remaining p ) len {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
@@ -407,14 +393,14 @@ $ `stdlib/std/bytes.nu`
     ^ @ !Json MsgpackErr { T @ Json { JStr s } }
 }
 
-@ __md_read_str_n * MsgpackDec p i lenbytes → !Json MsgpackErr {
+@ __md_read_str_n inout MsgpackDec p i lenbytes → !Json MsgpackErr {
     ? < ( __md_remaining p ) lenbytes {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
     ^ ( __md_read_str p ( __md_read_len p lenbytes ) )
 }
 
-@ __md_read_arr * MsgpackDec p i count i depth → !Json MsgpackErr {
+@ __md_read_arr inout MsgpackDec p i count i depth → !Json MsgpackErr {
     : ( Vec Json ) elems ( vec_new [Json] )
     : ~ i k 0
     : ~ b failed F
@@ -427,20 +413,19 @@ $ `stdlib/std/bytes.nu`
         = k + k 1
     }
     ? failed {
-        ( __mp_free_json_vec elems )
         ^ @ !Json MsgpackErr { F err }
     } {}
     ^ @ !Json MsgpackErr { T @ Json { JArr elems } }
 }
 
-@ __md_read_arr_n * MsgpackDec p i lenbytes i depth → !Json MsgpackErr {
+@ __md_read_arr_n inout MsgpackDec p i lenbytes i depth → !Json MsgpackErr {
     ? < ( __md_remaining p ) lenbytes {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
     ^ ( __md_read_arr p ( __md_read_len p lenbytes ) depth )
 }
 
-@ __md_read_map * MsgpackDec p i count i depth → !Json MsgpackErr {
+@ __md_read_map inout MsgpackDec p i count i depth → !Json MsgpackErr {
     : ( Vec Json ) elems ( vec_new [Json] )
     : ~ i k 0
     : ~ b failed F
@@ -457,13 +442,11 @@ $ `stdlib/std/bytes.nu`
                         F e → {
                             = failed T
                             = err e
-                            ( json_free jk )
                         }
                     }
                 } {
                     = failed T
                     = err @ MsgpackErr { MsgpackUnsupported }
-                    ( json_free jk )
                 }
             }
             F e → { = failed T = err e }
@@ -471,20 +454,14 @@ $ `stdlib/std/bytes.nu`
         = k + k 1
     }
     ? failed {
-        ( __mp_free_json_vec elems )
         ^ @ !Json MsgpackErr { F err }
     } {}
     ^ @ !Json MsgpackErr { T @ Json { JObj elems } }
 }
 
-@ __md_read_map_n * MsgpackDec p i lenbytes i depth → !Json MsgpackErr {
+@ __md_read_map_n inout MsgpackDec p i lenbytes i depth → !Json MsgpackErr {
     ? < ( __md_remaining p ) lenbytes {
         ^ @ !Json MsgpackErr { F @ MsgpackErr { MsgpackTruncated } }
     } {}
     ^ ( __md_read_map p ( __md_read_len p lenbytes ) depth )
-}
-
-@ __mp_free_json_vec ( Vec Json ) v → v {
-    : ( @ v Json ) drop \ Json e → v { ( json_free e ) }
-    ( vec_free_with [Json] v drop )
 }

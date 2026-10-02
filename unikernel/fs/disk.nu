@@ -193,13 +193,12 @@ $ `stdlib/fs/fatfmt.nu`
 @ nurl_disk_readdir_name i h s buf i cap → i {
     : String nm ( string_new )
     : i attr ( fatfs_readdir_attr h nm )
-    ? < attr 0 { ( string_free nm ) ^ 0 } {}
+    ? < attr 0 { ^ 0 } {}
     : i n ( string_len nm )
-    ? >= n cap { ( string_free nm ) ^ - 0 1 } {}
+    ? >= n cap { ^ - 0 1 } {}
     ( nurl_memcpy buf ( string_data nm ) n )
     ( nurl_memset # s + # i buf n 0 1 )
     = g_last_attr attr
-    ( string_free nm )
     ^ n
 }
 

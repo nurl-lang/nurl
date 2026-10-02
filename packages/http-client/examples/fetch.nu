@@ -34,7 +34,7 @@ $ `../src/http_client.nu`
     } {}
     : String url ( __fetch_at pos 0 )
 
-    : *HttpClient c ( http_client_new )
+    : HttpClient c ( http_client_new )
     ? ( args_present ap `insecure` ) { ( http_client_set_verify c F ) } {}
     ? ( args_present ap `h3` ) { ( http_client_set_h3 c 1 ) } {}
 
@@ -58,7 +58,6 @@ $ `../src/http_client.nu`
             = rc 1
         }
     }
-    ( http_client_free c )
     ( args_free ap )
     ^ rc
 }

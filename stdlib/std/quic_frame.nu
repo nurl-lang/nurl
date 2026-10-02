@@ -192,7 +192,7 @@ $ `stdlib/core/rcbox.nu`
 @ __qf_fail → QuicFrame { ^ @ QuicFrame { # s 0 } }
 
 // Read a varint at `. f next`, advancing; -1 when truncated.
-@ __qf_vi * QuicFrameImpl f ( Vec u ) buf → i {
+@ __qf_vi inout QuicFrameImpl f ( Vec u ) buf → i {
     : i v ( quic_varint_read buf . f next )
     ? < v 0 { ^ -1 } {}
     = . f next + . f next ( quic_varint_len_at buf . f next )
@@ -200,7 +200,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Copy `n` bytes at `. f next` into `. f bytes`, advancing; F if short.
-@ __qf_take * QuicFrameImpl f ( Vec u ) buf i n → b {
+@ __qf_take inout QuicFrameImpl f ( Vec u ) buf i n → b {
     ? | < n 0 > + . f next n ( vec_len [u] buf ) { ^ F } {}
     ? > n 0 {
         : *u p ( vec_data [u] buf )
@@ -216,7 +216,7 @@ $ `stdlib/core/rcbox.nu`
     : i ft ( quic_varint_read buf off )
     ? < ft 0 { ^ ( __qf_fail ) } {}
     : QuicFrame h ( __qf_new ft )
-    : *QuicFrameImpl f ( __QuicFrame_ptr h )
+    : ~ * QuicFrameImpl f ( __QuicFrame_ptr h )
     = . f next + off ( quic_varint_len_at buf off )
     ? == ft 0 {
         // PADDING: swallow the whole run so a 1200-byte Initial is one frame.
@@ -225,17 +225,17 @@ $ `stdlib/core/rcbox.nu`
     } {}
     ? == ft 1 { ^ h } {}
     ? | == ft 2 == ft 3 {
-        = . f a ( __qf_vi f buf )
-        = . f b ( __qf_vi f buf )
-        : i count ( __qf_vi f buf )
-        = . f c ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
+        = . f b ( __qf_vi . f 0 buf )
+        : i count ( __qf_vi . f 0 buf )
+        = . f c ( __qf_vi . f 0 buf )
         ? | | | < . f a 0 < . f b 0 < count 0 < . f c 0 { ^ ( __qf_fail ) } {}
         ? > . f c . f a { ^ ( __qf_fail ) } {}
         : ~ i smallest - . f a . f c
         : ~ i i 0
         ~ < i count {
-            : i gap ( __qf_vi f buf )
-            : i len ( __qf_vi f buf )
+            : i gap ( __qf_vi . f 0 buf )
+            : i len ( __qf_vi . f 0 buf )
             ? | < gap 0 < len 0 { ^ ( __qf_fail ) } {}
             // Each range must fit below the previous one (§19.3.1).
             : i largest_next - - smallest gap 2
@@ -249,7 +249,7 @@ $ `stdlib/core/rcbox.nu`
             = . f d 1
             : ~ i e 0
             ~ < e 3 {
-                : i v ( __qf_vi f buf )
+                : i v ( __qf_vi . f 0 buf )
                 ? < v 0 { ^ ( __qf_fail ) } {}
                 ( vec_push [i] . f ints v )
                 = e + e 1
@@ -258,65 +258,65 @@ $ `stdlib/core/rcbox.nu`
         ^ h
     } {}
     ? == ft 4 {
-        = . f a ( __qf_vi f buf )
-        = . f b ( __qf_vi f buf )
-        = . f c ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
+        = . f b ( __qf_vi . f 0 buf )
+        = . f c ( __qf_vi . f 0 buf )
         ? | | < . f a 0 < . f b 0 < . f c 0 { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? == ft 5 {
-        = . f a ( __qf_vi f buf )
-        = . f b ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
+        = . f b ( __qf_vi . f 0 buf )
         ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? == ft 6 {
-        = . f a ( __qf_vi f buf )
-        = . f b ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
+        = . f b ( __qf_vi . f 0 buf )
         ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
         ? > + . f a . f b ( quic_varint_max ) { ^ ( __qf_fail ) } {}
-        ? ! ( __qf_take f buf . f b ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take . f 0 buf . f b ) { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? == ft 7 {
-        : i tl ( __qf_vi f buf )
+        : i tl ( __qf_vi . f 0 buf )
         ? <= tl 0 { ^ ( __qf_fail ) } {}
-        ? ! ( __qf_take f buf tl ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take . f 0 buf tl ) { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? ( quic_frame_is_stream ft ) {
-        = . f a ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
         ? < . f a 0 { ^ ( __qf_fail ) } {}
-        ? != & ft 4 0 { = . f b ( __qf_vi f buf ) ? < . f b 0 { ^ ( __qf_fail ) } {} } {}
+        ? != & ft 4 0 { = . f b ( __qf_vi . f 0 buf ) ? < . f b 0 { ^ ( __qf_fail ) } {} } {}
         : ~ i len - n . f next
-        ? != & ft 2 0 { = len ( __qf_vi f buf ) ? < len 0 { ^ ( __qf_fail ) } {} } {}
+        ? != & ft 2 0 { = len ( __qf_vi . f 0 buf ) ? < len 0 { ^ ( __qf_fail ) } {} } {}
         = . f c len
         = . f d ? != & ft 1 0 1 0
         ? > + . f b len ( quic_varint_max ) { ^ ( __qf_fail ) } {}
-        ? ! ( __qf_take f buf len ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take . f 0 buf len ) { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? | | == ft 16 == ft 20 == ft 18 {
-        = . f a ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
         ? < . f a 0 { ^ ( __qf_fail ) } {}
         ? == ft 18 { = . f b 1 } {}
         ^ h
     } {}
     ? | | == ft 19 == ft 22 == ft 23 {
-        = . f a ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
         ? < . f a 0 { ^ ( __qf_fail ) } {}
         = . f b ? == ft 22 1 0
         ^ h
     } {}
     ? | == ft 17 == ft 21 {
-        = . f a ( __qf_vi f buf )
-        = . f b ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
+        = . f b ( __qf_vi . f 0 buf )
         ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? == ft 24 {
-        = . f a ( __qf_vi f buf )
-        = . f b ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
+        = . f b ( __qf_vi . f 0 buf )
         ? | < . f a 0 < . f b 0 { ^ ( __qf_fail ) } {}
         ? > . f b . f a { ^ ( __qf_fail ) } {}
         ? >= . f next n { ^ ( __qf_fail ) } {}
@@ -324,25 +324,25 @@ $ `stdlib/core/rcbox.nu`
         = . f next + . f next 1
         ? | < cl 1 > cl 20 { ^ ( __qf_fail ) } {}
         = . f c cl
-        ? ! ( __qf_take f buf + cl 16 ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take . f 0 buf + cl 16 ) { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? == ft 25 {
-        = . f a ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
         ? < . f a 0 { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? | == ft 26 == ft 27 {
-        ? ! ( __qf_take f buf 8 ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take . f 0 buf 8 ) { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? | == ft 28 == ft 29 {
-        = . f a ( __qf_vi f buf )
+        = . f a ( __qf_vi . f 0 buf )
         ? < . f a 0 { ^ ( __qf_fail ) } {}
-        ? == ft 28 { = . f b ( __qf_vi f buf ) ? < . f b 0 { ^ ( __qf_fail ) } {} } { = . f c 1 }
-        : i rl ( __qf_vi f buf )
+        ? == ft 28 { = . f b ( __qf_vi . f 0 buf ) ? < . f b 0 { ^ ( __qf_fail ) } {} } { = . f c 1 }
+        : i rl ( __qf_vi . f 0 buf )
         ? < rl 0 { ^ ( __qf_fail ) } {}
-        ? ! ( __qf_take f buf rl ) { ^ ( __qf_fail ) } {}
+        ? ! ( __qf_take . f 0 buf rl ) { ^ ( __qf_fail ) } {}
         ^ h
     } {}
     ? == ft 30 { ^ h } {}

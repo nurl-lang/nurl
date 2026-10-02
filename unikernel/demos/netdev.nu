@@ -48,7 +48,6 @@ $ `unikernel/drivers/virtionet.nu`
         : ( Vec u ) f ( vec_new [u] )
         ( pktbuf_copy_to f out k )
         : b _ok ( vnet_tx nic f 0 ( vec_len [u] f ) )
-        ( vec_free [u] f )
         = k + k 1
     }
     ( pktbuf_clear out )
@@ -62,7 +61,6 @@ $ `unikernel/drivers/virtionet.nu`
             : RxResult r ( stack_rx st in ( ms ) out )
             = got + got 1
         } { = more F }
-        ( vec_free [u] in )
     }
     ^ got
 }
@@ -118,9 +116,6 @@ $ `unikernel/drivers/virtionet.nu`
     ( nurl_print ? > ( stack_rx_frames st ) 0 `yes` `no` )
     ( nurl_print `\n` )
 
-    ( vec_free [u] payload )
-    ( pktbuf_free out )
-    ( stack_free st )
     ( vnet_close nic )
     ^ ? resolved 0 1
 }

@@ -93,7 +93,7 @@ $ `tokenizer.nu`
     b stream
     ( Vec i ) lz_node  // tape node id of each lazy base const
     ( Vec i ) lz_key  // its identity: layer * 16 + slot (__ft_base_name)
-    i mgg  // a Gguf held open across a streamed merge (0 = none)
+    Gguf mgg  // a Gguf held open across a streamed merge (gguf_none = none)
 }
 
 // Streaming base upload, OFF by default: the finetune tests compare the CPU
@@ -149,10 +149,10 @@ $ `tokenizer.nu`
 }
 
 // Dequant tensor `name` to f64. GGUF layout [out, in] flat (in fastest).
-@ __ft_raw * Gguf gg s name * u rowsb * u colsb → ( Vec f ) {
+@ __ft_raw Gguf gg s name * u rowsb * u colsb → ( Vec f ) {
     : i idx ( gguf_find_tensor gg name )
     ? >= idx 0 {} { ^ ( vec_new [f] ) }
-    : GgufTensor t ?? ( vec_get [GgufTensor] . gg tensors idx ) {
+    : GgufTensor t ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) idx ) {
         T x → x
         F → @ GgufTensor { ( string_new ) 0 0 0 0 0 0 0 0 0 }
     }
@@ -235,14 +235,14 @@ $ `tokenizer.nu`
 // table without touching a byte of its data. Rows/cols mirror __ft_raw +
 // __ft_transpose exactly: rows = d0 (in), cols = d1 (out). An absent tensor
 // gives 0×0, which callers read as "not present".
-@ __ft_lshape * Gguf gg i layer s suffix * u rowsb * u colsb → v {
+@ __ft_lshape Gguf gg i layer s suffix * u rowsb * u colsb → v {
     ( nurl_poke rowsb 0 0 )
     ( nurl_poke colsb 0 0 )
     : String nm ( __ft_lname layer suffix )
     : i idx ( gguf_find_tensor gg ( string_data nm ) )
     ( string_free nm )
     ? >= idx 0 {} { ^ v }
-    ?? ( vec_get [GgufTensor] . gg tensors idx ) {
+    ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) idx ) {
         T t → {
             ( nurl_poke rowsb 0 . t d0 )
             ( nurl_poke colsb 0 . t d1 )
@@ -252,7 +252,7 @@ $ `tokenizer.nu`
 }
 
 // A layer weight in tape layout (poisons `okb` on a missing tensor).
-@ __ft_lw * Gguf gg i layer s suffix * u okb → FtW {
+@ __ft_lw Gguf gg i layer s suffix * u okb → FtW {
     : String nm ( __ft_lname layer suffix )
     : *u rb ( nurl_alloc 8 )
     : *u cb ( nurl_alloc 8 )
@@ -271,7 +271,7 @@ $ `tokenizer.nu`
 }
 
 // An optional 1-D tensor (norm weight / bias) → heap *( Vec f ) or 0.
-@ __ft_lvec * Gguf gg i layer s suffix → s {
+@ __ft_lvec Gguf gg i layer s suffix → s {
     : String nm ( __ft_lname layer suffix )
     : *u rb ( nurl_alloc 8 )
     : *u cb ( nurl_alloc 8 )
@@ -289,14 +289,14 @@ $ `tokenizer.nu`
 // same way whether called at open or at merge-time reload. `gg` stays the
 // caller's to close. Poisons m.ok on a missing tensor.
 // One shape-only per-layer weight: real rows/cols, no data.
-@ __ft_shape_push * Gguf gg i L s suffix ( Vec FtW ) dst * u rb * u cb → v {
+@ __ft_shape_push Gguf gg i L s suffix ( Vec FtW ) dst * u rb * u cb → v {
     ( __ft_lshape gg L suffix rb cb )
     ( vec_push [FtW] dst @ FtW { ( nurl_peek rb 0 ) ( nurl_peek cb 0 ) ( vec_new [f] ) } )
 }
 
 // One shape-only per-layer 1-D tensor: an FtV holding an empty vec when the
 // model HAS this tensor, 0 when it does not (llama has no attn_q_norm).
-@ __ft_shape_vec * Gguf gg i L s suffix ( Vec s ) dst → v {
+@ __ft_shape_vec Gguf gg i L s suffix ( Vec s ) dst → v {
     : String nm ( __ft_lname L suffix )
     : i idx ( gguf_find_tensor gg ( string_data nm ) )
     ( string_free nm )
@@ -310,7 +310,7 @@ $ `tokenizer.nu`
 // The streaming counterpart of __ft_load_bases: read every per-layer
 // SHAPE and no data at all. ft_graph turns each into a lazy const and
 // ft_stream_upload fills them one at a time after the capture.
-@ __ft_load_shapes * Gguf gg * FtModel m → v {
+@ __ft_load_shapes Gguf gg * FtModel m → v {
     : *u rb ( nurl_alloc 8 )
     : *u cb ( nurl_alloc 8 )
     = . m n_ff 0
@@ -339,7 +339,7 @@ $ `tokenizer.nu`
     ? > . m n_ff 0 {} { = . m ok F }
 }
 
-@ __ft_load_bases * Gguf gg * FtModel m → v {
+@ __ft_load_bases Gguf gg * FtModel m → v {
     ? . m stream { ( __ft_load_shapes gg m ) ^ v } {}
     : *u okb ( nurl_alloc 8 )
     ( nurl_poke okb 0 1 )
@@ -540,7 +540,7 @@ $ `tokenizer.nu`
             = . m fn ( vec_new [s] )
             = . m qn ( vec_new [s] )
             = . m kn ( vec_new [s] )
-            = . m mgg 0
+            = . m mgg ( gguf_none )
             = . m lz_node ( vec_new [i] )
             = . m lz_key ( vec_new [i] )
             = . m src_path ( string_from path )
@@ -576,7 +576,7 @@ $ `tokenizer.nu`
     ^ x
 }
 
-@ __ft_const * GTape tp ( Vec f ) v i r i c → GVar {
+@ __ft_const GTape tp ( Vec f ) v i r i c → GVar {
     : ( Vec i ) s ( vec_new [i] )
     ? > r 0 { ( vec_push [i] s r ) } {}
     ( vec_push [i] s c )
@@ -595,7 +595,7 @@ $ `tokenizer.nu`
     ^ o
 }
 
-@ __ft_ones * GTape tp i n → GVar {
+@ __ft_ones GTape tp i n → GVar {
     : ( Vec f ) v ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 1.0 ) = k + k 1 }
@@ -640,7 +640,7 @@ $ `tokenizer.nu`
 // elements — row-major order already lays them out that way, which makes
 // this two reshapes around the ordinary rmsnorm. `wp` 0 (llama, qwen2)
 // returns the input untouched.
-@ __ft_head_norm * GTape tp GVar x GVar W b have i T2 i heads i hd GVar ones f eps → GVar {
+@ __ft_head_norm GTape tp GVar x GVar W b have i T2 i heads i hd GVar ones f eps → GVar {
     ? have {} { ^ x }
     : ( Vec i ) flat_s ( vec_new [i] )
     ( vec_push [i] flat_s * T2 heads )
@@ -657,7 +657,7 @@ $ `tokenizer.nu`
 }
 
 // LoRA pair registration: A [in,r] seeded small, B [r,out] zero.
-@ __ft_lora_pair * GTape tp Rng rg i in i r i out * u pids i slot → v {
+@ __ft_lora_pair GTape tp Rng rg i in i r i out * u pids i slot → v {
     : ( Vec f ) av ( vec_with_cap [f] * in r )
     : f lim / 1.0 ( float_sqrt # f in )
     : ~ i k 0
@@ -681,7 +681,7 @@ $ `tokenizer.nu`
 
 // LoRA linear over the pids-registered adapter for `slot` (the plumbing;
 // the math is nn_lora_linear).
-@ __ft_lora_lin * GTape tp GVar x GVar w0 * u pids i slot f scale → GVar {
+@ __ft_lora_lin GTape tp GVar x GVar w0 * u pids i slot f scale → GVar {
     : GVar pa @ GVar { ( nurl_peek pids * slot 2 ) }
     : GVar pb @ GVar { ( nurl_peek pids + * slot 2 1 ) }
     ^ ( nn_lora_linear tp x w0 pa pb scale )
@@ -699,7 +699,7 @@ $ `tokenizer.nu`
 // Build the full forward + next-token CE loss on `tp`. `ids` is one
 // sequence (T tokens; loss over positions 0..T-2 predicting 1..T-1).
 // `pids` must hold 2·7·n_layer i64 slots; LoRA params register FIRST.
-@ ft_graph * FtModel m * GTape tp ( Vec i ) ids i r f alpha i seed * u pids → FtG {
+@ ft_graph * FtModel m GTape tp ( Vec i ) ids i r f alpha i seed * u pids → FtG {
     : i T2 ( vec_len [i] ids )
     : i H . m n_embd
     : i hd . m head_dim
@@ -707,7 +707,7 @@ $ `tokenizer.nu`
     : i NKV . m n_kv
     : f scale / alpha # f r
     ? == . m rope_dim hd {} {
-        : GVar bad ( _g_poison tp `finetune: partial rotary not supported` )
+        : GVar bad ( grad_poison tp `finetune: partial rotary not supported` )
         ^ @ FtG { bad bad bad bad 0 }
     }
     // adapters first (stable ids for the optimizer)
@@ -917,7 +917,7 @@ $ `tokenizer.nu`
 // and an eager run upload identical bytes — what changes is only that one
 // tensor is resident at a time instead of the whole model.
 
-@ __ft_up_vec * FtModel m * Gguf gg * GProg pg i node i L s suf → b {
+@ __ft_up_vec * FtModel m Gguf gg GProg pg i node i L s suf → b {
     : s p ( __ft_lvec gg L suf )
     ? != # i p 0 {} { ^ F }
     : *FtV pv # *FtV p
@@ -931,7 +931,7 @@ $ `tokenizer.nu`
     ^ r
 }
 
-@ __ft_up_layer * FtModel m * Gguf gg * GProg pg i node i L i slot → b {
+@ __ft_up_layer * FtModel m Gguf gg GProg pg i node i L i slot → b {
     : s suf ( __ft_base_name slot )
     ? | | | | | | == slot 0 == slot 1 == slot 9 == slot 10 == slot 11 == slot 12 == slot 13 {
         ^ ( __ft_up_vec m gg pg node L suf )
@@ -951,7 +951,7 @@ $ `tokenizer.nu`
     ^ r
 }
 
-@ __ft_up_wout * FtModel m * Gguf gg * GProg pg i node → b {
+@ __ft_up_wout * FtModel m Gguf gg GProg pg i node → b {
     : i oi ( gguf_find_tensor gg `output.weight` )
     ? >= oi 0 {
         : *u rb ( nurl_alloc 8 )
@@ -996,7 +996,7 @@ $ `tokenizer.nu`
     ( vec_set [s] v L p )
 }
 
-@ __ft_layer_in * Gguf gg * FtModel m i L → b {
+@ __ft_layer_in Gguf gg * FtModel m i L → b {
     : *u okb ( nurl_alloc 8 )
     ( nurl_poke okb 0 1 )
     : FtW q ( __ft_lw gg L `attn_q.weight` okb )
@@ -1037,7 +1037,7 @@ $ `tokenizer.nu`
 
 // Fill every lazy base const's device buffer. Call once, right after the
 // capture; T when every tensor landed.
-@ ft_stream_upload * FtModel m * GProg pg → b {
+@ ft_stream_upload * FtModel m GProg pg → b {
     ? . m stream {} { ^ T }
     : i n ( vec_len [i] . m lz_node )
     ? > n 0 {} { ^ F }
@@ -1129,7 +1129,7 @@ $ `tokenizer.nu`
 // (dtype 0) writes F64, f32/mixed write F32 — either way the file holds
 // exactly what the device buffers hold, so a resume is a lossless
 // round-trip for every capture dtype.
-@ __ft_ckpt_add * StWriter so s name ( Vec f ) val i n i dtype → v {
+@ __ft_ckpt_add StWriter so s name ( Vec f ) val i n i dtype → v {
     ? == dtype 0 {
         : ( Vec i ) sh ( vec_new [i] )
         ( vec_push [i] sh n )
@@ -1138,8 +1138,8 @@ $ `tokenizer.nu`
     } { ( __ft_st_add so name val n 0 ) }
 }
 
-@ __ft_ckpt_save s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i step i dtype i wstr → b {
-    : *StWriter so ( stw_new )
+@ __ft_ckpt_save s path * FtModel m i r GProg pg GpOpt go * u pids i nslot i step i dtype i wstr → b {
+    : StWriter so ( stw_new )
     : ( Vec i ) meta ( vec_new [i] )
     ( vec_push [i] meta 1 )
     ( vec_push [i] meta step )
@@ -1217,7 +1217,7 @@ $ `tokenizer.nu`
 
 // An F64 checkpoint tensor read raw off the mapping — st_dequant narrows
 // everything through f32, which would round an f64-replay checkpoint.
-@ __ft_ckpt_vals64 * St st StTensor t → ( Vec f ) {
+@ __ft_ckpt_vals64 St st StTensor t → ( Vec f ) {
     : *u P ( st_tensor_ptr st t )
     : i n . t nelems
     : ( Vec f ) o ( vec_with_cap [f] n )
@@ -1231,7 +1231,7 @@ $ `tokenizer.nu`
 
 // One checkpoint tensor into a Vec f of exactly `want` elements, at the
 // precision the file stored (F64 raw, everything else via st_dequant).
-@ __ft_ckpt_read * St st s kind i pi i want → !( Vec f ) String {
+@ __ft_ckpt_read St st s kind i pi i want → !( Vec f ) String {
     : String nm ( __ft_ckpt_name kind pi )
     : i ti ( st_find_tensor st ( string_data nm ) )
     ( string_free nm )
@@ -1240,7 +1240,7 @@ $ `tokenizer.nu`
     }
     // fallback dtype -1: never ST_F64 (0), so a failed get cannot fall
     // into the raw-pointer path
-    : StTensor tt ?? ( vec_get [StTensor] . st tensors ti ) {
+    : StTensor tt ?? ( vec_get [StTensor] ( st_tensors st ) ti ) {
         T x → x
         F → @ StTensor { ( string_new ) -1 0 0 0 0 0 0 0 0 }
     }
@@ -1267,7 +1267,7 @@ $ `tokenizer.nu`
 // caller starts fresh); a shape/meta MISMATCH also reports F after
 // printing why — resuming a different run over it would be silent ruin,
 // so the caller must treat mismatch as fatal (mismb is poked 1).
-@ __ft_ckpt_load s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i wstr * u stepb * u mismb → b {
+@ __ft_ckpt_load s path * FtModel m i r GProg pg GpOpt go * u pids i nslot i wstr * u stepb * u mismb → b {
     ( nurl_poke mismb 0 0 )
     ?? ( st_open path ) {
         T st → {
@@ -1379,7 +1379,7 @@ $ `tokenizer.nu`
     // ft_graph needs the base matrices; a prior ft_train may have dropped
     // them (they only live host-side to build the graph). Stream them back.
     ? == ( vec_len [FtW] . m wq ) 0 { : b _r ( ft_reload_base m ) } {}
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : FtG fg ( ft_graph m tp ids r alpha seed pids )
     : ( Vec f ) aflat ( vec_new [f] )
     : ( Vec f ) bflat ( vec_new [f] )
@@ -1387,12 +1387,12 @@ $ `tokenizer.nu`
         ( nurl_free pids ) ( tape_free tp )
         ^ @ FtTrain { F 0.0 0.0 aflat bflat }
     }
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     : ~ b ok ( gk_ok kit )
     : ~ f l0 0.0
     : ~ f l1 0.0
     ? ok {
-        : *GProg pg ( gput_capture_dt kit tp . fg loss dtype )
+        : GProg pg ( gput_capture_dt kit tp . fg loss dtype )
         = ok ( gput_ok pg )
         // streamed base: the capture allocated the buffers from the shapes,
         // now fill them one tensor at a time
@@ -1403,7 +1403,7 @@ $ `tokenizer.nu`
         // adapters + activations. The base streams back from the GGUF for the
         // merge (ft_reload_base). Training reads device buffers only.
         ? ok { ( tape_drop_consts tp ) ( ft_drop_base m ) } {}
-        : *GpOpt go ( gpopt_adam_new lr )
+        : GpOpt go ( gpopt_adam_new lr )
         : ~ i pi 0
         ~ < pi * 2 nslot {
             ( gpopt_add go pg @ GVar { ( nurl_peek pids pi ) } 0.0 )
@@ -1503,7 +1503,7 @@ $ `tokenizer.nu`
 // ── safetensors output (via the safetensor package's writer) ─────────
 
 // Add one F32 tensor with shape [d0] (d1==0) or [d0,d1].
-@ __ft_st_add * StWriter w s name ( Vec f ) v i d0 i d1 → v {
+@ __ft_st_add StWriter w s name ( Vec f ) v i d0 i d1 → v {
     : ( Vec i ) sh ( vec_new [i] )
     ( vec_push [i] sh d0 )
     ? > d1 0 { ( vec_push [i] sh d1 ) } {}
@@ -1514,7 +1514,7 @@ $ `tokenizer.nu`
 // Save trained adapters as a safetensors file: per slot,
 // blk.<L>.<which>.lora_a [in,r] and .lora_b [r,out], F32.
 @ ft_adapters_save s path * FtModel m FtTrain t i r → !v String {
-    : *StWriter so ( stw_new )
+    : StWriter so ( stw_new )
     : i nslot * 7 . m n_layer
     : ~ i sl 0
     : ~ i aoff 0
@@ -1555,10 +1555,9 @@ $ `tokenizer.nu`
         = sl + sl 1
     }
     ? . m stream {
-        ? != . m mgg 0 {
-            : *Gguf mgg2 # *Gguf . m mgg
-            ( gguf_close mgg2 )
-            = . m mgg 0
+        ? ( gguf_is_open . m mgg ) {
+            ( gguf_close . m mgg )
+            = . m mgg ( gguf_none )
         } {}
     } {}
     : !v String res ( stw_write so path )
@@ -1597,7 +1596,7 @@ $ `tokenizer.nu`
             : ~ i r 0
             : i ti0 ( st_find_tensor st `blk.0.q.lora_a` )
             ? >= ti0 0 {
-                ?? ( vec_get [StTensor] . st tensors ti0 ) { T t → { = r . t d1 } F → {} }
+                ?? ( vec_get [StTensor] ( st_tensors st ) ti0 ) { T t → { = r . t d1 } F → {} }
             } {}
             ? & > r 0 <= r 4096 {} {
                 ( st_close st )
@@ -1668,7 +1667,7 @@ $ `tokenizer.nu`
 // does for GGUFs, so the file is a genuine HF checkpoint.
 
 // merged tape-layout [in,out] → emit [out,in] rows; q/k: NORM re-permute.
-@ __ft_emit_w * StWriter so s name FtW w b reperm i heads i hd → v {
+@ __ft_emit_w StWriter so s name FtW w b reperm i heads i hd → v {
     : i in . w rows
     : i out . w cols
     : ( Vec f ) e ( vec_with_cap [f] * out in )
@@ -1718,11 +1717,11 @@ $ `tokenizer.nu`
     // model of zeros. Hold the GGUF open and page one layer in at a time.
     ? . m stream {
         ?? ( gguf_open ( string_data . m src_path ) ) {
-            T gg → { = . m mgg # i gg }
+            T gg → { = . m mgg gg }
             F e → { ^ @ !v String { F e } }
         }
     } {}
-    : *StWriter so ( stw_new )
+    : StWriter so ( stw_new )
     // embeddings + final norm (frozen; [V,H] is already [out,in]).
     // The merge CONSUMES m.embd: once its bytes are in the writer the 3 GB
     // f64 host copy has no further reader here, and every caller merges
@@ -1749,8 +1748,7 @@ $ `tokenizer.nu`
         // for its seven slots and drop it again after the last one, so the
         // merge costs one layer of host RAM, not the whole model
         ? & . m stream == w 0 {
-            : *Gguf mgg # *Gguf . m mgg
-            : b _li ( __ft_layer_in mgg m L )
+            : b _li ( __ft_layer_in . m mgg m L )
         } {}
         // the per-layer norms, once per layer (at slot 0; norm mask bit3)
         ? & == w 0 == % / mask 8 2 1 {

@@ -50,11 +50,9 @@ $ `stdlib/std/args.nu`
         ? compact {
             : String out ( json_stringify j )
             ( nurl_print ( string_data out ) ) ( nurl_print `\n` )
-            ( string_free out )
         } {
             : String out ( json_pretty j )
             ( nurl_print ( string_data out ) ) ( nurl_print `\n` )
-            ( string_free out )
         }
     }
 }
@@ -124,7 +122,6 @@ $ `stdlib/std/args.nu`
                 }
                 = k + k 1
             }
-            ( vec_free [String] ks )  // shallow: the String handles now live in arr
             ^ @ ?Json { T arr }
         } {}
         ? ( json_is_arr j ) {
@@ -141,7 +138,6 @@ $ `stdlib/std/args.nu`
         ? ( json_is_obj j ) {
             : ( Vec String ) ks ( json_obj_keys j )
             : i n ( vec_len [String] ks )
-            ( vec_free_with [String] ks \ String s → v { ( string_free s ) } )
             ^ @ ?Json { T ( json_int n ) }
         } {}
         ? ( json_is_str j ) { ^ @ ?Json { T ( json_int ( nurl_str_len ( json_str_data j ) ) ) } } {}
@@ -162,7 +158,7 @@ $ `stdlib/std/args.nu`
     } {}
     : ?Json res ( __nq_apply_func func j )
     ?? res {
-        T rj → { ( __nq_emit rj compact raw ) ( json_free rj ) ^ 0 }
+        T rj → { ( __nq_emit rj compact raw ) ^ 0 }
         F _ → {
             ( nurl_eprint `nq: ` ) ( nurl_eprint func )
             ( nurl_eprint ` cannot be applied to ` ) ( nurl_eprint ( json_type_name j ) )
@@ -227,7 +223,6 @@ $ `stdlib/std/args.nu`
                         }
                         = k + k 1
                     }
-                    ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
                 } {
                     ( nurl_eprint `nq: cannot iterate over ` )
                     ( nurl_eprint ( json_type_name c ) ) ( nurl_eprint `\n` )
@@ -246,10 +241,10 @@ $ `stdlib/std/args.nu`
     : ~ String left ( string_new )
     : ~ String func ( string_new )
     ? >= pipe 0 {
-        ( string_free left ) = left ( __nq_substr_trim filter 0 pipe )
-        ( string_free func ) = func ( __nq_substr_trim filter + pipe 1 flen )
+        = left ( __nq_substr_trim filter 0 pipe )
+        = func ( __nq_substr_trim filter + pipe 1 flen )
     } {
-        ( string_free left ) = left ( __nq_substr_trim filter 0 flen )
+        = left ( __nq_substr_trim filter 0 flen )
     }
     : s lp ( string_data left )
     : s fn ( string_data func )
@@ -263,18 +258,13 @@ $ `stdlib/std/args.nu`
         : String prenorm ( __nq_norm ( string_data pre ) )
         : String postnorm ( __nq_norm ( string_data post ) )
         = rc ( __nq_iter doc ( string_data prenorm ) ( string_data postnorm ) fn compact raw )
-        ( string_free prenorm ) ( string_free postnorm )
-        ( string_free pre ) ( string_free post )
     } {
         : String norm ( __nq_norm lp )
         ?? ( json_get doc ( string_data norm ) ) {
             T sj → { = rc ( __nq_out sj fn compact raw ) }
             F _ → { = rc ( __nq_out ( json_null ) fn compact raw ) }
         }
-        ( string_free norm )
     }
-    ( string_free left )
-    ( string_free func )
     ^ rc
 }
 
@@ -293,7 +283,6 @@ $ `stdlib/std/args.nu`
     ( nurl_print `Reads JSON from stdin unless --file is given.\n\n` )
     : String h ( args_usage p )
     ( nurl_print ( string_data h ) )
-    ( string_free h )
 }
 
 // ── Entry point ───────────────────────────────────────────────────────
@@ -337,7 +326,7 @@ $ `stdlib/std/args.nu`
             ?? ( args_value p `file` ) {
                 T fv → {
                     ?? ( read_file ( string_data fv ) ) {
-                        T txt → { ( string_free input ) = input txt }
+                        T txt → { = input txt }
                         F _ → {
                             ( nurl_eprint `nq: cannot read file: ` )
                             ( nurl_eprintln ( string_data fv ) )
@@ -345,10 +334,8 @@ $ `stdlib/std/args.nu`
                             = have_input F
                         }
                     }
-                    ( string_free fv )
                 }
                 F _ → {
-                    ( string_free input )
                     = input ( read_all_stdin )
                 }
             }
@@ -358,16 +345,13 @@ $ `stdlib/std/args.nu`
                     F je → {
                         : String em ( json_format_error je )
                         ( nurl_eprint `nq: ` ) ( nurl_eprintln ( string_data em ) )
-                        ( string_free em )
                         = rc 1
                     }
                     T doc → {
                         = rc ( __nq_eval doc filter compact raw )
-                        ( json_free doc )
                     }
                 }
             } {}
-            ( string_free input )
         }
     } {
         ( nurl_eprint `nq: ` ) ( nurl_eprintln ( args_error p ) )
@@ -375,7 +359,5 @@ $ `stdlib/std/args.nu`
         = rc 2
     }
 
-    ( args_free p )
-    ( vec_free_with [String] argv \ String x → v { ( string_free x ) } )
     ^ rc
 }

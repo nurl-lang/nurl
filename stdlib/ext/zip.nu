@@ -12,10 +12,10 @@
 //                                            when deflate isn't smaller
 //   ( zip_add_stored Zip s name ( Vec u ) data ) → ! v ZipErr   force store
 //   ( zip_finish Zip )                     → ( Vec u )    archive bytes;
-//                                            consumes the builder
+//                                            the builder is spent
 // Reader:
 //   ( zip_open ( Vec u ) bytes )           → ! ZipArchive ZipErr
-//       BORROWS `bytes` — keep them alive until zip_close.
+//       BORROWS `bytes` — keep them alive while the archive is read.
 //   ( zip_open_ptr * u p i n )             → ! ZipArchive ZipErr
 //       Same, over a raw borrowed span — pair with mmap to read an
 //       archive far larger than RAM without copying it in.
@@ -31,7 +31,11 @@
 //   ( zip_extract ZipArchive i )           → ! ( Vec u ) ZipErr   crc-checked
 //   ( zip_extract_name ZipArchive s name ) → ! ( Vec u ) ZipErr
 //   ( zip_find ZipArchive s name )         → i            index, -1 absent
-//   ( zip_close ZipArchive )               → v
+//   ( zip_close ZipArchive )               → v            early release
+//                                            (optional)
+//
+// Zip and ZipArchive are handles (stdlib/core/rcbox.nu): every copy is
+// the same builder / archive, and the last owner releases it.
 //
 // Determinism: entries carry a fixed DOS timestamp (1980-01-01), so
 // identical inputs produce byte-identical archives.
@@ -47,6 +51,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
+$ `stdlib/core/rcbox.nu`
 
 : | ZipErr {
     ZipBadArchive  // no/garbled end-of-central-directory or headers
@@ -120,7 +125,7 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     ?? r {
         F _ → ^ @ ?( Vec u ) { F }
         T out → {
-            ? != ( vec_len [u] out ) usize { ( vec_free [u] out ) ^ @ ?( Vec u ) { F } } {}
+            ? != ( vec_len [u] out ) usize { ^ @ ?( Vec u ) { F } } {}
             ^ @ ?( Vec u ) { T out }
         }
     }
@@ -130,18 +135,30 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 //
 // Zip builder: `body` accumulates local headers + file data as they
 // are added; `central` accumulates the matching central-directory
-// records; `count` in ctl slot 0. Offsets are byte positions in body.
+// records; `count` entries so far. Offsets are byte positions in body.
 
-: Zip { s ctl ( Vec u ) body ( Vec u ) central }
+: ZipImpl { i count ( Vec u ) body ( Vec u ) central }
+
+: Zip { s ctl }
+
+@ Zip_share Zip h → Zip { ^ @ Zip { # s ( rcbox_share # i . h ctl ) } }
+
+@ Zip_drop sink Zip h → v {
+    ( mem_forget h )
+    ( rcbox_release [ZipImpl] # i . h ctl )
+}
+
+@ __Zip_ptr Zip h → *ZipImpl { ^ ( rcbox_ptr [ZipImpl] # i . h ctl ) }
 
 : i ZIP_DOSDATE 33  // 1980-01-01 → (0<<9)|(1<<5)|1
 
 @ zip_new → Zip {
-    ^ @ Zip { ( nurl_zalloc 8 ) ( vec_new [u] ) ( vec_new [u] ) }
+    ^ @ Zip { # s ( rcbox_new [ZipImpl] @ ZipImpl { 0 ( vec_new [u] ) ( vec_new [u] ) } ) }
 }
 
 // Shared add: method 8 with `comp` bytes, or method 0 when comp is None.
-@ __zip_add_entry Zip z s name ( Vec u ) data ? ( Vec u ) comp → !v ZipErr {
+@ __zip_add_entry Zip z__h s name ( Vec u ) data ? ( Vec u ) comp → !v ZipErr {
+    : *ZipImpl z ( __Zip_ptr z__h )
     : i namelen ( nurl_str_len name )
     : i usize ( vec_len [u] data )
     ? | > usize 4294967295 > namelen 65535 { ^ @ !v ZipErr { F ZipTooLarge } } {}
@@ -171,7 +188,6 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
             : *u cp ( vec_data [u] c )
             : ~ i k 0
             ~ < k cn { ( vec_push [u] b . cp k ) = k + k 1 }
-            ( vec_free [u] c )
         }
         F → {
             : *u dp ( vec_data [u] data )
@@ -199,7 +215,7 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     ( __zip_push_u32 cd 0 )  // external attrs
     ( __zip_push_u32 cd offset )
     ( bytes_extend_str cd name )
-    ( nurl_poke . z ctl 0 + ( nurl_peek . z ctl 0 ) 1 )
+    = . z count + . z count 1
     ^ @ !v ZipErr { T 0 }
 }
 
@@ -212,13 +228,16 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     ^ ( __zip_add_entry z name data @ ?( Vec u ) { F } )
 }
 
-// Append the central directory + end record; returns the archive and
-// frees the builder.
-@ zip_finish Zip z → ( Vec u ) {
+// Append the central directory + end record; returns the archive. The
+// body leaves the builder (moved, not copied); the builder is spent.
+@ zip_finish Zip z__h → ( Vec u ) {
+    : *ZipImpl z ( __Zip_ptr z__h )
     : ( Vec u ) out . z body
+    ( mem_take out )  // the archive leaves the builder
+    = . z body ( vec_new [u] )
     : i cd_off ( vec_len [u] out )
     : i cd_len ( vec_len [u] . z central )
-    : i count ( nurl_peek . z ctl 0 )
+    : i count . z count
     : *u cp ( vec_data [u] . z central )
     : ~ i k 0
     ~ < k cd_len { ( vec_push [u] out . cp k ) = k + k 1 }
@@ -230,26 +249,54 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     ( __zip_push_u32 out cd_len )
     ( __zip_push_u32 out cd_off )
     ( __zip_push_u16 out 0 )  // comment len
-    ( vec_free [u] . z central )
-    ( nurl_free . z ctl )
     ^ out
 }
 
 // ── reader ──────────────────────────────────────────────────────────
 //
-// ZipArchive: ctl slot 0 = entry count, slot 1 = entries ptr, slot 2 =
-// source data ptr (borrowed), slot 3 = source len. Entries are a flat
-// i64 array, 7 slots each:
+// ZipArchive: the entry count, the entries, the source span (borrowed).
+// Entries are a flat i64 array, 7 slots each:
 //   0 name_off (into source)  1 name_len  2 method  3 csize
 //   4 usize    5 local_hdr_off            6 crc
 
+: ZipArchiveImpl {
+    i count
+    ( Vec i ) entries
+    * u data  // the source, borrowed
+    i len
+}
+
 : ZipArchive { s ctl }
 
-@ zip_count ZipArchive a → i { ^ ( nurl_peek . a ctl 0 ) }
+@ ZipArchive_share ZipArchive h → ZipArchive { ^ @ ZipArchive { # s ( rcbox_share # i . h ctl ) } }
 
-@ __zip_entry ZipArchive a i idx i field → i {
-    : s ep # s ( nurl_peek . a ctl 1 )
-    ^ ( nurl_peek ep + * idx 7 field )
+@ ZipArchive_drop sink ZipArchive h → v {
+    ( mem_forget h )
+    ( rcbox_release [ZipArchiveImpl] # i . h ctl )
+}
+
+@ __ZipArchive_ptr ZipArchive h → *ZipArchiveImpl { ^ ( rcbox_ptr [ZipArchiveImpl] # i . h ctl ) }
+
+@ zip_count ZipArchive a__h → i {
+    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
+    ^ . a count
+}
+
+@ __zip_entry ZipArchive a__h i idx i field → i {
+    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
+    : *i ep ( vec_data [i] . a entries )
+    ^ . ep + * idx 7 field
+}
+
+// The source span the archive reads.
+@ __zip_src ZipArchive a__h → *u {
+    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
+    ^ . a data
+}
+
+@ __zip_srclen ZipArchive a__h → i {
+    : *ZipArchiveImpl a ( __ZipArchive_ptr a__h )
+    ^ . a len
 }
 
 // Pull the ZIP64 overrides for one central-directory record out of its
@@ -298,7 +345,7 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 }
 
 // Open an archive that lives in a borrowed span [p, p+n). `p` must stay
-// valid until zip_close. Nothing is copied: the entry table holds offsets
+// valid while the archive is read. Nothing is copied: the entry table holds offsets
 // into the span, so an mmap of a multi-GB archive costs no RAM.
 @ zip_open_ptr * u p i n → !ZipArchive ZipErr {
     ? < n 22 { ^ @ !ZipArchive ZipErr { F ZipBadArchive } } {}
@@ -340,8 +387,10 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     // A record is ≥46 bytes, so the directory's own length bounds the
     // entry count — never allocate on a count the file merely claims.
     ? > * count 46 cd_len { ^ @ !ZipArchive ZipErr { F ZipBadArchive } } {}
-    : s entries ( nurl_zalloc * count 56 )
-    : s x64 ( nurl_zalloc 24 )
+    : ( Vec i ) ents ( vec_zeroed [i] * count 7 )
+    : s entries # s ( vec_data [i] ents )
+    : ( Vec i ) x64v ( vec_zeroed [i] 3 )
+    : s x64 # s ( vec_data [i] x64v )
     : ~ i pos cd_off
     : ~ i e 0
     : ~ b bad F
@@ -377,22 +426,16 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
             }
         }
     }
-    ( nurl_free x64 )
     ? bad {
-        ( nurl_free entries )
         ^ @ !ZipArchive ZipErr { F ZipBadArchive }
     } {}
-    : s ctl ( nurl_zalloc 32 )
-    ( nurl_poke ctl 0 count )
-    ( nurl_poke ctl 1 # i entries )
-    ( nurl_poke ctl 2 # i p )
-    ( nurl_poke ctl 3 n )
-    ^ @ !ZipArchive ZipErr { T @ ZipArchive { ctl } }
+    : i box ( rcbox_new [ZipArchiveImpl] @ ZipArchiveImpl { count ents p n } )
+    ^ @ !ZipArchive ZipErr { T @ ZipArchive { # s box } }
 }
 
 @ zip_name_at ZipArchive a i idx → ?String {
     ? | < idx 0 >= idx ( zip_count a ) { ^ @ ?String { F } } {}
-    : *u p # *u ( nurl_peek . a ctl 2 )
+    : *u p ( __zip_src a )
     : i off ( __zip_entry a idx 0 )
     : i len ( __zip_entry a idx 1 )
     ^ @ ?String { T ( string_from_bytes # *u + # i p off len ) }
@@ -418,8 +461,8 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 // writer may pad the local extra differently from the central one.
 @ zip_data_off ZipArchive a i idx → i {
     ? | < idx 0 >= idx ( zip_count a ) { ^ -1 } {}
-    : *u p # *u ( nurl_peek . a ctl 2 )
-    : i n ( nurl_peek . a ctl 3 )
+    : *u p ( __zip_src a )
+    : i n ( __zip_srclen a )
     : i lho ( __zip_entry a idx 5 )
     ? | > + lho 30 n != ( __zip_rd_u32 p lho ) 0x04034b50 { ^ -1 } {}
     : i doff + + + lho 30 ( __zip_rd_u16 p + lho 26 ) ( __zip_rd_u16 p + lho 28 )
@@ -430,7 +473,7 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 // Index of `name`, or -1. Names are compared as raw bytes.
 @ zip_find ZipArchive a s name → i {
     : i nlen ( nurl_str_len name )
-    : *u p # *u ( nurl_peek . a ctl 2 )
+    : *u p ( __zip_src a )
     : i count ( zip_count a )
     : ~ i e 0
     ~ < e count {
@@ -451,7 +494,7 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
 
 @ zip_extract ZipArchive a i idx → !( Vec u ) ZipErr {
     ? | < idx 0 >= idx ( zip_count a ) { ^ @ !( Vec u ) ZipErr { F ZipNotFound } } {}
-    : *u p # *u ( nurl_peek . a ctl 2 )
+    : *u p ( __zip_src a )
     : i method ( __zip_entry a idx 2 )
     : i csize ( __zip_entry a idx 3 )
     : i usize ( __zip_entry a idx 4 )
@@ -474,7 +517,6 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
         T out → {
             : i have_crc ( crc32 out )
             ? != have_crc want_crc {
-                ( vec_free [u] out )
                 ^ @ !( Vec u ) ZipErr { F ZipCrc }
             } {}
             ^ @ !( Vec u ) ZipErr { T out }
@@ -489,7 +531,5 @@ $ `stdlib/ext/compress.nu`  // pure deflate/inflate + crc32 (via std/deflate.nu)
     ^ ( zip_extract a idx )
 }
 
-@ zip_close ZipArchive a → v {
-    ( nurl_free # s ( nurl_peek . a ctl 1 ) )
-    ( nurl_free . a ctl )
-}
+// Let go of `a` now rather than at the end of its owner's scope.
+@ zip_close sink ZipArchive a → v {}

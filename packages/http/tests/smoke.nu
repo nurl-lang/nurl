@@ -13,9 +13,7 @@ $ `src/http.nu`
         T nm → { ( string_push_str out ( string_data nm ) ) ( string_free nm ) }
         F junk → { ( string_free junk ) }
     }
-    : HttpResponse r ( response_text 200 ( string_data out ) )
-    ( string_free out )
-    ^ r
+    ^ ( response_text 200 ( string_data out ) )
 }
 
 @ h_echo HttpRequest req Params p → HttpResponse {
@@ -45,7 +43,7 @@ $ `src/http.nu`
         F junk → { ( string_free junk ) }
     }
 
-    : *HttpApp a ( http_app_new )
+    : HttpApp a ( http_app_new )
     ( http_app_cors a )
     ( http_app_logging a )
     ( http_app_get a `/` \ HttpRequest req Params p → HttpResponse { ^ ( response_text 200 `hello from http` ) } )
@@ -59,8 +57,5 @@ $ `src/http.nu`
         F junk → { ( string_free junk ) }
     }
 
-    : i rc ( http_app_listen a `127.0.0.1` port )
-    ( http_app_free a )
-    ( args_free ap )
-    ^ rc
+    ^ ( http_app_listen a `127.0.0.1` port )
 }

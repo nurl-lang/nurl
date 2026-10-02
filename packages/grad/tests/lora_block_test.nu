@@ -55,10 +55,9 @@ $ `deps/gpukit/src/dev.nu`
 
 // loss of a block variant (fresh tape each call — the FD probe path)
 @ block_loss Blk bl → f {
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : GVar l ( build_block tp bl # *u 0 # *u 0 )
     : f v ( g_scalar tp l )
-    ( tape_free tp )
     ^ v
 }
 
@@ -86,7 +85,7 @@ $ `deps/gpukit/src/dev.nu`
     // ── 1. FD through the whole block ────────────────────────────────
     ( nurl_print `— finite differences through the block —\n` )
     : Blk bl ( blk_new 42 F )
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : *u pav ( nurl_alloc * 7 8 )
     : *u pbv ( nurl_alloc * 7 8 )
     : GVar loss ( build_block tp bl pav pbv )
@@ -122,7 +121,7 @@ $ `deps/gpukit/src/dev.nu`
     // ── 2. the LoRA init identity (B = 0) ────────────────────────────
     ( nurl_print `— B=0 init identity —\n` )
     : Blk bz ( blk_new 42 T )
-    : *GTape tpz ( tape_new )
+    : GTape tpz ( tape_new )
     : *u pavz ( nurl_alloc * 7 8 )
     : *u pbvz ( nurl_alloc * 7 8 )
     : GVar lz ( build_block tpz bz pavz pbvz )
@@ -159,13 +158,13 @@ $ `deps/gpukit/src/dev.nu`
 
     // ── 3. device replay of the block ────────────────────────────────
     ( nurl_print `— device replay —\n` )
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {
         : b cpu ? == 1 ( nurl_str_eq ( gk_backend kit ) `cpu` ) T F
         ( nurl_print `  backend: ` )
         ( nurl_print ( gk_backend kit ) )
         ( nurl_print `\n` )
-        : *GProg pg ( gput_capture kit tp loss )
+        : GProg pg ( gput_capture kit tp loss )
         ( check ( gput_ok pg ) `block capture succeeds` )
         : ~ b rp F
         ? ( gput_ok pg ) {
@@ -202,7 +201,6 @@ $ `deps/gpukit/src/dev.nu`
                     }
                     = z + z 1
                 }
-                ( vec_free [f] dg )
                 = k2 + k2 1
             }
             ? cpu {
@@ -216,12 +214,12 @@ $ `deps/gpukit/src/dev.nu`
         } {}
         // — 4. a short LoRA training run on the device —
         ( nurl_print `— device LoRA training (B=0 init, 60 Adam steps) —\n` )
-        : *GTape tpt ( tape_new )
+        : GTape tpt ( tape_new )
         : *u pat ( nurl_alloc * 7 8 )
         : *u pbt ( nurl_alloc * 7 8 )
         : GVar lt ( build_block tpt bz pat pbt )
-        : *GProg pgt ( gput_capture kit tpt lt )
-        : *GpOpt go ( gpopt_adam_new 0.01 )
+        : GProg pgt ( gput_capture kit tpt lt )
+        : GpOpt go ( gpopt_adam_new 0.01 )
         : ~ i k3 0
         ~ < k3 7 {
             ( gpopt_add go pgt @ GVar { ( nurl_peek pat k3 ) } 0.0 )
@@ -247,11 +245,7 @@ $ `deps/gpukit/src/dev.nu`
         ( nurl_print ( nurl_str_float l1 ) )
         ( nurl_print `\n` )
         ( check < l1 * 0.5 l0 `LoRA training halves the CE loss` )
-        ( gpopt_free go )
-        ( gput_free pgt )
-        ( tape_free tpt )
         ( nurl_free pat ) ( nurl_free pbt )
-        ( gput_free pg )
     } {
         ( nurl_print `  (no backend — device checks skipped)\n` )
     }
@@ -259,8 +253,6 @@ $ `deps/gpukit/src/dev.nu`
 
     ( nurl_free pav ) ( nurl_free pbv )
     ( nurl_free pavz ) ( nurl_free pbvz )
-    ( tape_free tp ) ( tape_free tpz )
-    ( blk_free bl ) ( blk_free bz )
     ( nurl_print `lora_block_test: ` )
     ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` )

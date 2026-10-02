@@ -121,6 +121,20 @@ $ `stdlib/core/rcbox.nu`
     i last_port
 }
 
+// The mailbox lives in an rcbox (stdlib/core/rcbox.nu) behind this handle:
+// a UDP socket's Sock holds one (a null one otherwise), and dropping the
+// handle releases the mailbox with its PktBuf and Vec.
+: UdpMailbox { s ctl }
+
+@ UdpMailbox_share UdpMailbox h → UdpMailbox { ^ @ UdpMailbox { # s ( rcbox_share # i . h ctl ) } }
+
+@ UdpMailbox_drop sink UdpMailbox h → v {
+    ( mem_forget h )
+    ( rcbox_release [UdpBox] # i . h ctl )
+}
+
+@ __udp_mailbox_ptr UdpMailbox h → *UdpBox { ^ ( rcbox_ptr [UdpBox] # i . h ctl ) }
+
 : Sock {
     i kind
     i idx  // index into the TcpStack's connection or listener table
@@ -137,7 +151,7 @@ $ `stdlib/core/rcbox.nu`
     b eof  // peer FIN seen AND the receive queue drained
     b shut  // sock_shutdown was called: wake and refuse
     b used
-    i udp  // *UdpBox for a UDP socket, 0 otherwise
+    UdpMailbox udp  // a UDP socket's mailbox; a null handle otherwise
     b connected  // UDP: a default peer is set
     i opts  // UDP: setsockopt bits, recorded and answered
 }
@@ -164,9 +178,9 @@ $ `stdlib/core/rcbox.nu`
 
 @ __SockTab_ptr SockTab h → *SockTabImpl { ^ ( rcbox_ptr [SockTabImpl] # i . h ctl ) }
 
-// The Sock blocks (and a UDP socket's mailbox) are raw memory the table
-// keeps as integers: releasing them is the table's own drop. Its
-// TcpStack, output buffer and fd vector are dropped after.
+// The Sock blocks are raw memory the table keeps as integers: releasing
+// them — and the mailbox handle a UDP one holds — is the table's own
+// drop. Its TcpStack, output buffer and fd vector are dropped after.
 % Drop SockTabImpl {
     @ drop SockTabImpl st → v {
         : i n ( vec_len [i] . st fds )
@@ -174,8 +188,10 @@ $ `stdlib/core/rcbox.nu`
         ~ < k n {
             : *Sock s # *Sock ?? ( vec_get [i] . st fds k ) { T p → p F → 0 }
             ? != # i s 0 {
-                // A UDP socket still open at teardown owns its mailbox.
-                ? && . s used == . s kind ( sock_kind_udp ) { ( __udp_box_free . s udp ) } {}
+                // A UDP socket still open at teardown owns its mailbox
+                // (any other Sock holds a null handle, released as nothing).
+                : UdpMailbox mb . s udp
+                ( mem_take mb )
                 ( nurl_free # s s )
             } {}
             = k + k 1
@@ -218,15 +234,6 @@ $ `stdlib/core/rcbox.nu`
 
 // Let go of `st` now rather than at the end of its owner's scope.
 @ sock_free sink SockTab st → v {}
-
-// A UDP socket's mailbox: raw memory holding a PktBuf and a Vec.
-@ __udp_box_free i addr → v {
-    : *UdpBox b # *UdpBox addr
-    ? == # i b 0 { ^ } {}
-    ( pktbuf_free . b q )
-    ( vec_free [i] . b src )
-    ( nurl_free # s b )
-}
 
 // The connection table under the fds, lent.
 @ sock_tcpstack SockTab st__h → TcpStack {
@@ -274,7 +281,7 @@ $ `stdlib/core/rcbox.nu`
     = . s eof F
     = . s shut F
     = . s used T
-    = . s udp 0
+    = . s udp @ UdpMailbox { # s 0 }
     = . s connected F
     = . s opts 0
 }
@@ -521,7 +528,7 @@ $ `stdlib/core/rcbox.nu`
         ? && != # i s 0 && . s used && == . s kind ( sock_kind_udp )
         && == . s local_port . r dst_port
         || == . s local_ip 0 == . s local_ip . r dst_ip {
-            : *UdpBox b # *UdpBox . s udp
+            : *UdpBox b ( __udp_mailbox_ptr . s udp )
             ? != # i b 0 {
                 ( vec_extend_range [u] ( pktbuf_bytes . b q ) frame . r payload_off . r payload_len )
                 // …_empty, not _mark: a zero-length datagram is a
@@ -564,10 +571,8 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) f ( vec_new [u] )
         ( pktbuf_copy_to f w k )
         : i _r ( __sock_rx st f now )
-        ( vec_free [u] f )
         = k + k 1
     }
-    ( pktbuf_free w )
     ^ n
 }
 
@@ -752,17 +757,12 @@ $ `stdlib/core/rcbox.nu`
     ? ! ( __sock_can_open st ) { ^ ( __sock_err_fd st ( sock_err_other ) ) } {}
     : i fd ( __alloc_fd st )
     : *Sock s ( __sock st fd )
-    : *UdpBox b # *UdpBox ( nurl_alloc Z UdpBox )
-    = . b q ( pktbuf_new )
-    = . b src ( vec_new [i] )
-    = . b head 0
-    = . b last_ip 0
-    = . b last_port 0
+    : i box ( rcbox_new [UdpBox] @ UdpBox { ( pktbuf_new ) ( vec_new [i] ) 0 0 0 } )
     = . s kind ( sock_kind_udp )
     = . s idx -1
     = . s local_ip ip
     = . s local_port p
-    = . s udp # i b
+    = . s udp @ UdpMailbox { # s box }
     ^ fd
 }
 
@@ -770,7 +770,7 @@ $ `stdlib/core/rcbox.nu`
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ # *UdpBox 0 } {}
     ? != . s kind ( sock_kind_udp ) { ^ # *UdpBox 0 } {}
-    ^ # *UdpBox . s udp
+    ^ ( __udp_mailbox_ptr . s udp )
 }
 
 @ sock_udp_pending SockTab st__h i fd → i { ^ ( __sock_udp_pending ( __SockTab_ptr st__h ) fd ) }
@@ -1139,8 +1139,10 @@ $ `stdlib/core/rcbox.nu`
     = . s refs - . s refs 1
     ? > . s refs 0 { ^ } {}
     ? == . s kind ( sock_kind_udp ) {
-        ( __udp_box_free . s udp )
-        = . s udp 0
+        // The socket gives its mailbox up (dropped here).
+        : UdpMailbox gone . s udp
+        ( mem_take gone )
+        = . s udp @ UdpMailbox { # s 0 }
     } {}
     ? == . s kind ( sock_kind_listener ) {
         ( tstack_listener_close . st ts . s idx )

@@ -100,6 +100,12 @@ transcribing the condensed audio reports times in the condensed timeline,
 and a caller who wants to say "this was said at 3:12 of the recording" has
 to walk the map back. `vad_map_sample` does.
 
+For live audio, `vad_stream_new` gives a `VadStream`: push samples as they
+arrive, poll for closed segments, take their audio. It is a handle — every
+copy is the same stream, and the last owner releases it; `Wav`s, segment
+lists and the encoder's output are plain values. Nothing is released by
+hand (`vad_stream_free` / `wav_free` are optional early releases).
+
 ## Encoding MP3
 
 `mp3_encode` is MPEG-1, MPEG-2 and MPEG-2.5 Layer III, in NURL: the

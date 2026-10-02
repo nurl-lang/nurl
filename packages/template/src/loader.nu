@@ -13,7 +13,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `src/template.nu`
 
-@ tset_load_dir * TplSet t s dir s ext → i {
+@ tset_load_dir TplSet t s dir s ext → i {
     : String pat ( string_from dir )
     ( string_push_str pat `/*` )
     ( string_push_str pat ext )
@@ -39,23 +39,18 @@ $ `src/template.nu`
                             ?? ( read_file ( string_data path ) ) {
                                 T body → {
                                     ( tset_add t ( string_data name ) ( string_data body ) )
-                                    ( string_free body )
                                     = count + count 1
                                 }
                                 F _ → {}
                             }
-                            ( string_free name )
                         } {}
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            : ( @ v String ) sdrop \ String x → v { ( string_free x ) }
-            ( vec_free_with [String] files sdrop )
         }
         F _ → { = count - 0 1 }
     }
-    ( string_free pat )
     ^ count
 }

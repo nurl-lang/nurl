@@ -24,13 +24,13 @@
 //   ( ordmap_val_at    [K V] m i )          → ? V   its value
 //   ( ordmap_min_key   [K V] m )            → ? K
 //   ( ordmap_max_key   [K V] m )            → ? K
-//   ( ordmap_free      [K V] m )            → v     trivial K/V
+//   ( ordmap_free      [K V] m )            → v     early release (optional)
 //   ( ordmap_free_with [K V] m dk dv )      → v     dk:(@ v K) dv:(@ v V)
 //
 // Ownership: mirrors Vec/HashMap. On ordmap_set REPLACE, the existing
 // equal key is kept and the passed-in `k` is NOT stored — for owned
-// keys the caller still owns that `k`. ordmap_remove returns the value;
-// for owned-key maps prefer bulk teardown via ordmap_free_with.
+// keys the caller still owns that `k`. ordmap_remove returns the value.
+// A map is dropped with its keys and values by its owner at scope exit.
 
 $ `stdlib/core/vec.nu`
 
@@ -123,10 +123,8 @@ $ `stdlib/core/vec.nu`
     ^ ( vec_get [K] . m keys - n 1 )
 }
 
-@ ordmap_free [K V] sink ( OrdMap K V ) m → v {
-    ( vec_free [K] . m keys )
-    ( vec_free [V] . m vals )
-}
+// Early release: exactly what dropping `m` does (keys and values go with it).
+@ ordmap_free [K V] sink ( OrdMap K V ) m → v {}
 
 @ ordmap_free_with [K V] sink ( OrdMap K V ) m ( @ v K ) dk ( @ v V ) dv → v {
     ( vec_free_with [K] . m keys dk )

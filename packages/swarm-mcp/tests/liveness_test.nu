@@ -37,7 +37,7 @@ $ `src/wasmkernel.nu`
     : ( Vec u ) b ( mkpk 2 )
     : ( Vec u ) self ( mkpk 3 )
     : ( Vec u ) none ( vec_new [u] )
-    : *Roster r ( roster_new )
+    : Roster r ( roster_new )
     : Ring ring ( ring_new )
 
     // Three workers join at t=1000.
@@ -54,7 +54,6 @@ $ `src/wasmkernel.nu`
     // Nothing expires before the TTL.
     : ( Vec ( Vec u ) ) g0 ( roster_expire r 51000 90000 self )
     ( pb `no eviction inside the TTL:      ` == ( vec_len [( Vec u )] g0 ) 0 )
-    ( vec_free [( Vec u )] g0 )
 
     // `a` heartbeats again just before the sweep; `b` has now been silent for
     // 99 s. Past the TTL only the silent one goes — and the exempt self never
@@ -72,10 +71,9 @@ $ `src/wasmkernel.nu`
     // of truth, so this is what keeps routing off a dead node.
     : ~ i gi 0
     ~ < gi ( vec_len [( Vec u )] g1 ) {
-        ?? ( vec_get [( Vec u )] g1 gi ) { T pk → { ( ring_remove_member ring pk ) ( vec_free [u] pk ) } F → {} }
+        ?? ( vec_get [( Vec u )] g1 gi ) { T pk → { ( ring_remove_member ring pk ) } F → {} }
         = gi + gi 1
     }
-    ( vec_free [( Vec u )] g1 )
     ( pb `ring loses the evicted points:   ` == ( ring_point_count ring ) 16 )
     ( pb `gpu count drops with the member: ` == ( roster_count_caps r ( cap_gpu ) ) 0 )
 
@@ -89,9 +87,6 @@ $ `src/wasmkernel.nu`
     : MemberView oob ( roster_view r 99 )
     ( pb `roster_view out of range is 0:   ` == . oob id 0 )
 
-    ( roster_free r ) ( ring_free ring )
-    ( vec_free [u] a ) ( vec_free [u] b ) ( vec_free [u] self ) ( vec_free [u] none )
-
     // ── failed-chunk reason suffix ────────────────────────────────
     // A worker appends WHY a chunk failed after the existing frame, so an old
     // reader (fixed leading offsets) is unaffected and a new one recovers it.
@@ -103,8 +98,6 @@ $ `src/wasmkernel.nu`
     : String got ( chunk_err_read frame )
     ( pb `reason survives the round trip:  ` != 0 ( nurl_str_eq ( string_data got ) `nwasm: bad section size` ) )
     ( pb `the frame prefix is untouched:   ` & == base 9 == ?? ( vec_get [u] frame 0 ) { T x → # i x F → 9 } 0 )
-    ( string_free got )
-    ( vec_free [u] frame )
 
     // A frame with no suffix reads back as empty, not as garbage.
     : ( Vec u ) plain ( vec_new [u] )
@@ -112,8 +105,6 @@ $ `src/wasmkernel.nu`
     ( bytes_push_u64_be plain # u64 12345 )
     : String nothing ( chunk_err_read plain )
     ( pb `no suffix → empty reason:        ` == ( string_len nothing ) 0 )
-    ( string_free nothing )
-    ( vec_free [u] plain )
 
     ( nurl_print ? == g_fail 0 `ALL PASS\n` `FAILURES\n` )
     ^ ? == g_fail 0 0 1

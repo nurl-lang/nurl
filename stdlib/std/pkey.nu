@@ -75,12 +75,11 @@ $ `stdlib/std/ecdsa_p256.nu`
         ? != . e2 tag 4 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
         : ( Vec u ) inner ( _der_content der e2 )
         : DerTlv iseq ( der_at inner 0 )
-        ? == . iseq ok 0 { ( vec_free [u] inner ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+        ? == . iseq ok 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
         : DerTlv i0 ( _der_child inner iseq )  // version
         : DerTlv i1 ( _der_next inner i0 )  // OCTET STRING scalar
-        ? != . i1 tag 4 { ( vec_free [u] inner ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+        ? != . i1 tag 4 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
         : ( Vec u ) sc ( __pk_pad32 ( _der_content inner i1 ) )
-        ( vec_free [u] inner )
         ^ @ ?( Vec u ) { T sc }
     } {}
     ^ @ ?( Vec u ) { F # ( Vec u ) 0 }
@@ -99,7 +98,6 @@ $ `stdlib/std/ecdsa_p256.nu`
         : *u p ( vec_data [u] v )
         ( bytes_extend_raw out # s + # i p - n 32 32 )
     }
-    ( vec_free [u] v )
     ^ out
 }
 
@@ -109,7 +107,6 @@ $ `stdlib/std/ecdsa_p256.nu`
         F e → ^ @ !( Vec u ) ParseErr { F e }
         T der → {
             : ?( Vec u ) sc ( __pk_ec_scalar_der der )
-            ( vec_free [u] der )
             ?? sc {
                 T scalar → ^ @ !( Vec u ) ParseErr { T scalar }
                 F _ → ^ @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } }
@@ -132,9 +129,8 @@ $ `stdlib/std/ecdsa_p256.nu`
 // path, which needs only d and n.
 : RsaPriv { ( Vec u ) n ( Vec u ) e ( Vec u ) d }
 
-@ rsa_priv_free sink RsaPriv k → v {
-    ( vec_free [u] . k n ) ( vec_free [u] . k e ) ( vec_free [u] . k d )
-}
+// Its fields go with their owner; this lets go of them early (optional).
+@ rsa_priv_free sink RsaPriv k → v {}
 
 // Parse a PKCS#1 `RSAPrivateKey` DER: SEQUENCE { version, n, e, d, … }.
 @ __pk_rsa_pkcs1 ( Vec u ) der → ?RsaPriv {
@@ -159,7 +155,7 @@ $ `stdlib/std/ecdsa_p256.nu`
         F e → ^ @ !RsaPriv ParseErr { F e }
         T der → {
             : DerTlv seq ( der_at der 0 )
-            ? == . seq ok 0 { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
+            ? == . seq ok 0 { ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
             : DerTlv c0 ( _der_child der seq )  // version
             : DerTlv c1 ( _der_next der c0 )
             // PKCS#8: { version, AlgorithmIdentifier SEQUENCE, OCTET STRING }.
@@ -167,18 +163,15 @@ $ `stdlib/std/ecdsa_p256.nu`
             // the wrapper is shared by every key type (see the EC parser).
             ? & == . c1 ok 1 == . c1 tag 48 {
                 : DerTlv aoid ( _der_child der c1 )
-                ? | == . aoid ok 0 ! ( _der_oid_is der aoid `2a864886f70d010101` ) { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
+                ? | == . aoid ok 0 ! ( _der_oid_is der aoid `2a864886f70d010101` ) { ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
                 : DerTlv c2 ( _der_next der c1 )  // privateKey OCTET STRING
-                ? | == . c2 ok 0 != . c2 tag 4 { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
+                ? | == . c2 ok 0 != . c2 tag 4 { ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
                 : ( Vec u ) inner ( _der_content der c2 )
                 : ?RsaPriv rp ( __pk_rsa_pkcs1 inner )
-                ( vec_free [u] inner )
-                ( vec_free [u] der )
                 ^ ?? rp { T k → @ !RsaPriv ParseErr { T k } F _ → @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } }
             } {}
             // PKCS#1 RSAPrivateKey directly.
             : ?RsaPriv rp ( __pk_rsa_pkcs1 der )
-            ( vec_free [u] der )
             ^ ?? rp { T k → @ !RsaPriv ParseErr { T k } F _ → @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } }
         }
     }
@@ -200,7 +193,8 @@ $ `stdlib/std/ecdsa_p256.nu`
 // just to check one integer would cost every pkey user the import.
 : MldsaPriv { i level ( Vec u ) sk }
 
-@ mldsa_priv_free sink MldsaPriv k → v { ( vec_free [u] . k sk ) }
+// Its fields go with their owner; this lets go of them early (optional).
+@ mldsa_priv_free sink MldsaPriv k → v {}
 
 @ __pk_mldsa_level ( Vec u ) b DerTlv oid → i {
     ? ( _der_oid_is b oid `608648016503040311` ) { ^ 44 } {}
@@ -216,23 +210,19 @@ $ `stdlib/std/ecdsa_p256.nu`
         T der → {
             : DerTlv seq ( der_at der 0 )
             ? | == . seq ok 0 != . seq tag 48 {
-                ( vec_free [u] der )
                 ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
             } {}
             : DerTlv ver ( _der_child der seq )  // version INTEGER 0
             : DerTlv alg ( _der_next der ver )  // AlgorithmIdentifier
             ? | | == . alg ok 0 != . alg tag 48 == . ver ok 0 {
-                ( vec_free [u] der )
                 ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
             } {}
             : i level ( __pk_mldsa_level der ( _der_child der alg ) )
             ? == level 0 {
-                ( vec_free [u] der )
                 ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
             } {}
             : DerTlv pk8 ( _der_next der alg )  // privateKey OCTET STRING
             ? | == . pk8 ok 0 != . pk8 tag 4 {
-                ( vec_free [u] der )
                 ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
             } {}
             : ( Vec u ) body ( _der_content der pk8 )
@@ -246,12 +236,9 @@ $ `stdlib/std/ecdsa_p256.nu`
             ? & == . inner ok 1 == . inner tag 4 {
                 ? == + . inner start . inner len ( vec_len [u] body ) {
                     = sk ( _der_content body inner )
-                    ( vec_free [u] body )
                 } {}
             } {}
-            ( vec_free [u] der )
             ? == ( vec_len [u] sk ) 0 {
-                ( vec_free [u] sk )
                 ^ @ !MldsaPriv ParseErr { F @ ParseErr { BadFormat } }
             } {}
             ^ @ !MldsaPriv ParseErr { T @ MldsaPriv { level sk } }

@@ -75,14 +75,14 @@ $ `deps/gpukit/src/dev.nu`
 
 // Compare a device node against the CPU tape: 0 = bitwise equal, else the
 // worst relative difference (for the trans tier's CUDA tolerance).
-@ cmp_node * GProg pg * GTape tp GVar v b grads * u worst → b {
+@ cmp_node GProg pg GTape tp GVar v b grads * u worst → b {
     : Tensor ct ? grads ( grad_of tp v ) ( gvar_value tp v )
     : i n ( vec_len [f] . ct data )
     : ( Vec f ) dv ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n { ( vec_push [f] dv 0.0 ) = k + k 1 }
     : b got ? grads ( gput_grad pg v dv ) ( gput_value pg v dv )
-    ? got {} { ( vec_free [f] dv ) ^ F }
+    ? got {} { ^ F }
     : ~ b bit T
     : ~ f w ( bits_to_f64 ( nurl_peek worst 0 ) )
     = k 0
@@ -99,41 +99,35 @@ $ `deps/gpukit/src/dev.nu`
         = k + k 1
     }
     ( nurl_poke worst 0 ( f64_to_bits w ) )
-    ( vec_free [f] dv )
     ^ bit
 }
 
 // ── A: the exact tier, every op, bitwise ─────────────────────────────
 
-@ exact_tier * GpuKit kit → v {
-    : *GTape tp ( tape_new )
+@ exact_tier GpuKit kit → v {
+    : GTape tp ( tape_new )
     // params
     : ( Vec f ) av ( fillv 12 0.25 0.13 )
     : ( Vec i ) as2 ( shp2 4 3 )
     : Tensor at ( mk av as2 )
     : GVar A ( grad_param tp at )
-    ( tensor_free at ) ( vec_free [f] av ) ( vec_free [i] as2 )
     : ( Vec f ) wv ( fillv 6 -0.4 0.21 )
     : ( Vec i ) ws ( shp2 3 2 )
     : Tensor wt ( mk wv ws )
     : GVar W ( grad_param tp wt )
-    ( tensor_free wt ) ( vec_free [f] wv ) ( vec_free [i] ws )
     : ( Vec f ) bv ( fillv 2 0.05 0.3 )
     : ( Vec i ) bs ( shp1 2 )
     : Tensor bt ( mk bv bs )
     : GVar B ( grad_param tp bt )
-    ( tensor_free bt ) ( vec_free [f] bv ) ( vec_free [i] bs )
     // batched pair for bmm
     : ( Vec f ) pv ( fillv 12 0.2 0.11 )
     : ( Vec i ) ps ( shp3 2 3 2 )
     : Tensor pt ( mk pv ps )
     : GVar P ( grad_param tp pt )
-    ( tensor_free pt ) ( vec_free [f] pv ) ( vec_free [i] ps )
     : ( Vec f ) qv ( fillv 12 -0.3 0.17 )
     : ( Vec i ) qs ( shp3 2 2 3 )
     : Tensor qt ( mk qv qs )
     : GVar Q ( grad_const tp qt )
-    ( tensor_free qt ) ( vec_free [f] qv ) ( vec_free [i] qs )
 
     // the graph: touch every exact-tier op
     : GVar mm ( g_matmul tp A W )  // [4,2]
@@ -148,11 +142,9 @@ $ `deps/gpukit/src/dev.nu`
     : GVar tr ( g_transpose tp sb )  // [2,4]
     : ( Vec i ) rs ( shp2 4 2 )
     : GVar rsv ( g_reshape tp tr rs )
-    ( vec_free [i] rs )
     : ( Vec i ) st ( shp2 1 0 )
     : ( Vec i ) sp ( shp2 3 2 )
     : GVar sl ( g_slice tp rsv st sp )  // [2,2]
-    ( vec_free [i] st ) ( vec_free [i] sp )
     : GVar cc ( g_concat tp sl sl 1 )  // [2,4]
     : GVar bm ( g_bmm tp P Q )  // [2,3,3]
     : GVar s1 ( g_sum tp cc )
@@ -161,7 +153,7 @@ $ `deps/gpukit/src/dev.nu`
     : b bok ( backward tp loss )
     ( check bok `exact tier: CPU backward runs` )
 
-    : *GProg pg ( gput_capture kit tp loss )
+    : GProg pg ( gput_capture kit tp loss )
     ( check ( gput_ok pg ) `exact tier: capture succeeds` )
     : ~ b fw F
     : ~ b bw F
@@ -192,19 +184,16 @@ $ `deps/gpukit/src/dev.nu`
         ( nurl_print `\n` )
     }
     ( nurl_free worst )
-    ( gput_free pg )
-    ( tape_free tp )
 }
 
 // ── B: the transcendental tier ───────────────────────────────────────
 
-@ trans_tier * GpuKit kit b cpu_backend → v {
-    : *GTape tp ( tape_new )
+@ trans_tier GpuKit kit b cpu_backend → v {
+    : GTape tp ( tape_new )
     : ( Vec f ) xv ( fillv 12 0.35 0.19 )
     : ( Vec i ) xs ( shp2 3 4 )
     : Tensor xt ( mk xv xs )
     : GVar X ( grad_param tp xt )
-    ( tensor_free xt ) ( vec_free [f] xv ) ( vec_free [i] xs )
     : GVar sg ( g_sigmoid tp X )
     : GVar th ( g_tanh tp ( g_muls tp X 0.5 ) )
     : GVar ex ( g_exp tp ( g_neg tp X ) )
@@ -215,7 +204,7 @@ $ `deps/gpukit/src/dev.nu`
     : b bok ( backward tp loss )
     ( check bok `trans tier: CPU backward runs` )
 
-    : *GProg pg ( gput_capture kit tp loss )
+    : GProg pg ( gput_capture kit tp loss )
     ( check ( gput_ok pg ) `trans tier: capture succeeds` )
     : ~ b fw F
     : ~ b bw F
@@ -246,8 +235,6 @@ $ `deps/gpukit/src/dev.nu`
         ( check < w 0.000000000001 `trans tier: within 1e-12 relative on cuda` )
     }
     ( nurl_free worst )
-    ( gput_free pg )
-    ( tape_free tp )
 }
 
 // ── C: training equivalence (mini-AE, Adam + L2 + clip) ──────────────
@@ -264,7 +251,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // Build one AE episode on the tape: rows[B,d] const → d-h-d relu net →
 // L = (Σe² + α·(ΣW1²+ΣW2²)) / (2B). Returns the loss GVar.
-@ ae_episode * GTape tp GVar W1 GVar B1 GVar W2 GVar B2 Tensor rows f alpha i bsz → GVar {
+@ ae_episode GTape tp GVar W1 GVar B1 GVar W2 GVar B2 Tensor rows f alpha i bsz → GVar {
     : GVar X ( grad_const tp rows )
     : GVar h ( g_relu tp ( g_add tp ( g_matmul tp X W1 ) B1 ) )
     : GVar y ( g_add tp ( g_matmul tp h W2 ) B2 )
@@ -275,7 +262,7 @@ $ `deps/gpukit/src/dev.nu`
     ^ ( g_muls tp num / 1.0 * 2.0 # f bsz )
 }
 
-@ training_equiv * GpuKit kit → v {
+@ training_equiv GpuKit kit → v {
     : i D 6
     : i H 8
     : i BSZ 32
@@ -291,36 +278,30 @@ $ `deps/gpukit/src/dev.nu`
         ( vec_push [f] all - * 2.0 ( rng_u01 dg ) 1.0 )
         = k + k 1
     }
-    ( rng_free dg )
     // identical init on both paths
     : Rng ig ( rng_seed 7 )
     : ( Vec f ) w1v ( vec_new [f] )
     ( glorot ig D H w1v )
     : ( Vec f ) w2v ( vec_new [f] )
     ( glorot ig H D w2v )
-    ( rng_free ig )
     : ( Vec f ) b1v ( fillv H 0.0 0.0 )
     : ( Vec f ) b2v ( fillv D 0.0 0.0 )
 
     // — CPU path —
-    : *GTape tp ( tape_new )
+    : GTape tp ( tape_new )
     : ( Vec i ) w1s ( shp2 D H )
     : Tensor w1t ( mk w1v w1s )
     : GVar W1 ( grad_param tp w1t )
-    ( tensor_free w1t ) ( vec_free [i] w1s )
     : ( Vec i ) b1s ( shp1 H )
     : Tensor b1t ( mk b1v b1s )
     : GVar B1 ( grad_param tp b1t )
-    ( tensor_free b1t ) ( vec_free [i] b1s )
     : ( Vec i ) w2s ( shp2 H D )
     : Tensor w2t ( mk w2v w2s )
     : GVar W2 ( grad_param tp w2t )
-    ( tensor_free w2t ) ( vec_free [i] w2s )
     : ( Vec i ) b2s ( shp1 D )
     : Tensor b2t ( mk b2v b2s )
     : GVar B2 ( grad_param tp b2t )
-    ( tensor_free b2t ) ( vec_free [i] b2s )
-    : *Opt co ( opt_adam_new LR )
+    : Opt co ( opt_adam_new LR )
     ( opt_set_clip co CLIP )
     ( opt_add co tp W1 ALPHA )
     ( opt_add co tp B1 0.0 )
@@ -339,7 +320,6 @@ $ `deps/gpukit/src/dev.nu`
         : ( Vec i ) rsh ( shp2 BSZ D )
         : Tensor rt ( mk rows rsh )
         : GVar loss ( ae_episode tp W1 B1 W2 B2 rt ALPHA BSZ )
-        ( tensor_free rt ) ( vec_free [f] rows ) ( vec_free [i] rsh )
         : b bk ( backward tp loss )
         ? bk {} { ( nurl_print `    CPU episode backward failed\n` ) }
         ( vec_push [f] closs ( g_scalar tp loss ) )
@@ -349,30 +329,25 @@ $ `deps/gpukit/src/dev.nu`
     }
 
     // — device path: capture episode 0's structure, then replay —
-    : *GTape tp2 ( tape_new )
+    : GTape tp2 ( tape_new )
     : ( Vec i ) w1s2 ( shp2 D H )
     : Tensor w1t2 ( mk w1v w1s2 )
     : GVar W1d ( grad_param tp2 w1t2 )
-    ( tensor_free w1t2 ) ( vec_free [i] w1s2 )
     : ( Vec i ) b1s2 ( shp1 H )
     : Tensor b1t2 ( mk b1v b1s2 )
     : GVar B1d ( grad_param tp2 b1t2 )
-    ( tensor_free b1t2 ) ( vec_free [i] b1s2 )
     : ( Vec i ) w2s2 ( shp2 H D )
     : Tensor w2t2 ( mk w2v w2s2 )
     : GVar W2d ( grad_param tp2 w2t2 )
-    ( tensor_free w2t2 ) ( vec_free [i] w2s2 )
     : ( Vec i ) b2s2 ( shp1 D )
     : Tensor b2t2 ( mk b2v b2s2 )
     : GVar B2d ( grad_param tp2 b2t2 )
-    ( tensor_free b2t2 ) ( vec_free [i] b2s2 )
     : ( Vec f ) rows0 ( vec_with_cap [f] * BSZ D )
     : ~ i q0 0
     ~ < q0 * BSZ D { ( vec_push [f] rows0 ( _tf all q0 ) ) = q0 + q0 1 }
     : ( Vec i ) rsh0 ( shp2 BSZ D )
     : Tensor rt0 ( mk rows0 rsh0 )
     : GVar Xd ( grad_const tp2 rt0 )
-    ( tensor_free rt0 ) ( vec_free [i] rsh0 )
     // rebuild the SAME structure the CPU loop records, on top of Xd
     : GVar hd ( g_relu tp2 ( g_add tp2 ( g_matmul tp2 Xd W1d ) B1d ) )
     : GVar yd ( g_add tp2 ( g_matmul tp2 hd W2d ) B2d )
@@ -381,11 +356,10 @@ $ `deps/gpukit/src/dev.nu`
     : GVar l2d ( g_add tp2 ( g_sum tp2 ( g_mul tp2 W1d W1d ) ) ( g_sum tp2 ( g_mul tp2 W2d W2d ) ) )
     : GVar numd ( g_add tp2 sed ( g_muls tp2 l2d ALPHA ) )
     : GVar lossd ( g_muls tp2 numd / 1.0 * 2.0 # f BSZ )
-    ( vec_free [f] rows0 )
 
-    : *GProg pg ( gput_capture kit tp2 lossd )
+    : GProg pg ( gput_capture kit tp2 lossd )
     ( check ( gput_ok pg ) `training: capture succeeds` )
-    : *GpOpt go ( gpopt_adam_new LR )
+    : GpOpt go ( gpopt_adam_new LR )
     ( gpopt_set_clip go CLIP )
     ( gpopt_add go pg W1d ALPHA )
     ( gpopt_add go pg B1d 0.0 )
@@ -402,7 +376,6 @@ $ `deps/gpukit/src/dev.nu`
             = q + q 1
         }
         = devok & devok ( gput_set_input pg Xd rows )
-        ( vec_free [f] rows )
         = devok & devok ( gput_forward pg )
         = devok & devok ( gput_backward pg )
         ( vec_push [f] dloss ( gput_loss pg ) )
@@ -443,18 +416,10 @@ $ `deps/gpukit/src/dev.nu`
     }
     ( check pbit `training: final parameters bit-equal after 40 Adam steps` )
 
-    ( vec_free [f] closs ) ( vec_free [f] dloss )
-    ( gpopt_free go )
-    ( gput_free pg )
-    ( opt_free co )
-    ( tape_free tp ) ( tape_free tp2 )
-    ( vec_free [f] w1v ) ( vec_free [f] b1v )
-    ( vec_free [f] w2v ) ( vec_free [f] b2v )
-    ( vec_free [f] all )
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open 0 )
+    : GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_print `gput_parity: SKIP (no compute backend)\n` )
         ( gk_close kit )

@@ -36,7 +36,7 @@ $ `torchpt.nu`
     ^ T
 }
 
-@ cmd_info * Pt p → i {
+@ cmd_info Pt p → i {
     : i n ( pt_n_tensors p )
     ( nurl_print `tensors: ` ) ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` )
     : ~ i total 0
@@ -67,7 +67,7 @@ $ `torchpt.nu`
     ^ 0
 }
 
-@ cmd_tensors * Pt p s prefix → i {
+@ cmd_tensors Pt p s prefix → i {
     : i n ( pt_n_tensors p )
     : ~ i j 0
     ~ < j n {
@@ -78,7 +78,6 @@ $ `torchpt.nu`
             ( nurl_print `  ` )
             : String sh ( pt_shape_str p j )
             ( nurl_print ( string_data sh ) )
-            ( string_free sh )
             ( nurl_print `  ` ) ( nurl_print ( nurl_str_int ( pt_nbytes p j ) ) )
             ( nurl_print ` bytes` )
             ? ! ( pt_is_contiguous p j ) { ( nurl_print `  [view]` ) } {}
@@ -89,14 +88,14 @@ $ `torchpt.nu`
     ^ 0
 }
 
-@ cmd_stats * Pt p s name → i {
+@ cmd_stats Pt p s name → i {
     : i idx ( pt_find p name )
     ? < idx 0 { ( nurl_print `no such tensor\n` ) ^ 1 } {}
     : i n ( pt_nelems p idx )
     ? == n 0 { ( nurl_print `empty tensor\n` ) ^ 1 } {}
-    : *f buf # *f ( nurl_zalloc * n 8 )
+    : ( Vec f ) bv ( vec_zeroed [f] n )
+    : *f buf ( vec_data [f] bv )
     ? ! ( pt_read_f64 p idx 0 n buf ) {
-        ( nurl_free # s buf )
         ( nurl_print `cannot read tensor (non-contiguous or unsupported dtype)\n` )
         ^ 1
     } {}
@@ -116,19 +115,18 @@ $ `torchpt.nu`
     ( nurl_print ` max=` ) ( nurl_print ( nurl_str_float hi ) )
     ( nurl_print ` mean=` ) ( nurl_print ( nurl_str_float / sum # f n ) )
     ( nurl_print `\n` )
-    ( nurl_free # s buf )
     ^ 0
 }
 
-@ cmd_head * Pt p s name i count → i {
+@ cmd_head Pt p s name i count → i {
     : i idx ( pt_find p name )
     ? < idx 0 { ( nurl_print `no such tensor\n` ) ^ 1 } {}
     : i n ( pt_nelems p idx )
     : i want ? > count n n count
     ? <= want 0 { ( nurl_print `\n` ) ^ 0 } {}
-    : *f buf # *f ( nurl_zalloc * want 8 )
+    : ( Vec f ) bv ( vec_zeroed [f] want )
+    : *f buf ( vec_data [f] bv )
     ? ! ( pt_read_f64 p idx 0 want buf ) {
-        ( nurl_free # s buf )
         ( nurl_print `cannot read tensor\n` )
         ^ 1
     } {}
@@ -139,14 +137,13 @@ $ `torchpt.nu`
         = j + j 1
     }
     ( nurl_print `\n` )
-    ( nurl_free # s buf )
     ^ 0
 }
 
 // "<name> <dtype> <shape> <v0> <v1> …" per tensor. Values print through
 // nurl_str_float, which round-trips — so a diff against torch is a diff
 // of numbers, not of formatting.
-@ cmd_dump * Pt p → i {
+@ cmd_dump Pt p → i {
     : i n ( pt_n_tensors p )
     : ~ i j 0
     ~ < j n {
@@ -155,10 +152,10 @@ $ `torchpt.nu`
         ( nurl_print ` ` )
         : String sh ( pt_shape_str p j )
         ( nurl_print ( string_data sh ) )
-        ( string_free sh )
         : i cnt ( pt_nelems p j )
         ? > cnt 0 {
-            : *f buf # *f ( nurl_zalloc * cnt 8 )
+            : ( Vec f ) bv ( vec_zeroed [f] cnt )
+            : *f buf ( vec_data [f] bv )
             ? ( pt_read_f64 p j 0 cnt buf ) {
                 : ~ i e 0
                 ~ < e cnt {
@@ -166,7 +163,6 @@ $ `torchpt.nu`
                     = e + e 1
                 }
             } { ( nurl_print ` READ-FAILED` ) }
-            ( nurl_free # s buf )
         } {}
         ( nurl_print `\n` )
         = j + j 1
@@ -179,11 +175,10 @@ $ `torchpt.nu`
     ? < argc 3 { ^ ( usage ) } {}
     : s cmd ( nurl_argv 1 )
     : s path ( nurl_argv 2 )
-    : !*Pt String o ( pt_open path )
+    : !Pt String o ( pt_open path )
     ?? o {
         F e → {
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             ^ 1
         }
         T p → {

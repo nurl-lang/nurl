@@ -40,7 +40,8 @@ $ `stdlib/std/time.nu`
 
 @ bench_result_allocs_per_op BenchResult r → i { ^ . r allocs_per_op }
 
-@ bench_result_free sink BenchResult r → v { ( string_free . r name ) }
+// Let go of `r` now rather than at the end of its owner's scope.
+@ bench_result_free sink BenchResult r → v {}
 
 // Run `body` `iters` times (after a short warmup) and measure.
 @ bench_run s name i iters ( @ v ) body → BenchResult {
@@ -85,7 +86,6 @@ $ `stdlib/std/time.nu`
     : ~ b done F
     : ~ BenchResult best ( bench_run name 1 body )
     ~ ! done {
-        ( bench_result_free best )
         = best ( bench_run name iters body )
         ? | >= ( bench_result_total_ns best ) target >= iters cap {
             = done T
@@ -102,7 +102,6 @@ $ `stdlib/std/time.nu`
     ? & > total target & > iters 1 < iters cap {
         : i want / * iters target total
         ? & > want 0 < want iters {
-            ( bench_result_free best )
             = best ( bench_run name want body )
         } {}
     } {}
@@ -127,5 +126,4 @@ $ `stdlib/std/time.nu`
     : String line ( _bench_fmt ( string_data . r name ) . r iters . r ns_per_op . r allocs_per_op )
     ( nurl_print ( string_data line ) )
     ( nurl_print `\n` )
-    ( string_free line )
 }

@@ -18,7 +18,7 @@ $ `src/image.nu`
 @ try_bytes ( Vec u ) b → v {
     = g_tot + g_tot 1
     ?? ( image_decode b ) {
-        T im → { ( image_free im ) = g_ok + g_ok 1 }
+        T im → { = g_ok + g_ok 1 }
         F _ → {}
     }
 }
@@ -36,7 +36,6 @@ $ `src/image.nu`
     ? >= ( env_args_count ) 3 {
         : String a2 ( env_arg 2 )
         = phase - ( string_get a2 0 ) 48
-        ( string_free a2 )
     } {}
     : ~ i rc 0
     : !( Vec u ) IoErr r ( read_file_bytes ( string_data a1 ) )
@@ -53,7 +52,6 @@ $ `src/image.nu`
                     : ~ i k 0
                     ~ < k len { ( vec_push [u] pre ( _byte seed k ) ) = k + k 1 }
                     ( try_bytes pre )
-                    ( vec_free [u] pre )
                     = len + len step1
                 }
             } {}
@@ -71,7 +69,6 @@ $ `src/image.nu`
                             : ( Vec u ) mut ( copy_of seed )
                             ( vec_set [u] mut off v )
                             ( try_bytes mut )
-                            ( vec_free [u] mut )
                         }
                         = vi + vi 1
                     }
@@ -96,22 +93,18 @@ $ `src/image.nu`
                         = m + m 1
                     }
                     ( try_bytes mut )
-                    ( vec_free [u] mut )
                     = round + round 1
                 }
             } {}
 
-            ( vec_free [u] seed )
             : String msg ( string_from `fuzz done: ` )
             ( string_push_int msg g_tot )
             ( string_push_str msg ` mutants, ` )
             ( string_push_int msg g_ok )
             ( string_push_str msg ` still decoded` )
             ( puts ( string_data msg ) )
-            ( string_free msg )
         }
         F _ → { ( nurl_eprintln `cannot read seed` ) = rc 2 }
     }
-    ( string_free a1 )
     ^ rc
 }

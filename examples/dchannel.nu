@@ -51,14 +51,12 @@ $ `stdlib/ext/dchannel.nu`
     ( string_push_int banner port )
     ( string_push_str banner ` (channel "nums", cap 4)\n` )
     ( nurl_print ( string_data banner ) )
-    ( string_free banner )
 
     : !v NetErr sr ( dchan_serve `127.0.0.1` port store )
     ?? sr {
         T _ → {}
         F e → ( println `serve error: ` )
     }
-    ( dstore_free store )
     ^ 0
 }
 
@@ -74,7 +72,6 @@ $ `stdlib/ext/dchannel.nu`
     }
     ( dchan_close [i] ch )
     ( println `producer done; channel closed` )
-    ( dchan_free [i] ch )
     ^ 0
 }
 
@@ -101,8 +98,6 @@ $ `stdlib/ext/dchannel.nu`
     ( string_push_int line sum )
     ( string_push_char line 10 )
     ( nurl_print ( string_data line ) )
-    ( string_free line )
-    ( dchan_free [i] ch )
     ^ 0
 }
 
@@ -122,7 +117,6 @@ $ `stdlib/ext/dchannel.nu`
     : s m ( string_data mode )
     : String ps ( env_arg 2 )
     : i port ( nurl_str_to_int ( string_data ps ) )
-    ( string_free ps )
 
     : i rc ? != 0 ( nurl_str_eq m `server` ) {
         ( run_server port )
@@ -131,7 +125,6 @@ $ `stdlib/ext/dchannel.nu`
             ? < argc 4 { ( usage ) } {
                 : String ns ( env_arg 3 )
                 : i n ( nurl_str_to_int ( string_data ns ) )
-                ( string_free ns )
                 ( run_produce port n )
             }
         } {
@@ -143,6 +136,5 @@ $ `stdlib/ext/dchannel.nu`
         }
     }
 
-    ( string_free mode )
     ^ rc
 }

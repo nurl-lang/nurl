@@ -21,6 +21,7 @@ $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/net/membership.nu`
 $ `stdlib/net/relay.nu`
+$ `stdlib/core/rcbox.nu`
 
 & `c` @ nurl_atomic_i64_load *u p → i
 
@@ -41,21 +42,53 @@ $ `stdlib/net/relay.nu`
     ^ ( pkmsg_encode m )
 }
 
-: Heartbeat {
+: HeartbeatImpl {
     Thread thr
-    * i stop  // atomic flag: 0 = run, >0 = stop
-    s env  // thread closure env, freed after join
+    * i stop  // atomic flag: 0 = run, >0 = stop (the thread reads it until joined)
     i live
+}
+
+// A Heartbeat is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same heartbeat, and the last owner stops the thread
+// (as heartbeat_stop does), joins it and releases the flag.
+: Heartbeat { s ctl }
+
+@ Heartbeat_share Heartbeat h → Heartbeat { ^ @ Heartbeat { # s ( rcbox_share # i . h ctl ) } }
+
+@ Heartbeat_drop sink Heartbeat h → v {
+    ( mem_forget h )
+    ( rcbox_release [HeartbeatImpl] # i . h ctl )
+}
+
+@ __Heartbeat_ptr Heartbeat h → *HeartbeatImpl { ^ ( rcbox_ptr [HeartbeatImpl] # i . h ctl ) }
+
+// Stop and join a thread still running; the flag goes once nothing reads it.
+@ __hb_stop * HeartbeatImpl hb → v {
+    ? == . hb live 1 {
+        ( nurl_atomic_i64_inc # *u . hb stop )  // 0 → 1: stop after current sleep
+        ( thread_join . hb thr )
+        = . hb live 0
+    } {}
+}
+
+% Drop HeartbeatImpl {
+    @ drop HeartbeatImpl hb → v {
+        ? == . hb live 1 {
+            ( nurl_atomic_i64_inc # *u . hb stop )
+            ( thread_join . hb thr )
+        } {}
+        ( nurl_free # s . hb stop )
+    }
 }
 
 // Start the heartbeat thread. It broadcasts the self-alive payload to `group`
 // every `interval_ms`, reading the table under `mtx` (the caller must hold the
 // SAME mtx around its own table mutations). `rc` is the heartbeat's own relay
-// connection. Returns a *Heartbeat to stop later.
-@ heartbeat_start PkMemberTable t RelayClient rc ( Vec u ) group i interval_ms Mutex mtx → *Heartbeat {
-    : *Heartbeat hb # *Heartbeat ( nurl_alloc Z Heartbeat )
-    : *i stop # *i ( nurl_alloc 8 )
-    = . stop 0 0
+// connection. Returns a Heartbeat to stop later (its last owner stops it).
+@ heartbeat_start PkMemberTable t RelayClient rc ( Vec u ) group i interval_ms Mutex mtx → Heartbeat {
+    : i hb__box ( rcbox_zero [HeartbeatImpl] )
+    : *HeartbeatImpl hb ( rcbox_ptr [HeartbeatImpl] hb__box )
+    : *i stop # *i ( nurl_zalloc 8 )
     = . hb stop stop
     = . hb live 0
     : ( Vec u ) grp ( __hb_cpy group )
@@ -68,30 +101,21 @@ $ `stdlib/net/relay.nu`
                 : ( Vec u ) payload ( heartbeat_payload t )
                 ( mutex_unlock mtx )
                 ?? ( relay_broadcast rc grp payload ) { T _ → {} F _ → {} }
-                ( vec_free [u] payload )
             } {}
         }
-        ( vec_free [u] grp )
     }
 
     : !Thread ThreadErr tr ( thread_spawn body )
     ?? tr {
-        T th → { = . hb thr th = . hb live 1 }
-        F e → { ( vec_free [u] grp ) }
+        T th → { = . hb thr ( Thread_share th ) = . hb live 1 }
+        F e → {}
     }
-    ^ hb
+    ^ @ Heartbeat { # s hb__box }
 }
 
-// Signal the heartbeat thread to stop, join it, and free its resources.
-@ heartbeat_stop * Heartbeat hb → v {
-    ? == . hb live 1 {
-        ( nurl_atomic_i64_inc # *u . hb stop )  // 0 → 1: stop after current sleep
-        ( thread_join . hb thr )
-        // The handle goes with the block: taken out of it, dropped here.
-        : Thread th . hb thr
-        ( mem_take th )
-        = . hb live 0
-    } {}
-    ( nurl_free # s . hb stop )
-    ( nurl_free # s hb )
+// Signal the heartbeat thread to stop and join it. Optional: the last owner
+// of the Heartbeat does the same.
+@ heartbeat_stop Heartbeat hb__h → v {
+    : *HeartbeatImpl hb ( __Heartbeat_ptr hb__h )
+    ( __hb_stop hb )
 }

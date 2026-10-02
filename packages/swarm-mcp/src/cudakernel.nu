@@ -97,7 +97,6 @@ $ `wasmkernel.nu`
         ( string_push_str o `f` )
         ( string_push_str o ( string_data pc ) )
     }
-    ( string_free pc )
     ^ o
 }
 
@@ -256,7 +255,6 @@ $ `wasmkernel.nu`
         // result instead of silently dropping keys (needs a bigger max_keys).
         ( string_push_str cu `        if (probe == K) atomicAdd((unsigned long long*)&ok[2*K], 1ULL);\n` )
         ( string_push_str cu `    }\n}\n` )
-        ( string_free rc )
     } {
         ? == mode ( gpu_mode_vecreduce ) {
             // scatter-add gradient: the user writes grad(...) which calls the
@@ -284,7 +282,6 @@ $ `wasmkernel.nu`
             ( string_push_str cu `        grad` )
             ( string_push_str cu ( string_data gcall ) )
             ( string_push_str cu `;\n    }\n}\n` )
-            ( string_free gcall )
         } {
             ? == mode ( gpu_mode_hist ) {
                 // default val() when the user only wrote bin(): count per bin
@@ -363,11 +360,8 @@ $ `wasmkernel.nu`
                         ( string_push_str cu `    }\n` )
                         ( string_push_str cu `    if (t == 0) out[blockIdx.x] = sh[0];\n` )
                         ( string_push_str cu `}\n` )
-                        ( string_free comb ) ( string_free comb2 ) ( string_free mv )
                     } } } } }
-    ( string_free pt ) ( string_free pc ) ( string_free kt )
     ( __cuda_escape w ( string_data cu ) )
-    ( string_free cu )
     ( string_push_char w 96 )
     ( string_push_str w ` )\n` )
     ( __pl w `    ^ c` )
@@ -634,6 +628,5 @@ $ `wasmkernel.nu`
     ( string_push_str eff user ) ( string_push_char eff 10 )
     ( string_push_str eff `__device__ double f(long long x, const double* p) { return update(x, p); }` )
     : String out ( cuda_wrap ( string_data eff ) 0 ( gpu_mode_sample ) 1 0 )
-    ( string_free eff )
     ^ out
 }

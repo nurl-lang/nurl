@@ -32,7 +32,8 @@
 //   ( file_open path )           → ! File IoErr     open a file for binary reading
 //   ( file_read_chunk f n )      → ! ( Vec u ) IoErr  up to n bytes; empty Vec at EOF
 //   ( file_eof f )               → b                T once the stream is drained
-//   ( file_close f )             → v                close the handle
+//   ( file_close f )             → v                close now (optional: the
+//                                                    last owner closes it)
 //
 // Examples:
 //   : ! String IoErr r ( read_file `data.txt` )
@@ -52,6 +53,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/core/posix.nu`
+$ `stdlib/core/rcbox.nu`
 
 // errno-kind → IoErr enum value. Order matches `nurl_errno_kind` in
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
@@ -632,7 +634,6 @@ $ `stdlib/core/posix.nu`
         F e → { ^ @ !( Vec u ) IoErr { F e } }
         T bytes → {
             ? != closed # i32 0 {
-                ( vec_free [u] bytes )
                 ^ @ !( Vec u ) IoErr { F close_error }
             } {}
             ^ @ !( Vec u ) IoErr { T bytes }
@@ -846,7 +847,6 @@ $ `stdlib/core/posix.nu`
     }
     // Final component (the path itself, with no trailing separator).
     : !v IoErr last ( __dir_create_step ( string_data prefix ) )
-    ( string_free prefix )
     ?? last {
         T → { ^ @ !v IoErr { T 0 } }
         F e → { ^ @ !v IoErr { F ? have_first first e } }
@@ -858,12 +858,6 @@ $ `stdlib/core/posix.nu`
     : i32 rc ( unlink p )
     ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
-}
-
-// Free a Vec[String] and every String it owns.
-@ __fs_free_str_vec ( Vec String ) v → v {
-    : ( @ v String ) drop_str \ String e → v { ( string_free e ) }
-    ( vec_free_with [String] v drop_str )
 }
 
 // Recursively remove a directory and everything beneath it. Handed a
@@ -887,11 +881,9 @@ $ `stdlib/core/posix.nu`
                         : String full ( path_join path ( string_data name ) )
                         : s fp ( string_data full )
                         : !v IoErr r ? == 2 ( nurl_path_type fp ) { ( dir_remove_all fp ) } { ( __unlink_entry fp ) }
-                        ( string_free full )
                         ?? r {
                             T → {}
                             F e → {
-                                ( __fs_free_str_vec entries )
                                 ^ @ !v IoErr { F e }
                             }
                         }
@@ -900,7 +892,6 @@ $ `stdlib/core/posix.nu`
                 }
                 = idx + idx 1
             }
-            ( __fs_free_str_vec entries )
         }
     }
     // The directory is empty now — remove the directory itself.
@@ -915,10 +906,41 @@ $ `stdlib/core/posix.nu`
 // adds a refill buffer and a memchr line scanner on top of the same
 // FILE* handle; this layer is the raw binary primitive.
 //
-// File wraps a libc FILE* (an opaque `s`). file_open opens "rb"; the
-// handle is closed by file_close.
+// File is a handle on a libc FILE* in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same open file, and the last owner closes it —
+// file_close closes it now (a later operation on any copy is an error,
+// a later close a no-op). file_open opens "rb". `@ File { # s 0 }` is the
+// null File (no file).
 
-: File { s raw }
+: FileImpl { * v fp }  // the FILE*, 0 once closed
+
+% Drop FileImpl {
+    @ drop FileImpl f → v {
+        ? != 0 # i . f fp { ( nurl_file_close . f fp ) } {}
+    }
+}
+
+: File { s ctl }
+
+@ File_share File h → File { ^ @ File { # s ( rcbox_share # i . h ctl ) } }
+
+@ File_drop sink File h → v {
+    ( mem_forget h )
+    ( rcbox_release [FileImpl] # i . h ctl )
+}
+
+// The FILE* behind `f`, lent (0 for a null or closed File).
+@ file_raw File f → s {
+    ? == 0 # i . f ctl { ^ # s 0 } {}
+    ^ # s . ( rcbox_ptr [FileImpl] # i . f ctl ) fp
+}
+
+// Take over an open FILE* (0 gives the null File): the File's last owner
+// closes it.
+@ file_from_raw s fp → File {
+    ? == 0 # i fp { ^ @ File { # s 0 } } {}
+    ^ @ File { # s ( rcbox_new [FileImpl] @ FileImpl { # *v fp } ) }
+}
 
 @ file_open s path → !File IoErr {
     : *v h ( nurl_file_open path `rb` )
@@ -926,7 +948,7 @@ $ `stdlib/core/posix.nu`
         ^ @ !File IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : s rawp # s h
-    ^ @ !File IoErr { T @ File { rawp } }
+    ^ @ !File IoErr { T ( file_from_raw rawp ) }
 }
 
 // Read up to `n` bytes from the handle into an owned Vec[u]. A returned
@@ -934,7 +956,7 @@ $ `stdlib/core/posix.nu`
 // file_eof for an explicit check. The caller owns the Vec (vec_free [u]).
 @ file_read_chunk File f i n → !( Vec u ) IoErr {
     ? <= n 0 { ^ @ !( Vec u ) IoErr { T ( vec_new [u] ) } } {}
-    : s hp . f raw
+    : s hp ( file_raw f )
     ? == 0 # i hp {
         ^ @ !( Vec u ) IoErr { F @ IoErr { Other } }
     } {}
@@ -950,13 +972,19 @@ $ `stdlib/core/posix.nu`
 }
 
 @ file_eof File f → b {
-    : s hp . f raw
+    : s hp ( file_raw f )
     ^ != 0 ( nurl_file_eof # *v hp )
 }
 
+// Close the file now (optional: the last owner closes it). Every copy of
+// `f` sees it closed.
 @ file_close File f → v {
-    : s hp . f raw
-    ? != 0 # i hp { ( nurl_file_close # *v hp ) } {}
+    ? == 0 # i . f ctl { ^ } {}
+    : *FileImpl p ( rcbox_ptr [FileImpl] # i . f ctl )
+    ? != 0 # i . p fp {
+        ( nurl_file_close . p fp )
+        = . p fp # *v 0
+    } {}
 }
 
 // ── Handle-based streaming writes + seeking ─────────────────────────
@@ -992,7 +1020,7 @@ $ `stdlib/core/posix.nu`
         ^ @ !File IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : s rawp # s h
-    ^ @ !File IoErr { T @ File { rawp } }
+    ^ @ !File IoErr { T ( file_from_raw rawp ) }
 }
 
 // Create (truncate) `path` for writing. Binary mode — see the CRLF
@@ -1010,7 +1038,7 @@ $ `stdlib/core/posix.nu`
 // Write the whole Vec (binary-safe: NULs included). A short write is
 // an error, never silent truncation.
 @ file_write_chunk File f ( Vec u ) data → !v IoErr {
-    : s hp . f raw
+    : s hp ( file_raw f )
     ? == 0 # i hp { ^ @ !v IoErr { F @ IoErr { Other } } } {}
     : i n ( vec_len [u] data )
     ? <= n 0 { ^ @ !v IoErr { T 0 } } {}
@@ -1020,7 +1048,7 @@ $ `stdlib/core/posix.nu`
 }
 
 @ file_flush File f → !v IoErr {
-    : s hp . f raw
+    : s hp ( file_raw f )
     ? == 0 # i hp { ^ @ !v IoErr { F @ IoErr { Other } } } {}
     ? == 0 # i ( fflush hp ) { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
@@ -1044,7 +1072,7 @@ $ `stdlib/core/posix.nu`
 // manifest is allowed to name it) needs this instead. It costs a device
 // round-trip, so it is a deliberate call, not the default on every write.
 @ file_sync File f → !v IoErr {
-    : s hp . f raw
+    : s hp ( file_raw f )
     ? == 0 # i hp { ^ @ !v IoErr { F @ IoErr { Other } } } {}
     ? == 0 ( nurl_file_sync # *v hp ) { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
@@ -1073,7 +1101,7 @@ $ `stdlib/core/posix.nu`
 // Seek to `off` relative to `whence`; returns the new ABSOLUTE offset
 // (so `( file_seek f 0 FS_SEEK_END )` doubles as "how big is this").
 @ file_seek File f i off i whence → !i IoErr {
-    : s hp . f raw
+    : s hp ( file_raw f )
     ? == 0 # i hp { ^ @ !i IoErr { F @ IoErr { Other } } } {}
     ? == 0 # i ( fseek hp off # i32 whence ) {} {
         ^ @ !i IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
@@ -1084,7 +1112,7 @@ $ `stdlib/core/posix.nu`
 }
 
 @ file_tell File f → !i IoErr {
-    : s hp . f raw
+    : s hp ( file_raw f )
     ? == 0 # i hp { ^ @ !i IoErr { F @ IoErr { Other } } } {}
     : i posn ( ftell hp )
     ? >= posn 0 { ^ @ !i IoErr { T posn } } {}
@@ -1151,7 +1179,6 @@ $ `stdlib/core/posix.nu`
         } {}
         ? < got chunk { = going F } {}
     }
-    ( vec_free [u] buf )
     // fclose flushes buffered writes; success from fwrite alone does not
     // mean a complete copy (e.g. a full device can fail only at close).
     : i32 wc ( fclose wf )
@@ -1367,18 +1394,16 @@ $ `stdlib/core/posix.nu`
                             ? dirs_only {
                                 ? == 2 ( nurl_path_type_follow ( string_data full ) )
                                 { ( vec_push [String] acc full ) }
-                                { ( string_free full ) }
+                                {}
                             } {
                                 ( vec_push [String] acc full )
                             }
                         } {}
-                        ( string_free name )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] entries )
         }
         F _ → {}  // unreadable dir → no matches from it
     }
@@ -1403,15 +1428,12 @@ $ `stdlib/core/posix.nu`
                             : String full ( _glob_join base ( string_data name ) )
                             ? == 2 ( nurl_path_type_follow ( string_data full ) )
                             { ( __glob_walk_dirs acc ( string_data full ) ) } {}
-                            ( string_free full )
                         } {}
-                        ( string_free name )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] entries )
         }
         F _ → {}
     }
@@ -1488,28 +1510,14 @@ $ `stdlib/core/posix.nu`
                         : i tyf ( nurl_path_type_follow ( string_data full ) )
                         ? | & is_last > ty 0 & ! is_last == tyf 2
                         { ( vec_push [String] next full ) }
-                        { ( string_free full ) }
+                        {}
                     }
                 }
                 = fi + fi 1
             }
-            ( __glob_free_vec frontier )
             = frontier next
             = si + si 1
         }
     }
-    ( __glob_free_vec segs )
     ^ @ !( Vec String ) IoErr { T frontier }
-}
-
-// Free an owned Vec[String] (elements + container).
-@ __glob_free_vec ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i k 0
-    ~ < k n {
-        : ?String eo ( vec_get [String] v k )
-        ?? eo { T s → ( string_free s ) F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [String] v )
 }

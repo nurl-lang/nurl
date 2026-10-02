@@ -27,7 +27,7 @@
 // one, versions of a key sort newest-first, and a read at sequence S sees
 // the database exactly as it was after write S — a snapshot, for free.
 //
-//   ( lsm_open dir )                     → !*Lsm String
+//   ( lsm_open dir )                     → !Lsm String
 //   ( lsm_put db key val )               → !v String
 //   ( lsm_del db key )                   → !v String
 //   ( lsm_get db key )                   → !LsmGet String
@@ -35,7 +35,11 @@
 //   ( lsm_scan db from to limit snap )   → !LsmScan String
 //   ( lsm_flush db ) / ( lsm_compact db ) → !i String
 //   ( lsm_stats db )                     → LsmStats
-//   ( lsm_close db )
+//   ( lsm_close db )                     → v   early release (optional)
+//
+// An Lsm is a handle: every copy is the same open database, and the last
+// owner closes it — the log, every table file, the memtable. LsmGet and
+// LsmScan are plain values; nothing here is released by hand.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -45,17 +49,18 @@ $ `stdlib/std/path.nu`
 $ `memtable.nu`
 $ `sst.nu`
 $ `wal.nu`
+$ `stdlib/core/rcbox.nu`
 
 : i LSM_MEMLIMIT 4194304  // 4 MiB of memtable before an auto-flush
 
-: Lsm {
+: LsmImpl {
     String dir
     String walpath
     String manpath
-    * MemTable mem
+    MemTable mem
     ( Vec String ) names  // table file names, NEWEST FIRST
-    ( Vec * SstReader ) tables  // parallel to names
-    * Wal wal
+    ( Vec SstReader ) tables  // parallel to names
+    Wal wal
     i seq
     i nextfile
     i memlimit
@@ -63,6 +68,17 @@ $ `wal.nu`
     i flushes
     i compactions
 }
+
+: Lsm { s ctl }
+
+@ Lsm_share Lsm h → Lsm { ^ @ Lsm { # s ( rcbox_share # i . h ctl ) } }
+
+@ Lsm_drop sink Lsm h → v {
+    ( mem_forget h )
+    ( rcbox_release [LsmImpl] # i . h ctl )
+}
+
+@ __Lsm_ptr Lsm h → *LsmImpl { ^ ( rcbox_ptr [LsmImpl] # i . h ctl ) }
 
 : LsmGet {
     i found
@@ -81,13 +97,14 @@ $ `wal.nu`
     i filtered
 }
 
-@ lsm_get_free sink LsmGet g → v { ( vec_free [u] . g val ) }
+// Let go of `g` now rather than at the end of its owner's scope.
+@ lsm_get_free sink LsmGet g → v {}
 
 @ __lsm_err s what → String { ^ ( string_from what ) }
 
 // ── paths ───────────────────────────────────────────────────────────
 
-@ __lsm_path * Lsm db s name → String {
+@ __lsm_path * LsmImpl db s name → String {
     ^ ( path_join ( string_data . db dir ) name )
 }
 
@@ -99,7 +116,6 @@ $ `wal.nu`
     : ~ i pad - 6 ( string_len digits )
     ~ > pad 0 { ( string_push_char s 48 ) = pad - pad 1 }
     ( string_push_str s ( string_data digits ) )
-    ( string_free digits )
     ( string_push_str s `.sst` )
     ^ s
 }
@@ -110,7 +126,7 @@ $ `wal.nu`
 // replaced by rename, never edited in place, so a reader either sees the
 // whole old list or the whole new one.
 
-@ __lsm_manifest_write * Lsm db → !v String {
+@ __lsm_manifest_write * LsmImpl db → !v String {
     : String tmp ( __lsm_path db `MANIFEST.tmp` )
     : String body ( string_with_cap 256 )
     ( string_push_str body `lsmdb-manifest v1
@@ -139,20 +155,16 @@ next ` )
             ?? ( file_write_chunk f bytes ) { T _ → {} F _ → { = ok F } }
             ?? ( file_sync f ) { T _ → {} F _ → { = ok F } }
             ( file_close f )
-            ( vec_free [u] bytes )
         }
         F _ → { = ok F }
     }
-    ( string_free body )
     ? ok {} {
-        ( string_free tmp )
         ^ @ !v String { F ( __lsm_err `lsmdb: cannot write the manifest` ) }
     }
     ?? ( fs_rename ( string_data tmp ) ( string_data . db manpath ) ) {
         T _ → {}
         F _ → { = ok F }
     }
-    ( string_free tmp )
     ? ok {} { ^ @ !v String { F ( __lsm_err `lsmdb: cannot publish the manifest` ) } }
     // The rename itself has to reach the disk, or a crash can leave the
     // table on disk with the old manifest still naming the world.
@@ -167,15 +179,14 @@ next ` )
     ^ ( string_substr ln n - len n )
 }
 
-@ __lsm_manifest_read * Lsm db → !v String {
+@ __lsm_manifest_read * LsmImpl db → !v String {
     ? ( file_exists ( string_data . db manpath ) ) {} { ^ @ !v String { T 0 } }
     : !String IoErr rr ( read_file ( string_data . db manpath ) )
     : ~ String text ( string_new )
-    ?? rr { T s → { ( string_free text ) = text s } F _ → {
+    ?? rr { T s → { = text s } F _ → {
             ^ @ !v String { F ( __lsm_err `lsmdb: cannot read the manifest` ) } } }
     : ( Vec String ) lines ( string_split text `
 ` )
-    ( string_free text )
     : ~ b bad F
     : ~ i k 0
     ~ < k ( vec_len [String] lines ) {
@@ -187,12 +198,10 @@ next ` )
                     ? ( string_starts_with ln `seq ` ) {
                         : String rest ( __lsm_after ln 4 )
                         = . db seq ( nurl_str_to_int ( string_data rest ) )
-                        ( string_free rest )
                     } {
                         ? ( string_starts_with ln `next ` ) {
                             : String rest ( __lsm_after ln 5 )
                             = . db nextfile ( nurl_str_to_int ( string_data rest ) )
-                            ( string_free rest )
                         } {
                             ? ( string_starts_with ln `sst ` ) {
                                 ( vec_push [String] . db names ( __lsm_after ln 4 ) )
@@ -205,29 +214,32 @@ next ` )
         }
         = k + k 1
     }
-    ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
     ? bad { ^ @ !v String { F ( __lsm_err `lsmdb: not an lsmdb manifest` ) } } {}
     ^ @ !v String { T 0 }
 }
 
 // ── open / close ────────────────────────────────────────────────────
 
-@ lsm_open s dir → !*Lsm String {
+@ lsm_open s dir → !Lsm String {
     ?? ( dir_create_all dir ) {
         T _ → {}
         F _ → {
             : String msg ( string_from `lsmdb: cannot create database directory ` )
             ( string_push_str msg dir )
-            ^ @ !*Lsm String { F msg }
+            ^ @ !Lsm String { F msg }
         }
     }
-    : *Lsm db # *Lsm ( nurl_alloc Z Lsm )
+    // The handle first: every early return below lets go of it, and with
+    // it of whatever was opened so far (an unset log is a null handle).
+    : i db__box ( rcbox_zero [LsmImpl] )
+    : Lsm h @ Lsm { # s db__box }
+    : *LsmImpl db ( rcbox_ptr [LsmImpl] db__box )
     = . db dir ( string_from dir )
     = . db walpath ( path_join dir `WAL` )
     = . db manpath ( path_join dir `MANIFEST` )
     = . db mem ( mt_new 0 )
     = . db names ( vec_new [String] )
-    = . db tables ( vec_new [* SstReader] )
+    = . db tables ( vec_new [SstReader] )
     = . db seq 0
     = . db nextfile 1
     = . db memlimit LSM_MEMLIMIT
@@ -237,20 +249,21 @@ next ` )
 
     ?? ( __lsm_manifest_read db ) {
         T _ → {}
-        F e → { ( __lsm_free db ) ^ @ !*Lsm String { F e } }
+        F e → { ^ @ !Lsm String { F e } }
     }
     // Open every named table. A table the manifest names but the
     // directory does not have is a broken database, not a warning.
     : ~ i k 0
     ~ < k ( vec_len [String] . db names ) {
-        : ~ String nm ( string_new )
-        ?? ( vec_get [String] . db names k ) { T s → { ( string_free nm ) = nm s } F → {} }
-        : String full ( __lsm_path db ( string_data nm ) )
-        : !*SstReader String orr ( sst_open ( string_data full ) )
-        ( string_free full )
-        ?? orr {
-            T r → { ( vec_push [* SstReader] . db tables r ) }
-            F e → { ( __lsm_free db ) ^ @ !*Lsm String { F e } }
+        ?? ( vec_get [String] . db names k ) {
+            T nm → {
+                : String full ( __lsm_path db ( string_data nm ) )
+                ?? ( sst_open ( string_data full ) ) {
+                    T r → { ( vec_push [SstReader] . db tables r ) }
+                    F e → { ^ @ !Lsm String { F e } }
+                }
+            }
+            F → {}
         }
         = k + k 1
     }
@@ -267,52 +280,50 @@ next ` )
             ? == . st truncated 1 {
                 ?? ( wal_truncate ( string_data . db walpath ) . st bytes ) {
                     T _ → {}
-                    F e → { ( __lsm_free db ) ^ @ !*Lsm String { F e } }
+                    F e → { ^ @ !Lsm String { F e } }
                 }
             } {}
         }
-        F e → { ( __lsm_free db ) ^ @ !*Lsm String { F e } }
+        F e → { ^ @ !Lsm String { F e } }
     }
-    : !*Wal String wo ( wal_open ( string_data . db walpath ) )
+    : !Wal String wo ( wal_open ( string_data . db walpath ) )
     ?? wo {
         T w → { = . db wal w }
-        F e → { ( __lsm_free db ) ^ @ !*Lsm String { F e } }
+        F e → { ^ @ !Lsm String { F e } }
     }
-    ^ @ !*Lsm String { T db }
+    ^ @ !Lsm String { T h }
 }
 
-// Free everything a partially-built handle may own. The wal field is the
-// one that may still be unset, so it is never touched here — lsm_close
-// closes it and then calls this.
-@ __lsm_free sink * Lsm db → v {
-    ( string_free . db dir )
-    ( string_free . db walpath )
-    ( string_free . db manpath )
-    ( mt_free . db mem )
-    ( vec_free_with [String] . db names \ String s → v { ( string_free s ) } )
-    ( vec_free_with [* SstReader] . db tables \ * SstReader r → v { ( sst_close r ) } )
-    ( nurl_free # s db )
-}
+// Let go of `db` now rather than at the end of its owner's scope. The
+// last owner closes the database: the log, every table, the memtable.
+@ lsm_close sink Lsm db → v {}
 
-@ lsm_close * Lsm db → v {
-    ( wal_close . db wal )
-    ( __lsm_free db )
+@ lsm_seq Lsm db__h → i {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    ^ . db seq
 }
-
-@ lsm_seq * Lsm db → i { ^ . db seq }
 
 // Force everything written so far to the device. Only needed after
 // running with durability switched off — a bulk import that wants one
 // fsync at the end instead of one per row.
-@ lsm_sync * Lsm db → !v String { ^ ( wal_sync . db wal ) }
+@ lsm_sync Lsm db__h → !v String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    ^ ( wal_sync . db wal )
+}
 
-@ lsm_set_durable * Lsm db b on → v { = . db durable ? on 1 0 }
+@ lsm_set_durable Lsm db__h b on → v {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    = . db durable ? on 1 0
+}
 
-@ lsm_set_memlimit * Lsm db i n → v { = . db memlimit ? > n 1024 n 1024 }
+@ lsm_set_memlimit Lsm db__h i n → v {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    = . db memlimit ? > n 1024 n 1024
+}
 
 // ── writes ──────────────────────────────────────────────────────────
 
-@ __lsm_write * Lsm db ( Vec u ) key ( Vec u ) val i kind → !v String {
+@ __lsm_write * LsmImpl db ( Vec u ) key ( Vec u ) val i kind → !v String {
     = . db seq + . db seq 1
     : i seq . db seq
     ?? ( wal_append . db wal key val seq kind ) { T _ → {} F e → { ^ @ !v String { F e } } }
@@ -321,35 +332,41 @@ next ` )
     } {}
     ( mt_put . db mem key val seq kind )
     ? >= ( mt_bytes . db mem ) . db memlimit {
-        ?? ( lsm_flush db ) { T _ → {} F e → { ^ @ !v String { F e } } }
+        ?? ( __lsm_flush db ) { T _ → {} F e → { ^ @ !v String { F e } } }
     } {}
     ^ @ !v String { T 0 }
 }
 
-@ lsm_put * Lsm db ( Vec u ) key ( Vec u ) val → !v String {
+@ lsm_put Lsm db__h ( Vec u ) key ( Vec u ) val → !v String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
     ? == ( vec_len [u] key ) 0 {
         ^ @ !v String { F ( __lsm_err `lsmdb: the empty key is not a key` ) }
     } {}
     ^ ( __lsm_write db key val MT_PUT )
 }
 
-@ lsm_del * Lsm db ( Vec u ) key → !v String {
+@ lsm_del Lsm db__h ( Vec u ) key → !v String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
     : ( Vec u ) empty ( vec_new [u] )
-    : !v String r ( __lsm_write db key empty MT_DEL )
-    ( vec_free [u] empty )
-    ^ r
+    ^ ( __lsm_write db key empty MT_DEL )
 }
 
 // ── reads ───────────────────────────────────────────────────────────
 
-@ lsm_get * Lsm db ( Vec u ) key → !LsmGet String {
-    ^ ( lsm_get_at db key . db seq )
+@ lsm_get Lsm db__h ( Vec u ) key → !LsmGet String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    ^ ( __lsm_get_at db key . db seq )
 }
 
 // The read path in full: memtable, then tables newest to oldest. The
 // FIRST version found wins, and a tombstone counts as found — that is
 // what stops an older table's stale value from resurrecting a deleted key.
-@ lsm_get_at * Lsm db ( Vec u ) key i snap → !LsmGet String {
+@ lsm_get_at Lsm db__h ( Vec u ) key i snap → !LsmGet String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    ^ ( __lsm_get_at db key snap )
+}
+
+@ __lsm_get_at * LsmImpl db ( Vec u ) key i snap → !LsmGet String {
     : i node ( mt_find . db mem key snap )
     ? != node 0 {
         ? == ( mt_kind . db mem node ) MT_DEL {
@@ -358,21 +375,19 @@ next ` )
         ^ @ !LsmGet String { T @ LsmGet { 1 ( mt_seq . db mem node ) ( mt_val . db mem node ) } }
     } {}
     : ~ i k 0
-    : i n ( vec_len [* SstReader] . db tables )
+    : i n ( vec_len [SstReader] . db tables )
     ~ < k n {
-        ?? ( vec_get [* SstReader] . db tables k ) {
+        ?? ( vec_get [SstReader] . db tables k ) {
             T r → {
                 : !SstHit String hr ( sst_get r key snap )
                 ?? hr {
                     T hit → {
                         ? == . hit found 1 {
                             ? == . hit kind MT_DEL {
-                                ( sst_hit_free hit )
                                 ^ @ !LsmGet String { T @ LsmGet { 0 0 ( vec_new [u] ) } }
                             } {}
                             ^ @ !LsmGet String { T @ LsmGet { 1 . hit seq . hit val } }
                         } {}
-                        ( sst_hit_free hit )
                     }
                     F e → { ^ @ !LsmGet String { F e } }
                 }
@@ -392,50 +407,57 @@ next ` )
 // sequence half of that order puts newer versions first, the FIRST time
 // a key appears is always its newest visible version.
 
-: LsmIter {
-    * MemTable mem
+: LsmIterImpl {
+    MemTable mem  // a share: the memtable it walks stays alive with it
     i usemem
     i mnode
-    ( Vec * SstCursor ) curs
+    ( Vec SstCursor ) curs
     i src  // -1 memtable, >=0 cursor index, -2 exhausted
+    * SstCursorImpl cur  // cursor `src`, opened by the pick (curs owns it)
     i failed
     String err
 }
 
-@ __it_new * Lsm db b usemem ( Vec u ) from i snap → *LsmIter {
-    : *LsmIter it # *LsmIter ( nurl_alloc Z LsmIter )
-    = . it mem . db mem
+: LsmIter { s ctl }
+
+@ LsmIter_share LsmIter h → LsmIter { ^ @ LsmIter { # s ( rcbox_share # i . h ctl ) } }
+
+@ LsmIter_drop sink LsmIter h → v {
+    ( mem_forget h )
+    ( rcbox_release [LsmIterImpl] # i . h ctl )
+}
+
+@ __LsmIter_ptr LsmIter h → *LsmIterImpl { ^ ( rcbox_ptr [LsmIterImpl] # i . h ctl ) }
+
+@ __it_new * LsmImpl db b usemem ( Vec u ) from i snap → LsmIter {
+    : i it__box ( rcbox_zero [LsmIterImpl] )
+    : *LsmIterImpl it ( rcbox_ptr [LsmIterImpl] it__box )
+    = . it mem ( MemTable_share . db mem )
     = . it usemem ? usemem 1 0
-    = . it curs ( vec_new [* SstCursor] )
+    = . it curs ( vec_new [SstCursor] )
     = . it src -2
     = . it failed 0
     = . it err ( string_new )
     : b seeking > ( vec_len [u] from ) 0
     = . it mnode ? usemem ? seeking ( mt_seek . db mem from snap ) ( mt_first . db mem ) 0
     : ~ i k 0
-    ~ < k ( vec_len [* SstReader] . db tables ) {
-        ?? ( vec_get [* SstReader] . db tables k ) {
+    ~ < k ( vec_len [SstReader] . db tables ) {
+        ?? ( vec_get [SstReader] . db tables k ) {
             T r → {
-                : *SstCursor c ( sst_cursor r )
+                : SstCursor c ( sst_cursor r )
                 ? seeking { ( sc_seek c from snap ) } { ( sc_first c ) }
-                ( vec_push [* SstCursor] . it curs c )
+                ( vec_push [SstCursor] . it curs c )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ^ it
-}
-
-@ __it_free sink * LsmIter it → v {
-    ( vec_free_with [* SstCursor] . it curs \ * SstCursor c → v { ( sc_free c ) } )
-    ( string_free . it err )
-    ( nurl_free # s it )
+    ^ @ LsmIter { # s it__box }
 }
 
 // Select the source whose head sorts first. Returns -2 when every source
 // is exhausted.
-@ __it_pick * LsmIter it → i {
+@ __it_pick * LsmIterImpl it → i {
     : ~ i best -2
     : ~ * u bp # *u 0
     : ~ i boff 0
@@ -448,27 +470,33 @@ next ` )
         = blen ( mt_klen . it mem . it mnode )
         = bseq ( mt_seq . it mem . it mnode )
     } {}
+    : ~ * SstCursorImpl bcur # *SstCursorImpl 0
     : ~ i k 0
-    ~ < k ( vec_len [* SstCursor] . it curs ) {
-        ?? ( vec_get [* SstCursor] . it curs k ) {
+    ~ < k ( vec_len [SstCursor] . it curs ) {
+        ?? ( vec_get [SstCursor] . it curs k ) {
             T c → {
-                ? ( sc_failed c ) {
+                // The merge's inner loop: each cursor is opened once per
+                // step and its head read in place (sst.nu's cursor state).
+                : *SstCursorImpl cr ( _SstCursor_ptr c )
+                ? == . cr failed 1 {
                     = . it failed 1
+                    // a store through the pointer does not drop what the
+                    // field held
                     ( string_free . it err )
-                    = . it err ( string_from ( sc_err c ) )
+                    = . it err ( string_from ( string_data . cr err ) )
                 } {}
-                ? ( sc_valid c ) {
-                    : *u cp ( sc_kptr c )
-                    : i coff ( sc_koff c )
-                    : i clen ( sc_klen c )
-                    : i cseq ( sc_seq c )
+                ? == . cr valid 1 {
+                    : *u cp ( vec_data [u] . cr blk )
+                    : i coff . cr koff
+                    : i clen . cr kl
+                    : i cseq . cr seq
                     : ~ b take == best -2
                     ? take {} {
                         : i cmp ( lsm_bytes_cmp_raw cp coff clen bp boff blen )
                         = take | < cmp 0 & == cmp 0 > cseq bseq
                     }
                     ? take {
-                        = best k = bp cp = boff coff = blen clen = bseq cseq
+                        = best k = bp cp = boff coff = blen clen = bseq cseq = bcur cr
                     } {}
                 } {}
             }
@@ -477,45 +505,37 @@ next ` )
         = k + k 1
     }
     = . it src best
+    = . it cur bcur
     ^ best
 }
 
-@ __it_advance * LsmIter it → v {
+@ __it_advance * LsmIterImpl it → v {
     ? == . it src -1 { = . it mnode ( mt_next . it mem . it mnode ) } {
-        ? >= . it src 0 {
-            ?? ( vec_get [* SstCursor] . it curs . it src ) {
-                T c → { ( sc_next c ) }
-                F _ → {}
-            }
-        } {}
+        ? >= . it src 0 { ( _sc_next . it cur ) } {}
     }
 }
 
 // Key of the currently selected head, as an owned copy.
-@ __it_key * LsmIter it → ( Vec u ) {
+@ __it_key * LsmIterImpl it → ( Vec u ) {
     ? == . it src -1 { ^ ( mt_key . it mem . it mnode ) } {}
-    ?? ( vec_get [* SstCursor] . it curs . it src ) {
-        T c → { ^ ( sc_key c ) }
-        F _ → { ^ ( vec_new [u] ) }
-    }
+    ^ ( _sc_key . it cur )
 }
 
-@ __it_val * LsmIter it → ( Vec u ) {
+@ __it_val * LsmIterImpl it → ( Vec u ) {
     ? == . it src -1 { ^ ( mt_val . it mem . it mnode ) } {}
-    ?? ( vec_get [* SstCursor] . it curs . it src ) {
-        T c → { ^ ( sc_val c ) }
-        F _ → { ^ ( vec_new [u] ) }
-    }
+    ^ ( _sc_val . it cur )
 }
 
-@ __it_seq * LsmIter it → i {
+@ __it_seq * LsmIterImpl it → i {
     ? == . it src -1 { ^ ( mt_seq . it mem . it mnode ) } {}
-    ^ ?? ( vec_get [* SstCursor] . it curs . it src ) { T c → ( sc_seq c ) F _ → 0 }
+    : *SstCursorImpl cr . it cur
+    ^ . cr seq
 }
 
-@ __it_kind * LsmIter it → i {
+@ __it_kind * LsmIterImpl it → i {
     ? == . it src -1 { ^ ( mt_kind . it mem . it mnode ) } {}
-    ^ ?? ( vec_get [* SstCursor] . it curs . it src ) { T c → ( sc_kind c ) F _ → MT_PUT }
+    : *SstCursorImpl cr . it cur
+    ^ . cr kind
 }
 
 // ── scan ────────────────────────────────────────────────────────────
@@ -530,10 +550,8 @@ next ` )
     i count
 }
 
-@ lsm_scan_free sink LsmScan s → v {
-    ( vec_free [u] . s keys ) ( vec_free [i] . s koff ) ( vec_free [i] . s klen )
-    ( vec_free [u] . s vals ) ( vec_free [i] . s voff ) ( vec_free [i] . s vlen )
-}
+// Let go of `s` now rather than at the end of its owner's scope.
+@ lsm_scan_free sink LsmScan s → v {}
 
 @ lsm_scan_count LsmScan s → i { ^ . s count }
 
@@ -550,8 +568,10 @@ next ` )
 // Every live key in [from, to) as of `snap`, in order. An empty `from`
 // starts at the beginning; an empty `to` runs to the end; limit <= 0
 // means no limit.
-@ lsm_scan * Lsm db ( Vec u ) from ( Vec u ) to i limit i snap → !LsmScan String {
-    : *LsmIter it ( __it_new db T from snap )
+@ lsm_scan Lsm db__h ( Vec u ) from ( Vec u ) to i limit i snap → !LsmScan String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    : LsmIter ith ( __it_new db T from snap )
+    : *LsmIterImpl it ( __LsmIter_ptr ith )
     : ( Vec u ) keys ( vec_new [u] )
     : ( Vec i ) koff ( vec_new [i] )
     : ( Vec i ) klen ( vec_new [i] )
@@ -569,19 +589,17 @@ next ` )
     ~ ! stop {
         : i src ( __it_pick it )
         ? == . it failed 1 {
-            = failed T ( string_free err ) = err ( string_from ( string_data . it err ) )
+            = failed T = err ( string_from ( string_data . it err ) )
             = stop T
         } {
             ? == src -2 { = stop T } {
                 : ( Vec u ) key ( __it_key it )
                 : i seq ( __it_seq it )
                 : b samekey & haveprev == 0 ( lsm_bytes_cmp key prev )
-                ? & bounded >= ( lsm_bytes_cmp key to ) 0 { = stop T ( vec_free [u] key ) } {
-                    ? | samekey > seq snap {
-                        // an older version of a key already emitted, or a
-                        // version newer than the snapshot: skip it
-                        ( vec_free [u] key )
-                    } {
+                ? & bounded >= ( lsm_bytes_cmp key to ) 0 { = stop T } {
+                    // an older version of a key already emitted, or a
+                    // version newer than the snapshot: skip it
+                    ? | samekey > seq snap {} {
                         // first visible version of this key
                         ? == ( __it_kind it ) MT_PUT {
                             : ( Vec u ) val ( __it_val it )
@@ -591,11 +609,9 @@ next ` )
                             ( vec_push [i] voff ( vec_len [u] vals ) )
                             ( vec_push [i] vlen ( vec_len [u] val ) )
                             ( vec_extend [u] vals val )
-                            ( vec_free [u] val )
                             = count + count 1
                             ? & > limit 0 >= count limit { = stop T } {}
                         } {}
-                        ( vec_free [u] prev )
                         = prev key
                         = haveprev T
                     }
@@ -604,14 +620,7 @@ next ` )
             }
         }
     }
-    ( vec_free [u] prev )
-    ( __it_free it )
-    ? failed {
-        ( vec_free [u] keys ) ( vec_free [i] koff ) ( vec_free [i] klen )
-        ( vec_free [u] vals ) ( vec_free [i] voff ) ( vec_free [i] vlen )
-        ^ @ !LsmScan String { F err }
-    } {}
-    ( string_free err )
+    ? failed { ^ @ !LsmScan String { F err } } {}
     ^ @ !LsmScan String { T @ LsmScan { keys koff klen vals voff vlen count } }
 }
 
@@ -621,16 +630,19 @@ next ` )
 // newest — the memtable is the newest data in the database, and throwing
 // away its history here would silently break snapshot reads that the
 // tables themselves still support.
-@ lsm_flush * Lsm db → !i String {
+@ lsm_flush Lsm db__h → !i String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    ^ ( __lsm_flush db )
+}
+
+@ __lsm_flush * LsmImpl db → !i String {
     : i n ( mt_count . db mem )
     ? == n 0 { ^ @ !i String { T 0 } } {}
     : String name ( __lsm_table_name . db nextfile )
     : String full ( __lsm_path db ( string_data name ) )
-    : !*SstWriter String cw ( sst_create ( string_data full ) )
-    : ~ * SstWriter w # *SstWriter 0
-    ?? cw { T x → { = w x } F e → {
-            ( string_free name ) ( string_free full )
-            ^ @ !i String { F e } } }
+    : !SstWriter String cw ( sst_create ( string_data full ) )
+    : ~ SstWriter w @ SstWriter { # s 0 }
+    ?? cw { T x → { = w x } F e → { ^ @ !i String { F e } } }
 
     : ~ i node ( mt_first . db mem )
     : ~ b failed F
@@ -640,40 +652,33 @@ next ` )
         : ( Vec u ) v ( mt_val . db mem node )
         ?? ( sst_add w k v ( mt_seq . db mem node ) ( mt_kind . db mem node ) ) {
             T _ → {}
-            F e → { = failed T ( string_free err ) = err e }
+            F e → { = failed T = err e }
         }
-        ( vec_free [u] k ) ( vec_free [u] v )
         = node ( mt_next . db mem node )
     }
     : !i String fin ( sst_finish w )
-    ?? fin { T _ → {} F e → { ? failed { ( string_free e ) } { = failed T ( string_free err ) = err e } } }
+    ?? fin { T _ → {} F e → { ? failed {} { = failed T = err e } } }
     ? failed {
         ?? ( file_delete ( string_data full ) ) { T _ → {} F _ → {} }
-        ( string_free name ) ( string_free full )
         ^ @ !i String { F err }
     } {}
-    ( string_free err )
 
     // The table is on disk and fsynced. Only now may the manifest name it.
-    : !*SstReader String orr ( sst_open ( string_data full ) )
-    ( string_free full )
-    ?? orr {
+    ?? ( sst_open ( string_data full ) ) {
         T r → {
             ( vec_insert [String] . db names 0 name )
-            : b _ok ( vec_insert [* SstReader] . db tables 0 r )
+            : b _ok ( vec_insert [SstReader] . db tables 0 r )
         }
-        F e → { ( string_free name ) ^ @ !i String { F e } }
+        F e → { ^ @ !i String { F e } }
     }
     = . db nextfile + . db nextfile 1
     ?? ( __lsm_manifest_write db ) { T _ → {} F e → { ^ @ !i String { F e } } }
 
     // Published — the log's job is done and the memtable can go.
     ?? ( wal_reset ( string_data . db walpath ) ) { T _ → {} F e → { ^ @ !i String { F e } } }
-    ( wal_close . db wal )
-    ?? ( wal_open ( string_data . db walpath ) ) {
-        T nw → { = . db wal nw }
-        F e → { ^ @ !i String { F e } }
-    }
+    ?? ( wal_reopen . db wal ( string_data . db walpath ) ) { T _ → {} F e → { ^ @ !i String { F e } } }
+    // A store through the pointer does not drop what the field held: let
+    // go of the old memtable first.
     ( mt_free . db mem )
     = . db mem ( mt_new 0 )
     = . db flushes + . db flushes 1
@@ -682,27 +687,14 @@ next ` )
 
 // ── compaction ──────────────────────────────────────────────────────
 
-// Merge every table into one, keeping only the newest version of each
-// key and dropping tombstones. This is where space actually comes back:
-// overwritten values and deleted keys stop existing.
-//
-// It also throws history away, deliberately — a snapshot read older than
-// this point can no longer be served, exactly as in LevelDB. Compaction
-// is a choice to trade the past for space.
-@ lsm_compact * Lsm db → !i String {
-    : i ntables ( vec_len [* SstReader] . db tables )
-    ? < ntables 1 { ^ @ !i String { T 0 } } {}
-
-    : String name ( __lsm_table_name . db nextfile )
-    : String full ( __lsm_path db ( string_data name ) )
-    : !*SstWriter String cw ( sst_create ( string_data full ) )
-    : ~ * SstWriter w # *SstWriter 0
-    ?? cw { T x → { = w x } F e → {
-            ( string_free name ) ( string_free full )
-            ^ @ !i String { F e } } }
-
+// Merge every source into `w`, keeping only the newest version of each
+// key and dropping tombstones. Returns the entries kept. The merge
+// iterator — and with it every cursor's share of a table — is gone when
+// this returns, so the old tables close as soon as the store lets them go.
+@ __lsm_merge_into * LsmImpl db SstWriter w → !i String {
     : ( Vec u ) nokey ( vec_new [u] )
-    : *LsmIter it ( __it_new db F nokey . db seq )
+    : LsmIter ith ( __it_new db F nokey . db seq )
+    : *LsmIterImpl it ( __LsmIter_ptr ith )
     : ~ ( Vec u ) prev ( vec_new [u] )
     : ~ b haveprev F
     : ~ i kept 0
@@ -713,23 +705,21 @@ next ` )
     ~ ! stop {
         : i src ( __it_pick it )
         ? == . it failed 1 {
-            = failed T ( string_free err ) = err ( string_from ( string_data . it err ) )
+            = failed T = err ( string_from ( string_data . it err ) )
             = stop T
         } {
             ? == src -2 { = stop T } {
                 : ( Vec u ) key ( __it_key it )
                 : b samekey & haveprev == 0 ( lsm_bytes_cmp key prev )
-                ? samekey { ( vec_free [u] key ) } {
+                ? samekey {} {
                     ? == ( __it_kind it ) MT_PUT {
                         : ( Vec u ) val ( __it_val it )
                         ?? ( sst_add w key val ( __it_seq it ) MT_PUT ) {
                             T _ → {}
-                            F e → { = failed T = stop T ( string_free err ) = err e }
+                            F e → { = failed T = stop T = err e }
                         }
-                        ( vec_free [u] val )
                         = kept + kept 1
                     } {}
-                    ( vec_free [u] prev )
                     = prev key
                     = haveprev T
                 }
@@ -737,18 +727,39 @@ next ` )
             }
         }
     }
-    ( vec_free [u] prev )
-    ( vec_free [u] nokey )
-    ( __it_free it )
+    ? failed { ^ @ !i String { F err } } {}
+    ^ @ !i String { T kept }
+}
+
+// Merge every table into one, keeping only the newest version of each
+// key and dropping tombstones. This is where space actually comes back:
+// overwritten values and deleted keys stop existing.
+//
+// It also throws history away, deliberately — a snapshot read older than
+// this point can no longer be served, exactly as in LevelDB. Compaction
+// is a choice to trade the past for space.
+@ lsm_compact Lsm db__h → !i String {
+    : *LsmImpl db ( __Lsm_ptr db__h )
+    : i ntables ( vec_len [SstReader] . db tables )
+    ? < ntables 1 { ^ @ !i String { T 0 } } {}
+
+    : String name ( __lsm_table_name . db nextfile )
+    : String full ( __lsm_path db ( string_data name ) )
+    : !SstWriter String cw ( sst_create ( string_data full ) )
+    : ~ SstWriter w @ SstWriter { # s 0 }
+    ?? cw { T x → { = w x } F e → { ^ @ !i String { F e } } }
+
+    : ~ i kept 0
+    : ~ b failed F
+    : ~ String err ( string_new )
+    ?? ( __lsm_merge_into db w ) { T n → { = kept n } F e → { = failed T = err e } }
 
     : !i String fin ( sst_finish w )
-    ?? fin { T _ → {} F e → { ? failed { ( string_free e ) } { = failed T ( string_free err ) = err e } } }
+    ?? fin { T _ → {} F e → { ? failed {} { = failed T = err e } } }
     ? failed {
         ?? ( file_delete ( string_data full ) ) { T _ → {} F _ → {} }
-        ( string_free name ) ( string_free full )
         ^ @ !i String { F err }
     } {}
-    ( string_free err )
 
     // Take the old tables out of the live set before publishing, but do
     // not unlink them until the new manifest is on disk: a crash in
@@ -760,29 +771,20 @@ next ` )
         = k + k 1
     }
     ( vec_clear [String] . db names )
-    ( vec_free_with [* SstReader] . db tables \ * SstReader r → v { ( sst_close r ) } )
-    = . db tables ( vec_new [* SstReader] )
+    // the readers close their files as they go
+    ( vec_clear [SstReader] . db tables )
 
-    : !*SstReader String orr ( sst_open ( string_data full ) )
-    ( string_free full )
-    ?? orr {
+    ?? ( sst_open ( string_data full ) ) {
         T r → {
             ( vec_push [String] . db names name )
-            ( vec_push [* SstReader] . db tables r )
+            ( vec_push [SstReader] . db tables r )
         }
-        F e → {
-            ( string_free name )
-            ( vec_free_with [String] old \ String s → v { ( string_free s ) } )
-            ^ @ !i String { F e }
-        }
+        F e → { ^ @ !i String { F e } }
     }
     = . db nextfile + . db nextfile 1
     ?? ( __lsm_manifest_write db ) {
         T _ → {}
-        F e → {
-            ( vec_free_with [String] old \ String s → v { ( string_free s ) } )
-            ^ @ !i String { F e }
-        }
+        F e → { ^ @ !i String { F e } }
     }
 
     : ~ i j 0
@@ -791,27 +793,26 @@ next ` )
             T nm → {
                 : String p ( __lsm_path db ( string_data nm ) )
                 ?? ( file_delete ( string_data p ) ) { T _ → {} F _ → {} }
-                ( string_free p )
             }
             F → {}
         }
         = j + j 1
     }
-    ( vec_free_with [String] old \ String s → v { ( string_free s ) } )
     = . db compactions + . db compactions 1
     ^ @ !i String { T kept }
 }
 
 // ── stats ───────────────────────────────────────────────────────────
 
-@ lsm_stats * Lsm db → LsmStats {
+@ lsm_stats Lsm db__h → LsmStats {
+    : *LsmImpl db ( __Lsm_ptr db__h )
     : ~ i entries 0
     : ~ i filebytes 0
     : ~ i reads 0
     : ~ i filtered 0
     : ~ i k 0
-    ~ < k ( vec_len [* SstReader] . db tables ) {
-        ?? ( vec_get [* SstReader] . db tables k ) {
+    ~ < k ( vec_len [SstReader] . db tables ) {
+        ?? ( vec_get [SstReader] . db tables k ) {
             T r → {
                 = entries + entries ( sst_entries r )
                 = filebytes + filebytes ( sst_filesize r )
@@ -823,7 +824,7 @@ next ` )
         = k + k 1
     }
     ^ @ LsmStats {
-        ( vec_len [* SstReader] . db tables )
+        ( vec_len [SstReader] . db tables )
         entries
         ( mt_count . db mem )
         ( mt_bytes . db mem )

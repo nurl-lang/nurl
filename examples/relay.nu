@@ -13,7 +13,7 @@
 //         ( relay_register rc my_pubkey )            // announce identity
 //         ( relay_send rc dest_pubkey opaque_bytes ) // forward to a peer
 //         ?? ( relay_recv rc ) {                     // {src_pubkey, payload}
-//             T m → { /* . m src, . m payload */ ( relay_msg_free m ) }
+//             T m → { /* . m src, . m payload */ }
 //             F → {} }
 //         ( relay_close rc )
 //     } F e → {} }
@@ -27,7 +27,7 @@ $ `stdlib/net/relay.nu`
     : i argc ( env_args_count )
     : String host ? > argc 1 ( env_arg 1 ) ( string_from `0.0.0.0` )
     : i port ? > argc 2 {
-        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) ( string_free ps ) p
+        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) p
     } 47700
 
     ?? ( relay_server_start ( string_data host ) port ) {
@@ -38,6 +38,5 @@ $ `stdlib/net/relay.nu`
         }
         F e → ( nurl_print `relay failed to bind\n` )
     }
-    ( string_free host )
     ^ 0
 }

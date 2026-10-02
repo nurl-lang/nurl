@@ -8,7 +8,7 @@
 //   ( x509_selfsigned_p256 `localhost` 365 )    → X509SelfSigned
 //       .cert_pem   -----BEGIN CERTIFICATE-----      (X.509 v3, ECDSA-P256)
 //       .key_pem    -----BEGIN EC PRIVATE KEY-----   (SEC1 / RFC 5915)
-//   ( x509_selfsigned_free c )
+//   ( x509_selfsigned_free c )                       early release (optional)
 //
 // The key PEM is exactly the shape `openssl ecparam -genkey` writes and
 // `ec_p256_priv_from_pem` (std/pkey.nu) parses, so the pure TLS server
@@ -41,10 +41,8 @@ $ `stdlib/std/time.nu`
     String key_pem
 }
 
-@ x509_selfsigned_free sink X509SelfSigned c → v {
-    ( string_free . c cert_pem )
-    ( string_free . c key_pem )
-}
+// Its fields go with their owner; this lets go of them early (optional).
+@ x509_selfsigned_free sink X509SelfSigned c → v {}
 
 // ── entropy ───────────────────────────────────────────────────────────
 
@@ -75,7 +73,6 @@ $ `stdlib/std/time.nu`
         ? & == cmp 0 != db nbk { = cmp ? < db nbk - 0 1 1 } {}
         = k + k 1
     }
-    ( vec_free [u] nb )
     ^ & nonzero < cmp 0
 }
 
@@ -99,7 +96,6 @@ $ `stdlib/std/time.nu`
         }
     }
     ( bytes_extend_bytes out content )
-    ( vec_free [u] content )
     ^ out
 }
 
@@ -118,7 +114,6 @@ $ `stdlib/std/time.nu`
         = k + k 1
     }
     ? == ( vec_len [u] body ) 0 { ( vec_push [u] body # u 0 ) } {}
-    ( vec_free [u] mag )
     ^ ( _xg_tlv 2 body )
 }
 
@@ -141,7 +136,6 @@ $ `stdlib/std/time.nu`
     : ( Vec u ) b ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
     ( vec_push [u] b # u 0 )
     ( bytes_extend_bytes b content )
-    ( vec_free [u] content )
     ^ ( _xg_tlv 3 b )
 }
 
@@ -177,7 +171,7 @@ $ `stdlib/std/time.nu`
     : ( Vec u ) cnb ( bytes_from_str cn )
     : ( Vec u ) cnstr ( _xg_tlv 12 cnb )  // 0x0C UTF8String
     : ~ ( Vec u ) atv ( _xg_oid `550403` )  // 2.5.4.3 commonName
-    ( bytes_extend_bytes atv cnstr ) ( vec_free [u] cnstr )
+    ( bytes_extend_bytes atv cnstr )
     : ( Vec u ) atv_seq ( _xg_tlv 48 atv )
     : ( Vec u ) set ( _xg_tlv 49 atv_seq )
     ^ ( _xg_tlv 48 set )
@@ -192,10 +186,10 @@ $ `stdlib/std/time.nu`
 @ _xg_spki ( Vec u ) pub65 → ( Vec u ) {
     : ~ ( Vec u ) alg ( _xg_oid `2a8648ce3d0201` )  // id-ecPublicKey
     : ( Vec u ) curve ( _xg_oid `2a8648ce3d030107` )  // prime256v1
-    ( bytes_extend_bytes alg curve ) ( vec_free [u] curve )
+    ( bytes_extend_bytes alg curve )
     : ~ ( Vec u ) algseq ( _xg_tlv 48 alg )
     : ( Vec u ) bs ( _xg_bitstring pub65 )
-    ( bytes_extend_bytes algseq bs ) ( vec_free [u] bs )
+    ( bytes_extend_bytes algseq bs )
     ^ ( _xg_tlv 48 algseq )
 }
 
@@ -206,19 +200,19 @@ $ `stdlib/std/time.nu`
     : ( Vec u ) bc_oct ( _xg_tlv 4 bc_inner )
     : ~ ( Vec u ) bc ( _xg_oid `551d13` )  // 2.5.29.19
     : ( Vec u ) crit ( _xg_bool_true )
-    ( bytes_extend_bytes bc crit ) ( vec_free [u] crit )
-    ( bytes_extend_bytes bc bc_oct ) ( vec_free [u] bc_oct )
+    ( bytes_extend_bytes bc crit )
+    ( bytes_extend_bytes bc bc_oct )
     : ( Vec u ) bc_seq ( _xg_tlv 48 bc )
 
     // subjectAltName = SEQ{ OID, OCTET{ SEQ{ [2] IMPLICIT dNSName } } }
     : ( Vec u ) dns ( _xg_tlv 130 ( bytes_from_str cn ) )  // 0x82 context [2]
     : ( Vec u ) san_oct ( _xg_tlv 4 ( _xg_tlv 48 dns ) )
     : ~ ( Vec u ) san ( _xg_oid `551d11` )  // 2.5.29.17
-    ( bytes_extend_bytes san san_oct ) ( vec_free [u] san_oct )
+    ( bytes_extend_bytes san san_oct )
     : ( Vec u ) san_seq ( _xg_tlv 48 san )
 
     : ~ ( Vec u ) both bc_seq
-    ( bytes_extend_bytes both san_seq ) ( vec_free [u] san_seq )
+    ( bytes_extend_bytes both san_seq )
     : ( Vec u ) exts ( _xg_tlv 48 both )
     ^ ( _xg_tlv 163 exts )  // 0xA3 [3] EXPLICIT
 }
@@ -226,7 +220,6 @@ $ `stdlib/std/time.nu`
 // PEM: header + base64 wrapped at 64 columns + footer.
 @ _xg_pem s label ( Vec u ) der → String {
     : String b64 ( b64_encode_vec der )
-    ( vec_free [u] der )
     : String out ( string_with_cap + ( string_len b64 ) 96 )
     ( string_push_str out `-----BEGIN ` )
     ( string_push_str out label )
@@ -242,7 +235,6 @@ $ `stdlib/std/time.nu`
     ( string_push_str out `-----END ` )
     ( string_push_str out label )
     ( string_push_str out `-----\n` )
-    ( string_free b64 )
     ^ out
 }
 
@@ -252,10 +244,9 @@ $ `stdlib/std/time.nu`
 @ _xg_sig_der ( Vec u ) rs → ( Vec u ) {
     : ( Vec u ) rb ( bytes_slice rs 0 32 )
     : ( Vec u ) sb ( bytes_slice rs 32 64 )
-    ( vec_free [u] rs )
     : ~ ( Vec u ) body ( _xg_int rb )
     : ( Vec u ) si ( _xg_int sb )
-    ( bytes_extend_bytes body si ) ( vec_free [u] si )
+    ( bytes_extend_bytes body si )
     ^ ( _xg_tlv 48 body )
 }
 
@@ -308,37 +299,36 @@ $ `stdlib/std/time.nu`
     // _xg_int consumes its argument — hand it a copy so `serial` stays
     // caller-owned (both callers free their own).
     : ( Vec u ) ser ( _xg_int ( bytes_slice serial 0 ( vec_len [u] serial ) ) )
-    ( bytes_extend_bytes tbs_body ser ) ( vec_free [u] ser )
+    ( bytes_extend_bytes tbs_body ser )
     : ( Vec u ) alg1 ( _xg_alg_ecdsa_sha256 )
-    ( bytes_extend_bytes tbs_body alg1 ) ( vec_free [u] alg1 )
+    ( bytes_extend_bytes tbs_body alg1 )
     : ( Vec u ) issuer ( _xg_name cn )
-    ( bytes_extend_bytes tbs_body issuer ) ( vec_free [u] issuer )
+    ( bytes_extend_bytes tbs_body issuer )
     : ~ ( Vec u ) val ( _xg_utctime not_before_unix )
     : ( Vec u ) na ( _xg_utctime not_after_unix )
-    ( bytes_extend_bytes val na ) ( vec_free [u] na )
+    ( bytes_extend_bytes val na )
     : ( Vec u ) val_seq ( _xg_tlv 48 val )
-    ( bytes_extend_bytes tbs_body val_seq ) ( vec_free [u] val_seq )
+    ( bytes_extend_bytes tbs_body val_seq )
     : ( Vec u ) subject ( _xg_name cn )
-    ( bytes_extend_bytes tbs_body subject ) ( vec_free [u] subject )
+    ( bytes_extend_bytes tbs_body subject )
     : ( Vec u ) pub_copy ( bytes_slice pubkey 0 ( vec_len [u] pubkey ) )
     : ( Vec u ) spki ( _xg_spki pub_copy )
-    ( bytes_extend_bytes tbs_body spki ) ( vec_free [u] spki )
+    ( bytes_extend_bytes tbs_body spki )
     : ( Vec u ) exts ( _xg_extensions cn )
-    ( bytes_extend_bytes tbs_body exts ) ( vec_free [u] exts )
+    ( bytes_extend_bytes tbs_body exts )
     : ( Vec u ) tbs ( _xg_tlv 48 tbs_body )
 
     // sign SHA-256(TBS) with the same key the cert carries (self-signed)
     : ( Vec u ) h ( sha256_pure tbs )
     : ( Vec u ) rs ( ecdsa_p256_sign scalar h )
-    ( vec_free [u] h )
     : ( Vec u ) sig_der ( _xg_sig_der rs )
 
     // Certificate = SEQ{ TBS, AlgorithmIdentifier, BIT STRING sig }
     : ~ ( Vec u ) cert_body tbs
     : ( Vec u ) alg2 ( _xg_alg_ecdsa_sha256 )
-    ( bytes_extend_bytes cert_body alg2 ) ( vec_free [u] alg2 )
+    ( bytes_extend_bytes cert_body alg2 )
     : ( Vec u ) sig_bs ( _xg_bitstring sig_der )
-    ( bytes_extend_bytes cert_body sig_bs ) ( vec_free [u] sig_bs )
+    ( bytes_extend_bytes cert_body sig_bs )
     : ( Vec u ) cert_der ( _xg_tlv 48 cert_body )
 
     // SEC1 / RFC 5915 ECPrivateKey =
@@ -346,11 +336,11 @@ $ `stdlib/std/time.nu`
     : ( Vec u ) scalar_copy ( bytes_slice scalar 0 32 )
     : ~ ( Vec u ) key_body ( _xg_int1 1 )
     : ( Vec u ) sk_oct ( _xg_tlv 4 scalar_copy )
-    ( bytes_extend_bytes key_body sk_oct ) ( vec_free [u] sk_oct )
+    ( bytes_extend_bytes key_body sk_oct )
     : ( Vec u ) crv ( _xg_tlv 160 ( _xg_oid `2a8648ce3d030107` ) )
-    ( bytes_extend_bytes key_body crv ) ( vec_free [u] crv )
+    ( bytes_extend_bytes key_body crv )
     : ( Vec u ) pub_bs ( _xg_tlv 161 ( _xg_bitstring pubkey ) )
-    ( bytes_extend_bytes key_body pub_bs ) ( vec_free [u] pub_bs )
+    ( bytes_extend_bytes key_body pub_bs )
     : ( Vec u ) key_der ( _xg_tlv 48 key_body )
 
     ^ @ X509SelfSigned {
@@ -364,13 +354,11 @@ $ `stdlib/std/time.nu`
 @ x509_selfsigned_p256 s cn i days → X509SelfSigned {
     : ~ ( Vec u ) scalar ( _xg_rand_bytes 32 )
     ~ ! ( _xg_scalar_ok scalar ) {
-        ( vec_free [u] scalar )
         = scalar ( _xg_rand_bytes 32 )
     }
     : ( Vec u ) serial ( _xg_rand_bytes 12 )
     : i now ( now_seconds )
     : X509SelfSigned out ( x509_selfsigned_p256_pinned scalar serial cn - now 86400 + now * days 86400 )
-    ( vec_free [u] serial )
     ^ out
 }
 
@@ -404,7 +392,7 @@ $ `stdlib/std/time.nu`
 @ _xg_spki_mldsa i level ( Vec u ) pk → ( Vec u ) {
     : ~ ( Vec u ) algseq ( _xg_alg_mldsa level )
     : ( Vec u ) bs ( _xg_bitstring pk )
-    ( bytes_extend_bytes algseq bs ) ( vec_free [u] bs )
+    ( bytes_extend_bytes algseq bs )
     ^ ( _xg_tlv 48 algseq )
 }
 
@@ -414,10 +402,10 @@ $ `stdlib/std/time.nu`
 @ _xg_pkcs8_mldsa i level ( Vec u ) sk → ( Vec u ) {
     : ~ ( Vec u ) body ( _xg_int1 0 )
     : ( Vec u ) alg ( _xg_alg_mldsa level )
-    ( bytes_extend_bytes body alg ) ( vec_free [u] alg )
+    ( bytes_extend_bytes body alg )
     : ( Vec u ) inner ( _xg_tlv 4 sk )
     : ( Vec u ) outer ( _xg_tlv 4 inner )
-    ( bytes_extend_bytes body outer ) ( vec_free [u] outer )
+    ( bytes_extend_bytes body outer )
     ^ ( _xg_tlv 48 body )
 }
 
@@ -429,23 +417,23 @@ $ `stdlib/std/time.nu`
 @ x509_selfsigned_mldsa_pinned i level ( Vec u ) pk ( Vec u ) sk ( Vec u ) serial ( Vec u ) rnd s cn i not_before_unix i not_after_unix → X509SelfSigned {
     : ~ ( Vec u ) tbs_body ( _xg_tlv 160 ( _xg_int1 2 ) )  // [0]{ INTEGER 2 } = v3
     : ( Vec u ) ser ( _xg_int ( bytes_slice serial 0 ( vec_len [u] serial ) ) )
-    ( bytes_extend_bytes tbs_body ser ) ( vec_free [u] ser )
+    ( bytes_extend_bytes tbs_body ser )
     : ( Vec u ) alg1 ( _xg_alg_mldsa level )
-    ( bytes_extend_bytes tbs_body alg1 ) ( vec_free [u] alg1 )
+    ( bytes_extend_bytes tbs_body alg1 )
     : ( Vec u ) issuer ( _xg_name cn )
-    ( bytes_extend_bytes tbs_body issuer ) ( vec_free [u] issuer )
+    ( bytes_extend_bytes tbs_body issuer )
     : ~ ( Vec u ) val ( _xg_utctime not_before_unix )
     : ( Vec u ) na ( _xg_utctime not_after_unix )
-    ( bytes_extend_bytes val na ) ( vec_free [u] na )
+    ( bytes_extend_bytes val na )
     : ( Vec u ) val_seq ( _xg_tlv 48 val )
-    ( bytes_extend_bytes tbs_body val_seq ) ( vec_free [u] val_seq )
+    ( bytes_extend_bytes tbs_body val_seq )
     : ( Vec u ) subject ( _xg_name cn )
-    ( bytes_extend_bytes tbs_body subject ) ( vec_free [u] subject )
+    ( bytes_extend_bytes tbs_body subject )
     : ( Vec u ) pub_copy ( bytes_slice pk 0 ( vec_len [u] pk ) )
     : ( Vec u ) spki ( _xg_spki_mldsa level pub_copy )
-    ( bytes_extend_bytes tbs_body spki ) ( vec_free [u] spki )
+    ( bytes_extend_bytes tbs_body spki )
     : ( Vec u ) exts ( _xg_extensions cn )
-    ( bytes_extend_bytes tbs_body exts ) ( vec_free [u] exts )
+    ( bytes_extend_bytes tbs_body exts )
     : ( Vec u ) tbs ( _xg_tlv 48 tbs_body )
 
     // Sign the TBS bytes themselves — ML-DSA hashes internally, so there
@@ -454,13 +442,12 @@ $ `stdlib/std/time.nu`
     : ( Vec u ) ctx ( vec_new [u] )
     : ( Vec u ) mp ( _xg_mldsa_mprime tbs ctx )
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
-    ( vec_free [u] mp ) ( vec_free [u] ctx )
 
     : ~ ( Vec u ) cert_body tbs
     : ( Vec u ) alg2 ( _xg_alg_mldsa level )
-    ( bytes_extend_bytes cert_body alg2 ) ( vec_free [u] alg2 )
+    ( bytes_extend_bytes cert_body alg2 )
     : ( Vec u ) sig_bs ( _xg_bitstring sig )
-    ( bytes_extend_bytes cert_body sig_bs ) ( vec_free [u] sig_bs )
+    ( bytes_extend_bytes cert_body sig_bs )
     : ( Vec u ) cert_der ( _xg_tlv 48 cert_body )
 
     : ( Vec u ) sk_copy ( bytes_slice sk 0 ( vec_len [u] sk ) )
@@ -494,7 +481,5 @@ $ `stdlib/std/time.nu`
     : i now ( now_seconds )
     : X509SelfSigned out ( x509_selfsigned_mldsa_pinned level ( mldsa_pk ks ) ( mldsa_sk ks )
     serial rnd cn - now 86400 + now * days 86400 )
-    ( vec_free [u] rnd ) ( vec_free [u] serial )
-    ( mldsa_keys_free ks )
     ^ out
 }

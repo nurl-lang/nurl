@@ -176,7 +176,7 @@ $ `stdlib/core/rcbox.nu`
         : ~ b crashed F
         ?? r {
             T _ → {}
-            F pi → { = crashed T ( panic_info_free pi ) }
+            F pi → { = crashed T }
         }
         : b restart_on_crash ?? . child policy { RTemporary → F _ → T }
         : b restart_on_exit ?? . child policy { RPermanent → T _ → F }
@@ -228,7 +228,6 @@ $ `stdlib/core/rcbox.nu`
     ^ ?? r {
         T _ → T
         F pi → {
-            ( panic_info_free pi )
             = . child restarts + . child restarts 1
             F
         }
@@ -296,7 +295,6 @@ $ `stdlib/core/rcbox.nu`
                 = ok F
             } {
                 : ( Vec i ) nxt ( __next_runset . sup strategy crashed n )
-                ( vec_free [i] runset )
                 = runset nxt
             }
         }

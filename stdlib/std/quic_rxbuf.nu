@@ -85,7 +85,11 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_rxbuf_add QuicRxBuf r__h i off ( Vec u ) data → b {
-    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    : ~ * QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    ^ ( _quic_rxbuf_add_in . r 0 off data )
+}
+
+@ _quic_rxbuf_add_in inout QuicRxBufImpl r i off ( Vec u ) data → b {
     : i n ( vec_len [u] data )
     : i end + off n
     ? | < off 0 > end . r cap { ^ F } {}
@@ -126,12 +130,11 @@ $ `stdlib/core/rcbox.nu`
         = k + k 2
     }
     ? ! placed { ( vec_push [i] merged s ) ( vec_push [i] merged e ) } {}
-    ( vec_free [i] . r ranges )
     = . r ranges merged
     ^ T
 }
 
-@ __qrb_avail * QuicRxBufImpl r → i {
+@ __qrb_avail inout QuicRxBufImpl r → i {
     ? == ( vec_len [i] . r ranges ) 0 { ^ 0 } {}
     : i rs ( __qrb_ri . r ranges 0 )
     : i re ( __qrb_ri . r ranges 1 )
@@ -141,22 +144,21 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_rxbuf_avail QuicRxBuf r__h → i {
-    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
-    ^ ( __qrb_avail r )
+    : ~ * QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    ^ ( __qrb_avail . r 0 )
 }
 
 @ quic_rxbuf_peek_u8 QuicRxBuf r__h i k → i {
-    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
-    ? >= k ( __qrb_avail r ) { ^ 0 } {}
+    : ~ * QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    ? >= k ( __qrb_avail . r 0 ) { ^ 0 } {}
     ^ ( __qrb_bget . r buf - + . r consumed k . r base )
 }
 
 // Drop the dead prefix once it is worth a copy.
-@ __qrb_compact * QuicRxBufImpl r → v {
+@ __qrb_compact inout QuicRxBufImpl r → v {
     : i dead - . r consumed . r base
     ? < dead 16384 { ^ } {}
     : ( Vec u ) keep ( bytes_slice . r buf dead ( vec_len [u] . r buf ) )
-    ( vec_free [u] . r buf )
     = . r buf keep
     = . r base . r consumed
     // the first range starts at or before consumed by construction;
@@ -169,13 +171,13 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_rxbuf_read QuicRxBuf r__h i n → ( Vec u ) {
-    : *QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
-    : i avail ( __qrb_avail r )
+    : ~ * QuicRxBufImpl r ( __QuicRxBuf_ptr r__h )
+    : i avail ( __qrb_avail . r 0 )
     : i take ? < n avail n avail
     ? <= take 0 { ^ ( vec_new [u] ) } {}
     : i rel - . r consumed . r base
     : ( Vec u ) out ( bytes_slice . r buf rel + rel take )
     = . r consumed + . r consumed take
-    ( __qrb_compact r )
+    ( __qrb_compact . r 0 )
     ^ out
 }

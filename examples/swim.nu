@@ -47,8 +47,6 @@ $ `stdlib/std/swim.nu`
     }
     ( string_push_char line 10 )
     ( nurl_print ( string_data line ) )
-    ( string_free line )
-    ( vec_free_with [Member] ms \ Member mm → v { ( member_free mm ) } )
 }
 
 @ printer_loop SwimNode n i port → v {
@@ -67,7 +65,6 @@ $ `stdlib/std/swim.nu`
 
     : String ps ( env_arg 1 )
     : i port ( nurl_str_to_int ( string_data ps ) )
-    ( string_free ps )
 
     ( runtime_init 0 )
 
@@ -78,7 +75,6 @@ $ `stdlib/std/swim.nu`
             ? > argc 2 {
                 : String ss ( env_arg 2 )
                 : i seed ( nurl_str_to_int ( string_data ss ) )
-                ( string_free ss )
                 ( swim_join n `127.0.0.1` seed )
                 : String b ( string_from `joined seed :` )
                 ( string_push_int b seed )
@@ -90,7 +86,6 @@ $ `stdlib/std/swim.nu`
             ( swim_run n )
             ( spawn \ → v { ( printer_loop n port ) } )
             ( runtime_run )
-            ( swim_node_free n )
         }
         F e → {
             ( nurl_print `bind failed\n` )

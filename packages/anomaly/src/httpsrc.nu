@@ -234,7 +234,7 @@ $ `src/wfs.nu`
 // One request; Ok(body text) on a 2xx, Err(why) otherwise — the status
 // and the first line of the body, or the transport's word.
 @ http_fetch s method s url Json headers s body → !String String {
-    : *HttpClient hc ( http_client_new )
+    : HttpClient hc ( http_client_new )
     ( http_client_set_timeout hc WFS_TIMEOUT_MS )
     ( http_client_set_body_max hc WFS_BODY_MAX )
     ( http_client_set_user_agent hc `anomaly-http/1.0` )
@@ -309,7 +309,6 @@ $ `src/wfs.nu`
         }
     }
     ( vec_free [u] bb )
-    ( http_client_free hc )
     ? ok { ^ @ !String String { T text } } {}
     ^ @ !String String { F text }
 }

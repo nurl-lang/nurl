@@ -112,14 +112,6 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-@ __p384_scr_free sink P384Scr s → v {
-    ( vec_free [i] . s md ) ( vec_free [i] . s r2 )
-    ( vec_free [i] . s acc ) ( vec_free [i] . s diff )
-    ( vec_free [i] . s g0 ) ( vec_free [i] . s g1 ) ( vec_free [i] . s g2 )
-    ( vec_free [i] . s g3 ) ( vec_free [i] . s g4 ) ( vec_free [i] . s g5 )
-    ( vec_free [i] . s gp )
-}
-
 // p = 2^384 − 2^128 − 2^96 + 2^32 − 1, little-endian 64-bit limbs.
 @ __p384_mod_p → ( Vec i ) {
     : ( Vec i ) v ( _mag6 )
@@ -354,7 +346,6 @@ $ `stdlib/std/bytes.nu`
     : *i q ( vec_data [i] one )
     = . q 0 1 = . q 1 0 = . q 2 0 = . q 3 0 = . q 4 0 = . q 5 0
     ( __m6_mul scr dst a one )
-    ( vec_free [i] one )
 }
 
 @ __m6_copy ( Vec i ) dst ( Vec i ) a → v {
@@ -382,7 +373,6 @@ $ `stdlib/std/bytes.nu`
     : *i q ( vec_data [i] one )
     = . q 0 1 = . q 1 0 = . q 2 0 = . q 3 0 = . q 4 0 = . q 5 0
     ( __m6_to_mont scr dst one )
-    ( vec_free [i] one )
     : ~ i bit 383
     ~ >= bit 0 {
         ( __m6_mul scr dst dst dst )
@@ -402,10 +392,6 @@ $ `stdlib/std/bytes.nu`
     ^ @ P384Pt { ( _mag6 ) ( _mag6 ) ( _mag6 ) }
 }
 
-@ __p384_pt_free sink P384Pt p → v {
-    ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z )
-}
-
 @ __p384_set_identity P384Scr scr P384Pt pt → v {
     : *i xp ( vec_data [i] . pt x )
     : *i zp ( vec_data [i] . pt z )
@@ -415,7 +401,6 @@ $ `stdlib/std/bytes.nu`
     : *i q ( vec_data [i] one )
     = . q 0 1 = . q 1 0 = . q 2 0 = . q 3 0 = . q 4 0 = . q 5 0
     ( __m6_to_mont scr . pt y one )
-    ( vec_free [i] one )
 }
 
 @ __p384_pt_copy P384Pt dst P384Pt a → v {
@@ -565,7 +550,6 @@ $ `stdlib/std/bytes.nu`
         ( __p384_tbl_put tbl d run )
         = d + d 1
     }
-    ( __p384_pt_free run )
     ^ tbl
 }
 
@@ -593,16 +577,12 @@ $ `stdlib/std/bytes.nu`
     : ( Vec i ) w ( _mag6 )
     : ( Vec i ) nm2 ( __p384_nm2 )
     ( __m6_pow ns w sl nm2 )
-    ( vec_free [i] nm2 )
     ( __m6_mul ns zl zl w )
     ( __m6_mul ns rl rl w )
     ( __m6_from_mont ns zl zl )
     ( __m6_from_mont ns rl rl )
     : ( Vec u ) u1 ( __m6_to_be48 zl )
     : ( Vec u ) u2 ( __m6_to_be48 rl )
-    ( vec_free [i] sl ) ( vec_free [i] zl ) ( vec_free [i] rl )
-    ( vec_free [i] w )
-    ( __p384_scr_free ns )
 
     // The points, over GF(p).
     : P384Scr fs ( __p384_pscr_new )
@@ -613,13 +593,11 @@ $ `stdlib/std/bytes.nu`
     : ( Vec i ) gy ( __p384_gy_plain )
     ( __m6_to_mont fs . G x gx )
     ( __m6_to_mont fs . G y gy )
-    ( vec_free [i] gx ) ( vec_free [i] gy )
     : P384Pt Q ( __p384_pt_new )
     : ( Vec i ) qxl ( __m6_from_be qxb )
     : ( Vec i ) qyl ( __m6_from_be qyb )
     ( __m6_to_mont fs . Q x qxl )
     ( __m6_to_mont fs . Q y qyl )
-    ( vec_free [i] qxl ) ( vec_free [i] qyl )
     // Z = 1 in Montgomery form for both affine inputs.
     : ( Vec i ) one ( _mag6 )
     : *i q1 ( vec_data [i] one )
@@ -656,23 +634,13 @@ $ `stdlib/std/bytes.nu`
         : ( Vec i ) zinv ( _mag6 )
         : ( Vec i ) pm2 ( __p384_pm2 )
         ( __m6_pow fs zinv . acc z pm2 )
-        ( vec_free [i] pm2 )
         ( __m6_mul fs . acc x . acc x zinv )
         ( __m6_from_mont fs . acc x . acc x )
-        ( vec_free [i] zinv )
         : P384Scr ns2 ( __p384_nscr_new )
         ( __m6_reduce_once ns2 . acc x )
-        ( __p384_scr_free ns2 )
         : ( Vec u ) xb ( __m6_to_be48 . acc x )
         = result ( bytes_eq xb rb )
-        ( vec_free [u] xb )
     } {}
 
-    ( vec_free [u] u1 ) ( vec_free [u] u2 )
-    ( vec_free [i] one ) ( vec_free [i] tg ) ( vec_free [i] tq )
-    ( vec_free [i] am ) ( vec_free [i] b3m )
-    ( __p384_pt_free G ) ( __p384_pt_free Q )
-    ( __p384_pt_free acc ) ( __p384_pt_free ent )
-    ( __p384_scr_free fs )
     ^ result
 }

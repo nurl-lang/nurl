@@ -308,7 +308,6 @@ $ `stdlib/core/vec.nu`
 }
 
 @ path_normalize s p → String {
-    : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
     : i n ( nurl_str_len p )
     ? == n 0 {
         : String dot ( string_with_cap 1 )
@@ -354,7 +353,7 @@ $ `stdlib/core/vec.nu`
                                     } {
                                         : ?String pop_opt ( vec_pop [String] stk )
                                         ?? pop_opt {
-                                            T popped → ( string_free popped )
+                                            T popped → {}
                                             F → {}
                                         }
                                     }
@@ -384,7 +383,6 @@ $ `stdlib/core/vec.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] segs drop_str )
     : String out ( string_with_cap n )
     : ~ i di 0
     ~ < di drive_end {
@@ -397,7 +395,6 @@ $ `stdlib/core/vec.nu`
         ? == ( string_len out ) 0 {
             ( string_push_char out 46 )
         } {}
-        ( vec_free_with [String] stk drop_str )
         ^ out
     } {}
     : ~ i j 0
@@ -417,7 +414,6 @@ $ `stdlib/core/vec.nu`
         }
         = j + j 1
     }
-    ( vec_free_with [String] stk drop_str )
     ^ out
 }
 
@@ -453,9 +449,8 @@ $ `stdlib/core/vec.nu`
     ^ @ Path { c }
 }
 
-@ path_free sink Path p → v {
-    ( string_free . p inner )
-}
+// Let go of `p` now rather than at the end of its owner's scope.
+@ path_free sink Path p → v {}
 
 @ path_eq Path a Path b → b {
     ^ ( string_eq . a inner . b inner )
@@ -513,7 +508,6 @@ $ `stdlib/core/vec.nu`
 // no symlink awareness. None when the two are not comparable: one
 // absolute and one relative, or rooted on different Windows drives.
 @ path_relative_to Path base Path target → ?Path {
-    : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
     : s bs ( path_str base )
     : s ts ( path_str target )
     ? != ( path_is_absolute bs ) ( path_is_absolute ts ) {
@@ -531,8 +525,6 @@ $ `stdlib/core/vec.nu`
     : String tn ( path_normalize ts )
     : ( Vec String ) bsegs ( __collect_segments ( string_data bn ) 0 )
     : ( Vec String ) tsegs ( __collect_segments ( string_data tn ) 0 )
-    ( string_free bn )
-    ( string_free tn )
     : i bc ( vec_len [String] bsegs )
     : i tc ( vec_len [String] tsegs )
     // Length of the common leading run of equal segments.
@@ -575,8 +567,6 @@ $ `stdlib/core/vec.nu`
     }
     // Same location → empty result → ".".
     ? == 0 ( string_len out ) { ( string_push_char out 46 ) } {}
-    ( vec_free_with [String] bsegs drop_str )
-    ( vec_free_with [String] tsegs drop_str )
     : Path rp @ Path { out }
     ^ @ ?Path { T rp }
 }

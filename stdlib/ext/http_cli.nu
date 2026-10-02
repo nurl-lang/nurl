@@ -22,7 +22,7 @@
 //   ( httpc_status       HttpcResp r )                             → i
 //   ( httpc_body_str     HttpcResp r )                             → s   borrowed, NUL-terminated
 //   ( httpc_body_bytes   HttpcResp r )                             → ( Vec u )  owned copy
-//   ( httpc_resp_free     HttpcResp r )                             → v
+//   ( httpc_resp_free     HttpcResp r )                             → v   early release (optional)
 //
 // Transport: each request shells out to `curl`. The response BODY is
 // captured to a temp file via `-o` (so binary tarballs round-trip intact
@@ -59,21 +59,18 @@ $ `stdlib/ext/http_cli_types.nu`
     ?? ( env_get `TMPDIR` ) {
         T d → {
             ? > ( string_len d ) 0 { ^ d } {}
-            ( string_free d )
         }
         F _ → {}
     }
     ?? ( env_get `TEMP` ) {
         T d → {
             ? > ( string_len d ) 0 { ^ d } {}
-            ( string_free d )
         }
         F _ → {}
     }
     ?? ( env_get `TMP` ) {
         T d → {
             ? > ( string_len d ) 0 { ^ d } {}
-            ( string_free d )
         }
         F _ → {}
     }
@@ -174,7 +171,6 @@ $ `stdlib/ext/http_cli_types.nu`
             : ~ String atarg ( string_new )
             ? > ( nurl_str_len reqfile ) 0 {
                 ( vec_push [s] a `--data-binary` )
-                ( string_free atarg )
                 = atarg ( string_with_cap + ( nurl_str_len reqfile ) 2 )
                 ( string_push_char atarg 64 )  // '@'
                 ( string_push_str atarg reqfile )
@@ -193,16 +189,11 @@ $ `stdlib/ext/http_cli_types.nu`
                         = ok 1
                         = status ( nurl_str_to_int ( output_stdout out ) )
                     } {}
-                    ( output_free out )
                 }
             }
-            ( vec_free [s] a )
-            ( string_free atarg )
-            ( vec_free_with [String] hold \ String hs → v { ( string_free hs ) } )
 
             ? == ok 0 {
                 ( unlink ( string_data respfile ) )
-                ( string_free respfile )
                 ? == ec 6 { ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcDns } } {}
                 ? == ec 7 { ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcConnect } } {}
                 ? == ec 28 { ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcTimeout } } {}
@@ -216,14 +207,12 @@ $ `stdlib/ext/http_cli_types.nu`
             ?? ( read_file_bytes ( string_data respfile ) ) {
                 T b → {
                     = blen ( vec_len [u] b )
-                    ( vec_free [u] body )
                     = body b
                 }
                 F _ → {}
             }
             ( vec_push [u] body 0 )
             ( unlink ( string_data respfile ) )
-            ( string_free respfile )
 
             : HttpcResp r @ HttpcResp { status blen body }
             ^ @ !HttpcResp HttpcErr { T r }
@@ -245,12 +234,10 @@ $ `stdlib/ext/http_cli_types.nu`
             }
             ? == wok 0 {
                 ( unlink ( string_data bodyfile ) )
-                ( string_free bodyfile )
                 ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
             } {}
             : !HttpcResp HttpcErr res ( __httpc_exec method url ( string_data bodyfile ) headers_blob )
             ( unlink ( string_data bodyfile ) )
-            ( string_free bodyfile )
             ^ res
         }
     }
@@ -287,12 +274,10 @@ $ `stdlib/ext/http_cli_types.nu`
             }
             ? == wok 0 {
                 ( unlink ( string_data bodyfile ) )
-                ( string_free bodyfile )
                 ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
             } {}
             : !HttpcResp HttpcErr res ( __httpc_exec_t method url ( string_data bodyfile ) headers_blob max_secs )
             ( unlink ( string_data bodyfile ) )
-            ( string_free bodyfile )
             ^ res
         }
     }
@@ -330,6 +315,4 @@ $ `stdlib/ext/http_cli_types.nu`
     ^ out
 }
 
-@ httpc_resp_free sink HttpcResp r → v {
-    ( vec_free [u] . r body )
-}
+@ httpc_resp_free sink HttpcResp r → v {}
