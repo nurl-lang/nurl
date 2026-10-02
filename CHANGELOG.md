@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`( mem_dup c )` is a fresh value to the call it is passed to**
+  (`( vec_push out ( mem_dup c ) )`, c a `vec_get` payload): the push took
+  it for lent and copied the copy (anomaly meta_clone_versions leaked per
+  fork). `compiler/tests/mem_dup_payload_into_push.nu`.
 - **A lent call result copied on return no longer keeps the local it lent
   from alive** (`^ ( sane o )`, sane handing back a cursor over its
   parameter): o is dropped and the copy is published as owned (anomaly

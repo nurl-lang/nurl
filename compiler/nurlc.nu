@@ -9255,6 +9255,14 @@
     ( expect lex TT_RPAREN )
     ? & ( __type_needs_drop ty syms ) ( __clone_supported ty syms ) {
         : s r ( mem_emit_cloneif cg ty v `1` )
+        // The copy is fresh: nothing of what the copied expression lent or
+        // which call made it describes it (mem_lent_cond / mem_call_retown
+        // read the last call's answer — `( vec_push out ( mem_dup c ) )`
+        // with c a `vec_get` payload copied the copy, and leaked one).
+        ( nurl_sym_def syms `__last_call_name__` `` )
+        ( nurl_sym_def syms `__last_call_forward__` `` )
+        ( nurl_sym_def syms `__last_value_borrow__` `` )
+        ( nurl_sym_def syms `__last_call_ret_view__` `` )
         ( nurl_set_last_type ty )
         ^ r
     } {}
