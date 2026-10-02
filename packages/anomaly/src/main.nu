@@ -60,10 +60,8 @@ $ `src/mcp.nu`
 @ __an_store_root CliCtx x → String {
     : ~ String r ( ctx_str x `store` )
     ? > ( string_len r ) 0 {} {
-        ( string_free r )
         : String home ( env_var_or `HOME` `.` )
         = r ( path_join ( string_data home ) `.anomaly` )
-        ( string_free home )
     }
     ( __an_migrate_store ( string_data r ) )
     ^ r
@@ -76,11 +74,9 @@ $ `src/mcp.nu`
 @ __an_store_of CliCtx x s root → Store {
     : String org ( ctx_str x `org` )
     ? > ( string_len org ) 0 {} {
-        ( string_free org )
         ^ ( store_open root )
     }
     : Store st ( store_open_org root ( string_data org ) )
-    ( string_free org )
     ^ st
 }
 
@@ -100,7 +96,6 @@ $ `src/mcp.nu`
         ( string_push_str msg root )
         ( string_push_str msg `/migrated-<time>` )
         ( nurl_eprintln ( string_data msg ) )
-        ( string_free msg )
     } {}
 }
 
@@ -115,11 +110,9 @@ $ `src/mcp.nu`
     : String dir ( ctx_arg x 0 )
     ? > ( string_len dir ) 0 {} {
         ( nurl_eprintln `anomaly: analyze-job needs the task directory` )
-        ( string_free dir )
         ^ 2
     }
     : i rc ( analyze_run ( string_data dir ) )
-    ( string_free dir )
     ^ rc
 }
 
@@ -129,23 +122,19 @@ $ `src/mcp.nu`
 @ __an_webroot CliCtx x → String {
     : String v ( ctx_str x `webroot` )
     ? > ( string_len v ) 0 {
-        ? ( file_exists ( string_data v ) ) { ^ v } { ( string_free v ) }
+        ? ( file_exists ( string_data v ) ) { ^ v } {}
     } {
-        ( string_free v )
     }
     : !String IoErr exe ( fs_readlink `/proc/self/exe` )
     ?? exe {
         T ep → {
             : String bindir ( path_dirname ( string_data ep ) )
-            ( string_free ep )
             : String c1 ( path_join ( string_data bindir ) `static` )
             ? ( file_exists ( string_data c1 ) ) {
-                ( string_free bindir )
                 ^ c1
-            } { ( string_free c1 ) }
+            } {}
             : String share ( path_join ( string_data bindir ) `../share/anomaly/static` )
-            ( string_free bindir )
-            ? ( file_exists ( string_data share ) ) { ^ share } { ( string_free share ) }
+            ? ( file_exists ( string_data share ) ) { ^ share } {}
         }
         F _ → {}
     }
@@ -166,8 +155,6 @@ $ `src/mcp.nu`
         ?? eq {
             T at → {
                 ? <= at 0 {
-                    ( string_free kv )
-                    ( json_free o )
                     ^ @ ?Json { F }
                 } {}
                 : String key ( string_new )
@@ -188,16 +175,11 @@ $ `src/mcp.nu`
                     T fv → { ( json_obj_set o ( string_data key ) ( json_float fv ) ) }
                     F _ → { ( json_obj_set o ( string_data key ) ( json_str_lit ( string_data val ) ) ) }
                 }
-                ( string_free key )
-                ( string_free val )
             }
             F _ → {
-                ( string_free kv )
-                ( json_free o )
                 ^ @ ?Json { F }
             }
         }
-        ( string_free kv )
         = k + k 1
     }
     ^ @ ?Json { T o }
@@ -245,23 +227,18 @@ $ `src/mcp.nu`
     ( json_obj_set o `data_points` ( json_int ( model_n_points mo__h ) ) )
     : String out ( json_stringify o )
     ( pline ( string_data out ) )
-    ( string_free out )
-    ( json_free o )
 }
 
 // Print (or report the error of) one detect/score result. Exit code.
-@ __an_report Model mo__h ! Verdict String vr → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_report Model mo ! Verdict String vr → i {
     ?? vr {
         T vd → {
-            ( __an_print_verdict mo__h vd )
-            ( verdict_free vd )
+            ( __an_print_verdict mo vd )
             ^ 0
         }
         F e → {
             ( nurl_eprint `anomaly: ` )
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
     }
@@ -283,32 +260,26 @@ $ `src/mcp.nu`
         T rec → {
             : String root ( __an_store_root x )
             : Store st ( __an_store_of x ( string_data root ) )
-            ( string_free root )
             ? & == ingest F == ( store_exists st ( string_data mname ) ) F {
                 ( nurl_eprint `anomaly: model not found: ` )
                 ( nurl_eprintln ( string_data mname ) )
                 = rc 1
             } {
-                : Model mo__h ( model_open st ( string_data mname ) )
-                : *ModelImpl mo ( _Model_ptr mo__h )
+                : Model mo ( model_open st ( string_data mname ) )
                 ? ingest {
-                    : !Verdict String vr ( model_ingest mo__h rec )
-                    = rc ( __an_report mo__h vr )
+                    : !Verdict String vr ( model_ingest mo rec )
+                    = rc ( __an_report mo vr )
                 } {
-                    : !Verdict String vr ( model_detect_only mo__h rec )
-                    = rc ( __an_report mo__h vr )
+                    : !Verdict String vr ( model_detect_only mo rec )
+                    = rc ( __an_report mo vr )
                 }
-                ( model_free mo__h )
             }
-            ( store_free st )
-            ( json_free rec )
         }
         F _ → {
             ( nurl_eprintln `anomaly: arguments must be key=value pairs` )
             = rc 2
         }
     }
-    ( string_free mname )
     ^ rc
 }
 
@@ -320,7 +291,7 @@ $ `src/mcp.nu`
     ? > ( string_len fv ) 0 {
         : !String IoErr r ( read_file ( string_data fv ) )
         ?? r {
-            T txt → { ( string_free input ) = input txt }
+            T txt → { = input txt }
             F _ → {
                 ( nurl_eprint `anomaly: cannot read file: ` )
                 ( nurl_eprintln ( string_data fv ) )
@@ -328,26 +299,20 @@ $ `src/mcp.nu`
             }
         }
     } {
-        ( string_free input )
         = input ( read_all_stdin )
     }
-    ( string_free fv )
     ? have_input {} {
-        ( string_free input )
         ^ 1
     }
     : b header ( ctx_bool x `header` )
     : AnomCsv ds ( anom_parse_csv ( string_data input ) `,` header )
-    ( string_free input )
     ? || <= . ds rows 0 <= . ds cols 0 {
         ( nurl_eprintln `anomaly: no numeric rows found in input` )
-        ( anom_csv_free ds )
         ^ 1
     } {}
     : f margin ( ctx_float x `margin` )
     : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 0 0 100 256 -1.0 margin T }
     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
-    ( _an_vercfg_free cfg )
 
     : String out ( string_with_cap * . ds rows 16 )
     : ~ i r 0
@@ -362,15 +327,11 @@ $ `src/mcp.nu`
         = r + r 1
     }
     ( nurl_print ( string_data out ) )
-    ( string_free out )
     : String sm ( string_from `anomalies: ` )
     ( string_push_int sm . rep anomaly_count )
     ( string_push_str sm ` of ` )
     ( string_push_int sm . rep total_rows )
     ( nurl_eprintln ( string_data sm ) )
-    ( string_free sm )
-    ( anomaly_report_free rep )
-    ( anom_csv_free ds )
     ^ 0
 }
 
@@ -391,10 +352,6 @@ $ `src/mcp.nu`
         // quietly ignored is the failure nobody can see.
         ( nurl_eprint `anomaly: cannot read the config file: ` )
         ( nurl_eprintln ( config_error cfg ) )
-        ( config_free cfg )
-        ( string_free cfg_path )
-        ( string_free cfg_flag )
-        ( string_free root )
         ^ 2
     } {}
     ? ( config_loaded cfg ) {
@@ -426,9 +383,8 @@ $ `src/mcp.nu`
     ? == ( nurl_str_eq ( string_data addr ) ANOM_DEFAULT_ADDR ) 1 {
         : String from_file ( config_str cfg `service.addr` `` )
         ? > ( string_len from_file ) 0 {
-            ( string_free addr )
             = addr from_file
-        } { ( string_free from_file ) }
+        } {}
     } {}
     : ~ String host ( string_new )
     : ~ i port 8811
@@ -448,10 +404,8 @@ $ `src/mcp.nu`
                 = c + c 1
             }
             ?? ( string_to_int ps ) { T v → { = port v } F _ → {} }
-            ( string_free ps )
         }
         F _ → {
-            ( string_free host )
             = host ( string_from ( string_data addr ) )
         }
     }
@@ -460,7 +414,6 @@ $ `src/mcp.nu`
     // The config file supplies a web root only when nothing more specific
     // did — __an_webroot has already consulted --webroot and $ANOMALY_WEBROOT.
     ? == ( string_len webroot ) 0 {
-        ( string_free webroot )
         = webroot ( config_str cfg `service.webroot` `` )
     } {}
     ( anomaly_service_set_webroot ( string_data webroot ) )
@@ -469,7 +422,6 @@ $ `src/mcp.nu`
     // reach; the config file is the only place that origin is known.
     : String origin ( config_str cfg `service.public_url` `` )
     ( an_mcp_set_public_url ( string_data origin ) )
-    ( string_free origin )
     // Say where the models live: a mistyped --store or $ANOMALY_HOME
     // otherwise serves (and writes) the default store without a word.
     ( nurl_eprint `anomaly: model store: ` )
@@ -485,23 +437,14 @@ $ `src/mcp.nu`
     : ~ b srcs_on ( config_bool cfg `sources.enabled` T )
     : String senv ( env_var_or `ANOMALY_SOURCES` `` )
     ? > ( string_len senv ) 0 { = srcs_on != ( nurl_str_eq ( string_data senv ) `0` ) 1 } {}
-    ( string_free senv )
     ( anomaly_service_set_sources srcs_on )
     : i rc ( anomaly_serve ( string_data host ) port )
-    ( config_free cfg )
-    ( string_free cfg_path )
-    ( string_free cfg_flag )
-    ( string_free webroot )
-    ( string_free root )
-    ( string_free host )
-    ( string_free addr )
     ^ rc
 }
 
 @ __an_cmd_ls CliCtx x → i {
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ( Vec String ) names ( store_list st )
     : i n ( vec_len [String] names )
     : ~ i k 0
@@ -512,8 +455,6 @@ $ `src/mcp.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
-    ( store_free st )
     ^ 0
 }
 
@@ -521,16 +462,12 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ?? ( store_load_meta st ( string_data mname ) ) {
         T mm → {
             : Json o ( meta_to_json mm )
             : String out ( json_pretty o )
             ( pline ( string_data out ) )
-            ( string_free out )
-            ( json_free o )
-            ( meta_free mm )
         }
         F _ → {
             ( nurl_eprint `anomaly: model not found: ` )
@@ -538,8 +475,6 @@ $ `src/mcp.nu`
             = rc 1
         }
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -547,14 +482,12 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
         : Model mo__h ( model_open st ( string_data mname ) )
         : *ModelImpl mo ( _Model_ptr mo__h )
         : ( Vec i ) hidden ( vec_new [i] )
         : String err ( model_train_autoencoder mo__h hidden -1.0 )
-        ( vec_free [i] hidden )
         ? == ( string_len err ) 0 {
             : AeModel tae . mo ae
             : String msg ( string_from `autoencoder trained on ` )
@@ -563,21 +496,16 @@ $ `src/mcp.nu`
             ( string_push_int msg . tae filtered )
             ( string_push_str msg ` anomalies filtered)` )
             ( pline ( string_data msg ) )
-            ( string_free msg )
         } {
             ( nurl_eprint `anomaly: ` )
             ( nurl_eprintln ( string_data err ) )
             = rc 1
         }
-        ( string_free err )
-        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -585,11 +513,9 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
+        : Model mo ( model_open st ( string_data mname ) )
         : i season ( ctx_int x `season` )
         ? >= season -1 {
             : Json vo ( json_obj_new )
@@ -598,14 +524,12 @@ $ `src/mcp.nu`
             ( json_obj_set vers ANOM_FC_NAME vo )
             : Json patch ( json_obj_new )
             ( json_obj_set patch `versions` vers )
-            ( _an_ensure_fc_cfg mo__h )
-            : String perr ( model_apply_meta_patch mo__h patch )
-            ( string_free perr )
-            ( json_free patch )
+            ( _an_ensure_fc_cfg mo )
+            : String perr ( model_apply_meta_patch mo patch )
         } {}
-        : String err ( model_train_forecast mo__h )
+        : String err ( model_train_forecast mo )
         ? == ( string_len err ) 0 {
-            : FcModel fc__h ( model_forecast mo__h )
+            : FcModel fc__h ( model_forecast mo )
             : *FcModelImpl fc ( _FcModel_ptr fc__h )
             : String msg ( string_from `forecast models fitted for ` )
             ( string_push_int msg . fc nw )
@@ -615,21 +539,16 @@ $ `src/mcp.nu`
             ( string_push_int msg . fc season )
             ( string_push_str msg `)` )
             ( pline ( string_data msg ) )
-            ( string_free msg )
         } {
             ( nurl_eprint `anomaly: ` )
             ( nurl_eprintln ( string_data err ) )
             = rc 1
         }
-        ( string_free err )
-        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -637,34 +556,27 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
-        : FcModel fc__h ( model_forecast mo__h )
+        : Model mo ( model_open st ( string_data mname ) )
+        : FcModel fc__h ( model_forecast mo )
         : *FcModelImpl fc ( _FcModel_ptr fc__h )
         ? . fc trained {
             : ~ i h ( ctx_int x `horizon` )
             ? < h 1 { = h 12 } {}
-            : Json o ( model_forecast_json mo__h h )
+            : Json o ( model_forecast_json mo h )
             ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
             : String js ( json_stringify o )
             ( pline ( string_data js ) )
-            ( string_free js )
-            ( json_free o )
         } {
             ( nurl_eprintln `anomaly: the forecast version is not trained: anomaly train-fc <model> first` )
             = rc 1
         }
-        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -672,50 +584,41 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
+        : Model mo ( model_open st ( string_data mname ) )
         : ~ i h ( ctx_int x `horizon` )
         ? < h 1 { = h 12 } {}
         : ~ i n ( ctx_int x `points` )
         ? < n 1 { = n 200 } {}
-        : Json o ( model_forecast_backtest mo__h h n )
+        : Json o ( model_forecast_backtest mo h n )
         ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
         : String js ( json_stringify o )
         ( pline ( string_data js ) )
-        ( string_free js )
         ? ( json_obj_has o `error` ) { = rc 1 } {}
-        ( json_free o )
-        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
 // Resolve --last / --from / --to into the calibration window (see
 // model_window_from_last): --last counts back from the newest stored
 // point, `--last all` means the whole ring.
-@ __an_cli_window Model mo__h CliCtx x → ( Vec i ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_cli_window Model mo CliCtx x → ( Vec i ) {
     : i from0 ( ctx_int x `from` )
     : i to0 ( ctx_int x `to` )
     : String lasts ( ctx_str x `last` )
-    : ~ i last ( model_default_last mo__h )
+    : ~ i last ( model_default_last mo )
     : s lraw ( string_data lasts )
     ? || == ( nurl_str_eq lraw `all` ) 1 == ( nurl_str_eq lraw `*` ) 1 { = last 0 } {
         ?? ( string_to_int lasts ) { T v → { ? > v 0 { = last v } {} } F _ → {} }
     }
-    ( string_free lasts )
     : ~ i from_ts from0
     // seconds on a time clock, points on a count clock
-    ? & > last 0 <= from0 0 { = from_ts ( model_window_from_last mo__h to0 ( model_last_span mo__h last ) ) } {}
+    ? & > last 0 <= from0 0 { = from_ts ( model_window_from_last mo to0 ( model_last_span mo last ) ) } {}
     : ( Vec i ) w ( vec_new [i] )
     ( vec_push [i] w from_ts )
     ( vec_push [i] w to0 )
@@ -738,26 +641,22 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
-        ? ( model_is_trained mo__h ) {
-            : ( Vec i ) w ( __an_cli_window mo__h x )
-            : CalReport cal ( model_calibrate mo__h ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) )
-            ( vec_free [i] w )
+        : Model mo ( model_open st ( string_data mname ) )
+        ? ( model_is_trained mo ) {
+            : ( Vec i ) w ( __an_cli_window mo x )
+            : CalReport cal ( model_calibrate mo ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) )
             : String hdr ( string_from `window: ` )
             ( string_push_int hdr . cal n_rows )
             ( string_push_str hdr ` of ` )
-            ( string_push_int hdr ( model_n_points mo__h ) )
+            ( string_push_int hdr ( model_n_points mo ) )
             ( string_push_str hdr ` stored points; any version flags ` )
             ( string_push_int hdr . cal agg_flagged )
             ( string_push_str hdr ` (` )
             ( __an_push_pct hdr . cal agg_flagged . cal n_rows )
             ( string_push_str hdr `)` )
             ( pline ( string_data hdr ) )
-            ( string_free hdr )
             ( pline `version       margin    flagged        worst     margin for 0.1% / 1% / 5% / 10%` )
             : i ni ( vec_len [CalVer] . cal items )
             : ~ i k 0
@@ -783,25 +682,20 @@ $ `src/mcp.nu`
                         ( string_push_str ln ` / ` )
                         ( string_push_str ln ( float_to_string ( cal_margin_for_rate cv 0.1 ) ) )
                         ( pline ( string_data ln ) )
-                        ( string_free ln )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( cal_free cal )
         } {
             ( nurl_eprintln `anomaly: model is not trained yet` )
             = rc 1
         }
-        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -813,29 +707,22 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     : f rate ( ctx_float x `rate` )
     ? & >= rate 0.0 <= rate 1.0 {} {
         ( nurl_eprintln `anomaly: --rate must be between 0 and 1 (the fraction of the window to flag)` )
-        ( store_free st )
-        ( string_free mname )
         ^ 2
     }
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
-        ? ( model_is_trained mo__h ) {
-            : ( Vec i ) w ( __an_cli_window mo__h x )
+        : Model mo ( model_open st ( string_data mname ) )
+        ? ( model_is_trained mo ) {
+            : ( Vec i ) w ( __an_cli_window mo x )
             : b dry ( ctx_bool x `dry-run` )
             : ( Vec String ) none ( vec_new [String] )
             : String lasts ( ctx_str x `last` )
             : b own == ( nurl_str_eq ( string_data lasts ) `own` ) 1
-            ( string_free lasts )
-            : FineTuneReport rep ? own ( model_finetune_own mo__h rate ! dry none )
-            ( model_finetune_at mo__h rate ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) ! dry none )
-            ( vec_free [String] none )
-            ( vec_free [i] w )
+            : FineTuneReport rep ? own ( model_finetune_own mo rate ! dry none )
+            ( model_finetune_at mo rate ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) ! dry none )
             ( pline ? dry `dry run — nothing written` `margins updated` )
             ( pline `version       old margin -> new margin   flagged before -> after (window)` )
             : i ni ( vec_len [FtVer] . rep items )
@@ -860,25 +747,20 @@ $ `src/mcp.nu`
                         ( string_push_str ln `) of ` )
                         ( string_push_int ln . ft n )
                         ( pline ( string_data ln ) )
-                        ( string_free ln )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( finetune_free rep )
         } {
             ( nurl_eprintln `anomaly: model is not trained yet` )
             = rc 1
         }
-        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -886,30 +768,24 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
-        : i used ( model_force_train mo__h )
+        : Model mo ( model_open st ( string_data mname ) )
+        : i used ( model_force_train mo )
         ? > used 0 {
             : String msg ( string_from `trained on ` )
             ( string_push_int msg used )
             ( string_push_str msg ` points` )
             ( pline ( string_data msg ) )
-            ( string_free msg )
         } {
             ( nurl_eprintln `anomaly: not enough data to train` )
             = rc 1
         }
-        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -917,21 +793,16 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : Model mo__h ( model_open st ( string_data mname ) )
-        : *ModelImpl mo ( _Model_ptr mo__h )
-        ( model_reset mo__h )
-        ( model_free mo__h )
+        : Model mo ( model_open st ( string_data mname ) )
+        ( model_reset mo )
         ( pline `reset` )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 
@@ -939,7 +810,6 @@ $ `src/mcp.nu`
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
     : Store st ( __an_store_of x ( string_data root ) )
-    ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
         : b okd ( model_delete st ( string_data mname ) )
@@ -952,8 +822,6 @@ $ `src/mcp.nu`
         ( nurl_eprintln ( string_data mname ) )
         = rc 1
     }
-    ( store_free st )
-    ( string_free mname )
     ^ rc
 }
 

@@ -103,7 +103,6 @@ $ `src/imptime.nu`
         T c → {
             : String raw ( xml_inner_text c )
             : String out ( string_trim raw )
-            ( string_free raw )
             ^ out
         }
         F _ → { ^ ( string_new ) }
@@ -133,11 +132,9 @@ $ `src/imptime.nu`
 @ wfs_base_url s url → String {
     : String t0 ( string_from url )
     : String t ( string_trim t0 )
-    ( string_free t0 )
     : i q ( nurl_str_find ( string_data t ) `?` )
     ? >= q 0 {
         : String base ( string_substr t 0 q )
-        ( string_free t )
         ^ base
     } {}
     ^ t
@@ -150,7 +147,6 @@ $ `src/imptime.nu`
     : String b ( wfs_base_url url )
     : b ok | ( string_starts_with b `https://` ) ( string_starts_with b `http://` )
     : b long > ( string_len b ) 10
-    ( string_free b )
     ^ & ok long
 }
 
@@ -178,11 +174,9 @@ $ `src/imptime.nu`
     ( string_push_char u 38 )
     : String ek ( percent_encode key )
     ( string_push_str u ( string_data ek ) )
-    ( string_free ek )
     ( string_push_char u 61 )
     : String ev ( percent_encode val )
     ( string_push_str u ( string_data ev ) )
-    ( string_free ev )
 }
 
 // A stored-query value as text: strings as they are, numbers printed.
@@ -214,7 +208,6 @@ $ `src/imptime.nu`
             ? | == ( nurl_str_eq key `starttime` ) 1 == ( nurl_str_eq key `endtime` ) 1 {} {
                 : String txt ( __wfs_param_text v )
                 ? > ( string_len txt ) 0 { ( __wfs_push_param u key ( string_data txt ) ) } {}
-                ( string_free txt )
             }
         } )
     } {}
@@ -222,8 +215,6 @@ $ `src/imptime.nu`
     : String s1 ( time_format_iso ( time_from_unix end ) )
     ( __wfs_push_param u `starttime` ( string_data s0 ) )
     ( __wfs_push_param u `endtime` ( string_data s1 ) )
-    ( string_free s0 )
-    ( string_free s1 )
     ^ u
 }
 
@@ -243,7 +234,6 @@ $ `src/imptime.nu`
                 ? == ( nurl_str_eq key `srsName` ) 1 {} {
                     : String txt ( __wfs_param_text v )
                     ? > ( string_len txt ) 0 { ( __wfs_push_param u key ( string_data txt ) ) } {}
-                    ( string_free txt )
                 }
             }
         } )
@@ -251,7 +241,6 @@ $ `src/imptime.nu`
             T cv → {
                 : String ct ( __wfs_param_text cv )
                 ?? ( string_to_int ct ) { T n → { ? > n 0 { = count n } {} } F _ → {} }
-                ( string_free ct )
             }
             F _ → {}
         }
@@ -259,7 +248,6 @@ $ `src/imptime.nu`
             T sv → {
                 : String st ( __wfs_param_text sv )
                 ? > ( string_len st ) 0 { = srs T ( __wfs_push_param u `srsName` ( string_data st ) ) } {}
-                ( string_free st )
             }
             F _ → {}
         }
@@ -268,7 +256,6 @@ $ `src/imptime.nu`
     : String cs ( string_new )
     ( string_push_int cs count )
     ( __wfs_push_param u `count` ( string_data cs ) )
-    ( string_free cs )
     // The URN form, not "EPSG:4326": WFS 2.0 gives the URN the axis order
     // of the CRS itself — latitude first — where the short form is
     // answered longitude first by a GeoServer.
@@ -281,19 +268,17 @@ $ `src/imptime.nu`
 @ __wfs_param_json Xml p → Json {
     : Json o ( json_obj_new )
     ?? ( xml_attr p `name` ) {
-        T nm → { ( json_obj_set o `name` ( json_str_lit ( string_data nm ) ) ) ( string_free nm ) }
+        T nm → { ( json_obj_set o `name` ( json_str_lit ( string_data nm ) ) ) }
         F _ → { ( json_obj_set o `name` ( json_str_lit `` ) ) }
     }
     ?? ( xml_attr p `type` ) {
-        T ty → { ( json_obj_set o `type` ( json_str_lit ( string_data ty ) ) ) ( string_free ty ) }
+        T ty → { ( json_obj_set o `type` ( json_str_lit ( string_data ty ) ) ) }
         F _ → { ( json_obj_set o `type` ( json_str_lit `` ) ) }
     }
     : String title ( __wfs_child_text p `Title` )
     ( json_obj_set o `title` ( json_str_lit ( string_data title ) ) )
-    ( string_free title )
     : String abs ( __wfs_child_text p `Abstract` )
     ( json_obj_set o `abstract` ( json_str_lit ( string_data abs ) ) )
-    ( string_free abs )
     ^ o
 }
 
@@ -302,14 +287,11 @@ $ `src/imptime.nu`
     : Json o ( json_obj_new )
     : String name ( __wfs_child_text t `Name` )
     ( json_obj_set o `id` ( json_str_lit ( string_data name ) ) )
-    ( string_free name )
     ( json_obj_set o `kind` ( json_str_lit `type` ) )
     : String title ( __wfs_child_text t `Title` )
     ( json_obj_set o `title` ( json_str_lit ( string_data title ) ) )
-    ( string_free title )
     : String abs ( __wfs_child_text t `Abstract` )
     ( json_obj_set o `abstract` ( json_str_lit ( string_data abs ) ) )
-    ( string_free abs )
     ( json_obj_set o `parameters` ( json_arr_new ) )
     ^ o
 }
@@ -317,16 +299,14 @@ $ `src/imptime.nu`
 @ __wfs_query_json Xml q → Json {
     : Json o ( json_obj_new )
     ?? ( xml_attr q `id` ) {
-        T id → { ( json_obj_set o `id` ( json_str_lit ( string_data id ) ) ) ( string_free id ) }
+        T id → { ( json_obj_set o `id` ( json_str_lit ( string_data id ) ) ) }
         F _ → { ( json_obj_set o `id` ( json_str_lit `` ) ) }
     }
     ( json_obj_set o `kind` ( json_str_lit `stored` ) )
     : String title ( __wfs_child_text q `Title` )
     ( json_obj_set o `title` ( json_str_lit ( string_data title ) ) )
-    ( string_free title )
     : String abs ( __wfs_child_text q `Abstract` )
     ( json_obj_set o `abstract` ( json_str_lit ( string_data abs ) ) )
-    ( string_free abs )
     : Json ps ( json_arr_new )
     : i n ( vec_len [Xml] . q children )
     : ~ i k 0
@@ -357,7 +337,7 @@ $ `src/imptime.nu`
                         ? | ( __wfs_tag_is c `StoredQueryDescription` ) ( __wfs_tag_is c `StoredQuery` ) {
                             : Json q ( __wfs_query_json c )
                             : b byid ?? ( json_obj_get q `id` ) { T iv → == ( nurl_str_eq ( json_str_data iv ) WFS_BY_ID_QUERY ) 1 F _ → F }
-                            ? byid { ( json_free q ) } { ( json_arr_push qs q ) }
+                            ? byid {} { ( json_arr_push qs q ) }
                         } {}
                         ? ( __wfs_tag_is c `FeatureTypeList` ) {
                             : i nt ( vec_len [Xml] . c children )
@@ -376,30 +356,24 @@ $ `src/imptime.nu`
                 = k + k 1
             }
             ? == ( json_arr_len qs ) 0 {
-                ( json_free qs )
                 ? ( __wfs_tag_is root `ExceptionReport` ) {
                     : String why ( xml_inner_text root )
                     : String tw ( string_trim why )
                     : String msg ( string_from `the service answered with an exception: ` )
                     ( string_push_str msg ( string_data tw ) )
                     ( json_obj_set out `error` ( json_str_lit ( string_data msg ) ) )
-                    ( string_free msg )
-                    ( string_free tw )
-                    ( string_free why )
                 } {
                     ( json_obj_set out `error` ( json_str_lit `no feature types or stored queries in the answer: is this a WFS 2.0 endpoint?` ) )
                 }
             } {
                 ( json_obj_set out `queries` qs )
             }
-            ( xml_free root )
         }
         F e → {
             : String msg ( string_from `the answer is not XML (` )
             ( string_push_str msg ( xml_err_name e ) )
             ( string_push_char msg 41 )
             ( json_obj_set out `error` ( json_str_lit ( string_data msg ) ) )
-            ( string_free msg )
         }
     }
     ^ out
@@ -413,12 +387,6 @@ $ `src/imptime.nu`
     i members  // feature members read
     i missing  // values that were NaN or empty, left out of their row
     String err  // non-empty ⇒ nothing was read
-}
-
-@ wfs_pivot_free sink WfsPivot p → v {
-    ( vec_free_with [Json] . p rows \ Json j → v { ( json_free j ) } )
-    ( vec_free_with [String] . p columns \ String s → v { ( string_free s ) } )
-    ( string_free . p err )
 }
 
 @ _wfs_pivot_err s msg → WfsPivot {
@@ -486,7 +454,6 @@ $ `src/imptime.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
     = . out ok >= got 2
     ^ out
 }
@@ -498,8 +465,6 @@ $ `src/imptime.nu`
     : String name ( __wfs_child_text el `ParameterName` )
     : String tstr ( __wfs_child_text el `Time` )
     ? & > ( string_len name ) 0 > ( string_len tstr ) 0 {} {
-        ( string_free name )
-        ( string_free tstr )
         ^ 0
     }
     : ~ String pos ( string_new )
@@ -507,7 +472,6 @@ $ `src/imptime.nu`
         T loc → {
             ?? ( __wfs_child loc `Point` ) {
                 T pt → {
-                    ( string_free pos )
                     = pos ( __wfs_child_text pt `pos` )
                 }
                 F _ → {}
@@ -536,9 +500,7 @@ $ `src/imptime.nu`
         ( vec_push [Json] rows row )
         ( vec_push [String] keys key )
         = at - ( vec_len [Json] rows ) 1
-    } { ( string_free key ) }
-    ( string_free pos )
-    ( string_free tstr )
+    } {}
 
     : String vstr ( __wfs_child_text el `ParameterValue` )
     : ~ i rc 2
@@ -557,8 +519,6 @@ $ `src/imptime.nu`
             F _ → {}
         }
     } {}
-    ( string_free vstr )
-    ( string_free name )
     ^ rc
 }
 
@@ -573,10 +533,6 @@ $ `src/imptime.nu`
                 : String msg ( string_from `the service answered with an exception: ` )
                 ( string_push_str msg ( string_data tw ) )
                 : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
-                ( string_free msg )
-                ( string_free tw )
-                ( string_free why )
-                ( xml_free root )
                 ^ pe
             } {}
             : b is_fc ( __wfs_tag_is root `FeatureCollection` )
@@ -606,11 +562,8 @@ $ `src/imptime.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
-            ( xml_free root )
             : ~ String err ( string_new )
             ? == members 0 {
-                ( string_free err )
                 ? is_fc {
                     = err ( string_from `the feature collection holds no (location, time, parameter, value) members: pick a "simple" stored query` )
                 } {
@@ -624,7 +577,6 @@ $ `src/imptime.nu`
             ( string_push_str msg ( xml_err_name e ) )
             ( string_push_char msg 41 )
             : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
-            ( string_free msg )
             ^ pe
         }
     }
@@ -654,7 +606,6 @@ $ `src/imptime.nu`
     ? | | ( __wfs_tag_is x `pos` ) ( __wfs_tag_is x `posList` ) ( __wfs_tag_is x `coordinates` ) {
         : String raw ( xml_inner_text x )
         : String t ( string_trim raw )
-        ( string_free raw )
         ^ t
     } {}
     : i n ( vec_len [Xml] . x children )
@@ -664,7 +615,6 @@ $ `src/imptime.nu`
             T c → {
                 : String got ( __wfs_first_coord c )
                 ? > ( string_len got ) 0 { ^ got } {}
-                ( string_free got )
             }
             F _ → {}
         }
@@ -704,7 +654,6 @@ $ `src/imptime.nu`
                                     ( _wfs_col_add cols `lat` )
                                     ( _wfs_col_add cols `lon` )
                                 } {}
-                                ( string_free coord )
                             }
                         } {
                             : ~ b nested F
@@ -722,11 +671,9 @@ $ `src/imptime.nu`
                             } {
                                 : String raw ( xml_inner_text c )
                                 : String txt ( string_trim raw )
-                                ( string_free raw )
                                 ? > ( string_len txt ) 0 {
                                     : ~ String key ( string_clone local )
                                     ? & ( json_obj_has row ( string_data key ) ) > ( nurl_str_len parent ) 0 {
-                                        ( string_free key )
                                         = key ( string_from parent )
                                         ( string_push_char key 95 )
                                         ( string_push_str key ( string_data local ) )
@@ -748,12 +695,9 @@ $ `src/imptime.nu`
                                             }
                                         }
                                     }
-                                    ( string_free key )
                                 } {}
-                                ( string_free txt )
                             }
                         }
-                        ( string_free local )
                     }
                 } {}
             }
@@ -774,7 +718,6 @@ $ `src/imptime.nu`
     ? == ( nurl_str_eq time_field WFS_CLOCK_NONE ) 1 { ^ F } {}
     : ~ String key ( string_new )
     ? > ( nurl_str_len time_field ) 0 {
-        ( string_free key )
         = key ( string_from time_field )
     } {
         : ( Vec String ) keys ( json_obj_keys row )
@@ -788,7 +731,6 @@ $ `src/imptime.nu`
                             ? ( json_is_str v ) {
                                 : ImpStamp st ( imp_stamp_of_text ( json_str_data v ) )
                                 ? | == . st kind STAMP_DATETIME == . st kind STAMP_DATE {
-                                    ( string_free key )
                                     = key ( string_clone kn )
                                 } {}
                             } {}
@@ -800,7 +742,6 @@ $ `src/imptime.nu`
             }
             = k + k 1
         }
-        ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
     }
     : ~ b got F
     ? > ( string_len key ) 0 {
@@ -812,7 +753,6 @@ $ `src/imptime.nu`
                         ( json_obj_set row `timestamp` ( json_int secs ) )
                         : String iso ( time_format_iso ( time_from_unix secs ) )
                         ( json_obj_set row `time` ( json_str_lit ( string_data iso ) ) )
-                        ( string_free iso )
                         = got T
                     } {}
                 } {}
@@ -820,7 +760,6 @@ $ `src/imptime.nu`
             F _ → {}
         }
     } {}
-    ( string_free key )
     ^ got
 }
 
@@ -837,10 +776,6 @@ $ `src/imptime.nu`
                 : String msg ( string_from `the service answered with an exception: ` )
                 ( string_push_str msg ( string_data tw ) )
                 : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
-                ( string_free msg )
-                ( string_free tw )
-                ( string_free why )
-                ( xml_free root )
                 ^ pe
             } {}
             : b is_fc ( __wfs_tag_is root `FeatureCollection` )
@@ -870,7 +805,7 @@ $ `src/imptime.nu`
                                     ?? ( __wfs_first_elem c ) {
                                         T feat → {
                                             ?? ( xml_attr feat `gml:id` ) {
-                                                T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( _wfs_col_add cols `gml_id` ) ( string_free gid ) }
+                                                T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( _wfs_col_add cols `gml_id` ) }
                                                 F _ → {}
                                             }
                                             ( __wfs_wide_props row cols feat `` 0 )
@@ -880,7 +815,7 @@ $ `src/imptime.nu`
                                     }
                                 } {
                                     ?? ( xml_attr c `gml:id` ) {
-                                        T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( _wfs_col_add cols `gml_id` ) ( string_free gid ) }
+                                        T gid → { ( json_obj_set row `gml_id` ( json_str_lit ( string_data gid ) ) ) ( _wfs_col_add cols `gml_id` ) }
                                         F _ → {}
                                     }
                                     ( __wfs_wide_props row cols c `` 0 )
@@ -888,7 +823,6 @@ $ `src/imptime.nu`
                                 }
                                 : ( Vec String ) got ( json_obj_keys row )
                                 : i ngot ( vec_len [String] got )
-                                ( vec_free_with [String] got \ String s → v { ( string_free s ) } )
                                 ? & ok > ngot 0 {
                                     = members + members 1
                                     ? ( _wfs_wide_clock row time_field ) {} {
@@ -896,7 +830,6 @@ $ `src/imptime.nu`
                                     }
                                     ( vec_push [Json] rows row )
                                 } {
-                                    ( json_free row )
                                     ? ok { = missing + missing 1 } {}
                                 }
                             } {}
@@ -906,10 +839,8 @@ $ `src/imptime.nu`
                 }
                 = k + k 1
             }
-            ( xml_free root )
             : ~ String err ( string_new )
             ? == members 0 {
-                ( string_free err )
                 ? is_fc {
                     = err ( string_from `the feature collection holds no features with readable properties` )
                 } {
@@ -923,7 +854,6 @@ $ `src/imptime.nu`
             ( string_push_str msg ( xml_err_name e ) )
             ( string_push_char msg 41 )
             : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
-            ( string_free msg )
             ^ pe
         }
     }
@@ -944,7 +874,6 @@ $ `src/imptime.nu`
         T r → {
             : String body ( bytes_to_str . r body )
             ? & >= . r status 200 < . r status 300 {
-                ( string_free text )
                 = text body
                 = ok T
             } {
@@ -961,9 +890,7 @@ $ `src/imptime.nu`
                         = k + k 1
                     }
                 } {}
-                ( string_free body )
             }
-            ( http_response_free r )
         }
         F e → {
             ( string_push_str text `could not fetch: ` )

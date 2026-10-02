@@ -47,12 +47,6 @@ $ `stdlib/ext/toml.nu`
     ^ @ AnomalyConfig { F ( string_new ) ( string_new ) # TomlValue TBool }
 }
 
-@ config_free sink AnomalyConfig c → v {
-    ( string_free . c cpath )
-    ( string_free . c cerr )
-    ? . c loaded { ( toml_value_free . c root ) } {}
-}
-
 // Read and parse `path`. A file that does not exist is not an error — the
 // common case is having none — but a file that exists and does not parse
 // IS one: silently ignoring a config file someone wrote is how a service
@@ -64,7 +58,6 @@ $ `stdlib/ext/toml.nu`
         F _ → { ^ ( config_empty ) }
         T txt → {
             : !TomlValue TomlErr pr ( toml_parse ( string_data txt ) )
-            ( string_free txt )
             ?? pr {
                 T v → {
                     ^ @ AnomalyConfig { T ( string_from path ) ( string_new ) v }
@@ -141,10 +134,8 @@ $ `stdlib/ext/toml.nu`
                                     T sv → {
                                         ? > ( string_len out ) 0 { ( string_push_char out 44 ) } {}
                                         ( string_push_str out ( string_data sv ) )
-                                        ( string_free sv )
                                     }
                                     F _ → {
-                                        ( string_free out )
                                         ^ ( string_from dflt )
                                     }
                                 }
@@ -178,10 +169,8 @@ $ `stdlib/ext/toml.nu`
         : String p ( string_from store )
         ( string_push_str p `/anomaly.toml` )
         ? ( file_exists ( string_data p ) ) { ^ p } {}
-        ( string_free p )
     } {}
     : String etc ( string_from `/etc/anomaly/anomaly.toml` )
     ? ( file_exists ( string_data etc ) ) { ^ etc } {}
-    ( string_free etc )
     ^ ( string_new )
 }

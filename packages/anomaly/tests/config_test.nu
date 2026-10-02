@@ -43,13 +43,10 @@ $ `src/authz.nu`
     : AnomalyConfig c0 ( config_load ( string_data missing ) )
     ( check ! ( config_loaded c0 ) `parse: an absent file loads nothing` )
     ( check == ( nurl_str_len ( config_error c0 ) ) 0 `parse: and is not an error` )
-    ( config_free c0 )
-    ( string_free missing )
 
     // An empty path means "no file was found", not "read the cwd".
     : AnomalyConfig c1 ( config_load `` )
     ( check ! ( config_loaded c1 ) `parse: an empty path loads nothing` )
-    ( config_free c1 )
 
     // A file somebody wrote and got wrong must be visible. Ignoring it is
     // how a service comes up unconfigured with no way to tell why.
@@ -59,8 +56,6 @@ $ `src/authz.nu`
     : AnomalyConfig c2 ( config_load ( string_data bad ) )
     ( check ! ( config_loaded c2 ) `parse: a malformed file does not load` )
     ( check > ( nurl_str_len ( config_error c2 ) ) 0 `parse: and reports why` )
-    ( config_free c2 )
-    ( string_free bad )
 }
 
 @ test_read s dir → v {
@@ -82,10 +77,8 @@ port = 1234
 
     : String iss ( config_str c `auth.issuer` `` )
     ( check ( streq iss `https://id.example/x/v2.0` ) `read: a dotted string key` )
-    ( string_free iss )
     : String addr ( config_str c `service.addr` `` )
     ( check ( streq addr `0.0.0.0:9000` ) `read: a key in another table` )
-    ( string_free addr )
     ( check ( config_bool c `auth.enabled` F ) `read: a true bool` )
     ( check ! ( config_bool c `auth.open_ingest` T ) `read: a false bool overrides a true default` )
 
@@ -96,16 +89,11 @@ port = 1234
     // typo demotes to the default rather than to an empty string.
     : String miss ( config_str c `auth.audience` `fallback` )
     ( check ( streq miss `fallback` ) `read: an absent key yields the default` )
-    ( string_free miss )
     : String wrong ( config_str c `service.port` `fallback` )
     ( check ( streq wrong `fallback` ) `read: an int read as a string yields the default` )
-    ( string_free wrong )
     ( check ( config_bool c `auth.issuer` T ) `read: a string read as a bool yields the default` )
     : String nope ( config_str c `no.such.path` `fallback` )
     ( check ( streq nope `fallback` ) `read: a path through nothing yields the default` )
-    ( string_free nope )
-    ( config_free c )
-    ( string_free p )
 }
 
 @ test_find s dir → v {
@@ -114,7 +102,6 @@ port = 1234
     // not as a silent fall back to a different one.
     : String e ( config_find `/explicit/path.toml` dir )
     ( check ( streq e `/explicit/path.toml` ) `find: an explicit path wins` )
-    ( string_free e )
 
     // Nothing explicit, nothing in the store: nothing found (unless the
     // host happens to have /etc/anomaly/anomaly.toml, which is a valid
@@ -126,7 +113,6 @@ port = 1234
     : String none ( config_find `` ( string_data store ) )
     ( check ! ( streq none `/etc/anomaly/anomaly.toml` )
     `find: an empty store yields no store-local file` )
-    ( string_free none )
 
     : String inside ( string_from ( string_data store ) )
     ( string_push_str inside `/anomaly.toml` )
@@ -135,9 +121,6 @@ enabled = false
 ` )
     : String found ( config_find `` ( string_data store ) )
     ( check ( streq found ( string_data inside ) ) `find: <store>/anomaly.toml is found` )
-    ( string_free found )
-    ( string_free inside )
-    ( string_free store )
 }
 
 @ test_layer s dir → v {
@@ -185,8 +168,6 @@ client_id = "cid-from-file"
     ( check ! ( anomaly_authz_requested c ) `layer: and that reads as "not asked for"` )
     : !v IoErr u2 ( env_unset `ANOMALY_AUTH` )
     ?? u2 { T _ → {} F _ → {} }
-    ( config_free c )
-    ( string_free p )
 
     // Asked for but unusable: on without an issuer stays off, and says so
     // differently from "nobody asked".
@@ -199,14 +180,11 @@ client_id = "cid-only"
     : AnomalyConfig hc ( config_load ( string_data half ) )
     ( check ! ( anomaly_authz_apply hc ) `layer: enabled without an issuer stays off` )
     ( check ( anomaly_authz_requested hc ) `layer: but it reads as "asked for"` )
-    ( config_free hc )
-    ( string_free half )
 
     // Nothing configured at all.
     : AnomalyConfig empty ( config_empty )
     ( check ! ( anomaly_authz_apply empty ) `layer: no config at all leaves it off` )
     ( check ! ( anomaly_authz_requested empty ) `layer: and nobody asked` )
-    ( config_free empty )
 }
 
 @ main → i {
@@ -223,7 +201,6 @@ client_id = "cid-only"
 
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
     ( nurl_print `config_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0
