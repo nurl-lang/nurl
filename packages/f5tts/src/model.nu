@@ -40,7 +40,7 @@ $ `kernels.nu`
 : F5Model {
     GpuKit kit
     St st  // a safetensors checkpoint, st_none when this is a .pt
-    i pt  // *Pt — a PyTorch pickle checkpoint, 0 when this is safetensors
+    Pt pt  // a PyTorch pickle checkpoint, pt_none when this is safetensors
     String prefix  // what every tensor name in this file starts with
     b own_kit
     // architecture
@@ -158,7 +158,7 @@ $ `kernels.nu`
 
 @ f5_src_find * F5Model m s name → i {
     ? ( st_is_open . m st ) { ^ ( st_find_tensor . m st name ) } {}
-    ? != . m pt 0 { ^ ( pt_find # *Pt . m pt name ) } {}
+    ? ( pt_is_open . m pt ) { ^ ( pt_find . m pt name ) } {}
     ^ -1
 }
 
@@ -178,7 +178,7 @@ $ `kernels.nu`
             F → { ^ 0 }
         }
     } {}
-    ? != . m pt 0 { ^ ( pt_nelems # *Pt . m pt idx ) } {}
+    ? ( pt_is_open . m pt ) { ^ ( pt_nelems . m pt idx ) } {}
     ^ 0
 }
 
@@ -194,7 +194,7 @@ $ `kernels.nu`
             F → { ^ 0 }
         }
     } {}
-    ? != . m pt 0 { ^ ( pt_dim # *Pt . m pt idx k ) } {}
+    ? ( pt_is_open . m pt ) { ^ ( pt_dim . m pt idx k ) } {}
     ^ 0
 }
 
@@ -205,8 +205,8 @@ $ `kernels.nu`
             F → { ^ F }
         }
     } {}
-    ? != . m pt 0 {
-        ^ & == ( pt_dtype # *Pt . m pt idx ) PKS_F32 ( pt_is_contiguous # *Pt . m pt idx )
+    ? ( pt_is_open . m pt ) {
+        ^ & == ( pt_dtype . m pt idx ) PKS_F32 ( pt_is_contiguous . m pt idx )
     } {}
     ^ F
 }
@@ -218,7 +218,7 @@ $ `kernels.nu`
             F → { ^ # *u 0 }
         }
     } {}
-    ? != . m pt 0 { ^ ( pt_tensor_ptr # *Pt . m pt idx ) } {}
+    ? ( pt_is_open . m pt ) { ^ ( pt_tensor_ptr . m pt idx ) } {}
     ^ # *u 0
 }
 
@@ -647,12 +647,12 @@ $ `kernels.nu`
 @ f5_open s ckpt s vocab_path i device → !*F5Model String {
     : *F5Model m # *F5Model ( nurl_alloc Z F5Model )
     = . m st ( st_none )
-    = . m pt 0
+    = . m pt ( pt_none )
     = . m prefix ( string_new )
     : b is_pt | ( nurl_str_ends ckpt `.pt` ) | ( nurl_str_ends ckpt `.pth` ) ( nurl_str_ends ckpt `.bin` )
     ? is_pt {
         ?? ( pt_open ckpt ) {
-            T pt → { = . m pt # i pt }
+            T pt → { = . m pt pt }
             F e → {
                 ( nurl_free # s m )
                 ^ @ !*F5Model String { F e }
@@ -751,7 +751,7 @@ $ `kernels.nu`
     ( __f5m_freev . m f1_w ) ( __f5m_freev . m f1_b )
     ( __f5m_freev . m f2_w ) ( __f5m_freev . m f2_b )
     ? ( st_is_open . m st ) { ( st_close . m st ) = . m st ( st_none ) } {}
-    ? != . m pt 0 { ( pt_close # *Pt . m pt ) = . m pt 0 } {}
+    ? ( pt_is_open . m pt ) { ( pt_close . m pt ) = . m pt ( pt_none ) } {}
     ( string_free . m prefix )
     = . m prefix ( string_new )
     ? . m own_kit { ( gk_close . m kit ) } {}

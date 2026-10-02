@@ -30,7 +30,7 @@ $ `kernels.nu`
 
 : Vocos {
     GpuKit kit
-    i pt  // *Pt — the mmapped .bin
+    Pt pt  // the mmapped .bin
     b own_kit
     i dim
     i inner
@@ -74,14 +74,13 @@ $ `kernels.nu`
 
 // Upload one f32 tensor out of the pickle's storage, no host copy.
 @ __voc_up * Vocos v s name → GkBuf {
-    : *Pt pt # *Pt . v pt
-    : i ti ( pt_find pt name )
+    : i ti ( pt_find . v pt name )
     ? < ti 0 { ^ ( __voc_nobuf ) } {}
-    ? ( pt_is_contiguous pt ti ) {} { ^ ( __voc_nobuf ) }
-    : i ne ( pt_nelems pt ti )
+    ? ( pt_is_contiguous . v pt ti ) {} { ^ ( __voc_nobuf ) }
+    : i ne ( pt_nelems . v pt ti )
     : GkBuf b ( gk_dbuf_new . v kit ne GK_F32 )
     ? ( gk_buf_ok b ) {} { ^ ( __voc_nobuf ) }
-    ? ( gk_dbuf_upload_raw . v kit b ( pt_tensor_ptr pt ti ) ) {} {
+    ? ( gk_dbuf_upload_raw . v kit b ( pt_tensor_ptr . v pt ti ) ) {} {
         ( gk_dbuf_free b )
         ^ ( __voc_nobuf )
     }
@@ -105,13 +104,12 @@ $ `kernels.nu`
 // A convolution weight with the output channel moved LAST — see
 // __f5m_up_convw in model.nu: the same permutation, for the same reason.
 @ __voc_up_convw * Vocos v s name i cout i ipg i K → GkBuf {
-    : *Pt pt # *Pt . v pt
-    : i ti ( pt_find pt name )
+    : i ti ( pt_find . v pt name )
     ? < ti 0 { ^ ( __voc_nobuf ) } {}
-    ? ( pt_is_contiguous pt ti ) {} { ^ ( __voc_nobuf ) }
-    : i ne ( pt_nelems pt ti )
+    ? ( pt_is_contiguous . v pt ti ) {} { ^ ( __voc_nobuf ) }
+    : i ne ( pt_nelems . v pt ti )
     ? == ne * cout * ipg K {} { ^ ( __voc_nobuf ) }
-    : *u base ( pt_tensor_ptr pt ti )
+    : *u base ( pt_tensor_ptr . v pt ti )
     : ( Vec f ) perm ( vec_with_cap [f] ne )
     : ~ i k 0
     ~ < k K {
@@ -203,7 +201,7 @@ $ `kernels.nu`
     ?? ( pt_open path ) {
         T pt → {
             : *Vocos v # *Vocos ( nurl_alloc Z Vocos )
-            = . v pt # i pt
+            = . v pt pt
             = . v kit kit
             = . v own_kit F
             = . v dim 512
@@ -247,7 +245,7 @@ $ `kernels.nu`
     ( __voc_freev . v p1w ) ( __voc_freev . v p1b )
     ( __voc_freev . v p2w ) ( __voc_freev . v p2b )
     ( __voc_freev . v gam )
-    ? != . v pt 0 { ( pt_close # *Pt . v pt ) = . v pt 0 } {}
+    ? ( pt_is_open . v pt ) { ( pt_close . v pt ) = . v pt ( pt_none ) } {}
     ? . v own_kit { ( gk_close . v kit ) } {}
     ( nurl_free # s v )
 }

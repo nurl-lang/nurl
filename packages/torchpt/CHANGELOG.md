@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `Pt` and `Pk` are handles instead of `*Pt` / `*Pk` pointers: every copy is
+  the same checkpoint (or pickle tree), and the last owner releases it — a
+  `Pt` unmaps its file, as `pt_close` did. `pt_open` → `!Pt String`,
+  `pk_parse` → `!Pk String`; `pt_close` / `pk_free` are optional early
+  releases. The no-mmap fallback hands the file's bytes to the `Pt`.
+- New: `pt_none` / `pt_is_open` (an empty slot, for models whose
+  checkpoint may be another format).
+- A tensor's dims and strides live in one array per checkpoint instead of a
+  128-byte block per tensor freed by hand; the public pickle accessors are
+  wrappers over pointer-level twins the parser itself uses. Opening the
+  4.6 GB lingbot-map checkpoint runs 0.1–0.2 % fewer instructions.
+- Every `string_free` / `vec_free` / `args_free` in the library and the CLI
+  is gone; the CLI's float buffers are Vecs.
+
 ## 0.1.2
 
 `pk_free` now takes a **`sink`** parameter.
