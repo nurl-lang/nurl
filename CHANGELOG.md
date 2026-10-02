@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the struct a field store wrote into (`= . s v a`), a holder of the holder,
   or the name it was handed on to (`: Hold u t`).
   `compiler/tests/borrow_stored_owner_gone.nu`.
+- **A library handle rebuilt from a word and returned (`^ # H w`) is a view**
+  of whatever holds the word, as binding it (`: H m # H w`) is. A cast from
+  an integer counted as a value made from a number, so every caller released
+  the table's handle (packages/anomaly's forecast model table: a
+  use-after-free). An owner is built with a literal (`@ H { # s w }`) or a
+  share. `compiler/tests/return_cast_word_is_view.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated

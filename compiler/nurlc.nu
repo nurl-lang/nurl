@@ -22611,7 +22611,11 @@
     // is the table the program keeps, lent to whoever asks.)
     : b __cast_global & & ( is_ident_tok source_tt ) != 0 ( nurl_sym_len2 syms source_val `__global` )
     == 0 ( nurl_sym_len2 syms source_val `__enum_of` )
-    ( nurl_sym_def syms `__last_cast_lit__` ? | == source_tt TT_INT & > ( int_width st ) 0 ! __cast_global `1` `` )
+    // (Not a library handle rebuilt from a word, `# H w`: that is a view of
+    // whatever holds the word — a table's handle — as binding it is. Returned
+    // as an owner, every caller released the table's handle.)
+    : b __cast_word_view & ( __is_libh ( nurl_llty dt ) ) != source_tt TT_INT
+    ( nurl_sym_def syms `__last_cast_lit__` ? & ! __cast_word_view | == source_tt TT_INT & > ( int_width st ) 0 ! __cast_global `1` `` )
     ? ( seq st `void` )
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
