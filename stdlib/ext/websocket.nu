@@ -1136,10 +1136,6 @@ $ `stdlib/ext/compress.nu`
             }
         }
     }
-    // finding_stdlib_move_then_reassign_in_loop: `acc`, handed over and
-    // refilled on the fragmented path above, is not dropped at scope exit
-    // on any path; released here until the compiler does.
-    ( vec_free [u] acc )
     ? have_message {
         ^ @ !WsMessage WsErr { T @ WsMessage { kind compressed msg_payload } }
     } {
