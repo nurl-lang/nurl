@@ -6,7 +6,7 @@ $ `stdlib/ext/http_full.nu`
 @ h_root HttpRequest req Params params → HttpResponse {
     : ?String h ( header_get . req headers `X-Probe` )
     ?? h {
-        T s → { ( string_free s ) }
+        T s → {}
         F _ → {}
     }
     ^ ( response_text 200 `ok\n` )
@@ -22,7 +22,7 @@ $ `stdlib/ext/http_full.nu`
             ( signal_install_shutdown listener )
             : HttpServer srv ( server_new_with_timeout listener base 5000 )
             : !v NetErr rr ( server_run_pool srv 2 )
-            ( signal_clear_shutdown ) ( server_stop srv ) ( router_free r )
+            ( signal_clear_shutdown ) ( server_stop srv )
             ?? rr { T _ → { ^ 0 } F _ → { ^ 1 } }
         }
         F _ → { ^ 1 }
