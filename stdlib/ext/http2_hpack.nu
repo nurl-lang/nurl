@@ -589,26 +589,24 @@ $ `stdlib/ext/http2_frame.nu`
     }
 }
 
-// Internal: lowercase a header-field name into a freshly malloc'd
-// NUL-terminated `s`. RFC 9113 §8.2.2 mandates header field names be
+// Internal: lowercase a header-field name into `out` (cleared first; the
+// encoders keep one scratch String for the whole header list, so a name
+// costs no allocation). RFC 9113 §8.2.2 mandates header field names be
 // sent in lowercase ("A request or response containing uppercase header
 // field names MUST be treated as malformed"). Pseudo-headers like
-// `:status` pass through unchanged (the ':' is below 'A'). Caller frees
-// with `nurl_free`.
-@ __hpack_lower_name_dup s name → s {
+// `:status` pass through unchanged (the ':' is below 'A').
+@ __hpack_lower_name_into String out s name → s {
+    ( string_clear out )
     : i n ( nurl_str_len name )
-    : s out # s ( malloc + n 1 )
-    : *u op # *u out
     : *u sp # *u name
     : ~ i k 0
     ~ < k n {
         : ~ i c & # i . sp k 255
         ? & >= c 65 <= c 90 { = c + c 32 } {}
-        = . op k # u c
+        ( string_push_char out c )
         = k + k 1
     }
-    = . op n # u 0
-    ^ out
+    ^ ( string_data out )
 }
 
 // ── Encoder (literal, no Huffman, no indexing) ───────────────────────
@@ -616,13 +614,12 @@ $ `stdlib/ext/http2_frame.nu`
     : i n ( vec_len [Header] headers )
     : ( Vec u ) out ( vec_with_cap [u] * n 32 )
     : *Header hp ( vec_data [Header] headers )
+    : String lc ( string_with_cap 32 )
     : ~ i k 0
     ~ < k n {
         : Header h . hp k
         ( vec_push [u] out # u 0 )
-        : s lc_name ( __hpack_lower_name_dup ( string_data . h name ) )
-        ( hpack_encode_string out lc_name )
-        ( nurl_free lc_name )
+        ( hpack_encode_string out ( __hpack_lower_name_into lc ( string_data . h name ) ) )
         ( hpack_encode_string out ( string_data . h value ) )
         = k + k 1
     }
@@ -695,10 +692,11 @@ $ `stdlib/ext/http2_frame.nu`
     : ( Vec u ) out ( vec_with_cap [u] * + n 1 16 )
     ? >= size_update 0 { ( hpack_encode_int out 5 32 size_update ) } {}
     : *Header hp ( vec_data [Header] headers )
+    : String lc ( string_with_cap 32 )
     : ~ i k 0
     ~ < k n {
         : Header h . hp k
-        : s lc_name ( __hpack_lower_name_dup ( string_data . h name ) )
+        : s lc_name ( __hpack_lower_name_into lc ( string_data . h name ) )
         : s value ( string_data . h value )
         : i exact ( __hpack_find_exact dyn lc_name value )
         ? > exact 0 {
@@ -723,7 +721,6 @@ $ `stdlib/ext/http2_frame.nu`
                 ( hpack_encode_string out value )
             }
         }
-        ( nurl_free lc_name )
         = k + k 1
     }
     ^ @ HpackEncoded { out }
