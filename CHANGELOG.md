@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **…and so is one handed to a call returning an option / result of
   values.** `?? ( lsm_put db ( key_of k ) v ) { … }` kept the key for a
   consumer of the `!T E` (packages/lsmdb leaked one key per put).
-  `compiler/tests/temp_arg_into_result_call.nu`.
+  `compiler/tests/temp_arg_into_result_call.nu`. The same for a call
+  returning a struct of plain numbers (`( arima_update ( model_at t j ) y )`
+  kept the model's share — packages/anomaly).
 - **A value-producing `??` arm drops the payload it bound.**
   `^ ?? ( read_file p ) { T text → { : ( Vec i ) v ( f text ) v } … }`:
   the arm's drops waited for the join's verdict, and a consumed value kept

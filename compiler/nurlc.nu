@@ -17137,7 +17137,7 @@
         // (…or a String / Vec / struct this call builds rather than hands
         // back: `( copy_of ( string_data ( make ) ) )` — the summaries say
         // the result neither is nor views the argument.)
-        : b __dt_fresh & & | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) == 0 ( nurl_sym_len g_fn_ret_view call_name )
+        : b __dt_fresh & & | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 ) == 0 ( nurl_sym_len g_fn_ret_view call_name )
         == 0 ( nurl_sym_len2 syms call_name `__ret_borrow` )
         ? & | __scalar_ret __dt_fresh ( mem_consumer_arg_drop_safe syms call_name arg_idx ) {
             = owned ? == 0 ( nurl_str_len owned ) ( nurl_str_cat __dtmp `` ) ( nurl_str_cat3 owned ` ` __dtmp )
@@ -17193,9 +17193,11 @@
                 = __tc __tc3
             } {}
             // A call handing back a String / Vec / struct, or an option /
-            // result of them (`?? ( put db ( key k ) v )` — the key leaked):
-            // dropped here when it provably keeps no hold on this argument.
-            : b __hret & ! __scalar_ret | ( __is_handle_ty __crt ) ( __wrap_of_values __crt )
+            // result of them (`?? ( put db ( key k ) v )` — the key leaked),
+            // or a struct of plain numbers (`( arima_update ( model_at t j )
+            // y )` — the model's share leaked): dropped here when it
+            // provably keeps no hold on this argument.
+            : b __hret & ! __scalar_ret | | ( __is_handle_ty __crt ) ( __wrap_of_values __crt ) ( __ty_no_address __crt 0 )
             ? __hret {
                 : s __tad ( nurl_cg_reg cg )
                 ( emit_sink_flag_load ( mem_argdrop_const syms call_name fname arg_idx ) __tad )

@@ -4,7 +4,9 @@
 // `?? ( lsm_put db ( key_of k ) v ) { … }`: the key the inner call built was
 // kept for a consumer of the result, as if the `!T E` might point into it —
 // but a result of values holds no address the callee did not build, and the
-// key leaked on every put (packages/lsmdb, wave-1 package sweep).
+// key leaked on every put (packages/lsmdb, wave-1 package sweep). The same
+// for a struct of plain numbers: `( arima_update ( model_at t j ) y )` kept
+// the model's share (packages/anomaly).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -33,6 +35,10 @@ $ `stdlib/core/vec.nu`
 
 @ o_str ( Vec u ) k → ?String { ^ @ ?String { T ( string_from `x` ) } }
 
+: Pt { f x f y }
+
+@ p_of ( Vec u ) k → Pt { ^ @ Pt { # f ( vec_len [u] k ) 1.0 } }
+
 @ main → i {
     : ~ i k 0
     : ~ i l0 ( live )
@@ -44,6 +50,9 @@ $ `stdlib/core/vec.nu`
     = l0 ( live )
     = k 0 ~ < k 20 { : ?String r ( o_str ( mk k ) ) = k + k 1 }
     ( report `?String: ` - ( live ) l0 )
+    = l0 ( live )
+    = k 0 ~ < k 20 { : Pt r ( p_of ( mk k ) ) = k + k 1 }
+    ( report `struct of numbers: ` - ( live ) l0 )
     = l0 ( live )
     : ~ i acc 0
     = k 0 ~ < k 20 { = acc + acc ?? ( r_str ( mk k ) ) { T n → n F _ → 0 } = k + k 1 }
