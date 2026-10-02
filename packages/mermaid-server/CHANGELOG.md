@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- The loaded template set lives in an rcbox behind its global instead of a
+  `nurl_alloc`'d copy freed by hand; `mmd_state_init` takes the set over
+  (`sink`), and installing another releases the old one. `mmd_state_free`
+  is gone — the set lives for the process.
+- The parser's cursor and error slot (`MmdParser`) are one local every
+  helper takes `inout`, not a heap block allocated and freed per parse.
+- `MmdRenderRes`, `MmdParseResult`, `MmdGraph`, `MmdLayout`, `MmdTheme` and
+  `MmdTemplateSet` are plain values: their `*_free` functions are deleted
+  (nothing outside the package called them), and so is every
+  `string_free` / `vec_free` / `json_free` / `args_free` in the server, the
+  CLI and the tests (216 calls).
+- Fixed: the MCP server behind /mcp was kept alive with `mem_forget`, which
+  leaked it (138 allocations at every shutdown under LSan). `main` now owns
+  it for as long as the app serves and `mmd_build_app` takes it as a
+  parameter — the dispatch closure only views the server it was built from.
+- Rendering a 60-node diagram with two templates plus a parse error:
+  instructions:u −1.15 %, identical SVG.
+
 ## 0.2.1
 
 Template names are sorted with `sort_by`, and the MCP server lives as long as the app instead of being dropped when the routes were built — MCP requests read a freed server under NURL 0.67.0 (#1143).

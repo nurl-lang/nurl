@@ -31,14 +31,10 @@ $ `service.nu`
     : String home ( env_var_or `NURL_HOME` `` )
     : ~ String base ( string_new )
     ? > ( string_len home ) 0 { = base home } {
-        ( string_free base )
-        ( string_free home )
         : String h ( env_var_or `HOME` `.` )
         = base ( path_join ( string_data h ) `.nurl` )
-        ( string_free h )
     }
     : String share ( path_join ( string_data base ) `share/mermaid-server/.templates` )
-    ( string_free base )
     ^ share
 }
 
@@ -57,23 +53,9 @@ $ `service.nu`
         ( vec_push [String] out env )
         ^ out
     } {}
-    ( string_free env )
     ( vec_push [String] out ( string_from `.templates` ) )
     ( vec_push [String] out ( __mmdm_share_dir ) )
     ^ out
-}
-
-@ __mmdm_free_strings ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [String] v i ) {
-            T s → ( string_free s )
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ( vec_free [String] v )
 }
 
 // Load the template set into the process state. Returns T on success and
@@ -93,11 +75,8 @@ $ `service.nu`
                             : MmdTemplatesRes r ( mmd_templates_load MMD_TSRC_DIR ( string_data dir ) )
                             ? . r ok {
                                 ( mmd_state_init . r set )
-                                ( string_free . r message )
                                 = ok T
                             } {
-                                ( mmd_templates_free . r set )
-                                ( string_free last )
                                 = last . r message
                                 = i n  // a directory that exists but is broken is fatal
                             }
@@ -131,8 +110,6 @@ $ `service.nu`
             ( nurl_eprintln `Point --templates at a directory of *.toml templates, or set $MERMAID_TEMPLATES.` )
         }
     } {}
-    ( string_free last )
-    ( __mmdm_free_strings cands )
     ^ ok
 }
 
@@ -149,7 +126,6 @@ $ `service.nu`
             = rc 1
         }
     }
-    ( mcp_server_free srv )
     ^ rc
 }
 
@@ -179,7 +155,6 @@ $ `service.nu`
 @ __mmdm_render_cli ( Vec String ) rest String tmpl String outfile → i {
     : String src ( __mmdm_read_input rest )
     : MmdRenderRes res ( mmd_render_source ( string_data src ) ( string_data tmpl ) )
-    ( string_free src )
     : ~ i rc 0
     ? . res ok {
         : i nw ( vec_len [String] . res warnings )
@@ -216,12 +191,10 @@ $ `service.nu`
             ( string_push_int pos . res col )
             ( string_push_str pos `: ` )
             ( nurl_eprint ( string_data pos ) )
-            ( string_free pos )
         } {}
         ( nurl_eprintln ( string_data . res svg ) )
         = rc 1
     }
-    ( mmd_render_res_free res )
     ^ rc
 }
 
@@ -245,7 +218,6 @@ $ `service.nu`
                 ( string_push_str line `\n    ` )
                 ( string_push_str line ( string_data . tp path ) )
                 ( nurl_println ( string_data line ) )
-                ( string_free line )
             }
             F _ → {}
         }
@@ -279,7 +251,6 @@ $ `service.nu`
             ( nurl_print `  (none)            serve HTTP (and MCP at /mcp)\n` )
             ( nurl_print `  render [FILE]     render one diagram to stdout (stdin when FILE is omitted)\n` )
             ( nurl_print `  templates         list the loaded templates\n` )
-            ( string_free h )
         } {
             ? ( args_present p `version` ) {
                 ( nurl_print `mermaid-server ` )
@@ -287,18 +258,14 @@ $ `service.nu`
             } {
                 : String tdir ( args_value_or p `templates` `` )
                 ? ! ( __mmdm_load tdir ) {
-                    ( string_free tdir )
-                    ( args_free p )
                     ^ 1
                 } {}
-                ( string_free tdir )
 
                 : ( Vec String ) rest ( args_positionals p )
                 : ~ String cmd ( string_new )
                 ? > ( vec_len [String] rest ) 0 {
                     ?? ( vec_get [String] rest 0 ) {
                         T c → {
-                            ( string_free cmd )
                             = cmd ( string_clone c )
                         }
                         F _ → {}
@@ -312,8 +279,6 @@ $ `service.nu`
                         : String tmpl ( args_value_or p `template` `` )
                         : String outf ( args_value_or p `out` `` )
                         = rc ( __mmdm_render_cli rest tmpl outf )
-                        ( string_free tmpl )
-                        ( string_free outf )
                     } {
                         ? != 0 ( nurl_str_eq ( string_data cmd ) `templates` ) {
                             = rc ( __mmdm_list_templates )
@@ -327,18 +292,17 @@ $ `service.nu`
                                 : String host ( args_value_or p `host` `127.0.0.1` )
                                 : String port_s ( args_value_or p `port` `8808` )
                                 : i port ( nurl_str_to_int ( string_data port_s ) )
-                                ( string_free port_s )
                                 : ~ i workers ( sys_cpu_count )
                                 ?? ( args_value p `workers` ) {
                                     T wv → {
                                         = workers ( nurl_str_to_int ( string_data wv ) )
-                                        ( string_free wv )
                                     }
                                     F _ → {}
                                 }
                                 ? < workers 1 { = workers 1 } {}
                                 : b quiet ( args_present p `quiet` )
-                                : HttpApp a ( mmd_build_app workers quiet )
+                                : McpServer msrv ( mmd_mcp_server )
+                                : HttpApp a ( mmd_build_app workers quiet msrv )
                                 ? ! quiet {
                                     ( nurl_eprint `mermaid-server ` )
                                     ( nurl_eprint MMD_VERSION )
@@ -349,15 +313,12 @@ $ `service.nu`
                                     ( string_push_int b workers )
                                     ( string_push_str b ` worker(s); MCP at /mcp` )
                                     ( nurl_eprintln ( string_data b ) )
-                                    ( string_free b )
                                 } {}
                                 = rc ( http_app_listen a ( string_data host ) port )
-                                ( string_free host )
                             }
                         }
                     }
                 }
-                ( string_free cmd )
             }
         }
     } {
@@ -365,7 +326,5 @@ $ `service.nu`
         ( nurl_eprintln ( args_error p ) )
         = rc 2
     }
-    ( args_free p )
-    ( mmd_state_free )
     ^ rc
 }

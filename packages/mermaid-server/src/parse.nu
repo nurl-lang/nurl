@@ -7,8 +7,9 @@
 // (`-->|text|` and `-- text -->`).
 //
 // Everything is byte-oriented and single-pass. The cursor and the error
-// slot live behind `*MmdParser` — a heap pointer, because NURL structs are
-// passed BY VALUE and every helper here has to advance the shared cursor.
+// slot live in one `MmdParser` local that every helper takes `inout`,
+// because NURL structs are passed BY VALUE and every helper here has to
+// advance the shared cursor.
 //
 // Statements the flowchart grammar has but this parser does not model
 // (`classDef`, `class`, `style`, `linkStyle`, `click`, accessibility
@@ -36,28 +37,12 @@ $ `graph.nu`
     i err_col
 }
 
-@ __mmd_parser_new s src → *MmdParser {
-    : *MmdParser ps # *MmdParser ( nurl_alloc Z MmdParser )
-    = . ps src src
-    = . ps n ( nurl_str_len src )
-    = . ps pos 0
-    = . ps stop ( nurl_str_len src )
-    = . ps line 1
-    = . ps line_start 0
-    = . ps failed F
-    = . ps err ( string_new )
-    = . ps err_line 0
-    = . ps err_col 0
-    ^ ps
-}
-
-@ __mmd_parser_free sink * MmdParser ps → v {
-    ( string_free . ps err )
-    ( nurl_free # s ps )
+@ __mmd_parser_new s src → MmdParser {
+    ^ @ MmdParser { src ( nurl_str_len src ) 0 ( nurl_str_len src ) 1 0 F ( string_new ) 0 0 }
 }
 
 // Byte at `p`, or -1 past the end of the current statement window.
-@ __mmd_at * MmdParser ps i p → i {
+@ __mmd_at inout MmdParser ps i p → i {
     ? >= p . ps stop { ^ - 0 1 } {}
     ? < p 0 { ^ - 0 1 } {}
     ^ ( nurl_str_at . ps src . ps n p )
@@ -65,13 +50,13 @@ $ `graph.nu`
 
 // Byte at `p` ignoring the statement window (used by the statement
 // splitter, which runs over the whole source).
-@ __mmd_raw_at * MmdParser ps i p → i {
+@ __mmd_raw_at inout MmdParser ps i p → i {
     ? >= p . ps n { ^ - 0 1 } {}
     ? < p 0 { ^ - 0 1 } {}
     ^ ( nurl_str_at . ps src . ps n p )
 }
 
-@ __mmd_fail * MmdParser ps s msg i at → v {
+@ __mmd_fail inout MmdParser ps s msg i at → v {
     ? . ps failed { ^ v } {}
     = . ps failed T
     ( string_clear . ps err )
@@ -112,7 +97,7 @@ $ `graph.nu`
     ^ F
 }
 
-@ __mmd_skip_space * MmdParser ps → v {
+@ __mmd_skip_space inout MmdParser ps → v {
     : ~ i p . ps pos
     ~ ( __mmd_is_space ( __mmd_at ps p ) ) { = p + p 1 }
     = . ps pos p
@@ -120,7 +105,7 @@ $ `graph.nu`
 
 // ── Source slices ────────────────────────────────────────────────────
 
-@ __mmd_slice * MmdParser ps i from i to → String {
+@ __mmd_slice inout MmdParser ps i from i to → String {
     : ~ i a from
     : ~ i b to
     ? < a 0 { = a 0 } {}
@@ -135,7 +120,7 @@ $ `graph.nu`
     ^ out
 }
 
-@ __mmd_slice_trim * MmdParser ps i from i to → String {
+@ __mmd_slice_trim inout MmdParser ps i from i to → String {
     : ~ i a from
     : ~ i b to
     ~ & < a b ( __mmd_is_space ( nurl_str_at . ps src . ps n a ) ) { = a + a 1 }
@@ -151,30 +136,21 @@ $ `graph.nu`
 
 @ __mmd_label_clean String raw → String {
     : String trimmed ( string_trim raw )
-    ( string_free raw )
     : i n ( string_len trimmed )
     : ~ String body trimmed
     ? >= n 2 {
         ? & == ( string_get trimmed 0 ) 34 == ( string_get trimmed - n 1 ) 34 {
             : String inner ( string_substr trimmed 1 - n 2 )
-            ( string_free trimmed )
             = body inner
         } {}
     } {}
     : String a ( string_replace body `<br/>` `\n` )
-    ( string_free body )
     : String b ( string_replace a `<br />` `\n` )
-    ( string_free a )
     : String c ( string_replace b `<br>` `\n` )
-    ( string_free b )
     : String d ( string_replace c `&lt;` `<` )
-    ( string_free c )
     : String e ( string_replace d `&gt;` `>` )
-    ( string_free d )
     : String f ( string_replace e `&quot;` `"` )
-    ( string_free e )
     : String g ( string_replace f `&amp;` `&` )
-    ( string_free f )
     ^ g
 }
 
@@ -195,7 +171,7 @@ $ `graph.nu`
 // Index of `needle` (1 or 2 bytes) at or after `from`, within the
 // statement window; -1 if absent. Quoted spans are skipped so a `]` inside
 // `"..."` does not close the shape.
-@ __mmd_find_close * MmdParser ps i from i c0 i c1 → i {
+@ __mmd_find_close inout MmdParser ps i from i c0 i c1 → i {
     : ~ i p from
     : ~ b inq F
     : ~ i hit - 0 1
@@ -215,7 +191,7 @@ $ `graph.nu`
     ^ hit
 }
 
-@ __mmd_shape_at * MmdParser ps i pos → MmdShapeRes {
+@ __mmd_shape_at inout MmdParser ps i pos → MmdShapeRes {
     : i c0 ( __mmd_at ps pos )
     : i c1 ( __mmd_at ps + pos 1 )
 
@@ -289,7 +265,7 @@ $ `graph.nu`
 
 // Parse `id` + optional shape, interning the node. Returns its index, or
 // -1 with the parser's error slot set.
-@ __mmd_parse_node * MmdParser ps MmdGraph g → i {
+@ __mmd_parse_node inout MmdParser ps MmdGraph g → i {
     ( __mmd_skip_space ps )
     : i start . ps pos
     : ~ i p start
@@ -300,7 +276,6 @@ $ `graph.nu`
     } {}
     : String id ( __mmd_slice ps start p )
     : i idx ( mmd_node_index g ( string_data id ) )
-    ( string_free id )
     = . ps pos p
 
     : MmdShapeRes sh ( __mmd_shape_at ps p )
@@ -316,7 +291,7 @@ $ `graph.nu`
 }
 
 // `A & B & C` — a node group. Returns the interned indices; empty on error.
-@ __mmd_parse_node_group * MmdParser ps MmdGraph g → ( Vec i ) {
+@ __mmd_parse_node_group inout MmdParser ps MmdGraph g → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : ~ b going T
     ~ going {
@@ -346,7 +321,7 @@ $ `graph.nu`
 @ __mmd_link_none → MmdLinkRes { ^ @ MmdLinkRes { F 0 0 0 0 0 0 } }
 
 // Classify a run of line bytes [from,to): dotted wins over thick.
-@ __mmd_line_style * MmdParser ps i from i to → i {
+@ __mmd_line_style inout MmdParser ps i from i to → i {
     : ~ b dot F
     : ~ b thick F
     : ~ i k from
@@ -370,7 +345,7 @@ $ `graph.nu`
 
 // Scan a link starting at `ps.pos`. `ok = F` means "no link here" and the
 // cursor is untouched.
-@ __mmd_scan_link * MmdParser ps → MmdLinkRes {
+@ __mmd_scan_link inout MmdParser ps → MmdLinkRes {
     ( __mmd_skip_space ps )
     : ~ i p . ps pos
     : ~ i tail MMD_ARROW_NONE
@@ -443,14 +418,13 @@ $ `graph.nu`
 
 // Leading `[A-Za-z]` word of the current statement, lowercased. Empty when
 // the statement does not start with a letter.
-@ __mmd_peek_word * MmdParser ps → String {
+@ __mmd_peek_word inout MmdParser ps → String {
     : ~ i p . ps pos
     ~ ( __mmd_is_space ( __mmd_at ps p ) ) { = p + p 1 }
     : i start p
     ~ ( __mmd_is_alpha ( __mmd_at ps p ) ) { = p + p 1 }
     : String w ( __mmd_slice ps start p )
     : String lower ( string_to_lower w )
-    ( string_free w )
     ^ lower
 }
 
@@ -482,9 +456,9 @@ $ `graph.nu`
 }
 
 // Parse one chain statement: node group, then link + node group, repeating.
-@ __mmd_parse_chain * MmdParser ps MmdGraph g → v {
+@ __mmd_parse_chain inout MmdParser ps MmdGraph g → v {
     : ~ ( Vec i ) left ( __mmd_parse_node_group ps g )
-    ? . ps failed { ( vec_free [i] left ) ^ v } {}
+    ? . ps failed { ^ v } {}
 
     : ~ b going T
     ~ going {
@@ -498,7 +472,6 @@ $ `graph.nu`
                 = . ps pos . lk pos
                 : ( Vec i ) right ( __mmd_parse_node_group ps g )
                 ? . ps failed {
-                    ( vec_free [i] right )
                     = going F
                 } {
                     : i nl ( vec_len [i] left )
@@ -514,22 +487,20 @@ $ `graph.nu`
                                 T u → {
                                     ?? ( vec_get [i] right b ) {
                                         T w → ( mmd_add_edge g u w lab . lk line . lk head . lk tail )
-                                        F _ → ( string_free lab )
+                                        F _ → {}
                                     }
                                 }
-                                F _ → ( string_free lab )
+                                F _ → {}
                             }
                             = b + b 1
                         }
                         = a + a 1
                     }
-                    ( vec_free [i] left )
                     = left right
                 }
             }
         }
     }
-    ( vec_free [i] left )
 }
 
 // ── Statement splitting ──────────────────────────────────────────────
@@ -538,7 +509,7 @@ $ `graph.nu`
 // returned index is the exclusive end; `__mmd_advance_past` then moves the
 // cursor over the terminator, keeping the line counter honest.
 
-@ __mmd_stmt_end * MmdParser ps i from → i {
+@ __mmd_stmt_end inout MmdParser ps i from → i {
     : ~ i p from
     : ~ i depth 0
     : ~ b inq F
@@ -565,7 +536,7 @@ $ `graph.nu`
 
 // Skip blanks, newlines and `%%` comments; leaves the cursor on the first
 // byte of the next statement (or at EOF).
-@ __mmd_skip_blanks * MmdParser ps → v {
+@ __mmd_skip_blanks inout MmdParser ps → v {
     : ~ b going T
     ~ going {
         : i c ( __mmd_raw_at ps . ps pos )
@@ -595,11 +566,6 @@ $ `graph.nu`
     i col
 }
 
-@ mmd_parse_result_free sink MmdParseResult r → v {
-    ( mmd_graph_free . r graph )
-    ( string_free . r message )
-}
-
 @ __mmd_bad_header String w i line → MmdParseResult {
     : String m ( string_with_cap 160 )
     ( string_push_str m `expected 'graph <dir>' or 'flowchart <dir>' as the first statement` )
@@ -613,7 +579,7 @@ $ `graph.nu`
 
 @ mmd_parse s src → MmdParseResult {
     : MmdGraph g ( mmd_graph_new )
-    : *MmdParser ps ( __mmd_parser_new src )
+    : ~ MmdParser ps ( __mmd_parser_new src )
 
     // Header.
     ( __mmd_skip_blanks ps )
@@ -623,13 +589,9 @@ $ `graph.nu`
     : b is_graph | ( __mmd_word_is hw `graph` ) ( __mmd_word_is hw `flowchart` )
     ? ! is_graph {
         : MmdParseResult bad ( __mmd_bad_header hw . ps line )
-        ( string_free hw )
-        ( mmd_graph_free g )
-        ( __mmd_parser_free ps )
         ^ bad
     } {}
     = . ps pos + . ps pos ( string_len hw )
-    ( string_free hw )
     ( __mmd_skip_space ps )
     : String dirw ( __mmd_slice_trim ps . ps pos hstop )
     ? > ( string_len dirw ) 0 {
@@ -644,7 +606,6 @@ $ `graph.nu`
             ( vec_push [String] . g warnings m )
         }
     } {}
-    ( string_free dirw )
     = . ps pos hstop
 
     // Body.
@@ -668,7 +629,6 @@ $ `graph.nu`
                         : String rest ( __mmd_slice_trim ps + . ps pos ( string_len w ) e )
                         : i d ( mmd_dir_parse ( string_data rest ) )
                         ? >= d 0 { = . g dir d } {}
-                        ( string_free rest )
                     } {
                         ? ( __mmd_is_ignorable w ) {
                             ( __mmd_warn_ignored g w stmt_line )
@@ -676,7 +636,6 @@ $ `graph.nu`
                     }
                 }
             }
-            ( string_free w )
             ? . ps failed { = going F } { = . ps pos e }
         }
     }
@@ -686,9 +645,7 @@ $ `graph.nu`
         : String msg ( string_clone . ps err )
         : i el . ps err_line
         : i ec . ps err_col
-        ( __mmd_parser_free ps )
         ^ @ MmdParseResult { F g msg el ec }
     } {}
-    ( __mmd_parser_free ps )
     ^ @ MmdParseResult { T g ( string_new ) 0 0 }
 }
