@@ -16956,16 +16956,30 @@
     : s ll ( nurl_llty vt )
     : s xv ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-    : s xk ( mem_handle_key cg vt xv )
+    : ~ s xk ( mem_handle_key cg vt xv )
+    // An option / result binding: its value is the payload a cursor
+    // (`?? cur { T c → … }`) holds.
+    ? & == 0 ( nurl_str_len xk ) != 0 ( nurl_str_starts ll `{ i1, ` ) {
+        : s pt ( __wrap_part ll 0 )
+        ? != 0 ( nurl_str_len pt ) {
+            : s xp ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print xp ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print xv ) ( nurl_print `, 1\n` )
+            = xk ( mem_handle_key cg pt xp )
+        } {}
+    } {}
     ? == 0 ( nurl_str_len xk ) { ^ v } {}
     : s xnn ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print xnn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print xk ) ( nurl_print `, null\n` )
     ~ != 0 ( nurl_str_len rest ) {
         : s b ( str_first_word rest ) = rest ( str_skip_word rest )
         ? & ! ( seq b ptr ) != 0 ( nurl_sym_len2 syms b `__live` ) {
+            // (The borrower's own type: a payload cursor is not an option.)
+            : s bt0 ( nurl_sym_get2 syms b `__udty` )
+            : s bt ? | == 0 ( nurl_str_len bt0 ) != 0 ( nurl_str_starts bt0 `%__opt.` ) ( nurl_str_cat vt `` ) ( nurl_str_cat bt0 `` )
+            : s bll ( nurl_llty bt )
             : s bv ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print bv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ` ) ( nurl_print ll ) ( nurl_print `* ` ) ( nurl_print b ) ( nurl_print `\n` )
-            : s bk ( mem_handle_key cg vt bv )
+            ( nurl_print `  ` ) ( nurl_print bv ) ( nurl_print ` = load ` ) ( nurl_print bll ) ( nurl_print `, ` ) ( nurl_print bll ) ( nurl_print `* ` ) ( nurl_print b ) ( nurl_print `\n` )
+            : s bk ( mem_handle_key cg bt bv )
             : s same ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print same ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print bk ) ( nurl_print `, ` ) ( nurl_print xk ) ( nurl_print `\n` )
             : s xf ( mem_udrop_flag_get syms cg ptr )
@@ -21543,8 +21557,13 @@
         } {}
         : b __ud_same F
         ? & & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend ! __ud_same
-        { ( mem_udrop_hand_over syms cg __ud_ptr vt )
-            ( mem_emit_user_drop_one syms cg __ud_ptr vt ) }
+        {  // (By the type the binding was registered with: an option /
+            // result binding's drop is its twin `%__opt.T` — the value type
+            // `{ i1, T }` names no drop, and the old value was lost.)
+            : s __ud_rt0 ( nurl_sym_get2 syms __ud_ptr `__udty` )
+            : s __ud_rt ? == 0 ( nurl_str_len __ud_rt0 ) ( nurl_str_cat vt `` ) ( nurl_str_cat __ud_rt0 `` )
+            ( mem_udrop_hand_over syms cg __ud_ptr vt )
+            ( mem_emit_user_drop_one syms cg __ud_ptr __ud_rt ) }
         {}
         ? != 0 ( nurl_str_len ptr )
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` )

@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reassigning an option binding inside the `??` arm that matched it drops
+  the old value** (or hands it to the payload cursor still reading it):
+  `?? cur { T c → { = cur ( next ) } }` leaked the old value every iteration
+  (the pooled keep-alive client loop). `compiler/tests/option_reassign_in_own_arm.nu`.
 - **A literal built from a pointer parameter's field and handed straight to a
   call no longer makes the function a view** (`( flush @ Fh { . w fh } )`):
   every caller took its fresh error String for a borrow and never dropped it
