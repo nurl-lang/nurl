@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A raw string parameter placed in a literal the function keeps to itself
+  is lent, not kept** (`: P q @ P { p … } ^ . q n`): a temporary argument —
+  `( regex_compile ( nurl_argv_get 2 ) )` — was never freed. The parameter is
+  kept once the literal's binding leaves whole (stored, returned, passed on).
+  `compiler/tests/raw_param_in_local_literal.nu`.
 - **A pointer read as an argument of the call that mutates its container is
   not reported stale** (`( vec_push out . op k )` reads `op` before the push).
   `compiler/tests/stale_borrow_read_in_mutating_call.nu`.
