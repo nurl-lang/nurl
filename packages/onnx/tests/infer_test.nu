@@ -25,18 +25,10 @@ $ `src/runtime.nu`
 
 @ streqt s a s b → b { ^ != ( nurl_str_eq a b ) 0 }
 
-// Load a raw little-endian f32 file into a host buffer (count via pcell).
-@ load_f32t s path * u pcell → *u {
-    ?? ( read_file_bytes path ) {
-        T bytes → {
-            : i n / ( vec_len [u] bytes ) 4
-            : *u host ( nurl_alloc * n 4 )
-            ( vec_f32_into bytes host n )
-            ( nurl_poke pcell 0 n )
-            ^ host
-        }
-        F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
-    }
+// A raw little-endian f32 file: its bytes are the host buffer (empty if
+// unreadable); four bytes per value.
+@ load_f32t s path → ( Vec u ) {
+    ?? ( read_file_bytes path ) { T bytes → ^ bytes F _ → ^ ( vec_new [u] ) }
 }
 
 @ main → i {
@@ -82,16 +74,15 @@ $ `src/runtime.nu`
     ? ! ( rt_ok e ) { ( nurl_print `  skip (no CUDA device / kernel compile)\n` )
         ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 } { ( nurl_print `\nFAIL\n` ) ^ 1 } } {}
 
-    : *u ncell ( nurl_alloc 8 )
-    : *u input ( load_f32t `tests/data/tiny.in.f32` ncell )
-    : i in_n ( nurl_peek ncell 0 )
-    : RTensor out ( rt_run e g input 1 in_n )
+    : ( Vec u ) input ( load_f32t `tests/data/tiny.in.f32` )
+    : i in_n / ( vec_len [u] input ) 4
+    : RTensor out ( rt_run e g ( vec_data [u] input ) 1 in_n )
     : GpuHost host ( rt_download e out )
     : i out_n . out nelem
     ( check == out_n 3 `output is length 3` )
 
-    : *u ecell ( nurl_alloc 8 )
-    : *u exp ( load_f32t `tests/data/tiny.out.f32` ecell )
+    : ( Vec u ) exp_b ( load_f32t `tests/data/tiny.out.f32` )
+    : *u exp ( vec_data [u] exp_b )
     : ~ i bad 0
     : ~ i j 0
     ~ < j 3 {

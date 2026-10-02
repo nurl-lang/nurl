@@ -233,8 +233,10 @@ $ `stdlib/core/rcbox.nu`
     ^ ( string_data ?? ( vec_get [String] . n outputs 0 ) { T x → x F _ → ( string_new ) } )
 }
 
+// (A missing input is the empty name: a view of a fresh String made for
+// the purpose would outlive it — kept alive, it leaked once per call.)
 @ __rt_in_name ONode n i k → s {
-    ^ ( string_data ?? ( vec_get [String] . n inputs k ) { T x → x F _ → ( string_new ) } )
+    ?? ( vec_get [String] . n inputs k ) { T x → ^ ( string_data x ) F _ → ^ `` }
 }
 
 // ── host-side INT64 tensors ───────────────────────────────────────
