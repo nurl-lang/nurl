@@ -1269,6 +1269,9 @@
 //  data (statement list etc.); allocated in main()
 //  only when --borrowck is set
 : ~ i g_bck_depth 0  // block-nesting depth during the statement walk
+: ~ i g_retclo_n 0  // functions with a `retclo##` summary so far (gen_call skips the lookup while 0)
+: ~ i g_clolend_n 0  // bindings that recorded a `__clolend` (mem_check_ret_clo_lend skips idents while 0)
+: ~ i g_clo_lend_set 0  // 1 while `__last_call_clo_lend_idents__` holds the last call's answer (else it is empty)
 : ~ i g_bck_ownerless 0  // owner-less `store` rows pending in this statement (bck_take_owner_stores)
 : ~ i g_bck_sx_gen -1  // g_bck_gen of the last function that stored a value in a binding's value (bck_has_stored_in)
 : ~ i g_bck_gen 0  // analyzed-function generation for the binding-name
@@ -3366,6 +3369,45 @@
     ^ T
 }
 
+// A closure binding made by a call whose returned closure lends from some
+// of its arguments (`: ( @ i ) c ( first v )`): remember which.
+@ mem_note_clo_lend i syms s name s vt i rhs_tt → v {
+    ? | != rhs_tt TT_LPAREN == 0 g_clo_lend_set { ^ v } {}
+    : s ids ( nurl_sym_get syms `__last_call_clo_lend_idents__` )
+    ? & != 0 ( nurl_str_len ids ) ( __is_closure_ty vt ) { ( nurl_sym_def syms ( nurl_str_cat name `__clolend` ) ids ) = g_clolend_n + g_clolend_n 1 } {}
+}
+
+// `^ ( first v )` / `^ c` returning a closure that lends from `v`: a
+// parameter this function only borrows is lent on (its own `retclo`); one
+// it drops on return — a local, a `sink` parameter — would leave the
+// closure reading freed memory.
+@ mem_check_ret_clo_lend i lex i syms s lt i tt s tv → v {
+    // Cheapest first: most returns are neither a lending call nor a
+    // binding that recorded one.
+    : ~ s ids ``
+    ? == tt TT_LPAREN { ? == 0 g_clo_lend_set { ^ v } {} = ids ( nurl_str_cat ( nurl_sym_get syms `__last_call_clo_lend_idents__` ) `` ) } {
+        ? ! ( is_ident_tok tt ) { ^ v } {}
+        ? == 0 ( nurl_sym_len2 syms tv `__clolend` ) { ^ v } {}
+        = ids ( nurl_str_cat ( nurl_sym_get syms ( nurl_str_cat tv `__clolend` ) ) `` )
+    }
+    ? ! ( __is_closure_ty lt ) { ^ v } {}
+    ~ != 0 ( nurl_str_len ids ) {
+        : s id ( str_first_word ids ) = ids ( str_skip_word ids )
+        : i pi ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) id )
+        : b sinkp & >= pi 0 ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int pi ) )
+        ? & >= pi 0 ! sinkp { ( __record_param_idx syms `__fn_retclo__` id ) } {
+            ? | sinkp != 0 ( nurl_str_len ( mem_udrop_ptr_of syms id ) ) {
+                ( die_stmt lex ( nurl_str_cat4
+                `this returns a closure that borrows '` id
+                `' — the function that made it captured that argument without taking it over — but '`
+                ( nurl_str_cat4 id `' is dropped when this function returns, so the closure would read freed memory. `
+                `Hand the value over instead (declare that parameter 'sink' so the closure owns it), or keep '`
+                ( nurl_str_cat id `' alive in a caller that outlives the closure.` ) ) ) )
+            } {}
+        }
+    }
+}
+
 @ gen_ret i lex i syms i cg → s {
     // Noreturn inference input: this body does return somewhere.
     = g_fn_ret_count + g_fn_ret_count 1
@@ -3910,6 +3952,7 @@
     // the enum wrap may hand back a new SSA value.
     = val ( ret_ty_agree lex syms cg lt val ret_first_tt ret_first_val returning_match F )
     = lt ( nurl_get_last_type )
+    ? | != 0 g_clo_lend_set != 0 g_clolend_n { ( mem_check_ret_clo_lend lex syms lt ret_first_tt ret_first_val ) } {}
     // Determine which owned-slice binding (if any) is escaping as the return value.
     // Ownership transfers only when the return type is itself a slice AND the
     // returned expression resolved to a simple identifier load.
@@ -11765,6 +11808,16 @@
     : s __lend_ix ? != 0 ( nurl_str_starts __lend_cn `vec_get` ) ( nurl_str_cat `0` `` ) ( mem_fn_lent_params syms __lend_cn )
     : s __lend_ids ( bck_ret_alias_idents __lend_ix arg_idents )
     ( nurl_sym_def syms `__last_call_lend_idents__` __lend_ids )
+    // …and the arguments a closure it returns lends from (`retclo`; no
+    // lookup at all while no function has one).
+    ? != 0 g_clo_lend_set { ( nurl_sym_def syms `__last_call_clo_lend_idents__` `` ) = g_clo_lend_set 0 } {}
+    ? != 0 g_retclo_n {
+        ? != 0 ( nurl_sym_len2 g_pending_impl `retclo##` __lend_cn ) {
+            : s __clo_lend_ids ( bck_ret_alias_idents ( nurl_sym_get g_pending_impl ( nurl_str_cat `retclo##` __lend_cn ) ) arg_idents )
+            ( nurl_sym_def syms `__last_call_clo_lend_idents__` __clo_lend_ids )
+            = g_clo_lend_set 1
+        } {}
+    } {}
     // §2.8 (transitive passthrough): the argument NAMES sitting at the
     // positions this callee may return. `@ id2 ( @ v ) cb → ( @ v ) {
     // ^ ( id cb ) }` returns its own parameter through a second helper,
@@ -20539,6 +20592,7 @@
         ? != 0 ( nurl_str_len __av )
         { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
         {}
+        ? != 0 g_clo_lend_set { ( mem_note_clo_lend syms name vt bck_rhs_tt ) } {}
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
         ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
@@ -20826,6 +20880,7 @@
             ? != 0 ( nurl_str_len __av )
             { ( nurl_sym_def syms ( nurl_str_cat name `__arc_view` ) __av ) }
             {}
+            ? != 0 g_clo_lend_set { ( mem_note_clo_lend syms name vt bck_rhs_tt ) } {}
             ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line name )
             ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
             : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
@@ -26893,6 +26948,18 @@
     ( nurl_sym_pop syms )
     ( __clo_tmp_set __outer_clo_tmp )
     = g_struct_tmp __outer_struct_tmp
+    // A closure returned right here over a parameter it only borrows
+    // (`^ \ … r …`, `r` not `sink`) hands back a view of the caller's value:
+    // the result lends that parameter (`retclo`, gen_ret's check).
+    ? & clo_returned > captured_count 0 {
+        : ~ s __rcv ( nurl_str_cat captured_vars `` )
+        ~ != 0 ( nurl_str_len __rcv ) {
+            : s __cv ( str_first_word __rcv ) = __rcv ( str_skip_word __rcv )
+            : s __cvt ( nurl_sym_get syms __cv )
+            ? & ( __capture_lends __cv syms ) | ( __is_handle_ty __cvt ) ( __is_closure_ty __cvt )
+            { ( __record_param_idx syms `__fn_retclo__` __cv ) } {}
+        }
+    } {}
     : s clo_moved ? & > captured_count 0 ! clo_returned
     ( __clo_detach_moves lex syms captured_vars clo_detach_lit clo_bind_name ) ``
 
@@ -30181,6 +30248,7 @@
     ( nurl_sym_def syms `__fn_inferred_keep__` `` )
     ( nurl_sym_def syms `__fn_retlend__` `` )
     ( nurl_sym_def syms `__fn_retpart__` `` )
+    ( nurl_sym_def syms `__fn_retclo__` `` )
     ( nurl_sym_def syms `__fn_self_name__` fname )
     ( nurl_sym_def syms `__fn_scratch_objs__` `` )
     ( nurl_sym_def syms `__fn_inferred_store__` `` )
@@ -30259,7 +30327,10 @@
     ? & == 0 g_did_ret ! ( seq ret_ty `void` )
     { = last ( ret_ty_agree lex syms cg __fall_ty last
         ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
-        ( nurl_sym_get syms `__tail_first_val__` ) F T ) }
+        ( nurl_sym_get syms `__tail_first_val__` ) F T )
+        ? | != 0 g_clo_lend_set != 0 g_clolend_n {
+            ( mem_check_ret_clo_lend lex syms __fall_ty ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
+            ( nurl_sym_get syms `__tail_first_val__` ) ) } {} }
     {}
     // Borrow provenance for an IMPLICIT (no `^`) block return: the body's
     // final expression IS the return value, so if it left a borrow on
@@ -30325,6 +30396,14 @@
     : s __rp_part ( nurl_sym_get syms `__fn_retpart__` )
     ? != 0 ( nurl_str_len __rp_part )
     { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retpart##` fname ) __rp_part ) }
+    {}
+    // Parameters a closure this function returns lends from (gen_ret's
+    // returned-closure check). Diagnostic only: it does not change what a
+    // caller drops (mem_fn_lent_params does not read it).
+    : s __rc_set ( nurl_sym_get syms `__fn_retclo__` )
+    ? != 0 ( nurl_str_len __rc_set )
+    { ( nurl_sym_def g_pending_impl ( nurl_str_cat `retclo##` fname ) __rc_set )
+        = g_retclo_n + g_retclo_n 1 }
     {}
     : s __st_set ( nurl_sym_get syms `__fn_inferred_store__` )
     ? != 0 ( nurl_str_len __st_set )

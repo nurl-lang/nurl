@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a literal returned bare. `^ @ ?B { T @ B { shape v } }` lent `shape`
   back like a whole payload, so the caller took the result for borrowed and
   the fresh `v` leaked (packages/tensor). `compiler/tests/wrap_nested_param_taken.nu`.
+- **A closure that borrows a value cannot be returned past the scope that
+  drops it.** A closure capturing a parameter its function does not take
+  over only views the caller's value (docs/MEMORY.md §4); returned on past
+  the caller's own local (`^ ( first v )`, a binding of it, a helper that
+  lends on, an implicit return) it read freed memory with no diagnostic —
+  stdlib's `mcp_server_http_dispatch` has this shape. Now a compile error
+  that names the value and the cure (`sink`).
+  `compiler/tests/diag_returned_closure_lends_local.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
