@@ -258,7 +258,6 @@ $ `stdlib/net/dnsclient.nu`
         : ( Vec u ) f ( vec_new [u] )
         ( pktbuf_copy_to f out k )
         : i _t ( netdev_tx # s ( vec_data [u] f ) ( vec_len [u] f ) )
-        ( vec_free [u] f )
         = k + k 1
     }
     ( pktbuf_clear out )
@@ -298,10 +297,8 @@ $ `stdlib/net/dnsclient.nu`
                 : RxResult _r ( stack_rx net in ( __ms ) out )
                 ( __flush_frames out )
             } {}
-            ( vec_free [u] in )
         } {}
     }
-    ( pktbuf_free out )
 }
 
 // `ip=A.B.C.D/prefix` (with optional `gw=A.B.C.D`) on the kernel
@@ -391,7 +388,6 @@ $ `stdlib/net/dnsclient.nu`
         = . sh dns_ip ( dhcp_dns c )
         ( __arp_warm sh )
     } {}
-    ( dhcp_client_free c )
 }
 
 @ __dhcp_turn * Shim sh DhcpClient c i now → v {
@@ -404,7 +400,6 @@ $ `stdlib/net/dnsclient.nu`
         ? == want ( dhcp_msg_request ) ( dhcp_server_id c ) 0 )
         : i _n ( stack_tx_udp_broadcast . sh net ( dhcp_src_ip c ) ( dhcp_client_port )
         ( dhcp_server_port ) ( dhcp_dest_ip c ) msg 0 ( vec_len [u] msg ) out )
-        ( vec_free [u] msg )
         ( __flush_frames out )
     } {}
     : ~ b more T
@@ -420,9 +415,7 @@ $ `stdlib/net/dnsclient.nu`
                 ? . m valid { : b _h ( dhcp_handle c m now ) } {}
             } {}
         } { = more F }
-        ( vec_free [u] in )
     }
-    ( pktbuf_free out )
 }
 
 @ __tab → SockTab { ^ . ( __shim ) st }
@@ -520,11 +513,9 @@ $ `stdlib/net/dnsclient.nu`
         } {
             : i _t ( netdev_tx # s ( vec_data [u] f ) ( vec_len [u] f ) )
         }
-        ( vec_free [u] f )
         = moved + moved 1
         = k + k 1
     }
-    ( pktbuf_free w )
 
     // Then in: everything the device has for us.
     ? != . sh has_device 0 {
@@ -538,7 +529,6 @@ $ `stdlib/net/dnsclient.nu`
                 : i _r ( sock_rx st in now )
                 = moved + moved 1
             } { = more F }
-            ( vec_free [u] in )
         }
     } {}
 
@@ -786,10 +776,8 @@ $ `stdlib/net/dnsclient.nu`
         : i n ( sock_read st conn tmp cap )
         ? > n 0 {
             ( nurl_memcpy buf # s ( vec_data [u] tmp ) n )
-            ( vec_free [u] tmp )
             ^ n
         } {}
-        ( vec_free [u] tmp )
         ? == n 0 { ^ 0 } {}
         : i err - 0 n
         ? != err ( sock_err_again ) { ^ -1 } {}
@@ -845,7 +833,6 @@ $ `stdlib/net/dnsclient.nu`
             }
         }
     }
-    ( vec_free [u] src )
     ^ rc
 }
 
@@ -905,7 +892,6 @@ $ `stdlib/net/dnsclient.nu`
 @ __addr_string i ip i port → s {
     : String s1 ( ipv4_str ip )
     : s a ( nurl_str_cat3 ( string_data s1 ) `:` ( nurl_str_int port ) )
-    ( string_free s1 )
     ^ a
 }
 
@@ -1020,7 +1006,6 @@ $ `stdlib/net/dnsclient.nu`
     ( bytes_extend_raw src buf n )
     : i r ? >= ip 0 ( sock_udp_send_to st handle ip port src 0 n ( __ms ) )
     ( sock_udp_send st handle src 0 n ( __ms ) )
-    ( vec_free [u] src )
     // Whatever went out is on the wire before this returns: on
     // loopback the datagram IS delivered by the same call chain, and a
     // send that left frames queued would make the peer's next receive
@@ -1051,11 +1036,9 @@ $ `stdlib/net/dnsclient.nu`
         : i got ( sock_udp_recv_from st handle tmp n )
         ? > got 0 {
             ( nurl_memcpy buf # s ( vec_data [u] tmp ) got )
-            ( vec_free [u] tmp )
             ( __udp_cache_peer handle )
             ^ got
         } {}
-        ( vec_free [u] tmp )
         // A zero-length datagram is a datagram: it must be delivered,
         // not mistaken for "nothing arrived". That is the difference
         // between UDP and a stream, and the test that pins it sends an
@@ -1168,7 +1151,6 @@ $ `stdlib/net/dnsclient.nu`
         ( string_push_str out `::ffff:` )
         : String v4 ( ipv4_str ( ipv4_make # i . ap 16 # i . ap 17 # i . ap 18 # i . ap 19 ) )
         ( string_push_str out ( string_data v4 ) )
-        ( string_free v4 )
     } {
         // Longest run (≥ 2) of zero groups becomes "::".
         : ~ i best -1
@@ -1205,7 +1187,6 @@ $ `stdlib/net/dnsclient.nu`
     : i n ( nurl_str_len a )
     : s p # s ( nurl_alloc + n 1 )
     ( nurl_memcpy p a + n 1 )
-    ( string_free out )
     ^ p
 }
 
@@ -1329,7 +1310,6 @@ $ `stdlib/net/dnsclient.nu`
             F e → { = attempt 2 }
             T q → {
                 : i _s ( sock_udp_send_to st fd dns . sh dns_port q 0 ( vec_len [u] q ) ( __ms ) )
-                ( vec_free [u] q )
                 ? < _s 0 {
                     // The first send can fail with `again` while the
                     // gateway's ARP entry is still resolving — nothing
@@ -1358,10 +1338,8 @@ $ `stdlib/net/dnsclient.nu`
                                         // buffer — a manual free here is
                                         // the documented double-free trap
                                         = out ( nurl_str_cat3 out ( string_data one ) `\n` )
-                                        ( string_free one )
                                         = k + k 1
                                     }
-                                    ( vec_free [i] ips )
                                     = answered T
                                     = waiting F
                                 }
@@ -1374,7 +1352,6 @@ $ `stdlib/net/dnsclient.nu`
                                 }
                             }
                         } {}
-                        ( vec_free [u] resp )
                         ? && waiting ! answered {
                             : i left - deadline ( __ms )
                             ? <= left 0 { = waiting F } {
@@ -1429,7 +1406,6 @@ $ `stdlib/net/dnsclient.nu`
         = k + k 1
     }
     : s r ( nurl_str_cat ( string_data out ) `` )
-    ( string_free out )
     ^ r
 }
 

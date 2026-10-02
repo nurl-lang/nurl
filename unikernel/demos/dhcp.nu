@@ -46,14 +46,12 @@ $ `unikernel/drivers/virtionet.nu`
         ? == want ( dhcp_msg_request ) ( dhcp_server_id c ) 0 )
         : i _n ( stack_tx_udp_broadcast st ( dhcp_src_ip c ) ( dhcp_client_port )
         ( dhcp_server_port ) ( dhcp_dest_ip c ) msg 0 ( vec_len [u] msg ) out )
-        ( vec_free [u] msg )
         : i n ( pktbuf_count out )
         : ~ i k 0
         ~ < k n {
             : ( Vec u ) f ( vec_new [u] )
             ( pktbuf_copy_to f out k )
             : b _ok ( vnet_tx nic f 0 ( vec_len [u] f ) )
-            ( vec_free [u] f )
             = k + k 1
         }
         ( pktbuf_clear out )
@@ -73,9 +71,7 @@ $ `unikernel/drivers/virtionet.nu`
                 } {}
             } {}
         } { = more F }
-        ( vec_free [u] in )
     }
-    ( pktbuf_free out )
     ^ progressed
 }
 
@@ -118,15 +114,9 @@ $ `unikernel/drivers/virtionet.nu`
         ( nurl_print `lease has a deadline: ` )
         ( nurl_print ? > ( dhcp_lease_ms c ) 0 `yes` `no` )
         ( nurl_print `\n` )
-        ( string_free ip )
-        ( string_free gw )
     } {}
 
-    // Read the verdict before releasing the client: `dhcp_client_free`
-    // consumes it, and the borrow checker is right to say so.
     : b ok ( dhcp_bound c )
-    ( dhcp_client_free c )
-    ( stack_free st )
     ( vnet_close nic )
     ^ ? ok 0 1
 }

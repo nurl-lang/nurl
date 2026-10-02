@@ -38,7 +38,6 @@ $ `unikernel/drivers/virtionet.nu`
     : i n ( vnet_rx # *VirtioNet g_nic f )
     : i take ? > n cap cap n
     ? > take 0 { ( nurl_memcpy buf # s ( vec_data [u] f ) take ) } {}
-    ( vec_free [u] f )
     ^ take
 }
 
@@ -47,6 +46,5 @@ $ `unikernel/drivers/virtionet.nu`
     : ( Vec u ) f ( vec_new [u] )
     ( bytes_extend_raw f buf len )
     : b ok ( vnet_tx # *VirtioNet g_nic f 0 len )
-    ( vec_free [u] f )
     ^ ? ok len 0
 }

@@ -56,8 +56,8 @@ $ `packages/nwasm/src/interp.nu`
 // BORROWS the module: it is decoded ONCE and run per program. Both
 // halves of that matter. Decoding a 1.5 MB module is real work to
 // repeat eight times under an interpreter on an emulated CPU — and
-// `module_decode` CONSUMES its byte vector (module_free frees the
-// module's byte image), so decoding per program from the same vector
+// `module_decode` CONSUMES its byte vector (the module's last owner
+// frees its byte image), so decoding per program from the same vector
 // hands the second run freed memory. It did, and the guest reported
 // it the way a machine with no allocator debugging can: a garbled
 // error, then "not a wasm module", then #GP.
@@ -68,7 +68,6 @@ $ `packages/nwasm/src/interp.nu`
     {
         : i fidx ( module_export_func m `_start` )
         ? < fidx 0 {
-            ( string_free err )
             = err ( string_from `nurlc.wasm has no _start export` )
         } {
             : Interp it ( interp_new m )
@@ -83,18 +82,15 @@ $ `packages/nwasm/src/interp.nu`
             ( exec_func it fidx )
             ( interp_flush it )
             ? ( interp_trapped it ) {
-                ( string_free err )
                 = err ( bytes_to_str ( interp_trapmsg it ) )
             } {
                 ? != ( interp_exit_code it ) 0 {
-                    ( string_free err )
                     = err ( bytes_to_str ( interp_stderr_bytes it ) )
                 } {
                     = ok 1
                     ( vec_extend [u] out ( interp_stdout_bytes it ) )
                 }
             }
-            ( interp_free it )
         }
     }
     ^ @ WcRun { ok out err }
@@ -119,8 +115,6 @@ $ `packages/nwasm/src/interp.nu`
                 : String dm ( bytes_to_str ( module_err m ) )
                 ( nurl_print ( string_data dm ) )
                 ( nurl_print `\n` )
-                ( string_free dm )
-                ( module_free m )
                 ^ 1
             } {}
             : i argc ( env_args_count )
@@ -158,17 +152,11 @@ $ `packages/nwasm/src/interp.nu`
                                 ( nurl_print ` bytes)\n` )
                                 = fails + fails 1
                             }
-                            ( vec_free [u] want )
                         }
                     }
                 }
-                ( vec_free [u] . r out )
-                ( string_free . r err )
-                ( string_free want_path )
-                ( string_free src )
                 = a + a 1
             }
-            ( module_free m )
         }
     }
     ( nurl_print ? == fails 0 `all byte-identical\n` `MISMATCHES\n` )

@@ -200,7 +200,6 @@ $ `stdlib/hal/virtio.nu`
                 = ok T
             }
             F → {
-                ( vec_free [u] b )
                 = ok F
             }
         }
@@ -317,6 +316,9 @@ $ `stdlib/hal/virtio.nu`
     ^ n
 }
 
+// The releases here are not bookkeeping autodrop could do: the rings and
+// buffers are memory the DEVICE writes into, so they may be handed back
+// only after virtio_reset has stopped it, never at some scope end before.
 @ vnet_close * VirtioNet nic → v {
     ? == # i nic 0 { ^ } {}
     ( virtio_reset . nic base )

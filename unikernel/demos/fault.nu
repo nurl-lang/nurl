@@ -45,7 +45,6 @@ $ `stdlib/core/vec.nu`
     ( vec_push [i] pad n )
     : i deeper ? > n 0 ( __deep - n 1 ) 0
     : i mine ?? ( vec_get [i] pad 0 ) { T x → x F → 0 }
-    ( vec_free [i] pad )
     ^ + deeper mine
 }
 

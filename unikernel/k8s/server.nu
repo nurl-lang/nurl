@@ -85,7 +85,6 @@ $ `stdlib/ext/env.nu`
     ( string_push_str b ( nurl_str_int n ) )
     ( string_push_str b `\n\ntry /healthz, /info, /metrics\n` )
     : HttpResponse r ( response_text 200 ( string_data b ) )
-    ( string_free b )
     ^ r
 }
 
@@ -110,7 +109,6 @@ $ `stdlib/ext/env.nu`
     ( json_obj_set j `requests` ( json_int n ) )
     ( json_obj_set j `unix_time` ( json_int ( now_seconds ) ) )
     : HttpResponse r ( response_json 200 j )
-    ( json_free j )
     ^ r
 }
 
@@ -125,7 +123,6 @@ $ `stdlib/ext/env.nu`
     ( string_push_str b ( nurl_str_int ( uptime_ms boot_ns ) ) )
     ( string_push_str b `\n` )
     : HttpResponse r ( response_text 200 ( string_data b ) )
-    ( string_free b )
     ^ r
 }
 
@@ -212,13 +209,7 @@ $ `stdlib/ext/env.nu`
                 }
             }
             ( runtime_shutdown )
-            ( router_free rt )
         }
     }
-    ( string_free pod )
-    ( string_free platform )
-    ( string_free cert )
-    ( string_free key )
-    ( vec_free [i] counters )
     ^ 0
 }

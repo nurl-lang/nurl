@@ -57,7 +57,7 @@ $ `stdlib/core/string.nu`
                     F _e → = failures + failures 1
                     T c → {
                         ?? ( tcp_read_chunk c 2048 ) {
-                            T req → ( vec_free [u] req )
+                            T req → {}
                             F _e → {}
                         }
                         : !v NetErr w ( tcp_write_str c `HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n` )

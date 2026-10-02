@@ -31,6 +31,5 @@ $ `stdlib/core/io.nu`
         = j + j 1
     }
     ( nurl_print `same_bytes=` ) ( nurl_println_int same )
-    ( vec_free [u] b ) ( vec_free [u] c )
     ^ 0
 }

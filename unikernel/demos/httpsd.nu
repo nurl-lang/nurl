@@ -55,7 +55,6 @@ $ `stdlib/core/io.nu`
                                 ( nurl_print `request bytes: ` )
                                 ( nurl_print ? > ( vec_len [u] req ) 0 `yes` `no` )
                                 ( nurl_print `\n` )
-                                ( vec_free [u] req )
                             }
                             F _e → {}
                         }

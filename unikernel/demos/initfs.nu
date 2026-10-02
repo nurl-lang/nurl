@@ -24,12 +24,11 @@ $ `stdlib/std/fs.nu`
         T text → {
             ( nurl_print `file: ` )
             ( nurl_print ( string_data text ) )
-            ( string_free text )
         }
         F _e → ( nurl_print `file: MISSING\n` )
     }
     ?? ( read_file `etc/absent.txt` ) {
-        T t2 → { ( nurl_print `absent file read anyway\n` ) ( string_free t2 ) }
+        T t2 → { ( nurl_print `absent file read anyway\n` ) }
         F _e → ( nurl_print `a file that is not there: ENOENT\n` )
     }
     ^ 0

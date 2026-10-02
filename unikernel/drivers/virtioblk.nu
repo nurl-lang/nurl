@@ -266,6 +266,9 @@ $ `stdlib/hal/virtio.nu`
     ^ ( __request d ( vblk_type_flush ) 0 # s 0 0 F )
 }
 
+// The releases here are not bookkeeping autodrop could do: the rings and
+// buffers are memory the DEVICE writes into, so they may be handed back
+// only after virtio_reset has stopped it, never at some scope end before.
 @ vblk_close * VirtioBlk d → v {
     ? == # i d 0 { ^ } {}
     ( virtio_reset . d base )
