@@ -73,11 +73,12 @@ $ `stdlib/core/rcbox.nu`
 }
 
 : RingImpl {
-    ( Vec s ) points  // *RingPoint, sorted ascending by signed hash
+    ( Vec RingPoint ) points  // sorted ascending by signed hash
 }
 
 // A Ring is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
-// every copy is the same state, and the last owner releases it.
+// every copy is the same state, and the last owner releases it — the
+// points are values in a Vec, dropped with it.
 : Ring { s ctl }
 
 @ Ring_share Ring h → Ring { ^ @ Ring { # s ( rcbox_share # i . h ctl ) } }
@@ -89,24 +90,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ __Ring_ptr Ring h → *RingImpl { ^ ( rcbox_ptr [RingImpl] # i . h ctl ) }
 
-// The points are raw blocks the Vec only points at: releasing them is the
-// ring's own drop, run by its last owner (the Vec goes after it).
-% Drop RingImpl {
-    @ drop RingImpl r → v {
-        : i n ( vec_len [s] . r points )
-        : ~ i k 0
-        ~ < k n {
-            : s pp ?? ( vec_get [s] . r points k ) { T x → x F → # s 0 }
-            ? != # i pp 0 { : *RingPoint p # *RingPoint pp ( vec_free [u] . p owner ) ( nurl_free # s p ) } {}
-            = k + k 1
-        }
-    }
-}
-
 @ ring_new → Ring {
     : i r__box ( rcbox_zero [RingImpl] )
     : *RingImpl r ( rcbox_ptr [RingImpl] r__box )
-    = . r points ( vec_new [s] )
+    = . r points ( vec_new [RingPoint] )
     ^ @ Ring { # s r__box }
 }
 
@@ -115,15 +102,18 @@ $ `stdlib/core/rcbox.nu`
 
 @ ring_point_count Ring r__h → i {
     : *RingImpl r ( __Ring_ptr r__h )
-    ^ ( vec_len [s] . r points )
+    ^ ( vec_len [RingPoint] . r points )
+}
+
+// Point `idx` in place — the *RingPoint ring_owner / ring_owners hand out.
+@ __ring_at * RingImpl r i idx → s {
+    ^ # s + # i ( vec_data [RingPoint] . r points ) * idx Z RingPoint
 }
 
 @ __ring_sort * RingImpl r → v {
-    ( sort_by [s] . r points \ s a s b → i {
-        : *RingPoint pa # *RingPoint a
-        : *RingPoint pb # *RingPoint b
-        : i ha . pa hash
-        : i hb . pb hash
+    ( sort_by [RingPoint] . r points \ RingPoint a RingPoint b → i {
+        : i ha . a hash
+        : i hb . b hash
         ? < ha hb { ^ - 0 1 } {}
         ? > ha hb { ^ 1 } {}
         ^ 0
@@ -135,43 +125,41 @@ $ `stdlib/core/rcbox.nu`
     : *RingImpl r ( __Ring_ptr r__h )
     : ~ i v 0
     ~ < v vnodes {
-        : *RingPoint p # *RingPoint ( nurl_alloc Z RingPoint )
-        = . p hash ( __ring_point_hash pubkey v )
-        = . p owner ( __ring_cpy pubkey )
-        ( vec_push [s] . r points # s p )
+        ( vec_push [RingPoint] . r points @ RingPoint { ( __ring_point_hash pubkey v ) ( __ring_cpy pubkey ) } )
         = v + v 1
     }
     ( __ring_sort r )
 }
 
-// Remove all of a member's points (keys it owned re-home clockwise).
+// Remove all of a member's points (keys it owned re-home clockwise). The
+// points that stay are compacted to the front in place (still sorted); the
+// member's end up behind them and are cut off.
 @ ring_remove_member Ring r__h ( Vec u ) pubkey → v {
     : *RingImpl r ( __Ring_ptr r__h )
-    : ( Vec s ) keep ( vec_new [s] )
-    : i n ( vec_len [s] . r points )
+    : ( Vec RingPoint ) pts . r points
+    : i n ( vec_len [RingPoint] pts )
+    : *RingPoint d ( vec_data [RingPoint] pts )
+    : ~ i keep 0
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . r points k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *RingPoint p # *RingPoint pp
-            ? ( __ring_veq . p owner pubkey ) { ( vec_free [u] . p owner ) ( nurl_free # s p ) } { ( vec_push [s] keep pp ) }
+        ? ! ( __ring_veq . . d k owner pubkey ) {
+            ? != keep k { : b _sw ( vec_swap [RingPoint] pts keep k ) } {}
+            = keep + keep 1
         } {}
         = k + k 1
     }
-    ( vec_free [s] . r points )
-    = . r points keep
+    : b _cut ( vec_truncate [RingPoint] pts keep )
 }
 
 // First point index with hash >= kh (binary search), wrapping to 0.
 @ __ring_first_idx * RingImpl r i kh → i {
-    : i n ( vec_len [s] . r points )
+    : i n ( vec_len [RingPoint] . r points )
+    : *RingPoint d ( vec_data [RingPoint] . r points )
     : ~ i lo 0
     : ~ i hi n
     ~ < lo hi {
         : i mid + lo / - hi lo 2
-        : s mp ?? ( vec_get [s] . r points mid ) { T x → x F → # s 0 }
-        : *RingPoint pm # *RingPoint mp
-        ? < . pm hash kh { = lo + mid 1 } { = hi mid }
+        ? < . . d mid hash kh { = lo + mid 1 } { = hi mid }
     }
     ^ ? >= lo n 0 lo
 }
@@ -179,14 +167,13 @@ $ `stdlib/core/rcbox.nu`
 // The *RingPoint owning `key` (0 on an empty ring). Borrowed (ring-owned).
 @ ring_owner Ring r__h ( Vec u ) key → s {
     : *RingImpl r ( __Ring_ptr r__h )
-    : i n ( vec_len [s] . r points )
+    : i n ( vec_len [RingPoint] . r points )
     ? == n 0 { ^ # s 0 } {}
     : i kh ( __ring_hash key )
-    : i idx ( __ring_first_idx r kh )
-    ^ ?? ( vec_get [s] . r points idx ) { T x → x F → # s 0 }
+    ^ ( __ring_at r ( __ring_first_idx r kh ) )
 }
 
-// Owner pubkey for `key`, copied (caller frees). None on an empty ring.
+// Owner pubkey for `key`, copied (the caller's). None on an empty ring.
 @ ring_owner_pk Ring r__h ( Vec u ) key → ?( Vec u ) {
     : s pp ( ring_owner r__h key )
     ? == # i pp 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
@@ -206,23 +193,20 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The replica set for `key`: up to `nrep` DISTINCT owners clockwise from the
-// primary. Returns borrowed *RingPoint pointers (ring-owned); free only the
-// container with vec_free [s].
+// primary. Returns borrowed *RingPoint pointers (ring-owned) in a Vec that is
+// the caller's.
 @ ring_owners Ring r__h ( Vec u ) key i nrep → ( Vec s ) {
     : *RingImpl r ( __Ring_ptr r__h )
     : ( Vec s ) out ( vec_new [s] )
-    : i n ( vec_len [s] . r points )
+    : i n ( vec_len [RingPoint] . r points )
     ? == n 0 { ^ out } {}
     : i kh ( __ring_hash key )
     : i start ( __ring_first_idx r kh )
     : ~ i steps 0
     ~ & < steps n < ( vec_len [s] out ) nrep {
-        : i idx % + start steps n
-        : s pp ?? ( vec_get [s] . r points idx ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *RingPoint p # *RingPoint pp
-            ? ! ( __owners_has out . p owner ) { ( vec_push [s] out pp ) } {}
-        } {}
+        : s pp ( __ring_at r % + start steps n )
+        : *RingPoint p # *RingPoint pp
+        ? ! ( __owners_has out . p owner ) { ( vec_push [s] out pp ) } {}
         = steps + steps 1
     }
     ^ out

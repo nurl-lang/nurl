@@ -111,52 +111,46 @@ $ `stdlib/core/rcbox.nu`
     ^ b
 }
 
-: JCur { ( Vec u ) buf i off }
+// A decoder cursor is the buffer plus an offset the readers advance in
+// place (`inout`): nothing to allocate, nothing to release.
+@ __jc_u8 ( Vec u ) b inout i off → i { : i v ?? ( vec_get [u] b off ) { T x → # i x F → 0 } = off + off 1 ^ v }
 
-@ __jc_u8 * JCur c → i { : i v ?? ( vec_get [u] . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 1 ^ v }
+@ __jc_u16 ( Vec u ) b inout i off → i { : i v ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 } = off + off 2 ^ v }
 
-@ __jc_u16 * JCur c → i { : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 2 ^ v }
+@ __jc_u32 ( Vec u ) b inout i off → i { : i v ?? ( bytes_read_u32_be b off ) { T x → # i x F → 0 } = off + off 4 ^ v }
 
-@ __jc_u32 * JCur c → i { : i v ?? ( bytes_read_u32_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 4 ^ v }
+@ __jc_u64 ( Vec u ) b inout i off → i { : i v ?? ( bytes_read_u64_be b off ) { T x → # i x F → 0 } = off + off 8 ^ v }
 
-@ __jc_u64 * JCur c → i { : i v ?? ( bytes_read_u64_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 8 ^ v }
-
-@ __jc_blob * JCur c i n → ( Vec u ) {
+@ __jc_blob ( Vec u ) b inout i off i n → ( Vec u ) {
     : ( Vec u ) o ( vec_with_cap [u] n )
     : ~ i k 0
-    ~ < k n { ?? ( vec_get [u] . c buf + . c off k ) { T x → ( vec_push [u] o x ) F → {} } = k + k 1 }
-    = . c off + . c off n
+    ~ < k n { ?? ( vec_get [u] b + off k ) { T x → ( vec_push [u] o x ) F → {} } = k + k 1 }
+    = off + off n
     ^ o
 }
 
-@ __jc_rest * JCur c → ( Vec u ) {
-    : i n ( vec_len [u] . c buf )
-    ^ ( __jc_blob c - n . c off )
+@ __jc_rest ( Vec u ) b inout i off → ( Vec u ) {
+    : i n ( vec_len [u] b )
+    ^ ( __jc_blob b off - n off )
 }
 
 @ jobmsg_decode ( Vec u ) buf → JobMsg {
-    : *JCur c # *JCur ( nurl_alloc Z JCur )
-    = . c buf buf
-    = . c off 0
-    : i mtype ( __jc_u8 c )
-    : i task_id ( __jc_u64 c )
+    : ~ i off 0
+    : i mtype ( __jc_u8 buf off )
+    : i task_id ( __jc_u64 buf off )
     : ~ i kind 0
     : ~ ( Vec u ) submitter ( vec_new [u] )
     : ~ ( Vec u ) key ( vec_new [u] )
     ? == mtype ( job_submit_t ) {
-        = kind ( __jc_u32 c )
-        : i slen ( __jc_u16 c )
-        ( vec_free [u] submitter )
-        = submitter ( __jc_blob c slen )
-        : i klen ( __jc_u16 c )
-        ( vec_free [u] key )
-        = key ( __jc_blob c klen )
+        = kind ( __jc_u32 buf off )
+        : i slen ( __jc_u16 buf off )
+        = submitter ( __jc_blob buf off slen )
+        : i klen ( __jc_u16 buf off )
+        = key ( __jc_blob buf off klen )
     } {}
-    : ( Vec u ) payload ( __jc_rest c )
-    ( nurl_free # s c )
+    : ( Vec u ) payload ( __jc_rest buf off )
     ^ @ JobMsg { mtype task_id kind submitter key payload }
 }
-
 // ── node: ring + transport + handler registry + result store ─────
 
 : JobHandler {
@@ -377,7 +371,7 @@ $ `stdlib/core/rcbox.nu`
 // Does this node own `key` on the given ring?
 @ __job_owns_ring * JobNodeImpl n Ring ring ( Vec u ) key → b {
     : ?( Vec u ) o ( ring_owner_pk ring key )
-    ^ ?? o { T pk → { : b same ( __job_veq pk . n self_pk ) ( vec_free [u] pk ) same } F → F }
+    ^ ?? o { T pk → { : b same ( __job_veq pk . n self_pk ) same } F → F }
 }
 
 // Does this node currently own `key`? (main ring — kind-agnostic)
@@ -411,8 +405,6 @@ $ `stdlib/core/rcbox.nu`
             T owner → {
                 : ( Vec u ) msg ( job_build_submit tid kind . n self_pk key payload )
                 ?? ( transport_send . n transport owner msg ) { T _ → {} F _ → {} }
-                ( vec_free [u] msg )
-                ( vec_free [u] owner )
             }
             F → {}
         }
@@ -429,7 +421,6 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) res ( _job_execute n__h . m kind . m payload )
         : ( Vec u ) reply ( job_build_result . m task_id res )
         ?? ( transport_send . n transport . m submitter reply ) { T _ → {} F _ → {} }
-        ( vec_free [u] reply )
     } {
         : ?( Vec u ) o ( ring_owner_pk ring . m key )
         ?? o {
@@ -437,9 +428,7 @@ $ `stdlib/core/rcbox.nu`
                 ? ! ( __job_veq owner . n self_pk ) {
                     : ( Vec u ) fwd ( job_build_submit . m task_id . m kind . m submitter . m key . m payload )
                     ?? ( transport_send . n transport owner fwd ) { T _ → {} F _ → {} }
-                    ( vec_free [u] fwd )
                 } {}
-                ( vec_free [u] owner )
             }
             F → {}
         }
@@ -462,8 +451,6 @@ $ `stdlib/core/rcbox.nu`
                 : JobMsg m ( jobmsg_decode . tm payload )
                 ? == . m mtype ( job_submit_t ) { ( job_on_submit n__h m ) } {}
                 ? == . m mtype ( job_result_t ) { ( job_on_result n__h m ) } {}
-                ( jobmsg_free m )
-                ( transport_msg_free tm )
             }
             F → { = more F }
         }

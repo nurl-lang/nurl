@@ -184,21 +184,29 @@ $ `stdlib/core/rcbox.nu`
 @ sim_due SimNet net__h i now → ( Vec SimMsg ) {
     : *SimNetImpl net ( __SimNet_ptr net__h )
     : ( Vec SimMsg ) due ( vec_new [SimMsg] )
-    : ( Vec SimMsg ) keep ( vec_new [SimMsg] )
-    : i m ( vec_len [SimMsg] . net inflight )
+    // The messages still in flight are compacted to the front in place
+    // (order kept); the due ones end up behind them and are cut off.
+    : ( Vec SimMsg ) q . net inflight
+    : i m ( vec_len [SimMsg] q )
+    : ~ i keep 0
     : ~ i k 0
     ~ < k m {
-        ?? ( vec_get [SimMsg] . net inflight k ) {
+        ?? ( vec_get [SimMsg] q k ) {
             T msg → {
                 : *SimMsgImpl mp ( __SimMsg_ptr msg )
-                ? <= . mp at now { ( vec_push [SimMsg] due msg ) = . net delivered + . net delivered 1 } { ( vec_push [SimMsg] keep msg ) }
+                ? <= . mp at now {
+                    ( vec_push [SimMsg] due msg )
+                    = . net delivered + . net delivered 1
+                } {
+                    ? != keep k { : b _sw ( vec_swap [SimMsg] q keep k ) } {}
+                    = keep + keep 1
+                }
             }
             F → {}
         }
         = k + k 1
     }
-    ( vec_free [SimMsg] . net inflight )
-    = . net inflight keep
+    : b _cut ( vec_truncate [SimMsg] q keep )
     ^ due
 }
 

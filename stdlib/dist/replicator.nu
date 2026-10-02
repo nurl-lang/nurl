@@ -24,11 +24,11 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/dist/crdt.nu`
 $ `stdlib/dist/ring.nu`
 
-: RcCur { ( Vec u ) buf i off }
+// A decoder cursor is the buffer plus an offset the readers advance in
+// place (`inout`): nothing to allocate, nothing to release.
+@ __rc_u16 ( Vec u ) b inout i off → i { : i v ?? ( bytes_read_u16_be b off ) { T x → # i x F → 0 } = off + off 2 ^ v }
 
-@ __rc_u16 * RcCur c → i { : i v ?? ( bytes_read_u16_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 2 ^ v }
-
-@ __rc_u64 * RcCur c → i { : i v ?? ( bytes_read_u64_be . c buf . c off ) { T x → # i x F → 0 } = . c off + . c off 8 ^ v }
+@ __rc_u64 ( Vec u ) b inout i off → i { : i v ?? ( bytes_read_u64_be b off ) { T x → # i x F → 0 } = off + off 8 ^ v }
 
 // ── PNCounter ────────────────────────────────────────────────────
 // Emit the sparse (id, amt) slots in ASCENDING id order so the encoding is
@@ -67,27 +67,23 @@ $ `stdlib/dist/ring.nu`
     ^ b
 }
 
-@ __pn_get * RcCur cur ( Vec i ) ids ( Vec i ) amts → v {
-    : i n ( __rc_u16 cur )
+@ __pn_get ( Vec u ) buf inout i off ( Vec i ) ids ( Vec i ) amts → v {
+    : i n ( __rc_u16 buf off )
     : ~ i k 0
-    ~ < k n { ( vec_push [i] ids ( __rc_u64 cur ) ) ( vec_push [i] amts ( __rc_u64 cur ) ) = k + k 1 }
+    ~ < k n { ( vec_push [i] ids ( __rc_u64 buf off ) ) ( vec_push [i] amts ( __rc_u64 buf off ) ) = k + k 1 }
 }
 
 @ pncounter_decode ( Vec u ) buf → PNCounter {
     : PNCounter c ( pncounter_new )
-    : *RcCur cur # *RcCur ( nurl_alloc Z RcCur )
-    = . cur buf buf
-    = . cur off 0
-    ( __pn_get cur ( pncounter_inc_ids c ) ( pncounter_inc_amts c ) )
-    ( __pn_get cur ( pncounter_dec_ids c ) ( pncounter_dec_amts c ) )
-    ( nurl_free # s cur )
+    : ~ i off 0
+    ( __pn_get buf off ( pncounter_inc_ids c ) ( pncounter_inc_amts c ) )
+    ( __pn_get buf off ( pncounter_dec_ids c ) ( pncounter_dec_amts c ) )
     ^ c
 }
 // Decode a peer's encoded counter and merge it into this one.
 @ pncounter_merge_bytes PNCounter c ( Vec u ) buf → v {
     : PNCounter o ( pncounter_decode buf )
     ( pncounter_merge c o )
-    ( pncounter_free o )
 }
 
 // ── LwwReg ───────────────────────────────────────────────────────
@@ -100,13 +96,10 @@ $ `stdlib/dist/ring.nu`
 }
 
 @ lww_decode ( Vec u ) buf → LwwReg {
-    : *RcCur cur # *RcCur ( nurl_alloc Z RcCur )
-    = . cur buf buf
-    = . cur off 0
-    : i v ( __rc_u64 cur )
-    : i ts ( __rc_u64 cur )
-    : i rep ( __rc_u64 cur )
-    ( nurl_free # s cur )
+    : ~ i off 0
+    : i v ( __rc_u64 buf off )
+    : i ts ( __rc_u64 buf off )
+    : i rep ( __rc_u64 buf off )
     ^ @ LwwReg { v ts rep }
 }
 
@@ -136,16 +129,16 @@ $ `stdlib/dist/ring.nu`
     ^ b
 }
 
-@ __ortags_get * RcCur cur ( Vec s ) into → v {
-    : i n ( __rc_u16 cur )
+@ __ortags_get ( Vec u ) buf inout i off ( Vec s ) into → v {
+    : i n ( __rc_u16 buf off )
     : ~ i k 0
     ~ < k n {
         // NB: locals must NOT shadow OrTag field names — on the field-STORE
         // path a local int var of a field's name is (intentionally) read as
         // an array index, not a field (see core/vec.nu's `= . data idx x`).
-        : i ev ( __rc_u64 cur )
-        : i rv ( __rc_u64 cur )
-        : i sv ( __rc_u64 cur )
+        : i ev ( __rc_u64 buf off )
+        : i rv ( __rc_u64 buf off )
+        : i sv ( __rc_u64 buf off )
         : *OrTag t # *OrTag ( nurl_alloc Z OrTag )
         = . t elem ev
         = . t replica rv
@@ -157,19 +150,15 @@ $ `stdlib/dist/ring.nu`
 
 @ orset_decode ( Vec u ) buf → OrSet {
     : OrSet s ( orset_new )
-    : *RcCur cur # *RcCur ( nurl_alloc Z RcCur )
-    = . cur buf buf
-    = . cur off 0
-    ( __ortags_get cur ( orset_adds s ) )
-    ( __ortags_get cur ( orset_tombs s ) )
-    ( nurl_free # s cur )
+    : ~ i off 0
+    ( __ortags_get buf off ( orset_adds s ) )
+    ( __ortags_get buf off ( orset_tombs s ) )
     ^ s
 }
 
 @ orset_merge_bytes OrSet s ( Vec u ) buf → v {
     : OrSet o ( orset_decode buf )
     ( orset_merge s o )
-    ( orset_free o )
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -231,7 +220,6 @@ $ `stdlib/dist/ring.nu`
         } {}
         = k + k 1
     }
-    ( vec_free [s] owners )
     ^ found
 }
 
@@ -240,7 +228,6 @@ $ `stdlib/dist/ring.nu`
 @ replica_fanout Ring r ( Vec u ) key i nrep → i {
     : ( Vec s ) owners ( ring_owners r key nrep )
     : i n ( vec_len [s] owners )
-    ( vec_free [s] owners )
     ^ n
 }
 
