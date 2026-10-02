@@ -270,14 +270,10 @@ $ `stdlib/core/rcbox.nu`
             = . h rs rs
             : ( Vec u ) ss ( __dh . h s_priv . h rs )  // ss
             ( __sym_mix_key . h sym ss )
-            // An arm ending in another value-producing `??` does not drop
-            // its locals yet: released here by hand until it does.
-            ( vec_free [u] ss )  // finding_stdlib_nested_arm_locals
             : ( Vec u ) tag ( __slice msg 80 16 )  // empty payload
             : !( Vec u ) NoiseErr dp ( __sym_decrypt . h sym tag )
-            ( vec_free [u] tag )  // finding_stdlib_nested_arm_locals
             ?? dp {
-                T pt → { ( vec_free [u] pt ) @ !v NoiseErr { T 0 } }  // finding_stdlib_nested_arm_locals
+                T pt → { @ !v NoiseErr { T 0 } }
                 F e → @ !v NoiseErr { F # NoiseErr e }
             }
         }

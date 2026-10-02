@@ -236,9 +236,6 @@ $ `stdlib/std/ecdsa_p256.nu`
             ? & == . inner ok 1 == . inner tag 4 {
                 ? == + . inner start . inner len ( vec_len [u] body ) {
                     = sk ( _der_content body inner )
-                    // The reassignment does not release what `sk` took
-                    // over from `body` yet: released here until it does.
-                    ( vec_free [u] body )  // finding_stdlib_alias_rebind
                 } {}
             } {}
             ? == ( vec_len [u] sk ) 0 {
