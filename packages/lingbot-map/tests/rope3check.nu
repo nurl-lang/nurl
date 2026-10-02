@@ -13,10 +13,14 @@ $ `src/rope.nu`
     : i per + PSI * pph ppw
     : i n * ppf per
     : i dim 64
-    : *f x # *f ( nurl_zalloc * 8 * heads * n dim )
-    : *i fr # *i ( nurl_zalloc * 8 n )
-    : *i rw # *i ( nurl_zalloc * 8 n )
-    : *i cl # *i ( nurl_zalloc * 8 n )
+    : ( Vec u ) x__v ( vec_zeroed [u] * 8 * heads * n dim )
+    : *f x # *f ( vec_data [u] x__v )
+    : ( Vec u ) fr__v ( vec_zeroed [u] * 8 n )
+    : *i fr # *i ( vec_data [u] fr__v )
+    : ( Vec u ) rw__v ( vec_zeroed [u] * 8 n )
+    : *i rw # *i ( vec_data [u] rw__v )
+    : ( Vec u ) cl__v ( vec_zeroed [u] * 8 n )
+    : *i cl # *i ( vec_data [u] cl__v )
     : ~ i t 0
     ~ < t * heads * n dim {
         = . x t ( float_sin + 0.13 * 0.017 # f t )
@@ -49,8 +53,10 @@ $ `src/rope.nu`
         = f + f 1
     }
     : i maxpos 1024
-    : *f ct # *f ( nurl_zalloc * 8 * maxpos ( rope3d_width ) )
-    : *f st # *f ( nurl_zalloc * 8 * maxpos ( rope3d_width ) )
+    : ( Vec u ) ct__v ( vec_zeroed [u] * 8 * maxpos ( rope3d_width ) )
+    : *f ct # *f ( vec_data [u] ct__v )
+    : ( Vec u ) st__v ( vec_zeroed [u] * 8 * maxpos ( rope3d_width ) )
+    : *f st # *f ( vec_data [u] st__v )
     ( rope3d_tables maxpos ct st )
     ( rope3d_apply x heads n dim fr rw cl ct st )
     ( nurl_print `w` ) ( nurl_print ( nurl_str_int heads ) )
@@ -64,8 +70,6 @@ $ `src/rope.nu`
         = j + j 1
     }
     ( nurl_print `\n` )
-    ( nurl_free # s x ) ( nurl_free # s fr ) ( nurl_free # s rw )
-    ( nurl_free # s cl ) ( nurl_free # s ct ) ( nurl_free # s st )
 }
 
 @ main → i {

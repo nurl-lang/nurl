@@ -20,7 +20,6 @@
 // kernel, which is NOT the one preprocessing uses (see src/interp.nu).
 //
 //   ( dn_load w kit )                  → Dino
-//   ( dn_free d )                      → v
 //   ( dn_forward kit d ws img h w gh gw tok ) → b
 //     img: [3, H, W] f32 device, ALREADY ImageNet-normalised
 //     out: [gh*gw, 1024] f32 device — x_norm_patchtokens
@@ -72,24 +71,12 @@ $ `src/patchembed.nu`
     ( Vec f ) poscache
 }
 
-@ dn_free sink Dino d → v {
-    ( vec_free_with [LmBlk] . d blocks \ LmBlk b → v { ( lm_blk_free b ) } )
-    ( gk_dbuf_free . d proj_w ) ( gk_dbuf_free . d proj_b )
-    ( gk_dbuf_free . d normg ) ( gk_dbuf_free . d normb )
-    ( vec_free [f] . d cls )
-    ( vec_free [f] . d reg )
-    ( vec_free [f] . d pos )
-    ( vec_free [i] . d poskey )
-    ( vec_free [f] . d poscache )
-}
-
-@ dn_load * Lw w GpuKit kit → Dino {
+@ dn_load Lw w GpuKit kit → Dino {
     : ( Vec LmBlk ) bs ( vec_new [LmBlk] )
     : ~ i i0 0
     ~ < i0 DN_DEPTH {
         : String p ( lmw_prefix `aggregator.patch_embed.blocks` i0 )
         ( vec_push [LmBlk] bs ( lmw_block w kit ( string_data p ) F DN_EPS DN_DIM DN_HIDDEN ) )
-        ( string_free p )
         = i0 + i0 1
     }
     ^ @ Dino {
@@ -106,7 +93,7 @@ $ `src/patchembed.nu`
 }
 
 // A tensor read into a host vector, sized from the checkpoint.
-@ _dn_host * Lw w s name → ( Vec f ) {
+@ _dn_host Lw w s name → ( Vec f ) {
     : i n ( lw_nelems w name )
     : i cap ? > n 0 n 1
     : ( Vec f ) v ( vec_with_cap [f] cap )
@@ -145,7 +132,6 @@ $ `src/patchembed.nu`
         ( vec_push [f] . d poscache ?? ( vec_get [f] fresh j ) { T v → v F → 0.0 } )
         = j + j 1
     }
-    ( vec_free [f] fresh )
     : b _k ( vec_set_len [i] . d poskey 0 )
     ( vec_push [i] . d poskey gh )
     ( vec_push [i] . d poskey gw )
@@ -170,8 +156,10 @@ $ `src/patchembed.nu`
     // interpolate needs planar [C, H, W]; the checkpoint has [H*W, C]
     : i src_hw * DN_GRID DN_GRID
     : i dst_hw * gh gw
-    : *f pin # *f ( nurl_zalloc * 8 * DN_DIM src_hw )
-    : *f pout # *f ( nurl_zalloc * 8 * DN_DIM dst_hw )
+    : ( Vec u ) pin__v ( vec_zeroed [u] * 8 * DN_DIM src_hw )
+    : *f pin # *f ( vec_data [u] pin__v )
+    : ( Vec u ) pout__v ( vec_zeroed [u] * 8 * DN_DIM dst_hw )
+    : *f pout # *f ( vec_data [u] pout__v )
     : ~ i k 0
     ~ < k DN_DIM {
         : ~ i p 0
@@ -185,8 +173,6 @@ $ `src/patchembed.nu`
         ~ < p dst_hw { = . dst + DN_DIM + * p DN_DIM k . pout + * k dst_hw p = p + p 1 }
         = k + k 1
     }
-    ( nurl_free # s pin )
-    ( nurl_free # s pout )
     ^ out
 }
 
@@ -215,13 +201,11 @@ $ `src/patchembed.nu`
     ( pe_im2col img 3 h w DN_PATCH ( vec_data [f] cols ) )
     : GkBuf dcols ( gk_dbuf_new kit * np k GK_F32 )
     : b okc ( gk_dbuf_upload kit dcols cols )
-    ( vec_free [f] cols )
-    ? okc {} { ( gk_dbuf_free dcols ) ^ F }
+    ? okc {} { ^ F }
 
     // patches straight into rows 5.. of the token array
     : GkBuf pt ( lm_view tok * 5 DN_DIM * np DN_DIM )
     : b okg ( gkd_gemm kit pt dcols . d proj_w . d proj_b 1 np DN_DIM k 1.0 1.0 1 )
-    ( gk_dbuf_free dcols )
     ? okg {} { ^ F }
 
     // the position embedding for THIS grid, then the head rows.
@@ -245,7 +229,6 @@ $ `src/patchembed.nu`
     }
     : GkBuf hview ( lm_view tok 0 * 5 DN_DIM )
     : b okh ( gk_dbuf_upload kit hview head )
-    ( vec_free [f] head )
     ? okh {} { ^ F }
 
     // patch position rows, added to what the projection produced
@@ -258,10 +241,8 @@ $ `src/patchembed.nu`
 
     : GkBuf dpos ( gk_dbuf_new kit * np DN_DIM GK_F32 )
     : b okp ( gk_dbuf_upload kit dpos pgrid )
-    ( vec_free [f] pgrid )
-    ? okp {} { ( gk_dbuf_free dpos ) ^ F }
+    ? okp {} { ^ F }
     : b oka ( gkd_add kit pt pt dpos )
-    ( gk_dbuf_free dpos )
     ? oka {} { ^ F }
 
     // 24 blocks, no qk-norm and no rope — DINOv2 has neither

@@ -188,7 +188,6 @@ $ `src/preproc.nu`
 @ __lm_is_dir s p → b {
     ?? ( dir_list p ) {
         T v → {
-            ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
             ^ T
         }
         F _e → { ^ F }
@@ -234,7 +233,6 @@ $ `src/preproc.nu`
     : ( Vec String ) hits ( vec_new [String] )
     ?? ( dir_list dir ) {
         F _e → {
-            ( vec_free [String] hits )
             ( nurl_print `lingbot-map: cannot read the directory ` )
             ( nurl_print dir ) ( nurl_print `\n` )
             ^ F
@@ -252,11 +250,9 @@ $ `src/preproc.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
     }
     ? == ( vec_len [String] hits ) 0 {
-        ( vec_free [String] hits )
         ( nurl_print `lingbot-map: no .png, .jpg or .jpeg frames in ` )
         ( nurl_print dir ) ( nurl_print `\n` )
         ^ F
@@ -274,7 +270,6 @@ $ `src/preproc.nu`
         }
         = g + g 1
     }
-    ( vec_free [String] hits )
     ^ T
 }
 
@@ -411,11 +406,9 @@ $ `src/preproc.nu`
                 F e → {
                     ( nurl_print `lingbot-map: ` )
                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                    ( string_free e )
                     = bad 1
                 }
             }
-            ( string_free fdir )
         } {}
     } {}
 
@@ -423,11 +416,6 @@ $ `src/preproc.nu`
     // left, which is the order the reference applies its own --first_k and
     // --stride in: thirty frames at a stride of three is ten, not ninety.
     ? & > maxf 0 < maxf ( vec_len [String] fr ) {
-        : ~ i d maxf
-        ~ < d ( vec_len [String] fr ) {
-            ?? ( vec_get [String] fr d ) { T s → { ( string_free s ) } F → {} }
-            = d + d 1
-        }
         : b _c ( vec_truncate [String] fr maxf )
     } {}
     ? > fstride 1 {
@@ -446,10 +434,6 @@ $ `src/preproc.nu`
         ( vec_append [String] fr kept )
     } {}
     ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page host tls imgsize }
-}
-
-@ __lm_free_opts Opts o → v {
-    ( vec_free_with [String] . o frames \ String s → v { ( string_free s ) } )
 }
 
 // ── the checkpoint ──────────────────────────────────────────────────
@@ -481,7 +465,6 @@ $ `src/preproc.nu`
         ( nurl_print `, once. Cached under ` )
         : String root ( hub_store_root )
         ( nurl_print ( string_data root ) ) ( nurl_print `\n` )
-        ( string_free root )
     } {}
     ^ ( hub_get ref )
 }
@@ -495,24 +478,23 @@ $ `src/preproc.nu`
     ?? ( env_get `LINGBOT_MAP_MODEL` ) {
         T v → {
             : !String String r ( __lm_fetch ( string_data v ) verbose 0 )
-            ( string_free v )
             ^ r
         }
         F → {}
     }
     : String root ( hub_store_root )
     : String p ( path_join ( string_data root ) `lingbot-map/lingbot-map.pt` )
-    ( string_free root )
     ? == 1 ( nurl_path_type ( string_data p ) ) { ^ @ !String String { T p } } {}
-    ( string_free p )
     ^ ( __lm_fetch `robbyant/lingbot-map/lingbot-map.pt` verbose 1 )
 }
 
 // ── one frame ───────────────────────────────────────────────────────
 
 @ __lm_norm * f p i h i w → v {
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     : ~ i c 0
@@ -525,7 +507,6 @@ $ `src/preproc.nu`
         }
         = c + c 1
     }
-    ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
 @ __lm_u8 f v → i {
@@ -540,7 +521,8 @@ $ `src/preproc.nu`
 // `kinv` and `c2w` the camera. The writer buffers and flushes itself.
 @ __lm_emit PlyW p * f rgb * f dep * f cf * f kinv * f c2w
 i h i w f cmin i stride → v {
-    : *f wp # *f ( nurl_zalloc 24 )
+    : ( Vec u ) wp__v ( vec_zeroed [u] 24 )
+    : *f wp # *f ( vec_data [u] wp__v )
     : i plane * h w
     : ~ i y 0
     ~ < y h {
@@ -560,7 +542,6 @@ i h i w f cmin i stride → v {
         }
         = y + y stride
     }
-    ( nurl_free # s wp )
 }
 
 // `view` takes a cloud and the two options that apply to looking at one.
@@ -650,9 +631,9 @@ i h i w f cmin i stride → v {
     } {}
 
     : Opts o ( __lm_parse )
-    ? == . o bad 2 { ( __lm_help ) ( __lm_free_opts o ) ^ 0 } {}
-    ? == . o bad 3 { ( __lm_version ) ( __lm_free_opts o ) ^ 0 } {}
-    ? != . o bad 0 { ( __lm_usage ) ( __lm_free_opts o ) ^ 2 } {}
+    ? == . o bad 2 { ( __lm_help ) ^ 0 } {}
+    ? == . o bad 3 { ( __lm_version ) ^ 0 } {}
+    ? != . o bad 0 { ( __lm_usage ) ^ 2 } {}
     : ~ i nframes ( vec_len [String] . o frames )
     // Say what is missing. The old behaviour here was to print the usage
     // and leave the reader to spot which line applied to them.
@@ -663,7 +644,7 @@ i h i w f cmin i stride → v {
         ( nurl_print `or name the frames yourself:\n` )
         ( nurl_print `    lingbot-map shot0.png shot1.png shot2.png\n` )
         ( nurl_print `'lingbot-map --help' has the rest.\n` )
-        ( __lm_free_opts o ) ^ 2
+        ^ 2
     } {}
     // Every frame is checked before the 4.6 GB checkpoint is read. A
     // mistyped path used to cost a full model load and then fail on the
@@ -691,7 +672,7 @@ i h i w f cmin i stride → v {
             ( nurl_print ` more of the ` ) ( nurl_print ( nurl_str_int nframes ) )
             ( nurl_print ` frames)\n` )
         } {}
-        ( __lm_free_opts o ) ^ 2
+        ^ 2
     } {}
 
     // What is about to be reconstructed, said BEFORE the checkpoint is
@@ -715,9 +696,9 @@ i h i w f cmin i stride → v {
             ( nurl_print `or download lingbot-map.pt from\n` )
             ( nurl_print `    https://huggingface.co/robbyant/lingbot-map\n` )
             ( nurl_print `and name it with --model <path>.\n` )
-            ( string_free e ) ( __lm_free_opts o ) ^ 1
+            ^ 1
         }
-        T p → { ( string_free model ) = model p }
+        T p → { = model p }
     }
 
     // Set by any frame that fails, and returned. A reconstruction that
@@ -729,7 +710,7 @@ i h i w f cmin i stride → v {
     ? ( gk_ok kit ) {} {
         ( nurl_print `lingbot-map: no GPU backend — no CUDA device is visible, and this\n` )
         ( nurl_print `build has no CPU fallback compiled in.\n` )
-        ( string_free model ) ( __lm_free_opts o ) ^ 1
+        ^ 1
     }
     // Every gkd_* launch syncs the device by default, which is right for
     // one-shot compute and wrong for a model: a frame is thousands of
@@ -747,15 +728,15 @@ i h i w f cmin i stride → v {
     ? != . o verbose 0 {
         ( nurl_print `model  ` ) ( nurl_print ( string_data model ) ) ( nurl_print `\n` )
     } {}
-    : !*Lw String lo ( lw_open ( string_data model ) )
+    : !Lw String lo ( lw_open ( string_data model ) )
     ?? lo {
         F e → {
             ( nurl_print `lingbot-map: cannot read the checkpoint ` )
             ( nurl_print ( string_data model ) ) ( nurl_print `\n` )
-            ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e )
+            ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
             ( nurl_print `It should be lingbot-map.pt (or -long / -stage1) from\n` )
             ( nurl_print `    https://huggingface.co/robbyant/lingbot-map\n` )
-            ( gk_close kit ) ( string_free model ) ( __lm_free_opts o ) ^ 1
+            ( gk_close kit ) ^ 1
         }
         T lw → {
             : Agg a ( ag_load lw kit )
@@ -767,11 +748,12 @@ i h i w f cmin i stride → v {
             : !PlyW String po ( ply_create . o out . o ascii `lingbot-map, pure NURL` )
             ?? po {
                 F e → {
-                    ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1
+                    ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1
                 }
                 T ply → {
                     : ChWs cws ( ch_ws_new kit nframes )
-                    : *i taps # *i ( nurl_zalloc 32 )
+                    : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
+                    : *i taps # *i ( vec_data [u] taps__v )
                     ( ag_default_taps taps )
                     : ~ i p 0
                     : ~ i dn 0
@@ -788,11 +770,11 @@ i h i w f cmin i stride → v {
                         : i t_frame0 ( monotonic_ns )
                         : i dev0 ( gk_prof_total kit )
                         ? == failed 0 {
-                            : !*Frame String fro ( pp_load path . o imgsize LM_PATCH )
+                            : !Frame String fro ( pp_load path . o imgsize LM_PATCH )
                             ?? fro {
                                 F e → {
                                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                                    ( string_free e ) = failed 1
+                                    = failed 1
                                 }
                                 T f → {
                                     : i h ( pp_height f )
@@ -912,16 +894,17 @@ i h i w f cmin i stride → v {
                                         : i t_dl ( monotonic_ns )
                                         ? == failed 0 {
                                             : *f pe ( vec_data [f] pv )
-                                            : *f kk # *f ( nurl_zalloc 128 )
-                                            : *f ki # *f ( nurl_zalloc 128 )
-                                            : *f c2w # *f ( nurl_zalloc 128 )
+                                            : ( Vec u ) kk__v ( vec_zeroed [u] 128 )
+                                            : *f kk # *f ( vec_data [u] kk__v )
+                                            : ( Vec u ) ki__v ( vec_zeroed [u] 128 )
+                                            : *f ki # *f ( vec_data [u] ki__v )
+                                            : ( Vec u ) c2w__v ( vec_zeroed [u] 128 )
+                                            : *f c2w # *f ( vec_data [u] c2w__v )
                                             ( pose_enc_to_intri pe h w kk )
                                             ( intri_inverse kk ki )
                                             ( pose_enc_to_c2w pe c2w )
                                             ( __lm_emit ply rgb ( vec_data [f] dv )
                                             ( vec_data [f] cv ) ki c2w h w . o conf . o pixstride )
-                                            ( nurl_free # s kk ) ( nurl_free # s ki )
-                                            ( nurl_free # s c2w )
                                             ? != . o profile 0 {
                                                 ( nurl_print `   prep ` )
                                                 ( nurl_print ( nurl_str_int / - t_prep t_frame0 1000000 ) )
@@ -954,17 +937,8 @@ i h i w f cmin i stride → v {
                                                 ( nurl_print `\n` )
                                             } {}
                                         } {}
-                                        ( vec_free [f] cv ) ( vec_free [f] dv )
-                                        ( vec_free [f] pv )
                                     } {}
 
-                                    ( gk_dbuf_free conf ) ( gk_dbuf_free depth )
-                                    ( gk_dbuf_free pose )
-                                    ( gk_dbuf_free out ) ( gk_dbuf_free tok )
-                                    ( gk_dbuf_free dtok )
-                                    ( lm_ws_free ws )
-                                    ( vec_free [f] rgbv )
-                                    ( pp_free f )
                                 }
                             }
                         } {}
@@ -989,24 +963,17 @@ i h i w f cmin i stride → v {
                     // After the GPU work, so the reconstruction is not
                     // holding 17 GB of VRAM while someone looks at it.
                     ? & == failed 0 != . o view 0 { = serve 1 } {}
-                    ( nurl_free # s taps )
-                    ( ch_ws_free cws )
                     ? != failed 0 { = rc 1 } {}
                 }
             }
-            ( dp_free dp )
-            ( ch_free chd )
-            ( ag_free a )
-            ( lw_close lw )
         }
     }
     ( gk_close kit )
-    ( string_free model )
     ? != serve 0 {
         ( nurl_print `\n` )
         : i vrc ( vw_serve . o out . o host . o port . o page 0 . o tls )
         ? != vrc 0 { = rc vrc } {}
     } {}
-    ( __lm_free_opts o )
+
     ^ rc
 }

@@ -31,8 +31,10 @@ $ `src/interp.nu`
 }
 
 @ case i sw i sh i planes i dw i dh → v {
-    : *f src ( nurl_zalloc * 8 * planes * sw sh )
-    : *f dst ( nurl_zalloc * 8 * planes * dw dh )
+    : ( Vec u ) src__v ( vec_zeroed [u] * 8 * planes * sw sh )
+    : *f src # *f ( vec_data [u] src__v )
+    : ( Vec u ) dst__v ( vec_zeroed [u] * 8 * planes * dw dh )
+    : *f dst # *f ( vec_data [u] dst__v )
     ( fill src sw sh planes )
     ( interp_bicubic_aa src sw sh planes dw dh dst )
     ( nurl_print `g` ) ( nurl_print ( nurl_str_int sw ) )
@@ -46,7 +48,6 @@ $ `src/interp.nu`
         = j + j 1
     }
     ( nurl_print `\n` )
-    ( nurl_free # s src ) ( nurl_free # s dst )
 }
 
 @ main → i {

@@ -23,8 +23,10 @@ $ `src/preproc.nu`
 // ImageNet statistics, applied where the reference applies them — in the
 // aggregator, not in preprocessing.
 @ imnet_norm * f p i h i w → v {
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     : ~ i c 0
@@ -37,25 +39,24 @@ $ `src/preproc.nu`
         }
         = c + c 1
     }
-    ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
 @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: aggcheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
-    : !*Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
+    : !Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
     ?? fr {
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T f → {
             : i h ( pp_height f )
             : i w ( pp_width f )
             : i gh / h 14
             : i gw / w 14
             ( imnet_norm ( pp_data f ) h w )
-            : !*Lw String o ( lw_open ( nurl_argv 1 ) )
+            : !Lw String o ( lw_open ( nurl_argv 1 ) )
             ?? o {
-                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
                 T lw → {
                     : Agg a ( ag_load lw kit )
                     ? ( lw_ok lw ) {} { ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1 }
@@ -104,7 +105,6 @@ $ `src/preproc.nu`
                         ( nurl_print ` max=` ) ( nurl_print ( nurl_str_float hi ) )
                         ( nurl_print `\n` )
                     } {}
-                    ( vec_free [f] tv )
                     : *f hp ( vec_data [f] hv )
                     : ~ i k 0
                     ~ < k 4 {
@@ -121,14 +121,8 @@ $ `src/preproc.nu`
                         ( nurl_print `\n` )
                         = k + k 1
                     }
-                    ( vec_free [f] hv )
-                    ( gk_dbuf_free out ) ( gk_dbuf_free tok ) ( gk_dbuf_free dtok )
-                    ( lm_ws_free ws )
-                    ( ag_free a )
-                    ( lw_close lw )
                 }
             }
-            ( pp_free f )
         }
     }
     ( gk_close kit )

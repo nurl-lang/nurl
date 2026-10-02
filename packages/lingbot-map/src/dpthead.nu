@@ -35,7 +35,6 @@
 // depth and the result is positive by construction.
 //
 //   ( dp_load w kit )                    → Dpt
-//   ( dp_free d )                        → v
 //   ( dp_forward kit d taps gh gw h w trace depth conf ) → b
 //     taps:  [4, P, 2048] f32 device — the aggregator's output
 //     depth: [h*w] f32 device
@@ -63,26 +62,19 @@ $ `src/load.nu`
 // A conv with an optional bias, as a pair of device buffers.
 : DpConv { GkBuf w GkBuf b i hasb }
 
-@ __dp_conv * Lw lw GpuKit kit s prefix s leaf b bias → DpConv {
+@ __dp_conv Lw lw GpuKit kit s prefix s leaf b bias → DpConv {
     : String nw ( string_from prefix )
     ( string_push_str nw leaf )
     ( string_push_str nw `.weight` )
     : GkBuf w ( lmw_upload lw kit ( string_data nw ) )
-    ( string_free nw )
     ? bias {
         : String nb ( string_from prefix )
         ( string_push_str nb leaf )
         ( string_push_str nb `.bias` )
         : GkBuf b ( lmw_upload lw kit ( string_data nb ) )
-        ( string_free nb )
         ^ @ DpConv { w b 1 }
     } {}
     ^ @ DpConv { w ( gk_buf_none GK_F32 ) 0 }
-}
-
-@ __dp_conv_free sink DpConv c → v {
-    ( gk_dbuf_free . c w )
-    ? == . c hasb 1 { ( gk_dbuf_free . c b ) } {}
 }
 
 // One residual conv unit: relu → 3x3 → relu → 3x3, plus the input.
@@ -111,18 +103,17 @@ $ `src/load.nu`
     DpConv oc2b
 }
 
-@ __dp_rcu * Lw lw GpuKit kit s prefix s unit → DpRcu {
+@ __dp_rcu Lw lw GpuKit kit s prefix s unit → DpRcu {
     : String p ( string_from prefix )
     ( string_push_str p unit )
     ( string_push_char p 46 )
     : DpRcu r @ DpRcu {
         ( __dp_conv lw kit ( string_data p ) `conv1` T )
         ( __dp_conv lw kit ( string_data p ) `conv2` T ) }
-    ( string_free p )
     ^ r
 }
 
-@ __dp_fuse * Lw lw GpuKit kit i idx b has1 → DpFuse {
+@ __dp_fuse Lw lw GpuKit kit i idx b has1 → DpFuse {
     : String p ( string_from `depth_head.scratch.refinenet` )
     ( string_push_int p idx )
     ( string_push_char p 46 )
@@ -133,11 +124,10 @@ $ `src/load.nu`
         ( __dp_rcu lw kit ( string_data p ) `resConfUnit2` )
         ( __dp_conv lw kit ( string_data p ) `out_conv` T )
         ? has1 1 0 }
-    ( string_free p )
     ^ f
 }
 
-@ dp_load * Lw lw GpuKit kit → Dpt {
+@ dp_load Lw lw GpuKit kit → Dpt {
     : ( Vec DpConv ) pj ( vec_new [DpConv] )
     : ( Vec DpConv ) rz ( vec_new [DpConv] )
     : ( Vec DpConv ) rn ( vec_new [DpConv] )
@@ -146,19 +136,16 @@ $ `src/load.nu`
         : String pp ( string_from `depth_head.projects.` )
         ( string_push_int pp i0 )
         ( vec_push [DpConv] pj ( __dp_conv lw kit ( string_data pp ) `` T ) )
-        ( string_free pp )
         // resize_layers.2 is an Identity and has no parameters
         ? != i0 2 {
             : String rp ( string_from `depth_head.resize_layers.` )
             ( string_push_int rp i0 )
             ( vec_push [DpConv] rz ( __dp_conv lw kit ( string_data rp ) `` T ) )
-            ( string_free rp )
         } { ( vec_push [DpConv] rz @ DpConv {
                 ( gk_buf_none GK_F32 ) ( gk_buf_none GK_F32 ) 0 } ) }
         : String np ( string_from `depth_head.scratch.layer` )
         ( string_push_int np + i0 1 )
         ( vec_push [DpConv] rn ( __dp_conv lw kit ( string_data np ) `_rn` F ) )
-        ( string_free np )
         = i0 + i0 1
     }
     : ( Vec DpFuse ) fs ( vec_new [DpFuse] )
@@ -174,23 +161,6 @@ $ `src/load.nu`
         ( __dp_conv lw kit `depth_head.scratch.` `output_conv1` T )
         ( __dp_conv lw kit `depth_head.scratch.output_conv2.` `0` T )
         ( __dp_conv lw kit `depth_head.scratch.output_conv2.` `2` T ) }
-}
-
-@ __dp_rcu_free sink DpRcu r → v { ( __dp_conv_free . r c1 ) ( __dp_conv_free . r c2 ) }
-
-@ dp_free sink Dpt d → v {
-    ( gk_dbuf_free . d normg ) ( gk_dbuf_free . d normb )
-    ( vec_free_with [DpPe] . d pecache \ DpPe e → v { ( gk_dbuf_free . e pe ) } )
-    ( vec_free_with [DpConv] . d projects \ DpConv c → v { ( __dp_conv_free c ) } )
-    ( vec_free_with [DpConv] . d resizes \ DpConv c → v { ( __dp_conv_free c ) } )
-    ( vec_free_with [DpConv] . d rns \ DpConv c → v { ( __dp_conv_free c ) } )
-    ( vec_free_with [DpFuse] . d fuse \ DpFuse f → v {
-        ? == . f has1 1 { ( __dp_rcu_free . f u1 ) } {}
-        ( __dp_rcu_free . f u2 )
-        ( __dp_conv_free . f outc ) } )
-    ( __dp_conv_free . d oc1 )
-    ( __dp_conv_free . d oc2a )
-    ( __dp_conv_free . d oc2b )
 }
 
 // ── forward ─────────────────────────────────────────────────────────
@@ -267,7 +237,8 @@ $ `src/load.nu`
     : f ey * spany / # f - h 1 # f h
     // the frequencies depend only on k, so they are computed once —
     // inside the pixel loop this was a float_pow per pixel per frequency
-    : *f omg # *f ( nurl_zalloc * 8 ? > quarter 0 quarter 1 )
+    : ( Vec u ) omg__v ( vec_zeroed [u] * 8 ? > quarter 0 quarter 1 )
+    : *f omg # *f ( vec_data [u] omg__v )
     : ~ i ki 0
     ~ < ki quarter {
         = . omg ki / 1.0 ( float_pow DP_OMEGA0 / # f ki # f quarter )
@@ -297,11 +268,9 @@ $ `src/load.nu`
         }
         = y + y 1
     }
-    ( nurl_free # s omg )
     : GkBuf pe ( gk_dbuf_new kit * ch * h w GK_F32 )
     : b ok ( gk_dbuf_upload kit pe hv )
-    ( vec_free [f] hv )
-    ? ok {} { ( gk_dbuf_free pe ) ^ F }
+    ? ok {} { ^ F }
     ( vec_push [DpPe] cache @ DpPe { ch h w aspect pe } )
     ^ ( gkd_add kit x x pe )
 }
@@ -328,13 +297,11 @@ GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w i oh i ow i trace i tag → b {
     ? != trace 0 {
         : String l ( __dp_lbl `dpt_rcu` tag )
         ( __dp_dump kit ( string_data l ) out ch h w )
-        ( string_free l )
     } {}
     ? ( gkd_resize_bilinear kit up out ch h w oh ow 1 ) {} { ^ F }
     ? != trace 0 {
         : String l ( __dp_lbl `dpt_up` tag )
         ( __dp_dump kit ( string_data l ) up ch oh ow )
-        ( string_free l )
     } {}
     // out_conv is 1x1, so it is a conv with kernel 1 and no padding
     : DpConv oc . f outc
@@ -353,7 +320,6 @@ i gh i gw → b {
     : ( Vec i ) dims ( _lm_i2 np DP_IN )
     : ( Vec i ) perm ( _lm_i2 1 0 )
     : b r ( gkd_perm kit outmap tmp dims perm )
-    ( vec_free [i] dims ) ( vec_free [i] perm )
     ^ r
 }
 
@@ -366,7 +332,7 @@ i gh i gw → b {
     : i n * ch * h w
     : ( Vec f ) hv ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] hv n )
-    ? ( gk_dbuf_download kit b hv ) {} { ( vec_free [f] hv ) ^ v }
+    ? ( gk_dbuf_download kit b hv ) {} { ^ v }
     ( nurl_print label )
     ( nurl_print ` 1x` ) ( nurl_print ( nurl_str_int ch ) )
     ( nurl_print `x` ) ( nurl_print ( nurl_str_int h ) )
@@ -390,7 +356,6 @@ i gh i gw → b {
     ( nurl_print ` ` ) ( nurl_print ( nurl_str_float sum ) )
     ( nurl_print ` ` ) ( nurl_print ( nurl_str_float amax ) )
     ( nurl_print `\n` )
-    ( vec_free [f] hv )
 }
 
 @ __dp_lbl s base i idx → String {
@@ -414,10 +379,13 @@ GkBuf depth GkBuf conf → b {
     : f aspect / # f w # f h
 
     // per-tap channel counts and output sizes
-    : *i chs # *i ( nurl_zalloc 32 )
+    : ( Vec u ) chs__v ( vec_zeroed [u] 32 )
+    : *i chs # *i ( vec_data [u] chs__v )
     = . chs 0 256 = . chs 1 512 = . chs 2 1024 = . chs 3 1024
-    : *i ohs # *i ( nurl_zalloc 32 )
-    : *i ows # *i ( nurl_zalloc 32 )
+    : ( Vec u ) ohs__v ( vec_zeroed [u] 32 )
+    : *i ohs # *i ( vec_data [u] ohs__v )
+    : ( Vec u ) ows__v ( vec_zeroed [u] 32 )
+    : *i ows # *i ( vec_data [u] ows__v )
     = . ohs 0 * gh 4 = . ows 0 * gw 4
     = . ohs 1 * gh 2 = . ows 1 * gw 2
     = . ohs 2 gh = . ows 2 gw
@@ -443,17 +411,14 @@ GkBuf depth GkBuf conf → b {
             }
             F → { = ok F }
         }
-        ( gk_dbuf_free fmap )
         ? & ok != trace 0 {
             : String l ( __dp_lbl `dpt_proj_` t )
             ( __dp_dump kit ( string_data l ) proj cout gh gw )
-            ( string_free l )
         } {}
         ? & ok ( dp_pos_embed kit . d pecache proj cout gh gw aspect ) {} { = ok F }
         ? & ok != trace 0 {
             : String l ( __dp_lbl `dpt_pos_` t )
             ( __dp_dump kit ( string_data l ) proj cout gh gw )
-            ( string_free l )
         } {}
         // resize: transpose-up, identity, or stride-2 down
         : GkBuf rs ( gk_dbuf_new kit * cout * oh ow GK_F32 )
@@ -472,11 +437,9 @@ GkBuf depth GkBuf conf → b {
             }
             F → { = ok F }
         }
-        ( gk_dbuf_free proj )
         ? & ok != trace 0 {
             : String l ( __dp_lbl `dpt_rs_` t )
             ( __dp_dump kit ( string_data l ) rs cout oh ow )
-            ( string_free l )
         } {}
         // layerN_rn: 3x3 no bias, down to 256 channels
         : GkBuf rn ( gk_dbuf_new kit * DP_FEAT * oh ow GK_F32 )
@@ -487,19 +450,14 @@ GkBuf depth GkBuf conf → b {
             }
             F → { = ok F }
         }
-        ( gk_dbuf_free rs )
         ? & ok != trace 0 {
             : String l ( __dp_lbl `dpt_rn_` t )
             ( __dp_dump kit ( string_data l ) rn DP_FEAT oh ow )
-            ( string_free l )
         } {}
         ( vec_push [GkBuf] rns rn )
         = t + t 1
     }
-    ( gk_dbuf_free tmp )
     ? ok {} {
-        ( vec_free_with [GkBuf] rns \ GkBuf b → v { ( gk_dbuf_free b ) } )
-        ( nurl_free # s chs ) ( nurl_free # s ohs ) ( nurl_free # s ows )
         ^ F
     }
 
@@ -540,18 +498,13 @@ GkBuf depth GkBuf conf → b {
         ? & ok != trace 0 {
             : String l ( __dp_lbl `dpt_f` + fi 1 )
             ( __dp_dump kit ( string_data l ) nxt DP_FEAT oh ow )
-            ( string_free l )
         } {}
-        ( gk_dbuf_free t1 ) ( gk_dbuf_free t2 ) ( gk_dbuf_free up )
-        ( gk_dbuf_free cbuf )
         = cbuf nxt
         = ch oh
         = cw ow
         = step + step 1
     }
-    ( vec_free_with [GkBuf] rns \ GkBuf b → v { ( gk_dbuf_free b ) } )
-    ( nurl_free # s chs ) ( nurl_free # s ohs ) ( nurl_free # s ows )
-    ? ok {} { ( gk_dbuf_free cbuf ) ^ F }
+    ? ok {} { ^ F }
 
     // output_conv1 → 128 channels, upsample to the frame, pos embed,
     // output_conv2 → 2 channels
@@ -559,31 +512,26 @@ GkBuf depth GkBuf conf → b {
     : DpConv c1c . d oc1
     ? ( gkd_conv2d kit o1 cbuf . c1c w . c1c b . c1c hasb
     DP_FEAT ch cw 128 3 3 ch cw 1 1 1 1 ) {} { = ok F }
-    ( gk_dbuf_free cbuf )
     ? & ok != trace 0 { ( __dp_dump kit `dpt_oc1` o1 128 ch cw ) } {}
-    ? ok {} { ( gk_dbuf_free o1 ) ^ F }
+    ? ok {} { ^ F }
     : GkBuf full ( gk_dbuf_new kit * 128 * h w GK_F32 )
     ? ( gkd_resize_bilinear kit full o1 128 ch cw h w 1 ) {} { = ok F }
-    ( gk_dbuf_free o1 )
     ? & ok ( dp_pos_embed kit . d pecache full 128 h w aspect ) {} { = ok F }
     : GkBuf o2 ( gk_dbuf_new kit * 32 * h w GK_F32 )
     : DpConv c2a . d oc2a
     ? & ok ( gkd_conv2d kit o2 full . c2a w . c2a b . c2a hasb
     128 h w 32 3 3 h w 1 1 1 1 ) {} { = ok F }
-    ( gk_dbuf_free full )
     ? & ok ( gkd_relu kit o2 o2 ) {} { = ok F }
     : GkBuf o3 ( gk_dbuf_new kit * 2 * h w GK_F32 )
     : DpConv c2b . d oc2b
     ? & ok ( gkd_conv2d kit o3 o2 . c2b w . c2b b . c2b hasb
     32 h w 2 1 1 h w 0 0 1 1 ) {} { = ok F }
-    ( gk_dbuf_free o2 )
-    ? ok {} { ( gk_dbuf_free o3 ) ^ F }
+    ? ok {} { ^ F }
 
     // depth = exp(channel 0), confidence = 1 + exp(channel 1)
     : GkBuf c0 ( lm_view o3 0 * h w )
     : GkBuf c1 ( lm_view o3 * h w * h w )
     ? ( gkd_map kit `dexp` `expf(x)` depth c0 ) {} { = ok F }
     ? & ok ( gkd_map kit `dexpp1` `1.0f+expf(x)` conf c1 ) {} { = ok F }
-    ( gk_dbuf_free o3 )
     ^ ok
 }

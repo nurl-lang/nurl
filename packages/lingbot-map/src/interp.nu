@@ -99,10 +99,13 @@ $ `stdlib/std/float.nu`
     ? | | | | <= sw 0 <= sh 0 <= dw 0 <= dh 0 <= planes 0 { ^ v } {}
     : i kx ( __ip_ksize sw dw )
     : i ky ( __ip_ksize sh dh )
-    : *f wx ( nurl_zalloc * 8 kx )
-    : *f wy ( nurl_zalloc * 8 ky )
+    : ( Vec u ) wx__v ( vec_zeroed [u] * 8 kx )
+    : *f wx # *f ( vec_data [u] wx__v )
+    : ( Vec u ) wy__v ( vec_zeroed [u] * 8 ky )
+    : *f wy # *f ( vec_data [u] wy__v )
     // horizontal: sw → dw, rows unchanged
-    : *f mid ( nurl_zalloc * 8 * planes * dw sh )
+    : ( Vec u ) mid__v ( vec_zeroed [u] * 8 * planes * dw sh )
+    : *f mid # *f ( vec_data [u] mid__v )
     : ~ i ox 0
     ~ < ox dw {
         : i packed ( __ip_window sw dw ox wx )
@@ -152,7 +155,4 @@ $ `stdlib/std/float.nu`
         }
         = oy + oy 1
     }
-    ( nurl_free # s mid )
-    ( nurl_free # s wx )
-    ( nurl_free # s wy )
 }

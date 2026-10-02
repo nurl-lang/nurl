@@ -30,16 +30,25 @@ $ `src/geom.nu`
 }
 
 @ main → i {
-    : *i st ( nurl_zalloc 8 )
+    : ( Vec u ) st__v ( vec_zeroed [u] 8 )
+    : *i st # *i ( vec_data [u] st__v )
     = . st 0 20260725
-    : *f pe ( nurl_zalloc 128 )
-    : *f m ( nurl_zalloc 128 )
-    : *f q ( nurl_zalloc 64 )
-    : *f ext ( nurl_zalloc 128 )
-    : *f kk ( nurl_zalloc 128 )
-    : *f ki ( nurl_zalloc 128 )
-    : *f c2w ( nurl_zalloc 128 )
-    : *f pt ( nurl_zalloc 64 )
+    : ( Vec u ) pe__v ( vec_zeroed [u] 128 )
+    : *f pe # *f ( vec_data [u] pe__v )
+    : ( Vec u ) m__v ( vec_zeroed [u] 128 )
+    : *f m # *f ( vec_data [u] m__v )
+    : ( Vec u ) q__v ( vec_zeroed [u] 64 )
+    : *f q # *f ( vec_data [u] q__v )
+    : ( Vec u ) ext__v ( vec_zeroed [u] 128 )
+    : *f ext # *f ( vec_data [u] ext__v )
+    : ( Vec u ) kk__v ( vec_zeroed [u] 128 )
+    : *f kk # *f ( vec_data [u] kk__v )
+    : ( Vec u ) ki__v ( vec_zeroed [u] 128 )
+    : *f ki # *f ( vec_data [u] ki__v )
+    : ( Vec u ) c2w__v ( vec_zeroed [u] 128 )
+    : *f c2w # *f ( vec_data [u] c2w__v )
+    : ( Vec u ) pt__v ( vec_zeroed [u] 64 )
+    : *f pt # *f ( vec_data [u] pt__v )
     : ~ i case 0
     ~ < case 6 {
         ( nurl_print `case ` ) ( nurl_print ( nurl_str_int case ) ) ( nurl_print `\n` )
@@ -76,8 +85,5 @@ $ `src/geom.nu`
         }
         = case + case 1
     }
-    ( nurl_free # s st ) ( nurl_free # s pe ) ( nurl_free # s m ) ( nurl_free # s q )
-    ( nurl_free # s ext ) ( nurl_free # s kk ) ( nurl_free # s ki )
-    ( nurl_free # s c2w ) ( nurl_free # s pt )
     ^ 0
 }

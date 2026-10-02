@@ -23,8 +23,10 @@ $ `src/preproc.nu`
 : i STRIDE 9973
 
 @ imnet_norm * f p i h i w → v {
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     : ~ i c 0
@@ -37,7 +39,6 @@ $ `src/preproc.nu`
         }
         = c + c 1
     }
-    ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
 @ dump s label GkBuf b GpuKit kit i h i w s tail → v {
@@ -55,7 +56,6 @@ $ `src/preproc.nu`
         = j + j STRIDE
     }
     ( nurl_print `\n` )
-    ( vec_free [f] hv )
 }
 
 // world_points, in the reference's own layout: H x W x 3, unprojected
@@ -70,10 +70,14 @@ $ `src/preproc.nu`
     }
     : *f pe ( vec_data [f] pv )
     : *f dep ( vec_data [f] dv )
-    : *f kk # *f ( nurl_zalloc 128 )
-    : *f ki # *f ( nurl_zalloc 128 )
-    : *f c2w # *f ( nurl_zalloc 128 )
-    : *f wp # *f ( nurl_zalloc 24 )
+    : ( Vec u ) kk__v ( vec_zeroed [u] 128 )
+    : *f kk # *f ( vec_data [u] kk__v )
+    : ( Vec u ) ki__v ( vec_zeroed [u] 128 )
+    : *f ki # *f ( vec_data [u] ki__v )
+    : ( Vec u ) c2w__v ( vec_zeroed [u] 128 )
+    : *f c2w # *f ( vec_data [u] c2w__v )
+    : ( Vec u ) wp__v ( vec_zeroed [u] 24 )
+    : *f wp # *f ( vec_data [u] wp__v )
     ( pose_enc_to_intri pe h w kk )
     ( intri_inverse kk ki )
     ( pose_enc_to_c2w pe c2w )
@@ -88,27 +92,24 @@ $ `src/preproc.nu`
         = j + j STRIDE
     }
     ( nurl_print `\n` )
-    ( nurl_free # s wp ) ( nurl_free # s c2w )
-    ( nurl_free # s ki ) ( nurl_free # s kk )
-    ( vec_free [f] dv ) ( vec_free [f] pv )
 }
 
 @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: depthcheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
-    : !*Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
+    : !Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
     ?? fr {
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T f → {
             : i h ( pp_height f )
             : i w ( pp_width f )
             : i gh / h 14
             : i gw / w 14
             ( imnet_norm ( pp_data f ) h w )
-            : !*Lw String o ( lw_open ( nurl_argv 1 ) )
+            : !Lw String o ( lw_open ( nurl_argv 1 ) )
             ?? o {
-                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
                 T lw → {
                     : Agg a ( ag_load lw kit )
                     : Dpt dp ( dp_load lw kit )
@@ -121,7 +122,8 @@ $ `src/preproc.nu`
                     : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
-                    : *i taps # *i ( nurl_zalloc 32 )
+                    : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
+                    : *i taps # *i ( vec_data [u] taps__v )
                     ( ag_default_taps taps )
                     ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {}
                     { ( nurl_print `aggregator FAILED\n` ) ^ 1 }
@@ -139,19 +141,8 @@ $ `src/preproc.nu`
                     ? ( ch_forward kit chd cws camtok 0 pose ) {}
                     { ( nurl_print `camera head FAILED\n` ) ^ 1 }
                     ( wdump kit pose depth h w )
-                    ( gk_dbuf_free pose )
-                    ( ch_ws_free cws )
-                    ( gk_dbuf_free depth ) ( gk_dbuf_free conf )
-                    ( nurl_free # s taps )
-                    ( gk_dbuf_free out ) ( gk_dbuf_free tok ) ( gk_dbuf_free dtok )
-                    ( lm_ws_free ws )
-                    ( dp_free dp )
-                    ( ch_free chd )
-                    ( ag_free a )
-                    ( lw_close lw )
                 }
             }
-            ( pp_free f )
         }
     }
     ( gk_close kit )

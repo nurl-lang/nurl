@@ -25,7 +25,6 @@
 // src/rope.nu; they are not interchangeable.
 //
 //   ( ag_load w kit )        → Agg
-//   ( ag_free a )            → v
 //   ( ag_ntokens gh gw )     → i
 //   ( ag_kv_alloc kit a maxtok )  once, before the first frame
 //   ( ag_forward_one kit a ws dtok tok img h w gh gw fidx nscale
@@ -87,37 +86,25 @@ $ `src/rope.nu`
     = . out 0 4 = . out 1 11 = . out 2 17 = . out 3 23
 }
 
-@ ag_free sink Agg a → v {
-    ( dn_free . a dino )
-    ( vec_free_with [LmBlk] . a fb \ LmBlk b → v { ( lm_blk_free b ) } )
-    ( vec_free_with [LmBlk] . a gb \ LmBlk b → v { ( lm_blk_free b ) } )
-    ( vec_free [f] . a camtok )
-    ( vec_free [f] . a regtok )
-    ( vec_free [f] . a scltok )
-    ( gk_dbuf_free . a cos3 )
-    ( gk_dbuf_free . a sin3 )
-    ( vec_free_with [LmKv] . a kv \ LmKv c → v { ( lm_kv_free c ) } )
-}
-
-@ ag_load * Lw w GpuKit kit → Agg {
+@ ag_load Lw w GpuKit kit → Agg {
     : ( Vec LmBlk ) fb ( vec_new [LmBlk] )
     : ( Vec LmBlk ) gb ( vec_new [LmBlk] )
     : ~ i i0 0
     ~ < i0 AG_DEPTH {
         : String pf ( lmw_prefix `aggregator.frame_blocks` i0 )
         ( vec_push [LmBlk] fb ( lmw_block w kit ( string_data pf ) T AG_EPS AG_DIM AG_HIDDEN ) )
-        ( string_free pf )
         : String pg ( lmw_prefix `aggregator.global_blocks` i0 )
         ( vec_push [LmBlk] gb ( lmw_block w kit ( string_data pg ) T AG_EPS AG_DIM AG_HIDDEN ) )
-        ( string_free pg )
         = i0 + i0 1
     }
     // The 3-D frequency table is per MODEL, not per frame: 1024 positions
     // by 32 complex frequencies, the same for every forward pass.
     : i width ( rope3d_width )
     : i tn * AG_MAXPOS3 width
-    : *f hc # *f ( nurl_zalloc * 8 tn )
-    : *f hs # *f ( nurl_zalloc * 8 tn )
+    : ( Vec u ) hc__v ( vec_zeroed [u] * 8 tn )
+    : *f hc # *f ( vec_data [u] hc__v )
+    : ( Vec u ) hs__v ( vec_zeroed [u] * 8 tn )
+    : *f hs # *f ( vec_data [u] hs__v )
     ( rope3d_tables AG_MAXPOS3 hc hs )
     : GkBuf c3 ( gk_dbuf_new kit tn GK_F32 )
     : GkBuf s3 ( gk_dbuf_new kit tn GK_F32 )
@@ -131,8 +118,6 @@ $ `src/rope.nu`
     ~ < j tn { = . tcp j . hc j = . tsp j . hs j = j + j 1 }
     : b _u1 ( gk_dbuf_upload kit c3 tc )
     : b _u2 ( gk_dbuf_upload kit s3 ts )
-    ( vec_free [f] tc ) ( vec_free [f] ts )
-    ( nurl_free # s hc ) ( nurl_free # s hs )
     ^ @ Agg {
         ( dn_load w kit ) fb gb
         ( _dn_host w `aggregator.camera_token` )
@@ -234,7 +219,6 @@ $ `src/rope.nu`
         }
         = i0 + i0 1
     }
-    ( gk_dbuf_free sk ) ( gk_dbuf_free sv )
     ^ ok
 }
 
@@ -308,8 +292,10 @@ $ `src/rope.nu`
 @ ag_setup_rope2 GpuKit kit LmWs ws i hd i maxpos → b {
     : i half / hd 2
     : i tn * maxpos half
-    : *f hc # *f ( nurl_zalloc * 8 tn )
-    : *f hs # *f ( nurl_zalloc * 8 tn )
+    : ( Vec u ) hc__v ( vec_zeroed [u] * 8 tn )
+    : *f hc # *f ( vec_data [u] hc__v )
+    : ( Vec u ) hs__v ( vec_zeroed [u] * 8 tn )
+    : *f hs # *f ( vec_data [u] hs__v )
     ( rope2d_tables half maxpos hc hs )
     : ( Vec f ) tc ( vec_with_cap [f] tn )
     : ( Vec f ) ts ( vec_with_cap [f] tn )
@@ -320,8 +306,6 @@ $ `src/rope.nu`
     : ~ i j 0
     ~ < j tn { = . tcp j . hc j = . tsp j . hs j = j + j 1 }
     : b ok & ( gk_dbuf_upload kit . ws cosb tc ) ( gk_dbuf_upload kit . ws sinb ts )
-    ( vec_free [f] tc ) ( vec_free [f] ts )
-    ( nurl_free # s hc ) ( nurl_free # s hs )
     ^ ok
 }
 
@@ -332,7 +316,6 @@ $ `src/rope.nu`
     : ~ i j 0
     ~ < j n { = . vp j . p j = j + j 1 }
     : b r ( gk_dbuf_upload_i kit b v )
-    ( vec_free [i] v )
     ^ r
 }
 
@@ -362,18 +345,22 @@ i stopat * i taps GkBuf out → b {
     : ( Vec f ) sp ( ag_special_rows a fidx nscale )
     : GkBuf shead ( lm_view tok 0 * AG_SPECIAL AG_DIM )
     : b oks ( gk_dbuf_upload kit shead sp )
-    ( vec_free [f] sp )
     ? oks {} { ^ F }
     : GkBuf pdst ( lm_view tok * AG_SPECIAL AG_DIM * np AG_DIM )
     : GkBuf psrc ( lm_view dtok * 5 AG_DIM * np AG_DIM )
     ? ( gkd_map kit `copy` `x` pdst psrc ) {} { ^ F }
 
     // positions for both rotations
-    : *i r2 # *i ( nurl_zalloc * 8 p )
-    : *i c2 # *i ( nurl_zalloc * 8 p )
-    : *i fr # *i ( nurl_zalloc * 8 p )
-    : *i rw # *i ( nurl_zalloc * 8 p )
-    : *i cl # *i ( nurl_zalloc * 8 p )
+    : ( Vec u ) r2__v ( vec_zeroed [u] * 8 p )
+    : *i r2 # *i ( vec_data [u] r2__v )
+    : ( Vec u ) c2__v ( vec_zeroed [u] * 8 p )
+    : *i c2 # *i ( vec_data [u] c2__v )
+    : ( Vec u ) fr__v ( vec_zeroed [u] * 8 p )
+    : *i fr # *i ( vec_data [u] fr__v )
+    : ( Vec u ) rw__v ( vec_zeroed [u] * 8 p )
+    : *i rw # *i ( vec_data [u] rw__v )
+    : ( Vec u ) cl__v ( vec_zeroed [u] * 8 p )
+    : *i cl # *i ( vec_data [u] cl__v )
     ( ag_pos2 gh gw r2 c2 )
     ( ag_pos3 gh gw fidx fr rw cl )
     : GkBuf bfr ( gk_dbuf_new kit p GK_I64 )
@@ -381,16 +368,12 @@ i stopat * i taps GkBuf out → b {
     : GkBuf bcl ( gk_dbuf_new kit p GK_I64 )
     : b okp & & & & ( __ag_upi kit . ws rows r2 p ) ( __ag_upi kit . ws cols c2 p )
     ( __ag_upi kit bfr fr p ) ( __ag_upi kit brw rw p ) ( __ag_upi kit bcl cl p )
-    ( nurl_free # s r2 ) ( nurl_free # s c2 )
-    ( nurl_free # s fr ) ( nurl_free # s rw ) ( nurl_free # s cl )
     ? okp {} {
-        ( gk_dbuf_free bfr ) ( gk_dbuf_free brw ) ( gk_dbuf_free bcl )
         ^ F
     }
     // the 2-D tables have to be FILLED, not just allocated
     : i rp2_max / ( gk_buf_len . ws cosb ) / hd 2
     ? ( ag_setup_rope2 kit ws hd rp2_max ) {} {
-        ( gk_dbuf_free bfr ) ( gk_dbuf_free brw ) ( gk_dbuf_free bcl )
         ^ F
     }
     : LmRope rp2 @ LmRope { LM_ROPE_2D . ws rows . ws cols
@@ -434,6 +417,5 @@ i stopat * i taps GkBuf out → b {
         } {}
         = i0 + i0 1
     }
-    ( gk_dbuf_free fcopy )
     ^ ok  // bfr / brw / bcl went into rp3, and go with it
 }

@@ -19,8 +19,6 @@
 // its register-tiled kernel.
 //
 //   ( lm_ws_new kit n dim heads hidden maxkv maxpos )  → LmWs
-//   ( lm_ws_free ws )                                  → v
-//   ( lm_blk_free w )                                  → v
 //   ( lm_block_forward kit w ws rp x n dim heads hidden ) → b  x updated
 //
 // `rp` says which rotation the attention applies. The three blocks in
@@ -58,19 +56,6 @@ $ `deps/gpukit/src/devops.nu`
     // difference is invisible until a row's variance is small, and then
     // it is worth ~1e-3 in the output.
     f eps
-}
-
-@ lm_blk_free sink LmBlk w → v {
-    ( gk_dbuf_free . w n1g ) ( gk_dbuf_free . w n1b )
-    ( gk_dbuf_free . w qkvw ) ( gk_dbuf_free . w qkvb )
-    ( gk_dbuf_free . w qng ) ( gk_dbuf_free . w qnb )
-    ( gk_dbuf_free . w kng ) ( gk_dbuf_free . w knb )
-    ( gk_dbuf_free . w pw ) ( gk_dbuf_free . w pb )
-    ( gk_dbuf_free . w ls1 )
-    ( gk_dbuf_free . w n2g ) ( gk_dbuf_free . w n2b )
-    ( gk_dbuf_free . w f1w ) ( gk_dbuf_free . w f1b )
-    ( gk_dbuf_free . w f2w ) ( gk_dbuf_free . w f2b )
-    ( gk_dbuf_free . w ls2 )
 }
 
 // Which rotation an attention applies, and the tables it needs.
@@ -150,17 +135,6 @@ $ `deps/gpukit/src/devops.nu`
         maxkv }
 }
 
-@ lm_ws_free sink LmWs ws → v {
-    ( gk_dbuf_free . ws norm ) ( gk_dbuf_free . ws qkv )
-    ( gk_dbuf_free . ws qkvp ) ( gk_dbuf_free . ws kt )
-    ( gk_dbuf_free . ws kpack ) ( gk_dbuf_free . ws vpack )
-    ( gk_dbuf_free . ws att ) ( gk_dbuf_free . ws ctx )
-    ( gk_dbuf_free . ws ctxp ) ( gk_dbuf_free . ws branch )
-    ( gk_dbuf_free . ws hid ) ( gk_dbuf_free . ws scal )
-    ( gk_dbuf_free . ws rows ) ( gk_dbuf_free . ws cols )
-    ( gk_dbuf_free . ws cosb ) ( gk_dbuf_free . ws sinb )
-}
-
 // ── 2-D RoPE, on device ─────────────────────────────────────────────
 //
 // The one kernel this file adds. `x` is [heads, n, dim] and is rotated in
@@ -198,8 +172,6 @@ i heads i n i dim → b {
     ( vec_push [i] args ( gpu_arg_i64 dim ) )
     : i tot * heads * n / dim 2
     : b r ( gk_run_dev kit ( string_data src ) `lm_rope2d` ( gk_grid tot 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
     ^ r
 }
 
@@ -239,8 +211,6 @@ i heads i n i dim i nt i nh → b {
     ( vec_push [i] args ( gpu_arg_i64 nh ) )
     : i tot * heads * n / dim 2
     : b r ( gk_run_dev kit ( string_data src ) `lm_rope3d` ( gk_grid tot 256 ) 256 args )
-    ( vec_free [i] args )
-    ( string_free src )
     ^ r
 }
 
@@ -287,7 +257,6 @@ i heads i n i dim i nt i nh → b {
     : ( Vec i ) as ( _lm_i2 cols 1 )
     : ( Vec i ) bs ( _lm_i2 0 1 )
     : b ok1 ( gkd_ew_bc kit `mul` `*` tmp b ls od as bs )
-    ( vec_free [i] od ) ( vec_free [i] as ) ( vec_free [i] bs )
     ? ok1 {} { ^ F }
     ^ ( gkd_add kit y y tmp )
 }
@@ -317,8 +286,6 @@ i heads i n i dim i nt i nh → b {
     ^ @ LmKv { ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
         ( gk_dbuf_new kit * heads * maxkv hd GK_F32 ) maxkv 0 0 }
 }
-
-@ lm_kv_free sink LmKv c → v { ( gk_dbuf_free . c k ) ( gk_dbuf_free . c v ) }
 
 // Transformer block over `n` tokens; `x` is [n, dim], updated in place.
 //
@@ -353,7 +320,6 @@ i n i dim i heads i hidden → b {
     : ( Vec i ) qd ( _lm_i4 n 3 heads hd )
     : ( Vec i ) qp ( _lm_i4 1 2 0 3 )
     : b okp ( gkd_perm kit qkvp qkv qd qp )
-    ( vec_free [i] qd ) ( vec_free [i] qp )
     ? okp {} { ^ F }
     : GkBuf q ( lm_view qkvp 0 nd )
     : GkBuf k ( lm_view qkvp nd nd )
@@ -413,14 +379,12 @@ i n i dim i heads i hidden → b {
         : ( Vec i ) kd ( _lm_i3 heads nkv hd )
         : ( Vec i ) kp ( _lm_i3 0 2 1 )
         : b okk ( gkd_perm kit kt kuse kd kp )
-        ( vec_free [i] kd ) ( vec_free [i] kp )
         ? okk {} { ^ F }
         : GkBuf att ( lm_view . ws att 0 * heads * n nkv )
         ? ( gkd_bmm kit att q kt heads n hd nkv 1 1 ) {} { ^ F }
         : ( Vec f ) sv ( vec_with_cap [f] 1 )
         ( vec_push [f] sv scale )
         : b oks ( gk_dbuf_upload kit . ws scal sv )
-        ( vec_free [f] sv )
         ? oks {} { ^ F }
         ? ( gkd_ew kit `mul` `*` att att . ws scal ) {} { ^ F }
         ? ( gkd_softmax_ax kit att att * heads n nkv 1 ) {} { ^ F }
@@ -430,7 +394,6 @@ i n i dim i heads i hidden → b {
     : ( Vec i ) cd ( _lm_i3 heads n hd )
     : ( Vec i ) cp ( _lm_i3 1 0 2 )
     : b okc ( gkd_perm kit ctxp ctx cd cp )
-    ( vec_free [i] cd ) ( vec_free [i] cp )
     ? okc {} { ^ F }
     ? ( gkd_gemm kit branch ctxp . w pw . w pb 1 n dim dim 1.0 1.0 0 ) {} { ^ F }
     ? ( __lm_res kit x branch . w ls1 norm n dim ) {} { ^ F }

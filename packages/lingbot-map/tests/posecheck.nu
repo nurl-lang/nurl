@@ -21,8 +21,10 @@ $ `src/preproc.nu`
 $ `src/geom.nu`
 
 @ imnet_norm * f p i h i w → v {
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     : ~ i c 0
@@ -35,7 +37,6 @@ $ `src/geom.nu`
         }
         = c + c 1
     }
-    ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
 @ prow s label * f p i n → v {
@@ -49,18 +50,18 @@ $ `src/geom.nu`
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: posecheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
-    : !*Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
+    : !Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
     ?? fr {
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T f → {
             : i h ( pp_height f )
             : i w ( pp_width f )
             : i gh / h 14
             : i gw / w 14
             ( imnet_norm ( pp_data f ) h w )
-            : !*Lw String o ( lw_open ( nurl_argv 1 ) )
+            : !Lw String o ( lw_open ( nurl_argv 1 ) )
             ?? o {
-                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
                 T lw → {
                     : Agg a ( ag_load lw kit )
                     : CamHead ch ( ch_load lw kit )
@@ -72,7 +73,8 @@ $ `src/geom.nu`
                     : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
-                    : *i taps # *i ( nurl_zalloc 32 )
+                    : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
+                    : *i taps # *i ( vec_data [u] taps__v )
                     ( ag_default_taps taps )
                     ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {}
                     { ( nurl_print `aggregator FAILED\n` ) ^ 1 }
@@ -88,25 +90,16 @@ $ `src/geom.nu`
                     : *f pp ( vec_data [f] hv )
                     ( prow `pose_iter_3 1x1x9 |` pp 9 )
                     // and what it decodes to
-                    : *f ext # *f ( nurl_zalloc 128 )
-                    : *f kk # *f ( nurl_zalloc 128 )
+                    : ( Vec u ) ext__v ( vec_zeroed [u] 128 )
+                    : *f ext # *f ( vec_data [u] ext__v )
+                    : ( Vec u ) kk__v ( vec_zeroed [u] 128 )
+                    : *f kk # *f ( vec_data [u] kk__v )
                     ( pose_enc_to_extri pp ext )
                     ( pose_enc_to_intri pp h w kk )
                     ( prow `extrinsics` ext 12 )
                     ( prow `intrinsics` kk 9 )
-                    ( nurl_free # s ext ) ( nurl_free # s kk )
-                    ( vec_free [f] hv )
-                    ( gk_dbuf_free pose )
-                    ( ch_ws_free cws )
-                    ( nurl_free # s taps )
-                    ( gk_dbuf_free out ) ( gk_dbuf_free tok ) ( gk_dbuf_free dtok )
-                    ( lm_ws_free ws )
-                    ( ch_free ch )
-                    ( ag_free a )
-                    ( lw_close lw )
                 }
             }
-            ( pp_free f )
         }
     }
     ( gk_close kit )

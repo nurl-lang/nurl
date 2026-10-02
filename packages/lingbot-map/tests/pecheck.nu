@@ -10,11 +10,16 @@ $ `src/patchembed.nu`
 @ case i c i h i w i patch i nout → v {
     : i p ( pe_patches h w patch )
     : i k * c * patch patch
-    : *f img # *f ( nurl_zalloc * 8 * c * h w )
-    : *f wgt # *f ( nurl_zalloc * 8 * nout k )
-    : *f bia # *f ( nurl_zalloc * 8 nout )
-    : *f col # *f ( nurl_zalloc * 8 * p k )
-    : *f out # *f ( nurl_zalloc * 8 * p nout )
+    : ( Vec u ) img__v ( vec_zeroed [u] * 8 * c * h w )
+    : *f img # *f ( vec_data [u] img__v )
+    : ( Vec u ) wgt__v ( vec_zeroed [u] * 8 * nout k )
+    : *f wgt # *f ( vec_data [u] wgt__v )
+    : ( Vec u ) bia__v ( vec_zeroed [u] * 8 nout )
+    : *f bia # *f ( vec_data [u] bia__v )
+    : ( Vec u ) col__v ( vec_zeroed [u] * 8 * p k )
+    : *f col # *f ( vec_data [u] col__v )
+    : ( Vec u ) out__v ( vec_zeroed [u] * 8 * p nout )
+    : *f out # *f ( vec_data [u] out__v )
     : ~ i j 0
     ~ < j * c * h w { = . img j ( float_sin + 0.3 * 0.017 # f j ) = j + j 1 }
     = j 0
@@ -31,8 +36,6 @@ $ `src/patchembed.nu`
     = j 0
     ~ < j * p nout { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . out j ) ) = j + j 1 }
     ( nurl_print `\n` )
-    ( nurl_free # s img ) ( nurl_free # s wgt ) ( nurl_free # s bia )
-    ( nurl_free # s col ) ( nurl_free # s out )
 }
 
 @ main → i {
