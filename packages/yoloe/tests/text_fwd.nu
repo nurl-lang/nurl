@@ -12,10 +12,9 @@ $ `deps/onnx/src/runtime.nu`
 
 & `c` @ nurl_peek_f32 *u base i idx → f
 
-@ load_f32 s path * u pc → *u {
-    ?? ( read_file_bytes path ) { T b → { : i n / ( vec_len [u] b ) 4 : *u h ( nurl_alloc * n 4 )
-            ( vec_f32_into b h n ) ( nurl_poke pc 0 n ) ^ h }
-        F _ → { ( nurl_poke pc 0 0 ) ^ # *u 0 } }
+// A raw little-endian f32 file as its bytes (empty when unreadable).
+@ load_f32 s path → ( Vec u ) {
+    ?? ( read_file_bytes path ) { T b → ^ b F _ → ^ ( vec_new [u] ) }
 }
 
 @ main → i {
@@ -31,9 +30,10 @@ $ `deps/onnx/src/runtime.nu`
     ( nurl_print `nodes ` ) ( nurl_print ( nurl_str_int ( vec_len [ONode] . g nodes ) ) )
     ( nurl_print ` input=` ) ( nurl_print ( string_data . g input_name ) ) ( nurl_print `\n` )
 
-    // tokens.i64 is already int64 LE — upload its bytes directly
-    : ~ * u tokhost # *u 0
-    ?? ( read_file_bytes ( string_data tp ) ) { T tb → = tokhost # *u ( vec_data [u] tb ) F _ → { ( nurl_print `tokens fail\n` ) ^ 1 } }
+    // tokens.i64 is already int64 LE — upload its bytes directly (the Vec
+    // is bound here, so the bytes outlive the run that reads them)
+    : ( Vec u ) toks ?? ( read_file_bytes ( string_data tp ) ) { T tb → tb F _ → { ( nurl_print `tokens fail\n` ) ^ 1 } }
+    : *u tokhost ( vec_data [u] toks )
 
     : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
@@ -45,9 +45,9 @@ $ `deps/onnx/src/runtime.nu`
     : *u host ( gpu_host_ptr host__h )
     ( nurl_print `output floats ` ) ( nurl_print ( nurl_str_int . out nelem ) ) ( nurl_print `\n` )
 
-    : *u gc ( nurl_alloc 8 )
-    : *u gref ( load_f32 ( string_data fp ) gc )
-    : i gn ( nurl_peek gc 0 )
+    : ( Vec u ) gref_v ( load_f32 ( string_data fp ) )
+    : *u gref ( vec_data [u] gref_v )
+    : i gn / ( vec_len [u] gref_v ) 4
     : ~ i bad 0
     : ~ i nan 0
     : ~ f maxerr 0.0

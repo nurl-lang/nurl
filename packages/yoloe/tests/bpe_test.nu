@@ -25,7 +25,6 @@ $ `../src/bpe.nu`
         ~ < j ng { ? != ( _ig got j ) ( _ig exp j ) { = ok 0 } {} = j + j 1 }
     }
     ( p ? == ok 1 `[ok]\n` `[FAIL]\n` )
-    ( vec_free [i] got )
     ^ ok
 }
 

@@ -12,7 +12,9 @@
 //
 // Frames arrive as YUYV (4:2:2, 2 bytes/pixel) and are converted to packed
 // RGB with the BT.601 integer transform. One Camera owns the fd plus the
-// mmap'd ring of capture buffers.
+// mmap'd ring of capture buffers: it is a handle, every copy is the same
+// stream, and its last owner stops it, unmaps the ring and closes the fd
+// (cam_close does that now — an optional early release).
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -22,6 +24,7 @@ $ `stdlib/core/string.nu`
 // a different ABI for the same linker symbol — and the compiler now
 // says so instead of emitting a call the module never declared.
 $ `stdlib/core/posix.nu`
+$ `stdlib/core/rcbox.nu`
 
 // `ioctl` as C declares it — `int ioctl(int, unsigned long, ...)`.
 // stdlib/std/term.nu declares the same symbol, and one linker symbol
@@ -34,7 +37,19 @@ $ `stdlib/core/posix.nu`
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
 
 // A streaming webcam: fd, frame geometry, and the mmap'd buffer ring.
-: Camera { i fd i w i h i nbuf ( Vec i ) bufptr ( Vec i ) buflen i ok }
+: CameraImpl { i fd i w i h i nbuf ( Vec i ) bufptr ( Vec i ) buflen i ok }
+
+% Drop CameraImpl { @ drop CameraImpl c → v { ( __cam_release c ) } }
+
+: Camera { s ctl }
+
+@ Camera_share Camera h → Camera { ^ @ Camera { # s ( rcbox_share # i . h ctl ) } }
+
+@ Camera_drop sink Camera h → v { ( mem_forget h ) ( rcbox_release [CameraImpl] # i . h ctl ) }
+
+@ __Camera_ptr Camera h → *CameraImpl { ^ ( rcbox_ptr [CameraImpl] # i . h ctl ) }
+
+@ __cam_new CameraImpl c → Camera { ^ @ Camera { # s ( rcbox_new [CameraImpl] c ) } }
 
 @ __O_RDWR → i { ^ 2 }
 
@@ -65,43 +80,42 @@ $ `stdlib/core/posix.nu`
 // Open a webcam and start YUYV streaming at w×h with `nbuf` ring buffers.
 @ cam_open s path i w i h i nbuf → Camera {
     : i fd # i ( open path # i32 ( __O_RDWR ) )
-    ? < fd 0 { ^ @ Camera { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } } {}
+    ? < fd 0 { ^ ( __cam_new @ CameraImpl { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
 
     // VIDIOC_S_FMT: request YUYV w×h, progressive.
-    : *u fmt ( nurl_alloc 208 )
-    ( __zero fmt 52 )
+    : ( Vec u ) fmtv ( vec_zeroed [u] 208 )
+    : *u fmt ( vec_data [u] fmtv )
     ( nurl_poke_i32 fmt 0 ( __BUF_TYPE_CAPTURE ) )  // type @0
     ( nurl_poke_i32 fmt 2 w )  // pix.width @8
     ( nurl_poke_i32 fmt 3 h )  // pix.height @12
     ( nurl_poke_i32 fmt 4 ( __PIXFMT_YUYV ) )  // pix.pixelformat @16
     ( nurl_poke_i32 fmt 5 ( __FIELD_NONE ) )  // pix.field @20
     : i rf ( ioctl # i32 fd ( __VIDIOC_S_FMT ) fmt )
-    ? < rf 0 { ( close fd ) ( nurl_free fmt )
-        ^ @ Camera { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } } {}
+    ? < rf 0 { ( close fd )
+        ^ ( __cam_new @ CameraImpl { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
     // the driver may adjust geometry — read back what it granted
     : i aw ( nurl_peek_i32 fmt 2 )
     : i ah ( nurl_peek_i32 fmt 3 )
-    ( nurl_free fmt )
 
     // VIDIOC_REQBUFS: nbuf mmap buffers.
-    : *u rb ( nurl_alloc 20 )
-    ( __zero rb 5 )
+    : ( Vec u ) rbv ( vec_zeroed [u] 20 )
+    : *u rb ( vec_data [u] rbv )
     ( nurl_poke_i32 rb 0 nbuf )  // count @0
     ( nurl_poke_i32 rb 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
     ( nurl_poke_i32 rb 2 ( __MEMORY_MMAP ) )  // memory @8
     : i rr ( ioctl # i32 fd ( __VIDIOC_REQBUFS ) rb )
     : i got ( nurl_peek_i32 rb 0 )
-    ( nurl_free rb )
     ? | < rr 0 < got 1 { ( close fd )
-        ^ @ Camera { - 0 1 aw ah 0 ( vec_new [i] ) ( vec_new [i] ) 0 } } {}
+        ^ ( __cam_new @ CameraImpl { - 0 1 aw ah 0 ( vec_new [i] ) ( vec_new [i] ) 0 } ) } {}
 
     // Query + mmap each buffer, then queue it.
     : ( Vec i ) ptrs ( vec_new [i] )
     : ( Vec i ) lens ( vec_new [i] )
     : ~ b allok T
+    : ( Vec u ) bfv ( vec_zeroed [u] 88 )
+    : *u bf ( vec_data [u] bfv )
     : ~ i bi 0
     ~ < bi got {
-        : *u bf ( nurl_alloc 88 )
         ( __zero bf 22 )
         ( nurl_poke_i32 bf 0 bi )  // index @0
         ( nurl_poke_i32 bf 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
@@ -118,37 +132,38 @@ $ `stdlib/core/posix.nu`
                 ( ioctl # i32 fd ( __VIDIOC_QBUF ) bf )
             }
         }
-        ( nurl_free bf )
         = bi + bi 1
     }
 
     // STREAMON
-    : *u t ( nurl_alloc 4 )
+    : ( Vec u ) tv ( vec_zeroed [u] 4 )
+    : *u t ( vec_data [u] tv )
     ( nurl_poke_i32 t 0 ( __BUF_TYPE_CAPTURE ) )
     : i so ( ioctl # i32 fd ( __VIDIOC_STREAMON ) t )
-    ( nurl_free t )
+    // a stream that did not start still has its ring mapped: the drop unmaps it
     ? | < so 0 ! allok { ( close fd )
-        ^ @ Camera { - 0 1 aw ah got ptrs lens 0 } } {}
-    ^ @ Camera { fd aw ah got ptrs lens 1 }
+        ^ ( __cam_new @ CameraImpl { - 0 1 aw ah got ptrs lens 0 } ) } {}
+    ^ ( __cam_new @ CameraImpl { fd aw ah got ptrs lens 1 } )
 }
 
-@ cam_ok Camera c → b { ^ != . c ok 0 }
+@ cam_ok Camera h → b { : *CameraImpl c ( __Camera_ptr h ) ^ != . c ok 0 }
 
-@ cam_w Camera c → i { ^ . c w }
+@ cam_w Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c w }
 
-@ cam_h Camera c → i { ^ . c h }
+@ cam_h Camera h → i { : *CameraImpl c ( __Camera_ptr h ) ^ . c h }
 
 @ __clip255 i v → i { ^ ? < v 0 0 ? > v 255 255 v }
 
 // Grab one frame: dequeue a filled buffer, convert YUYV→RGB into `rgb`
 // (packed, 3 bytes/pixel, w*h*3 bytes), and requeue. Returns T on success.
-@ cam_grab Camera c ( Vec u ) rgb → b {
-    : *u bf ( nurl_alloc 88 )
-    ( __zero bf 22 )
+@ cam_grab Camera cam__h ( Vec u ) rgb → b {
+    : *CameraImpl c ( __Camera_ptr cam__h )
+    : ( Vec u ) bfv ( vec_zeroed [u] 88 )
+    : *u bf ( vec_data [u] bfv )
     ( nurl_poke_i32 bf 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
     ( nurl_poke_i32 bf 15 ( __MEMORY_MMAP ) )  // memory @60
     : i dr ( ioctl # i32 . c fd ( __VIDIOC_DQBUF ) bf )
-    ? < dr 0 { ( nurl_free bf ) ^ F } {}
+    ? < dr 0 { ^ F } {}
     : i idx ( nurl_peek_i32 bf 0 )  // index @0
     : *u src # *u ?? ( vec_get [i] . c bufptr idx ) { T x → x F _ → 0 }
     : i w . c w
@@ -182,21 +197,35 @@ $ `stdlib/core/posix.nu`
     }
     // requeue this buffer
     ( ioctl # i32 . c fd ( __VIDIOC_QBUF ) bf )
-    ( nurl_free bf )
     ^ T
 }
 
-@ cam_close Camera c → v {
-    : *u t ( nurl_alloc 4 )
-    ( nurl_poke_i32 t 0 ( __BUF_TYPE_CAPTURE ) )
-    ( ioctl # i32 . c fd ( __VIDIOC_STREAMOFF ) t )
-    ( nurl_free t )
+// Stop streaming, unmap the ring and close the fd.
+@ __cam_release_parts i fd i nbuf ( Vec i ) ptrs ( Vec i ) lens → v {
+    ? >= fd 0 {
+        : ( Vec u ) tv ( vec_zeroed [u] 4 )
+        : *u t ( vec_data [u] tv )
+        ( nurl_poke_i32 t 0 ( __BUF_TYPE_CAPTURE ) )
+        ( ioctl # i32 fd ( __VIDIOC_STREAMOFF ) t )
+    } {}
     : ~ i k 0
-    ~ < k . c nbuf {
-        : *u m # *u ?? ( vec_get [i] . c bufptr k ) { T x → x F _ → 0 }
-        : i ln ?? ( vec_get [i] . c buflen k ) { T x → x F _ → 0 }
+    ~ < k nbuf {
+        : *u m # *u ?? ( vec_get [i] ptrs k ) { T x → x F _ → 0 }
+        : i ln ?? ( vec_get [i] lens k ) { T x → x F _ → 0 }
         ? != # i m 0 { ( munmap m ln ) } {}
         = k + k 1
     }
-    ( close . c fd )
+    ? >= fd 0 { ( close fd ) } {}
+}
+
+@ __cam_release CameraImpl c → v { ( __cam_release_parts . c fd . c nbuf . c bufptr . c buflen ) }
+
+// Release the camera now (optional — its last owner does it anyway). The
+// fields are cleared, so the drop finds nothing left to release.
+@ cam_close Camera h → v {
+    : *CameraImpl c ( __Camera_ptr h )
+    ( __cam_release_parts . c fd . c nbuf . c bufptr . c buflen )
+    = . c nbuf 0
+    = . c fd - 0 1
+    = . c ok 0
 }

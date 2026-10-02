@@ -30,11 +30,9 @@ $ `decode.nu`
 
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
 
-@ load_f32 s path * u pcell → *u {
-    ?? ( read_file_bytes path ) {
-        T b → { : i n / ( vec_len [u] b ) 4 : *u h ( nurl_alloc * n 4 )
-            ( vec_f32_into b h n ) ( nurl_poke pcell 0 n ) ^ h }
-        F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 } }
+// A raw little-endian f32 file as its bytes (empty when unreadable).
+@ load_f32 s path → ( Vec u ) {
+    ?? ( read_file_bytes path ) { T b → ^ b F _ → ^ ( vec_new [u] ) }
 }
 
 @ read_names s path → ( Vec String ) {
@@ -80,9 +78,8 @@ $ `decode.nu`
     ~ < z nc { ( p ( name_at names z ) ) ( p ` ` ) = z + z 1 }
     ( p `\n` )
 
-    : *u tc ( nurl_alloc 8 )
-    : *u tpe ( load_f32 ( string_data tp ) tc )
-    ? != / ( nurl_peek tc 0 ) 512 nc { ( p `tpe size mismatch (expected ` ) ( pn * nc 512 ) ( p ` floats)\n` ) ^ 1 } {}
+    : ( Vec u ) tpe ( load_f32 ( string_data tp ) )
+    ? != / / ( vec_len [u] tpe ) 4 512 nc { ( p `tpe size mismatch (expected ` ) ( pn * nc 512 ) ( p ` floats)\n` ) ^ 1 } {}
 
     : ~ b have F
     : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
@@ -93,13 +90,13 @@ $ `decode.nu`
         T im → {
             ( p `image ` ) ( pn ( img_w im ) ) ( p `x` ) ( pn ( img_h im ) ) ( p `\n` )
             : Letterbox lb ( letterbox im 640 )
-            : *u host ( img_to_nchw_norm . lb img )
+            : ( Vec u ) host ( img_to_nchw_norm . lb img )
 
             : Engine e ( rt_open 0 )
             ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ^ 1 } {}
             ( p `device: ` ) ( p ( rt_name e ) ) ( p `\n` )
 
-            : RTensor out ( rt_run_two e g `images` host ( shape4 1 3 640 640 ) `tpe` tpe ( shape3 1 nc 512 ) )
+            : RTensor out ( rt_run_two e g `images` ( vec_data [u] host ) ( shape4 1 3 640 640 ) `tpe` ( vec_data [u] tpe ) ( shape3 1 nc 512 ) )
             : GpuHost o__h ( rt_download e out )
             : *u o ( gpu_host_ptr o__h )
 

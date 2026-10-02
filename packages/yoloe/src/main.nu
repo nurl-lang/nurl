@@ -102,8 +102,8 @@ $ `window.nu`
 // detection. Returns the detection count.
 @ process_frame Image im OGraph g Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
     : Letterbox lb ( letterbox im 640 )
-    : *u host ( img_to_nchw_norm . lb img )
-    : RTensor out ( rt_run_shaped e g host ( shape4 1 3 640 640 ) )
+    : ( Vec u ) host ( img_to_nchw_norm . lb img )
+    : RTensor out ( rt_run_shaped e g ( vec_data [u] host ) ( shape4 1 3 640 640 ) )
     : GpuHost o__h ( rt_download e out )
     : *u o ( gpu_host_ptr o__h )
     : ~ b masks want_masks
@@ -131,10 +131,9 @@ $ `window.nu`
                 : i x0 - ocx / ow 2
                 : i y0 - ocy / oh 2
                 ? masks {
-                    : *u coeff ( mask_coeffs o na nc . d ai )
-                    : *u L ( mask_logits # *u proto_i coeff MH MW )
-                    ( mask_overlay im L lb 640 x0 y0 ow oh ( pal_r k ) ( pal_g k ) ( pal_b k ) 128 )
-                    ( nurl_free coeff ) ( nurl_free L )
+                    : ( Vec u ) coeff ( mask_coeffs o na nc . d ai )
+                    : ( Vec u ) L ( mask_logits # *u proto_i ( vec_data [u] coeff ) MH MW )
+                    ( mask_overlay im ( vec_data [u] L ) lb 640 x0 y0 ow oh ( pal_r k ) ( pal_g k ) ( pal_b k ) 128 )
                 } {}
                 ? want_boxes { ( img_draw_rect im x0 y0 + x0 ow + y0 oh ( pal_r k ) ( pal_g k ) ( pal_b k ) ) } {}
                 ? verbose {
@@ -145,24 +144,18 @@ $ `window.nu`
         }
         = k + k 1
     }
-    ( nurl_free host )
-    ( vec_free [Detection] raw ) ( vec_free [Detection] dets )
     ^ nd
 }
 
-@ load_model s path * b okcell → OGraph {
-    : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
-    ?? ( read_file_bytes path ) { T mb → { = g ( onnx_parse mb ) ( nurl_poke # *u okcell 0 1 ) } F _ → { ( nurl_poke # *u okcell 0 0 ) } }
-    ^ g
+@ load_model s path → ?OGraph {
+    ?? ( read_file_bytes path ) { T mb → { ^ @ ?OGraph { T ( onnx_parse mb ) } } F _ → { ^ @ ?OGraph { F } } }
 }
 
 // ── still-image modes (detect / seg) ──────────────────────────────
 @ run_still b want_boxes b want_masks String mp String np String ip String op i gpu → i {
     ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
     ? == ( string_len ip ) 0 { ( p `missing --image <img>\n` ) ^ 1 } {}
-    : *b okc # *b ( nurl_alloc 8 )
-    : OGraph g ( load_model ( string_data mp ) okc )
-    ? == ( nurl_peek # *u okc 0 ) 0 { ( p `cannot read model: ` ) ( p ( string_data mp ) ) ( p `\n` ) ^ 1 } {}
+    : OGraph g ?? ( load_model ( string_data mp ) ) { T m → m F _ → { ( p `cannot read model: ` ) ( p ( string_data mp ) ) ( p `\n` ) ^ 1 } }
     : ( Vec String ) names ( read_names ( string_data np ) )
     : i nc ( vec_len [String] names )
     ? == nc 0 { ( p `missing/empty --classes <classes.txt>\n` ) ^ 1 } {}
@@ -189,9 +182,7 @@ $ `window.nu`
 // ── webcam mode (cam): live terminal display and/or save frames ───
 @ run_cam String mp String np String dev i nframes String od i mode b want_boxes b want_masks i gpu → i {
     ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
-    : *b okc # *b ( nurl_alloc 8 )
-    : OGraph g ( load_model ( string_data mp ) okc )
-    ? == ( nurl_peek # *u okc 0 ) 0 { ( p `cannot read model: ` ) ( p ( string_data mp ) ) ( p `\n` ) ^ 1 } {}
+    : OGraph g ?? ( load_model ( string_data mp ) ) { T m → m F _ → { ( p `cannot read model: ` ) ( p ( string_data mp ) ) ( p `\n` ) ^ 1 } }
     : ( Vec String ) names ( read_names ( string_data np ) )
     : i nc ( vec_len [String] names )
     ? == nc 0 { ( p `missing/empty --classes <classes.txt>\n` ) ^ 1 } {}
@@ -214,7 +205,7 @@ $ `window.nu`
     // display mode: 2=window, 1=terminal, 0=none. A window that fails to open
     // (no X) falls back to the terminal.
     : ~ i disp mode
-    : ~ XWin win @ XWin { 0 0 0 0 0 cw ch 0 }
+    : ~ XWin win ( xwin_none cw ch )
     ? == disp 2 {
         = win ( xwin_open cw ch `yoloe — live segmentation (any key/close to quit)` )
         ? ! ( xwin_ok win ) { ( p `no X display — falling back to the terminal (use --no-show to disable)\n` ) = disp 1 } {
@@ -285,8 +276,6 @@ $ `window.nu`
     : String ip ( ctx_str x `image` )
     : String op ( ctx_str x `out` )
     : i rc ( run_still want_boxes dmask mp np ip op gpu )
-    // ctx_str returns owned Strings (the old flag_str borrowed from argv)
-    ( string_free mp ) ( string_free np ) ( string_free ip ) ( string_free op )
     ^ rc
 }
 
@@ -309,7 +298,6 @@ $ `window.nu`
     ? ( ctx_bool x `window` ) { = mode 2 } {}
     ? ( ctx_bool x `no-show` ) { = mode 0 } {}
     : i rc ( run_cam mp np dev nframes od mode want_boxes want_masks gpu )
-    ( string_free mp ) ( string_free np ) ( string_free dev ) ( string_free od )
     ^ rc
 }
 

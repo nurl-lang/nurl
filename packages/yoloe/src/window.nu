@@ -9,6 +9,8 @@
 // so a headless build is unaffected.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 $ `image.nu`
 
 & `X11` @ XOpenDisplay *u name → *u
@@ -47,19 +49,52 @@ $ `image.nu`
 
 & `X11` @ XCloseDisplay *u dpy → i
 
+& `X11` @ XDestroyImage *u image → i
+
+& `X11` @ XFreeGC *u dpy *u gc → i
+
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
 
 & `c` @ nurl_peek_i32 *u base i idx → i32
 
-// Pointers (Display*, GC, XImage*, data) carried as i64; w/h the frame size.
-: XWin { i dpy i win i gc i img i data i w i h i ok }
+// Pointers (Display*, GC, XImage*) carried as i64; w/h the frame size. The
+// pixel buffer the XImage points at is the window's own Vec.
+: XWinImpl { i dpy i win i gc i img ( Vec u ) data i w i h i ok }
 
-@ xwin_ok XWin x → b { ^ != . x ok 0 }
+% Drop XWinImpl { @ drop XWinImpl x → v { ( __xwin_release . x dpy . x gc . x img ) } }
+
+// A window is a handle: every copy is the same window, and its last owner
+// closes the display connection (xwin_close does that now — an optional
+// early release).
+: XWin { s ctl }
+
+@ XWin_share XWin h → XWin { ^ @ XWin { # s ( rcbox_share # i . h ctl ) } }
+
+@ XWin_drop sink XWin h → v { ( mem_forget h ) ( rcbox_release [XWinImpl] # i . h ctl ) }
+
+@ __XWin_ptr XWin h → *XWinImpl { ^ ( rcbox_ptr [XWinImpl] # i . h ctl ) }
+
+// The window that never opened (ok=0): w×h is still the frame size.
+@ xwin_none i w i h → XWin { ^ @ XWin { # s ( rcbox_new [XWinImpl] @ XWinImpl { 0 0 0 0 ( vec_new [u] ) w h 0 } ) } }
+
+@ xwin_ok XWin h → b { : *XWinImpl x ( __XWin_ptr h ) ^ != . x ok 0 }
+
+// Free the XImage (not its pixels — they are the Vec's: XDestroyImage frees
+// a non-null data pointer, so it is cleared first) and the GC, and close the
+// display, which releases the window with it.
+@ __xwin_release i dpy i gc i img → v {
+    ? != img 0 {
+        ( nurl_poke # *u img 2 0 )  // XImage.data @16
+        ( XDestroyImage # *u img )
+    } {}
+    ? & != dpy 0 != gc 0 { ( XFreeGC # *u dpy # *u gc ) } {}
+    ? != dpy 0 { ( XCloseDisplay # *u dpy ) } {}
+}
 
 // Open a window of w×h titled `title`. ok=0 if no X display (run headless).
 @ xwin_open i w i h s title → XWin {
     : *u dpy ( XOpenDisplay # *u 0 )
-    ? == # i dpy 0 { ^ @ XWin { 0 0 0 0 0 w h 0 } } {}
+    ? == # i dpy 0 { ^ ( xwin_none w h ) } {}
     : i screen ( XDefaultScreen dpy )
     : i root ( XRootWindow dpy screen )
     : *u vis ( XDefaultVisual dpy screen )
@@ -68,21 +103,23 @@ $ `image.nu`
     ( XStoreName dpy win title )
     ( XSelectInput dpy win 5 )  // KeyPressMask(1) | ButtonPressMask(4)
     : i wmdel ( XInternAtom dpy `WM_DELETE_WINDOW` 0 )
-    : *u protos ( nurl_alloc 8 ) ( nurl_poke protos 0 wmdel )
+    : ( Vec u ) protov ( vec_zeroed [u] 8 )
+    : *u protos ( vec_data [u] protov )
+    ( nurl_poke protos 0 wmdel )
     ( XSetWMProtocols dpy win protos 1 )
-    ( nurl_free protos )
     ( XMapWindow dpy win )
     : *u gc ( XCreateGC dpy win 0 # *u 0 )
-    : *u data ( nurl_alloc * * w h 4 )  // 32-bit BGRX per pixel
-    : *u img ( XCreateImage dpy vis depth 2 0 data w h 32 0 )  // ZPixmap=2, pad 32
+    : ( Vec u ) data ( vec_zeroed [u] * * w h 4 )  // 32-bit BGRX per pixel
+    : *u img ( XCreateImage dpy vis depth 2 0 ( vec_data [u] data ) w h 32 0 )  // ZPixmap=2, pad 32
     ( XFlush dpy )
-    ^ @ XWin { # i dpy win # i gc # i img # i data w h 1 }
+    ^ @ XWin { # s ( rcbox_new [XWinImpl] @ XWinImpl { # i dpy win # i gc # i img data w h 1 } ) }
 }
 
 // Blit one RGB Image into the window. The frame must match the window size.
-@ xwin_show XWin x Image im → v {
+@ xwin_show XWin x__h Image im → v {
+    : *XWinImpl x ( __XWin_ptr x__h )
     ? == . x ok 0 { ^ {} } {}
-    : *u data # *u . x data
+    : *u data ( vec_data [u] . x data )
     : i w . x w
     : i h . x h
     : ~ i y 0
@@ -104,10 +141,12 @@ $ `image.nu`
 
 // Drain pending events; return T if the user asked to close (key, click, or
 // the window-manager close button).
-@ xwin_should_close XWin x → b {
+@ xwin_should_close XWin x__h → b {
+    : *XWinImpl x ( __XWin_ptr x__h )
     ? == . x ok 0 { ^ T } {}
     : *u dpy # *u . x dpy
-    : *u ev ( nurl_alloc 256 )
+    : ( Vec u ) evv ( vec_zeroed [u] 256 )  // an XEvent
+    : *u ev ( vec_data [u] evv )
     : ~ b quit F
     ~ > ( XPending dpy ) 0 {
         ( XNextEvent dpy ev )
@@ -115,11 +154,15 @@ $ `image.nu`
         // KeyPress(2) ButtonPress(4) DestroyNotify(17) ClientMessage(33)
         ? | | | == t 2 == t 4 == t 17 == t 33 { = quit T } {}
     }
-    ( nurl_free ev )
     ^ quit
 }
 
-@ xwin_close XWin x → v {
-    ? == . x ok 0 { ^ {} } {}
-    ( XCloseDisplay # *u . x dpy )
+// Close the window now (optional — its last owner does it anyway).
+@ xwin_close XWin x__h → v {
+    : *XWinImpl x ( __XWin_ptr x__h )
+    ( __xwin_release . x dpy . x gc . x img )
+    = . x dpy 0
+    = . x gc 0
+    = . x img 0
+    = . x ok 0
 }
