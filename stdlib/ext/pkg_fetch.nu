@@ -73,18 +73,15 @@ $ `stdlib/ext/manifest.nu`
     ? ! ( registry_name_valid name ) { ^ @ !RegIndex RegistryFetchErr { F RegistryBadIdentity } } {}
     : String url ( registry_index_url registry name )
     : !HttpcResp HttpcErr response ( httpc_get ( string_data url ) )
-    ( string_free url )
     ?? response {
         F error → { ^ @ !RegIndex RegistryFetchErr { F @ RegistryFetchErr { RegistryTransport error } } }
         T resp → {
             : i status ( httpc_status resp )
             ? != status 200 {
-                ( httpc_resp_free resp )
                 ? == status 404 { ^ @ !RegIndex RegistryFetchErr { F RegistryNotFound } } {}
                 ^ @ !RegIndex RegistryFetchErr { F @ RegistryFetchErr { RegistryHttp status } }
             } {}
             : String text ( string_from_bytes # *u ( httpc_body_str resp ) . resp blen )
-            ( httpc_resp_free resp )
             : !RegIndex RegistryFetchErr result ( registry_index_decode name text )
             ^ result
         }
@@ -99,7 +96,6 @@ $ `stdlib/ext/manifest.nu`
     : String sigurl ( regindex_tarball_url registry name version )
     ( string_push_str sigurl `.minisig` )
     : !HttpcResp HttpcErr sr ( httpc_get ( string_data sigurl ) )
-    ( string_free sigurl )
     ^ ?? sr {
         F _ → F
         T sresp → {
@@ -108,9 +104,7 @@ $ `stdlib/ext/manifest.nu`
                 : String sigbody ( string_from ( httpc_body_str sresp ) )
                 : String sl ( _ms_line2 ( string_data sigbody ) )
                 = ok ( minisign_verify_b64 gz pubkey ( string_data sl ) )
-                ( string_free sl )
             } {}
-            ( httpc_resp_free sresp )
             ^ ok
         }
     }
@@ -132,8 +126,6 @@ $ `stdlib/ext/manifest.nu`
             : LockPkg pkg ( lock_pkg_new name version `registry+` checksum )
             ( string_push_str . pkg source registry )
             : !i PkgFetchErr result ( pkg_install_locked_for_toolchain trust pkg dest toolchain )
-            ( lock_pkg_free pkg )
-            ( registry_trust_free trust )
             ^ result
         }
     }
@@ -149,20 +141,18 @@ $ `stdlib/ext/manifest.nu`
     ? ! ( registry_name_valid ( string_data . pkg name ) ) { ^ @ !i PkgFetchErr { F PkgBadIdentity } } {}
     ?? ( semver_parse ( string_data . pkg version ) ) {
         F _ → { ^ @ !i PkgFetchErr { F PkgBadIdentity } }
-        T parsed → { ( semver_free parsed ) }
+        T parsed → {}
     }
     ?? ( registry_from_source ( string_data . pkg source ) ) {
-        F empty → { ( string_free empty ) ^ @ !i PkgFetchErr { F PkgBadIdentity } }
+        F empty → { ^ @ !i PkgFetchErr { F PkgBadIdentity } }
         T registry → {
             : s key ( registry_trust_key trust ( string_data registry ) )
             ? == ( nurl_str_len key ) 0 {
-                ( string_free registry )
                 ^ @ !i PkgFetchErr { F PkgUntrustedRegistry }
             } {}
             : !i PkgFetchErr result ( __pkg_install_verified ( string_data registry )
             ( string_data . pkg name ) ( string_data . pkg version )
             ( string_data . pkg checksum ) dest key toolchain )
-            ( string_free registry )
             ^ result
         }
     }
@@ -188,14 +178,11 @@ $ `stdlib/ext/manifest.nu`
                                 = valid & != 0 ( nurl_str_eq ( string_data . manifest name ) name )
                                 != 0 ( nurl_str_eq ( string_data . manifest version ) version )
                                 = compatible ( manifest_supports_toolchain manifest toolchain )
-                                ( manifest_free manifest )
                             }
                             F _ → {}
                         }
                     } {}
-                    ( string_free text )
                 } {}
-                ( string_free path )
             }
             F _ → {}
         }
@@ -209,18 +196,14 @@ $ `stdlib/ext/manifest.nu`
 @ __pkg_install_verified s registry s name s version s checksum s dest s pubkey s toolchain → !i PkgFetchErr {
     : String url ( regindex_tarball_url registry name version )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
-    ( string_free url )
     ?? rr {
         F _ → ^ @ !i PkgFetchErr { F # PkgFetchErr PkgHttp }
         T resp → {
             ? != ( httpc_status resp ) 200 {
-                ( httpc_resp_free resp )
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgHttp }
             } {}
             : ( Vec u ) gz ( httpc_body_bytes resp )
-            ( httpc_resp_free resp )
             ? == ( vec_len [u] gz ) 0 {
-                ( vec_free [u] gz )
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgEmpty }
             } {}
 
@@ -228,10 +211,7 @@ $ `stdlib/ext/manifest.nu`
             : ( Vec u ) digest ( sha256_pure gz )
             : String hex ( bytes_to_hex digest )
             : i ok ( nurl_str_eq ( string_data hex ) checksum )
-            ( vec_free [u] digest )
-            ( string_free hex )
             ? == ok 0 {
-                ( vec_free [u] gz )
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgChecksumMismatch }
             } {}
 
@@ -239,31 +219,25 @@ $ `stdlib/ext/manifest.nu`
             // project key. Verification is mandatory and fail-closed — no
             // signature, no install (even when the checksum matched).
             ? ( __pkg_verify_sig registry name version gz pubkey ) {} {
-                ( vec_free [u] gz )
                 ^ @ !i PkgFetchErr { F # PkgFetchErr PkgBadSig }
             }
 
             : !( Vec u ) CompressErr dr ( gzip_decompress gz )
-            ( vec_free [u] gz )
             ?? dr {
                 F _ → ^ @ !i PkgFetchErr { F # PkgFetchErr PkgDecompress }
                 T raw → {
                     : !( Vec TarEntry ) TarErr parsed ( tar_parse raw )
-                    ( vec_free [u] raw )
                     ?? parsed {
                         F _ → { ^ @ !i PkgFetchErr { F PkgUnpack } }
                         T entries → {
                             ?? ( __pkg_archive_identity entries name version toolchain ) {
                                 F error → {
-                                    ( tar_entries_free entries )
                                     ^ @ !i PkgFetchErr { F error }
                                 }
                                 T _ → {}
                             }
                             : String destdir ( __pkg_join dest name )
                             : !i TarErr result ( tar_unpack_entries entries ( string_data destdir ) )
-                            ( string_free destdir )
-                            ( tar_entries_free entries )
                             ?? result {
                                 F _ → { ^ @ !i PkgFetchErr { F PkgUnpack } }
                                 T _ → { ^ @ !i PkgFetchErr { T 0 } }
@@ -288,15 +262,12 @@ $ `stdlib/ext/manifest.nu`
     ( string_push_str url `api/v1/search?q=` )
     ( string_push_str url query )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
-    ( string_free url )
     ?? rr {
         T resp → {
             : ~ String out ( string_new )
             ? == ( httpc_status resp ) 200 {
-                ( string_free out )
                 = out ( string_from ( httpc_body_str resp ) )
             } {}
-            ( httpc_resp_free resp )
             ^ out
         }
         F → ^ ( string_new )

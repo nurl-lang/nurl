@@ -43,7 +43,7 @@ $ `stdlib/ext/update_check.nu`
 @ __tc_is_windows → b {
     : ~ b w F
     ?? ( env_get `OS` ) {
-        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) ( string_free e ) }
+        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) }
         F → {}
     }
     ^ w
@@ -55,18 +55,17 @@ $ `stdlib/ext/update_check.nu`
 // Empty String when even the home directory is unknown.
 @ toolchain_prefix → String {
     ?? ( env_get `NURL_HOME` ) {
-        T v → { ? > ( string_len v ) 0 { ^ v } { ( string_free v ) } }
+        T v → { ? > ( string_len v ) 0 { ^ v } {} }
         F → {}
     }
     ?? ( env_get `NURL_STDLIB` ) {
-        T v → { ? > ( string_len v ) 0 { ^ v } { ( string_free v ) } }
+        T v → { ? > ( string_len v ) 0 { ^ v } {} }
         F → {}
     }
     : s home_var ? ( __tc_is_windows ) `USERPROFILE` `HOME`
     : String home ( env_var_or home_var `` )
-    ? == ( string_len home ) 0 { ( string_free home ) ^ ( string_new ) } {}
+    ? == ( string_len home ) 0 { ^ ( string_new ) } {}
     : String p ( path_join ( string_data home ) `.nurl` )
-    ( string_free home )
     ^ p
 }
 
@@ -76,9 +75,7 @@ $ `stdlib/ext/update_check.nu`
     : s name ? ( __tc_is_windows ) `get-nurl.ps1` `get-nurl.sh`
     : String dir ( path_join prefix `libexec` )
     : String f ( path_join ( string_data dir ) name )
-    ( string_free dir )
     ? ( file_exists ( string_data f ) ) { ^ f } {}
-    ( string_free f )
     ^ ( string_new )
 }
 
@@ -106,7 +103,6 @@ $ `stdlib/ext/update_check.nu`
                     T ln → {
                         ( nurl_print ( string_data ln ) )
                         ( nurl_print `\n` )
-                        ( string_free ln )
                     }
                     F → { = done 1 }
                 }
@@ -158,7 +154,7 @@ $ `stdlib/ext/update_check.nu`
 // probe has no reason to fail in a source checkout.
 @ __tc_check s want s current → i {
     : String target ( __tc_resolve_target want )
-    ? == ( string_len target ) 0 { ( string_free target ) ^ 1 } {}
+    ? == ( string_len target ) 0 { ^ 1 } {}
     ? ( update_check_is_release current ) {
         ? ( update_check_newer ( string_data target ) current ) {
             ( nurl_print `update available: ` )
@@ -178,7 +174,6 @@ $ `stdlib/ext/update_check.nu`
         ( nurl_print ( string_data target ) )
         ( nurl_print `\n` )
     }
-    ( string_free target )
     ^ 0
 }
 
@@ -190,7 +185,6 @@ $ `stdlib/ext/update_check.nu`
     : String prefix ( toolchain_prefix )
     ? == ( string_len prefix ) 0 {
         ( nurl_eprintln `nurl upgrade: cannot locate the toolchain — set $NURL_HOME to its install prefix.` )
-        ( string_free prefix )
         ^ 1
     } {}
 
@@ -198,23 +192,17 @@ $ `stdlib/ext/update_check.nu`
     // almost never what the user meant, so it takes an explicit --force.
     ? | ( update_check_is_release current ) force {} {
         ( __tc_report_dev current )
-        ( string_free prefix )
         ^ 1
     }
 
     : String installer ( toolchain_installer ( string_data prefix ) )
     ? == ( string_len installer ) 0 {
         ( __tc_report_no_installer ( string_data prefix ) )
-        ( string_free installer )
-        ( string_free prefix )
         ^ 1
     } {}
 
     : String target ( __tc_resolve_target want )
     ? == ( string_len target ) 0 {
-        ( string_free target )
-        ( string_free installer )
-        ( string_free prefix )
         ^ 1
     } {}
 
@@ -225,9 +213,6 @@ $ `stdlib/ext/update_check.nu`
         ( nurl_print `already on ` )
         ( nurl_print current )
         ( nurl_print ` — nothing to do (use --force to reinstall it).\n` )
-        ( string_free target )
-        ( string_free installer )
-        ( string_free prefix )
         ^ 0
     } {}
 
@@ -270,7 +255,6 @@ $ `stdlib/ext/update_check.nu`
         ( vec_push [s] args ( string_data prefix ) )
     }
     : i rc ( __tc_stream prog args )
-    ( vec_free [s] args )
 
     ? == rc 0 {
         // The cached probe still names the version we just left behind;
@@ -285,8 +269,5 @@ $ `stdlib/ext/update_check.nu`
         ( nurl_eprintln `nurl upgrade: the installer did not complete — the toolchain is unchanged.` )
     }
 
-    ( string_free target )
-    ( string_free installer )
-    ( string_free prefix )
     ^ ? == rc 0 0 1
 }

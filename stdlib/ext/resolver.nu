@@ -54,9 +54,9 @@ $ `stdlib/std/cmp.nu`
         ResolveFetch failure → {
             : String url ( registry_index_url ( string_data . failure registry ) ( string_data . failure name ) )
             ( string_push_str text `: ` ) ( string_push_str text ( string_data url ) )
-            ( string_push_str text `: ` ) ( string_free url )
+            ( string_push_str text `: ` )
             : String cause ( registry_fetch_err_text . failure cause )
-            ( string_push_str text ( string_data cause ) ) ( string_free cause )
+            ( string_push_str text ( string_data cause ) )
         }
         _ → {}
     }
@@ -97,25 +97,6 @@ $ `stdlib/std/cmp.nu`
         ( vec_new [__SolveNode] ) ( map_new [__SolveKey i] )
         ( vec_new [i] ) ( vec_new [__SolveFrame] ) ( vec_new [i] ) ( vec_new [i] )
     }
-}
-
-@ __solver_free sink __Solver solver → v {
-    ( map_free [s i] . solver registry_ids )
-    ( map_free [s i] . solver requirement_ids )
-    ( map_free [__SolveKey i] . solver node_ids )
-    ( vec_free_with [String] . solver registries \ String text → v { ( string_free text ) } )
-    ( vec_free_with [__SolveReq] . solver requirements \ __SolveReq req → v {
-        ( string_free . req text ) ( semver_req_free . req value )
-    } )
-    ( vec_free_with [__SolveNode] . solver nodes \ __SolveNode node → v {
-        ( string_free . node name ) ( regindex_free . node index )
-        ( vec_free [__SolveConstraint] . node requirements ) ( vec_free [i] . node domain ) ( vec_free [i] . node explanation )
-        ( vec_free_with [__SolveVersion] . node versions \ __SolveVersion version → v {
-            ( semver_free . version value ) ( vec_free [__SolveEdge] . version edges )
-        } )
-    } )
-    ( vec_free [i] . solver trail ) ( vec_free [i] . solver pending ) ( vec_free [i] . solver conflict )
-    ( vec_free_with [__SolveFrame] . solver frames \ __SolveFrame frame → v { ( vec_free [i] . frame candidates ) ( vec_free [i] . frame conflicts ) } )
 }
 
 @ __solver_registry __Solver solver String normalized → i {
@@ -190,8 +171,11 @@ $ `stdlib/std/cmp.nu`
             }
         }
         T index → {
-            ? ! ( string_eq . index name . node name ) { ( regindex_free index ) ^ @ !i ResolveErr { F ResolveBadIndex } } {}
-            ( regindex_free . node index ) = . node index index
+            ? ! ( string_eq . index name . node name ) { ^ @ !i ResolveErr { F ResolveBadIndex } } {}
+            // The placeholder index leaves the node (dropped here).
+            : RegIndex placeholder . node index
+            ( mem_take placeholder )
+            = . node index index
             = . node loaded 1
             : i n ( vec_len [IdxVersion] . index versions )
             : ~ i k 0
@@ -495,8 +479,8 @@ $ `stdlib/std/cmp.nu`
             : s url ? > ( string_len . dep registry ) 0 ( string_data . dep registry ) default_registry
             : ~ i registry -1
             ?? ( registry_url url ) {
-                F empty → { ( string_free empty ) ^ @ !i ResolveErr { F ResolveBadRegistry } }
-                T normalized → { = registry ( __solver_registry solver normalized ) ( string_free normalized ) }
+                F empty → { ^ @ !i ResolveErr { F ResolveBadRegistry } }
+                T normalized → { = registry ( __solver_registry solver normalized ) }
             }
             ?? ( __solver_requirement solver ( string_data . dep version ) ) {
                 F error → { ^ @ !i ResolveErr { F error } }
@@ -541,10 +525,6 @@ $ `stdlib/std/cmp.nu`
     ^ result
 }
 
-@ __solver_frame_free sink __SolveFrame frame → v {
-    ( vec_free [i] . frame candidates ) ( vec_free [i] . frame conflicts )
-}
-
 // Jump over decisions that cannot affect this contradiction. Each retained
 // frame's cause set contains only earlier levels, so reused stack positions
 // cannot leave stale reasons after an ancestor's assignment changes.
@@ -556,7 +536,7 @@ $ `stdlib/std/cmp.nu`
     ~ < k n { ? > . causes k target { = target . causes k } {} = k + k 1 }
     ? < target 0 { ^ F } {}
     ~ > ( vec_len [__SolveFrame] . solver frames ) + target 1 {
-        ?? ( __solver_pop solver ) { T frame → { ( __solver_frame_free frame ) } F _ → {} }
+        : ?__SolveFrame _popped ( __solver_pop solver )  // dropped here
     }
     : __SolveFrame frame . ( vec_data [__SolveFrame] . solver frames ) target
     : ~ i j 0
@@ -570,7 +550,7 @@ $ `stdlib/std/cmp.nu`
 @ resolve_registry ( Vec Dep ) roots s default_registry ( @ !RegIndex RegistryFetchErr s s ) fetch → !( Vec LockPkg ) ResolveErr {
     : __Solver solver ( __solver_new )
     ?? ( __solver_roots solver roots default_registry ) {
-        F error → { ( __solver_free solver ) ^ @ !( Vec LockPkg ) ResolveErr { F error } }
+        F error → { ^ @ !( Vec LockPkg ) ResolveErr { F error } }
         T _ → {}
     }
     : ~ ResolveErr failure ResolveConflict
@@ -579,14 +559,12 @@ $ `stdlib/std/cmp.nu`
         : ~ b jumping F
         ?? ( __solver_decision solver fetch ) {
             F error → {
-                ? ! ( __resolve_retryable error ) { ( __solver_free solver ) ^ @ !( Vec LockPkg ) ResolveErr { F error } } {}
+                ? ! ( __resolve_retryable error ) { ^ @ !( Vec LockPkg ) ResolveErr { F error } } {}
                 = failure error = jumping T
             }
             T frame → {
                 ? < . frame node 0 {
-                    ( __solver_frame_free frame )
                     : ( Vec LockPkg ) locked ( __solver_lock solver )
-                    ( __solver_free solver )
                     ^ @ !( Vec LockPkg ) ResolveErr { T locked }
                 } {}
                 ( vec_push [__SolveFrame] . solver frames frame )
@@ -629,7 +607,6 @@ $ `stdlib/std/cmp.nu`
                             ~ < j ( vec_len [i] . frame conflicts ) {
                                 ( __solver_reason . solver conflict . reasons j ) = j + j 1
                             }
-                            ( __solver_frame_free frame )
                             = jumping T
                         }
                     }
@@ -637,6 +614,5 @@ $ `stdlib/std/cmp.nu`
             } {}
         }
     }
-    ( __solver_free solver )
     ^ @ !( Vec LockPkg ) ResolveErr { F failure }
 }

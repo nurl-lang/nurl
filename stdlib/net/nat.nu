@@ -210,9 +210,6 @@ $ `stdlib/net/stun.nu`
     ^ cs
 }
 
-// Let go of `cs` now rather than at the end of its owner's scope.
-@ nat_candidates_free sink ( Vec Candidate ) cs → v {}
-
 // ── NAT-type probe ───────────────────────────────────────────────
 
 // Classify from two reflexive observations: same endpoint ⇒ independent

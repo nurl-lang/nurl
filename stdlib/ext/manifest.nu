@@ -35,8 +35,8 @@
 //
 //   ( manifest_parse s src s path_for_diag ) → ! Manifest ManifestErr
 //   ( manifest_load s path )                  → ! Manifest ManifestErr
-//   ( manifest_free Manifest m )              → v
-//   ( dep_free Dep d )                        → v
+//   ( manifest_free Manifest m )              → v   early release (optional)
+//   ( dep_free Dep d )                        → v   early release (optional)
 //   ( dep_is_path Dep d )  / ( dep_is_registry Dep d ) → b
 //   ( manifest_err_name ManifestErr e )       → s
 
@@ -86,12 +86,8 @@ $ `stdlib/ext/semver.nu`
 
 // ── Cascade-free helpers ─────────────────────────────────────────
 
-@ dep_free sink Dep d → v {
-    ( string_free . d name )
-    ( string_free . d path )
-    ( string_free . d version )
-    ( string_free . d registry )
-}
+// Let go of `d` now rather than at the end of its owner's scope.
+@ dep_free sink Dep d → v {}
 
 // A dependency resolved from a local path (`path` set) vs. fetched from
 // a registry by semver requirement (`path` empty).
@@ -113,35 +109,8 @@ $ `stdlib/ext/semver.nu`
     ^ > ( string_len . d version ) 0
 }
 
-@ manifest_free sink Manifest m → v {
-    ( string_free . m name )
-    ( string_free . m version )
-    ( string_free . m nurl_version )
-    ( string_free . m description )
-    ( string_free . m license )
-    ( string_free . m repository )
-    ( string_free . m postinstall )
-    ( string_free . m registry )
-    : i n ( vec_len [Dep] . m dependencies )
-    : ~ i k 0
-    ~ < k n {
-        : ?Dep dk ( vec_get [Dep] . m dependencies k )
-        ?? dk {
-            T dv → ( dep_free dv )
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ( vec_free [Dep] . m dependencies )
-    : i na ( vec_len [String] . m assets )
-    : ~ i ak 0
-    ~ < ak na {
-        : ?String ao ( vec_get [String] . m assets ak )
-        ?? ao { T av → ( string_free av ) F _ → {} }
-        = ak + ak 1
-    }
-    ( vec_free [String] . m assets )
-}
+// Let go of `m` now rather than at the end of its owner's scope.
+@ manifest_free sink Manifest m → v {}
 
 // ── Field extraction helpers ─────────────────────────────────────
 //
@@ -157,8 +126,8 @@ $ `stdlib/ext/semver.nu`
         T tv → {
             : ?String s ( toml_as_str tv )
             ?? s {
-                T sv → { ( string_free out ) = out sv }
-                F empty → ( string_free empty )
+                T sv → { = out sv }
+                F empty → {}
             }
         }
         F _ → {}
@@ -187,7 +156,7 @@ $ `stdlib/ext/semver.nu`
                                 : ?String sv ( toml_as_str ev )
                                 ?? sv {
                                     T s → ( vec_push [String] out s )
-                                    F empty → ( string_free empty )
+                                    F empty → {}
                                 }
                             }
                             F _ → {}
@@ -226,7 +195,6 @@ $ `stdlib/ext/semver.nu`
         TStr sv → {
             // Bare version string → registry dep against the default
             // registry. Copy as version, leave path + registry empty.
-            ( string_free version )
             = version ( string_from ( string_data sv ) )
         }
         TTable _ → {
@@ -236,8 +204,8 @@ $ `stdlib/ext/semver.nu`
                 T pj → {
                     : ?String ps ( toml_as_str pj )
                     ?? ps {
-                        T s → { ( string_free path ) = path s }
-                        F empty → ( string_free empty )
+                        T s → { = path s }
+                        F empty → {}
                     }
                 }
                 F _ → {}
@@ -247,8 +215,8 @@ $ `stdlib/ext/semver.nu`
                 T vj → {
                     : ?String vs ( toml_as_str vj )
                     ?? vs {
-                        T s → { ( string_free version ) = version s }
-                        F empty → ( string_free empty )
+                        T s → { = version s }
+                        F empty → {}
                     }
                 }
                 F _ → {}
@@ -258,8 +226,8 @@ $ `stdlib/ext/semver.nu`
                 T rj → {
                     : ?String rs ( toml_as_str rj )
                     ?? rs {
-                        T s → { ( string_free registry ) = registry s }
-                        F empty → ( string_free empty )
+                        T s → { = registry s }
+                        F empty → {}
                     }
                 }
                 F _ → {}
@@ -282,15 +250,10 @@ $ `stdlib/ext/semver.nu`
             // Required fields.
             : String name ( __field_str root `package.name` )
             ? == 0 ( string_len name ) {
-                ( string_free name )
-                ( toml_value_free root )
                 ^ @ !Manifest ManifestErr { F # ManifestErr ManifestMissingName }
             } {}
             : String version ( __field_str root `package.version` )
             ? == 0 ( string_len version ) {
-                ( string_free name )
-                ( string_free version )
-                ( toml_value_free root )
                 ^ @ !Manifest ManifestErr { F # ManifestErr ManifestMissingVersion }
             } {}
             // Optional fields.
@@ -305,13 +268,11 @@ $ `stdlib/ext/semver.nu`
             }
             ? > ( string_len nurl_min ) 0 {
                 ?? ( semver_parse ( string_data nurl_min ) ) {
-                    T parsed → ( semver_free parsed )
+                    T parsed → {}
                     F _ → { = min_valid F }
                 }
             } {}
             ? ! min_valid {
-                ( string_free name ) ( string_free version ) ( string_free nurl_min )
-                ( toml_value_free root )
                 ^ @ !Manifest ManifestErr { F ManifestBadShape }
             } {}
             : String description ( __field_str root `package.description` )
@@ -350,7 +311,6 @@ $ `stdlib/ext/semver.nu`
                 }
                 F _ → {}
             }
-            ( toml_value_free root )
             ^ @ !Manifest ManifestErr { T @ Manifest { name version nurl_min description license registry repository postinstall deps assets } }
         }
     }
@@ -369,10 +329,8 @@ $ `stdlib/ext/semver.nu`
                 F _ → {}
                 T required → {
                     = supported >= ( semver_compare current required ) 0
-                    ( semver_free required )
                 }
             }
-            ( semver_free current )
             ^ supported
         }
     }
@@ -392,7 +350,6 @@ $ `stdlib/ext/semver.nu`
                     = result @ !Manifest ManifestErr { F ManifestParseFailed }
                 }
             } {}
-            ( string_free text )
             ^ result
         }
     }

@@ -60,12 +60,10 @@ $ `stdlib/ext/http_cli.nu`
 @ __uc_cache_path → String {
     : ~ String base ( string_new )
     ?? ( env_get `NURL_HOME` ) {
-        T v → { ( string_free base ) = base v }
+        T v → { = base v }
         F → {
             : String home ( env_var_or `HOME` `.` )
-            ( string_free base )
             = base ( path_join ( string_data home ) `.nurl` )
-            ( string_free home )
         }
     }
     : String p ( path_join ( string_data base ) `.update-check` )
@@ -82,16 +80,12 @@ $ `stdlib/ext/http_cli.nu`
             ?? ( semver_parse ( string_data cs ) ) {
                 T cv → {
                     = gt ( semver_gt lv cv )
-                    ( semver_free cv )
                 }
                 F _ → {}
             }
-            ( semver_free lv )
         }
         F _ → {}
     }
-    ( string_free ls )
-    ( string_free cs )
     ^ gt
 }
 
@@ -100,7 +94,6 @@ $ `stdlib/ext/http_cli.nu`
     : String hb ( string_new )
     ( string_push_str hb `User-Agent: nurl-update-check\r\nAccept: application/vnd.github+json\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request `GET` `https://api.github.com/repos/nurl-lang/nurl/releases/latest` `` ( string_data hb ) )
-    ( string_free hb )
     ?? rr {
         T resp → {
             : ~ ? String out @ ?String { F }
@@ -112,12 +105,10 @@ $ `stdlib/ext/http_cli.nu`
                             T tj → { = out @ ?String { T ( string_from ( json_str_data tj ) ) } }
                             F → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
             } {}
-            ( httpc_resp_free resp )
             ^ out
         }
         F _ → { ^ @ ?String { F } }
@@ -130,9 +121,7 @@ $ `stdlib/ext/http_cli.nu`
     : b _1 ( json_obj_set j `checked` ( json_int secs ) )
     : b _2 ( json_obj_set j `latest` ( json_str_lit latest ) )
     : String txt ( json_stringify j )
-    ( json_free j )
     ?? ( write_file path ( string_data txt ) ) { T _ → {} F _ → {} }
-    ( string_free txt )
 }
 
 // the cache read result: was the probe fresh (within the TTL), and the
@@ -141,8 +130,6 @@ $ `stdlib/ext/http_cli.nu`
     b fresh
     String latest
 }
-
-@ __uc_cache_free sink UcCache c → v { ( string_free . c latest ) }
 
 @ __uc_read_cache s path i now → UcCache {
     : ~ b fresh F
@@ -162,16 +149,14 @@ $ `stdlib/ext/http_cli.nu`
                         ?? ( json_obj_get j `latest` ) {
                             T lj → {
                                 : s ld ( json_str_data lj )
-                                ? != ( nurl_str_eq ld `-` ) 0 {} { ( string_free latest ) = latest ( string_from ld ) }
+                                ? != ( nurl_str_eq ld `-` ) 0 {} { = latest ( string_from ld ) }
                             }
                             F → {}
                         }
                     } {}
-                    ( json_free j )
                 }
                 F _ → {}
             }
-            ( string_free txt )
         }
         F → {}
     }
@@ -220,13 +205,12 @@ $ `stdlib/ext/http_cli.nu`
     ? ( file_exists ( string_data cp ) ) {
         ?? ( file_delete ( string_data cp ) ) { T _ → {} F _ → {} }
     } {}
-    ( string_free cp )
 }
 
 @ update_check_notice s current → v {
     // opt-out and noise guards
-    ?? ( env_get `NURL_NO_UPDATE_CHECK` ) { T v → { ( string_free v ) ^ } F → {} }
-    ?? ( env_get `CI` ) { T v → { ( string_free v ) ^ } F → {} }
+    ?? ( env_get `NURL_NO_UPDATE_CHECK` ) { T v → { ^ } F → {} }
+    ?? ( env_get `CI` ) { T v → { ^ } F → {} }
     ? ( __uc_is_release current ) {} { ^ }
     ? ( term_is_tty 2 ) {} { ^ }
 
@@ -235,26 +219,22 @@ $ `stdlib/ext/http_cli.nu`
     : UcCache c ( __uc_read_cache ( string_data cp ) now )
     : ~ String latest ( string_from ( string_data . c latest ) )
     : b fresh . c fresh
-    ( __uc_cache_free c )
 
     ? fresh {} {
         // one probe per day; record the outcome either way so a persistent
         // failure does not re-probe on every run
         ?? ( __uc_fetch_latest ) {
             T v → {
-                ( string_free latest )
                 = latest v
                 ( __uc_write_cache ( string_data cp ) now ( string_data latest ) )
             }
             F → { ( __uc_write_cache ( string_data cp ) now `-` ) }
         }
     }
-    ( string_free cp )
 
     ? > ( string_len latest ) 0 {
         ? ( __uc_newer ( string_data latest ) current ) {
             ( __uc_notice ( string_data latest ) current )
         } {}
     } {}
-    ( string_free latest )
 }

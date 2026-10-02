@@ -29,7 +29,7 @@
 //   ( regindex_parse json )        → ! RegIndex RegIndexErr
 //   ( regindex_select idx req )    → i   highest non-yanked version index
 //                                        satisfying `req`, or -1
-//   ( regindex_free idx )          → v
+//   ( regindex_free idx )          → v   early release (optional)
 //   ( regindex_err_name e )        → s
 
 $ `stdlib/core/string.nu`
@@ -68,35 +68,8 @@ $ `stdlib/ext/semver.nu`
 
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
-@ idxdep_free sink IdxDep d → v {
-    ( string_free . d name )
-    ( string_free . d req )
-}
-
-@ idxversion_free sink IdxVersion v → v {
-    ( string_free . v version )
-    ( string_free . v checksum )
-    : i n ( vec_len [IdxDep] . v deps )
-    : ~ i k 0
-    ~ < k n {
-        : ?IdxDep dk ( vec_get [IdxDep] . v deps k )
-        ?? dk { T d → ( idxdep_free d ) F → {} }
-        = k + k 1
-    }
-    ( vec_free [IdxDep] . v deps )
-}
-
-@ regindex_free sink RegIndex idx → v {
-    ( string_free . idx name )
-    : i n ( vec_len [IdxVersion] . idx versions )
-    : ~ i k 0
-    ~ < k n {
-        : ?IdxVersion vk ( vec_get [IdxVersion] . idx versions k )
-        ?? vk { T v → ( idxversion_free v ) F → {} }
-        = k + k 1
-    }
-    ( vec_free [IdxVersion] . idx versions )
-}
+// Let go of `idx` now rather than at the end of its owner's scope.
+@ regindex_free sink RegIndex idx → v {}
 
 // ── JSON field helpers ────────────────────────────────────────────────
 
@@ -215,7 +188,6 @@ $ `stdlib/ext/semver.nu`
         F _ → ^ @ !RegIndex RegIndexErr { F # RegIndexErr RegIdxParseFailed }
         T root → {
             ? ! ( __ridx_shape root ) {
-                ( json_free root )
                 ^ @ !RegIndex RegIndexErr { F RegIdxBadShape }
             } {}
             : String name ( __ridx_str root `name` )
@@ -236,7 +208,6 @@ $ `stdlib/ext/semver.nu`
                 }
                 F → {}
             }
-            ( json_free root )
             ^ @ !RegIndex RegIndexErr { T @ RegIndex { name versions } }
         }
     }
@@ -270,7 +241,7 @@ $ `stdlib/ext/semver.nu`
                                                 T biv → {
                                                     : !Semver SemverErr bp ( semver_parse ( string_data . biv version ) )
                                                     ?? bp {
-                                                        T bv → { ? ( semver_gt cv bv ) { = best k } {} ( semver_free bv ) }
+                                                        T bv → { ? ( semver_gt cv bv ) { = best k } {} }
                                                         F → {}
                                                     }
                                                 }
@@ -278,7 +249,6 @@ $ `stdlib/ext/semver.nu`
                                             }
                                         }
                                     } {}
-                                    ( semver_free cv )
                                 }
                                 F → {}
                             }
@@ -288,7 +258,6 @@ $ `stdlib/ext/semver.nu`
                 }
                 = k + k 1
             }
-            ( semver_req_free r )
         }
     }
     ^ best

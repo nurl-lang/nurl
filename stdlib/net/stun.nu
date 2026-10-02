@@ -48,9 +48,6 @@ $ `stdlib/std/random.nu`
     ( Vec u ) msg
 }
 
-// Let go of `r` now rather than at the end of its owner's scope.
-@ stun_request_free sink StunRequest r → v {}
-
 // Build a Binding request carrying the given 12-byte transaction id.
 @ stun_build_request_with ( Vec u ) txid → ( Vec u ) {
     : ( Vec u ) m ( vec_new [u] )

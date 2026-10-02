@@ -28,7 +28,7 @@
 //   ( lock_serialize pkgs )    → String                (sorted, deterministic)
 //   ( lock_parse src )         → ! ( Vec LockPkg ) LockErr
 //   ( lock_load path )         → ! ( Vec LockPkg ) LockErr
-//   ( lock_pkg_free p ) / ( lockpkgs_free pkgs ) → v
+//   ( lockpkgs_free pkgs )     → v                     early release (optional)
 //   ( lock_err_name e )        → s
 //
 // String fields use the shared TOML basic-string serializer.
@@ -70,23 +70,8 @@ $ `stdlib/std/fs.nu`
     }
 }
 
-@ lock_pkg_free sink LockPkg p → v {
-    ( string_free . p name )
-    ( string_free . p version )
-    ( string_free . p source )
-    ( string_free . p checksum )
-}
-
-@ lockpkgs_free sink ( Vec LockPkg ) pkgs → v {
-    : i n ( vec_len [LockPkg] pkgs )
-    : ~ i k 0
-    ~ < k n {
-        : ?LockPkg po ( vec_get [LockPkg] pkgs k )
-        ?? po { T p → ( lock_pkg_free p ) F → {} }
-        = k + k 1
-    }
-    ( vec_free [LockPkg] pkgs )
-}
+// Let go of `pkgs` now rather than at the end of its owner's scope.
+@ lockpkgs_free sink ( Vec LockPkg ) pkgs → v {}
 
 // ── Serialize ─────────────────────────────────────────────────────────
 
@@ -149,7 +134,6 @@ $ `stdlib/std/fs.nu`
         }
         = i + i 1
     }
-    ( vec_free [* LockPkg] order )
     ^ out
 }
 
@@ -161,7 +145,7 @@ $ `stdlib/std/fs.nu`
     ?? v {
         T tv → {
             : ?String s ( toml_as_str tv )
-            ?? s { T sv → { ( string_free out ) = out sv } F empty → ( string_free empty ) }
+            ?? s { T sv → { = out sv } F empty → {} }
         }
         F → {}
     }
@@ -202,9 +186,7 @@ $ `stdlib/std/fs.nu`
                 }
                 F → {}
             }
-            ( toml_value_free root )
             ? == shape_ok 0 {
-                ( lockpkgs_free out )
                 ^ @ !( Vec LockPkg ) LockErr { F # LockErr LockBadShape }
             } {}
             ^ @ !( Vec LockPkg ) LockErr { T out }
@@ -217,7 +199,6 @@ $ `stdlib/std/fs.nu`
         F _ → { ^ @ !( Vec LockPkg ) LockErr { F LockReadFailed } }
         T text → {
             : !( Vec LockPkg ) LockErr result ( lock_parse ( string_data text ) )
-            ( string_free text )
             ^ result
         }
     }

@@ -209,7 +209,6 @@ $ `stdlib/core/vec.nu`
                 ? blank {
                     // blank line ends a pending doc block (and the header)
                     = header_done T
-                    ( string_free pending )
                     = pending ( string_with_cap 256 )
                     = pending_n 0
                 } {
@@ -250,7 +249,6 @@ $ `stdlib/core/vec.nu`
                         }
                     } {}
                     // any non-decl code line clears the pending doc
-                    ( string_free pending )
                     = pending ( string_with_cap 256 )
                     = pending_n 0
                 }
@@ -275,7 +273,6 @@ $ `stdlib/core/vec.nu`
         } {}
         = pos ? < le n + le 1 le
     }
-    ( string_free type_prose )
 
     ? > ( string_len header ) 0 {
         ( string_push_str out ( string_data header ) )

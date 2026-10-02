@@ -47,7 +47,6 @@ $ `stdlib/ext/http_cli_types.nu`
         F _ → { ^ @ !RegIndex RegistryFetchErr { F RegistryBadIndex } }
         T index → {
             ? != 0 ( nurl_str_eq name ( string_data . index name ) ) { ^ @ !RegIndex RegistryFetchErr { T index } } {}
-            ( regindex_free index )
             ^ @ !RegIndex RegistryFetchErr { F RegistryBadIndex }
         }
     }

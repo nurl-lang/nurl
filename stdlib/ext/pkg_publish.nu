@@ -237,15 +237,11 @@ $ `stdlib/ext/http_cli.nu`
                             ? & > to from == ( string_get t - to 1 ) 47 { = to - to 1 } {}
                             ( vec_push [String] pats ( string_substr t from - to from ) )
                         } {}
-                        ( string_free t )
-                        ( string_free raw )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] lines )
-            ( string_free text )
         }
         F _ → {}
     }
@@ -354,7 +350,7 @@ $ `stdlib/ext/http_cli.nu`
                                         // read, so it costs no extra I/O.
                                         ? & ( __pack_extensionless nm_s )
                                         ( __pack_is_executable_image bytes )
-                                        { ( vec_free [u] bytes ) }
+                                        {}
                                         { ( vec_push [TarEntry] out ( tar_entry_file ( string_data relpath ) bytes ) ) }
                                     }
                                     F fe → { ? ( __pack_vanished fe ) {} { = rc 1 } }
@@ -366,16 +362,13 @@ $ `stdlib/ext/http_cli.nu`
                                 } {}
                             }
                         } {}
-                        ( string_free nm )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] entries )
         }
     }
-    ( vec_free_with [String] scope \ String p → v { ( string_free p ) } )
     ^ rc
 }
 
@@ -388,9 +381,7 @@ $ `stdlib/ext/http_cli.nu`
     : ( Vec TarEntry ) ents ( vec_new [TarEntry] )
     : ( Vec String ) ignores ( __pack_read_ignores root )
     : i cr ( __pack_collect root `` ents ignores )
-    ( vec_free_with [String] ignores \ String p → v { ( string_free p ) } )
     ? != cr 0 {
-        ( tar_entries_free ents )
         ^ @ !( Vec String ) PackErr { F # PackErr PackReadFailed }
     } {}
     : ( Vec String ) names ( vec_new [String] )
@@ -403,7 +394,6 @@ $ `stdlib/ext/http_cli.nu`
         }
         = k + k 1
     }
-    ( tar_entries_free ents )
     ^ @ !( Vec String ) PackErr { T names }
 }
 
@@ -411,22 +401,17 @@ $ `stdlib/ext/http_cli.nu`
     : ( Vec TarEntry ) ents ( vec_new [TarEntry] )
     : ( Vec String ) ignores ( __pack_read_ignores root )
     : i cr ( __pack_collect root `` ents ignores )
-    ( vec_free_with [String] ignores \ String p → v { ( string_free p ) } )
     ? != cr 0 {
-        ( tar_entries_free ents )
         ^ @ !( Vec u ) PackErr { F # PackErr PackReadFailed }
     } {}
     ? == ( vec_len [TarEntry] ents ) 0 {
-        ( tar_entries_free ents )
         ^ @ !( Vec u ) PackErr { F # PackErr PackEmpty }
     } {}
     : !( Vec u ) TarErr tr ( tar_create ents )
-    ( tar_entries_free ents )
     ?? tr {
         F _ → ^ @ !( Vec u ) PackErr { F # PackErr PackTarFailed }
         T arc → {
             : !( Vec u ) CompressErr gr ( gzip_compress arc )
-            ( vec_free [u] arc )
             ?? gr {
                 F _ → ^ @ !( Vec u ) PackErr { F # PackErr PackGzipFailed }
                 T gz → ^ @ !( Vec u ) PackErr { T gz }
@@ -469,12 +454,10 @@ $ `stdlib/ext/http_cli.nu`
     } {}
     ( string_push_str hb `Content-Type: application/gzip\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request_bytes `POST` ( string_data url ) tarball ( string_data hb ) )
-    ( string_free url )
     ?? rr {
         F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
             : i st ( httpc_status resp )
-            ( httpc_resp_free resp )
             ^ ( __pub_status_map st )
         }
     }
@@ -511,12 +494,10 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str hb token )
     ( string_push_str hb `\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request `POST` ( string_data url ) `` ( string_data hb ) )
-    ( string_free url )
     ?? rr {
         F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
             : i st ( httpc_status resp )
-            ( httpc_resp_free resp )
             ^ ( __pub_status_map st )
         }
     }
@@ -540,12 +521,10 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str hb version )
     ( string_push_str hb `\r\n` )
     : !HttpcResp HttpcErr rr ( httpc_request `POST` ( string_data url ) `` ( string_data hb ) )
-    ( string_free url )
     ?? rr {
         F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
             : i st ( httpc_status resp )
-            ( httpc_resp_free resp )
             ^ ( __pub_status_map st )
         }
     }
