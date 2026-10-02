@@ -107,10 +107,10 @@ $ `tools/nurlfmt/tokenize.nu`
 // source layout as an owned String. The caller views the bytes
 // via `string_data` for the lifetime of the returned binding.
 
-@ pretty_print ( Vec FmtTok ) toks → String {
+@ pretty_print FmtToks ts → String {
     : String out ( string_with_cap 4096 )
 
-    : i n ( vec_len [FmtTok] toks )
+    : i n ( vec_len [FmtTok] . ts toks )
     : ~ i bd 0  // brace depth (drives indent)
     : ~ i pd 0  // paren+bracket depth (informational)
     : ~ i bk 0  // bracket depth `[...]` — content tight-spaced by rule
@@ -153,10 +153,10 @@ $ `tools/nurlfmt/tokenize.nu`
 
     : ~ i idx 0
     ~ < idx n {
-        ?? ( vec_get [FmtTok] toks idx ) {
+        ?? ( vec_get [FmtTok] . ts toks idx ) {
             T t → {
                 : i kind . t kind
-                : s text . t text
+                : s text ( fmt_tok_text ts t )
                 : i nl . t nl_before
 
                 // A `%` here is a `%Trait` object TYPE sigil (docs/spec.md §4.9),

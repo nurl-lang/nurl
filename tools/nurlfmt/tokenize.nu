@@ -31,8 +31,21 @@ $ `stdlib/core/vec.nu`
 
 : FmtTok {
     i kind
-    s text
+    i text  // byte offset of this token's NUL-terminated text in FmtToks.text
     i nl_before
+}
+
+// The token stream: every token's text is copied, NUL-terminated, into
+// one byte buffer, so a whole file costs two allocations that the
+// FmtToks owner releases (no per-token allocation, nothing to free).
+: FmtToks {
+    ( Vec FmtTok ) toks
+    ( Vec u ) text
+}
+
+// Text of token `t` as a C string; valid while `ts` lives.
+@ fmt_tok_text FmtToks ts FmtTok t → s {
+    ^ # s + # i ( vec_data [u] . ts text ) . t text
 }
 
 // ── Byte-class predicates ──────────────────────────────────────
@@ -103,16 +116,17 @@ $ `stdlib/core/vec.nu`
 
 // ── Token emission ─────────────────────────────────────────────
 // Centralised helper so callers only manage the source-window
-// [start, end) and the kind. The `text` slice is constructed
-// inline in the struct literal so the compiler does NOT bind it
-// to a local: a named owned binding would be auto-dropped at the
-// helper's scope exit, leaving a dangling pointer in the Vec.
-// Instead the Vec's elements hold the only reference; cleanup is
-// the caller's responsibility (see tokens_free).
-@ __fmt_emit ( Vec FmtTok ) toks s src i start i end i kind i nl_acc → v {
+// [start, end) and the kind; the text goes onto `buf`.
+@ __fmt_emit ( Vec FmtTok ) toks ( Vec u ) buf s src i start i end i kind i nl_acc → v {
     : i nl_clamped ? > nl_acc 2 2 nl_acc
-    ( vec_push [FmtTok] toks
-    @ FmtTok { kind ( nurl_str_slice src start - end start ) nl_clamped } )
+    : i off ( vec_len [u] buf )
+    : i len - end start
+    ( vec_reserve [u] buf + len 1 )
+    : s dst # s + # i ( vec_data [u] buf ) off
+    ( nurl_memcpy dst # s + # i src start len )
+    ( vec_set_len [u] buf + off len )
+    ( vec_push [u] buf # u 0 )
+    ( vec_push [FmtTok] toks @ FmtTok { kind off nl_clamped } )
 }
 
 // Match a UTF-8 `→` (E2 86 92) at index i. Out-of-range slots read
@@ -124,11 +138,11 @@ $ `stdlib/core/vec.nu`
 }
 
 // ── Main tokenise driver ───────────────────────────────────────
-// Returns an owned Vec[FmtTok] ending with one TT_FMT_EOF entry.
-// Caller is responsible for releasing it via tokens_free.
-@ tokenize s src → ( Vec FmtTok ) {
+// Returns the token stream, ending with one TT_FMT_EOF entry.
+@ tokenize s src → FmtToks {
     : ( Vec FmtTok ) toks ( vec_with_cap [FmtTok] 256 )
     : i n ( nurl_str_len src )
+    : ( Vec u ) buf ( vec_with_cap [u] + + n / n 2 16 )
     : ~ i i 0
     : ~ i nl_acc 0
 
@@ -157,7 +171,7 @@ $ `stdlib/core/vec.nu`
                 ~ & < j n != ( nurl_str_get src j ) 10 {
                     = j + j 1
                 }
-                ( __fmt_emit toks src i j TT_FMT_COMMENT nl_acc )
+                ( __fmt_emit toks buf src i j TT_FMT_COMMENT nl_acc )
                 = nl_acc 0
                 = i j
             } {
@@ -195,7 +209,7 @@ $ `stdlib/core/vec.nu`
                                 } }
                         }
                     }
-                    ( __fmt_emit toks src i j TT_FMT_STR nl_acc )
+                    ( __fmt_emit toks buf src i j TT_FMT_STR nl_acc )
                     = nl_acc 0
                     = i j
                 } {
@@ -219,7 +233,7 @@ $ `stdlib/core/vec.nu`
                             ~ & < j n ( fmt_is_ident_cont ( nurl_str_get src j ) ) {
                                 = j + j 1
                             }
-                            ( __fmt_emit toks src i j TT_FMT_INT nl_acc )
+                            ( __fmt_emit toks buf src i j TT_FMT_INT nl_acc )
                             = nl_acc 0
                             = i j
                         } {
@@ -248,7 +262,7 @@ $ `stdlib/core/vec.nu`
                                     }
                                 } {}
                             } {}
-                            ( __fmt_emit toks src i j kind nl_acc )
+                            ( __fmt_emit toks buf src i j kind nl_acc )
                             = nl_acc 0
                             = i j
                         }
@@ -270,14 +284,14 @@ $ `stdlib/core/vec.nu`
                                     = j + j 1
                                 }
                             }
-                            ( __fmt_emit toks src i j TT_FMT_IDENT nl_acc )
+                            ( __fmt_emit toks buf src i j TT_FMT_IDENT nl_acc )
                             = nl_acc 0
                             = i j
                         } {
 
                             // 6) Multi-byte arrow `→` (E2 86 92)
                             ? ( __fmt_is_arrow src i ) {
-                                ( __fmt_emit toks src i + i 3 TT_FMT_OP nl_acc )
+                                ( __fmt_emit toks buf src i + i 3 TT_FMT_OP nl_acc )
                                 = nl_acc 0
                                 = i + i 3
                             } {
@@ -289,59 +303,59 @@ $ `stdlib/core/vec.nu`
                                 //     returns 0 for OOB indices, so the third-
                                 //     byte check is bounds-safe at end-of-input.
                                 ? & & == c 46 == c2 46 == ( nurl_str_get src + i 2 ) 46 {
-                                    ( __fmt_emit toks src i + i 3 TT_FMT_OP nl_acc )
+                                    ( __fmt_emit toks buf src i + i 3 TT_FMT_OP nl_acc )
                                     = nl_acc 0
                                     = i + i 3
                                 } {
 
                                     // 7) Two-char operators
                                     ? & == c 61 == c2 61 {  // ==
-                                        ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                        ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                         = nl_acc 0
                                         = i + i 2
                                     } {
                                         ? & == c 33 == c2 61 {  // !=
-                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                            ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                             = nl_acc 0
                                             = i + i 2
                                         } {
                                             ? & == c 60 == c2 61 {  // <=
-                                                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                 = nl_acc 0
                                                 = i + i 2
                                             } {
                                                 ? & == c 62 == c2 61 {  // >=
-                                                    ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                    ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                     = nl_acc 0
                                                     = i + i 2
                                                 } {
                                                     ? & == c 60 == c2 60 {  // <<
-                                                        ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                        ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                         = nl_acc 0
                                                         = i + i 2
                                                     } {
                                                         ? & == c 62 == c2 62 {  // >>
-                                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                            ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                             = nl_acc 0
                                                             = i + i 2
                                                         } {
                                                             ? & == c 63 == c2 63 {  // ??
-                                                                ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                                 = nl_acc 0
                                                                 = i + i 2
                                                             } {
                                                                 ? & == c 94 == c2 94 {  // ^^
-                                                                    ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                    ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                                     = nl_acc 0
                                                                     = i + i 2
                                                                 } {
                                                                     ? & == c 124 == c2 124 {  // ||
-                                                                        ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                        ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                                         = nl_acc 0
                                                                         = i + i 2
                                                                     } {
                                                                         ? & == c 38 == c2 38 {  // &&
-                                                                            ( __fmt_emit toks src i + i 2 TT_FMT_OP nl_acc )
+                                                                            ( __fmt_emit toks buf src i + i 2 TT_FMT_OP nl_acc )
                                                                             = nl_acc 0
                                                                             = i + i 2
                                                                         } {
@@ -349,7 +363,7 @@ $ `stdlib/core/vec.nu`
                                                                             // 8) Fallback: emit any single byte as an OP token. Whitelisted
                                                                             //    grammar bytes go through this path; unknown bytes too,
                                                                             //    so the round-trip test catches any mismatch.
-                                                                            ( __fmt_emit toks src i + i 1 TT_FMT_OP nl_acc )
+                                                                            ( __fmt_emit toks buf src i + i 1 TT_FMT_OP nl_acc )
                                                                             = nl_acc 0
                                                                             = i + i 1
 
@@ -358,21 +372,8 @@ $ `stdlib/core/vec.nu`
     }
 
     : i nl_clamped ? > nl_acc 2 2 nl_acc
-    ( vec_push [FmtTok] toks @ FmtTok { TT_FMT_EOF `` nl_clamped } )
-    ^ toks
-}
-
-// Release owned token slices and the backing vec. EOF borrows a literal;
-// it is not an allocation and must never be passed to nurl_free.
-@ tokens_free sink ( Vec FmtTok ) toks → v {
-    : i n ( vec_len [FmtTok] toks )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [FmtTok] toks i ) {
-            T t → { ? != . t kind TT_FMT_EOF { ( nurl_free . t text ) } {} }
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ( vec_free [FmtTok] toks )
+    : i eof_off ( vec_len [u] buf )
+    ( vec_push [u] buf # u 0 )
+    ( vec_push [FmtTok] toks @ FmtTok { TT_FMT_EOF eof_off nl_clamped } )
+    ^ @ FmtToks { toks buf }
 }

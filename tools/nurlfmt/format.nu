@@ -8,11 +8,10 @@ $ `tools/nurlfmt/pretty.nu`
 
 // Format NUL-free source `src` to its canonical layout per docs/FORMAT.md.
 //
-// The token vector owns its source slices until pretty_print has copied
-// their bytes into the output. Release it after that borrow ends.
+// The token stream owns its text until pretty_print has copied the bytes
+// into the output; it is released when `toks` goes out of scope.
 @ format_source String src → String {
-    : ( Vec FmtTok ) toks ( tokenize ( string_data src ) )
+    : FmtToks toks ( tokenize ( string_data src ) )
     : String out ( pretty_print toks )
-    ( tokens_free toks )
     ^ out
 }
