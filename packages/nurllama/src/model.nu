@@ -59,7 +59,7 @@ $ `src/tokenizer.nu`
 : Llm {
     Gpu g
     LlmKernels ks
-    * Tok tok
+    Tok tok
     i n_embd
     i n_layer
     i n_head
@@ -826,7 +826,7 @@ $ `src/tokenizer.nu`
 
     // tokenizer first (it copies out of gg)
     ( __lm_lp `kv+cfg` )
-    : !*Tok String tr ( tok_new gg )
+    : !Tok String tr ( tok_new gg )
     ?? tr {
         T t → { = . m tok t }
         F e → {
@@ -1281,7 +1281,7 @@ $ `src/tokenizer.nu`
     ( nurl_free # s m )
 }
 
-@ llm_tok * Llm m → *Tok { ^ . m tok }
+@ llm_tok * Llm m → Tok { ^ . m tok }
 
 @ llm_n_vocab * Llm m → i { ^ . m n_vocab }
 

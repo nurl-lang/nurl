@@ -17,10 +17,13 @@
 //      unk_score = min_score − 10 and consecutive unks FUSE into one
 //   5. TemplateProcessing: <s> … </s> (ids read from the file)
 //
-//   ( uni_load path )              → !*Unigram String
+//   ( uni_load path )              → !Unigram String
 //   ( uni_encode u text add_special ( Vec i ) out ) → b
-//   ( uni_free u )                 → v
+//   ( uni_free u )                 → v   early release (optional)
 //   plus uni_n_vocab / uni_bos / uni_eos / uni_unk / uni_piece
+//
+// A Unigram is a handle: every copy is the same tokenizer, and the last
+// owner releases it. Nothing here is released by hand.
 //
 // Verified token-for-token against Hugging Face `tokenizers` on a
 // multilingual corpus (see tests/unigram_test.sh).
@@ -32,8 +35,9 @@ $ `stdlib/std/utf8.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Unigram {
+: UnigramImpl {
     ( Vec String ) pieces
     ( Vec f ) scores
     ( HashMap s i ) lookup
@@ -67,6 +71,19 @@ $ `stdlib/ext/json.nu`
     ( Vec i ) added_rstrip  // 1 = whitespace AFTER the token is consumed
 }
 
+// A Unigram is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same tokenizer, and the last owner releases it.
+: Unigram { s ctl }
+
+@ Unigram_share Unigram h → Unigram { ^ @ Unigram { # s ( rcbox_share # i . h ctl ) } }
+
+@ Unigram_drop sink Unigram h → v {
+    ( mem_forget h )
+    ( rcbox_release [UnigramImpl] # i . h ctl )
+}
+
+@ __Unigram_ptr Unigram h → *UnigramImpl { ^ ( rcbox_ptr [UnigramImpl] # i . h ctl ) }
+
 @ __uni_set ( HashMap s i ) m s key i val → v {
     : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
 }
@@ -92,7 +109,7 @@ $ `stdlib/ext/json.nu`
     ^ h
 }
 
-@ __uni_ft_build * Unigram u → v {
+@ __uni_ft_build * UnigramImpl u → v {
     : i nv ( vec_len [String] . u pieces )
     : ~ i cap 16
     ~ < cap * nv 2 { = cap * cap 2 }
@@ -126,7 +143,7 @@ $ `stdlib/ext/json.nu`
 
 // id of the piece equal to text[off .. off+len), or -1 — `h` is the
 // caller's rolling FNV over exactly those bytes.
-@ __uni_ft_get * Unigram u i h s text i off i len → i {
+@ __uni_ft_get * UnigramImpl u i h s text i off i len → i {
     : *u ftp # *u ( vec_data [i] . u ft )
     : ~ i sl & h . u ft_mask
     : ~ i found -1
@@ -162,8 +179,8 @@ $ `stdlib/ext/json.nu`
     ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
 }
 
-@ __uni_err s msg → !*Unigram String {
-    ^ @ !*Unigram String { F ( string_from msg ) }
+@ __uni_err s msg → !Unigram String {
+    ^ @ !Unigram String { F ( string_from msg ) }
 }
 
 // ── darts-clone double-array trie ────────────────────────────────────
@@ -195,9 +212,9 @@ $ `stdlib/ext/json.nu`
 @ __uni_value i u2 → i { ^ & u2 2147483647 }  // 0x7FFFFFFF
 
 // Longest charsmap match for text[p..): writes the matched byte length to
-// `mlen_cell`, returns the pool offset of the replacement (−1 = no match).
-@ __uni_norm_prefix * Unigram u s text i p i n * u mlen_cell → i {
-    ( nurl_poke mlen_cell 0 0 )
+// `mlen`, returns the pool offset of the replacement (−1 = no match).
+@ __uni_norm_prefix * UnigramImpl u s text i p i n inout i mlen → i {
+    = mlen 0
     ? . u has_norm {} { ^ -1 }
     : i nunits / ( vec_len [u] . u trie ) 4
     ? > nunits 0 {} { ^ -1 }
@@ -222,7 +239,7 @@ $ `stdlib/ext/json.nu`
                     ? ( __uni_has_leaf un ) {
                         ? < node nunits {
                             = best ( __uni_value ( __uni_unit . u trie node ) )
-                            ( nurl_poke mlen_cell 0 + - k p 1 )
+                            = mlen + - k p 1
                         } {}
                     } {}
                 } {}
@@ -234,7 +251,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Append the pool's NUL-terminated string at `off` to `out`.
-@ __uni_pool_push * Unigram u i off String out → v {
+@ __uni_pool_push * UnigramImpl u i off String out → v {
     : i pn ( vec_len [u] . u pool )
     : *u pp ( vec_data [u] . u pool )
     : ~ i k off
@@ -247,13 +264,12 @@ $ `stdlib/ext/json.nu`
 
 // Precompiled charsmap pass: longest-match replace, unmatched UTF-8 chars
 // copy through (invalid bytes copy as-is, one at a time).
-@ __uni_normalize * Unigram u s text i n String out → v {
-    : *u mlen ( nurl_alloc 8 )
+@ __uni_normalize * UnigramImpl u s text i n String out → v {
+    : ~ i ml 0
     : *u TP # *u text
     : ~ i p 0
     ~ < p n {
-        : i off ( __uni_norm_prefix u text p n mlen )
-        : i ml ( nurl_peek mlen 0 )
+        : i off ( __uni_norm_prefix u text p n ml )
         ? & >= off 0 > ml 0 {
             ( __uni_pool_push u off out )
             = p + p ml
@@ -265,7 +281,6 @@ $ `stdlib/ext/json.nu`
             = p + p w
         }
     }
-    ( nurl_free mlen )
 }
 
 // ── the pipeline for one added-token-free segment ────────────────────
@@ -273,7 +288,7 @@ $ `stdlib/ext/json.nu`
 // normalize (charsmap → collapse spaces) → Metaspace: every ' ' → ▁, then
 // prepend ▁ UNLESS the result is empty or already starts with ▁ (that is
 // what HF's Metaspace does — a leading space becomes the prefix itself).
-@ __uni_pretoken * Unigram u s text i n → String {
+@ __uni_pretoken * UnigramImpl u s text i n → String {
     : String nrm ( string_new )
     ( __uni_normalize u text n nrm )
     : String body ( string_new )
@@ -294,20 +309,18 @@ $ `stdlib/ext/json.nu`
         }
         = p + p 1
     }
-    ( string_free nrm )
     : i bn ( string_len body )
     : s bd ( string_data body )
     : b starts_meta & >= bn 3 & & == ( nurl_str_get bd 0 ) 226 == ( nurl_str_get bd 1 ) 150 == ( nurl_str_get bd 2 ) 129
     ? & . u add_prefix & > bn 0 ! starts_meta {} { ^ body }
     : String out ( string_from `▁` )
     ( string_push_str out bd )
-    ( string_free body )
     ^ out
 }
 
 // Unigram Viterbi over the pre-tokenized bytes. Appends ids to `out`;
 // consecutive unknowns fuse into ONE unk id (HF fuse_unk).
-@ __uni_viterbi * Unigram u String seg ( Vec i ) out → v {
+@ __uni_viterbi * UnigramImpl u String seg ( Vec i ) out → v {
     : s e ( string_data seg )
     : i n ( string_len seg )
     ? > n 0 {} { ^ }
@@ -395,16 +408,11 @@ $ `stdlib/ext/json.nu`
         = prev id2
         = j - j 1
     }
-    ( vec_free [i] bnd )
-    ( vec_free [f] best )
-    ( vec_free [i] bpos )
-    ( vec_free [i] bid )
-    ( vec_free [i] rev )
 }
 
 // ── loading ──────────────────────────────────────────────────────────
 
-@ __uni_load_vocab Json model * Unigram u → b {
+@ __uni_load_vocab Json model * UnigramImpl u → b {
     ?? ( json_obj_get model `vocab` ) {
         T vocab → {
             : i nv ( json_arr_len vocab )
@@ -443,7 +451,7 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ __uni_load_charsmap Json norm * Unigram u → v {
+@ __uni_load_charsmap Json norm * UnigramImpl u → v {
     : s ty ?? ( json_obj_get norm `type` ) { T t → ( json_str_data t ) F → `` }
     ? == 1 ( nurl_str_eq ty `Precompiled` ) {
         ?? ( json_obj_get norm `precompiled_charsmap` ) {
@@ -462,7 +470,6 @@ $ `stdlib/ext/json.nu`
                                 = . u has_norm T
                             } {}
                         } {}
-                        ( vec_free [u] blob )
                     }
                     F _e → {}
                 }
@@ -488,7 +495,7 @@ $ `stdlib/ext/json.nu`
 
 // The template's <s>/</s> ids: first SpecialToken before the Sequence entry
 // and first after it, resolved through the vocab lookup.
-@ __uni_load_template Json root * Unigram u → v {
+@ __uni_load_template Json root * UnigramImpl u → v {
     ?? ( json_get root `post_processor.single` ) {
         T single → {
             : i sn ( json_arr_len single )
@@ -521,7 +528,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Added tokens, kept longest-first so overlapping literals match greedily.
-@ __uni_load_added Json root * Unigram u → v {
+@ __uni_load_added Json root * UnigramImpl u → v {
     ?? ( json_obj_get root `added_tokens` ) {
         T arr → {
             : i an ( json_arr_len arr )
@@ -557,104 +564,80 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ uni_load s path → !*Unigram String {
+@ uni_load s path → !Unigram String {
     ?? ( read_file path ) {
         T txt → {
-            : ~ ? * Unigram result @ ?*Unigram { F }
-            : ~ String errmsg ( string_new )
             ?? ( json_parse ( string_data txt ) ) {
                 T root → {
                     : s mtype ?? ( json_get root `model.type` ) { T t → ( json_str_data t ) F → `` }
-                    ? == 1 ( nurl_str_eq mtype `Unigram` ) {
-                        : *Unigram u # *Unigram ( nurl_alloc Z Unigram )
-                        = . u pieces ( vec_new [String] )
-                        = . u scores ( vec_new [f] )
-                        = . u lookup ( map_new [s i] )
-                        = . u ft ( vec_new [i] )
-                        = . u ft_mask 0
-                        = . u trie ( vec_new [u] )
-                        = . u pool ( vec_new [u] )
-                        = . u added ( vec_new [String] )
-                        = . u added_ids ( vec_new [i] )
-                        = . u added_lstrip ( vec_new [i] )
-                        = . u added_rstrip ( vec_new [i] )
-                        = . u has_norm F
-                        = . u collapse_spaces F
-                        = . u add_prefix T
-                        = . u max_piece 1
-                        = . u bos -1
-                        = . u eos -1
-                        = . u unk_id ?? ( json_get root `model.unk_id` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
-                        : ?Json model ( json_obj_get root `model` )
-                        : ~ b okv F
-                        ?? model { T m → { = okv ( __uni_load_vocab m u ) } F → {} }
-                        ? okv {
-                            ( __uni_ft_build u )
-                            ?? ( json_obj_get root `normalizer` ) { T nrm → { ( __uni_load_charsmap nrm u ) } F → {} }
-                            : b apfx ?? ( json_get root `pre_tokenizer.add_prefix_space` ) { T x → ( json_as_bool x ) F → T }
-                            = . u add_prefix apfx
-                            ( __uni_load_template root u )
-                            ( __uni_load_added root u )
-                            = result @ ?*Unigram { T u }
-                        } {
-                            ( uni_free u )
-                            ( string_push_str errmsg `unigram: empty or missing model.vocab` )
-                        }
-                    } {
-                        ( string_push_str errmsg `unigram: model.type is not Unigram` )
-                    }
-                    ( json_free root )
+                    ? == 1 ( nurl_str_eq mtype `Unigram` ) {} { ^ ( __uni_err `unigram: model.type is not Unigram` ) }
+                    // The handle first: a file without a vocabulary lets go of it.
+                    : i u__box ( rcbox_zero [UnigramImpl] )
+                    : Unigram h @ Unigram { # s u__box }
+                    : *UnigramImpl u ( rcbox_ptr [UnigramImpl] u__box )
+                    = . u pieces ( vec_new [String] )
+                    = . u scores ( vec_new [f] )
+                    = . u lookup ( map_new [s i] )
+                    = . u ft ( vec_new [i] )
+                    = . u ft_mask 0
+                    = . u trie ( vec_new [u] )
+                    = . u pool ( vec_new [u] )
+                    = . u added ( vec_new [String] )
+                    = . u added_ids ( vec_new [i] )
+                    = . u added_lstrip ( vec_new [i] )
+                    = . u added_rstrip ( vec_new [i] )
+                    = . u has_norm F
+                    = . u collapse_spaces F
+                    = . u add_prefix T
+                    = . u max_piece 1
+                    = . u bos -1
+                    = . u eos -1
+                    = . u unk_id ?? ( json_get root `model.unk_id` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
+                    : ?Json model ( json_obj_get root `model` )
+                    : ~ b okv F
+                    ?? model { T m → { = okv ( __uni_load_vocab m u ) } F → {} }
+                    ? okv {} { ^ ( __uni_err `unigram: empty or missing model.vocab` ) }
+                    ( __uni_ft_build u )
+                    ?? ( json_obj_get root `normalizer` ) { T nrm → { ( __uni_load_charsmap nrm u ) } F → {} }
+                    : b apfx ?? ( json_get root `pre_tokenizer.add_prefix_space` ) { T x → ( json_as_bool x ) F → T }
+                    = . u add_prefix apfx
+                    ( __uni_load_template root u )
+                    ( __uni_load_added root u )
+                    ^ @ !Unigram String { T h }
                 }
-                F je → {
-                    ( string_push_str errmsg `unigram: tokenizer.json parse error` )
-                }
-            }
-            ( string_free txt )
-            ?? result {
-                T u2 → { ( string_free errmsg ) ^ @ !*Unigram String { T u2 } }
-                F → { ^ @ !*Unigram String { F errmsg } }
+                F je → { ^ ( __uni_err `unigram: tokenizer.json parse error` ) }
             }
         }
         F _e → { ^ ( __uni_err `unigram: cannot read tokenizer.json` ) }
     }
 }
 
-@ uni_free sink * Unigram u → v {
-    : ~ i k 0
-    : i np ( vec_len [String] . u pieces )
-    ~ < k np {
-        ?? ( vec_get [String] . u pieces k ) { T p → { ( string_free p ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] . u pieces )
-    ( vec_free [f] . u scores )
-    ( map_free [s i] . u lookup )
-    ( vec_free [i] . u ft )
-    ( vec_free [u] . u trie )
-    ( vec_free [u] . u pool )
-    = k 0
-    : i na ( vec_len [String] . u added )
-    ~ < k na {
-        ?? ( vec_get [String] . u added k ) { T p → { ( string_free p ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] . u added )
-    ( vec_free [i] . u added_ids )
-    ( vec_free [i] . u added_lstrip )
-    ( vec_free [i] . u added_rstrip )
-    ( nurl_free # *u u )
+// Let go of `u` now rather than at the end of its owner's scope.
+@ uni_free sink Unigram u → v {}
+
+@ uni_n_vocab Unigram u__h → i {
+    : *UnigramImpl u ( __Unigram_ptr u__h )
+    ^ ( vec_len [String] . u pieces )
 }
 
-@ uni_n_vocab * Unigram u → i { ^ ( vec_len [String] . u pieces ) }
+@ uni_bos Unigram u__h → i {
+    : *UnigramImpl u ( __Unigram_ptr u__h )
+    ^ . u bos
+}
 
-@ uni_bos * Unigram u → i { ^ . u bos }
+@ uni_eos Unigram u__h → i {
+    : *UnigramImpl u ( __Unigram_ptr u__h )
+    ^ . u eos
+}
 
-@ uni_eos * Unigram u → i { ^ . u eos }
-
-@ uni_unk * Unigram u → i { ^ . u unk_id }
+@ uni_unk Unigram u__h → i {
+    : *UnigramImpl u ( __Unigram_ptr u__h )
+    ^ . u unk_id
+}
 
 // Borrowed piece text ("" out of range).
-@ uni_piece * Unigram u i id → s {
+@ uni_piece Unigram u__h i id → s {
+    : *UnigramImpl u ( __Unigram_ptr u__h )
     ?? ( vec_get [String] . u pieces id ) { T p → { ^ ( string_data p ) } F → { ^ `` } }
 }
 
@@ -663,7 +646,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // Does an added token match text[p..)? Returns its index or −1.
-@ __uni_added_at * Unigram u s text i p i n → i {
+@ __uni_added_at * UnigramImpl u s text i p i n → i {
     : i na ( vec_len [String] . u added )
     : ~ i k 0
     ~ < k na {
@@ -682,20 +665,19 @@ $ `stdlib/ext/json.nu`
 }
 
 // One raw segment (no added tokens inside) through the full pipeline.
-@ __uni_segment * Unigram u s text i off i len ( Vec i ) out → v {
+@ __uni_segment * UnigramImpl u s text i off i len ( Vec i ) out → v {
     ? > len 0 {} { ^ }
     : String raw ( string_new )
     ( string_push_bytes raw # *u + # i text off len )
     : String pre ( __uni_pretoken u ( string_data raw ) ( string_len raw ) )
     ( __uni_viterbi u pre out )
-    ( string_free raw )
-    ( string_free pre )
 }
 
 // Encode `text`. add_special wraps the result in the file's template
 // (<s> … </s>). Returns F only when the tokenizer is unusable.
-@ uni_encode * Unigram u s text b add_special ( Vec i ) out → b {
-    ? > ( uni_n_vocab u ) 0 {} { ^ F }
+@ uni_encode Unigram u__h s text b add_special ( Vec i ) out → b {
+    : *UnigramImpl u ( __Unigram_ptr u__h )
+    ? > ( uni_n_vocab u__h ) 0 {} { ^ F }
     ? & add_special >= . u bos 0 { ( vec_push [i] out . u bos ) } {}
     : i n ( nurl_str_len text )
     : ~ i seg 0

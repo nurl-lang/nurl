@@ -9,7 +9,7 @@
 // them to `tok_build`. whisper does the same from vocab.json + merges.txt, with
 // the same engine behind it (deps/tokenizer/src/hf.nu).
 //
-//   ( tok_new gguf ) → !*Tok String
+//   ( tok_new gguf ) → !Tok String
 //
 // Everything else — tok_encode / tok_decode / tok_piece / tok_free / tok_bos /
 // tok_eos / tok_unk / tok_n_vocab — comes from the package.
@@ -19,8 +19,8 @@ $ `stdlib/core/string.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 
-@ __nlk_err s msg → !*Tok String {
-    ^ @ !*Tok String { F ( string_from msg ) }
+@ __nlk_err s msg → !Tok String {
+    ^ @ !Tok String { F ( string_from msg ) }
 }
 
 @ __nlk_geti ( Vec i ) v i k i def → i {
@@ -31,7 +31,7 @@ $ `deps/tokenizer/src/tokenizer.nu`
     ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
 }
 
-@ tok_new * Gguf g → !*Tok String {
+@ tok_new * Gguf g → !Tok String {
     : s model ( gguf_kv_str_or g `tokenizer.ggml.model` `` )
     : ~ i mode -1
     ? ( nurl_str_eq model `llama` ) { = mode TOK_SPM } {}
@@ -40,7 +40,7 @@ $ `deps/tokenizer/src/tokenizer.nu`
         : String m ( string_from `tokenizer: unsupported tokenizer.ggml.model '` )
         ( string_push_str m model )
         ( string_push_str m `' (supported: llama, gpt2)` )
-        ^ @ !*Tok String { F m }
+        ^ @ !Tok String { F m }
     } {}
 
     : i tki ( gguf_find_kv g `tokenizer.ggml.tokens` )

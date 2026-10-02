@@ -523,7 +523,7 @@ $ `stdlib/std/term.nu`
     ?? ( llm_open_st path ( string_data __w ) 0 ) {
         F e → { ^ ( __nl_err e ) }
         T m → {
-            : *Tok t ( llm_tok m )
+            : Tok t ( llm_tok m )
             : String stmp ( args_value_or p `temp` `0.8` )
             : ~ f temp 0.8
             ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
@@ -1107,7 +1107,7 @@ $ `stdlib/std/term.nu`
         : String wpath ( args_value_or p `weights` `` )
         ?? ( llm_open_st mp ( string_data wpath ) want_ctx ) {
             T m → {
-                : *Tok t ( llm_tok m )
+                : Tok t ( llm_tok m )
                 : ( Vec i ) ids ( tok_encode t prompt T )
                 : i nprompt ( vec_len [i] ids )
                 ? > nprompt ( llm_n_ctx m ) {
@@ -1303,7 +1303,7 @@ $ `stdlib/std/term.nu`
                                     : String m ( string_new )
                                     ( string_push_int m k )
                                     ( string_push_str m `: ` )
-                                    ( string_push_str m ( _tk_piece_data t k ) )
+                                    ( string_push_str m ( tok_piece_str t k ) )
                                     ( nurl_print ( string_data m ) )
                                     ( nurl_print `\n` )
                                     ( string_free m )

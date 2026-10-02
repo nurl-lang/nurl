@@ -84,7 +84,7 @@ $ `deps/tokenizer/src/unigram.nu`
     GkBuf elnw
     GkBuf elnb
     ( Vec EmbedLayer ) layers
-    * Unigram tok
+    Unigram tok
     b has_tok
     b ok
     // the weights as a lease: `loaded` says whether kit + weights exist

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `Tok` and `Unigram` are handles instead of `*Tok` / `*Unigram` pointers:
+  every copy is the same tokenizer, and the last owner releases its
+  vocabulary, merge table and maps. `tok_build`, `tok_from_hf`,
+  `tok_from_tokenizer_json` → `!Tok String`; `uni_load` → `!Unigram String`;
+  every operation takes the handle. `tok_free` / `uni_free` are optional
+  early releases.
+- `tok_build` takes its four vectors (`sink`); a rejected vocabulary lets
+  go of them with the error instead of freeing them by hand.
+- New: `tok_piece_str` — a piece's text as stored in the vocabulary
+  (borrowed), for callers that read the private `_tk_piece_data`.
+- Every `string_free` / `vec_free` / `json_free` / `args_free` in the
+  library, the CLI and the tests is gone. The charsmap matcher's 8-byte
+  result cell is an `inout` integer. Encoding runs 0.3–0.5 % fewer
+  instructions, decoding and Unigram stay within ±0.3 % (whisper / gemma /
+  bge-m3 vocabularies), with identical ids and text.
+
 ## 0.3.3
 
 `tok_free` and `uni_free` take **`sink`** parameters: a free function must consume the

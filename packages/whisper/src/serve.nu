@@ -44,7 +44,7 @@ $ `deps/http/src/http.nu`
 $ `src/run.nu`
 
 : ~ i g_srv_w 0  // *Whisper, as an address (0 = not serving)
-: ~ i g_srv_t 0  // *Tok
+: ~ i g_srv_t 0  // the Tok's box, lent by __wh_serve_run's caller
 : ~ i g_srv_reqs 0
 : ~ s g_srv_lang ``
 : ~ b g_srv_vad F
@@ -325,7 +325,7 @@ $ `src/run.nu`
             ( vec_free [f] mono )
 
             : *Whisper w # *Whisper g_srv_w
-            : *Tok t # *Tok g_srv_t
+            : Tok t # Tok g_srv_t
             : ( Vec u ) text ( vec_new [u] )
             ? ( wh_run w t at16 lang g_srv_max use_vad with_ts g_srv_nospeech text ) {
                 // trim the leading space the tokenizer writes on plain text
@@ -620,7 +620,7 @@ $ `src/run.nu`
     : ~ s lang g_srv_lang
     ? > ( nurl_str_len g_ws_lang ) 0 { = lang g_ws_lang } {}
     : *Whisper w # *Whisper g_srv_w
-    : *Tok t # *Tok g_srv_t
+    : Tok t # Tok g_srv_t
     : ( Vec u ) text ( vec_new [u] )
     // no VAD inside — the stream already segmented; no timestamps — the
     // segment IS the timestamp, and t0/t1 carry it
@@ -722,9 +722,9 @@ $ `src/run.nu`
 // both containers. Owns neither; the caller closes them.
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
-@ __wh_serve_run * Whisper w * Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
+@ __wh_serve_run * Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
     = g_srv_w # i w
-    = g_srv_t # i t
+    = g_srv_t # i . t ctl
     ? > ( nurl_str_len g_srv_dir ) 0 { ( nurl_free g_srv_dir ) } {}
     = g_srv_dir ( strdup dir )
     = g_srv_unload_ms * unload_s 1000

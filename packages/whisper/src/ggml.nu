@@ -435,7 +435,7 @@ $ `deps/tokenizer/src/hf.nu`
 // Build the tokenizer: base words byte-encoded, specials synthesized at
 // whisper.cpp's positional ids. Returns via tok_build so decode, control
 // matching and the timestamp rules all behave exactly as with tokenizer.json.
-@ gg_build_tok * Gg g → !*Tok String {
+@ gg_build_tok * Gg g → !Tok String {
     : i nv . g n_vocab
     : i nfile ( vec_len [String] . g vocab )
     : b multi >= nv 51865

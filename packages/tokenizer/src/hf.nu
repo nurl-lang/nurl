@@ -6,7 +6,7 @@
 // and nothing else about the tokenizer changes — which is why the engine takes
 // PARTS and does not know about either.
 //
-//   ( tok_from_hf vocab_path merges_path added_path spec ) → !*Tok String
+//   ( tok_from_hf vocab_path merges_path added_path spec ) → !Tok String
 //
 // `added_path` (added_tokens.json / a special-tokens file) may be empty. Every
 // piece it names is marked CONTROL, which is what makes `<|startoftranscript|>`
@@ -31,8 +31,8 @@ $ `tokenizer.nu`
 // break the moment the package is used as a dependency (deps/tokenizer/src/…).
 // gguf follows the same rule. So: import tokenizer.nu, then hf.nu.
 
-@ __hf_err s msg → !*Tok String {
-    ^ @ !*Tok String { F ( string_from msg ) }
+@ __hf_err s msg → !Tok String {
+    ^ @ !Tok String { F ( string_from msg ) }
 }
 
 // vocab.json is { "piece": id }, and the ids are dense — so the pieces are read
@@ -43,9 +43,7 @@ $ `tokenizer.nu`
         T txt → {
             ?? ( json_parse ( string_data txt ) ) {
                 T root → {
-                    ( string_free txt )
                     ? ( json_is_obj root ) {} {
-                        ( json_free root )
                         ^ @ !i String { F ( string_from `tokenizer: vocab.json is not an object` ) }
                     }
                     : ( Vec String ) keys ( json_obj_keys root )
@@ -70,8 +68,6 @@ $ `tokenizer.nu`
                         = k + k 1
                     }
                     ? < maxid 0 {
-                        ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-                        ( json_free root )
                         ^ @ !i String { F ( string_from `tokenizer: vocab.json has no entries` ) }
                     } {}
                     // pass 2: place every piece at its own id
@@ -89,10 +85,6 @@ $ `tokenizer.nu`
                                         ? ( json_is_num v ) {
                                             : i id ( json_as_int v )
                                             ? & >= id 0 <= id maxid {
-                                                ?? ( vec_get [String] out id ) {
-                                                    T old → { ( string_free old ) }
-                                                    F → {}
-                                                }
                                                 ( vec_set [String] out id ( string_from ( string_data kn ) ) )
                                             } {}
                                         } {}
@@ -104,16 +96,12 @@ $ `tokenizer.nu`
                         }
                         = k + k 1
                     }
-                    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-                    ( json_free root )
                     ^ @ !i String { T + maxid 1 }
                 }
                 F e → {
-                    ( string_free txt )
                     : String m ( json_format_error e )
                     : String msg ( string_from `tokenizer: vocab.json is not valid JSON: ` )
                     ( string_push_str msg ( string_data m ) )
-                    ( string_free m )
                     ^ @ !i String { F msg }
                 }
             }
@@ -149,7 +137,6 @@ $ `tokenizer.nu`
                 } {}
                 = i0 + j 1
             }
-            ( string_free txt )
             ^ @ !i String { T ( vec_len [String] out ) }
         }
         F _ → {
@@ -216,7 +203,6 @@ $ `tokenizer.nu`
                                                     ?? ( vec_get [String] pieces id ) {
                                                         T p → {
                                                             ? == 0 ( string_len p ) {
-                                                                ( string_free p )
                                                                 ( vec_set [String] pieces id ( string_from ( string_data kn ) ) )
                                                             } {}
                                                         }
@@ -232,35 +218,29 @@ $ `tokenizer.nu`
                             }
                             = k + k 1
                         }
-                        ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
                     } {}
-                    ( json_free root )
                 }
                 F _e → {}
             }
-            ( string_free txt )
         }
         F _ → {}
     }
 }
 
 // The whole loader: vocab.json + merges.txt (+ an optional added-tokens file).
-@ tok_from_hf s vocab_path s merges_path s added_path TokSpec spec → !*Tok String {
+@ tok_from_hf s vocab_path s merges_path s added_path TokSpec spec → !Tok String {
     : ( Vec String ) pieces ( vec_new [String] )
     ?? ( __hf_read_vocab vocab_path pieces ) {
         T _n → {}
         F e → {
-            ( vec_free_with [String] pieces \ String x → v { ( string_free x ) } )
-            ^ @ !*Tok String { F e }
+            ^ @ !Tok String { F e }
         }
     }
     : ( Vec String ) merges ( vec_new [String] )
     ?? ( __hf_read_merges merges_path merges ) {
         T _m → {}
         F e → {
-            ( vec_free_with [String] pieces \ String x → v { ( string_free x ) } )
-            ( vec_free_with [String] merges \ String x → v { ( string_free x ) } )
-            ^ @ !*Tok String { F e }
+            ^ @ !Tok String { F e }
         }
     }
     : ( Vec i ) types ( vec_new [i] )
@@ -288,19 +268,17 @@ $ `tokenizer.nu`
 // that decides whether it must come out of a prompt as a single token. This is
 // the loader to use.
 //
-//   ( tok_from_tokenizer_json path spec ) → !*Tok String
+//   ( tok_from_tokenizer_json path spec ) → !Tok String
 
-@ tok_from_tokenizer_json s path TokSpec spec → !*Tok String {
+@ tok_from_tokenizer_json s path TokSpec spec → !Tok String {
     ?? ( read_file path ) {
         T txt → {
             ?? ( json_parse ( string_data txt ) ) {
                 T root → {
-                    ( string_free txt )
                     : ~ Json model ( json_null )
                     ?? ( json_obj_get root `model` ) {
                         T m → { = model m }
                         F → {
-                            ( json_free root )
                             ^ ( __hf_err `tokenizer: tokenizer.json has no "model"` )
                         }
                     }
@@ -318,9 +296,6 @@ $ `tokenizer.nu`
                         F → {}
                     }
                     ? okv {} {
-                        ( vec_free_with [String] pieces \ String x → v { ( string_free x ) } )
-                        ( vec_free [i] types )
-                        ( json_free root )
                         ^ ( __hf_err `tokenizer: tokenizer.json has no model.vocab object` )
                     }
                     // model.merges: ["Ġ t", …] in rank order (newer files store
@@ -336,24 +311,21 @@ $ `tokenizer.nu`
                         T at → { ( __hf_added_into at pieces types ) }
                         F → {}
                     }
-                    ( json_free root )
                     : ( Vec f ) scores ( vec_new [f] )
                     ^ ( tok_build spec pieces scores types merges )
                 }
                 F e → {
-                    ( string_free txt )
                     : String m ( json_format_error e )
                     : String msg ( string_from `tokenizer: tokenizer.json is not valid JSON: ` )
                     ( string_push_str msg ( string_data m ) )
-                    ( string_free m )
-                    ^ @ !*Tok String { F msg }
+                    ^ @ !Tok String { F msg }
                 }
             }
         }
         F _ → {
             : String m ( string_from `tokenizer: cannot read ` )
             ( string_push_str m path )
-            ^ @ !*Tok String { F m }
+            ^ @ !Tok String { F m }
         }
     }
 }
@@ -405,10 +377,6 @@ $ `tokenizer.nu`
                 ? & >= id 0 <= id maxid {
                     ?? ( vec_get [String] keys k ) {
                         T kn → {
-                            ?? ( vec_get [String] pieces id ) {
-                                T old → { ( string_free old ) }
-                                F → {}
-                            }
                             ( vec_set [String] pieces id ( string_from ( string_data kn ) ) )
                         }
                         F → {}
@@ -419,8 +387,6 @@ $ `tokenizer.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-    ( vec_free [i] ids )
 }
 
 // merges: either ["A B", …] or [["A","B"], …] — tokenizers changed the shape
@@ -489,7 +455,6 @@ $ `tokenizer.nu`
                         ?? ( vec_get [String] pieces id ) {
                             T old → {
                                 ? == 0 ( string_len old ) {
-                                    ( string_free old )
                                     ( vec_set [String] pieces id ( string_from content ) )
                                 } {}
                             }
