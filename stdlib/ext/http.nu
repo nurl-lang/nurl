@@ -18,7 +18,7 @@
 // API (this revision):
 //
 //   ( header_new   s name s value )                  → Header
-//   ( header_free  Header h )                        → v
+//   ( header_free  Header h )                        → v   early release (optional)
 //   ( header_blob_one s name s value )               → String  one-line blob
 //
 //   ( http_request   s method s url s body s headers_blob )
@@ -171,10 +171,7 @@ $ `stdlib/core/rcbox.nu`
     ^ @ Header { n v }
 }
 
-@ header_free sink Header h → v {
-    ( string_free . h name )
-    ( string_free . h value )
-}
+@ header_free sink Header h → v {}
 
 // Build a one-line "Name: Value\r\n" String. Useful for assembling a
 // blob with `string_concat` when the caller wants typed pieces but not
@@ -208,10 +205,11 @@ $ `stdlib/core/rcbox.nu`
 //   slot 5  body_len       i64
 @ __http_dispatch i raw → !Response HttpErr {
     ? == raw 0 { ^ @ !Response HttpErr { F # HttpErr HttpOther } } {}
+    // Owned from here: a failed transfer's block goes with `r`.
+    : Response r @ Response { # s ( rcbox_new [ResponseImpl] @ ResponseImpl { raw } ) }
     : *u rawp # *u raw
     : i ek ( nurl_peek rawp 1 )
     ? != ek 0 {
-        ( nurl_http_response_free raw )
         ? == ek 1 { ^ @ !Response HttpErr { F # HttpErr HttpConnect } } {}
         ? == ek 2 { ^ @ !Response HttpErr { F # HttpErr HttpTimeout } } {}
         ? == ek 3 { ^ @ !Response HttpErr { F # HttpErr HttpTls } } {}
@@ -220,7 +218,6 @@ $ `stdlib/core/rcbox.nu`
         ? == ek 7 { ^ @ !Response HttpErr { F # HttpErr HttpTooLarge } } {}
         ^ @ !Response HttpErr { F # HttpErr HttpOther }
     } {}
-    : Response r @ Response { # s ( rcbox_new [ResponseImpl] @ ResponseImpl { raw } ) }
     ^ @ !Response HttpErr { T r }
 }
 
@@ -265,7 +262,6 @@ $ `stdlib/core/rcbox.nu`
 @ http_post_opts s url s body s content_type HttpOptions opt → !Response HttpErr {
     : String hb ( __with_ct content_type `` )
     : !Response HttpErr res ( http_request_with_opts `POST` url body ( string_data hb ) opt )
-    ( string_free hb )
     ^ res
 }
 
@@ -302,28 +298,24 @@ $ `stdlib/core/rcbox.nu`
 @ http_post s url s body s content_type → !Response HttpErr {
     : String hb ( __with_ct content_type `` )
     : !Response HttpErr res ( http_request `POST` url body ( string_data hb ) )
-    ( string_free hb )
     ^ res
 }
 
 @ http_post_with_headers s url s body s content_type s headers_blob → !Response HttpErr {
     : String hb ( __with_ct content_type headers_blob )
     : !Response HttpErr res ( http_request `POST` url body ( string_data hb ) )
-    ( string_free hb )
     ^ res
 }
 
 @ http_put s url s body s content_type → !Response HttpErr {
     : String hb ( __with_ct content_type `` )
     : !Response HttpErr res ( http_request `PUT` url body ( string_data hb ) )
-    ( string_free hb )
     ^ res
 }
 
 @ http_patch s url s body s content_type → !Response HttpErr {
     : String hb ( __with_ct content_type `` )
     : !Response HttpErr res ( http_request `PATCH` url body ( string_data hb ) )
-    ( string_free hb )
     ^ res
 }
 
@@ -355,14 +347,12 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 @ http_post_bytes s url ( Vec u ) body s content_type → !Response HttpErr {
     : String hb ( __with_ct content_type `` )
     : !Response HttpErr res ( http_request_bytes `POST` url body ( string_data hb ) )
-    ( string_free hb )
     ^ res
 }
 
 @ http_put_bytes s url ( Vec u ) body s content_type → !Response HttpErr {
     : String hb ( __with_ct content_type `` )
     : !Response HttpErr res ( http_request_bytes `PUT` url body ( string_data hb ) )
-    ( string_free hb )
     ^ res
 }
 
@@ -471,8 +461,7 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 //
 // For SSE / chunked responses where the body arrives over time and the
 // caller wants to react to each chunk before the request completes.
-// Backed by libcurl's multi handle in `runtime.c §14b`; WinHTTP and
-// WASI builds return `HttpOther` on open.
+// Backed by the pure-NURL client in http_pure.nu (hp_stream_*).
 //
 //   ( http_stream_open_to s method s url s body s headers_blob
 //                         i timeout_ms i connect_timeout_ms )
@@ -482,8 +471,8 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 //   ( http_stream_next    HttpStream s )           → ? String
 //                       owned chunk; None = EOF or error (probe via
 //                       http_stream_err / http_stream_status). Each
-//                       chunk is whatever libcurl flushed since the
-//                       last call — NOT a single SSE frame. Compose
+//                       chunk is whatever one socket read decoded
+//                       — NOT a single SSE frame. Compose
 //                       with `SseDecoder` (below) for event-aligned
 //                       reads.
 //   ( http_stream_status  HttpStream s )           → i
@@ -492,31 +481,27 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
 //   ( http_stream_err     HttpStream s )           → ? HttpErr
 //                       None = transfer succeeded; Some(e) = failure.
 //   ( http_stream_close   HttpStream s )           → v
-//                       MUST be called exactly once per opened stream.
+//                       closes the connection now (optional: the
+//                       stream's last owner closes it otherwise).
 //
 // Memory model:
-//   * Each `http_stream_next` chunk is a freshly-owned `String` —
-//     callers are responsible for freeing them. Returning a Vec[u]
-//     instead would double the per-chunk allocation cost; SSE is text
-//     so String is the right type.
-//   * The HttpStream handle owns the libcurl multi+easy pair and a
-//     small accumulator buffer. `http_stream_close` cascades to all of
-//     them; do not call after close.
-//   * Inputs (method/url/body/headers_blob) are BORROWED — a snapshot
-//     is taken inside libcurl, so the caller may free them right away.
+//   * Each `http_stream_next` chunk is a freshly-owned `String`. SSE is
+//     text, so String is the right type.
+//   * An HttpStream holds the stream's state (a handle, http_pure.nu):
+//     its connection, buffers and headers go with the stream's last
+//     owner, which closes the connection if http_stream_close did not.
+//   * Inputs (method/url/body/headers_blob) are BORROWED — the request
+//     is written during open, so the caller may let them go right away.
 
-: HttpStream { i raw }
+: HttpStream { HttpStreamState st }
 
 // Shared open-result dispatch for both the s-body and ( Vec u )-body
-// stream openers. `raw` is a *HttpStreamState (as i64); probe err_kind in
-// case open recorded a transport failure (e.g. malformed URL / connect).
-@ __http_stream_dispatch_open i raw → !HttpStream HttpErr {
-    ? == raw 0 {
-        ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
-    } {}
-    : i ek ( hp_stream_err_kind # *HttpStreamState raw )
+// stream openers. Probe err_kind in case open recorded a transport
+// failure (e.g. malformed URL / connect); a failed stream is dropped
+// here with its transport.
+@ __http_stream_dispatch_open HttpStreamState st → !HttpStream HttpErr {
+    : i ek ( hp_stream_err_kind st )
     ? != ek 0 {
-        ( hp_stream_close # *HttpStreamState raw )
         ? == ek 1 { ^ @ !HttpStream HttpErr { F # HttpErr HttpConnect } } {}
         ? == ek 2 { ^ @ !HttpStream HttpErr { F # HttpErr HttpTimeout } } {}
         ? == ek 3 { ^ @ !HttpStream HttpErr { F # HttpErr HttpTls } } {}
@@ -525,14 +510,13 @@ i timeout_ms i connect_timeout_ms → !Response HttpErr {
         ? == ek 7 { ^ @ !HttpStream HttpErr { F # HttpErr HttpTooLarge } } {}
         ^ @ !HttpStream HttpErr { F # HttpErr HttpOther }
     } {}
-    ^ @ !HttpStream HttpErr { T @ HttpStream { raw } }
+    ^ @ !HttpStream HttpErr { T @ HttpStream { st } }
 }
 
 @ http_stream_open_to s method s url s body s headers_blob
 i timeout_ms i connect_timeout_ms
 → !HttpStream HttpErr {
-    : *HttpStreamState st ( hp_stream_open method url # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
-    ^ ( __http_stream_dispatch_open # i st )
+    ^ ( __http_stream_dispatch_open ( hp_stream_open method url # *u body ( nurl_str_len body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms ) )
 }
 
 // Binary-safe streaming open: the body is a length-carrying ( Vec u ),
@@ -541,8 +525,7 @@ i timeout_ms i connect_timeout_ms
 @ http_stream_open_bytes_to s method s url ( Vec u ) body s headers_blob
 i timeout_ms i connect_timeout_ms
 → !HttpStream HttpErr {
-    : *HttpStreamState st ( hp_stream_open method url ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms )
-    ^ ( __http_stream_dispatch_open # i st )
+    ^ ( __http_stream_dispatch_open ( hp_stream_open method url ( vec_data [u] body ) ( vec_len [u] body ) headers_blob 1 -1 1 `nurl-http/0.1` timeout_ms ) )
 }
 
 @ http_stream_open s method s url s body s headers_blob
@@ -551,22 +534,22 @@ i timeout_ms i connect_timeout_ms
 }
 
 @ http_stream_next HttpStream st → ?String {
-    ^ ( hp_stream_next_str # *HttpStreamState . st raw )
+    ^ ( hp_stream_next_str . st st )
 }
 
 // Binary-safe body-chunk pull — embedded NUL bytes survive (unlike the
 // `?String` carrier of http_stream_next). None at end-of-stream or on
 // error (consult http_stream_err to tell them apart).
 @ http_stream_next_bytes HttpStream st → ?( Vec u ) {
-    ^ ( hp_stream_next_bytes # *HttpStreamState . st raw )
+    ^ ( hp_stream_next_bytes . st st )
 }
 
 @ http_stream_status HttpStream st → i {
-    ^ ( hp_stream_status # *HttpStreamState . st raw )
+    ^ ( hp_stream_status . st st )
 }
 
 @ http_stream_err HttpStream st → ?HttpErr {
-    : i ek ( hp_stream_err_kind # *HttpStreamState . st raw )
+    : i ek ( hp_stream_err_kind . st st )
     ? == ek 0 { ^ @ ?HttpErr { F # HttpErr HttpOther } } {}
     ? == ek 1 { ^ @ ?HttpErr { T # HttpErr HttpConnect } } {}
     ? == ek 2 { ^ @ ?HttpErr { T # HttpErr HttpTimeout } } {}
@@ -577,7 +560,7 @@ i timeout_ms i connect_timeout_ms
 }
 
 @ http_stream_close HttpStream st → v {
-    ( hp_stream_close # *HttpStreamState . st raw )
+    ( hp_stream_close . st st )
 }
 
 // Pump the multi handle until the upstream response headers are
@@ -596,22 +579,22 @@ i timeout_ms i connect_timeout_ms
 // upstream status + headers before deciding what to write back to the
 // downstream client.
 @ http_stream_pump_headers HttpStream st → i {
-    ^ ( hp_stream_pump_headers # *HttpStreamState . st raw )
+    ^ ( hp_stream_pump_headers . st st )
 }
 
 @ http_stream_header_count HttpStream st → i {
-    ^ ( hp_stream_header_count # *HttpStreamState . st raw )
+    ^ ( hp_stream_header_count . st st )
 }
 
 // BORROWED — lifetime tied to the HttpStream handle. Free not required
 // (and not allowed); copy with `string_from` if a long-lived String is
 // needed.
 @ http_stream_header_name HttpStream st i idx → s {
-    ^ ( hp_stream_header_name # *HttpStreamState . st raw idx )
+    ^ ( hp_stream_header_name . st st idx )
 }
 
 @ http_stream_header_value HttpStream st i idx → s {
-    ^ ( hp_stream_header_value # *HttpStreamState . st raw idx )
+    ^ ( hp_stream_header_value . st st idx )
 }
 
 // ── SSE parser (Server-Sent Events / W3C, Anthropic streaming) ──────
@@ -670,11 +653,7 @@ i timeout_ms i connect_timeout_ms
     ^ out
 }
 
-@ sse_event_free sink SseEvent e → v {
-    ( string_free . e name )
-    ( string_free . e data )
-    ( string_free . e id )
-}
+@ sse_event_free sink SseEvent e → v {}
 
 // Find the first `\n\n` separator inside the accumulator buffer. Returns
 // the byte offset of the FIRST `\n` of the pair (so the frame is
@@ -730,7 +709,6 @@ i timeout_ms i connect_timeout_ms
 
                     : s fp ( string_data fld )
                     ? != ( nurl_str_eq fp `event` ) 0 {
-                        ( string_free name )
                         = name ( string_from ( string_data val ) )
                     } {
                         ? != ( nurl_str_eq fp `data` ) 0 {
@@ -742,13 +720,10 @@ i timeout_ms i connect_timeout_ms
                             ( string_push_str data ( string_data val ) )
                         } {
                             ? != ( nurl_str_eq fp `id` ) 0 {
-                                ( string_free id )
                                 = id ( string_from ( string_data val ) )
                             } {}
                         }
                     }
-                    ( string_free fld )
-                    ( string_free val )
                 }
             } {}
             = ls + i 1

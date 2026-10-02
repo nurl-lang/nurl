@@ -231,7 +231,6 @@ $ `stdlib/ext/http_server.nu`
             ( string_push_str blob ( string_data . h value ) )
             ( string_push_str blob `\r\n` )
         } {}
-        ( string_free name_lc )
         = k + k 1
     }
     ^ blob
@@ -254,7 +253,6 @@ $ `stdlib/ext/http_server.nu`
     ? & . opts strip_content_encoding != 0 ( nurl_str_eq lcr `content-encoding` ) {
         = drop T
     } {}
-    ( string_free lc )
     ^ drop
 }
 
@@ -293,8 +291,6 @@ $ `stdlib/ext/http_server.nu`
     . opts timeout_ms
     . opts connect_timeout_ms )
 
-    ( string_free headers_blob )
-
     ?? or {
         T st → {
             : i status ( http_stream_pump_headers st )
@@ -318,7 +314,6 @@ $ `stdlib/ext/http_server.nu`
 
             // Status + headers + chunked TE in one write.
             : !v NetErr beg ( response_begin_chunked conn status hs )
-            ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
             ?? beg {
                 T _ → {}
                 F _ → {
@@ -342,7 +337,6 @@ $ `stdlib/ext/http_server.nu`
                                 F _ → { = status_local 1 = done T }
                             }
                         } {}
-                        ( vec_free [u] cb )
                     }
                     F _ → { = done T }
                 }
@@ -421,7 +415,6 @@ $ `stdlib/ext/http_server.nu`
                             : String url ( _build_upstream_url upstream_base req )
                             : !v ProxyErr pr ( proxy_stream_to_conn_with conn req
                             ( string_data url ) opts )
-                            ( string_free url )
                             ?? pr {
                                 T _ → {}
                                 F _ → {}
@@ -432,10 +425,7 @@ $ `stdlib/ext/http_server.nu`
                             : ( Vec u ) wire ( response_serialize er )
                             : !v NetErr _wr ( tcp_write_all conn wire )
                             ?? _wr { T _ → {} F _ → {} }
-                            ( vec_free [u] wire )
-                            ( http_response_free er )
                         }
-                        ( request_free req )
                     }
                     F e → {
                         // Don't silently drop a syntactically-bad request — the
@@ -447,12 +437,9 @@ $ `stdlib/ext/http_server.nu`
                             : ( Vec u ) wire ( response_serialize er )
                             : !v NetErr _wr ( tcp_write_all conn wire )
                             ?? _wr { T _ → {} F _ → {} }
-                            ( vec_free [u] wire )
-                            ( http_response_free er )
                         }
                     }
                 }
-                ( vec_free [u] carry )
                 ( tcp_close_conn conn )
             }
             F e → {

@@ -322,10 +322,16 @@ $ `stdlib/core/rcbox.nu`
 @ __hc_origin_drop_conn * HcOriginImpl o → v {
     ? != . o has_h2 0 {
         ( h2_client_disconnect . o h2 )
+        : H2Client gone2 . o h2
+        ( mem_take gone2 )  // the record lets the client go: dropped here
+        = . o h2 # H2Client 0
         = . o has_h2 0
     } {}
     ? != . o has_h1 0 {
         ( hp_conn_close . o h1 )
+        : HttpConn gone1 . o h1
+        ( mem_take gone1 )  // the record lets the connection go: dropped here
+        = . o h1 # HttpConn 0
         = . o has_h1 0
     } {}
     ( __hc_origin_drop_h3 o )
@@ -602,9 +608,10 @@ $ `stdlib/core/rcbox.nu`
     // The stream owns it from here (hp_stream_close closes it), so the
     // record's field is emptied: its drop must not see it again.
     : HttpConn conn . o h1
+    ( mem_take conn )  // the record gives it up: emptied right below
     = . o h1 # HttpConn 0
     = . o has_h1 0
-    : *HttpStreamState st ( hp_stream_open_on conn method ( string_data . o host ) . o port . o is_https path ( vec_data [u] body ) ( vec_len [u] body ) ( string_data blob ) ( string_data . c ua ) )
+    : HttpStreamState st ( hp_stream_open_on conn method ( string_data . o host ) . o port . o is_https path ( vec_data [u] body ) ( vec_len [u] body ) ( string_data blob ) ( string_data . c ua ) )
     ( string_free blob )
     ? > . c body_max 0 { ( hp_stream_set_body_max st . c body_max ) } {}
     ~ == ( hp_stream_finished st ) 0 { ( hp_stream_pump st ) }
@@ -633,7 +640,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Assemble an HttpResponse (status, headers, body) from a finished h1
 // stream, decoding the body if it is compressed and decompression is on.
-@ __hc_response_from_stream * HttpClientImpl c * HttpStreamState st s method → !HttpResponse HttpClientErr {
+@ __hc_response_from_stream * HttpClientImpl c HttpStreamState st s method → !HttpResponse HttpClientErr {
     : HttpResponse r ( response_new ( hp_stream_status st ) )
     : i hc ( hp_stream_header_count st )
     : ~ i k 0

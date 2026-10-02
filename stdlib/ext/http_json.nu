@@ -24,7 +24,6 @@ $ `stdlib/ext/json.nu`
     : String body ( json_stringify j )
     : !Response HttpErr res
     ( http_post url ( string_data body ) `application/json` )
-    ( string_free body )
     ^ res
 }
 
@@ -32,6 +31,5 @@ $ `stdlib/ext/json.nu`
     : String body ( json_stringify j )
     : !Response HttpErr res
     ( http_put url ( string_data body ) `application/json` )
-    ( string_free body )
     ^ res
 }
