@@ -1721,12 +1721,13 @@ $ `stdlib/core/rcbox.nu`
 // EncryptedExtensions, checked to be one we offered) is stored in
 // `c.alpn_sel`.
 @ __tls_handshake i raw s server_name s alpn ( Vec u ) sess → !TlsConn TlsErr {
-    : i ek ( nurl_tcp_err_kind raw )
-    ? != ek 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
+    // The connection owns the socket from here, on every path: a connect
+    // that failed is closed with it (it used to be left open).
+    : TlsConn c__h ( _tls_conn_new raw )
+    ? != ( nurl_tcp_err_kind raw ) 0 { ^ @ !TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     // Read timeout so an unresponsive/dead peer fails the handshake
     // cleanly instead of blocking the client forever.
     ( nurl_tcp_set_timeout raw 20000 )
-    : TlsConn c__h ( _tls_conn_new raw )
     : ~ * TlsConnImpl c ( __TlsConn_ptr c__h )
     // The handshake machine goes with this scope, on every path out of it.
     : CliHs hs__h ( _cli_hs_new server_name alpn sess )
