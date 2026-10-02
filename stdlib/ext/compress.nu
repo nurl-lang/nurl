@@ -26,8 +26,8 @@
 //
 // Memory model:
 //
-//   * Inputs are BORROWED — the caller still owns and frees the source
-//     Vec[u]. Outputs are OWNED Vec[u] handles; free with `vec_free [u]`.
+//   * Inputs are BORROWED — the caller still owns the source Vec[u].
+//     Outputs are OWNED Vec[u] handles, dropped with their owner.
 //   * gzip/zlib encoders frame empty payloads normally; empty compressed
 //     input is malformed. gzip decoding accepts complete concatenated members
 //     and rejects trailing garbage. zlib decoding requires exactly one stream.
@@ -159,7 +159,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
             : b valid & == trailer - n 4
             == ( adler32 . decoded bytes ) ( __df_read_be32 data - n 4 )
             ? ! valid {
-                ( vec_free [u] . decoded bytes )
                 ^ @ !( Vec u ) CompressErr { F CompressData }
             } {}
             ^ @ !( Vec u ) CompressErr { T . decoded bytes }
@@ -230,7 +229,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
         : ( Vec u ) header ( vec_new [u] )
         ( bytes_extend_raw header # s + # i data start - pos start )
         : i actual & ( crc32 header ) 65535
-        ( vec_free [u] header )
         : i expected | # i . data pos << # i . data + pos 1 8
         ? != actual expected { ^ @ !i CompressErr { F CompressData } } {}
         = pos + pos 2
@@ -259,7 +257,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
                 == & ( vec_len [u] . decoded bytes ) 4294967295 ( __df_read_le32 data + trailer 4 )
             } {}
             ? ! valid {
-                ( vec_free [u] . decoded bytes )
                 ^ @ !GzipMember CompressErr { F CompressData }
             } {}
             ^ @ !GzipMember CompressErr { T @ GzipMember { . decoded bytes + trailer 8 } }
@@ -282,7 +279,6 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
             }
             T member → {
                 ( vec_extend [u] out . member bytes )
-                ( vec_free [u] . member bytes )
                 = pos . member next
             }
         }
@@ -339,12 +335,12 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 //   ( raw_deflate_new   i window_bits i level ) → ! ZDeflate CompressErr
 //   ( raw_deflate_block ZDeflate d ( Vec u ) in ) → ! ( Vec u ) CompressErr
 //   ( raw_deflate_reset ZDeflate d )               → v   // drop the window
-//   ( raw_deflate_free  ZDeflate d )               → v
+//   ( raw_deflate_free  ZDeflate d )               → v   early release (optional)
 //   ( raw_inflate_new   i window_bits )            → ! ZInflate CompressErr
 //   ( raw_inflate_block ZInflate d ( Vec u ) in i max_out )
 //                                                  → ! ( Vec u ) CompressErr
 //   ( raw_inflate_reset ZInflate d )               → v
-//   ( raw_inflate_free  ZInflate d )               → v
+//   ( raw_inflate_free  ZInflate d )               → v   early release (optional)
 //
 // `window_bits` is clamped to [9, 15]. libz changes a raw-deflate
 // windowBits of 8 to 9 internally (and 8 is unusable for raw inflate),
@@ -353,8 +349,8 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 // never exceeds the inflater's window — inflating at 15 (the max) is
 // always safe regardless of the encoder's choice.
 //
-// Memory: ZDeflate / ZInflate own their history vectors. Pair every
-// successful `*_new` with a `*_free`.
+// Memory: ZDeflate / ZInflate own their history vectors and are dropped
+// with them by their owner; `*_free` releases one early.
 
 // A persistent raw-DEFLATE compressor. `history` is the uncompressed
 // window carried across messages so emitted matches can back-reference
@@ -391,9 +387,7 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     : b _r ( vec_set_len [u] . d history 0 )
 }
 
-@ raw_deflate_free sink ZDeflate d → v {
-    ( vec_free [u] . d history )
-}
+@ raw_deflate_free sink ZDeflate d → v {}
 
 @ raw_inflate_new i window_bits → !ZInflate CompressErr {
     ^ @ !ZInflate CompressErr { T @ ZInflate { ( vec_new [u] ) } }
@@ -420,6 +414,4 @@ $ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
     : b _r ( vec_set_len [u] . d history 0 )
 }
 
-@ raw_inflate_free sink ZInflate d → v {
-    ( vec_free [u] . d history )
-}
+@ raw_inflate_free sink ZInflate d → v {}

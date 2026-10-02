@@ -107,7 +107,6 @@ $ `stdlib/std/bytes.nu`
             = crc ^^ tv >> crc 8
             = i + i 1
         }
-        ( vec_free [i] t )
     }
     ^ & ^^ crc 4294967295 4294967295  // (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
 }
@@ -128,7 +127,8 @@ $ `stdlib/std/bytes.nu`
 //
 //   : Crc32 c ( crc32_ctx )
 //   : i sum ( crc32_ctx_hash c block )     // per block, no setup cost
-//   ( crc32_ctx_free c )
+//
+// The table goes with `c` (a struct holding a Vec, dropped by its owner).
 //
 // Same algorithm, same values as crc32 / crc32_update — the context is
 // purely about where the table lives.
@@ -136,8 +136,6 @@ $ `stdlib/std/bytes.nu`
 : Crc32 { ( Vec i ) tbl }
 
 @ crc32_ctx → Crc32 { ^ @ Crc32 { ( __crc32_table ) } }
-
-@ crc32_ctx_free sink Crc32 c → v { ( vec_free [i] . c tbl ) }
 
 @ crc32_ctx_update Crc32 c i crc0 ( Vec u ) data → i {
     : ~ i crc ^^ crc0 4294967295
@@ -199,7 +197,6 @@ $ `stdlib/std/bytes.nu`
     i pos
     i bitbuf
     i bitcnt
-    ( Vec u ) out
     i err
     i max_out  // exact bound; -1 = unlimited
     i window  // maximum allowed back-reference distance
@@ -207,9 +204,9 @@ $ `stdlib/std/bytes.nu`
 
 // Check before allocation/emission, including whole stored blocks and
 // match runs. Subtraction avoids overflowing on a very large caller cap.
-@ __infl_room * InflState st i amount → b {
+@ __infl_room inout InflState st ( Vec u ) out i amount → b {
     ? < . st max_out 0 { ^ T } {}
-    ? > amount - . st max_out ( vec_len [u] . st out ) {
+    ? > amount - . st max_out ( vec_len [u] out ) {
         = . st err 6
         ^ F
     } {}
@@ -222,7 +219,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Read `need` bits LSB-first. Sets st.err on input underflow.
-@ __infl_bits * InflState st i need → i {
+@ __infl_bits inout InflState st i need → i {
     ? != . st err 0 { ^ 0 } {}
     : ~ i val . st bitbuf
     : ~ i cnt . st bitcnt
@@ -239,7 +236,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Decode one symbol with Huffman table h (puff.c algorithm).
-@ __infl_decode * InflState st Huff h → i {
+@ __infl_decode inout InflState st Huff h → i {
     : ~ i code 0
     : ~ i first 0
     : ~ i index 0
@@ -291,7 +288,6 @@ $ `stdlib/std/bytes.nu`
         } {}
         = s + s 1
     }
-    ( vec_free [i] offs )
     ^ @ Huff { count symbol }
 }
 
@@ -353,7 +349,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Decode a Huffman-coded block body (fixed or dynamic) into st.out.
-@ __infl_codes * InflState st Huff lencode Huff distcode
+@ __infl_codes inout InflState st ( Vec u ) out Huff lencode Huff distcode
 ( Vec i ) lenbase ( Vec i ) lenext ( Vec i ) distbase ( Vec i ) distext → v {
     : ~ b done F
     ~ & ! done == . st err 0 {
@@ -362,7 +358,7 @@ $ `stdlib/std/bytes.nu`
         ? < sym 0 { = . st err 2 } {
             ? == sym 256 { = done T } {
                 ? < sym 256 {
-                    ? ( __infl_room st 1 ) { ( vec_push [u] . st out # u sym ) } {}
+                    ? ( __infl_room st out 1 ) { ( vec_push [u] out # u sym ) } {}
                 } {
                     // length/distance back-reference
                     : i li - sym 257
@@ -372,15 +368,15 @@ $ `stdlib/std/bytes.nu`
                         ? != . st err 0 { ^ v } {}
                         ? | < dsym 0 >= dsym 30 { = . st err 4 } {
                             : i dist + ( __df_get distbase dsym ) ( __infl_bits st ( __df_get distext dsym ) )
-                            : i outlen ( vec_len [u] . st out )
+                            : i outlen ( vec_len [u] out )
                             ? != . st err 0 { ^ v } {}
                             ? | > dist outlen > dist . st window { = . st err 4 } {
-                                ? ! ( __infl_room st length ) { ^ v } {}
+                                ? ! ( __infl_room st out length ) { ^ v } {}
                                 : ~ i k 0
                                 ~ < k length {
-                                    : i srcidx - ( vec_len [u] . st out ) dist
-                                    : *u op ( vec_data [u] . st out )
-                                    ( vec_push [u] . st out # u . op srcidx )
+                                    : i srcidx - ( vec_len [u] out ) dist
+                                    : *u op ( vec_data [u] out )
+                                    ( vec_push [u] out # u . op srcidx )
                                     = k + k 1
                                 }
                             }
@@ -411,7 +407,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Dynamic Huffman: read the two tables, then decode the block body.
-@ __infl_dynamic * InflState st
+@ __infl_dynamic inout InflState st ( Vec u ) out
 ( Vec i ) lenbase ( Vec i ) lenext ( Vec i ) distbase ( Vec i ) distext → v {
     : i hlit + 257 ( __infl_bits st 5 )
     : i hdist + 1 ( __infl_bits st 5 )
@@ -476,24 +472,15 @@ $ `stdlib/std/bytes.nu`
         ? | == ( __df_get litlen 256 ) 0
         | ! ( __infl_huff_valid lencode T F ) ! ( __infl_huff_valid distcode T T ) {
             = . st err 2
-        } { ( __infl_codes st lencode distcode lenbase lenext distbase distext ) }
-        ( vec_free [i] litlen ) ( vec_free [i] distlen )
-        ( __df_huff_free lencode ) ( __df_huff_free distcode )
+        } { ( __infl_codes st out lencode distcode lenbase lenext distbase distext ) }
     } {}
 
-    ( vec_free [i] order ) ( vec_free [i] cllen ) ( vec_free [i] lengths )
-    ( __df_huff_free clcode )
 }
 
-@ __df_huff_free sink Huff h → v {
-    ( vec_free [i] . h count )
-    ( vec_free [i] . h symbol )
-}
-
-// Drive the block loop over st (data/out preset). `partial` != 0 stops
+// Drive the block loop over st (data preset), appending to `out`. `partial` != 0 stops
 // cleanly when the input is exhausted at a block boundary (streaming /
 // sync-flush mode) instead of erroring on the missing BFINAL bit.
-@ __inflate_run * InflState st i partial → v {
+@ __inflate_run inout InflState st ( Vec u ) out i partial → v {
     : ( Vec i ) lenbase ( __infl_lenbase )
     : ( Vec i ) lenext ( __infl_lenext )
     : ( Vec i ) distbase ( __infl_distbase )
@@ -521,10 +508,10 @@ $ `stdlib/std/bytes.nu`
                         = . st pos + . st pos 4
                         ? != ^^ blen complement 65535 { = . st err 3 } {}
                         ? > blen - . st len . st pos { = . st err 5 } {}
-                        ? & == . st err 0 ( __infl_room st blen ) {
+                        ? & == . st err 0 ( __infl_room st out blen ) {
                             : ~ i k 0
                             ~ < k blen {
-                                ( vec_push [u] . st out # u . d + . st pos k )
+                                ( vec_push [u] out # u . d + . st pos k )
                                 = k + k 1
                             }
                             = . st pos + . st pos blen
@@ -534,19 +521,16 @@ $ `stdlib/std/bytes.nu`
                     ? == btype 1 {
                         : Huff lc ( __infl_fixed_lit )
                         : Huff dc ( __infl_fixed_dist )
-                        ( __infl_codes st lc dc lenbase lenext distbase distext )
-                        ( __df_huff_free lc ) ( __df_huff_free dc )
+                        ( __infl_codes st out lc dc lenbase lenext distbase distext )
                     } {
                         ? == btype 2 {
-                            ( __infl_dynamic st lenbase lenext distbase distext )
+                            ( __infl_dynamic st out lenbase lenext distbase distext )
                         } {
                             = . st err 1
                         } } } }
         }
     }
 
-    ( vec_free [i] lenbase ) ( vec_free [i] lenext )
-    ( vec_free [i] distbase ) ( vec_free [i] distext )
 }
 
 // Inflate a complete raw DEFLATE stream into bytes.
@@ -563,26 +547,14 @@ $ `stdlib/std/bytes.nu`
     ? | < start 0 > start ( vec_len [u] src ) {
         ^ @ !Inflated DeflateErr { F DeflateBadLength }
     } {}
-    : *InflState st ( nurl_alloc Z InflState )
-    = . st data # *u + # i ( vec_data [u] src ) start
-    = . st len - ( vec_len [u] src ) start
-    = . st pos 0
-    = . st bitbuf 0
-    = . st bitcnt 0
-    = . st out ( vec_new [u] )
-    = . st err 0
-    = . st max_out max_out
-    = . st window window
-    ( __inflate_run st 0 )
-    : i err . st err
-    : i consumed . st pos
-    : ( Vec u ) out . st out
-    ( mem_take out )  // st is released by hand: out is the only owner
-    ( nurl_free # s st )
-    ? != err 0 {
-        ^ @ !Inflated DeflateErr { F ( __df_err err ) }
+    : *u data # *u + # i ( vec_data [u] src ) start
+    : ~ InflState st @ InflState { data - ( vec_len [u] src ) start 0 0 0 0 max_out window }
+    : ( Vec u ) out ( vec_new [u] )
+    ( __inflate_run st out 0 )
+    ? != . st err 0 {
+        ^ @ !Inflated DeflateErr { F ( __df_err . st err ) }
     } {}
-    ^ @ !Inflated DeflateErr { T @ Inflated { out consumed } }
+    ^ @ !Inflated DeflateErr { T @ Inflated { out . st pos } }
 }
 
 // Decode one stream from src[start..], leaving trailers to the caller.
@@ -597,7 +569,6 @@ $ `stdlib/std/bytes.nu`
         F error → ^ @ !( Vec u ) DeflateErr { F error }
         T decoded → {
             ? != . decoded consumed ( vec_len [u] src ) {
-                ( vec_free [u] . decoded bytes )
                 ^ @ !( Vec u ) DeflateErr { F DeflateBadLength }
             } {}
             ^ @ !( Vec u ) DeflateErr { T . decoded bytes }
@@ -613,21 +584,13 @@ $ `stdlib/std/bytes.nu`
 // connection stays bounded. max_out (>0) caps the per-message output.
 @ inflate_stream ( Vec u ) history ( Vec u ) input i max_out → !( Vec u ) DeflateErr {
     : i oldlen ( vec_len [u] history )
-    : *InflState st ( nurl_alloc Z InflState )
-    = . st data ( vec_data [u] input )
-    = . st len ( vec_len [u] input )
-    = . st pos 0
-    = . st bitbuf 0
-    = . st bitcnt 0
-    = . st out history
-    = . st err 0
-    = . st max_out ? & > max_out 0 <= max_out - 9223372036854775807 oldlen + oldlen max_out -1
-    = . st window 32768
+    : i cap ? & > max_out 0 <= max_out - 9223372036854775807 oldlen + oldlen max_out -1
+    : ~ InflState st @ InflState { ( vec_data [u] input ) ( vec_len [u] input ) 0 0 0 0 cap 32768 }
 
-    ( __inflate_run st 1 )
+    // Decoded bytes go straight onto the caller's history (the window).
+    ( __inflate_run st history 1 )
 
     : i err . st err
-    ( nurl_free # s st )
     ? != err 0 {
         : b restored ( vec_set_len [u] history oldlen )
         ^ @ !( Vec u ) DeflateErr { F ( __df_err err ) }
@@ -674,7 +637,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Emit `n` bits of `val` LSB-first (used for header fields + extra bits).
-@ __df_bits * BitW w i val i n → v {
+@ __df_bits inout BitW w i val i n → v {
     = . w bitbuf | . w bitbuf << & val - << 1 n 1 . w bitcnt
     = . w bitcnt + . w bitcnt n
     ~ >= . w bitcnt 8 {
@@ -686,14 +649,14 @@ $ `stdlib/std/bytes.nu`
 
 // Emit an `n`-bit Huffman code MSB-first (DEFLATE packs codes high-bit
 // first; our bit writer is LSB-first, so reverse the code's bits).
-@ __df_huff * BitW w i code i n → v {
+@ __df_huff inout BitW w i code i n → v {
     : ~ i rev 0
     : ~ i k 0
     ~ < k n { = rev | << rev 1 & >> code k 1 = k + k 1 }
     ( __df_bits w rev n )
 }
 
-@ __df_flush * BitW w → v {
+@ __df_flush inout BitW w → v {
     ? > . w bitcnt 0 {
         ( vec_push [u] . w out # u & . w bitbuf 255 )
         = . w bitbuf 0
@@ -702,7 +665,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Emit a literal byte or a fixed-Huffman lit/len symbol (incl. EOB 256).
-@ __df_emit_sym * BitW w i sym → v {
+@ __df_emit_sym inout BitW w i sym → v {
     ? <= sym 143 { ( __df_huff w + 48 sym 8 ) } {
         ? <= sym 255 { ( __df_huff w + 400 - sym 144 9 ) } {
             ? <= sym 279 { ( __df_huff w - sym 256 7 ) } {
@@ -755,7 +718,7 @@ $ `stdlib/std/bytes.nu`
     ^ ds
 }
 
-@ __df_emit_match * BitW w i length i dist
+@ __df_emit_match inout BitW w i length i dist
 ( Vec i ) lenbase ( Vec i ) lenext ( Vec i ) distbase ( Vec i ) distext → v {
     : i li ( __df_len_sym lenbase length )
     ( __df_emit_sym w + 257 li )
@@ -772,7 +735,7 @@ $ `stdlib/std/bytes.nu`
 // Positions [0, start) form a preset dictionary: their hashes are seeded
 // so emitted matches may back-reference into them (permessage-deflate
 // context takeover), but no symbols are emitted for them.
-@ __df_lz77_block * BitW w ( Vec u ) src i bfinal i start → v {
+@ __df_lz77_block inout BitW w ( Vec u ) src i bfinal i start → v {
     : i n ( vec_len [u] src )
     : *u d ( vec_data [u] src )
 
@@ -839,22 +802,15 @@ $ `stdlib/std/bytes.nu`
     }
 
     ( __df_emit_sym w 256 )  // end of block
-    ( vec_free [i] lenbase ) ( vec_free [i] lenext )
-    ( vec_free [i] distbase ) ( vec_free [i] distext )
-    ( vec_free [i] head ) ( vec_free [i] prev )
 }
 
 // Compress bytes into a complete raw DEFLATE stream (single final block).
 @ deflate ( Vec u ) src → ( Vec u ) {
-    : *BitW w ( nurl_alloc Z BitW )
-    = . w out ( vec_new [u] )
-    = . w bitbuf 0
-    = . w bitcnt 0
+    : ~ BitW w @ BitW { ( vec_new [u] ) 0 0 }
     ( __df_lz77_block w src 1 0 )
     ( __df_flush w )
+    // The output leaves the writer (moved, not copied).
     : ( Vec u ) out . w out
-    ( mem_take out )  // w is released by hand: out is the only owner
-    ( nurl_free # s w )
     ^ out
 }
 
@@ -869,10 +825,7 @@ $ `stdlib/std/bytes.nu`
     ? > dlen 0 { ( bytes_extend_bytes combined dict ) } {}
     ( bytes_extend_bytes combined msg )
 
-    : *BitW w ( nurl_alloc Z BitW )
-    = . w out ( vec_new [u] )
-    = . w bitbuf 0
-    = . w bitcnt 0
+    : ~ BitW w @ BitW { ( vec_new [u] ) 0 0 }
     ( __df_lz77_block w combined 0 dlen )
     // Sync flush: empty stored block (BFINAL=0, BTYPE=00), byte-align, then
     // LEN=0x0000 / NLEN=0xFFFF.
@@ -884,9 +837,6 @@ $ `stdlib/std/bytes.nu`
     ( vec_push [u] . w out # u 255 )
     ( vec_push [u] . w out # u 255 )
     : ( Vec u ) out . w out
-    ( mem_take out )  // w is released by hand: out is the only owner
-    ( vec_free [u] combined )
-    ( nurl_free # s w )
     ^ out
 }
 
