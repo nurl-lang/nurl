@@ -632,7 +632,7 @@ $ `stdlib/ext/http2_conn.nu`
 // HTTP/1.1's keep-alive default applies and the caller may continue
 // reading further requests on the same socket.
 //
-// Frees `r` after serialise+write regardless of outcome. `wire` is the
+// `r` is the caller's (dropped by its owner). `wire` is the
 // connection-level scratch buffer (owned by _serve_keepalive_loop):
 // serialising into it instead of a fresh Vec saves an allocate/free
 // pair per response on the keep-alive hot path.
@@ -651,11 +651,6 @@ $ `stdlib/ext/http2_conn.nu`
     ( vec_clear [u] wire )
     ( response_serialize_head_to r wire )
     : !v NetErr wr ( tcp_write_all2 conn wire . r body )
-    // finding_stdlib_closure_cursor_assign: the response a handler hands
-    // back through the recover closure (`= resp ( f req )` below) does not
-    // make `resp` its owner, so the loop would never drop it; released
-    // here until the compiler gives that assignment its owner.
-    ( http_response_free r )
     ^ wr
 }
 
@@ -968,8 +963,6 @@ $ `stdlib/ext/http2_conn.nu`
                         ? > req_timeout_ms 0 {
                             : i elapsed - ( now_ms ) req_start_ms
                             ? > elapsed req_timeout_ms {
-                                // finding_stdlib_closure_cursor_assign (see __write_response)
-                                ( http_response_free resp )
                                 = final_resp ( response_text 504 `request total-timeout exceeded\n` )
                                 = timed_out T
                             } {}
@@ -1021,10 +1014,6 @@ $ `stdlib/ext/http2_conn.nu`
             }
         }
     }
-    // finding_stdlib_closure_cursor_assign (see __write_response): with
-    // the written responses released by hand, the loop's binding of the
-    // fallback cannot tell it still owns it.
-    ( http_response_free panic_resp )
 }
 
 // Decide whether the bytes at the start of a fresh connection are the
