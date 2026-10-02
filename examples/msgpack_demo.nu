@@ -81,15 +81,12 @@ $ `stdlib/ext/serde.nu`
                         }
                         F _ → ( nurl_print `decode FAIL\n` )
                     }
-                    ( json_free j2 )
                 }
                 F _ → ( nurl_print `msgpack decode FAIL\n` )
             }
-            ( vec_free [u] bytes )
         }
         F _ → ( nurl_print `msgpack encode FAIL\n` )
     }
-    ( json_free j )
 
     // A scalar needs no struct plumbing — from_msgpack_i decodes
     // straight to an i.
@@ -106,7 +103,6 @@ $ `stdlib/ext/serde.nu`
                 }
                 F _ → ( nurl_print `scalar FAIL\n` )
             }
-            ( vec_free [u] sb )
         }
         F _ → ( nurl_print `scalar encode FAIL\n` )
     }

@@ -70,6 +70,5 @@ connectivity check before trying anything that costs something.` )
         T _ → {}
         F e → { ( mcp_log ( mcp_server_err_name e ) ) }
     }
-    ( mcp_server_free srv )
     ^ 0
 }

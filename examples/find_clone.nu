@@ -252,7 +252,6 @@ $ `stdlib/ext/regex.nu`
         ?? c {
             T r → {
                 : i hits ( run_with ( make_regex_test r ) 3 argc )
-                ( regex_free r )
                 ^ ( exit_for_hits hits )
             }
             F e → {

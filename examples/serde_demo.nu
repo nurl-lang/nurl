@@ -74,11 +74,7 @@ $ `stdlib/ext/serde.nu`
                 }
                 F _ → ( nurl_print `decode FAIL\n` )
             }
-            ( json_free j2 )
         }
         F _ → ( nurl_print `parse FAIL\n` )
     }
-
-    ( string_free s )
-    ( json_free j )
 }

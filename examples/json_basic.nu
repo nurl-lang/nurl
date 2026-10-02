@@ -31,7 +31,6 @@ $ `stdlib/core/result.nu`
             ( nurl_print `parse null ok type=` )
             ( nurl_print ( json_type_name j ) )
             ( nurl_print `\n` )
-            ( json_free j )
         }
         F e → ( show_err `parse null err: ` # JsonError e )
     }
@@ -45,7 +44,6 @@ $ `stdlib/core/result.nu`
             ( nurl_print ` val=` )
             ( nurl_print ? ( json_bool_val j ) `T` `F` )
             ( nurl_print `\n` )
-            ( json_free j )
         }
         F e → ( show_err `parse true err: ` # JsonError e )
     }
@@ -59,7 +57,6 @@ $ `stdlib/core/result.nu`
             ( nurl_print ` val=` )
             ( nurl_print ? ( json_bool_val j ) `T` `F` )
             ( nurl_print `\n` )
-            ( json_free j )
         }
         F e → ( show_err `parse false err: ` # JsonError e )
     }
@@ -77,7 +74,6 @@ $ `stdlib/core/result.nu`
                 F → ( nurl_print `(none)` )
             }
             ( nurl_print `\n` )
-            ( json_free j )
         }
         F e → ( show_err `parse 42 err: ` # JsonError e )
     }
@@ -95,7 +91,6 @@ $ `stdlib/core/result.nu`
                 F → ( nurl_print `(none)` )
             }
             ( nurl_print `\n` )
-            ( json_free j )
         }
         F e → ( show_err `parse -3.5 err: ` # JsonError e )
     }
@@ -108,7 +103,6 @@ $ `stdlib/core/result.nu`
             ( nurl_print ( json_type_name j ) )
             ( nurl_print ` data=` )
             ( nurl_print ( json_str_data j ) )
-            ( json_free j )
         }
         F e → ( show_err `parse string err: ` # JsonError e )
     }
@@ -134,7 +128,6 @@ $ `stdlib/core/result.nu`
                 F → ( nurl_print `none` )
             }
             ( nurl_print `\n` )
-            ( json_free j )
         }
         F e → ( show_err `parse arr err: ` # JsonError e )
     }
@@ -176,12 +169,9 @@ $ `stdlib/core/result.nu`
                     } {
                         ( nurl_print `stringify roundtrip MISMATCH\n` )
                     }
-                    ( json_free j2 )
                 }
                 F e → ( show_err `roundtrip parse err: ` # JsonError e )
             }
-            ( string_free out )
-            ( json_free j )
         }
         F e → ( show_err `parse obj err: ` # JsonError e )
     }
@@ -189,19 +179,19 @@ $ `stdlib/core/result.nu`
     // 10. error paths
     : !Json JsonError re1 ( json_parse `` )
     ?? re1 {
-        T j → { ( nurl_print `unexpected ok\n` ) ( json_free j ) }
+        T j → { ( nurl_print `unexpected ok\n` ) }
         F e → ( show_err `err empty: ` # JsonError e )
     }
 
     : !Json JsonError re2 ( json_parse `xyz` )
     ?? re2 {
-        T j → { ( nurl_print `unexpected ok\n` ) ( json_free j ) }
+        T j → { ( nurl_print `unexpected ok\n` ) }
         F e → ( show_err `err bad: ` # JsonError e )
     }
 
     : !Json JsonError re3 ( json_parse `42 trailing` )
     ?? re3 {
-        T j → { ( nurl_print `unexpected ok\n` ) ( json_free j ) }
+        T j → { ( nurl_print `unexpected ok\n` ) }
         F e → ( show_err `err trailing: ` # JsonError e )
     }
 
@@ -232,8 +222,6 @@ $ `stdlib/core/result.nu`
                 = ki + ki 1
             }
             ( nurl_print `\n` )
-            : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
-            ( vec_free_with [String] keys drop_s )
 
             // arr_each on the inner array (json_obj_get → JArr)
             : ?Json y ( json_obj_get j `y` )
@@ -260,9 +248,6 @@ $ `stdlib/core/result.nu`
             }
             ( json_obj_each j print_pair )
             ( nurl_print `\n` )
-
-            ( string_free pp )
-            ( json_free j )
         }
         F e → ( show_err `pretty parse err: ` # JsonError e )
     }
@@ -275,8 +260,6 @@ $ `stdlib/core/result.nu`
             ( nurl_print `empty_pretty:\n` )
             ( nurl_print ( string_data p ) )
             ( nurl_print `\n` )
-            ( string_free p )
-            ( json_free j )
         }
         F e → ( show_err `empty pretty err: ` # JsonError e )
     }
@@ -374,12 +357,6 @@ $ `stdlib/core/result.nu`
     ( nurl_print ` eq_diff=` )
     ( nurl_print ? ( json_eq j1 j3 ) `T` `F` )
     ( nurl_print `\n` )
-    ( json_free j3 )
-    ( json_free j2 )
-    ( json_free j1 )
-
-    ( json_free dup )
-    ( string_free built_s )
 
     ^ 0
 }

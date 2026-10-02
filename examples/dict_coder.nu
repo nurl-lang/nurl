@@ -17,9 +17,9 @@
 //                    type-class dispatch)
 //
 // Ownership note: the words below are raw string-literal pointers,
-// so the HashMap and Vecs only borrow them — bare `map_free` /
-// `vec_free` is correct. For an owned-String dictionary you would
-// reach for `vec_free_with` + `map_free_with` instead.
+// so the HashMap and Vecs only borrow them. Nothing is released by
+// hand: each table releases itself when its binding goes out of scope
+// (an owned-String dictionary would release its Strings the same way).
 // ============================================================
 
 $ `stdlib/core/vec.nu`
@@ -206,7 +206,7 @@ $ `stdlib/std/hashmap.nu`
     ]
 
     // Construct the three working tables. They live for the whole run
-    // and are freed in reverse order at the end.
+    // and release themselves when main returns.
     : ( HashMap s i ) word_to_id ( map_new [s i] )
     : ( Vec s ) id_to_word ( vec_new [s] )
     : ( Vec i ) compressed ( vec_new [i] )
@@ -256,12 +256,8 @@ $ `stdlib/std/hashmap.nu`
     ( banner `Frequencies` )
     : ( HashMap i i ) freqs ( tally_freqs compressed )
     ( report_top_word freqs id_to_word )
-    ( map_free [i i] freqs )
 
     ( banner `Cleanup` )
-    ( map_free [s i] word_to_id )
-    ( vec_free [s] id_to_word )
-    ( vec_free [i] compressed )
     ( nurl_print `  done.\n` )
 
     ^ 0

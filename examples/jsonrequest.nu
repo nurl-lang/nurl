@@ -42,13 +42,9 @@ $ `stdlib/ext/json.nu`
                     : String pretty ( json_pretty obj )
                     ( nurl_print ( string_data pretty ) )
                     ( nurl_print `\n` )
-                    ( string_free pretty )
-                    ( json_free obj )
                 }
                 F e → ( show_parse_err `JSON parse error: ` # JsonError e )
             }
-
-            ( response_free resp )
         }
         F e → ( show_http_err `HTTP error: ` # HttpErr e )
     }

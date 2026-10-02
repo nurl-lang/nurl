@@ -63,11 +63,6 @@ $ `stdlib/std/fs.nu`
 
 : JiraConfig { String url String headers }
 
-@ jira_config_free sink JiraConfig c → v {
-    ( string_free . c url )
-    ( string_free . c headers )
-}
-
 // Riisu trailing slash base-URL:sta.
 @ __jira_trim_slash s raw → String {
     : i n ( nurl_str_len raw )
@@ -87,14 +82,12 @@ $ `stdlib/std/fs.nu`
             : ?String oe ( env_get `JIRA_EMAIL` )
             ?? oe {
                 F → {
-                    ( string_free url_raw )
                     ^ @ !JiraConfig JiraErr { F # JiraErr JiraConfigMissing }
                 }
                 T email → {
                     : ?String ot ( env_get `JIRA_API_TOKEN` )
                     ?? ot {
                         F → {
-                            ( string_free url_raw ) ( string_free email )
                             ^ @ !JiraConfig JiraErr { F # JiraErr JiraConfigMissing }
                         }
                         T token → {
@@ -111,8 +104,6 @@ $ `stdlib/std/fs.nu`
                             ( string_push_str headers `\r\n` )
                             ( string_push_str headers `Accept: application/json\r\n` )
                             ( string_push_str headers `Content-Type: application/json; charset=utf-8\r\n` )
-                            ( string_free url_raw ) ( string_free email ) ( string_free token )
-                            ( string_free pair ) ( string_free b64 )
                             : JiraConfig cfg @ JiraConfig { url headers }
                             ^ @ !JiraConfig JiraErr { T cfg }
                         }
@@ -142,14 +133,12 @@ $ `stdlib/std/fs.nu`
 
     : !Response HttpErr res
     ( http_request method ( string_data url ) body ( string_data . cfg headers ) )
-    ( string_free url )
 
     ?? res {
         F _he → { ^ @ !Json JiraErr { F # JiraErr JiraHttp } }
         T r → {
             : i st ( http_status r )
             : String body_owned ( string_from ( http_body_str r ) )
-            ( response_free r )
 
             // Tyhjä runko (esim. 204) onnistumisella → tyhjä objekti.
             ? & < st 300 == 0 ( string_len body_owned ) {
@@ -157,12 +146,10 @@ $ `stdlib/std/fs.nu`
             } {}
 
             : !Json JsonError pj ( json_parse ( string_data body_owned ) )
-            ( string_free body_owned )
             ?? pj {
                 F _je → { ^ @ !Json JiraErr { F # JiraErr JiraJson } }
                 T j → {
                     ? >= st 400 {
-                        ( json_free j )
                         ^ @ !Json JiraErr { F ( __jira_status_to_err st ) }
                     } {}
                     ^ @ !Json JiraErr { T j }
@@ -227,7 +214,6 @@ $ `stdlib/std/fs.nu`
                 : String toname ( __jira_json_path_str t `to` `name` )
                 : b matched | ( __jira_ieq ( string_data tname ) status )
                 ( __jira_ieq ( string_data toname ) status )
-                ( string_free tname ) ( string_free toname )
                 ? matched {
                     ^ ( __jira_json_field_str t `id` )
                 } {}
@@ -249,11 +235,9 @@ $ `stdlib/std/fs.nu`
                 F → {}
                 T trans → {
                     : String found ( __jira_find_transition trans status )
-                    ( string_free tid )
                     = tid found
                 }
             }
-            ( json_free tjson )
             ? == 0 ( string_len tid ) {
                 ^ @ !Json JiraErr { F # JiraErr JiraNotFound }
             } {}
@@ -263,14 +247,11 @@ $ `stdlib/std/fs.nu`
             : Json body ( json_obj_new )
             : b _b ( json_obj_set body `transition` inner )
             : String bs ( json_stringify body )
-            ( json_free body )
-            ( string_free tid )
             : String ep ( string_with_cap 64 )
             ( string_push_str ep `/rest/api/3/issue/` )
             ( string_push_str ep key )
             ( string_push_str ep `/transitions` )
             : !Json JiraErr r ( jira_request cfg `POST` ( string_data ep ) ( string_data bs ) )
-            ( string_free bs )
             ^ r
         }
     }
@@ -280,13 +261,11 @@ $ `stdlib/std/fs.nu`
     : Json body ( json_obj_new )
     : b _a ( json_obj_set body `accountId` ( json_str_lit `-1` ) )
     : String bs ( json_stringify body )
-    ( json_free body )
     : String ep ( string_with_cap 64 )
     ( string_push_str ep `/rest/api/3/issue/` )
     ( string_push_str ep key )
     ( string_push_str ep `/assignee` )
     : !Json JiraErr r ( jira_request cfg `PUT` ( string_data ep ) ( string_data bs ) )
-    ( string_free bs )
     ^ r
 }
 
@@ -294,13 +273,11 @@ $ `stdlib/std/fs.nu`
     : Json body ( json_obj_new )
     : b _a ( json_obj_set body `body` ( __jira_adf_doc text ) )
     : String bs ( json_stringify body )
-    ( json_free body )
     : String ep ( string_with_cap 64 )
     ( string_push_str ep `/rest/api/3/issue/` )
     ( string_push_str ep key )
     ( string_push_str ep `/comment` )
     : !Json JiraErr r ( jira_request cfg `POST` ( string_data ep ) ( string_data bs ) )
-    ( string_free bs )
     ^ r
 }
 
@@ -310,12 +287,10 @@ $ `stdlib/std/fs.nu`
     : Json body ( json_obj_new )
     : b _b ( json_obj_set body `fields` fields )
     : String bs ( json_stringify body )
-    ( json_free body )
     : String ep ( string_with_cap 64 )
     ( string_push_str ep `/rest/api/3/issue/` )
     ( string_push_str ep key )
     : !Json JiraErr r ( jira_request cfg `PUT` ( string_data ep ) ( string_data bs ) )
-    ( string_free bs )
     ^ r
 }
 
@@ -337,9 +312,7 @@ $ `stdlib/std/fs.nu`
     : Json body ( json_obj_new )
     : b _b ( json_obj_set body `fields` fields )
     : String bs ( json_stringify body )
-    ( json_free body )
     : !Json JiraErr r ( jira_request cfg `POST` `/rest/api/3/issue` ( string_data bs ) )
-    ( string_free bs )
     ^ r
 }
 
@@ -355,7 +328,6 @@ $ `stdlib/std/fs.nu`
         ( string_push_str ep ( string_data ( percent_encode fields ) ) )
     } {}
     : !Json JiraErr r ( jira_request cfg `GET` ( string_data ep ) `` )
-    ( string_free enc )
     ^ r
 }
 
@@ -446,7 +418,6 @@ $ `stdlib/std/fs.nu`
 @ __jira_collect_issue_type Json itd Json statuses Json issue_types Json transitions → v {
     : String itname ( __jira_json_field_str itd `name` )
     ? != 0 ( string_len itname ) { ( __jira_arr_add_unique issue_types ( string_data itname ) ) } {}
-    ( string_free itname )
     : ?Json ost ( json_obj_get itd `statuses` )
     ?? ost {
         F → {}
@@ -471,7 +442,6 @@ $ `stdlib/std/fs.nu`
     ( string_push_str ep pkey )
     ( string_push_str ep `/statuses` )
     : !Json JiraErr sr ( jira_request cfg `GET` ( string_data ep ) `` )
-    ( string_free ep )
     ?? sr {
         F _e → {}  // ohita virheelliset projektit (Python kerää varoitukset)
         T sjson → {
@@ -487,7 +457,6 @@ $ `stdlib/std/fs.nu`
                     = ti + ti 1
                 }
             } {}
-            ( json_free sjson )
             : String pname ( __jira_json_field_str proj `name` )
             : String pid ( __jira_json_field_str proj `id` )
             : Json entry ( json_obj_new )
@@ -510,7 +479,6 @@ $ `stdlib/std/fs.nu`
             : String p ( string_with_cap 128 )
             ( string_push_str p ( string_data home ) )
             ( string_push_str p `/.jira_project_map.json` )
-            ( string_free home )
             ^ p
         }
     }
@@ -539,20 +507,16 @@ $ `stdlib/std/fs.nu`
                     = i + i 1
                 }
             } {}
-            ( json_free projects )
             : String path ( __jira_map_path )
             : String js ( json_stringify project_map )
             : !v IoErr wr ( write_file ( string_data path ) ( string_data js ) )
-            ( string_free js )
             ?? wr {
                 F _io → {
-                    ( string_free path )
                     ^ @ !Json JiraErr { F # JiraErr JiraOther }
                 }
                 T _ok → {}
             }
             ( nurl_print `  Tallennettu: ` ) ( nurl_print ( string_data path ) ) ( nurl_print `\n` )
-            ( string_free path )
             ^ @ !Json JiraErr { T project_map }
         }
     }
@@ -704,7 +668,7 @@ $ `stdlib/std/fs.nu`
 @ __jira_run_simple JiraConfig cfg s ok_msg ! Json JiraErr r → i {
     ?? r {
         F e → { ( __jira_print_err e ) ^ 1 }
-        T j → { ( __jira_print_ok ok_msg ) ( json_free j ) ^ 0 }
+        T j → { ( __jira_print_ok ok_msg ) ^ 0 }
     }
 }
 
@@ -716,8 +680,6 @@ $ `stdlib/std/fs.nu`
             ( __jira_print_ok key )
             : String pretty ( json_stringify j )
             ( nurl_print `  ` ) ( nurl_print ( string_data pretty ) ) ( nurl_print `\n` )
-            ( string_free pretty )
-            ( json_free j )
             ^ 0
         }
     }
@@ -730,7 +692,6 @@ $ `stdlib/std/fs.nu`
         T j → {
             ( __jira_print_ok key )
             ( __jira_print_transitions j )
-            ( json_free j )
             ^ 0
         }
     }
@@ -743,7 +704,6 @@ $ `stdlib/std/fs.nu`
         T j → {
             ( __jira_print_ok `Haku valmis` )
             ( __jira_print_issues j )
-            ( json_free j )
             ^ 0
         }
     }
@@ -756,7 +716,6 @@ $ `stdlib/std/fs.nu`
         T j → {
             ( __jira_print_ok `Omat issuet` )
             ( __jira_print_issues j )
-            ( json_free j )
             ^ 0
         }
     }
@@ -769,7 +728,6 @@ $ `stdlib/std/fs.nu`
         T j → {
             ( __jira_print_ok `Projektit` )
             ( __jira_print_projects j )
-            ( json_free j )
             ^ 0
         }
     }
@@ -781,7 +739,6 @@ $ `stdlib/std/fs.nu`
         F e → { ( __jira_print_err e ) ^ 1 }
         T j → {
             ( __jira_print_ok `Projektikartta kartoitettu` )
-            ( json_free j )
             ^ 0
         }
     }
@@ -797,10 +754,8 @@ $ `stdlib/std/fs.nu`
         : String a ( env_arg i )
         ? & ( __jira_ieq ( string_data a ) flag ) < + i 1 n {
             : String v ( env_arg + i 1 )
-            ( string_free a )
             ^ v
         } {}
-        ( string_free a )
         = i + i 1
     }
     ^ ( string_from `` )
@@ -834,7 +789,6 @@ $ `stdlib/std/fs.nu`
     ?? cr {
         F _e → {
             ( nurl_print `✗ Virhe: Aseta JIRA_URL, JIRA_EMAIL ja JIRA_API_TOKEN\n` )
-            ( string_free action )
             ^ 1
         }
         T cfg → {
@@ -851,40 +805,33 @@ $ `stdlib/std/fs.nu`
                         : String st ( __jira_opt `--status` )
                         : String pr ( __jira_opt `--project` )
                         = rc ( cmd_my_issues cfg ( string_data st ) ( string_data pr ) )
-                        ( string_free st ) ( string_free pr )
                     } {
                         ? & ( __jira_ieq act `get` ) >= argc 3 {
                             : String key ( env_arg 2 )
                             = rc ( cmd_get cfg ( string_data key ) )
-                            ( string_free key )
                         } {
                             ? & ( __jira_ieq act `transitions` ) >= argc 3 {
                                 : String key ( env_arg 2 )
                                 = rc ( cmd_transitions cfg ( string_data key ) )
-                                ( string_free key )
                             } {
                                 ? & ( __jira_ieq act `assign` ) >= argc 3 {
                                     : String key ( env_arg 2 )
                                     = rc ( __jira_run_simple cfg `Issue otettu itsellesi` ( jira_assign_to_me cfg ( string_data key ) ) )
-                                    ( string_free key )
                                 } {
                                     ? & ( __jira_ieq act `status` ) >= argc 4 {
                                         : String key ( env_arg 2 )
                                         : String stv ( env_arg 3 )
                                         = rc ( __jira_run_simple cfg `Status vaihdettu` ( jira_change_status cfg ( string_data key ) ( string_data stv ) ) )
-                                        ( string_free key ) ( string_free stv )
                                     } {
                                         ? & ( __jira_ieq act `comment` ) >= argc 4 {
                                             : String key ( env_arg 2 )
                                             : String txt ( env_arg 3 )
                                             = rc ( __jira_run_simple cfg `Kommentti lisätty` ( jira_add_comment cfg ( string_data key ) ( string_data txt ) ) )
-                                            ( string_free key ) ( string_free txt )
                                         } {
                                             ? & ( __jira_ieq act `edit-desc` ) >= argc 4 {
                                                 : String key ( env_arg 2 )
                                                 : String txt ( env_arg 3 )
                                                 = rc ( __jira_run_simple cfg `Kuvaus päivitetty` ( jira_update_description cfg ( string_data key ) ( string_data txt ) ) )
-                                                ( string_free key ) ( string_free txt )
                                             } {
                                                 ? & ( __jira_ieq act `create` ) >= argc 3 {
                                                     : String summary ( env_arg 2 )
@@ -913,19 +860,15 @@ $ `stdlib/std/fs.nu`
                                                             { = rc ( __jira_run_simple cfg `Issue luotu` ( jira_create_issue cfg pd sd ) ) }
                                                         }
                                                     }
-                                                    ( string_free summary ) ( string_free pr ) ( string_free ty ) ( string_free de )
                                                 } {
                                                     ? & ( __jira_ieq act `search` ) >= argc 3 {
                                                         : String jql ( env_arg 2 )
                                                         = rc ( cmd_search cfg ( string_data jql ) )
-                                                        ( string_free jql )
                                                     } {
                                                         ( usage )
                                                         = rc 1
                                                     } } } } } } } } } } }
 
-            ( jira_config_free cfg )
-            ( string_free action )
             ^ rc
         }
     }

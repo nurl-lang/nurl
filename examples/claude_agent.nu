@@ -92,10 +92,11 @@ $ `stdlib/core/vec.nu`
 }
 
 // Cap the tool result so a wild `find /` can't blow our context window.
-// Trims to N bytes at most and appends a marker if truncated.
+// Trims to N bytes at most and appends a marker if truncated. Takes the
+// String: returned as is when it fits, dropped when a trimmed copy is.
 @ MAX_TOOL_BYTES → i { ^ 80000 }
 
-@ truncate_for_model String src → String {
+@ truncate_for_model sink String src → String {
     : i n ( string_len src )
     : i lim ( MAX_TOOL_BYTES )
     ? <= n lim {
@@ -105,12 +106,11 @@ $ `stdlib/core/vec.nu`
     ( string_push_str head `\n…[truncated, ` )
     ( string_push_int head - n lim )
     ( string_push_str head ` more bytes]` )
-    ( string_free src )
     ^ head
 }
 
-// Run a single tool_use block, returning (text, is_error). Both arms
-// hand back an owned String so the caller can free uniformly.
+// Run a single tool_use block, returning (text, is_error). Every arm
+// hands back an owned String.
 @ run_tool Json tu → String {
     : s name ( claude_tool_use_name tu )
     : ?Json input_o ( claude_tool_use_input tu )
@@ -141,7 +141,6 @@ $ `stdlib/core/vec.nu`
                     ( string_push_str body `\n[stderr]\n` )
                     ( string_push_str body ( output_stderr out ) )
                 } {}
-                ( output_free out )
                 ^ ( truncate_for_model body )
             }
             F e → {
@@ -225,19 +224,14 @@ $ `stdlib/core/vec.nu`
     }
     ? == ( nurl_str_len api_key ) 0 {
         ( nurl_print `error: ANTHROPIC_API_KEY not set\n` )
-        ?? key { T s → ( string_free s ) F → {} }
         ^ 1
     } {}
 
     // Build messages = [user_text(prompt)] and tools.
     : ( Vec Json ) msgs ( vec_new [Json] )
     ( vec_push [Json] msgs ( claude_msg_user_text ( string_data prompt ) ) )
-    ( string_free prompt )
 
     : ( Vec Json ) tools ( build_tools )
-
-    // Drop closure for the Vec[Json] cleanups at end-of-program.
-    : ( @ v Json ) drop_json \ Json e → v { ( json_free e ) }
 
     // Loop.
     : ~ i turn 0
@@ -305,22 +299,18 @@ $ `stdlib/core/vec.nu`
                                     ( vec_push [Json] results
                                     ( claude_tool_result_block tu_id ( string_data out ) looks_err ) )
                                 }
-                                ( string_free out )
                             }
                             F → {}
                         }
                         = k + k 1
                     }
-                    ( vec_free_with [Json] tcs drop_json )
 
                     // Push the user-side tool_result turn.
                     ( vec_push [Json] msgs ( claude_msg_user_blocks results ) )
-                    ( claude_response_free resp )
                 } {
                     // No tool_use: print the final answer and stop.
                     ( nurl_print ( claude_text resp ) )
                     ( nurl_print `\n` )
-                    ( claude_response_free resp )
                     = done T
                     = exit_code 0
                 }
@@ -348,10 +338,6 @@ $ `stdlib/core/vec.nu`
     ( nurl_eprint ` turns=` )
     ( nurl_eprint ( nurl_str_int turn ) )
     ( nurl_eprint `\n` )
-
-    ( vec_free_with [Json] msgs drop_json )
-    ( vec_free_with [Json] tools drop_json )
-    ?? key { T s → ( string_free s ) F → {} }
 
     ^ exit_code
 }

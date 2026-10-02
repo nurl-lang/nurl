@@ -145,7 +145,7 @@ $ `stdlib/ext/regex.nu`
 @ make_literal_matcher ( Vec String ) needles b ci → ( @ i s ) {
     ^ \ s line → i {
         : ~ String hay ( string_from line )
-        ? ci { : String low ( string_to_lower hay ) ( string_free hay ) = hay low } {}
+        ? ci { : String low ( string_to_lower hay ) = hay low } {}
         : s h ( string_data hay )
         : ~ i best -1
         : ~ i blen 0
@@ -163,7 +163,6 @@ $ `stdlib/ext/regex.nu`
             }
             = k + k 1
         }
-        ( string_free hay )
         ^ ? < best 0 -1 ( pack_span best blen )
     }
 }
@@ -210,7 +209,7 @@ $ `stdlib/ext/regex.nu`
         : i lastc & # i . # *u parent - pl 1 255
         ? | == lastc 47 == lastc 92 {
             : String t ( string_substr out 0 - pl 1 )
-            ( string_free out ) = out t
+            = out t
         } {}
     } {}
     : s sep ? >= ( nurl_str_find parent `\\` ) 0 `\\` `/`
@@ -271,8 +270,6 @@ $ `stdlib/ext/regex.nu`
                 }
                 = i + i 1
             }
-            ( vec_free_with [String] lines \ String s → v { ( string_free s ) } )
-            ( string_free content )
             ^ hits
         }
         F err → {
@@ -308,14 +305,12 @@ $ `stdlib/ext/regex.nu`
                             } {
                                 = hits + hits ( scan_file ( string_data sub ) matcher context color flag )
                             }
-                            ( string_free sub )
                         }
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] entries \ String s → v { ( string_free s ) } )
             ^ hits
         }
         F err → ^ 0
@@ -372,7 +367,7 @@ $ `stdlib/ext/regex.nu`
                             ? | ( seq a `-h` ) ( seq a `--help` ) { = show_help T } {
                                 ? | ( seq a `-p` ) ( seq a `--path` ) {
                                     = ai + ai 1
-                                    ? < ai argc { ( string_free path ) = path ( string_from ( nurl_argv_get ai ) ) }
+                                    ? < ai argc { = path ( string_from ( nurl_argv_get ai ) ) }
                                     { ( nurl_eprint `find: -p requires an argument\n` ) = bad T }
                                 } {
                                     ? ( string_starts_with ( string_from a ) `--color=` ) {
@@ -392,11 +387,11 @@ $ `stdlib/ext/regex.nu`
         = ai + ai 1
     }
 
-    ? show_help { ( usage ) ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ^ 0 } {}
-    ? bad { ( usage ) ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ^ 2 } {}
+    ? show_help { ( usage ) ^ 0 } {}
+    ? bad { ( usage ) ^ 2 } {}
     ? == ( vec_len [String] terms ) 0 {
         ( nurl_eprint `find: no search terms given\n` ) ( usage )
-        ( vec_free_with [String] terms \ String s → v { ( string_free s ) } ) ^ 2
+        ^ 2
     } {}
 
     : ~ b use_color F
@@ -430,7 +425,6 @@ $ `stdlib/ext/regex.nu`
         }
         ? ok { = hits ( walk ( string_data path ) ( make_regex_matcher rxs ) context recursive use_color flag ) }
         { = rc 2 }
-        ( vec_free_with [Regex] rxs \ Regex r → v { ( regex_free r ) } )
     } {
         : b ci ? strict F T
         : ( Vec String ) needles ( vec_new [String] )
@@ -447,12 +441,8 @@ $ `stdlib/ext/regex.nu`
             = ti + ti 1
         }
         = hits ( walk ( string_data path ) ( make_literal_matcher needles ci ) context recursive use_color flag )
-        ( vec_free_with [String] needles \ String s → v { ( string_free s ) } )
     }
 
-    ( vec_free [i] flag )
-    ( vec_free_with [String] terms \ String s → v { ( string_free s ) } )
-    ( string_free path )
     ? > rc 0 { ^ rc } {}
     ^ ? > hits 0 0 1
 }

@@ -22,12 +22,10 @@ $ `stdlib/std/async.nu`  // runtime_init
     : String s ( string_new )
     ( string_push_int s . r status )
     ( nurl_print ( string_data s ) )
-    ( string_free s )
     ( nurl_print ` bytes=` )
     : String n ( string_new )
     ( string_push_int n ( vec_len [u] . r body ) )
     ( nurl_print ( string_data n ) )
-    ( string_free n )
     ( nurl_print `\n` )
 }
 
@@ -44,13 +42,11 @@ $ `stdlib/std/async.nu`  // runtime_init
             : ( Vec u ) b1 ( vec_new [u] )
             : !i H2ClientErr s1 ( h2_client_submit client `GET` `https`
             host `/` h1 b1 )
-            ( vec_free_with [Header] h1 \ Header hh → v { ( header_free hh ) } )
 
             : ( Vec Header ) h2 ( vec_new [Header] )
             : ( Vec u ) b2 ( vec_new [u] )
             : !i H2ClientErr s2 ( h2_client_submit client `GET` `https`
             host `/robots.txt` h2 b2 )
-            ( vec_free_with [Header] h2 \ Header hh → v { ( header_free hh ) } )
 
             : !v H2ClientErr rr ( h2_client_run_until_complete client )
             ?? rr {
@@ -59,7 +55,7 @@ $ `stdlib/std/async.nu`  // runtime_init
                         T sid1 → {
                             : !HttpResponse H2ClientErr t1 ( h2_client_take_response client sid1 )
                             ?? t1 {
-                                T resp → { ( print_resp `GET /` resp ) ( http_response_free resp ) }
+                                T resp → { ( print_resp `GET /` resp ) }
                                 F e → { ( nurl_print `take1 err: ` ) ( nurl_print ( h2_client_err_name e ) ) ( nurl_print `\n` ) }
                             }
                         }
@@ -69,7 +65,7 @@ $ `stdlib/std/async.nu`  // runtime_init
                         T sid2 → {
                             : !HttpResponse H2ClientErr t2 ( h2_client_take_response client sid2 )
                             ?? t2 {
-                                T resp → { ( print_resp `GET /robots.txt` resp ) ( http_response_free resp ) }
+                                T resp → { ( print_resp `GET /robots.txt` resp ) }
                                 F e → { ( nurl_print `take2 err: ` ) ( nurl_print ( h2_client_err_name e ) ) ( nurl_print `\n` ) }
                             }
                         }

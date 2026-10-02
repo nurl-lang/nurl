@@ -31,7 +31,6 @@ $ `stdlib/ext/http.nu`
             ( nurl_print `get_header_count_gt0=` )
             ( nurl_print ? > ( http_header_count r ) 0 `T` `F` )
             ( nurl_print `\n` )
-            ( response_free r )
         }
         F e → {
             ( nurl_print `get_err=` )
@@ -54,7 +53,6 @@ $ `stdlib/ext/http.nu`
             ( nurl_print `post_status=` )
             ( nurl_print ( nurl_str_int ( http_status r ) ) )
             ( nurl_print `\n` )
-            ( response_free r )
         }
         F e → { ( nurl_print `post_err\n` ) }
     }
@@ -64,7 +62,6 @@ $ `stdlib/ext/http.nu`
     ?? bad {
         T r → {
             ( nurl_print `bad_unexpected_ok\n` )
-            ( response_free r )
         }
         F e → {
             ( nurl_print `bad=` )
