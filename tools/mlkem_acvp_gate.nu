@@ -36,7 +36,6 @@ $ `stdlib/std/mlkem.nu`
     : String txt ?? rd { T v → { v } F _e → { ( __die `cannot read vector file` ) ( string_new ) } }
     : !Json JsonError pr ( json_parse ( string_data txt ) )
     : Json j ?? pr { T v → { v } F _e → { ( __die `cannot parse vector JSON` ) ( json_null ) } }
-    ( string_free txt )
     ^ j
 }
 
@@ -60,7 +59,6 @@ $ `stdlib/std/mlkem.nu`
     ?? r {
         T w → {
             : b ok ( bytes_eq got w )
-            ( vec_free [u] w )
             ^ ok
         }
         F _e → { ^ F }
@@ -78,7 +76,7 @@ $ `stdlib/std/mlkem.nu`
     i skip
 }
 
-@ __note * Tally t b ok s what i tcid → v {
+@ __note inout Tally t b ok s what i tcid → v {
     ? ok { = . t pass + . t pass 1 } {
         = . t fail + . t fail 1
         : String ln ( string_new )
@@ -88,7 +86,6 @@ $ `stdlib/std/mlkem.nu`
         ( string_push_int ln tcid )
         ( string_push_str ln `\n` )
         ( nurl_print ( string_data ln ) )
-        ( string_free ln )
     }
 }
 
@@ -97,7 +94,7 @@ $ `stdlib/std/mlkem.nu`
     ?? o { T v → { ^ ?? ( json_num_as_i v ) { T n → { n } F → { 0 } } } F → { ^ 0 } }
 }
 
-@ __run_keygen Json doc * Tally t → v {
+@ __run_keygen Json doc inout Tally t → v {
     : ?Json og ( json_obj_get doc `testGroups` )
     : Json groups ?? og { T v → { v } F → { ( __die `keyGen: no testGroups` ) ( json_null ) } }
     : i ng ( json_arr_len groups )
@@ -116,16 +113,13 @@ $ `stdlib/std/mlkem.nu`
             : b ok & ( __eq_hex ( mlkem_ek ks ) ( __str tc `ek` ) )
             ( __eq_hex ( mlkem_dk ks ) ( __str tc `dk` ) )
             ( __note t ok `keyGen` ( __tcid tc ) )
-            ( mlkem_keys_free ks )
-            ( vec_free [u] z )
-            ( vec_free [u] d )
             = ti + ti 1
         }
         = gi + gi 1
     }
 }
 
-@ __run_encapdecap Json doc * Tally t → v {
+@ __run_encapdecap Json doc inout Tally t → v {
     : ?Json og ( json_obj_get doc `testGroups` )
     : Json groups ?? og { T v → { v } F → { ( __die `encapDecap: no testGroups` ) ( json_null ) } }
     : i ng ( json_arr_len groups )
@@ -149,9 +143,6 @@ $ `stdlib/std/mlkem.nu`
                 : b ok & ( __eq_hex ( mlkem_ct en ) ( __str tc `c` ) )
                 ( __eq_hex ( mlkem_ss en ) ( __str tc `k` ) )
                 ( __note t ok `encapsulation` ( __tcid tc ) )
-                ( mlkem_encap_free en )
-                ( vec_free [u] m )
-                ( vec_free [u] ek )
             } {}
             ? is_decap {
                 // dk may sit on the test or, for some group shapes, on
@@ -161,9 +152,6 @@ $ `stdlib/std/mlkem.nu`
                 : ( Vec u ) ct ( __hexv ( __str tc `c` ) )
                 : ( Vec u ) ss ( mlkem_decaps level dk ct )
                 ( __note t ( __eq_hex ss ( __str tc `k` ) ) `decapsulation` ( __tcid tc ) )
-                ( vec_free [u] ss )
-                ( vec_free [u] ct )
-                ( vec_free [u] dk )
             } {}
             ? | is_encap is_decap {} { = . t skip + . t skip 1 }
             = ti + ti 1
@@ -180,18 +168,13 @@ $ `stdlib/std/mlkem.nu`
     : s p1 ( nurl_argv_get 1 )
     : s p2 ( nurl_argv_get 2 )
 
-    : *Tally t # *Tally ( nurl_alloc Z Tally )
-    = . t pass 0
-    = . t fail 0
-    = . t skip 0
+    : ~ Tally t @ Tally { 0 0 0 }
 
     : Json kg ( __load p1 )
     ( __run_keygen kg t )
-    ( json_free kg )
 
     : Json ed ( __load p2 )
     ( __run_encapdecap ed t )
-    ( json_free ed )
 
     // Assembled as one String: `nurl_println_int` ends its own line, which
     // would break this summary across four of them.
@@ -201,8 +184,6 @@ $ `stdlib/std/mlkem.nu`
     ( string_push_int sum . t fail ) ( string_push_str sum ` failed, ` )
     ( string_push_int sum . t skip ) ( string_push_str sum ` skipped (key-validation groups)\n` )
     ( nurl_print ( string_data sum ) )
-    ( string_free sum )
     : i rc ? == . t fail 0 0 1
-    ( nurl_free # s t )
     ^ rc
 }
