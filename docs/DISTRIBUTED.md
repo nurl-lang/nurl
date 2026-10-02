@@ -162,7 +162,7 @@ Frames: `REGISTER` · `FORWARD(dest_pk, payload)` → `DELIVER(src_pk, payload)`
 fans one opaque payload out to every other member of a group: **one uplink, N
 downlinks**, the bandwidth shape mobile broadcast and group audio need.
 
-Server: `relay_server_start` / `_run` / `_stop` / `_free`. Client: `relay_dial`
+Server: `relay_server_start` / `_run` / `_stop` (the last owner releases it). Client: `relay_dial`
 · `relay_register` · `relay_send` · `relay_recv` → `?RelayMsg{src, payload}` ·
 `relay_group_join` / `relay_broadcast` · `relay_keepalive` · `relay_close`.
 
@@ -176,7 +176,7 @@ currently is*. A peer **registers** `pubkey → {candidate endpoints, chosen
 relay}`; any peer **looks** another up by pubkey. This is **control plane only**
 — the offer/answer of endpoints, never application data or media.
 
-Server: `rz_server_start` / `_run` / `_stop` / `_free`. Client:
+Server: `rz_server_start` / `_run` / `_stop` (the last owner releases it). Client:
 `rz_client_connect` · `peer_record_new` / `peer_record_add_endpoint` ·
 `rz_register_self` · `rz_lookup_peer` → `*PeerRecord` · `rz_client_close`.
 
@@ -212,7 +212,7 @@ rendezvous candidate drives to begin a direct path.
 ```
 transport_open · transport_add_peer · transport_try_direct
 transport_send · transport_broadcast · transport_group_join / _leave
-transport_recv · transport_free
+transport_recv
 ```
 
 ---
@@ -306,7 +306,7 @@ consistent-hashing property. FNV-1a/64 hashing, sorted points, binary-search
 lookup.
 
 `ring_new` · `ring_add_member` / `ring_remove_member` · `ring_owner` /
-`ring_owner_pk` · `ring_owners` · `ring_point_count` · `ring_free`.
+`ring_owner_pk` · `ring_owners` · `ring_point_count`.
 
 ### `dist/crdt.nu` — convergent replicated types
 

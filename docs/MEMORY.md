@@ -231,7 +231,7 @@ binding afterwards (the borrow checker reports a later use as a
 use-after-move):
 
 ```
-@ give_away sink ( Vec i ) g → v { ( vec_free [i] g ) }
+@ give_away sink ( Vec i ) g → v {}   // g is dropped here, by the callee
 ...
 : ( Vec i ) xs ( vec_new [i] )
 ( give_away xs )                 // xs is consumed; using it now is a move error
@@ -726,7 +726,7 @@ place the `*T` escape hatch is nudged rather than blocked.
 The check is path-aware in the one way that matters for false positives:
 the two arms of a `?` are alternatives, so a free or push in one arm does
 not make a pointer stale in the *other* (the guard-clause shape
-`? bad { ( string_free s ) ^ err } {}` is everywhere in the stdlib). At
+`? bad { ( string_free s ) ^ err } {}`). At
 the join it takes the union of the arms that actually fall through — an
 arm that returns cannot invalidate anything downstream of the `?`.
 
