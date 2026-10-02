@@ -54,7 +54,6 @@ $ `src/service.nu`
     : String av ( string_from `Bearer ` )
     ( string_push_str av token )
     ( vec_push [Header] hs ( hdr `authorization` ( string_data av ) ) )
-    ( string_free av )
     ^ hs
 }
 
@@ -90,12 +89,10 @@ Second pitch line.
 Body prose that must not leak in.
 ` ) ) )
     : !( Vec u ) TarErr tr ( tar_create ents )
-    ( tar_entries_free ents )
     ?? tr {
         F _ → ^ ( vec_new [u] )
         T arc → {
             : !( Vec u ) CompressErr cr ( gzip_compress arc )
-            ( vec_free [u] arc )
             ?? cr {
                 F _ → ^ ( vec_new [u] )
                 T gz → ^ gz
@@ -128,12 +125,10 @@ Hello *there*.
 @ __demo_secret i x → i { ^ x }
 ` ) ) )
     : !( Vec u ) TarErr tr ( tar_create ents )
-    ( tar_entries_free ents )
     ?? tr {
         F _ → ^ ( vec_new [u] )
         T arc → {
             : !( Vec u ) CompressErr gr ( gzip_compress arc )
-            ( vec_free [u] arc )
             ?? gr {
                 F _ → ^ ( vec_new [u] )
                 T gz → ^ gz
@@ -163,7 +158,6 @@ Hello *there*.
         }
     }
     ( check >= uid 0 `token minted` )
-    ( string_free hash )
 
     : Router r ( reg_service_router )
     : ( Vec u ) gz ( mk_tarball )
@@ -176,9 +170,6 @@ Hello *there*.
         ( check == . resp status 200 `publish 200` )
         : String b ( resp_body_str resp )
         ( check ( string_contains b `"ok":true` ) `publish ok body` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── publish again → 409 ──
@@ -186,8 +177,6 @@ Hello *there*.
         : HttpRequest req ( mk_req `POST` `/api/v1/publish` `` ( pub_headers ( string_data token ) `demo` `0.1.0` `` ) ( vec_clone [u] gz ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 409 `republish 409` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── bad token → 401 ──
@@ -195,8 +184,6 @@ Hello *there*.
         : HttpRequest req ( mk_req `POST` `/api/v1/publish` `` ( pub_headers `deadbeef` `demo` `0.2.0` `` ) ( vec_clone [u] gz ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 401 `bad token 401` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── invalid name → 400 ──
@@ -204,8 +191,6 @@ Hello *there*.
         : HttpRequest req ( mk_req `POST` `/api/v1/publish` `` ( pub_headers ( string_data token ) `../evil` `0.1.0` `` ) ( vec_clone [u] gz ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 400 `invalid name 400` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── index ──
@@ -221,11 +206,6 @@ Hello *there*.
         : ( Vec u ) digest ( sha256_pure gz )
         : String hex ( bytes_to_hex digest )
         ( check ( string_contains b ( string_data hex ) ) `index checksum matches` )
-        ( vec_free [u] digest )
-        ( string_free hex )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── index for unknown package → 404 ──
@@ -233,8 +213,6 @@ Hello *there*.
         : HttpRequest req ( mk_req `GET` `/index/nosuch.json` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 404 `unknown index 404` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── tarball round-trip ──
@@ -254,8 +232,6 @@ Hello *there*.
             }
         } {}
         ( check same `tarball bytes identical` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── tarball path traversal shapes → 400 ──
@@ -263,8 +239,6 @@ Hello *there*.
         : HttpRequest req ( mk_req `GET` `/pkgs/demo/other-0.1.0.tar.gz` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 400 `foreign tarball name 400` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── search ──
@@ -274,9 +248,6 @@ Hello *there*.
         : String b ( resp_body_str resp )
         ( check ( string_contains b `"name":"demo"` ) `search finds demo` )
         ( check ( string_contains b `widget frobnicator` ) `search returns description` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         // Description text matches even when the NAME doesn't — a
@@ -285,9 +256,6 @@ Hello *there*.
         : HttpResponse resp ( router_handle r req )
         : String b ( resp_body_str resp )
         ( check ( string_contains b `"name":"demo"` ) `search matches by description` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
     // ── description fallback: manifest without description → README pitch ──
     {
@@ -295,8 +263,6 @@ Hello *there*.
         : HttpRequest req ( mk_req `POST` `/api/v1/publish` `` ( pub_headers ( string_data token ) `plainpkg` `1.0.0` `` ) gz2 )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 200 `descless publish 200` )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `GET` `/api/v1/search` `q=quiet` ( no_headers ) ( vec_new [u] ) )
@@ -305,9 +271,6 @@ Hello *there*.
         ( check ( string_contains b `"name":"plainpkg"` ) `README-pitch is searchable` )
         ( check ( string_contains b `A quiet little fixture package. Second pitch line.` ) `pitch joined, bold stripped` )
         ( check ! ( string_contains b `must not leak` ) `only the first paragraph indexed` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── stats ──
@@ -317,9 +280,6 @@ Hello *there*.
         : String b ( resp_body_str resp )
         ( check ( string_contains b `"packages":2` ) `stats packages` )
         ( check ( string_contains b `"versions":2` ) `stats versions` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── catalog + detail pages ──
@@ -329,9 +289,6 @@ Hello *there*.
         : String b ( resp_body_str resp )
         ( check ( string_contains b `/packages/demo` ) `catalog links demo` )
         ( check ( string_contains b `widget frobnicator` ) `catalog shows description` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `GET` `/packages/demo` `` ( no_headers ) ( vec_new [u] ) )
@@ -347,12 +304,8 @@ Hello *there*.
         : Time now_t ( time_now )
         : String yr ( time_format now_t `%Y-` )
         ( check ( string_contains b ( string_data yr ) ) `detail shows publish date` )
-        ( string_free yr )
         ( check ( string_contains b `/packages/demo/0.1.0/files` ) `detail links files page` )
         ( check ( string_contains b `/packages/demo/0.1.0/api` ) `detail links api page` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── files page (tarball listing) ──
@@ -365,9 +318,6 @@ Hello *there*.
         ( check ( string_contains b `docs/pic.png` ) `files page lists docs/pic.png` )
         ( check ( string_contains b `nurl.toml` ) `files page lists nurl.toml` )
         ( check ( string_contains b ` B</td>` ) `files page shows sizes` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── API docs page (nurldoc over src/*.nu) ──
@@ -379,23 +329,16 @@ Hello *there*.
         ( check ( string_contains b `demo_hello` ) `api page documents the public function` )
         ( check ( string_contains b `friendly greeting` ) `api page includes the doc comment` )
         ( check == F ( string_contains b `__demo_secret` ) `api page omits file-private functions` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `GET` `/packages/demo/9.9.9/api` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 404 `api page unknown version 404` )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `GET` `/packages/demo/9.9.9/files` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 404 `files page unknown version 404` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── tarball asset ──
@@ -405,16 +348,11 @@ Hello *there*.
         ( check == . resp status 200 `asset 200` )
         : String b ( resp_body_str resp )
         ( check ( string_contains b `not-really-a-png` ) `asset bytes` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `GET` `/files/demo/0.1.0/src/lib.nu` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 415 `asset non-image 415` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── yank / unyank ──
@@ -422,24 +360,17 @@ Hello *there*.
         : HttpRequest req ( mk_req `POST` `/api/v1/yank` `` ( pub_headers ( string_data token ) `demo` `0.1.0` `` ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 200 `yank 200` )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `GET` `/index/demo.json` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         : String b ( resp_body_str resp )
         ( check ( string_contains b `"yanked":true` ) `index yanked` )
-        ( string_free b )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `POST` `/api/v1/unyank` `` ( pub_headers ( string_data token ) `demo` `0.1.0` `` ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 200 `unyank 200` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
     // ── ownership: a second user cannot publish or yank `demo` ──
@@ -453,18 +384,12 @@ Hello *there*.
                 : b _i ( reg_db_token_insert db uid2 ( string_data hash2 ) `t` 2000 )
             }
         }
-        ( string_free hash2 )
         : HttpRequest req ( mk_req `POST` `/api/v1/publish` `` ( pub_headers ( string_data tok2 ) `demo` `0.2.0` `` ) ( vec_clone [u] gz ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 403 `foreign publish 403` )
-        ( http_response_free resp )
-        ( request_free req )
         : HttpRequest req2 ( mk_req `POST` `/api/v1/yank` `` ( pub_headers ( string_data tok2 ) `demo` `0.1.0` `` ) ( vec_new [u] ) )
         : HttpResponse resp2 ( router_handle r req2 )
         ( check == . resp2 status 403 `foreign yank 403` )
-        ( http_response_free resp2 )
-        ( request_free req2 )
-        ( string_free tok2 )
     }
 
     // ── revoke ──
@@ -472,23 +397,14 @@ Hello *there*.
         : HttpRequest req ( mk_req `POST` `/api/v1/revoke` `` ( auth_headers ( string_data token ) ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 200 `revoke 200` )
-        ( http_response_free resp )
-        ( request_free req )
     }
     {
         : HttpRequest req ( mk_req `POST` `/api/v1/yank` `` ( pub_headers ( string_data token ) `demo` `0.1.0` `` ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         ( check == . resp status 401 `revoked token 401` )
-        ( http_response_free resp )
-        ( request_free req )
     }
 
-    ( vec_free [u] gz )
-    ( router_free r )
-    ( string_free token )
     ?? ( dir_remove_all ( string_data data ) ) { T _ → {} F _ → {} }
-    ( string_free data )
-    ( string_free dbp )
 
     ? > g_fails 0 {
         ( nurl_print `FAILURES: ` )

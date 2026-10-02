@@ -75,7 +75,6 @@ $ `src/pages.nu`
     ( string_push_str b code )
     ( string_push_str b `"}` )
     : HttpResponse r ( __reg_json_resp status ( string_data b ) )
-    ( string_free b )
     ^ r
 }
 
@@ -83,7 +82,6 @@ $ `src/pages.nu`
     : HttpResponse r ( response_new status )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
     ( response_set_body_str r ( string_data html ) )
-    ( string_free html )
     ^ r
 }
 
@@ -99,7 +97,6 @@ $ `src/pages.nu`
         ?? po {
             T pr → {
                 ? & ! found != 0 ( nurl_str_eq ( string_data . pr key ) key ) {
-                    ( string_free out )
                     = out ( string_from ( string_data . pr value ) )
                     = found T
                 } {}
@@ -108,7 +105,6 @@ $ `src/pages.nu`
         }
         = k + k 1
     }
-    ( query_pairs_free pairs )
     ^ out
 }
 
@@ -118,7 +114,6 @@ $ `src/pages.nu`
     ?? ho {
         T hv → {
             : String low ( string_to_lower hv )
-            ( string_free hv )
             ^ low
         }
         F → ^ ( string_new )
@@ -140,15 +135,11 @@ $ `src/pages.nu`
 @ __reg_auth_uid Database db HttpRequest req → i {
     : String auth ( __reg_header req `authorization` )
     : String tok ( reg_bearer_of ( string_data auth ) )
-    ( string_free auth )
     ? == ( string_len tok ) 0 {
-        ( string_free tok )
         ^ -1
     } {}
     : String hash ( reg_token_hash g_reg_pepper ( string_data tok ) )
-    ( string_free tok )
     : i uid ( reg_db_auth db ( string_data hash ) ( __reg_now ) )
-    ( string_free hash )
     ^ uid
 }
 
@@ -158,11 +149,10 @@ $ `src/pages.nu`
 @ __reg_h_index HttpRequest req Params p → HttpResponse {
     : ~ String file ( string_new )
     ?? ( params_get p `file` ) {
-        T v → { ( string_free file ) = file v }
+        T v → { = file v }
         F → {}
     }
     ? ! ( string_ends_with file `.json` ) {
-        ( string_free file )
         ^ ( __reg_err 400 `invalid_name` )
     } {}
     // strip ".json", lowercase
@@ -173,27 +163,20 @@ $ `src/pages.nu`
         ( string_push_char base ( nurl_str_get ( string_data file ) k ) )
         = k + k 1
     }
-    ( string_free file )
     : String name ( string_to_lower base )
-    ( string_free base )
     ? ! ( reg_name_valid ( string_data name ) ) {
-        ( string_free name )
         ^ ( __reg_err 400 `invalid_name` )
     } {}
     ?? ( reg_db_open g_reg_dbpath ) {
         F _ → {
-            ( string_free name )
             ^ ( __reg_err 500 `db_unavailable` )
         }
         T db → {
             : String body ( reg_db_index_json db ( string_data name ) )
-            ( string_free name )
             ? == ( string_len body ) 0 {
-                ( string_free body )
                 ^ ( __reg_err 404 `not_found` )
             } {}
             : HttpResponse r ( __reg_json_resp 200 ( string_data body ) )
-            ( string_free body )
             ( response_set_header r `Cache-Control` `public, max-age=60` )
             ^ r
         }
@@ -204,19 +187,16 @@ $ `src/pages.nu`
 @ __reg_h_tarball HttpRequest req Params p → HttpResponse {
     : ~ String rawname ( string_new )
     ?? ( params_get p `name` ) {
-        T v → { ( string_free rawname ) = rawname v }
+        T v → { = rawname v }
         F → {}
     }
     : String name ( string_to_lower rawname )
-    ( string_free rawname )
     : ~ String file ( string_new )
     ?? ( params_get p `file` ) {
-        T v → { ( string_free file ) = file v }
+        T v → { = file v }
         F → {}
     }
     ? ! ( reg_name_valid ( string_data name ) ) {
-        ( string_free name )
-        ( string_free file )
         ^ ( __reg_err 400 `bad_path` )
     } {}
     // expect exactly <name>-<version>.tar.gz
@@ -236,25 +216,17 @@ $ `src/pages.nu`
             }
         } { = shape_ok F }
     } {}
-    ( string_free prefix )
-    ( string_free file )
     ? | ! shape_ok ! ( reg_version_valid ( string_data version ) ) {
-        ( string_free name )
-        ( string_free version )
         ^ ( __reg_err 400 `bad_path` )
     } {}
     : ( Vec u ) bytes ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
-    ( string_free name )
-    ( string_free version )
     ? == ( vec_len [u] bytes ) 0 {
-        ( vec_free [u] bytes )
         ^ ( __reg_err 404 `not_found` )
     } {}
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/gzip` )
     ( response_set_header r `Cache-Control` `public, max-age=31536000, immutable` )
     ( response_set_body_bytes r bytes )
-    ( vec_free [u] bytes )
     ^ r
 }
 
@@ -296,7 +268,6 @@ $ `src/pages.nu`
                     = k + k 1
                 }
             } {}
-            ( json_free root )
         }
     }
     ^ ok
@@ -314,52 +285,36 @@ $ `src/pages.nu`
             : String name ( __reg_header_lower req `x-nurl-package` )
             : String version ( __reg_header req `x-nurl-version` )
             ? ! ( reg_name_valid ( string_data name ) ) {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 400 `invalid_name` )
             } {}
             ? ! ( reg_version_valid ( string_data version ) ) {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 400 `invalid_version` )
             } {}
             ? == ( vec_len [u] . req body ) 0 {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 400 `empty_body` )
             } {}
             ? > ( vec_len [u] . req body ) 16777216 {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 413 `too_large` )
             } {}
 
             // First-publisher ownership + version immutability.
             : i owner ( reg_db_pkg_owner db ( string_data name ) )
             ? & >= owner 0 != owner uid {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 403 `not_owner` )
             } {}
             ? ( reg_db_version_exists db ( string_data name ) ( string_data version ) ) {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 409 `version_exists` )
             } {}
 
             // Server-side checksum — a client digest is never trusted.
             : ( Vec u ) digest ( sha256_pure . req body )
             : String checksum ( bytes_to_hex digest )
-            ( vec_free [u] digest )
 
             // Tarball first, then the DB rows in one transaction. A
             // failure between the two leaves an orphan file that the
             // (name, version) immutability makes harmless — the next
             // attempt overwrites the identical path.
             ? ! ( reg_tarball_write g_reg_data ( string_data name ) ( string_data version ) . req body ) {
-                ( string_free name )
-                ( string_free version )
-                ( string_free checksum )
                 ^ ( __reg_err 500 `store_failed` )
             } {}
 
@@ -381,7 +336,6 @@ $ `src/pages.nu`
             ? ok {
                 : String deps ( __reg_header req `x-nurl-deps` )
                 ? ! ( __reg_insert_deps db ( string_data name ) ( string_data version ) ( string_data deps ) ) { = ok F } {}
-                ( string_free deps )
             } {}
             ? ok {
                 ?? ( sqlite_commit db ) { T _ → {} F _ → { = ok F } }
@@ -389,11 +343,7 @@ $ `src/pages.nu`
             ? ! ok {
                 ?? ( sqlite_rollback db ) { T _ → {} F _ → {} }
             } {}
-            ( string_free desc )
             ? ! ok {
-                ( string_free name )
-                ( string_free version )
-                ( string_free checksum )
                 ^ ( __reg_err 500 `db_write_failed` )
             } {}
 
@@ -402,12 +352,8 @@ $ `src/pages.nu`
             : b _b ( json_obj_set out `name` ( json_str_lit ( string_data name ) ) )
             : b _c ( json_obj_set out `version` ( json_str_lit ( string_data version ) ) )
             : b _d ( json_obj_set out `checksum` ( json_str_lit ( string_data checksum ) ) )
-            ( string_free name )
-            ( string_free version )
-            ( string_free checksum )
             : HttpResponse r ( response_new 200 )
             ( response_set_body_json r out )
-            ( json_free out )
             ^ r
         }
     }
@@ -425,30 +371,20 @@ $ `src/pages.nu`
             : String name ( __reg_header_lower req `x-nurl-package` )
             : String version ( __reg_header req `x-nurl-version` )
             ? ! ( reg_name_valid ( string_data name ) ) {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 400 `invalid_name` )
             } {}
             ? ! ( reg_version_valid ( string_data version ) ) {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 400 `invalid_version` )
             } {}
             : i owner ( reg_db_pkg_owner db ( string_data name ) )
             ? < owner 0 {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 404 `not_found` )
             } {}
             ? != owner uid {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 403 `not_owner` )
             } {}
             : b changed ( reg_db_version_set_yanked db ( string_data name ) ( string_data version ) yank )
             ? ! changed {
-                ( string_free name )
-                ( string_free version )
                 ^ ( __reg_err 404 `version_not_found` )
             } {}
             : Json out ( json_obj_new )
@@ -456,11 +392,8 @@ $ `src/pages.nu`
             : b _b ( json_obj_set out `name` ( json_str_lit ( string_data name ) ) )
             : b _c ( json_obj_set out `version` ( json_str_lit ( string_data version ) ) )
             : b _d ( json_obj_set out `yanked` ( json_bool yank ) )
-            ( string_free name )
-            ( string_free version )
             : HttpResponse r ( response_new 200 )
             ( response_set_body_json r out )
-            ( json_free out )
             ^ r
         }
     }
@@ -478,21 +411,16 @@ $ `src/pages.nu`
 @ __reg_h_revoke HttpRequest req Params p → HttpResponse {
     : String auth ( __reg_header req `authorization` )
     : String tok ( reg_bearer_of ( string_data auth ) )
-    ( string_free auth )
     ? == ( string_len tok ) 0 {
-        ( string_free tok )
         ^ ( __reg_err 401 `unauthorized` )
     } {}
     ?? ( reg_db_open g_reg_dbpath ) {
         F _ → {
-            ( string_free tok )
             ^ ( __reg_err 500 `db_unavailable` )
         }
         T db → {
             : String hash ( reg_token_hash g_reg_pepper ( string_data tok ) )
-            ( string_free tok )
             : b deleted ( reg_db_token_delete db ( string_data hash ) )
-            ( string_free hash )
             ? ! deleted { ^ ( __reg_err 401 `unknown_token` ) } {}
             ^ ( __reg_json_resp 200 `{"ok":true,"revoked":true}` )
         }
@@ -507,14 +435,11 @@ $ `src/pages.nu`
         T db → {
             : String qraw ( __reg_q_get req `q` )
             : String q ( string_to_lower qraw )
-            ( string_free qraw )
             : Json results ( reg_db_catalog_json db ( string_data q ) 50 )
-            ( string_free q )
             : Json out ( json_obj_new )
             : b _a ( json_obj_set out `results` results )
             : HttpResponse r ( response_new 200 )
             ( response_set_body_json r out )
-            ( json_free out )
             ^ r
         }
     }
@@ -526,7 +451,6 @@ $ `src/pages.nu`
         T db → {
             : String body ( reg_db_stats_json db )
             : HttpResponse r ( __reg_json_resp 200 ( string_data body ) )
-            ( string_free body )
             ( response_set_header r `Access-Control-Allow-Origin` `*` )
             ( response_set_header r `Cache-Control` `public, max-age=300` )
             ^ r
@@ -542,15 +466,12 @@ $ `src/pages.nu`
         T db → {
             : String qraw ( __reg_q_get req `q` )
             : String q ( string_to_lower qraw )
-            ( string_free qraw )
             : Json items ( reg_db_catalog_json db ( string_data q ) 200 )
             : Json ctx ( json_obj_new )
             : b _a ( json_obj_set ctx `title` ( json_str_lit `NURL registry` ) )
             : b _b ( json_obj_set ctx `q` ( json_str_lit ( string_data q ) ) )
             : b _c ( json_obj_set ctx `items` items )
-            ( string_free q )
             : String html ( reg_page_catalog ctx )
-            ( json_free ctx )
             ^ ( __reg_html_resp 200 html )
         }
     }
@@ -561,26 +482,22 @@ $ `src/pages.nu`
     : b _a ( json_obj_set ctx `title` ( json_str_lit `not found` ) )
     : b _b ( json_obj_set ctx `name` ( json_str_lit name ) )
     : String html ( reg_page_notfound ctx )
-    ( json_free ctx )
     ^ ( __reg_html_resp 404 html )
 }
 
 @ __reg_h_pkg_detail HttpRequest req Params p → HttpResponse {
     : ~ String rawname ( string_new )
     ?? ( params_get p `name` ) {
-        T v → { ( string_free rawname ) = rawname v }
+        T v → { = rawname v }
         F → {}
     }
     : String name ( string_to_lower rawname )
-    ( string_free rawname )
     ? ! ( reg_name_valid ( string_data name ) ) {
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-        ( string_free name )
         ^ r
     } {}
     ?? ( reg_db_open g_reg_dbpath ) {
         F _ → {
-            ( string_free name )
             ^ ( __reg_err 500 `db_unavailable` )
         }
         T db → {
@@ -592,9 +509,7 @@ $ `src/pages.nu`
                 F → {}
             }
             ? == nvers 0 {
-                ( json_free ctx )
                 : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-                ( string_free name )
                 ^ r
             } {}
             : b _t ( json_obj_set ctx `title` ( json_str_lit ( string_data name ) ) )
@@ -603,7 +518,6 @@ $ `src/pages.nu`
             ?? ( json_obj_get ctx `latest` ) {
                 T lj → {
                     ? ( json_is_str lj ) {
-                        ( string_free latest )
                         = latest ( string_from ( json_as_str lj ) )
                     } {}
                 }
@@ -613,7 +527,6 @@ $ `src/pages.nu`
                 : String reqs ( string_from `^` )
                 ( string_push_str reqs ( string_data latest ) )
                 : b _r ( json_obj_set ctx `req` ( json_str_lit ( string_data reqs ) ) )
-                ( string_free reqs )
                 : b _d ( json_obj_set ctx `deps` ( reg_db_deps_json db ( string_data name ) ( string_data latest ) ) )
                 : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data latest ) )
                 ? > ( vec_len [u] gz ) 0 {
@@ -621,23 +534,16 @@ $ `src/pages.nu`
                     ? ( string_starts_with repo `http` ) {
                         : b _p ( json_obj_set ctx `repository` ( json_str_lit ( string_data repo ) ) )
                     } {}
-                    ( string_free repo )
                     : String md ( reg_targz_readme gz )
                     ? & > ( string_len md ) 0 <= ( string_len md ) 524288 {
                         : String rh ( reg_readme_html ( string_data md ) ( string_data name ) ( string_data latest ) )
                         : b _m ( json_obj_set ctx `readme` ( json_str_lit ( string_data rh ) ) )
-                        ( string_free rh )
                     } {}
-                    ( string_free md )
                 } {}
-                ( vec_free [u] gz )
             } {
                 : b _r2 ( json_obj_set ctx `req` ( json_str_lit `*` ) )
             }
-            ( string_free latest )
-            ( string_free name )
             : String html ( reg_page_detail ctx )
-            ( json_free ctx )
             ^ ( __reg_html_resp 200 html )
         }
     }
@@ -669,33 +575,26 @@ $ `src/pages.nu`
 @ __reg_h_pkg_files HttpRequest req Params p → HttpResponse {
     : ~ String rawname ( string_new )
     ?? ( params_get p `name` ) {
-        T v → { ( string_free rawname ) = rawname v }
+        T v → { = rawname v }
         F → {}
     }
     : String name ( string_to_lower rawname )
-    ( string_free rawname )
     : ~ String version ( string_new )
     ?? ( params_get p `version` ) {
-        T v → { ( string_free version ) = version v }
+        T v → { = version v }
         F → {}
     }
     ? | ! ( reg_name_valid ( string_data name ) ) ! ( reg_version_valid ( string_data version ) ) {
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-        ( string_free name )
-        ( string_free version )
         ^ r
     } {}
     ?? ( reg_db_open g_reg_dbpath ) {
         F _ → {
-            ( string_free name )
-            ( string_free version )
             ^ ( __reg_err 500 `db_unavailable` )
         }
         T db → {
             ? ! ( reg_db_version_exists db ( string_data name ) ( string_data version ) ) {
                 : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-                ( string_free name )
-                ( string_free version )
                 ^ r
             } {}
             ^ ( __reg_pkg_files_page name version )
@@ -708,14 +607,10 @@ $ `src/pages.nu`
 @ __reg_pkg_files_page String name String version → HttpResponse {
     : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
     ? == ( vec_len [u] gz ) 0 {
-        ( vec_free [u] gz )
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-        ( string_free name )
-        ( string_free version )
         ^ r
     } {}
     : Json files ( reg_targz_list gz )
-    ( vec_free [u] gz )
     // Pre-format sizes for display; count + total while walking.
     : ~ i total 0
     : i nf ( json_arr_len files )
@@ -731,7 +626,6 @@ $ `src/pages.nu`
                 = total + total sz
                 : String hs ( __reg_fmt_size sz )
                 : b _h ( json_obj_set row `size` ( json_str_lit ( string_data hs ) ) )
-                ( string_free hs )
             }
             F → {}
         }
@@ -743,17 +637,12 @@ $ `src/pages.nu`
     : b _f ( json_obj_set ctx `files` files )
     : String tot ( __reg_fmt_size total )
     : b _t ( json_obj_set ctx `total` ( json_str_lit ( string_data tot ) ) )
-    ( string_free tot )
     : String title ( string_from ( string_data name ) )
     ( string_push_char title 32 )
     ( string_push_str title ( string_data version ) )
     ( string_push_str title ` — files` )
     : b _ti ( json_obj_set ctx `title` ( json_str_lit ( string_data title ) ) )
-    ( string_free title )
-    ( string_free name )
-    ( string_free version )
     : String html ( reg_page_files ctx )
-    ( json_free ctx )
     : HttpResponse r ( __reg_html_resp 200 html )
     ( response_set_header r `Cache-Control` `public, max-age=86400, immutable` )
     ^ r
@@ -764,33 +653,26 @@ $ `src/pages.nu`
 @ __reg_h_pkg_api HttpRequest req Params p → HttpResponse {
     : ~ String rawname ( string_new )
     ?? ( params_get p `name` ) {
-        T v → { ( string_free rawname ) = rawname v }
+        T v → { = rawname v }
         F → {}
     }
     : String name ( string_to_lower rawname )
-    ( string_free rawname )
     : ~ String version ( string_new )
     ?? ( params_get p `version` ) {
-        T v → { ( string_free version ) = version v }
+        T v → { = version v }
         F → {}
     }
     ? | ! ( reg_name_valid ( string_data name ) ) ! ( reg_version_valid ( string_data version ) ) {
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-        ( string_free name )
-        ( string_free version )
         ^ r
     } {}
     ?? ( reg_db_open g_reg_dbpath ) {
         F _ → {
-            ( string_free name )
-            ( string_free version )
             ^ ( __reg_err 500 `db_unavailable` )
         }
         T db → {
             ? ! ( reg_db_version_exists db ( string_data name ) ( string_data version ) ) {
                 : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-                ( string_free name )
-                ( string_free version )
                 ^ r
             } {}
             ^ ( __reg_pkg_api_page name version )
@@ -803,33 +685,23 @@ $ `src/pages.nu`
 @ __reg_pkg_api_page String name String version → HttpResponse {
     : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
     ? == ( vec_len [u] gz ) 0 {
-        ( vec_free [u] gz )
         : HttpResponse r ( __reg_notfound_page ( string_data name ) )
-        ( string_free name )
-        ( string_free version )
         ^ r
     } {}
     : String md ( reg_targz_api_md gz )
-    ( vec_free [u] gz )
     : Json ctx ( json_obj_new )
     : b _n ( json_obj_set ctx `name` ( json_str_lit ( string_data name ) ) )
     : b _v ( json_obj_set ctx `version` ( json_str_lit ( string_data version ) ) )
     ? & > ( string_len md ) 0 <= ( string_len md ) 2097152 {
         : String ah ( reg_api_html ( string_data md ) )
         : b _a ( json_obj_set ctx `api` ( json_str_lit ( string_data ah ) ) )
-        ( string_free ah )
     } {}
-    ( string_free md )
     : String title ( string_from ( string_data name ) )
     ( string_push_char title 32 )
     ( string_push_str title ( string_data version ) )
     ( string_push_str title ` — API` )
     : b _ti ( json_obj_set ctx `title` ( json_str_lit ( string_data title ) ) )
-    ( string_free title )
-    ( string_free name )
-    ( string_free version )
     : String html ( reg_page_api ctx )
-    ( json_free ctx )
     : HttpResponse r ( __reg_html_resp 200 html )
     ( response_set_header r `Cache-Control` `public, max-age=86400, immutable` )
     ^ r
@@ -840,7 +712,6 @@ $ `src/pages.nu`
 @ __reg_asset_mime s path → s {
     : String pl_s ( string_from path )
     : String pl ( string_to_lower pl_s )
-    ( string_free pl_s )
     : ~ s mime ``
     ? ( string_ends_with pl `.png` ) { = mime `image/png` } {}
     ? ( string_ends_with pl `.jpg` ) { = mime `image/jpeg` } {}
@@ -851,7 +722,6 @@ $ `src/pages.nu`
     ? ( string_ends_with pl `.ico` ) { = mime `image/x-icon` } {}
     ? ( string_ends_with pl `.bmp` ) { = mime `image/bmp` } {}
     ? ( string_ends_with pl `.avif` ) { = mime `image/avif` } {}
-    ( string_free pl )
     ^ mime
 }
 
@@ -860,55 +730,37 @@ $ `src/pages.nu`
 @ __reg_h_file HttpRequest req Params p → HttpResponse {
     : ~ String rawname ( string_new )
     ?? ( params_get p `name` ) {
-        T v → { ( string_free rawname ) = rawname v }
+        T v → { = rawname v }
         F → {}
     }
     : String name ( string_to_lower rawname )
-    ( string_free rawname )
     : ~ String version ( string_new )
     ?? ( params_get p `version` ) {
-        T v → { ( string_free version ) = version v }
+        T v → { = version v }
         F → {}
     }
     : ~ String rest ( string_new )
     ?? ( params_get p `rest` ) {
-        T v → { ( string_free rest ) = rest v }
+        T v → { = rest v }
         F → {}
     }
     ? | ! ( reg_name_valid ( string_data name ) ) ! ( reg_version_valid ( string_data version ) ) {
-        ( string_free name )
-        ( string_free version )
-        ( string_free rest )
         ^ ( __reg_err 400 `bad_path` )
     } {}
     : String safe ( reg_relpath_norm ( string_data rest ) )
-    ( string_free rest )
     ? == ( string_len safe ) 0 {
-        ( string_free name )
-        ( string_free version )
-        ( string_free safe )
         ^ ( __reg_err 400 `bad_path` )
     } {}
     : s mime ( __reg_asset_mime ( string_data safe ) )
     ? == ( nurl_str_len mime ) 0 {
-        ( string_free name )
-        ( string_free version )
-        ( string_free safe )
         ^ ( __reg_err 415 `unsupported_type` )
     } {}
     : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
-    ( string_free name )
-    ( string_free version )
     ? == ( vec_len [u] gz ) 0 {
-        ( vec_free [u] gz )
-        ( string_free safe )
         ^ ( __reg_err 404 `not_found` )
     } {}
     : ( Vec u ) data ( reg_targz_member gz ( string_data safe ) )
-    ( vec_free [u] gz )
-    ( string_free safe )
     ? == ( vec_len [u] data ) 0 {
-        ( vec_free [u] data )
         ^ ( __reg_err 404 `not_found` )
     } {}
     : HttpResponse r ( response_new 200 )
@@ -918,7 +770,6 @@ $ `src/pages.nu`
     // Neutralise any script an SVG might carry, even on direct navigation.
     ( response_set_header r `Content-Security-Policy` `default-src 'none'; style-src 'unsafe-inline'; sandbox` )
     ( response_set_body_bytes r data )
-    ( vec_free [u] data )
     ^ r
 }
 
@@ -935,7 +786,6 @@ $ `src/pages.nu`
         : b _a ( json_obj_set ctx `title` ( json_str_lit `NURL registry — tokens` ) )
         : b _b ( json_obj_set ctx `data` ( json_str_lit g_reg_data ) )
         : String html ( reg_page_login_help ctx )
-        ( json_free ctx )
         ^ ( __reg_html_resp 200 html )
     } {}
     : String state ( rand_hex_str 24 )
@@ -945,28 +795,22 @@ $ `src/pages.nu`
     : String cb ( string_from g_reg_base_url )
     ( string_push_str cb `/auth/callback` )
     : String cbe ( percent_encode ( string_data cb ) )
-    ( string_free cb )
     ( string_push_str loc ( string_data cbe ) )
-    ( string_free cbe )
     ( string_push_str loc `&state=` )
     ( string_push_str loc ( string_data state ) )
     : HttpResponse r ( response_new 302 )
     ( response_set_header r `Location` ( string_data loc ) )
-    ( string_free loc )
     : String ck ( string_from `nurlreg_state=` )
     ( string_push_str ck ( string_data state ) )
     ( string_push_str ck `; HttpOnly; SameSite=Lax; Path=/; Max-Age=600` )
     ? ( __reg_base_is_https ) { ( string_push_str ck `; Secure` ) } {}
     ( response_set_header r `Set-Cookie` ( string_data ck ) )
-    ( string_free ck )
-    ( string_free state )
     ^ r
 }
 
 @ __reg_base_is_https → b {
     : String b ( string_from g_reg_base_url )
     : b out ( string_starts_with b `https://` )
-    ( string_free b )
     ^ out
 }
 
@@ -1003,7 +847,6 @@ $ `src/pages.nu`
         } {}
         = k + k 1
     }
-    ( string_free ck )
     ^ out
 }
 
@@ -1016,12 +859,9 @@ $ `src/pages.nu`
     : String cb ( string_from g_reg_base_url )
     ( string_push_str cb `/auth/callback` )
     : b _d ( json_obj_set body `redirect_uri` ( json_str_lit ( string_data cb ) ) )
-    ( string_free cb )
     : String bs ( json_stringify body )
-    ( json_free body )
     : String out ( string_new )
     : !HttpcResp HttpcErr rr ( httpc_request `POST` `https://github.com/login/oauth/access_token` ( string_data bs ) `Content-Type: application/json\r\nAccept: application/json\r\n` )
-    ( string_free bs )
     ?? rr {
         F _ → ^ out
         T resp → {
@@ -1035,12 +875,10 @@ $ `src/pages.nu`
                             }
                             F → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
             } {}
-            ( httpc_resp_free resp )
             ^ out
         }
     }
@@ -1056,27 +894,20 @@ $ `src/pages.nu`
     ? & & > ( string_len code ) 0 > ( string_len state ) 0 > ( string_len cookie ) 0 {
         ? != 0 ( nurl_str_eq ( string_data state ) ( string_data cookie ) ) { = state_ok T } {}
     } {}
-    ( string_free state )
-    ( string_free cookie )
     ? ! state_ok {
-        ( string_free code )
         ^ ( __reg_err 400 `bad_oauth_state` )
     } {}
     : String ghtok ( __reg_gh_exchange ( string_data code ) )
-    ( string_free code )
     ? == ( string_len ghtok ) 0 {
-        ( string_free ghtok )
         ^ ( __reg_err 502 `oauth_exchange_failed` )
     } {}
     // GET the GitHub user behind the token.
     : String hb ( string_from `Authorization: Bearer ` )
     ( string_push_str hb ( string_data ghtok ) )
     ( string_push_str hb `\r\nUser-Agent: nurl-registry\r\nAccept: application/json\r\n` )
-    ( string_free ghtok )
     : ~ i gh_id -1
     : String login ( string_new )
     : !HttpcResp HttpcErr ur ( httpc_request `GET` `https://api.github.com/user` `` ( string_data hb ) )
-    ( string_free hb )
     ?? ur {
         F _ → {}
         T resp → {
@@ -1098,47 +929,36 @@ $ `src/pages.nu`
                             }
                             F → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
             } {}
-            ( httpc_resp_free resp )
         }
     }
     ? | < gh_id 0 == ( string_len login ) 0 {
-        ( string_free login )
         ^ ( __reg_err 502 `github_user_failed` )
     } {}
     ?? ( reg_db_open g_reg_dbpath ) {
         F _ → {
-            ( string_free login )
             ^ ( __reg_err 500 `db_unavailable` )
         }
         T db → {
             : i now ( __reg_now )
             : i uid ( reg_db_user_upsert_github db gh_id ( string_data login ) now )
             ? < uid 0 {
-                ( string_free login )
                 ^ ( __reg_err 500 `db_write_failed` )
             } {}
             : String token ( reg_token_new )
             : String hash ( reg_token_hash g_reg_pepper ( string_data token ) )
             : b ins ( reg_db_token_insert db uid ( string_data hash ) `cli` now )
-            ( string_free hash )
             ? ! ins {
-                ( string_free login )
-                ( string_free token )
                 ^ ( __reg_err 500 `db_write_failed` )
             } {}
             : Json ctx ( json_obj_new )
             : b _a ( json_obj_set ctx `title` ( json_str_lit `NURL registry — token` ) )
             : b _b ( json_obj_set ctx `login` ( json_str_lit ( string_data login ) ) )
             : b _c ( json_obj_set ctx `token` ( json_str_lit ( string_data token ) ) )
-            ( string_free login )
-            ( string_free token )
             : String html ( reg_page_token ctx )
-            ( json_free ctx )
             ^ ( __reg_html_resp 200 html )
         }
     }
