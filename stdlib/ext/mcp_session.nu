@@ -49,7 +49,7 @@
 //   ( mcp_session_is_pending store sid id )         → b
 //   ( mcp_session_resolve_rpc store sid response )  → b   CONSUMES response
 //   ( mcp_session_take_result store sid id )        → ? Json  owned
-//   ( mcp_session_store_free store )                → v
+//   ( mcp_session_store_free store )                → v   early release (optional)
 //
 //   ( mcp_sse_frame event data )                    → String  borrows data
 //   ( mcp_sse_frame_id id event data )              → String  borrows data
@@ -142,7 +142,7 @@ $ `stdlib/core/vec.nu`
             = k + k 1
         }
         : ?McpSession vo ( vec_remove [McpSession] . store sessions victim )
-        ?? vo { T se → ( __mcp_session_free se ) F → {} }
+        ?? vo { T se → {} F → {} }
     } {}
 }
 
@@ -188,22 +188,12 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ __mcp_session_free sink McpSession se → v {
-    ( string_free . se id )
-    ( vec_free_with [Json] . se notify \ Json j → v { ( json_free j ) } )
-    ( vec_free [i] . se pending_ids )
-    ( vec_free_with [Json] . se results \ Json j → v { ( json_free j ) } )
-    ( vec_free_with [String] . se subscriptions \ String s → v { ( string_free s ) } )
-    ( vec_free [i] . se backlog_ids )
-    ( vec_free_with [String] . se backlog_frames \ String s → v { ( string_free s ) } )
-}
-
 @ mcp_session_delete McpSessionStore store s sid → b {
     : i idx ( __mcp_session_find store sid )
     ? < idx 0 { ^ F } {}
     : ?McpSession so ( vec_remove [McpSession] . store sessions idx )
     ?? so {
-        T se → { ( __mcp_session_free se ) }
+        T se → {}
         F → {}
     }
     ^ T
@@ -213,7 +203,7 @@ $ `stdlib/core/vec.nu`
 
 @ mcp_session_push_notify McpSessionStore store s sid Json msg → b {
     : i idx ( __mcp_session_find store sid )
-    ? < idx 0 { ( json_free msg ) ^ F } {}
+    ? < idx 0 { ^ F } {}
     : ?McpSession so ( vec_get [McpSession] . store sessions idx )
     ?? so {
         T se → {
@@ -222,7 +212,7 @@ $ `stdlib/core/vec.nu`
             ( vec_push [Json] . se notify msg )
             ^ T
         }
-        F → { ( json_free msg ) ^ F }
+        F → { ^ F }
     }
 }
 
@@ -461,7 +451,7 @@ $ `stdlib/core/vec.nu`
 // freeing params). CONSUMES params.
 @ mcp_session_begin_rpc McpSessionStore store s sid s method Json params → i {
     : i idx ( __mcp_session_find store sid )
-    ? < idx 0 { ( json_free params ) ^ -1 } {}
+    ? < idx 0 { ^ -1 } {}
     : ?McpSession so ( vec_get [McpSession] . store sessions idx )
     ?? so {
         T se → {
@@ -473,7 +463,7 @@ $ `stdlib/core/vec.nu`
             ( __mcp_session_put store idx se )
             ^ id
         }
-        F → { ( json_free params ) ^ -1 }
+        F → { ^ -1 }
     }
 }
 
@@ -510,12 +500,12 @@ $ `stdlib/core/vec.nu`
 // integer "id" (then the response is freed).
 @ mcp_session_resolve_rpc McpSessionStore store s sid Json response → b {
     : i idx ( __mcp_session_find store sid )
-    ? < idx 0 { ( json_free response ) ^ F } {}
+    ? < idx 0 { ^ F } {}
     // json_obj_get returns a BORROW into `response` — never free it.
     : ?Json ido ( json_obj_get response `id` )
     : ~ i rid -1
     ?? ido { T j → { = rid ( json_as_int j ) } F → {} }
-    ? < rid 0 { ( json_free response ) ^ F } {}
+    ? < rid 0 { ^ F } {}
     : ?McpSession so ( vec_get [McpSession] . store sessions idx )
     ?? so {
         T se → {
@@ -526,12 +516,12 @@ $ `stdlib/core/vec.nu`
             // a forged result could be picked up by a later caller that
             // reuses the id. A non-pending id is dropped.
             : i pi ( __mcp_pending_index . se pending_ids rid )
-            ? < pi 0 { ( json_free response ) ^ F } {}
+            ? < pi 0 { ^ F } {}
             ( vec_remove [i] . se pending_ids pi )
             ( vec_push [Json] . se results response )
             ^ T
         }
-        F → { ( json_free response ) ^ F }
+        F → { ^ F }
     }
 }
 
@@ -564,16 +554,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ mcp_session_store_free sink McpSessionStore store → v {
-    : i n ( vec_len [McpSession] . store sessions )
-    : ~ i k 0
-    ~ < k n {
-        : ?McpSession so ( vec_get [McpSession] . store sessions k )
-        ?? so { T se → ( __mcp_session_free se ) F → {} }
-        = k + k 1
-    }
-    ( vec_free [McpSession] . store sessions )
-}
+@ mcp_session_store_free sink McpSessionStore store → v {}
 
 // ── Wire builders ─────────────────────────────────────────────────────
 
@@ -587,7 +568,6 @@ $ `stdlib/core/vec.nu`
     ( string_push_str out `\r\ndata: ` )
     ( string_push_str out ( string_data payload ) )
     ( string_push_str out `\r\n\r\n` )
-    ( string_free payload )
     ^ out
 }
 
@@ -605,7 +585,6 @@ $ `stdlib/core/vec.nu`
     ( string_push_str out `\r\ndata: ` )
     ( string_push_str out ( string_data payload ) )
     ( string_push_str out `\r\n\r\n` )
-    ( string_free payload )
     ^ out
 }
 
@@ -633,7 +612,6 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     // …so only the buffer is left to free.
-    ( vec_free [Json] messages )
     : Json params ( json_obj_new )
     ( json_obj_set params `messages` arr )
     ? > ( nurl_str_len system ) 0 {

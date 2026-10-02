@@ -304,23 +304,19 @@ $ `stdlib/ext/json.nu`
         : String line ( read_line )
 
         ? ( stdin_eof ) {
-            ( string_free line )
             ^ @ ?Json { F @ Json { JNull } }
         } {}
 
         : i ll ( string_len line )
         ? == ll 0 {
-            ( string_free line )
         } {
             : !Json JsonError pj ( json_parse ( string_data line ) )
             ?? pj {
                 T j → {
-                    ( string_free line )
                     ^ @ ?Json { T j }
                 }
                 F _ → {
                     ( mcp_log `parse error, skipping line` )
-                    ( string_free line )
                 }
             }
         }
@@ -335,8 +331,6 @@ $ `stdlib/ext/json.nu`
     ( nurl_print ( string_data s ) )
     ( nurl_print `\n` )
     ( flush )
-    ( string_free s )
-    ( json_free msg )
 }
 
 // ── JSON-RPC envelopes ──────────────────────────────────────────────
@@ -499,10 +493,10 @@ $ `stdlib/ext/json.nu`
         T props → {
             ?? ( json_obj_get props name ) {
                 T p → { ( json_obj_set p `enum` values ) }
-                F _ → { ( json_free values ) }
+                F _ → {}
             }
         }
-        F _ → { ( json_free values ) }
+        F _ → {}
     }
 }
 
@@ -555,7 +549,6 @@ $ `stdlib/ext/json.nu`
         = k + k 1
     }
     // Drop the now-emptied Vec — JArr keeps a fresh one inside.
-    ( vec_free [Json] tools )
     : Json out ( json_obj_new )
     ( json_obj_set out `tools` arr )
     // CacheableResult fields are REQUIRED on tools/list results in

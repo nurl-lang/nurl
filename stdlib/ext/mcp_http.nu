@@ -131,7 +131,6 @@ $ `stdlib/core/vec.nu`
     : Json id_null @ Json { JNull }
     : Json env ( mcp_response_error id_null code message )
     : HttpResponse r ( response_json 200 env )
-    ( json_free env )
     ^ r
 }
 
@@ -167,9 +166,8 @@ $ `stdlib/core/vec.nu`
                 }
                 F _ → { = bad T }
             }
-            ( string_free hv )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ? bad { ^ T } {}
     : ?String hn ( header_get . req headers `Mcp-Name` )
@@ -202,9 +200,8 @@ $ `stdlib/core/vec.nu`
                 F _ → {}
             }
             ? nm_ok {} { = bad T }
-            ( string_free nv )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ^ bad
 }
@@ -221,25 +218,21 @@ $ `stdlib/core/vec.nu`
     ?? accept {
         T s → {
             ? ( string_contains s `text/event-stream` ) { = want_sse T } {}
-            ( string_free s )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ? want_sse {
         : String payload ( json_stringify resp_json )
-        ( json_free resp_json )
         : String body ( string_with_cap + ( string_len payload ) 28 )
         ( string_push_str body `event: message\r\ndata: ` )
         ( string_push_str body ( string_data payload ) )
         ( string_push_str body `\r\n\r\n` )
-        ( string_free payload )
         : HttpResponse r ( response_text 200 ( string_data body ) )
         ( response_set_header r `Content-Type` `text/event-stream` )
         ( response_set_header r `Cache-Control` `no-cache` )
         ^ r
     } {
         : HttpResponse r ( response_json 200 resp_json )
-        ( json_free resp_json )
         ^ r
     }
 }
@@ -255,7 +248,6 @@ $ `stdlib/core/vec.nu`
             ? > ( string_len s ) 0 {
                 ( response_set_header r `Mcp-Session-Id` ( string_data s ) )
             } {}
-            ( string_free s )
         }
         F _ → {}
     }
@@ -341,7 +333,6 @@ $ `stdlib/core/vec.nu`
         // so json_parse (which reads via raw `s`) sees a clean string.
         : String body_str ( bytes_to_str . req body )
         : !Json JsonError pj ( json_parse ( string_data body_str ) )
-        ( string_free body_str )
 
         ?? pj {
             T jreq → {
@@ -355,7 +346,6 @@ $ `stdlib/core/vec.nu`
                 ? ( json_is_arr jreq ) {
                     : i bn ( json_arr_len jreq )
                     ? <= bn 0 {
-                        ( json_free jreq )
                         : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty batch` )
                         ( __mcp_http_apply_cors r )
                         ( __mcp_http_echo_session req r )
@@ -370,14 +360,13 @@ $ `stdlib/core/vec.nu`
                                 : ?Json reply ( dispatch el )
                                 ?? reply {
                                     T resp → ( vec_push [Json] resps resp )
-                                    F empty → ( json_free empty )
+                                    F empty → {}
                                 }
                             }
                             F _ → {}
                         }
                         = bi + bi 1
                     }
-                    ( json_free jreq )
 
                     : i nr ( vec_len [Json] resps )
                     ? > nr 0 {
@@ -387,7 +376,6 @@ $ `stdlib/core/vec.nu`
                         ( __mcp_http_echo_session req r )
                         ^ r
                     } {
-                        ( vec_free [Json] resps )
                         : HttpResponse r ( response_status_only 202 )
                         ( __mcp_http_apply_cors r )
                         ( __mcp_http_echo_session req r )
@@ -397,14 +385,12 @@ $ `stdlib/core/vec.nu`
 
                 // Single request — original path.
                 ? ( __mcp_http_header_mismatch req jreq ) {
-                    ( json_free jreq )
                     : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_header_mismatch `Mcp-Method/Mcp-Name header does not match the request body` )
                     ( __mcp_http_apply_cors r )
                     ( __mcp_http_echo_session req r )
                     ^ r
                 } {}
                 : ?Json reply ( dispatch jreq )
-                ( json_free jreq )
 
                 ?? reply {
                     T resp_json → {
@@ -414,7 +400,6 @@ $ `stdlib/core/vec.nu`
                         ^ r
                     }
                     F empty → {
-                        ( json_free empty )
                         // Notification consumed — no body, 202 Accepted.
                         : HttpResponse r ( response_status_only 202 )
                         ( __mcp_http_apply_cors r )
@@ -640,7 +625,6 @@ McpSessionStore store
                         ?? levo {
                             T lev → {
                                 : i last_id ( nurl_str_to_int ( string_data lev ) )
-                                ( string_free lev )
                                 : ( Vec String ) rp ( mcp_session_replay store ( string_data s ) last_id )
                                 : i rn ( vec_len [String] rp )
                                 : ~ i rk 0
@@ -649,13 +633,11 @@ McpSessionStore store
                                     ?? fo {
                                         T f → {
                                             ( string_push_str body ( string_data f ) )
-                                            ( string_free f )
                                         }
                                         F → {}
                                     }
                                     = rk + rk 1
                                 }
-                                ( vec_free [String] rp )
                             }
                             F _ → {}
                         }
@@ -669,21 +651,17 @@ McpSessionStore store
                             ?? fo {
                                 T f → {
                                     ( string_push_str body ( string_data f ) )
-                                    ( string_free f )
                                 }
                                 F → {}
                             }
                             = k + k 1
                         }
-                        ( vec_free [String] q )
                     } {}
-                    ( string_free s )
                 }
                 F _ → {}
             }
             ? ! have { ( string_push_str body `event: ready\r\ndata: {"transport":"streamable-http"}\r\n\r\n` ) } {}
             : HttpResponse r ( response_text 200 ( string_data body ) )
-            ( string_free body )
             ( response_set_header r `Content-Type` `text/event-stream` )
             ( response_set_header r `Cache-Control` `no-cache` )
             ( __mcp_http_apply_cors r )
@@ -694,7 +672,7 @@ McpSessionStore store
         // DELETE: tear the session down.
         ? != 0 ( nurl_str_eq rm `DELETE` ) {
             : ?String sido ( header_get . req headers `Mcp-Session-Id` )
-            ?? sido { T s → { ( mcp_session_delete store ( string_data s ) ) ( string_free s ) } F _ → {} }
+            ?? sido { T s → { ( mcp_session_delete store ( string_data s ) ) } F _ → {} }
             : HttpResponse r ( response_status_only 204 )
             ( __mcp_http_apply_cors r )
             ( __mcp_http_echo_session req r )
@@ -718,7 +696,6 @@ McpSessionStore store
 
         : String body_str ( bytes_to_str . req body )
         : !Json JsonError pj ( json_parse ( string_data body_str ) )
-        ( string_free body_str )
 
         ?? pj {
             T jreq → {
@@ -732,7 +709,6 @@ McpSessionStore store
                 ? ( json_is_arr jreq ) {
                     : i bcount ( json_arr_len jreq )
                     ? <= bcount 0 {
-                        ( json_free jreq )
                         : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty batch` )
                         ( __mcp_http_apply_cors r )
                         ( __mcp_http_echo_session req r )
@@ -748,13 +724,10 @@ McpSessionStore store
                                     ( string_push_str bsid ( string_data s ) )
                                 } { = breject T }
                             } {}
-                            ( string_free s )
                         }
                         F _ → {}
                     }
                     ? breject {
-                        ( string_free bsid )
-                        ( json_free jreq )
                         : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `unknown or expired Mcp-Session-Id` )
                         = . r status 404
                         ( __mcp_http_apply_cors r )
@@ -769,15 +742,13 @@ McpSessionStore store
                                 : ?Json reply ( __mcp_session_dispatch_one store ( string_data bsid ) el dispatch )
                                 ?? reply {
                                     T resp → ( vec_push [Json] resps resp )
-                                    F empty → ( json_free empty )
+                                    F empty → {}
                                 }
                             }
                             F _ → {}
                         }
                         = bi + bi 1
                     }
-                    ( json_free jreq )
-                    ( string_free bsid )
                     : i nr ( vec_len [Json] resps )
                     ? > nr 0 {
                         : Json resp_arr ( json_arr resps )
@@ -786,7 +757,6 @@ McpSessionStore store
                         ( __mcp_http_echo_session req r )
                         ^ r
                     } {
-                        ( vec_free [Json] resps )
                         : HttpResponse r ( response_status_only 202 )
                         ( __mcp_http_apply_cors r )
                         ( __mcp_http_echo_session req r )
@@ -798,8 +768,8 @@ McpSessionStore store
                 ? ( __mcp_req_is_response jreq ) {
                     : ?String sido ( header_get . req headers `Mcp-Session-Id` )
                     ?? sido {
-                        T s → { ( mcp_session_resolve_rpc store ( string_data s ) jreq ) ( string_free s ) }
-                        F _ → { ( json_free jreq ) }
+                        T s → { ( mcp_session_resolve_rpc store ( string_data s ) jreq ) }
+                        F _ → {}
                     }
                     : HttpResponse r ( response_status_only 202 )
                     ( __mcp_http_apply_cors r )
@@ -817,13 +787,11 @@ McpSessionStore store
                     ?? sv {
                         T s → {
                             ? & > ( string_len s ) 0 ! ( mcp_session_valid store ( string_data s ) ) { = reject T } {}
-                            ( string_free s )
                         }
                         F _ → {}
                     }
                 } {}
                 ? reject {
-                    ( json_free jreq )
                     : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `unknown or expired Mcp-Session-Id` )
                     = . r status 404
                     ( __mcp_http_apply_cors r )
@@ -855,12 +823,10 @@ McpSessionStore store
                             { ( mcp_session_subscribe store ( string_data s ) sub_uri ) } {}
                             ? & is_unsub != 0 ( nurl_str_len sub_uri )
                             { ( mcp_session_unsubscribe store ( string_data s ) sub_uri ) } {}
-                            ( string_free s )
                         }
                         F _ → {}
                     }
                     : Json env ( __mcp_subscribe_reply jreq )
-                    ( json_free jreq )
                     : HttpResponse r ( __mcp_http_response_for_json req env )
                     ( __mcp_http_echo_session req r )
                     ( __mcp_http_apply_cors r )
@@ -868,7 +834,6 @@ McpSessionStore store
                 } {}
 
                 : ?Json reply ( dispatch jreq )
-                ( json_free jreq )
 
                 ?? reply {
                     T resp_json → {
@@ -881,7 +846,6 @@ McpSessionStore store
                         ? is_init {
                             : String newsid ( mcp_session_create store )
                             ( response_set_header r `Mcp-Session-Id` ( string_data newsid ) )
-                            ( string_free newsid )
                         } {
                             ( __mcp_http_echo_session req r )
                         }
@@ -889,7 +853,6 @@ McpSessionStore store
                         ^ r
                     }
                     F empty → {
-                        ( json_free empty )
                         : HttpResponse r ( response_status_only 202 )
                         ( __mcp_http_apply_cors r )
                         ( __mcp_http_echo_session req r )
@@ -920,16 +883,13 @@ McpSessionStore store
     ( vec_push [Header] hs ( header_new `Cache-Control` `no-cache` ) )
     ( vec_push [Header] hs ( header_new `Connection` `keep-alive` ) )
     : !v NetErr r ( response_begin_chunked conn 200 hs )
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
     ^ r
 }
 
 @ mcp_sse_write_event TcpConn conn s event Json data → !v NetErr {
     : String f ( mcp_sse_frame event data )
     : ( Vec u ) bytes ( bytes_from_str ( string_data f ) )
-    ( string_free f )
     : !v NetErr r ( response_write_chunk conn bytes )
-    ( vec_free [u] bytes )
     ^ r
 }
 
@@ -947,13 +907,11 @@ McpSessionStore store
             T jv → {
                 : !v NetErr wr ( mcp_sse_write_event conn `message` jv )
                 ?? wr { T _ → { = wrote + wrote 1 } F → { = err T } }
-                ( json_free jv )
             }
             F → {}
         }
         = k + k 1
     }
-    ( vec_free [Json] q )
     ? err { ^ -1 } {}
     ^ wrote
 }
@@ -961,7 +919,6 @@ McpSessionStore store
 @ mcp_sse_heartbeat TcpConn conn → !v NetErr {
     : ( Vec u ) bytes ( bytes_from_str `: keep-alive\r\n\r\n` )
     : !v NetErr r ( response_write_chunk conn bytes )
-    ( vec_free [u] bytes )
     ^ r
 }
 

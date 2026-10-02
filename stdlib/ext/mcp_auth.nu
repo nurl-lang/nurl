@@ -93,7 +93,6 @@ $ `stdlib/ext/http_response.nu`
     : String out ( string_from origin )
     : String wk ( mcp_auth_metadata_path path )
     ( string_push_str out ( string_data wk ) )
-    ( string_free wk )
     ^ out
 }
 
@@ -138,7 +137,6 @@ $ `stdlib/ext/http_response.nu`
 // is public by definition. CONSUMES `md`.
 @ mcp_auth_metadata_response Json md → HttpResponse {
     : HttpResponse r ( response_json 200 md )
-    ( json_free md )
     ( response_set_header r `Access-Control-Allow-Origin` `*` )
     ( response_set_header r `Cache-Control` `public, max-age=3600` )
     ^ r
@@ -183,7 +181,6 @@ $ `stdlib/ext/http_response.nu`
     } {}
     ( json_obj_set body `resource_metadata` ( json_str_lit metadata_url ) )
     : HttpResponse r ( response_json 401 body )
-    ( json_free body )
     ( response_set_header r `WWW-Authenticate` ( string_data hv ) )
     ( response_set_header r `Access-Control-Allow-Origin` `*` )
     ( response_set_header r `Access-Control-Expose-Headers` `WWW-Authenticate` )
@@ -207,28 +204,22 @@ $ `stdlib/ext/http_response.nu`
         T v → {
             : String first ( __mcp_auth_first_value ( string_data v ) )
             ? > ( string_len first ) 0 {
-                ( string_free scheme )
                 = scheme first
-            } { ( string_free first ) }
-            ( string_free v )
+            } {}
         }
         F _ → {}
     }
     : ~ String host ( string_from `` )
     ?? ( header_get . req headers `X-Forwarded-Host` ) {
         T v → {
-            ( string_free host )
             = host ( __mcp_auth_first_value ( string_data v ) )
-            ( string_free v )
         }
         F _ → {}
     }
     ? == 0 ( string_len host ) {
         ?? ( header_get . req headers `Host` ) {
             T v → {
-                ( string_free host )
                 = host ( __mcp_auth_first_value ( string_data v ) )
-                ( string_free v )
             }
             F _ → {}
         }
@@ -278,14 +269,12 @@ $ `stdlib/ext/http_response.nu`
                 == 32 ( nurl_str_at raw n 6 )
             } {}
             ? ! is_bearer {
-                ( string_free v )
                 ^ @ ?String { F }
             } {}
             : ~ i start 7
             ~ & < start n == 32 ( nurl_str_at raw n start ) { = start + start 1 }
             : s tok ( nurl_str_slice raw start - n start )
             : String out ( string_from tok )
-            ( string_free v )
             ^ @ ?String { T out }
         }
         F _ → { ^ @ ?String { F } }

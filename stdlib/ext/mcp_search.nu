@@ -99,8 +99,6 @@ $ `stdlib/ext/nurldoc.nu`
                             // Try to recurse — if it's a directory, dir_list succeeds.
                             ( __ms_walk_ext arr root_dir ( string_data child_rel ) ext )
                         }
-                        ( string_free child_full )
-                        ( string_free child_rel )
                     }
                     F _ → {}
                 }
@@ -108,14 +106,12 @@ $ `stdlib/ext/nurldoc.nu`
             }
             : ~ i k 0
             ~ < k n {
-                ?? ( vec_get [String] entries k ) { T fs → ( string_free fs ) F _ → {} }
+                ?? ( vec_get [String] entries k ) { T fs → {} F _ → {} }
                 = k + k 1
             }
-            ( vec_free [String] entries )
         }
         F _ → {}
     }
-    ( string_free full )
 }
 
 // The .nu corpus walker every search path uses.
@@ -132,13 +128,10 @@ $ `stdlib/ext/nurldoc.nu`
 @ __ms_api_render_module s stdlib_dir s rel → String {
     : String fp ( path_join stdlib_dir rel )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free fp )
     ?? rd {
         T bytes → {
             : String src ( bytes_to_str bytes )
-            ( vec_free [u] bytes )
             : String md ( nurldoc_render ( string_data src ) rel )
-            ( string_free src )
             ^ md
         }
         F _ → ^ ( string_new )
@@ -177,7 +170,6 @@ $ `stdlib/ext/nurldoc.nu`
                 ( string_push_char hay 32 )
                 ( string_push_str hay ( string_data blk ) )
                 : String hay_lc ( string_to_lower hay )
-                ( string_free hay )
                 ? ( __ms_api_terms_match hay_lc terms ) {
                     : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
                     ( vec_set [i] ctr 0 + matched 1 )
@@ -199,13 +191,11 @@ $ `stdlib/ext/nurldoc.nu`
                         ( vec_set [i] ctr 1 + emitted 1 )
                     } {}
                 } {}
-                ( string_free hay_lc )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] parts \ String p → v { ( string_free p ) } )
 }
 
 // List matching examples as `examples/<rel> — <header blurb>`. Returns
@@ -228,17 +218,14 @@ $ `stdlib/ext/nurldoc.nu`
                 ? > ( nurl_str_len rel ) 0 {
                     : String fp ( path_join ( string_data dir ) rel )
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                    ( string_free fp )
                     ?? rd {
                         T bytes → {
                             : String src ( bytes_to_str bytes )
-                            ( vec_free [u] bytes )
                             : String hay ( string_with_cap + ( string_len src ) 64 )
                             ( string_push_str hay rel )
                             ( string_push_char hay 32 )
                             ( string_push_str hay ( string_data src ) )
                             : String hay_lc ( string_to_lower hay )
-                            ( string_free hay )
                             ? ( __ms_api_terms_match hay_lc terms ) {
                                 ? == shown 0 { ( string_push_str out `Examples containing every term:\n` ) } {}
                                 ( string_push_str out `  examples/` )
@@ -260,8 +247,6 @@ $ `stdlib/ext/nurldoc.nu`
                                 ( string_push_char out 10 )
                                 = shown + shown 1
                             } {}
-                            ( string_free hay_lc )
-                            ( string_free src )
                         }
                         F _ → {}
                     }
@@ -291,9 +276,7 @@ $ `stdlib/ext/nurldoc.nu`
                     ( string_push_str url `api/v1/search?q=` )
                     : String enc ( url_percent_encode ( string_data t ) )
                     ( string_push_str url ( string_data enc ) )
-                    ( string_free enc )
                     : !Response HttpErr r ( http_get ( string_data url ) )
-                    ( string_free url )
                     ?? r {
                         T resp → {
                             ?? ( json_parse ( http_body_str resp ) ) {
@@ -356,11 +339,9 @@ $ `stdlib/ext/nurldoc.nu`
                                         }
                                         F _ → {}
                                     }
-                                    ( json_free root )
                                 }
                                 F _ → {}
                             }
-                            ( response_free resp )
                         }
                         F _ → {}
                     }
@@ -370,7 +351,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = tk + tk 1
     }
-    ( vec_free_with [String] seen \ String v → v { ( string_free v ) } )
     ^ shown
 }
 
@@ -391,9 +371,7 @@ $ `stdlib/ext/nurldoc.nu`
                     ( string_push_str url `api/v1/search?q=` )
                     : String enc ( url_percent_encode ( string_data t ) )
                     ( string_push_str url ( string_data enc ) )
-                    ( string_free enc )
                     : !Response HttpErr r ( http_get ( string_data url ) )
-                    ( string_free url )
                     ?? r {
                         T resp → {
                             ?? ( json_parse ( http_body_str resp ) ) {
@@ -444,11 +422,9 @@ $ `stdlib/ext/nurldoc.nu`
                                         }
                                         F _ → {}
                                     }
-                                    ( json_free root )
                                 }
                                 F _ → {}
                             }
-                            ( response_free resp )
                         }
                         F _ → {}
                     }
@@ -509,9 +485,7 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_str url `api/v1/search?q=` )
     : String enc ( url_percent_encode pattern )
     ( string_push_str url ( string_data enc ) )
-    ( string_free enc )
     : !Response HttpErr r ( http_get ( string_data url ) )
-    ( string_free url )
     ?? r {
         T resp → {
             : s body ( http_body_str resp )
@@ -570,11 +544,9 @@ $ `stdlib/ext/nurldoc.nu`
                         }
                         F _ → {}
                     }
-                    ( json_free root )
                 }
                 F _ → {}
             }
-            ( response_free resp )
         }
         F _ → { ( string_push_str out `\n(registry search unavailable)\n` ) }
     }
@@ -676,13 +648,10 @@ $ `stdlib/ext/nurldoc.nu`
 @ __ms_grep_one_file s root s rel s label String pat_lc b word String out_clean String out_word ( Vec i ) ctr → v {
     : String fp ( path_join root rel )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free fp )
     ?? rd {
         T bytes → {
             : String src ( bytes_to_str bytes )
-            ( vec_free [u] bytes )
             : ( Vec String ) lines ( string_split src `\n` )
-            ( string_free src )
             : i nl ( vec_len [String] lines )
             : ~ i file_clean 0
             : ~ i file_word 0
@@ -712,7 +681,6 @@ $ `stdlib/ext/nurldoc.nu`
                                 ( vec_set [i] ctr 3 + ew 1 )
                             } {}
                         } {}
-                        ( string_free line_lc )
                     }
                     F _ → {}
                 }
@@ -728,7 +696,6 @@ $ `stdlib/ext/nurldoc.nu`
                 ( string_push_str out_word rel )
                 ( string_push_str out_word ` capped)\n` )
             } {}
-            ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
         }
         F _ → {}
     }
@@ -896,7 +863,7 @@ $ `stdlib/ext/nurldoc.nu`
         ( vec_insert [String] texts pos ( string_from text ) )
         ? > ( vec_len [i] scores ) cap {
             ( vec_remove [i] scores cap )
-            ?? ( vec_remove [String] texts cap ) { T old → ( string_free old ) F _ → {} }
+            ?? ( vec_remove [String] texts cap ) { T old → {} F _ → {} }
         } {}
     } {}
 }
@@ -915,7 +882,6 @@ $ `stdlib/ext/nurldoc.nu`
                 ( string_push_char hay 32 )
                 ( string_push_str hay ( string_data blk ) )
                 : String hay_lc ( string_to_lower hay )
-                ( string_free hay )
                 // The signature haystack: module path + the block's first
                 // line, which nurldoc renders as the declaration itself.
                 : String sig ( string_with_cap 160 )
@@ -929,10 +895,7 @@ $ `stdlib/ext/nurldoc.nu`
                     = si + si 1
                 }
                 : String sig_lc ( string_to_lower sig )
-                ( string_free sig )
                 : i sc ( __ms_or_score2 ( string_data sig_lc ) ( string_data hay_lc ) terms stats )
-                ( string_free sig_lc )
-                ( string_free hay_lc )
                 ? > sc 0 {
                     : i m ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
                     ( vec_set [i] ctr 0 + m 1 )
@@ -959,7 +922,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] parts \ String p → v { ( string_free p ) } )
 }
 
 // Run the OR pass over every module under stdlib_dir, append the ranked
@@ -991,11 +953,9 @@ $ `stdlib/ext/nurldoc.nu`
                 ? > ( nurl_str_len rel ) 0 {
                     : String fp ( path_join ( string_data dir ) rel )
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                    ( string_free fp )
                     ?? rd {
                         T bytes → {
                             : String src ( bytes_to_str bytes )
-                            ( vec_free [u] bytes )
                             // Same raw-source pre-filter as the AND pass,
                             // ORed: render only modules that can contribute.
                             : String pre ( string_with_cap + ( string_len src ) 64 )
@@ -1003,14 +963,10 @@ $ `stdlib/ext/nurldoc.nu`
                             ( string_push_char pre 32 )
                             ( string_push_str pre ( string_data src ) )
                             : String pre_lc ( string_to_lower pre )
-                            ( string_free pre )
                             ? > ( __ms_or_score2 `` ( string_data pre_lc ) terms stats ) 0 {
                                 : String md ( nurldoc_render ( string_data src ) rel )
                                 ( __ms_or_match_blocks md rel terms nterms scores texts ctr stats )
-                                ( string_free md )
                             } {}
-                            ( string_free pre_lc )
-                            ( string_free src )
                         }
                         F _ → {}
                     }
@@ -1020,8 +976,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = k + k 1
     }
-    ( json_free files )
-    ( string_free dir )
 
     : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
     : i shown ( vec_len [String] texts )
@@ -1046,10 +1000,6 @@ $ `stdlib/ext/nurldoc.nu`
             ( string_push_str out ` with the best coverage are above. Search one of the terms alone for the rest, or read a module with 'module'.)\n` )
         } {}
     } {}
-    ( vec_free [i] scores )
-    ( vec_free [i] ctr )
-    ( vec_free [i] stats )
-    ( vec_free_with [String] texts \ String t → v { ( string_free t ) } )
     ^ matched
 }
 
@@ -1118,7 +1068,6 @@ $ `stdlib/ext/nurldoc.nu`
                                             ( vec_push [String] hits ( string_from ( string_data t ) ) )
                                         } {}
                                     } {}
-                                    ( string_free rel_lc )
                                 } {}
                             }
                             F _ → {}
@@ -1132,7 +1081,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = tk + tk 1
     }
-    ( json_free files )
 
     : i n ( vec_len [String] rels )
     : i cap ( __ms_api_out_cap )
@@ -1175,7 +1123,6 @@ $ `stdlib/ext/nurldoc.nu`
                     ( string_push_str defer relj )
                     ( string_push_str defer `'.\n` )
                 }
-                ( string_free md )
             } {}
             = j + j 1
         }
@@ -1184,7 +1131,6 @@ $ `stdlib/ext/nurldoc.nu`
             ( string_push_str out ( string_data defer ) )
             ( string_push_char out 10 )
         } {}
-        ( string_free defer )
         // Every remaining term was NOT searched here. Say so, or an
         // agent reads "vec sort string split lowercase contains" coming
         // back without lowercase as "lowercase does not exist".
@@ -1208,9 +1154,6 @@ $ `stdlib/ext/nurldoc.nu`
         } {}
     } {}
     ( vec_push [i] miss_out ( vec_len [String] misses ) )
-    ( vec_free_with [String] rels \ String r → v { ( string_free r ) } )
-    ( vec_free_with [String] hits \ String h → v { ( string_free h ) } )
-    ( vec_free_with [String] misses \ String m → v { ( string_free m ) } )
     ^ n
 }
 
@@ -1222,7 +1165,6 @@ $ `stdlib/ext/nurldoc.nu`
     ? > ( string_len md ) ( __ms_api_out_cap ) {
         : String cut ( string_substr md 0 ( __ms_api_out_cap ) )
         ( string_push_str cut `\n… truncated — use nurl_read_stdlib for the full source.\n` )
-        ( string_free md )
         ^ cut
     } {}
     ^ md
@@ -1240,7 +1182,6 @@ $ `stdlib/ext/nurldoc.nu`
     // ("csv,json") — treat both as term boundaries.
     : String q_norm ( string_replace q_lc `,` ` ` )
     : ( Vec String ) terms ( string_split q_norm ` ` )
-    ( string_free q_norm )
     : String out ( string_with_cap 4096 )
     : ( Vec i ) ctr ( vec_new [i] )
     ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
@@ -1263,24 +1204,18 @@ $ `stdlib/ext/nurldoc.nu`
                     // terms can't all occur (path counts as haystack too).
                     : String fp ( path_join ( string_data dir ) rel )
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                    ( string_free fp )
                     ?? rd {
                         T bytes → {
                             : String src ( bytes_to_str bytes )
-                            ( vec_free [u] bytes )
                             : String pre ( string_with_cap + ( string_len src ) 64 )
                             ( string_push_str pre rel )
                             ( string_push_char pre 32 )
                             ( string_push_str pre ( string_data src ) )
                             : String pre_lc ( string_to_lower pre )
-                            ( string_free pre )
                             ? ( __ms_api_terms_match pre_lc terms ) {
                                 : String md ( nurldoc_render ( string_data src ) rel )
                                 ( __ms_api_match_blocks md rel terms out ctr )
-                                ( string_free md )
                             } {}
-                            ( string_free pre_lc )
-                            ( string_free src )
                         }
                         F _ → {}
                     }
@@ -1290,8 +1225,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = k + k 1
     }
-    ( json_free files )
-    ( string_free dir )
 
     : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
     : i emitted ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
@@ -1311,7 +1244,6 @@ $ `stdlib/ext/nurldoc.nu`
         : ( Vec i ) miss_ctr ( vec_new [i] )
         : i nm_n ( __ms_api_exact_modules stdlib_dir terms hdr miss_ctr )
         : i nm_missed ?? ( vec_get [i] miss_ctr 0 ) { T v → v F _ → 0 }
-        ( vec_free [i] miss_ctr )
         // A module-name hit that explains the WHOLE query is the answer.
         // One that leaves terms over is half an answer: `hash map insert`
         // named std/hash.nu (cryptographic hashing) and stopped, while
@@ -1353,9 +1285,6 @@ $ `stdlib/ext/nurldoc.nu`
     } {}
     // An exact package-name hit still deserves its one-line footer.
     ? & ! widened > ( nurl_str_len regbase ) 0 { ( __ms_api_exact_pkg_note regbase terms hdr ) } {}
-    ( string_free out ) ( vec_free [i] ctr )
-    ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
-    ( string_free q_lc )
     ^ hdr
 }
 
@@ -1408,7 +1337,6 @@ $ `stdlib/ext/nurldoc.nu`
         ( string_push_int hdr omitted )
         ( string_push_str hdr ` more matching lines omitted (per-file/total caps) — narrow the pattern or scope with 'where'.\n` )
     } {}
-    ( string_free pat_lc )
     ^ hdr
 }
 
@@ -1440,7 +1368,6 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_str u `.json` )
     : ~ String out ( string_new )
     : !Response HttpErr r ( http_get ( string_data u ) )
-    ( string_free u )
     ?? r {
         T resp → {
             ?? ( json_parse ( http_body_str resp ) ) {
@@ -1456,7 +1383,7 @@ $ `stdlib/ext/nurldoc.nu`
                                         ?? ( json_obj_get o `yanked` ) { T yj → { ? ( json_is_bool yj ) { = yanked ( json_as_bool yj ) } {} } F → {} }
                                         ? yanked {} {
                                             ?? ( json_obj_get o `version` ) {
-                                                T vj → { ? ( json_is_str vj ) { ( string_free out ) = out ( string_from ( json_as_str vj ) ) } {} }
+                                                T vj → { ? ( json_is_str vj ) { = out ( string_from ( json_as_str vj ) ) } {} }
                                                 F → {}
                                             }
                                         }
@@ -1468,11 +1395,9 @@ $ `stdlib/ext/nurldoc.nu`
                         }
                         F → {}
                     }
-                    ( json_free root )
                 }
                 F → {}
             }
-            ( response_free resp )
         }
         F → {}
     }
@@ -1485,14 +1410,12 @@ $ `stdlib/ext/nurldoc.nu`
 @ msearch_api_package s regbase s name s version → String {
     : ~ String ver ( string_from version )
     ? == ( string_len ver ) 0 {
-        ( string_free ver )
         = ver ( __ms_latest_version regbase name )
     } {}
     ? == ( string_len ver ) 0 { ^ ( string_new ) } {}
     : String url ( __ms_tarball_url regbase name ( string_data ver ) )
     : ~ String md ( string_new )
     : !Response HttpErr r ( http_get ( string_data url ) )
-    ( string_free url )
     ?? r {
         T resp → {
             ? == ( http_status resp ) 200 {
@@ -1507,7 +1430,6 @@ $ `stdlib/ext/nurldoc.nu`
                                 ( string_push_str hdr ( string_data ver ) )
                                 ( string_push_str hdr ` — package API surface (published src/*.nu)\n` )
                                 ( string_push_str md ( string_data hdr ) )
-                                ( string_free hdr )
                                 : i n ( vec_len [TarEntry] ents )
                                 : ~ i k 0
                                 ~ < k n {
@@ -1517,7 +1439,6 @@ $ `stdlib/ext/nurldoc.nu`
                                                 : ~ String pnorm ( string_from ( string_data . e path ) )
                                                 ? ( string_starts_with pnorm `./` ) {
                                                     : String c2 ( string_substr pnorm 2 - ( string_len pnorm ) 2 )
-                                                    ( string_free pnorm )
                                                     = pnorm c2
                                                 } {}
                                                 ? & ( string_starts_with pnorm `src/` ) ( string_ends_with pnorm `.nu` ) {
@@ -1526,7 +1447,6 @@ $ `stdlib/ext/nurldoc.nu`
                                                     : String one ( nurldoc_render ( string_data content ) ( string_data base ) )
                                                     ( string_push_str md `\n---\n\n` )
                                                     ( string_push_str md ( string_data one ) )
-                                                    ( string_free one ) ( string_free content )
                                                 } {}
                                             } {}
                                         }
@@ -1534,21 +1454,16 @@ $ `stdlib/ext/nurldoc.nu`
                                     }
                                     = k + k 1
                                 }
-                                ( tar_entries_free ents )
                             }
                             F → {}
                         }
-                        ( vec_free [u] raw )
                     }
                     F → {}
                 }
-                ( vec_free [u] gz )
             } {}
-            ( response_free resp )
         }
         F → {}
     }
-    ( string_free ver )
     ? > ( string_len md ) ( __ms_api_out_cap ) {
         : String cut ( string_substr md 0 ( __ms_api_out_cap ) )
         ( string_push_str cut `\n… truncated — fetch the tarball for the full source.\n` )
@@ -1604,7 +1519,6 @@ $ `stdlib/ext/nurldoc.nu`
 @ __ms_docs_norm s name → String {
     : ~ String w ( __ms_lc name )
     ? >= ( nurl_str_find ( string_data w ) `..` ) 0 {
-        ( string_free w )
         ^ ( string_new )
     } {}
     : ~ b more T
@@ -1612,20 +1526,20 @@ $ `stdlib/ext/nurldoc.nu`
         = more F
         ? ( string_starts_with w `/` ) {
             : String c1 ( string_substr w 1 - ( string_len w ) 1 )
-            ( string_free w ) = w c1 = more T
+            = w c1 = more T
         } {}
         ? ( string_starts_with w `./` ) {
             : String c2 ( string_substr w 2 - ( string_len w ) 2 )
-            ( string_free w ) = w c2 = more T
+            = w c2 = more T
         } {}
         ? ( string_starts_with w `docs/` ) {
             : String c3 ( string_substr w 5 - ( string_len w ) 5 )
-            ( string_free w ) = w c3 = more T
+            = w c3 = more T
         } {}
     }
     ~ ( string_ends_with w `/` ) {
         : String c4 ( string_substr w 0 - ( string_len w ) 1 )
-        ( string_free w ) = w c4
+        = w c4
     }
     ^ w
 }
@@ -1641,13 +1555,11 @@ $ `stdlib/ext/nurldoc.nu`
     : ~ String rl_stem ( string_from ( string_data rl ) )
     ? ( string_ends_with rl_stem `.md` ) {
         : String cut ( string_substr rl_stem 0 - ( string_len rl_stem ) 3 )
-        ( string_free rl_stem )
         = rl_stem cut
     } {}
     : ~ String base_stem ( string_from ( string_data base ) )
     ? ( string_ends_with base_stem `.md` ) {
         : String cut2 ( string_substr base_stem 0 - ( string_len base_stem ) 3 )
-        ( string_free base_stem )
         = base_stem cut2
     } {}
     : ~ i rank 0
@@ -1655,7 +1567,6 @@ $ `stdlib/ext/nurldoc.nu`
     ? & == rank 0 != 0 ( nurl_str_eq ( string_data rl_stem ) want ) { = rank 2 } {}
     ? & == rank 0 != 0 ( nurl_str_eq ( string_data base ) want ) { = rank 3 } {}
     ? & == rank 0 != 0 ( nurl_str_eq ( string_data base_stem ) want ) { = rank 4 } {}
-    ( string_free rl )
     ^ rank
 }
 
@@ -1665,7 +1576,6 @@ $ `stdlib/ext/nurldoc.nu`
     : String want ( __ms_docs_norm name )
     : ~ String best ( string_new )
     ? == ( string_len want ) 0 {
-        ( string_free want )
         ^ best
     } {}
     : Json files ( json_arr_new )
@@ -1683,7 +1593,6 @@ $ `stdlib/ext/nurldoc.nu`
                             : i rank ( __ms_docs_rank rel ( string_data want ) )
                             ? & > rank 0 | == best_rank 0 < rank best_rank {
                                 = best_rank rank
-                                ( string_free best )
                                 = best ( string_from rel )
                             } {}
                         } {}
@@ -1695,7 +1604,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = k + k 1
     }
-    ( string_free want )
     ^ best
 }
 
@@ -1733,18 +1641,14 @@ $ `stdlib/ext/nurldoc.nu`
                     }
                     : String fp ( path_join docs_dir rel )
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                    ( string_free fp )
                     ?? rd {
                         T bytes → {
                             : String src ( bytes_to_str bytes )
-                            ( vec_free [u] bytes )
                             : String t ( __ms_docs_title src )
                             ? > ( string_len t ) 0 {
                                 ( string_push_str out ` — ` )
                                 ( string_push_str out ( string_data t ) )
                             } {}
-                            ( string_free t )
-                            ( string_free src )
                         }
                         F _ → {}
                     }
@@ -1755,7 +1659,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = k + k 1
     }
-    ( json_free files )
     ? == nf 0 {
         ( string_push_str out `(no .md files under the configured docs directory)\n` )
     } {}
@@ -1874,7 +1777,6 @@ $ `stdlib/ext/nurldoc.nu`
         : ~ String num2 ( string_from ( string_data num ) )
         ? & > ( string_len num2 ) 0 == ( string_get num2 - ( string_len num2 ) 1 ) 46 {
             : String cut ( string_substr num2 0 - ( string_len num2 ) 1 )
-            ( string_free num2 )
             = num2 cut
         } {}
         ? != 0 ( nurl_str_eq ( string_data num2 ) want ) { = hit T } {}
@@ -1883,9 +1785,7 @@ $ `stdlib/ext/nurldoc.nu`
     ? ! hit {
         : String w ( __ms_lc want )
         ? >= ( nurl_str_find t ( string_data w ) ) 0 { = hit T } {}
-        ( string_free w )
     } {}
-    ( string_free tl )
     ^ hit
 }
 
@@ -1895,16 +1795,13 @@ $ `stdlib/ext/nurldoc.nu`
     : String rel ( msearch_docs_resolve docs_dir name )
     : String out ( string_with_cap 2048 )
     ? == ( string_len rel ) 0 {
-        ( string_free rel )
         ^ out
     } {}
     : String fp ( path_join docs_dir ( string_data rel ) )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free fp )
     ?? rd {
         T bytes → {
             : String src ( bytes_to_str bytes )
-            ( vec_free [u] bytes )
             : ( Vec i ) starts ( vec_new [i] )
             : ( Vec i ) levels ( vec_new [i] )
             : ( Vec String ) titles ( vec_new [String] )
@@ -1934,13 +1831,9 @@ $ `stdlib/ext/nurldoc.nu`
                 ( string_push_str out ` B)\n` )
                 = k + k 1
             }
-            ( vec_free [i] starts ) ( vec_free [i] levels )
-            ( vec_free_with [String] titles \ String t → v { ( string_free t ) } )
-            ( string_free src )
         }
         F _ → {}
     }
-    ( string_free rel )
     ^ out
 }
 
@@ -1950,16 +1843,13 @@ $ `stdlib/ext/nurldoc.nu`
     : String rel ( msearch_docs_resolve docs_dir name )
     : String out ( string_with_cap 4096 )
     ? == ( string_len rel ) 0 {
-        ( string_free rel )
         ^ out
     } {}
     : String fp ( path_join docs_dir ( string_data rel ) )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free fp )
     ?? rd {
         T bytes → {
             : String src ( bytes_to_str bytes )
-            ( vec_free [u] bytes )
             : ( Vec i ) starts ( vec_new [i] )
             : ( Vec i ) levels ( vec_new [i] )
             : ( Vec String ) titles ( vec_new [String] )
@@ -1991,20 +1881,15 @@ $ `stdlib/ext/nurldoc.nu`
                 : i keep ? > want ( __ms_docs_cap ) ( __ms_docs_cap ) want
                 : String slice ( string_substr src s0 keep )
                 ( string_push_str out ( string_data slice ) )
-                ( string_free slice )
                 ? > want keep {
                     ( string_push_str out `\n… section truncated — read the whole file with offset=` )
                     ( string_push_int out + s0 keep )
                     ( string_push_char out 10 )
                 } {}
             } {}
-            ( vec_free [i] starts ) ( vec_free [i] levels )
-            ( vec_free_with [String] titles \ String t → v { ( string_free t ) } )
-            ( string_free src )
         }
         F _ → {}
     }
-    ( string_free rel )
     ^ out
 }
 
@@ -2036,11 +1921,9 @@ $ `stdlib/ext/nurldoc.nu`
                 ? > ( nurl_str_len rel ) 0 {
                     : String fp ( path_join docs_dir rel )
                     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-                    ( string_free fp )
                     ?? rd {
                         T bytes → {
                             : String src ( bytes_to_str bytes )
-                            ( vec_free [u] bytes )
                             : ( Vec i ) starts ( vec_new [i] )
                             : ( Vec i ) levels ( vec_new [i] )
                             : ( Vec String ) titles ( vec_new [String] )
@@ -2060,9 +1943,7 @@ $ `stdlib/ext/nurldoc.nu`
                                     F _ → {}
                                 }
                                 : String sig_lc ( string_to_lower sig )
-                                ( string_free sig )
                                 : i sc ( __ms_or_score2 ( string_data sig_lc ) ( string_data body_lc ) terms stats )
-                                ( string_free sig_lc ) ( string_free body_lc )
                                 ? > sc 0 {
                                     = matched + matched 1
                                     : String snip ( string_with_cap 1200 )
@@ -2090,12 +1971,8 @@ $ `stdlib/ext/nurldoc.nu`
                                     ? > bn keep { ( string_push_str snip `\n…` ) } {}
                                     ( __ms_topk_push scores texts 6 sc ( string_data snip ) )
                                 } {}
-                                ( string_free body )
                                 = k + k 1
                             }
-                            ( vec_free [i] starts ) ( vec_free [i] levels )
-                            ( vec_free_with [String] titles \ String t → v { ( string_free t ) } )
-                            ( string_free src )
                         }
                         F _ → {}
                     }
@@ -2105,7 +1982,6 @@ $ `stdlib/ext/nurldoc.nu`
         }
         = fi + fi 1
     }
-    ( json_free files )
     : String out ( string_with_cap 4096 )
     : i shown ( vec_len [String] texts )
     ( string_push_int out matched )
@@ -2133,10 +2009,6 @@ $ `stdlib/ext/nurldoc.nu`
         ( string_push_str out `Nothing matched — terms are whole words. Call nurl_docs with no arguments for the index, or name=<doc> alone for that document's outline.\n` )
     } {}
     ( vec_set [i] hits 0 matched )
-    ( vec_free [i] scores ) ( vec_free [i] stats )
-    ( vec_free_with [String] texts \ String t → v { ( string_free t ) } )
-    ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
-    ( string_free q_lc )
     ^ out
 }
 
@@ -2160,17 +2032,14 @@ $ `stdlib/ext/nurldoc.nu`
 @ msearch_docs_read s docs_dir s name i offset → String {
     : String rel ( msearch_docs_resolve docs_dir name )
     ? == ( string_len rel ) 0 {
-        ( string_free rel )
         ^ ( string_new )
     } {}
     : String fp ( path_join docs_dir ( string_data rel ) )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free fp )
     : String out ( string_with_cap 4096 )
     ?? rd {
         T bytes → {
             : String src ( bytes_to_str bytes )
-            ( vec_free [u] bytes )
             : i n ( string_len src )
             : ~ i from ? < offset 0 0 offset
             ? > from n { = from n } {}
@@ -2191,8 +2060,6 @@ $ `stdlib/ext/nurldoc.nu`
             ( string_push_char out 10 )
             : String slice ( string_substr src from keep )
             ( string_push_str out ( string_data slice ) )
-            ( string_free slice )
-            ( string_free src )
             ? > left keep {
                 ( string_push_str out `\n… truncated at ` )
                 ( string_push_int out + from keep )
@@ -2209,7 +2076,6 @@ $ `stdlib/ext/nurldoc.nu`
             ( string_push_str out ` could not be read.\n` )
         }
     }
-    ( string_free rel )
     ^ out
 }
 
