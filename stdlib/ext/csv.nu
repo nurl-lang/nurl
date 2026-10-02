@@ -40,10 +40,12 @@
 // the content (or escape) buffer. Combine with `csv_table_view_len`
 // for length. Borrows are valid while the table lives.
 //
-// Memory: CSVReader and CSVTable are library handles (docs/MEMORY.md
-// §7.6) — every copy is the same reader / table, and the last owner
-// releases it. `csv_reader_free` / `csv_table_free` are early releases
-// (optional). A failed `csv_table_load*` returns the null table:
+// Memory: CSVReader, CSVDictReader, CSVWriter, CSVDictWriter and
+// CSVTable are library handles (docs/MEMORY.md §7.6) — every copy is the
+// same reader / writer / table, and the last owner releases it (a writer's
+// last owner closes its file). `csv_reader_free` / `csv_dict_reader_free`
+// / `csv_table_free` are early releases (optional); `csv_writer_close` /
+// `csv_dict_writer_close` close the file now. A failed `csv_table_load*` returns the null table:
 // test it with `csv_table_ok`.
 
 $ `stdlib/core/string.nu`
@@ -78,11 +80,8 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Shared row-vec helpers (streaming API) ─────────────────────────
 
-@ __csv_drop_string String s → v { ( string_free s ) }
-
-@ _csv_row_free sink ( Vec String ) row → v {
-    ( vec_free_with [String] row \ String s → v { ( string_free s ) } )
-}
+// Let go of `row` now rather than at the end of its owner's scope.
+@ _csv_row_free sink ( Vec String ) row → v {}
 
 // ── CSVReader (per-row stream) ─────────────────────────────────────
 
@@ -216,7 +215,6 @@ $ `stdlib/core/rcbox.nu`
     ? == ( vec_len [String] row ) 1 {
         : *String rp ( vec_data [String] row )
         ? == ( string_len . rp 0 ) 0 {
-            ( _csv_row_free row )
             ^ ( __csv_reader_next r )
         } {}
     } {}
@@ -226,23 +224,38 @@ $ `stdlib/core/rcbox.nu`
 
 // ── CSVDictReader ──────────────────────────────────────────────────
 
-: CSVDictReader {
+: CSVDictReaderImpl {
     ( Vec String ) header
     CSVReader reader
 }
 
-// The dict reader keeps its own share of `r`: it reads on from where `r`
-// stands, and the caller's handle stays valid.
-@ csv_dict_reader_new CSVReader r → *CSVDictReader {
-    : ?( Vec String ) h_opt ( csv_reader_next r )
-    : ( Vec String ) h ( opt_unwrap_or [( Vec String )] h_opt ( vec_new [String] ) )
-    : *CSVDictReader dr # *CSVDictReader ( nurl_malloc Z CSVDictReader )
-    = . dr header h
-    = . dr reader ( CSVReader_share r )
-    ^ dr
+// A CSVDictReader is a handle on its state in an rcbox: every copy is the
+// same reader, and the last owner releases it (its header and its share
+// of the row reader go with it).
+: CSVDictReader { s ctl }
+
+@ CSVDictReader_share CSVDictReader h → CSVDictReader { ^ @ CSVDictReader { # s ( rcbox_share # i . h ctl ) } }
+
+@ CSVDictReader_drop sink CSVDictReader h → v {
+    ( mem_forget h )
+    ( rcbox_release [CSVDictReaderImpl] # i . h ctl )
 }
 
-@ csv_dict_reader_next * CSVDictReader dr → ?( HashMap s String ) {
+@ __CSVDictReader_ptr CSVDictReader h → *CSVDictReaderImpl { ^ ( rcbox_ptr [CSVDictReaderImpl] # i . h ctl ) }
+
+// The dict reader keeps its own share of `r`: it reads on from where `r`
+// stands, and the caller's handle stays valid.
+@ csv_dict_reader_new CSVReader r → CSVDictReader {
+    : ?( Vec String ) h_opt ( csv_reader_next r )
+    // finding_stdlib_sink_param_returned_from_join: on an empty input the
+    // default comes back from opt_unwrap_or already freed (a compiler
+    // defect, reported); kept as written until it is fixed at the source.
+    : ( Vec String ) h ( opt_unwrap_or [( Vec String )] h_opt ( vec_new [String] ) )
+    ^ @ CSVDictReader { # s ( rcbox_new [CSVDictReaderImpl] @ CSVDictReaderImpl { h ( CSVReader_share r ) } ) }
+}
+
+@ csv_dict_reader_next CSVDictReader dr__h → ?( HashMap s String ) {
+    : *CSVDictReaderImpl dr ( __CSVDictReader_ptr dr__h )
     : ?( Vec String ) row_opt ( csv_reader_next . dr reader )
     ?? row_opt {
         T row → {
@@ -268,44 +281,52 @@ $ `stdlib/core/rcbox.nu`
                 }
                 = i + i 1
             }
-            ( _csv_row_free row )
             ^ @ ?( HashMap s String ) { T map }
         }
         F → { ^ @ ?( HashMap s String ) { F # ( HashMap s String ) 0 } }
     }
 }
 
-@ csv_dict_reader_free sink * CSVDictReader dr → v {
-    ( _csv_row_free . dr header )
-    ( csv_reader_free . dr reader )
-    ( nurl_free dr )
-}
+// Let go of `dr` now rather than at the end of its owner's scope.
+@ csv_dict_reader_free sink CSVDictReader dr → v {}
 
 // ── CSVWriter (per-row stream over a FILE*) ───────────────────────
 
-: CSVWriter {
-    * v f
+: CSVWriterImpl {
+    * v f  // the FILE*, 0 once closed
     i delimiter
     b crlf_terminator
     i quote_char
 }
 
-@ csv_writer_new s path → *CSVWriter {
-    : *CSVWriter w # *CSVWriter ( nurl_malloc Z CSVWriter )
-    = . w f ( nurl_file_open path `w` )
-    = . w delimiter 44
-    = . w crlf_terminator F
-    = . w quote_char 34
-    ^ w
+// The file is the one part the compiler does not manage: the last owner
+// closes it if csv_writer_close did not.
+% Drop CSVWriterImpl {
+    @ drop CSVWriterImpl w → v {
+        ? != 0 # i . w f { ( nurl_file_close . w f ) } {}
+    }
 }
 
-@ csv_writer_new_with s path CSVDialect dia → *CSVWriter {
-    : *CSVWriter w # *CSVWriter ( nurl_malloc Z CSVWriter )
-    = . w f ( nurl_file_open path `w` )
-    = . w delimiter . dia delimiter
-    = . w crlf_terminator . dia crlf_terminator
-    = . w quote_char . dia quote_char
-    ^ w
+// A CSVWriter is a handle on its state in an rcbox: every copy is the same
+// writer, and the last owner closes and releases it.
+: CSVWriter { s ctl }
+
+@ CSVWriter_share CSVWriter h → CSVWriter { ^ @ CSVWriter { # s ( rcbox_share # i . h ctl ) } }
+
+@ CSVWriter_drop sink CSVWriter h → v {
+    ( mem_forget h )
+    ( rcbox_release [CSVWriterImpl] # i . h ctl )
+}
+
+@ __CSVWriter_ptr CSVWriter h → *CSVWriterImpl { ^ ( rcbox_ptr [CSVWriterImpl] # i . h ctl ) }
+
+@ csv_writer_new s path → CSVWriter {
+    ^ ( csv_writer_new_with path ( csv_dialect_default ) )
+}
+
+@ csv_writer_new_with s path CSVDialect dia → CSVWriter {
+    : *v f ( nurl_file_open path `w` )
+    ^ @ CSVWriter { # s ( rcbox_new [CSVWriterImpl] @ CSVWriterImpl { f . dia delimiter . dia crlf_terminator . dia quote_char } ) }
 }
 
 @ __csv_write_field * v file s data i delim i quote → v {
@@ -336,17 +357,13 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ csv_writer_writerow * CSVWriter w ( Vec String ) row → v {
+@ csv_writer_writerow CSVWriter w__h ( Vec String ) row → v {
+    : *CSVWriterImpl w ( __CSVWriter_ptr w__h )
     : *v file . w f
+    ? == 0 # i file { ^ } {}
     : i n ( vec_len [String] row )
     : i delim . w delimiter
     : i quote . w quote_char
-
-    : *u sep_buf # *u ( nurl_malloc 2 )
-    = . sep_buf 0 # u delim
-    = . sep_buf 1 # u 0
-    : s sep # s sep_buf
-
     : ~ i i 0
     ~ < i n {
         : ?String s ( vec_get [String] row i )
@@ -354,39 +371,55 @@ $ `stdlib/core/rcbox.nu`
             T ss → ( __csv_write_field file ( string_data ss ) delim quote )
             F → {}
         }
-        ? < i - n 1 { ( nurl_file_write file sep ) } {}
+        ? < i - n 1 { ( nurl_file_write_byte file delim ) } {}
         = i + i 1
     }
     ? . w crlf_terminator { ( nurl_file_write file `\r\n` ) } { ( nurl_file_write file `\n` ) }
-    ( nurl_free sep_buf )
 }
 
-@ csv_writer_close * CSVWriter w → v {
-    ( nurl_file_close . w f )
-    ( nurl_free w )
+// Close the file now (a later write is a no-op); the writer itself goes
+// with its last owner.
+@ csv_writer_close CSVWriter w__h → v {
+    : *CSVWriterImpl w ( __CSVWriter_ptr w__h )
+    ? != 0 # i . w f { ( nurl_file_close . w f ) } {}
+    = . w f # *v 0
 }
 
 // ── CSVDictWriter ──────────────────────────────────────────────────
 
-: CSVDictWriter {
+: CSVDictWriterImpl {
     ( Vec String ) fieldnames
-    * CSVWriter writer
+    CSVWriter writer
 }
 
-@ csv_dict_writer_new * CSVWriter w ( Vec String ) fieldnames → *CSVDictWriter {
-    : *CSVDictWriter dw # *CSVDictWriter ( nurl_malloc Z CSVDictWriter )
-    = . dw fieldnames fieldnames
-    = . dw writer w
-    ^ dw
+// A CSVDictWriter is a handle on its state in an rcbox: every copy is the
+// same writer, and the last owner releases it (with its share of the
+// row writer).
+: CSVDictWriter { s ctl }
+
+@ CSVDictWriter_share CSVDictWriter h → CSVDictWriter { ^ @ CSVDictWriter { # s ( rcbox_share # i . h ctl ) } }
+
+@ CSVDictWriter_drop sink CSVDictWriter h → v {
+    ( mem_forget h )
+    ( rcbox_release [CSVDictWriterImpl] # i . h ctl )
 }
 
-@ csv_dict_writer_writeheader * CSVDictWriter dw → v {
+@ __CSVDictWriter_ptr CSVDictWriter h → *CSVDictWriterImpl { ^ ( rcbox_ptr [CSVDictWriterImpl] # i . h ctl ) }
+
+// The dict writer keeps its own copy of `fieldnames` and its own share of
+// `w`.
+@ csv_dict_writer_new CSVWriter w ( Vec String ) fieldnames → CSVDictWriter {
+    ^ @ CSVDictWriter { # s ( rcbox_new [CSVDictWriterImpl] @ CSVDictWriterImpl { ( vec_clone [String] fieldnames ) ( CSVWriter_share w ) } ) }
+}
+
+@ csv_dict_writer_writeheader CSVDictWriter dw__h → v {
+    : *CSVDictWriterImpl dw ( __CSVDictWriter_ptr dw__h )
     ( csv_writer_writerow . dw writer . dw fieldnames )
 }
 
-@ csv_dict_writer_writerow * CSVDictWriter dw ( HashMap s String ) row → v {
+@ csv_dict_writer_writerow CSVDictWriter dw__h ( HashMap s String ) row → v {
+    : *CSVDictWriterImpl dw ( __CSVDictWriter_ptr dw__h )
     : ( Vec String ) fns . dw fieldnames
-    : *CSVWriter wr . dw writer
     : i n ( vec_len [String] fns )
     : ( Vec String ) line ( vec_with_cap [String] n )
     : ~ i i 0
@@ -404,14 +437,13 @@ $ `stdlib/core/rcbox.nu`
         }
         = i + i 1
     }
-    ( csv_writer_writerow wr line )
-    ( _csv_row_free line )
+    ( csv_writer_writerow . dw writer line )
 }
 
-@ csv_dict_writer_close * CSVDictWriter dw → v {
-    ( _csv_row_free . dw fieldnames )
+// Close the underlying file now (as csv_writer_close does).
+@ csv_dict_writer_close CSVDictWriter dw__h → v {
+    : *CSVDictWriterImpl dw ( __CSVDictWriter_ptr dw__h )
     ( csv_writer_close . dw writer )
-    ( nurl_free dw )
 }
 
 // ── CSVTable: arena-backed bulk container ──────────────────────────
@@ -868,8 +900,8 @@ $ `stdlib/core/rcbox.nu`
             = pos p
         } {
             ? first_row {
-                ( _csv_row_free . t headers )
-                = . t headers ( vec_with_cap [String] n_cells )
+                ( vec_clear [String] . t headers )
+                ( vec_reserve [String] . t headers n_cells )
                 : ~ i k 0
                 ~ < k n_cells {
                     : i off . fcp + row_first_i64 * k 2
@@ -1106,6 +1138,17 @@ $ `stdlib/core/rcbox.nu`
 // truncate the (row_starts, row_lens) parallel vecs. flat_cells and
 // content are never touched, never copied.
 
+// Replace the row index: the old vectors leave the table (dropped here),
+// the new ones move in.
+@ __csv_set_rows * CSVTableImpl t sink ( Vec i ) starts sink ( Vec i ) lens → v {
+    : ( Vec i ) old_starts . t row_starts
+    ( mem_take old_starts )
+    : ( Vec i ) old_lens . t row_lens
+    ( mem_take old_lens )
+    = . t row_starts starts
+    = . t row_lens lens
+}
+
 // Permute (row_starts, row_lens) in place by `order`.
 @ __csv_permute_rows * CSVTableImpl t ( Vec i ) order → v {
     : i n ( vec_len [i] order )
@@ -1121,10 +1164,7 @@ $ `stdlib/core/rcbox.nu`
         ( vec_push [i] new_lens . rlp src )
         = k + k 1
     }
-    ( vec_free [i] . t row_starts )
-    ( vec_free [i] . t row_lens )
-    = . t row_starts new_starts
-    = . t row_lens new_lens
+    ( __csv_set_rows t new_starts new_lens )
 }
 
 // Numeric int sort: 1 parse per row + i64 sort over a permutation.
@@ -1171,7 +1211,6 @@ $ `stdlib/core/rcbox.nu`
         } )
 
         ( __csv_permute_rows t order )
-        ( vec_free [i] order )
     } {}
 }
 
@@ -1217,7 +1256,6 @@ $ `stdlib/core/rcbox.nu`
         } )
 
         ( __csv_permute_rows t order )
-        ( vec_free [i] order )
     } {}
 }
 
@@ -1280,7 +1318,6 @@ $ `stdlib/core/rcbox.nu`
         } )
 
         ( __csv_permute_rows t order )
-        ( vec_free [i] order )
     } {}
 }
 
@@ -1308,10 +1345,7 @@ $ `stdlib/core/rcbox.nu`
         } {}
         = ri + ri 1
     }
-    ( vec_free [i] . t row_starts )
-    ( vec_free [i] . t row_lens )
-    = . t row_starts new_starts
-    = . t row_lens new_lens
+    ( __csv_set_rows t new_starts new_lens )
 }
 
 // ── Typed predicate filters (fast path) ──────────────────────────
@@ -1462,7 +1496,8 @@ $ `stdlib/core/rcbox.nu`
         // typed_floats whether or not we ran the narrow path
         // (mismatched cache size means a prior filter already
         // broke alignment; cleared run means it's now consumed).
-        ( vec_free [f] . t typed_floats )
+        : ( Vec f ) stale . t typed_floats
+        ( mem_take stale )  // the cache leaves the table (dropped here)
         = . t typed_floats ( vec_new [f] )
         = . t typed_float_col - 0 1
     } {}
