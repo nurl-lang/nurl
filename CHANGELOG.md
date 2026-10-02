@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A lent call result copied on return no longer keeps the local it lent
+  from alive** (`^ ( sane o )`, sane handing back a cursor over its
+  parameter): o is dropped and the copy is published as owned (anomaly
+  prep.nu leaked a String per version patch). `compiler/tests/return_lent_call_on_local.nu`.
+- **A number read out of a local struct into the returned literal is a copy**
+  (`^ @ Ser { y . kd kind }`): kd is dropped with its Vec (anomaly forecast
+  leaked per fit). `compiler/tests/number_field_into_returned_literal.nu`.
 - **A call result assigned over an owned binding is the binding's only when
   the call says so** (`= x ( at p 0 )`, `at` lending a table element on one
   path): the binding kept its old flag and dropped the table's element

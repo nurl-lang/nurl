@@ -3603,6 +3603,7 @@
     // this function answers per call (mem_publish_hown); `true` unless a
     // rule below says otherwise.
     : ~ s hbit ( nurl_str_cat `true` `` )
+    : ~ b ret_call_copied F
     ? == ret_first_tt TT_LPAREN {
         : s cro ( mem_call_retown syms cg )
         ? != 0 ( nurl_str_len cro ) { = hbit cro } {}
@@ -3615,6 +3616,7 @@
             ( nurl_print `  ` ) ( nurl_print rb ) ( nurl_print ` = xor i1 ` ) ( nurl_print hbit ) ( nurl_print `, 1\n` )
             = val ( mem_emit_cloneif cg __crt val rb )
             = hbit ( nurl_str_cat `true` `` )
+            = ret_call_copied T
         } {}
     } {}
     // `^ ( string_data x )`: a raw view of an auto-dropped local outlives
@@ -4031,8 +4033,10 @@
     // happened to load last — 26k leaked bindings per self-compile.
     // A genuine borrow (ret_borrow / vec_get) still keeps the skip via
     // the second clause.
+    // (Not when the borrow was copied on the way out (ret_call_copied): the
+    // caller gets its own value, and t is this frame's to drop.)
     : b ret_arg_alias | & ! ret_is_direct_call ! ret_is_det_join
-    != 0 ( nurl_sym_len syms `__last_value_borrow__` )
+    & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_call_copied
     : s skip ? & & ( mem_is_slice_ty lt ) ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) ret_ident )
     ret_arg_alias
     ret_ident
@@ -4117,8 +4121,8 @@
     {}
     // Borrow provenance: if the returned value is a borrow (derived from a
     // parameter), this function returns a borrow — callers must NOT
-    // auto-drop a `:`-binding off it.
-    ? & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param
+    // auto-drop a `:`-binding off it. (Unless it was copied on the way out.)
+    ? & & != 0 ( nurl_sym_len syms `__last_value_borrow__` ) ! ret_owned_param ! ret_call_copied
     { ( nurl_sym_set_deep syms `__fn_ret_borrow__` `1` )
         ? ! ( mem_ret_borrow_of_params syms ret_first_tt ) { ( nurl_sym_set_deep syms `__fn_ret_borrow_x__` `1` ) } {}
         = hbit ( nurl_str_cat `false` `` ) }
@@ -24011,7 +24015,16 @@
             = __ad_field_moves & & != 0 ( nurl_str_len __adp ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) __adp )
             & == 0 ( nurl_sym_len2 syms __adp `__pname` ) ( __is_handle_ty __adt )
         } {}
-        ? | | ( is_ident_tok fld_first_tt ) & == fld_first_tt TT_DOT ! __ad_field_moves
+        // (Nor a number read out of one — `^ @ Ser { y . kd kind }`: a copy,
+        // and `kd` is dropped with all it holds; skipping it leaked its Vec.)
+        // (A struct with a `% Drop` of its own may release what a number
+        // in it names — a handle word: that one stays skipped.)
+        : ~ b __ad_number F
+        ? & == fld_first_tt TT_DOT | | > ( int_width fty ) 0 ( seq fty `double` ) ( seq fty `float` ) {
+            : s __adn_ot ( str_first_word ( str_skip_word ( nurl_sym_get syms `__last_field_read__` ) ) )
+            = __ad_number & != 0 ( nurl_str_len __adn_ot ) ! ( __has_user_drop __adn_ot )
+        } {}
+        ? | | ( is_ident_tok fld_first_tt ) & & == fld_first_tt TT_DOT ! __ad_field_moves ! __ad_number
         & == fld_first_tt TT_HASH == g_last_cast_direct 1
         { : s __ad ( nurl_sym_get syms `__last_ident_name__` )
             ? != 0 ( nurl_str_len __ad )
