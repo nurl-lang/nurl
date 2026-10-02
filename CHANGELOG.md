@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `sink` parameter assigned to an `inout` parameter moves into the
+  caller's slot** (`@ put inout T slot sink T v { = slot v }`): it was still
+  dropped at the callee's exit and the caller's slot read freed memory.
+  `compiler/tests/sink_param_into_inout.nu`.
 - **A `?` arm ending in a closure assignment yields that binding's closure.**
   `? on { = w ( wrap base ) = base w } {}`: the arm's value was copied for a
   join no statement consumes, and the copy leaked on every run (packages/http's

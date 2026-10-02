@@ -21477,10 +21477,12 @@
         // over it: it moves over (the local no longer drops it under the
         // caller — that read freed memory). A cursor (`: ~ H2Connection cur
         // c … = c cur`) may hold the caller's own value and is left as is.
+        // (A `sink` parameter is this function's own, as a local is: `@ put
+        // inout T slot sink T v { = slot v }` dropped `v` under the caller.)
         : s __io_src ? ( is_ident_tok bck_rhs_tt ) ( mem_udrop_ptr_of syms bck_rhs_val ) ``
         ? & & & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len ptr ) ( seq ( nurl_sym_get2 syms name `__inout` ) `1` ) ( __is_handle_ty vt )
         & ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
-        & & != 0 ( nurl_str_len __io_src ) == 0 ( nurl_sym_len2 syms __io_src `__pname` )
+        & & != 0 ( nurl_str_len __io_src ) | == 0 ( nurl_sym_len2 syms __io_src `__pname` ) ( __param_owned_slot syms __io_src )
         & | == 0 ( nurl_sym_len2 syms __io_src `__sborrow` ) != 0 ( nurl_str_starts ( nurl_sym_get2 syms __io_src `__sborrow` ) `@` )
         == 0 ( nurl_sym_len2 syms __io_src `__alias` ) {
             : s __io_old2 ( nurl_cg_reg cg )
