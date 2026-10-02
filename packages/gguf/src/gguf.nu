@@ -14,11 +14,12 @@
 // claims. A malformed or truncated file is an error, never a crash, a
 // hang, or an unbounded allocation.
 //
-//   ( gguf_open path )                → !*Gguf String    mmap + parse
-//   ( gguf_parse_bytes data )         → !*Gguf String    parse a buffer
-//                                       (BORROWS data — keep it alive
-//                                        until gguf_close)
-//   ( gguf_close g )                  → v                unmap + free
+//   ( gguf_open path )                → !Gguf String     mmap + parse
+//   ( gguf_parse_bytes data )         → !Gguf String     parse a buffer
+//                                       (the Gguf keeps `data`)
+//   ( gguf_close g )                  → v   early release (optional)
+//   ( gguf_kvs g ) ( gguf_tensors g ) → the metadata / tensor tables (borrowed)
+//   ( gguf_none ) / ( gguf_is_open g )  → an empty slot, and the test for one
 //   ( gguf_n_kv g ) ( gguf_n_tensors g )            → i
 //   ( gguf_find_kv g key )            → i   index, -1 when absent
 //   ( gguf_kv_int_or g key def )      → i   any int/bool-typed KV
@@ -33,6 +34,10 @@
 // KV keys and tensor names, power-of-two alignment, dims ≥ 1 with
 // overflow-checked element counts, aligned tensor offsets, and every
 // sizable tensor fully inside the data section.
+//
+// A Gguf is a handle: every copy is the same open file, and the last
+// owner unmaps it (or lets go of the buffer it was parsed from). Nothing
+// here is released by hand.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -40,6 +45,7 @@ $ `stdlib/core/posix.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── GGUF metadata value types (spec) ────────────────────────────────
 : i GGUF_VT_U8 0
@@ -160,7 +166,7 @@ $ `stdlib/std/floatbits.nu`
     i nbytes
 }
 
-: Gguf {
+: GgufImpl {
     i version
     i align
     ( Vec GgufKv ) kvs
@@ -170,8 +176,35 @@ $ `stdlib/std/floatbits.nu`
     * u map
     i map_size
     b from_mmap
-    ( Vec u ) buf
+    ( Vec u ) buf  // the bytes `map` points into, when they are not a mapping
 }
+
+// The mapping is the raw resource: its last owner unmaps it, as gguf_close
+// did. The tables and the buffer go with the drop glue.
+% Drop GgufImpl {
+    @ drop GgufImpl g → v {
+        ? . g from_mmap { : i32 _u ( munmap . g map . g map_size ) } {}
+    }
+}
+
+// A Gguf is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same open file, and the last owner releases it.
+: Gguf { s ctl }
+
+@ Gguf_share Gguf h → Gguf { ^ @ Gguf { # s ( rcbox_share # i . h ctl ) } }
+
+@ Gguf_drop sink Gguf h → v {
+    ( mem_forget h )
+    ( rcbox_release [GgufImpl] # i . h ctl )
+}
+
+@ __Gguf_ptr Gguf h → *GgufImpl { ^ ( rcbox_ptr [GgufImpl] # i . h ctl ) }
+
+// A Gguf that holds no file — for a slot that may be empty (a model kept
+// open across a streamed merge, or none). gguf_is_open tells them apart.
+@ gguf_none → Gguf { ^ @ Gguf { # s 0 } }
+
+@ gguf_is_open Gguf g → b { ^ != 0 # i . g ctl }
 
 // ── bounded little-endian cursor over the raw mapping ───────────────
 // Every read checks the remaining byte budget first; the first
@@ -409,33 +442,16 @@ $ `stdlib/std/floatbits.nu`
     ^ @ GgufTensor { name gt nd d0 d1 d2 d3 ne rel nb }
 }
 
-// ── owned-structure teardown ────────────────────────────────────────
-
-@ __g_kv_drop GgufKv k → v {
-    ( string_free . k key )
-    ( string_free . k sval )
-    ( vec_free [i] . k ai )
-    ( vec_free [f] . k af )
-    ( vec_free_with [String] . k astr \ String s → v { ( string_free s ) } )
-}
-
-@ __g_free_kvs ( Vec GgufKv ) v → v {
-    ( vec_free_with [GgufKv] v \ GgufKv k → v { ( __g_kv_drop k ) } )
-}
-
-@ __g_free_tensors ( Vec GgufTensor ) v → v {
-    ( vec_free_with [GgufTensor] v \ GgufTensor t → v { ( string_free . t name ) } )
-}
-
-@ __g_errs s msg → !*Gguf String {
-    ^ @ !*Gguf String { F ( string_from msg ) }
+@ __g_errs s msg → !Gguf String {
+    ^ @ !Gguf String { F ( string_from msg ) }
 }
 
 // ── the parser ──────────────────────────────────────────────────────
-// Parses the metadata + tensor table of the mapping [p, p+n) and
-// returns a heap Gguf borrowing that mapping. Ownership flags are
-// filled in by the callers (gguf_open / gguf_parse_bytes).
-@ __gguf_parse * u p i n → !*Gguf String {
+// Parses the metadata + tensor table of [p, p+n). `keep` is what p points
+// into when that is not a mapping (the Gguf holds it for as long as the
+// tensors are read); gguf_open hands in an empty Vec for a mapping, which
+// it owns until this succeeds.
+@ __gguf_parse * u p i n sink ( Vec u ) keep → !Gguf String {
     ? < n 24 { ^ ( __g_errs `gguf: file too small to be GGUF (< 24 bytes)` ) } {}
     : ~ GCur c @ GCur { p n 0 F }
     : i m0 ( __gc_u8 c )
@@ -452,7 +468,7 @@ $ `stdlib/std/floatbits.nu`
     ? | < ver 2 > ver 3 {
         : String m ( string_from `gguf: unsupported version ` )
         ( string_push_int m ver )
-        ^ @ !*Gguf String { F m }
+        ^ @ !Gguf String { F m }
     } {}
     : i ntens ( __gc_u64 c )
     : i nkv ( __gc_u64 c )
@@ -473,13 +489,12 @@ $ `stdlib/std/floatbits.nu`
         = k + k 1
     }
     ? . c fail {
-        ( __g_free_kvs kvs )
         : String m ( string_from `gguf: corrupt or truncated metadata (kv #` )
         ( string_push_int m k )
         ( string_push_str m ` of ` )
         ( string_push_int m nkv )
         ( string_push_str m `)` )
-        ^ @ !*Gguf String { F m }
+        ^ @ !Gguf String { F m }
     } {}
 
     // unique keys (spec requirement; duplicates would make lookups lie)
@@ -509,8 +524,7 @@ $ `stdlib/std/floatbits.nu`
             T a → { ( string_push_str m ( string_data . a key ) ) }
             F → {}
         }
-        ( __g_free_kvs kvs )
-        ^ @ !*Gguf String { F m }
+        ^ @ !Gguf String { F m }
     } {}
 
     // alignment (general.alignment, any integer type; default 32)
@@ -528,7 +542,6 @@ $ `stdlib/std/floatbits.nu`
         = k + k 1
     }
     ? | | < align 1 > align 1048576 != & align - align 1 0 {
-        ( __g_free_kvs kvs )
         ^ ( __g_errs `gguf: invalid general.alignment (must be a power of two, 1..1048576)` )
     } {}
 
@@ -540,14 +553,12 @@ $ `stdlib/std/floatbits.nu`
         = k + k 1
     }
     ? . c fail {
-        ( __g_free_kvs kvs )
-        ( __g_free_tensors ts )
         : String m ( string_from `gguf: corrupt or truncated tensor table (entry #` )
         ( string_push_int m k )
         ( string_push_str m ` of ` )
         ( string_push_int m ntens )
         ( string_push_str m `)` )
-        ^ @ !*Gguf String { F m }
+        ^ @ !Gguf String { F m }
     } {}
 
     // unique tensor names
@@ -577,9 +588,7 @@ $ `stdlib/std/floatbits.nu`
             T a → { ( string_push_str m ( string_data . a name ) ) }
             F → {}
         }
-        ( __g_free_kvs kvs )
-        ( __g_free_tensors ts )
-        ^ @ !*Gguf String { F m }
+        ^ @ !Gguf String { F m }
     } {}
 
     // data section start: metadata end rounded up to the alignment
@@ -589,8 +598,6 @@ $ `stdlib/std/floatbits.nu`
     ? != rem 0 { = doff + meta_end - align rem } {}
     ? > doff n {
         ? == ntens 0 { = doff n } {
-            ( __g_free_kvs kvs )
-            ( __g_free_tensors ts )
             ^ ( __g_errs `gguf: truncated before the tensor data section` )
         }
     } {}
@@ -626,23 +633,11 @@ $ `stdlib/std/floatbits.nu`
             }
             F → {}
         }
-        ( __g_free_kvs kvs )
-        ( __g_free_tensors ts )
-        ^ @ !*Gguf String { F m }
+        ^ @ !Gguf String { F m }
     } {}
 
-    : *Gguf g # *Gguf ( nurl_alloc Z Gguf )
-    = . g version ver
-    = . g align align
-    = . g kvs kvs
-    = . g tensors ts
-    = . g data_off doff
-    = . g data_size dsize
-    = . g map p
-    = . g map_size n
-    = . g from_mmap F
-    = . g buf ( vec_new [u] )
-    ^ @ !*Gguf String { T g }
+    : Gguf h @ Gguf { # s ( rcbox_new [GgufImpl] @ GgufImpl { ver align kvs ts doff dsize p n F keep } ) }
+    ^ @ !Gguf String { T h }
 }
 
 // ── open / close ────────────────────────────────────────────────────
@@ -650,13 +645,13 @@ $ `stdlib/std/floatbits.nu`
 // mmap-backed open (POSIX). Platforms without MAP_PRIVATE (wasm,
 // win32) fall back to reading the whole file into an owned buffer —
 // correct everywhere, mmap-lazy where it matters.
-@ gguf_open s path → !*Gguf String {
+@ gguf_open s path → !Gguf String {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
         ? < # i fd 0 {
             : String m ( string_from `gguf: cannot open ` )
             ( string_push_str m path )
-            ^ @ !*Gguf String { F m }
+            ^ @ !Gguf String { F m }
         } {}
         : i sz ( lseek fd 0 # i32 2 )
         ? < sz 24 {
@@ -666,75 +661,82 @@ $ `stdlib/std/floatbits.nu`
         : *u m ( mmap # *u 0 sz # i32 ( posix_const `PROT_READ` ) # i32 ( posix_const `MAP_PRIVATE` ) fd 0 )
         : i _c ( close # i fd )
         ? == # i m -1 { ^ ( __g_errs `gguf: mmap failed` ) } {}
-        : !*Gguf String r ( __gguf_parse m sz )
+        : !Gguf String r ( __gguf_parse m sz ( vec_new [u] ) )
         ?? r {
-            T g → {
+            T gh → {
+                // from here on the Gguf owns the mapping
+                : *GgufImpl g ( __Gguf_ptr gh )
                 = . g from_mmap T
-                ^ @ !*Gguf String { T g }
+                ^ @ !Gguf String { T gh }
             }
             F e → {
                 : i32 _u ( munmap m sz )
-                ^ @ !*Gguf String { F e }
+                ^ @ !Gguf String { F e }
             }
         }
     } {
-        : !( Vec u ) IoErr r ( read_file_bytes path )
-        ?? r {
-            T data → {
-                : !*Gguf String pr ( __gguf_parse ( vec_data [u] data ) ( vec_len [u] data ) )
-                ?? pr {
-                    T g → {
-                        // adopt the file buffer: drop the placeholder
-                        // empty vec first (g is manually managed — no
-                        // auto-drop reaches its fields)
-                        ( vec_free [u] . g buf )
-                        = . g buf data
-                        ^ @ !*Gguf String { T g }
-                    }
-                    F e → {
-                        ( vec_free [u] data )
-                        ^ @ !*Gguf String { F e }
-                    }
-                }
-            }
+        // no mmap: the Gguf keeps the file's bytes its tensors point into
+        ?? ( read_file_bytes path ) {
+            T data → { ^ ( __gguf_parse ( vec_data [u] data ) ( vec_len [u] data ) data ) }
             F _ → {
                 : String m ( string_from `gguf: cannot read ` )
                 ( string_push_str m path )
-                ^ @ !*Gguf String { F m }
+                ^ @ !Gguf String { F m }
             }
         }
     }
 }
 
-// Parse an in-memory GGUF image. BORROWS `data` — the caller keeps the
-// vec alive until gguf_close and frees it afterwards.
-@ gguf_parse_bytes ( Vec u ) data → !*Gguf String {
-    ^ ( __gguf_parse ( vec_data [u] data ) ( vec_len [u] data ) )
+// Parse an in-memory GGUF image. The Gguf keeps `data` (its tensors point
+// into it).
+@ gguf_parse_bytes sink ( Vec u ) data → !Gguf String {
+    ^ ( __gguf_parse ( vec_data [u] data ) ( vec_len [u] data ) data )
 }
 
-@ gguf_close * Gguf g → v {
-    ( __g_free_kvs . g kvs )
-    ( __g_free_tensors . g tensors )
-    ? . g from_mmap {
-        : i32 _u ( munmap . g map . g map_size )
-    } {}
-    ( vec_free [u] . g buf )
-    ( nurl_free # s g )
-}
+// Let go of `g` now rather than at the end of its owner's scope; the last
+// owner unmaps the file.
+@ gguf_close sink Gguf g → v {}
 
 // ── accessors ───────────────────────────────────────────────────────
 
-@ gguf_version * Gguf g → i { ^ . g version }
+@ gguf_version Gguf g__h → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    ^ . g version
+}
 
-@ gguf_align * Gguf g → i { ^ . g align }
+@ gguf_align Gguf g__h → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    ^ . g align
+}
 
-@ gguf_n_kv * Gguf g → i { ^ ( vec_len [GgufKv] . g kvs ) }
+@ gguf_n_kv Gguf g__h → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    ^ ( vec_len [GgufKv] . g kvs )
+}
 
-@ gguf_n_tensors * Gguf g → i { ^ ( vec_len [GgufTensor] . g tensors ) }
+// The metadata and tensor tables (borrowed: valid while the Gguf is).
+@ gguf_kvs Gguf g__h → ( Vec GgufKv ) {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    ^ . g kvs
+}
 
-@ gguf_data_size * Gguf g → i { ^ . g data_size }
+@ gguf_tensors Gguf g__h → ( Vec GgufTensor ) {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    ^ . g tensors
+}
 
-@ gguf_find_kv * Gguf g s key → i {
+@ gguf_n_tensors Gguf g__h → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    ^ ( vec_len [GgufTensor] . g tensors )
+}
+
+@ gguf_data_size Gguf g__h → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    ^ . g data_size
+}
+
+@ gguf_find_kv Gguf g__h s key → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
     : ~ i k 0
     : ~ i found -1
     ~ < k ( vec_len [GgufKv] . g kvs ) {
@@ -748,8 +750,9 @@ $ `stdlib/std/floatbits.nu`
     ^ found
 }
 
-@ gguf_kv_int_or * Gguf g s key i def → i {
-    : i idx ( gguf_find_kv g key )
+@ gguf_kv_int_or Gguf g__h s key i def → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
     ?? ( vec_get [GgufKv] . g kvs idx ) {
         T a → { ^ ? ( __g_int_vt . a vt ) . a ival def }
@@ -757,8 +760,9 @@ $ `stdlib/std/floatbits.nu`
     }
 }
 
-@ gguf_kv_f_or * Gguf g s key f def → f {
-    : i idx ( gguf_find_kv g key )
+@ gguf_kv_f_or Gguf g__h s key f def → f {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
     ?? ( vec_get [GgufKv] . g kvs idx ) {
         T a → { ^ ? | == . a vt 6 == . a vt 12 . a fval def }
@@ -766,10 +770,11 @@ $ `stdlib/std/floatbits.nu`
     }
 }
 
-// BORROWED: the returned s points into g (or is `def`); valid until
-// gguf_close. Do not free.
-@ gguf_kv_str_or * Gguf g s key s def → s {
-    : i idx ( gguf_find_kv g key )
+// BORROWED: the returned s points into g (or is `def`); valid while
+// the Gguf is. Do not free.
+@ gguf_kv_str_or Gguf g__h s key s def → s {
+    : *GgufImpl g ( __Gguf_ptr g__h )
+    : i idx ( gguf_find_kv g__h key )
     ? < idx 0 { ^ def } {}
     ?? ( vec_get [GgufKv] . g kvs idx ) {
         T a → { ^ ? == . a vt 8 ( string_data . a sval ) def }
@@ -777,7 +782,8 @@ $ `stdlib/std/floatbits.nu`
     }
 }
 
-@ gguf_find_tensor * Gguf g s name → i {
+@ gguf_find_tensor Gguf g__h s name → i {
+    : *GgufImpl g ( __Gguf_ptr g__h )
     : ~ i k 0
     : ~ i found -1
     ~ < k ( vec_len [GgufTensor] . g tensors ) {
@@ -792,7 +798,8 @@ $ `stdlib/std/floatbits.nu`
 }
 
 // BORROWED pointer to a tensor's first byte inside the mapping; valid
-// until gguf_close. Length is t.nbytes (when ≥ 0).
-@ gguf_tensor_ptr * Gguf g GgufTensor t → *u {
+// while the Gguf is. Length is t.nbytes (when ≥ 0).
+@ gguf_tensor_ptr Gguf g__h GgufTensor t → *u {
+    : *GgufImpl g ( __Gguf_ptr g__h )
     ^ # *u + + # i . g map . g data_off . t offset
 }

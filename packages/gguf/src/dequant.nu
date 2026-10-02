@@ -92,7 +92,7 @@ $ `gguf.nu`
 // consumer touch one row of a multi-gigabyte embedding table without
 // expanding the whole tensor: nurllama dequantises exactly the token's
 // row per step.
-@ gguf_dequant_range * Gguf g i idx i first i count → !( Vec u ) String {
+@ gguf_dequant_range Gguf g i idx i first i count → !( Vec u ) String {
     ? | < first 0 < count 0 {
         ^ @ !( Vec u ) String { F ( string_from `gguf: negative dequant range` ) }
     } {}
@@ -101,7 +101,7 @@ $ `gguf.nu`
     } {}
     : ~ i gt -1
     : ~ i ne 0
-    ?? ( vec_get [GgufTensor] . g tensors idx ) {
+    ?? ( vec_get [GgufTensor] ( gguf_tensors g ) idx ) {
         T t → {
             = gt . t gtype
             = ne . t nelems
@@ -124,12 +124,12 @@ $ `gguf.nu`
 }
 
 // Dequantise the whole tensor.
-@ gguf_dequant * Gguf g i idx → !( Vec u ) String {
+@ gguf_dequant Gguf g i idx → !( Vec u ) String {
     ? | < idx 0 >= idx ( gguf_n_tensors g ) {
         ^ @ !( Vec u ) String { F ( string_from `gguf: tensor index out of range` ) }
     } {}
     : ~ i ne 0
-    ?? ( vec_get [GgufTensor] . g tensors idx ) {
+    ?? ( vec_get [GgufTensor] ( gguf_tensors g ) idx ) {
         T t → { = ne . t nelems }
         F → {}
     }
@@ -138,11 +138,11 @@ $ `gguf.nu`
 
 // The decoder. `first`/`count` are block-aligned element bounds,
 // validated by the public entries above.
-@ __gg_dequant * Gguf g i idx i first i count → !( Vec u ) String {
+@ __gg_dequant Gguf g i idx i first i count → !( Vec u ) String {
     : ~ i gt -1
     : ~ i nb -1
     : ~ i addr 0
-    ?? ( vec_get [GgufTensor] . g tensors idx ) {
+    ?? ( vec_get [GgufTensor] ( gguf_tensors g ) idx ) {
         T t → {
             = gt . t gtype
             = nb . t nbytes
@@ -462,7 +462,6 @@ $ `gguf.nu`
         ^ @ !( Vec u ) String { T out }
     } {}
 
-    ( vec_free [u] out )
     : String m ( string_from `gguf: dequantisation not implemented for type ` )
     ( string_push_str m ( gguf_type_name gt ) )
     ( string_push_str m ` (` )
@@ -472,7 +471,7 @@ $ `gguf.nu`
 }
 
 // Convenience: dequantise to host doubles (tests, small tensors).
-@ gguf_dequant_f64 * Gguf g i idx → !( Vec f ) String {
+@ gguf_dequant_f64 Gguf g i idx → !( Vec f ) String {
     : !( Vec u ) String r ( gguf_dequant g idx )
     ?? r {
         T raw → {
@@ -486,7 +485,6 @@ $ `gguf.nu`
                 }
                 = k + k 1
             }
-            ( vec_free [u] raw )
             ^ @ !( Vec f ) String { T out }
         }
         F e → { ^ @ !( Vec f ) String { F e } }

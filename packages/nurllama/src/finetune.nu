@@ -93,7 +93,7 @@ $ `tokenizer.nu`
     b stream
     ( Vec i ) lz_node  // tape node id of each lazy base const
     ( Vec i ) lz_key  // its identity: layer * 16 + slot (__ft_base_name)
-    i mgg  // a Gguf held open across a streamed merge (0 = none)
+    Gguf mgg  // a Gguf held open across a streamed merge (gguf_none = none)
 }
 
 // Streaming base upload, OFF by default: the finetune tests compare the CPU
@@ -149,10 +149,10 @@ $ `tokenizer.nu`
 }
 
 // Dequant tensor `name` to f64. GGUF layout [out, in] flat (in fastest).
-@ __ft_raw * Gguf gg s name * u rowsb * u colsb → ( Vec f ) {
+@ __ft_raw Gguf gg s name * u rowsb * u colsb → ( Vec f ) {
     : i idx ( gguf_find_tensor gg name )
     ? >= idx 0 {} { ^ ( vec_new [f] ) }
-    : GgufTensor t ?? ( vec_get [GgufTensor] . gg tensors idx ) {
+    : GgufTensor t ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) idx ) {
         T x → x
         F → @ GgufTensor { ( string_new ) 0 0 0 0 0 0 0 0 0 }
     }
@@ -235,14 +235,14 @@ $ `tokenizer.nu`
 // table without touching a byte of its data. Rows/cols mirror __ft_raw +
 // __ft_transpose exactly: rows = d0 (in), cols = d1 (out). An absent tensor
 // gives 0×0, which callers read as "not present".
-@ __ft_lshape * Gguf gg i layer s suffix * u rowsb * u colsb → v {
+@ __ft_lshape Gguf gg i layer s suffix * u rowsb * u colsb → v {
     ( nurl_poke rowsb 0 0 )
     ( nurl_poke colsb 0 0 )
     : String nm ( __ft_lname layer suffix )
     : i idx ( gguf_find_tensor gg ( string_data nm ) )
     ( string_free nm )
     ? >= idx 0 {} { ^ v }
-    ?? ( vec_get [GgufTensor] . gg tensors idx ) {
+    ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) idx ) {
         T t → {
             ( nurl_poke rowsb 0 . t d0 )
             ( nurl_poke colsb 0 . t d1 )
@@ -252,7 +252,7 @@ $ `tokenizer.nu`
 }
 
 // A layer weight in tape layout (poisons `okb` on a missing tensor).
-@ __ft_lw * Gguf gg i layer s suffix * u okb → FtW {
+@ __ft_lw Gguf gg i layer s suffix * u okb → FtW {
     : String nm ( __ft_lname layer suffix )
     : *u rb ( nurl_alloc 8 )
     : *u cb ( nurl_alloc 8 )
@@ -271,7 +271,7 @@ $ `tokenizer.nu`
 }
 
 // An optional 1-D tensor (norm weight / bias) → heap *( Vec f ) or 0.
-@ __ft_lvec * Gguf gg i layer s suffix → s {
+@ __ft_lvec Gguf gg i layer s suffix → s {
     : String nm ( __ft_lname layer suffix )
     : *u rb ( nurl_alloc 8 )
     : *u cb ( nurl_alloc 8 )
@@ -289,14 +289,14 @@ $ `tokenizer.nu`
 // same way whether called at open or at merge-time reload. `gg` stays the
 // caller's to close. Poisons m.ok on a missing tensor.
 // One shape-only per-layer weight: real rows/cols, no data.
-@ __ft_shape_push * Gguf gg i L s suffix ( Vec FtW ) dst * u rb * u cb → v {
+@ __ft_shape_push Gguf gg i L s suffix ( Vec FtW ) dst * u rb * u cb → v {
     ( __ft_lshape gg L suffix rb cb )
     ( vec_push [FtW] dst @ FtW { ( nurl_peek rb 0 ) ( nurl_peek cb 0 ) ( vec_new [f] ) } )
 }
 
 // One shape-only per-layer 1-D tensor: an FtV holding an empty vec when the
 // model HAS this tensor, 0 when it does not (llama has no attn_q_norm).
-@ __ft_shape_vec * Gguf gg i L s suffix ( Vec s ) dst → v {
+@ __ft_shape_vec Gguf gg i L s suffix ( Vec s ) dst → v {
     : String nm ( __ft_lname L suffix )
     : i idx ( gguf_find_tensor gg ( string_data nm ) )
     ( string_free nm )
@@ -310,7 +310,7 @@ $ `tokenizer.nu`
 // The streaming counterpart of __ft_load_bases: read every per-layer
 // SHAPE and no data at all. ft_graph turns each into a lazy const and
 // ft_stream_upload fills them one at a time after the capture.
-@ __ft_load_shapes * Gguf gg * FtModel m → v {
+@ __ft_load_shapes Gguf gg * FtModel m → v {
     : *u rb ( nurl_alloc 8 )
     : *u cb ( nurl_alloc 8 )
     = . m n_ff 0
@@ -339,7 +339,7 @@ $ `tokenizer.nu`
     ? > . m n_ff 0 {} { = . m ok F }
 }
 
-@ __ft_load_bases * Gguf gg * FtModel m → v {
+@ __ft_load_bases Gguf gg * FtModel m → v {
     ? . m stream { ( __ft_load_shapes gg m ) ^ v } {}
     : *u okb ( nurl_alloc 8 )
     ( nurl_poke okb 0 1 )
@@ -540,7 +540,7 @@ $ `tokenizer.nu`
             = . m fn ( vec_new [s] )
             = . m qn ( vec_new [s] )
             = . m kn ( vec_new [s] )
-            = . m mgg 0
+            = . m mgg ( gguf_none )
             = . m lz_node ( vec_new [i] )
             = . m lz_key ( vec_new [i] )
             = . m src_path ( string_from path )
@@ -917,7 +917,7 @@ $ `tokenizer.nu`
 // and an eager run upload identical bytes — what changes is only that one
 // tensor is resident at a time instead of the whole model.
 
-@ __ft_up_vec * FtModel m * Gguf gg GProg pg i node i L s suf → b {
+@ __ft_up_vec * FtModel m Gguf gg GProg pg i node i L s suf → b {
     : s p ( __ft_lvec gg L suf )
     ? != # i p 0 {} { ^ F }
     : *FtV pv # *FtV p
@@ -931,7 +931,7 @@ $ `tokenizer.nu`
     ^ r
 }
 
-@ __ft_up_layer * FtModel m * Gguf gg GProg pg i node i L i slot → b {
+@ __ft_up_layer * FtModel m Gguf gg GProg pg i node i L i slot → b {
     : s suf ( __ft_base_name slot )
     ? | | | | | | == slot 0 == slot 1 == slot 9 == slot 10 == slot 11 == slot 12 == slot 13 {
         ^ ( __ft_up_vec m gg pg node L suf )
@@ -951,7 +951,7 @@ $ `tokenizer.nu`
     ^ r
 }
 
-@ __ft_up_wout * FtModel m * Gguf gg GProg pg i node → b {
+@ __ft_up_wout * FtModel m Gguf gg GProg pg i node → b {
     : i oi ( gguf_find_tensor gg `output.weight` )
     ? >= oi 0 {
         : *u rb ( nurl_alloc 8 )
@@ -996,7 +996,7 @@ $ `tokenizer.nu`
     ( vec_set [s] v L p )
 }
 
-@ __ft_layer_in * Gguf gg * FtModel m i L → b {
+@ __ft_layer_in Gguf gg * FtModel m i L → b {
     : *u okb ( nurl_alloc 8 )
     ( nurl_poke okb 0 1 )
     : FtW q ( __ft_lw gg L `attn_q.weight` okb )
@@ -1555,10 +1555,9 @@ $ `tokenizer.nu`
         = sl + sl 1
     }
     ? . m stream {
-        ? != . m mgg 0 {
-            : *Gguf mgg2 # *Gguf . m mgg
-            ( gguf_close mgg2 )
-            = . m mgg 0
+        ? ( gguf_is_open . m mgg ) {
+            ( gguf_close . m mgg )
+            = . m mgg ( gguf_none )
         } {}
     } {}
     : !v String res ( stw_write so path )
@@ -1718,7 +1717,7 @@ $ `tokenizer.nu`
     // model of zeros. Hold the GGUF open and page one layer in at a time.
     ? . m stream {
         ?? ( gguf_open ( string_data . m src_path ) ) {
-            T gg → { = . m mgg # i gg }
+            T gg → { = . m mgg gg }
             F e → { ^ @ !v String { F e } }
         }
     } {}
@@ -1749,8 +1748,7 @@ $ `tokenizer.nu`
         // for its seven slots and drop it again after the last one, so the
         // merge costs one layer of host RAM, not the whole model
         ? & . m stream == w 0 {
-            : *Gguf mgg # *Gguf . m mgg
-            : b _li ( __ft_layer_in mgg m L )
+            : b _li ( __ft_layer_in . m mgg m L )
         } {}
         // the per-layer norms, once per layer (at slot 0; norm mask bit3)
         ? & == w 0 == % / mask 8 2 1 {

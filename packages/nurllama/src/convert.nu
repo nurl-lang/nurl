@@ -202,7 +202,7 @@ $ `deps/safetensor/src/safetensor.nu`
 }
 
 // Encode a dequantised f32-LE chunk as `gt` and hand it to the stream.
-@ __cv_emit * GgufS sw i gt ( Vec u ) f32le → !v String {
+@ __cv_emit GgufS sw i gt ( Vec u ) f32le → !v String {
     ? == gt CV_F32 { ^ ( gws_data sw f32le ) } {}
     ? == gt CV_Q8_0 {
         ?? ( gq_q8_0_encode f32le ) {
@@ -241,7 +241,7 @@ $ `deps/safetensor/src/safetensor.nu`
 // chunks of whole rows) into the writer as type `gt`. `row` is the
 // GGUF ne0 — chunk boundaries must land on row boundaries so the
 // quantiser sees whole blocks.
-@ __cv_stream_src * Cv c * GgufS sw i gt s hfname i row → !v String {
+@ __cv_stream_src * Cv c GgufS sw i gt s hfname i row → !v String {
     : i h ( __cv_find c hfname )
     ? < h 0 {
         : String m ( string_from `nurllama convert: checkpoint has no tensor ` )
@@ -279,7 +279,7 @@ $ `deps/safetensor/src/safetensor.nu`
 // Stream a fused 3D experts tensor: 256 per-expert HF tensors, in
 // expert order, each dequantised and encoded whole (an expert is a
 // few MB).
-@ __cv_stream_experts * Cv c * GgufS sw i gt i layer s proj → !v String {
+@ __cv_stream_experts * Cv c GgufS sw i gt i layer s proj → !v String {
     : ~ i e 0
     ~ < e . c n_expert {
         : String nm ( string_from `model.layers.` )
@@ -772,21 +772,20 @@ $ `deps/safetensor/src/safetensor.nu`
     }
 
     // ── write ──
-    : ~ i sw_addr 0
+    : ~ GgufS sw @ GgufS { # s 0 }
     ?? ( gws_create outpath 32 ) {
-        T sw2 → { = sw_addr # i sw2 }
+        T sw2 → { = sw sw2 }
         F e → {
             ( __cv_errmsg `cannot create output` ( string_data e ) )
             ( string_free e )
         }
     }
-    ? == sw_addr 0 {
+    ? == 0 # i . sw ctl {
         ( string_free chat_template )
         ( __cv_free_vocab vv )
         ( __cv_close c )
         ^ 1
     } {}
-    : *GgufS sw # *GgufS sw_addr
 
     ( gws_kv_str sw `general.architecture` `llada2` )
     : String gname ( string_from `llada2 ` )

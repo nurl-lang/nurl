@@ -58,7 +58,7 @@ $ `deps/gguf/src/gguf.nu`
 // Pick the style from the model's own chat template (substring match on
 // the marker tokens each dialect must contain), falling back to PLAIN
 // when the model ships no template — a base model, honestly served.
-@ chat_style_of * Gguf g → i {
+@ chat_style_of Gguf g → i {
     : s tpl ( gguf_kv_str_or g `tokenizer.chat_template` `` )
     ? > ( nurl_str_len tpl ) 0 {
         ? >= ( nurl_str_find tpl `<|im_start|>` ) 0 { ^ CHAT_CHATML } {}
