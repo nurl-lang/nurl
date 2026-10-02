@@ -23593,8 +23593,12 @@
         // over instead made every caller hand its value in — and the paths
         // that return something else then dropped the caller's value.
         // (A `sink` parameter is this function's own: it moves out.)
+        // Not a parameter in a literal nested in the wrap (`^ @ ?B { T @ B {
+        // shape v } }`): beside the fresh `v` the payload cannot be lent, and
+        // lending it made the caller drop nothing of it — `v` leaked. It is
+        // taken over, as in a literal returned bare (`^ @ B { shape v }`).
         : i __fpl_i ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val )
-        : b fld_param_lend & & & & | & agg_returned agg_is_wrap agg_nested_wrap ( is_ident_tok fld_first_tt )
+        : b fld_param_lend & & & & & agg_returned agg_is_wrap ( is_ident_tok fld_first_tt )
         >= __fpl_i 0
         ( __is_handle_ty ( nurl_sym_get syms fld_first_val ) )
         ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fpl_i ) )

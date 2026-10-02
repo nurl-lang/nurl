@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the table's handle (packages/anomaly's forecast model table: a
   use-after-free). An owner is built with a literal (`@ H { # s w }`) or a
   share. `compiler/tests/return_cast_word_is_view.nu`.
+- **A parameter in a literal nested in a returned option is taken over**, as
+  in a literal returned bare. `^ @ ?B { T @ B { shape v } }` lent `shape`
+  back like a whole payload, so the caller took the result for borrowed and
+  the fresh `v` leaked (packages/tensor). `compiler/tests/wrap_nested_param_taken.nu`.
 
 - **A `% Drop` impl runs wherever its value lives.** A Drop type used as a
   `Vec` element or a struct field had its impl replaced by a generated
