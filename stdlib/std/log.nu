@@ -64,11 +64,9 @@
 // directly, owned `String` use `( string_data str )`, integers use
 // `( nurl_str_int n )`, floats `( nurl_str_float x )`.
 //
-// Note: `log_*f*` always allocates a small Vec[s] for argument
-// marshalling. Below-threshold calls still pay this cost; the
-// emit itself is cheap (a few stderr writes). If you have a
-// hot path that logs a million Debug-suppressed lines, gate the
-// call yourself with `( log_get_level )`.
+// Note: a below-threshold `log_*f*` call formats nothing — the level is
+// checked first, and the message is built (fmt1..fmt3, reading the
+// arguments in place) only when it will be emitted.
 //
 // Example:
 //   ( log_set_level ( log_level_warn ) )
@@ -240,17 +238,6 @@ $ `stdlib/std/fmt.nu`
     ( __log_dispatch level msg keys vals )
 }
 
-@ __log_emitf i level s tmpl ( Vec s ) args → v {
-    : i thr __g_log_level
-    ? < level thr {} {
-        : String r ( fmt tmpl args )
-        : ( Vec s ) keys ( vec_new [s] )
-        : ( Vec s ) vals ( vec_new [s] )
-        ( __log_dispatch level ( string_data r ) keys vals )
-        ( string_free r )
-    }
-}
-
 // ── Raw-message variants ────────────────────────────────────────────
 
 @ log_debug s msg → v { ( __log_emit 0 msg ) }
@@ -261,115 +248,69 @@ $ `stdlib/std/fmt.nu`
 
 @ log_error s msg → v { ( __log_emit 3 msg ) }
 
-// ── Formatted variants (1..3 args; build a Vec[s] then dispatch) ────
+// ── Formatted variants (1..3 args) ──────────────────────────────────
+//
+// The level is checked first: a suppressed call formats nothing. An
+// emitted one builds its message with fmt1..fmt3, which read the
+// arguments in place — a caller's temporary is only read, never kept.
 
-// The log*fN helpers pass copies of their arguments through the Vec (and
-// free them here), so a caller's temporary is only read, never kept.
-@ __log_args_free sink ( Vec s ) v → v {
-    ( vec_free_with [s] v \ s x → v { ( nurl_free x ) } )
-}
+@ __log_on i level → b { ^ >= level __g_log_level }
+
+@ __log_emitf i level String r → v { ( __log_emit level ( string_data r ) ) }
 
 @ log_debugf1 s tmpl s a → v {
-    : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( __log_emitf 0 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 0 ) { ( __log_emitf 0 ( fmt1 tmpl a ) ) } {}
 }
 
 @ log_debugf2 s tmpl s a s b → v {
-    : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( __log_emitf 0 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 0 ) { ( __log_emitf 0 ( fmt2 tmpl a b ) ) } {}
 }
 
 @ log_debugf3 s tmpl s a s b s c → v {
-    : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( vec_push [s] v ( nurl_str_cat c `` ) )
-    ( __log_emitf 0 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 0 ) { ( __log_emitf 0 ( fmt3 tmpl a b c ) ) } {}
 }
 
 @ log_infof1 s tmpl s a → v {
-    : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( __log_emitf 1 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 1 ) { ( __log_emitf 1 ( fmt1 tmpl a ) ) } {}
 }
 
 @ log_infof2 s tmpl s a s b → v {
-    : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( __log_emitf 1 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 1 ) { ( __log_emitf 1 ( fmt2 tmpl a b ) ) } {}
 }
 
 @ log_infof3 s tmpl s a s b s c → v {
-    : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( vec_push [s] v ( nurl_str_cat c `` ) )
-    ( __log_emitf 1 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 1 ) { ( __log_emitf 1 ( fmt3 tmpl a b c ) ) } {}
 }
 
 @ log_warnf1 s tmpl s a → v {
-    : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( __log_emitf 2 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 2 ) { ( __log_emitf 2 ( fmt1 tmpl a ) ) } {}
 }
 
 @ log_warnf2 s tmpl s a s b → v {
-    : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( __log_emitf 2 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 2 ) { ( __log_emitf 2 ( fmt2 tmpl a b ) ) } {}
 }
 
 @ log_warnf3 s tmpl s a s b s c → v {
-    : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( vec_push [s] v ( nurl_str_cat c `` ) )
-    ( __log_emitf 2 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 2 ) { ( __log_emitf 2 ( fmt3 tmpl a b c ) ) } {}
 }
 
 @ log_errorf1 s tmpl s a → v {
-    : ( Vec s ) v ( vec_with_cap [s] 1 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( __log_emitf 3 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 3 ) { ( __log_emitf 3 ( fmt1 tmpl a ) ) } {}
 }
 
 @ log_errorf2 s tmpl s a s b → v {
-    : ( Vec s ) v ( vec_with_cap [s] 2 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( __log_emitf 3 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 3 ) { ( __log_emitf 3 ( fmt2 tmpl a b ) ) } {}
 }
 
 @ log_errorf3 s tmpl s a s b s c → v {
-    : ( Vec s ) v ( vec_with_cap [s] 3 )
-    ( vec_push [s] v ( nurl_str_cat a `` ) )
-    ( vec_push [s] v ( nurl_str_cat b `` ) )
-    ( vec_push [s] v ( nurl_str_cat c `` ) )
-    ( __log_emitf 3 tmpl v )
-    ( __log_args_free v )
+    ? ( __log_on 3 ) { ( __log_emitf 3 ( fmt3 tmpl a b c ) ) } {}
 }
 
 // ── Key/value variants (1..3 pairs at each level) ───────────────────
 //
 // Below-threshold calls still allocate the 2 small Vec[s] for argument
-// marshalling — same cost profile as log_*fN. Use `( log_get_level )`
-// to gate a hot-path Debug log explicitly if needed.
+// marshalling. Use `( log_get_level )` to gate a hot-path Debug log
+// explicitly if needed.
 
 @ __log_kv_emit i level s msg s k1 s v1 i n2 s k2 s v2 i n3 s k3 s v3 → v {
     : ( Vec s ) keys ( vec_with_cap [s] 3 )
