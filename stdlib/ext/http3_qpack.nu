@@ -256,7 +256,6 @@ $ `stdlib/std/quic_varint.nu`
 }
 
 @ __qpack_fail ( Vec Header ) hs i code → !( Vec Header ) i {
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
     ^ @ !( Vec Header ) i { F code }
 }
 
@@ -303,7 +302,6 @@ $ `stdlib/std/quic_varint.nu`
                 ?? ( __qpack_read_string block off 7 ) {
                     T vs → {
                         ( vec_push [Header] hs ( header_new ( qpack_static_name idx ) ( string_data . vs value ) ) )
-                        ( string_free . vs value )
                         = off + off . vs consumed
                     }
                     F e → { ^ ( __qpack_fail hs e ) }
@@ -317,12 +315,10 @@ $ `stdlib/std/quic_varint.nu`
                             ?? ( __qpack_read_string block off 7 ) {
                                 T vs → {
                                     ( vec_push [Header] hs ( header_new ( string_data . ns value ) ( string_data . vs value ) ) )
-                                    ( string_free . vs value )
                                     = off + off . vs consumed
                                 }
-                                F e → { ( string_free . ns value ) ^ ( __qpack_fail hs e ) }
+                                F e → { ^ ( __qpack_fail hs e ) }
                             }
-                            ( string_free . ns value )
                         }
                         F e → { ^ ( __qpack_fail hs e ) }
                     }

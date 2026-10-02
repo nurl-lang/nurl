@@ -53,28 +53,39 @@ $ `stdlib/core/rcbox.nu`
 
 @ h3_kind_unknown → i { ^ -1 }
 
-@ __h3_stream_new i id i kind → *H3Stream {
-    : *H3Stream s # *H3Stream ( nurl_alloc Z H3Stream )
-    = . s id id
-    = . s kind kind
-    = . s buf ( vec_new [u] )
-    = . s state 0
-    = . s headers ( vec_new [Header] )
-    = . s body ( vec_new [u] )
-    = . s done 0
-    ^ s
+// A stream's state in an rcbox (stdlib/core/rcbox.nu). The connection's
+// list holds one owner of each; the code below works on the H3Stream in
+// place (its address stays put while the list grows or shrinks), and the
+// stream goes when it leaves the list or the connection goes.
+: H3StreamBox { s ctl }
+
+@ H3StreamBox_share H3StreamBox h → H3StreamBox { ^ @ H3StreamBox { # s ( rcbox_share # i . h ctl ) } }
+
+@ H3StreamBox_drop sink H3StreamBox h → v {
+    ( mem_forget h )
+    ( rcbox_release [H3Stream] # i . h ctl )
 }
 
-@ __h3_stream_free sink * H3Stream s → v {
-    ( vec_free [u] . s buf )
-    ( vec_free_with [Header] . s headers \ Header h → v { ( header_free h ) } )
-    ( vec_free [u] . s body )
-    ( nurl_free # s s )
+@ __h3_stream_new i id i kind → H3StreamBox {
+    ^ @ H3StreamBox { # s ( rcbox_new [H3Stream] @ H3Stream {
+            id kind ( vec_new [u] ) 0 ( vec_new [Header] ) ( vec_new [u] ) 0
+        } ) }
+}
+
+// Drop the first `n` bytes of a stream buffer, in place.
+@ __h3_consume ( Vec u ) buf i n → v {
+    : i total ( vec_len [u] buf )
+    ? >= n total { ( vec_clear [u] buf ) } {
+        : i remaining - total n
+        : *u p ( vec_data [u] buf )
+        ( nurl_memmove # s p # s # *u + # i p n remaining )
+        ( vec_set_len [u] buf remaining )
+    }
 }
 
 : H3ConnImpl {
     QuicConn qc
-    ( Vec i ) streams
+    ( Vec H3StreamBox ) streams
     i ctl_out
     i enc_out
     i dec_out
@@ -89,20 +100,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // An H3Conn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
-// every copy is the same state, and the last owner releases it.
+// every copy is the same state, and the last owner releases it — the
+// streams and the QuicConn it shares go with the fields.
 : H3Conn { s ctl }
-
-// The streams are raw H3Stream blocks (as integers): releasing them is
-// the connection's own drop; the QuicConn it shares goes with the fields.
-% Drop H3ConnImpl {
-    @ drop H3ConnImpl h → v {
-        : ~ i k 0
-        ~ < k ( vec_len [i] . h streams ) {
-            ( __h3_stream_free # *H3Stream ( __h3_ri . h streams k ) )
-            = k + k 1
-        }
-    }
-}
 
 @ H3Conn_share H3Conn h → H3Conn { ^ @ H3Conn { # s ( rcbox_share # i . h ctl ) } }
 
@@ -119,7 +119,7 @@ $ `stdlib/core/rcbox.nu`
     : i h__box ( rcbox_zero [H3ConnImpl] )
     : *H3ConnImpl h ( rcbox_ptr [H3ConnImpl] h__box )
     = . h qc ( QuicConn_share qc )
-    = . h streams ( vec_new [i] )
+    = . h streams ( vec_new [H3StreamBox] )
     = . h peer_control -1
     = . h peer_qenc -1
     = . h peer_qdec -1
@@ -159,10 +159,15 @@ $ `stdlib/core/rcbox.nu`
     ?? ( vec_get [i] v k ) { T x → ^ x F → ^ 0 }
 }
 
+// The k-th stream of the list, in place.
+@ __h3_si * H3ConnImpl h i k → *H3Stream {
+    ?? ( vec_get [H3StreamBox] . h streams k ) { T b → ^ ( rcbox_ptr [H3Stream] # i . b ctl ) F → ^ # *H3Stream 0 }
+}
+
 @ __h3_stream_get * H3ConnImpl h i id → *H3Stream {
     : ~ i k 0
-    ~ < k ( vec_len [i] . h streams ) {
-        : *H3Stream s # *H3Stream ( __h3_ri . h streams k )
+    ~ < k ( vec_len [H3StreamBox] . h streams ) {
+        : *H3Stream s ( __h3_si h k )
         ? == . s id id { ^ s } {}
         = k + k 1
     }
@@ -171,11 +176,10 @@ $ `stdlib/core/rcbox.nu`
 
 @ __h3_stream_drop * H3ConnImpl h i id → v {
     : ~ i k 0
-    ~ < k ( vec_len [i] . h streams ) {
-        : *H3Stream s # *H3Stream ( __h3_ri . h streams k )
+    ~ < k ( vec_len [H3StreamBox] . h streams ) {
+        : *H3Stream s ( __h3_si h k )
         ? == . s id id {
-            ( __h3_stream_free s )
-            : ?i _r ( vec_remove [i] . h streams k )
+            ?? ( vec_remove [H3StreamBox] . h streams k ) { T _gone → {} F _ → {} }
             ( quic_conn_stream_done . h qc id )
             ^
         } {}
@@ -206,8 +210,8 @@ $ `stdlib/core/rcbox.nu`
     // the smallest request stream id we will not process: "all seen so far"
     : ~ i max_id 0
     : ~ i k 0
-    ~ < k ( vec_len [i] . h streams ) {
-        : *H3Stream s # *H3Stream ( __h3_ri . h streams k )
+    ~ < k ( vec_len [H3StreamBox] . h streams ) {
+        : *H3Stream s ( __h3_si h k )
         ? & == . s kind 0 > + . s id 4 max_id { = max_id + . s id 4 } {}
         = k + k 1
     }
@@ -310,7 +314,6 @@ $ `stdlib/core/rcbox.nu`
         : s nm ( string_data . hh name )
         : s vl ( string_data . hh value )
         ? ( __h3_eq nm `:method` ) {
-            ( string_free . req method )
             = . req method ( string_from vl )
         } {
             ? ( __h3_eq nm `:path` ) {
@@ -321,9 +324,7 @@ $ `stdlib/core/rcbox.nu`
                     ? == 63 ( nurl_str_get vl j ) { = qi j } {}
                     = j + j 1
                 }
-                ( string_free . req path )
                 ? >= qi 0 {
-                    ( string_free . req query )
                     : String p ( string_with_cap qi )
                     ( string_push_bytes p # *u vl qi )
                     = . req path p
@@ -343,7 +344,6 @@ $ `stdlib/core/rcbox.nu`
         }
         = k + k 1
     }
-    ( string_free . req version )
     = . req version ( string_from `HTTP/3` )
     ( vec_extend [u] . req body . s body )
     ^ req
@@ -374,7 +374,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec Header ) all ( vec_new [Header] )
     : String st ( __h3_status_str . r status )
     ( vec_push [Header] all ( header_new `:status` ( string_data st ) ) )
-    ( string_free st )
     : i nh ( vec_len [Header] . r headers )
     : *Header hp ( vec_data [Header] . r headers )
     : ~ i k 0
@@ -397,10 +396,8 @@ $ `stdlib/core/rcbox.nu`
         = k + k 1
     }
     : ( Vec u ) block ( qpack_encode_section all )
-    ( vec_free_with [Header] all \ Header hh → v { ( header_free hh ) } )
     : ( Vec u ) wire ( vec_new [u] )
     ( h3_push_frame wire ( h3_ft_headers ) block )
-    ( vec_free [u] block )
     : i blen ( vec_len [u] . r body )
     ? > blen 0 { ( h3_push_frame wire ( h3_ft_data ) . r body ) } {}
     : i _n ( quic_conn_stream_send . h qc . s id wire T )
@@ -410,8 +407,6 @@ $ `stdlib/core/rcbox.nu`
     : HttpRequest req ( __h3_to_request s )
     : HttpResponse resp ( handler req )
     ( __h3_send_response h s resp )
-    ( http_response_free resp )
-    ( request_free req )
     = . s done 1
 }
 
@@ -434,42 +429,37 @@ $ `stdlib/core/rcbox.nu`
         ^ F
     } {}
     : ( Vec u ) payload ( bytes_slice . s buf hl + hl flen )
-    : ( Vec u ) rest ( bytes_slice . s buf + hl flen ( vec_len [u] . s buf ) )
-    ( vec_free [u] . s buf )
-    = . s buf rest
+    ( __h3_consume . s buf + hl flen )
     ? == ft ( h3_ft_headers ) {
-        ? == . s state 2 { ( vec_free [u] payload ) ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ F } {}
-        ? > flen . h max_field_section { ( vec_free [u] payload ) ( __h3_fail h ( h3_err_excessive_load ) ) ^ F } {}
+        ? == . s state 2 { ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ F } {}
+        ? > flen . h max_field_section { ( __h3_fail h ( h3_err_excessive_load ) ) ^ F } {}
         ?? ( qpack_decode_section payload ) {
             T hs → {
                 ? == . s state 0 {
                     : i bad ( _h3_validate_request hs )
                     ? != bad 0 {
-                        ( vec_free_with [Header] hs \ Header hh → v { ( header_free hh ) } )
-                        ( vec_free [u] payload )
                         ( __h3_stream_error h s bad )
                         ^ F
                     } {}
-                    ( vec_free_with [Header] . s headers \ Header hh → v { ( header_free hh ) } )
+                    : ( Vec Header ) old . s headers
+                    ( mem_take old )  // a store through the stream pointer drops nothing
                     = . s headers hs
                     = . s state 1
                 } {
                     // trailers: accepted, not surfaced
-                    ( vec_free_with [Header] hs \ Header hh → v { ( header_free hh ) } )
                     = . s state 2
                 }
             }
-            F code → { ( vec_free [u] payload ) ( __h3_fail h code ) ^ F }
+            F code → { ( __h3_fail h code ) ^ F }
         }
     } {
         ? == ft ( h3_ft_data ) {
-            ? == . s state 2 { ( vec_free [u] payload ) ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ F } {}
-            ? > + ( vec_len [u] . s body ) flen . h body_max { ( vec_free [u] payload ) ( __h3_stream_error h s ( h3_err_excessive_load ) ) ^ F } {}
+            ? == . s state 2 { ( __h3_fail h ( h3_err_frame_unexpected ) ) ^ F } {}
+            ? > + ( vec_len [u] . s body ) flen . h body_max { ( __h3_stream_error h s ( h3_err_excessive_load ) ) ^ F } {}
             ( bytes_extend_bytes . s body payload )
         } {}
         // reserved / unknown types: skipped (§7.2.8, §9)
     }
-    ( vec_free [u] payload )
     ^ T
 }
 
@@ -509,12 +499,10 @@ $ `stdlib/core/rcbox.nu`
         : i have - ( vec_len [u] . s buf ) hl
         ? < have flen { ? fin { ( __h3_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
         : ( Vec u ) payload ( bytes_slice . s buf hl + hl flen )
-        : ( Vec u ) rest ( bytes_slice . s buf + hl flen ( vec_len [u] . s buf ) )
-        ( vec_free [u] . s buf )
-        = . s buf rest
+        ( __h3_consume . s buf + hl flen )
         ? == ft ( h3_ft_settings ) {
             : i bad ( h3_settings_parse payload )
-            ? != bad 0 { ( vec_free [u] payload ) ( __h3_fail h bad ) ^ } {}
+            ? != bad 0 { ( __h3_fail h bad ) ^ } {}
             = . h peer_settings 1
             // the peer's dynamic-table capacity must stay 0 for us
             // (we never insert); any value is fine to receive
@@ -522,7 +510,6 @@ $ `stdlib/core/rcbox.nu`
             ? > mfs 0 { ? < mfs . h max_field_section { = . h max_field_section mfs } {} } {}
         } {}
         // CANCEL_PUSH, GOAWAY, MAX_PUSH_ID, reserved, unknown: nothing to do
-        ( vec_free [u] payload )
     }
 }
 
@@ -531,9 +518,7 @@ $ `stdlib/core/rcbox.nu`
         : i r ? encoder ( qpack_encoder_instruction . s buf 0 ) ( qpack_decoder_instruction . s buf 0 )
         ? == r -1 { ? fin { ( __h3_fail h ( h3_err_closed_critical_stream ) ) } {} ^ } {}
         ? == r -2 { ( __h3_fail h ? encoder ( qpack_err_encoder_stream ) ( qpack_err_decoder_stream ) ) ^ } {}
-        : ( Vec u ) rest ( bytes_slice . s buf r ( vec_len [u] . s buf ) )
-        ( vec_free [u] . s buf )
-        = . s buf rest
+        ( __h3_consume . s buf r )
     }
     ? & fin == . h failed 0 { ( __h3_fail h ( h3_err_closed_critical_stream ) ) } {}
 }
@@ -543,9 +528,7 @@ $ `stdlib/core/rcbox.nu`
     : i t ( quic_varint_read . s buf 0 )
     ? < t 0 { ^ } {}
     : i tl ( quic_varint_len_at . s buf 0 )
-    : ( Vec u ) rest ( bytes_slice . s buf tl ( vec_len [u] . s buf ) )
-    ( vec_free [u] . s buf )
-    = . s buf rest
+    ( __h3_consume . s buf tl )
     ? == t ( h3_st_control ) {
         ? >= . h peer_control 0 { ( __h3_fail h ( h3_err_stream_creation ) ) ^ } {}
         = . h peer_control . s id
@@ -581,8 +564,9 @@ $ `stdlib/core/rcbox.nu`
     : b uni != & id 2 0
     ? == # i s 0 {
         ? & ( _qc_stream_is_server id ) T { ^ } {}
-        = s ( __h3_stream_new id ? uni ( h3_kind_unknown ) ( h3_kind_request ) )
-        ( vec_push [i] . h streams # i s )
+        : H3StreamBox nb ( __h3_stream_new id ? uni ( h3_kind_unknown ) ( h3_kind_request ) )
+        = s ( rcbox_ptr [H3Stream] # i . nb ctl )
+        ( vec_push [H3StreamBox] . h streams nb )
     } {}
     ? != . s done 0 { ^ } {}
     // a reset request stream is simply gone
@@ -606,7 +590,6 @@ $ `stdlib/core/rcbox.nu`
                 ( bytes_extend_bytes . s buf d )
             }
         }
-        ( vec_free [u] d )
     }
     : b fin ( quic_conn_stream_fin qc id )
     ? == . s kind ( h3_kind_unknown ) { ( __h3_classify h s ) } {}
@@ -629,5 +612,4 @@ $ `stdlib/core/rcbox.nu`
         ( __h3_on_stream h ( __h3_ri ids k ) handler )
         = k + k 1
     }
-    ( vec_free [i] ids )
 }
