@@ -16,7 +16,6 @@ $ `stdlib/std/async.nu`
     : b sized ( vec_set_len [u] payload 4194304 )
     ( nurl_memset ( vec_data [u] payload ) 65 4194304 )
     : !( Vec u ) NetErr prepared ( tcp_prepare_write conn payload )
-    ( vec_free [u] payload )
     : ~ i status 0
     ?? prepared {
         F error → { ( nurl_eprintln ( net_err_name error ) ) = status 2 }
@@ -45,9 +44,6 @@ $ `stdlib/std/async.nu`
             }
             : ( Vec u ) expected ( bytes_from_str `hello partial` )
             ? ! ( bytes_eq received expected ) { = status 1 } {}
-            ( vec_free [u] expected )
-            ( vec_free [u] received )
-            ( vec_free [u] wire )
         }
     }
     ( tcp_close_conn conn )

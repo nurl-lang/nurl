@@ -15,7 +15,6 @@ $ `stdlib/std/time.nu`
     : TcpListener listener \ ( tcp_listen_tls `127.0.0.1` 0 ku_cert ku_key )
     : String addr ( tcp_local_addr listener )
     ( nurl_println ( string_data addr ) ) ( nurl_flush_stdout )
-    ( string_free addr )
     : !TcpConn NetErr accepted ( tcp_accept listener )
     ( tcp_close_listener listener )
     ^ accepted
@@ -42,7 +41,7 @@ $ `stdlib/std/time.nu`
                 ?? ( tcp_write_all conn got ) { T _ → {} F e → { ( nurl_eprintln ( net_err_name e ) ) = rc 1 } }
             } {
                 ?? ( tcp_prepare_write conn got ) {
-                    T wire → { ( vec_extend [u] pending wire ) ( vec_free [u] wire ) }
+                    T wire → { ( vec_extend [u] pending wire ) }
                     F e → { ( nurl_eprintln ( net_err_name e ) ) = rc 1 }
                 }
                 ? < offset ( vec_len [u] pending ) {
@@ -58,7 +57,6 @@ $ `stdlib/std/time.nu`
             }
         } {}
     }
-    ( vec_free [u] got ) ( vec_free [u] pending )
     ( tcp_close_conn conn )
     ^ rc
 }
