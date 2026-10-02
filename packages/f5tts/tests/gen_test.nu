@@ -42,11 +42,9 @@ $ `src/vocos.nu`
                 ?? ( bytes_read_f32_le bs * k 4 ) { T x → { ( vec_push [f] out # f x ) } F → {} }
                 = k + k 1
             }
-            ( vec_free [u] bs )
         }
         F _e → { ( nurl_eprint `cannot read ` ) ( nurl_eprintln ( string_data p ) ) }
     }
-    ( string_free p )
     ^ out
 }
 
@@ -61,11 +59,9 @@ $ `src/vocos.nu`
                 ?? ( bytes_read_u32_le bs * k 4 ) { T x → { ( vec_push [i] out # i x ) } F → {} }
                 = k + k 1
             }
-            ( vec_free [u] bs )
         }
         F _e → {}
     }
-    ( string_free p )
     ^ out
 }
 
@@ -104,7 +100,6 @@ $ `src/vocos.nu`
         ( nurl_print `  FAIL ` ) = g_fail + g_fail 1
     }
     ( nurl_println ( string_data m ) )
-    ( string_free m )
 }
 
 @ main → i {
@@ -183,19 +178,15 @@ $ `src/vocos.nu`
                     : String outp ( __g_path dir `nurl.wav` )
                     ?? ( wav_write ( string_data outp ) wave 24000 1 ) {
                         T _ → { ( nurl_print `  wrote ` ) ( nurl_println ( string_data outp ) ) }
-                        F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) }
+                        F e → { ( nurl_eprintln ( string_data e ) ) }
                     }
-                    ( string_free outp )
-                    ( vec_free [f] wave )
                     ( voc_close vc )
                 }
-                F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) }
+                F e → { ( nurl_eprintln ( string_data e ) ) }
             }
-            ( vec_free [f] gmel )
-            ( vec_free [f] y )
             ( f5_close m )
         }
-        F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_eprintln ( string_data e ) ) ^ 1 }
     }
     ( nurl_print `\npassed ` ) ( nurl_print_int g_pass )
     ( nurl_print `, failed ` ) ( nurl_print_int g_fail ) ( nurl_print `\n` )

@@ -60,11 +60,10 @@ $ `src/text.nu`
         ( string_push_char s 10 )
         = k + k 1
     }
-    ( vec_free [i] tails )
     ^ s
 }
 
-@ __t_case * F5Vocab v s text s want → v {
+@ __t_case F5Vocab v s text s want → v {
     : ( Vec i ) ids ( vec_new [i] )
     ( f5_text_ids v text ids )
     : String got ( string_new )
@@ -81,8 +80,6 @@ $ `src/text.nu`
         ( nurl_print `       want ` ) ( nurl_println want )
         ( nurl_print `       got  ` ) ( nurl_println ( string_data got ) )
     }
-    ( string_free got )
-    ( vec_free [i] ids )
 }
 
 @ __t_chunks s text i mx s want → v {
@@ -101,9 +98,6 @@ $ `src/text.nu`
         ( nurl_print `       want ` ) ( nurl_println want )
         ( nurl_print `       got  ` ) ( nurl_println ( string_data got ) )
     }
-    ( string_free got )
-    : ( @ v String ) drop_c \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] cs drop_c )
 }
 
 @ main → i {
@@ -119,7 +113,6 @@ $ `src/text.nu`
             ^ 1
         }
     }
-    ( string_free vtxt )
 
     ?? ( f5_vocab_load ( string_data vpath ) ) {
         T v → {
@@ -143,16 +136,13 @@ $ `src/text.nu`
             ( __t_chunks `Hei! Mitä kuuluu? Kaikki hyvin, kiitos.` 20 `|Hei! Mitä kuuluu?|Kaikki hyvin,|kiitos.` )
             ( __t_chunks `Yöllä hiljaisessa mökissä kuuntelin, kuinka tuuli ujeltaa ja järven aallot lyövät rantaan.` 40 `|Yöllä hiljaisessa mökissä kuuntelin,|kuinka tuuli ujeltaa ja järven aallot lyövät rantaan.` )
 
-            ( f5_vocab_free v )
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
     }
     ?? ( file_delete ( string_data vpath ) ) { T _ → {} F _e → {} }
-    ( string_free vpath )
 
     ( nurl_print `\n` )
     ( nurl_print `passed ` )

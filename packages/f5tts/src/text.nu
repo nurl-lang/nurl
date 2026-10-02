@@ -22,20 +22,35 @@
 // yields alphanumerics unsplit). So the segmentation needs no dictionary and
 // no Viterbi: it is a three-way byte classification, done here in one pass.
 //
-//   ( f5_vocab_load path )              → !*F5Vocab String
+//   ( f5_vocab_load path )              → !F5Vocab String   (a handle; the last owner releases it)
 //   ( f5_text_ids vocab text out )      → v         ids appended to `out`
 //   ( f5_chunk_text text max_bytes )    → ( Vec String )
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/core/symtab.nu`
+$ `stdlib/std/hashmap.nu`
+$ `stdlib/core/rcbox.nu`
 $ `stdlib/std/fs.nu`
 
-: F5Vocab {
+: F5VocabImpl {
     ( Vec i ) ascii  // 128 slots: a one-byte character's id, -1 when absent
-    i map  // symtab: a multi-byte character → its id, in decimal
+    ( HashMap s i ) map  // a multi-byte character → its id; keys point into `keys`
+    ( Vec u ) keys  // every multi-byte character, NUL-terminated, back to back
     i size  // the vocabulary's length, which is also text_num_embeds
 }
+
+// An F5Vocab is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same vocabulary, and the last owner releases it.
+: F5Vocab { s ctl }
+
+@ F5Vocab_share F5Vocab h → F5Vocab { ^ @ F5Vocab { # s ( rcbox_share # i . h ctl ) } }
+
+@ F5Vocab_drop sink F5Vocab h → v {
+    ( mem_forget h )
+    ( rcbox_release [F5VocabImpl] # i . h ctl )
+}
+
+@ __F5Vocab_ptr F5Vocab h → *F5VocabImpl { ^ ( rcbox_ptr [F5VocabImpl] # i . h ctl ) }
 
 // The same read, public: run.nu's silence walk needs it too.
 @ _f5t_geti ( Vec i ) v i k → i {
@@ -46,23 +61,25 @@ $ `stdlib/std/fs.nu`
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ -1 } }
 }
 
-@ __f5t_err s msg → !*F5Vocab String {
-    ^ @ !*F5Vocab String { F ( string_from msg ) }
+@ __f5t_err s msg → !F5Vocab String {
+    ^ @ !F5Vocab String { F ( string_from msg ) }
 }
 
 // Read a vocab.txt — one token per line, the line NUMBER is the id. Python
 // reads it as `for i, char in enumerate(f)` and drops the last character of
 // each line, so a trailing "\r" from a CRLF file would be part of the token;
 // a file ending in a newline yields no extra empty token.
-@ f5_vocab_load s path → !*F5Vocab String {
+@ f5_vocab_load s path → !F5Vocab String {
     ?? ( read_file path ) {
         T txt → {
-            : *F5Vocab v # *F5Vocab ( nurl_alloc Z F5Vocab )
             : ( Vec i ) asc ( vec_with_cap [i] 128 )
             : ~ i k 0
             ~ < k 128 { ( vec_push [i] asc -1 ) = k + k 1 }
-            = . v ascii asc
-            = . v map ( nurl_sym_new )
+            // the multi-byte tokens go into one byte arena first and are
+            // keyed once it has stopped growing (a key is a pointer into it)
+            : ( Vec u ) keys ( vec_new [u] )
+            : ( Vec i ) koff ( vec_new [i] )
+            : ( Vec i ) kid ( vec_new [i] )
             : s data ( string_data txt )
             : i n ( nurl_str_len data )
             : ~ i id 0
@@ -78,19 +95,14 @@ $ `stdlib/std/fs.nu`
                             : i c ( nurl_str_get data start )
                             ? < c 128 { ( vec_set [i] asc c id ) } {}
                         } {}
-                        ? > len 1 {
-                            : String key ( string_new )
+                        ? != len 1 {
+                            // an empty line is a real token in the file's
+                            // eyes; it was always bound to 0
+                            ( vec_push [i] koff ( vec_len [u] keys ) )
+                            ( vec_push [i] kid ? == len 0 { 0 } { id } )
                             : ~ i j start
-                            ~ < j i { ( string_push_char key ( nurl_str_get data j ) ) = j + j 1 }
-                            : String val ( string_new )
-                            ( string_push_int val id )
-                            ( nurl_sym_def . v map ( string_data key ) ( string_data val ) )
-                            ( string_free key )
-                            ( string_free val )
-                        } {}
-                        ? == len 0 {
-                            // an empty line is a real token in the file's eyes
-                            ( nurl_sym_def . v map `` ( string_data ( string_from `0` ) ) )
+                            ~ < j i { ( vec_push [u] keys # u ( nurl_str_get data j ) ) = j + j 1 }
+                            ( vec_push [u] keys # u 0 )
                         } {}
                         = id + id 1
                     } {}
@@ -98,20 +110,30 @@ $ `stdlib/std/fs.nu`
                 } {}
                 = i + i 1
             }
-            = . v size id
-            ( string_free txt )
-            ^ @ !*F5Vocab String { T v }
+            : ( HashMap s i ) map ( map_new [s i] )
+            : i base # i ( vec_data [u] keys )
+            = k 0
+            ~ < k ( vec_len [i] koff ) {
+                ( __f5t_set map # s + base ( __f5t_geti koff k ) ( __f5t_geti kid k ) )
+                = k + k 1
+            }
+            ^ @ !F5Vocab String { T @ F5Vocab { # s ( rcbox_new [F5VocabImpl] @ F5VocabImpl { asc map keys id } ) } }
         }
         F _e → { ^ ( __f5t_err `f5tts: cannot read the vocabulary file` ) }
     }
 }
 
-@ f5_vocab_size * F5Vocab v → i { ^ . v size }
-
-@ f5_vocab_free * F5Vocab v → v {
-    ( vec_free [i] . v ascii )
-    ( nurl_free # s v )
+@ __f5t_set ( HashMap s i ) m s key i val → v {
+    : ?i _old ( map_set [s i] m key val \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
 }
+
+@ f5_vocab_size F5Vocab v__h → i {
+    : *F5VocabImpl v ( __F5Vocab_ptr v__h )
+    ^ . v size
+}
+
+// Early release (optional): the last owner of a vocabulary releases it.
+@ f5_vocab_free sink F5Vocab v → v {}
 
 // jieba's han class, Latin half: [a-zA-Z0-9+#&._%-]. A run of these is one
 // segment; everything else is one character per segment, except that a
@@ -153,21 +175,21 @@ $ `stdlib/std/fs.nu`
     ^ T
 }
 
-@ __f5t_id_ascii * F5Vocab v i c → i {
+@ __f5t_id_ascii * F5VocabImpl v i c → i {
     ? >= c 128 { ^ 0 } {}
     : i id ( __f5t_geti . v ascii c )
     ? < id 0 { ^ 0 } {}
     ^ id
 }
 
-@ __f5t_id_multi * F5Vocab v s text i off i len → i {
+@ __f5t_id_multi * F5VocabImpl v s text i off i len → i {
     : String key ( string_new )
     : ~ i j 0
     ~ < j len { ( string_push_char key ( nurl_str_get text + off j ) ) = j + j 1 }
-    : s got ( nurl_sym_get . v map ( string_data key ) )
-    ( string_free key )
-    ? == ( nurl_str_len got ) 0 { ^ 0 } {}
-    ^ ( nurl_str_to_int got )
+    ?? ( map_get [s i] . v map ( string_data key ) \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } ) {
+        T id → { ^ id }
+        F → { ^ 0 }
+    }
 }
 
 // The three characters F5-TTS rewrites before anything else looks at the text
@@ -222,7 +244,7 @@ $ `stdlib/std/fs.nu`
 
 // Emit one segment's characters, preceded by the space F5-TTS inserts in
 // front of a multi-character pure-ASCII segment. Returns the new `last`.
-@ __f5t_emit_seg * F5Vocab v s text i from i to ( Vec i ) out i last → i {
+@ __f5t_emit_seg * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     ? & > - to from 1 ( __f5t_needs_space lst ) {
         ( vec_push [i] out ( __f5t_id_ascii v 32 ) )
@@ -241,7 +263,7 @@ $ `stdlib/std/fs.nu`
 // A stretch of a han block with no dictionary word in it: the skip class
 // takes the alphanumeric runs, and each gap between them is ONE segment
 // (finalseg yields the split's leftovers whole, not character by character).
-@ __f5t_scan_plain * F5Vocab v s text i from i to ( Vec i ) out i last → i {
+@ __f5t_scan_plain * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i j from
     : ~ i gs -1
@@ -290,7 +312,7 @@ $ `stdlib/std/fs.nu`
     ^ ( __f5t_lit_at text pos end `c#` )
 }
 
-@ __f5t_scan_block * F5Vocab v s text i from i to ( Vec i ) out i last → i {
+@ __f5t_scan_block * F5VocabImpl v s text i from i to ( Vec i ) out i last → i {
     : ~ i lst last
     : ~ i i from
     : ~ i start from
@@ -308,7 +330,8 @@ $ `stdlib/std/fs.nu`
 }
 
 // The character sequence, as vocabulary ids, appended to `out`.
-@ f5_text_ids * F5Vocab v s text ( Vec i ) out → v {
+@ f5_text_ids F5Vocab v__h s text ( Vec i ) out → v {
+    : *F5VocabImpl v ( __F5Vocab_ptr v__h )
     : i n ( nurl_str_len text )
     : ~ i last -2
     : ~ i i 0
@@ -424,8 +447,5 @@ $ `stdlib/std/fs.nu`
         = k + k 1
     }
     ? > ( string_len cur ) 0 { ( vec_push [String] chunks ( string_trim cur ) ) } {}
-    ( string_free cur )
-    : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] sents drop_str )
     ^ chunks
 }

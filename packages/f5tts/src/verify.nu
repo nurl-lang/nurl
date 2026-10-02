@@ -27,10 +27,12 @@ $ `deps/audio/src/wav.nu`
 
 : ~ s g_f5v_lang ``  // empty = let the transcriber detect one
 
+// The transcriber is process configuration: set once at startup, so the
+// strings are copied into the globals and kept for the process's life.
 @ f5_whisper_set s host i port s lang → v {
-    = g_f5v_host host
+    = g_f5v_host ( strdup host )
     = g_f5v_port port
-    ? > ( nurl_str_len lang ) 0 { = g_f5v_lang lang } {}
+    ? > ( nurl_str_len lang ) 0 { = g_f5v_lang ( strdup lang ) } {}
 }
 
 @ f5_whisper_enabled → b { ^ > ( nurl_str_len g_f5v_host ) 0 }
@@ -199,7 +201,6 @@ $ `deps/audio/src/wav.nu`
         }
     }
     ( __f5v_flush cur out )
-    ( string_free cur )
     ^ out
 }
 
@@ -294,7 +295,6 @@ $ `deps/audio/src/wav.nu`
         = i + i 1
     }
     : i out ( __f5v_geti d + * nr w nh )
-    ( vec_free [i] d )
     ^ out
 }
 
@@ -304,17 +304,12 @@ $ `deps/audio/src/wav.nu`
     : ( Vec String ) r ( f5_words reference )
     : ( Vec String ) h ( f5_words hypothesis )
     : i e ( f5_word_errors r h )
-    : ( @ v String ) drop_w \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] r drop_w )
-    ( vec_free_with [String] h drop_w )
     ^ e
 }
 
 @ f5_word_count_norm s text → i {
     : ( Vec String ) r ( f5_words text )
     : i n ( vec_len [String] r )
-    : ( @ v String ) drop_w \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] r drop_w )
     ^ n
 }
 
@@ -325,9 +320,6 @@ $ `deps/audio/src/wav.nu`
     : i nr ( vec_len [String] r )
     : i nh ( vec_len [String] h )
     : i e ( f5_word_errors r h )
-    : ( @ v String ) drop_w \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] r drop_w )
-    ( vec_free_with [String] h drop_w )
     ? == nr 0 { ^ ? == nh 0 0.0 1.0 } {}
     ^ / # f e # f nr
 }
@@ -361,7 +353,6 @@ $ `deps/audio/src/wav.nu`
     ( string_push_str head boundary )
     ( string_push_str head `\r\nContent-Disposition: form-data; name="file"; filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n` )
     ( __f5v_push_str out ( string_data head ) )
-    ( string_free head )
     : ~ i k 0
     ~ < k ( vec_len [u] wav ) {
         ?? ( vec_get [u] wav k ) { T b → { ( vec_push [u] out b ) } F → {} }
@@ -371,7 +362,6 @@ $ `deps/audio/src/wav.nu`
     ( string_push_str tail boundary )
     ( string_push_str tail `--\r\n` )
     ( __f5v_push_str out ( string_data tail ) )
-    ( string_free tail )
     ^ out
 }
 
@@ -384,14 +374,11 @@ $ `deps/audio/src/wav.nu`
     : ~ ( Vec u ) bytes ( vec_new [u] )
     ? as_form {
         ( string_push_str ctype `multipart/form-data; boundary=f5ttsboundary` )
-        ( vec_free [u] bytes )
         = bytes ( __f5v_multipart wav g_f5v_lang `f5ttsboundary` )
     } {
         ( string_push_str ctype `audio/wav` )
-        ( vec_free [u] bytes )
         = bytes ( vec_clone [u] wav )
     }
-    ( vec_free [u] wav )
     : String url ( f5_whisper_where )
     ( string_push_str url `/inference` )
     : String out ( string_new )
@@ -404,17 +391,12 @@ $ `deps/audio/src/wav.nu`
                             T tv → { ( string_push_str out ( json_as_str tv ) ) }
                             F → {}
                         }
-                        ( json_free root )
                     }
                     F _e → {}
                 }
             } {}
-            ( response_free resp )
         }
         F _e → {}
     }
-    ( string_free url )
-    ( string_free ctype )
-    ( vec_free [u] bytes )
     ^ ( string_trim out )
 }

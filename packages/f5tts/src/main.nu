@@ -83,29 +83,21 @@ $ `verify.nu`
                                     = j + j 1
                                 }
                                 ( nurl_println ( string_data out ) )
-                                ( string_free out )
-                                ( vec_free [i] ids )
                             }
                             F → {}
                         }
                         = k + k 1
                     }
-                    : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
-                    ( vec_free_with [String] lines drop_str )
-                    ( string_free txt )
-                    ( f5_vocab_free v )
                     ^ 0
                 }
                 F _e → {
                     ( nurl_eprintln `f5tts: cannot read the input file` )
-                    ( f5_vocab_free v )
                     ^ 1
                 }
             }
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
     }
@@ -134,16 +126,11 @@ $ `verify.nu`
                             = j + j 1
                         }
                         ( nurl_print `\n` )
-                        : ( @ v String ) drop_c \ String s → v { ( string_free s ) }
-                        ( vec_free_with [String] cs drop_c )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
-            ( vec_free_with [String] lines drop_str )
-            ( string_free txt )
             ^ 0
         }
         F _e → {
@@ -188,7 +175,6 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
                                             ( string_push_int m3 ( f5_score_attempts score ) )
                                             ( string_push_str m3 ` attempts at most)` )
                                             ( nurl_eprintln ( string_data m3 ) )
-                                            ( string_free m3 )
                                         } {}
                                         ? quiet {} {
                                             : String m2 ( string_from `f5tts: ` )
@@ -197,47 +183,40 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
                                             ( string_push_int m2 - ( now_ms ) t1 )
                                             ( string_push_str m2 ` ms` )
                                             ( nurl_eprintln ( string_data m2 ) )
-                                            ( string_free m2 )
                                         }
                                         ?? ( __f5_write_audio outp wave kbps ) {
                                             T _ → { ? quiet {} { ( nurl_eprint `f5tts: wrote ` ) ( nurl_eprintln outp ) } }
-                                            F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) = rc 1 }
+                                            F e → { ( nurl_eprintln ( string_data e ) ) = rc 1 }
                                         }
                                     } {
                                         ( nurl_eprintln `f5tts: synthesis failed` )
                                         = rc 1
                                     }
                                     ? profile { ( gk_prof_report ( f5_kit m ) ) } {}
-                                    ( vec_free [i] score )
-                                    ( vec_free [f] wave )
                                     ( voc_close vc )
                                     ( f5_close m )
-                                    ( f5_voice_free v )
-                                    ( f5_vocab_free vocab )
                                     ^ rc
                                 }
                                 F e → {
-                                    ( nurl_eprintln ( string_data e ) ) ( string_free e )
-                                    ( f5_close m ) ( f5_voice_free v ) ( f5_vocab_free vocab )
+                                    ( nurl_eprintln ( string_data e ) )
+                                    ( f5_close m )
                                     ^ 1
                                 }
                             }
                         }
                         F e → {
-                            ( nurl_eprintln ( string_data e ) ) ( string_free e )
-                            ( f5_voice_free v ) ( f5_vocab_free vocab )
+                            ( nurl_eprintln ( string_data e ) )
                             ^ 1
                         }
                     }
                 }
                 F e → {
-                    ( nurl_eprintln ( string_data e ) ) ( string_free e )
-                    ( f5_vocab_free vocab )
+                    ( nurl_eprintln ( string_data e ) )
                     ^ 1
                 }
             }
         }
-        F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_eprintln ( string_data e ) ) ^ 1 }
     }
 }
 
@@ -260,11 +239,8 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     }
     : String lang ( args_value_or p `lang` `` )
     ? > ( string_len host ) 0 {
-        ( f5_whisper_set ( string_data ( string_clone host ) ) port ( string_data ( string_clone lang ) ) )
+        ( f5_whisper_set ( string_data host ) port ( string_data lang ) )
     } {}
-    ( string_free w )
-    ( string_free host )
-    ( string_free lang )
 }
 
 // The name decides the container: `-o out.mp3` writes MPEG-2 Layer III at
@@ -280,7 +256,6 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
                     T _ → {}
                     F _ → { = out @ !v String { F ( string_from `f5tts: cannot write the mp3` ) } }
                 }
-                ( vec_free [u] bytes )
                 ^ out
             }
             F e → { ^ @ !v String { F e } }
@@ -321,15 +296,12 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  synth --model NAME --vocoder NAME --voice DIR --text TEXT -o out.wav\n  serve --model NAME --vocoder NAME [--addr H:P] [--token T] [--unload-after S]\n  tokens <vocab.txt> <file>   one line of vocabulary ids per line of text\n  chunks <file> [--max N]     the text split the way F5-TTS splits it\n` )
-        ( string_free u )
-        ( args_free p )
         ^ 0
     } {}
     ( __f5_whisper_from p )
@@ -344,14 +316,10 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
         : String svoc ( args_value_or p `vocoder` `` )
         ? == 0 ( string_len smodel ) {
             ( __f5_need_model )
-            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
-            ( args_free p )
             ^ 2
         } {}
         ? == 0 ( string_len svoc ) {
             ( __f5_need_vocoder )
-            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
-            ( args_free p )
             ^ 2
         } {}
         : String svoices ( args_value_or p `voices` `` )
@@ -359,13 +327,11 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
             ( f5_ensure_dirs )
             : String d ( f5_voices_dir )
             ( string_push_str svoices ( string_data d ) )
-            ( string_free d )
         } {}
         : String smodels ( args_value_or p `models` `` )
         ? == 0 ( string_len smodels ) {
             : String d ( f5_models_dir )
             ( string_push_str smodels ( string_data d ) )
-            ( string_free d )
         } {}
         : String saddr ( args_value_or p `addr` `127.0.0.1:7861` )
         : String stok ( args_value_or p `token` `` )
@@ -375,20 +341,16 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
         : ~ i unload 0
         : String sul ( args_value_or p `unload-after` `0` )
         ?? ( string_to_int sul ) { T x → { = unload x } F _ → {} }
-        ( string_free sul )
         : ~ i dev -1
         : String sdv ( args_value_or p `gpu` `-1` )
         ?? ( string_to_int sdv ) { T x → { = dev x } F _ → {} }
-        ( string_free sdv )
-        : ~ s host `127.0.0.1`
+        : ~ String hostS ( string_from `127.0.0.1` )
         : ~ i port 7861
         : i colon ( nurl_str_find ( string_data saddr ) `:` )
         ? >= colon 0 {
-            : String hs ( string_substr saddr 0 colon )
-            = host ( string_data ( string_clone hs ) )
+            = hostS ( string_substr saddr 0 colon )
             = port ( nurl_str_to_int ( nurl_str_slice ( string_data saddr ) + colon 1
             - ( string_len saddr ) + colon 1 ) )
-            ( string_free hs )
         } {}
         : ~ i rc 2
         // --model may be a registry id, a path, or a Hugging Face ref. An id
@@ -404,8 +366,6 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
             ( string_clear svocab )
             ( string_push_str svocab ( string_data rvo ) )
         } {}
-        ( string_free rck )
-        ( string_free rvo )
         ? != 0 ( nurl_str_len ( string_data svoices ) ) {
             : String mp ( f5_resolve_file ( string_data smodel ) `.safetensors` )
             : String vp ( f5_resolve_vocab ( string_data svocab ) ( string_data mp ) )
@@ -413,21 +373,14 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
             ? & & > ( string_len mp ) 0 > ( string_len vp ) 0 > ( string_len cp ) 0 {
                 = rc ( f5_serve ( string_data mp ) ( string_data vp ) ( string_data cp )
                 ( string_data svoices ) ( string_data smodels ) ( string_data smid )
-                host port ( string_data stok ) dev unload )
+                ( string_data hostS ) port ( string_data stok ) dev unload )
             } {
                 ( nurl_eprintln `f5tts: could not resolve the checkpoint, its vocabulary or the vocoder` )
                 = rc 1
             }
-            ( string_free mp )
-            ( string_free vp )
-            ( string_free cp )
         } {
             ( nurl_eprintln `usage: f5tts serve --voices DIR [--model REF] [--vocoder REF] [--addr H:P] [--token T] [--unload-after S]` )
         }
-        ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
-        ( string_free svoices ) ( string_free smodels ) ( string_free smid )
-        ( string_free saddr ) ( string_free stok )
-        ( args_free p )
         ^ rc
     } {}
     ? ( nurl_str_eq cmd0 `synth` ) {
@@ -436,14 +389,10 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
         : String svoc ( args_value_or p `vocoder` `` )
         ? == 0 ( string_len smodel ) {
             ( __f5_need_model )
-            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
-            ( args_free p )
             ^ 2
         } {}
         ? == 0 ( string_len svoc ) {
             ( __f5_need_vocoder )
-            ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
-            ( args_free p )
             ^ 2
         } {}
         : String svoice ( args_value_or p `voice` `` )
@@ -451,44 +400,34 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
         : ~ i kbps 128
         : String skb ( args_value_or p `bitrate` `128` )
         ?? ( string_to_int skb ) { T v → { = kbps v } F _ → {} }
-        ( string_free skb )
         : String sout ( args_value_or p `output` `out.wav` )
         : ~ i steps 32
         : String sst ( args_value_or p `steps` `32` )
         ?? ( string_to_int sst ) { T x → { = steps x } F _ → {} }
-        ( string_free sst )
         : ~ i seed 0
         : String ssd ( args_value_or p `seed` `0` )
         ?? ( string_to_int ssd ) { T x → { = seed x } F _ → {} }
-        ( string_free ssd )
         : ~ i dev -1
         : String sdv ( args_value_or p `gpu` `-1` )
         ?? ( string_to_int sdv ) { T x → { = dev x } F _ → {} }
-        ( string_free sdv )
         : ~ f cfg 2.0
         : String scf ( args_value_or p `cfg` `2.0` )
         ?? ( string_to_float scf ) { T x → { = cfg x } F → {} }
-        ( string_free scf )
         : ~ f sway -1.0
         : String ssw ( args_value_or p `sway` `-1.0` )
         ?? ( string_to_float ssw ) { T x → { = sway x } F → {} }
-        ( string_free ssw )
         : ~ f speed 1.0
         : String ssp ( args_value_or p `speed` `1.0` )
         ?? ( string_to_float ssp ) { T x → { = speed x } F → {} }
-        ( string_free ssp )
         : ~ f fade 0.15
         : String sfd ( args_value_or p `fade` `0.15` )
         ?? ( string_to_float sfd ) { T x → { = fade x } F → {} }
-        ( string_free sfd )
         : ~ i retries 0
         : String srt ( args_value_or p `retries` `0` )
         ?? ( string_to_int srt ) { T x → { = retries x } F _ → {} }
-        ( string_free srt )
         : ~ f maxwer 0.15
         : String smw ( args_value_or p `max-wer` `0.15` )
         ?? ( string_to_float smw ) { T x → { = maxwer x } F → {} }
-        ( string_free smw )
         : ~ i rc 2
         ? != 0 ( nurl_str_len ( string_data svoice ) ) {
             // A --model that is neither a path nor an owner/repo reference is
@@ -502,9 +441,6 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
             : String mp ? in_reg ( string_clone rck ) ( f5_resolve_file ( string_data smodel ) `.safetensors` )
             : String vp ? & in_reg == 0 ( nurl_str_len ( string_data svocab ) ) ( string_clone rvo )
             ( f5_resolve_vocab ( string_data svocab ) ( string_data mp ) )
-            ( string_free models_dir )
-            ( string_free rck )
-            ( string_free rvo )
             : String cp ( f5_resolve_file ( string_data svoc ) `.bin` )
             ? & & > ( string_len mp ) 0 > ( string_len vp ) 0 > ( string_len cp ) 0 {
                 = rc ( __f5_cmd_synth ( string_data mp ) ( string_data vp ) ( string_data cp )
@@ -515,20 +451,13 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
                 ( nurl_eprintln `f5tts: could not resolve the checkpoint, its vocabulary or the vocoder` )
                 = rc 1
             }
-            ( string_free mp )
-            ( string_free vp )
-            ( string_free cp )
         } {
             ( nurl_eprintln `usage: f5tts synth --model NAME --vocoder NAME --voice DIR --text TEXT -o out.wav` )
         }
-        ( string_free smodel ) ( string_free svocab ) ( string_free svoc )
-        ( string_free svoice ) ( string_free stext ) ( string_free sout )
-        ( args_free p )
         ^ rc
     } {}
     ? < np 2 {
         ( nurl_eprintln `usage: f5tts <tokens|chunks> … (f5tts --help)` )
-        ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -542,23 +471,18 @@ i steps f cfg f sway f speed f fade i seed i retries f max_wer i kbps i device b
     ? ( nurl_str_eq cmd `tokens` ) {
         ? == ( nurl_str_len a2 ) 0 {
             ( nurl_eprintln `usage: f5tts tokens <vocab.txt> <file>` )
-            ( args_free p )
             ^ 2
         } {}
         : i rc ( __f5_cmd_tokens a1 a2 )
-        ( args_free p )
         ^ rc
     } {}
     ? ( nurl_str_eq cmd `chunks` ) {
         : ~ i mx 135
         : String sm ( args_value_or p `max` `135` )
         ?? ( string_to_int sm ) { T x → { = mx x } F _ → {} }
-        ( string_free sm )
         : i rc ( __f5_cmd_chunks a1 mx )
-        ( args_free p )
         ^ rc
     } {}
     ( nurl_eprintln `f5tts: unknown command (f5tts --help)` )
-    ( args_free p )
     ^ 2
 }

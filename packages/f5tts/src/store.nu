@@ -21,12 +21,12 @@ $ `stdlib/ext/json.nu`
 
 @ f5_home → String {
     ?? ( env_get `F5TTS_HOME` ) {
-        T h → { ? > ( string_len h ) 0 { ^ h } { ( string_free h ) } }
+        T h → { ? > ( string_len h ) 0 { ^ h } {} }
         F → {}
     }
     : ~ String base ( string_new )
     ?? ( env_get `HOME` ) {
-        T h → { ( string_push_str base ( string_data h ) ) ( string_free h ) }
+        T h → { ( string_push_str base ( string_data h ) ) }
         F → { ( string_push_char base 46 ) }
     }
     ( string_push_str base `/.f5tts` )
@@ -68,9 +68,6 @@ $ `stdlib/ext/json.nu`
         ( nurl_eprint `f5tts: cannot create ` )
         ( nurl_eprintln ( string_data h ) )
     }
-    ( string_free h )
-    ( string_free v )
-    ( string_free m )
     ^ ok
 }
 
@@ -110,15 +107,12 @@ $ `stdlib/ext/json.nu`
                         T node → { ( string_push_str txt ( json_as_str node ) ) }
                         F → {}
                     }
-                    ( json_free root )
                 }
                 F _e → {}
             }
-            ( string_free js )
         }
         F _e → {}
     }
-    ( string_free cfg )
     ^ txt
 }
 
@@ -136,23 +130,18 @@ $ `stdlib/ext/json.nu`
         T _ → {}
         F _e → { ( string_push_str err `cannot write the recording` ) }
     }
-    ( string_free wp )
     ? == 0 ( string_len err ) {
         : Json o ( json_obj_new )
         : b _n ( json_obj_set o `name` ( json_str_lit id ) )
         : b _t ( json_obj_set o `ref_text` ( json_str_lit ref_text ) )
         : String js ( json_stringify o )
-        ( json_free o )
         : String cp ( string_from ( string_data dir ) )
         ( string_push_str cp `/config.json` )
         ?? ( write_file ( string_data cp ) ( string_data js ) ) {
             T _ → {}
             F _e → { ( string_push_str err `cannot write config.json` ) }
         }
-        ( string_free cp )
-        ( string_free js )
     } {}
-    ( string_free dir )
     ^ err
 }
 
@@ -163,17 +152,13 @@ $ `stdlib/ext/json.nu`
     : String wp ( string_from ( string_data dir ) )
     ( string_push_str wp `/reference.wav` )
     ?? ( file_delete ( string_data wp ) ) { T _ → {} F _e → {} }
-    ( string_free wp )
     : String cp ( string_from ( string_data dir ) )
     ( string_push_str cp `/config.json` )
     ?? ( file_delete ( string_data cp ) ) { T _ → {} F _e → {} }
-    ( string_free cp )
     : String sp ( string_from ( string_data dir ) )
     ( string_push_str sp `/sample.wav` )
     ?? ( file_delete ( string_data sp ) ) { T _ → {} F _e → {} }
-    ( string_free sp )
     ?? ( dir_remove ( string_data dir ) ) { T _ → {} F _e → { = ok F } }
-    ( string_free dir )
     ^ ok
 }
 
@@ -191,14 +176,11 @@ $ `stdlib/ext/json.nu`
                         ? ( file_exists ( string_data wp ) ) {
                             ( vec_push [String] out ( string_clone nm ) )
                         } {}
-                        ( string_free wp )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
-            ( vec_free_with [String] names drop_s )
         }
         F _e → {}
     }
