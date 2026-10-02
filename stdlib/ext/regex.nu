@@ -87,7 +87,8 @@ $ `stdlib/core/rcbox.nu`
 
 : Regex { s ctl }
 
-// Parser state — heap-owned, freed by regex_compile.
+// Parser state — a local of regex_compile the parser advances in place
+// (`inout`); its tables move into the compiled pattern.
 : RxParser {
     s pat
     i len
@@ -100,7 +101,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── State table helpers ─────────────────────────────────────────────
 
-@ __rx_add_state * RxParser p i kind i a i out1 i out2 → i {
+@ __rx_add_state inout RxParser p i kind i a i out1 i out2 → i {
     : ( Vec i ) st . p states
     : i n / ( vec_len [i] st ) 4
     ( vec_push [i] st kind )
@@ -141,7 +142,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Patch the exit state's out1 (uniform fragment-exit convention).
-@ __rx_patch_exit * RxParser p i exit_idx i target → v {
+@ __rx_patch_exit inout RxParser p i exit_idx i target → v {
     ( __rx_set_out1 . p states exit_idx target )
 }
 
@@ -149,7 +150,7 @@ $ `stdlib/core/rcbox.nu`
 // A class is stored as a header word followed by 2 * n_pairs range
 // words. Header layout: (n_pairs << 1) | neg_flag.
 
-@ __rx_class_begin * RxParser p i neg → i {
+@ __rx_class_begin inout RxParser p i neg → i {
     : ( Vec i ) cs . p classes
     : ( Vec i ) ofs . p class_starts
     : i idx ( vec_len [i] ofs )
@@ -160,13 +161,13 @@ $ `stdlib/core/rcbox.nu`
     ^ idx
 }
 
-@ __rx_class_add_range * RxParser p i lo i hi → v {
+@ __rx_class_add_range inout RxParser p i lo i hi → v {
     : ( Vec i ) cs . p classes
     ( vec_push [i] cs lo )
     ( vec_push [i] cs hi )
 }
 
-@ __rx_class_finish * RxParser p i class_idx → v {
+@ __rx_class_finish inout RxParser p i class_idx → v {
     : ( Vec i ) cs . p classes
     : ( Vec i ) ofs . p class_starts
     : i off ( __vi_get ofs class_idx )
@@ -218,7 +219,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Build a built-in class for \d, \D, \w, \W, \s, \S. Returns class_idx.
-@ __rx_builtin_class * RxParser p i which → i {
+@ __rx_builtin_class inout RxParser p i which → i {
     // which: 0=\d 1=\D 2=\w 3=\W 4=\s 5=\S
     : i neg ? | == which 1 | == which 3 == which 5 1 0
     : i idx ( __rx_class_begin p neg )
@@ -242,14 +243,14 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Parser cursor helpers ───────────────────────────────────────────
 
-@ __rx_eof * RxParser p → b { ^ >= . p pos . p len }
+@ __rx_eof inout RxParser p → b { ^ >= . p pos . p len }
 
-@ __rx_peek * RxParser p → i {
+@ __rx_peek inout RxParser p → i {
     ? ( __rx_eof p ) { ^ -1 } {}
     ^ ( nurl_str_at . p pat . p len . p pos )
 }
 
-@ __rx_bump * RxParser p → i {
+@ __rx_bump inout RxParser p → i {
     : i c ( __rx_peek p )
     = . p pos + . p pos 1
     ^ c
@@ -262,7 +263,7 @@ $ `stdlib/core/rcbox.nu`
 // Encoded into a single i: (kind << 16) | (value & 0xFFFF).
 // The class indices stay well under 65535 in any sane pattern.
 
-@ __rx_decode_escape * RxParser p → i {
+@ __rx_decode_escape inout RxParser p → i {
     : i c ( __rx_peek p )
     = . p pos + . p pos 1
     // Plain meta-literals: . * + ? ( ) [ ] | ^ $ \ /
@@ -306,40 +307,40 @@ $ `stdlib/core/rcbox.nu`
 // Convention: every fragment's "exit" is a state whose out1 is unset
 // and gets patched by the next concat.
 
-@ __emit_char * RxParser p i c → i {
+@ __emit_char inout RxParser p i c → i {
     : i s1 ( __rx_add_state p 1 c -1 -1 )
     : i s2 ( __rx_add_state p 6 0 -1 -1 )
     ( __rx_set_out1 . p states s1 s2 )
     ^ ( __frag s1 s2 )
 }
 
-@ __emit_any * RxParser p → i {
+@ __emit_any inout RxParser p → i {
     : i s1 ( __rx_add_state p 2 0 -1 -1 )
     : i s2 ( __rx_add_state p 6 0 -1 -1 )
     ( __rx_set_out1 . p states s1 s2 )
     ^ ( __frag s1 s2 )
 }
 
-@ __emit_class * RxParser p i ci → i {
+@ __emit_class inout RxParser p i ci → i {
     : i s1 ( __rx_add_state p 3 ci -1 -1 )
     : i s2 ( __rx_add_state p 6 0 -1 -1 )
     ( __rx_set_out1 . p states s1 s2 )
     ^ ( __frag s1 s2 )
 }
 
-@ __emit_anchor * RxParser p i which → i {
+@ __emit_anchor inout RxParser p i which → i {
     : i s1 ( __rx_add_state p 4 which -1 -1 )
     : i s2 ( __rx_add_state p 6 0 -1 -1 )
     ( __rx_set_out1 . p states s1 s2 )
     ^ ( __frag s1 s2 )
 }
 
-@ __emit_concat * RxParser p i fa i fb → i {
+@ __emit_concat inout RxParser p i fa i fb → i {
     ( __rx_patch_exit p ( __frag_exit fa ) ( __frag_entry fb ) )
     ^ ( __frag ( __frag_entry fa ) ( __frag_exit fb ) )
 }
 
-@ __emit_alt * RxParser p i fa i fb → i {
+@ __emit_alt inout RxParser p i fa i fb → i {
     : i merge ( __rx_add_state p 6 0 -1 -1 )
     ( __rx_patch_exit p ( __frag_exit fa ) merge )
     ( __rx_patch_exit p ( __frag_exit fb ) merge )
@@ -347,21 +348,21 @@ $ `stdlib/core/rcbox.nu`
     ^ ( __frag split merge )
 }
 
-@ __emit_star * RxParser p i fa → i {
+@ __emit_star inout RxParser p i fa → i {
     : i merge ( __rx_add_state p 6 0 -1 -1 )
     : i split ( __rx_add_state p 5 0 ( __frag_entry fa ) merge )
     ( __rx_patch_exit p ( __frag_exit fa ) split )
     ^ ( __frag split merge )
 }
 
-@ __emit_plus * RxParser p i fa → i {
+@ __emit_plus inout RxParser p i fa → i {
     : i merge ( __rx_add_state p 6 0 -1 -1 )
     : i split ( __rx_add_state p 5 0 ( __frag_entry fa ) merge )
     ( __rx_patch_exit p ( __frag_exit fa ) split )
     ^ ( __frag ( __frag_entry fa ) merge )
 }
 
-@ __emit_optional * RxParser p i fa → i {
+@ __emit_optional inout RxParser p i fa → i {
     : i merge ( __rx_add_state p 6 0 -1 -1 )
     : i split ( __rx_add_state p 5 0 ( __frag_entry fa ) merge )
     ( __rx_patch_exit p ( __frag_exit fa ) merge )
@@ -372,7 +373,7 @@ $ `stdlib/core/rcbox.nu`
 // Returns a fragment encoded as i, or -1 on parse error. The caller
 // translates -1 into ParseErr::BadFormat.
 
-@ __parse_class * RxParser p → i {
+@ __parse_class inout RxParser p → i {
     // ASSUMES position past '['. Builds a class and emits a class state
     // fragment. Returns fragment, or -1 on error.
     : ~ i neg 0
@@ -461,7 +462,7 @@ $ `stdlib/core/rcbox.nu`
 // Forward declaration via mutual recursion: __parse_alt and __parse_atom
 // reference each other through __parse_seq.
 
-@ __parse_atom * RxParser p → i {
+@ __parse_atom inout RxParser p → i {
     ? ( __rx_eof p ) { ^ -1 } {}
     : i c ( __rx_peek p )
     : ~ i frag -1
@@ -531,7 +532,7 @@ $ `stdlib/core/rcbox.nu`
     ^ frag
 }
 
-@ __parse_seq * RxParser p → i {
+@ __parse_seq inout RxParser p → i {
     // Empty seq → epsilon fragment (one Eps state pointing nowhere; will
     // be patched).
     : ~ i acc -1
@@ -554,7 +555,7 @@ $ `stdlib/core/rcbox.nu`
     ^ acc
 }
 
-@ __parse_alt * RxParser p → i {
+@ __parse_alt inout RxParser p → i {
     : i first ( __parse_seq p )
     ? < first 0 { ^ -1 } {}
     : ~ i acc first
@@ -579,46 +580,22 @@ $ `stdlib/core/rcbox.nu`
     ? == n 0 {
         ^ @ !Regex ParseErr { F @ ParseErr { Empty } }
     } {}
-    : *RxParser p # *RxParser ( nurl_alloc Z RxParser )
-    = . p pat pattern
-    = . p len n
-    = . p pos 0
-    = . p states ( vec_new [i] )
-    = . p classes ( vec_new [i] )
-    = . p class_starts ( vec_new [i] )
-    = . p ngroups 0
+    : ~ RxParser p @ RxParser { pattern n 0 ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) 0 }
     : i frag ( __parse_alt p )
     ? < frag 0 {
-        ( vec_free [i] . p states )
-        ( vec_free [i] . p classes )
-        ( vec_free [i] . p class_starts )
-        ( nurl_free # s p )
         ^ @ !Regex ParseErr { F @ ParseErr { BadFormat } }
     } {}
     ? < . p pos . p len {
         // Trailing `)` or `]` is not consumed by parser → reject.
-        ( vec_free [i] . p states )
-        ( vec_free [i] . p classes )
-        ( vec_free [i] . p class_starts )
-        ( nurl_free # s p )
         ^ @ !Regex ParseErr { F @ ParseErr { TrailingGarbage } }
     } {}
     // Patch the fragment exit to a fresh Match state.
     : i match_state ( __rx_add_state p 0 0 -1 -1 )
     ( __rx_patch_exit p ( __frag_exit frag ) match_state )
     : i start_idx ( __frag_entry frag )
-    // The parser's tables move into the pattern (the parser block is
-    // raw memory, freed below without them).
-    : ( Vec i ) states . p states
-    ( mem_take states )
-    : ( Vec i ) classes . p classes
-    ( mem_take classes )
-    : ( Vec i ) class_starts . p class_starts
-    ( mem_take class_starts )
-    : i box ( rcbox_new [RegexImpl] @ RegexImpl { states classes class_starts start_idx . p ngroups } )
-    : Regex r @ Regex { # s box }
-    ( nurl_free # s p )
-    ^ @ !Regex ParseErr { T r }
+    // The parser's tables move into the pattern.
+    : i box ( rcbox_new [RegexImpl] @ RegexImpl { . p states . p classes . p class_starts start_idx . p ngroups } )
+    ^ @ !Regex ParseErr { T @ Regex { # s box } }
 }
 
 @ Regex_share Regex r → Regex { ^ @ Regex { # s ( rcbox_share # i . r ctl ) } }
@@ -771,17 +748,6 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __rx_scratch_free sink RxScratch sc → v {
-    ( vec_free [i] . sc cur )
-    ( vec_free [i] . sc nxt )
-    ( vec_free [i] . sc marked_cur )
-    ( vec_free [i] . sc marked_nxt )
-    ( vec_free [i] . sc caps_cur )
-    ( vec_free [i] . sc caps_nxt )
-    ( vec_free [i] . sc work )
-    ( vec_free [i] . sc best )
-}
-
 // Try to match starting at text_pos. Returns the longest match length
 // found at this start (≥0), or -1 if no match. `sc` is scratch owned by
 // the caller; its contents are reset here, so the same scratch can be
@@ -898,7 +864,6 @@ $ `stdlib/core/rcbox.nu`
         : i m ( __rx_run_at r text n pos sc )
         ? >= m 0 { = hit T } { = pos + pos 1 }
     }
-    ( __rx_scratch_free sc )
     ^ hit
 }
 
@@ -906,7 +871,6 @@ $ `stdlib/core/rcbox.nu`
     : i n ( nurl_str_len text )
     : RxScratch sc ( __rx_scratch_new r )
     : i m ( __rx_run_at r text n 0 sc )
-    ( __rx_scratch_free sc )
     ^ == m n
 }
 
@@ -920,7 +884,6 @@ $ `stdlib/core/rcbox.nu`
         : i m ( __rx_run_at r text n pos sc )
         ? >= m 0 { = hit_at pos = hit_len m } { = pos + pos 1 }
     }
-    ( __rx_scratch_free sc )
     ? >= hit_at 0 { ^ @ ?Match { T @ Match { hit_at hit_len } } } {}
     ^ @ ?Match { F @ Match { 0 0 } }
 }
@@ -960,7 +923,6 @@ $ `stdlib/core/rcbox.nu`
             ( __vi_set slots 1 + pos m )
         } { = pos + pos 1 }
     }
-    ( __rx_scratch_free sc )
     ? >= hit_at 0 { ^ @ ?Match { T @ Match { hit_at hit_len } } } {}
     ^ @ ?Match { F @ Match { 0 0 } }
 }
@@ -1040,7 +1002,6 @@ $ `stdlib/core/rcbox.nu`
             = pos + pos 1
         }
     }
-    ( __rx_scratch_free sc )
     ^ out
 }
 
@@ -1066,7 +1027,6 @@ $ `stdlib/core/rcbox.nu`
             = pos + pos 1
         }
     }
-    ( __rx_scratch_free sc )
     ^ out
 }
 
@@ -1092,7 +1052,6 @@ $ `stdlib/core/rcbox.nu`
             = seg_start pos
         } { = pos + pos 1 }
     }
-    ( __rx_scratch_free sc )
     // Emit final segment [seg_start..n)
     : i tail_len - n seg_start
     : String tail ( string_with_cap tail_len )

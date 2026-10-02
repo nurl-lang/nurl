@@ -2,8 +2,8 @@
 //
 // The IETF-standard binary serialization (used by COSE / WebAuthn / CTAP /
 // many IoT protocols), the sibling of MessagePack. Like ext/msgpack.nu it
-// works on the `Json` value, so every `json_*` accessor / `json_free` /
-// `json_stringify` operates on a decoded document:
+// works on the `Json` value, so every `json_*` accessor and
+// `json_stringify` operate on a decoded document:
 //
 //   ( cbor_encode Json j )       → !( Vec u ) CborErr
 //   ( cbor_decode ( Vec u ) v )  → !Json CborErr
@@ -175,21 +175,14 @@ $ `stdlib/std/bytes.nu`
 
 // ── decoder ─────────────────────────────────────────────────────────
 
+// Cursor over the input buffer (`data` borrows the caller's Vec for the
+// whole cbor_decode call). A local of cbor_decode the readers advance in
+// place (`inout`): nothing to allocate, nothing to release.
 : CborDec { s data i len i pos }
 
-@ __cd_new ( Vec u ) v → *CborDec {
-    : *CborDec p # *CborDec ( nurl_alloc Z CborDec )
-    = . p data # s ( vec_data [u] v )
-    = . p len ( vec_len [u] v )
-    = . p pos 0
-    ^ p
-}
+@ __cd_remaining inout CborDec p → i { ^ - . p len . p pos }
 
-@ __cd_free sink * CborDec p → v { ( nurl_free # s p ) }
-
-@ __cd_remaining * CborDec p → i { ^ - . p len . p pos }
-
-@ __cd_u8 * CborDec p → i {
+@ __cd_u8 inout CborDec p → i {
     : *u d # *u . p data
     : i idx . p pos
     : i bb & 255 # i . d idx
@@ -198,7 +191,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Read `nbytes` big-endian into an unsigned i64 accumulator.
-@ __cd_be * CborDec p i nbytes → i {
+@ __cd_be inout CborDec p i nbytes → i {
     : ~ i val 0
     : ~ i k 0
     ~ < k nbytes { = val + * val 256 ( __cd_u8 p ) = k + k 1 }
@@ -207,7 +200,7 @@ $ `stdlib/std/bytes.nu`
 
 // Decode the head argument for additional-info `ai` (majors 0–5). 24→1,
 // 25→2, 26→4, 27→8 length bytes; 28–30 reserved; 31 indefinite.
-@ __cd_arg * CborDec p i ai → !i CborErr {
+@ __cd_arg inout CborDec p i ai → !i CborErr {
     ? < ai 24 { ^ @ !i CborErr { T ai } } {}
     : i nbytes ? == ai 24 1 ? == ai 25 2 ? == ai 26 4 ? == ai 27 8 -1
     ? < nbytes 0 {
@@ -219,22 +212,20 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ cbor_decode ( Vec u ) v → !Json CborErr {
-    : *CborDec p ( __cd_new v )
+    : ~ CborDec p @ CborDec { # s ( vec_data [u] v ) ( vec_len [u] v ) 0 }
     : !Json CborErr r ( __cd_value p 0 )
     ?? r {
         T jv → {
             ? > ( __cd_remaining p ) 0 {
-                ( json_free jv ) ( __cd_free p )
                 ^ @ !Json CborErr { F @ CborErr { CborTrailing } }
             } {}
-            ( __cd_free p )
             ^ @ !Json CborErr { T jv }
         }
-        F e → { ( __cd_free p ) ^ @ !Json CborErr { F e } }
+        F e → { ^ @ !Json CborErr { F e } }
     }
 }
 
-@ __cd_value * CborDec p i depth → !Json CborErr {
+@ __cd_value inout CborDec p i depth → !Json CborErr {
     ? > depth CBOR_MAX_DEPTH { ^ @ !Json CborErr { F @ CborErr { CborDepth } } } {}
     ? < ( __cd_remaining p ) 1 { ^ @ !Json CborErr { F @ CborErr { CborTruncated } } } {}
     : i b ( __cd_u8 p )
@@ -257,7 +248,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Read `n` UTF-8 bytes as a JStr.
-@ __cd_text * CborDec p i n → !Json CborErr {
+@ __cd_text inout CborDec p i n → !Json CborErr {
     ? < ( __cd_remaining p ) n { ^ @ !Json CborErr { F @ CborErr { CborTruncated } } } {}
     : String s ( string_with_cap + n 1 )
     : ~ i k 0
@@ -266,7 +257,7 @@ $ `stdlib/std/bytes.nu`
     ^ @ !Json CborErr { T j }
 }
 
-@ __cd_array * CborDec p i n i depth → !Json CborErr {
+@ __cd_array inout CborDec p i n i depth → !Json CborErr {
     : Json arr ( json_arr_new )
     : ~ i k 0
     ~ < k n {
@@ -280,7 +271,7 @@ $ `stdlib/std/bytes.nu`
     ^ @ !Json CborErr { T arr }
 }
 
-@ __cd_map * CborDec p i n i depth → !Json CborErr {
+@ __cd_map inout CborDec p i n i depth → !Json CborErr {
     : Json obj ( json_obj_new )
     : ~ i k 0
     ~ < k n {
@@ -288,13 +279,12 @@ $ `stdlib/std/bytes.nu`
         ?? kv {
             T key → {
                 ? ( json_is_str key ) {} {
-                    ( json_free key )
                     ^ @ !Json CborErr { F @ CborErr { CborBadType } }
                 }
                 : !Json CborErr vv ( __cd_value p + depth 1 )
                 ?? vv {
-                    T val → { : b _ok ( json_obj_set obj ( json_str_data key ) val ) ( json_free key ) }
-                    F er → { ( json_free key ) ^ @ !Json CborErr { F er } }
+                    T val → { : b _ok ( json_obj_set obj ( json_str_data key ) val ) }
+                    F er → { ^ @ !Json CborErr { F er } }
                 }
             }
             F er → { ^ @ !Json CborErr { F er } }
@@ -305,7 +295,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Major 7: false/true/null, undefined→null, and float16/32/64.
-@ __cd_simple * CborDec p i ai → !Json CborErr {
+@ __cd_simple inout CborDec p i ai → !Json CborErr {
     ? == ai 20 { ^ @ !Json CborErr { T ( json_bool F ) } } {}
     ? == ai 21 { ^ @ !Json CborErr { T ( json_bool T ) } } {}
     ? == ai 22 { ^ @ !Json CborErr { T ( json_null ) } } {}
