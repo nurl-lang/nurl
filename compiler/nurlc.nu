@@ -10355,6 +10355,10 @@
     ( seq fname `vec_set` )
     ( seq fname `thread_spawn` )
     : ~ i arg_idx 0
+    // Containers this call mutates: their borrowed pointers go stale only
+    // once every argument has been read — `( vec_push out . op k )` reads
+    // `op` before the push (§2.10). Applied after the argument loop.
+    : ~ s __pk_defer ``
     // Space-separated 0-based indices of the callee's `inout`
     // parameters (recorded into g_fn_inout by the signature prepass and
     // when the callee is compiled). An argument at one of these positions
@@ -10743,7 +10747,7 @@
             ? & ( is_ident_tok bck_arg_tt ) ( __ptr_borrow_fn fname )
             { ( nurl_sym_def syms `__last_borrow_src__` bck_arg_val ) } {}
             ? & ( is_ident_tok bck_arg_tt ) ( __ptr_mutator fname )
-            { ( __ptr_kill bck_arg_val bck_arg_line ) } {}
+            { = __pk_defer ( nurl_str_cat4 __pk_defer `k ` bck_arg_val ( nurl_str_cat3 ` ` ( nurl_str_int bck_arg_line ) ` - - - ` ) ) } {}
         } {}
         // …and the same mutation one call deep (§2.10). A helper whose
         // summary says it mutates the container handed to THIS parameter
@@ -10757,7 +10761,7 @@
         ? ( is_ident_tok bck_arg_tt )
         { : s __pk_mut ( nurl_sym_get g_fn_mutates call_name )
             ? ( str_contains_word __pk_mut ( nurl_str_int arg_idx ) )
-            { ( __ptr_kill bck_arg_val bck_arg_line ) }
+            { = __pk_defer ( nurl_str_cat4 __pk_defer `k ` bck_arg_val ( nurl_str_cat3 ` ` ( nurl_str_int bck_arg_line ) ` - - - ` ) ) }
             {  // Not known to mutate — but for a callee that has not
                 // been compiled yet, "not known" is the whole point.
                 // Kill provisionally and park the question; the summary
@@ -10768,8 +10772,8 @@
                 & | != 0 ( nurl_sym_len2 syms fname `__arity` )
                 != 0 ( nurl_sym_len2 syms fname `__garity` )
                 ! __callee_shadowed
-                { ( __ptr_kill_pending bck_arg_val bck_arg_line
-                    call_name fname arg_idx ) }
+                { = __pk_defer ( nurl_str_cat4 ( nurl_str_cat4 __pk_defer `p ` bck_arg_val ` ` )
+                    ( nurl_str_int bck_arg_line ) ( nurl_str_cat4 ` ` call_name ` ` fname ) ( nurl_str_cat3 ` ` ( nurl_str_int arg_idx ) ` ` ) ) }
                 {} } }
         {}
         // Borrow checker: a closure binding handed to a parameter the
@@ -11654,6 +11658,16 @@
             ( nurl_str_cat rest_argstr ( nurl_str_cat4 `, ` at ` ` av ) )
         }
         = arg_idx + arg_idx 1
+    }
+    ~ != 0 ( nurl_str_len __pk_defer ) {
+        : s __pkk ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
+        : s __pkc ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
+        : s __pkl ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
+        : s __pkn ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
+        : s __pkf ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
+        : s __pki ( str_first_word __pk_defer ) = __pk_defer ( str_skip_word __pk_defer )
+        ? ( seq __pkk `k` ) { ( __ptr_kill __pkc ( nurl_str_to_int __pkl ) ) }
+        { ( __ptr_kill_pending __pkc ( nurl_str_to_int __pkl ) __pkn __pkf ( nurl_str_to_int __pki ) ) }
     }
     // Values are already in SSA arguments. Neutralize the previous owner before
     // entering the consuming callee, including on panic and conditional paths.

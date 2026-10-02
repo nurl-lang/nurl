@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pointer read as an argument of the call that mutates its container is
+  not reported stale** (`( vec_push out . op k )` reads `op` before the push).
+  `compiler/tests/stale_borrow_read_in_mutating_call.nu`.
 - **An arm whose value is an owned recursive enum (Json) drops its locals**:
   the decoded RPC envelope leaked per call in stdlib cluster.
   `compiler/tests/value_arm_recursive_enum.nu`.
