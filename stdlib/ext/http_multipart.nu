@@ -13,8 +13,8 @@
 //                                    → ( Vec MultipartPart )    OWNED
 //   ( request_multipart_parts HttpRequest req )
 //                                    → ? ( Vec MultipartPart )
-//   ( multipart_part_free  MultipartPart p )            → v
-//   ( multipart_parts_free ( Vec MultipartPart ) parts ) → v
+//   ( multipart_part_free  MultipartPart p )            → v   early release (optional)
+//   ( multipart_parts_free ( Vec MultipartPart ) parts ) → v   early release (optional)
 //   ( multipart_find_first ( Vec MultipartPart ) parts s name ) → i
 //                                                          (-1 if absent)
 //   ( multipart_count      ( Vec MultipartPart ) parts )  → i
@@ -85,16 +85,9 @@ $ `stdlib/ext/http_request.nu`
     ( Vec u ) data
 }
 
-@ multipart_part_free sink MultipartPart p → v {
-    ( string_free . p name )
-    ( string_free . p filename )
-    ( string_free . p content_type )
-    ( vec_free [u] . p data )
-}
+@ multipart_part_free sink MultipartPart p → v {}
 
-@ multipart_parts_free sink ( Vec MultipartPart ) parts → v {
-    ( vec_free_with [MultipartPart] parts \ MultipartPart p → v { ( multipart_part_free p ) } )
-}
+@ multipart_parts_free sink ( Vec MultipartPart ) parts → v {}
 
 @ multipart_count ( Vec MultipartPart ) parts → i {
     ^ ( vec_len [MultipartPart] parts )
@@ -290,7 +283,6 @@ $ `stdlib/ext/http_request.nu`
                         : String fname ( _bsubstr body line_start colon )
                         : String fvalue_raw ( _bsubstr body + colon 1 nl )
                         : String fvalue ( string_trim fvalue_raw )
-                        ( string_free fvalue_raw )
                         : String fname_lc ( string_to_lower fname )
                         : s fname_lc_raw ( string_data fname_lc )
                         ? != 0 ( nurl_str_eq fname_lc_raw `content-disposition` ) {
@@ -300,8 +292,6 @@ $ `stdlib/ext/http_request.nu`
                         ? != 0 ( nurl_str_eq fname_lc_raw `content-type` ) {
                             ( string_push_str content_type ( string_data fvalue ) )
                         } {}
-                        ( string_free fname )
-                        ( string_free fname_lc )
                     } {}
                     = line_start + nl 2
                 }
@@ -408,7 +398,6 @@ $ `stdlib/ext/http_request.nu`
                         ? > ( string_len . p name ) 0 {
                             ( vec_push [MultipartPart] parts p )
                         } {
-                            ( multipart_part_free p )
                         }
                         = pos + next_b ilen
                     }
@@ -445,15 +434,12 @@ $ `stdlib/ext/http_request.nu`
     : i mt_end ? < semi 0 n semi
     : String mt_raw ( __subraw_trim ct 0 mt_end )
     : String mt_lc ( string_to_lower mt_raw )
-    ( string_free mt_raw )
     : b is_mp != 0 ( nurl_str_eq ( string_data mt_lc ) `multipart/form-data` )
-    ( string_free mt_lc )
     ? ! is_mp { ^ out } {}
     ? < semi 0 { ^ out } {}
 
     : String params_raw ( __subraw_trim ct + semi 1 n )
     ( __extract_param ( string_data params_raw ) `boundary` out )
-    ( string_free params_raw )
     ^ out
 }
 
@@ -494,17 +480,13 @@ $ `stdlib/ext/http_request.nu`
     ?? ct {
         T ctv → {
             : String boundary ( __extract_boundary ( string_data ctv ) )
-            ( string_free ctv )
             ? > ( string_len boundary ) 0 {
                 : ( Vec MultipartPart ) parts ( parse_multipart_form . req body ( string_data boundary ) )
-                ( string_free boundary )
                 ^ @ ?( Vec MultipartPart ) { T parts }
             } {}
-            ( string_free boundary )
             ^ @ ?( Vec MultipartPart ) { F }
         }
         F miss → {
-            ( string_free miss )
             ^ @ ?( Vec MultipartPart ) { F }
         }
     }

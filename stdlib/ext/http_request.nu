@@ -17,7 +17,7 @@
 //                                                          (frees: free
 //                                                          path + query)
 //   ( parse_query s qs )                    → ( Vec QueryPair )
-//   ( query_pairs_free ( Vec QueryPair ) v ) → v
+//   ( query_pairs_free ( Vec QueryPair ) v ) → v   early release (optional)
 //
 // Note on shape: query parameters use a dedicated `QueryPair { String
 // key, String value }` struct. `( Vec ( Pair String String ) )` is
@@ -137,21 +137,11 @@ $ `stdlib/std/simd.nu`
     String query
 }
 
-@ url_split_free sink UrlSplit u → v {
-    ( string_free . u path )
-    ( string_free . u query )
-}
-
 // Owned (key, value) pair for query-string parsing. See the module
 // header note about why this isn't `Pair[String,String]`.
 : QueryPair {
     String key
     String value
-}
-
-@ query_pair_free sink QueryPair p → v {
-    ( string_free . p key )
-    ( string_free . p value )
 }
 
 // ── Internal byte-buffer helpers ──────────────────────────────────────
@@ -323,9 +313,7 @@ $ `stdlib/std/simd.nu`
 
 // ── Headers helpers ───────────────────────────────────────────────────
 
-@ headers_free sink ( Vec Header ) hs → v {
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
-}
+@ headers_free sink ( Vec Header ) hs → v {}
 
 // Direct-pointer iteration via `vec_data` + `*Header`. `vec_get
 // [Header]` is now compiler-correct (since the multi-field Option
@@ -360,14 +348,7 @@ $ `stdlib/std/simd.nu`
     }
 }
 
-@ request_free sink HttpRequest req → v {
-    ( string_free . req method )
-    ( string_free . req path )
-    ( string_free . req query )
-    ( string_free . req version )
-    ( headers_free . req headers )
-    ( vec_free [u] . req body )
-}
+@ request_free sink HttpRequest req → v {}
 
 // Empty a request for reuse, keeping every allocation: the four line
 // Strings are cleared in place, the headers move — Strings and all —
@@ -574,8 +555,6 @@ $ `stdlib/std/simd.nu`
                 } {}
                 : String key ( percent_decode ( string_data key_raw ) )
                 : String val ( percent_decode ( string_data val_raw ) )
-                ( string_free key_raw )
-                ( string_free val_raw )
                 : QueryPair p @ QueryPair { key val }
                 ( vec_push [QueryPair] out p )
             } {}
@@ -586,9 +565,7 @@ $ `stdlib/std/simd.nu`
     ^ out
 }
 
-@ query_pairs_free sink ( Vec QueryPair ) v → v {
-    ( vec_free_with [QueryPair] v \ QueryPair p → v { ( query_pair_free p ) } )
-}
+@ query_pairs_free sink ( Vec QueryPair ) v → v {}
 
 // ── Internal request-line parts ───────────────────────────────────────
 //
@@ -604,13 +581,6 @@ $ `stdlib/std/simd.nu`
     String query
     String version
     b ok
-}
-
-@ __req_line_parts_free sink ReqLineParts r → v {
-    ( string_free . r method )
-    ( string_free . r path )
-    ( string_free . r query )
-    ( string_free . r version )
 }
 
 // The allocation-free form: writes method / path / query / version into
@@ -654,7 +624,6 @@ $ `stdlib/std/simd.nu`
     : String version ( _bsubstr buf + sp2 1 line_end )
 
     : UrlSplit us ( parse_url ( string_data target ) )
-    ( string_free target )
 
     ^ @ ReqLineParts {
         method
@@ -859,7 +828,6 @@ $ `stdlib/std/simd.nu`
     ?? r {
         T consumed → { ^ @ !ParsedHeadOk HttpReqErr { T @ ParsedHeadOk { req consumed } } }
         F e → {
-            ( request_free req )
             ^ @ !ParsedHeadOk HttpReqErr { F e }
         }
     }
@@ -968,15 +936,12 @@ $ `stdlib/std/simd.nu`
             // CL.TE smuggling defence (also enforced at head parse): a body
             // with both Transfer-Encoding and Content-Length is ambiguous.
             : ?String __cl2 ( header_get . req headers `Content-Length` )
-            : b __both ?? __cl2 { T x → { ( string_free x ) T } F _ → F }
+            : b __both ?? __cl2 { T x → { T } F _ → F }
             ? __both {
-                ( string_free tev )
                 ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqMalformed }
             } {}
             : String tev_lc ( string_to_lower tev )
             : b is_chunked != 0 ( nurl_str_eq ( string_data tev_lc ) `chunked` )
-            ( string_free tev_lc )
-            ( string_free tev )
             ? is_chunked {
                 ^ ( __read_body_chunked conn max_bytes )
             } {}
@@ -992,7 +957,6 @@ $ `stdlib/std/simd.nu`
     ?? cl {
         T clv → {
             : !i ParseErr nr ( string_to_int clv )
-            ( string_free clv )
             ?? nr {
                 T clen → {
                     ? < clen 0 {
@@ -1030,7 +994,6 @@ $ `stdlib/std/simd.nu`
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ( vec_extend [u] buf chunk )
-                ( vec_free [u] chunk )
                 = remaining - remaining got
             }
             F e → {
@@ -1067,7 +1030,6 @@ $ `stdlib/std/simd.nu`
         ?? line_r {
             T line → {
                 : !i ParseErr sz ( _parse_hex_size line )
-                ( string_free line )
                 ?? sz {
                     T n → {
                         ? < n 0 { = status 0 = done T } {}
@@ -1086,7 +1048,6 @@ $ `stdlib/std/simd.nu`
                                 ?? trailer {
                                     T t → {
                                         : i tl ( string_len t )
-                                        ( string_free t )
                                         ? == tl 0 { = tdone T } {
                                             = tcount + tcount 1
                                             ? > tcount ( __max_trailer_lines_req ) {
@@ -1106,7 +1067,6 @@ $ `stdlib/std/simd.nu`
                                 ?? cr {
                                     T chunk → {
                                         ( vec_extend [u] body chunk )
-                                        ( vec_free [u] chunk )
                                         // The chunk data MUST be followed by
                                         // exactly CRLF (RFC 9112 §7.1) — an
                                         // empty line. __read_crlf_line reads
@@ -1117,7 +1077,6 @@ $ `stdlib/std/simd.nu`
                                         ?? eolr {
                                             T eol → {
                                                 : i el ( string_len eol )
-                                                ( string_free eol )
                                                 ? != el 0 { = status 0 = done T } {}
                                             }
                                             F _ → = status 0
@@ -1161,18 +1120,15 @@ $ `stdlib/std/simd.nu`
                 T chunk → {
                     : i got ( vec_len [u] chunk )
                     ? == got 0 {
-                        ( vec_free [u] chunk )
                         = status 0 = done T
                     } {
                         : i b ( _bbyte chunk 0 )
-                        ( vec_free [u] chunk )
                         = seen + seen 1
                         ? & == prev 13 == b 10 {
                             // Trim the trailing CR we already pushed.
                             : i ll ( string_len line )
                             ? > ll 0 {
                                 : String trimmed ( string_substr line 0 - ll 1 )
-                                ( string_free line )
                                 = line trimmed
                             } {}
                             = done T
@@ -1262,8 +1218,6 @@ $ `stdlib/std/simd.nu`
                 : String val_raw ( _bsubstr buf val_start k )
                 : String key ( percent_decode ( string_data key_raw ) )
                 : String val ( percent_decode ( string_data val_raw ) )
-                ( string_free key_raw )
-                ( string_free val_raw )
                 : QueryPair p @ QueryPair { key val }
                 ( vec_push [QueryPair] out p )
             } {}
@@ -1307,8 +1261,6 @@ $ `stdlib/std/simd.nu`
         T ctv → {
             : String ctv_lc ( string_to_lower ctv )
             : b is_form ( __ct_prefix_eq ctv_lc `application/x-www-form-urlencoded` )
-            ( string_free ctv_lc )
-            ( string_free ctv )
             ? is_form {
                 : ( Vec QueryPair ) pairs ( parse_form_urlencoded . req body )
                 ^ @ ?( Vec QueryPair ) { T pairs }
@@ -1316,7 +1268,6 @@ $ `stdlib/std/simd.nu`
             ^ @ ?( Vec QueryPair ) { F }
         }
         F miss → {
-            ( string_free miss )
             ^ @ ?( Vec QueryPair ) { F }
         }
     }

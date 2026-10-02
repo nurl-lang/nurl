@@ -23,7 +23,7 @@ $ `stdlib/ext/env.nu`
 @ __creds_home → String {
     : ?String h ( env_get `HOME` )
     ^ ?? h {
-        T hv → { ? > ( string_len hv ) 0 hv { ( string_free hv ) ( string_from `.` ) } }
+        T hv → { ? > ( string_len hv ) 0 hv { ( string_from `.` ) } }
         F → ( string_from `.` )
     }
 }
@@ -66,20 +66,17 @@ $ `stdlib/ext/env.nu`
                         ( string_push_char out 10 )
                     } {}
                 } {}
-                ( string_free line )
             }
             F → {}
         }
         = k + k 1
     }
-    ( vec_free [String] lines )
     ^ out
 }
 
 @ creds_get s registry → String {
     : String path ( creds_path )
     : !String IoErr rr ( read_file ( string_data path ) )
-    ( string_free path )
     : ~ String out ( string_new )
     ?? rr {
         T content → {
@@ -95,20 +92,16 @@ $ `stdlib/ext/env.nu`
                             T ti → {
                                 : String reg ( string_substr line 0 ti )
                                 ? != 0 ( nurl_str_eq ( string_data reg ) registry ) {
-                                    ( string_free out )
                                     = out ( string_substr line + ti 1 - ( string_len line ) + ti 1 )
                                 } {}
                             }
                             F → {}
                         }
-                        ( string_free line )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] lines )
-            ( string_free content )
         }
         F → {}
     }
@@ -118,7 +111,6 @@ $ `stdlib/ext/env.nu`
 @ creds_set s registry s token → !v IoErr {
     : String dir ( __creds_dir )
     : !v IoErr dr ( dir_create_all ( string_data dir ) )
-    ( string_free dir )
     ?? dr { T _ → {} F e → { ^ @ !v IoErr { F e } } }
 
     : String path ( creds_path )
@@ -126,9 +118,7 @@ $ `stdlib/ext/env.nu`
     : !String IoErr rr ( read_file ( string_data path ) )
     ?? rr {
         T content → {
-            ( string_free body )
             = body ( __creds_without content registry )
-            ( string_free content )
         }
         F → {}
     }
@@ -138,7 +128,6 @@ $ `stdlib/ext/env.nu`
     ( string_push_char body 10 )  // \n
     : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
     : !v IoErr _cm ( set_permissions ( string_data path ) 384 )  // 0600
-    ( string_free path )
     ^ wr
 }
 
@@ -152,12 +141,9 @@ $ `stdlib/ext/env.nu`
             : !v IoErr wr ( write_file ( string_data path ) ( string_data body ) )
             ?? wr { T _ → {} F _ → { = rc 1 } }
             : !v IoErr _cm ( set_permissions ( string_data path ) 384 )
-            ( string_free body )
-            ( string_free content )
         }
         F → {}  // no file → nothing to remove
     }
-    ( string_free path )
     ? != rc 0 { ^ @ !v IoErr { F # IoErr WriteFailed } } {}
     ^ @ !v IoErr { T 0 }
 }

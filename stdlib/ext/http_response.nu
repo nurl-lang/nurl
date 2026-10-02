@@ -7,7 +7,7 @@
 // API (this revision):
 //
 //   ( response_new i status )                     → HttpResponse
-//   ( http_response_free HttpResponse r )              → v
+//   ( http_response_free HttpResponse r )              → v   early release (optional)
 //   ( response_set_header  HttpResponse r s name s value ) → v
 //   ( response_add_header  HttpResponse r s name s value ) → v
 //   ( response_set_body_str   HttpResponse r s text )      → v
@@ -32,8 +32,9 @@
 // Memory model:
 //
 //   * `response_new` allocates a fresh HttpResponse with empty headers
-//     and empty body. Caller frees with `http_response_free` — cascades into
-//     every Header (name + value) and the body Vec.
+//     and empty body. Its owner drops it — every Header (name + value)
+//     and the body Vec with it; `http_response_free` is an optional
+//     early release.
 //   * `response_set_header` REPLACES any existing header with the same
 //     name (case-insensitive ASCII match per RFC 7230 §3.2). If no
 //     match exists, a fresh entry is appended. This is the right
@@ -51,12 +52,12 @@
 //   * `response_serialize` returns an OWNED `( Vec u )` containing the
 //     full HTTP/1.1 wire payload (status line + headers + blank line +
 //     body). It does NOT consume the response — caller still owns the
-//     HttpResponse and must `http_response_free` it. Auto-prepends
+//     HttpResponse. Auto-prepends
 //     `Content-Length` (computed from the body Vec) UNLESS a
 //     `Transfer-Encoding` header is present (RFC 7230 §3.3.2 forbids
 //     both at once).
 //   * Convenience helpers (`response_text` etc.) all return a fresh
-//     OWNED HttpResponse; caller frees as usual.
+//     OWNED HttpResponse.
 //   * The chunked-streaming helpers BORROW the TcpConn and the chunk
 //     bytes; nothing is moved. The transition Connection: close is
 //     not implied — caller manages keep-alive separately.
@@ -98,10 +99,8 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ http_response_free sink HttpResponse r → v {
-    ( vec_free_with [Header] . r headers \ Header h → v { ( header_free h ) } )
-    ( vec_free [u] . r body )
-}
+// Let go of `r` now rather than at the end of its owner's scope.
+@ http_response_free sink HttpResponse r → v {}
 
 // ── Header / body mutators ────────────────────────────────────────────
 
@@ -154,7 +153,7 @@ $ `stdlib/ext/json.nu`
 
 // Make `p[0..n)` the body WITHOUT copying it: the body becomes a
 // borrowed view (`vec_borrow_raw`) of the caller's buffer, the server
-// writes it in place, and `http_response_free` releases only the view,
+// writes it in place, and dropping the response releases only the view,
 // never `p`. This is the large-body fast path — a precomputed asset, a
 // cache entry, an mmap — where the copy `response_set_body_bytes` makes
 // was the whole per-byte cost of the response.
@@ -188,7 +187,6 @@ $ `stdlib/ext/json.nu`
     : String s ( json_stringify j )
     ( vec_clear [u] . r body )
     ( bytes_extend_str . r body ( string_data s ) )
-    ( string_free s )
     ? ( __has_header_ci . r headers `Content-Type` ) {} {
         ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
     }
@@ -232,7 +230,7 @@ $ `stdlib/ext/json.nu`
 
 // ── Serialisation ─────────────────────────────────────────────────────
 // Build the on-the-wire byte sequence for `r`. The output is fully
-// owned — caller frees with `( vec_free [u] out )`. Content-Length is
+// owned by the caller. Content-Length is
 // auto-prepended unless the response carries a Transfer-Encoding
 // header (RFC 7230 §3.3.2). Headers are emitted in insertion order.
 // Append `str`'s bytes to `out`, dropping any CR (13) / LF (10). Header

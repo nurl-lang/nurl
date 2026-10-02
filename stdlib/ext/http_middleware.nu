@@ -12,7 +12,7 @@
 //                          one line per request)
 //
 //   ( metrics_new )                                   → Metrics
-//   ( metrics_free Metrics m )                        → v
+//   ( metrics_free Metrics m )                        → v   early release (optional)
 //
 //   ( with_metrics  Metrics m
 //                   ( @ HttpResponse HttpRequest ) inner )
@@ -128,9 +128,7 @@ $ `stdlib/core/vec.nu`
     ^ @ Metrics { v }
 }
 
-@ metrics_free sink Metrics m → v {
-    ( vec_free [i] . m counters )
-}
+@ metrics_free sink Metrics m → v {}
 
 @ __m_inc Metrics m i idx i delta → v {
     : *i data ( vec_data [i] . m counters )
@@ -259,6 +257,5 @@ $ `stdlib/core/vec.nu`
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `text/plain; version=0.0.4; charset=utf-8` )
     ( response_set_body_str r ( string_data body ) )
-    ( string_free body )
     ^ r
 }

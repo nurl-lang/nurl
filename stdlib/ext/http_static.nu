@@ -199,17 +199,14 @@ $ `stdlib/core/vec.nu`
     // after separator-stripping (a Windows drive-letter form, which
     // path_join would otherwise honour and serve outside `dir`).
     ? | ( _has_dotdot_segment rels ) ( path_is_absolute rels ) {
-        ( string_free rel )
         ^ ( response_text 403 `forbidden\n` )
     } {}
 
     // Empty tail ("/" or all-separators) → directory index.
     : ~ String full ( path_join dir `index.html` )
     ? > ( string_len rel ) 0 {
-        ( string_free full )
         = full ( path_join dir rels )
     } {}
-    ( string_free rel )
 
     // Refuse to serve a directory entry directly (e.g. someone requested
     // `/static/css/`). file_exists returns F for directories under POSIX
@@ -228,12 +225,9 @@ $ `stdlib/core/vec.nu`
         T body → {
             : String ext ( path_extension ( string_data full ) )
             : s mime ( mime_for_ext ( string_data ext ) )
-            ( string_free ext )
-            ( string_free full )
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` mime )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → {
