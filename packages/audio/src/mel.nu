@@ -98,8 +98,6 @@ $ `stdlib/std/float.nu`
         }
         = m + m 1
     }
-    ( vec_free [f] fft_hz )
-    ( vec_free [f] edges )
     ^ w
 }
 
@@ -175,9 +173,6 @@ $ `stdlib/std/float.nu`
         }
         = fr + fr 1
     }
-    ( vec_free [f] wf )
-    ( vec_free [f] sre )
-    ( vec_free [f] sim )
     ^ out
 }
 
@@ -189,8 +184,6 @@ $ `stdlib/std/float.nu`
     : ( Vec f ) padded ( reflect_pad x / n_fft 2 )
     : FftPlan p ( fft_plan n_fft )
     : ( Vec f ) pw ( stft_power p padded win n_fft hop )
-    ( vec_free [f] win )
-    ( vec_free [f] padded )
     : i frames / ( vec_len [f] pw ) n_bins
     // whisper drops the last frame — with 30 s of audio that is what turns
     // 3001 frames into the 3000 the encoder expects
@@ -252,10 +245,6 @@ $ `stdlib/std/float.nu`
         ( vec_set [f] out k / + c 4.0 4.0 )
         = k + k 1
     }
-    ( vec_free [f] pw )
-    ( vec_free [f] fb )
-    ( vec_free [i] blo )
-    ( vec_free [i] bhi )
     ^ out
 }
 
@@ -339,8 +328,6 @@ $ `stdlib/std/float.nu`
         }
         = m + m 1
     }
-    ( vec_free [f] fft_hz )
-    ( vec_free [f] edges )
     ^ w
 }
 
@@ -352,8 +339,6 @@ $ `stdlib/std/float.nu`
     : ( Vec f ) padded ( reflect_pad x / n_fft 2 )
     : FftPlan p ( fft_plan n_fft )
     : ( Vec f ) pw ( stft_power p padded win n_fft hop )
-    ( vec_free [f] win )
-    ( vec_free [f] padded )
     : i frames / ( vec_len [f] pw ) n_bins
     : f nyq # f / rate 2
     : ( Vec f ) fb ( mel_filters_htk n_fft n_mels rate 0.0 nyq )
@@ -395,9 +380,5 @@ $ `stdlib/std/float.nu`
         }
         = fr + fr 1
     }
-    ( vec_free [f] pw )
-    ( vec_free [f] fb )
-    ( vec_free [i] blo )
-    ( vec_free [i] bhi )
     ^ out
 }

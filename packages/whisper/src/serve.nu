@@ -614,7 +614,7 @@ $ `src/run.nu`
 }
 
 // A closed utterance: transcribe it, send {"text","t0","t1"}.
-@ __srv_ws_emit TcpConn c * VadStream vs → v {
+@ __srv_ws_emit TcpConn c VadStream vs → v {
     : VadSeg g ( vad_stream_seg vs )
     : ( Vec f ) seg ( vad_stream_take vs )
     : ~ s lang g_srv_lang
@@ -687,7 +687,7 @@ $ `src/run.nu`
     = g_ws_f32 0
     ? > ( nurl_str_len g_ws_lang ) 0 { ( nurl_free g_ws_lang ) } {}
     = g_ws_lang ``
-    : *VadStream vs ( vad_stream_new 16000 ( vad_default_opts ) )
+    : VadStream vs ( vad_stream_new 16000 ( vad_default_opts ) )
     : WsLimits lim ( ws_default_limits )
     : ~ b open T
     ~ open {

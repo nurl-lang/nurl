@@ -59,6 +59,9 @@ $ `mp3tab.nu`
 : i MP3_SI_C1T 9
 : i MP3_SI_N 10
 
+// The encoder's state: a plain value on mp3_encode's stack, which every
+// stage borrows `inout`; the compiler drops its tables when the encode
+// returns, and the finished stream moves out.
 : Mp3 {
     i channels
     i rate
@@ -119,35 +122,6 @@ $ `mp3tab.nu`
     i cbits
 }
 
-@ mp3_free sink * Mp3 m → v {
-    ( vec_free [f] . m enw )
-    ( vec_free [f] . m fl )
-    ( vec_free [f] . m cosl )
-    ( vec_free [f] . m ca )
-    ( vec_free [f] . m cs )
-    ( vec_free [i] . m sfb )
-    ( vec_free [i] . m hcode )
-    ( vec_free [i] . m hlen )
-    ( vec_free [i] . m hxlen )
-    ( vec_free [i] . m hylen )
-    ( vec_free [i] . m hlinbits )
-    ( vec_free [i] . m hlinmax )
-    ( vec_free [i] . m hoff )
-    ( vec_free [i] . m sdv0 )
-    ( vec_free [i] . m sdv1 )
-    ( vec_free [i] . m idx34 )
-    ( vec_free [f] . m xbuf )
-    ( vec_free [i] . m xoff )
-    ( vec_free [f] . m sb )
-    ( vec_free [f] . m xr )
-    ( vec_free [i] . m ix )
-    ( vec_free [i] . m si )
-    ( vec_free [f] . m yw )
-    ( vec_free [f] . m mdin )
-    ( vec_free [u] . m out )
-    ( nurl_free # s m )
-}
-
 // ---------------------------------------------------------------- tables
 
 // The nine rates the format defines, in the order the header numbers them.
@@ -192,7 +166,6 @@ $ `mp3tab.nu`
         ? & < found 0 == here bitr { = found k } {}
         = k + k 1
     }
-    ( vec_free [i] t )
     ^ found
 }
 
@@ -289,7 +262,6 @@ $ `mp3tab.nu`
         = . p k ? == which 0 / c d / 1.0 d
         = k + k 1
     }
-    ( vec_free [f] src )
     ^ v
 }
 
@@ -308,16 +280,16 @@ $ `mp3tab.nu`
 
 // ---------------------------------------------------------------- the encoder
 
-@ __mp3_new i rate i channels i bitrate → !*Mp3 String {
+@ __mp3_new i rate i channels i bitrate → !Mp3 String {
     ? | < channels 1 > channels 2 {
-        ^ @ !*Mp3 String { F ( string_from `mp3: only mono and stereo exist in this format` ) }
+        ^ @ !Mp3 String { F ( string_from `mp3: only mono and stereo exist in this format` ) }
     } {}
     : i sri ( __mp3_srate_index rate )
     ? < sri 0 {
         : String e ( string_from `mp3: ` )
         ( string_push_int e rate )
         ( string_push_str e ` Hz is not an MPEG sample rate (32000/44100/48000, 16000/22050/24000, 8000/11025/12000)` )
-        ^ @ !*Mp3 String { F e }
+        ^ @ !Mp3 String { F e }
     } {}
     : i version ? < sri 3 3 ? < sri 6 2 0
     : i gpf ? == version 3 2 1
@@ -328,10 +300,9 @@ $ `mp3tab.nu`
         ( string_push_str e ` kbit/s is not a bitrate this MPEG version allows at ` )
         ( string_push_int e rate )
         ( string_push_str e ` Hz` )
-        ^ @ !*Mp3 String { F e }
+        ^ @ !Mp3 String { F e }
     } {}
-    : *Mp3 m # *Mp3 ( nurl_alloc Z Mp3 )
-    = . m channels channels
+    : ~ Mp3 m @ Mp3 { channels }
     = . m rate rate
     = . m sri sri
     = . m version version
@@ -393,13 +364,13 @@ $ `mp3tab.nu`
     = . m out ( vec_new [u] )
     = . m cache 0
     = . m cbits 0
-    ^ @ !*Mp3 String { T m }
+    ^ @ !Mp3 String { T m }
 }
 
 // ---------------------------------------------------------------- bit output
 
 // Bits go in most-significant first, which is the only order the format has.
-@ __mp3_putbits * Mp3 m i val i n → v {
+@ __mp3_putbits inout Mp3 m i val i n → v {
     : ~ i k n
     ~ > k 0 {
         = k - k 1
@@ -414,7 +385,7 @@ $ `mp3tab.nu`
     }
 }
 
-@ __mp3_bitpos * Mp3 m → i {
+@ __mp3_bitpos inout Mp3 m → i {
     ^ + * ( vec_len [u] . m out ) 8 . m cbits
 }
 
@@ -423,7 +394,7 @@ $ `mp3tab.nu`
 // 32 new samples in, 32 subband samples out. The window buffer is a ring of
 // 512: each call drops the oldest 32 and the cursor walks back by 32 (480
 // forward, modulo 512), which is why the samples go in backwards.
-@ __mp3_subband * Mp3 m ( Vec f ) pcm i npcm i pos i stride i ch i sbase → v {
+@ __mp3_subband inout Mp3 m ( Vec f ) pcm i npcm i pos i stride i ch i sbase → v {
     : *f x ( vec_data [f] . m xbuf )
     : *f ew ( vec_data [f] . m enw )
     : *f flp ( vec_data [f] . m fl )
@@ -474,13 +445,13 @@ $ `mp3tab.nu`
     }
 }
 
-@ __mp3_sb_row * Mp3 m i ch i g i k → i {
+@ __mp3_sb_row inout Mp3 m i ch i g i k → i {
     : i per + . m gpf 1
     ^ * + * + * ch per g 18 k 32
 }
 
 // Polyphase, then the MDCT of 18 previous subband samples with 18 new ones.
-@ __mp3_mdct * Mp3 m ( Vec f ) pcm i npcm i base → v {
+@ __mp3_mdct inout Mp3 m ( Vec f ) pcm i npcm i base → v {
     : i chn . m channels
     : i gpf . m gpf
     : *f sbp ( vec_data [f] . m sb )
@@ -575,7 +546,7 @@ $ `mp3tab.nu`
 // Every spectral value divided by one step size and raised to 3/4, which is
 // the companding curve the format fixes. `step` is the exponent the decoder
 // will undo; a larger step is a coarser grid and fewer bits.
-@ __mp3_quantize * Mp3 m i xrbase i ixbase i step f xrmax → i {
+@ __mp3_quantize inout Mp3 m i xrbase i ixbase i step f xrmax → i {
     : f e / # f - 0 step 4.0
     : f scale ( pow 2.0 e )
     // 8192^(4/3): past this the values no longer fit the code books, so
@@ -603,7 +574,7 @@ $ `mp3tab.nu`
     ^ mx
 }
 
-@ __mp3_ix_max * Mp3 m i ixbase i begin i end → i {
+@ __mp3_ix_max inout Mp3 m i ixbase i begin i end → i {
     : *i ixp ( vec_data [i] . m ix )
     : ~ i mx 0
     : ~ i i begin
@@ -618,7 +589,7 @@ $ `mp3tab.nu`
 // A granule ends in zeros, and before them in values of at most one. Those
 // two tails get cheaper codings than the general one, so the boundaries
 // between the three areas are worth finding exactly.
-@ __mp3_calc_runlen * Mp3 m i ixbase → v {
+@ __mp3_calc_runlen inout Mp3 m i ixbase → v {
     : *i ixp ( vec_data [i] . m ix )
     : ~ i i MP3_GRAN
     : ~ b stop F
@@ -644,7 +615,7 @@ $ `mp3tab.nu`
 
 // The quadruple area has two code books and no way to tell in advance which
 // is cheaper, so both are counted and the smaller wins.
-@ __mp3_count1_bits * Mp3 m i ixbase → i {
+@ __mp3_count1_bits inout Mp3 m i ixbase → i {
     : *i ixp ( vec_data [i] . m ix )
     : *i hl ( vec_data [i] . m hlen )
     : *i ho ( vec_data [i] . m hoff )
@@ -678,7 +649,7 @@ $ `mp3tab.nu`
 // Where the big-values area splits into its three regions. The split has to
 // land on a scalefactor band boundary, so this walks the band table down from
 // the nominal count until it finds one that fits.
-@ __mp3_subdivide * Mp3 m → v {
+@ __mp3_subdivide inout Mp3 m → v {
     ? == . m c_bigv 0 {
         = . m c_r0 0
         = . m c_r1 0
@@ -718,7 +689,7 @@ $ `mp3tab.nu`
     }
 }
 
-@ __mp3_count_bit * Mp3 m i ixbase i start i end i table → i {
+@ __mp3_count_bit inout Mp3 m i ixbase i start i end i table → i {
     ? == table 0 { ^ 0 } {}
     : *i ixp ( vec_data [i] . m ix )
     : *i hl ( vec_data [i] . m hlen )
@@ -751,7 +722,7 @@ $ `mp3tab.nu`
 // not arbitrary: the books come in families that only differ in how far they
 // reach, so the first one wide enough is the first one worth counting, and
 // only its near neighbours can beat it.
-@ __mp3_choose_table * Mp3 m i ixbase i begin i end → i {
+@ __mp3_choose_table inout Mp3 m i ixbase i begin i end → i {
     : i mx0 ( __mp3_ix_max m ixbase begin end )
     ? == mx0 0 { ^ 0 } {}
     : *i hx ( vec_data [i] . m hxlen )
@@ -817,7 +788,7 @@ $ `mp3tab.nu`
     ^ ca0
 }
 
-@ __mp3_bigv_tab_select * Mp3 m i ixbase → v {
+@ __mp3_bigv_tab_select inout Mp3 m i ixbase → v {
     = . m c_ts0 0
     = . m c_ts1 0
     = . m c_ts2 0
@@ -833,7 +804,7 @@ $ `mp3tab.nu`
     } {}
 }
 
-@ __mp3_bigv_bitcount * Mp3 m i ixbase → i {
+@ __mp3_bigv_bitcount inout Mp3 m i ixbase → i {
     : ~ i bits 0
     ? != . m c_ts0 0 {
         = bits + bits ( __mp3_count_bit m ixbase 0 . m c_a1 . m c_ts0 )
@@ -849,7 +820,7 @@ $ `mp3tab.nu`
 
 // A step size that nearly fills the frame, found by halving rather than by
 // walking: 120 candidate exponents, seven counts.
-@ __mp3_bin_search * Mp3 m i xrbase i ixbase f xrmax i desired → i {
+@ __mp3_bin_search inout Mp3 m i xrbase i ixbase f xrmax i desired → i {
     : ~ i next -120
     : ~ i count 120
     : ~ b go T
@@ -877,7 +848,7 @@ $ `mp3tab.nu`
 
 // From there, one step at a time until the granule fits. Without a masking
 // model there is nothing else to trade: the step size IS the bit allocation.
-@ __mp3_inner_loop * Mp3 m i xrbase i ixbase f xrmax i max_bits → i {
+@ __mp3_inner_loop inout Mp3 m i xrbase i ixbase f xrmax i max_bits → i {
     : ~ i bits 0
     ? < max_bits 0 { = . m c_step - . m c_step 1 } {}
     : ~ b done F
@@ -900,7 +871,7 @@ $ `mp3tab.nu`
 
 // ------------------------------------------------------------ frame assembly
 
-@ __mp3_iteration * Mp3 m → v {
+@ __mp3_iteration inout Mp3 m → v {
     : i chn . m channels
     : i gpf . m gpf
     : *f xrp ( vec_data [f] . m xr )
@@ -959,7 +930,7 @@ $ `mp3tab.nu`
 // This encoder never carries bits forward into the next frame, so whatever a
 // granule did not spend has to be spent here, as stuffing. A frame that came
 // out short is a frame the next sync word starts in the middle of.
-@ __mp3_resv_end * Mp3 m → v {
+@ __mp3_resv_end inout Mp3 m → v {
     : *i sip ( vec_data [i] . m si )
     = . m resv_drain 0
     ? & == . m channels 2 == & . m mean_bits 1 1 {
@@ -1003,7 +974,7 @@ $ `mp3tab.nu`
     } {}
 }
 
-@ __mp3_side_info * Mp3 m → v {
+@ __mp3_side_info inout Mp3 m → v {
     : *i sip ( vec_data [i] . m si )
     : i chn . m channels
     : i gpf . m gpf
@@ -1062,7 +1033,7 @@ $ `mp3tab.nu`
     }
 }
 
-@ __mp3_huffman_pair * Mp3 m i table i x0 i y0 → v {
+@ __mp3_huffman_pair inout Mp3 m i table i x0 i y0 → v {
     : *i hc ( vec_data [i] . m hcode )
     : *i hl ( vec_data [i] . m hlen )
     : *i ho ( vec_data [i] . m hoff )
@@ -1099,7 +1070,7 @@ $ `mp3tab.nu`
     }
 }
 
-@ __mp3_huffman_quad * Mp3 m i table i v0 i w0 i x0 i y0 → v {
+@ __mp3_huffman_quad inout Mp3 m i table i v0 i w0 i x0 i y0 → v {
     : *i hc ( vec_data [i] . m hcode )
     : *i hl ( vec_data [i] . m hlen )
     : *i ho ( vec_data [i] . m hoff )
@@ -1124,7 +1095,7 @@ $ `mp3tab.nu`
     ( __mp3_putbits m code cbits )
 }
 
-@ __mp3_huffman_bits * Mp3 m i gr i ch → v {
+@ __mp3_huffman_bits inout Mp3 m i gr i ch → v {
     : *i ixp ( vec_data [i] . m ix )
     : *i sip ( vec_data [i] . m si )
     : *i sf ( vec_data [i] . m sfb )
@@ -1181,7 +1152,7 @@ $ `mp3tab.nu`
     } {}
 }
 
-@ __mp3_format * Mp3 m → v {
+@ __mp3_format inout Mp3 m → v {
     : *f xrp ( vec_data [f] . m xr )
     : *i ixp ( vec_data [i] . m ix )
     : i chn . m channels
@@ -1229,7 +1200,8 @@ $ `mp3tab.nu`
 // what goes in is what a decoder gets back.
 @ mp3_encode ( Vec f ) samples i rate i channels i bitrate → !( Vec u ) String {
     ?? ( __mp3_new rate channels bitrate ) {
-        T m → {
+        T m0 → {
+            : ~ Mp3 m m0
             : i nper * . m gpf MP3_GRAN
             : i navail ( vec_len [f] samples )
             : i total / navail channels
@@ -1259,8 +1231,7 @@ $ `mp3tab.nu`
                 ( __mp3_putbits m 0 - 8 . m cbits )
             } {}
             : ( Vec u ) out . m out
-            = . m out ( vec_new [u] )
-            ( mp3_free m )
+            ( mem_take out )  // the stream leaves the encoder, not copied
             ^ @ !( Vec u ) String { T out }
         }
         F e → { ^ @ !( Vec u ) String { F e } }

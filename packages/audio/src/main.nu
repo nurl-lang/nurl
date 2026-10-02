@@ -23,7 +23,6 @@ $ `src/mp3.nu`
 @ __say String m → v {
     ( nurl_print ( string_data m ) )
     ( nurl_print `\n` )
-    ( string_free m )
 }
 
 // f32 little-endian bytes of a float vector — how a spectrogram leaves this
@@ -46,7 +45,6 @@ $ `src/mp3.nu`
             = rc 1
         }
     }
-    ( vec_free [u] d )
     ^ rc
 }
 
@@ -61,20 +59,16 @@ $ `src/mp3.nu`
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  info <file.wav>\n  mel <file.wav> -o mel.f32\n  resample <in.wav> <out.wav> --rate 16000\n  mp3 <in.wav> <out.mp3> [--bitrate 128]\n  vad <file.wav>\n  tone <out.wav> [--rate N] [--seconds S]\n` )
-        ( string_free u )
-        ( args_free p )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 2 {
         ( nurl_eprintln `usage: audio <info|mel|resample|tone> <file> … (audio --help)` )
-        ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -89,14 +83,12 @@ $ `src/mp3.nu`
     : ~ i want_rate 16000
     : String srate ( args_value_or p `rate` `16000` )
     ?? ( string_to_int srate ) { T v → { = want_rate v } F _ → {} }
-    ( string_free srate )
 
     // `tone` writes a file rather than reading one
     ? ( nurl_str_eq cmd `tone` ) {
         : ~ i secs 1
         : String ssecs ( args_value_or p `seconds` `1` )
         ?? ( string_to_int ssecs ) { T v → { = secs v } F _ → {} }
-        ( string_free ssecs )
         : i n * want_rate secs
         : ( Vec f ) x ( vec_with_cap [f] n )
         : ~ i k 0
@@ -112,12 +104,9 @@ $ `src/mp3.nu`
             T _ → {}
             F e → {
                 ( nurl_eprintln ( string_data e ) )
-                ( string_free e )
                 = rc 1
             }
         }
-        ( vec_free [f] x )
-        ( args_free p )
         ^ rc
     } {}
 
@@ -147,7 +136,6 @@ $ `src/mp3.nu`
                 : ~ i nmel 100
                 : String smel ( args_value_or p `mels` `100` )
                 ?? ( string_to_int smel ) { T v → { = nmel v } F _ → {} }
-                ( string_free smel )
                 : ( Vec f ) mono ( wav_mono w )
                 : ( Vec f ) at24 ( resample mono . w rate 24000 )
                 : ( Vec f ) mel ( log_mel_vocos at24 1024 256 nmel 24000 )
@@ -160,19 +148,12 @@ $ `src/mp3.nu`
                 ( string_push_str m ` mels → ` )
                 ( string_push_str m ( string_data o ) )
                 ( __say m )
-                ( string_free o )
-                ( vec_free [f] mono )
-                ( vec_free [f] at24 )
-                ( vec_free [f] mel )
-                ( wav_free w )
-                ( args_free p )
                 ^ rc
             } {}
             ? ( nurl_str_eq cmd `mel` ) {
                 : ~ i nmel 80
                 : String smel ( args_value_or p `mels` `80` )
                 ?? ( string_to_int smel ) { T v → { = nmel v } F _ → {} }
-                ( string_free smel )
                 : ( Vec f ) mono ( wav_mono w )
                 : ( Vec f ) at16 ( resample mono . w rate 16000 )
                 // whisper always feeds its encoder exactly 30 s
@@ -187,11 +168,6 @@ $ `src/mp3.nu`
                 ( string_push_str m ` mels → ` )
                 ( string_push_str m ( string_data o ) )
                 ( __say m )
-                ( string_free o )
-                ( vec_free [f] mono )
-                ( vec_free [f] at16 )
-                ( vec_free [f] fixed )
-                ( vec_free [f] mel )
             } {}
             ? ( nurl_str_eq cmd `vad` ) {
                 : ( Vec f ) mono ( wav_mono w )
@@ -220,15 +196,11 @@ $ `src/mp3.nu`
                 ( string_push_float m / * 100.0 # f voiced # f ? > total 0 total 1 )
                 ( string_push_str m ` % of the audio is speech` )
                 ( __say m )
-                ( vec_free [f] mono )
-                ( vec_free [f] at16 )
-                ( vec_free [VadSeg] segs )
             } {}
             ? ( nurl_str_eq cmd `mp3` ) {
                 : ~ i kbps 128
                 : String skb ( args_value_or p `bitrate` `128` )
                 ?? ( string_to_int skb ) { T v → { = kbps v } F _ → {} }
-                ( string_free skb )
                 ?? ( mp3_encode . w samples . w rate . w channels kbps ) {
                     T bytes → {
                         ?? ( write_file_bytes path2 bytes ) {
@@ -245,11 +217,9 @@ $ `src/mp3.nu`
                         ( string_push_str m ` kbit/s → ` )
                         ( string_push_str m path2 )
                         ( __say m )
-                        ( vec_free [u] bytes )
                     }
                     F e → {
                         ( nurl_eprintln ( string_data e ) )
-                        ( string_free e )
                         = rc 1
                     }
                 }
@@ -261,21 +231,14 @@ $ `src/mp3.nu`
                     T _ → {}
                     F e → {
                         ( nurl_eprintln ( string_data e ) )
-                        ( string_free e )
                         = rc 1
                     }
                 }
-                ( vec_free [f] mono )
-                ( vec_free [f] rs )
             } {}
-            ( wav_free w )
-            ( args_free p )
             ^ rc
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
-            ( args_free p )
             ^ 1
         }
     }

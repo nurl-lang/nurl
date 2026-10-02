@@ -33,9 +33,9 @@ $ `stdlib/std/float.nu`
     i bits  // as stored in the file (informational)
 }
 
-@ wav_free sink Wav w → v {
-    ( vec_free [f] . w samples )
-}
+// Let go of `w` now rather than at the end of its owner's scope. A Wav is
+// a plain value (its samples are a Vec): nothing needs releasing by hand.
+@ wav_free sink Wav w → v {}
 
 @ __wav_err s msg → !Wav String {
     ^ @ !Wav String { F ( string_from msg ) }
@@ -114,7 +114,6 @@ $ `stdlib/std/float.nu`
     ?? ( read_file_bytes path ) {
         T data → {
             : !Wav String r ( __wav_parse data )
-            ( vec_free [u] data )
             ^ r
         }
         F _ → {
@@ -354,11 +353,9 @@ $ `stdlib/std/float.nu`
     }
     ?? ( write_file_bytes path d ) {
         T _ → {
-            ( vec_free [u] d )
             ^ @ !v String { T 0 }
         }
         F _ → {
-            ( vec_free [u] d )
             ^ @ !v String { F ( string_from `wav: cannot write file` ) }
         }
     }

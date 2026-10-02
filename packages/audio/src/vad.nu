@@ -23,6 +23,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
+$ `stdlib/core/rcbox.nu`
 
 : VadSeg {
     i start  // first sample
@@ -83,7 +84,6 @@ $ `stdlib/std/sort.nu`
     ( sort_by [f] s \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
     : i idx / n 10
     : f v ( __vad_get s ? < idx n idx - n 1 )
-    ( vec_free [f] s )
     ^ v
 }
 
@@ -97,7 +97,6 @@ $ `stdlib/std/sort.nu`
     : ( Vec f ) e ( __vad_energies x rate win hop )
     : i nf ( vec_len [f] e )
     ? == nf 0 {
-        ( vec_free [f] e )
         ^ segs
     } {}
     : f floor ( __vad_floor e )
@@ -132,7 +131,6 @@ $ `stdlib/std/sort.nu`
             ( __vad_push segs run_start + last_voiced 1 hop pad n )
         } {}
     } {}
-    ( vec_free [f] e )
     ^ segs
 }
 
@@ -228,7 +226,6 @@ $ `stdlib/std/sort.nu`
 @ vad_extract ( Vec f ) x ( Vec VadSeg ) segs i max_gap → ( Vec f ) {
     : ( Vec VadRun ) runs ( vec_new [VadRun] )
     : ( Vec f ) out ( vad_extract_runs x segs max_gap runs )
-    ( vec_free [VadRun] runs )
     ^ out
 }
 
@@ -263,7 +260,7 @@ $ `stdlib/std/sort.nu`
 // has to keep adapting, because the room changes: someone turns a fan on at
 // minute ten and a frozen floor calls the fan speech forever.
 //
-//   : *VadStream st ( vad_stream_new 16000 ( vad_default_opts ) )
+//   : VadStream st ( vad_stream_new 16000 ( vad_default_opts ) )
 //   ( vad_stream_push st samples )      feed audio as it arrives
 //   ~ ( vad_stream_poll st ) {          a segment CLOSED —
 //       : VadSeg g ( vad_stream_seg st )      where it sits (absolute samples)
@@ -271,6 +268,9 @@ $ `stdlib/std/sort.nu`
 //       ...transcribe x...
 //   }
 //   ( vad_stream_flush st )             end of stream: close an open run
+//
+// A VadStream is a handle: every copy is the same stream, and the last
+// owner releases it (vad_stream_free is an optional early release).
 //
 // Same physics as the batch detector — 30 ms window / 10 ms hop, speech is
 // what stands margin_db above the floor for min_speech_ms, gaps under
@@ -289,7 +289,7 @@ $ `stdlib/std/sort.nu`
 // (nothing before the would-be pad of a future run is ever needed), so an
 // hour of quiet room costs a minute of energies and a fraction of a second
 // of samples — not an hour of either.
-: VadStream {
+: VadStreamImpl {
     ( Vec f ) buf  // unconsumed samples; buf[0] is absolute sample `base`
     i base
     i nframe  // frames processed so far (absolute)
@@ -311,8 +311,22 @@ $ `stdlib/std/sort.nu`
     i seg_end
 }
 
-@ vad_stream_new i rate VadOpts o → *VadStream {
-    : *VadStream st # *VadStream ( nurl_alloc Z VadStream )
+// A VadStream is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same stream, and the last owner releases it.
+: VadStream { s ctl }
+
+@ VadStream_share VadStream h → VadStream { ^ @ VadStream { # s ( rcbox_share # i . h ctl ) } }
+
+@ VadStream_drop sink VadStream h → v {
+    ( mem_forget h )
+    ( rcbox_release [VadStreamImpl] # i . h ctl )
+}
+
+@ __VadStream_ptr VadStream h → *VadStreamImpl { ^ ( rcbox_ptr [VadStreamImpl] # i . h ctl ) }
+
+@ vad_stream_new i rate VadOpts o → VadStream {
+    : i st__box ( rcbox_zero [VadStreamImpl] )
+    : *VadStreamImpl st ( rcbox_ptr [VadStreamImpl] st__box )
     = . st buf ( vec_new [f] )
     = . st base 0
     = . st nframe 0
@@ -332,18 +346,15 @@ $ `stdlib/std/sort.nu`
     = . st floor_at -1
     = . st seg_start -1
     = . st seg_end -1
-    ^ st
+    ^ @ VadStream { # s st__box }
 }
 
-@ vad_stream_free sink * VadStream st → v {
-    ( vec_free [f] . st buf )
-    ( vec_free [f] . st e )
-    ( nurl_free # s st )
-}
+// Let go of `st` now rather than at the end of its owner's scope.
+@ vad_stream_free sink VadStream st → v {}
 
 // The trailing-minute percentile. ~6000 energies at most; sorting a copy once
 // a second is nothing next to one second of audio.
-@ __vads_refloor * VadStream st → v {
+@ __vads_refloor * VadStreamImpl st → v {
     : i n ( vec_len [f] . st e )
     ? < n 30 { ^ {} } {}
     : ( Vec f ) s ( vec_new [f] )
@@ -355,12 +366,11 @@ $ `stdlib/std/sort.nu`
     ( sort_by [f] s \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
     : i idx / n 10
     = . st floor ( __vad_get s ? < idx n idx - n 1 )
-    ( vec_free [f] s )
     = . st floor_at . st nframe
 }
 
 // Close the run [run_frame, end_frame) into the pending segment slot.
-@ __vads_close * VadStream st i run_frame i end_frame → v {
+@ __vads_close * VadStreamImpl st i run_frame i end_frame → v {
     : ~ i s0 - * run_frame . st hop . st pad
     ? < s0 . st base { = s0 . st base } {}
     : ~ i s1 + * end_frame . st hop . st pad
@@ -373,7 +383,8 @@ $ `stdlib/std/sort.nu`
 // Feed samples. Frames are processed up to the data (or up to a pending
 // segment — one is handed over at a time, and processing resumes after
 // vad_stream_take).
-@ vad_stream_push * VadStream st ( Vec f ) x → v {
+@ vad_stream_push VadStream st__h ( Vec f ) x → v {
+    : *VadStreamImpl st ( __VadStream_ptr st__h )
     : ~ i k 0
     ~ < k ( vec_len [f] x ) {
         ( vec_push [f] . st buf ( __vad_get x k ) )
@@ -382,7 +393,7 @@ $ `stdlib/std/sort.nu`
     ( __vads_process st )
 }
 
-@ __vads_process * VadStream st → v {
+@ __vads_process * VadStreamImpl st → v {
     ~ & == . st seg_start -1
     <= + * . st nframe . st hop . st win + . st base ( vec_len [f] . st buf ) {
         : i f . st nframe
@@ -406,7 +417,6 @@ $ `stdlib/std/sort.nu`
                 ( vec_push [f] ne ( __vad_get . st e j ) )
                 = j + j 1
             }
-            ( vec_free [f] . st e )
             = . st e ne
             = . st e0 + . st e0 drop
         } {}
@@ -446,7 +456,7 @@ $ `stdlib/std/sort.nu`
 }
 
 // Drop buffer prefix below absolute sample `abs`.
-@ __vads_drop * VadStream st i abs → v {
+@ __vads_drop * VadStreamImpl st i abs → v {
     : i off - abs . st base
     ? <= off 0 { ^ {} } {}
     : ( Vec f ) nb ( vec_new [f] )
@@ -461,16 +471,21 @@ $ `stdlib/std/sort.nu`
 }
 
 // Is a closed segment waiting?
-@ vad_stream_poll * VadStream st → b { ^ != . st seg_start -1 }
+@ vad_stream_poll VadStream st__h → b {
+    : *VadStreamImpl st ( __VadStream_ptr st__h )
+    ^ != . st seg_start -1
+}
 
 // Where the pending segment sits, in absolute samples since stream start.
-@ vad_stream_seg * VadStream st → VadSeg {
+@ vad_stream_seg VadStream st__h → VadSeg {
+    : *VadStreamImpl st ( __VadStream_ptr st__h )
     ^ @ VadSeg { . st seg_start . st seg_end }
 }
 
 // The pending segment's audio. Clears the slot, releases what came before
 // it, and resumes frame processing.
-@ vad_stream_take * VadStream st → ( Vec f ) {
+@ vad_stream_take VadStream st__h → ( Vec f ) {
+    : *VadStreamImpl st ( __VadStream_ptr st__h )
     : ( Vec f ) out ( vec_new [f] )
     ? == . st seg_start -1 { ^ out } {}
     : ~ i k - . st seg_start . st base
@@ -489,7 +504,8 @@ $ `stdlib/std/sort.nu`
 
 // End of stream: close an open run (if it was ever long enough to be
 // speech). T = a segment is now pending.
-@ vad_stream_flush * VadStream st → b {
+@ vad_stream_flush VadStream st__h → b {
+    : *VadStreamImpl st ( __VadStream_ptr st__h )
     ? != . st seg_start -1 { ^ T } {}
     ? >= . st run_start 0 {
         ? >= - + . st last_voiced 1 . st run_start . st min_speech {
