@@ -42,14 +42,12 @@ $ `stdlib/ext/http_auth.nu`
         }
         = k + k 1
     }
-    ( query_pairs_free pairs )
 
     // 2. X-API-Key header
     : ?String x_api ( header_get . req headers `x-api-key` )
     ?? x_api {
         T key_val → {
             ? ( constant_time_eq ( string_data key_val ) management_key ) { = ok T } {}
-            ( string_free key_val )
         }
         F _ → {}
     }
@@ -59,7 +57,6 @@ $ `stdlib/ext/http_auth.nu`
     ?? bearer {
         T token → {
             ? ( constant_time_eq ( string_data token ) management_key ) { = ok T } {}
-            ( string_free token )
         }
         F _ → {}
     }

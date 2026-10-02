@@ -21,7 +21,7 @@ $ `service.nu`
 @ _resolve ArgParser ap s flag s env_name s fallback → String {
     : ~ String out ( _env_or env_name fallback )
     ?? ( args_value ap flag ) {
-        T v → { ( string_free out ) = out v }
+        T v → { = out v }
         F _ → {}
     }
     ^ out
@@ -45,7 +45,6 @@ $ `service.nu`
 @ _generate_key s label → String {
     : ( Vec u ) raw ( _pki_rand_bytes 24 )
     : String hex ( _pki_bytes_to_hex raw )
-    ( vec_free [u] raw )
     ( nurl_eprint `[pki-server] WARNING: no ` )
     ( nurl_eprint label )
     ( nurl_eprint ` configured — generated one for this run:\n[pki-server]   ` )
@@ -73,15 +72,12 @@ $ `service.nu`
 
     ? ( args_parse_argv ap ) {} {
         ( nurl_eprintln ( args_error ap ) )
-        ( args_free ap )
         ^ 2
     }
 
     ? ( args_present ap `help` ) {
         : String u ( args_usage ap )
         ( nurl_print ( string_data u ) )
-        ( string_free u )
-        ( args_free ap )
         ^ 0
     } {}
 
@@ -89,7 +85,6 @@ $ `service.nu`
     : String s_port ( _resolve ap `port` `PORT` `8080` )
     : ~ i port 8080
     ?? ( string_to_int s_port ) { T v → { = port v } F _ → {} }
-    ( string_free s_port )
 
     : String s_host ( _resolve ap `host` `HOST` `0.0.0.0` )
     : String ca_cert ( _resolve ap `ca-cert` `CA_CERT` `./certs/ca.crt` )
@@ -106,25 +101,18 @@ $ `service.nu`
         ( nurl_eprint `[pki-server] ERROR: unknown --algorithm '` )
         ( nurl_eprint ( string_data s_alg ) )
         ( nurl_eprintln `' (expected p256, mldsa44, mldsa65 or mldsa87)` )
-        ( string_free s_alg )
-        ( args_free ap )
         ^ 2
     } {}
-    ( string_free s_alg )
 
     : ~ String init_key ( _resolve ap `init-key` `DEVICE_INIT_KEY` `` )
     ? ( _is_placeholder_key init_key ) {
-        ( string_free init_key )
         = init_key ( _generate_key `device initialization key` )
     } {}
 
     : ~ String mgmt_key ( _resolve ap `mgmt-key` `MANAGEMENT_KEY` `` )
     ? ( _is_placeholder_key mgmt_key ) {
-        ( string_free mgmt_key )
         = mgmt_key ( _generate_key `management API key` )
     } {}
-
-    ( args_free ap )
 
     ( nurl_print `[pki-server] Initializing PKI subsystem...\n` )
     : b init_ok ( pki_service_init ( string_data ca_cert ) ( string_data ca_key ) ( string_data crl_file ) ( string_data index_file ) ( string_data initial_dir ) ( string_data certs_dir ) ( string_data init_key ) ( string_data mgmt_key ) ( string_data ca_cn ) alg )
@@ -134,16 +122,6 @@ $ `service.nu`
         ( nurl_eprintln `[pki-server]        An existing --ca-cert/--ca-key pair that fails to load is NOT` )
         ( nurl_eprintln `[pki-server]        replaced: overwriting it would invalidate every certificate` )
         ( nurl_eprintln `[pki-server]        ever issued under it. Move the old pair aside to mint a new CA.` )
-        ( string_free s_host )
-        ( string_free ca_cert )
-        ( string_free ca_key )
-        ( string_free crl_file )
-        ( string_free index_file )
-        ( string_free initial_dir )
-        ( string_free certs_dir )
-        ( string_free init_key )
-        ( string_free mgmt_key )
-        ( string_free ca_cn )
         ^ 1
     } {}
 
@@ -157,22 +135,10 @@ $ `service.nu`
     : String s_port_disp ( string_new )
     ( string_push_int s_port_disp port )
     ( nurl_print ( string_data s_port_disp ) )
-    ( string_free s_port_disp )
     ( nurl_print `\n` )
 
     : HttpApp app ( pki_build_app )
     : i rc ( http_app_listen app ( string_data s_host ) port )
-
-    ( string_free s_host )
-    ( string_free ca_cert )
-    ( string_free ca_key )
-    ( string_free crl_file )
-    ( string_free index_file )
-    ( string_free initial_dir )
-    ( string_free certs_dir )
-    ( string_free init_key )
-    ( string_free mgmt_key )
-    ( string_free ca_cn )
 
     ^ rc
 }
