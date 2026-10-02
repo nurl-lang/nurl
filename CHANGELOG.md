@@ -292,6 +292,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   −22 % instructions, level 19 −2 %, deflate+gzip −5 %, zip −5 %, `fmt2`
   −36 % (fixed-arity `fmt*` / `log_*fN` no longer copy their arguments;
   a suppressed `log_*fN` formats nothing).
+- **The HTTP / MCP / WebSocket / MQTT / SMTP / XML / serde stdlib releases
+  nothing by hand** (940 → 4 release calls in `stdlib/ext/http*`,
+  `mcp*`, `websocket`, `mqtt`, `smtp`, `xml`, `serde`, `cookies`,
+  `credentials`, `anthropic`; the 4 kept are marked with the compiler
+  finding they wait for). Raw state became library handles over an rcbox:
+  `HttpStreamState` (was `*HttpStreamState`; new `hp_stream_body`
+  accessor; the last owner closes a transport still held,
+  `hp_stream_close` closes it early), `HttpConn` (a handle; the last owner
+  closes it, `hp_conn_close` is idempotent), `HttpStream` holds the state
+  (`http_stream_close` optional), `H2Client` (its 16-word peek/poke state
+  block became fields; `h2_client_close` an optional early release,
+  `h2_client_disconnect` closes the TcpConn; new `h2_client_tcp`), the
+  HTTP/3 stream tables, MCP tasks, and the HTTP server's DoS state (the
+  server's last copy releases it, no longer `server_stop`). New
+  `h2_conn_finish` (the final flush `h2_conn_free` did). Consumed
+  arguments are `sink`: HTTP/2 client bodies, `h2_conn_new_buffered`'s
+  carry, `mcp_server_add_*` schemas, MCP task Json. Every `*_free` of
+  these modules is an optional early release; unused `url_split_free`,
+  `query_pair_free`, `ws_frame_free`, `hpack_string_free` were removed.
+  HTTP server CPU per request (instructions:u, `bench/http_server.nu`,
+  oha 100k keep-alive): HTTP/1.1 −4.6 %, HTTP/2 −2.3 %.
 - **A `sink` parameter placed in a literal moves in instead of being
   copied.** `rcbox_new [T] @ T { a b }` in a library-handle constructor
   copied every Vec / String it was handed and then dropped the original
