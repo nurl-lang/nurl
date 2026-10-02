@@ -23755,7 +23755,19 @@
         // (A cast counts when what it casts is such a binding — not a call:
         // `@ H { # s ( rcbox_new [T] @ T { a b } ) }` named `b` last, and
         // a returned H skipped `b`'s drop.)
-        ? | | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_DOT
+        // (Not a handle field of a struct this function owns — `^ @ ?V { T
+        // . x a }`: that field moves out, emptied in `x` (fld_src below), and
+        // `x` is dropped with what else it holds; skipping it leaked every
+        // other field.)
+        : ~ b __ad_field_moves F
+        ? & agg_moves_fields == fld_first_tt TT_DOT {
+            : s __adf ( nurl_sym_get syms `__last_field_read__` )
+            : s __adp ( str_first_word __adf )
+            : s __adt ( str_first_word ( str_skip_word ( str_skip_word ( str_skip_word __adf ) ) ) )
+            = __ad_field_moves & & != 0 ( nurl_str_len __adp ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) __adp )
+            & == 0 ( nurl_sym_len2 syms __adp `__pname` ) ( __is_handle_ty __adt )
+        } {}
+        ? | | ( is_ident_tok fld_first_tt ) & == fld_first_tt TT_DOT ! __ad_field_moves
         & == fld_first_tt TT_HASH == g_last_cast_direct 1
         { : s __ad ( nurl_sym_get syms `__last_ident_name__` )
             ? != 0 ( nurl_str_len __ad )

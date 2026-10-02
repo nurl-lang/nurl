@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A field of an owned local struct placed in a returned option / result
+  leaves the struct's other fields to be dropped** (`^ @ ?V { T . x a }`
+  leaked `x`'s other fields once per call — stdlib zstd).
+  `compiler/tests/field_into_returned_wrap.nu`.
 - **A parameter a function only borrows, stored into a field of a struct of
   its own, is copied** (`= . a f v`, `a` a local), as the literal
   `@ A { v }` copies it. Taken over, the caller handed its value in and the
