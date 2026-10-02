@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A parameter a function only borrows, stored into a field of a struct of
+  its own, is copied** (`= . a f v`, `a` a local), as the literal
+  `@ A { v }` copies it. Taken over, the caller handed its value in and the
+  local freed it at return while the caller still read it.
+  `compiler/tests/field_store_param_copied.nu`.
 - **A field taken out of a cursor over a payload leaves the payload's slot
   too** (`: ~ E e e0 … : V out . e f ( mem_take out )`): the payload still
   dropped the field and the Vec handed on was freed.

@@ -21735,7 +21735,22 @@
             = __fs_moved T
         } {}
     } {}
-    ? & & ! manual ! __fs_wb ! __fs_moved
+    // A parameter this function only borrows, stored into a struct of its
+    // own (`= . a f v`, `a` a local): copied, as the literal `@ A { v }`
+    // copies it. Taken over instead, the caller handed its value in and
+    // `a` freed it at return while the caller still read it.
+    : s __fs_obj0 ( nurl_sym_get syms `__last_field_obj__` )
+    : i __fs_pi ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) __fs_val )
+    : ~ b __fs_param_copy F
+    ? & & & & ( is_ident_tok __fs_tt ) ! manual ! indirect ! __fs_putback >= __fs_pi 0 {
+        ? & & & != 0 ( nurl_str_len __fs_obj0 ) < ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) __fs_obj0 ) 0
+        == 0 ( nurl_sym_len2 syms __fs_obj0 `__global` )
+        ! ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int __fs_pi ) ) {
+            = __fs_param_copy ( __clone_supported __fs_ty syms )
+        } {}
+    } {}
+    ? __fs_param_copy { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v `1` ) } {}
+    ? & & & ! manual ! __fs_wb ! __fs_moved ! __fs_param_copy
     { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v ( mem_lent_cond syms cg __fs_ty __fs_tt __fs_val ) ) } {}
     // `= . p f . am g` into memory managed by hand, from a local that still
     // owns (and will drop) its field: the hand-managed struct gets its own
@@ -21811,7 +21826,7 @@
             ( mem_udrop_flag_set syms cg __fsp __nf )
         } {}
     } {
-        ? & ( is_ident_tok __fs_tt ) ! __fs_putback { ( mem_note_kept syms cg __fs_val ! manual ) } {}
+        ? & & ( is_ident_tok __fs_tt ) ! __fs_putback ! __fs_param_copy { ( mem_note_kept syms cg __fs_val ! manual ) } {}
     }
     // `= . s f a`: `a`'s handle lives in `s` from here (the borrow checker's
     // stored-in-owner relation, bck_kill_stored_in) — a struct binding's
