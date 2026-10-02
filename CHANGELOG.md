@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An arm whose value is made of numbers drops its locals** even when it
+  ends in another `??` (stdlib noise handshakes leaked per handshake).
+  `compiler/tests/nested_arm_numbers_drops_locals.nu`.
+- **A cursor reassigned on one path takes its source's value along only where
+  it still holds it** (`: ~ V sk body … ? c { = sk … } {} … ^ @ R { sk }`
+  leaked `body` — stdlib pkey). `compiler/tests/cursor_reassigned_returned.nu`.
 - **A value a closure assigns over a binding it captured by pointer is owned
   by that binding** (`recover \ → v { = resp ( f req ) }`): the old value
   was never dropped and the new one never owned — a response leaked per

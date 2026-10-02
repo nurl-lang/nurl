@@ -9985,7 +9985,41 @@
     ? > ( int_width ll ) 0 { ^ T } {}
     ? ( seq ll `double` ) { ^ T } {}
     ? ( seq ll `float` ) { ^ T } {}
-    ^ F
+    // …or an option / result / struct of nothing but numbers (`!v i`): it
+    // cannot reference anything either. An arm ending in a nested `??` of
+    // such a value left its locals undropped (stdlib noise handshakes).
+    ^ ( __ty_numbers_only ll 0 )
+}
+
+// Is `ty` built of numbers alone — scalars, and options / results /
+// plain structs of them?
+@ __ty_numbers_only s ty0 i depth → b {
+    ? > depth 6 { ^ F } {}
+    : s ty ( nurl_llty ty0 )
+    : i n ( nurl_str_len ty )
+    ? == 0 n { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    ? | | > ( int_width ty ) 0 ( seq ty `double` ) ( seq ty `float` ) { ^ T } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s a ( __wrap_part ty 0 )
+        : s b ( __wrap_part ty 1 )
+        ? == 0 ( nurl_str_len a ) { ^ F } {}
+        ? ! ( __ty_numbers_only a + depth 1 ) { ^ F } {}
+        ^ | == 0 ( nurl_str_len b ) ( __ty_numbers_only b + depth 1 )
+    } {}
+    ? | | | != ( nurl_str_get ty 0 ) 37 ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_libh ty ) { ^ F } {}
+    ? == 0 g_root_syms { ^ F } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    ? | == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ F } {}
+    ? != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) { ^ F } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        : s ft ( nurl_sym_get g_root_syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+        ? ! ( __ty_numbers_only ft + depth 1 ) { ^ F } {}
+        = fi + fi 1
+    }
+    ^ T
 }
 
 @ bck_esc_check_call_arg i lex i syms i line s ident s fname → v {
@@ -16911,8 +16945,33 @@
         ? & != 0 ( nurl_sym_len2 syms src `__pname` ) ! ( __param_owned_slot syms src )
         { ( nurl_sym_set_deep syms `__agg_lends__` `1` )
             ( __record_param_idx syms `__fn_retpart__` ( nurl_sym_get2 syms src `__pname` ) ) } {}
-        ( mem_udrop_flag_set syms cg src `0` )
+        ( mem_alias_src_leaves syms cg src ptr )
     }
+}
+
+// The value a cursor `ptr` holds leaves with it: its source `src` stops
+// owning it — if it is still the same value. A cursor reassigned on some
+// path (`: ~ V sk body … ? c { = sk ( mk ) } {} … ^ @ R { sk }`) holds
+// another one there, and `src` still drops its own (it leaked). Asked at
+// run time by the identity of the value's first buffer.
+@ mem_alias_src_leaves i syms i cg s src s ptr → v {
+    : s st ( nurl_sym_get2 syms src `__udty` )
+    : s pt ( nurl_sym_get2 syms ptr `__udty` )
+    ? | | == 0 ( nurl_str_len st ) ! ( seq st pt ) != 0 ( nurl_str_starts st `%__opt.` ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    : s ll ( nurl_llty st )
+    : s sv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print sv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print src ) ( nurl_print `\n` )
+    : s sk ( mem_handle_key cg st sv )
+    ? == 0 ( nurl_str_len sk ) { ( mem_udrop_flag_set syms cg src `0` ) ^ v } {}
+    : s pv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print pv ) ( nurl_print ` = load ` ) ( nurl_print ll ) ( nurl_print `, ptr ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s pk ( mem_handle_key cg st pv )
+    : s ne ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print ne ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print sk ) ( nurl_print `, ` ) ( nurl_print pk ) ( nurl_print `\n` )
+    : s f ( mem_udrop_flag_get syms cg src )
+    : s nf ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = and i1 ` ) ( nurl_print f ) ( nurl_print `, ` ) ( nurl_print ne ) ( nurl_print `\n` )
+    ( mem_udrop_flag_set syms cg src nf )
 }
 
 // A payload of an option parameter taken on: that parameter is kept.
