@@ -174,14 +174,15 @@ $ `src/store.nu`
     ( vec_free_with [String] empty \ String x → v { ( string_free x ) } )
 
     // Build a model: meta + one trained version.
-    : *Meta m ( meta_new `sensor_a` `2026-07-03T00:00:00Z` )
+    : Meta m__h ( meta_new `sensor_a` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec f ) data ( make_data )
     : Scaler sc ( scaler_fit data 208 2 )
-    ( meta_set_scaler m sc )
+    ( meta_set_scaler m__h sc )
     ( scaler_apply_matrix sc data 208 2 )
     : VerModel vm ( train_one data )
 
-    ( check ( store_save_meta st `sensor_a` m ) `store: meta saved` )
+    ( check ( store_save_meta st `sensor_a` m__h ) `store: meta saved` )
     ( check ( store_save_forest st `sensor_a` vm ) `store: forest saved` )
     ( check ( store_exists st `sensor_a` ) `store: exists` )
     ( check == ( store_exists st `nope` ) F `store: missing model absent` )
@@ -195,10 +196,10 @@ $ `src/store.nu`
     ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
 
     // Reload: metadata equal, forest scores bit-exact.
-    : ?*Meta m2o ( store_load_meta st `sensor_a` )
+    : ?Meta m2o ( store_load_meta st `sensor_a` )
     ?? m2o {
         T m2 → {
-            : String s1 ( meta_to_json_str m )
+            : String s1 ( meta_to_json_str m__h )
             : String s2 ( meta_to_json_str m2 )
             ( check ( string_eq s1 s2 ) `store: metadata survives round-trip` )
             ( string_free s1 )
@@ -269,14 +270,15 @@ $ `src/store.nu`
 
     // The ring: a point at its lifetime sequence number, the oldest
     // evicted by a range delete, the whole ring replaced.
-    : *Meta pm ( meta_new `sensor_a` `2026-01-01T00:00:00Z` )
-    ( store_commit_point st `sensor_a` 100 `{"temp":1,"timestamp":100}` 0 pm )
-    ( store_commit_point st `sensor_a` 101 `{"temp":2,"timestamp":101}` 0 pm )
+    : Meta pm__h ( meta_new `sensor_a` `2026-01-01T00:00:00Z` )
+    : *MetaImpl pm ( _Meta_ptr pm__h )
+    ( store_commit_point st `sensor_a` 100 `{"temp":1,"timestamp":100}` 0 pm__h )
+    ( store_commit_point st `sensor_a` 101 `{"temp":2,"timestamp":101}` 0 pm__h )
     : ( Vec String ) pts ( store_load_points st `sensor_a` )
     ( check == ( vec_len [String] pts ) 2 `store: a point goes in at its sequence number` )
     ( vec_free_with [String] pts \ String x → v { ( string_free x ) } )
     ( check == ( store_points_count st `sensor_a` ) 2 `store: and is counted` )
-    ( store_commit_point st `sensor_a` 102 `{"temp":3,"timestamp":102}` 101 pm )
+    ( store_commit_point st `sensor_a` 102 `{"temp":3,"timestamp":102}` 101 pm__h )
     : ( Vec String ) pts_e ( store_load_points st `sensor_a` )
     ( check == ( vec_len [String] pts_e ) 2 `store: eviction drops everything older` )
     ?? ( vec_get [String] pts_e 0 ) {
@@ -294,7 +296,7 @@ $ `src/store.nu`
     : ( Vec String ) pts2 ( store_load_points st `sensor_a` )
     ( check == ( vec_len [String] pts2 ) 1 `store: the whole ring can be replaced` )
     ( vec_free_with [String] pts2 \ String x → v { ( string_free x ) } )
-    ( meta_free pm )
+    ( meta_free pm__h )
 
     // Corrupt the stored forest: load returns None.
     : ?( Vec u ) fraw ( __st_blob_get st `sensor_a` `forest:short_term` )
@@ -316,7 +318,7 @@ $ `src/store.nu`
     ( anom_vermodel_free vm )
     ( scaler_free sc )
     ( vec_free [f] data )
-    ( meta_free m )
+    ( meta_free m__h )
     ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }

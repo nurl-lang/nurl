@@ -67,11 +67,12 @@ $ `src/dynamic.nu`
     i n_versions
 }
 
-@ ingest_pt * Model mo f temp f load i idx → IngestOut {
+@ ingest_pt Model mo__h f temp f load i idx → IngestOut {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     ( json_obj_set j `load` ( json_float load ) )
-    : !Verdict String r ( model_ingest_at mo j + T0 * idx 60 )
+    : !Verdict String r ( model_ingest_at mo__h j + T0 * idx 60 )
     ( json_free j )
     ?? r {
         T vd → {
@@ -86,21 +87,23 @@ $ `src/dynamic.nu`
     }
 }
 
-@ set_all_margins * Model mo f margin → v {
-    : b a ( model_set_margin mo `short_term` margin )
-    : b b2 ( model_set_margin mo `daily` margin )
-    : b c ( model_set_margin mo `weekly` margin )
-    : b d ( model_set_margin mo `seasonal` margin )
-    : b e ( model_set_margin mo `timevector` margin )
+@ set_all_margins Model mo__h f margin → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : b a ( model_set_margin mo__h `short_term` margin )
+    : b b2 ( model_set_margin mo__h `daily` margin )
+    : b c ( model_set_margin mo__h `weekly` margin )
+    : b d ( model_set_margin mo__h `seasonal` margin )
+    : b e ( model_set_margin mo__h `timevector` margin )
 }
 
 // ── Scenario A: statistical behaviour at production limits ────────────
 
 @ test_stream Store st → v {
     = g_lcg 1
-    : *Model mo ( model_open_at st `stream` T0 )
+    : Model mo__h ( model_open_at st `stream` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ( check == ( store_exists st `stream` ) T `stream: created on first use` )
-    ( set_all_margins mo 0.17 )
+    ( set_all_margins mo__h 0.17 )
 
     : ~ b all_warming T
     : ~ b any_false_alarm F
@@ -109,7 +112,7 @@ $ `src/dynamic.nu`
     ~ <= k 100 {
         : f temp + 20.0 ( gauss3 )
         : f load + 5.0 * ( gauss3 ) 0.5
-        : IngestOut o ( ingest_pt mo temp load k )
+        : IngestOut o ( ingest_pt mo__h temp load k )
         ? < k 50 {
             ? & . o ok == . o ready F {} { = all_warming F }
         } {
@@ -121,11 +124,12 @@ $ `src/dynamic.nu`
     ( check all_warming `stream: points 1-49 warming up (ready=false)` )
     ( check ready_from_50 `stream: ready from point 50 (first train)` )
     ( check == any_false_alarm F `stream: no false alarms on 51 normal points` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm__h ( model_metadata mo__h )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm last_trained 100 `stream: schedule retrained at 100` )
 
     // The step change: extreme in both features, flagged immediately.
-    : IngestOut o101 ( ingest_pt mo 26.0 8.0 101 )
+    : IngestOut o101 ( ingest_pt mo__h 26.0 8.0 101 )
     ( check . o101 anomaly `stream: step change flagged` )
     ( check <= . o101 score -0.17 `stream: step change crosses the margin` )
     ( check == . o101 n_versions 7 `stream: verdict carries all 7 versions` )
@@ -134,7 +138,7 @@ $ `src/dynamic.nu`
     : Json probe ( json_obj_new )
     ( json_obj_set probe `temp` ( json_float 26.0 ) )
     ( json_obj_set probe `load` ( json_float 8.0 ) )
-    : !Verdict String dr ( model_detect_only mo probe )
+    : !Verdict String dr ( model_detect_only mo__h probe )
     ( json_free probe )
     ?? dr {
         T vd → {
@@ -143,7 +147,7 @@ $ `src/dynamic.nu`
         }
         F e → { ( string_free e ) ( check F `stream: detect_only succeeds` ) }
     }
-    ( model_free mo )
+    ( model_free mo__h )
 }
 
 // ── Scenario C: one absurd reading, and a reading left out ────────────
@@ -155,20 +159,21 @@ $ `src/dynamic.nu`
 
 @ test_extreme Store st → v {
     = g_lcg 7
-    : *Model mo ( model_open_at st `extreme` T0 )
+    : Model mo__h ( model_open_at st `extreme` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : ~ i k 1
     ~ <= k 60 {
-        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
+        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
         = k + k 1
     }
-    ( check ( model_is_trained mo ) `extreme: trained on 60 normal points` )
+    ( check ( model_is_trained mo__h ) `extreme: trained on 60 normal points` )
 
     // A reading the model cannot know: absent, not zero. Zero was 40
     // standard deviations below a temperature of 20 and the range guard
     // blamed a value nobody sent.
     : Json half ( json_obj_new )
     ( json_obj_set half `load` ( json_float 5.0 ) )
-    : !Verdict String hr ( model_ingest_at mo half + T0 * 61 60 )
+    : !Verdict String hr ( model_ingest_at mo__h half + T0 * 61 60 )
     ( json_free half )
     ?? hr {
         T vd → {
@@ -193,16 +198,17 @@ $ `src/dynamic.nu`
 
     // 1.0e200 goes in (it is a finite number), the model retrains over it,
     // and keeps scoring — finitely.
-    : IngestOut big ( ingest_pt mo 1.0e200 5.0 62 )
+    : IngestOut big ( ingest_pt mo__h 1.0e200 5.0 62 )
     ( check . big ok `extreme: 1.0e200 is stored` )
     ( check . big anomaly `extreme: 1.0e200 is flagged` )
     ( check ( _an_finite . big score ) `extreme: the score of 1.0e200 is finite` )
-    : i used ( model_force_train_at mo + T0 * 63 60 )
+    : i used ( model_force_train_at mo__h + T0 * 63 60 )
     ( check == used 62 `extreme: retrain over the extreme point` )
-    : IngestOut after ( ingest_pt mo 20.0 5.0 63 )
+    : IngestOut after ( ingest_pt mo__h 20.0 5.0 63 )
     ( check . after ok `extreme: scoring after the retrain does not crash` )
     ( check ( _an_finite . after score ) `extreme: the score after the retrain is finite` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm__h ( model_metadata mo__h )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     : ~ b std_ok T
     : i nsd ( vec_len [f] . mm sc_std )
     : ~ i c 0
@@ -211,29 +217,34 @@ $ `src/dynamic.nu`
         = c + c 1
     }
     ( check & > nsd 0 std_ok `extreme: every persisted std is finite and positive` )
-    ( model_free mo )
+    ( model_free mo__h )
 
     // Reopened from disk: the metadata parses, the columns are still there.
-    : *Model mo2 ( model_open_at st `extreme` + T0 * 64 60 )
-    : *Meta mm2 ( model_metadata mo2 )
+    : Model mo2__h ( model_open_at st `extreme` + T0 * 64 60 )
+    : *ModelImpl mo2 ( _Model_ptr mo2__h )
+    : Meta mm2__h ( model_metadata mo2__h )
+    : *MetaImpl mm2 ( _Meta_ptr mm2__h )
     ( check == ( vec_len [String] . mm2 feats ) 2 `extreme: the reopened model keeps its two features` )
-    ( check ( model_is_trained mo2 ) `extreme: the reopened model is trained` )
-    : IngestOut o2 ( ingest_pt mo2 20.0 5.0 64 )
+    ( check ( model_is_trained mo2__h ) `extreme: the reopened model is trained` )
+    : IngestOut o2 ( ingest_pt mo2__h 20.0 5.0 64 )
     ( check & . o2 ok ( _an_finite . o2 score ) `extreme: the reopened model scores` )
-    ( model_free mo2 )
+    ( model_free mo2__h )
 
     // A point of 1.0e308: still a finite number, still a finite score.
-    : *Model mo3 ( model_open_at st `extreme` + T0 * 65 60 )
-    : IngestOut huge ( ingest_pt mo3 1.0e308 5.0 65 )
+    : Model mo3__h ( model_open_at st `extreme` + T0 * 65 60 )
+    : *ModelImpl mo3 ( _Model_ptr mo3__h )
+    : IngestOut huge ( ingest_pt mo3__h 1.0e308 5.0 65 )
     ( check & . huge ok ( _an_finite . huge score ) `extreme: 1.0e308 scores finitely` )
-    ( model_free mo3 )
+    ( model_free mo3__h )
 
     // The reading was flagged and stored — and it did NOT set the scale.
     // Before this, one of them left the feature with a std of 1e199, and
     // every real reading standardised to nought: the feature stopped
     // being watched until the reading left the ring.
-    : *Model mo4 ( model_open_at st `extreme` + T0 * 66 60 )
-    : *Meta mm4 ( model_metadata mo4 )
+    : Model mo4__h ( model_open_at st `extreme` + T0 * 66 60 )
+    : *ModelImpl mo4 ( _Model_ptr mo4__h )
+    : Meta mm4__h ( model_metadata mo4__h )
+    : *MetaImpl mm4 ( _Meta_ptr mm4__h )
     : ~ b scale_sane F
     ?? ( vec_get [f] . mm4 sc_std 0 ) { T sd → { = scale_sane & > sd 0.01 < sd 100.0 } F _ → {} }
     ( check scale_sane `extreme: the absurd readings did not set the scale` )
@@ -245,7 +256,7 @@ $ `src/dynamic.nu`
     : Json probe ( json_obj_new )
     ( json_obj_set probe `temp` ( json_float 26.0 ) )
     ( json_obj_set probe `load` ( json_float 5.0 ) )
-    : !Verdict String pr ( model_detect_only mo4 probe )
+    : !Verdict String pr ( model_detect_only mo4__h probe )
     ( json_free probe )
     ?? pr {
         T vd → {
@@ -264,7 +275,7 @@ $ `src/dynamic.nu`
         }
         F e → { ( string_free e ) ( check F `extreme: the reopened model scores a probe` ) }
     }
-    ( model_free mo4 )
+    ( model_free mo4__h )
 }
 
 // ── Scenario D: a metadata file that does not parse ───────────────────
@@ -275,23 +286,25 @@ $ `src/dynamic.nu`
 
 @ test_corrupt_meta Store st → v {
     = g_lcg 9
-    : *Model mo ( model_open_at st `corrupt` T0 )
+    : Model mo__h ( model_open_at st `corrupt` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : ~ i k 1
     ~ <= k 55 {
-        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
+        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 * ( gauss3 ) 0.5 k )
         = k + k 1
     }
-    ( check ( model_is_trained mo ) `corrupt: trained` )
-    ( model_free mo )
+    ( check ( model_is_trained mo__h ) `corrupt: trained` )
+    ( model_free mo__h )
 
     // Break the stored metadata behind the model's back.
     ( __st_meta_put_on_test st `corrupt` `{"name": "corrupt", "created": "x", "scaler": {"mean": [null], "std": [null]}` )
 
-    : *Model mo2 ( model_open_at st `corrupt` + T0 * 56 60 )
-    ( check ! ( model_is_trained mo2 ) `corrupt: the model reopens untrained (no forest over no columns)` )
-    : IngestOut o2 ( ingest_pt mo2 20.0 5.0 56 )
+    : Model mo2__h ( model_open_at st `corrupt` + T0 * 56 60 )
+    : *ModelImpl mo2 ( _Model_ptr mo2__h )
+    ( check ! ( model_is_trained mo2__h ) `corrupt: the model reopens untrained (no forest over no columns)` )
+    : IngestOut o2 ( ingest_pt mo2__h 20.0 5.0 56 )
     ( check . o2 ok `corrupt: the reopened model takes a point without crashing` )
-    ( model_free mo2 )
+    ( model_free mo2__h )
 
     ( check ( __st_corrupt_rows_test st `corrupt` ) `corrupt: the metadata that would not parse is kept aside` )
 }
@@ -326,45 +339,47 @@ $ `src/dynamic.nu`
 // ── Scenario B: streaming mechanics at tiny limits ────────────────────
 
 @ test_mechanics Store st → v {
-    : *Model mo ( model_open_at st `mech` T0 )
-    ( model_set_limits mo 10 30 )
-    ( model_set_schedule mo 10 20 )
-    ( check ( model_set_margin mo `weekly` 0.5 ) `mech: margin update accepted` )
-    ( check == ( model_set_margin mo `nosuch` 0.5 ) F `mech: unknown version margin rejected` )
-    ( set_all_margins mo 0.5 )
-    ( check == ( model_is_trained mo ) F `mech: starts untrained` )
+    : Model mo__h ( model_open_at st `mech` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_set_limits mo__h 10 30 )
+    ( model_set_schedule mo__h 10 20 )
+    ( check ( model_set_margin mo__h `weekly` 0.5 ) `mech: margin update accepted` )
+    ( check == ( model_set_margin mo__h `nosuch` 0.5 ) F `mech: unknown version margin rejected` )
+    ( set_all_margins mo__h 0.5 )
+    ( check == ( model_is_trained mo__h ) F `mech: starts untrained` )
 
     : ~ b all_warming T
     : ~ i k 1
     ~ <= k 9 {
-        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
+        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
         ? & . o ok == . o ready F {} { = all_warming F }
         = k + k 1
     }
     ( check all_warming `mech: points 1-9 warming up` )
 
-    : IngestOut o10 ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) 10 )
+    : IngestOut o10 ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) 10 )
     ( check . o10 ready `mech: point 10 trains and is ready` )
-    ( check ( model_is_trained mo ) `mech: trained after warm-up` )
-    : *Meta mm ( model_metadata mo )
+    ( check ( model_is_trained mo__h ) `mech: trained after warm-up` )
+    : Meta mm__h ( model_metadata mo__h )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm last_trained 10 `mech: last_trained = 10` )
 
     = k 11
     ~ <= k 25 {
-        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
+        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
         = k + k 1
     }
     ( check == . mm last_trained 20 `mech: schedule retrained at 20` )
 
     // detect_only mutates nothing: not metadata, not the ring, not disk.
-    : String meta_before ( meta_to_json_str mm )
-    : i pts_before ( model_n_points mo )
+    : String meta_before ( meta_to_json_str mm__h )
+    : i pts_before ( model_n_points mo__h )
     : Json probe ( json_obj_new )
     ( json_obj_set probe `temp` ( json_float 1000.0 ) )
     ( json_obj_set probe `load` ( json_float 5.0 ) )
     ( json_obj_set probe `newcol` ( json_float 5.0 ) )
     ( json_obj_set probe `status` ( json_str_lit `newcat` ) )
-    : !Verdict String dr ( model_detect_only mo probe )
+    : !Verdict String dr ( model_detect_only mo__h probe )
     ( json_free probe )
     ?? dr {
         T vd → { ( verdict_free vd ) ( check T `mech: detect_only succeeds` ) }
@@ -374,7 +389,7 @@ $ `src/dynamic.nu`
     // as 0 it would be a value nobody sent.
     : Json half ( json_obj_new )
     ( json_obj_set half `temp` ( json_float 20.0 ) )
-    : !Verdict String hr ( model_detect_only mo half )
+    : !Verdict String hr ( model_detect_only mo__h half )
     ( json_free half )
     ?? hr {
         T vd → { ( verdict_free vd ) ( check F `mech: detect_only refuses a point without a known column` ) }
@@ -383,9 +398,9 @@ $ `src/dynamic.nu`
             ( string_free e )
         }
     }
-    : String meta_after ( meta_to_json_str mm )
+    : String meta_after ( meta_to_json_str mm__h )
     ( check ( string_eq meta_before meta_after ) `mech: detect_only leaves metadata untouched` )
-    ( check == ( model_n_points mo ) pts_before `mech: detect_only leaves the ring untouched` )
+    ( check == ( model_n_points mo__h ) pts_before `mech: detect_only leaves the ring untouched` )
     : ( Vec String ) disk_pts ( store_load_points st `mech` )
     ( check == ( vec_len [String] disk_pts ) pts_before `mech: detect_only leaves disk untouched` )
     ( vec_free_with [String] disk_pts \ String x → v { ( string_free x ) } )
@@ -395,10 +410,10 @@ $ `src/dynamic.nu`
     // Ring eviction: cap is 30, lifetime counter keeps going.
     = k 26
     ~ <= k 40 {
-        : IngestOut o ( ingest_pt mo + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
+        : IngestOut o ( ingest_pt mo__h + 20.0 ( gauss3 ) + 5.0 ( gauss3 ) k )
         = k + k 1
     }
-    ( check == ( model_n_points mo ) 30 `mech: ring capped at 30` )
+    ( check == ( model_n_points mo__h ) 30 `mech: ring capped at 30` )
     ( check == . mm n_seen 40 `mech: n_seen counts past the cap` )
     ( check == . mm n_stored 30 `mech: n_stored is the ring's fill, not the lifetime count` )
     ?? ( vec_get [i] . mo times 0 ) {
@@ -410,12 +425,14 @@ $ `src/dynamic.nu`
     ( vec_free_with [String] disk2 \ String x → v { ( string_free x ) } )
 
     // Reopen from disk: trained state, counters, schedule survive.
-    ( model_free mo )
-    : *Model mo2 ( model_open_at st `mech` + T0 * 41 60 )
-    ( model_set_limits mo2 10 30 )
-    ( check ( model_is_trained mo2 ) `mech: reopened model is trained` )
-    ( check == ( model_n_points mo2 ) 30 `mech: reopened ring intact` )
-    : *Meta mm2 ( model_metadata mo2 )
+    ( model_free mo__h )
+    : Model mo2__h ( model_open_at st `mech` + T0 * 41 60 )
+    : *ModelImpl mo2 ( _Model_ptr mo2__h )
+    ( model_set_limits mo2__h 10 30 )
+    ( check ( model_is_trained mo2__h ) `mech: reopened model is trained` )
+    ( check == ( model_n_points mo2__h ) 30 `mech: reopened ring intact` )
+    : Meta mm2__h ( model_metadata mo2__h )
+    : *MetaImpl mm2 ( _Meta_ptr mm2__h )
     ( check == . mm2 n_seen 40 `mech: reopened n_seen intact` )
     ( check == . mm2 n_stored 30 `mech: reopened n_stored intact` )
     ( check == . mm2 sched_below 10 `mech: reopened schedule intact` )
@@ -424,7 +441,7 @@ $ `src/dynamic.nu`
     : i seen_before . mm2 n_seen
     : Json badj ( json_obj_new )
     ( json_obj_set badj `temp` ( json_str_lit `not-a-number` ) )
-    : !Verdict String br ( model_ingest_at mo2 badj + T0 * 42 60 )
+    : !Verdict String br ( model_ingest_at mo2__h badj + T0 * 42 60 )
     ( json_free badj )
     ?? br {
         T vd → { ( verdict_free vd ) ( check F `mech: bad numeric rejected` ) }
@@ -433,15 +450,15 @@ $ `src/dynamic.nu`
     ( check == . mm2 n_seen seen_before `mech: rejected point not counted` )
 
     // Reset: data and forests gone, identity/schedule kept.
-    ( model_reset mo2 )
-    ( check == ( model_n_points mo2 ) 0 `mech: reset drops the ring` )
-    ( check == . ( model_metadata mo2 ) n_stored 0 `mech: reset zeroes n_stored` )
-    ( check == ( model_is_trained mo2 ) F `mech: reset drops the forests` )
-    ( check == . ( model_metadata mo2 ) sched_below 10 `mech: reset keeps the schedule` )
+    ( model_reset mo2__h )
+    ( check == ( model_n_points mo2__h ) 0 `mech: reset drops the ring` )
+    ( check == . ( _Meta_ptr ( model_metadata mo2__h ) ) n_stored 0 `mech: reset zeroes n_stored` )
+    ( check == ( model_is_trained mo2__h ) F `mech: reset drops the forests` )
+    ( check == . ( _Meta_ptr ( model_metadata mo2__h ) ) sched_below 10 `mech: reset keeps the schedule` )
     ( check ( store_exists st `mech` ) `mech: reset keeps the model` )
 
     // Delete: everything gone.
-    ( model_free mo2 )
+    ( model_free mo2__h )
     ( check ( model_delete st `mech` ) `mech: delete` )
     ( check == ( store_exists st `mech` ) F `mech: deleted model gone` )
 }

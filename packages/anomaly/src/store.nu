@@ -844,9 +844,10 @@ $ `deps/iforest/src/iforest.nu`
     ^ ok
 }
 
-@ store_save_meta Store st s name * Meta m → b {
+@ store_save_meta Store st s name Meta m__h → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ? . st ok {} { ^ F }
-    : String txt ( meta_to_json_str m )
+    : String txt ( meta_to_json_str m__h )
     : ~ b ok F
     ?? ( __st_conn st ) {
         F _ → {}
@@ -856,8 +857,8 @@ $ `deps/iforest/src/iforest.nu`
     ^ ok
 }
 
-@ store_load_meta Store st s name → ?*Meta {
-    ? . st ok {} { ^ @ ?*Meta { F } }
+@ store_load_meta Store st s name → ?Meta {
+    ? . st ok {} { ^ @ ?Meta { F } }
     : ~ b found F
     : ~ String txt ( string_new )
     ?? ( __st_conn st ) {
@@ -881,8 +882,8 @@ $ `deps/iforest/src/iforest.nu`
             }
         }
     }
-    ? found {} { ( string_free txt ) ^ @ ?*Meta { F } }
-    : ?*Meta m ( meta_from_json_str ( string_data txt ) )
+    ? found {} { ( string_free txt ) ^ @ ?Meta { F } }
+    : ?Meta m ( meta_from_json_str ( string_data txt ) )
     ( string_free txt )
     ^ m
 }
@@ -987,8 +988,9 @@ $ `deps/iforest/src/iforest.nu`
     }
 }
 
-@ store_save_fc Store st s name * FcModel fc → b {
-    : String txt ( fc_to_json_str fc )
+@ store_save_fc Store st s name FcModel fc__h → b {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
+    : String txt ( fc_to_json_str fc__h )
     : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
     : b ok ( __st_blob_put st name ANOM_KIND_FC data )
     ( vec_free [u] data )
@@ -996,13 +998,13 @@ $ `deps/iforest/src/iforest.nu`
     ^ ok
 }
 
-@ store_load_fc Store st s name → ?*FcModel {
+@ store_load_fc Store st s name → ?FcModel {
     ?? ( __st_blob_get st name ANOM_KIND_FC ) {
-        F _ → { ^ @ ?*FcModel { F } }
+        F _ → { ^ @ ?FcModel { F } }
         T data → {
             : String txt ( string_from_bytes ( vec_data [u] data ) ( vec_len [u] data ) )
             ( vec_free [u] data )
-            : ?*FcModel m ( fc_from_json_str ( string_data txt ) )
+            : ?FcModel m ( fc_from_json_str ( string_data txt ) )
             ( string_free txt )
             ^ m
         }
@@ -1194,9 +1196,10 @@ $ `deps/iforest/src/iforest.nu`
 // A crash between them would leave the ring and `n_seen` disagreeing, and
 // another thread must never read the ring half-updated. `evict_before` is
 // the lifetime number of the oldest row to keep (0 evicts nothing).
-@ store_commit_point Store st s name i seq s line i evict_before * Meta m → b {
+@ store_commit_point Store st s name i seq s line i evict_before Meta m__h → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ? . st ok {} { ^ F }
-    : String txt ( meta_to_json_str m )
+    : String txt ( meta_to_json_str m__h )
     : ~ b ok F
     ?? ( __st_conn st ) {
         F _ → {}
@@ -1602,7 +1605,7 @@ $ `deps/iforest/src/iforest.nu`
     ( string_free log )
     : ~ i seen ( vec_len [String] lines )
     ?? ( meta_from_json_str ( string_data meta ) ) {
-        T m → { = seen . m n_seen ( meta_free m ) }
+        T m → { = seen . ( _Meta_ptr m ) n_seen }
         F _ → {}
     }
     : ~ i base - seen ( vec_len [String] lines )
@@ -1938,7 +1941,7 @@ $ `deps/iforest/src/iforest.nu`
     ? > ( string_len meta ) 0 {} { ( string_free meta ) ^ F }
     : ~ i seen 0
     ?? ( meta_from_json_str ( string_data meta ) ) {
-        T m → { = seen . m n_seen ( meta_free m ) }
+        T m → { = seen . ( _Meta_ptr m ) n_seen }
         F _ → {}
     }
     : ( Vec String ) lines ( store_load_points src name )

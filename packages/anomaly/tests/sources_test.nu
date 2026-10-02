@@ -581,9 +581,10 @@ b,2.5`
 // The first train of a model that arrived as a whole calibrates its
 // margins once; a second call, and a later run, leave them alone.
 @ test_autotune Store st → v {
-    : *Model mo ( model_open_at st `tuned` 1000 )
-    ( model_set_limits mo 10 150000 )
-    ( model_set_schedule mo 100000 100000 )
+    : Model mo__h ( model_open_at st `tuned` 1000 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_set_limits mo__h 10 150000 )
+    ( model_set_schedule mo__h 100000 100000 )
     : ~ i k 0
     : ~ i seed 5
     ~ < k 120 {
@@ -591,33 +592,34 @@ b,2.5`
         : Json j ( json_obj_new )
         ( json_obj_set j `t` ( json_float + 20.0 / # f % seed 1000 100.0 ) )
         ( json_obj_set j `p` ( json_float + 1000.0 / # f % + seed 77 1000 50.0 ) )
-        : !Verdict String r ( model_ingest_at mo j + 1000 * k 60 )
+        : !Verdict String r ( model_ingest_at mo__h j + 1000 * k 60 )
         ?? r { T vd → { ( verdict_free vd ) } F e → { ( string_free e ) } }
         ( json_free j )
         = k + k 1
     }
-    : i tr ( model_force_train_at mo + 1000 * 120 60 )
+    : i tr ( model_force_train_at mo__h + 1000 * 120 60 )
     ( check > tr 0 `autotune: trained` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm__h ( model_metadata mo__h )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm tuned_at 0 `autotune: never tuned yet` )
-    : f before ( meta_version_margin mm `short_term` -1.0 )
-    ( check ! ( model_autotune_at mo 0.005 9998 ) `autotune: a rate that would flag no row of 120 does nothing` )
+    : f before ( meta_version_margin mm__h `short_term` -1.0 )
+    ( check ! ( model_autotune_at mo__h 0.005 9998 ) `autotune: a rate that would flag no row of 120 does nothing` )
     ( check == . mm tuned_at 0 `autotune: and leaves the model untuned for a bigger ring` )
-    ( check ( model_autotune_at mo 0.05 9999 ) `autotune: the first train calibrates` )
+    ( check ( model_autotune_at mo__h 0.05 9999 ) `autotune: the first train calibrates` )
     ( check == . mm tuned_at 9999 `autotune: and remembers when` )
-    : f after ( meta_version_margin mm `short_term` -1.0 )
+    : f after ( meta_version_margin mm__h `short_term` -1.0 )
     ( check ! ( near before after ) `autotune: the margin moved` )
-    ( check ! ( model_autotune_at mo 0.05 10000 ) `autotune: a second call does nothing` )
+    ( check ! ( model_autotune_at mo__h 0.05 10000 ) `autotune: a second call does nothing` )
     ( check == . mm tuned_at 9999 `autotune: the first time stands` )
-    ( check ! ( model_autotune_at mo 0.0 10001 ) `autotune: rate 0 does nothing` )
+    ( check ! ( model_autotune_at mo__h 0.0 10001 ) `autotune: rate 0 does nothing` )
     // the metadata carries it
-    : String js ( meta_to_json_str mm )
+    : String js ( meta_to_json_str mm__h )
     ?? ( meta_from_json_str ( string_data js ) ) {
-        T m2 → { ( check == . m2 tuned_at 9999 `autotune: tuned_at survives the JSON round trip` ) ( meta_free m2 ) }
+        T m2 → { ( check == . ( _Meta_ptr m2 ) tuned_at 9999 `autotune: tuned_at survives the JSON round trip` ) ( meta_free m2 ) }
         F _ → { ( check F `autotune: metadata parses back` ) }
     }
     ( string_free js )
-    ( model_free mo )
+    ( model_free mo__h )
 }
 
 // ── run ───────────────────────────────────────────────────────────────
@@ -669,12 +671,13 @@ b,2.5`
         F _ → { ( check F `run: reload` ) }
     }
     ( check ( store_exists st `helsinki_weather` ) `run: the model exists now` )
-    : *Model mo ( model_open st `helsinki_weather` )
-    ( check == ( model_n_points mo ) 3 `run: the model holds three points` )
-    ( check == ( model_last_ts mo ) T_0600 `run: the newest point carries the observation's clock` )
-    : *Meta mm . mo meta
+    : Model mo__h ( model_open st `helsinki_weather` )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( check == ( model_n_points mo__h ) 3 `run: the model holds three points` )
+    ( check == ( model_last_ts mo__h ) T_0600 `run: the newest point carries the observation's clock` )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ( check ! . mm count_clock `run: a time clock` )
-    ( model_free mo )
+    ( model_free mo__h )
 
     // The same rows again, in the window the next run would ask for:
     // every row lies before it, so nothing lands twice.
@@ -684,9 +687,10 @@ b,2.5`
     ( check == ( jint r2 `ingested` ) 0 `run: nothing ingested twice` )
     ( check == ( jint r2 `skipped_outside` ) 3 `run: the rows were outside the window` )
     ( json_free r2 )
-    : *Model mo2 ( model_open st `helsinki_weather` )
-    ( check == ( model_n_points mo2 ) 3 `run: still three points` )
-    ( model_free mo2 )
+    : Model mo2__h ( model_open st `helsinki_weather` )
+    : *ModelImpl mo2 ( _Model_ptr mo2__h )
+    ( check == ( model_n_points mo2__h ) 3 `run: still three points` )
+    ( model_free mo2__h )
 
     // A backfill window ending before first_time takes only what lies
     // there: nothing from this fixture, and first_time moves back.
@@ -705,7 +709,8 @@ b,2.5`
     }
 
     // Only the chosen features land: lat and lon were not chosen.
-    : *Model mo3 ( model_open st `helsinki_weather` )
+    : Model mo3__h ( model_open st `helsinki_weather` )
+    : *ModelImpl mo3 ( _Model_ptr mo3__h )
     ?? ( vec_get [String] . mo3 lines 0 ) {
         T line → {
             ( check ( string_contains line `"t2m"` ) `run: t2m stored` )
@@ -714,7 +719,7 @@ b,2.5`
         }
         F _ → { ( check F `run: stored line` ) }
     }
-    ( model_free mo3 )
+    ( model_free mo3__h )
 
     // A fetch that fails leaves the error on the record and the model alone.
     : Json e1 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { F ( string_from `HTTP 400 from the service: bad place` ) } w F + now 800 )
@@ -946,8 +951,9 @@ b,2.5`
         }
         F _ → { ( check F `type run: reload` ) }
     }
-    : *Model mo ( model_open st `dwd_t2m` )
-    ( check == ( model_n_points mo ) 3 `type run: model holds three points` )
+    : Model mo__h ( model_open st `dwd_t2m` )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( check == ( model_n_points mo__h ) 3 `type run: model holds three points` )
     : Json mj ( meta_to_json . mo meta )
     ?? ( json_obj_get mj `column_types` ) {
         T ct → {
@@ -967,7 +973,7 @@ b,2.5`
         }
         F _ → { ( check F `type run: stored line` ) }
     }
-    ( model_free mo )
+    ( model_free mo__h )
     : b _d ( source_delete ORG ( string_data id ) )
     ( string_free id )
 }

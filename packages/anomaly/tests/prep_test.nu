@@ -51,11 +51,12 @@ $ `src/prep.nu`
 // ── 1. Golden mixed-type record ───────────────────────────────────────
 
 @ test_golden → v {
-    : *Meta m ( meta_new `t1` `2026-07-03T00:00:00Z` )
+    : Meta m__h ( meta_new `t1` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r ( json_parse `{"temp": 21.5, "status": "ok", "when": "2026-07-03T12:34:56Z", "timestamp": "2026-07-03T12:00:00Z"}` )
     ?? r {
         T j → {
-            : !EncPoint String er ( anomaly_preprocess m j )
+            : !EncPoint String er ( anomaly_preprocess m__h j )
             ?? er {
                 T p → {
                     ( check == ( vec_len [f] . p vals ) 8 `golden: 8 features (timestamp key skipped)` )
@@ -80,7 +81,7 @@ $ `src/prep.nu`
                 }
             }
             // Derived feature order: cols first-seen, canonical expansion.
-            : ( Vec String ) fs ( meta_derived_feats m )
+            : ( Vec String ) fs ( meta_derived_feats m__h )
             ( check == ( vec_len [String] fs ) 8 `golden: derived feature count` )
             ( check ( feat_eq fs 0 `temp` ) `golden: feat[0] temp` )
             ( check ( feat_eq fs 1 `status_ok` ) `golden: feat[1] status_ok` )
@@ -90,12 +91,12 @@ $ `src/prep.nu`
             // is a date, not a cycle: eight days keep the hour pair only,
             // three weeks add the weekday pair, an unknown span keeps all.
             = . m train_span * 8 86400
-            : ( Vec String ) f8 ( meta_derived_feats m )
+            : ( Vec String ) f8 ( meta_derived_feats m__h )
             ( check == ( vec_len [String] f8 ) 4 `cycles: eight days keep only the hour pair` )
             ( check ( feat_eq f8 3 `when_hour_cos` ) `cycles: the pair is hour sin/cos` )
             ( vec_free_with [String] f8 \ String x → v { ( string_free x ) } )
             = . m train_span * 21 86400
-            : ( Vec String ) f21 ( meta_derived_feats m )
+            : ( Vec String ) f21 ( meta_derived_feats m__h )
             ( check == ( vec_len [String] f21 ) 6 `cycles: three weeks add the weekday pair` )
             ( check ( feat_eq f21 5 `when_weekday_cos` ) `cycles: weekday follows hour` )
             ( vec_free_with [String] f21 \ String x → v { ( string_free x ) } )
@@ -104,21 +105,22 @@ $ `src/prep.nu`
         }
         F _ → { ( check F `golden: test json parses` ) }
     }
-    ( meta_free m )
+    ( meta_free m__h )
 }
 
 // ── 1b. Calendar features read the clock the stamp was written in ─────
 
 // The hour_sin/hour_cos pair of `stamp`'s encoding, as (sin, cos) of the
 // hour it names; -999999 when the stamp is rejected.
-@ hour_of * Meta m s stamp → f {
+@ hour_of Meta m__h s stamp → f {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : String src ( string_from `{"when": "` )
     ( string_push_str src stamp )
     ( string_push_str src `"}` )
     : ~ f got -999999.0
     ?? ( json_parse ( string_data src ) ) {
         T j → {
-            ?? ( anomaly_preprocess m j ) {
+            ?? ( anomaly_preprocess m__h j ) {
                 T p → {
                     // atan2 of the pair gives the angle back; 24·angle/2π is the hour.
                     : f ang ( float_atan2 ( enc_val p `when_hour_sin` ) ( enc_val p `when_hour_cos` ) )
@@ -138,26 +140,27 @@ $ `src/prep.nu`
 }
 
 @ test_calendar_clock → v {
-    : *Meta m ( meta_new `t1b` `2026-07-03T00:00:00Z` )
+    : Meta m__h ( meta_new `t1b` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     // Midnight in +03:00 is midnight to the sender, not 21:00 UTC.
-    ( check ( feq ( hour_of m `2026-08-01T00:00:00+03:00` ) 0.0 ) `calendar: +03:00 midnight is hour 0` )
-    ( check ( feq ( hour_of m `2026-08-01T00:00:00-05:30` ) 0.0 ) `calendar: -05:30 midnight is hour 0` )
-    ( check ( feq ( hour_of m `2026-08-01T23:00:00Z` ) 23.0 ) `calendar: Z is UTC` )
-    ( check ( feq ( hour_of m `2026-08-01T07:15:00` ) 7.0 ) `calendar: no designator = as written` )
-    ( check ( feq ( hour_of m `2026-08-01T07:15:00.250+02:00` ) 7.0 ) `calendar: fraction before the offset` )
+    ( check ( feq ( hour_of m__h `2026-08-01T00:00:00+03:00` ) 0.0 ) `calendar: +03:00 midnight is hour 0` )
+    ( check ( feq ( hour_of m__h `2026-08-01T00:00:00-05:30` ) 0.0 ) `calendar: -05:30 midnight is hour 0` )
+    ( check ( feq ( hour_of m__h `2026-08-01T23:00:00Z` ) 23.0 ) `calendar: Z is UTC` )
+    ( check ( feq ( hour_of m__h `2026-08-01T07:15:00` ) 7.0 ) `calendar: no designator = as written` )
+    ( check ( feq ( hour_of m__h `2026-08-01T07:15:00.250+02:00` ) 7.0 ) `calendar: fraction before the offset` )
     ( check == ( _an_iso_offset `2026-08-01T00:00:00+0300` ) 10800 `calendar: offset without colon` )
     ( check == ( _an_iso_offset `2026-08-01T00:00:00-05:30` ) -19800 `calendar: negative offset` )
     ( check == ( _an_iso_offset `2026-08-01T00:00:00Z` ) 0 `calendar: Z offset 0` )
-    ( check ! ( meta_retrain_required m ) `calendar: a current model needs no retrain` )
+    ( check ! ( meta_retrain_required m__h ) `calendar: a current model needs no retrain` )
 
     // A model stored under encoding 1 still encodes its points the old
     // way (its frozen feature order names them) and says so.
     = . m feat_enc 1
-    ( meta_refresh_feats m )
-    ( check ( meta_retrain_required m ) `calendar: encoding-1 model needs a retrain` )
+    ( meta_refresh_feats m__h )
+    ( check ( meta_retrain_required m__h ) `calendar: encoding-1 model needs a retrain` )
     ?? ( json_parse `{"when": "2026-08-01T00:00:00+03:00"}` ) {
         T j → {
-            ?? ( anomaly_preprocess m j ) {
+            ?? ( anomaly_preprocess m__h j ) {
                 T p → {
                     ( check ( feq ( enc_val p `when_hour` ) 21.0 ) `calendar: encoding 1 keeps its UTC hour` )
                     ( check ( feq ( enc_val p `when_day` ) 31.0 ) `calendar: encoding 1 keeps day-of-month` )
@@ -169,21 +172,22 @@ $ `src/prep.nu`
         }
         F _ → {}
     }
-    : ( Vec String ) fs ( meta_derived_feats m )
+    : ( Vec String ) fs ( meta_derived_feats m__h )
     ( check ( feat_eq fs 0 `when_hour` ) `calendar: encoding 1 keeps its feature names` )
     ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
-    ( meta_free m )
+    ( meta_free m__h )
 }
 
 // ── 2. Category growth is deterministic and sorted ────────────────────
 
 @ test_categories → v {
-    : *Meta m ( meta_new `t2` `2026-07-03T00:00:00Z` )
+    : Meta m__h ( meta_new `t2` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r1 ( json_parse `{"status": "warn"}` )
     : !Json JsonError r2 ( json_parse `{"status": "alert"}` )
     ?? r1 {
         T j1 → {
-            : !EncPoint String e1 ( anomaly_preprocess m j1 )
+            : !EncPoint String e1 ( anomaly_preprocess m__h j1 )
             ?? e1 { T p → { ( enc_free p ) } F e → { ( string_free e ) } }
             ( json_free j1 )
         }
@@ -191,7 +195,7 @@ $ `src/prep.nu`
     }
     ?? r2 {
         T j2 → {
-            : !EncPoint String e2 ( anomaly_preprocess m j2 )
+            : !EncPoint String e2 ( anomaly_preprocess m__h j2 )
             ?? e2 {
                 T p → {
                     // Both categories known now; "alert" is hot.
@@ -206,28 +210,29 @@ $ `src/prep.nu`
         F _ → {}
     }
     // Sorted order: alert before warn regardless of arrival order.
-    : ( Vec String ) fs ( meta_derived_feats m )
+    : ( Vec String ) fs ( meta_derived_feats m__h )
     ( check ( feat_eq fs 0 `status_alert` ) `cats: sorted feat[0] status_alert` )
     ( check ( feat_eq fs 1 `status_warn` ) `cats: sorted feat[1] status_warn` )
     ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
-    ( meta_free m )
+    ( meta_free m__h )
 }
 
 // ── 3. Frozen projection: stability rule ──────────────────────────────
 
 @ test_projection → v {
-    : *Meta m ( meta_new `t3` `2026-07-03T00:00:00Z` )
+    : Meta m__h ( meta_new `t3` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r1 ( json_parse `{"a": 1, "status": "ok"}` )
     ?? r1 {
         T j1 → {
-            : !EncPoint String e1 ( anomaly_preprocess m j1 )
+            : !EncPoint String e1 ( anomaly_preprocess m__h j1 )
             ?? e1 { T p → { ( enc_free p ) } F e → { ( string_free e ) } }
             ( json_free j1 )
         }
         F _ → {}
     }
-    ( meta_refresh_feats m )
-    ( check ( meta_is_frozen m ) `proj: frozen after refresh` )
+    ( meta_refresh_feats m__h )
+    ( check ( meta_is_frozen m__h ) `proj: frozen after refresh` )
     : i nfroz ( vec_len [String] . m feats )
     ( check == nfroz 2 `proj: frozen order has 2 features` )
 
@@ -236,7 +241,7 @@ $ `src/prep.nu`
     : !Json JsonError r2 ( json_parse `{"status": "zzz", "extra": 9.0}` )
     ?? r2 {
         T j2 → {
-            : !EncPoint String e2 ( anomaly_preprocess m j2 )
+            : !EncPoint String e2 ( anomaly_preprocess m__h j2 )
             ?? e2 {
                 T p → {
                     : ( Vec f ) x ( anomaly_project p . m feats )
@@ -254,20 +259,21 @@ $ `src/prep.nu`
     }
     // Metadata itself kept learning (new col + category recorded for the
     // next retrain), even though the frozen order didn't move.
-    : ( Vec String ) fs ( meta_derived_feats m )
+    : ( Vec String ) fs ( meta_derived_feats m__h )
     ( check == ( vec_len [String] fs ) 4 `proj: metadata still learns (4 derived feats)` )
     ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
-    ( meta_free m )
+    ( meta_free m__h )
 }
 
 // ── 4. Numeric parse failure is a hard error ──────────────────────────
 
 @ test_numeric_error → v {
-    : *Meta m ( meta_new `t4` `2026-07-03T00:00:00Z` )
+    : Meta m__h ( meta_new `t4` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r1 ( json_parse `{"temp": 1.0}` )
     ?? r1 {
         T j1 → {
-            : !EncPoint String e1 ( anomaly_preprocess m j1 )
+            : !EncPoint String e1 ( anomaly_preprocess m__h j1 )
             ?? e1 { T p → { ( enc_free p ) } F e → { ( string_free e ) } }
             ( json_free j1 )
         }
@@ -276,7 +282,7 @@ $ `src/prep.nu`
     : !Json JsonError r2 ( json_parse `{"temp": "abc"}` )
     ?? r2 {
         T j2 → {
-            : !EncPoint String e2 ( anomaly_preprocess m j2 )
+            : !EncPoint String e2 ( anomaly_preprocess m__h j2 )
             ?? e2 {
                 T p → { ( enc_free p ) ( check F `numerr: bad value rejected` ) }
                 F e → {
@@ -289,7 +295,7 @@ $ `src/prep.nu`
         }
         F _ → {}
     }
-    ( meta_free m )
+    ( meta_free m__h )
 }
 
 // ── 5. Scaler: fit / apply / inverse / zero-variance ──────────────────
@@ -331,9 +337,10 @@ $ `src/prep.nu`
     ( vec_free [f] data )
 
     // Round-trip through metadata (mean/std persisted, rebuilt as inv_std).
-    : *Meta m ( meta_new `t5` `2026-07-03T00:00:00Z` )
-    ( meta_set_scaler m sc )
-    : Scaler sc2 ( meta_scaler m )
+    : Meta m__h ( meta_new `t5` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
+    ( meta_set_scaler m__h sc )
+    : Scaler sc2 ( meta_scaler m__h )
     ?? ( vec_get [f] . sc inv_std 0 ) {
         T a0 → {
             ?? ( vec_get [f] . sc2 inv_std 0 ) {
@@ -345,44 +352,45 @@ $ `src/prep.nu`
     }
     ( scaler_free sc2 )
     ( scaler_free sc )
-    ( meta_free m )
+    ( meta_free m__h )
 }
 
 // ── 6. Metadata JSON round-trip is byte-stable ────────────────────────
 
 @ test_meta_roundtrip → v {
-    : *Meta m ( meta_new `t6` `2026-07-03T00:00:00Z` )
+    : Meta m__h ( meta_new `t6` `2026-07-03T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : !Json JsonError r1 ( json_parse `{"temp": 21.5, "status": "ok", "when": "2026-07-03T12:34:56Z"}` )
     ?? r1 {
         T j1 → {
-            : !EncPoint String e1 ( anomaly_preprocess m j1 )
+            : !EncPoint String e1 ( anomaly_preprocess m__h j1 )
             ?? e1 { T p → { ( enc_free p ) } F e → { ( string_free e ) } }
             ( json_free j1 )
         }
         F _ → {}
     }
-    ( meta_refresh_feats m )
+    ( meta_refresh_feats m__h )
     : ( Vec f ) data ( vec_new [f] )
     ( vec_push [f] data 1.0 ) ( vec_push [f] data 2.0 )
     ( vec_push [f] data 3.0 ) ( vec_push [f] data 4.0 )
     : Scaler sc ( scaler_fit data 2 2 )
-    ( meta_set_scaler m sc )
+    ( meta_set_scaler m__h sc )
     ( scaler_free sc )
     ( vec_free [f] data )
     = . m n_seen 123
     = . m last_trained 100
 
-    : String s1 ( meta_to_json_str m )
-    : ?*Meta m2o ( meta_from_json_str ( string_data s1 ) )
+    : String s1 ( meta_to_json_str m__h )
+    : ?Meta m2o ( meta_from_json_str ( string_data s1 ) )
     ?? m2o {
         T m2 → {
             : String s2 ( meta_to_json_str m2 )
             ( check ( string_eq s1 s2 ) `meta: JSON round-trip byte-stable` )
-            ( check == . m2 n_seen 123 `meta: n_points_seen survives` )
-            ( check == . m2 sched_below 50 `meta: schedule default survives` )
-            ( check == ( vec_len [VerCfg] . m2 versions ) 8 `meta: 8 default versions survive` )
-            ( check == ( vec_len [String] . m2 feats ) 8 `meta: feature order survives` )
-            ( check == . m2 feat_enc ANOM_FEAT_ENC `meta: feature encoding survives` )
+            ( check == . ( _Meta_ptr m2 ) n_seen 123 `meta: n_points_seen survives` )
+            ( check == . ( _Meta_ptr m2 ) sched_below 50 `meta: schedule default survives` )
+            ( check == ( vec_len [VerCfg] . ( _Meta_ptr m2 ) versions ) 8 `meta: 8 default versions survive` )
+            ( check == ( vec_len [String] . ( _Meta_ptr m2 ) feats ) 8 `meta: feature order survives` )
+            ( check == . ( _Meta_ptr m2 ) feat_enc ANOM_FEAT_ENC `meta: feature encoding survives` )
             ( string_free s2 )
             ( meta_free m2 )
         }
@@ -391,11 +399,11 @@ $ `src/prep.nu`
     ( string_free s1 )
 
     // Corrupt / partial input is rejected cleanly, never UB.
-    : ?*Meta bad1 ( meta_from_json_str `{"name": 7}` )
+    : ?Meta bad1 ( meta_from_json_str `{"name": 7}` )
     ?? bad1 { T mb → { ( meta_free mb ) ( check F `meta: mistyped name rejected` ) } F _ → { ( check T `meta: mistyped name rejected` ) } }
-    : ?*Meta bad2 ( meta_from_json_str `not json at all` )
+    : ?Meta bad2 ( meta_from_json_str `not json at all` )
     ?? bad2 { T mb → { ( meta_free mb ) ( check F `meta: garbage rejected` ) } F _ → { ( check T `meta: garbage rejected` ) } }
-    ( meta_free m )
+    ( meta_free m__h )
 }
 
 // ── 5b. Scaler: absent readings, extreme readings, the cap ────────────
@@ -445,17 +453,18 @@ $ `src/prep.nu`
     ( vec_free [f] far2 )
 
     // The persisted form never carries a non-finite std.
-    : *Meta m ( meta_new `robust` `2026-01-01T00:00:00Z` )
+    : Meta m__h ( meta_new `robust` `2026-01-01T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec f ) badinv ( vec_new [f] )
     ( vec_push [f] badinv 0.0 )
     : ( Vec f ) badmean ( vec_new [f] )
     ( vec_push [f] badmean ( float_inf ) )
     : Scaler bad @ Scaler { badmean badinv }
-    ( meta_set_scaler m bad )
+    ( meta_set_scaler m__h bad )
     ( scaler_free bad )
     ?? ( vec_get [f] . m sc_std 0 ) { T s0 → { ( check ( feq s0 1.0 ) `scaler: a std that is not finite persists as 1` ) } F _ → {} }
     ?? ( vec_get [f] . m sc_mean 0 ) { T m0 → { ( check ( feq m0 0.0 ) `scaler: a mean that is not finite persists as 0` ) } F _ → {} }
-    ( meta_free m )
+    ( meta_free m__h )
     ( scaler_free sc )
     ( scaler_free sc2 )
     ( vec_free [f] data )

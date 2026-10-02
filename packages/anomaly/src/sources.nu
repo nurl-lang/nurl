@@ -1175,19 +1175,20 @@ $ `src/imptime.nu`
         ( string_free model )
         ^ err
     } {}
-    : *Model mo ( model_open st ( string_data model ) )
+    : Model mo__h ( model_open st ( string_data model ) )
+    : *ModelImpl mo ( _Model_ptr mo__h )
     // A categorical column is declared before the first point arrives,
     // or a coordinate would be judged a number by its first value. On a
     // model that already knows the column the kind is settled and the
     // declaration is a no-op.
     ?? ( json_obj_get src `categorical` ) {
         T cv → {
-            : *Meta mm . mo meta
+            : *MetaImpl mm ( _Meta_ptr . mo meta )
             : i ncv ( json_arr_len cv )
             : ~ i k 0
             ~ < k ncv {
                 ?? ( json_arr_get cv k ) {
-                    T f → { ? ( json_is_str f ) { : b _d ( meta_declare_column mm ( json_str_data f ) COL_CATEGORICAL ) } {} }
+                    T f → { ? ( json_is_str f ) { : b _d ( meta_declare_column . mo meta ( json_str_data f ) COL_CATEGORICAL ) } {} }
                     F _ → {}
                 }
                 = k + k 1
@@ -1195,7 +1196,7 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    : ImportReport rep ( model_import_at mo . sp points now )
+    : ImportReport rep ( model_import_at mo__h . sp points now )
     ? > ( string_len . rep err ) 0 {
         ( string_free err )
         = err ( string_clone . rep err )
@@ -1214,9 +1215,9 @@ $ `src/imptime.nu`
     ( __src_set_int src `last_rows` . rep accepted )
     ( __src_set_int src `total_rows` + ( _src_jint src `total_rows` 0 ) . rep accepted )
     ( json_obj_set src `last_trained` ( json_bool . rep trained ) )
-    ? . rep trained { ( json_obj_set src `last_tuned` ( json_bool ( __src_first_train mo src . sp points now ) ) ) } {}
+    ? . rep trained { ( json_obj_set src `last_tuned` ( json_bool ( __src_first_train mo__h src . sp points now ) ) ) } {}
     ( import_report_free rep )
-    ( model_free mo )
+    ( model_free mo__h )
     ( store_free st )
     ( string_free model )
     ^ err
@@ -1267,17 +1268,19 @@ $ `src/imptime.nu`
 // version on fits the daily rhythm the feed has, not a plain ARIMA. A
 // model tuned before, by hand or by an earlier run, is left as it is.
 // Returns whether the margins were calibrated now.
-@ __src_first_train * Model mo Json src ( Vec Json ) points i now → b {
-    : *Meta mm ( model_metadata mo )
+@ __src_first_train Model mo__h Json src ( Vec Json ) points i now → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : Meta mm__h ( model_metadata mo__h )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ? == . mm tuned_at 0 {} { ^ F }
     : i season ( source_season_of ( source_step_of points ) )
     ? > season 0 {
-        : i at ( meta_find_version mm ANOM_FC_NAME )
+        : i at ( meta_find_version mm__h ANOM_FC_NAME )
         : ~ b unset T
         ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? > . vc window_size 0 { = unset F } {} } F _ → {} } } {}
-        ? unset { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
+        ? unset { : b _w ( model_set_version_window mo__h ANOM_FC_NAME season 0 ) } {}
     } {}
-    ^ ( model_autotune_at mo ( __src_jfloat src `finetune_rate` SRC_FINETUNE_DEFAULT ) now )
+    ^ ( model_autotune_at mo__h ( __src_jfloat src `finetune_rate` SRC_FINETUNE_DEFAULT ) now )
 }
 
 // What a run does once the answer is in hand: the record re-read (it may

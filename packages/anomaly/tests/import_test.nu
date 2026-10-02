@@ -250,21 +250,22 @@ oops
 }
 
 @ test_ingest Store st → v {
-    : *Model mo ( model_open_at st `imported` T0 )
-    ( model_set_limits mo 30 150000 )
-    ( model_set_schedule mo 1000000 1000000 )
+    : Model mo__h ( model_open_at st `imported` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_set_limits mo__h 30 150000 )
+    ( model_set_schedule mo__h 1000000 1000000 )
 
     : String body ( mk_jsonl T0 120 )
     : ImportParse ip ( import_parse ( string_data body ) `jsonl` )
     ( string_free body )
     ( check == ( vec_len [Json] . ip rows ) 120 `ingest: the file parses` )
-    : ImportReport rep ( model_import_at mo . ip rows + T0 100000 )
+    : ImportReport rep ( model_import_at mo__h . ip rows + T0 100000 )
     ( check == ( string_len . rep err ) 0 `ingest: it imports` )
     ( check == . rep accepted 120 `ingest: every row landed` )
     ( check == . rep stored 120 `ingest: and the ring holds them` )
     // Enough history arrived to train on, so it trains — once, at the end.
     ( check . rep trained `ingest: the model trained afterwards` )
-    ( check ( model_is_trained mo ) `ingest: and is trained` )
+    ( check ( model_is_trained mo__h ) `ingest: and is trained` )
     ( import_report_free rep )
     ( import_parse_free ip )
 
@@ -282,7 +283,7 @@ oops
     : String older ( mk_jsonl - T0 86400 30 )
     : ImportParse ip2 ( import_parse ( string_data older ) `jsonl` )
     ( string_free older )
-    : ImportReport rep2 ( model_import_at mo . ip2 rows + T0 100000 )
+    : ImportReport rep2 ( model_import_at mo__h . ip2 rows + T0 100000 )
     ( check == . rep2 accepted 30 `ingest: the older file imports` )
     ( check == . rep2 stored 150 `ingest: the ring holds both` )
     ( import_report_free rep2 )
@@ -301,18 +302,19 @@ oops
     : ~ i newfirst 0
     ?? ( vec_get [i] . mo times 0 ) { T x → { = newfirst x } F _ → {} }
     ( check == newfirst - T0 86400 `ingest: the older history is at the front` )
-    ( model_free mo )
+    ( model_free mo__h )
 }
 
 @ test_evict Store st → v {
     // A file bigger than the ring is a file whose TAIL the model keeps.
-    : *Model mo ( model_open_at st `evicted` T0 )
-    ( model_set_limits mo 30 40 )
-    ( model_set_schedule mo 1000000 1000000 )
+    : Model mo__h ( model_open_at st `evicted` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_set_limits mo__h 30 40 )
+    ( model_set_schedule mo__h 1000000 1000000 )
     : String body ( mk_jsonl T0 100 )
     : ImportParse ip ( import_parse ( string_data body ) `jsonl` )
     ( string_free body )
-    : ImportReport rep ( model_import_at mo . ip rows + T0 100000 )
+    : ImportReport rep ( model_import_at mo__h . ip rows + T0 100000 )
     ( check == . rep accepted 100 `evict: every row was read` )
     ( check == . rep stored 40 `evict: the ring keeps its cap` )
     : ~ i first 0
@@ -320,20 +322,21 @@ oops
     ( check == first + T0 * 60 60 `evict: and it is the newest 40 that stayed` )
     ( import_report_free rep )
     ( import_parse_free ip )
-    ( model_free mo )
+    ( model_free mo__h )
 }
 
 @ test_reject Store st → v {
-    : *Model mo ( model_open_at st `rejected` T0 )
-    ( model_set_limits mo 30 150000 )
-    ( model_set_schedule mo 1000000 1000000 )
+    : Model mo__h ( model_open_at st `rejected` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_set_limits mo__h 30 150000 )
+    ( model_set_schedule mo__h 1000000 1000000 )
     : ( Vec Json ) none ( vec_new [Json] )
-    : ImportReport empty ( model_import_at mo none T0 )
+    : ImportReport empty ( model_import_at mo__h none T0 )
     ( check > ( string_len . empty err ) 0 `reject: an empty import is an error` )
     ( import_report_free empty )
     ( vec_free [Json] none )
-    ( check == ( model_n_points mo ) 0 `reject: and changed nothing` )
-    ( model_free mo )
+    ( check == ( model_n_points mo__h ) 0 `reject: and changed nothing` )
+    ( model_free mo__h )
 }
 
 // A stamp read from text, or -1 when the text is not one.

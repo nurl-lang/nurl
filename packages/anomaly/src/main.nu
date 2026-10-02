@@ -204,7 +204,8 @@ $ `src/mcp.nu`
 }
 
 // Print a verdict as one compact JSON object.
-@ __an_print_verdict * Model mo Verdict vd → v {
+@ __an_print_verdict Model mo__h Verdict vd → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : Json o ( json_obj_new )
     ? . vd ready {
         ( json_obj_set o `status` ( json_str_lit `success` ) )
@@ -223,7 +224,8 @@ $ `src/mcp.nu`
                     ( json_obj_set vo `severity` ( json_float ( anom_severity . vv score . vv margin ) ) )
                     ( json_obj_set vo `margin` ( json_float . vv margin ) )
                     ? >= . vv vv_feat 0 {
-                        : *Meta pmm ( model_metadata mo )
+                        : Meta pmm__h ( model_metadata mo__h )
+                        : *MetaImpl pmm ( _Meta_ptr pmm__h )
                         ?? ( vec_get [String] . pmm feats . vv vv_feat ) {
                             T fname → { ( json_obj_set vo `feature` ( json_str_lit ( string_data fname ) ) ) }
                             F _ → {}
@@ -240,7 +242,7 @@ $ `src/mcp.nu`
         ( json_obj_set o `status` ( json_str_lit `collecting` ) )
         ( json_obj_set o `min_data_points` ( json_int . mo min_points ) )
     }
-    ( json_obj_set o `data_points` ( json_int ( model_n_points mo ) ) )
+    ( json_obj_set o `data_points` ( json_int ( model_n_points mo__h ) ) )
     : String out ( json_stringify o )
     ( pline ( string_data out ) )
     ( string_free out )
@@ -248,10 +250,11 @@ $ `src/mcp.nu`
 }
 
 // Print (or report the error of) one detect/score result. Exit code.
-@ __an_report * Model mo ! Verdict String vr → i {
+@ __an_report Model mo__h ! Verdict String vr → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ?? vr {
         T vd → {
-            ( __an_print_verdict mo vd )
+            ( __an_print_verdict mo__h vd )
             ( verdict_free vd )
             ^ 0
         }
@@ -286,15 +289,16 @@ $ `src/mcp.nu`
                 ( nurl_eprintln ( string_data mname ) )
                 = rc 1
             } {
-                : *Model mo ( model_open st ( string_data mname ) )
+                : Model mo__h ( model_open st ( string_data mname ) )
+                : *ModelImpl mo ( _Model_ptr mo__h )
                 ? ingest {
-                    : !Verdict String vr ( model_ingest mo rec )
-                    = rc ( __an_report mo vr )
+                    : !Verdict String vr ( model_ingest mo__h rec )
+                    = rc ( __an_report mo__h vr )
                 } {
-                    : !Verdict String vr ( model_detect_only mo rec )
-                    = rc ( __an_report mo vr )
+                    : !Verdict String vr ( model_detect_only mo__h rec )
+                    = rc ( __an_report mo__h vr )
                 }
-                ( model_free mo )
+                ( model_free mo__h )
             }
             ( store_free st )
             ( json_free rec )
@@ -546,9 +550,10 @@ $ `src/mcp.nu`
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
         : ( Vec i ) hidden ( vec_new [i] )
-        : String err ( model_train_autoencoder mo hidden -1.0 )
+        : String err ( model_train_autoencoder mo__h hidden -1.0 )
         ( vec_free [i] hidden )
         ? == ( string_len err ) 0 {
             : AeModel tae . mo ae
@@ -565,7 +570,7 @@ $ `src/mcp.nu`
             = rc 1
         }
         ( string_free err )
-        ( model_free mo )
+        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
@@ -583,7 +588,8 @@ $ `src/mcp.nu`
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
         : i season ( ctx_int x `season` )
         ? >= season -1 {
             : Json vo ( json_obj_new )
@@ -592,14 +598,15 @@ $ `src/mcp.nu`
             ( json_obj_set vers ANOM_FC_NAME vo )
             : Json patch ( json_obj_new )
             ( json_obj_set patch `versions` vers )
-            ( _an_ensure_fc_cfg mo )
-            : String perr ( model_apply_meta_patch mo patch )
+            ( _an_ensure_fc_cfg mo__h )
+            : String perr ( model_apply_meta_patch mo__h patch )
             ( string_free perr )
             ( json_free patch )
         } {}
-        : String err ( model_train_forecast mo )
+        : String err ( model_train_forecast mo__h )
         ? == ( string_len err ) 0 {
-            : *FcModel fc ( model_forecast mo )
+            : FcModel fc__h ( model_forecast mo__h )
+            : *FcModelImpl fc ( _FcModel_ptr fc__h )
             : String msg ( string_from `forecast models fitted for ` )
             ( string_push_int msg . fc nw )
             ( string_push_str msg ` features on ` )
@@ -615,7 +622,7 @@ $ `src/mcp.nu`
             = rc 1
         }
         ( string_free err )
-        ( model_free mo )
+        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
@@ -633,12 +640,14 @@ $ `src/mcp.nu`
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
-        : *FcModel fc ( model_forecast mo )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
+        : FcModel fc__h ( model_forecast mo__h )
+        : *FcModelImpl fc ( _FcModel_ptr fc__h )
         ? . fc trained {
             : ~ i h ( ctx_int x `horizon` )
             ? < h 1 { = h 12 } {}
-            : Json o ( model_forecast_json mo h )
+            : Json o ( model_forecast_json mo__h h )
             ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
             : String js ( json_stringify o )
             ( pline ( string_data js ) )
@@ -648,7 +657,7 @@ $ `src/mcp.nu`
             ( nurl_eprintln `anomaly: the forecast version is not trained: anomaly train-fc <model> first` )
             = rc 1
         }
-        ( model_free mo )
+        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
@@ -666,19 +675,20 @@ $ `src/mcp.nu`
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
         : ~ i h ( ctx_int x `horizon` )
         ? < h 1 { = h 12 } {}
         : ~ i n ( ctx_int x `points` )
         ? < n 1 { = n 200 } {}
-        : Json o ( model_forecast_backtest mo h n )
+        : Json o ( model_forecast_backtest mo__h h n )
         ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
         : String js ( json_stringify o )
         ( pline ( string_data js ) )
         ( string_free js )
         ? ( json_obj_has o `error` ) { = rc 1 } {}
         ( json_free o )
-        ( model_free mo )
+        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
@@ -692,11 +702,12 @@ $ `src/mcp.nu`
 // Resolve --last / --from / --to into the calibration window (see
 // model_window_from_last): --last counts back from the newest stored
 // point, `--last all` means the whole ring.
-@ __an_cli_window * Model mo CliCtx x → ( Vec i ) {
+@ __an_cli_window Model mo__h CliCtx x → ( Vec i ) {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : i from0 ( ctx_int x `from` )
     : i to0 ( ctx_int x `to` )
     : String lasts ( ctx_str x `last` )
-    : ~ i last ( model_default_last mo )
+    : ~ i last ( model_default_last mo__h )
     : s lraw ( string_data lasts )
     ? || == ( nurl_str_eq lraw `all` ) 1 == ( nurl_str_eq lraw `*` ) 1 { = last 0 } {
         ?? ( string_to_int lasts ) { T v → { ? > v 0 { = last v } {} } F _ → {} }
@@ -704,7 +715,7 @@ $ `src/mcp.nu`
     ( string_free lasts )
     : ~ i from_ts from0
     // seconds on a time clock, points on a count clock
-    ? & > last 0 <= from0 0 { = from_ts ( model_window_from_last mo to0 ( model_last_span mo last ) ) } {}
+    ? & > last 0 <= from0 0 { = from_ts ( model_window_from_last mo__h to0 ( model_last_span mo__h last ) ) } {}
     : ( Vec i ) w ( vec_new [i] )
     ( vec_push [i] w from_ts )
     ( vec_push [i] w to0 )
@@ -730,15 +741,16 @@ $ `src/mcp.nu`
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
-        ? ( model_is_trained mo ) {
-            : ( Vec i ) w ( __an_cli_window mo x )
-            : CalReport cal ( model_calibrate mo ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
+        ? ( model_is_trained mo__h ) {
+            : ( Vec i ) w ( __an_cli_window mo__h x )
+            : CalReport cal ( model_calibrate mo__h ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) )
             ( vec_free [i] w )
             : String hdr ( string_from `window: ` )
             ( string_push_int hdr . cal n_rows )
             ( string_push_str hdr ` of ` )
-            ( string_push_int hdr ( model_n_points mo ) )
+            ( string_push_int hdr ( model_n_points mo__h ) )
             ( string_push_str hdr ` stored points; any version flags ` )
             ( string_push_int hdr . cal agg_flagged )
             ( string_push_str hdr ` (` )
@@ -782,7 +794,7 @@ $ `src/mcp.nu`
             ( nurl_eprintln `anomaly: model is not trained yet` )
             = rc 1
         }
-        ( model_free mo )
+        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
@@ -811,16 +823,17 @@ $ `src/mcp.nu`
         ^ 2
     }
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
-        ? ( model_is_trained mo ) {
-            : ( Vec i ) w ( __an_cli_window mo x )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
+        ? ( model_is_trained mo__h ) {
+            : ( Vec i ) w ( __an_cli_window mo__h x )
             : b dry ( ctx_bool x `dry-run` )
             : ( Vec String ) none ( vec_new [String] )
             : String lasts ( ctx_str x `last` )
             : b own == ( nurl_str_eq ( string_data lasts ) `own` ) 1
             ( string_free lasts )
-            : FineTuneReport rep ? own ( model_finetune_own mo rate ! dry none )
-            ( model_finetune_at mo rate ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) ! dry none )
+            : FineTuneReport rep ? own ( model_finetune_own mo__h rate ! dry none )
+            ( model_finetune_at mo__h rate ( _mlp_iget w 0 ) ( _mlp_iget w 1 ) ! dry none )
             ( vec_free [String] none )
             ( vec_free [i] w )
             ( pline ? dry `dry run — nothing written` `margins updated` )
@@ -858,7 +871,7 @@ $ `src/mcp.nu`
             ( nurl_eprintln `anomaly: model is not trained yet` )
             = rc 1
         }
-        ( model_free mo )
+        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
@@ -876,8 +889,9 @@ $ `src/mcp.nu`
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
-        : i used ( model_force_train mo )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
+        : i used ( model_force_train mo__h )
         ? > used 0 {
             : String msg ( string_from `trained on ` )
             ( string_push_int msg used )
@@ -888,7 +902,7 @@ $ `src/mcp.nu`
             ( nurl_eprintln `anomaly: not enough data to train` )
             = rc 1
         }
-        ( model_free mo )
+        ( model_free mo__h )
     } {
         ( nurl_eprint `anomaly: model not found: ` )
         ( nurl_eprintln ( string_data mname ) )
@@ -906,9 +920,10 @@ $ `src/mcp.nu`
     ( string_free root )
     : ~ i rc 0
     ? ( store_exists st ( string_data mname ) ) {
-        : *Model mo ( model_open st ( string_data mname ) )
-        ( model_reset mo )
-        ( model_free mo )
+        : Model mo__h ( model_open st ( string_data mname ) )
+        : *ModelImpl mo ( _Model_ptr mo__h )
+        ( model_reset mo__h )
+        ( model_free mo__h )
         ( pline `reset` )
     } {
         ( nurl_eprint `anomaly: model not found: ` )

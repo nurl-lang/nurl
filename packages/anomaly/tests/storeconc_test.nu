@@ -50,7 +50,8 @@ $ `src/store.nu`
 // each one its own transaction, with an eviction once past the cap.
 @ worker s root s name → v {
     : Store st ( store_open root )
-    : *Meta m ( meta_new name `2026-01-01T00:00:00Z` )
+    : Meta m__h ( meta_new name `2026-01-01T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : ~ i k 0
     ~ < k CONC_POINTS {
         : String line ( string_from `{"temp":` )
@@ -62,11 +63,11 @@ $ `src/store.nu`
         // Keep the newest 100: past that every point evicts one.
         : ~ i evict 0
         ? > + k 1 100 { = evict - + k 1 100 } {}
-        ( store_commit_point st name k ( string_data line ) evict m )
+        ( store_commit_point st name k ( string_data line ) evict m__h )
         ( string_free line )
         = k + k 1
     }
-    ( meta_free m )
+    ( meta_free m__h )
     ( store_free st )
 }
 
