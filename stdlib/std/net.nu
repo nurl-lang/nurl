@@ -231,12 +231,10 @@ $ `stdlib/std/pkey.nu`
         = guard + guard 1
         : String suf ( string_substr pem pos - total pos )
         : i rel ( nurl_str_find ( string_data suf ) `-----BEGIN CERTIFICATE-----` )
-        ( string_free suf )
         ? < rel 0 { = pos total } {
             : i bi + pos rel
             : String suf2 ( string_substr pem bi - total bi )
             : i erel ( nurl_str_find ( string_data suf2 ) `-----END CERTIFICATE-----` )
-            ( string_free suf2 )
             ? < erel 0 { = pos total } {
                 : i blen + erel 25  // through the END marker (25 chars)
                 : String block ( string_substr pem bi blen )
@@ -244,11 +242,9 @@ $ `stdlib/std/pkey.nu`
                     T der → {
                         : ( Vec u ) e ( tls_cert_entry der )
                         ( bytes_extend_bytes list e )
-                        ( vec_free [u] e ) ( vec_free [u] der )
                     }
                     F _ → {}
                 }
-                ( string_free block )
                 = pos + bi blen
             }
         }
@@ -267,31 +263,28 @@ $ `stdlib/std/pkey.nu`
 @ _load_tls_creds s cert_path s key_path ( Vec u ) cert_out ( Vec u ) k1 ( Vec u ) k2 ( Vec u ) k3 → i {
     : String certpem ?? ( read_file cert_path ) { T p → p F _ → ( string_new ) }
     : ( Vec u ) chain ( __net_cert_chain certpem )
-    ( string_free certpem )
-    ? == ( vec_len [u] chain ) 0 { ( vec_free [u] chain ) ^ -10 } {}
+    ? == ( vec_len [u] chain ) 0 { ^ -10 } {}
     ( bytes_extend_bytes cert_out chain )
-    ( vec_free [u] chain )
     : String keypem ?? ( read_file key_path ) { T p → p F _ → ( string_new ) }
     // EC first; on failure try RSA (the parsers reject foreign encodings).
     : ?( Vec u ) ec ?? ( ec_p256_priv_from_pem ( string_data keypem ) ) {
         T sc → @ ?( Vec u ) { T sc } F _ → @ ?( Vec u ) { F # ( Vec u ) 0 }
     }
     ?? ec {
-        T sc → { ( bytes_extend_bytes k1 sc ) ( vec_free [u] sc ) ( string_free keypem ) ^ 0 }
+        T sc → { ( bytes_extend_bytes k1 sc ) ^ 0 }
         F _ → {}
     }
     : i kt ?? ( rsa_priv_from_pem ( string_data keypem ) ) {
         T k → {
             ( bytes_extend_bytes k1 . k n ) ( bytes_extend_bytes k2 . k d )
             ( bytes_extend_bytes k3 . k e )  // public exponent — for sign-time blinding
-            ( rsa_priv_free k ) 1
+            1
         }
         F _ → ?? ( mldsa_priv_from_pem ( string_data keypem ) ) {
-            T mk → { ( bytes_extend_bytes k1 . mk sk ) ( mldsa_priv_free mk ) 2 }
+            T mk → { ( bytes_extend_bytes k1 . mk sk ) 2 }
             F _ → -11
         }
     }
-    ( string_free keypem )
     ^ kt
 }
 
@@ -322,7 +315,6 @@ $ `stdlib/std/pkey.nu`
         : ( Vec u ) u2 ( vec_new [u] )
         : ( Vec u ) u3 ( vec_new [u] )
         : i pqt ( _load_tls_creds pq_cert_path pq_key_path pqcert pqk u2 u3 )
-        ( vec_free [u] u2 ) ( vec_free [u] u3 )
         : i pqerr ? < pqt 0 - 0 pqt ? != pqt 2 11 0
         ? != pqerr 0 {
             ^ @ !TcpListener NetErr { F ( _net_err_of pqerr ) }
@@ -350,16 +342,13 @@ $ `stdlib/std/pkey.nu`
     : i kl2 ( vec_len [u] k2 )
     : i kp3 ( __net_dup k3 )
     : i kl3 ( vec_len [u] k3 )
-    ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
     : ( Vec u ) alpn ( tls_alpn_pack alpn_protocols )
     : i alpnp ( __net_dup alpn )
     : i alpnlen ( vec_len [u] alpn )
-    ( vec_free [u] alpn )
     : i pqcertp ( __net_dup pqcert )
     : i pqcertlen ( vec_len [u] pqcert )
     : i pqkp ( __net_dup pqk )
     : i pqkl ( vec_len [u] pqk )
-    ( vec_free [u] pqcert ) ( vec_free [u] pqk )
     : s rp # s raw
     ^ @ !TcpListener NetErr { T @ TcpListener { rp 1 keytype certp certlen kp1 kl1 kp2 kl2 kp3 kl3 alpnp alpnlen pqcertp pqcertlen pqkp pqkl } }
 }
@@ -867,7 +856,6 @@ $ `stdlib/std/pkey.nu`
         }
         T v → {
             ? == ( vec_len [u] v ) 0 {
-                ( vec_free [u] v )
                 ^ @ !( Vec u ) NetErr { F # NetErr NetClosed }
             } {}
             ^ @ !( Vec u ) NetErr { T v }
@@ -907,7 +895,6 @@ $ `stdlib/std/pkey.nu`
     : s pbuf # s p
     : i n ( nurl_tcp_read raw pbuf max )
     ? < n 0 {
-        ( vec_free [u] v )
         : i ek ( nurl_tcp_err_kind raw )
         ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
     } {}
@@ -939,7 +926,6 @@ $ `stdlib/std/pkey.nu`
             T v → {
                 : i n ( vec_len [u] v )
                 ( vec_extend [u] buf v )
-                ( vec_free [u] v )
                 ^ @ !i NetErr { T n }
             }
             F e → ^ @ !i NetErr { F e }
@@ -1074,7 +1060,6 @@ $ `stdlib/std/pkey.nu`
             T decoded → {
                 : i count ( vec_len [u] decoded )
                 ( vec_extend [u] bytes decoded )
-                ( vec_free [u] decoded )
                 ? == count 0 { ^ @ !i NetErr { F NetClosed } } {}
                 ^ @ !i NetErr { T count }
             }
@@ -1219,7 +1204,6 @@ $ `stdlib/std/pkey.nu`
     ? != ( __conn_tlsptr c ) 0 {
         : ( Vec u ) b ( bytes_from_str text )
         : !v NetErr r ( __tls_write_net c b )
-        ( vec_free [u] b )
         ^ r
     } {}
     : s rp . c raw

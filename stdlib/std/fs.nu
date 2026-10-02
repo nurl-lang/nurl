@@ -632,7 +632,6 @@ $ `stdlib/core/posix.nu`
         F e → { ^ @ !( Vec u ) IoErr { F e } }
         T bytes → {
             ? != closed # i32 0 {
-                ( vec_free [u] bytes )
                 ^ @ !( Vec u ) IoErr { F close_error }
             } {}
             ^ @ !( Vec u ) IoErr { T bytes }
@@ -846,7 +845,6 @@ $ `stdlib/core/posix.nu`
     }
     // Final component (the path itself, with no trailing separator).
     : !v IoErr last ( __dir_create_step ( string_data prefix ) )
-    ( string_free prefix )
     ?? last {
         T → { ^ @ !v IoErr { T 0 } }
         F e → { ^ @ !v IoErr { F ? have_first first e } }
@@ -858,12 +856,6 @@ $ `stdlib/core/posix.nu`
     : i32 rc ( unlink p )
     ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
     ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
-}
-
-// Free a Vec[String] and every String it owns.
-@ __fs_free_str_vec ( Vec String ) v → v {
-    : ( @ v String ) drop_str \ String e → v { ( string_free e ) }
-    ( vec_free_with [String] v drop_str )
 }
 
 // Recursively remove a directory and everything beneath it. Handed a
@@ -887,11 +879,9 @@ $ `stdlib/core/posix.nu`
                         : String full ( path_join path ( string_data name ) )
                         : s fp ( string_data full )
                         : !v IoErr r ? == 2 ( nurl_path_type fp ) { ( dir_remove_all fp ) } { ( __unlink_entry fp ) }
-                        ( string_free full )
                         ?? r {
                             T → {}
                             F e → {
-                                ( __fs_free_str_vec entries )
                                 ^ @ !v IoErr { F e }
                             }
                         }
@@ -900,7 +890,6 @@ $ `stdlib/core/posix.nu`
                 }
                 = idx + idx 1
             }
-            ( __fs_free_str_vec entries )
         }
     }
     // The directory is empty now — remove the directory itself.
@@ -1151,7 +1140,6 @@ $ `stdlib/core/posix.nu`
         } {}
         ? < got chunk { = going F } {}
     }
-    ( vec_free [u] buf )
     // fclose flushes buffered writes; success from fwrite alone does not
     // mean a complete copy (e.g. a full device can fail only at close).
     : i32 wc ( fclose wf )
@@ -1367,18 +1355,16 @@ $ `stdlib/core/posix.nu`
                             ? dirs_only {
                                 ? == 2 ( nurl_path_type_follow ( string_data full ) )
                                 { ( vec_push [String] acc full ) }
-                                { ( string_free full ) }
+                                {}
                             } {
                                 ( vec_push [String] acc full )
                             }
                         } {}
-                        ( string_free name )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] entries )
         }
         F _ → {}  // unreadable dir → no matches from it
     }
@@ -1403,15 +1389,12 @@ $ `stdlib/core/posix.nu`
                             : String full ( _glob_join base ( string_data name ) )
                             ? == 2 ( nurl_path_type_follow ( string_data full ) )
                             { ( __glob_walk_dirs acc ( string_data full ) ) } {}
-                            ( string_free full )
                         } {}
-                        ( string_free name )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] entries )
         }
         F _ → {}
     }
@@ -1488,28 +1471,14 @@ $ `stdlib/core/posix.nu`
                         : i tyf ( nurl_path_type_follow ( string_data full ) )
                         ? | & is_last > ty 0 & ! is_last == tyf 2
                         { ( vec_push [String] next full ) }
-                        { ( string_free full ) }
+                        {}
                     }
                 }
                 = fi + fi 1
             }
-            ( __glob_free_vec frontier )
             = frontier next
             = si + si 1
         }
     }
-    ( __glob_free_vec segs )
     ^ @ !( Vec String ) IoErr { T frontier }
-}
-
-// Free an owned Vec[String] (elements + container).
-@ __glob_free_vec ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i k 0
-    ~ < k n {
-        : ?String eo ( vec_get [String] v k )
-        ?? eo { T s → ( string_free s ) F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [String] v )
 }

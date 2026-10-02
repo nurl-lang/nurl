@@ -300,12 +300,8 @@ $ `stdlib/std/async_ffi.nu`
 
 // ── UdpPacket helpers ──────────────────────────────────────────────
 
-@ udp_packet_free sink UdpPacket p → v {
-    : ( Vec u ) d . p data
-    : String pr . p peer
-    ( vec_free [u] d )
-    ( string_free pr )
-}
+// Let go of `p` now rather than at the end of its owner's scope.
+@ udp_packet_free sink UdpPacket p → v {}
 
 // ── Send / Receive ─────────────────────────────────────────────────
 
@@ -370,7 +366,6 @@ $ `stdlib/std/async_ffi.nu`
     : s pbuf # s p
     : i n ( nurl_udp_recv_from raw pbuf max )
     ? < n 0 {
-        ( vec_free [u] v )
         : i ek ( nurl_udp_err_kind raw )
         ^ @ !UdpPacket NetErr { F ( _net_err_of ek ) }
     } {}
@@ -422,7 +417,6 @@ $ `stdlib/std/async_ffi.nu`
     : s pbuf # s p
     : i n ( nurl_udp_recv raw pbuf max )
     ? < n 0 {
-        ( vec_free [u] v )
         : i ek ( nurl_udp_err_kind raw )
         ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
     } {}
@@ -587,7 +581,6 @@ $ `stdlib/std/async_ffi.nu`
     : ( Vec u ) a ( udp_addr_new )
     : i rc ( nurl_udp_addr_resolve host port ( __udp_addr_ptr a ) )
     ? < rc 0 {
-        ( vec_free [u] a )
         ^ @ !( Vec u ) NetErr { F # NetErr NetOther }
     } {}
     ^ @ !( Vec u ) NetErr { T a }

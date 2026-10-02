@@ -284,11 +284,6 @@ $ `stdlib/core/vec.nu`
         ? < na nb { = res -1 } { ? > na nb { = res 1 } {} }
     } {}
 
-    : i fa 0
-    : ~ i kk 0
-    ~ < kk na { : ?String t ( vec_get [String] ia kk ) ?? t { T s → {} F → {} } = kk + kk 1 }
-    : ~ i jj 0
-    ~ < jj nb { : ?String t ( vec_get [String] ib jj ) ?? t { T s → {} F → {} } = jj + jj 1 }
     ^ res
 }
 

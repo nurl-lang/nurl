@@ -58,9 +58,8 @@ $ `stdlib/core/string.nu`
     String msg
 }
 
-@ panic_info_free sink PanicInfo p → v {
-    ( string_free . p msg )
-}
+// Let go of `p` now rather than at the end of its owner's scope.
+@ panic_info_free sink PanicInfo p → v {}
 
 // Halt execution with `msg`. If a `recover` frame is active on this
 // thread, longjmps to it; the matching `recover` returns Err with `msg`
@@ -76,7 +75,6 @@ $ `stdlib/core/string.nu`
 // releases while unwinding.
 @ panic_with sink String m → v {
     : s c ( nurl_str_cat ( string_data m ) `` )
-    ( string_free m )
     ( nurl_panic c )
 }
 

@@ -142,7 +142,6 @@ $ `stdlib/std/term.nu`
         ( string_push_str ln ( string_data curh ) )
         ( string_push_str ln ` / ` )
         ( string_push_str ln ( string_data toth ) )
-        ( string_free toth )
     } {
         ( string_push_str ln ( string_data curh ) )
     }
@@ -164,12 +163,10 @@ $ `stdlib/std/term.nu`
         ( string_push_str ln `  ` )
         ( string_push_str ln ( string_data rh ) )
         ( string_push_str ln `/s` )
-        ( string_free rh )
     } {}
     ( string_push_str ln `    ` )
     ? final { ( string_push_char ln 10 ) } {}
     ( __pg_write ( string_data ln ) )
-    ( string_free curh )
 }
 
 // Fold one sample into the moving average. alpha = 1/8 over the 100 ms
@@ -219,6 +216,5 @@ $ `stdlib/std/term.nu`
 // dead after this. Still silent when stderr is not a tty.
 @ progress_done * Progress p → v {
     ? . p tty { ( __pg_render p T ) } {}
-    ( string_free . p label )
     ( nurl_free # s p )
 }

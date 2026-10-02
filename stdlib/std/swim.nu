@@ -72,9 +72,8 @@ $ `stdlib/core/rcbox.nu`
     ^ @ Member { ( string_from host ) port incarnation state ( monotonic_ns ) }
 }
 
-@ member_free sink Member m → v {
-    ( string_free . m host )
-}
+// Let go of `m` now rather than at the end of its owner's scope.
+@ member_free sink Member m → v {}
 
 // ── Message types ────────────────────────────────────────────────────
 
@@ -112,11 +111,8 @@ $ `stdlib/core/rcbox.nu`
     ( Vec Member ) gossip
 }
 
-@ swim_msg_free sink SwimMsg m → v {
-    ( string_free . m from_host )
-    ( string_free . m target_host )
-    ( vec_free_with [Member] . m gossip \ Member mm → v { ( member_free mm ) } )
-}
+// Let go of `m` now rather than at the end of its owner's scope.
+@ swim_msg_free sink SwimMsg m → v {}
 
 // ── Wire codec ───────────────────────────────────────────────────────
 
@@ -416,12 +412,10 @@ $ `stdlib/core/rcbox.nu`
     }
     : i cn ( vec_len [i] cand )
     ? == cn 0 {
-        ( vec_free [i] cand )
         ( mutex_unlock . t m )
         ^ @ ?Member { F # Member 0 }
     } {}
     : i pick ?? ( vec_get [i] cand ( rng_below . t rng cn ) ) { T x → x F → 0 }
-    ( vec_free [i] cand )
     : ?Member out ?? ( vec_get [Member] . t members pick ) {
         T mm → @ ?Member { T ( __member_copy mm ) }
         F → @ ?Member { F # Member 0 }
@@ -463,7 +457,6 @@ $ `stdlib/core/rcbox.nu`
         ( vec_remove [i] cand ci )  // sample without replacement
         = taken + taken 1
     }
-    ( vec_free [i] cand )
     ( mutex_unlock . t m )
     ^ out
 }
@@ -625,7 +618,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) bytes ( swim_msg_encode m )
     : !i NetErr r ( udp_send_to . n sock bytes host port )
     ?? r { T _ → {} F _ → {} }
-    ( vec_free [u] bytes )
 }
 
 // Build a message of `ty` carrying a fresh gossip sample.
@@ -652,7 +644,6 @@ $ `stdlib/core/rcbox.nu`
     ? == ty 1 {  // PING → ACK (echo seq)
         : SwimMsg ack ( __mk_msg n @ SwimMsgType { MtAck } . m seq `` 0 )
         ( __node_send n ( string_data . m from_host ) . m from_port ack )
-        ( swim_msg_free ack )
     } {}
     ? == ty 2 {  // ACK → record seq
         ( mutex_lock . n ack_m )
@@ -672,12 +663,10 @@ $ `stdlib/core/rcbox.nu`
         ( mutex_unlock . n fwd_m )
         : SwimMsg ping ( __mk_msg n @ SwimMsgType { MtPing } probe_seq `` 0 )
         ( __node_send n ( string_data . m target_host ) . m target_port ping )
-        ( swim_msg_free ping )
     } {}
     ? == ty 4 {  // JOIN → reply with our view
         : SwimMsg ja ( __mk_msg n @ SwimMsgType { MtJoinAck } . m seq `` 0 )
         ( __node_send n ( string_data . m from_host ) . m from_port ja )
-        ( swim_msg_free ja )
     } {}
     // MtJoinAck (5): gossip already merged.
 }
@@ -709,7 +698,6 @@ $ `stdlib/core/rcbox.nu`
                 ( mutex_unlock . n fwd_m )
                 : SwimMsg ack ( __mk_msg n @ SwimMsgType { MtAck } oseq `` 0 )
                 ( __node_send n ( string_data rh ) rp ack )
-                ( swim_msg_free ack )
             }
             F → ( mutex_unlock . n fwd_m )
         }
@@ -726,7 +714,7 @@ $ `stdlib/core/rcbox.nu`
     ~ < k ( vec_len [FwdEntry] . n fwd ) {
         : ~ b drop F
         ?? ( vec_get [FwdEntry] . n fwd k ) {
-            T e → { ? > - now . e created_ms cutoff { = drop T ( string_free . e req_host ) } {} }
+            T e → { ? > - now . e created_ms cutoff { = drop T } {} }
             F → {}
         }
         ? drop { ( vec_remove [FwdEntry] . n fwd k ) } { = k + k 1 }
@@ -741,10 +729,9 @@ $ `stdlib/core/rcbox.nu`
             T pkt → {
                 : !SwimMsg SwimErr d ( swim_msg_decode . pkt data )
                 ?? d {
-                    T m → { ( __handle n m ) ( swim_msg_free m ) }
+                    T m → { ( __handle n m ) }
                     F _ → {}
                 }
-                ( udp_packet_free pkt )
             }
             F _ → {}  // timeout → re-check running
         }
@@ -779,13 +766,11 @@ $ `stdlib/core/rcbox.nu`
             T rly → {
                 : SwimMsg pr ( __mk_msg n @ SwimMsgType { MtPingReq } iseq ( string_data thost ) tport )
                 ( __node_send n ( string_data . rly host ) . rly port pr )
-                ( swim_msg_free pr )
             }
             F → {}
         }
         = ri + ri 1
     }
-    ( vec_free_with [Member] relays \ Member d → v { ( member_free d ) } )
     ? == rn 0 { ^ F } {}
     : ~ b iok F
     : ~ i iwaited 0
@@ -807,7 +792,6 @@ $ `stdlib/core/rcbox.nu`
                 : i seq . n seq_ctr
                 : SwimMsg ping ( __mk_msg n @ SwimMsgType { MtPing } seq `` 0 )
                 ( __node_send n ( string_data . mm host ) . mm port ping )
-                ( swim_msg_free ping )
                 : ~ b ok F
                 : ~ i waited 0
                 ~ & ! ok < waited . n ping_timeout_ms {
@@ -825,12 +809,10 @@ $ `stdlib/core/rcbox.nu`
                         : b _s ( mtable_suspect . n table ( string_data . mm host ) . mm port )
                     } {}
                 } {}
-                ( member_free mm )
             }
             F → {}
         }
         : ( Vec Member ) dead ( mtable_sweep . n table )
-        ( vec_free_with [Member] dead \ Member d → v { ( member_free d ) } )
         ( __prune_fwd n )
         ( mutex_lock . n ack_m )
         ( vec_clear [i] . n acked )
@@ -844,7 +826,6 @@ $ `stdlib/core/rcbox.nu`
     : *SwimNodeImpl n ( __SwimNode_ptr n__h )
     : SwimMsg j ( __mk_msg n @ SwimMsgType { MtJoin } 0 `` 0 )
     ( __node_send n seed_host seed_port j )
-    ( swim_msg_free j )
 }
 
 // Spawn the receiver + failure-detector fibers. Requires runtime_init /
@@ -854,9 +835,9 @@ $ `stdlib/core/rcbox.nu`
     // ends (a closure that releases a capture takes it over), so the
     // caller's handle may go at any time: the node outlives both loops.
     : SwimNode rn ( SwimNode_share n )
-    ( spawn \ → v { ( __recv_loop ( __SwimNode_ptr rn ) ) ( swim_node_free rn ) } )
+    ( spawn \ → v { ( __recv_loop ( __SwimNode_ptr rn ) ) } )
     : SwimNode fn ( SwimNode_share n )
-    ( spawn \ → v { ( __fd_loop ( __SwimNode_ptr fn ) ) ( swim_node_free fn ) } )
+    ( spawn \ → v { ( __fd_loop ( __SwimNode_ptr fn ) ) } )
 }
 
 @ swim_stop SwimNode n__h → v {

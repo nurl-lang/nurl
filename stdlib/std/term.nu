@@ -123,7 +123,6 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
     : String h ( __ansi_csi )
     ( string_push_str h `H` )
     ( string_push_str s ( string_data h ) )
-    ( string_free h )
     ^ s
 }
 
@@ -171,14 +170,12 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 @ __term_repaint s prompt String buf i pos → v {
     : String cl ( ansi_clear_line )
     ( nurl_print ( string_data cl ) )
-    ( string_free cl )
     ( nurl_print prompt )
     ( nurl_print ( string_data buf ) )
     : i tail - ( string_len buf ) pos
     ? > tail 0 {
         : String back ( ansi_cursor_left tail )
         ( nurl_print ( string_data back ) )
-        ( string_free back )
     } {}
     ( nurl_flush_stdout )
 }
@@ -257,7 +254,7 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
                                         ? & == c2 65 > hidx 0 {  // up
                                             = hidx - hidx 1
                                             ?? ( vec_get [String] history hidx ) {
-                                                T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) ( string_free h ) }
+                                                T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) }
                                                 F _ → {}
                                             }
                                         } {}
@@ -268,7 +265,7 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
                                                 = pos 0
                                             } {
                                                 ?? ( vec_get [String] history hidx ) {
-                                                    T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) ( string_free h ) }
+                                                    T h → { ( __term_setbuf buf ( string_data h ) ) = pos ( string_len buf ) }
                                                     F _ → {}
                                                 }
                                             }
@@ -326,7 +323,6 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
                 T n → { ? > n 0 { = out n } {} }
                 F _ → {}
             }
-            ( string_free v )
             ^ out
         }
         F → { ^ def }

@@ -415,23 +415,12 @@ $ `stdlib/core/marker.nu`
         ( nurl_poke h 1 NURL_SQLITE_UNSUPPORTED )
         ^ @ !i SqliteErr { F # SqliteErr SqliteUnsupported }
     } {}
-    : s err_buf ( nurl_zalloc 8 )
-    : i rc ( sqlite3_exec db_ptr sql # *u 0 # *u 0 # *u err_buf )
-    : s err # s ( nurl_peek err_buf 0 )
-    ( nurl_free err_buf )
+    // No out-message: on failure the connection's own message (what
+    // sqlite3_exec would have copied out) is read with sqlite3_errmsg,
+    // so there is no sqlite-allocated string to give back.
+    : i rc ( sqlite3_exec db_ptr sql # *u 0 # *u 0 # *u 0 )
     ? != rc SQLITE_OK {
-        : s old # s ( nurl_peek h 2 )
-        ? != # i old 0 { ( nurl_free old ) ( nurl_poke h 2 0 ) } {}
-        ? != # i err 0 {
-            : i n ( nurl_str_len err )
-            : s copy ( nurl_alloc + n 1 )
-            : *u dst # *u copy
-            : *u src # *u err
-            ( nurl_memcpy dst src n )
-            = . dst n # u 0
-            ( nurl_poke h 2 # i copy )
-            ( sqlite3_free err )
-        } { ( __db_set_errmsg h ) }
+        ( __db_set_errmsg h )
         ( nurl_poke h 1 rc )
         ^ @ !i SqliteErr { F ( __sqlite_err_of rc ) }
     } {}
