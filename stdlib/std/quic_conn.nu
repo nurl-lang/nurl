@@ -143,7 +143,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── streams ──────────────────────────────────────────────────────
 
-: QuicStream {
+: QuicStreamImpl {
     i id
     QuicRxBuf rx
     i rx_window
@@ -168,38 +168,30 @@ $ `stdlib/core/rcbox.nu`
 
 @ _qc_stream_is_server i id → b { ^ == & id 1 1 }
 
-// `local`: this endpoint opened the stream.
-@ __qc_stream_new i id i rx_window i tx_max b local → *QuicStream {
-    : *QuicStream s # *QuicStream ( nurl_alloc Z QuicStream )
-    = . s id id
-    // Our own unidirectional stream has no receive side.
-    : b has_rx ! & local ! ( __qc_stream_is_bidi id )
-    ? has_rx { = . s rx ( quic_rxbuf_new rx_window ) } { = . s rx @ QuicRxBuf { # s 0 } }
-    = . s rx_window rx_window
-    = . s rx_max_data rx_window
-    = . s rx_fin_off -1
-    = . s rx_reset_err -1
-    = . s rx_done ? has_rx 0 1
-    = . s readable 0
-    = . s tx_buf ( vec_new [u] )
-    = . s tx_off 0
-    = . s tx_fin 0
-    = . s tx_fin_sent 0
-    = . s tx_max_data tx_max
-    = . s tx_reset_err -1
-    = . s tx_reset_sent 0
-    = . s tx_stop_err -1
-    // The peer's unidirectional stream has no send side.
-    : b has_tx | local ( __qc_stream_is_bidi id )
-    = . s tx_done ? has_tx 0 1
-    = . s app_done 0
-    ^ s
+// A stream is a handle on its state in an rcbox (stdlib/core/rcbox.nu),
+// kept in the connection's `streams`; its receive buffer and send queue
+// go with it.
+: QuicStream { s ctl }
+
+@ QuicStream_share QuicStream h → QuicStream { ^ @ QuicStream { # s ( rcbox_share # i . h ctl ) } }
+
+@ QuicStream_drop sink QuicStream h → v {
+    ( mem_forget h )
+    ( rcbox_release [QuicStreamImpl] # i . h ctl )
 }
 
-@ __qc_stream_free sink * QuicStream s → v {
-    ( quic_rxbuf_free . s rx )
-    ( vec_free [u] . s tx_buf )
-    ( nurl_free # s s )
+@ __QuicStream_ptr QuicStream h → *QuicStreamImpl { ^ ( rcbox_ptr [QuicStreamImpl] # i . h ctl ) }
+
+// `local`: this endpoint opened the stream.
+@ __qc_stream_new i id i rx_window i tx_max b local → QuicStream {
+    // Our own unidirectional stream has no receive side; the peer's
+    // unidirectional stream has no send side.
+    : b has_rx ! & local ! ( __qc_stream_is_bidi id )
+    : b has_tx | local ( __qc_stream_is_bidi id )
+    : QuicRxBuf rx ? has_rx ( quic_rxbuf_new rx_window ) @ QuicRxBuf { # s 0 }
+    ^ @ QuicStream { # s ( rcbox_new [QuicStreamImpl] @ QuicStreamImpl {
+            id rx rx_window rx_window -1 -1 ? has_rx 0 1 0
+            ( vec_new [u] ) 0 0 0 tx_max -1 0 -1 ? has_tx 0 1 0 } ) }
 }
 
 // ── the connection ───────────────────────────────────────────────
@@ -278,7 +270,7 @@ $ `stdlib/core/rcbox.nu`
     i max_streams_uni_peer
     i next_local_bidi
     i next_local_uni
-    ( Vec i ) streams
+    ( Vec QuicStream ) streams
     ( Vec i ) readable
     i idle_timeout
     i last_activity
@@ -312,19 +304,6 @@ $ `stdlib/core/rcbox.nu`
 // layer on top), and the last owner releases it.
 : QuicConn { s ctl }
 
-// The streams are raw QuicStream blocks (as integers): releasing them is
-// the connection's own drop. Keys, TLS machine, recovery state, transport
-// parameters and buffers go with the fields after it.
-% Drop QuicConnImpl {
-    @ drop QuicConnImpl c → v {
-        : ~ i k 0
-        ~ < k ( vec_len [i] . c streams ) {
-            ( __qc_stream_free # *QuicStream ( __qc_ri . c streams k ) )
-            = k + k 1
-        }
-    }
-}
-
 @ QuicConn_share QuicConn h → QuicConn { ^ @ QuicConn { # s ( rcbox_share # i . h ctl ) } }
 
 @ QuicConn_drop sink QuicConn h → v {
@@ -345,7 +324,7 @@ $ `stdlib/core/rcbox.nu`
 @ quic_conn_default_max_streams_uni → i { ^ 3 }
 
 // Did this endpoint open stream `id`? (server: odd ids; client: even)
-@ __qc_is_local * QuicConnImpl c i id → b { ^ == & id 1 ? != . c is_client 0 0 1 }
+@ __qc_is_local inout QuicConnImpl c i id → b { ^ == & id 1 ? != . c is_client 0 0 1 }
 
 @ __qc_rand i n → ( Vec u ) {
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
@@ -449,7 +428,7 @@ $ `stdlib/core/rcbox.nu`
     = . c max_streams_uni_peer 0
     = . c next_local_bidi 1
     = . c next_local_uni 3
-    = . c streams ( vec_new [i] )
+    = . c streams ( vec_new [QuicStream] )
     = . c readable ( vec_new [i] )
     = . c idle_timeout ( quic_tp_max_idle_timeout tp )
     = . c last_activity now
@@ -489,11 +468,9 @@ $ `stdlib/core/rcbox.nu`
     ( quic_tp_set_original_dcid mine odcid )
     : ( Vec u ) tok ( __qc_rand 16 )
     ( quic_tp_set_stateless_reset_token mine tok )
-    ( vec_free [u] tok )
     : ( Vec u ) tpb ( quic_tp_encode mine T )
     = . c tls ( quic_tls_srv_new . creds cert_chain . creds keytype . creds ec_priv . creds rsa_n . creds rsa_e . creds rsa_d . creds ml_level alpn_prefs tpb )
     ? > ( vec_len [u] . creds pq_chain ) 0 { ( quic_tls_srv_set_pq . c tls . creds pq_chain . creds pq_level . creds pq_sk ) } {}
-    ( vec_free [u] tpb )
     = . c k_rx0 ( quic_initial_keys odcid T )
     = . c k_tx0 ( quic_initial_keys odcid F )
     ^ h
@@ -508,14 +485,13 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) scid ( __qc_rand 8 )
     : ( Vec u ) dcid ( __qc_rand 8 )
     : QuicConn h ( __qc_new_common scid peer tp now )
-    : *QuicConnImpl c ( __QuicConn_ptr h )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr h )
     = . c is_client 1
     ( bytes_extend_bytes . c dcid dcid )
     ( bytes_extend_bytes . c odcid dcid )
     = . c dcid_learned 0
     : ( Vec u ) sn ( bytes_from_str server_name )
     ( bytes_extend_bytes . c server_name sn )
-    ( vec_free [u] sn )
     = . c verify verify
     // The client's address needs no validating (§8.1) and the client
     // never sends HANDSHAKE_DONE (§19.20).
@@ -525,12 +501,9 @@ $ `stdlib/core/rcbox.nu`
     = . c next_local_uni 2
     : ( Vec u ) tpb ( quic_tp_encode . c local_tp F )
     = . c tlsc ( quic_tls_cli_new server_name alpn tpb )
-    ( vec_free [u] tpb )
     = . c k_tx0 ( quic_initial_keys dcid T )
     = . c k_rx0 ( quic_initial_keys dcid F )
-    ( __qc_tls_pump c )
-    ( vec_free [u] dcid )
-    ( vec_free [u] scid )
+    ( __qc_tls_pump . c 0 )
     ^ h
 }
 
@@ -635,7 +608,7 @@ $ `stdlib/core/rcbox.nu`
 // Enter the closing state with a transport (`app` = 0) or application
 // (`app` = 1) error. The CONNECTION_CLOSE goes out with the next
 // `quic_conn_send`; the state lasts 3 PTOs (§10.2).
-@ __qc_fail * QuicConnImpl c i app i code i frame_type → v {
+@ __qc_fail inout QuicConnImpl c i app i code i frame_type → v {
     ? >= . c state 2 { ^ } {}
     = . c state 2
     = . c close_app app
@@ -647,54 +620,55 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_close QuicConn c__h i app i code ( Vec u ) reason → v {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
     ( vec_clear [u] . c close_reason )
     ( bytes_extend_bytes . c close_reason reason )
-    ( __qc_fail c app code 0 )
+    ( __qc_fail . c 0 app code 0 )
 }
 
 // ── streams: lookup / open ───────────────────────────────────────
 
-@ __qc_stream_get * QuicConnImpl c i id → *QuicStream {
+@ __qc_stream_get inout QuicConnImpl c i id → *QuicStreamImpl {
+    : *QuicStream sp ( vec_data [QuicStream] . c streams )
+    : i n ( vec_len [QuicStream] . c streams )
     : ~ i k 0
-    ~ < k ( vec_len [i] . c streams ) {
-        : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
+    ~ < k n {
+        : *QuicStreamImpl s ( __QuicStream_ptr . sp k )
         ? == . s id id { ^ s } {}
         = k + k 1
     }
-    ^ # *QuicStream 0
+    ^ # *QuicStreamImpl 0
 }
 
 // The peer's stream `id`: open it (and every lower one of its kind not
 // yet seen) unless it is beyond the limit we advertised. Returns the
 // stream, or 0 with the connection failed.
-@ __qc_peer_stream * QuicConnImpl c i id → *QuicStream {
-    : *QuicStream s ( __qc_stream_get c id )
+@ __qc_peer_stream inout QuicConnImpl c i id → *QuicStreamImpl {
+    : *QuicStreamImpl s ( __qc_stream_get c id )
     ? != # i s 0 { ^ s } {}
     : b bidi ( __qc_stream_is_bidi id )
     : i idx >> id 2
     : i limit ? bidi . c max_streams_bidi_local . c max_streams_uni_local
-    ? >= idx limit { ( __qc_fail c 0 ( quic_err_stream_limit ) 0 ) ^ # *QuicStream 0 } {}
+    ? >= idx limit { ( __qc_fail c 0 ( quic_err_stream_limit ) 0 ) ^ # *QuicStreamImpl 0 } {}
     // A stream below one already closed and forgotten: nothing to reopen.
     : i opened ? bidi . c peer_bidi_opened . c peer_uni_opened
     ? < idx opened {
         // it was opened and later released — treat as closed: no state
-        ^ # *QuicStream 0
+        ^ # *QuicStreamImpl 0
     } {}
     : i window ? bidi ( quic_tp_initial_max_stream_data_bidi_remote . c local_tp ) ( quic_tp_initial_max_stream_data_uni . c local_tp )
     : i tx_max ? bidi ? != 0 # i . . c peer_tp ctl ( quic_tp_initial_max_stream_data_bidi_local . c peer_tp ) 0 0
     : ~ i i opened
     ~ <= i idx {
         : i nid | << i 2 & id 3
-        : *QuicStream ns ( __qc_stream_new nid window tx_max F )
-        ( vec_push [i] . c streams # i ns )
+        ( vec_push [QuicStream] . c streams ( __qc_stream_new nid window tx_max F ) )
         = i + i 1
     }
     ? bidi { = . c peer_bidi_opened + idx 1 } { = . c peer_uni_opened + idx 1 }
     ^ ( __qc_stream_get c id )
 }
 
-@ __qc_mark_readable * QuicConnImpl c * QuicStream s → v {
+@ __qc_mark_readable inout QuicConnImpl c * QuicStreamImpl s → v {
     ? != . s readable 0 { ^ } {}
     = . s readable 1
     ( vec_push [i] . c readable . s id )
@@ -702,11 +676,11 @@ $ `stdlib/core/rcbox.nu`
 
 // Put ids back in front of the readable queue (the listener peeked).
 @ _qc_requeue_readable QuicConn c__h ( Vec i ) ids → v {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
     : ~ i k 0
     ~ < k ( vec_len [i] ids ) {
-        : *QuicStream s ( __qc_stream_get c ( __qc_ri ids k ) )
-        ? != # i s 0 { ( __qc_mark_readable c s ) } {}
+        : *QuicStreamImpl s ( __qc_stream_get . c 0 ( __qc_ri ids k ) )
+        ? != # i s 0 { ( __qc_mark_readable . c 0 s ) } {}
         = k + k 1
     }
 }
@@ -717,14 +691,14 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_take_readable QuicConn c__h → ( Vec i ) {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
     // The queue moves out (the connection starts an empty one).
     : ( Vec i ) out . c readable
     ( mem_take out )
     = . c readable ( vec_new [i] )
     : ~ i k 0
     ~ < k ( vec_len [i] out ) {
-        : *QuicStream s ( __qc_stream_get c ( __qc_ri out k ) )
+        : *QuicStreamImpl s ( __qc_stream_get . c 0 ( __qc_ri out k ) )
         ? != # i s 0 { = . s readable 0 } {}
         = k + k 1
     }
@@ -734,8 +708,8 @@ $ `stdlib/core/rcbox.nu`
 // ── streams: application side ────────────────────────────────────
 
 @ quic_conn_stream_recv QuicConn c__h i id i max → ( Vec u ) {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? | == # i s 0 == 0 # i . . s rx ctl { ^ ( vec_new [u] ) } {}
     ? >= . s rx_reset_err 0 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) out ( quic_rxbuf_read . s rx max )
@@ -760,23 +734,23 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_stream_fin QuicConn c__h i id → b {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? | == # i s 0 == 0 # i . . s rx ctl { ^ F } {}
     ? < . s rx_fin_off 0 { ^ F } {}
     ^ == ( quic_rxbuf_consumed . s rx ) . s rx_fin_off
 }
 
 @ quic_conn_stream_reset_err QuicConn c__h i id → i {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? == # i s 0 { ^ -1 } {}
     ^ . s rx_reset_err
 }
 
 @ quic_conn_stream_stop_err QuicConn c__h i id → i {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? == # i s 0 { ^ -1 } {}
     ^ . s tx_stop_err
 }
@@ -788,8 +762,7 @@ $ `stdlib/core/rcbox.nu`
     : i id . c next_local_uni
     = . c next_local_uni + id 4
     : i tx_max ? != 0 # i . . c peer_tp ctl ( quic_tp_initial_max_stream_data_uni . c peer_tp ) 0
-    : *QuicStream s ( __qc_stream_new id 0 tx_max T )
-    ( vec_push [i] . c streams # i s )
+    ( vec_push [QuicStream] . c streams ( __qc_stream_new id 0 tx_max T ) )
     ^ id
 }
 
@@ -802,16 +775,15 @@ $ `stdlib/core/rcbox.nu`
     ? >= idx . c max_streams_bidi_peer { ^ -1 } {}
     : i id . c next_local_bidi
     = . c next_local_bidi + id 4
-    : *QuicStream s ( __qc_stream_new id ( quic_tp_initial_max_stream_data_bidi_local . c local_tp ) ( quic_tp_initial_max_stream_data_bidi_remote . c peer_tp ) T )
-    ( vec_push [i] . c streams # i s )
+    ( vec_push [QuicStream] . c streams ( __qc_stream_new id ( quic_tp_initial_max_stream_data_bidi_local . c local_tp ) ( quic_tp_initial_max_stream_data_bidi_remote . c peer_tp ) T ) )
     ^ id
 }
 
 // Buffer `data` (and a FIN) for sending. Everything is accepted up to
 // 4 MB of unsent bytes per stream; flow control applies at send time.
 @ quic_conn_stream_send QuicConn c__h i id ( Vec u ) data b fin → i {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? == # i s 0 { ^ -1 } {}
     ? | != . s tx_done 0 != . s tx_fin 0 { ^ -1 } {}
     ? >= . s tx_reset_err 0 { ^ -1 } {}
@@ -827,8 +799,8 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_stream_reset QuicConn c__h i id i err → v {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? | == # i s 0 != . s tx_done 0 { ^ } {}
     ? >= . s tx_reset_err 0 { ^ } {}
     = . s tx_reset_err err
@@ -837,29 +809,28 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_stream_stop_sending QuicConn c__h i id i err → v {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? | == # i s 0 == 0 # i . . s rx ctl { ^ } {}
     ? != . s rx_done 0 { ^ } {}
     ( quic_push_stop_sending . c ctl2 id err )
 }
 
 @ quic_conn_stream_done QuicConn c__h i id → v {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
-    : *QuicStream s ( __qc_stream_get c id )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
+    : *QuicStreamImpl s ( __qc_stream_get . c 0 id )
     ? == # i s 0 { ^ } {}
     = . s app_done 1
-    ( __qc_stream_gc c )
+    ( __qc_stream_gc . c 0 )
 }
 
 // Release streams both sides are done with; credit the peer's stream
 // limit for its streams (MAX_STREAMS keeps `max_streams_*_local` open
 // slots ahead of what has been closed).
-@ __qc_stream_gc * QuicConnImpl c → v {
-    : ( Vec i ) keep ( vec_new [i] )
+@ __qc_stream_gc inout QuicConnImpl c → v {
     : ~ i k 0
-    ~ < k ( vec_len [i] . c streams ) {
-        : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
+    ~ < k ( vec_len [QuicStream] . c streams ) {
+        : *QuicStreamImpl s ( __QuicStream_ptr . ( vec_data [QuicStream] . c streams ) k )
         : b tx_finished | != . s tx_done 0 | & != . s tx_fin_sent 0 == ( vec_len [u] . s tx_buf ) 0 != . s tx_reset_sent 0
         : b rx_finished | != . s rx_done 0 >= . s rx_reset_err 0
         ? & & != . s app_done 0 tx_finished rx_finished {
@@ -880,30 +851,28 @@ $ `stdlib/core/rcbox.nu`
                     } {}
                 }
             } {}
-            ( __qc_stream_free s )
-        } { ( vec_push [i] keep # i s ) }
-        = k + k 1
+            // Out of the list, and gone with it.
+            : ?QuicStream gone ( vec_remove [QuicStream] . c streams k )
+        } { = k + k 1 }
     }
-    ( vec_free [i] . c streams )
-    = . c streams keep
 }
 
 // ── receive: packet-number bookkeeping ───────────────────────────
 
-@ __qc_rx_ranges * QuicConnImpl c i space → ( Vec i ) {
+@ __qc_rx_ranges inout QuicConnImpl c i space → ( Vec i ) {
     ? == space 0 { ^ . c rx_ranges0 } {}
     ? == space 1 { ^ . c rx_ranges1 } {}
     ^ . c rx_ranges2
 }
 
-@ __qc_largest_rx * QuicConnImpl c i space → i {
+@ __qc_largest_rx inout QuicConnImpl c i space → i {
     ? == space 0 { ^ . c largest_rx0 } {}
     ? == space 1 { ^ . c largest_rx1 } {}
     ^ . c largest_rx2
 }
 
 // Is `pn` already in the received set?
-@ __qc_rx_seen * QuicConnImpl c i space i pn → b {
+@ __qc_rx_seen inout QuicConnImpl c i space i pn → b {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     : ~ i k 0
     ~ < k ( vec_len [i] r ) {
@@ -915,7 +884,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Record `pn`; ranges are kept sorted descending [hi, lo] pairs as an
 // ACK frame wants them, at most 32 ranges (older ones fall off).
-@ __qc_rx_record * QuicConnImpl c i space i pn → v {
+@ __qc_rx_record inout QuicConnImpl c i space i pn → v {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     : ( Vec i ) out ( vec_new [i] )
     : ~ b placed F
@@ -940,7 +909,6 @@ $ `stdlib/core/rcbox.nu`
     }
     ? ! placed { ( vec_push [i] out lo ) ( vec_push [i] out hi ) } {}
     ~ > ( vec_len [i] out ) 64 { : ?i _a ( vec_pop [i] out ) : ?i _b ( vec_pop [i] out ) }
-    ( vec_free [i] r )
     ? == space 0 { = . c rx_ranges0 out } {}
     ? == space 1 { = . c rx_ranges1 out } {}
     ? == space 2 { = . c rx_ranges2 out } {}
@@ -952,7 +920,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Build an ACK frame for `space` from the received ranges.
-@ __qc_push_ack * QuicConnImpl c i space ( Vec u ) out → v {
+@ __qc_push_ack inout QuicConnImpl c i space ( Vec u ) out → v {
     : ( Vec i ) r ( __qc_rx_ranges c space )
     ? == ( vec_len [i] r ) 0 { ^ } {}
     : i largest ( __qc_ri r 1 )
@@ -976,7 +944,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── receive: keys per space ──────────────────────────────────────
 
-@ __qc_install_handshake_keys * QuicConnImpl c → v {
+@ __qc_install_handshake_keys inout QuicConnImpl c → v {
     ? != 0 # i . . c k_tx1 ctl { ^ } {}
     ? != . c is_client 0 {
         : i cipher ( quic_tls_cli_cipher . c tlsc )
@@ -992,7 +960,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The client's 1-RTT keys, once the server Finished has verified.
-@ __qc_install_app_keys * QuicConnImpl c → v {
+@ __qc_install_app_keys inout QuicConnImpl c → v {
     ? != 0 # i . . c k_tx2 ctl { ^ } {}
     : i cipher ( quic_tls_cli_cipher . c tlsc )
     = . c k_tx2 ( quic_keys_derive cipher ( quic_tls_cli_c_ap . c tlsc ) )
@@ -1000,7 +968,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // The peer's transport parameters, once the TLS layer has them.
-@ __qc_apply_peer_tp * QuicConnImpl c → v {
+@ __qc_apply_peer_tp inout QuicConnImpl c → v {
     ? != 0 # i . . c peer_tp ctl { ^ } {}
     : QuicTp p ? != . c is_client 0 ( quic_tp_decode ( quic_tls_cli_server_tp . c tlsc ) F ) ( quic_tp_decode ( quic_tls_srv_client_tp . c tls ) T )
     ? == 0 # i . p ctl { ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 ) ^ } {}
@@ -1018,7 +986,6 @@ $ `stdlib/core/rcbox.nu`
         } { ? ( quic_tp_has_retry_scid p ) { = ok F } {} }
     } {}
     ? ! ok {
-        ( quic_tp_free p )
         ( __qc_fail c 0 ( quic_err_transport_parameter ) 0 )
         ^
     } {}
@@ -1035,8 +1002,8 @@ $ `stdlib/core/rcbox.nu`
     // streams opened before the parameters arrived (none for a server —
     // client data waits for 1-RTT — but keep the invariant)
     : ~ i k 0
-    ~ < k ( vec_len [i] . c streams ) {
-        : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
+    ~ < k ( vec_len [QuicStream] . c streams ) {
+        : *QuicStreamImpl s ( __QuicStream_ptr . ( vec_data [QuicStream] . c streams ) k )
         ? ( __qc_stream_is_bidi . s id ) {
             = . s tx_max_data ? ( __qc_is_local c . s id ) ( quic_tp_initial_max_stream_data_bidi_remote p ) ( quic_tp_initial_max_stream_data_bidi_local p )
         } {}
@@ -1046,14 +1013,14 @@ $ `stdlib/core/rcbox.nu`
 
 // Drain the TLS layer's outputs into the CRYPTO queues and react to
 // its state changes.
-@ __qc_tls_pump * QuicConnImpl c → v {
+@ __qc_tls_pump inout QuicConnImpl c → v {
     ? != . c is_client 0 { ( __qc_tls_pump_client c ) ^ } {}
     : ( Vec u ) o0 ( quic_tls_srv_take_out . c tls 0 )
-    ( bytes_extend_bytes . c crypto_out0 o0 ) ( vec_free [u] o0 )
+    ( bytes_extend_bytes . c crypto_out0 o0 )
     : ( Vec u ) o1 ( quic_tls_srv_take_out . c tls 1 )
-    ( bytes_extend_bytes . c crypto_out1 o1 ) ( vec_free [u] o1 )
+    ( bytes_extend_bytes . c crypto_out1 o1 )
     : ( Vec u ) o2 ( quic_tls_srv_take_out . c tls 2 )
-    ( bytes_extend_bytes . c crypto_out2 o2 ) ( vec_free [u] o2 )
+    ( bytes_extend_bytes . c crypto_out2 o2 )
     : i st ( quic_tls_srv_state . c tls )
     ? & >= st 1 == . c tls_state 0 {
         = . c tls_state 1
@@ -1078,13 +1045,13 @@ $ `stdlib/core/rcbox.nu`
 // Finished verified — the handshake is then complete (streams may
 // open, 1-RTT data flows both ways) but confirmed only on the server's
 // HANDSHAKE_DONE (§4.1.2), which is when the Handshake keys go.
-@ __qc_tls_pump_client * QuicConnImpl c → v {
+@ __qc_tls_pump_client inout QuicConnImpl c → v {
     : ( Vec u ) o0 ( quic_tls_cli_take_out . c tlsc 0 )
-    ( bytes_extend_bytes . c crypto_out0 o0 ) ( vec_free [u] o0 )
+    ( bytes_extend_bytes . c crypto_out0 o0 )
     : ( Vec u ) o1 ( quic_tls_cli_take_out . c tlsc 1 )
-    ( bytes_extend_bytes . c crypto_out1 o1 ) ( vec_free [u] o1 )
+    ( bytes_extend_bytes . c crypto_out1 o1 )
     : ( Vec u ) o2 ( quic_tls_cli_take_out . c tlsc 2 )
-    ( bytes_extend_bytes . c crypto_out2 o2 ) ( vec_free [u] o2 )
+    ( bytes_extend_bytes . c crypto_out2 o2 )
     : i st ( quic_tls_cli_state . c tlsc )
     ? & >= st 1 == . c tls_state 0 {
         = . c tls_state 1
@@ -1095,7 +1062,6 @@ $ `stdlib/core/rcbox.nu`
         ? != . c verify 0 {
             : String sn ( string_from_bytes ( vec_data [u] . c server_name ) ( vec_len [u] . c server_name ) )
             : i vrc ( quic_tls_cli_verify . c tlsc ( string_data sn ) )
-            ( string_free sn )
             ? != vrc 0 { ( __qc_fail c 0 ( quic_err_crypto vrc ) 0 ) ^ } {}
         } {}
         ( __qc_install_app_keys c )
@@ -1107,11 +1073,10 @@ $ `stdlib/core/rcbox.nu`
     } {}
 }
 
-@ __qc_drop_keys * QuicConnImpl c i space → v {
+@ __qc_drop_keys inout QuicConnImpl c i space → v {
     ? == space 0 {
         ? != . c keys0_dropped 0 { ^ } {}
         = . c keys0_dropped 1
-        ( quic_keys_free . c k_rx0 ) ( quic_keys_free . c k_tx0 )
         = . c k_rx0 @ QuicKeys { # s 0 }
         = . c k_tx0 @ QuicKeys { # s 0 }
         ( vec_clear [u] . c crypto_out0 ) ( vec_clear [u] . c retx0 )
@@ -1120,7 +1085,6 @@ $ `stdlib/core/rcbox.nu`
     } {}
     ? != . c keys1_dropped 0 { ^ } {}
     = . c keys1_dropped 1
-    ( quic_keys_free . c k_rx1 ) ( quic_keys_free . c k_tx1 )
     = . c k_rx1 @ QuicKeys { # s 0 }
     = . c k_tx1 @ QuicKeys { # s 0 }
     ( vec_clear [u] . c crypto_out1 ) ( vec_clear [u] . c retx1 )
@@ -1130,7 +1094,7 @@ $ `stdlib/core/rcbox.nu`
 // More connection IDs for the peer (§5.1.1), each with a reset token:
 // up to two extra, never more than its active_connection_id_limit allows
 // (the initial one counts; the default limit of 2 leaves room for one).
-@ __qc_issue_cids * QuicConnImpl c → v {
+@ __qc_issue_cids inout QuicConnImpl c → v {
     : i limit ? != 0 # i . . c peer_tp ctl ( quic_tp_active_connection_id_limit . c peer_tp ) 2
     : ~ i want - limit 1
     ? > want 2 { = want 2 } {}
@@ -1142,20 +1106,19 @@ $ `stdlib/core/rcbox.nu`
         ( vec_push [i] . c cid_seqs . c cid_next_seq )
         = . c cid_next_seq + . c cid_next_seq 1
         = . c cid_extra_issued + . c cid_extra_issued 1
-        ( vec_free [u] tok ) ( vec_free [u] cid )
     }
 }
 
 // ── receive: frames ──────────────────────────────────────────────
 
 // Returns 0 to continue, 1 when the connection has failed.
-@ __qc_on_stream_frame * QuicConnImpl c QuicFrame f → i {
+@ __qc_on_stream_frame inout QuicConnImpl c QuicFrame f → i {
     : i id ( quic_frame_a f )
     ? ( __qc_is_local c id ) {
         ? ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
         ? >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
     } {}
-    : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
+    : *QuicStreamImpl s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
     ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
     ? == 0 # i . . s rx ctl { ( __qc_fail c 0 ( quic_err_stream_state ) ( quic_frame_type f ) ) ^ 1 } {}
     : i off ( quic_frame_b f )
@@ -1182,7 +1145,7 @@ $ `stdlib/core/rcbox.nu`
     ^ 0
 }
 
-@ __qc_on_frame * QuicConnImpl c i space QuicFrame f → i {
+@ __qc_on_frame inout QuicConnImpl c i space QuicFrame f → i {
     : i ft ( quic_frame_type f )
     ? | == ft 0 == ft 1 { ^ 0 } {}
     ? | == ft 2 == ft 3 {
@@ -1191,7 +1154,6 @@ $ `stdlib/core/rcbox.nu`
         ? == space 0 { ( bytes_extend_bytes . c retx0 lost ) } {}
         ? == space 1 { ( bytes_extend_bytes . c retx1 lost ) } {}
         ? == space 2 { ( bytes_extend_bytes . c retx2 lost ) } {}
-        ( vec_free [u] lost )
         ^ 0
     } {}
     ? == ft 6 {
@@ -1214,7 +1176,7 @@ $ `stdlib/core/rcbox.nu`
         : i id ( quic_frame_a f )
         ? & ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id . c next_local_bidi { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
-        : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
+        : *QuicStreamImpl s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
         ? == 0 # i . . s rx ctl { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         : i final ( quic_frame_c f )
@@ -1234,7 +1196,7 @@ $ `stdlib/core/rcbox.nu`
         // receive-only for us: the peer's unidirectional streams
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id ? ( __qc_stream_is_bidi id ) . c next_local_bidi . c next_local_uni { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
-        : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
+        : *QuicStreamImpl s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
         ? < . s tx_stop_err 0 {
             = . s tx_stop_err ( quic_frame_b f )
@@ -1248,7 +1210,7 @@ $ `stdlib/core/rcbox.nu`
         : i id ( quic_frame_a f )
         ? & ! ( __qc_is_local c id ) ! ( __qc_stream_is_bidi id ) { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
         ? & ( __qc_is_local c id ) >= id ? ( __qc_stream_is_bidi id ) . c next_local_bidi . c next_local_uni { ( __qc_fail c 0 ( quic_err_stream_state ) ft ) ^ 1 } {}
-        : *QuicStream s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
+        : *QuicStreamImpl s ? ( __qc_is_local c id ) ( __qc_stream_get c id ) ( __qc_peer_stream c id )
         ? == # i s 0 { ^ ? >= . c state 2 1 0 } {}
         ? > ( quic_frame_b f ) . s tx_max_data { = . s tx_max_data ( quic_frame_b f ) } {}
         ^ 0
@@ -1287,7 +1249,6 @@ $ `stdlib/core/rcbox.nu`
             ( vec_push [i] . c peer_cid_seqs seq )
             ( bytes_extend_bytes . c peer_cids cid )
         } {}
-        ( vec_free [u] cid )
         // RFC 9000 §19.15 — Retire Prior To MUST NOT exceed the Sequence
         // Number. Without this a single frame with rpt = seq = 2^60 drove
         // the retire loop ~4.6e18 iterations (CPU hang + OOM building
@@ -1334,7 +1295,6 @@ $ `stdlib/core/rcbox.nu`
                 : ( Vec u ) rest ( bytes_slice . c cids + * k 8 8 ( vec_len [u] . c cids ) )
                 : b _t ( vec_set_len [u] . c cids * k 8 )
                 ( bytes_extend_bytes . c cids rest )
-                ( vec_free [u] rest )
                 = . c cid_extra_issued - . c cid_extra_issued 1
                 ( __qc_issue_cids c )
                 ^ 0
@@ -1377,7 +1337,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── receive: packets ─────────────────────────────────────────────
 
-@ __qc_rx_keys * QuicConnImpl c i space → QuicKeys {
+@ __qc_rx_keys inout QuicConnImpl c i space → QuicKeys {
     ? == space 0 { ^ . c k_rx0 } {}
     ? == space 1 { ^ . c k_rx1 } {}
     ^ . c k_rx2
@@ -1385,20 +1345,18 @@ $ `stdlib/core/rcbox.nu`
 
 // Does this packet's DCID name us? Initial packets may still carry the
 // client's original DCID (it learns ours from the ServerHello packet).
-@ __qc_is_ours * QuicConnImpl c ( Vec u ) pkt QuicHdr h → b {
+@ __qc_is_ours inout QuicConnImpl c ( Vec u ) pkt QuicHdr h → b {
     : i dl . h dcid_len
     : ( Vec u ) d ( quic_hdr_dcid h pkt )
-    ? & == . h ptype 0 ( bytes_eq d . c odcid ) { ( vec_free [u] d ) ^ T } {}
-    ? != dl 8 { ( vec_free [u] d ) ^ F } {}
+    ? & == . h ptype 0 ( bytes_eq d . c odcid ) { ^ T } {}
+    ? != dl 8 { ^ F } {}
     : ~ i k 0
     : ~ b ok F
     ~ & ! ok < + k 8 + ( vec_len [u] . c cids ) 1 {
         : ( Vec u ) cid ( bytes_slice . c cids k + k 8 )
         ? ( bytes_eq cid d ) { = ok T } {}
-        ( vec_free [u] cid )
         = k + k 8
     }
-    ( vec_free [u] d )
     ^ ok
 }
 
@@ -1406,7 +1364,7 @@ $ `stdlib/core/rcbox.nu`
 // of the server's has been processed (a Retry counts): if version 1 is listed the packet is
 // a fake and ignored; otherwise there is no version in common and the
 // attempt is abandoned — the connection closes with no packet sent.
-@ __qc_on_vn * QuicConnImpl c ( Vec u ) dgram QuicHdr h → v {
+@ __qc_on_vn inout QuicConnImpl c ( Vec u ) dgram QuicHdr h → v {
     ? | | | == . c is_client 0 >= . c largest_rx0 0 != . c tls_state 0 != . c retry_seen 0 { ^ } {}
     : ~ i p . h pn_off
     : ~ b has1 F
@@ -1426,7 +1384,7 @@ $ `stdlib/core/rcbox.nu`
 // new DCID (new Initial keys), its token rides in every Initial, the
 // ClientHello goes again, and packet numbers continue (§17.2.5.3). A
 // Retry that fails its tag or repeats our own DCID is discarded.
-@ __qc_on_retry * QuicConnImpl c ( Vec u ) dgram i off QuicHdr h → v {
+@ __qc_on_retry inout QuicConnImpl c ( Vec u ) dgram i off QuicHdr h → v {
     ? | | | == . c is_client 0 != . c retry_seen 0 >= . c largest_rx0 0 != . c tls_state 0 { ^ } {}
     : i n . h end
     ? < - n off 16 { ^ } {}
@@ -1434,20 +1392,16 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) tag ( bytes_slice dgram - n 16 n )
     : ( Vec u ) want ( quic_retry_tag . c odcid body )
     : b ok ( bytes_eq tag want )
-    ( vec_free [u] want ) ( vec_free [u] tag ) ( vec_free [u] body )
     ? ! ok { ^ } {}
     : ( Vec u ) rscid ( quic_hdr_scid h dgram )
-    ? | == ( vec_len [u] rscid ) 0 ( bytes_eq rscid . c dcid ) { ( vec_free [u] rscid ) ^ } {}
+    ? | == ( vec_len [u] rscid ) 0 ( bytes_eq rscid . c dcid ) { ^ } {}
     = . c retry_seen 1
     ( vec_clear [u] . c retry_scid ) ( bytes_extend_bytes . c retry_scid rscid )
     ( vec_clear [u] . c dcid ) ( bytes_extend_bytes . c dcid rscid )
     : ( Vec u ) tok ( quic_hdr_token h dgram )
     ( vec_clear [u] . c token ) ( bytes_extend_bytes . c token tok )
-    ( vec_free [u] tok )
-    ( quic_keys_free . c k_tx0 ) ( quic_keys_free . c k_rx0 )
     = . c k_tx0 ( quic_initial_keys rscid T )
     = . c k_rx0 ( quic_initial_keys rscid F )
-    ( vec_free [u] rscid )
     // the Initial we sent is gone as far as the server is concerned
     ( quic_rec_discard_space . c rec 0 )
     ( vec_clear [u] . c retx0 )
@@ -1459,7 +1413,7 @@ $ `stdlib/core/rcbox.nu`
 
 // One packet out of a datagram. Returns the offset after it, or -1 to
 // stop processing the datagram.
-@ __qc_recv_packet * QuicConnImpl c ( Vec u ) dgram i off → i {
+@ __qc_recv_packet inout QuicConnImpl c ( Vec u ) dgram i off → i {
     : QuicHdr h ( quic_hdr_parse dgram off 8 )
     ? < . h ptype 0 { ^ -1 } {}
     : i ptype . h ptype
@@ -1478,7 +1432,7 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) pkt ( bytes_slice dgram off end )
     : i pn_off - . h pn_off off
     : i pn_len ( quic_hp_remove keys pkt pn_off )
-    ? < pn_len 0 { ( vec_free [u] pkt ) ^ end } {}
+    ? < pn_len 0 { ^ end } {}
     : i b0 ( __qc_bget pkt 0 )
     : i pn ( quic_pn_decode ( quic_pn_read pkt pn_off pn_len ) pn_len ( __qc_largest_rx c space ) )
     : ( Vec u ) hdr ( bytes_slice pkt 0 + pn_off pn_len )
@@ -1489,40 +1443,36 @@ $ `stdlib/core/rcbox.nu`
     ? == space 2 {
         : i phase ? != & b0 4 0 1 0
         ? == phase . c key_phase {
-            ?? ( quic_open keys pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T } F → {} }
+            ?? ( quic_open keys pn hdr body ) { T p → { = payload p = opened T } F → {} }
             // an old-phase packet after an update
             ? & ! opened != 0 # i . . c k_rx2_prev ctl {
-                ?? ( quic_open . c k_rx2_prev pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T } F → {} }
+                ?? ( quic_open . c k_rx2_prev pn hdr body ) { T p → { = payload p = opened T } F → {} }
             } {}
         } {
             ? == 0 # i . . c k_rx2_next ctl { = . c k_rx2_next ( quic_keys_update . c k_rx2 ) } {}
-            ?? ( quic_open . c k_rx2_next pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T = phase_flip T } F → {} }
+            ?? ( quic_open . c k_rx2_next pn hdr body ) { T p → { = payload p = opened T = phase_flip T } F → {} }
         }
     } {
-        ?? ( quic_open keys pn hdr body ) { T p → { ( vec_free [u] payload ) = payload p = opened T } F → {} }
+        ?? ( quic_open keys pn hdr body ) { T p → { = payload p = opened T } F → {} }
     }
     // the server's SCID from its first authenticated Initial is the DCID
     // we send to from now on (§7.2)
     : ( Vec u ) srv_scid ? & & opened == space 0 == . c dcid_learned 0 ( quic_hdr_scid h dgram ) ( vec_new [u] )
-    ( vec_free [u] body ) ( vec_free [u] hdr ) ( vec_free [u] pkt )
-    ? ! opened { ( vec_free [u] payload ) ( vec_free [u] srv_scid ) ^ end } {}
+    ? ! opened { ^ end } {}
     ? & == space 0 == . c dcid_learned 0 {
         = . c dcid_learned 1
         ( vec_clear [u] . c dcid )
         ( bytes_extend_bytes . c dcid srv_scid )
     } {}
-    ( vec_free [u] srv_scid )
     // reserved bits (§17.2 / §17.3.1), only meaningful once authenticated
-    ? != & b0 12 0 { ( vec_free [u] payload ) ( __qc_fail c 0 10 0 ) ^ -1 } {}
-    ? ( __qc_rx_seen c space pn ) { ( vec_free [u] payload ) ^ end } {}
+    ? != & b0 12 0 { ( __qc_fail c 0 10 0 ) ^ -1 } {}
+    ? ( __qc_rx_seen c space pn ) { ^ end } {}
     ? phase_flip {
         // key update (§6): the peer's new keys are good; rotate ours too
-        ( quic_keys_free . c k_rx2_prev )
         = . c k_rx2_prev . c k_rx2
         = . c k_rx2 . c k_rx2_next
         = . c k_rx2_next @ QuicKeys { # s 0 }
         : QuicKeys ntx ( quic_keys_update . c k_tx2 )
-        ( quic_keys_free . c k_tx2 )
         = . c k_tx2 ntx
         = . c key_phase ? == . c key_phase 0 1 0
         = . c key_update_pn pn
@@ -1534,7 +1484,7 @@ $ `stdlib/core/rcbox.nu`
         = . c validated 1
         ( __qc_drop_keys c 0 )
     } {}
-    ? == ( vec_len [u] payload ) 0 { ( vec_free [u] payload ) ( __qc_fail c 0 10 0 ) ^ -1 } {}
+    ? == ( vec_len [u] payload ) 0 { ( __qc_fail c 0 10 0 ) ^ -1 } {}
     : ~ i p 0
     : ~ i ack_eliciting 0
     : ~ i stop 0
@@ -1553,10 +1503,8 @@ $ `stdlib/core/rcbox.nu`
                 = p ( quic_frame_next f )
                 ? != ( __qc_on_frame c space f ) 0 { = stop 1 } {}
             }
-            ( quic_frame_free f )
         }
     }
-    ( vec_free [u] payload )
     ? != ack_eliciting 0 {
         ? == space 0 { = . c ack_needed0 1 } {}
         ? == space 1 { = . c ack_needed1 1 } {}
@@ -1571,7 +1519,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_recv QuicConn c__h ( Vec u ) dgram ( Vec u ) from i now → v {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     ? >= . c state 3 {
         // draining / closed: nothing is processed
@@ -1596,13 +1544,12 @@ $ `stdlib/core/rcbox.nu`
             ? == . h ptype 0 {
                 : ( Vec u ) sc ( quic_hdr_scid h dgram )
                 ( bytes_extend_bytes . c dcid sc )
-                ( vec_free [u] sc )
             } {}
         } {}
     } {}
     : ~ i off 0
     ~ & >= off 0 < off ( vec_len [u] dgram ) {
-        = off ( __qc_recv_packet c dgram off )
+        = off ( __qc_recv_packet . c 0 dgram off )
     }
     // Commit a peer-address migration only now, and only if a packet in
     // this datagram authenticated (last_activity advanced). This ties the
@@ -1620,37 +1567,37 @@ $ `stdlib/core/rcbox.nu`
 
 // ── send ─────────────────────────────────────────────────────────
 
-@ __qc_tx_keys * QuicConnImpl c i space → QuicKeys {
+@ __qc_tx_keys inout QuicConnImpl c i space → QuicKeys {
     ? == space 0 { ^ . c k_tx0 } {}
     ? == space 1 { ^ . c k_tx1 } {}
     ^ . c k_tx2
 }
 
-@ __qc_next_pn * QuicConnImpl c i space → i {
+@ __qc_next_pn inout QuicConnImpl c i space → i {
     ? == space 0 { ^ . c next_pn0 } {}
     ? == space 1 { ^ . c next_pn1 } {}
     ^ . c next_pn2
 }
 
-@ __qc_bump_pn * QuicConnImpl c i space → v {
+@ __qc_bump_pn inout QuicConnImpl c i space → v {
     ? == space 0 { = . c next_pn0 + . c next_pn0 1 ^ } {}
     ? == space 1 { = . c next_pn1 + . c next_pn1 1 ^ } {}
     = . c next_pn2 + . c next_pn2 1
 }
 
-@ __qc_crypto_out * QuicConnImpl c i space → ( Vec u ) {
+@ __qc_crypto_out inout QuicConnImpl c i space → ( Vec u ) {
     ? == space 0 { ^ . c crypto_out0 } {}
     ? == space 1 { ^ . c crypto_out1 } {}
     ^ . c crypto_out2
 }
 
-@ __qc_crypto_sent * QuicConnImpl c i space → i {
+@ __qc_crypto_sent inout QuicConnImpl c i space → i {
     ? == space 0 { ^ . c crypto_sent0 } {}
     ? == space 1 { ^ . c crypto_sent1 } {}
     ^ . c crypto_sent2
 }
 
-@ __qc_retx * QuicConnImpl c i space → ( Vec u ) {
+@ __qc_retx inout QuicConnImpl c i space → ( Vec u ) {
     ? == space 0 { ^ . c retx0 } {}
     ? == space 1 { ^ . c retx1 } {}
     ^ . c retx2
@@ -1666,13 +1613,11 @@ $ `stdlib/core/rcbox.nu`
         : QuicFrame f ( quic_frame_parse src p )
         ? == 0 # i . f ctl { : b _t ( vec_set_len [u] src p ) = p ( vec_len [u] src ) } {
             : i fl - ( quic_frame_next f ) p
-            ? > fl - room used { ( quic_frame_free f ) = p ( vec_len [u] src ) } {
+            ? > fl - room used { = p ( vec_len [u] src ) } {
                 : ( Vec u ) piece ( bytes_slice src p ( quic_frame_next f ) )
                 ( bytes_extend_bytes dst piece )
-                ( vec_free [u] piece )
                 = used + used fl
                 = p ( quic_frame_next f )
-                ( quic_frame_free f )
             }
         }
     }
@@ -1680,7 +1625,6 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) rest ( bytes_slice src used ( vec_len [u] src ) )
         ( vec_clear [u] src )
         ( bytes_extend_bytes src rest )
-        ( vec_free [u] rest )
     } {}
     ^ used
 }
@@ -1691,18 +1635,17 @@ $ `stdlib/core/rcbox.nu`
 
 // Append the reserved ACK when it is due or the packet has other frames;
 // returns the packet's ack-eliciting flag unchanged.
-@ __qc_finish_ack * QuicConnImpl c i space ( Vec u ) out ( Vec u ) ackbuf b due i ae → i {
+@ __qc_finish_ack inout QuicConnImpl c i space ( Vec u ) out ( Vec u ) ackbuf b due i ae → i {
     ? & > ( vec_len [u] ackbuf ) 0 | due > ( vec_len [u] out ) 0 {
         ( bytes_extend_bytes out ackbuf )
         ? == space 0 { = . c ack_needed0 0 } {}
         ? == space 1 { = . c ack_needed1 0 } {}
         ? == space 2 { = . c ack_needed2 0 = . c ae_since_ack2 0 } {}
     } {}
-    ( vec_free [u] ackbuf )
     ^ ae
 }
 
-@ __qc_build_payload * QuicConnImpl c i space i room ( Vec u ) out ( Vec u ) retx → i {
+@ __qc_build_payload inout QuicConnImpl c i space i room ( Vec u ) out ( Vec u ) retx → i {
     : ~ i ae 0
     : ~ i left room
     // CONNECTION_CLOSE, alone (§10.2.3)
@@ -1751,7 +1694,6 @@ $ `stdlib/core/rcbox.nu`
             = ae 1
             : ( Vec u ) rest ( bytes_slice co n ( vec_len [u] co ) )
             ( vec_clear [u] co ) ( bytes_extend_bytes co rest )
-            ( vec_free [u] rest ) ( vec_free [u] fr ) ( vec_free [u] chunk )
             ? == space 0 { = . c crypto_sent0 + sent n } {}
             ? == space 1 { = . c crypto_sent1 + sent n } {}
             ? == space 2 { = . c crypto_sent2 + sent n } {}
@@ -1775,8 +1717,8 @@ $ `stdlib/core/rcbox.nu`
     } {}
     // RESET_STREAM for streams asked to stop / reset by the application
     : ~ i k 0
-    ~ & < k ( vec_len [i] . c streams ) > left 16 {
-        : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
+    ~ & < k ( vec_len [QuicStream] . c streams ) > left 16 {
+        : *QuicStreamImpl s ( __QuicStream_ptr . ( vec_data [QuicStream] . c streams ) k )
         ? & >= . s tx_reset_err 0 == . s tx_reset_sent 0 {
             ( quic_push_reset_stream out . s id . s tx_reset_err . s tx_off )
             ( quic_push_reset_stream retx . s id . s tx_reset_err . s tx_off )
@@ -1790,8 +1732,8 @@ $ `stdlib/core/rcbox.nu`
     // STREAM data, round-robin, under both flow-control limits and cwnd
     ? ! ( quic_rec_can_send . c rec room ) { ^ ( __qc_finish_ack c space out ackbuf ack_due ae ) } {}
     = k 0
-    ~ & < k ( vec_len [i] . c streams ) > left 8 {
-        : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
+    ~ & < k ( vec_len [QuicStream] . c streams ) > left 8 {
+        : *QuicStreamImpl s ( __QuicStream_ptr . ( vec_data [QuicStream] . c streams ) k )
         : i pending ( vec_len [u] . s tx_buf )
         : b want_fin & != . s tx_fin 0 == . s tx_fin_sent 0
         ? & == . s tx_done 0 | > pending 0 want_fin {
@@ -1817,12 +1759,11 @@ $ `stdlib/core/rcbox.nu`
                     = left - left ( vec_len [u] fr )
                     = ae 1
                     : ( Vec u ) rest ( bytes_slice . s tx_buf allow pending )
-                    ( vec_clear [u] . s tx_buf ) ( bytes_extend_bytes . s tx_buf rest ) ( vec_free [u] rest )
+                    ( vec_clear [u] . s tx_buf ) ( bytes_extend_bytes . s tx_buf rest )
                     = . s tx_off + . s tx_off allow
                     = . c data_sent + . c data_sent allow
                     ? fin_now { = . s tx_fin_sent 1 = . s tx_done 1 } {}
                 } {}
-                ( vec_free [u] chunk )
             } {
                 // blocked by flow control: say so once per limit
                 ? & > pending 0 <= win_s 0 { ( quic_push_stream_data_blocked out . s id . s tx_max_data ) = left - room ( vec_len [u] out ) = ae 1 } {}
@@ -1834,7 +1775,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Is there anything to send in `space`?
-@ __qc_space_wants_send * QuicConnImpl c i space → b {
+@ __qc_space_wants_send inout QuicConnImpl c i space → b {
     ? == # i ( __qc_tx_keys c space ) 0 { ^ F } {}
     ? == . c state 2 { ^ == . c close_sent 0 } {}
     : i need ? == space 0 . c ack_needed0 ? == space 1 . c ack_needed1 . c ack_needed2
@@ -1845,8 +1786,8 @@ $ `stdlib/core/rcbox.nu`
     ? & != . c confirmed 0 == . c handshake_done_sent 0 { ^ T } {}
     ? > ( vec_len [u] . c ctl2 ) 0 { ^ T } {}
     : ~ i k 0
-    ~ < k ( vec_len [i] . c streams ) {
-        : *QuicStream s # *QuicStream ( __qc_ri . c streams k )
+    ~ < k ( vec_len [QuicStream] . c streams ) {
+        : *QuicStreamImpl s ( __QuicStream_ptr . ( vec_data [QuicStream] . c streams ) k )
         ? & >= . s tx_reset_err 0 == . s tx_reset_sent 0 { ^ T } {}
         ? & == . s tx_done 0 | > ( vec_len [u] . s tx_buf ) 0 & != . s tx_fin 0 == . s tx_fin_sent 0 {
             ? & > ( vec_len [u] . s tx_buf ) 0 | <= - . s tx_max_data . s tx_off 0 <= - . c max_data_peer . c data_sent 0 {} { ^ T }
@@ -1857,7 +1798,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_send QuicConn c__h i now → ( Vec u ) {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     : ( Vec u ) dgram ( vec_new [u] )
     ? >= . c state 3 { ^ dgram } {}
@@ -1871,9 +1812,8 @@ $ `stdlib/core/rcbox.nu`
     : i probe ( quic_rec_take_probe . c rec )
     ? >= probe 0 {
         : ( Vec u ) pf ( quic_rec_probe_frames . c rec probe )
-        : ( Vec u ) rq ( __qc_retx c probe )
+        : ( Vec u ) rq ( __qc_retx . c 0 probe )
         ? > ( vec_len [u] pf ) 0 { ( bytes_extend_bytes rq pf ) } { ( quic_push_ping rq ) }
-        ( vec_free [u] pf )
     } {}
     // Plaintext payloads per space first, so the datagram can be padded
     // as a whole; then seal in order.
@@ -1894,20 +1834,20 @@ $ `stdlib/core/rcbox.nu`
     : ~ i has0 0
     : ~ i has1 0
     : ~ i has2 0
-    ? & ( __qc_space_wants_send c 0 ) == . c keys0_dropped 0 {
+    ? & ( __qc_space_wants_send . c 0 0 ) == . c keys0_dropped 0 {
         : i room - - budget used + + hdr_long tok_cost 16
-        ? > room 0 { = ae0 ( __qc_build_payload c 0 room pay0 rt0 ) } {}
+        ? > room 0 { = ae0 ( __qc_build_payload . c 0 0 room pay0 rt0 ) } {}
         ? | > ( vec_len [u] pay0 ) 0 == . c close_sent 0 { = has0 1 = used + used + + + hdr_long tok_cost 16 ( vec_len [u] pay0 ) } {}
     } {}
-    ? & ( __qc_space_wants_send c 1 ) == . c keys1_dropped 0 {
+    ? & ( __qc_space_wants_send . c 0 1 ) == . c keys1_dropped 0 {
         : i room - - budget used + hdr_long 16
-        ? > room 0 { = ae1 ( __qc_build_payload c 1 room pay1 rt1 ) } {}
+        ? > room 0 { = ae1 ( __qc_build_payload . c 0 1 room pay1 rt1 ) } {}
         ? > ( vec_len [u] pay1 ) 0 { = has1 1 = used + used + + hdr_long 16 ( vec_len [u] pay1 ) } {}
     } {}
-    ? & ( __qc_space_wants_send c 2 ) != 0 # i . . c k_tx2 ctl {
+    ? & ( __qc_space_wants_send . c 0 2 ) != 0 # i . . c k_tx2 ctl {
         ? >= . c tls_state 2 {
             : i room - - budget used + hdr_short 16
-            ? > room 0 { = ae2 ( __qc_build_payload c 2 room pay2 rt2 ) } {}
+            ? > room 0 { = ae2 ( __qc_build_payload . c 0 2 room pay2 rt2 ) } {}
             ? > ( vec_len [u] pay2 ) 0 { = has2 1 = used + used + + hdr_short 16 ( vec_len [u] pay2 ) } {}
         } {}
     } {}
@@ -1933,8 +1873,7 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) pkt ( quic_packet_protect . c k_tx0 hdr pn pn_len pay0 )
         ( bytes_extend_bytes dgram pkt )
         ( quic_rec_on_sent . c rec 0 pn now ( vec_len [u] pkt ) ae0 rt0 )
-        ( __qc_bump_pn c 0 )
-        ( vec_free [u] pkt ) ( vec_free [u] hdr )
+        ( __qc_bump_pn . c 0 0 )
     } {}
     ? != has1 0 {
         : i pn . c next_pn1
@@ -1944,8 +1883,7 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) pkt ( quic_packet_protect . c k_tx1 hdr pn pn_len pay1 )
         ( bytes_extend_bytes dgram pkt )
         ( quic_rec_on_sent . c rec 1 pn now ( vec_len [u] pkt ) ae1 rt1 )
-        ( __qc_bump_pn c 1 )
-        ( vec_free [u] pkt ) ( vec_free [u] hdr )
+        ( __qc_bump_pn . c 0 1 )
     } {}
     ? != has2 0 {
         : i pn . c next_pn2
@@ -1954,16 +1892,12 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) pkt ( quic_packet_protect . c k_tx2 hdr pn pn_len pay2 )
         ( bytes_extend_bytes dgram pkt )
         ( quic_rec_on_sent . c rec 2 pn now ( vec_len [u] pkt ) ae2 rt2 )
-        ( __qc_bump_pn c 2 )
-        ( vec_free [u] pkt ) ( vec_free [u] hdr )
+        ( __qc_bump_pn . c 0 2 )
     } {}
-    ( vec_free [u] empty )
-    ( vec_free [u] pay0 ) ( vec_free [u] pay1 ) ( vec_free [u] pay2 )
-    ( vec_free [u] rt0 ) ( vec_free [u] rt1 ) ( vec_free [u] rt2 )
     = . c bytes_sent + . c bytes_sent ( vec_len [u] dgram )
     ? > ( vec_len [u] dgram ) 0 { = . c last_activity now } {}
     // a client discards Initial keys when it first sends a Handshake packet (§4.9.1)
-    ? & != . c is_client 0 != has1 0 { ( __qc_drop_keys c 0 ) } {}
+    ? & != . c is_client 0 != has1 0 { ( __qc_drop_keys . c 0 0 ) } {}
     ^ dgram
 }
 
@@ -1987,7 +1921,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_conn_on_timeout QuicConn c__h i now → v {
-    : *QuicConnImpl c ( __QuicConn_ptr c__h )
+    : ~ * QuicConnImpl c ( __QuicConn_ptr c__h )
     = . c now now
     ? >= . c state 2 {
         ? >= now . c close_deadline { = . c state 4 } {}
@@ -2002,8 +1936,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i space 0
     ~ < space 3 {
         : ( Vec u ) lost ( quic_rec_take_lost . c rec space )
-        ? > ( vec_len [u] lost ) 0 { ( bytes_extend_bytes ( __qc_retx c space ) lost ) } {}
-        ( vec_free [u] lost )
+        ? > ( vec_len [u] lost ) 0 { ( bytes_extend_bytes ( __qc_retx . c 0 space ) lost ) } {}
         = space + space 1
     }
     ? == . c ack_needed2 2 { ? >= now + . c largest_rx_time2 25 { = . c ack_needed2 1 } {} } {}

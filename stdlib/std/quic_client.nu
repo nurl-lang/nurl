@@ -89,25 +89,25 @@ $ `stdlib/core/rcbox.nu`
 @ quic_client_connect s host i port s server_name s alpn QuicTp tp i verify i timeout_ms → QuicClient {
     : !( Vec u ) NetErr ar ( udp_addr_resolve host port )
     : ( Vec u ) peer ?? ar { T a → a F _ → ( vec_new [u] ) }
-    ? == ( vec_len [u] peer ) 0 { ( vec_free [u] peer ) ^ @ QuicClient { # s 0 } } {}
+    ? == ( vec_len [u] peer ) 0 { ^ @ QuicClient { # s 0 } } {}
     // a socket of the peer's family: bind the wildcard of that family
     : !UdpSocket NetErr sr ( udp_bind ? == ( udp_addr_family peer ) 6 `::` `0.0.0.0` 0 )
     : ~ i ok 0
     : ~ UdpSocket sock @ UdpSocket { `` }
     ?? sr { T s → { = sock s = ok 1 } F _ → {} }
-    ? == ok 0 { ( vec_free [u] peer ) ^ @ QuicClient { # s 0 } } {}
+    ? == ok 0 { ^ @ QuicClient { # s 0 } } {}
     : i cl__box ( rcbox_zero [QuicClientImpl] )
-    : *QuicClientImpl cl ( rcbox_ptr [QuicClientImpl] cl__box )
+    : ~ * QuicClientImpl cl ( rcbox_ptr [QuicClientImpl] cl__box )
     = . cl sock sock
     = . cl has_sock 1
     = . cl peer peer
     = . cl buf ( vec_with_cap [u] 65536 )
     = . cl from ( udp_addr_new )
     = . cl conn ( quic_conn_new_client peer server_name alpn tp verify ( __qcl_now ) )
-    ( __qcl_pump cl )
+    ( __qcl_pump . cl 0 )
     : i deadline + ( __qcl_now ) timeout_ms
     ~ & < ( quic_conn_state . cl conn ) 1 < ( __qcl_now ) deadline {
-        ( __qcl_step cl - deadline ( __qcl_now ) )
+        ( __qcl_step . cl 0 - deadline ( __qcl_now ) )
     }
     ^ @ QuicClient { # s cl__box }
 }
@@ -125,14 +125,13 @@ $ `stdlib/core/rcbox.nu`
     ^ . cl conn
 }
 
-@ __qcl_pump * QuicClientImpl cl → v {
+@ __qcl_pump inout QuicClientImpl cl → v {
     : ~ i guard 0
     ~ < guard 64 {
         : ( Vec u ) d ( quic_conn_send . cl conn ( __qcl_now ) )
-        ? == ( vec_len [u] d ) 0 { ( vec_free [u] d ) = guard 64 } {
+        ? == ( vec_len [u] d ) 0 { = guard 64 } {
             : !i NetErr w ( udp_send_addr . cl sock d . cl peer )
             ?? w { T _ → {} F _ → {} }
-            ( vec_free [u] d )
             = guard + guard 1
         }
     }
@@ -140,14 +139,14 @@ $ `stdlib/core/rcbox.nu`
 
 // Send everything the connection has ready.
 @ quic_client_pump QuicClient cl__h → v {
-    : *QuicClientImpl cl ( __QuicClient_ptr cl__h )
-    ( __qcl_pump cl )
+    : ~ * QuicClientImpl cl ( __QuicClient_ptr cl__h )
+    ( __qcl_pump . cl 0 )
 }
 
 // One turn of the loop: wait for a datagram at most `wait_ms` (or until
 // the connection's next deadline, whichever is first), feed it, drain
 // what else is ready, run the timers, send.
-@ __qcl_step * QuicClientImpl cl i wait_ms → v {
+@ __qcl_step inout QuicClientImpl cl i wait_ms → v {
     : QuicConn c . cl conn
     : i now0 ( __qcl_now )
     : ~ i wait ? < wait_ms 0 0 wait_ms
@@ -176,15 +175,15 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_client_step QuicClient cl__h i wait_ms → v {
-    : *QuicClientImpl cl ( __QuicClient_ptr cl__h )
-    ( __qcl_step cl wait_ms )
+    : ~ * QuicClientImpl cl ( __QuicClient_ptr cl__h )
+    ( __qcl_step . cl 0 wait_ms )
 }
 
 // Drive until a stream is readable (T), or the connection is closing /
 // closed or the time is up (F). The ids are left in the connection for
 // `quic_conn_take_readable`.
 @ quic_client_wait_readable QuicClient cl__h i timeout_ms → b {
-    : *QuicClientImpl cl ( __QuicClient_ptr cl__h )
+    : ~ * QuicClientImpl cl ( __QuicClient_ptr cl__h )
     : QuicConn c . cl conn
     : i deadline + ( __qcl_now ) timeout_ms
     ~ T {
@@ -192,11 +191,10 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec i ) r ( quic_conn_take_readable c )
         : i n ( vec_len [i] r )
         ( _qc_requeue_readable c r )
-        ( vec_free [i] r )
         ? > n 0 { ^ T } {}
         : i now ( __qcl_now )
         ? >= now deadline { ^ F } {}
-        ( __qcl_step cl - deadline now )
+        ( __qcl_step . cl 0 - deadline now )
     }
     ^ F
 }
@@ -204,12 +202,12 @@ $ `stdlib/core/rcbox.nu`
 // Close (application error when `app` = 1) and keep the loop going
 // until the connection has gone through closing, or `timeout_ms`.
 @ quic_client_close QuicClient cl__h i app i code ( Vec u ) reason i timeout_ms → v {
-    : *QuicClientImpl cl ( __QuicClient_ptr cl__h )
+    : ~ * QuicClientImpl cl ( __QuicClient_ptr cl__h )
     : QuicConn c . cl conn
     ( quic_conn_close c app code reason )
-    ( __qcl_pump cl )
+    ( __qcl_pump . cl 0 )
     : i deadline + ( __qcl_now ) timeout_ms
     ~ & < ( quic_conn_state c ) 4 < ( __qcl_now ) deadline {
-        ( __qcl_step cl - deadline ( __qcl_now ) )
+        ( __qcl_step . cl 0 - deadline ( __qcl_now ) )
     }
 }

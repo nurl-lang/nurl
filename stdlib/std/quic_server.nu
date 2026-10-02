@@ -142,7 +142,7 @@ $ `stdlib/core/rcbox.nu`
 // Register every id the connection answers to (issued ids may grow),
 // and forget the ones the peer retired: a stale entry would keep a
 // finished connection alive.
-@ __qs_register * QuicServerImpl s QuicConn c → v {
+@ __qs_register inout QuicServerImpl s QuicConn c → v {
     : ( Vec u ) cids ( quic_conn_cids c )
     : ~ i off 0
     ~ < + off 8 + ( vec_len [u] cids ) 1 {
@@ -161,7 +161,7 @@ $ `stdlib/core/rcbox.nu`
     } {}
 }
 
-@ __qs_unregister * QuicServerImpl s QuicConn c → v {
+@ __qs_unregister inout QuicServerImpl s QuicConn c → v {
     : ( Vec u ) cids ( quic_conn_cids c )
     : ~ i off 0
     ~ < + off 8 + ( vec_len [u] cids ) 1 {
@@ -170,14 +170,13 @@ $ `stdlib/core/rcbox.nu`
     }
 }
 
-@ __qs_pump * QuicServerImpl s QuicConn c i now → v {
+@ __qs_pump inout QuicServerImpl s QuicConn c i now → v {
     : ~ i guard 0
     ~ < guard 64 {
         : ( Vec u ) d ( quic_conn_send c now )
-        ? == ( vec_len [u] d ) 0 { ( vec_free [u] d ) = guard 64 } {
+        ? == ( vec_len [u] d ) 0 { = guard 64 } {
             : !i NetErr w ( udp_send_addr . s sock d ( quic_conn_peer c ) )
             ?? w { T _ → {} F _ → {} }
-            ( vec_free [u] d )
             = guard + guard 1
         }
     }
@@ -187,11 +186,11 @@ $ `stdlib/core/rcbox.nu`
 
 // Send everything `conn` has ready.
 @ quic_server_pump QuicServer s__h QuicConn c i now → v {
-    : *QuicServerImpl s ( __QuicServer_ptr s__h )
-    ( __qs_pump s c now )
+    : ~ * QuicServerImpl s ( __QuicServer_ptr s__h )
+    ( __qs_pump . s 0 c now )
 }
 
-@ __qs_dispatch * QuicServerImpl s ( Vec u ) dgram ( Vec u ) from i now → v {
+@ __qs_dispatch inout QuicServerImpl s ( Vec u ) dgram ( Vec u ) from i now → v {
     : i n ( vec_len [u] dgram )
     ? < n 1 { ^ } {}
     : QuicHdr h ( quic_hdr_parse dgram 0 ( quic_conn_scid_len ) )
@@ -209,7 +208,6 @@ $ `stdlib/core/rcbox.nu`
                 : ( Vec u ) vn ( quic_vn_build scid dcid vers )
                 : !i NetErr w ( udp_send_addr . s sock vn from )
                 ?? w { T _ → {} F _ → {} }
-                ( vec_free [u] vn ) ( vec_free [u] scid )
             } {}
         } {
             // A new connection: a client Initial of at least 1200 bytes (§14.1)
@@ -219,19 +217,17 @@ $ `stdlib/core/rcbox.nu`
                 ( vec_push [QuicConn] . s conns ( QuicConn_share c ) )
                 ( __qs_map_set . s by_cid ( __qs_key dcid 0 ) c )
                 ( __qs_register s c )
-                ( vec_free [u] scid )
                 = . s accepted + . s accepted 1
             } { = . s rejected + . s rejected 1 }
         }
     } {}
-    ( vec_free [u] dcid )
     ? == 0 # i . c ctl { ^ } {}
     : i before ( quic_conn_state c )
     ( quic_conn_recv c dgram from now )
     ( __qs_after c s now before )
 }
 
-@ __qs_new_scid * QuicServerImpl s → ( Vec u ) {
+@ __qs_new_scid inout QuicServerImpl s → ( Vec u ) {
     : ( Vec u ) v ( vec_with_cap [u] 8 )
     : b _ok ( vec_resize_zeroed [u] v 8 )
     ~ T {
@@ -243,7 +239,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // After input or a timer: events to the application, then output.
-@ __qs_after QuicConn c * QuicServerImpl s i now i before → v {
+@ __qs_after QuicConn c inout QuicServerImpl s i now i before → v {
     : i st ( quic_conn_state c )
     : ( @ v QuicConn i ) ev . s on_event
     ? & == before 0 == st 1 { ( ev c 1 ) } {}
@@ -254,14 +250,13 @@ $ `stdlib/core/rcbox.nu`
             ( _qc_requeue_readable c r )
             ( ev c 2 )
         } {}
-        ( vec_free [i] r )
     } {}
     ( __qs_pump s c now )
 }
 
 // Closed connections leave the table (from the end, so the indexes still
 // to visit stay put); a turn without one rebuilds nothing.
-@ __qs_reap * QuicServerImpl s → v {
+@ __qs_reap inout QuicServerImpl s → v {
     : ~ i k - ( vec_len [QuicConn] . s conns ) 1
     ~ >= k 0 {
         : ~ b gone F
@@ -284,7 +279,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ quic_server_run QuicServer s__h → v {
-    : *QuicServerImpl s ( __QuicServer_ptr s__h )
+    : ~ * QuicServerImpl s ( __QuicServer_ptr s__h )
     = . s running 1
     : ( Vec u ) buf ( vec_with_cap [u] 65536 )
     : ( Vec u ) from ( udp_addr_new )
@@ -309,7 +304,7 @@ $ `stdlib/core/rcbox.nu`
         : !i NetErr r ( udp_recv_into_deadline . s sock buf from wait )
         : i now ( __qs_now )
         ?? r {
-            T n → { ( __qs_dispatch s buf from now ) }
+            T n → { ( __qs_dispatch . s 0 buf from now ) }
             F e → {}
         }
         // drain what else is ready without blocking
@@ -317,7 +312,7 @@ $ `stdlib/core/rcbox.nu`
         ~ != more 0 {
             : !i NetErr r2 ( udp_recv_into_deadline . s sock buf from 0 )
             ?? r2 {
-                T n → { ( __qs_dispatch s buf from ( __qs_now ) ) }
+                T n → { ( __qs_dispatch . s 0 buf from ( __qs_now ) ) }
                 F e → { = more 0 }
             }
         }
@@ -331,14 +326,13 @@ $ `stdlib/core/rcbox.nu`
                     ? & > t 0 <= t now2 {
                         : i before ( quic_conn_state c )
                         ( quic_conn_on_timeout c now2 )
-                        ( __qs_after c s now2 before )
+                        ( __qs_after c . s 0 now2 before )
                     } {}
                 }
                 F → {}
             }
             = k + k 1
         }
-        ( __qs_reap s )
+        ( __qs_reap . s 0 )
     }
-    ( vec_free [u] from )
 }

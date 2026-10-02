@@ -71,15 +71,6 @@ $ `stdlib/core/rcbox.nu`
 // every copy is the same keys, and the last owner releases them.
 : QuicKeys { s ctl }
 
-// The AES key schedules are raw memory (std/aes_gcm.nu): releasing them
-// is the keys' own drop; the byte strings go with the fields after it.
-% Drop QuicKeysImpl {
-    @ drop QuicKeysImpl k → v {
-        ( aes_gcm_key_free . k aead )
-        ( aes_gcm_key_free . k hpk )
-    }
-}
-
 @ QuicKeys_share QuicKeys h → QuicKeys { ^ @ QuicKeys { # s ( rcbox_share # i . h ctl ) } }
 
 @ QuicKeys_drop sink QuicKeys h → v {
@@ -99,7 +90,6 @@ $ `stdlib/core/rcbox.nu`
     = . k key ( hkdf_expand_label secret `quic key` empty klen )
     = . k iv ( hkdf_expand_label secret `quic iv` empty 12 )
     = . k hp ( hkdf_expand_label secret `quic hp` empty klen )
-    ( vec_free [u] empty )
     ? == cipher 1 {
         = . k aead ( aes_gcm_key_new . k key )
         = . k hpk ( aes_gcm_key_new . k hp )
@@ -144,16 +134,13 @@ $ `stdlib/core/rcbox.nu`
     : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) next ( hkdf_expand_label . k secret `quic ku` empty 32 )
-    ( vec_free [u] empty )
     : QuicKeys n ( quic_keys_derive . k cipher next )
-    ( vec_free [u] next )
     ^ n
 }
 
 @ quic_initial_secret ( Vec u ) dcid → ( Vec u ) {
     : ( Vec u ) salt ?? ( bytes_from_hex `38762cf7f55934b34d179ae6a4c80cadccbb7f0a` ) { T v → v F _ → ( vec_new [u] ) }
     : ( Vec u ) s ( hkdf_extract salt dcid )
-    ( vec_free [u] salt )
     ^ s
 }
 
@@ -163,8 +150,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) secret ? is_client ( hkdf_expand_label initial `client in` empty 32 ) ( hkdf_expand_label initial `server in` empty 32 )
     : QuicKeys k ( quic_keys_derive 1 secret )
-    ( vec_free [u] secret )
-    ( vec_free [u] initial )
     ^ k
 }
 
@@ -186,7 +171,6 @@ $ `stdlib/core/rcbox.nu`
     : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
     : ( Vec u ) nonce ( quic_nonce . k iv pn )
     : ( Vec u ) out ? == . k cipher 1 ( aes_gcm_seal . k aead nonce header payload ) ( aead_encrypt . k key nonce header payload )
-    ( vec_free [u] nonce )
     ^ out
 }
 
@@ -194,7 +178,6 @@ $ `stdlib/core/rcbox.nu`
     : *QuicKeysImpl k ( __QuicKeys_ptr k__h )
     : ( Vec u ) nonce ( quic_nonce . k iv pn )
     : ?( Vec u ) out ? == . k cipher 1 ( aes_gcm_open . k aead nonce header ct_tag ) ( aead_decrypt . k key nonce header ct_tag )
-    ( vec_free [u] nonce )
     ^ out
 }
 
@@ -204,7 +187,6 @@ $ `stdlib/core/rcbox.nu`
     ? == . k cipher 1 {
         : ( Vec u ) block ( aes_block_encrypt . k hpk sample )
         : ( Vec u ) m ( bytes_slice block 0 5 )
-        ( vec_free [u] block )
         ^ m
     } {}
     // ChaCha20: counter = sample[0..4] little-endian, nonce = sample[4..16].
@@ -212,8 +194,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) nonce ( bytes_slice sample 4 16 )
     : ( Vec u ) block ( chacha20_block . k hp counter nonce )
     : ( Vec u ) m ( bytes_slice block 0 5 )
-    ( vec_free [u] block )
-    ( vec_free [u] nonce )
     ^ m
 }
 
@@ -234,8 +214,6 @@ $ `stdlib/core/rcbox.nu`
         : b _ok ( vec_set [u] pkt + pn_off i # u ^^ ( __qp_bget pkt + pn_off i ) ( __qp_bget mask + 1 i ) )
         = i + i 1
     }
-    ( vec_free [u] mask )
-    ( vec_free [u] sample )
 }
 
 @ quic_hp_remove QuicKeys k__h ( Vec u ) pkt i pn_off → i {
@@ -252,8 +230,6 @@ $ `stdlib/core/rcbox.nu`
         : b _ok ( vec_set [u] pkt + pn_off i # u ^^ ( __qp_bget pkt + pn_off i ) ( __qp_bget mask + 1 i ) )
         = i + i 1
     }
-    ( vec_free [u] mask )
-    ( vec_free [u] sample )
     ^ pn_len
 }
 
@@ -272,7 +248,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) ct ( quic_seal k__h pn header payload )
     : ( Vec u ) pkt ( bytes_slice header 0 ( vec_len [u] header ) )
     ( bytes_extend_bytes pkt ct )
-    ( vec_free [u] ct )
     ( quic_hp_apply k__h pkt - ( vec_len [u] header ) pn_len pn_len )
     ^ pkt
 }
@@ -433,10 +408,6 @@ $ `stdlib/core/rcbox.nu`
     ( bytes_extend_bytes aad retry_without_tag )
     : ( Vec u ) empty ( vec_new [u] )
     : ( Vec u ) tag ( aes128_gcm_encrypt key nonce aad empty )
-    ( vec_free [u] empty )
-    ( vec_free [u] aad )
-    ( vec_free [u] nonce )
-    ( vec_free [u] key )
     ^ tag
 }
 
@@ -451,7 +422,6 @@ $ `stdlib/core/rcbox.nu`
     ( bytes_extend_bytes out token )
     : ( Vec u ) tag ( quic_retry_tag odcid out )
     ( bytes_extend_bytes out tag )
-    ( vec_free [u] tag )
     ^ out
 }
 
