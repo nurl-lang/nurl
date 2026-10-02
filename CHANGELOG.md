@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Vec or String rebuilt from a word and returned is a view**
+  (`^ # ( Vec T ) . e inits_ref`), as a library handle already was: every
+  caller released the holder's Vec (packages/onnx — a use-after-free in
+  every model with a Split node). `compiler/tests/return_cast_word_vec_is_view.nu`.
 - **A raw string parameter placed in a literal the function keeps to itself
   is lent, not kept** (`: P q @ P { p … } ^ . q n`): a temporary argument —
   `( regex_compile ( nurl_argv_get 2 ) )` — was never freed. The parameter is

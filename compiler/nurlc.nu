@@ -22910,10 +22910,13 @@
     // is the table the program keeps, lent to whoever asks.)
     : b __cast_global & & ( is_ident_tok source_tt ) != 0 ( nurl_sym_len2 syms source_val `__global` )
     == 0 ( nurl_sym_len2 syms source_val `__enum_of` )
-    // (Not a library handle rebuilt from a word, `# H w`: that is a view of
-    // whatever holds the word — a table's handle — as binding it is. Returned
-    // as an owner, every caller released the table's handle.)
-    : b __cast_word_view & ( __is_libh ( nurl_llty dt ) ) != source_tt TT_INT
+    // (Not a library handle, String or Vec rebuilt from a word, `# H w`,
+    // `# ( Vec T ) . e inits_ref`: that is a view of whatever holds the
+    // word — a table's handle, a graph's initializers — as binding it is.
+    // Returned as an owner, every caller released the holder's value.)
+    : s __cwv_ll ( nurl_llty dt )
+    : b __cast_word_view & | | ( __is_libh __cwv_ll ) ( seq __cwv_ll `%String` ) != 0 ( nurl_str_starts __cwv_ll `%Vec__` )
+    != source_tt TT_INT
     ( nurl_sym_def syms `__last_cast_lit__` ? & ! __cast_word_view | == source_tt TT_INT & > ( int_width st ) 0 ! __cast_global `1` `` )
     ? ( seq st `void` )
     { : ~ s vr ``
