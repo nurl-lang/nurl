@@ -240,7 +240,6 @@ $ `stdlib/ext/msgpack.nu`
     ?? ( msgpack_decode bytes ) {
         T j → {
             : ?i o ( json_num_as_i j )
-            ( json_free j )
             ^ ?? o {
                 T n → @ !i MsgpackErr { T n }
                 F → @ !i MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
@@ -254,7 +253,6 @@ $ `stdlib/ext/msgpack.nu`
     ?? ( msgpack_decode bytes ) {
         T j → {
             : ?f o ( json_num_as_f j )
-            ( json_free j )
             ^ ?? o {
                 T x → @ !f MsgpackErr { T x }
                 F → @ !f MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
@@ -269,7 +267,6 @@ $ `stdlib/ext/msgpack.nu`
         T j → {
             : b isb ( json_is_bool j )
             : b val ( json_bool_val j )
-            ( json_free j )
             ? isb { ^ @ !b MsgpackErr { T val } } {}
             ^ @ !b MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
         }
@@ -283,10 +280,8 @@ $ `stdlib/ext/msgpack.nu`
         T j → {
             ? ( json_is_str j ) {
                 : String s ( string_from ( json_str_data j ) )
-                ( json_free j )
                 ^ @ !String MsgpackErr { T s }
             } {}
-            ( json_free j )
             ^ @ !String MsgpackErr { F @ MsgpackErr { MsgpackTypeMismatch } }
         }
         F e → { ^ @ !String MsgpackErr { F e } }

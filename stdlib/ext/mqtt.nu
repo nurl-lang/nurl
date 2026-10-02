@@ -46,7 +46,7 @@
 //   ( mqtt_listener_recv MqttListener lst )                    → ? MqttMessage
 //   ( mqtt_listener_stop MqttListener lst )                    → v
 //   ( mqtt_message_prop MqttMessage m s key )                  → s   borrowed
-//   ( mqtt_message_free MqttMessage m )                        → v
+//   ( mqtt_message_free MqttMessage m )                        → v   early release (optional)
 //   ( mqtt_topic_matches s filter s topic )                    → b
 //   ( mqtt_err_name     MqttErr e )                            → s
 //   ( mqtt_disconnect   MqttClient )                           → v
@@ -395,7 +395,6 @@ $ `stdlib/ext/websocket.nu`
         ( bytes_push_u32_be cprops . cfg session_expiry )
     } {}
     ( __mqtt_emit_props vh cprops )
-    ( vec_free [u] cprops )
 
     : ( Vec u ) pl ( vec_with_cap [u] 64 )
     ( _mqtt_put_str pl . cfg client_id )
@@ -477,20 +476,16 @@ $ `stdlib/ext/websocket.nu`
             T f → {
                 : i op . f opcode
                 ? == op ( ws_opcode_close ) {
-                    ( ws_frame_free f )
                     ^ @ !v MqttErr { F # MqttErr MqttClosed }
                 } {}
                 ? == op ( ws_opcode_ping ) {
                     : !v WsErr pg ( ws_client_send_pong . cl conn . f payload )
                     ?? pg { T → {} F _ → {} }
-                    ( ws_frame_free f )
                 } {
                     ? == op ( ws_opcode_pong ) {
-                        ( ws_frame_free f )
                     } {
                         // continuation / binary / text → MQTT byte stream
                         ( vec_extend [u] . cl rxbuf . f payload )
-                        ( ws_frame_free f )
                     }
                 }
             }
@@ -515,7 +510,6 @@ $ `stdlib/ext/websocket.nu`
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ( vec_extend [u] . cl rxbuf chunk )
-                ( vec_free [u] chunk )
                 ? <= got 0 { ^ @ !v MqttErr { F # MqttErr MqttClosed } } {}
             }
             F e → { ^ @ !v MqttErr { F ( __mqtt_of_net e ) } }
@@ -569,13 +563,9 @@ $ `stdlib/ext/websocket.nu`
     : ( Vec u ) pkt ( vec_with_cap [u] 96 )
     ( _mqtt_encode_connect pkt cfg )
     : !v NetErr wr ( __mqtt_write_pkt cl pkt )
-    ( vec_free [u] pkt )
     ?? wr {
         T → {}
         F we → {
-            ( vec_free [u] . cl rxbuf )
-            ( vec_free [i] . cl qos2_rx )
-            ( vec_free [i] . cl ctl )
             ( tcp_close_conn . cl conn )
             ^ @ !MqttClient MqttErr { F ( __mqtt_of_net we ) }
         }
@@ -585,24 +575,17 @@ $ `stdlib/ext/websocket.nu`
     ?? rd {
         T resp → {
             : i reason ( mqtt_connack_reason resp )
-            ( vec_free [u] resp )
             ? == reason 0 {
                 ^ @ !MqttClient MqttErr { T cl }
             } {
                 ( nurl_eprint `mqtt: broker refused CONNECT, reason code ` )
                 ( nurl_eprint ( nurl_str_int reason ) )
                 ( nurl_eprint `\n` )
-                ( vec_free [u] . cl rxbuf )
-                ( vec_free [i] . cl qos2_rx )
-                ( vec_free [i] . cl ctl )
                 ( tcp_close_conn . cl conn )
                 ^ @ !MqttClient MqttErr { F ( __mqtt_connack_err reason ) }
             }
         }
         F re → {
-            ( vec_free [u] . cl rxbuf )
-            ( vec_free [i] . cl qos2_rx )
-            ( vec_free [i] . cl ctl )
             ( tcp_close_conn . cl conn )
             ^ @ !MqttClient MqttErr { F re }
         }
@@ -688,7 +671,6 @@ $ `stdlib/ext/websocket.nu`
             T ack → {
                 : i pt & >> ( _mqtt_byte ack 0 ) 4 15
                 : i apid + * ( _mqtt_byte ack 2 ) 256 ( _mqtt_byte ack 3 )
-                ( vec_free [u] ack )
                 ? & == pt 4 == apid pid { ^ @ !v MqttErr { T 0 } } {}
             }
             F e → { ^ @ !v MqttErr { F e } }
@@ -709,7 +691,6 @@ $ `stdlib/ext/websocket.nu`
             T p → {
                 : i pt & >> ( _mqtt_byte p 0 ) 4 15
                 : i rpid + * ( _mqtt_byte p 2 ) 256 ( _mqtt_byte p 3 )
-                ( vec_free [u] p )
                 ? & == pt 5 == rpid pid { = got_rec T } {}
             }
             F e → { ^ @ !v MqttErr { F e } }
@@ -726,7 +707,6 @@ $ `stdlib/ext/websocket.nu`
             T p → {
                 : i pt & >> ( _mqtt_byte p 0 ) 4 15
                 : i cpid + * ( _mqtt_byte p 2 ) 256 ( _mqtt_byte p 3 )
-                ( vec_free [u] p )
                 ? & == pt 7 == cpid pid { ^ @ !v MqttErr { T 0 } } {}
             }
             F e → { ^ @ !v MqttErr { F e } }
@@ -763,7 +743,6 @@ $ `stdlib/ext/websocket.nu`
         = pi + pi 1
     }
     ( __mqtt_emit_props vh props )
-    ( vec_free [u] props )
     : i plen ( nurl_str_len payload )
 
     : ( Vec u ) pkt ( vec_with_cap [u] 72 )
@@ -774,8 +753,6 @@ $ `stdlib/ext/websocket.nu`
     ( bytes_extend_str pkt payload )
 
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
-    ( vec_free [u] vh )
-    ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
     ? == qos 1 { ^ ( __mqtt_await_puback cl pid ) } {}
@@ -861,16 +838,12 @@ $ `stdlib/ext/websocket.nu`
     ( vec_extend [u] pkt pl )
 
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
-    ( vec_free [u] vh )
-    ( vec_free [u] pl )
-    ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
     : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
     ?? rd {
         T resp → {
             : !v MqttErr res ( __mqtt_check_suback resp pid 1 )
-            ( vec_free [u] resp )
             ^ res
         }
         F re → { ^ @ !v MqttErr { F re } }
@@ -915,16 +888,12 @@ $ `stdlib/ext/websocket.nu`
     ( vec_extend [u] pkt pl )
 
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
-    ( vec_free [u] vh )
-    ( vec_free [u] pl )
-    ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
     : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
     ?? rd {
         T resp → {
             : !v MqttErr res ( __mqtt_check_suback resp pid nt )
-            ( vec_free [u] resp )
             ^ res
         }
         F re → { ^ @ !v MqttErr { F re } }
@@ -949,9 +918,6 @@ $ `stdlib/ext/websocket.nu`
     ( vec_extend [u] pkt pl )
 
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
-    ( vec_free [u] vh )
-    ( vec_free [u] pl )
-    ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
     : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
@@ -959,7 +925,6 @@ $ `stdlib/ext/websocket.nu`
         T resp → {
             : i b0 ( _mqtt_byte resp 0 )
             : i upid + * ( _mqtt_byte resp 2 ) 256 ( _mqtt_byte resp 3 )
-            ( vec_free [u] resp )
             // UNSUBACK type is 11 (0xB0), matching packet id.
             ? & == & b0 240 176 == upid pid {
                 ^ @ !v MqttErr { T 0 }
@@ -980,7 +945,6 @@ $ `stdlib/ext/websocket.nu`
     ( vec_push [u] pkt # u 192 )
     ( vec_push [u] pkt # u 0 )
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
-    ( vec_free [u] pkt )
     ?? w { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
     : ~ i guard 0
@@ -990,7 +954,6 @@ $ `stdlib/ext/websocket.nu`
         ?? rp {
             T resp → {
                 : i pt & >> ( _mqtt_byte resp 0 ) 4 15
-                ( vec_free [u] resp )
                 ? == pt 13 {
                     ( __mqtt_deadline_bump cl )
                     ^ @ !v MqttErr { T 0 }
@@ -1011,7 +974,6 @@ $ `stdlib/ext/websocket.nu`
     ( vec_push [u] pkt # u 0 )
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ?? w { T → {} F _ → {} }
-    ( vec_free [u] pkt )
     ( __mqtt_deadline_bump cl )
 }
 
@@ -1060,14 +1022,12 @@ $ `stdlib/ext/websocket.nu`
             : ( Vec u ) pkt ( vec_with_cap [u] 96 )
             ( _mqtt_encode_connect pkt cfg )
             : !v NetErr wr ( tcp_write_all nc pkt )
-            ( vec_free [u] pkt )
             ?? wr { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
 
             : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
             ?? rd {
                 T resp → {
                     : i reason ( mqtt_connack_reason resp )
-                    ( vec_free [u] resp )
                     ? == reason 0 {
                         ( __mqtt_deadline_bump cl )
                         ^ @ !v MqttErr { T 0 }
@@ -1153,7 +1113,6 @@ $ `stdlib/ext/websocket.nu`
         ?? rp {
             T pkt → {
                 : i pt & >> ( _mqtt_byte pkt 0 ) 4 15
-                ( vec_free [u] pkt )
                 ? == pt 6 { = saw_rel T = stop T } {}
             }
             F _ → { = stop T }
@@ -1252,7 +1211,6 @@ $ `stdlib/ext/websocket.nu`
     : String payload ( __mqtt_extract_str pkt propend - end propend )
     : ( Vec ( Pair String String ) ) props ( vec_new [( Pair String String )] )
     ( _mqtt_parse_props pkt propstart propend props )
-    ( vec_free [u] pkt )
     : i inpid + * pidhi 256 pidlo
     ? == qos 1 { ( __mqtt_send_ack2 cl 64 inpid ) } {}
     ? == qos 2 {
@@ -1264,9 +1222,6 @@ $ `stdlib/ext/websocket.nu`
         : b done ( __mqtt_qos2_inbound cl inpid )
         ? done { ( _mqtt_qos2_forget . cl qos2_rx inpid ) } {}
         ? dup {
-            ( string_free topic )
-            ( string_free payload )
-            ( mqtt_props_free props )
             ^ @ ?MqttMessage { F # MqttMessage 0 }
         } {}
     } {}
@@ -1294,7 +1249,6 @@ $ `stdlib/ext/websocket.nu`
                         F _ → {}
                     }
                 } {
-                    ( vec_free [u] pkt )
                     ? == ptype 14 {
                         ^ @ !MqttMessage MqttErr { F # MqttErr MqttClosed }
                     } {}
@@ -1309,25 +1263,10 @@ $ `stdlib/ext/websocket.nu`
 // Free a user-property list and every String inside it. (A manual loop
 // rather than vec_free_with — a `\`-closure parameter cannot carry the
 // compound type `( Pair String String )`.)
-@ mqtt_props_free sink ( Vec ( Pair String String ) ) props → v {
-    : i n ( vec_len [( Pair String String )] props )
-    : *( Pair String String ) d ( vec_data [( Pair String String )] props )
-    : ~ i k 0
-    ~ < k n {
-        : ( Pair String String ) p . d k
-        ( string_free . p first )
-        ( string_free . p second )
-        = k + k 1
-    }
-    ( vec_free [( Pair String String )] props )
-}
+@ mqtt_props_free sink ( Vec ( Pair String String ) ) props → v {}
 
 // Free an MqttMessage — topic, payload, and every user-property pair.
-@ mqtt_message_free sink MqttMessage m → v {
-    ( string_free . m topic )
-    ( string_free . m payload )
-    ( mqtt_props_free . m props )
-}
+@ mqtt_message_free sink MqttMessage m → v {}
 
 // Look up a user-property value by key; "" when absent. The result is
 // borrowed from the message — valid until mqtt_message_free.
@@ -1465,8 +1404,6 @@ $ `stdlib/ext/websocket.nu`
     : ( Vec u ) f ( bytes_from_str filter )
     : ( Vec u ) t ( bytes_from_str name )
     : b r ( __mqtt_topic_match_bytes f t )
-    ( vec_free [u] f )
-    ( vec_free [u] t )
     ^ r
 }
 
@@ -1515,7 +1452,6 @@ $ `stdlib/ext/websocket.nu`
                             F _ → {}
                         }
                     } {
-                        ( vec_free [u] pkt )
                         ? == ptype 14 { = running F } {}
                     }
                 }
@@ -1544,9 +1480,6 @@ $ `stdlib/ext/websocket.nu`
             }
         }
         ( chan_close [MqttMessage] inbox )
-        ( vec_free [u] . cl rxbuf )
-        ( vec_free [i] . cl qos2_rx )
-        ( vec_free [i] . cl ctl )
         ( tcp_close_conn . cl conn )
     }
 
@@ -1554,7 +1487,6 @@ $ `stdlib/ext/websocket.nu`
     ?? tr {
         T t → { ^ @ !MqttListener MqttErr { T @ MqttListener { inbox t } } }
         F _ → {
-            ( chan_free [MqttMessage] inbox )
             ^ @ !MqttListener MqttErr { F # MqttErr MqttTransport }
         }
     }
@@ -1573,7 +1505,6 @@ $ `stdlib/ext/websocket.nu`
 @ mqtt_listener_stop MqttListener lst → v {
     ( chan_close [MqttMessage] . lst inbox )
     ( thread_join . lst thread )
-    ( chan_free [MqttMessage] . lst inbox )
 }
 
 // ── disconnect ───────────────────────────────────────────────────────
@@ -1587,13 +1518,9 @@ $ `stdlib/ext/websocket.nu`
     ( vec_push [u] pkt # u 0 )
     : !v NetErr w ( __mqtt_write_pkt cl pkt )
     ?? w { T → {} F _ → {} }
-    ( vec_free [u] pkt )
     ? . cl ws {
         : !v WsErr wc ( ws_client_send_close . cl conn 1000 `` )
         ?? wc { T → {} F _ → {} }
     } {}
-    ( vec_free [u] . cl rxbuf )
-    ( vec_free [i] . cl qos2_rx )
-    ( vec_free [i] . cl ctl )
     ( tcp_close_conn . cl conn )
 }
