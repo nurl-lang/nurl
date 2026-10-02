@@ -51,7 +51,7 @@ $ `stdlib/std/float.nu`
     ( vec_push [f] a 6.63 ) ( vec_push [f] a 11.38 ) ( vec_push [f] a 9.42 ) ( vec_push [f] a 5.11 )
     ( vec_push [f] a 16.62 ) ( vec_push [f] a 10.52 )
     : f r ?? ( vec_get [f] a + * b 2 which ) { T x → x F _ → 1.0 }
-    ( vec_free [f] a ) ^ r
+    ^ r
 }
 
 // grid value at (channel, cy, cx) for a 13×13 grid.
@@ -168,6 +168,5 @@ $ `stdlib/std/float.nu`
             = picked + picked 1
         }
     }
-    ( vec_free [i] used )
     ^ keep
 }
