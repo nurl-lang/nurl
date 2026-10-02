@@ -104,7 +104,7 @@ $ `stdlib/std/fs.nu`
     ( eput prompt )
     ? ( stdin_eof ) { ^ @ ?String { F } } {}
     : String ln ( read_line )
-    ? & == ( string_len ln ) 0 ( stdin_eof ) { ( string_free ln ) ^ @ ?String { F } } {}
+    ? & == ( string_len ln ) 0 ( stdin_eof ) { ^ @ ?String { F } } {}
     ^ @ ?String { T ln }
 }
 
@@ -115,7 +115,7 @@ $ `stdlib/std/fs.nu`
     ~ > ( __repl_balance ( string_data acc ) ) 0 {
         : ?String cont ( __repl_read `  ...> ` hist tty )
         ?? cont {
-            T c → { ( string_push_char acc 10 ) ( string_push_str acc ( string_data c ) ) ( string_free c ) }
+            T c → { ( string_push_char acc 10 ) ( string_push_str acc ( string_data c ) ) }
             F _ → { ^ acc }
         }
     }
@@ -158,19 +158,18 @@ $ `stdlib/std/fs.nu`
     : String prog ( __build_program imports defs `` )
     : !v IoErr _w ( write_file `/tmp/nurl_repl_check.nu` ( string_data prog ) )
     ?? _w { T _ → {} F _ → {} }
-    ( string_free prog )
     : b ok ( __frontend_ok `/tmp/nurl_repl_check.nu` )
     ? ok {
         ( eput `defined.\n` )
     } {
         // roll back the bad definition
-        ? is_import { ( __pop_free imports ) } { ( __pop_free defs ) }
+        ? is_import { ( __pop_last imports ) } { ( __pop_last defs ) }
         ( eput `definition rejected (kept previous session).\n` )
     }
 }
 
-@ __pop_free ( Vec String ) v → v {
-    ?? ( vec_pop [String] v ) { T s → ( string_free s ) F _ → {} }
+@ __pop_last ( Vec String ) v → v {
+    ?? ( vec_pop [String] v ) { T _ → {} F _ → {} }
 }
 
 // Run the frontend only (fast) and surface its diagnostics on stderr.
@@ -184,11 +183,9 @@ $ `stdlib/std/fs.nu`
         T out → {
             = ok ( output_success out )
             ? ok {} { ( eput ( output_stderr out ) ) }
-            ( output_free out )
         }
         F _ → { ( eput `could not launch the compiler\n` ) }
     }
-    ( string_free cmd )
     ^ ok
 }
 
@@ -198,7 +195,6 @@ $ `stdlib/std/fs.nu`
     : String prog ( __build_program imports defs body )
     : !v IoErr _w ( write_file `/tmp/nurl_repl_eval.nu` ( string_data prog ) )
     ?? _w { T _ → {} F e → { ( eput `could not write temp file\n` ) } }
-    ( string_free prog )
 
     // compile
     : ~ b built F
@@ -209,7 +205,6 @@ $ `stdlib/std/fs.nu`
                 ( eput ( output_stderr out ) )
                 ( eput ( output_stdout out ) )
             }
-            ( output_free out )
         }
         F _ → { ( eput `could not launch the compiler\n` ) }
     }
@@ -223,7 +218,6 @@ $ `stdlib/std/fs.nu`
                 } {}
                 : i elen ( output_stderr_len out )
                 ? > elen 0 { ( eput ( output_stderr out ) ) } {}
-                ( output_free out )
             }
             F _ → { ( eput `could not run the program\n` ) }
         }
@@ -258,15 +252,14 @@ $ `stdlib/std/fs.nu`
 }
 
 @ __repl_reset ( Vec String ) imports ( Vec String ) defs → v {
-    ~ > ( vec_len [String] imports ) 0 { ( __pop_free imports ) }
-    ~ > ( vec_len [String] defs ) 0 { ( __pop_free defs ) }
+    ~ > ( vec_len [String] imports ) 0 { ( __pop_last imports ) }
+    ~ > ( vec_len [String] defs ) 0 { ( __pop_last defs ) }
     ( eput `session cleared.\n` )
 }
 
 @ __repl_save String full ( Vec String ) imports ( Vec String ) defs → v {
     : String arg ( __after_space full )
     : String path ( __trim ( string_data arg ) )
-    ( string_free arg )
     ? == ( string_len path ) 0 {
         ( eput `usage: :save FILE\n` )
     } {
@@ -278,9 +271,7 @@ $ `stdlib/std/fs.nu`
             T _ → { ( eput `saved to ` ) ( eput ( string_data path ) ) ( eput `\n` ) }
             F _ → { ( eput `could not write that file\n` ) }
         }
-        ( string_free prog )
     }
-    ( string_free path )
 }
 
 // Substring after the first space (the meta-command argument).
@@ -335,13 +326,10 @@ $ `stdlib/std/fs.nu`
             F _ → { = running F }
             T raw → {
                 : String inp ( __trim ( string_data raw ) )
-                ( string_free raw )
-                ? == ( string_len inp ) 0 { ( string_free inp ) } {
+                ? == ( string_len inp ) 0 {} {
                     : String full ( __read_full ( string_data inp ) hist tty )
-                    ( string_free inp )
                     ( vec_push [String] hist ( __clone_str full ) )
                     : i act ( __repl_dispatch full imports defs )
-                    ( string_free full )
                     ? == act 9 { = running F } {}
                 }
             }
