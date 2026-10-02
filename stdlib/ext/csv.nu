@@ -247,9 +247,6 @@ $ `stdlib/core/rcbox.nu`
 // stands, and the caller's handle stays valid.
 @ csv_dict_reader_new CSVReader r → CSVDictReader {
     : ?( Vec String ) h_opt ( csv_reader_next r )
-    // finding_stdlib_sink_param_returned_from_join: on an empty input the
-    // default comes back from opt_unwrap_or already freed (a compiler
-    // defect, reported); kept as written until it is fixed at the source.
     : ( Vec String ) h ( opt_unwrap_or [( Vec String )] h_opt ( vec_new [String] ) )
     ^ @ CSVDictReader { # s ( rcbox_new [CSVDictReaderImpl] @ CSVDictReaderImpl { h ( CSVReader_share r ) } ) }
 }
