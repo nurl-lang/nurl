@@ -35,12 +35,9 @@ $ `service.nu`
 @ __agm_db_path CliCtx x → String {
     : ~ String r ( ctx_str x `db` )
     ? > ( string_len r ) 0 { ^ r } {}
-    ( string_free r )
     : String home ( env_var_or `HOME` `.` )
     : String dir ( path_join ( string_data home ) `.agora` )
     = r ( path_join ( string_data dir ) `agora.db` )
-    ( string_free dir )
-    ( string_free home )
     ^ r
 }
 
@@ -52,7 +49,6 @@ $ `service.nu`
         ( nurl_eprint `agora: cannot open the store at ` )
         ( nurl_eprintln ( string_data db ) )
     }
-    ( string_free db )
     ^ ok
 }
 
@@ -61,7 +57,6 @@ $ `service.nu`
     : String raw ( ctx_str x `as` )
     : String who ( ag_identity_resolve ( string_data raw ) )
     : b from_cwd ( ag_identity_from_cwd ( string_data raw ) )
-    ( string_free raw )
     ? ( ag_name_ok ( string_data who ) ) {} {
         ? > ( string_len who ) 0 {
             ( nurl_eprint `agora: --as must be ` )
@@ -69,15 +64,12 @@ $ `service.nu`
         } {
             ( nurl_eprintln `agora: say who you are: --as NAME (or $AGORA_AGENT)` )
         }
-        ( string_free who )
         ^ F
     }
     ? from_cwd {
         : String origin ( ag_cwd )
         ( ag_state_set_local_from ( string_data who ) ( string_data origin ) )
-        ( string_free origin )
     } { ( ag_state_set_local ( string_data who ) ) }
-    ( string_free who )
     ^ T
 }
 
@@ -93,17 +85,14 @@ $ `service.nu`
             ~ < c colon { ( string_push_char host ( string_get addr c ) ) = c + c 1 }
             : String ps ( string_substr addr + colon 1 - n + colon 1 )
             = port ( nurl_str_to_int ( string_data ps ) )
-            ( string_free ps )
         }
         F _ → {
             ( string_push_str host ( string_data addr ) )
             = port 8820
         }
     }
-    ( string_free addr )
     ? | <= port 0 > port 65535 {
         ( nurl_eprintln `agora: --addr needs HOST:PORT` )
-        ( string_free host )
         ^ 2
     } {}
     : i workers ( ctx_int x `workers` )
@@ -117,10 +106,8 @@ $ `service.nu`
         ( string_push_int m port )
         ( string_push_str m ` — REST at /api (GET /api lists the ops), MCP at /mcp` )
         ( nurl_eprintln ( string_data m ) )
-        ( string_free m )
     }
     : i rc ( ag_serve ( string_data host ) port workers quiet )
-    ( string_free host )
     ^ rc
 }
 
@@ -154,24 +141,20 @@ $ `service.nu`
                                 T key → {
                                     ? > k 0 { ( string_push_str line `, ` ) } {}
                                     ( string_push_str line ( string_data key ) )
-                                    ( string_free key )
                                 }
                                 F _ → {}
                             }
                             = k + k 1
                         }
-                        ( vec_free [String] keys )
                     }
                     F _ → {}
                 }
                 ( nurl_println ( string_data line ) )
-                ( string_free line )
             }
             F _ → {}
         }
         = i + i 1
     }
-    ( ag_catalog_free cat )
     ^ 0
 }
 
@@ -181,7 +164,6 @@ $ `service.nu`
 @ __agm_cmd_op CliCtx x → i {
     : String op ( ctx_arg x 0 )
     ? > ( string_len op ) 0 {} {
-        ( string_free op )
         ( nurl_eprintln `agora: what to do? 'agora ops' lists the operations; 'agora --help' the commands` )
         ^ 2
     }
@@ -189,22 +171,17 @@ $ `service.nu`
         ( nurl_eprint `agora: unknown operation '` )
         ( nurl_eprint ( string_data op ) )
         ( nurl_eprintln `' — 'agora ops' lists them` )
-        ( string_free op )
         ^ 2
     } {}
-    ? ( __agm_open x ) {} { ( string_free op ) ^ 1 }
+    ? ( __agm_open x ) {} { ^ 1 }
     : i now ( now_seconds )
     : ~ AgCaller caller ( ag_caller_anon )
     ? == ( ag_op_auth_kind ( string_data op ) ) 1 {
-        ? ( __agm_identity x ) {} { ( string_free op ) ( ag_caller_free caller ) ^ 2 }
-        ( ag_caller_free caller )
+        ? ( __agm_identity x ) {} { ^ 2 }
         = caller ( ag_caller_local_from ( ag_store ) ( ag_local_identity ) ( ag_local_origin ) now )
         ? . caller authed {} {
             ( nurl_eprint `agora: ` )
             ( nurl_eprintln ( ag_local_refusal ) )
-            ( string_free op )
-            ( json_free ( json_null ) )
-            ( ag_caller_free caller )
             ^ 2
         }
     } {}
@@ -218,8 +195,6 @@ $ `service.nu`
                 : String k ( string_substr kv 0 eq )
                 : String v ( string_substr kv + eq 1 - ( string_len kv ) + eq 1 )
                 ( json_obj_set args ( string_data k ) ( json_str_lit ( string_data v ) ) )
-                ( string_free k )
-                ( string_free v )
             }
             F _ → {
                 ( nurl_eprint `agora: arguments are key=value, not '` )
@@ -227,25 +202,18 @@ $ `service.nu`
                 ( nurl_eprintln `'` )
             }
         }
-        ( string_free kv )
         = i + i 1
     }
     : AgRes res ( ag_op_call ( ag_store ) caller ( string_data op ) args now )
-    ( json_free args )
-    ( ag_caller_free caller )
-    ( string_free op )
     ? ( ctx_bool x `json` ) {
         : String js ( json_stringify . res body )
         ( nurl_println ( string_data js ) )
-        ( string_free js )
     } {
         ( nurl_print ( string_data . res text ) )
         ? & > ( string_len . res text ) 0
         != ( string_get . res text - ( string_len . res text ) 1 ) 10 { ( nurl_print `\n` ) } {}
     }
     : i rc ? < . res status 400 0 1
-    ( ag_res_free res )
-    ( ag_state_free )
     ^ rc
 }
 

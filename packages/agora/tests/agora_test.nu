@@ -50,31 +50,27 @@ $ `src/service.nu`
     ( check ( ag_agent_create st `bob` `` `h-bob` 101 ) `store: bob joins` )
     ( check ! ( ag_agent_create st `bob` `` `h-bob2` 102 ) `store: a name is taken once` )
     ?? ( ag_agent_by_token st `h-bob` 103 ) {
-        T id → { ( check ( seq ( string_data id ) `bob` ) `store: token resolves bob` ) ( string_free id ) }
+        T id → { ( check ( seq ( string_data id ) `bob` ) `store: token resolves bob` ) }
         F _ → { ( check F `store: token resolves bob` ) }
     }
     ?? ( ag_agent_by_token st `h-nope` 103 ) {
-        T id → { ( check F `store: unknown token is nobody` ) ( string_free id ) }
+        T id → { ( check F `store: unknown token is nobody` ) }
         F _ → { ( check T `store: unknown token is nobody` ) }
     }
     : i m1 ( ag_post st `public` `alice` `hello all` 0 110 )
     ( check > m1 0 `store: alice posts` )
     : String bobbox ( ag_mailbox `bob` )
     : i m2 ( ag_post st ( string_data bobbox ) `alice` `hi bob` 0 111 )
-    ( string_free bobbox )
     ( check == ( ag_unread st `bob` ) 2 `store: bob has 2 unread` )
     ( check == ( ag_unread st `alice` ) 0 `store: own posts are not unread` )
     : AgInbox ib ( ag_inbox st `bob` 1 )
     ( check == ( vec_len [AgMsg] . ib msgs ) 1 `store: inbox honours the limit` )
     ( check == . ib remaining 1 `store: and counts what is left` )
-    ( ag_inbox_free ib )
     : AgInbox ib2 ( ag_inbox st `bob` 10 )
     ( check == ( vec_len [AgMsg] . ib2 msgs ) 1 `store: the next drain gets the rest` )
     ( check == . ib2 remaining 0 `store: nothing remains` )
-    ( ag_inbox_free ib2 )
     : AgInbox ib3 ( ag_inbox st `bob` 10 )
     ( check == ( vec_len [AgMsg] . ib3 msgs ) 0 `store: a message is delivered ONCE` )
-    ( ag_inbox_free ib3 )
 
     : i t1 ( ag_task_post st `do x` `details` `,dev,` `alice` 2 120 )
     ( check > t1 0 `store: task posted` )
@@ -84,18 +80,14 @@ $ `src/service.nu`
     ( check == ( ag_unread st `alice` ) 1 `store: the poster hears of the claim` )
     : ( Vec AgTask ) mine ( ag_tasks st `mine` `bob` `` 10 123 )
     ( check == ( vec_len [AgTask] mine ) 1 `store: bob holds one` )
-    ( ag_tasks_free mine )
     ( check == ( ag_task_extend st t1 `bob` 100 150 ) AG_TASK_OK `store: bob extends` )
     : ( Vec AgTask ) still ( ag_tasks st `mine` `bob` `` 10 200 )
     ( check == ( vec_len [AgTask] still ) 1 `store: the extended lease holds at t=200` )
-    ( ag_tasks_free still )
     : ( Vec AgTask ) open ( ag_tasks st `open` `` `dev` 10 300 )
     ( check == ( vec_len [AgTask] open ) 1 `store: an expired lease reopens the task` )
-    ( ag_tasks_free open )
     ( check == ( ag_unread st `bob` ) 1 `store: the holder hears of the expiry` )
     : ( Vec AgTask ) none ( ag_tasks st `open` `` `ops` 10 300 )
     ( check == ( vec_len [AgTask] none ) 0 `store: tag filter is exact` )
-    ( ag_tasks_free none )
     ( check == ( ag_task_claim st t1 `bob` 60 301 ) AG_TASK_OK `store: bob reclaims` )
     ( check == ( ag_task_release st t1 `bob` `cannot today` 302 ) AG_TASK_OK `store: bob releases` )
     ( check == ( ag_task_claim st t1 `bob` 60 303 ) AG_TASK_OK `store: and takes it again` )
@@ -106,7 +98,6 @@ $ `src/service.nu`
         T t → {
             ( check ( seq ( string_data . t status ) `done` ) `store: task is done` )
             ( check ( seq ( string_data . t result ) `result text` ) `store: with its result` )
-            ( ag_task_free t )
         }
         F _ → { ( check F `store: task is done` ) }
     }
@@ -118,21 +109,19 @@ $ `src/service.nu`
     ( check ( ag_note_set st `` `plan` `step 1` `alice` 400 ) `store: note set` )
     ( check ( ag_note_set st `` `plan` `step 2` `bob` 401 ) `store: note overwrite` )
     ?? ( ag_note_get st `` `plan` ) {
-        T n → { ( check ( seq ( string_data . n body ) `step 2` ) `store: note reads back` ) ( ag_note_free n ) }
+        T n → { ( check ( seq ( string_data . n body ) `step 2` ) `store: note reads back` ) }
         F _ → { ( check F `store: note reads back` ) }
     }
     ( check ( ag_note_set st `repo` `plan` `repo plan` `alice` 402 ) `store: same key under a project` )
     ?? ( ag_note_get st `` `plan` ) {
-        T n → { ( check ( seq ( string_data . n body ) `step 2` ) `store: the global one is untouched` ) ( ag_note_free n ) }
+        T n → { ( check ( seq ( string_data . n body ) `step 2` ) `store: the global one is untouched` ) }
         F _ → { ( check F `store: the global one is untouched` ) }
     }
     : ( Vec AgNote ) only ( ag_notes st `repo` F T )
     ( check == ( vec_len [AgNote] only ) 1 `store: notes of one project` )
-    ( ag_notes_free only )
     : ( Vec AgNote ) every ( ag_notes st `` T F )
     ( check == ( vec_len [AgNote] every ) 2 `store: notes of every project` )
     ( check == ( ag_note_count st ) 2 `store: note count spans projects` )
-    ( ag_notes_free every )
     ( check ( ag_note_del st `repo` `plan` ) `store: project note deleted` )
     ( check ( ag_note_del st `` `plan` ) `store: note deleted` )
     ( check ! ( ag_note_del st `` `plan` ) `store: deleting twice fails` )
@@ -159,12 +148,10 @@ $ `src/service.nu`
         = k + k 1
     }
     ( check & ! saw_before saw_after `store: following starts from now` )
-    ( ag_inbox_free ib4 )
     ( check ( ag_unfollow st `bob` `dev` ) `store: bob unfollows` )
     ( check ! ( ag_unfollow st `bob` `dev` ) `store: unfollow twice fails` )
     : ( Vec AgMsg ) h ( ag_history st `dev` 0 10 )
     ( check == ( vec_len [AgMsg] h ) 2 `store: history sees everything` )
-    ( ag_msgs_free h )
 }
 
 // A 0.1.0 store (notes keyed by `key` alone) opened by 0.2.0: the rows
@@ -182,15 +169,13 @@ $ `src/service.nu`
     : AgStore st ( ag_store_open path )
     ( check . st ok `migrate: 0.2.0 opens it` )
     ?? ( ag_note_get st `` `old` ) {
-        T n → { ( check ( seq ( string_data . n body ) `from 0.1.0` ) `migrate: the old note is a global note` ) ( ag_note_free n ) }
+        T n → { ( check ( seq ( string_data . n body ) `from 0.1.0` ) `migrate: the old note is a global note` ) }
         F _ → { ( check F `migrate: the old note is a global note` ) }
     }
     ( check ( ag_note_set st `p` `old` `new` `bob` 8 ) `migrate: the new key shape works` )
     ( check == ( ag_note_count st ) 2 `migrate: both rows` )
     : AgStore again ( ag_store_open path )
     ( check & . again ok == ( ag_note_count again ) 2 `migrate: opening again migrates nothing` )
-    ( ag_store_free again )
-    ( ag_store_free st )
 }
 
 // ── 2. operations ────────────────────────────────────────────────────
@@ -199,10 +184,8 @@ $ `src/service.nu`
     : AgStore st ( ag_store )
     : AgCaller c ? > ( nurl_str_len who ) 0 ( ag_caller_local st who now ) ( ag_caller_anon )
     : ~ Json args ( json_null )
-    ?? ( json_parse args_json ) { T j → { ( json_free args ) = args j } F _ → {} }
+    ?? ( json_parse args_json ) { T j → { = args j } F _ → {} }
     : AgRes r ( ag_op_call st c op args now )
-    ( json_free args )
-    ( ag_caller_free c )
     ^ r
 }
 
@@ -218,173 +201,122 @@ $ `src/service.nu`
             T d → {
                 : AgRes r ( call `probe` ( string_data . d name ) `{}` 1000 )
                 ? == . r status 501 { = all_wired F } {}
-                ( ag_res_free r )
             }
             F _ → {}
         }
         = i + i 1
     }
-    ( ag_catalog_free cat )
     ( check all_wired `ops: every catalog entry dispatches` )
 
     : AgRes u ( call `` `brief` `{}` 1000 )
     ( check == . u status 401 `ops: brief needs a caller` )
     ( check ( has . u text `join` ) `ops: and the text says how` )
-    ( ag_res_free u )
     : AgRes unk ( call `` `nope` `{}` 1000 )
     ( check == . unk status 404 `ops: unknown op is 404` )
-    ( ag_res_free unk )
 
     : AgRes j ( call `` `join` `{"name":"carol","about":"tester"}` 1000 )
     ( check == . j status 200 `ops: join` )
     ( check ( has . j text `token: ` ) `ops: join shows the token` )
-    ( ag_res_free j )
     : AgRes j2 ( call `` `join` `{"name":"carol"}` 1000 )
     ( check == . j2 status 409 `ops: join twice is 409` )
-    ( ag_res_free j2 )
     : AgRes j3 ( call `` `join` `{"name":"Bad Name"}` 1000 )
     ( check == . j3 status 400 `ops: join checks the name` )
-    ( ag_res_free j3 )
 
     : AgRes p ( call `dan` `post` `{"body":"hello"}` 1001 )
     ( check ( seq ( string_data . p text ) `#1 posted to public\n` ) `ops: post text` )
-    ( ag_res_free p )
     : AgRes s ( call `dan` `send` `{"to":"carol","body":"psst","reply_to":1}` 1002 )
     ( check == . s status 200 `ops: send` )
-    ( ag_res_free s )
     : AgRes s2 ( call `dan` `send` `{"to":"nobody","body":"psst"}` 1002 )
     ( check == . s2 status 404 `ops: send to nobody is 404` )
-    ( ag_res_free s2 )
     : AgRes b ( call `carol` `brief` `{}` 1062 )
     ( check ( has . b text `inbox: 2 new\n#1 public dan 1m: hello\n#2 dm dan 1m re#1: psst\n` ) `ops: brief delivers both, in order, with ages` )
     ( check ( has . b text `open tasks: 0 · notes: 0` ) `ops: brief counts` )
-    ( ag_res_free b )
     : AgRes b2 ( call `carol` `brief` `{}` 1063 )
     ( check ( has . b2 text `inbox: nothing new` ) `ops: brief delivers once` )
-    ( ag_res_free b2 )
     // wait: returns at once when something is unread, at the timeout otherwise
     : AgRes s3 ( call `dan` `send` `{"to":"carol","body":"wake up"}` 1064 )
-    ( ag_res_free s3 )
     : i w0 ( now_ms )
     : AgRes w1 ( call `carol` `wait` `{"timeout_s":5}` 1064 )
     : i w1ms - ( now_ms ) w0
     ( check & ( has . w1 text `wake up` ) < w1ms 1000 `ops: wait returns at once with the unread message` )
-    ( ag_res_free w1 )
     : AgRes s4 ( call `dan` `send` `{"to":"carol","body":"report only"}` 1064 )
-    ( ag_res_free s4 )
     : AgRes w3 ( call `carol` `wait` `{"timeout_s":5,"deliver":false}` 1064 )
     ( check ( has . w3 text `unread: 1 (brief delivers)` ) `ops: wait deliver=false reports, moves nothing` )
-    ( ag_res_free w3 )
     : AgRes w4 ( call `carol` `inbox` `{}` 1064 )
     ( check ( has . w4 text `report only` ) `ops: the message is still undelivered afterwards` )
-    ( ag_res_free w4 )
     : i w2s ( now_ms )
     : AgRes w2 ( call `carol` `wait` `{"timeout_s":1}` 1065 )
     : i w2ms - ( now_ms ) w2s
     ( check & ( has . w2 text `inbox: nothing new` ) & >= w2ms 900 < w2ms 3000 `ops: wait with nothing new returns at the timeout` )
-    ( ag_res_free w2 )
     : AgRes hs ( call `carol` `history` `{"channel":"public"}` 1064 )
     ( check ( has . hs text `#1 public dan` ) `ops: history re-reads` )
-    ( ag_res_free hs )
     : AgRes hm ( call `carol` `history` `{"channel":"@dan"}` 1064 )
     ( check == . hm status 403 `ops: another's mail is 403` )
-    ( ag_res_free hm )
     : AgRes hm2 ( call `carol` `history` `{"channel":"@carol"}` 1064 )
     ( check == . hm2 status 200 `ops: own mail is readable` )
-    ( ag_res_free hm2 )
 
     : AgRes tp ( call `dan` `task_post` `{"title":"review","tags":"Rust, review","priority":"3"}` 1100 )
     ( check == . tp status 200 `ops: task_post (priority as a string)` )
-    ( ag_res_free tp )
     : AgRes tl ( call `carol` `tasks` `{"tag":"rust"}` 1101 )
     ( check ( has . tl text `#1 p3 [rust,review] review — open, dan` ) `ops: tasks line` )
-    ( ag_res_free tl )
     : AgRes tc ( call `carol` `task_claim` `{"id":1,"lease_s":120}` 1102 )
     ( check ( has . tc text `claimed by you, lease 2m left` ) `ops: task_claim text` )
-    ( ag_res_free tc )
     : AgRes tc2 ( call `erin` `task_claim` `{"id":1}` 1103 )
     ( check == . tc2 status 409 `ops: second claim is 409` )
-    ( ag_res_free tc2 )
     : AgRes bb ( call `carol` `brief` `{}` 1110 )
     ( check ( has . bb text `holding:\n#1 p3 [rust,review] review — claimed carol, 1m left` ) `ops: brief lists held tasks with the lease` )
-    ( ag_res_free bb )
     : AgRes td0 ( call `carol` `task_done` `{"id":1}` 1111 )
     ( check == . td0 status 400 `ops: task_done needs a result` )
-    ( ag_res_free td0 )
     : AgRes td ( call `carol` `task_done` `{"id":1,"result":"merged"}` 1112 )
     ( check == . td status 200 `ops: task_done` )
-    ( ag_res_free td )
     : AgRes db ( call `dan` `brief` `{}` 1113 )
     ( check ( has . db text `task #1 claimed by carol: review` ) `ops: poster hears of the claim` )
     ( check ( has . db text `task #1 done by carol: review\nresult: merged` ) `ops: and of the result` )
-    ( ag_res_free db )
     : AgRes tk ( call `dan` `task` `{"id":1}` 1114 )
     ( check ( has . tk text `result: merged` ) `ops: task shows the result` )
-    ( ag_res_free tk )
 
     : AgRes ns ( call `dan` `note_set` `{"key":"plan","body":"ship it"}` 1200 )
     ( check == . ns status 200 `ops: note_set` )
-    ( ag_res_free ns )
     : AgRes nn ( call `carol` `notes` `{}` 1260 )
     ( check ( has . nn text `plan (dan 1m)` ) `ops: notes list` )
-    ( ag_res_free nn )
     : AgRes nr ( call `carol` `note` `{"key":"plan"}` 1260 )
     ( check ( has . nr text `ship it` ) `ops: note read` )
-    ( ag_res_free nr )
     : AgRes nd ( call `carol` `note_del` `{"key":"plan"}` 1261 )
     ( check == . nd status 200 `ops: note_del` )
-    ( ag_res_free nd )
     : AgRes nd2 ( call `carol` `note_del` `{"key":"plan"}` 1261 )
     ( check == . nd2 status 404 `ops: note_del twice is 404` )
-    ( ag_res_free nd2 )
     : AgRes pn ( call `dan` `note_set` `{"project":"nurl","key":"build","body":"./build.sh"}` 1270 )
     ( check ( seq ( string_data . pn text ) `note nurl/build saved\n` ) `ops: note_set under a project` )
-    ( ag_res_free pn )
     : AgRes pn2 ( call `dan` `note_set` `{"project":"Bad Project","key":"x","body":"y"}` 1270 )
     ( check == . pn2 status 400 `ops: a project is a name` )
-    ( ag_res_free pn2 )
     : AgRes gn ( call `dan` `note_set` `{"key":"build","body":"global build"}` 1271 )
-    ( ag_res_free gn )
     : AgRes pr ( call `carol` `note` `{"project":"nurl","key":"build"}` 1331 )
     ( check ( has . pr text `nurl/build (dan 1m):\n./build.sh` ) `ops: note reads the project's` )
-    ( ag_res_free pr )
     : AgRes gr ( call `carol` `note` `{"key":"build"}` 1331 )
     ( check ( has . gr text `build (dan 1m):\nglobal build` ) `ops: note without project reads the global one` )
-    ( ag_res_free gr )
     : AgRes pl ( call `carol` `notes` `{"project":"nurl"}` 1332 )
     ( check ( seq ( string_data . pl text ) `build (dan 1m)\n` ) `ops: notes of a project` )
-    ( ag_res_free pl )
     : AgRes al ( call `carol` `notes` `{}` 1332 )
     ( check ( seq ( string_data . al text ) `build (dan 1m)\nnurl/build (dan 1m)\n` ) `ops: notes of every project, prefixed` )
-    ( ag_res_free al )
     : AgRes el ( call `carol` `notes` `{"project":"empty"}` 1332 )
     ( check ( has . el text `no notes for project empty` ) `ops: an empty project says how` )
-    ( ag_res_free el )
     : AgRes pd ( call `carol` `note_del` `{"project":"nurl","key":"build"}` 1333 )
     ( check == . pd status 200 `ops: note_del under a project` )
-    ( ag_res_free pd )
     : AgRes gd ( call `carol` `note_del` `{"key":"build"}` 1333 )
     ( check == . gd status 200 `ops: and the global one` )
-    ( ag_res_free gd )
 
     : AgRes cc ( call `dan` `channel_create` `{"name":"dev"}` 1300 )
     ( check == . cc status 200 `ops: channel_create` )
-    ( ag_res_free cc )
     : AgRes fo ( call `carol` `follow` `{"channel":"dev"}` 1301 )
     ( check == . fo status 200 `ops: follow` )
-    ( ag_res_free fo )
     : AgRes ch ( call `carol` `channels` `{}` 1302 )
     ( check ( has . ch text `dev (0)` ) `ops: channels` )
-    ( ag_res_free ch )
     : AgRes uf ( call `carol` `unfollow` `{"channel":"dev"}` 1303 )
     ( check == . uf status 200 `ops: unfollow` )
-    ( ag_res_free uf )
     : AgRes ag ( call `carol` `agents` `{}` 1304 )
     ( check ( has . ag text `carol (seen now) — tester` ) `ops: agents` )
-    ( ag_res_free ag )
     : AgRes wi ( call `carol` `whoami` `{}` 1305 )
     ( check ( has . wi text `you: carol — tester\nfollows: public\n` ) `ops: whoami` )
-    ( ag_res_free wi )
 }
 
 // ── 2b. identity spelling ────────────────────────────────────────────
@@ -393,37 +325,28 @@ $ `src/service.nu`
     // The unit test runs in the package directory, whose basename is `agora`.
     : String a ( ag_identity_resolve `claude-@cwd` )
     ( check ( seq ( string_data a ) `claude-agora` ) `identity: @cwd is the working directory's basename` )
-    ( string_free a )
     : String b ( ag_identity_resolve `@cwd` )
     ( check ( seq ( string_data b ) `agora` ) `identity: bare @cwd` )
-    ( string_free b )
     : String c ( ag_identity_resolve `plain` )
     ( check ( seq ( string_data c ) `plain` ) `identity: no token, no change` )
-    ( string_free c )
     : String d ( ag_identity_resolve `@cwd-@cwd` )
     ( check ( seq ( string_data d ) `agora-agora` ) `identity: every occurrence` )
-    ( string_free d )
     ( check ( ag_identity_from_cwd `claude-@cwd` ) `identity: @cwd spelling is recognised` )
     ( check ! ( ag_identity_from_cwd `claude` ) `identity: a plain name is not` )
     // A @cwd name registered from one directory refuses another.
     : AgStore st ( ag_store )
     : AgCaller c1 ( ag_caller_local_from st `claude-agora` `/somewhere/agora` 2000 )
     ( check . c1 authed `identity: first @cwd registration` )
-    ( ag_caller_free c1 )
     : AgCaller c2 ( ag_caller_local_from st `claude-agora` `/somewhere/agora` 2001 )
     ( check . c2 authed `identity: same directory again` )
-    ( ag_caller_free c2 )
     : AgCaller c3 ( ag_caller_local_from st `claude-agora` `/elsewhere/agora` 2002 )
     ( check ! . c3 authed `identity: another directory with the same basename is refused` )
     : String why ( string_from ( ag_local_refusal ) )
     ( check ( string_contains why `/somewhere/agora` ) `identity: and the refusal names the owner` )
-    ( string_free why )
-    ( ag_caller_free c3 )
     : AgCaller c4 ( ag_caller_local_from st `claude-agora` `` 2003 )
     ( check . c4 authed `identity: an explicit name (no origin) is never refused` )
-    ( ag_caller_free c4 )
     ?? ( ag_agent_get st `claude-agora` ) {
-        T a → { ( check ( seq ( string_data . a origin ) `/somewhere/agora` ) `identity: origin recorded` ) ( ag_agent_free a ) }
+        T a → { ( check ( seq ( string_data . a origin ) `/somewhere/agora` ) `identity: origin recorded` ) }
         F _ → { ( check F `identity: origin recorded` ) }
     }
 }
@@ -444,7 +367,6 @@ $ `src/service.nu`
         ( bytes_extend_str . req body body )
     } {}
     : HttpResponse resp ( router_handle r req )
-    ( request_free req )
     ^ resp
 }
 
@@ -458,12 +380,9 @@ $ `src/service.nu`
     ( check == . c status 200 `rest: GET /api` )
     ( check ( has cb `"name":"brief"` ) `rest: the catalog lists brief` )
     ( check ( has cb `"path":"/api/task_claim"` ) `rest: with paths` )
-    ( string_free cb )
-    ( http_response_free c )
 
     : HttpResponse u ( rest r `POST` `/api/brief` `` `` `{}` )
     ( check == . u status 401 `rest: POST /api/brief without a token is 401` )
-    ( http_response_free u )
 
     : HttpResponse j ( rest r `POST` `/api/join` `` `` `{"name":"rest-user"}` )
     : String jb ( body_of j )
@@ -472,13 +391,10 @@ $ `src/service.nu`
     ?? ( json_parse ( string_data jb ) ) {
         T jj → {
             ?? ( json_obj_get jj `token` ) { T t → { ( string_push_str tok ( json_as_str t ) ) } F _ → {} }
-            ( json_free jj )
         }
         F _ → {}
     }
     ( check == ( string_len tok ) 48 `rest: the token is 48 hex chars` )
-    ( string_free jb )
-    ( http_response_free j )
     : String auth ( string_from `Bearer ` )
     ( string_push_str auth ( string_data tok ) )
 
@@ -486,31 +402,21 @@ $ `src/service.nu`
     : String wb ( body_of w )
     ( check == . w status 200 `rest: GET with the token` )
     ( check ( has wb `"agent":"rest-user"` ) `rest: whoami body` )
-    ( string_free wb )
-    ( http_response_free w )
 
     : HttpResponse p ( rest r `POST` `/api/post` `` ( string_data auth ) `{"body":"over rest"}` )
     : String pb ( body_of p )
     ( check ( has pb `"id":` ) `rest: post answers the id` )
-    ( string_free pb )
-    ( http_response_free p )
 
     : HttpResponse h ( rest r `GET` `/api/history` `channel=public&limit=1` ( string_data auth ) `` )
     : String hb ( body_of h )
     ( check ( has hb `"body":"over rest"` ) `rest: GET with query arguments` )
-    ( string_free hb )
-    ( http_response_free h )
 
     : HttpResponse bad ( rest r `POST` `/api/nope` `` ( string_data auth ) `{}` )
     ( check == . bad status 404 `rest: unknown op is 404` )
-    ( http_response_free bad )
 
     : HttpResponse bt ( rest r `GET` `/api/whoami` `` `Bearer 0000` `` )
     ( check == . bt status 401 `rest: a bad token is 401` )
-    ( http_response_free bt )
 
-    ( string_free auth )
-    ( string_free tok )
 }
 
 // ── 4. MCP ───────────────────────────────────────────────────────────
@@ -520,10 +426,9 @@ $ `src/service.nu`
     ?? ( json_parse json ) {
         T req → {
             ?? ( mcp_server_dispatch_as srv req ctx ) {
-                T res → { ( string_free out ) = out ( json_stringify res ) ( json_free res ) }
-                F e → { ( mcp_rpc_err_free e ) }
+                T res → { = out ( json_stringify res ) }
+                F e → {}
             }
-            ( json_free req )
         }
         F _ → {}
     }
@@ -536,28 +441,21 @@ $ `src/service.nu`
     : String tl ( mcp srv `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` ( json_null ) )
     ( check ( has tl `"name":"task_claim"` ) `mcp: tools/list` )
     ( check ( has tl `"required":["id"]` ) `mcp: schemas carry required` )
-    ( string_free tl )
 
     : String c0 ( mcp srv `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}` ( json_null ) )
     ( check ( has c0 `"isError":true` ) `mcp: no context, no local identity → error` )
-    ( string_free c0 )
 
     : Json ctx ( json_obj_new )
     ( json_obj_set ctx `agent` ( json_str_lit `carol` ) )
     : String c1 ( mcp srv `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whoami","arguments":{}}}` ctx )
     ( check ( has c1 `you: carol` ) `mcp: tools/call with a context acts as it` )
-    ( string_free c1 )
     : String c2 ( mcp srv `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"post","arguments":{"body":"via mcp","channel":"dev"}}}` ctx )
     ( check ( has c2 `posted to dev` ) `mcp: post through a tool` )
-    ( string_free c2 )
-    ( json_free ctx )
 
     ( ag_state_set_local `stdio-agent` )
     : String c3 ( mcp srv `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"whoami","arguments":{}}}` ( json_null ) )
     ( check ( has c3 `you: stdio-agent` ) `mcp: null context is the local identity` )
-    ( string_free c3 )
     ( ag_state_set_local `` )
-    ( mcp_server_free srv )
 }
 
 @ main → i {
@@ -566,15 +464,12 @@ $ `src/service.nu`
     : String db ( string_from `agora_test_scratch/agora.db` )
     ?? ( file_delete ( string_data db ) ) { T _ → {} F _ → {} }
     ( check ( ag_state_init ( string_data db ) ) `state: init` )
-    ( string_free db )
-    ( string_free dir )
 
     // The store test gets a file of its own, so the ids and names the
     // operation tests expect start from a clean one.
     ?? ( file_delete `agora_test_scratch/store.db` ) { T _ → {} F _ → {} }
     : AgStore st ( ag_store_open `agora_test_scratch/store.db` )
     ( test_store st )
-    ( ag_store_free st )
     ( test_migration )
     ( test_ops )
     ( test_identity )
@@ -582,7 +477,6 @@ $ `src/service.nu`
     : Router r ( http_app_router app )
     ( test_rest r )
     ( test_mcp )
-    ( ag_service_shutdown )
 
     : String sum ( string_from `agora_test: ` )
     ( string_push_int sum g_pass )
@@ -590,6 +484,5 @@ $ `src/service.nu`
     ( string_push_int sum g_fail )
     ( string_push_str sum ` failed` )
     ( nurl_println ( string_data sum ) )
-    ( string_free sum )
     ^ ? > g_fail 0 1 0
 }

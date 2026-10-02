@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- The service state (`AgState`: the store and the local identity), the
+  local-refusal text and the MCP server the HTTP face serves each live in an
+  rcbox behind their global — one owner for the process — instead of
+  `nurl_alloc`'d blocks freed by hand. `ag_state_init` releases a state
+  installed before it; the MCP server is built by `ag_build_app` before any
+  worker runs (it was built lazily by whichever worker took the first /mcp
+  request). `ag_state_free`, `ag_refusal_free` and `ag_service_shutdown`
+  are gone.
+- `AgStore`, `AgAgent`, `AgChannel`, `AgMsg`, `AgTask`, `AgNote`,
+  `AgInbox`, `AgCaller`, `AgRes` and `AgOpDef` are plain values: their
+  `*_free` functions (and the Vec-of variants) are deleted — nothing outside
+  the package called them — and so is every `string_free` / `vec_free` /
+  `json_free` / `args_free` in the server, the CLI and the tests (393
+  calls).
+- Same status codes for a REST + MCP workload (join, post, send, brief,
+  inbox, history, tasks, notes, wait, error paths); instructions:u −0.07 %.
+
 ## 0.3.2
 
 0.3.1 carried the test databases in `agora_test_scratch/`; the package now has a `.gitignore` excluding them, which is the file `nurlpkg pack` reads. No code change.

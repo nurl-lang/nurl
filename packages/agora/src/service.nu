@@ -48,11 +48,9 @@ $ `api.nu`
     : i now ( now_seconds )
     : AgCaller caller ( ag_caller_of_ctx st ( mcp_call_context c ) now )
     : AgRes res ( ag_op_call st caller name args now )
-    ( ag_caller_free caller )
     : Json out ? < . res status 400
     ( mcp_tool_result_text ( string_data . res text ) )
     ( mcp_tool_result_error ( string_data . res text ) )
-    ( ag_res_free res )
     ^ out
 }
 
@@ -79,7 +77,6 @@ $ `api.nu`
         }
         = i + i 1
     }
-    ( ag_catalog_free cat )
     ^ srv
 }
 
@@ -91,7 +88,6 @@ $ `api.nu`
     ?? ( mcp_auth_bearer_token req ) {
         T tok → {
             : AgCaller c ( ag_caller_of_token ( ag_store ) ( string_data tok ) now )
-            ( string_free tok )
             ^ c
         }
         F _ → { ^ ( ag_caller_anon ) }
@@ -134,14 +130,12 @@ $ `api.nu`
                 : String path ( string_from `/api/` )
                 ( string_push_str path ( string_data . d name ) )
                 ( json_obj_set o `path` ( json_str_lit ( string_data path ) ) )
-                ( string_free path )
                 ( json_arr_push arr o )
             }
             F _ → {}
         }
         = i + i 1
     }
-    ( ag_catalog_free cat )
     : Json out ( json_obj_new )
     ( json_obj_set out `service` ( json_str_lit `agora` ) )
     ( json_obj_set out `version` ( json_str_lit AG_VERSION ) )
@@ -153,7 +147,6 @@ $ `api.nu`
 @ __ag_h_catalog HttpRequest req Params p → HttpResponse {
     : Json o ( ag_catalog_json )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
     ^ r
 }
 
@@ -162,7 +155,7 @@ $ `api.nu`
 @ __ag_http_args HttpRequest req → Json {
     ? > ( vec_len [u] . req body ) 0 {
         ?? ( json_parse_bytes . req body ) {
-            T j → { ? ( json_is_obj j ) { ^ j } { ( json_free j ) } }
+            T j → { ? ( json_is_obj j ) { ^ j } {} }
             F _ → {}
         }
         // A body that is not a JSON object: the query still counts.
@@ -178,60 +171,40 @@ $ `api.nu`
         }
         = i + i 1
     }
-    ( query_pairs_free pairs )
     ^ o
 }
 
 // POST|GET /api/:op
 @ __ag_h_api HttpRequest req Params p → HttpResponse {
     : ~ String op ( string_new )
-    ?? ( params_get p `op` ) { T v → { ( string_free op ) = op v } F _ → {} }
+    ?? ( params_get p `op` ) { T v → { = op v } F _ → {} }
     : i now ( now_seconds )
     : AgCaller caller ( __ag_http_caller req now )
     : Json args ( __ag_http_args req )
     : AgRes res ( ag_op_call ( ag_store ) caller ( string_data op ) args now )
-    ( json_free args )
-    ( ag_caller_free caller )
-    ( string_free op )
     : HttpResponse r ( response_json . res status . res body )
     ? == . res status 401 {
         ( response_set_header r `WWW-Authenticate` `Bearer realm="agora"` )
     } {}
-    ( ag_res_free res )
     ^ r
 }
 
-// The one McpServer the HTTP face serves, built on first use and
-// freed by `ag_service_shutdown`. Every field of an McpServer is a
-// shared handle, so the copy `__ag_mcp_srv` returns IS the server.
+// The one McpServer the HTTP face serves: built by ag_build_app before
+// any worker runs (or on first use), in an rcbox behind a global that owns
+// it for the rest of the process. `__ag_mcp_srv` lends it to a request.
 : AgMcpWiring {
     McpServer server
-    b has_server
 }
 
 : ~ i g_ag_mcp 0
 
-@ __ag_mcp_srv → McpServer {
-    ? == g_ag_mcp 0 {
-        : *AgMcpWiring w # *AgMcpWiring ( nurl_alloc Z AgMcpWiring )
-        = . w server ( ag_mcp_server )
-        = . w has_server T
-        = g_ag_mcp # i w
-    } {}
-    : *AgMcpWiring w # *AgMcpWiring g_ag_mcp
-    ^ . w server
+@ __ag_mcp_init → v {
+    ? == g_ag_mcp 0 { = g_ag_mcp ( rcbox_new [AgMcpWiring] @ AgMcpWiring { ( ag_mcp_server ) } ) } {}
 }
 
-// Free what the service built: the MCP server and the state. For a
-// clean exit (and a clean LeakSanitizer run) after the listener closes.
-@ ag_service_shutdown → v {
-    ? == g_ag_mcp 0 {} {
-        : *AgMcpWiring w # *AgMcpWiring g_ag_mcp
-        ? . w has_server { ( mcp_server_free . w server ) } {}
-        ( nurl_free # s # *AgMcpWiring g_ag_mcp )
-        = g_ag_mcp 0
-    }
-    ( ag_state_free )
+@ __ag_mcp_srv → McpServer {
+    ( __ag_mcp_init )
+    ^ . ( rcbox_ptr [AgMcpWiring] g_ag_mcp ) server
 }
 
 // /mcp — Streamable HTTP, the caller resolved per request and handed
@@ -240,12 +213,10 @@ $ `api.nu`
     : i now ( now_seconds )
     : AgCaller caller ( __ag_http_caller req now )
     : Json ctx ( __ag_ctx_of caller )
-    ( ag_caller_free caller )
     : McpServer srv ( __ag_mcp_srv )
     : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
     : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
     : HttpResponse out ( h req )
-    ( json_free ctx )
     ^ out
 }
 
@@ -259,13 +230,14 @@ $ `api.nu`
     ( http_app_cors a )
     ( http_app_body_max a 1048576 )
     ? quiet { ( http_app_quiet a ) } {}
+    ( __ag_mcp_init )
 
     ( http_app_get a `/healthz` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_health req p ) } )
     ( http_app_get a `/api` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_catalog req p ) } )
     ( http_app_get a `/api/:op` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_api req p ) } )
     ( http_app_post a `/api/:op` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_api req p ) } )
     // MCP shares the process and the port (the server itself lives in
-    // the wiring above, built on the first /mcp request).
+    // the wiring above).
     ( http_app_route a `POST` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_mcp req ) } )
     ( http_app_route a `GET` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_mcp req ) } )
     ( http_app_route a `DELETE` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_mcp req ) } )
@@ -274,9 +246,7 @@ $ `api.nu`
 
 @ ag_serve s host i port i workers b quiet → i {
     : HttpApp a ( ag_build_app workers quiet )
-    : i rc ( http_app_listen a host port )
-    ( ag_service_shutdown )
-    ^ rc
+    ^ ( http_app_listen a host port )
 }
 
 // MCP over stdio as the local identity set with `ag_state_set_local`.
@@ -290,7 +260,5 @@ $ `api.nu`
             = rc 1
         }
     }
-    ( mcp_server_free srv )
-    ( ag_state_free )
     ^ rc
 }

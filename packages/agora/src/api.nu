@@ -32,6 +32,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `store.nu`
+$ `stdlib/core/rcbox.nu`
 
 : s AG_VERSION `0.3.2`
 
@@ -59,7 +60,8 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 //
 // Shared by every worker thread and read-only after start: the store's
 // path (each operation opens its own connection) and the local identity
-// a stdio server acts as. Behind a global pointer so all workers see it.
+// a stdio server acts as. In an rcbox behind a global so all workers see
+// it; the global is its one owner for the rest of the process.
 
 : AgState {
     AgStore store
@@ -69,28 +71,19 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 
 : ~ i g_ag_state 0
 
+// Open the store at `db_path` and install the state (a state installed
+// before is released).
 @ ag_state_init s db_path → b {
-    : *AgState p # *AgState ( nurl_alloc Z AgState )
-    = . p store ( ag_store_open db_path )
-    = . p local ( string_new )
-    = . p local_origin ( string_new )
-    = g_ag_state # i p
-    ^ . . p store ok
+    : i old g_ag_state
+    = g_ag_state ( rcbox_new [AgState] @ AgState { ( ag_store_open db_path ) ( string_new ) ( string_new ) } )
+    ( rcbox_release [AgState] old )
+    ^ . . ( __ag_state ) store ok
 }
 
-@ ag_state_free → v {
-    ? == g_ag_state 0 { ^ v } {}
-    : *AgState p # *AgState g_ag_state
-    ( ag_store_free . p store )
-    ( string_free . p local )
-    ( string_free . p local_origin )
-    ( ag_refusal_free )
-    ( nurl_free # s # *AgState g_ag_state )
-    = g_ag_state 0
-}
+@ __ag_state → *AgState { ^ ( rcbox_ptr [AgState] g_ag_state ) }
 
 @ ag_state_set_local s name → v {
-    : *AgState p # *AgState g_ag_state
+    : *AgState p ( __ag_state )
     ( string_clear . p local )
     ( string_push_str . p local name )
     ( string_clear . p local_origin )
@@ -99,24 +92,23 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 // A local identity that came from `@cwd`: remembered with its directory.
 @ ag_state_set_local_from s name s origin → v {
     ( ag_state_set_local name )
-    : *AgState p # *AgState g_ag_state
+    : *AgState p ( __ag_state )
     ( string_push_str . p local_origin origin )
 }
 
 @ ag_local_origin → s {
-    : *AgState p # *AgState g_ag_state
+    : *AgState p ( __ag_state )
     ^ ( string_data . p local_origin )
 }
 
-// A shallow copy of the store handle: the path String is shared, never
-// freed by the receiver.
+// The store handle, lent: the path String stays the state's.
 @ ag_store → AgStore {
-    : *AgState p # *AgState g_ag_state
+    : *AgState p ( __ag_state )
     ^ @ AgStore { . . p store path . . p store ok }
 }
 
 @ ag_local_identity → s {
-    : *AgState p # *AgState g_ag_state
+    : *AgState p ( __ag_state )
     ^ ( string_data . p local )
 }
 
@@ -135,9 +127,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ?? ( env_cwd ) {
         T d → {
             : String b ( path_basename ( string_data d ) )
-            ( string_free d )
             : String low ( string_to_lower b )
-            ( string_free b )
             : s t ( string_data low )
             : i n ( nurl_str_len t )
             : ~ i i 0
@@ -148,7 +138,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
                 ( string_push_char base ? ok c 45 )
                 = i + i 1
             }
-            ( string_free low )
         }
         F _ → {}
     }
@@ -168,8 +157,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
             = i + i 1
         }
     }
-    ( string_free base )
-    ( string_free w )
     ^ out
 }
 
@@ -177,8 +164,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     b authed
     String agent
 }
-
-@ ag_caller_free sink AgCaller c → v { ( string_free . c agent ) }
 
 @ ag_caller_anon → AgCaller { ^ @ AgCaller { F ( string_new ) } }
 
@@ -188,8 +173,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( bytes_extend_str raw token )
     : ( Vec u ) dig ( sha256_pure raw )
     : String hex ( bytes_to_hex dig )
-    ( vec_free [u] dig )
-    ( vec_free [u] raw )
     ^ hex
 }
 
@@ -198,7 +181,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ? == ( nurl_str_len token ) 0 { ^ ( ag_caller_anon ) } {}
     : String h ( ag_token_hash token )
     : ?String id ( ag_agent_by_token st ( string_data h ) now )
-    ( string_free h )
     ?? id {
         T a → { ^ @ AgCaller { T a } }
         F _ → { ^ ( ag_caller_anon ) }
@@ -230,27 +212,23 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
                 ( string_push_str why `, not from ` )
                 ( string_push_str why origin )
                 ( string_push_str why ` — give an explicit --as NAME` )
-                ( ag_agent_free a )
                 ( ag_set_local_refusal ( string_data why ) )
-                ( string_free why )
                 ^ ( ag_caller_anon )
             } {}
-            ( ag_agent_free a )
             ( ag_agent_touch st name now )
         }
         F _ → {
             : String tok ( rand_hex_str 32 )
             : String h ( ag_token_hash ( string_data tok ) )
             ( ag_agent_create_from st name `` ( string_data h ) origin now )
-            ( string_free h )
-            ( string_free tok )
         }
     }
     ^ @ AgCaller { T ( string_from name ) }
 }
 
-// Why the last local resolution refused (empty when it did not). A
-// wrapper struct: a String cannot be assigned through a bare pointer.
+// Why the last local resolution refused (empty when it did not): one
+// String in an rcbox behind a global, made on first use and kept for the
+// process; it is rewritten in place.
 : AgRefusal {
     String why
 }
@@ -258,28 +236,15 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 : ~ i g_ag_refusal 0
 
 @ ag_set_local_refusal s why → v {
-    ? == g_ag_refusal 0 {
-        : *AgRefusal p # *AgRefusal ( nurl_alloc Z AgRefusal )
-        = . p why ( string_new )
-        = g_ag_refusal # i p
-    } {}
-    : *AgRefusal p # *AgRefusal g_ag_refusal
+    ? == g_ag_refusal 0 { = g_ag_refusal ( rcbox_new [AgRefusal] @ AgRefusal { ( string_new ) } ) } {}
+    : *AgRefusal p ( rcbox_ptr [AgRefusal] g_ag_refusal )
     ( string_clear . p why )
     ( string_push_str . p why why )
 }
 
 @ ag_local_refusal → s {
     ? == g_ag_refusal 0 { ^ `` } {}
-    : *AgRefusal p # *AgRefusal g_ag_refusal
-    ^ ( string_data . p why )
-}
-
-@ ag_refusal_free → v {
-    ? == g_ag_refusal 0 { ^ v } {}
-    : *AgRefusal p # *AgRefusal g_ag_refusal
-    ( string_free . p why )
-    ( nurl_free # s # *AgRefusal g_ag_refusal )
-    = g_ag_refusal 0
+    ^ ( string_data . ( rcbox_ptr [AgRefusal] g_ag_refusal ) why )
 }
 
 // The caller behind an MCP dispatch context (`mcp_call_context`): the
@@ -305,7 +270,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 @ ag_identity_from_cwd s who → b {
     : String w ( string_from who )
     : b r ( string_contains w `@cwd` )
-    ( string_free w )
     ^ r
 }
 
@@ -325,11 +289,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     String text
 }
 
-@ ag_res_free sink AgRes r → v {
-    ( json_free . r body )
-    ( string_free . r text )
-}
-
 @ __ag_ok Json body String text → AgRes { ^ @ AgRes { 200 body text } }
 
 @ __ag_err i status s msg → AgRes {
@@ -340,7 +299,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 
 @ __ag_err_s i status String msg → AgRes {
     : AgRes r ( __ag_err status ( string_data msg ) )
-    ( string_free msg )
     ^ r
 }
 
@@ -451,8 +409,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         } { ( string_push_char cur c ) }
         = i + i 1
     }
-    ( string_free cur )
-    ( string_free low )
     ^ out
 }
 
@@ -472,7 +428,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         } { ( string_push_char cur c ) }
         = i + i 1
     }
-    ( string_free cur )
     ^ arr
 }
 
@@ -658,10 +613,9 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ^ o
 }
 
-// A String is pushed into `out` and freed.
+// The text of `s`, appended to `out`.
 @ __ag_push_take String out String s → v {
     ( string_push_str out ( string_data s ) )
-    ( string_free s )
 }
 
 // ── The catalog ──────────────────────────────────────────────────────
@@ -672,22 +626,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     Json schema
     b read_only
     b needs_auth
-}
-
-@ ag_opdef_free sink AgOpDef d → v {
-    ( string_free . d name )
-    ( string_free . d desc )
-    ( json_free . d schema )
-}
-
-@ ag_catalog_free sink ( Vec AgOpDef ) v → v {
-    : i n ( vec_len [AgOpDef] v )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [AgOpDef] v i ) { T d → ( ag_opdef_free d ) F _ → {} }
-        = i + i 1
-    }
-    ( vec_free [AgOpDef] v )
 }
 
 @ __ag_def ( Vec AgOpDef ) v s name s desc Json schema b read_only b needs_auth → v {
@@ -843,30 +781,21 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String name ( __ag_arg_str args `name` )
     : String about ( __ag_arg_str args `about` )
     ? ( ag_name_ok ( string_data name ) ) {} {
-        ( string_free name )
-        ( string_free about )
         : String m ( string_from `name must be ` )
         ( string_push_str m AG_NAME_RULE )
         ^ ( __ag_err_s 400 m )
     }
     ? > ( string_len about ) 1024 {
-        ( string_free name )
-        ( string_free about )
         ^ ( __ag_err 400 `about: at most 1024 characters` )
     } {}
     : String tok ( rand_hex_str 24 )
     : String h ( ag_token_hash ( string_data tok ) )
     ? ( ag_agent_create st ( string_data name ) ( string_data about ) ( string_data h ) now ) {} {
-        ( string_free h )
-        ( string_free tok )
-        ( string_free about )
         : String m ( string_from `name '` )
         ( string_push_str m ( string_data name ) )
         ( string_push_str m `' is taken — if it is yours, use your token; otherwise pick another` )
-        ( string_free name )
         ^ ( __ag_err_s 409 m )
     }
-    ( string_free h )
     : Json o ( json_obj_new )
     ( json_obj_set o `agent` ( json_str_lit ( string_data name ) ) )
     ( json_obj_set o `token` ( json_str_lit ( string_data tok ) ) )
@@ -875,9 +804,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( string_push_str t `\ntoken: ` )
     ( string_push_str t ( string_data tok ) )
     ( string_push_str t `\nSend it as Authorization: Bearer <token> on every call; it is not shown again. Then call brief.` )
-    ( string_free tok )
-    ( string_free about )
-    ( string_free name )
     ^ ( __ag_ok o t )
 }
 
@@ -893,7 +819,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
                 ( string_push_str t ( string_data . a about ) )
             } {}
             ( json_obj_set o `about` ( json_str_lit ( string_data . a about ) ) )
-            ( ag_agent_free a )
         }
         F _ → {}
     }
@@ -914,7 +839,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         = i + i 1
     }
     ? == n 0 { ( string_push_str t `(none)` ) } {}
-    ( ag_strings_free fl )
     ( json_obj_set o `follows` fj )
     : i unread ( ag_unread st me )
     ( json_obj_set o `unread` ( json_int unread ) )
@@ -941,7 +865,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
             ( string_push_str t ` more — call inbox)\n` )
         } {}
     }
-    ( ag_inbox_free ib )
 }
 
 @ __ag_op_inbox AgStore st s me Json args i now → AgRes {
@@ -965,7 +888,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         ( string_push_str t `holding:\n` )
         ( __ag_tasks_text t mine now )
     } {}
-    ( ag_tasks_free mine )
     : i nopen ( ag_task_count_open st )
     : i nnotes ( ag_note_count st )
     ( json_obj_set o `open_tasks` ( json_int nopen ) )
@@ -1007,7 +929,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         ( string_push_str t `holding:\n` )
         ( __ag_tasks_text t mine then )
     } {}
-    ( ag_tasks_free mine )
     ^ ( __ag_ok o t )
 }
 
@@ -1047,71 +968,60 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 
 @ __ag_op_post AgStore st s me Json args i now → AgRes {
     : String body ( __ag_arg_str args `body` )
-    ?? ( __ag_body_check body ) { T e → { ( string_free body ) ^ e } F _ → {} }
+    ?? ( __ag_body_check body ) { T e → { ^ e } F _ → {} }
     : ~ String ch ( __ag_arg_str args `channel` )
     ? == ( string_len ch ) 0 { ( string_push_str ch `public` ) } {}
     ? ( ag_channel_exists st ( string_data ch ) ) {} {
-        ( string_free body )
         : String m ( string_from `no channel '` )
         ( string_push_str m ( string_data ch ) )
         ( string_push_str m `' — channels lists them, channel_create makes one` )
-        ( string_free ch )
         ^ ( __ag_err_s 404 m )
     }
     : i reply ( __ag_arg_int args `reply_to` 0 )
     : i id ( ag_post st ( string_data ch ) me ( string_data body ) reply now )
-    ( string_free body )
-    ? == id 0 { ( string_free ch ) ^ ( __ag_err 500 `could not store the message` ) } {}
+    ? == id 0 { ^ ( __ag_err 500 `could not store the message` ) } {}
     : AgRes r ( __ag_posted id ( string_data ch ) )
-    ( string_free ch )
     ^ r
 }
 
 @ __ag_op_send AgStore st s me Json args i now → AgRes {
     : String body ( __ag_arg_str args `body` )
-    ?? ( __ag_body_check body ) { T e → { ( string_free body ) ^ e } F _ → {} }
+    ?? ( __ag_body_check body ) { T e → { ^ e } F _ → {} }
     : String to ( __ag_arg_str args `to` )
     : ~ b known F
-    ?? ( ag_agent_get st ( string_data to ) ) { T a → { ( ag_agent_free a ) = known T } F _ → {} }
+    ?? ( ag_agent_get st ( string_data to ) ) { T a → { = known T } F _ → {} }
     ? known {} {
-        ( string_free body )
         : String m ( string_from `no agent '` )
         ( string_push_str m ( string_data to ) )
         ( string_push_str m `' — agents lists who is here` )
-        ( string_free to )
         ^ ( __ag_err_s 404 m )
     }
     : i reply ( __ag_arg_int args `reply_to` 0 )
     : String mbox ( ag_mailbox ( string_data to ) )
     : i id ( ag_post st ( string_data mbox ) me ( string_data body ) reply now )
-    ( string_free mbox )
-    ( string_free body )
-    ? == id 0 { ( string_free to ) ^ ( __ag_err 500 `could not store the message` ) } {}
+    ? == id 0 { ^ ( __ag_err 500 `could not store the message` ) } {}
     : Json o ( __ag_obj_int `id` id )
     : String t ( string_from `#` )
     ( string_push_int t id )
     ( string_push_str t ` sent to ` )
     ( string_push_str t ( string_data to ) )
     ( string_push_str t `\n` )
-    ( string_free to )
     ^ ( __ag_ok o t )
 }
 
 @ __ag_op_history AgStore st s me Json args i now → AgRes {
     : String ch ( __ag_arg_str args `channel` )
-    ? == ( string_len ch ) 0 { ( string_free ch ) ^ ( __ag_err 400 `channel is required` ) } {}
+    ? == ( string_len ch ) 0 { ^ ( __ag_err 400 `channel is required` ) } {}
     // A mailbox is readable by its owner only.
     ? == ( nurl_str_get ( string_data ch ) 0 ) 64 {
         : String mine ( ag_mailbox me )
         : b own ( string_eq mine ch )
-        ( string_free mine )
-        ? own {} { ( string_free ch ) ^ ( __ag_err 403 `only your own mail (@yourname) is readable` ) }
+        ? own {} { ^ ( __ag_err 403 `only your own mail (@yourname) is readable` ) }
     } {
         ? ( ag_channel_exists st ( string_data ch ) ) {} {
             : String m ( string_from `no channel '` )
             ( string_push_str m ( string_data ch ) )
             ( string_push_str m `'` )
-            ( string_free ch )
             ^ ( __ag_err_s 404 m )
         }
     }
@@ -1140,8 +1050,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
             F _ → {}
         }
     }
-    ( ag_msgs_free msgs )
-    ( string_free ch )
     ^ ( __ag_ok o t )
 }
 
@@ -1174,7 +1082,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         = i + i 1
     }
     ? == n 0 { ( string_push_str t `nobody has joined yet\n` ) } {}
-    ( ag_agents_free v )
     : Json o ( json_obj_new )
     ( json_obj_set o `agents` arr )
     ^ ( __ag_ok o t )
@@ -1208,7 +1115,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         }
         = i + i 1
     }
-    ( ag_channels_free v )
     : Json o ( json_obj_new )
     ( json_obj_set o `channels` arr )
     ^ ( __ag_ok o t )
@@ -1218,48 +1124,40 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String name ( __ag_arg_str args `name` )
     : String about ( __ag_arg_str args `about` )
     ? ( ag_name_ok ( string_data name ) ) {} {
-        ( string_free name )
-        ( string_free about )
         : String m ( string_from `channel name must be ` )
         ( string_push_str m AG_NAME_RULE )
         ^ ( __ag_err_s 400 m )
     }
     ? ( ag_channel_create st ( string_data name ) ( string_data about ) me now ) {} {
-        ( string_free about )
         : String m ( string_from `channel '` )
         ( string_push_str m ( string_data name ) )
         ( string_push_str m `' exists already` )
-        ( string_free name )
         ^ ( __ag_err_s 409 m )
     }
     ( ag_follow st me ( string_data name ) )
-    ( string_free about )
     : Json o ( json_obj_new )
     ( json_obj_set o `channel` ( json_str_lit ( string_data name ) ) )
     : String t ( string_from `created and following ` )
     ( string_push_str t ( string_data name ) )
     ( string_push_str t `\n` )
-    ( string_free name )
     ^ ( __ag_ok o t )
 }
 
 @ __ag_op_follow AgStore st s me Json args i now b on → AgRes {
     : String ch ( __ag_arg_str args `channel` )
-    ? == ( string_len ch ) 0 { ( string_free ch ) ^ ( __ag_err 400 `channel is required` ) } {}
+    ? == ( string_len ch ) 0 { ^ ( __ag_err 400 `channel is required` ) } {}
     ? ( ag_channel_exists st ( string_data ch ) ) {} {
         : String m ( string_from `no channel '` )
         ( string_push_str m ( string_data ch ) )
         ( string_push_str m `'` )
-        ( string_free ch )
         ^ ( __ag_err_s 404 m )
     }
     : b ok ? on ( ag_follow st me ( string_data ch ) ) ( ag_unfollow st me ( string_data ch ) )
     ? ok {} {
-        ? on { ( string_free ch ) ^ ( __ag_err 500 `could not follow` ) }
+        ? on { ^ ( __ag_err 500 `could not follow` ) }
         {
             : String m ( string_from `you were not following ` )
             ( string_push_str m ( string_data ch ) )
-            ( string_free ch )
             ^ ( __ag_err_s 409 m )
         }
     }
@@ -1269,24 +1167,19 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String t ( string_from ? on `following ` `no longer following ` )
     ( string_push_str t ( string_data ch ) )
     ( string_push_str t `\n` )
-    ( string_free ch )
     ^ ( __ag_ok o t )
 }
 
 @ __ag_op_task_post AgStore st s me Json args i now → AgRes {
     : String title ( __ag_arg_str args `title` )
-    ? == ( string_len title ) 0 { ( string_free title ) ^ ( __ag_err 400 `title is required` ) } {}
-    ? > ( string_len title ) 200 { ( string_free title ) ^ ( __ag_err 400 `title: at most 200 characters` ) } {}
+    ? == ( string_len title ) 0 { ^ ( __ag_err 400 `title is required` ) } {}
+    ? > ( string_len title ) 200 { ^ ( __ag_err 400 `title: at most 200 characters` ) } {}
     : String body ( __ag_arg_str args `body` )
-    ? > ( string_len body ) AG_BODY_MAX { ( string_free title ) ( string_free body ) ^ ( __ag_err 400 `body: at most 16 KiB` ) } {}
+    ? > ( string_len body ) AG_BODY_MAX { ^ ( __ag_err 400 `body: at most 16 KiB` ) } {}
     : String rawtags ( __ag_arg_str args `tags` )
     : String tags ( __ag_tags_norm rawtags )
-    ( string_free rawtags )
     : i prio ( __ag_clamp ( __ag_arg_int args `priority` 0 ) -100 100 )
     : i id ( ag_task_post st ( string_data title ) ( string_data body ) ( string_data tags ) me prio now )
-    ( string_free title )
-    ( string_free body )
-    ( string_free tags )
     ? == id 0 { ^ ( __ag_err 500 `could not store the task` ) } {}
     : Json o ( __ag_obj_int `id` id )
     : String t ( string_from `task #` )
@@ -1300,7 +1193,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ? == ( string_len which ) 0 { ( string_push_str which `open` ) } {}
     : String tag ( __ag_arg_str args `tag` )
     : String ltag ( string_to_lower tag )
-    ( string_free tag )
     : ( Vec AgTask ) v ( ag_tasks st ( string_data which ) me ( string_data ltag ) ( __ag_limit args ) now )
     : Json o ( json_obj_new )
     ( json_obj_set o `which` ( json_str_lit ( string_data which ) ) )
@@ -1317,9 +1209,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         } {}
         ( string_push_str t `\n` )
     } { ( __ag_tasks_text t v now ) }
-    ( ag_tasks_free v )
-    ( string_free ltag )
-    ( string_free which )
     ^ ( __ag_ok o t )
 }
 
@@ -1346,7 +1235,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
                 ( string_push_str t ( string_data . tk result ) )
                 ( string_push_str t `\n` )
             } {}
-            ( ag_task_free tk )
             ^ ( __ag_ok o t )
         }
     }
@@ -1373,7 +1261,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ?? ( ag_task_get st id now ) {
         T tk → {
             ( json_obj_set o `task` ( __ag_task_json tk ) )
-            ( ag_task_free tk )
         }
         F _ → {}
     }
@@ -1392,7 +1279,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( __ag_left did now + now lease )
     ( string_push_str did ` — task_done when finished` )
     : AgRes r ( __ag_task_verdict st rc id ( string_data did ) `is not open (someone holds it, or it is finished) — tasks shows what is` now )
-    ( string_free did )
     ^ r
 }
 
@@ -1403,26 +1289,23 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : ~ String did ( string_from `lease ` )
     ( __ag_left did now + now lease )
     : AgRes r ( __ag_task_verdict st rc id ( string_data did ) `is not held by you` now )
-    ( string_free did )
     ^ r
 }
 
 @ __ag_op_task_done AgStore st s me Json args i now → AgRes {
     : i id ( __ag_arg_int args `id` 0 )
     : String result ( __ag_arg_str args `result` )
-    ? == ( string_len result ) 0 { ( string_free result ) ^ ( __ag_err 400 `result is required — say what was done` ) } {}
-    ? > ( string_len result ) AG_BODY_MAX { ( string_free result ) ^ ( __ag_err 400 `result: at most 16 KiB` ) } {}
+    ? == ( string_len result ) 0 { ^ ( __ag_err 400 `result is required — say what was done` ) } {}
+    ? > ( string_len result ) AG_BODY_MAX { ^ ( __ag_err 400 `result: at most 16 KiB` ) } {}
     : i rc ( ag_task_done st id me ( string_data result ) now )
-    ( string_free result )
     ^ ( __ag_task_verdict st rc id `done — the poster has your result` `is not held by you` now )
 }
 
 @ __ag_op_task_release AgStore st s me Json args i now → AgRes {
     : i id ( __ag_arg_int args `id` 0 )
     : String note ( __ag_arg_str args `note` )
-    ? > ( string_len note ) AG_BODY_MAX { ( string_free note ) ^ ( __ag_err 400 `note: at most 16 KiB` ) } {}
+    ? > ( string_len note ) AG_BODY_MAX { ^ ( __ag_err 400 `note: at most 16 KiB` ) } {}
     : i rc ( ag_task_release st id me ( string_data note ) now )
-    ( string_free note )
     ^ ( __ag_task_verdict st rc id `released — open again` `is not held by you` now )
 }
 
@@ -1437,7 +1320,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String pr ( __ag_arg_str args `project` )
     ? == ( string_len pr ) 0 { ^ @ ?String { T pr } } {}
     ? ( ag_name_ok ( string_data pr ) ) { ^ @ ?String { T pr } } {}
-    ( string_free pr )
     ^ @ ?String { F }
 }
 
@@ -1459,27 +1341,23 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 @ __ag_op_note_set AgStore st s me Json args i now → AgRes {
     : String key ( __ag_arg_str args `key` )
     ? ( ag_name_ok ( string_data key ) ) {} {
-        ( string_free key )
         : String m ( string_from `key must be ` )
         ( string_push_str m AG_NAME_RULE )
         ^ ( __ag_err_s 400 m )
     }
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
-    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free key ) ( string_free project ) ^ ( __ag_bad_project ) } }
+    ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     : String body ( __ag_arg_str args `body` )
-    ?? ( __ag_body_check body ) { T e → { ( string_free key ) ( string_free project ) ( string_free body ) ^ e } F _ → {} }
+    ?? ( __ag_body_check body ) { T e → { ^ e } F _ → {} }
     : b ok ( ag_note_set st ( string_data project ) ( string_data key ) ( string_data body ) me now )
-    ( string_free body )
-    ? ok {} { ( string_free key ) ( string_free project ) ^ ( __ag_err 500 `could not store the note` ) }
+    ? ok {} { ^ ( __ag_err 500 `could not store the note` ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data key ) ) )
     : String t ( string_from `note ` )
     ( __ag_note_ref t ( string_data project ) ( string_data key ) )
     ( string_push_str t ` saved\n` )
-    ( string_free key )
-    ( string_free project )
     ^ ( __ag_ok o t )
 }
 
@@ -1487,8 +1365,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String m ( string_from `no note '` )
     ( __ag_note_ref m ( string_data project ) ( string_data key ) )
     ( string_push_str m `' — notes lists them` )
-    ( string_free key )
-    ( string_free project )
     ^ ( __ag_err_s 404 m )
 }
 
@@ -1496,7 +1372,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String key ( __ag_arg_str args `key` )
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
-    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free key ) ( string_free project ) ^ ( __ag_bad_project ) } }
+    ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     ?? ( ag_note_get st ( string_data project ) ( string_data key ) ) {
         F _ → { ^ ( __ag_no_note project key ) }
         T n → {
@@ -1510,9 +1386,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
             ( string_push_str t `):\n` )
             ( string_push_str t ( string_data . n body ) )
             ( string_push_str t `\n` )
-            ( ag_note_free n )
-            ( string_free key )
-            ( string_free project )
             ^ ( __ag_ok o t )
         }
     }
@@ -1521,7 +1394,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 @ __ag_op_notes AgStore st Json args i now → AgRes {
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
-    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free project ) ^ ( __ag_bad_project ) } }
+    ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     : b all == ( string_len project ) 0
     : ( Vec AgNote ) v ( ag_notes st ( string_data project ) all F )
     : Json arr ( json_arr_new )
@@ -1553,11 +1426,9 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
             ( string_push_str t ` key=… writes one\n` )
         }
     } {}
-    ( ag_notes_free v )
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `notes` arr )
-    ( string_free project )
     ^ ( __ag_ok o t )
 }
 
@@ -1565,7 +1436,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String key ( __ag_arg_str args `key` )
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
-    ?? pro { T p → { ( string_free project ) = project p } F _ → { ( string_free key ) ( string_free project ) ^ ( __ag_bad_project ) } }
+    ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     ? ( ag_note_del st ( string_data project ) ( string_data key ) ) {} { ^ ( __ag_no_note project key ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
@@ -1573,8 +1444,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     : String t ( string_from `note ` )
     ( __ag_note_ref t ( string_data project ) ( string_data key ) )
     ( string_push_str t ` deleted\n` )
-    ( string_free key )
-    ( string_free project )
     ^ ( __ag_ok o t )
 }
 
@@ -1596,7 +1465,6 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         }
         = i + i 1
     }
-    ( ag_catalog_free cat )
     ^ kind
 }
 
