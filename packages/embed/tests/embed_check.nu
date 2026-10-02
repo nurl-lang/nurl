@@ -38,28 +38,18 @@ $ `src/model.nu`
                                         = k + k 1
                                     }
                                     ( nurl_print ( string_data o ) ) ( nurl_print `\n` )
-                                    ( string_free o )
                                 } { ( nurl_print `ENCODE FAIL\n` ) = rc 1 }
-                                ( vec_free [f] emb )
                             } {}
-                            ( string_free line )
                             = ls + p 1
                         } {}
                         = p + p 1
                     }
-                    ( string_free corpus )
                 }
                 F _ → { ( nurl_print `corpus read fail\n` ) = rc 1 }
             }
             ( embed_close e )
         }
-        F err → { ( nurl_print `open fail: ` ) ( nurl_print ( string_data err ) ) ( nurl_print `\n` ) ( string_free err ) = rc 1 }
+        F err → { ( nurl_print `open fail: ` ) ( nurl_print ( string_data err ) ) ( nurl_print `\n` ) = rc 1 }
     }
-    : ~ i k 0
-    ~ < k ( vec_len [String] av ) {
-        ?? ( vec_get [String] av k ) { T s2 → { ( string_free s2 ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] av )
     ^ rc
 }

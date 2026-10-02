@@ -28,7 +28,7 @@ $ `deps/hub/src/hub.nu`
 @ __embed_resolve s arg → String {
     ?? ( hub_get arg ) {
         T p → { ^ p }
-        F e → { ( nurl_eprint ( string_data e ) ) ( nurl_eprint `\n` ) ( string_free e ) ^ ( string_new ) }
+        F e → { ( nurl_eprint ( string_data e ) ) ( nurl_eprint `\n` ) ^ ( string_new ) }
     }
 }
 
@@ -85,16 +85,7 @@ $ `deps/hub/src/hub.nu`
     ^ ? > p 0 { p } { def }
 }
 
-@ __cli_free_args ( Vec String ) av → v {
-    : ~ i k 0
-    ~ < k ( vec_len [String] av ) {
-        ?? ( vec_get [String] av k ) { T s2 → { ( string_free s2 ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] av )
-}
-
-@ __cli_apply_opts * Embed e ( Vec String ) av i from → v {
+@ __cli_apply_opts Embed e ( Vec String ) av i from → v {
     : s pool ( __cli_opt av from `--pool` )
     : b nonorm ( __cli_has av from `--no-normalize` )
     : i mode ? != 0 ( nurl_str_eq pool `mean` ) { EM_POOL_MEAN } { EM_POOL_CLS }
@@ -131,17 +122,14 @@ $ `deps/hub/src/hub.nu`
                     ? > ( nurl_str_len us ) 0 { = unload_s ( nurl_str_to_int us ) } {}
                     ? < unload_s 0 { = unload_s 0 } {}
                     = rc ( embed_serve e dir ( string_data host ) port ( __cli_opt av 3 `--token` ) unload_s )
-                    ( string_free host )
                     ( embed_close e )
                 }
                 F err → {
                     ( nurl_eprint ( string_data err ) ) ( nurl_eprint `\n` )
-                    ( string_free err )
                     = rc 1
                 }
             }
         }
-        ( string_free dirS )
     } {
         ? & >= n 4 != 0 ( nurl_str_eq cmd `text` ) {
             : String dirS ( __embed_resolve ( __cli_arg av 2 ) )
@@ -161,27 +149,22 @@ $ `deps/hub/src/hub.nu`
                                 = k + k 1
                             }
                             ( nurl_print ( string_data o ) ) ( nurl_print `\n` )
-                            ( string_free o )
                         } {
                             ( nurl_eprint `embed: encode failed\n` )
                             = rc 1
                         }
-                        ( vec_free [f] emb )
                         ( embed_close e )
                     }
                     F err → {
                         ( nurl_eprint ( string_data err ) ) ( nurl_eprint `\n` )
-                        ( string_free err )
                         = rc 1
                     }
                 }
             }
-            ( string_free dirS )
         } {
             ( __cli_usage )
             = rc ? | == n 1 != 0 ( nurl_str_eq cmd `--help` ) { 0 } { 2 }
         }
     }
-    ( __cli_free_args av )
     ^ rc
 }

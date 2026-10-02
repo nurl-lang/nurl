@@ -13,11 +13,15 @@
 //   tokenizer.json      Unigram vocabulary (packages/tokenizer)
 //   model.safetensors   f32 weights (packages/safetensor, mmap-backed)
 //
-//   ( embed_open dir )              → !*Embed String
-//   ( embed_open_dev dir gpu )      → !*Embed String   (gpu -1 = best)
+//   ( embed_open dir )              → !Embed String
+//   ( embed_open_dev dir gpu )      → !Embed String   (gpu -1 = best)
 //   ( embed_encode e text out )     → b     out = the embedding vector
 //   ( embed_encode_batch e ids offs out norm ) → b     B texts, one call
-//   ( embed_dim e ) ( embed_close e )
+//   ( embed_dim e )
+//
+// Embed is a handle: every copy is the same engine, and its last owner
+// gives everything back — the weights, the kit, the CUDA context.
+// embed_close is an optional early release.
 //
 // Inference is BATCHED where the fused attention runs (CUDA): texts are
 // grouped longest-first into chunks of at most EM_ROWS_BUDGET padded
@@ -45,6 +49,7 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/devops.nu`
 $ `deps/safetensor/src/safetensor.nu`
 $ `deps/tokenizer/src/unigram.nu`
+$ `stdlib/core/rcbox.nu`
 
 // pooling modes
 : i EM_POOL_CLS 0
@@ -75,7 +80,7 @@ $ `deps/tokenizer/src/unigram.nu`
     GkBuf ln2w GkBuf ln2b
 }
 
-: Embed {
+: EmbedImpl {
     GpuKit kit
     EmbedCfg cfg
     GkBuf wemb
@@ -105,8 +110,21 @@ $ `deps/tokenizer/src/unigram.nu`
     ( Vec GpuCopy ) up_q  // every tensor's upload, sent as ONE batch
 }
 
-@ __em_err s msg → !*Embed String {
-    ^ @ !*Embed String { F ( string_from msg ) }
+// An Embed is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same engine, and the last owner releases it.
+: Embed { s ctl }
+
+@ Embed_share Embed h → Embed { ^ @ Embed { # s ( rcbox_share # i . h ctl ) } }
+
+@ Embed_drop sink Embed h → v {
+    ( mem_forget h )
+    ( rcbox_release [EmbedImpl] # i . h ctl )
+}
+
+@ __Embed_ptr Embed h → *EmbedImpl { ^ ( rcbox_ptr [EmbedImpl] # i . h ctl ) }
+
+@ __em_err s msg → !Embed String {
+    ^ @ !Embed String { F ( string_from msg ) }
 }
 
 @ __em_cfg_int Json root s key i def → i {
@@ -126,7 +144,7 @@ $ `deps/tokenizer/src/unigram.nu`
 // Upload one f32 tensor from the mapping to the device. On any miss or
 // dtype surprise the engine is marked broken and an empty buf returned —
 // nothing runs on a partially-loaded model.
-@ __em_up * Embed e St s2 s name → GkBuf {
+@ __em_up * EmbedImpl e St s2 s name → GkBuf {
     : i idx ( st_find_tensor s2 name )
     ? >= idx 0 {} { = . e ok F ^ ( gk_buf_none GK_F32 ) }
     ?? ( vec_get [StTensor] ( st_tensors s2 ) idx ) {
@@ -147,7 +165,7 @@ $ `deps/tokenizer/src/unigram.nu`
 // carved from the arena: a new 128 MB chunk when the current one is full,
 // an exact-size chunk for anything larger (the 1 GB word embedding).
 // 0 = out of device memory.
-@ __em_carve * Embed e i bytes → i {
+@ __em_carve * EmbedImpl e i bytes → i {
     : i need * / + bytes 255 256 256
     ? > need ( __EM_ARENA_CHUNK ) {
         : GpuBuffer big ( gpu_alloc ( gk_gpu . e kit ) need )
@@ -172,7 +190,7 @@ $ `deps/tokenizer/src/unigram.nu`
     ^ d
 }
 
-@ __em_arena_free * Embed e → v {
+@ __em_arena_reset * EmbedImpl e → v {
     ( vec_clear [GpuBuffer] . e arenao )  // the chunks go back
     ( vec_clear [i] . e arena )
     ( vec_clear [i] . e arenasz )
@@ -199,16 +217,15 @@ $ `deps/tokenizer/src/unigram.nu`
     ^ s2
 }
 
-@ __em_up_layer * Embed e St s2 i layer s suffix → GkBuf {
+@ __em_up_layer * EmbedImpl e St s2 i layer s suffix → GkBuf {
     : String nm ( __em_lname layer suffix )
     : GkBuf b ( __em_up e s2 ( string_data nm ) )
-    ( string_free nm )
     ^ b
 }
 
 // Open a model directory. Pooling defaults to CLS + normalize (the BGE
 // convention); callers can override with embed_set_pooling.
-@ embed_open s dir → !*Embed String {
+@ embed_open s dir → !Embed String {
     ^ ( embed_open_dev dir - 0 1 )
 }
 
@@ -218,13 +235,14 @@ $ `deps/tokenizer/src/unigram.nu`
 // $NURL_GPU_DEVICE override. A named ordinal must BE a CUDA device:
 // falling back to the CPU backend behind an explicit --gpu would be
 // hiding exactly the mistake the flag exists to make loud.
-@ embed_open_dev s dir i gpu → !*Embed String {
-    : *Embed e # *Embed ( nurl_alloc Z Embed )
-    // nurl_alloc does NOT zero: every field read before assignment is set
+@ embed_open_dev s dir i gpu → !Embed String {
+    // zeroed: every handle field starts as the null handle, so an early
+    // return drops a half-built engine cleanly
+    : Embed h @ Embed { # s ( rcbox_zero [EmbedImpl] ) }
+    : *EmbedImpl e ( __Embed_ptr h )
     = . e ok T
     = . e has_tok F
     = . e loaded F
-    = . e kit # GpuKit 0
     = . e dir ( string_from dir )
     = . e gpu gpu
     = . e layers ( vec_new [EmbedLayer] )
@@ -260,34 +278,26 @@ $ `deps/tokenizer/src/unigram.nu`
                         - - maxpos padid 1  // XLM-R: usable positions
                     }
                     ? == % dim heads 0 { = cfg_ok T } {}
-                    ( json_free root )
                 }
                 F _e → {}
             }
-            ( string_free txt )
         }
         F _ → {}
     }
-    ( string_free cfgp )
-    ? cfg_ok {} { ( embed_close e ) ^ ( __em_err `embed: cannot read config.json (or dim % heads != 0)` ) }
+    ? cfg_ok {} { ^ ( __em_err `embed: cannot read config.json (or dim % heads != 0)` ) }
     // tokenizer.json
     : String tokp ( __em_path dir `tokenizer.json` )
     : ~ String tokerr ( string_new )
     ?? ( uni_load ( string_data tokp ) ) {
         T u → { = . e tok u = . e has_tok T }
-        F te → { ( string_free tokerr ) = tokerr te }
+        F te → { = tokerr te }
     }
-    ( string_free tokp )
-    ? . e has_tok {} {
-        ( embed_close e )
-        ^ @ !*Embed String { F tokerr }
-    }
-    ( string_free tokerr )
+    ? . e has_tok {} { ^ @ !Embed String { F tokerr } }
     ?? ( __em_load_weights e ) {
         T _ → {}
-        F le → { ( embed_close e ) ^ @ !*Embed String { F le } }
+        F le → { ^ @ !Embed String { F le } }
     }
-    ^ @ !*Embed String { T e }
+    ^ @ !Embed String { T h }
 }
 
 // ── the weights as a lease ──────────────────────────────────────────
@@ -296,7 +306,7 @@ $ `deps/tokenizer/src/unigram.nu`
 // that `embed_unload` undoes and `embed_reload` redoes. The config and the
 // tokenizer are not touched: they are the engine; the weights are what it
 // holds. `gpu` is the ordinal the caller named at open (-1 = best).
-@ __em_load_weights * Embed e → !v String {
+@ __em_load_weights * EmbedImpl e → !v String {
     : s dir ( string_data . e dir )
     : i gpu . e gpu
     // device: the one the caller named, else the BEST one — not driver
@@ -308,15 +318,13 @@ $ `deps/tokenizer/src/unigram.nu`
     ? >= gpu 0 {
         = . e kit ( gk_open gpu )
         ? & ( gk_ok . e kit ) != 0 ( nurl_str_eq ( gk_backend . e kit ) `cuda` ) {} {
-            ( gk_close . e kit )
-            = . e kit # GpuKit 0
+            ( __em_drop_kit e )
             ^ @ !v String { F ( string_from `embed: --gpu: not a usable CUDA device ordinal (note: CUDA order is fastest-first, not nvidia-smi's PCI order)` ) }
         }
     } {
         = . e kit ( gk_open_best )
         ? ( gk_ok . e kit ) {} {
-            ( gk_close . e kit )
-            = . e kit # GpuKit 0
+            ( __em_drop_kit e )
             ^ @ !v String { F ( string_from `embed: no compute device (CUDA or CPU backend)` ) }
         }
     }
@@ -366,11 +374,10 @@ $ `deps/tokenizer/src/unigram.nu`
             ( gpu_staging_free )
             ( st_close s2 )
         }
-        F se → { ( string_free se ) }
+        F _ → {}
     }
-    ( string_free stp )
     ? & st_ok . e ok {} {
-        ( embed_unload e )
+        ( __em_unload e )
         = . e ok T
         ^ @ !v String { F ( string_from `embed: model.safetensors missing, or a tensor absent / not f32` ) }
     }
@@ -381,38 +388,50 @@ $ `deps/tokenizer/src/unigram.nu`
 // Give the device back: every weight (the arena chunks), the kit — its
 // buffer pool, its kernels, the CUDA context. What stays is the engine:
 // config, tokenizer, the model dir for the reload. Idempotent.
-@ embed_unload * Embed e → v {
-    ? . e loaded {} {
-        ? != # i . e kit 0 { ( gk_close . e kit ) = . e kit # GpuKit 0 } {}
-        ^ {}
-    }
-    ( __em_arena_free e )
+@ embed_unload Embed e__h → v { ( __em_unload ( __Embed_ptr e__h ) ) }
+
+@ __em_unload * EmbedImpl e → v {
+    ( __em_arena_reset e )
     ( vec_clear [EmbedLayer] . e layers )
-    ( gk_close . e kit )
-    = . e kit # GpuKit 0
+    ( __em_drop_kit e )
     = . e loaded F
+}
+
+// The kit leaves the engine and is dropped here: with the arena and the
+// layers already gone it is the last owner of the pool, the kernels and
+// the CUDA context, so they go back now, not when the engine does.
+@ __em_drop_kit * EmbedImpl e → v {
+    : GpuKit old . e kit
+    ( mem_take old )
+    = . e kit @ GpuKit { # s 0 }
 }
 
 // Bring the weights back after embed_unload. F carries the loader's
 // message; the engine stays usable for tokenizing either way.
-@ embed_reload * Embed e → !v String {
+@ embed_reload Embed e__h → !v String {
+    : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e loaded { ^ @ !v String { T 0 } } {}
     ^ ( __em_load_weights e )
 }
 
-@ embed_loaded * Embed e → b { ^ . e loaded }
+@ embed_loaded Embed e__h → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ^ . e loaded
+}
 
 // Pooling override: mode EM_POOL_CLS | EM_POOL_MEAN, normalize on/off.
 // (cfg is an inline struct; a field write through two levels is not an
 // lvalue in NURL, so the setters rebuild the struct.)
-@ embed_set_pooling * Embed e i mode b normalize → v {
+@ embed_set_pooling Embed e__h i mode b normalize → v {
+    : *EmbedImpl e ( __Embed_ptr e__h )
     : EmbedCfg c . e cfg
     = . e cfg @ EmbedCfg { . c layers . c heads . c dim . c ffn . c vocab . c maxpos . c padid . c eps mode normalize . c maxseq }
 }
 
 // Cap on tokens per text (specials included); clamped to the model's
 // position table.
-@ embed_set_maxseq * Embed e i n → v {
+@ embed_set_maxseq Embed e__h i n → v {
+    : *EmbedImpl e ( __Embed_ptr e__h )
     : EmbedCfg c . e cfg
     : i lim - - . c maxpos . c padid 1
     ? & > n 0 <= n lim {
@@ -420,27 +439,42 @@ $ `deps/tokenizer/src/unigram.nu`
     } {}
 }
 
-@ embed_dim * Embed e → i { ^ . . e cfg dim }
-
-@ embed_ok * Embed e → b { ^ . e ok }
-
-@ embed_backend * Embed e → s { ? . e loaded { ^ ( gk_backend . e kit ) } { ^ `none` } }
-
-@ embed_device_name * Embed e → s { ? . e loaded { ^ ( gk_device_name . e kit ) } { ^ `none (weights unloaded)` } }
-
-@ embed_maxseq * Embed e → i { ^ . . e cfg maxseq }
-
-@ embed_close * Embed e → v {
-    ( embed_unload e )
-    ( vec_free [EmbedLayer] . e layers )
-    ( vec_free [i] . e arena )
-    ( vec_free [i] . e arenasz )
-    ( vec_free [GpuBuffer] . e arenao )
-    ( vec_free [GpuCopy] . e up_q )
-    ( string_free . e dir )
-    ? . e has_tok { ( uni_free . e tok ) } {}
-    ( nurl_free # *u e )
+@ embed_dim Embed e__h → i {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ^ . . e cfg dim
 }
+
+@ embed_ok Embed e__h → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ^ . e ok
+}
+
+@ embed_backend Embed e__h → s {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ? . e loaded { ^ ( gk_backend . e kit ) } { ^ `none` }
+}
+
+@ embed_device_name Embed e__h → s {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ? . e loaded { ^ ( gk_device_name . e kit ) } { ^ `none (weights unloaded)` }
+}
+
+// Kernels the engine's kit has compiled so far (0 while unloaded) — a
+// server that stopped meeting new shapes stops growing this.
+@ embed_kernel_count Embed e__h → i {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ? . e loaded { ^ ( gk_kernel_count . e kit ) } {}
+    ^ 0
+}
+
+@ embed_maxseq Embed e__h → i {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ^ . . e cfg maxseq
+}
+
+// Early release (optional): the last owner of the engine gives back the
+// weights, the kit and the CUDA context.
+@ embed_close sink Embed e → v {}
 
 // ── forward ──────────────────────────────────────────────────────────
 
@@ -515,16 +549,16 @@ $ `deps/tokenizer/src/unigram.nu`
 }
 
 // y[n,dim] = x[n,in] · W[dim,in]ᵀ + bias — the HF Linear shape.
-@ __em_linear * Embed e GkBuf y GkBuf x GkBuf w GkBuf bb i n i dout i din → b {
+@ __em_linear * EmbedImpl e GkBuf y GkBuf x GkBuf w GkBuf bb i n i dout i din → b {
     ^ ( gkd_gemm . e kit y x w bb 1 n dout din 1.0 1.0 1 )
 }
 
 // exact-erf GELU, in place semantics via a fresh output buffer
-@ __em_gelu * Embed e GkBuf y GkBuf x → b {
+@ __em_gelu * EmbedImpl e GkBuf y GkBuf x → b {
     ^ ( gkd_map . e kit `geluerf` `x*0.5f*(1.0f+erff(x*0.70710678f))` y x )
 }
 
-@ __em_new * Embed e i nfloats → GkBuf {
+@ __em_new * EmbedImpl e i nfloats → GkBuf {
     ^ ( gk_dbuf_new . e kit nfloats GK_F32 )
 }
 
@@ -549,7 +583,7 @@ $ `deps/tokenizer/src/unigram.nu`
 // CPU backend, or a head width its register tile is not sized for) the
 // composed bmm/softmax/bmm path runs instead, with the same mask added
 // to the scores.
-@ __em_attn * Embed e GkBuf ctx GkBuf qh GkBuf kh GkBuf vh GkBuf mask i n → b {
+@ __em_attn * EmbedImpl e GkBuf ctx GkBuf qh GkBuf kh GkBuf vh GkBuf mask i n → b {
     : i dim . . e cfg dim
     : i heads . . e cfg heads
     : i hd / dim heads
@@ -573,7 +607,6 @@ $ `deps/tokenizer/src/unigram.nu`
     : ( Vec f ) hinv ( vec_new [f] )
     ( vec_push [f] hinv scale )
     ? ok { = ok ( gk_dbuf_upload . e kit inv hinv ) } {}
-    ( vec_free [f] hinv )
     ? ok { = ok ( gkd_mul . e kit sc sc inv ) } {}
     : ( Vec i ) od ( vec_new [i] )
     ( vec_push [i] od * heads n ) ( vec_push [i] od n )
@@ -585,15 +618,12 @@ $ `deps/tokenizer/src/unigram.nu`
     : GkBuf pr ( __em_new e * * heads n n )
     ? ok { = ok ( gkd_softmax_ax . e kit pr sc * heads n n 1 ) } {}
     ? ok { = ok ( gkd_bmm . e kit ctx pr vh heads n n hd 1 1 ) } {}
-    ( gk_dbuf_free kt ) ( gk_dbuf_free sc ) ( gk_dbuf_free inv ) ( gk_dbuf_free pr )
-    ( vec_free [i] d3 ) ( vec_free [i] p021 )
-    ( vec_free [i] od ) ( vec_free [i] sa ) ( vec_free [i] sb )
     ^ ok
 }
 
 // One transformer block over hidden[n,dim] (replaces `hid` content by
 // writing into it at the residual+LN steps). Returns F on any failure.
-@ __em_block * Embed e EmbedLayer l GkBuf hid GkBuf mask i n → b {
+@ __em_block * EmbedImpl e EmbedLayer l GkBuf hid GkBuf mask i n → b {
     : i dim . . e cfg dim
     : i heads . . e cfg heads
     : i hd / dim heads
@@ -640,12 +670,6 @@ $ `deps/tokenizer/src/unigram.nu`
     : GkBuf res2 ( __em_new e * n dim )
     ? ok { = ok ( gkd_add . e kit res2 h2 hid ) } {}
     ? ok { = ok ( gkd_layernorm . e kit hid res2 . l ln2w . l ln2b n dim eps ) } {}
-    ( gk_dbuf_free q ) ( gk_dbuf_free k ) ( gk_dbuf_free v )
-    ( gk_dbuf_free qh ) ( gk_dbuf_free kh ) ( gk_dbuf_free vh )
-    ( gk_dbuf_free ctx ) ( gk_dbuf_free mrg )
-    ( gk_dbuf_free ao ) ( gk_dbuf_free res )
-    ( gk_dbuf_free h1 ) ( gk_dbuf_free h1g ) ( gk_dbuf_free h2 ) ( gk_dbuf_free res2 )
-    ( vec_free [i] dims ) ( vec_free [i] dims2 ) ( vec_free [i] p102 )
     ^ ok
 }
 
@@ -658,7 +682,7 @@ $ `deps/tokenizer/src/unigram.nu`
 // batched split would have baked a fresh NVRTC compile for per
 // (batch, length) pair. `mask` is [bq, np] additive rows, one per
 // sequence.
-@ __em_block_x * Embed e EmbedLayer l GkBuf hid GkBuf mask i bq i np → b {
+@ __em_block_x * EmbedImpl e EmbedLayer l GkBuf hid GkBuf mask i bq i np → b {
     : i dim . . e cfg dim
     : i heads . . e cfg heads
     : i hd / dim heads
@@ -691,16 +715,14 @@ $ `deps/tokenizer/src/unigram.nu`
     : GkBuf res2 ( __em_new e * rows dim )
     ? ok { = ok ( gkd_add . e kit res2 h2 hid ) } {}
     ? ok { = ok ( gkd_layernorm . e kit hid res2 . l ln2w . l ln2b rows dim eps ) } {}
-    ( gk_dbuf_free q ) ( gk_dbuf_free k ) ( gk_dbuf_free v )
-    ( gk_dbuf_free ctx ) ( gk_dbuf_free ao ) ( gk_dbuf_free res )
-    ( gk_dbuf_free h1 ) ( gk_dbuf_free h1g ) ( gk_dbuf_free h2 ) ( gk_dbuf_free res2 )
     ^ ok
 }
 
 // Tokenize (Unigram, <s>…</s>) with truncation to cfg.maxseq: the head
 // of the sequence is kept and </s> re-appended, sentence-transformers
 // style.
-@ embed_tokenize * Embed e s text ( Vec i ) out → b {
+@ embed_tokenize Embed e__h s text ( Vec i ) out → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
     ? ( uni_encode . e tok text T out ) {} { ^ F }
     : i cap . . e cfg maxseq
     ? > ( vec_len [i] out ) cap {
@@ -716,24 +738,26 @@ $ `deps/tokenizer/src/unigram.nu`
 
 // The embedding for one text, normalized per the engine's configuration.
 // `out` receives embed_dim floats.
-@ embed_encode * Embed e s text ( Vec f ) out → b {
-    ^ ( embed_encode_norm e text out . . e cfg normalize )
+@ embed_encode Embed e__h s text ( Vec f ) out → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ^ ( embed_encode_norm e__h text out . . e cfg normalize )
 }
 
 // The same, with the L2 normalize decided by the caller — a request
 // carrying "normalize": false must not have to reconfigure the engine
 // (and a concurrent server must not be able to observe it doing so).
-@ embed_encode_norm * Embed e s text ( Vec f ) out b normalize → b {
+@ embed_encode_norm Embed e__h s text ( Vec f ) out b normalize → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e ok {} { ^ F }
     : ( Vec i ) ids ( vec_new [i] )
-    ? ( embed_tokenize e text ids ) {} { ( vec_free [i] ids ) ^ F }
-    : b r ( embed_encode_ids_norm e ids out normalize )
-    ( vec_free [i] ids )
+    ? ( embed_tokenize e__h text ids ) {} { ^ F }
+    : b r ( embed_encode_ids_norm e__h ids out normalize )
     ^ r
 }
 
-@ embed_encode_ids * Embed e ( Vec i ) ids ( Vec f ) out → b {
-    ^ ( embed_encode_ids_norm e ids out . . e cfg normalize )
+@ embed_encode_ids Embed e__h ( Vec i ) ids ( Vec f ) out → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
+    ^ ( embed_encode_ids_norm e__h ids out . . e cfg normalize )
 }
 
 // The single-text forward on the composed/permute path — what runs
@@ -741,7 +765,7 @@ $ `deps/tokenizer/src/unigram.nu`
 // width gkd_attention_ok refuses). Reads ids[from .. from+n) and writes
 // its dim floats into out at row `orow`. Callers hold the device bound
 // and `e` verified.
-@ __em_fwd_one * Embed e ( Vec i ) ids i from i n ( Vec f ) out i orow b normalize → b {
+@ __em_fwd_one * EmbedImpl e ( Vec i ) ids i from i n ( Vec f ) out i orow b normalize → b {
     ? > n 0 {} { ^ F }
     : i dim . . e cfg dim
     : i padid . . e cfg padid
@@ -763,7 +787,6 @@ $ `deps/tokenizer/src/unigram.nu`
     }
     : GkBuf idb ( gk_dbuf_new . e kit np GK_I64 )
     = ok ( gk_dbuf_upload_i . e kit idb pids )
-    ( vec_free [i] pids )
     // the additive attention mask: 0 for a real token, −∞ for padding
     : GkBuf mask ( __em_new e np )
     : ( Vec f ) hmask ( vec_with_cap [f] np )
@@ -771,7 +794,6 @@ $ `deps/tokenizer/src/unigram.nu`
     = k 0
     ~ < k np { ( vec_push [f] hmask ? < k n { 0.0 } { ninf } ) = k + k 1 }
     ? ok { = ok ( gk_dbuf_upload . e kit mask hmask ) } {}
-    ( vec_free [f] hmask )
     // hidden = word[ids] + positions[pad+1 .. pad+1+np) + type0
     : GkBuf hid ( __em_new e * np dim )
     ? ok { = ok ( gkd_gather . e kit hid . e wemb idb 1 . . e cfg vocab dim np ) } {}
@@ -788,8 +810,9 @@ $ `deps/tokenizer/src/unigram.nu`
     : ( Vec i ) sb ( vec_new [i] )
     ( vec_push [i] sb 0 ) ( vec_push [i] sb 1 )
     ? ok { = ok ( gkd_ew_bc . e kit `add` `+` sum2 sum1 . e temb od sa sb ) } {}
-    ( vec_free [i] od ) ( vec_free [i] sa ) ( vec_free [i] sb )
     ? ok { = ok ( gkd_layernorm . e kit hid sum2 . e elnw . e elnb np dim . . e cfg eps ) } {}
+    // early release: the blocks below reuse these three from the pool
+    // (held to the end instead, embed_shapes' pool grows 197 → 245 blocks)
     ( gk_dbuf_free pos ) ( gk_dbuf_free sum1 ) ( gk_dbuf_free sum2 )
     // blocks
     : i nl ( vec_len [EmbedLayer] . e layers )
@@ -819,7 +842,6 @@ $ `deps/tokenizer/src/unigram.nu`
         = k + k 1
     }
     ? ok { = ok ( gk_dbuf_upload . e kit pw hpw ) } {}
-    ( vec_free [f] hpw )
     ? ok {
         = ok ( gkd_gemm . e kit pooled pw hid pooled 0 1 dim np
         ? meanpool { / 1.0 # f n } { 1.0 } 0.0 0 )
@@ -849,9 +871,6 @@ $ `deps/tokenizer/src/unigram.nu`
             = k2 + k2 1
         }
     } {}
-    ( vec_free [f] hp )
-    ( gk_dbuf_free idb ) ( gk_dbuf_free mask ) ( gk_dbuf_free hid )
-    ( gk_dbuf_free pooled ) ( gk_dbuf_free pw )
     ^ ok
 }
 
@@ -861,7 +880,7 @@ $ `deps/tokenizer/src/unigram.nu`
 // pool (see __em_bucket_b); their rows run the arithmetic and are then
 // pooled by an all-zero weight row and never copied out. Each real
 // text's vector lands in `out` at its ORIGINAL index — ord carries it.
-@ __em_fwd_batch * Embed e ( Vec i ) ids ( Vec i ) offs ( Vec i ) ord i at i take i bq i np b normalize ( Vec f ) out → b {
+@ __em_fwd_batch * EmbedImpl e ( Vec i ) ids ( Vec i ) offs ( Vec i ) ord i at i take i bq i np b normalize ( Vec f ) out → b {
     : i dim . . e cfg dim
     : i padid . . e cfg padid
     : i rows * bq np
@@ -883,7 +902,6 @@ $ `deps/tokenizer/src/unigram.nu`
     }
     : GkBuf idb ( gk_dbuf_new . e kit rows GK_I64 )
     = ok ( gk_dbuf_upload_i . e kit idb pids )
-    ( vec_free [i] pids )
     // the additive attention mask, one row per sequence: 0 for a real
     // token, −∞ for padding (a dummy is −∞ across; see gkd_attention_batch)
     : GkBuf mask ( __em_new e rows )
@@ -897,7 +915,6 @@ $ `deps/tokenizer/src/unigram.nu`
         = bi + bi 1
     }
     ? ok { = ok ( gk_dbuf_upload . e kit mask hmask ) } {}
-    ( vec_free [f] hmask )
     // hidden = word[ids] + positions[pad+1 .. pad+1+np) + type0, LN —
     // the position table is one [np,dim] slice broadcast over the batch
     : GkBuf hid ( __em_new e * rows dim )
@@ -912,7 +929,6 @@ $ `deps/tokenizer/src/unigram.nu`
     : ( Vec i ) sb1 ( vec_new [i] )
     ( vec_push [i] sb1 0 ) ( vec_push [i] sb1 1 )
     ? ok { = ok ( gkd_ew_bc . e kit `add` `+` sum1 hid pos od1 sa1 sb1 ) } {}
-    ( vec_free [i] od1 ) ( vec_free [i] sa1 ) ( vec_free [i] sb1 )
     // + token_type_embeddings[0] broadcast over every row
     : GkBuf sum2 ( __em_new e * rows dim )
     : ( Vec i ) od ( vec_new [i] )
@@ -922,8 +938,9 @@ $ `deps/tokenizer/src/unigram.nu`
     : ( Vec i ) sb ( vec_new [i] )
     ( vec_push [i] sb 0 ) ( vec_push [i] sb 1 )
     ? ok { = ok ( gkd_ew_bc . e kit `add` `+` sum2 sum1 . e temb od sa sb ) } {}
-    ( vec_free [i] od ) ( vec_free [i] sa ) ( vec_free [i] sb )
     ? ok { = ok ( gkd_layernorm . e kit hid sum2 . e elnw . e elnb rows dim . . e cfg eps ) } {}
+    // early release: the blocks below reuse these three from the pool
+    // (held to the end instead, embed_shapes' pool grows 197 → 245 blocks)
     ( gk_dbuf_free pos ) ( gk_dbuf_free sum1 ) ( gk_dbuf_free sum2 )
     // blocks
     : i nl ( vec_len [EmbedLayer] . e layers )
@@ -957,7 +974,6 @@ $ `deps/tokenizer/src/unigram.nu`
         = bi + bi 1
     }
     ? ok { = ok ( gk_dbuf_upload . e kit pw hpw ) } {}
-    ( vec_free [f] hpw )
     ? ok { = ok ( gkd_bmm . e kit pooled pw hid bq 1 np dim 1 1 ) } {}
     ? & ok meanpool {
         : GkBuf inv ( __em_new e bq )
@@ -969,7 +985,6 @@ $ `deps/tokenizer/src/unigram.nu`
             = bi + bi 1
         }
         = ok ( gk_dbuf_upload . e kit inv hinv )
-        ( vec_free [f] hinv )
         : ( Vec i ) odm ( vec_new [i] )
         ( vec_push [i] odm bq ) ( vec_push [i] odm dim )
         : ( Vec i ) sam ( vec_new [i] )
@@ -977,8 +992,6 @@ $ `deps/tokenizer/src/unigram.nu`
         : ( Vec i ) sbm ( vec_new [i] )
         ( vec_push [i] sbm 1 ) ( vec_push [i] sbm 0 )
         ? ok { = ok ( gkd_ew_bc . e kit `mul` `*` pooled pooled inv odm sam sbm ) } {}
-        ( vec_free [i] odm ) ( vec_free [i] sam ) ( vec_free [i] sbm )
-        ( gk_dbuf_free inv )
     } {}
     ( gk_autosync T )
     // download, then normalize + scatter each real row to its text's slot
@@ -1010,9 +1023,6 @@ $ `deps/tokenizer/src/unigram.nu`
             = bi + bi 1
         }
     } {}
-    ( vec_free [f] hp )
-    ( gk_dbuf_free idb ) ( gk_dbuf_free mask ) ( gk_dbuf_free hid )
-    ( gk_dbuf_free pooled ) ( gk_dbuf_free pw )
     ^ ok
 }
 
@@ -1031,7 +1041,8 @@ $ `deps/tokenizer/src/unigram.nu`
 // The CUDA context is thread-local and this may be called from a
 // server's worker rather than the thread that opened the model, so the
 // device is bound to the caller first.
-@ embed_encode_batch * Embed e ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
+@ embed_encode_batch Embed e__h ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e ok {} { ^ F }
     ? ( gk_bind_thread . e kit ) {} { ^ F }
     : i nb - ( vec_len [i] offs ) 1
@@ -1104,12 +1115,12 @@ $ `deps/tokenizer/src/unigram.nu`
             = at + at take
         } {}
     }
-    ( vec_free [i] ord )
     ^ ok
 }
 
 // Forward over one already-tokenized id sequence — a batch of one.
-@ embed_encode_ids_norm * Embed e ( Vec i ) ids ( Vec f ) out b normalize → b {
+@ embed_encode_ids_norm Embed e__h ( Vec i ) ids ( Vec f ) out b normalize → b {
+    : *EmbedImpl e ( __Embed_ptr e__h )
     ? . e ok {} { ^ F }
     : i dim . . e cfg dim
     ( vec_clear [f] out )
@@ -1118,7 +1129,6 @@ $ `deps/tokenizer/src/unigram.nu`
     : ( Vec i ) offs ( vec_new [i] )
     ( vec_push [i] offs 0 )
     ( vec_push [i] offs ( vec_len [i] ids ) )
-    : b r ( embed_encode_batch e ids offs out normalize )
-    ( vec_free [i] offs )
+    : b r ( embed_encode_batch e__h ids offs out normalize )
     ^ r
 }

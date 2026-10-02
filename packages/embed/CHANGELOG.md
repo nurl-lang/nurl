@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Nothing is released by hand any more. `embed_open` / `embed_open_dev`
+return an **`Embed` handle** (was `*Embed`): every copy is the same
+engine, and its last owner gives back the weights, the kit and the CUDA
+context — a caller that lets go of it frees nothing. `embed_close` is an
+optional early release. A server's job is a handle its fiber owns while
+the model queue borrows it, and the package's own code and tests call no
+`*_free` (the six device buffers released before the block loop stay as
+early releases: held to the end, the buffer pool grows 197 → 245 blocks
+over `embed_shapes`). New `embed_kernel_count` (the test used to read
+the kit through the pointer).
+
 Follows the stdlib's one-word `Mutex` / `Cond` handles: the model
 queue's lock and its two conditions live in one block the server
 allocates once and keeps for the process (the model thread and the

@@ -49,11 +49,12 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/url.nu`
+$ `stdlib/core/rcbox.nu`
 $ `stdlib/ext/json.nu`
 $ `deps/http/src/http.nu`
 $ `model.nu`
 
-: ~ i g_em 0  // *Embed as an address (0 = not serving)
+: ~ i g_em 0  // the served Embed handle's ctl word, lent by embed_serve's caller (0 = not serving)
 : ~ s g_em_token ``
 : ~ s g_em_name ``
 : ~ i g_em_reqs 0
@@ -82,9 +83,9 @@ $ `model.nu`
 // lock and two conditions sit in an EmSync block the server allocates
 // once and keeps for the process (the model thread and the ticker
 // outlive any one scope, as the handlers do). The submitting fiber owns
-// the job and frees it once it has seen `done`; the model thread only
-// fills it in.
-: EmJob {
+// the job (an EmJob handle) and keeps it until it has seen `done`; the
+// queue and the model thread only borrow its address meanwhile.
+: EmJobImpl {
     i next
     ( Vec i ) ids  // flat tokens for the whole request
     ( Vec i ) offs  // B+1 offsets into ids
@@ -92,6 +93,13 @@ $ `model.nu`
     b normalize
     b done
     b ok
+}
+
+: EmJob { s ctl }
+
+@ EmJob_drop sink EmJob h → v {
+    ( mem_forget h )
+    ( rcbox_release [EmJobImpl] # i . h ctl )
 }
 
 : ~ i g_q_head 0
@@ -108,40 +116,40 @@ $ `model.nu`
 @ __em_sync → *EmSync { ^ # *EmSync g_q_sync }
 
 // Run one request's forward — the WHOLE batch, one job — on the model
-// thread and wait for it. `ids`, `offs` and `out` stay owned by the
-// caller — the job only borrows them for the length of the call, which
-// is exactly how long the caller blocks.
-@ __em_submit ( Vec i ) ids ( Vec i ) offs ( Vec f ) out b normalize → b {
-    ? != g_q_sync 0 {} { ^ F }
+// thread and wait for it. The job takes `ids` and `offs`; what comes
+// back is the `nout` floats of the batch's embeddings, or an empty Vec
+// when the forward failed.
+@ __em_submit sink ( Vec i ) ids sink ( Vec i ) offs i nout b normalize → ( Vec f ) {
+    ? != g_q_sync 0 {} { ^ ( vec_new [f] ) }
     : *EmSync q ( __em_sync )
-    : *EmJob j # *EmJob ( nurl_alloc Z EmJob )
-    = . j next 0
-    = . j ids ids
-    = . j offs offs
-    = . j out out
-    = . j normalize normalize
-    = . j done F
-    = . j ok F
+    : ( Vec f ) out ( vec_with_cap [f] nout )
+    : ~ i z 0
+    ~ < z nout { ( vec_push [f] out 0.0 ) = z + z 1 }
+    : EmJob jh @ EmJob { # s ( rcbox_new [EmJobImpl] @ EmJobImpl { 0 ids offs out normalize F F } ) }
+    : *EmJobImpl j ( rcbox_ptr [EmJobImpl] # i . jh ctl )
     ( mutex_lock . q m )
     ? == g_q_tail 0 {
         = g_q_head # i j
         = g_q_tail # i j
     } {
-        : *EmJob t # *EmJob g_q_tail
+        : *EmJobImpl t # *EmJobImpl g_q_tail
         = . t next # i j
         = g_q_tail # i j
     }
     ( cond_signal . q req )
     ~ ! . j done { ( cond_wait . q done . q m ) }
     ( mutex_unlock . q m )
-    : b r . j ok
-    ( nurl_free # *u j )
-    ^ r
+    ? . j ok {} { ^ ( vec_new [f] ) }
+    // the embeddings leave the job (which drops the rest with jh)
+    : ( Vec f ) res . j out
+    ( mem_take res )
+    = . j out ( vec_new [f] )
+    ^ res
 }
 
 // The model thread: take jobs, run them, wake the waiter.
 @ __em_model_loop → v {
-    : *Embed e # *Embed g_em
+    : Embed e # Embed g_em
     : *EmSync q ( __em_sync )
     : ~ b run T
     ~ run {
@@ -157,7 +165,6 @@ $ `model.nu`
                     ( string_push_int m / g_em_unload_ms 1000 )
                     ( string_push_str m ` s — weights unloaded (device memory released; the next request reloads them)` )
                     ( nurl_eprintln ( string_data m ) )
-                    ( string_free m )
                 } {}
             } {}
         }
@@ -165,7 +172,7 @@ $ `model.nu`
             ( mutex_unlock . q m )
             = run F
         } {
-            : *EmJob j # *EmJob g_q_head
+            : *EmJobImpl j # *EmJobImpl g_q_head
             = g_q_head . j next
             ? == g_q_head 0 { = g_q_tail 0 } {}
             ( mutex_unlock . q m )
@@ -180,11 +187,9 @@ $ `model.nu`
                         ( string_push_int m g_em_load_ms )
                         ( string_push_str m ` ms` )
                         ( nurl_eprintln ( string_data m ) )
-                        ( string_free m )
                     }
                     F le → {
                         ( nurl_eprintln ( string_data le ) )
-                        ( string_free le )
                         = r F
                     }
                 }
@@ -242,7 +247,6 @@ $ `model.nu`
         }
         = k + k 1
     }
-    ( url_params_free ps )
     ^ out
 }
 
@@ -255,7 +259,6 @@ $ `model.nu`
             ? & > ( nurl_str_len h ) 7 != 0 ( nurl_str_starts h `Bearer ` ) {
                 ? ( __em_tok_eq ( nurl_str_slice h 7 - ( nurl_str_len h ) 7 ) g_em_token ) { = ok T } {}
             } {}
-            ( string_free hv )
         }
         F → {}
     }
@@ -264,7 +267,6 @@ $ `model.nu`
     ? > ( string_len qt ) 0 {
         ? ( __em_tok_eq ( string_data qt ) g_em_token ) { = ok T } {}
     } {}
-    ( string_free qt )
     ^ ok
 }
 
@@ -272,20 +274,10 @@ $ `model.nu`
     : Json o ( json_obj_new )
     : b _s ( json_obj_set o `error` ( json_str_lit msg ) )
     : HttpResponse r ( response_json status o )
-    ( json_free o )
     ^ r
 }
 
-@ __em_free_texts ( Vec String ) texts → v {
-    : ~ i k 0
-    ~ < k ( vec_len [String] texts ) {
-        ?? ( vec_get [String] texts k ) { T t → { ( string_free t ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] texts )
-}
-
-// Embed `texts` (owned Vec of owned Strings; freed here) → the response.
+// Embed `texts` → the response.
 //
 // Tokenizing is done outside the model lock — the Unigram engine only
 // reads — and so is building the response, which for a batch of long
@@ -294,7 +286,7 @@ $ `model.nu`
 // sees every text of the batch at once and runs them as a few padded
 // batched forwards (embed_encode_batch), not one forward per text.
 @ __em_run ( Vec String ) texts b normalize → HttpResponse {
-    : *Embed e # *Embed g_em
+    : Embed e # Embed g_em
     : i nt ( vec_len [String] texts )
     : i dim ( embed_dim e )
     : ~ b ok T
@@ -318,23 +310,14 @@ $ `model.nu`
                     }
                     ( vec_push [i] offs ( vec_len [i] ids ) )
                 } { = ok F }
-                ( vec_free [i] tid )
             }
             F → { = ok F }
         }
         = k + k 1
     }
-    : ( Vec f ) flat ( vec_with_cap [f] * nt dim )
-    : ~ i z 0
-    ~ < z * nt dim { ( vec_push [f] flat 0.0 ) = z + z 1 }
-    ? ok { = ok ( __em_submit ids offs flat normalize ) } {}
-    ( vec_free [i] ids )
-    ( vec_free [i] offs )
-    ( __em_free_texts texts )
-    ? ok {} {
-        ( vec_free [f] flat )
-        ^ ( __em_jerr 500 `embedding failed` )
-    }
+    ? ok {} { ^ ( __em_jerr 500 `embedding failed` ) }
+    : ( Vec f ) flat ( __em_submit ids offs * nt dim normalize )
+    ? > ( vec_len [f] flat ) 0 {} { ^ ( __em_jerr 500 `embedding failed` ) }
     // one per served request, not per text in a batch — the queue mutex
     // is what makes it a count and not a race
     : *EmSync q ( __em_sync )
@@ -366,20 +349,16 @@ $ `model.nu`
         ( string_push_char bs 93 )
         = k + k 1
     }
-    ( vec_free [f] flat )
     ( string_push_str bs `],"model":` )
     : Json mn ( json_str_lit g_em_name )
     : String mns ( json_stringify mn )
-    ( json_free mn )
     ( string_push_str bs ( string_data mns ) )
-    ( string_free mns )
     ( string_push_str bs `,"dimension":` )
     ( string_push_int bs dim )
     ( string_push_char bs 125 )
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
     ( response_set_body_str r ( string_data bs ) )
-    ( string_free bs )
     ^ r
 }
 
@@ -422,7 +401,6 @@ $ `model.nu`
     : String bodys ( string_new )
     ( string_push_bytes bodys ( vec_data [u] . req body ) ( vec_len [u] . req body ) )
     : !Json JsonError parsed ( json_parse ( string_data bodys ) )
-    ( string_free bodys )
     ?? parsed {
         T root → {
             : ( Vec String ) texts ( vec_new [String] )
@@ -437,9 +415,7 @@ $ `model.nu`
                 T nv → { = normalize ( json_as_bool nv ) }
                 F → {}
             }
-            ( json_free root )
             ? & have > ( vec_len [String] texts ) 0 {} {
-                ( __em_free_texts texts )
                 ^ ( __em_jerr 400 `no text provided — body must be {"text": "..."} or {"text": ["...", ...]}` )
             }
             ^ ( __em_run texts normalize )
@@ -454,19 +430,17 @@ $ `model.nu`
     ? ( __em_authed req ) {} { ^ ( __em_jerr 401 `unauthorized — pass 'Authorization: Bearer <token>'` ) }
     : String txt ( __em_query_val ( string_data . req query ) `text` )
     ? > ( string_len txt ) 0 {} {
-        ( string_free txt )
         ^ ( __em_jerr 400 `no text provided — GET /create_embedding?text=...` )
     }
     : String nq ( __em_query_val ( string_data . req query ) `normalize` )
     : b normalize ? != 0 ( nurl_str_eq ( string_data nq ) `false` ) { F } { T }
-    ( string_free nq )
     : ( Vec String ) texts ( vec_new [String] )
     ( vec_push [String] texts txt )
     ^ ( __em_run texts normalize )
 }
 
 @ __em_health HttpRequest req → HttpResponse {
-    : *Embed e # *Embed g_em
+    : Embed e # Embed g_em
     : Json o ( json_obj_new )
     // `healthy` either way: an engine whose weights are unloaded under
     // --unload-after answers the next request, it just pays the reload
@@ -493,13 +467,12 @@ $ `model.nu`
     : b _s9 ( json_obj_set o `pool_blocks` ( json_int ( gk_pool_count ) ) )
     : b _s10 ( json_obj_set o `pool_idle_bytes` ( json_int ( gk_pool_idle_bytes ) ) )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
     ^ r
 }
 
 // Serve `e` (borrowed for the server's lifetime). Blocks until stopped.
-@ embed_serve * Embed e s name s host i port s token i unload_s → i {
-    = g_em # i e
+@ embed_serve Embed e s name s host i port s token i unload_s → i {
+    = g_em # i . e ctl
     = g_em_unload_ms * unload_s 1000
     = g_em_idle_since ( monotonic_ns )
     = g_em_loads 1
@@ -518,8 +491,11 @@ $ `model.nu`
     } {}
     : *EmSync q ( __em_sync )
     : ( @ v ) modelfn \ → v { ( __em_model_loop ) }
-    ?? ( thread_spawn modelfn ) {
-        T th → { ( thread_detach th ) }
+    // joined before this returns: the model thread reads the engine, and
+    // the caller lets the engine go as soon as serving ends
+    : !Thread ThreadErr model_th ( thread_spawn modelfn )
+    ?? model_th {
+        T _ → {}
         F _te → {
             ( nurl_eprint `embed: cannot start the model thread\n` )
             ^ 1
@@ -565,13 +541,13 @@ $ `model.nu`
     } {}
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
-    ( string_free msg )
 
     : i rc ( http_app_listen a host port )
     ( mutex_lock . q m )
     = g_q_stop T
     ( cond_broadcast . q req )
     ( mutex_unlock . q m )
+    ?? model_th { T th → { : i _j ( thread_join th ) } F _te → {} }
     = g_em 0
     ^ rc
 }
