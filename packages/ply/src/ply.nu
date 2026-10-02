@@ -177,7 +177,7 @@ $ `stdlib/core/rcbox.nu`
 // Flush what is buffered, rewind to the count field, overwrite it in
 // place, close. Nothing to do for a writer finished already.
 @ __ply_close File f i ascii String abuf ( Vec u ) bbuf i cnt_off i n → b {
-    ? == 0 # i . f raw { ^ T } {}
+    ? == 0 # i ( file_raw f ) { ^ T } {}
     : ~ b ok ( __ply_flush_bufs f ascii abuf bbuf )
     ? ok {
         ?? ( file_seek f cnt_off 0 ) {
@@ -231,6 +231,9 @@ $ `stdlib/core/rcbox.nu`
 @ ply_finish PlyW w__h → b {
     : *PlyWImpl w ( __PlyW_ptr w__h )
     : b ok ( __ply_close . w f . w ascii . w abuf . w bbuf . w cnt_off . w n )
+    // The closed file's handle leaves the writer (dropped here).
+    : File old_f . w f
+    ( mem_take old_f )
     = . w f @ File { # s 0 }
     ^ ok
 }

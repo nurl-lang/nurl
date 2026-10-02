@@ -44,12 +44,12 @@ $ `stdlib/std/progress.nu`
     ( ck hf `progress_human: B/KB/MB/GB with one decimal` )
 
     // progress on a non-tty: counters advance, zero terminal noise
-    : *Progress p ( progress_new `fetch` 1000 )
+    : Progress p ( progress_new `fetch` 1000 )
     ( progress_add p 400 )
     ( progress_set p 900 )
     ( progress_add p 100 )
-    ( ck == . p cur 1000 `progress counters advance` )
-    ( ck ! . p tty `non-tty detected (renders suppressed)` )
+    ( ck == ( progress_cur p ) 1000 `progress counters advance` )
+    ( ck ! ( progress_tty p ) `non-tty detected (renders suppressed)` )
     ( progress_done p )
     ( nurl_print `done\n` )
     ^ 0

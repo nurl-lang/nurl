@@ -150,7 +150,7 @@ $ `hf.nu`
                 }
             }
 
-            : *Progress pg ( progress_new staging total )
+            : Progress pg ( progress_new staging total )
             ? > done_bytes 0 { ( progress_set pg done_bytes ) } {}
             : ~ b more ! failed
             ~ more {

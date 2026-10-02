@@ -885,7 +885,7 @@ $ `deps/safetensor/src/safetensor.nu`
         }
     } {}
 
-    : *Progress pg ( progress_new `convert` njobs )
+    : Progress pg ( progress_new `convert` njobs )
     = k 0
     ~ & ok < k njobs {
         : ~ s nm ``

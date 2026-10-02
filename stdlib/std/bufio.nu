@@ -13,8 +13,10 @@
 //     steady-state line loop allocates nothing after warm-up.
 //
 // Safety:
-//   * BufReader owns its buffer + file handle; `bufreader_close` frees
-//     both. Same opaque-handle shape as Vec / String / HashMap.
+//   * BufReader owns its buffer + file handle and is a library handle
+//     (docs/MEMORY.md §7.6): every copy is the same reader, and the last
+//     owner releases the buffer and closes the file it opened.
+//     `bufreader_close` does that now (optional).
 //   * Neither read entry point hands back a pointer into the internal
 //     buffer — `read_line` returns a fresh owned String, `read_line_into`
 //     copies into a String the caller already owns. No view is
@@ -45,7 +47,7 @@
 //                                                     rewrite line endings
 //                                                     needs.
 //   ( bufreader_eof br )               → b          T once fully drained
-//   ( bufreader_close br )             → v          free buffer + handle
+//   ( bufreader_close br )             → v          release now (optional)
 //
 // Example — count lines in a huge file without loading it. Note the
 // loop shape: a `~` condition must be side-effect-free, so the read
@@ -69,6 +71,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/posix.nu`  // errno_kind
 $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
+$ `stdlib/core/rcbox.nu`
 
 // ── libc bridges (pure-NURL FFI) ────────────────────────────────────
 // fread is declared globally in nurlc's preamble (Phase 7, 2026-05-23);
@@ -87,8 +90,10 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 // the current buffer; never shrinks.
 : i BUFIO_CAP 65536
 
-// BufReader is an opaque handle over a 64-byte control block, mirroring
-// the Vec / String / HashMap layout so it round-trips through `! T E`.
+// BufReader is a one-word handle on a 64-byte control block in an rcbox
+// (stdlib/core/rcbox.nu), so it round-trips through `! T E`; every copy is
+// the same reader, and the last owner releases the buffer and closes a
+// file the reader opened (BufReaderImpl's drop).
 //
 // Control block (8 × i64, via nurl_peek/poke):
 //   word 0: file handle (FILE* as i64; 0 ⇒ no stream / degrade to EOF)
@@ -99,7 +104,28 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 //   word 5: eof   — 1 once the underlying stream is exhausted
 //   word 6: owns  — 1 if `bufreader_close` should fclose the handle
 //   word 7: scratch — start offset of the line last returned
+: BufReaderImpl { i h i buf i cap i start i end i eof i owns i scratch }
+
+// The buffer and (when the reader opened it) the stream are raw: releasing
+// them is the reader's own drop, run by its last owner.
+% Drop BufReaderImpl {
+    @ drop BufReaderImpl r → v {
+        ? != 0 . r buf { ( nurl_free # s . r buf ) } {}
+        ? && != 0 . r owns != 0 . r h { ( nurl_file_close # *v . r h ) } {}
+    }
+}
+
 : BufReader { s ctl }
+
+@ BufReader_share BufReader h → BufReader { ^ @ BufReader { # s ( rcbox_share # i . h ctl ) } }
+
+@ BufReader_drop sink BufReader h → v {
+    ( mem_forget h )
+    ( rcbox_release [BufReaderImpl] # i . h ctl )
+}
+
+// The control block in place (the BufReaderImpl's words).
+@ __br_ctl BufReader h → s { ^ # s ( rcbox_ptr [BufReaderImpl] # i . h ctl ) }
 
 // ── Internal ────────────────────────────────────────────────────────
 
@@ -116,13 +142,14 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 }
 
 @ __bufreader_make * v h i owns → BufReader {
-    : s ctl ( nurl_zalloc 64 )
+    : i box ( rcbox_zero [BufReaderImpl] )
+    : s ctl # s ( rcbox_ptr [BufReaderImpl] box )
     : s buf ( nurl_alloc BUFIO_CAP )
     ( nurl_poke ctl 0 # i h )
     ( nurl_poke ctl 1 # i buf )
     ( nurl_poke ctl 2 BUFIO_CAP )
     ( nurl_poke ctl 6 owns )
-    ^ @ BufReader { ctl }
+    ^ @ BufReader { # s box }
 }
 
 // Make room and pull one more chunk from the stream into [end, cap).
@@ -226,14 +253,14 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 @ bufreader_stdin → BufReader {
     : *v h ( fdopen 0 `rb` )
     : BufReader br ( __bufreader_make h 1 )
-    ? == 0 # i h { ( nurl_poke . br ctl 5 1 ) } {}
+    ? == 0 # i h { ( nurl_poke ( __br_ctl br ) 5 1 ) } {}
     ^ br
 }
 
 // ── Reading ─────────────────────────────────────────────────────────
 
 @ bufreader_read_line BufReader br → ?String {
-    : s ctl . br ctl
+    : s ctl ( __br_ctl br )
     : i len ( __bufreader_next_line ctl )
     ? < len 0 { ^ @ ?String { F # String 0 } } {}
     : *u buf # *u ( nurl_peek ctl 1 )
@@ -246,7 +273,7 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 // across the read loop — its buffer grows once and is then never
 // reallocated, so the hot loop performs no per-line allocation.
 @ bufreader_read_line_into BufReader br String dst → b {
-    : s ctl . br ctl
+    : s ctl ( __br_ctl br )
     : i len ( __bufreader_next_line ctl )
     ( string_clear dst )
     ? < len 0 { ^ F } {}
@@ -267,7 +294,7 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 // right default for copying. Same zero-allocation loop shape — reuse one
 // `dst`.
 @ bufreader_read_line_raw BufReader br String dst → b {
-    : s ctl . br ctl
+    : s ctl ( __br_ctl br )
     : i len ( __bufreader_next_line ctl )
     ( string_clear dst )
     ? < len 0 { ^ F } {}
@@ -283,18 +310,26 @@ $ `stdlib/std/fs.nu`  // nurl_file_open / nurl_file_close
 // ── Inspect / cleanup ───────────────────────────────────────────────
 
 @ bufreader_eof BufReader br → b {
-    : s ctl . br ctl
+    : s ctl ( __br_ctl br )
     ? == 0 ( nurl_peek ctl 5 ) { ^ F } {}
     ^ >= ( nurl_peek ctl 3 ) ( nurl_peek ctl 4 )
 }
 
+// Release the buffer and close the file now (optional: the last owner
+// does it). Every copy of `br` sees an exhausted reader afterwards.
 @ bufreader_close BufReader br → v {
-    : s ctl . br ctl
+    ? == 0 # i . br ctl { ^ } {}
+    : s ctl ( __br_ctl br )
     : i buf ( nurl_peek ctl 1 )
     ? != 0 buf { ( nurl_free # s buf ) } {}
     ? != 0 ( nurl_peek ctl 6 ) {
         : i h ( nurl_peek ctl 0 )
         ? != 0 h { ( nurl_file_close # *v h ) } {}
     } {}
-    ( nurl_free ctl )
+    ( nurl_poke ctl 0 0 )
+    ( nurl_poke ctl 1 0 )
+    ( nurl_poke ctl 2 0 )
+    ( nurl_poke ctl 3 0 )
+    ( nurl_poke ctl 4 0 )
+    ( nurl_poke ctl 5 1 )
 }

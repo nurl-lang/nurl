@@ -387,7 +387,7 @@ $ `gguf.nu`
     ( Vec i ) td3
     ( Vec i ) toff
     ( Vec i ) tbytes
-    s fh
+    File fh  // the open output (its last owner closes it)
     // 0 = declaring KVs and tensors, 1 = streaming payloads, 2 = finished
     i phase
     i cur
@@ -419,7 +419,7 @@ $ `gguf.nu`
             = . s td3 ( vec_new [i] )
             = . s toff ( vec_new [i] )
             = . s tbytes ( vec_new [i] )
-            = . s fh . fh raw
+            = . s fh ( File_share fh )
             = . s phase 0
             = . s cur 0
             = . s cur_got 0
@@ -526,7 +526,7 @@ $ `gguf.nu`
 }
 
 @ __gws_write * GgufS s ( Vec u ) bytes → !v String {
-    ?? ( file_write_chunk @ File { . s fh } bytes ) {
+    ?? ( file_write_chunk . s fh bytes ) {
         T _ → { ^ @ !v String { T 0 } }
         F _ → { ^ ( __gws_err `gguf: file write failed` ) }
     }
@@ -637,19 +637,21 @@ $ `gguf.nu`
         ^ @ !v String { F m }
     } {}
     : ~ b flush_ok F
-    ?? ( file_flush @ File { . s fh } ) {
+    ?? ( file_flush . s fh ) {
         T _ → { = flush_ok T }
         F _ → {}
     }
-    ( file_close @ File { . s fh } )
-    = . s fh # s 0
+    ( file_close . s fh )
     = . s phase 2
     ? flush_ok {} { ^ ( __gws_err `gguf: file flush failed` ) }
     ^ @ !v String { T 0 }
 }
 
 @ gws_free sink * GgufS s → v {
-    ? != 0 # i . s fh { ( file_close @ File { . s fh } ) } {}
+    // The file handle leaves the raw block (dropped here: it closes the
+    // file if gws_finish did not).
+    : File fh . s fh
+    ( mem_take fh )
     ( vec_free [u] . s kvb )
     ( vec_free_with [String] . s tnames \ String t → v { ( string_free t ) } )
     ( vec_free [i] . s ttype )
