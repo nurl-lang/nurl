@@ -4,12 +4,13 @@
 // via NURL_GPU=cpu — same kernels either way) and runs autoregressive
 // decode with a device-resident KV cache:
 //
-//   ( llm_open path n_ctx )   → !*Llm String
+//   ( llm_open path n_ctx )   → !Llm String
 //   ( llm_eval m token pos )  → v        one decode step; logits land in
 //                                        the reused host buffer
 //   ( llm_logit m i )         → f        read logit i of the last eval
 //   ( llm_n_vocab m ) ( llm_tok m )      the model's tokenizer rides along
-//   ( llm_close m )
+//   Llm is a handle: its last owner releases the weights, the KV cache
+//   and the device context; ( llm_close m ) is an optional early release.
 //
 // Weights stay QUANTISED on the device: a matvec whose weight type has
 // a device kernel (F32/F16/Q4_0/Q8_0/Q4_K/Q6_K) uploads the GGUF bytes
@@ -55,8 +56,9 @@ $ `stdlib/std/time.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `src/kernels.nu`
 $ `src/tokenizer.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Llm {
+: LlmImpl {
     Gpu g
     LlmKernels ks
     Tok tok
@@ -201,13 +203,26 @@ $ `src/tokenizer.nu`
     i prof_out_ns
 }
 
-@ __lm_err s msg → !*Llm String {
-    ^ @ !*Llm String { F ( string_from msg ) }
+// A Llm is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Llm { s ctl }
+
+@ Llm_share Llm h → Llm { ^ @ Llm { # s ( rcbox_share # i . h ctl ) } }
+
+@ Llm_drop sink Llm h → v {
+    ( mem_forget h )
+    ( rcbox_release [LlmImpl] # i . h ctl )
+}
+
+@ __Llm_ptr Llm h → *LlmImpl { ^ ( rcbox_ptr [LlmImpl] # i . h ctl ) }
+
+@ __lm_err s msg → !Llm String {
+    ^ @ !Llm String { F ( string_from msg ) }
 }
 
 // Profiler clock: drain the GPU queue, then read the monotonic clock, so a
 // phase's accumulated ns reflect real device work rather than launch return.
-@ __lm_prof_now * Llm m → i {
+@ __lm_prof_now * LlmImpl m → i {
     : i _s ( gpu_sync . m g )
     ^ ( monotonic_ns )
 }
@@ -228,14 +243,12 @@ $ `src/tokenizer.nu`
 @ __lm_kv_i Gguf g s arch s suffix i def → i {
     : String k ( __lm_key arch suffix )
     : i v ( gguf_kv_int_or g ( string_data k ) def )
-    ( string_free k )
     ^ v
 }
 
 @ __lm_kv_f Gguf g s arch s suffix f def → f {
     : String k ( __lm_key arch suffix )
     : f v ( gguf_kv_f_or g ( string_data k ) def )
-    ( string_free k )
     ^ v
 }
 
@@ -250,7 +263,6 @@ $ `src/tokenizer.nu`
     ?? ( env_get `NURLLAMA_DEQUANT` ) {
         T v → {
             : b host ( string_eq_raw v `host` )
-            ( string_free v )
             ? host { ^ F } {}
         }
         F → {}
@@ -281,7 +293,7 @@ $ `src/tokenizer.nu`
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
 
-@ __lm_upload * Llm m Gguf gg s name → i {
+@ __lm_upload * LlmImpl m Gguf gg s name → i {
     // A second container, when one was given: same tensor, different file.
     ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m name )
@@ -321,14 +333,12 @@ $ `src/tokenizer.nu`
         ? & == gt 8 & > ne0 0 == % ne0 32 0 {
             : GpuBuffer br ( gpu_alloc . m g nb )
             ? == . br dptr 0 {
-                ( gpu_free bq )
                 = __lm_alloc_failed T
                 ^ -1
             } {}
             : i _t1 ( monotonic_ns )
             ( lk_q8_repack . m ks . bq dptr . br dptr / ne0 32 / nb 34 )
             : i _rs ( gpu_sync . m g )
-            ( gpu_free bq )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
             ( vec_push [i] . m wdptr . br dptr )
             ( vec_push [GpuBuffer] . m wbufs br )
@@ -348,12 +358,10 @@ $ `src/tokenizer.nu`
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
             ? == . b dptr 0 {
-                ( vec_free [u] raw )
                 = __lm_alloc_failed T
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
             ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
@@ -361,7 +369,6 @@ $ `src/tokenizer.nu`
             ^ . b dptr
         }
         F e → {
-            ( string_free e )
             ^ -1
         }
     }
@@ -386,7 +393,7 @@ $ `src/tokenizer.nu`
 }
 
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
-@ __lm_scratch * Llm m i nfloats → i {
+@ __lm_scratch * LlmImpl m i nfloats → i {
     : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
     ? == . b dptr 0 {
         = __lm_alloc_failed T
@@ -486,7 +493,7 @@ $ `src/tokenizer.nu`
 // dequanted f32 bytes, before upload: out-lane (h·hd + 2j) ← (h·hd + j),
 // (h·hd + 2j+1) ← (h·hd + rd/2 + j) for j < rd/2; lanes ≥ rd untouched.
 // A weight permutes ROW blocks of the [out, in] tensor; a bias, elements.
-@ __lm_st_rope_permute * Llm m s name ( Vec u ) raw → v {
+@ __lm_st_rope_permute * LlmImpl m s name ( Vec u ) raw → v {
     ? == . m rope_style 0 {} { ^ v }
     : b isq | != 0 ( nurl_str_ends name `attn_q.weight` ) != 0 ( nurl_str_ends name `attn_q.bias` )
     : b isk | != 0 ( nurl_str_ends name `attn_k.weight` ) != 0 ( nurl_str_ends name `attn_k.bias` )
@@ -538,7 +545,6 @@ $ `src/tokenizer.nu`
         }
         = h + h 1
     }
-    ( vec_free [u] tmp )
 }
 
 // Upload one tensor from the safetensors file, as f32. Returns -1 when the
@@ -550,15 +556,13 @@ $ `src/tokenizer.nu`
 // to happen here, on this path only. (Getting this wrong is not subtle: the
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
-@ __lm_upload_st * Llm m s name → i {
+@ __lm_upload_st * LlmImpl m s name → i {
     : String hf ( __lm_hf_name name . m st_norm_add1 )
     ? == 0 ( string_len hf ) {
-        ( string_free hf )
         ^ -1
     } {}
     : i ti ( st_find_tensor . m st ( string_data hf ) )
     : b is_norm != 0 ( nurl_str_ends ( string_data hf ) `norm.weight` )
-    ( string_free hf )
     ? < ti 0 { ^ -1 } {}
     ?? ( st_dequant . m st ti ) {
         T raw → {
@@ -567,12 +571,10 @@ $ `src/tokenizer.nu`
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
             ? == . b dptr 0 {
-                ( vec_free [u] raw )
                 = __lm_alloc_failed T
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
             ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
@@ -580,7 +582,6 @@ $ `src/tokenizer.nu`
             ^ . b dptr
         }
         F e → {
-            ( string_free e )
             ^ -1
         }
     }
@@ -606,56 +607,49 @@ $ `src/tokenizer.nu`
 // Optional per-layer tensor: device pointer, or -1 when the model has
 // none (biases are architecture-dependent). Always uploaded as f32 —
 // a bias is a single row, so the dequant cost is nil.
-@ __lm_upload_opt * Llm m Gguf gg i layer s suffix → i {
+@ __lm_upload_opt * LlmImpl m Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
     ? ( st_is_open . m st ) {
         : i d ( __lm_upload_st m ( string_data nm ) )
         ? >= d 0 {
-            ( string_free nm )
             ^ d
         } {}
     } {}
     : i ti ( gguf_find_tensor gg ( string_data nm ) )
     ? < ti 0 {
-        ( string_free nm )
         ^ -1
     } {}
     : !( Vec u ) String r ( gguf_dequant gg ti )
-    ( string_free nm )
     ?? r {
         T raw → {
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
             ? == . b dptr 0 {
-                ( vec_free [u] raw )
                 = __lm_alloc_failed T
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
             ( vec_push [GpuBuffer] . m wbufs b )
             ( vec_push [i] . m wbytes . b bytes )
             ^ . b dptr
         }
         F e → {
-            ( string_free e )
             ^ -1
         }
     }
 }
 
-@ __lm_upload_layer * Llm m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
+@ __lm_upload_layer * LlmImpl m Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
     : String nm ( __lm_tname layer suffix )
     : i d ( __lm_upload m gg ( string_data nm ) )
-    ( string_free nm )
     ? < d 0 { ^ F } {}
     ( vec_push [i] dst d )
     ( vec_push [i] tdst __lm_last_type )
     ^ T
 }
 
-@ llm_open s path i want_ctx → !*Llm String {
+@ llm_open s path i want_ctx → !Llm String {
     ^ ( llm_open_st path `` want_ctx )
 }
 
@@ -675,7 +669,7 @@ $ `src/tokenizer.nu`
 
 @ __lm_lp_start → v {
     = __lm_lprof F
-    ?? ( env_get `NURLLAMA_PROF` ) { T v → { ( string_free v ) = __lm_lprof T } F → {} }
+    ?? ( env_get `NURLLAMA_PROF` ) { T v → { = __lm_lprof T } F → {} }
     = __lm_lt ( monotonic_ns )
 }
 
@@ -688,16 +682,15 @@ $ `src/tokenizer.nu`
     ( string_push_int msg / - now __lm_lt 1000000 )
     ( string_push_str msg `ms` )
     ( nurl_eprintln ( string_data msg ) )
-    ( string_free msg )
     = __lm_lt now
 }
 
-@ llm_open_st s path s weights i want_ctx → !*Llm String {
+@ llm_open_st s path s weights i want_ctx → !Llm String {
     ( __lm_lp_start )
     : ~ Gguf gg ( gguf_none )
     ?? ( gguf_open path ) {
         T g0 → { = gg g0 }
-        F e → { ^ @ !*Llm String { F e } }
+        F e → { ^ @ !Llm String { F e } }
     }
     ( __lm_lp `gguf_open` )
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
@@ -713,21 +706,21 @@ $ `src/tokenizer.nu`
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
         ( string_push_str msg `' (supported: llama, qwen2, qwen3, gemma3, phi3, llada2)` )
-        ( gguf_close gg )
-        ^ @ !*Llm String { F msg }
+        ^ @ !Llm String { F msg }
     }
 
-    : *Llm m # *Llm ( nurl_alloc Z Llm )
+    // zeroed: every handle field starts as the null handle, so an early
+    // return drops a half-built model cleanly
+    : Llm h @ Llm { # s ( rcbox_zero [LlmImpl] ) }
+    : *LlmImpl m ( __Llm_ptr h )
     = __lm_alloc_failed F
-    // nurl_alloc Z = sizeof — plain malloc, so every field must be
-    // assigned; the prof counters are the only ones no later code sets
     = . m prof_on F
     = . m prof_attn_ns 0
     = . m prof_moe_ns 0
     = . m prof_shexp_ns 0
     = . m prof_dense_ns 0
     = . m prof_out_ns 0
-    ?? ( env_get `NURLLAMA_PROF` ) { T v → { ( string_free v ) = . m prof_on T } F → {} }
+    ?? ( env_get `NURLLAMA_PROF` ) { T v → { = . m prof_on T } F → {} }
     = . m st ( st_none )
     = . m gg ( gguf_none )
     = . m st_embd -1
@@ -740,8 +733,6 @@ $ `src/tokenizer.nu`
     = . m eps ( __lm_kv_f gg arch `attention.layer_norm_rms_epsilon` 0.00001 )
     = . m rope_base ( __lm_kv_f gg arch `rope.freq_base` 10000.0 )
     ? | | | < . m n_embd 1 < . m n_layer 1 < . m n_head 1 < . m n_ff 1 {
-        ( nurl_free # s m )
-        ( gguf_close gg )
         ^ ( __lm_err `nurllama: model is missing llama.* hyperparameters` )
     } {}
     // head_dim is NOT n_embd/n_head in general: gemma3 states it explicitly
@@ -778,8 +769,6 @@ $ `src/tokenizer.nu`
     = . m weights_norm ? != 0 ( __lm_kv_i gg arch `expert_weights_norm` 1 ) T F
     = . m first_dense ( __lm_kv_i gg arch `leading_dense_block_count` ? is_llada2 1 0 )
     ? & is_llada2 | | < . m n_expert 1 < . m n_expert_used 1 < . m moe_ff 1 {
-        ( nurl_free # s m )
-        ( gguf_close gg )
         ^ ( __lm_err `nurllama: llada2 model is missing its MoE hyperparameters` )
     } {}
 
@@ -829,9 +818,7 @@ $ `src/tokenizer.nu`
     ?? tr {
         T t → { = . m tok t }
         F e → {
-            ( nurl_free # s m )
-            ( gguf_close gg )
-            ^ @ !*Llm String { F e }
+            ^ @ !Llm String { F e }
         }
     }
     = . m n_vocab ( tok_n_vocab . m tok )
@@ -842,17 +829,11 @@ $ `src/tokenizer.nu`
     = . m g ( gpu_open ( gpu_best_device ) )
     ( __lm_lp `gpu_open` )
     ? ( gpu_ok . m g ) {} {
-        ( tok_free . m tok )
-        ( nurl_free # s m )
-        ( gguf_close gg )
         ^ ( __lm_err `nurllama: no compute device (set NURL_GPU=cpu for the host backend)` )
     }
     = . m ks ( lk_build . m g )
     ( __lm_lp `kernels` )
     ? . . m ks ok {} {
-        ( tok_free . m tok )
-        ( nurl_free # s m )
-        ( gguf_close gg )
         ^ ( __lm_err `nurllama: kernel compilation failed` )
     }
 
@@ -866,16 +847,11 @@ $ `src/tokenizer.nu`
                 = . m st_norm_add1 is_gemma3
                 = . m st_embd ( st_find_tensor . m st `model.embed_tokens.weight` )
                 ? < . m st_embd 0 {
-                    ( st_close . m st )
-                    ( nurl_free # s m )
-                    ( gguf_close gg )
                     ^ ( __lm_err `nurllama: the safetensors file has no model.embed_tokens.weight` )
                 } {}
             }
             F e → {
-                ( nurl_free # s m )
-                ( gguf_close gg )
-                ^ @ !*Llm String { F e }
+                ^ @ !Llm String { F e }
             }
         }
     } {}
@@ -976,7 +952,6 @@ $ `src/tokenizer.nu`
             ? ( __lm_upload_layer m gg L `attn_k.weight` . m wk . m tq_wk ) {} { = ok F }
             ? ( __lm_upload_layer m gg L `attn_v.weight` . m wv . m tq_wv ) {} { = ok F }
         }
-        ( string_free qkvn )
         ? ( __lm_upload_layer m gg L `attn_output.weight` . m wo . m tq_wo ) {} { = ok F }
         // qwen2 carries Q/K/V biases; llama does not. Absent = -1 = skip.
         ( vec_push [i] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
@@ -1011,7 +986,6 @@ $ `src/tokenizer.nu`
             // CPU over 256 scores per position
             : String bn ( __lm_tname L `exp_probs_b.bias` )
             : i bi ( gguf_find_tensor gg ( string_data bn ) )
-            ( string_free bn )
             ? >= bi 0 {
                 ?? ( gguf_dequant gg bi ) {
                     T raw → {
@@ -1023,10 +997,8 @@ $ `src/tokenizer.nu`
                             ( vec_push [f] . m exp_bias # f ( bits_to_f32 bits ) )
                             = e + e 1
                         }
-                        ( vec_free [u] raw )
                     }
                     F e2 → {
-                        ( string_free e2 )
                         = ok F
                     }
                 }
@@ -1050,7 +1022,6 @@ $ `src/tokenizer.nu`
                 ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
                 ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
             }
-            ( string_free upn )
             // placeholders on the MoE side too
             ( vec_push [i] . m gate_inp -1 )
             ( vec_push [i] . m tq_gate_inp 0 )
@@ -1078,10 +1049,9 @@ $ `src/tokenizer.nu`
     }
     // The mapping stays open for the model's lifetime — the embedding
     // rows are dequantised straight out of it per step (see llm_eval).
-    // llm_close unmaps.
+    // The model's last owner unmaps it.
     = . m gg gg
     ? ok {} {
-        ( llm_close m )
         ? __lm_alloc_failed {
             ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
         } {}
@@ -1096,7 +1066,6 @@ $ `src/tokenizer.nu`
         ( string_push_int um / __lm_rp_ns 1000000 )
         ( string_push_str um `ms` )
         ( nurl_eprintln ( string_data um ) )
-        ( string_free um )
     } {}
     // KV cache + activation scratch
     : i kvdim * . m n_kv . m head_dim
@@ -1161,7 +1130,6 @@ $ `src/tokenizer.nu`
         }
         : GpuBuffer bu ( gpu_buffer_view . m bias_all * nbias 4 )
         : i _ub ( gpu_upload bu ( vec_data [u] bb ) )
-        ( vec_free [u] bb )
     } {
         = . m rlogitsd -1
         = . m router_host ( gpu_host_none )
@@ -1174,7 +1142,6 @@ $ `src/tokenizer.nu`
         = . m bias_all -1
     }
     ? __lm_alloc_failed {
-        ( llm_close m )
         ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
     } {}
     // the weights are up — release the upload path's pinned staging
@@ -1182,7 +1149,6 @@ $ `src/tokenizer.nu`
     ( __lm_lp `scratch+bias` )
     ?? ( env_get `NURLLAMA_VERBOSE` ) {
         T v → {
-            ( string_free v )
             : ~ i total 0
             : ~ i k 0
             ~ < k ( vec_len [i] . m wbytes ) {
@@ -1192,111 +1158,82 @@ $ `src/tokenizer.nu`
             : String dmsg ( string_from `[nurllama] device: ` )
             ( string_push_str dmsg ( gpu_name . m g ) )
             ( nurl_eprintln ( string_data dmsg ) )
-            ( string_free dmsg )
             : String msg ( string_from `[nurllama] device memory: ` )
             ( string_push_int msg / total 1048576 )
             ( string_push_str msg ` MiB (weights + KV cache + scratch)` )
             ( nurl_eprintln ( string_data msg ) )
-            ( string_free msg )
         }
         F → {}
     }
-    ^ @ !*Llm String { T m }
+    ^ @ !Llm String { T h }
 }
 
-@ llm_close * Llm m → v {
-    ? . m prof_on {
-        : String pm ( string_from `[prof] attn=` )
-        ( string_push_int pm / . m prof_attn_ns 1000000 )
-        ( string_push_str pm `ms shexp=` )
-        ( string_push_int pm / . m prof_shexp_ns 1000000 )
-        ( string_push_str pm `ms moe_total=` )
-        ( string_push_int pm / . m prof_moe_ns 1000000 )
-        ( string_push_str pm `ms (experts=` )
-        ( string_push_int pm / - . m prof_moe_ns . m prof_shexp_ns 1000000 )
-        ( string_push_str pm `ms) dense=` )
-        ( string_push_int pm / . m prof_dense_ns 1000000 )
-        ( string_push_str pm `ms out=` )
-        ( string_push_int pm / . m prof_out_ns 1000000 )
-        ( string_push_str pm `ms` )
-        ( nurl_eprintln ( string_data pm ) )
-        ( string_free pm )
-    } {}
-    ? ( st_is_open . m st ) { ( st_close . m st ) } {}
-    ( vec_free [GpuBuffer] . m wbufs )  // every weight and scratch buffer
-    ( vec_free [i] . m wdptr )
-    ( vec_free [i] . m wbytes )
-    ( vec_free [i] . m tq_attn_norm )
-    ( vec_free [i] . m tq_wq )
-    ( vec_free [i] . m tq_wk )
-    ( vec_free [i] . m tq_wv )
-    ( vec_free [i] . m bq )
-    ( vec_free [i] . m bk )
-    ( vec_free [i] . m bv )
-    ( vec_free [i] . m tq_wo )
-    ( vec_free [i] . m tq_ffn_norm )
-    ( vec_free [i] . m tq_gate )
-    ( vec_free [i] . m tq_down )
-    ( vec_free [i] . m tq_up )
-    ( vec_free [i] . m attn_norm )
-    ( vec_free [i] . m q_norm )
-    ( vec_free [i] . m k_norm )
-    ( vec_free [i] . m post_attn_norm )
-    ( vec_free [i] . m post_ffn_norm )
-    ( vec_free [i] . m wq )
-    ( vec_free [i] . m wk )
-    ( vec_free [i] . m wv )
-    ( vec_free [i] . m wo )
-    ( vec_free [i] . m ffn_norm )
-    ( vec_free [i] . m w_gate )
-    ( vec_free [i] . m w_down )
-    ( vec_free [i] . m w_up )
-    ( vec_free [i] . m kcache )
-    ( vec_free [i] . m vcache )
-    ( vec_free [i] . m gate_inp )
-    ( vec_free [i] . m tq_gate_inp )
-    ( vec_free [f] . m exp_bias )
-    ( vec_free [i] . m gate_exps )
-    ( vec_free [i] . m up_exps )
-    ( vec_free [i] . m down_exps )
-    ( vec_free [i] . m tq_gate_exps )
-    ( vec_free [i] . m tq_up_exps )
-    ( vec_free [i] . m tq_down_exps )
-    ( vec_free [i] . m gate_shexp )
-    ( vec_free [i] . m up_shexp )
-    ( vec_free [i] . m down_shexp )
-    ( vec_free [i] . m tq_gate_shexp )
-    ( vec_free [i] . m tq_up_shexp )
-    ( vec_free [i] . m tq_down_shexp )
-    ( gpu_host_free . m router_host )
-    ( gpu_host_free . m amid_h )
-    ( gpu_host_free . m amprob_h )
-    ( vec_free [u] . m embd_host )
-    ? ( gguf_is_open . m gg ) { ( gguf_close . m gg ) } {}
-    ( gpu_host_free . m logits_host )
-    ( lk_free . m ks )
-    ( tok_free . m tok )
-    ( gpu_close . m g )
-    ( nurl_free # s m )
+// The profiler's totals (NURLLAMA_PROF) are printed when the model goes:
+// its last owner drops the LlmImpl, and the compiler then drops every
+// weight buffer, the tokenizer, the mappings and the device context.
+% Drop LlmImpl {
+    @ drop LlmImpl m → v {
+        ? . m prof_on {
+            : String pm ( string_from `[prof] attn=` )
+            ( string_push_int pm / . m prof_attn_ns 1000000 )
+            ( string_push_str pm `ms shexp=` )
+            ( string_push_int pm / . m prof_shexp_ns 1000000 )
+            ( string_push_str pm `ms moe_total=` )
+            ( string_push_int pm / . m prof_moe_ns 1000000 )
+            ( string_push_str pm `ms (experts=` )
+            ( string_push_int pm / - . m prof_moe_ns . m prof_shexp_ns 1000000 )
+            ( string_push_str pm `ms) dense=` )
+            ( string_push_int pm / . m prof_dense_ns 1000000 )
+            ( string_push_str pm `ms out=` )
+            ( string_push_int pm / . m prof_out_ns 1000000 )
+            ( string_push_str pm `ms` )
+            ( nurl_eprintln ( string_data pm ) )
+        } {}
+    }
 }
 
-@ llm_tok * Llm m → Tok { ^ . m tok }
+// Early release (optional): the model's last owner gives everything back.
+@ llm_close sink Llm m → v {}
 
-@ llm_n_vocab * Llm m → i { ^ . m n_vocab }
+// A model kept in a module global (a server's resident model) as one
+// word: llm_into_word makes the word one owner of the model, a view of it
+// is `# Llm w`, and llm_word_release gives that owner back.
+@ llm_into_word sink Llm m → i {
+    : i w # i . m ctl
+    ( mem_forget m )
+    ^ w
+}
 
-@ llm_n_ctx * Llm m → i { ^ . m n_ctx }
+@ llm_word_release i w → v { ( rcbox_release [LlmImpl] w ) }
 
-@ llm_logit * Llm m i idx → f { ^ ( gpu_host_get_f32 . m logits_host idx ) }
+@ llm_tok Llm m__h → Tok {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ . m tok
+}
+
+@ llm_n_vocab Llm m__h → i {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ . m n_vocab
+}
+
+@ llm_n_ctx Llm m__h → i {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ . m n_ctx
+}
+
+@ llm_logit Llm m__h i idx → f {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ ( gpu_host_get_f32 . m logits_host idx )
+}
 
 // One decode step: token at position pos (0-based; caller feeds
 // positions sequentially). Logits for the NEXT token land in
 // logits_host.
 // One decode step: token at position pos.
-@ llm_eval * Llm m i token i pos → v {
+@ llm_eval Llm m__h i token i pos → v {
     : ( Vec i ) one ( vec_new [i] )
     ( vec_push [i] one token )
-    ( llm_eval_n m one 0 1 pos )
-    ( vec_free [i] one )
+    ( llm_eval_n m__h one 0 1 pos )
 }
 
 // Evaluate `count` tokens — ids[first .. first+count) — starting at
@@ -1304,7 +1241,8 @@ $ `src/tokenizer.nu`
 // runs per position over the cache this same batch already filled (its
 // causal window differs per position). Logits are produced for the LAST
 // position only, which is all a prefill or a decode step needs.
-@ llm_eval_n * Llm m ( Vec i ) ids i first i count i pos0 → v {
+@ llm_eval_n Llm m__h ( Vec i ) ids i first i count i pos0 → v {
+    : *LlmImpl m ( __Llm_ptr m__h )
     ( __lm_eval_core m ids first count pos0 0 T 1 )
 }
 
@@ -1315,7 +1253,8 @@ $ `src/tokenizer.nu`
 // denoise step samples all of them). The window's K/V rows land in the
 // cache at pos0.., overwriting the previous step's; earlier (frozen)
 // blocks keep theirs, which is exactly the block-diffusion mask.
-@ llm_eval_win * Llm m ( Vec i ) ids i first i count i pos0 i kvlen b want_logits → v {
+@ llm_eval_win Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen b want_logits → v {
+    : *LlmImpl m ( __Llm_ptr m__h )
     ( __lm_eval_core m ids first count pos0 kvlen F ? want_logits 2 0 )
 }
 
@@ -1325,7 +1264,7 @@ $ `src/tokenizer.nu`
 // n_expert_used best experts inside them), weights = the UNBIASED
 // scores of the winners, normalised, times expert_weights_scale.
 // Appends (expert, weight) pairs to sel/wts.
-@ __lm_moe_route * Llm m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
+@ __lm_moe_route * LlmImpl m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
     : i nx . m n_expert
     : i per_grp ? > . m n_group 0 / nx . m n_group nx
     : ( Vec f ) sc ( vec_new [f] )
@@ -1403,8 +1342,6 @@ $ `src/tokenizer.nu`
             ( vec_push [i] allowed ? in 1 0 )
             = e + e 1
         }
-        ( vec_free [f] gsc )
-        ( vec_free [i] picked )
     } {
         = e 0
         ~ < e nx {
@@ -1467,13 +1404,9 @@ $ `src/tokenizer.nu`
         ( vec_push [f] wts w )
         = t2 + t2 1
     }
-    ( vec_free [f] sc )
-    ( vec_free [f] biased )
-    ( vec_free [i] allowed )
-    ( vec_free [i] chosen )
 }
 
-@ __lm_eval_core * Llm m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
+@ __lm_eval_core * LlmImpl m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
     ? < count 1 { ^ v } {}
     : i ne . m n_embd
     : i hd . m head_dim
@@ -1495,17 +1428,15 @@ $ `src/tokenizer.nu`
             ?? ( st_dequant_range . m st . m st_embd * tok ne ne ) {
                 T row → {
                     : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
-                    ( vec_free [u] row )
                 }
-                F e → { ( string_free e ) }
+                F _e → {}
             }
         } {
             ?? ( gguf_dequant_range . m gg . m embd_idx * tok ne ne ) {
                 T row → {
                     : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
-                    ( vec_free [u] row )
                 }
-                F e → { ( string_free e ) }
+                F _e → {}
             }
         }
         = bi + bi 1
@@ -1648,8 +1579,6 @@ $ `src/tokenizer.nu`
                         ( lk_axpy . m ks orow . m moe_outd w ne )
                         = j + j 1
                     }
-                    ( vec_free [i] sel )
-                    ( vec_free [f] wts )
                     = b2 + b2 1
                 }
             }
@@ -1710,25 +1639,39 @@ $ `src/tokenizer.nu`
 
 // After a mode-3 (greedy) window eval: the argmax token id and its
 // softmax probability for window row `row`.
-@ llm_win_id * Llm m i row → i { ^ # i ( gpu_host_get_i32 . m amid_h row ) }
+@ llm_win_id Llm m__h i row → i {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ # i ( gpu_host_get_i32 . m amid_h row )
+}
 
-@ llm_win_prob * Llm m i row → f { ^ ( gpu_host_get_f32 . m amprob_h row ) }
+@ llm_win_prob Llm m__h i row → f {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ ( gpu_host_get_f32 . m amprob_h row )
+}
 
 // Greedy window eval: run the forward and reduce to (id, prob) per
 // position on the device (no full-vocab download).
-@ llm_win_greedy * Llm m ( Vec i ) ids i first i count i pos0 i kvlen → v {
+@ llm_win_greedy Llm m__h ( Vec i ) ids i first i count i pos0 i kvlen → v {
+    : *LlmImpl m ( __Llm_ptr m__h )
     ( __lm_eval_core m ids first count pos0 kvlen F 3 )
 }
 
 // Logit `idx` of window row `row` after an all-positions eval
 // (llm_eval_win with logits). Row 0 = the window's first position.
-@ llm_logit_at * Llm m i row i idx → f {
+@ llm_logit_at Llm m__h i row i idx → f {
+    : *LlmImpl m ( __Llm_ptr m__h )
     ^ ( gpu_host_get_f32 . m logits_host + * row . m n_vocab idx )
 }
 
-@ llm_mask_id * Llm m → i { ^ . m mask_id }
+@ llm_mask_id Llm m__h → i {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ . m mask_id
+}
 
-@ llm_is_diffusion * Llm m → b { ^ . m bidir }
+@ llm_is_diffusion Llm m__h → b {
+    : *LlmImpl m ( __Llm_ptr m__h )
+    ^ . m bidir
+}
 
 // The largest chunk a single llm_eval_n call may take.
 @ llm_chunk → i { ^ LM_CHUNK }
@@ -1736,13 +1679,13 @@ $ `src/tokenizer.nu`
 // Prefill: run the whole prompt through the model in chunks, leaving the
 // KV cache filled and the logits set for the LAST prompt token — the
 // distribution the first generated token is drawn from.
-@ llm_prefill * Llm m ( Vec i ) ids → v {
+@ llm_prefill Llm m__h ( Vec i ) ids → v {
     : i n ( vec_len [i] ids )
     : ~ i off 0
     ~ < off n {
         : i left - n off
         : i take ? < left LM_CHUNK left LM_CHUNK
-        ( llm_eval_n m ids off take off )
+        ( llm_eval_n m__h ids off take off )
         = off + off take
     }
 }

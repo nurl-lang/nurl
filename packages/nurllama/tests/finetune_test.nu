@@ -55,15 +55,14 @@ $ `deps/gpukit/src/dev.nu`
     : String mp ( model_path )
     ? ( file_exists ( string_data mp ) ) {} {
         ( nurl_print `finetune_test: SKIP (SmolLM-135M not in the pull store)\n` )
-        ( string_free mp )
         ^ 0
     }
 
     // ── 1. load ──────────────────────────────────────────────────────
     ?? ( ft_open ( string_data mp ) ) {
         T m → {
-            ( check & & == . m n_embd 576 == . m n_layer 30 == . m n_head 9 `SmolLM dims read from metadata (576/30/9)` )
-            ( check == . m rope_style 0 `llama arch → NORM rope (un-permuted at load)` )
+            ( check & & == ( ft_n_embd m ) 576 == ( ft_n_layer m ) 30 == ( ft_n_head m ) 9 `SmolLM dims read from metadata (576/30/9)` )
+            ( check == ( ft_rope_style m ) 0 `llama arch → NORM rope (un-permuted at load)` )
 
             // tokenize the prompt with the model's own tokenizer
             : ( Vec i ) ids ( vec_new [i] )
@@ -74,21 +73,18 @@ $ `deps/gpukit/src/dev.nu`
                             : ( Vec i ) enc ( tok_encode tk `The capital of France is Paris, and the capital of Italy is` T )
                             : ~ i k 0
                             ~ < k ( vec_len [i] enc ) { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
-                            ( vec_free [i] enc )
-                            ( tok_free tk )
                         }
-                        F e → { ( string_free e ) }
+                        F _e → {}
                     }
-                    ( gguf_close gg )
                 }
-                F e → { ( string_free e ) }
+                F _e → {}
             }
             : i T2 ( vec_len [i] ids )
             ( check >= T2 8 `prompt tokenizes (>= 8 tokens)` )
 
             // ── 2. build the graph + the wiring oracle ──────────────
             : GTape tp ( tape_new )
-            : *u pids ( nurl_alloc * * 2 * 7 . m n_layer 8 )
+            : ( Vec i ) pids ( vec_new [i] )
             : FtG fg ( ft_graph m tp ids 8 16.0 42 pids )
             ( check ( tape_ok tp ) `full 30-layer graph builds (tape healthy)` )
             : f ce ( g_scalar tp . fg loss )
@@ -98,7 +94,7 @@ $ `deps/gpukit/src/dev.nu`
             ( check & > ce 0.1 < ce 10.0 `pretrained CE loss is sane (0.1 < ce < 10)` )
             // tape top-1 at the last position
             : Tensor lg ( gvar_value tp . fg logits )
-            : i V . m n_vocab
+            : i V ( ft_n_vocab m )
             : ~ i targ 0
             : ~ f tbest -1000000000.0
             : ~ i c 0
@@ -133,11 +129,9 @@ $ `deps/gpukit/src/dev.nu`
                     ( nurl_print ( nurl_str_float fe ) )
                     ( nurl_print `\n` )
                     ( check < rel 0.05 `top logit within 5% (f32 engine vs f64 tape)` )
-                    ( llm_close lm )
                 }
                 F e → {
                     ( nurl_print `  (llm_open failed — engine oracle skipped)\n` )
-                    ( string_free e )
                 }
             }
 
@@ -155,20 +149,19 @@ $ `deps/gpukit/src/dev.nu`
             // adapters: save + round-trip
             : s apath `/tmp/nurl_ft_adapters.safetensors`
             : ~ b saok F
-            ?? ( ft_adapters_save apath m tr 8 ) { T _ → { = saok T } F e2 → { ( string_free e2 ) } }
+            ?? ( ft_adapters_save apath m tr 8 ) { T _ → { = saok T } F _e2 → {} }
             ( check saok `adapters save as safetensors` )
             ?? ( st_open apath ) {
                 T st → {
-                    ( check == ( st_n_tensors st ) * 2 * 7 . m n_layer `adapter file holds 2 tensors per slot (420)` )
+                    ( check == ( st_n_tensors st ) * 2 * 7 ( ft_n_layer m ) `adapter file holds 2 tensors per slot (420)` )
                     ( check >= ( st_find_tensor st `blk.0.q.lora_a` ) 0 `blk.0.q.lora_a present` )
-                    ( st_close st )
                 }
-                F e2 → { ( string_free e2 ) = g_fail + g_fail 1 }
+                F e2 → { = g_fail + g_fail 1 }
             }
             // merge + run through nurllama's --weights path
             : s mpath `/tmp/nurl_ft_merged.safetensors`
             : ~ b meok F
-            ?? ( ft_merge_st mpath m tr 8 16.0 ) { T _ → { = meok T } F e2 → { ( string_free e2 ) } }
+            ?? ( ft_merge_st mpath m tr 8 16.0 ) { T _ → { = meok T } F _e2 → {} }
             ( check meok `merged full-model safetensors written` )
             ? meok {
                 ?? ( llm_open_st ( string_data mp ) mpath 256 ) {
@@ -194,18 +187,15 @@ $ `deps/gpukit/src/dev.nu`
                         ( nurl_print_int - T2 1 )
                         ( nurl_print ` positions reproduce the training targets\n` )
                         ( check >= hits - T2 2 `merged model reproduces the overfitted sentence (>= T-2 greedy hits)` )
-                        ( llm_close lm2 )
                     }
                     F e2 → {
                         ( nurl_print `  llm_open_st FAILED: ` )
                         ( nurl_print ( string_data e2 ) )
                         ( nurl_print `\n` )
-                        ( string_free e2 )
                         = g_fail + g_fail 1
                     }
                 }
             } {}
-            ( ft_train_free tr )
             // multi-window: halve the window → 2 windows round-robin; the
             // trained model must reproduce BOTH windows' targets
             : i HW / T2 2
@@ -217,26 +207,19 @@ $ `deps/gpukit/src/dev.nu`
             ( nurl_print ( nurl_str_float . tr2 l1 ) )
             ( nurl_print `\n` )
             ( check < . tr2 l1 * 0.2 . tr2 l0 `2-window training cuts the CE by 5x+` )
-            ( ft_train_free tr2 )
             // the float32 device-replay path (ft_train dtype=1) is proven
             // end to end by grad's gput_f32_test (loss 1e-5, params 4e-4 vs
             // the f64 tape) and, on a real model, by the `finetune --f32`
             // CLI run in the package README — not re-run here (a fourth full
             // 30-layer training would balloon this suite's wall time).
-            ( nurl_free pids )
-            ( tape_free tp )
-            ( vec_free [i] ids )
-            ( ft_free m )
         }
         F e → {
             ( nurl_print `ft_open FAILED: ` )
             ( nurl_print ( string_data e ) )
             ( nurl_print `\n` )
-            ( string_free e )
             = g_fail + g_fail 1
         }
     }
-    ( string_free mp )
     ( nurl_print `finetune_test: ` )
     ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` )

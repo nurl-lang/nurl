@@ -60,6 +60,28 @@ $ `deps/gpu/src/gpu.nu`
     b ok
 }
 
+// Kernel sources assembled from shared device helpers: an owned String
+// (__lk_compile hands its text to the compiler).
+@ __lk_cat2 s a s b → String {
+    : String r ( string_from a )
+    ( string_push_str r b )
+    ^ r
+}
+
+@ __lk_cat3 s a s b s c → String {
+    : String r ( __lk_cat2 a b )
+    ( string_push_str r c )
+    ^ r
+}
+
+@ __lk_cat4 s a s b s c s d → String {
+    : String r ( __lk_cat3 a b c )
+    ( string_push_str r d )
+    ^ r
+}
+
+@ __lk_compile Gpu g String src s name → GpuKernel { ^ ( gpu_compile g ( string_data src ) name ) }
+
 @ __lk_matvec → s {
     ^ `extern "C" __global__ void matvec(
         const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
@@ -300,8 +322,8 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
-@ __lk_mv_exp_q8_0 → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_f16_dev ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_exp_q8_0(
+@ __lk_mv_exp_q8_0 → String {
+    ^ ( __lk_cat3 ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_exp_q8_0(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y,
         const int* __restrict__ expid, int rows, int cols, int xk, int n_assign) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
@@ -434,8 +456,8 @@ $ `deps/gpu/src/gpu.nu`
 // puts the whole window in a single warp — 32 threads serially scanning
 // vocab-sized rows twice was the output phase's real cost. The lowest-
 // index tie-break reproduces the serial first-max argmax exactly.
-@ __lk_argmax_conf_w → s {
-    ^ ( nurl_str_cat ( __lk_warp_red ) `extern "C" __global__ void argmax_conf_w(
+@ __lk_argmax_conf_w → String {
+    ^ ( __lk_cat2 ( __lk_warp_red ) `extern "C" __global__ void argmax_conf_w(
         const float* __restrict__ logits, int* __restrict__ out_id, float* __restrict__ out_prob,
         int vocab, int count) {
         NL_WARP_PROLOGUE(count, 1)
@@ -625,8 +647,8 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
-@ __lk_mv_q4_0 → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0(
+@ __lk_mv_q4_0 → String {
+    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -654,8 +676,8 @@ $ `deps/gpu/src/gpu.nu`
 // __lk_q8_repack): scales first, then 4-byte-aligned quant blocks.
 // Even nb takes the int/float4 fast path; odd nb (possible only in
 // tiny test models) reads bytes from the same layout.
-@ __lk_mv_q8_0 → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_f16_dev ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_q8_0(
+@ __lk_mv_q8_0 → String {
+    ^ ( __lk_cat3 ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_q8_0(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -717,8 +739,8 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
-@ __lk_mv_q8_0_b → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_f16_dev ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_q8_0_b(
+@ __lk_mv_q8_0_b → String {
+    ^ ( __lk_cat3 ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_q8_0_b(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int r = blockIdx.x*blockDim.x + threadIdx.x;
         if (r >= rows) return;
@@ -760,8 +782,8 @@ $ `deps/gpu/src/gpu.nu`
 // Q4_K: 144-byte super-block of 256 — d, dmin (f16), 12 packed 6-bit
 // scale/min pairs, 128 nibble bytes. Sub-block s takes its 32 values
 // from the low (even s) or high (odd s) nibbles of bytes [s/2*32 …].
-@ __lk_mv_q4_k → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k(
+@ __lk_mv_q4_k → String {
+    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -804,8 +826,8 @@ $ `deps/gpu/src/gpu.nu`
 
 // Q6_K: 210-byte super-block of 256 — 128 low-nibble bytes, 64 bytes
 // of upper 2 bits, 16 int8 scales, f16 d. Sixteen 16-element groups.
-@ __lk_mv_q6_k → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k(
+@ __lk_mv_q6_k → String {
+    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -846,8 +868,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q5_0 → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0(
+@ __lk_mv_q5_0 → String {
+    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -877,8 +899,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q5_1 → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1(
+@ __lk_mv_q5_1 → String {
+    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -912,8 +934,8 @@ $ `deps/gpu/src/gpu.nu`
 
 // Q5_K: 176-byte super-block of 256 — d, dmin (f16), 12 packed scale/
 // min bytes, 32 bytes carrying each value's 5th bit, 128 nibble bytes.
-@ __lk_mv_q5_k → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k(
+@ __lk_mv_q5_k → String {
+    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -956,8 +978,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_f16 → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_f16(
+@ __lk_mv_f16 → String {
+    ^ ( __lk_cat2 ( __lk_f16_dev ) `extern "C" __global__ void mv_f16(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -999,8 +1021,8 @@ $ `deps/gpu/src/gpu.nu`
     `
 }
 
-@ __lk_mv_f32_w → s {
-    ^ ( nurl_str_cat ( __lk_warp_red ) `extern "C" __global__ void mv_f32_w(
+@ __lk_mv_f32_w → String {
+    ^ ( __lk_cat2 ( __lk_warp_red ) `extern "C" __global__ void mv_f32_w(
         const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         const float* w = W + (long long)r*cols;
@@ -1012,8 +1034,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q4_0_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q4_0_w(
+@ __lk_mv_q4_0_w → String {
+    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 32;
@@ -1035,8 +1057,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q8_0_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_q8_0_w(
+@ __lk_mv_q8_0_w → String {
+    ^ ( __lk_cat4 ( __lk_warp_red ) ( __lk_f16_dev ) ( __lk_q8s_dev ) `extern "C" __global__ void mv_q8_0_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 32;
@@ -1068,8 +1090,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q4_k_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q4_k_w(
+@ __lk_mv_q4_k_w → String {
+    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 256;
@@ -1110,8 +1132,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q6_k_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q6_k_w(
+@ __lk_mv_q6_k_w → String {
+    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 256;
@@ -1157,8 +1179,8 @@ $ `deps/gpu/src/gpu.nu`
 // read 32 rows at once, i.e. 32 unrelated cache lines per load. Same warp
 // split as the K-quants: the warp walks blocks together, lane l takes byte l.
 
-@ __lk_mv_q5_0_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q5_0_w(
+@ __lk_mv_q5_0_w → String {
+    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 32;
@@ -1185,8 +1207,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q5_1_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q5_1_w(
+@ __lk_mv_q5_1_w → String {
+    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 32;
@@ -1212,8 +1234,8 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
-@ __lk_mv_q5_k_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q5_k_w(
+@ __lk_mv_q5_k_w → String {
+    ^ ( __lk_cat3 ( __lk_warp_red ) ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 256;
@@ -1266,20 +1288,20 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k7 ( gpu_compile g ( __lk_copyat ) `copyat` )
     : GpuKernel k8 ( gpu_compile g ( __lk_axpy ) `axpy` )
     : GpuKernel me1 ( gpu_compile g ( __lk_mv_exp_f32 ) `mv_exp_f32` )
-    : GpuKernel me2 ( gpu_compile g ( __lk_mv_exp_q8_0 ) `mv_exp_q8_0` )
+    : GpuKernel me2 ( __lk_compile g ( __lk_mv_exp_q8_0 ) `mv_exp_q8_0` )
     : GpuKernel me3 ( gpu_compile g ( __lk_moe_scatter ) `moe_scatter` )
     : GpuKernel me4 ( gpu_compile g ( __lk_moe_route ) `moe_route` )
     : GpuKernel me5 ( gpu_compile g ( __lk_argmax_conf ) `argmax_conf` )
-    : GpuKernel q1 ( gpu_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
-    : GpuKernel q2 ( gpu_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
+    : GpuKernel q1 ( __lk_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
+    : GpuKernel q2 ( __lk_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
     : GpuKernel qb1 ( gpu_compile g ( __lk_mv_f32_b ) `mv_f32_b` )
-    : GpuKernel qb2 ( gpu_compile g ( __lk_mv_q8_0_b ) `mv_q8_0_b` )
-    : GpuKernel q3 ( gpu_compile g ( __lk_mv_q4_k ) `mv_q4_k` )
-    : GpuKernel q4 ( gpu_compile g ( __lk_mv_q6_k ) `mv_q6_k` )
-    : GpuKernel q5 ( gpu_compile g ( __lk_mv_f16 ) `mv_f16` )
-    : GpuKernel q6 ( gpu_compile g ( __lk_mv_q5_0 ) `mv_q5_0` )
-    : GpuKernel q7 ( gpu_compile g ( __lk_mv_q5_1 ) `mv_q5_1` )
-    : GpuKernel q8 ( gpu_compile g ( __lk_mv_q5_k ) `mv_q5_k` )
+    : GpuKernel qb2 ( __lk_compile g ( __lk_mv_q8_0_b ) `mv_q8_0_b` )
+    : GpuKernel q3 ( __lk_compile g ( __lk_mv_q4_k ) `mv_q4_k` )
+    : GpuKernel q4 ( __lk_compile g ( __lk_mv_q6_k ) `mv_q6_k` )
+    : GpuKernel q5 ( __lk_compile g ( __lk_mv_f16 ) `mv_f16` )
+    : GpuKernel q6 ( __lk_compile g ( __lk_mv_q5_0 ) `mv_q5_0` )
+    : GpuKernel q7 ( __lk_compile g ( __lk_mv_q5_1 ) `mv_q5_1` )
+    : GpuKernel q8 ( __lk_compile g ( __lk_mv_q5_k ) `mv_q5_k` )
     : b ok0 & & & ( gpu_kernel_ok k1 ) ( gpu_kernel_ok k2 )
     & & & ( gpu_kernel_ok k3 ) ( gpu_kernel_ok k4 ) ( gpu_kernel_ok k4a ) ( gpu_kernel_ok k4b )
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
@@ -1293,63 +1315,19 @@ $ `deps/gpu/src/gpu.nu`
     // other backend the portable kernels above stay in charge, and the
     // flag below turns the dispatch off.
     : b want_warp == ( gpu_backend ) 0
-    : GpuKernel w1 ? want_warp ( gpu_compile g ( __lk_mv_f32_w ) `mv_f32_w` ) ( gpu_kernel_none )
-    : GpuKernel w2 ? want_warp ( gpu_compile g ( __lk_mv_q4_0_w ) `mv_q4_0_w` ) ( gpu_kernel_none )
-    : GpuKernel w3 ? want_warp ( gpu_compile g ( __lk_mv_q8_0_w ) `mv_q8_0_w` ) ( gpu_kernel_none )
-    : GpuKernel w4 ? want_warp ( gpu_compile g ( __lk_mv_q4_k_w ) `mv_q4_k_w` ) ( gpu_kernel_none )
-    : GpuKernel w5 ? want_warp ( gpu_compile g ( __lk_mv_q6_k_w ) `mv_q6_k_w` ) ( gpu_kernel_none )
-    : GpuKernel w6 ? want_warp ( gpu_compile g ( __lk_mv_q5_0_w ) `mv_q5_0_w` ) ( gpu_kernel_none )
-    : GpuKernel w7 ? want_warp ( gpu_compile g ( __lk_mv_q5_1_w ) `mv_q5_1_w` ) ( gpu_kernel_none )
-    : GpuKernel w8 ? want_warp ( gpu_compile g ( __lk_mv_q5_k_w ) `mv_q5_k_w` ) ( gpu_kernel_none )
-    : GpuKernel me5w ? want_warp ( gpu_compile g ( __lk_argmax_conf_w ) `argmax_conf_w` ) ( gpu_kernel_none )
+    : GpuKernel w1 ? want_warp ( __lk_compile g ( __lk_mv_f32_w ) `mv_f32_w` ) ( gpu_kernel_none )
+    : GpuKernel w2 ? want_warp ( __lk_compile g ( __lk_mv_q4_0_w ) `mv_q4_0_w` ) ( gpu_kernel_none )
+    : GpuKernel w3 ? want_warp ( __lk_compile g ( __lk_mv_q8_0_w ) `mv_q8_0_w` ) ( gpu_kernel_none )
+    : GpuKernel w4 ? want_warp ( __lk_compile g ( __lk_mv_q4_k_w ) `mv_q4_k_w` ) ( gpu_kernel_none )
+    : GpuKernel w5 ? want_warp ( __lk_compile g ( __lk_mv_q6_k_w ) `mv_q6_k_w` ) ( gpu_kernel_none )
+    : GpuKernel w6 ? want_warp ( __lk_compile g ( __lk_mv_q5_0_w ) `mv_q5_0_w` ) ( gpu_kernel_none )
+    : GpuKernel w7 ? want_warp ( __lk_compile g ( __lk_mv_q5_1_w ) `mv_q5_1_w` ) ( gpu_kernel_none )
+    : GpuKernel w8 ? want_warp ( __lk_compile g ( __lk_mv_q5_k_w ) `mv_q5_k_w` ) ( gpu_kernel_none )
+    : GpuKernel me5w ? want_warp ( __lk_compile g ( __lk_argmax_conf_w ) `argmax_conf_w` ) ( gpu_kernel_none )
     : b warp & & want_warp ( gpu_kernel_ok me5w )
     & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
     & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )
     ^ @ LlmKernels { k1 q1 q2 qb1 qb2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 me1 me2 me3 me4 me5 me5w rp ok }
-}
-
-@ lk_free sink LlmKernels ks → v {
-    ( gpu_kernel_free . ks matvec )
-    ( gpu_kernel_free . ks mv_q4_0 )
-    ( gpu_kernel_free . ks mv_q8_0 )
-    ( gpu_kernel_free . ks mv_f32_b )
-    ( gpu_kernel_free . ks mv_q8_0_b )
-    ( gpu_kernel_free . ks mv_q5_0 )
-    ( gpu_kernel_free . ks mv_q5_1 )
-    ( gpu_kernel_free . ks mv_q4_k )
-    ( gpu_kernel_free . ks mv_q5_k )
-    ( gpu_kernel_free . ks mv_q6_k )
-    ( gpu_kernel_free . ks mv_f16 )
-    ? . ks warp {
-        ( gpu_kernel_free . ks w_f32 )
-        ( gpu_kernel_free . ks w_q4_0 )
-        ( gpu_kernel_free . ks w_q8_0 )
-        ( gpu_kernel_free . ks w_q4_k )
-        ( gpu_kernel_free . ks w_q6_k )
-        ( gpu_kernel_free . ks w_q5_0 )
-        ( gpu_kernel_free . ks w_q5_1 )
-        ( gpu_kernel_free . ks w_q5_k )
-        ( gpu_kernel_free . ks argmax_conf_w )
-    } {}
-    ( gpu_kernel_free . ks rmsnorm )
-    ( gpu_kernel_free . ks rope )
-    ( gpu_kernel_free . ks rope_neox )
-    ( gpu_kernel_free . ks attn )
-    ( gpu_kernel_free . ks attn_sc )
-    ( gpu_kernel_free . ks attn_out )
-    ( gpu_kernel_free . ks silumul )
-    ( gpu_kernel_free . ks gelumul )
-    ( gpu_kernel_free . ks scale )
-    ( gpu_kernel_free . ks addv )
-    ( gpu_kernel_free . ks addrow )
-    ( gpu_kernel_free . ks copyat )
-    ( gpu_kernel_free . ks axpy )
-    ( gpu_kernel_free . ks mv_exp_f32 )
-    ( gpu_kernel_free . ks mv_exp_q8_0 )
-    ( gpu_kernel_free . ks moe_scatter )
-    ( gpu_kernel_free . ks moe_route )
-    ( gpu_kernel_free . ks argmax_conf )
-    ( gpu_kernel_free . ks q8_repack )
 }
 
 // ── launch wrappers (raw device pointers, onnx op idiom) ────────────
@@ -1363,7 +1341,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 cols ) )
     ( vec_push [i] a ( gpu_arg_i32 batch ) )
     : i _r ( gpu_launch . ks matvec ( gpu_grid * rows batch 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 // Quantised matvec dispatch: `gt` is the ggml tensor type of W.
@@ -1413,7 +1390,6 @@ $ `deps/gpu/src/gpu.nu`
                 ? == which 0 { : i _r ( gpu_launch . ks matvec sg 64 ba ) } {}
                 ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0 sg 64 ba ) } {}
             }
-            ( vec_free [i] ba )
             ^ T
         } {}
     } {}
@@ -1438,7 +1414,6 @@ $ `deps/gpu/src/gpu.nu`
         ? == which 6 { : i _r ( gpu_launch . ks w_q5_0 wg 128 wa ) } {}
         ? == which 7 { : i _r ( gpu_launch . ks w_q5_1 wg 128 wa ) } {}
         ? == which 8 { : i _r ( gpu_launch . ks w_q5_k wg 128 wa ) } {}
-        ( vec_free [i] wa )
         ^ T
     } {}
     ? == which 0 {
@@ -1461,7 +1436,6 @@ $ `deps/gpu/src/gpu.nu`
     ? == which 6 { : i _r ( gpu_launch . ks mv_q5_0 grid 64 a ) } {}
     ? == which 7 { : i _r ( gpu_launch . ks mv_q5_1 grid 64 a ) } {}
     ? == which 8 { : i _r ( gpu_launch . ks mv_q5_k grid 64 a ) } {}
-    ( vec_free [i] a )
     ^ T
 }
 
@@ -1500,7 +1474,6 @@ $ `deps/gpu/src/gpu.nu`
     : i grid ( gpu_grid * rows n_assign 64 )
     ? == gt 0 { : i _r ( gpu_launch . ks mv_exp_f32 grid 64 a ) } {}
     ? == gt 8 { : i _r ( gpu_launch . ks mv_exp_q8_0 grid 64 a ) } {}
-    ( vec_free [i] a )
     ^ T
 }
 
@@ -1520,7 +1493,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 norm ) )
     ( vec_push [i] a ( gpu_arg_i32 count ) )
     : i _r ( gpu_launch . ks moe_route ( gpu_grid count 64 ) 64 a )
-    ( vec_free [i] a )
 }
 
 // Greedy argmax + softmax-prob per position, on device.
@@ -1533,7 +1505,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 nb ) )
     ( vec_push [i] a ( gpu_arg_i64 nblk ) )
     : i _r ( gpu_launch . ks q8_repack ( gpu_grid nblk 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ lk_argmax_conf LlmKernels ks i logitsd i outid i outprob i vocab i count → v {
@@ -1548,7 +1519,6 @@ $ `deps/gpu/src/gpu.nu`
     } {
         : i _r ( gpu_launch . ks argmax_conf ( gpu_grid count 64 ) 64 a )
     }
-    ( vec_free [i] a )
 }
 
 // out[pos] += Σ_j wts[pos*K+j] · down[(pos*K+j)] over `dim` floats.
@@ -1561,7 +1531,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 dim ) )
     ( vec_push [i] a ( gpu_arg_i32 count ) )
     : i _r ( gpu_launch . ks moe_scatter ( gpu_grid * count dim 64 ) 64 a )
-    ( vec_free [i] a )
 }
 
 @ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps i batch → v {
@@ -1573,7 +1542,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_f32 eps ) )
     ( vec_push [i] a ( gpu_arg_i32 batch ) )
     : i _r ( gpu_launch . ks rmsnorm ( gpu_grid * n batch 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 // style: 0 = NORM (llama), 1 = NEOX (qwen2)
@@ -1592,7 +1560,6 @@ $ `deps/gpu/src/gpu.nu`
     } {
         : i _r ( gpu_launch . ks rope ( gpu_grid total 256 ) 256 a )
     }
-    ( vec_free [i] a )
 }
 
 // npos0 = the causal window of the FIRST batch element (element b sees
@@ -1613,7 +1580,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a1 ( gpu_arg_i32 window ) )
     ( vec_push [i] a1 ( gpu_arg_i32 causal ) )
     : i _r1 ( gpu_launch . ks attn_sc ( gpu_grid * * * nh batch maxpos 1 256 ) 256 a1 )
-    ( vec_free [i] a1 )
     : ( Vec i ) a2 ( vec_new [i] )
     ( vec_push [i] a2 ( gpu_arg_i64 vcd ) )
     ( vec_push [i] a2 ( gpu_arg_i64 scd ) )
@@ -1627,7 +1593,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a2 ( gpu_arg_i32 window ) )
     ( vec_push [i] a2 ( gpu_arg_i32 causal ) )
     : i _r2 ( gpu_launch . ks attn_out ( gpu_grid * * nh batch hd 256 ) 256 a2 )
-    ( vec_free [i] a2 )
 }
 
 // y ← y + a·x — the routed-expert accumulator (each selected expert's
@@ -1639,7 +1604,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] ar ( gpu_arg_f32 a ) )
     ( vec_push [i] ar ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks axpy ( gpu_grid n 256 ) 256 ar )
-    ( vec_free [i] ar )
 }
 
 // GeGLU: g ← gelu(g) * u, in place. Same shape as lk_silumul.
@@ -1649,7 +1613,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 ud ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks gelumul ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 // x ← x * s, in place.
@@ -1659,7 +1622,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_f32 s ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks scale ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ lk_silumul LlmKernels ks i gd i ud i n → v {
@@ -1668,7 +1630,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 ud ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks silumul ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ lk_addv LlmKernels ks i ad i bd i n → v {
@@ -1677,7 +1638,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 bd ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks addv ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 // a[b][i] += v[i] for every row of the batch
@@ -1688,7 +1648,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     ( vec_push [i] a ( gpu_arg_i32 batch ) )
     : i _r ( gpu_launch . ks addrow ( gpu_grid * n batch 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ lk_copyat LlmKernels ks i dstd i srcd i off i n → v {
@@ -1698,5 +1657,4 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 off ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks copyat ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }

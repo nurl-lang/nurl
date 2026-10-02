@@ -15,7 +15,6 @@
 //   ( cfg_exists root )      → b
 //   ( cfg_load root )        → ?NlConfig
 //   ( cfg_save root cfg )    → b
-//   ( cfg_free cfg )         → v
 
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
@@ -31,14 +30,6 @@ $ `stdlib/ext/json.nu`
     String models_dir
 }
 
-@ cfg_free sink NlConfig c → v {
-    ( string_free . c model )
-    ( string_free . c host )
-    ( string_free . c auth )
-    ( string_free . c token )
-    ( string_free . c models_dir )
-}
-
 @ cfg_path String root → String {
     ^ ( path_join ( string_data root ) `config.json` )
 }
@@ -46,7 +37,6 @@ $ `stdlib/ext/json.nu`
 @ cfg_exists String root → b {
     : String p ( cfg_path root )
     : b e ( file_exists ( string_data p ) )
-    ( string_free p )
     ^ e
 }
 
@@ -65,40 +55,27 @@ $ `stdlib/ext/json.nu`
     ^ def
 }
 
-// Load the config, or None when it is absent or unparseable. The
-// caller owns the returned NlConfig (cfg_free).
+// Load the config, or None when it is absent or unparseable.
 @ cfg_load String root → ?NlConfig {
     : String p ( cfg_path root )
-    : ~ i addr 0
     ?? ( read_file ( string_data p ) ) {
         T txt → {
             ?? ( json_parse ( string_data txt ) ) {
                 T j → {
-                    // Build directly into a heap NlConfig and hand back its
-                    // pointer — no placeholder to leak on the success path.
-                    : *NlConfig c # *NlConfig ( nurl_alloc Z NlConfig )
-                    = . c model ( __cfg_str j `model` `` )
-                    = . c host ( __cfg_str j `host` `127.0.0.1` )
-                    = . c port ( __cfg_int j `port` 11434 )
-                    = . c auth ( __cfg_str j `auth` `open` )
-                    = . c token ( __cfg_str j `token` `` )
-                    = . c models_dir ( __cfg_str j `models_dir` `` )
-                    = addr # i c
-                    ( json_free j )
+                    ^ @ ?NlConfig { T @ NlConfig {
+                            ( __cfg_str j `model` `` )
+                            ( __cfg_str j `host` `127.0.0.1` )
+                            ( __cfg_int j `port` 11434 )
+                            ( __cfg_str j `auth` `open` )
+                            ( __cfg_str j `token` `` )
+                            ( __cfg_str j `models_dir` `` )
+                        } }
                 }
-                F e → { ( string_free ( json_format_error e ) ) }
+                F _e → {}
             }
-            ( string_free txt )
         }
         F _ → {}
     }
-    ( string_free p )
-    ? != addr 0 {
-        : *NlConfig c # *NlConfig addr
-        : NlConfig out @ NlConfig { . c model . c host . c port . c auth . c token . c models_dir }
-        ( nurl_free # s c )
-        ^ @ ?NlConfig { T out }
-    } {}
     ^ @ ?NlConfig { F }
 }
 
@@ -114,11 +91,8 @@ $ `stdlib/ext/json.nu`
     : b _5 ( json_obj_set j `token` ( json_str_lit ( string_data . c token ) ) )
     : b _6 ( json_obj_set j `models_dir` ( json_str_lit ( string_data . c models_dir ) ) )
     : String txt ( json_pretty j )
-    ( json_free j )
     ( string_push_char txt 10 )
     : String p ( cfg_path root )
     : b ok ?? ( write_file ( string_data p ) ( string_data txt ) ) { T _ → { T } F _ → { F } }
-    ( string_free p )
-    ( string_free txt )
     ^ ok
 }

@@ -44,12 +44,17 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `tokenizer.nu`
+$ `stdlib/core/rcbox.nu`
 
-// A heap-boxed f64 vector (NURL has no bare deref for *( Vec f ) — field
-// access through a struct pointer is the idiom).
+// An optional per-layer 1-D tensor (norm weight / bias): `has` says
+// whether the model carries it (llama has no attn_q_norm), `v` holds its
+// values (empty for a shape-only placeholder).
 : FtV {
+    b has
     ( Vec f ) v
 }
+
+@ __ft_nov → FtV { ^ @ FtV { F ( vec_new [f] ) } }
 
 // One weight in tape layout: data [rows=in, cols=out] flat.
 : FtW {
@@ -58,7 +63,7 @@ $ `tokenizer.nu`
     ( Vec f ) data
 }
 
-: FtModel {
+: FtModelImpl {
     b ok
     i n_embd
     i n_layer
@@ -76,11 +81,11 @@ $ `tokenizer.nu`
     ( Vec f ) norm_f  // output_norm [n_embd]
     ( Vec FtW ) wq ( Vec FtW ) wk ( Vec FtW ) wv ( Vec FtW ) wo
     ( Vec FtW ) wg ( Vec FtW ) wu ( Vec FtW ) wd
-    ( Vec s ) bq ( Vec s ) bk ( Vec s ) bv  // *( Vec f ) or 0 (qwen2 bias)
-    ( Vec s ) an ( Vec s ) fn  // attn_norm / ffn_norm, *( Vec f ) per layer
-    // qwen3's per-head Q/K RMSNorm weights [head_dim], *( Vec f ) or 0.
-    // Absent for llama/qwen2 — a 0 here simply skips the norm.
-    ( Vec s ) qn ( Vec s ) kn
+    ( Vec FtV ) bq ( Vec FtV ) bk ( Vec FtV ) bv  // qwen2's biases (absent elsewhere)
+    ( Vec FtV ) an ( Vec FtV ) fn  // attn_norm / ffn_norm per layer
+    // qwen3's per-head Q/K RMSNorm weights [head_dim]. Absent for
+    // llama/qwen2 — an absent one simply skips the norm.
+    ( Vec FtV ) qn ( Vec FtV ) kn
     String src_path  // the GGUF path — so the per-layer base matrices can be
     // freed after device capture (ft_drop_base) and streamed back for the
     // merge (ft_reload_base), keeping host RAM off the base during training
@@ -96,6 +101,19 @@ $ `tokenizer.nu`
     Gguf mgg  // a Gguf held open across a streamed merge (gguf_none = none)
 }
 
+// An FtModel is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: FtModel { s ctl }
+
+@ FtModel_share FtModel h → FtModel { ^ @ FtModel { # s ( rcbox_share # i . h ctl ) } }
+
+@ FtModel_drop sink FtModel h → v {
+    ( mem_forget h )
+    ( rcbox_release [FtModelImpl] # i . h ctl )
+}
+
+@ __FtModel_ptr FtModel h → *FtModelImpl { ^ ( rcbox_ptr [FtModelImpl] # i . h ctl ) }
+
 // Streaming base upload, OFF by default: the finetune tests compare the CPU
 // tape's loss against the device's, and a lazy const has no host values to
 // compare with. `nurllama finetune --stream` turns it on for models whose
@@ -106,50 +124,11 @@ $ `tokenizer.nu`
 
 @ __ft_stream_wanted → b { ^ __ft_stream_on }
 
-@ __ft_wfree FtW w → v { ( vec_free [f] . w data ) }
-
-@ __ft_vfree ( Vec s ) v → v {
-    : ~ i k 0
-    ~ < k ( vec_len [s] v ) {
-        : s p ?? ( vec_get [s] v k ) { T x → x F → # s 0 }
-        ? != # i p 0 {
-            : *FtV pv # *FtV p
-            ( vec_free [f] . pv v )
-            ( nurl_free p )
-        } {}
-        = k + k 1
-    }
-    ( vec_free [s] v )
-}
-
-@ ft_free sink * FtModel m → v {
-    ( vec_free [f] . m embd )
-    ( __ft_wfree . m wout )
-    ( vec_free [f] . m norm_f )
-    : ~ i k 0
-    ~ < k ( vec_len [FtW] . m wq ) {
-        ?? ( vec_get [FtW] . m wq k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wk k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wv k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wo k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wg k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wu k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wd k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [FtW] . m wq ) ( vec_free [FtW] . m wk ) ( vec_free [FtW] . m wv )
-    ( vec_free [FtW] . m wo ) ( vec_free [FtW] . m wg ) ( vec_free [FtW] . m wu )
-    ( vec_free [FtW] . m wd )
-    ( __ft_vfree . m bq ) ( __ft_vfree . m bk ) ( __ft_vfree . m bv )
-    ( __ft_vfree . m an ) ( __ft_vfree . m fn )
-    ( __ft_vfree . m qn ) ( __ft_vfree . m kn )
-    ( vec_free [i] . m lz_node ) ( vec_free [i] . m lz_key )
-    ( string_free . m src_path )
-    ( nurl_free # s m )
-}
+// Let go of `m` now rather than at the end of its owner's scope.
+@ ft_free sink FtModel m → v {}
 
 // Dequant tensor `name` to f64. GGUF layout [out, in] flat (in fastest).
-@ __ft_raw Gguf gg s name * u rowsb * u colsb → ( Vec f ) {
+@ __ft_raw Gguf gg s name inout i rows inout i cols → ( Vec f ) {
     : i idx ( gguf_find_tensor gg name )
     ? >= idx 0 {} { ^ ( vec_new [f] ) }
     : GgufTensor t ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) idx ) {
@@ -158,12 +137,11 @@ $ `tokenizer.nu`
     }
     ?? ( gguf_dequant_f64 gg idx ) {
         T v → {
-            ( nurl_poke rowsb 0 . t d1 )  // out
-            ( nurl_poke colsb 0 . t d0 )  // in
+            = rows . t d1  // out
+            = cols . t d0  // in
             ^ v
         }
         F e → {
-            ( string_free e )
             ^ ( vec_new [f] )
         }
     }
@@ -190,10 +168,10 @@ $ `tokenizer.nu`
 // new col (h·hd + j) = old col (h·hd + 2j), new (h·hd + hd/2 + j) = old
 // (h·hd + 2j + 1). After this, half-split NEOX rope computes the model's
 // exact rotations (at permuted lanes; scores are permutation-invariant).
-@ __ft_unperm FtW w i heads i hd → v {
+@ __ft_unperm FtW w i heads i hd → v { ( __ft_unperm_data . w data . w rows . w cols heads hd ) }
+
+@ __ft_unperm_data ( Vec f ) data i rows i cols i heads i hd → v {
     : i half / hd 2
-    : i rows . w rows
-    : i cols . w cols
     : ( Vec f ) tmp ( vec_with_cap [f] cols )
     : ~ i c 0
     ~ < c cols { ( vec_push [f] tmp 0.0 ) = c + c 1 }
@@ -204,24 +182,20 @@ $ `tokenizer.nu`
         ~ < h heads {
             : ~ i j 0
             ~ < j half {
-                ( vec_set [f] tmp + * h hd j ( _tf . w data + base + * h hd * 2 j ) )
-                ( vec_set [f] tmp + * h hd + half j ( _tf . w data + base + * h hd + * 2 j 1 ) )
+                ( vec_set [f] tmp + * h hd j ( _tf data + base + * h hd * 2 j ) )
+                ( vec_set [f] tmp + * h hd + half j ( _tf data + base + * h hd + * 2 j 1 ) )
                 = j + j 1
             }
             = h + h 1
         }
         = c 0
-        ~ < c cols { ( vec_set [f] . w data + base c ( _tf tmp c ) ) = c + c 1 }
+        ~ < c cols { ( vec_set [f] data + base c ( _tf tmp c ) ) = c + c 1 }
         = r + r 1
     }
-    ( vec_free [f] tmp )
 }
 
 // Same un-permutation for a bias vector (one row).
-@ __ft_unperm_vec * FtV p i heads i hd → v {
-    : FtW w @ FtW { 1 * heads hd . p v }
-    ( __ft_unperm w heads hd )
-}
+@ __ft_unperm_vec FtV p i heads i hd → v { ( __ft_unperm_data . p v 1 * heads hd heads hd ) }
 
 @ __ft_lname i layer s suffix → String {
     : String s ( string_from `blk.` )
@@ -235,52 +209,43 @@ $ `tokenizer.nu`
 // table without touching a byte of its data. Rows/cols mirror __ft_raw +
 // __ft_transpose exactly: rows = d0 (in), cols = d1 (out). An absent tensor
 // gives 0×0, which callers read as "not present".
-@ __ft_lshape Gguf gg i layer s suffix * u rowsb * u colsb → v {
-    ( nurl_poke rowsb 0 0 )
-    ( nurl_poke colsb 0 0 )
+@ __ft_lshape Gguf gg i layer s suffix inout i rows inout i cols → v {
+    = rows 0
+    = cols 0
     : String nm ( __ft_lname layer suffix )
     : i idx ( gguf_find_tensor gg ( string_data nm ) )
-    ( string_free nm )
     ? >= idx 0 {} { ^ v }
     ?? ( vec_get [GgufTensor] ( gguf_tensors gg ) idx ) {
         T t → {
-            ( nurl_poke rowsb 0 . t d0 )
-            ( nurl_poke colsb 0 . t d1 )
+            = rows . t d0
+            = cols . t d1
         }
         F → {}
     }
 }
 
-// A layer weight in tape layout (poisons `okb` on a missing tensor).
-@ __ft_lw Gguf gg i layer s suffix * u okb → FtW {
+// A layer weight in tape layout (clears `ok` on a missing tensor).
+@ __ft_lw Gguf gg i layer s suffix inout b ok → FtW {
     : String nm ( __ft_lname layer suffix )
-    : *u rb ( nurl_alloc 8 )
-    : *u cb ( nurl_alloc 8 )
-    : ( Vec f ) raw ( __ft_raw gg ( string_data nm ) rb cb )
-    ( string_free nm )
+    : ~ i rows 0
+    : ~ i cols 0
+    : ( Vec f ) raw ( __ft_raw gg ( string_data nm ) rows cols )
     ? > ( vec_len [f] raw ) 0 {} {
-        ( nurl_poke okb 0 0 )
-        ( nurl_free rb ) ( nurl_free cb )
-        ( vec_free [f] raw )
+        = ok F
         ^ @ FtW { 0 0 ( vec_new [f] ) }
     }
-    : FtW w ( __ft_transpose raw ( nurl_peek rb 0 ) ( nurl_peek cb 0 ) )
-    ( vec_free [f] raw )
-    ( nurl_free rb ) ( nurl_free cb )
-    ^ w
+    ^ ( __ft_transpose raw rows cols )
 }
 
-// An optional 1-D tensor (norm weight / bias) → heap *( Vec f ) or 0.
-@ __ft_lvec Gguf gg i layer s suffix → s {
+// An optional 1-D tensor (norm weight / bias); absent when the model
+// does not carry it.
+@ __ft_lvec Gguf gg i layer s suffix → FtV {
     : String nm ( __ft_lname layer suffix )
-    : *u rb ( nurl_alloc 8 )
-    : *u cb ( nurl_alloc 8 )
-    : ( Vec f ) raw ( __ft_raw gg ( string_data nm ) rb cb )
-    ( string_free nm ) ( nurl_free rb ) ( nurl_free cb )
-    ? > ( vec_len [f] raw ) 0 {} { ( vec_free [f] raw ) ^ # s 0 }
-    : *FtV p # *FtV ( nurl_alloc Z FtV )
-    = . p v raw
-    ^ # s p
+    : ~ i rows 0
+    : ~ i cols 0
+    : ( Vec f ) raw ( __ft_raw gg ( string_data nm ) rows cols )
+    ? > ( vec_len [f] raw ) 0 {} { ^ ( __ft_nov ) }
+    ^ @ FtV { T raw }
 }
 
 // Open a GGUF and lift every weight into tape-ready f64 host tensors.
@@ -289,43 +254,38 @@ $ `tokenizer.nu`
 // same way whether called at open or at merge-time reload. `gg` stays the
 // caller's to close. Poisons m.ok on a missing tensor.
 // One shape-only per-layer weight: real rows/cols, no data.
-@ __ft_shape_push Gguf gg i L s suffix ( Vec FtW ) dst * u rb * u cb → v {
-    ( __ft_lshape gg L suffix rb cb )
-    ( vec_push [FtW] dst @ FtW { ( nurl_peek rb 0 ) ( nurl_peek cb 0 ) ( vec_new [f] ) } )
+@ __ft_shape_push Gguf gg i L s suffix ( Vec FtW ) dst → v {
+    : ~ i rows 0
+    : ~ i cols 0
+    ( __ft_lshape gg L suffix rows cols )
+    ( vec_push [FtW] dst @ FtW { rows cols ( vec_new [f] ) } )
 }
 
-// One shape-only per-layer 1-D tensor: an FtV holding an empty vec when the
-// model HAS this tensor, 0 when it does not (llama has no attn_q_norm).
-@ __ft_shape_vec Gguf gg i L s suffix ( Vec s ) dst → v {
+// One shape-only per-layer 1-D tensor: present with no values when the
+// model HAS this tensor, absent when it does not (llama has no attn_q_norm).
+@ __ft_shape_vec Gguf gg i L s suffix ( Vec FtV ) dst → v {
     : String nm ( __ft_lname L suffix )
     : i idx ( gguf_find_tensor gg ( string_data nm ) )
-    ( string_free nm )
-    ? >= idx 0 {
-        : *FtV p # *FtV ( nurl_alloc Z FtV )
-        = . p v ( vec_new [f] )
-        ( vec_push [s] dst # s p )
-    } { ( vec_push [s] dst # s 0 ) }
+    ( vec_push [FtV] dst @ FtV { >= idx 0 ( vec_new [f] ) } )
 }
 
 // The streaming counterpart of __ft_load_bases: read every per-layer
 // SHAPE and no data at all. ft_graph turns each into a lazy const and
 // ft_stream_upload fills them one at a time after the capture.
-@ __ft_load_shapes Gguf gg * FtModel m → v {
-    : *u rb ( nurl_alloc 8 )
-    : *u cb ( nurl_alloc 8 )
+@ __ft_load_shapes Gguf gg * FtModelImpl m → v {
     = . m n_ff 0
     : ~ i L 0
     ~ < L . m n_layer {
-        ( __ft_shape_push gg L `attn_q.weight` . m wq rb cb )
-        ( __ft_shape_push gg L `attn_k.weight` . m wk rb cb )
-        ( __ft_shape_push gg L `attn_v.weight` . m wv rb cb )
-        ( __ft_shape_push gg L `attn_output.weight` . m wo rb cb )
-        ( __ft_shape_push gg L `ffn_gate.weight` . m wg rb cb )
+        ( __ft_shape_push gg L `attn_q.weight` . m wq )
+        ( __ft_shape_push gg L `attn_k.weight` . m wk )
+        ( __ft_shape_push gg L `attn_v.weight` . m wv )
+        ( __ft_shape_push gg L `attn_output.weight` . m wo )
+        ( __ft_shape_push gg L `ffn_gate.weight` . m wg )
         ? == . m n_ff 0 {
             ?? ( vec_get [FtW] . m wg L ) { T w → { = . m n_ff . w cols } F → {} }
         } {}
-        ( __ft_shape_push gg L `ffn_up.weight` . m wu rb cb )
-        ( __ft_shape_push gg L `ffn_down.weight` . m wd rb cb )
+        ( __ft_shape_push gg L `ffn_up.weight` . m wu )
+        ( __ft_shape_push gg L `ffn_down.weight` . m wd )
         ( __ft_shape_vec gg L `attn_q.bias` . m bq )
         ( __ft_shape_vec gg L `attn_k.bias` . m bk )
         ( __ft_shape_vec gg L `attn_v.bias` . m bv )
@@ -335,146 +295,107 @@ $ `tokenizer.nu`
         ( __ft_shape_vec gg L `attn_k_norm.weight` . m kn )
         = L + L 1
     }
-    ( nurl_free rb ) ( nurl_free cb )
     ? > . m n_ff 0 {} { = . m ok F }
 }
 
-@ __ft_load_bases Gguf gg * FtModel m → v {
+@ __ft_load_bases Gguf gg * FtModelImpl m → v {
     ? . m stream { ( __ft_load_shapes gg m ) ^ v } {}
-    : *u okb ( nurl_alloc 8 )
-    ( nurl_poke okb 0 1 )
+    : ~ b ok T
     // ffn size read from the first gate tensor
     = . m n_ff 0
     : ~ i L 0
     ~ < L . m n_layer {
-        : FtW q ( __ft_lw gg L `attn_q.weight` okb )
-        : FtW k2 ( __ft_lw gg L `attn_k.weight` okb )
+        : FtW q ( __ft_lw gg L `attn_q.weight` ok )
+        : FtW k2 ( __ft_lw gg L `attn_k.weight` ok )
         ? == . m rope_style 0 {
             ( __ft_unperm q . m n_head . m head_dim )
             ( __ft_unperm k2 . m n_kv . m head_dim )
         } {}
         ( vec_push [FtW] . m wq q )
         ( vec_push [FtW] . m wk k2 )
-        ( vec_push [FtW] . m wv ( __ft_lw gg L `attn_v.weight` okb ) )
-        ( vec_push [FtW] . m wo ( __ft_lw gg L `attn_output.weight` okb ) )
-        : FtW g2 ( __ft_lw gg L `ffn_gate.weight` okb )
+        ( vec_push [FtW] . m wv ( __ft_lw gg L `attn_v.weight` ok ) )
+        ( vec_push [FtW] . m wo ( __ft_lw gg L `attn_output.weight` ok ) )
+        : FtW g2 ( __ft_lw gg L `ffn_gate.weight` ok )
         ? == . m n_ff 0 { = . m n_ff . g2 cols } {}
         ( vec_push [FtW] . m wg g2 )
-        ( vec_push [FtW] . m wu ( __ft_lw gg L `ffn_up.weight` okb ) )
-        ( vec_push [FtW] . m wd ( __ft_lw gg L `ffn_down.weight` okb ) )
-        : s bqp ( __ft_lvec gg L `attn_q.bias` )
-        : s bkp ( __ft_lvec gg L `attn_k.bias` )
-        ? & == . m rope_style 0 != # i bqp 0 {
-            : *FtV pq # *FtV bqp
-            ( __ft_unperm_vec pq . m n_head . m head_dim )
-        } {}
-        ? & == . m rope_style 0 != # i bkp 0 {
-            : *FtV pk # *FtV bkp
-            ( __ft_unperm_vec pk . m n_kv . m head_dim )
-        } {}
-        ( vec_push [s] . m bq bqp )
-        ( vec_push [s] . m bk bkp )
-        ( vec_push [s] . m bv ( __ft_lvec gg L `attn_v.bias` ) )
-        ( vec_push [s] . m an ( __ft_lvec gg L `attn_norm.weight` ) )
-        ( vec_push [s] . m fn ( __ft_lvec gg L `ffn_norm.weight` ) )
+        ( vec_push [FtW] . m wu ( __ft_lw gg L `ffn_up.weight` ok ) )
+        ( vec_push [FtW] . m wd ( __ft_lw gg L `ffn_down.weight` ok ) )
+        : FtV bqp ( __ft_lvec gg L `attn_q.bias` )
+        : FtV bkp ( __ft_lvec gg L `attn_k.bias` )
+        ? & == . m rope_style 0 . bqp has { ( __ft_unperm_vec bqp . m n_head . m head_dim ) } {}
+        ? & == . m rope_style 0 . bkp has { ( __ft_unperm_vec bkp . m n_kv . m head_dim ) } {}
+        ( vec_push [FtV] . m bq bqp )
+        ( vec_push [FtV] . m bk bkp )
+        ( vec_push [FtV] . m bv ( __ft_lvec gg L `attn_v.bias` ) )
+        ( vec_push [FtV] . m an ( __ft_lvec gg L `attn_norm.weight` ) )
+        ( vec_push [FtV] . m fn ( __ft_lvec gg L `ffn_norm.weight` ) )
         // qwen3 only; 0 everywhere else. NOT un-permuted for NORM rope:
         // the weight is per-LANE inside a head, and the un-permute
         // reorders lanes, so a NORM-rope model carrying these would need
         // the same reorder — none does (qwen3 is NEOX).
-        ( vec_push [s] . m qn ( __ft_lvec gg L `attn_q_norm.weight` ) )
-        ( vec_push [s] . m kn ( __ft_lvec gg L `attn_k_norm.weight` ) )
+        ( vec_push [FtV] . m qn ( __ft_lvec gg L `attn_q_norm.weight` ) )
+        ( vec_push [FtV] . m kn ( __ft_lvec gg L `attn_k_norm.weight` ) )
         = L + L 1
     }
-    ? == ( nurl_peek okb 0 ) 1 {} { = . m ok F }
-    ( nurl_free okb )
-}
-
-// Free the *FtV entries of `v` and EMPTY the vec (keep the handle valid so
-// it can be re-pushed or finally vec_free'd).
-@ __ft_clear_svec ( Vec s ) v → v {
-    : ~ i k 0
-    ~ < k ( vec_len [s] v ) {
-        : s p ?? ( vec_get [s] v k ) { T x → x F → # s 0 }
-        ? != # i p 0 {
-            : *FtV pv # *FtV p
-            ( vec_free [f] . pv v )
-            ( nurl_free p )
-        } {}
-        = k + k 1
-    }
-    ( vec_clear [s] v )
+    ? ok {} { = . m ok F }
 }
 
 // Drop the per-layer base matrices + biases/norms (the bulk of host RAM),
-// emptying their vecs. embd / wout / norm_f are KEPT (embd feeds the
+// emptying their vecs (clearing a vec drops its elements). embd / wout / norm_f are KEPT (embd feeds the
 // per-window input recompute; the rest are small). Idempotent — a second
 // call over empty vecs is a no-op — and reversible via ft_reload_base.
-@ ft_drop_base * FtModel m → v {
-    : ~ i k 0
-    ~ < k ( vec_len [FtW] . m wq ) {
-        ?? ( vec_get [FtW] . m wq k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wk k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wv k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wo k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wg k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wu k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        ?? ( vec_get [FtW] . m wd k ) { T w → { ( __ft_wfree w ) } F _ → {} }
-        = k + k 1
-    }
+@ ft_drop_base FtModel m__h → v {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     ( vec_clear [FtW] . m wq ) ( vec_clear [FtW] . m wk ) ( vec_clear [FtW] . m wv )
     ( vec_clear [FtW] . m wo ) ( vec_clear [FtW] . m wg ) ( vec_clear [FtW] . m wu )
     ( vec_clear [FtW] . m wd )
-    ( __ft_clear_svec . m bq ) ( __ft_clear_svec . m bk ) ( __ft_clear_svec . m bv )
-    ( __ft_clear_svec . m an ) ( __ft_clear_svec . m fn )
-    ( __ft_clear_svec . m qn ) ( __ft_clear_svec . m kn )
+    ( vec_clear [FtV] . m bq ) ( vec_clear [FtV] . m bk ) ( vec_clear [FtV] . m bv )
+    ( vec_clear [FtV] . m an ) ( vec_clear [FtV] . m fn )
+    ( vec_clear [FtV] . m qn ) ( vec_clear [FtV] . m kn )
 }
 
 // Re-stream the per-layer base from the source GGUF into `m`'s (empty)
 // vecs — the reverse of ft_drop_base, using the SAME loader path so the
 // NORM-rope un-permute is identical byte-for-byte. T on success.
-@ ft_reload_base * FtModel m → b {
+@ ft_reload_base FtModel m__h → b {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     ?? ( gguf_open ( string_data . m src_path ) ) {
         T gg → {
             ( __ft_load_bases gg m )
-            ( gguf_close gg )
             ^ . m ok
         }
-        F e → { ( string_free e ) ^ F }
+        F e → { ^ F }
     }
     ^ F
 }
 
-@ ft_open s path → !*FtModel String {
+@ ft_open s path → !FtModel String {
     ?? ( gguf_open path ) {
         T gg → {
             : s arch ( gguf_kv_str_or gg `general.architecture` `` )
-            : *FtModel m # *FtModel ( nurl_alloc Z FtModel )
+            // zeroed: an early return drops a half-built model cleanly
+            : FtModel h @ FtModel { # s ( rcbox_zero [FtModelImpl] ) }
+            : *FtModelImpl m ( __FtModel_ptr h )
             = . m ok T
             = . m stream ( __ft_stream_wanted )
             : String kb ( string_from arch )
             ( string_push_str kb `.embedding_length` )
             = . m n_embd ( gguf_kv_int_or gg ( string_data kb ) 0 )
-            ( string_free kb )
             : String kb2 ( string_from arch )
             ( string_push_str kb2 `.block_count` )
             = . m n_layer ( gguf_kv_int_or gg ( string_data kb2 ) 0 )
-            ( string_free kb2 )
             : String kb3 ( string_from arch )
             ( string_push_str kb3 `.attention.head_count` )
             = . m n_head ( gguf_kv_int_or gg ( string_data kb3 ) 0 )
-            ( string_free kb3 )
             : String kb4 ( string_from arch )
             ( string_push_str kb4 `.attention.head_count_kv` )
             = . m n_kv ( gguf_kv_int_or gg ( string_data kb4 ) . m n_head )
-            ( string_free kb4 )
             : String kb5 ( string_from arch )
             ( string_push_str kb5 `.attention.layer_norm_rms_epsilon` )
             = . m eps ( gguf_kv_f_or gg ( string_data kb5 ) 0.00001 )
-            ( string_free kb5 )
             : String kb6 ( string_from arch )
             ( string_push_str kb6 `.rope.freq_base` )
             = . m rope_base ( gguf_kv_f_or gg ( string_data kb6 ) 10000.0 )
-            ( string_free kb6 )
             // head_dim is NOT n_embd/n_head in general — qwen3-4B states
             // 128 against a 2560/32 = 80 — so read key_length when the
             // model publishes it. Everything downstream already sizes
@@ -483,25 +404,21 @@ $ `tokenizer.nu`
             : String kb8 ( string_from arch )
             ( string_push_str kb8 `.attention.key_length` )
             = . m head_dim ( gguf_kv_int_or gg ( string_data kb8 ) . m head_dim )
-            ( string_free kb8 )
             : String kb7 ( string_from arch )
             ( string_push_str kb7 `.rope.dimension_count` )
             = . m rope_dim ( gguf_kv_int_or gg ( string_data kb7 ) . m head_dim )
-            ( string_free kb7 )
             // qwen2 and qwen3 both rotate the two halves of the span (NEOX);
             // llama rotates adjacent lanes (NORM, un-permuted at load).
             : b is_q3 != 0 ( nurl_str_eq arch `qwen3` )
             = . m rope_style ? | == ( nurl_str_eq arch `qwen2` ) 1 is_q3 1 0
             ? & > . m n_embd 0 > . m n_layer 0 {} {
-                ( gguf_close gg )
-                ( nurl_free # s m )
-                ^ @ !*FtModel String { F ( string_from `finetune: not a llama/qwen2/qwen3 GGUF` ) }
+                ^ @ !FtModel String { F ( string_from `finetune: not a llama/qwen2/qwen3 GGUF` ) }
             }
             // embeddings [vocab, n_embd]
-            : *u rb ( nurl_alloc 8 )
-            : *u cb ( nurl_alloc 8 )
-            = . m embd ( __ft_raw gg `token_embd.weight` rb cb )
-            = . m n_vocab ( nurl_peek rb 0 )
+            : ~ i erows 0
+            : ~ i ecols 0
+            = . m embd ( __ft_raw gg `token_embd.weight` erows ecols )
+            = . m n_vocab erows
             ? > ( vec_len [f] . m embd ) 0 {} { = . m ok F }
             // lm_head: output.weight, or the tied embedding table. Streaming
             // takes its SHAPE only — a 151936 x 2560 f64 transpose is 3.1 GB
@@ -511,21 +428,17 @@ $ `tokenizer.nu`
                 = . m wout @ FtW { . m n_embd . m n_vocab ( vec_new [f] ) }
             } {
                 ? >= oi 0 {
-                    : *u rb2 ( nurl_alloc 8 )
-                    : *u cb2 ( nurl_alloc 8 )
-                    : ( Vec f ) raw ( __ft_raw gg `output.weight` rb2 cb2 )
-                    = . m wout ( __ft_transpose raw ( nurl_peek rb2 0 ) ( nurl_peek cb2 0 ) )
-                    ( vec_free [f] raw )
-                    ( nurl_free rb2 ) ( nurl_free cb2 )
+                    : ~ i orows 0
+                    : ~ i ocols 0
+                    : ( Vec f ) raw ( __ft_raw gg `output.weight` orows ocols )
+                    = . m wout ( __ft_transpose raw orows ocols )
                 } {
                     = . m wout ( __ft_transpose . m embd . m n_vocab . m n_embd )
                 }
             }
-            : *u rb3 ( nurl_alloc 8 )
-            : *u cb3 ( nurl_alloc 8 )
-            = . m norm_f ( __ft_raw gg `output_norm.weight` rb3 cb3 )
-            ( nurl_free rb3 ) ( nurl_free cb3 )
-            ( nurl_free rb ) ( nurl_free cb )
+            : ~ i nrows 0
+            : ~ i ncols 0
+            = . m norm_f ( __ft_raw gg `output_norm.weight` nrows ncols )
             = . m wq ( vec_new [FtW] )
             = . m wk ( vec_new [FtW] )
             = . m wv ( vec_new [FtW] )
@@ -533,34 +446,53 @@ $ `tokenizer.nu`
             = . m wg ( vec_new [FtW] )
             = . m wu ( vec_new [FtW] )
             = . m wd ( vec_new [FtW] )
-            = . m bq ( vec_new [s] )
-            = . m bk ( vec_new [s] )
-            = . m bv ( vec_new [s] )
-            = . m an ( vec_new [s] )
-            = . m fn ( vec_new [s] )
-            = . m qn ( vec_new [s] )
-            = . m kn ( vec_new [s] )
+            = . m bq ( vec_new [FtV] )
+            = . m bk ( vec_new [FtV] )
+            = . m bv ( vec_new [FtV] )
+            = . m an ( vec_new [FtV] )
+            = . m fn ( vec_new [FtV] )
+            = . m qn ( vec_new [FtV] )
+            = . m kn ( vec_new [FtV] )
             = . m mgg ( gguf_none )
             = . m lz_node ( vec_new [i] )
             = . m lz_key ( vec_new [i] )
             = . m src_path ( string_from path )
             ( __ft_load_bases gg m )
-            ( gguf_close gg )
-            ? . m ok {} {
-                : *FtModel m2 m
-                ( ft_free m2 )
-                ^ @ !*FtModel String { F ( string_from `finetune: missing tensors in GGUF` ) }
-            }
-            ^ @ !*FtModel String { T m }
+            ? . m ok {} { ^ @ !FtModel String { F ( string_from `finetune: missing tensors in GGUF` ) } }
+            ^ @ !FtModel String { T h }
         }
-        F e → { ^ @ !*FtModel String { F e } }
+        F e → { ^ @ !FtModel String { F e } }
     }
+}
+
+// The model's shape, for callers that size buffers or print it.
+@ ft_n_embd FtModel h → i { ^ . ( __FtModel_ptr h ) n_embd }
+
+@ ft_n_layer FtModel h → i { ^ . ( __FtModel_ptr h ) n_layer }
+
+@ ft_n_head FtModel h → i { ^ . ( __FtModel_ptr h ) n_head }
+
+@ ft_n_kv FtModel h → i { ^ . ( __FtModel_ptr h ) n_kv }
+
+@ ft_head_dim FtModel h → i { ^ . ( __FtModel_ptr h ) head_dim }
+
+@ ft_n_vocab FtModel h → i { ^ . ( __FtModel_ptr h ) n_vocab }
+
+@ ft_rope_style FtModel h → i { ^ . ( __FtModel_ptr h ) rope_style }
+
+// Whether layer L carries qwen3's per-head Q and K norms (both of them).
+@ ft_has_qk_norm FtModel h i L → b {
+    : *FtModelImpl m ( __FtModel_ptr h )
+    : b q ?? ( vec_get [FtV] . m qn L ) { T x → . x has F → F }
+    : b k ?? ( vec_get [FtV] . m kn L ) { T x → . x has F → F }
+    ^ & q k
 }
 
 // ── the tape graph ────────────────────────────────────────────────────
 
 // Host-side embedding lookup: token ids → [T, n_embd] rows.
-@ ft_embed * FtModel m ( Vec i ) ids → ( Vec f ) {
+@ ft_embed FtModel m__h ( Vec i ) ids → ( Vec f ) {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     : i T2 ( vec_len [i] ids )
     : ( Vec f ) x ( vec_with_cap [f] * T2 . m n_embd )
     : ~ i t 0
@@ -586,12 +518,10 @@ $ `tokenizer.nu`
     : i nel * ? > r 0 r 1 c
     ? & == ( vec_len [f] v ) 0 > nel 0 {
         : GVar g ( grad_const_lazy tp s TE_F64 )
-        ( vec_free [i] s )
         ^ g
     } {}
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar o ( grad_const tp t )
-    ( tensor_free t )
     ^ o
 }
 
@@ -600,7 +530,6 @@ $ `tokenizer.nu`
     : ~ i k 0
     ~ < k n { ( vec_push [f] v 1.0 ) = k + k 1 }
     : GVar o ( __ft_const tp v n 1 )
-    ( vec_free [f] v )
     ^ o
 }
 
@@ -626,7 +555,7 @@ $ `tokenizer.nu`
 }
 
 // Note a streamed base const's tape node so ft_stream_upload can fill it.
-@ __ft_rec * FtModel m GVar g i L i k → GVar {
+@ __ft_rec * FtModelImpl m GVar g i L i k → GVar {
     ? . m stream {
         ( vec_push [i] . m lz_node . g id )
         ( vec_push [i] . m lz_key + * L 16 k )
@@ -646,18 +575,16 @@ $ `tokenizer.nu`
     ( vec_push [i] flat_s * T2 heads )
     ( vec_push [i] flat_s hd )
     : GVar flat ( g_reshape tp x flat_s )
-    ( vec_free [i] flat_s )
     : GVar normed ( nn_rmsnorm tp flat W ones hd eps )
     : ( Vec i ) back_s ( vec_new [i] )
     ( vec_push [i] back_s T2 )
     ( vec_push [i] back_s * heads hd )
     : GVar o ( g_reshape tp normed back_s )
-    ( vec_free [i] back_s )
     ^ o
 }
 
 // LoRA pair registration: A [in,r] seeded small, B [r,out] zero.
-@ __ft_lora_pair GTape tp Rng rg i in i r i out * u pids i slot → v {
+@ __ft_lora_pair GTape tp Rng rg i in i r i out ( Vec i ) pids i slot → v {
     : ( Vec f ) av ( vec_with_cap [f] * in r )
     : f lim / 1.0 ( float_sqrt # f in )
     : ~ i k 0
@@ -666,7 +593,6 @@ $ `tokenizer.nu`
     ( vec_push [i] as2 in ) ( vec_push [i] as2 r )
     : Tensor at ( tensor_from_data TE_F64 as2 av )
     : GVar pa ( grad_param tp at )
-    ( tensor_free at ) ( vec_free [f] av )
     : ( Vec f ) bv ( vec_with_cap [f] * r out )
     = k 0
     ~ < k * r out { ( vec_push [f] bv 0.0 ) = k + k 1 }
@@ -674,16 +600,15 @@ $ `tokenizer.nu`
     ( vec_push [i] bs r ) ( vec_push [i] bs out )
     : Tensor bt ( tensor_from_data TE_F64 bs bv )
     : GVar pb ( grad_param tp bt )
-    ( tensor_free bt ) ( vec_free [f] bv )
-    ( nurl_poke pids * slot 2 . pa id )
-    ( nurl_poke pids + * slot 2 1 . pb id )
+    : b _a ( vec_set [i] pids * slot 2 . pa id )
+    : b _b ( vec_set [i] pids + * slot 2 1 . pb id )
 }
 
 // LoRA linear over the pids-registered adapter for `slot` (the plumbing;
 // the math is nn_lora_linear).
-@ __ft_lora_lin GTape tp GVar x GVar w0 * u pids i slot f scale → GVar {
-    : GVar pa @ GVar { ( nurl_peek pids * slot 2 ) }
-    : GVar pb @ GVar { ( nurl_peek pids + * slot 2 1 ) }
+@ __ft_lora_lin GTape tp GVar x GVar w0 ( Vec i ) pids i slot f scale → GVar {
+    : GVar pa @ GVar { ( _ti pids * slot 2 ) }
+    : GVar pb @ GVar { ( _ti pids + * slot 2 1 ) }
     ^ ( nn_lora_linear tp x w0 pa pb scale )
 }
 
@@ -698,8 +623,11 @@ $ `tokenizer.nu`
 
 // Build the full forward + next-token CE loss on `tp`. `ids` is one
 // sequence (T tokens; loss over positions 0..T-2 predicting 1..T-1).
-// `pids` must hold 2·7·n_layer i64 slots; LoRA params register FIRST.
-@ ft_graph * FtModel m GTape tp ( Vec i ) ids i r f alpha i seed * u pids → FtG {
+// `pids` receives the 2·7·n_layer LoRA parameter ids (A, B per slot);
+// LoRA params register FIRST.
+@ ft_graph FtModel m__h GTape tp ( Vec i ) ids i r f alpha i seed ( Vec i ) pids → FtG {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
+    : b _sized ( vec_resize_zeroed [i] pids * 14 . m n_layer )
     : i T2 ( vec_len [i] ids )
     : i H . m n_embd
     : i hd . m head_dim
@@ -724,12 +652,10 @@ $ `tokenizer.nu`
         ( __ft_lora_pair tp rg . m n_ff r H pids + s7 6 )
         = L + L 1
     }
-    ( rng_free rg )
     // shared consts
-    : ( Vec f ) xrows ( ft_embed m ids )
+    : ( Vec f ) xrows ( ft_embed m__h ids )
     : ~ GVar x ( __ft_const tp xrows T2 H )
     : GVar xin @ GVar { . x id }
-    ( vec_free [f] xrows )
     : GVar onesH ( __ft_ones tp H )
     : GVar onesHD ( __ft_ones tp hd )
     : GVar onesF ( __ft_ones tp . m n_ff )
@@ -751,7 +677,6 @@ $ `tokenizer.nu`
     }
     : GVar Cos ( __ft_const tp cv T2 half )
     : GVar Sin ( __ft_const tp sv T2 half )
-    ( vec_free [f] cv ) ( vec_free [f] sv )
     : ( Vec f ) mv ( vec_with_cap [f] * T2 T2 )
     = t 0
     ~ < t T2 {
@@ -760,7 +685,6 @@ $ `tokenizer.nu`
         = t + t 1
     }
     : GVar Mask ( __ft_const tp mv T2 T2 )
-    ( vec_free [f] mv )
     : f iscale / 1.0 ( float_sqrt # f hd )
 
     = L 0
@@ -780,20 +704,16 @@ $ `tokenizer.nu`
         : GVar Wg ( __ft_rec m ( __ft_const tp . gw data . gw rows . gw cols ) L 6 )
         : GVar Wu ( __ft_rec m ( __ft_const tp . uw data . uw rows . uw cols ) L 7 )
         : GVar Wd ( __ft_rec m ( __ft_const tp . dw data . dw rows . dw cols ) L 8 )
-        : s anp ?? ( vec_get [s] . m an L ) { T x → x F → # s 0 }
-        : *FtV anv # *FtV anp
+        : FtV anv ?? ( vec_get [FtV] . m an L ) { T x → x F → ( __ft_nov ) }
         : GVar N1 ( __ft_rec m ( __ft_const tp . anv v 0 H ) L 0 )
-        : s fnp ?? ( vec_get [s] . m fn L ) { T x → x F → # s 0 }
-        : *FtV fnv # *FtV fnp
+        : FtV fnv ?? ( vec_get [FtV] . m fn L ) { T x → x F → ( __ft_nov ) }
         : GVar N2 ( __ft_rec m ( __ft_const tp . fnv v 0 H ) L 1 )
         // qwen3's per-head Q/K norms, declared here so every base const of
         // this layer is created in one place (the streamer pairs by key).
-        : s qnp ?? ( vec_get [s] . m qn L ) { T x → x F → # s 0 }
-        : s knp ?? ( vec_get [s] . m kn L ) { T x → x F → # s 0 }
-        : b haveqn != # i qnp 0
-        : b havekn != # i knp 0
-        : *FtV qnv # *FtV ? haveqn { qnp } { # s 0 }
-        : *FtV knv # *FtV ? havekn { knp } { # s 0 }
+        : FtV qnv ?? ( vec_get [FtV] . m qn L ) { T x → x F → ( __ft_nov ) }
+        : FtV knv ?? ( vec_get [FtV] . m kn L ) { T x → x F → ( __ft_nov ) }
+        : b haveqn . qnv has
+        : b havekn . knv has
         : ~ GVar QN @ GVar { -1 }
         : ~ GVar KN @ GVar { -1 }
         ? haveqn { = QN ( __ft_rec m ( __ft_const tp . qnv v 0 hd ) L 9 ) } {}
@@ -803,19 +723,16 @@ $ `tokenizer.nu`
         : ~ GVar q ( __ft_lora_lin tp xn Wq pids + s7 0 scale )
         : ~ GVar kk ( __ft_lora_lin tp xn Wk pids + s7 1 scale )
         : ~ GVar vv ( __ft_lora_lin tp xn Wv pids + s7 2 scale )
-        : s bqp ?? ( vec_get [s] . m bq L ) { T x → x F → # s 0 }
-        ? != # i bqp 0 {
-            : *FtV bqv # *FtV bqp
+        : FtV bqv ?? ( vec_get [FtV] . m bq L ) { T x → x F → ( __ft_nov ) }
+        ? . bqv has {
             = q ( g_add tp q ( __ft_rec m ( __ft_const tp . bqv v 0 * NH hd ) L 11 ) )
         } {}
-        : s bkp ?? ( vec_get [s] . m bk L ) { T x → x F → # s 0 }
-        ? != # i bkp 0 {
-            : *FtV bkv # *FtV bkp
+        : FtV bkv ?? ( vec_get [FtV] . m bk L ) { T x → x F → ( __ft_nov ) }
+        ? . bkv has {
             = kk ( g_add tp kk ( __ft_rec m ( __ft_const tp . bkv v 0 * NKV hd ) L 12 ) )
         } {}
-        : s bvp ?? ( vec_get [s] . m bv L ) { T x → x F → # s 0 }
-        ? != # i bvp 0 {
-            : *FtV bvv # *FtV bvp
+        : FtV bvv ?? ( vec_get [FtV] . m bv L ) { T x → x F → ( __ft_nov ) }
+        ? . bvv has {
             = vv ( g_add tp vv ( __ft_rec m ( __ft_const tp . bvv v 0 * NKV hd ) L 13 ) )
         } {}
         // qwen3 norms every head's Q and K before the rotation; absent
@@ -853,14 +770,14 @@ $ `tokenizer.nu`
     }
     : GVar Oh ( __ft_const tp oh T2 . m n_vocab )
     : GVar ohin @ GVar { . Oh id }
-    ( vec_free [f] oh )
     // next-token CE over rows 0..T-2 (the last position has no target)
     : GVar loss ( nn_cross_entropy_rows tp logits Oh onesV - T2 1 )
     ^ @ FtG { loss logits xin ohin * 7 . m n_layer }
 }
 
 // The one-hot rows for a window's ids (row t = ids[t+1]; last row zero).
-@ ft_onehot * FtModel m ( Vec i ) ids → ( Vec f ) {
+@ ft_onehot FtModel m__h ( Vec i ) ids → ( Vec f ) {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     : i T2 ( vec_len [i] ids )
     : ( Vec f ) oh ( vec_with_cap [f] * T2 . m n_vocab )
     : ~ i t 0
@@ -885,19 +802,14 @@ $ `tokenizer.nu`
     ( Vec f ) bflat
 }
 
-@ ft_train_free sink FtTrain t → v {
-    ( vec_free [f] . t aflat )
-    ( vec_free [f] . t bflat )
-}
-
-@ __ft_ain * FtModel m i slot → i {
+@ __ft_ain * FtModelImpl m i slot → i {
     : i w % slot 7
     ? == w 3 { ^ * . m n_head . m head_dim } {}
     ? == w 6 { ^ . m n_ff } {}
     ^ . m n_embd
 }
 
-@ __ft_aout * FtModel m i slot → i {
+@ __ft_aout * FtModelImpl m i slot → i {
     : i w % slot 7
     ? == w 0 { ^ * . m n_head . m head_dim } {}
     ? | == w 1 == w 2 { ^ * . m n_kv . m head_dim } {}
@@ -917,57 +829,42 @@ $ `tokenizer.nu`
 // and an eager run upload identical bytes — what changes is only that one
 // tensor is resident at a time instead of the whole model.
 
-@ __ft_up_vec * FtModel m Gguf gg GProg pg i node i L s suf → b {
-    : s p ( __ft_lvec gg L suf )
-    ? != # i p 0 {} { ^ F }
-    : *FtV pv # *FtV p
+@ __ft_up_vec * FtModelImpl m Gguf gg GProg pg i node i L s suf → b {
+    : FtV pv ( __ft_lvec gg L suf )
+    ? . pv has {} { ^ F }
     ? == . m rope_style 0 {
         ? ( nurl_str_eq suf `attn_q.bias` ) { ( __ft_unperm_vec pv . m n_head . m head_dim ) } {}
         ? ( nurl_str_eq suf `attn_k.bias` ) { ( __ft_unperm_vec pv . m n_kv . m head_dim ) } {}
     } {}
-    : b r ( gput_set_input pg @ GVar { node } . pv v )
-    ( vec_free [f] . pv v )
-    ( nurl_free p )
-    ^ r
+    ^ ( gput_set_input pg @ GVar { node } . pv v )
 }
 
-@ __ft_up_layer * FtModel m Gguf gg GProg pg i node i L i slot → b {
+@ __ft_up_layer * FtModelImpl m Gguf gg GProg pg i node i L i slot → b {
     : s suf ( __ft_base_name slot )
     ? | | | | | | == slot 0 == slot 1 == slot 9 == slot 10 == slot 11 == slot 12 == slot 13 {
         ^ ( __ft_up_vec m gg pg node L suf )
     } {}
-    : *u okb ( nurl_alloc 8 )
-    ( nurl_poke okb 0 1 )
-    : FtW w ( __ft_lw gg L suf okb )
-    : i lok ( nurl_peek okb 0 )
-    ( nurl_free okb )
-    ? == lok 1 {} { ( __ft_wfree w ) ^ F }
+    : ~ b lok T
+    : FtW w ( __ft_lw gg L suf lok )
+    ? lok {} { ^ F }
     ? == . m rope_style 0 {
         ? == slot 2 { ( __ft_unperm w . m n_head . m head_dim ) } {}
         ? == slot 3 { ( __ft_unperm w . m n_kv . m head_dim ) } {}
     } {}
-    : b r ( gput_set_input pg @ GVar { node } . w data )
-    ( __ft_wfree w )
-    ^ r
+    ^ ( gput_set_input pg @ GVar { node } . w data )
 }
 
-@ __ft_up_wout * FtModel m Gguf gg GProg pg i node → b {
+@ __ft_up_wout * FtModelImpl m Gguf gg GProg pg i node → b {
     : i oi ( gguf_find_tensor gg `output.weight` )
     ? >= oi 0 {
-        : *u rb ( nurl_alloc 8 )
-        : *u cb ( nurl_alloc 8 )
-        : ( Vec f ) raw ( __ft_raw gg `output.weight` rb cb )
-        : FtW w ( __ft_transpose raw ( nurl_peek rb 0 ) ( nurl_peek cb 0 ) )
-        ( vec_free [f] raw )
-        ( nurl_free rb ) ( nurl_free cb )
-        : b r ( gput_set_input pg @ GVar { node } . w data )
-        ( __ft_wfree w )
-        ^ r
+        : ~ i rows 0
+        : ~ i cols 0
+        : ( Vec f ) raw ( __ft_raw gg `output.weight` rows cols )
+        : FtW w ( __ft_transpose raw rows cols )
+        ^ ( gput_set_input pg @ GVar { node } . w data )
     } {}
     : FtW w2 ( __ft_transpose . m embd . m n_vocab . m n_embd )
-    : b r2 ( gput_set_input pg @ GVar { node } . w2 data )
-    ( __ft_wfree w2 )
-    ^ r2
+    ^ ( gput_set_input pg @ GVar { node } . w2 data )
 }
 
 // ── one layer in, one layer out (the streamed merge) ──────────────────
@@ -977,51 +874,34 @@ $ `tokenizer.nu`
 // makes. These swap a layer's shape-only placeholders for the real tensors
 // and back.
 
-@ __ft_slot_set ( Vec FtW ) v i L FtW w → v {
-    ?? ( vec_get [FtW] v L ) { T old → { ( __ft_wfree old ) } F → {} }
-    ( vec_set [FtW] v L w )
-}
+// (vec_set drops the slot's old value)
+@ __ft_slot_set ( Vec FtW ) v i L sink FtW w → v { : b _s ( vec_set [FtW] v L w ) }
 
-@ __ft_vslot_set ( Vec s ) v i L s p → v {
-    ?? ( vec_get [s] v L ) {
-        T old → {
-            ? != # i old 0 {
-                : *FtV ov # *FtV old
-                ( vec_free [f] . ov v )
-                ( nurl_free old )
-            } {}
-        }
-        F → {}
-    }
-    ( vec_set [s] v L p )
-}
+@ __ft_vslot_set ( Vec FtV ) v i L sink FtV p → v { : b _s ( vec_set [FtV] v L p ) }
 
-@ __ft_layer_in Gguf gg * FtModel m i L → b {
-    : *u okb ( nurl_alloc 8 )
-    ( nurl_poke okb 0 1 )
-    : FtW q ( __ft_lw gg L `attn_q.weight` okb )
-    : FtW k2 ( __ft_lw gg L `attn_k.weight` okb )
+@ __ft_layer_in Gguf gg * FtModelImpl m i L → b {
+    : ~ b ok T
+    : FtW q ( __ft_lw gg L `attn_q.weight` ok )
+    : FtW k2 ( __ft_lw gg L `attn_k.weight` ok )
     ? == . m rope_style 0 {
         ( __ft_unperm q . m n_head . m head_dim )
         ( __ft_unperm k2 . m n_kv . m head_dim )
     } {}
     ( __ft_slot_set . m wq L q )
     ( __ft_slot_set . m wk L k2 )
-    ( __ft_slot_set . m wv L ( __ft_lw gg L `attn_v.weight` okb ) )
-    ( __ft_slot_set . m wo L ( __ft_lw gg L `attn_output.weight` okb ) )
-    ( __ft_slot_set . m wg L ( __ft_lw gg L `ffn_gate.weight` okb ) )
-    ( __ft_slot_set . m wu L ( __ft_lw gg L `ffn_up.weight` okb ) )
-    ( __ft_slot_set . m wd L ( __ft_lw gg L `ffn_down.weight` okb ) )
+    ( __ft_slot_set . m wv L ( __ft_lw gg L `attn_v.weight` ok ) )
+    ( __ft_slot_set . m wo L ( __ft_lw gg L `attn_output.weight` ok ) )
+    ( __ft_slot_set . m wg L ( __ft_lw gg L `ffn_gate.weight` ok ) )
+    ( __ft_slot_set . m wu L ( __ft_lw gg L `ffn_up.weight` ok ) )
+    ( __ft_slot_set . m wd L ( __ft_lw gg L `ffn_down.weight` ok ) )
     ( __ft_vslot_set . m an L ( __ft_lvec gg L `attn_norm.weight` ) )
     ( __ft_vslot_set . m fn L ( __ft_lvec gg L `ffn_norm.weight` ) )
     ( __ft_vslot_set . m qn L ( __ft_lvec gg L `attn_q_norm.weight` ) )
     ( __ft_vslot_set . m kn L ( __ft_lvec gg L `attn_k_norm.weight` ) )
-    : i r ( nurl_peek okb 0 )
-    ( nurl_free okb )
-    ^ == r 1
+    ^ ok
 }
 
-@ __ft_layer_out * FtModel m i L → v {
+@ __ft_layer_out * FtModelImpl m i L → v {
     ( __ft_slot_set . m wq L @ FtW { 0 0 ( vec_new [f] ) } )
     ( __ft_slot_set . m wk L @ FtW { 0 0 ( vec_new [f] ) } )
     ( __ft_slot_set . m wv L @ FtW { 0 0 ( vec_new [f] ) } )
@@ -1029,15 +909,16 @@ $ `tokenizer.nu`
     ( __ft_slot_set . m wg L @ FtW { 0 0 ( vec_new [f] ) } )
     ( __ft_slot_set . m wu L @ FtW { 0 0 ( vec_new [f] ) } )
     ( __ft_slot_set . m wd L @ FtW { 0 0 ( vec_new [f] ) } )
-    ( __ft_vslot_set . m an L # s 0 )
-    ( __ft_vslot_set . m fn L # s 0 )
-    ( __ft_vslot_set . m qn L # s 0 )
-    ( __ft_vslot_set . m kn L # s 0 )
+    ( __ft_vslot_set . m an L ( __ft_nov ) )
+    ( __ft_vslot_set . m fn L ( __ft_nov ) )
+    ( __ft_vslot_set . m qn L ( __ft_nov ) )
+    ( __ft_vslot_set . m kn L ( __ft_nov ) )
 }
 
 // Fill every lazy base const's device buffer. Call once, right after the
 // capture; T when every tensor landed.
-@ ft_stream_upload * FtModel m GProg pg → b {
+@ ft_stream_upload FtModel m__h GProg pg → b {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     ? . m stream {} { ^ T }
     : i n ( vec_len [i] . m lz_node )
     ? > n 0 {} { ^ F }
@@ -1054,9 +935,8 @@ $ `tokenizer.nu`
                 { = ok ( __ft_up_layer m gg pg node L slot ) }
                 = k + k 1
             }
-            ( gguf_close gg )
         }
-        F e → { ( string_free e ) = ok F }
+        F e → { = ok F }
     }
     ^ ok
 }
@@ -1119,7 +999,7 @@ $ `tokenizer.nu`
 }
 
 // The element count of pids entry `pi` (A blocks are even, B odd).
-@ __ft_ckpt_n * FtModel m i r i pi → i {
+@ __ft_ckpt_n * FtModelImpl m i r i pi → i {
     : i sl / pi 2
     ? == % pi 2 0 { ^ * ( __ft_ain m sl ) r } {}
     ^ * r ( __ft_aout m sl )
@@ -1134,11 +1014,10 @@ $ `tokenizer.nu`
         : ( Vec i ) sh ( vec_new [i] )
         ( vec_push [i] sh n )
         ( stw_add_f64 so name sh val )
-        ( vec_free [i] sh )
     } { ( __ft_st_add so name val n 0 ) }
 }
 
-@ __ft_ckpt_save s path * FtModel m i r GProg pg GpOpt go * u pids i nslot i step i dtype i wstr → b {
+@ __ft_ckpt_save s path * FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i step i dtype i wstr → b {
     : StWriter so ( stw_new )
     : ( Vec i ) meta ( vec_new [i] )
     ( vec_push [i] meta 1 )
@@ -1150,7 +1029,6 @@ $ `tokenizer.nu`
     : ( Vec i ) msh ( vec_new [i] )
     ( vec_push [i] msh 6 )
     ( stw_add_i64 so `ckpt.meta` msh meta )
-    ( vec_free [i] msh ) ( vec_free [i] meta )
     : ~ b ok T
     : ~ i pi 0
     ~ & < pi * 2 nslot ok {
@@ -1158,25 +1036,21 @@ $ `tokenizer.nu`
         : ( Vec f ) val ( vec_with_cap [f] n )
         : ~ i k 0
         ~ < k n { ( vec_push [f] val 0.0 ) = k + k 1 }
-        = ok & ok ( gput_value pg @ GVar { ( nurl_peek pids pi ) } val )
+        = ok & ok ( gput_value pg @ GVar { ( _ti pids pi ) } val )
         ? ok {
             : String nm ( __ft_ckpt_name `p` pi )
             ( __ft_ckpt_add so ( string_data nm ) val n dtype )
-            ( string_free nm )
         } {}
         = ok & ok ( gpopt_m_download go pg pi val )
         ? ok {
             : String nm ( __ft_ckpt_name `m` pi )
             ( __ft_ckpt_add so ( string_data nm ) val n dtype )
-            ( string_free nm )
         } {}
         = ok & ok ( gpopt_v_download go pg pi val )
         ? ok {
             : String nm ( __ft_ckpt_name `v` pi )
             ( __ft_ckpt_add so ( string_data nm ) val n dtype )
-            ( string_free nm )
         } {}
-        ( vec_free [f] val )
         = pi + pi 1
     }
     ? ok {
@@ -1189,11 +1063,9 @@ $ `tokenizer.nu`
                     F _ → { = ok F }
                 }
             }
-            F e → { ( string_free e ) = ok F }
+            F e → { = ok F }
         }
-        ( string_free tmp )
     } {}
-    ( stw_free so )
     ^ ok
 }
 
@@ -1234,7 +1106,6 @@ $ `tokenizer.nu`
 @ __ft_ckpt_read St st s kind i pi i want → !( Vec f ) String {
     : String nm ( __ft_ckpt_name kind pi )
     : i ti ( st_find_tensor st ( string_data nm ) )
-    ( string_free nm )
     ? >= ti 0 {} {
         ^ @ !( Vec f ) String { F ( string_from `finetune: checkpoint tensor missing` ) }
     }
@@ -1247,15 +1118,12 @@ $ `tokenizer.nu`
     ? == . tt dtype ST_F64 {
         : ( Vec f ) o ( __ft_ckpt_vals64 st tt )
         ? == ( vec_len [f] o ) want { ^ @ !( Vec f ) String { T o } } {}
-        ( vec_free [f] o )
         ^ @ !( Vec f ) String { F ( string_from `finetune: checkpoint tensor size mismatch` ) }
     } {}
     ?? ( st_dequant st ti ) {
         T by → {
             : ( Vec f ) o ( __ft_ckpt_vals by )
-            ( vec_free [u] by )
             ? == ( vec_len [f] o ) want { ^ @ !( Vec f ) String { T o } } {}
-            ( vec_free [f] o )
             ^ @ !( Vec f ) String { F ( string_from `finetune: checkpoint tensor size mismatch` ) }
         }
         F e → { ^ @ !( Vec f ) String { F e } }
@@ -1267,8 +1135,8 @@ $ `tokenizer.nu`
 // caller starts fresh); a shape/meta MISMATCH also reports F after
 // printing why — resuming a different run over it would be silent ruin,
 // so the caller must treat mismatch as fatal (mismb is poked 1).
-@ __ft_ckpt_load s path * FtModel m i r GProg pg GpOpt go * u pids i nslot i wstr * u stepb * u mismb → b {
-    ( nurl_poke mismb 0 0 )
+@ __ft_ckpt_load s path * FtModelImpl m i r GProg pg GpOpt go ( Vec i ) pids i nslot i wstr inout i stepout inout b mismatch → b {
+    = mismatch F
     ?? ( st_open path ) {
         T st → {
             : ~ b ok T
@@ -1280,7 +1148,6 @@ $ `tokenizer.nu`
                 ?? ( st_dequant st mi ) {
                     T by → {
                         : ( Vec f ) mv ( __ft_ckpt_vals by )
-                        ( vec_free [u] by )
                         // 5 entries = a pre-stride checkpoint (its schedule
                         // was the sequential stride 1)
                         : i mn ( vec_len [f] mv )
@@ -1293,18 +1160,17 @@ $ `tokenizer.nu`
                             : i cws ? == mn 6 # i ( _tf mv 5 ) 1
                             ? & & == ver 1 == cslot nslot == cr r {} {
                                 ( nurl_eprintln `nurllama: checkpoint does not match this run (model/rank differ)` )
-                                ( nurl_poke mismb 0 1 )
+                                = mismatch T
                                 = ok F
                             }
                             ? == cws wstr {} {
                                 ( nurl_eprintln `nurllama: checkpoint was trained with a different --window-stride — resuming would silently change which data the run sees` )
-                                ( nurl_poke mismb 0 1 )
+                                = mismatch T
                                 = ok F
                             }
                         } { = ok F }
-                        ( vec_free [f] mv )
                     }
-                    F e → { ( string_free e ) = ok F }
+                    F e → { = ok F }
                 }
             } {}
             : ~ i pi 0
@@ -1312,49 +1178,46 @@ $ `tokenizer.nu`
                 : i n ( __ft_ckpt_n m r pi )
                 ?? ( __ft_ckpt_read st `p` pi n ) {
                     T val → {
-                        = ok ( gput_set_input pg @ GVar { ( nurl_peek pids pi ) } val )
-                        ( vec_free [f] val )
+                        = ok ( gput_set_input pg @ GVar { ( _ti pids pi ) } val )
                     }
-                    F e → { ( string_free e ) = ok F }
+                    F e → { = ok F }
                 }
                 ? ok {
                     ?? ( __ft_ckpt_read st `m` pi n ) {
                         T val → {
                             = ok ( gpopt_m_upload go pg pi val )
-                            ( vec_free [f] val )
                         }
-                        F e → { ( string_free e ) = ok F }
+                        F e → { = ok F }
                     }
                 } {}
                 ? ok {
                     ?? ( __ft_ckpt_read st `v` pi n ) {
                         T val → {
                             = ok ( gpopt_v_upload go pg pi val )
-                            ( vec_free [f] val )
                         }
-                        F e → { ( string_free e ) = ok F }
+                        F e → { = ok F }
                     }
                 } {}
                 = pi + pi 1
             }
-            ( st_close st )
             ? ok {
-                ( nurl_poke stepb 0 step )
+                = stepout step
                 ( gpopt_set_t go t )
             } {}
             ^ ok
         }
-        F e → { ( string_free e ) ^ F }
+        F e → { ^ F }
     }
 }
 
-@ ft_train * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose → FtTrain {
-    ^ ( ft_train_ck m corpus win r alpha seed steps lr dtype verbose `` 0 F 1 )
+@ ft_train FtModel m__h ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose → FtTrain {
+    ^ ( ft_train_ck m__h corpus win r alpha seed steps lr dtype verbose `` 0 F 1 )
 }
 
 // wstride: 1 = sequential legacy order · 0 = auto (golden-ratio coprime,
 // ft_auto_stride) · else used as given, mod nwin.
-@ ft_train_ck * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume i wstride → FtTrain {
+@ ft_train_ck FtModel m__h ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume i wstride → FtTrain {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     : i total ( vec_len [i] corpus )
     : ~ i T2 win
     ? > T2 total { = T2 total } {}
@@ -1375,16 +1238,15 @@ $ `tokenizer.nu`
     : ~ i k0 0
     ~ < k0 T2 { ( vec_push [i] ids ( _ti corpus k0 ) ) = k0 + k0 1 }
     : i nslot * 7 . m n_layer
-    : *u pids ( nurl_alloc * * 2 nslot 8 )
+    : ( Vec i ) pids ( vec_new [i] )
     // ft_graph needs the base matrices; a prior ft_train may have dropped
     // them (they only live host-side to build the graph). Stream them back.
-    ? == ( vec_len [FtW] . m wq ) 0 { : b _r ( ft_reload_base m ) } {}
+    ? == ( vec_len [FtW] . m wq ) 0 { : b _r ( ft_reload_base m__h ) } {}
     : GTape tp ( tape_new )
-    : FtG fg ( ft_graph m tp ids r alpha seed pids )
+    : FtG fg ( ft_graph m__h tp ids r alpha seed pids )
     : ( Vec f ) aflat ( vec_new [f] )
     : ( Vec f ) bflat ( vec_new [f] )
     ? ( tape_ok tp ) {} {
-        ( nurl_free pids ) ( tape_free tp )
         ^ @ FtTrain { F 0.0 0.0 aflat bflat }
     }
     : GpuKit kit ( gk_open 0 )
@@ -1396,36 +1258,35 @@ $ `tokenizer.nu`
         = ok ( gput_ok pg )
         // streamed base: the capture allocated the buffers from the shapes,
         // now fill them one tensor at a time
-        ? ok { = ok ( ft_stream_upload m pg ) } {}
+        ? ok { = ok ( ft_stream_upload m__h pg ) } {}
         // The base weights are now on the device; their f64 host copies are
         // dead weight during training. Free BOTH the tape's const nodes and
         // the model's per-layer base matrices — host RAM drops to the
         // adapters + activations. The base streams back from the GGUF for the
         // merge (ft_reload_base). Training reads device buffers only.
-        ? ok { ( tape_drop_consts tp ) ( ft_drop_base m ) } {}
+        ? ok { ( tape_drop_consts tp ) ( ft_drop_base m__h ) } {}
         : GpOpt go ( gpopt_adam_new lr )
         : ~ i pi 0
         ~ < pi * 2 nslot {
-            ( gpopt_add go pg @ GVar { ( nurl_peek pids pi ) } 0.0 )
+            ( gpopt_add go pg @ GVar { ( _ti pids pi ) } 0.0 )
             = pi + pi 1
         }
         : ~ i st 0
         ? & & ok resume > ( nurl_str_len ckptp ) 0 {
-            : *u stb ( nurl_alloc 8 )
-            : *u mismb ( nurl_alloc 8 )
-            ? ( __ft_ckpt_load ckptp m r pg go pids nslot wstr stb mismb ) {
-                = st ( nurl_peek stb 0 )
+            : ~ i stl 0
+            : ~ b mism F
+            ? ( __ft_ckpt_load ckptp m r pg go pids nslot wstr stl mism ) {
+                = st stl
                 ( nurl_print `resumed from checkpoint: step ` )
                 ( nurl_print ( nurl_str_int st ) )
                 ( nurl_print `/` )
                 ( nurl_print ( nurl_str_int steps ) )
                 ( nurl_print `\n` )
             } {
-                ? == ( nurl_peek mismb 0 ) 1 { = ok F } {
+                ? mism { = ok F } {
                     ( nurl_print `no usable checkpoint — starting from step 0\n` )
                 }
             }
-            ( nurl_free stb ) ( nurl_free mismb )
         } {}
         : ~ i cur 0
         : ~ b first T
@@ -1436,13 +1297,10 @@ $ `tokenizer.nu`
                 : ( Vec i ) wids ( vec_with_cap [i] T2 )
                 : ~ i q 0
                 ~ < q T2 { ( vec_push [i] wids ( _ti corpus + * w T2 q ) ) = q + q 1 }
-                : ( Vec f ) xr ( ft_embed m wids )
+                : ( Vec f ) xr ( ft_embed m__h wids )
                 = ok & ok ( gput_set_input pg . fg xin xr )
-                ( vec_free [f] xr )
-                : ( Vec f ) ohr ( ft_onehot m wids )
+                : ( Vec f ) ohr ( ft_onehot m__h wids )
                 = ok & ok ( gput_set_input pg . fg ohin ohr )
-                ( vec_free [f] ohr )
-                ( vec_free [i] wids )
                 = cur w
             } {}
             = ok & ok ( gput_forward pg )
@@ -1477,15 +1335,12 @@ $ `tokenizer.nu`
             }
         } {}
         = ok & ok ( gput_param_sync_host pg tp )
-        ( gpopt_free go )
-        ( gput_free pg )
     } {}
-    ( gk_close kit )
     // download the trained values from the tape
     : ~ i sl 0
     ~ < sl nslot {
-        : GVar pa @ GVar { ( nurl_peek pids * sl 2 ) }
-        : GVar pb @ GVar { ( nurl_peek pids + * sl 2 1 ) }
+        : GVar pa @ GVar { ( _ti pids * sl 2 ) }
+        : GVar pb @ GVar { ( _ti pids + * sl 2 1 ) }
         : Tensor ta ( gvar_value tp pa )
         : Tensor tb ( gvar_value tp pb )
         : ~ i k 0
@@ -1494,9 +1349,6 @@ $ `tokenizer.nu`
         ~ < k ( vec_len [f] . tb data ) { ( vec_push [f] bflat ( _tf . tb data k ) ) = k + k 1 }
         = sl + sl 1
     }
-    ( nurl_free pids )
-    ( tape_free tp )
-    ( vec_free [i] ids )
     ^ @ FtTrain { ok l0 l1 aflat bflat }
 }
 
@@ -1508,12 +1360,12 @@ $ `tokenizer.nu`
     ( vec_push [i] sh d0 )
     ? > d1 0 { ( vec_push [i] sh d1 ) } {}
     ( stw_add_f32 w name sh v )
-    ( vec_free [i] sh )
 }
 
 // Save trained adapters as a safetensors file: per slot,
 // blk.<L>.<which>.lora_a [in,r] and .lora_b [r,out], F32.
-@ ft_adapters_save s path * FtModel m FtTrain t i r → !v String {
+@ ft_adapters_save s path FtModel m__h FtTrain t i r → !v String {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     : StWriter so ( stw_new )
     : i nslot * 7 . m n_layer
     : ~ i sl 0
@@ -1542,26 +1394,22 @@ $ `tokenizer.nu`
         : ~ i k 0
         ~ < k * in r { ( vec_push [f] av ( _tf . t aflat + aoff k ) ) = k + k 1 }
         ( __ft_st_add so ( string_data na ) av in r )
-        ( vec_free [f] av )
         : ( Vec f ) bv ( vec_with_cap [f] * r out )
         = k 0
         ~ < k * r out { ( vec_push [f] bv ( _tf . t bflat + boff k ) ) = k + k 1 }
         ( __ft_st_add so ( string_data nb ) bv r out )
-        ( vec_free [f] bv )
-        ( string_free na ) ( string_free nb )
         = aoff + aoff * in r
         = boff + boff * r out
         ? & . m stream == w 6 { ( __ft_layer_out m L ) } {}
         = sl + sl 1
     }
     ? . m stream {
-        ? ( gguf_is_open . m mgg ) {
-            ( gguf_close . m mgg )
-            = . m mgg ( gguf_none )
-        } {}
+        // the merge's GGUF leaves the model (closed here)
+        : Gguf mgg . m mgg
+        ( mem_take mgg )
+        = . m mgg ( gguf_none )
     } {}
     : !v String res ( stw_write so path )
-    ( stw_free so )
     ^ res
 }
 
@@ -1589,8 +1437,9 @@ $ `tokenizer.nu`
 // input when the training happened in ANOTHER process: `finetune
 // --merge-only` after a crash between the adapter save and the merge, or
 // merging an adapter file someone shipped. The rank is read from the
-// file's own blk.0.q.lora_a [in, r] shape and poked into rankb.
-@ ft_adapters_load s path * FtModel m * u rankb → !FtTrain String {
+// file's own blk.0.q.lora_a [in, r] shape and stored into `rank`.
+@ ft_adapters_load s path FtModel m__h inout i rank → !FtTrain String {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     ?? ( st_open path ) {
         T st → {
             : ~ i r 0
@@ -1599,7 +1448,6 @@ $ `tokenizer.nu`
                 ?? ( vec_get [StTensor] ( st_tensors st ) ti0 ) { T t → { = r . t d1 } F → {} }
             } {}
             ? & > r 0 <= r 4096 {} {
-                ( st_close st )
                 ^ @ !FtTrain String { F ( string_from `finetune: not an adapters file (blk.0.q.lora_a missing or malformed)` ) }
             }
             : i nslot * 7 . m n_layer
@@ -1612,47 +1460,39 @@ $ `tokenizer.nu`
                 : i out ( __ft_aout m sl )
                 : String na ( __ft_adapter_name sl `.lora_a` )
                 : i ta ( st_find_tensor st ( string_data na ) )
-                ( string_free na )
                 : String nb ( __ft_adapter_name sl `.lora_b` )
                 : i tb ( st_find_tensor st ( string_data nb ) )
-                ( string_free nb )
                 ? & >= ta 0 >= tb 0 {} { = ok F }
                 ? ok {
                     ?? ( st_dequant st ta ) {
                         T by → {
                             : ( Vec f ) av ( __ft_ckpt_vals by )
-                            ( vec_free [u] by )
                             ? == ( vec_len [f] av ) * in r {
                                 : ~ i k 0
                                 ~ < k * in r { ( vec_push [f] aflat ( _tf av k ) ) = k + k 1 }
                             } { = ok F }
-                            ( vec_free [f] av )
                         }
-                        F e → { ( string_free e ) = ok F }
+                        F e → { = ok F }
                     }
                 } {}
                 ? ok {
                     ?? ( st_dequant st tb ) {
                         T by → {
                             : ( Vec f ) bv ( __ft_ckpt_vals by )
-                            ( vec_free [u] by )
                             ? == ( vec_len [f] bv ) * r out {
                                 : ~ i k 0
                                 ~ < k * r out { ( vec_push [f] bflat ( _tf bv k ) ) = k + k 1 }
                             } { = ok F }
-                            ( vec_free [f] bv )
                         }
-                        F e → { ( string_free e ) = ok F }
+                        F e → { = ok F }
                     }
                 } {}
                 = sl + sl 1
             }
-            ( st_close st )
             ? ok {} {
-                ( vec_free [f] aflat ) ( vec_free [f] bflat )
                 ^ @ !FtTrain String { F ( string_from `finetune: adapters file does not match this model (missing slot or shape mismatch)` ) }
             }
-            ( nurl_poke rankb 0 r )
+            = rank r
             ^ @ !FtTrain String { T @ FtTrain { T 0.0 0.0 aflat bflat } }
         }
         F e → { ^ @ !FtTrain String { F e } }
@@ -1691,24 +1531,24 @@ $ `tokenizer.nu`
         = o + o 1
     }
     ( __ft_st_add so name e out in )
-    ( vec_free [f] e )
 }
 
 // Merge every adapter into its base weight and write the FULL model as a
 // safetensors file — run it with nurllama's --weights path (llm_open_st).
-@ ft_merge_st s path * FtModel m FtTrain t i r f alpha → !v String {
-    ^ ( ft_merge_st_mask path m t r alpha 15 )
+@ ft_merge_st s path FtModel m__h FtTrain t i r f alpha → !v String {
+    ^ ( ft_merge_st_mask path m__h t r alpha 15 )
 }
 
 // mask bit0 = embeddings, bit1 = attention projections, bit2 = mlp
 // projections (a bisect handle for the merged-path diagnostics).
-@ ft_merge_st_mask s path * FtModel m FtTrain t i r f alpha i mask → !v String {
+@ ft_merge_st_mask s path FtModel m__h FtTrain t i r f alpha i mask → !v String {
+    : *FtModelImpl m ( __FtModel_ptr m__h )
     : f scale / alpha # f r
     // The per-layer base matrices were freed after device capture
     // (ft_drop_base); stream them back for the merge (identical loader path,
     // so the NORM-rope un-permute matches byte-for-byte). No-op if resident.
     ? == ( vec_len [FtW] . m wq ) 0 {
-        ? ( ft_reload_base m ) {} {
+        ? ( ft_reload_base m__h ) {} {
             ^ @ !v String { F ( string_from `finetune: cannot reload base weights for merge` ) }
         }
     } {}
@@ -1725,12 +1565,15 @@ $ `tokenizer.nu`
     // embeddings + final norm (frozen; [V,H] is already [out,in]).
     // The merge CONSUMES m.embd: once its bytes are in the writer the 3 GB
     // f64 host copy has no further reader here, and every caller merges
-    // once and then ft_free's the model — keeping it alive would stack it
-    // on top of the writer's own copy for the rest of the merge.
+    // once and then lets the model go — keeping it alive would stack it on
+    // top of the writer's own copy for the rest of the merge. So the
+    // embedding leaves the model here and is dropped at the end of this
+    // arm, before the first layer is merged.
     ? == % mask 2 1 {
-        ( __ft_st_add so `model.embed_tokens.weight` . m embd . m n_vocab . m n_embd )
-        ( vec_free [f] . m embd )
+        : ( Vec f ) embd . m embd
+        ( mem_take embd )
         = . m embd ( vec_new [f] )
+        ( __ft_st_add so `model.embed_tokens.weight` embd . m n_vocab . m n_embd )
     } {}
     ? == % / mask 8 2 1 {
         ( __ft_st_add so `model.norm.weight` . m norm_f . m n_embd 0 )
@@ -1752,39 +1595,31 @@ $ `tokenizer.nu`
         } {}
         // the per-layer norms, once per layer (at slot 0; norm mask bit3)
         ? & == w 0 == % / mask 8 2 1 {
-            : s anp ?? ( vec_get [s] . m an L ) { T x → x F → # s 0 }
-            : *FtV anv # *FtV anp
+            : FtV anv ?? ( vec_get [FtV] . m an L ) { T x → x F → ( __ft_nov ) }
             : String n1 ( string_from `model.layers.` )
             ( string_push_str n1 ( nurl_str_int L ) )
             ( string_push_str n1 `.input_layernorm.weight` )
             ( __ft_st_add so ( string_data n1 ) . anv v . m n_embd 0 )
-            ( string_free n1 )
-            : s fnp ?? ( vec_get [s] . m fn L ) { T x → x F → # s 0 }
-            : *FtV fnv # *FtV fnp
+            : FtV fnv ?? ( vec_get [FtV] . m fn L ) { T x → x F → ( __ft_nov ) }
             : String n2 ( string_from `model.layers.` )
             ( string_push_str n2 ( nurl_str_int L ) )
             ( string_push_str n2 `.post_attention_layernorm.weight` )
             ( __ft_st_add so ( string_data n2 ) . fnv v . m n_embd 0 )
-            ( string_free n2 )
             // qwen3's per-head Q/K norms are frozen too, but a merged
             // model without them is a DIFFERENT model — emit when present.
-            : s qnp ?? ( vec_get [s] . m qn L ) { T x → x F → # s 0 }
-            ? != # i qnp 0 {
-                : *FtV qnv # *FtV qnp
+            : FtV qnv ?? ( vec_get [FtV] . m qn L ) { T x → x F → ( __ft_nov ) }
+            ? . qnv has {
                 : String n3 ( string_from `model.layers.` )
                 ( string_push_str n3 ( nurl_str_int L ) )
                 ( string_push_str n3 `.self_attn.q_norm.weight` )
                 ( __ft_st_add so ( string_data n3 ) . qnv v . m head_dim 0 )
-                ( string_free n3 )
             } {}
-            : s knp ?? ( vec_get [s] . m kn L ) { T x → x F → # s 0 }
-            ? != # i knp 0 {
-                : *FtV knv # *FtV knp
+            : FtV knv ?? ( vec_get [FtV] . m kn L ) { T x → x F → ( __ft_nov ) }
+            ? . knv has {
                 : String n4 ( string_from `model.layers.` )
                 ( string_push_str n4 ( nurl_str_int L ) )
                 ( string_push_str n4 `.self_attn.k_norm.weight` )
                 ( __ft_st_add so ( string_data n4 ) . knv v . m head_dim 0 )
-                ( string_free n4 )
             } {}
         } {}
         : ~ FtW w0 @ FtW { 0 0 ( vec_new [f] ) }
@@ -1832,16 +1667,14 @@ $ `tokenizer.nu`
         : i heads ? == w 0 . m n_head . m n_kv
         : b want ? <= w 3 == % / mask 2 2 1 == % / mask 4 2 1
         ? want { ( __ft_emit_w so ( string_data nm ) mw reperm heads . m head_dim ) } {}
-        ( string_free nm )
         // (`md` lives in `mw` now, which drops it.)
         // qwen2 q/k/v biases pass through unmerged (NEOX: no reperm)
         ? <= w 2 {
-            : ~ s bp # s 0
-            ? == w 0 { = bp ?? ( vec_get [s] . m bq L ) { T x → x F → # s 0 } } {}
-            ? == w 1 { = bp ?? ( vec_get [s] . m bk L ) { T x → x F → # s 0 } } {}
-            ? == w 2 { = bp ?? ( vec_get [s] . m bv L ) { T x → x F → # s 0 } } {}
-            ? != # i bp 0 {
-                : *FtV bv2 # *FtV bp
+            : ~ FtV bv2 ( __ft_nov )
+            ? == w 0 { = bv2 ?? ( vec_get [FtV] . m bq L ) { T x → x F → bv2 } } {}
+            ? == w 1 { = bv2 ?? ( vec_get [FtV] . m bk L ) { T x → x F → bv2 } } {}
+            ? == w 2 { = bv2 ?? ( vec_get [FtV] . m bv L ) { T x → x F → bv2 } } {}
+            ? . bv2 has {
                 : ~ s bn `self_attn.q_proj.bias`
                 ? == w 1 { = bn `self_attn.k_proj.bias` } {}
                 ? == w 2 { = bn `self_attn.v_proj.bias` } {}
@@ -1850,7 +1683,6 @@ $ `tokenizer.nu`
                 ( string_push_str nb `.` )
                 ( string_push_str nb bn )
                 ( __ft_st_add so ( string_data nb ) . bv2 v out 0 )
-                ( string_free nb )
             } {}
         } {}
         = aoff + aoff * in r
@@ -1863,7 +1695,6 @@ $ `tokenizer.nu`
         = sl + sl 1
     }
     : !v String res ( stw_write so path )
-    ( stw_free so )
     ^ res
 }
 
@@ -1888,11 +1719,10 @@ $ `tokenizer.nu`
         }
         ?? ( ft_open modp ) {
             T m → {
-                : *u rb ( nurl_alloc 8 )
                 : ~ i rc 0
-                ?? ( ft_adapters_load outp m rb ) {
+                : ~ i r 0
+                ?? ( ft_adapters_load outp m r ) {
                     T tr → {
-                        : i r ( nurl_peek rb 0 )
                         ( nurl_print `merge-only: adapters ` )
                         ( nurl_print outp )
                         ( nurl_print ` (rank ` )
@@ -1908,25 +1738,19 @@ $ `tokenizer.nu`
                             }
                             F e → {
                                 ( nurl_eprintln ( string_data e ) )
-                                ( string_free e )
                                 = rc 1
                             }
                         }
-                        ( ft_train_free tr )
                     }
                     F e → {
                         ( nurl_eprintln ( string_data e ) )
-                        ( string_free e )
                         = rc 1
                     }
                 }
-                ( nurl_free rb )
-                ( ft_free m )
                 ^ rc
             }
             F e → {
                 ( nurl_eprintln ( string_data e ) )
-                ( string_free e )
                 ^ 1
             }
         }
@@ -1935,13 +1759,13 @@ $ `tokenizer.nu`
     : ~ b haderr F
     : ~ String textS ( string_new )
     ?? ( read_file datap ) {
-        T t → { ( string_free textS ) = textS t = text ( string_data textS ) }
+        T t → { = textS t = text ( string_data textS ) }
         F _ → {
             ( nurl_eprintln `nurllama: cannot read the data file` )
             = haderr T
         }
     }
-    ? haderr { ( string_free textS ) ^ 1 } {}
+    ? haderr { ^ 1 } {}
     : ( Vec i ) ids ( vec_new [i] )
     ?? ( gguf_open modp ) {
         T gg → {
@@ -1950,26 +1774,19 @@ $ `tokenizer.nu`
                     : ( Vec i ) enc ( tok_encode tk text T )
                     : ~ i k 0
                     ~ < k ( vec_len [i] enc ) { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
-                    ( vec_free [i] enc )
-                    ( tok_free tk )
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
-                    ( string_free e )
                     = haderr T
                 }
             }
-            ( gguf_close gg )
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             = haderr T
         }
     }
-    ( string_free textS )
     ? | haderr < ( vec_len [i] ids ) 4 {
-        ( vec_free [i] ids )
         ( nurl_eprintln `nurllama: need at least 4 tokens of training data` )
         ^ 1
     } {}
@@ -1987,9 +1804,9 @@ $ `tokenizer.nu`
     ?? ( ft_open modp ) {
         T m → {
             ( nurl_print `model: ` )
-            ( nurl_print ( nurl_str_int . m n_layer ) )
+            ( nurl_print ( nurl_str_int ( ft_n_layer m ) ) )
             ( nurl_print ` layers · hidden ` )
-            ( nurl_print ( nurl_str_int . m n_embd ) )
+            ( nurl_print ( nurl_str_int ( ft_n_embd m ) ) )
             ( nurl_print ` · building the tape + capturing onto the device\n` )
             : i dt ? mixed 2 ? f32 1 0
             ? mixed { ( nurl_print `precision: mixed (f32 storage, f64 accumulation — half VRAM, near-f64 accuracy)\n` ) } {}
@@ -1997,7 +1814,6 @@ $ `tokenizer.nu`
             : FtTrain tr ( ft_train_ck m ids seq rank alpha seed steps lr dt T ckptp ckevery resume wstride )
             ? . tr ok {} {
                 ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )
-                ( ft_train_free tr ) ( ft_free m ) ( vec_free [i] ids )
                 ^ 1
             }
             ( nurl_print `CE ` )
@@ -2014,7 +1830,6 @@ $ `tokenizer.nu`
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
-                    ( string_free e )
                     = rc 1
                 }
             }
@@ -2029,20 +1844,14 @@ $ `tokenizer.nu`
                     }
                     F e → {
                         ( nurl_eprintln ( string_data e ) )
-                        ( string_free e )
                         = rc 1
                     }
                 }
             } {}
-            ( ft_train_free tr )
-            ( ft_free m )
-            ( vec_free [i] ids )
             ^ rc
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
-            ( vec_free [i] ids )
             ^ 1
         }
     }

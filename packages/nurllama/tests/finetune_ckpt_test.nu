@@ -69,7 +69,6 @@ $ `deps/gpukit/src/dev.nu`
     : String mp ( model_path )
     ? ( file_exists ( string_data mp ) ) {} {
         ( nurl_print `finetune_ckpt_test: SKIP (SmolLM-135M not in the pull store)\n` )
-        ( string_free mp )
         ^ 0
     }
     : s ckpt `/tmp/nurl_ft_ckpt_test.st`
@@ -84,14 +83,11 @@ $ `deps/gpukit/src/dev.nu`
                             : ( Vec i ) enc ( tok_encode tk `The capital of France is Paris, and the capital of Italy is` T )
                             : ~ i k 0
                             ~ < k ( vec_len [i] enc ) { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
-                            ( vec_free [i] enc )
-                            ( tok_free tk )
                         }
-                        F e → { ( string_free e ) }
+                        F _e → {}
                     }
-                    ( gguf_close gg )
                 }
-                F e → { ( string_free e ) }
+                F _e → {}
             }
             : i T2 ( vec_len [i] ids )
             ( check >= T2 8 `prompt tokenizes (>= 8 tokens)` )
@@ -123,23 +119,15 @@ $ `deps/gpukit/src/dev.nu`
             : FtTrain trX ( ft_train_ck m ids HW 4 16.0 42 40 0.002 0 F ckpt 10 T 1 )
             ( check == . trX ok F `rank mismatch refuses to resume (ok=F)` )
 
-            ( ft_train_free trA )
-            ( ft_train_free trB )
-            ( ft_train_free trC )
-            ( ft_train_free trX )
-            ( vec_free [i] ids )
-            ( ft_free m )
             ?? ( file_delete ckpt ) { T _ → {} F _ → {} }
         }
         F e → {
             ( nurl_print `ft_open FAILED: ` )
             ( nurl_print ( string_data e ) )
             ( nurl_print `\n` )
-            ( string_free e )
             = g_fail + g_fail 1
         }
     }
-    ( string_free mp )
     ( nurl_print `finetune_ckpt_test: ` )
     ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` )

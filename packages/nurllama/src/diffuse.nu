@@ -48,7 +48,7 @@ $ `src/model.nu`
 // from softmax(logits/temp). Appends the chosen id to `ids` and its
 // probability under the SAME distribution to `confs` (the reference
 // scores greedy confidence on the unscaled softmax).
-@ __dz_sample_row * Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) confs → v {
+@ __dz_sample_row Llm m i row f temp Rng rng ( Vec i ) ids ( Vec f ) confs → v {
     : i n ( llm_n_vocab m )
     : f t ? > temp 0.0 temp 1.0
     : ~ f mx -1.0e30
@@ -88,7 +88,7 @@ $ `src/model.nu`
     ( vec_push [f] confs / ( exp / - ( llm_logit_at m row chosen ) mx t ) sum )
 }
 
-@ dz_generate * Llm m ( Vec i ) prompt i gen_len0 i block_len0 f threshold f edit_thr i max_post f temp Rng rng → ( Vec i ) {
+@ dz_generate Llm m ( Vec i ) prompt i gen_len0 i block_len0 f threshold f edit_thr i max_post f temp Rng rng → ( Vec i ) {
     : i mask ( llm_mask_id m )
     : i eos ( tok_eos ( llm_tok m ) )
     : ( Vec i ) out ( vec_new [i] )
@@ -215,8 +215,6 @@ $ `src/model.nu`
                     } {}
                     = k + k 1
                 }
-                ( vec_free [i] x0 )
-                ( vec_free [f] confs )
                 ? & == n_active 0 ! edited {
                     = block_done T
                     = kv_settled T
@@ -252,6 +250,5 @@ $ `src/model.nu`
         }
         = k + k 1
     }
-    ( vec_free [i] x )
     ^ out
 }

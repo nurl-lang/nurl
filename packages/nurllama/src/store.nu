@@ -39,7 +39,6 @@ $ `stdlib/ext/json.nu`
     }
     : String home ( env_var_or `HOME` `.` )
     : String r ( path_join ( string_data home ) `.nurllama` )
-    ( string_free home )
     ^ r
 }
 
@@ -63,8 +62,6 @@ $ `stdlib/ext/json.nu`
     : String nm ( string_from `sha256-` )
     ( string_push_str nm hex )
     : String p ( path_join ( string_data bdir ) ( string_data nm ) )
-    ( string_free bdir )
-    ( string_free nm )
     ^ p
 }
 
@@ -72,8 +69,6 @@ $ `stdlib/ext/json.nu`
     : String mdir ( path_join ( string_data root ) `manifests` )
     : String sn ( __nl_safe_name name )
     : String p ( path_join ( string_data mdir ) ( string_data sn ) )
-    ( string_free mdir )
-    ( string_free sn )
     ^ p
 }
 
@@ -82,8 +77,6 @@ $ `stdlib/ext/json.nu`
     : String m ( path_join ( string_data root ) `manifests` )
     : !v IoErr r1 ( dir_create_all ( string_data b ) )
     : !v IoErr r2 ( dir_create_all ( string_data m ) )
-    ( string_free b )
-    ( string_free m )
     : ~ b ok T
     ?? r1 { T _ → {} F _ → { = ok F } }
     ?? r2 { T _ → {} F _ → { = ok F } }
@@ -107,7 +100,6 @@ $ `stdlib/ext/json.nu`
                         ? == ( vec_len [u] piece ) 0 { = more F } {
                             ( sha256_update h piece )
                         }
-                        ( vec_free [u] piece )
                     }
                     F _ → { = more F }
                 }
@@ -115,7 +107,6 @@ $ `stdlib/ext/json.nu`
             ( file_close f )
             : ( Vec u ) dg ( sha256_final h )
             : String hex ( bytes_to_hex dg )
-            ( vec_free [u] dg )
             ^ @ !String String { T hex }
         }
         F _ → {
@@ -133,15 +124,11 @@ $ `stdlib/ext/json.nu`
     : String dg ( string_from `sha256:` )
     ( string_push_str dg hex )
     : b _s3 ( json_obj_set j `digest` ( json_str_lit ( string_data dg ) ) )
-    ( string_free dg )
     : b _s4 ( json_obj_set j `size` ( json_int size ) )
     : b _s5 ( json_obj_set j `format` ( json_str_lit `gguf` ) )
     : String txt ( json_stringify j )
-    ( json_free j )
     : String mp ( nl_manifest_path root name )
     : !v IoErr wr ( write_file ( string_data mp ) ( string_data txt ) )
-    ( string_free mp )
-    ( string_free txt )
     ?? wr {
         T _ → { ^ @ !v String { T 0 } }
         F _ → { ^ @ !v String { F ( string_from `nurllama: cannot write the manifest` ) } }
@@ -171,11 +158,9 @@ $ `stdlib/ext/json.nu`
                         }
                         F → {}
                     }
-                    ( json_free j )
                 }
                 F _ → {}
             }
-            ( string_free txt )
             ^ hex
         }
         F _ → { ^ ( string_new ) }
@@ -188,15 +173,11 @@ $ `stdlib/ext/json.nu`
     ? ( file_exists arg ) { ^ @ ?String { T ( string_from arg ) } } {}
     : String mp ( nl_manifest_path root arg )
     : String hex ( __nl_manifest_hex ( string_data mp ) )
-    ( string_free mp )
     ? == ( string_len hex ) 64 {} {
-        ( string_free hex )
         ^ @ ?String { F }
     }
     : String bp ( nl_blob_path root ( string_data hex ) )
-    ( string_free hex )
     ? ( file_exists ( string_data bp ) ) { ^ @ ?String { T bp } } {}
-    ( string_free bp )
     ^ @ ?String { F }
 }
 
@@ -218,7 +199,6 @@ $ `stdlib/ext/json.nu`
                                 T sz → { = bsz sz }
                                 F _ → {}
                             }
-                            ( string_free bp )
                         } {}
                         : String ln ( string_from ( string_data nm ) )
                         : ~ i pad - 32 ( string_len ln )
@@ -229,29 +209,22 @@ $ `stdlib/ext/json.nu`
                         ? >= bsz 0 {
                             : String hs ( progress_human bsz )
                             ( string_push_str ln ( string_data hs ) )
-                            ( string_free hs )
                             ( string_push_str ln `  sha256:` )
                             : String short ( string_substr hex 0 12 )
                             ( string_push_str ln ( string_data short ) )
-                            ( string_free short )
                         } {
                             ( string_push_str ln `MISSING BLOB` )
                         }
                         ( nurl_print ( string_data ln ) )
                         ( nurl_print `\n` )
-                        ( string_free ln )
-                        ( string_free hex )
-                        ( string_free mp )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _ → {}
     }
-    ( string_free mdir )
 }
 
 // True when any OTHER manifest still references blob `hex`.
@@ -270,36 +243,28 @@ $ `stdlib/ext/json.nu`
                             : String mp ( path_join ( string_data mdir ) ( string_data nm ) )
                             : String ohex ( __nl_manifest_hex ( string_data mp ) )
                             ? ( nurl_str_eq ( string_data ohex ) hex ) { = shared T } {}
-                            ( string_free ohex )
-                            ( string_free mp )
                         }
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _ → {}
     }
-    ( string_free keep )
-    ( string_free mdir )
     ^ shared
 }
 
 @ nl_store_rm String root s name → !v String {
     : String mp ( nl_manifest_path root name )
     ? ( file_exists ( string_data mp ) ) {} {
-        ( string_free mp )
         ^ @ !v String { F ( string_from `nurllama: no such model in the store` ) }
     }
     : String hex ( __nl_manifest_hex ( string_data mp ) )
     : !v IoErr dr ( file_delete ( string_data mp ) )
-    ( string_free mp )
     ?? dr {
         T _ → {}
         F _ → {
-            ( string_free hex )
             ^ @ !v String { F ( string_from `nurllama: cannot remove the manifest` ) }
         }
     }
@@ -308,10 +273,8 @@ $ `stdlib/ext/json.nu`
         ? ( __nl_blob_shared root ( string_data hex ) name ) {} {
             : String bp ( nl_blob_path root ( string_data hex ) )
             ( file_delete ( string_data bp ) )
-            ( string_free bp )
         }
     } {}
-    ( string_free hex )
     ^ @ !v String { T 0 }
 }
 
@@ -320,24 +283,18 @@ $ `stdlib/ext/json.nu`
 @ nl_store_verify String root s name → !v String {
     : String mp ( nl_manifest_path root name )
     : String hex ( __nl_manifest_hex ( string_data mp ) )
-    ( string_free mp )
     ? == ( string_len hex ) 64 {} {
-        ( string_free hex )
         ^ @ !v String { F ( string_from `nurllama: no such model (or a malformed manifest)` ) }
     }
     : String bp ( nl_blob_path root ( string_data hex ) )
     : !String String hr ( nl_hash_file ( string_data bp ) )
-    ( string_free bp )
     ?? hr {
         T got → {
             : b okh ( string_eq got hex )
-            ( string_free got )
-            ( string_free hex )
             ? okh { ^ @ !v String { T 0 } } {}
             ^ @ !v String { F ( string_from `nurllama: INTEGRITY FAILURE — blob does not hash to its manifest digest` ) }
         }
         F e → {
-            ( string_free hex )
             ^ @ !v String { F e }
         }
     }

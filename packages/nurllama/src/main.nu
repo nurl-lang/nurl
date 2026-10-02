@@ -88,7 +88,6 @@ $ `stdlib/std/term.nu`
 
 @ __nl_err String e → i {
     ( nurl_eprintln ( string_data e ) )
-    ( string_free e )
     ^ 1
 }
 
@@ -126,7 +125,7 @@ $ `stdlib/std/term.nu`
     }
     ?? ( hub_get arg ) {
         T p → { ^ @ ?String { T p } }
-        F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) ^ @ ?String { F } }
+        F e → { ( nurl_eprintln ( string_data e ) ) ^ @ ?String { F } }
     }
 }
 
@@ -140,7 +139,6 @@ $ `stdlib/std/term.nu`
     }
     ( nurl_print ( string_data m ) )
     ( nurl_print `\n` )
-    ( string_free m )
 }
 
 // ── selftest ────────────────────────────────────────────────────────
@@ -220,7 +218,6 @@ $ `stdlib/std/term.nu`
             ( vec_push [String] toks ( string_from `<0x98>` ) )
             ( vec_push [String] toks ( string_from `<0x80>` ) )
             ( gw_kv_arr_str w `tokenizer.ggml.tokens` toks )
-            ( vec_free_with [String] toks \ String s → v { ( string_free s ) } )
             : ( Vec f ) sc ( vec_new [f] )
             ( vec_push [f] sc 0.0 ) ( vec_push [f] sc 0.0 ) ( vec_push [f] sc 0.0 )
             ( vec_push [f] sc -10.0 ) ( vec_push [f] sc -6.0 ) ( vec_push [f] sc -5.0 )
@@ -231,7 +228,6 @@ $ `stdlib/std/term.nu`
             ( vec_push [f] sc -8.0 ) ( vec_push [f] sc 0.0 ) ( vec_push [f] sc 0.0 )
             ( vec_push [f] sc 0.0 ) ( vec_push [f] sc 0.0 )
             ( gw_kv_arr_f32 w `tokenizer.ggml.scores` sc )
-            ( vec_free [f] sc )
             : ( Vec i ) ty ( vec_new [i] )
             ( vec_push [i] ty 2 ) ( vec_push [i] ty 3 ) ( vec_push [i] ty 3 )
             : ~ i k 3
@@ -241,17 +237,14 @@ $ `stdlib/std/term.nu`
             }
             ( vec_push [i] ty 6 ) ( vec_push [i] ty 6 ) ( vec_push [i] ty 6 ) ( vec_push [i] ty 6 )
             ( gw_kv_arr_i32 w `tokenizer.ggml.token_type` ty )
-            ( vec_free [i] ty )
             ( gw_kv_u32 w `tokenizer.ggml.bos_token_id` 1 )
             ( gw_kv_u32 w `tokenizer.ggml.eos_token_id` 2 )
             ( gw_kv_u32 w `tokenizer.ggml.unknown_token_id` 0 )
             ( gw_kv_bool w `tokenizer.ggml.add_bos_token` T )
             : !v String wr ( gw_write w path )
-            ( gw_free w )
-            ?? wr { T _ → {} F e → { ( string_free e ) = ok 0 } }
+            ?? wr { T _ → {} F e → { = ok 0 } }
         }
         F e → {
-            ( string_free e )
             = ok 0
         }
     }
@@ -281,7 +274,6 @@ $ `stdlib/std/term.nu`
             ( vec_push [String] toks gh )
             ( vec_push [String] toks ( string_from `<|end|>` ) )
             ( gw_kv_arr_str w `tokenizer.ggml.tokens` toks )
-            ( vec_free_with [String] toks \ String s → v { ( string_free s ) } )
             : ( Vec i ) ty ( vec_new [i] )
             : ~ i k 0
             ~ < k 10 {
@@ -290,7 +282,6 @@ $ `stdlib/std/term.nu`
             }
             ( vec_push [i] ty 3 )
             ( gw_kv_arr_i32 w `tokenizer.ggml.token_type` ty )
-            ( vec_free [i] ty )
             : ( Vec String ) mg ( vec_new [String] )
             ( vec_push [String] mg ( string_from `h e` ) )
             ( vec_push [String] mg ( string_from `he l` ) )
@@ -300,14 +291,11 @@ $ `stdlib/std/term.nu`
             ( string_push_str m5 ` hello` )
             ( vec_push [String] mg m5 )
             ( gw_kv_arr_str w `tokenizer.ggml.merges` mg )
-            ( vec_free_with [String] mg \ String s → v { ( string_free s ) } )
             ( gw_kv_u32 w `tokenizer.ggml.eos_token_id` 10 )
             : !v String wr ( gw_write w path )
-            ( gw_free w )
-            ?? wr { T _ → {} F e → { ( string_free e ) = ok 0 } }
+            ?? wr { T _ → {} F e → { = ok 0 } }
         }
         F e → {
-            ( string_free e )
             = ok 0
         }
     }
@@ -320,7 +308,6 @@ $ `stdlib/std/term.nu`
     : ~ String path ( string_new )
     ?? tf {
         T p → {
-            ( string_free path )
             = path p
         }
         F _ → {
@@ -341,57 +328,43 @@ $ `stdlib/std/term.nu`
                     : ( Vec i ) e1 ( tok_encode t `hello` T )
                     : x1 [i | 1 8]
                     ( __nl_ck cn ( __nl_ids_eq e1 . x1 0 2 ) `SPM: 'hello' → merge chain to ▁hello` )
-                    ( vec_free [i] e1 )
 
                     : ( Vec i ) e2 ( tok_encode t `hello world` T )
                     : x2 [i | 1 8 13]
                     ( __nl_ck cn ( __nl_ids_eq e2 . x2 0 3 ) `SPM: two words` )
-                    ( vec_free [i] e2 )
 
                     : ( Vec i ) e3 ( tok_encode t `hell` T )
                     : x3 [i | 1 7]
                     ( __nl_ck cn ( __nl_ids_eq e3 . x3 0 2 ) `SPM: prefix piece wins` )
-                    ( vec_free [i] e3 )
 
                     // 😀 = F0 9F 98 80 → the four BYTE tokens
                     : ( Vec i ) e4 ( tok_encode t `😀` T )
                     : x4 [i | 1 3 19 20 21 22]
                     ( __nl_ck cn ( __nl_ids_eq e4 . x4 0 6 ) `SPM: byte fallback (emoji)` )
-                    ( vec_free [i] e4 )
 
                     // 'z' has no piece and no byte token → UNK
                     : ( Vec i ) e5 ( tok_encode t `z` T )
                     : x5 [i | 1 3 0]
                     ( __nl_ck cn ( __nl_ids_eq e5 . x5 0 3 ) `SPM: unknown char → UNK` )
-                    ( vec_free [i] e5 )
 
                     : ( Vec i ) e6 ( tok_encode t `` T )
                     : x6 [i | 1]
                     ( __nl_ck cn ( __nl_ids_eq e6 . x6 0 1 ) `SPM: empty text → just BOS` )
-                    ( vec_free [i] e6 )
 
                     // decode: control tokens vanish, ▁ → space, bytes rejoin
                     : ( Vec i ) e7 ( tok_encode t `hello world` T )
                     : ( Vec u ) d7 ( tok_decode t e7 )
                     ( __nl_ck cn ( __nl_bytes_is d7 ` hello world` ) `SPM: decode round-trip` )
-                    ( vec_free [u] d7 )
-                    ( vec_free [i] e7 )
                     : ( Vec i ) e8 ( tok_encode t `😀` T )
                     : ( Vec u ) d8 ( tok_decode t e8 )
                     ( __nl_ck cn ( __nl_bytes_is d8 ` 😀` ) `SPM: byte tokens decode to the emoji` )
-                    ( vec_free [u] d8 )
-                    ( vec_free [i] e8 )
-                    ( tok_free t )
                 }
                 F e → {
-                    ( string_free e )
                     ( __nl_ck cn F `SPM: tok_new` )
                 }
             }
-            ( gguf_close g )
         }
         F e → {
-            ( string_free e )
             ( __nl_ck cn F `SPM: gguf_open` )
         }
     }
@@ -408,36 +381,27 @@ $ `stdlib/std/term.nu`
                     : ( Vec i ) e1 ( tok_encode t `hello hello` T )
                     : x1 [i | 8 9]
                     ( __nl_ck cn ( __nl_ids_eq e1 . x1 0 2 ) `BPE: merge ranks + space glue` )
-                    ( vec_free [i] e1 )
 
                     // partial merges only: "hell" stops at rank-3 product
                     : ( Vec i ) e2 ( tok_encode t `hell` T )
                     : x2 [i | 7]
                     ( __nl_ck cn ( __nl_ids_eq e2 . x2 0 1 ) `BPE: partial merge chain` )
-                    ( vec_free [i] e2 )
 
                     // 'ol' has no merge → two singles
                     : ( Vec i ) e3 ( tok_encode t `ol` T )
                     : x3 [i | 3 2]
                     ( __nl_ck cn ( __nl_ids_eq e3 . x3 0 2 ) `BPE: unmergeable pair stays split` )
-                    ( vec_free [i] e3 )
 
                     : ( Vec i ) e4 ( tok_encode t `hello hello` T )
                     : ( Vec u ) d4 ( tok_decode t e4 )
                     ( __nl_ck cn ( __nl_bytes_is d4 `hello hello` ) `BPE: decode inverts the byte remap` )
-                    ( vec_free [u] d4 )
-                    ( vec_free [i] e4 )
-                    ( tok_free t )
                 }
                 F e → {
-                    ( string_free e )
                     ( __nl_ck cn F `BPE: tok_new` )
                 }
             }
-            ( gguf_close g )
         }
         F e → {
-            ( string_free e )
             ( __nl_ck cn F `BPE: gguf_open` )
         }
     }
@@ -475,25 +439,21 @@ $ `stdlib/std/term.nu`
                 ( gw_kv_str w `general.architecture` `llama` )
                 ? > ( nurl_str_len tpl ) 0 { ( gw_kv_str w `tokenizer.chat_template` tpl ) } {}
                 : !v String wr ( gw_write w ( string_data path ) )
-                ( gw_free w )
-                ?? wr { T _ → {} F e → { ( string_free e ) } }
             }
-            F e → { ( string_free e ) }
+            F _e → {}
         }
         : ~ i got -1
         ?? ( gguf_open ( string_data path ) ) {
             T gg → {
                 = got ( chat_style_of gg )
-                ( gguf_close gg )
             }
-            F e → { ( string_free e ) }
+            F _e → {}
         }
         ( __nl_ck cn == got want `chat style detected from the model's own metadata` )
         = si + si 1
     }
 
     ( file_delete ( string_data path ) )
-    ( string_free path )
     : String m ( string_from `selftest: ` )
     ( string_push_int m . cn pass )
     ( string_push_str m ` passed, ` )
@@ -501,7 +461,6 @@ $ `stdlib/std/term.nu`
     ( string_push_str m ` failed` )
     ( nurl_print ( string_data m ) )
     ( nurl_print `\n` )
-    ( string_free m )
     ^ ? > . cn fail 0 1 0
 }
 
@@ -515,9 +474,8 @@ $ `stdlib/std/term.nu`
     ?? ( gguf_open path ) {
         T gg → {
             = style ( chat_style_of gg )
-            ( gguf_close gg )
         }
-        F e → { ( string_free e ) }
+        F _e → {}
     }
     : String __w ( args_value_or p `weights` `` )
     ?? ( llm_open_st path ( string_data __w ) 0 ) {
@@ -527,23 +485,18 @@ $ `stdlib/std/term.nu`
             : String stmp ( args_value_or p `temp` `0.8` )
             : ~ f temp 0.8
             ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
-            ( string_free stmp )
             : String snp ( args_value_or p `n-predict` `256` )
             : ~ i npredict 256
             ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
-            ( string_free snp )
             : String stk ( args_value_or p `topk` `40` )
             : ~ i topk 40
             ?? ( string_to_int stk ) { T v2 → { = topk v2 } F _ → {} }
-            ( string_free stk )
             : String stp ( args_value_or p `topp` `0.95` )
             : ~ f topp 0.95
             ?? ( string_to_float stp ) { T v2 → { = topp v2 } F → {} }
-            ( string_free stp )
             : String ssd ( args_value_or p `seed` `42` )
             : ~ i seed 42
             ?? ( string_to_int ssd ) { T v2 → { = seed v2 } F _ → {} }
-            ( string_free ssd )
             : Rng rng ( rng_seed seed )
 
             ? == style CHAT_PLAIN {
@@ -560,23 +513,18 @@ $ `stdlib/std/term.nu`
                         : s lraw ( string_data line )
                         ? | ( nurl_str_eq lraw `/exit` ) ( nurl_str_eq lraw `/quit` ) {
                             = running F
-                            ( string_free line )
                         } {
-                            ? == 0 ( nurl_str_len lraw ) { ( string_free line ) } {
+                            ? == 0 ( nurl_str_len lraw ) {} {
                                 ( vec_push [ChatMsg] msgs ( chat_msg `user` lraw ) )
                                 ( vec_push [String] hist ( string_from lraw ) )
-                                ( string_free line )
                                 : String prompt ( chat_render style msgs )
                                 : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
-                                ( string_free prompt )
                                 : i nprompt ( vec_len [i] ids )
                                 ? > nprompt ( llm_n_ctx m ) {
                                     ( nurl_eprintln `nurllama: conversation is longer than the context — /exit and restart` )
-                                    ( vec_free [i] ids )
                                     = running F
                                 } {
                                     ( llm_prefill m ids )
-                                    ( vec_free [i] ids )
                                     : String reply ( string_new )
                                     : ~ i posn nprompt
                                     : ~ i produced 0
@@ -586,7 +534,6 @@ $ `stdlib/std/term.nu`
                                         ? == nt ( tok_eos t ) { = stop T } {
                                             : ( Vec u ) pb ( tok_piece t nt )
                                             : String piece ( bytes_to_str pb )
-                                            ( vec_free [u] pb )
                                             ? ( chat_stop_matches style ( string_data piece ) ) { = stop T } {
                                                 ( nurl_print ( string_data piece ) )
                                                 ( flush )
@@ -595,22 +542,16 @@ $ `stdlib/std/term.nu`
                                                 = posn + posn 1
                                                 = produced + produced 1
                                             }
-                                            ( string_free piece )
                                         }
                                     }
                                     ( nurl_print `\n` )
                                     ( vec_push [ChatMsg] msgs ( chat_msg `assistant` ( string_data reply ) ) )
-                                    ( string_free reply )
                                 }
                             }
                         }
                     }
                 }
             }
-            ( chat_msgs_free msgs )
-            ( vec_free_with [String] hist \ String s → v { ( string_free s ) } )
-            ( rng_free rng )
-            ( llm_close m )
             ^ 0
         }
     }
@@ -656,25 +597,20 @@ $ `stdlib/std/term.nu`
     ( args_opt p `model` 0 `MODEL` `serve: the default model (same as the positional: serve MODEL) — the web UI chats with it, and an /api request that names no model falls back to it` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  start [-y]                                interactive setup wizard + web chat server\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [model] [--host H] [--port N] [--weights FILE] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n  convert <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]\n` )
-        ( string_free u )
-        ( args_free p )
         ^ 0
     } {}
     ? ( args_present p `version` ) {
         ( nurl_print `nurllama 0.17.7\n` )
-        ( args_free p )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {
         ( nurl_eprintln `usage: nurllama <tokenize|detok|vocab|selftest> … (nurllama --help)` )
-        ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -686,15 +622,12 @@ $ `stdlib/std/term.nu`
 
     ? ( nurl_str_eq cmd `selftest` ) {
         : i rc ( __nl_selftest )
-        ( args_free p )
         ^ rc
     } {}
 
     ? ( nurl_str_eq cmd `list` ) {
         : String root ( nl_store_root )
         ( nl_store_list root )
-        ( string_free root )
-        ( args_free p )
         ^ 0
     } {}
 
@@ -716,17 +649,13 @@ $ `stdlib/std/term.nu`
         ( vec_push [ChatMsg] msgs ( chat_msg `system` `be brief` ) )
         ( vec_push [ChatMsg] msgs ( chat_msg `user` `hi` ) )
         : String out ( chat_render style msgs )
-        ( chat_msgs_free msgs )
         ( nurl_print ( string_data out ) )
         ( nurl_print `\n` )
-        ( string_free out )
-        ( args_free p )
         ^ 0
     } {}
 
     ? ( nurl_str_eq cmd `start` ) {
         : i rc ( nurllama_start p )
-        ( args_free p )
         ^ rc
     } {}
 
@@ -736,7 +665,6 @@ $ `stdlib/std/term.nu`
         : String sport ( args_value_or p `port` `11434` )
         : ~ i port 11434
         ?? ( string_to_int sport ) { T v2 → { = port v2 } F _ → {} }
-        ( string_free sport )
         // The default model: `serve MODEL` or `serve --model MODEL`. The
         // web UI chats with it, and an /api request that names no model of
         // its own falls back to it. Resolved NOW so a bad name fails at
@@ -745,7 +673,6 @@ $ `stdlib/std/term.nu`
         ? >= ( args_positional_count p ) 2 {
             ?? ( vec_get [String] pos 1 ) {
                 T c → {
-                    ( string_free marg )
                     = marg ( string_from ( string_data c ) )
                 }
                 F → {}
@@ -758,43 +685,29 @@ $ `stdlib/std/term.nu`
                     // keep the user's own name when the store can resolve it
                     // (so the UI and /api echo `qwen3-4b`, not a blob path);
                     // a hub ref needs the fetched path
-                    ( string_free mdef )
                     ?? ( nl_resolve root ( string_data marg ) ) {
                         T sp → {
-                            ( string_free sp )
                             = mdef ( string_from ( string_data marg ) )
-                            ( string_free pth )
                         }
                         F → { = mdef pth }
                     }
                 }
                 F → {
-                    ( string_free marg ) ( string_free mdef )
-                    ( string_free host ) ( string_free root ) ( args_free p )
                     ^ 1
                 }
             }
         } {}
-        ( string_free marg )
         : String sw ( args_value_or p `weights` `` )
         ? & > ( string_len sw ) 0 == ( string_len mdef ) 0 {
-            ( string_free sw ) ( string_free mdef )
-            ( string_free host ) ( string_free root ) ( args_free p )
             ^ ( __nl_err ( string_from `nurllama: --weights replaces the tensors of a model, it does not select one — name the GGUF too: nurllama serve base.gguf --weights merged.safetensors` ) )
         } {}
         ( api_set_weights ( string_data sw ) )
         : i rc ( api_serve root ( string_data host ) port ( string_data mdef ) )
-        ( string_free sw )
-        ( string_free mdef )
-        ( string_free host )
-        ( string_free root )
-        ( args_free p )
         ^ rc
     } {}
 
     ? ( nurl_str_eq cmd `convert` ) {
         ? < ( args_positional_count p ) 3 {
-            ( args_free p )
             ^ ( __nl_err ( string_from `nurllama: convert needs <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]` ) )
         } {}
         : ~ s hfdir ``
@@ -814,18 +727,14 @@ $ `stdlib/std/term.nu`
         ?? ( hub_get hfdir ) {
             T hd → {
                 = rc ( nurllama_convert ( string_data hd ) outp ( string_data ot ) )
-                ( string_free hd )
             }
             F e → { = rc ( __nl_err e ) }
         }
-        ( string_free ot )
-        ( args_free p )
         ^ rc
     } {}
 
     ? ( nurl_str_eq cmd `finetune` ) {
         ? < ( args_positional_count p ) 3 {
-            ( args_free p )
             ^ ( __nl_err ( string_from `nurllama: finetune needs <model.gguf> <data.txt> (nurllama --help)` ) )
         } {}
         : ~ s modp ``
@@ -865,17 +774,11 @@ $ `stdlib/std/term.nu`
         ?? ( string_to_int swstr ) { T v → { = wstride v } F _ → {} }
         : b mergeonly ? == ( args_present p `merge-only` ) 1 T F
         : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 mixed ( string_data sckpt ) ckevery resume wstride mergeonly )
-        ( string_free souts ) ( string_free smerged ) ( string_free ssteps )
-        ( string_free slr ) ( string_free srank ) ( string_free salpha )
-        ( string_free sseq ) ( string_free sseed )
-        ( string_free sckpt ) ( string_free severy ) ( string_free swstr )
-        ( args_free p )
         ^ rc
     } {}
 
     ? | | ( nurl_str_eq cmd `pull` ) ( nurl_str_eq cmd `rm` ) ( nurl_str_eq cmd `verify` ) {
         ? < ( args_positional_count p ) 2 {
-            ( args_free p )
             ^ ( __nl_err ( string_from `nurllama: this command needs an argument (nurllama --help)` ) )
         } {}
         : ~ s a1 ``
@@ -888,7 +791,6 @@ $ `stdlib/std/term.nu`
         ? ( nurl_str_eq cmd `pull` ) {
             : String nn ( args_value_or p `name` `` )
             : !v String r ( nl_pull root a1 ( string_data nn ) )
-            ( string_free nn )
             ?? r {
                 T _ → {}
                 F e → { = rc ( __nl_err e ) }
@@ -908,19 +810,15 @@ $ `stdlib/std/term.nu`
                 }
             }
         }
-        ( string_free root )
-        ( args_free p )
         ^ rc
     } {}
 
     ? < ( args_positional_count p ) 2 {
-        ( args_free p )
         ^ ( __nl_err ( string_from `nurllama: this command needs a model file (nurllama --help)` ) )
     } {}
 
     ? ( nurl_str_eq cmd `chat` ) {
         ? < ( args_positional_count p ) 2 {
-            ( args_free p )
             ^ ( __nl_err ( string_from `nurllama: chat needs a model (nurllama --help)` ) )
         } {}
         : ~ s carg ``
@@ -932,21 +830,15 @@ $ `stdlib/std/term.nu`
         : ~ String cres ( string_new )
         ?? ( __nl_resolve_or_fetch croot carg ) {
             T pth → {
-                ( string_free cres )
                 = cres pth
             }
             F → {}
         }
-        ( string_free croot )
         ? > ( string_len cres ) 0 {} {
             // __nl_resolve_or_fetch already reported why
-            ( string_free cres )
-            ( args_free p )
             ^ 1
         }
         : i rc ( __nl_chat ( string_data cres ) p )
-        ( string_free cres )
-        ( args_free p )
         ^ rc
     } {}
 
@@ -972,9 +864,6 @@ $ `stdlib/std/term.nu`
                 }
                 : i nd ( vec_len [i] dids )
                 ? | < nd 1 > nd ( llm_chunk ) {
-                    ( vec_free [i] dids )
-                    ( llm_close mm )
-                    ( args_free p )
                     ^ ( __nl_err ( string_from `nurllama: dlogits needs 1..64 token ids` ) )
                 } {}
                 ( llm_eval_win mm dids 0 nd 0 nd T )
@@ -989,18 +878,13 @@ $ `stdlib/std/term.nu`
                     }
                     ( string_push_char line 10 )
                     ( nurl_print ( string_data line ) )
-                    ( string_free line )
                     = r + r 1
                 }
-                ( vec_free [i] dids )
-                ( llm_close mm )
             }
             F e → {
-                ( args_free p )
                 ^ ( __nl_err e )
             }
         }
-        ( args_free p )
         ^ 0
     } {}
 
@@ -1027,26 +911,20 @@ $ `stdlib/std/term.nu`
                 : String snp ( args_value_or p `n-predict` `16` )
                 : ~ i npredict 16
                 ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
-                ( string_free snp )
                 : String sbl ( args_value_or p `block` `8` )
                 : ~ i dbl 8
                 ?? ( string_to_int sbl ) { T v2 → { = dbl v2 } F _ → {} }
-                ( string_free sbl )
                 : String sth ( args_value_or p `threshold` `0.7` )
                 : ~ f dthr 0.7
                 ?? ( string_to_float sth ) { T v2 → { = dthr v2 } F → {} }
-                ( string_free sth )
                 : String set2 ( args_value_or p `edit-threshold` `0.5` )
                 : ~ f dethr 0.5
                 ?? ( string_to_float set2 ) { T v2 → { = dethr v2 } F → {} }
-                ( string_free set2 )
                 : String sps ( args_value_or p `post-steps` `16` )
                 : ~ i dpost 16
                 ?? ( string_to_int sps ) { T v2 → { = dpost v2 } F _ → {} }
-                ( string_free sps )
                 : Rng rng ( rng_seed 42 )
                 : ( Vec i ) gen ( dz_generate mm dids npredict dbl dthr dethr dpost 0.0 rng )
-                ( rng_free rng )
                 : String line ( string_new )
                 : ~ i gi 0
                 ~ < gi ( vec_len [i] gen ) {
@@ -1056,17 +934,11 @@ $ `stdlib/std/term.nu`
                 }
                 ( string_push_char line 10 )
                 ( nurl_print ( string_data line ) )
-                ( string_free line )
-                ( vec_free [i] gen )
-                ( vec_free [i] dids )
-                ( llm_close mm )
             }
             F e → {
-                ( args_free p )
                 ^ ( __nl_err e )
             }
         }
-        ( args_free p )
         ^ 0
     } {}
 
@@ -1081,16 +953,12 @@ $ `stdlib/std/term.nu`
         : ~ String mres ( string_new )
         ?? ( __nl_resolve_or_fetch mroot mparg ) {
             T pth → {
-                ( string_free mres )
                 = mres pth
             }
             F → {}
         }
-        ( string_free mroot )
         ? > ( string_len mres ) 0 {} {
             // __nl_resolve_or_fetch already reported why
-            ( string_free mres )
-            ( args_free p )
             ^ 1
         }
         : s mp ( string_data mres )
@@ -1102,7 +970,6 @@ $ `stdlib/std/term.nu`
         : String sctx ( args_value_or p `ctx` `0` )
         : ~ i want_ctx 0
         ?? ( string_to_int sctx ) { T v2 → { = want_ctx v2 } F _ → {} }
-        ( string_free sctx )
         : ~ i rc2 0
         : String wpath ( args_value_or p `weights` `` )
         ?? ( llm_open_st mp ( string_data wpath ) want_ctx ) {
@@ -1119,31 +986,24 @@ $ `stdlib/std/term.nu`
                         : String snp ( args_value_or p `n-predict` `256` )
                         : ~ i npredict 256
                         ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
-                        ( string_free snp )
                         : String stmp ( args_value_or p `temp` `0` )
                         : ~ f temp 0.0
                         ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
-                        ( string_free stmp )
                         : String sbl ( args_value_or p `block` `32` )
                         : ~ i dbl 32
                         ?? ( string_to_int sbl ) { T v2 → { = dbl v2 } F _ → {} }
-                        ( string_free sbl )
                         : String sth ( args_value_or p `threshold` `0.7` )
                         : ~ f dthr 0.7
                         ?? ( string_to_float sth ) { T v2 → { = dthr v2 } F → {} }
-                        ( string_free sth )
                         : String set2 ( args_value_or p `edit-threshold` `0.5` )
                         : ~ f dethr 0.5
                         ?? ( string_to_float set2 ) { T v2 → { = dethr v2 } F → {} }
-                        ( string_free set2 )
                         : String sps ( args_value_or p `post-steps` `16` )
                         : ~ i dpost 16
                         ?? ( string_to_int sps ) { T v2 → { = dpost v2 } F _ → {} }
-                        ( string_free sps )
                         : String ssd ( args_value_or p `seed` `42` )
                         : ~ i seed 42
                         ?? ( string_to_int ssd ) { T v2 → { = seed v2 } F _ → {} }
-                        ( string_free ssd )
                         : Rng rng ( rng_seed seed )
                         : ( Vec i ) gen ( dz_generate m ids npredict dbl dthr dethr dpost temp rng )
                         : ~ i gi 0
@@ -1151,13 +1011,10 @@ $ `stdlib/std/term.nu`
                             : ( Vec u ) pb ( tok_piece t ( _dz_geti gen gi ) )
                             : i pn ( vec_len [u] pb )
                             ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
-                            ( vec_free [u] pb )
                             = gi + gi 1
                         }
                         ( flush )
                         ( nurl_print `\n` )
-                        ( vec_free [i] gen )
-                        ( rng_free rng )
                     } {
                         // prefill: the whole prompt in batched chunks
 
@@ -1169,30 +1026,24 @@ $ `stdlib/std/term.nu`
                                 ( string_push_float ln ( llm_logit m j ) )
                                 ( nurl_print ( string_data ln ) )
                                 ( nurl_print `\n` )
-                                ( string_free ln )
                                 = j + j 1
                             }
                         } {
                             : String stmp ( args_value_or p `temp` `0.8` )
                             : ~ f temp 0.8
                             ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
-                            ( string_free stmp )
                             : String snp ( args_value_or p `n-predict` `64` )
                             : ~ i npredict 64
                             ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
-                            ( string_free snp )
                             : String stk ( args_value_or p `topk` `40` )
                             : ~ i topk 40
                             ?? ( string_to_int stk ) { T v2 → { = topk v2 } F _ → {} }
-                            ( string_free stk )
                             : String stp ( args_value_or p `topp` `0.95` )
                             : ~ f topp 0.95
                             ?? ( string_to_float stp ) { T v2 → { = topp v2 } F → {} }
-                            ( string_free stp )
                             : String ssd ( args_value_or p `seed` `42` )
                             : ~ i seed 42
                             ?? ( string_to_int ssd ) { T v2 → { = seed v2 } F _ → {} }
-                            ( string_free ssd )
                             : Rng rng ( rng_seed seed )
 
                             : ~ i pos nprompt
@@ -1204,26 +1055,19 @@ $ `stdlib/std/term.nu`
                                     : ( Vec u ) pb ( tok_piece t nt2 )
                                     : i pn ( vec_len [u] pb )
                                     ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
-                                    ( vec_free [u] pb )
                                     ( flush )
                                     ( llm_eval m nt2 pos )
                                     = pos + pos 1
                                     = produced + produced 1
                                 }
                             }
-                            ( rng_free rng )
                             ( nurl_print `\n` )
                         }
                     }
                 }
-                ( vec_free [i] ids )
-                ( llm_close m )
             }
             F e → { = rc2 ( __nl_err e ) }
         }
-        ( string_free wpath )
-        ( string_free mres )
-        ( args_free p )
         ^ rc2
     } {}
     : ~ s mparg2 ``
@@ -1235,16 +1079,12 @@ $ `stdlib/std/term.nu`
     : ~ String mres2 ( string_new )
     ?? ( __nl_resolve_or_fetch mroot2 mparg2 ) {
         T pth → {
-            ( string_free mres2 )
             = mres2 pth
         }
         F → {}
     }
-    ( string_free mroot2 )
     ? > ( string_len mres2 ) 0 {} {
         // __nl_resolve_or_fetch already reported why
-        ( string_free mres2 )
-        ( args_free p )
         ^ 1
     }
     : s mpath ( string_data mres2 )
@@ -1261,7 +1101,6 @@ $ `stdlib/std/term.nu`
                         }
                         : ( Vec i ) ids ( tok_encode t text ! ( args_present p `no-special` ) )
                         ( __nl_print_ids ids )
-                        ( vec_free [i] ids )
                     } {
                         ? ( nurl_str_eq cmd `detok` ) {
                             : ( Vec i ) ids ( vec_new [i] )
@@ -1282,8 +1121,6 @@ $ `stdlib/std/term.nu`
                             : i n ( vec_len [u] out )
                             ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] out ) n ) } {}
                             ( nurl_print `\n` )
-                            ( vec_free [u] out )
-                            ( vec_free [i] ids )
                         } {
                             ? ( nurl_str_eq cmd `vocab` ) {
                                 : ~ i n ( tok_n_vocab t )
@@ -1306,7 +1143,6 @@ $ `stdlib/std/term.nu`
                                     ( string_push_str m ( tok_piece_str t k ) )
                                     ( nurl_print ( string_data m ) )
                                     ( nurl_print `\n` )
-                                    ( string_free m )
                                     = k + k 1
                                 }
                             } {
@@ -1315,15 +1151,11 @@ $ `stdlib/std/term.nu`
                             }
                         }
                     }
-                    ( tok_free t )
                 }
                 F e → { = rc ( __nl_err e ) }
             }
-            ( gguf_close g )
         }
         F e → { = rc ( __nl_err e ) }
     }
-    ( string_free mres2 )
-    ( args_free p )
     ^ rc
 }

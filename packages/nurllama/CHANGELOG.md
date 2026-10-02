@@ -2,6 +2,31 @@
 
 All notable changes to the `nurllama` package.
 
+## Unreleased
+
+Nothing is released by hand any more.
+
+- `llm_open` / `llm_open_st` return an **`Llm` handle** (was `*Llm`) and
+  `ft_open` an **`FtModel` handle** (was `*FtModel`): every copy is the
+  same model, and its last owner releases the weights, the KV cache, the
+  mappings and the device context. `llm_close` / `ft_free` are optional
+  early releases; the `NURLLAMA_PROF` totals print when the model goes.
+  A server keeps its resident model as one word (`llm_into_word` /
+  `llm_word_release`).
+- `cfg_free`, `chat_msg_free`, `chat_msgs_free`, `ft_train_free` and
+  `lk_free` are gone: `NlConfig`, `ChatMsg`, `FtTrain` and `LlmKernels`
+  are plain values the compiler drops.
+- `ft_graph` fills a `( Vec i )` of LoRA parameter ids (was a raw
+  `*u` block the caller sized), and `ft_adapters_load` returns the rank
+  through an `inout i` (was a `*u` cell). New shape accessors
+  `ft_n_embd` / `ft_n_layer` / `ft_n_head` / `ft_n_kv` / `ft_head_dim` /
+  `ft_n_vocab` / `ft_rope_style` and `ft_has_qk_norm`.
+- The trainer's optional norm / bias tensors are values (`FtV`) rather
+  than heap boxes behind raw words, and a NORM-rope q/k bias is now
+  un-permuted in place: the old code built a literal from the boxed
+  vector, which copies it, and un-permuted the copy. No llama-family
+  model carries q/k biases, so no trained or merged output changes.
+
 ## 0.17.7
 
 The merged LoRA weight is no longer freed after its owner took it over (a double free under NURL 0.67.0, #1143).
