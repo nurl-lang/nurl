@@ -22,17 +22,12 @@ $ `stdlib/std/hash_sha512.nu`
 
 @ __ed_pt → EdPt { ^ @ EdPt { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
 
-@ __ed_pt_free sink EdPt p → v {
-    ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z ) ( vec_free [i] . p t )
-}
-
 // ── constants ──────────────────────────────────────────────────────
 // Built by unpacking the 32-byte little-endian forms of TweetNaCl's gf
 // constants (the high-bit mask in _unpack25519 is a no-op here).
 @ __ed_const s hex → ( Vec i ) {
     : ( Vec u ) b ?? ( bytes_from_hex hex ) { T v → v F _ → ( vec_new [u] ) }
     : ( Vec i ) g ( _unpack25519 b )
-    ( vec_free [u] b )
     ^ g
 }
 
@@ -71,7 +66,6 @@ $ `stdlib/std/hash_sha512.nu`
 @ __ed_s_canonical ( Vec u ) cap_S → b {
     : ( Vec u ) Lc ( __ed_L )
     : b ok ( __ed_lt32 cap_S Lc )
-    ( vec_free [u] Lc )
     ^ ok
 }
 
@@ -83,7 +77,6 @@ $ `stdlib/std/hash_sha512.nu`
     ( _bset m 31 & ( _x_bget m 31 ) 127 )  // clear the sign bit
     : ( Vec u ) pc ?? ( bytes_from_hex `edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f` ) { T v → v F _ → ( vec_new [u] ) }
     : b ok ( __ed_lt32 m pc )
-    ( vec_free [u] m ) ( vec_free [u] pc )
     ^ ok
 }
 
@@ -120,12 +113,6 @@ $ `stdlib/std/hash_sha512.nu`
         ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero )
         ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero )
     }
-}
-
-@ __ed_scr_free sink EdScratch s → v {
-    ( vec_free [i] . s a ) ( vec_free [i] . s b ) ( vec_free [i] . s c )
-    ( vec_free [i] . s d ) ( vec_free [i] . s e ) ( vec_free [i] . s f )
-    ( vec_free [i] . s g ) ( vec_free [i] . s h ) ( vec_free [i] . s tt )
 }
 
 // p ← p + q, twisted-Edwards extended coordinates. `p` may be `q` (the
@@ -262,9 +249,6 @@ $ `stdlib/std/hash_sha512.nu`
         ( __ed_add sc p sel d2 )
         = w + w 1
     }
-    ( __ed_pt_free cur ) ( __ed_pt_free sel )
-    ( vec_free [i] tbl )
-    ( __ed_scr_free sc )
 }
 
 @ __ed_pt_copy EdPt dst EdPt src → v {
@@ -284,15 +268,12 @@ $ `stdlib/std/hash_sha512.nu`
     ( _vset . q z 0 1 )
     ( _M . q t bx by )
     ( __ed_scalarmult p q s d2 )
-    ( __ed_pt_free q )
-    ( vec_free [i] bx ) ( vec_free [i] by )
 }
 
 // parity = low bit of the canonical packing.
 @ __ed_par25519 ( Vec i ) a → i {
     : ( Vec u ) d ( _pack25519 a )
     : i p & ( _x_bget d 0 ) 1
-    ( vec_free [u] d )
     ^ p
 }
 
@@ -303,7 +284,6 @@ $ `stdlib/std/hash_sha512.nu`
     : ~ i diff 0
     : ~ i k 0
     ~ < k 32 { = diff | diff ^^ ( _x_bget pa k ) ( _x_bget pb k ) = k + k 1 }
-    ( vec_free [u] pa ) ( vec_free [u] pb )
     ^ ? == diff 0 0 1
 }
 
@@ -317,7 +297,6 @@ $ `stdlib/std/hash_sha512.nu`
         = a - a 1
     }
     ( _gf_into o c )
-    ( vec_free [i] c )
 }
 
 // Pack a point to 32 bytes (affine y with the x-parity in the top bit).
@@ -329,7 +308,6 @@ $ `stdlib/std/hash_sha512.nu`
     : ( Vec u ) r ( _pack25519 ty )
     : i px ( __ed_par25519 tx )
     ( _bset r 31 ^^ ( _x_bget r 31 ) << px 7 )
-    ( vec_free [i] zi ) ( vec_free [i] tx ) ( vec_free [i] ty )
     ^ r
 }
 
@@ -344,7 +322,6 @@ $ `stdlib/std/hash_sha512.nu`
     ( _vset . r z 0 1 )
     : ( Vec i ) ry ( _unpack25519 p )
     ( _gf_into . r y ry )
-    ( vec_free [i] ry )
     ( _S num . r y )
     ( _M den num cD )
     ( _Z num num . r z )
@@ -370,12 +347,9 @@ $ `stdlib/std/hash_sha512.nu`
         ? == ( __ed_par25519 . r x ) >> ( _x_bget p 31 ) 7 {
             : ( Vec i ) z0 ( _gf_zero )
             ( _Z . r x z0 . r x )
-            ( vec_free [i] z0 )
         } {}
         ( _M . r t . r x . r y )
     } {}
-    ( vec_free [i] cD ) ( vec_free [i] cI ) ( vec_free [i] num ) ( vec_free [i] den )
-    ( vec_free [i] den2 ) ( vec_free [i] den4 ) ( vec_free [i] den6 ) ( vec_free [i] t ) ( vec_free [i] chk )
     ^ ret
 }
 
@@ -413,7 +387,6 @@ $ `stdlib/std/hash_sha512.nu`
         ( _bset r i2 & ( _vget x i2 ) 255 )
         = i2 + i2 1
     }
-    ( vec_free [u] cL )
 }
 
 // Reduce a 64-byte value mod L, leaving the 32-byte result in r[0:32].
@@ -422,7 +395,6 @@ $ `stdlib/std/hash_sha512.nu`
     : ~ i i 0
     ~ < i 64 { ( _vset x i ( _x_bget r i ) ) = i + i 1 }
     ( __ed_modL r x )
-    ( vec_free [i] x )
 }
 
 // ── public API ─────────────────────────────────────────────────────
@@ -437,7 +409,6 @@ $ `stdlib/std/hash_sha512.nu`
     : EdPt p ( __ed_pt )
     ( __ed_scalarbase p a d2 )
     : ( Vec u ) pk ( __ed_pack p )
-    ( __ed_pt_free p ) ( vec_free [i] d2 ) ( vec_free [u] h ) ( vec_free [u] a )
     ^ pk
 }
 
@@ -490,10 +461,6 @@ $ `stdlib/std/hash_sha512.nu`
     : ( Vec u ) sig ( vec_new [u] )
     ( __ed_app sig cap_R ) ( __ed_app sig cap_S )
 
-    ( __ed_pt_free pA ) ( __ed_pt_free pR ) ( vec_free [i] d2 ) ( vec_free [i] x )
-    ( vec_free [u] h ) ( vec_free [u] a ) ( vec_free [u] prefix ) ( vec_free [u] cap_A )
-    ( vec_free [u] rhash ) ( vec_free [u] rscalar ) ( vec_free [u] cap_R )
-    ( vec_free [u] khash ) ( vec_free [u] cap_S )
     ^ sig
 }
 
@@ -505,7 +472,6 @@ $ `stdlib/std/hash_sha512.nu`
     : ( Vec u ) cap_A ( __ed_b32 pk 0 )
     : i okpt ( __ed_unpackneg negA cap_A )
     ? != okpt 0 {
-        ( __ed_pt_free negA ) ( vec_free [i] d2 ) ( vec_free [u] cap_A )
         ^ F
     } {}
     : ( Vec u ) cap_R ( __ed_b32 sig 0 )
@@ -514,8 +480,6 @@ $ `stdlib/std/hash_sha512.nu`
     // a non-canonical S enables (R, S+L) malleability; non-canonical A/R
     // break point-uniqueness. Conformant signers always satisfy both.
     ? | | ! ( __ed_s_canonical cap_S ) ! ( __ed_y_canonical cap_A ) ! ( __ed_y_canonical cap_R ) {
-        ( __ed_pt_free negA ) ( vec_free [i] d2 )
-        ( vec_free [u] cap_A ) ( vec_free [u] cap_R ) ( vec_free [u] cap_S )
         ^ F
     } {}
 
@@ -531,14 +495,10 @@ $ `stdlib/std/hash_sha512.nu`
     : EdPt q ( __ed_pt ) ( __ed_scalarbase q cap_S d2 )
     : EdScratch vsc ( __ed_scr_new )
     ( __ed_add vsc p q d2 )
-    ( __ed_scr_free vsc )
     : ( Vec u ) tcheck ( __ed_pack p )
     : ~ i diff 0
     : ~ i kk 0
     ~ < kk 32 { = diff | diff ^^ ( _x_bget cap_R kk ) ( _x_bget tcheck kk ) = kk + kk 1 }
 
-    ( __ed_pt_free negA ) ( __ed_pt_free p ) ( __ed_pt_free q ) ( vec_free [i] d2 )
-    ( vec_free [u] cap_A ) ( vec_free [u] cap_R ) ( vec_free [u] cap_S )
-    ( vec_free [u] khash ) ( vec_free [u] kscalar ) ( vec_free [u] tcheck )
     ^ == diff 0
 }

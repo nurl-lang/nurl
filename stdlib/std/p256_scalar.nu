@@ -260,7 +260,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) rr ( __sn_rr )
     : ( Vec i ) o ( __sn_mag4 )
     ( __sn_mul o a rr )
-    ( vec_free [i] rr )
     ^ o
 }
 
@@ -268,7 +267,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) one ( __sn_one )
     : ( Vec i ) o ( __sn_mag4 )
     ( __sn_mul o a one )
-    ( vec_free [i] one )
     ^ o
 }
 
@@ -322,7 +320,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) v ( __sn_from_be_raw x )
     ( __sn_reduce v )
     : ( Vec u ) o ( __sn_to_be v )
-    ( vec_free [i] v )
     ^ o
 }
 
@@ -335,8 +332,6 @@ $ `stdlib/core/vec.nu`
     ( __sn_mul pm am bm )
     : ( Vec i ) pr ( __sn_from_mont pm )
     : ( Vec u ) o ( __sn_to_be pr )
-    ( vec_free [i] av ) ( vec_free [i] bv ) ( vec_free [i] am )
-    ( vec_free [i] bm ) ( vec_free [i] pm ) ( vec_free [i] pr )
     ^ o
 }
 
@@ -359,7 +354,6 @@ $ `stdlib/core/vec.nu`
     }
     ( __sn_condsub s # u64 . sp 0 # u64 . sp 1 # u64 . sp 2 # u64 . sp 3 cy )
     : ( Vec u ) o ( __sn_to_be s )
-    ( vec_free [i] av ) ( vec_free [i] bv ) ( vec_free [i] s )
     ^ o
 }
 
@@ -440,7 +434,5 @@ $ `stdlib/core/vec.nu`
     }
     : ( Vec i ) out ( __sn_from_mont r )
     : ( Vec u ) o ( __sn_to_be out )
-    ( vec_free [i] av ) ( vec_free [i] am ) ( vec_free [i] r )
-    ( vec_free [u] e ) ( vec_free [i] w ) ( vec_free [i] out )
     ^ o
 }

@@ -408,15 +408,12 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
     ( vec_push [u] idx # u x1 )
     ( vec_push [u] idx # u x2 )
     ( sha3_absorb xof idx )
-    ( vec_free [u] idx )
 
     : ~ i ctr 0
     ~ < ctr 256 {
         : ( Vec u ) buf ( sha3_squeeze xof 168 )
         = ctr ( __rej_uniform r off ctr buf 168 )
-        ( vec_free [u] buf )
     }
-    ( sha3_free xof )
 }
 
 // The two index bytes of cell `c` of a k×k matrix, in the order FIPS
@@ -450,8 +447,6 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
     : ( Vec u ) x2 ( __mat_idx k transposed + c0 2 )
     : ( Vec u ) x3 ( __mat_idx k transposed + c0 3 )
     ( sha3x4_absorb xof x0 x1 x2 x3 )
-    ( vec_free [u] x0 ) ( vec_free [u] x1 )
-    ( vec_free [u] x2 ) ( vec_free [u] x3 )
 
     : ( Vec u ) b0 ( vec_with_cap [u] 168 )
     : ( Vec u ) b1 ( vec_with_cap [u] 168 )
@@ -474,9 +469,6 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
             = n3 ( __rej_uniform r * 256 + c0 3 n3 b3 168 )
         }
     }
-    ( vec_free [u] b0 ) ( vec_free [u] b1 )
-    ( vec_free [u] b2 ) ( vec_free [u] b3 )
-    ( sha3x4_free xof )
 }
 
 // PRF_η (FIPS 203 §4.1): SHAKE256(s ‖ b, 64η).
@@ -486,9 +478,7 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
     : ( Vec u ) nb ( vec_new [u] )
     ( vec_push [u] nb # u nonce )
     ( sha3_absorb h nb )
-    ( vec_free [u] nb )
     : ( Vec u ) out ( sha3_squeeze h * 64 eta )
-    ( sha3_free h )
     ^ out
 }
 
@@ -505,9 +495,7 @@ simd @ __poly_basemul * i16 r i ro * i16 a i ao * i16 b i bo * i16 zetas → v {
     : ( Vec u ) b2 ( vec_new [u] ) ( vec_push [u] b2 # u n2 )
     : ( Vec u ) b3 ( vec_new [u] ) ( vec_push [u] b3 # u n3 )
     ( sha3x4_absorb h b0 b1 b2 b3 )
-    ( vec_free [u] b0 ) ( vec_free [u] b1 ) ( vec_free [u] b2 ) ( vec_free [u] b3 )
     ( sha3x4_squeeze h * 64 eta o0 o1 o2 o3 )
-    ( sha3x4_free h )
 }
 
 // One batch of `count` consecutive-nonce CBD polynomials into dst,
@@ -720,10 +708,8 @@ simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout
     ( bytes_extend_bytes gin d )
     ( vec_push [u] gin # u k )
     : ( Vec u ) g ( sha3_512_pure gin )
-    ( vec_free [u] gin )
     : ( Vec u ) rho ( bytes_slice g 0 32 )
     : ( Vec u ) sigma ( bytes_slice g 32 64 )
-    ( vec_free [u] g )
 
     : ( Vec i16 ) a ( __poly_zero * 256 * k k )
     ( __gen_matrix a rho k F zp )
@@ -762,14 +748,6 @@ simd @ __kpke_keygen MlkemParams prm ( Vec u ) d ( Vec u ) ekout ( Vec u ) dkout
     = i 0
     ~ < i k { ( __poly_canon sp * 256 i ) ( __byte_encode sp * 256 i 12 dkout ) = i + i 1 }
 
-    ( vec_free [i16] scratch )
-    ( vec_free [i16] t )
-    ( vec_free [i16] e )
-    ( vec_free [i16] s )
-    ( vec_free [i16] a )
-    ( vec_free [u] sigma )
-    ( vec_free [u] rho )
-    ( vec_free [i16] zt )
 }
 
 // K-PKE.Encrypt (Algorithm 14).
@@ -798,7 +776,6 @@ simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec
     ( __cbd_batch e1p r k k . prm eta2 )
     : ( Vec u ) prf2 ( __mlkem_prf r * 2 k . prm eta2 )
     ( __cbd e2p 0 prf2 . prm eta2 )
-    ( vec_free [u] prf2 )
 
     = i 0
     ~ < i k { ( __ntt yp * 256 i zp ) ( __poly_reduce yp * 256 i ) = i + i 1 }
@@ -840,17 +817,6 @@ simd @ __kpke_encrypt MlkemParams prm ( Vec u ) ek ( Vec u ) m ( Vec u ) r ( Vec
     ( __poly_compress vp 0 . prm dv )
     ( __byte_encode vp 0 . prm dv ctout )
 
-    ( vec_free [i16] mu )
-    ( vec_free [i16] vpoly )
-    ( vec_free [i16] scratch )
-    ( vec_free [i16] uvec )
-    ( vec_free [i16] e2 )
-    ( vec_free [i16] e1 )
-    ( vec_free [i16] y )
-    ( vec_free [i16] at )
-    ( vec_free [u] rho )
-    ( vec_free [i16] t )
-    ( vec_free [i16] zt )
 }
 
 // K-PKE.Decrypt (Algorithm 15) → the 32-byte message.
@@ -894,12 +860,6 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : ( Vec u ) m ( vec_new [u] )
     ( __byte_encode wp 0 1 m )
 
-    ( vec_free [i16] scratch )
-    ( vec_free [i16] w )
-    ( vec_free [i16] s )
-    ( vec_free [i16] vpoly )
-    ( vec_free [i16] uvec )
-    ( vec_free [i16] zt )
     ^ m
 }
 
@@ -975,7 +935,6 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     ( bytes_extend_bytes dk ek )
     : ( Vec u ) hek ( sha3_256_pure ek )
     ( bytes_extend_bytes dk hek )
-    ( vec_free [u] hek )
     ( bytes_extend_bytes dk z )
     ^ @ MlkemKeys { # s ( rcbox_new [MlkemKeysImpl] @ MlkemKeysImpl { ek dk } ) }
 }
@@ -984,8 +943,6 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     : ( Vec u ) d ( rand_bytes 32 )
     : ( Vec u ) z ( rand_bytes 32 )
     : MlkemKeys h ( mlkem_keygen_derand level d z )
-    ( vec_free [u] z )
-    ( vec_free [u] d )
     ^ h
 }
 
@@ -997,23 +954,18 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     ( bytes_extend_bytes gin m )
     : ( Vec u ) hek ( sha3_256_pure ek )
     ( bytes_extend_bytes gin hek )
-    ( vec_free [u] hek )
     : ( Vec u ) g ( sha3_512_pure gin )
-    ( vec_free [u] gin )
     : ( Vec u ) kk ( bytes_slice g 0 32 )
     : ( Vec u ) r ( bytes_slice g 32 64 )
-    ( vec_free [u] g )
 
     : ( Vec u ) ct ( vec_with_cap [u] ( mlkem_ct_len level ) )
     ( __kpke_encrypt prm ek m r ct )
-    ( vec_free [u] r )
     ^ @ MlkemEncap { # s ( rcbox_new [MlkemEncapImpl] @ MlkemEncapImpl { ct kk } ) }
 }
 
 @ mlkem_encaps i level ( Vec u ) ek → MlkemEncap {
     : ( Vec u ) m ( rand_bytes 32 )
     : MlkemEncap h ( mlkem_encaps_derand level ek m )
-    ( vec_free [u] m )
     ^ h
 }
 
@@ -1041,17 +993,14 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
     ( bytes_extend_bytes gin m )
     ( bytes_extend_bytes gin hh )
     : ( Vec u ) g ( sha3_512_pure gin )
-    ( vec_free [u] gin )
     : ( Vec u ) kprime ( bytes_slice g 0 32 )
     : ( Vec u ) rprime ( bytes_slice g 32 64 )
-    ( vec_free [u] g )
 
     // K̄ ← J(z ‖ c, 32)
     : Sha3 j ( shake256_init )
     ( sha3_absorb j z )
     ( sha3_absorb j ct )
     : ( Vec u ) kbar ( sha3_squeeze j 32 )
-    ( sha3_free j )
 
     : ( Vec u ) ct2 ( vec_with_cap [u] ( mlkem_ct_len level ) )
     ( __kpke_encrypt prm ekpke m rprime ct2 )
@@ -1086,13 +1035,5 @@ simd @ __kpke_decrypt MlkemParams prm ( Vec u ) dk ( Vec u ) ct → ( Vec u ) {
         = i + i 1
     }
 
-    ( vec_free [u] kbar )
-    ( vec_free [u] rprime )
-    ( vec_free [u] kprime )
-    ( vec_free [u] m )
-    ( vec_free [u] z )
-    ( vec_free [u] hh )
-    ( vec_free [u] ekpke )
-    ( vec_free [u] dkpke )
     ^ out
 }

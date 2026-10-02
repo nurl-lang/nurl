@@ -413,9 +413,6 @@ $ `stdlib/core/vec.nu`
     ( _sqn25519 z10 5 )
     ( _M z10 z10 z11 )  // z^(2^255−21)
     ( _gf_into io z10 )
-    ( vec_free [i] z ) ( vec_free [i] z2 ) ( vec_free [i] z9 )
-    ( vec_free [i] z11 ) ( vec_free [i] z5 ) ( vec_free [i] z10 )
-    ( vec_free [i] z50 ) ( vec_free [i] t )
 }
 
 // ── the ladder ────────────────────────────────────────────────────
@@ -471,15 +468,6 @@ $ `stdlib/core/vec.nu`
     ( _M a a c )
     : ( Vec u ) out ( _pack25519 a )
 
-    ( vec_free [i] x )
-    ( vec_free [i] a )
-    ( vec_free [i] b )
-    ( vec_free [i] c )
-    ( vec_free [i] d )
-    ( vec_free [i] e )
-    ( vec_free [i] f )
-    ( vec_free [i] k121665 )
-    ( vec_free [u] z )
     ^ out
 }
 
@@ -505,14 +493,7 @@ $ `stdlib/core/vec.nu`
 
 @ __xe_pt → XEP { ^ @ XEP { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
 
-@ __xe_pt_free sink XEP p → v { ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z ) ( vec_free [i] . p t ) }
-
 @ __xe_scr → XEScr { ^ @ XEScr { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
-
-@ __xe_scr_free sink XEScr s → v {
-    ( vec_free [i] . s a ) ( vec_free [i] . s b ) ( vec_free [i] . s c ) ( vec_free [i] . s d ) ( vec_free [i] . s e )
-    ( vec_free [i] . s f ) ( vec_free [i] . s g ) ( vec_free [i] . s h ) ( vec_free [i] . s tt )
-}
 
 // 2d, the Ed25519 addition constant, baked as five 2^51 limbs.
 @ __xe_d2 → ( Vec i ) {
@@ -672,9 +653,6 @@ $ `stdlib/core/vec.nu`
     // The winner lives for the rest of the program, through the global.
     ? == won # i . ntbl ctl { ( mem_forget ntbl ) } {}
     = g_xe_ntbl won
-    ( vec_free [i] src ) ( vec_free [i] d2 )
-    ( vec_free [i] x ) ( vec_free [i] y ) ( vec_free [i] t )
-    ( vec_free [i] yp ) ( vec_free [i] ym ) ( vec_free [i] t2d )
 }
 
 @ __xe_ntbl → ( Vec i ) {
@@ -821,10 +799,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) out ( _pack25519 uf )
 
     // tbl is the shared process-global niels table — never freed here.
-    ( __xe_scr_free scr )
-    ( __xe_pt_free acc )
-    ( vec_free [i] syp ) ( vec_free [i] sym ) ( vec_free [i] std )
-    ( vec_free [u] sc ) ( vec_free [i] num ) ( vec_free [i] den ) ( vec_free [i] uf )
     ^ out
 }
 

@@ -200,7 +200,6 @@ $ `stdlib/core/rcbox.nu`
     ( sha3_absorb h b )
     ( sha3_absorb h c )
     : ( Vec u ) o ( sha3_squeeze h outlen )
-    ( sha3_free h )
     ^ o
 }
 
@@ -273,17 +272,11 @@ $ `stdlib/core/rcbox.nu`
     ^ v
 }
 
-@ __slhx4_new → *SlhCtx {
-    : *SlhCtx c # *SlhCtx ( nurl_alloc Z SlhCtx )
-    = . c st ( __sx_buf_u64 100 )
-    = . c scr ( __sx_buf_u64 100 )
-    = . c rc ( keccak_round_constants )
-    = . c in0 ( __sx_buf 136 )
-    = . c in1 ( __sx_buf 136 )
-    = . c in2 ( __sx_buf 136 )
-    = . c in3 ( __sx_buf 136 )
-    = . c val ( __sx_buf 128 )
-    ^ c
+// A context is a value the public call keeps in a local and lends down
+// the chain (`inout`); its buffers go with that local.
+@ __slhx4_new → SlhCtx {
+    ^ @ SlhCtx { ( __sx_buf_u64 100 ) ( __sx_buf_u64 100 ) ( keccak_round_constants )
+        ( __sx_buf 136 ) ( __sx_buf 136 ) ( __sx_buf 136 ) ( __sx_buf 136 ) ( __sx_buf 128 ) }
 }
 
 @ __sx_buf_u64 i len → ( Vec u64 ) {
@@ -292,19 +285,7 @@ $ `stdlib/core/rcbox.nu`
     ^ v
 }
 
-@ __slhx4_free sink * SlhCtx c → v {
-    ( vec_free [u64] . c st )
-    ( vec_free [u64] . c scr )
-    ( vec_free [u64] . c rc )
-    ( vec_free [u] . c in0 )
-    ( vec_free [u] . c in1 )
-    ( vec_free [u] . c in2 )
-    ( vec_free [u] . c in3 )
-    ( vec_free [u] . c val )
-    ( nurl_free # s c )
-}
-
-@ __sx_in * SlhCtx c i w → *u {
+@ __sx_in inout SlhCtx c i w → *u {
     ? == w 0 { ^ ( vec_data [u] . c in0 ) } {}
     ? == w 1 { ^ ( vec_data [u] . c in1 ) } {}
     ? == w 2 { ^ ( vec_data [u] . c in2 ) } {}
@@ -315,7 +296,7 @@ $ `stdlib/core/rcbox.nu`
 // absorbs, so the four-way and one-way spellings of the same hash are
 // the same bytes. `value` is a raw pointer because it is usually a lane
 // of ctx.val; the vecs it can also come from hand over vec_data.
-@ __sx_stage * SlhCtx c i w ( Vec u ) pkseed ( Vec u ) adrs * u value i vlen → i {
+@ __sx_stage inout SlhCtx c i w ( Vec u ) pkseed ( Vec u ) adrs * u value i vlen → i {
     : i n ( vec_len [u] pkseed )
     : *u dst ( __sx_in c w )
     ( nurl_memcpy # s dst # s ( vec_data [u] pkseed ) n )
@@ -326,7 +307,7 @@ $ `stdlib/core/rcbox.nu`
 
 // One four-way hash over the staged inputs, n bytes back into each
 // lane of ctx.val.
-@ __sx_run * SlhCtx c i inlen i n → v {
+@ __sx_run inout SlhCtx c i inlen i n → v {
     : *u vp ( vec_data [u] . c val )
     ( shake256x4_block ( vec_data [u64] . c st ) ( vec_data [u64] . c scr )
     ( vec_data [u64] . c rc )
@@ -340,7 +321,7 @@ $ `stdlib/core/rcbox.nu`
 // exit. All four lanes take the same number of steps — the callers
 // with per-chain step counts (sign, verify) stay on the scalar path,
 // where the count is data-dependent and small.
-@ __chains_x4 * SlhCtx c ( Vec u ) pkseed ( Vec u ) adrs i c0 i c1 i c2 i c3 i start i steps i n → v {
+@ __chains_x4 inout SlhCtx c ( Vec u ) pkseed ( Vec u ) adrs i c0 i c1 i c2 i c3 i start i steps i n → v {
     : *u vp ( vec_data [u] . c val )
     : ~ i j start
     ~ < j + start steps {
@@ -371,7 +352,7 @@ $ `stdlib/core/rcbox.nu`
 // equal-start runner the values cannot live in ctx.val, because a
 // discarded lane must KEEP its old value across the run that would
 // have overwritten it.
-@ __chains_var_x4 * SlhCtx c ( Vec u ) pkseed ( Vec u ) adrs i c0 i c1 i c2 i c3 i s0 i s1 i s2 i s3 * u vals i n → v {
+@ __chains_var_x4 inout SlhCtx c ( Vec u ) pkseed ( Vec u ) adrs i c0 i c1 i c2 i c3 i s0 i s1 i s2 i s3 * u vals i n → v {
     : *u vp ( vec_data [u] . c val )
     // Start at the earliest lane's entry point: steps before it would
     // stage four frozen values and discard four results — a permutation
@@ -412,7 +393,6 @@ $ `stdlib/core/rcbox.nu`
     ~ < j + start steps {
         ( __adrs_set_hash adrs j )
         : ( Vec u ) nxt ( __slh_f pkseed adrs tmp n )
-        ( vec_free [u] tmp )
         = tmp nxt
         = j + j 1
     }
@@ -440,7 +420,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec i ) cs ( __base_2b cb 4 3 )
     = i 0
     ~ < i 3 { ( vec_push [i] msg ?? ( vec_get [i] cs i ) { T x → { x } F → { 0 } } ) = i + i 1 }
-    ( vec_free [i] cs )
     ^ msg
 }
 
@@ -448,7 +427,7 @@ $ `stdlib/core/rcbox.nu`
 // times, and each call is len chains × (1 PRF + 15 F). All chains run
 // the same 15 steps, so they go four at a time; a group past the end
 // duplicates the last chain and drops the extra lanes.
-@ __wots_pkgen * SlhCtx c ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __wots_pkgen inout SlhCtx c ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : i n . p n
     : i len . p len
     : ( Vec u ) skadrs ( __adrs_copy adrs )
@@ -487,7 +466,6 @@ $ `stdlib/core/rcbox.nu`
     ( __adrs_set_type pkadrs 1 )
     ( __adrs_set_kp pkadrs ( __adrs_get_kp adrs ) )
     : ( Vec u ) out ( __slh_f pkseed pkadrs tmp n )
-    ( vec_free [u] tmp ) ( vec_free [u] pkadrs ) ( vec_free [u] skadrs )
     ^ out
 }
 
@@ -505,14 +483,12 @@ $ `stdlib/core/rcbox.nu`
         : i steps ?? ( vec_get [i] msg i ) { T x → { x } F → { 0 } }
         : ( Vec u ) ch ( __wots_chain sk 0 steps pkseed adrs . p n )
         ( bytes_extend_bytes sig ch )
-        ( vec_free [u] ch ) ( vec_free [u] sk )
         = i + i 1
     }
-    ( vec_free [u] skadrs ) ( vec_free [i] msg )
     ^ sig
 }
 
-@ __wots_pk_from_sig * SlhCtx c ( Vec u ) sig ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __wots_pk_from_sig inout SlhCtx c ( Vec u ) sig ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : i n . p n
     : i len . p len
     : ( Vec i ) msg ( __wots_msg m p )
@@ -541,12 +517,10 @@ $ `stdlib/core/rcbox.nu`
         }
         = g + g 4
     }
-    ( vec_free [u] vals )
     : ( Vec u ) pkadrs ( __adrs_copy adrs )
     ( __adrs_set_type pkadrs 1 )
     ( __adrs_set_kp pkadrs ( __adrs_get_kp adrs ) )
     : ( Vec u ) out ( __slh_f pkseed pkadrs tmp n )
-    ( vec_free [u] tmp ) ( vec_free [u] pkadrs ) ( vec_free [i] msg )
     ^ out
 }
 
@@ -556,7 +530,7 @@ $ `stdlib/core/rcbox.nu`
 //
 // This is where an `s` parameter set spends its time: h' = 9 means
 // every one of the d layers rebuilds 512 WOTS+ key pairs per signature.
-@ __xmss_node * SlhCtx c ( Vec u ) skseed i i2 i z ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __xmss_node inout SlhCtx c ( Vec u ) skseed i i2 i z ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     ? == z 0 {
         ( __adrs_set_type adrs 0 )
         ( __adrs_set_kp adrs i2 )
@@ -570,11 +544,10 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) both ( bytes_slice l 0 ( vec_len [u] l ) )
     ( bytes_extend_bytes both r )
     : ( Vec u ) out ( __slh_f pkseed adrs both . p n )
-    ( vec_free [u] both ) ( vec_free [u] r ) ( vec_free [u] l )
     ^ out
 }
 
-@ __xmss_sign * SlhCtx c ( Vec u ) m ( Vec u ) skseed i idx ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __xmss_sign inout SlhCtx c ( Vec u ) m ( Vec u ) skseed i idx ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : ( Vec u ) auth ( vec_new [u] )
     : ~ i j 0
     ~ < j . p hp {
@@ -582,7 +555,6 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) a2 ( __adrs_copy adrs )
         : ( Vec u ) nd ( __xmss_node c skseed kk j pkseed a2 p )
         ( bytes_extend_bytes auth nd )
-        ( vec_free [u] nd ) ( vec_free [u] a2 )
         = j + j 1
     }
     ( __adrs_set_type adrs 0 )
@@ -592,13 +564,12 @@ $ `stdlib/core/rcbox.nu`
     ^ sig
 }
 
-@ __xmss_pk_from_sig * SlhCtx c i idx ( Vec u ) sigx ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __xmss_pk_from_sig inout SlhCtx c i idx ( Vec u ) sigx ( Vec u ) m ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : i wl * . p len . p n
     ( __adrs_set_type adrs 0 )
     ( __adrs_set_kp adrs idx )
     : ( Vec u ) wsig ( bytes_slice sigx 0 wl )
     : ~ ( Vec u ) node ( __wots_pk_from_sig c wsig m pkseed adrs p )
-    ( vec_free [u] wsig )
     ( __adrs_set_type adrs 2 )
     ( __adrs_set_index adrs idx )
     : ~ i k 0
@@ -617,7 +588,6 @@ $ `stdlib/core/rcbox.nu`
             ( bytes_extend_bytes both node )
         }
         : ( Vec u ) nn ( __slh_f pkseed adrs both . p n )
-        ( vec_free [u] both ) ( vec_free [u] ak ) ( vec_free [u] node )
         = node nn
         = k + k 1
     }
@@ -626,7 +596,7 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Hypertree (§7) ─────────────────────────────────────────────────
 
-@ __ht_sign * SlhCtx c ( Vec u ) m ( Vec u ) skseed ( Vec u ) pkseed i idx_tree i idx_leaf SlhParams p → ( Vec u ) {
+@ __ht_sign inout SlhCtx c ( Vec u ) m ( Vec u ) skseed ( Vec u ) pkseed i idx_tree i idx_leaf SlhParams p → ( Vec u ) {
     : ~ i it idx_tree
     : ~ i il idx_leaf
     : ( Vec u ) adrs ( __adrs_new )
@@ -638,7 +608,6 @@ $ `stdlib/core/rcbox.nu`
     ( __adrs_set_layer a0 0 )
     ( __adrs_set_tree a0 it )
     : ~ ( Vec u ) root ( __xmss_pk_from_sig c il sig0 m pkseed a0 p )
-    ( vec_free [u] a0 ) ( vec_free [u] sig0 ) ( vec_free [u] adrs )
 
     : ~ i j 1
     ~ < j . p d {
@@ -658,18 +627,14 @@ $ `stdlib/core/rcbox.nu`
             ( __adrs_set_layer a2 j )
             ( __adrs_set_tree a2 it )
             : ( Vec u ) nr ( __xmss_pk_from_sig c il sj root pkseed a2 p )
-            ( vec_free [u] root )
             = root nr
-            ( vec_free [u] a2 )
         } {}
-        ( vec_free [u] sj ) ( vec_free [u] aj )
         = j + j 1
     }
-    ( vec_free [u] root )
     ^ out
 }
 
-@ __ht_verify * SlhCtx c ( Vec u ) m ( Vec u ) sight ( Vec u ) pkseed i idx_tree i idx_leaf ( Vec u ) pkroot SlhParams p → b {
+@ __ht_verify inout SlhCtx c ( Vec u ) m ( Vec u ) sight ( Vec u ) pkseed i idx_tree i idx_leaf ( Vec u ) pkroot SlhParams p → b {
     : i xl * + . p hp . p len . p n
     : ~ i it idx_tree
     : ~ i il idx_leaf
@@ -678,7 +643,6 @@ $ `stdlib/core/rcbox.nu`
     ( __adrs_set_tree a0 it )
     : ( Vec u ) s0 ( bytes_slice sight 0 xl )
     : ~ ( Vec u ) node ( __xmss_pk_from_sig c il s0 m pkseed a0 p )
-    ( vec_free [u] s0 ) ( vec_free [u] a0 )
     : ~ i j 1
     ~ < j . p d {
         // Masked and logically shifted, not `%` and `>>`: for
@@ -692,13 +656,10 @@ $ `stdlib/core/rcbox.nu`
         ( __adrs_set_tree aj it )
         : ( Vec u ) sj ( bytes_slice sight * j xl * + j 1 xl )
         : ( Vec u ) nn ( __xmss_pk_from_sig c il sj node pkseed aj p )
-        ( vec_free [u] node )
         = node nn
-        ( vec_free [u] sj ) ( vec_free [u] aj )
         = j + j 1
     }
     : b ok ( bytes_eq node pkroot )
-    ( vec_free [u] node )
     ^ ok
 }
 
@@ -715,7 +676,6 @@ $ `stdlib/core/rcbox.nu`
     ( __adrs_set_kp sk ( __adrs_get_kp adrs ) )
     ( __adrs_set_index sk idx )
     : ( Vec u ) out ( __slh_prf pkseed sk skseed . p n )
-    ( vec_free [u] sk )
     ^ out
 }
 
@@ -734,7 +694,7 @@ $ `stdlib/core/rcbox.nu`
 //
 // Returns the root; appends sk(selected leaf) ‖ auth[0..a) to `sig`,
 // which is exactly the per-tree slice of a FORS signature.
-@ __fors_tree * SlhCtx c ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs i tree i sel ( Vec u ) sig SlhParams p → ( Vec u ) {
+@ __fors_tree inout SlhCtx c ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs i tree i sel ( Vec u ) sig SlhParams p → ( Vec u ) {
     : i n . p n
     : i a . p a
     : i nleaf << 1 a
@@ -748,7 +708,6 @@ $ `stdlib/core/rcbox.nu`
     ( __adrs_set_index skadrs + base sel )
     : ( Vec u ) sksel ( __slh_prf pkseed skadrs skseed n )
     ( bytes_extend_bytes sig sksel )
-    ( vec_free [u] sksel )
 
     : ( Vec u ) buf ( __sx_buf * nleaf n )
     : *u bp ( vec_data [u] buf )
@@ -796,7 +755,6 @@ $ `stdlib/core/rcbox.nu`
         : i sib ^^ >> sel h 1
         : ( Vec u ) an ( bytes_slice buf * sib n * + sib 1 n )
         ( bytes_extend_bytes sig an )
-        ( vec_free [u] an )
         : i half / cur 2
         : i hh + h 1
         ( __adrs_set_height adrs hh )
@@ -827,21 +785,18 @@ $ `stdlib/core/rcbox.nu`
     }
 
     : ( Vec u ) root ( bytes_slice buf 0 n )
-    ( vec_free [u] buf ) ( vec_free [u] skadrs )
     ^ root
 }
 
-@ __fors_sign * SlhCtx c ( Vec u ) md ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __fors_sign inout SlhCtx c ( Vec u ) md ( Vec u ) skseed ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : ( Vec i ) idx ( __base_2b md . p a . p k )
     : ( Vec u ) sig ( vec_new [u] )
     : ~ i i 0
     ~ < i . p k {
         : i ii ?? ( vec_get [i] idx i ) { T x → { x } F → { 0 } }
         : ( Vec u ) root ( __fors_tree c skseed pkseed adrs i ii sig p )
-        ( vec_free [u] root )
         = i + i 1
     }
-    ( vec_free [i] idx )
     ^ sig
 }
 
@@ -852,7 +807,7 @@ $ `stdlib/core/rcbox.nu`
 // bit of ii_w that says whether the node is a left or right child),
 // and that is staging bytes, not control flow the lanes would have to
 // agree on.
-@ __fors_pk_from_sig * SlhCtx c ( Vec u ) sigf ( Vec u ) md ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
+@ __fors_pk_from_sig inout SlhCtx c ( Vec u ) sigf ( Vec u ) md ( Vec u ) pkseed ( Vec u ) adrs SlhParams p → ( Vec u ) {
     : i n . p n
     : i a . p a
     : i k . p k
@@ -947,12 +902,10 @@ $ `stdlib/core/rcbox.nu`
         }
         = g + g 4
     }
-    ( vec_free [u] both ) ( vec_free [u] vals )
     : ( Vec u ) fa ( __adrs_copy adrs )
     ( __adrs_set_type fa 4 )
     ( __adrs_set_kp fa ( __adrs_get_kp adrs ) )
     : ( Vec u ) out ( __slh_f pkseed fa roots n )
-    ( vec_free [u] fa ) ( vec_free [u] roots ) ( vec_free [i] idx )
     ^ out
 }
 
@@ -993,17 +946,14 @@ $ `stdlib/core/rcbox.nu`
     : SlhParams p ( __slh_params set )
     : ( Vec u ) adrs ( __adrs_new )
     ( __adrs_set_layer adrs - . p d 1 )
-    : *SlhCtx c ( __slhx4_new )
+    : ~ SlhCtx c ( __slhx4_new )
     : ( Vec u ) root ( __xmss_node c skseed 0 . p hp pkseed adrs p )
-    ( __slhx4_free c )
-    ( vec_free [u] adrs )
     : ( Vec u ) pk ( bytes_slice pkseed 0 . p n )
     ( bytes_extend_bytes pk root )
     : ( Vec u ) sk ( bytes_slice skseed 0 . p n )
     ( bytes_extend_bytes sk skprf )
     ( bytes_extend_bytes sk pkseed )
     ( bytes_extend_bytes sk root )
-    ( vec_free [u] root )
     ^ @ SlhKeys { # s ( rcbox_new [SlhKeysImpl] @ SlhKeysImpl { pk sk } ) }
 }
 
@@ -1013,7 +963,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) b2 ( rand_bytes . p n )
     : ( Vec u ) c ( rand_bytes . p n )
     : SlhKeys h ( slhdsa_keygen_derand set a b2 c )
-    ( vec_free [u] c ) ( vec_free [u] b2 ) ( vec_free [u] a )
     ^ h
 }
 
@@ -1060,32 +1009,25 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) hin ( bytes_slice pkseed 0 n )
     ( bytes_extend_bytes hin pkroot )
     : ( Vec u ) digest ( __slh_shake r hin msg . p m )
-    ( vec_free [u] hin )
 
     : i ka / + * . p k . p a 7 8
     : ( Vec u ) md ( bytes_slice digest 0 ka )
     : i it ( __slh_idx_tree digest p )
     : i il ( __slh_idx_leaf digest p )
-    ( vec_free [u] digest )
 
     : ( Vec u ) adrs ( __adrs_new )
     ( __adrs_set_tree adrs it )
     ( __adrs_set_type adrs 3 )
     ( __adrs_set_kp adrs il )
-    : *SlhCtx c ( __slhx4_new )
+    : ~ SlhCtx c ( __slhx4_new )
     : ( Vec u ) sigf ( __fors_sign c md skseed pkseed adrs p )
     : ( Vec u ) pkf ( __fors_pk_from_sig c sigf md pkseed adrs p )
     : ( Vec u ) sigh ( __ht_sign c pkf skseed pkseed it il p )
-    ( __slhx4_free c )
 
     : ( Vec u ) out ( bytes_slice r 0 n )
     ( bytes_extend_bytes out sigf )
     ( bytes_extend_bytes out sigh )
 
-    ( vec_free [u] sigh ) ( vec_free [u] pkf ) ( vec_free [u] sigf )
-    ( vec_free [u] adrs ) ( vec_free [u] md ) ( vec_free [u] r )
-    ( vec_free [u] pkroot ) ( vec_free [u] pkseed )
-    ( vec_free [u] skprf ) ( vec_free [u] skseed )
     ^ out
 }
 
@@ -1104,25 +1046,19 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) hin ( bytes_slice pkseed 0 n )
     ( bytes_extend_bytes hin pkroot )
     : ( Vec u ) digest ( __slh_shake r hin msg . p m )
-    ( vec_free [u] hin )
     : i ka / + * . p k . p a 7 8
     : ( Vec u ) md ( bytes_slice digest 0 ka )
     : i it ( __slh_idx_tree digest p )
     : i il ( __slh_idx_leaf digest p )
-    ( vec_free [u] digest )
 
     : ( Vec u ) adrs ( __adrs_new )
     ( __adrs_set_tree adrs it )
     ( __adrs_set_type adrs 3 )
     ( __adrs_set_kp adrs il )
-    : *SlhCtx c ( __slhx4_new )
+    : ~ SlhCtx c ( __slhx4_new )
     : ( Vec u ) pkf ( __fors_pk_from_sig c sigf md pkseed adrs p )
     : b ok ( __ht_verify c pkf sigh pkseed it il pkroot p )
-    ( __slhx4_free c )
 
-    ( vec_free [u] pkf ) ( vec_free [u] adrs ) ( vec_free [u] md )
-    ( vec_free [u] sigh ) ( vec_free [u] sigf ) ( vec_free [u] r )
-    ( vec_free [u] pkroot ) ( vec_free [u] pkseed )
     ^ ok
 }
 
@@ -1148,7 +1084,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) mp ( __slh_mprime msg ctx )
     : ( Vec u ) rnd ( rand_bytes . p n )
     : ( Vec u ) sig ( slhdsa_sign_internal set sk mp rnd )
-    ( vec_free [u] rnd ) ( vec_free [u] mp )
     ^ sig
 }
 
@@ -1158,7 +1093,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) mp ( __slh_mprime msg ctx )
     : ( Vec u ) rnd ( bytes_slice sk * 2 . p n * 3 . p n )
     : ( Vec u ) sig ( slhdsa_sign_internal set sk mp rnd )
-    ( vec_free [u] rnd ) ( vec_free [u] mp )
     ^ sig
 }
 
@@ -1166,6 +1100,5 @@ $ `stdlib/core/rcbox.nu`
     ? > ( vec_len [u] ctx ) 255 { ^ F } {}
     : ( Vec u ) mp ( __slh_mprime msg ctx )
     : b ok ( slhdsa_verify_internal set pk mp sig )
-    ( vec_free [u] mp )
     ^ ok
 }

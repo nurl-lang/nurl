@@ -29,8 +29,8 @@
 //       verifying — never trust its contents until a verify succeeds.
 //
 // `claims` is a JSON object the caller owns (sign stringifies it; it is
-// NOT freed here). verify returns the parsed payload as an owned Json —
-// the caller frees it with json_free. The header is built internally per
+// NOT consumed here). verify returns the parsed payload as an owned Json.
+// The header is built internally per
 // algorithm, so the caller only supplies claims.
 //
 // Time claims: `verify` validates `exp` (reject once now ≥ exp) and
@@ -92,20 +92,23 @@ $ `stdlib/ext/crypto.nu`
 // The two '.' positions of a well-formed token, written into a 2-slot
 // scratch. Returns T iff exactly two dots exist and neither segment is
 // empty (header, payload, signature all non-zero length).
-@ __jwt_split s token s d0p s d1p → b {
+// Where a token's two dots are; `ok` F when it is not three non-empty
+// segments.
+: JwtDots { b ok i d0 i d1 }
+
+@ __jwt_split s token → JwtDots {
+    : JwtDots bad @ JwtDots { F 0 0 }
     : i len ( nurl_str_len token )
     : i d0 ( __jwt_dot_at token 0 )
     : i d1 ( __jwt_dot_at token 1 )
     : i d2 ( __jwt_dot_at token 2 )
-    ? < d0 0 { ^ F } {}
-    ? < d1 0 { ^ F } {}
-    ? >= d2 0 { ^ F } {}  // a third dot ⇒ malformed
-    ? <= d0 0 { ^ F } {}  // empty header
-    ? <= - d1 d0 1 { ^ F } {}  // empty payload
-    ? >= + d1 1 len { ^ F } {}  // empty signature
-    ( nurl_poke # s d0p 0 d0 )
-    ( nurl_poke # s d1p 0 d1 )
-    ^ T
+    ? < d0 0 { ^ bad } {}
+    ? < d1 0 { ^ bad } {}
+    ? >= d2 0 { ^ bad } {}  // a third dot ⇒ malformed
+    ? <= d0 0 { ^ bad } {}  // empty header
+    ? <= - d1 d0 1 { ^ bad } {}  // empty payload
+    ? >= + d1 1 len { ^ bad } {}  // empty signature
+    ^ @ JwtDots { T d0 d1 }
 }
 
 // String → owned Vec[u] (caller's text is NUL-free ASCII here).
@@ -123,9 +126,6 @@ $ `stdlib/ext/crypto.nu`
     ( string_push_str out ( string_data h64 ) )
     ( string_push_char out 46 )
     ( string_push_str out ( string_data p64 ) )
-    ( string_free h64 )
-    ( string_free p64 )
-    ( string_free payload_json )
     ^ out
 }
 
@@ -141,11 +141,6 @@ $ `stdlib/ext/crypto.nu`
     ( string_push_str token ( string_data signing ) )
     ( string_push_char token 46 )
     ( string_push_str token ( string_data sig64 ) )
-    ( vec_free [u] key )
-    ( vec_free [u] msg )
-    ( vec_free [u] mac )
-    ( string_free sig64 )
-    ( string_free signing )
     ^ token
 }
 
@@ -155,15 +150,13 @@ $ `stdlib/ext/crypto.nu`
 @ __jwt_payload_json s token i d0 i d1 → !Json JwtErr {
     : String p64 ( __jwt_slice token + d0 1 d1 )
     : !String ParseErr pd ( b64_url_decode ( string_data p64 ) )
-    ( string_free p64 )
     ?? pd {
         T pjson → {
             : !Json JsonError pj ( json_parse ( string_data pjson ) )
-            ( string_free pjson )
             ?? pj {
                 T j → {
                     ? ( __jwt_is_obj j ) { ^ @ !Json JwtErr { T j } }
-                    { ( json_free j ) ^ @ !Json JwtErr { F JwtBadClaims } }
+                    { ^ @ !Json JwtErr { F JwtBadClaims } }
                 }
                 F _ → { ^ @ !Json JwtErr { F JwtMalformed } }
             }
@@ -179,7 +172,6 @@ $ `stdlib/ext/crypto.nu`
 @ __jwt_is_obj Json j → b {
     : String s ( json_stringify j )
     : b ok & > ( string_len s ) 0 == ( nurl_str_get ( string_data s ) 0 ) 123
-    ( string_free s )
     ^ ok
 }
 
@@ -212,15 +204,10 @@ $ `stdlib/ext/crypto.nu`
 }
 
 @ jwt_hs256_verify_at s secret s token i now → !Json JwtErr {
-    : s d0buf ( nurl_zalloc 8 )
-    : s d1buf ( nurl_zalloc 8 )
-    ? ( __jwt_split token d0buf d1buf ) {} {
-        ( nurl_free d0buf ) ( nurl_free d1buf )
-        ^ @ !Json JwtErr { F JwtMalformed }
-    }
-    : i d0 ( nurl_peek d0buf 0 )
-    : i d1 ( nurl_peek d1buf 0 )
-    ( nurl_free d0buf ) ( nurl_free d1buf )
+    : JwtDots dots ( __jwt_split token )
+    ? . dots ok {} { ^ @ !Json JwtErr { F JwtMalformed } }
+    : i d0 . dots d0
+    : i d1 . dots d1
     // Recompute the MAC over segments [0..d1) and base64url-encode it,
     // then constant-time compare to the presented signature segment.
     : String signing ( __jwt_slice token 0 d1 )
@@ -231,15 +218,13 @@ $ `stdlib/ext/crypto.nu`
     : i siglen - ( nurl_str_len token ) + d1 1
     : String got ( __jwt_slice token + d1 1 ( nurl_str_len token ) )
     : b sig_ok ( constant_time_eq ( string_data want ) ( string_data got ) )
-    ( vec_free [u] key ) ( vec_free [u] msg ) ( vec_free [u] mac )
-    ( string_free want ) ( string_free got ) ( string_free signing )
     ? sig_ok {} { ^ @ !Json JwtErr { F JwtBadSignature } }
     : !Json JwtErr pj ( __jwt_payload_json token d0 d1 )
     ?? pj {
         T payload → {
             : ?JwtErr terr ( __jwt_check_time payload now )
             ?? terr {
-                T e → { ( json_free payload ) ^ @ !Json JwtErr { F e } }
+                T e → { ^ @ !Json JwtErr { F e } }
                 F _ → { ^ @ !Json JwtErr { T payload } }
             }
         }
@@ -257,7 +242,6 @@ $ `stdlib/ext/crypto.nu`
     : String signing ( __jwt_signing_input `{"alg":"EdDSA","typ":"JWT"}` claims )
     : ( Vec u ) msg ( __jwt_bytes ( string_data signing ) )
     : !( Vec u ) CryptoErr so ( ed25519_sign sk msg )
-    ( vec_free [u] msg )
     ?? so {
         T sig → {
             : String sig64 ( b64_url_encode_vec sig )
@@ -265,50 +249,37 @@ $ `stdlib/ext/crypto.nu`
             ( string_push_str token ( string_data signing ) )
             ( string_push_char token 46 )
             ( string_push_str token ( string_data sig64 ) )
-            ( vec_free [u] sig )
-            ( string_free sig64 )
-            ( string_free signing )
             ^ @ !String CryptoErr { T token }
         }
         F e → {
-            ( string_free signing )
             ^ @ !String CryptoErr { F e }
         }
     }
 }
 
 @ jwt_eddsa_verify_at ( Vec u ) pk s token i now → !Json JwtErr {
-    : s d0buf ( nurl_zalloc 8 )
-    : s d1buf ( nurl_zalloc 8 )
-    ? ( __jwt_split token d0buf d1buf ) {} {
-        ( nurl_free d0buf ) ( nurl_free d1buf )
-        ^ @ !Json JwtErr { F JwtMalformed }
-    }
-    : i d0 ( nurl_peek d0buf 0 )
-    : i d1 ( nurl_peek d1buf 0 )
-    ( nurl_free d0buf ) ( nurl_free d1buf )
+    : JwtDots dots ( __jwt_split token )
+    ? . dots ok {} { ^ @ !Json JwtErr { F JwtMalformed } }
+    : i d0 . dots d0
+    : i d1 . dots d1
     : String signing ( __jwt_slice token 0 d1 )
     : String sig64 ( __jwt_slice token + d1 1 ( nurl_str_len token ) )
     : !( Vec u ) ParseErr sd ( b64_url_decode_vec ( string_data sig64 ) )
-    ( string_free sig64 )
     : ~ b sig_ok F
     ?? sd {
         T sig → {
             : ( Vec u ) msg ( __jwt_bytes ( string_data signing ) )
             = sig_ok ( ed25519_verify pk msg sig )
-            ( vec_free [u] msg )
-            ( vec_free [u] sig )
         }
         F _ → {}
     }
-    ( string_free signing )
     ? sig_ok {} { ^ @ !Json JwtErr { F JwtBadSignature } }
     : !Json JwtErr pj ( __jwt_payload_json token d0 d1 )
     ?? pj {
         T payload → {
             : ?JwtErr terr ( __jwt_check_time payload now )
             ?? terr {
-                T e → { ( json_free payload ) ^ @ !Json JwtErr { F e } }
+                T e → { ^ @ !Json JwtErr { F e } }
                 F _ → { ^ @ !Json JwtErr { T payload } }
             }
         }
@@ -328,34 +299,23 @@ $ `stdlib/ext/crypto.nu`
     : String signing ( __jwt_signing_input `{"alg":"ES256","typ":"JWT"}` claims )
     : ( Vec u ) msg ( __jwt_bytes ( string_data signing ) )
     : ( Vec u ) h ( sha256_pure msg )
-    ( vec_free [u] msg )
     : ( Vec u ) sig ( ecdsa_p256_sign scalar h )
-    ( vec_free [u] h )
     : String sig64 ( b64_url_encode_vec sig )
     : String token ( string_with_cap + ( string_len signing ) + ( string_len sig64 ) 1 )
     ( string_push_str token ( string_data signing ) )
     ( string_push_char token 46 )
     ( string_push_str token ( string_data sig64 ) )
-    ( vec_free [u] sig )
-    ( string_free sig64 )
-    ( string_free signing )
     ^ @ !String CryptoErr { T token }
 }
 
 @ jwt_es256_verify_at ( Vec u ) pubkey s token i now → !Json JwtErr {
-    : s d0buf ( nurl_zalloc 8 )
-    : s d1buf ( nurl_zalloc 8 )
-    ? ( __jwt_split token d0buf d1buf ) {} {
-        ( nurl_free d0buf ) ( nurl_free d1buf )
-        ^ @ !Json JwtErr { F JwtMalformed }
-    }
-    : i d0 ( nurl_peek d0buf 0 )
-    : i d1 ( nurl_peek d1buf 0 )
-    ( nurl_free d0buf ) ( nurl_free d1buf )
+    : JwtDots dots ( __jwt_split token )
+    ? . dots ok {} { ^ @ !Json JwtErr { F JwtMalformed } }
+    : i d0 . dots d0
+    : i d1 . dots d1
     : String signing ( __jwt_slice token 0 d1 )
     : String sig64 ( __jwt_slice token + d1 1 ( nurl_str_len token ) )
     : !( Vec u ) ParseErr sd ( b64_url_decode_vec ( string_data sig64 ) )
-    ( string_free sig64 )
     : ~ b sig_ok F
     ?? sd {
         T sig → {
@@ -365,24 +325,18 @@ $ `stdlib/ext/crypto.nu`
                 : ( Vec u ) s ( bytes_slice sig 32 64 )
                 : ( Vec u ) msg ( __jwt_bytes ( string_data signing ) )
                 : ( Vec u ) h ( sha256_pure msg )
-                ( vec_free [u] msg )
                 = sig_ok ( ecdsa_p256_verify pubkey r s h )
-                ( vec_free [u] r )
-                ( vec_free [u] s )
-                ( vec_free [u] h )
             } {}
-            ( vec_free [u] sig )
         }
         F _ → {}
     }
-    ( string_free signing )
     ? sig_ok {} { ^ @ !Json JwtErr { F JwtBadSignature } }
     : !Json JwtErr pj ( __jwt_payload_json token d0 d1 )
     ?? pj {
         T payload → {
             : ?JwtErr terr ( __jwt_check_time payload now )
             ?? terr {
-                T e → { ( json_free payload ) ^ @ !Json JwtErr { F e } }
+                T e → { ^ @ !Json JwtErr { F e } }
                 F _ → { ^ @ !Json JwtErr { T payload } }
             }
         }
@@ -397,14 +351,9 @@ $ `stdlib/ext/crypto.nu`
 // ── Unverified decode ──────────────────────────────────────────────
 
 @ jwt_decode_unverified s token → !Json JwtErr {
-    : s d0buf ( nurl_zalloc 8 )
-    : s d1buf ( nurl_zalloc 8 )
-    ? ( __jwt_split token d0buf d1buf ) {} {
-        ( nurl_free d0buf ) ( nurl_free d1buf )
-        ^ @ !Json JwtErr { F JwtMalformed }
-    }
-    : i d0 ( nurl_peek d0buf 0 )
-    : i d1 ( nurl_peek d1buf 0 )
-    ( nurl_free d0buf ) ( nurl_free d1buf )
+    : JwtDots dots ( __jwt_split token )
+    ? . dots ok {} { ^ @ !Json JwtErr { F JwtMalformed } }
+    : i d0 . dots d0
+    : i d1 . dots d1
     ^ ( __jwt_payload_json token d0 d1 )
 }

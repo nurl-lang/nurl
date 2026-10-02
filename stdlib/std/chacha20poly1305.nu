@@ -57,12 +57,23 @@ $ `stdlib/core/vec.nu`
 
 @ __le_words → i {
     ? >= g_cc_le 0 { ^ g_cc_le } {}
-    : *u p # *u ( nurl_zalloc 8 )
+    : ( Vec u ) w ( vec_zeroed [u] 8 )
+    : *u p ( vec_data [u] w )
     ( nurl_poke # s p 0 1 )
     = g_cc_le ? == # i . p 0 1 1 0
-    ( nurl_free # s p )
     ^ g_cc_le
 }
+
+// The output Vec of the XOR kernels, `n` long, with room after it for
+// the 16-byte tag an AEAD appends (no regrow) and, 16-aligned past that,
+// `scratch` bytes of keystream scratch: one allocation, not two.
+@ __xor_out i n i scratch → ( Vec u ) {
+    : ( Vec u ) out ( vec_with_cap [u] + ( __xor_scratch_at n ) scratch )
+    : b _ol ( vec_set_len [u] out n )
+    ^ out
+}
+
+@ __xor_scratch_at i n → i { ^ & + n 31 -16 }
 
 // `n` zero bytes — the plaintext that turns the XOR kernel into a plain
 // keystream generator.
@@ -82,7 +93,6 @@ $ `stdlib/core/vec.nu`
 @ chacha20_block ( Vec u ) key i counter ( Vec u ) nonce → ( Vec u ) {
     : ( Vec u ) z ( __zeros 64 )
     : ( Vec u ) out ( chacha20_xor_range key counter nonce z 0 64 )
-    ( vec_free [u] z )
     ^ out
 }
 
@@ -276,8 +286,7 @@ $ `stdlib/core/vec.nu`
 @ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
     ? == 0 ( __le_words )
     { ^ ( _chacha20_xor_range_scalar key counter nonce data doff n ) } {}
-    : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
-    : b _ol ( vec_set_len [u] out n )
+    : ( Vec u ) out ( __xor_out n 128 )
     ? == n 0 { ^ out } {}
     : *u dp # *u + # i ( vec_data [u] data ) doff
     : *u op ( vec_data [u] out )
@@ -287,7 +296,7 @@ $ `stdlib/core/vec.nu`
     : i nn0 ( __ld32 nonce 0 )
     : i nn1 ( __ld32 nonce 4 )
     : i nn2 ( __ld32 nonce 8 )
-    : *u ks # *u ( nurl_zalloc 128 )
+    : *u ks # *u + # i op ( __xor_scratch_at n )
     : ~ i ctr counter
     : ~ i off 0
     // Two blocks a pass while at least 128 bytes remain; the tail falls
@@ -331,7 +340,6 @@ $ `stdlib/core/vec.nu`
         = ctr + ctr 1
         = off + off 64
     }
-    ( nurl_free # s ks )
     ^ out
 }
 
@@ -340,8 +348,7 @@ $ `stdlib/core/vec.nu`
 // 32-bit words down in the wrong byte order. See chacha20_xor_range
 // below for the vector path that handles every little-endian host.
 @ _chacha20_xor_range_scalar ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
-    : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
-    : b _ol ( vec_set_len [u] out n )
+    : ( Vec u ) out ( __xor_out n 64 )
     ? == n 0 { ^ out } {}
     : *u dp # *u + # i ( vec_data [u] data ) doff
     : *u op ( vec_data [u] out )
@@ -363,7 +370,7 @@ $ `stdlib/core/vec.nu`
     // plus their shifts and masks on the byte path below, which stays as
     // the fallback for the unaligned and big-endian cases.
     : i wordio & ( __le_words ) ? == 0 | & # i dp 7 & # i op 7 1 0
-    : *u ks # *u ( nurl_zalloc 64 )
+    : *u ks # *u + # i op ( __xor_scratch_at n )
     : ~ i ctr counter
     : ~ i off 0
     ~ < off n {
@@ -685,7 +692,6 @@ $ `stdlib/core/vec.nu`
         = off + off 64
         = ctr + ctr 1
     }
-    ( nurl_free # s ks )
     ^ out
 }
 
@@ -743,18 +749,18 @@ $ `stdlib/core/vec.nu`
             = t0 # u64 ( __ld64 mp off )
             = t1 # u64 ( __ld64 mp + off 8 )
         } {
-            // Tail: gather the remaining bytes into a 16-byte zero buffer,
-            // set the 0x01 marker byte after them, and clear `hibit` — the
-            // marker now rides inside t0/t1 at its natural position.
+            // Tail: the remaining bytes, zero-padded to 16, with the 0x01
+            // marker byte after them — assembled little-endian straight
+            // into t0/t1 — and `hibit` cleared: the marker now rides
+            // inside t0/t1 at its natural position.
             : i blk rem
-            : *u bb # *u ( nurl_zalloc 16 )
             : ~ i j 0
-            ~ < j blk { = . bb j . mp + off j = j + j 1 }
-            = . bb blk # u 1
-            = t0 # u64 ( __ld64 bb 0 )
-            = t1 # u64 ( __ld64 bb 8 )
+            ~ <= j blk {
+                : u64 bv ? < j blk # u64 . mp + off j # u64 1
+                ? < j 8 { = t0 | t0 << bv # u64 * 8 j } { = t1 | t1 << bv # u64 * 8 - j 8 }
+                = j + j 1
+            }
             = hibit 0
-            ( nurl_free # s bb )
         }
         // h += m (three 44/44/42-bit limbs plus the block-marker bit).
         = h0 + h0 & t0 0xfffffffffff
@@ -863,7 +869,6 @@ $ `stdlib/core/vec.nu`
     // of it. One of these per AEAD record.
     : ( Vec u ) z ( __zeros 32 )
     : ( Vec u ) otk ( chacha20_xor_range key 0 nonce z 0 32 )
-    ( vec_free [u] z )
     ^ otk
 }
 
@@ -920,9 +925,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) tag ( poly1305_mac otk md )
     : ~ i k 0
     ~ < k 16 { ( vec_push [u] ct # u ( __cc_bget tag k ) ) = k + k 1 }
-    ( vec_free [u] otk )
-    ( vec_free [u] md )
-    ( vec_free [u] tag )
     ^ ct
 }
 
@@ -953,9 +955,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) md ( __mac_data aad ct_and_tag 0 ctlen )
     : ( Vec u ) tag ( poly1305_mac otk md )
     : b ok ( __tag_ok ct_and_tag ctlen tag )
-    ( vec_free [u] otk )
-    ( vec_free [u] md )
-    ( vec_free [u] tag )
     ? ! ok { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : ( Vec u ) pt ( chacha20_xor_range key 1 nonce ct_and_tag 0 ctlen )
     ^ @ ?( Vec u ) { T pt }

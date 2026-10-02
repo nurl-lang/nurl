@@ -68,7 +68,6 @@ $ `stdlib/std/x509.nu`
     : ( Vec u ) out ( vec_with_cap [u] * 2 clen )
     ( bytes_extend_bytes out rp )
     ( bytes_extend_bytes out sp )
-    ( vec_free [u] rraw ) ( vec_free [u] sraw ) ( vec_free [u] rp ) ( vec_free [u] sp )
     ^ out
 }
 
@@ -90,24 +89,20 @@ $ `stdlib/std/x509.nu`
         : ( Vec u ) h ( sha256_pure msg )
         : ( Vec u ) di ( rsa_di_sha256 )
         = ok ( rsa_pkcs1_verify . iss rsa_n . iss rsa_e sig di h )
-        ( vec_free [u] h ) ( vec_free [u] di )
     } {}
     ? & == . iss key_alg 1 == alg 2 {
         : ( Vec u ) h ( sha384_pure msg )
         : ( Vec u ) di ( rsa_di_sha384 )
         = ok ( rsa_pkcs1_verify . iss rsa_n . iss rsa_e sig di h )
-        ( vec_free [u] h ) ( vec_free [u] di )
     } {}
     ? & == . iss key_alg 1 == alg 3 {
         : ( Vec u ) h ( sha512_pure msg )
         : ( Vec u ) di ( rsa_di_sha512 )
         = ok ( rsa_pkcs1_verify . iss rsa_n . iss rsa_e sig di h )
-        ( vec_free [u] h ) ( vec_free [u] di )
     } {}
     ? & == . iss key_alg 1 == alg 6 {
         : ( Vec u ) h ( sha256_pure msg )
         = ok ( rsa_pss_verify_sha256 . iss rsa_n . iss rsa_e sig h )
-        ( vec_free [u] h )
     } {}
     // ML-DSA. Unlike every branch above, nothing is hashed here first:
     // ML-DSA takes the message and does its own hashing internally, so
@@ -132,9 +127,7 @@ $ `stdlib/std/x509.nu`
             : ( Vec u ) r ( bytes_slice rs 0 32 )
             : ( Vec u ) s ( bytes_slice rs 32 64 )
             = ok ( ecdsa_p256_verify . iss ec_point r s h )
-            ( vec_free [u] r ) ( vec_free [u] s )
         } {}
-        ( vec_free [u] rs ) ( vec_free [u] h )
     } {}
     ? & == . iss key_alg 2 == alg 5 {
         : ( Vec u ) h ( sha384_pure msg )
@@ -143,9 +136,7 @@ $ `stdlib/std/x509.nu`
             : ( Vec u ) r ( bytes_slice rs 0 48 )
             : ( Vec u ) s ( bytes_slice rs 48 96 )
             = ok ( ecdsa_p384_verify . iss ec_point r s h )
-            ( vec_free [u] r ) ( vec_free [u] s )
         } {}
-        ( vec_free [u] rs ) ( vec_free [u] h )
     } {}
     ^ ok
 }
@@ -260,13 +251,10 @@ $ `stdlib/std/x509.nu`
                         } {}
                     }
                 } {}
-                ( x509_free c )
-                ( vec_free [u] der )
                 = p + es endlen
             }
         }
     }
-    ( vec_free [u] bundle )
     ^ ok
 }
 
@@ -318,10 +306,8 @@ $ `stdlib/std/x509.nu`
     } {}
     : ( Vec u ) r1 ( __v_read_or_empty `/etc/ssl/certs/ca-certificates.crt` )
     ? > ( vec_len [u] r1 ) 0 { ^ r1 } {}
-    ( vec_free [u] r1 )
     : ( Vec u ) r2 ( __v_read_or_empty `/etc/pki/tls/certs/ca-bundle.crt` )
     ? > ( vec_len [u] r2 ) 0 { ^ r2 } {}
-    ( vec_free [u] r2 )
     : ( Vec u ) r3 ( __v_read_or_empty `/etc/ssl/cert.pem` )
     ^ r3
 }
@@ -387,8 +373,6 @@ $ `stdlib/std/x509.nu`
             ? & == rc 0 ! ( bytes_eq . child issuer . issuer subject ) { = rc 14 } {}
             ? & == rc 0 ! ( __v_sig_check issuer . child sig_alg . child sig . child tbs ) { = rc 4 } {}
         }
-        ( x509_free child ) ( x509_free issuer )
-        ( vec_free [u] cder ) ( vec_free [u] ider )
         = li + li 1
     }
 
@@ -399,17 +383,13 @@ $ `stdlib/std/x509.nu`
         : ( Vec u ) tder ( bytes_slice cert_msg ts + ts tl )
         : X509 top ( x509_parse tder )
         ? ! ( __v_anchor_ok top ) { = rc 5 } {}
-        ( x509_free top )
-        ( vec_free [u] tder )
     } {}
 
-    ( x509_free leaf )
-    ( vec_free [u] leafder )
     ^ rc
 }
 
 // Leaf public key (parsed) from a Certificate message — for verifying the
-// TLS 1.2 ServerKeyExchange signature. Caller x509_frees it.
+// TLS 1.2 ServerKeyExchange signature.
 @ tls_leaf_cert ( Vec u ) cert_msg i is12 → X509 {
     : ( Vec i ) starts ( vec_new [i] )
     : ( Vec i ) lens ( vec_new [i] )
@@ -421,7 +401,6 @@ $ `stdlib/std/x509.nu`
     : i ll ?? ( vec_get [i] lens 0 ) { T x → x F _ → 0 }
     : ( Vec u ) der ( bytes_slice cert_msg ls + ls ll )
     : X509 leaf ( x509_parse der )
-    ( vec_free [u] der )
     ^ leaf
 }
 
@@ -444,21 +423,18 @@ $ `stdlib/std/x509.nu`
 // says nothing until its key signs the transcript.
 @ tls_cv_verify ( Vec u ) cert_msg i cv_scheme ( Vec u ) cv_sig ( Vec u ) th_cert → b {
     : X509 leaf ( tls_leaf_cert cert_msg 0 )
-    ? ! . leaf ok { ( x509_free leaf ) ^ F } {}
+    ? ! . leaf ok { ^ F } {}
     : i alg ( __v_scheme_alg cv_scheme )
-    ? == alg 0 { ( x509_free leaf ) ^ F } {}
+    ? == alg 0 { ^ F } {}
     : ( Vec u ) content ( __v_cv_content th_cert )
     : b cvok ( __v_sig_check leaf alg cv_sig content )
-    ( vec_free [u] content )
-    ( x509_free leaf )
     ^ cvok
 }
 
 @ tls_cert_verify ( Vec u ) cert_msg i cv_scheme ( Vec u ) cv_sig ( Vec u ) th_cert s hostname → i {
     : X509 leaf ( tls_leaf_cert cert_msg 0 )
-    ? ! . leaf ok { ( x509_free leaf ) ^ 2 } {}
+    ? ! . leaf ok { ^ 2 } {}
     : i alg ( __v_scheme_alg cv_scheme )
-    ( x509_free leaf )
     ? == alg 0 { ^ 9 } {}
     ? ! ( tls_cv_verify cert_msg cv_scheme cv_sig th_cert ) { ^ 3 } {}
     // Hostname + chain + anchor.

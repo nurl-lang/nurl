@@ -613,14 +613,11 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] idx # u x1 )
     ( vec_push [u] idx # u x2 )
     ( sha3_absorb xof idx )
-    ( vec_free [u] idx )
     : ~ i ctr 0
     ~ < ctr 256 {
         : ( Vec u ) buf ( sha3_squeeze xof 168 )
         = ctr ( __rej_uniform_q r off ctr buf 168 )
-        ( vec_free [u] buf )
     }
-    ( sha3_free xof )
 }
 
 // The two index bytes of cell `c` of the k×l matrix: ρ‖s‖r, column
@@ -646,8 +643,6 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) x2 ( __md_a_idx l + c0 2 )
     : ( Vec u ) x3 ( __md_a_idx l + c0 3 )
     ( sha3x4_absorb xof x0 x1 x2 x3 )
-    ( vec_free [u] x0 ) ( vec_free [u] x1 )
-    ( vec_free [u] x2 ) ( vec_free [u] x3 )
 
     : ( Vec u ) b0 ( vec_with_cap [u] 168 )
     : ( Vec u ) b1 ( vec_with_cap [u] 168 )
@@ -670,9 +665,6 @@ $ `stdlib/core/rcbox.nu`
             = n3 ( __rej_uniform_q r * 256 + c0 3 n3 b3 168 )
         }
     }
-    ( vec_free [u] b0 ) ( vec_free [u] b1 )
-    ( vec_free [u] b2 ) ( vec_free [u] b3 )
-    ( sha3x4_free xof )
 }
 
 // ExpandA (FIPS 204 §3.7): the whole k×l matrix from ρ.
@@ -751,7 +743,6 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) b2 ( vec_new [u] ) ( vec_push [u] b2 # u & + n0 m2 255 ) ( vec_push [u] b2 # u & >> + n0 m2 8 255 )
         : ( Vec u ) b3 ( vec_new [u] ) ( vec_push [u] b3 # u & + n0 m3 255 ) ( vec_push [u] b3 # u & >> + n0 m3 8 255 )
         ( sha3x4_absorb h b0 b1 b2 b3 )
-        ( vec_free [u] b0 ) ( vec_free [u] b1 ) ( vec_free [u] b2 ) ( vec_free [u] b3 )
         : ( Vec u ) o0 ( vec_with_cap [u] 136 )
         : ( Vec u ) o1 ( vec_with_cap [u] 136 )
         : ( Vec u ) o2 ( vec_with_cap [u] 136 )
@@ -773,9 +764,6 @@ $ `stdlib/core/rcbox.nu`
                 = c3 ( __eta_reject r + off0 * 256 m3 c3 o3 136 eta )
             }
         }
-        ( vec_free [u] o0 ) ( vec_free [u] o1 )
-        ( vec_free [u] o2 ) ( vec_free [u] o3 )
-        ( sha3x4_free h )
         = g + g 4
     }
 }
@@ -787,7 +775,6 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] nb # u & nonce 255 )
     ( vec_push [u] nb # u & >> nonce 8 255 )
     ( sha3_absorb xof nb )
-    ( vec_free [u] nb )
     : ~ i ctr 0
     ~ < ctr 256 {
         : ( Vec u ) buf ( sha3_squeeze xof 136 )
@@ -807,9 +794,7 @@ $ `stdlib/core/rcbox.nu`
                 = ctr + ctr 1
             } {}
         }
-        ( vec_free [u] buf )
     }
-    ( sha3_free xof )
 }
 
 // ExpandMask's per-polynomial half (Algorithm 34): a masking polynomial
@@ -835,19 +820,15 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec u ) b2 ( vec_new [u] ) ( vec_push [u] b2 # u & n2 255 ) ( vec_push [u] b2 # u & >> n2 8 255 )
         : ( Vec u ) b3 ( vec_new [u] ) ( vec_push [u] b3 # u & n3 255 ) ( vec_push [u] b3 # u & >> n3 8 255 )
         ( sha3x4_absorb h b0 b1 b2 b3 )
-        ( vec_free [u] b0 ) ( vec_free [u] b1 ) ( vec_free [u] b2 ) ( vec_free [u] b3 )
         : ( Vec u ) o0 ( vec_with_cap [u] * 32 zbits )
         : ( Vec u ) o1 ( vec_with_cap [u] * 32 zbits )
         : ( Vec u ) o2 ( vec_with_cap [u] * 32 zbits )
         : ( Vec u ) o3 ( vec_with_cap [u] * 32 zbits )
         ( sha3x4_squeeze h * 32 zbits o0 o1 o2 o3 )
-        ( sha3x4_free h )
         ( __bitunpack o0 0 zbits g1 r + off0 * 256 + g 0 )
         ? < + g 1 count { ( __bitunpack o1 0 zbits g1 r + off0 * 256 + g 1 ) } {}
         ? < + g 2 count { ( __bitunpack o2 0 zbits g1 r + off0 * 256 + g 2 ) } {}
         ? < + g 3 count { ( __bitunpack o3 0 zbits g1 r + off0 * 256 + g 3 ) } {}
-        ( vec_free [u] o0 ) ( vec_free [u] o1 )
-        ( vec_free [u] o2 ) ( vec_free [u] o3 )
         = g + g 4
     }
 }
@@ -859,11 +840,8 @@ $ `stdlib/core/rcbox.nu`
     ( vec_push [u] nb # u & nonce 255 )
     ( vec_push [u] nb # u & >> nonce 8 255 )
     ( sha3_absorb xof nb )
-    ( vec_free [u] nb )
     : ( Vec u ) buf ( sha3_squeeze xof * 32 zbits )
-    ( sha3_free xof )
     ( __bitunpack buf 0 zbits g1 r off )
-    ( vec_free [u] buf )
 }
 
 // SampleInBall (Algorithm 29): a polynomial with exactly τ coefficients
@@ -879,7 +857,6 @@ $ `stdlib/core/rcbox.nu`
     : ~ i signs 0
     : ~ i b 0
     ~ < b 8 { = signs | signs << # i . sp b * 8 b = b + b 1 }
-    ( vec_free [u] sb )
     : ~ i pos 256
     : ( Vec u ) buf ( sha3_squeeze xof 136 )
     : ~ ( Vec u ) cur buf
@@ -889,7 +866,6 @@ $ `stdlib/core/rcbox.nu`
         : ~ i j 256
         ~ > j n {
             ? >= cp ( vec_len [u] cur ) {
-                ( vec_free [u] cur )
                 = cur ( sha3_squeeze xof 136 )
                 = cp 0
             } {}
@@ -902,8 +878,6 @@ $ `stdlib/core/rcbox.nu`
         = signs >> signs 1
         = n + n 1
     }
-    ( vec_free [u] cur )
-    ( sha3_free xof )
 }
 
 // ── Hint packing ───────────────────────────────────────────────────
@@ -1111,7 +1085,6 @@ simd @ mldsa_keygen_derand i level ( Vec u ) xi → MldsaKeys {
 @ mldsa_keygen i level → MldsaKeys {
     : ( Vec u ) xi ( rand_bytes 32 )
     : MldsaKeys h ( mldsa_keygen_derand level xi )
-    ( vec_free [u] xi )
     ^ h
 }
 
@@ -1198,7 +1171,6 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
     ( sha3_absorb hr rnd )
     ( sha3_absorb hr mu )
     : ( Vec u ) rhopp ( sha3_squeeze hr 64 )
-    ( sha3_free hr )
 
     : ( Vec i32 ) y ( __md_poly_zero * 256 l )
     : ( Vec i32 ) yh ( __md_poly_zero * 256 l )
@@ -1252,8 +1224,6 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
         ( sha3_absorb hc mu )
         ( sha3_absorb hc w1enc )
         : ( Vec u ) ctilde ( sha3_squeeze hc . p lam )
-        ( sha3_free hc )
-        ( vec_free [u] w1enc )
         ( __poly_challenge cpp 0 ctilde . p tau )
         ( __md_ntt cpp 0 zp )
 
@@ -1327,7 +1297,6 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
         } {}
 
         ? ok {
-            ( vec_free [u] sig )
             = sig ( vec_with_cap [u] ( mldsa_sig_len level ) )
             ( bytes_extend_bytes sig ctilde )
             = i 0
@@ -1335,19 +1304,9 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
             ( __hint_pack hp sig k . p omega )
             = done T
         } {}
-        ( vec_free [u] ctilde )
         = kappa + kappa l
     }
 
-    ( vec_free [i32] scratch ) ( vec_free [i32] hint ) ( vec_free [i32] ct0 )
-    ( vec_free [i32] cs2 ) ( vec_free [i32] cs1 ) ( vec_free [i32] cp )
-    ( vec_free [i32] w0 ) ( vec_free [i32] w1 ) ( vec_free [i32] w )
-    ( vec_free [i32] yh ) ( vec_free [i32] y )
-    ( vec_free [u] rhopp )
-    ( vec_free [i32] a )
-    ( vec_free [i32] t0 ) ( vec_free [i32] s2 ) ( vec_free [i32] s1 )
-    ( vec_free [u] tr ) ( vec_free [u] kk ) ( vec_free [u] rho )
-    ( vec_free [i32] zt )
     ^ sig
 }
 
@@ -1358,7 +1317,6 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
     ( sha3_absorb h tr )
     ( sha3_absorb h mprime )
     : ( Vec u ) mu ( sha3_squeeze h 64 )
-    ( sha3_free h )
     ^ mu
 }
 
@@ -1367,8 +1325,6 @@ simd @ mldsa_sign_mu i level ( Vec u ) sk ( Vec u ) mu ( Vec u ) rnd → ( Vec u
     : ( Vec u ) tr ( bytes_slice sk 64 128 )
     : ( Vec u ) mu ( __mldsa_mu tr mprime )
     : ( Vec u ) sig ( mldsa_sign_mu level sk mu rnd )
-    ( vec_free [u] mu )
-    ( vec_free [u] tr )
     ^ sig
 }
 
@@ -1472,21 +1428,12 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
         ( sha3_absorb hc mu )
         ( sha3_absorb hc w1enc )
         : ( Vec u ) c2 ( sha3_squeeze hc . p lam )
-        ( sha3_free hc )
-        ( vec_free [u] w1enc )
         // Constant-time: the comparison itself is not secret, but a
         // length-dependent early exit is a habit worth not forming.
         = ok & ok ( constant_time_eq_vec ctilde c2 )
 
-        ( vec_free [u] c2 )
-        ( vec_free [i32] w1 )
-        ( vec_free [i32] scratch ) ( vec_free [i32] tmp ) ( vec_free [i32] wa )
-        ( vec_free [i32] t1h ) ( vec_free [i32] zh ) ( vec_free [i32] cp )
-        ( vec_free [i32] a )
     } {}
 
-    ( vec_free [i32] hint ) ( vec_free [i32] z ) ( vec_free [u] ctilde )
-    ( vec_free [i32] t1 ) ( vec_free [u] rho ) ( vec_free [i32] zt )
     ^ ok
 }
 
@@ -1496,8 +1443,6 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     : ( Vec u ) tr ( shake256_pure pk 64 )
     : ( Vec u ) mu ( __mldsa_mu tr mprime )
     : b ok ( mldsa_verify_mu level pk mu sig )
-    ( vec_free [u] mu )
-    ( vec_free [u] tr )
     ^ ok
 }
 
@@ -1525,8 +1470,6 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     : ( Vec u ) mp ( __mldsa_mprime msg ctx )
     : ( Vec u ) rnd ( rand_bytes 32 )
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
-    ( vec_free [u] rnd )
-    ( vec_free [u] mp )
     ^ sig
 }
 
@@ -1541,7 +1484,6 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     : ~ i i 0
     ~ < i 32 { ( vec_push [u] rnd # u 0 ) = i + i 1 }
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
-    ( vec_free [u] mp )
     ^ sig
 }
 
@@ -1549,7 +1491,6 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     ? > ( vec_len [u] ctx ) 255 { ^ F } {}
     : ( Vec u ) mp ( __mldsa_mprime msg ctx )
     : b ok ( mldsa_verify_internal level pk mp sig )
-    ( vec_free [u] mp )
     ^ ok
 }
 
@@ -1664,8 +1605,6 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
     ( bytes_extend_bytes m ctx )
     ( bytes_extend_bytes m oid )
     ( bytes_extend_bytes m dig )
-    ( vec_free [u] dig )
-    ( vec_free [u] oid )
     ^ m
 }
 
@@ -1675,11 +1614,9 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
 @ mldsa_sign_prehash i level ( Vec u ) sk ( Vec u ) msg ( Vec u ) ctx i alg → ( Vec u ) {
     ? > ( vec_len [u] ctx ) 255 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) mp ( mldsa_ph_mprime alg msg ctx )
-    ? == ( vec_len [u] mp ) 0 { ( vec_free [u] mp ) ^ ( vec_new [u] ) } {}
+    ? == ( vec_len [u] mp ) 0 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) rnd ( rand_bytes 32 )
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
-    ( vec_free [u] rnd )
-    ( vec_free [u] mp )
     ^ sig
 }
 
@@ -1688,20 +1625,18 @@ simd @ mldsa_verify_mu i level ( Vec u ) pk ( Vec u ) mu ( Vec u ) sig → b {
 @ mldsa_sign_prehash_deterministic i level ( Vec u ) sk ( Vec u ) msg ( Vec u ) ctx i alg → ( Vec u ) {
     ? > ( vec_len [u] ctx ) 255 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) mp ( mldsa_ph_mprime alg msg ctx )
-    ? == ( vec_len [u] mp ) 0 { ( vec_free [u] mp ) ^ ( vec_new [u] ) } {}
+    ? == ( vec_len [u] mp ) 0 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) rnd ( vec_with_cap [u] 32 )
     : ~ i i 0
     ~ < i 32 { ( vec_push [u] rnd # u 0 ) = i + i 1 }
     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
-    ( vec_free [u] mp )
     ^ sig
 }
 
 @ mldsa_verify_prehash i level ( Vec u ) pk ( Vec u ) msg ( Vec u ) ctx i alg ( Vec u ) sig → b {
     ? > ( vec_len [u] ctx ) 255 { ^ F } {}
     : ( Vec u ) mp ( mldsa_ph_mprime alg msg ctx )
-    ? == ( vec_len [u] mp ) 0 { ( vec_free [u] mp ) ^ F } {}
+    ? == ( vec_len [u] mp ) 0 { ^ F } {}
     : b ok ( mldsa_verify_internal level pk mp sig )
-    ( vec_free [u] mp )
     ^ ok
 }

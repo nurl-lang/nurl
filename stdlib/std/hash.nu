@@ -29,8 +29,8 @@
 // ETags, legacy APIs) — both are collision-broken and MUST NOT be used
 // to authenticate data or hash secrets.
 //
-// Ownership: every returned `( Vec u )` / `String` is owned — the caller
-// frees it (`vec_free [u]` / `string_free`) or lets auto-drop run.
+// Ownership: every returned `( Vec u )` / `String` is owned, and goes
+// with its owner.
 //
 // Example — verifying a webhook signature:
 //   : String want ( hmac_sha256_hex secret payload )

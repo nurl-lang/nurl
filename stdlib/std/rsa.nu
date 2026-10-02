@@ -34,7 +34,6 @@ $ `stdlib/std/hash_sha256.nu`
     ? == r 0 { ( nurl_panic `rsa: CSPRNG (nurl_rand_fill) failed` ) } {}
     : BigInt rb ( bigint_from_bytes_be buf )
     : BigInt rm ( bigint_rem rb bn )
-    ( vec_free [u] buf ) ( bigint_free rb )
     ^ rm
 }
 
@@ -45,7 +44,6 @@ $ `stdlib/std/hash_sha256.nu`
     : BigInt bn ( bigint_from_bytes_be n )
     : BigInt bs ( bigint_from_bytes_be sig )
     : b ok < ( bigint_cmp bs bn ) 0
-    ( bigint_free bn ) ( bigint_free bs )
     ^ ok
 }
 
@@ -57,10 +55,6 @@ $ `stdlib/std/hash_sha256.nu`
     : BigInt bs ( bigint_from_bytes_be sig )
     : BigInt m ( bigint_modpow bs be bn )
     : ( Vec u ) em ( bigint_to_bytes_be m ( vec_len [u] n ) )
-    ( bigint_free bn )
-    ( bigint_free be )
-    ( bigint_free bs )
-    ( bigint_free m )
     ^ em
 }
 
@@ -109,7 +103,6 @@ $ `stdlib/std/hash_sha256.nu`
         ? != ( __rsa_bget em + + tstart dplen d ) ( __rsa_bget digest d ) { = ok F } {}
         = d + d 1
     }
-    ( vec_free [u] em )
     ^ ok
 }
 
@@ -117,7 +110,6 @@ $ `stdlib/std/hash_sha256.nu`
 @ rsa_pkcs1_verify_sha256 ( Vec u ) n ( Vec u ) e ( Vec u ) sig ( Vec u ) digest → b {
     : ( Vec u ) di ( rsa_di_sha256 )
     : b r ( rsa_pkcs1_verify n e sig di digest )
-    ( vec_free [u] di )
     ^ r
 }
 
@@ -140,8 +132,6 @@ $ `stdlib/std/hash_sha256.nu`
         : ( Vec u ) blk ( sha256_pure inb )
         : ~ i bi 0
         ~ & < bi 32 < ( vec_len [u] out ) len { ( vec_push [u] out # u ( __rsa_bget blk bi ) ) = bi + bi 1 }
-        ( vec_free [u] inb )
-        ( vec_free [u] blk )
         = counter + counter 1
     }
     ^ out
@@ -175,7 +165,6 @@ $ `stdlib/std/hash_sha256.nu`
     : ( Vec u ) emfull ( __rsa_em n e sig )
     // emfull is k bytes; EM is its low emLen bytes (right-aligned).
     : ( Vec u ) em ( bytes_slice emfull - k emlen k )
-    ( vec_free [u] emfull )
     : ~ b ok T
     ? != ( __rsa_bget em - emlen 1 ) 188 { = ok F } {}  // trailer 0xbc
     : i dblen - - emlen hlen 1
@@ -212,8 +201,6 @@ $ `stdlib/std/hash_sha256.nu`
     : ( Vec u ) hprime ( sha256_pure mprime )
     : ~ i c 0
     ~ < c hlen { ? != ( __rsa_bget hprime c ) ( __rsa_bget h c ) { = ok F } {} = c + c 1 }
-    ( vec_free [u] em ) ( vec_free [u] maskeddb ) ( vec_free [u] h ) ( vec_free [u] dbmask )
-    ( vec_free [u] salt ) ( vec_free [u] hprime )
     ^ ok
 }
 
@@ -276,7 +263,6 @@ $ `stdlib/std/hash_sha256.nu`
     : ~ BigInt bsig ( bigint_zero )
     ? ( bigint_is_zero rinv ) {
         // r not invertible (astronomically rare for n=pq) → sign unblinded.
-        ( bigint_free bsig )
         = bsig ( bigint_modpow bm bd bn )
     } {
         : BigInt re ( bigint_modpow r be bn )  // r^e mod n (public exp, fast)
@@ -284,15 +270,8 @@ $ `stdlib/std/hash_sha256.nu`
         : BigInt mbr ( bigint_rem mb bn )  // EM·r^e mod n
         : BigInt sb ( bigint_modpow mbr bd bn )  // (EM·r^e)^d = EM^d·r mod n
         : BigInt su ( bigint_mul sb rinv )
-        ( bigint_free bsig )
         = bsig ( bigint_rem su bn )  // ·r^{-1} → EM^d mod n
-        ( bigint_free re ) ( bigint_free mb ) ( bigint_free mbr )
-        ( bigint_free sb ) ( bigint_free su )
     }
     : ( Vec u ) sig ( bigint_to_bytes_be bsig k )
-    ( bigint_free bm ) ( bigint_free bd ) ( bigint_free be ) ( bigint_free bn )
-    ( bigint_free r ) ( bigint_free rinv ) ( bigint_free bsig )
-    ( vec_free [u] h )
-    ( vec_free [u] dbmask )
     ^ sig
 }

@@ -114,13 +114,6 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ _p256_scr_free sink P256Scratch s → v {
-    ( vec_free [i] . s modp ) ( vec_free [i] . s t ) ( vec_free [i] . s diff )
-    ( vec_free [i] . s g0 ) ( vec_free [i] . s g1 ) ( vec_free [i] . s g2 )
-    ( vec_free [i] . s g3 ) ( vec_free [i] . s g4 ) ( vec_free [i] . s g5 )
-    ( vec_free [i] . s gp )
-}
-
 // Limb access in the field routines goes through `*i` rather than
 // `__ctl` / `vec_set`. Every one of these loops is fixed-count with an
 // index the compiler can see is in range, so the bounds check the Vec
@@ -149,7 +142,6 @@ $ `stdlib/core/vec.nu`
 @ p256ct_mul ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_mul_s scr a b )
-    ( _p256_scr_free scr )
     ^ r
 }
 
@@ -565,7 +557,6 @@ $ `stdlib/core/vec.nu`
 @ p256ct_add ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_add_s scr a b )
-    ( _p256_scr_free scr )
     ^ r
 }
 
@@ -620,7 +611,6 @@ $ `stdlib/core/vec.nu`
 @ p256ct_sub ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_sub_s scr a b )
-    ( _p256_scr_free scr )
     ^ r
 }
 
@@ -675,7 +665,6 @@ $ `stdlib/core/vec.nu`
 @ p256ct_to_mont ( Vec i ) a → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( _p256_to_mont_s scr a )
-    ( _p256_scr_free scr )
     ^ r
 }
 
@@ -688,13 +677,11 @@ $ `stdlib/core/vec.nu`
 @ _p256_to_mont_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     : ( Vec i ) r2 ( __p256_r2 )
     ( _p256_mul_d scr dst a r2 )
-    ( vec_free [i] r2 )
 }
 
 @ p256ct_from_mont ( Vec i ) a → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_from_mont_s scr a )
-    ( _p256_scr_free scr )
     ^ r
 }
 
@@ -707,7 +694,6 @@ $ `stdlib/core/vec.nu`
 @ _p256_from_mont_d P256Scratch scr ( Vec i ) dst ( Vec i ) a → v {
     : ( Vec i ) one ( __p256_one )
     ( _p256_mul_d scr dst a one )
-    ( vec_free [i] one )
 }
 
 // True iff a == 0 (constant-time OR of all limbs). a is a plain/Mont limb vec.
@@ -722,7 +708,6 @@ $ `stdlib/core/vec.nu`
 @ p256ct_one_mont → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( _p256_one_mont_s scr )
-    ( _p256_scr_free scr )
     ^ r
 }
 
@@ -735,7 +720,6 @@ $ `stdlib/core/vec.nu`
 @ _p256_one_mont_d P256Scratch scr ( Vec i ) dst → v {
     : ( Vec i ) one ( __p256_one )
     ( _p256_to_mont_d scr dst one )
-    ( vec_free [i] one )
 }
 
 // Modular inverse in Montgomery form: a^(p-2) mod p, via a fixed addition
@@ -745,7 +729,6 @@ $ `stdlib/core/vec.nu`
 @ p256ct_inv ( Vec i ) a → ( Vec i ) {
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) r ( __p256_inv_s scr a )
-    ( _p256_scr_free scr )
     ^ r
 }
 
@@ -795,8 +778,6 @@ $ `stdlib/core/vec.nu`
     ( __p256_sqn scr dst 4 ) ( _p256_mul_d scr dst dst x4 )
     ( __p256_sqn scr dst 2 ) ( _p256_mul_d scr dst dst x2 )
     ( __p256_sqn scr dst 2 ) ( _p256_mul_d scr dst dst a )
-    ( vec_free [i] x2 ) ( vec_free [i] x4 ) ( vec_free [i] x8 )
-    ( vec_free [i] x16 ) ( vec_free [i] x32 )
 }
 
 // 4-limb copy.
@@ -809,8 +790,6 @@ $ `stdlib/core/vec.nu`
     = . op 3 . ap 3
 }
 
-@ p256ct_free sink ( Vec i ) a → v { ( vec_free [i] a ) }
-
 // ── constant-time P-256 point arithmetic (homogeneous projective) ──────
 // Points are (X : Y : Z), x = X/Z, y = Y/Z, identity = (0 : 1 : 0); every
 // coordinate is an 8-limb Montgomery field element. Addition uses the Renes–
@@ -821,10 +800,6 @@ $ `stdlib/core/vec.nu`
 // form (curve constants, computed once per scalar-mult).
 
 : P256Pt { ( Vec i ) x ( Vec i ) y ( Vec i ) z }
-
-@ p256pt_free sink P256Pt p → v {
-    ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z )
-}
 
 // An uninitialised point (three 8-limb magnitudes) — a ladder register.
 @ _p256_pt_mag → P256Pt {
@@ -1240,10 +1215,8 @@ $ `stdlib/core/vec.nu`
     : P256Scratch scr ( _p256_scr_new )
     : ( Vec i ) aplain ( _p256_a_plain )
     : ( Vec i ) am ( _p256_to_mont_s scr aplain )
-    ( vec_free [i] aplain )
     : ( Vec i ) b3plain ( _p256_b3_plain )
     : ( Vec i ) b3m ( _p256_to_mont_s scr b3plain )
-    ( vec_free [i] b3plain )
     // base in Montgomery projective form (Z = 1).
     : P256Pt base ( _p256_pt_mag )
     ( _p256_to_mont_d scr . base x bx )
@@ -1288,10 +1261,6 @@ $ `stdlib/core/vec.nu`
     : ( Vec u ) out ( vec_with_cap [u] 64 )
     ( _p256_limbs_to_be out . acc x )
     ( _p256_limbs_to_be out . acc y )
-    ( p256pt_free base ) ( p256pt_free acc ) ( p256pt_free added )
-    ( vec_free [i] tbl )
-    ( vec_free [i] am ) ( vec_free [i] b3m ) ( vec_free [i] zinv )
-    ( _p256_scr_free scr )
     ^ out
 }
 
