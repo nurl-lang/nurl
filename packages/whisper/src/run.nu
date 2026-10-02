@@ -44,7 +44,6 @@ $ `src/model.nu`
                         ?? ( vec_get [u] h 3 ) { T x3 → { = b3 # i x3 } F → {} }
                         = yes & & & == b0 108 == b1 109 == b2 103 == b3 103
                     } {}
-                    ( vec_free [u] h )
                 }
                 F _ → {}
             }
@@ -81,7 +80,6 @@ $ `src/model.nu`
     ? == 1 ( vec_len [i] ids ) {
         ?? ( vec_get [i] ids 0 ) { T x → { = id x } F → {} }
     } {}
-    ( vec_free [i] ids )
     ^ id
 }
 
@@ -139,9 +137,6 @@ $ `src/model.nu`
         = j + j 1
     }
     ( vec_push [u] out 10 )
-    ( string_free line )
-    ( vec_free [u] txt )
-    ( vec_free [i] seg )
 }
 
 // Timestamp decoding is not "leave <|notimestamps|> out and hope": whisper was
@@ -246,7 +241,7 @@ $ `src/model.nu`
 // 20 ms) with the words — it was trained to. `win_off` places this window in
 // the condensed timeline; `runs` places the condensed timeline in the
 // recording.
-@ __wh_decode_window * Whisper w Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs f nospeech ( Vec u ) out → b {
+@ __wh_decode_window Whisper w Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs f nospeech ( Vec u ) out → b {
     // Language codes are lowercase by definition (<|fi|>, <|en|> …) — a
     // phone keyboard capitalizes the first letter, and "Fi" failing with
     // no explanation is a bug report waiting to happen. Normalize here,
@@ -275,7 +270,6 @@ $ `src/model.nu`
         ( nurl_eprint lang )
         ( nurl_eprintln `' — whisper language codes are lowercase two-letter (fi, en, sv, de, …)` )
     } {}
-    ( string_free ltok )
     ? | | | | < sot 0 < lid 0 < task 0 < nots 0 < eot 0 { ^ F } {}
 
     : ( Vec i ) prompt ( vec_new [i] )
@@ -307,15 +301,12 @@ $ `src/model.nu`
         ? & & == k 0 >= nosp 0 < nospeech 1.0 {
             : ( Vec f ) lg0 ( wh_logits w )
             : f pn ( __wh_nosp_prob lg0 nosp )
-            ( vec_free [f] lg0 )
             ? > pn nospeech { = silent T } {}
         } {}
         = pos + pos 1
         = k + k 1
     }
     ? silent {
-        ( vec_free [i] outids )
-        ( vec_free [i] prompt )
         ^ T
     } {}
     : ~ b done F
@@ -338,7 +329,6 @@ $ `src/model.nu`
             : b lts & >= made 1 >= last ts0
             : b pts | < made 2 >= last2 ts0
             = nt ( __wh_next_ts lg ts0 eot == made 0 lts pts mints )
-            ( vec_free [f] lg )
         } {
             = nt ( wh_argmax_dev w )
         }
@@ -383,10 +373,7 @@ $ `src/model.nu`
             }
             = j + j 1
         }
-        ( vec_free [u] txt )
     }
-    ( vec_free [i] outids )
-    ( vec_free [i] prompt )
     ^ T
 }
 
@@ -403,7 +390,15 @@ $ `src/model.nu`
 // once and exits; `whisper serve` opens the model ONCE and runs this per
 // request — the 1.5 GB read, the f16→f32 conversion and the kernel compile
 // all happen before the first request instead of inside every one.
-@ wh_run * Whisper w Tok t ( Vec f ) at16_in s lang i maxtok b use_vad b with_ts f nospeech ( Vec u ) out → b {
+// A WAV as the 16 kHz mono samples the model hears. Takes the WAV: it and
+// its mono mix are gone when this returns, so a long recording is not held
+// three times over while the model runs (an hour at 16 kHz is 460 MB a copy).
+@ wh_wav16 sink Wav aw → ( Vec f ) {
+    : ( Vec f ) mono ( wav_mono aw )
+    ^ ( resample mono . aw rate 16000 )
+}
+
+@ wh_run Whisper w Tok t sink ( Vec f ) at16_in s lang i maxtok b use_vad b with_ts f nospeech ( Vec u ) out → b {
     : ~ ( Vec f ) at16 at16_in
     // where each surviving stretch of condensed audio sits in the
     // recording — empty (identity) without VAD
@@ -414,16 +409,14 @@ $ `src/model.nu`
         // boundary that two sentences do not run together, far less than
         // the pause it replaces.
         : ( Vec f ) sp ( vad_extract_runs at16 segs 8000 runs )
-        ( vec_free [f] at16 )
         = at16 sp
-        ( vec_free [VadSeg] segs )
     } {}
-    : i nmel . w n_mels
+    : i nmel ( wh_n_mels w )
     : i total ( vec_len [f] at16 )
     // the window is the encoder's own length: 1500 positions × 2 (the
     // stride-2 conv) × 160 samples of hop = 30 s at 16 kHz. Derived, not
     // assumed.
-    : i window * . w n_ctx_enc 320
+    : i window * ( wh_n_ctx_enc w ) 320
     // no audio (or, under VAD, no speech in it) is no windows — not one
     // window of silence. Whisper asked to transcribe silence does not
     // return nothing; it returns "[BLANK_AUDIO]", or a sentence it made up.
@@ -443,16 +436,11 @@ $ `src/model.nu`
         }
         : ( Vec f ) fixed ( pad_or_trim chunk window )
         : ( Vec f ) mel ( log_mel_whisper fixed 400 160 nmel 16000 )
-        ( vec_free [f] chunk )
-        ( vec_free [f] fixed )
         ( wh_encode w mel )
         ( wh_prepare_cross w )
-        ( vec_free [f] mel )
         : f woff / # f * wi window 16000.0
         ? ( __wh_decode_window w t lang maxtok with_ts woff runs nospeech out ) {} { = ok F }
         = wi + wi 1
     }
-    ( vec_free [f] at16 )
-    ( vec_free [VadRun] runs )
     ^ ok
 }

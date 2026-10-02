@@ -43,7 +43,7 @@ $ `stdlib/std/floatbits.nu`
 $ `deps/http/src/http.nu`
 $ `src/run.nu`
 
-: ~ i g_srv_w 0  // *Whisper, as an address (0 = not serving)
+: ~ i g_srv_w 0  // the loaded Whisper's ctl word, OWNED by the server (0 = none loaded)
 : ~ i g_srv_t 0  // the Tok's box, lent by __wh_serve_run's caller
 : ~ i g_srv_reqs 0
 : ~ s g_srv_lang ``
@@ -107,24 +107,28 @@ $ `src/run.nu`
     : ~ i wp 0
     ? ( _wh_is_ggml g_srv_dir ) {
         ?? ( wh_open_ggml g_srv_dir ) {
-            T w → { = wp # i w }
+            T w → {
+                // the server owns the model through g_srv_w from here
+                = wp # i . w ctl
+                ( mem_forget w )
+            }
             F e → {
                 ( nurl_eprintln ( string_data e ) )
-                ( string_free e )
             }
         }
     } {
         : String cfg ( _wh_path g_srv_dir `config.json` )
         : String wts ( _wh_path g_srv_dir `model.safetensors` )
         ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
-            T w → { = wp # i w }
+            T w → {
+                // the server owns the model through g_srv_w from here
+                = wp # i . w ctl
+                ( mem_forget w )
+            }
             F e → {
                 ( nurl_eprintln ( string_data e ) )
-                ( string_free e )
             }
         }
-        ( string_free cfg )
-        ( string_free wts )
     }
     ? == wp 0 { ^ F } {}
     = g_srv_w wp
@@ -134,7 +138,6 @@ $ `src/run.nu`
     ( string_push_int m g_srv_load_ms )
     ( string_push_str m ` ms` )
     ( nurl_eprintln ( string_data m ) )
-    ( string_free m )
     ^ T
 }
 
@@ -171,16 +174,17 @@ $ `src/run.nu`
         ( sleep_ms 200 )
         ( __srv_lock )
         ? & & != g_srv_w 0 == g_srv_busy 0 >= ( elapsed_ms_since g_srv_idle_since ) g_srv_unload_ms {
-            : *Whisper w # *Whisper g_srv_w
+            // the server's word becomes an owner again, released right here,
+            // on the thread the context was just bound to
+            : Whisper w @ Whisper { # s g_srv_w }
             = g_srv_w 0
-            : b _b ( gpu_bind_thread . w g )
+            : b _b ( gpu_bind_thread ( wh_gpu w ) )
             ( wh_close w )
             = g_srv_unloads + g_srv_unloads 1
             : String m ( string_from `whisper: idle for ` )
             ( string_push_int m / g_srv_unload_ms 1000 )
             ( string_push_str m ` s — model unloaded (device and host memory released; the next request reloads it)` )
             ( nurl_eprintln ( string_data m ) )
-            ( string_free m )
         } {}
         ( __srv_unlock )
     }
@@ -243,7 +247,6 @@ $ `src/run.nu`
             ? & > ( nurl_str_len h ) 7 != 0 ( nurl_str_starts h `Bearer ` ) {
                 ? ( __srv_tok_eq ( nurl_str_slice h 7 - ( nurl_str_len h ) 7 ) g_srv_token ) { = ok T } {}
             } {}
-            ( string_free hv )
         }
         F → {}
     }
@@ -252,7 +255,6 @@ $ `src/run.nu`
     ? > ( string_len qt ) 0 {
         ? ( __srv_tok_eq ( string_data qt ) g_srv_token ) { = ok T } {}
     } {}
-    ( string_free qt )
     ^ ok
 }
 
@@ -260,7 +262,6 @@ $ `src/run.nu`
     : Json o ( json_obj_new )
     : b _s ( json_obj_set o `error` ( json_str_lit `unauthorized — pass the token as 'Authorization: Bearer <token>' or '?token=<token>'` ) )
     : HttpResponse r ( response_json 401 o )
-    ( json_free o )
     ^ r
 }
 
@@ -301,7 +302,6 @@ $ `src/run.nu`
         }
         = k + k 1
     }
-    ( vec_free [u] b )
     ^ out
 }
 
@@ -309,22 +309,25 @@ $ `src/run.nu`
     : Json o ( json_obj_new )
     : b _s ( json_obj_set o `error` ( json_str_lit msg ) )
     : HttpResponse r ( response_json status o )
-    ( json_free o )
     ^ r
 }
 
-// The transcription itself, after the request has been picked apart.
-// Owns `wav`; frees it.
-@ __srv_run ( Vec u ) wav s lang b use_vad b with_ts b as_text → HttpResponse {
+// The request's WAV bytes as 16 kHz samples. Takes the bytes: the upload,
+// the parsed WAV and its mono mix are all gone before the model runs.
+@ __srv_pcm16 sink ( Vec u ) wav → !( Vec f ) String {
     ?? ( wav_parse wav ) {
-        T aw → {
-            ( vec_free [u] wav )
-            : ( Vec f ) mono ( wav_mono aw )
-            : ( Vec f ) at16 ( resample mono . aw rate 16000 )
-            ( wav_free aw )
-            ( vec_free [f] mono )
+        T aw → { ^ @ !( Vec f ) String { T ( wh_wav16 aw ) } }
+        F e → { ^ @ !( Vec f ) String { F e } }
+    }
+}
 
-            : *Whisper w # *Whisper g_srv_w
+// The transcription itself, after the request has been picked apart.
+// Takes `wav`.
+@ __srv_run sink ( Vec u ) wav s lang b use_vad b with_ts b as_text → HttpResponse {
+    ?? ( __srv_pcm16 wav ) {
+        T at16 → {
+
+            : Whisper w # Whisper g_srv_w
             : Tok t # Tok g_srv_t
             : ( Vec u ) text ( vec_new [u] )
             ? ( wh_run w t at16 lang g_srv_max use_vad with_ts g_srv_nospeech text ) {
@@ -345,26 +348,19 @@ $ `src/run.nu`
                     }
                     = k + k 1
                 }
-                ( vec_free [u] text )
                 ? as_text {
                     : HttpResponse r ( response_text 200 ( string_data st ) )
-                    ( string_free st )
                     ^ r
                 } {}
                 : Json o ( json_obj_new )
                 : b _s ( json_obj_set o `text` ( json_str_lit ( string_data st ) ) )
                 : HttpResponse r ( response_json 200 o )
-                ( json_free o )
-                ( string_free st )
                 ^ r
             } {}
-            ( vec_free [u] text )
             ^ ( __srv_err 500 `decode failed (is this a whisper tokenizer.json?)` )
         }
         F e → {
-            ( vec_free [u] wav )
             : HttpResponse r ( __srv_err 400 ( string_data e ) )
-            ( string_free e )
             ^ r
         }
     }
@@ -390,11 +386,7 @@ $ `src/run.nu`
             : String fmt_s ( __srv_field_str parts `response_format` )
             : String vad_s ( __srv_field_str parts `vad` )
             : String ts_s ( __srv_field_str parts `timestamps` )
-            ( multipart_parts_free parts )
             ? == 0 ( vec_len [u] wav ) {
-                ( vec_free [u] wav )
-                ( string_free lang_s ) ( string_free fmt_s )
-                ( string_free vad_s ) ( string_free ts_s )
                 ^ ( __srv_err 400 `multipart form has no 'file' field` )
             } {}
             : ~ s lang g_srv_lang
@@ -405,8 +397,6 @@ $ `src/run.nu`
             : b with_ts | g_srv_ts ts2
             : b as_text ? ( nurl_str_eq ( string_data fmt_s ) `text` ) T F
             : HttpResponse r ( __srv_run wav lang use_vad with_ts as_text )
-            ( string_free lang_s ) ( string_free fmt_s )
-            ( string_free vad_s ) ( string_free ts_s )
             ^ r
         }
         F → {}
@@ -438,15 +428,12 @@ $ `src/run.nu`
     ?? exe {
         T ep → {
             : String bindir ( path_dirname ( string_data ep ) )
-            ( string_free ep )
             : String c1 ( path_join ( string_data bindir ) `views/index.html` )
             ? ( file_exists ( string_data c1 ) ) {
-                ( string_free bindir )
                 ^ c1
-            } { ( string_free c1 ) }
+            } {}
             : String share ( path_join ( string_data bindir ) `../share/whisper/views/index.html` )
-            ( string_free bindir )
-            ? ( file_exists ( string_data share ) ) { ^ share } { ( string_free share ) }
+            ? ( file_exists ( string_data share ) ) { ^ share } {}
         }
         F _ → {}
     }
@@ -462,17 +449,14 @@ $ `src/run.nu`
     ? > ( string_len pp ) 0 {
         ?? ( read_file_bytes ( string_data pp ) ) {
             T body → {
-                ( string_free pp )
                 : HttpResponse r ( response_new 200 )
                 ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
                 ( response_set_body_bytes r body )
-                ( vec_free [u] body )
                 ^ r
             }
             F _ → {}
         }
     } {}
-    ( string_free pp )
     ^ ( response_text 404 `test page not found — reinstall the package (nurlpkg stages views/ into share/whisper/), or run from the package directory\n` )
 }
 
@@ -486,11 +470,11 @@ $ `src/run.nu`
     : b _a ( json_obj_set o `status` ( json_str_lit ? loaded `ok` `idle` ) )
     : b _l ( json_obj_set o `loaded` ( json_bool loaded ) )
     ? loaded {
-        : *Whisper w # *Whisper g_srv_w
-        : b _b ( json_obj_set o `d_model` ( json_int . w d_model ) )
-        : b _c ( json_obj_set o `n_mels` ( json_int . w n_mels ) )
-        : b _d ( json_obj_set o `encoder_layers` ( json_int . w n_enc_layer ) )
-        : b _e ( json_obj_set o `decoder_layers` ( json_int . w n_dec_layer ) )
+        : Whisper w # Whisper g_srv_w
+        : b _b ( json_obj_set o `d_model` ( json_int ( wh_d_model w ) ) )
+        : b _c ( json_obj_set o `n_mels` ( json_int ( wh_n_mels w ) ) )
+        : b _d ( json_obj_set o `encoder_layers` ( json_int ( wh_n_enc_layer w ) ) )
+        : b _e ( json_obj_set o `decoder_layers` ( json_int ( wh_n_dec_layer w ) ) )
     } {}
     : b _f ( json_obj_set o `requests` ( json_int g_srv_reqs ) )
     : b _g ( json_obj_set o `unload_after_s` ( json_int / g_srv_unload_ms 1000 ) )
@@ -502,7 +486,6 @@ $ `src/run.nu`
     } {}
     ( __srv_unlock )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
     ^ r
 }
 
@@ -536,8 +519,6 @@ $ `src/run.nu`
     : b _c ( json_obj_set o `vad` ( json_str_lit `adaptive-floor` ) )
     : String body ( json_stringify o )
     : !v WsErr _w ( ws_send_text c ( string_data body ) )
-    ( string_free body )
-    ( json_free o )
 }
 
 @ __srv_ws_config TcpConn c ( Vec u ) payload → v {
@@ -569,11 +550,9 @@ $ `src/run.nu`
                 }
                 F → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
-    ( string_free ps )
     ( __srv_ws_ack c )
 }
 
@@ -619,7 +598,7 @@ $ `src/run.nu`
     : ( Vec f ) seg ( vad_stream_take vs )
     : ~ s lang g_srv_lang
     ? > ( nurl_str_len g_ws_lang ) 0 { = lang g_ws_lang } {}
-    : *Whisper w # *Whisper g_srv_w
+    : Whisper w # Whisper g_srv_w
     : Tok t # Tok g_srv_t
     : ( Vec u ) text ( vec_new [u] )
     // no VAD inside — the stream already segmented; no timestamps — the
@@ -629,7 +608,6 @@ $ `src/run.nu`
         // pumping room noise past the energy floor). Nothing to say, and
         // saying nothing is the right amount.
         ? == ( vec_len [u] text ) 0 {
-            ( vec_free [u] text )
             = g_srv_reqs + g_srv_reqs 1
             ^ {}
         } {}
@@ -648,9 +626,6 @@ $ `src/run.nu`
         : b _c ( json_obj_set o `t1` ( json_float / # f . g end 16000.0 ) )
         : String body ( json_stringify o )
         : !v WsErr _w ( ws_send_text c ( string_data body ) )
-        ( string_free body )
-        ( json_free o )
-        ( string_free st )
     } {
         // The decode failed (an unknown language token, most likely) —
         // SAY SO on the socket. A client staring at silence cannot tell a
@@ -660,10 +635,7 @@ $ `src/run.nu`
         : b _e ( json_obj_set eo `error` ( json_str_lit `transcription failed — check the language code (lowercase: fi, en, sv, …); the server log has the detail` ) )
         : String eb ( json_stringify eo )
         : !v WsErr _we ( ws_send_text c ( string_data eb ) )
-        ( string_free eb )
-        ( json_free eo )
     }
-    ( vec_free [u] text )
     = g_srv_reqs + g_srv_reqs 1
 }
 
@@ -698,10 +670,8 @@ $ `src/run.nu`
                 } {
                     : ( Vec f ) x ( __srv_ws_samples . msg payload )
                     ( vad_stream_push vs x )
-                    ( vec_free [f] x )
                     ~ ( vad_stream_poll vs ) { ( __srv_ws_emit c vs ) }
                 }
-                ( vec_free [u] . msg payload )
             }
             F _ → { = open F }
         }
@@ -711,7 +681,6 @@ $ `src/run.nu`
     // before the close reply)
     ? ( vad_stream_flush vs ) { ( __srv_ws_emit c vs ) } {}
     : !v WsErr _c ( ws_send_close c 1000 `bye` )
-    ( vad_stream_free vs )
     ? > ( nurl_str_len g_ws_lang ) 0 { ( nurl_free g_ws_lang ) } {}
     = g_ws_lang ``
     ( __srv_release )
@@ -719,11 +688,13 @@ $ `src/run.nu`
 }
 
 // The server proper, once a model and tokenizer are open — one body for
-// both containers. Owns neither; the caller closes them.
+// both containers. Takes the model (the server owns it: an idle unload and
+// a reload swap it); the caller keeps the tokenizer.
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
-@ __wh_serve_run * Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
-    = g_srv_w # i w
+@ __wh_serve_run sink Whisper w Tok t s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token i unload_s → i {
+    = g_srv_w # i . w ctl
+    ( mem_forget w )  // the server owns it now (g_srv_w)
     = g_srv_t # i . t ctl
     ? > ( nurl_str_len g_srv_dir ) 0 { ( nurl_free g_srv_dir ) } {}
     = g_srv_dir ( strdup dir )
@@ -794,7 +765,6 @@ $ `src/run.nu`
     } {}
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
-    ( string_free msg )
 
     : ~ i rc 0
     ? tls {
@@ -807,9 +777,8 @@ $ `src/run.nu`
     // have replaced the caller's `w` with nothing, or a reload with a new one
     ( __srv_lock )
     ? != g_srv_w 0 {
-        : *Whisper wl # *Whisper g_srv_w
+        : Whisper wl @ Whisper { # s g_srv_w }  // the owner, dropped here
         = g_srv_w 0
-        ( wh_close wl )
     } {}
     ( __srv_unlock )
     = g_srv_t 0
@@ -827,28 +796,23 @@ $ `src/run.nu`
 
     // a whisper.cpp ggml container serves as itself: one file, no sidecars
     ? ( _wh_is_ggml dir ) {
-        ( string_free cfg ) ( string_free wts ) ( string_free tjs )
         ?? ( wh_open_ggml dir ) {
             T w → {
-                ?? ( gg_build_tok # *Gg . w gg ) {
+                ?? ( gg_build_tok ( wh_gg w ) ) {
                     T t → {
                         // the run owns the model from here: it closes
                         // whatever is loaded when it returns
                         : i rc2 ( __wh_serve_run w t dir host port lang maxtok use_vad with_ts cert key token unload_s )
-                        ( tok_free t )
                         ^ rc2
                     }
                     F e → {
                         ( nurl_eprintln ( string_data e ) )
-                        ( string_free e )
-                        ( wh_close w )
                         ^ 1
                     }
                 }
             }
             F e → {
                 ( nurl_eprintln ( string_data e ) )
-                ( string_free e )
                 ^ 1
             }
         }
@@ -863,18 +827,14 @@ $ `src/run.nu`
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
-                    ( string_free e )
                     = rc 1
                 }
             }
-            ( tok_free t )
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             = rc 1
         }
     }
-    ( string_free cfg ) ( string_free wts ) ( string_free tjs )
     ^ rc
 }

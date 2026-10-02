@@ -39,7 +39,7 @@ $ `src/serve.nu`
 @ __wh_resolve s arg → String {
     ?? ( hub_get arg ) {
         T p → { ^ p }
-        F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) ^ ( string_new ) }
+        F e → { ( nurl_eprintln ( string_data e ) ) ^ ( string_new ) }
     }
 }
 
@@ -61,20 +61,16 @@ $ `src/serve.nu`
             = rc 1
         }
     }
-    ( vec_free [u] d )
     ^ rc
 }
 
 // The shared tail once the model and tokenizer are open: read the audio,
 // resample, run, print. Owns neither w nor t.
-@ __wh_transcribe_run * Whisper w Tok t s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
+@ __wh_transcribe_run Whisper w Tok t s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     : ~ i rc 0
     ?? ( wav_read wavpath ) {
         T aw → {
-            : ( Vec f ) mono ( wav_mono aw )
-            : ( Vec f ) at16 ( resample mono . aw rate 16000 )
-            ( wav_free aw )
-            ( vec_free [f] mono )
+            : ( Vec f ) at16 ( wh_wav16 aw )
             : ( Vec u ) text ( vec_new [u] )
             ? ( wh_run w t at16 lang maxtok use_vad with_ts nospeech text ) {
                 : i n ( vec_len [u] text )
@@ -84,11 +80,9 @@ $ `src/serve.nu`
                 ( nurl_eprintln `whisper: the vocabulary has no control tokens (is this a whisper model?)` )
                 = rc 1
             }
-            ( vec_free [u] text )
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             = rc 1
         }
     }
@@ -102,22 +96,18 @@ $ `src/serve.nu`
         ?? ( wh_open_ggml dir ) {
             T w → {
                 : ~ i rc2 1
-                ?? ( gg_build_tok # *Gg . w gg ) {
+                ?? ( gg_build_tok ( wh_gg w ) ) {
                     T t → {
                         = rc2 ( __wh_transcribe_run w t wavpath lang maxtok use_vad with_ts nospeech )
-                        ( tok_free t )
                     }
                     F e → {
                         ( nurl_eprintln ( string_data e ) )
-                        ( string_free e )
                     }
                 }
-                ( wh_close w )
                 ^ rc2
             }
             F e → {
                 ( nurl_eprintln ( string_data e ) )
-                ( string_free e )
                 ^ 1
             }
         }
@@ -132,10 +122,7 @@ $ `src/serve.nu`
         T t → {
             ?? ( wav_read wavpath ) {
                 T aw → {
-                    : ( Vec f ) mono ( wav_mono aw )
-                    : ( Vec f ) at16 ( resample mono . aw rate 16000 )
-                    ( wav_free aw )
-                    ( vec_free [f] mono )
+                    : ( Vec f ) at16 ( wh_wav16 aw )
                     // The model is opened BEFORE the spectrogram is computed:
                     // how many mel bands it wants is a property of the model
                     // (80 for whisper-tiny … large-v2, 128 for large-v3 and
@@ -152,31 +139,24 @@ $ `src/serve.nu`
                                 ( nurl_eprintln `whisper: the vocabulary has no control tokens (is this a whisper tokenizer.json?)` )
                                 = rc 1
                             }
-                            ( vec_free [u] text )
-                            ( wh_close w )
                         }
                         F e → {
                             ( nurl_eprintln ( string_data e ) )
-                            ( string_free e )
                             = rc 1
                         }
                     }
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
-                    ( string_free e )
                     = rc 1
                 }
             }
-            ( tok_free t )
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             = rc 1
         }
     }
-    ( string_free cfg ) ( string_free wts ) ( string_free tjs )
     ^ rc
 }
 
@@ -197,20 +177,16 @@ $ `src/serve.nu`
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
         ^ 2
     }
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
         ( nurl_print `\ncommands:\n  encode <config.json> <model.safetensors> <audio.wav> -o enc.f32\n` )
-        ( string_free u )
-        ( args_free p )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 2 {
         ( nurl_eprintln `usage: whisper transcribe <model-dir> <audio.wav> · whisper serve <model-dir> --addr host:port · whisper encode <config.json> <model.safetensors> <audio.wav> -o enc.f32` )
-        ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
@@ -220,25 +196,21 @@ $ `src/serve.nu`
         : ~ s dir ``
         ?? ( vec_get [String] pos 1 ) { T c → { = dir ( string_data c ) } F → {} }
         : String __mdl ( __wh_resolve dir )
-        ? == ( string_len __mdl ) 0 { ( string_free __mdl ) ( args_free p ) ^ 1 } {}
+        ? == ( string_len __mdl ) 0 { ^ 1 } {}
         = dir ( string_data __mdl )
         : String lang ( args_value_or p `lang` `en` )
         : ~ i maxtok 200
         : String smax ( args_value_or p `max` `200` )
         ?? ( string_to_int smax ) { T v → { = maxtok v } F _ → {} }
-        ( string_free smax )
         : ~ i unload_s 0
         : String sunl ( args_value_or p `unload-after` `0` )
         ?? ( string_to_int sunl ) {
             T v → { = unload_s v }
             F _ → {
                 ( nurl_eprintln `whisper: --unload-after takes a number of seconds` )
-                ( string_free sunl )
-                ( string_free lang ) ( string_free __mdl ) ( args_free p )
                 ^ 2
             }
         }
-        ( string_free sunl )
         ? < unload_s 0 { = unload_s 0 } {}
         // --addr host:port — the LAST colon splits, so a future [::1]:port
         // does not shear an IPv6 address in half
@@ -264,7 +236,6 @@ $ `src/serve.nu`
                 = ai + ai 1
             }
             ?? ( string_to_int ps ) { T v → { = port v } F _ → {} }
-            ( string_free ps )
         } {
             ( string_push_str host ( string_data addr ) )
         }
@@ -280,14 +251,10 @@ $ `src/serve.nu`
             : ~ String tdir ( env_var_or `TMPDIR` `/tmp` )
             : String cpath ( path_join ( string_data tdir ) `whisper_self.crt` )
             : String kpath ( path_join ( string_data tdir ) `whisper_self.key` )
-            ( string_free tdir )
             : !v IoErr w1 ( write_file ( string_data cpath ) ( string_data . ss cert_pem ) )
             ?? w1 { T _ → {} F _ → { ( nurl_eprintln `whisper: cannot write the self-signed cert` ) } }
             : !v IoErr w2 ( write_file ( string_data kpath ) ( string_data . ss key_pem ) )
             ?? w2 { T _ → {} F _ → { ( nurl_eprintln `whisper: cannot write the self-signed key` ) } }
-            ( x509_selfsigned_free ss )
-            ( string_free certf )
-            ( string_free keyf )
             = certf cpath
             = keyf kpath
             ( nurl_eprintln `whisper: self-signed TLS minted — the browser will warn once; accept it and the microphone works` )
@@ -297,7 +264,6 @@ $ `src/serve.nu`
         // where `--token secret` would sit in `ps` output for anyone to read.
         : ~ String token ( args_value_or p `token` `` )
         ? == ( string_len token ) 0 {
-            ( string_free token )
             = token ( env_var_or `WHISPER_TOKEN` `` )
         } {}
         // Bind to something other than loopback with no token, and the
@@ -308,19 +274,10 @@ $ `src/serve.nu`
             ( nurl_eprintln `whisper: WARNING — serving on a non-loopback address with NO token; anyone who can reach this port can use the model. Pass --token or set WHISPER_TOKEN.` )
         } {}
         : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) ( string_data token ) unload_s )
-        ( string_free token )
-        ( string_free certf )
-        ( string_free keyf )
-        ( string_free host )
-        ( string_free addr )
-        ( string_free lang )
-        ( string_free __mdl )
-        ( args_free p )
         ^ rc
     } {}
     ? < ( args_positional_count p ) 3 {
         ( nurl_eprintln `usage: whisper transcribe <model-dir> <audio.wav> · whisper serve <model-dir> --addr host:port · whisper encode <config.json> <model.safetensors> <audio.wav> -o enc.f32` )
-        ( args_free p )
         ^ 2
     } {}
     ? ( nurl_str_eq cmd0 `transcribe` ) {
@@ -329,21 +286,16 @@ $ `src/serve.nu`
         ?? ( vec_get [String] pos 1 ) { T c → { = dir ( string_data c ) } F → {} }
         ?? ( vec_get [String] pos 2 ) { T c → { = awav ( string_data c ) } F → {} }
         : String __mdl ( __wh_resolve dir )
-        ? == ( string_len __mdl ) 0 { ( string_free __mdl ) ( args_free p ) ^ 1 } {}
+        ? == ( string_len __mdl ) 0 { ^ 1 } {}
         = dir ( string_data __mdl )
         : String lang ( args_value_or p `lang` `en` )
         : ~ i maxtok 200
         : String smax ( args_value_or p `max` `200` )
         ?? ( string_to_int smax ) { T v → { = maxtok v } F _ → {} }
-        ( string_free smax )
         : String nsp ( args_value_or p `nospeech` `0.6` )
         : ~ f nospeech 0.6
         ?? ( string_to_float nsp ) { T v2 → { = nospeech v2 } F _ → {} }
-        ( string_free nsp )
         : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) nospeech )
-        ( string_free lang )
-        ( string_free __mdl )
-        ( args_free p )
         ^ rc
     } {}
     : ~ s cfg ``
@@ -355,10 +307,7 @@ $ `src/serve.nu`
 
     ?? ( wav_read wav ) {
         T aw → {
-            : ( Vec f ) mono ( wav_mono aw )
-            : ( Vec f ) at16 ( resample mono . aw rate 16000 )
-            ( wav_free aw )
-            ( vec_free [f] mono )
+            : ( Vec f ) at16 ( wh_wav16 aw )
             // at16 is NOT freed here: the model has to be opened first (how many
             // mel bands it wants and how long a window it sees are ITS
             // properties), and pad_or_trim reads at16 after that. Freeing it
@@ -368,42 +317,29 @@ $ `src/serve.nu`
             // the end, on every path.
             ?? ( wh_open cfg wts ) {
                 T w → {
-                    : ( Vec f ) fixed ( pad_or_trim at16 * . w n_ctx_enc 320 )
-                    : ( Vec f ) mel ( log_mel_whisper fixed 400 160 . w n_mels 16000 )
-                    ( vec_free [f] fixed )
-                    ( vec_free [f] at16 )
+                    : ( Vec f ) fixed ( pad_or_trim at16 * ( wh_n_ctx_enc w ) 320 )
+                    : ( Vec f ) mel ( log_mel_whisper fixed 400 160 ( wh_n_mels w ) 16000 )
                     ( wh_encode w mel )
                     : ( Vec f ) enc ( wh_enc_out w )
                     : String o ( args_value_or p `output` `enc.f32` )
                     : i rc ( __wcli_write_f32 ( string_data o ) enc )
                     : String m ( string_from `encoder — ` )
-                    ( string_push_int m . w n_ctx_enc )
+                    ( string_push_int m ( wh_n_ctx_enc w ) )
                     ( string_push_str m ` x ` )
-                    ( string_push_int m . w d_model )
+                    ( string_push_int m ( wh_d_model w ) )
                     ( string_push_str m ` states → ` )
                     ( string_push_str m ( string_data o ) )
                     ( nurl_print ( string_data m ) ) ( nurl_print `\n` )
-                    ( string_free m )
-                    ( string_free o )
-                    ( vec_free [f] enc )
-                    ( vec_free [f] mel )
-                    ( wh_close w )
-                    ( args_free p )
                     ^ rc
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
-                    ( string_free e )
-                    ( vec_free [f] at16 )
-                    ( args_free p )
                     ^ 1
                 }
             }
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
-            ( args_free p )
             ^ 1
         }
     }

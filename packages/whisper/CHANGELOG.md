@@ -9,6 +9,33 @@ one block the server allocates once and keeps for the process (the
 single module global, instead of two globals holding the words of the
 mutex's former `Cell`. Behaviour is unchanged.
 
+Nothing is released by hand any more:
+
+- **`Whisper` and `Gg` are handles.** `wh_open` / `wh_open_ggml` return
+  `!Whisper String` and `gg_open` returns `!Gg String` (was `*Whisper` /
+  `*Gg`); every copy is the same model, and the last owner gives back the
+  device buffers, the kernels, the CUDA context and the weight file (a ggml
+  mapping is unmapped by its last owner). `wh_close` / `gg_close` remain as
+  optional early releases; `wk_free` is gone (`WhKernels` drops its own
+  kernels). Code that read fields reads them through `wh_gpu`,
+  `wh_n_mels`, `wh_d_model`, `wh_n_ctx_enc`, `wh_n_enc_layer`,
+  `wh_n_dec_layer` and `wh_gg`; `gg_none` / `gg_is_open` name the absent
+  container.
+- The package's own code and tests no longer call `string_free`,
+  `vec_free`, `json_free`, `args_free`, `tok_free`, `wav_free` & co. (282 →
+  7 release calls in `src/`, 12 → 0 in `tests/`); what is left is the
+  page-locked staging pair given back once a load is done and the server's
+  process-global config strings.
+- `wh_run` takes its samples (`sink`): under `--vad` the full recording is
+  dropped the moment the condensed one exists, as it was freed by hand
+  before. New `wh_wav16` turns a `Wav` into the 16 kHz samples and drops
+  the WAV and its mono mix on the way, so the CLI and the server do not
+  hold a long recording three times over while the model runs (peak RSS
+  on a 132 s clip: unchanged against 1.2.0, where the hand-written frees
+  did it; +33 MB with them merely deleted).
+- The served model is owned by the server (`g_srv_w`); the reaper's unload
+  and the shutdown drop it rather than closing a borrowed pointer.
+
 ## 1.2.0
 
 The server learns to let go of the model, and loading it stops paying for

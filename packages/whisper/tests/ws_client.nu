@@ -34,7 +34,6 @@ $ `stdlib/ext/websocket.nu`
     }
     : ~ b ok T
     ?? ( ws_client_send_binary conn d ) { T _ → {} F _ → { = ok F } }
-    ( vec_free [u] d )
     ^ ok
 }
 
@@ -66,8 +65,6 @@ $ `stdlib/ext/websocket.nu`
                         = k + k 1
                     }
                     ( nurl_print ( string_data am ) ) ( nurl_print `\n` )
-                    ( string_free am )
-                    ( vec_free [u] . ack payload )
                 }
                 F _ → {}
             }
@@ -76,8 +73,6 @@ $ `stdlib/ext/websocket.nu`
                 T aw → {
                     : ( Vec f ) mono ( wav_mono aw )
                     : ( Vec f ) at16 ( resample mono . aw rate 16000 )
-                    ( wav_free aw )
-                    ( vec_free [f] mono )
                     : i n ( vec_len [f] at16 )
                     : ~ i off 0
                     ~ < off n {
@@ -96,8 +91,6 @@ $ `stdlib/ext/websocket.nu`
                         : b _q ( __wsc_send_chunk conn quiet 0 8000 )
                         = r + r 1
                     }
-                    ( vec_free [f] quiet )
-                    ( vec_free [f] at16 )
 
                     // done sending: initiate the close handshake. The server
                     // flushes an open utterance, sends its text, THEN answers
@@ -117,8 +110,6 @@ $ `stdlib/ext/websocket.nu`
                                     = k + k 1
                                 }
                                 ( nurl_print ( string_data tm ) ) ( nurl_print `\n` )
-                                ( string_free tm )
-                                ( vec_free [u] . msg payload )
                             }
                             F _ → { = reading F }
                         }
@@ -126,17 +117,14 @@ $ `stdlib/ext/websocket.nu`
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
-                    ( string_free e )
                 }
             }
             ( ws_client_close cl )
         }
         F _ → {
             ( nurl_eprintln `cannot connect` )
-            ( args_free p )
             ^ 1
         }
     }
-    ( args_free p )
     ^ 0
 }

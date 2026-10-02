@@ -881,32 +881,6 @@ $ `deps/gpu/src/gpu.nu`
     ^ @ WhKernels { k1 k1w k1t k1m warp k2 k2b k3 k4 k5f k5d k5m k5 k6 k7 k8 k9 k12 k13 k10 k11 k14 ok }
 }
 
-@ wk_free sink WhKernels ks → v {
-    ( gpu_kernel_free . ks matvec )
-    ? . ks warp {
-        ( gpu_kernel_free . ks matvec_w )
-        ( gpu_kernel_free . ks matvec_t )
-        ( gpu_kernel_free . ks matmul )
-        ( gpu_kernel_free . ks attn_f )
-        ( gpu_kernel_free . ks attn_d )
-        ( gpu_kernel_free . ks attn_dm )
-        ( gpu_kernel_free . ks layernorm_b )
-    } {}
-    ( gpu_kernel_free . ks layernorm )
-    ( gpu_kernel_free . ks gelu )
-    ( gpu_kernel_free . ks conv1d )
-    ( gpu_kernel_free . ks attn_sc )
-    ( gpu_kernel_free . ks attn_out )
-    ( gpu_kernel_free . ks addv )
-    ( gpu_kernel_free . ks addrow )
-    ( gpu_kernel_free . ks scale )
-    ( gpu_kernel_free . ks cvt_f16 )
-    ( gpu_kernel_free . ks cvt_bf16 )
-    ( gpu_kernel_free . ks getrow )
-    ( gpu_kernel_free . ks setrow )
-    ( gpu_kernel_free . ks argmaxk )
-}
-
 // ── launchers ───────────────────────────────────────────────────────
 
 // y[batch][rows] = W[rows][cols] · x[batch][cols] + bias[rows]. `bd` may be 0.
@@ -947,7 +921,6 @@ $ `deps/gpu/src/gpu.nu`
     } {
         : i _r ( gpu_launch . ks matvec ( gpu_grid * rows batch 128 ) 128 a )
     }
-    ( vec_free [i] a )
 }
 
 @ wk_layernorm WhKernels ks i xd i wd i bd i yd i n f eps i batch → v {
@@ -964,7 +937,6 @@ $ `deps/gpu/src/gpu.nu`
     } {
         : i _r ( gpu_launch . ks layernorm ( gpu_grid batch 256 ) 256 a )
     }
-    ( vec_free [i] a )
 }
 
 @ wk_gelu WhKernels ks i xd i n → v {
@@ -972,7 +944,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks gelu ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ wk_conv1d WhKernels ks i xd i wd i bd i yd i t_in i c_in i c_out i stride i pad → v {
@@ -988,7 +959,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 pad ) )
     : i t_out + / - + t_in * 2 pad 3 stride 1
     : i _r ( gpu_launch . ks conv1d ( gpu_grid * t_out c_out 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 // Attention. `causal` 0 = every query sees every key (the encoder, and the
@@ -1021,7 +991,6 @@ $ `deps/gpu/src/gpu.nu`
         ( vec_push [i] ad ( gpu_arg_i32 chunk ) )
         ( vec_push [i] ad ( gpu_arg_i32 nchunk ) )
         : i _rd ( gpu_launch . ks attn_d * * nh nq nchunk 256 ad )
-        ( vec_free [i] ad )
         : ( Vec i ) am ( vec_new [i] )
         ( vec_push [i] am ( gpu_arg_i64 scd ) )
         ( vec_push [i] am ( gpu_arg_i64 outd ) )
@@ -1030,7 +999,6 @@ $ `deps/gpu/src/gpu.nu`
         ( vec_push [i] am ( gpu_arg_i32 nq ) )
         ( vec_push [i] am ( gpu_arg_i32 nchunk ) )
         : i _rm ( gpu_launch . ks attn_dm * nh nq 64 am )
-        ( vec_free [i] am )
         ^ {}
     } {}
     ? & & & . ks warp == causal 0 == hd 64 >= nq 64 {
@@ -1045,7 +1013,6 @@ $ `deps/gpu/src/gpu.nu`
         ( vec_push [i] af ( gpu_arg_i32 nkey ) )
         ( vec_push [i] af ( gpu_arg_f32 qscale ) )
         : i _rf ( gpu_launch . ks attn_f * nh ( gpu_grid nq 64 ) 64 af )
-        ( vec_free [i] af )
         ^ {}
     } {}
     : ( Vec i ) a1 ( vec_new [i] )
@@ -1059,7 +1026,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a1 ( gpu_arg_f32 qscale ) )
     ( vec_push [i] a1 ( gpu_arg_i32 causal ) )
     : i _r1 ( gpu_launch . ks attn_sc ( gpu_grid * * nh nq nkey 256 ) 256 a1 )
-    ( vec_free [i] a1 )
     : ( Vec i ) a2 ( vec_new [i] )
     ( vec_push [i] a2 ( gpu_arg_i64 vd ) )
     ( vec_push [i] a2 ( gpu_arg_i64 scd ) )
@@ -1069,7 +1035,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a2 ( gpu_arg_i32 nq ) )
     ( vec_push [i] a2 ( gpu_arg_i32 nkey ) )
     : i _r2 ( gpu_launch . ks attn_out ( gpu_grid * * nh nq hd 256 ) 256 a2 )
-    ( vec_free [i] a2 )
 }
 
 @ wk_addv WhKernels ks i ad i bd i n → v {
@@ -1078,7 +1043,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 bd ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks addv ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ wk_addrow WhKernels ks i ad i vd i n i batch → v {
@@ -1088,7 +1052,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     ( vec_push [i] a ( gpu_arg_i32 batch ) )
     : i _r ( gpu_launch . ks addrow ( gpu_grid * n batch 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ wk_scale WhKernels ks i xd f s i n → v {
@@ -1097,7 +1060,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_f32 s ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks scale ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ wk_getrow WhKernels ks i table i yd i row i n i wt → v {
@@ -1108,7 +1070,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     ( vec_push [i] a ( gpu_arg_i32 wt ) )
     : i _r ( gpu_launch . ks getrow ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 @ wk_setrow WhKernels ks i cache i vd i row i n → v {
@@ -1118,7 +1079,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 row ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks setrow ( gpu_grid n 256 ) 256 a )
-    ( vec_free [i] a )
 }
 
 // `half` = 1 for f16, 0 for bf16.
@@ -1129,7 +1089,6 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     ( vec_push [i] a ( gpu_arg_i64 outd ) )
     : i _r ( gpu_launch . ks argmaxk 1 256 a )
-    ( vec_free [i] a )
 }
 
 @ wk_cvt WhKernels ks i srcd i dstd i n b half → v {
@@ -1140,5 +1099,4 @@ $ `deps/gpu/src/gpu.nu`
     ? half
     { : i _r ( gpu_launch . ks cvt_f16 ( gpu_grid n 256 ) 256 a ) }
     { : i _r ( gpu_launch . ks cvt_bf16 ( gpu_grid n 256 ) 256 a ) }
-    ( vec_free [i] a )
 }

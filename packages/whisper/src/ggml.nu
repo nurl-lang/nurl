@@ -46,12 +46,13 @@ $ `stdlib/core/posix.nu`
 $ `stdlib/std/fs.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
+$ `stdlib/core/rcbox.nu`
 
 // dtype codes shared with the safetensor reader's ST_* so __wh_up's dispatch
 // works on either source. ttype 0 = f32, 1 = f16; anything else is a
 // quantised block format this package does not run yet.
 
-: Gg {
+: GgImpl {
     // The whole file, as bytes: an mmap where the platform has one (the
     // page cache IS the copy, and a model that is already cached maps in
     // microseconds), the read fallback's Vec elsewhere. `gg_release_data`
@@ -79,33 +80,50 @@ $ `deps/tokenizer/src/hf.nu`
     ( Vec i ) toffs  // absolute byte offset of the tensor's data
 }
 
-@ __gg_free_strings ( Vec String ) v → v {
-    ( vec_free_with [String] v \ String s2 → v { ( string_free s2 ) } )
+// The mapping is raw: the last owner unmaps it (gg_release_data may have
+// done so already). The Vecs are dropped by the compiler after this.
+% Drop GgImpl { @ drop GgImpl x → v {
+        ? & . x from_mmap != # i . x map 0 { : i32 _u ( munmap . x map . x nbytes ) } {}
+    } }
+
+// A Gg is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same container, and the last owner releases it —
+// the mapping (or the read buffer) and the parsed tables. gg_close is
+// an optional early release.
+: Gg { s ctl }
+
+@ Gg_share Gg h → Gg { ^ @ Gg { # s ( rcbox_share # i . h ctl ) } }
+
+@ Gg_drop sink Gg h → v {
+    ( mem_forget h )
+    ( rcbox_release [GgImpl] # i . h ctl )
 }
+
+@ _Gg_ptr Gg h → *GgImpl { ^ ( rcbox_ptr [GgImpl] # i . h ctl ) }
+
+// The handle that holds no container (a model loaded from safetensors).
+@ gg_none → Gg { ^ @ Gg { # s 0 } }
+
+@ gg_is_open Gg h → b { ^ != # i . h ctl 0 }
 
 // Give the file back — the mapping or the read buffer — and keep the
 // parsed metadata (vocabulary, tensor table). After this `gg_ptr` must not
 // be called; the loader calls it exactly once, right after the last upload.
-@ gg_release_data * Gg g → v {
+@ gg_release_data Gg g__h → v {
+    : *GgImpl g ( _Gg_ptr g__h )
     ? . g from_mmap {
         ? != # i . g map 0 { : i32 _u ( munmap . g map . g nbytes ) } {}
     } {}
     = . g from_mmap F
     = . g map # *u 0
-    ( vec_free [u] . g data )
+    // the read fallback's buffer leaves the container (dropped here)
+    : ( Vec u ) old . g data
+    ( mem_take old )
     = . g data ( vec_new [u] )
 }
 
-@ gg_close * Gg g → v {
-    ( gg_release_data g )
-    ( vec_free [u] . g data )
-    ( __gg_free_strings . g vocab )
-    ( __gg_free_strings . g tnames )
-    ( vec_free [i] . g ttypes )
-    ( vec_free [i] . g tnelems )
-    ( vec_free [i] . g toffs )
-    ( nurl_free # s g )
-}
+// Early release (optional): the last owner gives everything back.
+@ gg_close sink Gg g → v {}
 
 @ __gg_i32 * u d i off → i {
     : i b0 & # i . d off 255
@@ -117,13 +135,14 @@ $ `deps/tokenizer/src/hf.nu`
     ^ v
 }
 
-@ __gg_err s msg → !*Gg String {
-    ^ @ !*Gg String { F ( string_from msg ) }
+@ __gg_err s msg → !v String {
+    ^ @ !v String { F ( string_from msg ) }
 }
 
-@ gg_open s path → !*Gg String {
-    : *Gg g # *Gg ( nurl_alloc Z Gg )
-    // nurl_alloc does NOT zero: every field read before assignment is set here
+@ gg_open s path → !Gg String {
+    // zeroed, and a handle from the start: an early return drops it whole
+    : Gg h @ Gg { # s ( rcbox_zero [GgImpl] ) }
+    : *GgImpl g ( _Gg_ptr h )
     = . g map # *u 0
     = . g nbytes 0
     = . g from_mmap F
@@ -134,12 +153,14 @@ $ `deps/tokenizer/src/hf.nu`
     = . g tnelems ( vec_new [i] )
     = . g toffs ( vec_new [i] )
     ? ( __gg_map g path ) {} {
-        ( gg_close g )
         : String m ( string_from `ggml: cannot read ` )
         ( string_push_str m path )
-        ^ @ !*Gg String { F m }
+        ^ @ !Gg String { F m }
     }
-    ^ ( __gg_parse g )
+    ?? ( __gg_parse g ) {
+        T _ → { ^ @ !Gg String { T h } }
+        F e → { ^ @ !Gg String { F e } }
+    }
 }
 
 // Bring the file into the address space. mmap where the platform has it —
@@ -148,7 +169,7 @@ $ `deps/tokenizer/src/hf.nu`
 // makes over it (a cold file streams in at the disk's readahead rate rather
 // than a page fault at a time). Elsewhere (Windows, WASI) the file is read
 // into a Vec and `map` points at its bytes.
-@ __gg_map * Gg g s path → b {
+@ __gg_map * GgImpl g s path → b {
     ? != ( posix_const `MAP_PRIVATE` ) -1 {
         : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
         ? < # i fd 0 { ^ F } {}
@@ -188,17 +209,15 @@ $ `deps/tokenizer/src/hf.nu`
 // The container's own parse over the mapped bytes: header, the mel filters
 // (skipped), the vocabulary, the tensor table. Every length is checked
 // against the mapping before it is trusted.
-@ __gg_parse * Gg g → !*Gg String {
+@ __gg_parse * GgImpl g → !v String {
     : i n . g nbytes
     ? < n 56 {
-        ( gg_close g )
         ^ ( __gg_err `ggml: file too short for a header` )
     } {}
     : *u dd . g map
     // magic 0x67676d6c on disk is the bytes 'l' 'm' 'g' 'g' —
     // checked as bytes, so nobody has to trust a decimal spelling
     ? | | | != & # i . dd 0 255 108 != & # i . dd 1 255 109 != & # i . dd 2 255 103 != & # i . dd 3 255 103 {
-        ( gg_close g )
         ^ ( __gg_err `ggml: bad magic (not a ggml file)` )
     } {}
     = . g n_vocab ( __gg_i32 dd 4 )
@@ -216,22 +235,20 @@ $ `deps/tokenizer/src/hf.nu`
 
     // mel filters: skip (ours are verified against HF's own)
     : ~ i off 48
-    ? > + off 8 n { ( gg_close g ) ^ ( __gg_err `ggml: truncated at filters` ) } {}
+    ? > + off 8 n { ^ ( __gg_err `ggml: truncated at filters` ) } {}
     : i fmel ( __gg_i32 dd off )
     : i ffft ( __gg_i32 dd + off 4 )
     = off + off 8
     ? | | < fmel 0 < ffft 0 > + off * * fmel ffft 4 n {
-        ( gg_close g )
         ^ ( __gg_err `ggml: filter block overruns the file` )
     } {}
     = off + off * * fmel ffft 4
 
     // vocabulary: raw words
-    ? > + off 4 n { ( gg_close g ) ^ ( __gg_err `ggml: truncated at vocab` ) } {}
+    ? > + off 4 n { ^ ( __gg_err `ggml: truncated at vocab` ) } {}
     : i nvf ( __gg_i32 dd off )
     = off + off 4
     ? | < nvf 0 > nvf . g n_vocab {
-        ( gg_close g )
         ^ ( __gg_err `ggml: vocab count is a lie` )
     } {}
     : ~ i k 0
@@ -253,7 +270,7 @@ $ `deps/tokenizer/src/hf.nu`
         }
         = k + k 1
     }
-    ? ! vok { ( gg_close g ) ^ ( __gg_err `ggml: vocab overruns the file` ) } {}
+    ? ! vok { ^ ( __gg_err `ggml: vocab overruns the file` ) } {}
 
     // tensors until EOF
     : ~ b tok2 T
@@ -282,13 +299,10 @@ $ `deps/tokenizer/src/hf.nu`
                     }
                     = off + off nl
                     ? & != tt 0 != tt 1 {
-                        ( string_free nm )
-                        ( gg_close g )
                         ^ ( __gg_err `ggml: quantised tensors (q4/q5/q8) are not supported yet — use an f16 ggml model or the safetensors checkpoint` )
                     } {}
                     : i tsz * ne ? == tt 0 4 2
                     ? | ! tok2 > + off tsz n {
-                        ( string_free nm )
                         = tok2 F
                     } {
                         ( vec_push [String] . g tnames nm )
@@ -301,8 +315,8 @@ $ `deps/tokenizer/src/hf.nu`
             }
         }
     }
-    ? ! tok2 { ( gg_close g ) ^ ( __gg_err `ggml: tensor block overruns the file` ) } {}
-    ^ @ !*Gg String { T g }
+    ? ! tok2 { ^ ( __gg_err `ggml: tensor block overruns the file` ) } {}
+    ^ @ !v String { T 0 }
 }
 
 // ── HF name → ggml name ─────────────────────────────────────────────
@@ -377,7 +391,8 @@ $ `deps/tokenizer/src/hf.nu`
 }
 
 // Find a tensor by its HF name. -1 when absent.
-@ gg_find * Gg g s hf → i {
+@ gg_find Gg g__h s hf → i {
+    : *GgImpl g ( _Gg_ptr g__h )
     : String gn ( gg_map_name hf )
     : ~ i found -1
     : ~ i k 0
@@ -390,19 +405,21 @@ $ `deps/tokenizer/src/hf.nu`
         }
         = k + k 1
     }
-    ( string_free gn )
     ^ found
 }
 
-@ gg_ttype * Gg g i ti → i {
+@ gg_ttype Gg g__h i ti → i {
+    : *GgImpl g ( _Gg_ptr g__h )
     ?? ( vec_get [i] . g ttypes ti ) { T x → { ^ x } F → { ^ -1 } }
 }
 
-@ gg_nelems * Gg g i ti → i {
+@ gg_nelems Gg g__h i ti → i {
+    : *GgImpl g ( _Gg_ptr g__h )
     ?? ( vec_get [i] . g tnelems ti ) { T x → { ^ x } F → { ^ 0 } }
 }
 
-@ gg_ptr * Gg g i ti → *u {
+@ gg_ptr Gg g__h i ti → *u {
+    : *GgImpl g ( _Gg_ptr g__h )
     : ~ i o2 0
     ?? ( vec_get [i] . g toffs ti ) { T x → { = o2 x } F → {} }
     ^ # *u + # i . g map o2
@@ -435,7 +452,8 @@ $ `deps/tokenizer/src/hf.nu`
 // Build the tokenizer: base words byte-encoded, specials synthesized at
 // whisper.cpp's positional ids. Returns via tok_build so decode, control
 // matching and the timestamp rules all behave exactly as with tokenizer.json.
-@ gg_build_tok * Gg g → !Tok String {
+@ gg_build_tok Gg g__h → !Tok String {
+    : *GgImpl g ( _Gg_ptr g__h )
     : i nv . g n_vocab
     : i nfile ( vec_len [String] . g vocab )
     : b multi >= nv 51865
@@ -489,7 +507,6 @@ $ `deps/tokenizer/src/hf.nu`
                         ( string_push_str piece `<|` )
                         ( string_push_str piece ( string_data lc ) )
                         ( string_push_str piece `|>` )
-                        ( string_free lc )
                     } {
                         ? == id t_translate { ( string_push_str piece `<|translate|>` ) } {
                             ? == id t_transcribe { ( string_push_str piece `<|transcribe|>` ) } {
@@ -519,7 +536,6 @@ $ `deps/tokenizer/src/hf.nu`
         ( vec_push [i] types ty )
         = id + id 1
     }
-    ( __gg_free_strings enc )
     : TokSpec spec @ TokSpec { TOK_BPE PRE_DEFAULT -1 eot -1 F F F }
     ^ ( tok_build spec pieces scores types merges )
 }
