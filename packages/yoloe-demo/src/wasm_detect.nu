@@ -129,9 +129,8 @@ $ `deps/yoloe/src/mask.nu`
     : ( Vec u ) tpeb ( wd_load_blob 1 )
     : ~ i nc / ( vec_len [u] tpeb ) 2048
     ? | == nc 0 > nc WD_K { ( host_status - 0 1 11 ) ^ 1 } {}
-    : *u tpe ( nurl_alloc * * WD_K 512 4 )
-    : ~ i zi 0
-    ~ < zi * WD_K 512 { ( nurl_poke_f32 tpe zi 0.0 ) = zi + zi 1 }
+    : ( Vec u ) tpev ( vec_zeroed [u] * * WD_K 512 4 )
+    : *u tpe ( vec_data [u] tpev )
     : *u tsrc ( vec_data [u] tpeb )
     : ~ i ci 0
     ~ < ci * nc 512 { ( nurl_poke_f32 tpe ci ( nurl_peek_f32 tsrc ci ) ) = ci + ci 1 }
@@ -144,8 +143,10 @@ $ `deps/yoloe/src/mask.nu`
     // shared frame + control + result buffers
     : ( Vec u ) rgb ( vec_with_cap [u] * * WD_W WD_H 3 )
     : b _r1 ( vec_set_len [u] rgb * * WD_W WD_H 3 )
-    : *u ctl ( nurl_alloc * 544 4 )
-    : *u dets_out ( nurl_alloc * * WD_MAXDET 6 4 )
+    : ( Vec u ) ctlv ( vec_zeroed [u] * 544 4 )
+    : ( Vec u ) detsv ( vec_zeroed [u] * * WD_MAXDET 6 4 )
+    : *u ctl ( vec_data [u] ctlv )
+    : *u dets_out ( vec_data [u] detsv )
 
     : i na 8400
     : i MH ( mask_dim )
@@ -174,7 +175,8 @@ $ `deps/yoloe/src/mask.nu`
 
                 : Image im ( image_of WD_W WD_H 3 rgb )
                 : Letterbox lb ( letterbox im 640 )
-                : *u host ( img_to_nchw_norm . lb img )
+                : ( Vec u ) hostv ( img_to_nchw_norm . lb img )
+                : *u host ( vec_data [u] hostv )
                 : ( Vec i ) s3 ( vec_new [i] )
                 ( vec_push [i] s3 1 ) ( vec_push [i] s3 WD_K ) ( vec_push [i] s3 512 )
                 : RTensor out ( rt_run_two e g `images` host ( wd_shape4 1 3 640 640 ) `tpe` tpe s3 )
@@ -205,11 +207,9 @@ $ `deps/yoloe/src/mask.nu`
                             : i x0 - ocx / ow 2
                             : i y0 - ocy / oh 2
                             ? masks {
-                                : *u coeff ( mask_coeffs o na WD_K . d ai )
-                                : *u L ( mask_logits # *u proto_i coeff MH MW )
-                                ( mask_overlay im L lb 640 x0 y0 ow oh ( wd_pal 0 k ) ( wd_pal 1 k ) ( wd_pal 2 k ) 118 )
-                                ( nurl_free coeff )
-                                ( nurl_free L )
+                                : ( Vec u ) coeff ( mask_coeffs o na WD_K . d ai )
+                                : ( Vec u ) L ( mask_logits # *u proto_i ( vec_data [u] coeff ) MH MW )
+                                ( mask_overlay im ( vec_data [u] L ) lb 640 x0 y0 ow oh ( wd_pal 0 k ) ( wd_pal 1 k ) ( wd_pal 2 k ) 118 )
                             } {}
                             : i base * k 6
                             ( nurl_poke_f32 dets_out + base 0 # f . d cls )
@@ -226,11 +226,6 @@ $ `deps/yoloe/src/mask.nu`
 
                 : i ms / - ( monotonic_ns ) t0 1000000
                 ( host_result dets_out nd ms )
-
-                ( nurl_free host )
-                ( image_free . lb img )
-                ( vec_free [Detection] raw )
-                ( vec_free [Detection] dets )
             } {
                 = run F
             } }
