@@ -248,6 +248,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`File`, `BufReader`, `Progress`, `Heartbeat`, `Zip` / `ZipArchive`,
+  `DChannel`, `CSVWriter` / `CSVDictWriter` / `CSVDictReader` release
+  themselves.** Each is a library handle over an rcbox: every copy is the
+  same object, and the last owner releases it — a `File`'s or a writer's
+  last owner closes its file (a `File` dropped without `file_close` leaked
+  its FILE*), a `Heartbeat`'s stops and joins its thread. `file_close`,
+  `bufreader_close`, `csv_writer_close`, `heartbeat_stop` act now and are
+  optional; `zip_close`, `dchan_free`, `csv_dict_reader_free` are early
+  releases. `File` gained `file_raw` / `file_from_raw` (code that read
+  `. f raw` uses `file_raw`); `Progress` gained `progress_cur` /
+  `progress_tty`; `progress_done` no longer frees. Write the types without
+  `*` (`heartbeat_start` → `Heartbeat`, `progress_new` → `Progress`,
+  `csv_writer_new` → `CSVWriter`).
+- **`nat_gather` returns `( Vec Candidate )`** (values instead of raw
+  `*Candidate` blocks); a `Ring` keeps its points as values (`ring_owner` /
+  `ring_owners` still hand out `*RingPoint` pointers into it).
+- **The standard library frees nothing by hand** outside container and
+  Drop implementations (core / data formats / compression / filesystems /
+  network stack / dist / package tooling): decoder cursors and scratch
+  states (zstd, deflate, msgpack, CBOR, YAML, regex parser, FAT directory
+  cursor, job / replicator / rendezvous decoders) are locals advanced in
+  place (`inout`) instead of `nurl_alloc`'d blocks; queues are drained in
+  place (new `bytes_drop_front`). The `*_free` functions of owning values
+  (manifest, lockfile, semver, registry index, URL, path, swim, tar
+  entries, …) are early releases; `crc32_ctx_free`, `tar_entry_free`,
+  `lock_pkg_free`, `idxdep_free`, `idxversion_free`, `stun_request_free`
+  and `nat_candidates_free` (no callers) are gone. zstd level-3 round trip
+  −22 % instructions, level 19 −2 %, deflate+gzip −5 %, zip −5 %, `fmt2`
+  −36 % (fixed-arity `fmt*` / `log_*fN` no longer copy their arguments;
+  a suppressed `log_*fN` formats nothing).
 - **A `sink` parameter placed in a literal moves in instead of being
   copied.** `rcbox_new [T] @ T { a b }` in a library-handle constructor
   copied every Vec / String it was handed and then dropped the original
