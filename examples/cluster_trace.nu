@@ -26,7 +26,6 @@ $ `stdlib/ext/cluster.nu`
     ( nurl_print `trace server on 127.0.0.1:` ) ( nurl_println_int port )
     : !v NetErr sr ( cluster_serve `127.0.0.1` port reg )
     ?? sr { T _ → {} F _ → {} }
-    ( registry_free reg )
     ^ 0
 }
 
@@ -35,24 +34,20 @@ $ `stdlib/ext/cluster.nu`
     : i mine ( trace_current_trace )
     : String mh ( trace_hex16 mine )
     ( nurl_print `client trace = ` ) ( nurl_print ( string_data mh ) ) ( nurl_print `\n` )
-    ( string_free mh )
 
     : Node n ( node_new `127.0.0.1` port )
     : !Json ClusterErr r ( call_remote n `trace_echo` ( json_null ) )
     : i rc ?? r {
         T res → {
             : i seen ( json_as_int res )
-            ( json_free res )
             : String sh ( trace_hex16 seen )
             ( nurl_print `server saw  = ` ) ( nurl_print ( string_data sh ) ) ( nurl_print `\n` )
-            ( string_free sh )
             ( nurl_print `propagated: ` )
             ( nurl_print ? == seen mine `YES\n` `NO\n` )
             0
         }
         F e → { ( nurl_print `call failed\n` ) 1 }
     }
-    ( node_free n )
     ^ rc
 }
 
@@ -62,10 +57,8 @@ $ `stdlib/ext/cluster.nu`
     : String mode ( env_arg 1 )
     : String ps ( env_arg 2 )
     : i port ( nurl_str_to_int ( string_data ps ) )
-    ( string_free ps )
     : i rc ? != 0 ( nurl_str_eq ( string_data mode ) `server` )
     ( run_server port )
     ( run_client port )
-    ( string_free mode )
     ^ rc
 }

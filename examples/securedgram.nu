@@ -49,8 +49,6 @@ $ `stdlib/net/securedgram.nu`
             : String got ( asstr . d data )
             ( nurl_print who ) ( nurl_print ` got: ` ) ( nurl_print ( string_data got ) ) ( nurl_print `\n` )
             : b ok ( veq . d data expect )
-            ( string_free got )
-            ( recvdata_free d )
             ok
         }
         F → { ( nurl_print who ) ( nurl_print ` got nothing\n` ) F }
@@ -90,14 +88,10 @@ $ `stdlib/net/securedgram.nu`
                     : !v NetErr _s3 ( securedgram_send bn . akp pk rep )
                     ( nurl_print `reply:   ` ) ( nurl_print ? ( show `A` ( pump an ) rep ) `OK\n` `FAIL\n` )
 
-                    ( vec_free [u] m1 ) ( vec_free [u] m2 ) ( vec_free [u] rep )
                     ( securedgram_close bn )
                 } F _ → ( nurl_print `B bind failed\n` ) }
             ( securedgram_close an )
         } F _ → ( nurl_print `A bind failed\n` ) }
 
-    ( vec_free [u] psk )
-    ( vec_free [u] . akp sk ) ( vec_free [u] . akp pk )
-    ( vec_free [u] . bkp sk ) ( vec_free [u] . bkp pk )
     ^ 0
 }

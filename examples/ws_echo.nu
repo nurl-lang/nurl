@@ -81,10 +81,7 @@ $ `stdlib/ext/websocket.nu`
                 : ( Vec u ) wire ( response_serialize r400 )
                 : !v NetErr _ww ( tcp_write_all conn wire )
                 ?? _ww { T _ → {} F _ → {} }
-                ( vec_free [u] wire )
-                ( http_response_free r400 )
             }
-            ( request_free req )
         }
         F _ → {}  // Bad / truncated request — silently drop.
     }

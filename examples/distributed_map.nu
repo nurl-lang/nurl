@@ -64,7 +64,6 @@ $ `stdlib/dist/job.nu`
     : Ring r ( ring_new )
     : ( Vec u ) w0 ( pk_for 1 ) : ( Vec u ) w1 ( pk_for 2 )
     ( ring_add_member r w0 64 ) ( ring_add_member r w1 64 )
-    ( vec_free [u] w0 ) ( vec_free [u] w1 )
     ^ r
 }
 
@@ -82,8 +81,7 @@ $ `stdlib/dist/job.nu`
             // blocking pump (recv honours the socket timeout outside fibers)
             : ~ i ticks 0
             ~ < ticks 40 { ( job_pump jn 200 ) = ticks + ticks 1 }
-            ( job_node_free jn ) ( ring_free ring ) ( transport_free tr )
-            ( vec_free [u] me ) ( relay_close rc )
+            ( relay_close rc )
         }
         F e → ( nurl_print `worker dial failed\n` )
     }
@@ -106,7 +104,6 @@ $ `stdlib/dist/job.nu`
                 : String txt ( chunk_text i )
                 : ( Vec u ) payload ( str_bytes txt )
                 ( vec_push [i] tids ( job_submit jn 0 key payload ) )
-                ( vec_free [u] key ) ( string_free txt ) ( vec_free [u] payload )
                 = i + i 1
             }
 
@@ -125,16 +122,14 @@ $ `stdlib/dist/job.nu`
             : ~ i j 0
             ~ < j 4 {
                 ?? ( job_await jn ?? ( vec_get [i] tids j ) { T x → x F → 0 } ) {
-                    T r → { = total + total ?? ( bytes_read_u32_be r 0 ) { T x → # i x F → 0 } ( vec_free [u] r ) }
+                    T r → { = total + total ?? ( bytes_read_u32_be r 0 ) { T x → # i x F → 0 } }
                     F → {}
                 }
                 = j + j 1
             }
             ( nurl_print `distributed word count total = ` ) ( nurl_print_int total ) ( nurl_print ` (expected 17)\n` )
 
-            ( vec_free [i] tids )
-            ( job_node_free jn ) ( ring_free ring ) ( transport_free tr )
-            ( vec_free [u] me ) ( relay_close rc )
+            ( relay_close rc )
         }
         F e → ( nurl_print `coordinator dial failed\n` )
     }
@@ -145,14 +140,13 @@ $ `stdlib/dist/job.nu`
     ? < argc 3 { ( nurl_print `usage: distributed_map <worker|map> <host> <port> [id]\n` ) ^ 1 } {}
     : String role ( env_arg 1 )
     : String host ( env_arg 2 )
-    : String ps ( env_arg 3 ) : i port ( nurl_str_to_int ( string_data ps ) ) ( string_free ps )
+    : String ps ( env_arg 3 ) : i port ( nurl_str_to_int ( string_data ps ) )
 
     ? != 0 ( nurl_str_eq ( string_data role ) `worker` ) {
-        : i id ? > argc 4 { : String is ( env_arg 4 ) : i v ( nurl_str_to_int ( string_data is ) ) ( string_free is ) v } 1
+        : i id ? > argc 4 { : String is ( env_arg 4 ) : i v ( nurl_str_to_int ( string_data is ) ) v } 1
         ( run_worker ( string_data host ) port id )
     } {
         ( run_coordinator ( string_data host ) port )
     }
-    ( string_free role ) ( string_free host )
     ^ 0
 }

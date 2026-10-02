@@ -38,7 +38,6 @@ $ `stdlib/ext/env.nu`
     : ( Vec u ) priv ?? ( ec_p256_priv_from_pem ( string_data keypem ) ) { T v → v F _ → ( vec_new [u] ) }
     ? | == ( vec_len [u] cert ) 0 != ( vec_len [u] priv ) 32 {
         ( nurl_print `failed to load cert/key\n` )
-        ( vec_free [u] cert ) ( vec_free [u] priv ) ( string_free keypem )
         ^ 1
     } {}
 
@@ -54,19 +53,16 @@ $ `stdlib/ext/env.nu`
                     ?? ( tls_accept # i . conn raw chain priv ) {
                         F e → { ( nurl_print `handshake failed: ` ) ( nurl_print ( tls_err_name e ) ) ( nurl_print `\n` ) }
                         T c → {
-                            ?? ( tls_server_read c 8192 ) { T req → ( vec_free [u] req ) F _ → {} }
+                            ?? ( tls_server_read c 8192 ) { T req → {} F _ → {} }
                             : ( Vec u ) resp ( bytes_from_str `HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello, pure!` )
                             ?? ( tls_server_write c resp ) { T _ → {} F _ → {} }
-                            ( vec_free [u] resp )
                             ( tls_close c )
                         }
                     }
-                    ( vec_free [u] chain )
                 }
             }
             ( tcp_close_listener lst )
         }
     }
-    ( vec_free [u] cert ) ( vec_free [u] priv ) ( string_free keypem )
     ^ 0
 }

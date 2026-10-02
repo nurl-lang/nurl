@@ -85,8 +85,6 @@ $ `stdlib/ext/http_full.nu`
 
             ( runtime_shutdown )
             ( tcp_close_listener listener )
-            ( metrics_free mtr )
-            ( router_free r )
         }
         F e → {
             ( nurl_print `bind failed: ` )

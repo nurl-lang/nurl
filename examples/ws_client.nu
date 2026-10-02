@@ -47,7 +47,6 @@ $ `stdlib/ext/websocket.nu`
             ?? mr {
                 T msg → {
                     ( print_payload `echo: ` . msg payload )
-                    ( ws_message_free msg )
                 }
                 F e → {
                     ( nurl_print `read failed: ` ) ( nurl_print ( ws_err_name e ) ) ( nurl_print `\n` )
@@ -70,7 +69,6 @@ $ `stdlib/ext/websocket.nu`
     ? > ( env_args_count ) 1 {
         : String u ( env_arg 1 )
         : i rc ( run ( string_data u ) )
-        ( string_free u )
         ^ rc
     } {
         ^ ( run `ws://127.0.0.1:9001/` )

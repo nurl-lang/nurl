@@ -50,7 +50,6 @@ $ `stdlib/ext/cluster.nu`
     ( string_push_int banner port )
     ( string_push_str banner ` (fn: square)\n` )
     ( nurl_print ( string_data banner ) )
-    ( string_free banner )
 
     : !v NetErr sr ( cluster_serve `127.0.0.1` port reg )
     ?? sr {
@@ -61,7 +60,6 @@ $ `stdlib/ext/cluster.nu`
             ( nurl_print `\n` )
         }
     }
-    ( registry_free reg )
     ^ 0
 }
 
@@ -102,7 +100,6 @@ $ `stdlib/ext/cluster.nu`
         ?? rr {
             T result → {
                 : i v ( json_as_int result )
-                ( json_free result )
                 = sum + sum v
                 = ok + ok 1
                 : String line ( string_from `  square(` )
@@ -124,7 +121,6 @@ $ `stdlib/ext/cluster.nu`
                 ( nurl_print ( string_data line ) )
             }
         }
-        ( node_free n )
         = task + task 1
     }
 
@@ -134,10 +130,7 @@ $ `stdlib/ext/cluster.nu`
     ( string_push_int summary sum )
     ( string_push_char summary 10 )
     ( nurl_print ( string_data summary ) )
-    ( string_free summary )
 
-    ( vec_free_with [CircuitBreaker] breakers
-    \ CircuitBreaker c → v { ( cb_free c ) } )
     ^ 0
 }
 
@@ -159,7 +152,6 @@ $ `stdlib/ext/cluster.nu`
     : i rc ? != 0 ( nurl_str_eq m `server` ) {
         : String ps ( env_arg 2 )
         : i port ( nurl_str_to_int ( string_data ps ) )
-        ( string_free ps )
         ( run_server port )
     } {
         ? | != 0 ( nurl_str_eq m `client` ) != 0 ( nurl_str_eq m `client-mp` ) {
@@ -171,17 +163,14 @@ $ `stdlib/ext/cluster.nu`
             ~ < k argc {
                 : String ps ( env_arg k )
                 ( vec_push [i] ports ( nurl_str_to_int ( string_data ps ) ) )
-                ( string_free ps )
                 = k + k 1
             }
             : i r ( run_client ports )
-            ( vec_free [i] ports )
             r
         } {
             ( usage )
         }
     }
 
-    ( string_free mode )
     ^ rc
 }

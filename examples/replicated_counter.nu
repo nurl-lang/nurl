@@ -28,10 +28,10 @@ $ `stdlib/dist/identity.nu`
     : i argc ( env_args_count )
     : String host ? > argc 1 ( env_arg 1 ) ( string_from `127.0.0.1` )
     : i port ? > argc 2 {
-        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) ( string_free ps ) p
+        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) p
     } 47700
     : i rid ? > argc 3 {
-        : String rs ( env_arg 3 ) : i r ( nurl_str_to_int ( string_data rs ) ) ( string_free rs ) r
+        : String rs ( env_arg 3 ) : i r ( nurl_str_to_int ( string_data rs ) ) r
     } 0
 
     ?? ( relay_dial ( string_data host ) port ) {
@@ -54,12 +54,11 @@ $ `stdlib/dist/identity.nu`
                 ( pncounter_inc ctr crep 1 )  // count our own work (pubkey-stable slot)
                 : ( Vec u ) wire ( pncounter_encode ctr )
                 ?? ( transport_broadcast tr g wire ) { T _ → {} F _ → {} }
-                ( vec_free [u] wire )
                 // drain inbound counters and merge them
                 : ~ b more T
                 ~ more {
                     ?? ( transport_recv tr 100 ) {
-                        T m → { ( pncounter_merge_bytes ctr . m payload ) ( transport_msg_free m ) }
+                        T m → { ( pncounter_merge_bytes ctr . m payload ) }
                         F → { = more F }
                     }
                 }
@@ -70,12 +69,9 @@ $ `stdlib/dist/identity.nu`
             ( nurl_print `replica ` ) ( nurl_print_int rid )
             ( nurl_print ` converged value = ` ) ( nurl_println_int ( pncounter_value ctr ) )
 
-            ( pncounter_free ctr )
-            ( vec_free [u] self_pk ) ( vec_free [u] g )
-            ( transport_free tr ) ( relay_close rc )
+            ( relay_close rc )
         }
         F e → ( nurl_print `could not reach relay\n` )
     }
-    ( string_free host )
     ^ 0
 }

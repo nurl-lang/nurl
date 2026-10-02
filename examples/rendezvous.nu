@@ -27,7 +27,7 @@ $ `stdlib/net/rendezvous.nu`
     : i argc ( env_args_count )
     : String host ? > argc 1 ( env_arg 1 ) ( string_from `0.0.0.0` )
     : i port ? > argc 2 {
-        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) ( string_free ps ) p
+        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) p
     } 47703
 
     ?? ( rz_server_start ( string_data host ) port ) {
@@ -38,6 +38,5 @@ $ `stdlib/net/rendezvous.nu`
         }
         F e → ( nurl_print `rendezvous failed to bind\n` )
     }
-    ( string_free host )
     ^ 0
 }

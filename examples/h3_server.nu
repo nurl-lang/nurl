@@ -25,7 +25,6 @@ $ `packages/http/src/http.nu`
         ( string_push_str body ( string_data . req version ) )
         ( string_push_str body `\n` )
         : HttpResponse r ( response_text 200 ( string_data body ) )
-        ( string_free body )
         ^ r
     } )
     : i argc ( nurl_argv_count )

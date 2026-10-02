@@ -27,7 +27,7 @@ $ `stdlib/net/transport.nu`
     : i argc ( env_args_count )
     : String host ? > argc 1 ( env_arg 1 ) ( string_from `127.0.0.1` )
     : i port ? > argc 2 {
-        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) ( string_free ps ) p
+        : String ps ( env_arg 2 ) : i p ( nurl_str_to_int ( string_data ps ) ) p
     } 47700
 
     ?? ( relay_dial ( string_data host ) port ) {
@@ -52,17 +52,13 @@ $ `stdlib/net/transport.nu`
             ?? ( transport_recv t 3000 ) {
                 T m → {
                     ( nurl_print `recv ` ) ( nurl_print_int ( vec_len [u] . m payload ) ) ( nurl_print ` bytes from a peer\n` )
-                    ( transport_msg_free m )
                 }
                 F → ( nurl_print `no message this round\n` )
             }
 
-            ( vec_free [u] me ) ( vec_free [u] g ) ( vec_free [u] payload )
-            ( transport_free t )
             ( relay_close rc )
         }
         F e → ( nurl_print `could not reach relay\n` )
     }
-    ( string_free host )
     ^ 0
 }
