@@ -121,20 +121,17 @@ $ `stdlib/std/thread.nu`
     }
     : String path ( path_join g_an_webroot relfile )
     : !String IoErr fr ( read_file ( string_data path ) )
-    ( string_free path )
     ?? fr {
         T text → {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` ( __an_content_type relfile ) )
             ( response_set_body_str r ( string_data text ) )
-            ( string_free text )
             ^ r
         }
         F _ → {
             : String msg ( string_from `File not found: ` )
             ( string_push_str msg relfile )
             : HttpResponse rr ( __an_json_err 404 ( string_data msg ) )
-            ( string_free msg )
             ^ rr
         }
     }
@@ -164,7 +161,6 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `status` ( json_str_lit `error` ) )
     ( json_obj_set o `message` ( json_str_lit msg ) )
     : HttpResponse r ( response_json status o )
-    ( json_free o )
     ^ r
 }
 
@@ -190,7 +186,6 @@ $ `stdlib/std/thread.nu`
     ( string_push_str msg name )
     ( string_push_str msg ` not found` )
     : HttpResponse r ( __an_json_err 404 ( string_data msg ) )
-    ( string_free msg )
     ^ r
 }
 
@@ -213,7 +208,6 @@ $ `stdlib/std/thread.nu`
 @ __an_body_json HttpRequest req → ?Json {
     : String txt ( bytes_to_str . req body )
     : !Json JsonError r ( json_parse ( string_data txt ) )
-    ( string_free txt )
     ?? r {
         T j → { ^ @ ?Json { T j } }
         F _ → { ^ @ ?Json { F } }
@@ -228,7 +222,6 @@ $ `stdlib/std/thread.nu`
     ? > ( string_len v ) 0 {
         ?? ( float_parse ( string_data v ) ) { T x → { = out x } F _ → {} }
     } {}
-    ( string_free v )
     ^ out
 }
 
@@ -237,7 +230,6 @@ $ `stdlib/std/thread.nu`
     ( string_push_char needle 61 )
     : ?i at0 ( string_index_of q ( string_data needle ) )
     : i klen ( string_len needle )
-    ( string_free needle )
     ?? at0 {
         T at → {
             : String val ( string_new )
@@ -261,7 +253,6 @@ $ `stdlib/std/thread.nu`
                     F _ → {}
                 }
             }
-            ( string_free val )
             ^ out
         }
         F _ → { ^ dflt }
@@ -290,10 +281,6 @@ $ `stdlib/std/thread.nu`
     b creating  // the named model does not exist yet; this call would make it
 }
 
-@ __an_gate_free sink Gate g → v {
-    ( principal_free . g who )
-}
-
 // Sanitize a reason before it goes into a header: part of it is copied from
 // a token, and a CR LF in there is response splitting, not a diagnostic.
 @ __an_safe_reason s raw → String {
@@ -320,18 +307,14 @@ $ `stdlib/std/thread.nu`
     ? > ( string_len why ) 0 {
         : String msg ( string_from `Token rejected: ` )
         ( string_push_str msg ( string_data why ) )
-        ( http_response_free r )
         = r ( __an_json_err 401 ( string_data msg ) )
         : String chal ( string_from `Bearer error="invalid_token", error_description="` )
         ( string_push_str chal ( string_data why ) )
         ( string_push_char chal 34 )
         ( response_set_header r `WWW-Authenticate` ( string_data chal ) )
-        ( string_free chal )
-        ( string_free msg )
     } {
         ( response_set_header r `WWW-Authenticate` `Bearer` )
     }
-    ( string_free why )
     ^ r
 }
 
@@ -350,7 +333,6 @@ $ `stdlib/std/thread.nu`
         : String k ( string_from `key:` )
         ( string_push_str k ( string_data . p key_id ) )
         ( anomaly_set_actor ( string_data k ) )
-        ( string_free k )
     } { ( anomaly_set_actor who ) }
 }
 
@@ -384,7 +366,6 @@ $ `stdlib/std/thread.nu`
 
     : Store st ( __an_store_of p )
     : b exists ( store_exists st name )
-    ( store_free st )
     ? exists {} {
         // `allow_create` marks the routes that put DATA in, and a model
         // coming into existence is a side effect of that — the first point
@@ -435,7 +416,6 @@ $ `stdlib/std/thread.nu`
         : Principal p ( authz_principal req )
         ( __an_note_actor p )
         : b have . p authed
-        ( principal_free p )
         ? have {} { ^ @ Gate { T AZ_GATE_OK ( principal_public_admin ) T } }
     } {}
     // Putting data in — a streamed point, or a file of history; the
@@ -476,11 +456,9 @@ $ `stdlib/std/thread.nu`
 
 // ── Verdict → JSON ────────────────────────────────────────────────────
 
-@ __an_verdict_resp Model mo__h s mname Json body Verdict vd → HttpResponse {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : Json o ( __an_verdict_json mo__h mname body vd )
+@ __an_verdict_resp Model mo s mname Json body Verdict vd → HttpResponse {
+    : Json o ( __an_verdict_json mo mname body vd )
     : HttpResponse r ( response_json ? . vd ready 200 202 o )
-    ( json_free o )
     ^ r
 }
 
@@ -489,8 +467,7 @@ $ `stdlib/std/thread.nu`
 @ __an_verdict_json Model mo__h s mname Json body Verdict vd → Json {
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? . vd ready {} {
-        : Meta mm__h ( model_metadata mo__h )
-        : *MetaImpl mm ( _Meta_ptr mm__h )
+        : Meta mm ( model_metadata mo__h )
         : i n ( model_n_points mo__h )
         : String msg ( string_from `Collecting data (` )
         ( string_push_int msg n )
@@ -503,7 +480,6 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `data_points` ( json_int n ) )
         ( json_obj_set o `min_data_points` ( json_int . mo min_points ) )
         ( json_obj_set o `model_name` ( json_str_lit mname ) )
-        ( string_free msg )
         ^ o
     }
 
@@ -529,7 +505,6 @@ $ `stdlib/std/thread.nu`
         }
         ( json_obj_set o `missing` ma )
     } {}
-    ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
 
     // `severity` is the one number that means the same thing in every
     // version: -score / margin, so 1.0 is exactly the alert line, 2.0 is
@@ -622,14 +597,11 @@ $ `stdlib/std/thread.nu`
 @ __an_h_forecast_point HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_ingest req ( string_data mname ) )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : ~ i h ( __an_query_int . req query `horizon` 1 )
@@ -638,60 +610,37 @@ $ `stdlib/std/thread.nu`
     ?? ( __an_body_json req ) {
         T body → {
             ? ( json_is_obj body ) {} {
-                ( json_free body )
-                ( __an_gate_free gate )
-                ( string_free mname )
                 ^ ( __an_json_err 400 `The body must be a JSON object: the point's fields.` )
             }
             : Store st ( __an_store_of . gate who )
-            : Model mo__h ( model_open st ( string_data mname ) )
-            : *ModelImpl mo ( _Model_ptr mo__h )
+            : Model mo ( model_open st ( string_data mname ) )
             : ~ HttpResponse resp ( response_status_only 500 )
-            : i pts ( __an_point_time mo__h body )
+            : i pts ( __an_point_time mo body )
             ? | == pts -1 == pts -2 {
-                ( http_response_free resp )
                 = resp ( __an_bad_time pts )
-                ( model_free mo__h )
-                ( store_free st )
-                ( json_free body )
-                ( __an_gate_free gate )
-                ( string_free mname )
                 ^ resp
             } {}
-            : !Verdict String vr ? == pts -3 ( model_ingest mo__h body ) ( model_ingest_at mo__h body pts )
+            : !Verdict String vr ? == pts -3 ( model_ingest mo body ) ( model_ingest_at mo body pts )
             ?? vr {
                 T vd → {
-                    : Json o ( __an_verdict_json mo__h ( string_data mname ) body vd )
-                    : String why ( model_forecast_ensure_at mo__h ( model_now mo__h ) )
+                    : Json o ( __an_verdict_json mo ( string_data mname ) body vd )
+                    : String why ( model_forecast_ensure_at mo ( model_now mo ) )
                     ? == ( string_len why ) 0 {
-                        ( json_obj_set o `forecast` ( model_forecast_json mo__h h ) )
+                        ( json_obj_set o `forecast` ( model_forecast_json mo h ) )
                     } {
                         ( json_obj_set o `forecast` ( json_null ) )
                         ( json_obj_set o `forecast_unavailable` ( json_str_lit ( string_data why ) ) )
                     }
-                    ( string_free why )
-                    ( http_response_free resp )
                     = resp ( response_json ? . vd ready 200 202 o )
-                    ( json_free o )
-                    ( verdict_free vd )
                 }
                 F e → {
-                    ( http_response_free resp )
                     = resp ( __an_json_err 400 ( string_data e ) )
-                    ( string_free e )
                 }
             }
-            ( model_free mo__h )
-            ( store_free st )
-            ( json_free body )
             ( __an_gate_claim gate ( string_data mname ) )
-            ( __an_gate_free gate )
-            ( string_free mname )
             ^ resp
         }
         F _ → {
-            ( __an_gate_free gate )
-            ( string_free mname )
             ^ ( __an_json_err 400 `No data provided` )
         }
     }
@@ -702,22 +651,16 @@ $ `stdlib/std/thread.nu`
 @ __an_h_audit HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : ~ i limit ( __an_query_int . req query `limit` 100 )
@@ -728,9 +671,6 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `count` ( json_int ( json_arr_len entries ) ) )
     ( json_obj_set o `entries` entries )
     : HttpResponse resp ( response_json 200 o )
-    ( json_free o )
-    ( store_free st )
-    ( string_free mname )
     ^ resp
 }
 
@@ -739,22 +679,16 @@ $ `stdlib/std/thread.nu`
 @ __an_h_forecast_backtest HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : ~ i h ( __an_query_int . req query `horizon` 12 )
@@ -763,15 +697,10 @@ $ `stdlib/std/thread.nu`
     : ~ i n ( __an_query_int . req query `points` 200 )
     ? < n 1 { = n 1 } {}
     ? > n 5000 { = n 5000 } {}
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : Json o ( model_forecast_backtest mo__h h n )
+    : Model mo ( model_open st ( string_data mname ) )
+    : Json o ( model_forecast_backtest mo h n )
     ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
     : HttpResponse resp ( response_json ? ( json_obj_has o `error` ) 400 200 o )
-    ( json_free o )
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free mname )
     ^ resp
 }
 
@@ -780,114 +709,75 @@ $ `stdlib/std/thread.nu`
 @ __an_h_detect HttpRequest req Params p b ingest → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     // /detect puts a point in; /detect_only only scores one and changes
     // nothing, which makes it a read a viewer may do.
     : ~ Gate gate ( __an_gate_ingest req ( string_data mname ) )
     ? ingest {} {
-        ( __an_gate_free gate )
         = gate ( __an_gate_model req ( string_data mname ) F F )
     }
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : ?Json bodyo ( __an_body_json req )
     ?? bodyo {
         T body → {
             ? ( json_is_obj body ) {} {
-                ( json_free body )
-                ( __an_gate_free gate )
-                ( string_free mname )
                 ^ ( __an_json_err 400 `No parameters provided. Need at least one numeric parameter.` )
             }
             : Store st ( __an_store_of . gate who )
             ? ingest {} {
                 ? ( store_exists st ( string_data mname ) ) {} {
                     : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-                    ( store_free st )
-                    ( json_free body )
-                    ( __an_gate_free gate )
-                    ( string_free mname )
                     ^ r404
                 }
             }
-            : Model mo__h ( model_open st ( string_data mname ) )
-            : *ModelImpl mo ( _Model_ptr mo__h )
+            : Model mo ( model_open st ( string_data mname ) )
             ? ingest {} {
-                ? ( model_is_trained mo__h ) {} {
+                ? ( model_is_trained mo ) {} {
                     : String msg ( string_from `Model ` )
                     ( string_push_str msg ( string_data mname ) )
                     ( string_push_str msg ` exists but is not trained yet.` )
                     : HttpResponse rr ( __an_json_err 400 ( string_data msg ) )
-                    ( string_free msg )
-                    ( model_free mo__h )
-                    ( store_free st )
-                    ( json_free body )
-                    ( __an_gate_free gate )
-                    ( string_free mname )
                     ^ rr
                 }
             }
             : ~ HttpResponse resp ( response_status_only 500 )
-            : i pts ? ingest ( __an_point_time mo__h body ) -3
+            : i pts ? ingest ( __an_point_time mo body ) -3
             ? & ingest | == pts -1 == pts -2 {
-                ( http_response_free resp )
                 = resp ( __an_bad_time pts )
-                ( model_free mo__h )
-                ( store_free st )
-                ( json_free body )
-                ( __an_gate_free gate )
-                ( string_free mname )
                 ^ resp
             } {}
             ? ingest {
-                : !Verdict String vr ? == pts -3 ( model_ingest mo__h body ) ( model_ingest_at mo__h body pts )
+                : !Verdict String vr ? == pts -3 ( model_ingest mo body ) ( model_ingest_at mo body pts )
                 ?? vr {
                     T vd → {
-                        ( http_response_free resp )
-                        = resp ( __an_verdict_resp mo__h ( string_data mname ) body vd )
-                        ( verdict_free vd )
+                        = resp ( __an_verdict_resp mo ( string_data mname ) body vd )
                     }
                     F e → {
-                        ( http_response_free resp )
                         = resp ( __an_json_err 400 ( string_data e ) )
-                        ( string_free e )
                     }
                 }
             } {
-                : !Verdict String vr ( model_detect_only mo__h body )
+                : !Verdict String vr ( model_detect_only mo body )
                 ?? vr {
                     T vd → {
-                        ( http_response_free resp )
-                        = resp ( __an_verdict_resp mo__h ( string_data mname ) body vd )
-                        ( verdict_free vd )
+                        = resp ( __an_verdict_resp mo ( string_data mname ) body vd )
                     }
                     F e → {
-                        ( http_response_free resp )
                         = resp ( __an_json_err 400 ( string_data e ) )
-                        ( string_free e )
                     }
                 }
             }
-            ( model_free mo__h )
-            ( store_free st )
-            ( json_free body )
             // The model exists now if it did not before, so whoever brought
             // it into being becomes its owner. Doing this after the ingest
             // means a rejected point never claims a model.
             ( __an_gate_claim gate ( string_data mname ) )
-            ( __an_gate_free gate )
-            ( string_free mname )
             ^ resp
         }
         F _ → {
-            ( __an_gate_free gate )
-            ( string_free mname )
             ^ ( __an_json_err 400 `No parameters provided. Need at least one numeric parameter.` )
         }
     }
@@ -896,7 +786,6 @@ $ `stdlib/std/thread.nu`
 @ __an_h_force_train HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -905,21 +794,15 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : i used ( model_force_train mo__h )
+    : Model mo ( model_open st ( string_data mname ) )
+    : i used ( model_force_train mo )
     : ~ HttpResponse resp ( response_status_only 500 )
     ? > used 0 {
         : String msg ( string_from `Model ` )
@@ -927,17 +810,10 @@ $ `stdlib/std/thread.nu`
         ( string_push_str msg ` trained` )
         : Json o ( __an_ok_msg ( string_data msg ) )
         ( json_obj_set o `points_used` ( json_int used ) )
-        ( http_response_free resp )
         = resp ( response_json 200 o )
-        ( json_free o )
-        ( string_free msg )
     } {
-        ( http_response_free resp )
         = resp ( __an_json_err 400 `Not enough data to train` )
     }
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free mname )
     ^ resp
 }
 
@@ -948,7 +824,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal lp . gate who
@@ -969,7 +844,6 @@ $ `stdlib/std/thread.nu`
         ?? ( az_db_open ( string_data . lp org ) ) {
             F _ → {}
             T db → {
-                ( vec_free [String] owned )
                 = owned ( az_org_model_names db )
             }
         }
@@ -998,13 +872,11 @@ $ `stdlib/std/thread.nu`
                                 ?? ( store_load_ae st ( string_data nm ) ) {
                                     T ae → {
                                         ( json_obj_set mj `retrain_required` ( json_bool ( an_ae_stale mm ae ) ) )
-                                        ( ae_free ae )
                                     }
                                     F _ → {}
                                 }
                             } {}
                             ( json_obj_set models ( string_data nm ) mj )
-                            ( meta_free mm )
                         }
                         F _ → {}
                     }
@@ -1014,17 +886,12 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] owned \ String x → v { ( string_free x ) } )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `models` models )
     ( json_obj_set o `min_data_points` ( json_int ANOM_MIN_POINTS ) )
     ( json_obj_set o `max_data_points` ( json_int ANOM_MAX_POINTS ) )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( store_free st )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -1153,7 +1020,6 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set o `effective_margin` ( json_float ( anom_ae_margin ae arel ) ) )
             ( json_obj_set o `feature_names` ( _an_jarr_of_strs . ae feats ) )
             ( json_obj_set o `layer_sizes` ( __an_ae_layers ae ) )
-            ( ae_free ae )
         }
         F → {
             ( json_obj_set o `trained` ( json_bool F ) )
@@ -1170,9 +1036,7 @@ $ `stdlib/std/thread.nu`
     : ~ Json o ( json_obj_new )
     ?? ( store_load_fc st name ) {
         T fc → {
-            ( json_free o )
             = o ( fc_info_json fc )
-            ( fc_free fc )
         }
         F → { ( json_obj_set o `trained` ( json_bool F ) ) }
     }
@@ -1199,26 +1063,19 @@ $ `stdlib/std/thread.nu`
 @ __an_h_train_fc HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
+    : Model mo ( model_open st ( string_data mname ) )
     ?? ( __an_body_json req ) {
         T body → {
             : Json vo ( json_obj_new )
@@ -1231,39 +1088,26 @@ $ `stdlib/std/thread.nu`
                 ( json_obj_set vers ANOM_FC_NAME vo )
                 : Json patch ( json_obj_new )
                 ( json_obj_set patch `versions` vers )
-                : String perr ( model_apply_meta_patch mo__h patch )
-                ( string_free perr )
-                ( json_free patch )
-            } { ( json_free vo ) }
-            ( json_free body )
+                : String perr ( model_apply_meta_patch mo patch )
+            } {}
         }
         F _ → {}
     }
-    : String err ( model_train_forecast mo__h )
+    : String err ( model_train_forecast mo )
     ? == ( string_len err ) 0 {
-        : FcModel fc__h ( model_forecast mo__h )
+        : FcModel fc__h ( model_forecast mo )
         : *FcModelImpl fc ( _FcModel_ptr fc__h )
         : String msg ( string_from `Forecast models trained for model ` )
         ( string_push_str msg ( string_data mname ) )
         : Json o ( __an_ok_msg ( string_data msg ) )
-        ( string_free msg )
         ( json_obj_set o `features` ( _an_jarr_of_strs . fc feats ) )
         ( json_obj_set o `skipped` ( _an_jarr_of_strs . fc skipped ) )
         ( json_obj_set o `training_data_points` ( json_int . fc trained_on ) )
         ( json_obj_set o `season` ( json_int . fc season ) )
         : HttpResponse rr ( response_json 200 o )
-        ( json_free o )
-        ( string_free err )
-        ( model_free mo__h )
-        ( store_free st )
-        ( string_free mname )
         ^ rr
     } {
         : HttpResponse re ( __an_json_err 400 ( string_data err ) )
-        ( string_free err )
-        ( model_free mo__h )
-        ( store_free st )
-        ( string_free mname )
         ^ re
     }
 }
@@ -1274,55 +1118,41 @@ $ `stdlib/std/thread.nu`
 @ __an_h_forecast HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : ~ i h ( __an_query_int . req query `horizon` 12 )
     ? < h 1 { = h 1 } {}
     ? > h 1000 { = h 1000 } {}
     : i origin ( __an_query_int . req query `origin` -1 )
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    : FcModel fc__h ( model_forecast mo__h )
+    : Model mo ( model_open st ( string_data mname ) )
+    : FcModel fc__h ( model_forecast mo )
     : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ~ HttpResponse resp ( response_status_only 500 )
     ? . fc trained {
-        ( http_response_free resp )
         // ?origin=<row>: the forecast as it would have been made from that
         // stored row, a copy of the models replayed up to it
-        : Json o ? & >= origin 0 < origin - ( model_n_points mo__h ) 1 ( model_forecast_from_json mo__h h origin ) ( model_forecast_json mo__h h )
+        : Json o ? & >= origin 0 < origin - ( model_n_points mo ) 1 ( model_forecast_from_json mo h origin ) ( model_forecast_json mo h )
         ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
         = resp ( response_json 200 o )
-        ( json_free o )
     } {
-        ( http_response_free resp )
         = resp ( __an_json_err 400 `the forecast version is not trained: POST /train/forecast/<model> first` )
     }
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free mname )
     ^ resp
 }
 
 @ __an_h_metadata HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -1331,8 +1161,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     // The owner is not part of the stored metadata — it belongs to the
@@ -1344,13 +1172,11 @@ $ `stdlib/std/thread.nu`
         ?? ( az_db_open ( string_data . mp org ) ) {
             F _ → {}
             T db → {
-                ( string_free owner )
                 = owner ( az_model_owner db ( string_data mname ) )
             }
         }
     } {}
     : Store st ( __an_store_of mp )
-    ( __an_gate_free gate )
     : ?Meta mload ( store_load_meta st ( string_data mname ) )
     : ~ HttpResponse resp ( response_status_only 500 )
     ?? mload {
@@ -1362,26 +1188,18 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set o `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
             ( json_obj_set o `forecast` ( __an_fc_json st ( string_data mname ) mm ) )
             ( json_obj_set o `flatline` ( _an_flat_json mm ) )
-            ( http_response_free resp )
             = resp ( response_json 200 o )
-            ( json_free o )
-            ( meta_free mm )
         }
         F _ → {
-            ( http_response_free resp )
             = resp ( __an_404_model ( string_data mname ) )
         }
     }
-    ( store_free st )
-    ( string_free owner )
-    ( string_free mname )
     ^ resp
 }
 
 @ __an_h_data HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -1390,16 +1208,11 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : i limit ( __an_query_int . req query `limit` 100 )
@@ -1408,7 +1221,6 @@ $ `stdlib/std/thread.nu`
     : String ffilter ( __an_query_str . req query `fields` )
     : b want_fields & > ( string_len ffilter ) 0 == ( nurl_str_eq ( string_data ffilter ) `*` ) 0
     : ( Vec String ) fields ( string_split ffilter `,` )
-    ( string_free ffilter )
     : ( Vec String ) pts ( store_load_points st ( string_data mname ) )
     : i total ( vec_len [String] pts )
     : ( Vec i ) kept ( __an_data_select . req query pts )
@@ -1432,7 +1244,6 @@ $ `stdlib/std/thread.nu`
                         ( json_arr_push idxs ( json_int k ) )
                         ? want_fields {
                             ( json_arr_push arr ( __an_project_row j fields ) )
-                            ( json_free j )
                         } { ( json_arr_push arr j ) }
                     }
                     F _ → {}
@@ -1441,9 +1252,6 @@ $ `stdlib/std/thread.nu`
             F _ → {}
         }
     }
-    ( vec_free [i] kept )
-    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] pts \ String x → v { ( string_free x ) } )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `model_name` ( json_str_lit ( string_data mname ) ) )
@@ -1451,7 +1259,6 @@ $ `stdlib/std/thread.nu`
     ?? ( store_load_meta st ( string_data mname ) ) {
         T dmm → {
             ( json_obj_set o `clock` ( json_str_lit ? . ( _Meta_ptr dmm ) count_clock `count` `time` ) )
-            ( meta_free dmm )
         }
         F _ → {}
     }
@@ -1460,9 +1267,6 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `data` arr )
     ( json_obj_set o `indices` idxs )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( store_free st )
-    ( string_free mname )
     ^ r
 }
 
@@ -1481,7 +1285,6 @@ $ `stdlib/std/thread.nu`
     ? > ( string_len atq ) 0 {
         ?? ( string_to_int atq ) { T x → { = at x } F _ → {} }
     } {}
-    ( string_free atq )
     : i q_from ( __an_query_int q `from` 0 )
     : i q_to ( __an_query_int q `to` 0 )
     : i q_last ( __an_query_int q `last` 0 )
@@ -1580,7 +1383,6 @@ $ `stdlib/std/thread.nu`
             ? | ( json_is_obj v ) ( json_is_arr v ) {
                 ( __an_csv_quote out ( string_data txt ) )
             } { ( string_push_str out ( string_data txt ) ) }
-            ( string_free txt )
         }
     }
 }
@@ -1597,38 +1399,28 @@ $ `stdlib/std/thread.nu`
 @ __an_h_export HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : String fmtq ( __an_query_str . req query `format` )
     : b jsonl == ( nurl_str_eq ( string_data fmtq ) `jsonl` ) 1
     : b csv | == ( string_len fmtq ) 0 == ( nurl_str_eq ( string_data fmtq ) `csv` ) 1
-    ( string_free fmtq )
     ? | jsonl csv {} {
-        ( string_free mname )
-        ( __an_gate_free gate )
         ^ ( __an_json_err 400 `format must be csv or jsonl` )
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : i limit ( __an_query_int . req query `limit` 0 )
     : String ffilter ( __an_query_str . req query `fields` )
     : b want_fields & > ( string_len ffilter ) 0 == ( nurl_str_eq ( string_data ffilter ) `*` ) 0
     : ( Vec String ) fields ( string_split ffilter `,` )
-    ( string_free ffilter )
     : ( Vec String ) pts ( store_load_points st ( string_data mname ) )
     : ( Vec i ) kept ( __an_data_select . req query pts )
     : i in_window ( vec_len [i] kept )
@@ -1653,9 +1445,6 @@ $ `stdlib/std/thread.nu`
                                 ( string_push_str out ( string_data txt ) )
                                 ( string_push_char out 10 )
                                 = rows + rows 1
-                                ( string_free txt )
-                                ( json_free row )
-                                ( json_free j )
                             }
                             F _ → {}
                         }
@@ -1711,8 +1500,6 @@ $ `stdlib/std/thread.nu`
                                     }
                                     = kk + kk 1
                                 }
-                                ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-                                ( json_free j )
                             }
                             F _ → {}
                         }
@@ -1754,7 +1541,6 @@ $ `stdlib/std/thread.nu`
                             }
                             ( string_push_char out 10 )
                             = rows + rows 1
-                            ( json_free j )
                         }
                         F _ → {}
                     }
@@ -1762,11 +1548,7 @@ $ `stdlib/std/thread.nu`
                 F _ → {}
             }
         }
-        ( vec_free_with [String] cols \ String x → v { ( string_free x ) } )
     }
-    ( vec_free [i] kept )
-    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] pts \ String x → v { ( string_free x ) } )
 
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` ? jsonl `application/x-ndjson` `text/csv; charset=utf-8` )
@@ -1774,16 +1556,11 @@ $ `stdlib/std/thread.nu`
     ( string_push_str cd ( string_data mname ) )
     ( string_push_str cd ? jsonl `.jsonl"` `.csv"` )
     ( response_set_header r `Content-Disposition` ( string_data cd ) )
-    ( string_free cd )
     ( response_set_header r `Cache-Control` `private, no-store` )
     : String xr ( string_new )
     ( string_push_int xr rows )
     ( response_set_header r `X-Rows` ( string_data xr ) )
-    ( string_free xr )
     ( response_set_body_str r ( string_data out ) )
-    ( string_free out )
-    ( store_free st )
-    ( string_free mname )
     ^ r
 }
 
@@ -1796,7 +1573,6 @@ $ `stdlib/std/thread.nu`
     ( string_push_char needle 61 )
     : ?i at0 ( string_index_of q ( string_data needle ) )
     : i klen ( string_len needle )
-    ( string_free needle )
     ?? at0 {
         T at → {
             : String val ( string_new )
@@ -1811,7 +1587,6 @@ $ `stdlib/std/thread.nu`
                 }
             }
             : String dec ( percent_decode ( string_data val ) )
-            ( string_free val )
             ^ dec
         }
         F _ → { ^ ( string_new ) }
@@ -1834,7 +1609,6 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] parts \ String x → v { ( string_free x ) } )
     ^ found
 }
 
@@ -1870,7 +1644,6 @@ $ `stdlib/std/thread.nu`
 @ __an_h_anomalies HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -1879,16 +1652,11 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
 
@@ -1905,7 +1673,6 @@ $ `stdlib/std/thread.nu`
     ? > ( string_len ctopk ) 0 {
         ?? ( string_to_int ctopk ) { T x → { = topk x } F _ → {} }
     } {}
-    ( string_free ctopk )
     : i refresh ( __an_query_int . req query `refresh` 0 )
     : String only ( __an_query_str . req query `only` )
     : String vfilter ( __an_query_str . req query `versions` )
@@ -1915,7 +1682,6 @@ $ `stdlib/std/thread.nu`
     ? < minvotes 1 { = minvotes 1 } {}
     : String group ( __an_query_str . req query `group` )
     : b want_events == ( nurl_str_eq ( string_data group ) `runs` ) 1
-    ( string_free group )
 
     : Model mo__h ( model_open st ( string_data mname ) )
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -2097,9 +1863,7 @@ $ `stdlib/std/thread.nu`
                                     }
                                     ( json_obj_set o `contributions` ca )
                                 } {}
-                                ( ae_contrib_free cs )
                             } {}
-                            ( json_free rec )
                         }
                         F → {}
                     }
@@ -2110,8 +1874,6 @@ $ `stdlib/std/thread.nu`
             F _ → {}
         }
     }
-    ( vec_free [i] kept )
-    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
 
     : Json cache ( json_obj_new )
     ( json_obj_set cache `hits` ( json_int . so hits ) )
@@ -2182,9 +1944,6 @@ $ `stdlib/std/thread.nu`
         }
         ( json_obj_set o `events` evs )
     } {}
-    ( scan_runs_free sr )
-    ( vec_free [i] label_of )
-    ( labels_free labels )
     ( json_obj_set o `returned` ( json_int shown ) )
     ( json_obj_set o `model_versions` vers )
     : Json byv ( json_obj_new )
@@ -2196,7 +1955,6 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( vec_free [i] vflagged )
     ( json_obj_set o `flagged_by_version` byv )
     ? > np 0 {
         : Json wj ( json_obj_new )
@@ -2209,21 +1967,12 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `points` arr )
 
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( scan_free so )
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free only )
-    ( string_free vfilter )
-    ( string_free ffilter )
-    ( string_free mname )
     ^ r
 }
 
 @ __an_h_reset HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -2232,31 +1981,20 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
-    : Model mo__h ( model_open st ( string_data mname ) )
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ( model_reset mo__h )
-    ( model_free mo__h )
+    : Model mo ( model_open st ( string_data mname ) )
+    ( model_reset mo )
     : String msg ( string_from `Model ` )
     ( string_push_str msg ( string_data mname ) )
     ( string_push_str msg ` reset` )
     : Json o ( __an_ok_msg ( string_data msg ) )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( string_free msg )
-    ( store_free st )
-    ( string_free mname )
     ^ r
 }
 
@@ -2289,22 +2027,16 @@ $ `stdlib/std/thread.nu`
 @ __an_h_label HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ r404
     }
     : ~ i index -1
@@ -2323,16 +2055,10 @@ $ `stdlib/std/thread.nu`
                     F _ → {}
                 }
             } {}
-            ( json_free body )
         }
         F _ → {}
     }
     ? ( label_known ( string_data label ) ) {} {
-        ( string_free label )
-        ( string_free note )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ ( __an_json_err 400 `label must be "false_positive", "confirmed" or "none"` )
     }
     : Model mo__h ( model_open st ( string_data mname ) )
@@ -2349,13 +2075,6 @@ $ `stdlib/std/thread.nu`
             ( string_push_int why index )
             ( string_push_str why ` is not flagged by this model, so it cannot be a false positive. Label a row the model calls an anomaly (anomalies lists them); "confirmed" and "none" apply to any stored row.` )
             : HttpResponse rfp ( __an_json_err 400 ( string_data why ) )
-            ( string_free why )
-            ( model_free mo__h )
-            ( string_free label )
-            ( string_free note )
-            ( store_free st )
-            ( __an_gate_free gate )
-            ( string_free mname )
             ^ rfp
         } {}
     } {}
@@ -2364,13 +2083,6 @@ $ `stdlib/std/thread.nu`
     : i at ( now_seconds )
     : i seq ( model_label_point mo__h index ( string_data label ) ( string_data by ) ( string_data note ) at )
     ? >= seq 0 {} {
-        ( model_free mo__h )
-        ( string_free by )
-        ( string_free label )
-        ( string_free note )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ ( __an_json_err 400 `index must name a stored point` )
     }
     : ~ i ts 0
@@ -2391,15 +2103,6 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `at` ( json_int at ) )
     ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( string_free msg )
-    ( model_free mo__h )
-    ( string_free by )
-    ( string_free label )
-    ( string_free note )
-    ( store_free st )
-    ( __an_gate_free gate )
-    ( string_free mname )
     ^ r
 }
 
@@ -2408,22 +2111,16 @@ $ `stdlib/std/thread.nu`
 @ __an_h_labels HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : Model mo__h ( model_open st ( string_data mname ) )
@@ -2458,33 +2155,22 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `confirmed` ( json_int oks ) )
     ( json_obj_set o `labels` arr )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( labels_free labels )
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free mname )
     ^ r
 }
 
 @ __an_h_delete HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ r404
     }
     : b okd ( store_delete st ( string_data mname ) )
@@ -2492,16 +2178,11 @@ $ `stdlib/std/thread.nu`
     // next model to take the name inherits an owner nobody chose.
     : Principal dp . gate who
     ( __an_forget_model dp ( string_data mname ) )
-    ( __an_gate_free gate )
     : String msg ( string_from `Model ` )
     ( string_push_str msg ( string_data mname ) )
     ( string_push_str msg ` deleted successfully` )
     : Json o ( __an_ok_msg ( string_data msg ) )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( string_free msg )
-    ( store_free st )
-    ( string_free mname )
     ^ r
 }
 
@@ -2524,17 +2205,13 @@ $ `stdlib/std/thread.nu`
 @ __an_h_fork HttpRequest req Params p → HttpResponse {
     : String src ( __an_param_model p )
     ? ( __an_name_ok ( string_data src ) ) {} {
-        ( string_free src )
         ^ ( __an_bad_name )
     }
     : Gate sgate ( __an_gate_model req ( string_data src ) F F )
     ? . sgate allowed {} {
         : HttpResponse rd ( __an_gate_deny sgate )
-        ( __an_gate_free sgate )
-        ( string_free src )
         ^ rd
     }
-    ( __an_gate_free sgate )
 
     : ~ String name ( string_new )
     : ~ i q_from 0
@@ -2594,26 +2271,16 @@ $ `stdlib/std/thread.nu`
                     F _ → {}
                 }
             } {}
-            ( json_free body )
         }
         F _ → {}
     }
     ? bad_rate {
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ ( __an_json_err 400 `rate must be a number in (0, 1].` )
     } {}
     ? ( __an_name_ok ( string_data name ) ) {} {
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ ( __an_json_err 400 `Body needs "name": the new model's name (letters, numbers and underscores).` )
     }
     ? == ( nurl_str_eq ( string_data name ) ( string_data src ) ) 1 {
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ ( __an_json_err 400 `A model cannot be forked onto itself.` )
     } {}
     // May the caller bring the target into being? The gate's create branch
@@ -2621,20 +2288,11 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data name ) T T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
     ? ( store_exists st ( string_data src ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data src ) )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ r404
     }
     ? ( store_exists st ( string_data name ) ) {
@@ -2642,12 +2300,6 @@ $ `stdlib/std/thread.nu`
         ( string_push_str msg ( string_data name ) )
         ( string_push_str msg ` already exists; delete it first or choose another name.` )
         : HttpResponse r409 ( __an_json_err 409 ( string_data msg ) )
-        ( string_free msg )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ r409
     } {}
 
@@ -2694,7 +2346,6 @@ $ `stdlib/std/thread.nu`
                             }
                             = fi + fi 1
                         }
-                        ( json_free rec )
                         ( vec_push [Json] recs row )
                     } { ( vec_push [Json] recs rec ) }
                 }
@@ -2716,7 +2367,6 @@ $ `stdlib/std/thread.nu`
     : i src_tuned . sm tuned_at
     : AeModel sae . smo ae
     : ( Vec i ) ae_layout ? . sae trained ( ae_hidden sae ) ( vec_new [i] )
-    ( model_free smo__h )
     : i nrec ( vec_len [Json] recs )
     ? < nrec ANOM_MIN_POINTS {
         : String m ( string_from `The window holds ` )
@@ -2727,15 +2377,6 @@ $ `stdlib/std/thread.nu`
         ( string_push_int m ANOM_MIN_POINTS )
         ( string_push_str m ` are needed to train a model. Widen the window.` )
         : HttpResponse rr ( __an_json_err 400 ( string_data m ) )
-        ( string_free m )
-        ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
-        ( vec_free_with [VerCfg] src_versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
-        ( vec_free [i] ae_layout )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ rr
     } {}
 
@@ -2744,7 +2385,8 @@ $ `stdlib/std/thread.nu`
     : *ModelImpl mo ( _Model_ptr mo__h )
     : *MetaImpl mm ( _Meta_ptr . mo meta )
     = . mm count_clock count_clock
-    ( vec_free_with [VerCfg] . mm versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
+    : ( Vec VerCfg ) old_versions . mm versions
+    ( mem_take old_versions )  // a store through the pointer drops nothing
     = . mm versions src_versions
     // margins the source's owner set stay set: the fork is tuned as it was
     = . mm tuned_at src_tuned
@@ -2754,7 +2396,6 @@ $ `stdlib/std/thread.nu`
     : i maxp ? > nrec ANOM_MAX_POINTS nrec ANOM_MAX_POINTS
     ( model_set_limits mo__h ANOM_MIN_POINTS maxp )
     : ImportReport rep ( model_import mo__h recs )
-    ( vec_free_with [Json] recs \ Json j → v { ( json_free j ) } )
     ? | > ( string_len . rep err ) 0 < . rep accepted ANOM_MIN_POINTS {
         : String m ( string_from `Nothing to train on: ` )
         ? > ( string_len . rep err ) 0 { ( string_push_str m ( string_data . rep err ) ) } {
@@ -2764,22 +2405,11 @@ $ `stdlib/std/thread.nu`
             ( string_push_str m ` points carried a numeric value in the requested fields.` )
         }
         : HttpResponse rr ( __an_json_err 400 ( string_data m ) )
-        ( string_free m )
-        ( import_report_free rep )
-        ( model_free mo__h )
-        ( vec_free [i] ae_layout )
         : b _d ( store_delete st ( string_data name ) )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-        ( string_free name )
-        ( string_free src )
         ^ rr
     } {}
     ( __an_gate_claim gate ( string_data name ) )
-    ( __an_gate_free gate )
     : WholeTrain wt ( model_train_whole mo__h rate ae_layout )
-    ( vec_free [i] ae_layout )
     : ScanOut so ( model_scan mo__h 0 0 0 F )
 
     : Json o ( json_obj_new )
@@ -2790,7 +2420,6 @@ $ `stdlib/std/thread.nu`
     : ( Vec i ) wb ( model_window_bounds mo__h from_ts to_ts )
     ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
     ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
-    ( vec_free [i] wb )
     ( json_obj_set wj `source_points` ( json_int np ) )
     ( json_obj_set o `window` wj )
     ( json_obj_set o `points` ( json_int . rep accepted ) )
@@ -2823,21 +2452,12 @@ $ `stdlib/std/thread.nu`
     }
     ( json_obj_set o `model_versions` vers )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( scan_free so )
-    ( import_report_free rep )
-    ( model_free mo__h )
-    ( store_free st )
-    ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
-    ( string_free name )
-    ( string_free src )
     ^ r
 }
 
 @ __an_h_schedule HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -2846,16 +2466,11 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : ?Json bodyo ( __an_body_json req )
@@ -2863,16 +2478,12 @@ $ `stdlib/std/thread.nu`
         T body → {
             : i below ( _an_jint body `below_max_retrain_frequency` 0 )
             : i atmax ( _an_jint body `at_max_retrain_frequency` 0 )
-            ( json_free body )
             ? || > below 0 > atmax 0 {} {
-                ( store_free st )
-                ( string_free mname )
                 ^ ( __an_json_err 400 `No training schedule parameters provided` )
             }
-            : Model mo__h ( model_open st ( string_data mname ) )
-            : *ModelImpl mo ( _Model_ptr mo__h )
-            ( model_set_schedule mo__h below atmax )
-            : Meta mm__h ( model_metadata mo__h )
+            : Model mo ( model_open st ( string_data mname ) )
+            ( model_set_schedule mo below atmax )
+            : Meta mm__h ( model_metadata mo )
             : *MetaImpl mm ( _Meta_ptr mm__h )
             : String msg ( string_from `Training schedule updated for model ` )
             ( string_push_str msg ( string_data mname ) )
@@ -2883,16 +2494,9 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set sched `autoencoder` ( json_bool . mm sched_ae ) )
             ( json_obj_set o `training_schedule` sched )
             : HttpResponse r ( response_json 200 o )
-            ( json_free o )
-            ( string_free msg )
-            ( model_free mo__h )
-            ( store_free st )
-            ( string_free mname )
             ^ r
         }
         F _ → {
-            ( store_free st )
-            ( string_free mname )
             ^ ( __an_json_err 400 `No data provided` )
         }
     }
@@ -2901,7 +2505,6 @@ $ `stdlib/std/thread.nu`
 @ __an_h_meta_update HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -2910,42 +2513,27 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : ?Json bodyo ( __an_body_json req )
     ?? bodyo {
         T body → {
-            : Model mo__h ( model_open st ( string_data mname ) )
-            : *ModelImpl mo ( _Model_ptr mo__h )
+            : Model mo ( model_open st ( string_data mname ) )
             : ( Vec String ) adj ( vec_new [String] )
-            : String err ( model_apply_meta_patch_notes mo__h body adj )
-            ( json_free body )
+            : String err ( model_apply_meta_patch_notes mo body adj )
             ? == ( string_len err ) 0 {} {
                 : HttpResponse rbad ( __an_json_err 400 ( string_data err ) )
-                ( string_free err )
-                ( vec_free_with [String] adj \ String x → v { ( string_free x ) } )
-                ( model_free mo__h )
-                ( store_free st )
-                ( string_free mname )
                 ^ rbad
             }
-            ( string_free err )
-            : Meta mm__h ( model_metadata mo__h )
-            : *MetaImpl mm ( _Meta_ptr mm__h )
+            : Meta mm ( model_metadata mo )
             : String msg ( string_from `Metadata updated for model ` )
             ( string_push_str msg ( string_data mname ) )
             : Json o ( __an_ok_msg ( string_data msg ) )
-            ( string_free msg )
             // What the patch asked for and the config could not hold.
             ? > ( vec_len [String] adj ) 0 {
                 : Json aj ( json_arr_new )
@@ -2959,24 +2547,17 @@ $ `stdlib/std/thread.nu`
                 }
                 ( json_obj_set o `adjusted` aj )
             } {}
-            ( vec_free_with [String] adj \ String x → v { ( string_free x ) } )
-            : Json meta ( meta_to_json mm__h )
+            : Json meta ( meta_to_json mm )
             ( json_obj_set meta `model_name` ( json_str_lit ( string_data mname ) ) )
             ( json_obj_set meta `editable_fields` ( meta_editable_fields ) )
-            ( json_obj_set meta `autoencoder` ( __an_ae_json st ( string_data mname ) mm__h ) )
-            ( json_obj_set meta `forecast` ( __an_fc_json st ( string_data mname ) mm__h ) )
-            ( json_obj_set meta `flatline` ( _an_flat_json mm__h ) )
+            ( json_obj_set meta `autoencoder` ( __an_ae_json st ( string_data mname ) mm ) )
+            ( json_obj_set meta `forecast` ( __an_fc_json st ( string_data mname ) mm ) )
+            ( json_obj_set meta `flatline` ( _an_flat_json mm ) )
             ( json_obj_set o `metadata` meta )
             : HttpResponse r ( response_json 200 o )
-            ( json_free o )
-            ( model_free mo__h )
-            ( store_free st )
-            ( string_free mname )
             ^ r
         }
         F _ → {
-            ( store_free st )
-            ( string_free mname )
             ^ ( __an_json_err 400 `No data provided` )
         }
     }
@@ -2985,7 +2566,6 @@ $ `stdlib/std/thread.nu`
 @ __an_h_train_ae HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -2994,16 +2574,11 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : Model mo__h ( model_open st ( string_data mname ) )
@@ -3043,35 +2618,23 @@ $ `stdlib/std/thread.nu`
                 }
                 F _ → {}
             }
-            ( json_free body )
         }
         F _ → {}
     }
     : String err ( model_train_autoencoder mo__h hidden contam )
-    ( vec_free [i] hidden )
     ? == ( string_len err ) 0 {
         : AeModel tae . mo ae
         : String msg ( string_from `Autoencoder trained successfully for model ` )
         ( string_push_str msg ( string_data mname ) )
         : Json o ( __an_ok_msg ( string_data msg ) )
-        ( string_free msg )
         ( json_obj_set o `training_data_points` ( json_int . tae trained_on ) )
         ( json_obj_set o `filtered_anomalies` ( json_int . tae filtered ) )
         ( json_obj_set o `reconstruction_threshold` ( json_float . tae threshold ) )
         ( json_obj_set o `layer_sizes` ( __an_ae_layers tae ) )
         : HttpResponse rr ( response_json 200 o )
-        ( json_free o )
-        ( string_free err )
-        ( model_free mo__h )
-        ( store_free st )
-        ( string_free mname )
         ^ rr
     } {
         : HttpResponse rr ( __an_json_err 400 ( string_data err ) )
-        ( string_free err )
-        ( model_free mo__h )
-        ( store_free st )
-        ( string_free mname )
         ^ rr
     }
 }
@@ -3169,10 +2732,8 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set e `exact` ( json_bool == fl # i ( float_round * r # f . cv n ) ) )
         : String key ( __an_rate_key r )
         ( json_obj_set mfr ( string_data key ) e )
-        ( string_free key )
         = k + k 1
     }
-    ( vec_free [f] rates )
     ( json_obj_set o `margin_for_rate` mfr )
     ? with_curve { ( json_obj_set o `curve` ( __an_cal_curve cv ) ) } {}
     ^ o
@@ -3180,22 +2741,20 @@ $ `stdlib/std/thread.nu`
 
 // `last` as a span of stamps: seconds on the wall clock; on the count
 // clock the caller counts POINTS, and a point is one tick.
-@ __an_last_span Model mo__h i q_last → i {
-    : *ModelImpl mo ( _Model_ptr mo__h )
-    ^ ( model_last_span mo__h q_last )
+@ __an_last_span Model mo i q_last → i {
+    ^ ( model_last_span mo q_last )
 }
 
 // The window shared by calibration and fine-tune: ?from / ?to / ?last
 // (query) or the same keys in a JSON body; `last` defaults to 24 h when
 // nothing bounds the window.
-@ __an_cal_window Model mo__h i q_from i q_to i q_last → ( Vec i ) {
-    : *ModelImpl mo ( _Model_ptr mo__h )
+@ __an_cal_window Model mo i q_from i q_to i q_last → ( Vec i ) {
     : ~ i from_ts q_from
     : ~ i to_ts q_to
-    : ~ i last ( __an_last_span mo__h q_last )
-    ? & & <= from_ts 0 <= to_ts 0 == last 0 { = last ( model_last_span mo__h ( model_default_last mo__h ) ) } {}
+    : ~ i last ( __an_last_span mo q_last )
+    ? & & <= from_ts 0 <= to_ts 0 == last 0 { = last ( model_last_span mo ( model_default_last mo ) ) } {}
     ? > last 0 {
-        : i f2 ( model_window_from_last mo__h to_ts last )
+        : i f2 ( model_window_from_last mo to_ts last )
         ? > f2 0 { = from_ts f2 } {}
     } {}
     : ( Vec i ) w ( vec_new [i] )
@@ -3216,22 +2775,16 @@ $ `stdlib/std/thread.nu`
 @ __an_h_calibration HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_model req ( string_data mname ) F F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
     : i q_from ( __an_query_int . req query `from` 0 )
@@ -3239,7 +2792,6 @@ $ `stdlib/std/thread.nu`
     : i q_last ( __an_query_int . req query `last` 0 )
     : String qcurve ( __an_query_str . req query `curve` )
     : b with_curve ! == ( nurl_str_eq ( string_data qcurve ) `0` ) 1
-    ( string_free qcurve )
 
     : Model mo__h ( model_open st ( string_data mname ) )
     : *ModelImpl mo ( _Model_ptr mo__h )
@@ -3248,16 +2800,11 @@ $ `stdlib/std/thread.nu`
         ( string_push_str msg ( string_data mname ) )
         ( string_push_str msg ` exists but is not trained yet.` )
         : HttpResponse rr ( __an_json_err 400 ( string_data msg ) )
-        ( string_free msg )
-        ( model_free mo__h )
-        ( store_free st )
-        ( string_free mname )
         ^ rr
     }
     : ( Vec i ) win ( __an_cal_window mo__h q_from q_to q_last )
     : i from_ts ( _mlp_iget win 0 )
     : i to_ts ( _mlp_iget win 1 )
-    ( vec_free [i] win )
     : CalReport cal ( model_calibrate mo__h from_ts to_ts )
 
     : Json o ( json_obj_new )
@@ -3269,7 +2816,6 @@ $ `stdlib/std/thread.nu`
     : ( Vec i ) wb ( model_window_bounds mo__h from_ts to_ts )
     ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
     ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
-    ( vec_free [i] wb )
     ( json_obj_set wj `rows` ( json_int . cal n_rows ) )
     ( json_obj_set wj `excluded` ( json_int . cal excluded ) )
     ( json_obj_set wj `total` ( json_int ( model_n_points mo__h ) ) )
@@ -3304,12 +2850,7 @@ $ `stdlib/std/thread.nu`
         = k + k 1
     }
     ( json_obj_set o `versions` vers )
-    ( cal_free cal )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free mname )
     ^ r
 }
 
@@ -3325,7 +2866,6 @@ $ `stdlib/std/thread.nu`
 @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
 
@@ -3334,16 +2874,11 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_model req ( string_data mname ) F T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Store st ( __an_store_of . gate who )
-    ( __an_gate_free gate )
     ? ( store_exists st ( string_data mname ) ) {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( store_free st )
-        ( string_free mname )
         ^ r404
     }
 
@@ -3357,7 +2892,6 @@ $ `stdlib/std/thread.nu`
     : ~ b bad_rate F
     : String qlast ( __an_query_str . req query `last` )
     ? == ( nurl_str_eq ( string_data qlast ) `own` ) 1 { = own T } {}
-    ( string_free qlast )
     ?? ( __an_body_json req ) {
         T body → {
             ? ( json_is_obj body ) {
@@ -3406,30 +2940,21 @@ $ `stdlib/std/thread.nu`
                     F _ → {}
                 }
             } {}
-            ( json_free body )
         }
         F _ → {}
     }
     ? bad_rate {
-        ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
         : HttpResponse rb ( __an_json_err 400 `rate must be a number between 0 and 1 (the fraction of the window to flag)` )
-        ( store_free st )
-        ( string_free mname )
         ^ rb
     } {}
 
     : Model mo__h ( model_open st ( string_data mname ) )
     : *ModelImpl mo ( _Model_ptr mo__h )
     ? ( model_is_trained mo__h ) {} {
-        ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
         : String msg ( string_from `Model ` )
         ( string_push_str msg ( string_data mname ) )
         ( string_push_str msg ` exists but is not trained yet.` )
         : HttpResponse rr ( __an_json_err 400 ( string_data msg ) )
-        ( string_free msg )
-        ( model_free mo__h )
-        ( store_free st )
-        ( string_free mname )
         ^ rr
     }
     : ~ i from_ts 0
@@ -3438,11 +2963,9 @@ $ `stdlib/std/thread.nu`
         : ( Vec i ) win ( __an_cal_window mo__h q_from q_to q_last )
         = from_ts ( _mlp_iget win 0 )
         = to_ts ( _mlp_iget win 1 )
-        ( vec_free [i] win )
     }
     : FineTuneReport rep ? own ( model_finetune_own mo__h rate ! dry only ) ( model_finetune_at mo__h rate from_ts to_ts ! dry only )
     ? own { = from_ts . rep from_ts } {}
-    ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
 
     : Json margins ( json_obj_new )
     : Json scores ( json_obj_new )
@@ -3535,12 +3058,10 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `consensus` cj )
     } {}
     ? > ( string_len note ) 0 { ( json_obj_set o `note` ( json_str_lit ( string_data note ) ) ) } {}
-    ( string_free note )
     : Json wj ( json_obj_new )
     : ( Vec i ) wb ( model_window_bounds mo__h from_ts to_ts )
     ( json_obj_set wj `from` ( json_int ( _mlp_iget wb 0 ) ) )
     ( json_obj_set wj `to` ( json_int ( _mlp_iget wb 1 ) ) )
-    ( vec_free [i] wb )
     ( json_obj_set wj `rows` ( json_int . rep n_rows ) )
     ( json_obj_set wj `excluded` ( json_int . rep excluded ) )
     ( json_obj_set wj `own` ( json_bool own ) )
@@ -3548,13 +3069,7 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `versions` vers )
     ( json_obj_set o `adjusted_margins` margins )
     ( json_obj_set o `max_anomaly_scores` scores )
-    ( finetune_free rep )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( string_free msg )
-    ( model_free mo__h )
-    ( store_free st )
-    ( string_free mname )
     ^ r
 }
 
@@ -3566,15 +3081,12 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
-    ( __an_gate_free gate )
     : ?Json bodyo ( __an_body_json req )
     ?? bodyo {
         T body → {
             ? ( json_obj_has body `model_name` ) {
-                ( json_free body )
                 ^ ( __an_json_err 400 `model_name is not supported: batch scoring trains a stateless forest on the file itself` )
             } {}
             : ~ String fpath ( string_new )
@@ -3582,7 +3094,6 @@ $ `stdlib/std/thread.nu`
             ?? ( json_obj_get body `file_path` ) {
                 T fp → {
                     ? ( json_is_str fp ) {
-                        ( string_free fpath )
                         = fpath ( string_from ( json_str_data fp ) )
                         = have_path T
                     } {}
@@ -3594,24 +3105,18 @@ $ `stdlib/std/thread.nu`
                 T hh → { = header ( json_as_bool hh ) }
                 F _ → {}
             }
-            ( json_free body )
             ? have_path {} {
-                ( string_free fpath )
                 ^ ( __an_json_err 400 `file_path is required` )
             }
             : !String IoErr fr ( read_file ( string_data fpath ) )
             ?? fr {
                 T text → {
                     : AnomCsv ds ( anom_parse_csv ( string_data text ) `,` header )
-                    ( string_free text )
                     ? || <= . ds rows 0 <= . ds cols 0 {
-                        ( anom_csv_free ds )
-                        ( string_free fpath )
                         ^ ( __an_json_err 400 `No numeric rows found in file` )
                     } {}
                     : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 0 0 100 256 -1.0 0.0 T }
                     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
-                    ( _an_vercfg_free cfg )
 
                     : Json res ( json_obj_new )
                     ( json_obj_set res `file_path` ( json_str_lit ( string_data fpath ) ) )
@@ -3665,22 +3170,16 @@ $ `stdlib/std/thread.nu`
                         = d + d 1
                     }
                     ( json_obj_set res `anomaly_details` details )
-                    ( anomaly_report_free rep )
-                    ( anom_csv_free ds )
-                    ( string_free fpath )
 
                     : Json o ( __an_ok_msg `Anomaly detection completed` )
                     ( json_obj_set o `result` res )
                     : HttpResponse r ( response_json 200 o )
-                    ( json_free o )
                     ^ r
                 }
                 F _ → {
                     : String msg ( string_from `File not found: ` )
                     ( string_push_str msg ( string_data fpath ) )
                     : HttpResponse rr ( __an_json_err 404 ( string_data msg ) )
-                    ( string_free msg )
-                    ( string_free fpath )
                     ^ rr
                 }
             }
@@ -3712,9 +3211,7 @@ $ `stdlib/std/thread.nu`
     ( string_push_str scope ( anomaly_authz_audience ) )
     ( string_push_str scope `/access_as_user` )
     ( json_obj_set o `scope` ( json_str_lit ( string_data scope ) ) )
-    ( string_free scope )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
     ^ r
 }
 
@@ -3723,7 +3220,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -3732,8 +3228,6 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `auth_enabled` ( json_bool ( anomaly_authz_enabled ) ) )
     ( json_obj_set o `is_admin` ( json_bool ( principal_is_admin me ) ) )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -3743,7 +3237,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -3751,7 +3244,6 @@ $ `stdlib/std/thread.nu`
     ?? ( az_db_open ( string_data . me org ) ) {
         F _ → {}
         T db → {
-            ( json_free arr )
             = arr ( az_users_json db )
         }
     }
@@ -3760,8 +3252,6 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
     ( json_obj_set o `users` arr )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -3770,14 +3260,13 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
     : ~ String target ( string_new )
     ?? ( params_get p `sub` ) {
-        T v → { ( string_free target ) = target v }
-        F junk → { ( string_free target ) = target junk }
+        T v → { = target v }
+        F junk → { = target junk }
     }
     : ~ String role ( string_new )
     ?? ( __an_body_json req ) {
@@ -3785,18 +3274,15 @@ $ `stdlib/std/thread.nu`
             ?? ( json_obj_get body `role` ) {
                 T rv → {
                     ? ( json_is_str rv ) {
-                        ( string_free role )
                         = role ( string_from ( json_str_data rv ) )
                     } {}
                 }
                 F _ → {}
             }
-            ( json_free body )
         }
         F → {}
     }
     ? > ( string_len role ) 0 {} {
-        ( string_free role ) ( string_free target ) ( __an_gate_free gate )
         ^ ( __an_json_err 400 `role must be "admin" or "viewer"` )
     }
     : ~ b ok F
@@ -3810,19 +3296,12 @@ $ `stdlib/std/thread.nu`
         : Json o ( __an_ok_msg ( string_data msg ) )
         ( json_obj_set o `subject` ( json_str_lit ( string_data target ) ) )
         ( json_obj_set o `role` ( json_str_lit ( string_data role ) ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
-        ( string_free msg )
     } {
-        ( http_response_free r )
         // The one refusal worth naming: an organisation that demotes its
         // last administrator can never appoint another.
         = r ( __an_json_err 400 `Refused: unknown user, unknown role, or this is the organisation's last administrator.` )
     }
-    ( string_free role )
-    ( string_free target )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -3834,7 +3313,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -3842,7 +3320,6 @@ $ `stdlib/std/thread.nu`
     ?? ( az_db_open ( string_data . me org ) ) {
         F _ → {}
         T db → {
-            ( json_free arr )
             = arr ( az_keys_json db )
         }
     }
@@ -3850,8 +3327,6 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `keys` arr )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -3867,7 +3342,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -3878,7 +3352,6 @@ $ `stdlib/std/thread.nu`
             ?? ( json_obj_get body `label` ) {
                 T lv → {
                     ? ( json_is_str lv ) {
-                        ( string_free label )
                         = label ( string_from ( json_str_data lv ) )
                     } {}
                 }
@@ -3892,7 +3365,6 @@ $ `stdlib/std/thread.nu`
                 }
                 F _ → {}
             }
-            ( json_free body )
         }
         F → {}
     }
@@ -3914,14 +3386,9 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set o `role` ( json_str_lit krole ) )
             ( json_obj_set o `key` ( json_str_lit ( string_data . k secret ) ) )
             ( json_obj_set o `message` ( json_str_lit `Copy this key now: it is stored hashed and cannot be shown again.` ) )
-            ( http_response_free r )
             = r ( response_json 201 o )
-            ( json_free o )
-            ( key_issue_free k )
         }
     }
-    ( string_free label )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -3933,14 +3400,13 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
     : ~ String kid ( string_new )
     ?? ( params_get p `id` ) {
-        T v → { ( string_free kid ) = kid v }
-        F junk → { ( string_free kid ) = kid junk }
+        T v → { = kid v }
+        F junk → { = kid junk }
     }
     : ~ b ok F
     ?? ( az_db_open ( string_data . me org ) ) {
@@ -3953,12 +3419,8 @@ $ `stdlib/std/thread.nu`
     ? ok {
         : Json o ( __an_ok_msg `Key revoked` )
         ( json_obj_set o `id` ( json_str_lit ( string_data kid ) ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( string_free kid )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -3971,14 +3433,11 @@ $ `stdlib/std/thread.nu`
 @ __an_h_claim HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
     : Principal me . gate who
@@ -3998,14 +3457,10 @@ $ `stdlib/std/thread.nu`
                 = adopted ( store_move_model waiting st ( string_data mname ) ( now_seconds ) )
                 = exists adopted
             } {}
-            ( store_free waiting )
         } {}
     }
-    ( store_free st )
     ? exists {} {
         : HttpResponse r404 ( __an_404_model ( string_data mname ) )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ r404
     }
     : ~ String owner ( string_from ( string_data . me sub ) )
@@ -4014,13 +3469,11 @@ $ `stdlib/std/thread.nu`
             ?? ( json_obj_get body `owner` ) {
                 T ov → {
                     ? ( json_is_str ov ) {
-                        ( string_free owner )
                         = owner ( string_from ( json_str_data ov ) )
                     } {}
                 }
                 F _ → {}
             }
-            ( json_free body )
         }
         F → {}
     }
@@ -4054,20 +3507,14 @@ $ `stdlib/std/thread.nu`
     }
     : ~ HttpResponse r ( __an_json_err 500 `could not record the owner` )
     ? refused_home {
-        ( http_response_free r )
         = r ( __an_json_err 403 `This model belongs to no organization, and only the home organization may adopt one.` )
     } {}
     ? ok {
         : Json o ( __an_ok_msg `Owner set` )
         ( json_obj_set o `model` ( json_str_lit ( string_data mname ) ) )
         ( json_obj_set o `owner` ( json_str_lit ( string_data owner ) ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( string_free owner )
-    ( __an_gate_free gate )
-    ( string_free mname )
     ^ r
 }
 
@@ -4105,14 +3552,11 @@ $ `stdlib/std/thread.nu`
 @ __an_h_import HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
-        ( string_free mname )
         ^ ( __an_bad_name )
     }
     : Gate gate ( __an_gate_ingest req ( string_data mname ) )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rd
     }
 
@@ -4125,49 +3569,30 @@ $ `stdlib/std/thread.nu`
     : ~ String body ( string_new )
     ? > ( string_len fileq ) 0 {
         ? ( orgfiles_name_ok ( string_data fileq ) ) {} {
-            ( string_free body )
-            ( string_free fileq )
-            ( string_free fmt )
-            ( __an_gate_free gate )
-            ( string_free mname )
             ^ ( __an_json_err 400 `file: not a name in this organisation's folder.` )
         }
         : Principal ime . gate who
         : String fp ( orgfiles_path ( string_data . ime org ) ( string_data fileq ) )
         : ~ b got F
         ?? ( read_file ( string_data fp ) ) {
-            T txt → { ( string_free body ) = body txt = got T }
+            T txt → { = body txt = got T }
             F _ → {}
         }
-        ( string_free fp )
         ? got {} {
             : String msg ( string_from `file: ` )
             ( string_push_str msg ( string_data fileq ) )
             ( string_push_str msg ` is not in this organisation's folder — GET /api/org/files lists what is.` )
             : HttpResponse rnf ( __an_json_err 404 ( string_data msg ) )
-            ( string_free msg )
-            ( string_free body )
-            ( string_free fileq )
-            ( string_free fmt )
-            ( __an_gate_free gate )
-            ( string_free mname )
             ^ rnf
         }
         ? > ( string_len fmt ) 0 {} {
-            ( string_free fmt )
             = fmt ( string_from ? ( string_ends_with fileq `.csv` ) `csv` `` )
         }
-    } { ( string_free body ) = body ( bytes_to_str . req body ) }
-    ( string_free fileq )
+    } { = body ( bytes_to_str . req body ) }
     : ImportParse ip ( import_parse ( string_data body ) ( string_data fmt ) )
-    ( string_free body )
-    ( string_free fmt )
 
     ? > ( string_len . ip err ) 0 {
         : HttpResponse rr ( __an_json_err 400 ( string_data . ip err ) )
-        ( import_parse_free ip )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rr
     } {}
 
@@ -4177,14 +3602,12 @@ $ `stdlib/std/thread.nu`
     ? > ( string_len tq ) 0 {
         : !Json JsonError tj ( json_parse ( string_data tq ) )
         ?? tj {
-            T j → { ? ( json_is_obj j ) { ( json_free spec ) = spec j } { ( json_free j ) } }
+            T j → { ? ( json_is_obj j ) { = spec j } {} }
             F _ → {}
         }
     } {}
-    ( string_free tq )
     : String tzq ( __an_query_str . req query `tz` )
     ? > ( string_len tzq ) 0 { ( json_obj_set spec `tz` ( json_str_lit ( string_data tzq ) ) ) } {}
-    ( string_free tzq )
     : i tz ( imp_tz_of spec )
     : b calendar > ( __an_query_int . req query `calendar` 0 ) 0
     : String clockq ( __an_query_str . req query `clock` )
@@ -4192,7 +3615,6 @@ $ `stdlib/std/thread.nu`
     : Store st ( __an_store_of . gate who )
     : b existed ( store_exists st ( string_data mname ) )
     : Json insp ( import_inspect . ip rows spec tz )
-    ( json_free spec )
 
     // inspect=1: the description, and where the model stands, nothing
     // more — a model that does not exist is not brought into being by a
@@ -4211,18 +3633,11 @@ $ `stdlib/std/thread.nu`
             : *MetaImpl mm0 ( _Meta_ptr . mo0 meta )
             = npts ( model_n_points mo0__h )
             = count . mm0 count_clock
-            ( model_free mo0__h )
         } {}
         ( json_obj_set mj `data_points` ( json_int npts ) )
         ( json_obj_set mj `clock` ( json_str_lit ? count `count` `time` ) )
         ( json_obj_set insp `model` mj )
         : HttpResponse ri ( response_json 200 insp )
-        ( json_free insp )
-        ( string_free clockq )
-        ( import_parse_free ip )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ ri
     } {}
     : Model mo__h ( model_open st ( string_data mname ) )
@@ -4232,17 +3647,9 @@ $ `stdlib/std/thread.nu`
     // The plan, applied: every row stamped from it, or a 400 naming what
     // the plan asked for and the file does not have.
     : Json plan ?? ( json_obj_get insp `time` ) { T tp → ( json_clone tp ) F _ → ( json_obj_new ) }
-    ( json_free insp )
     ? ( json_obj_has plan `error` ) {
         : s perr ?? ( json_obj_get plan `error` ) { T e → ( json_str_data e ) F _ → `bad time plan` }
         : HttpResponse rp ( __an_json_err 400 perr )
-        ( json_free plan )
-        ( string_free clockq )
-        ( import_parse_free ip )
-        ( model_free mo__h )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rp
     } {}
     : ImpTimeResult tr ( import_time_apply . ip rows plan calendar tz )
@@ -4255,7 +3662,6 @@ $ `stdlib/std/thread.nu`
         ? > ( string_len clockq ) 0 {
             ? == ( nurl_str_eq ( string_data clockq ) `count` ) 1 { = want T } {
                 ? == ( nurl_str_eq ( string_data clockq ) `time` ) 1 { = want F } {
-                    ( string_free cerr )
                     = cerr ( string_from `clock must be "time" or "count"` )
                 }
             }
@@ -4263,24 +3669,13 @@ $ `stdlib/std/thread.nu`
         = . mm count_clock want
     } {
         ? & > ( string_len clockq ) 0 != == ( nurl_str_eq ( string_data clockq ) `count` ) 1 . mm count_clock {
-            ( string_free cerr )
             = cerr ( string_from `clock can only change on a model with no stored points (reset it first)` )
         } {}
     }
-    ( string_free clockq )
     ? > ( string_len cerr ) 0 {
         : HttpResponse rc ( __an_json_err 400 ( string_data cerr ) )
-        ( string_free cerr )
-        ( imp_time_result_free tr )
-        ( json_free plan )
-        ( import_parse_free ip )
-        ( model_free mo__h )
-        ( store_free st )
-        ( __an_gate_free gate )
-        ( string_free mname )
         ^ rc
     } {}
-    ( string_free cerr )
 
     : ImportReport rep ( model_import mo__h . ip rows )
     // The first train of a model that arrived as a file calibrates its
@@ -4298,7 +3693,6 @@ $ `stdlib/std/thread.nu`
 
     : ~ HttpResponse r ( response_status_only 500 )
     ? > ( string_len . rep err ) 0 {
-        ( http_response_free r )
         = r ( __an_json_err 400 ( string_data . rep err ) )
     } {
         // The model exists now if it did not before, so the organisation
@@ -4358,18 +3752,8 @@ $ `stdlib/std/thread.nu`
             = k + k 1
         }
         ( json_obj_set o `notes` notes )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
     }
-    ( import_report_free rep )
-    ( imp_time_result_free tr )
-    ( json_free plan )
-    ( import_parse_free ip )
-    ( model_free mo__h )
-    ( store_free st )
-    ( __an_gate_free gate )
-    ( string_free mname )
     ^ r
 }
 
@@ -4427,7 +3811,6 @@ $ `stdlib/std/thread.nu`
     : String u ( string_from `/api/org/files/` )
     ( string_push_str u ( string_data . f name ) )
     ( json_obj_set o `url` ( json_str_lit ( string_data u ) ) )
-    ( string_free u )
     ^ o
 }
 
@@ -4435,7 +3818,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -4450,14 +3832,11 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( orgfiles_free fs )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
     ( json_obj_set o `files` arr )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -4470,7 +3849,6 @@ $ `stdlib/std/thread.nu`
     ( string_push_str msg name )
     ( string_push_str msg ` not found` )
     : HttpResponse r ( __an_json_err 404 ( string_data msg ) )
-    ( string_free msg )
     ^ r
 }
 
@@ -4480,21 +3858,17 @@ $ `stdlib/std/thread.nu`
     : ~ HttpResponse r ( __an_404_file name )
     ?? ( read_file_bytes ( string_data path ) ) {
         T data → {
-            ( http_response_free r )
             = r ( response_new 200 )
             ( response_set_header r `Content-Type` ( orgfiles_content_type name ) )
             : String cd ( string_from `attachment; filename="` )
             ( string_push_str cd name )
             ( string_push_char cd 34 )
             ( response_set_header r `Content-Disposition` ( string_data cd ) )
-            ( string_free cd )
             ( response_set_header r `Cache-Control` `private, no-store` )
             ( response_set_body_bytes r data )
-            ( vec_free [u] data )
         }
         F _ → {}
     }
-    ( string_free path )
     ^ r
 }
 
@@ -4504,7 +3878,6 @@ $ `stdlib/std/thread.nu`
 @ __an_h_org_file_get HttpRequest req Params p → HttpResponse {
     : String name ( __an_param_str p `name` )
     ? ( orgfiles_name_ok ( string_data name ) ) {} {
-        ( string_free name )
         ^ ( __an_bad_file_name )
     }
     : String sig ( __an_query_str . req query `sig` )
@@ -4514,23 +3887,15 @@ $ `stdlib/std/thread.nu`
         : b ok ( orgfiles_verify ( string_data lorg ) ( string_data name ) exp ( string_data sig ) ( now_seconds ) )
         : HttpResponse rl ? ok ( __an_serve_org_file ( string_data lorg ) ( string_data name ) )
         ( __an_json_err 403 `This link is not valid, or has expired.` )
-        ( string_free lorg )
-        ( string_free sig )
-        ( string_free name )
         ^ rl
     } {}
-    ( string_free sig )
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free name )
         ^ rd
     }
     : Principal me . gate who
     : HttpResponse r ( __an_serve_org_file ( string_data . me org ) ( string_data name ) )
-    ( __an_gate_free gate )
-    ( string_free name )
     ^ r
 }
 
@@ -4540,14 +3905,11 @@ $ `stdlib/std/thread.nu`
 @ __an_h_org_file_link HttpRequest req Params p → HttpResponse {
     : String name ( __an_param_str p `name` )
     ? ( orgfiles_name_ok ( string_data name ) ) {} {
-        ( string_free name )
         ^ ( __an_bad_file_name )
     }
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free name )
         ^ rd
     }
     : Principal me . gate who
@@ -4562,41 +3924,28 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `status` ( json_str_lit `success` ) )
         ( json_obj_set o `download_url` ( json_str_lit ( string_data u ) ) )
         ( json_obj_set o `expires` ( json_int exp ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
-        ( string_free u )
     } {}
-    ( string_free . f name )
-    ( __an_gate_free gate )
-    ( string_free name )
     ^ r
 }
 
 @ __an_h_org_file_delete HttpRequest req Params p → HttpResponse {
     : String name ( __an_param_str p `name` )
     ? ( orgfiles_name_ok ( string_data name ) ) {} {
-        ( string_free name )
         ^ ( __an_bad_file_name )
     }
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free name )
         ^ rd
     }
     : Principal me . gate who
     : ~ HttpResponse r ( __an_404_file ( string_data name ) )
     ? ( orgfiles_delete ( string_data . me org ) ( string_data name ) ) {
-        ( http_response_free r )
         : Json o ( __an_ok_msg `deleted` )
         ( json_obj_set o `name` ( json_str_lit ( string_data name ) ) )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( __an_gate_free gate )
-    ( string_free name )
     ^ r
 }
 
@@ -4609,14 +3958,12 @@ $ `stdlib/std/thread.nu`
 @ __an_task_response s org s id i fail_status → HttpResponse {
     : String dir ( analyze_task_dir org id )
     : ?Json stm ( analyze_status_read ( string_data dir ) )
-    ( string_free dir )
     ?? stm {
         F _ → {
             : String msg ( string_from `Task ` )
             ( string_push_str msg id )
             ( string_push_str msg ` not found` )
             : HttpResponse r404 ( __an_json_err 404 ( string_data msg ) )
-            ( string_free msg )
             ^ r404
         }
         T st → {
@@ -4672,7 +4019,6 @@ $ `stdlib/std/thread.nu`
                     : String u ( orgfiles_link org ( string_data fname ) exp )
                     ( json_obj_set fj `download_url` ( json_str_lit ( string_data u ) ) )
                     ( json_obj_set fj `expires` ( json_int exp ) )
-                    ( string_free u )
                     ( json_obj_set o `file` fj )
                     ( json_obj_set o `inline` ( json_bool <= nanom ANA_INLINE_MAX ) )
                     ? <= nanom ANA_INLINE_MAX {
@@ -4683,27 +4029,18 @@ $ `stdlib/std/thread.nu`
                                     T res → {
                                         ?? ( json_obj_get res `points` ) { T pts → { ( json_obj_set o `points` ( json_clone pts ) ) } F _ → {} }
                                         ?? ( json_obj_get res `time` ) { T tj → { ( json_obj_set o `time` ( json_clone tj ) ) } F _ → {} }
-                                        ( json_free res )
                                     }
                                     F _ → {}
                                 }
-                                ( string_free txt )
                             }
                             F _ → {}
                         }
-                        ( string_free path )
                     } {}
-                    ( string_free . f name )
-                    ( string_free fname )
                 } {
                     ( json_obj_set o `status` ( json_str_lit `pending` ) )
                 }
             }
             : HttpResponse r ( response_json code o )
-            ( json_free o )
-            ( string_free turl )
-            ( string_free state )
-            ( json_free st )
             ^ r
         }
     }
@@ -4722,7 +4059,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -4736,65 +4072,47 @@ $ `stdlib/std/thread.nu`
     : ~ b from_folder F
     ? > ( string_len fileq ) 0 {
         ? ( orgfiles_name_ok ( string_data fileq ) ) {} {
-            ( vec_free [u] content )
-            ( string_free fileq )
-            ( __an_gate_free gate )
             ^ ( __an_json_err 400 `file: not a name in this organisation's folder.` )
         }
         : String fp ( orgfiles_path ( string_data . me org ) ( string_data fileq ) )
         ?? ( read_file ( string_data fp ) ) {
             T txt → {
-                ( vec_free [u] content )
                 = content ( bytes_from_str ( string_data txt ) )
-                ( string_free txt )
                 = from_folder T
             }
             F _ → {}
         }
-        ( string_free fp )
         ? from_folder {} {
             : String msg ( string_from `file: ` )
             ( string_push_str msg ( string_data fileq ) )
             ( string_push_str msg ` is not in this organisation's folder — GET /api/org/files lists what is.` )
             : HttpResponse rnf ( __an_json_err 404 ( string_data msg ) )
-            ( string_free msg )
-            ( string_free fileq )
-            ( vec_free [u] content )
-            ( __an_gate_free gate )
             ^ rnf
         }
     } {}
     ? | from_folder > ( vec_len [u] . req body ) 0 {} {
-        ( vec_free [u] content )
-        ( string_free fileq )
-        ( __an_gate_free gate )
         ^ ( __an_json_err 400 `The request body is empty: send the file to analyse as the body, or name one the folder holds with ?file=.` )
     }
 
     : Json params ( json_obj_new )
     : String fmt ( __an_query_str . req query `format` )
     ( json_obj_set params `format` ( json_str_lit ( string_data fmt ) ) )
-    ( string_free fmt )
     : ~ Json spec ( json_obj_new )
     : String tq ( __an_query_str . req query `time` )
     ? > ( string_len tq ) 0 {
         ?? ( json_parse ( string_data tq ) ) {
-            T j → { ? ( json_is_obj j ) { ( json_free spec ) = spec j } { ( json_free j ) } }
+            T j → { ? ( json_is_obj j ) { = spec j } {} }
             F _ → {}
         }
     } {}
-    ( string_free tq )
     : String tzq ( __an_query_str . req query `tz` )
     ? > ( string_len tzq ) 0 { ( json_obj_set spec `tz` ( json_str_lit ( string_data tzq ) ) ) } {}
-    ( string_free tzq )
     ( json_obj_set params `time` spec )
     ( json_obj_set params `calendar` ( json_bool > ( __an_query_int . req query `calendar` 0 ) 0 ) )
     : String clockq ( __an_query_str . req query `clock` )
     ( json_obj_set params `clock` ( json_str_lit ( string_data clockq ) ) )
-    ( string_free clockq )
     : String label ( __an_query_str . req query `name` )
     ( json_obj_set params `name` ( json_str_lit ? > ( string_len label ) 0 ( string_data label ) `analysis` ) )
-    ( string_free label )
     ( json_obj_set params `votes` ( json_int ( __an_query_int . req query `votes` 1 ) ) )
     ( json_obj_set params `created` ( json_int ( now_seconds ) ) )
     ( json_obj_set params `by` ( json_str_lit ( string_data . me sub ) ) )
@@ -4803,24 +4121,17 @@ $ `stdlib/std/thread.nu`
     : String wq ( __an_query_str . req query `wait` )
     : ~ i wait AN_ANALYZE_WAIT_DEFAULT
     ? > ( string_len wq ) 0 { ?? ( string_to_int wq ) { T x → { = wait x } F _ → {} } } {}
-    ( string_free wq )
     ? < wait 0 { = wait 0 } {}
     ? > wait AN_ANALYZE_WAIT_MAX { = wait AN_ANALYZE_WAIT_MAX } {}
 
     ? from_folder { ( json_obj_set params `source_file` ( json_str_lit ( string_data fileq ) ) ) } {}
     : String id ( analyze_task_create ( string_data . me org ) params ? from_folder content . req body )
-    ( vec_free [u] content )
-    ( string_free fileq )
-    ( json_free params )
     ? > ( string_len id ) 0 {} {
-        ( string_free id )
-        ( __an_gate_free gate )
         ^ ( __an_json_err 500 `The task could not be created in the organisation's folder.` )
     }
     ? ( analyze_spawn ( string_data . me org ) ( string_data id ) ) {} {
         : String dir ( analyze_task_dir ( string_data . me org ) ( string_data id ) )
         ( _ana_mark_crashed ( string_data dir ) -1 `no thread could be started for the job` )
-        ( string_free dir )
     }
 
     // Wait for the job, with the service released: the live detectors keep
@@ -4831,7 +4142,6 @@ $ `stdlib/std/thread.nu`
     ~ waiting {
         : String state ( analyze_state ( string_data dir ) )
         ? ( analyze_state_final ( string_data state ) ) { = waiting F } {}
-        ( string_free state )
         ? & waiting >= ( now_ms ) deadline { = waiting F } {}
         ? waiting {
             ( __an_lock_release )
@@ -4839,10 +4149,7 @@ $ `stdlib/std/thread.nu`
             ( __an_lock_acquire )
         } {}
     }
-    ( string_free dir )
     : HttpResponse r ( __an_task_response ( string_data . me org ) ( string_data id ) 400 )
-    ( string_free id )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -4862,7 +4169,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -4871,28 +4177,21 @@ $ `stdlib/std/thread.nu`
     ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
     ( json_obj_set o `tasks` ( analyze_task_list ( string_data . me org ) ) )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( __an_gate_free gate )
     ^ r
 }
 
 @ __an_h_task HttpRequest req Params p → HttpResponse {
     : String id ( __an_param_str p `id` )
     ? ( __an_task_id_ok ( string_data id ) ) {} {
-        ( string_free id )
         ^ ( __an_json_err 400 `Invalid task id.` )
     }
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free id )
         ^ rd
     }
     : Principal me . gate who
     : HttpResponse r ( __an_task_response ( string_data . me org ) ( string_data id ) 200 )
-    ( __an_gate_free gate )
-    ( string_free id )
     ^ r
 }
 
@@ -4901,27 +4200,20 @@ $ `stdlib/std/thread.nu`
 @ __an_h_task_delete HttpRequest req Params p → HttpResponse {
     : String id ( __an_param_str p `id` )
     ? ( __an_task_id_ok ( string_data id ) ) {} {
-        ( string_free id )
         ^ ( __an_json_err 400 `Invalid task id.` )
     }
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free id )
         ^ rd
     }
     : Principal me . gate who
     : ~ HttpResponse r ( __an_json_err 404 `Task not found` )
     ? ( analyze_task_delete ( string_data . me org ) ( string_data id ) ) {
-        ( http_response_free r )
         : Json o ( __an_ok_msg `deleted` )
         ( json_obj_set o `task_id` ( json_str_lit ( string_data id ) ) )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( __an_gate_free gate )
-    ( string_free id )
     ^ r
 }
 
@@ -4949,21 +4241,18 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_owner req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : ~ Json arr ( json_arr_new )
     ?? ( az_root_open ) {
         F _ → {}
-        T db → { ( json_free arr ) = arr ( az_tenants_json db ) }
+        T db → { = arr ( az_tenants_json db ) }
     }
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `owner_tenant` ( json_str_lit ( anomaly_authz_owner_tenant ) ) )
     ( json_obj_set o `tenants` arr )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -4972,14 +4261,13 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_owner req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
     : ~ String tid ( string_new )
     ?? ( params_get p `tid` ) {
-        T v → { ( string_free tid ) = tid v }
-        F junk → { ( string_free tid ) = tid junk }
+        T v → { = tid v }
+        F junk → { = tid junk }
     }
     : ~ String state ( string_new )
     ?? ( __an_body_json req ) {
@@ -4987,13 +4275,11 @@ $ `stdlib/std/thread.nu`
             ?? ( json_obj_get body `state` ) {
                 T sv → {
                     ? ( json_is_str sv ) {
-                        ( string_free state )
                         = state ( string_from ( json_str_data sv ) )
                     } {}
                 }
                 F _ → {}
             }
-            ( json_free body )
         }
         F → {}
     }
@@ -5010,13 +4296,8 @@ $ `stdlib/std/thread.nu`
         : Json o ( __an_ok_msg `Tenant updated` )
         ( json_obj_set o `tenant` ( json_str_lit ( string_data tid ) ) )
         ( json_obj_set o `state` ( json_str_lit ( string_data state ) ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( string_free state )
-    ( string_free tid )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -5027,7 +4308,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_owner req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Json arr ( json_arr_new )
@@ -5048,7 +4328,6 @@ $ `stdlib/std/thread.nu`
                         ( json_obj_set o `models` ( json_int ( vec_len [String] ms ) ) )
                         ( json_obj_set o `is_home` ( json_bool ( az_is_home_org ( string_data org ) ) ) )
                         ( json_arr_push arr o )
-                        ( vec_free_with [String] ms \ String x → v { ( string_free x ) } )
                     }
                 }
             }
@@ -5056,13 +4335,10 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] orgs \ String x → v { ( string_free x ) } )
     : Json out ( json_obj_new )
     ( json_obj_set out `status` ( json_str_lit `success` ) )
     ( json_obj_set out `organizations` arr )
     : HttpResponse r ( response_json 200 out )
-    ( json_free out )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -5071,27 +4347,23 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_owner req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : ~ String org ( string_new )
     ?? ( params_get p `org` ) {
-        T v → { ( string_free org ) = org v }
-        F junk → { ( string_free org ) = org junk }
+        T v → { = org v }
+        F junk → { = org junk }
     }
     : ~ Json arr ( json_arr_new )
     ?? ( az_db_open ( string_data org ) ) {
         F _ → {}
-        T db → { ( json_free arr ) = arr ( az_users_json db ) }
+        T db → { = arr ( az_users_json db ) }
     }
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `organization` ( json_str_lit ( string_data org ) ) )
     ( json_obj_set o `users` arr )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( string_free org )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -5104,18 +4376,17 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_owner req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : ~ String org ( string_new )
     ?? ( params_get p `org` ) {
-        T v → { ( string_free org ) = org v }
-        F junk → { ( string_free org ) = org junk }
+        T v → { = org v }
+        F junk → { = org junk }
     }
     : ~ String sub ( string_new )
     ?? ( params_get p `sub` ) {
-        T v → { ( string_free sub ) = sub v }
-        F junk → { ( string_free sub ) = sub junk }
+        T v → { = sub v }
+        F junk → { = sub junk }
     }
     : ~ String role ( string_new )
     ?? ( __an_body_json req ) {
@@ -5123,13 +4394,11 @@ $ `stdlib/std/thread.nu`
             ?? ( json_obj_get body `role` ) {
                 T rv → {
                     ? ( json_is_str rv ) {
-                        ( string_free role )
                         = role ( string_from ( json_str_data rv ) )
                     } {}
                 }
                 F _ → {}
             }
-            ( json_free body )
         }
         F → {}
     }
@@ -5144,14 +4413,8 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `organization` ( json_str_lit ( string_data org ) ) )
         ( json_obj_set o `subject` ( json_str_lit ( string_data sub ) ) )
         ( json_obj_set o `role` ( json_str_lit ( string_data role ) ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( string_free role )
-    ( string_free sub )
-    ( string_free org )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -5179,8 +4442,6 @@ $ `stdlib/std/thread.nu`
                 }
                 = k + k 1
             }
-            ( store_free st )
-            ( vec_free_with [String] ms \ String x → v { ( string_free x ) } )
         }
     }
     : b _d ( az_org_drop org )
@@ -5200,18 +4461,15 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req F )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
     // A key is the organisation's credential, not a person: it cannot ask
     // to be forgotten on that person's behalf.
     ? . me via_key {
-        ( __an_gate_free gate )
         ^ ( __an_json_err 403 `An API key cannot delete the account that made it. Sign in first.` )
     } {}
     ? ( anomaly_authz_enabled ) {} {
-        ( __an_gate_free gate )
         ^ ( __an_json_err 400 `There is no account to delete: this service is running without sign-in.` )
     }
 
@@ -5236,11 +4494,8 @@ $ `stdlib/std/thread.nu`
         `Account deleted.` )
         ( json_obj_set o `organization_deleted` ( json_bool org_gone ) )
         ( json_obj_set o `models_deleted` ( json_int models_gone ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -5251,18 +4506,17 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_owner req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : ~ String org ( string_new )
     ?? ( params_get p `org` ) {
-        T v → { ( string_free org ) = org v }
-        F junk → { ( string_free org ) = org junk }
+        T v → { = org v }
+        F junk → { = org junk }
     }
     : ~ String sub ( string_new )
     ?? ( params_get p `sub` ) {
-        T v → { ( string_free sub ) = sub v }
-        F junk → { ( string_free sub ) = sub junk }
+        T v → { = sub v }
+        F junk → { = sub junk }
     }
     : ~ b ok F
     : ~ b org_gone F
@@ -5282,13 +4536,8 @@ $ `stdlib/std/thread.nu`
         ( json_obj_set o `subject` ( json_str_lit ( string_data sub ) ) )
         ( json_obj_set o `organization_deleted` ( json_bool org_gone ) )
         ( json_obj_set o `models_deleted` ( json_int models_gone ) )
-        ( http_response_free r )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( string_free sub )
-    ( string_free org )
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -5325,10 +4574,8 @@ $ `stdlib/std/thread.nu`
 @ __an_header_secret s name → b {
     : String raw ( string_from name )
     : String low ( string_to_lower raw )
-    ( string_free raw )
     : s l ( string_data low )
     : b hit | | | | | ( __an_has l `authorization` ) ( __an_has l `cookie` ) ( __an_has l `key` ) ( __an_has l `token` ) ( __an_has l `secret` ) ( __an_has l `password` )
-    ( string_free low )
     ^ hit
 }
 
@@ -5345,7 +4592,6 @@ $ `stdlib/std/thread.nu`
     ( string_push_str msg id )
     ( string_push_str msg ` not found` )
     : HttpResponse r ( __an_json_err 404 ( string_data msg ) )
-    ( string_free msg )
     ^ r
 }
 
@@ -5355,7 +4601,6 @@ $ `stdlib/std/thread.nu`
     : Json o ( json_clone src )
     : String id ( __an_src_id src )
     ( json_obj_set o `running` ( json_bool ( source_is_running org ( string_data id ) ) ) )
-    ( string_free id )
     // A header that carries a credential is an administrator's secret;
     // the record is every member's to read. Those values are masked —
     // and the mask sent back on an edit keeps the stored value — while a
@@ -5382,7 +4627,6 @@ $ `stdlib/std/thread.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
             ( json_obj_set o `headers` masked )
         }
         F _ → {}
@@ -5402,7 +4646,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -5417,42 +4660,32 @@ $ `stdlib/std/thread.nu`
         }
         = k + k 1
     }
-    ( sources_free srcs )
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit `success` ) )
     ( json_obj_set o `organization` ( json_str_lit ( string_data . me org ) ) )
     ( json_obj_set o `sources` arr )
     : HttpResponse r ( response_json 200 o )
-    ( json_free o )
-    ( __an_gate_free gate )
     ^ r
 }
 
 @ __an_h_source_get HttpRequest req Params p → HttpResponse {
     : String id ( __an_param_str p `id` )
-    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    ? ( source_id_ok ( string_data id ) ) {} { ^ ( __an_bad_source_id ) }
     : Gate gate ( __an_gate_member req )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free id )
         ^ rd
     }
     : Principal me . gate who
     : ~ HttpResponse r ( __an_404_source ( string_data id ) )
     ?? ( source_load ( string_data . me org ) ( string_data id ) ) {
         T src → {
-            ( http_response_free r )
             : Json o ( __an_source_json ( string_data . me org ) src )
             ( json_obj_set o `status` ( json_str_lit `success` ) )
             = r ( response_json 200 o )
-            ( json_free o )
-            ( json_free src )
         }
         F _ → {}
     }
-    ( __an_gate_free gate )
-    ( string_free id )
     ^ r
 }
 
@@ -5460,7 +4693,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : Principal me . gate who
@@ -5469,42 +4701,32 @@ $ `stdlib/std/thread.nu`
         T body → {
             ?? ( source_create ( string_data . me org ) body ( string_data . me sub ) ( now_seconds ) ) {
                 T src → {
-                    ( http_response_free r )
                     : Json o ( __an_source_json ( string_data . me org ) src )
                     ( json_obj_set o `status` ( json_str_lit `success` ) )
                     = r ( response_json 201 o )
-                    ( json_free o )
-                    ( json_free src )
                 }
                 F e → {
-                    ( http_response_free r )
                     = r ( __an_json_err 400 ( string_data e ) )
-                    ( string_free e )
                 }
             }
-            ( json_free body )
         }
         F _ → {}
     }
-    ( __an_gate_free gate )
     ^ r
 }
 
 @ __an_h_source_update HttpRequest req Params p → HttpResponse {
     : String id ( __an_param_str p `id` )
-    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    ? ( source_id_ok ( string_data id ) ) {} { ^ ( __an_bad_source_id ) }
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free id )
         ^ rd
     }
     : Principal me . gate who
     : ~ HttpResponse r ( __an_json_err 400 `The body must be a JSON object with the fields to change.` )
     ?? ( __an_body_json req ) {
         T body → {
-            ( http_response_free r )
             ? ( source_is_running ( string_data . me org ) ( string_data id ) ) {
                 = r ( __an_json_err 409 `This source is being fetched right now; try again in a moment.` )
             } {
@@ -5513,8 +4735,6 @@ $ `stdlib/std/thread.nu`
                         : Json o ( __an_source_json ( string_data . me org ) src )
                         ( json_obj_set o `status` ( json_str_lit `success` ) )
                         = r ( response_json 200 o )
-                        ( json_free o )
-                        ( json_free src )
                     }
                     F e → {
                         ? == ( nurl_str_eq ( string_data e ) `no such source` ) 1 {
@@ -5522,40 +4742,30 @@ $ `stdlib/std/thread.nu`
                         } {
                             = r ( __an_json_err 400 ( string_data e ) )
                         }
-                        ( string_free e )
                     }
                 }
             }
-            ( json_free body )
         }
         F _ → {}
     }
-    ( __an_gate_free gate )
-    ( string_free id )
     ^ r
 }
 
 @ __an_h_source_delete HttpRequest req Params p → HttpResponse {
     : String id ( __an_param_str p `id` )
-    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    ? ( source_id_ok ( string_data id ) ) {} { ^ ( __an_bad_source_id ) }
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free id )
         ^ rd
     }
     : Principal me . gate who
     : ~ HttpResponse r ( __an_404_source ( string_data id ) )
     ? ( source_delete ( string_data . me org ) ( string_data id ) ) {
-        ( http_response_free r )
         : Json o ( __an_ok_msg `deleted` )
         ( json_obj_set o `id` ( json_str_lit ( string_data id ) ) )
         = r ( response_json 200 o )
-        ( json_free o )
     } {}
-    ( __an_gate_free gate )
-    ( string_free id )
     ^ r
 }
 
@@ -5563,12 +4773,10 @@ $ `stdlib/std/thread.nu`
 // it. The lock is let go while the service is asked.
 @ __an_h_source_run HttpRequest req Params p → HttpResponse {
     : String id ( __an_param_str p `id` )
-    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ ( __an_bad_source_id ) }
+    ? ( source_id_ok ( string_data id ) ) {} { ^ ( __an_bad_source_id ) }
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
-        ( string_free id )
         ^ rd
     }
     : Principal me . gate who
@@ -5591,9 +4799,6 @@ $ `stdlib/std/thread.nu`
         F _ → {}
     }
     : HttpResponse r ( response_json status rep )
-    ( json_free rep )
-    ( __an_gate_free gate )
-    ( string_free id )
     ^ r
 }
 
@@ -5617,7 +4822,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : ~ HttpResponse r ( __an_json_err 400 `The body must be {"url": "https://…/wfs"} — an http(s) WFS endpoint.` )
@@ -5629,7 +4833,6 @@ $ `stdlib/std/thread.nu`
                 ( __an_src_unlock )
                 : !String String fr ( wfs_fetch ( string_data u ) )
                 ( __an_src_lock )
-                ( string_free u )
                 ?? fr {
                     T xml → {
                         : ~ Json cat ( wfs_catalog ( string_data xml ) )
@@ -5640,11 +4843,9 @@ $ `stdlib/std/thread.nu`
                             ( __an_src_unlock )
                             : !String String sr ( wfs_fetch ( string_data su ) )
                             ( __an_src_lock )
-                            ( string_free su )
                             ?? sr {
                                 T sxml → {
                                     : Json scat ( wfs_catalog ( string_data sxml ) )
-                                    ( string_free sxml )
                                     ? ( json_obj_has scat `queries` ) {
                                         : Json merged ( json_arr_new )
                                         ?? ( json_obj_get scat `queries` ) {
@@ -5655,17 +4856,13 @@ $ `stdlib/std/thread.nu`
                                             T tq → { ( json_arr_each tq \ Json q → v { ( json_arr_push merged ( json_clone q ) ) } ) }
                                             F _ → {}
                                         }
-                                        ( json_free cat )
                                         = cat ( json_obj_new )
                                         ( json_obj_set cat `queries` merged )
                                     } {}
-                                    ( json_free scat )
                                 }
-                                F swhy → { ( string_free swhy ) }
+                                F swhy → {}
                             }
                         } {}
-                        ( string_free xml )
-                        ( http_response_free r )
                         ? ( json_obj_has cat `error` ) {
                             : s why ?? ( json_obj_get cat `error` ) { T e → ( json_str_data e ) F _ → `` }
                             = r ( __an_json_err 400 why )
@@ -5674,21 +4871,15 @@ $ `stdlib/std/thread.nu`
                             ( json_obj_set cat `base_url` ( json_str_lit ( string_data base ) ) )
                             = r ( response_json 200 cat )
                         }
-                        ( json_free cat )
                     }
                     F why → {
-                        ( http_response_free r )
                         = r ( __an_json_err 502 ( string_data why ) )
-                        ( string_free why )
                     }
                 }
             } {}
-            ( string_free base )
-            ( json_free body )
         }
         F _ → {}
     }
-    ( __an_gate_free gate )
     ^ r
 }
 
@@ -5776,7 +4967,6 @@ $ `stdlib/std/thread.nu`
                                                         // measurement: tallied like text so the page can say so.
                                                         : String xt ( json_stringify v )
                                                         ( __an_src_col_text c ( string_data xt ) )
-                                                        ( string_free xt )
                                                     }
                                                     F _ → {}
                                                 }
@@ -5803,7 +4993,6 @@ $ `stdlib/std/thread.nu`
                     }
                     = k + k 1
                 }
-                ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
             }
             F _ → {}
         }
@@ -5851,8 +5040,6 @@ $ `stdlib/std/thread.nu`
         }
         = q + q 1
     }
-    ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
-    ( json_free cols )
     ^ arr
 }
 
@@ -5863,7 +5050,6 @@ $ `stdlib/std/thread.nu`
     : Gate gate ( __an_gate_auth req T )
     ? . gate allowed {} {
         : HttpResponse rd ( __an_gate_deny gate )
-        ( __an_gate_free gate )
         ^ rd
     }
     : ~ HttpResponse r ( __an_json_err 400 `The body must carry url and query (and params, hours).` )
@@ -5889,7 +5075,6 @@ $ `stdlib/std/thread.nu`
                         ?? ( source_load ( string_data . pme org ) ( json_str_data idv ) ) {
                             T saved → {
                                 ?? ( json_obj_get saved `headers` ) { T sh → { ( json_obj_set tmp `headers` ( json_clone sh ) ) } F _ → {} }
-                                ( json_free saved )
                             }
                             F _ → {}
                         }
@@ -5900,9 +5085,7 @@ $ `stdlib/std/thread.nu`
             ( json_obj_set spec `model` ( json_str_lit `preview` ) )
             ( json_obj_set spec `name` ( json_str_lit `preview` ) )
             : String err ( source_apply tmp spec )
-            ( json_free spec )
             ? > ( string_len err ) 0 {
-                ( http_response_free r )
                 = r ( __an_json_err 400 ( string_data err ) )
             } {
                 : ~ i hours ( _src_jint body `hours` 3 )
@@ -5912,7 +5095,6 @@ $ `stdlib/std/thread.nu`
                 ( __an_src_unlock )
                 : !( Vec Json ) String fr ( source_fetch tmp - now * hours 3600 now )
                 ( __an_src_lock )
-                ( http_response_free r )
                 ?? fr {
                     T rows → {
                         : Json o ( json_obj_new )
@@ -5932,22 +5114,15 @@ $ `stdlib/std/thread.nu`
                         }
                         ( json_obj_set o `sample` sample )
                         = r ( response_json 200 o )
-                        ( json_free o )
-                        ( vec_free_with [Json] rows \ Json j → v { ( json_free j ) } )
                     }
                     F why → {
                         = r ( __an_json_err 502 ( string_data why ) )
-                        ( string_free why )
                     }
                 }
             }
-            ( string_free err )
-            ( json_free tmp )
-            ( json_free body )
         }
         F _ → {}
     }
-    ( __an_gate_free gate )
     ^ r
 }
 

@@ -70,10 +70,11 @@ $ `src/store.nu`
 // copy shares each route (a Route is a shared handle), so routes added to
 // `r` afterwards are not seen. The wiring lives in memory kept by hand, so
 // the router it held — the empty one, or an earlier service router's copy
-// and with it that router's routes — is released here.
+// and with it that router's routes — is taken out and dropped here.
 @ an_mcp_attach_router Router r → v {
     : *McpWiring w ( __mcp_wiring )
-    ( router_free . w router )
+    : Router old_router . w router
+    ( mem_take old_router )  // a store through the pointer drops nothing
     = . w router @ Router { . r routes }
 }
 
@@ -113,11 +114,11 @@ $ `src/store.nu`
     ( json_obj_set c `may_ingest` ( json_bool ( principal_may_ingest p ) ) )
     ( json_obj_set c `via_api_key` ( json_bool . p via_key ) )
     ?? ( header_get . req headers `authorization` ) {
-        T v → { ( json_obj_set c `authorization` ( json_str_lit ( string_data v ) ) ) ( string_free v ) }
+        T v → { ( json_obj_set c `authorization` ( json_str_lit ( string_data v ) ) ) }
         F → {}
     }
     ?? ( header_get . req headers `x-api-key` ) {
-        T v → { ( json_obj_set c `api_key` ( json_str_lit ( string_data v ) ) ) ( string_free v ) }
+        T v → { ( json_obj_set c `api_key` ( json_str_lit ( string_data v ) ) ) }
         F → {}
     }
     ^ c
@@ -157,14 +158,11 @@ $ `src/store.nu`
     Json body  // the parsed body, or JSON null when it was not JSON
 }
 
-@ __mcp_api_out_free sink ApiOut o → v { ( json_free . o body ) }
-
 @ __mcp_api Json ctx s method s path String query ? Json body → ApiOut {
     ?? body {
         T bj → {
             : String txt ( json_stringify bj )
             : ApiOut out ( __mcp_api_send ctx method path query `application/json` ( string_data txt ) )
-            ( string_free txt )
             ^ out
         }
         F _ → { ^ ( __mcp_api_send ctx method path query `` `` ) }
@@ -193,16 +191,14 @@ $ `src/store.nu`
     } {}
     : *McpWiring w ( __mcp_wiring )
     : HttpResponse resp ( router_handle . w router req )
-    ( request_free req )
     : ~ Json parsed ( json_null )
     ? > ( vec_len [u] . resp body ) 0 {
         ?? ( json_parse_bytes . resp body ) {
-            T j → { ( json_free parsed ) = parsed j }
+            T j → { = parsed j }
             F _ → {}
         }
     } {}
     : i st . resp status
-    ( http_response_free resp )
     ^ @ ApiOut { st parsed }
 }
 
@@ -240,7 +236,6 @@ $ `src/store.nu`
         ( string_push_str m hint )
     } {}
     : Json out ( mcp_tool_result_error ( string_data m ) )
-    ( string_free m )
     ^ out
 }
 
@@ -272,8 +267,6 @@ $ `src/store.nu`
 @ __mcp_result_json Json j → Json {
     : String txt ( json_stringify j )
     : Json out ( mcp_tool_result_text ( string_data txt ) )
-    ( string_free txt )
-    ( json_free j )
     ^ out
 }
 
@@ -281,7 +274,6 @@ $ `src/store.nu`
 @ __mcp_pass ApiOut o → Json {
     ? ( __mcp_api_ok o ) {} {
         : Json e ( __mcp_api_error o )
-        ( __mcp_api_out_free o )
         ^ e
     }
     ^ ( __mcp_result_json . o body )
@@ -445,14 +437,12 @@ $ `src/store.nu`
     ( string_push_char q 61 )
     : String enc ( percent_encode value )
     ( string_push_str q ( string_data enc ) )
-    ( string_free enc )
 }
 
 @ __mcp_q_add_int String q s key i value → v {
     : String n ( string_new )
     ( string_push_int n value )
     ( __mcp_q_add q key ( string_data n ) )
-    ( string_free n )
 }
 
 // from / to / last from the arguments onto a query string. Returns a tool
@@ -490,7 +480,6 @@ $ `src/store.nu`
     ? <= ts 0 { ^ ( json_null ) } {}
     : String iso ( time_format_iso ( time_from_unix ts ) )
     : Json out ( json_str_lit ( string_data iso ) )
-    ( string_free iso )
     ^ out
 }
 
@@ -635,7 +624,6 @@ $ `src/store.nu`
 @ __mcp_csv_has s csv s name → b {
     : String hay ( string_from csv )
     : ( Vec String ) parts ( string_split hay `,` )
-    ( string_free hay )
     : ~ b hit F
     : i n ( vec_len [String] parts )
     : ~ i k 0
@@ -644,13 +632,11 @@ $ `src/store.nu`
             T pp → {
                 : String t ( string_trim pp )
                 ? == ( nurl_str_eq ( string_data t ) name ) 1 { = hit T } {}
-                ( string_free t )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] parts \ String x → v { ( string_free x ) } )
     ^ hit
 }
 
@@ -687,14 +673,11 @@ $ `src/store.nu`
     : String q ( string_new )
     : String mp ( __mcp_model_path `/models/dynamic/` given `/metadata` )
     : ApiOut probe ( __mcp_api ctx `GET` ( string_data mp ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free mp )
     // 404: no such model; 400: not even a model name (an alias may carry
     // spaces and accents, a name may not).
     : b missing | == . probe status 404 == . probe status 400
-    ( __mcp_api_out_free probe )
-    ? missing {} { ( string_free q ) ^ given }
+    ? missing {} { ^ given }
     : ApiOut o ( __mcp_api ctx `GET` `/models/dynamic` q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
     : ~ String real ( string_new )
     ? ( __mcp_api_ok o ) {
         : String want ( string_to_lower given )
@@ -708,8 +691,6 @@ $ `src/store.nu`
                                     : String al ( string_from ( json_str_data av ) )
                                     : String all ( string_to_lower al )
                                     ? & > ( string_len all ) 0 ( string_eq all want ) { ( string_push_str real name ) } {}
-                                    ( string_free all )
-                                    ( string_free al )
                                 } {}
                             }
                             F _ → {}
@@ -719,11 +700,8 @@ $ `src/store.nu`
             }
             F _ → {}
         }
-        ( string_free want )
     } {}
-    ( __mcp_api_out_free o )
-    ? > ( string_len real ) 0 { ( string_free given ) ^ real } {}
-    ( string_free real )
+    ? > ( string_len real ) 0 { ^ real } {}
     ^ given
 }
 
@@ -740,8 +718,7 @@ $ `src/store.nu`
 @ __mcp_t_whoami Json a Json ctx → Json {
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `GET` `/api/me` q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( json_obj_new )
     ( __mcp_copy . o body `organization` out )
     ( __mcp_copy . o body `name` out )
@@ -763,7 +740,6 @@ $ `src/store.nu`
     }
     ( json_obj_set out `may` may )
     ( json_obj_set out `scratch_prefix` ( json_str_lit AZ_LLM_PREFIX ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -789,7 +765,6 @@ $ `src/store.nu`
             ( json_obj_each ct \ s k Json v → v { ( json_arr_push cols ( json_str_lit k ) ) } )
             ? detail { ( json_obj_set m `columns` cols ) } {
                 ( json_obj_set m `columns` ( json_int ( json_arr_len cols ) ) )
-                ( json_free cols )
             }
         }
         F _ → {}
@@ -824,7 +799,7 @@ $ `src/store.nu`
         F _ → {}
     }
     : Json w ( __mcp_health_meta mj )
-    ? > ( json_arr_len w ) 0 { ( json_obj_set m `warnings` w ) } { ( json_free w ) }
+    ? > ( json_arr_len w ) 0 { ( json_obj_set m `warnings` w ) } {}
     ^ m
 }
 
@@ -843,7 +818,6 @@ $ `src/store.nu`
         ( string_push_int s seen )
         ( string_push_str s ` points are stored; the rest were evicted, and every window and retrain sees only what is stored` )
         ( json_arr_push w ( json_str_lit ( string_data s ) ) )
-        ( string_free s )
     } {}
     ?? ( json_obj_get mj `retrain_required` ) {
         T v → { ? ( json_as_bool v ) { ( json_arr_push w ( json_str_lit `retrain required: the feature order predates the current calendar encoding; retrain re-encodes the ring` ) ) } {} }
@@ -858,7 +832,6 @@ $ `src/store.nu`
                     : String s ( string_from vn )
                     ( string_push_str s `: margin 0 — no band above its raw threshold, so it flags every row it scores past that line; calibration shows what a margin would flag, finetune sets one` )
                     ( json_arr_push w ( json_str_lit ( string_data s ) ) )
-                    ( string_free s )
                 } {}
             } )
         }
@@ -870,8 +843,7 @@ $ `src/store.nu`
 @ __mcp_t_list_models Json a Json ctx → Json {
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `GET` `/models/dynamic` q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : b detail ( __mcp_arg_bool a `detail` F )
     : Json out ( json_obj_new )
     ( json_obj_set out `organization` ( json_str_lit ( __mcp_ctx_str ctx `organization` ) ) )
@@ -894,7 +866,6 @@ $ `src/store.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
             = n ( json_arr_len arr )
         }
         F _ → {}
@@ -906,7 +877,6 @@ $ `src/store.nu`
     ? detail
     `Times are ISO-8601 UTC; on a count clock rows are numbered instead. Next: anomalies {model, last:"24h"} or anomaly_summary.`
     `Times are ISO-8601 UTC; on a count clock rows are numbered instead. columns is a count and versions_on the versions that judge — describe_model {model} names them, detail: true lists them here for every model. Next: anomalies {model, last:"24h"} or anomaly_summary.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -1041,16 +1011,12 @@ $ `src/store.nu`
 
 @ __mcp_t_describe_model Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String path ( __mcp_model_path `/models/dynamic/` model `/metadata` )
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
-    ( string_free path )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( __mcp_model_desc . o body )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -1062,7 +1028,6 @@ $ `src/store.nu`
     : String q ( string_new )
     : Json werr ( __mcp_q_window a q )
     ? ( json_is_null werr ) {} {
-        ( string_free q )
         ^ @ ApiOut { 0 werr }
     }
     ? only_anomalies { ( __mcp_q_add q `only` `anomalies` ) } {}
@@ -1073,15 +1038,11 @@ $ `src/store.nu`
     ? > rows 0 { ( __mcp_q_add_int q `rows` rows ) } {}
     : String vers ( __mcp_arg_csv a `versions` )
     ? > ( string_len vers ) 0 { ( __mcp_q_add q `versions` ( string_data vers ) ) } {}
-    ( string_free vers )
     : String fields ( __mcp_arg_csv a `fields` )
     ( __mcp_q_add q `fields` ? > ( string_len fields ) 0 ( string_data fields ) `*` )
-    ( string_free fields )
     ( __mcp_q_add_int q `contrib` contrib )
     : String path ( __mcp_model_path `/models/dynamic/` model `/anomalies` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
     ^ o
 }
 
@@ -1133,7 +1094,6 @@ $ `src/store.nu`
                     ( string_push_str m ( __mcp_feat_at arr 1 ) )
                     ( string_push_str m ` carry the blame together: what broke is the relation between them, not necessarily the field with the larger share — the net predicts each from the other, so the field that FOLLOWED a failure is blamed as loudly as the one that failed. A version that judges one field alone (range_guard, flatline, forecast) names the culprit when there is a single one; see this row's versions.` )
                     ( json_obj_set o `blame` ( json_str_lit ( string_data m ) ) )
-                    ( string_free m )
                 } {}
             } {}
         }
@@ -1188,7 +1148,6 @@ $ `src/store.nu`
                     ? > n 1 { ( string_push_char m 115 ) } {}
                     ( string_push_str m `, so no row can carry that many votes. describe_model lists them; 2 is the usual "more than one version agrees".` )
                     : Json e ( mcp_tool_result_error ( string_data m ) )
-                    ( string_free m )
                     ^ e
                 } {}
             } {}
@@ -1207,7 +1166,7 @@ $ `src/store.nu`
 
 @ __mcp_t_anomalies Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : i asked ( __mcp_arg_int a `count` 20 )
     : ~ i count asked
     ? <= count 0 { = count 20 } {}
@@ -1216,12 +1175,11 @@ $ `src/store.nu`
     ? < contrib 0 { = contrib 0 } {}
     : b all_points ( __mcp_arg_bool a `all_points` F )
     : ApiOut o ( __mcp_scan a ctx model count contrib ! all_points )
-    ( string_free model )
     ? == . o status 0 { ^ . o body } {}
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : Json vbad ( __mcp_votes_impossible b ( __mcp_arg_int a `min_votes` 1 ) )
-    ? ( json_is_null vbad ) {} { ( __mcp_api_out_free o ) ^ vbad }
+    ? ( json_is_null vbad ) {} { ^ vbad }
     : b cc ( __mcp_count_clock b )
     : Json out ( json_obj_new )
     ( __mcp_scan_summary b out )
@@ -1232,7 +1190,6 @@ $ `src/store.nu`
         ( string_push_int cm asked )
         ( string_push_str cm ` is past the cap of 200 rows a tool answer carries; 200 were listed. Narrow the window (from/to/last) or read anomaly_summary for the whole of it.` )
         ( json_obj_set out `count_capped` ( json_str_lit ( string_data cm ) ) )
-        ( string_free cm )
     } {}
     : Json rows ( json_arr_new )
     ?? ( json_obj_get b `points` ) {
@@ -1252,7 +1209,6 @@ $ `src/store.nu`
         ( string_push_int fnote total )
         ( string_push_str fnote ` anomalies the window holds over every version` )
         ( json_obj_set out `note` ( json_str_lit ( string_data fnote ) ) )
-        ( string_free fnote )
     } {}
     ? & ! filtered > total shown {
         : String note ( string_from `the newest ` )
@@ -1261,10 +1217,8 @@ $ `src/store.nu`
         ( string_push_int note total )
         ( string_push_str note ` in the window — raise count (max 200), or narrow from/to/last` )
         ( json_obj_set out `note` ( json_str_lit ( string_data note ) ) )
-        ( string_free note )
     } {}
     ( json_obj_set out `rows` rows )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -1289,17 +1243,16 @@ $ `src/store.nu`
 
 @ __mcp_t_anomaly_summary Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : ~ i buckets ( __mcp_arg_int a `buckets` 12 )
     ? <= buckets 0 { = buckets 12 } {}
     ? > buckets 48 { = buckets 48 } {}
     : ApiOut o ( __mcp_scan a ctx model 0 3 T )
-    ( string_free model )
     ? == . o status 0 { ^ . o body } {}
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : Json vbad ( __mcp_votes_impossible b ( __mcp_arg_int a `min_votes` 1 ) )
-    ? ( json_is_null vbad ) {} { ( __mcp_api_out_free o ) ^ vbad }
+    ? ( json_is_null vbad ) {} { ^ vbad }
     : b cc ( __mcp_count_clock b )
     : Json out ( json_obj_new )
     ( __mcp_scan_summary b out )
@@ -1444,7 +1397,6 @@ $ `src/store.nu`
                 ( string_push_int note ne )
                 ( string_push_str note ` in the window — anomalies lists every row with its event; narrow from/to/last for the rest` )
                 ( json_obj_set out `events_note` ( json_str_lit ( string_data note ) ) )
-                ( string_free note )
             } {}
         }
         F _ → {}
@@ -1484,12 +1436,8 @@ $ `src/store.nu`
             ( json_arr_push tl bo )
             = k + k 1
         }
-        ( vec_free [i] counts )
-        ( vec_free [i] ecounts )
         ( json_obj_set out `timeline` tl )
     } {}
-    ( vec_free [i] stamps )
-    ( vec_free [i] starts )
 
     // The features the autoencoder blamed most, by mean share.
     : i nf ( vec_len [FeatShare] feats )
@@ -1530,7 +1478,6 @@ $ `src/store.nu`
         }
         ( json_obj_set out `top_features` top )
     } {}
-    ( vec_free_with [FeatShare] feats \ FeatShare x → v { ( string_free . x name ) } )
 
     // Health: what the window says about the model itself. A rate of
     // nothing or of everything is a margin problem or a stale version,
@@ -1546,7 +1493,6 @@ $ `src/store.nu`
             ( string_push_int s # i ( float_round * rate 100.0 ) )
             ( string_push_str s ` % of the window: a margin this tight, or a version trained on data unlike this window, says nothing about the stream — see which version below, then finetune {rate: 0.01} or retrain` )
             ( json_arr_push warn ( json_str_lit ( string_data s ) ) )
-            ( string_free s )
         } {}
         ?? ( json_obj_get b `flagged_by_version` ) {
             T fbv → {
@@ -1562,7 +1508,6 @@ $ `src/store.nu`
                             ( string_push_str s ` rows in the window` )
                             ? ( _an_is_flat_name vn ) { ( string_push_str s `: a column stood still for that long — a sensor to check, not a margin to move` ) } {}
                             ( json_arr_push warn ( json_str_lit ( string_data s ) ) )
-                            ( string_free s )
                         }
                     } {}
                 } )
@@ -1580,9 +1525,8 @@ $ `src/store.nu`
             F _ → {}
         }
     } {}
-    ? > ( json_arr_len warn ) 0 { ( json_obj_set out `warnings` warn ) } { ( json_free warn ) }
+    ? > ( json_arr_len warn ) 0 { ( json_obj_set out `warnings` warn ) } {}
     ( json_obj_set out `next` ( json_str_lit `anomalies {model, count, from/to/last} lists the rows; point {model, index} shows one in full; calibration shows how the margins sit.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -1656,7 +1600,6 @@ $ `src/store.nu`
                 }
                 = k + k 1
             }
-            ( json_free idxs )
         }
         F _ → {}
     }
@@ -1670,23 +1613,19 @@ $ `src/store.nu`
 
 @ __mcp_t_points Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : ~ i count ( __mcp_arg_int a `count` 20 )
     ? <= count 0 { = count 20 } {}
     ? > count 500 { = count 500 } {}
     : String q ( string_new )
     : Json werr ( __mcp_q_window a q )
-    ? ( json_is_null werr ) {} { ( string_free q ) ( string_free model ) ^ werr }
+    ? ( json_is_null werr ) {} { ^ werr }
     ( __mcp_q_add_int q `limit` count )
     : String fields ( __mcp_arg_csv a `fields` )
     ? > ( string_len fields ) 0 { ( __mcp_q_add q `fields` ( string_data fields ) ) } {}
-    ( string_free fields )
     : String path ( __mcp_model_path `/models/dynamic/` model `/data` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : Json out ( json_obj_new )
     ( __mcp_copy b `model_name` out )
@@ -1704,38 +1643,30 @@ $ `src/store.nu`
         ( string_push_int note inw )
         ( string_push_str note ` points in the window — raise count (max 500) or narrow from/to/last` )
         ( json_obj_set out `note` ( json_str_lit ( string_data note ) ) )
-        ( string_free note )
     } {}
     ( json_obj_set out `rows` rows )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_point Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
-    ? ( __mcp_arg_has a `index` ) {} { ( string_free model ) ^ ( mcp_tool_result_error `index: required — the ring index an anomalies row carries` ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
+    ? ( __mcp_arg_has a `index` ) {} { ^ ( mcp_tool_result_error `index: required — the ring index an anomalies row carries` ) }
     : i idx ( __mcp_arg_int a `index` -1 )
-    ? >= idx 0 {} { ( string_free model ) ^ ( mcp_tool_result_error `index: a non-negative integer` ) }
+    ? >= idx 0 {} { ^ ( mcp_tool_result_error `index: a non-negative integer` ) }
     : String q ( string_new )
     ( __mcp_q_add_int q `at` idx )
     : String path ( __mcp_model_path `/models/dynamic/` model `/data` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json rows ( __mcp_data_rows . o body )
     ? > ( json_arr_len rows ) 0 {} {
-        ( json_free rows )
         : String m ( string_from `no point at index ` )
         ( string_push_int m idx )
         ( string_push_str m ` — the ring holds ` )
         ( string_push_int m ( __mcp_int_of . o body `data_points_count` ) )
         ( string_push_str m ` points` )
-        ( __mcp_api_out_free o )
         : Json e ( mcp_tool_result_error ( string_data m ) )
-        ( string_free m )
         ^ e
     }
     : Json out ( json_obj_new )
@@ -1745,8 +1676,6 @@ $ `src/store.nu`
         T r → { ( json_obj_set out `point` ( json_clone r ) ) }
         F _ → {}
     }
-    ( json_free rows )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -1784,16 +1713,13 @@ $ `src/store.nu`
 
 @ __mcp_t_calibration Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String q ( string_new )
     : Json werr ( __mcp_q_window a q )
-    ? ( json_is_null werr ) {} { ( string_free q ) ( string_free model ) ^ werr }
+    ? ( json_is_null werr ) {} { ^ werr }
     : String path ( __mcp_model_path `/models/dynamic/` model `/calibration` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : b cc ( __mcp_count_clock b )
     : Json out ( json_obj_new )
@@ -1870,7 +1796,6 @@ $ `src/store.nu`
         F _ → {}
     }
     ( json_obj_set out `reading` ( json_str_lit `A version flags a row when its score is at or below -margin (score = decision function; the more negative, the more anomalous); rate = flagged / n over this window. margin_for_rate gives, per requested rate, the nearest margin the window's scores can supply: when scores tie at the cut the achieved rate differs from the requested one (exact = false) — a run of identical scores is taken or left whole. Margins are shown exactly as stored, in each version's own units (units: a forest's margin is absolute on its decision function; the autoencoder's is a fraction of its reconstruction threshold, and its scores here are scaled the same way; range_guard's is a count of standard deviations — its score is -max|z| over the features, and it names the feature; flatline's is a fraction of each column's OWN reference run — its score is minus the largest stuck fraction over the numeric columns, and it names the column). finetune {model, rate} sets them, the flatline excepted: its margin is not a rate, so it has no margin_for_rate table; alert_line says instead what the current margin asks of each column, in rows and in minutes, and edit_model sets it.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -1898,7 +1823,7 @@ $ `src/store.nu`
 // echo of the submitted values is dropped; the caller sent them. A model
 // still collecting its first points says so instead of scoring.
 @ __mcp_verdict_out ApiOut o b ingested → Json {
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : Json out ( json_obj_new )
     ( __mcp_copy b `status` out )
@@ -1940,43 +1865,36 @@ $ `src/store.nu`
     }
     ( json_obj_set out `points_stored` ( json_int ( __mcp_int_of b `data_points` ) ) )
     ( json_obj_set out `stored` ( json_bool ingested ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_score_point Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : ?Json vals ( __mcp_values_arg a )
     ?? vals {
         T v → {
             : String q ( string_new )
             : String path ( __mcp_model_path `/detect_only/` model `` )
             : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T v } )
-            ( string_free path )
-            ( string_free q )
-            ( string_free model )
             ^ ( __mcp_verdict_out o F )
         }
-        F _ → { ( string_free model ) ^ ( __mcp_no_values ) }
+        F _ → { ^ ( __mcp_no_values ) }
     }
 }
 
 @ __mcp_t_ingest_point Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : ?Json vals ( __mcp_values_arg a )
     ?? vals {
         T v → {
             : String q ( string_new )
             : String path ( __mcp_model_path `/detect/` model `` )
             : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T v } )
-            ( string_free path )
-            ( string_free q )
-            ( string_free model )
             ^ ( __mcp_verdict_out o T )
         }
-        F _ → { ( string_free model ) ^ ( __mcp_no_values ) }
+        F _ → { ^ ( __mcp_no_values ) }
     }
 }
 
@@ -1987,20 +1905,16 @@ $ `src/store.nu`
 @ __mcp_t_get Json ctx s path → Json {
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `GET` path q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( __mcp_iso_times . o body )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_task Json a Json ctx → Json {
     : String id ( __mcp_arg_str a `id` )
-    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a task_id from list_tasks or analyze_data` ) }
+    ? > ( string_len id ) 0 {} { ^ ( mcp_tool_result_error `id: required — a task_id from list_tasks or analyze_data` ) }
     : String path ( __mcp_model_path `/api/org/tasks/` id `` )
     : Json out ( __mcp_t_get ctx ( string_data path ) )
-    ( string_free path )
-    ( string_free id )
     ^ out
 }
 
@@ -2012,21 +1926,17 @@ $ `src/store.nu`
 // query string and sends no body.
 @ __mcp_file_arg Json a String text → s {
     : String fname ( __mcp_arg_str a `file` )
-    ? > ( string_len fname ) 0 { ( string_free fname ) ^ `folder` } {}
-    ( string_free fname )
+    ? > ( string_len fname ) 0 { ^ `folder` } {}
     : String csv ( __mcp_arg_str a `csv` )
     ? > ( string_len csv ) 0 {
         ( string_push_str text ( string_data csv ) )
-        ( string_free csv )
         ^ `text/csv`
     } {}
-    ( string_free csv )
     ?? ( __mcp_arg a `rows` ) {
         T rows → {
             ? ( json_is_arr rows ) {
                 : String js ( json_stringify rows )
                 ( string_push_str text ( string_data js ) )
-                ( string_free js )
                 ^ `application/json`
             } {}
         }
@@ -2044,13 +1954,11 @@ $ `src/store.nu`
     ? == ( nurl_str_eq content_type `folder` ) 1 {
         : String fname ( __mcp_arg_str a `file` )
         ( __mcp_q_add q `file` ( string_data fname ) )
-        ( string_free fname )
     } {}
     : String fmt ( __mcp_arg_str a `format` )
     ? > ( string_len fmt ) 0 { ( __mcp_q_add q `format` ( string_data fmt ) ) } {
         ? == ( nurl_str_eq content_type `application/json` ) 1 { ( __mcp_q_add q `format` `json` ) } {}
     }
-    ( string_free fmt )
     : String time ( __mcp_arg_str a `time` )
     ? > ( string_len time ) 0 {
         // A column name is the common case; a plan object passes through.
@@ -2059,48 +1967,39 @@ $ `src/store.nu`
                 ? ( json_is_obj tv ) {
                     : String js ( json_stringify tv )
                     ( __mcp_q_add q `time` ( string_data js ) )
-                    ( string_free js )
                 } {
                     : Json plan ( json_obj_new )
                     ( json_obj_set plan `mode` ( json_str_lit `column` ) )
                     ( json_obj_set plan `column` ( json_str_lit ( string_data time ) ) )
                     : String js ( json_stringify plan )
                     ( __mcp_q_add q `time` ( string_data js ) )
-                    ( string_free js )
-                    ( json_free plan )
                 }
             }
             F _ → {}
         }
     } {}
-    ( string_free time )
     : String tz ( __mcp_arg_str a `tz` )
     ? > ( string_len tz ) 0 { ( __mcp_q_add q `tz` ( string_data tz ) ) } {}
-    ( string_free tz )
     ? ( __mcp_arg_bool a `calendar` F ) { ( __mcp_q_add q `calendar` `1` ) } {}
     : String clock ( __mcp_arg_str a `clock` )
     ? > ( string_len clock ) 0 { ( __mcp_q_add q `clock` ( string_data clock ) ) } {}
-    ( string_free clock )
 }
 
 @ __mcp_t_analyze_data Json a Json ctx → Json {
     : String text ( string_new )
     : s ct ( __mcp_file_arg a text )
-    ? > ( nurl_str_len ct ) 0 {} { ( string_free text ) ^ ( __mcp_no_file ) }
+    ? > ( nurl_str_len ct ) 0 {} { ^ ( __mcp_no_file ) }
     : String q ( string_new )
     ( __mcp_q_file a q ct )
     : String name ( __mcp_arg_str a `name` )
     ? > ( string_len name ) 0 { ( __mcp_q_add q `name` ( string_data name ) ) } {}
-    ( string_free name )
     : i votes ( __mcp_arg_int a `votes` 0 )
     ? > votes 0 { ( __mcp_q_add_int q `votes` votes ) } {}
     : i wait ( __mcp_arg_int a `wait` 30 )
     ( __mcp_q_add_int q `wait` wait )
     : b folder == ( nurl_str_eq ct `folder` ) 1
     : ApiOut o ( __mcp_api_send ctx `POST` `/api/analyze` q ? folder `text/csv` ct ( string_data text ) )
-    ( string_free q )
-    ( string_free text )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     // 202: the task is still running — say how to come back for it.
     ? == . o status 202 {
         ( json_obj_set . o body `hint` ( json_str_lit `still running — call task {id: task_id} in a little while; wait (max 60 s) holds the call longer next time` ) )
@@ -2110,10 +2009,10 @@ $ `src/store.nu`
 
 @ __mcp_t_import_data Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String text ( string_new )
     : s ct ( __mcp_file_arg a text )
-    ? > ( nurl_str_len ct ) 0 {} { ( string_free text ) ( string_free model ) ^ ( __mcp_no_file ) }
+    ? > ( nurl_str_len ct ) 0 {} { ^ ( __mcp_no_file ) }
     : String q ( string_new )
     ( __mcp_q_file a q ct )
     // The share of the file the margins should flag, the same knob
@@ -2125,16 +2024,11 @@ $ `src/store.nu`
         : String rs ( string_new )
         ( string_push_float rs ( __mcp_arg_f a `rate` 0.01 ) )
         ( __mcp_q_add q `finetune` ( string_data rs ) )
-        ( string_free rs )
     } {}
     : String path ( __mcp_model_path `/models/dynamic/` model `/import` )
     : b folder == ( nurl_str_eq ct `folder` ) 1
     : ApiOut o ( __mcp_api_send ctx `POST` ( string_data path ) q ? folder `text/csv` ct ( string_data text ) )
-    ( string_free path )
-    ( string_free q )
-    ( string_free text )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : Json out ( json_obj_new )
     ( __mcp_copy b `model_name` out )
@@ -2151,7 +2045,6 @@ $ `src/store.nu`
     ( __mcp_copy b `notes` out )
     ( __mcp_copy b `warning` out )
     ( json_obj_set out `next` ( json_str_lit `calibration {model} says what the margins flag over this history — read it before anomalies, especially when calibrated is false.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -2159,11 +2052,9 @@ $ `src/store.nu`
 
 @ __mcp_t_fork_model Json a Json ctx → Json {
     : String src ( __mcp_arg_str a `source` )
-    ? > ( string_len src ) 0 {} { ( string_free src ) ^ ( mcp_tool_result_error `source: required — the model whose history to learn from` ) }
+    ? > ( string_len src ) 0 {} { ^ ( mcp_tool_result_error `source: required — the model whose history to learn from` ) }
     : String name ( __mcp_arg_str a `name` )
     ? > ( string_len name ) 0 {} {
-        ( string_free name )
-        ( string_free src )
         ^ ( mcp_tool_result_error `name: required — llm_<something> is yours to create; another name needs the administrator role` )
     }
     : Json body ( json_obj_new )
@@ -2172,9 +2063,6 @@ $ `src/store.nu`
     : i to ( __mcp_arg_instant a `to` )
     : i last ( __mcp_arg_span a `last` )
     ? | | < from 0 < to 0 & < last 0 != last MCP_SPAN_ALL {
-        ( json_free body )
-        ( string_free name )
-        ( string_free src )
         ^ ( mcp_tool_result_error `from/to: ISO-8601 or Unix seconds; last: seconds, 90s / 15m / 24h / 7d / 2w, or "all" for the source's whole ring` )
     } {}
     ? > from 0 { ( json_obj_set body `from` ( json_int from ) ) } {}
@@ -2189,12 +2077,7 @@ $ `src/store.nu`
     : String q ( string_new )
     : String path ( __mcp_model_path `/models/dynamic/` src `/fork` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
-    ( json_free body )
-    ( string_free path )
-    ( string_free q )
-    ( string_free name )
-    ( string_free src )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : b cc F
     : Json out ( json_obj_new )
@@ -2235,7 +2118,6 @@ $ `src/store.nu`
         ( json_obj_set out `alert_rate` rj )
     } {}
     ( json_obj_set out `next` ( json_str_lit `anomalies {model: <model_name>} shows what it flags on its own history; calibration to see the margins; delete_model when done with it.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -2244,33 +2126,27 @@ $ `src/store.nu`
     : String q ( string_new )
     : String path ( __mcp_model_path prefix model suffix )
     : ApiOut o ( __mcp_api ctx method ( string_data path ) q body )
-    ( string_free path )
-    ( string_free q )
     ^ ( __mcp_pass o )
 }
 
 @ __mcp_t_retrain Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String q ( string_new )
     : String path ( __mcp_model_path `/force_train/` model `` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( json_obj_new )
     ( __mcp_copy . o body `status` out )
     ( __mcp_copy . o body `message` out )
     ( __mcp_copy . o body `points_used` out )
     ( json_obj_set out `next` ( json_str_lit `calibration to see the margins the retrained versions now hold; anomalies to see what they flag.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_train_autoencoder Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : Json body ( json_obj_new )
     ?? ( __mcp_arg a `hidden` ) {
         T hv → { ? ( json_is_arr hv ) { ( json_obj_set body `hidden` ( json_clone hv ) ) } {} }
@@ -2280,11 +2156,7 @@ $ `src/store.nu`
     : String q ( string_new )
     : String path ( __mcp_model_path `/train/autoencoder/` model `` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
-    ( string_free path )
-    ( string_free q )
-    ( json_free body )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( json_obj_new )
     ( __mcp_copy . o body `status` out )
     ( __mcp_copy . o body `message` out )
@@ -2295,24 +2167,19 @@ $ `src/store.nu`
     // informational — the margin the verdict uses is relative to it.
     ( __mcp_copy_rounded . o body `reconstruction_threshold` out 4 )
     ( json_obj_set out `next` ( json_str_lit `describe_model shows the autoencoder's effective margin; anomalies {versions: ["autoencoder"]} what it flags on its own.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_train_forecast Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : Json body ( json_obj_new )
     ? ( __mcp_arg_has a `season` ) { ( json_obj_set body `season` ( json_int ( __mcp_arg_int a `season` 0 ) ) ) } {}
     ? ( __mcp_arg_has a `window_points` ) { ( json_obj_set body `window_points` ( json_int ( __mcp_arg_int a `window_points` 0 ) ) ) } {}
     : String q ( string_new )
     : String path ( __mcp_model_path `/train/forecast/` model `` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
-    ( string_free path )
-    ( string_free q )
-    ( json_free body )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( json_obj_new )
     ( __mcp_copy . o body `status` out )
     ( __mcp_copy . o body `message` out )
@@ -2321,7 +2188,6 @@ $ `src/store.nu`
     ( __mcp_copy . o body `training_data_points` out )
     ( __mcp_copy . o body `season` out )
     ( json_obj_set out `next` ( json_str_lit `forecast {model, horizon} for what the models expect next; anomalies {versions: ["forecast"]} for the points that landed far from their forecast, each naming the feature.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -2365,16 +2231,13 @@ $ `src/store.nu`
 // back, and `features` narrows to the columns asked for.
 @ __mcp_t_forecast Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String q ( string_from `horizon=` )
     ( string_push_int q ( __mcp_arg_int a `horizon` 12 ) )
     ? ( __mcp_arg_has a `origin` ) { ( string_push_str q `&origin=` ) ( string_push_int q ( __mcp_arg_int a `origin` 0 ) ) } {}
     : String path ( __mcp_model_path `/models/dynamic/` model `/forecast` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : b detail ( __mcp_arg_bool a `detail` F )
     : String want ( __mcp_arg_csv a `features` )
@@ -2417,7 +2280,6 @@ $ `src/store.nu`
                                 T m → {
                                     : String os ( __mcp_order_str m )
                                     ( json_obj_set e `order` ( json_str_lit ( string_data os ) ) )
-                                    ( string_free os )
                                     ( __mcp_copy_rounded m `sigma2` e 6 )
                                     ? detail { ( json_obj_set e `fit` ( json_clone m ) ) } {}
                                 }
@@ -2441,7 +2303,6 @@ $ `src/store.nu`
         }
         F _ → {}
     }
-    ( string_free want )
     ( json_obj_set out `forecasts` fa )
     ? > total shown {
         : String n ( string_from `` )
@@ -2450,47 +2311,37 @@ $ `src/store.nu`
         ( string_push_int n total )
         ( string_push_str n ` watched features shown (features narrowed the list)` )
         ( json_obj_set out `note` ( json_str_lit ( string_data n ) ) )
-        ( string_free n )
     } {}
     ? ! detail {
         ( json_obj_set out `fit_note` ( json_str_lit `order is the fitted ARIMA in one line and selected the form the holdout chose; detail: true adds the coefficients and the fit statistics, and the 80 % band. forecast_backtest measures whether these forecasts are any good — read it before trusting the band, whose width comes from the fit and is routinely optimistic.` ) )
     } {}
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_forecast_point Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : ~ Json body ( json_obj_new )
     ?? ( __mcp_arg a `values` ) {
-        T v → { ? ( json_is_obj v ) { ( json_free body ) = body ( json_clone v ) } {} }
+        T v → { ? ( json_is_obj v ) { = body ( json_clone v ) } {} }
         F _ → {}
     }
     : String q ( string_from `horizon=` )
     ( string_push_int q ( __mcp_arg_int a `horizon` 1 ) )
     : String path ( __mcp_model_path `/forecast/` model `` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
-    ( string_free path )
-    ( string_free q )
-    ( json_free body )
-    ( string_free model )
     ^ ( __mcp_pass o )
 }
 
 @ __mcp_t_audit Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String q ( string_from `limit=` )
     ( string_push_int q ( __mcp_arg_int a `limit` 100 ) )
     : String path ( __mcp_model_path `/models/dynamic/` model `/audit` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( __mcp_iso_times . o body )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -2526,17 +2377,14 @@ $ `src/store.nu`
 // the model.
 @ __mcp_t_forecast_backtest Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String q ( string_from `horizon=` )
     ( string_push_int q ( __mcp_arg_int a `horizon` 12 ) )
     ( string_push_str q `&points=` )
     ( string_push_int q ( __mcp_arg_int a `points` 200 ) )
     : String path ( __mcp_model_path `/models/dynamic/` model `/forecast/backtest` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : Json out ( json_clone b )
     : ~ i n_feat 0
@@ -2573,7 +2421,6 @@ $ `src/store.nu`
                             ( string_push_str rd `the model beats persistence and its band covers about what it claims.` )
                         } {}
                         ( json_obj_set fo `reading` ( json_str_lit ( string_data rd ) ) )
-                        ( string_free rd )
                         // skill_vs_seasonal_naive flatters when the
                         // seasonal naive is bad; the two baselines'
                         // errors are already here, and naming that is
@@ -2605,15 +2452,13 @@ $ `src/store.nu`
             ( string_push_str v ` of them.` )
         } {}
         ( json_obj_set out `verdict` ( json_str_lit ( string_data v ) ) )
-        ( string_free v )
     } {}
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_finetune Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : Json body ( json_obj_new )
     ? ( __mcp_arg_has a `rate` ) { ( json_obj_set body `rate` ( json_float ( __mcp_arg_f a `rate` 0.01 ) ) ) } {}
     // `last`: the shared span vocabulary, plus "own" — each version's
@@ -2626,8 +2471,6 @@ $ `src/store.nu`
     ? own { ( json_obj_set body `last` ( json_str_lit `own` ) ) } {
         : i last ( __mcp_arg_span a `last` )
         ? == last -1 {
-            ( json_free body )
-            ( string_free model )
             ^ ( mcp_tool_result_error `last: not a span — use seconds, 90s / 15m / 24h / 7d / 2w, "all" for every stored point, or "own" for each version's own training period` )
         } {}
         ? > last 0 { ( json_obj_set body `last` ( json_int last ) ) } {}
@@ -2636,8 +2479,6 @@ $ `src/store.nu`
     : i from ( __mcp_arg_instant a `from` )
     : i to ( __mcp_arg_instant a `to` )
     ? | < from 0 < to 0 {
-        ( json_free body )
-        ( string_free model )
         ^ ( mcp_tool_result_error `from/to: ISO-8601 or Unix seconds` )
     } {}
     ? > from 0 { ( json_obj_set body `from` ( json_int from ) ) } {}
@@ -2650,10 +2491,6 @@ $ `src/store.nu`
     : String q ( string_new )
     : String path ( __mcp_model_path `/api/dynamic/` model `/finetune` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
-    ( string_free path )
-    ( string_free q )
-    ( json_free body )
-    ( string_free model )
     ^ ( __mcp_finetune_out o )
 }
 
@@ -2665,7 +2502,7 @@ $ `src/store.nu`
 // `adjusted_margins` / `max_anomaly_scores` maps repeat the per-version
 // numbers and are not carried.
 @ __mcp_finetune_out ApiOut o → Json {
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : b cc ( __mcp_count_clock b )
     : Json out ( json_obj_new )
@@ -2724,26 +2561,21 @@ $ `src/store.nu`
         ( json_obj_set out `rate_is_per_version` ( json_str_lit `the rate above is what EACH version's margin now flags on its own; this model calls a row an anomaly if ANY version flags it (votes = 1), so its own rate over this window is the union — calibration's aggregate.rate, or anomaly_summary's anomaly_rate, is that number. edit_model {votes: N} makes N versions have to agree, and then rate becomes the model's own share.` ) )
     } {}
     ( json_obj_set out `next` ( json_str_lit `calibration {model} to read the aggregate rate these margins produce; anomalies to see what they flag.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_edit_model Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     ?? ( __mcp_arg a `patch` ) {
         T pv → {
             ? & ( json_is_obj pv ) > ( __mcp_obj_len pv ) 0 {} {
-                ( string_free model )
                 ^ ( mcp_tool_result_error `patch: required — an object with one or more of alias, clock, schedule, max_data_points, versions, votes (describe_model lists editable_fields and the current values)` )
             }
             : String q ( string_new )
             : String path ( __mcp_model_path `/models/dynamic/` model `/metadata` )
             : ApiOut o ( __mcp_api ctx `PUT` ( string_data path ) q @ ?Json { T pv } )
-            ( string_free path )
-            ( string_free q )
-            ( string_free model )
-            ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+            ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
             : Json b . o body
             : Json out ( json_obj_new )
             ( __mcp_copy b `message` out )
@@ -2755,11 +2587,9 @@ $ `src/store.nu`
                 F _ → {}
             }
             ( json_obj_set out `next` ( json_str_lit `calibration to see what the margins now flag over a window; audit lists every margin this and every other change moved.` ) )
-            ( __mcp_api_out_free o )
             ^ ( __mcp_result_json out )
         }
         F _ → {
-            ( string_free model )
             ^ ( mcp_tool_result_error `patch: required — an object with one or more of alias, clock, schedule, max_data_points, versions, votes` )
         }
     }
@@ -2769,19 +2599,16 @@ $ `src/store.nu`
 @ __mcp_obj_len Json o → i {
     : ( Vec String ) ks ( json_obj_keys o )
     : i n ( vec_len [String] ks )
-    ( vec_free_with [String] ks \ String x → v { ( string_free x ) } )
     ^ n
 }
 
 @ __mcp_t_reset_model Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     ? ( __mcp_arg_bool a `confirm` F ) {} {
-        ( string_free model )
         ^ ( mcp_tool_result_error `confirm: true is required — reset drops every stored point and forest of the model and cannot be undone` )
     }
     : Json out ( __mcp_model_post ctx `/models/dynamic/` model `/reset` `POST` @ ?Json { F @ Json { JNull } } )
-    ( string_free model )
     ^ out
 }
 
@@ -2790,33 +2617,24 @@ $ `src/store.nu`
 // left out of calibration and fine-tune.
 @ __mcp_t_label_anomaly Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : i index ( __mcp_arg_int a `index` -1 )
     ? >= index 0 {} {
-        ( string_free model )
         ^ ( mcp_tool_result_error `index: the row's index, as anomalies and points list it` )
     }
     : String label ( __mcp_arg_str a `label` )
     ? ( label_known ( string_data label ) ) {} {
-        ( string_free label )
-        ( string_free model )
         ^ ( mcp_tool_result_error `label: "false_positive", "confirmed", or "none" to withdraw an earlier label` )
     }
     : Json body ( json_obj_new )
     ( json_obj_set body `index` ( json_int index ) )
     ( json_obj_set body `label` ( json_str_lit ( string_data label ) ) )
-    ( string_free label )
     : String note ( __mcp_arg_str a `note` )
     ? > ( string_len note ) 0 { ( json_obj_set body `note` ( json_str_lit ( string_data note ) ) ) } {}
-    ( string_free note )
     : String q ( string_new )
     : String path ( __mcp_model_path `/models/dynamic/` model `/labels` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { T body } )
-    ( string_free path )
-    ( string_free q )
-    ( json_free body )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : Json out ( json_obj_new )
     ( __mcp_copy b `status` out )
@@ -2828,20 +2646,16 @@ $ `src/store.nu`
     ( __mcp_copy b `by` out )
     ( __mcp_when_of b `at` out `at` F )
     ( __mcp_copy b `note` out )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_labels Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String q ( string_new )
     : String path ( __mcp_model_path `/models/dynamic/` model `/labels` )
     : ApiOut o ( __mcp_api ctx `GET` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free path )
-    ( string_free q )
-    ( string_free model )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json b . o body
     : b cc ( __mcp_count_clock b )
     : Json out ( json_obj_new )
@@ -2868,19 +2682,16 @@ $ `src/store.nu`
         F _ → {}
     }
     ( json_obj_set out `labels` rows )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_delete_model Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     ? ( __mcp_arg_bool a `confirm` F ) {} {
-        ( string_free model )
         ^ ( mcp_tool_result_error `confirm: true is required — delete removes the model, its data and its forests for good` )
     }
     : Json out ( __mcp_model_post ctx `/delete_model/` model `` `DELETE` @ ?Json { F @ Json { JNull } } )
-    ( string_free model )
     ^ out
 }
 
@@ -2888,32 +2699,24 @@ $ `src/store.nu`
 
 @ __mcp_t_claim_model Json a Json ctx → Json {
     : String model ( __mcp_need_model a ctx )
-    ? > ( string_len model ) 0 {} { ( string_free model ) ^ ( __mcp_no_model ) }
+    ? > ( string_len model ) 0 {} { ^ ( __mcp_no_model ) }
     : String owner ( __mcp_arg_str a `owner` )
     : Json body ( json_obj_new )
     ? > ( string_len owner ) 0 { ( json_obj_set body `owner` ( json_str_lit ( string_data owner ) ) ) } {}
-    ( string_free owner )
     : Json out ( __mcp_model_post ctx `/models/dynamic/` model `/claim` `POST` @ ?Json { T body } )
-    ( json_free body )
-    ( string_free model )
     ^ out
 }
 
 @ __mcp_t_set_role Json a Json ctx → Json {
     : String sub ( __mcp_arg_str a `subject` )
-    ? > ( string_len sub ) 0 {} { ( string_free sub ) ^ ( mcp_tool_result_error `subject: required — a member's subject from org_users` ) }
+    ? > ( string_len sub ) 0 {} { ^ ( mcp_tool_result_error `subject: required — a member's subject from org_users` ) }
     : String role ( __mcp_arg_str a `role` )
-    ? > ( string_len role ) 0 {} { ( string_free role ) ( string_free sub ) ^ ( mcp_tool_result_error `role: required — admin or viewer` ) }
+    ? > ( string_len role ) 0 {} { ^ ( mcp_tool_result_error `role: required — admin or viewer` ) }
     : Json body ( json_obj_new )
     ( json_obj_set body `role` ( json_str_lit ( string_data role ) ) )
     : String path ( __mcp_model_path `/api/org/users/` sub `/role` )
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `PUT` ( string_data path ) q @ ?Json { T body } )
-    ( string_free q )
-    ( string_free path )
-    ( json_free body )
-    ( string_free role )
-    ( string_free sub )
     ^ ( __mcp_pass o )
 }
 
@@ -2927,7 +2730,6 @@ $ `src/store.nu`
     : Json body ( json_obj_new )
     : String all ( string_from __MCP_SOURCE_FIELDS )
     : ( Vec String ) keys ( string_split all ` ` )
-    ( string_free all )
     : i n ( vec_len [String] keys )
     : ~ i k 0
     ~ < k n {
@@ -2942,7 +2744,6 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ^ body
 }
 
@@ -2952,11 +2753,9 @@ $ `src/store.nu`
 
 @ __mcp_t_source Json a Json ctx → Json {
     : String id ( __mcp_need_source_id a )
-    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    ? > ( string_len id ) 0 {} { ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
     : String path ( __mcp_model_path `/api/org/sources/` id `` )
     : Json out ( __mcp_t_get ctx ( string_data path ) )
-    ( string_free path )
-    ( string_free id )
     ^ out
 }
 
@@ -2964,56 +2763,42 @@ $ `src/store.nu`
     : Json body ( __mcp_source_body a )
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `POST` `/api/org/sources` q @ ?Json { T body } )
-    ( string_free q )
-    ( json_free body )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : Json out ( json_clone . o body )
     ( json_obj_set out `next` ( json_str_lit `run_source {id} fetches now (backfill_hours reaches back); source {id} shows each run's outcome; the model named receives the points.` ) )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
 @ __mcp_t_update_source Json a Json ctx → Json {
     : String id ( __mcp_need_source_id a )
-    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    ? > ( string_len id ) 0 {} { ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
     : Json body ( __mcp_source_body a )
     : String path ( __mcp_model_path `/api/org/sources/` id `` )
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `PUT` ( string_data path ) q @ ?Json { T body } )
-    ( string_free q )
-    ( string_free path )
-    ( json_free body )
-    ( string_free id )
     ^ ( __mcp_pass o )
 }
 
 @ __mcp_t_delete_source Json a Json ctx → Json {
     : String id ( __mcp_need_source_id a )
-    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    ? > ( string_len id ) 0 {} { ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
     ? ( __mcp_arg_bool a `confirm` F ) {} {
-        ( string_free id )
         ^ ( mcp_tool_result_error `confirm: true is required — delete removes the source and its schedule; the model and the points it fetched stay` )
     }
     : String path ( __mcp_model_path `/api/org/sources/` id `` )
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `DELETE` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
-    ( string_free path )
-    ( string_free id )
     ^ ( __mcp_pass o )
 }
 
 @ __mcp_t_run_source Json a Json ctx → Json {
     : String id ( __mcp_need_source_id a )
-    ? > ( string_len id ) 0 {} { ( string_free id ) ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
+    ? > ( string_len id ) 0 {} { ^ ( mcp_tool_result_error `id: required — a source id from sources` ) }
     : String q ( string_new )
     : i back ( __mcp_arg_int a `backfill_hours` 0 )
     ? > back 0 { ( string_push_str q `backfill_hours=` ) ( string_push_int q back ) } {}
     : String path ( __mcp_model_path `/api/org/sources/` id `/run` )
     : ApiOut o ( __mcp_api ctx `POST` ( string_data path ) q @ ?Json { F @ Json { JNull } } )
-    ( string_free q )
-    ( string_free path )
-    ( string_free id )
     ^ ( __mcp_pass o )
 }
 
@@ -3024,19 +2809,15 @@ $ `src/store.nu`
 // `query` names it.
 @ __mcp_t_source_catalog Json a Json ctx → Json {
     : String url ( __mcp_arg_str a `url` )
-    ? > ( string_len url ) 0 {} { ( string_free url ) ^ ( mcp_tool_result_error `url: required — the WFS endpoint` ) }
+    ? > ( string_len url ) 0 {} { ^ ( mcp_tool_result_error `url: required — the WFS endpoint` ) }
     : Json body ( json_obj_new )
     ( json_obj_set body `url` ( json_str_lit ( string_data url ) ) )
-    ( string_free url )
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `POST` `/api/org/sources/catalog` q @ ?Json { T body } )
-    ( string_free q )
-    ( json_free body )
-    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ( __mcp_api_out_free o ) ^ e }
+    ? ( __mcp_api_ok o ) {} { : Json e ( __mcp_api_error o ) ^ e }
     : String want ( __mcp_arg_str a `query` )
     : String filt0 ( __mcp_arg_str a `filter` )
     : String filt ( string_to_lower filt0 )
-    ( string_free filt0 )
     : Json out ( json_obj_new )
     ( __mcp_copy . o body `base_url` out )
     : Json list ( json_arr_new )
@@ -3057,7 +2838,6 @@ $ `src/store.nu`
                                     : String lid ( string_to_lower id )
                                     : String lt ( string_to_lower title )
                                     = take | >= ( nurl_str_find ( string_data lid ) ( string_data filt ) ) 0 >= ( nurl_str_find ( string_data lt ) ( string_data filt ) ) 0
-                                    ( string_free lid ) ( string_free lt )
                                 } {}
                             }
                             ? take {
@@ -3070,7 +2850,6 @@ $ `src/store.nu`
                                     ( json_arr_push list c )
                                 }
                             } {}
-                            ( string_free id ) ( string_free title )
                         }
                         F _ → {}
                     }
@@ -3086,8 +2865,6 @@ $ `src/store.nu`
     ? & == ( string_len want ) 0 == ( json_arr_len list ) 0 {} {
         ? == ( string_len want ) 0 { ( json_obj_set out `next` ( json_str_lit `source_catalog {url, query: "<id>"} shows one entry's parameters; source_preview {url, query, mode, params, hours} its columns.` ) ) } {}
     }
-    ( string_free want ) ( string_free filt )
-    ( __mcp_api_out_free o )
     ^ ( __mcp_result_json out )
 }
 
@@ -3101,8 +2878,6 @@ $ `src/store.nu`
     ? ( __mcp_arg_has a `hours` ) { ( json_obj_set body `hours` ( json_int ( __mcp_arg_int a `hours` 24 ) ) ) } {}
     : String q ( string_new )
     : ApiOut o ( __mcp_api ctx `POST` `/api/org/sources/preview` q @ ?Json { T body } )
-    ( string_free q )
-    ( json_free body )
     ^ ( __mcp_pass o )
 }
 
@@ -3169,7 +2944,6 @@ $ `src/store.nu`
     : String d ( string_from `One point: the model's columns and their values, e.g. {"temperature": 21.5, "state": "on"}. Columns the model does not know are ignored; ` )
     ( string_push_str d missing )
     ( mcp_schema_prop sc `values` `object` ( string_data d ) T )
-    ( string_free d )
     ^ sc
 }
 
@@ -3608,9 +3382,6 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     ( string_push_str scope `/access_as_user` )
     : Json md ( mcp_auth_resource_metadata ( string_data resource ) ( anomaly_authz_issuer ) ( string_data scope ) )
     : HttpResponse r ( mcp_auth_metadata_response md )
-    ( string_free scope )
-    ( string_free resource )
-    ( string_free base )
     ^ r
 }
 
@@ -3621,32 +3392,26 @@ Every member may build scratch models named llm_… (fork_model: a slice of an e
     // client where to sign in (WWW-Authenticate → resource metadata →
     // authorization server), and why.
     ? & ( anomaly_authz_enabled ) ! . p authed {
-        ( principal_free p )
         : String base ( __mcp_base req )
         : String mdpath ( mcp_auth_metadata_path `/mcp` )
         : String mdurl ( string_from ( string_data base ) )
         ( string_push_str mdurl ( string_data mdpath ) )
-        ( string_free mdpath )
         : s why ( anomaly_authz_last_error )
         // A credential was PRESENTED — as a bearer token or in X-API-Key,
         // the two places authz_principal reads — and refused: that is
         // invalid_token, and the description says why. Nothing presented
         // is the plain invitation to sign in.
-        : b had_token | ?? ( mcp_auth_bearer_token req ) { T t → { ( string_free t ) T } F → F }
-        ?? ( header_get . req headers `x-api-key` ) { T v → { ( string_free v ) T } F → F }
+        : b had_token | ?? ( mcp_auth_bearer_token req ) { T t → { T } F → F }
+        ?? ( header_get . req headers `x-api-key` ) { T v → { T } F → F }
         : HttpResponse r ( mcp_auth_challenge ( string_data mdurl )
         ? had_token `invalid_token` `unauthorized`
         ? > ( nurl_str_len why ) 0 why `sign in to the anomaly service, or send an API key as the bearer token` )
-        ( string_free mdurl )
-        ( string_free base )
         ^ r
     } {}
     : Json ctx ( __mcp_ctx_of req p )
-    ( principal_free p )
     : McpServer srv ( __mcp_server )
     : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
     : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
     : HttpResponse out ( h req )
-    ( json_free ctx )
     ^ out
 }

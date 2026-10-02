@@ -87,10 +87,10 @@ $ `deps/oauth/src/oauth.nu`
 
 // The configured strings, owned. A global can hold a `s` (a borrowed char*)
 // but not a String, so the Strings behind these live in one heap block whose
-// address is the global; reconfiguring frees the previous block. The obvious
-// alternative — hand the globals `( string_data owned )` and never free the
-// owned String — is a leak that a long-running service would never notice
-// and a test that reconfigures would report every time.
+// address is the global; reconfiguring rewrites them in place. The obvious
+// alternative — hand the globals `( string_data owned )` and keep the owned
+// String alive forever — is a leak that a long-running service would never
+// notice and a test that reconfigures would report every time.
 : AzStrings {
     String s_issuer
     String s_client_id
@@ -116,12 +116,12 @@ $ `deps/oauth/src/oauth.nu`
 }
 
 @ __az_set_str * AzStrings a i which s v → v {
-    ? == which 0 { ( string_free . a s_issuer ) = . a s_issuer ( string_from v ) } {}
-    ? == which 1 { ( string_free . a s_client_id ) = . a s_client_id ( string_from v ) } {}
-    ? == which 2 { ( string_free . a s_audience ) = . a s_audience ( string_from v ) } {}
-    ? == which 3 { ( string_free . a s_allowed ) = . a s_allowed ( string_from v ) } {}
-    ? == which 4 { ( string_free . a s_last_err ) = . a s_last_err ( string_from v ) } {}
-    ? == which 5 { ( string_free . a s_owner ) = . a s_owner ( string_from v ) } {}
+    ? == which 0 { ( string_clear . a s_issuer ) ( string_push_str . a s_issuer v ) } {}
+    ? == which 1 { ( string_clear . a s_client_id ) ( string_push_str . a s_client_id v ) } {}
+    ? == which 2 { ( string_clear . a s_audience ) ( string_push_str . a s_audience v ) } {}
+    ? == which 3 { ( string_clear . a s_allowed ) ( string_push_str . a s_allowed v ) } {}
+    ? == which 4 { ( string_clear . a s_last_err ) ( string_push_str . a s_last_err v ) } {}
+    ? == which 5 { ( string_clear . a s_owner ) ( string_push_str . a s_owner v ) } {}
 }
 
 @ g_az_issuer → s { ^ ( string_data . ( __az_strs ) s_issuer ) }
@@ -240,7 +240,6 @@ $ `deps/oauth/src/oauth.nu`
     ? > ( string_len mode ) 0 {
         = want == ( nurl_str_eq ( string_data mode ) `oidc` ) 1
     } {}
-    ( string_free mode )
     : ~ String iss ( config_str cfg `auth.issuer` `` )
     : ~ String cid ( config_str cfg `auth.client_id` `` )
     : ~ String aud ( config_str cfg `auth.audience` `` )
@@ -252,32 +251,31 @@ $ `deps/oauth/src/oauth.nu`
     // The environment overlays only where it actually says something, so an
     // unset variable lets the file show through rather than blanking it.
     ?? ( env_get `ANOMALY_MODE` ) {
-        T v → { = want == ( nurl_str_eq ( string_data v ) `oidc` ) 1 ( string_free v ) }
+        T v → { = want == ( nurl_str_eq ( string_data v ) `oidc` ) 1 }
         F → {}
     }
     ?? ( env_get `ANOMALY_AUTH` ) {
-        T v → { = want ( __az_truthy ( string_data v ) ) ( string_free v ) }
+        T v → { = want ( __az_truthy ( string_data v ) ) }
         F → {}
     }
     ?? ( env_get `ANOMALY_OPEN_INGEST` ) {
-        T v → { = open_ing ( __az_truthy ( string_data v ) ) ( string_free v ) }
+        T v → { = open_ing ( __az_truthy ( string_data v ) ) }
         F → {}
     }
     ?? ( env_get `ANOMALY_OIDC_ISSUER` ) {
-        T v → { ( string_free iss ) = iss v }
+        T v → { = iss v }
         F → {}
     }
     ?? ( env_get `ANOMALY_OIDC_CLIENT_ID` ) {
-        T v → { ( string_free cid ) = cid v }
+        T v → { = cid v }
         F → {}
     }
     ?? ( env_get `ANOMALY_OIDC_AUDIENCE` ) {
-        T v → { ( string_free aud ) = aud v }
+        T v → { = aud v }
         F → {}
     }
 
     ? > ( string_len aud ) 0 {} {
-        ( string_free aud )
         = aud ( string_from `api://` )
         ( string_push_str aud ( string_data cid ) )
     }
@@ -290,40 +288,33 @@ $ `deps/oauth/src/oauth.nu`
 
     : ~ b multi ( config_bool cfg `auth.multi_tenant` F )
     ?? ( env_get `ANOMALY_OIDC_MULTI_TENANT` ) {
-        T v → { = multi ( __az_truthy ( string_data v ) ) ( string_free v ) }
+        T v → { = multi ( __az_truthy ( string_data v ) ) }
         F → {}
     }
     : ~ String allow ( config_str_list cfg `auth.allowed_tenants` `` )
     ?? ( env_get `ANOMALY_OIDC_ALLOWED_TENANTS` ) {
-        T v → { ( string_free allow ) = allow v }
+        T v → { = allow v }
         F → {}
     }
     : String allow_lc ( __az_lower ( string_data allow ) )
-    ( string_free allow )
     ( anomaly_authz_configure_tenancy multi ( string_data allow_lc ) )
 
     : ~ String owner ( config_str cfg `auth.owner_tenant` `` )
     ?? ( env_get `ANOMALY_OIDC_OWNER_TENANT` ) {
-        T v → { ( string_free owner ) = owner v }
+        T v → { = owner v }
         F → {}
     }
     : String owner_lc ( __az_lower ( string_data owner ) )
-    ( string_free owner )
     ( anomaly_authz_set_owner_tenant ( string_data owner_lc ) )
-    ( string_free owner_lc )
 
     // The configured list only ever ADDS to the registry, so a headless
     // deployment can admit tenants without a dashboard and a decision made
     // in the dashboard is never undone by a restart.
     ? usable { ( az_seed_allowed ( g_az_allowed ) ( now_seconds ) ) } {}
-    // configure/configure_tenancy copy what they are given, so these are
-    // ours to release. (They used to back the globals directly and were
+    // configure/configure_tenancy copy what they are given, so these go
+    // with this scope. (They used to back the globals directly and were
     // deliberately leaked; that was a leak a service would never notice and
     // a test that reconfigures reports every time.)
-    ( string_free allow_lc )
-    ( string_free aud )
-    ( string_free cid )
-    ( string_free iss )
     ^ usable
 }
 
@@ -333,7 +324,7 @@ $ `deps/oauth/src/oauth.nu`
 @ anomaly_authz_requested AnomalyConfig cfg → b {
     : ~ b want ( config_bool cfg `auth.enabled` F )
     ?? ( env_get `ANOMALY_AUTH` ) {
-        T v → { = want ( __az_truthy ( string_data v ) ) ( string_free v ) }
+        T v → { = want ( __az_truthy ( string_data v ) ) }
         F → {}
     }
     ^ want
@@ -385,15 +376,6 @@ $ `deps/oauth/src/oauth.nu`
     String key_id  // empty unless via_key
 }
 
-@ principal_free sink Principal p → v {
-    ( string_free . p org )
-    ( string_free . p sub )
-    ( string_free . p email )
-    ( string_free . p pname )
-    ( string_free . p role )
-    ( string_free . p key_id )
-}
-
 @ principal_anon → Principal {
     ^ @ Principal {
         F F ( string_new ) ( string_new ) ( string_new )
@@ -430,7 +412,6 @@ $ `deps/oauth/src/oauth.nu`
     ? > ( nurl_str_len owner ) 0 {} { ^ F }
     : String key ( __az_org_key owner )
     : b same == ( nurl_str_eq ( string_data key ) ( string_data . p org ) ) 1
-    ( string_free key )
     ^ same
 }
 
@@ -486,13 +467,10 @@ $ `deps/oauth/src/oauth.nu`
     ? plain { ^ ( __az_lower raw ) } {}
     : ( Vec u ) msg ( bytes_from_str raw )
     : ( Vec u ) dig ( sha256_pure msg )
-    ( vec_free [u] msg )
     : String hex ( bytes_to_hex dig )
-    ( vec_free [u] dig )
     : String out ( string_new )
     : ~ i j 0
     ~ < j 32 { ( string_push_char out ( string_get hex j ) ) = j + j 1 }
-    ( string_free hex )
     ^ out
 }
 
@@ -587,13 +565,11 @@ $ `deps/oauth/src/oauth.nu`
 @ az_home_org → String {
     : String p ( __az_home_marker )
     : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
     ?? r {
         T txt → {
             // string_trim builds a new String; the one read_file handed us
-            // is still ours to release.
+            // goes with this arm.
             : String t ( string_trim txt )
-            ( string_free txt )
             ^ t
         }
         F _ → { ^ ( string_new ) }
@@ -604,9 +580,8 @@ $ `deps/oauth/src/oauth.nu`
     : String h ( az_home_org )
     // No marker at all — a store from before this existed. Nobody is home,
     // so nothing is adoptable until an operator says so.
-    ? > ( string_len h ) 0 {} { ( string_free h ) ^ F }
+    ? > ( string_len h ) 0 {} { ^ F }
     : b same == ( nurl_str_eq ( string_data h ) org ) 1
-    ( string_free h )
     ^ same
 }
 
@@ -624,7 +599,6 @@ $ `deps/oauth/src/oauth.nu`
         : !v IoErr w ( write_file ( string_data p ) org )
         ?? w { T _ → {} F _ → {} }
     }
-    ( string_free p )
 }
 
 // Is `name` held by the public organisation — the bucket for points that
@@ -661,10 +635,8 @@ $ `deps/oauth/src/oauth.nu`
     : String dir ( __az_orgs_dir )
     : !v IoErr mk ( dir_create_all ( string_data dir ) )
     ?? mk { T _ → {} F _ → {} }
-    ( string_free dir )
     : String path ( __az_db_path org )
     : !Database SqliteErr dr ( sqlite_open ( string_data path ) )
-    ( string_free path )
     ?? dr {
         F e → { ^ @ !Database SqliteErr { F e } }
         T db → {
@@ -682,13 +654,11 @@ $ `deps/oauth/src/oauth.nu`
                             T _ → {}
                             F _ → { ? is_alter {} { = failed T } }
                         }
-                        ( string_free sq )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] stmts )
             ? failed { ^ @ !Database SqliteErr { F # SqliteErr SqliteMisuse } } {}
             ( __az_claim_home_if_unset org )
             ^ @ !Database SqliteErr { T db }
@@ -725,10 +695,8 @@ $ `deps/oauth/src/oauth.nu`
     : String dir ( __az_orgs_dir )
     : !v IoErr mk ( dir_create_all ( string_data dir ) )
     ?? mk { T _ → {} F _ → {} }
-    ( string_free dir )
     : String path ( __az_root_db_path )
     : !Database SqliteErr dr ( sqlite_open ( string_data path ) )
-    ( string_free path )
     ?? dr {
         F e → { ^ @ !Database SqliteErr { F e } }
         T db → {
@@ -757,7 +725,7 @@ $ `deps/oauth/src/oauth.nu`
         T q → {
             ( __az_bind_str q 1 ( string_from tid ) )
             ?? ( sqlite_step q ) {
-                T has → { ? has { ( string_free st ) = st ( sqlite_column_text q 0 ) } {} }
+                T has → { ? has { = st ( sqlite_column_text q 0 ) } {} }
                 F _ → {}
             }
         }
@@ -770,7 +738,6 @@ $ `deps/oauth/src/oauth.nu`
 @ az_tenant_note Database db s tid s label i now → String {
     : String have ( az_tenant_state db tid )
     ? > ( string_len have ) 0 { ^ have } {}
-    ( string_free have )
     ?? ( sqlite_prepare db `INSERT INTO tenants (tid, state, label, first_seen)
          VALUES (?1, 'pending', ?2, ?3)` ) {
         F _ → {}
@@ -840,8 +807,6 @@ $ `deps/oauth/src/oauth.nu`
                             ( json_obj_set o `decided_at` ( json_int ( sqlite_column_int q 4 ) ) )
                             ( json_obj_set o `decided_by` ( json_str_lit ( string_data by ) ) )
                             ( json_arr_push arr o )
-                            ( string_free tid ) ( string_free st )
-                            ( string_free lb ) ( string_free by )
                         } { = done T }
                     }
                 }
@@ -861,7 +826,6 @@ $ `deps/oauth/src/oauth.nu`
     ? > ( nurl_str_len owner ) 0 {
         : String ok ( __az_lower owner )
         : b is_owner == ( nurl_str_eq ( string_data ok ) tid ) 1
-        ( string_free ok )
         ? is_owner { ^ T } {}
     } {}
     : ~ b admitted F
@@ -870,7 +834,6 @@ $ `deps/oauth/src/oauth.nu`
         T db → {
             : String st ( az_tenant_note db tid `` now )
             = admitted == ( nurl_str_eq ( string_data st ) AZ_TENANT_ALLOWED ) 1
-            ( string_free st )
         }
     }
     ^ admitted
@@ -884,7 +847,6 @@ $ `deps/oauth/src/oauth.nu`
     ? > ( nurl_str_len csv ) 0 {} { ^ }
     : String list ( string_from csv )
     : ( Vec String ) parts ( string_split list `,` )
-    ( string_free list )
     ?? ( az_root_open ) {
         F _ → {}
         T db → {
@@ -900,9 +862,7 @@ $ `deps/oauth/src/oauth.nu`
                                 : b _r ( az_tenant_set_state db ( string_data t )
                                 AZ_TENANT_ALLOWED `config` now )
                             }
-                            ( string_free cur )
                         } {}
-                        ( string_free t )
                     }
                     F _ → {}
                 }
@@ -910,14 +870,12 @@ $ `deps/oauth/src/oauth.nu`
             }
         }
     }
-    ( vec_free_with [String] parts \ String x → v { ( string_free x ) } )
 }
 
-// Bind an owned String and free it — sqlite_bind_text copies immediately,
-// so the two belong together and separating them is how a leak gets in.
+// Bind a String (sqlite_bind_text copies it); a bind that fails shows up
+// as a failed step.
 @ __az_bind_str Statement st i idx String v → v {
     ?? ( sqlite_bind_text st idx v ) { T _ → {} F _ → {} }
-    ( string_free v )
 }
 
 // Run a statement to completion, discarding rows. T when it did not error.
@@ -960,7 +918,6 @@ $ `deps/oauth/src/oauth.nu`
             ?? ( sqlite_step q ) {
                 T has → {
                     ? has {
-                        ( string_free role )
                         = role ( sqlite_column_text q 0 )
                     } {}
                 }
@@ -990,7 +947,6 @@ $ `deps/oauth/src/oauth.nu`
         }
         ^ have
     } {}
-    ( string_free have )
     : ~ s role AZ_ROLE_VIEWER
     ? == ( az_user_count db ) 0 { = role AZ_ROLE_ADMIN } {}
     ?? ( sqlite_prepare db `INSERT INTO users (sub, email, name, role, created_at, last_seen_at)
@@ -1016,7 +972,6 @@ $ `deps/oauth/src/oauth.nu`
     ? == ( nurl_str_eq role AZ_ROLE_VIEWER ) 1 {
         : String cur ( az_user_role db sub )
         : b was_admin == ( nurl_str_eq ( string_data cur ) AZ_ROLE_ADMIN ) 1
-        ( string_free cur )
         ? & was_admin <= ( az_admin_count db ) 1 { ^ F } {}
     } {}
     : ~ b ok F
@@ -1070,8 +1025,6 @@ $ `deps/oauth/src/oauth.nu`
                             ( json_obj_set o `created_at` ( json_int ( sqlite_column_int q 4 ) ) )
                             ( json_obj_set o `last_seen_at` ( json_int ( sqlite_column_int q 5 ) ) )
                             ( json_arr_push arr o )
-                            ( string_free sub ) ( string_free em )
-                            ( string_free nm ) ( string_free rl )
                         } { = done T }
                     }
                 }
@@ -1094,7 +1047,6 @@ $ `deps/oauth/src/oauth.nu`
             ?? ( sqlite_step q ) {
                 T has → {
                     ? has {
-                        ( string_free owner )
                         = owner ( sqlite_column_text q 0 )
                     } {}
                 }
@@ -1174,7 +1126,6 @@ $ `deps/oauth/src/oauth.nu`
                             : String nm ( sqlite_column_text q 0 )
                             : String ow ( sqlite_column_text q 1 )
                             ( json_obj_set o ( string_data nm ) ( json_str_lit ( string_data ow ) ) )
-                            ( string_free nm ) ( string_free ow )
                         } { = done T }
                     }
                 }
@@ -1304,13 +1255,10 @@ $ `deps/oauth/src/oauth.nu`
     ( string_push_str wal `-wal` )
     : !v IoErr rw ( file_delete ( string_data wal ) )
     ?? rw { T _ → {} F _ → {} }
-    ( string_free wal )
     : String shm ( string_from ( string_data p ) )
     ( string_push_str shm `-shm` )
     : !v IoErr rs ( file_delete ( string_data shm ) )
     ?? rs { T _ → {} F _ → {} }
-    ( string_free shm )
-    ( string_free p )
     ^ ok
 }
 
@@ -1325,9 +1273,7 @@ $ `deps/oauth/src/oauth.nu`
 @ __az_hash_hex s secret → String {
     : ( Vec u ) msg ( bytes_from_str secret )
     : ( Vec u ) dig ( sha256_pure msg )
-    ( vec_free [u] msg )
     : String hex ( bytes_to_hex dig )
-    ( vec_free [u] dig )
     ^ hex
 }
 
@@ -1349,11 +1295,6 @@ $ `deps/oauth/src/oauth.nu`
 : KeyIssue {
     String key_id
     String secret  // the plaintext, which exists only here and in the response
-}
-
-@ key_issue_free sink KeyIssue k → v {
-    ( string_free . k key_id )
-    ( string_free . k secret )
 }
 
 @ az_key_create Database db s sub s label s role i now → KeyIssue {
@@ -1378,7 +1319,6 @@ $ `deps/oauth/src/oauth.nu`
     ( string_push_str token ( string_data id ) )
     ( string_push_char token 95 )
     ( string_push_str token ( string_data secret ) )
-    ( string_free secret )
     ^ @ KeyIssue { id token }
 }
 
@@ -1430,8 +1370,6 @@ $ `deps/oauth/src/oauth.nu`
                             ( json_obj_set o `last_used_at` ( json_int ( sqlite_column_int q 4 ) ) )
                             ( json_obj_set o `revoked` ( json_bool > ( sqlite_column_int q 5 ) 0 ) )
                             ( json_arr_push arr o )
-                            ( string_free id ) ( string_free ow )
-                            ( string_free lb ) ( string_free rl )
                         } { = done T }
                     }
                 }
@@ -1462,22 +1400,15 @@ $ `deps/oauth/src/oauth.nu`
         = j + j 1
     }
     ? < j n {} {
-        ( string_free id )
         ^ @ KeyParts { F ( string_new ) ( string_new ) }
     }
     = j + j 1
     : String sec ( string_new )
     ~ < j n { ( string_push_char sec ( nurl_str_at token n j ) ) = j + j 1 }
     ? & > ( string_len id ) 0 > ( string_len sec ) 0 {} {
-        ( string_free id ) ( string_free sec )
         ^ @ KeyParts { F ( string_new ) ( string_new ) }
     }
     ^ @ KeyParts { T id sec }
-}
-
-@ key_parts_free sink KeyParts k → v {
-    ( string_free . k kp_id )
-    ( string_free . k kp_secret )
 }
 
 // Resolve a presented key against one organisation's database. The
@@ -1496,7 +1427,6 @@ $ `deps/oauth/src/oauth.nu`
                     ? has {
                         : String got ( sqlite_column_text q 0 )
                         ? ( __az_hex_eq got want ) {
-                            ( principal_free out )
                             = out @ Principal {
                                 T T
                                 ( string_from org )
@@ -1507,14 +1437,12 @@ $ `deps/oauth/src/oauth.nu`
                                 ( string_from ( string_data . kp kp_id ) )
                             }
                         } {}
-                        ( string_free got )
                     } {}
                 }
                 F _ → {}
             }
         }
     }
-    ( string_free want )
     ? . out authed {
         ?? ( sqlite_prepare db `UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2` ) {
             F _ → {}
@@ -1537,7 +1465,6 @@ $ `deps/oauth/src/oauth.nu`
     : ( Vec String ) out ( vec_new [String] )
     : String dir ( __az_orgs_dir )
     : !( Vec String ) IoErr r ( dir_list ( string_data dir ) )
-    ( string_free dir )
     ?? r {
         T names → {
             : i n ( vec_len [String] names )
@@ -1562,7 +1489,6 @@ $ `deps/oauth/src/oauth.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
         }
         F _ → {}
     }
@@ -1602,43 +1528,36 @@ $ `deps/oauth/src/oauth.nu`
     ?? ( http_client_get hc ( string_data url ) ) {
         T r → {
             ? & >= . r status 200 < . r status 300 {
-                ( string_free body )
                 = body ( bytes_to_str . r body )
                 = got T
             } {}
-            ( http_response_free r )
         }
         F _ → {}
     }
-    ( string_free url )
-    ? got {} { ( string_free body ) ^ @ ?OidcProvider { F } }
+    ? got {} { ^ @ ?OidcProvider { F } }
 
     : ~ String tmpl ( string_new )
     : ~ String jwks ( string_new )
     ?? ( json_parse ( string_data body ) ) {
         T j → {
             ?? ( json_obj_get j `issuer` ) {
-                T v → { ? ( json_is_str v ) { ( string_free tmpl ) = tmpl ( string_from ( json_str_data v ) ) } {} }
+                T v → { ? ( json_is_str v ) { = tmpl ( string_from ( json_str_data v ) ) } {} }
                 F _ → {}
             }
             ?? ( json_obj_get j `jwks_uri` ) {
-                T v → { ? ( json_is_str v ) { ( string_free jwks ) = jwks ( string_from ( json_str_data v ) ) } {} }
+                T v → { ? ( json_is_str v ) { = jwks ( string_from ( json_str_data v ) ) } {} }
                 F _ → {}
             }
-            ( json_free j )
         }
         F _ → {}
     }
-    ( string_free body )
     ? & > ( string_len tmpl ) 0 > ( string_len jwks ) 0 {} {
-        ( string_free tmpl ) ( string_free jwks )
         ^ @ ?OidcProvider { F }
     }
 
     : OidcProvider p ( oidc_provider_new ( g_az_issuer ) )
     ( oidc_provider_set_jwks_uri p ( string_data jwks ) )
-    ( string_free jwks )
-    // tmpl backs g_az_iss_tmpl for the process's lifetime; not freed.
+    // tmpl backs g_az_iss_tmpl for the process's lifetime: kept.
     = g_az_iss_tmpl ( string_data tmpl )
     ( __az_keep_provider p )
     ^ @ ?OidcProvider { T p }
@@ -1680,7 +1599,7 @@ $ `deps/oauth/src/oauth.nu`
             = k + k 1
         }
     }
-    ? hit {} { ( string_free out ) ^ ( string_new ) }
+    ? hit {} { ^ ( string_new ) }
     ^ out
 }
 
@@ -1692,7 +1611,6 @@ $ `deps/oauth/src/oauth.nu`
     ? > n 0 {} { ^ T }
     : String list ( string_from ( g_az_allowed ) )
     : ( Vec String ) parts ( string_split list `,` )
-    ( string_free list )
     : ~ b ok F
     : i np ( vec_len [String] parts )
     : ~ i k 0
@@ -1701,13 +1619,11 @@ $ `deps/oauth/src/oauth.nu`
             T x → {
                 : String t ( __az_lower ( string_data x ) )
                 ? == ( nurl_str_eq ( string_data t ) tid ) 1 { = ok T } {}
-                ( string_free t )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] parts \ String x → v { ( string_free x ) } )
     ^ ok
 }
 
@@ -1720,10 +1636,9 @@ $ `deps/oauth/src/oauth.nu`
         T j → {
             : ~ String tid ( string_new )
             ?? ( json_obj_get j `tid` ) {
-                T v → { ? ( json_is_str v ) { ( string_free tid ) = tid ( string_from ( json_str_data v ) ) } {} }
+                T v → { ? ( json_is_str v ) { = tid ( string_from ( json_str_data v ) ) } {} }
                 F _ → {}
             }
-            ( json_free j )
             ^ tid
         }
         F _ → { ^ ( string_new ) }
@@ -1751,7 +1666,6 @@ $ `deps/oauth/src/oauth.nu`
         // organisation for whoever knocks is how a multi-tenant service
         // fills a disk with strangers.
         : b ok_pre ( az_tenant_admitted ( string_data tid_pre ) now )
-        ( string_free tid_pre )
         ? ok_pre {} {
             ( __az_set_last_err `this organisation is not approved for this service yet` )
             ^ ( principal_anon )
@@ -1771,13 +1685,10 @@ $ `deps/oauth/src/oauth.nu`
             : ~ String want_iss ( string_from ( g_az_issuer ) )
             ? g_az_multi {
                 : String tid0 ( __az_unverified_tid token )
-                ( string_free want_iss )
                 = want_iss ( __az_issuer_for ( string_data tid0 ) )
-                ( string_free tid0 )
             } {}
             ? > ( string_len want_iss ) 0 {} {
                 ( __az_set_last_err `the token names no tenant to derive an issuer from` )
-                ( string_free want_iss )
                 ^ ( principal_anon )
             }
 
@@ -1806,13 +1717,10 @@ $ `deps/oauth/src/oauth.nu`
                         ( string_push_str why `: ` )
                         ( string_push_str why ( oidc_provider_last_error p ) )
                         ( __az_set_last_err ( string_data why ) )
-                        ( string_free why )
                         = attempt + attempt 1
                     }
                 }
-                ( oidc_policy_free pol )
             }
-            ( string_free want_iss )
             ?? got {
                 F → { ^ ( principal_anon ) }
                 T id → {
@@ -1827,22 +1735,16 @@ $ `deps/oauth/src/oauth.nu`
                     ? g_az_multi {
                         ? ( az_tenant_admitted ( string_data tid ) now ) {} {
                             ( __az_set_last_err `this organisation is not approved for this service yet` )
-                            ( string_free tid )
-                            ( oidc_identity_free id )
                             ^ ( principal_anon )
                         }
                     } {}
                     : ~ String orgsrc ( string_new )
                     ? > ( string_len tid ) 0 {
-                        ( string_free orgsrc )
                         = orgsrc ( string_from ( string_data tid ) )
                     } {
-                        ( string_free orgsrc )
                         = orgsrc ( string_from ( string_data . id issuer ) )
                     }
-                    ( string_free tid )
                     : String org ( __az_org_key ( string_data orgsrc ) )
-                    ( string_free orgsrc )
 
                     : ~ Principal out ( principal_anon )
                     ?? ( az_db_open ( string_data org ) ) {
@@ -1850,7 +1752,6 @@ $ `deps/oauth/src/oauth.nu`
                         T db → {
                             : String role ( az_user_touch db ( string_data . id subject )
                             ( string_data . id email ) ( string_data . id name ) now )
-                            ( principal_free out )
                             = out @ Principal {
                                 T F
                                 ( string_from ( string_data org ) )
@@ -1862,8 +1763,6 @@ $ `deps/oauth/src/oauth.nu`
                             }
                         }
                     }
-                    ( string_free org )
-                    ( oidc_identity_free id )
                     ^ out
                 }
             }
@@ -1886,9 +1785,8 @@ $ `deps/oauth/src/oauth.nu`
                         T db → {
                             : Principal cand ( az_key_principal db ( string_data org ) kp now )
                             ? . cand authed {
-                                ( principal_free out )
                                 = out cand
-                            } { ( principal_free cand ) }
+                            } {}
                         }
                     }
                 }
@@ -1897,7 +1795,6 @@ $ `deps/oauth/src/oauth.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] orgs \ String x → v { ( string_free x ) } )
     ^ out
 }
 
@@ -1908,13 +1805,13 @@ $ `deps/oauth/src/oauth.nu`
     ? ( anomaly_authz_enabled ) {} { ^ ( principal_public_admin ) }
     : ~ String tok ( string_new )
     ?? ( parse_bearer_auth req ) {
-        T t → { ( string_free tok ) = tok t }
+        T t → { = tok t }
         F → {
             // A key may also arrive in its own header, because an
             // Authorization header is awkward to set in some of the
             // producers that will carry one.
             ?? ( header_get . req headers `x-api-key` ) {
-                T v → { ( string_free tok ) = tok v }
+                T v → { = tok v }
                 F → {}
             }
         }
@@ -1923,23 +1820,18 @@ $ `deps/oauth/src/oauth.nu`
         // Nothing presented, so nothing was refused: a reason left over
         // from an earlier request must not be reported for this one.
         ( __az_set_last_err `` )
-        ( string_free tok )
         ^ ( principal_anon )
     }
     : KeyParts kp ( __az_key_split ( string_data tok ) )
     : ~ Principal out ( principal_anon )
     ? . kp ok {
-        ( principal_free out )
         = out ( __az_key_principal_any kp now )
         // A key is refused for one reason only; the token path records
         // its own, and this one is as entitled to be told as those are.
         ( __az_set_last_err ? . out authed `` `the API key is not recognised, or has been revoked` )
     } {
-        ( principal_free out )
         = out ( __az_token_principal ( string_data tok ) now )
     }
-    ( key_parts_free kp )
-    ( string_free tok )
     ^ out
 }
 

@@ -107,17 +107,14 @@ $ `stdlib/ext/json.nu`
                             T stt → { ? ( stat_is_dir stt ) { ( vec_push [String] out ( string_clone nm ) ) } {} }
                             F _ → {}
                         }
-                        ( string_free p )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _ → {}
     }
-    ( string_free d )
     ^ out
 }
 
@@ -174,10 +171,6 @@ $ `stdlib/ext/json.nu`
     i mtime
 }
 
-@ orgfiles_free sink ( Vec OrgFile ) xs → v {
-    ( vec_free_with [OrgFile] xs \ OrgFile x → v { ( string_free . x name ) } )
-}
-
 // Every file in the folder that carries a valid name, by name. Anything
 // else in the directory — a temp file mid-write, a stray dotfile — is
 // not a file the API ever handed out and is not listed.
@@ -205,17 +198,14 @@ $ `stdlib/ext/json.nu`
                                 }
                                 F _ → {}
                             }
-                            ( string_free p )
                         } {}
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
         }
     }
-    ( string_free d )
     // Insertion sort by name: folders hold a handful of files, and a
     // stable listing is what a caller pages through.
     : i n ( vec_len [OrgFile] out )
@@ -249,7 +239,6 @@ $ `stdlib/ext/json.nu`
         }
         F _ → {}
     }
-    ( string_free p )
     ^ out
 }
 
@@ -257,7 +246,6 @@ $ `stdlib/ext/json.nu`
     : String p ( orgfiles_path org name )
     : ~ b ok F
     ?? ( file_delete ( string_data p ) ) { T _ → { = ok T } F _ → {} }
-    ( string_free p )
     ^ ok
 }
 
@@ -274,8 +262,6 @@ $ `stdlib/ext/json.nu`
         }
         F _ → {}
     }
-    ( string_free tmp )
-    ( string_free p )
     ^ ok
 }
 
@@ -294,18 +280,17 @@ $ `stdlib/ext/json.nu`
     ( string_push_str p `/link.secret` )
     : ~ String sec ( string_new )
     ?? ( read_file ( string_data p ) ) {
-        T s0 → { ( string_free sec ) = sec ( string_trim s0 ) ( string_free s0 ) }
+        T s0 → { = sec ( string_trim s0 ) }
         F _ → {}
     }
     ? < ( string_len sec ) 32 {
-        ( string_free sec )
         = sec ( rand_hex_str 32 )
         : !v IoErr wr ( write_file ( string_data p ) ( string_data sec ) )
         ?? wr { T _ → {} F _ → {} }
     } {}
-    ( string_free p )
     // Kept for the life of the process, in the module's own block.
-    ( string_free . st secret )
+    : String old_secret . st secret
+    ( mem_take old_secret )  // a store through the pointer drops nothing
     = . st secret sec
     ^ ( string_data . st secret )
 }
@@ -320,10 +305,6 @@ $ `stdlib/ext/json.nu`
     : ( Vec u ) m ( bytes_from_str ( string_data msg ) )
     : ( Vec u ) dig ( hmac_sha256_pure k m )
     : String hex ( bytes_to_hex dig )
-    ( vec_free [u] dig )
-    ( vec_free [u] m )
-    ( vec_free [u] k )
-    ( string_free msg )
     ^ hex
 }
 
@@ -347,7 +328,6 @@ $ `stdlib/ext/json.nu`
     ? ( orgfiles_name_ok name ) {} { ^ F }
     : String want ( orgfiles_sign org name exp )
     : b ok ( __of_eq_ct ( string_data want ) sig )
-    ( string_free want )
     ^ ok
 }
 
@@ -362,7 +342,6 @@ $ `stdlib/ext/json.nu`
     ( string_push_int u exp )
     ( string_push_str u `&sig=` )
     ( string_push_str u ( string_data sig ) )
-    ( string_free sig )
     ^ u
 }
 
@@ -374,6 +353,5 @@ $ `stdlib/ext/json.nu`
     ? ( string_ends_with n `.json` ) { = ct `application/json` } {}
     ? ( string_ends_with n `.csv` ) { = ct `text/csv; charset=utf-8` } {}
     ? ( string_ends_with n `.txt` ) { = ct `text/plain; charset=utf-8` } {}
-    ( string_free n )
     ^ ct
 }

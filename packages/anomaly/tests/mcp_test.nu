@@ -84,11 +84,6 @@ $ `src/service.nu`
     String www
 }
 
-@ out_free sink Out o → v {
-    ( json_free . o body )
-    ( string_free . o www )
-}
-
 @ fire Router r s method s path s query s body s key → Out {
     : HttpRequest req ( mk_req method path query body key )
     : HttpResponse resp ( router_handle r req )
@@ -96,17 +91,14 @@ $ `src/service.nu`
     : String txt ( bytes_to_str . resp body )
     : ~ Json parsed ( json_null )
     ?? ( json_parse ( string_data txt ) ) {
-        T j → { ( json_free parsed ) = parsed j }
+        T j → { = parsed j }
         F _ → {}
     }
     : ~ String www ( string_new )
     ?? ( header_get . resp headers `www-authenticate` ) {
-        T v → { ( string_free www ) = www v }
+        T v → { = www v }
         F → {}
     }
-    ( string_free txt )
-    ( http_response_free resp )
-    ( request_free req )
     ^ @ Out { status parsed www }
 }
 
@@ -118,7 +110,6 @@ $ `src/service.nu`
     ( string_push_str body params )
     ( string_push_str body `}` )
     : Out o ( fire r `POST` `/mcp` `` ( string_data body ) key )
-    ( string_free body )
     ^ o
 }
 
@@ -171,11 +162,6 @@ $ `src/service.nu`
     Json data
 }
 
-@ call_free sink Call c → v {
-    ( string_free . c text )
-    ( json_free . c data )
-}
-
 @ call Router r s tool s args s key → Call {
     : String params ( string_from `{"name":"` )
     ( string_push_str params tool )
@@ -183,7 +169,6 @@ $ `src/service.nu`
     ( string_push_str params args )
     ( string_push_str params `}` )
     : Out o ( rpc r `tools/call` ( string_data params ) key )
-    ( string_free params )
     : ~ b ok F
     : ~ String text ( string_new )
     : ~ Json data ( json_null )
@@ -201,10 +186,9 @@ $ `src/service.nu`
                     T c0 → {
                         ?? ( json_obj_get c0 `text` ) {
                             T t → {
-                                ( string_free text )
                                 = text ( string_from ( json_as_str t ) )
                                 ?? ( json_parse ( string_data text ) ) {
-                                    T j → { ( json_free data ) = data j }
+                                    T j → { = data j }
                                     F _ → {}
                                 }
                             }
@@ -217,7 +201,6 @@ $ `src/service.nu`
             F _ → {}
         }
     } {}
-    ( out_free o )
     ^ @ Call { ok text data }
 }
 
@@ -279,11 +262,8 @@ $ `src/service.nu`
         ( string_push_int body % k 7 )
         ( string_push_str body `}` )
         : Out o ( fire r `POST` ( string_data path ) `` ( string_data body ) key )
-        ( out_free o )
-        ( string_free body )
         = k + k 1
     }
-    ( string_free path )
 }
 
 // ── Simple mode: no sign-in, every tool ─────────────────────────────────
@@ -291,11 +271,9 @@ $ `src/service.nu`
 @ test_transport Router r → v {
     : Out pre ( fire r `OPTIONS` `/mcp` `` `` `` )
     ( check == . pre status 204 `mcp: OPTIONS /mcp -> 204 preflight` )
-    ( out_free pre )
 
     : Out md ( fire r `GET` `/.well-known/oauth-protected-resource/mcp` `` `` `` )
     ( check == . md status 404 `mcp: no protected-resource metadata while sign-in is off` )
-    ( out_free md )
 
     : Out ini ( rpc r `initialize` `{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}` `` )
     ( check == . ini status 200 `mcp: initialize -> 200` )
@@ -312,7 +290,6 @@ $ `src/service.nu`
     }
     ( check named `mcp: the server calls itself anomaly` )
     ( check instructed `mcp: initialize carries instructions for the agent` )
-    ( out_free ini )
 
     : Out ls ( rpc r `tools/list` `{}` `` )
     ( check == . ls status 200 `mcp: tools/list -> 200` )
@@ -323,13 +300,11 @@ $ `src/service.nu`
     ( check ( tools_has . ls body `set_role` ) `mcp: sign-in off = admin: set_role listed` )
     ( check ( tools_has . ls body `org_keys` ) `mcp: sign-in off = admin: org_keys listed` )
     ( check == ( tools_count . ls body ) 41 `mcp: every one of the 41 tools is listed` )
-    ( out_free ls )
 
     // A tool that does not exist is refused in the tool-result envelope.
     : Call nope ( call r `no_such_tool` `{}` `` )
     ( check ! . nope ok `mcp: an unknown tool is an error` )
     ( check ( string_contains . nope text `unknown tool` ) `mcp: and says so` )
-    ( call_free nope )
 }
 
 @ test_reading Router r → v {
@@ -340,7 +315,6 @@ $ `src/service.nu`
     ( check ( jstr_eq . who data `role` `admin` ) `mcp: sign-in off: whoami says admin` )
     ( check ( jstr_eq . who data `scratch_prefix` `llm_` ) `mcp: whoami names the scratch prefix` )
     ( check > ( jarr_len . who data `may` ) 2 `mcp: whoami lists what the role may do` )
-    ( call_free who )
 
     : Call lm ( call r `list_models` `{}` `` )
     ( check . lm ok `mcp: list_models answers` )
@@ -364,7 +338,6 @@ $ `src/service.nu`
     }
     ( check saw `mcp: the brief has name, a column count and points seen` )
     ( check brief `mcp: and names the versions that are on, not every margin` )
-    ( call_free lm )
 
     : Call lmd ( call r `list_models` `{"detail":true}` `` )
     ( check . lmd ok `mcp: list_models detail answers` )
@@ -381,7 +354,6 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check full `mcp: detail: true lists the columns and every version's margin` )
-    ( call_free lmd )
 
     : Call dm ( call r `describe_model` `{"model":"pub"}` `` )
     ( check . dm ok `mcp: describe_model answers` )
@@ -390,25 +362,20 @@ $ `src/service.nu`
     : ~ i nfeat 0
     ?? ( json_obj_get . dm data `features` ) { T fo → { = nfeat ( jint_of fo `count` ) ( check == ( jarr_len fo `names` ) nfeat `mcp: a short feature order is listed whole` ) } F _ → {} }
     ( check >= nfeat 2 `mcp: describe_model counts the features` )
-    ( call_free dm )
 
     : Call miss ( call r `describe_model` `{}` `` )
     ( check ! . miss ok `mcp: a missing model argument is an error` )
     ( check ( string_contains . miss text `list_models` ) `mcp: that points at list_models` )
-    ( call_free miss )
 
     // An alias names the model too: the tool resolves it to the real name.
     : Call al ( call r `edit_model` `{"model":"pub","patch":{"alias":"Pump House"}}` `` )
     ( check . al ok `mcp: the model gets an alias` )
-    ( call_free al )
     : Call byal ( call r `describe_model` `{"model":"pump house"}` `` )
     ( check . byal ok `mcp: the alias resolves` )
     ( check ( jstr_eq . byal data `model_name` `pub` ) `mcp: to the model's real name` )
-    ( call_free byal )
     : Call gone ( call r `describe_model` `{"model":"nosuch"}` `` )
     ( check ! . gone ok `mcp: an unknown model is an error` )
     ( check ( string_contains . gone text `404` ) `mcp: carrying the API's status` )
-    ( call_free gone )
 
     : Call an ( call r `anomalies` `{"model":"pub","count":5}` `` )
     ( check . an ok `mcp: anomalies answers` )
@@ -453,16 +420,13 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check row_event `mcp: every anomalous row names its event` )
-    ( call_free an )
 
     : Call all ( call r `anomalies` `{"model":"pub","all_points":true,"count":200}` `` )
     ( check . all ok `mcp: anomalies all_points answers` )
     ( check == ( jarr_len . all data `rows` ) 61 `mcp: all_points lists every row` )
-    ( call_free all )
 
     : Call bad ( call r `anomalies` `{"model":"pub","last":"yesterdayish"}` `` )
     ( check ! . bad ok `mcp: an unreadable window is an error` )
-    ( call_free bad )
 
     : Call su ( call r `anomaly_summary` `{"model":"pub","buckets":4}` `` )
     ( check . su ok `mcp: anomaly_summary answers` )
@@ -519,7 +483,6 @@ $ `src/service.nu`
                 T mv → {
                     : ( Vec String ) bk ( json_obj_keys bv )
                     = zeros == ( vec_len [String] bk ) ( json_arr_len mv )
-                    ( vec_free_with [String] bk \ String x → v { ( string_free x ) } )
                 }
                 F _ → {}
             }
@@ -527,7 +490,6 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check zeros `mcp: by_version carries a line for every version, flagged or not` )
-    ( call_free su )
 
     : Call pt ( call r `points` `{"model":"pub","count":3}` `` )
     ( check . pt ok `mcp: points answers` )
@@ -544,13 +506,11 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check >= idx 0 `mcp: a points row carries its ring index` )
-    ( call_free pt )
 
     : String pargs ( string_from `{"model":"pub","index":` )
     ( string_push_int pargs idx )
     ( string_push_str pargs `}` )
     : Call one ( call r `point` ( string_data pargs ) `` )
-    ( string_free pargs )
     ( check . one ok `mcp: point answers for that index` )
     ( check ( jstr_eq . one data `model_name` `pub` ) `mcp: point names the model` )
     ( check ( jobj_at . one data `point` ) `mcp: point carries the row` )
@@ -561,12 +521,10 @@ $ `src/service.nu`
         }
         F _ → {}
     }
-    ( call_free one )
 
     : Call far ( call r `point` `{"model":"pub","index":100000}` `` )
     ( check ! . far ok `mcp: point past the ring is an error` )
     ( check ( string_contains . far text `holds 61 points` ) `mcp: that says how many points there are` )
-    ( call_free far )
 
     : Call ca ( call r `calibration` `{"model":"pub"}` `` )
     ( check . ca ok `mcp: calibration answers` )
@@ -586,25 +544,19 @@ $ `src/service.nu`
     }
     ( check rd `mcp: calibration reads each version` )
     ( check ( string_contains . ca text `too few rows` ) `mcp: a window under 100 rows is called too small to read` )
-    ( call_free ca )
 
     // A version with no margin flags everything past its raw threshold;
     // list_models says so before anyone trusts its verdicts.
     : Call m0 ( call r `edit_model` `{"model":"pub","patch":{"versions":{"short_term":{"decision_margin":0}}}}` `` )
     ( check . m0 ok `mcp: the margin is zeroed` )
-    ( call_free m0 )
     : Call lmw ( call r `list_models` `{}` `` )
     ( check ( string_contains . lmw text `short_term: margin 0` ) `mcp: list_models warns about a margin of 0` )
-    ( call_free lmw )
     : Call m1 ( call r `edit_model` `{"model":"pub","patch":{"versions":{"short_term":{"decision_margin":0.05}}}}` `` )
-    ( call_free m1 )
     : Call mu ( call r `edit_model` `{"model":"pub","patch":{"schedule":{"forecast":500},"versions":{"short_term":{"window_size":48}}}}` `` )
     ( check ! . mu ok `mcp: edit_model refuses a patch with an unknown key` )
     ( check ( string_contains . mu text `schedule.forecast` ) `mcp: the refusal names the key` )
-    ( call_free mu )
     : Call lmq ( call r `list_models` `{}` `` )
     ( check ! ( string_contains . lmq text `margin 0 ` ) `mcp: the warning goes with the margin` )
-    ( call_free lmq )
 
     // Labels: the flagged row called a false positive carries the label
     // in anomalies, is counted in the summary, and leaves calibration.
@@ -614,27 +566,22 @@ $ `src/service.nu`
         T rows → { ?? ( json_arr_get rows 0 ) { T r0 → { = aidx ( jint_of r0 `index` ) } F _ → {} } }
         F _ → {}
     }
-    ( call_free an2 )
     ( check >= aidx 0 `mcp: an anomaly to label` )
     : Call lbad ( call r `label_anomaly` `{"model":"pub","index":0,"label":"meh"}` `` )
     ( check ! . lbad ok `mcp: an unknown label is refused` )
-    ( call_free lbad )
     : String largs ( string_from `{"model":"pub","index":` )
     ( string_push_int largs aidx )
     ( string_push_str largs `,"label":"false_positive","note":"window open"}` )
     : Call lab ( call r `label_anomaly` ( string_data largs ) `` )
-    ( string_free largs )
     ( check . lab ok `mcp: label_anomaly answers` )
     ( check ( jstr_eq . lab data `label` `false_positive` ) `mcp: and echoes the label` )
     ( check ( jstr_eq . lab data `note` `window open` ) `mcp: with the note` )
     ( check == ( jint_of . lab data `index` ) aidx `mcp: on the row asked` )
     ( check ( json_obj_has . lab data `at` ) `mcp: stamped` )
-    ( call_free lab )
     : Call ll ( call r `labels` `{"model":"pub"}` `` )
     ( check . ll ok `mcp: labels answers` )
     ( check == ( jint_of . ll data `count` ) 1 `mcp: one label` )
     ( check == ( jint_of . ll data `false_positives` ) 1 `mcp: counted as a false positive` )
-    ( call_free ll )
     : Call an3 ( call r `anomalies` `{"model":"pub","count":1}` `` )
     : ~ b lrow F
     ?? ( json_obj_get . an3 data `rows` ) {
@@ -642,17 +589,14 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check lrow `mcp: the row carries its label` )
-    ( call_free an3 )
     : Call su2 ( call r `anomaly_summary` `{"model":"pub"}` `` )
     : ~ i sfp 0
     ?? ( json_obj_get . su2 data `labelled` ) { T lj → { = sfp ( jint_of lj `false_positive` ) } F _ → {} }
     ( check == sfp 1 `mcp: the summary counts the labelled rows` )
-    ( call_free su2 )
     : Call ca2 ( call r `calibration` `{"model":"pub"}` `` )
     : ~ i cex 0
     ?? ( json_obj_get . ca2 data `window` ) { T w → { = cex ( jint_of w `excluded` ) } F _ → {} }
     ( check == cex 1 `mcp: calibration says it left the false positive out` )
-    ( call_free ca2 )
 
     : Call sc ( call r `score_point` `{"model":"pub","values":{"temp":99,"load":44}}` `` )
     ( check . sc ok `mcp: score_point answers` )
@@ -671,20 +615,16 @@ $ `src/service.nu`
     }
     : Call va ( call r `anomalies` `{"model":"pub","min_votes":2,"all_points":true}` `` )
     ( check . va ok `mcp: anomalies takes min_votes` )
-    ( call_free va )
     // A filter no row can satisfy is a caller's mistake, and "0
     // anomalies" reads as good news. It is refused, with the number that
     // makes it impossible.
     : Call vb ( call r `anomalies` `{"model":"pub","min_votes":99}` `` )
     ( check ! . vb ok `mcp: an impossible min_votes is refused, not answered with zero` )
     ( check ( string_contains . vb text `min_votes` ) `mcp: and the refusal names the filter` )
-    ( call_free vb )
     // A count past the answer's cap says it was cut.
     : Call vc ( call r `anomalies` `{"model":"pub","count":9999,"all_points":true}` `` )
     ( check . vc ok `mcp: a count past the cap still answers` )
     ( check ( json_obj_has . vc data `count_capped` ) `mcp: and says the count was cut` )
-    ( call_free vc )
-    ( call_free sc )
 }
 
 // The `weekly` version of `model` as describe_model shows it: its
@@ -700,7 +640,6 @@ $ `src/service.nu`
     ( string_push_str args model )
     ( string_push_str args `"}` )
     : Call dm ( call r `describe_model` ( string_data args ) `` )
-    ( string_free args )
     : ~ i wmin -1
     : ~ i est -1
     : ~ b en F
@@ -717,7 +656,6 @@ $ `src/service.nu`
         }
         F _ → {}
     }
-    ( call_free dm )
     ^ @ Weekly { wmin est en }
 }
 
@@ -725,12 +663,10 @@ $ `src/service.nu`
     : Call noname ( call r `fork_model` `{"source":"pub"}` `` )
     ( check ! . noname ok `mcp: fork_model needs a name` )
     ( check ( string_contains . noname text `llm_` ) `mcp: and suggests the scratch prefix` )
-    ( call_free noname )
 
     // Give the source a configuration of its own: the fork must carry it.
     : Call cfg ( call r `edit_model` `{"model":"pub","patch":{"versions":{"weekly":{"n_estimators":123,"enabled":false}}}}` `` )
     ( check . cfg ok `mcp: the source's weekly version is edited` )
-    ( call_free cfg )
 
     : Call fk ( call r `fork_model` `{"source":"pub","name":"llm_fork","fields":["temp"]}` `` )
     ( check . fk ok `mcp: fork_model builds a scratch model` )
@@ -739,7 +675,6 @@ $ `src/service.nu`
     ( check == ( jarr_len . fk data `fields` ) 1 `mcp: fork kept the one field asked` )
     ( check > ( jint_of . fk data `points` ) 50 `mcp: fork trained on the slice` )
     ( check ( string_contains . fk text `delete_model when done` ) `mcp: fork tells what comes next` )
-    ( call_free fk )
 
     : Weekly fw ( weekly_of r `llm_fork` )
     ( check == . fw est 123 `mcp: the fork inherits the source's version configuration` )
@@ -748,7 +683,6 @@ $ `src/service.nu`
 
     : Call lm ( call r `list_models` `{}` `` )
     ( check == ( jint_of . lm data `count` ) 2 `mcp: list_models now counts two` )
-    ( call_free lm )
 
     : Call dm ( call r `describe_model` `{"model":"llm_fork"}` `` )
     : ~ b scratch F
@@ -757,39 +691,31 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check scratch `mcp: describe_model marks it scratch` )
-    ( call_free dm )
 
     : Call ft ( call r `finetune` `{"model":"llm_fork","rate":0.05,"dry_run":true}` `` )
     ( check . ft ok `mcp: finetune dry_run answers` )
     ( check ( jobj_at . ft data `versions` ) `mcp: finetune reports the versions` )
     ( check ( jobj_at . ft data `window` ) `mcp: finetune reports the window` )
     ( check ! ( json_obj_has . ft data `adjusted_margins` ) `mcp: finetune drops the legacy margin map` )
-    ( call_free ft )
     : Call fta ( call r `finetune` `{"model":"llm_fork","rate":0.05,"dry_run":true,"last":"all"}` `` )
     ( check . fta ok `mcp: finetune takes last=all` )
-    ( call_free fta )
 
     : Call ed ( call r `edit_model` `{"model":"llm_fork","patch":{"alias":"forked"}}` `` )
     ( check . ed ok `mcp: edit_model applies a patch` )
     ( check ( string_contains . ed text `forked` ) `mcp: and echoes the new alias` )
-    ( call_free ed )
 
     : Call nc ( call r `delete_model` `{"model":"llm_fork"}` `` )
     ( check ! . nc ok `mcp: delete_model without confirm is refused` )
     ( check ( string_contains . nc text `confirm` ) `mcp: and asks for confirm` )
-    ( call_free nc )
 
     : Call rs ( call r `reset_model` `{"model":"llm_fork","confirm":false}` `` )
     ( check ! . rs ok `mcp: reset_model with confirm=false is refused` )
-    ( call_free rs )
 
     : Call dl ( call r `delete_model` `{"model":"llm_fork","confirm":true}` `` )
     ( check . dl ok `mcp: delete_model with confirm removes it` )
-    ( call_free dl )
 
     : Call lm2 ( call r `list_models` `{}` `` )
     ( check == ( jint_of . lm2 data `count` ) 1 `mcp: and the listing is back to one` )
-    ( call_free lm2 )
 }
 
 // ── OIDC mode: the challenge, the metadata, and three roles ─────────────
@@ -808,13 +734,10 @@ $ `src/service.nu`
         F _ → { ( check F `mcp: orgM opens` ) }
         T db → {
             : String r1 ( az_user_touch db `boss` `b@m` `Boss` T0 )
-            ( string_free r1 )
             : KeyIssue ka ( az_key_create db `boss` `agent-admin` AZ_ROLE_ADMIN T0 )
             : KeyIssue kg ( az_key_create db `boss` `feed` AZ_ROLE_INGEST T0 )
-            ( string_free a ) = a ( string_from ( string_data . ka secret ) )
-            ( string_free g ) = g ( string_from ( string_data . kg secret ) )
-            ( key_issue_free ka )
-            ( key_issue_free kg )
+            = a ( string_from ( string_data . ka secret ) )
+            = g ( string_from ( string_data . kg secret ) )
         }
     }
     ^ @ Keys { a g }
@@ -830,13 +753,11 @@ $ `src/service.nu`
     ( check ( string_starts_with . anon www `Bearer resource_metadata="` ) `mcp: WWW-Authenticate points at the resource metadata` )
     ( check ( string_contains . anon www `/.well-known/oauth-protected-resource/mcp"` ) `mcp: at the /mcp-scoped document` )
     ( check ( jstr_eq . anon body `error` `unauthorized` ) `mcp: the body says unauthorized` )
-    ( out_free anon )
 
     // A credential that does not verify says why.
     : Out badtok ( fire r `POST` `/mcp` `` `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}` `anok_nosuch_key` )
     ( check == . badtok status 401 `mcp: a bad key -> 401` )
     ( check ( string_contains . badtok www `error="invalid_token"` ) `mcp: named invalid_token` )
-    ( out_free badtok )
 
     // The metadata document, at both paths.
     : Out md ( fire r `GET` `/.well-known/oauth-protected-resource/mcp` `` `` `` )
@@ -857,7 +778,6 @@ $ `src/service.nu`
         T rv → {
             : String rs ( string_from ( json_as_str rv ) )
             = res ( string_ends_with rs `/mcp` )
-            ( string_free rs )
         }
         F _ → {}
     }
@@ -873,10 +793,8 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check scope `mcp: the scope is the audience's access_as_user` )
-    ( out_free md )
     : Out md2 ( fire r `GET` `/.well-known/oauth-protected-resource` `` `` `` )
     ( check == . md2 status 200 `mcp: the unscoped metadata path answers too` )
-    ( out_free md2 )
 
     : Keys ks ( mk_keys )
     : s GK ( string_data . ks ingest )
@@ -896,17 +814,14 @@ $ `src/service.nu`
     ( check ! ( tools_has . gl body `org_users` ) `mcp: ingest does not see org_users` )
     ( check ! ( tools_has . gl body `claim_model` ) `mcp: ingest does not see claim_model` )
     ( check == ( tools_count . gl body ) 31 `mcp: 31 tools for an ingest key` )
-    ( out_free gl )
 
     : Out al ( rpc r `tools/list` `{}` AK )
     ( check == ( tools_count . al body ) 41 `mcp: an admin key sees every tool` )
-    ( out_free al )
 
     // An invisible tool called by name is unknown to that caller.
     : Call hid ( call r `set_role` `{"subject":"boss","role":"viewer"}` GK )
     ( check ! . hid ok `mcp: ingest calling set_role is refused` )
     ( check ( string_contains . hid text `unknown tool` ) `mcp: as an unknown tool` )
-    ( call_free hid )
 
     // A production model, fed by the ingest key: the organisation's.
     ( feed r `prod` 61 GK )
@@ -916,113 +831,89 @@ $ `src/service.nu`
     ( check ( jstr_eq . gwho data `role` `ingest` ) `mcp: and says ingest` )
     ( check ( jstr_eq . gwho data `organization` `orgM` ) `mcp: in orgM` )
     ( check ( string_contains . gwho text `NOT change or delete models outside llm_` ) `mcp: whoami says what it may not do` )
-    ( call_free gwho )
 
     : Call glm ( call r `list_models` `{}` GK )
     ( check . glm ok `mcp: ingest list_models answers` )
     ( check == ( jint_of . glm data `count` ) 1 `mcp: it sees the organisation's model` )
     ( check ( jstr_eq . glm data `organization` `orgM` ) `mcp: the listing names the organisation` )
-    ( call_free glm )
 
     : Call gan ( call r `anomalies` `{"model":"prod","count":3}` GK )
     ( check . gan ok `mcp: ingest reads the organisation's anomalies` )
     ( check == ( jint_of . gan data `points_stored` ) 61 `mcp: all 61 points are there` )
-    ( call_free gan )
 
     : Call gip ( call r `ingest_point` `{"model":"prod","values":{"temp":23.5,"load":1.2}}` GK )
     ( check . gip ok `mcp: ingest_point stores a point` )
     ( check ( string_contains . gip text `anomaly` ) `mcp: and answers with the verdict` )
-    ( call_free gip )
 
     : Call grt ( call r `retrain` `{"model":"prod"}` GK )
     ( check ! . grt ok `mcp: ingest may not retrain a production model` )
     ( check ( string_contains . grt text `403` ) `mcp: refused with the API's 403` )
     ( check ( string_contains . grt text `llm_` ) `mcp: and the refusal explains the scratch rule` )
-    ( call_free grt )
 
     // Bringing a model into being is the ingest capability, whatever the
     // name — but what it brought into being outside llm_… is production,
     // and production it may not touch again.
     : Call gfk_prod ( call r `fork_model` `{"source":"prod","name":"prod2"}` GK )
     ( check . gfk_prod ok `mcp: ingest may fork onto a production name (creating is its capability)` )
-    ( call_free gfk_prod )
     : Call grt_p2 ( call r `retrain` `{"model":"prod2"}` GK )
     ( check ! . grt_p2 ok `mcp: but may not retrain what it created there` )
-    ( call_free grt_p2 )
 
     : Call gfk ( call r `fork_model` `{"source":"prod","name":"llm_mine"}` GK )
     ( check . gfk ok `mcp: ingest forks a scratch model` )
     ( check ( jstr_eq . gfk data `model_name` `llm_mine` ) `mcp: named llm_mine` )
-    ( call_free gfk )
 
     : Call glm2 ( call r `list_models` `{}` GK )
     ( check == ( jint_of . glm2 data `count` ) 3 `mcp: the scratch model is the organisation's too` )
-    ( call_free glm2 )
 
     : Call grt2 ( call r `retrain` `{"model":"llm_mine"}` GK )
     ( check . grt2 ok `mcp: ingest retrains its scratch model` )
-    ( call_free grt2 )
 
     : Call gae ( call r `train_autoencoder` `{"model":"llm_mine"}` GK )
     ( check . gae ok `mcp: ingest trains its scratch model's autoencoder` )
-    ( call_free gae )
 
     : Call gfc ( call r `train_forecast` `{"model":"llm_mine","season":0}` GK )
     ( check . gfc ok `mcp: ingest trains its scratch model's forecast version` )
-    ( call_free gfc )
     : Call gfo ( call r `forecast` `{"model":"llm_mine","horizon":3}` GK )
     ( check . gfo ok `mcp: and reads its forecast` )
     ( check == ( jint_of . gfo data `horizon` ) 3 `mcp: three steps ahead` )
     ( check ( string_contains . gfo text `"lo95"` ) `mcp: with intervals` )
-    ( call_free gfo )
     : Call gfp ( call r `forecast_point` `{"model":"llm_mine","values":{"temp":23.0,"load":1.1},"horizon":2}` GK )
     ( check . gfp ok `mcp: ingest stores a point and gets the forecast from it` )
     ( check ( string_contains . gfp text `"forecast":{` ) `mcp: the forecast rides with the verdict` )
-    ( call_free gfp )
     : Call gbt ( call r `forecast_backtest` `{"model":"llm_mine","horizon":2,"points":10}` GK )
     ( check . gbt ok `mcp: ingest reads the backtest` )
     ( check == ( jint_of . gbt data `origins` ) 10 `mcp: ten origins` )
-    ( call_free gbt )
     : Call gau ( call r `audit` `{"model":"llm_mine","limit":50}` GK )
     ( check . gau ok `mcp: the audit log reads` )
     ( check ( string_contains . gau text `"action":"finetune"` ) `mcp: and holds the finetune's margin changes` )
     ( check ( string_contains . gau text `"actor":"key:` ) `mcp: made by the key` )
-    ( call_free gau )
 
     // The admin sees it, and may touch production.
     : Call adm ( call r `describe_model` `{"model":"llm_mine"}` AK )
     ( check . adm ok `mcp: admin sees the scratch model` )
-    ( call_free adm )
     : Call art ( call r `retrain` `{"model":"prod"}` AK )
     ( check . art ok `mcp: admin retrains a production model` )
-    ( call_free art )
     : Call ausers ( call r `org_users` `{}` AK )
     ( check . ausers ok `mcp: admin lists the organisation's members` )
     ( check ( string_contains . ausers text `boss` ) `mcp: and finds boss among them` )
-    ( call_free ausers )
     : Call akeys ( call r `org_keys` `{}` AK )
     ( check . akeys ok `mcp: admin lists the organisation's keys` )
     ( check ( string_contains . akeys text `agent-admin` ) `mcp: by label` )
     ( check ! ( string_contains . akeys text GK ) `mcp: never a secret` )
-    ( call_free akeys )
 
     // Data sources: every member reads them, an administrator writes them.
     : Out gl2 ( rpc r `tools/list` `{}` GK )
     ( check ! ( tools_has . gl2 body `create_source` ) `mcp: ingest does not see create_source` )
     ( check ( tools_has . gl2 body `sources` ) `mcp: but sees sources` )
-    ( out_free gl2 )
     // An ingest key reports readings; the folder and the sources are a
     // member's (a viewer's, an administrator's) — the API refuses it.
     : Call gsrc0 ( call r `sources` `{}` GK )
     ( check ! . gsrc0 ok `mcp: an ingest key may not read the sources` )
-    ( call_free gsrc0 )
     : Call asrc0 ( call r `sources` `{}` AK )
     ( check . asrc0 ok `mcp: admin lists the sources` )
     ( check ( string_contains . asrc0 text `"sources":[]` ) `mcp: none yet` )
-    ( call_free asrc0 )
     : Call gcs ( call r `create_source` `{"name":"x","kind":"http","url":"https://example.invalid/api","model":"prod"}` GK )
     ( check ! . gcs ok `mcp: ingest calling create_source is refused` )
-    ( call_free gcs )
     : Call acs ( call r `create_source` `{"name":"Meter","kind":"http","url":"https://example.invalid/api/readings","model":"prod","path":"data.items","headers":{"Authorization":"Bearer s3cret"},"interval_minutes":30,"enabled":false}` AK )
     ( check . acs ok `mcp: admin creates an http source` )
     ( check ( jstr_eq . acs data `kind` `http` ) `mcp: of the kind given` )
@@ -1032,17 +923,14 @@ $ `src/service.nu`
     : String sid ( string_new )
     ?? ( json_obj_get . acs data `id` ) { T e → { ( string_push_str sid ( json_str_data e ) ) } F _ → {} }
     ( check > ( string_len sid ) 0 `mcp: the answer carries the source id` )
-    ( call_free acs )
     : String upd ( string_from `{"id":"` )
     ( string_push_str upd ( string_data sid ) )
     ( string_push_str upd `","name":"Meter B","kind":"wfs","url":"https://opendata.fmi.fi/wfs","mode":"stored","query":"fmi::observations::weather::simple","params":{"place":"Kumpula"},"features":["t2m"]}` )
     : Call aus ( call r `update_source` ( string_data upd ) AK )
-    ( string_free upd )
     ( check . aus ok `mcp: admin changes the source's kind and settings` )
     ( check ( jstr_eq . aus data `kind` `wfs` ) `mcp: now a wfs source` )
     ( check ( jstr_eq . aus data `query` `fmi::observations::weather::simple` ) `mcp: with the stored query` )
     ( check ( jstr_eq . aus data `name` `Meter B` ) `mcp: renamed` )
-    ( call_free aus )
     : String one ( string_from `{"id":"` )
     ( string_push_str one ( string_data sid ) )
     ( string_push_str one `"}` )
@@ -1050,48 +938,33 @@ $ `src/service.nu`
     ( check . gone ok `mcp: a member reads one source` )
     ( check ( jstr_eq . gone data `model` `prod` ) `mcp: and sees its model` )
     ( check ! ( string_contains . gone text `s3cret` ) `mcp: header values stay masked` )
-    ( call_free gone )
     : Call gds ( call r `delete_source` ( string_data one ) GK )
     ( check ! . gds ok `mcp: ingest may not delete a source` )
-    ( call_free gds )
     : Call ads0 ( call r `delete_source` ( string_data one ) AK )
     ( check ! . ads0 ok `mcp: delete_source insists on confirm` )
-    ( call_free ads0 )
-    ( string_free one )
     : String del ( string_from `{"id":"` )
     ( string_push_str del ( string_data sid ) )
     ( string_push_str del `","confirm":true}` )
     : Call ads ( call r `delete_source` ( string_data del ) AK )
-    ( string_free del )
     ( check . ads ok `mcp: admin deletes the source` )
-    ( call_free ads )
     : Call asrc1 ( call r `sources` `{}` AK )
     ( check ( string_contains . asrc1 text `"sources":[]` ) `mcp: and it is gone` )
-    ( call_free asrc1 )
-    ( string_free sid )
 
     // The scratch model is cleaned up by whoever made it; production is not.
     : Call gdel_prod ( call r `delete_model` `{"model":"prod","confirm":true}` GK )
     ( check ! . gdel_prod ok `mcp: ingest may not delete a production model` )
-    ( call_free gdel_prod )
     : Call gdel ( call r `delete_model` `{"model":"llm_mine","confirm":true}` GK )
     ( check . gdel ok `mcp: ingest deletes its scratch model` )
-    ( call_free gdel )
     : Call glm3 ( call r `list_models` `{}` GK )
     ( check == ( jint_of . glm3 data `count` ) 2 `mcp: and it is gone from the listing` )
-    ( call_free glm3 )
     : Call adel ( call r `delete_model` `{"model":"prod2","confirm":true}` AK )
     ( check . adel ok `mcp: admin deletes the production fork` )
-    ( call_free adel )
 
     // Metadata comes back to 404 once sign-in is off again.
     ( anomaly_authz_configure F T `` `` `` )
     : Out off ( fire r `GET` `/.well-known/oauth-protected-resource/mcp` `` `` `` )
     ( check == . off status 404 `mcp: metadata is gone with sign-in off` )
-    ( out_free off )
 
-    ( string_free . ks admin )
-    ( string_free . ks ingest )
 }
 
 @ main → i {
@@ -1109,7 +982,6 @@ $ `src/service.nu`
 
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
 
     : String summary ( string_from `mcp_test: ` )
     ( string_push_int summary g_pass )
@@ -1117,7 +989,6 @@ $ `src/service.nu`
     ( string_push_int summary g_fail )
     ( string_push_str summary ` failed` )
     ( pline ( string_data summary ) )
-    ( string_free summary )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }
