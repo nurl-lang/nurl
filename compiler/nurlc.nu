@@ -21734,8 +21734,17 @@
         ( __words_all_equal ( nurl_sym_get syms `__last_call_lend_idents__` ) name )
         : ~ s __ud_ro ``
         : ~ s __ud_of ``
+        // …but a call that cannot hand back this binding's value (`= x ( at
+        // p 0 )`, lending from p) replaces it: the old value goes by its own
+        // flag, and the binding owns the new one exactly when the call says
+        // so. (Gated, a lent result kept the old flag and was dropped as the
+        // binding's own — the table's element, freed under the table.)
+        : b __ud_may_self | | __ud_self_lend ( str_contains_word ( nurl_sym_get syms `__last_call_lend_idents__` ) name )
+        ( str_contains_word ( nurl_sym_get syms `__last_phi_idents__` ) name )
+        : ~ s __ud_ro_new ``
         ? & & & != 0 ( nurl_str_len __ud_ptr ) == bck_rhs_tt TT_LPAREN ( __is_handle_ty vt ) | == 0 ( nurl_str_len __ud_borrow ) __ud_self_lend
         { = __ud_ro ( mem_call_retown syms cg )
+            ? & != 0 ( nurl_str_len __ud_ro ) ! __ud_may_self { = __ud_ro_new __ud_ro = __ud_ro `` } {}
             ? != 0 ( nurl_str_len __ud_ro ) {
                 = __ud_of ( mem_udrop_flag_get syms cg __ud_ptr )
                 : s __ud_g ( nurl_cg_reg cg )
@@ -21773,14 +21782,19 @@
                 `' — no binding, parameter, or global with this name is in scope; declare it first (': T name value')` ) ) }
         }
         // Owned result: owned; the caller's own value handed back: as before.
-        ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) != 0 ( nurl_str_len __ud_of )
-        { : s __ud_nf ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print __ud_nf ) ( nurl_print ` = select i1 ` ) ( nurl_print __ud_ro )
-            ( nurl_print `, i1 1, i1 ` ) ( nurl_print __ud_of ) ( nurl_print `\n` )
-            ( mem_udrop_flag_set syms cg __ud_ptr __ud_nf )
-            ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` ) }
-        { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
-            { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow ) } {} }
+        ? != 0 ( nurl_str_len __ud_ro_new ) {
+            ( mem_udrop_flag_set syms cg __ud_ptr __ud_ro_new )
+            ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` )
+        } {
+            ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) != 0 ( nurl_str_len __ud_of )
+            { : s __ud_nf ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __ud_nf ) ( nurl_print ` = select i1 ` ) ( nurl_print __ud_ro )
+                ( nurl_print `, i1 1, i1 ` ) ( nurl_print __ud_of ) ( nurl_print `\n` )
+                ( mem_udrop_flag_set syms cg __ud_ptr __ud_nf )
+                ( nurl_sym_set_deep syms ( nurl_str_cat __ud_ptr `__sborrow` ) `` ) }
+            { ? & & != 0 ( nurl_str_len __ud_ptr ) ! ( seq bck_rhs_val name ) ! __ud_same
+                { ( mem_udrop_bind_flag syms cg __ud_ptr vt bck_rhs_tt bck_rhs_val __ud_borrow ) } {} }
+        }
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
         ? lhs_is_owned_str { ( mem_journal_push_str cg ptr ) } {}

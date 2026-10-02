@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A call result assigned over an owned binding is the binding's only when
+  the call says so** (`= x ( at p 0 )`, `at` lending a table element on one
+  path): the binding kept its old flag and dropped the table's element
+  (packages/yoloe-demo crashed on every second /detect).
+  `compiler/tests/reassign_lent_result.nu`.
 - **A Vec or String rebuilt from a word and returned is a view**
   (`^ # ( Vec T ) . e inits_ref`), as a library handle already was: every
   caller released the holder's Vec (packages/onnx — a use-after-free in
