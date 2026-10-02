@@ -31,7 +31,7 @@ $ `stdlib/net/securedgram.nu`
 @ k32 i b → ( Vec u ) { : ( Vec u ) v ( vec_with_cap [u] 32 ) : ~ i k 0 ~ < k 32 { ( vec_push [u] v # u b ) = k + k 1 } ^ v }
 
 // Pump B until it returns a transport datagram (handshake packets → None).
-@ pump * SecureNode node → ?RecvData {
+@ pump SecureNode node → ?RecvData {
     : ~ i tries 0
     : ~ b done F
     : ~ ? RecvData out @ ?RecvData { F # RecvData 0 }
@@ -62,8 +62,8 @@ $ `stdlib/net/securedgram.nu`
     : CryptoKeypair bkp ?? ( x25519_keygen ) { T k → k F _ → @ CryptoKeypair { ( vec_new [u] ) ( vec_new [u] ) } }
     : ( Vec u ) psk ( k32 77 )
 
-    : !*SecureNode NetErr ar ( securedgram_open `127.0.0.1` 9810 akp psk )
-    : !*SecureNode NetErr br ( securedgram_open `127.0.0.1` 9811 bkp psk )
+    : !SecureNode NetErr ar ( securedgram_open `127.0.0.1` 9810 akp psk )
+    : !SecureNode NetErr br ( securedgram_open `127.0.0.1` 9811 bkp psk )
     ?? ar { T an → {
             ?? br { T bn → {
                     ( securedgram_add_peer an . bkp pk `127.0.0.1` 9811 )

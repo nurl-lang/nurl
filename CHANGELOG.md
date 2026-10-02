@@ -367,6 +367,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `inout` and go with their owners; std/net.nu's `TcpConn` keeps one owner
   of the connection as a word (`_tls_word`) and `tcp_close_conn` hands it
   back.
+- **`SecureNode` (net/securedgram) releases itself.** `securedgram_open`
+  returns a `SecureNode` handle (was `*SecureNode`); `securedgram_close`
+  closes the socket and frees nothing, and the last owner releases the
+  keys and peers (closing the socket if nobody did). A partial message is
+  one buffer at its chunks' places instead of a box per chunk.
+  `noise_keys_free` and `recvdata_free` are optional early releases.
 
 ### Added
 

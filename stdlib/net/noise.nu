@@ -88,7 +88,7 @@ $ `stdlib/core/rcbox.nu`
     ^ ?? ( x25519_derive sk pk ) { T x → x F _ → ( vec_new [u] ) }
 }
 
-// ── SymmetricState (heap; mutated through the handshake) ──────────────
+// ── SymmetricState (a value inside the handshake; mutated in place) ────
 
 : SymState {
     ( Vec u ) ck  // chaining key (32)
@@ -98,63 +98,40 @@ $ `stdlib/core/rcbox.nu`
     i has_key
 }
 
-@ __sym_new s protocol → *SymState {
-    : *SymState s # *SymState ( nurl_alloc Z SymState )
+@ __sym_new s protocol → SymState {
     : ( Vec u ) name ( vec_new [u] )
     ( bytes_extend_str name protocol )
     // protocol name is > 32 bytes → h = SHA256(name); ck = h.
     : ( Vec u ) h0 ( sha256_pure name )
-    ( vec_free [u] name )
-    = . s ck ( __slice h0 0 32 )
-    = . s h h0
-    = . s k ( vec_new [u] )
-    = . s nonce 0
-    = . s has_key 0
-    ^ s
+    ^ @ SymState { ( __slice h0 0 32 ) h0 ( vec_new [u] ) 0 0 }
 }
 
-@ __sym_free sink * SymState s → v {
-    ( vec_free [u] . s ck )
-    ( vec_free [u] . s h )
-    ( vec_free [u] . s k )
-    ( nurl_free # s s )
-}
-
-@ __sym_mix_hash * SymState s ( Vec u ) data → v {
+@ __sym_mix_hash inout SymState s ( Vec u ) data → v {
     : ( Vec u ) cat ( __cat . s h data )
     : ( Vec u ) nh ( sha256_pure cat )
-    ( vec_free [u] cat )
-    ( vec_free [u] . s h )
     = . s h nh
 }
 
-@ __sym_mix_key * SymState s ( Vec u ) ikm → v {
+@ __sym_mix_key inout SymState s ( Vec u ) ikm → v {
     : ( Vec u ) out ( __noise_hkdf . s ck ikm 2 )
-    ( vec_free [u] . s ck )
     = . s ck ( __slice out 0 32 )
-    ( vec_free [u] . s k )
     = . s k ( __slice out 32 32 )
-    ( vec_free [u] out )
     = . s nonce 0
     = . s has_key 1
 }
 
-@ __sym_mix_key_and_hash * SymState s ( Vec u ) ikm → v {
+@ __sym_mix_key_and_hash inout SymState s ( Vec u ) ikm → v {
     : ( Vec u ) out ( __noise_hkdf . s ck ikm 3 )
-    ( vec_free [u] . s ck )
     = . s ck ( __slice out 0 32 )
     : ( Vec u ) temp_h ( __slice out 32 32 )
     ( __sym_mix_hash s temp_h )
-    ( vec_free [u] temp_h )
-    ( vec_free [u] . s k )
     = . s k ( __slice out 64 32 )
-    ( vec_free [u] out )
     = . s nonce 0
     = . s has_key 1
 }
 
 // EncryptAndHash: AEAD(pt) with ad=h (when keyed), then MixHash(ct).
-@ __sym_encrypt * SymState s ( Vec u ) pt → ( Vec u ) {
+@ __sym_encrypt inout SymState s ( Vec u ) pt → ( Vec u ) {
     ? == . s has_key 0 {
         ( __sym_mix_hash s pt )
         ^ ( __slice pt 0 ( vec_len [u] pt ) )
@@ -162,21 +139,19 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) nonce ( noise_nonce . s nonce )
     : ( Vec u ) ct ?? ( chacha20poly1305_encrypt . s k nonce . s h pt )
     { T x → x F _ → ( vec_new [u] ) }
-    ( vec_free [u] nonce )
     = . s nonce + . s nonce 1
     ( __sym_mix_hash s ct )
     ^ ct
 }
 
 // DecryptAndHash: MixHash(ct) AFTER decrypting under the pre-update h.
-@ __sym_decrypt * SymState s ( Vec u ) ct → !( Vec u ) NoiseErr {
+@ __sym_decrypt inout SymState s ( Vec u ) ct → !( Vec u ) NoiseErr {
     ? == . s has_key 0 {
         ( __sym_mix_hash s ct )
         ^ @ !( Vec u ) NoiseErr { T ( __slice ct 0 ( vec_len [u] ct ) ) }
     } {}
     : ( Vec u ) nonce ( noise_nonce . s nonce )
     : !( Vec u ) CryptoErr dr ( chacha20poly1305_decrypt . s k nonce . s h ct )
-    ( vec_free [u] nonce )
     ^ ?? dr {
         T pt → {
             = . s nonce + . s nonce 1
@@ -190,7 +165,7 @@ $ `stdlib/core/rcbox.nu`
 // ── HandshakeState ───────────────────────────────────────────────────
 
 : HandshakeImpl {
-    s sym  // *SymState
+    SymState sym
     ( Vec u ) s_priv  // our static private
     ( Vec u ) s_pub  // our static public
     ( Vec u ) e_priv  // our ephemeral private
@@ -214,52 +189,33 @@ $ `stdlib/core/rcbox.nu`
 
 @ __Handshake_ptr Handshake h → *HandshakeImpl { ^ ( rcbox_ptr [HandshakeImpl] # i . h ctl ) }
 
-// The symmetric state is a raw block of its own: releasing it is the
-// handshake's drop, run by its last owner (the key Vecs go after it).
-% Drop HandshakeImpl {
-    @ drop HandshakeImpl h → v {
-        ? != # i . h sym 0 { ( __sym_free # *SymState . h sym ) } {}
-    }
-}
-
-@ __hs_sym * HandshakeImpl h → *SymState { ^ # *SymState . h sym }
-
 // Initialise. `rs` is the remote static public key (required for the
 // initiator; pass the responder's own static public for the responder so
 // the IK pre-message hashes identically on both sides). `psk` is 32 bytes.
 @ noise_init i is_initiator CryptoKeypair static_kp ( Vec u ) rs ( Vec u ) psk → Handshake {
-    : i h__box ( rcbox_zero [HandshakeImpl] )
-    : *HandshakeImpl h ( rcbox_ptr [HandshakeImpl] h__box )
-    : *SymState sym ( __sym_new `Noise_IKpsk2_25519_ChaChaPoly_SHA256` )
-    = . h sym # s sym
-    = . h s_priv ( __slice . static_kp sk 0 32 )
-    = . h s_pub ( __slice . static_kp pk 0 32 )
-    = . h e_priv ( vec_new [u] )
-    = . h e_pub ( vec_new [u] )
-    = . h rs ( __slice rs 0 ( vec_len [u] rs ) )
-    = . h re ( vec_new [u] )
-    = . h psk ( __slice psk 0 ( vec_len [u] psk ) )
-    = . h initiator ? is_initiator 1 0
+    : ~ SymState sym ( __sym_new `Noise_IKpsk2_25519_ChaChaPoly_SHA256` )
     // prologue is empty. IK pre-message `<- s`: both sides MixHash the
     // responder's static public. The initiator holds it as `rs`; the
     // responder passed its own static public as `rs` here, so both hash
     // the same 32 bytes.
-    ( __sym_mix_hash sym . h rs )
-    ^ @ Handshake { # s h__box }
+    ( __sym_mix_hash sym rs )
+    ^ @ Handshake { # s ( rcbox_new [HandshakeImpl] @ HandshakeImpl {
+            sym
+            ( __slice . static_kp sk 0 32 ) ( __slice . static_kp pk 0 32 )
+            ( vec_new [u] ) ( vec_new [u] )
+            ( __slice rs 0 ( vec_len [u] rs ) ) ( vec_new [u] )
+            ( __slice psk 0 ( vec_len [u] psk ) )
+            ? is_initiator 1 0 } ) }
 }
 
 // Let go of `h` now rather than at the end of its owner's scope.
 @ noise_free sink Handshake h → v {}
 
-@ __hs_gen_ephemeral * HandshakeImpl h → v {
+@ __hs_gen_ephemeral inout HandshakeImpl h → v {
     ?? ( x25519_keygen ) {
         T kp → {
-            ( vec_free [u] . h e_priv )
             = . h e_priv ( __slice . kp sk 0 32 )
-            ( vec_free [u] . h e_pub )
             = . h e_pub ( __slice . kp pk 0 32 )
-            ( vec_free [u] . kp sk )
-            ( vec_free [u] . kp pk )
         }
         F _ → {}
     }
@@ -274,57 +230,54 @@ $ `stdlib/core/rcbox.nu`
 
 // Initiator → message 1: e, es, s, ss + empty payload.
 @ noise_write_msg1 Handshake h__h → ( Vec u ) {
-    : *HandshakeImpl h ( __Handshake_ptr h__h )
-    : *SymState sym ( __hs_sym h )
+    : ~ * HandshakeImpl h ( __Handshake_ptr h__h )
+    ^ ( __noise_write_msg1_in . h 0 )
+}
+
+@ __noise_write_msg1_in inout HandshakeImpl h → ( Vec u ) {
     ( __hs_gen_ephemeral h )
     : ( Vec u ) out ( __slice . h e_pub 0 32 )  // e
-    ( __sym_mix_hash sym . h e_pub )
+    ( __sym_mix_hash . h sym . h e_pub )
     : ( Vec u ) es ( __dh . h e_priv . h rs )  // es
-    ( __sym_mix_key sym es )
-    ( vec_free [u] es )
-    : ( Vec u ) enc_s ( __sym_encrypt sym . h s_pub )  // s
+    ( __sym_mix_key . h sym es )
+    : ( Vec u ) enc_s ( __sym_encrypt . h sym . h s_pub )  // s
     : ( Vec u ) out2 ( __cat out enc_s )
-    ( vec_free [u] out )
-    ( vec_free [u] enc_s )
     : ( Vec u ) ss ( __dh . h s_priv . h rs )  // ss
-    ( __sym_mix_key sym ss )
-    ( vec_free [u] ss )
+    ( __sym_mix_key . h sym ss )
     : ( Vec u ) empty ( vec_new [u] )
-    : ( Vec u ) tag ( __sym_encrypt sym empty )  // payload (empty)
-    ( vec_free [u] empty )
+    : ( Vec u ) tag ( __sym_encrypt . h sym empty )  // payload (empty)
     : ( Vec u ) msg ( __cat out2 tag )
-    ( vec_free [u] out2 )
-    ( vec_free [u] tag )
     ^ msg
 }
 
 // Responder ← message 1.
 @ noise_read_msg1 Handshake h__h ( Vec u ) msg → !v NoiseErr {
-    : *HandshakeImpl h ( __Handshake_ptr h__h )
+    : ~ * HandshakeImpl h ( __Handshake_ptr h__h )
+    ^ ( __noise_read_msg1_in . h 0 msg )
+}
+
+@ __noise_read_msg1_in inout HandshakeImpl h ( Vec u ) msg → !v NoiseErr {
     ? < ( vec_len [u] msg ) 96 { ^ @ !v NoiseErr { F @ NoiseErr { NoiseBadMsg } } } {}
-    : *SymState sym ( __hs_sym h )
     : ( Vec u ) re ( __slice msg 0 32 )  // e
-    ( vec_free [u] . h re )
     = . h re re
-    ( __sym_mix_hash sym . h re )
+    ( __sym_mix_hash . h sym . h re )
     : ( Vec u ) es ( __dh . h s_priv . h re )  // es
-    ( __sym_mix_key sym es )
-    ( vec_free [u] es )
+    ( __sym_mix_key . h sym es )
     : ( Vec u ) enc_s ( __slice msg 32 48 )  // s (32 + 16 tag)
-    : !( Vec u ) NoiseErr ds ( __sym_decrypt sym enc_s )
-    ( vec_free [u] enc_s )
+    : !( Vec u ) NoiseErr ds ( __sym_decrypt . h sym enc_s )
     ^ ?? ds {
         T rs → {
-            ( vec_free [u] . h rs )
             = . h rs rs
             : ( Vec u ) ss ( __dh . h s_priv . h rs )  // ss
-            ( __sym_mix_key sym ss )
-            ( vec_free [u] ss )
+            ( __sym_mix_key . h sym ss )
+            // An arm ending in another value-producing `??` does not drop
+            // its locals yet: released here by hand until it does.
+            ( vec_free [u] ss )  // finding_stdlib_nested_arm_locals
             : ( Vec u ) tag ( __slice msg 80 16 )  // empty payload
-            : !( Vec u ) NoiseErr dp ( __sym_decrypt sym tag )
-            ( vec_free [u] tag )
+            : !( Vec u ) NoiseErr dp ( __sym_decrypt . h sym tag )
+            ( vec_free [u] tag )  // finding_stdlib_nested_arm_locals
             ?? dp {
-                T pt → { ( vec_free [u] pt ) @ !v NoiseErr { T 0 } }
+                T pt → { ( vec_free [u] pt ) @ !v NoiseErr { T 0 } }  // finding_stdlib_nested_arm_locals
                 F e → @ !v NoiseErr { F # NoiseErr e }
             }
         }
@@ -334,48 +287,45 @@ $ `stdlib/core/rcbox.nu`
 
 // Responder → message 2: e, ee, se, psk + empty payload.
 @ noise_write_msg2 Handshake h__h → ( Vec u ) {
-    : *HandshakeImpl h ( __Handshake_ptr h__h )
-    : *SymState sym ( __hs_sym h )
+    : ~ * HandshakeImpl h ( __Handshake_ptr h__h )
+    ^ ( __noise_write_msg2_in . h 0 )
+}
+
+@ __noise_write_msg2_in inout HandshakeImpl h → ( Vec u ) {
     ( __hs_gen_ephemeral h )
     : ( Vec u ) out ( __slice . h e_pub 0 32 )  // e
-    ( __sym_mix_hash sym . h e_pub )
+    ( __sym_mix_hash . h sym . h e_pub )
     : ( Vec u ) ee ( __dh . h e_priv . h re )  // ee
-    ( __sym_mix_key sym ee )
-    ( vec_free [u] ee )
+    ( __sym_mix_key . h sym ee )
     : ( Vec u ) se ( __dh . h e_priv . h rs )  // se (resp e × init s)
-    ( __sym_mix_key sym se )
-    ( vec_free [u] se )
-    ( __sym_mix_key_and_hash sym . h psk )  // psk
+    ( __sym_mix_key . h sym se )
+    ( __sym_mix_key_and_hash . h sym . h psk )  // psk
     : ( Vec u ) empty ( vec_new [u] )
-    : ( Vec u ) tag ( __sym_encrypt sym empty )  // empty payload
-    ( vec_free [u] empty )
+    : ( Vec u ) tag ( __sym_encrypt . h sym empty )  // empty payload
     : ( Vec u ) msg ( __cat out tag )
-    ( vec_free [u] out )
-    ( vec_free [u] tag )
     ^ msg
 }
 
 // Initiator ← message 2.
 @ noise_read_msg2 Handshake h__h ( Vec u ) msg → !v NoiseErr {
-    : *HandshakeImpl h ( __Handshake_ptr h__h )
+    : ~ * HandshakeImpl h ( __Handshake_ptr h__h )
+    ^ ( __noise_read_msg2_in . h 0 msg )
+}
+
+@ __noise_read_msg2_in inout HandshakeImpl h ( Vec u ) msg → !v NoiseErr {
     ? < ( vec_len [u] msg ) 48 { ^ @ !v NoiseErr { F @ NoiseErr { NoiseBadMsg } } } {}
-    : *SymState sym ( __hs_sym h )
     : ( Vec u ) re ( __slice msg 0 32 )  // e
-    ( vec_free [u] . h re )
     = . h re re
-    ( __sym_mix_hash sym . h re )
+    ( __sym_mix_hash . h sym . h re )
     : ( Vec u ) ee ( __dh . h e_priv . h re )  // ee
-    ( __sym_mix_key sym ee )
-    ( vec_free [u] ee )
+    ( __sym_mix_key . h sym ee )
     : ( Vec u ) se ( __dh . h s_priv . h re )  // se (init s × resp e)
-    ( __sym_mix_key sym se )
-    ( vec_free [u] se )
-    ( __sym_mix_key_and_hash sym . h psk )  // psk
+    ( __sym_mix_key . h sym se )
+    ( __sym_mix_key_and_hash . h sym . h psk )  // psk
     : ( Vec u ) tag ( __slice msg 32 16 )  // empty payload
-    : !( Vec u ) NoiseErr dp ( __sym_decrypt sym tag )
-    ( vec_free [u] tag )
+    : !( Vec u ) NoiseErr dp ( __sym_decrypt . h sym tag )
     ^ ?? dp {
-        T pt → { ( vec_free [u] pt ) @ !v NoiseErr { T 0 } }
+        T pt → { @ !v NoiseErr { T 0 } }
         F e → @ !v NoiseErr { F # NoiseErr e }
     }
 }
@@ -387,17 +337,17 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) recv
 }
 
-@ noise_keys_free sink NoiseKeys k → v {
-    ( vec_free [u] . k send )
-    ( vec_free [u] . k recv )
-}
+// The keys go with their owner; this lets go of them early (optional).
+@ noise_keys_free sink NoiseKeys k → v {}
 
 @ noise_split Handshake h__h → NoiseKeys {
-    : *HandshakeImpl h ( __Handshake_ptr h__h )
-    : *SymState sym ( __hs_sym h )
+    : ~ * HandshakeImpl h ( __Handshake_ptr h__h )
+    ^ ( __noise_split_in . h 0 )
+}
+
+@ __noise_split_in inout HandshakeImpl h → NoiseKeys {
     : ( Vec u ) empty ( vec_new [u] )
-    : ( Vec u ) out ( __noise_hkdf . sym ck empty 2 )
-    ( vec_free [u] empty )
+    : ( Vec u ) out ( __noise_hkdf . . h sym ck empty 2 )
     : ( Vec u ) k1 ( __slice out 0 32 )
     : ( Vec u ) k2 ( __slice out 32 32 )
     // Initiator sends with k1/recvs with k2; responder is symmetric.
