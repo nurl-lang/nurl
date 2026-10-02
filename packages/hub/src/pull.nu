@@ -47,7 +47,7 @@ $ `hf.nu`
 }
 
 // Feed the existing .part through the hasher (resume path).
-@ __hub_rehash_part * Sha256 h s path → !i String {
+@ __hub_rehash_part Sha256 h s path → !i String {
     : !File IoErr fr ( file_open path )
     ?? fr {
         T f → {
@@ -124,7 +124,7 @@ $ `hf.nu`
             }
             ? & resume > total 0 { = total + total off } {}
 
-            : *Sha256 h ( sha256_init )
+            : Sha256 h ( sha256_init )
             : ~ i done_bytes 0
             : ~ b failed F
             : ~ String ferr ( string_new )

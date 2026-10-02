@@ -262,7 +262,6 @@ $ `stdlib/std/bytes.nu`
         ( __md5_transform state tail toff K S )
         = toff + toff 64
     }
-    ( vec_free [u] tail )
 
     // Serialise state[0..4] as 16 little-endian bytes.
     : ( Vec u ) out ( vec_with_cap [u] 16 )
@@ -276,7 +275,5 @@ $ `stdlib/std/bytes.nu`
         = si + si 1
     }
 
-    ( vec_free [u32] K )
-    ( vec_free [u] S )
     ^ out
 }

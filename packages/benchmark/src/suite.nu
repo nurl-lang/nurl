@@ -252,7 +252,7 @@ $ `src/report.nu`
     : ( Vec i ) sink ( vec_new [i] )
     ( vec_push [i] sink 0 )
     : BenchRow r ( bench_thpt `sha256` n `MB/s` \ → v {
-        : *Sha256 h ( sha256_init )
+        : Sha256 h ( sha256_init )
         ( sha256_update h buf )
         : ( Vec u ) d ( sha256_final h )
         ( vec_set [i] sink 0 + ( __ipeek sink 0 ) ( vec_len [u] d ) )

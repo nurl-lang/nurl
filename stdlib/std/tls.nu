@@ -1245,7 +1245,7 @@ $ `stdlib/core/rcbox.nu`
     // 0: QUIC, where the session id MUST be empty (RFC 9001 §8.4)
     i state
     i err  // failure kind: 1 TlsHandshake 2 TlsProtocol 3 TlsBadCipher 4 TlsHRR
-    * Sha256 trh  // incremental transcript hash (0 once finished)
+    Sha256 trh  // incremental transcript hash
     i cipher  // 0 ChaCha20-Poly1305 · 1 AES-128-GCM
     i version  // 13 / 12, known from the ServerHello on
     i kx_group  // 4588 X25519MLKEM768 · 29 x25519 · 23 secp256r1
@@ -1277,14 +1277,6 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) out_ch  // the ClientHello, to send in the clear
     ( Vec u ) out_fin  // the client Finished, to send under c_hs
     ( Vec u ) sh  // the ServerHello, kept only for a TLS 1.2 fallback
-}
-
-// The live transcript hasher is the one raw part: a machine dropped
-// mid-handshake finishes it off (its Vec fields are dropped after this).
-% Drop CliHsImpl {
-    @ drop CliHsImpl h → v {
-        ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
-    }
 }
 
 // A CliHs is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -1409,12 +1401,6 @@ $ `stdlib/core/rcbox.nu`
 @ _cli_hs_c_ap CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) c_ap }
 
 @ _cli_hs_s_ap CliHs h → ( Vec u ) { ^ . ( __CliHs_ptr h ) s_ap }
-
-// Discard a live transcript hasher (error paths).
-@ _trh_abort * Sha256 h → v {
-    : ( Vec u ) d ( sha256_final h )
-    ( vec_free [u] d )
-}
 
 @ __cli_hs_fail * CliHsImpl h i err i alert → i {
     = . h state 4
@@ -1632,7 +1618,6 @@ $ `stdlib/core/rcbox.nu`
         // its PSK from this (see __client_take_ticket).
         ( sha256_update . h trh finmsg )
         : ( Vec u ) th_cf ( sha256_final . h trh )
-        = . h trh # *Sha256 0
         ( vec_free [u] . h res_master )
         = . h res_master ( derive_secret . h master `res master` th_cf )
         ( vec_free [u] . h out_fin )

@@ -381,7 +381,6 @@ pub @ sha3_squeeze Sha3 h__h i n → ( Vec u ) {
     : Sha3 h ( sha3_new rate dom )
     ( sha3_absorb h data )
     : ( Vec u ) out ( sha3_squeeze h outlen )
-    ( sha3_free h )
     ^ out
 }
 

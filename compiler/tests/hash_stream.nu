@@ -36,7 +36,7 @@ $ `stdlib/std/hash_blake3.nu`
 
 // stream `data` through updates of `step` bytes and finalize
 @ sha_streamed ( Vec u ) data i step → ( Vec u ) {
-    : *Sha256 h ( sha256_init )
+    : Sha256 h ( sha256_init )
     : i n ( vec_len [u] data )
     : ~ i off 0
     ~ < off n {
@@ -51,7 +51,7 @@ $ `stdlib/std/hash_blake3.nu`
 }
 
 @ b3_streamed ( Vec u ) data i step → ( Vec u ) {
-    : *Blake3 h ( blake3_init )
+    : Blake3 h ( blake3_init )
     : i n ( vec_len [u] data )
     : ~ i off 0
     ~ < off n {
@@ -71,7 +71,7 @@ $ `stdlib/std/hash_blake3.nu`
 
 @ main → i {
     // ── SHA-256 vectors through the stream ──
-    : *Sha256 h0 ( sha256_init )
+    : Sha256 h0 ( sha256_init )
     : ( Vec u ) d0 ( sha256_final h0 )
     ( ck ( hex_is d0 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` ) `sha256 stream: empty` )
     ( vec_free [u] d0 )
@@ -106,7 +106,7 @@ $ `stdlib/std/hash_blake3.nu`
     ( vec_free [u] big )
 
     // ── BLAKE3 vectors + tree shapes ──
-    : *Blake3 b0 ( blake3_init )
+    : Blake3 b0 ( blake3_init )
     : ( Vec u ) e0 ( blake3_final b0 )
     ( ck ( hex_is e0 `af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262` ) `blake3 stream: empty (official vector)` )
     ( vec_free [u] e0 )

@@ -103,13 +103,11 @@ $ `stdlib/std/pbkdf2.nu`
     ~ < i blocks {
         : ( Vec u ) t ( __sc_xor_n x b * i 64 64 )
         : ( Vec u ) nx ( __salsa20_8 t )
-        ( vec_free [u] t ) ( vec_free [u] x )
         = x nx
         : i pos ? == % i 2 0 / i 2 + r / - i 1 2
         ( __sc_put_n out * pos 64 x 64 )
         = i + i 1
     }
-    ( vec_free [u] x )
     ^ out
 }
 
@@ -124,7 +122,6 @@ $ `stdlib/std/pbkdf2.nu`
     ~ < i n {
         ( __sc_put_n v * i blen x blen )
         : ( Vec u ) nx ( __blockmix x r )
-        ( vec_free [u] x )
         = x nx
         = i + i 1
     }
@@ -133,11 +130,9 @@ $ `stdlib/std/pbkdf2.nu`
         : i j & ( __sc_integerify x blen ) - n 1
         : ( Vec u ) t ( __sc_xor_n x v * j blen blen )
         : ( Vec u ) nx ( __blockmix t r )
-        ( vec_free [u] t ) ( vec_free [u] x )
         = x nx
         = i + i 1
     }
-    ( vec_free [u] v )
     ^ x
 }
 
@@ -150,10 +145,8 @@ $ `stdlib/std/pbkdf2.nu`
         : ( Vec u ) bi ( __sc_slice_n b * i blen blen )
         : ( Vec u ) mixed ( __romix bi n r )
         ( __sc_put_n b * i blen mixed blen )
-        ( vec_free [u] bi ) ( vec_free [u] mixed )
         = i + i 1
     }
     : ( Vec u ) dk ( pbkdf2_hmac_sha256 password b 1 dklen )
-    ( vec_free [u] b )
     ^ dk
 }

@@ -242,7 +242,6 @@ $ `stdlib/std/bytes.nu`
         ( __sha512_transform state tail toff K sched )
         = toff + toff 128
     }
-    ( vec_free [u] tail )
 
     // Serialise state[0..8] as 64 big-endian bytes.
     : ( Vec u ) out ( vec_with_cap [u] 64 )
@@ -261,9 +260,6 @@ $ `stdlib/std/bytes.nu`
         = si + si 1
     }
 
-    ( vec_free [u64] state )
-    ( vec_free [u64] K )
-    ( vec_free [u64] sched )
     : b _t ( vec_set_len [u] out outlen )
     ^ out
 }
@@ -281,7 +277,6 @@ $ `stdlib/std/bytes.nu`
             ( vec_push [u] kbuf # u & ( __sha512_vu8 khash ki ) 255 )
             = ki + ki 1
         }
-        ( vec_free [u] khash )
     } {
         : ~ i ki 0
         ~ < ki klen {
@@ -318,7 +313,6 @@ $ `stdlib/std/bytes.nu`
         = mi + mi 1
     }
     : ( Vec u ) inner ( sha512_pure inner_input )
-    ( vec_free [u] inner_input )
 
     : ( Vec u ) outer_input ( vec_with_cap [u] 192 )
     : ~ i oi 0
@@ -332,7 +326,6 @@ $ `stdlib/std/bytes.nu`
         = ni + ni 1
     }
     : ( Vec u ) mac ( sha512_pure outer_input )
-    ( vec_free [u] inner )
     ^ mac
 }
 

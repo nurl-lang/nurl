@@ -342,6 +342,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
   struct whose module defines `S_drop sink S x` (and `S_share` /
   `S_clone`) is dropped and copied like `HashMap`.
+- **`Sha256` and `Blake3` streams release themselves.** `sha256_init` /
+  `blake3_init` return a library handle (`Sha256` / `Blake3`, was `*Sha256`
+  / `*Blake3`); `sha256_final` / `blake3_final` leave the stream spent
+  instead of freeing it, and the last owner releases it (`sha256_free` /
+  `blake3_free` are early releases). Code naming the type drops the `*`.
+  A SHA-256 stream is now one block of words (state, schedule, partial
+  block and a snapshot area) — 5 allocations per stream instead of 6–7, and
+  `sha256_snapshot` no longer clones the stream — and `hmac_sha256_pure`
+  streams key block and message through one hasher instead of building
+  `ipad ‖ msg`: a SHA-256 / HMAC / HKDF / PBKDF2 mix runs 15 % fewer
+  instructions.
 
 ### Added
 

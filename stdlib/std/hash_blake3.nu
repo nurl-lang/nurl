@@ -18,6 +18,7 @@
 $ `stdlib/std/bytes.nu`
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── word helpers ──────────────────────────────────────────────────
 
@@ -157,20 +158,17 @@ $ `stdlib/core/vec.nu`
     ( vec_push [u32] s # u32 & >> counter 32 0xFFFFFFFF )
     ( vec_push [u32] s # u32 blen )
     ( vec_push [u32] s # u32 flags )
-    ( vec_free [u32] iv )
 
     : ~ ( Vec u32 ) m ( __b3_copy block 16 )
     : ~ i rd 0
     ~ < rd 7 {
         ? > rd 0 {
             : ( Vec u32 ) mp ( __b3_permute m )
-            ( vec_free [u32] m )
             = m mp
         } {}
         ( __b3_round s m )
         = rd + rd 1
     }
-    ( vec_free [u32] m )
 
     // Feed-forward: s[i] ^= s[i+8]; s[i+8] ^= cv[i].
     : ~ i j 0
@@ -195,10 +193,7 @@ $ `stdlib/core/vec.nu`
         : ( Vec u32 ) bw ( __b3_block_words data + off * bk 64 64 )
         : i fl ? == bk 0 1 0  // CHUNK_START on the first block only
         : ( Vec u32 ) out ( __b3_compress cv bw counter 64 fl )
-        ( vec_free [u32] bw )
-        ( vec_free [u32] cv )
         = cv ( __b3_copy out 8 )
-        ( vec_free [u32] out )
         = bk + bk 1
     }
     : i lb_off + off * - nb 1 64
@@ -207,8 +202,6 @@ $ `stdlib/core/vec.nu`
     : i lflags | 2 | ? == nb 1 1 0 ? root 8 0  // CHUNK_END | (CHUNK_START if 1 block) | (ROOT?)
     : ( Vec u32 ) st ( __b3_compress cv lbw counter lb_len lflags )
     : ( Vec u32 ) result ( __b3_copy st 8 )
-    ( vec_free [u32] lbw )
-    ( vec_free [u32] st )
     ^ result
 }
 
@@ -223,8 +216,6 @@ $ `stdlib/core/vec.nu`
     : i flags | 4 ? root 8 0  // PARENT | (ROOT?)
     : ( Vec u32 ) st ( __b3_compress iv block 0 64 flags )
     : ( Vec u32 ) result ( __b3_copy st 8 )
-    ( vec_free [u32] iv )
-    ( vec_free [u32] st )
     ^ result
 }
 
@@ -261,49 +252,59 @@ $ `stdlib/core/vec.nu`
 // produces the same tree as the one-shot. blake3_pure below is a thin
 // init/update/final composition — the two paths cannot drift.
 //
-//   ( blake3_init )          → *Blake3
+//   ( blake3_init )          → Blake3
 //   ( blake3_update h v )    → v          any piece size, any count
-//   ( blake3_final h )       → ( Vec u )  32-byte digest; FREES h —
-//                                          the handle is dead after this
+//   ( blake3_final h )       → ( Vec u )  32-byte digest; the stream is
+//                                          spent after this
+//
+// A Blake3 is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same stream, and the last owner releases it.
 
-: Blake3 {
+: Blake3Impl {
     ( Vec u32 ) stack
     i scount
     ( Vec u ) cbuf
     i counter
 }
 
-@ blake3_init → *Blake3 {
-    : *Blake3 h # *Blake3 ( nurl_alloc Z Blake3 )
-    = . h stack ( vec_new [u32] )
-    = . h scount 0
-    = . h cbuf ( vec_new [u] )
-    = . h counter 0
-    ^ h
+: Blake3 { s ctl }
+
+@ Blake3_share Blake3 h → Blake3 { ^ @ Blake3 { # s ( rcbox_share # i . h ctl ) } }
+
+@ Blake3_drop sink Blake3 h → v {
+    ( mem_forget h )
+    ( rcbox_release [Blake3Impl] # i . h ctl )
 }
+
+@ __Blake3_ptr Blake3 h → *Blake3Impl { ^ ( rcbox_ptr [Blake3Impl] # i . h ctl ) }
+
+@ blake3_init → Blake3 {
+    ^ @ Blake3 { # s ( rcbox_new [Blake3Impl] @ Blake3Impl { ( vec_new [u32] ) 0 ( vec_new [u] ) 0 } ) }
+}
+
+// Let go of `h` now rather than at the end of its owner's scope.
+@ blake3_free sink Blake3 h → v {}
 
 // Fold a completed (non-final) chunk CV into the stack, merging one
 // parent per trailing one-bit of the completed-chunk count — exactly
 // __b3_root_multi's loop, one chunk at a time.
-@ __b3_absorb_cv * Blake3 h ( Vec u32 ) cv0 → v {
+@ __b3_absorb_cv * Blake3Impl h sink ( Vec u32 ) cv0 → v {
     : ~ ( Vec u32 ) ncv cv0
     : ~ i total + . h counter 1
     ~ == & total 1 0 {
         : ( Vec u32 ) popped ( __b3_stack_pop . h stack )
         = . h scount - . h scount 1
         : ( Vec u32 ) merged ( __b3_parent popped ncv F )
-        ( vec_free [u32] popped )
-        ( vec_free [u32] ncv )
         = ncv merged
         = total >> total 1
     }
     ( __b3_stack_push . h stack ncv )
-    ( vec_free [u32] ncv )
     = . h scount + . h scount 1
     = . h counter + . h counter 1
 }
 
-@ blake3_update * Blake3 h ( Vec u ) data → v {
+@ blake3_update Blake3 h__h ( Vec u ) data → v {
+    : *Blake3Impl h ( __Blake3_ptr h__h )
     : i n ( vec_len [u] data )
     : ~ i off 0
     ~ < off n {
@@ -320,17 +321,17 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// Digest and DESTROY: the buffered bytes are the final chunk; fold the
-// stack right-to-left, marking the last merge (or lone chunk) as root.
-@ blake3_final * Blake3 h → ( Vec u ) {
+// Digest: the buffered bytes are the final chunk; fold the stack
+// right-to-left, marking the last merge (or lone chunk) as root. The
+// stream is spent — its storage goes with its last owner.
+@ blake3_final Blake3 h__h → ( Vec u ) {
+    : *Blake3Impl h ( __Blake3_ptr h__h )
     : b lone & == . h counter 0 == . h scount 0
     : ~ ( Vec u32 ) cur ( __b3_chunk_cv . h cbuf 0 ( vec_len [u] . h cbuf ) . h counter lone )
     : ~ i r - . h scount 1
     ~ >= r 0 {
         : ( Vec u32 ) left ( __b3_stack_get . h stack r )
         : ( Vec u32 ) merged ( __b3_parent left cur == r 0 )
-        ( vec_free [u32] left )
-        ( vec_free [u32] cur )
         = cur merged
         = r - r 1
     }
@@ -344,10 +345,6 @@ $ `stdlib/core/vec.nu`
         ( vec_push [u] out # u & >> w 24 255 )
         = i + i 1
     }
-    ( vec_free [u32] cur )
-    ( vec_free [u32] . h stack )
-    ( vec_free [u] . h cbuf )
-    ( nurl_free # s h )
     ^ out
 }
 
@@ -355,7 +352,7 @@ $ `stdlib/core/vec.nu`
 
 // One-shot over the streaming core.
 @ blake3_pure ( Vec u ) data → ( Vec u ) {
-    : *Blake3 h ( blake3_init )
+    : Blake3 h ( blake3_init )
     ( blake3_update h data )
     ^ ( blake3_final h )
 }

@@ -648,7 +648,7 @@ $ `stdlib/core/rcbox.nu`
     i ext_in_present
     ( Vec u ) ext_out
     i state
-    * Sha256 trh
+    Sha256 trh  // incremental transcript hash
     i cipher
     i resumed
     i can_resume
@@ -671,14 +671,6 @@ $ `stdlib/core/rcbox.nu`
     ( Vec u ) pq_chain
     ( Vec u ) pq_sk
     i pq_level
-}
-
-// The live transcript hasher is the one raw part: a machine dropped
-// mid-handshake finishes it off (its Vec fields are dropped after this).
-% Drop SrvHsImpl {
-    @ drop SrvHsImpl h → v {
-        ? != # i . h trh 0 { ( _trh_abort . h trh ) } {}
-    }
 }
 
 // A SrvHs is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -853,8 +845,7 @@ $ `stdlib/core/rcbox.nu`
     ? != . h state 0 { ^ ( __srv_hs_fail h 10 ) } {}
     // handshake type 1, and a body at least as long as its fixed part
     ? | < ( vec_len [u] ch ) 39 != ( _t_bget ch 0 ) 1 { ^ ( __srv_hs_fail h 50 ) } {}
-    : *Sha256 trh . h trh
-    ( sha256_update trh ch )
+    ( sha256_update . h trh ch )
 
     : i sidlen ( _t_bget ch 38 )
     : i p1 + 39 sidlen
@@ -1031,7 +1022,7 @@ $ `stdlib/core/rcbox.nu`
     // ── ServerHello ──
     : ( Vec u ) srand ( __srv_rand 32 )
     : ( Vec u ) sh ( __srv_build_sh srand ch sidlen suite grp spub psk_sel )
-    ( sha256_update trh sh )
+    ( sha256_update . h trh sh )
     ( vec_clear [u] . h out_sh )
     ( bytes_extend_bytes . h out_sh sh )
 
@@ -1042,7 +1033,7 @@ $ `stdlib/core/rcbox.nu`
     : ( Vec u ) early ? == . h resumed 1 ( _psk_early psk ) ( hkdf_extract empty z32 )
     : ( Vec u ) derived1 ( derive_secret early `derived` ehash )
     : ( Vec u ) hs_secret ( hkdf_extract derived1 ecdhe )
-    : ( Vec u ) th_sh ( sha256_snapshot trh )
+    : ( Vec u ) th_sh ( sha256_snapshot . h trh )
     ( vec_free [u] . h c_hs )
     ( vec_free [u] . h s_hs )
     = . h c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
@@ -1072,7 +1063,7 @@ $ `stdlib/core/rcbox.nu`
     ( _blk16 eebody exts )  // extensions length + extensions
     ( vec_free [u] exts )
     : ( Vec u ) ee ( __srv_hs_wrap 8 eebody )
-    ( sha256_update trh ee )
+    ( sha256_update . h trh ee )
     ( vec_clear [u] . h out_hs )
     ( bytes_extend_bytes . h out_hs ee )
     ( vec_free [u] eebody )
@@ -1090,28 +1081,28 @@ $ `stdlib/core/rcbox.nu`
         ( _u24 certbody ( vec_len [u] . h cert_chain ) )  // certificate_list length
         ( _tls_cat certbody . h cert_chain )
         : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
-        ( sha256_update trh certmsg )
+        ( sha256_update . h trh certmsg )
         ( bytes_extend_bytes . h out_hs certmsg )
         ( vec_free [u] certbody )
         ( vec_free [u] certmsg )
 
         // ── CertificateVerify ──
-        : ( Vec u ) th_cert ( sha256_snapshot trh )
+        : ( Vec u ) th_cert ( sha256_snapshot . h trh )
         : ( Vec u ) cvc ( __srv_cv_content th_cert )
         : ( Vec u ) cvdig ( sha256_pure cvc )
         : ( Vec u ) cvbody ( __srv_cv_body . h keytype . h ec_priv . h rsa_n . h rsa_e . h rsa_d cvdig cvc . h ml_level )
         : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
-        ( sha256_update trh cvmsg )
+        ( sha256_update . h trh cvmsg )
         ( bytes_extend_bytes . h out_hs cvmsg )
         ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
         ( vec_free [u] cvbody ) ( vec_free [u] cvmsg )
     } {}
 
     // ── server Finished ──
-    : ( Vec u ) th_cv ( sha256_snapshot trh )
+    : ( Vec u ) th_cv ( sha256_snapshot . h trh )
     : ( Vec u ) sfin ( _finished_mac . h s_hs th_cv )
     : ( Vec u ) sfmsg ( __srv_hs_wrap 20 sfin )
-    ( sha256_update trh sfmsg )
+    ( sha256_update . h trh sfmsg )
     ( bytes_extend_bytes . h out_hs sfmsg )
     ( vec_free [u] th_cv )
     ( vec_free [u] sfin )
@@ -1119,7 +1110,7 @@ $ `stdlib/core/rcbox.nu`
 
     // ── application keys (transcript through server Finished) ──
     ( vec_free [u] . h th_sf )
-    = . h th_sf ( sha256_snapshot trh )
+    = . h th_sf ( sha256_snapshot . h trh )
     ( vec_free [u] . h c_ap )
     ( vec_free [u] . h s_ap )
     = . h c_ap ( derive_secret . h master `c ap traffic` . h th_sf )
@@ -1152,7 +1143,6 @@ $ `stdlib/core/rcbox.nu`
     // resumption secret is derived from.
     ( sha256_update . h trh cf )
     : ( Vec u ) th_cf ( sha256_final . h trh )
-    = . h trh # *Sha256 0
     ( vec_free [u] . h res_master )
     = . h res_master ( derive_secret . h master `res master` th_cf )
     ( vec_free [u] th_cf )
