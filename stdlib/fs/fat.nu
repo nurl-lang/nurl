@@ -29,6 +29,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/hal/blockdev.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── directory-entry attributes (FAT spec, §6) ───────────────────────
 
@@ -98,7 +99,9 @@ $ `stdlib/hal/blockdev.nu`
 
 @ fat_mounted → b { ^ != g_vol 0 }
 
-@ fat_vol → *FatVol { ^ # *FatVol g_vol }
+// The mounted volume: an rcbox (stdlib/core/rcbox.nu) the global holds
+// from fat_mount to fat_unmount; its cache vectors go with it.
+@ fat_vol → *FatVol { ^ ( rcbox_ptr [FatVol] g_vol ) }
 
 @ fat_type → i { ? == g_vol 0 { ^ 0 } {} ^ . ( fat_vol ) ftype }
 
@@ -317,7 +320,6 @@ $ `stdlib/hal/blockdev.nu`
     : i rootc ( __le32 sec 44 )
     : i fsinfo ( __le16 sec 48 )
     : i sig ( __le16 sec 510 )
-    ( vec_free [u] sec )
 
     // Each of these is a way a non-FAT sector 0 produces a plausible
     // number. `bps` is the one that matters most: see the header.
@@ -366,7 +368,8 @@ $ `stdlib/hal/blockdev.nu`
     : i need_bytes ? == ftype 32 * + nclus 2 4 ? == ftype 16 * + nclus 2 2 / + * + nclus 2 3 1 2
     ? < * fat_secs ( blk_sector_size ) need_bytes { ^ F } {}
 
-    : *FatVol v # *FatVol ( nurl_alloc Z FatVol )
+    : i vbox ( rcbox_zero [FatVol] )
+    : *FatVol v ( rcbox_ptr [FatVol] vbox )
     = . v spc spc
     = . v rsvd rsvd
     = . v nfats nfats
@@ -390,7 +393,7 @@ $ `stdlib/hal/blockdev.nu`
     = . v rw writable
     = . v dirty F
     ( __cache_init v )
-    = g_vol # i v
+    = g_vol vbox
     ^ T
 }
 
@@ -405,13 +408,10 @@ $ `stdlib/hal/blockdev.nu`
     : b _i ( fat_write_fsinfo )
     : b _f ( fat_cache_flush )
     : b _d ( blk_flush )
-    ( vec_free [u] . v cbuf )
-    ( vec_free [i] . v clba )
-    ( vec_free [i] . v cdirty )
-    ( vec_free [i] . v cage )
-    ( vec_free [u] . v scratch )
-    ( nurl_free # s v )
+    // The mount ends: the global's volume (and its cache) is released.
+    : i vbox g_vol
     = g_vol 0
+    ( rcbox_release [FatVol] vbox )
 }
 
 // ── the allocation table ────────────────────────────────────────────

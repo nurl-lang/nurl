@@ -188,12 +188,10 @@ $ `stdlib/fs/fat.nu`
     b fixed
 }
 
-@ __dp_new * FatVol v i dirclus → *DirPos {
-    : *DirPos p # *DirPos ( nurl_alloc Z DirPos )
-    = . p dirclus dirclus
-    = . p eidx 0
-    = . p sec_in_clus 0
-    = . p done F
+// A cursor at the start of directory `dirclus`: a value the scanners keep
+// in a local and advance in place (`inout`).
+@ __dp_new * FatVol v i dirclus → DirPos {
+    : ~ DirPos p @ DirPos { dirclus 0 0 0 0 0 F F }
     ? == dirclus 0 {
         = . p fixed T
         = . p clus 0
@@ -209,17 +207,15 @@ $ `stdlib/fs/fat.nu`
     ^ p
 }
 
-@ __dp_free sink * DirPos p → v { ( nurl_free # s p ) }
+@ __dp_lba inout DirPos p → i { ^ . p lba }
 
-@ __dp_lba * DirPos p → i { ^ . p lba }
-
-@ __dp_off * DirPos p → i { ^ * . p eidx ( fat_ent_size ) }
+@ __dp_off inout DirPos p → i { ^ * . p eidx ( fat_ent_size ) }
 
 // Move to the next 32-byte entry. Sets `done` at the end of the
 // directory; a chain that runs out is the end, and so is a chain whose
 // FAT read failed — the caller distinguishes them by asking the volume,
 // not by getting a different answer from the cursor.
-@ __dp_advance * FatVol v * DirPos p → v {
+@ __dp_advance * FatVol v inout DirPos p → v {
     ? . p done { ^ } {}
     = . p eidx + . p eidx 1
     ? < . p eidx ( fat_ents_per_sector ) { ^ } {}
@@ -241,9 +237,9 @@ $ `stdlib/fs/fat.nu`
 
 // ── directory entry fields ──────────────────────────────────────────
 
-@ __ent_b * FatVol v * DirPos p i k → i { ^ ( fat_rd8 v ( __dp_lba p ) + ( __dp_off p ) k ) }
+@ __ent_b * FatVol v inout DirPos p i k → i { ^ ( fat_rd8 v ( __dp_lba p ) + ( __dp_off p ) k ) }
 
-@ __ent_attr * FatVol v * DirPos p → i { ^ ( __ent_b v p 11 ) }
+@ __ent_attr * FatVol v inout DirPos p → i { ^ ( __ent_b v p 11 ) }
 
 @ __ent_first_clus * FatVol v i lba i off → i {
     : i hi ( fat_rd16 v lba + off 20 )
@@ -473,7 +469,7 @@ $ `stdlib/fs/fat.nu`
 // goes.
 @ fat_dir_find * FatVol v i dirclus ( Vec i ) want → FatEnt {
     : ~ FatEnt res ( __ent_none )
-    : *DirPos p ( __dp_new v dirclus )
+    : ~ DirPos p ( __dp_new v dirclus )
     : ~ i lfn_sum - 0 1
     : ~ i lfn_start 0
     : ~ i lfn_n 0
@@ -586,8 +582,6 @@ $ `stdlib/fs/fat.nu`
             }
         }
     }
-    ( vec_free [i] lfn )
-    ( __dp_free p )
     ^ res
 }
 
@@ -653,7 +647,6 @@ $ `stdlib/fs/fat.nu`
     : ( Vec i ) leaf ( vec_new [i] )
     : i dir ( fat_resolve_parent v path leaf )
     ? < dir 0 {
-        ( vec_free [i] leaf )
         : ~ FatEnt e ( __ent_none )
         = . e err ? == dir ( fe_io ) T F
         ^ e
@@ -669,8 +662,8 @@ $ `stdlib/fs/fat.nu`
 // the cursor would be O(1) — and a directory is a handful of sectors,
 // while a saved cursor that outlived the directory it pointed into is
 // a class of bug this trades away.
-@ __dp_seek * FatVol v i dirclus i idx → *DirPos {
-    : *DirPos p ( __dp_new v dirclus )
+@ __dp_seek * FatVol v i dirclus i idx → DirPos {
+    : ~ DirPos p ( __dp_new v dirclus )
     : ~ i k 0
     ~ && < k idx ! . p done { ( __dp_advance v p ) = k + k 1 }
     ^ p
@@ -703,7 +696,7 @@ $ `stdlib/fs/fat.nu`
 // one that was never used, and the second also ends the directory —
 // but the SPACE after it exists, so it is free rather than absent.
 @ __dir_find_run * FatVol v i dirclus i need → i {
-    : *DirPos p ( __dp_new v dirclus )
+    : ~ DirPos p ( __dp_new v dirclus )
     : ~ i idx 0
     : ~ i run_start 0
     : ~ i run 0
@@ -721,7 +714,6 @@ $ `stdlib/fs/fat.nu`
             ? ! . p done { ( __dp_advance v p ) = idx + idx 1 } {}
         }
     }
-    ( __dp_free p )
     ^ found
 }
 
@@ -740,7 +732,7 @@ $ `stdlib/fs/fat.nu`
 // long names can generate one short name, and a directory holding two
 // identical short entries is one a checker calls corrupt.
 @ __sfn_exists * FatVol v i dirclus ( Vec u ) name11 → b {
-    : *DirPos p ( __dp_new v dirclus )
+    : ~ DirPos p ( __dp_new v dirclus )
     : ~ b hit F
     : ~ i guard 0
     ~ && ! . p done < guard 4194304 {
@@ -764,7 +756,6 @@ $ `stdlib/fs/fat.nu`
             }
         }
     }
-    ( __dp_free p )
     ^ hit
 }
 
@@ -956,7 +947,6 @@ $ `stdlib/fs/fat.nu`
     ? needs_lfn {
         = ntflags 0
         ? ! ( __sfn_generate v dirclus name name11 ) {
-            ( vec_free [u] name11 )
             = . res err T
             ^ res
         } {}
@@ -975,12 +965,11 @@ $ `stdlib/fs/fat.nu`
         }
     }
     ? < at 0 {
-        ( vec_free [u] name11 )
         = . res err T
         ^ res
     } {}
 
-    : *DirPos p ( __dp_seek v dirclus at )
+    : ~ DirPos p ( __dp_seek v dirclus at )
     : ~ b ok T
     ? needs_lfn {
         // The long-name run is stored in REVERSE: the fragment carrying
@@ -1018,8 +1007,6 @@ $ `stdlib/fs/fat.nu`
             = . res size size
         } { = . res err T }
     } { = . res err T }
-    ( __dp_free p )
-    ( vec_free [u] name11 )
     ^ res
 }
 
@@ -1032,7 +1019,7 @@ $ `stdlib/fs/fat.nu`
 @ fat_dir_remove * FatVol v FatEnt e → b {
     ? ! . v rw { ^ F } {}
     ? ! . e found { ^ F } {}
-    : *DirPos p ( __dp_seek v . e dirclus . e first_idx )
+    : ~ DirPos p ( __dp_seek v . e dirclus . e first_idx )
     : ~ i k 0
     : ~ b ok T
     ~ && < k . e nslots ok {
@@ -1042,7 +1029,6 @@ $ `stdlib/fs/fat.nu`
             = k + k 1
         }
     }
-    ( __dp_free p )
     ^ ok
 }
 
@@ -1148,10 +1134,8 @@ $ `stdlib/fs/fat.nu`
         ? ! . v rw { ^ ( fe_rofs ) } {}
         ? > ( vec_len [i] leaf ) ( fat_name_max ) { ^ ( fe_nametoolong ) } {}
         = e ( fat_dir_create v dir leaf ( fat_attr_archive ) 0 0 )
-        ( vec_free [i] leaf )
         ? ! . e found { ^ ( fe_nospc ) } {}
     } {
-        ( vec_free [i] leaf )
         // O_EXCL means something only together with O_CREAT, and the
         // test is that BOTH bits are set — `flags & (CREAT & EXCL)` is
         // `flags & 0`, which is a condition that can never be true and
@@ -1533,14 +1517,12 @@ $ `stdlib/fs/fat.nu`
     // Writing the real one there is a difference `fsck.vfat` reports.
     : i parent ? == dir ( fat_root_cluster ) 0 dir
     ? ok { = ok ( __write_short v lba ( fat_ent_size ) n11 0 ( fat_attr_dir ) parent 0 ) } {}
-    ( vec_free [u] n11 )
     ? ! ok {
         : b _f ( fat_free_chain v c )
         ^ ( fe_io )
     } {}
 
     : FatEnt e ( fat_dir_create v dir leaf ( fat_attr_dir ) c 0 )
-    ( vec_free [i] leaf )
     ? ! . e found {
         : b _f ( fat_free_chain v c )
         ^ ( fe_nospc )
@@ -1550,7 +1532,7 @@ $ `stdlib/fs/fat.nu`
 
 // Is this directory empty apart from "." and ".."?
 @ __dir_is_empty * FatVol v i dirclus → b {
-    : *DirPos p ( __dp_new v dirclus )
+    : ~ DirPos p ( __dp_new v dirclus )
     : ~ b empty T
     : ~ i guard 0
     ~ && ! . p done < guard 4194304 {
@@ -1573,7 +1555,6 @@ $ `stdlib/fs/fat.nu`
             }
         }
     }
-    ( __dp_free p )
     ^ empty
 }
 
@@ -1638,7 +1619,6 @@ $ `stdlib/fs/fat.nu`
     } {}
 
     : FatEnt made ( fat_dir_create v dir leaf . src attr . src first_clus . src size )
-    ( vec_free [i] leaf )
     ? ! . made found { ^ ( fe_nospc ) } {}
 
     // Re-read the source rather than trusting the entry found before
@@ -1734,7 +1714,7 @@ $ `stdlib/fs/fat.nu`
     ? == # i f 0 { ^ - 0 1 } {}
     ? ! . f isdir { ^ - 0 1 } {}
 
-    : *DirPos p ( __dp_seek v . f first . f pos )
+    : ~ DirPos p ( __dp_seek v . f first . f pos )
     : ( Vec i ) lfn ( vec_new [i] )
     : ( Vec i ) name ( vec_new [i] )
     : ~ i lfn_sum - 0 1
@@ -1810,8 +1790,5 @@ $ `stdlib/fs/fat.nu`
             }
         }
     }
-    ( vec_free [i] lfn )
-    ( vec_free [i] name )
-    ( __dp_free p )
     ^ got
 }
