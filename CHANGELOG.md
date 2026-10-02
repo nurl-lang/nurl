@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A number from a call cannot be bound as a handle struct** (`: H h ( mk )`
+  with `mk → i` reinterpreted the number as the handle's pointer and owned
+  nothing). Now a compile error naming the literal to write.
+  `compiler/tests/diag_number_into_handle.nu`.
 - **Reassigning an option binding inside the `??` arm that matched it drops
   the old value** (or hands it to the payload cursor still reading it):
   `?? cur { T c → { = cur ( next ) } }` leaked the old value every iteration

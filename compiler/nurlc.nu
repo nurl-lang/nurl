@@ -20935,6 +20935,13 @@
             ? ( is_ident_tok bck_rhs_tt )
             { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
             { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
+            // A number from a call bound as a handle struct (`: H h ( mk )`,
+            // mk → i): the binding would be built by reinterpreting the
+            // number as the handle's pointer, and own nothing it was given.
+            ? & & == bck_rhs_tt TT_LPAREN > ( int_width vt ) 0 ( __is_single_ptr_struct ptype syms ) {
+                ( die_stmt lex ( nurl_str_cat4 `'` name ( nurl_str_cat3 `' is declared '` ( llvm_to_nurl ptype ) `' but the call gives a number ('` )
+                ( nurl_str_cat3 ( llvm_to_nurl vt ) `') — NURL has no implicit conversions. Build the value with its literal ('@ ` ( nurl_str_cat3 ( llvm_to_nurl ptype ) ` { # s … }') or the constructor that returns it.` `` ) ) ) )
+            } {}
             : s widened_val ( coerce_store_val lex val vt ptype syms cg )
             // Handle closure to function pointer conversion
             : s store_val ( convert_closure_arg widened_val vt ptype cg )
@@ -25182,6 +25189,18 @@
 // source is i1 and the destination is a non-i1 integer type, and is a
 // no-op in every other case. Placed here so both the let-binding and
 // `=`-assign paths can share it.
+// `{ s ctl }`-shaped: a struct whose only field is a pointer.
+@ __is_single_ptr_struct s ty i syms → b {
+    : i n ( nurl_str_len ty )
+    ? | < n 2 != ( nurl_str_get ty 0 ) 37 { ^ F } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ F } {}
+    : s tname ( nurl_str_slice ty 1 - n 1 )
+    : s f0 ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_0` `__type` ) )
+    ? == 0 ( nurl_str_len f0 ) { ^ F } {}
+    ? != 0 ( nurl_sym_len syms ( nurl_str_cat3 tname `__idx_1` `__type` ) ) { ^ F } {}
+    ^ == ( nurl_str_get f0 - ( nurl_str_len f0 ) 1 ) 42
+}
+
 @ coerce_store_val i lex s val s from_ty s to_ty i syms i cg → s {
     // RHS first-token evidence from the binding-init / assignment call
     // sites, consume-once: `` = no evidence (fall back to the last-ident
