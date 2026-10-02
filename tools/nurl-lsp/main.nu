@@ -32,7 +32,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 
 // nurl_sym table doubling as a URI → text store. Key = LSP document
 // URI (e.g. `file:///path/to/x.nu`); value = raw file content. nurl_sym
-// copies both, so callers can free their inputs.
+// copies both, so the inputs stay the caller's.
 : ~ i g_docs 0
 
 // Newline-separated list of every document URI opened this session.
@@ -239,7 +239,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         ~ & < k n | == ( nurl_str_get line k ) 32 == ( nurl_str_get line k ) 9 { = k + k 1 }
         : String msg ( __substr line k n )
         : b warning ( __string_starts_with msg `warning: ` )
-        ? ! | warning ( __string_starts_with msg `error: ` ) { ( string_free msg ) continue } {}
+        ? ! | warning ( __string_starts_with msg `error: ` ) { continue } {}
         : String path ( __substr line 0 path_end )
         : b same != 0 ( nurl_str_eq ( string_data path ) source_path )
         : Json d ( __build_diagnostic 1 1 ? warning 2 1 ( string_data msg ) )
@@ -253,7 +253,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
             : s imported ( __read_if_exists ( string_data path ) )
             : Path raw ( path_new ( string_data path ) )
             : ?Path canonical ( path_canonical raw )
-            ( path_free raw )
             ?? canonical {
                 T real → {
                     : String uri ( __path_to_uri ( path_str real ) )
@@ -266,12 +265,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                     : Json list ( json_arr_new )
                     ( json_arr_push list related )
                     ( json_obj_set d `relatedInformation` list )
-                    ( string_free uri ) ( path_free real )
                 }
                 F → {}
             }
         }
-        ( string_free path ) ( string_free msg )
         ^ @ ?Json { T d }
     }
     ^ @ ?Json { F }
@@ -307,9 +304,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         } {}
         : String suffix ( __substr uri start n )
         ( string_push_str raw ( string_data suffix ) )
-        ( string_free suffix )
         : String decoded ( url_percent_decode ( string_data raw ) )
-        ( string_free raw )
         ^ decoded
     } {}
     ^ ( string_from uri )
@@ -335,9 +330,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ? != 0 ( nurl_str_starts ( string_data encoded ) `//` ) {
         : String authority_path ( __substr ( string_data encoded ) 2 ( string_len encoded ) )
         ( string_push_str out ( string_data authority_path ) )
-        ( string_free authority_path )
     } { ( string_push_str out ( string_data encoded ) ) }
-    ( string_free encoded ) ( string_free normalized )
     ^ out
 }
 
@@ -416,11 +409,9 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __tool_directory s command → String {
     : Path path ( path_new command )
     : ?Path canonical ( path_canonical path )
-    ( path_free path )
     ?? canonical {
         T real → {
             : String dir ( path_dirname ( path_str real ) )
-            ( path_free real )
             ^ dir
         }
         F → { ^ ( path_dirname command ) }
@@ -435,20 +426,15 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __resolve_tool Json params s key s envname s name → String {
     : String explicit ( __init_option params key )
     ? > ( string_len explicit ) 0 { ^ explicit } {}
-    ( string_free explicit )
     : String configured ( env_var_or envname `` )
     ? > ( string_len configured ) 0 { ^ configured } {}
-    ( string_free configured )
     : s self ( nurl_argv 0 )
     ? | >= ( nurl_str_find self `/` ) 0 >= ( nurl_str_find self `\\` ) 0 {
         : String dir ( __tool_directory self )
         : String candidate ( path_join ( string_data dir ) name )
-        ( string_free dir )
         ? ( __is_executable ( string_data candidate ) ) { ^ candidate } {}
         : String exe ( string_from ( nurl_str_cat ( string_data candidate ) `.exe` ) )
-        ( string_free candidate )
         ? ( __is_executable ( string_data exe ) ) { ^ exe } {}
-        ( string_free exe )
     } {}
     ^ ( string_from name )  // process_run performs the platform PATH search
 }
@@ -477,17 +463,14 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                 } {}
                 = trial + trial 1
             }
-            ( string_free dir ) ( string_free candidate )
             = pos ? < next 0 + n 1 + next 1
         }
-        ( string_free paths )
         ? ! found { ^ ( string_from command ) } {}
     } {}
     ? ( path_is_absolute selected ) { ^ ( string_from selected ) } {}
     ?? ( env_cwd ) {
         T cwd → {
             : String absolute ( path_join ( string_data cwd ) selected )
-            ( string_free cwd )
             ^ absolute
         }
         F _ → { ^ ( string_from selected ) }
@@ -499,7 +482,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     : String formatter_config ( __resolve_tool params `formatterPath` `NURLFMT` `nurlfmt` )
     : String compiler ( __stable_command ( string_data compiler_config ) )
     : String formatter ( __stable_command ( string_data formatter_config ) )
-    ( string_free compiler_config ) ( string_free formatter_config )
     ( nurl_sym_def g_tools `compiler` ( string_data compiler ) )
     ( nurl_sym_def g_tools `formatter` ( string_data formatter ) )
     ( nurl_sym_def g_tools `compiler_checked` `` )
@@ -512,11 +494,8 @@ $ `tools/nurl-lsp/jsonrpc.nu`
             : String prefix ( path_dirname ( string_data dir ) )
             : String stdlib ( path_join ( string_data prefix ) `stdlib` )
             ? ( file_exists ( string_data stdlib ) ) { : !v IoErr _set ( env_set `NURL_STDLIB` ( string_data prefix ) ) } {}
-            ( string_free stdlib ) ( string_free prefix ) ( string_free dir )
         } {}
-        ( string_free existing )
     }
-    ( string_free root ) ( string_free compiler ) ( string_free formatter )
 }
 
 @ __compiler_error → s {
@@ -532,7 +511,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                 ? | ! ( output_success out ) | < ( nurl_str_find ( output_stdout out ) `--stdin` ) 0 < ( nurl_str_find ( output_stdout out ) `--check` ) 0 {
                     ( nurl_sym_def g_tools `compiler_error` ( nurl_str_cat3 `compiler '` compiler `' does not support --stdin and --check; rebuild or select a matching toolchain` ) )
                 } {}
-                ( output_free out )
             }
         }
         ? == 0 ( nurl_str_len ( nurl_sym_get g_tools `compiler_error` ) ) {
@@ -562,7 +540,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( vec_push [s] nc_args ( string_data path ) )
     : s compiler ( nurl_sym_get g_tools `compiler` )
     : !Output ProcessErr pr ( process_run compiler nc_args content )
-    ( vec_free [s] nc_args )
     ?? pr {
         F e → { ( json_arr_push diags ( __build_diagnostic 1 1 1 ( nurl_str_cat `cannot execute compiler: ` ( process_err_name e ) ) ) ) }
         T out → {
@@ -585,17 +562,14 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                     }
                     F _ → {}
                 }
-                ( string_free line )
                 = pos ? < nl 0 n + nl 1
             }
             ? & ! ( output_success out ) ! reported_error {
                 ( json_arr_push diags ( __build_diagnostic 1 1 1 ( nurl_str_cat3 `compiler failed: ` ( nurl_str_int ( output_exit_code out ) ) ( nurl_str_cat `\n` stderr_s ) ) ) )
             } {}
-            ( output_free out )
         }
     }
 
-    ( string_free path )
     ^ diags
 }
 
@@ -626,7 +600,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( string_push_char val 9 )
     ( string_push_str val ( nurl_str_int kind ) )
     ( nurl_sym_def g_defs name ( string_data val ) )
-    ( string_free val )
 
     // g_defs_by_uri entry: append "name\tline\tkind" triplet to the
     // existing TSV (or seed it). Same-line idempotence isn't worth the
@@ -645,7 +618,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( string_push_char acc 9 )
     ( string_push_str acc ( nurl_str_int kind ) )
     ( nurl_sym_def g_defs_by_uri uri ( string_data acc ) )
-    ( string_free acc )
 
     // First-time-seen → append to the all-names TSV. Skipped on
     // duplicates so the iterator stays linear-bounded by distinct
@@ -661,7 +633,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         } {}
         ( string_push_str list_acc name )
         ( nurl_sym_def g_all_names `:list` ( string_data list_acc ) )
-        ( string_free list_acc )
     } {}
 }
 
@@ -770,7 +741,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                         = p ( __skip_ws content ie n )
                                                         = more T
                                                     } {}
-                                                    ( string_free tok )
                                                 } {}
                                             }
                                             ? < p n {
@@ -782,7 +752,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                     ? > ae ai {
                                                         : String nm ( __substr content ai ae )
                                                         ( __register_def ( string_data nm ) uri line 12 )
-                                                        ( string_free nm )
                                                     } {}
                                                 } {
                                                     ? == c2 58 {
@@ -801,7 +770,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                 ? > ee ep {
                                                                     : String nm ( __substr content ep ee )
                                                                     ( __register_def ( string_data nm ) uri line 10 )
-                                                                    ( string_free nm )
                                                                     // Walk the body for variant names.
                                                                     : i bb ( __skip_ws content ee n )
                                                                     ? & < bb n == ( nurl_str_get content bb ) 123 {
@@ -819,7 +787,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                                                 : String vn ( __substr content wp ve )
                                                                                                 // SymbolKind 22 EnumMember
                                                                                                 ( __register_def ( string_data vn ) uri body_line 22 )
-                                                                                                ( string_free vn )
                                                                                                 = wp ve
                                                                                             } { = wp + wp 1 }
                                                                                         }
@@ -841,13 +808,11 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                         ? > ke np {
                                                                             : String nm ( __substr content np ke )
                                                                             ( __register_def ( string_data nm ) uri line 14 )
-                                                                            ( string_free nm )
                                                                         } {}
                                                                     } {
                                                                         // struct: `: Name { ... }` (SymbolKind 23)
                                                                         ( __register_def ( string_data tok ) uri line 23 )
                                                                     }
-                                                                    ( string_free tok )
                                                                 } {}
                                                             }
                                                         } {}
@@ -861,7 +826,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                 ? > nm_e nm_s {
                                                                     : String nm ( __substr content nm_s nm_e )
                                                                     ( __register_def ( string_data nm ) uri line 12 )
-                                                                    ( string_free nm )
                                                                 } {}
                                                             } {}
                                                         } {}
@@ -906,34 +870,26 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         : s name ? == pass 0 ( nurl_str_cat rel `` ) ( nurl_str_cat rel `.nu` )
         ? ( path_is_absolute name ) {
             ? ( file_exists name ) {
-                ( string_free dir ) ( string_free installed )
                 ^ ( string_from name )
             } {}
         } {
             : String sibling ( path_join ( string_data dir ) name )
             ? ( file_exists ( string_data sibling ) ) {
-                ( string_free dir ) ( string_free installed )
                 ^ sibling
             } {}
-            ( string_free sibling )
             : String local ( path_join root name )
             ? ( file_exists ( string_data local ) ) {
-                ( string_free dir ) ( string_free installed )
                 ^ local
             } {}
-            ( string_free local )
             ? > ( string_len installed ) 0 {
                 : String shipped ( path_join ( string_data installed ) name )
                 ? ( file_exists ( string_data shipped ) ) {
-                    ( string_free dir ) ( string_free installed )
                     ^ shipped
                 } {}
-                ( string_free shipped )
             } {}
         }
         ? != 0 ( nurl_str_ends rel `.nu` ) { = pass 2 } { = pass + pass 1 }
     }
-    ( string_free dir ) ( string_free installed )
     ^ ( string_from rel )
 }
 
@@ -999,7 +955,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ?? ( read_file path ) {
         T text → {
             : s owned ( nurl_str_cat ( string_data text ) `` )
-            ( string_free text )
             ^ owned
         }
         F _ → { ^ ( nurl_str_cat `` `` ) }
@@ -1019,7 +974,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         ? > ( nurl_str_len content ) 0 {
             : String uri ? > ( nurl_str_len open_uri ) 0 ( string_from open_uri ) ( __path_to_uri abs_path )
             ( __index_content ( string_data uri ) content )
-            ( string_free uri )
             : ( Vec String ) imports ( __collect_imports content )
             : i nimp ( vec_len [String] imports )
             : ~ i k 0
@@ -1029,14 +983,11 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                     T pv → {
                         : String abs ( __resolve_import_path ( string_data pv ) abs_path )
                         ( __index_path ( string_data abs ) )
-                        ( string_free abs )
-                        ( string_free pv )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] imports )
         } {}
     } {}
 }
@@ -1054,7 +1005,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( nurl_sym_def g_indexed ( string_data path ) `` )
     ( nurl_sym_def g_defs_by_uri uri `` )
     ( __index_path ( string_data path ) )
-    ( string_free path )
 }
 
 // ── Document state + handlers ─────────────────────────────────────
@@ -1065,7 +1015,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_obj_set params `diagnostics` diags )
     : Json note ( __make_notification `textDocument/publishDiagnostics` params )
     ( write_message note )
-    ( json_free note )
 }
 
 // Re-run diagnostics for `uri` using its current stored text. Called
@@ -1157,7 +1106,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         ( nurl_sym_def g_docs uri `` )
         : String path ( __uri_to_path uri )
         ( nurl_sym_def g_docs ( nurl_str_cat `:path:` ( string_data path ) ) `` )
-        ( string_free path )
         ( __publish_diagnostics uri ( json_arr_new ) )
     } {}
 }
@@ -1249,7 +1197,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                     : i line_end ? >= tab2 0 tab2 n
                                                                     : String line_str ( __substr defs_val + tab 1 line_end )
                                                                     : !i ParseErr lr ( string_to_int line_str )
-                                                                    ( string_free line_str )
                                                                     ?? lr {
                                                                         T def_line → {
                                                                             // Convert compiler 1-based line to LSP 0-based.
@@ -1264,10 +1211,8 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                         }
                                                                         F _ → {}
                                                                     }
-                                                                    ( string_free def_uri )
                                                                 } {}
                                                             } {}
-                                                            ( string_free name )
                                                         }
                                                         F _ → {}
                                                     }
@@ -1290,7 +1235,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     } {}
     : Json resp ( __make_response id result )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── Document outline (textDocument/documentSymbol) ──────────────
@@ -1353,9 +1297,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                         }
                         F _ → {}
                     }
-                    ( string_free name )
-                    ( string_free line_s )
-                    ( string_free kind_s )
                     = pos ? >= t3 0 + t3 1 n
                 }
             }
@@ -1363,7 +1304,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     } {}
     : Json resp ( __make_response id result )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── Hover (textDocument/hover) ───────────────────────────────────
@@ -1509,22 +1449,14 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                                     ( json_obj_set hov `contents` contents )
                                                                                     = result hov
 
-                                                                                    ( string_free def_path )
-                                                                                    ( string_free sig )
-                                                                                    ( string_free base )
-                                                                                    ( string_free md )
                                                                                 }
                                                                                 F _ → {}
                                                                             }
                                                                         }
                                                                         F _ → {}
                                                                     }
-                                                                    ( string_free def_uri )
-                                                                    ( string_free line_s )
-                                                                    ( string_free kind_s )
                                                                 } {}
                                                             } {}
-                                                            ( string_free name )
                                                         }
                                                         F _ → {}
                                                     }
@@ -1547,7 +1479,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     } {}
     : Json resp ( __make_response id result )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── Completion (textDocument/completion) ────────────────────────
@@ -1622,9 +1553,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( string_push_str detail ( nurl_str_int line ) )
     ( string_push_char detail 41 )
     ( json_obj_set item `detail` ( json_str_lit ( string_data detail ) ) )
-    ( string_free path )
-    ( string_free base )
-    ( string_free detail )
     ^ item
 }
 
@@ -1680,16 +1608,11 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                     }
                                                                     F _ → {}
                                                                 }
-                                                                ( string_free def_uri )
-                                                                ( string_free line_s )
-                                                                ( string_free kind_s )
                                                             } {}
                                                         } {}
                                                     } {}
-                                                    ( string_free name )
                                                     = tpos ? >= tend 0 + tend 1 nt
                                                 }
-                                                ( string_free prefix )
                                             }
                                             F _ → {}
                                         }
@@ -1713,7 +1636,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_obj_set clist `items` items )
     : Json resp ( __make_response id clist )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── Formatting (textDocument/formatting) ─────────────────────────
@@ -1736,12 +1658,10 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         ( vec_push [s] args `--stdin` )
         : s formatter ( nurl_sym_get g_tools `formatter` )
         : !Output ProcessErr pr ( process_run formatter args content )
-        ( vec_free [s] args )
         ?? pr {
             F e → {
-                ( json_free edits )
                 : Json failure ( __make_error id -32603 ( nurl_str_cat3 `cannot execute formatter '` formatter ( nurl_str_cat `': ` ( process_err_name e ) ) ) )
-                ( write_message failure ) ( json_free failure )
+                ( write_message failure )
                 ^
             }
             T out → {
@@ -1757,18 +1677,15 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                     ( json_obj_set edit `newText` ( json_str_lit formatted ) )
                     ( json_arr_push edits edit )
                 } {
-                    ( json_free edits )
                     : Json failure ( __make_error id -32603 ( nurl_str_cat `formatter failed: ` ( output_stderr out ) ) )
-                    ( write_message failure ) ( json_free failure ) ( output_free out )
+                    ( write_message failure )
                     ^
                 }
-                ( output_free out )
             }
         }
     } {}
     : Json resp ( __make_response id edits )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── Workspace symbol search (workspace/symbol) ───────────────────
@@ -1846,18 +1763,13 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                         }
                         F _ → {}
                     }
-                    ( string_free def_uri )
-                    ( string_free line_s )
-                    ( string_free kind_s )
                 } {}
             } {}
         } {}
-        ( string_free name )
         = tpos ? >= tend 0 + tend 1 nt
     }
     : Json resp ( __make_response id items )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── Folding ranges (textDocument/foldingRange) ───────────────────
@@ -1928,11 +1840,9 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                 }
             }
         }
-        ( vec_free [i] stack )
     } {}
     : Json resp ( __make_response id ranges )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── References (textDocument/references) ────────────────────────────
@@ -2015,7 +1925,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         : String duri ( __substr list pos end )
         : s dc ( nurl_sym_get g_docs ( string_data duri ) )
         ? > ( nurl_str_len dc ) 0 { ( __collect_refs_in_doc ( string_data duri ) dc name out ) } {}
-        ( string_free duri )
         = pos ? < nl 0 n + nl 1
     }
 }
@@ -2045,7 +1954,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                     ?? tk {
                                                         T name → {
                                                             ( __refs_all_docs ( string_data name ) result )
-                                                            ( string_free name )
                                                         }
                                                         F _ → {}
                                                     }
@@ -2068,7 +1976,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     } {}
     : Json resp ( __make_response id result )
     ( write_message resp )
-    ( json_free resp )
 }
 
 // ── Rename (textDocument/rename) ────────────────────────────────────
@@ -2148,7 +2055,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         }
         ( json_obj_set changes uri edits )
     } {}
-    ( json_free locs )
 }
 
 // Sweep the same scope as textDocument/references (every open doc),
@@ -2165,7 +2071,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         : String duri ( __substr list pos end )
         : s dc ( nurl_sym_get g_docs ( string_data duri ) )
         ? > ( nurl_str_len dc ) 0 { ( __rename_edits_for_doc ( string_data duri ) dc name new_name changes ) } {}
-        ( string_free duri )
         = pos ? < nl 0 n + nl 1
     }
     : s defs_val ( nurl_sym_get g_defs name )
@@ -2181,9 +2086,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                 ? > ( nurl_str_len def_content ) 0 {
                     ( __rename_edits_for_doc ( string_data def_uri ) def_content name new_name changes )
                 } {}
-                ( string_free def_path )
             } {}
-            ( string_free def_uri )
         } {}
     } {}
 }
@@ -2264,23 +2167,19 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                 ( __rename_all_docs ( string_data name ) new_name changes )
                             }
                         }
-                        ( string_free name )
                     }
                 }
             }
         }
     }
     ? have_err {
-        ( json_free changes )
         : Json resp ( __make_error id - 0 32602 err_msg )
         ( write_message resp )
-        ( json_free resp )
     } {
         : Json we ( json_obj_new )
         ( json_obj_set we `changes` changes )
         : Json resp ( __make_response id we )
         ( write_message resp )
-        ( json_free resp )
     }
 }
 
@@ -2308,7 +2207,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
         ? > ( nurl_str_len cur ) 0 { ( string_push_str acc cur ) ( string_push_char acc 10 ) } {}
         ( string_push_str acc uri )
         ( nurl_sym_def g_doc_uris `list` ( string_data acc ) )
-        ( string_free acc )
     }
 }
 
@@ -2329,11 +2227,9 @@ $ `tools/nurl-lsp/jsonrpc.nu`
             ? & > ln 0 == ( string_get p - ln 1 ) 47 {
                 : String p2 ( __substr ( string_data p ) 0 - ln 1 )
                 ( __set_workspace_root ( string_data p2 ) )
-                ( string_free p2 )
             } {
                 ( __set_workspace_root ( string_data p ) )
             }
-            ( string_free p )
         }
         F _ → {
             : ?Json rp ( json_obj_get params `rootPath` )
@@ -2360,14 +2256,12 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_obj_set result `serverInfo` info )
     : Json resp ( __make_response id result )
     ( write_message resp )
-    ( json_free resp )
 }
 
 @ __handle_shutdown Json id → v {
     = g_shutdown_received T
     : Json resp ( __make_response id ( json_null ) )
     ( write_message resp )
-    ( json_free resp )
 }
 
 @ __handle_unknown_request Json id s method → v {
@@ -2376,8 +2270,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( string_push_str msg method )
     : Json resp ( __make_error id - 0 32601 ( string_data msg ) )
     ( write_message resp )
-    ( json_free resp )
-    ( string_free msg )
 }
 
 @ __dispatch Json msg → v {
@@ -2407,7 +2299,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                     F _ → {
                                         : Json resp ( __make_response id ( json_null ) )
                                         ( write_message resp )
-                                        ( json_free resp )
                                     }
                                 }
                             } {
@@ -2418,7 +2309,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                         F _ → {
                                             : Json resp ( __make_response id ( json_arr_new ) )
                                             ( write_message resp )
-                                            ( json_free resp )
                                         }
                                     }
                                 } {
@@ -2429,7 +2319,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                             F _ → {
                                                 : Json resp ( __make_response id ( json_null ) )
                                                 ( write_message resp )
-                                                ( json_free resp )
                                             }
                                         }
                                     } {
@@ -2440,7 +2329,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                 F _ → {
                                                     : Json resp ( __make_response id ( json_arr_new ) )
                                                     ( write_message resp )
-                                                    ( json_free resp )
                                                 }
                                             }
                                         } {
@@ -2451,7 +2339,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                     F _ → {
                                                         : Json resp ( __make_response id ( json_arr_new ) )
                                                         ( write_message resp )
-                                                        ( json_free resp )
                                                     }
                                                 }
                                             } {
@@ -2462,7 +2349,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                         F _ → {
                                                             : Json resp ( __make_response id ( json_arr_new ) )
                                                             ( write_message resp )
-                                                            ( json_free resp )
                                                         }
                                                     }
                                                 } {
@@ -2473,7 +2359,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                             F _ → {
                                                                 : Json resp ( __make_response id ( json_arr_new ) )
                                                                 ( write_message resp )
-                                                                ( json_free resp )
                                                             }
                                                         }
                                                     } {
@@ -2484,7 +2369,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                 F _ → {
                                                                     : Json resp ( __make_response id ( json_arr_new ) )
                                                                     ( write_message resp )
-                                                                    ( json_free resp )
                                                                 }
                                                             }
                                                         } {
@@ -2495,7 +2379,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                     F _ → {
                                                                         : Json resp ( __make_error id - 0 32602 `rename rejected: missing params` )
                                                                         ( write_message resp )
-                                                                        ( json_free resp )
                                                                     }
                                                                 }
                                                             } {
@@ -2560,7 +2443,6 @@ $ `tools/nurl-lsp/jsonrpc.nu`
             F _ → { = done T }
             T msg → {
                 ( __dispatch msg )
-                ( json_free msg )
                 ? g_exit_requested { = done T } {}
             }
         }

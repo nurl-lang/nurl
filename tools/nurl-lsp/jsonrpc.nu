@@ -20,8 +20,8 @@
 //   ( write_message Json j )    → v        serialise + Content-Length + flush
 //
 // Both routines own their I/O: `read_message` consumes the runtime's
-// borrowed line slot and returns an owned Json tree on Some; the
-// caller frees the Json with `json_free`. `write_message` flushes
+// borrowed line slot and returns an owned Json tree on Some (its
+// owner drops it). `write_message` flushes
 // stdout after each write so the editor sees the message immediately.
 
 $ `stdlib/core/io.nu`
@@ -90,13 +90,11 @@ $ `stdlib/ext/json.nu`
         : String line ( read_line )
         : i ll ( string_len line )
         ? ( stdin_eof ) {
-            ( string_free line )
             ^ @ ?Json { F }
         } {}
         // Blank line (or pure "\r") terminates the header block.
         : b is_blank | == ll 0 & == ll 1 == ( string_get line 0 ) 13
         ? is_blank {
-            ( string_free line )
             = done T
         } {
             ? ( __header_is_content_length ( string_data line ) ) {
@@ -106,7 +104,6 @@ $ `stdlib/ext/json.nu`
                     = have_clen T
                 } {}
             } {}
-            ( string_free line )
         }
     }
     ? ! have_clen {
@@ -118,7 +115,6 @@ $ `stdlib/ext/json.nu`
     : i got ( vec_len [u] body )
     ? < got clen {
         ( nurl_eprintln `[lsp] short read: body truncated by EOF` )
-        ( vec_free [u] body )
         ^ @ ?Json { F }
     } {}
     // The body bytes are UTF-8 JSON; copy into a NUL-terminated String
@@ -132,9 +128,7 @@ $ `stdlib/ext/json.nu`
         ( string_push_char src # i . data k )
         = k + k 1
     }
-    ( vec_free [u] body )
     : !Json JsonError pr ( json_parse ( string_data src ) )
-    ( string_free src )
     ?? pr {
         T j → ^ @ ?Json { T j }
         F _ → {
@@ -149,7 +143,7 @@ $ `stdlib/ext/json.nu`
 // Serialise `j` to a JSON string, count its bytes, and emit a framed
 // message on stdout. Flushes after each frame so the editor sees the
 // reply without buffering delay. The caller retains ownership of `j`
-// and frees it after this call returns (write_message borrows).
+// (write_message borrows).
 
 @ write_message Json j → v {
     : String body ( json_stringify j )
@@ -161,6 +155,4 @@ $ `stdlib/ext/json.nu`
     ( nurl_print ( string_data hdr ) )
     ( nurl_print ( string_data body ) )
     ( flush )
-    ( string_free hdr )
-    ( string_free body )
 }
