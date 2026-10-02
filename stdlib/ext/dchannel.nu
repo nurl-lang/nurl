@@ -296,7 +296,6 @@ $ `stdlib/core/rcbox.nu`
     : Registry r ( registry_new )
     ( dchan_register store r )
     : !v NetErr rr ( cluster_serve host port r )
-    ( registry_free r )
     ^ rr
 }
 
@@ -330,19 +329,26 @@ $ `stdlib/core/rcbox.nu`
     ( @ v A ) drop
 }
 
+// A DChannel is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same channel, and the last owner releases it — the
+// node, the name and the codec closures (copies the channel keeps) go
+// with it.
 : DChannel [A] { s ctl }
+
+@ DChannel_share [A] ( DChannel A ) h → ( DChannel A ) { ^ @ ( DChannel A ) { # s ( rcbox_share # i . h ctl ) } }
+
+@ DChannel_drop [A] sink ( DChannel A ) h → v {
+    ( mem_forget h )
+    ( rcbox_release [( DChannelImpl A )] # i . h ctl )
+}
+
+@ __dchan_ptr [A] ( DChannel A ) h → *( DChannelImpl A ) { ^ ( rcbox_ptr [( DChannelImpl A )] # i . h ctl ) }
 
 @ dchan_open [A] Node node s name RetryPolicy pol i poll_ms
 ( @ Json A ) enc ( @ A Json ) dec ( @ v A ) drop → ( DChannel A ) {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) ( nurl_alloc Z ( DChannelImpl A ) )
-    = . impl node node
-    = . impl name ( string_from name )
-    = . impl pol pol
-    = . impl poll_ms ? > poll_ms 0 poll_ms 20
-    = . impl enc enc
-    = . impl dec dec
-    = . impl drop drop
-    ^ @ ( DChannel A ) { # s impl }
+    : i pm ? > poll_ms 0 poll_ms 20
+    : i box ( rcbox_new [( DChannelImpl A )] @ ( DChannelImpl A ) { node ( string_from name ) pol pm enc dec drop } )
+    ^ @ ( DChannel A ) { # s box }
 }
 
 // Identity codecs for A = Json (the wire's native type).
@@ -350,23 +356,11 @@ $ `stdlib/core/rcbox.nu`
     ^ ( dchan_open [Json] node name pol poll_ms
     \ Json v → Json { ^ ( json_clone v ) }
     \ Json j → Json { ^ ( json_clone j ) }
-    \ Json j → v { ( json_free j ) } )
+    \ Json j → v {} )
 }
 
-@ dchan_free [A] sink ( DChannel A ) ch → v {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
-    ( node_free . impl node )
-    ( string_free . impl name )
-    // The heap block owns the codec closures stored into it (clones —
-    // docs/MEMORY.md §7.4); release them with the block.
-    : ( @ Json A ) e . impl enc
-    ( nurl_closure_drop # *u e 1 )
-    : ( @ A Json ) d . impl dec
-    ( nurl_closure_drop # *u d 1 )
-    : ( @ v A ) dr . impl drop
-    ( nurl_closure_drop # *u dr 1 )
-    ( nurl_free . ch ctl )
-}
+// Let go of `ch` now rather than at the end of its owner's scope.
+@ dchan_free [A] sink ( DChannel A ) ch → v {}
 
 @ __poll_grow i w → i {
     : i n * w 2
@@ -406,7 +400,6 @@ $ `stdlib/core/rcbox.nu`
                     @ DSend { DSendFull }
                 }
             }
-            ( json_free res )
             d
         }
         F _ → @ DSend { DSendErr }
@@ -417,7 +410,7 @@ $ `stdlib/core/rcbox.nu`
 // closed channel returns F and the caller keeps v; a full remote queue
 // makes us wait and retry.
 @ dchan_send [A] ( DChannel A ) ch A v → b {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
+    : *( DChannelImpl A ) impl ( __dchan_ptr [A] ch )
     : ( @ Json A ) e . impl enc
     : Json payload ( e v )  // BORROWS v
 
@@ -436,7 +429,6 @@ $ `stdlib/core/rcbox.nu`
             }
         }
     }
-    ( json_free payload )
     ? ok {
         : ( @ v A ) dr . impl drop
         ( dr v )
@@ -447,11 +439,10 @@ $ `stdlib/core/rcbox.nu`
 // Non-blocking send. DSendOk consumes v; every other outcome leaves v
 // with the caller.
 @ dchan_try_send [A] ( DChannel A ) ch A v → DSend {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
+    : *( DChannelImpl A ) impl ( __dchan_ptr [A] ch )
     : ( @ Json A ) e . impl enc
     : Json payload ( e v )
     : DSend d ( __send_once [A] impl payload )
-    ( json_free payload )
     ?? d {
         DSendOk → {
             : ( @ v A ) dr . impl drop
@@ -485,7 +476,6 @@ $ `stdlib/core/rcbox.nu`
                 : i tg ? != 0 ( nurl_str_eq st `closed` ) 1 0
                 @ ( RecvOut A ) { tg ( __dec_null [A] impl ) }
             }
-            ( json_free res )
             out
         }
         F _ → @ ( RecvOut A ) { 3 ( __dec_null [A] impl ) }
@@ -498,13 +488,12 @@ $ `stdlib/core/rcbox.nu`
     : ( @ A Json ) dec . impl dec
     : Json n ( json_null )
     : A a ( dec n )
-    ( json_free n )
     ^ a
 }
 
 // Blocking recv. None only when the remote channel is closed AND drained.
 @ dchan_recv [A] ( DChannel A ) ch → ?A {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
+    : *( DChannelImpl A ) impl ( __dchan_ptr [A] ch )
     : ( @ v A ) dr . impl drop
 
     : ~ b done F
@@ -535,7 +524,7 @@ $ `stdlib/core/rcbox.nu`
 
 // Non-blocking recv: one shot, None on empty/closed/error.
 @ dchan_try_recv [A] ( DChannel A ) ch → ?A {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
+    : *( DChannelImpl A ) impl ( __dchan_ptr [A] ch )
     : ( @ v A ) dr . impl drop
     : ( RecvOut A ) ro ( __recv_once [A] impl )
     ? == . ro tag 2 {
@@ -546,21 +535,19 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ dchan_close [A] ( DChannel A ) ch → v {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
+    : *( DChannelImpl A ) impl ( __dchan_ptr [A] ch )
     : Json args ( __name_args ( string_data . impl name ) )
-    : !Json ClusterErr rr ( call_remote_with . impl node ( __wire_close ) args . impl pol )
-    ?? rr { T res → ( json_free res ) F _ → {} }
+    : !Json ClusterErr _rr ( call_remote_with . impl node ( __wire_close ) args . impl pol )
 }
 
 @ dchan_len [A] ( DChannel A ) ch → i {
-    : *( DChannelImpl A ) impl # *( DChannelImpl A ) . ch ctl
+    : *( DChannelImpl A ) impl ( __dchan_ptr [A] ch )
     : Json args ( __name_args ( string_data . impl name ) )
     : !Json ClusterErr rr ( call_remote_with . impl node ( __wire_len ) args . impl pol )
     ^ ?? rr {
         T res → {
             : ?Json lj ( json_obj_get res `len` )
             : i n ?? lj { T x → ( json_as_int x ) F → 0 }
-            ( json_free res )
             n
         }
         F _ → 0
