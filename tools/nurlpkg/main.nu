@@ -65,7 +65,7 @@ $ `stdlib/std/bytes.nu`
 @ __registry_url Manifest m → String {
     : ?String ev ( env_get `NURL_REGISTRY` )
     ?? ev {
-        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        T e → { ? > ( string_len e ) 0 { ^ e } {} }
         F → {}
     }
     ? > ( string_len . m registry ) 0 {
@@ -79,7 +79,7 @@ $ `stdlib/std/bytes.nu`
 @ __reg_default → String {
     : ?String ev ( env_get `NURL_REGISTRY` )
     ?? ev {
-        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        T e → { ? > ( string_len e ) 0 { ^ e } {} }
         F → {}
     }
     ^ ( string_from ( __default_registry ) )
@@ -90,22 +90,10 @@ $ `stdlib/std/bytes.nu`
 @ __resolve_token s registry → String {
     : ?String ev ( env_get `NURL_TOKEN` )
     ?? ev {
-        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        T e → { ? > ( string_len e ) 0 { ^ e } {} }
         F → {}
     }
     ^ ( creds_get registry )
-}
-
-// Free a Dep vector built by __registry_roots (each Dep + the vector).
-@ __deps_free_vec ( Vec Dep ) v → v {
-    : i n ( vec_len [Dep] v )
-    : ~ i k 0
-    ~ < k n {
-        : ?Dep dk ( vec_get [Dep] v k )
-        ?? dk { T d → ( dep_free d ) F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [Dep] v )
 }
 
 // Dependencies that must be resolved from the registry at install time:
@@ -117,7 +105,7 @@ $ `stdlib/std/bytes.nu`
 // Hybrids whose path IS present on disk are left to the path-dep BFS and
 // excluded here (no double install). Returned hybrids have their `path`
 // cleared so `resolve_registry` seeds them as registry roots. Caller owns
-// the returned vector (free each Dep).
+// the returned vector.
 @ __registry_roots Manifest m s cwd → ( Vec Dep ) {
     : ( Vec Dep ) out ( vec_new [Dep] )
     : i n ( vec_len [Dep] . m dependencies )
@@ -132,7 +120,6 @@ $ `stdlib/std/bytes.nu`
                     ? ( dep_has_version d ) {
                         : String tgt ( __abs_join cwd ( string_data . d path ) )
                         ? ! ( __dep_has_manifest ( string_data tgt ) ) { = take T = clearpath T } {}
-                        ( string_free tgt )
                     } {}
                 }
                 ? take {
@@ -494,7 +481,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ~ < k argc {
         : String a ( env_arg k )
         : b hit | != 0 ( nurl_str_eq ( string_data a ) `--help` ) != 0 ( nurl_str_eq ( string_data a ) `-h` )
-        ( string_free a )
         ? hit { ^ T } {}
         = k + k 1
     }
@@ -520,7 +506,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             ( string_push_str needle av )
             ( string_push_str needle ` ` )
             ? >= ( nurl_str_find ( string_data pad ) ( string_data needle ) ) 0 { = okflag T } {}
-            ( string_free pad ) ( string_free needle )
             ? okflag {} {
                 ( nurl_eprint `nurlpkg: unknown option '` )
                 ( nurl_eprint av )
@@ -530,11 +515,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( nurl_eprint `hint: nurlpkg ` )
                 ( nurl_eprint cmd )
                 ( nurl_eprintln ` --help` )
-                ( string_free a )
                 ^ 1
             }
         } {}
-        ( string_free a )
         = k + k 1
     }
     ^ 0
@@ -549,14 +532,12 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __cmd_build s name s outp → i {
     : ~ String dir ( string_from `.` )
     ? > ( nurl_str_len name ) 0 {
-        ( string_free dir )
         = dir ( string_from `deps/` )
         ( string_push_str dir name )
         ? ( file_exists ( string_data dir ) ) {} {
             ( nurl_eprint `nurlpkg: no deps/` )
             ( nurl_eprint name )
             ( nurl_eprintln ` — run 'nurlpkg install' first (or 'nurlpkg add' + install)` )
-            ( string_free dir )
             ^ 1
         }
     } {}
@@ -564,10 +545,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( string_push_str entry `/src/main.nu` )
     ? ( file_exists ( string_data entry ) ) {} {
         ( nurl_eprintln `nurlpkg: the package has no src/main.nu — it is a library, not a program` )
-        ( string_free entry ) ( string_free dir )
         ^ 1
     }
-    ( string_free entry )
     // an installed application's deps are its SIBLINGS under ./deps — give
     // it the link its root-relative imports expect (idempotent)
     ? > ( nurl_str_len name ) 0 {
@@ -579,7 +558,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 F _ → { ( nurl_eprintln `nurlpkg: warning — could not create the deps link` ) }
             }
         }
-        ( string_free dl )
     } {}
     // binary name: --out, else the manifest's name (this dir) / the dep name
     : ~ String binout ( string_new )
@@ -591,7 +569,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             ?? mr0 {
                 T m0 → {
                     ( string_push_str binout ( string_data . m0 name ) )
-                    ( manifest_free m0 )
                 }
                 F _ → { ( string_push_str binout `a.out` ) }
             }
@@ -606,14 +583,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( string_push_str absout ( string_data c ) )
                 ( string_push_str absout `/` )
                 ( string_push_str absout ( string_data binout ) )
-                ( string_free c )
             }
             F _ → { ( string_push_str absout ( string_data binout ) ) }
         }
     }
     : String nurl ( __env_or `NURL` `nurl` )
     : ~ String orig ( string_new )
-    ?? ( env_cwd ) { T c → { ( string_free orig ) = orig c } F _ → {} }
+    ?? ( env_cwd ) { T c → { = orig c } F _ → {} }
     : ~ i rc 1
     ?? ( env_chdir ( string_data dir ) ) {
         F _ → { ( nurl_eprintln `nurlpkg: cannot enter the package directory` ) }
@@ -626,7 +602,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( vec_push [s] cargs `src/main.nu` )
                 ( vec_push [s] cargs ( string_data absout ) )
                 : i ok2 ( __spawn ( string_data nurl ) cargs `compile` )
-                ( vec_free [s] cargs )
                 ? == ok2 0 { = rc 1 } {
                     = rc 0
                     ( nurl_print `built ` )
@@ -637,8 +612,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
     }
     ? > ( string_len orig ) 0 { ?? ( env_chdir ( string_data orig ) ) { T _ → {} F _ → {} } } {}
-    ( string_free absout ) ( string_free binout )
-    ( string_free nurl ) ( string_free orig ) ( string_free dir )
     ^ rc
 }
 
@@ -666,7 +639,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( string_push_str body `# Example:\n` )
     ( string_push_str body `# http-router = { path = "../router", version = "0.2.0" }\n` )
     : !v IoErr wr ( write_file `nurl.toml` ( string_data body ) )
-    ( string_free body )
     ?? wr {
         T _ → {
             ( nurl_print `Created nurl.toml\n` )
@@ -706,7 +678,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             } {}
             : i nd ( vec_len [Dep] . m dependencies )
             ( nurl_print `dependencies: ` ) ( nurl_print ( nurl_str_int nd ) ) ( nurl_print `\n` )
-            ( manifest_free m )
         }
     }
     ^ rc
@@ -740,7 +711,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __is_dependencies_header String line → b {
     : String t ( string_trim line )
     : b out != 0 ( nurl_str_eq ( string_data t ) `[dependencies]` )
-    ( string_free t )
     ^ out
 }
 
@@ -752,8 +722,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : s s ( string_data t )
     : i tlen ( string_len t )
     : i nlen ( nurl_str_len name )
-    // Single exit so the trimmed copy is always freed (early `^`s here
-    // used to leak one String per non-matching line on every add/remove).
     : ~ b out F
     : ~ b decided F
     ? < tlen + nlen 1 { = decided T } {}
@@ -774,7 +742,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             }
         }
     } {}
-    ( string_free t )
     ^ out
 }
 
@@ -837,7 +804,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : ~ String src ( string_new )
     ?? rr {
         T s → {
-            ( string_free src )
             = src s
         }
         F _ → {
@@ -846,7 +812,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
     }
     : ( Vec String ) lines ( string_split src `\n` )
-    ( string_free src )
 
     // First pass: locate the [dependencies] header. Also scan the
     // section for a duplicate <name> entry.
@@ -896,13 +861,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         ( nurl_eprintln `' is already declared under [dependencies]` )
                         ( nurl_eprintln `Run 'nurlpkg remove <name>' first.` )
                         : i fn ( vec_len [String] lines )
-                        : ~ i fk 0
-                        ~ < fk fn {
-                            : ?String fpk ( vec_get [String] lines fk )
-                            ?? fpk { T s → ( string_free s ) F _ → {} }
-                            = fk + fk 1
-                        }
-                        ( vec_free [String] lines )
                         ^ 1
                     } {}
                 }
@@ -917,7 +875,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : String new_line ( string_from name )
     ( string_push_str new_line ` = ` )
     ( string_push_str new_line ( string_data value_text ) )
-    ( string_free value_text )
 
     : ( Vec String ) out_lines ( vec_new [String] )
     ? >= dep_hdr_idx 0 {
@@ -958,28 +915,12 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( vec_push [String] out_lines ( string_from `[dependencies]` ) )
         ( vec_push [String] out_lines new_line )
     }
-    // Free the input lines.
     : i fn ( vec_len [String] lines )
-    : ~ i fk 0
-    ~ < fk fn {
-        : ?String fpk ( vec_get [String] lines fk )
-        ?? fpk { T s → ( string_free s ) F _ → {} }
-        = fk + fk 1
-    }
-    ( vec_free [String] lines )
 
     : String joined ( __join_lines out_lines )
     : i jfn ( vec_len [String] out_lines )
-    : ~ i jfk 0
-    ~ < jfk jfn {
-        : ?String fpk ( vec_get [String] out_lines jfk )
-        ?? fpk { T s → ( string_free s ) F _ → {} }
-        = jfk + jfk 1
-    }
-    ( vec_free [String] out_lines )
 
     : !v IoErr wr ( write_file `nurl.toml` ( string_data joined ) )
-    ( string_free joined )
     : ~ i rc 0
     ?? wr {
         T _ → {
@@ -1009,7 +950,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : ~ String src ( string_new )
     ?? rr {
         T s → {
-            ( string_free src )
             = src s
         }
         F _ → {
@@ -1018,7 +958,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
     }
     : ( Vec String ) lines ( string_split src `\n` )
-    ( string_free src )
 
     : i nlines ( vec_len [String] lines )
     : ~ b in_deps F
@@ -1049,42 +988,19 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         = k + k 1
     }
-    // Free the input lines.
-    : ~ i fk 0
-    ~ < fk nlines {
-        : ?String fpk ( vec_get [String] lines fk )
-        ?? fpk { T s → ( string_free s ) F _ → {} }
-        = fk + fk 1
-    }
-    ( vec_free [String] lines )
 
     ? ! removed {
         ( nurl_eprint `nurlpkg: '` )
         ( nurl_eprint name )
         ( nurl_eprintln `' is not declared under [dependencies]` )
         : i jfn ( vec_len [String] out_lines )
-        : ~ i jfk 0
-        ~ < jfk jfn {
-            : ?String fpk ( vec_get [String] out_lines jfk )
-            ?? fpk { T s → ( string_free s ) F _ → {} }
-            = jfk + jfk 1
-        }
-        ( vec_free [String] out_lines )
         ^ 1
     } {}
 
     : String joined ( __join_lines out_lines )
     : i jfn ( vec_len [String] out_lines )
-    : ~ i jfk 0
-    ~ < jfk jfn {
-        : ?String fpk ( vec_get [String] out_lines jfk )
-        ?? fpk { T s → ( string_free s ) F _ → {} }
-        = jfk + jfk 1
-    }
-    ( vec_free [String] out_lines )
 
     : !v IoErr wr ( write_file `nurl.toml` ( string_data joined ) )
-    ( string_free joined )
     : ~ i rc 0
     ?? wr {
         T _ → {
@@ -1124,24 +1040,21 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : String text ( registry_fetch_err_text error )
     : String url ( registry_index_url registry name )
     ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint ( string_data url ) ) ( nurl_eprint `: ` )
-    ( string_free url )
-    ( nurl_eprintln ( string_data text ) ) ( string_free text )
+    ( nurl_eprintln ( string_data text ) )
 }
 
 @ __report_resolve_error ResolveErr error → v {
     : String text ( resolve_err_text error )
     ( nurl_eprint `nurlpkg: registry resolution failed (` )
     ( nurl_eprint ( string_data text ) ) ( nurl_eprintln `)` )
-    ( string_free text ) ( resolve_err_free error )
 }
 
 @ __update_candidate Manifest m Dep d → !String i {
     ? > ( string_len . d path ) 0 {
         : String mf ( string_clone . d path ) ( string_push_str mf `/nurl.toml` )
         : !Manifest ManifestErr mr ( manifest_load ( string_data mf ) )
-        ( string_free mf )
         ?? mr {
-            T dm → { : String out ( string_clone . dm version ) ( manifest_free dm ) ^ @ !String i { T out } }
+            T dm → { : String out ( string_clone . dm version ) ^ @ !String i { T out } }
             F _ → { ( nurl_eprint `nurlpkg: cannot read local dependency: ` ) ( nurl_eprintln ( string_data . d name ) ) ^ @ !String i { F 1 } }
         }
     } {}
@@ -1150,20 +1063,18 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ?? result {
         F error → {
             ?? error {
-                RegistryNotFound → { ( string_free reg ) ^ @ !String i { T ( string_new ) } }
+                RegistryNotFound → { ^ @ !String i { T ( string_new ) } }
                 _ → { ( __report_registry_fetch ( string_data reg ) ( string_data . d name ) error ) }
             }
-            ( string_free reg ) ^ @ !String i { F 1 }
+            ^ @ !String i { F 1 }
         }
         T index → {
-            ( string_free reg )
             : ~ String out ( string_new )
             : i selected ( regindex_select index `*` )
             ? >= selected 0 {
                 : IdxVersion version . ( vec_data [IdxVersion] . index versions ) selected
-                ( string_free out ) = out ( string_clone . version version )
+                = out ( string_clone . version version )
             } {}
-            ( regindex_free index )
             ^ @ !String i { T out }
         }
     }
@@ -1178,13 +1089,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T req → {
             ?? ( semver_parse ver ) {
                 F _ → {
-                    ( semver_req_free req )
                     ^ F
                 }
                 T v → {
                     : b out ( semver_req_matches req v )
-                    ( semver_free v )
-                    ( semver_req_free req )
                     ^ out
                 }
             }
@@ -1266,7 +1174,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : ~ String src ( string_new )
     ?? rr {
         T s → {
-            ( string_free src )
             = src s
         }
         F _ → {
@@ -1275,7 +1182,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
     }
     : ( Vec String ) lines ( string_split src `\n` )
-    ( string_free src )
     : i nlines ( vec_len [String] lines )
     : ( Vec String ) out_lines ( vec_new [String] )
     : ~ b in_deps F
@@ -1295,7 +1201,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         ( vec_push [String] out_lines nl )
                         = copied T
                         = done T
-                    } { ( string_free nl ) }
+                    } {}
                 } {}
                 ? ! copied {
                     ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
@@ -1305,21 +1211,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         = k + k 1
     }
-    : ~ i fk 0
-    ~ < fk nlines {
-        : ?String fpk ( vec_get [String] lines fk )
-        ?? fpk {
-            T s → ( string_free s )
-            F _ → {}
-        }
-        = fk + fk 1
-    }
-    ( vec_free [String] lines )
     : ~ i rc 0
     ? done {
         : String joined ( __join_lines out_lines )
         : !v IoErr wr ( write_file `nurl.toml` ( string_data joined ) )
-        ( string_free joined )
         ?? wr {
             T _ → {}
             F _ → {
@@ -1333,17 +1228,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( nurl_eprintln `' in nurl.toml` )
         = rc 1
     }
-    : i jn ( vec_len [String] out_lines )
-    : ~ i jk 0
-    ~ < jk jn {
-        : ?String fpk ( vec_get [String] out_lines jk )
-        ?? fpk {
-            T s → ( string_free s )
-            F _ → {}
-        }
-        = jk + jk 1
-    }
-    ( vec_free [String] out_lines )
     ^ rc
 }
 
@@ -1360,11 +1244,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ( flush )
     : String ans ( read_line )
     : String t ( string_trim ans )
-    ( string_free ans )
     : String lo ( string_to_lower t )
-    ( string_free t )
     : b yes | != 0 ( nurl_str_eq ( string_data lo ) `y` ) != 0 ( nurl_str_eq ( string_data lo ) `yes` )
-    ( string_free lo )
     ^ yes
 }
 
@@ -1385,7 +1266,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             : i n ( vec_len [Dep] . m dependencies )
             ? == n 0 {
                 ( nurl_print `no dependencies in nurl.toml\n` )
-                ( manifest_free m )
                 ^ 0
             } {}
             : ~ i changed 0
@@ -1462,10 +1342,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                                     ( nurl_print dname )
                                                     ( nurl_print `: skipped\n` )
                                                 }
-                                                ( string_free newreq )
                                             }
                                         }
-                                        ( string_free cand )
                                     }
                                 }
                             }
@@ -1475,7 +1353,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 }
                 = k + k 1
             }
-            ( manifest_free m )
             ? > changed 0 {
                 ( nurl_print `updated ` )
                 ( nurl_print ( nurl_str_int changed ) )
@@ -1541,7 +1418,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     } { ( string_push_char probe 47 ) }
     ( string_push_str probe `nurl.toml` )
     : b ok ( file_exists ( string_data probe ) )
-    ( string_free probe )
     ^ ok
 }
 
@@ -1583,7 +1459,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : String target ( __abs_join cwd relpath )
     : s target_s ( string_data target )
     ? ( __seen_contains seen target_s ) {
-        ( string_free target )
         ^ 0
     } {}
     ? ! ( __dep_has_manifest target_s ) {
@@ -1593,7 +1468,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ? ( dep_has_version d ) {
             ( nurl_print `  ` ) ( nurl_print name )
             ( nurl_print ` (local path absent; resolving from registry)\n` )
-            ( string_free target )
             ^ 0
         } {}
         ( nurl_eprint `  ` )
@@ -1601,7 +1475,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( nurl_eprint `: skip (no nurl.toml at ` )
         ( nurl_eprint target_s )
         ( nurl_eprintln `)` )
-        ( string_free target )
         ^ 1
     } {}
     : String mfpath ( string_from target_s )
@@ -1610,7 +1483,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ?? ( manifest_load ( string_data mfpath ) ) {
         T manifest → {
             = minimum_rc ( __check_selected_toolchain manifest )
-            ( manifest_free manifest )
         }
         F error → {
             ( nurl_eprint `nurlpkg: cannot parse local dependency ` )
@@ -1618,8 +1490,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             ( nurl_eprintln ( manifest_err_name error ) )
         }
     }
-    ( string_free mfpath )
-    ? != minimum_rc 0 { ( string_free target ) ^ 1 } {}
+    ? != minimum_rc 0 { ^ 1 } {}
     : String linkpath ( __deps_path name )
     : s linkpath_s ( string_data linkpath )
     ? ( file_exists linkpath_s ) {
@@ -1658,9 +1529,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     ( nurl_eprintln target_s )
                     = existing_rc 1
                 }
-                ( string_free ex_base ) ( string_free ex_abs ) ( string_free ex_join )
-                ( string_free ex_norm ) ( string_free tg_abs ) ( string_free tg_norm )
-                ( string_free existing )
             }
             F _ → {
                 : String installed_absolute ( __abs_join cwd linkpath_s )
@@ -1674,7 +1542,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     ( nurl_eprintln `: existing deps entry is not the declared path dependency link; refusing to substitute different source contents` )
                     = existing_rc 1
                 }
-                ( string_free installed_absolute ) ( string_free installed_normal ) ( string_free target_normal )
             }
         }
         // Record it as seen so the transitive walker doesn't try
@@ -1683,8 +1550,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         // Existing path links still need traversal: a dependency's manifest
         // (including its transitive minimum toolchain) may have changed.
         ? == existing_rc 0 { ( vec_push [String] queue ( string_from target_s ) ) } {}
-        ( string_free linkpath )
-        ( string_free target )
         ^ existing_rc
     } {}
     : !v IoErr sr ( fs_symlink target_s linkpath_s )
@@ -1702,8 +1567,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             = rc 1
         }
     }
-    ( string_free linkpath )
-    ( string_free target )
     ^ rc
 }
 
@@ -1723,7 +1586,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     } { ( string_push_char mf 47 ) }
     ( string_push_str mf `nurl.toml` )
     : !Manifest ManifestErr mr ( manifest_load ( string_data mf ) )
-    ( string_free mf )
     : ~ i rc 0
     ?? mr {
         F e → {
@@ -1759,7 +1621,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 }
                 = k + k 1
             }
-            ( manifest_free sub )
         }
     }
     ^ rc
@@ -1773,10 +1634,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : ~ ( Vec String ) names ( vec_new [String] )
     ? ( file_exists `deps` ) {
         ?? ( dir_list `deps` ) {
-            T entries → { ( vec_free [String] names ) = names entries }
+            T entries → { = names entries }
             F _ → {
                 ( nurl_eprintln `nurlpkg: failed to list deps/ directory while writing lockfile` )
-                ( vec_free [String] names )
                 ^ 1
             }
         }
@@ -1827,18 +1687,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                 ( vec_push [LockPkg] actual ( lock_pkg_new ( string_data . m name )
                                 ( string_data . m version ) ( string_data source ) `` ) )
                             } {}
-                            ( manifest_free m )
                         }
                     }
                 } {}
-                ( string_free mfpath )
-                ( string_free source )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] names \ String name → v { ( string_free name ) } )
     // A missing directory/manifest cannot erase a registry pin. Local packages
     // can be removed or updated during development and are refreshed from disk.
     : i count ( vec_len [LockPkg] regpkgs )
@@ -1873,9 +1729,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             T _ → { = rc 0 }
             F _ → { ( nurl_eprintln `nurlpkg: failed to write nurl.lock` ) }
         }
-        ( string_free body )
     } {}
-    ( lockpkgs_free actual )
     ^ rc
 }
 
@@ -1895,7 +1749,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             : ?String sv ( toml_as_str tv )
             ?? sv {
                 T s → ^ s
-                F empty → { ( string_free empty ) ^ ( string_new ) }
+                F empty → { ^ ( string_new ) }
             }
         }
         F _ → {}
@@ -1955,15 +1809,12 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                                             ( nurl_eprintln `` )
                                                             = rc 1
                                                         } {}
-                                                        ( manifest_free m )
                                                     }
                                                     F _ → {}
                                                 }
                                             } {}
-                                            ( string_free mfpath )
                                             ( vec_push [String] expected name )
-                                        } { ( string_free name ) }
-                                        ( string_free lock_ver )
+                                        } {}
                                     }
                                     F _ → {}
                                 }
@@ -1993,13 +1844,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                             = k + k 1
                         }
                         : i fn ( vec_len [String] entries )
-                        : ~ i fk 0
-                        ~ < fk fn {
-                            : ?String pk ( vec_get [String] entries fk )
-                            ?? pk { T s → ( string_free s ) F _ → {} }
-                            = fk + fk 1
-                        }
-                        ( vec_free [String] entries )
                     }
                     F _ → {}
                 }
@@ -2044,21 +1888,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             }
 
             // Tidy up.
-            : ~ i fk 0
-            ~ < fk ne {
-                : ?String pk ( vec_get [String] expected fk )
-                ?? pk { T s → ( string_free s ) F _ → {} }
-                = fk + fk 1
-            }
-            ( vec_free [String] expected )
-            : ~ i fa 0
-            ~ < fa na {
-                : ?String pk ( vec_get [String] actual fa )
-                ?? pk { T s → ( string_free s ) F _ → {} }
-                = fa + fa 1
-            }
-            ( vec_free [String] actual )
-            ( toml_value_free root )
         }
     }
     ? == rc 0 { ( nurl_print `nurl.lock matches deps/\n` ) } {}
@@ -2075,16 +1904,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : ~ ( Vec LockPkg ) existing ( vec_new [LockPkg] )
     ? ( file_exists `nurl.lock` ) {
         ?? ( lock_load `nurl.lock` ) {
-            T locked → { ( lockpkgs_free existing ) = existing locked }
+            T locked → { = existing locked }
             F _ → {
-                ( lockpkgs_free existing )
                 ( nurl_eprintln `nurlpkg: cannot read existing nurl.lock` )
                 ^ 1
             }
         }
     } {}
     : i rc ( __write_lockfile existing )
-    ( lockpkgs_free existing )
     ? == rc 0 { ( nurl_print `wrote nurl.lock\n` ) } {}
     ^ rc
 }
@@ -2125,14 +1952,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ?? ( vec_get [LockPkg] locked k ) {
                     T p → {
                         ?? ( registry_from_source ( string_data . p source ) ) {
-                            F empty → { ( string_free empty ) = ok F }
+                            F empty → { = ok F }
                             T registry → {
                                 ? == ( nurl_str_len ( registry_trust_key trust ( string_data registry ) ) ) 0 {
                                     ( nurl_eprint `nurlpkg: no trusted signing key for registry ` )
                                     ( nurl_eprintln ( string_data registry ) )
                                     = ok F
                                 } {}
-                                ( string_free registry )
                             }
                         }
                     }
@@ -2141,7 +1967,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 = k + k 1
             }
             ? ok { ^ @ !RegistryTrust RegistryTrustErr { T trust } } {}
-            ( registry_trust_free trust )
             ^ @ !RegistryTrust RegistryTrustErr { F RegistryBadConfig }
         }
     }
@@ -2155,7 +1980,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __install_registry Manifest m s cwd ( Vec LockPkg ) out → i {
     : ( Vec Dep ) roots ( __registry_roots m cwd )
     ? == ( vec_len [Dep] roots ) 0 {
-        ( __deps_free_vec roots )
         ^ 0
     } {}
     : String reg ( __registry_url m )
@@ -2203,14 +2027,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         }
                         = k + k 1
                     }
-                    ( registry_trust_free trust )
                 }
             }
-            ( lockpkgs_free locked )
         }
     }
-    ( string_free reg )
-    ( __deps_free_vec roots )
     ^ rc
 }
 
@@ -2238,13 +2058,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             T _ → {
                 : String p ( creds_path )
                 ( nurl_print `Saved token to ` ) ( nurl_print ( string_data p ) ) ( nurl_print `\n` )
-                ( string_free p )
             }
             F _ → { ( nurl_eprintln `nurlpkg: failed to write credentials` ) = rc 1 }
         }
     }
-    ( string_free token )
-    ( string_free reg )
     ^ rc
 }
 
@@ -2260,14 +2077,12 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 F e → { ( nurl_eprint `nurlpkg: revoke failed (` ) ( nurl_eprint ( publish_err_name e ) ) ( nurl_eprintln `)` ) = rc 1 }
             }
         } { ( nurl_print `No stored token to revoke.\n` ) }
-        ( string_free tok )
     } {}
     : !v IoErr cr ( creds_remove ( string_data reg ) )
     ?? cr {
         T _ → ( nurl_print `Removed local credential.\n` )
         F _ → { ( nurl_eprintln `nurlpkg: failed to update credentials` ) = rc 1 }
     }
-    ( string_free reg )
     ^ rc
 }
 
@@ -2318,12 +2133,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     }
                     F → {}
                 }
-                ( json_free root )
             }
         }
     }
-    ( string_free body )
-    ( string_free reg )
     ^ rc
 }
 
@@ -2342,10 +2154,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ? . version yanked { ( nurl_print ` (yanked)` ) } {}
                 ( nurl_print `\n` ) = k + k 1
             }
-            ( regindex_free idx )
         }
     }
-    ( string_free reg ) ^ rc
+    ^ rc
 }
 
 // ── yank / unyank ────────────────────────────────────────────────
@@ -2371,8 +2182,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             }
         }
     }
-    ( string_free token )
-    ( string_free reg )
     ^ rc
 }
 
@@ -2411,7 +2220,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                             }
                             = fi + fi 1
                         }
-                        ( vec_free_with [String] files \ String x → v { ( string_free x ) } )
                     }
                     F _ → {}
                 }
@@ -2420,7 +2228,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         = pi + pi 1
     }
-    ( vec_free_with [String] pats \ String x → v { ( string_free x ) } )
     ^ found
 }
 
@@ -2471,12 +2278,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         = j + j 1
                     }
                     ? & > ( string_len nm ) 0 < j n {
-                        ? ( __vec_has_str acc ( string_data nm ) ) { ( string_free nm ) } { ( vec_push [String] acc nm ) }
-                    } { ( string_free nm ) }
+                        ? ( __vec_has_str acc ( string_data nm ) ) {} { ( vec_push [String] acc nm ) }
+                    } {}
                     = i j
                 } { = i + i 1 }
             }
-            ( string_free txt )
         }
         F _ → {}
     }
@@ -2562,15 +2368,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                             = j + j 1
                         }
                         ? != 0 ( nurl_str_starts ( string_data nm ) `stdlib/` ) {
-                            ? ( __vec_has_str acc ( string_data nm ) ) { ( string_free nm ) }
+                            ? ( __vec_has_str acc ( string_data nm ) ) {}
                             { ( vec_push [String] acc nm ) }
-                        } { ( string_free nm ) }
+                        } {}
                         = i j
                     } {}
                 } {}
                 = i + i 1
             }
-            ( string_free txt )
         }
         F _ → {}
     }
@@ -2595,7 +2400,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                             }
                             = fi + fi 1
                         }
-                        ( vec_free_with [String] files \ String x → v { ( string_free x ) } )
                     }
                     F _ → {}
                 }
@@ -2604,7 +2408,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         = pi + pi 1
     }
-    ( vec_free_with [String] pats \ String x → v { ( string_free x ) } )
     ^ found
 }
 
@@ -2615,7 +2418,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T v → {
             // an EMPTY NURL_STDLIB is not a stdlib — treat it as unset
             ? > ( string_len v ) 0 { ^ v } {}
-            ( string_free v )
         }
         F → {}
     }
@@ -2623,7 +2425,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T h → {
             : String p2 ( string_from ( string_data h ) )
             ( string_push_str p2 `/.nurl` )
-            ( string_free h )
             ^ p2
         }
         F → {}
@@ -2634,7 +2435,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __check_stdlib_available → i {
     : String root ( __toolchain_stdlib_root )
     ? == 0 ( string_len root ) {
-        ( string_free root )
         ^ 0
     } {}
     : ( Vec String ) used ( __scan_stdlib_imports )
@@ -2653,24 +2453,19 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     : String m ( string_from `  ` )
                     ( string_push_str m ( string_data rel ) )
                     ( nurl_eprintln ( string_data m ) )
-                    ( string_free m )
                     = missing + missing 1
                 }
-                ( string_free full )
             }
             F → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] used \ String x → v { ( string_free x ) } )
     ? > missing 0 {
         : String m ( string_from `nurlpkg: they exist in the repo but not in ` )
         ( string_push_str m ( string_data root ) )
         ( string_push_str m ` — so this package would publish cleanly and then fail to install for everyone. Cut a toolchain release that ships them first (or set NURL_STDLIB to the toolchain you are targeting).` )
         ( nurl_eprintln ( string_data m ) )
-        ( string_free m )
     } {}
-    ( string_free root )
     ^ ? > missing 0 1 0
 }
 
@@ -2692,7 +2487,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : String p ( string_from ( string_data root ) )
     ( string_push_str p ? ( __is_windows ) `/bin/nurlc.exe` `/bin/nurlc` )
     ? ( file_exists ( string_data p ) ) { ^ p } {}
-    ( string_free p )
     ^ ( string_new )
 }
 
@@ -2722,7 +2516,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                 ( nurl_eprintln `nurlpkg: resolve the compiler diagnostics and rerun publication; target-toolchain compatibility has not been established.` )
                                 = bad 1
                             }
-                            ( output_free out )
                         }
                         F error → {
                             ( nurl_eprint `nurlpkg: could not launch the installed compiler (` )
@@ -2766,22 +2559,18 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             T output → {
                 ? ( output_success output ) {
                     : String raw ( string_from ( output_stdout output ) )
-                    ( string_free version ) = version ( string_trim raw )
-                    ( string_free raw )
+                    = version ( string_trim raw )
                 } {}
-                ( output_free output )
             }
         }
-        ( vec_free [s] args )
     } {
         : ~ b selected F
         ?? ( env_get `NURL_STDLIB` ) {
-            T value → { = selected > ( string_len value ) 0 ( string_free value ) }
-            F empty → ( string_free empty )
+            T value → { = selected > ( string_len value ) 0 }
+            F empty → {}
         }
         ? ! selected { ( string_push_str version ( nurl_version ) ) } {}
     }
-    ( string_free cc ) ( string_free root )
     ^ version
 }
 
@@ -2789,21 +2578,18 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ? == ( string_len . manifest nurl_version ) 0 { ^ 0 } {}
     : String version ( __selected_toolchain_version )
     : i result ( __check_manifest_toolchain manifest ( string_data version ) )
-    ( string_free version )
     ^ result
 }
 
 @ __install_locked_for_selected_toolchain RegistryTrust trust LockPkg pkg s dest → !i PkgFetchErr {
     : String version ( __selected_toolchain_version )
     : !i PkgFetchErr result ( pkg_install_locked_for_toolchain trust pkg dest ( string_data version ) )
-    ( string_free version )
     ^ result
 }
 
 @ __install_for_selected_toolchain s registry s name s version s checksum s dest → !i PkgFetchErr {
     : String toolchain ( __selected_toolchain_version )
     : !i PkgFetchErr result ( pkg_install_one_for_toolchain registry name version checksum dest ( string_data toolchain ) )
-    ( string_free toolchain )
     ^ result
 }
 
@@ -2811,7 +2597,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : String root ( __toolchain_stdlib_root )
     ? == 0 ( string_len root ) {
         ( nurl_eprintln `nurlpkg: cannot locate the target toolchain; set NURL_STDLIB or install the toolchain under HOME/.nurl before publishing.` )
-        ( string_free root )
         ^ 1
     } {}
 
@@ -2820,8 +2605,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( nurl_eprint `nurlpkg: no installed compiler under ` )
         ( nurl_eprintln ( string_data root ) )
         ( nurl_eprintln `nurlpkg: install the target toolchain before publishing; compilation was not checked.` )
-        ( string_free cc )
-        ( string_free root )
         ^ 1
     } {}
 
@@ -2832,8 +2615,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T _ → {}
         F _ → {
             ( nurl_eprintln `nurlpkg: could not configure the target toolchain environment; publication refused.` )
-            ( string_free cc )
-            ( string_free root )
             ^ 1
         }
     }
@@ -2850,16 +2631,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ? ! ( output_success output ) { = bad 1 } {
                     = bad ( __check_manifest_toolchain manifest ( string_data version ) )
                 }
-                ( string_free version ) ( string_free raw_version ) ( output_free output )
             }
         }
-        ( vec_free [s] args )
     } {}
-    ? != bad 0 { ( string_free cc ) ( string_free root ) ^ bad } {}
+    ? != bad 0 { ^ bad } {}
     ?? ( pkg_pack_list `.` ) {
         T files → {
             = bad ( __check_packaged_sources ( string_data cc ) ( string_data root ) files )
-            ( vec_free_with [String] files \ String path → v { ( string_free path ) } )
         }
         F error → {
             ( nurl_eprint `nurlpkg: cannot enumerate the package sources (` )
@@ -2868,8 +2646,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             = bad 1
         }
     }
-    ( string_free cc )
-    ( string_free root )
     ^ bad
 }
 
@@ -2896,7 +2672,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         = k + k 1
     }
-    ( vec_free_with [String] used \ String x → v { ( string_free x ) } )
     ? != missing 0 {
         ( nurl_eprintln `  (the deps/ symlink is a local artefact — an undeclared dependency breaks every registry install)` )
     } {}
@@ -2961,16 +2736,12 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                             ( nurl_eprintln ( string_data . dm version ) )
                                             = bad 1
                                         }
-                                        ( semver_free lv )
                                     }
                                 }
-                                ( semver_req_free req )
                             }
                         }
-                        ( manifest_free dm )
                     }
                 }
-                ( string_free dtoml )
             }
         } {}
         = di + di 1
@@ -2991,7 +2762,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ? ( __packaged_source path ) { ( vec_push [String] out ( string_clone path ) ) } {}
                 = k + k 1
             }
-            ( vec_free_with [String] files \ String x → v { ( string_free x ) } )
             ^ @ !( Vec String ) PackErr { T out }
         }
     }
@@ -3006,10 +2776,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 F e → { = result @ !b IoErr { F e } }
                 T bb → {
                     = result @ !b IoErr { T ( bytes_eq ba bb ) }
-                    ( vec_free [u] bb )
                 }
             }
-            ( vec_free [u] ba )
             ^ result
         }
     }
@@ -3040,7 +2808,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 = result 2
             }
         }
-        ( string_free local ) ( string_free published )
         ? != result 0 { ^ result } {}
         = k + k 1
     }
@@ -3062,10 +2829,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 }
                 T pubs → {
                     = result ( __compare_source_files localdir pubdir locals pubs )
-                    ( vec_free_with [String] pubs \ String x → v { ( string_free x ) } )
                 }
             }
-            ( vec_free_with [String] locals \ String x → v { ( string_free x ) } )
         }
     }
     ^ result
@@ -3074,7 +2839,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __dep_drifts s reg s name s ver s checksum s localdir → i {
     : String troot ( __tmp_root )
     : !String IoErr sr ( fs_tempdir ( string_data troot ) `nurlpkg-drift-` )
-    ( string_free troot )
     : ~ i result 2
     ?? sr {
         F e → {
@@ -3092,7 +2856,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 T _ → {
                     : String pubdir ( path_join ( string_data stage ) name )
                     = result ( __compare_package_sources localdir ( string_data pubdir ) )
-                    ( string_free pubdir )
                 }
             }
             ?? ( dir_remove_all ( string_data stage ) ) {
@@ -3103,7 +2866,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     = result 2
                 }
             }
-            ( string_free stage )
         }
     }
     ^ result
@@ -3139,7 +2901,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     ( nurl_eprintln `nurlpkg: bump and publish the dependency version before publishing this package.` )
                 } {}
             }
-            ( regindex_free index )
         }
     }
     ^ bad
@@ -3161,10 +2922,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 T local → {
                     : s origin ? > ( string_len . d registry ) 0 ( string_data . d registry ) reg
                     ? != 0 ( __check_published_override d local origin ) { = bad 1 } {}
-                    ( manifest_free local )
                 }
             }
-            ( string_free manifest )
         } {}
         = k + k 1
     }
@@ -3250,22 +3009,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                             }
                                             = fk + fk 1
                                         }
-                                        ( vec_free_with [String] files \ String q → v { ( string_free q ) } )
                                     }
                                     F _ → {}
                                 }
                                 ( nurl_print `dry-run: every gate passed; nothing was uploaded.\n` )
-                                ( vec_free [u] digest )
-                                ( string_free hex )
-                                ( vec_free [u] tarball )
-                                ( string_free reg )
-                                ( string_free token )
-                                ( manifest_free m )
                                 ^ 0
                             } {}
                             : String deps_json ( __deps_json m )
                             : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
-                            ( string_free deps_json )
                             ?? ur {
                                 T _ → ( nurl_print `published.\n` )
                                 F ue → {
@@ -3321,16 +3072,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                     = rc 1
                                 }
                             }
-                            ( vec_free [u] digest )
-                            ( string_free hex )
-                            ( vec_free [u] tarball )
                         }
                     }
                 }
             }
-            ( string_free reg )
-            ( string_free token )
-            ( manifest_free m )
         }
     }
     ^ rc
@@ -3356,7 +3101,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __env_or s name s fallback → String {
     : ?String ev ( env_get name )
     ?? ev {
-        T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } }
+        T e → { ? > ( string_len e ) 0 { ^ e } {} }
         F → {}
     }
     ^ ( string_from fallback )
@@ -3369,7 +3114,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : ?String ev ( env_get `OS` )
     : ~ b w F
     ?? ev {
-        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) ( string_free e ) }
+        T e → { = w ( nurl_str_eq ( string_data e ) `Windows_NT` ) }
         F → {}
     }
     ^ w
@@ -3380,13 +3125,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __tmp_root → String {
     ? ( __is_windows ) {
         : ?String t ( env_get `TEMP` )
-        ?? t { T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } } F → {} }
+        ?? t { T e → { ? > ( string_len e ) 0 { ^ e } {} } F → {} }
         : ?String t2 ( env_get `TMP` )
-        ?? t2 { T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } } F → {} }
+        ?? t2 { T e → { ? > ( string_len e ) 0 { ^ e } {} } F → {} }
         ^ ( string_from `.` )
     } {}
     : ?String td ( env_get `TMPDIR` )
-    ?? td { T e → { ? > ( string_len e ) 0 { ^ e } { ( string_free e ) } } F → {} }
+    ?? td { T e → { ? > ( string_len e ) 0 { ^ e } {} } F → {} }
     ^ ( string_from `/tmp` )
 }
 
@@ -3399,15 +3144,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T h → {
             ? > ( string_len h ) 0 {
                 : String d ( path_join ( string_data h ) `bin` )
-                ( string_free h )
                 ^ d
-            } { ( string_free h ) }
+            } {}
         }
         F → {}
     }
     : String home ? ( __is_windows ) ( __env_or `USERPROFILE` `.` ) ( __env_or `HOME` `.` )
     : String out ( path_join ( string_data home ) `.nurl/bin` )
-    ( string_free home )
     ^ out
 }
 
@@ -3422,7 +3165,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint label ) ( nurl_eprintln ` failed:` )
                 ( nurl_eprint ( output_stderr out ) )
             }
-            ( output_free out )
         }
         F _ → { ( nurl_eprint `nurlpkg: ` ) ( nurl_eprint label ) ( nurl_eprintln ` could not launch` ) }
     }
@@ -3436,7 +3178,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : String mfp ( string_from pkgdir )
     ( string_push_str mfp `/nurl.toml` )
     : !Manifest ManifestErr mr ( manifest_load ( string_data mfp ) )
-    ( string_free mfp )
     ?? mr {
         T m → {
             ? > ( string_len . m postinstall ) 0 {
@@ -3444,7 +3185,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( nurl_print ( string_data . m postinstall ) )
                 ( nurl_print `\n` )
             } {}
-            ( manifest_free m )
         }
         F _ → {}
     }
@@ -3463,7 +3203,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ? == t 1 {
         : String parent ( path_dirname dst )
         ?? ( dir_create_all ( string_data parent ) ) { T _ → {} F _ → {} }
-        ( string_free parent )
         ?? ( fs_copy_file src dst ) { T _ → { ^ 0 } F _ → { ^ 1 } }
     } {}
     ? == t 2 {
@@ -3483,15 +3222,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                             : String s2 ( path_join src ( string_data nm ) )
                             : String d2 ( path_join dst ( string_data nm ) )
                             ? != 0 ( __copy_tree ( string_data s2 ) ( string_data d2 ) ) { = rc 1 } {}
-                            ( string_free s2 )
-                            ( string_free d2 )
-                            ( string_free nm )
                         }
                         F _ → {}
                     }
                     = k + k 1
                 }
-                ( vec_free [String] entries )
             }
         }
         ^ rc
@@ -3527,9 +3262,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ? == na 0 { ^ 0 } {}
     : String prefix ( path_dirname bindir )
     : String sharedir ( path_join ( string_data prefix ) `share` )
-    ( string_free prefix )
     : String pkgshare ( path_join ( string_data sharedir ) name )
-    ( string_free sharedir )
     ?? ( dir_remove_all ( string_data pkgshare ) ) { T _ → {} F _ → {} }
     : ~ i rc 0
     : ~ i k 0
@@ -3549,8 +3282,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         ( nurl_eprintln ( string_data a ) )
                         = rc 1
                     } {}
-                    ( string_free srcp )
-                    ( string_free dstp )
                 }
             }
             F _ → {}
@@ -3560,7 +3291,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ? == rc 0 {
         ( nurl_print `Assets → ` ) ( nurl_print ( string_data pkgshare ) ) ( nurl_print `\n` )
     } {}
-    ( string_free pkgshare )
     ^ rc
 }
 
@@ -3569,7 +3299,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __tool_publish_binary s source s destination s bindir b win → !v IoErr {
     \ ( dir_create_all bindir )
     : String stage \ ( fs_tempfile bindir `.nurlpkg-install-` )
-    ; { ( string_free stage ) }
     ; { ?? ( file_delete ( string_data stage ) ) { T _ → {} F _ → {} } }
     \ ( fs_copy_file source ( string_data stage ) )
     ? ! win { \ ( set_permissions ( string_data stage ) 493 ) } {}
@@ -3585,10 +3314,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     // Remember where we started so we can return after building in pkgdir.
     : ~ String orig ( string_new )
     ?? ( env_cwd ) {
-        T c → { ( string_free orig ) = orig c }
+        T c → { = orig c }
         F _ → {
             ( nurl_eprintln `nurlpkg: cannot determine the working directory` )
-            ( string_free orig ) ( string_free nurl ) ( string_free bindir )
             ^ 1
         }
     }
@@ -3606,7 +3334,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( vec_push [s] cargs `src/main.nu` )
                 ( vec_push [s] cargs `.nurl-bin` )
                 : i ok2 ( __spawn ( string_data nurl ) cargs `compile` )
-                ( vec_free [s] cargs )
                 ? == ok2 0 { = rc 1 } { = rc 0 }
             }
         }
@@ -3656,11 +3383,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     T am → {
                         ? != 0 ( __install_assets am pkgdir name ( string_data bindir ) ) { = rc 1 } {}
                         ( string_push_str ver ( string_data . am version ) )
-                        ( manifest_free am )
                     }
                     F _ → {}
                 }
-                ( string_free ampath )
                 // Show the package's [hints].postinstall message, if any.
                 ( __print_postinstall pkgdir )
                 // The LAST line says what landed and where — the name and
@@ -3671,16 +3396,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 } {}
                 ( nurl_print ` installed → ` )
                 ( nurl_print ( string_data dest ) ) ( nurl_print `\n` )
-                ( string_free ver )
             }
         }
-        ( string_free outbin )
-        ( string_free dest )
     } {}
 
-    ( string_free orig )
-    ( string_free nurl )
-    ( string_free bindir )
     ^ rc
 }
 
@@ -3700,7 +3419,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 }
                 = k + k 1
             }
-            ( manifest_free m )
         }
         F _ → {}
     }
@@ -3748,7 +3466,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                         ( nurl_print ` → deps/` ) ( nurl_print ( string_data . p name ) )
                                         ( nurl_print `\n` )
                                         ? != 0 ( nurl_str_eq ( string_data . p name ) name ) {
-                                            ( string_free rootver )
                                             = rootver ( string_from ( string_data . p version ) )
                                         } {}
                                     }
@@ -3763,13 +3480,10 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         }
                         = k + k 1
                     }
-                    ( registry_trust_free trust )
                 }
             }
-            ( lockpkgs_free locked )
         }
     }
-    ( __deps_free_vec roots )
     ? & == rc 0 & ( file_exists `nurl.toml` ) > ( string_len rootver ) 0 {
         ? ( __toml_declares_dep name ) {} {
             : String req ( string_with_cap 24 )
@@ -3777,7 +3491,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             ( string_push_str req ( string_data rootver ) )
             : i arc ( __cmd_add name `` ( string_data req ) )
             ? != arc 0 { = rc arc } {}
-            ( string_free req )
         }
     } {}
     ? == rc 0 {
@@ -3785,7 +3498,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( nurl_print name )
         ( nurl_print `/src/<module>.nu  (backtick-quoted)\n` )
     } {}
-    ( string_free rootver )
     ^ rc
 }
 
@@ -3808,7 +3520,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         // simultaneous installs of the same package name.
                         : String troot ( __tmp_root )
                         : !String IoErr sr ( fs_tempdir ( string_data troot ) `nurlpkg-tool-` )
-                        ( string_free troot )
                         ?? sr {
                             F e → {
                                 ( nurl_eprint `nurlpkg: cannot create tool staging directory: ` )
@@ -3833,7 +3544,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                         } {
                                             = rc ( __tool_build_and_install name ( string_data pkgdir ) ( string_data binsrc ) )
                                         }
-                                        ( string_free binsrc ) ( string_free pkgdir )
                                     }
                                 }
                                 ?? ( dir_remove_all ( string_data stage ) ) {
@@ -3844,16 +3554,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                         = rc 1
                                     }
                                 }
-                                ( string_free stage )
                             }
                         }
                     }
                 }
             }
-            ( regindex_free ridx )
         }
     }
-    ( string_free regS )
     ^ rc
 }
 
@@ -3865,10 +3572,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : !String IoErr cwdR ( env_cwd )
     : ~ String cwd ( string_new )
     ?? cwdR {
-        T c → { ( string_free cwd ) = cwd c }
+        T c → { = cwd c }
         F _ → {
             ( nurl_eprintln `nurlpkg: failed to determine current directory` )
-            ( string_free cwd )
             ^ 1
         }
     }
@@ -3883,7 +3589,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             T _ → {}
             F _ → {
                 ( nurl_eprintln `nurlpkg: failed to create deps/ directory` )
-                ( string_free cwd )
                 ^ 1
             }
         }
@@ -3899,7 +3604,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         T root → {
             ? != ( __check_selected_toolchain root ) 0 {
-                ( manifest_free root ) ( string_free cwd ) ^ 1
+                ^ 1
             } {}
             : i n ( vec_len [Dep] . root dependencies )
             ( nurl_print `installing ` )
@@ -3933,13 +3638,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     T d → {
                         : i one_rc ( __install_one cwd_s d seen next_queue )
                         ? != one_rc 0 { = rc 1 } {}
-                        ( dep_free d )
                     }
                     F _ → {}
                 }
                 = tx + tx 1
             }
-            ( vec_free [Dep] dq )
             // Process the transitive frontier: for each newly-installed
             // target, load its manifest and enqueue children. Loop until
             // no new entries are added.
@@ -3958,14 +3661,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     }
                     = j + j 1
                 }
-                // Free the frontier we just consumed.
-                : ~ i fk 0
-                ~ < fk nq {
-                    : ?String pkj ( vec_get [String] next_queue fk )
-                    ?? pkj { T pk → ( string_free pk ) F _ → {} }
-                    = fk + fk 1
-                }
-                ( vec_free [String] next_queue )
                 = next_queue ( vec_new [String] )
                 : i ndq ( vec_len [Dep] next_dq )
                 : ~ i di 0
@@ -3975,50 +3670,34 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         T d → {
                             : i one_rc ( __install_one cwd_s d seen next_queue )
                             ? != one_rc 0 { = rc 1 } {}
-                            ( dep_free d )
                         }
                         F _ → {}
                     }
                     = di + di 1
                 }
-                ( vec_free [Dep] next_dq )
             }
-            ( vec_free [String] next_queue )
-            : i sn ( vec_len [String] seen )
-            : ~ i si 0
-            ~ < si sn {
-                : ?String pk ( vec_get [String] seen si )
-                ?? pk { T s → ( string_free s ) F _ → {} }
-                = si + si 1
-            }
-            ( vec_free [String] seen )
             // Registry pass: resolve + download + verify + unpack the
             // registry deps (path deps were handled by the BFS above).
             : ( Vec LockPkg ) regpkgs ( vec_new [LockPkg] )
             : i reg_rc ( __install_registry root cwd_s regpkgs )
             ? != reg_rc 0 { = rc 1 } {}
-            // The closing line names the package whose deps these are —
-            // captured before the manifest is freed.
+            // The closing line names the package whose deps these are.
             : String who ( string_from ( string_data . root name ) )
             ? > ( string_len . root version ) 0 {
                 ( string_push_char who 32 )
                 ( string_push_str who ( string_data . root version ) )
             } {}
-            ( manifest_free root )
             // Publish the lock and success only after the entire install succeeds.
             ? == rc 0 {
                 : i lr ( __write_lockfile regpkgs )
                 ? != lr 0 { = rc 1 } {}
             } {}
-            ( lockpkgs_free regpkgs )
             ? == rc 0 {
                 ( nurl_print ( string_data who ) )
                 ( nurl_print `: dependencies installed\n` )
             } {}
-            ( string_free who )
         }
     }
-    ( string_free cwd )
     ^ rc
 }
 
@@ -4060,7 +3739,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 }
                 = k + k 1
             }
-            ( manifest_free m )
         }
     }
     ^ rc
@@ -4098,7 +3776,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
 @ __test_driver → String {
     ?? ( env_get `NURL_CC` ) {
-        T v → { ? > ( string_len v ) 0 { ^ v } { ( string_free v ) } }
+        T v → { ? > ( string_len v ) 0 { ^ v } {} }
         F _ → {}
     }
     // A toolchain checkout builds with its OWN freshly built compiler, not
@@ -4121,7 +3799,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ?? ( read_file goldp ) {
         T g → {
             ? == ( string_len g ) outlen { = ok == ( memcmp ( string_data g ) out outlen ) 0 } {}
-            ( string_free g )
         }
         F _ → {}
     }
@@ -4131,7 +3808,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 @ __test_workspace → !String IoErr {
     : String root ( __tmp_root )
     : !String IoErr created ( fs_tempdir ( string_data root ) `nurlpkg-run-` )
-    ( string_free root )
     ^ created
 }
 
@@ -4141,7 +3817,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T _ → {}
         F _ → { ( nurl_eprintln `nurlpkg: failed to clean test artifacts` ) = ok F }
     }
-    ( string_free directory )
     ^ ok
 }
 
@@ -4156,7 +3831,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
     : ~ i result 1
     : b compiled != ( __spawn driver args `test compile` ) 0
-    ( vec_free [s] args )
     ? ! compiled { ( __test_report name `FAIL` `(compile error)` ) } {}
 
     ? compiled {
@@ -4180,27 +3854,21 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     ( __test_report name `PASS` `` ) = result 0
                 }
                 ? != result 0 { ( nurl_eprint ( output_stderr out ) ) } {}
-                ( string_free goldp )
-                ( output_free out )
             }
             F _ → { ( __test_report name `FAIL` `(could not run)` ) }
         }
     } {}
 
-    ( string_free bin )
-    ( string_free name )
     ^ result
 }
 
-// Owns `files` (the fs_glob result): runs each, frees them, reports.
+// Owns `files` (the fs_glob result): runs each, reports.
 @ __run_tests ( Vec String ) files → i {
     : ~ String directory ( string_new )
     ?? ( __test_workspace ) {
-        T made → { ( string_free directory ) = directory made }
+        T made → { = directory made }
         F _ → {
             ( nurl_eprintln `nurlpkg: could not create test artifact directory` )
-            ( string_free directory )
-            ( vec_free_with [String] files \ String path → v { ( string_free path ) } )
             ^ 1
         }
     }
@@ -4214,14 +3882,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ?? ( vec_get [String] files k ) {
             T src → {
                 ? == ( __run_one ( string_data src ) ( string_data driver ) ( string_data directory ) ) 0 { = pass + pass 1 } { = fail + fail 1 }
-                ( string_free src )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free [String] files )
-    ( string_free driver )
     ? ! ( __test_workspace_remove directory ) { = fail + fail 1 } {}
     ( nurl_print `\n` )
     ( nurl_print `PASS ` ) ( nurl_print ( nurl_str_int pass ) )
@@ -4241,7 +3906,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T files → {
             ? == ( vec_len [String] files ) 0 {
                 ( nurl_eprintln `nurlpkg: no tests found (expected tests/*.nu)` )
-                ( vec_free [String] files )
                 1
             } {
                 ( __run_tests files )
@@ -4268,7 +3932,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
     : ~ i result 1
     : b compiled != ( __spawn driver args `benchmark compile` ) 0
-    ( vec_free [s] args )
     ? ! compiled { ( nurl_print `── ` ) ( nurl_print ( string_data name ) ) ( nurl_print ` (compile error)\n` ) } {}
 
     ? compiled {
@@ -4280,25 +3943,20 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ? > olen 0 { : i _w ( write 1 # *u ( output_stdout out ) olen ) } {}
                 ? == ( output_exit_code out ) 0 { = result 0 } {}
                 ? != result 0 { ( nurl_eprint ( output_stderr out ) ) } {}
-                ( output_free out )
             }
             F _ → { ( nurl_print `(could not run)\n` ) }
         }
     } {}
 
-    ( string_free bin )
-    ( string_free name )
     ^ result
 }
 
 @ __run_benches ( Vec String ) files → i {
     : ~ String directory ( string_new )
     ?? ( __test_workspace ) {
-        T made → { ( string_free directory ) = directory made }
+        T made → { = directory made }
         F _ → {
             ( nurl_eprintln `nurlpkg: could not create benchmark artifact directory` )
-            ( string_free directory )
-            ( vec_free_with [String] files \ String path → v { ( string_free path ) } )
             ^ 1
         }
     }
@@ -4312,14 +3970,11 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ?? ( vec_get [String] files k ) {
             T src → {
                 ? == ( __run_bench_one ( string_data src ) ( string_data driver ) ( string_data directory ) ) 0 { = ran + ran 1 } { = failed + failed 1 }
-                ( string_free src )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free [String] files )
-    ( string_free driver )
     ? ! ( __test_workspace_remove directory ) { = failed + failed 1 } {}
     ( nurl_print `\nran ` ) ( nurl_print ( nurl_str_int ran ) )
     ( nurl_print ` · failed ` ) ( nurl_print ( nurl_str_int failed ) ) ( nurl_print `\n` )
@@ -4335,7 +3990,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         T files → {
             ? == ( vec_len [String] files ) 0 {
                 ( nurl_eprintln `nurlpkg: no benchmarks found (expected benches/*.nu)` )
-                ( vec_free [String] files )
                 1
             } {
                 ( __run_benches files )
@@ -4361,10 +4015,8 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         : String a ( env_arg k )
         : i nx + k 1
         ? & != 0 ( nurl_str_eq ( string_data a ) name ) < nx argc {
-            ( string_free out )
             = out ( env_arg nx )
         } {}
-        ( string_free a )
         = k + k 1
     }
     ^ out
@@ -4377,7 +4029,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     ~ < k argc {
         : String a ( env_arg k )
         : b hit != 0 ( nurl_str_eq ( string_data a ) name )
-        ( string_free a )
         ? hit { ^ T } {}
         = k + k 1
     }
@@ -4390,7 +4041,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : b force ( __has_flag `--force` 2 )
     : String want ( __flag_value `--version` 2 )
     : i rc ( toolchain_upgrade ( string_data want ) ( nurl_version ) check_only force )
-    ( string_free want )
     ^ rc
 }
 
@@ -4405,7 +4055,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     : String a ( env_arg 1 )
     : s v ( string_data a )
     : b hit | | != 0 ( nurl_str_eq v `self-update` ) != 0 ( nurl_str_eq v `upgrade` ) != 0 ( nurl_str_eq v `self-upgrade` )
-    ( string_free a )
     ^ hit
 }
 
@@ -4429,38 +4078,30 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     // `nurlpkg help <cmd>`, `nurlpkg --help` / -h all end here.
     ? | != 0 ( nurl_str_eq s_sub `--help` ) != 0 ( nurl_str_eq s_sub `-h` ) {
         ( __print_usage )
-        ( string_free sub )
         ^ 0
     } {}
     ? & != 0 ( nurl_str_eq s_sub `help` ) >= argc 3 {
         : String hc ( env_arg 2 )
         : b known ( __cmd_help ( string_data hc ) )
         ? known {} { ( __print_usage ) }
-        ( string_free hc )
-        ( string_free sub )
         ^ 0
     } {}
     ? ( __wants_help 2 ) {
         : b known2 ( __cmd_help s_sub )
         ? known2 {} { ( __print_usage ) }
-        ( string_free sub )
         ^ 0
     } {}
     ? | | != 0 ( nurl_str_eq s_sub `--version` ) != 0 ( nurl_str_eq s_sub `-v` ) != 0 ( nurl_str_eq s_sub `version` ) {
         ( nurl_print ( nurl_version ) ) ( nurl_print `\n` )
-        ( string_free sub )
         ^ 0
     } {}
     // Upgrade the toolchain. `nurl upgrade` routes here too.
     ? | | != 0 ( nurl_str_eq s_sub `self-update` ) != 0 ( nurl_str_eq s_sub `upgrade` ) != 0 ( nurl_str_eq s_sub `self-upgrade` ) {
-        ( string_free sub )
         ^ ( __cmd_self_update )
     } {}
     ? != 0 ( nurl_str_eq s_sub `init` ) {
         : String name ? >= argc 3 ( env_arg 2 ) ( string_new )
         : i rc ( __cmd_init ( string_data name ) )
-        ( string_free name )
-        ( string_free sub )
         ^ rc
     } {}
     ? != 0 ( nurl_str_eq s_sub `info` ) {
@@ -4468,36 +4109,28 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ? >= argc 3 {
             : String name ( env_arg 2 )
             : i rc ( __cmd_registry_info ( string_data name ) )
-            ( string_free name )
-            ( string_free sub )
             ^ rc
         } {}
-        ( string_free sub )
         ^ ( __cmd_info )
     } {}
     ? != 0 ( nurl_str_eq s_sub `deps` ) {
-        ( string_free sub )
         ? != 0 ( __reject_unknown_flags `deps` `` 2 ) { ^ 1 } {}
         ^ ( __cmd_deps )
     } {}
     ? != 0 ( nurl_str_eq s_sub `install` ) {
-        ( string_free sub )
         // `install <name>` → install a binary tool; bare `install` → deps.
         ? >= argc 3 {
             : String tname ( env_arg 2 )
             : i rc ( __cmd_install_tool ( string_data tname ) )
-            ( string_free tname )
             ^ rc
         } {}
         ^ ( __cmd_install )
     } {}
     ? != 0 ( nurl_str_eq s_sub `lock` ) {
-        ( string_free sub )
         ? != 0 ( __reject_unknown_flags `lock` `` 2 ) { ^ 1 } {}
         ^ ( __cmd_lock )
     } {}
     ? != 0 ( nurl_str_eq s_sub `build` ) {
-        ( string_free sub )
         ? != 0 ( __reject_unknown_flags `build` `--out` 2 ) { ^ 1 } {}
         : ~ String bname ( string_new )
         : ~ String bout ( string_new )
@@ -4507,38 +4140,31 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             ? != 0 ( nurl_str_eq ( string_data ba ) `--out` ) {
                 ? < + bk 1 argc {
                     : String bo ( env_arg + bk 1 )
-                    ( string_free bout )
                     = bout bo
                     = bk + bk 1
                 } {}
             } {
                 ? == ( nurl_str_get ( string_data ba ) 0 ) 45 {} {
-                    ( string_free bname )
                     = bname ( string_from ( string_data ba ) )
                 }
             }
-            ( string_free ba )
             = bk + bk 1
         }
         : i brc ( __cmd_build ( string_data bname ) ( string_data bout ) )
-        ( string_free bname ) ( string_free bout )
         ^ brc
     } {}
     ? != 0 ( nurl_str_eq s_sub `publish` ) {
-        ( string_free sub )
         ? != 0 ( __reject_unknown_flags `publish` `--dry-run --dryrun` 2 ) { ^ 1 } {}
         : ~ b dry F
         : ~ i pk 2
         ~ < pk argc {
             : String pa ( env_arg pk )
             ? | != 0 ( nurl_str_eq ( string_data pa ) `--dry-run` ) != 0 ( nurl_str_eq ( string_data pa ) `--dryrun` ) { = dry T } {}
-            ( string_free pa )
             = pk + pk 1
         }
         ^ ( __cmd_publish dry )
     } {}
     ? != 0 ( nurl_str_eq s_sub `login` ) {
-        ( string_free sub )
         ^ ( __cmd_login )
     } {}
     ? != 0 ( nurl_str_eq s_sub `logout` ) {
@@ -4547,32 +4173,24 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ? >= argc 3 {
             : String f ( env_arg 2 )
             ? != 0 ( nurl_str_eq ( string_data f ) `--revoke` ) { = revoke 1 } {}
-            ( string_free f )
         } {}
-        ( string_free sub )
         ^ ( __cmd_logout revoke )
     } {}
     ? != 0 ( nurl_str_eq s_sub `search` ) {
         : ~ String q ( string_new )
         ? >= argc 3 { = q ( env_arg 2 ) } {}
         : i rc ( __cmd_search ( string_data q ) )
-        ( string_free q )
-        ( string_free sub )
         ^ rc
     } {}
     ? | != 0 ( nurl_str_eq s_sub `yank` ) != 0 ( nurl_str_eq s_sub `unyank` ) {
         : i yk ( nurl_str_eq s_sub `yank` )
         ? < argc 4 {
             ( nurl_eprintln `nurlpkg: usage: nurlpkg yank|unyank <name> <version>` )
-            ( string_free sub )
             ^ 1
         } {}
         : String name ( env_arg 2 )
         : String version ( env_arg 3 )
         : i rc ( __cmd_yank ( string_data name ) ( string_data version ) yk )
-        ( string_free version )
-        ( string_free name )
-        ( string_free sub )
         ^ rc
     } {}
     ? != 0 ( nurl_str_eq s_sub `add` ) {
@@ -4587,34 +4205,25 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             : s flag_s ( string_data flag )
             ? != 0 ( nurl_str_eq flag_s `--path` ) {
                 ? < + ai 1 argc {
-                    ( string_free path )
                     = path ( env_arg + ai 1 )
                     = ai + ai 2
                 } { = ai + ai 1 }
             } {
                 ? != 0 ( nurl_str_eq flag_s `--version` ) {
                     ? < + ai 1 argc {
-                        ( string_free version )
                         = version ( env_arg + ai 1 )
                         = ai + ai 2
                     } { = ai + ai 1 }
                 } { = ai + ai 1 }
             }
-            ( string_free flag )
         }
         : i rc ( __cmd_add ( string_data name ) ( string_data path ) ( string_data version ) )
-        ( string_free version )
-        ( string_free path )
-        ( string_free name )
-        ( string_free sub )
         ^ rc
     } {}
     ? != 0 ( nurl_str_eq s_sub `remove` ) {
         : ~ String name ( string_new )
         ? >= argc 3 { = name ( env_arg 2 ) } {}
         : i rc ( __cmd_remove ( string_data name ) )
-        ( string_free name )
-        ( string_free sub )
         ^ rc
     } {}
     ? != 0 ( nurl_str_eq s_sub `update` ) {
@@ -4627,7 +4236,6 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             : s a_s ( string_data a )
             ? | | != 0 ( nurl_str_eq a_s `--all` ) != 0 ( nurl_str_eq a_s `-y` ) != 0 ( nurl_str_eq a_s `--yes` ) {
                 = all 1
-                ( string_free a )
             } {
                 ( vec_push [String] only a )
             }
@@ -4635,42 +4243,26 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         }
         : i rc ( __cmd_update only all )
         : i on ( vec_len [String] only )
-        : ~ i ok 0
-        ~ < ok on {
-            : ?String oo ( vec_get [String] only ok )
-            ?? oo {
-                T s → ( string_free s )
-                F _ → {}
-            }
-            = ok + ok 1
-        }
-        ( vec_free [String] only )
-        ( string_free sub )
         ^ rc
     } {}
     ? != 0 ( nurl_str_eq s_sub `verify` ) {
-        ( string_free sub )
         ^ ( __cmd_verify )
     } {}
     ? != 0 ( nurl_str_eq s_sub `test` ) {
-        ( string_free sub )
         ^ ( __cmd_test )
     } {}
     ? != 0 ( nurl_str_eq s_sub `bench` ) {
-        ( string_free sub )
         ^ ( __cmd_bench )
     } {}
     // `version` / `--version` are handled at the top of main (they print
     // the toolchain version) — no duplicate branches here.
     ? != 0 ( nurl_str_eq s_sub `help` ) {
-        ( string_free sub )
         ( __print_usage )
         ^ 0
     } {}
     ( nurl_eprint `nurlpkg: unknown subcommand '` )
     ( nurl_eprint s_sub )
     ( nurl_eprintln `'` )
-    ( string_free sub )
     ( __print_usage )
     ^ 2
 }
