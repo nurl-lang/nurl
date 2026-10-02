@@ -42,7 +42,6 @@ $ `stdlib/ext/env.nu`
         T img → {
             ( mem_alloc )
             ( mem_load ( vec_data [u] img ) ( vec_len [u] img ) 0 )
-            ( vec_free [u] img )
             ( cpu_set_pc 0x400 )
 
             : ~ i instr 0
@@ -82,15 +81,15 @@ $ `stdlib/ext/env.nu`
 @ run_boot s kpath s bpath s cpath i frames → i {
     ( c64_alloc )
     ?? ( read_file_bytes kpath ) {
-        T k → { ( load_kernal ( vec_data [u] k ) ( vec_len [u] k ) ) ( vec_free [u] k ) }
+        T k → { ( load_kernal ( vec_data [u] k ) ( vec_len [u] k ) ) }
         F _ → { ( nurl_print `cannot read KERNAL: ` ) ( nurl_print kpath ) ( nurl_print `\n` ) ^ 2 }
     }
     ?? ( read_file_bytes bpath ) {
-        T b → { ( load_basic ( vec_data [u] b ) ( vec_len [u] b ) ) ( vec_free [u] b ) }
+        T b → { ( load_basic ( vec_data [u] b ) ( vec_len [u] b ) ) }
         F _ → { ( nurl_print `cannot read BASIC: ` ) ( nurl_print bpath ) ( nurl_print `\n` ) ^ 2 }
     }
     ?? ( read_file_bytes cpath ) {
-        T c → { ( load_chargen ( vec_data [u] c ) ( vec_len [u] c ) ) ( vec_free [u] c ) }
+        T c → { ( load_chargen ( vec_data [u] c ) ( vec_len [u] c ) ) }
         F _ → { ( nurl_print `cannot read CHARGEN: ` ) ( nurl_print cpath ) ( nurl_print `\n` ) ^ 2 }
     }
     ( c64_boot )
@@ -110,7 +109,6 @@ $ `stdlib/ext/env.nu`
                 1 → ( load_basic ( vec_data [u] d ) ( vec_len [u] d ) )
                 _ → ( load_chargen ( vec_data [u] d ) ( vec_len [u] d ) )
             }
-            ( vec_free [u] d )
             ^ T
         }
         F _ → { ( nurl_print `cannot read ROM: ` ) ( nurl_print path ) ( nurl_print `\n` ) ^ F }
@@ -128,7 +126,6 @@ $ `stdlib/ext/env.nu`
     ?? ( read_file_bytes prog ) {
         T p → {
             : i addr ( prg_autostart ( vec_data [u] p ) ( vec_len [u] p ) )
-            ( vec_free [u] p )
             ( nurl_print `loaded ` ) ( nurl_print prog ) ( nurl_print ` @ ` ) ( print_hex16 addr ) ( nurl_print `\n` )
         }
         F _ → { ( nurl_print `cannot read prg: ` ) ( nurl_print prog ) ( nurl_print `\n` ) ^ 2 }
@@ -163,7 +160,6 @@ $ `stdlib/ext/env.nu`
     ?? ( read_file_bytes dpath ) {
         T d → {
             ( disk_attach ( vec_data [u] d ) ( vec_len [u] d ) )
-            ( vec_free [u] d )
             : i addr ( disk_autostart )
             ( nurl_print `attached ` ) ( nurl_print dpath ) ( nurl_print `, autostarted @ ` ) ( print_hex16 addr ) ( nurl_print `\n` )
         }
@@ -207,7 +203,7 @@ $ `stdlib/ext/env.nu`
     : ~ i f 0
     ~ < f 150 { ( run_one_frame ) = f + f 1 }
     ?? ( read_file_bytes dpath ) {
-        T d → { ( disk_attach ( vec_data [u] d ) ( vec_len [u] d ) ) ( vec_free [u] d ) }
+        T d → { ( disk_attach ( vec_data [u] d ) ( vec_len [u] d ) ) }
         F _ → { ( nurl_print `cannot read d64\n` ) ^ 2 }
     }
     ( type_line `LOAD"$",8` 40 )
@@ -236,7 +232,7 @@ $ `stdlib/ext/env.nu`
     : ~ i f 0
     ~ < f 150 { ( run_one_frame ) = f + f 1 }
     ?? ( read_file_bytes prog ) {
-        T p → { ( prg_autostart ( vec_data [u] p ) ( vec_len [u] p ) ) ( vec_free [u] p ) }
+        T p → { ( prg_autostart ( vec_data [u] p ) ( vec_len [u] p ) ) }
         F _ → { ( nurl_print `cannot read prg\n` ) ^ 2 }
     }
     : ~ i g 0

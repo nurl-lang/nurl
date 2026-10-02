@@ -29,7 +29,6 @@ $ `stdlib/ext/env.nu`
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
         T rom → {
             ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )
-            ( vec_free [u] rom )
             : ~ i guard 0
             ~ & < g_frames frames < guard 2000000000 {
                 = guard + guard ( cpu_advance )
@@ -48,7 +47,7 @@ $ `stdlib/ext/env.nu`
     : !( Vec u ) IoErr rr ( read_file_bytes path )
     ?? rr {
         F _ → { ( nurl_print `cannot read ROM\n` ) ^ 2 }
-        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) ( vec_free [u] rom ) }
+        T rom → { ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) ) }
     }
     : ( Vec u ) pcm ( vec_new [u] )
     : ~ i nz 0
@@ -104,7 +103,6 @@ $ `stdlib/ext/env.nu`
         }
         T rom → {
             ( cart_load ( vec_data [u] rom ) ( vec_len [u] rom ) )
-            ( vec_free [u] rom )
 
             : ~ i instr 0
             : ~ i done 0
