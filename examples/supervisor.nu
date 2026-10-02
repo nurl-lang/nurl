@@ -9,14 +9,9 @@
 //   ./nurl.sh examples/supervisor.nu
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
 $ `stdlib/std/async.nu`
 $ `stdlib/std/supervisor.nu`
-
-@ make_counter → *i {
-    : *i p # *i ( nurl_alloc Z i )
-    ( nurl_poke p 0 0 )
-    ^ p
-}
 
 @ say s who s msg → v {
     : String line ( string_from `  [` )
@@ -36,11 +31,12 @@ $ `stdlib/std/supervisor.nu`
     \ → v { ( say `alpha` `working… done` ) } )
 
     // beta: crashes the first time, succeeds when restarted.
-    : *i bc ( make_counter )
+    // A one-slot Vec: the closure's copy and this one are the same buffer.
+    : ( Vec i ) bc ( vec_zeroed [i] 1 )
     ( supervisor_add sup `beta` @ RestartPolicy { RTransient }
     \ → v {
-        : i n + 1 ( nurl_peek bc 0 )
-        ( nurl_poke bc 0 n )
+        : i n + 1 ?? ( vec_get [i] bc 0 ) { T x → x F → 0 }
+        : b _s ( vec_set [i] bc 0 n )
         ? == n 1 {
             ( say `beta` `crashing on first attempt!` )
             ( panic `beta failed` )
@@ -60,8 +56,6 @@ $ `stdlib/std/supervisor.nu`
     ( string_push_char summary 10 )
     ( nurl_print ( string_data summary ) )
 
-    ( supervisor_free sup )
-    ( nurl_free # s bc )
     ( runtime_shutdown )
     ^ 0
 }
