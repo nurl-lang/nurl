@@ -213,7 +213,7 @@ $ `stdlib/std/thread.nu`
     : ~ b ok T
     ?? ( h2_client_connect_h2c `127.0.0.1` port ) {
         T client → {
-            = ok & ok ( small_send_buffer . client tcp )
+            = ok & ok ( small_send_buffer ( h2_client_tcp client ) )
             : ( Vec Header ) headers ( vec_new [Header] )
             : ( Vec u ) request ( vec_with_cap [u] 1048576 )
             = k 0

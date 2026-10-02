@@ -6,7 +6,7 @@
 //     Serve a connection that is known to be HTTP/2 — a prior-knowledge
 //     h2c client, or a TLS client that negotiated "h2" — from its first
 //     byte: reads the client preface, runs the frame loop until the peer
-//     goes away, frees the connection state. The caller still owns the
+//     goes away, sends what is still queued. The caller still owns the
 //     TcpConn and closes it afterwards.
 //
 // The regular HTTP server (`stdlib/ext/http_server.nu`, and the
@@ -39,7 +39,7 @@ $ `stdlib/ext/http2_conn.nu`
         T h2c → {
             : ~ H2Connection active h2c
             : !v H2ConnErr sr ( h2_conn_serve active handler )
-            ( h2_conn_free active )
+            ( h2_conn_finish active )
             ^ sr
         }
         F e → { ^ @ !v H2ConnErr { F e } }

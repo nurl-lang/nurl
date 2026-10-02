@@ -13,15 +13,11 @@ $ `metadata.nu`
 
 : GrpcClientImpl { H2Client transport String scheme String authority b owns_transport }
 
-% Drop GrpcClientImpl { @ drop GrpcClientImpl c → v { ( __grpc_client_dispose c ) } }
-
-// The H2Client is not the compiler's to drop field by field: a transport
-// the client opened is disconnected (which frees what it owns), and a lent
-// one belongs to whoever lent it.
-@ __grpc_client_dispose sink GrpcClientImpl c → v {
-    ? . c owns_transport { ( h2_client_disconnect . c transport ) } {}
-    ( string_free . c scheme ) ( string_free . c authority )
-    ( mem_forget c )
+// A transport the client opened is disconnected with it; a lent one stays
+// connected for whoever lent it. The fields (the transport handle, the
+// strings) go with the value.
+% Drop GrpcClientImpl {
+    @ drop GrpcClientImpl c → v { ? . c owns_transport { ( h2_client_disconnect . c transport ) } {} }
 }
 
 : GrpcClient { s ctl }
@@ -59,7 +55,7 @@ $ `metadata.nu`
 @ grpc_client_from_h2 H2Client transport s scheme s authority → GrpcClient {
     : i c__box ( rcbox_zero [GrpcClientImpl] )
     : *GrpcClientImpl c ( rcbox_ptr [GrpcClientImpl] c__box )
-    = . c transport transport  // lent: stored as is, never released here
+    = . c transport ( H2Client_share transport )  // the caller keeps its own copy
     = . c scheme ( string_from scheme )
     = . c authority ( string_from authority )
     = . c owns_transport F

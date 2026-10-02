@@ -191,9 +191,7 @@ $ `stdlib/ext/http2_frame.nu`
     ^ @ HpackDynTable { ( vec_new [Header] ) 0 max_size }
 }
 
-@ hpack_dyn_free sink HpackDynTable t → v {
-    ( vec_free_with [Header] . t entries \ Header h → v { ( header_free h ) } )
-}
+@ hpack_dyn_free sink HpackDynTable t → v {}
 
 @ hpack_dyn_len HpackDynTable t → i { ^ ( vec_len [Header] . t entries ) }
 
@@ -214,7 +212,6 @@ $ `stdlib/ext/http2_frame.nu`
                     T th → {
                         : i sz ( __hpack_entry_size th )
                         = . t current_size - . t current_size sz
-                        ( header_free th )
                     }
                     F _ → { = done T }
                 }
@@ -231,7 +228,6 @@ $ `stdlib/ext/http2_frame.nu`
     : i sz ( __hpack_entry_size h )
     ( __hpack_dyn_evict t sz )
     ? > sz . t max_size {
-        ( header_free h )
         ^
     } {}
     ( vec_insert [Header] . t entries 0 h )
@@ -359,8 +355,6 @@ $ `stdlib/ext/http2_frame.nu`
 
 : HpackString { String value i consumed }
 
-@ hpack_string_free sink HpackString s → v { ( string_free . s value ) }
-
 @ hpack_decode_string ( Vec u ) buf i from → !HpackString HpackErr {
     : i n ( vec_len [u] buf )
     ? >= from n {
@@ -389,7 +383,6 @@ $ `stdlib/ext/http2_frame.nu`
     } {}
     : ~ String s ( string_new )
     ? huffman {
-        ( string_free s )
         : !String HpackErr hr ( _hpack_huffman_decode buf data_off length )
         ?? hr {
             T text → { = s text }
@@ -421,15 +414,7 @@ $ `stdlib/ext/http2_frame.nu`
     ( Vec Header ) headers
 }
 
-// Local copy of http_request.nu's headers_free — keeps this module
-// importable on its own without pulling in the whole request stack.
-@ __hpack_headers_free sink ( Vec Header ) hs → v {
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
-}
-
-@ hpack_decoded_free sink HpackDecoded d → v {
-    ( __hpack_headers_free . d headers )
-}
+@ hpack_decoded_free sink HpackDecoded d → v {}
 
 : HpackLitResult {
     String name
@@ -485,8 +470,6 @@ $ `stdlib/ext/http2_frame.nu`
                         ( string_data . lr_ name )
                         ( string_data . lr_ value ) ) )
                         ( hpack_dyn_insert dyn ( string_data . lr_ name ) ( string_data . lr_ value ) )
-                        ( string_free . lr_ name )
-                        ( string_free . lr_ value )
                         = off + off . lr_ consumed
                         = seen_field T
                     }
@@ -534,8 +517,6 @@ $ `stdlib/ext/http2_frame.nu`
                             ( vec_push [Header] hdrs ( header_new
                             ( string_data . lr_ name )
                             ( string_data . lr_ value ) ) )
-                            ( string_free . lr_ name )
-                            ( string_free . lr_ value )
                             = off + off . lr_ consumed
                             = seen_field T
                         }
@@ -551,7 +532,6 @@ $ `stdlib/ext/http2_frame.nu`
         ? >= off n { = done T } {}
     }
     ? ! ok {
-        ( vec_free_with [Header] hdrs \ Header h → v { ( header_free h ) } )
         // `dyn` stays the caller's (updated in place): it frees it, e.g.
         // h2_conn_free after the COMPRESSION_ERROR GOAWAY (RFC 9113 §4.3).
         ^ @ !HpackDecoded HpackErr { F last_err }
@@ -577,9 +557,7 @@ $ `stdlib/ext/http2_frame.nu`
         : ?Header opt ( hpack_dyn_lookup dyn name_idx )
         ?? opt {
             T h → {
-                ( string_free name )
                 = name ( string_from ( string_data . h name ) )
-                ( header_free h )
             }
             F _ → { ^ @ !HpackLitResult HpackErr { F HpackBadIndex } }
         }
@@ -587,7 +565,6 @@ $ `stdlib/ext/http2_frame.nu`
         : !HpackString HpackErr ns ( hpack_decode_string buf cur_off )
         ?? ns {
             T hs → {
-                ( string_free name )
                 = name . hs value
                 = cur_off + cur_off . hs consumed
             }
@@ -598,7 +575,6 @@ $ `stdlib/ext/http2_frame.nu`
     : !HpackString HpackErr vs ( hpack_decode_string buf cur_off )
     ?? vs {
         T hs → {
-            ( string_free value )
             = value . hs value
             = cur_off + cur_off . hs consumed
         }

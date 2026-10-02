@@ -30,9 +30,11 @@
 //       * peer connection close → return Ok
 //       * protocol error → emit GOAWAY(error_code) → return Err
 //
-//   h2_conn_free H2Connection → v
-//     Free all owned state. Caller is still responsible for the TCP
-//     connection.
+//   h2_conn_finish H2Connection → v
+//     Send what is still queued (best effort, never waits) before the
+//     caller closes the TCP connection, which stays the caller's. The
+//     connection's state goes with its owner; h2_conn_free is
+//     h2_conn_finish plus an optional early release.
 //
 // Validation enforced here (state machine + flow control):
 //   * Stream IDs are odd (client-initiated) and monotonically
@@ -52,10 +54,11 @@
 //   * H2Connection owns its peer + our SETTINGS, both HPACK dynamic
 //     tables, and the active stream Vec.
 //   * Streams own their accumulated header block, decoded headers,
-//     and DATA body until handler dispatch — at which point the
-//     handler receives an OWNED HttpRequest and is responsible for
-//     freeing it. Stream entries are removed from the active set
-//     once the response is fully written.
+//     and DATA body until handler dispatch, when the body moves into
+//     the HttpRequest the handler is lent. Stream entries are removed
+//     from the active set once the response is fully written.
+//   * Nothing here is released by hand: the connection, its streams
+//     and the queued responses go with their owners.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -199,13 +202,6 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 }
 
-@ __h2_stream_free sink H2Stream s → v {
-    ( vec_free [u] . s header_block )
-    ( vec_free_with [Header] . s decoded_headers
-    \ Header h → v { ( header_free h ) } )
-    ( vec_free [u] . s body )
-}
-
 // ── Connection ────────────────────────────────────────────────────────
 
 : H2Connection {
@@ -265,19 +261,18 @@ $ `stdlib/ext/http2_hpack.nu`
     H2FrameWriter writer
 }
 
-@ h2_conn_free sink H2Connection c → v {
-    // Best effort, never waits: whatever a backed-up socket still refuses
-    // is dropped exactly as a failed final send always was.
+// Send what the connection still has queued — best effort, never waits:
+// whatever a backed-up socket still refuses is dropped exactly as a
+// failed final send always was. The last thing a server does with a
+// connection before closing its socket; its memory goes with its owner.
+@ h2_conn_finish H2Connection c → v {
     : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
     ?? flushed { T _ → {} F _ → {} }
-    ( hpack_dyn_free . c enc_dyn )
-    ( hpack_dyn_free . c dec_dyn )
-    ( vec_free_with [H2Stream] . c streams
-    \ H2Stream s → v { ( __h2_stream_free s ) } )
-    ( vec_free [u] . c rx )
-    ( http_response_free . c panic_resp )
-    ( h2_frame_writer_free . c writer )
 }
+
+// h2_conn_finish, then let go of `c` now rather than at the end of its
+// owner's scope (optional).
+@ h2_conn_free sink H2Connection c → v { ( h2_conn_finish c ) }
 
 // ── Initial handshake ─────────────────────────────────────────────────
 //
@@ -317,18 +312,17 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 // h2_conn_new over a connection whose first bytes have already been read:
-// `carry` (OWNED from here on — freed on every path) holds them, starting
+// `carry` (taken over: dropped on a failed handshake) holds them, starting
 // with the 24-byte preface, and becomes the connection's receive buffer.
 // This is how the HTTP/1.1 keep-alive loop hands a prior-knowledge
 // (RFC 9113 §3.4) connection over without losing the SETTINGS frame that
 // typically rides in the same TCP segment as the preface. `body_max` caps
 // each request body (the HttpServer's HttpLimits value).
-@ h2_conn_new_buffered TcpConn tcp ( Vec u ) carry i body_max → !H2Connection H2ConnErr {
+@ h2_conn_new_buffered TcpConn tcp sink ( Vec u ) carry i body_max → !H2Connection H2ConnErr {
     : !v H2FrameErr pr ( h2_read_preface_buf tcp carry )
     ?? pr {
         T _ → {}
         F e → {
-            ( vec_free [u] carry )
             // §3.4 — only a structurally-invalid preface (BadPreface)
             // is signalled with a GOAWAY; a read error (peer never
             // sent the preface, timed out, or closed the socket
@@ -360,11 +354,9 @@ $ `stdlib/ext/http2_hpack.nu`
     ( vec_push [H2Setting] initial_settings @ H2Setting {
         ( h2_settings_max_header_list_size ) ( _h2_max_header_block_bytes ) } )
     : !v H2FrameErr sr ( h2_send_settings tcp initial_settings )
-    ( vec_free [H2Setting] initial_settings )
     ?? sr {
         T _ → {}
         F e → {
-            ( vec_free [u] carry )
             ^ @ !H2Connection H2ConnErr { F ( __h2_frame_err_to_conn e ) }
         }
     }
@@ -467,7 +459,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ~ < r n {
         : H2Stream s . sp r
         ? == . s state ( h2_state_closed ) {
-            ( __h2_stream_free s )
+            ( mem_take s )  // the table gives it up: dropped here
         } {
             ? != w r { = . sp w s } {}
             = w + w 1
@@ -696,9 +688,10 @@ $ `stdlib/ext/http2_hpack.nu`
     : !HpackDecoded HpackErr dr ( hpack_decode_block . s header_block . cur dec_dyn )
     ?? dr {
         T dd → {
-            // Replace decoded_headers on the stream
-            ( vec_free_with [Header] . s decoded_headers
-            \ Header h → v { ( header_free h ) } )
+            // Replace decoded_headers on the stream; the old list is
+            // taken out of the slot and dropped here.
+            : ( Vec Header ) old . s decoded_headers
+            ( mem_take old )
             = . s decoded_headers . dd headers
             = . s headers_decoded T
             ( __h2_set_stream cur sidx s )
@@ -940,7 +933,7 @@ $ `stdlib/ext/http2_hpack.nu`
         : s vl ( string_data . h value )
         ? & == ( nurl_str_len nm ) 7
         != 0 ( nurl_str_eq nm `:method` )
-        { ( string_free . req method )
+        {
             = . req method ( string_from vl ) } {
             ? & == ( nurl_str_len nm ) 5
             != 0 ( nurl_str_eq nm `:path` )
@@ -952,9 +945,7 @@ $ `stdlib/ext/http2_hpack.nu`
                     ? == 63 ( nurl_str_get vl j ) { = qi j } {}
                     = j + j 1
                 }
-                ( string_free . req path )
                 ? >= qi 0 {
-                    ( string_free . req query )
                     = . req path ( string_from_n vl qi )
                     = . req query ( string_from_n
                     ( nurl_str_slice_unsafe vl + qi 1 )
@@ -980,11 +971,9 @@ $ `stdlib/ext/http2_hpack.nu`
         }
         = k + k 1
     }
-    ( string_free . req version )
     = . req version ( string_from `HTTP/2` )
     // Transfer the body to the request. A cleared duplicate would retain a
     // whole request allocation for the lifetime of a flow-blocked response.
-    ( vec_free [u] . req body )
     : ( Vec u ) moved . s body
     ( mem_take moved )  // leaves the stream: replaced right below
     = . s body ( vec_new [u] )
@@ -1048,10 +1037,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ @ H2Event { kind sid ( vec_new [Header] ) ( vec_new [u] ) end code }
 }
 
-@ h2_event_free sink H2Event event → v {
-    ( vec_free_with [Header] . event headers \ Header h → v { ( header_free h ) } )
-    ( vec_free [u] . event data )
-}
+@ h2_event_free sink H2Event event → v {}
 
 @ __h2_eq_ci s a s b → i {
     : i la ( nurl_str_len a )
@@ -1153,16 +1139,13 @@ $ `stdlib/ext/http2_hpack.nu`
                 = k + k 1
             }
             ? > header_bytes ( _h2_max_header_block_bytes ) {
-                ( vec_free_with [Header] . dd headers \ Header h → v { ( header_free h ) } )
                 ^ @ !H2Event H2ConnErr { F H2ConnEnhanceCalm }
             } {}
             ? . s receiving_trailers {
                 ? ! ( __h2_trailers_valid . dd headers ) {
-                    ( vec_free_with [Header] . dd headers \ Header h → v { ( header_free h ) } )
                     ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
                 } {}
                 ? ( __h2_content_length_mismatch s ) {
-                    ( vec_free_with [Header] . dd headers \ Header h → v { ( header_free h ) } )
                     ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
                 } {}
                 : H2Stream ended ( __h2_remote_end s )
@@ -1170,7 +1153,8 @@ $ `stdlib/ext/http2_hpack.nu`
                 ^ @ !H2Event H2ConnErr { T @ H2Event {
                         ( h2_event_trailers ) sid . dd headers ( vec_new [u] ) T 0 } }
             } {}
-            ( vec_free_with [Header] . s decoded_headers \ Header h → v { ( header_free h ) } )
+            : ( Vec Header ) old . s decoded_headers
+            ( mem_take old )  // the slot's old list: dropped here
             = . s decoded_headers . dd headers
             = . s headers_decoded T
             ( __h2_set_stream c idx s )
@@ -1231,7 +1215,6 @@ $ `stdlib/ext/http2_hpack.nu`
     ( bytes_push_u32_be payload # u32 code )
     ( bytes_extend_str payload debug )
     : !v H2FrameErr result ( __h2_queue_frame c ( h2_type_goaway ) 0 0 payload )
-    ( vec_free [u] payload )
     ?? result { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
     : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
     ?? flushed { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
@@ -1379,7 +1362,7 @@ $ `stdlib/ext/http2_hpack.nu`
             : H2Stream s ( __h2_get_stream c idx )
             : !( Vec u ) H2ConnErr hr ( __h2_extract_headers_payload frame )
             ?? hr {
-                T block → { ( vec_extend [u] . s header_block block ) ( vec_free [u] block ) }
+                T block → { ( vec_extend [u] . s header_block block ) }
                 F e → { ^ @ !H2Event H2ConnErr { F e } }
             }
             ? > ( vec_len [u] . s header_block ) ( _h2_max_header_block_bytes ) { ^ @ !H2Event H2ConnErr { F H2ConnProtocol } } {}
@@ -1432,7 +1415,6 @@ $ `stdlib/ext/http2_hpack.nu`
                 T data → {
                     : i n ( vec_len [u] data )
                     ? > n - 9223372036854775807 . s body_received {
-                        ( vec_free [u] data )
                         ^ @ !H2Event H2ConnErr { F H2ConnEnhanceCalm }
                     } {}
                     = . s body_received + . s body_received n
@@ -1441,7 +1423,6 @@ $ `stdlib/ext/http2_hpack.nu`
                     : b end != 0 & . frame flags ( h2_flag_end_stream )
                     ? end {
                         ? ( __h2_content_length_mismatch s ) {
-                            ( vec_free [u] data )
                             ^ @ !H2Event H2ConnErr { F H2ConnProtocol }
                         } {}
                         : H2Stream ended ( __h2_remote_end s )
@@ -1608,7 +1589,6 @@ $ `stdlib/ext/http2_hpack.nu`
         }
         T frame → {
             : !H2Event H2ConnErr result ( __h2_receive_frame c frame )
-            ( h2_frame_free frame )
             ?? result {
                 T event → { ^ @ !H2Event H2ConnErr { T event } }
                 F e → {
@@ -1667,16 +1647,14 @@ $ `stdlib/ext/http2_hpack.nu`
         : *u p ( vec_data [u] block )
         : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i p offset count )
         : !v H2FrameErr wr ( __h2_queue_frame c ? first ( h2_type_headers ) ( h2_type_continuation ) flags sid view )
-        ( vec_free [u] view )
         ?? wr {
             T _ → {}
-            F e → { ( vec_free [u] block ) ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
+            F e → { ^ @ !v H2ConnErr { F ( __h2_frame_err_to_conn e ) } }
         }
         = offset + offset count
         = first F
         = more ! last
     }
-    ( vec_free [u] block )
     ^ @ !v H2ConnErr { T 0 }
 }
 
@@ -1761,7 +1739,6 @@ $ `stdlib/ext/http2_hpack.nu`
     } {}
     : ( Vec u ) view ( vec_borrow_raw [u] ( vec_data [u] data ) count )
     : !v H2FrameErr wr ( __h2_queue_frame c ( h2_type_data ) ? ended ( h2_flag_end_stream ) 0 sid view )
-    ( vec_free [u] view )
     ?? wr { T _ → {} F e → { ^ @ !i H2ConnErr { F ( __h2_frame_err_to_conn e ) } } }
     = . c conn_send_window - . c conn_send_window count
     = . s send_window - . s send_window count
@@ -1781,10 +1758,6 @@ $ `stdlib/ext/http2_hpack.nu`
     HttpResponse response
     i offset
     b headers_sent
-}
-
-@ __h2_pending_free sink H2PendingResponse pending → v {
-    ? > . pending stream_id 0 { ( http_response_free . pending response ) } {}
 }
 
 @ h2_default_max_buffered_bytes → i { ^ 67108864 }
@@ -1853,7 +1826,6 @@ $ `stdlib/ext/http2_hpack.nu`
                 ? ! . item headers_sent {
                     : ( Vec Header ) headers ( __h2_response_headers r )
                     : !v H2ConnErr hr ( h2_stream_headers c sid headers == length 0 )
-                    ( vec_free_with [Header] headers \ Header h → v { ( header_free h ) } )
                     ?? hr { T _ → {} F e → { ^ @ !v H2ConnErr { F e } } }
                     = . item headers_sent T
                     = progress T
@@ -1863,7 +1835,6 @@ $ `stdlib/ext/http2_hpack.nu`
                     : *u bp ( vec_data [u] . r body )
                     : ( Vec u ) view ( vec_borrow_raw [u] # *u + # i bp . item offset - length . item offset )
                     : !i H2ConnErr wr ( h2_stream_data c sid view T )
-                    ( vec_free [u] view )
                     ?? wr {
                         T written → {
                             = . item offset + . item offset written
@@ -1875,13 +1846,11 @@ $ `stdlib/ext/http2_hpack.nu`
                 } {}
             } {}
             ? complete {
-                // The slot gives its response up: taken and freed; the
-                // slot is marked dead in place (stream_id 0), dropped by
-                // the compaction below.
+                // The slot is marked dead in place (stream_id 0); the
+                // compaction below drops it. Until then it still owns its
+                // response, so an error return here leaves `pending` whole.
                 : *H2PendingResponse ip # *H2PendingResponse + # i p * k Z H2PendingResponse
                 = . ip stream_id 0
-                ( mem_take item )
-                ( __h2_pending_free item )
             } {
                 = . p k item
             }
@@ -1890,7 +1859,9 @@ $ `stdlib/ext/http2_hpack.nu`
         = k 0
         ~ < k n {
             : H2PendingResponse live . p k
-            ? > . live stream_id 0 { = . p w live = w + w 1 } {}
+            ? > . live stream_id 0 { = . p w live = w + w 1 } {
+                ( mem_take live )  // a dead slot gives its response up: dropped here
+            }
             = k + k 1
         }
         ( vec_set_len [H2PendingResponse] pending w )
@@ -1912,10 +1883,8 @@ $ `stdlib/ext/http2_hpack.nu`
         T _ → {}
         F info → {
             ( nurl_eprintln ( nurl_str_cat `[panic] HTTP/2 handler: ` ( string_data . info msg ) ) )
-            ( panic_info_free info )
         }
     }
-    ( request_free req )
     : HttpResponse fallback . c panic_resp
     ? == # i ( vec_data [u] . response body ) # i ( vec_data [u] . fallback body ) {
         = . c panic_resp ( response_text 500 `internal server error\n` )
@@ -1924,7 +1893,6 @@ $ `stdlib/ext/http2_hpack.nu`
     // replaced in `c`): owned here, handed to `pending` below.
     ( mem_take response )
     ? > ( vec_len [u] . response body ) - ( h2_default_max_buffered_bytes ) ( __h2_buffered_bytes c pending ) {
-        ( http_response_free response )
         ^ ( h2_stream_reset c sid ( h2_err_enhance_your_calm ) )
     } {}
     ( vec_push [H2PendingResponse] pending @ H2PendingResponse { sid response 0 F } )
@@ -1977,12 +1945,10 @@ $ `stdlib/ext/http2_hpack.nu`
                             ?? queued { T _ → {} F e → { = failed T = error e } }
                         } {}
                     } {}
-                    ( h2_event_free event )
                 }
             }
         } {}
     }
-    ( vec_free_with [H2PendingResponse] pending \ H2PendingResponse p → v { ( __h2_pending_free p ) } )
     ? failed {
         ? ! . conn goaway_sent {
             : !v H2FrameErr wr ( __h2_send_goaway conn . conn last_peer_stream_id ( __h2_err_to_code error ) `` )

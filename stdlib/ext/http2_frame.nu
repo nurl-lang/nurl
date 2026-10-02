@@ -149,7 +149,7 @@ $ `stdlib/std/net.nu`
     }
 }
 
-@ h2_frame_free sink H2Frame f → v { ( vec_free [u] . f payload ) }
+@ h2_frame_free sink H2Frame f → v {}
 
 // ── Pure serializer ───────────────────────────────────────────────────
 
@@ -189,7 +189,7 @@ $ `stdlib/std/net.nu`
     i consumed  // bytes consumed from input (9 + payload_len)
 }
 
-@ h2_parsed_frame_free sink H2ParsedFrame p → v { ( h2_frame_free . p frame ) }
+@ h2_parsed_frame_free sink H2ParsedFrame p → v {}
 
 // Parse one frame from a byte buffer starting at `from`. Returns
 // H2FrameReadShort when fewer than 9+payload_len bytes are available
@@ -247,7 +247,6 @@ $ `stdlib/std/net.nu`
             T chunk → {
                 : i got ( vec_len [u] chunk )
                 ( vec_extend [u] buf chunk )
-                ( vec_free [u] chunk )
                 = remaining - remaining got
             }
             F e → {
@@ -281,7 +280,6 @@ $ `stdlib/std/net.nu`
                 ? != # i . p k ( nurl_str_get want k ) { = ok F } {}
                 = k + k 1
             }
-            ( vec_free [u] buf )
             ? ok {
                 ^ @ !v H2FrameErr { T 0 }
             } {
@@ -298,7 +296,6 @@ $ `stdlib/std/net.nu`
 @ h2_write_preface TcpConn conn → !v H2FrameErr {
     : ( Vec u ) buf ( bytes_from_str ( h2_conn_preface ) )
     : !v NetErr wr ( tcp_write_all conn buf )
-    ( vec_free [u] buf )
     ?? wr {
         T _ → { ^ @ !v H2FrameErr { T 0 } }
         F _ → { ^ @ !v H2FrameErr { F H2FrameWriteIo } }
@@ -328,7 +325,6 @@ $ `stdlib/std/net.nu`
             : i s2 # i . p 7
             : i s3 # i . p 8
             = stream_id + + + << & s0 127 24 << s1 16 << s2 8 s3
-            ( vec_free [u] hdr )
         }
         F e → { ^ @ !H2Frame H2FrameErr { F e } }
     }
@@ -451,7 +447,6 @@ $ `stdlib/std/net.nu`
     ?? sr {
         T wire → {
             : !v NetErr wr ( tcp_write_all conn wire )
-            ( vec_free [u] wire )
             ?? wr {
                 T _ → { ^ @ !v H2FrameErr { T 0 } }
                 F _ → { ^ @ !v H2FrameErr { F H2FrameWriteIo } }
@@ -480,7 +475,6 @@ $ `stdlib/std/net.nu`
     }
     : H2Frame f @ H2Frame { ( h2_type_settings ) 0 0 payload }
     : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
-    ( h2_frame_free f )
     ^ r
 }
 
@@ -490,7 +484,6 @@ $ `stdlib/std/net.nu`
         ( h2_type_settings ) ( h2_flag_ack ) 0 ( vec_new [u] )
     }
     : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
-    ( h2_frame_free f )
     ^ r
 }
 
@@ -504,7 +497,6 @@ $ `stdlib/std/net.nu`
     ( vec_extend [u] p opaque )
     : H2Frame f @ H2Frame { ( h2_type_ping ) 0 0 p }
     : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
-    ( h2_frame_free f )
     ^ r
 }
 
@@ -519,7 +511,6 @@ $ `stdlib/std/net.nu`
         ( h2_type_ping ) ( h2_flag_ack ) 0 p
     }
     : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
-    ( h2_frame_free f )
     ^ r
 }
 
@@ -535,7 +526,6 @@ $ `stdlib/std/net.nu`
     ? > dn 0 { ( bytes_extend_str p debug ) } {}
     : H2Frame f @ H2Frame { ( h2_type_goaway ) 0 0 p }
     : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
-    ( h2_frame_free f )
     ^ r
 }
 
@@ -547,7 +537,6 @@ $ `stdlib/std/net.nu`
     ( bytes_push_u32_be p # u32 inc )
     : H2Frame f @ H2Frame { ( h2_type_window_update ) 0 stream_id p }
     : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
-    ( h2_frame_free f )
     ^ r
 }
 
@@ -557,7 +546,6 @@ $ `stdlib/std/net.nu`
     ( bytes_push_u32_be p # u32 error_code )
     : H2Frame f @ H2Frame { ( h2_type_rst_stream ) 0 stream_id p }
     : !v H2FrameErr r ( h2_write_frame conn f ( h2_max_frame_size_upper_bound ) )
-    ( h2_frame_free f )
     ^ r
 }
 

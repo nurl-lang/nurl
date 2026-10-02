@@ -8,7 +8,8 @@
 // Ownership: submit/send always consume their body, including on failure;
 // request headers are borrowed. take_data and take_response transfer ownership.
 // stream_state is a borrowed snapshot; its vectors must not be freed or retained
-// across mutation. close frees client state; disconnect also closes its TcpConn.
+// across mutation. The client is a handle: its state goes with its last owner
+// (close is an optional early release); disconnect closes its TcpConn.
 //
 // Limits default to 10 MiB per send/collect queue and 100 retained streams.
 // Streaming receive credit is released when take_data drains application bytes,
@@ -30,6 +31,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http2_frame.nu`
 $ `stdlib/ext/http2_hpack.nu`
+$ `stdlib/core/rcbox.nu`
 
 // Plaintext connect primitive (nurl_tcp_connect is not in the compiler's
 // runtime symbol table, so declare it here). TLS-with-ALPN now goes
@@ -135,28 +137,28 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 }
 
-@ __h2c_stream_free sink H2CStream s → v {
-    ( vec_free_with [Header] . s headers \ Header h → v { ( header_free h ) } )
-    ( vec_free_with [Header] . s trailers \ Header h → v { ( header_free h ) } )
-    ( vec_free [u] . s body )
-    ( vec_free [u] . s pending_body )
-}
-
-// The client connection. Scalar mutable state lives in a heap control
-// block `st` (word-indexed via nurl_peek/poke) so the whole struct can
-// be passed by value while mutations still persist — the same escape
-// hatch Vec uses for its `ctl`. The decoder table sits in a 1-element
-// Vec for the same reason (its scalar size fields must survive updates).
-//
-// st slot layout:
-//   0 next_stream_id          5 peer_header_table_size
-//   1 conn_send_window        6 peer_max_concurrent_streams
-//   2 conn_recv_window        7 goaway_received (0/1)
-//   3 peer_initial_window     8 goaway_last_id
-//   4 peer_max_frame_size
-: H2Client {
+// The client connection. Its state sits in one heap block behind the
+// H2Client handle, so the handle passes by value while mutations persist.
+// The decoder table sits in a 1-element Vec (its scalar size fields are
+// updated through the element pointer).
+: H2ClientImpl {
     TcpConn tcp  // BORROWED
-    s st  // heap scalar-state control block (16 words)
+    i next_sid  // next stream id (client streams are odd, 1,3,5…)
+    i conn_send_window  // connection initial is fixed
+    i conn_recv_window
+    i peer_iws  // peer_initial_window_size
+    i peer_mfs  // peer_max_frame_size
+    i peer_hts  // peer_header_table_size
+    i peer_max_streams  // peer_max_concurrent_streams (assumed until SETTINGS)
+    i goaway_received
+    i goaway_last_id
+    i max_send_bytes  // maximum pending request bytes
+    i max_recv_bytes  // maximum buffered response bytes per stream
+    i max_streams  // maximum retained streams (includes completed)
+    i cont_sid  // continuation: stream id
+    i cont_end_stream  // continuation: originating END_STREAM
+    i cont_count  // continuation: frames so far
+    i conn_error  // fatal framing/I/O error, forbids reuse
     ( Vec HpackDynTable ) dec_box  // 1 elem; connection-global decoder table
     ( Vec H2CStream ) streams
     ( Vec u ) rx  // partial wire frame retained across deadline wakeups
@@ -164,22 +166,33 @@ $ `stdlib/ext/http2_hpack.nu`
     H2FrameWriter writer
 }
 
-@ __h2c_st_get H2Client c i slot → i { ^ ( nurl_peek . c st slot ) }
+// An H2Client is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy — the caller's, a pool's, a gRPC client's — is the same
+// connection, and the last owner releases it (the TcpConn stays the
+// caller's to close: h2_client_disconnect).
+: H2Client { s ctl }
 
-@ __h2c_st_set H2Client c i slot i v → v { ( nurl_poke . c st slot v ) }
+@ H2Client_share H2Client h → H2Client { ^ @ H2Client { # s ( rcbox_share # i . h ctl ) } }
 
-@ __h2c_peer_mfs H2Client c → i { ^ ( nurl_peek . c st 4 ) }
+@ H2Client_drop sink H2Client h → v {
+    ( mem_forget h )
+    ( rcbox_release [H2ClientImpl] # i . h ctl )
+}
 
-@ __h2c_peer_iws H2Client c → i { ^ ( nurl_peek . c st 3 ) }
+@ __H2Client_ptr H2Client h → *H2ClientImpl { ^ ( rcbox_ptr [H2ClientImpl] # i . h ctl ) }
 
-@ __h2c_conn_window H2Client c → i { ^ ( nurl_peek . c st 1 ) }
+@ __h2c_peer_mfs * H2ClientImpl c → i { ^ . c peer_mfs }
 
-@ __h2c_set_conn_window H2Client c i v → v { ( nurl_poke . c st 1 v ) }
+@ __h2c_peer_iws * H2ClientImpl c → i { ^ . c peer_iws }
+
+@ __h2c_conn_window * H2ClientImpl c → i { ^ . c conn_send_window }
+
+@ __h2c_set_conn_window * H2ClientImpl c i v → v { = . c conn_send_window v }
 
 // Underlying socket fd, for readiness polling (nurl_reactor_wait_*).
 // Through tcp_conn_fd: a TLS conn's handle lives in its TlsConn and its
 // `raw` is 0 — polling that probed the wrong (null or foreign) socket.
-@ __h2c_fd H2Client c → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd . c tcp ) ) }
+@ __h2c_fd * H2ClientImpl c → i { ^ ( nurl_tcp_get_fd ( tcp_conn_fd . c tcp ) ) }
 
 // Non-blocking readiness probe: a 0 ms timeout makes the reactor wait
 // a pure poll. (Runtime builtin, also used by std/net.nu's async path.)
@@ -192,7 +205,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // taken on a hunch holds the connection for the whole socket timeout.
 @ __h2c_readable i fd → b { ^ == ( nurl_reactor_wait_read fd 0 ) 1 }
 
-@ __h2c_goaway H2Client c → i { ^ ( nurl_peek . c st 7 ) }
+@ __h2c_goaway * H2ClientImpl c → i { ^ . c goaway_received }
 
 // ── Small byte / string helpers ───────────────────────────────────────
 
@@ -244,7 +257,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // ── Stream registry helpers (mirror http2_conn.nu's get/set/find) ─────
 
-@ __h2c_find_stream H2Client c i sid → i {
+@ __h2c_find_stream * H2ClientImpl c i sid → i {
     : i n ( vec_len [H2CStream] . c streams )
     : *H2CStream sp ( vec_data [H2CStream] . c streams )
     : ~ i k 0
@@ -257,12 +270,12 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ found
 }
 
-@ __h2c_get_stream H2Client c i idx → H2CStream {
+@ __h2c_get_stream * H2ClientImpl c i idx → H2CStream {
     : *H2CStream sp ( vec_data [H2CStream] . c streams )
     ^ . sp idx
 }
 
-@ __h2c_set_stream H2Client c i idx H2CStream s → v {
+@ __h2c_set_stream * H2ClientImpl c i idx H2CStream s → v {
     : *H2CStream sp ( vec_data [H2CStream] . c streams )
     // `s` is the slot's own value, read by the getter and updated: it
     // goes back as is (the table still owns it).
@@ -270,7 +283,7 @@ $ `stdlib/ext/http2_hpack.nu`
     = . sp idx s
 }
 
-@ __h2c_any_pending H2Client c → b {
+@ __h2c_any_pending * H2ClientImpl c → b {
     : i n ( vec_len [H2CStream] . c streams )
     : *H2CStream sp ( vec_data [H2CStream] . c streams )
     : ~ i k 0
@@ -285,7 +298,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // ── SETTINGS application (client side) ────────────────────────────────
 
-@ __h2c_apply_settings H2Client c H2Frame f → !v H2ClientErr {
+@ __h2c_apply_settings * H2ClientImpl c H2Frame f → !v H2ClientErr {
     : i n ( vec_len [u] . f payload )
     ? != 0 % n 6 { ^ @ !v H2ClientErr { F # H2ClientErr H2CFrameSize } } {}
     : *u p ( vec_data [u] . f payload )
@@ -303,20 +316,20 @@ $ `stdlib/ext/http2_hpack.nu`
         //   1 HEADER_TABLE_SIZE   2 ENABLE_PUSH   3 MAX_CONCURRENT_STREAMS
         //   4 INITIAL_WINDOW_SIZE 5 MAX_FRAME_SIZE 6 MAX_HEADER_LIST_SIZE
         ?? id {
-            1 → { ( nurl_poke . c st 5 value ) }  // HEADER_TABLE_SIZE
+            1 → { = . c peer_hts value }  // HEADER_TABLE_SIZE
             2 → {
                 // RFC 9113 §6.5.2 permits servers to explicitly disable push.
                 ? != value 0 { = err # H2ClientErr H2CProtocol = status 1 } {}
             }
-            3 → { ( nurl_poke . c st 6 value ) }  // MAX_CONCURRENT_STREAMS
+            3 → { = . c peer_max_streams value }  // MAX_CONCURRENT_STREAMS
             4 → {  // INITIAL_WINDOW_SIZE — the per-stream send-window seed.
                 ? > value ( h2_max_window_size ) {
                     = err # H2ClientErr H2CFlowControl
                     = status 1
                 } {
-                    : i old ( nurl_peek . c st 3 )
+                    : i old . c peer_iws
                     : i delta - value old
-                    ( nurl_poke . c st 3 value )
+                    = . c peer_iws value
                     // §6.9.2 — adjust every open stream's send_window.
                     : i ns ( vec_len [H2CStream] . c streams )
                     : *H2CStream sp ( vec_data [H2CStream] . c streams )
@@ -338,7 +351,7 @@ $ `stdlib/ext/http2_hpack.nu`
                     = err # H2ClientErr H2CProtocol
                     = status 1
                 } {
-                    ( nurl_poke . c st 4 value )
+                    = . c peer_mfs value
                 }
             }
             _ → {}  // ENABLE_PUSH(2) / MAX_HEADER_LIST_SIZE(6) / unknown — ignore
@@ -350,20 +363,6 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 // ── Handshake + connect ───────────────────────────────────────────────
-
-// Free everything H2Client OWNS (state block, decoder table, streams).
-// Does NOT touch the BORROWED TcpConn.
-@ __h2c_free_owned H2Client c → v {
-    ( vec_free_with [H2CStream] . c streams
-    \ H2CStream s → v { ( __h2c_stream_free s ) } )
-    : *HpackDynTable dp ( vec_data [HpackDynTable] . c dec_box )
-    ( hpack_dyn_free . dp 0 )
-    ( vec_free [HpackDynTable] . c dec_box )
-    ( vec_free [u] . c rx )
-    ( vec_free [u] . c header_block )
-    ( h2_frame_writer_free . c writer )
-    ( nurl_free . c st )
-}
 
 // Write the preface, send our SETTINGS, then read frames until the peer
 // sends its SETTINGS (RFC 9113 §3.4 mandates it as the first frame) —
@@ -383,31 +382,25 @@ $ `stdlib/ext/http2_hpack.nu`
     ( vec_push [H2Setting] ss @ H2Setting {
         ( h2_settings_max_frame_size ) 16384 } )
     : !v H2FrameErr sr ( h2_send_settings conn ss )
-    ( vec_free [H2Setting] ss )
     ?? sr {
         T _ → {}
         F e → { ^ @ !H2Client H2ClientErr { F ( __h2c_frame_err_to_client e ) } }
     }
-    // Allocate scalar state (16 words) + decoder table + stream registry.
-    : s st ( nurl_zalloc 128 )
-    ( nurl_poke st 0 1 )  // next_stream_id (client streams are odd, 1,3,5…)
-    ( nurl_poke st 1 65535 )  // conn_send_window (connection initial is fixed)
-    ( nurl_poke st 2 65535 )  // conn_recv_window
-    ( nurl_poke st 3 65535 )  // peer_initial_window_size (default)
-    ( nurl_poke st 4 16384 )  // peer_max_frame_size (default)
-    ( nurl_poke st 5 4096 )  // peer_header_table_size (default)
-    ( nurl_poke st 6 100 )  // peer_max_concurrent_streams (assumed)
-    ( nurl_poke st 7 0 )  // goaway_received
-    ( nurl_poke st 8 0 )  // goaway_last_id
-    ( nurl_poke st 9 10485760 )  // maximum pending request bytes
-    ( nurl_poke st 10 10485760 )  // maximum buffered response bytes per stream
-    ( nurl_poke st 11 100 )  // maximum retained streams (includes completed)
-    // 12 continuation stream id, 13 originating END_STREAM, 14 continuation count
-    // 15 connection error (fatal framing/I/O error, forbids reuse)
+    // Scalar state (defaults until the peer's SETTINGS), decoder table,
+    // stream registry.
     : ( Vec HpackDynTable ) dec_box ( vec_new [HpackDynTable] )
     ( vec_push [HpackDynTable] dec_box ( hpack_dyn_new 4096 ) )
-    : ( Vec H2CStream ) streams ( vec_new [H2CStream] )
-    : H2Client c @ H2Client { conn st dec_box streams ( vec_new [u] ) ( vec_new [u] ) ( h2_frame_writer conn 1048576 ) }
+    : H2Client h @ H2Client { # s ( rcbox_new [H2ClientImpl] @ H2ClientImpl {
+            conn
+            1  // next stream id
+            65535 65535  // connection send / receive windows
+            65535 16384 4096 100  // peer initial window, max frame, table size, streams
+            0 0  // goaway received / last id
+            10485760 10485760 100  // send queue, receive buffer, retained streams
+            0 0 0 0  // continuation sid / END_STREAM / count, connection error
+            dec_box ( vec_new [H2CStream] ) ( vec_new [u] ) ( vec_new [u] ) ( h2_frame_writer conn 1048576 )
+        } ) }
+    : *H2ClientImpl c ( __H2Client_ptr h )
     // RFC 9113 §3.4 requires the first peer frame to be non-ACK SETTINGS.
     : !H2Frame H2FrameErr rf ( h2_read_frame_buf conn . c rx 16384 )
     ?? rf {
@@ -415,28 +408,22 @@ $ `stdlib/ext/http2_hpack.nu`
             : b valid & & == . frame frame_type 4 == . frame stream_id 0
             == 0 & . frame flags ( h2_flag_ack )
             ? ! valid {
-                ( h2_frame_free frame )
-                ( __h2c_free_owned c )
                 ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CProtocol }
             } {}
             : !v H2ClientErr ar ( __h2c_apply_settings c frame )
-            ( h2_frame_free frame )
             ?? ar { T _ → {} F e → {
-                    ( __h2c_free_owned c )
                     ^ @ !H2Client H2ClientErr { F e }
                 } }
             : !v H2FrameErr ack ( h2_send_settings_ack conn )
             ?? ack { T _ → {} F e → {
-                    ( __h2c_free_owned c )
                     ^ @ !H2Client H2ClientErr { F ( __h2c_frame_err_to_client e ) }
                 } }
         }
         F e → {
-            ( __h2c_free_owned c )
             ^ @ !H2Client H2ClientErr { F ( __h2c_frame_err_to_client e ) }
         }
     }
-    ^ @ !H2Client H2ClientErr { T c }
+    ^ @ !H2Client H2ClientErr { T h }
 }
 
 @ h2_client_attach TcpConn conn → !H2Client H2ClientErr {
@@ -476,7 +463,6 @@ $ `stdlib/ext/http2_hpack.nu`
     // HTTP/1.1 and our framing would be garbage.
     : String proto ( tcp_alpn_protocol conn )
     : b is_h2 != 0 ( nurl_str_eq ( string_data proto ) `h2` )
-    ( string_free proto )
     ? ! is_h2 {
         ( tcp_close_conn conn )
         ^ @ !H2Client H2ClientErr { F # H2ClientErr H2CAlpn }
@@ -492,16 +478,27 @@ $ `stdlib/ext/http2_hpack.nu`
     }
 }
 
-@ h2_client_close H2Client c → v { ( __h2c_free_owned c ) }
+// Let go of `c` now rather than at the end of its owner's scope (optional).
+@ h2_client_close sink H2Client c → v {}
 
-@ h2_client_disconnect H2Client c → v {
+// The TcpConn the client runs over (the caller's, as handed to attach /
+// opened by connect).
+@ h2_client_tcp H2Client c__h → TcpConn {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
+    ^ . c tcp
+}
+
+// Close the TcpConn the client runs over (the caller's: a client attached
+// to a connection does not own it). The client's state goes with its last
+// owner.
+@ h2_client_disconnect H2Client c__h → v {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     ( tcp_close_conn . c tcp )
-    ( __h2c_free_owned c )
 }
 
 // Scope a shared transport's write deadline to the earliest caller/stream
 // deadline; restore the borrowed TcpConn's original policy after every write.
-@ __h2c_begin_write H2Client c i deadline → i {
+@ __h2c_begin_write * H2ClientImpl c i deadline → i {
     : i prior ( tcp_write_deadline . c tcp )
     : ~ i chosen ( __h2c_nearest_deadline c )
     ? & > deadline 0 | == chosen 0 < deadline chosen { = chosen deadline } {}
@@ -510,40 +507,40 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ prior
 }
 
-@ __h2c_flush_wire H2Client c → !v H2FrameErr {
+@ __h2c_flush_wire * H2ClientImpl c → !v H2FrameErr {
     : i prior ( __h2c_begin_write c 0 )
     : !i H2FrameErr flushed ( h2_frame_writer_flush . c writer )
     ( tcp_set_write_deadline . c tcp prior )
     ^ ?? flushed { T _ → @ !v H2FrameErr { T 0 } F e → @ !v H2FrameErr { F e } }
 }
 
-@ __h2c_write_frame H2Client c H2Frame frame i max_frame_size → !v H2FrameErr {
+@ __h2c_write_frame * H2ClientImpl c H2Frame frame i max_frame_size → !v H2FrameErr {
     : !v H2FrameErr queued ( h2_frame_writer_queue . c writer frame max_frame_size )
     ?? queued { T _ → {} F e → { ^ @ !v H2FrameErr { F e } } }
     ^ ( __h2c_flush_wire c )
 }
 
-@ __h2c_send_reset H2Client c i sid i code → !v H2FrameErr {
+@ __h2c_send_reset * H2ClientImpl c i sid i code → !v H2FrameErr {
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_push_u32_be payload # u32 code )
     : !v H2FrameErr result ( __h2c_write_frame c @ H2Frame { 3 0 sid payload } 16384 )
     ^ result
 }
 
-@ __h2c_send_window H2Client c i sid i amount → !v H2FrameErr {
+@ __h2c_send_window * H2ClientImpl c i sid i amount → !v H2FrameErr {
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_push_u32_be payload # u32 amount )
     : !v H2FrameErr result ( __h2c_write_frame c @ H2Frame { 8 0 sid payload } 16384 )
     ^ result
 }
 
-@ __h2c_settings_ack H2Client c → !v H2FrameErr {
+@ __h2c_settings_ack * H2ClientImpl c → !v H2FrameErr {
     : ( Vec u ) payload ( vec_new [u] )
     : !v H2FrameErr result ( __h2c_write_frame c @ H2Frame { 4 1 0 payload } 16384 )
     ^ result
 }
 
-@ __h2c_ping_ack H2Client c ( Vec u ) payload → !v H2FrameErr {
+@ __h2c_ping_ack * H2ClientImpl c ( Vec u ) payload → !v H2FrameErr {
     // The frame holds its own copy of the borrowed payload, dropped here.
     : H2Frame frame @ H2Frame { 6 1 0 payload }
     ^ ( __h2c_write_frame c frame 16384 )
@@ -554,13 +551,12 @@ $ `stdlib/ext/http2_hpack.nu`
 // Send the request HEADERS block as one HEADERS frame, or split into
 // HEADERS + CONTINUATION when it exceeds the peer's max-frame-size.
 // TAKES OWNERSHIP of `block` (frees it).
-@ __h2c_send_headers H2Client c i sid ( Vec u ) block b end_stream → !v H2ClientErr {
+@ __h2c_send_headers * H2ClientImpl c i sid ( Vec u ) block b end_stream → !v H2ClientErr {
     : i mfs ( __h2c_peer_mfs c )
     : i blen ( vec_len [u] block )
     // Reserve the whole block before emitting HEADERS: a rejected continuation
     // must never leave a partially queued HPACK block on the connection.
     ? ! ( h2_frame_writer_room . c writer + blen 1024 ) {
-        ( vec_free [u] block )
         ^ @ !v H2ClientErr { F # H2ClientErr H2CWouldBlock }
     } {}
     ? <= blen mfs {
@@ -568,7 +564,6 @@ $ `stdlib/ext/http2_hpack.nu`
         ? end_stream ( h2_flag_end_stream ) 0
         : H2Frame hf @ H2Frame { ( h2_type_headers ) fl sid block }
         : !v H2FrameErr wr ( __h2c_write_frame c hf mfs )
-        ( h2_frame_free hf )
         ?? wr {
             T _ → { ^ @ !v H2ClientErr { T 0 } }
             F e → { ^ @ !v H2ClientErr { F ( __h2c_frame_err_to_client e ) } }
@@ -592,14 +587,12 @@ $ `stdlib/ext/http2_hpack.nu`
         : i fl ? & first end_stream + fl0 ( h2_flag_end_stream ) fl0
         : H2Frame pf @ H2Frame { ftype fl sid part }
         : !v H2FrameErr wr ( __h2c_write_frame c pf mfs )
-        ( h2_frame_free pf )
         ?? wr {
             T _ → {}
             F e → { = err ( __h2c_frame_err_to_client e ) = status 1 }
         }
         = pos + pos chunk
     }
-    ( vec_free [u] block )
     ? == status 1 { ^ @ !v H2ClientErr { F err } } {}
     ^ @ !v H2ClientErr { T 0 }
 }
@@ -607,13 +600,12 @@ $ `stdlib/ext/http2_hpack.nu`
 // Open a new stream: encode + send request HEADERS, register the stream,
 // and flush as much body as the flow-control windows currently permit.
 // Returns the assigned (odd) stream id. TAKES OWNERSHIP of `body`.
-@ __h2c_submit H2Client c s method s scheme s authority s path
-( Vec Header ) headers ( Vec u ) body b streaming i deadline_ns → !i H2ClientErr {
-    ? | != 0 ( __h2c_goaway c ) != 0 ( nurl_peek . c st 15 ) {
-        ( vec_free [u] body )
+@ __h2c_submit * H2ClientImpl c s method s scheme s authority s path
+( Vec Header ) headers sink ( Vec u ) body b streaming i deadline_ns → !i H2ClientErr {
+    ? | != 0 ( __h2c_goaway c ) != 0 . c conn_error {
         ^ @ !i H2ClientErr { F # H2ClientErr H2CRefused }
     } {}
-    : i sid ( nurl_peek . c st 0 )
+    : i sid . c next_sid
     : i ns ( vec_len [H2CStream] . c streams )
     : ~ i active 0
     : ~ i si 0
@@ -622,16 +614,14 @@ $ `stdlib/ext/http2_hpack.nu`
         ? ! & . existing complete . existing req_done { = active + active 1 } {}
         = si + si 1
     }
-    ? | | > sid ( h2_max_stream_id ) >= ns ( nurl_peek . c st 11 )
-    >= active ( nurl_peek . c st 6 ) {
-        ( vec_free [u] body )
+    ? | | > sid ( h2_max_stream_id ) >= ns . c max_streams
+    >= active . c peer_max_streams {
         ^ @ !i H2ClientErr { F # H2ClientErr H2CRefused }
     } {}
-    ? > ( vec_len [u] body ) ( nurl_peek . c st 9 ) {
-        ( vec_free [u] body )
+    ? > ( vec_len [u] body ) . c max_send_bytes {
         ^ @ !i H2ClientErr { F # H2ClientErr H2CBufferLimit }
     } {}
-    ( nurl_poke . c st 0 + sid 2 )
+    = . c next_sid + sid 2
     // Build the header list: pseudo-headers first, in the required order
     // (§8.3.1), then regular headers — lowercased, hop-by-hop dropped.
     : ( Vec Header ) all ( vec_new [Header] )
@@ -655,8 +645,6 @@ $ `stdlib/ext/http2_hpack.nu`
             // moves into `all` once valid (dropped on the reject path).
             : Header checked @ Header { ( string_to_lower . h name ) ( string_from ( string_data . h value ) ) }
             ? | == ( string_get . checked name 0 ) 58 ! ( __h2c_header_valid checked ) {
-                ( vec_free_with [Header] all \ Header hh → v { ( header_free hh ) } )
-                ( vec_free [u] body )
                 ^ @ !i H2ClientErr { F # H2ClientErr H2CProtocol }
             } {}
             ( vec_push [Header] all checked )
@@ -664,10 +652,7 @@ $ `stdlib/ext/http2_hpack.nu`
         = k + k 1
     }
     : ( Vec u ) block ( hpack_encode_headers all )
-    ( vec_free_with [Header] all \ Header hh → v { ( header_free hh ) } )
     ? > ( vec_len [u] block ) 65536 {
-        ( vec_free [u] block )
-        ( vec_free [u] body )
         ^ @ !i H2ClientErr { F # H2ClientErr H2CBufferLimit }
     } {}
     : i body_len ( vec_len [u] body )
@@ -678,9 +663,8 @@ $ `stdlib/ext/http2_hpack.nu`
     ?? hr {
         T _ → {}
         F e → {
-            ( vec_free [u] body )
             ?? e { H2CWouldBlock → { ^ @ !i H2ClientErr { F e } } _ → {} }
-            ( nurl_poke . c st 15 1 )
+            = . c conn_error 1
             ? & > deadline_ns 0 >= ( monotonic_ns ) deadline_ns {
                 ^ @ !i H2ClientErr { F # H2ClientErr H2CDeadline }
             } {}
@@ -705,19 +689,22 @@ $ `stdlib/ext/http2_hpack.nu`
 // the next mutation; only take_data transfers ownership. send always consumes
 // its input, including on error. Applications can inspect pending_body/send_pos
 // before constructing the next bounded chunk.
-@ h2_client_submit H2Client c s method s scheme s authority s path
-( Vec Header ) headers ( Vec u ) body → !i H2ClientErr {
+@ h2_client_submit H2Client c__h s method s scheme s authority s path
+( Vec Header ) headers sink ( Vec u ) body → !i H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     ^ ( __h2c_submit c method scheme authority path headers body F 0 )
 }
 
-@ h2_client_open H2Client c s method s scheme s authority s path
+@ h2_client_open H2Client c__h s method s scheme s authority s path
 ( Vec Header ) headers → !i H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     ^ ( __h2c_submit c method scheme authority path headers ( vec_new [u] ) T 0 )
 }
 
 // Same open operation with its deadline active before initial HEADERS write.
-@ h2_client_open_deadline H2Client c s method s scheme s authority s path
+@ h2_client_open_deadline H2Client c__h s method s scheme s authority s path
 ( Vec Header ) headers i deadline_ns → !i H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     ? < deadline_ns 0 { ^ @ !i H2ClientErr { F # H2ClientErr H2COther } } {}
     ? & > deadline_ns 0 >= ( monotonic_ns ) deadline_ns {
         ^ @ !i H2ClientErr { F # H2ClientErr H2CDeadline }
@@ -725,13 +712,15 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ ( __h2c_submit c method scheme authority path headers ( vec_new [u] ) T deadline_ns )
 }
 
-@ h2_client_stream_state H2Client c i sid → ?H2CStream {
+@ h2_client_stream_state H2Client c__h i sid → ?H2CStream {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     : i idx ( __h2c_find_stream c sid )
     ? < idx 0 { ^ @ ?H2CStream { F # H2CStream 0 } } {}
     ^ @ ?H2CStream { T ( __h2c_get_stream c idx ) }
 }
 
-@ h2_client_set_limits H2Client c i send_bytes i recv_bytes i max_streams → !v H2ClientErr {
+@ h2_client_set_limits H2Client c__h i send_bytes i recv_bytes i max_streams → !v H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     ? | | <= send_bytes 0 <= recv_bytes 0 <= max_streams 0 {
         ^ @ !v H2ClientErr { F # H2ClientErr H2CBufferLimit }
     } {}
@@ -747,40 +736,35 @@ $ `stdlib/ext/http2_hpack.nu`
     ? > ( vec_len [H2CStream] . c streams ) max_streams {
         ^ @ !v H2ClientErr { F # H2ClientErr H2CBufferLimit }
     } {}
-    ( nurl_poke . c st 9 send_bytes )
-    ( nurl_poke . c st 10 recv_bytes )
-    ( nurl_poke . c st 11 max_streams )
+    = . c max_send_bytes send_bytes
+    = . c max_recv_bytes recv_bytes
+    = . c max_streams max_streams
     ^ @ !v H2ClientErr { T 0 }
 }
 
-@ h2_client_send H2Client c i sid ( Vec u ) body b end_stream → !v H2ClientErr {
+@ h2_client_send H2Client c__h i sid sink ( Vec u ) body b end_stream → !v H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     : !v H2ClientErr deadlines ( __h2c_expire_deadlines c )
     ?? deadlines { T _ → {} F e → {
-            ( vec_free [u] body )
             ^ @ !v H2ClientErr { F e }
         } }
     : i idx ( __h2c_find_stream c sid )
-    ? | < idx 0 != 0 ( nurl_peek . c st 15 ) {
-        ( vec_free [u] body )
+    ? | < idx 0 != 0 . c conn_error {
         ^ @ !v H2ClientErr { F # H2ClientErr H2COther }
     } {}
     : H2CStream s ( __h2c_get_stream c idx )
     ? . s deadline_expired {
-        ( vec_free [u] body )
         ^ @ !v H2ClientErr { F # H2ClientErr H2CDeadline }
     } {}
     ? | | . s send_end . s req_done . s complete {
-        ( vec_free [u] body )
         ^ @ !v H2ClientErr { F # H2ClientErr H2CRstStream }
     } {}
     : i incoming ( vec_len [u] body )
     : i pending - ( vec_len [u] . s pending_body ) . s send_pos
-    ? > incoming ( nurl_peek . c st 9 ) {
-        ( vec_free [u] body )
+    ? > incoming . c max_send_bytes {
         ^ @ !v H2ClientErr { F # H2ClientErr H2CBufferLimit }
     } {}
-    ? > incoming - ( nurl_peek . c st 9 ) pending {
-        ( vec_free [u] body )
+    ? > incoming - . c max_send_bytes pending {
         ^ @ !v H2ClientErr { F # H2ClientErr H2CWouldBlock }
     } {}
     ? > . s send_pos 0 {
@@ -788,13 +772,13 @@ $ `stdlib/ext/http2_hpack.nu`
         = . s send_pos 0
     } {}
     ( vec_extend [u] . s pending_body body )
-    ( vec_free [u] body )
     = . s send_end end_stream
     ( __h2c_set_stream c idx s )
     ^ ( __h2c_flush_pending c )
 }
 
-@ h2_client_set_stream_deadline H2Client c i sid i deadline_ns → !v H2ClientErr {
+@ h2_client_set_stream_deadline H2Client c__h i sid i deadline_ns → !v H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     : i idx ( __h2c_find_stream c sid )
     ? | < idx 0 < deadline_ns 0 {
         ^ @ !v H2ClientErr { F # H2ClientErr H2COther }
@@ -805,7 +789,11 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ @ !v H2ClientErr { T 0 }
 }
 
-@ h2_client_cancel H2Client c i sid i code → !v H2ClientErr {
+@ h2_client_cancel H2Client c__h i sid i code → !v H2ClientErr {
+    ^ ( __h2c_cancel ( __H2Client_ptr c__h ) sid code )
+}
+
+@ __h2c_cancel * H2ClientImpl c i sid i code → !v H2ClientErr {
     : i idx ( __h2c_find_stream c sid )
     ? < idx 0 { ^ @ !v H2ClientErr { F # H2ClientErr H2COther } } {}
     : H2CStream s ( __h2c_get_stream c idx )
@@ -813,19 +801,21 @@ $ `stdlib/ext/http2_hpack.nu`
     = . s complete T
     = . s req_done T
     = . s rst_code code
-    ( vec_free [u] . s pending_body )
+    : ( Vec u ) unsent . s pending_body
+    ( mem_take unsent )  // the slot's queued body: dropped here
     = . s pending_body ( vec_new [u] )
     = . s send_pos 0
     ( __h2c_set_stream c idx s )
     : !v H2FrameErr wr ( __h2c_send_reset c sid code )
     ?? wr { T _ → {} F e → {
-            ( nurl_poke . c st 15 1 )
+            = . c conn_error 1
             ^ @ !v H2ClientErr { F ( __h2c_frame_err_to_client e ) }
         } }
     ^ @ !v H2ClientErr { T 0 }
 }
 
-@ h2_client_release_stream H2Client c i sid → !v H2ClientErr {
+@ h2_client_release_stream H2Client c__h i sid → !v H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     : i idx ( __h2c_find_stream c sid )
     ? < idx 0 { ^ @ !v H2ClientErr { F # H2ClientErr H2COther } } {}
     : H2CStream s ( __h2c_get_stream c idx )
@@ -833,17 +823,15 @@ $ `stdlib/ext/http2_hpack.nu`
         ^ @ !v H2ClientErr { F # H2ClientErr H2CIncomplete }
     } {}
     ? ! . s req_done {
-        : !v H2ClientErr cr ( h2_client_cancel c sid ( h2_err_cancel ) )
+        : !v H2ClientErr cr ( __h2c_cancel c sid ( h2_err_cancel ) )
         ?? cr { T _ → {} F e → { ^ @ !v H2ClientErr { F e } } }
     } {}
-    ?? ( vec_remove [H2CStream] . c streams idx ) {
-        T removed → { ( __h2c_stream_free removed ) }
-        F _ → {}
-    }
+    ?? ( vec_remove [H2CStream] . c streams idx ) { T _removed → {} F _ → {} }
     ^ @ !v H2ClientErr { T 0 }
 }
 
-@ h2_client_take_data H2Client c i sid → !( Vec u ) H2ClientErr {
+@ h2_client_take_data H2Client c__h i sid → !( Vec u ) H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     : i idx ( __h2c_find_stream c sid )
     ? < idx 0 { ^ @ !( Vec u ) H2ClientErr { F # H2ClientErr H2COther } } {}
     : H2CStream s ( __h2c_get_stream c idx )
@@ -858,8 +846,7 @@ $ `stdlib/ext/http2_hpack.nu`
         ( __h2c_set_stream c idx s )
         : !v H2FrameErr wr ( __h2c_send_window c sid credit )
         ?? wr { T _ → {} F e → {
-                ( vec_free [u] out )
-                ( nurl_poke . c st 15 1 )
+                = . c conn_error 1
                 ^ @ !( Vec u ) H2ClientErr { F ( __h2c_frame_err_to_client e ) }
             } }
     } {
@@ -870,7 +857,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // ── Driver: flush pending DATA ────────────────────────────────────────
 
-@ __h2c_flush_pending H2Client c → !v H2ClientErr {
+@ __h2c_flush_pending * H2ClientImpl c → !v H2ClientErr {
     : i mfs 16384
     : i ns ( vec_len [H2CStream] . c streams )
     : ~ i idx 0
@@ -904,9 +891,8 @@ $ `stdlib/ext/http2_hpack.nu`
                     : H2Frame df @ H2Frame { ( h2_type_data )
                         ? last ( h2_flag_end_stream ) 0 . s id part }
                     : !v H2FrameErr wr ( __h2c_write_frame c df mfs )
-                    ( h2_frame_free df )
                     ?? wr { T _ → {} F e → {
-                            ( nurl_poke . c st 15 1 )
+                            = . c conn_error 1
                             ( __h2c_set_stream c idx s )
                             ^ @ !v H2ClientErr { F ( __h2c_frame_err_to_client e ) }
                         } }
@@ -918,7 +904,8 @@ $ `stdlib/ext/http2_hpack.nu`
                 }
             }
             ? == . s send_pos plen {
-                ( vec_free [u] . s pending_body )
+                : ( Vec u ) sent . s pending_body
+                ( mem_take sent )  // the slot's sent bytes: dropped here
                 = . s pending_body ( vec_new [u] )
                 = . s send_pos 0
             } {}
@@ -1023,7 +1010,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ @ !i H2ClientErr { T length }
 }
 
-@ __h2c_apply_response_headers H2Client c i idx ( Vec u ) block b end_stream → !v H2ClientErr {
+@ __h2c_apply_response_headers * H2ClientImpl c i idx ( Vec u ) block b end_stream → !v H2ClientErr {
     : *HpackDynTable dp ( vec_data [HpackDynTable] . c dec_box )
     // The decoder updates the table in place; it goes back into its slot
     // as is (the box still owns it).
@@ -1034,12 +1021,10 @@ $ `stdlib/ext/http2_hpack.nu`
     ?? hd {
         T dec → {
             ? < idx 0 {
-                ( vec_free_with [Header] . dec headers \ Header h → v { ( header_free h ) } )
                 ^ @ !v H2ClientErr { T 0 }
             } {}
             : H2CStream s ( __h2c_get_stream c idx )
             ? . s complete {
-                ( vec_free_with [Header] . dec headers \ Header h → v { ( header_free h ) } )
                 ^ @ !v H2ClientErr { T 0 }
             } {}
             : b trailing . s headers_done
@@ -1093,7 +1078,6 @@ $ `stdlib/ext/http2_hpack.nu`
                 ? != . s received_bytes . s expected_length { = valid F } {}
             } {}
             ? ! valid {
-                ( vec_free_with [Header] . dec headers \ Header h → v { ( header_free h ) } )
                 ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol }
             } {}
             // Informational responses precede the actual response and never
@@ -1117,7 +1101,6 @@ $ `stdlib/ext/http2_hpack.nu`
                 ? end_stream { = . s complete T } {}
                 ( __h2c_set_stream c idx s )
             } {}
-            ( vec_free_with [Header] . dec headers \ Header h → v { ( header_free h ) } )
             ^ @ !v H2ClientErr { T 0 }
         }
         F _ → { ^ @ !v H2ClientErr { F # H2ClientErr H2CCompression } }
@@ -1126,31 +1109,30 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // Assemble incrementally: returning to the caller for deadlines never loses
 // already-read fragments. Both byte and frame budgets stop CONTINUATION floods.
-@ __h2c_receive_headers H2Client c H2Frame frame → !v H2ClientErr {
+@ __h2c_receive_headers * H2ClientImpl c H2Frame frame → !v H2ClientErr {
     : i sid . frame stream_id
     : b first == . frame frame_type 1
     ? first {
         : !( Vec u ) H2ClientErr er ( __h2c_extract_headers_payload frame )
         ?? er { T part → {
                 ( vec_extend [u] . c header_block part )
-                ( vec_free [u] part )
             } F e → { ^ @ !v H2ClientErr { F e } } }
-        ( nurl_poke . c st 12 sid )
-        ( nurl_poke . c st 13 & . frame flags ( h2_flag_end_stream ) )
-        ( nurl_poke . c st 14 1 )
+        = . c cont_sid sid
+        = . c cont_end_stream & . frame flags ( h2_flag_end_stream )
+        = . c cont_count 1
     } {
         ( vec_extend [u] . c header_block . frame payload )
-        ( nurl_poke . c st 14 + ( nurl_peek . c st 14 ) 1 )
+        = . c cont_count + . c cont_count 1
     }
-    ? | > ( vec_len [u] . c header_block ) 65536 > ( nurl_peek . c st 14 ) 64 {
+    ? | > ( vec_len [u] . c header_block ) 65536 > . c cont_count 64 {
         ^ @ !v H2ClientErr { F # H2ClientErr H2CBufferLimit }
     } {}
     ? != 0 & . frame flags ( h2_flag_end_headers ) {
         : i idx ( __h2c_find_stream c sid )
-        : b es != 0 ( nurl_peek . c st 13 )
+        : b es != 0 . c cont_end_stream
         : !v H2ClientErr ar ( __h2c_apply_response_headers c idx . c header_block es )
         ( vec_clear [u] . c header_block )
-        ( nurl_poke . c st 12 0 )
+        = . c cont_sid 0
         ^ ar
     } {}
     ^ @ !v H2ClientErr { T 0 }
@@ -1163,11 +1145,11 @@ $ `stdlib/ext/http2_hpack.nu`
         F e → @ !v H2ClientErr { F ( __h2c_frame_err_to_client e ) } }
 }
 
-@ __h2c_dispatch H2Client c H2Frame frame → !v H2ClientErr {
+@ __h2c_dispatch * H2ClientImpl c H2Frame frame → !v H2ClientErr {
     : i ft . frame frame_type
     : i sid . frame stream_id
     : i plen ( vec_len [u] . frame payload )
-    : i cont ( nurl_peek . c st 12 )
+    : i cont . c cont_sid
     ? != cont 0 {
         ? | != ft 9 != sid cont { ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol } } {}
     } {
@@ -1175,7 +1157,7 @@ $ `stdlib/ext/http2_hpack.nu`
     }
     ? | | | | == ft 0 == ft 1 == ft 2 == ft 3 == ft 9 {
         ? | == sid 0 == 0 & sid 1 { ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol } } {}
-        ? & != ft 2 >= sid ( nurl_peek . c st 0 ) {
+        ? & != ft 2 >= sid . c next_sid {
             ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol }
         } {}
     } {}
@@ -1188,8 +1170,8 @@ $ `stdlib/ext/http2_hpack.nu`
     } {}
     ?? ft {
         0 → {
-            ? > plen ( nurl_peek . c st 2 ) { ^ @ !v H2ClientErr { F # H2ClientErr H2CFlowControl } } {}
-            ( nurl_poke . c st 2 - ( nurl_peek . c st 2 ) plen )
+            ? > plen . c conn_recv_window { ^ @ !v H2ClientErr { F # H2ClientErr H2CFlowControl } } {}
+            = . c conn_recv_window - . c conn_recv_window plen
             : !( Vec u ) H2FrameErr dr ( h2_data_strip_padding frame )
             ?? dr {
                 T data → {
@@ -1199,25 +1181,21 @@ $ `stdlib/ext/http2_hpack.nu`
                         : H2CStream s ( __h2c_get_stream c idx )
                         ? < . s rst_code 0 {
                             ? | ! . s headers_done . s complete {
-                                ( vec_free [u] data )
                                 ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol }
                             } {}
                             ? > plen . s recv_window {
-                                ( vec_free [u] data )
                                 ^ @ !v H2ClientErr { F # H2ClientErr H2CFlowControl }
                             } {}
                             = . s recv_window - . s recv_window plen
                             : i buffered ( vec_len [u] . s body )
-                            ? > dl - ( nurl_peek . c st 10 ) buffered {
+                            ? > dl - . c max_recv_bytes buffered {
                                 ( __h2c_set_stream c idx s )
-                                : !v H2ClientErr rr ( h2_client_cancel c sid ( h2_err_enhance_your_calm ) )
+                                : !v H2ClientErr rr ( __h2c_cancel c sid ( h2_err_enhance_your_calm ) )
                                 ?? rr { T _ → {} F e → {
-                                        ( vec_free [u] data )
                                         ^ @ !v H2ClientErr { F e }
                                     } }
                             } {
                                 ? & . s no_body > dl 0 {
-                                    ( vec_free [u] data )
                                     ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol }
                                 } {}
                                 ( vec_extend [u] . s body data )
@@ -1226,7 +1204,6 @@ $ `stdlib/ext/http2_hpack.nu`
                                 ? & ! . s no_body >= . s expected_length 0 {
                                     ? | > . s received_bytes . s expected_length
                                     & es != . s received_bytes . s expected_length {
-                                        ( vec_free [u] data )
                                         ( __h2c_set_stream c idx s )
                                         ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol }
                                     } {}
@@ -1241,7 +1218,6 @@ $ `stdlib/ext/http2_hpack.nu`
                                     : !v H2ClientErr wr ( __h2c_control_result
                                     ( __h2c_send_window c sid credit ) )
                                     ?? wr { T _ → {} F e → {
-                                            ( vec_free [u] data )
                                             ( __h2c_set_stream c idx s )
                                             ^ @ !v H2ClientErr { F e }
                                         } }
@@ -1250,11 +1226,10 @@ $ `stdlib/ext/http2_hpack.nu`
                             }
                         } {}
                     } {}
-                    ( vec_free [u] data )
                     // Connection credit is returned on buffering so a stalled
                     // consumer cannot prevent other streams from receiving.
                     ? > plen 0 {
-                        ( nurl_poke . c st 2 + ( nurl_peek . c st 2 ) plen )
+                        = . c conn_recv_window + . c conn_recv_window plen
                         ^ ( __h2c_control_result ( __h2c_send_window c 0 plen ) )
                     } {}
                 }
@@ -1270,7 +1245,8 @@ $ `stdlib/ext/http2_hpack.nu`
                 = . s rst_code ( __h2c_read_u32 . frame payload 0 )
                 = . s complete T
                 = . s req_done T
-                ( vec_free [u] . s pending_body )
+                : ( Vec u ) unsent . s pending_body
+                ( mem_take unsent )  // the slot's queued body: dropped here
                 = . s pending_body ( vec_new [u] )
                 = . s send_pos 0
                 ( __h2c_set_stream c idx s )
@@ -1292,11 +1268,11 @@ $ `stdlib/ext/http2_hpack.nu`
         }
         7 → {
             : i last & 2147483647 ( __h2c_read_u32 . frame payload 0 )
-            ? & != 0 ( __h2c_goaway c ) > last ( nurl_peek . c st 8 ) {
+            ? & != 0 ( __h2c_goaway c ) > last . c goaway_last_id {
                 ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol }
             } {}
-            ( nurl_poke . c st 7 1 )
-            ( nurl_poke . c st 8 last )
+            = . c goaway_received 1
+            = . c goaway_last_id last
             : ~ i k 0
             ~ < k ( vec_len [H2CStream] . c streams ) {
                 : H2CStream s ( __h2c_get_stream c k )
@@ -1304,7 +1280,8 @@ $ `stdlib/ext/http2_hpack.nu`
                     = . s complete T
                     = . s req_done T
                     = . s rst_code ( h2_err_refused_stream )
-                    ( vec_free [u] . s pending_body )
+                    : ( Vec u ) unsent . s pending_body
+                    ( mem_take unsent )  // the slot's queued body: dropped here
                     = . s pending_body ( vec_new [u] )
                     = . s send_pos 0
                     ( __h2c_set_stream c k s )
@@ -1320,7 +1297,7 @@ $ `stdlib/ext/http2_hpack.nu`
                 ? > inc - ( h2_max_window_size ) old { ^ @ !v H2ClientErr { F # H2ClientErr H2CFlowControl } } {}
                 ( __h2c_set_conn_window c + old inc )
             } {
-                ? | == 0 & sid 1 >= sid ( nurl_peek . c st 0 ) {
+                ? | == 0 & sid 1 >= sid . c next_sid {
                     ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol }
                 } {}
                 : i idx ( __h2c_find_stream c sid )
@@ -1340,7 +1317,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ @ !v H2ClientErr { T 0 }
 }
 
-@ __h2c_has_sendable H2Client c → b {
+@ __h2c_has_sendable * H2ClientImpl c → b {
     : ~ i k 0
     ~ < k ( vec_len [H2CStream] . c streams ) {
         : H2CStream stream ( __h2c_get_stream c k )
@@ -1356,7 +1333,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // Cancel deadlines independently so one expired RPC never destroys a healthy
 // multiplexed connection. The response snapshot retains the terminal reason.
-@ __h2c_expire_deadlines H2Client c → !v H2ClientErr {
+@ __h2c_expire_deadlines * H2ClientImpl c → !v H2ClientErr {
     : i now ( monotonic_ns )
     : ~ i k 0
     ~ < k ( vec_len [H2CStream] . c streams ) {
@@ -1364,7 +1341,7 @@ $ `stdlib/ext/http2_hpack.nu`
         ? & & ! . s complete > . s deadline_ns 0 >= now . s deadline_ns {
             = . s deadline_expired T
             ( __h2c_set_stream c k s )
-            : !v H2ClientErr cr ( h2_client_cancel c . s id ( h2_err_cancel ) )
+            : !v H2ClientErr cr ( __h2c_cancel c . s id ( h2_err_cancel ) )
             ?? cr { T _ → {} F e → { ^ @ !v H2ClientErr { F e } } }
         } {}
         = k + k 1
@@ -1372,7 +1349,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ @ !v H2ClientErr { T 0 }
 }
 
-@ __h2c_nearest_deadline H2Client c → i {
+@ __h2c_nearest_deadline * H2ClientImpl c → i {
     : ~ i nearest 0
     : ~ i k 0
     ~ < k ( vec_len [H2CStream] . c streams ) {
@@ -1384,7 +1361,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ^ nearest
 }
 
-@ __h2c_buffered_frame H2Client c → b {
+@ __h2c_buffered_frame * H2ClientImpl c → b {
     ? < ( vec_len [u] . c rx ) 9 { ^ F } {}
     : *u p ( vec_data [u] . c rx )
     : i length + + << # i . p 0 16 << # i . p 1 8 # i . p 2
@@ -1394,7 +1371,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // Preserve partial frames on a deadline wakeup. Recompute the remaining
 // absolute budget before every recv, bounding slow-drip peers as well as idle
 // peers. The socket's caller-selected timeout is restored on every path.
-@ __h2c_read_one H2Client c → !H2Frame H2ClientErr {
+@ __h2c_read_one * H2ClientImpl c → !H2Frame H2ClientErr {
     : i old_ms ( nurl_tcp_timeout_ms ( tcp_conn_fd . c tcp ) )
     : i idle_ms ? > old_ms 0 old_ms 30000
     : i nearest ( __h2c_nearest_deadline c )
@@ -1455,8 +1432,10 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // One owner pumps the connection; no nested readers. Bounded frame bursts
 // return control even when a peer continuously sends control frames.
-@ h2_client_pump_once H2Client c → !v H2ClientErr {
-    ? != 0 ( nurl_peek . c st 15 ) { ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol } } {}
+@ h2_client_pump_once H2Client c__h → !v H2ClientErr { ^ ( __h2c_pump_once ( __H2Client_ptr c__h ) ) }
+
+@ __h2c_pump_once * H2ClientImpl c → !v H2ClientErr {
+    ? != 0 . c conn_error { ^ @ !v H2ClientErr { F # H2ClientErr H2CProtocol } } {}
     : !v H2ClientErr expired ( __h2c_expire_deadlines c )
     ?? expired { T _ → {} F e → { ^ @ !v H2ClientErr { F e } } }
     : i fd ( __h2c_fd c )
@@ -1465,14 +1444,13 @@ $ `stdlib/ext/http2_hpack.nu`
         : !H2Frame H2ClientErr rf ( __h2c_read_one c )
         ?? rf { T frame → {
                 : !v H2ClientErr dr ( __h2c_dispatch c frame )
-                ( h2_frame_free frame )
                 ?? dr { T _ → {} F e → {
-                        ( nurl_poke . c st 15 1 )
+                        = . c conn_error 1
                         ^ @ !v H2ClientErr { F e }
                     } }
             } F e → {
                 ?? e { H2CWouldBlock → { ^ ( __h2c_expire_deadlines c ) } _ → {} }
-                ( nurl_poke . c st 15 1 )
+                = . c conn_error 1
                 ^ @ !v H2ClientErr { F e }
             } }
         = frames + frames 1
@@ -1484,7 +1462,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ?? fw { T _ → {} F e → { ^ @ !v H2ClientErr { F e } } }
     : !v H2FrameErr wire ( __h2c_flush_wire c )
     ?? wire { T _ → {} F e → {
-            ( nurl_poke . c st 15 1 )
+            = . c conn_error 1
             ^ @ !v H2ClientErr { F ( __h2c_frame_err_to_client e ) }
         } }
     // A frame burst limit is a scheduling yield, not a reason to wait on
@@ -1496,14 +1474,13 @@ $ `stdlib/ext/http2_hpack.nu`
         : !H2Frame H2ClientErr rf ( __h2c_read_one c )
         ?? rf { T frame → {
                 : !v H2ClientErr dr ( __h2c_dispatch c frame )
-                ( h2_frame_free frame )
                 ?? dr { T _ → {} F e → {
-                        ( nurl_poke . c st 15 1 )
+                        = . c conn_error 1
                         ^ @ !v H2ClientErr { F e }
                     } }
             } F e → {
                 ?? e { H2CWouldBlock → { ^ ( __h2c_expire_deadlines c ) } _ → {} }
-                ( nurl_poke . c st 15 1 )
+                = . c conn_error 1
                 ^ @ !v H2ClientErr { F e }
             } }
     } {}
@@ -1511,11 +1488,12 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 // Pump until every submitted stream has completed (or a fatal error).
-@ h2_client_run_until_complete H2Client c → !v H2ClientErr {
+@ h2_client_run_until_complete H2Client c__h → !v H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     : ~ i status 0
     : ~ H2ClientErr err H2COther
     ~ & == status 0 ( __h2c_any_pending c ) {
-        : !v H2ClientErr pr ( h2_client_pump_once c )
+        : !v H2ClientErr pr ( __h2c_pump_once c )
         ?? pr { T _ → {} F e → { = err e = status 1 } }
     }
     ? == status 1 { ^ @ !v H2ClientErr { F err } } {}
@@ -1526,7 +1504,8 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // Remove the completed stream and hand back its response. Err if the
 // stream is unknown or the peer reset it.
-@ h2_client_take_response H2Client c i sid → !HttpResponse H2ClientErr {
+@ h2_client_take_response H2Client c__h i sid → !HttpResponse H2ClientErr {
+    : *H2ClientImpl c ( __H2Client_ptr c__h )
     : i idx ( __h2c_find_stream c sid )
     ? < idx 0 {
         ^ @ !HttpResponse H2ClientErr { F # H2ClientErr H2COther }
@@ -1536,12 +1515,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ?H2CStream popped ( vec_remove [H2CStream] . c streams idx )
     ?? popped {
         T s → {
-            ( vec_free [u] . s pending_body )
-            ( vec_free_with [Header] . s trailers \ Header h → v { ( header_free h ) } )
             ? >= . s rst_code 0 {
-                ( vec_free_with [Header] . s headers
-                \ Header h → v { ( header_free h ) } )
-                ( vec_free [u] . s body )
                 ^ @ !HttpResponse H2ClientErr { F ? . s deadline_expired # H2ClientErr H2CDeadline # H2ClientErr H2CRstStream }
             } {}
             : HttpResponse r @ HttpResponse { . s status . s headers . s body }
@@ -1555,10 +1529,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 : H2Url { b tls String host i port String path }
 
-@ _h2_url_free sink H2Url u → v {
-    ( string_free . u host )
-    ( string_free . u path )
-}
+@ _h2_url_free sink H2Url u → v {}
 
 // Parse "https://host[:port][/path]" or "http://...". Default port
 // 443 (https) / 80 (http); default path "/". None on bad scheme / host.
@@ -1574,11 +1545,10 @@ $ `stdlib/ext/http2_hpack.nu`
             : ~ b ok F
             ? == 1 ( nurl_str_eq sch `https` ) { = tls T = ok T } {}
             ? == 1 ( nurl_str_eq sch `http` ) { = tls F = ok T } {}
-            ? ! ok { ( url_free u ) ^ @ ?H2Url { F # H2Url 0 } } {}
+            ? ! ok { ^ @ ?H2Url { F # H2Url 0 } } {}
             : i port ( url_port_or_default u )
             : String host ( string_from ( string_data . u host ) )
             : String path ( url_request_target u )
-            ( url_free u )
             ^ @ ?H2Url { T @ H2Url { tls host port path } }
         }
         F _ → @ ?H2Url { F # H2Url 0 }
@@ -1587,7 +1557,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 // One request over a fresh connection. TAKES OWNERSHIP of `body`;
 // `headers` is borrowed.
-@ h2_request s url s method ( Vec Header ) headers ( Vec u ) body → !HttpResponse H2ClientErr {
+@ h2_request s url s method ( Vec Header ) headers sink ( Vec u ) body → !HttpResponse H2ClientErr {
     : ?H2Url pu ( _h2_parse_url url )
     ?? pu {
         T u → {
@@ -1605,7 +1575,6 @@ $ `stdlib/ext/http2_hpack.nu`
                     : s scheme ? . u tls `https` `http`
                     : !i H2ClientErr sr ( h2_client_submit client method scheme
                     ( string_data auth ) ( string_data . u path ) headers body )
-                    ( string_free auth )
                     ?? sr {
                         T sid → {
                             : !v H2ClientErr rr ( h2_client_run_until_complete client )
@@ -1614,32 +1583,26 @@ $ `stdlib/ext/http2_hpack.nu`
                                     : !HttpResponse H2ClientErr tr
                                     ( h2_client_take_response client sid )
                                     ( h2_client_disconnect client )
-                                    ( _h2_url_free u )
                                     ^ tr
                                 }
                                 F e → {
                                     ( h2_client_disconnect client )
-                                    ( _h2_url_free u )
                                     ^ @ !HttpResponse H2ClientErr { F e }
                                 }
                             }
                         }
                         F e → {
                             ( h2_client_disconnect client )
-                            ( _h2_url_free u )
                             ^ @ !HttpResponse H2ClientErr { F e }
                         }
                     }
                 }
                 F e → {
-                    ( vec_free [u] body )
-                    ( _h2_url_free u )
                     ^ @ !HttpResponse H2ClientErr { F e }
                 }
             }
         }
         F _ → {
-            ( vec_free [u] body )
             ^ @ !HttpResponse H2ClientErr { F # H2ClientErr H2CUrl }
         }
     }
@@ -1649,6 +1612,5 @@ $ `stdlib/ext/http2_hpack.nu`
     : ( Vec Header ) h ( vec_new [Header] )
     : ( Vec u ) b ( vec_new [u] )
     : !HttpResponse H2ClientErr r ( h2_request url `GET` h b )
-    ( vec_free_with [Header] h \ Header hh → v { ( header_free hh ) } )
     ^ r
 }
