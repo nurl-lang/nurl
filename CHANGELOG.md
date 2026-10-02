@@ -312,7 +312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   these modules is an optional early release; unused `url_split_free`,
   `query_pair_free`, `ws_frame_free`, `hpack_string_free` were removed.
   HTTP server CPU per request (instructions:u, `bench/http_server.nu`,
-  oha 100k keep-alive): HTTP/1.1 −3.7 %, HTTP/2 −2.4 %.
+  oha 100k keep-alive): HTTP/1.1 −3.1 %, HTTP/2 −2.1 %.
 - **A `sink` parameter placed in a literal moves in instead of being
   copied.** `rcbox_new [T] @ T { a b }` in a library-handle constructor
   copied every Vec / String it was handed and then dropped the original
