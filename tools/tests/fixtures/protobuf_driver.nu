@@ -52,7 +52,6 @@ $ `stdlib/core/io.nu`
                 \ ( proto_expect tag 2 ( proto_offset before ) )
                 : String value \ ( proto_read_string r )
                 : !v ProtoError status ( proto_write_string out 9 value )
-                ( string_free value )
                 \ status
             }
             10 → {
@@ -106,10 +105,9 @@ $ `stdlib/core/io.nu`
                 ?? status {
                     T → {
                         : !v ProtoError write_status ( proto_write_bytes out 17 encoded )
-                        ( vec_free [u] encoded )
                         \ write_status
                     }
-                    F e → { ( vec_free [u] encoded ) ^ @ !v ProtoError { F e } }
+                    F e → { ^ @ !v ProtoError { F e } }
                 }
             }
             18 → {
@@ -146,12 +144,10 @@ $ `stdlib/core/io.nu`
             ( nurl_print `ok ` )
             : String hex ( bytes_to_hex out )
             ( nurl_print ( string_data hex ) )
-            ( string_free hex )
         }
         F e → { ( nurl_print `err ` ) ( nurl_print ( proto_error_name . e code ) ) }
     }
     ( nurl_print `\n` )
-    ( vec_free [u] out )
 }
 
 @ main → i {
@@ -164,16 +160,13 @@ $ `stdlib/core/io.nu`
             ? == ( string_len hex ) 0 {
                 : ( Vec u ) empty ( vec_new [u] )
                 ( process empty validate )
-                ( vec_free [u] empty )
             } {
                 ?? ( bytes_from_hex ( string_data hex ) ) {
-                    T bytes → { ( process bytes validate ) ( vec_free [u] bytes ) }
+                    T bytes → { ( process bytes validate ) }
                     F _ → { ( nurl_print `bad test hex\n` ) }
                 }
             }
-            ( string_free hex )
         }
-        ( string_free line )
     }
     ^ 0
 }
