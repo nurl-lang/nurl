@@ -23893,10 +23893,15 @@
         // …and never for a library handle's own literal: its module mints
         // an owner there — `Mutex_share` reads the block pointer out of the
         // handle it was given and returns another owner of the block.
-        ? & & & == fld_first_tt TT_DOT ! ( __is_libh agg_ty )
+        // …and not for a literal built straight as a call's argument
+        // (`( file_flush @ File { . w fh } )`): that aggregate goes to the
+        // callee, not back to this function's caller — taken for a view,
+        // every caller left this function's fresh results undropped.
+        ? & & & & == fld_first_tt TT_DOT ! ( __is_libh agg_ty )
         ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) fld_dot_obj )
         & > ( nurl_str_len fty ) 0
         == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
+        == 0 ( nurl_sym_len syms `__agg_arg_call__` )
         { ( nurl_sym_def syms `__fn_builds_view__` `1` ) }
         {}
         // …or a global cast back to a pointer: `@ ( Vec u32 ) { # s g_tbl }`

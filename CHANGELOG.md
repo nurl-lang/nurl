@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A literal built from a pointer parameter's field and handed straight to a
+  call no longer makes the function a view** (`( flush @ Fh { . w fh } )`):
+  every caller took its fresh error String for a borrow and never dropped it
+  (packages/gguf). `compiler/tests/call_arg_literal_not_view.nu`.
 - **A field of an owned local struct placed in a returned option / result
   leaves the struct's other fields to be dropped** (`^ @ ?V { T . x a }`
   leaked `x`'s other fields once per call — stdlib zstd).
