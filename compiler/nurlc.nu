@@ -10010,7 +10010,12 @@
     ? | | | != ( nurl_str_get ty 0 ) 37 ( seq ty `%String` ) != 0 ( nurl_str_starts ty `%Vec__` ) ( __is_libh ty ) { ^ F } {}
     ? == 0 g_root_syms { ^ F } {}
     : s sname ( nurl_str_slice ty 1 - n 1 )
-    ? | == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) { ^ F } {}
+    // An enum of bare tags (`: | NoiseErr { NoiseBadMsg NoiseAuth … }`) is
+    // a number.
+    ? != 0 ( nurl_sym_len2 g_root_syms sname `__variants` ) {
+        ^ == 0 ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__max_payloads` ) )
+    } {}
+    ? == 0 ( nurl_sym_len2 g_root_syms sname `__field_count` ) { ^ F } {}
     ? != 0 ( nurl_sym_len2 g_impl_name_syms `drop##` ty ) { ^ F } {}
     : i fc ( nurl_str_to_int ( nurl_sym_get2 g_root_syms sname `__field_count` ) )
     : ~ i fi 0
