@@ -3167,7 +3167,7 @@ $ `stdlib/core/rcbox.nu`
 // server/discover and the --version banner all read this. It had
 // drifted to a hand-written 0.20.0 once already.
 
-@ sm_version → s { ^ `0.29.0` }
+@ sm_version → s { ^ `0.30.0` }
 
 @ sm_instructions → s {
     ^ `Distributed compute over a swarm cluster: submit expression / NURL / CUDA-C kernels over integer ranges or uploaded datasets, sample or histogram on GPU workers, and iterate (SGD or a custom update rule). Call swarm_help first — topic "start" for the workflow, "limits" for the envelope.`
