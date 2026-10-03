@@ -189,9 +189,9 @@ $ `stdlib/ext/nurldoc.nu`
                         ( string_push_str out rel )
                         ( string_push_str out ` › ` )
                         : i bn ( string_len blk )
-                        : i keep ? > bn 700 700 bn
-                        : ~ i j 0
                         : s raw ( string_data blk )
+                        : i keep ? > bn 700 ( __mcp_utf8_cut raw 700 ) bn
+                        : ~ i j 0
                         ~ < j keep {
                             ( string_push_char out ( nurl_str_get raw j ) )
                             = j + j 1
@@ -639,9 +639,9 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_char buf 58 )
     ( string_push_int buf lineno )
     ( string_push_str buf `: ` )
-    : ~ i keep ( string_len line )
-    ? > keep 200 { = keep 200 } {}
     : s lraw ( string_data line )
+    : ~ i keep ( string_len line )
+    ? > keep 200 { = keep ( __mcp_utf8_cut lraw 200 ) } {}
     : ~ i j 0
     ~ < j keep {
         : i c ( nurl_str_get lraw j )
@@ -918,8 +918,8 @@ $ `stdlib/ext/nurldoc.nu`
                     ( string_push_int snip nterms )
                     ( string_push_str snip ` terms] › ` )
                     : i bn ( string_len blk )
-                    : i keep ? > bn 500 500 bn
                     : s raw ( string_data blk )
+                    : i keep ? > bn 500 ( __mcp_utf8_cut raw 500 ) bn
                     : ~ i j 0
                     ~ < j keep {
                         ( string_push_char snip ( nurl_str_get raw j ) )
@@ -1174,7 +1174,7 @@ $ `stdlib/ext/nurldoc.nu`
     : String md ( __ms_api_render_module stdlib_dir rel )
     ? == ( string_len md ) 0 { ^ md } {}
     ? > ( string_len md ) ( __ms_api_out_cap ) {
-        : String cut ( string_substr md 0 ( __ms_api_out_cap ) )
+        : String cut ( string_substr md 0 ( __mcp_utf8_cut ( string_data md ) ( __ms_api_out_cap ) ) )
         ( string_push_str cut `\n… truncated — use nurl_read_stdlib for the full source.\n` )
         ^ cut
     } {}
@@ -1476,7 +1476,7 @@ $ `stdlib/ext/nurldoc.nu`
         F → {}
     }
     ? > ( string_len md ) ( __ms_api_out_cap ) {
-        : String cut ( string_substr md 0 ( __ms_api_out_cap ) )
+        : String cut ( string_substr md 0 ( __mcp_utf8_cut ( string_data md ) ( __ms_api_out_cap ) ) )
         ( string_push_str cut `\n… truncated — fetch the tarball for the full source.\n` )
         ^ cut
     } {}

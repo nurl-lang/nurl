@@ -76,15 +76,28 @@ case "$os" in
 esac
 
 # ── Downloader ─────────────────────────────────────────────────────────
+# Every fetch is tried three times: GitHub answers an occasional 5xx for a
+# release asset (seen right after a release was published — `nurl upgrade`
+# failed with a 500 while the same URL downloaded fine moments later).
 if have curl; then
-    dl() { curl -fsSL "$1" -o "$2"; }
-    dl_stdout() { curl -fsSL "$1"; }
+    dl1() { curl -fsSL "$1" -o "$2"; }
+    dl_stdout1() { curl -fsSL "$1"; }
 elif have wget; then
-    dl() { wget -qO "$2" "$1"; }
-    dl_stdout() { wget -qO- "$1"; }
+    dl1() { wget -qO "$2" "$1"; }
+    dl_stdout1() { wget -qO- "$1"; }
 else
     err "need curl or wget on PATH."
 fi
+dl() {
+    dl1 "$1" "$2" && return 0
+    sleep 2; dl1 "$1" "$2" && return 0
+    sleep 5; dl1 "$1" "$2"
+}
+dl_stdout() {
+    dl_stdout1 "$1" && return 0
+    sleep 2; dl_stdout1 "$1" && return 0
+    sleep 5; dl_stdout1 "$1"
+}
 
 # ── Resolve version (latest release tag if unset) ──────────────────────
 if [ -z "$VERSION" ]; then

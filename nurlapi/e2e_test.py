@@ -150,7 +150,17 @@ class Client:
         if not raw:
             return status, hdrs, None
         ctype = (hdrs.get("Content-Type") or hdrs.get("content-type") or "").lower()
-        text = raw.decode("utf-8", errors="replace")
+        # Every MCP reply must be valid UTF-8: decoding with errors="replace"
+        # hid a tool that cut text inside a multi-byte character, and a JSON
+        # client rejects the whole reply (nurl_api query=http, 0.69.1).
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as e:
+            what = body.get("method", "?") if isinstance(body, dict) else "batch"
+            if isinstance(body, dict) and isinstance(body.get("params"), dict) and body["params"].get("name"):
+                what += " " + str(body["params"]["name"]) + " " + json.dumps(body["params"].get("arguments", {}))[:80]
+            assert_true(f"reply is valid UTF-8 ({what})", False, f"invalid byte at {e.start}")
+            text = raw.decode("utf-8", errors="replace")
         # Streamable-HTTP transport: replies come back framed as a single
         # `event: message\ndata: <json>\n` SSE chunk.
         if "text/event-stream" in ctype:
