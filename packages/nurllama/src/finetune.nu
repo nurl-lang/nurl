@@ -356,12 +356,20 @@ $ `stdlib/core/rcbox.nu`
 
 // Re-stream the per-layer base from the source GGUF into `m`'s (empty)
 // vecs — the reverse of ft_drop_base, using the SAME loader path so the
-// NORM-rope un-permute is identical byte-for-byte. T on success.
+// NORM-rope un-permute is identical byte-for-byte. Also restores the
+// embedding table when ft_merge_st consumed it: training again after a
+// merge would otherwise embed every token as a zero row. T on success.
 @ ft_reload_base FtModel m__h → b {
     : *FtModelImpl m ( __FtModel_ptr m__h )
     ?? ( gguf_open ( string_data . m src_path ) ) {
         T gg → {
-            ( __ft_load_bases gg m )
+            ? == ( vec_len [FtW] . m wq ) 0 { ( __ft_load_bases gg m ) } {}
+            ? == ( vec_len [f] . m embd ) 0 {
+                : ~ i erows 0
+                : ~ i ecols 0
+                = . m embd ( __ft_raw gg `token_embd.weight` erows ecols )
+                ? > ( vec_len [f] . m embd ) 0 {} { = . m ok F }
+            } {}
             ^ . m ok
         }
         F e → { ^ F }
@@ -1240,8 +1248,9 @@ $ `stdlib/core/rcbox.nu`
     : i nslot * 7 . m n_layer
     : ( Vec i ) pids ( vec_new [i] )
     // ft_graph needs the base matrices; a prior ft_train may have dropped
-    // them (they only live host-side to build the graph). Stream them back.
-    ? == ( vec_len [FtW] . m wq ) 0 { : b _r ( ft_reload_base m__h ) } {}
+    // them (they only live host-side to build the graph), and a prior
+    // ft_merge_st consumed the embedding table. Stream them back.
+    ? | == ( vec_len [FtW] . m wq ) 0 == ( vec_len [f] . m embd ) 0 { : b _r ( ft_reload_base m__h ) } {}
     : GTape tp ( tape_new )
     : FtG fg ( ft_graph m__h tp ids r alpha seed pids )
     : ( Vec f ) aflat ( vec_new [f] )

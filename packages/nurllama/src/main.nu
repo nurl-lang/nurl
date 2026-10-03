@@ -606,7 +606,7 @@ $ `stdlib/std/term.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.17.7\n` )
+        ( nurl_print `nurllama 0.18.0\n` )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {
