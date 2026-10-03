@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## [0.7.2] — 2026-10-03
 
-Nothing is released by hand any more.
+Nothing is released by hand any more. The public API is unchanged; the
+package requires NURL 0.69.0.
 
 - `Image` is a plain value whose pixels the compiler drops; `image_free` is
   an optional early release (empty). Every `image_free` / `vec_free` /
