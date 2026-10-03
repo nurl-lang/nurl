@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A raw view of a value the function drops on the way out is returned as a
+  copy** (`^ ( string_data x )` leaked x per call; `^ ( view_of x )` was a
+  use-after-free). A view of a parameter stays the caller's own.
+  `compiler/tests/return_raw_view_of_local.nu`.
 - **`( mem_dup c )` is a fresh value to the call it is passed to**
   (`( vec_push out ( mem_dup c ) )`, c a `vec_get` payload): the push took
   it for lent and copied the copy (anomaly meta_clone_versions leaked per

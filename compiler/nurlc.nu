@@ -3037,6 +3037,17 @@
     ^ F
 }
 
+// …and which one: the first such binding's drop slot, `` when none.
+@ __call_lent_local i syms → s {
+    : ~ s ids ( nurl_sym_get syms `__last_call_lend_idents__` )
+    ~ != 0 ( nurl_str_len ids ) {
+        : s id ( str_first_word ids ) = ids ( str_skip_word ids )
+        : s up ( mem_udrop_ptr_of syms id )
+        ? & != 0 ( nurl_str_len up ) | == 0 ( nurl_sym_len2 syms up `__pname` ) ( __param_owned_slot syms up ) { ^ up } {}
+    }
+    ^ ( nurl_str_cat `` `` )
+}
+
 @ __phi_lends_params_only i syms → b {
     : ~ s ids ( nurl_sym_get syms `__last_phi_idents__` )
     : s pnames ( nurl_sym_get syms `__fn_param_names__` )
@@ -3599,6 +3610,7 @@
     ( __clo_tmp_set `` )
     ( nurl_sym_def syms `__last_closure_env__` `` )
     : ~ s val ( gen_operand lex syms cg )
+    : s __rv_ll ( nurl_llty ( nurl_get_last_type ) )
     // Whether this path hands the caller a value it owns — published when
     // this function answers per call (mem_publish_hown); `true` unless a
     // rule below says otherwise.
@@ -3619,14 +3631,39 @@
             = ret_call_copied T
         } {}
     } {}
-    // `^ ( string_data x )`: a raw view of an auto-dropped local outlives
-    // it — x (and what it is a cursor over) is kept, not dropped. At worst
-    // a leak, never a dangling return; return the String to hand it over.
-    ? & == ret_first_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_borrow_src__` ) {
-        : s vsp ( mem_udrop_ptr_of syms ( nurl_sym_get syms `__last_borrow_src__` ) )
+    // `^ ( string_data x )`, `^ ( view_of x )`: a raw view of a value this
+    // frame drops on the way out. The caller gets its own copy of the
+    // bytes (an owned result, like a fresh string) and x goes as usual —
+    // kept instead, x leaked; dropped, the view dangled. (Inside a closure
+    // body x is the closure's capture and outlives the call: kept.)
+    ? == ret_first_tt TT_LPAREN {
+        : ~ s vsp ``
+        ? != 0 ( nurl_sym_len syms `__last_borrow_src__` ) { = vsp ( mem_udrop_ptr_of syms ( nurl_sym_get syms `__last_borrow_src__` ) ) } {
+            ? ( seq __rv_ll `i8*` ) { = vsp ( __call_lent_local syms ) } {}
+        }
         ? & != 0 ( nurl_str_len vsp ) ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) vsp ) {
-            ( mem_udrop_flag_set syms cg vsp `0` )
-            ( mem_udrop_alias_move syms cg vsp `0` )
+            ? & & & == g_bck_closure_depth 0 ( seq __rv_ll `i8*` ) == 0 ( nurl_sym_len2 syms vsp `__pname` )
+            == 0 ( nurl_sym_len2 syms vsp `__optparam` ) {
+                : s cp ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print cp ) ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)\n` )
+                = val cp
+                ( nurl_sym_def syms `__last_call_ret_owned__` `str` )
+            } {
+                ( mem_udrop_flag_set syms cg vsp `0` )
+                ( mem_udrop_alias_move syms cg vsp `0` )
+            }
+        } {}
+        // A raw view of a parameter (`^ ( string_data p )`, `^ ( view_of p
+        // )`) lends that parameter: its callers' view of their own argument
+        // (mem_fn_lent_params), so a caller returning it past its local copies.
+        ? ( seq __rv_ll `i8*` ) {
+            : ~ s __rvp ( nurl_str_cat ( nurl_sym_get syms `__last_call_lend_idents__` ) `` )
+            ? != 0 ( nurl_sym_len syms `__last_borrow_src__` ) { = __rvp ( nurl_str_cat3 __rvp ` ` ( nurl_sym_get syms `__last_borrow_src__` ) ) } {}
+            : s __rv_pn ( nurl_sym_get syms `__fn_param_names__` )
+            ~ != 0 ( nurl_str_len __rvp ) {
+                : s w ( str_first_word __rvp ) = __rvp ( str_skip_word __rvp )
+                ? ( str_contains_word __rv_pn w ) { ( __record_param_idx syms `__fn_retlend__` w ) } {}
+            }
         } {}
     } {}
     // `^ ( g … )`: this function lends whenever g does (resolved at module
