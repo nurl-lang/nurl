@@ -1,34 +1,58 @@
 # Changelog
 
-## Unreleased
+## [0.34.0] — 2026-10-03
 
-Follows the stdlib's self-releasing handles. The service lock is a one-word
-`Mutex` handle now: the module global holds that word and lends it back to
-the handlers and the source scheduler, and `anomaly serve`'s own binding
-releases the lock when the server returns (it used to reach into the
-Mutex's former `Cell`, which no longer exists). `Rng`, `Router` and a child
-process's `Output` release themselves too, so their `rng_free` /
-`router_free` / `output_free` calls are gone. The MCP wiring, which lives in
-memory kept by hand, now releases the router copy it replaces every time a
-service router is attached, not only the first time: a copy shares its
-routes, so a second `anomaly_service_router` (the tests build several) kept
-the first router's whole route table alive. Builds against the matching
-http-client, which follows the HTTP/3 client handle. No behaviour change.
+Nothing in the package is released by hand any more. Needs toolchain 0.69.0.
 
-Nothing in the package is released by hand any more. `Model` (and the
-metadata `Meta`, the forecast version's `FcModel` behind it) is a handle
-that releases itself when its last copy goes — `: Model mo ( model_open st
-name )`, not `*Model`, and no `model_free` needed (it stays as an optional
-early release, as does `scaler_free`). The other release functions are
-gone: `verdict_free`, `meta_free`, `cal_free`, `finetune_free`,
-`scan_free`, `import_report_free`, `labels_free`, `store_free`,
-`config_free`, `principal_free`, `fc_free` and the rest — their values
-release themselves. The forecast version keeps its per-feature ARIMA
-models as handles in a Vec instead of raw words, and its fit jobs as
-values; the forest-blob reader, the GPU trainer's failure flag and the
-encoded scan history no longer use hand-allocated memory. Request
-handling runs 5 % fewer instructions (the library's ingest / score / train
-path is unchanged).
+### Changed (API)
+
+- `Model`, `Meta` and `FcModel` are self-releasing handles instead of heap
+  pointers: every copy is the same state and the last copy releases it.
+  - `model_open` / `model_open_at`: `→ *Model` → `→ Model`
+    (`: Model mo ( model_open st name )`); every `model_*` function takes
+    `Model` instead of `* Model`.
+  - `model_metadata`: `→ *Meta` → `→ Meta`; `meta_new`, `meta_from_json`,
+    `meta_from_json_str`, `store_load_meta` return `Meta` / `?Meta`; every
+    `meta_*` function and `store_save_meta` / `store_commit_point` take `Meta`.
+  - `model_forecast`: `→ *FcModel` → `→ FcModel`; `fc_new`,
+    `fc_from_json_str`, `store_load_fc` return `FcModel` / `?FcModel`; every
+    `fc_*` function and `store_save_fc` take `FcModel`.
+  - `model_forecast_model`: `→ *ArimaModel` → `→ ArimaModel` (the arima
+    package's handle); `fc_replay_begin` returns `( Vec ArimaModel )` instead
+    of `( Vec i )`, and `fc_replay_step` takes it.
+  - `anom_gpu_kit`: `→ *GpuKit` → `→ GpuKit` (gpukit 0.9's handle).
+- `model_free` and `scaler_free` remain as optional early releases.
+- Removed — their values release themselves: `verdict_free`, `meta_free`,
+  `fc_free`, `fc_forecast_free`, `fc_out_free`, `fc_replay_end`, `cal_free`,
+  `finetune_free`, `whole_train_free`, `scan_free`, `scan_runs_free`,
+  `scorecache_free`, `import_report_free`, `import_parse_free`,
+  `imp_plan_free`, `imp_time_result_free`, `labels_free`, `label_free`,
+  `store_free`, `config_free`, `principal_free`, `key_issue_free`,
+  `key_parts_free`, `orgfiles_free`, `sources_free`, `wfs_pivot_free`,
+  `anom_csv_free`, `anom_vermodel_free`, `anomaly_report_free`, `ae_free`,
+  `ae_contrib_free`, `enc_free`. Delete the calls.
+- Requires the self-releasing handles of its dependencies: gpu 0.14,
+  gpukit 0.9 (`GpuKit`), cli 0.4 (`Cli`), http 0.7 (`HttpApp`), http-client
+  0.3 (`HttpClient`), oauth 0.2 (`OidcProvider`), arima 0.5 (`ArimaModel`),
+  mlp 0.3.8 and iforest 0.1.5 (`mlp_free` / `iforest_free` are no longer
+  called).
+
+### Fixed
+
+- The MCP wiring released the router copy it replaces only the first time a
+  service router was attached; a second `anomaly_service_router` kept the
+  first router's whole route table alive. It is released every time now.
+- The service lock is a one-word `Mutex` handle that `anomaly serve`'s own
+  binding releases when the server returns (it used to reach into the
+  Mutex's former `Cell`, which no longer exists).
+
+### Internal
+
+- The forecast version keeps its per-feature ARIMA models as handles in a
+  Vec and its fit jobs as values; the forest-blob reader, the GPU trainer's
+  failure flag and the encoded scan history no longer use hand-allocated
+  memory. `Rng`, `Router` and a child process's `Output` release themselves.
+  No change to scores, verdicts, the HTTP/MCP surface or the stored format.
 
 ## 0.33.4
 

@@ -1387,8 +1387,8 @@ model_ae_contrib / model_point_json / model_force_train / model_reset /
 model_delete / model_calibrate / model_finetune / model_finetune_at /
 model_train_autoencoder / model_train_forecast / model_forecast /
 model_set_schedule / model_set_margin / model_set_version_enabled /
-model_set_version_window / model_apply_meta_patch / model_metadata /
-model_free`, plus the layers beneath:
+model_set_version_window / model_apply_meta_patch / model_metadata`
+(`model_free` is an optional early release), plus the layers beneath:
 preprocessing + scaler (`prep.nu`), the per-point decision core over
 `iforest` (`model.nu`), bulk/batch scoring + training with the GPU path
 (`score.nu`), persistence (`store.nu`), batch CSV (`csvdata.nu`) and the
