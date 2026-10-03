@@ -1,16 +1,35 @@
 # Changelog
 
-## Unreleased
+## [0.10.0] — 2026-10-03
 
-**Nothing is released by hand.** The checkpoint is an `Lw` handle instead
-of a `*Lw` pointer (`lw_open` → `!Lw String`): every copy is the same
-mapping and its last owner unmaps it; `lw_close` is an optional early
-release and `lw_none` is the empty slot. A preprocessed frame is a plain
-`Frame` value (`pp_load` → `!Frame String`) and `pp_free` is gone. The
-models' value structs (`Agg`, `Dino`, `CamHead`, `ChWs`, `Dpt`, `LmBlk`,
-`LmWs`, `LmKv`) hold device buffers that release themselves, so their
-`*_free` functions are gone, as is every tail free in the CLI and the
-checks; the host scratch blocks are Vecs.
+Requires NURL 0.69.0, gpukit ^0.9, torchpt ^0.2 and ply ^0.3.
+The command line is unchanged; the library API changed incompatibly.
+
+### Changed (API)
+
+**Nothing is released by hand.**
+
+- The checkpoint is an `Lw` handle instead of a `*Lw` pointer:
+  `lw_open s → !*Lw String` → `lw_open s → !Lw String`, and every `lw_*`
+  accessor takes `Lw` by value. Every copy is the same mapping and its last
+  owner unmaps it; `lw_close` is now an optional early release (`sink Lw`)
+  and `lw_none` is the empty slot.
+- A preprocessed frame is a plain `Frame` value: `pp_load → !*Frame String`
+  → `!Frame String`; `pp_width`/`pp_height`/`pp_data` take `Frame`.
+  `pp_free` is removed.
+- Every function that took `* GpuKit` takes gpukit 0.9's `GpuKit` handle
+  (`ag_load`, `ag_forward_one`, `ch_load`, `ch_forward`, `dn_load`,
+  `dn_forward`, `dp_load`, `dp_forward`, `lm_ws_new`, `lm_kv_new`,
+  `lm_block_forward`, `lm_rope2d`/`lm_rope3d`, `lmw_upload`, `lmw_block`, …).
+- The models' value structs (`Agg`, `Dino`, `CamHead`, `ChWs`, `Dpt`,
+  `LmBlk`, `LmWs`, `LmKv`) hold device buffers that release themselves, so
+  `ag_free`, `dn_free`, `ch_free`, `ch_ws_free`, `dp_free`, `lm_blk_free`,
+  `lm_ws_free` and `lm_kv_free` are removed. Drop the calls.
+
+### Fixed
+
+- Every host scratch block (geometry, resampler, PLY emitter, CLI
+  per-frame buffers) is a Vec, so no early-return path can leak one.
 
 ## 0.9.9
 
