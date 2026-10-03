@@ -127,6 +127,8 @@ $ `api.nu`
                 ( json_obj_set o `schema` ( json_clone . d schema ) )
                 ( json_obj_set o `read_only` ( json_bool . d read_only ) )
                 ( json_obj_set o `auth` ( json_bool . d needs_auth ) )
+                : s ta ( ag_op_text_arg ( string_data . d name ) )
+                ? > ( nurl_str_len ta ) 0 { ( json_obj_set o `text_arg` ( json_str_lit ta ) ) } {}
                 : String path ( string_from `/api/` )
                 ( string_push_str path ( string_data . d name ) )
                 ( json_obj_set o `path` ( json_str_lit ( string_data path ) ) )
@@ -150,18 +152,9 @@ $ `api.nu`
     ^ r
 }
 
-// The arguments of a REST call: the JSON object in the body, else the
-// query string as flat strings (handlers accept numeric strings).
-@ __ag_http_args HttpRequest req → Json {
-    ? > ( vec_len [u] . req body ) 0 {
-        ?? ( json_parse_bytes . req body ) {
-            T j → { ? ( json_is_obj j ) { ^ j } {} }
-            F _ → {}
-        }
-        // A body that is not a JSON object: the query still counts.
-    } {}
-    : Json o ( json_obj_new )
-    : ( Vec QueryPair ) pairs ( parse_query ( string_data . req query ) )
+// `k=v&…` pairs (percent-decoded) into the object `o`.
+@ __ag_put_pairs Json o s qs → v {
+    : ( Vec QueryPair ) pairs ( parse_query qs )
     : i n ( vec_len [QueryPair] pairs )
     : ~ i i 0
     ~ < i n {
@@ -171,6 +164,48 @@ $ `api.nu`
         }
         = i + i 1
     }
+}
+
+// The arguments of a REST call for `op`, from the body by its kind:
+//   text/plain       the body IS the op's free-text argument (post's
+//                    `body`, task_done's `result` — ag_op_text_arg),
+//                    the rest from the query string: no JSON quoting
+//                    for a shell (`curl --data-binary @- -H
+//                    'Content-Type: text/plain' '…/api/post?channel=x'`)
+//   a JSON object    the arguments, as they are (whatever the type
+//                    says: `curl -d '{…}'` sends it as a form)
+//   a form           `k=v&…` pairs (`curl --data-urlencode body@file`),
+//                    plus the query string
+//   nothing / else   the query string as flat strings (handlers accept
+//                    numeric strings)
+@ __ag_http_args HttpRequest req s op → Json {
+    : b has_body > ( vec_len [u] . req body ) 0
+    : ~ b is_text F
+    : ~ b is_form F
+    ?? ( header_get . req headers `Content-Type` ) {
+        T ct → {
+            : String low ( string_to_lower ct )
+            = is_text ( string_starts_with low `text/plain` )
+            = is_form ( string_starts_with low `application/x-www-form-urlencoded` )
+        }
+        F _ → {}
+    }
+    ? & has_body ! is_text {
+        ?? ( json_parse_bytes . req body ) {
+            T j → { ? ( json_is_obj j ) { ^ j } {} }
+            F _ → {}
+        }
+    } {}
+    : Json o ( json_obj_new )
+    ( __ag_put_pairs o ( string_data . req query ) )
+    ? has_body {
+        : String text ( string_from_bytes ( vec_data [u] . req body ) ( vec_len [u] . req body ) )
+        ? is_form { ( __ag_put_pairs o ( string_data text ) ) } {}
+        ? is_text {
+            : s field ( ag_op_text_arg op )
+            ? > ( nurl_str_len field ) 0 { ( json_obj_set o field ( json_str_lit ( string_data text ) ) ) } {}
+        } {}
+    } {}
     ^ o
 }
 
@@ -180,7 +215,7 @@ $ `api.nu`
     ?? ( params_get p `op` ) { T v → { = op v } F _ → {} }
     : i now ( now_seconds )
     : AgCaller caller ( __ag_http_caller req now )
-    : Json args ( __ag_http_args req )
+    : Json args ( __ag_http_args req ( string_data op ) )
     : AgRes res ( ag_op_call ( ag_store ) caller ( string_data op ) args now )
     : HttpResponse r ( response_json . res status . res body )
     ? == . res status 401 {

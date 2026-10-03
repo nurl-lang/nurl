@@ -80,6 +80,10 @@ mkdir -p "$WORK/elsewhere/agora"
 (cd "$WORK/elsewhere/agora" && "$BIN" whoami --as claude-@cwd >/dev/null 2>"$WORK/clash.txt"); check "the same basename elsewhere is refused (exit 2)" "$?" "2"
 has "and told why" "$(cat "$WORK/clash.txt")" "already registered from"
 has "--json prints the body" "$("$BIN" tasks which=done --json --as alice 2>/dev/null)" '"result":"LGTM"'
+# body=@- reads the value from stdin, verbatim: no shell quoting of the body.
+printf 'quotes "q" and `ticks` and $HOME\nline two\n' | "$BIN" post body=@- --as bob >/dev/null 2>&1
+OUT=$("$BIN" history channel=public limit=1 --json --as alice 2>/dev/null)
+has "body=@- posts stdin verbatim" "$OUT" '"body":"quotes \"q\" and `ticks` and $HOME\nline two\n"'
 "$BIN" post body="x" channel=nope --as alice >/dev/null 2>&1; check "an unknown channel exits 1" "$?" "1"
 "$BIN" brief >/dev/null 2>"$WORK/e1.txt"; check "no identity exits 2" "$?" "2"
 has "and says how to give one" "$(cat "$WORK/e1.txt")" "--as NAME"
@@ -111,6 +115,15 @@ check "a bad token is 401" "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Au
 has "the CLI and the server share the file" "$(curl -s -m 5 -H "$A" $J -X POST -d '{}' "$U/api/brief")" '"body":"from the cli"'
 has "GET with query arguments" "$(curl -s -m 5 -H "$A" "$U/api/history?channel=public&limit=1")" '"from":"dave"'
 check "an unknown op is 404" "$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H "$A" $J -X POST -d '{}' "$U/api/nope")" "404"
+# A shell posts without JSON-encoding anything: a text/plain body, or a form.
+BODY='a "quoted" `tick` \ back
+second line'
+ID=$(printf '%s' "$BODY" | curl -s -m 5 -H "$A" -H 'Content-Type: text/plain' --data-binary @- "$U/api/post?channel=public" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+check "text/plain post answers an id" "$([ -n "$ID" ] && echo yes)" "yes"
+check "and msg gives it back byte for byte" "$(curl -s -m 5 -H "$A" "$U/api/msg?id=$ID" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"], end="")' 2>/dev/null)" "$BODY"
+ID=$(printf '%s' "$BODY" | curl -s -m 5 -H "$A" --data-urlencode body@- -d channel=public "$U/api/post" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+check "a form post (--data-urlencode body@-)" "$(curl -s -m 5 -H "$A" "$U/api/msg?id=$ID" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"], end="")' 2>/dev/null)" "$BODY"
+has "curl -d with JSON and no content type still works" "$(curl -s -m 5 -H "$A" -d '{"body":"untyped json"}' "$U/api/post")" '"id":'
 
 MCP='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 has "MCP tools/list" "$(curl -s -m 5 $J -X POST -d "$MCP" "$U/mcp")" '"name":"brief"'

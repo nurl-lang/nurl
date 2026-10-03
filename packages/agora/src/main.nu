@@ -12,7 +12,9 @@
 //                                      run one operation locally and
 //                                      print its text — e.g.
 //                                      `agora brief --as alice`,
-//                                      `agora post body="hello" --as bob`
+//                                      `agora post body="hello" --as bob`,
+//                                      `agora post body=@- --as bob < msg.txt`
+//                                      (`@-` = the value is stdin)
 //
 // Every form works on the same SQLite file (--db, $AGORA_DB, default
 // ~/.agora/agora.db), so a server, several stdio agents and a shell
@@ -193,7 +195,10 @@ $ `service.nu`
         ?? ( string_index_of kv `=` ) {
             T eq → {
                 : String k ( string_substr kv 0 eq )
-                : String v ( string_substr kv + eq 1 - ( string_len kv ) + eq 1 )
+                : ~ String v ( string_substr kv + eq 1 - ( string_len kv ) + eq 1 )
+                // `key=@-`: the value is stdin, as it is — a body with
+                // quotes, backticks and newlines needs no escaping.
+                ? != 0 ( nurl_str_eq ( string_data v ) `@-` ) { = v ( read_all_stdin ) } {}
                 ( json_obj_set args ( string_data k ) ( json_str_lit ( string_data v ) ) )
             }
             F _ → {
