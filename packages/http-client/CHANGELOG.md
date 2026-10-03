@@ -1,21 +1,30 @@
 # Changelog
 
-## Unreleased
+## [0.3.0] — 2026-10-03
 
-Follows the stdlib's HTTP/3 client handle: `h3_client_connect` now returns an
-`H3Client` value (a handle that releases itself when its last owner goes)
-instead of a `*H3Client`. An origin holds the handle while its QUIC connection
-is pooled; a QUIC attempt that does not complete is released with its binding
-instead of by an explicit free. No change to the facade's API.
+### Changed (breaking)
 
-`HttpClient` releases itself: `http_client_new` returns an `HttpClient`
-handle (its state in an rcbox) instead of a `*HttpClient` the caller had to
-free. Every copy of the handle is the same client; its last owner closes the
-pooled connections and releases the pool, the cookie jar and the rest.
-`http_client_free` stays as an optional early release. The origin records
-are handles too — each one's drop closes the h2 / h1 connection it holds and
-says goodbye to its QUIC connection — so nothing in the package frees by hand
-any more. Callers change `*HttpClient` to `HttpClient`.
+- `HttpClient` releases itself: `( http_client_new )` returns an `HttpClient`
+  handle instead of a `*HttpClient` the caller had to free
+  (`: *HttpClient c ( http_client_new )` → `: HttpClient c ( http_client_new )`).
+  Every function that took `* HttpClient` (`http_client_get` / `_post` /
+  `_request` / `_set_*` / `_jar` / `_last_proto` / …) takes `HttpClient`.
+  Every copy of the handle is the same client; its last owner closes the
+  pooled connections and releases the pool, the cookie jar and the rest.
+  `http_client_free` stays as an optional early release.
+- A returned `HttpResponse` is dropped with its binding — the examples no
+  longer call `http_response_free`.
+
+### Changed
+
+- Follows the stdlib's HTTP/3 client handle: an origin holds its QUIC
+  connection as an `H3Client` handle while it is pooled, and a QUIC attempt
+  that does not complete is released with its binding. The per-origin
+  records are handles too — each one's drop closes the h2 / h1 connection
+  it holds and says goodbye to its QUIC connection — so nothing in the
+  package frees by hand any more.
+
+Requires NURL 0.69.0.
 
 ## 0.2.1
 
