@@ -1,40 +1,49 @@
 # Changelog
 
-## Unreleased
+## [2.0.0] — 2026-10-03
 
-Follows the stdlib's one-word `Mutex` handle: the lock over the model
-lease (the loaded model, the in-flight count, the idle clock) lives in
-one block the server allocates once and keeps for the process (the
-`--unload-after` reaper outlives any one scope), reached through a
-single module global, instead of two globals holding the words of the
-mutex's former `Cell`. Behaviour is unchanged.
+Nothing is released by hand any more. The command line, the HTTP API and
+the WebSocket stream are unchanged; the library API is not, hence 2.0.
 
-Nothing is released by hand any more:
+### Changed (library API)
 
 - **`Whisper` and `Gg` are handles.** `wh_open` / `wh_open_ggml` return
-  `!Whisper String` and `gg_open` returns `!Gg String` (was `*Whisper` /
-  `*Gg`); every copy is the same model, and the last owner gives back the
-  device buffers, the kernels, the CUDA context and the weight file (a ggml
-  mapping is unmapped by its last owner). `wh_close` / `gg_close` remain as
-  optional early releases; `wk_free` is gone (`WhKernels` drops its own
-  kernels). Code that read fields reads them through `wh_gpu`,
-  `wh_n_mels`, `wh_d_model`, `wh_n_ctx_enc`, `wh_n_enc_layer`,
-  `wh_n_dec_layer` and `wh_gg`; `gg_none` / `gg_is_open` name the absent
-  container.
+  `!Whisper String` and `gg_open` returns `!Gg String` (was `!*Whisper
+  String` / `!*Gg String`); every copy is the same model, and the last
+  owner gives back the device buffers, the kernels, the CUDA context and
+  the weight file (a ggml mapping is unmapped by its last owner).
+  `wh_close` / `gg_close` remain as optional early releases. Every
+  function that took `* Whisper` / `* Gg` / `* Tok` takes the handle
+  (`Whisper`, `Gg`, `Tok`); `gg_build_tok` returns `!Tok String`.
+- Fields are read through accessors: `wh_gpu`, `wh_n_mels`, `wh_d_model`,
+  `wh_n_ctx_enc`, `wh_n_enc_layer`, `wh_n_dec_layer` and `wh_gg` (was
+  `. w n_mels` & co.); `gg_none` / `gg_is_open` name the absent container.
+- `wk_free` is removed: `WhKernels` drops its own kernels.
+- `wh_run` takes its samples (`sink ( Vec f ) at16_in`): under `--vad` the
+  full recording is dropped the moment the condensed one exists.
+- New `wh_wav16 sink Wav → ( Vec f )` turns a `Wav` into the 16 kHz mono
+  samples and drops the WAV and its mono mix on the way, so the CLI and the
+  server do not hold a long recording three times over while the model
+  runs (peak RSS on a 132 s clip: unchanged against 1.2.0, where
+  hand-written frees did it).
+- Needs toolchain 0.69.0 and the handle APIs of its dependencies: gpu 0.14
+  (`GpuHost`, `gpu_kernel_none`), http 0.7 (`HttpApp`), tokenizer 0.4 (`Tok`),
+  safetensor 0.4 (`St`) and audio 0.8 (`VadStream`).
+
+### Fixed / internal
+
 - The package's own code and tests no longer call `string_free`,
   `vec_free`, `json_free`, `args_free`, `tok_free`, `wav_free` & co. (282 →
   7 release calls in `src/`, 12 → 0 in `tests/`); what is left is the
   page-locked staging pair given back once a load is done and the server's
   process-global config strings.
-- `wh_run` takes its samples (`sink`): under `--vad` the full recording is
-  dropped the moment the condensed one exists, as it was freed by hand
-  before. New `wh_wav16` turns a `Wav` into the 16 kHz samples and drops
-  the WAV and its mono mix on the way, so the CLI and the server do not
-  hold a long recording three times over while the model runs (peak RSS
-  on a 132 s clip: unchanged against 1.2.0, where the hand-written frees
-  did it; +33 MB with them merely deleted).
-- The served model is owned by the server (`g_srv_w`); the reaper's unload
-  and the shutdown drop it rather than closing a borrowed pointer.
+- The served model is owned by the server; the `--unload-after` reaper's
+  unload and the shutdown drop it rather than closing a borrowed pointer.
+- The lock over the model lease (the loaded model, the in-flight count,
+  the idle clock) follows the stdlib's one-word `Mutex` handle: one block
+  the server allocates once and keeps for the process, instead of two
+  globals holding the words of the mutex's former `Cell`. Behaviour is
+  unchanged.
 
 ## 1.2.0
 
