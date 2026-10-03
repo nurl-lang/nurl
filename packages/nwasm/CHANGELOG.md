@@ -1,33 +1,51 @@
 # Changelog
 
-## Unreleased
+## [2.0.0] — 2026-10-03
 
 Nothing is released by hand any more: `Module` and `Interp` free themselves.
+The `nwasm` CLI (`nwasm run …`, its flags, output and exit codes) is
+unchanged; the major version is for the embedding library API below.
+
+### Changed (breaking)
 
 - `module_decode` returns a `Module` and `interp_new` an `Interp` — library
   handles over an rcbox (NURL's `stdlib/core/rcbox.nu`) instead of `*Module` /
-  `*Interp` pointers. Every copy (a struct field, a `Vec` element,
-  `Module_share` / `Interp_share`) is the same module or instance, and the
-  last owner releases it: the section records, the linear memory and its
-  guard reservation, predecoded and JIT-compiled bodies, open guest sockets,
-  and the instance's threads (joined first). `module_free` / `interp_free` are
-  optional early releases.
-- An `Interp` holds a share of its `Module`, so the module can no longer be
-  released under a live instance.
+  `*Interp` pointers (`: *Module m ( module_decode b )` →
+  `: Module m ( module_decode b )`). Every function that took the pointer
+  (`interp_*`, `exec_func`, `module_export_func`, `module_export_global`,
+  `module_func_name`, `module_func_type`) takes the handle. Every copy (a
+  struct field, a `Vec` element, `Module_share` / `Interp_share`) is the same
+  module or instance, and the last owner releases it: the section records,
+  the linear memory and its guard reservation, predecoded and JIT-compiled
+  bodies, open guest sockets, and the instance's threads (joined first).
+  `module_free` / `interp_free` are optional early releases.
+- Fields are no longer reachable through the handle; read them through the
+  new accessors `module_ok`, `module_err`, `module_num_import_funcs`,
+  `interp_stack` (push an invoked export's arguments, read its results),
+  `interp_trapmsg`, `interp_exit_code`, `interp_set_fuel`.
 - `module_decode` takes its byte vector as a `sink` (it always kept it as the
   module image; now the signature says so).
-- Fields are read through accessors: `module_ok`, `module_err`,
-  `module_num_import_funcs`, `interp_stack` (push an invoked export's
-  arguments, read its results), `interp_trapmsg`, `interp_exit_code`,
-  `interp_set_fuel`.
-- The byte cursor `Wc` is a plain value (`: ~ Wc c ( wc_new bytes )`, passed
-  `inout`) instead of a heap block; `wc_free` has nothing left to do.
+- The byte cursor `Wc` is a plain value (`: ~ Wc c ( wc_new bytes )`, and the
+  `wc_*` readers take it `inout`) instead of a `*Wc` heap block; `wc_free`
+  has nothing left to do.
+- `interp_thread_new` is removed from the public API (wasi-threads spawn their
+  instance internally).
+
+### Fixed
+
+- An `Interp` holds a share of its `Module`, so the module can no longer be
+  released under a live instance.
 - A spawned wasi-thread's instance starts zeroed (its memory base selector and
   JIT state were read uninitialised), and its start closure is no longer kept
   in a hand-freed holder — the runtime runs the thread on its own copy.
 
-Instruction counts (`perf stat -e instructions:u`, JIT and interpreter, the
-bench corpus plus nurlc.wasm compiling json_parse.nu) are unchanged to −0.1 %.
+### Performance
+
+- Instruction counts (`perf stat -e instructions:u`, JIT and interpreter, the
+  bench corpus plus nurlc.wasm compiling json_parse.nu) are unchanged to
+  −0.1 %.
+
+Requires NURL 0.69.0.
 
 ## 1.0.11
 
