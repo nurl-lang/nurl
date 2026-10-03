@@ -6,7 +6,8 @@
 #  YOLOE with no server round-trip.
 #
 #  Pipeline:
-#    1. gen_static_kernels.nu → kernels_static.c  (24 onnx kernels)
+#    1. gen_static_kernels.nu → kernels_static.c  (every kernel the
+#       onnx executor can launch, from its kernel census)
 #    2. zig cc --target=wasm32-wasi → kernels_static.wasm.o
 #    3. wasmbuilder src/wasm_detect.nu + the kernel object → .wasm
 #

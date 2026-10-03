@@ -289,16 +289,31 @@ $ `toolchain.nu`
     // path below reaches for binaryen's --strip-dwarf for its own reason
     // (wasm-opt aborts on these tables), which is the same removal one
     // tool later and does not cover the default build.
-    ? . opts debug {} { ( vec_push [s] args `-Wl,--strip-debug` ) }
-    ? > ( nurl_str_len . opts extra_cflags ) 0 {
-        // split the space-separated flag string into separate argv slots
-        : ( Vec String ) fl ( string_split_borrow . opts extra_cflags )
-        : ~ i fk 0
-        ~ < fk ( vec_len [String] fl ) {
-            ?? ( vec_get [String] fl fk ) { T x → { ( vec_push [s] args ( string_data x ) ) } F _ → {} }
-            = fk + fk 1
-        }
-    } {}
+    //
+    // Not when the asyncify step follows: wasm-ld's strip takes the
+    // `target_features` section with it, and that section is how
+    // wasm-opt learns which features the module uses — without it
+    // binaryen validates against the MVP and rejects every SIMD or
+    // bulk-memory instruction ("SIMD operation (SIMD is disabled)").
+    // That step strips the debug info itself, and the features section
+    // after it has done its job.
+    : b __asy_custom > ( nurl_str_len . opts asyncify_imports ) 0
+    : b will_asyncify & . opts asyncify | uses_canvas __asy_custom
+    ? | . opts debug will_asyncify {} { ( vec_push [s] args `-Wl,--strip-debug` ) }
+    // The space-separated flag and object strings are split into separate
+    // argv slots. `args` holds BORROWED views (string_data) of the split
+    // words, so their owners `fl` / `obs` live at function scope, until
+    // after process_run. Declared inside the `?` branches that filled `args`, they were
+    // auto-dropped at the end of the branch and the link argv carried
+    // freed strings ("error: <garbage>: unrecognized file extension").
+    // Splitting "" yields no words.
+    : ( Vec String ) fl ( string_split_borrow . opts extra_cflags )
+    : ( Vec String ) obs ( string_split_borrow . opts extra_obj )
+    : ~ i fk 0
+    ~ < fk ( vec_len [String] fl ) {
+        ?? ( vec_get [String] fl fk ) { T x → { ( vec_push [s] args ( string_data x ) ) } F _ → {} }
+        = fk + fk 1
+    }
     ( vec_push [s] args ( string_data ll_path ) )
     ( vec_push [s] args ( string_data runtime_o ) )
     ? uses_canvas { ( vec_push [s] args ( string_data canvas_o ) ) } {}
@@ -306,14 +321,11 @@ $ `toolchain.nu`
     // extra_obj is space-separated: split so several objects can link
     // (e.g. kernels_static.wasm.o + wgpu_asyncify.wasm.o for a module
     // that supports both the static-CPU and WebGPU backends).
-    ? > ( nurl_str_len . opts extra_obj ) 0 {
-        : ( Vec String ) obs ( string_split_borrow . opts extra_obj )
-        : ~ i ok 0
-        ~ < ok ( vec_len [String] obs ) {
-            ?? ( vec_get [String] obs ok ) { T x → { ( vec_push [s] args ( string_data x ) ) } F _ → {} }
-            = ok + ok 1
-        }
-    } {}
+    : ~ i ok 0
+    ~ < ok ( vec_len [String] obs ) {
+        ?? ( vec_get [String] obs ok ) { T x → { ( vec_push [s] args ( string_data x ) ) } F _ → {} }
+        = ok + ok 1
+    }
     ( vec_push [s] args `-o` )
     ( vec_push [s] args out_wasm )
     ( vec_push [s] args `-lm` )
@@ -340,8 +352,7 @@ $ `toolchain.nu`
     //    to canvas.sleep, matching the playground pipeline; any module
     //    can name its own async imports via opts.asyncify_imports (e.g.
     //    env.wgpu_download for the WebGPU backend).
-    : b __asy_custom > ( nurl_str_len . opts asyncify_imports ) 0
-    ? & . opts asyncify | uses_canvas __asy_custom {
+    ? will_asyncify {
         ( __wb_say . opts quiet `wasmbuilder: wasm-opt --asyncify` )
         : String tmp_out ( string_from out_wasm )
         ( string_push_str tmp_out `.async` )
@@ -351,10 +362,13 @@ $ `toolchain.nu`
         // strip DWARF first: wasm-opt's asyncify pass aborts on the debug
         // line-table extensions wasi-sdk/zig objects carry
         // (`Fatal: TODO: DW_LNE_define_file`).
-        ( vec_push [s] oargs `--strip-dwarf` )
+        // Without --debug the link kept the debug info for this step
+        // (see the link flags), so all of it goes here.
+        ( vec_push [s] oargs ? . opts debug `--strip-dwarf` `--strip-debug` )
         ( vec_push [s] oargs `--asyncify` )
         ( vec_push [s] oargs parg )
         ( vec_push [s] oargs `-O2` )
+        ( vec_push [s] oargs `--strip-target-features` )
         ( vec_push [s] oargs out_wasm )
         ( vec_push [s] oargs `-o` )
         ( vec_push [s] oargs ( string_data tmp_out ) )

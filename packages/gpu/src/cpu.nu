@@ -22,13 +22,17 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/ext/env.nu`
 
-& `c` @ dlopen s path i flags → *u
+// The C ABI's `int`s are i32: on x86-64 an i64 in their place happens to
+// work, but a wasm32 module that declares dlopen(…, i64) is INVALID — the
+// call's operand type must match wasi-libc's signature, so every wasm
+// build that linked this file failed to compile in the browser.
+& `c` @ dlopen s path i32 flags → *u
 
 & `c` @ dlsym *u handle s name → *u
 
-& `c` @ dlclose *u handle → i
+& `c` @ dlclose *u handle → i32
 
-& `c` @ system s cmd → i
+& `c` @ system s cmd → i32
 
 & `c` @ nurl_peek_i32 *u base i idx → i32
 
@@ -356,7 +360,7 @@ static void __nurl_ensure(int n) {
         ( string_push_char cmd 32 )
         ( string_push_str cmd ( string_data cpath ) )
         ( string_push_str cmd ` 2>/tmp/nurlcpu_cc.log` )
-        = rc ( system ( string_data cmd ) )
+        = rc # i ( system ( string_data cmd ) )
         ( string_free cmd )
         = cand + cand 1
     }
@@ -464,9 +468,16 @@ static inline float __fdiv_rn(float a, float b) { return a / b; }
 }
 
 // The registry: a name→launcher table + the strong nurl_static_kernel.
+// The table always carries one extra row, CPU_STATIC_SENTINEL, bound to a
+// no-op: gpu_open probes for it to tell "a static set is linked" from the
+// runtime's weak NULL stub without naming any real kernel — kernel names
+// belong to whatever library generated the set and change with it.
+: s CPU_STATIC_SENTINEL `__nurl_static_set`
+
 @ cpu_static_registry ( Vec String ) entries → String {
     : String out ( string_with_cap 2048 )
-    ( string_push_str out `\ntypedef struct { const char* name; void (*fn)(long long*, long long, long long); } __NurlStaticK;\nstatic const __NurlStaticK __nurl_static_tab[] = {\n` )
+    ( string_push_str out `\nstatic void __nurl_sl___nurl_static_set(long long* p, long long grid, long long block){(void)p;(void)grid;(void)block;}\n` )
+    ( string_push_str out `\ntypedef struct { const char* name; void (*fn)(long long*, long long, long long); } __NurlStaticK;\nstatic const __NurlStaticK __nurl_static_tab[] = {\n  { "__nurl_static_set", __nurl_sl___nurl_static_set },\n` )
     : i n ( vec_len [String] entries )
     : ~ i k 0
     ~ < k n {

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+**The static backend's probe no longer names a kernel.** `gpu_open` under
+`NURL_GPU=static` checked for a kernel called `gemm` to tell a linked
+`kernels_static.c` from runtime_core.c's weak stub — a name that belonged
+to the onnx package's old kernel set, so a current set (gpukit's
+`gk32_gemm_tiled`, …) read as "no static kernels linked". `cpu_static_registry`
+now always emits a no-op row `CPU_STATIC_SENTINEL` (`__nurl_static_set`) and
+that is what is probed. New `gpu_none` (a device that is not there, opening
+nothing).
+
+The CPU backend's C imports use the C ABI's `int`: `dlopen(…, i32 flags)`,
+`dlclose → i32`, `system → i32`. An `i` (i64) in their place happens to work
+on x86-64, but in a wasm32 module the call's operand type must match
+wasi-libc's signature — every wasm build that linked this file (yoloe-demo's
+in-browser engine) failed validation ("call[1] expected type i32").
+
 **Nothing is released by hand.** Every handle is a small value struct
 whose raw fields still read for free (`. b dptr`, `. b bytes`, `. k func`,
 `. g dev`) and whose new `own` field holds the resource behind it:

@@ -259,6 +259,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_sync GpuKit kit__h → b {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? . kit census { ^ T } {}
     ^ == ( gpu_sync . kit gpu ) 0
 }
 
@@ -400,6 +401,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ? . kit ok {} { ^ F }
     : i slot ( _gk_kernel_slot kit src name )
     ? >= slot 0 {} { ^ F }
+    ? . kit census { ^ T } {}
     ? g_gk_prof { ( gpu_timer_mark . kit gpu . kit ev0 ) } {}
     ? == ( _gk_slot_launch kit slot grid block args ) 0 {} { ^ F }
     ? g_gk_prof {

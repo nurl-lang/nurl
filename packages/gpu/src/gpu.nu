@@ -264,7 +264,7 @@ $ `cpu.nu`
         ^ ( __gpu_noctx ordinal - 0 4 1 )
     } {}
     ? ( __force_static ) {
-        ? == # i ( nurl_static_kernel `gemm` ) 0 {
+        ? == # i ( nurl_static_kernel CPU_STATIC_SENTINEL ) 0 {
             ( nurl_eprint `[gpu/static] no static kernels linked into this binary (kernels_static.c missing)\n` )
             ^ ( __gpu_noctx ordinal - 0 3 0 )
         } {}
@@ -287,6 +287,10 @@ $ `cpu.nu`
 }
 
 @ gpu_ok Gpu g → b { ^ != . g ctx 0 }
+
+// A device that is not there (gpu_ok F) — opens nothing, probes no driver.
+// For a holder that must carry a Gpu but never launches on it.
+@ gpu_none → Gpu { ^ ( __gpu_noctx 0 - 0 1 0 ) }
 
 // Human-readable device name (e.g. "NVIDIA GeForce RTX 4090", or "CPU").
 // Borrowed: valid while `g` (or anything made through it) is alive.
