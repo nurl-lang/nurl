@@ -1,14 +1,23 @@
 # hub changelog
 
-## Unreleased
+## [0.2.0] — 2026-10-03
 
-Nothing is released by hand any more. `HubRef` and `HubFile` are plain
-values whose Strings the compiler drops, so `hub_ref_free` and
-`hub_file_free` are gone (nothing outside the package called them), and
-every `string_free` / `vec_free_with` / `json_free` / `args_free` in the
-library, the CLI and the tests is removed (234 calls). Same output from
-every CLI command; instructions:u for `verify` / `ls` / `dir` on a cached
-repository within ±0.01 %.
+Nothing is released by hand any more.
+
+### Removed
+
+- `hub_ref_free` and `hub_file_free`: `HubRef` and `HubFile` are plain values
+  whose Strings the compiler drops with their binding — delete the calls
+  (nothing outside the package called them).
+
+### Changed
+
+- Every `string_free` / `vec_free_with` / `json_free` / `args_free` in the
+  library, the CLI and the tests is removed (234 calls). Same output from
+  every CLI command; instructions:u for `verify` / `ls` / `dir` on a cached
+  repository within ±0.01 %.
+
+Requires NURL 0.69.0.
 
 ## 0.1.4
 

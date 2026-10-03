@@ -63,7 +63,7 @@ $ `src/hub.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `hub 0.1.4\n` )
+        ( nurl_print `hub 0.2.0\n` )
         ^ 0
     } {}
 
