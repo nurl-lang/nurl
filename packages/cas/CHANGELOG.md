@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.1.3] — 2026-10-03
+
+Requires NURL 0.69.0.
 
 Nothing is released by hand any more. `Cas` and `CasManifest` are plain
 values whose Strings and Vecs the compiler drops; `cas_free` and

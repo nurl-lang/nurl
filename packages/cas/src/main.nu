@@ -63,7 +63,7 @@ $ `manifest.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `cas 0.1.2\n` )
+        ( nurl_print `cas 0.1.3\n` )
         ^ 0
     } {}
 
