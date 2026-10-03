@@ -125,6 +125,10 @@
 // libc string primitives (NUL-terminated).
 & `c` @ strlen s text → i
 
+// Length of `text`, measuring at most `maxlen` bytes: a clamp that only
+// needs to know whether the string reaches some length stops there.
+& `c` @ strnlen s text i maxlen → i
+
 & `c` @ strcmp s a s b → i32
 
 & `c` @ strncmp s a s b i n → i32

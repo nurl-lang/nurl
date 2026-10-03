@@ -4,6 +4,6 @@ compiler/tests/borrow_strict_handle_second_name_more.nu:46: error: 'a' may alrea
     ( vec_free [i] a )
 compiler/tests/borrow_strict_handle_second_name_more.nu:54: error: 'a' is consumed here, but its value was stored into an owner at line 52 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'a' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup a ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
     ( vec_free [i] a )
-compiler/tests/borrow_strict_handle_second_name_more.nu:62: error: 'a' may already be freed here — a closure that captured it frees it at line 61; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+compiler/tests/borrow_strict_handle_second_name_more.nu:62: error: use of possibly-moved value 'a' — the closure 'f' frees it when it runs, and it was used at line 61; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
     ( vec_free [i] a )
 error: compilation aborted — 3 borrow-checker violations (re-run with --no-borrowck to bypass)

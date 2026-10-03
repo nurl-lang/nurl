@@ -8,7 +8,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Using a value freed on only some paths is an error by default** — a
+  read as much as a second free (docs/MEMORY.md §2.1). `? c { ( string_free
+  x ) } {}` followed by `( string_len x )` or `( string_free x )` compiled
+  clean and was a use-after-free / double free whenever `c` held; the
+  second free was reported only under `--strict-borrowck`, the read never.
+  The walk follows the paths that are real: a `break` / `continue` ends
+  its path (its state goes to the loop exit / next iteration), a binding
+  declared in a loop body or a block is gone after it, a closure frees
+  what it captured when it RUNS (not when it is made), and a handle
+  handed to a second name on some path stays readable (its second consume
+  is still the strict-mode check). Measured against every first-party
+  program (compiler, stdlib, tests, examples, packages): one stdlib
+  function rewritten (`env_cwd`, below) and two real double frees in
+  `compiler/tests/ws_permessage_deflate.nu` fixed; nothing else moved.
+  `borrow_strict_maybe_double_free` / `…_generic_…` are default-mode
+  tests now (`borrow_maybe_double_free`, `borrow_generic_maybe_double_free`).
+
+### Performance
+
+- **`nurl_str_slice` measures a string only as far as the slice.** The
+  clamp asked `strlen` for the whole string on every call; it asks
+  `strnlen(str, start + n)` now, which decides the same clamp. Cutting a
+  2 MB buffer into 200k lines by offset went from 6.4 s to 2.4 s; a slice
+  near the front of a long string costs the slice. (`strnlen` joins the
+  pre-registered libc surface.)
+- **The compiler's symbol tables answer a value's length from the length
+  they cache.** `nurl_sym_len` / `_len2` and the in-place appends ran
+  `strlen` over the value, and the borrow checker asks that of its
+  statement accumulator once per recorded statement — quadratic in a
+  function's size; splitting the accumulator into rows sliced from the
+  text's start, quadratic again. A self-compile executes 3.8% fewer
+  instructions (12.97 → 12.47 billion; `strlen` 1.25 → 0.77 billion), and
+  182 temporaries the compiler leaked per self-compile — the origin
+  analysis read the old clamp's `strlen` result as address-carrying — are
+  freed.
+- **A free inside a `recover` extent re-checks the panic journal's tail
+  only when it removed an entry.** Most frees there are of buffers the
+  journal never held; the tail check ran for each.
+
 ### Fixed
+
+- **`( dyn Trait v )` no longer frees `v` twice.** The `%dyn` object owns
+  its box and drops the boxed value through the vtable, but boxing copied
+  the bytes and left `v`'s own drop in place: every `( dyn Speaker d )` of
+  a `d` owning a String was a heap-use-after-free at scope exit. Boxing is
+  a store now — an owned local moves in (a later use is a use-after-move),
+  a parameter or a field read is copied.
+- **A struct with a `%Trait` field is dropped.** It got no drop at all, so
+  the box, the boxed value and every sibling field leaked (docs listed it
+  as a limitation); it gets the field-by-field drop any struct holding a
+  Drop value gets.
+- **A `%dyn` built right in a call's argument is dropped as a whole.**
+  Only the box was freed after the call, leaking what the boxed value
+  owned — and a call inside the operand (`( f ( dyn T ( make ) ) )`) lost
+  the marker, so not even the box was.
+- **What a `??` arm does to an outer binding reaches the code after the
+  match.** The arms were walked in isolation with their exit discarded,
+  so `?? x { T v → ( string_free s ) F → ( string_free s ) }` followed by
+  `( string_free s )` compiled clean and freed `s` twice. Arms now start
+  from the match's state with their payload names bound for the arm only.
+- **Reading an option after taking its payload apart is rejected.**
+  Freeing a field of a match payload (`?? o { T t → ( string_free . t name
+  ) }`) empties it in `o`; reading `o` afterwards read an emptied handle
+  (SEGV). It is a use of a moved value now.
+- **`env_cwd` manages no memory by hand.** Its retry loop freed a raw
+  buffer on one branch and reused it on another; each attempt's buffer is
+  a `( Vec u )` the scope drops.
 
 - **`nurlpkg publish` names a registry rate limit and shows the HTTP status
   of any other rejection.** A 429 (the registry's per-account publish cap)

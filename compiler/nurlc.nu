@@ -1244,6 +1244,7 @@
 // Disabled by default because the extensions have a meaningful
 // false-positive rate against existing stdlib code.
 : ~ i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
+: ~ i g_maybe_moved 1  // 0 with --no-maybe-moved: reading or consuming a maybe-moved binding is an error
 // strict-arity: the n-ary `&`/`|` arity trap is an ERROR by default.
 // The trap is the language's one documented foot-gun and, as a warning,
 // it produced `status: ok` plus a binary whose conditional logic is
@@ -7350,14 +7351,21 @@
     ^ r
 }
 
+// The clamp needs the length only as far as start+n (stdlib/core/string.nu
+// has the same body): strnlen, not strlen, so a slice near the front of a
+// long string costs the slice.
+& `c` @ strnlen s text i maxlen → i
+
 @ nurl_str_slice s str i start i n → s {
-    : i slen ( strlen str )
     : ~ i st start
     : ~ i k n
     ? < st 0 { = st 0 } {}
-    ? > st slen { = st slen } {}
     ? < k 0 { = k 0 } {}
-    ? > + st k slen { = k - slen st } {}
+    : i room - 9223372036854775807 st
+    : i want ? > k room 9223372036854775807 + st k
+    : i slen ( strnlen str want )
+    ? > st slen { = st slen } {}
+    ? > k - slen st { = k - slen st } {}
     : s r # s ( nurl_alloc + k 1 )
     : *u sp # *u str
     : *u sat # *u + # i sp st
@@ -7707,10 +7715,14 @@
     = . depths count ( nurl_peek t 1 )
     : *i hashes # *i # s ( nurl_peek t 12 )
     = . hashes count hn
-    // Slot 11 caches the value's length for nurl_sym_append_word; 0 means
-    // "not known, ask strlen", which is also what an empty value measures.
+    // Slot 11 caches the value's length — for the appends, which grow a
+    // value in place, and for nurl_sym_len / _len2, which a caller asks
+    // of the compiler's largest accumulators once per record (measured
+    // with strlen, `bck_record`'s emptiness test made recording a
+    // function's statements quadratic). 0 is "ask strlen", which is also
+    // what an empty value measures.
     : *i lens # *i # s ( nurl_peek t 11 )
-    = . lens count 0
+    = . lens count ( nurl_str_len type )
     // Push onto the front of the bucket chain — newest-first, so a
     // later definition of the same name shadows the earlier one, exactly
     // like the old backward linear scan.
@@ -7804,7 +7816,7 @@
     ( nurl_free . types idx )
     = . types idx # s ( nurl_strdup value )
     : *i lens # *i # s ( nurl_peek # s h 11 )
-    = . lens idx 0
+    = . lens idx ( nurl_str_len value )
 }
 
 // Overwrite the value of `name` WHERE IT LIVES, at whatever scope depth
@@ -7844,7 +7856,7 @@
             { ( nurl_free . types idx )
                 = . types idx # s ( nurl_strdup value )
                 : *i lens # *i # s ( nurl_peek t 11 )
-                = . lens idx 0
+                = . lens idx ( nurl_str_len value )
                 ^ v }
             { = cur . prev idx }
         }
@@ -7865,7 +7877,9 @@
     ? < idx 0 { ( nurl_sym_def h name suffix ) ^ } {}
     : *s types # *s # s ( nurl_peek # s h 4 )
     : s old . types idx
-    : i ol ( nurl_str_len old )
+    : *i lens # *i # s ( nurl_peek # s h 11 )
+    : i cl . lens idx
+    : i ol ? != cl 0 cl ( nurl_str_len old )
     : i sl ( nurl_str_len suffix )
     // nurl_realloc, not malloc + copy + free: for a value that only
     // ever grows, glibc extends the block in place and the accumulated
@@ -7873,7 +7887,6 @@
     : s grown # s ( nurl_realloc # *u old + + ol sl 1 )
     ( memcpy # s + # i # *u grown ol suffix + sl 1 )
     = . types idx grown
-    : *i lens # *i # s ( nurl_peek # s h 11 )
     = . lens idx + ol sl
 }
 
@@ -7975,10 +7988,19 @@
     ~ != cur 0 {
         : i idx - cur 1
         ? >= idx count { ^ 0 } {}
-        ? & == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( nurl_str_len . types idx ) } {}
+        ? & == hn . hashes idx == 0 # i ( strcmp name . names idx ) { ^ ( __sym_vlen t types idx ) } {}
         = cur . prev idx
     }
     0
+}
+
+// The length of value `idx` of table `t`: its cached length (slot 11),
+// measured only when nothing cached one.
+@ __sym_vlen s t * s types i idx → i {
+    : *i lens # *i # s ( nurl_peek t 11 )
+    : i cl . lens idx
+    ? != cl 0 { ^ cl } {}
+    ^ ( nurl_str_len . types idx )
 }
 
 // nurl_sym_len for a two-part key. See nurl_sym_get2.
@@ -8002,7 +8024,7 @@
         ? & & == hn . hashes idx == ( nurl_str_len cand ) + bl sl
         & == 0 # i ( memcmp cand base bl )
         == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
-        { ^ ( nurl_str_len . types idx ) }
+        { ^ ( __sym_vlen t types idx ) }
         { = cur . prev idx }
     }
     0
@@ -10356,6 +10378,9 @@
 }
 
 @ gen_call i lex i syms i cg → s {
+    // The call's own line — the lexer has moved past `)` by the time a
+    // use of a closure binding is noted (bck_note_closure_caps).
+    : i __call_line ( nurl_lex_line lex )
     ? != 0 g_rawlit_n { = g_member_obj 0 } {}
     ( nurl_lex_advance lex )
     : ~ s fname ( nurl_lex_val lex )
@@ -11072,7 +11097,7 @@
         // programs that are correct.
         ? & ( is_ident_tok bck_arg_tt )
         ( nurl_sym_has_word g_fn_invoke_only call_name ( nurl_str_int arg_idx ) )
-        { ( bck_note_closure_caps syms bck_arg_val ) }
+        { ( bck_note_closure_caps syms bck_arg_val ( nurl_lex_line lex ) ) }
         {}
         // A closure-returning call as the argument hands over the owner it
         // published (mem_retclo_take) — the same reclamation a literal gets.
@@ -11630,6 +11655,11 @@
                         ( nurl_print `  ` ) ( nurl_print nw ) ( nurl_print ` = xor i1 ` ) ( nurl_print wf ) ( nurl_print `, ` ) ( nurl_print tk ) ( nurl_print `\n` )
                         ( mem_udrop_flag_set syms cg fr_ptr nf )
                         ( mem_udrop_flag_set syms cg fr_w nw )
+                        // Taken apart only when the callee consumes the field:
+                        // known now for a declared sink / a closure, else at
+                        // module end (the same pending row an argument gets).
+                        ? fr_decl { ( bck_note_payload_taken syms fr_w ( nurl_lex_line lex ) ) }
+                        { ( bck_note_payload_pending syms fr_w ( nurl_lex_line lex ) call_name arg_idx fname ) }
                     } {}
                 }
                 // A parameter's field: the parameter is consumed with it.
@@ -12494,7 +12524,7 @@
         // what keeps an invoke-only parameter invoke-only), so this is the
         // only site that sees `( f )` — and it is the shape the whole
         // use-after-free family is written in.
-        ( bck_note_closure_caps syms call_name )
+        ( bck_note_closure_caps syms call_name __call_line )
         // This is a stored closure variable - load and call
         : s loaded_closure ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print loaded_closure )
@@ -14981,7 +15011,19 @@
             // join. A bare (block-less) arm leaves this armed; the
             // next arm re-arms it, and the post-loop disarm clears a
             // trailing bare arm's residue.
-            ( bck_record `match-arm-edge` `` bck_mline )
+            // The arm's payload bindings ride on the row (comma-separated):
+            // they have no `let` row of their own, and the walk binds them
+            // on entry to the arm and forgets them after it.
+            : ~ s __arm_binds ``
+            : ~ s __ab_rest ( nurl_str_cat4 pv0 ` ` pv1 ( nurl_str_cat3 ` ` pv2 ( nurl_str_cat ` ` pv_over ) ) )
+            ~ != 0 ( nurl_str_len __ab_rest ) {
+                : s __ab ( str_first_word __ab_rest )
+                = __ab_rest ( str_skip_word __ab_rest )
+                ? & != 0 ( nurl_str_len __ab ) ! ( seq __ab `_` ) {
+                    = __arm_binds ? == 0 ( nurl_str_len __arm_binds ) ( nurl_str_cat __ab `` ) ( nurl_str_cat3 __arm_binds `,` __ab )
+                } {}
+            }
+            ( bck_record `match-arm-edge` __arm_binds bck_mline )
             ( bck_set_block_kind `match-arm` )
             : i __saved_in_arm g_in_match_arm
             = g_in_match_arm 1
@@ -15769,6 +15811,11 @@
     // Record that this loop's exit label is a real branch target — an
     // infinite loop with a `break` DOES reach its exit (see gen_loop).
     ? is_break { ( nurl_sym_def g_loop_break_used target `1` ) } {}
+    // Borrow checker: the jump ends this path. Its state reaches the
+    // loop's exit (`brk`) or the next iteration (`cnt`), never the
+    // statement after it — the `ret` rule for a loop (bck_loop).
+    ( bck_flush_moves )
+    ( bck_record ? is_break `brk` `cnt` `` jline )
     // The drop emitters do not just emit: each rewrites the owned-list
     // it walks, because at a function's single exit that bookkeeping is
     // finished with. A branch is not that. `break` is ONE path out of
@@ -17600,19 +17647,22 @@
     // the call unless the callee keeps the argument (argdrop).
     ? & & != 0 g_auto_drop_strings ! shadowed
     & ( seq ( nurl_sym_get syms `__arg_dyn_box__` ) `1` ) != 0 ( nurl_str_starts at `%dyn.` ) {
-        : s __db ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print __db ) ( nurl_print ` = extractvalue ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av ) ( nurl_print `, 0\n` )
         // A trait-object parameter is dropped by a callee that sinks it
-        // and kept by one that stores it; otherwise it is only read.
+        // and kept by one that stores it; otherwise it is only read, and
+        // the whole object is dropped here: the boxed value through the
+        // vtable's destructor, then the box (drop__dyn.<T>). Freeing the
+        // bare box leaked everything the boxed value owned.
         : s __dsk ( nurl_cg_reg cg )
         ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_sink.` ( nurl_str_int ( sink_flag call_name fname arg_idx ) ) ) __dsk )
         : s __dst ( nurl_cg_reg cg )
         ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_store.` ( nurl_str_int ( store_flag call_name fname arg_idx ) ) ) __dst )
         : s __dkp ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print __dkp ) ( nurl_print ` = or i1 ` ) ( nurl_print __dsk ) ( nurl_print `, ` ) ( nurl_print __dst ) ( nurl_print `\n` )
-        : s __dbo ( nurl_cg_reg cg )
-        ( emit_sink_owner_select __dkp `i8*` `null` __db __dbo )
-        = owned ? == 0 ( nurl_str_len owned ) ( nurl_str_cat __dbo `` ) ( nurl_str_cat3 owned ` ` __dbo )
+        : s __dnk ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print __dnk ) ( nurl_print ` = xor i1 ` ) ( nurl_print __dkp ) ( nurl_print `, 1\n` )
+        ( __dropifv_request at )
+        : s __dw ( nurl_str_cat4 `h|` __dnk ( nurl_str_cat3 `|` at `|` ) av )
+        = owned ? == 0 ( nurl_str_len owned ) __dw ( nurl_str_cat3 owned ` ` __dw )
     } {}
     ( nurl_sym_def syms `__arg_dyn_box__` `` )
     // The fields a literal argument made or copied (gen_agg_lit): dropped
@@ -18030,7 +18080,7 @@
 // A payload cursor about to give up a field takes over the option / result
 // binding it reads from: only its own copy is zeroed, so it must also be
 // the one that drops the rest.
-@ mem_udrop_takeover_opt i syms i cg s fp → v {
+@ mem_udrop_takeover_opt i syms i cg s fp i line → v {
     : ~ s al ( nurl_sym_get2 syms fp `__alias` )
     ~ != 0 ( nurl_str_len al ) {
         : s w ( str_first_word al ) = al ( str_skip_word al )
@@ -18041,8 +18091,28 @@
             ( nurl_print `  ` ) ( nurl_print nf ) ( nurl_print ` = or i1 ` ) ( nurl_print cf ) ( nurl_print `, ` ) ( nurl_print wf ) ( nurl_print `\n` )
             ( mem_udrop_flag_set syms cg fp nf )
             ( mem_udrop_flag_set syms cg w `0` )
+            ( bck_note_payload_taken syms w line )
         } {}
     }
+}
+
+// The payload of option / result binding (drop slot `w`) was taken apart
+// here — a field of it consumed or moved out, the rest handed to the arm
+// that took it. The binding is left with a field zeroed and drops nothing,
+// so it is MOVED for the borrow checker: reading it after the match (on
+// the path that took it) is an error, not a null handle at run time.
+@ bck_note_payload_taken i syms s w i line → v {
+    : s bn ( nurl_sym_get2 syms w `__bname` )
+    ? == 0 ( nurl_str_len bn ) { ^ v } {}
+    ( bck_stash_move bn line `taking its payload apart` )
+}
+
+// …when that depends on whether `callee` consumes argument `argidx`,
+// which is decided after the module (a `pendcall` row).
+@ bck_note_payload_pending i syms s w i line s callee i argidx s cause → v {
+    : s bn ( nurl_sym_get2 syms w `__bname` )
+    ? == 0 ( nurl_str_len bn ) { ^ v } {}
+    ( bck_stash_pending_call bn line callee argidx cause F )
 }
 
 // `ptr` takes field `fr` (`<struct ptr> <sty> <idx> <fty>`) out of a
@@ -18965,7 +19035,7 @@
 // handles too. Expanding at RECORD time (rather than in the analyze walk)
 // keeps the whole state machine, the diagnostic and the loop fixpoint
 // untouched: the invocation simply reads what the closure can reach.
-@ bck_note_closure_caps i syms s name → v {
+@ bck_note_closure_caps i syms s name i line → v {
     ? == g_borrowck 0 { ^ v } {}
     ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
     // Walk a COPY: `caps` borrows the symbol-table entry and the cursor
@@ -18986,6 +19056,15 @@
             ( nurl_str_cat3 g_bck_cap_via ` ` ( nurl_str_cat3 w ` ` name ) ) }
         {}
     }
+    // A use of the closure may run its body, and the body frees these:
+    // after this statement they are maybe-freed (a second invocation, or a
+    // read through the captured name, is the use-after-free).
+    : ~ s frest ( nurl_str_cat ( nurl_sym_get2 syms name `__closure_frees` ) `` )
+    ~ != 0 ( nurl_str_len frest ) {
+        : s fw ( str_first_word frest )
+        = frest ( str_skip_word frest )
+        ( bck_stash_maybe_move fw line ( nurl_str_cat3 `the closure '` name `' frees it when it runs, and it was used` ) )
+    }
 }
 
 // The dual: `name` is being (re)bound to something that is NOT a
@@ -18997,6 +19076,7 @@
 @ bck_clear_cap_name i syms s name → v {
     ? ! ( str_contains_word g_bck_cap_names name ) { ^ v } {}
     ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) `` )
+    ( nurl_sym_def syms ( nurl_str_cat name `__closure_frees` ) `` )
 }
 
 // Remember that `name` is a closure binding carrying captures, for the
@@ -19217,7 +19297,7 @@
         ? | ( seq nm dest ) ( str_contains_word params nm ) {} {
             ? definite
             { ( bck_stash_move nm line `an alias copy through a '?' / '??' result` ) }
-            { ( bck_stash_maybe_move nm line why ) } }
+            { ( bck_stash_maybe_alias nm line why ) } }
     }
 }
 
@@ -19256,7 +19336,7 @@
     {  // Bound, not inline — see bck_alias_from_phi: a fresh string
         // passed straight to a user function is never released.
         : s why ( nurl_str_cat3 `its handle was handed to '` dest `' by an alias assignment` )
-        ( bck_stash_maybe_move rhs_val line why ) }
+        ( bck_stash_maybe_alias rhs_val line why ) }
     {}
 }
 
@@ -19346,12 +19426,26 @@
     } {}
 }
 
+// The alias companion of bck_stash_maybe_move: `name`'s handle went to
+// another name on some path, and stays live through it (BCK_MAYBE_ALIAS).
+@ bck_stash_maybe_alias s name i line s cause → v {
+    ? & != g_borrowck 0 == g_bck_rec_off 0 {
+        ( nurl_sym_set g_bck ( nurl_str_cat3 `qc_` name ( nurl_str_int line ) ) cause )
+        : s cur ( nurl_sym_get g_bck `paliases` )
+        : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        ( nurl_sym_set g_bck `paliases`
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
+    } {}
+}
+
 // Drain the per-statement move stash into `move` rows. Called by
 // gen_stmt once the enclosing statement's own record is in place.
 @ bck_flush_moves → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         : ~ s qrest ( nurl_sym_get g_bck `pmaybes` )
         ( nurl_sym_set g_bck `pmaybes` `` )
+        : ~ s arest ( nurl_sym_get g_bck `paliases` )
+        ( nurl_sym_set g_bck `paliases` `` )
         : ~ s rest ( nurl_sym_get g_bck `pmoves` )
         ( nurl_sym_set g_bck `pmoves` `` )
         // A statement that recorded no row of its own leaves stray
@@ -19387,6 +19481,13 @@
             : s qln ( str_first_word qrest )
             = qrest ( str_skip_word qrest )
             ( bck_record `maybemove` qnm ( nurl_str_to_int qln ) )
+        }
+        ~ != 0 ( nurl_str_len arest ) {
+            : s anm ( str_first_word arest )
+            = arest ( str_skip_word arest )
+            : s aln ( str_first_word arest )
+            = arest ( str_skip_word arest )
+            ( bck_record `maybealias` anm ( nurl_str_to_int aln ) )
         }
         // …and the calls whose move effect is not decidable yet.
         : ~ s prest ( nurl_sym_get g_bck `ppends` )
@@ -19530,12 +19631,27 @@
 // binding's to consume — a second consume (a sink, a free, another
 // store) is the double free.
 : i BCK_STORED 7
+// Handed, on some path, to another name that may now own it (a `?` / `??`
+// that selected it, `= z a`, a call that may return it): the buffer is
+// still live through one of the two names, so a READ through this one is
+// fine, but a second CONSUME double-frees on that path. Kept apart from
+// MAYBE_MOVED, which means "freed on some path": a read of that one is a
+// use-after-free.
+: i BCK_MAYBE_ALIAS 8
 
 // Lattice join — least upper bound of two per-binding states meeting
 // at a control-flow merge point.
 @ bck_join i a i b → i {
     ? == a b { ^ a } {}
     ? | == a BCK_INVALID == b BCK_INVALID { ^ BCK_INVALID } {}
+    // Maybe-aliased against anything not freed stays maybe-aliased; against
+    // a free (definite or maybe) it is maybe-freed — a free is the stronger
+    // fact for both a read and a consume.
+    ? | == a BCK_MAYBE_ALIAS == b BCK_MAYBE_ALIAS {
+        : i o ? == a BCK_MAYBE_ALIAS b a
+        ? | == o BCK_MOVED == o BCK_MAYBE_MOVED { ^ BCK_MAYBE_MOVED } {}
+        ^ BCK_MAYBE_ALIAS
+    } {}
     // Stored on one path only: a later consume is a double free on that
     // path alone — not flagged (the conditional-move contract below).
     ? | == a BCK_STORED == b BCK_STORED {
@@ -19563,6 +19679,14 @@
     ? & a_nm b_nm { ^ BCK_OWNED } {}
     // Borrow-state disagreements are not produced until a later phase.
     BCK_INVALID
+}
+
+// The state after a maybe-alias of a binding in state `cur`: a live
+// binding becomes maybe-aliased; one already freed, or maybe freed, or
+// stored into an owner, keeps the stronger fact.
+@ bck_alias_step i cur → i {
+    ? | == cur BCK_OWNED == cur BCK_UNINIT { ^ BCK_MAYBE_ALIAS } {}
+    ^ cur
 }
 
 // ── Per-binding state — a direct-indexed lattice-digit array ───────
@@ -19766,7 +19890,7 @@
     : s w ( bck_field rec 1 )
     : b __pend | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) | | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` )
     : s w2 ? | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
-    ( seq kind `maybemove` ) __pend
+    | ( seq kind `maybemove` ) ( seq kind `maybealias` ) __pend
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
     : s rds ( bck_ids ( bck_field rec 2 ) )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
@@ -19847,8 +19971,10 @@
     : ~ i pos 0
     ~ < pos len {
         ? == # i . tp pos 10 {
+            // (Sliced from the row's own start: a slice from the text's
+            // start measured the whole text once per row.)
             ( nurl_sym_set g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
-            ( bck_xlate_row ( nurl_str_slice txt start - pos start ) ) )
+            ( bck_xlate_row ( nurl_str_slice # s + # i tp start 0 - pos start ) ) )
             = n + n 1
             = start + pos 1
         } {}
@@ -19990,7 +20116,7 @@
 // diagnostic keeps its exact text. Deduplicated through the same
 // warnset; the `mm:` prefix keeps a strict diagnostic from suppressing
 // a later definite one (or vice versa) on the same line+name.
-@ bck_diag_maybe i id i useline → v {
+@ bck_diag_maybe i id i useline b strict_only → v {
     : s ids ( nurl_str_int id )
     : s tag ( nurl_str_cat3 ( nurl_str_cat `mm:` ( nurl_str_int useline ) ) `:` ids )
     : s ws ( nurl_sym_get g_bck `warnset` )
@@ -20006,7 +20132,65 @@
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `'` name
         ( nurl_str_cat `' may already be freed here` by ) ( nurl_str_cat3 ml
-        `; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)` `` ) ) )
+        ( nurl_str_cat ? strict_only `; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)` `; this second free double-frees on that path (restructure so exactly one path frees it)` `` ) `` ) ) )
+    }
+}
+
+// Is interned binding `id` a module-level `: ~` global? Any call may
+// reassign one (`( nurl_lex_free g_live_lexers )` unlinks the head and
+// stores the next), so the walk's per-path view of it says nothing once a
+// call ran — the maybe-moved rules leave globals alone.
+@ bck_id_is_global i id → b {
+    ? == 0 g_root_syms { ^ F } {}
+    ^ != 0 ( nurl_sym_len2 g_root_syms ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) ) `__global` )
+}
+
+// Reading a binding whose state is MAYBE-moved: on the path where the
+// consume ran, the handle names a freed buffer, so the read is a
+// use-after-free there. Same dedup channel as bck_diag_maybe (`mm:`).
+@ bck_diag_maybe_read i id i useline → v {
+    : s ids ( nurl_str_int id )
+    // `mm:` — bck_diag_maybe's tag: a consume is also a read, and one
+    // report per site is enough.
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `mm:` ( nurl_str_int useline ) ) `:` ids )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) {} {
+        ( nurl_sym_set g_bck `warnset`
+        ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
+        : s name ( nurl_sym_get2 g_bck `rv_` ids )
+        : s ml ( nurl_sym_get2 g_bck `ml_` ids )
+        : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` name ml ) )
+        : s by ? == 0 ( nurl_str_len cause )
+        ( nurl_str_cat ` — it was consumed on only some paths, at line ` `` )
+        ( nurl_str_cat3 ` — ` cause ` at line ` )
+        // Parked until the function's walk is done: a loop's fixpoint
+        // sees a read as maybe-freed before its verification pass proves
+        // it definitely freed, and the definite report (bck_diag) is the
+        // one to keep for the same site (bck_emit_maybe_reads).
+        : s key ( nurl_str_cat3 ( nurl_str_int useline ) `:` ids )
+        ( nurl_sym_set g_bck ( nurl_str_cat `pm_` key )
+        ( nurl_str_cat4 `use of possibly-moved value '` name
+        ( nurl_str_cat `'` by ) ( nurl_str_cat3 ml
+        `; on that path this reads a freed buffer. Consume it on every path, or rebind it (= ` ( nurl_str_cat name ` …) on the path that consumed it` ) ) ) )
+        : s pl ( nurl_sym_get g_bck `pml` )
+        ( nurl_sym_set g_bck `pml` ? == 0 ( nurl_str_len pl ) ( nurl_str_cat key `` ) ( nurl_str_cat3 pl ` ` key ) )
+    }
+}
+
+// Emit the parked maybe-freed reads of the function just walked, except
+// where the same line and binding drew the definite use-after-move.
+@ bck_emit_maybe_reads → v {
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck `pml` ) `` )
+    ( nurl_sym_set g_bck `pml` `` )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s key ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ! ( str_contains_word ws key ) {
+            : i c ( nurl_str_find key `:` )
+            ( bck_emit_error ( nurl_sym_get g_bck `file` ) ( nurl_str_to_int ( nurl_str_slice key 0 c ) )
+            ( nurl_sym_get g_bck ( nurl_str_cat `pm_` key ) ) )
+        } {}
     }
 }
 
@@ -20046,7 +20230,9 @@
                 = idv + * idv 10 - # i . rp i 48
                 = i + i 1
             }
-            ? == BCK_MOVED ( bck_st_get state idv ) { ( bck_diag idv line ) } {}
+            : i rst ( bck_st_get state idv )
+            ? == BCK_MOVED rst { ( bck_diag idv line ) } {}
+            ? & & != 0 g_maybe_moved == BCK_MAYBE_MOVED rst ! ( bck_id_is_global idv ) { ( bck_diag_maybe_read idv line ) } {}
         }
     }
 }
@@ -20072,7 +20258,16 @@
         // Most rows are plain statements: past their reads, nothing to do —
         // and no dozen kind compares to find that out.
         ? ( seq kind `expr` ) { = p + p 1 } {
-            ? ( seq kind `ret` ) {
+            ? | ( seq kind `brk` ) ( seq kind `cnt` ) {
+                // Into the innermost loop's exit / back-edge accumulator.
+                : s acck ? ( seq kind `brk` ) `lbrk` `lcnt`
+                : s acc ( nurl_sym_get g_bck acck )
+                ( nurl_sym_set g_bck acck ? == 0 ( nurl_str_len acc ) ( nurl_str_cat st `` ) ( bck_join_state acc st ) )
+                = st ( nurl_str_cat `!` `` )
+                = p hi
+                = done T
+            } {}
+            ? & ! done ( seq kind `ret` ) {
                 : s after_defers ( bck_apply_defers st )
                 = st ( nurl_str_cat `!` `` )
                 = p hi
@@ -20105,8 +20300,8 @@
                 // path where the first free ran. Opt-in because it also
                 // flags the mutually-exclusive-frees pattern the default
                 // no-false-positive contract protects.
-                ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvid ) {
-                    ( bck_diag_maybe mvid ( nurl_str_to_int ( bck_field rec 3 ) ) )
+                ? | & & != 0 g_maybe_moved == BCK_MAYBE_MOVED ( bck_st_get st mvid ) ! ( bck_id_is_global mvid ) & != 0 g_strict_borrowck | == BCK_MAYBE_MOVED ( bck_st_get st mvid ) == BCK_MAYBE_ALIAS ( bck_st_get st mvid ) {
+                    ( bck_diag_maybe mvid ( nurl_str_to_int ( bck_field rec 3 ) ) == BCK_MAYBE_ALIAS ( bck_st_get st mvid ) )
                 } {}
                 ? == BCK_STORED ( bck_st_get st mvid ) { ( bck_diag_stored mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
                 ? & == BCK_OWNED ( bck_st_get st mvid ) ( bck_has_stored_in mvid )
@@ -20114,6 +20309,14 @@
                 = st ( bck_st_set st mvid BCK_MOVED )
                 ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
                 ( bck_field rec 3 ) )
+                = p + p 1
+                = done T
+            } {}
+            ? & ! done ( seq kind `maybealias` ) {
+                : s avn ( bck_field rec 1 )
+                : i avid ( nurl_str_to_int avn )
+                = st ( bck_st_set st avid ( bck_alias_step ( bck_st_get st avid ) ) )
+                ( nurl_sym_set g_bck ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
                 = p + p 1
                 = done T
             } {}
@@ -20232,8 +20435,8 @@
                 : s psink ( nurl_sym_get g_fn_sink pcal )
                 : s palias ? ( seq kind `pendretain` ) `` ( nurl_sym_get g_fn_ret_alias pcal )
                 ? ( str_contains_word psink paix )
-                { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )
-                    { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) ) } {}
+                { ? | & & != 0 g_maybe_moved == BCK_MAYBE_MOVED ( bck_st_get st pvid ) ! ( bck_id_is_global pvid ) & != 0 g_strict_borrowck | == BCK_MAYBE_MOVED ( bck_st_get st pvid ) == BCK_MAYBE_ALIAS ( bck_st_get st pvid )
+                    { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) == BCK_MAYBE_ALIAS ( bck_st_get st pvid ) ) } {}
                     ? == BCK_STORED ( bck_st_get st pvid ) { ( bck_diag_stored pvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
                     = st ( bck_st_set st pvid BCK_MOVED )
                     ? ( seq kind `pendretain` ) {
@@ -20245,7 +20448,7 @@
                     ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
                 { ? ( str_contains_word palias paix )
                     { = st ( bck_st_set st pvid
-                        ( bck_join ( bck_st_get st pvid ) BCK_MOVED ) )
+                        ( bck_alias_step ( bck_st_get st pvid ) ) )
                         ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
                     {} }
                 = p + p 1
@@ -20271,14 +20474,20 @@
                     : i flag ( nurl_str_to_int ( nurl_sym_get g_bck ( nurl_str_cat `df_` ( nurl_str_int p ) ) ) )
                     = st ( bck_st_set st flag BCK_MOVED )
                 } {
+                    // A binding the block declares is gone after it
+                    // (bck_scope_restore): one that shadowed an outer name
+                    // must not leave its state on that name.
+                    : s blk_pre ( nurl_str_cat st `` )
                     ? | ( seq bk `loop` ) ( seq bk `foreach` ) {
                         // Pass the controlling `~ cond` reads (carried in the
                         // block row's reads field) and its line so bck_loop can
                         // re-check them against the loop's back-edge state.
-                        = st ( bck_loop + p 1 eb st ( bck_field rec 2 )
+                        : s lpost ( bck_loop + p 1 eb st ( bck_field rec 2 )
                         ( nurl_str_to_int ( bck_field rec 3 ) ) )
+                        = st ( bck_scope_restore + p 1 eb blk_pre lpost )
                     } {
-                        = st ( bck_walk_seq + p 1 eb st )
+                        : s bpost ( bck_walk_seq + p 1 eb st )
+                        = st ( bck_scope_restore + p 1 eb blk_pre bpost )
                     }
                 }
                 = p + eb 1
@@ -20386,45 +20595,52 @@
     ^ ( bck_join_state s_then s_else )
 }
 
-// `??` — walk each arm in ISOLATION. Continuing arms leave outer
-// ownership alone; an exhaustive all-returning match is unreachable.
+// `??` — each arm is walked from the state at the match, with its
+// payload names (carried on the `match-arm-edge` row) bound for the arm's
+// extent; the live arms' exits join, and a non-exhaustive match joins the
+// entry state too (no arm taken). After an arm, its payload names and the
+// bindings it declared are put back to their outer state, so an arm's `v`
+// never speaks for an outer `v` (the flat name-keyed state's one hazard).
 //
-// A `??` arm binds payload variables (`T v -> ...`) that have no `let`
-// row, so the flat name-keyed state cannot tell an arm's `v` from a
-// same-named binding in an enclosing scope. Descending with the outer
-// state would conflate them and false-positive, which is why the whole
-// match used to be a state-preserving black box — and why a double free
-// written inside an arm compiled clean and segfaulted at run time,
-// while the identical code inside a `?` arm, a loop, a bare block or a
-// helper was rejected.
-//
-// The conflation is avoidable without scope-qualified state: walk each
-// arm from an EMPTY state, where every id reads Uninit. Then only a
-// binding that gets its own `let` row inside the arm becomes tracked,
-// and such a binding is arm-local by construction — nothing outside can
-// be confused with it. A payload name, or an outer name the arm merely
-// touches, starts Uninit and is ignored, so no diagnostic can fire on
-// it. Moving one twice WITHIN the arm is still caught, because the
-// first move is what makes it tracked.
-//
-// The arm's exit state is discarded and the entry state returned
-// unchanged: what an arm did to an outer binding remains out of scope
-// here (the scrutinee itself is still move-checked on the `match` row,
-// before this is called). This closes the intra-arm hole without
-// widening the lattice, and cannot report anything that was not a
-// definite bug.
+// The arms used to be walked from an EMPTY state with the exit discarded,
+// which made the whole match a black box for every outer binding:
+// `?? x { T v → ( string_free s ) F → ( string_free s ) }` followed by
+// `( string_free s )` compiled clean and freed `s` twice.
 @ bck_handle_match i mi i em s state → s {
     : ~ b saw_arm F
-    : ~ b live_arm F
+    : ~ b fallthrough F
+    : ~ s acc ``
+    : ~ b have F
     : ~ i j + mi 1
     ~ < j em {
-        : s kind ( bck_field ( bck_rec j ) 0 )
-        ? ( seq kind `match-fallthrough` ) { = live_arm T } {}
+        : s rec ( bck_rec j )
+        : s kind ( bck_field rec 0 )
+        ? ( seq kind `match-fallthrough` ) { = fallthrough T } {}
         ? ( seq kind `match-arm-edge` ) {
             : i end ( bck_match_close j `match-arm-edge` `endmatch-arm-edge` )
-            : s armfinal ( bck_walk_seq + j 1 end `` )
+            // Enter the arm with its payload names bound (Owned): they
+            // shadow any same-named outer binding for the arm's extent.
+            : ~ s entry ( nurl_str_cat state `` )
+            : ~ s binds ( bck_field rec 1 )
+            : ~ s ids ``
+            ~ != 0 ( nurl_str_len binds ) {
+                : i cm ( nurl_str_find binds `,` )
+                : s nm ? < cm 0 ( nurl_str_cat binds `` ) ( nurl_str_slice binds 0 cm )
+                = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
+                : i id ( bck_intern nm )
+                = entry ( bck_st_set entry id BCK_OWNED )
+                = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
+            }
+            : s armfinal ( bck_walk_seq + j 1 end entry )
             = saw_arm T
-            ? ! ( seq armfinal `!` ) { = live_arm T } {}
+            ? ! ( seq armfinal `!` ) {
+                // …and forget them, and whatever the arm declared, on the
+                // way out: the outer bindings they shadowed come back.
+                : s scoped ( bck_scope_restore + j 1 end state armfinal )
+                : s out ( bck_restore_ids ids state scoped )
+                = acc ? have ( bck_join_state acc out ) ( nurl_str_cat out `` )
+                = have T
+            } {}
             = j + end 1
         } {
             ? ( seq kind `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
@@ -20436,8 +20652,55 @@
             }
         }
     }
-    ? & saw_arm ! live_arm { ^ ( nurl_str_cat `!` `` ) } {}
-    ^ ( nurl_str_cat state `` )
+    // A non-exhaustive match also continues with no arm taken.
+    ? | fallthrough ! saw_arm {
+        = acc ? have ( bck_join_state acc state ) ( nurl_str_cat state `` )
+        = have T
+    } {}
+    ? ! have { ^ ( nurl_str_cat `!` `` ) } {}
+    ^ acc
+}
+
+// `post` with each binding a `let` row declares directly in [lo, hi)
+// (not inside a nested block, cond or match — those scope their own)
+// put back to its state in `pre`: a binding declared in a scope is gone
+// after it, and the outer binding it may have shadowed is visible again.
+@ bck_scope_restore i lo i hi s pre s post → s {
+    ? ( seq post `!` ) { ^ ( nurl_str_cat `!` `` ) } {}
+    : ~ s out ( nurl_str_cat post `` )
+    : ~ i j lo
+    ~ < j hi {
+        : s rec ( bck_rec j )
+        : s kind ( bck_field rec 0 )
+        ? ( seq kind `let` ) {
+            : i id ( nurl_str_to_int ( bck_field rec 1 ) )
+            = out ( bck_st_set out id ( bck_st_get pre id ) )
+            = j + j 1
+        } {
+            ? ( seq kind `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
+                ? ( seq kind `match` ) { = j + ( bck_match_close j `match` `endmatch` ) 1 } {
+                    ? ( seq kind `block` ) { = j + ( bck_match_close j `block` `endblock` ) 1 } {
+                        = j + j 1
+                    }
+                }
+            }
+        }
+    }
+    ^ out
+}
+
+// `post` with each id of the space-separated list `ids` put back to its
+// state in `pre`.
+@ bck_restore_ids s ids s pre s post → s {
+    : ~ s out ( nurl_str_cat post `` )
+    : ~ s rest ( nurl_str_cat ids `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : i id ( nurl_str_to_int w )
+        = out ( bck_st_set out id ( bck_st_get pre id ) )
+    }
+    ^ out
 }
 
 // Build the loop's back-edge seed: the state on entry to iterations
@@ -20476,6 +20739,28 @@
     out
 }
 
+// `post` with every binding that did not exist before the loop (Uninit in
+// `pre`) reset to Uninit: a body-local binding is out of scope at the loop
+// head and after the loop. `!` (no path) stays `!`.
+@ bck_loop_mask s pre s post → s {
+    ? ( seq post `!` ) { ^ ( nurl_str_cat `!` `` ) } {}
+    // An owned copy of `post`, reset in place where `pre` has no binding.
+    : s out ( nurl_str_cat post `` )
+    : i np ( nurl_str_len pre )
+    : i ns ( nurl_str_len out )
+    : *u ob # *u out
+    : *u pp # *u pre
+    : ~ i i 0
+    ~ < i ns {
+        ? | >= i np == - # i . pp i 48 BCK_UNINIT {
+            : u zd # u 48
+            = . ob i zd
+        } {}
+        = i + i 1
+    }
+    ^ out
+}
+
 // `~` loop — the body carries a back-edge, so re-enter it until the
 // state at the loop head stops changing (the join of the head state
 // with the body's exit state). The 16-iteration cap is a safety
@@ -20493,9 +20778,27 @@
     : ~ s head ( nurl_str_cat pre `` )
     : ~ i iter 0
     : ~ b done F
+    // This loop's own `break` / `continue` accumulators; the enclosing
+    // loop's are put back on the way out.
+    : s outer_brk ( nurl_sym_get g_bck `lbrk` )
+    : s outer_cnt ( nurl_sym_get g_bck `lcnt` )
+    : ~ s brk ``
     ~ & ! done < iter 16 {
-        : s post ( bck_walk_seq lo hi head )
-        : s merged ( bck_join_state head post )
+        ( nurl_sym_set g_bck `lbrk` `` )
+        ( nurl_sym_set g_bck `lcnt` `` )
+        : s post0 ( bck_walk_seq lo hi head )
+        : s cnt ( nurl_sym_get g_bck `lcnt` )
+        = brk ( nurl_sym_get g_bck `lbrk` )
+        // What reaches the next iteration: the body's end and every
+        // `continue`. A binding declared in the body is fresh in every
+        // iteration, so only the ones that existed before the loop carry
+        // (bck_loop_mask) — carried, a body-local `( string_free x )`
+        // read as a free of the NEXT iteration's x.
+        : s post ? == 0 ( nurl_str_len cnt ) post0 ( bck_join_state post0 cnt )
+        // (Bound: a fresh raw string handed straight to a user function is
+        // not released as a call temporary.)
+        : s carried ( bck_loop_mask pre post )
+        : s merged ( bck_join_state head carried )
         // Copy `merged` into `head` — aliasing the loop-local `merged`
         // would double-free it (iteration drop + function-exit drop).
         ? ( seq merged head ) { = done T } { = head ( nurl_str_cat merged `` ) }
@@ -20510,7 +20813,12 @@
     ( bck_check_moved_reads cond_reads cond_line verif )
     : s vend ( bck_walk_seq lo hi verif )
     ? != 0 ( nurl_str_len vend ) {} {}
-    head
+    ( nurl_sym_set g_bck `lbrk` outer_brk )
+    ( nurl_sym_set g_bck `lcnt` outer_cnt )
+    // The loop is left at its condition (the head state) or by a `break`.
+    ? == 0 ( nurl_str_len brk ) { ^ head } {}
+    : s left ( bck_loop_mask pre brk )
+    ^ ( bck_join_state head left )
 }
 
 // bck_analyze: consume the per-function statement list captured by
@@ -20522,6 +20830,7 @@
 // joining a bare Uninit on the other branch straight back to Moved.
 @ bck_analyze s params → v {
     ( nurl_sym_set g_bck `warnset` `` )
+    ( nurl_sym_set g_bck `pml` `` )
     // New function, new dense id space: bumping the generation
     // invalidates every intern entry left by earlier functions.
     = g_bck_gen + g_bck_gen 1
@@ -20556,6 +20865,7 @@
     // Every `ret` row replayed the defers armed on its path; anything
     // still unwalked is a conditionally-armed site, analysed body-local.
     ( bck_sweep_unwalked_defers )
+    ( bck_emit_maybe_reads )
     // `final` is the function's exit state; the walk inspects it no
     // further. Reference it in a void `?` so the body type-checks as
     // `v` without a spurious unused binding.
@@ -21256,7 +21566,7 @@
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( __clo_tmp_set `` )
         ( nurl_sym_def syms `__last_env_of__` `` )
-        ( nurl_sym_def syms `__last_closure_caps__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -21340,6 +21650,7 @@
         : s rhs_closure_caps ( nurl_sym_get syms `__last_closure_caps__` )
         ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len rhs_closure_caps )
         { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
+            ( nurl_sym_def syms ( nurl_str_cat name `__closure_frees` ) ( nurl_sym_get syms `__last_closure_frees__` ) )
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
         // Borrow provenance: did the RHS produce a borrow (a value aliasing
@@ -21397,6 +21708,8 @@
         ( nurl_sym_def syms name vt )
         ( rec_decl_loc syms name bck_line lex )
         ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
+        // …and back, for the borrow checker (bck_note_payload_taken).
+        ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
         ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
         // Only mark mutability if explicitly specified with ~
         ? is_mutable
@@ -21549,7 +21862,7 @@
             ( nurl_sym_def syms `__last_closure_env__` `` )
             ( __clo_tmp_set `` )
             ( nurl_sym_def syms `__last_env_of__` `` )
-            ( nurl_sym_def syms `__last_closure_caps__` `` )
+            ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` )
             ( nurl_sym_def syms `__last_slice_owned__` `` )
             ( nurl_sym_def syms `__last_phi_idents__` `` )
             ( nurl_sym_def syms `__last_phi_cause__` `` )
@@ -21614,6 +21927,7 @@
             : s rhs_closure_caps ( nurl_sym_get syms `__last_closure_caps__` )
             ? & != 0 ( nurl_str_len rhs_closure_env ) != 0 ( nurl_str_len rhs_closure_caps )
             { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) rhs_closure_caps )
+                ( nurl_sym_def syms ( nurl_str_cat name `__closure_frees` ) ( nurl_sym_get syms `__last_closure_frees__` ) )
                 ( bck_add_cap_name name ) }
             { ( bck_clear_cap_name syms name ) }
             // Same carry for the shared-mutation flag (§6.5): a closure
@@ -21699,6 +22013,7 @@
             ( nurl_sym_def syms name ptype )
             ( rec_decl_loc syms name bck_line lex )
             ( nurl_sym_def syms ( nurl_str_cat name `__ptr` ) ptr )
+            ( nurl_sym_def syms ( nurl_str_cat ptr `__bname` ) name )
             ? != 0 ( nurl_sym_len2 syms name `__eaddr` ) { ( nurl_sym_def syms ( nurl_str_cat ptr `__eaddr` ) ( nurl_sym_get2 syms name `__eaddr` ) ) } {}
             // Only mark mutability if explicitly specified with ~
             ? is_mutable
@@ -21865,7 +22180,7 @@
         ( nurl_sym_def syms `__last_phi_definite__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( __clo_tmp_set `` )
-        ( nurl_sym_def syms `__last_closure_caps__` `` )
+        ( nurl_sym_def syms `__last_closure_caps__` `` ) ( nurl_sym_def syms `__last_closure_frees__` `` )
         ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
         ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
@@ -21885,6 +22200,7 @@
         : s __asn_env ( nurl_sym_get syms `__last_closure_env__` )
         ? & != 0 ( nurl_str_len __asn_env ) != 0 ( nurl_str_len __asn_caps )
         { ( nurl_sym_def syms ( nurl_str_cat name `__closure_caps` ) __asn_caps )
+            ( nurl_sym_def syms ( nurl_str_cat name `__closure_frees` ) ( nurl_sym_get syms `__last_closure_frees__` ) )
             ( bck_add_cap_name name ) }
         { ( bck_clear_cap_name syms name ) }
         // Env ownership, the `:` binding's rule in the `=` spelling. A
@@ -22520,7 +22836,7 @@
         }
         ? & & & & __fs_payload != 0 ( nurl_str_len __fsp ) ( __is_handle_ty __fsf )
         ( nurl_sym_has_word syms `__user_drops__` __fsp ) == 0 ( nurl_sym_len2 syms __fsp `__pname` ) {
-            ( mem_udrop_takeover_opt syms cg __fsp )
+            ( mem_udrop_takeover_opt syms cg __fsp ( nurl_lex_line lex ) )
             : s __fo ( mem_udrop_flag_get syms cg __fsp )
             ( mem_zero_field cg __fsp __fst __fsi __fsf __fo )
             : s __fl ( nurl_cg_reg cg )
@@ -22578,7 +22894,7 @@
                         ? != 0 ( nurl_str_starts ( nurl_sym_get2 syms __mfw `__udty` ) `%__opt.` ) { = __mf_payload T } {}
                     }
                     ? __mf_payload {
-                        ( mem_udrop_takeover_opt syms cg __mfp )
+                        ( mem_udrop_takeover_opt syms cg __mfp ( nurl_lex_line lex ) )
                         ( mem_zero_field cg __mfp __mfs __mfi __mff ( mem_udrop_flag_get syms cg __mfp ) )
                     } { = __fs_v ( mem_emit_cloneif cg __fs_ty __fs_v ( mem_udrop_flag_get syms cg __mfp ) ) }
                 } {} }
@@ -24685,7 +25001,7 @@
             : s fs_fty ( str_first_word fs )
             ? & & ( nurl_sym_has_word syms `__user_drops__` fs_ptr )
             == 0 ( nurl_sym_len2 syms fs_ptr `__pname` ) ( __is_handle_ty fs_fty )
-            { ( mem_udrop_takeover_opt syms cg fs_ptr )
+            { ( mem_udrop_takeover_opt syms cg fs_ptr ( nurl_lex_line lex ) )
                 : s __tk ( mem_udrop_flag_get syms cg fs_ptr )
                 ( mem_zero_field cg fs_ptr fs_sty fs_idx fs_fty __tk )
                 // A payload of an option binding holds its field exactly when
@@ -27862,15 +28178,28 @@
     // that frees its capture and is never called leaks rather than
     // double-frees. Reads stay legal; a second CONSUME is reported
     // under --strict-borrowck.
+    //
+    // WHEN it may free it is when the closure is used: a closure bound to a
+    // name frees nothing until that name is invoked or handed on, so the
+    // capture stays live (readable) until then — maybe-ALIASED here — and
+    // every use of the binding maybe-frees it (`__closure_frees`,
+    // bck_note_closure_caps). A literal built as a call's argument is used
+    // right where it is made.
     : ~ s __cl_cons ( nurl_str_cat g_closure_consumed `` )
     = g_closure_consumed __cl_consumed_saved
+    : ~ s __cl_frees ``
+    : b __cl_used_now ( seq ( nurl_sym_get syms `__in_call_arg__` ) `1` )
     ~ != 0 ( nurl_str_len __cl_cons ) {
         : s __cl_n ( str_first_word __cl_cons )
         = __cl_cons ( str_skip_word __cl_cons )
-        ? ( str_contains_word captured_vars __cl_n )
-        { ( bck_stash_maybe_move __cl_n ( nurl_lex_line lex )
-            `a closure that captured it frees it` ) }
-        {}
+        ? ( str_contains_word captured_vars __cl_n ) {
+            = __cl_frees ? == 0 ( nurl_str_len __cl_frees ) ( nurl_str_cat __cl_n `` ) ( nurl_str_cat3 __cl_frees ` ` __cl_n )
+            ? __cl_used_now
+            { ( bck_stash_maybe_move __cl_n ( nurl_lex_line lex )
+                `a closure that captured it frees it` ) }
+            { ( bck_stash_maybe_alias __cl_n ( nurl_lex_line lex )
+                `a closure that captured it may free it` ) }
+        } {}
     }
     // Fall-off exit. A closure body that ends WITHOUT `^` reached the
     // `ret` below having dropped nothing: `gen_ret_term` runs the whole
@@ -28110,6 +28439,9 @@
     // sibling closure's list (the same discipline
     // `__last_closure_param_idents__` follows).
     ( nurl_sym_def syms `__last_closure_caps__` __cap_heap )
+    // …and the ones its body frees (published after the body scope is
+    // popped, so the binding site sees them).
+    ( nurl_sym_def syms `__last_closure_frees__` __cl_frees )
 
     result2
 }
@@ -36092,6 +36424,7 @@
     // (i32 for int-returners, i8* for ptr-returners); NURL callers do
     // their own widening via `# i` if they need i64.
     ( __emit_rt_decl syms `declare i64  @strlen(i8* nocapture nofree)` )
+    ( __emit_rt_decl syms `declare i64  @strnlen(i8* nocapture nofree, i64) "nurl.value-only"="1"` )
     ( __emit_rt_decl syms `declare i32  @strcmp(i8* nocapture nofree, i8* nocapture nofree)` )
     ( __emit_rt_decl syms `declare i32  @strncmp(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
     ( __emit_rt_decl syms `declare i32  @memcmp(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
@@ -36965,6 +37298,7 @@
     ( nurl_sym_def syms `nurl_realloc` `i8*` )
     // libc string / parse primitives
     ( nurl_sym_def syms `strlen` `i64` )
+    ( nurl_sym_def syms `strnlen` `i64` )
     ( nurl_sym_def syms `strcmp` `i32` )
     ( nurl_sym_def syms `strncmp` `i32` )
     ( nurl_sym_def syms `memcmp` `i32` )
@@ -38316,6 +38650,13 @@
     ( nurl_print `  call void @nurl_free(i8* %data)\n  br label %done\ndone:\n  ret void\n}\n` )
     // Register so `: %T x ( dyn … )` bindings auto-drop + journal like any Drop.
     ( nurl_sym_def g_impl_name_syms ( nurl_str_cat `drop##` dynty ) mangle )
+    // …and so a struct holding one gets the field-by-field drop a struct
+    // holding any Drop value gets (__needs_synth_drop). That predicate
+    // short-circuits on "no Drop impl in the program", and this one is a
+    // Drop impl too: without the flag, a `%dyn` field leaked its box, the
+    // boxed value and every sibling field (docs/LIMITATIONS.md used to list
+    // it as a struct "not dropped as a whole").
+    = g_user_drop_seen 1
     // Panic-unwind journal thunk (loads the fat pointer from an alloca).
     ( emit_jdrop_thunk dynty mangle )
 }
@@ -38391,11 +38732,56 @@
     : s tname ( nurl_lex_val lex )
     ( lint_note_used tname )
     ( nurl_lex_advance lex )  // consume trait name
+    // The box OWNS what it holds: the `%dyn` value's drop runs the
+    // concrete type's drop through vtable slot 0 and frees the box. So the
+    // operand is a store, exactly as into an aggregate literal's field
+    // (docs/MEMORY.md §7.6 "Stores move"): an owned local moves in (its
+    // drop flag clears, and the borrow checker records the move), a
+    // borrowed value — a parameter, a field read, a borrowing call — is
+    // copied. Boxing the bare bytes instead dropped the value twice: once
+    // by its binding at scope exit, once by the dyn.
+    : i vtt ( nurl_lex_type lex )
+    : s vname ( nurl_lex_val lex )
+    : i vline ( nurl_lex_line lex )
+    : b vident ( is_ident_tok vtt )
+    : s vlty ? vident ( nurl_sym_get syms vname ) ``
+    : i vpi ? vident ( nurl_sym_word_index syms `__fn_param_names__` vname ) -1
+    : b vsink & >= vpi 0 ( str_contains_word ( nurl_sym_get g_fn_sink ( nurl_sym_get syms `__fn_self_name__` ) ) ( nurl_str_int vpi ) )
+    : b vparam & >= vpi 0 ! vsink
+    // Lentness of a bare identifier, read before the move below clears
+    // its flag.
+    : ~ s vlent ``
+    ? & vident ! vparam { = vlent ( mem_lent_cond syms cg vlty vtt vname ) } {}
+    // Whether this object is itself a call's argument (mem_arg_temps drops
+    // it after the call): the calls inside the operand reset the marker
+    // for their own arguments, so it is restored once the operand is done.
+    : s vdynarg ( nurl_sym_get syms `__arg_dyn_box__` )
+    ( nurl_sym_def syms `__arg_dyn_box__` `` )
     ( nurl_sym_def syms `__in_call_arg__` `1` )
-    : s val ( gen_operand lex syms cg )
+    : ~ s val ( gen_operand lex syms cg )
     ( nurl_sym_def syms `__in_call_arg__` `` )
+    ( nurl_sym_def syms `__arg_dyn_box__` vdynarg )
     : s ct ( nurl_get_last_type )
     ( expect lex TT_RPAREN )
+    ? ( __type_needs_drop ct syms ) {
+        : b vclone ( __clone_supported ct syms )
+        ? vparam {
+            // A parameter is the caller's: copy it; a type with no copy
+            // is kept (g_fn_keeps), so its caller hands the value over.
+            ? vclone { = vlent ( nurl_str_cat `1` `` ) } { ( mem_note_kept syms cg vname T ) }
+        } {
+            ? ! vident { = vlent ( mem_lent_cond syms cg ct vtt val ) } {}
+            ? vident {
+                ( mem_note_kept syms cg vname T )
+                ? ( bck_is_heap_lty vlty ) { ( bck_stash_move vname vline ( nurl_str_cat3 `( dyn ` tname ` … )` ) ) } {}
+            } {}
+        }
+        ? != 0 ( nurl_str_len vlent ) {
+            ? vclone { = val ( mem_emit_cloneif cg ct val vlent ) }
+            { ( die lex ( nurl_str_cat4 `'( dyn ` tname ( nurl_str_cat3 ` … )' boxes a borrowed value of type '` ct `', which owns heap memory and has no copy: the box would free what its real owner still holds. ` )
+                `Box a value this function owns — bind it with ':' first, or take the parameter as 'sink'.` ) ) }
+        } {}
+    } {}
     ( dyn_check_object_safe lex tname )
     ( dyn_note_needed tname )
     : s implkey ( nurl_str_cat3 tname `##` ct )
@@ -42286,31 +42672,33 @@
                             { = g_borrowck 1 }
                             { ? ( seq a `--no-borrowck` )
                                 { = g_borrowck 0 }
-                                { ? ( seq a `--strict-borrowck` )
-                                    { = g_borrowck 1 = g_strict_borrowck 1 }
-                                    { ? ( seq a `--strict-arity` )
-                                        { = g_strict_arity 1 }
-                                        { ? ( seq a `--no-strict-arity` )
-                                            { = g_strict_arity 0 }
-                                            { ? ( seq a `--ffi-host-imports` )
-                                                { = g_ffi_host_imports 1 }
-                                                { ? ( seq a `--no-cpu-dispatch` )
-                                                    { = g_cpu_dispatch 0 }
-                                                    { ? ( seq a `--no-dce` )
-                                                        { = g_dce 0 }
-                                                        { ? != 0 ( nurl_str_starts a `--keep=` )
-                                                            { = g_dce_keep ( nurl_str_slice a 7 - ( nurl_str_len a ) 7 ) }
-                                                            { ? != 0 ( nurl_str_starts a `--split=` )
-                                                                { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
-                                                                { ? != 0 ( nurl_str_starts a `--split-out=` )
-                                                                    { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
-                                                                    { ? != 0 ( nurl_str_starts a `--split-min=` )
-                                                                        { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
-                                                                        { ? != 0 ( nurl_str_starts a `-` ) {
-                                                                                ( nurl_eprintln ( nurl_str_cat `nurlc: unknown option: ` a ) )
-                                                                                ^ 2
-                                                                            } {}
-                                                                            = path a = path_count + path_count 1 } } } } } } } } } } } } } } } }
+                                { ? ( seq a `--no-maybe-moved` )
+                                    { = g_maybe_moved 0 }
+                                    { ? ( seq a `--strict-borrowck` )
+                                        { = g_borrowck 1 = g_strict_borrowck 1 }
+                                        { ? ( seq a `--strict-arity` )
+                                            { = g_strict_arity 1 }
+                                            { ? ( seq a `--no-strict-arity` )
+                                                { = g_strict_arity 0 }
+                                                { ? ( seq a `--ffi-host-imports` )
+                                                    { = g_ffi_host_imports 1 }
+                                                    { ? ( seq a `--no-cpu-dispatch` )
+                                                        { = g_cpu_dispatch 0 }
+                                                        { ? ( seq a `--no-dce` )
+                                                            { = g_dce 0 }
+                                                            { ? != 0 ( nurl_str_starts a `--keep=` )
+                                                                { = g_dce_keep ( nurl_str_slice a 7 - ( nurl_str_len a ) 7 ) }
+                                                                { ? != 0 ( nurl_str_starts a `--split=` )
+                                                                    { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
+                                                                    { ? != 0 ( nurl_str_starts a `--split-out=` )
+                                                                        { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
+                                                                        { ? != 0 ( nurl_str_starts a `--split-min=` )
+                                                                            { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
+                                                                            { ? != 0 ( nurl_str_starts a `-` ) {
+                                                                                    ( nurl_eprintln ( nurl_str_cat `nurlc: unknown option: ` a ) )
+                                                                                    ^ 2
+                                                                                } {}
+                                                                                = path a = path_count + path_count 1 } } } } } } } } } } } } } } } } }
         }
         = ai + ai 1
     }

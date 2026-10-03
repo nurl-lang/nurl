@@ -1,4 +1,4 @@
-// borrow_strict_generic_maybe_double_free.nu — the conditional
+// borrow_generic_maybe_double_free.nu — the conditional
 // double-free (docs/MEMORY.md §6.2/§6.5) reached through a GENERIC
 // wrapper instead of a second `vec_free` at the same site.
 //
@@ -11,12 +11,9 @@
 //     counts as a consume at all — without it the call was invisible
 //     to the checker and even the UNCONDITIONAL double free through a
 //     generic wrapper compiled clean (borrow_generic_sink_wrapper);
-//   * the strict-mode rule that consuming a MAYBE-moved binding is an
-//     error, which is what makes the conditional shape reportable.
-//
-// Strict-only, like borrow_strict_maybe_double_free: the default
-// checker deliberately keeps the no-false-positive property and lets
-// the conditional shape through.
+//   * the rule that using a binding freed on some paths only is an
+//     error, which is what makes the conditional shape reportable (a
+//     default rule now; it was --strict-borrowck only).
 //
 // One positive + one rebind control.
 

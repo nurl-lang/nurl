@@ -142,35 +142,20 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get
 // Owned-cwd loop: `getcwd(buf, cap)` returns NULL with errno=ERANGE
 // when the buffer is too small; we double and retry until we land on
 // a fit or hit the 1 MB ceiling (which would mean a pathologically
-// long cwd — well past any real filesystem's PATH_MAX).
+// long cwd — well past any real filesystem's PATH_MAX). Each attempt's
+// buffer is a `( Vec u )` the scope drops, so no path frees anything by
+// hand — the raw `nurl_alloc` / `nurl_free` loop this replaced had a
+// free on one branch and a reuse on another.
 @ env_cwd → !String IoErr {
     : ~ i cap 256
-    : ~ s buf ( nurl_alloc cap )
-    : ~ b done F
-    : ~ b ok F
-    ~ ! done {
-        : s rc ( getcwd buf cap )
-        ? != # i rc 0 {
-            = ok T
-            = done T
-        } {
-            : i e ( nurl_errno_get )
-            ? != e ( posix_const `ERANGE` ) { = done T } {
-                ( nurl_free buf )
-                = cap * cap 2
-                ? > cap 1048576 { = done T } {
-                    = buf ( nurl_alloc cap )
-                }
-            }
-        }
+    ~ <= cap 1048576 {
+        : ( Vec u ) buf ( vec_zeroed [u] cap )
+        : s rc ( getcwd # s ( vec_data [u] buf ) cap )
+        ? != # i rc 0 { ^ @ !String IoErr { T ( string_from rc ) } } {}
+        ? != ( nurl_errno_get ) ( posix_const `ERANGE` ) { ^ @ !String IoErr { F @ IoErr { Other } } } {}
+        = cap * cap 2
     }
-    ? ok {
-        : String out ( string_from buf )
-        ( nurl_free buf )
-        ^ @ !String IoErr { T out }
-    } {
-        ^ @ !String IoErr { F @ IoErr { Other } }
-    }
+    ^ @ !String IoErr { F @ IoErr { Other } }
 }
 
 @ env_chdir s path → !v IoErr {

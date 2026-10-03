@@ -1,15 +1,10 @@
-// borrow_strict_maybe_double_free.nu — strict-mode check for the
-// CONDITIONAL double-free (the "maybe-moved hole", docs/MEMORY.md
-// §6.2/§6.5).
+// borrow_maybe_double_free.nu — the CONDITIONAL double-free (the old
+// "maybe-moved hole", docs/MEMORY.md §2.1/§6.5).
 //
 // A value freed on only one arm of a `?` and then freed again is a real
-// double-free on the path where the first free ran. The DEFAULT checker
-// deliberately does not flag it — that keeps the no-false-positive
-// property exact, at the price of this hole. `--strict-borrowck` closes
-// it: consuming a MAYBE-moved binding is an error.
-//
-// This file compiles cleanly under the default checker and only errors
-// under --strict-borrowck (which the test runner adds for borrow_strict_*).
+// double-free on the path where the first free ran. It is an error by
+// default: a consume — or any read — of a binding freed on some paths
+// only. (It used to be reported under --strict-borrowck alone.)
 //
 // One positive case + one rebind control + one join-revive control.
 

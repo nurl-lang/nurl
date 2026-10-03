@@ -3035,15 +3035,21 @@ static void nurl__jrnl_pop_nulls(void) {
  * out of line behind nurl_journal_forget's early return. */
 static inline void nurl__jrnl_forget_body(void *p) {
     size_t *link = &nurl__jrnl_buckets[nurl__jrnl_bucket(p)];
+    int removed = 0;
     while (*link) {
         NurlJournalEntry *entry = &nurl__jrnl[*link - 1];
         if (entry->ptr == p) {
             *link = entry->next;
             entry->ptr = NULL;
             --nurl__jrnl_live;
+            removed = 1;
         } else link = &entry->next;
     }
-    nurl__jrnl_pop_nulls();
+    /* Only a removal can leave a hole at the tail. Most frees inside a
+     * recover extent are of buffers the journal never held (a free with
+     * nothing registered at its address), and re-checking the tail for
+     * each of them was a tenth of the journal's whole cost. */
+    if (removed) nurl__jrnl_pop_nulls();
 }
 __attribute__((noinline))
 static void nurl__jrnl_forget_slow(void *p) { nurl__jrnl_forget_body(p); }

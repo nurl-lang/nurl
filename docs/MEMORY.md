@@ -313,9 +313,41 @@ error: use of moved value 'v' - it was consumed at line N
          (pass a fresh value or rebind it before reuse)
 ```
 
-Re-binding the name (`: ...` or `= ...`) revives it. A binding moved
-on only one arm of a `?` is *maybe-moved* and deliberately not
-flagged, to keep the rule false-positive-free.
+Re-binding the name (`: ...` or `= ...`) revives it.
+
+A binding consumed on only **some** paths — freed on one arm of a `?`,
+or captured by a closure that frees it and has since been used — is
+*maybe-freed*, and using it is an error too, a read as much as a second
+free: on the path that consumed it the read is a use-after-free.
+
+```
+error: use of possibly-moved value 'x' — it was consumed on only some
+       paths, at line N; on that path this reads a freed buffer
+```
+
+The rule is path-aware where the program is:
+
+- a `break` or `continue` ends its path, so `? c { ( string_free t )
+  break } {}` followed by a read of `t` is clean — the freeing path
+  never reaches the read;
+- a binding declared in a loop body (a foreach element included) is a
+  fresh one in every iteration, so freeing it does not carry into the
+  next;
+- a closure frees what it captured when it **runs**: the capture stays
+  readable until the closure's first use (an invocation, or handing the
+  closure on), and is maybe-freed after it — a second invocation is the
+  double free;
+- a module-level global is left alone: any call may reassign it.
+
+What the rule does not treat as a free is a handle handed to a second
+name on some path (`= prev t`, a `?` that selected it, a call that may
+return it): the buffer lives on through the other name, so reading
+either is fine. A second *consume* of such a *maybe-aliased* binding is
+reported under `--strict-borrowck` (§2.9).
+
+Regressions: `borrow_maybe_freed_read.nu` (the positive and every
+control above), `borrow_maybe_double_free.nu`,
+`borrow_generic_maybe_double_free.nu`, `borrow_closure_free_then_read.nu`.
 
 ### 2.1b Freeing what the compiler already frees
 
@@ -383,11 +415,13 @@ depends on what is actually known:
 - **Definite** (an ordinary move, reported by default) when the result
   IS one binding's handle on every path — every live arm names it, or
   the other arm returned. Any later use is a use-after-move.
-- **Conditional** — the *maybe-move*, `Owned ⊔ Moved` in the lattice of
-  §2.6, reported only under `--strict-borrowck`. This covers the `?`
-  with one aliasing arm, every assignment handover, and every
-  returned-handle case. Reads of a maybe-moved binding are **never**
-  flagged; only a second consume is.
+- **Conditional** — the *maybe-alias*: the handle went to the other
+  name on some path, and the buffer lives on through one of them. This
+  covers the `?` with one aliasing arm, every assignment handover, and
+  every returned-handle case. Reading either name is fine; a second
+  consume is reported under `--strict-borrowck`. (A binding *freed* on
+  some paths is a different state — maybe-freed — and any use of it is
+  an error by default, §2.1.)
 
 The assignment and interprocedural cases are conditional even though
 the handover itself is certain, and that is a statement about the
@@ -660,13 +694,12 @@ default) adds three further checks, all diagnostic-only and all emitting
    owned binding whose pointer may outlive that binding's drop is
    reported — a narrow check on the otherwise-untracked `*T` surface
    (§3).
-3. **Consuming a MAYBE-MOVED binding (§6.2/§6.5).** It is a real
-   double-free on the path where the first consume ran. The check is
-   one rule, but a binding reaches the maybe-moved state by more than
-   one route, and every one of them is covered here — the heading used
-   to name only the first, which read as though the other shapes were
-   a fourth check:
-   - freed on one arm of a `?` and still owned on the other;
+3. **Consuming a MAYBE-ALIASED binding (§6.2/§6.5).** A binding freed
+   on some paths only is an error by default, for a consume and a read
+   alike (§2.1). What strict mode adds is the second consume of a
+   binding whose handle went to *another name* on some path — a
+   double-free when that other name is consumed too, which this
+   checker cannot see. The routes into that state:
    - its handle selected by a value-producing `?` / `??` and bound
      elsewhere;
    - stored into an aggregate literal built as a call argument whose
@@ -676,22 +709,13 @@ default) adds three further checks, all diagnostic-only and all emitting
      knows is kept — a bound or returned literal, `vec_push` — is the
      default §2.12 error instead);
    - handed to another name by an alias assignment (`= z a`);
-   - captured by a closure whose body frees it (the closure may run
-     zero times, once, or many);
-   - passed to a call whose effect is not decidable at that point —
-     the callee may `sink` the parameter or hand the handle back.
+   - captured by a closure whose body frees it, before that closure is
+     used (after a use it is maybe-freed — the default rule);
+   - passed to a call that may hand the handle back.
 
-   Off by default because it also flags the legitimate
-   mutually-exclusive-frees pattern (free under `cond` here, free under
-   `! cond` later), which the default no-false-positive contract
-   protects.
-
-   What this check does NOT cover is a *read* of a maybe-moved binding
-   (§2.1): a free on one arm of a `?` followed by an unconditional read
-   after the join is a use-after-free on the taken path and is reported
-   in neither mode. That is a known boundary with a witness, not an
-   oversight; see the v1 hardening ledger for the two measurements that
-   bear on closing it.
+   Off by default because the other name is usually a borrow that never
+   consumes (`: ( Vec String ) pos ( args_positionals p )` followed by
+   freeing `p`).
 
 It is **off by default** because the extensions have a meaningful
 false-positive rate against existing stdlib code; it is a tightening
@@ -974,30 +998,36 @@ class:
   foreach (§2.5), and an **aliased `inout` writer** sharing a call with
   another reader of the same binding (§2.4).
 
-It deliberately **does not** flag the *conditional* forms, to keep the
-no-false-positive property exact. The sharp edge is the **maybe-moved**
-case: a value freed on only one arm of a `?` and then freed again is a
-real double-free on the path where the first free ran, yet it is *not*
-reported —
+The *conditional* forms are flagged too. A value freed on only one arm
+of a `?` and then freed again — or read — is a real double-free (or
+use-after-free) on the path where the first free ran, and it is an
+error:
 
 ```
 ? cond { ( vec_free [i] xs ) } {}
-( vec_free [i] xs )    // double-free when cond was true — NOT flagged
+( vec_free [i] xs )    // error: use of possibly-moved value 'xs'
 ```
 
-— because flagging it would also reject the many programs where the
-two frees are mutually exclusive. Definite double-frees (both arms, or
-straight-line, or loop-carried) *are* caught; only the genuinely
-conditional one slips. Together with the unchecked classes (§3) and the
-trusted surface (§6.4), this is why "compiles clean" means "free of the
-bug classes the checker *reports*," not "verified memory-safe."
+The walk follows `break`, `continue`, `^` and loop-local scope, so a
+free on a path that never reaches the use is not counted. What it does
+not follow is a correlation between two conditions: the
+mutually-exclusive-frees pattern (free under `cond` here, free under
+`! cond` later) is rejected — restructure it so one path frees. A
+handle handed to another name on some path (*maybe-aliased*) is still
+readable, and its second consume is the one conditional form left to
+`--strict-borrowck` (§2.9). Together with the unchecked classes (§3)
+and the trusted surface (§6.4), this is why "compiles clean" means
+"free of the bug classes the checker *reports*," not "verified
+memory-safe."
 
 ### 6.3 The no-false-positive property
 
-Every rule is tuned to flag only a **definite** fault, never a
-*maybe*: a value moved on one arm of a `?` is `MaybeMoved` and left
-alone (§2.1); only the back-edge-carried, definitely-moved binding is
-flagged in a loop (§2.6); a summary records a parameter broadly but
+Every rule is tuned to flag a fault that happens on a **real path**:
+a value freed on one arm of a `?` and then used is flagged, because the
+path through that arm is real; a value handed to another name on one
+path is not, because the buffer is still live there (§2.1); only the
+back-edge-carried binding is flagged in a loop (§2.6), and a `break`
+path is not joined into the code after it; a summary records a parameter broadly but
 only fires when a *real* stack reference is passed (§2.7, §2.8). The
 consequence is a working contract: **if the checker flags your code, it
 has found a real bug** — quote the message and fix it. The whole
@@ -1076,12 +1106,14 @@ Concretely — and this is the comparison that matters — code that
 compiles clean, uses no `*T`, and calls no FFI can still do things
 safe Rust cannot:
 
-1. **Conditionally double-free.** A value freed on one arm of a `?`
-   and then freed again unconditionally is a real double-free on one
-   path, and it is *not* flagged by default — the price of the
-   no-false-positive property (§6.2, §6.3). `--strict-borrowck` closes
-   exactly this hole (§2.9, check 3) at the cost of also flagging the
-   legitimate mutually-exclusive-frees pattern.
+1. **Double-free through a second name, conditionally.** A value freed
+   on one arm of a `?` and then used — freed again or read — is an
+   error by default (§2.1). What is not flagged by default is a handle
+   handed to a second name on *some* path (`= z a` under a condition, a
+   `?` that selected it) and then consumed through both names:
+   `--strict-borrowck` reports it (§2.9, check 3), at the cost of also
+   flagging the common case where the second name is a borrow that
+   never consumes.
 2. **Data-race on shared heap state.** There is a `Send`/`Sync`
    system, and it is a *lint over types*, not a proof about programs.
    `Send` ("may move to another thread") and `Sync` ("may be reached
@@ -1541,7 +1573,13 @@ shape.
 struct whose fields own a `String` / `Vec` (or such a struct) are dropped
 the same way, through `drop__String`, `drop__Vec__<T>` (which drops the
 elements) and `drop__<S>` from the drop graph. A struct with an enum or
-trait-object field, or a `% Drop` of its own, keeps its old rules. These
+trait-object (`%Trait`) field is move-only and gets the compiler-written
+field-by-field drop described above (the `%dyn` object's synthesized Drop
+counts as a Drop impl for that purpose); a struct with a `% Drop` of its
+own keeps its impl. A `( dyn Trait v )` box OWNS `v`: boxing an owned
+local moves it in, boxing a borrowed value (a parameter, a field) copies
+it, and a `%dyn` built right in a call's argument is dropped as a whole
+after the call (`compiler/tests/dyn_box_owns_value.nu`). These
 handles are freely aliased, so their bindings follow a few more rules:
 
 - **Cursors.** `: cur root` borrows: `root` keeps its value and `cur`

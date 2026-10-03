@@ -229,15 +229,20 @@ $ `stdlib/core/char.nu`
 }
 
 // Return bytes [start, start+len); result is heap-allocated, NUL-terminated.
-// Clamps `start` and `len` into the actual string length.
+// Clamps `start` and `len` into the actual string length — measured only as
+// far as start+len: a slice near the front of a long string costs the
+// slice, not the string (a whole-string strlen per slice made cutting a
+// buffer into its lines quadratic).
 @ nurl_str_slice s str i start i n → s {
-    : i slen ( strlen str )
     : ~ i st start
     : ~ i k n
     ? < st 0 { = st 0 } {}
-    ? > st slen { = st slen } {}
     ? < k 0 { = k 0 } {}
-    ? > + st k slen { = k - slen st } {}
+    : i room - 9223372036854775807 st
+    : i want ? > k room 9223372036854775807 + st k
+    : i slen ( strnlen str want )
+    ? > st slen { = st slen } {}
+    ? > k - slen st { = k - slen st } {}
     : s r # s ( nurl_alloc + k 1 )
     : *u sp # *u str
     : *u sat # *u + # i sp st
