@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A raw pointer read after the block that drops its owner is a compile
+  error** (`= p ( string_data x )` / `( vec_push [s] args ( string_data x ) )`
+  with x, or the vector x reads, dropped at the end of its block): a silent
+  use-after-free before (packages/wasmbuilder's link argv). An owner moved
+  on into a container that outlives the pointer is fine.
+  `compiler/tests/diag_pointer_outlives_owner.nu`.
 - **A raw view of a value the function drops on the way out is returned as a
   copy** (`^ ( string_data x )` leaked x per call; `^ ( view_of x )` was a
   use-after-free). A view of a parameter stays the caller's own.
