@@ -1,0 +1,27 @@
+# Changelog
+
+All notable changes to this package are documented here.
+
+## [0.3.1] — 2026-10-03
+
+No API change. Requires NURL 0.69.0.
+
+### Changed
+
+- Nothing is released by hand any more: every `string_free` / `vec_free` /
+  `output_free` / `regex_free` / `args_free` in the builder, the CLI and the
+  tests is gone. `wb_compiler_free` stays as an optional early release (it
+  no longer does anything the compiler would not).
+
+### Fixed
+
+- `--obj FILE` and `--cflags FLAGS`: the split words were dropped at the end
+  of the branch that split them while the link argv still borrowed them, so
+  the link could see a garbage object path or flag. They now live as long as
+  the link.
+- `--asyncify` (or `--asyncify-imports`, or a canvas program) with SIMD or
+  bulk-memory code: the link no longer strips debug info — which took the
+  `target_features` section with it, so binaryen validated against the MVP
+  and rejected the module ("SIMD operation (SIMD is disabled)"). The
+  wasm-opt step strips the debug info itself (`--strip-dwarf` with
+  `--debug`, `--strip-debug` without) and then `--strip-target-features`.
