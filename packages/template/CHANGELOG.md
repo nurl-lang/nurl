@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## [0.2.0] — 2026-10-03
 
-`TplSet` releases itself: `tset_new` returns a `TplSet` handle (its names and sources in an rcbox) instead of a `*TplSet` the caller had to free; every copy is the same set and the last owner releases it. `tset_free` stays as an optional early release. The renderer's per-call state lives behind a handle of its own and goes when the call returns — the engine frees nothing by hand. Callers change `*TplSet` to `TplSet`.
+Requires NURL 0.69.0.
+
+`TplSet` releases itself: `tset_new` returns a `TplSet` handle (its names and sources in an rcbox) instead of a `*TplSet` the caller had to free; every copy is the same set and the last owner releases it. `tset_free` stays as an optional early release. The renderer's per-call state lives behind a handle of its own and goes when the call returns — the engine frees nothing by hand. Every function that took `* TplSet` (`tset_add`, `tset_has`, `tset_render`, `tpl_render_with`, `tset_load_dir`) takes the handle; callers change `*TplSet` to `TplSet`.
 
 ## 0.1.2
 
