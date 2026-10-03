@@ -1,27 +1,6 @@
 # Changelog
 
-## Unreleased
-
-**Kernel census.** `gk_open_census` opens a kit with no device that launches
-nothing: every `gk_run` / `gk_run_dev` — so every `gkd_*` wrapper —
-validates its arguments as usual, then records the kernel it would compile
-(entry name and exact source, once per name; `gk_kernel_count`,
-`gk_census_name`, `gk_census_src`) and reports success. It answers
-`gk_backend` "cpu" and `gk_jit` F — the branches the gpu package's STATIC
-backend takes — so driving a program's kernel calls through it yields the
-exact kernel set a static / wasm build must link, from the same builders
-that run on a device. packages/onnx derives its `kernels_static.c` this way.
-
-- `gk_jit kit`: T when kernels are compiled at run time (CUDA, the CPU
-  backend), F on the static and WebGPU backends, whose kernel sets are fixed
-  at build time and looked up by name. `gkd_perm` shape-specialises (a
-  kernel NAMED after the tensor's shape) only when `gk_jit` — before, a
-  permute of 64K+ elements asked the static backend for a kernel no build
-  could contain.
-- `gkd_convtranspose2d` takes the exact-upsample body (stride = kernel, no
-  padding) on every backend, not only CUDA. Bit-identical by construction;
-  on the static backend the general body's 64-bit modulos were 44 % of a
-  YOLOE-seg forward's profile.
+## [0.9.0] — 2026-10-03
 
 **Nothing is released by hand.** `gk_open` / `gk_open_best` return a
 `GpuKit` handle instead of a `*GpuKit` pointer: every copy of it is the same
@@ -46,6 +25,27 @@ never be handed out of a context that is gone or of another device's kit.
 `gk_pool_count` / `gk_pool_idle_bytes` still sum every kit. The profiler's
 event pair is the kit's too. Requires the gpu package's self-releasing
 handles (`GpuBuffer`, `GpuKernel`, `GpuTimer`, `GpuHost`).
+
+**Kernel census.** `gk_open_census` opens a kit with no device that launches
+nothing: every `gk_run` / `gk_run_dev` — so every `gkd_*` wrapper —
+validates its arguments as usual, then records the kernel it would compile
+(entry name and exact source, once per name; `gk_kernel_count`,
+`gk_census_name`, `gk_census_src`) and reports success. It answers
+`gk_backend` "cpu" and `gk_jit` F — the branches the gpu package's STATIC
+backend takes — so driving a program's kernel calls through it yields the
+exact kernel set a static / wasm build must link, from the same builders
+that run on a device. packages/onnx derives its `kernels_static.c` this way.
+
+- `gk_jit kit`: T when kernels are compiled at run time (CUDA, the CPU
+  backend), F on the static and WebGPU backends, whose kernel sets are fixed
+  at build time and looked up by name. `gkd_perm` shape-specialises (a
+  kernel NAMED after the tensor's shape) only when `gk_jit` — before, a
+  permute of 64K+ elements asked the static backend for a kernel no build
+  could contain.
+- `gkd_convtranspose2d` takes the exact-upsample body (stride = kernel, no
+  padding) on every backend, not only CUDA. Bit-identical by construction;
+  on the static backend the general body's 64-bit modulos were 44 % of a
+  YOLOE-seg forward's profile.
 
 ## 0.8.1
 
