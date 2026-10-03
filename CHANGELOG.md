@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value stored into a field of a binding that only borrows its value is
+  that binding's own** (`: ~ Rec r ?? ( vec_get rs 0 ) … = . r name (
+  string_from … )`, or a copy of a by-value parameter): it leaked per call.
+  The field now has an owner flag of its own — dropped with the binding,
+  replaced on the next store, copied when the binding is handed back to a
+  caller that would not own it, and handed to the slot when the binding is
+  written back (`= . p k r`, or a helper that puts it back), which then
+  drops the value it replaced unless the program took it out first.
+  `compiler/tests/fresh_into_borrowed_copy.nu`.
 - **A raw pointer read after the block that drops its owner is a compile
   error** (`= p ( string_data x )` / `( vec_push [s] args ( string_data x ) )`
   with x, or the vector x reads, dropped at the end of its block): a silent
