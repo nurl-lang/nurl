@@ -148,6 +148,28 @@ $ `../src/oauth.nu`
                 F _ → { ( ok F `aud is enforced` ) }
             }
             ( oidc_policy_set_audience pol `client-1` )
+            // An ID token issued to another client (azp) is not ours; an
+            // access token for our API that another client requested is.
+            : s acc `{"iss":"https://iss.example","aud":"client-1","azp":"cli-app","sub":"u1","exp":2000,"iat":1000}`
+            ?? ( json_parse acc ) {
+                T ac → {
+                    ?? ( claims_check ac pol 1500 ) {
+                        T e → { ( ok_str ( claim_err_desc # ClaimErr e ) `wrong authorized party (azp)` `an ID token's azp must be us` ) }
+                        F _ → { ( ok F `an ID token's azp must be us` ) }
+                    }
+                    ?? ( claims_check_access ac pol 1500 ) {
+                        T _ → { ( ok F `an access token's azp is the requesting client` ) }
+                        F _ → { ( ok T `an access token's azp is the requesting client` ) }
+                    }
+                    ( oidc_policy_set_audience pol `someone-else` )
+                    ?? ( claims_check_access ac pol 1500 ) {
+                        T e → { ( ok_str ( claim_err_desc # ClaimErr e ) `wrong audience` `an access token's aud is still enforced` ) }
+                        F _ → { ( ok F `an access token's aud is still enforced` ) }
+                    }
+                    ( oidc_policy_set_audience pol `client-1` )
+                }
+                F _ → { ( ok F `access claims parse` ) }
+            }
             ( oidc_policy_set_issuer pol `https://evil.example` )
             ?? ( claims_check claims pol 1500 ) {
                 T e → { ( ok_str ( claim_err_desc # ClaimErr e ) `wrong issuer` `iss is enforced` ) }

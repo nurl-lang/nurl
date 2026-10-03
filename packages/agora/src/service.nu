@@ -32,6 +32,7 @@ $ `stdlib/std/sysinfo.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `api.nu`
+$ `web.nu`
 
 // ── MCP ──────────────────────────────────────────────────────────────
 
@@ -45,15 +46,57 @@ $ `api.nu`
         }
         F _ → {}
     }
-    : AgStore st ( ag_store )
     : i now ( now_seconds )
-    : AgCaller caller ( ag_caller_of_ctx st ( mcp_call_context c ) now )
+    : Json ctx ( mcp_call_context c )
+    // Signed in: the context names the organisation, the person, the
+    // agent they act as and the MCP session (see __ag_h_mcp).
+    ? ( ag_auth_oidc ) {
+        : String org ( __ag_ctx_str ctx `org` )
+        : AgStore st ( ag_org_store ( string_data org ) )
+        : String sub ( __ag_ctx_str ctx `sub` )
+        : String agent ( __ag_ctx_str ctx `agent` )
+        : String session ( __ag_ctx_str ctx `session` )
+        : ~ AgRes res ( _ag_err 401 `not signed in` )
+        ? & . st ok > ( string_len sub ) 0 {
+            = res ( ag_oidc_call st ( string_data sub ) ( string_data agent ) ( string_data session ) name args now )
+        } {}
+        ? & < . res status 400 != 0 ( nurl_str_eq name `whoami` ) {
+            ( string_push_str . res text `signed in: ` )
+            ( string_push_str . res text ( string_data ( __ag_ctx_str ctx `email` ) ) )
+            ( string_push_str . res text ` (organisation ` )
+            ( string_push_str . res text ( string_data org ) )
+            ( string_push_str . res text `)\n` )
+        } {}
+        : Json out ? < . res status 400
+        ( mcp_tool_result_text ( string_data . res text ) )
+        ( mcp_tool_result_error ( string_data . res text ) )
+        ^ out
+    } {}
+    : AgStore st ( ag_store )
+    : AgCaller caller ( ag_caller_of_ctx st ctx now )
     : AgRes res ( ag_op_call st caller name args now )
     : Json out ? < . res status 400
     ( mcp_tool_result_text ( string_data . res text ) )
     ( mcp_tool_result_error ( string_data . res text ) )
     ^ out
 }
+
+// A string field of the dispatch context ('' when absent).
+@ __ag_ctx_str Json ctx s key → String {
+    ? ( json_is_obj ctx ) {
+        ?? ( json_obj_get ctx key ) { T v → { ^ ( string_from ( json_as_str v ) ) } F _ → {} }
+    } {}
+    ^ ( string_new )
+}
+
+// What a signed-in agent reads before its first call.
+: s AG_INSTRUCTIONS_OIDC `Agora is where agents meet: channels, direct mail, a task board and shared notes — your organisation's, behind your sign-in.
+First call: join name=<who you are in this session> (a name of your own; created on first use, then yours). Without it you act as your default agent; whoami says who.
+Every turn: brief — what is new (each message once; long channel posts cut, msg id=N reads one whole), your held tasks, the counts.
+Waiting on someone: wait — blocks until anything arrives for you, then answers as brief; waiting costs no tokens.
+Talk: post to a channel, send for direct mail, history to re-read or search. status says what you are doing (agents shows it).
+Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
+Remember: note_set / note / notes for facts that outlive this conversation, per project (a name, or the repository's git remote URL) or global.`
 
 // The MCP server, from the catalog. Built once; served over any
 // transport. A tool's annotations follow its flags: read-only ops are
@@ -63,14 +106,19 @@ $ `api.nu`
 // for). openWorldHint is F: agora talks to its own file, not the web.
 @ ag_mcp_server → McpServer {
     : McpServer srv ( mcp_server_new `agora` AG_VERSION )
-    ( mcp_server_set_instructions srv AG_INSTRUCTIONS )
+    : b oidc ( ag_auth_oidc )
+    ( mcp_server_set_instructions srv ? oidc AG_INSTRUCTIONS_OIDC AG_INSTRUCTIONS )
     : ( Vec AgOpDef ) cat ( ag_op_catalog )
     : i n ( vec_len [AgOpDef] cat )
     : ~ i i 0
     ~ < i n {
         ?? ( vec_get [AgOpDef] cat i ) {
             T d → {
-                ( mcp_server_add_tool_ctx srv ( string_data . d name ) ( string_data . d desc )
+                : b is_join != 0 ( nurl_str_eq ( string_data . d name ) `join` )
+                : s desc ? & oidc is_join
+                `Choose who you are in this session: a name of your own (created on first use, then yours). Your sign-in is the credential — no token.`
+                ( string_data . d desc )
+                ( mcp_server_add_tool_ctx srv ( string_data . d name ) desc
                 ( json_clone . d schema ) . d read_only F . d read_only F
                 \ Json a McpCall c → Json { ^ ( __ag_mcp_tool a c ) } )
             }
@@ -142,7 +190,9 @@ $ `api.nu`
     : Json out ( json_obj_new )
     ( json_obj_set out `service` ( json_str_lit `agora` ) )
     ( json_obj_set out `version` ( json_str_lit AG_VERSION ) )
-    ( json_obj_set out `auth` ( json_str_lit `Authorization: Bearer <token from join>` ) )
+    ( json_obj_set out `auth` ( json_str_lit ? ( ag_auth_oidc )
+    `Authorization: Bearer <OIDC access token>; X-Agora-Agent: <your agent> (default: named after you)`
+    `Authorization: Bearer <token from join>` ) )
     ( json_obj_set out `ops` arr )
     ^ out
 }
@@ -215,8 +265,16 @@ $ `api.nu`
     : ~ String op ( string_new )
     ?? ( params_get p `op` ) { T v → { = op v } F _ → {} }
     : i now ( now_seconds )
-    : AgCaller caller ( __ag_http_caller req now )
     : Json args ( __ag_http_args req ( string_data op ) )
+    ? ( ag_auth_oidc ) {
+        : AgWho w ( ag_who req now )
+        ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+        : String agent ( ag_agent_for req . w st . w who `` )
+        : AgRes res ( ag_oidc_call . w st ( string_data . . w who sub ) ( string_data agent ) `` ( string_data op ) args now )
+        : HttpResponse r ( response_json . res status . res body )
+        ^ r
+    } {}
+    : AgCaller caller ( __ag_http_caller req now )
     : AgRes res ( ag_op_call ( ag_store ) caller ( string_data op ) args now )
     : HttpResponse r ( response_json . res status . res body )
     ? == . res status 401 {
@@ -247,6 +305,7 @@ $ `api.nu`
 // to the dispatch as its context.
 @ __ag_h_mcp HttpRequest req → HttpResponse {
     : i now ( now_seconds )
+    ? ( ag_auth_oidc ) { ^ ( __ag_h_mcp_oidc req now ) } {}
     : AgCaller caller ( __ag_http_caller req now )
     : Json ctx ( __ag_ctx_of caller )
     : McpServer srv ( __ag_mcp_srv )
@@ -256,11 +315,86 @@ $ `api.nu`
     ^ out
 }
 
+// Is this request an MCP `initialize`?
+@ __ag_is_initialize HttpRequest req → b {
+    ? > ( vec_len [u] . req body ) 0 {} { ^ F }
+    ?? ( json_parse_bytes . req body ) {
+        T j → {
+            ? ( json_is_obj j ) {
+                ?? ( json_obj_get j `method` ) { T m → { ^ != 0 ( nurl_str_eq ( json_as_str m ) `initialize` ) } F _ → {} }
+            } {}
+        }
+        F _ → {}
+    }
+    ^ F
+}
+
+// Signed-in /mcp: no token → the 401 that tells the client where to
+// sign in. The session id is the service's own: handed out on
+// `initialize`, it is what `join` binds an agent to.
+@ __ag_h_mcp_oidc HttpRequest req i now → HttpResponse {
+    : s method ( string_data . req method )
+    ? != 0 ( nurl_str_eq method `OPTIONS` ) {
+        : McpServer srv0 ( __ag_mcp_srv )
+        : Json c0 ( json_obj_new )
+        : ( @ ?Json Json ) d0 \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv0 rq c0 ) }
+        : ( @ HttpResponse HttpRequest ) h0 ( mcp_http_handler d0 )
+        : HttpResponse pre ( h0 req )
+        ^ pre
+    } {}
+    : AgWho w ( ag_who req now )
+    ? == . w status 401 { ^ ( ag_mcp_challenge req . w who ) } {}
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : ~ String session ( _ag_header req `mcp-session-id` )
+    // A session id travels in a header and keys an agent binding: only
+    // the service's own shape (32 hex digits) is accepted.
+    ? & > ( string_len session ) 0 ! ( __ag_is_session_id ( string_data session ) ) { = session ( string_new ) } {}
+    ? != 0 ( nurl_str_eq method `DELETE` ) {
+        ? > ( string_len session ) 0 {
+            ( _ag_exec_ss . w st `DELETE FROM sessions WHERE id = ?1 AND sub = ?2` ( string_data session ) ( string_data . . w who sub ) )
+        } {}
+        : HttpResponse gone ( response_status_only 204 )
+        ^ gone
+    } {}
+    : b fresh & == ( string_len session ) 0 ( __ag_is_initialize req )
+    ? fresh { = session ( rand_hex_str 16 ) } {}
+    : String agent ( ag_agent_for req . w st . w who ( string_data session ) )
+    : Json ctx ( json_obj_new )
+    ( json_obj_set ctx `org` ( json_str_lit ( string_data . . w who org ) ) )
+    ( json_obj_set ctx `sub` ( json_str_lit ( string_data . . w who sub ) ) )
+    ( json_obj_set ctx `email` ( json_str_lit ( string_data . . w who email ) ) )
+    ( json_obj_set ctx `agent` ( json_str_lit ( string_data agent ) ) )
+    ( json_obj_set ctx `session` ( json_str_lit ( string_data session ) ) )
+    : McpServer srv ( __ag_mcp_srv )
+    : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
+    : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
+    : HttpResponse out ( h req )
+    ? fresh { ( response_set_header out `Mcp-Session-Id` ( string_data session ) ) } {}
+    ^ out
+}
+
+@ __ag_is_session_id s v → b {
+    : i n ( nurl_str_len v )
+    ? == n 32 {} { ^ F }
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get v k )
+        ? | & >= c 48 <= c 57 & >= c 97 <= c 102 {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
 // ── Wiring ───────────────────────────────────────────────────────────
 
 // The whole HTTP app. Separate from `ag_serve` so tests can drive it
 // through `router_handle` without a socket.
 @ ag_build_app i workers b quiet → HttpApp {
+    ^ ( ag_build_app_web workers quiet `` )
+}
+
+// The same with the web page served from `webroot` ('' = none).
+@ ag_build_app_web i workers b quiet s webroot → HttpApp {
     : HttpApp a ( http_app_new )
     ( http_app_workers a workers )
     ( http_app_cors a )
@@ -277,16 +411,67 @@ $ `api.nu`
     ( http_app_route a `POST` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_mcp req ) } )
     ( http_app_route a `GET` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_mcp req ) } )
     ( http_app_route a `DELETE` `/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_mcp req ) } )
+    // OAuth discovery for MCP clients (404 in local mode).
+    ( http_app_get a `/.well-known/oauth-protected-resource` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_resource_metadata req p ) } )
+    ( http_app_get a `/.well-known/oauth-protected-resource/mcp` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_resource_metadata req p ) } )
+    // The web page: its sign-in configuration and its API.
+    ( http_app_get a `/auth/config` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_auth_config req p ) } )
+    ( http_app_get a `/m/me` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_me req p ) } )
+    ( http_app_get a `/m/agents` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_agents req p ) } )
+    ( http_app_put a `/m/agents/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_agent_put req p ) } )
+    ( http_app_delete a `/m/agents/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_agent_del req p ) } )
+    ( http_app_get a `/m/channels` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_channels req p ) } )
+    ( http_app_delete a `/m/channels` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_channel_del req p ) } )
+    ( http_app_get a `/m/messages` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_messages req p ) } )
+    ( http_app_put a `/m/messages/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_message_put req p ) } )
+    ( http_app_delete a `/m/messages/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_message_del req p ) } )
+    ( http_app_get a `/m/tasks` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_tasks req p ) } )
+    ( http_app_put a `/m/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_task_put req p ) } )
+    ( http_app_delete a `/m/tasks/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_task_del req p ) } )
+    ( http_app_get a `/m/notes` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_notes req p ) } )
+    ( http_app_put a `/m/notes` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_note_put req p ) } )
+    ( http_app_delete a `/m/notes` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_note_del req p ) } )
+    ( http_app_get a `/m/users` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_users req p ) } )
+    ( http_app_put a `/m/users/:sub` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_user_put req p ) } )
+    ( http_app_delete a `/m/users/:sub` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_user_del req p ) } )
+    ( http_app_get a `/m/tenants` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_tenants req p ) } )
+    ( http_app_put a `/m/tenants/:tid` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_tenant_put req p ) } )
+    ? > ( nurl_str_len webroot ) 0 {
+        // The sign-in redirect lands on a page of its own; everything
+        // else unrouted is a file of the web root (`/` = index.html).
+        ( ag_auth_set_webroot webroot )
+        ( http_app_get a `/oauth/callback` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_serve_callback ) } )
+        ( http_app_static_dir a webroot )
+    } {}
     ^ a
 }
 
+// The sign-in callback page of the web root.
+@ __ag_serve_callback → HttpResponse {
+    : String path ( path_join ( ag_auth_webroot ) `oauth-callback.html` )
+    ?? ( read_file ( string_data path ) ) {
+        T text → {
+            : HttpResponse r ( response_new 200 )
+            ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+            ( response_set_header r `Cache-Control` `no-store` )
+            ( response_set_body_str r ( string_data text ) )
+            ^ r
+        }
+        F _ → { ^ ( response_text 404 `not found\n` ) }
+    }
+}
+
 @ ag_serve s host i port i workers b quiet → i {
+    ^ ( ag_serve_web host port workers quiet `` )
+}
+
+@ ag_serve_web s host i port i workers b quiet s webroot → i {
     // `--workers 0` means one per CPU — and must mean a pool: the http
     // package runs a single-threaded loop for 0, where one agent's `wait`
     // held up every other call until it returned.
     : i w ? > workers 0 workers ? > ( sys_cpu_count ) 4 ( sys_cpu_count ) 4
     ( ag_wait_cap_set w )
-    : HttpApp a ( ag_build_app w quiet )
+    : HttpApp a ( ag_build_app_web w quiet webroot )
     ^ ( http_app_listen a host port )
 }
 

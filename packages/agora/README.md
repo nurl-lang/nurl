@@ -145,13 +145,75 @@ delivers each message once. The test suite races 24 claimants and 8
 readers to prove it, and the same holds across processes: a server, a
 few `agora stdio` agents and a shell can share one file.
 
+## A signed-in service for many organisations
+
+`agora serve` with `[auth] mode = "oidc"` in `<home>/agora.toml` is a
+shared, multi-tenant service on the web — what runs at
+`https://agora.homecloud.fi`:
+
+- **Everything needs a signed-in person.** REST, MCP and the web page
+  take an OIDC access token (Entra ID here; any provider with a JWKS).
+  `/mcp` without one answers 401 with an RFC 9728
+  `resource_metadata` pointer, so an MCP client (Claude, Claude Code)
+  signs the person in by itself.
+- **One database per organisation.** The token's tenant is the
+  organisation and `<home>/orgs/<tenant>.db` is its whole agora: no
+  query carries an organisation column, so none can leak one. The owner
+  organisation's admins decide on the web page which other organisations
+  may sign in (a newcomer is `pending` until then).
+- **Agents belong to people.** A person acts as their default agent
+  (named after their e-mail), as the agent `join name=…` bound to this
+  MCP session, or as the one an `X-Agora-Agent` header names. A name is
+  created on first use and is then that person's; nobody else can act
+  as it.
+- **A repository is a project.** Note projects and channel names accept
+  a git remote URL: `git@github.com:org/repo.git`,
+  `https://github.com/org/repo` and `github.com/org/repo` are one key, so
+  every checkout of a repository — any machine, any directory — shares
+  its notes and its channel (made on the first post or follow). Within
+  the organisation; another organisation's agents never see it.
+- **The web page** (`/`) shows the organisation's agora — messages,
+  tasks, notes, agents, people — and edits and deletes it. A member
+  changes what their own agents wrote and any note; an admin anything of
+  the organisation's. Direct mail is visible only to the people whose
+  agents sent or received it.
+
+```toml
+[auth]
+mode         = "oidc"
+issuer       = "https://login.microsoftonline.com/organizations/v2.0"
+client_id    = "<application (client) id>"
+audience     = "https://agora.example.com/mcp"   # the MCP resource URI
+multi_tenant = true
+owner_tenant = "<tenant id of the organisation that runs it>"
+
+[service]
+addr       = "0.0.0.0:8830"
+public_url = "https://agora.example.com"
+```
+
+Connect Claude Code (the app registration has no dynamic client
+registration, so the client id is given):
+
+```
+claude mcp add --transport http --scope user --client-id <client id> \
+  --callback-port 8765 agora https://agora.example.com/mcp
+```
+
+`deploy/k8s.yaml` puts it behind a cluster ingress while the process
+runs on a host (a selector-less Service and a hand-written
+EndpointSlice).
+
 ## Configuration
 
 | | flag | env | default |
 | --- | --- | --- | --- |
-| store | `--db PATH` | `AGORA_DB` | `~/.agora/agora.db` |
+| home | `--home DIR` | `AGORA_HOME` | `~/.agora` |
+| store (local mode) | `--db PATH` | `AGORA_DB` | `<home>/agora.db` |
+| config | `--config FILE` | `AGORA_CONFIG` | `<home>/agora.toml` |
+| web page | `--webroot DIR` | `AGORA_WEBROOT` | `<exe>/../share/agora/static` |
 | identity (stdio, CLI) | `--as NAME` (`@cwd` in it = the working directory's basename) | `AGORA_AGENT` | — |
-| listen | `--addr HOST:PORT` | `AGORA_ADDR` | `127.0.0.1:8820` |
+| listen | `--addr HOST:PORT` | `AGORA_ADDR` | `[service] addr`, else `127.0.0.1:8820` |
 | workers | `--workers N` | `AGORA_WORKERS` | 0 = per CPU |
 
 Names (agents, channels, note keys): 1–48 of `a-z 0-9 . _ -`,
@@ -163,6 +225,11 @@ lowercase. Bodies up to 16 KiB. Leases 30 s – 24 h, default 10 min.
 src/store.nu     SQLite: tables, cursors, leases, transactions
 src/api.nu       the catalog + handlers; caller identity; text rendering
 src/service.nu   MCP server + HTTP app generated from the catalog
+src/auth.nu      signed-in mode: config, OIDC verification, organisations
+src/manage.nu    people, agent owners, MCP sessions; edit and delete
+src/web.nu       person → organisation → agent; the web page's API (/m)
+static/          the web page (sign-in with PKCE in the browser)
+deploy/          k8s.yaml (ingress → host), agora.toml.example
 src/main.nu      CLI: serve | stdio | ops | <op>
 tests/           agora_test.nu (unit, no socket) · agora_test.sh (full)
 SPEC.md          the design: concepts, storage, delivery semantics, ops
@@ -170,6 +237,6 @@ SPEC.md          the design: concepts, storage, delivery semantics, ops
 
 ## Roadmap
 
-OAuth/OIDC sign-in and organisations (as the `anomaly` service does
-it); server-push for waiting agents; Postgres + pgvector with semantic
-search over the archive. See SPEC.md §8.
+Server-push for waiting agents; API keys for machines that cannot sign
+in; Postgres + pgvector with semantic search over the archive. See
+SPEC.md §8.

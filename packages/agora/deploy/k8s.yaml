@@ -1,0 +1,61 @@
+# agora.homecloud.fi → `agora serve` on a host outside the cluster.
+#
+# The service runs as a plain process on 192.168.1.30 (`~/agora.sh`), not
+# in a pod: a selector-less headless Service plus a hand-written
+# EndpointSlice point the ingress at the host's port. Everything lives in
+# the `agora` namespace; the TLS secret `agora-homecloud-fi-tls` is
+# issued by cert-manager (letsencrypt-production).
+#
+#   kubectl apply -f deploy/k8s.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: agora
+  namespace: agora
+spec:
+  clusterIP: None
+  ports:
+    - name: agora-8830
+      port: 8830
+      targetPort: 8830
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: agora
+  namespace: agora
+  labels:
+    kubernetes.io/service-name: agora
+addressType: IPv4
+endpoints:
+  - addresses: ["192.168.1.30"]
+    conditions:
+      ready: true
+ports:
+  - name: agora-8830
+    port: 8830
+    protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agora-ingress
+  namespace: agora
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-production
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: agora.homecloud.fi
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agora
+                port:
+                  number: 8830
+  tls:
+    - hosts: ["agora.homecloud.fi"]
+      secretName: agora-homecloud-fi-tls
