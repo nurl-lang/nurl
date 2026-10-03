@@ -16,9 +16,11 @@
 //   host.bind(instance);                 // after memory is available
 //   await host.runWithAsyncify(() => instance.exports._start());
 //
-// kernels_wgsl.js supplies the WGSL + arg signatures.
+// kernels_wgsl.js supplies the kernel set: each kernel's WGSL body and
+// the C parameter list it is launched with, from which the bindings, the
+// uniform block and the argument decoding are generated (marshal).
 
-import { K, buildWGSL, scalarLayout, dispatchInvocations } from "./kernels_wgsl.js";
+import { K, buildWGSL, bindLayout, marshal, uniformLayout, dispatchInvocations } from "./kernels_wgsl.js";
 
 export async function makeWebGPUHost() {
   // high-performance matters on multi-GPU machines: the default adapter
@@ -27,6 +29,10 @@ export async function makeWebGPUHost() {
   const adapter = navigator.gpu && await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
   const device = adapter && await adapter.requestDevice();
   const ok = !!device;
+  // A WGSL that fails to compile, or a bind group that does not match its
+  // pipeline, is reported asynchronously and otherwise silently drops the
+  // work — say so (labels carry the kernel's name).
+  if (ok) device.addEventListener("uncapturederror", (e) => console.error("[gpu/webgpu] " + ((e.error && e.error.message) || e)));
 
   let memory = null, exp = null;
   const mem = () => new Uint8Array(memory.buffer);
@@ -80,7 +86,10 @@ export async function makeWebGPUHost() {
   const bgCache = new Map();      // key → { bg, uni, ids }
   function dropCachedFor(bufId) {
     for (const [k, e] of bgCache) {
-      if (e.ids.includes(bufId)) { e.uni.destroy(); bgCache.delete(k); }
+      if (e.ids.includes(bufId)) {
+        if (e.uni) { if (enc) deadBufs.push(e.uni); else e.uni.destroy(); }
+        bgCache.delete(k);
+      }
     }
   }
 
@@ -105,9 +114,22 @@ export async function makeWebGPUHost() {
       if (!K[name]) return 0n;
       let id = pipeByName.get(name);
       if (id) return BigInt(id);
-      const mod = device.createShaderModule({ code: buildWGSL(name) });
-      const pipe = device.createComputePipeline({ layout: "auto", compute: { module: mod, entryPoint: "main" } });
-      pipelines.push({ pipe, name });
+      let pipe;
+      try {
+        const mod = device.createShaderModule({ label: name, code: buildWGSL(name) });
+        // the bind-group layout is the kernel's parameter list, not what
+        // the body happens to reference ("auto" drops an unused binding,
+        // and the launch's bind group would then fail to match)
+        const bgl = device.createBindGroupLayout({ label: name, entries: bindLayout(name).map((e) => ({
+          binding: e.binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: e.type } })) });
+        pipe = device.createComputePipeline({ label: name,
+          layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+          compute: { module: mod, entryPoint: "main" } });
+      } catch (e) {
+        console.error(`[gpu/webgpu] ${name}: ${e.message || e}`);
+        return 0n;
+      }
+      pipelines.push({ pipe, name, hasUniform: uniformLayout(name).length > 0 });
       id = pipelines.length; // 1-based
       pipeByName.set(name, id);
       return BigInt(id);
@@ -148,45 +170,37 @@ export async function makeWebGPUHost() {
     wgpu_launch: (pipeId, total, argsPtr, nargs) => {
       const entry = pipelines[Number(pipeId) - 1]; if (!entry) return -1n;
       const name = entry.name;
-      const params = K[name].params;
-      // args: nargs i64 cells at argsPtr — buffer ids or scalar bits, in param order.
-      const argsBase = Number(argsPtr) >> 3; // i64 index
-      const cellsLo = new Int32Array(memory.buffer, Number(argsPtr), Number(nargs) * 2);
-      const storageEntries = [];
-      const scalars = scalarLayout(name);
-      const ub = new ArrayBuffer(Math.max(16, Math.ceil(scalars.length * 4 / 16) * 16));
-      const ubI = new Int32Array(ub), ubF = new Float32Array(ub);
-      let bufBinding = 0, scalarIdx = 0;
-      const ids = [], scalarVals = [];
-      for (let i = 0; i < params.length; i++) {
-        const [pn, t] = params[i];
-        const lo = cellsLo[i * 2]; // low 32 bits of the i64 cell
-        if (t === "b" || t === "w" || t === "q" || t === "Q") {
-          const b = lo === 0 ? nullBuf() : buffers.get(lo);
-          if (!b) return -2n;
-          ids.push(lo);
-          storageEntries.push({ binding: bufBinding++, resource: { buffer: b } });
-        } else if (t === "f") {
-          const fv = new Float32Array(new Int32Array([lo]).buffer)[0];
-          ubF[scalarIdx++] = fv;
-          scalarVals.push(fv);
-        } else {
-          ubI[scalarIdx++] = lo;
-          scalarVals.push(lo);
-        }
-      }
-      const key = pipeId + "|" + ids.join(",") + "|" + new Uint32Array(ub).join(",");
+      // args: nargs i64 cells at argsPtr — buffer ids or scalar bits, in
+      // the kernel's parameter order (its `sig`)
+      const dv = new DataView(memory.buffer, Number(argsPtr), Number(nargs) * 8);
+      const cells = [];
+      for (let i = 0; i < Number(nargs); i++) cells.push(dv.getBigInt64(i * 8, true));
+      const m = marshal(name, cells);
+      if (m.error) { console.error("[gpu/webgpu] " + m.error); return -3n; }
+      const key = pipeId + "|" + m.ids.join(",") + "|" + new Uint32Array(m.uniform).join(",");
       let ce = bgCache.get(key);
       if (!ce) {
-        const uni = device.createBuffer({ size: ub.byteLength, usage: UN });
-        device.queue.writeBuffer(uni, 0, ub);
-        storageEntries.push({ binding: bufBinding, resource: { buffer: uni } });
-        ce = { bg: device.createBindGroup({ layout: entry.pipe.getBindGroupLayout(0), entries: storageEntries }), uni, ids };
+        const entries = [];
+        for (let i = 0; i < m.ids.length; i++) {
+          const b = m.ids[i] === 0 ? nullBuf() : buffers.get(m.ids[i]);
+          if (!b) return -2n;
+          entries.push({ binding: i, resource: { buffer: b } });
+        }
+        let uni = null;
+        if (entry.hasUniform) {
+          uni = device.createBuffer({ size: m.uniform.byteLength, usage: UN });
+          device.queue.writeBuffer(uni, 0, m.uniform);
+          entries.push({ binding: m.ids.length, resource: { buffer: uni } });
+        }
+        const bg = entries.length ? device.createBindGroup({ label: name, layout: entry.pipe.getBindGroupLayout(0), entries }) : null;
+        ce = { bg, uni, ids: m.ids };
         bgCache.set(key, ce);
       }
+      const groups = Math.ceil(dispatchInvocations(name, m.scalars, Number(total)) / 64);
+      if (groups <= 0) return 0n;
       const p = getPass();
-      p.setPipeline(entry.pipe); p.setBindGroup(0, ce.bg);
-      const groups = Math.ceil(dispatchInvocations(name, scalarVals, Number(total)) / 64);
+      p.setPipeline(entry.pipe);
+      if (ce.bg) p.setBindGroup(0, ce.bg);
       const gx = Math.min(groups, 65535), gy = Math.ceil(groups / 65535);
       p.dispatchWorkgroups(gx, gy);
       return 0n;
@@ -237,6 +251,20 @@ export async function makeWebGPUHost() {
     },
     imports,
     bind(instance) { memory = instance.exports.memory; exp = instance.exports; },
+    // Read device buffer `id` back without Asyncify (for a JS caller that
+    // can await — tests drive the imports directly with this).
+    async readBuffer(id, bytes) {
+      const b = buffers.get(Number(id)); if (!b) throw new Error("no buffer " + id);
+      const rb = device.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      endPass();
+      if (!enc) enc = device.createCommandEncoder();
+      enc.copyBufferToBuffer(b, 0, rb, 0, bytes);
+      flush();
+      await rb.mapAsync(GPUMapMode.READ);
+      const out = rb.getMappedRange().slice(0);
+      rb.destroy();
+      return out;
+    },
     // Wrap a host import so a synchronous NURL call suspends the module
     // (Asyncify unwind), awaits `fn`'s Promise, then rewinds returning its
     // result. Use for a blocking import that must go async without a

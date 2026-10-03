@@ -8,8 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The compiler asks its symbol table about a word in a list in place**
+  (`nurl_sym_has_word`, `nurl_sym_word_index`): 131 `( str_contains_word (
+  nurl_sym_get … ) w )` / `str_word_index` sites copied a whole list — a
+  scope's drop list, a function's parameter names — to test one word.
+  Self-compile −0.4 % instructions (shipped build).
+- **A function that hands back a binding as it came from a call answers
+  ownership statically when that call cannot lend** (`: String s (
+  string_from … ) … ^ s`): it was marked per-call (a runtime flag read at
+  every caller), decided before the callee's summary was final; now settled
+  at module end. bench pq −0.6 %, json_parse −0.4 % instructions.
+
 ### Fixed
 
+- **A value stored into a field of a binding that only borrows its value is
+  that binding's own** (`: ~ Rec r ?? ( vec_get rs 0 ) … = . r name (
+  string_from … )`, or a copy of a by-value parameter): it leaked per call.
+  The field now has an owner flag of its own — dropped with the binding,
+  replaced on the next store, copied when the binding is handed back to a
+  caller that would not own it, and handed to the slot when the binding is
+  written back (`= . p k r`, or a helper that puts it back), which then
+  drops the value it replaced unless the program took it out first.
+  `compiler/tests/fresh_into_borrowed_copy.nu`.
+- **A raw pointer read after the block that drops its owner is a compile
+  error** (`= p ( string_data x )` / `( vec_push [s] args ( string_data x ) )`
+  with x, or the vector x reads, dropped at the end of its block): a silent
+  use-after-free before (packages/wasmbuilder's link argv). An owner moved
+  on into a container that outlives the pointer is fine.
+  `compiler/tests/diag_pointer_outlives_owner.nu`.
+- **A raw view of a value the function drops on the way out is returned as a
+  copy** (`^ ( string_data x )` leaked x per call; `^ ( view_of x )` was a
+  use-after-free). A view of a parameter stays the caller's own.
+  `compiler/tests/return_raw_view_of_local.nu`.
 - **`( mem_dup c )` is a fresh value to the call it is passed to**
   (`( vec_push out ( mem_dup c ) )`, c a `vec_get` payload): the push took
   it for lent and copied the copy (anomaly meta_clone_versions leaked per

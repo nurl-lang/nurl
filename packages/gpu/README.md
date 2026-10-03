@@ -10,19 +10,32 @@ kernels linked into a sealed binary, or — in a browser/Deno wasm module — as
 
 ## WebGPU backend (backend 3) — the browser GPU
 
-`( gpu_force_webgpu )` before `gpu_open` selects a WebGPU backend: the onnx
-kernels, pre-translated to WGSL (`web/kernels_wgsl.js`), run through
-`navigator.gpu` driven by host imports the JS embedder implements
-(`web/webgpu.js`, works in a browser worker and in Deno). Device memory is a
-`GPUBuffer`; the one async op — `GPUBuffer.mapAsync` readback — is bridged with
-Asyncify so the synchronous NURL `gpu_download` returns data in wasm memory
+`( gpu_force_webgpu )` before `gpu_open` selects a WebGPU backend: a fixed
+set of WGSL kernels (`web/kernels_wgsl.js`) run through `navigator.gpu`
+driven by host imports the JS embedder implements (`web/webgpu.js`, works in
+a browser worker and in Deno). Device memory is a `GPUBuffer`; the one async
+op — `GPUBuffer.mapAsync` readback — is bridged with Asyncify so the
+synchronous NURL `gpu_download` returns data in wasm memory
 (`web/wgpu_asyncify.c` provides the unwind stack; build with wasmbuilder
 `--asyncify-imports env.wgpu_download`).
 
-Every WGSL kernel is verified on a real GPU against a JS reference of the
-CUDA-C (`./tests/webgpu_test.sh`, via Deno — skips without a GPU). This is
-what runs the whole YOLOE detector in the browser (see `packages/yoloe-demo`,
-~1.1 s/frame at 640×640 on an RTX 4090, matching onnxruntime within tolerance).
+Kernels are looked up by entry name, so the set must be exactly what the
+executor requests. For the onnx executor it is **checked against the
+executor itself**: each entry states the CUDA-C parameter list it implements
+(`sig`), and the bindings, uniform block and argument decoding are generated
+from that list; onnx's `tests/wgsl_census_test.nu` (no device) fails when the
+executor's kernel census holds a kernel the set lacks, a `sig` that differs
+from the recorded parameter list, a parameter type the glue cannot marshal,
+or an entry the census no longer records. Only the WGSL bodies are written by
+hand. `gpu_open` probes the set's sentinel entry (`GPU_WGSL_SENTINEL`), never
+a real kernel name.
+
+Every WGSL kernel runs on a real WebGPU device through this host, against a
+JS reference of its CUDA-C (`./tests/webgpu_test.sh` — Deno, or headless
+Chrome via `tests/webgpu_chrome.mjs`, on the GPU or SwiftShader; skips
+without either). onnx's `tests/webgpu_test.sh` runs a whole model forward in
+wasm on it. This is what runs the YOLOE detector in the browser (see
+`packages/yoloe-demo`).
 
 ## CPU backend (v0.2.0) — run with no GPU
 

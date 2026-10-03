@@ -193,7 +193,7 @@ $ `src/service.nu`
     // Every catalog entry has a handler (a 501 would mean it does not).
     : ( Vec AgOpDef ) cat ( ag_op_catalog )
     : i n ( vec_len [AgOpDef] cat )
-    ( check == n 25 `ops: 25 in the catalog` )
+    ( check == n 27 `ops: 27 in the catalog` )
     : ~ b all_wired T
     : ~ i i 0
     ~ < i n {
@@ -201,12 +201,22 @@ $ `src/service.nu`
             T d → {
                 : AgRes r ( call `probe` ( string_data . d name ) `{}` 1000 )
                 ? == . r status 501 { = all_wired F } {}
+                // The fixed auth table agrees with the catalog.
+                : i want ? . d needs_auth 1 0
+                ? == ( ag_op_auth_kind ( string_data . d name ) ) want {} {
+                    ( check F ( nurl_str_cat `ops: auth table disagrees on ` ( string_data . d name ) ) )
+                }
             }
             F _ → {}
         }
         = i + i 1
     }
     ( check all_wired `ops: every catalog entry dispatches` )
+    ( check == ( ag_op_auth_kind `nope` ) -1 `ops: auth table: unknown name` )
+    ( check == ( ag_op_auth_kind `` ) -1 `ops: auth table: empty name` )
+    ( check == ( ag_op_auth_kind `task post` ) -1 `ops: auth table: a name with a space` )
+    ( check == ( ag_op_auth_kind `brief wait` ) -1 `ops: auth table: two names` )
+    ( check == ( ag_op_auth_kind `notes` ) 1 `ops: auth table: the last name` )
 
     : AgRes u ( call `` `brief` `{}` 1000 )
     ( check == . u status 401 `ops: brief needs a caller` )
@@ -319,6 +329,168 @@ $ `src/service.nu`
     ( check ( has . wi text `you: carol — tester\nfollows: public\n` ) `ops: whoami` )
 }
 
+// ── 2a. 0.4.0: cut bodies, msg, newest, history filters, refs, status ─
+
+@ test_new_ops → v {
+    : AgRes cc ( call `gus` `channel_create` `{"name":"sweep"}` 3000 )
+    ( check == . cc status 200 `new: gus makes sweep` )
+    ( call `hal` `follow` `{"channel":"sweep"}` 3000 )
+    // A long post (1000 bytes) is cut in brief; direct mail is not.
+    : String long ( string_from `FINDING (compiler): ` )
+    ~ < ( string_len long ) 1000 { ( string_push_str long `x` ) }
+    : String pj ( string_from `{"channel":"sweep","body":"` )
+    ( string_push_str pj ( string_data long ) )
+    ( string_push_str pj `"}` )
+    : AgRes p1 ( call `gus` `post` ( string_data pj ) 3001 )
+    : i id1 ( res_id p1 )
+    : String sj ( string_from `{"to":"hal","body":"` )
+    ( string_push_str sj ( string_data long ) )
+    ( string_push_str sj `"}` )
+    ( call `gus` `send` ( string_data sj ) 3002 )
+    : AgRes b1 ( call `hal` `brief` `{}` 3003 )
+    : String cutmark ( string_from `… (+700 bytes: msg id=` )
+    ( string_push_int cutmark id1 )
+    ( string_push_str cutmark `)` )
+    ( check ( has . b1 text ( string_data cutmark ) ) `new: brief cuts a long channel post, saying how to read it whole` )
+    ( check ( has . b1 text ( string_data long ) ) `new: and delivers direct mail whole` )
+    : String bj ( json_stringify . b1 body )
+    ( check ( has bj `"cut":700` ) `new: the JSON says how much was cut` )
+    : AgRes m1 ( call `hal` `msg` ( string_data ( id_args id1 ) ) 3004 )
+    ( check & == . m1 status 200 ( has . m1 text ( string_data long ) ) `new: msg reads the whole post` )
+    : AgRes m2 ( call `ivy` `msg` ( string_data ( id_args + id1 1 ) ) 3004 )
+    ( check == . m2 status 403 `new: msg of another's direct mail is 403` )
+    : AgRes m3 ( call `hal` `msg` `{"id":999999}` 3004 )
+    ( check == . m3 status 404 `new: msg of no message is 404` )
+    ( call `gus` `post` ( string_data pj ) 3005 )
+    : AgRes b2 ( call `hal` `brief` `{"max_body":0}` 3006 )
+    ( check ( has . b2 text ( string_data long ) ) `new: max_body=0 delivers whole` )
+    ( call `gus` `post` ( string_data pj ) 3007 )
+    : AgRes b3 ( call `hal` `brief` `{"max_body":50}` 3008 )
+    ( check ( has . b3 text `… (+950 bytes` ) `new: max_body sets the cut` )
+    // UTF-8: a cut never splits a character.
+    ( check == ( ag_cut_at `aää` 5 2 ) 1 `new: a cut backs off to a character start` )
+    ( check == ( ag_cut_at `aää` 5 3 ) 3 `new: a cut on a boundary stays` )
+    ( check == ( ag_cut_at `abc` 3 0 ) 3 `new: max 0 = whole` )
+
+    // newest: a backlog of 6 posts, deliver the newest 2; mail is never skipped.
+    : ~ i k 0
+    : ~ i first 0
+    ~ < k 6 {
+        : String bj2 ( string_from `{"channel":"sweep","body":"backlog ` )
+        ( string_push_int bj2 k )
+        ( string_push_str bj2 `"}` )
+        : AgRes pk ( call `gus` `post` ( string_data bj2 ) 3010 )
+        ? == k 0 { = first ( res_id pk ) } {}
+        = k + k 1
+    }
+    ( call `gus` `send` `{"to":"hal","body":"mail in the backlog"}` 3011 )
+    : AgRes nb ( call `hal` `brief` `{"newest":2}` 3012 )
+    ( check ( has . nb text `inbox: 3 new` ) `new: newest=2 delivers 2 posts and the mail` )
+    ( check & ( has . nb text `backlog 5` ) ! ( has . nb text `backlog 3` ) `new: the newest ones` )
+    ( check ( has . nb text `mail in the backlog` ) `new: direct mail is never skipped` )
+    : String skipmark ( string_from `(skipped 4 older on sweep — history channel=sweep after=` )
+    ( string_push_int skipmark - first 1 )
+    ( check ( has . nb text ( string_data skipmark ) ) `new: the skip says where the rest is` )
+    : AgRes nb2 ( call `hal` `brief` `{}` 3013 )
+    ( check ( has . nb2 text `inbox: nothing new` ) `new: skipped posts are not delivered later` )
+
+    // history: after (forward), q, from, hints.
+    : String ha ( string_from `{"channel":"sweep","limit":2,"after":` )
+    ( string_push_int ha - first 1 )
+    ( string_push_str ha `}` )
+    : AgRes h1 ( call `hal` `history` ( string_data ha ) 3014 )
+    ( check & ( has . h1 text `backlog 0` ) ( has . h1 text `backlog 1` ) `new: history after= pages forward` )
+    : String nextmark ( string_from `(newer: history after=` )
+    ( string_push_int nextmark + first 1 )
+    ( check ( has . h1 text ( string_data nextmark ) ) `new: and says where the next page starts` )
+    : AgRes h2 ( call `hal` `history` `{"channel":"sweep","q":"BACKLOG 4"}` 3014 )
+    ( check & ( has . h2 text `backlog 4` ) ! ( has . h2 text `backlog 3` ) `new: history q= matches, case-insensitively` )
+    : AgRes h3 ( call `hal` `history` `{"channel":"sweep","q":"100%_"}` 3014 )
+    ( check ( has . h3 text `no messages matching 100%_` ) `new: q escapes LIKE's own characters` )
+    : AgRes h4 ( call `hal` `history` `{"channel":"sweep","from":"nobody"}` 3014 )
+    ( check ( has . h4 text `no messages from nobody` ) `new: history from= filters by sender` )
+    : AgRes h5 ( call `hal` `history` `{"channel":"sweep","from":"gus","limit":1,"max_body":10}` 3014 )
+    ( check & ( has . h5 text `backlog 5` ) ( has . h5 text `(older: history before=` ) `new: history from= + a full page points back` )
+    : AgRes h6 ( call `hal` `history` `{"channel":"sweep","limit":200}` 3014 )
+    ( check ! ( has . h6 text `(older:` ) `new: a page that is not full has no older hint` )
+
+    // A finding becomes a task; its author hears the result.
+    : String tj ( string_from `{"ref":` )
+    ( string_push_int tj id1 )
+    ( string_push_str tj `,"tags":"finding"}` )
+    : AgRes tp ( call `hal` `task_post` ( string_data tj ) 3020 )
+    ( check & == . tp status 200 ( has . tp text ( nurl_str_cat `(re#` ( string_data ( int_str id1 ) ) ) ) `new: task_post ref= makes a task of a message` )
+    : i tid ( res_id tp )
+    : AgRes tk ( call `hal` `task` ( string_data ( id_args tid ) ) 3021 )
+    ( check ( has . tk text `FINDING (compiler): xxx` ) `new: the title is the message's first line` )
+    ( check ( has . tk text ( string_data long ) ) `new: the body is the message` )
+    : AgRes tb ( call `hal` `brief` `{}` 3021 )
+    ( check ( has . tb text `you posted 1 unfinished` ) `new: brief counts what you posted and is not finished` )
+    : AgRes tr ( call `hal` `task_post` `{"ref":999999}` 3021 )
+    ( check == . tr status 404 `new: ref= to no message is 404` )
+    : AgRes tt ( call `hal` `task_post` `{}` 3021 )
+    ( check == . tt status 400 `new: no title and no ref is 400` )
+    : String cj ( string_from `{"id":` )
+    ( string_push_int cj tid )
+    ( string_push_str cj `,"result":"fixed in abc123"}` )
+    ( call `ivy` `task_claim` ( string_data ( id_args tid ) ) 3022 )
+    ( call `ivy` `task_done` ( string_data cj ) 3023 )
+    : AgRes gb ( call `gus` `brief` `{}` 3024 )
+    : String told ( string_from `(from your #` )
+    ( string_push_int told id1 )
+    ( string_push_str told `) done by ivy` )
+    ( check & ( has . gb text ( string_data told ) ) ( has . gb text `result: fixed in abc123` ) `new: the message's author hears the result` )
+    : AgRes hb ( call `hal` `brief` `{}` 3024 )
+    ( check ( has . hb text `done by ivy` ) `new: and so does the poster` )
+    ( check ! ( has . hb text `(from your #` ) `new: the poster is told once` )
+
+    // status: what an agent is doing, shown by agents and whoami.
+    : AgRes st1 ( call `ivy` `status` `{"text":"running san corpus, ETA 20m"}` 3030 )
+    ( check == . st1 status 200 `new: status` )
+    : AgRes ag ( call `gus` `agents` `{}` 3090 )
+    ( check ( has . ag text `ivy (seen 1m; status 1m: running san corpus, ETA 20m)` ) `new: agents shows the status and its age` )
+    : AgRes wi ( call `ivy` `whoami` `{}` 3090 )
+    ( check ( has . wi text `status: running san corpus, ETA 20m (1m)` ) `new: whoami shows it` )
+    : AgRes st2 ( call `ivy` `status` `{"text":"two\\nlines"}` 3091 )
+    ( check == . st2 status 400 `new: a status is one line` )
+    : AgRes st3 ( call `ivy` `status` `{}` 3092 )
+    ( check ( has . st3 text `status cleared` ) `new: an empty status clears it` )
+    : AgRes ag2 ( call `gus` `agents` `{}` 3093 )
+    ( check ! ( has . ag2 text `running san` ) `new: and agents no longer shows it` )
+}
+
+// A 0.3 store (agents without status, tasks without ref) opened by 0.4:
+// the columns are added, the rows kept.
+@ test_migration_03 → v {
+    : s path `agora_test_scratch/v3.db`
+    ?? ( file_delete path ) { T _ → {} F _ → {} }
+    ?? ( sqlite_open path ) {
+        F _ → { ( check F `migrate 0.3: seed` ) }
+        T db → {
+            ?? ( sqlite_exec db `CREATE TABLE agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '')` ) { T _ → {} F _ → {} }
+            ?? ( sqlite_exec db `CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, result TEXT NOT NULL DEFAULT '', priority INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL)` ) { T _ → {} F _ → {} }
+            ?? ( sqlite_exec db `INSERT INTO agents VALUES ('old', 'from 0.3', 'h-old', 1, 1, '')` ) { T _ → {} F _ → {} }
+            ?? ( sqlite_exec db `INSERT INTO tasks (title, poster, status, created, updated) VALUES ('old task', 'old', 'open', 1, 1)` ) { T _ → { ( check T `migrate 0.3: seed` ) } F _ → { ( check F `migrate 0.3: seed` ) } }
+        }
+    }
+    : AgStore st ( ag_store_open path )
+    ( check . st ok `migrate 0.3: 0.4 opens it` )
+    ( check ( ag_agent_set_status st `old` `migrated` 5 ) `migrate 0.3: agents gained status` )
+    ?? ( ag_agent_get st `old` ) {
+        T a → { ( check & ( seq ( string_data . a about ) `from 0.3` ) ( seq ( string_data . a status ) `migrated` ) `migrate 0.3: the old agent kept, with a status` ) }
+        F _ → { ( check F `migrate 0.3: the old agent kept, with a status` ) }
+    }
+    ?? ( ag_task_get st 1 5 ) {
+        T t → { ( check & ( seq ( string_data . t title ) `old task` ) == . t ref 0 `migrate 0.3: the old task kept, ref 0` ) }
+        F _ → { ( check F `migrate 0.3: the old task kept, ref 0` ) }
+    }
+    : i t2 ( ag_task_post_ref st `new` `` `` `old` 0 7 6 )
+    ?? ( ag_task_get st t2 6 ) {
+        T t → { ( check == . t ref 7 `migrate 0.3: a new task has its ref` ) }
+        F _ → { ( check F `migrate 0.3: a new task has its ref` ) }
+    }
+}
+
 // ── 2b. identity spelling ────────────────────────────────────────────
 
 @ test_identity → v {
@@ -370,6 +542,55 @@ $ `src/service.nu`
     ^ resp
 }
 
+@ rest_ct Router r s method s path s query s auth s ctype s body → HttpResponse {
+    : HttpRequest req ( request_new )
+    ( string_push_str . req method method )
+    ( string_push_str . req path path )
+    ( string_push_str . req query query )
+    ( string_push_str . req version `HTTP/1.1` )
+    ( vec_push [Header] . req headers ( header_new `Authorization` auth ) )
+    ( vec_push [Header] . req headers ( header_new `Content-Type` ctype ) )
+    ( bytes_extend_str . req body body )
+    : HttpResponse resp ( router_handle r req )
+    ^ resp
+}
+
+@ id_args i id → String {
+    : String o ( string_from `{"id":` )
+    ( string_push_int o id )
+    ( string_push_str o `}` )
+    ^ o
+}
+
+@ int_str i n → String {
+    : String o ( string_new )
+    ( string_push_int o n )
+    ^ o
+}
+
+// `"id"` of a JSON body; 0 when absent.
+@ id_of_body String b → i {
+    ?? ( json_parse ( string_data b ) ) {
+        T j → { ?? ( json_obj_get j `id` ) { T v → { ^ ( json_as_int v ) } F _ → {} } }
+        F _ → {}
+    }
+    ^ 0
+}
+
+// `"body"` of a JSON body.
+@ msg_body String b → String {
+    ?? ( json_parse ( string_data b ) ) {
+        T j → { ?? ( json_obj_get j `body` ) { T v → { ^ ( string_from ( json_as_str v ) ) } F _ → {} } }
+        F _ → {}
+    }
+    ^ ( string_new )
+}
+
+@ res_id AgRes r → i {
+    ?? ( json_obj_get . r body `id` ) { T v → { ^ ( json_as_int v ) } F _ → {} }
+    ^ 0
+}
+
 @ body_of HttpResponse resp → String {
     ^ ( string_from_bytes ( vec_data [u] . resp body ) ( vec_len [u] . resp body ) )
 }
@@ -411,6 +632,29 @@ $ `src/service.nu`
     : String hb ( body_of h )
     ( check ( has hb `"body":"over rest"` ) `rest: GET with query arguments` )
 
+    // A text/plain body is the op's free-text argument, the rest from the
+    // query: quotes, backticks, backslashes and newlines need no escaping.
+    : String rawb ( string_from `he said "don't" ` )
+    ( string_push_char rawb 96 ) ( string_push_str rawb `x` ) ( string_push_char rawb 96 )
+    ( string_push_str rawb ` $HOME\nline 2 \\ & a=b ä` )
+    : s raw ( string_data rawb )
+    : HttpResponse tp ( rest_ct r `POST` `/api/post` `channel=public` ( string_data auth ) `text/plain; charset=utf-8` raw )
+    ( check == . tp status 200 `rest: text/plain post` )
+    : i tpid ( id_of_body ( body_of tp ) )
+    : HttpResponse tm ( rest r `GET` `/api/msg` ( nurl_str_cat `id=` ( string_data ( int_str tpid ) ) ) ( string_data auth ) `` )
+    ( check ( seq ( string_data ( msg_body ( body_of tm ) ) ) raw ) `rest: the text/plain body round-trips byte for byte` )
+    : HttpResponse fp ( rest_ct r `POST` `/api/post` `` ( string_data auth ) `application/x-www-form-urlencoded` `channel=public&body=a%26b+c%0Ad` )
+    ( check == . fp status 200 `rest: a form post` )
+    : HttpResponse fm ( rest r `GET` `/api/msg` ( nurl_str_cat `id=` ( string_data ( int_str ( id_of_body ( body_of fp ) ) ) ) ) ( string_data auth ) `` )
+    ( check ( seq ( string_data ( msg_body ( body_of fm ) ) ) `a&b c\nd` ) `rest: a form body is percent-decoded` )
+    : HttpResponse jf ( rest_ct r `POST` `/api/post` `` ( string_data auth ) `application/x-www-form-urlencoded` `{"body":"json as a form"}` )
+    ( check == . jf status 200 `rest: a JSON object sent as a form (curl -d) is still JSON` )
+    : HttpResponse tt ( rest_ct r `POST` `/api/task_done` `id=999` ( string_data auth ) `text/plain` `done` )
+    ( check == . tt status 409 `rest: text/plain fills task_done's result` )
+    : HttpResponse tn ( rest_ct r `POST` `/api/whoami` `` ( string_data auth ) `text/plain` `ignored` )
+    ( check == . tn status 200 `rest: text/plain to an op with no text argument is ignored` )
+    ( check ( has cb `"text_arg":"body"` ) `rest: the catalog names the text argument` )
+
     : HttpResponse bad ( rest r `POST` `/api/nope` `` ( string_data auth ) `{}` )
     ( check == . bad status 404 `rest: unknown op is 404` )
 
@@ -437,7 +681,7 @@ $ `src/service.nu`
 
 @ test_mcp → v {
     : McpServer srv ( ag_mcp_server )
-    ( check == ( mcp_server_tool_count srv ) 25 `mcp: 25 tools from the catalog` )
+    ( check == ( mcp_server_tool_count srv ) 27 `mcp: 27 tools from the catalog` )
     : String tl ( mcp srv `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` ( json_null ) )
     ( check ( has tl `"name":"task_claim"` ) `mcp: tools/list` )
     ( check ( has tl `"required":["id"]` ) `mcp: schemas carry required` )
@@ -473,6 +717,8 @@ $ `src/service.nu`
     ( test_migration )
     ( test_ops )
     ( test_identity )
+    ( test_new_ops )
+    ( test_migration_03 )
     : HttpApp app ( ag_build_app 1 T )
     : Router r ( http_app_router app )
     ( test_rest r )

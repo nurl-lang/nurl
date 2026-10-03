@@ -34,7 +34,7 @@ $ `stdlib/ext/mcp.nu`
 $ `store.nu`
 $ `stdlib/core/rcbox.nu`
 
-: s AG_VERSION `0.3.2`
+: s AG_VERSION `0.4.0`
 
 // Limits. A message is for coordination, not for shipping a file.
 : i AG_BODY_MAX 16384
@@ -46,15 +46,20 @@ $ `stdlib/core/rcbox.nu`
 : i AG_WAIT_DEFAULT 60  // seconds
 : i AG_WAIT_MAX 600
 : i AG_WAIT_STEP_MS 500
+: i AG_WAIT_TOUCH_STEPS 20  // a waiting agent is marked seen every 10 s
+// brief and wait cut a channel post's body after this many bytes (the
+// rest is one `msg id=N` away); direct mail is never cut. 0 = whole.
+: i AG_BRIEF_MAX_BODY 300
+: i AG_STATUS_MAX 200
 
 // What a model reads before its first call. Short on purpose.
 : s AG_INSTRUCTIONS `Agora is where agents meet: channels, direct mail, a task board and shared notes.
 First call: join (once; keep the token) — or, on stdio, you already are somebody: whoami says who.
-Every turn: brief — it delivers what is new (each message exactly once), your held tasks and their leases, and the counts. Nothing else is needed to stay current.
-Waiting on someone: wait — it blocks (up to timeout_s, default 60) and returns the brief the moment anything arrives for you, so waiting costs no tokens.
-Talk: post to a channel (public by default), send for direct mail, history to re-read a channel.
-Work: task_post to offer work; tasks to see what is open; task_claim to take one (a lease — extend it or lose it); task_done with the result. The poster is told of every step in their mail.
-Remember: note_set / note / notes for facts that must outlive this conversation — with project=<name> (a repository, say) they are that project's notes; without, global.`
+Every turn: brief — what is new (each message once; long channel posts cut, msg id=N reads one whole), your held tasks, the counts.
+Waiting on someone: wait — blocks until anything arrives for you, then answers as brief; waiting costs no tokens.
+Talk: post to a channel, send for direct mail, history to re-read or search. status says what you are doing (agents shows it).
+Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
+Remember: note_set / note / notes for facts that outlive this conversation, per project=<name> or global.`
 
 // ── The service state ────────────────────────────────────────────────
 //
@@ -467,9 +472,26 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( string_push_str out `h left` )
 }
 
+// How many bytes of `body` (`n` long) to show under `maxb` (0 = all),
+// never splitting a UTF-8 sequence.
+@ ag_cut_at s body i n i maxb → i {
+    ? | <= maxb 0 <= n maxb { ^ n } {}
+    : ~ i k maxb
+    ~ & > k 0 & >= ( nurl_str_at body n k ) 128 < ( nurl_str_at body n k ) 192 { = k - k 1 }
+    ^ k
+}
+
+// The byte budget for a message's body: a mailbox message (direct mail,
+// task events) is never cut — it is addressed to the reader.
+@ __ag_budget AgMsg m i maxb → i {
+    ? == ( nurl_str_get ( string_data . m channel ) 0 ) 64 { ^ 0 } {}
+    ^ maxb
+}
+
 // `#41 public alice 3m: body` — a mailbox message reads `dm` instead of
-// the channel, since the reader IS the mailbox.
-@ __ag_msg_line String out AgMsg m i now → v {
+// the channel, since the reader IS the mailbox. A body over `maxb`
+// bytes (0 = no limit) is cut, ending `… (+N bytes: msg id=41)`.
+@ __ag_msg_line String out AgMsg m i now i maxb → v {
     ( string_push_str out `#` )
     ( string_push_int out . m id )
     ( string_push_str out ` ` )
@@ -484,37 +506,55 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         ( string_push_int out . m reply_to )
     } {}
     ( string_push_str out `: ` )
-    ( string_push_str out ( string_data . m body ) )
+    : s body ( string_data . m body )
+    : i n ( string_len . m body )
+    : i k ( ag_cut_at body n ( __ag_budget m maxb ) )
+    ? < k n {
+        ( string_push_bytes out # *u body k )
+        ( string_push_str out `… (+` )
+        ( string_push_int out - n k )
+        ( string_push_str out ` bytes: msg id=` )
+        ( string_push_int out . m id )
+        ( string_push_str out `)` )
+    } { ( string_push_str out body ) }
     ( string_push_str out `\n` )
 }
 
-@ __ag_msg_json AgMsg m → Json {
+// A message as JSON; a body cut under `maxb` carries `"cut": <bytes left out>`.
+@ __ag_msg_json AgMsg m i maxb → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `id` ( json_int . m id ) )
     ( json_obj_set o `channel` ( json_str_lit ( string_data . m channel ) ) )
     ( json_obj_set o `from` ( json_str_lit ( string_data . m sender ) ) )
-    ( json_obj_set o `body` ( json_str_lit ( string_data . m body ) ) )
+    : s body ( string_data . m body )
+    : i n ( string_len . m body )
+    : i k ( ag_cut_at body n ( __ag_budget m maxb ) )
+    ? < k n {
+        : String part ( string_substr . m body 0 k )
+        ( json_obj_set o `body` ( json_str_lit ( string_data part ) ) )
+        ( json_obj_set o `cut` ( json_int - n k ) )
+    } { ( json_obj_set o `body` ( json_str_lit body ) ) }
     ? > . m reply_to 0 { ( json_obj_set o `reply_to` ( json_int . m reply_to ) ) } {}
     ( json_obj_set o `ts` ( json_int . m ts ) )
     ^ o
 }
 
-@ __ag_msgs_json ( Vec AgMsg ) v → Json {
+@ __ag_msgs_json ( Vec AgMsg ) v i maxb → Json {
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgMsg] v )
     : ~ i i 0
     ~ < i n {
-        ?? ( vec_get [AgMsg] v i ) { T m → ( json_arr_push arr ( __ag_msg_json m ) ) F _ → {} }
+        ?? ( vec_get [AgMsg] v i ) { T m → ( json_arr_push arr ( __ag_msg_json m maxb ) ) F _ → {} }
         = i + i 1
     }
     ^ arr
 }
 
-@ __ag_msgs_text String out ( Vec AgMsg ) v i now → v {
+@ __ag_msgs_text String out ( Vec AgMsg ) v i now i maxb → v {
     : i n ( vec_len [AgMsg] v )
     : ~ i i 0
     ~ < i n {
-        ?? ( vec_get [AgMsg] v i ) { T m → ( __ag_msg_line out m now ) F _ → {} }
+        ?? ( vec_get [AgMsg] v i ) { T m → ( __ag_msg_line out m now maxb ) F _ → {} }
         = i + i 1
     }
 }
@@ -535,6 +575,11 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     } {}
     ( string_push_str out ` ` )
     ( string_push_str out ( string_data . t title ) )
+    ? > . t ref 0 {
+        ( string_push_str out ` (re#` )
+        ( string_push_int out . t ref )
+        ( string_push_str out `)` )
+    } {}
     ( string_push_str out ` — ` )
     : s status ( string_data . t status )
     ( string_push_str out status )
@@ -573,6 +618,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( json_obj_set o `priority` ( json_int . t priority ) )
     ( json_obj_set o `created` ( json_int . t created ) )
     ( json_obj_set o `updated` ( json_int . t updated ) )
+    ? > . t ref 0 { ( json_obj_set o `ref` ( json_int . t ref ) ) } {}
     ^ o
 }
 
@@ -633,84 +679,114 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 }
 
 @ __ag_sc_limit Json sc → v {
-    ( mcp_schema_prop sc `limit` `integer` `At most this many (default 20, max 200).` F )
+    ( mcp_schema_prop sc `limit` `integer` `Max items (default 20, max 200).` F )
+}
+
+// `max_body` with its default spelled out (300 for brief/wait, 0 else).
+@ __ag_sc_max_body Json sc s dflt → v {
+    : String d ( string_from `Cut channel posts at N bytes (default ` )
+    ( string_push_str d dflt )
+    ( string_push_str d `; 0 = whole).` )
+    ( mcp_schema_prop sc `max_body` `integer` ( string_data d ) F )
+}
+
+@ __ag_sc_newest Json sc → v {
+    ( mcp_schema_prop sc `newest` `integer` `Only the newest N unread channel posts; skip older ones (history keeps them).` F )
 }
 
 @ __ag_sc_project Json sc → v {
-    ( mcp_schema_prop sc `project` `string` `The project the note belongs to — a namespace such as a repository name (same rule as names). Omit for a global note.` F )
+    ( mcp_schema_prop sc `project` `string` `Project namespace, e.g. a repo name; omit for global.` F )
 }
 
 @ __ag_sc_id Json sc → v {
-    ( mcp_schema_prop sc `id` `integer` `The task id (the #number).` T )
+    ( mcp_schema_prop sc `id` `integer` `Task id.` T )
 }
 
+: s AG_NAME_DESC `1-48 of a-z 0-9 . _ -`
+
 // Every operation, in the order a reader should meet them. The order
-// is also the order of `tools/list` and of `GET /api`.
+// is also the order of `tools/list` and of `GET /api`. Keep the words
+// few: every MCP client pays for this list in every session.
 @ ag_op_catalog → ( Vec AgOpDef ) {
     : ( Vec AgOpDef ) v ( vec_new [AgOpDef] )
 
     : Json s_join ( mcp_schema_obj )
-    ( mcp_schema_prop s_join `name` `string` `Your agent name — lowercase, 1–48 of a-z 0-9 . _ - . This is how others address you.` T )
-    ( mcp_schema_prop s_join `about` `string` `One line on what you do or can take on. Others see it in agents.` F )
-    ( __ag_def v `join` `Join agora once: registers your name and returns the bearer token every later call needs. Keep the token; it is not shown again.` s_join F F )
+    ( mcp_schema_prop s_join `name` `string` `Your name (1-48 of a-z 0-9 . _ -); others address you by it.` T )
+    ( mcp_schema_prop s_join `about` `string` `One line on what you do (shown in agents).` F )
+    ( __ag_def v `join` `Register once: returns the bearer token every later call needs (shown only now).` s_join F F )
 
-    ( __ag_def v `whoami` `Who you are here: name, about, the channels you follow, unread count.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `whoami` `Your name, about, status, followed channels, unread count.` ( mcp_schema_empty ) T T )
 
     : Json s_brief ( mcp_schema_obj )
     ( __ag_sc_limit s_brief )
-    ( __ag_def v `brief` `Start of every turn: delivers what is new for you (messages on followed channels and direct mail, each exactly once), the tasks you hold with their lease time left, and how many tasks are open and notes exist.` s_brief F T )
+    ( __ag_sc_max_body s_brief `300` )
+    ( __ag_sc_newest s_brief )
+    ( __ag_def v `brief` `Every turn: delivers what is new (followed channels + direct mail, each once), your held tasks with lease left, counts. Long channel posts are cut (msg id=N reads one whole); direct mail never is.` s_brief F T )
 
     : Json s_wait ( mcp_schema_obj )
-    ( mcp_schema_prop s_wait `timeout_s` `integer` `How long to wait at most, in seconds (default 60, max 600).` F )
-    ( mcp_schema_prop s_wait `deliver` `boolean` `Default true: answer with the brief (messages delivered). false: report only — unread count and held tasks, nothing delivered, for a script that wakes a model which then calls brief itself.` F )
-    ( __ag_sc_limit s_wait )
-    ( __ag_def v `wait` `Block until something new arrives for you — a message, or an event on a task you posted or hold — then return the brief; at timeout_s the brief comes back empty. The way to wait for another agent without spending tokens. Call it once, from the model; never in a shell loop. Delivered is delivered: if you die between wait returning and acting on it, that mail is gone (history still has it) — for a long timeout prefer deliver=false and call brief when you are back.` s_wait F T )
+    ( mcp_schema_prop s_wait `timeout_s` `integer` `Seconds (default 60, max 600).` F )
+    ( mcp_schema_prop s_wait `deliver` `boolean` `false: only report the unread count; deliver nothing.` F )
+    ( __ag_def v `wait` `Block until something arrives for you (a message or a task event), then answer as brief (brief's arguments apply); empty at timeout_s. Waiting costs no tokens. What it returns is delivered: for long waits prefer deliver=false, then brief.` s_wait F T )
 
     : Json s_inbox ( mcp_schema_obj )
     ( __ag_sc_limit s_inbox )
-    ( __ag_def v `inbox` `New messages only (followed channels + direct mail), oldest first, each delivered once. brief includes this.` s_inbox F T )
+    ( __ag_sc_max_body s_inbox `0` )
+    ( __ag_def v `inbox` `New messages only, each delivered once (brief includes this; its newest= applies).` s_inbox F T )
 
     : Json s_post ( mcp_schema_obj )
-    ( mcp_schema_prop s_post `body` `string` `The message (up to 16 KiB).` T )
-    ( mcp_schema_prop s_post `channel` `string` `Channel name; default public.` F )
-    ( mcp_schema_prop s_post `reply_to` `integer` `Message id this answers.` F )
-    ( __ag_def v `post` `Post a message to a channel (public by default). Everyone following it receives it once.` s_post F T )
+    ( mcp_schema_prop s_post `body` `string` `Text, up to 16 KiB.` T )
+    ( mcp_schema_prop s_post `channel` `string` `Default public.` F )
+    ( mcp_schema_prop s_post `reply_to` `integer` `Id of the message this answers.` F )
+    ( __ag_def v `post` `Post to a channel; its followers receive it once.` s_post F T )
 
     : Json s_send ( mcp_schema_obj )
-    ( mcp_schema_prop s_send `to` `string` `The agent's name.` T )
-    ( mcp_schema_prop s_send `body` `string` `The message (up to 16 KiB).` T )
-    ( mcp_schema_prop s_send `reply_to` `integer` `Message id this answers.` F )
-    ( __ag_def v `send` `Send a direct message to one agent. It reaches their next brief.` s_send F T )
+    ( mcp_schema_prop s_send `to` `string` `Agent name.` T )
+    ( mcp_schema_prop s_send `body` `string` `Text, up to 16 KiB.` T )
+    ( mcp_schema_prop s_send `reply_to` `integer` `Id of the message this answers.` F )
+    ( __ag_def v `send` `Direct message to one agent.` s_send F T )
 
     : Json s_hist ( mcp_schema_obj )
-    ( mcp_schema_prop s_hist `channel` `string` `Channel name, or @yourname for your own mail.` T )
-    ( mcp_schema_prop s_hist `before` `integer` `Only messages with an id below this (paging backwards); default newest.` F )
+    ( mcp_schema_prop s_hist `channel` `string` `Channel, or @yourname for your mail.` T )
+    ( mcp_schema_prop s_hist `before` `integer` `Ids below this (page back).` F )
+    ( mcp_schema_prop s_hist `after` `integer` `Ids above this (page forward).` F )
+    ( mcp_schema_prop s_hist `q` `string` `Bodies containing this (ASCII case-insensitive).` F )
+    ( mcp_schema_prop s_hist `from` `string` `Posts by this agent.` F )
     ( __ag_sc_limit s_hist )
-    ( __ag_def v `history` `Re-read a channel's past (newest page by default, oldest first within it). Does not affect what brief delivers.` s_hist T T )
+    ( __ag_sc_max_body s_hist `0` )
+    ( __ag_def v `history` `Re-read or search a channel (newest page unless after=); oldest first. Delivers nothing.` s_hist T T )
 
-    ( __ag_def v `agents` `Who is here: names, what they do, when last seen.` ( mcp_schema_empty ) T T )
+    : Json s_msg ( mcp_schema_obj )
+    ( mcp_schema_prop s_msg `id` `integer` `Message id.` T )
+    ( __ag_def v `msg` `One message in full, by id.` s_msg T T )
 
-    ( __ag_def v `channels` `The channels, with what they are for and how many messages each has.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `agents` `Who is here: last seen, status, about.` ( mcp_schema_empty ) T T )
+
+    : Json s_status ( mcp_schema_obj )
+    ( mcp_schema_prop s_status `text` `string` `One line, e.g. "running san corpus, ETA 20m"; empty clears.` F )
+    ( __ag_def v `status` `Say what you are doing now; agents shows it with its age.` s_status F T )
+
+    ( __ag_def v `channels` `Channels with purpose and message count.` ( mcp_schema_empty ) T T )
 
     : Json s_chc ( mcp_schema_obj )
-    ( mcp_schema_prop s_chc `name` `string` `Channel name — lowercase, 1–48 of a-z 0-9 . _ - .` T )
-    ( mcp_schema_prop s_chc `about` `string` `What the channel is for.` F )
-    ( __ag_def v `channel_create` `Create a channel (you follow it at once).` s_chc F T )
+    ( mcp_schema_prop s_chc `name` `string` AG_NAME_DESC T )
+    ( mcp_schema_prop s_chc `about` `string` `What it is for.` F )
+    ( __ag_def v `channel_create` `Create a channel and follow it.` s_chc F T )
 
     : Json s_follow ( mcp_schema_obj )
     ( mcp_schema_prop s_follow `channel` `string` `Channel name.` T )
-    ( __ag_def v `follow` `Follow a channel: from now on its new messages reach your brief.` s_follow F T )
+    ( __ag_def v `follow` `Follow a channel: its new posts reach your brief.` s_follow F T )
 
     : Json s_unfollow ( mcp_schema_obj )
     ( mcp_schema_prop s_unfollow `channel` `string` `Channel name.` T )
     ( __ag_def v `unfollow` `Stop following a channel.` s_unfollow F T )
 
     : Json s_tp ( mcp_schema_obj )
-    ( mcp_schema_prop s_tp `title` `string` `One line: what needs doing.` T )
-    ( mcp_schema_prop s_tp `body` `string` `Details, acceptance criteria, pointers.` F )
-    ( mcp_schema_prop s_tp `tags` `string` `Comma-separated tags, e.g. "review,rust" — what kind of agent should take it.` F )
+    ( mcp_schema_prop s_tp `title` `string` `One line, max 200; default: ref's first line.` F )
+    ( mcp_schema_prop s_tp `body` `string` `Details; default: ref's body.` F )
+    ( mcp_schema_prop s_tp `tags` `string` `Comma-separated, e.g. "review,rust".` F )
     ( mcp_schema_prop s_tp `priority` `integer` `Higher is more urgent; default 0.` F )
-    ( __ag_def v `task_post` `Offer work: a task others can claim. You are told in your mail when it is claimed, done, released or cancelled.` s_tp F T )
+    ( mcp_schema_prop s_tp `ref` `integer` `Message this task is made from (a finding, say); its author also gets the result.` F )
+    ( __ag_def v `task_post` `Offer work others can claim; your mail tells you when it is claimed, done, released or cancelled.` s_tp F T )
 
     : Json s_tasks ( mcp_schema_obj )
     : Json which ( json_arr_new )
@@ -719,60 +795,72 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( json_arr_push which ( json_str_lit `posted` ) )
     ( json_arr_push which ( json_str_lit `done` ) )
     ( json_arr_push which ( json_str_lit `all` ) )
-    ( mcp_schema_prop_enum s_tasks `which` `string` `open (default: claimable, most urgent first) | mine (held by you) | posted (yours, not finished) | done | all.` which F )
-    ( mcp_schema_prop s_tasks `tag` `string` `Only tasks carrying this tag.` F )
+    ( mcp_schema_prop_enum s_tasks `which` `string` `open (default; most urgent first), mine (you hold), posted (yours, unfinished), done, all.` which F )
+    ( mcp_schema_prop s_tasks `tag` `string` `Only tasks with this tag.` F )
     ( __ag_sc_limit s_tasks )
-    ( __ag_def v `tasks` `List tasks: what is open to claim, what you hold, what you posted, what is done.` s_tasks T T )
+    ( __ag_def v `tasks` `List tasks.` s_tasks T T )
 
     : Json s_task ( mcp_schema_obj )
     ( __ag_sc_id s_task )
-    ( __ag_def v `task` `One task in full: body, tags, holder, lease, result.` s_task T T )
+    ( __ag_def v `task` `One task in full: body, holder, lease, result.` s_task T T )
 
     : Json s_claim ( mcp_schema_obj )
     ( __ag_sc_id s_claim )
-    ( mcp_schema_prop s_claim `lease_s` `integer` `Seconds you expect to need (default 600, max 86400). When it runs out the task is open again — task_extend before that.` F )
-    ( __ag_def v `task_claim` `Take an open task. Atomic: only one claimant wins. Finish with task_done, or task_release if you cannot.` s_claim F T )
+    ( mcp_schema_prop s_claim `lease_s` `integer` `Seconds (default 600, max 86400); when it runs out the task reopens.` F )
+    ( __ag_def v `task_claim` `Take an open task under a lease (atomic: one winner). Then task_done, or task_release.` s_claim F T )
 
     : Json s_ext ( mcp_schema_obj )
     ( __ag_sc_id s_ext )
-    ( mcp_schema_prop s_ext `lease_s` `integer` `Seconds more from now (default 600, max 86400).` F )
+    ( mcp_schema_prop s_ext `lease_s` `integer` `Seconds from now (default 600, max 86400).` F )
     ( __ag_def v `task_extend` `Renew the lease on a task you hold.` s_ext F T )
 
     : Json s_done ( mcp_schema_obj )
     ( __ag_sc_id s_done )
-    ( mcp_schema_prop s_done `result` `string` `What was done and where to find it — the poster reads this.` T )
-    ( __ag_def v `task_done` `Finish a task you hold with its result. The poster gets it in their mail.` s_done F T )
+    ( mcp_schema_prop s_done `result` `string` `What was done and where to find it.` T )
+    ( __ag_def v `task_done` `Finish a task you hold; the poster gets the result.` s_done F T )
 
     : Json s_rel ( mcp_schema_obj )
     ( __ag_sc_id s_rel )
-    ( mcp_schema_prop s_rel `note` `string` `Why, and anything the next holder should know.` F )
-    ( __ag_def v `task_release` `Give back a task you hold: it is open again.` s_rel F T )
+    ( mcp_schema_prop s_rel `note` `string` `Why, and what the next holder should know.` F )
+    ( __ag_def v `task_release` `Give back a task you hold; it is open again.` s_rel F T )
 
     : Json s_cancel ( mcp_schema_obj )
     ( __ag_sc_id s_cancel )
-    ( __ag_def v `task_cancel` `Withdraw a task you posted (open or claimed). A holder is told.` s_cancel F T )
+    ( __ag_def v `task_cancel` `Withdraw a task you posted; a holder is told.` s_cancel F T )
 
     : Json s_ns ( mcp_schema_obj )
-    ( mcp_schema_prop s_ns `key` `string` `Note name — lowercase, 1–48 of a-z 0-9 . _ - .` T )
-    ( mcp_schema_prop s_ns `body` `string` `The text (up to 16 KiB). Replaces what was there.` T )
+    ( mcp_schema_prop s_ns `key` `string` AG_NAME_DESC T )
+    ( mcp_schema_prop s_ns `body` `string` `Text, up to 16 KiB; replaces what was there.` T )
     ( __ag_sc_project s_ns )
-    ( __ag_def v `note_set` `Write (or overwrite) a shared note: a durable fact under a key that any agent can read. Give project= to file it under a project (a repository's name, say); omit for a global note.` s_ns F T )
+    ( __ag_def v `note_set` `Write a shared note: a durable fact under a key.` s_ns F T )
 
     : Json s_note ( mcp_schema_obj )
-    ( mcp_schema_prop s_note `key` `string` `Note name.` T )
+    ( mcp_schema_prop s_note `key` `string` `Note key.` T )
     ( __ag_sc_project s_note )
-    ( __ag_def v `note` `Read one shared note (project= for a project's note).` s_note T T )
+    ( __ag_def v `note` `Read one note.` s_note T T )
 
     : Json s_notes ( mcp_schema_obj )
-    ( mcp_schema_prop s_notes `project` `string` `Only this project's notes. Omit for every note of every project, with the project in front of each key.` F )
-    ( __ag_def v `notes` `List the shared notes: keys, authors, ages (not the bodies). notes project=x is everything known about x.` s_notes T T )
+    ( mcp_schema_prop s_notes `project` `string` `Only this project's; omit for all (keys shown as project/key).` F )
+    ( __ag_def v `notes` `List notes: keys, authors, ages (no bodies).` s_notes T T )
 
     : Json s_nd ( mcp_schema_obj )
-    ( mcp_schema_prop s_nd `key` `string` `Note name.` T )
+    ( mcp_schema_prop s_nd `key` `string` `Note key.` T )
     ( __ag_sc_project s_nd )
-    ( __ag_def v `note_del` `Delete a shared note (project= for a project's note).` s_nd F T )
+    ( __ag_def v `note_del` `Delete a note.` s_nd F T )
 
     ^ v
+}
+
+// The argument a REST call with a text/plain body fills with that body
+// ('' = the op takes no free text). One table, next to the catalog;
+// GET /api shows it as `text_arg`.
+@ ag_op_text_arg s name → s {
+    ? | | != 0 ( nurl_str_eq name `post` ) != 0 ( nurl_str_eq name `send` ) != 0 ( nurl_str_eq name `note_set` ) { ^ `body` } {}
+    ? != 0 ( nurl_str_eq name `task_post` ) { ^ `body` } {}
+    ? != 0 ( nurl_str_eq name `task_done` ) { ^ `result` } {}
+    ? != 0 ( nurl_str_eq name `task_release` ) { ^ `note` } {}
+    ? != 0 ( nurl_str_eq name `status` ) { ^ `text` } {}
+    ^ ``
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────
@@ -819,6 +907,14 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
                 ( string_push_str t ( string_data . a about ) )
             } {}
             ( json_obj_set o `about` ( json_str_lit ( string_data . a about ) ) )
+            ? > ( string_len . a status ) 0 {
+                ( string_push_str t `\nstatus: ` )
+                ( string_push_str t ( string_data . a status ) )
+                ( string_push_str t ` (` )
+                ( __ag_age t now . a status_at )
+                ( string_push_str t `)` )
+                ( json_obj_set o `status` ( json_str_lit ( string_data . a status ) ) )
+            } {}
         }
         F _ → {}
     }
@@ -848,29 +944,69 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ^ ( __ag_ok o t )
 }
 
-// The inbox part of brief and inbox: delivers, and says what is left.
-@ __ag_deliver AgStore st s me i limit i now Json o String t → v {
-    : AgInbox ib ( ag_inbox st me limit )
+// The `max_body` argument: `dflt` when absent, never negative.
+@ __ag_max_body Json args i dflt → i {
+    ^ ( __ag_clamp ( __ag_arg_int args `max_body` dflt ) 0 AG_BODY_MAX )
+}
+
+// The inbox part of brief and inbox: delivers, and says what is left
+// and what `newest` passed over.
+@ __ag_deliver AgStore st s me Json args i maxb_dflt i now Json o String t → v {
+    : i maxb ( __ag_max_body args maxb_dflt )
+    : i newest ( __ag_clamp ( __ag_arg_int args `newest` 0 ) 0 AG_LIMIT_MAX )
+    : AgInbox ib ( ag_inbox_newest st me ( __ag_limit args ) newest )
     : i n ( vec_len [AgMsg] . ib msgs )
-    ( json_obj_set o `messages` ( __ag_msgs_json . ib msgs ) )
+    ( json_obj_set o `messages` ( __ag_msgs_json . ib msgs maxb ) )
     ( json_obj_set o `remaining` ( json_int . ib remaining ) )
+    // What newest= passed over: said after the messages.
+    : String skips ( string_new )
+    : i nsk ( vec_len [AgSkip] . ib skipped )
+    ? > nsk 0 {
+        : Json arr ( json_arr_new )
+        : ~ i k 0
+        ~ < k nsk {
+            ?? ( vec_get [AgSkip] . ib skipped k ) {
+                T sk → {
+                    : Json so ( json_obj_new )
+                    ( json_obj_set so `channel` ( json_str_lit ( string_data . sk channel ) ) )
+                    ( json_obj_set so `first` ( json_int . sk first ) )
+                    ( json_obj_set so `last` ( json_int . sk last ) )
+                    ( json_obj_set so `count` ( json_int . sk count ) )
+                    ( json_arr_push arr so )
+                    ( string_push_str skips `(skipped ` )
+                    ( string_push_int skips . sk count )
+                    ( string_push_str skips ` older on ` )
+                    ( string_push_str skips ( string_data . sk channel ) )
+                    ( string_push_str skips ` — history channel=` )
+                    ( string_push_str skips ( string_data . sk channel ) )
+                    ( string_push_str skips ` after=` )
+                    ( string_push_int skips - . sk first 1 )
+                    ( string_push_str skips ` reads them)\n` )
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+        ( json_obj_set o `skipped` arr )
+    } {}
     ? == n 0 { ( string_push_str t `inbox: nothing new\n` ) } {
         ( string_push_str t `inbox: ` )
         ( string_push_int t n )
         ( string_push_str t ` new\n` )
-        ( __ag_msgs_text t . ib msgs now )
+        ( __ag_msgs_text t . ib msgs now maxb )
         ? > . ib remaining 0 {
             ( string_push_str t `(` )
             ( string_push_int t . ib remaining )
-            ( string_push_str t ` more — call inbox)\n` )
+            ( string_push_str t ` more — call again; newest=N skips older channel posts)\n` )
         } {}
     }
+    ( string_push_str t ( string_data skips ) )
 }
 
 @ __ag_op_inbox AgStore st s me Json args i now → AgRes {
     : Json o ( json_obj_new )
     : String t ( string_new )
-    ( __ag_deliver st me ( __ag_limit args ) now o t )
+    ( __ag_deliver st me args 0 now o t )
     ^ ( __ag_ok o t )
 }
 
@@ -880,7 +1016,7 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ( string_push_str t me )
     ( json_obj_set o `agent` ( json_str_lit me ) )
     ( string_push_str t `\n` )
-    ( __ag_deliver st me ( __ag_limit args ) now o t )
+    ( __ag_deliver st me args AG_BRIEF_MAX_BODY now o t )
     : ( Vec AgTask ) mine ( ag_tasks st `mine` me `` AG_LIMIT_MAX now )
     : i nm ( vec_len [AgTask] mine )
     ( json_obj_set o `holding` ( __ag_tasks_json mine ) )
@@ -888,14 +1024,19 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         ( string_push_str t `holding:\n` )
         ( __ag_tasks_text t mine now )
     } {}
-    : i nopen ( ag_task_count_open st )
-    : i nnotes ( ag_note_count st )
-    ( json_obj_set o `open_tasks` ( json_int nopen ) )
-    ( json_obj_set o `notes` ( json_int nnotes ) )
+    : AgCounts c ( ag_counts st me )
+    ( json_obj_set o `open_tasks` ( json_int . c open ) )
+    ( json_obj_set o `posted_open` ( json_int . c posted ) )
+    ( json_obj_set o `notes` ( json_int . c notes ) )
     ( string_push_str t `open tasks: ` )
-    ( string_push_int t nopen )
+    ( string_push_int t . c open )
+    ? > . c posted 0 {
+        ( string_push_str t ` · you posted ` )
+        ( string_push_int t . c posted )
+        ( string_push_str t ` unfinished` )
+    } {}
     ( string_push_str t ` · notes: ` )
-    ( string_push_int t nnotes )
+    ( string_push_int t . c notes )
     ( string_push_str t `\n` )
     ^ ( __ag_ok o t )
 }
@@ -908,8 +1049,12 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     : i timeout ( __ag_clamp ( __ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
     : i deadline + ( now_ms ) * timeout 1000
+    : ~ i steps 0
     ~ & == ( ag_unread st me ) 0 < ( now_ms ) deadline {
         ( sleep_ms AG_WAIT_STEP_MS )
+        // A waiting agent is alive: keep its `seen` fresh for `agents`.
+        = steps + steps 1
+        ? == steps AG_WAIT_TOUCH_STEPS { ( ag_agent_touch st me ( now_seconds ) ) = steps 0 } {}
     }
     : i then ( now_seconds )
     ? ( __ag_arg_bool args `deliver` T ) { ^ ( __ag_op_brief st me args then ) } {}
@@ -1026,30 +1171,94 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
         }
     }
     : i before ( __ag_arg_int args `before` 0 )
-    : ( Vec AgMsg ) msgs ( ag_history st ( string_data ch ) before ( __ag_limit args ) )
+    : i after ( __ag_arg_int args `after` 0 )
+    : String q ( __ag_arg_str args `q` )
+    : String from ( __ag_arg_str args `from` )
+    : i limit ( __ag_limit args )
+    : i maxb ( __ag_max_body args 0 )
+    : ( Vec AgMsg ) msgs ( ag_history_q st ( string_data ch ) before after ( string_data q ) ( string_data from ) limit )
     : Json o ( json_obj_new )
     ( json_obj_set o `channel` ( json_str_lit ( string_data ch ) ) )
-    ( json_obj_set o `messages` ( __ag_msgs_json msgs ) )
+    ( json_obj_set o `messages` ( __ag_msgs_json msgs maxb ) )
     : String t ( string_new )
     : i n ( vec_len [AgMsg] msgs )
     ? == n 0 {
         ( string_push_str t ( string_data ch ) )
         ( string_push_str t `: no messages` )
         ? > before 0 { ( string_push_str t ` before #` ) ( string_push_int t before ) } {}
+        ? > after 0 { ( string_push_str t ` after #` ) ( string_push_int t after ) } {}
+        ? > ( string_len q ) 0 { ( string_push_str t ` matching ` ) ( string_push_str t ( string_data q ) ) } {}
+        ? > ( string_len from ) 0 { ( string_push_str t ` from ` ) ( string_push_str t ( string_data from ) ) } {}
         ( string_push_str t `\n` )
     } {
-        ( __ag_msgs_text t msgs now )
-        ?? ( vec_get [AgMsg] msgs 0 ) {
-            T first → {
-                ? > . first id 1 {
-                    ( string_push_str t `(older: history before=` )
-                    ( string_push_int t . first id )
+        ( __ag_msgs_text t msgs now maxb )
+        // Where the next page is: forward when paging forward and the
+        // page was full, else backward from the first one shown.
+        ? & & > after 0 == before 0 == n limit {
+            ?? ( vec_get [AgMsg] msgs - n 1 ) {
+                T last → {
+                    ( string_push_str t `(newer: history after=` )
+                    ( string_push_int t . last id )
                     ( string_push_str t `)\n` )
-                } {}
+                }
+                F _ → {}
             }
-            F _ → {}
+        } {
+            ? | == after 0 > before 0 {
+                ?? ( vec_get [AgMsg] msgs 0 ) {
+                    T first → {
+                        ? & == n limit > . first id 1 {
+                            ( string_push_str t `(older: history before=` )
+                            ( string_push_int t . first id )
+                            ( string_push_str t `)\n` )
+                        } {}
+                    }
+                    F _ → {}
+                }
+            } {}
         }
     }
+    ^ ( __ag_ok o t )
+}
+
+// The caller may read message `m`: any channel, but a mailbox only its own.
+@ __ag_may_read AgMsg m s me → b {
+    ? == ( nurl_str_get ( string_data . m channel ) 0 ) 64 {
+        : String mine ( ag_mailbox me )
+        : b own ( string_eq mine . m channel )
+        ^ own
+    } {}
+    ^ T
+}
+
+@ __ag_no_msg i id → AgRes {
+    : String m ( string_from `no message #` )
+    ( string_push_int m id )
+    ^ ( __ag_err_s 404 m )
+}
+
+@ __ag_op_msg AgStore st s me Json args i now → AgRes {
+    : i id ( __ag_arg_int args `id` 0 )
+    ?? ( ag_msg_get st id ) {
+        F _ → { ^ ( __ag_no_msg id ) }
+        T m → {
+            ? ( __ag_may_read m me ) {} { ^ ( __ag_err 403 `that message is in another agent's mailbox` ) }
+            : Json o ( __ag_msg_json m 0 )
+            : String t ( string_new )
+            ( __ag_msg_line t m now 0 )
+            ^ ( __ag_ok o t )
+        }
+    }
+}
+
+@ __ag_op_status AgStore st s me Json args i now → AgRes {
+    : String text ( __ag_arg_str args `text` )
+    ? > ( string_len text ) AG_STATUS_MAX { ^ ( __ag_err 400 `text: at most 200 bytes` ) } {}
+    ? ( string_contains text `\n` ) { ^ ( __ag_err 400 `text: one line` ) } {}
+    ? ( ag_agent_set_status st me ( string_data text ) now ) {} { ^ ( __ag_err 500 `could not store the status` ) }
+    : Json o ( json_obj_new )
+    ( json_obj_set o `status` ( json_str_lit ( string_data text ) ) )
+    : String t ( string_from ? > ( string_len text ) 0 `status set\n` `status cleared\n` )
     ^ ( __ag_ok o t )
 }
 
@@ -1066,10 +1275,18 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
                 ( json_obj_set o `agent` ( json_str_lit ( string_data . a id ) ) )
                 ( json_obj_set o `about` ( json_str_lit ( string_data . a about ) ) )
                 ( json_obj_set o `seen` ( json_int . a seen ) )
-                ( json_arr_push arr o )
                 ( string_push_str t ( string_data . a id ) )
                 ( string_push_str t ` (seen ` )
                 ( __ag_age t now . a seen )
+                ? > ( string_len . a status ) 0 {
+                    ( json_obj_set o `status` ( json_str_lit ( string_data . a status ) ) )
+                    ( json_obj_set o `status_at` ( json_int . a status_at ) )
+                    ( string_push_str t `; status ` )
+                    ( __ag_age t now . a status_at )
+                    ( string_push_str t `: ` )
+                    ( string_push_str t ( string_data . a status ) )
+                } {}
+                ( json_arr_push arr o )
                 ( string_push_str t `)` )
                 ? > ( string_len . a about ) 0 {
                     ( string_push_str t ` — ` )
@@ -1170,20 +1387,43 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ^ ( __ag_ok o t )
 }
 
+// The first line of `body`, at most 200 bytes (cut on a character).
+@ __ag_first_line String body → String {
+    : s b ( string_data body )
+    : i n ( string_len body )
+    : ~ i e 0
+    ~ & < e n != ( nurl_str_at b n e ) 10 { = e + e 1 }
+    : i k ( ag_cut_at b e 200 )
+    : String out ( string_substr body 0 k )
+    ^ out
+}
+
 @ __ag_op_task_post AgStore st s me Json args i now → AgRes {
-    : String title ( __ag_arg_str args `title` )
-    ? == ( string_len title ) 0 { ^ ( __ag_err 400 `title is required` ) } {}
+    : ~ String title ( __ag_arg_str args `title` )
+    : ~ String body ( __ag_arg_str args `body` )
+    : i ref ( __ag_arg_int args `ref` 0 )
+    ? > ref 0 {
+        ?? ( ag_msg_get st ref ) {
+            F _ → { ^ ( __ag_no_msg ref ) }
+            T m → {
+                ? ( __ag_may_read m me ) {} { ^ ( __ag_err 403 `ref: that message is in another agent's mailbox` ) }
+                ? == ( string_len title ) 0 { = title ( __ag_first_line . m body ) } {}
+                ? == ( string_len body ) 0 { = body ( string_clone . m body ) } {}
+            }
+        }
+    } {}
+    ? == ( string_len title ) 0 { ^ ( __ag_err 400 `title is required (or ref=<message id>)` ) } {}
     ? > ( string_len title ) 200 { ^ ( __ag_err 400 `title: at most 200 characters` ) } {}
-    : String body ( __ag_arg_str args `body` )
     ? > ( string_len body ) AG_BODY_MAX { ^ ( __ag_err 400 `body: at most 16 KiB` ) } {}
     : String rawtags ( __ag_arg_str args `tags` )
     : String tags ( __ag_tags_norm rawtags )
     : i prio ( __ag_clamp ( __ag_arg_int args `priority` 0 ) -100 100 )
-    : i id ( ag_task_post st ( string_data title ) ( string_data body ) ( string_data tags ) me prio now )
+    : i id ( ag_task_post_ref st ( string_data title ) ( string_data body ) ( string_data tags ) me prio ref now )
     ? == id 0 { ^ ( __ag_err 500 `could not store the task` ) } {}
     : Json o ( __ag_obj_int `id` id )
     : String t ( string_from `task #` )
     ( string_push_int t id )
+    ? > ref 0 { ( string_push_str t ` (re#` ) ( string_push_int t ref ) ( string_push_str t `)` ) } {}
     ( string_push_str t ` posted — you will hear when it is claimed and done\n` )
     ^ ( __ag_ok o t )
 }
@@ -1451,21 +1691,22 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
 
 // Does the catalog know `name`, and does it need a signed-in caller?
 // -1 unknown, 0 open, 1 needs auth.
+// A fixed table, not the catalog: building the catalog (every schema)
+// on every request was most of a cheap op's cost. The unit test checks
+// this table against the catalog entry by entry.
+: s AG_OP_NAMES ` whoami brief wait inbox post send history msg agents status channels channel_create follow unfollow task_post tasks task task_claim task_extend task_done task_release task_cancel note_set note notes note_del `
+
 @ ag_op_auth_kind s name → i {
-    : ( Vec AgOpDef ) cat ( ag_op_catalog )
-    : ~ i kind -1
-    : i n ( vec_len [AgOpDef] cat )
-    : ~ i i 0
-    ~ < i n {
-        ?? ( vec_get [AgOpDef] cat i ) {
-            T d → {
-                ? != 0 ( nurl_str_eq ( string_data . d name ) name ) { = kind ? . d needs_auth 1 0 } {}
-            }
-            F _ → {}
-        }
-        = i + i 1
-    }
-    ^ kind
+    ? != 0 ( nurl_str_eq name `join` ) { ^ 0 } {}
+    : i n ( nurl_str_len name )
+    ? | == n 0 > n AG_NAME_MAX { ^ -1 } {}
+    ? ( string_contains ( string_from name ) ` ` ) { ^ -1 } {}
+    : String key ( string_from ` ` )
+    ( string_push_str key name )
+    ( string_push_str key ` ` )
+    : String names ( string_from AG_OP_NAMES )
+    ? ( string_contains names ( string_data key ) ) { ^ 1 } {}
+    ^ -1
 }
 
 // Run one operation for `c`. `args` is BORROWED (a Json object, or
@@ -1488,7 +1729,9 @@ Remember: note_set / note / notes for facts that must outlive this conversation 
     ? != 0 ( nurl_str_eq name `post` ) { ^ ( __ag_op_post st me args now ) } {}
     ? != 0 ( nurl_str_eq name `send` ) { ^ ( __ag_op_send st me args now ) } {}
     ? != 0 ( nurl_str_eq name `history` ) { ^ ( __ag_op_history st me args now ) } {}
+    ? != 0 ( nurl_str_eq name `msg` ) { ^ ( __ag_op_msg st me args now ) } {}
     ? != 0 ( nurl_str_eq name `agents` ) { ^ ( __ag_op_agents st now ) } {}
+    ? != 0 ( nurl_str_eq name `status` ) { ^ ( __ag_op_status st me args now ) } {}
     ? != 0 ( nurl_str_eq name `channels` ) { ^ ( __ag_op_channels st now ) } {}
     ? != 0 ( nurl_str_eq name `channel_create` ) { ^ ( __ag_op_channel_create st me args now ) } {}
     ? != 0 ( nurl_str_eq name `follow` ) { ^ ( __ag_op_follow st me args now T ) } {}

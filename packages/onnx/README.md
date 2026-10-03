@@ -109,6 +109,35 @@ NURL_STDLIB=<repo> ../../nurl.sh src/main.nu
 
 Or install from the registry: `nurlpkg install onnx`.
 
+### Static and wasm builds
+
+The gpu package's static backend runs precompiled kernels — no NVRTC, no
+host compiler, no dlopen — which is what a wasm32 build (e.g. yoloe-demo's
+in-browser engine) or a sealed native binary uses. `tools/gen_static_kernels.nu`
+writes the C for every kernel the executor can launch; the set is derived
+from the executor itself (`rt_kernel_census`, run on a gpukit census kit),
+not listed by hand:
+
+```
+../../nurl.sh tools/gen_static_kernels.nu gen && ./gen kernels_static.c
+cc -O2 -c kernels_static.c                                     # native
+zig cc --target=wasm32-wasi -O3 -msimd128 -c kernels_static.c  # wasm
+NURL_EXTRA_OBJS=kernels_static.o ../../nurl.sh src/main.nu
+NURL_GPU=static ./src/main tests/data/tiny.onnx tests/data/tiny.in.f32 tests/data/tiny.out.f32
+```
+
+`tests/census_test.nu` checks the census covers every kernel call in the
+executor; `tests/static_test.sh` runs the whole path above.
+
+The gpu package's **WebGPU** backend (wasm in a browser) has a fixed kernel
+set too, hand-written WGSL in `deps/gpu/web/kernels_wgsl.js`.
+`tests/wgsl_census_test.nu` (no device) checks it against the same census:
+a WGSL kernel for every census kernel, each with exactly the parameter list
+the census recorded, and none the executor no longer launches.
+`tests/webgpu_test.sh` builds `tests/webgpu/run.nu` to wasm and runs
+tiny.onnx on a real WebGPU device in headless Chrome (skips without zig,
+node + puppeteer, Chrome or an adapter).
+
 ## Test fixtures
 
 `tests/data/` holds a tiny 4→8→3 MLP (`tiny.onnx`) plus a reference input

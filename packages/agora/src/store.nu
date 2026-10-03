@@ -40,6 +40,8 @@ $ `stdlib/ext/sqlite.nu`
     i created
     i seen
     String origin  // the working directory a @cwd identity was made from; '' otherwise
+    String status  // what the agent says it is doing now; '' = nothing said
+    i status_at  // when it said so
 }
 
 : AgChannel {
@@ -72,6 +74,7 @@ $ `stdlib/ext/sqlite.nu`
     i priority
     i created
     i updated
+    i ref  // the message this task was made from; 0 = none
 }
 
 : AgNote {
@@ -99,13 +102,13 @@ $ `stdlib/ext/sqlite.nu`
 
 @ __ag_schema → ( Vec String ) {
     : ( Vec String ) v ( vec_new [String] )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '')` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', status_at INTEGER NOT NULL DEFAULT 0)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS channels (name TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS follows (agent TEXT NOT NULL, channel TEXT NOT NULL, PRIMARY KEY (agent, channel))` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, sender TEXT NOT NULL, body TEXT NOT NULL, reply_to INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)` ) )
     ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS messages_channel ON messages (channel, id)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS cursors (agent TEXT NOT NULL, channel TEXT NOT NULL, last_id INTEGER NOT NULL, PRIMARY KEY (agent, channel))` ) )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, result TEXT NOT NULL DEFAULT '', priority INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL)` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, result TEXT NOT NULL DEFAULT '', priority INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL, ref INTEGER NOT NULL DEFAULT 0)` ) )
     ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, priority, id)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (project TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (project, key))` ) )
     ( vec_push [String] v ( string_from `INSERT OR IGNORE INTO channels (name, about, created_by, created) VALUES ('public', 'Everyone follows this channel.', '', 0)` ) )
@@ -130,6 +133,14 @@ $ `stdlib/ext/sqlite.nu`
             // 0.3.0: agents.origin. Adding a column needs no copy.
             ? ( __ag_table_lacks db `agents` `origin` ) {
                 ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN origin TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
+            } {}
+            // 0.4.0: agents.status / status_at, tasks.ref.
+            ? ( __ag_table_lacks db `agents` `status` ) {
+                ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
+                ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN status_at INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
+            } {}
+            ? ( __ag_table_lacks db `tasks` `ref` ) {
+                ?? ( sqlite_exec db `ALTER TABLE tasks ADD COLUMN ref INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
             } {}
             ? old_notes {
                 ?? ( sqlite_exec db `ALTER TABLE notes RENAME TO notes_v1` ) { T _ → {} F _ → {} }
@@ -313,6 +324,26 @@ $ `stdlib/ext/sqlite.nu`
     ^ ok
 }
 
+// What the agent says it is doing ('' clears it), stamped `now`.
+@ ag_agent_set_status AgStore st s id s status i now → b {
+    : ~ b ok F
+    ?? ( __ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `UPDATE agents SET status = ?2, status_at = ?3, seen = ?3 WHERE id = ?1` ) {
+                F _ → {}
+                T q → {
+                    ( __ag_bind_s q 1 id )
+                    ( __ag_bind_s q 2 status )
+                    ( __ag_bind_i q 3 now )
+                    = ok & ( __ag_run q ) > ( sqlite_changes db ) 0
+                }
+            }
+        }
+    }
+    ^ ok
+}
+
 // The agent whose token hashes to `token_hash`, or None. Touches `seen`.
 @ ag_agent_by_token AgStore st s token_hash i now → ?String {
     : ~ String id ( string_new )
@@ -362,16 +393,18 @@ $ `stdlib/ext/sqlite.nu`
         ( sqlite_column_int q 2 )
         ( sqlite_column_int q 3 )
         ( sqlite_column_text q 4 )
+        ( sqlite_column_text q 5 )
+        ( sqlite_column_int q 6 )
     }
 }
 
 @ ag_agent_get AgStore st s id → ?AgAgent {
     : ~ b found F
-    : ~ AgAgent out @ AgAgent { ( string_new ) ( string_new ) 0 0 ( string_new ) }
+    : ~ AgAgent out @ AgAgent { ( string_new ) ( string_new ) 0 0 ( string_new ) ( string_new ) 0 }
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin FROM agents WHERE id = ?1` ) {
+            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at FROM agents WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
                     ( __ag_bind_s q 1 id )
@@ -392,7 +425,7 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin FROM agents ORDER BY seen DESC` ) {
+            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at FROM agents ORDER BY seen DESC` ) {
                 F _ → {}
                 T q → {
                     ~ ( __ag_row q ) { ( vec_push [AgAgent] out ( __ag_read_agent q ) ) }
@@ -591,6 +624,79 @@ $ `stdlib/ext/sqlite.nu`
 : AgInbox {
     ( Vec AgMsg ) msgs
     i remaining  // still undelivered after this batch
+    ( Vec AgSkip ) skipped  // channel posts passed over (`newest`), per channel
+}
+
+// Channel posts an inbox drain passed over without delivering them:
+// ids `first`..`last` of `channel`, `count` of them. `history` has them.
+: AgSkip {
+    String channel
+    i first
+    i last
+    i count
+}
+
+// Move `agent`'s cursor on `channel` up to `id` (never back).
+@ __ag_cursor_on Database db s agent s channel i id → v {
+    ?? ( sqlite_prepare db `INSERT INTO cursors (agent, channel, last_id) VALUES (?1, ?2, ?3) ON CONFLICT (agent, channel) DO UPDATE SET last_id = MAX(last_id, excluded.last_id)` ) {
+        F _ → {}
+        T q → {
+            ( __ag_bind_s q 1 agent )
+            ( __ag_bind_s q 2 channel )
+            ( __ag_bind_i q 3 id )
+            ( __ag_run q )
+        }
+    }
+}
+
+// `newest` > 0: leave only the newest `newest` undelivered CHANNEL posts
+// for delivery — the older ones are passed over (their cursors moved) and
+// returned as one AgSkip per channel. The mailbox is never skipped.
+@ __ag_skip_older_on Database db s agent String mbox i newest → ( Vec AgSkip ) {
+    : ( Vec AgSkip ) out ( vec_new [AgSkip] )
+    : ~ i cut 0
+    : String tsql ( string_from `SELECT m.id` )
+    ( string_push_str tsql AG_INBOX_WHERE )
+    ( string_push_str tsql ` AND m.channel != ?2 ORDER BY m.id DESC LIMIT 1 OFFSET ?3` )
+    ?? ( sqlite_prepare db ( string_data tsql ) ) {
+        F _ → {}
+        T q → {
+            ( __ag_bind_s q 1 agent )
+            ( __ag_bind_str q 2 ( string_clone mbox ) )
+            ( __ag_bind_i q 3 newest )
+            ? ( __ag_row q ) { = cut ( sqlite_column_int q 0 ) } {}
+        }
+    }
+    ? == cut 0 { ^ out } {}
+    : String ssql ( string_from `SELECT m.channel, MIN(m.id), MAX(m.id), COUNT(*)` )
+    ( string_push_str ssql AG_INBOX_WHERE )
+    ( string_push_str ssql ` AND m.channel != ?2 AND m.id <= ?3 GROUP BY m.channel ORDER BY m.channel` )
+    ?? ( sqlite_prepare db ( string_data ssql ) ) {
+        F _ → {}
+        T q → {
+            ( __ag_bind_s q 1 agent )
+            ( __ag_bind_str q 2 ( string_clone mbox ) )
+            ( __ag_bind_i q 3 cut )
+            ~ ( __ag_row q ) {
+                ( vec_push [AgSkip] out @ AgSkip {
+                    ( sqlite_column_text q 0 )
+                    ( sqlite_column_int q 1 )
+                    ( sqlite_column_int q 2 )
+                    ( sqlite_column_int q 3 )
+                } )
+            }
+        }
+    }
+    : i n ( vec_len [AgSkip] out )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [AgSkip] out k ) {
+            T sk → { ( __ag_cursor_on db agent ( string_data . sk channel ) . sk last ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ out
 }
 
 // Everything new for `agent` — its mailbox plus the channels it follows,
@@ -598,13 +704,22 @@ $ `stdlib/ext/sqlite.nu`
 // returned, in one transaction: two concurrent drains cannot deliver
 // the same message twice. Own posts are never delivered back.
 @ ag_inbox AgStore st s agent i limit → AgInbox {
+    ^ ( ag_inbox_newest st agent limit 0 )
+}
+
+// The same; `newest` > 0 first passes over all but the newest `newest`
+// undelivered channel posts (see __ag_skip_older_on), in the same
+// transaction.
+@ ag_inbox_newest AgStore st s agent i limit i newest → AgInbox {
     : ( Vec AgMsg ) out ( vec_new [AgMsg] )
+    : ~ ( Vec AgSkip ) skipped ( vec_new [AgSkip] )
     : ~ i remaining 0
     : String mbox ( ag_mailbox agent )
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ @ AgInbox { out 0 } }
+            ? ( __ag_begin db ) {} { ^ @ AgInbox { out 0 skipped } }
+            ? > newest 0 { = skipped ( __ag_skip_older_on db agent mbox newest ) } {}
             : String sql ( string_from `SELECT m.id, m.channel, m.sender, m.body, m.reply_to, m.ts` )
             ( string_push_str sql AG_INBOX_WHERE )
             ( string_push_str sql ` ORDER BY m.id LIMIT ?3` )
@@ -617,21 +732,23 @@ $ `stdlib/ext/sqlite.nu`
                     ~ ( __ag_row q ) { ( vec_push [AgMsg] out ( __ag_read_msg q ) ) }
                 }
             }
-            // Advance each touched channel's cursor to the last id it got.
+            // Advance each touched channel's cursor to the last id it got:
+            // one upsert per channel, at its last message in the batch.
             : i n ( vec_len [AgMsg] out )
             : ~ i i 0
             ~ < i n {
                 ?? ( vec_get [AgMsg] out i ) {
                     T m → {
-                        ?? ( sqlite_prepare db `INSERT INTO cursors (agent, channel, last_id) VALUES (?1, ?2, ?3) ON CONFLICT (agent, channel) DO UPDATE SET last_id = MAX(last_id, excluded.last_id)` ) {
-                            F _ → {}
-                            T q → {
-                                ( __ag_bind_s q 1 agent )
-                                ( __ag_bind_str q 2 ( string_clone . m channel ) )
-                                ( __ag_bind_i q 3 . m id )
-                                ( __ag_run q )
+                        : ~ b last T
+                        : ~ i j + i 1
+                        ~ & last < j n {
+                            ?? ( vec_get [AgMsg] out j ) {
+                                T m2 → { ? ( string_eq . m channel . m2 channel ) { = last F } {} }
+                                F _ → {}
                             }
+                            = j + j 1
                         }
+                        ? last { ( __ag_cursor_on db agent ( string_data . m channel ) . m id ) } {}
                     }
                     F _ → {}
                 }
@@ -652,7 +769,7 @@ $ `stdlib/ext/sqlite.nu`
             ? ( __ag_commit db ) {} { ( __ag_rollback db ) }
         }
     }
-    ^ @ AgInbox { out remaining }
+    ^ @ AgInbox { out remaining skipped }
 }
 
 // How many are waiting, without delivering anything.
@@ -680,22 +797,55 @@ $ `stdlib/ext/sqlite.nu`
 // The newest `limit` messages of a channel with id < `before` (0 = from
 // the newest), returned oldest first. Moves no cursor.
 @ ag_history AgStore st s channel i before i limit → ( Vec AgMsg ) {
+    ^ ( ag_history_q st channel before 0 `` `` limit )
+}
+
+// A page of a channel, oldest first, moving no cursor. Only ids below
+// `before` (0 = no bound) and above `after` (0 = no bound); only bodies
+// containing `text` (case-insensitive for ASCII; '' = any); only posts
+// by `from` ('' = anyone). With `after` and no `before` the page is the
+// OLDEST `limit` past `after` (paging forward); otherwise the newest.
+@ ag_history_q AgStore st s channel i before i after s text s from i limit → ( Vec AgMsg ) {
     : ( Vec AgMsg ) out ( vec_new [AgMsg] )
+    : b forward & > after 0 == before 0
+    : s sql ? forward
+    `SELECT id, channel, sender, body, reply_to, ts FROM messages WHERE channel = ?1 AND id > ?4 AND (?5 = '' OR body LIKE ?5 ESCAPE '\\') AND (?6 = '' OR sender = ?6) ORDER BY id LIMIT ?3`
+    `SELECT id, channel, sender, body, reply_to, ts FROM (SELECT * FROM messages WHERE channel = ?1 AND (?2 = 0 OR id < ?2) AND id > ?4 AND (?5 = '' OR body LIKE ?5 ESCAPE '\\') AND (?6 = '' OR sender = ?6) ORDER BY id DESC LIMIT ?3) ORDER BY id`
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, channel, sender, body, reply_to, ts FROM (SELECT * FROM messages WHERE channel = ?1 AND (?2 = 0 OR id < ?2) ORDER BY id DESC LIMIT ?3) ORDER BY id` ) {
+            ?? ( sqlite_prepare db sql ) {
                 F _ → {}
                 T q → {
                     ( __ag_bind_s q 1 channel )
                     ( __ag_bind_i q 2 before )
                     ( __ag_bind_i q 3 limit )
+                    ( __ag_bind_i q 4 after )
+                    ( __ag_bind_str q 5 ( __ag_like_pat text ) )
+                    ( __ag_bind_s q 6 from )
                     ~ ( __ag_row q ) { ( vec_push [AgMsg] out ( __ag_read_msg q ) ) }
                 }
             }
         }
     }
     ^ out
+}
+
+// `%text%` with LIKE's own characters escaped ('' stays '').
+@ __ag_like_pat s text → String {
+    : String p ( string_new )
+    : i n ( nurl_str_len text )
+    ? == n 0 { ^ p } {}
+    ( string_push_char p 37 )
+    : ~ i i 0
+    ~ < i n {
+        : i c ( nurl_str_get text i )
+        ? | | == c 37 == c 95 == c 92 { ( string_push_char p 92 ) } {}
+        ( string_push_char p c )
+        = i + i 1
+    }
+    ( string_push_char p 37 )
+    ^ p
 }
 
 @ ag_msg_get AgStore st i id → ?AgMsg {
@@ -736,10 +886,11 @@ $ `stdlib/ext/sqlite.nu`
         ( sqlite_column_int q 9 )
         ( sqlite_column_int q 10 )
         ( sqlite_column_int q 11 )
+        ( sqlite_column_int q 12 )
     }
 }
 
-: s AG_TASK_COLS `id, title, body, tags, poster, status, owner, lease_until, result, priority, created, updated`
+: s AG_TASK_COLS `id, title, body, tags, poster, status, owner, lease_until, result, priority, created, updated, ref`
 
 // Leases that ran out: the task goes back to open and the holder that
 // went quiet hears about it in its mailbox. Called at the start of every
@@ -787,11 +938,17 @@ $ `stdlib/ext/sqlite.nu`
 }
 
 @ ag_task_post AgStore st s title s body s tags s poster i priority i now → i {
+    ^ ( ag_task_post_ref st title body tags poster priority 0 now )
+}
+
+// The same, made from message `ref` (0 = none): whoever wrote that
+// message also hears when the task is done.
+@ ag_task_post_ref AgStore st s title s body s tags s poster i priority i ref i now → i {
     : ~ i id 0
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `INSERT INTO tasks (title, body, tags, poster, status, priority, created, updated) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?6)` ) {
+            ?? ( sqlite_prepare db `INSERT INTO tasks (title, body, tags, poster, status, priority, created, updated, ref) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?6, ?7)` ) {
                 F _ → {}
                 T q → {
                     ( __ag_bind_s q 1 title )
@@ -800,6 +957,7 @@ $ `stdlib/ext/sqlite.nu`
                     ( __ag_bind_s q 4 poster )
                     ( __ag_bind_i q 5 priority )
                     ( __ag_bind_i q 6 now )
+                    ( __ag_bind_i q 7 ref )
                     ? ( __ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
                 }
             }
@@ -810,7 +968,7 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_task_get AgStore st i id i now → ?AgTask {
     : ~ b found F
-    : ~ AgTask out @ AgTask { 0 ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 ( string_new ) 0 0 0 }
+    : ~ AgTask out @ AgTask { 0 ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 ( string_new ) 0 0 0 0 }
     ?? ( __ag_conn st ) {
         F _ → {}
         T db → {
@@ -899,6 +1057,33 @@ $ `stdlib/ext/sqlite.nu`
         }
     }
     ^ n
+}
+
+// The counts brief shows, in one connection and one statement: open
+// tasks, tasks `agent` posted that are not finished, notes.
+: AgCounts {
+    i open
+    i posted
+    i notes
+}
+
+@ ag_counts AgStore st s agent → AgCounts {
+    : ~ AgCounts c @ AgCounts { 0 0 0 }
+    ?? ( __ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM tasks WHERE status = 'open'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed') AND poster = ?1), (SELECT COUNT(*) FROM notes)` ) {
+                F _ → {}
+                T q → {
+                    ( __ag_bind_s q 1 agent )
+                    ? ( __ag_row q ) {
+                        = c @ AgCounts { ( sqlite_column_int q 0 ) ( sqlite_column_int q 1 ) ( sqlite_column_int q 2 ) }
+                    } {}
+                }
+            }
+        }
+    }
+    ^ c
 }
 
 // Outcome of a state change on a task.
@@ -999,8 +1184,9 @@ $ `stdlib/ext/sqlite.nu`
             ( __ag_expire_on db now )
             : ~ String poster ( string_new )
             : ~ String title ( string_new )
+            : ~ i ref 0
             : ~ b mine F
-            ?? ( sqlite_prepare db `SELECT poster, title FROM tasks WHERE id = ?1 AND status = 'claimed' AND owner = ?2` ) {
+            ?? ( sqlite_prepare db `SELECT poster, title, ref FROM tasks WHERE id = ?1 AND status = 'claimed' AND owner = ?2` ) {
                 F _ → {}
                 T q → {
                     ( __ag_bind_i q 1 id )
@@ -1008,6 +1194,7 @@ $ `stdlib/ext/sqlite.nu`
                     ? ( __ag_row q ) {
                         = poster ( sqlite_column_text q 0 )
                         = title ( sqlite_column_text q 1 )
+                        = ref ( sqlite_column_int q 2 )
                         = mine T
                     } {}
                 }
@@ -1042,10 +1229,45 @@ $ `stdlib/ext/sqlite.nu`
                 : String mbox ( ag_mailbox ( string_data poster ) )
                 ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
             } {}
+            // A task made from a message: its author hears the result too
+            // (unless that is the poster, told above, or the holder).
+            ? & & == rc AG_TASK_OK is_done > ref 0 {
+                : String author ( __ag_msg_sender_on db ref )
+                : s au ( string_data author )
+                ? & & > ( nurl_str_len au ) 0 == 0 ( nurl_str_eq au agent ) == 0 ( nurl_str_eq au ( string_data poster ) ) {
+                    : String body ( string_from `task #` )
+                    ( string_push_int body id )
+                    ( string_push_str body ` (from your #` )
+                    ( string_push_int body ref )
+                    ( string_push_str body `) done by ` )
+                    ( string_push_str body agent )
+                    ( string_push_str body `: ` )
+                    ( string_push_str body ( string_data title ) )
+                    ? > ( nurl_str_len text ) 0 {
+                        ( string_push_str body `\nresult: ` )
+                        ( string_push_str body text )
+                    } {}
+                    : String mbox ( ag_mailbox au )
+                    ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) ref now )
+                } {}
+            } {}
             ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
         }
     }
     ^ rc
+}
+
+// Who wrote message `id` ('' when there is no such message).
+@ __ag_msg_sender_on Database db i id → String {
+    : ~ String who ( string_new )
+    ?? ( sqlite_prepare db `SELECT sender FROM messages WHERE id = ?1` ) {
+        F _ → {}
+        T q → {
+            ( __ag_bind_i q 1 id )
+            ? ( __ag_row q ) { = who ( sqlite_column_text q 0 ) } {}
+        }
+    }
+    ^ who
 }
 
 @ ag_task_done AgStore st i id s agent s result i now → i {

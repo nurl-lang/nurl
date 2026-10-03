@@ -103,6 +103,14 @@ $ `cpu.nu`
 
 & `c` @ wgpu_launch i pipeline i total *u args i nargs → i
 
+// The entry gpu_open probes to tell a working WebGPU host from a missing
+// one. Every WGSL kernel set (web/kernels_wgsl.js) carries it, a no-op
+// with no parameters, so the probe names no real kernel — those belong to
+// whatever executor the set serves and change with it (it named
+// `osigmoid`, a kernel of onnx's pre-0.7 set: a current set without it
+// would read as "no WebGPU").
+: s GPU_WGSL_SENTINEL `__nurl_wgsl_set`
+
 @ gpu_force_webgpu → v { = __gpu_force 3 }
 
 @ __force_webgpu → b {
@@ -254,9 +262,10 @@ $ `cpu.nu`
 
 @ gpu_open i ordinal → Gpu {
     ? ( __force_webgpu ) {
-        // probe: wgpu_pipeline of a known kernel returns >0 when the JS
-        // host has WebGPU up. 0 → no adapter / host missing.
-        ? <= ( wgpu_pipeline `osigmoid` ) 0 {
+        // probe: the WGSL set's sentinel entry compiles to a pipeline (>0)
+        // when the JS host has WebGPU up. 0 → no adapter / host missing /
+        // a kernels_wgsl.js without the sentinel.
+        ? <= ( wgpu_pipeline GPU_WGSL_SENTINEL ) 0 {
             ( nurl_eprint `[gpu/webgpu] no WebGPU host / adapter (wgpu_pipeline failed)\n` )
             ^ ( __gpu_noctx ordinal - 0 4 0 )
         } {}
@@ -264,7 +273,7 @@ $ `cpu.nu`
         ^ ( __gpu_noctx ordinal - 0 4 1 )
     } {}
     ? ( __force_static ) {
-        ? == # i ( nurl_static_kernel `gemm` ) 0 {
+        ? == # i ( nurl_static_kernel CPU_STATIC_SENTINEL ) 0 {
             ( nurl_eprint `[gpu/static] no static kernels linked into this binary (kernels_static.c missing)\n` )
             ^ ( __gpu_noctx ordinal - 0 3 0 )
         } {}
@@ -287,6 +296,10 @@ $ `cpu.nu`
 }
 
 @ gpu_ok Gpu g → b { ^ != . g ctx 0 }
+
+// A device that is not there (gpu_ok F) — opens nothing, probes no driver.
+// For a holder that must carry a Gpu but never launches on it.
+@ gpu_none → Gpu { ^ ( __gpu_noctx 0 - 0 1 0 ) }
 
 // Human-readable device name (e.g. "NVIDIA GeForce RTX 4090", or "CPU").
 // Borrowed: valid while `g` (or anything made through it) is alive.

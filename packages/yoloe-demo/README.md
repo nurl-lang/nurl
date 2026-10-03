@@ -227,7 +227,9 @@ mask composited into the returned frame.
 
 * The in-browser engines are the **CPU** (static kernels) and the
   **WebGPU** backend (packages/gpu backend 3 — the onnx kernels as WGSL
-  compute shaders). The WGSL kernels are verified on a real GPU via Deno
+  compute shaders). The WGSL set is checked against the onnx executor's
+  kernel census (`packages/onnx/tests/wgsl_census_test.nu`) and every
+  kernel is run on a real WebGPU device
   (`packages/gpu/tests/webgpu_test.sh`); the full detector forward and
   the shipped `web/worker.js` are verified via Deno Workers
   (`tests/webgpu_worker_test.mjs`, exercised by `demo_test.sh`).

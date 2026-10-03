@@ -610,8 +610,8 @@ $ `stdlib/core/rcbox.nu`
     //   1 per-channel  view [C, per]   X (per, 1)      B (1, 0)
     //   3 per-inner    view [n/p, p]   X (p, 1)        B (0, 1)
     : i nx . X nelem
-    : s opname ? == op 0 { `mul` } { ? == op 1 { `add` } { ? == op 2 { `sub` } { `div` } } }
-    : s opc ? == op 0 { `*` } { ? == op 1 { `+` } { ? == op 2 { `-` } { `/` } } }
+    : s opname ( rt_ew_name op )
+    : s opc ( rt_ew_sym op )
     : ( Vec i ) od ( vec_new [i] )
     : ( Vec i ) ast ( vec_new [i] )
     : ( Vec i ) bst ( vec_new [i] )
@@ -636,6 +636,14 @@ $ `stdlib/core/rcbox.nu`
     : GkBuf yb ( gk_buf_wrap yd nx GK_F32 )
     ? ( gkd_ew_bc . e kit opname opc yb ( __rt_fbuf X ) ( __rt_fbuf B ) od ast bst ) {} { ( __rt_op_fail `Mul/Add/Sub/Div` ) }
 }
+
+// The broadcast-elementwise family, op 0..RT_EW_OPS-1 (Mul Add Sub Div):
+// the kernel-name suffix and the C operator. Shared with rt_kernel_census.
+: i RT_EW_OPS 4
+
+@ rt_ew_name i op → s { ? == op 0 { ^ `mul` } {} ? == op 1 { ^ `add` } {} ? == op 2 { ^ `sub` } {} ^ `div` }
+
+@ rt_ew_sym i op → s { ? == op 0 { ^ `*` } {} ? == op 1 { ^ `+` } {} ? == op 2 { ^ `-` } {} ^ `/` }
 
 @ rt_sigmoid * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
@@ -1244,3 +1252,88 @@ $ `stdlib/core/rcbox.nu`
 // engine's last owner releases its device blocks, its value map and the
 // device (the kit).
 @ rt_close sink Engine e → v {}
+
+// ── Kernel census ─────────────────────────────────────────────────────
+//
+// Every kernel this executor can launch, by issuing each gkd_* call the
+// op handlers above make — once per variant the handler can select (Gemm
+// with and without transB, dilated and plain Conv, both ArgMax input
+// types, each elementwise op, …) — on `kit`. Run on a census kit
+// (gk_open_census) nothing launches: the kit records each kernel's entry
+// name and exact source from gpukit's own builders, taking the branches
+// the static backend takes. tools/gen_static_kernels.nu turns that record
+// into kernels_static.c, so the static / wasm kernel set is DERIVED from
+// the executor and the kernel library, not mirrored from them; and
+// tests/wgsl_census_test.nu holds the gpu package's WebGPU set (hand-written
+// WGSL bodies) to the same record, name for name and parameter list for
+// parameter list.
+//
+// Keep it in step with the handlers: a new gkd_* call above belongs here
+// too. tests/census_test.nu fails when a wrapper the executor calls is
+// missing from this function, and the static backend fails loudly ("kernel
+// not in the linked set") on any kernel a static build lacks.
+//
+// The shapes are the smallest each wrapper accepts; buffers are views over
+// a dummy address (nothing is dereferenced on a census kit). Returns the
+// number of calls the kit REJECTED — 0 on success; a rejection means a
+// wrapper's validation changed under this census and it must follow.
+@ __cz_f i n → GkBuf { ^ ( gk_buf_wrap 4096 n GK_F32 ) }
+
+@ __cz_i i n → GkBuf { ^ ( gk_buf_wrap 4096 n GK_I64 ) }
+
+@ __cz_ok b ok s what → i {
+    ? ok { ^ 0 } {}
+    ( nurl_eprint `[onnx census] gpukit rejected: ` ) ( nurl_eprint what ) ( nurl_eprint `\n` )
+    ^ 1
+}
+
+@ rt_kernel_census GpuKit kit → i {
+    : ~ i bad 0
+    // Gemm (alpha/beta/bias, both transB), MatMul / Einsum (transB 0)
+    = bad + bad ( __cz_ok ( gkd_gemm kit ( __cz_f 6 ) ( __cz_f 8 ) ( __cz_f 12 ) ( __cz_f 3 ) 1 2 3 4 1.0 1.0 0 ) `gemm` )
+    = bad + bad ( __cz_ok ( gkd_gemm kit ( __cz_f 6 ) ( __cz_f 8 ) ( __cz_f 12 ) ( __cz_f 3 ) 1 2 3 4 1.0 1.0 1 ) `gemm transB` )
+    // batched MatMul
+    = bad + bad ( __cz_ok ( gkd_bmm kit ( __cz_f 12 ) ( __cz_f 16 ) ( __cz_f 24 ) 2 2 4 3 1 1 ) `bmm` )
+    // Conv: dilation 1 (the specialised body) and dilated
+    = bad + bad ( __cz_ok ( gkd_conv2d_dil kit ( __cz_f 32 ) ( __cz_f 32 ) ( __cz_f 36 ) ( __cz_f 2 ) 1 2 4 4 2 3 3 4 4 1 1 1 1 1 1 ) `conv2d` )
+    = bad + bad ( __cz_ok ( gkd_conv2d_dil kit ( __cz_f 8 ) ( __cz_f 32 ) ( __cz_f 36 ) ( __cz_f 2 ) 1 2 4 4 2 3 3 2 2 1 1 1 1 2 2 ) `conv2d dilated` )
+    // ConvTranspose: stride = kernel, no pad (the exact-upsample body) and
+    // the general one
+    = bad + bad ( __cz_ok ( gkd_convtranspose2d kit ( __cz_f 32 ) ( __cz_f 4 ) ( __cz_f 8 ) ( __cz_f 2 ) 1 1 2 2 2 2 2 4 4 0 0 2 2 ) `convtranspose2d upsample` )
+    = bad + bad ( __cz_ok ( gkd_convtranspose2d kit ( __cz_f 18 ) ( __cz_f 4 ) ( __cz_f 18 ) ( __cz_f 2 ) 1 1 2 2 2 3 3 3 3 1 1 2 2 ) `convtranspose2d` )
+    = bad + bad ( __cz_ok ( gkd_maxpool2d kit ( __cz_f 8 ) ( __cz_f 32 ) 2 4 4 2 2 2 2 2 2 0 0 ) `maxpool2d` )
+    = bad + bad ( __cz_ok ( gkd_batchnorm kit ( __cz_f 8 ) ( __cz_f 8 ) ( __cz_f 2 ) ( __cz_f 2 ) ( __cz_f 2 ) ( __cz_f 2 ) 2 4 0.00001 ) `batchnorm` )
+    // activations / maps
+    = bad + bad ( __cz_ok ( gkd_relu kit ( __cz_f 4 ) ( __cz_f 4 ) ) `relu` )
+    = bad + bad ( __cz_ok ( gkd_sigmoid kit ( __cz_f 4 ) ( __cz_f 4 ) ) `sigmoid` )
+    = bad + bad ( __cz_ok ( gkd_leakyrelu kit ( __cz_f 4 ) ( __cz_f 4 ) 0.1 ) `leakyrelu` )
+    = bad + bad ( __cz_ok ( gkd_clip kit ( __cz_f 4 ) ( __cz_f 4 ) 0.0 6.0 ) `clip` )
+    = bad + bad ( __cz_ok ( gkd_erf kit ( __cz_f 4 ) ( __cz_f 4 ) ) `erf` )
+    = bad + bad ( __cz_ok ( gkd_layernorm kit ( __cz_f 8 ) ( __cz_f 8 ) ( __cz_f 4 ) ( __cz_f 4 ) 2 4 0.00001 ) `layernorm` )
+    = bad + bad ( __cz_ok ( gkd_softmax_ax kit ( __cz_f 8 ) ( __cz_f 8 ) 1 4 2 ) `softmax_ax` )
+    // broadcast elementwise, every op the handler maps
+    : ~ i op 0
+    ~ < op RT_EW_OPS {
+        : ( Vec i ) od ( vec_new [i] ) ( vec_push [i] od 2 ) ( vec_push [i] od 3 )
+        : ( Vec i ) ast ( vec_new [i] ) ( vec_push [i] ast 3 ) ( vec_push [i] ast 1 )
+        : ( Vec i ) bst ( vec_new [i] ) ( vec_push [i] bst 1 ) ( vec_push [i] bst 0 )
+        = bad + bad ( __cz_ok ( gkd_ew_bc kit ( rt_ew_name op ) ( rt_ew_sym op ) ( __cz_f 6 ) ( __cz_f 6 ) ( __cz_f 2 ) od ast bst ) ( rt_ew_name op ) )
+        = op + op 1
+    }
+    // data movement
+    = bad + bad ( __cz_ok ( gkd_slice_ax kit ( __cz_f 4 ) ( __cz_f 8 ) 2 2 1 4 1 ) `slice_ax` )
+    = bad + bad ( __cz_ok ( gkd_copy_ax kit ( __cz_f 8 ) ( __cz_f 4 ) 2 2 1 4 1 ) `copy_ax` )
+    : ( Vec i ) pd ( vec_new [i] ) ( vec_push [i] pd 2 ) ( vec_push [i] pd 3 )
+    : ( Vec i ) pp ( vec_new [i] ) ( vec_push [i] pp 1 ) ( vec_push [i] pp 0 )
+    = bad + bad ( __cz_ok ( gkd_perm kit ( __cz_f 6 ) ( __cz_f 6 ) pd pp ) `perm` )
+    = bad + bad ( __cz_ok ( gkd_resize_bilinear kit ( __cz_f 16 ) ( __cz_f 4 ) 1 2 2 4 4 0 ) `resize_bilinear` )
+    = bad + bad ( __cz_ok ( gkd_resize_nn kit ( __cz_f 16 ) ( __cz_f 4 ) 1 2 2 4 4 2 2 ) `resize_nn` )
+    = bad + bad ( __cz_ok ( gkd_expandlast kit ( __cz_f 6 ) ( __cz_f 2 ) 2 3 ) `expandlast` )
+    // reductions / index selection
+    = bad + bad ( __cz_ok ( gkd_reducel2 kit ( __cz_f 2 ) ( __cz_f 8 ) 2 4 ) `reducel2` )
+    = bad + bad ( __cz_ok ( gkd_argmax kit ( __cz_i 2 ) ( __cz_f 8 ) 2 4 ) `argmax f32` )
+    = bad + bad ( __cz_ok ( gkd_argmax kit ( __cz_i 2 ) ( __cz_i 8 ) 2 4 ) `argmax i64` )
+    = bad + bad ( __cz_ok ( gkd_gather kit ( __cz_f 4 ) ( __cz_f 8 ) ( __cz_i 2 ) 1 4 2 2 ) `gather` )
+    = bad + bad ( __cz_ok ( gkd_eos_gather kit ( __cz_f 6 ) ( __cz_f 12 ) ( __cz_i 4 ) 2 2 3 ) `eos_gather` )
+    ^ bad
+}

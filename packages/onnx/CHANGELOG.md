@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+**The WebGPU kernel set is checked against the executor too.** The gpu
+package's WebGPU backend looks kernels up by name in a fixed WGSL set
+(`deps/gpu/web/kernels_wgsl.js`), which still held the pre-0.7 kernels — the
+census that fixed the static backend in 0.9.1 did not reach it, and objdet's
+wasm module and yoloe-demo's WebGPU engine failed at run time. New
+`tests/wgsl_census_test.nu` (no device, no browser) holds that set to
+`rt_kernel_census`: a WGSL kernel for every census kernel, each with exactly
+the parameter list the census recorded, every parameter type marshallable,
+and no entry the executor no longer launches. New `tests/webgpu_test.sh`
+builds `tests/webgpu/run.nu` (one forward on the WebGPU backend, as a
+wasm32-wasi command) and runs tiny.onnx on a real WebGPU device in headless
+Chrome against the onnxruntime reference (skips without zig, node +
+puppeteer, Chrome or an adapter).
+
+Verified on Chrome's WebGPU (SwiftShader): tiny.onnx matches onnxruntime to
+7.3e-8 of range; tinyyolov2 matches the CUDA backend to 4.5e-7 of range
+(21125 outputs); objdet's wasm module detects car 0.6388 / car 0.5774 /
+dog 0.3231, the same boxes and scores as the native CUDA CLI to 4 decimals.
+
+## 0.9.1
+
+**The static backend and the wasm builds work again — and their kernel set
+can no longer drift from the executor.** `tools/gen_static_kernels.nu`, which
+writes the `kernels_static.c` that the gpu package's static backend (no
+NVRTC, no host compiler, no dlopen: every wasm32 build, e.g. yoloe-demo's
+in-browser engine) links, kept a hand-written mirror of the executor's
+kernel list and imported `src/ops.nu` to get the sources. 0.7.0 moved the
+executor onto gpukit's kernel library and deleted `ops.nu`; the mirror was
+never updated, the generator stopped compiling, and the kernels it had
+emitted were not the ones the executor asked for any more (`gemm` vs
+`gk32_gemm_tiled`, `int` parameter cells vs `long long`). Every test stayed
+green for three releases.
+
+The kernel set is now **derived**, not listed. `rt_kernel_census kit`
+(runtime.nu) issues every `gkd_*` call the executor makes — once per variant
+a handler can select — on a gpukit *census kit*, which records each kernel's
+entry name and exact source from gpukit's own builders while taking the
+static backend's branches. `src/static_kernels.nu` turns that record into C
+(`onnx_static_kernels_c`); the tool is a thin front end over it. A kernel
+the executor gains, or a body gpukit changes, reaches the static set with no
+edit to the generator.
+
+- The hand-optimised static conv2d is kept (2.41 s vs 3.14 s per tinyyolov2
+  frame, bit-identical), re-cut for the current `gk32_conv2d` parameter
+  cells (`long long`). An override now states the exact parameter list it
+  was written against; the generator refuses to emit one whose kernel's
+  signature changed, or whose kernel the census no longer records.
+- The generator refuses a kernel that needs block barriers (`__syncthreads`,
+  `__shared__`), which the static backend's serial launcher cannot run.
+- New `tests/census_test.nu` (no device, no compiler): every `gkd_*` wrapper
+  the package's sources call is exercised by the census, gpukit accepts
+  every census call, and `kernels_static.c` generates with every kernel
+  registered. New `tests/static_test.sh`: generate, compile (`cc -O2`, and
+  `zig cc --target=wasm32-wasi` when zig is present), link into the CLI and
+  run `tiny.onnx` with `NURL_GPU=static` against the onnxruntime reference.
+
+Verified on the static backend against CUDA: tinyyolov2, YOLOE-v8s-seg,
+YOLOE promptable-k32 and the MobileCLIP text encoder match to float32
+rounding (max |Δ| relative to the output's range ≤ 6.2e-6), and are
+bit-identical to the CPU (host C++) backend and to the last working static
+build (7e536eaa). Per forward, native static (single thread, cc -O2) vs that
+build: tinyyolov2 2.42 s (2.41), YOLOE-v8s-seg 17.0 s (19.9), promptable
+18.2 s (20.4); the yoloe-demo wasm module (node, -O3 -msimd128) detects the
+demo image's dog at 0.853 in 33.0 s per frame.
+
+Requires gpukit's census kit (`gk_open_census`) and the gpu package's static
+probe sentinel (`CPU_STATIC_SENTINEL`).
+
 **Nothing is released by hand.** `rt_open` returns an `Engine` handle
 instead of a `*Engine` pointer: every copy is the same engine, and its last
 owner releases every device block it allocated (now kept as `GpuBuffer`s),

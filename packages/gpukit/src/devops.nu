@@ -401,8 +401,12 @@ $ `dev.nu`
     //
     // The sum still runs ic ascending over the same terms — the skipped
     // iterations contributed nothing — so it is bit-identical.
-    : b on_cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
-    : b exact & & & & == ph 0 == pw 0 == sh kh == sw kw on_cuda
+    //
+    // Every backend takes it. The CPU and static backends pay for the
+    // general body's modulos even more than a GPU does (a 64-bit idiv
+    // per tap): on the static backend a YOLOE-seg forward spent 44 % of
+    // its time in this kernel's general body.
+    : b exact & & == ph 0 == pw 0 & == sh kh == sw kw
     : String kname ( __gkd_name . y dtype )
     : String src ( __gkd_head kname ? exact `convt2d_up` `convt2d` )
     ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
@@ -1218,7 +1222,10 @@ i batch i heads i n i nkv i hd f scale → b {
     // the kernel name carries the shape, so each distinct one is
     // compiled and cached once (and the on-disk kernel cache makes that
     // once per machine, not once per process).
-    : b lit >= total 65536
+    // A static / WebGPU build links a fixed kernel set by name, which a
+    // per-shape name can never be in: specialise only where kernels are
+    // compiled at run time (gk_jit).
+    : b lit & ( gk_jit kit ) >= total 65536
     : String kname ( __gkd_name . y dtype )
     ( string_push_str kname `perm6` )
     ? lit {

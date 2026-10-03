@@ -84,6 +84,8 @@ $ `deps/gpu/src/gpu.nu`
     ( Vec i ) pstamp
     GpuTimer ev0  // the profiler's event pair (gk_prof)
     GpuTimer ev1
+    b census  // a census kit (gk_open_census): records, never launches
+    ( Vec String ) csrc  // census only: each cache slot's kernel source
 }
 
 // The process-wide pool counters (gk_pool_count / gk_pool_idle_bytes) sum
@@ -126,7 +128,7 @@ $ `deps/gpu/src/gpu.nu`
     : b ok ( gpu_ok g )
     ^ @ GpuKit { # s ( rcbox_new [GpuKitImpl] @ GpuKitImpl { g ok ( vec_new [GkKernelEntry] )
             ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
-            ( gpu_timer_none ) ( gpu_timer_none ) } ) }
+            ( gpu_timer_none ) ( gpu_timer_none ) F ( vec_new [String] ) } ) }
 }
 
 // Open the device a caller who does not care should get: $NURL_GPU_DEVICE
@@ -149,8 +151,64 @@ $ `deps/gpu/src/gpu.nu`
     ^ . kit gpu
 }
 
-// "cuda" or "cpu".
-@ gk_backend GpuKit kit → s { ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` } }
+// "cuda" or "cpu". A census kit answers "cpu": it takes the static
+// backend's branches (see gk_open_census).
+@ gk_backend GpuKit kit__h → s {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? . kit census { ^ `cpu` } {}
+    ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` }
+}
+
+// T when this kit compiles kernels from source at run time — CUDA (NVRTC)
+// or the CPU backend (host C++) — so a shape-specialised kernel, whose
+// name and body are generated per call, costs one compile and nothing
+// else. F on the static and WebGPU backends, whose kernel sets are fixed
+// when the program is BUILT and looked up by entry name: a name carrying
+// a run-time shape can never be in such a set, so a wrapper that
+// specialises must ask this first and fall back to its generic kernel.
+// F on a census kit, which records what a static build must link.
+@ gk_jit GpuKit kit__h → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ? . kit census { ^ F } {}
+    : i be ( gpu_backend )
+    ^ | == be 0 == be 1
+}
+
+// ── Kernel census ─────────────────────────────────────────────────────
+//
+// A census kit opens no device and launches nothing. Every gk_run /
+// gk_run_dev — so every gkd_* wrapper — validates its arguments exactly
+// as it would on a device, then RECORDS the kernel it would compile
+// (entry name and the exact source, once per name) and reports success.
+// It answers gk_backend "cpu" and gk_jit F, which are the branches the
+// gpu package's STATIC backend takes — so driving a program's kernel
+// calls through a census kit yields precisely the kernel set a static
+// build (a precompiled kernels_static.c, native or wasm32) has to link,
+// from the same source builders that run on a device: nothing mirrored
+// by hand, nothing to rot. Buffers for the calls can be gk_buf_wrap
+// views over any nonzero address; nothing is dereferenced.
+@ gk_open_census → GpuKit {
+    ^ @ GpuKit { # s ( rcbox_new [GpuKitImpl] @ GpuKitImpl { ( gpu_none ) T ( vec_new [GkKernelEntry] )
+            ( vec_new [GpuBuffer] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] ) ( vec_new [i] )
+            ( gpu_timer_none ) ( gpu_timer_none ) T ( vec_new [String] ) } ) }
+}
+
+@ gk_is_census GpuKit kit__h → b {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ^ . kit census
+}
+
+// What a census kit recorded: gk_kernel_count kernels, slot k's entry
+// name and source (borrowed from the kit; "" out of range).
+@ gk_census_name GpuKit kit__h i k → s {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ?? ( vec_get [GkKernelEntry] . kit cache k ) { T e → { ^ ( string_data . e name ) } F _ → { ^ `` } }
+}
+
+@ gk_census_src GpuKit kit__h i k → s {
+    : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
+    ?? ( vec_get [String] . kit csrc k ) { T x → { ^ ( string_data x ) } F _ → { ^ `` } }
+}
 
 @ gk_device_name GpuKit kit__h → s {
     : *GpuKitImpl kit ( _GpuKit_ptr kit__h )
@@ -443,6 +501,11 @@ $ `deps/gpu/src/gpu.nu`
         }
         = k + k 1
     }
+    ? . kit census {
+        ( vec_push [GkKernelEntry] . kit cache @ GkKernelEntry { ( string_from name ) ( gpu_kernel_none ) 0 0 } )
+        ( vec_push [String] . kit csrc ( string_from src ) )
+        ^ n
+    } {}
     : GpuKernel kn ( gpu_compile . kit gpu src name )
     ? ( gpu_kernel_ok kn ) {} { ^ - 0 1 }
     ( vec_push [GkKernelEntry] . kit cache @ GkKernelEntry { ( string_from name ) kn 0 0 } )
@@ -484,6 +547,7 @@ $ `deps/gpu/src/gpu.nu`
     ? . kit ok {} { ^ F }
     : i slot ( _gk_kernel_slot kit src name )
     ? < slot 0 { ^ F } {}
+    ? . kit census { ^ T } {}
 
     : i nc ( vec_len [GkArg] call )
     : ( Vec i ) args ( vec_new [i] )
