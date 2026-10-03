@@ -60,6 +60,15 @@ if (-not $Version) {
     if (-not $Version) { throw "could not determine the latest release tag; pass -Version vX.Y.Z." }
 }
 
+# GitHub answers an occasional 5xx for a release asset (seen right after a
+# release was published): the archive fetch is tried three times.
+function Get-WithRetry([string]$Uri, [string]$OutFile) {
+    for ($i = 1; $i -le 3; $i++) {
+        try { Invoke-WebRequest $Uri -OutFile $OutFile; return }
+        catch { if ($i -eq 3) { throw } ; Start-Sleep -Seconds (2 * $i) }
+    }
+}
+
 $archive = "nurl-$Version-$target.zip"
 $base = "https://github.com/$repo/releases/download/$Version"
 $tmp = Join-Path $env:TEMP ("nurl-" + [System.Guid]::NewGuid().ToString("N"))
@@ -68,7 +77,7 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
     Write-Host "downloading $archive ($Version)..."
     $zip = Join-Path $tmp $archive
-    Invoke-WebRequest "$base/$archive" -OutFile $zip
+    Get-WithRetry "$base/$archive" $zip
 
     # ── Verify checksum (fail-CLOSED unless -Insecure) ─────────────────
     # A checksum MISMATCH always aborts. Only the *inability* to fetch the
