@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## [0.3.0] — 2026-10-03
+
+Needs toolchain 0.69.0, yoloe 0.7 (Vec-returning `img_to_nchw_norm`,
+`mask_coeffs`, `mask_logits`), onnx 0.9.1 (`Engine` handle, `rt_download`
+returns a `GpuHost`) and http 0.7 (`HttpApp` handle).
+
+### Changed (API)
+
+- `yd_params_free` is removed: the query parameters release themselves.
+- The route handlers take the server state as their first argument
+  (`h_index Demo d HttpRequest req Params p`, likewise `h_wasm_model`,
+  `h_tpe`, `h_detect`, `h_prompt`); `Demo` is a handle the route closures
+  capture.
+- `yd_load_graph s path * b okcell → OGraph` → `yd_load_graph s path →
+  ?OGraph`.
+
+The served page, the `/detect`, `/tpe`, `/prompt` HTTP API and the CLI flags
+are unchanged.
+
+### Fixed
 
 **The WebGPU engine runs again.** The gpu package's WGSL kernel set (copied
 next to the worker by `tools/build_wasm.sh`) still held onnx's pre-0.7
