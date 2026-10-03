@@ -3014,6 +3014,28 @@
     ( nurl_print `  store i1 ` ) ( nurl_print bit ) ( nurl_print `, ptr ` ) ( nurl_print hs ) ( nurl_print `\n` )
 }
 
+// The call just made, as `callee generic` (mem_call_retown's pair).
+@ __last_call_pair i syms → s {
+    : ~ s cn ( nurl_sym_get syms `__last_call_name__` )
+    : ~ s gn ``
+    ? != 0 ( nurl_sym_len syms `__last_call_forward__` ) {
+        : s fw ( nurl_sym_get syms `__last_call_forward__` )
+        = cn ( str_first_word fw ) = gn ( str_first_word ( str_skip_word fw ) )
+    } {}
+    ? == 0 ( nurl_str_len cn ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_len gn ) { = gn cn } {}
+    ^ ( nurl_str_cat3 cn ` ` gn )
+}
+
+// This function answers per call if the call `pair` can lend its result.
+@ mem_hown_dyn_if i syms s pair → v {
+    ? == 0 ( nurl_sym_len syms `__ret_hown_slot__` ) { ^ v } {}
+    : s k ( nurl_str_cat `retdynif##` ( nurl_sym_get syms `__fn_self_name__` ) )
+    : s cur ( nurl_sym_get g_pending_impl k )
+    ? ( str_contains_word cur ( str_first_word pair ) ) { ^ v } {}
+    ( nurl_sym_def g_pending_impl k ? == 0 ( nurl_str_len cur ) ( nurl_str_cat pair `` ) ( nurl_str_cat3 cur ` ` pair ) )
+}
+
 @ mem_hown_mark_dyn i syms → v {
     ? == 0 ( nurl_sym_len syms `__ret_hown_slot__` ) { ^ v } {}
     ( nurl_sym_def g_pending_impl ( nurl_str_cat `retdyn##` ( nurl_sym_get syms `__fn_self_name__` ) ) `1` )
@@ -3826,8 +3848,13 @@
             : s c ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print c ) ( nurl_print ` = and i1 ` ) ( nurl_print kv ) ( nurl_print `, ` ) ( nurl_print nb ) ( nurl_print `\n` )
             // …or, better, answers per call: no copy, the caller is told
-            // this invocation lent (mem_publish_hown).
-            ( mem_hown_mark_dyn syms )
+            // this invocation lent (mem_publish_hown). (Bound straight from a
+            // call — `: String s ( string_from … ) … ^ s` — it lends only if
+            // that call can: settled at module end, so a function whose every
+            // path owns answers statically.)
+            : s __cpair ? & == 0 ( nurl_sym_len2 syms cup `__alias` ) == ( nurl_str_get csb 0 ) 64
+            ( nurl_sym_get2 syms ( nurl_str_slice csb 1 - ( nurl_str_len csb ) 1 ) `__sbcn` ) ``
+            ? != 0 ( nurl_str_len __cpair ) { ( mem_hown_dyn_if syms __cpair ) } { ( mem_hown_mark_dyn syms ) }
             = val ( mem_emit_cloneif cg cty val ( mem_hown_static syms cg c ) )
             = hbit acc
         } {}
@@ -6647,13 +6674,35 @@
 
 // Does `fname` answer per call whether its result is owned — itself, or
 // by handing back as is (`^ ( g … )`) the result of a callee that does?
-@ __hown_dyn s fname i depth → b {
+@ __hown_dyn i syms s fname i depth → b {
     ? | == 0 ( nurl_str_len fname ) > depth 8 { ^ F } {}
     ? != 0 ( nurl_sym_len2 g_pending_impl `retdyn##` fname ) { ^ T } {}
     : ~ s via ( nurl_sym_get g_pending_impl ( nurl_str_cat `retvia##` fname ) )
     ~ != 0 ( nurl_str_len via ) {
         : s c ( str_first_word via ) = via ( str_skip_word via )
-        ? ( __hown_dyn c + depth 1 ) { ^ T } {}
+        ? ( __hown_dyn syms c + depth 1 ) { ^ T } {}
+    }
+    // A binding handed back as it came from a call (mem_hown_dyn_if): per
+    // call exactly when that call may lend.
+    : ~ s cond ( nurl_sym_get g_pending_impl ( nurl_str_cat `retdynif##` fname ) )
+    ~ != 0 ( nurl_str_len cond ) {
+        : s c ( str_first_word cond ) = cond ( str_skip_word cond )
+        : s g ( str_first_word cond ) = cond ( str_skip_word cond )
+        ? | | ( __callee_lent syms c g ) ( __hown_dyn syms c + depth 1 ) ( __hown_dyn syms g + depth 1 ) { ^ T } {}
+    }
+    ^ F
+}
+
+// May a call of `callee` (generic `generic`) hand back a lent result?
+@ __callee_lent i syms s callee s generic → b {
+    ? | ( mem_fn_lends syms callee 0 ) ( mem_fn_lends syms generic 0 ) { ^ T } {}
+    // A parameter's field handed back while the parameter stays the
+    // caller's: a lend.
+    : ~ s rl ( nurl_sym_get g_pending_impl ( nurl_str_cat `retlend##` callee ) )
+    : s own ( nurl_str_cat3 ( nurl_sym_get g_fn_sink callee ) ` ` ( nurl_sym_get g_fn_keeps callee ) )
+    ~ != 0 ( nurl_str_len rl ) {
+        : s w ( str_first_word rl ) = rl ( str_skip_word rl )
+        ? ! ( str_contains_word own w ) { ^ T } {}
     }
     ^ F
 }
@@ -6664,18 +6713,10 @@
         : s number ( str_first_word rest ) = rest ( str_skip_word rest )
         : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
         : s generic ( str_first_word rest ) = rest ( str_skip_word rest )
-        : ~ b lent | ( mem_fn_lends syms callee 0 ) ( mem_fn_lends syms generic 0 )
-        // A parameter's field handed back while the parameter stays the
-        // caller's: a lend.
-        : ~ s rl ( nurl_sym_get g_pending_impl ( nurl_str_cat `retlend##` callee ) )
-        : s own ( nurl_str_cat3 ( nurl_sym_get g_fn_sink callee ) ` ` ( nurl_sym_get g_fn_keeps callee ) )
-        ~ != 0 ( nurl_str_len rl ) {
-            : s w ( str_first_word rl ) = rl ( str_skip_word rl )
-            ? ! ( str_contains_word own w ) { = lent T } {}
-        }
+        : b lent ( __callee_lent syms callee generic )
         ( nurl_print `@.__nurl_retown.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` ) ( nurl_print ? lent `false` `true` ) ( nurl_print `\n` )
-        : b dyn | ( __hown_dyn callee 0 ) ( __hown_dyn generic 0 )
+        : b dyn | ( __hown_dyn syms callee 0 ) ( __hown_dyn syms generic 0 )
         ? & & != 0 g_lint != 0 g_lint_fpend & ! lent ! dyn
         { ( nurl_sym_def g_lint_fpend ( nurl_str_cat `owned @.__nurl_retown.` number ) `1` ) } {}
         ( nurl_print `@.__nurl_retdyn.` ) ( nurl_print number )
@@ -17746,6 +17787,9 @@
             : s ls ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print ls ) ( nurl_print ` = alloca i1\n  store i1 ` ) ( nurl_print nr ) ( nurl_print `, ptr ` ) ( nurl_print ls ) ( nurl_print `\n` )
             ( __sb syms ptr ( nurl_str_cat `@` ls ) )
+            // …and which call made it (`cn gn`): whether that call can lend at
+            // all is a module-end fact (__hown_dyn's `retdynif##`).
+            ( nurl_sym_def syms ( nurl_str_cat ls `__sbcn` ) ( __last_call_pair syms ) )
             // Which module-end constant answers it — the redundant-free
             // lint reports a release of this binding only once that says
             // "owned" (lint_free_resolve).

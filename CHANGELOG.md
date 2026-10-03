@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A function that hands back a binding as it came from a call answers
+  ownership statically when that call cannot lend** (`: String s (
+  string_from … ) … ^ s`): it was marked per-call (a runtime flag read at
+  every caller), decided before the callee's summary was final; now settled
+  at module end. bench pq −0.6 %, json_parse −0.4 % instructions.
+
 ### Fixed
 
 - **A raw view of a value the function drops on the way out is returned as a
