@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nurlpkg publish` names a registry rate limit and shows the HTTP status
+  of any other rejection.** A 429 (the registry's per-account publish cap)
+  printed only `publish failed (PubRejected)`; it now says the registry is
+  rate-limiting publishes and to try again later, and other rejections end
+  `(PubRejected, HTTP <status>)`. New `PubRateLimited` and
+  `pkg_publish_last_status` in `stdlib/ext/pkg_publish.nu`.
+
 ## [0.69.1] — 2026-10-03
 
 ### Fixed

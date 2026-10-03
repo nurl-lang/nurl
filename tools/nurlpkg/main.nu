@@ -3063,9 +3063,20 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                             ( nurl_eprintln `nurlpkg: TLS handshake with the registry failed` )
                                             ( nurl_eprintln `hint: check the system CA bundle and the clock; a TLS-intercepting proxy will also do this` )
                                         }
+                                        // 429: the registry caps publishes per
+                                        // account per hour — a full release of
+                                        // many packages meets it.
+                                        PubRateLimited → {
+                                            ( nurl_eprintln `nurlpkg: the registry is rate-limiting publishes from this account (HTTP 429)` )
+                                            ( nurl_eprintln `hint: the limit is per hour — wait and run 'nurlpkg publish' again; nothing was published` )
+                                        }
                                         _ → {
                                             ( nurl_eprint `nurlpkg: publish failed (` )
                                             ( nurl_eprint ( publish_err_name ue ) )
+                                            ? > ( pkg_publish_last_status ) 0 {
+                                                ( nurl_eprint `, HTTP ` )
+                                                ( nurl_eprint_int ( pkg_publish_last_status ) )
+                                            } {}
                                             ( nurl_eprintln `)` )
                                         }
                                     }
