@@ -1,31 +1,49 @@
 # Changelog
 
-## Unreleased
+## [0.4.0] — 2026-10-03
 
 Nothing is released by hand any more.
+
+### Changed (breaking)
 
 - `PkiCa` is a handle over an rcbox instead of a `*PkiCa`: every copy is the
   same CA and the last owner releases its keys. `pki_generate_ca`,
   `pki_load_or_create_ca` and `_pki_ca_from_pem` return `PkiCa`; a load that
   fails returns a null handle, tested with the new `pki_ca_ok` (was `== 0`
-  on the pointer). New read accessors `pki_ca_alg`, `pki_ca_cert_pem`,
-  `pki_ca_key_pem`, `pki_ca_cn`. A CA is built from its key pair in one
-  literal instead of filled field by field through the pointer; the signing
-  helpers are private (`__pki_sign`, `__pki_tbs`, `__pki_wrap_cert`) and
-  keep taking the state pointer.
+  on the pointer). `pki_issue_device_cert`, `pki_issue_cert_from_csr`,
+  `pki_verify_cert`, `pki_generate_crl`, `pki_record_revocation`,
+  `pki_load_crl` and `pki_ca_public` take the handle. Read the CA through the
+  new accessors `pki_ca_alg`, `pki_ca_cert_pem`, `pki_ca_key_pem`,
+  `pki_ca_cn` instead of its fields.
+- `pki_build_app` returns an `HttpApp` handle (http 0.7) instead of
+  `*HttpApp`.
+- Removed: `pki_ca_new` (a CA is built from its key pair in one literal) and
+  the helpers `_pki_sign`, `_pki_tbs`, `_pki_wrap_cert` (now private
+  `__pki_sign` / `__pki_tbs` / `__pki_wrap_cert`).
+- Removed: `pki_ca_free`, `pki_cert_free`, `pki_cert_info_free` and
+  `pki_revoked_free` — `PkiCert`, `PkiCertInfo` and `PkiRevoked` are plain
+  values dropped with their binding (nothing outside the package called
+  them).
+
+### Changed
+
 - The service keeps one owner of the loaded CA behind its global and each
   handler takes another for the request (an atomic count, no copy), instead
   of casting a raw address back to `*PkiCa`.
-- `PkiCert`, `PkiCertInfo` and `PkiRevoked` are plain values: `pki_ca_free`,
-  `pki_cert_free`, `pki_cert_info_free` and `pki_revoked_free` are deleted
-  (nothing outside the package called them), and so is every `string_free` /
-  `vec_free` / `json_free` / `x509_free` / `args_free` in the server and the
-  smoke tests (394 calls).
+- Every `string_free` / `vec_free` / `json_free` / `x509_free` / `args_free`
+  in the server and the smoke tests is gone (394 calls).
+- The ML-DSA key pair drawn for a new CA or a device certificate is an
+  `MldsaKeys` value (stdlib 0.69.0 made it a self-releasing handle); the
+  block's end releases the keys where `mldsa_keys_free` used to. No change in
+  behaviour.
+
+### Performance
+
 - The whole E2E workload (init, renew, JSON and form issuance, CSR signing,
   revocation, CRL, pages) runs the same instructions (±0.1 %, ECDSA nonce
   noise) and answers with the same status codes.
 
-The ML-DSA key pair drawn for a new CA or a device certificate is an `MldsaKeys` value, not a `*MldsaKeys`: `stdlib/std/mldsa.nu` made it a self-releasing handle that its last owner drops. The two `mldsa_keys_free` calls at the end of those blocks are gone — the block's end releases the keys at the same point. No change in behaviour.
+Requires NURL 0.69.0 and http 0.7.
 
 ## 0.3.2
 
