@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.69.0] — 2026-10-03
+
+Memory is never released by hand. The compiler drops every value where its
+owner's scope ends — Strings, Vecs, options and results, closures, structs
+holding them, and library handles (`Mutex`, `Channel`, `Regex`, `TlsConn`,
+`File`, …, now self-releasing rcbox handles) — and the standard library,
+the tools and every package in the repository were rewritten to free
+nothing explicitly: `*_free` / `*_close` remain only as optional early
+releases. Along the way dozens of ownership defects were fixed at their
+source in the compiler (leaks, double frees, use-after-free shapes), and
+new compile errors catch a pointer or closure outliving the value it
+borrows. See docs/MEMORY.md for the model.
+
+### Added
+
+- **Drop glue** (docs/MEMORY.md §7.6). After a `% Drop` impl returns, the
+  compiler drops the fields it manages (`String`, `Vec`, library handles,
+  Drop values), so a destructor only releases what the language cannot
+  see. Fields the impl freed by hand, and a value handed to a disposer,
+  are skipped. `compiler/tests/drop_impl_semantics.nu`.
+
 ### Changed
 
 - **The compiler asks its symbol table about a word in a list in place**
@@ -20,6 +41,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string_from … ) … ^ s`): it was marked per-call (a runtime flag read at
   every caller), decided before the callee's summary was final; now settled
   at module end. bench pq −0.6 %, json_parse −0.4 % instructions.
+
+
+- **`File`, `BufReader`, `Progress`, `Heartbeat`, `Zip` / `ZipArchive`,
+  `DChannel`, `CSVWriter` / `CSVDictWriter` / `CSVDictReader` release
+  themselves.** Each is a library handle over an rcbox: every copy is the
+  same object, and the last owner releases it — a `File`'s or a writer's
+  last owner closes its file (a `File` dropped without `file_close` leaked
+  its FILE*), a `Heartbeat`'s stops and joins its thread. `file_close`,
+  `bufreader_close`, `csv_writer_close`, `heartbeat_stop` act now and are
+  optional; `zip_close`, `dchan_free`, `csv_dict_reader_free` are early
+  releases. `File` gained `file_raw` / `file_from_raw` (code that read
+  `. f raw` uses `file_raw`); `Progress` gained `progress_cur` /
+  `progress_tty`; `progress_done` no longer frees. Write the types without
+  `*` (`heartbeat_start` → `Heartbeat`, `progress_new` → `Progress`,
+  `csv_writer_new` → `CSVWriter`).
+- **`nat_gather` returns `( Vec Candidate )`** (values instead of raw
+  `*Candidate` blocks); a `Ring` keeps its points as values (`ring_owner` /
+  `ring_owners` still hand out `*RingPoint` pointers into it).
+- **The standard library frees nothing by hand** outside container and
+  Drop implementations (core / data formats / compression / filesystems /
+  network stack / dist / package tooling): decoder cursors and scratch
+  states (zstd, deflate, msgpack, CBOR, YAML, regex parser, FAT directory
+  cursor, job / replicator / rendezvous decoders) are locals advanced in
+  place (`inout`) instead of `nurl_alloc`'d blocks; queues are drained in
+  place (new `bytes_drop_front`). The `*_free` functions of owning values
+  (manifest, lockfile, semver, registry index, URL, path, swim, tar
+  entries, …) are early releases; `crc32_ctx_free`, `tar_entry_free`,
+  `lock_pkg_free`, `idxdep_free`, `idxversion_free`, `stun_request_free`
+  and `nat_candidates_free` (no callers) are gone. zstd level-3 round trip
+  −22 % instructions, level 19 −2 %, deflate+gzip −5 %, zip −5 %, `fmt2`
+  −36 % (fixed-arity `fmt*` / `log_*fN` no longer copy their arguments;
+  a suppressed `log_*fN` formats nothing).
+- **The HTTP / MCP / WebSocket / MQTT / SMTP / XML / serde stdlib releases
+  nothing by hand** (940 → 1 release call in `stdlib/ext/http*`,
+  `mcp*`, `websocket`, `mqtt`, `smtp`, `xml`, `serde`, `cookies`,
+  `credentials`, `anthropic`; the one kept, in the WebSocket reader, is
+  marked with the compiler finding it waits for). Raw state became library handles over an rcbox:
+  `HttpStreamState` (was `*HttpStreamState`; new `hp_stream_body`
+  accessor; the last owner closes a transport still held,
+  `hp_stream_close` closes it early), `HttpConn` (a handle; the last owner
+  closes it, `hp_conn_close` is idempotent), `HttpStream` holds the state
+  (`http_stream_close` optional), `H2Client` (its 16-word peek/poke state
+  block became fields; `h2_client_close` an optional early release,
+  `h2_client_disconnect` closes the TcpConn; new `h2_client_tcp`), the
+  HTTP/3 stream tables, MCP tasks, and the HTTP server's DoS state (the
+  server's last copy releases it, no longer `server_stop`). New
+  `h2_conn_finish` (the final flush `h2_conn_free` did). Consumed
+  arguments are `sink`: HTTP/2 client bodies, `h2_conn_new_buffered`'s
+  carry, `mcp_server_add_*` schemas, MCP task Json. Every `*_free` of
+  these modules is an optional early release; unused `url_split_free`,
+  `query_pair_free`, `ws_frame_free`, `hpack_string_free` were removed.
+  HTTP server CPU per request (instructions:u, `bench/http_server.nu`,
+  oha 100k keep-alive): HTTP/1.1 −3.1 %, HTTP/2 −2.1 %.
+- **A `sink` parameter placed in a literal moves in instead of being
+  copied.** `rcbox_new [T] @ T { a b }` in a library-handle constructor
+  copied every Vec / String it was handed and then dropped the original
+  (9 → 5 allocations per construction in
+  `compiler/tests/sink_param_into_literal.nu`). A literal passed to a call
+  that only reads it leaves the parameter its owner, as for a local.
+- **A `sink` closure parameter takes the closure over.** A temporary handed
+  to one moves in, a binding is handed a copy, and the callee drops what it
+  took unless it returns it or captures it in a closure it returns. The
+  iterator combinators take their source and function by `sink`: a tiny
+  three-stage pipeline builds with 36 % fewer instructions (it copied the
+  chain at every stage), and `iter_free` releases early.
+  `compiler/tests/sink_closure_param.nu`.
+
+- **`Mutex`, `Cond`, `Semaphore` and `Channel` release themselves.** Each
+  is now a reference-counted library handle: every copy — a thread's or a
+  fiber's closure capture, a struct field, a `Vec` element, `Mutex_share`
+  / `Channel_share` — is the same object, and the last owner destroys it
+  (a channel with whatever is still queued). `mutex_free` / `cond_free` /
+  `sem_free` / `chan_free` remain as early releases of one owner. Storing
+  one owned value into two owners is the usual compile error; store a
+  `Mutex_share`. The handles are one word now (`Mutex { s p }`); code
+  that reached into `Mutex.c` uses `mutex_raw`.
+  `compiler/tests/sync_handles_autodrop.nu`.
+- **`DStore` (dchannel) releases itself**, its queues with it: an rcbox
+  handle (the registered handlers' captures share it) whose entries hold
+  rcbox `DQ` queue handles instead of raw pointers.
+- **The MCP task store releases itself, and a server keeps its own share.**
+  `McpTaskStore` is an rcbox handle whose drop frees its tasks; the server
+  holds a `McpTaskStore_share` instead of a hand-managed view cell, so the
+  store outlives neither side.
+- **`Regex`, `Rng`, `Bitset`, `Arena`, `Supervisor`, `CircuitBreaker`, the
+  cluster `Registry` and process `Output` release themselves.** Each is a
+  library handle over state in an rcbox (`stdlib/core/rcbox.nu`: one block,
+  `[ owners ][ T ]`, the last owner drops `T` — its managed fields and its
+  own `% Drop`): every copy is the same state, as a copied pointer was, and
+  no one frees it by hand. Their `*_free` functions remain as early
+  releases. `compiler/tests/opaque_handles_autodrop.nu`.
+- **`Cell` releases itself.** Its block carries an owner count in front of
+  the bytes: `Cell_share` is another owner (a thread's capture, a struct
+  field), and the last owner frees it. `cell_free` remains as an early
+  release of one owner.
+- **A sole owner skips the locked owner-count update.** rcbox handles,
+  `Cell`, `Bitset`, `Channel` and the sync handles read a count of 1 as "no
+  one else holds this" and share or release without a locked
+  read-modify-write (`nurl_rc_share` / `nurl_rc_release`); a loop creating,
+  sharing and dropping handles ran 7–23 % fewer cycles.
+- **`Thread` releases itself.** A handle whose last owner detaches the
+  thread unless it was joined or detached, and frees it; a discarded
+  `( thread_spawn … )` leaked its `pthread_t` and never detached. The first
+  `thread_join` / `thread_detach` through any copy settles the thread; a
+  second join returns -1 (it was a use after free). `@ Thread { # s 0 }` is
+  the null handle. `compiler/tests/thread_handle_autodrop.nu`.
+- **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
+  struct whose module defines `S_drop sink S x` (and `S_share` /
+  `S_clone`) is dropped and copied like `HashMap`.
+- **`Sha256` and `Blake3` streams release themselves.** `sha256_init` /
+  `blake3_init` return a library handle (`Sha256` / `Blake3`, was `*Sha256`
+  / `*Blake3`); `sha256_final` / `blake3_final` leave the stream spent
+  instead of freeing it, and the last owner releases it (`sha256_free` /
+  `blake3_free` are early releases). Code naming the type drops the `*`.
+  A SHA-256 stream is now one block of words (state, schedule, partial
+  block and a snapshot area) — 5 allocations per stream instead of 6–7, and
+  `sha256_snapshot` no longer clones the stream — and `hmac_sha256_pure`
+  streams key block and message through one hasher instead of building
+  `ipad ‖ msg`: a SHA-256 / HMAC / HKDF / PBKDF2 mix runs 15 % fewer
+  instructions.
+- **`TlsConn` releases itself.** The TLS client and server entry points
+  (`tls_connect*`, `tls_attach*`, `tls_accept*`) return a `TlsConn` library
+  handle (was `*TlsConn`); every copy is the same connection and its last
+  owner releases it, closing the socket if nobody called `tls_close`.
+  `tls_close` / `tls_server_close` still say close_notify and close the
+  socket at a point of the caller's choosing, but free nothing (safe to
+  repeat). Code that read the connection's fields uses accessors:
+  `tls_socket` (the runtime socket handle), `tls_cert_msg`, `tls_cv_sig`,
+  `tls_th_cert` (what the verifier was given, lent). Write the type without
+  `*`; `# *TlsConn 0` becomes `@ TlsConn { # s 0 }`. The handshake
+  machines' transcript hashes, keys and buffers are replaced through
+  `inout` and go with their owners; std/net.nu's `TcpConn` keeps one owner
+  of the connection as a word (`_tls_word`) and `tcp_close_conn` hands it
+  back.
+- **`SecureNode` (net/securedgram) releases itself.** `securedgram_open`
+  returns a `SecureNode` handle (was `*SecureNode`); `securedgram_close`
+  closes the socket and frees nothing, and the last owner releases the
+  keys and peers (closing the socket if nobody did). A partial message is
+  one buffer at its chunks' places instead of a box per chunk.
+  `noise_keys_free` and `recvdata_free` are optional early releases.
 
 ### Fixed
 
@@ -327,155 +488,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `^ @ ?T { T v }` was copied always while the function counted as a
   lender; the copy leaked. Now the caller owns the result exactly when the
   function did. `compiler/tests/wrap_of_maybe_lent_payload.nu`.
-
-### Changed
-
-- **`File`, `BufReader`, `Progress`, `Heartbeat`, `Zip` / `ZipArchive`,
-  `DChannel`, `CSVWriter` / `CSVDictWriter` / `CSVDictReader` release
-  themselves.** Each is a library handle over an rcbox: every copy is the
-  same object, and the last owner releases it — a `File`'s or a writer's
-  last owner closes its file (a `File` dropped without `file_close` leaked
-  its FILE*), a `Heartbeat`'s stops and joins its thread. `file_close`,
-  `bufreader_close`, `csv_writer_close`, `heartbeat_stop` act now and are
-  optional; `zip_close`, `dchan_free`, `csv_dict_reader_free` are early
-  releases. `File` gained `file_raw` / `file_from_raw` (code that read
-  `. f raw` uses `file_raw`); `Progress` gained `progress_cur` /
-  `progress_tty`; `progress_done` no longer frees. Write the types without
-  `*` (`heartbeat_start` → `Heartbeat`, `progress_new` → `Progress`,
-  `csv_writer_new` → `CSVWriter`).
-- **`nat_gather` returns `( Vec Candidate )`** (values instead of raw
-  `*Candidate` blocks); a `Ring` keeps its points as values (`ring_owner` /
-  `ring_owners` still hand out `*RingPoint` pointers into it).
-- **The standard library frees nothing by hand** outside container and
-  Drop implementations (core / data formats / compression / filesystems /
-  network stack / dist / package tooling): decoder cursors and scratch
-  states (zstd, deflate, msgpack, CBOR, YAML, regex parser, FAT directory
-  cursor, job / replicator / rendezvous decoders) are locals advanced in
-  place (`inout`) instead of `nurl_alloc`'d blocks; queues are drained in
-  place (new `bytes_drop_front`). The `*_free` functions of owning values
-  (manifest, lockfile, semver, registry index, URL, path, swim, tar
-  entries, …) are early releases; `crc32_ctx_free`, `tar_entry_free`,
-  `lock_pkg_free`, `idxdep_free`, `idxversion_free`, `stun_request_free`
-  and `nat_candidates_free` (no callers) are gone. zstd level-3 round trip
-  −22 % instructions, level 19 −2 %, deflate+gzip −5 %, zip −5 %, `fmt2`
-  −36 % (fixed-arity `fmt*` / `log_*fN` no longer copy their arguments;
-  a suppressed `log_*fN` formats nothing).
-- **The HTTP / MCP / WebSocket / MQTT / SMTP / XML / serde stdlib releases
-  nothing by hand** (940 → 1 release call in `stdlib/ext/http*`,
-  `mcp*`, `websocket`, `mqtt`, `smtp`, `xml`, `serde`, `cookies`,
-  `credentials`, `anthropic`; the one kept, in the WebSocket reader, is
-  marked with the compiler finding it waits for). Raw state became library handles over an rcbox:
-  `HttpStreamState` (was `*HttpStreamState`; new `hp_stream_body`
-  accessor; the last owner closes a transport still held,
-  `hp_stream_close` closes it early), `HttpConn` (a handle; the last owner
-  closes it, `hp_conn_close` is idempotent), `HttpStream` holds the state
-  (`http_stream_close` optional), `H2Client` (its 16-word peek/poke state
-  block became fields; `h2_client_close` an optional early release,
-  `h2_client_disconnect` closes the TcpConn; new `h2_client_tcp`), the
-  HTTP/3 stream tables, MCP tasks, and the HTTP server's DoS state (the
-  server's last copy releases it, no longer `server_stop`). New
-  `h2_conn_finish` (the final flush `h2_conn_free` did). Consumed
-  arguments are `sink`: HTTP/2 client bodies, `h2_conn_new_buffered`'s
-  carry, `mcp_server_add_*` schemas, MCP task Json. Every `*_free` of
-  these modules is an optional early release; unused `url_split_free`,
-  `query_pair_free`, `ws_frame_free`, `hpack_string_free` were removed.
-  HTTP server CPU per request (instructions:u, `bench/http_server.nu`,
-  oha 100k keep-alive): HTTP/1.1 −3.1 %, HTTP/2 −2.1 %.
-- **A `sink` parameter placed in a literal moves in instead of being
-  copied.** `rcbox_new [T] @ T { a b }` in a library-handle constructor
-  copied every Vec / String it was handed and then dropped the original
-  (9 → 5 allocations per construction in
-  `compiler/tests/sink_param_into_literal.nu`). A literal passed to a call
-  that only reads it leaves the parameter its owner, as for a local.
-- **A `sink` closure parameter takes the closure over.** A temporary handed
-  to one moves in, a binding is handed a copy, and the callee drops what it
-  took unless it returns it or captures it in a closure it returns. The
-  iterator combinators take their source and function by `sink`: a tiny
-  three-stage pipeline builds with 36 % fewer instructions (it copied the
-  chain at every stage), and `iter_free` releases early.
-  `compiler/tests/sink_closure_param.nu`.
-
-- **`Mutex`, `Cond`, `Semaphore` and `Channel` release themselves.** Each
-  is now a reference-counted library handle: every copy — a thread's or a
-  fiber's closure capture, a struct field, a `Vec` element, `Mutex_share`
-  / `Channel_share` — is the same object, and the last owner destroys it
-  (a channel with whatever is still queued). `mutex_free` / `cond_free` /
-  `sem_free` / `chan_free` remain as early releases of one owner. Storing
-  one owned value into two owners is the usual compile error; store a
-  `Mutex_share`. The handles are one word now (`Mutex { s p }`); code
-  that reached into `Mutex.c` uses `mutex_raw`.
-  `compiler/tests/sync_handles_autodrop.nu`.
-- **`DStore` (dchannel) releases itself**, its queues with it: an rcbox
-  handle (the registered handlers' captures share it) whose entries hold
-  rcbox `DQ` queue handles instead of raw pointers.
-- **The MCP task store releases itself, and a server keeps its own share.**
-  `McpTaskStore` is an rcbox handle whose drop frees its tasks; the server
-  holds a `McpTaskStore_share` instead of a hand-managed view cell, so the
-  store outlives neither side.
-- **`Regex`, `Rng`, `Bitset`, `Arena`, `Supervisor`, `CircuitBreaker`, the
-  cluster `Registry` and process `Output` release themselves.** Each is a
-  library handle over state in an rcbox (`stdlib/core/rcbox.nu`: one block,
-  `[ owners ][ T ]`, the last owner drops `T` — its managed fields and its
-  own `% Drop`): every copy is the same state, as a copied pointer was, and
-  no one frees it by hand. Their `*_free` functions remain as early
-  releases. `compiler/tests/opaque_handles_autodrop.nu`.
-- **`Cell` releases itself.** Its block carries an owner count in front of
-  the bytes: `Cell_share` is another owner (a thread's capture, a struct
-  field), and the last owner frees it. `cell_free` remains as an early
-  release of one owner.
-- **A sole owner skips the locked owner-count update.** rcbox handles,
-  `Cell`, `Bitset`, `Channel` and the sync handles read a count of 1 as "no
-  one else holds this" and share or release without a locked
-  read-modify-write (`nurl_rc_share` / `nurl_rc_release`); a loop creating,
-  sharing and dropping handles ran 7–23 % fewer cycles.
-- **`Thread` releases itself.** A handle whose last owner detaches the
-  thread unless it was joined or detached, and frees it; a discarded
-  `( thread_spawn … )` leaked its `pthread_t` and never detached. The first
-  `thread_join` / `thread_detach` through any copy settles the thread; a
-  second join returns -1 (it was a use after free). `@ Thread { # s 0 }` is
-  the null handle. `compiler/tests/thread_handle_autodrop.nu`.
-- **Library handles need not be generic** (docs/MEMORY.md §7.6): a plain
-  struct whose module defines `S_drop sink S x` (and `S_share` /
-  `S_clone`) is dropped and copied like `HashMap`.
-- **`Sha256` and `Blake3` streams release themselves.** `sha256_init` /
-  `blake3_init` return a library handle (`Sha256` / `Blake3`, was `*Sha256`
-  / `*Blake3`); `sha256_final` / `blake3_final` leave the stream spent
-  instead of freeing it, and the last owner releases it (`sha256_free` /
-  `blake3_free` are early releases). Code naming the type drops the `*`.
-  A SHA-256 stream is now one block of words (state, schedule, partial
-  block and a snapshot area) — 5 allocations per stream instead of 6–7, and
-  `sha256_snapshot` no longer clones the stream — and `hmac_sha256_pure`
-  streams key block and message through one hasher instead of building
-  `ipad ‖ msg`: a SHA-256 / HMAC / HKDF / PBKDF2 mix runs 15 % fewer
-  instructions.
-- **`TlsConn` releases itself.** The TLS client and server entry points
-  (`tls_connect*`, `tls_attach*`, `tls_accept*`) return a `TlsConn` library
-  handle (was `*TlsConn`); every copy is the same connection and its last
-  owner releases it, closing the socket if nobody called `tls_close`.
-  `tls_close` / `tls_server_close` still say close_notify and close the
-  socket at a point of the caller's choosing, but free nothing (safe to
-  repeat). Code that read the connection's fields uses accessors:
-  `tls_socket` (the runtime socket handle), `tls_cert_msg`, `tls_cv_sig`,
-  `tls_th_cert` (what the verifier was given, lent). Write the type without
-  `*`; `# *TlsConn 0` becomes `@ TlsConn { # s 0 }`. The handshake
-  machines' transcript hashes, keys and buffers are replaced through
-  `inout` and go with their owners; std/net.nu's `TcpConn` keeps one owner
-  of the connection as a word (`_tls_word`) and `tcp_close_conn` hands it
-  back.
-- **`SecureNode` (net/securedgram) releases itself.** `securedgram_open`
-  returns a `SecureNode` handle (was `*SecureNode`); `securedgram_close`
-  closes the socket and frees nothing, and the last owner releases the
-  keys and peers (closing the socket if nobody did). A partial message is
-  one buffer at its chunks' places instead of a box per chunk.
-  `noise_keys_free` and `recvdata_free` are optional early releases.
-
-### Added
-
-- **Drop glue** (docs/MEMORY.md §7.6). After a `% Drop` impl returns, the
-  compiler drops the fields it manages (`String`, `Vec`, library handles,
-  Drop values), so a destructor only releases what the language cannot
-  see. Fields the impl freed by hand, and a value handed to a disposer,
-  are skipped. `compiler/tests/drop_impl_semantics.nu`.
 
 ## [0.68.0] — 2026-09-30
 

@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## [0.1.5] — 2026-10-03
 
 **Nothing is released by hand.** An `IForest` is an owning struct whose node
 arrays are released with its owner; `iforest_free` is an optional early
 release. The tree builder and the CLI no longer free their own scratch.
+The API is unchanged, and scores at a fixed seed are byte-identical to
+0.1.4.
 
 ## 0.1.4
 

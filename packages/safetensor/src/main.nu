@@ -134,7 +134,7 @@ $ `src/selftest.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `safetensor 0.3.5\n` )
+        ( nurl_print `safetensor 0.4.0\n` )
         ^ 0
     } {}
     ? < ( args_positional_count p ) 1 {

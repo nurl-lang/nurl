@@ -35,7 +35,7 @@ $ `html.nu`
 $ `jsonout.nu`
 $ `runner.nu`
 
-: s NURLCOV_VERSION `0.1.0`
+: s NURLCOV_VERSION `0.2.0`
 
 @ __usage → v {
     ( nurl_print `nurl-cov — test-coverage mapper for NURL\n\n` )

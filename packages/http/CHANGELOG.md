@@ -1,8 +1,21 @@
 # Changelog
 
-## Unreleased
+## [0.7.0] — 2026-10-03
 
-`HttpApp` releases itself: `http_app_new` returns an `HttpApp` handle (its state in an rcbox) instead of a `*HttpApp` the caller had to free. Every copy of the handle is the same app, and its last owner drops the router, the strings and the middleware — the servers that never called `http_app_free` (embed, f5tts, whisper) no longer leak the app at exit. `http_app_free` stays as an optional early release. Callers change `*HttpApp` to `HttpApp`; nothing else in the API moved.
+### Changed (breaking)
+
+- `HttpApp` releases itself: `( http_app_new )` returns an `HttpApp` handle
+  instead of a `*HttpApp` the caller had to free (`: *HttpApp a ( http_app_new )`
+  → `: HttpApp a ( http_app_new )`). Every function that took `* HttpApp`
+  takes `HttpApp`. Every copy of the handle (a struct field, a `Vec` element,
+  a closure capture) is the same app; its last owner drops the router, the
+  strings and the middleware — servers that never called `http_app_free`
+  no longer leak the app at exit. `http_app_free` stays as an optional early
+  release. Nothing else in the API moved.
+- `http_app_use`: the app keeps its own copy of the middleware wrapper, so the
+  wrapper no longer has to outlive `http_app_listen` or be freed by the caller.
+
+Requires NURL 0.69.0.
 
 ## 0.6.2
 

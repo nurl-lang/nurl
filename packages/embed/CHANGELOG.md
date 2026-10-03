@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.5.0] — 2026-10-03
+
+Requires NURL 0.69.0.
 
 Nothing is released by hand any more. `embed_open` / `embed_open_dev`
 return an **`Embed` handle** (was `*Embed`): every copy is the same

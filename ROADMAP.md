@@ -170,8 +170,11 @@ A high-level map of what exists. Dates and per-feature detail are in
   Since 0.68.0 the whole test corpus runs leak-clean under LeakSanitizer
   as a CI gate, `--lint` reports release calls the model made redundant
   (`[redundant-free]`), and the panic journal belongs to the fiber, so
-  recover extents of interleaving fibers stay apart. Model and known gaps:
-  [`docs/MEMORY.md`](docs/MEMORY.md).
+  recover extents of interleaving fibers stay apart. Since 0.69.0 nothing
+  is released by hand anywhere — stdlib, tools and every package free
+  nothing explicitly; opaque library state is self-releasing handles — and
+  a raw pointer or closure outliving the value it borrows is a compile
+  error. Model and known gaps: [`docs/MEMORY.md`](docs/MEMORY.md).
 - Front-end is diagnostic-first: malformed prefix-arity programs, undefined
   identifiers, call-arity mismatches, unbalanced braces / stray top-level
   tokens, and visibility violations are hard errors with source locations —

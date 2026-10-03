@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.3.0] — 2026-10-03
+
+Requires NURL 0.69.0 and http ^0.7 (the viewer builds on the `HttpApp` handle).
 
 Nothing is released by hand any more.
 

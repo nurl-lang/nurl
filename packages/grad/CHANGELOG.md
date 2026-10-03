@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.11.0] — 2026-10-03
 
 **Nothing is released by hand.** `GTape`, `Opt`, `GProg`, `GpOpt`, `GpPlan`
 and `GpFuse` are handles over rcboxes instead of `*T` pointers: every copy

@@ -336,7 +336,7 @@ $ `redis.nu`
 }
 
 @ main → i {
-    : Cli c ( cli_new `redis` `a pure-NURL Redis client (RESP2, optional pure TLS); redis://[user:pass@]host:port/db as the argument` `0.2.1` )
+    : Cli c ( cli_new `redis` `a pure-NURL Redis client (RESP2, optional pure TLS); redis://[user:pass@]host:port/db as the argument` `0.3.0` )
     ( cli_flag_str c `host` 104 `HOST` `server host` `127.0.0.1` `REDIS_HOST` )
     ( cli_flag_int c `port` 112 `PORT` `server port` 6379 `REDIS_PORT` )
     ( cli_flag_str c `password` 97 `PASSWORD` `AUTH password` `` `REDIS_PASSWORD` )

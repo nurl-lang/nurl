@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.5.0] — 2026-10-03
 
 **Nothing is released by hand.** `ArimaModel` is a handle over an rcbox
 instead of a `*ArimaModel` pointer: the fits, `arima_auto*`, `arima_clone`,

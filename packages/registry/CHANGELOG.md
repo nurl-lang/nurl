@@ -1,15 +1,25 @@
 # Changelog
 
-## Unreleased
+## [0.4.4] — 2026-10-03
 
-Nothing is released by hand any more. The registry holds no pointer state —
-its records are plain values (Strings, Vecs, Json, SQLite handles) the
-compiler drops — so every `string_free` / `vec_free` / `json_free` /
-`args_free` / `semver_free` in the server, the CLI and the wire test is
-removed (393 calls). A reassigned binding drops what it held, so
-`( string_free x ) = x …` became `= x …`. Same status codes and bodies for
-every route; instructions:u for the wire test and a served workload
-(publish, every page, yank/unyank, error paths) +0.03 to +0.05 %.
+Nothing is released by hand any more. No change to the routes, the wire
+format or the CLI.
+
+### Changed
+
+- The registry holds no pointer state — its records are plain values
+  (Strings, Vecs, Json, SQLite handles) the compiler drops — so every
+  `string_free` / `vec_free` / `json_free` / `args_free` / `semver_free` in
+  the server, the CLI and the wire test is removed (393 calls). A reassigned
+  binding drops what it held, so `( string_free x ) = x …` became `= x …`.
+  Same status codes and bodies for every route; instructions:u for the wire
+  test and a served workload (publish, every page, yank/unyank, error paths)
+  +0.03 to +0.05 %.
+- Serves through http 0.7's self-releasing `HttpApp` handle and renders
+  through template's self-releasing `TplSet` handle (requires http ^0.7 and
+  the matching template release).
+
+Requires NURL 0.69.0.
 
 ## 0.4.3
 

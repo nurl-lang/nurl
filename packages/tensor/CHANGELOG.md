@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.6.0] — 2026-10-03
 
 **Nothing is released by hand.** A `Tensor` and a `DTensor` are owning
 structs: a Tensor's shape and data, and a DTensor's shape and device block

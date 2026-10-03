@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.2.0] — 2026-10-03
+
+Requires NURL 0.69.0.
 
 Nothing is released by hand any more.
 

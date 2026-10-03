@@ -193,6 +193,22 @@ WMS=$(( ($(date +%s%N) - T0) / 1000000 ))
 has "wait with nothing new is the empty brief" "$(cat "$WORK/wait2.out")" '"messages":[]'
 check "at the timeout" "$([ "$WMS" -ge 900 ] && [ "$WMS" -lt 4000 ] && echo ok || echo "${WMS}ms")" "ok"
 
+# More waiters than the pool can hold (4 workers keep 2 for everything
+# else): the excess answer at once as `busy`, and a brief is not starved.
+PIDS=""
+for i in 1 2 3 4; do
+    T=$(curl -s -m 5 $J -X POST -d "{\"name\":\"idle$i\"}" "$U/api/join" | sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p')
+    curl -s -m 30 -H "Authorization: Bearer $T" $J -X POST -d '{"timeout_s":8}' "$U/api/wait" > "$WORK/waitb$i.out" &
+    PIDS="$PIDS $!"
+done
+sleep 1
+T0=$(date +%s%N)
+curl -s -m 30 -o /dev/null -H "$A" $J -X POST -d '{}' "$U/api/whoami"
+WMS=$(( ($(date +%s%N) - T0) / 1000000 ))
+check "a call beside a full room of waiters is not held up" "$([ "$WMS" -lt 2000 ] && echo fast || echo "${WMS}ms")" "fast"
+wait $PIDS
+check "the waiters past the cap answered busy" "$(cat "$WORK"/waitb*.out | grep -o '"busy":true' | wc -l | tr -d ' ')" "2"
+
 kill "$SERVE_PID"; wait "$SERVE_PID" 2>/dev/null; SERVE_PID=""
 check "the server log is quiet" "$(wc -c < "$WORK/serve.log" | tr -d ' ')" "0"
 

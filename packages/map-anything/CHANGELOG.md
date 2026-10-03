@@ -1,18 +1,40 @@
 # Changelog
 
-## Unreleased
+## [0.5.0] — 2026-10-03
 
-**Nothing is released by hand.** The checkpoint is an `Lw` handle instead
-of a `*Lw` pointer (`lw_open` → `!Lw String`): every copy is the same
-mapping and its last owner unmaps it; `lw_close` is an optional early
-release and `lw_none` is the empty slot. A fitted view is a plain `Frame`
-value (`pp_fit` → `!Frame String`), the views are a `( Vec Frame )`
-instead of frame pointers kept as words, and `pp_free` is gone. The
-models' value structs (`Dino`, `MaBlk`, `MaWs`, `InfoShare`, `PoseH`,
-`ScaleH`, `Dpt`, `Sky`) hold buffers that release themselves, so their
-`*_free` functions are gone, as is every tail free in the CLI and the
-checks; the host scratch blocks are Vecs (the CLI's per-view buffers were
-never freed before).
+Requires NURL 0.69.0, gpukit ^0.9, onnx ^0.9.1, safetensor ^0.4 and ply
+^0.3. The command line is unchanged; the library API changed
+incompatibly.
+
+### Changed (API)
+
+**Nothing is released by hand.**
+
+- The checkpoint is an `Lw` handle instead of a `*Lw` pointer:
+  `lw_open s → !*Lw String` → `lw_open s → !Lw String`, and every `lw_*`
+  accessor takes `Lw` by value. Every copy is the same mapping and its last
+  owner unmaps it; `lw_close` is now an optional early release (`sink Lw`)
+  and `lw_none` is the empty slot.
+- A fitted view is a plain `Frame` value: `pp_fit → !*Frame String` →
+  `!Frame String`; `pp_width`/`pp_height`/`pp_data` take `Frame`; the views
+  are a `( Vec Frame )` instead of frame pointers kept as words. `pp_free`
+  is removed.
+- Every function that took `* GpuKit` takes gpukit 0.9's `GpuKit` handle
+  (`dn_load`, `dn_forward`, `dp_load`, `dp_forward`, `ph_load`,
+  `ph_forward`, `sh_load`, `sh_forward`, `is_load`, `is_forward`,
+  `ma_ws_new`, `ma_block_forward`, `maw_upload`, `maw_block`, …).
+- The models' value structs (`Dino`, `MaBlk`, `MaWs`, `InfoShare`, `PoseH`,
+  `ScaleH`, `Dpt`, `Sky`) hold buffers that release themselves, so
+  `dn_free`, `ma_blk_free`, `ma_ws_free`, `is_free`, `ph_free`, `sh_free`,
+  `dp_free` and `sky_free` are removed. Drop the calls. `Sky` holds onnx
+  0.9.1's `Engine` handle instead of `*Engine`.
+
+### Fixed
+
+- The CLI's per-view host buffers were never freed; they are Vecs now and
+  are released with the view. Every other host scratch block (geometry,
+  edge mask, Sim(3) fit, sky mask) is a Vec too, so no early-return path
+  can leak one.
 
 ## 0.4.7
 

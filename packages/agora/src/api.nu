@@ -1041,6 +1041,28 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ^ ( __ag_ok o t )
 }
 
+& `c` @ nurl_atomic_i64_inc *u p → i
+
+& `c` @ nurl_atomic_i64_dec_fetch *u p → i
+
+// Waits blocking in this process, and how many may: a `wait` holds a
+// server worker for its whole timeout, so more waiters than workers left
+// nothing to answer anyone else. Past the cap a `wait` answers at once,
+// as brief would (`busy` says so). 0 = no cap (stdio: one agent, one
+// process). The counter is a process-lifetime cell.
+: ~ i g_ag_wait_cap 0
+: ~ i g_ag_wait_cell 0
+
+@ ag_wait_cap_set i workers → v {
+    : i reserve ? > / workers 4 2 / workers 4 2
+    = g_ag_wait_cap ? > - workers reserve 1 - workers reserve 1
+    ? == g_ag_wait_cell 0 {
+        : *u c ( nurl_alloc 8 )
+        ( nurl_poke c 0 0 )
+        = g_ag_wait_cell # i c
+    } {}
+}
+
 // Block until the caller has something unread (every task event is a
 // mailbox message, so unread > 0 covers all of it), at most timeout_s;
 // then deliver. Polls the file every AG_WAIT_STEP_MS: a worker thread
@@ -1048,7 +1070,14 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // the price of a wait that costs the caller nothing.
 @ __ag_op_wait AgStore st s me Json args i now → AgRes {
     : i timeout ( __ag_clamp ( __ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
-    : i deadline + ( now_ms ) * timeout 1000
+    : ~ b busy F
+    ? != 0 g_ag_wait_cap {
+        ? >= ( nurl_atomic_i64_inc # *u g_ag_wait_cell ) g_ag_wait_cap {
+            : i _d ( nurl_atomic_i64_dec_fetch # *u g_ag_wait_cell )
+            = busy T
+        } {}
+    } {}
+    : i deadline ? busy 0 + ( now_ms ) * timeout 1000
     : ~ i steps 0
     ~ & == ( ag_unread st me ) 0 < ( now_ms ) deadline {
         ( sleep_ms AG_WAIT_STEP_MS )
@@ -1056,8 +1085,13 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         = steps + steps 1
         ? == steps AG_WAIT_TOUCH_STEPS { ( ag_agent_touch st me ( now_seconds ) ) = steps 0 } {}
     }
+    ? & != 0 g_ag_wait_cap ! busy { : i _d ( nurl_atomic_i64_dec_fetch # *u g_ag_wait_cell ) } {}
     : i then ( now_seconds )
-    ? ( __ag_arg_bool args `deliver` T ) { ^ ( __ag_op_brief st me args then ) } {}
+    ? ( __ag_arg_bool args `deliver` T ) {
+        : AgRes r ( __ag_op_brief st me args then )
+        ? busy { ^ ( __ag_busy_note r ) } {}
+        ^ r
+    } {}
     // Report only: what brief would say, with nothing moved.
     : Json o ( json_obj_new )
     : String t ( string_from `you: ` )
@@ -1068,6 +1102,10 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( string_push_str t `\nunread: ` )
     ( string_push_int t unread )
     ( string_push_str t ` (brief delivers)\n` )
+    ? busy {
+        ( json_obj_set o `busy` ( json_bool T ) )
+        ( string_push_str t `wait: the server's waiting slots are full — answered now; wait again later\n` )
+    } {}
     : ( Vec AgTask ) mine ( ag_tasks st `mine` me `` AG_LIMIT_MAX then )
     ( json_obj_set o `holding` ( __ag_tasks_json mine ) )
     ? > ( vec_len [AgTask] mine ) 0 {
@@ -1075,6 +1113,13 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         ( __ag_tasks_text t mine then )
     } {}
     ^ ( __ag_ok o t )
+}
+
+// A wait answered at once because every waiting slot was taken.
+@ __ag_busy_note sink AgRes r → AgRes {
+    ( json_obj_set . r body `busy` ( json_bool T ) )
+    ( string_push_str . r text `wait: the server's waiting slots are full — answered now; wait again later\n` )
+    ^ r
 }
 
 // A boolean argument (JSON true/false, or "true"/"false"/"1"/"0").

@@ -92,7 +92,7 @@ $ `deps/chart/src/chart.nu`
 
 : ( Vec f ) v ( vec_new [f] )
 ( vec_push [f] v 3.0 ) ( vec_push [f] v 7.0 ) ( vec_push [f] v 5.0 )
-: String s ( chart_sparkline v )      // ▃█▆
+: String s ( chart_sparkline v )      // ▁█▅
 ```
 
 ### API

@@ -2,9 +2,9 @@
 
 All notable changes to the `nurllama` package.
 
-## Unreleased
+## [0.18.0] — 2026-10-03
 
-Nothing is released by hand any more.
+Nothing is released by hand any more. Requires NURL 0.69.0.
 
 - `llm_open` / `llm_open_st` return an **`Llm` handle** (was `*Llm`) and
   `ft_open` an **`FtModel` handle** (was `*FtModel`): every copy is the
@@ -16,6 +16,12 @@ Nothing is released by hand any more.
 - `cfg_free`, `chat_msg_free`, `chat_msgs_free`, `ft_train_free` and
   `lk_free` are gone: `NlConfig`, `ChatMsg`, `FtTrain` and `LlmKernels`
   are plain values the compiler drops.
+- Follows the dependencies' handles: `tok_new` takes a `Gguf` and returns a
+  `Tok` (was `*Gguf` → `*Tok`), `llm_tok` returns `Tok` (was `*Tok`),
+  `chat_style_of` takes `Gguf`, and every `llm_*` / `ft_*` / `dz_generate`
+  / `sample_*` function takes the `Llm` / `FtModel` handle instead of a
+  pointer (`ft_graph` takes a `GTape` and `ft_stream_upload` a `GProg`
+  handle from grad 0.11, both were pointers).
 - `ft_graph` fills a `( Vec i )` of LoRA parameter ids (was a raw
   `*u` block the caller sized), and `ft_adapters_load` returns the rank
   through an `inout i` (was a `*u` cell). New shape accessors
@@ -26,6 +32,14 @@ Nothing is released by hand any more.
   un-permuted in place: the old code built a literal from the boxed
   vector, which copies it, and un-permuted the copy. No llama-family
   model carries q/k biases, so no trained or merged output changes.
+
+### Fixed
+
+- Training again with an `FtModel` after `ft_merge_st` no longer trains on
+  zero inputs: the merge consumes the host embedding table, and the next
+  `ft_train` / `ft_train_ck` now streams it back from the GGUF along with
+  the dropped base (`ft_reload_base` restores both). Before, every token
+  embedded as a zero row, the CE sat at ln(n_vocab) and nothing learned.
 
 ## 0.17.7
 

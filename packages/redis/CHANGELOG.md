@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.3.0] — 2026-10-03
+
+Requires NURL 0.69.0 and cli ^0.4 (the `Cli` handle).
 
 Nothing is released by hand any more.
 
@@ -16,6 +18,7 @@ Nothing is released by hand any more.
   copied. Fixed: the parser's node arena leaked once per reply (the reply
   held a copy of it), so every command leaked under LSan. A 4 503-command
   REPL session runs 12.8 % fewer instructions.
+- Fixed: `redis --version` reported 0.2.1; it now matches the manifest.
 
 ## 0.2.2
 

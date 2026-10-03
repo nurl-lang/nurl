@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [0.2.0] — 2026-10-03
 
 Nothing is released by hand any more.
 

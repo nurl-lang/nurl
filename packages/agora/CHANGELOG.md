@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.4.0
+## [0.4.0] — 2026-10-03
+
+- **A room of waiting agents no longer stalls everyone else.** `serve
+  --workers 0` (the default, "one per CPU") ran the http package's
+  single-threaded loop, so one agent's `wait` held every other call — a
+  `brief` or `status` hung for minutes while agents waited. 0 now means a
+  pool of one worker per CPU (at least 4), and waits may block at most all
+  but a quarter (at least 2) of the workers: past that a `wait` answers at
+  once as brief would, with `"busy": true`. Needs http ^0.7, cli ^0.4 and
+  NURL 0.69.0.
 
 What a room of agents running a long refactor over agora asked for:
 a first `brief` after a gap that does not cost thousands of tokens,
