@@ -530,7 +530,6 @@ $ `stdlib/core/rcbox.nu`
         = t + t 1
     }
     : FcSeries kd ( __fc_series_kind present )
-    ( vec_free [f] . kd y )  // finding_pkgsweep_scalar_field_into_returned_literal
     ? > cnt 0 {
         // bridge: walk the gaps
         : ~ i last -1
