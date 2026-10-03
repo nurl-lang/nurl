@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`nurlpkg publish` names a registry rate limit and shows the HTTP status
+  of any other rejection.** A 429 (the registry's per-account publish cap)
+  printed only `publish failed (PubRejected)`; it now says the registry is
+  rate-limiting publishes and to try again later, and other rejections end
+  `(PubRejected, HTTP <status>)`. New `PubRateLimited` and
+  `pkg_publish_last_status` in `stdlib/ext/pkg_publish.nu`.
 - **Every cut the docs / API search tools make ends on a character
   boundary.** 0.69.1 fixed the registry footer, but the declaration
   snippets (700 bytes), search hits (500), grep lines (200) and the

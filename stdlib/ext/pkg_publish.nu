@@ -61,8 +61,16 @@ $ `stdlib/ext/http_cli.nu`
     PubForbidden  // 403 — reserved name, typosquat lookalike, or the token's
     // package scope. NOT an auth problem, so it must not suggest re-login.
     PubConflict  // 409 — version already published (immutability)
-    PubRejected  // any other non-2xx
+    PubRateLimited  // 429 — too many publishes from this account; retry later
+    PubRejected  // any other non-2xx (pkg_publish_last_status says which)
 }
+
+// The HTTP status of the last publish / yank / revoke reply (0 before
+// any): a PubRejected names no cause, and without the code the caller
+// could only guess.
+: ~ i g_pub_last_status 0
+
+@ pkg_publish_last_status → i { ^ g_pub_last_status }
 
 @ pack_err_name PackErr e → s {
     ^ ?? e {
@@ -95,6 +103,7 @@ $ `stdlib/ext/http_cli.nu`
         PubAuth → `PubAuth`
         PubForbidden → `PubForbidden`
         PubConflict → `PubConflict`
+        PubRateLimited → `PubRateLimited`
         PubRejected → `PubRejected`
     }
 }
@@ -478,10 +487,12 @@ $ `stdlib/ext/http_cli.nu`
 // (reserved_name / token_scope / name_too_similar) is a distinct, non-auth
 // rejection, so a name problem is never mislabelled as an expired token.
 @ __pub_status_map i st → !i PublishErr {
+    = g_pub_last_status st
     ? & >= st 200 < st 300 { ^ @ !i PublishErr { T 0 } } {}
     ? == st 401 { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
     ? == st 403 { ^ @ !i PublishErr { F # PublishErr PubForbidden } } {}
     ? == st 409 { ^ @ !i PublishErr { F # PublishErr PubConflict } } {}
+    ? == st 429 { ^ @ !i PublishErr { F # PublishErr PubRateLimited } } {}
     ^ @ !i PublishErr { F # PublishErr PubRejected }
 }
 

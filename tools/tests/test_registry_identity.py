@@ -42,7 +42,7 @@ class RegistryIdentityTest(unittest.TestCase):
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 owner.requests.append(self.path)
-                self.send_response(500)
+                self.send_response(owner.statuses.get(self.path, 500))
                 self.send_header('Content-Length', '0')
                 self.end_headers()
 
@@ -266,6 +266,26 @@ class RegistryIdentityTest(unittest.TestCase):
             self.assertEqual((self.project/'nurl.lock').read_bytes(), b'prior lock must survive\n')
             self.assertEqual(self.requests, [])
         return run
+
+    def publish_reply(self, status):
+        env = self.publish_project()
+        root = self.publish_toolchain()
+        self.statuses['/a/api/v1/publish'] = status
+        run = self.run_pkg('publish', env={**env, 'NURL_STDLIB': str(root)})
+        self.assertNotEqual(run.returncode, 0, run.stdout+run.stderr)
+        self.assertIn('/a/api/v1/publish', self.requests)
+        return run.stderr
+
+    def test_publish_names_a_rate_limit(self):
+        # 429 is the registry's per-account publish cap: say so, not
+        # "PubRejected" (a release of many packages meets it).
+        err = self.publish_reply(429)
+        self.assertIn(b'rate-limiting publishes', err)
+        self.assertNotIn(b'PubRejected', err)
+
+    def test_publish_rejection_carries_the_status(self):
+        err = self.publish_reply(500)
+        self.assertIn(b'PubRejected, HTTP 500', err)
 
     def test_publish_requires_installed_compiler(self):
         env = self.publish_project()
