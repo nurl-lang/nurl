@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.1.3] — 2026-10-03
+
+Requires NURL 0.69.0.
 
 Nothing is released by hand any more: every `string_free`, `vec_free`,
 `vec_free_with` and `args_free` call (21) is gone — the compiler drops the
