@@ -1,8 +1,27 @@
 # Changelog
 
-## Unreleased
+## [0.4.0] — 2026-10-03
 
-`Cli` releases itself: `cli_new` returns a `Cli` handle (its state in an rcbox) instead of a `*Cli` the caller had to free, and a `CliCtx`'s back-reference is one more owner of it. The last owner drops the strings, flags and commands; `cli_free` stays as an optional early release. Callers change `*Cli` to `Cli`.
+Requires NURL 0.69.0.
+
+### Changed (breaking)
+
+- `Cli` is a handle that releases itself: `( cli_new prog about version )` returns
+  `Cli` (was `*Cli`, a heap pointer the caller had to free). Every builder and
+  `cli_run` take the `Cli` handle (`cli_flag_str`/`_int`/`_bool`/`_float`, `cli_cmd`,
+  `cli_default`, `cli_run`). Callers change `: *Cli c` to `: Cli c` and drop the
+  `( cli_free c )` call — the last owner releases the strings, flags and commands.
+  `cli_free` remains as an optional early release.
+- A `CliCtx`'s `cli` field is a `Cli` handle (one more owner) instead of a `* Cli`
+  back-pointer.
+
+### Fixed
+
+- `cli_run` and the default-command path no longer free the parser, token and argv
+  vectors by hand; each command context gets its own copy of the parser and is
+  dropped with everything it holds.
+- `ctx_str` results and the strings handlers allocate are released by auto-drop —
+  handlers no longer need `string_free`.
 
 ## 0.3.1
 
