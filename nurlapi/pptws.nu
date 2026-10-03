@@ -19,15 +19,29 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/ext/http_full.nu`
+$ `stdlib/core/rcbox.nu`
 
-: PptMember {
-    TcpConn conn
+: PptMemberImpl {
+    TcpConn conn  // the server's; the upgrade hook's caller closes it
     Mutex wlock  // serialise concurrent writes to this conn
     String channel
     i alive  // 1 = connected, 0 = gone / write failed
 }
+// One member, shared by its connection's loop and the registry: the last
+// copy releases it (its write mutex and channel name with it).
+: PptMember { s ctl }
+
+@ PptMember_drop sink PptMember h → v {
+    ( mem_forget h )
+    ( rcbox_release [PptMemberImpl] # i . h ctl )
+}
+
+@ PptMember_share PptMember h → PptMember { ^ @ PptMember { # s ( rcbox_share # i . h ctl ) } }
+
+@ __ppt_m PptMember h → *PptMemberImpl { ^ ( rcbox_ptr [PptMemberImpl] # i . h ctl ) }
+
 : PptReg {
-    ( Vec s ) members  // *PptMember
+    ( Vec PptMember ) members
     Mutex lock  // guards the member list + all fan-out writes
 }
 : ~ i g_ppt_reg 0  // *PptReg as int (set once in ppt_install)
@@ -39,14 +53,14 @@ $ `stdlib/ext/http_full.nu`
     : i plen ( string_len path )
     ? <= plen 7 { ^ ( string_from `public` ) } {}
     : String c ( string_substr path 7 - plen 7 )
-    ? == ( string_len c ) 0 { ( string_free c ) ^ ( string_from `public` ) } {}
+    ? == ( string_len c ) 0 { ^ ( string_from `public` ) } {}
     ^ c
 }
 
 @ __ppt_same String a String b → b { ^ != 0 ( nurl_str_eq ( string_data a ) ( string_data b ) ) }
 
 // write under the per-conn write lock; mark the member dead on any write error
-@ __ppt_send_bin * PptMember m ( Vec u ) payload → v {
+@ __ppt_send_bin * PptMemberImpl m ( Vec u ) payload → v {
     ? != . m alive 1 { ^ v } {}
     ( mutex_lock . m wlock )
     : !v WsErr wr ( ws_send_binary . m conn payload )
@@ -54,7 +68,7 @@ $ `stdlib/ext/http_full.nu`
     ( mutex_unlock . m wlock )
 }
 
-@ __ppt_send_text * PptMember m s text → v {
+@ __ppt_send_text * PptMemberImpl m s text → v {
     ? != . m alive 1 { ^ v } {}
     ( mutex_lock . m wlock )
     : !v WsErr wr ( ws_send_text . m conn text )
@@ -63,11 +77,13 @@ $ `stdlib/ext/http_full.nu`
 }
 
 @ __ppt_count * PptReg reg String chan → i {
-    : i n ( vec_len [s] . reg members )
+    : i n ( vec_len [PptMember] . reg members )
     : ~ i c 0 : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . reg members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *PptMember m # *PptMember pp ? & == . m alive 1 ( __ppt_same . m channel chan ) { = c + c 1 } {} } {}
+        ?? ( vec_get [PptMember] . reg members k ) {
+            T x → { : *PptMemberImpl m ( __ppt_m x ) ? & == . m alive 1 ( __ppt_same . m channel chan ) { = c + c 1 } {} }
+            F → {}
+        }
         = k + k 1
     }
     ^ c
@@ -80,63 +96,61 @@ $ `stdlib/ext/http_full.nu`
     : String js ( string_from `{"type":"presence","count":` )
     ( string_push_int js cnt )
     ( string_push_str js `}` )
-    : i n ( vec_len [s] . reg members )
+    : i n ( vec_len [PptMember] . reg members )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . reg members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 { : *PptMember m # *PptMember pp ? ( __ppt_same . m channel chan ) { ( __ppt_send_text m ( string_data js ) ) } {} } {}
+        ?? ( vec_get [PptMember] . reg members k ) {
+            T x → { : *PptMemberImpl m ( __ppt_m x ) ? ( __ppt_same . m channel chan ) { ( __ppt_send_text m ( string_data js ) ) } {} }
+            F → {}
+        }
         = k + k 1
     }
-    ( string_free js )
     ( mutex_unlock . reg lock )
 }
 
 // forward one voice frame to every OTHER member on the sender's channel
-@ __ppt_forward * PptReg reg * PptMember from ( Vec u ) payload → v {
+@ __ppt_forward * PptReg reg * PptMemberImpl from ( Vec u ) payload → v {
     ( mutex_lock . reg lock )
-    : i n ( vec_len [s] . reg members )
+    : i n ( vec_len [PptMember] . reg members )
     : ~ i k 0
     ~ < k n {
-        : s pp ?? ( vec_get [s] . reg members k ) { T x → x F → # s 0 }
-        ? != # i pp 0 {
-            : *PptMember m # *PptMember pp
-            ? & != # i m # i from ( __ppt_same . m channel . from channel ) { ( __ppt_send_bin m payload ) } {}
-        } {}
+        ?? ( vec_get [PptMember] . reg members k ) {
+            T x → {
+                : *PptMemberImpl m ( __ppt_m x )
+                ? & != # i m # i from ( __ppt_same . m channel . from channel ) { ( __ppt_send_bin m payload ) } {}
+            }
+            F → {}
+        }
         = k + k 1
     }
     ( mutex_unlock . reg lock )
 }
 
-@ __ppt_join * PptReg reg TcpConn conn String chan → *PptMember {
-    : *PptMember m # *PptMember ( nurl_alloc Z PptMember )
-    = . m conn conn
-    = . m wlock ( mutex_new )
-    = . m channel ( string_from ( string_data chan ) )
-    = . m alive 1
+@ __ppt_join * PptReg reg TcpConn conn String chan → PptMember {
+    : PptMember h @ PptMember { # s ( rcbox_new [PptMemberImpl] @ PptMemberImpl { conn ( mutex_new ) ( string_from ( string_data chan ) ) 1 } ) }
     ( mutex_lock . reg lock )
-    ( vec_push [s] . reg members # s m )
+    ( vec_push [PptMember] . reg members ( PptMember_share h ) )
     ( mutex_unlock . reg lock )
-    ^ m
+    ^ h
 }
 
-@ __ppt_leave * PptReg reg * PptMember m → v {
+// The registry's copy goes; the connection's own goes with its scope.
+@ __ppt_leave * PptReg reg PptMember h → v {
     ( mutex_lock . reg lock )
-    : i n ( vec_len [s] . reg members )
+    : i n ( vec_len [PptMember] . reg members )
     : ~ i k 0
     : ~ b removed F
     ~ & ! removed < k n {
-        : s pp ?? ( vec_get [s] . reg members k ) { T x → x F → # s 0 }
-        ? == # i pp # i m { ?? ( vec_remove [s] . reg members k ) { T _ → {} F → {} } = removed T } {}
+        : ~ b hit F
+        ?? ( vec_get [PptMember] . reg members k ) { T x → { = hit == # i . x ctl # i . h ctl } F → {} }
+        ? hit { ?? ( vec_remove [PptMember] . reg members k ) { T _ → {} F → {} } = removed T } {}
         = k + k 1
     }
     ( mutex_unlock . reg lock )
-    ( mutex_free . m wlock )
-    ( string_free . m channel )
-    ( nurl_free # s m )
 }
 
 // per-connection frame loop: forward binary (voice), answer ping, end on close
-@ __ppt_loop * PptReg reg * PptMember me TcpConn conn → v {
+@ __ppt_loop * PptReg reg * PptMemberImpl me TcpConn conn → v {
     : WsLimits lim @ WsLimits { 262144 1048576 30000 64 }
     : ~ b done F
     ~ ! done {
@@ -152,7 +166,6 @@ $ `stdlib/ext/http_full.nu`
                     ?? _p { T _ → {} F _ → {} }
                     ( mutex_unlock . me wlock )
                 } {}
-                ( vec_free [u] . f payload )
             }
             F _ → { = done T }
         }
@@ -164,7 +177,7 @@ $ `stdlib/ext/http_full.nu`
 // Call once before server_run.
 @ ppt_install → v {
     : *PptReg reg # *PptReg ( nurl_alloc Z PptReg )
-    = . reg members ( vec_new [s] )
+    = . reg members ( vec_new [PptMember] )
     = . reg lock ( mutex_new )
     = g_ppt_reg # i reg
     ( server_set_upgrade \ TcpConn conn HttpRequest req → b {
@@ -177,12 +190,11 @@ $ `stdlib/ext/http_full.nu`
         : String chan ( __ppt_chan . req path )
         ( tcp_set_timeout conn 30000 )
         : *PptReg r ( __ppt_reg )
-        : *PptMember me ( __ppt_join r conn chan )
+        : PptMember me ( __ppt_join r conn chan )
         ( __ppt_presence r chan )
-        ( __ppt_loop r me conn )
+        ( __ppt_loop r ( __ppt_m me ) conn )
         ( __ppt_leave r me )
         ( __ppt_presence r chan )
-        ( string_free chan )
         ^ T
     } )
 }

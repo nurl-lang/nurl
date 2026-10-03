@@ -472,13 +472,13 @@ def t_tools_call_docs(c: Client) -> None:
     env = _tool_call(c, "nurl_docs", {"name": "MEMORY.md", "outline": True})
     outline = _tool_text(env)
     assert_true("outline reports the section count", "sections. Ask for one with section=" in outline)
-    assert_true("outline lists a numbered section", "7.4 Manually-managed handles" in outline)
+    assert_true("outline lists a numbered section", "7.4 Manually-managed memory" in outline)
 
     # section= by number, and by words from the heading — both reach the
     # same section, and it is a fraction of the 44 KB document.
     env = _tool_call(c, "nurl_docs", {"name": "MEMORY", "section": "7.4"})
     by_num = _tool_text(env)
-    assert_true("section by number", by_num.startswith("docs/MEMORY.md \u203a 7.4 Manually-managed handles"))
+    assert_true("section by number", by_num.startswith("docs/MEMORY.md \u203a 7.4 Manually-managed memory"))
     env = _tool_call(c, "nurl_docs", {"name": "MEMORY", "section": "manually-managed"})
     by_words = _tool_text(env)
     assert_true("section by words reaches the same one", by_words.startswith("docs/MEMORY.md \u203a 7.4"))
@@ -505,7 +505,7 @@ def t_tools_call_docs(c: Client) -> None:
     env = _tool_call(c, "nurl_docs", {"query": "string_free manually managed handles"})
     q = _tool_text(env)
     assert_true("query reports a section count", "documentation section(s) match" in q)
-    assert_true("query finds the handle section", "7.4 Manually-managed handles" in q)
+    assert_true("query finds the handle section", "7.4 Manually-managed memory" in q)
     assert_true("query hands back a section key", "[section=7.4]" in q)
     assert_true(
         "query returns sections, not whole documents",

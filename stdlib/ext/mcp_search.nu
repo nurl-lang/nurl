@@ -42,6 +42,17 @@ $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/nurldoc.nu`
 
 // The registry to search: $NURL_REGISTRY, else the public default.
+
+// The longest prefix of `d` at most `n` bytes that ends on a character
+// boundary: a description cut inside a multi-byte character (the registry's
+// pitches are full of `—`) made the reply invalid UTF-8, and a JSON client
+// rejected the whole tool result.
+@ __mcp_utf8_cut s d i n → i {
+    : ~ i k n
+    ~ & > k 0 == 128 & ( nurl_str_get d k ) 192 { = k - k 1 }
+    ^ k
+}
+
 @ msearch_default_registry → String {
     ^ ( env_var_or `NURL_REGISTRY` `https://reg.nurl-lang.org/` )
 }
@@ -314,7 +325,7 @@ $ `stdlib/ext/nurldoc.nu`
                                                                         : i dn ( nurl_str_len d )
                                                                         ? > dn 0 {
                                                                             ( string_push_str out ` — ` )
-                                                                            : ~ i keep ? > dn 160 160 dn
+                                                                            : ~ i keep ? > dn 160 ( __mcp_utf8_cut d 160 ) dn
                                                                             : ~ i j 0
                                                                             ~ < j keep {
                                                                                 : i c ( nurl_str_get d j )
@@ -399,7 +410,7 @@ $ `stdlib/ext/nurldoc.nu`
                                                                         : i dn ( nurl_str_len d )
                                                                         ? > dn 0 {
                                                                             ( string_push_str out ` — ` )
-                                                                            : ~ i keep ? > dn 200 200 dn
+                                                                            : ~ i keep ? > dn 200 ( __mcp_utf8_cut d 200 ) dn
                                                                             : ~ i j 0
                                                                             ~ < j keep {
                                                                                 : i c ( nurl_str_get d j )
@@ -522,7 +533,7 @@ $ `stdlib/ext/nurldoc.nu`
                                                     // First 200 bytes of the description.
                                                     : s d ( json_as_str dj )
                                                     : i dn ( nurl_str_len d )
-                                                    : ~ i keep ? > dn 200 200 dn
+                                                    : ~ i keep ? > dn 200 ( __mcp_utf8_cut d 200 ) dn
                                                     : ~ i j 0
                                                     ~ < j keep {
                                                         : i c ( nurl_str_get d j )
