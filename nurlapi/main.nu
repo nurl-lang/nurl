@@ -3,7 +3,6 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/path.nu`
-$ `stdlib/std/url.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/int.nu`
@@ -79,7 +78,6 @@ $ `nurlapi/pptws.nu`
 @ run_allowed → b {
     : String v ( env_var_or `NURL_ALLOW_RUN` `` )
     : b r | != 0 ( nurl_str_eq ( string_data v ) `1` ) != 0 ( nurl_str_eq ( string_data v ) `true` )
-    ( string_free v )
     ^ r
 }
 
@@ -139,8 +137,6 @@ $ `nurlapi/pptws.nu`
         }
         = i + i 1
     }
-    ( vec_free_with [String] parts \ String l → v { ( string_free l ) } )
-    ( string_free fs )
     ^ bad
 }
 
@@ -163,8 +159,6 @@ $ `nurlapi/pptws.nu`
         }
         = i + i 1
     }
-    ( vec_free_with [String] parts \ String l → v { ( string_free l ) } )
-    ( string_free fs )
 }
 
 // The 400 for a flag that is not on the list. Built through the JSON
@@ -180,9 +174,6 @@ $ `nurlapi/pptws.nu`
     : String body ( json_stringify e )
     : HttpResponse hr ( response_text 400 ( string_data body ) )
     ( response_set_header hr `Content-Type` `application/json` )
-    ( json_free e )
-    ( string_free body )
-    ( string_free m )
     ^ hr
 }
 
@@ -191,7 +182,6 @@ $ `nurlapi/pptws.nu`
 @ __run_built_binary Json res s bin_path → v {
     : ( Vec s ) noargs ( vec_new [s] )
     : !Output ProcessErr r ( run_tool bin_path noargs )
-    ( vec_free [s] noargs )
     ?? r {
         T o → {
             : Json run ( json_obj_new )
@@ -199,7 +189,6 @@ $ `nurlapi/pptws.nu`
             ( json_obj_set run `stdout` ( json_str_lit ( output_stdout o ) ) )
             ( json_obj_set run `stderr` ( json_str_lit ( output_stderr o ) ) )
             ( json_obj_set res `run` run )
-            ( output_free o )
         }
         F e → {
             : Json run ( json_obj_new )
@@ -221,7 +210,6 @@ $ `nurlapi/pptws.nu`
 @ get_port → i {
     : String ps ( env_var_or `NURL_PORT` `8000` )
     : i p ( nurl_str_to_int ( string_data ps ) )
-    ( string_free ps )
     ^ ? > p 0 p 8000
 }
 
@@ -242,7 +230,6 @@ $ `nurlapi/pptws.nu`
     ( string_push_str fname target_id )
     ( string_push_str fname `.o` )
     : String full ( path_join ( string_data sdir ) ( string_data fname ) )
-    ( string_free sdir ) ( string_free fname )
     ^ full
 }
 
@@ -258,7 +245,7 @@ $ `nurlapi/pptws.nu`
     ^ build_id
 }
 
-@ drop_str String s → v { ( string_free s ) }
+@ drop_str String s → v {}
 
 // ── M11 hardening: tool timeouts, per-IP rate limit, output GC ────────
 //
@@ -286,8 +273,6 @@ $ `nurlapi/pptws.nu`
     : ~ i k 0
     ~ < k n { ?? ( vec_get [s] args k ) { T a → ( vec_push [s] targs a ) F → {} } = k + k 1 }
     : !Output ProcessErr r ( process_run `/usr/bin/timeout` targs `` )
-    ( vec_free [s] targs )
-    ( string_free secs )
     ^ r
 }
 
@@ -297,7 +282,6 @@ $ `nurlapi/pptws.nu`
 @ get_max_build_body → i {
     : String s ( env_var_or `NURL_MAX_BUILD_BODY` `8388608` )
     : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 8388608 }
-    ( string_free s )
     ^ n
 }
 
@@ -331,14 +315,12 @@ $ `nurlapi/pptws.nu`
 @ get_builds_per_min → i {
     : String s ( env_var_or `NURL_BUILDS_PER_MIN` `20` )
     : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 20 }
-    ( string_free s )
     ^ ? > n 0 n 1
 }
 
 @ get_mcp_per_min → i {
     : String s ( env_var_or `NURL_MCP_PER_MIN` `120` )
     : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 120 }
-    ( string_free s )
     ^ ? > n 0 n 1
 }
 
@@ -363,9 +345,6 @@ $ `nurlapi/pptws.nu`
     // the table without bound. Reset wholesale past 4096 distinct IPs —
     // crude, but bounded memory beats precise bookkeeping here.
     ? > ( vec_len [String] . reg ips ) 4096 {
-        : i cn ( vec_len [String] . reg ips )
-        : ~ i ck 0
-        ~ < ck cn { ?? ( vec_get [String] . reg ips ck ) { T s2 → ( string_free s2 ) F → {} } = ck + ck 1 }
         ( vec_clear [String] . reg ips )
         ( vec_clear [i] . reg wins )
         ( vec_clear [i] . reg cnts )
@@ -418,10 +397,8 @@ $ `nurlapi/pptws.nu`
 @ sweep_output_dir → v {
     : String ttl_s ( env_var_or `NURL_OUTPUT_TTL_SECS` `3600` )
     : i ttl_ms * ?? ( int_parse ( string_data ttl_s ) ) { T v → v F _ → 3600 } 1000
-    ( string_free ttl_s )
     : String max_s ( env_var_or `NURL_OUTPUT_MAX_BUILDS` `512` )
     : i max_builds ?? ( int_parse ( string_data max_s ) ) { T v → v F _ → 512 }
-    ( string_free max_s )
     : i now ( now_ms )
     : String od ( get_output_dir )
     : !( Vec String ) IoErr dr ( dir_list ( string_data od ) )
@@ -439,7 +416,6 @@ $ `nurlapi/pptws.nu`
                             ? > - now ms ttl_ms {
                                 : String p ( path_join ( string_data od ) ( string_data f ) )
                                 ?? ( dir_remove_all ( string_data p ) ) { T _ → {} F _ → {} }
-                                ( string_free p )
                             } { ( vec_push [i] alive_ms ms ) }
                         } {}
                     }
@@ -460,7 +436,6 @@ $ `nurlapi/pptws.nu`
                             ? == ( __build_dir_ms ( string_data f ) ) oldest {
                                 : String p ( path_join ( string_data od ) ( string_data f ) )
                                 ?? ( dir_remove_all ( string_data p ) ) { T _ → {} F _ → {} }
-                                ( string_free p )
                             } {}
                         }
                         F → {}
@@ -471,16 +446,12 @@ $ `nurlapi/pptws.nu`
                 : ( Vec i ) rest ( vec_new [i] )
                 : ~ i q 0
                 ~ < q alive { ?? ( vec_get [i] alive_ms q ) { T v → { ? != v oldest { ( vec_push [i] rest v ) } {} } F → {} } = q + q 1 }
-                ( vec_free [i] alive_ms )
                 = alive_ms rest
                 = alive ( vec_len [i] alive_ms )
             }
-            ( vec_free [i] alive_ms )
-            ( vec_free_with [String] files \ String s2 → v { ( string_free s2 ) } )
         }
         F _ → {}
     }
-    ( string_free od )
 }
 
 @ list_stdlib_modules → Json {
@@ -501,20 +472,15 @@ $ `nurlapi/pptws.nu`
                                                 ? ( string_ends_with f2 `.nu` ) {
                                                     : String rel ( path_join ( string_data f ) ( string_data f2 ) )
                                                     ( json_arr_push arr ( json_str_lit ( string_data rel ) ) )
-                                                    ( string_free rel )
                                                 } {}
                                             } F → {} } = j + j 1
                                     }
-                                    : ~ i k 0 ~ < k ( vec_len [String] files2 ) { ?? ( vec_get [String] files2 k ) { T fs → ( string_free fs ) F → {} } = k + k 1 } ( vec_free [String] files2 )
                                 } F _ → {} }
                         } {}
-                        ( string_free sub )
                     } F → {} } = i + i 1
             }
-            : ~ i k 0 ~ < k ( vec_len [String] files ) { ?? ( vec_get [String] files k ) { T fs → ( string_free fs ) F → {} } = k + k 1 } ( vec_free [String] files )
         } F _ → {}
     }
-    ( string_free sdir )
     ^ arr
 }
 
@@ -556,13 +522,11 @@ $ `nurlapi/pptws.nu`
 @ __public_base_url → String {
     : ~ String env ( env_var_or `NURL_PUBLIC_URL` `` )
     ? == ( string_len env ) 0 {
-        ( string_free env )
         = env ( env_var_or `NURL_API_URL` `` )
     } {}
     : i n ( string_len env )
     ? & > n 0 ( string_ends_with env `/` ) {
         : String trimmed ( string_substr env 0 - n 1 )
-        ( string_free env )
         ^ trimmed
     } {}
     ^ env
@@ -585,13 +549,10 @@ $ `nurlapi/pptws.nu`
     : String base ( __public_base_url )
     : String url ( string_with_cap 96 )
     ( string_push_str url ( string_data base ) )
-    ( string_free base )
     ( string_push_str url `/download/` )
     ( string_push_str url ( string_data token ) )
     ( json_obj_set o `download_url` ( json_str_lit ( string_data url ) ) )
     ( json_obj_set o `token` ( json_str_lit ( string_data token ) ) )
-    ( string_free url )
-    ( string_free token )
     ^ o
 }
 
@@ -816,7 +777,7 @@ s combined_stdout s combined_stderr → v {
     ?? root_res {
         T root → {
             : s source ( get_common_json root `source` `` )
-            ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+            ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             : s opt ( get_common_json root `opt` `-O2` )
             // Caller-selectable compiler flags (allow-listed). Validated
@@ -825,9 +786,8 @@ s combined_stdout s combined_stderr → v {
             : s __flags ( get_common_json root `flags` `` )
             : String __badf ( bad_nurlc_flag __flags )
             ? != 0 ( string_len __badf )
-            { ( json_free root ) ( string_free body_str )
+            {
                 ^ ( bad_flag_response __badf ) } {}
-            ( string_free __badf )
 
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -838,7 +798,7 @@ s combined_stdout s combined_stderr → v {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
                     : ~ String bin_name ( string_from filename )
-                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
+                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
                     : String ll_path ( path_join ( string_data build_dir ) ( string_data ll_name ) )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
@@ -846,7 +806,7 @@ s combined_stdout s combined_stderr → v {
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
 
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
 
                     ?? nurlc_res {
                         T n_out → {
@@ -863,7 +823,7 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] clang_args ( string_data bin_path ) )
                                 ( push_native_runtime_libs clang_args )
 
-                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args ) ( vec_free [s] clang_args )
+                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args )
 
                                 ?? clang_res {
                                     T c_out → {
@@ -912,19 +872,12 @@ s combined_stdout s combined_stderr → v {
                                         : HttpResponse hr ( response_text 200 ( string_data body ) )
                                         ( response_set_header hr `Content-Type` `application/json` )
 
-                                        ( string_free combined_stderr ) ( json_free res ) ( string_free runtime_o )
-                                        ( output_free n_out ) ( output_free c_out ) ( json_free root )
-                                        ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path )
-                                        ( string_free bin_name ) ( string_free bin_path )
-                                        ( string_free build_id ) ( string_free build_dir )
-                                        ( string_free body_str ) ( string_free body )
                                         ^ hr
                                     }
                                     F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) }
                                 }
                             } {
                                 : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
-                                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
                                 ^ hr_err
                             }
                         }
@@ -947,13 +900,13 @@ s combined_stdout s combined_stderr → v {
     ?? root_res {
         T root → {
             : s source ( get_common_json root `source` `` )
-            ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+            ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             // Native-only dependency (e.g. libpq) → no wasm build; report
             // cleanly instead of dumping the wasm-ld undefined-symbol wall.
             : s __wasm_nodep ( native_only_dep source )
             ? != 0 ( nurl_str_len __wasm_nodep )
-            { ( json_free root ) ( string_free body_str )
+            {
                 ^ ( unsupported_target_response filename __wasm_nodep `WebAssembly` ) } {}
             // Caller-selectable compiler flags (allow-listed). Validated
             // here, at the top, so a bad one is a 400 rather than a build
@@ -961,9 +914,8 @@ s combined_stdout s combined_stderr → v {
             : s __flags ( get_common_json root `flags` `` )
             : String __badf ( bad_nurlc_flag __flags )
             ? != 0 ( string_len __badf )
-            { ( json_free root ) ( string_free body_str )
+            {
                 ^ ( bad_flag_response __badf ) } {}
-            ( string_free __badf )
             : b emit_ll ( get_common_bool root `emit_ll` F )
             // links_only:true (the MCP tool sets it) omits the inline
             // wasm_base64 payload and the inline llvm_ir blob — the caller
@@ -988,7 +940,7 @@ s combined_stdout s combined_stderr → v {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
                     : ~ String bin_name ( string_from filename )
-                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
+                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String ll_name ( string_from ( string_data bin_name ) ) ( string_push_str ll_name `.ll` )
                     : String wasm_name ( string_from ( string_data bin_name ) ) ( string_push_str wasm_name `.wasm` )
 
@@ -1016,7 +968,7 @@ s combined_stdout s combined_stderr → v {
                     : ~ b nok F
                     : ~ b proc_ok T
                     ? != 0 ( nurl_str_len provided_ir ) {
-                        ( string_free ir ) = ir ( string_from provided_ir ) = nok T
+                        = ir ( string_from provided_ir ) = nok T
                     } {
                         // --no-cpu-dispatch: the `simd` prefix expands to an
                         // x86-64-v3 clone, and nurlc emits no target triple
@@ -1025,34 +977,26 @@ s combined_stdout s combined_stderr → v {
                         // recognized feature for this target" line per
                         // feature.
                         : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags ) ( vec_push [s] nurlc_args `--ffi-host-imports` ) ( vec_push [s] nurlc_args `--no-cpu-dispatch` )
-                        : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
+                        : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
                         ?? nurlc_res {
                             T n_out → {
                                 = n_rc ( output_exit_code n_out )
                                 = nok ( output_success n_out )
-                                ( string_free n_se_s ) = n_se_s ( string_from ( output_stderr n_out ) )
-                                ? nok { ( string_free ir ) = ir ( string_from ( output_stdout n_out ) ) } {}
-                                ( output_free n_out )
+                                = n_se_s ( string_from ( output_stderr n_out ) )
+                                ? nok { = ir ( string_from ( output_stdout n_out ) ) } {}
                             }
                             F _ → { = proc_ok F }
                         }
                     }
                     ? ! proc_ok {
-                        ( string_free ir ) ( string_free n_se_s ) ( json_free root )
-                        ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path )
-                        ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
                         ^ ( response_text 500 `{"error":"nurlc process failed"}\n` )
                     } {}
                     ? ! nok {
                         : HttpResponse hr_err ( nurlc_failure_response filename n_rc ( string_data n_se_s ) 0 )
-                        ( string_free ir ) ( string_free n_se_s ) ( json_free root )
-                        ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path )
-                        ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
                         ^ hr_err
                     } {}
                     : String ir_fixed ( wb_prepare_ir_for_wasi ir )
                     ( write_file ( string_data ll_path ) ( string_data ir_fixed ) )
-                    ( string_free ir )
 
                     // NURL regex doesn't support \b (unknown-escape falls through
                     // to literal 'b'), so the trailing `(` of the IR call/decl
@@ -1063,11 +1007,11 @@ s combined_stdout s combined_stderr → v {
                     // to link canvas.wasm.o until this fix.
                     : ~ b uses_canvas F
                     : !Regex ParseErr re_canv ( regex_compile `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\(` )
-                    ?? re_canv { T rc → { = uses_canvas ( regex_test rc ( string_data ir_fixed ) ) ( regex_free rc ) } F _ → {} }
+                    ?? re_canv { T rc → { = uses_canvas ( regex_test rc ( string_data ir_fixed ) ) } F _ → {} }
 
                     : ~ b uses_audio F
                     : !Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\(` )
-                    ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) ( regex_free ra ) } F _ → {} }
+                    ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) } F _ → {} }
 
                     : ( Vec s ) clang_args ( vec_new [s] )
                     ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` )
@@ -1098,7 +1042,7 @@ s combined_stdout s combined_stderr → v {
                     ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
                     ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
 
-                    : !Output ProcessErr clang_res ( run_tool ( string_data ( get_wasi_clang ) ) clang_args ) ( vec_free [s] clang_args )
+                    : !Output ProcessErr clang_res ( run_tool ( string_data ( get_wasi_clang ) ) clang_args )
 
                     ?? clang_res {
                         T c_out → {
@@ -1118,7 +1062,6 @@ s combined_stdout s combined_stderr → v {
                             ? & == c_rc 0 uses_canvas {
                                 : String async_name ( string_from ( string_data bin_name ) ) ( string_push_str async_name `.async.wasm` )
                                 : String asyncified_path ( path_join ( string_data build_dir ) ( string_data async_name ) )
-                                ( string_free async_name )
                                 : ( Vec s ) opt_args ( vec_new [s] )
                                 ( vec_push [s] opt_args `--asyncify` )
                                 ( vec_push [s] opt_args `--pass-arg=asyncify-imports@canvas.sleep` )
@@ -1127,20 +1070,17 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] opt_args `-o` )
                                 ( vec_push [s] opt_args ( string_data asyncified_path ) )
                                 : !Output ProcessErr opt_res ( run_tool ( string_data ( get_wasm_opt ) ) opt_args )
-                                ( vec_free [s] opt_args )
                                 ?? opt_res {
                                     T o_out → {
                                         : i opt_rc ( output_exit_code o_out )
                                         ? == opt_rc 0 {
-                                            ( string_free wasm_path ) = wasm_path asyncified_path
+                                            = wasm_path asyncified_path
                                         } {
                                             = c_rc opt_rc
                                             ? > ( string_len combined_stderr ) 0 { ( string_push_char combined_stderr 10 ) } {}
                                             ( string_push_str combined_stderr `wasm-opt --asyncify failed:\n` )
                                             ( string_push_str combined_stderr ( output_stderr o_out ) )
-                                            ( string_free asyncified_path )
                                         }
-                                        ( output_free o_out )
                                     }
                                     F _ → {
                                         = c_rc 127
@@ -1148,7 +1088,6 @@ s combined_stdout s combined_stderr → v {
                                         ( string_push_str combined_stderr `wasm-opt not found at ` )
                                         ( string_push_str combined_stderr ( string_data ( get_wasm_opt ) ) )
                                         ( string_push_str combined_stderr ` — canvas requires binaryen (apt install binaryen)` )
-                                        ( string_free asyncified_path )
                                     }
                                 }
                             } {}
@@ -1184,7 +1123,7 @@ s combined_stdout s combined_stderr → v {
                             : i ll_bytes ?? ll_size_res { T s → s F _ → 0 }
                             ( json_obj_set res `ll_artifact` ( make_artifact_json ( string_data ll_name ) ll_bytes ( string_data build_id ) ) )
 
-                            : ~ String b64 ( string_new ) : ~ String wasm_url ( string_new )
+                            : ~ String wasm_url ( string_new )
                             ? == c_rc 0 {
                                 : !i IoErr wasm_size_res ( file_size ( string_data wasm_path ) )
                                 : i w_bytes ?? wasm_size_res { T s → s F _ → 0 }
@@ -1197,29 +1136,22 @@ s combined_stdout s combined_stderr → v {
                                 ? links_only {} {
                                     : !( Vec u ) IoErr wasm_data_res ( read_file_bytes ( string_data wasm_path ) )
                                     ?? wasm_data_res { T w_data → {
-                                            : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
-                                            ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
+                                            : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) ) } F _ → {} }
                                 }
                                 = wasm_url ( string_with_cap 96 )
                                 : String w_base ( __public_base_url )
                                 ( string_push_str wasm_url ( string_data w_base ) )
-                                ( string_free w_base )
                                 ( string_push_str wasm_url `/download/` ) ( string_push_str wasm_url ( string_data build_id ) ) ( string_push_str wasm_url `/` ) ( string_push_str wasm_url ( string_data final_name ) )
                                 ( json_obj_set res `download_url` ( json_str_lit ( string_data wasm_url ) ) )
-                                ( string_free final_name )
                             } {}
 
                             : String body ( json_stringify res )
                             : HttpResponse hr ( response_text 200 ( string_data body ) )
                             ( response_set_header hr `Content-Type` `application/json` )
 
-                            ( string_free b64 ) ( string_free wasm_url ) ( string_free combined_stderr ) ( json_free res ) ( string_free ir_fixed )
-                            ( string_free n_se_s ) ( output_free c_out ) ( json_free root )
-                            ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free wasm_name ) ( string_free wasm_path )
-                            ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body )
                             ^ hr
                         }
-                        F ce → { ( string_free ir_fixed ) ( string_free n_se_s ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
+                        F ce → { ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
                     }
                 }
                 F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
@@ -1238,13 +1170,13 @@ s combined_stdout s combined_stderr → v {
     ?? root_res {
         T root → {
             : s source ( get_common_json root `source` `` )
-            ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+            ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             // Native-only dependency (e.g. libpq) → no Windows cross-build;
             // report cleanly instead of the mingw undefined-reference wall.
             : s __win_nodep ( native_only_dep source )
             ? != 0 ( nurl_str_len __win_nodep )
-            { ( json_free root ) ( string_free body_str )
+            {
                 ^ ( unsupported_target_response filename __win_nodep `Windows` ) } {}
             // Caller-selectable compiler flags (allow-listed). Validated
             // here, at the top, so a bad one is a 400 rather than a build
@@ -1252,9 +1184,8 @@ s combined_stdout s combined_stderr → v {
             : s __flags ( get_common_json root `flags` `` )
             : String __badf ( bad_nurlc_flag __flags )
             ? != 0 ( string_len __badf )
-            { ( json_free root ) ( string_free body_str )
+            {
                 ^ ( bad_flag_response __badf ) } {}
-            ( string_free __badf )
             : s opt ( get_common_json root `opt` `-O2` )
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -1265,11 +1196,11 @@ s combined_stdout s combined_stderr → v {
                     ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
                     : ~ String bin_name ( string_from filename )
-                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
+                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     ( string_push_str bin_name `.exe` )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1297,7 +1228,7 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] clang_args ( string_data ll_path ) )
                                 ( vec_push [s] clang_args `-o` )
                                 ( vec_push [s] clang_args ( string_data obj_path ) )
-                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args ) ( vec_free [s] clang_args )
+                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args )
 
                                 ?? clang_res {
                                     T c_out → {
@@ -1373,7 +1304,6 @@ s combined_stdout s combined_stderr → v {
                                         ( vec_push [s] link_args `-o` )
                                         ( vec_push [s] link_args ( string_data bin_path ) )
                                         : !Output ProcessErr link_res ( run_tool ( string_data ( get_mingw_gcc ) ) link_args )
-                                        ( vec_free [s] link_args )
 
                                         ?? link_res {
                                             T l_out → {
@@ -1408,13 +1338,6 @@ s combined_stdout s combined_stderr → v {
                                                 : String body ( json_stringify res )
                                                 : HttpResponse hr ( response_text 200 ( string_data body ) )
                                                 ( response_set_header hr `Content-Type` `application/json` )
-                                                ( string_free stage1 ) ( string_free combined_stderr ) ( json_free res )
-                                                ( output_free n_out ) ( output_free c_out ) ( output_free l_out ) ( json_free root )
-                                                ( string_free curl_marker ) ( string_free curl_L )
-                                                ( string_free nu_path ) ( string_free ll_path ) ( string_free obj_path )
-                                                ( string_free bin_name ) ( string_free bin_path )
-                                                ( string_free build_id ) ( string_free build_dir )
-                                                ( string_free body_str ) ( string_free body )
                                                 ^ hr
                                             }
                                             F _ → { ^ ( response_text 500 `{"error":"mingw-gcc invocation failed"}\n` ) }
@@ -1422,7 +1345,6 @@ s combined_stdout s combined_stderr → v {
                                     } F ce → { ^ ( response_text 500 `{"error":"clang process failed"}\n` ) } }
                             } {
                                 : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
-                                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
                                 ^ hr_err
                             } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
                 } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
@@ -1437,7 +1359,7 @@ s combined_stdout s combined_stderr → v {
     ?? root_res {
         T root → {
             : s source ( get_common_json root `source` `` )
-            ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+            ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             : s opt ( get_common_json root `opt` `-O2` )
             // Caller-selectable compiler flags (allow-listed). Validated
@@ -1446,9 +1368,8 @@ s combined_stdout s combined_stderr → v {
             : s __flags ( get_common_json root `flags` `` )
             : String __badf ( bad_nurlc_flag __flags )
             ? != 0 ( string_len __badf )
-            { ( json_free root ) ( string_free body_str )
+            {
                 ^ ( bad_flag_response __badf ) } {}
-            ( string_free __badf )
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
             : !v IoErr dr ( dir_create ( string_data build_dir ) )
@@ -1458,10 +1379,10 @@ s combined_stdout s combined_stderr → v {
                     ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
                     : ~ String bin_name ( string_from filename )
-                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
+                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1470,7 +1391,7 @@ s combined_stdout s combined_stderr → v {
                                 : ( Vec s ) zig_args ( vec_new [s] )
                                 ( vec_push [s] zig_args `cc` ) ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args `x86_64-macos-none` ) ( vec_push [s] zig_args opt )
                                 ( vec_push [s] zig_args `-Wno-override-module` ) ( vec_push [s] zig_args ( string_data ll_path ) ) ( vec_push [s] zig_args ( string_data ( get_runtime_mac_o ) ) ) ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
-                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args ) ( vec_free [s] zig_args )
+                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args )
                                 ?? zig_res {
                                     T z_out → {
                                         : i z_rc ( output_exit_code z_out )
@@ -1499,17 +1420,10 @@ s combined_stdout s combined_stderr → v {
                                         : String body ( json_stringify res )
                                         : HttpResponse hr ( response_text 200 ( string_data body ) )
                                         ( response_set_header hr `Content-Type` `application/json` )
-                                        ( string_free combined_stderr ) ( json_free res )
-                                        ( output_free n_out ) ( output_free z_out ) ( json_free root )
-                                        ( string_free nu_path ) ( string_free ll_path )
-                                        ( string_free bin_name ) ( string_free bin_path )
-                                        ( string_free build_id ) ( string_free build_dir )
-                                        ( string_free body_str ) ( string_free body )
                                         ^ hr
                                     } F ce → { ^ ( response_text 500 `{"error":"zig process failed"}\n` ) } }
                             } {
                                 : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
-                                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name ) ( string_free bin_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
                                 ^ hr_err
                             } } F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) } }
                 } F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) } } } F _ → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) } }
@@ -1569,32 +1483,27 @@ s combined_stdout s combined_stderr → v {
                 ?? mr {
                     T mtxt → {
                         : !Json JsonError mj ( json_parse ( string_data mtxt ) )
-                        ?? mj { T m → { ( json_free man ) = man m = have_man T } F _ → {} }
-                        ( string_free mtxt )
+                        ?? mj { T m → { = man m = have_man T } F _ → {} }
                     }
                     F _ → {}
                 }
             } {}
-            ( string_free mpath )
             : ~ i i 0 ~ < i ( vec_len [String] files ) {
                 : ?String fs_opt ( vec_get [String] files i )
-                ?? fs_opt { T f → { ? ( string_ends_with f `.nu` ) { : String fpath ( path_join ( string_data edir ) ( string_data f ) ) : !i IoErr szr ( file_size ( string_data fpath ) ) : Json obj ( json_obj_new ) ( json_obj_set obj `name` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `path` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `bytes` ( json_int ?? szr { T s → s F _ → 0 } ) ) ? have_man { ?? ( __uk_example_entry man ( string_data f ) ) { T e → { ?? ( json_obj_get e `unikernel` ) { T uj → { ( json_obj_set obj `unikernel` ( json_bool ( json_as_bool uj ) ) ) } F → {} } ?? ( json_obj_get e `reason` ) { T rj → { ( json_obj_set obj `unikernel_reason` ( json_str_lit ( json_str_data rj ) ) ) } F → {} } } F _ → {} } } {} ( json_arr_push arr obj ) ( string_free fpath ) } {} } F → {} }
+                ?? fs_opt { T f → { ? ( string_ends_with f `.nu` ) { : String fpath ( path_join ( string_data edir ) ( string_data f ) ) : !i IoErr szr ( file_size ( string_data fpath ) ) : Json obj ( json_obj_new ) ( json_obj_set obj `name` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `path` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `bytes` ( json_int ?? szr { T s → s F _ → 0 } ) ) ? have_man { ?? ( __uk_example_entry man ( string_data f ) ) { T e → { ?? ( json_obj_get e `unikernel` ) { T uj → { ( json_obj_set obj `unikernel` ( json_bool ( json_as_bool uj ) ) ) } F → {} } ?? ( json_obj_get e `reason` ) { T rj → { ( json_obj_set obj `unikernel_reason` ( json_str_lit ( json_str_data rj ) ) ) } F → {} } } F _ → {} } } {} ( json_arr_push arr obj ) } {} } F → {} }
                 = i + i 1
             }
             : String body ( json_stringify arr )
             : HttpResponse res ( response_text 200 ( string_data body ) ) ( response_set_header res `Content-Type` `application/json` )
-            ( json_free arr )
-            ( json_free man )
-            : ~ i k 0 ~ < k ( vec_len [String] files ) { ?? ( vec_get [String] files k ) { T fs → ( string_free fs ) F → {} } = k + k 1 } ( vec_free [String] files ) ( string_free edir ) ( string_free body )
             ^ res
         }
-        F _ → { ( string_free edir ) ^ ( response_text 500 `{"error":"could not list examples"}\n` ) }
+        F _ → { ^ ( response_text 500 `{"error":"could not list examples"}\n` ) }
     }
 }
 
 @ h_get_example HttpRequest req Params params → HttpResponse {
     ( nurl_print `[srv] GET /examples/` )
-    ?? ( params_get params `name` ) { T n → { ( nurl_print ( string_data n ) ) ( string_free n ) } F → {} }
+    ?? ( params_get params `name` ) { T n → { ( nurl_print ( string_data n ) ) } F → {} }
     ( nurl_print `\n` )
     : ?String name_opt ( params_get params `name` )
     ?? name_opt { T name → {
@@ -1608,7 +1517,6 @@ s combined_stdout s combined_stderr → v {
                 : String rel ( string_with_cap + nlen 10 )
                 ( string_push_str rel `examples/` ) ( string_push_str rel ( string_data name ) )
                 : HttpResponse mr ( __serve_repo_doc ( string_data rel ) )
-                ( string_free rel ) ( string_free name )
                 ^ mr
             } {}
             : String edir ( get_examples_dir )
@@ -1619,9 +1527,8 @@ s combined_stdout s combined_stderr → v {
                     : Json obj ( json_obj_new ) ( json_obj_set obj `name` ( json_str_lit ( string_data name ) ) ) ( json_obj_set obj `source` ( json_str_lit ( string_data source ) ) ) ( json_obj_set obj `bytes` ( json_int ( string_len source ) ) )
                     : String body ( json_stringify obj )
                     : HttpResponse hr ( response_text 200 ( string_data body ) ) ( response_set_header hr `Content-Type` `application/json` )
-                    ( json_free obj ) ( string_free source ) ( string_free edir ) ( string_free fpath ) ( string_free name ) ( string_free body )
                     ^ hr }
-                F _ → { ( string_free edir ) ( string_free fpath ) ( string_free name ) ^ ( response_text 404 `{"error":"example not found"}\n` ) } } }
+                F _ → { ^ ( response_text 404 `{"error":"example not found"}\n` ) } } }
         F _ → { ^ ( response_text 400 `{"error":"missing example name"}\n` ) } }
 }
 
@@ -1637,7 +1544,6 @@ s combined_stdout s combined_stderr → v {
     // still running an older image.
     : String build_id ( env_var_or `NURL_BUILD_ID` `` )
     ( json_obj_set j `build_id` ( json_str_lit ( string_data build_id ) ) )
-    ( string_free build_id )
     ( json_obj_set j `nurlc_available` ( json_bool ( file_exists ( string_data nurlc_path ) ) ) )
     ( json_obj_set j `nurlc_path` ( json_str_lit ( string_data nurlc_path ) ) )
     ( json_obj_set j `wasi_toolchain_available` ( json_bool | ( file_exists ( string_data wasi_clang ) ) ( file_exists ( string_data runtime_wasm ) ) ) )
@@ -1647,7 +1553,6 @@ s combined_stdout s combined_stderr → v {
 
     : String body ( json_stringify j )
     : HttpResponse r ( response_text 200 ( string_data body ) ) ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( json_free j ) ( string_free nurlc_path ) ( string_free stdlib_dir ) ( string_free wasi_clang ) ( string_free runtime_wasm ) ( string_free body )
     ^ r
 }
 
@@ -1664,13 +1569,12 @@ s combined_stdout s combined_stderr → v {
 // http://localhost:8000 if even that is missing. Returns an owned String.
 @ __mcp_info_base_url HttpRequest req → String {
     : String env ( __public_base_url )
-    ? != ( string_len env ) 0 { ^ env } { ( string_free env ) }
+    ? != ( string_len env ) 0 { ^ env } {}
     : ~ s scheme `http`
     : ?String proto_opt ( header_get . req headers `X-Forwarded-Proto` )
     ?? proto_opt {
         T proto → {
             ? != 0 ( nurl_str_eq ( string_data proto ) `https` ) { = scheme `https` } {}
-            ( string_free proto )
         }
         F _ → {}
     }
@@ -1681,7 +1585,6 @@ s combined_stdout s combined_stderr → v {
             ( string_push_str out scheme )
             ( string_push_str out `://` )
             ( string_push_str out ( string_data host ) )
-            ( string_free host )
             ^ out
         }
         F _ → { ^ ( string_from `http://localhost:8000` ) }
@@ -1745,7 +1648,6 @@ s combined_stdout s combined_stderr → v {
     : String body ( json_stringify j )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( json_free j ) ( string_free body ) ( string_free base ) ( string_free mcp_url )
     ^ r
 }
 
@@ -1858,7 +1760,6 @@ s combined_stdout s combined_stderr → v {
     : String body ( json_stringify doc )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( json_free doc ) ( string_free body )
     ^ r
 }
 
@@ -1873,7 +1774,6 @@ s combined_stdout s combined_stderr → v {
     ( string_push_str html `<!doctype html>\n<html lang="en"><head>\n<meta charset="utf-8" />\n<title>NURL Compiler API · Swagger UI</title>\n<meta name="viewport" content="width=device-width,initial-scale=1" />\n<link rel="icon" type="image/svg+xml" href="/favicon.svg" />\n<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />\n<style>body{margin:0;background:#0f1115;color:#e6e6e6}.swagger-ui{color:#e6e6e6}.swagger-ui .info .title,.swagger-ui .info p,.swagger-ui .info li,.swagger-ui .info a,.swagger-ui .info h1,.swagger-ui .info h2,.swagger-ui .info h3,.swagger-ui .info h4,.swagger-ui .info h5{color:#e6e6e6}.swagger-ui .scheme-container{background:#171a21;box-shadow:none}.swagger-ui .opblock-tag{color:#dbeeff;border-bottom-color:#2a2f3a}.swagger-ui .opblock-tag small{color:#9aa4b2}.swagger-ui .opblock .opblock-summary-path,.swagger-ui .opblock .opblock-summary-path__deprecated,.swagger-ui .opblock .opblock-summary-description{color:#e6e6e6}.swagger-ui .opblock-description-wrapper p,.swagger-ui .opblock-title_normal p,.swagger-ui .markdown p,.swagger-ui .markdown li,.swagger-ui .renderedMarkdown p,.swagger-ui .renderedMarkdown li{color:#cfd6e0}.swagger-ui .opblock{background:#141821;border-color:#2a2f3a;box-shadow:none}.swagger-ui .opblock .opblock-section-header{background:#171a21;box-shadow:none}.swagger-ui .opblock .opblock-section-header h4,.swagger-ui .opblock .opblock-section-header>label{color:#e6e6e6}.swagger-ui .tab li,.swagger-ui .parameter__name,.swagger-ui .parameter__type,.swagger-ui table thead tr td,.swagger-ui table thead tr th,.swagger-ui .response-col_status,.swagger-ui .response-col_links,.swagger-ui .col_header,.swagger-ui label{color:#e6e6e6}.swagger-ui .parameter__in,.swagger-ui .parameter__extension{color:#9aa4b2}.swagger-ui table{border-color:#2a2f3a}.swagger-ui table tbody tr td{color:#cfd6e0;border-color:#2a2f3a}.swagger-ui .responses-inner h4,.swagger-ui .responses-inner h5{color:#e6e6e6}.swagger-ui input[type=text],.swagger-ui input[type=password],.swagger-ui input[type=email],.swagger-ui textarea,.swagger-ui select{background:#0f1115;color:#e6e6e6;border-color:#2a2f3a}.swagger-ui section.models{border-color:#2a2f3a}.swagger-ui section.models h4,.swagger-ui .model-title,.swagger-ui .model{color:#e6e6e6}.swagger-ui section.models .model-container{background:#141821}.swagger-ui .prop-type{color:#7fd0ff}.swagger-ui .prop-format{color:#9aa4b2}.swagger-ui svg{fill:#cfd6e0}.swagger-ui .model-toggle:after{filter:invert(1)}.swagger-ui .topbar{background:#171a21}.swagger-ui .btn{color:#e6e6e6;border-color:#3a4150;background:#1a1f29}.swagger-ui .opblock-body pre.microlight,.swagger-ui .highlight-code>.microlight{background:#0b0d11;color:#e6e6e6}.swagger-ui .info .base-url,.swagger-ui .info hgroup.main a{color:#9aa4b2}</style>\n</head><body>\n<div id="swagger-ui"></div>\n<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>\n<script>\nwindow.onload = () => {\n  window.ui = SwaggerUIBundle({\n    url: '/openapi.json',\n    dom_id: '#swagger-ui',\n    deepLinking: true,\n    presets: [SwaggerUIBundle.presets.apis],\n    layout: 'BaseLayout'\n  });\n};\n</script>\n</body></html>\n` )
     : HttpResponse r ( response_text 200 ( string_data html ) )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
-    ( string_free html )
     ^ r
 }
 
@@ -1888,7 +1788,6 @@ s combined_stdout s combined_stderr → v {
     : String body ( json_stringify j )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( string_free body )
     ^ r
 }
 
@@ -1907,7 +1806,6 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set j `bearer_methods_supported` methods )
     ( json_obj_set j `scopes_supported` ( json_arr_new ) )
     : HttpResponse r ( __json_response_200 j )
-    ( json_free j ) ( string_free base ) ( string_free mcp_url )
     ^ r
 }
 
@@ -1918,7 +1816,6 @@ s combined_stdout s combined_stderr → v {
     ( string_push_str u base )
     ( string_push_str u suffix )
     ( json_obj_set j k ( json_str_lit ( string_data u ) ) )
-    ( string_free u )
 }
 
 @ h_oauth_auth_server HttpRequest req Params params → HttpResponse {
@@ -1944,7 +1841,6 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set j `code_challenge_methods_supported` cm )
     ( json_obj_set j `scopes_supported` ( json_arr_new ) )
     : HttpResponse r ( __json_response_200 j )
-    ( json_free j ) ( string_free base )
     ^ r
 }
 
@@ -1961,12 +1857,10 @@ s combined_stdout s combined_stderr → v {
     ( string_push_str cid `nurl-mcp-` )
     : i now_ms ( now_ms )
     ( string_push_str cid `synthetic-` )
-    : String now_s ( string_with_cap 24 )
     // We don't have itoa; reuse json_int_to_string semantics via Json.
     : Json tmp ( json_int now_ms )
     : String t_str ( json_stringify tmp )
     ( string_push_str cid ( string_data t_str ) )
-    ( json_free tmp ) ( string_free t_str )
     ( json_obj_set res `client_id` ( json_str_lit ( string_data cid ) ) )
     ( json_obj_set res `client_id_issued_at` ( json_int / now_ms 1000 ) )
     : Json def_gt ( json_arr_new ) ( json_arr_push def_gt ( json_str_lit `authorization_code` ) )
@@ -1996,7 +1890,6 @@ s combined_stdout s combined_stderr → v {
             ( __oauth_echo body res `software_version` )
             ( __oauth_echo body res `software_statement` )
             ( __oauth_echo body res `application_type` )
-            ( json_free body )
         }
         F _ → {}
     }
@@ -2004,7 +1897,6 @@ s combined_stdout s combined_stderr → v {
     : String body ( json_stringify res )
     : HttpResponse r ( response_text 201 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( json_free res ) ( string_free cid ) ( string_free now_s ) ( string_free body ) ( string_free body_str )
     ^ r
 }
 
@@ -2039,23 +1931,12 @@ s combined_stdout s combined_stderr → v {
     ^ found
 }
 
-@ __oauth_pairs_free sink ( Vec QueryPair ) pairs → v {
-    : i n ( vec_len [QueryPair] pairs )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [QueryPair] pairs k ) { T p → ( query_pair_free p ) F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [QueryPair] pairs )
-}
-
 // GET /authorize — instantly redirect with a dummy code. No consent UI.
 @ h_oauth_authorize HttpRequest req Params params → HttpResponse {
     ( nurl_print `[srv] GET /authorize\n` )
     : ( Vec QueryPair ) pairs ( parse_query ( string_data . req query ) )
     : ?String redir_opt ( __oauth_query_get pairs `redirect_uri` )
     : ?String state_opt ( __oauth_query_get pairs `state` )
-    ( __oauth_pairs_free pairs )
     ?? redir_opt {
         T redir → {
             : String loc ( string_with_cap + ( string_len redir ) 64 )
@@ -2067,22 +1948,19 @@ s combined_stdout s combined_stderr → v {
             : Json tmp ( json_int ( now_ms ) )
             : String ts ( json_stringify tmp )
             ( string_push_str loc ( string_data ts ) )
-            ( json_free tmp ) ( string_free ts )
             ?? state_opt {
                 T st → {
                     ( string_push_str loc `&state=` )
                     ( string_push_str loc ( string_data st ) )
-                    ( string_free st )
                 }
                 F _ → {}
             }
             : HttpResponse r ( response_new 302 )
             ( response_set_header r `Location` ( string_data loc ) )
-            ( string_free loc ) ( string_free redir )
             ^ r
         }
         F _ → {
-            ?? state_opt { T st → { ( string_free st ) } F _ → {} }
+            ?? state_opt { T st → {} F _ → {} }
             ^ ( response_text 400 `{"error":"redirect_uri required"}` )
         }
     }
@@ -2098,13 +1976,11 @@ s combined_stdout s combined_stderr → v {
     : Json tmp ( json_int ( now_ms ) )
     : String t_str ( json_stringify tmp )
     ( string_push_str tok ( string_data t_str ) )
-    ( json_free tmp ) ( string_free t_str )
     ( json_obj_set j `access_token` ( json_str_lit ( string_data tok ) ) )
     ( json_obj_set j `token_type` ( json_str_lit `Bearer` ) )
     ( json_obj_set j `expires_in` ( json_int 31536000 ) )
     ( json_obj_set j `scope` ( json_str_lit `` ) )
     : HttpResponse r ( __json_response_200 j )
-    ( json_free j ) ( string_free tok )
     ^ r
 }
 
@@ -2119,7 +1995,6 @@ s combined_stdout s combined_stderr → v {
             ?? fname_opt { T fname → {
                     // Path-traversal defence — refuse `..` in either segment.
                     ? | ( _has_dotdot_segment ( string_data bid ) ) ( _has_dotdot_segment ( string_data fname ) ) {
-                        ( string_free bid ) ( string_free fname )
                         ^ ( response_text 403 `forbidden\n` )
                     } {}
                     : String out_dir_base ( get_output_dir )
@@ -2133,25 +2008,19 @@ s combined_stdout s combined_stderr → v {
                             : HttpResponse r ( response_new 200 )
                             ( response_set_header r `Content-Type` mime )
                             ( response_set_body_bytes r body )
-                            ( vec_free [u] body )
-                            ( string_free ext ) ( string_free fpath ) ( string_free build_dir )
-                            ( string_free out_dir_base ) ( string_free bid ) ( string_free fname )
                             ^ r
                         }
                         F _ → {
-                            ( string_free fpath ) ( string_free build_dir )
-                            ( string_free out_dir_base ) ( string_free bid ) ( string_free fname )
                             ^ ( response_text 404 `not found\n` )
                         }
                     }
-                } F _ → { ( string_free bid ) ^ ( response_text 400 `{"error":"filename missing"}\n` ) } }
+                } F _ → { ^ ( response_text 400 `{"error":"filename missing"}\n` ) } }
         } F _ → { ^ ( response_text 400 `{"error":"build_id missing"}\n` ) } }
 }
 
 @ h_static HttpRequest req Params params → HttpResponse {
     : String sdir ( get_static_dir )
     : HttpResponse res ( serve_static ( string_data sdir ) req )
-    ( string_free sdir )
     ^ res
 }
 
@@ -2177,11 +2046,9 @@ s combined_stdout s combined_stderr → v {
             : String body ( json_stringify obj )
             : HttpResponse hr ( response_text 200 ( string_data body ) )
             ( response_set_header hr `Content-Type` `application/json` )
-            ( json_free obj ) ( string_free source ) ( string_free edir ) ( string_free fpath ) ( string_free body )
             ^ hr
         }
         F _ → {
-            ( string_free edir ) ( string_free fpath )
             ^ ( response_text 404 `{"error":"example not found"}\n` )
         }
     }
@@ -2207,12 +2074,9 @@ s combined_stdout s combined_stderr → v {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` mime )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
-            ( string_free ext ) ( string_free fpath ) ( string_free build_dir ) ( string_free out_dir_base )
             ^ r
         }
         F _ → {
-            ( string_free fpath ) ( string_free build_dir ) ( string_free out_dir_base )
             ^ ( response_text 404 `not found\n` )
         }
     }
@@ -2228,14 +2092,12 @@ s combined_stdout s combined_stderr → v {
         T body → {
             : String ext ( path_extension ( string_data full ) )
             : s mime ( mime_for_ext ( string_data ext ) )
-            ( string_free ext ) ( string_free full )
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` mime )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
-        F _ → { ( string_free full ) ^ ( response_text 404 `not found\n` ) }
+        F _ → { ^ ( response_text 404 `not found\n` ) }
     }
 }
 
@@ -2250,45 +2112,35 @@ s combined_stdout s combined_stderr → v {
 
     // ── POST routes (build endpoints) ──
     ? & is_post ( string_eq ptmp ( string_from `/build` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_build req ( params_new ) )
     } {}
     ? & is_post ( string_eq ptmp ( string_from `/build_wasm` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_build_wasm req ( params_new ) )
     } {}
     ? & is_post ( string_eq ptmp ( string_from `/build_windows` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_build_windows req ( params_new ) )
     } {}
     ? & is_post ( string_eq ptmp ( string_from `/build_macos` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_build_macos req ( params_new ) )
     } {}
 
     // ── GET literal routes ──
     ? & is_get ( string_eq ptmp ( string_from `/health` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_health req ( params_new ) )
     } {}
     ? & is_get ( string_eq ptmp ( string_from `/mcp-info` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_mcp_info req ( params_new ) )
     } {}
     ? & is_get ( string_eq ptmp ( string_from `/examples` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_examples req ( params_new ) )
     } {}
     ? & is_get ( string_eq ptmp ( string_from `/favicon.ico` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_favicon req ( params_new ) )
     } {}
     ? & is_get ( string_eq ptmp ( string_from `/favicon.svg` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_favicon req ( params_new ) )
     } {}
     ? & is_get ( string_eq ptmp ( string_from `/` ) ) {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_static req ( params_new ) )
     } {}
 
@@ -2297,9 +2149,7 @@ s combined_stdout s combined_stderr → v {
     ? & is_get ( string_starts_with ptmp `/examples/` ) {
         : i plen ( string_len ptmp )
         : String name ( string_substr ptmp 10 - plen 10 )
-        ( string_free mtmp ) ( string_free ptmp )
         : HttpResponse res ( h_get_example_for req name )
-        ( string_free name )
         ^ res
     } {}
 
@@ -2308,19 +2158,15 @@ s combined_stdout s combined_stderr → v {
         : i plen ( string_len ptmp )
         : String tail ( string_substr ptmp 10 - plen 10 )
         : ?i slash ( string_index_of tail `/` )
-        ( string_free mtmp )
         ?? slash {
             T sx → {
                 : i tlen ( string_len tail )
                 : String build_id ( string_substr tail 0 sx )
                 : String fname ( string_substr tail + sx 1 - - tlen sx 1 )
-                ( string_free tail ) ( string_free ptmp )
                 : HttpResponse res ( h_download_for req build_id fname )
-                ( string_free build_id ) ( string_free fname )
                 ^ res
             }
             F _ → {
-                ( string_free tail ) ( string_free ptmp )
                 ^ ( response_text 400 `{"error":"download path malformed"}\n` )
             }
         }
@@ -2330,20 +2176,16 @@ s combined_stdout s combined_stderr → v {
     ? & is_get ( string_starts_with ptmp `/static/` ) {
         : i plen ( string_len ptmp )
         : String tail ( string_substr ptmp 8 - plen 8 )
-        ( string_free mtmp ) ( string_free ptmp )
         : HttpResponse res ( h_static_for req tail )
-        ( string_free tail )
         ^ res
     } {}
 
     // ── Catch-all GET → serve from `static/` ──
     ? is_get {
-        ( string_free mtmp ) ( string_free ptmp )
         ^ ( h_static req ( params_new ) )
     } {}
 
     // ── Fallback ──
-    ( string_free mtmp ) ( string_free ptmp )
     ^ ( response_text 404 `not found\n` )
 }
 
@@ -2351,13 +2193,11 @@ s combined_stdout s combined_stderr → v {
     : String sdir ( get_static_dir )
     : String fp ( path_join ( string_data sdir ) `favicon.svg` )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free sdir ) ( string_free fp )
     ?? rd {
         T body → {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` `image/svg+xml` )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → { ^ ( response_text 404 `not found\n` ) }
@@ -2372,26 +2212,21 @@ s combined_stdout s combined_stderr → v {
     ?? tail_opt {
         T tail → {
             ? ( _has_dotdot_segment ( string_data tail ) ) {
-                ( string_free tail )
                 ^ ( response_text 403 `forbidden\n` )
             } {}
             : String sdir ( get_static_dir )
             : String full ( path_join ( string_data sdir ) ( string_data tail ) )
-            ( string_free sdir ) ( string_free tail )
             : !( Vec u ) IoErr rd ( read_file_bytes ( string_data full ) )
             ?? rd {
                 T body → {
                     : String ext ( path_extension ( string_data full ) )
                     : s mime ( mime_for_ext ( string_data ext ) )
-                    ( string_free ext )
-                    ( string_free full )
                     : HttpResponse r ( response_new 200 )
                     ( response_set_header r `Content-Type` mime )
                     ( response_set_body_bytes r body )
-                    ( vec_free [u] body )
                     ^ r
                 }
-                F _ → { ( string_free full ) ^ ( response_text 404 `not found\n` ) }
+                F _ → { ^ ( response_text 404 `not found\n` ) }
             }
         }
         F _ → { ^ ( response_text 400 `{"error":"path missing"}\n` ) }
@@ -2814,7 +2649,6 @@ s combined_stdout s combined_stderr → v {
                     ( __md_close_block state out )
                     : String info ( string_substr line 3 - line_len 3 )
                     ( __md_open_code out ( string_data info ) )
-                    ( string_free info )
                     = in_code T
                 } {
                     // Heading?
@@ -2834,7 +2668,6 @@ s combined_stdout s combined_stderr → v {
                         ( string_push_str out `</h` )
                         ( string_push_str out ( string_data hn ) )
                         ( string_push_str out `>\n` )
-                        ( string_free hn )
                     } {
                         // Horizontal rule?
                         ? ( __md_is_hr lp line_len ) {
@@ -2869,7 +2702,6 @@ s combined_stdout s combined_stderr → v {
                                         ? ( __md_has_pipe lp line_len ) {
                                             : String dline ( __md_read_line src next_pos n )
                                             = is_table ( __md_is_table_delim ( string_data dline ) ( string_len dline ) )
-                                            ( string_free dline )
                                         } {}
                                         ? is_table {
                                             ( __md_close_block state out )
@@ -2889,7 +2721,6 @@ s combined_stdout s combined_stderr → v {
                                                     ( string_push_str out `</tr>\n` )
                                                     = tp ( __md_next_pos src tp n )
                                                 } { = done T }
-                                                ( string_free row )
                                             }
                                             ( string_push_str out `</tbody>\n</table>\n` )
                                             = next_pos tp
@@ -2903,12 +2734,10 @@ s combined_stdout s combined_stderr → v {
                 } }
         }
 
-        ( string_free line )
         = pos next_pos
     }
     ( __md_close_block state out )
     ? in_code { ( string_push_str out `</code></pre>\n` ) } {}
-    ( vec_free [i] state )
     ^ out
 }
 
@@ -2975,14 +2804,10 @@ s combined_stdout s combined_stderr → v {
             : ~ i ki 0
             ~ < ki blen { : ?u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char src c ) } F → {} } = ki + ki 1 }
             ( _string_seal src )
-            ( vec_free [u] body )
             : String rendered ( md_to_html ( string_data src ) )
-            ( string_free src )
             : String page ( __doc_page_html title rendered raw_path )
-            ( string_free rendered )
             : HttpResponse r ( response_text 200 ( string_data page ) )
             ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
-            ( string_free page )
             ^ r
         }
         F _ → { ^ ( response_text 404 not_found_msg ) }
@@ -3009,7 +2834,6 @@ s combined_stdout s combined_stderr → v {
     : HttpResponse r ? is_md
     ( __serve_md_as_html ( string_data fp ) rel ( string_data rawp ) `not found\n` )
     ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `not found\n` )
-    ( string_free root ) ( string_free fp ) ( string_free rawp )
     ^ r
 }
 
@@ -3022,7 +2846,6 @@ s combined_stdout s combined_stderr → v {
             ( string_push_str rel subdir )
             ( string_push_str rel ( string_data tail ) )
             : HttpResponse r ( __serve_repo_doc ( string_data rel ) )
-            ( string_free rel ) ( string_free tail )
             ^ r
         }
         F _ → { ^ ( response_text 400 `path missing\n` ) }
@@ -3041,7 +2864,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /readme\n` )
     : String fp ( get_readme_path )
     : HttpResponse r ( __serve_md_as_html ( string_data fp ) `README` `/readme.md` `README.md not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3056,7 +2878,6 @@ s combined_stdout s combined_stderr → v {
             : ~ i ki 0
             ~ < ki blen { : ?u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char text c ) } F → {} } = ki + ki 1 }
             ( _string_seal text )
-            ( vec_free [u] body )
             // Wrap the EBNF as a single fenced code block and pump it through
             // the markdown renderer so we reuse the doc-page chrome.
             : String wrapped ( string_with_cap + ( string_len text ) 64 )
@@ -3071,18 +2892,13 @@ s combined_stdout s combined_stderr → v {
             ( string_push_char wrapped 10 )
             ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 ) ( string_push_char wrapped 96 )
             ( string_push_char wrapped 10 )
-            ( string_free text )
             : String rendered ( md_to_html ( string_data wrapped ) )
-            ( string_free wrapped )
             : String page ( __doc_page_html `Grammar` rendered `/grammar.ebnf` )
-            ( string_free rendered )
             : HttpResponse hr ( response_text 200 ( string_data page ) )
             ( response_set_header hr `Content-Type` `text/html; charset=utf-8` )
-            ( string_free fp ) ( string_free page )
             ^ hr
         }
         F _ → {
-            ( string_free fp )
             ^ ( response_text 404 `grammar.ebnf not found\n` )
         }
     }
@@ -3099,7 +2915,6 @@ s combined_stdout s combined_stderr → v {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` mime )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → { ^ ( response_text 404 not_found_msg ) }
@@ -3110,7 +2925,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /readme.md\n` )
     : String fp ( get_readme_path )
     : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `README.md not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3118,7 +2932,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /roadmap\n` )
     : String fp ( get_roadmap_path )
     : HttpResponse r ( __serve_md_as_html ( string_data fp ) `Roadmap` `/roadmap.md` `ROADMAP.md not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3126,7 +2939,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /roadmap.md\n` )
     : String fp ( get_roadmap_path )
     : HttpResponse r ( __serve_file_text ( string_data fp ) `text/markdown; charset=utf-8` `ROADMAP.md not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3134,7 +2946,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /grammar.ebnf\n` )
     : String fp ( get_grammar_path )
     : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `grammar.ebnf not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3142,7 +2953,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /LICENSE-MIT\n` )
     : String fp ( get_license_mit_path )
     : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `LICENSE-MIT not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3150,7 +2960,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /LICENSE-APACHE\n` )
     : String fp ( get_license_apache_path )
     : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `LICENSE-APACHE not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3158,7 +2967,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /NOTICE\n` )
     : String fp ( get_notice_path )
     : HttpResponse r ( __serve_file_text ( string_data fp ) `text/plain; charset=utf-8` `NOTICE not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3216,7 +3024,6 @@ s combined_stdout s combined_stderr → v {
                 }
                 = k + k 1
             }
-            ( vec_free [u] body )
             ( string_push_str html `</pre></div></body></html>` )
             : HttpResponse r ( response_text 200 ( string_data html ) )
             ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
@@ -3230,7 +3037,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /license/mit\n` )
     : String fp ( get_license_mit_path )
     : HttpResponse r ( __serve_doc_pre `MIT License` ( string_data fp ) `/LICENSE-MIT` `LICENSE-MIT not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3238,7 +3044,6 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `[srv] GET /license/apache\n` )
     : String fp ( get_license_apache_path )
     : HttpResponse r ( __serve_doc_pre `Apache License 2.0` ( string_data fp ) `/LICENSE-APACHE` `LICENSE-APACHE not found\n` )
-    ( string_free fp )
     ^ r
 }
 
@@ -3252,7 +3057,6 @@ s combined_stdout s combined_stderr → v {
     : String body ( json_stringify arr )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( json_free arr ) ( string_free dir ) ( string_free body )
     ^ r
 }
 
@@ -3264,7 +3068,6 @@ s combined_stdout s combined_stderr → v {
     : String body ( json_stringify arr )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( json_free arr ) ( string_free dir ) ( string_free body )
     ^ r
 }
 
@@ -3282,13 +3085,11 @@ s combined_stdout s combined_stderr → v {
     : String sdir ( get_static_dir )
     : String fp ( path_join ( string_data sdir ) `viewer.html` )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free sdir ) ( string_free fp )
     ?? rd {
         T body → {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → { ^ ( response_text 500 `viewer.html not found in static dir\n` ) }
@@ -3300,13 +3101,11 @@ s combined_stdout s combined_stderr → v {
     : String sdir ( get_static_dir )
     : String fp ( path_join ( string_data sdir ) `gameboydemo.html` )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free sdir ) ( string_free fp )
     ?? rd {
         T body → {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → { ^ ( response_text 500 `gameboydemo.html not found in static dir\n` ) }
@@ -3318,13 +3117,11 @@ s combined_stdout s combined_stderr → v {
     : String sdir ( get_static_dir )
     : String fp ( path_join ( string_data sdir ) `pptchatdemo.html` )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free sdir ) ( string_free fp )
     ?? rd {
         T body → {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → { ^ ( response_text 500 `pptchatdemo.html not found in static dir\n` ) }
@@ -3336,13 +3133,11 @@ s combined_stdout s combined_stderr → v {
     : String sdir ( get_static_dir )
     : String fp ( path_join ( string_data sdir ) `c64demo.html` )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free sdir ) ( string_free fp )
     ?? rd {
         T body → {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → { ^ ( response_text 500 `c64demo.html not found in static dir\n` ) }
@@ -3356,13 +3151,11 @@ s combined_stdout s combined_stderr → v {
     : String sdir ( get_static_dir )
     : String fp ( path_join ( string_data sdir ) `objdetdemo.html` )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free sdir ) ( string_free fp )
     ?? rd {
         T body → {
             : HttpResponse r ( response_new 200 )
             ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
             ( response_set_body_bytes r body )
-            ( vec_free [u] body )
             ^ r
         }
         F _ → { ^ ( response_text 500 `objdetdemo.html not found in static dir\n` ) }
@@ -3402,13 +3195,9 @@ s combined_stdout s combined_stderr → v {
             : String body_s ( json_stringify o )
             : HttpResponse r ( response_text 200 ( string_data body_s ) )
             ( response_set_header r `Content-Type` `application/json` )
-            ( string_free src ) ( json_free o ) ( string_free body_s )
-            ( vec_free [u] body )
-            ( string_free fpath )
             ^ r
         }
         F _ → {
-            ( string_free fpath )
             ^ ( response_text 404 `{"error":"not found"}` )
         }
     }
@@ -3420,7 +3209,6 @@ s combined_stdout s combined_stderr → v {
         T tail → {
             : String dir ( get_stdlib_dir )
             : HttpResponse r ( __serve_module_json req dir ( string_data tail ) )
-            ( string_free dir ) ( string_free tail )
             ^ r
         }
         F _ → { ^ ( response_text 400 `{"error":"path missing"}\n` ) }
@@ -3433,7 +3221,6 @@ s combined_stdout s combined_stderr → v {
         T tail → {
             : String dir ( get_tests_dir )
             : HttpResponse r ( __serve_module_json req dir ( string_data tail ) )
-            ( string_free dir ) ( string_free tail )
             ^ r
         }
         F _ → { ^ ( response_text 400 `{"error":"path missing"}\n` ) }
@@ -3469,7 +3256,6 @@ s combined_stdout s combined_stderr → v {
         ?? e { T j → ( vec_push [String] paths ( string_from ( json_str_data j ) ) ) F _ → {} }
         = i + i 1
     }
-    ( json_free mods )
     : ( @ i String String ) cmp \ String a String b → i { ^ ( nurl_str_cmp ( string_data a ) ( string_data b ) ) }
     ( sort_by [String] paths cmp )
 
@@ -3487,27 +3273,20 @@ s combined_stdout s combined_stderr → v {
                 : String grp ( __sd_group ps )
                 ? == 0 ( nurl_str_eq ( string_data grp ) ( string_data cur ) ) {
                     ( string_push_str md `\n## ` ) ( string_push_str md ( string_data grp ) ) ( string_push_str md `\n\n` )
-                    ( string_free cur ) = cur ( string_from ( string_data grp ) )
+                    = cur ( string_from ( string_data grp ) )
                 } {}
-                ( string_free grp )
                 ( string_push_str md `- [` ) ( string_push_str md ps )
                 ( string_push_str md `](/stdlib-docs/` ) ( string_push_str md ps ) ( string_push_str md `)\n` )
-                ( string_free p )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( string_free cur )
-    ( vec_free [String] paths )
 
     : String html ( md_to_html ( string_data md ) )
-    ( string_free md )
     : String page ( __doc_page_html `NURL Standard Library` html `/stdlib-docs` )
-    ( string_free html )
     : HttpResponse r ( response_text 200 ( string_data page ) )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
-    ( string_free page )
     ^ r
 }
 
@@ -3517,7 +3296,6 @@ s combined_stdout s combined_stderr → v {
         T tail → {
             ( nurl_print `[srv] GET /stdlib-docs/` ) ( nurl_print ( string_data tail ) ) ( nurl_print `\n` )
             ? ( _has_dotdot_segment ( string_data tail ) ) {
-                ( string_free tail )
                 ^ ( response_text 403 `forbidden\n` )
             } {}
             : i tn ( string_len tail )
@@ -3529,7 +3307,6 @@ s combined_stdout s combined_stderr → v {
             : HttpResponse res ?? cr {
                 T src → {
                     : String docmd ( nurldoc_render ( string_data src ) ( string_data rel ) )
-                    ( string_free src )
                     : HttpResponse r ? is_raw {
                         : HttpResponse rr ( response_text 200 ( string_data docmd ) )
                         ( response_set_header rr `Content-Type` `text/markdown; charset=utf-8` )
@@ -3539,18 +3316,14 @@ s combined_stdout s combined_stderr → v {
                         : String rawp ( string_with_cap + ( string_len rel ) 20 )
                         ( string_push_str rawp `/stdlib-docs/` ) ( string_push_str rawp ( string_data rel ) ) ( string_push_str rawp `.md` )
                         : String page ( __doc_page_html ( string_data rel ) html ( string_data rawp ) )
-                        ( string_free html ) ( string_free rawp )
                         : HttpResponse rr ( response_text 200 ( string_data page ) )
                         ( response_set_header rr `Content-Type` `text/html; charset=utf-8` )
-                        ( string_free page )
                         ^ rr
                     }
-                    ( string_free docmd )
                     ^ r
                 }
                 F _ → ( response_text 404 `module not found\n` )
             }
-            ( string_free fp ) ( string_free dir ) ( string_free rel ) ( string_free tail )
             ^ res
         }
         F _ → { ^ ( response_text 400 `path missing\n` ) }
@@ -3595,7 +3368,6 @@ s combined_stdout s combined_stderr → v {
     : String body ( json_stringify arr )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
-    ( json_free arr ) ( string_free body )
     ^ r
 }
 
@@ -3649,10 +3421,9 @@ s combined_stdout s combined_stderr → v {
             : s target ( get_common_json root `target` `` )
             : s filename ( get_common_json root `filename` `main.nu` )
             : s opt ( get_common_json root `opt` `-O2` )
-            ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+            ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s triple ( __zig_triple_for target )
             ? == ( nurl_str_len triple ) 0 {
-                ( json_free root ) ( string_free body_str )
                 ^ ( response_text 400 `{"error":"unknown target id (see GET /targets)"}\n` )
             } {}
             // Caller-selectable compiler flags (allow-listed). Validated
@@ -3661,9 +3432,8 @@ s combined_stdout s combined_stderr → v {
             : s __flags ( get_common_json root `flags` `` )
             : String __badf ( bad_nurlc_flag __flags )
             ? != 0 ( string_len __badf )
-            { ( json_free root ) ( string_free body_str )
+            {
                 ^ ( bad_flag_response __badf ) } {}
-            ( string_free __badf )
             : b is_static ( __zig_is_static target )
             : b is_linux ( __zig_is_linux target )
 
@@ -3676,13 +3446,13 @@ s combined_stdout s combined_stderr → v {
                     ( write_file ( string_data nu_path ) source )
                     : String ll_path ( path_join ( string_data build_dir ) `main.ll` )
                     : ~ String bin_name ( string_from filename )
-                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
+                    ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : String rt_o ( get_runtime_target_o target )
 
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( push_nurlc_flags nurlc_args __flags )
                     ? ! ( __zig_is_x86_64 target ) { ( vec_push [s] nurlc_args `--no-cpu-dispatch` ) } {}
-                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -3698,7 +3468,7 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] zig_args ( string_data rt_o ) )
                                 ? is_linux { ( vec_push [s] zig_args `-lm` ) ( vec_push [s] zig_args `-lpthread` ) } {}
                                 ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
-                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args ) ( vec_free [s] zig_args )
+                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args )
                                 ?? zig_res {
                                     T z_out → {
                                         : i z_rc ( output_exit_code z_out )
@@ -3732,21 +3502,12 @@ s combined_stdout s combined_stderr → v {
                                         : String body ( json_stringify res )
                                         : HttpResponse hr ( response_text 200 ( string_data body ) )
                                         ( response_set_header hr `Content-Type` `application/json` )
-                                        ( string_free combined_stderr ) ( json_free res )
-                                        ( output_free n_out ) ( output_free z_out ) ( json_free root )
-                                        ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
-                                        ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
-                                        ( string_free build_dir ) ( string_free body_str ) ( string_free body )
                                         ^ hr
                                     }
                                     F _ → { ^ ( response_text 500 `{"error":"zig cc invocation failed"}\n` ) }
                                 }
                             } {
                                 : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
-                                ( output_free n_out ) ( json_free root )
-                                ( string_free nu_path ) ( string_free ll_path ) ( string_free bin_name )
-                                ( string_free bin_path ) ( string_free rt_o ) ( string_free build_id )
-                                ( string_free build_dir ) ( string_free body_str )
                                 ^ hr_err
                             }
                         }
@@ -3914,7 +3675,6 @@ s combined_stdout s combined_stderr → v {
     ? ! ( file_exists ( string_data qemu ) ) {
         ( json_obj_set o `ran` ( json_bool F ) )
         ( json_obj_set o `error` ( json_str_lit `qemu is not available in this deployment` ) )
-        ( string_free qemu )
         ^ o
     } {}
     : String secs ( get_boot_secs )
@@ -3958,11 +3718,6 @@ s combined_stdout s combined_stderr → v {
     ( vec_push [s] qa `-kernel` ) ( vec_push [s] qa elf_path )
     ( vec_push [s] qa `-append` ) ( vec_push [s] qa ( string_data append ) )
     : !Output ProcessErr br ( process_run `/usr/bin/timeout` qa `` )
-    ( vec_free [s] qa )
-    ( string_free append )
-    ( string_free secs )
-    ( string_free qemu )
-    ( string_free share )
     ?? br {
         T bout → {
             : i brc ( output_exit_code bout )
@@ -3992,8 +3747,6 @@ s combined_stdout s combined_stderr → v {
             // stderr, not console — without this a failed boot is an
             // empty log and nothing to debug with.
             ( json_obj_set o `qemu_stderr` ( json_str_lit ( output_stderr bout ) ) )
-            ( string_free log )
-            ( output_free bout )
         }
         F _ → {
             ( json_obj_set o `ran` ( json_bool F ) )
@@ -4010,7 +3763,7 @@ s combined_stdout s combined_stderr → v {
     ?? root_res {
         T root → {
             : s source ( get_common_json root `source` `` )
-            ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+            ? == ( nurl_str_len source ) 0 { ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             : s uargs ( get_common_json root `args` `` )
             // Which machine. x86_64 stays the default: it is what every
@@ -4020,7 +3773,6 @@ s combined_stdout s combined_stderr → v {
             // does not boot.
             : s arch ( get_common_json root `arch` `x86_64` )
             ? ! ( __uk_arch_ok arch ) {
-                ( json_free root ) ( string_free body_str )
                 ^ ( response_text 400 `{"error":"arch must be \"x86_64\" or \"aarch64\""}\n` )
             } {}
             : ~ b want_boot F
@@ -4034,7 +3786,7 @@ s combined_stdout s combined_stderr → v {
                     : String nu_path ( path_join ( string_data build_dir ) filename )
                     ( write_file ( string_data nu_path ) source )
                     : ~ String elf_name ( string_from filename )
-                    ? ( string_ends_with elf_name `.nu` ) { : String tmp ( string_substr elf_name 0 - ( string_len elf_name ) 3 ) ( string_free elf_name ) = elf_name tmp } {}
+                    ? ( string_ends_with elf_name `.nu` ) { : String tmp ( string_substr elf_name 0 - ( string_len elf_name ) 3 ) = elf_name tmp } {}
                     ( string_push_str elf_name `.elf` )
                     : String elf_path ( path_join ( string_data build_dir ) ( string_data elf_name ) )
 
@@ -4064,9 +3816,6 @@ s combined_stdout s combined_stderr → v {
                                                         }
                                                         F _ → { = fs_bad T }
                                                     }
-                                                    ( string_free fdir )
-                                                    ( string_free fpath )
-                                                    ( vec_free [u] bytes )
                                                 }
                                                 F _ → { = fs_bad T }
                                             }
@@ -4076,16 +3825,10 @@ s combined_stdout s combined_stderr → v {
                                 }
                                 = ki + ki 1
                             }
-                            : ~ i kf 0
-                            ~ < kf nk { ?? ( vec_get [String] keys kf ) { T ks → ( string_free ks ) F → {} } = kf + kf 1 }
-                            ( vec_free [String] keys )
                         }
                         F → {}
                     }
                     ? fs_bad {
-                        ( json_free root ) ( string_free body_str )
-                        ( string_free nu_path ) ( string_free elf_name ) ( string_free elf_path )
-                        ( string_free fs_dir ) ( string_free build_id ) ( string_free build_dir )
                         ^ ( response_text 400 `{"error":"files: every key must be a relative path with no '..' segments, and every value valid base64"}\n` )
                     } {}
 
@@ -4099,8 +3842,6 @@ s combined_stdout s combined_stderr → v {
                     } {}
                     : String script ( get_unikernel_build_script arch )
                     : !Output ProcessErr t_res ( run_tool ( string_data script ) targs )
-                    ( vec_free [s] targs )
-                    ( string_free script )
 
                     ?? t_res {
                         T t_out → {
@@ -4137,7 +3878,7 @@ s combined_stdout s combined_stderr → v {
                                     : ~ String img_name ( string_from ( string_data elf_name ) )
                                     ? ( string_ends_with img_name `.elf` ) {
                                         : String t2 ( string_substr img_name 0 - ( string_len img_name ) 4 )
-                                        ( string_free img_name ) = img_name t2
+                                        = img_name t2
                                     } {}
                                     ( string_push_str img_name `.Image` )
                                     : String img_path ( path_join ( string_data build_dir ) ( string_data img_name ) )
@@ -4148,8 +3889,6 @@ s combined_stdout s combined_stderr → v {
                                         ?? isz { T sz → sz F _ → 0 } ( string_data build_id ) ) )
                                         = have_image T
                                     } {}
-                                    ( string_free img_path )
-                                    ( string_free img_name )
                                 } {}
                                 // How to run it: the plain command, and the
                                 // networked variant for a program that serves
@@ -4174,20 +3913,11 @@ s combined_stdout s combined_stderr → v {
                                 `Use -accel tcg on a machine without /dev/kvm. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. QEMU takes the .elf shown here; Firecracker and cloud-hypervisor take the .Image beside it (the flat container this architecture uses, where x86 uses the ELF's PVH note) and need an AArch64 host.`
                                 `Use -accel tcg on a machine without /dev/kvm. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. QEMU takes the .elf shown here. This build produced NO flat .Image — llvm-objcopy was not on the builder's PATH (the build stderr says so) — so Firecracker and cloud-hypervisor, which take the .Image on this architecture, have nothing to boot from here: rebuild where llvm-objcopy exists, or objcopy -O binary the .elf yourself.`
                                 `Use -accel tcg on a machine without /dev/kvm. Memory floor: a hello answers on -m 3, an HTTPS server on -m 4; -m 64 leaves headroom. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. The same .elf boots under Firecracker and cloud-hypervisor unchanged — all three read its PVH note.` ) )
-                                ( string_free bc )
-                                ( string_free bn )
                                 ( json_obj_set res `boot` boot )
                             } {}
                             : String body ( json_stringify res )
                             : HttpResponse hr ( response_text 200 ( string_data body ) )
                             ( response_set_header hr `Content-Type` `application/json` )
-                            ( json_free res )
-                            ( string_free body )
-                            ( output_free t_out )
-                            ( json_free root )
-                            ( string_free nu_path ) ( string_free elf_name ) ( string_free elf_path )
-                            ( string_free fs_dir ) ( string_free build_id ) ( string_free build_dir )
-                            ( string_free body_str )
                             ^ hr
                         }
                         F _ → { ^ ( response_text 500 `{"error":"unikernel build process failed to start"}\n` ) }
@@ -4323,8 +4053,6 @@ s combined_stdout s combined_stderr → v {
         T body → {
             : String s_body ( bytes_to_str body )
             : Json result ( __mcp_result_text ( string_data s_body ) )
-            ( vec_free [u] body )
-            ( string_free s_body )
             ^ result
         }
         F _ → { ^ ( __mcp_result_error `file not found` ) }
@@ -4338,8 +4066,6 @@ s combined_stdout s combined_stderr → v {
     ( msearch_walk_nu_files arr dir `` )
     : String body ( json_stringify arr )
     : Json result ( __mcp_result_text ( string_data body ) )
-    ( json_free arr )
-    ( string_free body )
     ^ result
 }
 
@@ -4361,12 +4087,10 @@ s combined_stdout s combined_stderr → v {
     ( string_push_str url ( string_data url_base ) )
     ( string_push_str url endpoint )
     : !Response HttpErr r ( http_post ( string_data url ) ( string_data body_s ) `application/json` )
-    ( string_free body_s ) ( string_free url ) ( string_free url_base )
     ?? r {
         T resp → {
             : s text ( http_body_str resp )
             : Json result ( __mcp_result_text text )
-            ( response_free resp )
             ^ result
         }
         F e → {
@@ -4374,7 +4098,6 @@ s combined_stdout s combined_stderr → v {
             ( string_push_str msg `loopback build call failed: ` )
             ( string_push_str msg ( http_err_name e ) )
             : Json result ( __mcp_result_error ( string_data msg ) )
-            ( string_free msg )
             ^ result
         }
     }
@@ -4397,7 +4120,6 @@ s combined_stdout s combined_stderr → v {
     ? != 0 ( nurl_str_len __flags ) { ( json_obj_set body `flags` ( json_str_lit __flags ) ) } {}
     ? links_only { ( json_obj_set body `links_only` ( json_bool T ) ) } {}
     : Json result ( __mcp_build_endpoint endpoint body )
-    ( json_free body )
     ^ result
 }
 
@@ -4446,7 +4168,6 @@ s combined_stdout s combined_stderr → v {
     // values, so the files object is cloned in.
     ?? ( json_obj_get args `files` ) { T fo → { ( json_obj_set body `files` ( json_clone fo ) ) } F → {} }
     : Json result ( __mcp_build_endpoint `/build_unikernel` body )
-    ( json_free body )
     ^ result
 }
 
@@ -4463,7 +4184,6 @@ s combined_stdout s combined_stderr → v {
     : s __flags ( __mcp_args_get `flags` args `` )
     ? != 0 ( nurl_str_len __flags ) { ( json_obj_set body `flags` ( json_str_lit __flags ) ) } {}
     : Json result ( __mcp_build_endpoint `/build_target` body )
-    ( json_free body )
     ^ result
 }
 
@@ -4483,7 +4203,6 @@ s combined_stdout s combined_stderr → v {
 @ __lc_owned s raw → String {
     : String tmp ( string_from raw )
     : String lc ( string_to_lower tmp )
-    ( string_free tmp )
     ^ lc
 }
 
@@ -4559,7 +4278,6 @@ s combined_stdout s combined_stderr → v {
                 ~ & < te bn != ( string_get body te ) 10 { = te + te 1 }
                 : String title ( string_substr body 0 te )
                 : String title_lc ( string_to_lower title )
-                ( string_free title )
                 : ~ i score 0
                 : i tn ( vec_len [String] terms )
                 : ~ i tk 0
@@ -4576,14 +4294,11 @@ s combined_stdout s combined_stderr → v {
                     }
                     = tk + tk 1
                 }
-                ( string_free title_lc )
                 ( vec_push [String] m_prov ( string_from ( string_data prov ) ) )
                 ( vec_push [String] m_body ( string_from ( string_data body ) ) )
                 ( vec_push [i] m_score score )
             } {}
-            ( string_free hay_lc ) ( string_free hay ) ( string_free prov )
         } {}
-        ( string_free body )
         ( string_clear ent )
     } {}
 }
@@ -4606,13 +4321,13 @@ s combined_stdout s combined_stderr → v {
                 : i ln ( string_len line )
                 ? ( string_starts_with line `## ` ) {
                     ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
-                    ( string_free cur_rel ) = cur_rel ( string_substr line 3 - ln 3 )
-                    ( string_free cur_rel_lc ) = cur_rel_lc ( string_to_lower cur_rel )
-                    ( string_free cur_cat ) = cur_cat ( string_from `` )
+                    = cur_rel ( string_substr line 3 - ln 3 )
+                    = cur_rel_lc ( string_to_lower cur_rel )
+                    = cur_cat ( string_from `` )
                 } {
                     ? ( string_starts_with line `### ` ) {
                         ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
-                        ( string_free cur_cat ) = cur_cat ( string_substr line 4 - ln 4 )
+                        = cur_cat ( string_substr line 4 - ln 4 )
                     } {
                         // Both bullet styles appear in the file: `- ` in the
                         // 0.9.1+ sections, `* ` in the older ones.
@@ -4643,8 +4358,6 @@ s combined_stdout s combined_stderr → v {
         = li + li 1
     }
     ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
-    ( string_free cur_rel ) ( string_free cur_rel_lc ) ( string_free cur_cat ) ( string_free ent )
-    ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
 }
 
 @ __cl_idx_line String idx String rel i count → v {
@@ -4670,7 +4383,7 @@ s combined_stdout s combined_stderr → v {
                 : i ln ( string_len line )
                 ? ( string_starts_with line `## ` ) {
                     ? > ( string_len cur_rel ) 0 { ( __cl_idx_line idx cur_rel cur_count ) } {}
-                    ( string_free cur_rel ) = cur_rel ( string_substr line 3 - ln 3 )
+                    = cur_rel ( string_substr line 3 - ln 3 )
                     = cur_count 0
                     = releases + releases 1
                 } {
@@ -4685,8 +4398,6 @@ s combined_stdout s combined_stderr → v {
         = li + li 1
     }
     ? > ( string_len cur_rel ) 0 { ( __cl_idx_line idx cur_rel cur_count ) } {}
-    ( string_free cur_rel )
-    ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
 
     : String hdr ( string_with_cap + ( string_len idx ) 256 )
     ( string_push_str hdr `CHANGELOG.md — ` )
@@ -4696,7 +4407,6 @@ s combined_stdout s combined_stderr → v {
     ( string_push_str hdr ` entries. Call again with 'query' (space-separated terms, ALL must match, case-insensitive) and/or 'release' (e.g. 0.9.6 or Unreleased) to fetch full entries; 'limit' defaults to 10.\n\n` )
     ( string_push_str hdr ( string_data idx ) )
     : Json result ( __mcp_result_text ( string_data hdr ) )
-    ( string_free hdr ) ( string_free idx )
     ^ result
 }
 
@@ -4710,14 +4420,11 @@ s combined_stdout s combined_stderr → v {
 
     : String fp ( get_changelog_path )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free fp )
     ?? rd {
         T bytes → {
             : String src ( bytes_to_str bytes )
-            ( vec_free [u] bytes )
             ? & == ( nurl_str_len query ) 0 == ( nurl_str_len release ) 0 {
                 : Json r ( __changelog_index_result src )
-                ( string_free src )
                 ^ r
             } {}
 
@@ -4768,9 +4475,9 @@ s combined_stdout s combined_stderr → v {
             ~ < ek matched {
                 : i idx ?? ( vec_get [i] order ek ) { T v → v F _ → 0 }
                 : ~ String prov ( string_new )
-                ?? ( vec_get [String] m_prov idx ) { T v → { ( string_free prov ) = prov v } F _ → {} }
+                ?? ( vec_get [String] m_prov idx ) { T v → { = prov v } F _ → {} }
                 : ~ String bod ( string_new )
-                ?? ( vec_get [String] m_body idx ) { T v → { ( string_free bod ) = bod v } F _ → {} }
+                ?? ( vec_get [String] m_body idx ) { T v → { = bod v } F _ → {} }
                 ? & & ! compact < emitted limit < ( string_len out ) ( __cl_out_cap ) {
                     ( string_push_str out ( string_data prov ) )
                     ( string_push_char out 10 )
@@ -4830,12 +4537,6 @@ s combined_stdout s combined_stderr → v {
                 ( string_push_str hdr ` more matching entries omitted (byte cap) — narrow the query or filter by release.\n` )
             } {}
             : Json result ( __mcp_result_text ( string_data hdr ) )
-            ( string_free hdr ) ( string_free out ) ( string_free rel_lc )
-            ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
-            ( vec_free_with [String] m_prov \ String v → v { ( string_free v ) } )
-            ( vec_free_with [String] m_body \ String v → v { ( string_free v ) } )
-            ( vec_free [i] m_score ) ( vec_free [i] order )
-            ( string_free q_lc ) ( vec_free [i] ctr ) ( string_free src )
             ^ result
         }
         F _ → { ^ ( __mcp_result_error `CHANGELOG.md not found` ) }
@@ -4892,9 +4593,7 @@ s combined_stdout s combined_stderr → v {
     ? > ( nurl_str_len package ) 0 {
         : String rb0 ( msearch_default_registry )
         : String md0 ( msearch_api_package ( string_data rb0 ) package version )
-        ( string_free rb0 )
         ? == ( string_len md0 ) 0 {
-            ( string_free md0 )
             ^ ( __mcp_result_error `package not found or has no src/*.nu — check the name (see nurl_grep where='packages'); 'version' defaults to the latest` )
         } {}
         // Prepend the import recipe: the module headings below are '# <mod>.nu';
@@ -4914,21 +4613,16 @@ s combined_stdout s combined_stderr → v {
         ( string_push_str hint `/src/nn.nu).\n\n` )
         ( string_push_str hint ( string_data md0 ) )
         : Json r0 ( __mcp_result_text ( string_data hint ) )
-        ( string_free hint )
-        ( string_free md0 )
         ^ r0
     } {}
     ? > ( nurl_str_len module ) 0 {
         ? ( _has_dotdot_segment module ) { ^ ( __mcp_result_error `bad 'module'` ) } {}
         : String sd ( get_stdlib_dir )
         : String md ( msearch_api_module ( string_data sd ) module )
-        ( string_free sd )
         ? == ( string_len md ) 0 {
-            ( string_free md )
             ^ ( __mcp_result_error `module not found — 'module' is a path from nurl_list_stdlib, e.g. ext/csv.nu` )
         } {}
         : Json r ( __mcp_result_text ( string_data md ) )
-        ( string_free md )
         ^ r
     } {}
     ? == ( nurl_str_len query ) 0 {
@@ -4938,9 +4632,7 @@ s combined_stdout s combined_stderr → v {
     : String ed ( get_examples_dir )
     : String rb ( msearch_default_registry )
     : String text ( msearch_api_query ( string_data sd ) ( string_data ed ) ( string_data rb ) query )
-    ( string_free sd ) ( string_free ed ) ( string_free rb )
     : Json result ( __mcp_result_text ( string_data text ) )
-    ( string_free text )
     ^ result
 }
 
@@ -4969,18 +4661,13 @@ s combined_stdout s combined_stderr → v {
         : ( Vec i ) hits ( vec_new [i] )
         ( vec_push [i] hits 0 )
         : String text ( msearch_docs_query ( string_data dd ) query hits )
-        ( vec_free [i] hits )
-        ( string_free dd )
         : Json r ( __mcp_result_text ( string_data text ) )
-        ( string_free text )
         ^ r
     } {}
 
     ? == ( nurl_str_len name ) 0 {
         : String listing ( msearch_docs_list ( string_data dd ) )
-        ( string_free dd )
         : Json r ( __mcp_result_text ( string_data listing ) )
-        ( string_free listing )
         ^ r
     } {}
 
@@ -4989,12 +4676,9 @@ s combined_stdout s combined_stderr → v {
     ? outline {
         : String o ( msearch_docs_outline ( string_data dd ) name )
         ? > ( string_len o ) 0 {
-            ( string_free dd )
             : Json r ( __mcp_result_text ( string_data o ) )
-            ( string_free o )
             ^ r
         } {}
-        ( string_free o )
     } {}
 
     // name= + section= — one section, bounded by the next heading of
@@ -5003,48 +4687,35 @@ s combined_stdout s combined_stderr → v {
     ? > ( nurl_str_len section ) 0 {
         : String sec ( msearch_docs_section ( string_data dd ) name section )
         ? > ( string_len sec ) 0 {
-            ( string_free dd )
             : Json r ( __mcp_result_text ( string_data sec ) )
-            ( string_free sec )
             ^ r
         } {}
-        ( string_free sec )
         : String o ( msearch_docs_outline ( string_data dd ) name )
         ? > ( string_len o ) 0 {
-            ( string_free dd )
             : String msg ( string_with_cap + ( string_len o ) 128 )
             ( string_push_str msg `no section matches '` )
             ( string_push_str msg section )
             ( string_push_str msg `'. ` )
             ( string_push_str msg ( string_data o ) )
-            ( string_free o )
             : Json e ( __mcp_result_error ( string_data msg ) )
-            ( string_free msg )
             ^ e
         } {}
-        ( string_free o )
     } {}
 
     : String text ( msearch_docs_read ( string_data dd ) name offset )
     ? == ( string_len text ) 0 {
         // Unknown name → answer with what DOES exist rather than a bare
         // error, so the model's next call is the right one.
-        ( string_free text )
         : String listing ( msearch_docs_list ( string_data dd ) )
-        ( string_free dd )
         : String msg ( string_with_cap + ( string_len listing ) 128 )
         ( string_push_str msg `no document matches '` )
         ( string_push_str msg name )
         ( string_push_str msg `'. ` )
         ( string_push_str msg ( string_data listing ) )
-        ( string_free listing )
         : Json e ( __mcp_result_error ( string_data msg ) )
-        ( string_free msg )
         ^ e
     } {}
-    ( string_free dd )
     : Json result ( __mcp_result_text ( string_data text ) )
-    ( string_free text )
     ^ result
 }
 
@@ -5088,17 +4759,15 @@ s combined_stdout s combined_stderr → v {
     : b w_tests | all >= ( nurl_str_find where_s `test` ) 0
     : b w_packages | all >= ( nurl_str_find where_s `package` ) 0
     : ~ String sd ( string_new )
-    ? w_stdlib { ( string_free sd ) = sd ( get_stdlib_dir ) } {}
+    ? w_stdlib { = sd ( get_stdlib_dir ) } {}
     : ~ String ed ( string_new )
-    ? w_examples { ( string_free ed ) = ed ( get_examples_dir ) } {}
+    ? w_examples { = ed ( get_examples_dir ) } {}
     : ~ String td ( string_new )
-    ? w_tests { ( string_free td ) = td ( get_tests_dir ) } {}
+    ? w_tests { = td ( get_tests_dir ) } {}
     : ~ String rb ( string_new )
-    ? w_packages { ( string_free rb ) = rb ( msearch_default_registry ) } {}
+    ? w_packages { = rb ( msearch_default_registry ) } {}
     : String text ( msearch_grep pattern word ( string_data sd ) ( string_data ed ) ( string_data td ) ( string_data rb ) )
-    ( string_free sd ) ( string_free ed ) ( string_free td ) ( string_free rb )
     : Json result ( __mcp_result_text ( string_data text ) )
-    ( string_free text )
     ^ result
 }
 
@@ -5120,13 +4789,11 @@ s combined_stdout s combined_stderr → v {
 
 @ __mcp_list_dir_result String dir → Json {
     : Json result ( __mcp_list_files_result ( string_data dir ) )
-    ( string_free dir )
     ^ result
 }
 
 @ __mcp_read_owned_path String fp → Json {
     : Json result ( __mcp_read_file_result ( string_data fp ) )
-    ( string_free fp )
     ^ result
 }
 
@@ -5135,12 +4802,10 @@ s combined_stdout s combined_stderr → v {
 @ __mcp_read_under String dir Json args → Json {
     : s rel ( __mcp_args_get `name` args `` )
     ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
-        ( string_free dir )
         ^ ( __mcp_result_error `bad or missing 'name'` )
     } {}
     : String fp ( path_join ( string_data dir ) rel )
     : Json result ( __mcp_read_file_result ( string_data fp ) )
-    ( string_free dir ) ( string_free fp )
     ^ result
 }
 
@@ -5158,17 +4823,14 @@ s combined_stdout s combined_stderr → v {
     : Json out ( json_obj_new )
     ( json_obj_set out `mimeType` ( json_str_lit mime ) )
     ( json_obj_set out `text` ( json_str_lit ( string_data body ) ) )
-    ( string_free body )
     ^ out
 }
 
 @ __mcp_res_file s mime String fp → Json {
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
-    ( string_free fp )
     ?? rd {
         T body → {
             : String s_body ( bytes_to_str body )
-            ( vec_free [u] body )
             ^ ( __mcp_res_text mime s_body )
         }
         F _ → { ^ ( json_null ) }
@@ -5179,9 +4841,7 @@ s combined_stdout s combined_stderr → v {
 @ __mcp_res_listing String dir → Json {
     : Json arr ( json_arr_new )
     ( msearch_walk_nu_files arr ( string_data dir ) `` )
-    ( string_free dir )
     : String body ( json_stringify arr )
-    ( json_free arr )
     ^ ( __mcp_res_text `application/json` body )
 }
 
@@ -5195,11 +4855,9 @@ s combined_stdout s combined_stderr → v {
         F _ → {}
     }
     ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
-        ( string_free dir )
         ^ ( json_null )
     } {}
     : String fp ( path_join ( string_data dir ) rel )
-    ( string_free dir )
     ^ ( __mcp_res_file `text/plain` fp )
 }
 
@@ -5301,10 +4959,8 @@ s combined_stdout s combined_stderr → v {
     : String nm ( get_mcp_server_name )
     : String ver ( get_mcp_server_version )
     : McpServer srv ( mcp_server_new ( string_data nm ) ( string_data ver ) )
-    ( string_free nm ) ( string_free ver )
     : String instr ( __mcp_instructions_text )
     ( mcp_server_set_instructions srv ( string_data instr ) )
-    ( string_free instr )
     ( mcp_server_set_cache_policy srv 3600000 3600000 `public` )
 
     ( mcp_server_add_tool_full srv `nurl_build_native`
@@ -5420,11 +5076,10 @@ s combined_stdout s combined_stderr → v {
         : HttpResponse resp ( base req )
         : ?String had_sid ( header_get . req headers `Mcp-Session-Id` )
         ?? had_sid {
-            T s → ( string_free s )
+            T s → {}
             F _ → {
                 : String sid ( rand_hex_str 16 )
                 ( response_set_header resp `Mcp-Session-Id` ( string_data sid ) )
-                ( string_free sid )
             }
         }
         ^ resp
@@ -5444,7 +5099,6 @@ s combined_stdout s combined_stderr → v {
 @ get_compile_slots → i {
     : String s ( env_var_or `NURL_COMPILE_SLOTS` `4` )
     : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 4 }
-    ( string_free s )
     ^ ? > n 0 n 1
 }
 
@@ -5486,7 +5140,6 @@ s combined_stdout s combined_stderr → v {
     ? != 0 ( nurl_str_eq p `/mcp` ) { ^ T } {}
     : String ps ( string_from p )
     : b hit ( string_starts_with ps `/build` )
-    ( string_free ps )
     ^ hit
 }
 
@@ -5546,8 +5199,6 @@ s combined_stdout s combined_stderr → v {
         : String rkey ( string_from ? is_mcp `m:` `b:` )
         ( string_push_str rkey ( string_data ip ) )
         : b allowed ( rl_allow ( string_data rkey ) ? is_mcp ( get_mcp_per_min ) ( get_builds_per_min ) )
-        ( string_free rkey )
-        ( string_free ip )
         ? ! allowed {
             : HttpResponse r429 ( response_text 429 `{"error":"rate_limited"}\n` )
             ( response_set_header r429 `Content-Type` `application/json` )
@@ -5570,8 +5221,8 @@ s combined_stdout s combined_stderr → v {
         : !v PanicInfo pr ( recover \ → v { = resp ( inner req ) } )
         ( sem_release gate )
         ?? pr {
-            T _ → { ( http_response_free placeholder ) }
-            F p → { ( panic_info_free p ) }
+            T _ → {}
+            F p → {}
         }
         ^ resp
     } {
@@ -5596,7 +5247,6 @@ s combined_stdout s combined_stderr → v {
             ( nurl_eprint ` — stdlib imports in nurlc may fail\n` )
         }
     }
-    ( string_free wr )
 
     : i port ( get_port )
     : Router r ( router_new )
@@ -5687,7 +5337,6 @@ s combined_stdout s combined_stderr → v {
             // Worker count is overridable so we can A/B test threading vs sequential.
             : String wkstr ( env_var_or `NURL_WORKERS` `16` )
             : i workers ?? ( int_parse ( string_data wkstr ) ) { T n → n F _ → 16 }
-            ( string_free wkstr )
 
             // The whole serve path is `packages/http`: bind, adopt the
             // router, install the shutdown signal, run the keep-alive
@@ -5720,8 +5369,6 @@ s combined_stdout s combined_stderr → v {
             ( rl_install )  // per-IP build rate limiter (M11)
             ( ppt_install )  // /pptws/<channel> WebSocket voice relay (upgrade hook)
             : i rc ( http_app_listen app `0.0.0.0` port )
-            ( gate_free )
-            ( mcp_server_free msrv )
             ^ rc
         }
         {}

@@ -37,7 +37,10 @@ skip=0
 failed_files=()
 skipped_files=()
 
-for f in examples/*.nu examples/*/*.nu bench/*.nu duo/*.nu; do
+# (…and the playground API: it was not checked here, so v0.69.0 was tagged
+# with nurlapi/main.nu calling a function that release removed — found
+# only when the playground deploy broke.)
+for f in examples/*.nu examples/*/*.nu bench/*.nu duo/*.nu nurlapi/*.nu; do
     [[ -f "$f" ]] || continue
     if "$NURLC" "$f" > /dev/null 2>/tmp/check_examples_err.$$; then
         pass=$((pass + 1))

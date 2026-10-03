@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.69.1] — 2026-10-03
+
+### Fixed
+
+- **The playground API builds again.** `nurlapi/main.nu` still called
+  `query_pair_free`, which 0.69.0 removed, so the v0.69.0 playground deploy
+  failed at its image build. The gate that frontend-compiles the examples
+  (`tools/check_examples.sh`, run in CI) now covers `nurlapi/` too.
+- **The playground API releases nothing by hand** — the 0.69.0 sweep had
+  missed it: 638 release calls removed, and the PTT-Chat relay's member
+  record is a self-releasing handle shared by its connection and the
+  registry (its write mutex and channel name had been freed by hand). The
+  end-to-end suite gives the same results before and after, in the
+  container and under AddressSanitizer + LeakSanitizer.
+- **`nurl_api` / package search replies stay valid UTF-8.** The registry
+  footer cut a package's description at a fixed byte count, which landed
+  inside a multi-byte character (`—`) for `http`, so the whole tool reply
+  was invalid UTF-8 and a JSON client rejected it. Cuts now end on a
+  character boundary (`stdlib/ext/mcp_search.nu`). The playground's
+  end-to-end suite expected a section title docs/MEMORY.md had renamed in
+  0.67.0; updated.
+
 ## [0.69.0] — 2026-10-03
 
 Memory is never released by hand. The compiler drops every value where its
