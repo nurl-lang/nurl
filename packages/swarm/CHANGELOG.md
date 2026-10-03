@@ -1,18 +1,27 @@
 # Changelog
 
-## Unreleased
+## [0.3.0] — 2026-10-03
 
 Nothing in the package is released by hand any more.
 
+### Changed (breaking)
+
 - `Roster` and `Swarm` are library handles over an rcbox (`stdlib/core/rcbox.nu`)
-  instead of `*Roster` / `*Swarm` pointers: every copy is the same roster / node,
-  and the last owner releases it — the swarm's transport, ring, roster and job
-  node with it. A roster keeps its members as `( Vec Member )` values.
+  instead of `*Roster` / `*Swarm` pointers (`roster_new → Roster`,
+  `swarm_new … → Swarm`; every function that took the pointer takes the
+  handle). Every copy is the same roster / node, and the last owner releases
+  it — the swarm's transport, ring, roster and job node with it. A roster
+  keeps its members as `( Vec Member )` values.
 - `shard` returns `( Vec Chunk )` (plain `{ lo hi }` values) instead of a
   `( Vec s )` of raw `*Chunk`: read a chunk with `vec_get [Chunk]`.
-- New `swarm_worker_count` (the roster size of a node).
 - `roster_free`, `swarm_free`, `shard_free`, `hello_free` remain as optional
   early releases; no caller needs them.
+
+### Added
+
+- `swarm_worker_count` (the roster size of a node).
+
+Requires NURL 0.69.0.
 
 ## 0.2.2
 
