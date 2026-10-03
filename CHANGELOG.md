@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The compiler asks its symbol table about a word in a list in place**
+  (`nurl_sym_has_word`, `nurl_sym_word_index`): 131 `( str_contains_word (
+  nurl_sym_get … ) w )` / `str_word_index` sites copied a whole list — a
+  scope's drop list, a function's parameter names — to test one word.
+  Self-compile −0.4 % instructions (shipped build).
 - **A function that hands back a binding as it came from a call answers
   ownership statically when that call cannot lend** (`: String s (
   string_from … ) … ^ s`): it was marked per-call (a runtime flag read at
