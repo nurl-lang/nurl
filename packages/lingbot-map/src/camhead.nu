@@ -27,7 +27,6 @@
 // only position that varies is time.
 //
 //   ( ch_load w kit )                        → CamHead
-//   ( ch_free c )                            → v
 //   ( ch_forward kit c ws camtok fidx out )  → b
 //     camtok: [1, 2048] f32 device — the camera token of the last layer
 //     out:    [9] f32 device — the activated pose encoding
@@ -74,19 +73,6 @@ $ `src/rope.nu`
     GkBuf cos3 GkBuf sin3
 }
 
-@ ch_free sink CamHead c → v {
-    ( vec_free_with [LmBlk] . c trunk \ LmBlk b → v { ( lm_blk_free b ) } )
-    ( gk_dbuf_free . c tokng ) ( gk_dbuf_free . c tokngb )
-    ( gk_dbuf_free . c trnkg ) ( gk_dbuf_free . c trnkb )
-    ( gk_dbuf_free . c embw ) ( gk_dbuf_free . c embb )
-    ( gk_dbuf_free . c modw ) ( gk_dbuf_free . c modb )
-    ( gk_dbuf_free . c pb1w ) ( gk_dbuf_free . c pb1b )
-    ( gk_dbuf_free . c pb2w ) ( gk_dbuf_free . c pb2b )
-    ( gk_dbuf_free . c empty )
-    ( gk_dbuf_free . c ones ) ( gk_dbuf_free . c zeros )
-    ( gk_dbuf_free . c cos3 ) ( gk_dbuf_free . c sin3 )
-}
-
 @ __ch_const GpuKit kit i n f v → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : ( Vec f ) h ( vec_with_cap [f] n )
@@ -95,23 +81,23 @@ $ `src/rope.nu`
     : ~ i j 0
     ~ < j n { = . hp j v = j + j 1 }
     : b _u ( gk_dbuf_upload kit b h )
-    ( vec_free [f] h )
     ^ b
 }
 
-@ ch_load * Lw w GpuKit kit → CamHead {
+@ ch_load Lw w GpuKit kit → CamHead {
     : ( Vec LmBlk ) tr ( vec_new [LmBlk] )
     : ~ i i0 0
     ~ < i0 CH_DEPTH {
         : String p ( lmw_prefix `camera_head.trunk` i0 )
         ( vec_push [LmBlk] tr ( lmw_block w kit ( string_data p ) F CH_EPS CH_DIM CH_HIDDEN ) )
-        ( string_free p )
         = i0 + i0 1
     }
     : i width / + + CH_T CH_H CH_W 2
     : i tn * CH_MAXPOS width
-    : *f hc # *f ( nurl_zalloc * 8 tn )
-    : *f hs # *f ( nurl_zalloc * 8 tn )
+    : ( Vec u ) hc__v ( vec_zeroed [u] * 8 tn )
+    : *f hc # *f ( vec_data [u] hc__v )
+    : ( Vec u ) hs__v ( vec_zeroed [u] * 8 tn )
+    : *f hs # *f ( vec_data [u] hs__v )
     ( rope3d_tables_fhw CH_T CH_H CH_W CH_MAXPOS hc hs )
     : GkBuf c3 ( gk_dbuf_new kit tn GK_F32 )
     : GkBuf s3 ( gk_dbuf_new kit tn GK_F32 )
@@ -125,8 +111,6 @@ $ `src/rope.nu`
     ~ < j tn { = . tcp j . hc j = . tsp j . hs j = j + j 1 }
     : b _u1 ( gk_dbuf_upload kit c3 tc )
     : b _u2 ( gk_dbuf_upload kit s3 ts )
-    ( vec_free [f] tc ) ( vec_free [f] ts )
-    ( nurl_free # s hc ) ( nurl_free # s hs )
     ^ @ CamHead {
         tr
         ( lmw_upload w kit `camera_head.token_norm.weight` )
@@ -201,21 +185,10 @@ $ `src/rope.nu`
         kvs mf }
 }
 
-@ ch_ws_free sink ChWs w → v {
-    ( gk_dbuf_free . w tok ) ( gk_dbuf_free . w cond )
-    ( gk_dbuf_free . w mod ) ( gk_dbuf_free . w norm )
-    ( gk_dbuf_free . w x ) ( gk_dbuf_free . w hid )
-    ( gk_dbuf_free . w pred ) ( gk_dbuf_free . w delta )
-    ( gk_dbuf_free . w fr ) ( gk_dbuf_free . w rw ) ( gk_dbuf_free . w cl )
-    ( lm_ws_free . w blk )
-    ( vec_free_with [LmKv] . w kvs \ LmKv c → v { ( lm_kv_free c ) } )
-}
-
 @ __ch_upi1 GpuKit kit GkBuf b i v → b {
     : ( Vec i ) t ( vec_with_cap [i] 1 )
     ( vec_push [i] t v )
     : b r ( gk_dbuf_upload_i kit b t )
-    ( vec_free [i] t )
     ^ r
 }
 

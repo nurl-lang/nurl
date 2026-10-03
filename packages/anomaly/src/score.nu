@@ -209,11 +209,8 @@ $ `deps/gpukit/src/gpukit.nu`
     ( vec_push [GkArg] call ( gk_i64 n_trees ) )
     ( vec_push [GkArg] call ( gk_buf_out outp * n_rows 8 ) )
     : b ok ( gk_run kit ( __ag_kernel_src ) `anomaly_paths` ( gk_grid n_rows 256 ) 256 call )
-    ( vec_free [GkArg] call )
-    ( vec_free [f] cleaf )
 
     ? ok { ( vec_set_len [f] totals n_rows ) } {
-        ( vec_free [f] totals )
         ( nurl_eprintln `anomaly: gpu scoring failed, falling back to the pure path` )
         ^ @ ?( Vec f ) { F }
     }
@@ -227,7 +224,6 @@ $ `deps/gpukit/src/gpukit.nu`
         ( vec_push [f] out ( __ag_total_to_score . tp r n_trees cpsi ) )
         = r + r 1
     }
-    ( vec_free [f] totals )
     ^ @ ?( Vec f ) { T out }
 }
 
@@ -301,14 +297,12 @@ $ `deps/gpukit/src/gpukit.nu`
             ( vec_push [f] ss - 0.0 . rp r )
             = r + r 1
         }
-        ( vec_free [f] raw )
         ( sort_by [f] ss \ f a f b → i {
             ? < a b { ^ -1 } {}
             ? > a b { ^ 1 } {}
             ^ 0
         } )
         = . vm offset ( _an_percentile ss . cfg contamination )
-        ( vec_free [f] ss )
     } {}
     ^ vm
 }
@@ -332,17 +326,9 @@ $ `deps/gpukit/src/gpukit.nu`
         ? ( anom_is_anomaly vm . dfp r ) { ( vec_push [i] hits r ) } {}
         = r + r 1
     }
-    ( anom_vermodel_free vm )
-    ( vec_free [f] scaled )
-    ( scaler_free sc )
 
     : i n_hits ( vec_len [i] hits )
     : ~ f pct 0.0
     ? > n_rows 0 { = pct / * # f n_hits 100.0 # f n_rows } {}
     ^ @ BatchReport { n_rows n_hits pct hits > n_hits 0 scores }
-}
-
-@ anomaly_report_free sink BatchReport rep → v {
-    ( vec_free [i] . rep anomaly_indices )
-    ( vec_free [f] . rep scores )
 }

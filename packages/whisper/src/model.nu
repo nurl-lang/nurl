@@ -27,13 +27,14 @@ $ `deps/gpu/src/gpu.nu`
 $ `deps/safetensor/src/safetensor.nu`
 $ `src/ggml.nu`
 $ `src/kernels.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Whisper {
+: WhisperImpl {
     Gpu g
     WhKernels ks
     b w_half  // matrix weights live on the device as raw f16 halves
     St st  // the safetensors file (HF checkpoint) — st_none in ggml mode
-    i gg  // *Gg, whisper.cpp's legacy ggml container — 0 in HF mode
+    Gg gg  // whisper.cpp's legacy ggml container — the null handle in HF mode
     // the load's upload queue: every tensor is allocated as it is met and
     // sent in ONE streamed batch (gpu_upload_batch) once the last one is
     // known; f16/bf16 tensors that must be widened wait in cvt_* for their
@@ -157,8 +158,38 @@ $ `src/kernels.nu`
     ( Vec GpuBuffer ) bufo  // their owners: released with the model
 }
 
-@ __wh_err s msg → !*Whisper String {
-    ^ @ !*Whisper String { F ( string_from msg ) }
+// A Whisper is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same model, and the last owner releases it — every
+// device allocation, the kernels, the context, the weight file. wh_close
+// is an optional early release.
+: Whisper { s ctl }
+
+@ Whisper_share Whisper h → Whisper { ^ @ Whisper { # s ( rcbox_share # i . h ctl ) } }
+
+@ Whisper_drop sink Whisper h → v {
+    ( mem_forget h )
+    ( rcbox_release [WhisperImpl] # i . h ctl )
+}
+
+@ __Whisper_ptr Whisper h → *WhisperImpl { ^ ( rcbox_ptr [WhisperImpl] # i . h ctl ) }
+
+// The model's shape and device, for callers that size inputs or bind threads.
+@ wh_gpu Whisper h → Gpu { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w g }
+
+@ wh_n_mels Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_mels }
+
+@ wh_d_model Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w d_model }
+
+@ wh_n_ctx_enc Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_ctx_enc }
+
+@ wh_n_enc_layer Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_enc_layer }
+
+@ wh_n_dec_layer Whisper h → i { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w n_dec_layer }
+// the ggml container the model came from (the null handle in HF mode)
+@ wh_gg Whisper h → Gg { : *WhisperImpl w ( __Whisper_ptr h ) ^ . w gg }
+
+@ __wh_err s msg → !v String {
+    ^ @ !v String { F ( string_from msg ) }
 }
 
 @ __wh_geti ( Vec i ) v i k → i {
@@ -198,8 +229,8 @@ $ `src/kernels.nu`
     ^ ? ( nurl_str_eq name `decoder.token_embedding.weight` ) T F
 }
 
-@ __wh_probe_half_gg * Whisper w → b {
-    : *Gg gg # *Gg . w gg
+@ __wh_probe_half_gg * WhisperImpl w → b {
+    : *GgImpl gg ( _Gg_ptr . w gg )
     : ~ i seen 0
     : ~ b all16 T
     : ~ i k 0
@@ -220,8 +251,8 @@ $ `src/kernels.nu`
     ^ & > seen 0 all16
 }
 
-@ __wh_probe_half * Whisper w → b {
-    ? != . w gg 0 { ^ ( __wh_probe_half_gg w ) } {}
+@ __wh_probe_half * WhisperImpl w → b {
+    ? ( gg_is_open . w gg ) { ^ ( __wh_probe_half_gg w ) } {}
     : ~ i seen 0
     : ~ b all16 T
     : ~ i k 0
@@ -247,10 +278,10 @@ $ `src/kernels.nu`
 // upload the halves as they are and let the kernels widen at the point of
 // use. Everything else (norms, biases, convs, positions) still widens here:
 // their bytes are noise, and it keeps every other kernel untouched.
-@ __wh_up * Whisper w s name → i {
+@ __wh_up * WhisperImpl w s name → i {
     : b keep16 ( __wh_is_matrix name )
-    ? != . w gg 0 {
-        : *Gg gg # *Gg . w gg
+    ? ( gg_is_open . w gg ) {
+        : Gg gg . w gg
         : i gi ( gg_find gg name )
         ? < gi 0 { ^ -1 } {}
         : i gt ( gg_ttype gg gi )
@@ -293,13 +324,11 @@ $ `src/kernels.nu`
         T raw → {
             : i n ( vec_len [u] raw )
             : i d ( __wh_carve w n )
-            ? == d 0 { ( vec_free [u] raw ) ^ -1 } {}
+            ? == d 0 { ^ -1 } {}
             : i _u ( gpu_upload ( gpu_buffer_view d n ) ( vec_data [u] raw ) )
-            ( vec_free [u] raw )
             ^ d
         }
         F e → {
-            ( string_free e )
             ^ -1
         }
     }
@@ -313,7 +342,7 @@ $ `src/kernels.nu`
 // model's pointer is final at that moment — and its bytes are queued; the
 // queue goes up as one streamed batch (gpu_upload_batch: pinned staging,
 // four copy threads, DMA overlapping the fill) once every tensor is known.
-@ __wh_queue_init * Whisper w → v {
+@ __wh_queue_init * WhisperImpl w → v {
     = . w up_q ( vec_new [GpuCopy] )
     = . w arena_cur 0
     = . w arena_off 0
@@ -335,9 +364,9 @@ $ `src/kernels.nu`
 // `bytes` of device memory for the model's lifetime, 256-byte aligned,
 // carved from the weight arena: a new 128 MB chunk when the current one is
 // full, an exact-size chunk for anything larger than that (the token
-// embedding). Every chunk sits in bufs, which is what wh_close frees.
+// embedding). Every chunk sits in bufs, whose owners (bufo) the model drops.
 // 0 = out of device memory (and `oom` is set for the error message).
-@ __wh_carve * Whisper w i bytes → i {
+@ __wh_carve * WhisperImpl w i bytes → i {
     : i need * / + bytes 255 256 256
     ? > need 0 {
         : GpuBuffer big ( gpu_alloc . w g need )
@@ -367,7 +396,7 @@ $ `src/kernels.nu`
 // larger (in half mode the raw sources are a model's norms and biases,
 // a couple of megabytes in all; a checkpoint that widens every matrix
 // takes what it needs).
-@ __wh_carve_raw * Whisper w i bytes → i {
+@ __wh_carve_raw * WhisperImpl w i bytes → i {
     : i need * / + bytes 255 256 256
     ? > + . w raw_off need . w raw_cap {
         : i csz ? > need 16777216 need 16777216
@@ -387,7 +416,7 @@ $ `src/kernels.nu`
 
 // Carve `bytes` for the tensor at `host` and queue its upload. Returns the
 // device pointer the model keeps, -1 on OOM.
-@ __wh_queue * Whisper w * u host i bytes → i {
+@ __wh_queue * WhisperImpl w * u host i bytes → i {
     : i d ( __wh_carve w bytes )
     ? == d 0 { ^ -1 } {}
     ( vec_push [GpuCopy] . w up_q @ GpuCopy { d # i host bytes } )
@@ -398,7 +427,7 @@ $ `src/kernels.nu`
 // into the raw arena, the f32 buffer is carved now (its pointer is what
 // the model keeps), and the widen kernel runs after the batch has landed.
 // Returns the f32 pointer, -1 on OOM.
-@ __wh_queue_widen * Whisper w * u host i n b f16 → i {
+@ __wh_queue_widen * WhisperImpl w * u host i n b f16 → i {
     : i raw ( __wh_carve_raw w * n 2 )
     ? == raw 0 { ^ -1 } {}
     : i d ( __wh_carve w * n 4 )
@@ -413,7 +442,7 @@ $ `src/kernels.nu`
 
 // Send the queue, widen what was waiting on it, give the raw arena back.
 // F = the upload failed.
-@ __wh_queue_flush * Whisper w → b {
+@ __wh_queue_flush * WhisperImpl w → b {
     : i rc ( gpu_upload_batch . w up_q )
     ( vec_clear [GpuCopy] . w up_q )
     ? != rc 0 { ^ F } {}
@@ -433,7 +462,7 @@ $ `src/kernels.nu`
     // the widens are queued behind the uploads on the same stream; the raw
     // chunks must outlive them — one sync, then the frees
     : i _s ( gpu_sync . w g )
-    ( __wh_raw_free w )
+    ( __wh_raw_release w )
     ( vec_clear [i] . w cvt_src )
     ( vec_clear [i] . w cvt_dst )
     ( vec_clear [i] . w cvt_n )
@@ -441,27 +470,13 @@ $ `src/kernels.nu`
     ^ T
 }
 
-@ __wh_raw_free * Whisper w → v {
+@ __wh_raw_release * WhisperImpl w → v {
     ( vec_clear [GpuBuffer] . w cvt_rawo )  // the raw chunks go back
     ( vec_clear [i] . w cvt_raw )
     ( vec_clear [i] . w cvt_rawsz )
     = . w raw_cur 0
     = . w raw_off 0
     = . w raw_cap 0
-}
-
-// wh_close: the queue itself, and any raw chunks a failed load left
-// waiting for a widen that never came
-@ __wh_queue_free * Whisper w → v {
-    ( __wh_raw_free w )
-    ( vec_free [GpuCopy] . w up_q )
-    ( vec_free [i] . w cvt_raw )
-    ( vec_free [i] . w cvt_rawsz )
-    ( vec_free [GpuBuffer] . w cvt_rawo )
-    ( vec_free [i] . w cvt_src )
-    ( vec_free [i] . w cvt_dst )
-    ( vec_free [i] . w cvt_n )
-    ( vec_free [i] . w cvt_f16 )
 }
 
 @ __wh_lname i layer s suffix → String {
@@ -481,18 +496,16 @@ $ `src/kernels.nu`
     ^ s2
 }
 
-@ __wh_up_dlayer * Whisper w i layer s suffix ( Vec i ) dst → b {
+@ __wh_up_dlayer * WhisperImpl w i layer s suffix ( Vec i ) dst → b {
     : String nm ( __wh_dname layer suffix )
     : i d ( __wh_up w ( string_data nm ) )
-    ( string_free nm )
     ( vec_push [i] dst d )
     ^ >= d 0
 }
 
-@ __wh_up_layer * Whisper w i layer s suffix ( Vec i ) dst → b {
+@ __wh_up_layer * WhisperImpl w i layer s suffix ( Vec i ) dst → b {
     : String nm ( __wh_lname layer suffix )
     : i d ( __wh_up w ( string_data nm ) )
-    ( string_free nm )
     ( vec_push [i] dst d )
     ^ >= d 0
 }
@@ -518,29 +531,31 @@ $ `src/kernels.nu`
 // would have taken two hours to register — with the process unstoppable
 // (R state, ptrace could not attach) for the duration. The staged path
 // the gpu package takes for pageable memory is the right one here.
-@ __wh_source_done * Whisper w → v {
+@ __wh_source_done * WhisperImpl w → v {
     // the staging pair is 128 MB of page-locked memory — a loader that is
     // done loading gives it back
     ( gpu_staging_free )
-    ? != . w gg 0 {
+    ? ( gg_is_open . w gg ) {
         // the ggml handle stays (the tokenizer is built from its vocabulary
         // after this returns); only the file goes
-        ( gg_release_data # *Gg . w gg )
+        ( gg_release_data . w gg )
     } {}
     ? ( st_is_open . w st ) {
-        ( st_close . w st )
+        // the file leaves the model and is unmapped here
+        : St old . w st
+        ( mem_take old )
         = . w st ( st_none )
     } {}
 }
 
-@ __wh_scratch * Whisper w i nfloats → i {
+@ __wh_scratch * WhisperImpl w i nfloats → i {
     : i d ( __wh_carve w * nfloats 4 )
     ? == d 0 { ^ -1 } {}
     ^ d
 }
 
 // "there was not enough room", with the numbers that make it actionable.
-@ __wh_oom_err * Whisper w → !*Whisper String {
+@ __wh_oom_err * WhisperImpl w → !v String {
     : String m ( string_from `whisper: out of device memory loading the model` )
     : i fr ( gpu_mem_free . w g )
     : i to ( gpu_mem_total . w g )
@@ -553,8 +568,7 @@ $ `src/kernels.nu`
         ( string_push_str m `; NURL_GPU_DEVICE picks another card, NURL_GPU=cpu the host backend)` )
     } {}
     : String d ( string_from ( string_data m ) )
-    ( string_free m )
-    ^ @ !*Whisper String { F d }
+    ^ @ !v String { F d }
 }
 
 // config.json — the hyperparameters live next to the weights, not inside them
@@ -565,7 +579,7 @@ $ `src/kernels.nu`
     }
 }
 
-@ wh_open s config_path s weights_path → !*Whisper String {
+@ wh_open s config_path s weights_path → !Whisper String {
     // hyperparameters
     : ~ i n_mels 80
     : ~ i d_model 384
@@ -589,27 +603,23 @@ $ `src/kernels.nu`
                     = n_ctx ( __wh_cfg_int root `max_source_positions` 1500 )
                     = n_vocab ( __wh_cfg_int root `vocab_size` 51865 )
                     = n_dctx ( __wh_cfg_int root `max_target_positions` 448 )
-                    ( json_free root )
-                    ( string_free txt )
                 }
                 F _e → {
-                    ( string_free txt )
-                    ^ ( __wh_err `whisper: config.json is not valid JSON` )
+                    ^ @ !Whisper String { F ( string_from `whisper: config.json is not valid JSON` ) }
                 }
             }
         }
         F _ → {
             : String m ( string_from `whisper: cannot read ` )
             ( string_push_str m config_path )
-            ^ @ !*Whisper String { F m }
+            ^ @ !Whisper String { F m }
         }
     }
 
-    : *Whisper w # *Whisper ( nurl_alloc Z Whisper )
-    // nurl_alloc does NOT zero: `Z T` is only the size. Every field read
-    // before its assignment must be set here — `gg` stays 0 in HF mode,
-    // and a garbage nonzero would route the probe into the ggml branch.
-    = . w gg 0
+    // zeroed, and a handle from the start: every early return drops the
+    // half-built model whole. `gg` stays the null handle in HF mode.
+    : Whisper h @ Whisper { # s ( rcbox_zero [WhisperImpl] ) }
+    : *WhisperImpl w ( __Whisper_ptr h )
     = . w bufs ( vec_new [i] )
     = . w bufsz ( vec_new [i] )
     = . w bufo ( vec_new [GpuBuffer] )
@@ -632,21 +642,22 @@ $ `src/kernels.nu`
             = . w st st
             = . w w_half ( __wh_probe_half w )
         }
-        F e → {
-            ( nurl_free # s w )
-            ^ @ !*Whisper String { F e }
-        }
+        F e → { ^ @ !Whisper String { F e } }
     }
-
-    ^ ( __wh_finish w n_dctx )
+    ?? ( __wh_finish w n_dctx ) {
+        T _ → { ^ @ !Whisper String { T h } }
+        F e → { ^ @ !Whisper String { F e } }
+    }
 }
 
 // Open a whisper.cpp ggml container: hyperparameters and tokenizer live in
 // the same file as the weights, so the only argument is the file.
-@ wh_open_ggml s path → !*Whisper String {
+@ wh_open_ggml s path → !Whisper String {
     ?? ( gg_open path ) {
         T gg → {
-            : *Whisper w # *Whisper ( nurl_alloc Z Whisper )
+            : Whisper h @ Whisper { # s ( rcbox_zero [WhisperImpl] ) }
+            : *WhisperImpl w ( __Whisper_ptr h )
+            : *GgImpl gp ( _Gg_ptr gg )
             = . w st ( st_none )
             = . w bufs ( vec_new [i] )
             = . w bufsz ( vec_new [i] )
@@ -654,38 +665,37 @@ $ `src/kernels.nu`
             = . w logits_host ( gpu_host_none )
             ( __wh_queue_init w )
             = . w oom F
-            = . w gg # i gg
-            = . w n_mels . gg n_mels
-            = . w d_model . gg n_audio_state
-            = . w n_head . gg n_audio_head
-            = . w head_dim / . gg n_audio_state . gg n_audio_head
-            = . w d_head . gg n_text_head
-            = . w d_head_dim / . gg n_text_state . gg n_text_head
-            = . w n_enc_layer . gg n_audio_layer
-            = . w n_dec_layer . gg n_text_layer
-            = . w n_ctx_enc . gg n_audio_ctx
-            = . w n_vocab . gg n_vocab
+            = . w gg gg
+            = . w n_mels . gp n_mels
+            = . w d_model . gp n_audio_state
+            = . w n_head . gp n_audio_head
+            = . w head_dim / . gp n_audio_state . gp n_audio_head
+            = . w d_head . gp n_text_head
+            = . w d_head_dim / . gp n_text_state . gp n_text_head
+            = . w n_enc_layer . gp n_audio_layer
+            = . w n_dec_layer . gp n_text_layer
+            = . w n_ctx_enc . gp n_audio_ctx
+            = . w n_vocab . gp n_vocab
             = . w w_half ( __wh_probe_half w )
-            ^ ( __wh_finish w . gg n_text_ctx )
+            ?? ( __wh_finish w . gp n_text_ctx ) {
+                T _ → { ^ @ !Whisper String { T h } }
+                F e → { ^ @ !Whisper String { F e } }
+            }
         }
-        F e → {
-            ^ @ !*Whisper String { F e }
-        }
+        F e → { ^ @ !Whisper String { F e } }
     }
 }
 
 // Everything after "the weight source is open and probed" — one body for
 // both containers: device, kernels, every upload (in HF names — the ggml
 // source translates), caches, scratch.
-@ __wh_finish * Whisper w i n_dctx → !*Whisper String {
+@ __wh_finish * WhisperImpl w i n_dctx → !v String {
     = . w g ( gpu_open ( gpu_best_device ) )
     ? ( gpu_ok . w g ) {} {
-        ( wh_close w )
         ^ ( __wh_err `whisper: no compute device (set NURL_GPU=cpu for the host backend)` )
     }
     = . w ks ( wk_build . w g )
     ? . . w ks ok {} {
-        ( wh_close w )
         ^ ( __wh_err `whisper: kernel compilation failed` )
     }
 
@@ -737,8 +747,7 @@ $ `src/kernels.nu`
         = L + L 1
     }
     ? ok {} {
-        ? . w oom { : !*Whisper String e ( __wh_oom_err w ) ( wh_close w ) ^ e } {}
-        ( wh_close w )
+        ? . w oom { ^ ( __wh_oom_err w ) } {}
         ^ ( __wh_err `whisper: the checkpoint is missing encoder tensors` )
     }
 
@@ -808,12 +817,10 @@ $ `src/kernels.nu`
         = L + L 1
     }
     ? ok {} {
-        ? . w oom { : !*Whisper String e ( __wh_oom_err w ) ( wh_close w ) ^ e } {}
-        ( wh_close w )
+        ? . w oom { ^ ( __wh_oom_err w ) } {}
         ^ ( __wh_err `whisper: the checkpoint is missing decoder tensors` )
     }
     ? ( __wh_queue_flush w ) {} {
-        ( wh_close w )
         ^ ( __wh_err `whisper: uploading the weights to the device failed` )
     }
     ( __wh_source_done w )
@@ -872,49 +879,19 @@ $ `src/kernels.nu`
     // 51865 floats to find out which of them is largest
     = . w argmax_d ( __wh_scratch w 1 )
     = . w logits_host ( gpu_host_alloc * . w n_vocab 4 )
-    ? . w oom { : !*Whisper String e ( __wh_oom_err w ) ( wh_close w ) ^ e } {}
-    ^ @ !*Whisper String { T w }
+    ? . w oom { ^ ( __wh_oom_err w ) } {}
+    ^ @ !v String { T 0 }
 }
 
-@ wh_close * Whisper w → v {
-    ( vec_free [GpuBuffer] . w bufo )  // every device allocation
-    ( vec_free [i] . w bufs )
-    ( vec_free [i] . w bufsz )
-    ( __wh_queue_free w )
-    ( vec_free [i] . w e_ln1_w ) ( vec_free [i] . w e_ln1_b )
-    ( vec_free [i] . w e_wq ) ( vec_free [i] . w e_bq )
-    ( vec_free [i] . w e_wk )
-    ( vec_free [i] . w e_wv ) ( vec_free [i] . w e_bv )
-    ( vec_free [i] . w e_wo ) ( vec_free [i] . w e_bo )
-    ( vec_free [i] . w e_ln2_w ) ( vec_free [i] . w e_ln2_b )
-    ( vec_free [i] . w e_fc1_w ) ( vec_free [i] . w e_fc1_b )
-    ( vec_free [i] . w e_fc2_w ) ( vec_free [i] . w e_fc2_b )
-    ( vec_free [i] . w d_ln1_w ) ( vec_free [i] . w d_ln1_b )
-    ( vec_free [i] . w d_wq ) ( vec_free [i] . w d_bq )
-    ( vec_free [i] . w d_wk )
-    ( vec_free [i] . w d_wv ) ( vec_free [i] . w d_bv )
-    ( vec_free [i] . w d_wo ) ( vec_free [i] . w d_bo )
-    ( vec_free [i] . w d_lnx_w ) ( vec_free [i] . w d_lnx_b )
-    ( vec_free [i] . w x_wq ) ( vec_free [i] . w x_bq )
-    ( vec_free [i] . w x_wk )
-    ( vec_free [i] . w x_wv ) ( vec_free [i] . w x_bv )
-    ( vec_free [i] . w x_wo ) ( vec_free [i] . w x_bo )
-    ( vec_free [i] . w d_ln2_w ) ( vec_free [i] . w d_ln2_b )
-    ( vec_free [i] . w d_fc1_w ) ( vec_free [i] . w d_fc1_b )
-    ( vec_free [i] . w d_fc2_w ) ( vec_free [i] . w d_fc2_b )
-    ( vec_free [i] . w kcache ) ( vec_free [i] . w vcache )
-    ( vec_free [i] . w xk ) ( vec_free [i] . w xv )
-    ( gpu_host_free . w logits_host )
-    ? ( st_is_open . w st ) { ( st_close . w st ) } {}
-    ? != . w gg 0 { ( gg_close # *Gg . w gg ) } {}
-    ? ( gpu_ok . w g ) { ( wk_free . w ks ) ( gpu_close . w g ) } {}
-    ( nurl_free # s w )
-}
+// Early release (optional): the last owner gives back every device
+// allocation, the kernels, the context and the weight file.
+@ wh_close sink Whisper w → v {}
 
 // Run the encoder over a 30-second log-mel spectrogram: `mel` is 3000 × n_mels,
 // row-major (a frame is contiguous) — exactly what packages/audio produces.
 // Leaves the 1500 encoder states on the device (wh_enc_out).
-@ wh_encode * Whisper w ( Vec f ) mel → v {
+@ wh_encode Whisper w__h ( Vec f ) mel → v {
+    : *WhisperImpl w ( __Whisper_ptr w__h )
     : i nframe / ( vec_len [f] mel ) . w n_mels
     : i dm . w d_model
     : i nh . w n_head
@@ -934,7 +911,6 @@ $ `src/kernels.nu`
     }
     : GpuBuffer mb ( gpu_buffer_view . w mel_d * 4 ( vec_len [f] mel ) )
     : i _u ( gpu_upload mb ( vec_data [u] raw ) )
-    ( vec_free [u] raw )
 
     // conv1 (stride 1) → GELU → conv2 (stride 2) → GELU
     ( wk_conv1d . w ks . w mel_d . w conv1_w . w conv1_b . w c1_d nframe . w n_mels dm 1 1 )
@@ -979,7 +955,8 @@ $ `src/kernels.nu`
 }
 
 // The encoder states, back on the host: 1500 × d_model, row-major.
-@ wh_enc_out * Whisper w → ( Vec f ) {
+@ wh_enc_out Whisper w__h → ( Vec f ) {
+    : *WhisperImpl w ( __Whisper_ptr w__h )
     : i n * . w n_ctx_enc . w d_model
     : GpuHost hb ( gpu_host_alloc * n 4 )
     : *u host ( gpu_host_ptr hb )
@@ -1005,7 +982,8 @@ $ `src/kernels.nu`
 // change while a clip is being transcribed. So they are computed ONCE here,
 // after wh_encode — not once per generated token, which would redo 1500×d_model
 // of work for every word.
-@ wh_prepare_cross * Whisper w → v {
+@ wh_prepare_cross Whisper w__h → v {
+    : *WhisperImpl w ( __Whisper_ptr w__h )
     : i dm . w d_model
     : i nc . w n_ctx_enc
     : ~ i L 0
@@ -1024,7 +1002,8 @@ $ `src/kernels.nu`
 // The self-attention needs no causal mask: there is exactly ONE query, at the
 // end, and the cache holds only what came before it. Masking is what you do when
 // you process several positions at once.
-@ wh_decode_step * Whisper w i tok i pos → v {
+@ wh_decode_step Whisper w__h i tok i pos → v {
+    : *WhisperImpl w ( __Whisper_ptr w__h )
     : i dm . w d_model
     : i nh . w d_head
     : i hd . w d_head_dim
@@ -1034,7 +1013,7 @@ $ `src/kernels.nu`
 
     // token embedding + the position's own vector (a matrix, one row each)
     ( wk_getrow . w ks . w tok_embd . w dx_d tok dm ? . w w_half 1 0 )
-    ( wk_addv_row w pos )
+    ( wk_addv_row w__h pos )
 
     : ~ i L 0
     ~ < L . w n_dec_layer {
@@ -1078,14 +1057,16 @@ $ `src/kernels.nu`
 
 // x += embed_positions[pos]. The row lives inside a matrix, so it is added by
 // pointing at the row rather than by a broadcast.
-@ wk_addv_row * Whisper w i pos → v {
+@ wk_addv_row Whisper w__h i pos → v {
+    : *WhisperImpl w ( __Whisper_ptr w__h )
     : i dm . w d_model
     : i rowptr + . w dec_pos * * pos dm 4
     ( wk_addv . w ks . w dx_d rowptr dm )
 }
 
 // The logits of the last step, on the host.
-@ wh_logits * Whisper w → ( Vec f ) {
+@ wh_logits Whisper w__h → ( Vec f ) {
+    : *WhisperImpl w ( __Whisper_ptr w__h )
     : GpuBuffer b ( gpu_buffer_view . w logits_d * . w n_vocab 4 )
     : i _d ( gpu_download ( gpu_host_ptr . w logits_host ) b )
     : ( Vec f ) out ( vec_with_cap [f] . w n_vocab )
@@ -1100,7 +1081,8 @@ $ `src/kernels.nu`
 // The greedy pick, without fetching the logits: the reduction runs on the
 // device and one integer comes back. Ties go to the lower index in the kernel
 // exactly as they do in wh_argmax below, so the token stream is the same one.
-@ wh_argmax_dev * Whisper w → i {
+@ wh_argmax_dev Whisper w__h → i {
+    : *WhisperImpl w ( __Whisper_ptr w__h )
     ( wk_argmax . w ks . w logits_d . w n_vocab . w argmax_d )
     : GpuBuffer b ( gpu_buffer_view . w argmax_d 4 )
     : i _d ( gpu_download ( gpu_host_ptr . w logits_host ) b )

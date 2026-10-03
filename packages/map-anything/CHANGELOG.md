@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** The checkpoint is an `Lw` handle instead
+of a `*Lw` pointer (`lw_open` → `!Lw String`): every copy is the same
+mapping and its last owner unmaps it; `lw_close` is an optional early
+release and `lw_none` is the empty slot. A fitted view is a plain `Frame`
+value (`pp_fit` → `!Frame String`), the views are a `( Vec Frame )`
+instead of frame pointers kept as words, and `pp_free` is gone. The
+models' value structs (`Dino`, `MaBlk`, `MaWs`, `InfoShare`, `PoseH`,
+`ScaleH`, `Dpt`, `Sky`) hold buffers that release themselves, so their
+`*_free` functions are gone, as is every tail free in the CLI and the
+checks; the host scratch blocks are Vecs (the CLI's per-view buffers were
+never freed before).
+
 ## 0.4.7
 
 Frame lists are compacted with `vec_replace` and trimmed with `vec_truncate` under NURL 0.67.0's element-dropping containers (#1143).

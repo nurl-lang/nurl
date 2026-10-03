@@ -15,6 +15,21 @@ routes, so a second `anomaly_service_router` (the tests build several) kept
 the first router's whole route table alive. Builds against the matching
 http-client, which follows the HTTP/3 client handle. No behaviour change.
 
+Nothing in the package is released by hand any more. `Model` (and the
+metadata `Meta`, the forecast version's `FcModel` behind it) is a handle
+that releases itself when its last copy goes — `: Model mo ( model_open st
+name )`, not `*Model`, and no `model_free` needed (it stays as an optional
+early release, as does `scaler_free`). The other release functions are
+gone: `verdict_free`, `meta_free`, `cal_free`, `finetune_free`,
+`scan_free`, `import_report_free`, `labels_free`, `store_free`,
+`config_free`, `principal_free`, `fc_free` and the rest — their values
+release themselves. The forecast version keeps its per-feature ARIMA
+models as handles in a Vec instead of raw words, and its fit jobs as
+values; the forest-blob reader, the GPU trainer's failure flag and the
+encoded scan history no longer use hand-allocated memory. Request
+handling runs 5 % fewer instructions (the library's ingest / score / train
+path is unchanged).
+
 ## 0.33.4
 
 0.33.3 carried five test databases left by local test runs (`anomaly_*_test/orgs/public.db`); the package's own `.gitignore` now excludes them, which is the file `nurlpkg pack` reads. No code change.

@@ -34,21 +34,12 @@ $ `deps/iforest/src/iforest.nu`
 // ── Bounded little-endian reader over an untrusted byte buffer ────────
 
 : BlobRd {
-    ( Vec u ) buf
     i pos
     b ok
 }
 
-@ __an_rd_new ( Vec u ) buf → *BlobRd {
-    : *BlobRd rd # *BlobRd ( nurl_malloc Z BlobRd )
-    = . rd buf buf
-    = . rd pos 0
-    = . rd ok T
-    ^ rd
-}
-
-@ __an_rd_u64 * BlobRd rd → i {
-    ?? ( bytes_read_u64_le . rd buf . rd pos ) {
+@ __an_rd_u64 ( Vec u ) buf inout BlobRd rd → i {
+    ?? ( bytes_read_u64_le buf . rd pos ) {
         T x → {
             = . rd pos + . rd pos 8
             ^ # i x
@@ -60,8 +51,8 @@ $ `deps/iforest/src/iforest.nu`
     }
 }
 
-@ __an_rd_f64 * BlobRd rd → f {
-    ?? ( bytes_read_f64_le . rd buf . rd pos ) {
+@ __an_rd_f64 ( Vec u ) buf inout BlobRd rd → f {
+    ?? ( bytes_read_f64_le buf . rd pos ) {
         T x → {
             = . rd pos + . rd pos 8
             ^ x
@@ -98,27 +89,27 @@ $ `deps/iforest/src/iforest.nu`
 }
 
 // Read `want` i64s (a count-prefixed vector whose count must equal `want`).
-@ __an_blob_read_ivec * BlobRd rd i want → ( Vec i ) {
+@ __an_blob_read_ivec ( Vec u ) buf inout BlobRd rd i want → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
-    : i n ( __an_rd_u64 rd )
+    : i n ( __an_rd_u64 buf rd )
     ? == n want {} { = . rd ok F ^ out }
     ( vec_reserve [i] out n )
     : ~ i k 0
     ~ & . rd ok < k n {
-        ( vec_push [i] out ( __an_rd_u64 rd ) )
+        ( vec_push [i] out ( __an_rd_u64 buf rd ) )
         = k + k 1
     }
     ^ out
 }
 
-@ __an_blob_read_fvec * BlobRd rd i want → ( Vec f ) {
+@ __an_blob_read_fvec ( Vec u ) buf inout BlobRd rd i want → ( Vec f ) {
     : ( Vec f ) out ( vec_new [f] )
-    : i n ( __an_rd_u64 rd )
+    : i n ( __an_rd_u64 buf rd )
     ? == n want {} { = . rd ok F ^ out }
     ( vec_reserve [f] out n )
     : ~ i k 0
     ~ & . rd ok < k n {
-        ( vec_push [f] out ( __an_rd_f64 rd ) )
+        ( vec_push [f] out ( __an_rd_f64 buf rd ) )
         = k + k 1
     }
     ^ out
@@ -168,13 +159,12 @@ $ `deps/iforest/src/iforest.nu`
 @ vermodel_from_bytes ( Vec u ) buf → ?VerModel {
     : ( Vec u ) magic ( bytes_from_str `ANOMFOR1` )
     : b magic_ok ( bytes_starts_with buf magic )
-    ( vec_free [u] magic )
     ? magic_ok {} { ^ @ ?VerModel { F } }
 
-    : *BlobRd rd ( __an_rd_new buf )
+    : ~ BlobRd rd @ BlobRd { 0 T }
     = . rd pos 8
 
-    : i nlen ( __an_rd_u64 rd )
+    : i nlen ( __an_rd_u64 buf rd )
     ? || < nlen 0 > nlen ANOM_BLOB_MAX_NAME { = . rd ok F } {}
     : ~ String vname ( string_new )
     ? . rd ok {
@@ -182,37 +172,35 @@ $ `deps/iforest/src/iforest.nu`
         ? > + . rd pos nlen n { = . rd ok F } {
             : *u bp ( vec_data [u] buf )
             : i base + # i bp . rd pos
-            ( string_free vname )
             = vname ( string_from_bytes # *u base nlen )
             = . rd pos + . rd pos nlen
         }
     } {}
 
-    : f off ( __an_rd_f64 rd )
-    : f margin ( __an_rd_f64 rd )
-    : i n_trees ( __an_rd_u64 rd )
-    : i sample_size ( __an_rd_u64 rd )
-    : f c_psi ( __an_rd_f64 rd )
-    : i n_cols ( __an_rd_u64 rd )
+    : f off ( __an_rd_f64 buf rd )
+    : f margin ( __an_rd_f64 buf rd )
+    : i n_trees ( __an_rd_u64 buf rd )
+    : i sample_size ( __an_rd_u64 buf rd )
+    : f c_psi ( __an_rd_f64 buf rd )
+    : i n_cols ( __an_rd_u64 buf rd )
     ? || < n_trees 0 > n_trees ANOM_BLOB_MAX_TREES { = . rd ok F } {}
     ? || < sample_size 0 || < n_cols 0 > n_cols ANOM_BLOB_MAX_NODES { = . rd ok F } {}
 
-    : ( Vec i ) roots ( __an_blob_read_ivec rd n_trees )
-    : i n_nodes ( __an_rd_u64 rd )
+    : ( Vec i ) roots ( __an_blob_read_ivec buf rd n_trees )
+    : i n_nodes ( __an_rd_u64 buf rd )
     ? || < n_nodes 0 > n_nodes ANOM_BLOB_MAX_NODES { = . rd ok F } {}
     : ~ i safe_nodes n_nodes
     ? . rd ok {} { = safe_nodes 0 }
-    : ( Vec i ) feature ( __an_blob_read_ivec rd safe_nodes )
-    : ( Vec f ) split ( __an_blob_read_fvec rd safe_nodes )
-    : ( Vec i ) left ( __an_blob_read_ivec rd safe_nodes )
-    : ( Vec i ) right ( __an_blob_read_ivec rd safe_nodes )
-    : ( Vec i ) size ( __an_blob_read_ivec rd safe_nodes )
+    : ( Vec i ) feature ( __an_blob_read_ivec buf rd safe_nodes )
+    : ( Vec f ) split ( __an_blob_read_fvec buf rd safe_nodes )
+    : ( Vec i ) left ( __an_blob_read_ivec buf rd safe_nodes )
+    : ( Vec i ) right ( __an_blob_read_ivec buf rd safe_nodes )
+    : ( Vec i ) size ( __an_blob_read_ivec buf rd safe_nodes )
 
     // Trailing garbage after a well-formed body is also a corrupt file.
     ? == . rd pos ( vec_len [u] buf ) {} { = . rd ok F }
 
     : ~ b ok . rd ok
-    ( nurl_free rd )
     ? ok {
         ? ( __an_blob_idx_ok roots safe_nodes ) {} { = ok F }
         ? ( __an_blob_idx_ok left safe_nodes ) {} { = ok F }
@@ -222,13 +210,6 @@ $ `deps/iforest/src/iforest.nu`
     } {}
 
     ? ok {} {
-        ( string_free vname )
-        ( vec_free [i] roots )
-        ( vec_free [i] feature )
-        ( vec_free [f] split )
-        ( vec_free [i] left )
-        ( vec_free [i] right )
-        ( vec_free [i] size )
         ^ @ ?VerModel { F }
     }
     : IForest fo @ IForest { n_trees sample_size c_psi n_cols roots feature split left right size }
@@ -287,15 +268,6 @@ $ `deps/iforest/src/iforest.nu`
         epoch base_seen ( vec_new [String] )
         ( vec_new [i] ) ( vec_new [f] ) ( vec_new [f] ) ( vec_new [i] ) ( vec_new [i] )
     }
-}
-
-@ scorecache_free sink ScoreCache c → v {
-    ( vec_free_with [String] . c vnames \ String x → v { ( string_free x ) } )
-    ( vec_free [i] . c state )
-    ( vec_free [f] . c score )
-    ( vec_free [f] . c severity )
-    ( vec_free [i] . c present )
-    ( vec_free [i] . c flagged )
 }
 
 @ scorecache_rows ScoreCache c → i {
@@ -366,16 +338,6 @@ $ `deps/iforest/src/iforest.nu`
     String by  // who said so (a principal's name, an API key's id, or empty)
     i at  // when (unix seconds)
     String note
-}
-
-@ label_free sink Label l → v {
-    ( string_free . l label )
-    ( string_free . l by )
-    ( string_free . l note )
-}
-
-@ labels_free sink ( Vec Label ) ls → v {
-    ( vec_free_with [Label] ls \ Label l → v { ( label_free l ) } )
 }
 
 // Is `s` a label a reader may give?
@@ -580,9 +542,8 @@ $ `deps/iforest/src/iforest.nu`
 @ __st_conn Store st → !Database SqliteErr {
     : String path ( __st_db_path st )
     ?? ( sqlite_open ( string_data path ) ) {
-        F e → { ( string_free path ) ^ @ !Database SqliteErr { F e } }
+        F e → { ^ @ !Database SqliteErr { F e } }
         T db → {
-            ( string_free path )
             ?? ( sqlite_busy_timeout db 5000 ) { T _ → {} F _ → {} }
             ?? ( sqlite_exec db `PRAGMA synchronous=NORMAL` ) { T _ → {} F _ → {} }
             ^ @ !Database SqliteErr { T db }
@@ -600,7 +561,6 @@ $ `deps/iforest/src/iforest.nu`
     : String dir ( __st_orgs_dir root )
     : !v IoErr mk ( dir_create_all ( string_data dir ) )
     ?? mk { T _ → {} F _ → {} }
-    ( string_free dir )
     : Store st @ Store { ( string_from root ) ( string_from org ) T }
     : ~ b ok F
     ?? ( __st_conn st ) {
@@ -615,17 +575,14 @@ $ `deps/iforest/src/iforest.nu`
                 ?? ( vec_get [String] stmts k ) {
                     T sq → {
                         ?? ( sqlite_exec db ( string_data sq ) ) { T _ → {} F _ → { = failed T } }
-                        ( string_free sq )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free [String] stmts )
             = ok ! failed
         }
     }
-    ( store_free st )
     ^ @ Store { ( string_from root ) ( string_from org ) ok }
 }
 
@@ -635,20 +592,14 @@ $ `deps/iforest/src/iforest.nu`
 // nothing.
 @ store_open s root → Store { ^ ( store_open_org root ANOM_ORG_DEFAULT ) }
 
-@ store_free sink Store st → v {
-    ( string_free . st root )
-    ( string_free . st org )
-}
-
 @ store_org Store st → s { ^ ( string_data . st org ) }
 
 // ── Statement helpers ─────────────────────────────────────────────────
 
-// Bind an owned String and free it — sqlite_bind_text copies immediately,
-// so the two belong together and separating them is how a leak gets in.
+// Bind a String (sqlite_bind_text copies it); a bind that fails shows up
+// as a failed step.
 @ __st_bind_str Statement q i idx String v → v {
     ?? ( sqlite_bind_text q idx v ) { T _ → {} F _ → {} }
-    ( string_free v )
 }
 
 @ __st_bind_i Statement q i idx i v → v {
@@ -746,7 +697,6 @@ $ `deps/iforest/src/iforest.nu`
                         F _ → {}
                         T has → {
                             ? has {
-                                ( vec_free [u] out )
                                 = out ( sqlite_column_blob q 0 )
                                 = found T
                             } {}
@@ -757,7 +707,6 @@ $ `deps/iforest/src/iforest.nu`
         }
     }
     ? found { ^ @ ?( Vec u ) { T out } } {}
-    ( vec_free [u] out )
     ^ @ ?( Vec u ) { F }
 }
 
@@ -844,7 +793,7 @@ $ `deps/iforest/src/iforest.nu`
     ^ ok
 }
 
-@ store_save_meta Store st s name * Meta m → b {
+@ store_save_meta Store st s name Meta m → b {
     ? . st ok {} { ^ F }
     : String txt ( meta_to_json_str m )
     : ~ b ok F
@@ -852,12 +801,11 @@ $ `deps/iforest/src/iforest.nu`
         F _ → {}
         T db → { = ok ( __st_meta_put_on db name ( string_clone txt ) ) }
     }
-    ( string_free txt )
     ^ ok
 }
 
-@ store_load_meta Store st s name → ?*Meta {
-    ? . st ok {} { ^ @ ?*Meta { F } }
+@ store_load_meta Store st s name → ?Meta {
+    ? . st ok {} { ^ @ ?Meta { F } }
     : ~ b found F
     : ~ String txt ( string_new )
     ?? ( __st_conn st ) {
@@ -871,7 +819,6 @@ $ `deps/iforest/src/iforest.nu`
                         F _ → {}
                         T has → {
                             ? has {
-                                ( string_free txt )
                                 = txt ( sqlite_column_text q 0 )
                                 = found T
                             } {}
@@ -881,9 +828,8 @@ $ `deps/iforest/src/iforest.nu`
             }
         }
     }
-    ? found {} { ( string_free txt ) ^ @ ?*Meta { F } }
-    : ?*Meta m ( meta_from_json_str ( string_data txt ) )
-    ( string_free txt )
+    ? found {} { ^ @ ?Meta { F } }
+    : ?Meta m ( meta_from_json_str ( string_data txt ) )
     ^ m
 }
 
@@ -925,8 +871,6 @@ $ `deps/iforest/src/iforest.nu`
     : ( Vec u ) blob ( vermodel_to_bytes vm )
     : String kind ( __st_forest_kind ( string_data . vm vname ) )
     : b ok ( __st_blob_put st name ( string_data kind ) blob )
-    ( string_free kind )
-    ( vec_free [u] blob )
     ^ ok
 }
 
@@ -936,18 +880,15 @@ $ `deps/iforest/src/iforest.nu`
 @ store_load_forest Store st s name s vname → ?VerModel {
     : String kind ( __st_forest_kind vname )
     : ?( Vec u ) got ( __st_blob_get st name ( string_data kind ) )
-    ( string_free kind )
     ?? got {
         F _ → { ^ @ ?VerModel { F } }
         T blob → {
             : ?VerModel vm ( vermodel_from_bytes blob )
-            ( vec_free [u] blob )
             ?? vm {
                 T v → {
                     ? == ( nurl_str_eq ( string_data . v vname ) vname ) 1 {
                         ^ @ ?VerModel { T v }
                     } {
-                        ( anom_vermodel_free v )
                         ^ @ ?VerModel { F }
                     }
                 }
@@ -960,7 +901,6 @@ $ `deps/iforest/src/iforest.nu`
 @ store_delete_forest Store st s name s vname → v {
     : String kind ( __st_forest_kind vname )
     ( __st_blob_del st name ( string_data kind ) )
-    ( string_free kind )
 }
 
 // ── The autoencoder and the forecast ──────────────────────────────────
@@ -969,8 +909,6 @@ $ `deps/iforest/src/iforest.nu`
     : String txt ( ae_to_json_str ae )
     : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
     : b ok ( __st_blob_put st name ANOM_KIND_AE data )
-    ( vec_free [u] data )
-    ( string_free txt )
     ^ ok
 }
 
@@ -979,31 +917,25 @@ $ `deps/iforest/src/iforest.nu`
         F _ → { ^ @ ?AeModel { F } }
         T data → {
             : String txt ( string_from_bytes ( vec_data [u] data ) ( vec_len [u] data ) )
-            ( vec_free [u] data )
             : ?AeModel m ( ae_from_json_str ( string_data txt ) )
-            ( string_free txt )
             ^ m
         }
     }
 }
 
-@ store_save_fc Store st s name * FcModel fc → b {
+@ store_save_fc Store st s name FcModel fc → b {
     : String txt ( fc_to_json_str fc )
     : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
     : b ok ( __st_blob_put st name ANOM_KIND_FC data )
-    ( vec_free [u] data )
-    ( string_free txt )
     ^ ok
 }
 
-@ store_load_fc Store st s name → ?*FcModel {
+@ store_load_fc Store st s name → ?FcModel {
     ?? ( __st_blob_get st name ANOM_KIND_FC ) {
-        F _ → { ^ @ ?*FcModel { F } }
+        F _ → { ^ @ ?FcModel { F } }
         T data → {
             : String txt ( string_from_bytes ( vec_data [u] data ) ( vec_len [u] data ) )
-            ( vec_free [u] data )
-            : ?*FcModel m ( fc_from_json_str ( string_data txt ) )
-            ( string_free txt )
+            : ?FcModel m ( fc_from_json_str ( string_data txt ) )
             ^ m
         }
     }
@@ -1078,7 +1010,6 @@ $ `deps/iforest/src/iforest.nu`
         = k + k 1
     }
     : b ok ( __st_blob_put st name ANOM_KIND_SCORES out )
-    ( vec_free [u] out )
     ^ ok
 }
 
@@ -1092,21 +1023,19 @@ $ `deps/iforest/src/iforest.nu`
             // wrong number.
             : ( Vec u ) magic ( bytes_from_str `ANOMSCR2` )
             : b magic_ok ( bytes_starts_with buf magic )
-            ( vec_free [u] magic )
             ? magic_ok {} {
-                ( vec_free [u] buf )
                 ^ @ ?ScoreCache { F }
             }
-            : *BlobRd rd ( __an_rd_new buf )
+            : ~ BlobRd rd @ BlobRd { 0 T }
             = . rd pos 8
-            : i epoch ( __an_rd_u64 rd )
-            : i base ( __an_rd_u64 rd )
-            : i nv ( __an_rd_u64 rd )
+            : i epoch ( __an_rd_u64 buf rd )
+            : i base ( __an_rd_u64 buf rd )
+            : i nv ( __an_rd_u64 buf rd )
             ? || < nv 0 > nv ANOM_SC_MAX_VERS { = . rd ok F } {}
             : ScoreCache c ( scorecache_new epoch base )
             : ~ i k 0
             ~ & . rd ok < k nv {
-                : i nlen ( __an_rd_u64 rd )
+                : i nlen ( __an_rd_u64 buf rd )
                 ? || < nlen 0 > nlen ANOM_BLOB_MAX_NAME { = . rd ok F } {
                     : i n ( vec_len [u] buf )
                     ? > + . rd pos nlen n { = . rd ok F } {
@@ -1118,7 +1047,7 @@ $ `deps/iforest/src/iforest.nu`
                 }
                 = k + k 1
             }
-            : i nr ( __an_rd_u64 rd )
+            : i nr ( __an_rd_u64 buf rd )
             ? || < nr 0 > nr ANOM_SC_MAX_ROWS { = . rd ok F } {}
             : ~ i safe nr
             ? . rd ok {} { = safe 0 }
@@ -1129,20 +1058,17 @@ $ `deps/iforest/src/iforest.nu`
             ( vec_reserve [i] . c flagged safe )
             = k 0
             ~ & . rd ok < k safe {
-                ( vec_push [f] . c score ( __an_rd_f64 rd ) )
-                ( vec_push [f] . c severity ( __an_rd_f64 rd ) )
-                ( vec_push [i] . c state ( __an_rd_u64 rd ) )
-                ( vec_push [i] . c present ( __an_rd_u64 rd ) )
-                ( vec_push [i] . c flagged ( __an_rd_u64 rd ) )
+                ( vec_push [f] . c score ( __an_rd_f64 buf rd ) )
+                ( vec_push [f] . c severity ( __an_rd_f64 buf rd ) )
+                ( vec_push [i] . c state ( __an_rd_u64 buf rd ) )
+                ( vec_push [i] . c present ( __an_rd_u64 buf rd ) )
+                ( vec_push [i] . c flagged ( __an_rd_u64 buf rd ) )
                 = k + k 1
             }
             // Trailing garbage after a well-formed body is corruption too.
             ? == . rd pos ( vec_len [u] buf ) {} { = . rd ok F }
             : b good . rd ok
-            ( nurl_free rd )
-            ( vec_free [u] buf )
             ? good { ^ @ ?ScoreCache { T c } } {}
-            ( scorecache_free c )
             ^ @ ?ScoreCache { F }
         }
         F _ → { ^ @ ?ScoreCache { F } }
@@ -1194,7 +1120,7 @@ $ `deps/iforest/src/iforest.nu`
 // A crash between them would leave the ring and `n_seen` disagreeing, and
 // another thread must never read the ring half-updated. `evict_before` is
 // the lifetime number of the oldest row to keep (0 evicts nothing).
-@ store_commit_point Store st s name i seq s line i evict_before * Meta m → b {
+@ store_commit_point Store st s name i seq s line i evict_before Meta m → b {
     ? . st ok {} { ^ F }
     : String txt ( meta_to_json_str m )
     : ~ b ok F
@@ -1213,7 +1139,6 @@ $ `deps/iforest/src/iforest.nu`
             = ok good
         }
     }
-    ( string_free txt )
     ^ ok
 }
 
@@ -1358,7 +1283,6 @@ $ `deps/iforest/src/iforest.nu`
     } {}
     : Json o ( label_to_json l )
     : String txt ( json_stringify o )
-    ( json_free o )
     : ~ b ok F
     ?? ( sqlite_prepare db `INSERT OR REPLACE INTO labels (model, seq, rec) VALUES (?1, ?2, ?3)` ) {
         F _ → {}
@@ -1369,7 +1293,6 @@ $ `deps/iforest/src/iforest.nu`
             = ok ( __st_run q )
         }
     }
-    ( string_free txt )
     ^ ok
 }
 
@@ -1416,13 +1339,11 @@ $ `deps/iforest/src/iforest.nu`
                                                         ( __an_label_int j `at` )
                                                         ( __an_label_str j `note` )
                                                     } )
-                                                } { ( string_free lab ) }
+                                                } {}
                                             } {}
-                                            ( json_free j )
                                         }
                                         F _ → {}
                                     }
-                                    ( string_free rec )
                                 } { = done T }
                             }
                         }
@@ -1455,7 +1376,6 @@ $ `deps/iforest/src/iforest.nu`
             = ok ( __st_run q )
         }
     }
-    ( string_free txt )
     ^ ok
 }
 
@@ -1507,7 +1427,6 @@ $ `deps/iforest/src/iforest.nu`
             F _ → {}
         }
     }
-    ( vec_free_with [String] rows \ String x → v { ( string_free x ) } )
     ^ arr
 }
 
@@ -1557,7 +1476,6 @@ $ `deps/iforest/src/iforest.nu`
 @ __st_flat_text s root s name s file → String {
     : String p ( __st_flat_file root name file )
     : !String IoErr r ( read_file ( string_data p ) )
-    ( string_free p )
     ?? r { T txt → { ^ txt } F _ → { ^ ( string_new ) } }
 }
 
@@ -1565,11 +1483,9 @@ $ `deps/iforest/src/iforest.nu`
 @ __st_flat_blob s root s name s file Store st s kind → b {
     : String p ( __st_flat_file root name file )
     : !( Vec u ) IoErr r ( read_file_bytes ( string_data p ) )
-    ( string_free p )
     ?? r {
         T data → {
             : b ok ( __st_blob_put st name kind data )
-            ( vec_free [u] data )
             ^ ok
         }
         F _ → { ^ T }
@@ -1580,7 +1496,7 @@ $ `deps/iforest/src/iforest.nu`
 @ store_migrate_dir Store st s root s name i now → b {
     ? . st ok {} { ^ F }
     : String meta ( __st_flat_text root name `metadata.json` )
-    ? > ( string_len meta ) 0 {} { ( string_free meta ) ^ F }
+    ? > ( string_len meta ) 0 {} { ^ F }
 
     // The lifetime number of the ring's oldest row: what the metadata
     // counted minus what the log holds. Metadata that does not parse is
@@ -1598,11 +1514,9 @@ $ `deps/iforest/src/iforest.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] raw \ String x → v { ( string_free x ) } )
-    ( string_free log )
     : ~ i seen ( vec_len [String] lines )
     ?? ( meta_from_json_str ( string_data meta ) ) {
-        T m → { = seen . m n_seen ( meta_free m ) }
+        T m → { = seen . ( _Meta_ptr m ) n_seen }
         F _ → {}
     }
     : ~ i base - seen ( vec_len [String] lines )
@@ -1633,10 +1547,8 @@ $ `deps/iforest/src/iforest.nu`
             ? own { ? ok { ? ( __st_commit db ) {} { = ok F } } { ( __st_rollback db ) } } {}
         }
     }
-    ( string_free meta )
 
     ? ok { ? ( store_write_points st name lines base ) {} { = ok F } } {}
-    ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
 
     // The blobs: one forest per trained version, plus the autoencoder,
     // the forecast and the score cache when they exist.
@@ -1659,19 +1571,15 @@ $ `deps/iforest/src/iforest.nu`
                                 ~ < c - fl 7 { ( string_push_char vn ( nurl_str_at f fl c ) ) = c + c 1 }
                                 : String kind ( __st_forest_kind ( string_data vn ) )
                                 ? ( __st_flat_blob root name f st ( string_data kind ) ) {} { = ok F }
-                                ( string_free kind )
-                                ( string_free vn )
                             } {}
                         }
                         F _ → {}
                     }
                     = e + e 1
                 }
-                ( vec_free_with [String] entries \ String x → v { ( string_free x ) } )
             }
             F _ → {}
         }
-        ( string_free dir )
     } {}
 
     ? ok { ? ( __st_flat_blob root name `autoencoder.json` st ANOM_KIND_AE ) {} { = ok F } } {}
@@ -1704,10 +1612,8 @@ $ `deps/iforest/src/iforest.nu`
                                             ( __an_label_str o `note` )
                                         }
                                         : b _w ( store_append_label st name one )
-                                        ( label_free one )
-                                    } { ( string_free lb ) }
+                                    } {}
                                 } {}
-                                ( json_free o )
                             }
                             F _ → {}
                         }
@@ -1717,8 +1623,6 @@ $ `deps/iforest/src/iforest.nu`
             }
             = j + j 1
         }
-        ( vec_free_with [String] ls \ String x → v { ( string_free x ) } )
-        ( string_free lab )
     } {}
 
     ? ok {
@@ -1731,7 +1635,7 @@ $ `deps/iforest/src/iforest.nu`
                 T l → {
                     ? > ( string_len l ) 0 {
                         ?? ( json_parse ( string_data l ) ) {
-                            T o → { : b _w ( store_append_audit st name o ) ( json_free o ) }
+                            T o → { : b _w ( store_append_audit st name o ) }
                             F _ → {}
                         }
                     } {}
@@ -1740,8 +1644,6 @@ $ `deps/iforest/src/iforest.nu`
             }
             = j + j 1
         }
-        ( vec_free_with [String] as \ String x → v { ( string_free x ) } )
-        ( string_free aud )
     } {}
 
     ^ ok
@@ -1779,7 +1681,6 @@ $ `deps/iforest/src/iforest.nu`
                                                     ?? ( sqlite_step q ) {
                                                         T has → {
                                                             ? has {
-                                                                ( string_free found )
                                                                 = found ( string_from ( string_data org ) )
                                                             } {}
                                                         }
@@ -1790,22 +1691,17 @@ $ `deps/iforest/src/iforest.nu`
                                         }
                                     }
                                 } {}
-                                ( store_free probe )
                             } {}
-                            ( string_free org )
                         } {}
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] entries \ String x → v { ( string_free x ) } )
         }
         F _ → {}
     }
-    ( string_free dir )
     ? > ( string_len found ) 0 { ^ found } {}
-    ( string_free found )
     ^ ( string_from ANOM_ORG_DEFAULT )
 }
 
@@ -1829,12 +1725,10 @@ $ `deps/iforest/src/iforest.nu`
                         ? skip {} {
                             : String probe ( __st_flat_file root en `metadata.json` )
                             : b is_model ( file_exists ( string_data probe ) )
-                            ( string_free probe )
                             ? is_model {
                                 : String org ( __st_owner_org root en )
                                 : Store st ( store_open_org root ( string_data org ) )
                                 : b ok ( store_migrate_dir st root en now )
-                                ( store_free st )
                                 ? ok {
                                     : !v IoErr mk ( dir_create_all ( string_data aside ) )
                                     ?? mk { T _ → {} F _ → {} }
@@ -1846,10 +1740,7 @@ $ `deps/iforest/src/iforest.nu`
                                     ( string_push_str to en )
                                     : !v IoErr mv ( fs_rename ( string_data from ) ( string_data to ) )
                                     ?? mv { T _ → { = moved + moved 1 } F _ → {} }
-                                    ( string_free from )
-                                    ( string_free to )
                                 } {}
-                                ( string_free org )
                             } {}
                         }
                     }
@@ -1857,11 +1748,9 @@ $ `deps/iforest/src/iforest.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] entries \ String x → v { ( string_free x ) } )
         }
         F _ → {}
     }
-    ( string_free aside )
     ^ moved
 }
 
@@ -1915,7 +1804,7 @@ $ `deps/iforest/src/iforest.nu`
                     ?? ( sqlite_step q ) {
                         F _ → {}
                         T has → {
-                            ? has { ( string_free txt ) = txt ( sqlite_column_text q 0 ) } {}
+                            ? has { = txt ( sqlite_column_text q 0 ) } {}
                         }
                     }
                 }
@@ -1935,10 +1824,10 @@ $ `deps/iforest/src/iforest.nu`
     ? ( store_exists dst name ) { ^ F } {}
 
     : String meta ( __st_meta_text src name )
-    ? > ( string_len meta ) 0 {} { ( string_free meta ) ^ F }
+    ? > ( string_len meta ) 0 {} { ^ F }
     : ~ i seen 0
     ?? ( meta_from_json_str ( string_data meta ) ) {
-        T m → { = seen . m n_seen ( meta_free m ) }
+        T m → { = seen . ( _Meta_ptr m ) n_seen }
         F _ → {}
     }
     : ( Vec String ) lines ( store_load_points src name )
@@ -1977,8 +1866,6 @@ $ `deps/iforest/src/iforest.nu`
             = ok good
         }
     }
-    ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
-    ( string_free meta )
     ? ok {} { ^ F }
 
     // The blobs, the labels and the audit trail, each read from the source
@@ -1992,7 +1879,6 @@ $ `deps/iforest/src/iforest.nu`
                 ?? ( __st_blob_get src name ( string_data kd ) ) {
                     T data → {
                         ? ( __st_blob_put dst name ( string_data kd ) data ) {} { = ok F }
-                        ( vec_free [u] data )
                     }
                     F _ → {}
                 }
@@ -2001,7 +1887,6 @@ $ `deps/iforest/src/iforest.nu`
         }
         = j + j 1
     }
-    ( vec_free_with [String] kinds \ String x → v { ( string_free x ) } )
 
     : ( Vec Label ) labs ( store_load_labels src name )
     : i nl ( vec_len [Label] labs )
@@ -2010,7 +1895,6 @@ $ `deps/iforest/src/iforest.nu`
         ?? ( vec_get [Label] labs j ) { T l → { : b _w ( store_append_label dst name l ) } F _ → {} }
         = j + j 1
     }
-    ( labels_free labs )
 
     : Json aud ( store_load_audit src name 0 )
     : i na ( json_arr_len aud )
@@ -2019,7 +1903,6 @@ $ `deps/iforest/src/iforest.nu`
         ?? ( json_arr_get aud j ) { T e → { : b _w ( store_append_audit dst name e ) } F _ → {} }
         = j + j 1
     }
-    ( json_free aud )
 
     ? ok { ? ( store_delete src name ) {} { = ok F } } {}
     ? ok {

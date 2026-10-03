@@ -118,7 +118,6 @@ $ `src/sky.nu`
     : ( Vec String ) hits ( vec_new [String] )
     ?? ( dir_list dir ) {
         F _e → {
-            ( vec_free [String] hits )
             ( nurl_print `map-anything: cannot read the directory ` )
             ( nurl_print dir ) ( nurl_print `\n` )
             ^ F
@@ -136,11 +135,9 @@ $ `src/sky.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
     }
     ? == ( vec_len [String] hits ) 0 {
-        ( vec_free [String] hits )
         ( nurl_print `map-anything: no .png, .jpg or .jpeg frames in ` )
         ( nurl_print dir ) ( nurl_print `\n` )
         ^ F
@@ -155,7 +152,6 @@ $ `src/sky.nu`
         }
         = g + g 1
     }
-    ( vec_free [String] hits )
     ^ T
 }
 
@@ -163,8 +159,10 @@ $ `src/sky.nu`
 
 // ImageNet normalisation, in place over CHW planes.
 @ __ma_norm * f p i n → v {
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     : ~ i c 0
@@ -177,7 +175,6 @@ $ `src/sky.nu`
         }
         = c + c 1
     }
-    ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
 @ __ma_u8 f v → i {
@@ -196,7 +193,6 @@ $ `src/sky.nu`
         ?? ( env_get `MAP_ANYTHING_MODEL` ) {
             T v → {
                 ( string_push_str ref ( string_data v ) )
-                ( string_free v )
             }
             F → { ( string_push_str ref MA_DEFAULT_REF ) }
         }
@@ -209,13 +205,11 @@ $ `src/sky.nu`
         } {}
     }
     : !String String r ( hub_get ( string_data ref ) )
-    ( string_free ref )
     ?? r {
         F e → ^ @ !String String { F e }
         T p → {
             ? ( __ma_is_dir ( string_data p ) ) {
                 : String mp ( path_join ( string_data p ) `model.safetensors` )
-                ( string_free p )
                 ^ @ !String String { T mp }
             } {}
             ^ @ !String String { T p }
@@ -356,11 +350,9 @@ $ `src/sky.nu`
                 F e → {
                     ( nurl_print `map-anything: ` )
                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                    ( string_free e )
                     = bad 1
                 }
             }
-            ( string_free fdir )
         } {}
     } {}
     // stride, then the cap — subsample first so the cap keeps coverage
@@ -387,11 +379,6 @@ $ `src/sky.nu`
             ( nurl_print ( nurl_str_int ( vec_len [String] fr ) ) )
             ( nurl_print `; --max-views 0 lifts the cap)\n` )
         } {}
-        : ~ i d maxviews
-        ~ < d ( vec_len [String] fr ) {
-            ?? ( vec_get [String] fr d ) { T st → { ( string_free st ) } F → {} }
-            = d + d 1
-        }
         : b _c ( vec_truncate [String] fr maxviews )
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
@@ -420,11 +407,9 @@ $ `src/sky.nu`
         F e → {
             ( nurl_print `map-anything: ` )
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             ^ 1
         }
         T p → {
-            ( string_free mhold )
             = mhold p
             = mpath ( string_data mhold )
         }
@@ -441,7 +426,6 @@ $ `src/sky.nu`
         ?? ( pp_open fp ) {
             F e → {
                 ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                ( string_free e )
                 ^ 1
             }
             T im → {
@@ -467,7 +451,7 @@ $ `src/sky.nu`
     } {}
 
     // fit every view; keep the [0,1] pixels for colours
-    : ( Vec i ) framev ( vec_new [i] )  // *Frame as i handles
+    : ( Vec Frame ) framev ( vec_new [Frame] )
     = k 0
     ~ < k nv {
         ?? ( vec_get [Image] imgs k ) {
@@ -476,24 +460,21 @@ $ `src/sky.nu`
                 ?? ( pp_fit im w h ) {
                     F e → {
                         ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                        ( string_free e )
                         ^ 1
                     }
-                    T fr → { ( vec_push [i] framev # i fr ) }
+                    T fr → { ( vec_push [Frame] framev fr ) }
                 }
             }
         }
         = k + k 1
     }
-    ( vec_free_with [Image] imgs \ Image im → v { ( image_free im ) } )
 
     // the model, the device
-    : ~ * Lw lw # *Lw 0
+    : ~ Lw lw ( lw_none )
     ?? ( lw_open mpath ) {
         F e → {
             ( nurl_print `map-anything: ` )
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             ^ 1
         }
         T got → { = lw got }
@@ -547,7 +528,8 @@ $ `src/sky.nu`
     : GkBuf i11b ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
     : GkBuf finb ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
     : GkBuf tok ( gk_dbuf_new kit * tpv DN_DIM GK_F32 )
-    : *f norm # *f ( nurl_zalloc * 8 * 3 * h w )
+    : ( Vec u ) norm__v ( vec_zeroed [u] * 8 * 3 * h w )
+    : *f norm # *f ( vec_data [u] norm__v )
 
     // sky segmentation, when asked for: the LingBot demo's skyseg.onnx,
     // fetched through hub and run through the onnx package
@@ -557,13 +539,10 @@ $ `src/sky.nu`
             F e → {
                 ( nurl_print `map-anything: skyseg fetch failed: ` )
                 ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                ( string_free e )
                 ^ 1
             }
             T p → {
-                ( sky_free sky )
                 = sky ( sky_open ( string_data p ) )
-                ( string_free p )
                 ? . sky ok {} {
                     ( nurl_print `map-anything: cannot load skyseg.onnx\n` )
                     ^ 1
@@ -576,7 +555,6 @@ $ `src/sky.nu`
     ?? ( ply_create . o out . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
         F e → {
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             ^ 1
         }
         T p → { = ply p }
@@ -588,21 +566,34 @@ $ `src/sky.nu`
     : GkBuf mlog ( gk_dbuf_new kit hw GK_F32 )
     : ( Vec f ) hostv ( vec_with_cap [f] * 3 hw )
     : b _hl ( vec_set_len [f] hostv * 3 hw )
-    : *f rays_h # *f ( nurl_zalloc * 8 * 3 hw )
-    : *f depth_h # *f ( nurl_zalloc * 8 hw )
-    : *f conf_h # *f ( nurl_zalloc * 8 hw )
-    : *f mlog_h # *f ( nurl_zalloc * 8 hw )
-    : *f pose # *f ( nurl_zalloc 56 )
-    : *f pts # *f ( nurl_zalloc * 24 hw )
-    : *f depthz # *f ( nurl_zalloc * 8 hw )
-    : *u mask # *u ( nurl_zalloc hw )
+    : ( Vec u ) rays_h__v ( vec_zeroed [u] * 8 * 3 hw )
+    : *f rays_h # *f ( vec_data [u] rays_h__v )
+    : ( Vec u ) depth_h__v ( vec_zeroed [u] * 8 hw )
+    : *f depth_h # *f ( vec_data [u] depth_h__v )
+    : ( Vec u ) conf_h__v ( vec_zeroed [u] * 8 hw )
+    : *f conf_h # *f ( vec_data [u] conf_h__v )
+    : ( Vec u ) mlog_h__v ( vec_zeroed [u] * 8 hw )
+    : *f mlog_h # *f ( vec_data [u] mlog_h__v )
+    : ( Vec u ) pose__v ( vec_zeroed [u] 56 )
+    : *f pose # *f ( vec_data [u] pose__v )
+    : ( Vec u ) pts__v ( vec_zeroed [u] * 24 hw )
+    : *f pts # *f ( vec_data [u] pts__v )
+    : ( Vec u ) depthz__v ( vec_zeroed [u] * 8 hw )
+    : *f depthz # *f ( vec_data [u] depthz__v )
+    : ( Vec u ) mask__v ( vec_zeroed [u] hw )
+    : *u mask # *u ( vec_data [u] mask__v )
     // the stitch: the previous window's last `ov` views in GLOBAL
     // coordinates, and pair buffers for the Sim(3) fit
-    : *f prev_pts # *f ( nurl_zalloc * 24 * ov hw )
-    : *u prev_mask # *u ( nurl_zalloc * ov hw )
-    : *f pair_x # *f ( nurl_zalloc * 24 * ov hw )
-    : *f pair_y # *f ( nurl_zalloc * 24 * ov hw )
-    : *f xf # *f ( nurl_zalloc 104 )
+    : ( Vec u ) prev_pts__v ( vec_zeroed [u] * 24 * ov hw )
+    : *f prev_pts # *f ( vec_data [u] prev_pts__v )
+    : ( Vec u ) prev_mask__v ( vec_zeroed [u] * ov hw )
+    : *u prev_mask # *u ( vec_data [u] prev_mask__v )
+    : ( Vec u ) pair_x__v ( vec_zeroed [u] * 24 * ov hw )
+    : *f pair_x # *f ( vec_data [u] pair_x__v )
+    : ( Vec u ) pair_y__v ( vec_zeroed [u] * 24 * ov hw )
+    : *f pair_y # *f ( vec_data [u] pair_y__v )
+    : ( Vec u ) xf__v ( vec_zeroed [u] 104 )
+    : *f xf # *f ( vec_data [u] xf__v )
     = . xf 0 1.0
     = . xf 1 1.0
     = . xf 5 1.0
@@ -624,9 +615,7 @@ $ `src/sky.nu`
         // encoder over this window's views, placed into the sequence
         = k 0
         ~ < k count {
-            : ~ * Frame fr # *Frame 0
-            ?? ( vec_get [i] framev + wbase k ) { T v → { = fr # *Frame v } F → {} }
-            : *f src ( pp_data fr )
+            : *f src ?? ( vec_get [Frame] framev + wbase k ) { T v → ( pp_data v ) F → # *f 0 }
             : ~ i j 0
             ~ < j * 3 * h w { = . norm j . src j = j + j 1 }
             ( __ma_norm norm * h w )
@@ -703,9 +692,8 @@ $ `src/sky.nu`
                 ~ < j hw { = . mask j # u 1 = j + j 1 }
             }
             ? != . o masksky 0 {
-                : ~ * Frame skf # *Frame 0
-                ?? ( vec_get [i] framev + wbase v ) { T vv → { = skf # *Frame vv } F → {} }
-                ? ( sky_mask sky ( pp_data skf ) w h mask ) {} {
+                : *f skpx ?? ( vec_get [Frame] framev + wbase v ) { T vv → ( pp_data vv ) F → # *f 0 }
+                ? ( sky_mask sky skpx w h mask ) {} {
                     ( nurl_print `map-anything: sky segmentation failed\n` )
                     ^ 1
                 }
@@ -744,9 +732,7 @@ $ `src/sky.nu`
 
             ? >= v emit_from {
                 ? > windex 0 { ( gm_sim3_apply pts hw xf ) } {}
-                : ~ * Frame fr # *Frame 0
-                ?? ( vec_get [i] framev + wbase v ) { T vv → { = fr # *Frame vv } F → {} }
-                : *f rgb ( pp_data fr )
+                : *f rgb ?? ( vec_get [Frame] framev + wbase v ) { T vv → ( pp_data vv ) F → # *f 0 }
                 : ~ i y 0
                 ~ < y h {
                     : ~ i px 0

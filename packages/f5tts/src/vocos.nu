@@ -27,11 +27,11 @@ $ `deps/gpukit/src/devops.nu`
 $ `deps/torchpt/src/torchpt.nu`
 $ `deps/audio/src/istft.nu`
 $ `kernels.nu`
+$ `stdlib/core/rcbox.nu`
 
-: Vocos {
+: VocosImpl {
     GpuKit kit
     Pt pt  // the mmapped .bin
-    b own_kit
     i dim
     i inner
     i layers
@@ -52,8 +52,21 @@ $ `kernels.nu`
     GkBuf melb GkBuf h GkBuf t1 GkBuf t2 GkBuf big GkBuf spec
 }
 
-@ __voc_err s msg → !*Vocos String {
-    ^ @ !*Vocos String { F ( string_from msg ) }
+// A Vocos is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same vocoder, and the last owner releases it.
+: Vocos { s ctl }
+
+@ Vocos_share Vocos h → Vocos { ^ @ Vocos { # s ( rcbox_share # i . h ctl ) } }
+
+@ Vocos_drop sink Vocos h → v {
+    ( mem_forget h )
+    ( rcbox_release [VocosImpl] # i . h ctl )
+}
+
+@ __Vocos_ptr Vocos h → *VocosImpl { ^ ( rcbox_ptr [VocosImpl] # i . h ctl ) }
+
+@ __voc_err s msg → !Vocos String {
+    ^ @ !Vocos String { F ( string_from msg ) }
 }
 
 @ __voc_nobuf → GkBuf { ^ ( gk_buf_none GK_F32 ) }
@@ -73,7 +86,7 @@ $ `kernels.nu`
 }
 
 // Upload one f32 tensor out of the pickle's storage, no host copy.
-@ __voc_up * Vocos v s name → GkBuf {
+@ __voc_up * VocosImpl v s name → GkBuf {
     : i ti ( pt_find . v pt name )
     ? < ti 0 { ^ ( __voc_nobuf ) } {}
     ? ( pt_is_contiguous . v pt ti ) {} { ^ ( __voc_nobuf ) }
@@ -81,18 +94,16 @@ $ `kernels.nu`
     : GkBuf b ( gk_dbuf_new . v kit ne GK_F32 )
     ? ( gk_buf_ok b ) {} { ^ ( __voc_nobuf ) }
     ? ( gk_dbuf_upload_raw . v kit b ( pt_tensor_ptr . v pt ti ) ) {} {
-        ( gk_dbuf_free b )
         ^ ( __voc_nobuf )
     }
     ^ b
 }
 
-@ __voc_upl * Vocos v i k s suf ( Vec GkBuf ) dst → b {
+@ __voc_upl * VocosImpl v i k s suf ( Vec GkBuf ) dst → b {
     : String s ( string_from `backbone.convnext.` )
     ( string_push_int s k )
     ( string_push_str s suf )
     : GkBuf b ( __voc_up v ( string_data s ) )
-    ( string_free s )
     ( vec_push [GkBuf] dst b )
     ^ ( gk_buf_ok b )
 }
@@ -103,7 +114,7 @@ $ `kernels.nu`
 
 // A convolution weight with the output channel moved LAST — see
 // __f5m_up_convw in model.nu: the same permutation, for the same reason.
-@ __voc_up_convw * Vocos v s name i cout i ipg i K → GkBuf {
+@ __voc_up_convw * VocosImpl v s name i cout i ipg i K → GkBuf {
     : i ti ( pt_find . v pt name )
     ? < ti 0 { ^ ( __voc_nobuf ) } {}
     ? ( pt_is_contiguous . v pt ti ) {} { ^ ( __voc_nobuf ) }
@@ -125,24 +136,22 @@ $ `kernels.nu`
         = k + k 1
     }
     : GkBuf b ( gk_dbuf_new . v kit ne GK_F32 )
-    ? ( gk_buf_ok b ) {} { ( vec_free [f] perm ) ^ ( __voc_nobuf ) }
+    ? ( gk_buf_ok b ) {} { ^ ( __voc_nobuf ) }
     : b ok ( gk_dbuf_upload . v kit b perm )
-    ( vec_free [f] perm )
-    ? ok {} { ( gk_dbuf_free b ) ^ ( __voc_nobuf ) }
+    ? ok {} { ^ ( __voc_nobuf ) }
     ^ b
 }
 
-@ __voc_upl_convw * Vocos v i k s suf i cout i ipg i K ( Vec GkBuf ) dst → b {
+@ __voc_upl_convw * VocosImpl v i k s suf i cout i ipg i K ( Vec GkBuf ) dst → b {
     : String s ( string_from `backbone.convnext.` )
     ( string_push_int s k )
     ( string_push_str s suf )
     : GkBuf b ( __voc_up_convw v ( string_data s ) cout ipg K )
-    ( string_free s )
     ( vec_push [GkBuf] dst b )
     ^ ( gk_buf_ok b )
 }
 
-@ __voc_lists * Vocos v → v {
+@ __voc_lists * VocosImpl v → v {
     = . v dw_w ( vec_new [GkBuf] )
     = . v dw_b ( vec_new [GkBuf] )
     = . v nw ( vec_new [GkBuf] )
@@ -154,18 +163,33 @@ $ `kernels.nu`
     = . v gam ( vec_new [GkBuf] )
 }
 
-@ __voc_scratch_zero * Vocos v → v {
+// Let go of the frame-sized scratch. A store through the vocoder's pointer
+// does not drop what it overwrites, so each buffer leaves through a take and
+// is dropped when this returns — before the caller allocates the next size.
+@ __voc_scratch_zero * VocosImpl v → v {
     = . v frames 0
+    : GkBuf o_melb . v melb
+    ( mem_take o_melb )
     = . v melb ( __voc_nobuf )
+    : GkBuf o_h . v h
+    ( mem_take o_h )
     = . v h ( __voc_nobuf )
+    : GkBuf o_t1 . v t1
+    ( mem_take o_t1 )
     = . v t1 ( __voc_nobuf )
+    : GkBuf o_t2 . v t2
+    ( mem_take o_t2 )
     = . v t2 ( __voc_nobuf )
+    : GkBuf o_big . v big
+    ( mem_take o_big )
     = . v big ( __voc_nobuf )
+    : GkBuf o_spec . v spec
+    ( mem_take o_spec )
     = . v spec ( __voc_nobuf )
 }
 
 // Every weight, from the pickle to the device — again after an idle unload.
-@ __voc_upload_all * Vocos v → b {
+@ __voc_upload_all * VocosImpl v → b {
     ( vec_clear [GkBuf] . v dw_w ) ( vec_clear [GkBuf] . v dw_b )
     ( vec_clear [GkBuf] . v nw ) ( vec_clear [GkBuf] . v nb )
     ( vec_clear [GkBuf] . v p1w ) ( vec_clear [GkBuf] . v p1b )
@@ -197,13 +221,14 @@ $ `kernels.nu`
     ^ ok
 }
 
-@ voc_open s path GpuKit kit → !*Vocos String {
+@ voc_open s path GpuKit kit → !Vocos String {
     ?? ( pt_open path ) {
         T pt → {
-            : *Vocos v # *Vocos ( nurl_alloc Z Vocos )
+            : Vocos h @ Vocos { # s ( rcbox_zero [VocosImpl] ) }
+            : *VocosImpl v ( __Vocos_ptr h )
             = . v pt pt
-            = . v kit kit
-            = . v own_kit F
+            // one more owner of the caller's kit: the vocoder runs on it
+            = . v kit ( GpuKit_share kit )
             = . v dim 512
             = . v inner 1536
             = . v layers 8
@@ -215,44 +240,19 @@ $ `kernels.nu`
             ? ( __voc_upload_all v ) {} {
                 ^ ( __voc_err `f5tts: the vocoder checkpoint is missing tensors` )
             }
-            ^ @ !*Vocos String { T v }
+            ^ @ !Vocos String { T h }
         }
-        F e → { ^ @ !*Vocos String { F e } }
+        F e → { ^ @ !Vocos String { F e } }
     }
 }
 
-@ __voc_freev ( Vec GkBuf ) v → v {
-    : i n ( vec_len [GkBuf] v )
-    : ~ i k 0
-    ~ < k n { ( gk_dbuf_free ( __voc_bget v k ) ) = k + k 1 }
-    ( vec_free [GkBuf] v )
-}
+// Early release (optional): the last owner of the vocoder gives back its
+// weights, its scratch and the mapping.
+@ voc_close sink Vocos v → v {}
 
-@ voc_free_scratch * Vocos v → v {
-    ( gk_dbuf_free . v melb ) ( gk_dbuf_free . v h ) ( gk_dbuf_free . v t1 )
-    ( gk_dbuf_free . v t2 ) ( gk_dbuf_free . v big ) ( gk_dbuf_free . v spec )
-    ( __voc_scratch_zero v )
-}
-
-@ voc_close * Vocos v → v {
-    ( voc_free_scratch v )
-    ( gk_dbuf_free . v emb_w ) ( gk_dbuf_free . v emb_b )
-    ( gk_dbuf_free . v n_w ) ( gk_dbuf_free . v n_b )
-    ( gk_dbuf_free . v fn_w ) ( gk_dbuf_free . v fn_b )
-    ( gk_dbuf_free . v out_w ) ( gk_dbuf_free . v out_b )
-    ( __voc_freev . v dw_w ) ( __voc_freev . v dw_b )
-    ( __voc_freev . v nw ) ( __voc_freev . v nb )
-    ( __voc_freev . v p1w ) ( __voc_freev . v p1b )
-    ( __voc_freev . v p2w ) ( __voc_freev . v p2b )
-    ( __voc_freev . v gam )
-    ? ( pt_is_open . v pt ) { ( pt_close . v pt ) = . v pt ( pt_none ) } {}
-    ? . v own_kit { ( gk_close . v kit ) } {}
-    ( nurl_free # s v )
-}
-
-@ voc_alloc * Vocos v i frames → b {
+@ __voc_alloc * VocosImpl v i frames → b {
     ? == . v frames frames { ^ T } {}
-    ( voc_free_scratch v )
+    ( __voc_scratch_zero v )
     : i dim . v dim
     = . v frames frames
     = . v melb ( gk_dbuf_new . v kit * frames . v nmel GK_F32 )
@@ -265,10 +265,11 @@ $ `kernels.nu`
 }
 
 // mel (frames × 100, row-major, natural-log scale) → waveform at 24 kHz.
-@ voc_decode * Vocos v ( Vec f ) mel i frames ( Vec f ) out → b {
+@ voc_decode Vocos v__h ( Vec f ) mel i frames ( Vec f ) out → b {
+    : *VocosImpl v ( __Vocos_ptr v__h )
     : i dim . v dim
     : i inner . v inner
-    ? ( voc_alloc v frames ) {} { ^ F }
+    ? ( __voc_alloc v frames ) {} { ^ F }
     : GkBuf melb ( __voc_view . v melb 0 * frames . v nmel )
     : GkBuf h ( __voc_view . v h 0 * frames dim )
     : GkBuf t1 ( __voc_view . v t1 0 * frames dim )
@@ -309,7 +310,7 @@ $ `kernels.nu`
     : ( Vec f ) flat ( vec_with_cap [f] * frames * 2 nbins )
     : ~ i k 0
     ~ < k * frames * 2 nbins { ( vec_push [f] flat 0.0 ) = k + k 1 }
-    ? ( gk_dbuf_download . v kit spec flat ) {} { ( vec_free [f] flat ) ^ F }
+    ? ( gk_dbuf_download . v kit spec flat ) {} { ^ F }
     : ( Vec f ) re ( vec_with_cap [f] * frames nbins )
     : ( Vec f ) im ( vec_with_cap [f] * frames nbins )
     : ~ i t 0
@@ -329,50 +330,66 @@ $ `kernels.nu`
         }
         = t + t 1
     }
-    ( vec_free [f] flat )
     : ( Vec f ) wave ( istft_center re im . v nfft . v hop frames )
-    ( vec_free [f] re )
-    ( vec_free [f] im )
     ( vec_clear [f] out )
     = k 0
     ~ < k ( vec_len [f] wave ) {
         ?? ( vec_get [f] wave k ) { T x → { ( vec_push [f] out x ) } F → {} }
         = k + k 1
     }
-    ( vec_free [f] wave )
     ^ T
 }
 
 // ── the vocoder's lease ─────────────────────────────────────────────
 
-@ __voc_freebufs ( Vec GkBuf ) v → v {
-    : i n ( vec_len [GkBuf] v )
-    : ~ i k 0
-    ~ < k n { ( gk_dbuf_free ( __voc_bget v k ) ) = k + k 1 }
-    ( vec_clear [GkBuf] v )
+@ voc_loaded Vocos v__h → b {
+    : *VocosImpl v ( __Vocos_ptr v__h )
+    ^ ( gk_buf_ok . v out_w )
 }
 
-@ voc_loaded * Vocos v → b { ^ ( gk_buf_ok . v out_w ) }
-
-@ voc_unload * Vocos v → v {
-    ? ( voc_loaded v ) {} { ^ }
-    ( voc_free_scratch v )
-    ( gk_dbuf_free . v emb_w ) ( gk_dbuf_free . v emb_b )
-    ( gk_dbuf_free . v n_w ) ( gk_dbuf_free . v n_b )
-    ( gk_dbuf_free . v fn_w ) ( gk_dbuf_free . v fn_b )
-    ( gk_dbuf_free . v out_w ) ( gk_dbuf_free . v out_b )
-    = . v emb_w ( __voc_nobuf ) = . v emb_b ( __voc_nobuf )
-    = . v n_w ( __voc_nobuf ) = . v n_b ( __voc_nobuf )
-    = . v fn_w ( __voc_nobuf ) = . v fn_b ( __voc_nobuf )
-    = . v out_w ( __voc_nobuf ) = . v out_b ( __voc_nobuf )
-    ( __voc_freebufs . v dw_w ) ( __voc_freebufs . v dw_b )
-    ( __voc_freebufs . v nw ) ( __voc_freebufs . v nb )
-    ( __voc_freebufs . v p1w ) ( __voc_freebufs . v p1b )
-    ( __voc_freebufs . v p2w ) ( __voc_freebufs . v p2b )
-    ( __voc_freebufs . v gam )
+@ voc_unload Vocos v__h → v {
+    : *VocosImpl v ( __Vocos_ptr v__h )
+    ? ( voc_loaded v__h ) {} { ^ }
+    ( __voc_scratch_zero v )
+    ( __voc_drop_top v )
+    ( vec_clear [GkBuf] . v dw_w ) ( vec_clear [GkBuf] . v dw_b )
+    ( vec_clear [GkBuf] . v nw ) ( vec_clear [GkBuf] . v nb )
+    ( vec_clear [GkBuf] . v p1w ) ( vec_clear [GkBuf] . v p1b )
+    ( vec_clear [GkBuf] . v p2w ) ( vec_clear [GkBuf] . v p2b )
+    ( vec_clear [GkBuf] . v gam )
 }
 
-@ voc_reload * Vocos v → b {
-    ? ( voc_loaded v ) { ^ T } {}
+// The single-tensor weights leave the vocoder (dropped when this returns);
+// the per-layer lists are emptied by vec_clear, which drops their elements.
+@ __voc_drop_top * VocosImpl v → v {
+    : GkBuf o_emb_w . v emb_w
+    ( mem_take o_emb_w )
+    = . v emb_w ( __voc_nobuf )
+    : GkBuf o_emb_b . v emb_b
+    ( mem_take o_emb_b )
+    = . v emb_b ( __voc_nobuf )
+    : GkBuf o_n_w . v n_w
+    ( mem_take o_n_w )
+    = . v n_w ( __voc_nobuf )
+    : GkBuf o_n_b . v n_b
+    ( mem_take o_n_b )
+    = . v n_b ( __voc_nobuf )
+    : GkBuf o_fn_w . v fn_w
+    ( mem_take o_fn_w )
+    = . v fn_w ( __voc_nobuf )
+    : GkBuf o_fn_b . v fn_b
+    ( mem_take o_fn_b )
+    = . v fn_b ( __voc_nobuf )
+    : GkBuf o_out_w . v out_w
+    ( mem_take o_out_w )
+    = . v out_w ( __voc_nobuf )
+    : GkBuf o_out_b . v out_b
+    ( mem_take o_out_b )
+    = . v out_b ( __voc_nobuf )
+}
+
+@ voc_reload Vocos v__h → b {
+    : *VocosImpl v ( __Vocos_ptr v__h )
+    ? ( voc_loaded v__h ) { ^ T } {}
     ^ ( __voc_upload_all v )
 }

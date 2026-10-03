@@ -17,8 +17,7 @@
 //
 // Output is one f32 plane-major (CHW) buffer per frame, C = 3.
 //
-//   ( pp_load path size patch )  → !*Frame String
-//   ( pp_free fr )               → v
+//   ( pp_load path size patch )  → !Frame String
 //   ( pp_width fr ) ( pp_height fr )   → i
 //   ( pp_data fr )               → *f   CHW, [0,1], borrowed
 //
@@ -37,21 +36,16 @@ $ `deps/image/src/image.nu`
     ( Vec f ) data  // CHW, 3 planes, values in [0, 1]
 }
 
-@ pp_width * Frame fr → i { ^ . fr width }
+@ pp_width Frame fr → i { ^ . fr width }
 
-@ pp_height * Frame fr → i { ^ . fr height }
+@ pp_height Frame fr → i { ^ . fr height }
 
-@ pp_data * Frame fr → *f { ^ ( vec_data [f] . fr data ) }
+@ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
 
-@ pp_free sink * Frame fr → v {
-    ( vec_free [f] . fr data )
-    ( nurl_free # s fr )
-}
-
-@ __pp_err s msg s detail → !*Frame String {
+@ __pp_err s msg s detail → !Frame String {
     : String m ( string_from msg )
     ( string_push_str m detail )
-    ^ @ !*Frame String { F m }
+    ^ @ !Frame String { F m }
 }
 
 // round-half-away-from-zero on a non-negative ratio, matching python's
@@ -63,7 +57,7 @@ $ `deps/image/src/image.nu`
 }
 
 // Resize + centre-crop one decoded image to the model's input geometry.
-// Returns a NEW image; the caller frees both.
+// Returns a NEW image.
 @ pp_fit Image im i size i patch → Image {
     : i w . im width
     : i h . im height
@@ -77,7 +71,6 @@ $ `deps/image/src/image.nu`
     ? <= nh size { ^ resized } {}
     : i start_y / - nh size 2
     : Image cropped ( image_crop resized 0 start_y nw size )
-    ( image_free resized )
     ^ cropped
 }
 
@@ -90,25 +83,22 @@ $ `deps/image/src/image.nu`
 // applying the wrong one. Video-derived frames, which is what streaming
 // reconstruction is actually fed, carry no EXIF. Applying it belongs with
 // EXIF support in `image`, not with a guess here.
-@ pp_load s path i size i patch → !*Frame String {
+@ pp_load s path i size i patch → !Frame String {
     ?? ( image_load path ) {
         F → {
             : String m ( string_from `lingbot-map: cannot decode ` )
             ( string_push_str m path )
             ( string_push_str m ` — ` )
             ( string_push_str m ( image_error ) )
-            ^ @ !*Frame String { F m }
+            ^ @ !Frame String { F m }
         }
         T im → {
             // Alpha composited onto WHITE, as the reference does, then RGB.
             : Image rgb ( __pp_flatten im )
-            ( image_free im )
             : Image fit ( pp_fit rgb size patch )
-            ( image_free rgb )
             : i w . fit width
             : i h . fit height
             ? | <= w 0 <= h 0 {
-                ( image_free fit )
                 ^ ( __pp_err `lingbot-map: empty frame after resize: ` path )
             } {}
             // Interleaved bytes to planar floats, through the two data
@@ -121,7 +111,6 @@ $ `deps/image/src/image.nu`
             // copy below indexes on that, so say so rather than read
             // past a row if it ever stops being true.
             ? != ch 3 {
-                ( image_free fit )
                 ^ ( __pp_err `lingbot-map: expected an RGB frame from ` path )
             } {}
             : ( Vec f ) data ( vec_with_cap [f] * 3 * w h )
@@ -144,12 +133,7 @@ $ `deps/image/src/image.nu`
                 }
                 = k + k 1
             }
-            ( image_free fit )
-            : *Frame fr # *Frame ( nurl_alloc Z Frame )
-            = . fr width w
-            = . fr height h
-            = . fr data data
-            ^ @ !*Frame String { T fr }
+            ^ @ !Frame String { T @ Frame { w h data } }
         }
     }
 }

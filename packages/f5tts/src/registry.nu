@@ -38,12 +38,6 @@ $ `deps/hub/src/hub.nu`
     b cached  // the files are on this machine already
 }
 
-@ f5_entry_free F5Entry e → v {
-    ( string_free . e id )
-    ( string_free . e ckpt )
-    ( string_free . e vocab )
-}
-
 @ __f5g_push ( Vec F5Entry ) v s id s ckpt s vocab b local b cached → v {
     ( vec_push [F5Entry] v @ F5Entry {
         ( string_from id ) ( string_from ckpt ) ( string_from vocab ) local cached
@@ -107,8 +101,6 @@ $ `deps/hub/src/hub.nu`
                 }
                 = k + k 1
             }
-            : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
-            ( vec_free_with [String] names drop_s )
         }
         F _e → {}
     }
@@ -136,17 +128,12 @@ $ `deps/hub/src/hub.nu`
                                 ( __f5g_push out ( string_data nm ) ( string_data ck )
                                 ( string_data vo ) T T )
                             } {}
-                            ( string_free vo )
                         } {}
-                        ( string_free ck )
-                        ( string_free dir )
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
-            ( vec_free_with [String] names drop_s )
         }
         F _e → {}
     }
@@ -163,15 +150,6 @@ $ `deps/hub/src/hub.nu`
         = k + k 1
     }
     ^ F
-}
-
-@ f5_registry_free ( Vec F5Entry ) v → v {
-    : ~ i k 0
-    ~ < k ( vec_len [F5Entry] v ) {
-        ?? ( vec_get [F5Entry] v k ) { T e → { ( f5_entry_free e ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [F5Entry] v )
 }
 
 // Resolve a name to the two paths a model needs, fetching if the name is a
@@ -195,7 +173,6 @@ $ `deps/hub/src/hub.nu`
         }
         = k + k 1
     }
-    ( f5_registry_free reg )
     ? ok { ^ T } {}
     ? ( f5_is_reference id ) {} { ^ F }
     // a repository reference: the hub turns it into a path, downloading the
@@ -208,20 +185,15 @@ $ `deps/hub/src/hub.nu`
                     ( string_push_str ckpt_out ( string_data cp ) )
                     ( string_push_str vocab_out ( string_data vp ) )
                     = ok T
-                    ( string_free vp )
                 }
                 F ve → {
                     ( nurl_eprintln ( string_data ve ) )
-                    ( string_free ve )
                 }
             }
-            ( string_free cp )
         }
         F ce → {
             ( nurl_eprintln ( string_data ce ) )
-            ( string_free ce )
         }
     }
-    ( string_free vref )
     ^ ok
 }

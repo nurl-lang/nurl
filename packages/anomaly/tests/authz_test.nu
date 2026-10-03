@@ -71,7 +71,6 @@ $ `src/authz.nu`
     ( string_push_char out 46 )
     ( string_push_str out ( string_data c64 ) )
     ( string_push_str out `.AAAA` )
-    ( string_free claims ) ( string_free h64 ) ( string_free c64 )
     ^ out
 }
 
@@ -87,7 +86,6 @@ $ `src/authz.nu`
     // A tenant GUID survives as itself, lowercased.
     : String a ( __az_org_key `A1B2C3D4-0000-4000-8000-ABCDEF123456` )
     ( check ( streq a `a1b2c3d4-0000-4000-8000-abcdef123456` ) `orgkey: a GUID passes through, lowercased` )
-    ( string_free a )
 
     // Anything that could name a path is replaced by a digest of it. The
     // point is not that the digest is secret; it is that no input can
@@ -104,20 +102,16 @@ $ `src/authz.nu`
         = k + k 1
     }
     ( check clean `orgkey: the digest is hex only` )
-    ( string_free b )
 
     : String c ( __az_org_key `https://login.microsoftonline.com/x/v2.0` )
     ( check == ( string_len c ) 32 `orgkey: an issuer URL digests too` )
-    ( string_free c )
     : String d ( __az_org_key `` )
     ( check == ( string_len d ) 32 `orgkey: an empty id still yields a name` )
-    ( string_free d )
 
     // Distinct inputs must not share a database.
     : String e1 ( __az_org_key `../a` )
     : String e2 ( __az_org_key `../b` )
     ( check ! ( streq e1 ( string_data e2 ) ) `orgkey: different inputs, different keys` )
-    ( string_free e1 ) ( string_free e2 )
 }
 
 // Multi-tenant: which issuer a token has to carry, and which tenants are
@@ -134,19 +128,16 @@ $ `src/authz.nu`
     // demand — and that is a refusal, not a wildcard.
     : String none ( __az_issuer_for `aaaa-bbbb` )
     ( check == ( string_len none ) 0 `tenancy: no template yields no issuer` )
-    ( string_free none )
 
     // The provider's own template, with the token's tenant substituted.
     = g_az_iss_tmpl `https://login.example.com/{tenantid}/v2.0`
     : String iss ( __az_issuer_for `1111-2222` )
     ( check ( streq iss `https://login.example.com/1111-2222/v2.0` )
     `tenancy: the tenant is substituted into the template` )
-    ( string_free iss )
 
     // A token that names no tenant cannot name an issuer either.
     : String empty ( __az_issuer_for `` )
     ( check == ( string_len empty ) 0 `tenancy: no tenant yields no issuer` )
-    ( string_free empty )
 
     // A template with no placeholder is a fixed string somebody wrote by
     // mistake; substituting nothing into it would silently accept every
@@ -154,7 +145,6 @@ $ `src/authz.nu`
     = g_az_iss_tmpl `https://login.example.com/fixed/v2.0`
     : String noph ( __az_issuer_for `1111-2222` )
     ( check == ( string_len noph ) 0 `tenancy: a template without the placeholder is refused` )
-    ( string_free noph )
     = g_az_iss_tmpl `https://login.example.com/{tenantid}/v2.0`
 
     // The allowlist. Empty admits everyone — that is what multi-tenant
@@ -200,7 +190,6 @@ $ `src/authz.nu`
     ( check ! . p1 authed `wiring: an unapproved organisation is refused` )
     ( check ( __has ( anomaly_authz_last_error ) `not approved` )
     `wiring: and the reason says it is not approved` )
-    ( principal_free p1 )
 
     // With the tenant admitted, the refusal must move PAST the tenant check
     // — to the signature, which an unsigned token cannot pass. A reason
@@ -220,16 +209,13 @@ $ `src/authz.nu`
     ( check ! . p2 authed `wiring: an unsigned token is still refused` )
     ( check ! ( __has ( anomaly_authz_last_error ) `not approved` )
     `wiring: but no longer for its tenant — the issuer was derived` )
-    ( principal_free p2 )
 
     // And every refusal says something. A 401 with an empty reason is the
     // sign-in screen that reappears forever with nothing to go on.
     ( check > ( nurl_str_len ( anomaly_authz_last_error ) ) 0
     `wiring: a refusal always carries a reason` )
 
-    ( string_free tok )
     = g_az_prov_addr 0
-    ( oidc_provider_free fake )
     ( anomaly_authz_configure_tenancy F `` )
     ( anomaly_authz_configure F T `` `` `` )
 }
@@ -245,23 +231,19 @@ $ `src/authz.nu`
             // whose every user is a viewer can never appoint an admin.
             : String r1 ( az_user_touch db `sub-1` `a@x` `Aa` T0 )
             ( check ( streq r1 `admin` ) `users: the first subject becomes admin` )
-            ( string_free r1 )
             : String r2 ( az_user_touch db `sub-2` `b@x` `Bb` T0 )
             ( check ( streq r2 `viewer` ) `users: the second becomes a viewer` )
-            ( string_free r2 )
             ( check == ( az_user_count db ) 2 `users: both were recorded` )
             ( check == ( az_admin_count db ) 1 `users: exactly one admin` )
 
             // A repeat visit refreshes the profile without changing the role.
             : String r1b ( az_user_touch db `sub-1` `a2@x` `Aa2` + T0 60 )
             ( check ( streq r1b `admin` ) `users: a return visit keeps the role` )
-            ( string_free r1b )
             ( check == ( az_user_count db ) 2 `users: and adds no row` )
 
             ( check ( az_user_set_role db `sub-2` `admin` ) `users: a viewer can be promoted` )
             : String r2b ( az_user_role db `sub-2` )
             ( check ( streq r2b `admin` ) `users: the promotion stuck` )
-            ( string_free r2b )
             ( check == ( az_admin_count db ) 2 `users: two admins now` )
 
             ( check ( az_user_set_role db `sub-2` `viewer` ) `users: and demoted again` )
@@ -277,11 +259,9 @@ $ `src/authz.nu`
 
             : String none ( az_user_role db `nobody` )
             ( check == ( string_len none ) 0 `users: an unknown subject has no role` )
-            ( string_free none )
 
             : Json us ( az_users_json db )
             ( check == ( json_arr_len us ) 2 `users: the listing has both` )
-            ( json_free us )
         }
     }
 }
@@ -291,9 +271,7 @@ $ `src/authz.nu`
         F _ → { ( check F `own: the org database opens` ) }
         T db → {
             : String _r1 ( az_user_touch db `alice` `a@x` `Alice` T0 )
-            ( string_free _r1 )
             : String _r2 ( az_user_touch db `bob` `b@x` `Bob` T0 )
-            ( string_free _r2 )
             : Principal admin ( mkp `orgB` `alice` `admin` )
             : Principal viewer ( mkp `orgB` `bob` `viewer` )
 
@@ -329,9 +307,6 @@ $ `src/authz.nu`
 
             : Principal anon ( principal_anon )
             ( check ! ( az_may_see db anon `shared` ) `own: an unauthenticated caller sees nothing` )
-            ( principal_free anon )
-            ( principal_free admin )
-            ( principal_free viewer )
         }
     }
 }
@@ -346,7 +321,6 @@ $ `src/authz.nu`
         F _ → { ( check F `cross: orgX opens` ) }
         T dbx → {
             : String _a ( az_user_touch dbx `xadmin` `x@x` `X` T0 )
-            ( string_free _a )
             ( check ( az_model_claim dbx `shared-name` `xadmin` T0 F ) `cross: orgX claims a model` )
             ( check ( az_model_claim dbx `x-only` `xadmin` T0 F ) `cross: and another` )
         }
@@ -356,7 +330,6 @@ $ `src/authz.nu`
         T dby → {
             : String ry ( az_user_touch dby `yadmin` `y@y` `Y` T0 )
             ( check ( streq ry `admin` ) `cross: orgY's first user is ITS admin` )
-            ( string_free ry )
             : Principal yadmin ( mkp `orgY` `yadmin` `admin` )
 
             // Being an admin of orgY says nothing about orgX's models.
@@ -367,16 +340,13 @@ $ `src/authz.nu`
             // Its own listing is empty, not the store's.
             : ( Vec String ) mine ( az_org_model_names dby )
             ( check == ( vec_len [String] mine ) 0 `cross: orgY's model list is empty` )
-            ( vec_free_with [String] mine \ String x → v { ( string_free x ) } )
 
             // Once orgY claims a name of its own, it sees exactly that.
             ( check ( az_model_claim dby `y-only` `yadmin` T0 F ) `cross: orgY claims its own` )
             : ( Vec String ) mine2 ( az_org_model_names dby )
             ( check == ( vec_len [String] mine2 ) 1 `cross: and now lists exactly one` )
-            ( vec_free_with [String] mine2 \ String x → v { ( string_free x ) } )
             ( check ( az_may_see dby yadmin `y-only` ) `cross: which it can see` )
             ( check ! ( az_may_see dby yadmin `x-only` ) `cross: while orgX's stays invisible` )
-            ( principal_free yadmin )
         }
     }
 
@@ -395,7 +365,6 @@ $ `src/authz.nu`
     // once.
     ( check ! ( az_is_home_org AZ_PUBLIC_ORG ) `home: public is not home` )
     ( check ! ( streq home AZ_PUBLIC_ORG ) `home: and never became it` )
-    ( string_free home )
 }
 
 // The public organisation: where a point that named no owner waits.
@@ -404,7 +373,6 @@ $ `src/authz.nu`
     : String marker ( __az_home_marker )
     : !v IoErr rm ( file_delete ( string_data marker ) )
     ?? rm { T _ → {} F _ → {} }
-    ( string_free marker )
     ?? ( az_db_open AZ_PUBLIC_ORG ) {
         F _ → { ( check F `public: its database opens` ) }
         T db → {
@@ -414,13 +382,12 @@ $ `src/authz.nu`
     }
     : String h ( az_home_org )
     ( check == ( string_len h ) 0 `public: creating it wrote no home marker` )
-    ( string_free h )
 
     // A real organisation created afterwards IS home — the operator who
     // signs in after the producers started must still be able to adopt.
     ?? ( az_db_open `orgReal` ) {
         F _ → { ( check F `public: a real org opens` ) }
-        T db2 → { : String r ( az_user_touch db2 `op` `o@o` `Op` T0 ) ( string_free r ) }
+        T db2 → { : String r ( az_user_touch db2 `op` `o@o` `Op` T0 ) }
     }
     ( check ( az_is_home_org `orgReal` ) `public: the first REAL organisation is home` )
 
@@ -441,21 +408,18 @@ $ `src/authz.nu`
             ( check T `reg: the root database opens` )
             : String none ( az_tenant_state db `never-seen` )
             ( check == ( string_len none ) 0 `reg: an unseen tenant has no state` )
-            ( string_free none )
 
             // First knock: recorded as pending, and refused. Provisioning
             // an organisation for whoever turns up is how a multi-tenant
             // service fills a disk with strangers.
             : String st1 ( az_tenant_note db `stranger-tid` `Some Org` T0 )
             ( check ( streq st1 `pending` ) `reg: a first sighting is pending` )
-            ( string_free st1 )
             ( check ! ( az_tenant_admitted `stranger-tid` T0 ) `reg: pending means refused` )
 
             // A repeat visit must not undo a decision.
             ( check ( az_tenant_set_state db `stranger-tid` `allowed` `admin-1` T0 ) `reg: it can be approved` )
             : String st2 ( az_tenant_note db `stranger-tid` `Some Org` T0 )
             ( check ( streq st2 `allowed` ) `reg: a return visit keeps the decision` )
-            ( string_free st2 )
             ( check ( az_tenant_admitted `stranger-tid` T0 ) `reg: approved means admitted` )
 
             ( check ( az_tenant_set_state db `stranger-tid` `blocked` `admin-1` T0 ) `reg: it can be blocked` )
@@ -471,7 +435,6 @@ $ `src/authz.nu`
 
             : Json ts ( az_tenants_json db )
             ( check > ( json_arr_len ts ) 0 `reg: the listing has the tenants seen` )
-            ( json_free ts )
         }
     }
     ( anomaly_authz_set_owner_tenant `` )
@@ -483,9 +446,7 @@ $ `src/authz.nu`
         F _ → { ( check F `leave: orgZ opens` ) }
         T db → {
             : String r1 ( az_user_touch db `zadmin` `z@z` `Z` T0 )
-            ( string_free r1 )
             : String r2 ( az_user_touch db `zviewer` `v@z` `V` T0 )
-            ( string_free r2 )
             ( check ( az_model_claim db `zmodel` `zviewer` T0 F ) `leave: the org holds a model` )
             : KeyIssue k ( az_key_create db `zviewer` `feed` AZ_ROLE_INGEST T0 )
             : KeyParts kp ( __az_key_split ( string_data . k secret ) )
@@ -496,16 +457,12 @@ $ `src/authz.nu`
             ( check == ( az_user_count db ) 1 `leave: and is gone from the roster` )
             : String gone ( az_user_role db `zviewer` )
             ( check == ( string_len gone ) 0 `leave: with no role left` )
-            ( string_free gone )
             : Principal still ( az_key_principal db `orgZ` kp T0 )
             ( check . still authed `leave: the key they issued still works` )
             ( check ( streq . still sub `` ) `leave: but no longer names them` )
-            ( principal_free still )
             ( check ( az_model_in_org db `zmodel` ) `leave: and the org keeps the model` )
 
             ( check ! ( az_user_delete db `nobody` ) `leave: an unknown user is not deletable` )
-            ( key_parts_free kp )
-            ( key_issue_free k )
         }
     }
 
@@ -516,16 +473,13 @@ $ `src/authz.nu`
         F _ → { ( check F `leave: orgGone opens` ) }
         T db → {
             : String r ( az_user_touch db `only` `o@o` `O` T0 )
-            ( string_free r )
             : b _c ( az_model_claim db `gonemodel` `only` T0 F )
             ( check ( az_user_delete db `only` ) `leave: the last member leaves` )
             ( check == ( az_user_count db ) 0 `leave: the org has no members` )
-            ( vec_free [String] doomed )
             = doomed ( az_org_models_before_delete db )
             ( check == ( vec_len [String] doomed ) 1 `leave: its models are named before it goes` )
         }
     }
-    ( vec_free_with [String] doomed \ String x → v { ( string_free x ) } )
     ( check ( az_org_drop `orgGone` ) `leave: the organisation database is deleted` )
     // Reopening would CREATE a fresh one, so what is asserted is that
     // nothing survived: no members, no models, no keys.
@@ -535,7 +489,6 @@ $ `src/authz.nu`
             ( check == ( az_user_count db2 ) 0 `leave: nothing survived it` )
             : ( Vec String ) ms ( az_org_model_names db2 )
             ( check == ( vec_len [String] ms ) 0 `leave: not its models either` )
-            ( vec_free_with [String] ms \ String x → v { ( string_free x ) } )
         }
     }
 }
@@ -567,7 +520,6 @@ $ `src/authz.nu`
         ( string_new ) ( string_from AZ_ROLE_VIEWER ) ( string_from `kid2` )
     }
     ( check ! ( principal_may_ingest vkey ) `cap: a viewer-roled key may not either` )
-    ( principal_free vkey )
 
     ?? ( az_db_open `orgI` ) {
         F _ → { ( check F `cap: orgI opens` ) }
@@ -581,8 +533,6 @@ $ `src/authz.nu`
             ( check ( az_may_write db admin `owned` ) `cap: while an admin may` )
         }
     }
-    ( principal_free admin ) ( principal_free viewer )
-    ( principal_free key ) ( principal_free anon )
 }
 
 @ test_keys → v {
@@ -593,10 +543,8 @@ $ `src/authz.nu`
             // and her key can be shown to inherit a viewer's reach rather
             // than the first-user admin grant.
             : String _r0 ( az_user_touch db `founder` `f@x` `Founder` T0 )
-            ( string_free _r0 )
             : String _r ( az_user_touch db `carol` `c@x` `Carol` T0 )
             ( check == ( nurl_str_eq ( string_data _r ) `viewer` ) 1 `keys: carol is a viewer` )
-            ( string_free _r )
 
             : KeyIssue k1 ( az_key_create db `carol` `node-red` AZ_ROLE_INGEST T0 )
             ( check > ( string_len . k1 secret ) 40 `keys: the issued token is long` )
@@ -612,24 +560,18 @@ $ `src/authz.nu`
             : Principal ip ( mkp `orgC` `x` `ingest` )
             ( check ! ( principal_is_admin pr ) `keys: an ingest key is not an admin` )
             ( check ( principal_may_ingest pr ) `keys: but it may send points` )
-            ( principal_free ip )
             ( check ( streq . pr org `orgC` ) `keys: and the organisation` )
-            ( principal_free pr )
 
             // A key is only as good as its secret: the id alone is not it.
             : KeyParts forged @ KeyParts { T ( string_from ( string_data . p1 kp_id ) )
                 ( string_from `00000000000000000000000000000000` ) }
             : Principal bad ( az_key_principal db `orgC` forged T0 )
             ( check ! . bad authed `keys: a wrong secret does not authenticate` )
-            ( principal_free bad )
-            ( key_parts_free forged )
 
             : KeyParts unknown @ KeyParts { T ( string_from `deadbeefdeadbeef` )
                 ( string_from ( string_data . p1 kp_secret ) ) }
             : Principal bad2 ( az_key_principal db `orgC` unknown T0 )
             ( check ! . bad2 authed `keys: an unknown id does not authenticate` )
-            ( principal_free bad2 )
-            ( key_parts_free unknown )
 
             // Revocation is immediate and one-way. There is no owner check:
             // the key is the ORGANISATION's, and whoever pressed the button
@@ -637,12 +579,10 @@ $ `src/authz.nu`
             ( check ( az_key_revoke db ( string_data . k1 key_id ) T0 ) `keys: it can be revoked` )
             : Principal after ( az_key_principal db `orgC` p1 T0 )
             ( check ! . after authed `keys: a revoked key stops working` )
-            ( principal_free after )
             ( check ! ( az_key_revoke db ( string_data . k1 key_id ) T0 ) `keys: revoking twice is a no-op` )
             ( check ! ( az_key_revoke db `no-such-key` T0 ) `keys: an unknown id revokes nothing` )
 
             : String _r2 ( az_user_touch db `dave` `d@x` `Dave` T0 )
-            ( string_free _r2 )
             : KeyIssue k2 ( az_key_create db `dave` `daves` AZ_ROLE_INGEST T0 )
             ( check ( az_key_revoke db ( string_data . k2 key_id ) T0 ) `keys: anyone's key is the org's to revoke` )
 
@@ -650,11 +590,7 @@ $ `src/authz.nu`
             // because there is no per-person ownership.
             : Json all ( az_keys_json db )
             ( check == ( json_arr_len all ) 2 `keys: the listing is the organisation's` )
-            ( json_free all )
 
-            ( key_parts_free p1 )
-            ( key_issue_free k1 )
-            ( key_issue_free k2 )
         }
     }
 
@@ -662,16 +598,12 @@ $ `src/authz.nu`
     // resolver tells an API key from a JWT.
     : KeyParts n1 ( __az_key_split `eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.x.y` )
     ( check ! . n1 ok `keys: a JWT is not mistaken for a key` )
-    ( key_parts_free n1 )
     : KeyParts n2 ( __az_key_split `anok_noseparator` )
     ( check ! . n2 ok `keys: a token with no separator is refused` )
-    ( key_parts_free n2 )
     : KeyParts n3 ( __az_key_split `anok__abc` )
     ( check ! . n3 ok `keys: an empty id is refused` )
-    ( key_parts_free n3 )
     : KeyParts n4 ( __az_key_split `anok_abc_` )
     ( check ! . n4 ok `keys: an empty secret is refused` )
-    ( key_parts_free n4 )
 }
 
 @ test_off → v {
@@ -684,7 +616,6 @@ $ `src/authz.nu`
     ( check . p authed `off: the caller is authenticated` )
     ( check ( principal_is_admin p ) `off: and is an admin` )
     ( check ( streq . p org `public` ) `off: in the shared public organisation` )
-    ( principal_free p )
 
     // Turning it on needs an issuer AND a client id; without them it would
     // refuse every request rather than protect anything, so it stays off.
@@ -715,7 +646,6 @@ $ `src/authz.nu`
 
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
     ( nurl_print `authz_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

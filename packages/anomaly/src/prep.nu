@@ -30,6 +30,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Column kinds ──────────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ $ `stdlib/ext/json.nu`
 // column i (empty unless categorical). `feats` is the authoritative feature
 // order once non-empty (snapshotted at each train by meta_refresh_feats);
 // until then the model is "unfrozen" and the order is derived on demand.
-: Meta {
+: MetaImpl {
     String name
     String created
     String alias  // human-readable nickname; empty = go by `name`
@@ -97,6 +98,19 @@ $ `stdlib/ext/json.nu`
     ( Vec f ) absurd_n  // readings left out of the last fit per feature (see anomaly_mask_absurd)
     ( Vec VerCfg ) versions
 }
+
+// A Meta is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Meta { s ctl }
+
+@ Meta_share Meta h → Meta { ^ @ Meta { # s ( rcbox_share # i . h ctl ) } }
+
+@ Meta_drop sink Meta h → v {
+    ( mem_forget h )
+    ( rcbox_release [MetaImpl] # i . h ctl )
+}
+
+@ _Meta_ptr Meta h → *MetaImpl { ^ ( rcbox_ptr [MetaImpl] # i . h ctl ) }
 
 // ── Calendar features ─────────────────────────────────────────────────
 //
@@ -297,13 +311,10 @@ $ `stdlib/ext/json.nu`
     ^ vs
 }
 
-@ _an_vercfg_free sink VerCfg vc → v {
-    ( string_free . vc vname )
-}
-
 // An owned copy of a model's version configuration — what a fork takes
 // from its source.
-@ meta_clone_versions * Meta m → ( Vec VerCfg ) {
+@ meta_clone_versions Meta m__h → ( Vec VerCfg ) {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : i nv ( vec_len [VerCfg] . m versions )
     : ( Vec VerCfg ) out ( vec_with_cap [VerCfg] nv )
     : ~ i k 0
@@ -337,8 +348,9 @@ $ `stdlib/ext/json.nu`
 
 // ── Meta lifecycle ────────────────────────────────────────────────────
 
-@ meta_new s name s created → *Meta {
-    : *Meta m # *Meta ( nurl_malloc Z Meta )
+@ meta_new s name s created → Meta {
+    : i m__box ( rcbox_zero [MetaImpl] )
+    : *MetaImpl m ( rcbox_ptr [MetaImpl] m__box )
     = . m name ( string_from name )
     = . m created ( string_from created )
     = . m alias ( string_new )
@@ -366,30 +378,11 @@ $ `stdlib/ext/json.nu`
     = . m flat_run ( vec_new [f] )
     = . m flat_sd ( vec_new [f] )
     = . m versions ( meta_default_versions )
-    ^ m
-}
-
-@ meta_free sink * Meta m → v {
-    ( string_free . m name )
-    ( string_free . m created )
-    ( string_free . m alias )
-    ( vec_free_with [String] . m cols \ String x → v { ( string_free x ) } )
-    ( vec_free [i] . m kinds )
-    ( vec_free_with [( Vec String )] . m cats \ ( Vec String ) cv → v {
-        ( vec_free_with [String] cv \ String x → v { ( string_free x ) } )
-    } )
-    ( vec_free_with [String] . m feats \ String x → v { ( string_free x ) } )
-    ( vec_free [f] . m sc_mean )
-    ( vec_free [f] . m sc_std )
-    ( vec_free [f] . m flat_run )
-    ( vec_free [f] . m flat_sd )
-    ( vec_free [f] . m absurd_n )
-    ( vec_free_with [VerCfg] . m versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
-    ( nurl_free m )
+    ^ @ Meta { # s m__box }
 }
 
 // Index of column `name` in the metadata, or -1.
-@ __an_col_find * Meta m s name → i {
+@ __an_col_find * MetaImpl m s name → i {
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
     ~ < k n {
@@ -403,19 +396,21 @@ $ `stdlib/ext/json.nu`
 }
 
 // Column kind at index `ci` (COL_NUMERIC if somehow missing).
-@ __an_kind_at * Meta m i ci → i {
+@ __an_kind_at * MetaImpl m i ci → i {
     ?? ( vec_get [i] . m kinds ci ) { T k → { ^ k } F _ → { ^ COL_NUMERIC } }
 }
 
 // A model is "frozen" once it has an authoritative feature order (set at
 // first train). Before that, feature order is derived from the metadata.
-@ meta_is_frozen * Meta m → b {
+@ meta_is_frozen Meta m__h → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ^ > ( vec_len [String] . m feats ) 0
 }
 
 // Whether any column is a timestamp — the only kind whose encoding has
 // changed between ANOM_FEAT_ENC schemes.
-@ meta_has_timestamp * Meta m → b {
+@ meta_has_timestamp Meta m__h → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : i n ( vec_len [i] . m kinds )
     : ~ i k 0
     ~ < k n {
@@ -428,10 +423,11 @@ $ `stdlib/ext/json.nu`
 // A trained model whose frozen feature order was built under an older
 // calendar encoding: it still scores, the old way, but its next retrain
 // changes what it learns.
-@ meta_retrain_required * Meta m → b {
+@ meta_retrain_required Meta m__h → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ? >= . m feat_enc ANOM_FEAT_ENC { ^ F } {}
-    ? ! ( meta_is_frozen m ) { ^ F } {}
-    ^ ( meta_has_timestamp m )
+    ? ! ( meta_is_frozen m__h ) { ^ F } {}
+    ^ ( meta_has_timestamp m__h )
 }
 
 // Declare a column's kind before its first value is seen — the one way
@@ -439,7 +435,8 @@ $ `stdlib/ext/json.nu`
 // code that should be an identity, not a magnitude. A column the model
 // already knows keeps its kind (its encoding is settled); returns T only
 // when the declaration took.
-@ meta_declare_column * Meta m s name i kind → b {
+@ meta_declare_column Meta m__h s name i kind → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ? >= ( __an_col_find m name ) 0 { ^ F } {}
     ? | | == kind COL_NUMERIC == kind COL_CATEGORICAL == kind COL_TIMESTAMP {} { ^ F }
     ( vec_push [String] . m cols ( string_from name ) )
@@ -458,7 +455,6 @@ $ `stdlib/ext/json.nu`
     ? ( json_is_str jv ) {
         : String tmp ( string_from ( json_str_data jv ) )
         : ?f fx ( string_to_float tmp )
-        ( string_free tmp )
         ?? fx { T _ → { ^ COL_NUMERIC } F _ → {} }
         : !i ParseErr r ( time_parse_iso ( json_str_data jv ) )
         ?? r { T _ → { ^ COL_TIMESTAMP } F _ → {} }
@@ -476,7 +472,6 @@ $ `stdlib/ext/json.nu`
     ? ( json_is_str jv ) {
         : String tmp ( string_from ( json_str_data jv ) )
         : ?f fx ( string_to_float tmp )
-        ( string_free tmp )
         ^ fx
     } {}
     ^ @ ?f { F 0.0 }
@@ -531,13 +526,15 @@ $ `stdlib/ext/json.nu`
 // hour needs two days, weekday two weeks, month two years — and a later
 // retrain over a longer span brings the rest in. An unknown span (0: a
 // count clock, or a model from before the field) keeps every cycle.
-@ __an_cycle_seen * Meta m i period → b {
+@ __an_cycle_seen Meta m__h i period → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ? <= . m train_span 0 { ^ T } {}
     ^ >= . m train_span * 2 period
 }
 
 // Append column `ci`'s feature names (in canonical order) to `out`.
-@ __an_push_col_feats * Meta m i ci ( Vec String ) out → v {
+@ __an_push_col_feats Meta m__h i ci ( Vec String ) out → v {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ?? ( vec_get [String] . m cols ci ) {
         T c → {
             : s cn ( string_data c )
@@ -568,15 +565,15 @@ $ `stdlib/ext/json.nu`
                     ( vec_push [String] out ( __an_feat_name cn `month` ) )
                     ( vec_push [String] out ( __an_feat_name cn `weekday` ) )
                 } {
-                    ? ( __an_cycle_seen m 86400 ) {
+                    ? ( __an_cycle_seen m__h 86400 ) {
                         ( vec_push [String] out ( __an_feat_name cn `hour_sin` ) )
                         ( vec_push [String] out ( __an_feat_name cn `hour_cos` ) )
                     } {}
-                    ? ( __an_cycle_seen m 604800 ) {
+                    ? ( __an_cycle_seen m__h 604800 ) {
                         ( vec_push [String] out ( __an_feat_name cn `weekday_sin` ) )
                         ( vec_push [String] out ( __an_feat_name cn `weekday_cos` ) )
                     } {}
-                    ? ( __an_cycle_seen m 31557600 ) {
+                    ? ( __an_cycle_seen m__h 31557600 ) {
                         ( vec_push [String] out ( __an_feat_name cn `month_sin` ) )
                         ( vec_push [String] out ( __an_feat_name cn `month_cos` ) )
                     } {}
@@ -590,12 +587,13 @@ $ `stdlib/ext/json.nu`
 // The feature order implied by the current metadata: columns in first-seen
 // order, each expanded canonically (categoricals over their sorted
 // categories). Deterministic for a given metadata state. Owned result.
-@ meta_derived_feats * Meta m → ( Vec String ) {
+@ meta_derived_feats Meta m__h → ( Vec String ) {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec String ) out ( vec_new [String] )
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
     ~ < k n {
-        ( __an_push_col_feats m k out )
+        ( __an_push_col_feats m__h k out )
         = k + k 1
     }
     ^ out
@@ -605,7 +603,8 @@ $ `stdlib/ext/json.nu`
 // for a one-hot level or a calendar feature. The flatline guard watches
 // only these: a category that does not change and a month that does not
 // change are not sensors.
-@ meta_numeric_feat_mask * Meta m → ( Vec i ) {
+@ meta_numeric_feat_mask Meta m__h → ( Vec i ) {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : i nf ( vec_len [String] . m feats )
     : ( Vec i ) out ( vec_with_cap [i] nf )
     : i nc ( vec_len [String] . m cols )
@@ -635,17 +634,14 @@ $ `stdlib/ext/json.nu`
 
 // Snapshot the derived feature order as authoritative (called at train
 // time). From now on scoring projects onto exactly this vector.
-@ meta_refresh_feats * Meta m → v {
-    ( vec_free_with [String] . m feats \ String x → v { ( string_free x ) } )
-    = . m feats ( meta_derived_feats m )
+@ meta_refresh_feats Meta m__h → v {
+    : *MetaImpl m ( _Meta_ptr m__h )
+    : ( Vec String ) old_feats . m feats
+    ( mem_take old_feats )  // a store through the pointer drops nothing
+    = . m feats ( meta_derived_feats m__h )
 }
 
 // ── Preprocessing ─────────────────────────────────────────────────────
-
-@ enc_free sink EncPoint p → v {
-    ( vec_free_with [String] . p names \ String x → v { ( string_free x ) } )
-    ( vec_free [f] . p vals )
-}
 
 // Index of feature `name` in the encoded point, or -1.
 @ enc_find EncPoint p s name → i {
@@ -719,7 +715,8 @@ $ `stdlib/ext/json.nu`
 // categories are recorded in the metadata; otherwise an unseen category
 // just yields an all-zero one-hot. Returns an error message, or an empty
 // String on success.
-@ __an_encode_col * Meta m i ci s cn Json jv ( Vec String ) names ( Vec f ) vals b learn → String {
+@ __an_encode_col Meta m__h i ci s cn Json jv ( Vec String ) names ( Vec f ) vals b learn → String {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : i kind ( __an_kind_at m ci )
     ? == kind COL_NUMERIC {
         : ?f fx ( __an_num_of jv )
@@ -758,7 +755,6 @@ $ `stdlib/ext/json.nu`
             }
             F _ → {}
         }
-        ( string_free sval )
     } {}
     ? == kind COL_TIMESTAMP {
         ? ( json_is_str jv ) {
@@ -796,7 +792,8 @@ $ `stdlib/ext/json.nu`
     ^ ( string_new )
 }
 
-@ __an_preprocess * Meta m Json raw b learn → !EncPoint String {
+@ __an_preprocess Meta m__h Json raw b learn → !EncPoint String {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec String ) names ( vec_new [String] )
     : ( Vec f ) vals ( vec_new [f] )
     : ( Vec String ) keys ( json_obj_keys raw )
@@ -819,14 +816,11 @@ $ `stdlib/ext/json.nu`
                             } {}
                             : ~ String e2 ( string_new )
                             ? >= ci 0 {
-                                ( string_free e2 )
-                                = e2 ( __an_encode_col m ci cn jv names vals learn )
+                                = e2 ( __an_encode_col m__h ci cn jv names vals learn )
                             } {}
                             ? > ( string_len e2 ) 0 {
-                                ( string_free err )
                                 = err e2
                             } {
-                                ( string_free e2 )
                             }
                         }
                         F _ → {}
@@ -837,13 +831,9 @@ $ `stdlib/ext/json.nu`
         }
         = ki + ki 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ? > ( string_len err ) 0 {
-        ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-        ( vec_free [f] vals )
         ^ @ !EncPoint String { F err }
     } {}
-    ( string_free err )
     ^ @ !EncPoint String { T @ EncPoint { names vals } }
 }
 
@@ -851,7 +841,7 @@ $ `stdlib/ext/json.nu`
 // metadata as new columns / categories appear. The reserved key
 // `timestamp` is the point's own clock and is never a feature. Numeric
 // parse failure and bad timestamps are hard errors (owned message).
-@ anomaly_preprocess * Meta m Json raw → !EncPoint String {
+@ anomaly_preprocess Meta m Json raw → !EncPoint String {
     ^ ( __an_preprocess m raw T )
 }
 
@@ -861,7 +851,8 @@ $ `stdlib/ext/json.nu`
 // standardisation is however many standard deviations 0 is from the
 // column's mean, and the range guard would then blame a value nobody
 // sent. Owned; empty when the point is complete.
-@ anomaly_missing_cols * Meta m Json raw → ( Vec String ) {
+@ anomaly_missing_cols Meta m__h Json raw → ( Vec String ) {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : ( Vec String ) out ( vec_new [String] )
     : i n ( vec_len [String] . m cols )
     : ~ i k 0
@@ -887,7 +878,7 @@ $ `stdlib/ext/json.nu`
 // but "Missing columns: TW" over a point that says `"TW": null` reads as
 // the service not seeing what the caller plainly sent, and the caller
 // looks for a transport bug instead of for the null.
-@ anomaly_null_cols * Meta m Json raw ( Vec String ) missing → ( Vec String ) {
+@ anomaly_null_cols Meta m__h Json raw ( Vec String ) missing → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : i n ( vec_len [String] missing )
     : ~ i k 0
@@ -910,7 +901,7 @@ $ `stdlib/ext/json.nu`
 // skipped, unseen categories one-hot to all-zeros — exactly what the
 // frozen-feature projection would do with them anyway. For detect-only
 // paths that must not mutate model state.
-@ anomaly_preprocess_ro * Meta m Json raw → !EncPoint String {
+@ anomaly_preprocess_ro Meta m Json raw → !EncPoint String {
     ^ ( __an_preprocess m raw F )
 }
 
@@ -1034,7 +1025,6 @@ $ `stdlib/ext/json.nu`
                 }
                 = sigma / tot # f ns
             }
-            ( vec_free [f] dev )
             ? & > sigma 0.0 ( _an_finite sigma ) {
                 : f lim * ANOM_ABSURD_SIGMAS sigma
                 : *f wp ( vec_data [f] data )
@@ -1052,7 +1042,6 @@ $ `stdlib/ext/json.nu`
                 }
             } {}
         } {}
-        ( vec_free [f] sample )
         ( vec_push [i] counts masked )
         = total + total masked
         = c + c 1
@@ -1196,16 +1185,18 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-@ scaler_free sink Scaler sc → v {
-    ( vec_free [f] . sc mean )
-    ( vec_free [f] . sc inv_std )
-}
+// Let go of `sc` now rather than at the end of its owner's scope (optional:
+// the scaler's vectors are released with it).
+@ scaler_free sink Scaler sc → v {}
 
 // Persist a fitted scaler into metadata (stored as mean + std; zero
 // variance is stored as std = 1, matching its inv_std = 1).
-@ meta_set_scaler * Meta m Scaler sc → v {
-    ( vec_free [f] . m sc_mean )
-    ( vec_free [f] . m sc_std )
+@ meta_set_scaler Meta m__h Scaler sc → v {
+    : *MetaImpl m ( _Meta_ptr m__h )
+    : ( Vec f ) old_sc_mean . m sc_mean
+    ( mem_take old_sc_mean )  // a store through the pointer drops nothing
+    : ( Vec f ) old_sc_std . m sc_std
+    ( mem_take old_sc_std )  // a store through the pointer drops nothing
     : i n ( vec_len [f] . sc mean )
     : ( Vec f ) ms ( vec_with_cap [f] n )
     : ( Vec f ) ss ( vec_with_cap [f] n )
@@ -1229,7 +1220,8 @@ $ `stdlib/ext/json.nu`
 }
 
 // Rebuild a usable Scaler from persisted metadata. Owned result.
-@ meta_scaler * Meta m → Scaler {
+@ meta_scaler Meta m__h → Scaler {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : i n ( vec_len [f] . m sc_mean )
     : ( Vec f ) mean ( vec_with_cap [f] n )
     : ( Vec f ) inv ( vec_with_cap [f] n )
@@ -1297,7 +1289,7 @@ $ `stdlib/ext/json.nu`
                 : ?f fx ( json_num_as_f e )
                 ?? fx {
                     T x → { ( vec_push [f] out x ) }
-                    F _ → { ( vec_free [f] out ) ^ @ ?( Vec f ) { F } }
+                    F _ → { ^ @ ?( Vec f ) { F } }
                 }
             }
             F _ → {}
@@ -1319,7 +1311,6 @@ $ `stdlib/ext/json.nu`
                 ? ( json_is_str e ) {
                     ( vec_push [String] out ( string_from ( json_str_data e ) ) )
                 } {
-                    ( vec_free_with [String] out \ String x → v { ( string_free x ) } )
                     ^ @ ?( Vec String ) { F }
                 }
             }
@@ -1332,7 +1323,8 @@ $ `stdlib/ext/json.nu`
 
 // Serialise metadata to an owned Json object (fixed field order, so the
 // same metadata always stringifies identically).
-@ meta_to_json * Meta m → Json {
+@ meta_to_json Meta m__h → Json {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : Json o ( json_obj_new )
     ( json_obj_set o `name` ( json_str_lit ( string_data . m name ) ) )
     ( json_obj_set o `created` ( json_str_lit ( string_data . m created ) ) )
@@ -1439,7 +1431,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set o `score_epoch` ( json_int . m score_epoch ) )
     ( json_obj_set o `feature_encoding` ( json_int . m feat_enc ) )
     ( json_obj_set o `train_span` ( json_int . m train_span ) )
-    ( json_obj_set o `retrain_required` ( json_bool ( meta_retrain_required m ) ) )
+    ( json_obj_set o `retrain_required` ( json_bool ( meta_retrain_required m__h ) ) )
     ^ o
 }
 
@@ -1492,9 +1484,9 @@ $ `stdlib/ext/json.nu`
 }
 
 // Parse metadata back from JSON. None on malformed shape (missing/mistyped
-// required fields); the partially-built Meta is freed on failure.
-@ meta_from_json Json j → ?*Meta {
-    ? ( json_is_obj j ) {} { ^ @ ?*Meta { F } }
+// required fields).
+@ meta_from_json Json j → ?Meta {
+    ? ( json_is_obj j ) {} { ^ @ ?Meta { F } }
 
     : ~ b ok T
     : ~ String mname ( string_new )
@@ -1502,7 +1494,6 @@ $ `stdlib/ext/json.nu`
     ?? ( json_obj_get j `name` ) {
         T e → {
             ? ( json_is_str e ) {
-                ( string_free mname )
                 = mname ( string_from ( json_str_data e ) )
             } { = ok F }
         }
@@ -1511,21 +1502,17 @@ $ `stdlib/ext/json.nu`
     ?? ( json_obj_get j `created` ) {
         T e → {
             ? ( json_is_str e ) {
-                ( string_free mcreated )
                 = mcreated ( string_from ( json_str_data e ) )
             } { = ok F }
         }
         F _ → { = ok F }
     }
     ? ok {} {
-        ( string_free mname )
-        ( string_free mcreated )
-        ^ @ ?*Meta { F }
+        ^ @ ?Meta { F }
     }
 
-    : *Meta m ( meta_new ( string_data mname ) ( string_data mcreated ) )
-    ( string_free mname )
-    ( string_free mcreated )
+    : Meta m__h ( meta_new ( string_data mname ) ( string_data mcreated ) )
+    : *MetaImpl m ( _Meta_ptr m__h )
 
     // Columns: column_types drives order; categories fills categorical cols.
     ?? ( json_obj_get j `column_types` ) {
@@ -1554,10 +1541,9 @@ $ `stdlib/ext/json.nu`
                                                     : ?( Vec String ) cs ( __an_strs_of_jarr ca )
                                                     ?? cs {
                                                         T got → {
-                                                            ( vec_free [String] colcats )
                                                             = colcats got
                                                         }
-                                                        F junk → { ( vec_free [String] junk ) = ok F }
+                                                        F junk → { = ok F }
                                                     }
                                                 }
                                                 F _ → {}
@@ -1575,7 +1561,6 @@ $ `stdlib/ext/json.nu`
                     }
                     = k + k 1
                 }
-                ( vec_free_with [String] tkeys \ String x → v { ( string_free x ) } )
             } { = ok F }
         }
         F _ → {}
@@ -1587,10 +1572,11 @@ $ `stdlib/ext/json.nu`
             : ?( Vec String ) fs ( __an_strs_of_jarr fa )
             ?? fs {
                 T got → {
-                    ( vec_free_with [String] . m feats \ String x → v { ( string_free x ) } )
+                    : ( Vec String ) old_feats . m feats
+                    ( mem_take old_feats )  // a store through the pointer drops nothing
                     = . m feats got
                 }
-                F junk → { ( vec_free [String] junk ) = ok F }
+                F junk → { = ok F }
             }
         }
         F _ → {}
@@ -1603,8 +1589,8 @@ $ `stdlib/ext/json.nu`
                 T ma → {
                     : ?( Vec f ) mm ( __an_floats_of_jarr ma )
                     ?? mm {
-                        T got → { ( vec_free [f] . m sc_mean ) = . m sc_mean got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_sc_mean . m sc_mean ( mem_take old_sc_mean ) = . m sc_mean got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1613,8 +1599,8 @@ $ `stdlib/ext/json.nu`
                 T sa → {
                     : ?( Vec f ) ssv ( __an_floats_of_jarr sa )
                     ?? ssv {
-                        T got → { ( vec_free [f] . m sc_std ) = . m sc_std got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_sc_std . m sc_std ( mem_take old_sc_std ) = . m sc_std got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1631,8 +1617,8 @@ $ `stdlib/ext/json.nu`
             ?? ( json_obj_get fl `ref_run` ) {
                 T ra → {
                     ?? ( __an_floats_of_jarr ra ) {
-                        T got → { ( vec_free [f] . m flat_run ) = . m flat_run got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_flat_run . m flat_run ( mem_take old_flat_run ) = . m flat_run got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1640,8 +1626,8 @@ $ `stdlib/ext/json.nu`
             ?? ( json_obj_get fl `ref_sd` ) {
                 T sa → {
                     ?? ( __an_floats_of_jarr sa ) {
-                        T got → { ( vec_free [f] . m flat_sd ) = . m flat_sd got }
-                        F junk → { ( vec_free [f] junk ) = ok F }
+                        T got → { : ( Vec f ) old_flat_sd . m flat_sd ( mem_take old_flat_sd ) = . m flat_sd got }
+                        F junk → { = ok F }
                     }
                 }
                 F _ → {}
@@ -1656,8 +1642,7 @@ $ `stdlib/ext/json.nu`
     ?? ( json_obj_get j `absurd_readings` ) {
         T abj → {
             ? ( json_is_obj abj ) {
-                ( vec_free [f] . m absurd_n )
-                = . m absurd_n ( vec_new [f] )
+                ( vec_clear [f] . m absurd_n )
                 : i nf2 ( vec_len [String] . m feats )
                 : ~ i ai 0
                 ~ < ai nf2 {
@@ -1693,8 +1678,7 @@ $ `stdlib/ext/json.nu`
     ?? ( json_obj_get j `versions` ) {
         T vers → {
             ? ( json_is_obj vers ) {
-                ( vec_free_with [VerCfg] . m versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
-                = . m versions ( vec_new [VerCfg] )
+                ( vec_clear [VerCfg] . m versions )
                 : ( Vec String ) vkeys ( json_obj_keys vers )
                 : i nvk ( vec_len [String] vkeys )
                 : ~ i vk 0
@@ -1714,7 +1698,6 @@ $ `stdlib/ext/json.nu`
                     }
                     = vk + vk 1
                 }
-                ( vec_free_with [String] vkeys \ String x → v { ( string_free x ) } )
             } {}
         }
         F _ → {}
@@ -1747,38 +1730,35 @@ $ `stdlib/ext/json.nu`
     ?? ( json_obj_get j `alias` ) {
         T av → {
             ? ( json_is_str av ) {
-                ( string_free . m alias )
-                = . m alias ( string_from ( json_str_data av ) )
+                ( string_clear . m alias )
+                ( string_push_str . m alias ( json_str_data av ) )
             } {}
         }
         F _ → {}
     }
 
     ? ok {} {
-        ( meta_free m )
-        ^ @ ?*Meta { F }
+        ^ @ ?Meta { F }
     }
-    ^ @ ?*Meta { T m }
+    ^ @ ?Meta { T m__h }
 }
 
 // Convenience: metadata → compact JSON text (owned).
-@ meta_to_json_str * Meta m → String {
+@ meta_to_json_str Meta m → String {
     : Json o ( meta_to_json m )
     : String out ( json_stringify o )
-    ( json_free o )
     ^ out
 }
 
 // Convenience: JSON text → metadata; None on parse or shape errors.
-@ meta_from_json_str s src → ?*Meta {
+@ meta_from_json_str s src → ?Meta {
     : !Json JsonError r ( json_parse src )
     ?? r {
         T j → {
-            : ?*Meta mm ( meta_from_json j )
-            ( json_free j )
+            : ?Meta mm ( meta_from_json j )
             ^ mm
         }
-        F _ → { ^ @ ?*Meta { F } }
+        F _ → { ^ @ ?Meta { F } }
     }
 }
 
@@ -1792,7 +1772,8 @@ $ `stdlib/ext/json.nu`
 // touch `versions`; the schedule lives on Meta directly.
 
 // Index of the version named `vname`, or -1.
-@ meta_find_version * Meta m s vname → i {
+@ meta_find_version Meta m__h s vname → i {
+    : *MetaImpl m ( _Meta_ptr m__h )
     : i nv ( vec_len [VerCfg] . m versions )
     : ~ i k 0
     ~ < k nv {
@@ -1806,8 +1787,9 @@ $ `stdlib/ext/json.nu`
 }
 
 // Is version `vname` enabled? `dflt` when there is no such version.
-@ meta_version_enabled * Meta m s vname b dflt → b {
-    : i at ( meta_find_version m vname )
+@ meta_version_enabled Meta m__h s vname b dflt → b {
+    : *MetaImpl m ( _Meta_ptr m__h )
+    : i at ( meta_find_version m__h vname )
     ? < at 0 { ^ dflt } {}
     ?? ( vec_get [VerCfg] . m versions at ) { T vc → { ^ . vc enabled } F _ → { ^ dflt } }
 }
@@ -1817,8 +1799,9 @@ $ `stdlib/ext/json.nu`
 // from its forest blob — so margin changes (fine-tune, a config PUT) take
 // effect immediately, without a retrain. The blob's stored margin is only
 // the fallback for versions no longer present in the metadata.
-@ meta_version_margin * Meta m s vname f dflt → f {
-    : i at ( meta_find_version m vname )
+@ meta_version_margin Meta m__h s vname f dflt → f {
+    : *MetaImpl m ( _Meta_ptr m__h )
+    : i at ( meta_find_version m__h vname )
     ? < at 0 { ^ dflt } {}
     ?? ( vec_get [VerCfg] . m versions at ) { T vc → { ^ . vc decision_margin } F _ → { ^ dflt } }
 }
@@ -1829,7 +1812,8 @@ $ `stdlib/ext/json.nu`
 // it, and every cache entry carrying an older epoch is stale by
 // construction. One counter beats trying to reason about which caches a
 // given edit could have invalidated.
-@ meta_bump_epoch * Meta m → v {
+@ meta_bump_epoch Meta m__h → v {
+    : *MetaImpl m ( _Meta_ptr m__h )
     = . m score_epoch + . m score_epoch 1
 }
 
@@ -1912,7 +1896,6 @@ $ `stdlib/ext/json.nu`
     : ( Vec String ) keys ( json_obj_keys o )
     : String allowed_s ( string_from allowed )
     : ( Vec String ) ok ( string_split allowed_s ` ` )
-    ( string_free allowed_s )
     : i nk ( vec_len [String] keys )
     : i na ( vec_len [String] ok )
     : ~ i k 0
@@ -1939,8 +1922,6 @@ $ `stdlib/ext/json.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] ok \ String x → v { ( string_free x ) } )
     ^ out
 }
 
@@ -1959,7 +1940,8 @@ $ `stdlib/ext/json.nu`
 // possible and still one flag away: `replace_versions` makes the object
 // the WHOLE list, which is how the dashboard's JSON editor adds and
 // removes them, and there the names it does not know are the point.
-@ meta_versions_patch_check * Meta m Json vers b replace → String {
+@ meta_versions_patch_check Meta m__h Json vers b replace → String {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ? ( json_is_obj vers ) {} { ^ ( string_from `versions must be a JSON object of version configs` ) }
     : ( Vec String ) keys ( json_obj_keys vers )
     : i nk ( vec_len [String] keys )
@@ -1971,8 +1953,7 @@ $ `stdlib/ext/json.nu`
                 ?? ( json_obj_get vers ( string_data vn ) ) {
                     T vo → {
                         ? ( json_is_obj vo ) {
-                            ? | replace >= ( meta_find_version m ( string_data vn ) ) 0 {} {
-                                ( string_free why )
+                            ? | replace >= ( meta_find_version m__h ( string_data vn ) ) 0 {} {
                                 = why ( string_from `versions.` )
                                 ( string_push_str why ( string_data vn ) )
                                 ( string_push_str why ` is not a version of this model (it has: ` )
@@ -1988,25 +1969,19 @@ $ `stdlib/ext/json.nu`
                                 }
                                 : String names ( string_join have `, ` )
                                 ( string_push_str why ( string_data names ) )
-                                ( string_free names )
-                                ( vec_free_with [String] have \ String x → v { ( string_free x ) } )
                                 ( string_push_str why `). To ADD a version, send the whole list with replace_versions: true.` )
                             }
                             : String pre ( string_from `versions.` )
                             ( string_push_str pre ( string_data vn ) )
                             : String bad ( _an_unknown_keys vo ANOM_VERCFG_FIELDS ( string_data pre ) )
-                            ( string_free pre )
                             ? > ( string_len bad ) 0 {
-                                ( string_free why )
                                 = why ( string_from `unknown field ` )
                                 ( string_push_str why ( string_data bad ) )
                                 ( string_push_str why ` (a version config has: ` )
                                 ( string_push_str why ANOM_VERCFG_FIELDS )
                                 ( string_push_char why 41 )
                             } {}
-                            ( string_free bad )
                         } {
-                            ( string_free why )
                             = why ( string_from `versions.` )
                             ( string_push_str why ( string_data vn ) )
                             ( string_push_str why ` must be a JSON object` )
@@ -2019,7 +1994,6 @@ $ `stdlib/ext/json.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ^ why
 }
 
@@ -2035,7 +2009,8 @@ $ `stdlib/ext/json.nu`
 // patch may only edit versions the model has, and only a whole-list patch
 // (`replace_versions`) may name one it does not. This function is the
 // mechanism; the rule about who may use it lives with the patch.
-@ meta_apply_versions_json * Meta m Json vers b replace → i {
+@ meta_apply_versions_json Meta m__h Json vers b replace → i {
+    : *MetaImpl m ( _Meta_ptr m__h )
     ? ( json_is_obj vers ) {} { ^ -1 }
     : ( Vec String ) keys ( json_obj_keys vers )
     : i nk ( vec_len [String] keys )
@@ -2046,7 +2021,7 @@ $ `stdlib/ext/json.nu`
                 ?? ( json_obj_get vers ( string_data vn ) ) {
                     T vo → {
                         ? ( json_is_obj vo ) {
-                            : i at ( meta_find_version m ( string_data vn ) )
+                            : i at ( meta_find_version m__h ( string_data vn ) )
                             ? >= at 0 {
                                 ?? ( vec_get [VerCfg] . m versions at ) {
                                     T cur → {
@@ -2076,15 +2051,15 @@ $ `stdlib/ext/json.nu`
                 T vc → {
                     ? ( json_obj_has vers ( string_data . vc vname ) ) {
                         ( vec_push [VerCfg] kept vc )
-                    } { ( _an_vercfg_free vc ) }
+                    } {}
                 }
                 F _ → {}
             }
             = k + k 1
         }
-        ( vec_free [VerCfg] . m versions )
+        : ( Vec VerCfg ) old_versions . m versions
+        ( mem_take old_versions )  // a store through the pointer drops nothing
         = . m versions kept
     } {}
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ^ ( vec_len [VerCfg] . m versions )
 }

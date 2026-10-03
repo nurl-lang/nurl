@@ -47,13 +47,6 @@ $ `src/imptime.nu`
     String format  // what it turned out to be
 }
 
-@ import_parse_free sink ImportParse ip → v {
-    ( vec_free_with [Json] . ip rows \ Json j → v { ( json_free j ) } )
-    ( vec_free_with [String] . ip notes \ String s → v { ( string_free s ) } )
-    ( string_free . ip err )
-    ( string_free . ip format )
-}
-
 @ __imp_fail s why → ImportParse {
     ^ @ ImportParse {
         ( vec_new [Json] ) 0 ( vec_new [String] ) ( string_from why ) ( string_new )
@@ -66,7 +59,6 @@ $ `src/imptime.nu`
 @ __imp_trimmed s raw → String {
     : String tmp ( string_from raw )
     : String out ( string_trim tmp )
-    ( string_free tmp )
     ^ out
 }
 
@@ -100,7 +92,6 @@ $ `src/imptime.nu`
     ? == c 123 {
         : String t ( string_from text )
         : ( Vec String ) ls ( string_split t `\n` )
-        ( string_free t )
         : i n ( vec_len [String] ls )
         : ~ i objs 0
         : ~ i k 0
@@ -111,7 +102,6 @@ $ `src/imptime.nu`
             }
             = k + k 1
         }
-        ( vec_free_with [String] ls \ String x → v { ( string_free x ) } )
         ? > objs 1 { ^ ( string_from `jsonl` ) } {}
         ^ ( string_from `json` )
     } {}
@@ -201,29 +191,24 @@ $ `src/imptime.nu`
         // An empty cell contributes no field at all rather than an empty
         // category: a column that is blank in one row is missing there, and
         // the projection already means "missing" by leaving it out.
-        ( string_free t )
         ^ @ ?Json { F }
     }
     ? ( __imp_is_missing ( string_data t ) ) {
-        ( string_free t )
         ^ @ ?Json { F }
     } {}
     ?? ( string_to_int t ) {
         T n → {
-            ( string_free t )
             ^ @ ?Json { T ( json_int n ) }
         }
         F _ → {}
     }
     ?? ( string_to_float t ) {
         T x → {
-            ( string_free t )
             ^ @ ?Json { T ( json_float x ) }
         }
         F → {}
     }
     : Json j ( json_str_lit ( string_data t ) )
-    ( string_free t )
     ^ @ ?Json { T j }
 }
 
@@ -232,7 +217,7 @@ $ `src/imptime.nu`
 // number is a number, a JSON null is no field. An exporter that writes
 // its gaps as "-" in JSON deserves the same reading as one that writes
 // them in CSV — otherwise the dash becomes a category and the column a
-// text feature. Returns a fresh object; the given one is freed.
+// text feature. Returns a fresh object.
 @ __imp_norm_row Json row → Json {
     : Json out ( json_obj_new )
     : ( Vec String ) keys ( json_obj_keys row )
@@ -261,18 +246,14 @@ $ `src/imptime.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-    ( json_free row )
     ^ out
 }
 
 @ __imp_parse_csv s text → ImportParse {
     : String whole ( string_from text )
     : ( Vec String ) lines ( string_split whole `\n` )
-    ( string_free whole )
     : i n ( vec_len [String] lines )
     ? > n 0 {} {
-        ( vec_free [String] lines )
         ^ ( __imp_fail `the file is empty` )
     }
 
@@ -288,19 +269,15 @@ $ `src/imptime.nu`
                 : String t ( __imp_trimmed ( string_data l ) )
                 ? > ( string_len t ) 0 {
                     = delim ( __imp_delim ( string_data l ) )
-                    ( vec_free_with [String] headers \ String x → v { ( string_free x ) } )
                     = headers ( __imp_split_row ( string_data l ) delim )
                     = got_header T
                 } {}
-                ( string_free t )
             }
             F _ → {}
         }
         = start + start 1
     }
     ? got_header {} {
-        ( vec_free [String] lines )
-        ( vec_free [String] headers )
         ^ ( __imp_fail `the file has no header row` )
     }
     // Trim the names once: a header written with spaces after the commas
@@ -327,7 +304,6 @@ $ `src/imptime.nu`
             T l → {
                 : String t ( __imp_trimmed ( string_data l ) )
                 : b blank == ( string_len t ) 0
-                ( string_free t )
                 ? blank {} {
                     ? >= ( vec_len [Json] rows ) ANOM_IMPORT_MAX_ROWS {} {
                         : ( Vec String ) cells ( __imp_split_row ( string_data l ) delim )
@@ -357,16 +333,13 @@ $ `src/imptime.nu`
                             }
                             : ( Vec String ) got ( json_obj_keys o )
                             : i nfields ( vec_len [String] got )
-                            ( vec_free_with [String] got \ String x → v { ( string_free x ) } )
                             ? > nfields 0 {
                                 ( vec_push [Json] rows o )
                             } {
-                                ( json_free o )
                                 = skipped + skipped 1
                                 ( __imp_note notes + k 1 `every column was empty` )
                             }
                         }
-                        ( vec_free_with [String] cells \ String x → v { ( string_free x ) } )
                     }
                 }
             }
@@ -374,8 +347,6 @@ $ `src/imptime.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
-    ( vec_free_with [String] headers \ String x → v { ( string_free x ) } )
     ^ @ ImportParse { rows skipped notes ( string_new ) ( string_from `csv` ) }
 }
 
@@ -411,7 +382,6 @@ $ `src/imptime.nu`
             : ~ ImportParse out ( __imp_fail `` )
             ?? ( __imp_array_of doc ) {
                 F → {
-                    ( import_parse_free out )
                     = out ( __imp_fail `expected an array of objects, or an object with a "data", "points" or "rows" array` )
                 }
                 T arr → {
@@ -436,11 +406,9 @@ $ `src/imptime.nu`
                             = k + k 1
                         }
                     }
-                    ( import_parse_free out )
                     = out @ ImportParse { rows skipped notes ( string_new ) ( string_from `json` ) }
                 }
             }
-            ( json_free doc )
             ^ out
         }
     }
@@ -449,7 +417,6 @@ $ `src/imptime.nu`
 @ __imp_parse_jsonl s text → ImportParse {
     : String whole ( string_from text )
     : ( Vec String ) lines ( string_split whole `\n` )
-    ( string_free whole )
     : ( Vec Json ) rows ( vec_new [Json] )
     : ( Vec String ) notes ( vec_new [String] )
     : ~ i skipped 0
@@ -465,7 +432,6 @@ $ `src/imptime.nu`
                         ?? r {
                             T j → {
                                 ? ( json_is_obj j ) { ( vec_push [Json] rows ( __imp_norm_row j ) ) } {
-                                    ( json_free j )
                                     = skipped + skipped 1
                                     ( __imp_note notes + k 1 `not an object` )
                                 }
@@ -477,13 +443,11 @@ $ `src/imptime.nu`
                         }
                     }
                 } {}
-                ( string_free t )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
     ^ @ ImportParse { rows skipped notes ( string_new ) ( string_from `jsonl` ) }
 }
 
@@ -496,7 +460,6 @@ $ `src/imptime.nu`
 
     : ~ String fmt ( string_from format )
     ? | == ( string_len fmt ) 0 == ( nurl_str_eq ( string_data fmt ) `auto` ) 1 {
-        ( string_free fmt )
         = fmt ( import_sniff text )
     } {}
     : s f ( string_data fmt )
@@ -506,22 +469,17 @@ $ `src/imptime.nu`
     // so the name is only a courtesy for the person who knows what they
     // are holding.
     ? | == ( nurl_str_eq f `csv` ) 1 == ( nurl_str_eq f `fmi` ) 1 {
-        ( import_parse_free out )
         = out ( __imp_parse_csv text )
     } {
         ? == ( nurl_str_eq f `jsonl` ) 1 {
-            ( import_parse_free out )
             = out ( __imp_parse_jsonl text )
         } {
             ? == ( nurl_str_eq f `json` ) 1 {
-                ( import_parse_free out )
                 = out ( __imp_parse_json text )
             } {
-                ( import_parse_free out )
                 = out ( __imp_fail `format must be "csv", "json", "jsonl", "fmi" (a CSV from the weather service) or "auto"` )
             }
         }
     }
-    ( string_free fmt )
     ^ out
 }

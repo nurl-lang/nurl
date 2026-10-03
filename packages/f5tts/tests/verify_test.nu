@@ -35,7 +35,6 @@ $ `src/run.nu`
         ( string_push_str label `)` )
     }
     ( __t_check == got want ( string_data label ) )
-    ( string_free label )
 }
 
 @ __t_number i n s want → v {
@@ -45,8 +44,6 @@ $ `src/run.nu`
     ( string_push_str label ` → ` )
     ( string_push_str label ( string_data got ) )
     ( __t_check != 0 ( nurl_str_eq ( string_data got ) want ) ( string_data label ) )
-    ( string_free label )
-    ( string_free got )
 }
 
 @ __t_lead s text i want → v {
@@ -56,7 +53,6 @@ $ `src/run.nu`
     ( string_push_str label `" at ` )
     ( string_push_int label got )
     ( __t_check == got want ( string_data label ) )
-    ( string_free label )
 }
 
 @ main → i {
@@ -108,6 +104,5 @@ $ `src/run.nu`
     ( string_push_int s g_fail )
     ( string_push_str s ` failed` )
     ( nurl_println ( string_data s ) )
-    ( string_free s )
     ^ ? > g_fail 0 1 0
 }

@@ -79,7 +79,6 @@ $ `src/store.nu`
     }
     ? ( string_ends_with out `.gguf` ) {
         : String cutd ( string_substr out 0 - ( string_len out ) 5 )
-        ( string_free out )
         ^ cutd
     } {}
     ^ out
@@ -94,13 +93,10 @@ $ `src/store.nu`
         : s nm ( http_stream_header_name st k )
         : String low ( string_from nm )
         : String lowc ( string_to_lower low )
-        ( string_free low )
         ? ( nurl_str_eq ( string_data lowc ) want ) {
-            ( string_free out )
             = out ( string_from ( http_stream_header_value st k ) )
             = k hc
         } { = k + k 1 }
-        ( string_free lowc )
     }
     ^ out
 }
@@ -121,7 +117,6 @@ $ `src/store.nu`
                             ( sha256_update h piece )
                             = total + total pn
                         }
-                        ( vec_free [u] piece )
                     }
                     F _ → { = more F }
                 }
@@ -142,25 +137,19 @@ $ `src/store.nu`
     : String url ( nl_resolve_url src )
     : ~ String name ( string_new )
     ? > ( nurl_str_len name_override ) 0 {
-        ( string_free name )
         = name ( string_from name_override )
     } {
-        ( string_free name )
         = name ( nl_default_name src )
     }
     ? > ( string_len name ) 0 {} {
-        ( string_free name )
-        ( string_free url )
         ^ @ !v String { F ( string_from `nurllama: cannot derive a model name — pass --name` ) }
     }
 
     // staging path: blobs/<safe-name>.part
     : String bdir ( path_join ( string_data root ) `blobs` )
     : String part0 ( path_join ( string_data bdir ) ( string_data name ) )
-    ( string_free bdir )
     : String part ( string_from ( string_data part0 ) )
     ( string_push_str part `.part` )
-    ( string_free part0 )
 
     // resume offset = existing partial size
     : ~ i off 0
@@ -176,7 +165,6 @@ $ `src/store.nu`
     } {}
 
     : !HttpStream HttpErr sr ( http_stream_open `GET` ( string_data url ) `` ( string_data hdrs ) )
-    ( string_free hdrs )
     ?? sr {
         T st → {
             : i status ( http_stream_pump_headers st )
@@ -184,7 +172,6 @@ $ `src/store.nu`
             ? == status 206 { = resume T } {}
             ? | == status 200 == status 206 {} {
                 ( http_stream_close st )
-                ( string_free part ) ( string_free name ) ( string_free url )
                 : String msg ( string_from `nurllama: download failed (HTTP ` )
                 ( string_push_int msg status )
                 ( string_push_str msg `)` )
@@ -198,7 +185,6 @@ $ `src/store.nu`
                 T v → { = total v }
                 F _ → {}
             }
-            ( string_free cl )
             ? & resume > total 0 { = total + total off } {}
 
             : Sha256 h ( sha256_init )
@@ -215,20 +201,19 @@ $ `src/store.nu`
                     T n → { = done_bytes n }
                     F e → {
                         = failed T
-                        ( string_free ferr )
                         = ferr e
                     }
                 }
                 ? failed {} {
                     ?? ( file_append ( string_data part ) ) {
                         T fa → { = f fa = fh_ok 1 }
-                        F _ → { = failed T ( string_free ferr ) = ferr ( string_from `nurllama: cannot open the staging file` ) }
+                        F _ → { = failed T = ferr ( string_from `nurllama: cannot open the staging file` ) }
                     }
                 }
             } {
                 ?? ( file_create ( string_data part ) ) {
                     T fa → { = f fa = fh_ok 1 }
-                    F _ → { = failed T ( string_free ferr ) = ferr ( string_from `nurllama: cannot create the staging file` ) }
+                    F _ → { = failed T = ferr ( string_from `nurllama: cannot create the staging file` ) }
                 }
             }
 
@@ -250,12 +235,10 @@ $ `src/store.nu`
                                 F _ → {
                                     = failed T
                                     = more F
-                                    ( string_free ferr )
                                     = ferr ( string_from `nurllama: disk write failed mid-download` )
                                 }
                             }
                         } {}
-                        ( vec_free [u] piece )
                     }
                     F → { = more F }
                 }
@@ -269,7 +252,6 @@ $ `src/store.nu`
                 ?? he {
                     T _ → {
                         = failed T
-                        ( string_free ferr )
                         = ferr ( string_from `nurllama: transfer aborted — rerun to resume from the partial file` )
                     }
                     F → {}
@@ -278,37 +260,27 @@ $ `src/store.nu`
             ( http_stream_close st )
             : ( Vec u ) dg ( sha256_final h )
             ? failed {
-                ( vec_free [u] dg )
-                ( string_free part ) ( string_free name ) ( string_free url )
                 ^ @ !v String { F ferr }
             } {}
-            ( string_free ferr )
 
             // content-length sanity: a short body is a broken download
             ? & > total 0 != done_bytes total {
-                ( vec_free [u] dg )
-                ( string_free part ) ( string_free name ) ( string_free url )
                 ^ @ !v String { F ( string_from `nurllama: transfer ended short — rerun to resume from the partial file` ) }
             } {}
 
             : String hex ( bytes_to_hex dg )
-            ( vec_free [u] dg )
             : String bp ( nl_blob_path root ( string_data hex ) )
             : !v IoErr mv ( fs_rename ( string_data part ) ( string_data bp ) )
             ?? mv {
                 T _ → {}
                 F _ → {
-                    ( string_free hex ) ( string_free bp )
-                    ( string_free part ) ( string_free name ) ( string_free url )
                     ^ @ !v String { F ( string_from `nurllama: cannot move the finished blob into place` ) }
                 }
             }
             : !v String ar ( nl_store_add root ( string_data name ) ( string_data url ) ( string_data hex ) done_bytes )
-            ( string_free bp )
             ?? ar {
                 T _ → {}
                 F e → {
-                    ( string_free hex ) ( string_free part ) ( string_free name ) ( string_free url )
                     ^ @ !v String { F e }
                 }
             }
@@ -317,21 +289,15 @@ $ `src/store.nu`
             ( string_push_str msg ` (sha256:` )
             : String short ( string_substr hex 0 12 )
             ( string_push_str msg ( string_data short ) )
-            ( string_free short )
             ( string_push_str msg `…, ` )
             : String hs ( progress_human done_bytes )
             ( string_push_str msg ( string_data hs ) )
-            ( string_free hs )
             ( string_push_str msg `)` )
             ( nurl_print ( string_data msg ) )
             ( nurl_print `\n` )
-            ( string_free msg )
-            ( string_free hex )
-            ( string_free part ) ( string_free name ) ( string_free url )
             ^ @ !v String { T 0 }
         }
         F _ → {
-            ( string_free part ) ( string_free name ) ( string_free url )
             ^ @ !v String { F ( string_from `nurllama: cannot reach the download URL` ) }
         }
     }

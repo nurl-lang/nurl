@@ -28,11 +28,10 @@ $ `src/sample.nu`
             : i n / ( vec_len [u] bs ) 4
             : ~ i k 0
             ~ < k n { ?? ( bytes_read_f32_le bs * k 4 ) { T x → { ( vec_push [f] out # f x ) } F → {} } = k + k 1 }
-            ( vec_free [u] bs )
         }
         F _e → { ( nurl_eprint `cannot read ` ) ( nurl_eprintln ( string_data p ) ) }
     }
-    ( string_free p ) ^ out
+    ^ out
 }
 
 @ __s_read_i32 s dir s name → ( Vec i ) {
@@ -43,11 +42,10 @@ $ `src/sample.nu`
             : i n / ( vec_len [u] bs ) 4
             : ~ i k 0
             ~ < k n { ?? ( bytes_read_u32_le bs * k 4 ) { T x → { ( vec_push [i] out # i x ) } F → {} } = k + k 1 }
-            ( vec_free [u] bs )
         }
         F _e → {}
     }
-    ( string_free p ) ^ out
+    ^ out
 }
 
 @ __s_get ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } } }
@@ -72,7 +70,6 @@ $ `src/sample.nu`
     ( string_push_str msg `  relative ` )
     ( string_push_float msg rel )
     ( nurl_println ( string_data msg ) )
-    ( string_free msg )
 }
 
 @ main → i {
@@ -97,7 +94,6 @@ $ `src/sample.nu`
             ? ( f5_download m ( f5_buf_txt m ) gtxt * 2 * n 512 ) {} {}
             ( __s_cmp gtxt 0 wtc `the conditional text encoder` )
             ( __s_cmp gtxt * n 512 wtu `the unconditional text encoder` )
-            ( vec_free [f] gtxt ) ( vec_free [f] wtc ) ( vec_free [f] wtu )
             : ( Vec f ) c2 ( vec_with_cap [f] * 2 * n 100 )
             : i have ( vec_len [f] cond )
             : ~ i k 0
@@ -112,8 +108,6 @@ $ `src/sample.nu`
             ? ( f5_download m ( f5_buf_pred m ) got * 2 * n 100 ) {} { ( nurl_eprintln `download` ) ^ 1 }
             ( __s_cmp got 0 wpred `the conditional half` )
             ( __s_cmp got * n 100 wnull `the unconditional half` )
-            ( vec_free [f] got )
-            ( vec_free [f] c2 )
             ( f5_close m )
         }
         F e → { ( nurl_eprintln ( string_data e ) ) ^ 1 }

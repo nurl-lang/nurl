@@ -45,6 +45,7 @@ $ `stdlib/std/sysinfo.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `deps/arima/src/arima.nu`
+$ `stdlib/core/rcbox.nu`
 
 // Rows absorbed between two writes of forecast.json.
 : i ANOM_FC_SAVE_EVERY 32
@@ -93,16 +94,16 @@ $ `deps/arima/src/arima.nu`
 // watched: there is nothing in it to be surprised by.
 : f ANOM_FC_DETERMINISTIC 0.000001
 
-// The trained version. `models` holds ArimaModel per watched feature;
+// The trained version. `models` holds an ArimaModel per watched feature;
 // `feats` their names and `cols` their index in the metadata's feature
 // order, both frozen at training. `pos` is the ring row the states have
 // absorbed up to (exclusive) in the open model; `seq` the same as an
 // absolute sequence number, which is what the file carries.
-: FcModel {
+: FcModelImpl {
     b trained
     ( Vec String ) feats
     ( Vec i ) cols
-    ( Vec i ) models
+    ( Vec ArimaModel ) models
     i nw
     i pos
     i seq
@@ -118,12 +119,26 @@ $ `deps/arima/src/arima.nu`
     ( Vec f ) scale  // per watched feature: its spread in the fit window (the verdict's floor is a share of it)
 }
 
-@ fc_new → *FcModel {
-    : *FcModel fc # *FcModel ( nurl_malloc Z FcModel )
+// A FcModel is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: FcModel { s ctl }
+
+@ FcModel_share FcModel h → FcModel { ^ @ FcModel { # s ( rcbox_share # i . h ctl ) } }
+
+@ FcModel_drop sink FcModel h → v {
+    ( mem_forget h )
+    ( rcbox_release [FcModelImpl] # i . h ctl )
+}
+
+@ _FcModel_ptr FcModel h → *FcModelImpl { ^ ( rcbox_ptr [FcModelImpl] # i . h ctl ) }
+
+@ fc_new → FcModel {
+    : i fc__box ( rcbox_zero [FcModelImpl] )
+    : *FcModelImpl fc ( rcbox_ptr [FcModelImpl] fc__box )
     = . fc trained F
     = . fc feats ( vec_new [String] )
     = . fc cols ( vec_new [i] )
-    = . fc models ( vec_new [i] )
+    = . fc models ( vec_new [ArimaModel] )
     = . fc nw 0
     = . fc pos 0
     = . fc seq 0
@@ -137,22 +152,16 @@ $ `deps/arima/src/arima.nu`
     = . fc sel_naive ( vec_new [f] )
     = . fc skipped ( vec_new [String] )
     = . fc scale ( vec_new [f] )
-    ^ fc
+    ^ @ FcModel { # s fc__box }
 }
 
-// The models are kept as raw handle words (ArimaModel's ctl) in this
-// file's hand-managed tables — FcModel.models, FcJob.out, the replay
-// copies: a model goes in with its owner given up (mem_forget), is read
-// in place through a lent cast (`# ArimaModel ( _fc_geti . fc models j )`
-// — nothing counted, nothing to release), and is released by handing the
-// word back to arima_free as an owner (__fc_model_free). A model handed
-// OUT of the table (model_forecast_model) is another owner of it.
-@ _fc_model_at * FcModel fc i j → ArimaModel {
-    ^ ( ArimaModel_share # ArimaModel ( _fc_geti . fc models j ) )
-}
-
-@ __fc_model_free i w → v {
-    ? != w 0 { ( arima_free @ ArimaModel { # s w } ) } {}
+// The models are read in place in the loops below — `. pm j` through the
+// Vec's data is a view, nothing counted. A model handed OUT of the table
+// (model_forecast_model) is another owner of it.
+@ _fc_model_at FcModel fc__h i j → ArimaModel {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
+    ?? ( vec_get [ArimaModel] . fc models j ) { T m → { ^ ( ArimaModel_share m ) } F _ → {} }
+    ^ @ ArimaModel { # s 0 }
 }
 
 @ _fc_geti ( Vec i ) v i k → i {
@@ -164,44 +173,21 @@ $ `deps/arima/src/arima.nu`
 }
 
 // Drop the trained models; the handle stays, untrained.
-@ fc_clear * FcModel fc → v {
-    : i n ( vec_len [i] . fc models )
-    : ~ i k 0
-    ~ < k n { ( __fc_model_free ( _fc_geti . fc models k ) ) = k + k 1 }
-    ( vec_free [i] . fc models )
-    = . fc models ( vec_new [i] )
-    ( vec_free_with [String] . fc feats \ String x → v { ( string_free x ) } )
-    = . fc feats ( vec_new [String] )
-    ( vec_free [i] . fc cols )
-    = . fc cols ( vec_new [i] )
-    ( vec_free_with [String] . fc sel \ String x → v { ( string_free x ) } )
-    = . fc sel ( vec_new [String] )
-    ( vec_free [f] . fc sel_mae )
-    = . fc sel_mae ( vec_new [f] )
-    ( vec_free [f] . fc sel_naive )
-    = . fc sel_naive ( vec_new [f] )
-    ( vec_free_with [String] . fc skipped \ String x → v { ( string_free x ) } )
-    = . fc skipped ( vec_new [String] )
-    ( vec_free [f] . fc scale )
-    = . fc scale ( vec_new [f] )
+@ fc_clear FcModel fc__h → v {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
+    ( vec_clear [ArimaModel] . fc models )
+    ( vec_clear [String] . fc feats )
+    ( vec_clear [i] . fc cols )
+    ( vec_clear [String] . fc sel )
+    ( vec_clear [f] . fc sel_mae )
+    ( vec_clear [f] . fc sel_naive )
+    ( vec_clear [String] . fc skipped )
+    ( vec_clear [f] . fc scale )
     = . fc nw 0
     = . fc trained F
     = . fc pos 0
     = . fc seq 0
     = . fc unsaved 0
-}
-
-@ fc_free sink * FcModel fc → v {
-    ( fc_clear fc )
-    ( vec_free [i] . fc models )
-    ( vec_free [String] . fc feats )
-    ( vec_free [i] . fc cols )
-    ( vec_free [String] . fc sel )
-    ( vec_free [f] . fc sel_mae )
-    ( vec_free [f] . fc sel_naive )
-    ( vec_free [String] . fc skipped )
-    ( vec_free [f] . fc scale )
-    ( nurl_free # s fc )
 }
 
 // The watched features' readings of an encoded point, NaN where the
@@ -234,7 +220,7 @@ $ `deps/arima/src/arima.nu`
 : FcJob {
     ( Vec f ) y
     i season  // the season in rows (0 = none)
-    i out  // ArimaModel, 0 until fitted
+    ArimaModel out  // the null handle until fitted
     String sel  // the form chosen
     f sel_mae
     f sel_naive
@@ -250,11 +236,6 @@ $ `deps/arima/src/arima.nu`
     String name
     b fixed  // ARIMA(0,1,0): the last value carried forward, as a candidate
     b trend  // a linear drift among the regressors
-}
-
-@ __fc_cand_free sink FcCand c → v {
-    ( vec_free [i] . c periods )
-    ( string_free . c name )
 }
 
 @ __fc_cand i sarima i p1 i p2 i k s name → FcCand {
@@ -330,7 +311,6 @@ $ `deps/arima/src/arima.nu`
     : ~ i t 0
     ~ < t nfit { = . ph t . py t = t + t 1 }
     : ArimaModel m ( __fc_fit_cand head c )
-    ( vec_free [f] head )
     : ~ f err 0.0
     : ~ f nai 0.0
     : ~ i cnt 0
@@ -355,20 +335,12 @@ $ `deps/arima/src/arima.nu`
                 = cnt + cnt 1
                 = q + q 1
             }
-            ( arima_forecast_free f1 )
             : ArimaUpdate _u ( arima_update m . py + t 1 )
             = t + t 1
         }
     } {}
-    ( arima_free m )
     ? & > cnt 0 ! bad { ^ @ FcScore { / err # f cnt / nai # f cnt } } {}
     ^ @ FcScore { ( float_inf ) ( float_inf ) }
-}
-
-: FcLane {
-    ( Vec i ) jobs
-    i lane
-    i stride
 }
 
 // Select the form on the holdout, then fit it on the whole window.
@@ -399,25 +371,23 @@ $ `deps/arima/src/arima.nu`
     } {}
     ?? ( vec_get [FcCand] cands best ) {
         T cand → {
-            : ArimaModel m ( __fc_fit_cand . j y cand )
-            = . j out # i m
-            ( mem_forget m )  // the job's word owns it now
-            ( string_free . j sel )
-            = . j sel ( string_from ( string_data . cand name ) )
+            // the job starts with the null model and an empty name
+            = . j out ( __fc_fit_cand . j y cand )
+            ( string_push_str . j sel ( string_data . cand name ) )
             = . j sel_mae best_mae
             = . j sel_naive best_naive
         }
         F _ → {}
     }
-    ( vec_free_with [FcCand] cands \ FcCand c → v { ( __fc_cand_free c ) } )
 }
 
-@ __fc_lane_run * FcLane ln → v {
-    : i n ( vec_len [i] . ln jobs )
-    : ~ i k . ln lane
+// Jobs lane, lane + stride, … of the `n` at `base` (the jobs Vec's data:
+// each job is written by one lane only).
+@ __fc_lane_run i base i n i lane i stride → v {
+    : ~ i k lane
     ~ < k n {
-        ( __fc_job_run # *FcJob ( _fc_geti . ln jobs k ) )
-        = k + k . ln stride
+        ( __fc_job_run # *FcJob + base * k Z FcJob )
+        = k + k stride
     }
 }
 
@@ -429,39 +399,27 @@ $ `deps/arima/src/arima.nu`
     ^ t
 }
 
-// Run the fits, one thread per lane of jobs (the arima package's own
-// idiom: the runtime frees a spawned closure's env after the body; a
-// spawn that fails runs the lane here and frees it by hand).
-@ __fc_jobs_run ( Vec i ) jobs → v {
-    : i n ( vec_len [i] jobs )
+// Run the fits, one thread per lane of jobs; a spawn that fails runs its
+// lane here. Every lane is joined before the jobs are read.
+@ __fc_jobs_run ( Vec FcJob ) jobs → v {
+    : i n ( vec_len [FcJob] jobs )
+    : i base # i ( vec_data [FcJob] jobs )
     : i nt ( __fc_threads n )
     ? > nt 1 {
         : ( Vec Thread ) ts ( vec_new [Thread] )
-        : ( Vec i ) lanes ( vec_new [i] )
         : ~ i l 0
         ~ < l nt {
-            : *FcLane ln # *FcLane ( nurl_malloc Z FcLane )
-            = . ln jobs jobs
-            = . ln lane l
-            = . ln stride nt
-            ( vec_push [i] lanes # i ln )
-            : ( @ v ) body \ → v { ( __fc_lane_run ln ) }
+            : i lane l
+            : ( @ v ) body \ → v { ( __fc_lane_run base n lane nt ) }
             ?? ( thread_spawn_owned body ) {
                 T t → { ( vec_push [Thread] ts t ) }
-                F _ → { ( __fc_lane_run ln ) }
+                F _ → { ( __fc_lane_run base n lane nt ) }
             }
             = l + l 1
         }
         = l 0
         ~ < l ( vec_len [Thread] ts ) { ?? ( vec_get [Thread] ts l ) { T t → { : i _j ( thread_join t ) } F _ → {} } = l + l 1 }
-        = l 0
-        ~ < l ( vec_len [i] lanes ) { ( nurl_free # s ( _fc_geti lanes l ) ) = l + l 1 }
-        ( vec_free [Thread] ts )
-        ( vec_free [i] lanes )
-    } {
-        : ~ i k 0
-        ~ < k n { ( __fc_job_run # *FcJob ( _fc_geti jobs k ) ) = k + k 1 }
-    }
+    } { ( __fc_lane_run base n 0 1 ) }
 }
 
 // One feature's fit series over rows [from, n) of the hist: the present
@@ -514,8 +472,6 @@ $ `deps/arima/src/arima.nu`
     ~ < k n { ( vec_push [f] dev ( float_abs - . pv k med ) ) = k + k 1 }
     ( sort_by [f] dev \ f a f b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
     : ~ f spread * 1.4826 ( _fc_getf dev / n 2 )
-    ( vec_free [f] sorted )
-    ( vec_free [f] dev )
     ? > spread 0.0 {} {
         : ~ f sum 0.0
         = k 0
@@ -550,8 +506,6 @@ $ `deps/arima/src/arima.nu`
         ~ < k nf { ? > ( _fc_getf falls k ) * 10.0 step {} { = resets F } = k + k 1 }
         ? resets { = kind 2 } {}
     } {}
-    ( vec_free [f] pos )
-    ( vec_free [f] falls )
     ^ @ FcSeries { y n T kind spread }
 }
 
@@ -576,8 +530,6 @@ $ `deps/arima/src/arima.nu`
         = t + t 1
     }
     : FcSeries kd ( __fc_series_kind present )
-    ( vec_free [f] . kd y )
-    ( vec_free [f] present )
     ? > cnt 0 {
         // bridge: walk the gaps
         : ~ i last -1
@@ -616,10 +568,12 @@ $ `deps/arima/src/arima.nu`
 // the window gets a model; the models are then filtered over the whole
 // ring so their states stand at its end. Returns the number of features
 // watched.
-@ fc_train * FcModel fc * Meta mm ( Vec EncPoint ) encs i from i season i now i base_seq → i {
-    ( fc_clear fc )
+@ fc_train FcModel fc__h Meta mm__h ( Vec EncPoint ) encs i from i season i now i base_seq → i {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
+    ( fc_clear fc__h )
     : i ne ( vec_len [EncPoint] encs )
-    : ( Vec i ) mask ( meta_numeric_feat_mask mm )
+    : ( Vec i ) mask ( meta_numeric_feat_mask mm__h )
     : i nfeat ( vec_len [String] . mm feats )
     : ( Vec String ) cand ( vec_new [String] )
     : ( Vec i ) ccols ( vec_new [i] )
@@ -633,11 +587,8 @@ $ `deps/arima/src/arima.nu`
         } {}
         = j + j 1
     }
-    ( vec_free [i] mask )
     : i nc ( vec_len [String] cand )
     ? | == nc 0 <= - ne from ANOM_FC_MIN_FIT {
-        ( vec_free_with [String] cand \ String x → v { ( string_free x ) } )
-        ( vec_free [i] ccols )
         ^ 0
     } {}
     // the candidates' readings over the ring
@@ -648,7 +599,6 @@ $ `deps/arima/src/arima.nu`
             T p → {
                 : ( Vec f ) row ( fc_project p cand )
                 ( vec_extend [f] hist row )
-                ( vec_free [f] row )
             }
             F _ → {}
         }
@@ -661,15 +611,13 @@ $ `deps/arima/src/arima.nu`
     // (prep.nu, "Absurd readings").
     : ( Vec i ) fc_abs ( vec_new [i] )
     : i _fc_masked ( anomaly_mask_absurd hist ne nc fc_abs )
-    ( vec_free [i] fc_abs )
 
     // the fit jobs, one per feature worth fitting
-    : ( Vec i ) jobs ( vec_new [i] )
+    : ( Vec FcJob ) jobs ( vec_new [FcJob] )
     : ( Vec i ) jfeat ( vec_new [i] )
     = j 0
     ~ < j nc {
         : FcSeries fs ( __fc_fit_series hist nc j from ne )
-        : ( Vec f ) y . fs y
         : b fit & & >= . fs present ANOM_FC_MIN_FIT . fs distinct == . fs kind 0
         ? fit {} {
             : String why ( string_new )
@@ -685,37 +633,33 @@ $ `deps/arima/src/arima.nu`
             ( vec_push [String] . fc skipped why )
         }
         ? fit {
-            : *FcJob jb # *FcJob ( nurl_malloc Z FcJob )
-            = . jb y y
-            = . jb season season
-            = . jb out 0
-            = . jb sel ( string_new )
-            = . jb sel_mae 0.0
-            = . jb sel_naive 0.0
-            = . jb spread . fs spread
-            ( vec_push [i] jobs # i jb )
+            : ( Vec f ) y . fs y
+            ( mem_take y )  // the series leaves fs for the job
+            ( vec_push [FcJob] jobs @ FcJob { y season @ ArimaModel { # s 0 } ( string_new ) 0.0 0.0 . fs spread } )
             ( vec_push [i] jfeat j )
-        } { ( vec_free [f] y ) }
+        } {}
         = j + j 1
     }
     ( __fc_jobs_run jobs )
     // keep the fits that converged; bring each state to the ring's end
-    : i nj ( vec_len [i] jobs )
+    : i nj ( vec_len [FcJob] jobs )
+    : *FcJob pjobs ( vec_data [FcJob] jobs )
     = k 0
     ~ < k nj {
-        : *FcJob jb # *FcJob ( _fc_geti jobs k )
+        : FcJob jb . pjobs k
         : i cj ( _fc_geti jfeat k )
-        : ArimaModel m # ArimaModel . jb out
+        : ArimaModel m . jb out
+        : b fitted != # i . m ctl 0
         // a feature the chosen form reproduces to within a millionth of
         // its spread is a signal, not a reading: nothing to be surprised by
-        : b determ & != . jb out 0 <= . jb sel_mae * ANOM_FC_DETERMINISTIC . jb spread
+        : b determ & fitted <= . jb sel_mae * ANOM_FC_DETERMINISTIC . jb spread
         : ~ b keep F
         // A fit whose innovation variance is not a finite positive number
         // has not converged, whatever the flag says: it would answer every
         // later reading with a standard error of infinity and score it as
         // a perfect hit. `> inf 0.0` is true, so the finiteness is the
         // part that has to be asked for.
-        ? & ! determ != . jb out 0 {
+        ? & ! determ fitted {
             ? & ( arima_converged m ) ( _an_finite ( arima_sigma2 m ) ) {
                 ? > ( arima_sigma2 m ) 0.0 { = keep T } {}
             } {}
@@ -739,23 +683,15 @@ $ `deps/arima/src/arima.nu`
                 F _ → {}
             }
             ( vec_push [i] . fc cols ( _fc_geti ccols cj ) )
-            ( vec_push [i] . fc models # i m )
+            ( vec_push [ArimaModel] . fc models ( ArimaModel_share m ) )
             ( vec_push [String] . fc sel ( string_from ( string_data . jb sel ) ) )
             ( vec_push [f] . fc sel_mae . jb sel_mae )
             ( vec_push [f] . fc sel_naive . jb sel_naive )
             ( vec_push [f] . fc scale . jb spread )
-        } { ( __fc_model_free . jb out ) }
-        ( vec_free [f] . jb y )
-        ( string_free . jb sel )
-        ( nurl_free # s jb )
+        } {}
         = k + k 1
     }
-    ( vec_free [i] jobs )
-    ( vec_free [i] jfeat )
-    ( vec_free [f] hist )
-    ( vec_free_with [String] cand \ String x → v { ( string_free x ) } )
-    ( vec_free [i] ccols )
-    = . fc nw ( vec_len [i] . fc models )
+    = . fc nw ( vec_len [ArimaModel] . fc models )
     = . fc trained > . fc nw 0
     = . fc pos ne
     = . fc season season
@@ -769,11 +705,13 @@ $ `deps/arima/src/arima.nu`
 // ── Streaming ─────────────────────────────────────────────────────────
 
 // Absorb one row of readings (the watched features' values, NaN = gap).
-@ fc_absorb * FcModel fc ( Vec f ) raw → v {
+@ fc_absorb FcModel fc__h ( Vec f ) raw → v {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : i nw . fc nw
+    : *ArimaModel pm ( vec_data [ArimaModel] . fc models )
     : ~ i j 0
     ~ < j nw {
-        : ArimaUpdate _u ( arima_update # ArimaModel ( _fc_geti . fc models j ) ( _fc_getf raw j ) )
+        : ArimaUpdate _u ( arima_update . pm j ( _fc_getf raw j ) )
         = j + j 1
     }
     = . fc pos + . fc pos 1
@@ -781,7 +719,8 @@ $ `deps/arima/src/arima.nu`
 }
 
 // The ring evicted its oldest row.
-@ fc_evict * FcModel fc → v {
+@ fc_evict FcModel fc__h → v {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ? > . fc pos 0 { = . fc pos - . fc pos 1 } {}
 }
 
@@ -793,35 +732,32 @@ $ `deps/arima/src/arima.nu`
     ( Vec f ) z  // per watched feature; NaN where not judged
 }
 
-@ fc_out_free sink FcOut o → v {
-    ( vec_free [f] . o z )
-}
-
 // Judge a row of readings against the models' current forecasts. With
 // `absorb` the readings are then absorbed (the live ingest: the row is
 // the ring's newest); without, the states stay (detect_only).
-@ fc_judge * FcModel fc ( Vec f ) raw b absorb → FcOut {
+@ fc_judge FcModel fc__h ( Vec f ) raw b absorb → FcOut {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : i nw . fc nw
     : ( Vec f ) z ( vec_zeroed [f] nw )
     : *f pz ( vec_data [f] z )
     : ~ b ready F
     : ~ f worst 0.0
     : ~ i wf -1
+    : *ArimaModel pm ( vec_data [ArimaModel] . fc models )
     : ~ i j 0
     ~ < j nw {
-        : ArimaModel m # ArimaModel ( _fc_geti . fc models j )
+        : ArimaModel m . pm j
         : f y ( _fc_getf raw j )
         : ~ f zj ( float_nan )
         ? absorb {
             : ArimaUpdate u ( arima_update m y )
-            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc j . u innovation . u variance ) } {}
+            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc__h j . u innovation . u variance ) } {}
         } {
             ? ( float_is_nan y ) {} {
                 : ArimaForecast f1 ( arima_forecast m 1 )
                 : f se ( _fc_getf . f1 se 0 )
                 : f vr * se se
-                ? & > se 0.0 <= vr * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc j - y ( _fc_getf . f1 mean 0 ) vr ) } {}
-                ( arima_forecast_free f1 )
+                ? & > se 0.0 <= vr * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc__h j - y ( _fc_getf . f1 mean 0 ) vr ) } {}
             }
         }
         = . pz j zj
@@ -847,21 +783,17 @@ $ `deps/arima/src/arima.nu`
     ( Vec ( Vec f ) ) se
 }
 
-@ fc_forecast_free sink FcForecast o → v {
-    ( vec_free_with [String] . o feats \ String x → v { ( string_free x ) } )
-    ( vec_free_with [( Vec f )] . o mean \ ( Vec f ) v → v { ( vec_free [f] v ) } )
-    ( vec_free_with [( Vec f )] . o se \ ( Vec f ) v → v { ( vec_free [f] v ) } )
-}
-
-@ fc_forecast * FcModel fc i h → FcForecast {
+@ fc_forecast FcModel fc__h i h → FcForecast {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ( Vec String ) feats ( vec_new [String] )
     : ( Vec ( Vec f ) ) means ( vec_new [( Vec f )] )
     : ( Vec ( Vec f ) ) ses ( vec_new [( Vec f )] )
     : i nw . fc nw
+    : *ArimaModel pm ( vec_data [ArimaModel] . fc models )
     : ~ i j 0
     ~ < j nw {
         ?? ( vec_get [String] . fc feats j ) { T fn → { ( vec_push [String] feats ( string_from ( string_data fn ) ) ) } F _ → {} }
-        : ArimaForecast f1 ( arima_forecast # ArimaModel ( _fc_geti . fc models j ) h )
+        : ArimaForecast f1 ( arima_forecast . pm j h )
         ( vec_push [( Vec f )] means . f1 mean )
         ( vec_push [( Vec f )] ses . f1 se )
         = j + j 1
@@ -874,15 +806,16 @@ $ `deps/arima/src/arima.nu`
 // A copy of every model, restarted: the stream begins again at the row
 // whose absolute sequence number is `seq` (the regressors' phase
 // follows from it).
-@ fc_replay_begin * FcModel fc i seq → ( Vec i ) {
-    : ( Vec i ) out ( vec_new [i] )
+@ fc_replay_begin FcModel fc__h i seq → ( Vec ArimaModel ) {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
+    : ( Vec ArimaModel ) out ( vec_new [ArimaModel] )
     : i nw . fc nw
+    : *ArimaModel pm ( vec_data [ArimaModel] . fc models )
     : ~ i j 0
     ~ < j nw {
-        : ArimaModel c ( arima_clone # ArimaModel ( _fc_geti . fc models j ) )
+        : ArimaModel c ( arima_clone . pm j )
         ( arima_restart_at c - seq . fc origin_seq )
-        ( vec_push [i] out # i c )
-        ( mem_forget c )  // the copies' word owns it now (fc_replay_end)
+        ( vec_push [ArimaModel] out c )
         = j + j 1
     }
     ^ out
@@ -892,7 +825,8 @@ $ `deps/arima/src/arima.nu`
 // written into `z` when it is not empty.
 // The z-score of an innovation against the larger of the forecast's
 // standard error and the feature's floor (ANOM_FC_SE_FLOOR × spread).
-@ __fc_z * FcModel fc i j f innovation f variance → f {
+@ __fc_z FcModel fc__h i j f innovation f variance → f {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ~ f se ? > variance 0.0 ( float_sqrt variance ) 0.0
     : f floor * ANOM_FC_SE_FLOOR ( _fc_getf . fc scale j )
     ? < se floor { = se floor } {}
@@ -916,29 +850,23 @@ $ `deps/arima/src/arima.nu`
     ^ z
 }
 
-@ fc_replay_step * FcModel fc ( Vec i ) copies ( Vec f ) raw ( Vec f ) z → v {
-    : i nw ( vec_len [i] copies )
+@ fc_replay_step FcModel fc__h ( Vec ArimaModel ) copies ( Vec f ) raw ( Vec f ) z → v {
+    : i nw ( vec_len [ArimaModel] copies )
     : *f pz ( vec_data [f] z )
     : b want == ( vec_len [f] z ) nw
+    : *ArimaModel pm ( vec_data [ArimaModel] copies )
     : ~ i j 0
     ~ < j nw {
-        : ArimaModel m # ArimaModel ( _fc_geti copies j )
+        : ArimaModel m . pm j
         : f y ( _fc_getf raw j )
         : ArimaUpdate u ( arima_update m y )
         ? want {
             : ~ f zj ( float_nan )
-            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc j . u innovation . u variance ) } {}
+            ? & ! ( float_is_nan y ) <= . u variance * ANOM_FC_DIFFUSE ( arima_sigma2 m ) { = zj ( __fc_z fc__h j . u innovation . u variance ) } {}
             = . pz j zj
         } {}
         = j + j 1
     }
-}
-
-@ fc_replay_end ( Vec i ) copies → v {
-    : i nw ( vec_len [i] copies )
-    : ~ i j 0
-    ~ < j nw { ( __fc_model_free ( _fc_geti copies j ) ) = j + j 1 }
-    ( vec_free [i] copies )
 }
 
 // The verdict a row of z-scores gives: the largest |z| and the feature
@@ -968,7 +896,8 @@ $ `deps/arima/src/arima.nu`
 
 : s FC_FORMAT `anomaly-forecast-1`
 
-@ fc_to_json_str * FcModel fc → String {
+@ fc_to_json_str FcModel fc__h → String {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : Json o ( json_obj_new )
     ( json_obj_set o `format` ( json_str_lit FC_FORMAT ) )
     ( json_obj_set o `trained` ( json_bool . fc trained ) )
@@ -989,25 +918,24 @@ $ `deps/arima/src/arima.nu`
     ( json_obj_set o `skipped` ( _an_jarr_of_strs . fc skipped ) )
     ( json_obj_set o `scale` ( _an_jarr_of_floats . fc scale ) )
     : Json ms ( json_arr_new )
+    : *ArimaModel pm ( vec_data [ArimaModel] . fc models )
     = j 0
     ~ < j nw {
-        : String mj ( arima_to_json # ArimaModel ( _fc_geti . fc models j ) )
+        : String mj ( arima_to_json . pm j )
         ?? ( json_parse ( string_data mj ) ) {
             T mo → { ( json_arr_push ms mo ) }
             F _ → {}
         }
-        ( string_free mj )
         = j + j 1
     }
     ( json_obj_set o `models` ms )
     : String out ( json_stringify o )
-    ( json_free o )
     ^ out
 }
 
 // None on a malformed document; a document whose models do not parse
 // is untrained.
-@ fc_from_json_str s src → ?*FcModel {
+@ fc_from_json_str s src → ?FcModel {
     ?? ( json_parse src ) {
         T o → {
             : ~ b ok ( json_is_obj o )
@@ -1017,8 +945,9 @@ $ `deps/arima/src/arima.nu`
                     F _ → { = ok F }
                 }
             } {}
-            ? ok {} { ( json_free o ) ^ @ ?*FcModel { F } }
-            : *FcModel fc ( fc_new )
+            ? ok {} { ^ @ ?FcModel { F } }
+            : FcModel fc__h ( fc_new )
+            : *FcModelImpl fc ( _FcModel_ptr fc__h )
             = . fc season ( _an_jint o `season` 0 )
             = . fc trained_at ( _an_jint o `trained_at` 0 )
             = . fc trained_on ( _an_jint o `trained_on` 0 )
@@ -1067,10 +996,9 @@ $ `deps/arima/src/arima.nu`
                                 T e → {
                                     : String es ( json_stringify e )
                                     ?? ( arima_from_json ( string_data es ) ) {
-                                        T m → { ( vec_push [i] . fc models # i m ) ( mem_forget m ) }
+                                        T m → { ( vec_push [ArimaModel] . fc models m ) }
                                         F _ → { = good F }
                                     }
-                                    ( string_free es )
                                 }
                                 F _ → { = good F }
                             }
@@ -1103,8 +1031,7 @@ $ `deps/arima/src/arima.nu`
                 }
                 F _ → {}
             }
-            ( json_free o )
-            : i nw ( vec_len [i] . fc models )
+            : i nw ( vec_len [ArimaModel] . fc models )
             ? & & good == ( vec_len [String] . fc feats ) nw == ( vec_len [i] . fc cols ) nw {} { = good F }
             // a file from before the selection: no record of it
             ~ < ( vec_len [String] . fc sel ) nw { ( vec_push [String] . fc sel ( string_new ) ) }
@@ -1114,10 +1041,10 @@ $ `deps/arima/src/arima.nu`
             ? & good > nw 0 {
                 = . fc nw nw
                 = . fc trained T
-            } { ( fc_clear fc ) }
-            ^ @ ?*FcModel { T fc }
+            } { ( fc_clear fc__h ) }
+            ^ @ ?FcModel { T fc__h }
         }
-        F _ → { ^ @ ?*FcModel { F } }
+        F _ → { ^ @ ?FcModel { F } }
     }
 }
 
@@ -1140,7 +1067,8 @@ $ `deps/arima/src/arima.nu`
 // season it does not model, and a reader who takes the number at face
 // value believes a daily rhythm is being watched when nothing of the
 // kind is happening.
-@ fc_seasonal_count * FcModel fc → i {
+@ fc_seasonal_count FcModel fc__h → i {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : ~ i n 0
     : ~ i j 0
     ~ < j . fc nw {
@@ -1157,19 +1085,21 @@ $ `deps/arima/src/arima.nu`
 }
 
 // The form a feature's fit chose ("naive", "arima", "fourier4", …).
-@ fc_selected_of * FcModel fc i j → s {
+@ fc_selected_of FcModel fc__h i j → s {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ?? ( vec_get [String] . fc sel j ) { T sn → { ^ ( string_data sn ) } F _ → {} }
     ^ ``
 }
 
 // What a reader sees of the version (the metadata response's block).
-@ fc_info_json * FcModel fc → Json {
+@ fc_info_json FcModel fc__h → Json {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     : Json o ( json_obj_new )
     ( json_obj_set o `trained` ( json_bool . fc trained ) )
     ? . fc trained {
         ( json_obj_set o `features` ( _an_jarr_of_strs . fc feats ) )
         ( json_obj_set o `season` ( json_int . fc season ) )
-        : i _seas ( fc_seasonal_count fc )
+        : i _seas ( fc_seasonal_count fc__h )
         ( json_obj_set o `seasonal_features` ( json_int _seas ) )
         ? & > . fc season 0 == _seas 0 {
             ( json_obj_set o `season_note` ( json_str_lit `season is the period the order search was offered, in rows; no feature's chosen form uses it, so nothing here models a cycle of that length.` ) )
@@ -1180,10 +1110,10 @@ $ `deps/arima/src/arima.nu`
         ( json_obj_set o `skipped` ( _an_jarr_of_strs . fc skipped ) )
         : Json ms ( json_arr_new )
         : i nw . fc nw
+        : *ArimaModel pm ( vec_data [ArimaModel] . fc models )
         : ~ i j 0
         ~ < j nw {
-            : ArimaModel m # ArimaModel ( _fc_geti . fc models j )
-            : Json c ( arima_coef m )
+            : Json c ( arima_coef . pm j )
             ?? ( vec_get [String] . fc feats j ) { T fn → { ( json_obj_set c `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
             ?? ( vec_get [String] . fc sel j ) { T sn → { ( json_obj_set c `selected` ( json_str_lit ( string_data sn ) ) ) } F _ → {} }
             : f hm ( _fc_getf . fc sel_mae j )

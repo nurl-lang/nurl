@@ -91,9 +91,6 @@ $ `src/score.nu`
     ( check < df_out df_norm `batch: outlier df below normal df` )
     ( check <= df_out -0.1 `batch: outlier crosses the margin` )
 
-    ( anomaly_report_free rep )
-    ( _an_vercfg_free cfg )
-    ( vec_free [f] data )
 }
 
 // ── Determinism: fixed seed ⇒ identical scores ────────────────────────
@@ -115,11 +112,6 @@ $ `src/score.nu`
         = k + k 1
     }
     ( check same `determinism: two trainings give byte-identical scores` )
-    ( anomaly_report_free r1 )
-    ( anomaly_report_free r2 )
-    ( _an_vercfg_free cfg1 )
-    ( _an_vercfg_free cfg2 )
-    ( vec_free [f] data )
 }
 
 // ── Contamination pinning ─────────────────────────────────────────────
@@ -135,9 +127,6 @@ $ `src/score.nu`
     // 5% of 208 ≈ 10.4 — allow slack for score ties around the cut.
     ( check >= . rep anomaly_count 6 `contamination: >= 6 of 208 flagged` )
     ( check <= . rep anomaly_count 16 `contamination: <= 16 of 208 flagged` )
-    ( anomaly_report_free rep )
-    ( _an_vercfg_free cfg )
-    ( vec_free [f] data )
 
     // auto ⇒ offset pinned at exactly -0.5.
     : ( Vec f ) data2 ( make_data )
@@ -146,10 +135,6 @@ $ `src/score.nu`
     ( scaler_apply_matrix sc data2 208 2 )
     : VerModel vm ( anom_train_version data2 208 2 cfg2 )
     ( check == . vm offset -0.5 `contamination: auto offset = -0.5` )
-    ( anom_vermodel_free vm )
-    ( _an_vercfg_free cfg2 )
-    ( scaler_free sc )
-    ( vec_free [f] data2 )
 }
 
 @ main → i {
@@ -162,7 +147,6 @@ $ `src/score.nu`
     ( string_push_int summary g_fail )
     ( string_push_str summary ` failed` )
     ( pline ( string_data summary ) )
-    ( string_free summary )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }

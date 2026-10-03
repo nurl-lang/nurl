@@ -38,7 +38,6 @@ $ `src/detect.nu`
     : Image big ( img_resize solid 8 8 )
     ( check == ( img_get big 4 4 1 ) 120 `resize preserves solid colour` )
     ( check & == ( img_w big ) 8 == ( img_h big ) 8 `resize dims` )
-    ( image_free im ) ( image_free solid ) ( image_free big )
 }
 
 @ test_nchw → v {
@@ -46,21 +45,22 @@ $ `src/detect.nu`
     : Image im ( img_blank 2 2 )
     ( img_set im 0 0 0 10 ) ( img_set im 1 0 0 20 )
     ( img_set im 0 0 1 30 )
-    : *u t ( img_to_nchw im )
+    : ( Vec u ) tv ( img_to_nchw im )
+    : *u t ( vec_data [u] tv )
     // CHW: channel 0 plane is first 4 floats; (x=1,y=0) -> index 1 = 20.
     : f r10 ( nurl_peek_f32 t 1 )
     ( check & > r10 19.5 < r10 20.5 `nchw R(1,0)=20` )
     // channel 1 plane starts at index 4; (0,0) -> index 4 = 30.
     : f g00 ( nurl_peek_f32 t 4 )
     ( check & > g00 29.5 < g00 30.5 `nchw G(0,0)=30` )
-    ( nurl_free t ) ( image_free im )
 }
 
 // Build a 13x13x125 grid with one strong "dog" box planted at cell (6,6),
 // anchor 0, and verify decode finds it.
 @ test_decode → v {
     ( nurl_print `[decode]\n` )
-    : *u grid ( nurl_alloc * 21125 4 )
+    : ( Vec u ) grid_v ( vec_zeroed [u] * 21125 4 )
+    : *u grid ( vec_data [u] grid_v )
     : ~ i z 0
     ~ < z 21125 { ( nurl_poke_f32 grid z # f - 0.0 10.0 ) = z + z 1 }  // all logits very negative
     : i cy 6
@@ -78,8 +78,6 @@ $ `src/detect.nu`
             ( check & > . d cx 0.4 < . d cx 0.6 `box centre near cell (6,6)` )
         } F _ → ( check F `det fetch` )
     }
-    ( vec_free [Detection] dets )
-    ( nurl_free grid )
 }
 
 @ test_nms → v {
@@ -90,8 +88,6 @@ $ `src/detect.nu`
     ( vec_push [Detection] ds @ Detection { 7 0.7 0.5 0.5 0.2 0.2 } )  // cat, same box, kept (diff class)
     : ( Vec Detection ) keep ( yolo_nms ds 0.45 )
     ( check == ( vec_len [Detection] keep ) 2 `nms drops the overlapping same-class box` )
-    ( vec_free [Detection] keep )
-    ( vec_free [Detection] ds )
 }
 
 @ test_names → v {

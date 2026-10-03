@@ -19,12 +19,9 @@ $ `../src/image.nu`
 
 & `c` @ nurl_peek_f32 *u base i idx → f
 
-@ load_f32 s path * u pcell → *u {
-    ?? ( read_file_bytes path ) {
-        T bytes → { : i n / ( vec_len [u] bytes ) 4 : *u host ( nurl_alloc * n 4 )
-            ( vec_f32_into bytes host n ) ( nurl_poke pcell 0 n ) ^ host }
-        F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
-    }
+// A raw little-endian f32 file as its bytes (empty when unreadable).
+@ load_f32 s path → ( Vec u ) {
+    ?? ( read_file_bytes path ) { T b → ^ b F _ → ^ ( vec_new [u] ) }
 }
 
 @ shape4 i a i b i c i d → ( Vec i ) {
@@ -46,7 +43,8 @@ $ `../src/image.nu`
     ?? ( img_load ( string_data ip ) ) {
         T im → {
             : Letterbox lb ( letterbox im 640 )
-            : *u host ( img_to_nchw_norm . lb img )
+            : ( Vec u ) host_v ( img_to_nchw_norm . lb img )
+            : *u host ( vec_data [u] host_v )
             : Engine e ( rt_open 0 )
             ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
             ( nurl_print `device ` ) ( nurl_print ( rt_name e ) ) ( nurl_print `\n` )
@@ -57,9 +55,9 @@ $ `../src/image.nu`
             : *u ph ( gpu_host_ptr ph__h )
             ( nurl_print `proto floats ` ) ( nurl_print ( nurl_str_int . proto nelem ) ) ( nurl_print `\n` )
 
-            : *u gc ( nurl_alloc 8 )
-            : *u gref ( load_f32 ( string_data pp ) gc )
-            : i gn ( nurl_peek gc 0 )
+            : ( Vec u ) gref_v ( load_f32 ( string_data pp ) )
+            : *u gref ( vec_data [u] gref_v )
+            : i gn / ( vec_len [u] gref_v ) 4
             : ~ i bad 0
             : ~ f maxerr 0.0
             : ~ i j 0

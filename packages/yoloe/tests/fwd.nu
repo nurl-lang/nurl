@@ -12,12 +12,9 @@ $ `deps/onnx/src/runtime.nu`
 
 & `c` @ nurl_peek_f32 *u base i idx → f
 
-@ load_f32 s path * u pcell → *u {
-    ?? ( read_file_bytes path ) {
-        T bytes → { : i n / ( vec_len [u] bytes ) 4 : *u host ( nurl_alloc * n 4 )
-            ( vec_f32_into bytes host n ) ( nurl_poke pcell 0 n ) ^ host }
-        F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 }
-    }
+// A raw little-endian f32 file as its bytes (empty when unreadable).
+@ load_f32 s path → ( Vec u ) {
+    ?? ( read_file_bytes path ) { T b → ^ b F _ → ^ ( vec_new [u] ) }
 }
 
 @ shape4 i a i b i c i d → ( Vec i ) {
@@ -37,8 +34,8 @@ $ `deps/onnx/src/runtime.nu`
     ( nurl_print ` inits ` ) ( nurl_print ( nurl_str_int ( vec_len [OTensor] . g inits ) ) )
     ( nurl_print ` out=` ) ( nurl_print ( string_data . g output_name ) ) ( nurl_print `\n` )
 
-    : *u nc ( nurl_alloc 8 )
-    : *u input ( load_f32 ( string_data ip ) nc )
+    : ( Vec u ) input_v ( load_f32 ( string_data ip ) )
+    : *u input ( vec_data [u] input_v )
 
     : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( nurl_print `gpu/kernels failed\n` ) ^ 1 } {}
@@ -49,9 +46,9 @@ $ `deps/onnx/src/runtime.nu`
     : *u host ( gpu_host_ptr host__h )
     ( nurl_print `output floats ` ) ( nurl_print ( nurl_str_int . out nelem ) ) ( nurl_print `\n` )
 
-    : *u gc ( nurl_alloc 8 )
-    : *u gref ( load_f32 ( string_data op ) gc )
-    : i gn ( nurl_peek gc 0 )
+    : ( Vec u ) gref_v ( load_f32 ( string_data op ) )
+    : *u gref ( vec_data [u] gref_v )
+    : i gn / ( vec_len [u] gref_v ) 4
     : ~ i bad 0
     : ~ f maxerr 0.0
     : ~ i j 0

@@ -15,8 +15,8 @@
 // naming the tensor and both shapes, at load time, instead of a wrong
 // answer several hundred matmuls later.
 //
-//   ( lw_open path )                     → !*Lw String
-//   ( lw_close w )                       → v
+//   ( lw_open path )                     → !Lw String
+//   ( lw_close w )                       → v    early release (optional)
 //   ( lw_has w name )                    → b
 //   ( lw_index w name )                  → i    -1 when absent
 //   ( lw_dim w name axis )               → i
@@ -33,46 +33,53 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/core/rcbox.nu`
 $ `stdlib/std/floatbits.nu`
 $ `deps/safetensor/src/safetensor.nu`
 
-: Lw {
-    St st
+: LwImpl {
+    St st  // the mapping: its last owner unmaps it
     ( Vec String ) errs
 }
 
-@ lw_open s path → !*Lw String {
+// An open checkpoint is a handle: every copy is the same mapping, and the
+// last owner releases it. lw_close is an optional early release.
+: Lw { s ctl }
+
+@ Lw_share Lw h → Lw { ^ @ Lw { # s ( rcbox_share # i . h ctl ) } }
+
+@ Lw_drop sink Lw h → v { ( mem_forget h ) ( rcbox_release [LwImpl] # i . h ctl ) }
+
+@ __Lw_ptr Lw h → *LwImpl { ^ ( rcbox_ptr [LwImpl] # i . h ctl ) }
+// No checkpoint (an empty slot until lw_open fills it).
+@ lw_none → Lw { ^ @ Lw { # s 0 } }
+
+@ lw_open s path → !Lw String {
     : !St String r ( st_open path )
     ?? r {
-        F e → ^ @ !*Lw String { F e }
-        T st → {
-            : *Lw w # *Lw ( nurl_alloc Z Lw )
-            = . w st st
-            = . w errs ( vec_new [String] )
-            ^ @ !*Lw String { T w }
-        }
+        F e → ^ @ !Lw String { F e }
+        T st → { ^ @ !Lw String { T @ Lw { # s ( rcbox_new [LwImpl] @ LwImpl { st ( vec_new [String] ) } ) } } }
     }
 }
 
-@ lw_close * Lw w → v {
-    ( st_close . w st )
-    ( vec_free_with [String] . w errs \ String s → v { ( string_free s ) } )
-    ( nurl_free # s w )
-}
+// Release the checkpoint now (optional — its last owner does it anyway).
+@ lw_close sink Lw w → v {}
 
-@ lw_n_tensors * Lw w → i { ^ ( st_n_tensors . w st ) }
+@ lw_n_tensors Lw w__h → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( st_n_tensors . w st ) }
 
-@ lw_index * Lw w s name → i { ^ ( st_find_tensor . w st name ) }
+@ lw_index Lw w__h s name → i { : *LwImpl w ( __Lw_ptr w__h ) ^ ( st_find_tensor . w st name ) }
 
-@ lw_has * Lw w s name → b { ^ >= ( st_find_tensor . w st name ) 0 }
+@ lw_has Lw w__h s name → b { : *LwImpl w ( __Lw_ptr w__h ) ^ >= ( st_find_tensor . w st name ) 0 }
 
-@ lw_ndim * Lw w s name → i {
+@ lw_ndim Lw w__h s name → i {
+    : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) { T t → ^ . t nd F → ^ 0 }
 }
 
-@ lw_dim * Lw w s name i axis → i {
+@ lw_dim Lw w__h s name i axis → i {
+    : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
@@ -81,22 +88,24 @@ $ `deps/safetensor/src/safetensor.nu`
     }
 }
 
-@ lw_nelems * Lw w s name → i {
+@ lw_nelems Lw w__h s name → i {
+    : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) { T t → ^ . t nelems F → ^ 0 }
 }
 
-@ __lw_fail * Lw w String m → v {
-    ? == 0 ( vec_len [String] . w errs ) { ( vec_push [String] . w errs m ) }
-    { ( string_free m ) }
+// Keep the first failure only; a later one is dropped with the call.
+@ __lw_fail * LwImpl w sink String m → v {
+    ? == 0 ( vec_len [String] . w errs ) { ( vec_push [String] . w errs m ) } {}
 }
 
-@ lw_error * Lw w → s {
+@ lw_error Lw w__h → s {
+    : *LwImpl w ( __Lw_ptr w__h )
     ?? ( vec_get [String] . w errs 0 ) { T s → ^ ( string_data s ) F → ^ `` }
 }
 
-@ lw_ok * Lw w → b { ^ == 0 ( vec_len [String] . w errs ) }
+@ lw_ok Lw w__h → b { : *LwImpl w ( __Lw_ptr w__h ) ^ == 0 ( vec_len [String] . w errs ) }
 
 // The tensor's own bytes inside the mapping, when they are already
 // contiguous float32 — which is the layout a GK_F32 device buffer wants,
@@ -104,7 +113,8 @@ $ `deps/safetensor/src/safetensor.nu`
 // are contiguous by construction, so only the dtype and length are
 // checked. Returns 0 when the tensor is absent, a different dtype or a
 // different length, and the caller falls back to the converting read.
-@ lw_f32_ptr * Lw w s name i n → *u {
+@ lw_f32_ptr Lw w__h s name i n → *u {
+    : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 { ^ # *u 0 } {}
     ?? ( vec_get [StTensor] ( st_tensors . w st ) i0 ) {
@@ -122,7 +132,8 @@ $ `deps/safetensor/src/safetensor.nu`
 // the wrong size, or unreadable. Every dtype widens through f32 (the
 // container's dequant path), which is exact for this checkpoint — the
 // file is F32 throughout.
-@ lw_read * Lw w s name * f dst i n → b {
+@ lw_read Lw w__h s name * f dst i n → b {
+    : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 {
         : String m ( string_from `map-anything: checkpoint has no tensor '` )
@@ -153,7 +164,6 @@ $ `deps/safetensor/src/safetensor.nu`
             ( string_push_str m name )
             ( string_push_str m `': ` )
             ( string_push_str m ( string_data e ) )
-            ( string_free e )
             ( __lw_fail w m )
             ^ F
         }
@@ -166,7 +176,6 @@ $ `deps/safetensor/src/safetensor.nu`
                 = . dst k # f ( bits_to_f32 bits )
                 = k + k 1
             }
-            ( vec_free [u] bytes )
             ^ T
         }
     }
@@ -175,7 +184,8 @@ $ `deps/safetensor/src/safetensor.nu`
 // Assert a tensor's presence and shape. Pass −1 for an axis that may be
 // anything, and for axes beyond the tensor's rank. Records the first
 // failure; returns whether THIS check passed.
-@ lw_require * Lw w s name i d0 i d1 i d2 i d3 → b {
+@ lw_require Lw w__h s name i d0 i d1 i d2 i d3 → b {
+    : *LwImpl w ( __Lw_ptr w__h )
     : i i0 ( st_find_tensor . w st name )
     ? < i0 0 {
         : String m ( string_from `map-anything: checkpoint has no tensor '` )
@@ -236,15 +246,15 @@ $ `deps/safetensor/src/safetensor.nu`
 // How many `<prefix>N<suffix>` tensors the checkpoint holds, counting up
 // from 0 until one is missing — the layer count, read off the file
 // rather than hard-coded.
-@ lw_count_indexed * Lw w s prefix s suffix → i {
+@ lw_count_indexed Lw w__h s prefix s suffix → i {
+    : *LwImpl w ( __Lw_ptr w__h )
     : ~ i n 0
     : ~ b more T
     ~ & more < n 4096 {
         : String nm ( string_from prefix )
         ( string_push_int nm n )
         ( string_push_str nm suffix )
-        ? ( lw_has w ( string_data nm ) ) { = n + n 1 } { = more F }
-        ( string_free nm )
+        ? ( lw_has w__h ( string_data nm ) ) { = n + n 1 } { = more F }
     }
     ^ n
 }

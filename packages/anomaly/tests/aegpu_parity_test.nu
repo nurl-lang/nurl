@@ -65,8 +65,6 @@ $ `deps/mlp/src/mlp.nu`
     ? == . cr n_iter . gr n_iter { ( nurl_print `n_iter: EQUAL\n` ) } { ( nurl_print `n_iter: MISMATCH\n` ) = ok F }
     ? == ( f64_to_bits . cr best_val ) ( f64_to_bits . gr best_val ) { ( nurl_print `best_val: BIT-EXACT\n` ) } { ( nurl_print `best_val: MISMATCH\n` ) = ok F }
     ? == ( f64_to_bits . cr loss ) ( f64_to_bits . gr loss ) { ( nurl_print `loss: BIT-EXACT\n` ) } { ( nurl_print `loss: MISMATCH\n` ) = ok F }
-    ( mlp_free cm ) ( mlp_free gm )
-    ( vec_free [f] X ) ( vec_free [i] sz )
     ( anom_gpu_close )
     ? ok { ( nurl_print `PARITY: ALL BIT-EXACT\n` ) ^ 0 } { ( nurl_print `PARITY: FAILED\n` ) ^ 1 }
 }

@@ -10,9 +10,12 @@ $ `src/rope.nu`
 @ case i heads i gw i gh i dim i nspecial → v {
     : i npatch * gw gh
     : i n + nspecial npatch
-    : *f x # *f ( nurl_zalloc * 8 * heads * n dim )
-    : *i rows # *i ( nurl_zalloc * 8 n )
-    : *i cols # *i ( nurl_zalloc * 8 n )
+    : ( Vec u ) x__v ( vec_zeroed [u] * 8 * heads * n dim )
+    : *f x # *f ( vec_data [u] x__v )
+    : ( Vec u ) rows__v ( vec_zeroed [u] * 8 n )
+    : *i rows # *i ( vec_data [u] rows__v )
+    : ( Vec u ) cols__v ( vec_zeroed [u] * 8 n )
+    : *i cols # *i ( vec_data [u] cols__v )
     // special tokens at (0,0); patches at (y+1, x+1), row-major
     : ~ i t 0
     ~ < t nspecial { = . rows t 0 = . cols t 0 = t + t 1 }
@@ -42,8 +45,10 @@ $ `src/rope.nu`
         = h + h 1
     }
     : i maxpos + 2 ? > gw gh gw gh
-    : *f ct # *f ( nurl_zalloc * 8 * maxpos / dim 2 )
-    : *f st # *f ( nurl_zalloc * 8 * maxpos / dim 2 )
+    : ( Vec u ) ct__v ( vec_zeroed [u] * 8 * maxpos / dim 2 )
+    : *f ct # *f ( vec_data [u] ct__v )
+    : ( Vec u ) st__v ( vec_zeroed [u] * 8 * maxpos / dim 2 )
+    : *f st # *f ( vec_data [u] st__v )
     ( rope2d_tables / dim 2 maxpos ct st )
     ( rope2d_apply x heads n dim rows cols ct st )
     ( nurl_print `r` ) ( nurl_print ( nurl_str_int heads ) )
@@ -57,8 +62,6 @@ $ `src/rope.nu`
         = j + j 1
     }
     ( nurl_print `\n` )
-    ( nurl_free # s x ) ( nurl_free # s rows ) ( nurl_free # s cols )
-    ( nurl_free # s ct ) ( nurl_free # s st )
 }
 
 @ main → i {

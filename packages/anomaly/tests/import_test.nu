@@ -73,14 +73,11 @@ $ `src/dynamic.nu`
     ( check == ( vec_len [Json] . ip rows ) 2 `csv: two rows` )
     : String t0 ( cell ip 0 `room` )
     ( check ( streq t0 `kitchen` ) `csv: a text cell stays text` )
-    ( string_free t0 )
     // A delimiter inside quotes is data, not a column break — the row would
     // otherwise have one field too many and be thrown away.
     : String t1 ( cell ip 1 `room` )
     ( check ( streq t1 `living, room` ) `csv: a quoted delimiter is data` )
-    ( string_free t1 )
     ( check ( has_key ip 0 `temp` ) `csv: the numeric column is there` )
-    ( import_parse_free ip )
 
     // Semicolons, because that is what a spreadsheet in half of Europe
     // writes and its author has no reason to know.
@@ -89,7 +86,6 @@ $ `src/dynamic.nu`
 ` `csv` )
     ( check == ( vec_len [Json] . semi rows ) 1 `csv: a semicolon file parses` )
     ( check ( has_key semi 0 `b` ) `csv: with both columns` )
-    ( import_parse_free semi )
 
     // A blank cell contributes no field rather than an empty category.
     : ImportParse blank ( import_parse `a,b
@@ -97,7 +93,6 @@ $ `src/dynamic.nu`
 ` `csv` )
     ( check ( has_key blank 0 `a` ) `csv: the filled column is present` )
     ( check ! ( has_key blank 0 `b` ) `csv: a blank cell yields no field` )
-    ( import_parse_free blank )
 
     // One bad row does not fail a file.
     : ImportParse ragged ( import_parse `a,b
@@ -108,7 +103,6 @@ $ `src/dynamic.nu`
     ( check == ( vec_len [Json] . ragged rows ) 2 `csv: the good rows survive` )
     ( check == . ragged skipped 1 `csv: the ragged row is counted` )
     ( check > ( vec_len [String] . ragged notes ) 0 `csv: and described` )
-    ( import_parse_free ragged )
 
     // The weather service's export is a CSV; naming it is allowed.
     : ImportParse fmi ( import_parse `Vuosi,Kuukausi,Päivä,Aika,Lämpötila
@@ -118,41 +112,32 @@ $ `src/dynamic.nu`
     ( check == ( string_len . fmi err ) 0 `fmi: accepted as a format name` )
     ( check == ( vec_len [Json] . fmi rows ) 2 `fmi: read as csv` )
     ( check ! ( has_key fmi 1 `Lämpötila` ) `fmi: a dash is a missing cell` )
-    ( import_parse_free fmi )
     : ImportParse unk ( import_parse `a,b
 1,2` `xml` )
     ( check > ( string_len . unk err ) 0 `format: an unknown name is an error` )
-    ( import_parse_free unk )
 
     : ImportParse nohdr ( import_parse `` `csv` )
     ( check > ( string_len . nohdr err ) 0 `csv: an empty file is an error` )
-    ( import_parse_free nohdr )
 }
 
 @ test_json → v {
     : ImportParse arr ( import_parse `[{"a":1},{"a":2}]` `json` )
     ( check == ( vec_len [Json] . arr rows ) 2 `json: a bare array` )
-    ( import_parse_free arr )
 
     // What this service's own /data route emits, wrapped in its envelope.
     : ImportParse wrapped ( import_parse `{"status":"success","data":[{"a":1}]}` `json` )
     ( check == ( vec_len [Json] . wrapped rows ) 1 `json: an array under "data"` )
-    ( import_parse_free wrapped )
     : ImportParse pts ( import_parse `{"points":[{"a":1},{"a":2}]}` `json` )
     ( check == ( vec_len [Json] . pts rows ) 2 `json: or under "points"` )
-    ( import_parse_free pts )
 
     : ImportParse mixed ( import_parse `[{"a":1},5,{"a":2}]` `json` )
     ( check == ( vec_len [Json] . mixed rows ) 2 `json: a non-object is skipped` )
     ( check == . mixed skipped 1 `json: and counted` )
-    ( import_parse_free mixed )
 
     : ImportParse bad ( import_parse `{ not json` `json` )
     ( check > ( string_len . bad err ) 0 `json: malformed is an error` )
-    ( import_parse_free bad )
     : ImportParse noarr ( import_parse `{"a":1}` `json` )
     ( check > ( string_len . noarr err ) 0 `json: an object with no array is an error` )
-    ( import_parse_free noarr )
 
     // The cell rule holds for JSON too: a dash or an N/A is no field, a
     // null is no field, a number written as text is a number.
@@ -162,15 +147,11 @@ $ `src/dynamic.nu`
     ( check ! ( has_key gaps 0 `p` ) `json: and null` )
     : String h ( cell gaps 0 `h` )
     ( check ( streq h `21` ) `json: "21.5" is a number` )
-    ( string_free h )
     : String n ( cell gaps 0 `n` )
     ( check ( streq n `7` ) `json: "7" is an integer` )
-    ( string_free n )
     : String kk ( cell gaps 0 `k` )
     ( check ( streq kk `ok` ) `json: a word stays text` )
-    ( string_free kk )
     ( check ( has_key gaps 0 `x` ) `json: a number is kept` )
-    ( import_parse_free gaps )
 }
 
 @ test_jsonl → v {
@@ -181,7 +162,6 @@ $ `src/dynamic.nu`
 ` `jsonl` )
     ( check == ( vec_len [Json] . ip rows ) 3 `jsonl: blank lines are not rows` )
     ( check == . ip skipped 0 `jsonl: and are not failures either` )
-    ( import_parse_free ip )
 
     : ImportParse bad ( import_parse `{"a":1}
 oops
@@ -189,7 +169,6 @@ oops
 ` `jsonl` )
     ( check == ( vec_len [Json] . bad rows ) 2 `jsonl: a bad line does not stop the file` )
     ( check == . bad skipped 1 `jsonl: it is counted` )
-    ( import_parse_free bad )
 
     : ImportParse gaps ( import_parse `{"a":"-","b":"1"}
 {"a":"NaN","b":"2"}
@@ -198,25 +177,19 @@ oops
     ( check ! ( has_key gaps 1 `a` ) `jsonl: so is NaN` )
     : String b1 ( cell gaps 1 `b` )
     ( check ( streq b1 `2` ) `jsonl: "2" is a number` )
-    ( string_free b1 )
-    ( import_parse_free gaps )
 }
 
 @ test_sniff → v {
     : String a ( import_sniff `[{"a":1}]` )
     ( check ( streq a `json` ) `sniff: a leading bracket is json` )
-    ( string_free a )
     : String b ( import_sniff `{"a":1}
 {"a":2}` )
     ( check ( streq b `jsonl` ) `sniff: repeated objects are jsonl` )
-    ( string_free b )
     : String c ( import_sniff `{"data":[{"a":1}]}` )
     ( check ( streq c `json` ) `sniff: one object is json` )
-    ( string_free c )
     : String d ( import_sniff `a,b
 1,2` )
     ( check ( streq d `csv` ) `sniff: anything else is csv` )
-    ( string_free d )
 
     // auto is the same decision, made for a caller who did not say.
     : ImportParse ip ( import_parse `a,b
@@ -224,13 +197,11 @@ oops
 ` `auto` )
     ( check ( streq . ip format `csv` ) `sniff: auto reports what it chose` )
     ( check == ( vec_len [Json] . ip rows ) 1 `sniff: and parses it` )
-    ( import_parse_free ip )
 
     : ImportParse bad ( import_parse `a,b
 1,2
 ` `wizard` )
     ( check > ( string_len . bad err ) 0 `sniff: an unknown format is refused` )
-    ( import_parse_free bad )
 }
 
 // Build a JSONL body of `n` points, one per minute from `from`.
@@ -250,23 +221,21 @@ oops
 }
 
 @ test_ingest Store st → v {
-    : *Model mo ( model_open_at st `imported` T0 )
-    ( model_set_limits mo 30 150000 )
-    ( model_set_schedule mo 1000000 1000000 )
+    : Model mo__h ( model_open_at st `imported` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_set_limits mo__h 30 150000 )
+    ( model_set_schedule mo__h 1000000 1000000 )
 
     : String body ( mk_jsonl T0 120 )
     : ImportParse ip ( import_parse ( string_data body ) `jsonl` )
-    ( string_free body )
     ( check == ( vec_len [Json] . ip rows ) 120 `ingest: the file parses` )
-    : ImportReport rep ( model_import_at mo . ip rows + T0 100000 )
+    : ImportReport rep ( model_import_at mo__h . ip rows + T0 100000 )
     ( check == ( string_len . rep err ) 0 `ingest: it imports` )
     ( check == . rep accepted 120 `ingest: every row landed` )
     ( check == . rep stored 120 `ingest: and the ring holds them` )
     // Enough history arrived to train on, so it trains — once, at the end.
     ( check . rep trained `ingest: the model trained afterwards` )
-    ( check ( model_is_trained mo ) `ingest: and is trained` )
-    ( import_report_free rep )
-    ( import_parse_free ip )
+    ( check ( model_is_trained mo__h ) `ingest: and is trained` )
 
     // The timestamps came from the FILE. History that all landed at "now"
     // would make every time window see one instant.
@@ -281,12 +250,9 @@ oops
     // after it: the ring is read as a time sequence by every window.
     : String older ( mk_jsonl - T0 86400 30 )
     : ImportParse ip2 ( import_parse ( string_data older ) `jsonl` )
-    ( string_free older )
-    : ImportReport rep2 ( model_import_at mo . ip2 rows + T0 100000 )
+    : ImportReport rep2 ( model_import_at mo__h . ip2 rows + T0 100000 )
     ( check == . rep2 accepted 30 `ingest: the older file imports` )
     ( check == . rep2 stored 150 `ingest: the ring holds both` )
-    ( import_report_free rep2 )
-    ( import_parse_free ip2 )
     : ~ b ordered T
     : ~ i prev -1
     : ~ i k 0
@@ -301,39 +267,32 @@ oops
     : ~ i newfirst 0
     ?? ( vec_get [i] . mo times 0 ) { T x → { = newfirst x } F _ → {} }
     ( check == newfirst - T0 86400 `ingest: the older history is at the front` )
-    ( model_free mo )
 }
 
 @ test_evict Store st → v {
     // A file bigger than the ring is a file whose TAIL the model keeps.
-    : *Model mo ( model_open_at st `evicted` T0 )
-    ( model_set_limits mo 30 40 )
-    ( model_set_schedule mo 1000000 1000000 )
+    : Model mo__h ( model_open_at st `evicted` T0 )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_set_limits mo__h 30 40 )
+    ( model_set_schedule mo__h 1000000 1000000 )
     : String body ( mk_jsonl T0 100 )
     : ImportParse ip ( import_parse ( string_data body ) `jsonl` )
-    ( string_free body )
-    : ImportReport rep ( model_import_at mo . ip rows + T0 100000 )
+    : ImportReport rep ( model_import_at mo__h . ip rows + T0 100000 )
     ( check == . rep accepted 100 `evict: every row was read` )
     ( check == . rep stored 40 `evict: the ring keeps its cap` )
     : ~ i first 0
     ?? ( vec_get [i] . mo times 0 ) { T x → { = first x } F _ → {} }
     ( check == first + T0 * 60 60 `evict: and it is the newest 40 that stayed` )
-    ( import_report_free rep )
-    ( import_parse_free ip )
-    ( model_free mo )
 }
 
 @ test_reject Store st → v {
-    : *Model mo ( model_open_at st `rejected` T0 )
+    : Model mo ( model_open_at st `rejected` T0 )
     ( model_set_limits mo 30 150000 )
     ( model_set_schedule mo 1000000 1000000 )
     : ( Vec Json ) none ( vec_new [Json] )
     : ImportReport empty ( model_import_at mo none T0 )
     ( check > ( string_len . empty err ) 0 `reject: an empty import is an error` )
-    ( import_report_free empty )
-    ( vec_free [Json] none )
     ( check == ( model_n_points mo ) 0 `reject: and changed nothing` )
-    ( model_free mo )
 }
 
 // A stamp read from text, or -1 when the text is not one.
@@ -454,10 +413,6 @@ oops
     ( check ! ( row_has . ip rows 0 `Aika [Paikallinen aika]` ) `time: Aika consumed` )
     ( check ( row_has . ip rows 0 `Havaintoasema` ) `time: the station column stays` )
     ( check ( row_has . ip rows 0 `time` ) `time: calendar=T leaves an ISO time column` )
-    ( imp_time_result_free r )
-    ( json_free plan )
-    ( json_free insp )
-    ( import_parse_free ip )
 
     // An explicit plan naming a column that is not there is an error, not a
     // silent nothing.
@@ -468,8 +423,6 @@ oops
         T plan → { ( check ( json_obj_has plan `error` ) `time: a missing column is reported` ) }
         F _ → { ( check F `time: inspect reports` ) }
     }
-    ( json_free insp2 )
-    ( json_free bad )
 
     // "none": nothing is read; no row gets a timestamp.
     : Json none ( jparse `{"mode":"none"}` )
@@ -480,13 +433,9 @@ oops
             ( check == . r3 stamped 0 `time: mode none stamps nothing` )
             ( check ! ( row_has . ip2 rows 0 `timestamp` ) `time: and rows stay unstamped` )
             ( check ( row_has . ip2 rows 0 `Vuosi` ) `time: and columns stay` )
-            ( imp_time_result_free r3 )
         }
         F _ → { ( check F `time: none plan` ) }
     }
-    ( json_free insp3 )
-    ( json_free none )
-    ( import_parse_free ip2 )
 
     // A single datetime column under an unrelated name is found by its
     // values; a naive stamp is read in the zone given (+03:00 here).
@@ -502,13 +451,9 @@ oops
             ( check ( seq ( jstr plan `column` ) `ajanhetki` ) `time: found by its values` )
             : ImpTimeResult r4 ( import_time_apply . ip4 rows plan F ( imp_tz_of spec4 ) )
             ( check == ( row_int . ip4 rows 0 `timestamp` ) T_FMI `time: naive stamp read in +03:00` )
-            ( imp_time_result_free r4 )
         }
         F _ → { ( check F `time: column plan` ) }
     }
-    ( json_free insp4 )
-    ( json_free spec4 )
-    ( import_parse_free ip4 )
 
     // The same export handed over as JSON rows, numbers already numbers,
     // the way an assistant sends `rows`: the parts are found the same.
@@ -523,12 +468,9 @@ oops
             ( check == . rj stamped 2 `time: json rows stamped` )
             ( check ! ( row_has . ipj rows 0 `Aika [UTC]` ) `time: json rows: the clock part is consumed` )
             ( check ! ( row_has . ipj rows 0 `Pilvisyys [1/8]` ) `time: json rows: "-" is a missing value` )
-            ( imp_time_result_free rj )
         }
         F _ → { ( check F `time: json rows inspect has a time plan` ) }
     }
-    ( json_free inspj )
-    ( import_parse_free ipj )
 
     // Nothing time-like at all: the proposal is none, with no confidence.
     : ImportParse ip5 ( import_parse `a,b,min
@@ -542,9 +484,6 @@ oops
         }
         F _ → { ( check F `time: none proposal` ) }
     }
-    ( json_free insp5 )
-    ( json_free auto )
-    ( import_parse_free ip5 )
 }
 
 @ main → i {
@@ -563,10 +502,8 @@ oops
     ( test_evict st )
     ( test_reject st )
 
-    ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
     ( nurl_print `import_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

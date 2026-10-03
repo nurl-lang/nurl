@@ -23,8 +23,10 @@ $ `src/preproc.nu`
 // anything. Doing it here, not in preproc, mirrors the reference —
 // applying them twice is a quiet way to get a plausible wrong answer.
 @ imnet_norm * f p i h i w → v {
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     : ~ i c 0
@@ -37,7 +39,6 @@ $ `src/preproc.nu`
         }
         = c + c 1
     }
-    ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
 @ main → i {
@@ -45,9 +46,9 @@ $ `src/preproc.nu`
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
 
-    : !*Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
+    : !Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
     ?? fr {
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T f → {
             : i h ( pp_height f )
             : i w ( pp_width f )
@@ -55,9 +56,9 @@ $ `src/preproc.nu`
             : i gw / w 14
             ( imnet_norm ( pp_data f ) h w )
 
-            : !*Lw String o ( lw_open ( nurl_argv 1 ) )
+            : !Lw String o ( lw_open ( nurl_argv 1 ) )
             ?? o {
-                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+                F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
                 T lw → {
                     : Dino d ( dn_load lw kit )
                     ? ( lw_ok lw ) {} {
@@ -83,14 +84,8 @@ $ `src/preproc.nu`
                         = j + j STRIDE
                     }
                     ( nurl_print `\n` )
-                    ( vec_free [f] out )
-                    ( gk_dbuf_free tok )
-                    ( lm_ws_free ws )
-                    ( dn_free d )
-                    ( lw_close lw )
                 }
             }
-            ( pp_free f )
         }
     }
     ( gk_close kit )

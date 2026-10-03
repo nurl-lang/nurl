@@ -125,7 +125,8 @@ $ `src/rope.nu`
     // the attention still produces plausible numbers, so it shows up as a
     // few percent of error rather than as anything obviously broken.
     : i hs * n hd
-    : *f qkv # *f ( nurl_zalloc * 8 * 3 nd )
+    : ( Vec u ) qkv__v ( vec_zeroed [u] * 8 * 3 nd )
+    : *f qkv # *f ( vec_data [u] qkv__v )
     ( bk_linear x n dim qkv_w qkv_b * 3 dim qkv )
     // [n, 3, heads, hd] → q/k/v each [heads, n, hd]
     : *f q scratch
@@ -148,7 +149,6 @@ $ `src/rope.nu`
         }
         = t + t 1
     }
-    ( nurl_free # s qkv )
     // qk LayerNorm is per HEAD, over head_dim — heads·n independent rows
     // qk-norm and rope are both optional and both signalled by a null
     // pointer: DINOv2's own blocks have neither (they add a position
@@ -165,7 +165,8 @@ $ `src/rope.nu`
     // scaled dot-product attention, per head
     : *f att # *f + # i scratch * 8 * 3 nd
     : f scale / 1.0 ( float_sqrt # f hd )
-    : *f ctx # *f ( nurl_zalloc * 8 nd )
+    : ( Vec u ) ctx__v ( vec_zeroed [u] * 8 nd )
+    : *f ctx # *f ( vec_data [u] ctx__v )
     : ~ i h 0
     ~ < h heads {
         : i hb * h hs
@@ -197,7 +198,6 @@ $ `src/rope.nu`
         = h + h 1
     }
     ( bk_linear ctx n dim proj_w proj_b dim out )
-    ( nurl_free # s ctx )
 }
 
 // One full transformer block.
@@ -213,9 +213,12 @@ $ `src/rope.nu`
 * f n2_g * f n2_b * f fc1_w * f fc1_b * f fc2_w * f fc2_b * f ls2
 * i grow * i gcol * f cos_t * f sin_t * f scratch → v {
     : i nd * n dim
-    : *f norm # *f ( nurl_zalloc * 8 nd )
-    : *f branch # *f ( nurl_zalloc * 8 nd )
-    : *f hid # *f ( nurl_zalloc * 8 * n hidden )
+    : ( Vec u ) norm__v ( vec_zeroed [u] * 8 nd )
+    : *f norm # *f ( vec_data [u] norm__v )
+    : ( Vec u ) branch__v ( vec_zeroed [u] * 8 nd )
+    : *f branch # *f ( vec_data [u] branch__v )
+    : ( Vec u ) hid__v ( vec_zeroed [u] * 8 * n hidden )
+    : *f hid # *f ( vec_data [u] hid__v )
 
     ( bk_layernorm x n dim n1_g n1_b BK_EPS norm )
     ( bk_attention norm n dim heads qkv_w qkv_b qn_g qn_b kn_g kn_b
@@ -230,7 +233,4 @@ $ `src/rope.nu`
     = j 0
     ~ < j nd { = . x j + . x j * . branch j . ls2 % j dim = j + j 1 }
 
-    ( nurl_free # s norm )
-    ( nurl_free # s branch )
-    ( nurl_free # s hid )
 }

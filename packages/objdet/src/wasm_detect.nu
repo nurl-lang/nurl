@@ -55,9 +55,12 @@ $ `detect.nu`
     ? ! ( rt_ok e ) { ( host_status - 0 1 12 ) ^ 1 } {}
     ( host_status 2 0 )
 
-    : *u nchw ( nurl_alloc * * * 3 OD_N OD_N 4 )
-    : *u ctl ( nurl_alloc * 16 4 )
-    : *u dets_out ( nurl_alloc * * OD_MAXDET 6 4 )
+    : ( Vec u ) nchw_v ( vec_zeroed [u] * * * 3 OD_N OD_N 4 )
+    : ( Vec u ) ctl_v ( vec_zeroed [u] * 16 4 )
+    : ( Vec u ) dets_v ( vec_zeroed [u] * * OD_MAXDET 6 4 )
+    : *u nchw ( vec_data [u] nchw_v )
+    : *u ctl ( vec_data [u] ctl_v )
+    : *u dets_out ( vec_data [u] dets_v )
 
     : ~ b run T
     ~ run {
@@ -88,8 +91,6 @@ $ `detect.nu`
                 = k + k 1
             }
             ( host_result dets_out nd )
-            ( vec_free [Detection] raw )
-            ( vec_free [Detection] dets )
         } {
             = run F
         }

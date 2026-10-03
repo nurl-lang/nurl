@@ -282,17 +282,14 @@ b,2.5`
 @ test_wfs → v {
     : String b1 ( wfs_base_url ` https://opendata.fmi.fi/wfs?request=GetCapabilities ` )
     ( check ( seq ( string_data b1 ) `https://opendata.fmi.fi/wfs` ) `wfs: base url drops the query and the spaces` )
-    ( string_free b1 )
     : String b2 ( wfs_base_url `http://example.org/wfs` )
     ( check ( seq ( string_data b2 ) `http://example.org/wfs` ) `wfs: base url without a query stays` )
-    ( string_free b2 )
     ( check ( wfs_url_ok `https://opendata.fmi.fi/wfs?request=GetCapabilities` ) `wfs: https url ok` )
     ( check ! ( wfs_url_ok `ftp://opendata.fmi.fi/wfs` ) `wfs: ftp refused` )
     ( check ! ( wfs_url_ok `` ) `wfs: empty refused` )
 
     : String cu ( wfs_url_catalog `https://opendata.fmi.fi/wfs?x=1` )
     ( check ( seq ( string_data cu ) `https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0&request=DescribeStoredQueries` ) `wfs: catalogue url` )
-    ( string_free cu )
 
     : Json params ( json_obj_new )
     ( json_obj_set params `place` ( json_str_lit `Kumpula,Helsinki` ) )
@@ -306,8 +303,6 @@ b,2.5`
     ( check ! ( string_contains fu `2001-01-01` ) `wfs: a saved starttime is not sent` )
     ( check ! ( string_contains fu `crs=` ) `wfs: an empty parameter is not sent` )
     ( check ( string_contains fu `&starttime=2026-09-07T05%3A00%3A00Z&endtime=2026-09-07T06%3A00%3A00Z` ) `wfs: the window's times end the url` )
-    ( string_free fu )
-    ( json_free params )
 
     : Json cat ( wfs_catalog CATALOG_XML )
     ( check ! ( jhas cat `error` ) `wfs: catalogue parses` )
@@ -339,13 +334,10 @@ b,2.5`
         }
         F _ → { ( check F `wfs: queries` ) }
     }
-    ( json_free cat )
     : Json cat2 ( wfs_catalog EXCEPTION_XML )
     ( check ( has_text ( jstr cat2 `error` ) `exception` ) `wfs: an exception report is an error` )
-    ( json_free cat2 )
     : Json cat3 ( wfs_catalog `this is not xml` )
     ( check ( jhas cat3 `error` ) `wfs: garbage is an error` )
-    ( json_free cat3 )
 
     : WfsPivot pv ( wfs_pivot FEATURE_XML )
     ( check == ( string_len . pv err ) 0 `pivot: no error` )
@@ -379,17 +371,13 @@ b,2.5`
         }
         F _ → { ( check F `pivot: row 2` ) }
     }
-    ( wfs_pivot_free pv )
     : WfsPivot pe ( wfs_pivot EXCEPTION_XML )
     ( check ( string_contains . pe err `No location parameter given` ) `pivot: exception text surfaces` )
-    ( wfs_pivot_free pe )
     : WfsPivot pf ( wfs_pivot EMPTY_FC_XML )
     ( check ( string_starts_with . pf err `the feature collection holds no` ) `pivot: an empty collection says so` )
     ( check == ( vec_len [Json] . pf rows ) 0 `pivot: an empty collection has no rows` )
-    ( wfs_pivot_free pf )
     : WfsPivot pg ( wfs_pivot `<html>nope</html>` )
     ( check ( seq ( string_data . pg err ) `not a WFS feature collection` ) `pivot: another document is refused` )
-    ( wfs_pivot_free pg )
 }
 
 // ── sources ───────────────────────────────────────────────────────────
@@ -415,10 +403,9 @@ b,2.5`
     : Json b ( body_full )
     : ~ String id ( string_new )
     ?? ( source_create ORG b `tester` 1000 ) {
-        T src → { ( string_free id ) = id ( string_from ( jstr src `id` ) ) ( json_free src ) }
-        F e → { ( string_free e ) }
+        T src → { = id ( string_from ( jstr src `id` ) ) }
+        F e → {}
     }
-    ( json_free b )
     ^ id
 }
 
@@ -427,7 +414,6 @@ b,2.5`
     : ~ String id ( string_new )
     ?? ( source_create ORG b `tester` 1000 ) {
         T src → {
-            ( string_free id )
             = id ( string_from ( jstr src `id` ) )
             ( check ( source_id_ok ( string_data id ) ) `sources: id is twelve hex digits` )
             ( check ( seq ( jstr src `url` ) `https://opendata.fmi.fi/wfs` ) `sources: url stored as its base` )
@@ -440,52 +426,44 @@ b,2.5`
             ( check ( seq ( jstr src `created_by` ) `tester` ) `sources: created_by` )
             ( check ( seq ( jstr src `kind` ) `wfs` ) `sources: kind` )
             ( check == ( jint src `last_time` ) 0 `sources: nothing fetched yet` )
-            ( json_free src )
         }
-        F e → { ( nurl_print `  create said: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( check F `sources: create` ) ( string_free e ) }
+        F e → { ( nurl_print `  create said: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( check F `sources: create` ) }
     }
-    ( json_free b )
 
     // What is refused.
     : Json bad1 ( body_full )
     ( json_obj_set bad1 `url` ( json_str_lit `ftp://x/wfs` ) )
     ?? ( source_create ORG bad1 `tester` 1000 ) {
-        T s1 → { ( check F `sources: ftp url refused` ) ( json_free s1 ) }
-        F e → { ( check ( string_contains e `url must be` ) `sources: ftp url refused` ) ( string_free e ) }
+        T s1 → { ( check F `sources: ftp url refused` ) }
+        F e → { ( check ( string_contains e `url must be` ) `sources: ftp url refused` ) }
     }
-    ( json_free bad1 )
     : Json bad2 ( json_obj_new )
     ( json_obj_set bad2 `url` ( json_str_lit `https://opendata.fmi.fi/wfs` ) )
     ?? ( source_create ORG bad2 `tester` 1000 ) {
-        T s2 → { ( check F `sources: missing query and model refused` ) ( json_free s2 ) }
-        F e → { ( check ( string_contains e `needs url, query and model` ) `sources: missing query and model refused` ) ( string_free e ) }
+        T s2 → { ( check F `sources: missing query and model refused` ) }
+        F e → { ( check ( string_contains e `needs url, query and model` ) `sources: missing query and model refused` ) }
     }
-    ( json_free bad2 )
     : Json bad3 ( body_full )
     ( json_obj_set bad3 `interval_minutes` ( json_int 0 ) )
     ?? ( source_create ORG bad3 `tester` 1000 ) {
-        T s3 → { ( check F `sources: interval 0 refused` ) ( json_free s3 ) }
-        F e → { ( check ( string_contains e `interval_minutes` ) `sources: interval 0 refused` ) ( string_free e ) }
+        T s3 → { ( check F `sources: interval 0 refused` ) }
+        F e → { ( check ( string_contains e `interval_minutes` ) `sources: interval 0 refused` ) }
     }
-    ( json_free bad3 )
     : Json bad4 ( body_full )
     ( json_obj_set bad4 `model` ( json_str_lit `no spaces` ) )
     ?? ( source_create ORG bad4 `tester` 1000 ) {
-        T s4 → { ( check F `sources: bad model name refused` ) ( json_free s4 ) }
-        F e → { ( check ( string_contains e `model must be` ) `sources: bad model name refused` ) ( string_free e ) }
+        T s4 → { ( check F `sources: bad model name refused` ) }
+        F e → { ( check ( string_contains e `model must be` ) `sources: bad model name refused` ) }
     }
-    ( json_free bad4 )
     : Json bad5 ( body_full )
     ( json_obj_set bad5 `features` ( json_str_lit `t2m` ) )
     ?? ( source_create ORG bad5 `tester` 1000 ) {
-        T s5 → { ( check F `sources: features must be an array` ) ( json_free s5 ) }
-        F e → { ( check ( string_contains e `features must be` ) `sources: features must be an array` ) ( string_free e ) }
+        T s5 → { ( check F `sources: features must be an array` ) }
+        F e → { ( check ( string_contains e `features must be` ) `sources: features must be an array` ) }
     }
-    ( json_free bad5 )
 
     : ( Vec Json ) all ( sources_list ORG )
     ( check == ( vec_len [Json] all ) 1 `sources: one listed` )
-    ( sources_free all )
 
     // Change the interval: the span stays. Change the query: it resets.
     ?? ( source_load ORG ( string_data id ) ) {
@@ -493,7 +471,6 @@ b,2.5`
             ( json_obj_set src `first_time` ( json_int 500 ) )
             ( json_obj_set src `last_time` ( json_int 900 ) )
             ( check ( source_save ORG src ) `sources: saved with a span` )
-            ( json_free src )
         }
         F _ → { ( check F `sources: load` ) }
     }
@@ -506,40 +483,33 @@ b,2.5`
             ( check ( seq ( jstr src `name` ) `Helsinki hourly` ) `sources: name trimmed` )
             ( check == ( jint src `last_time` ) 900 `sources: the span survives an interval change` )
             ( check == ( jint src `updated_at` ) 2000 `sources: updated_at` )
-            ( json_free src )
         }
-        F e → { ( check F `sources: update interval` ) ( string_free e ) }
+        F e → { ( check F `sources: update interval` ) }
     }
-    ( json_free ch1 )
     : Json ch2 ( json_obj_new )
     ( json_obj_set ch2 `query` ( json_str_lit `fmi::observations::weather::hourly::simple` ) )
     ?? ( source_update ORG ( string_data id ) ch2 2100 ) {
         T src → {
             ( check == ( jint src `last_time` ) 0 `sources: a new query resets the span` )
             ( check == ( jint src `first_time` ) 0 `sources: a new query resets first_time` )
-            ( json_free src )
         }
-        F e → { ( check F `sources: update query` ) ( string_free e ) }
+        F e → { ( check F `sources: update query` ) }
     }
-    ( json_free ch2 )
     : Json ch3 ( json_obj_new )
     ( json_obj_set ch3 `history_hours` ( json_int 99999 ) )
     ?? ( source_update ORG ( string_data id ) ch3 2200 ) {
-        T src → { ( check F `sources: absurd history refused` ) ( json_free src ) }
-        F e → { ( check ( string_contains e `history_hours` ) `sources: absurd history refused` ) ( string_free e ) }
+        T src → { ( check F `sources: absurd history refused` ) }
+        F e → { ( check ( string_contains e `history_hours` ) `sources: absurd history refused` ) }
     }
     ?? ( source_update ORG `000000000000` ch3 2200 ) {
-        T src → { ( check F `sources: unknown id` ) ( json_free src ) }
-        F e → { ( check ( seq ( string_data e ) `no such source` ) `sources: unknown id` ) ( string_free e ) }
+        T src → { ( check F `sources: unknown id` ) }
+        F e → { ( check ( seq ( string_data e ) `no such source` ) `sources: unknown id` ) }
     }
-    ( json_free ch3 )
 
     ( check ( source_delete ORG ( string_data id ) ) `sources: deleted` )
     ( check ! ( source_delete ORG ( string_data id ) ) `sources: deleting twice is false` )
     : ( Vec Json ) none ( sources_list ORG )
     ( check == ( vec_len [Json] none ) 0 `sources: none listed after delete` )
-    ( sources_free none )
-    ( string_free id )
 }
 
 // ── windows ───────────────────────────────────────────────────────────
@@ -558,7 +528,6 @@ b,2.5`
     ( check & == . w3 start - now 172800 == . w3 end - - now 21600 1 `window: a backfill ends before first_time` )
     : SrcWindow w4 ( source_window src now T 1 )
     ( check > . w4 start . w4 end `window: a backfill inside the span is empty` )
-    ( json_free src )
 
     // The step of a run's points and the season it implies.
     : ( Vec Json ) pts ( vec_new [Json] )
@@ -575,13 +544,12 @@ b,2.5`
     ( check == ( source_season_of 86400 ) 7 `season: a day → the week` )
     ( check == ( source_season_of 0 ) 0 `season: no step, no season` )
     ( check == ( source_season_of 200000 ) 0 `season: a step past a day has none` )
-    ( vec_free_with [Json] pts \ Json j → v { ( json_free j ) } )
 }
 
 // The first train of a model that arrived as a whole calibrates its
 // margins once; a second call, and a later run, leave them alone.
 @ test_autotune Store st → v {
-    : *Model mo ( model_open_at st `tuned` 1000 )
+    : Model mo ( model_open_at st `tuned` 1000 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
@@ -592,32 +560,30 @@ b,2.5`
         ( json_obj_set j `t` ( json_float + 20.0 / # f % seed 1000 100.0 ) )
         ( json_obj_set j `p` ( json_float + 1000.0 / # f % + seed 77 1000 50.0 ) )
         : !Verdict String r ( model_ingest_at mo j + 1000 * k 60 )
-        ?? r { T vd → { ( verdict_free vd ) } F e → { ( string_free e ) } }
-        ( json_free j )
+        ?? r { T vd → {} F e → {} }
         = k + k 1
     }
     : i tr ( model_force_train_at mo + 1000 * 120 60 )
     ( check > tr 0 `autotune: trained` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm__h ( model_metadata mo )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm tuned_at 0 `autotune: never tuned yet` )
-    : f before ( meta_version_margin mm `short_term` -1.0 )
+    : f before ( meta_version_margin mm__h `short_term` -1.0 )
     ( check ! ( model_autotune_at mo 0.005 9998 ) `autotune: a rate that would flag no row of 120 does nothing` )
     ( check == . mm tuned_at 0 `autotune: and leaves the model untuned for a bigger ring` )
     ( check ( model_autotune_at mo 0.05 9999 ) `autotune: the first train calibrates` )
     ( check == . mm tuned_at 9999 `autotune: and remembers when` )
-    : f after ( meta_version_margin mm `short_term` -1.0 )
+    : f after ( meta_version_margin mm__h `short_term` -1.0 )
     ( check ! ( near before after ) `autotune: the margin moved` )
     ( check ! ( model_autotune_at mo 0.05 10000 ) `autotune: a second call does nothing` )
     ( check == . mm tuned_at 9999 `autotune: the first time stands` )
     ( check ! ( model_autotune_at mo 0.0 10001 ) `autotune: rate 0 does nothing` )
     // the metadata carries it
-    : String js ( meta_to_json_str mm )
+    : String js ( meta_to_json_str mm__h )
     ?? ( meta_from_json_str ( string_data js ) ) {
-        T m2 → { ( check == . m2 tuned_at 9999 `autotune: tuned_at survives the JSON round trip` ) ( meta_free m2 ) }
+        T m2 → { ( check == . ( _Meta_ptr m2 ) tuned_at 9999 `autotune: tuned_at survives the JSON round trip` ) }
         F _ → { ( check F `autotune: metadata parses back` ) }
     }
-    ( string_free js )
-    ( model_free mo )
 }
 
 // ── run ───────────────────────────────────────────────────────────────
@@ -634,7 +600,6 @@ b,2.5`
         }
         = k + k 1
     }
-    ( wfs_pivot_free pv )
     ^ rows
 }
 
@@ -654,7 +619,6 @@ b,2.5`
     ( check == ( jint r1 `fetched` ) 3 `run: three rows fetched` )
     ( check == ( jint r1 `newest` ) T_0600 `run: newest observation` )
     ( check == ( jint r1 `oldest` ) T_0500 `run: oldest observation` )
-    ( json_free r1 )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ( check ( seq ( jstr src `last_status` ) `ok` ) `run: record says ok` )
@@ -664,17 +628,16 @@ b,2.5`
             ( check == ( jint src `total_rows` ) 3 `run: total_rows` )
             ( check == ( jint src `runs` ) 1 `run: runs` )
             ( check == ( jint src `last_run` ) now `run: last_run` )
-            ( json_free src )
         }
         F _ → { ( check F `run: reload` ) }
     }
     ( check ( store_exists st `helsinki_weather` ) `run: the model exists now` )
-    : *Model mo ( model_open st `helsinki_weather` )
-    ( check == ( model_n_points mo ) 3 `run: the model holds three points` )
-    ( check == ( model_last_ts mo ) T_0600 `run: the newest point carries the observation's clock` )
-    : *Meta mm . mo meta
+    : Model mo__h ( model_open st `helsinki_weather` )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( check == ( model_n_points mo__h ) 3 `run: the model holds three points` )
+    ( check == ( model_last_ts mo__h ) T_0600 `run: the newest point carries the observation's clock` )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ( check ! . mm count_clock `run: a time clock` )
-    ( model_free mo )
 
     // The same rows again, in the window the next run would ask for:
     // every row lies before it, so nothing lands twice.
@@ -683,10 +646,8 @@ b,2.5`
     ( check ( seq ( jstr r2 `status` ) `success` ) `run: second run succeeds` )
     ( check == ( jint r2 `ingested` ) 0 `run: nothing ingested twice` )
     ( check == ( jint r2 `skipped_outside` ) 3 `run: the rows were outside the window` )
-    ( json_free r2 )
-    : *Model mo2 ( model_open st `helsinki_weather` )
+    : Model mo2 ( model_open st `helsinki_weather` )
     ( check == ( model_n_points mo2 ) 3 `run: still three points` )
-    ( model_free mo2 )
 
     // A backfill window ending before first_time takes only what lies
     // there: nothing from this fixture, and first_time moves back.
@@ -694,18 +655,17 @@ b,2.5`
     : Json r3 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T ( fixture_rows ) } w3 T + now 700 )
     ( check ( seq ( jstr r3 `status` ) `success` ) `run: backfill succeeds` )
     ( check == ( jint r3 `ingested` ) 0 `run: backfill takes nothing from inside the span` )
-    ( json_free r3 )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ( check == ( jint src `first_time` ) - T_0500 7200 `run: backfill moved first_time back` )
             ( check == ( jint src `last_time` ) + now 600 `run: last_time untouched by a backfill` )
-            ( json_free src )
         }
         F _ → { ( check F `run: reload after backfill` ) }
     }
 
     // Only the chosen features land: lat and lon were not chosen.
-    : *Model mo3 ( model_open st `helsinki_weather` )
+    : Model mo3__h ( model_open st `helsinki_weather` )
+    : *ModelImpl mo3 ( _Model_ptr mo3__h )
     ?? ( vec_get [String] . mo3 lines 0 ) {
         T line → {
             ( check ( string_contains line `"t2m"` ) `run: t2m stored` )
@@ -714,19 +674,16 @@ b,2.5`
         }
         F _ → { ( check F `run: stored line` ) }
     }
-    ( model_free mo3 )
 
     // A fetch that fails leaves the error on the record and the model alone.
     : Json e1 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { F ( string_from `HTTP 400 from the service: bad place` ) } w F + now 800 )
     ( check ( seq ( jstr e1 `status` ) `error` ) `run: a failed fetch is an error` )
     ( check ( has_text ( jstr e1 `message` ) `HTTP 400` ) `run: the reason is passed on` )
-    ( json_free e1 )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ( check ( seq ( jstr src `last_status` ) `error` ) `run: record says error` )
             ( check ( has_text ( jstr src `last_error` ) `bad place` ) `run: last_error kept` )
             ( check == ( jint src `runs` ) 4 `run: every attempt counts as a run` )
-            ( json_free src )
         }
         F _ → { ( check F `run: reload after error` ) }
     }
@@ -735,16 +692,13 @@ b,2.5`
     // ends in an error on the record within the connect failure.
     : Json ch ( json_obj_new )
     ( json_obj_set ch `url` ( json_str_lit `http://127.0.0.1:9/wfs` ) )
-    ?? ( source_update ORG ( string_data id ) ch 3000 ) { T s → { ( json_free s ) } F e → { ( string_free e ) } }
-    ( json_free ch )
+    ?? ( source_update ORG ( string_data id ) ch 3000 ) { T s → {} F e → {} }
     : Json e2 ( source_run ORG ( string_data id ) F 0 + now 900 \ → v { ( nop ) } \ → v { ( nop ) } )
     ( check ( seq ( jstr e2 `status` ) `error` ) `run: an unreachable service is an error` )
     ( check ( has_text ( jstr e2 `message` ) `could not fetch` ) `run: says it could not fetch` )
     ( check ! ( source_is_running ORG ( string_data id ) ) `run: not marked running afterwards` )
-    ( json_free e2 )
     : Json e3 ( source_run ORG `000000000000` F 0 now \ → v { ( nop ) } \ → v { ( nop ) } )
     ( check ( seq ( jstr e3 `message` ) `no such source` ) `run: unknown source` )
-    ( json_free e3 )
 
     // a changed model resets the span: the new model has seen none of it
     : Json chm ( json_obj_new )
@@ -753,17 +707,13 @@ b,2.5`
         T upd → {
             ( check == ( jint upd `first_time` ) 0 `run: a changed model resets first_time` )
             ( check == ( jint upd `last_time` ) 0 `run: and last_time` )
-            ( json_free upd )
         }
-        F e → { ( check F `run: model change` ) ( string_free e ) }
+        F e → { ( check F `run: model change` ) }
     }
-    ( json_free chm )
     : Json chb ( json_obj_new )
     ( json_obj_set chb `model` ( json_str_lit `fmi_test` ) )
-    ?? ( source_update ORG ( string_data id ) chb + now 6 ) { T upd → { ( json_free upd ) } F e → { ( string_free e ) } }
-    ( json_free chb )
+    ?? ( source_update ORG ( string_data id ) chb + now 6 ) { T upd → {} F e → {} }
     : b _d ( source_delete ORG ( string_data id ) )
-    ( string_free id )
 }
 
 // ── wide ──────────────────────────────────────────────────────────────
@@ -787,13 +737,11 @@ b,2.5`
         }
         F _ → { ( check F `wide: queries` ) }
     }
-    ( json_free cat )
     : Json scat ( wfs_catalog CATALOG_XML )
     ?? ( json_obj_get scat `queries` ) {
         T qs → { ?? ( json_arr_get qs 0 ) { T q → { ( check ( seq ( jstr q `kind` ) `stored` ) `wide: a stored query says so` ) } F _ → {} } }
         F _ → {}
     }
-    ( json_free scat )
 
     : Json params ( json_obj_new )
     ( json_obj_set params `count` ( json_str_lit `250` ) )
@@ -805,13 +753,9 @@ b,2.5`
     ( check ( string_contains tu `&count=250` ) `wide: url takes the count` )
     ( check ( string_contains tu `&srsName=urn%3Aogc%3Adef%3Acrs%3AEPSG%3A%3A4326` ) `wide: url asks for WGS 84, latitude first` )
     ( check ! ( string_contains tu `bbox=` ) `wide: an empty parameter is not sent` )
-    ( string_free tu )
-    ( json_free params )
     : Json none ( json_obj_new )
     : String tu2 ( wfs_url_type `https://x/wfs` `a:b` none )
     ( check ( string_contains tu2 `&count=1000&srsName=` ) `wide: default count` )
-    ( string_free tu2 )
-    ( json_free none )
 
     : WfsPivot pv ( wfs_pivot_wide WIDE_XML `` 5000 )
     ( check == ( string_len . pv err ) 0 `wide pivot: no error` )
@@ -840,19 +784,16 @@ b,2.5`
         }
         F _ → { ( check F `wide pivot: row 1` ) }
     }
-    ( wfs_pivot_free pv )
     : WfsPivot pz ( wfs_pivot_wide WIDE_XML `none` 5000 )
     ?? ( vec_get [Json] . pz rows 0 ) {
         T r0 → { ( check & == ( jint r0 `timestamp` ) 5000 ! ( jhas r0 `time` ) `wide pivot: "none" means no property is the clock` ) }
         F _ → { ( check F `wide pivot: none clock` ) }
     }
-    ( wfs_pivot_free pz )
     : WfsPivot pn ( wfs_pivot_wide WIDE_XML `NAME` 5000 )
     ?? ( vec_get [Json] . pn rows 0 ) {
         T r0 → { ( check == ( jint r0 `timestamp` ) 5000 `wide pivot: a named clock that is no date falls back to now` ) }
         F _ → { ( check F `wide pivot: named clock` ) }
     }
-    ( wfs_pivot_free pn )
     : WfsPivot ps ( wfs_pivot_wide SNAPSHOT_XML `` 7000 )
     ( check == ( vec_len [Json] . ps rows ) 1 `wide pivot: snapshot row` )
     ?? ( vec_get [Json] . ps rows 0 ) {
@@ -863,10 +804,8 @@ b,2.5`
         }
         F _ → { ( check F `wide pivot: snapshot` ) }
     }
-    ( wfs_pivot_free ps )
     : WfsPivot pe ( wfs_pivot_wide EXCEPTION_XML `` 1 )
     ( check ( string_contains . pe err `exception` ) `wide pivot: exception surfaces` )
-    ( wfs_pivot_free pe )
 
     // A feature-type source: window, categorical coordinates, the span.
     : Json b ( json_obj_new )
@@ -883,7 +822,7 @@ b,2.5`
     : ~ String id ( string_new )
     ?? ( source_create ORG b `tester` 1000 ) {
         T src → {
-            ( string_free id ) = id ( string_from ( jstr src `id` ) )
+            = id ( string_from ( jstr src `id` ) )
             ( check ( seq ( jstr src `mode` ) `type` ) `type source: mode kept` )
             ( check ( source_is_type src ) `type source: is a type` )
             : SrcWindow w ( source_window src 9000 F 0 )
@@ -894,18 +833,15 @@ b,2.5`
             ( json_obj_set src `allow_future` ( json_bool F ) )
             : SrcWindow wb ( source_window src 9000 T 24 )
             ( check & == . wb start - 9000 86400 == . wb end 9000 `type source: a backfill reaches back from the fetch time` )
-            ( json_free src )
         }
-        F e → { ( check F `type source: create` ) ( string_free e ) }
+        F e → { ( check F `type source: create` ) }
     }
-    ( json_free b )
     : Json bad ( json_obj_new )
     ( json_obj_set bad `mode` ( json_str_lit `sideways` ) )
     ?? ( source_update ORG ( string_data id ) bad 1100 ) {
-        T src → { ( check F `type source: bad mode refused` ) ( json_free src ) }
-        F e → { ( check ( string_contains e `mode must be` ) `type source: bad mode refused` ) ( string_free e ) }
+        T src → { ( check F `type source: bad mode refused` ) }
+        F e → { ( check ( string_contains e `mode must be` ) `type source: bad mode refused` ) }
     }
-    ( json_free bad )
 
     : i now + T_0600 600
     : WfsPivot pw ( wfs_pivot_wide WIDE_XML `` now )
@@ -913,41 +849,35 @@ b,2.5`
     : i nr ( vec_len [Json] . pw rows )
     : ~ i k 0
     ~ < k nr { ?? ( vec_get [Json] . pw rows k ) { T r → { ( vec_push [Json] rows ( json_clone r ) ) } F _ → {} } = k + k 1 }
-    ( wfs_pivot_free pw )
     : ~ Json cur ( json_null )
-    ?? ( source_load ORG ( string_data id ) ) { T sj → { ( json_free cur ) = cur sj } F _ → {} }
+    ?? ( source_load ORG ( string_data id ) ) { T sj → { = cur sj } F _ → {} }
     : SrcWindow w2 ( source_window cur now F 0 )
-    ( json_free cur )
     : Json r1 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T rows } w2 F now )
     ( check ( seq ( jstr r1 `status` ) `success` ) `type run: success` )
     ( check == ( jint r1 `ingested` ) 3 `type run: three features in` )
-    ( json_free r1 )
     // The same features again: nothing new, and the span does not move.
     : WfsPivot pw2 ( wfs_pivot_wide WIDE_XML `` + now 100 )
     : ( Vec Json ) rows2 ( vec_new [Json] )
     : i nr2 ( vec_len [Json] . pw2 rows )
     = k 0
     ~ < k nr2 { ?? ( vec_get [Json] . pw2 rows k ) { T r → { ( vec_push [Json] rows2 ( json_clone r ) ) } F _ → {} } = k + k 1 }
-    ( wfs_pivot_free pw2 )
     : ~ Json cur2 ( json_null )
-    ?? ( source_load ORG ( string_data id ) ) { T sj → { ( json_free cur2 ) = cur2 sj } F _ → {} }
+    ?? ( source_load ORG ( string_data id ) ) { T sj → { = cur2 sj } F _ → {} }
     : SrcWindow w4 ( source_window cur2 + now 100 F 0 )
-    ( json_free cur2 )
     : Json r2 ( source_run_rows ORG ( string_data id ) @ !( Vec Json ) String { T rows2 } w4 F + now 100 )
     ( check == ( jint r2 `ingested` ) 0 `type run: the same features land once` )
-    ( json_free r2 )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ( check == ( jint src `last_time` ) T_0600 `type run: last_time is the newest feature's clock` )
             ( check == ( jint src `first_time` ) T_0500 `type run: first_time is the oldest` )
             : SrcWindow w3 ( source_window src + now 60 F 0 )
             ( check == . w3 start + T_0600 1 `type run: the next window starts after the newest clock` )
-            ( json_free src )
         }
         F _ → { ( check F `type run: reload` ) }
     }
-    : *Model mo ( model_open st `dwd_t2m` )
-    ( check == ( model_n_points mo ) 3 `type run: model holds three points` )
+    : Model mo__h ( model_open st `dwd_t2m` )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( check == ( model_n_points mo__h ) 3 `type run: model holds three points` )
     : Json mj ( meta_to_json . mo meta )
     ?? ( json_obj_get mj `column_types` ) {
         T ct → {
@@ -957,7 +887,6 @@ b,2.5`
         }
         F _ → { ( check F `type run: column_types` ) }
     }
-    ( json_free mj )
     ?? ( vec_get [String] . mo lines 0 ) {
         T line → {
             ( check ( string_contains line `"lat":"53.8633"` ) `type run: a categorical coordinate is stored as text` )
@@ -967,9 +896,7 @@ b,2.5`
         }
         F _ → { ( check F `type run: stored line` ) }
     }
-    ( model_free mo )
     : b _d ( source_delete ORG ( string_data id ) )
-    ( string_free id )
 }
 
 // ── due ───────────────────────────────────────────────────────────────
@@ -982,31 +909,24 @@ b,2.5`
         T r → { ( check & ( seq ( string_data . r org ) ORG ) ( seq ( string_data . r id ) ( string_data id ) ) `due: names org and id` ) }
         F _ → { ( check F `due: ref` ) }
     }
-    ( vec_free_with [SrcRef] d1 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ( json_obj_set src `last_run` ( json_int 5000 ) )
             : b _s ( source_save ORG src )
-            ( json_free src )
         }
         F _ → {}
     }
     : ( Vec SrcRef ) d2 ( sources_due + 5000 599 )
     ( check == ( vec_len [SrcRef] d2 ) 0 `due: not due before the interval passes` )
-    ( vec_free_with [SrcRef] d2 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
     : ( Vec SrcRef ) d3 ( sources_due + 5000 600 )
     ( check == ( vec_len [SrcRef] d3 ) 1 `due: due when it has` )
-    ( vec_free_with [SrcRef] d3 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
     : Json off ( json_obj_new )
     ( json_obj_set off `enabled` ( json_bool F ) )
-    ?? ( source_update ORG ( string_data id ) off 6000 ) { T s → { ( json_free s ) } F e → { ( string_free e ) } }
-    ( json_free off )
+    ?? ( source_update ORG ( string_data id ) off 6000 ) { T s → {} F e → {} }
     : ( Vec SrcRef ) d4 ( sources_due 99999 )
     ( check == ( vec_len [SrcRef] d4 ) 0 `due: a disabled source never is` )
-    ( vec_free_with [SrcRef] d4 \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
     ( check == ( sources_tick 99999 \ → v { ( nop ) } \ → v { ( nop ) } ) 0 `due: a tick with nothing due runs nothing` )
     : b _d ( source_delete ORG ( string_data id ) )
-    ( string_free id )
 }
 
 // ── routes ────────────────────────────────────────────────────────────
@@ -1035,12 +955,9 @@ b,2.5`
     : ~ Json parsed ( json_null )
     : !Json JsonError jr ( json_parse ( string_data txt ) )
     ?? jr {
-        T j → { ( json_free parsed ) = parsed j }
+        T j → { = parsed j }
         F _ → {}
     }
-    ( string_free txt )
-    ( http_response_free resp )
-    ( request_free req )
     ^ @ SvcOut { status parsed }
 }
 
@@ -1067,7 +984,6 @@ b,2.5`
         T r2 → { ( check ( seq ( jstr r2 `reading_temperature` ) `NaN` ) `http pivot: a "NaN" string stays text (the column table will say mixed)` ) }
         F _ → { ( check F `http pivot: row 2` ) }
     }
-    ( wfs_pivot_free pa )
     : WfsPivot po ( http_pivot JSON_OBJECT `current` `` 7000 )
     ( check == ( vec_len [Json] . po rows ) 1 `http pivot: an object is one record` )
     ?? ( vec_get [Json] . po rows 0 ) {
@@ -1078,19 +994,15 @@ b,2.5`
         }
         F _ → { ( check F `http pivot: object row` ) }
     }
-    ( wfs_pivot_free po )
     : WfsPivot pw ( http_pivot JSON_OBJECT `` `none` 7000 )
     ?? ( vec_get [Json] . pw rows 0 ) {
         T r0 → { ( check & ( jhas r0 `current_temperature_2m` ) == ( jint r0 `timestamp` ) 7000 `http pivot: whole answer flattened, no clock → now` ) }
         F _ → { ( check F `http pivot: whole` ) }
     }
-    ( wfs_pivot_free pw )
     : WfsPivot pm ( http_pivot JSON_OBJECT `nowhere.here` `` 1 )
     ( check ( string_contains . pm err `nothing at the path` ) `http pivot: a missing path says so` )
-    ( wfs_pivot_free pm )
     : WfsPivot pj ( http_pivot `<html>` `` `` 1 )
     ( check ( string_contains . pj err `not JSON` ) `http pivot: HTML is not JSON` )
-    ( wfs_pivot_free pj )
 
     // ── csv ───────────────────────────────────────────────────────────
     //
@@ -1115,14 +1027,12 @@ b,2.5`
         T r2 → { ( check ! ( jhas r2 `place` ) `csv pivot: an empty cell is a missing value, not an empty string` ) }
         F _ → { ( check F `csv pivot: row 2` ) }
     }
-    ( wfs_pivot_free pc )
     // The clock is detected when none is named.
     : WfsPivot pd ( csv_pivot CSV_FEED `` 5000 )
     ?? ( vec_get [Json] . pd rows 0 ) {
         T r0 → { ( check == ( jint r0 `timestamp` ) T_0500 `csv pivot: the clock column is detected` ) }
         F _ → { ( check F `csv pivot: detected row 0` ) }
     }
-    ( wfs_pivot_free pd )
     // No clock anywhere: the fetch time, so an undated file is a snapshot.
     : WfsPivot pn ( csv_pivot CSV_NOCLOCK `` 4242 )
     ( check == ( vec_len [Json] . pn rows ) 2 `csv pivot: a file with no clock still parses` )
@@ -1130,10 +1040,8 @@ b,2.5`
         T r0 → { ( check == ( jint r0 `timestamp` ) 4242 `csv pivot: and every row is stamped with the fetch time` ) }
         F _ → { ( check F `csv pivot: unstamped row 0` ) }
     }
-    ( wfs_pivot_free pn )
     : WfsPivot pe ( csv_pivot `` `` 1 )
     ( check > ( string_len . pe err ) 0 `csv pivot: an empty answer is an error, not zero rows` )
-    ( wfs_pivot_free pe )
 
     // A source: created with headers, listed masked, edited with the mask.
     : SvcOut c1 ( fire r `POST` `/api/org/sources` `` `{"kind":"http","url":"http://127.0.0.1:9/api/v1/readings?station=1","method":"GET","headers":{"Digitraffic-User":"anomaly-test","Authorization":"Bearer s3cret"},"path":"data.items","features":["reading_temperature","name"],"categorical":["name"],"model":"http_test"}` )
@@ -1148,7 +1056,6 @@ b,2.5`
         }
         F _ → { ( check F `http source: headers` ) }
     }
-    ( json_free . c1 body )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ?? ( json_obj_get src `headers` ) {
@@ -1156,7 +1063,6 @@ b,2.5`
                 F _ → { ( check F `http source: stored headers` ) }
             }
             ( check ( source_is_type src ) `http source: fetched whole each run` )
-            ( json_free src )
         }
         F _ → { ( check F `http source: load` ) }
     }
@@ -1164,7 +1070,6 @@ b,2.5`
     ( string_push_str path ( string_data id ) )
     : SvcOut u1 ( fire r `PUT` ( string_data path ) `` `{"headers":{"Digitraffic-User":"renamed","Authorization":"••••••••"},"path":"data.items"}` )
     ( check == . u1 status 200 `http source: edited` )
-    ( json_free . u1 body )
     ?? ( source_load ORG ( string_data id ) ) {
         T src → {
             ?? ( json_obj_get src `headers` ) {
@@ -1174,25 +1079,19 @@ b,2.5`
                 }
                 F _ → { ( check F `http source: edited headers` ) }
             }
-            ( json_free src )
         }
         F _ → { ( check F `http source: reload` ) }
     }
     : SvcOut u2 ( fire r `PUT` ( string_data path ) `` `{"headers":{"Bad Name":"x"}}` )
     ( check == . u2 status 400 `http source: a header name with a space is refused` )
-    ( json_free . u2 body )
     : SvcOut u3 ( fire r `PUT` ( string_data path ) `` `{"method":"DELETE"}` )
     ( check == . u3 status 400 `http source: DELETE is not a poll` )
-    ( json_free . u3 body )
     : SvcOut c2 ( fire r `POST` `/api/org/sources` `` `{"kind":"http","url":"https://example.org/x","model":"m"}` )
     ( check == . c2 status 201 `http source: no query needed` )
     : String id2 ( string_from ( jstr . c2 body `id` ) )
-    ( json_free . c2 body )
     : b _d2 ( source_delete ORG ( string_data id2 ) )
-    ( string_free id2 )
     : SvcOut c3 ( fire r `POST` `/api/org/sources` `` `{"kind":"ftp","url":"https://example.org/x","model":"m"}` )
     ( check == . c3 status 400 `http source: an unknown kind is refused` )
-    ( json_free . c3 body )
 
     // A run against a closed port: the failure on the record.
     : String rpath ( string_clone path )
@@ -1200,17 +1099,11 @@ b,2.5`
     : SvcOut r1 ( fire r `POST` ( string_data rpath ) `` `` )
     ( check == . r1 status 400 `http source: an unreachable url fails the run` )
     ( check ( has_text ( jstr . r1 body `message` ) `could not fetch` ) `http source: and says why` )
-    ( json_free . r1 body )
-    ( string_free rpath )
     : SvcOut p1 ( fire r `POST` `/api/org/sources/preview` `` `{"kind":"http","url":"http://127.0.0.1:9/x","path":"","headers":{"X-Key":"k"}}` )
     ( check == . p1 status 502 `http source: an unreachable preview is 502` )
-    ( json_free . p1 body )
 
     : SvcOut d1 ( fire r `DELETE` ( string_data path ) `` `` )
     ( check == . d1 status 200 `http source: deleted` )
-    ( json_free . d1 body )
-    ( string_free path )
-    ( string_free id )
 }
 
 @ test_routes → v {
@@ -1222,93 +1115,69 @@ b,2.5`
         T arr → { ( check == ( json_arr_len arr ) 0 `routes: none yet` ) }
         F _ → { ( check F `routes: sources array` ) }
     }
-    ( json_free . l0 body )
 
     : SvcOut c0 ( fire r `POST` `/api/org/sources` `` `{"url":"ftp://x"}` )
     ( check == . c0 status 400 `routes: a bad body is 400` )
-    ( json_free . c0 body )
     : SvcOut c1 ( fire r `POST` `/api/org/sources` `` `not json` )
     ( check == . c1 status 400 `routes: not JSON is 400` )
-    ( json_free . c1 body )
 
     : Json b ( body_full )
     ( json_obj_set b `name` ( json_str_lit `Helsinki` ) )
     : String bs ( json_stringify b )
-    ( json_free b )
     : SvcOut c2 ( fire r `POST` `/api/org/sources` `` ( string_data bs ) )
-    ( string_free bs )
     ( check == . c2 status 201 `routes: created 201` )
     : String id ( string_from ( jstr . c2 body `id` ) )
     ( check ( source_id_ok ( string_data id ) ) `routes: the answer carries the id` )
     ( check ( seq ( jstr . c2 body `name` ) `Helsinki` ) `routes: and the record` )
     ( check ( jhas . c2 body `running` ) `routes: and whether it runs` )
-    ( json_free . c2 body )
 
     : String path ( string_from `/api/org/sources/` )
     ( string_push_str path ( string_data id ) )
     : SvcOut g1 ( fire r `GET` ( string_data path ) `` `` )
     ( check == . g1 status 200 `routes: GET one 200` )
     ( check ( seq ( jstr . g1 body `model` ) `helsinki_weather` ) `routes: GET one has the model` )
-    ( json_free . g1 body )
     : SvcOut g2 ( fire r `GET` `/api/org/sources/000000000000` `` `` )
     ( check == . g2 status 404 `routes: unknown id 404` )
-    ( json_free . g2 body )
     : SvcOut g3 ( fire r `GET` `/api/org/sources/not-an-id` `` `` )
     ( check == . g3 status 400 `routes: malformed id 400` )
-    ( json_free . g3 body )
 
     : SvcOut u1 ( fire r `PUT` ( string_data path ) `` `{"interval_minutes": 5, "enabled": false}` )
     ( check == . u1 status 200 `routes: PUT 200` )
     ( check == ( jint . u1 body `interval_minutes` ) 5 `routes: PUT changed the interval` )
-    ( json_free . u1 body )
     : SvcOut u2 ( fire r `PUT` ( string_data path ) `` `{"interval_minutes": 0}` )
     ( check == . u2 status 400 `routes: PUT with a bad value 400` )
-    ( json_free . u2 body )
 
     : SvcOut l1 ( fire r `GET` `/api/org/sources` `` `` )
     ?? ( json_obj_get . l1 body `sources` ) {
         T arr → { ( check == ( json_arr_len arr ) 1 `routes: one listed` ) }
         F _ → { ( check F `routes: sources array` ) }
     }
-    ( json_free . l1 body )
 
     // Run: the URL is a real host nobody listens on, so the run fails
     // fast and the failure is the answer.
     : SvcOut u3 ( fire r `PUT` ( string_data path ) `` `{"url": "http://127.0.0.1:9/wfs"}` )
     ( check == . u3 status 200 `routes: PUT url` )
-    ( json_free . u3 body )
     : String rpath ( string_clone path )
     ( string_push_str rpath `/run` )
     : SvcOut r1 ( fire r `POST` ( string_data rpath ) `` `` )
     ( check == . r1 status 400 `routes: a failed run is 400` )
     ( check ( seq ( jstr . r1 body `status` ) `error` ) `routes: with status error` )
-    ( json_free . r1 body )
     : SvcOut r2 ( fire r `POST` `/api/org/sources/000000000000/run` `` `` )
     ( check == . r2 status 404 `routes: running an unknown source 404` )
-    ( json_free . r2 body )
-    ( string_free rpath )
 
     : SvcOut k1 ( fire r `POST` `/api/org/sources/catalog` `` `{"url": "ftp://nope"}` )
     ( check == . k1 status 400 `routes: catalogue needs an http(s) url` )
-    ( json_free . k1 body )
     : SvcOut k2 ( fire r `POST` `/api/org/sources/catalog` `` `{"url": "http://127.0.0.1:9/wfs"}` )
     ( check == . k2 status 502 `routes: an unreachable catalogue is 502` )
-    ( json_free . k2 body )
     : SvcOut p1 ( fire r `POST` `/api/org/sources/preview` `` `{"url": "https://opendata.fmi.fi/wfs"}` )
     ( check == . p1 status 400 `routes: preview needs a query` )
-    ( json_free . p1 body )
     : SvcOut p2 ( fire r `POST` `/api/org/sources/preview` `` `{"url": "http://127.0.0.1:9/wfs", "query": "x::simple", "hours": 1}` )
     ( check == . p2 status 502 `routes: an unreachable preview is 502` )
-    ( json_free . p2 body )
 
     : SvcOut d1 ( fire r `DELETE` ( string_data path ) `` `` )
     ( check == . d1 status 200 `routes: DELETE 200` )
-    ( json_free . d1 body )
     : SvcOut d2 ( fire r `DELETE` ( string_data path ) `` `` )
     ( check == . d2 status 404 `routes: DELETE twice 404` )
-    ( json_free . d2 body )
-    ( string_free path )
-    ( string_free id )
 }
 
 // `string_contains` takes a String, and a String built inline is never
@@ -1348,10 +1217,8 @@ b,2.5`
     ( test_due )
     ( test_routes )
 
-    ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
     ( nurl_print `sources_test: ` ) ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` ) ( nurl_print_int g_fail ) ( nurl_print ` failed\n` )
     ^ ? > g_fail 0 1 0

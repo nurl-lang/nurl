@@ -50,7 +50,8 @@ $ `src/store.nu`
 // each one its own transaction, with an eviction once past the cap.
 @ worker s root s name → v {
     : Store st ( store_open root )
-    : *Meta m ( meta_new name `2026-01-01T00:00:00Z` )
+    : Meta m__h ( meta_new name `2026-01-01T00:00:00Z` )
+    : *MetaImpl m ( _Meta_ptr m__h )
     : ~ i k 0
     ~ < k CONC_POINTS {
         : String line ( string_from `{"temp":` )
@@ -62,18 +63,15 @@ $ `src/store.nu`
         // Keep the newest 100: past that every point evicts one.
         : ~ i evict 0
         ? > + k 1 100 { = evict - + k 1 100 } {}
-        ( store_commit_point st name k ( string_data line ) evict m )
-        ( string_free line )
+        ( store_commit_point st name k ( string_data line ) evict m__h )
         = k + k 1
     }
-    ( meta_free m )
-    ( store_free st )
 }
 
 @ main → i {
     : ~ String root ( string_from `./anomaly_storeconc_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
-        T d → { ( string_free root ) = root d }
+        T d → { = root d }
         F _ → {}
     }
     : !v IoErr junk ( dir_remove_all ( string_data root ) )
@@ -83,7 +81,6 @@ $ `src/store.nu`
     // than on creating them.
     : Store seed ( store_open ( string_data root ) )
     ( check . seed ok `conc: the organisation's database opens` )
-    ( store_free seed )
 
     : ( Vec Thread ) ts ( vec_new [Thread] )
     : ( Vec String ) names ( vec_new [String] )
@@ -102,8 +99,6 @@ $ `src/store.nu`
                 : String n2 ( string_clone nm )
                 : ( @ v ) body \ → v {
                     ( worker ( string_data r2 ) ( string_data n2 ) )
-                    ( string_free r2 )
-                    ( string_free n2 )
                 }
                 ?? ( thread_spawn_owned body ) {
                     T th → { ( vec_push [Thread] ts th ) }
@@ -126,7 +121,6 @@ $ `src/store.nu`
     : Store st ( store_open ( string_data root ) )
     : ( Vec String ) listed ( store_list st )
     ( check == ( vec_len [String] listed ) CONC_THREADS `conc: every worker's model is in the database` )
-    ( vec_free_with [String] listed \ String x → v { ( string_free x ) } )
     : ~ b counts_ok T
     : ~ b content_ok T
     = t 0
@@ -141,11 +135,9 @@ $ `src/store.nu`
                         ( string_push_int want - CONC_POINTS 1 )
                         ( string_push_char want 44 )
                         ? ( string_contains last ( string_data want ) ) {} { = content_ok F }
-                        ( string_free want )
                     }
                     F _ → { = content_ok F }
                 }
-                ( vec_free_with [String] tail \ String x → v { ( string_free x ) } )
             }
             F _ → {}
         }
@@ -153,13 +145,9 @@ $ `src/store.nu`
     }
     ( check counts_ok `conc: each ring holds exactly its cap after concurrent eviction` )
     ( check content_ok `conc: and its newest point is the last one that thread wrote` )
-    ( store_free st )
-    ( vec_free [Thread] ts )
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
 
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
 
     : String summary ( string_from `storeconc_test: ` )
     ( string_push_int summary g_pass )
@@ -167,7 +155,6 @@ $ `src/store.nu`
     ( string_push_int summary g_fail )
     ( string_push_str summary ` failed` )
     ( pline ( string_data summary ) )
-    ( string_free summary )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }

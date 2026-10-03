@@ -66,12 +66,9 @@ $ `src/service.nu`
     : ~ Json parsed ( json_null )
     : !Json JsonError jr ( json_parse ( string_data txt ) )
     ?? jr {
-        T j → { ( json_free parsed ) = parsed j }
+        T j → { = parsed j }
         F _ → {}
     }
-    ( string_free txt )
-    ( http_response_free resp )
-    ( request_free req )
     ^ @ SvcOut { status parsed }
 }
 
@@ -102,20 +99,12 @@ $ `src/service.nu`
         }
         = k + k 1
     }
-    ( http_response_free resp )
-    ( request_free req )
     ^ @ TextOut { status txt hv }
-}
-
-@ text_out_free sink TextOut t → v {
-    ( string_free . t text )
-    ( string_free . t header )
 }
 
 // Fire one request for its status alone; the body is parsed and dropped.
 @ status_of Router r s method s path → i {
     : SvcOut o ( fire r method path `` `` )
-    ( json_free . o body )
     ^ . o status
 }
 
@@ -172,7 +161,7 @@ $ `src/service.nu`
 @ main → i {
     : ~ String root ( string_from `./anomaly_svc_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
-        T d → { ( string_free root ) = root d }
+        T d → { = root d }
         F _ → {}
     }
     : !v IoErr junk ( dir_remove_all ( string_data root ) )
@@ -184,14 +173,12 @@ $ `src/service.nu`
     : SvcOut bad ( fire r `POST` `/detect/bad!name` `` `{"temp": 1}` )
     ( check == . bad status 400 `svc: invalid name -> 400` )
     ( check ( jstr_eq . bad body `status` `error` ) `svc: invalid name error body` )
-    ( json_free . bad body )
 
     // First point: create-on-first-use + warming up (202).
     : SvcOut first ( fire r `POST` `/detect/svc` `` `{"temp": 20.5}` )
     ( check == . first status 202 `svc: first point -> 202 collecting` )
     ( check ( jstr_eq . first body `status` `collecting` ) `svc: collecting status` )
     ( check == ( jint_of . first body `data_points` ) 1 `svc: data_points 1` )
-    ( json_free . first body )
 
     // 49 more points → trained, 200 success.
     : ~ i k 2
@@ -202,9 +189,7 @@ $ `src/service.nu`
         ( string_push_int body % k 10 )
         ( string_push_str body `.5}` )
         : SvcOut o ( fire r `POST` `/detect/svc` `` ( string_data body ) )
-        ( string_free body )
         = last_status . o status
-        ( json_free last_body )
         = last_body . o body
         = k + k 1
     }
@@ -227,12 +212,10 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check has_versions `svc: per-version breakdown present` )
-    ( json_free last_body )
 
     // detect_only: missing model 404; outlier flagged; garbage 400.
     : SvcOut miss ( fire r `POST` `/detect_only/nosuch` `` `{"temp": 1}` )
     ( check == . miss status 404 `svc: detect_only missing -> 404` )
-    ( json_free . miss body )
     : SvcOut outl ( fire r `POST` `/detect_only/svc` `` `{"temp": 99}` )
     ( check == . outl status 200 `svc: detect_only -> 200` )
     ( check ( jbool_of . outl body `anomaly` ) `svc: outlier flagged` )
@@ -268,10 +251,8 @@ $ `src/service.nu`
     }
     ( check > sev_st 0.0 `svc: per-version severity present` )
     ( check ti_ok `svc: threshold_info carries decision_margin and units` )
-    ( json_free . outl body )
     : SvcOut garb ( fire r `POST` `/detect_only/svc` `` `not json` )
     ( check == . garb status 400 `svc: garbage body -> 400` )
-    ( json_free . garb body )
     // A column the model knows and the point leaves out is an error that
     // names it — scored as 0 it would be a value nobody sent, blamed.
     : SvcOut lack ( fire r `POST` `/detect_only/svc` `` `{"other": 1}` )
@@ -282,7 +263,6 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check names_it `svc: the error names the missing column` )
-    ( json_free . lack body )
 
     // Listing + metadata + data.
     : SvcOut lst ( fire r `GET` `/models/dynamic` `` `` )
@@ -296,7 +276,6 @@ $ `src/service.nu`
     }
     ( check has_svc `svc: model in listing` )
     ( check == ( jint_of . lst body `min_data_points` ) 50 `svc: listing min_data_points` )
-    ( json_free . lst body )
 
     : SvcOut md ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     ( check == . md status 200 `svc: metadata -> 200` )
@@ -305,10 +284,8 @@ $ `src/service.nu`
     `svc: metadata publishes the editable key list` )
     ( check ( jarr_has . md body `editable_fields` `versions` )
     `svc: the editable key list names versions` )
-    ( json_free . md body )
     : SvcOut md4 ( fire r `GET` `/models/dynamic/nosuch/metadata` `` `` )
     ( check == . md4 status 404 `svc: metadata missing -> 404` )
-    ( json_free . md4 body )
 
     : SvcOut data ( fire r `GET` `/models/dynamic/svc/data` `limit=5` `` )
     ( check == . data status 200 `svc: data -> 200` )
@@ -319,13 +296,11 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check == arr_len 5 `svc: data respects limit` )
-    ( json_free . data body )
 
     // The ring's fill is published beside the lifetime count.
     : SvcOut mds ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     ( check == ( jint_of . mds body `n_points_stored` ) 50 `svc: metadata publishes n_points_stored` )
     ( check == ( jint_of . mds body `n_points_seen` ) 50 `svc: n_points_seen beside it` )
-    ( json_free . mds body )
 
     // Export: the stored points as a file.
     : TextOut xc ( fire_text r `GET` `/models/dynamic/svc/export` `format=csv` `Content-Type` )
@@ -333,10 +308,8 @@ $ `src/service.nu`
     ( check ( string_starts_with . xc header `text/csv` ) `svc: export csv content type` )
     ( check ( string_starts_with . xc text `timestamp,temp\n` ) `svc: csv header is timestamp first, then the fields` )
     ( check == ( string_count . xc text `\n` ) 51 `svc: csv has a header line and every stored row` )
-    ( text_out_free xc )
     : TextOut xd ( fire_text r `GET` `/models/dynamic/svc/export` `format=csv` `Content-Disposition` )
     ( check ( string_starts_with . xd header `attachment; filename="svc.csv"` ) `svc: export csv is a download named after the model` )
-    ( text_out_free xd )
     : TextOut xj ( fire_text r `GET` `/models/dynamic/svc/export` `format=jsonl&limit=5` `Content-Type` )
     ( check == . xj status 200 `svc: export jsonl -> 200` )
     ( check ( string_starts_with . xj header `application/x-ndjson` ) `svc: export jsonl content type` )
@@ -347,22 +320,18 @@ $ `src/service.nu`
         T l0 → {
             : !Json JsonError pj ( json_parse ( string_data l0 ) )
             ?? pj {
-                T j → { = jl_ok & ( json_obj_has j `timestamp` ) ( json_obj_has j `temp` ) ( json_free j ) }
+                T j → { = jl_ok & ( json_obj_has j `timestamp` ) ( json_obj_has j `temp` ) }
                 F _ → {}
             }
         }
         F _ → {}
     }
     ( check jl_ok `svc: each jsonl line is the stored record` )
-    ( vec_free_with [String] jl \ String x → v { ( string_free x ) } )
-    ( text_out_free xj )
     : TextOut xf ( fire_text r `GET` `/models/dynamic/svc/export` `format=csv&fields=nosuch&limit=2` `X-Rows` )
     ( check ( string_starts_with . xf text `timestamp,nosuch\n` ) `svc: csv fields= sets the columns` )
     ( check == ( nurl_str_eq ( string_data . xf header ) `2` ) 1 `svc: X-Rows counts the exported rows` )
-    ( text_out_free xf )
     : TextOut xb ( fire_text r `GET` `/models/dynamic/svc/export` `format=xml` `Content-Type` )
     ( check == . xb status 400 `svc: export with an unknown format -> 400` )
-    ( text_out_free xb )
     ( check == ( status_of r `GET` `/models/dynamic/nosuch/export` ) 404 `svc: export of a missing model -> 404` )
 
     // Schedule.
@@ -374,10 +343,8 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check == below 25 `svc: schedule below_max updated` )
-    ( json_free . sch body )
     : SvcOut sch2 ( fire r `PUT` `/api/dynamic/svc/schedule` `` `{}` )
     ( check == . sch2 status 400 `svc: empty schedule -> 400` )
-    ( json_free . sch2 body )
 
     // Editable metadata: PUT /models/dynamic/<m>/metadata.
     : SvcOut mu ( fire r `PUT` `/models/dynamic/svc/metadata` ``
@@ -421,17 +388,13 @@ $ `src/service.nu`
     ( check patch_applied `svc: metadata PUT sets a version margin` )
     ( check weekly_off `svc: metadata PUT disables a version` )
     ( check == below2 30 `svc: metadata PUT sets the schedule` )
-    ( json_free . mu body )
 
     : SvcOut mu2 ( fire r `PUT` `/models/dynamic/svc/metadata` `` `{"versions":[]}` )
     ( check == . mu2 status 400 `svc: metadata PUT rejects a non-object versions` )
-    ( json_free . mu2 body )
     : SvcOut mu3 ( fire r `PUT` `/models/dynamic/svc/metadata` `` `{}` )
     ( check == . mu3 status 400 `svc: an empty metadata patch -> 400` )
-    ( json_free . mu3 body )
     : SvcOut mu4 ( fire r `PUT` `/models/dynamic/nope/metadata` `` `{"schedule":{"below_max":5,"at_max":5}}` )
     ( check == . mu4 status 404 `svc: metadata PUT on an unknown model -> 404` )
-    ( json_free . mu4 body )
 
     // The metadata GET carries the autoencoder's own state.
     : SvcOut aem ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
@@ -441,13 +404,11 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check ae_block `svc: metadata carries an autoencoder block, not stale` )
-    ( json_free . aem body )
 
     // Put weekly back so the routes below see the default version set.
     : SvcOut mu5 ( fire r `PUT` `/models/dynamic/svc/metadata` ``
     `{"versions":{"weekly":{"enabled":true},"daily":{"decision_margin":0.12}},"schedule":{"below_max":25,"at_max":1000}}` )
     ( check == . mu5 status 200 `svc: metadata PUT restores the defaults` )
-    ( json_free . mu5 body )
 
     // Calibration: read-only, per version, with the rate ladder.
     : SvcOut cal ( fire r `GET` `/models/dynamic/svc/calibration` `last=all&curve=0` `` )
@@ -491,10 +452,8 @@ $ `src/service.nu`
     ( check cal_st `svc: calibration reports short_term over 50 rows` )
     ( check cal_units `svc: calibration names the margin's units` )
     ( check cal_ladder `svc: margin_for_rate carries requested and achieved rates` )
-    ( json_free . cal body )
     : SvcOut cal4 ( fire r `GET` `/models/dynamic/nosuch/calibration` `` `` )
     ( check == . cal4 status 404 `svc: calibration missing -> 404` )
-    ( json_free . cal4 body )
 
     // Fine-tune: a dry run changes nothing, a real one writes 10 % of 50
     // = 5 flagged per version (the feed cycles ten values, so the five
@@ -515,7 +474,6 @@ $ `src/service.nu`
     }
     ( check == dry_applied F `svc: dry run applies nothing` )
     ( check == dry_after 5 `svc: dry run predicts 5 flagged of 50` )
-    ( json_free . ftd body )
 
     : SvcOut ft ( fire r `POST` `/api/dynamic/svc/finetune` `` `{"rate":0.1,"last":"all"}` )
     ( check == . ft status 200 `svc: finetune -> 200` )
@@ -564,11 +522,8 @@ $ `src/service.nu`
     }
     ( check au_ok `svc: an entry names the action and the new margin` )
     ( check au_edit `svc: a margin moved by a metadata edit is in the audit log too` )
-    ( json_free . au body )
     : SvcOut md6b ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     ( check > ( jint_of . md6b body `tuned_at` ) 0 `svc: a hand-set margin marks the model tuned` )
-    ( json_free . md6b body )
-    ( json_free . ft body )
     : SvcOut md6 ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     : ~ f stored_m -2.0
     ?? ( json_obj_get . md6 body `versions` ) {
@@ -581,10 +536,8 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check < ( float_abs - stored_m ft_margin ) 0.000000001 `svc: the fine-tuned margin is in the metadata` )
-    ( json_free . md6 body )
     : SvcOut ftb ( fire r `POST` `/api/dynamic/svc/finetune` `` `{"rate":7}` )
     ( check == . ftb status 400 `svc: finetune with rate > 1 -> 400` )
-    ( json_free . ftb body )
 
     // Force train.
     : SvcOut tr ( fire r `POST` `/force_train/svc` `` `` )
@@ -594,32 +547,25 @@ $ `src/service.nu`
     // The forecast version: untrained until asked, then a forecast.
     : SvcOut fq0 ( fire r `GET` `/models/dynamic/svc/forecast` `horizon=3` `` )
     ( check == . fq0 status 400 `svc: forecast before training -> 400` )
-    ( json_free . fq0 body )
     : SvcOut ftr ( fire r `POST` `/train/forecast/svc` `` `{"season":0}` )
     ( check == . ftr status 200 `svc: train/forecast -> 200` )
     ( check == ( jint_of . ftr body `training_data_points` ) 50 `svc: the forecast fitted the ring` )
-    ( json_free . ftr body )
     : SvcOut fq1 ( fire r `GET` `/models/dynamic/svc/forecast` `horizon=3` `` )
     ( check == . fq1 status 200 `svc: forecast -> 200` )
     ( check == ( jint_of . fq1 body `horizon` ) 3 `svc: three steps ahead` )
     : ~ i nfc 0
     ?? ( json_obj_get . fq1 body `forecasts` ) { T fa → { = nfc ( json_arr_len fa ) } F _ → {} }
     ( check > nfc 0 `svc: a forecast per watched feature` )
-    ( json_free . fq1 body )
     // a point may carry its own clock; one from the past is refused
     : String ptb ( string_from `{"temp": 20.9, "timestamp": ` )
     ( string_push_int ptb + ( now_seconds ) 1 )
     ( string_push_str ptb `}` )
     : SvcOut dt1 ( fire r `POST` `/detect/svc` `` ( string_data ptb ) )
-    ( string_free ptb )
     ( check == . dt1 status 200 `svc: a point with its own timestamp is stored` )
-    ( json_free . dt1 body )
     : SvcOut dt2 ( fire r `POST` `/detect/svc` `` `{"temp": 20.9, "timestamp": 1000}` )
     ( check == . dt2 status 400 `svc: a point older than the newest stored is refused` )
-    ( json_free . dt2 body )
     : SvcOut dt3 ( fire r `POST` `/detect/svc_iso` `` `{"temp": 20.9, "timestamp": "2026-01-01T00:00:10Z"}` )
     ( check == . dt3 status 202 `svc: an ISO-8601 timestamp is read (a new model, collecting)` )
-    ( json_free . dt3 body )
     // An absurd reading is stored and flagged, and sets nobody's scale.
     // Its own model, so the counts every other assertion here rests on
     // stay what they were.
@@ -629,16 +575,12 @@ $ `src/service.nu`
         ( string_push_int abb % abk 5 )
         ( string_push_str abb `.5}` )
         : SvcOut abo ( fire r `POST` `/detect/absurd` `` ( string_data abb ) )
-        ( string_free abb )
-        ( json_free . abo body )
         = abk + abk 1
     }
     : SvcOut ab1 ( fire r `POST` `/detect/absurd` `` `{"temp": 1e200}` )
     ( check == . ab1 status 200 `svc: an absurd reading is stored, not refused` )
     ( check ( jbool_of . ab1 body `anomaly` ) `svc: and flagged` )
-    ( json_free . ab1 body )
     : SvcOut abt ( fire r `POST` `/force_train/absurd` `` `` )
-    ( json_free . abt body )
     : SvcOut abm ( fire r `GET` `/models/dynamic/absurd/metadata` `` `` )
     : ~ b names_it F
     ?? ( json_obj_get . abm body `absurd_readings` ) {
@@ -646,7 +588,6 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check names_it `svc: the metadata names the feature whose reading was left out of the fit` )
-    ( json_free . abm body )
     // a reading that is not a finite number is refused, named
     : SvcOut inf1 ( fire r `POST` `/detect/svc` `` `{"temp": 1e999}` )
     ( check == . inf1 status 400 `svc: an infinite reading -> 400` )
@@ -656,13 +597,11 @@ $ `src/service.nu`
             ? ( json_is_str m ) {
                 : String ms ( string_from ( json_str_data m ) )
                 = names_temp ( string_contains ms `finite` )
-                ( string_free ms )
             } {}
         }
         F _ → {}
     }
     ( check names_temp `svc: the refusal says the value must be finite` )
-    ( json_free . inf1 body )
     // a patch key the service does not read is refused, named
     : SvcOut unk ( fire r `PUT` `/models/dynamic/svc/metadata` `` `{"schedule":{"forecast":500}}` )
     ( check == . unk status 400 `svc: metadata PUT with an unknown key -> 400` )
@@ -672,13 +611,11 @@ $ `src/service.nu`
             ? ( json_is_str m ) {
                 : String ms ( string_from ( json_str_data m ) )
                 = names_key ( string_contains ms `schedule.forecast` )
-                ( string_free ms )
             } {}
         }
         F _ → {}
     }
     ( check names_key `svc: the refusal names the unknown key` )
-    ( json_free . unk body )
     // /forecast: the point goes in, the forecast comes back with intervals and times
     : SvcOut fp ( fire r `POST` `/forecast/svc` `horizon=2` `{"temp": 21.0}` )
     ( check == . fp status 200 `svc: POST /forecast -> 200` )
@@ -695,15 +632,12 @@ $ `src/service.nu`
     ( check == fph 2 `svc: two steps ahead` )
     ( check fpt `svc: a time per step` )
     ( check == ( jint_of . fp body `data_points` ) 52 `svc: the point was stored` )
-    ( json_free . fp body )
     : SvcOut fq2 ( fire r `GET` `/models/dynamic/svc/forecast` `horizon=2&origin=40` `` )
     ( check == . fq2 status 200 `svc: a forecast from an earlier row -> 200` )
     ( check == ( jint_of . fq2 body `origin` ) 40 `svc: from the row asked` )
-    ( json_free . fq2 body )
     : SvcOut bt ( fire r `GET` `/models/dynamic/svc/forecast/backtest` `horizon=3&points=20` `` )
     ( check == . bt status 200 `svc: backtest -> 200` )
     ( check == ( jint_of . bt body `origins` ) 20 `svc: twenty origins` )
-    ( json_free . bt body )
     : SvcOut md7 ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     : ~ b fc_on F
     ?? ( json_obj_get . md7 body `forecast` ) {
@@ -711,8 +645,6 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check fc_on `svc: the metadata's forecast block says trained and on` )
-    ( json_free . md7 body )
-    ( json_free . tr body )
 
     // Batch CSV.
     : String csv ( string_from `a,b\n1,2\n1.1,2.1\n0.9,1.9\n50,50\n1,2\n1,2.2\n` )
@@ -720,12 +652,10 @@ $ `src/service.nu`
     ( string_push_str csvpath `/batch.csv` )
     : !v IoErr wr ( write_file ( string_data csvpath ) ( string_data csv ) )
     ?? wr { T _ → {} F _ → {} }
-    ( string_free csv )
     : String breq ( string_from `{"file_path": "` )
     ( string_push_str breq ( string_data csvpath ) )
     ( string_push_str breq `", "has_header": true}` )
     : SvcOut bat ( fire r `POST` `/detect_anomalies` `` ( string_data breq ) )
-    ( string_free breq )
     ( check == . bat status 200 `svc: detect_anomalies -> 200` )
     : ~ i bcount -1
     : ~ b bhas F
@@ -746,11 +676,8 @@ $ `src/service.nu`
     ( check == bcount 1 `svc: batch flags exactly the outlier row` )
     ( check bhas `svc: batch has_anomalies` )
     ( check == bidx 3 `svc: batch anomaly index 3` )
-    ( json_free . bat body )
     : SvcOut batm ( fire r `POST` `/detect_anomalies` `` `{"file_path": "x.csv", "model_name": "svc"}` )
     ( check == . batm status 400 `svc: batch model_name rejected` )
-    ( json_free . batm body )
-    ( string_free csvpath )
 
     // ── GET /models/dynamic/<m>/anomalies ─────────────────────────────
     //
@@ -758,10 +685,8 @@ $ `src/service.nu`
     // cache underneath, and the filters the dashboard drives.
     : SvcOut an404 ( fire r `GET` `/models/dynamic/nosuch/anomalies` `` `` )
     ( check == . an404 status 404 `svc: anomalies missing model -> 404` )
-    ( json_free . an404 body )
     : SvcOut anbad ( fire r `GET` `/models/dynamic/bad-name/anomalies` `` `` )
     ( check == . anbad status 400 `svc: anomalies bad name -> 400` )
-    ( json_free . anbad body )
 
     : SvcOut an1 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
     ( check == . an1 status 200 `svc: anomalies -> 200` )
@@ -812,7 +737,6 @@ $ `src/service.nu`
         T fbv → {
             : ( Vec String ) ks ( json_obj_keys fbv )
             = an1_fbv ( vec_len [String] ks )
-            ( vec_free_with [String] ks \ String x → v { ( string_free x ) } )
         }
         F _ → {}
     }
@@ -823,7 +747,6 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check an1_win `svc: anomalies describes the window it scanned` )
-    ( json_free . an1 body )
 
     // Second call: same answer, nothing recomputed.
     : SvcOut an2 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
@@ -835,7 +758,6 @@ $ `src/service.nu`
     }
     ( check == an2_hits an1_total `svc: the second scan is served from cache` )
     ( check == an2_miss 0 `svc: the cached scan recomputes nothing` )
-    ( json_free . an2 body )
 
     // limit takes the newest rows; fields adds the values the chart needs.
     : SvcOut an3 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=3&fields=temp` `` )
@@ -857,19 +779,16 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check an3_vals `svc: fields= attaches the requested feature values` )
-    ( json_free . an3 body )
 
     // A time window nothing falls into is empty, not an error.
     : SvcOut an4 ( fire r `GET` `/models/dynamic/svc/anomalies` `from=4000000000` `` )
     ( check == . an4 status 200 `svc: an empty time window -> 200` )
     ( check == ( jint_of . an4 body `returned` ) 0 `svc: an empty time window returns nothing` )
-    ( json_free . an4 body )
 
     // A margin edit changes verdicts, so it must invalidate the cache.
     : SvcOut anpatch ( fire r `PUT` `/models/dynamic/svc/metadata` ``
     `{"versions": {"weekly": {"decision_margin": 0.011}}}` )
     ( check == . anpatch status 200 `svc: margin patch -> 200` )
-    ( json_free . anpatch body )
     : SvcOut an5 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
     : ~ i an5_miss -1
     : ~ i an5_epoch -1
@@ -879,7 +798,6 @@ $ `src/service.nu`
     }
     ( check == an5_miss an1_total `svc: a margin edit invalidates every cached verdict` )
     ( check > an5_epoch an1_epoch `svc: the epoch advanced` )
-    ( json_free . an5 body )
 
     // Runs: consecutive anomalous rows are one event. Every row in a run
     // names it, the count is always there, and group=runs lists them.
@@ -958,30 +876,24 @@ $ `src/service.nu`
         }
         F _ → {}
     }
-    ( json_free . an6 body )
 
     // ── labels ────────────────────────────────────────────────────────
     ( check >= lidx 0 `svc: an anomalous row to label` )
     : SvcOut lb1 ( fire r `POST` `/models/dynamic/svc/labels` `` `{"index": 0, "label": "meh"}` )
     ( check == . lb1 status 400 `svc: an unknown label -> 400` )
-    ( json_free . lb1 body )
     : SvcOut lb2 ( fire r `POST` `/models/dynamic/svc/labels` `` `{"index": 100000, "label": "confirmed"}` )
     ( check == . lb2 status 400 `svc: an index past the ring -> 400` )
-    ( json_free . lb2 body )
     : SvcOut lb3 ( fire r `POST` `/models/dynamic/nosuch/labels` `` `{"index": 0, "label": "confirmed"}` )
     ( check == . lb3 status 404 `svc: labels on a missing model -> 404` )
-    ( json_free . lb3 body )
     : String lbody ( string_from `{"index": ` )
     ( string_push_int lbody lidx )
     ( string_push_str lbody `, "label": "false_positive", "note": "cleaning"}` )
     : SvcOut lb4 ( fire r `POST` `/models/dynamic/svc/labels` `` ( string_data lbody ) )
-    ( string_free lbody )
     ( check == . lb4 status 200 `svc: label -> 200` )
     ( check == ( jint_of . lb4 body `index` ) lidx `svc: the label names the row` )
     ( check ( jstr_eq . lb4 body `label` `false_positive` ) `svc: and the label` )
     ( check ( jstr_eq . lb4 body `note` `cleaning` ) `svc: and the note` )
     ( check >= ( jint_of . lb4 body `seq` ) lidx `svc: keyed by lifetime sequence` )
-    ( json_free . lb4 body )
     : SvcOut lb5 ( fire r `GET` `/models/dynamic/svc/labels` `` `` )
     ( check == . lb5 status 200 `svc: labels list -> 200` )
     ( check == ( jint_of . lb5 body `count` ) 1 `svc: one label in force` )
@@ -992,7 +904,6 @@ $ `src/service.nu`
         F _ → {}
     }
     ( check lb5_row `svc: the listed label carries the row's current index` )
-    ( json_free . lb5 body )
     : SvcOut lb6 ( fire r `GET` `/models/dynamic/svc/anomalies` `limit=all` `` )
     : ~ b lb6_row F
     : ~ i lb6_epoch -1
@@ -1013,22 +924,17 @@ $ `src/service.nu`
     }
     ( check lb6_row `svc: the scan row carries its label` )
     ( check == lb6_epoch an5_epoch `svc: a label does not move the scoring epoch` )
-    ( json_free . lb6 body )
     : SvcOut lb7 ( fire r `GET` `/models/dynamic/svc/calibration` `` `` )
     : ~ i lb7_ex -1
     ?? ( json_obj_get . lb7 body `window` ) { T w → { = lb7_ex ( jint_of w `excluded` ) } F _ → {} }
     ( check == lb7_ex 1 `svc: calibration leaves the false positive out` )
-    ( json_free . lb7 body )
     : String lnone ( string_from `{"index": ` )
     ( string_push_int lnone lidx )
     ( string_push_str lnone `, "label": "none"}` )
     : SvcOut lb8 ( fire r `POST` `/models/dynamic/svc/labels` `` ( string_data lnone ) )
-    ( string_free lnone )
     ( check == . lb8 status 200 `svc: none -> 200` )
-    ( json_free . lb8 body )
     : SvcOut lb9 ( fire r `GET` `/models/dynamic/svc/labels` `` `` )
     ( check == ( jint_of . lb9 body `count` ) 0 `svc: none withdraws the label` )
-    ( json_free . lb9 body )
 
     // Import with a clock to find. An FMI-shaped file: the time is spread
     // over year/month/day/clock columns under Finnish names, and `-` is a
@@ -1059,10 +965,8 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     : ~ b insp_exists T
     ?? ( json_obj_get . insp body `model` ) { T mj → { = insp_exists ( jbool_of mj `exists` ) } F _ → {} }
     ( check ! insp_exists `svc: inspect does not bring the model into being` )
-    ( json_free . insp body )
     : SvcOut md_none ( fire r `GET` `/models/dynamic/svc_imp/metadata` `` `` )
     ( check == . md_none status 404 `svc: inspected model still 404` )
-    ( json_free . md_none body )
 
     : SvcOut imp ( fire r `POST` `/models/dynamic/svc_imp/import` `format=csv&tz=utc` FMI )
     ( check == . imp status 200 `svc: import with the proposed clock -> 200` )
@@ -1070,7 +974,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     : ~ i imp_stamped 0
     ?? ( json_obj_get . imp body `time` ) { T tj → { = imp_stamped ( jint_of tj `stamped` ) } F _ → {} }
     ( check == imp_stamped 6 `svc: every row was stamped` )
-    ( json_free . imp body )
     : SvcOut md_imp ( fire r `GET` `/models/dynamic/svc_imp/metadata` `` `` )
     ( check ( jstr_eq . md_imp body `clock` `time` ) `svc: metadata clock is time` )
     : ~ b has_year F
@@ -1084,7 +987,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     }
     ( check ! has_year `svc: the consumed year column is not a feature` )
     ( check has_temp `svc: the measurement columns are features` )
-    ( json_free . md_imp body )
     : SvcOut dat ( fire r `GET` `/models/dynamic/svc_imp/data` `limit=all` `` )
     : ~ i first_ts 0
     ?? ( json_obj_get . dat body `data` ) {
@@ -1092,7 +994,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
         F _ → {}
     }
     ( check == first_ts 1787961600 `svc: the stored point carries the parsed stamp` )
-    ( json_free . dat body )
     // ?at=<index>: exactly that row; past the end, none.
     : SvcOut at1 ( fire r `GET` `/models/dynamic/svc_imp/data` `at=1` `` )
     : ~ i at1_n 0
@@ -1106,12 +1007,10 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     }
     ( check == at1_n 1 `svc: data?at= returns one row` )
     ( check == at1_ts + 1787961600 600 `svc: data?at=1 is the second stored row` )
-    ( json_free . at1 body )
     : SvcOut at9 ( fire r `GET` `/models/dynamic/svc_imp/data` `at=99` `` )
     : ~ i at9_n -1
     ?? ( json_obj_get . at9 body `data` ) { T a → { = at9_n ( json_arr_len a ) } F _ → {} }
     ( check == at9_n 0 `svc: data?at= past the end is empty` )
-    ( json_free . at9 body )
     // A feature named with spaces and a degree sign arrives percent-encoded
     // from a browser; fields= must still find it.
     : SvcOut anf ( fire r `GET` `/models/dynamic/svc_imp/anomalies`
@@ -1138,7 +1037,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     }
     ( check anf_temp `svc: fields= is percent-decoded (space, UTF-8)` )
     ( check anf_rh `svc: fields= is percent-decoded (%25)` )
-    ( json_free . anf body )
     ( check == ( status_of r `DELETE` `/delete_model/svc_imp` ) 200 `svc: delete imported model` )
 
     // The same rows without any time column: the model is born on the
@@ -1154,7 +1052,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     : SvcOut impc ( fire r `POST` `/models/dynamic/svc_cnt/import` `format=csv` NOTIME )
     ( check == . impc status 200 `svc: import without a clock -> 200` )
     ( check ( jstr_eq . impc body `clock` `count` ) `svc: unstamped rows run on the count clock` )
-    ( json_free . impc body )
     : SvcOut datc ( fire r `GET` `/models/dynamic/svc_cnt/data` `limit=all` `` )
     : ~ i tick0 0
     : ~ i tick4 0
@@ -1167,19 +1064,15 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     }
     ( check == tick0 60 `svc: count clock starts at tick 60` )
     ( check == tick4 300 `svc: ticks are 60 apart` )
-    ( json_free . datc body )
     : SvcOut detc ( fire r `POST` `/detect/svc_cnt` `` `{"a": 11.3, "b": 92}` )
     ( check | == . detc status 200 == . detc status 202 `svc: detect on a count-clock model is accepted` )
-    ( json_free . detc body )
     : SvcOut calc ( fire r `GET` `/models/dynamic/svc_cnt/calibration` `last=2` `` )
     : ~ i cal_rows -1
     ?? ( json_obj_get . calc body `window` ) { T w → { = cal_rows ( jint_of w `rows` ) } F _ → {} }
     // 400 (not trained) is fine too: what matters is that last= counts points.
     ? == . calc status 200 { ( check == cal_rows 2 `svc: last=2 on a count clock is 2 points` ) } {}
-    ( json_free . calc body )
     : SvcOut clk ( fire r `PUT` `/models/dynamic/svc_cnt/metadata` `` `{"clock": "time"}` )
     ( check == . clk status 400 `svc: the clock cannot change once points are stored` )
-    ( json_free . clk body )
     // Stamped rows into a count-clock model are taken as ticks — the clock
     // is settled — and the response says so.
     : SvcOut mismatch ( fire r `POST` `/models/dynamic/svc_cnt/import` `format=csv&tz=utc` FMI )
@@ -1191,7 +1084,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
         F _ → {}
     }
     ( check noted `svc: ignored stamps are noted` )
-    ( json_free . mismatch body )
     : SvcOut datc2 ( fire r `GET` `/models/dynamic/svc_cnt/data` `limit=all` `` )
     : ~ i tick11 0
     ?? ( json_obj_get . datc2 body `data` ) {
@@ -1199,30 +1091,24 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
         F _ → {}
     }
     ( check == tick11 720 `svc: the stamped rows took ticks, not their stamps` )
-    ( json_free . datc2 body )
     ( check == ( status_of r `DELETE` `/delete_model/svc_cnt` ) 200 `svc: delete count model` )
 
     // A stored point may leave a column out, and the verdict says which.
     : SvcOut part ( fire r `POST` `/detect/svc` `` `{"other": 1}` )
     ( check == . part status 200 `svc: a stored point may leave a column out` )
     ( check ( jarr_has . part body `missing` `temp` ) `svc: the verdict lists the column it scored as 0` )
-    ( json_free . part body )
 
     // Reset → not trained → detect_only 400.
     : SvcOut rs ( fire r `POST` `/models/dynamic/svc/reset` `` `{}` )
     ( check == . rs status 200 `svc: reset -> 200` )
-    ( json_free . rs body )
     : SvcOut nt ( fire r `POST` `/detect_only/svc` `` `{"temp": 1}` )
     ( check == . nt status 400 `svc: detect_only after reset -> 400 (not trained)` )
-    ( json_free . nt body )
 
     // Delete (both verbs), then gone.
     : SvcOut del ( fire r `DELETE` `/delete_model/svc` `` `` )
     ( check == . del status 200 `svc: delete -> 200` )
-    ( json_free . del body )
     : SvcOut md5 ( fire r `GET` `/models/dynamic/svc/metadata` `` `` )
     ( check == . md5 status 404 `svc: deleted model metadata -> 404` )
-    ( json_free . md5 body )
 
     // ── Organisation folder, signed links ─────────────────────────────
     ( check ( orgfiles_name_ok `report-2026.05.json` ) `orgfiles: plain name ok` )
@@ -1231,20 +1117,16 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( check ! ( orgfiles_name_ok `a b` ) `orgfiles: space rejected` )
     : String safe ( orgfiles_safe_name `demo run/x` )
     ( check == ( nurl_str_eq ( string_data safe ) `demo_run_x` ) 1 `orgfiles: safe_name maps the rest to _` )
-    ( string_free safe )
     : ( Vec u ) payload ( bytes_from_str `{"hello": 1}` )
     ( check ( orgfiles_write `public` `hello.json` payload ) `orgfiles: write` )
-    ( vec_free [u] payload )
     : SvcOut fl ( fire r `GET` `/api/org/files` `` `` )
     ( check == . fl status 200 `org files: list -> 200` )
     : ~ i nfiles 0
     ?? ( json_obj_get . fl body `files` ) { T a → { = nfiles ( json_arr_len a ) } F _ → {} }
     ( check == nfiles 1 `org files: one file listed` )
-    ( json_free . fl body )
     : SvcOut fg ( fire r `GET` `/api/org/files/hello.json` `` `` )
     ( check == . fg status 200 `org files: member get -> 200` )
     ( check == ( jint_of . fg body `hello` ) 1 `org files: get returns the content` )
-    ( json_free . fg body )
     ( check == ( status_of r `GET` `/api/org/files/nope.json` ) 404 `org files: missing -> 404` )
     ( check == ( status_of r `GET` `/api/org/files/.env` ) 400 `org files: bad name -> 400` )
     : SvcOut lk ( fire r `POST` `/api/org/files/hello.json/link` `ttl=60` `` )
@@ -1252,7 +1134,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     : ~ String durl ( string_new )
     ?? ( json_obj_get . lk body `download_url` ) { T u → { ( string_push_str durl ( json_str_data u ) ) } F _ → {} }
     ( check > ( string_len durl ) 0 `org files: link carries download_url` )
-    ( json_free . lk body )
     // The link is path?query: split it and fire the query as an
     // anonymous request — the signature alone must open the file.
     : ~ i qat -1
@@ -1262,22 +1143,15 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     : String lquery ( string_substr durl + qat 1 - ( string_len durl ) + qat 1 )
     : SvcOut sg ( fire r `GET` ( string_data lpath ) ( string_data lquery ) `` )
     ( check == . sg status 200 `org files: signed link -> 200` )
-    ( json_free . sg body )
     : ~ String bad ( string_from ( string_data lquery ) )
     ( string_push_str bad `0` )
     : SvcOut sb ( fire r `GET` ( string_data lpath ) ( string_data bad ) `` )
     ( check == . sb status 403 `org files: tampered signature -> 403` )
-    ( json_free . sb body )
-    ( string_free bad )
     : i tnow ( now_seconds )
     : String sig ( orgfiles_sign `public` `hello.json` + tnow 60 )
     ( check ( orgfiles_verify `public` `hello.json` + tnow 60 ( string_data sig ) tnow ) `orgfiles: verify own signature` )
     ( check ! ( orgfiles_verify `public` `hello.json` + tnow 60 ( string_data sig ) + tnow 61 ) `orgfiles: expired link fails` )
     ( check ! ( orgfiles_verify `other` `hello.json` + tnow 60 ( string_data sig ) tnow ) `orgfiles: signature is bound to the org` )
-    ( string_free sig )
-    ( string_free lpath )
-    ( string_free lquery )
-    ( string_free durl )
     ( check == ( status_of r `DELETE` `/api/org/files/hello.json` ) 200 `org files: delete -> 200` )
     ( check == ( status_of r `GET` `/api/org/files/hello.json` ) 404 `org files: deleted -> 404` )
 
@@ -1305,7 +1179,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     : ~ String tid ( string_new )
     ?? ( json_obj_get . aq body `task_id` ) { T t → { ( string_push_str tid ( json_str_data t ) ) } F _ → {} }
     ( check == ( string_len tid ) 24 `analyze: task_id is 24 hex chars` )
-    ( json_free . aq body )
     : String tdir ( analyze_task_dir `public` ( string_data tid ) )
     ( check == ( analyze_run ( string_data tdir ) ) 0 `analyze: the job runs to completion` )
     : ~ String turl ( string_from `/api/org/tasks/` )
@@ -1351,27 +1224,21 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
         }
         F _ → {}
     }
-    ( json_free . tr body )
     : ~ String rurl ( string_from `/api/org/files/` )
     ( string_push_str rurl ( string_data rfile ) )
     : SvcOut rf ( fire r `GET` ( string_data rurl ) `` `` )
     ( check == . rf status 200 `tasks: result file is in the org folder` )
     ( check == ( jint_of . rf body `rows` ) 400 `tasks: result file carries the report` )
-    ( json_free . rf body )
-    ( string_free rurl )
-    ( string_free rfile )
     : SvcOut tl ( fire r `GET` `/api/org/tasks` `` `` )
     ( check == . tl status 200 `tasks: list -> 200` )
     : ~ i ntasks 0
     ?? ( json_obj_get . tl body `tasks` ) { T a → { = ntasks ( json_arr_len a ) } F _ → {} }
     ( check == ntasks 1 `tasks: one task listed` )
-    ( json_free . tl body )
     // A garbage file fails with a message, in the task and in the answer.
     : SvcOut ag ( fire r `POST` `/api/analyze` `wait=0` `this is not data` )
     ( check == . ag status 202 `analyze: garbage queues too` )
     : ~ String gid ( string_new )
     ?? ( json_obj_get . ag body `task_id` ) { T t → { ( string_push_str gid ( json_str_data t ) ) } F _ → {} }
-    ( json_free . ag body )
     : String gdir ( analyze_task_dir `public` ( string_data gid ) )
     ( check != ( analyze_run ( string_data gdir ) ) 0 `analyze: garbage job fails` )
     : ~ String gurl ( string_from `/api/org/tasks/` )
@@ -1380,20 +1247,11 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( check == . gr status 200 `tasks: failed task is readable` )
     ( check ( jstr_eq . gr body `state` `failed` ) `tasks: state failed` )
     ( check ( jstr_eq . gr body `status` `error` ) `tasks: failed task says error` )
-    ( json_free . gr body )
     ( check == ( status_of r `DELETE` ( string_data gurl ) ) 200 `tasks: delete -> 200` )
     ( check == ( status_of r `GET` ( string_data gurl ) ) 404 `tasks: deleted -> 404` )
-    ( string_free gurl )
-    ( string_free gdir )
-    ( string_free gid )
-    ( string_free turl )
-    ( string_free tdir )
-    ( string_free tid )
-    ( string_free csv )
 
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
 
     : String summary ( string_from `service_test: ` )
     ( string_push_int summary g_pass )
@@ -1401,7 +1259,6 @@ Kouvola Anjala,2026,8,29,00:50,11.4,92
     ( string_push_int summary g_fail )
     ( string_push_str summary ` failed` )
     ( pline ( string_data summary ) )
-    ( string_free summary )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }

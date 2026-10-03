@@ -15,7 +15,6 @@ $ `src/geom.nu`
     : String m ( string_from ? ok `ok   ` `FAIL ` )
     ( string_push_str m what )
     ( puts ( string_data m ) )
-    ( string_free m )
     ? ok {} { = __s3_fails + __s3_fails 1 }
 }
 
@@ -28,10 +27,13 @@ $ `src/geom.nu`
     : f uz / az al
     : f half * angle 0.5
     : f sw ( float_sin half )
-    : *f r # *f ( nurl_zalloc 72 )
+    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
+    : *f r # *f ( vec_data [u] r__v )
     ( gm_quat_to_mat * ux sw * uy sw * uz sw ( float_cos half ) r )
-    : *f xs # *f ( nurl_zalloc * 24 n )
-    : *f ys # *f ( nurl_zalloc * 24 n )
+    : ( Vec u ) xs__v ( vec_zeroed [u] * 24 n )
+    : *f xs # *f ( vec_data [u] xs__v )
+    : ( Vec u ) ys__v ( vec_zeroed [u] * 24 n )
+    : *f ys # *f ( vec_data [u] ys__v )
     : ~ i j 0
     ~ < j n {
         // a deterministic pseudo-random cloud with real 3-D spread
@@ -47,7 +49,8 @@ $ `src/geom.nu`
         = . ys + * j 3 2 + + * s + + * . r 6 x0 * . r 7 x1 * . r 8 x2 tz nz
         = j + j 1
     }
-    : *f xf # *f ( nurl_zalloc 104 )
+    : ( Vec u ) xf__v ( vec_zeroed [u] 104 )
+    : *f xf # *f ( vec_data [u] xf__v )
     : b fitok ( gm_sim3_fit xs ys n xf )
     ( __s3_check fitok label )
     ? fitok {
@@ -68,13 +71,8 @@ $ `src/geom.nu`
         : String m ( string_from `  residual ` )
         ( string_push_float m worst )
         ( puts ( string_data m ) )
-        ( string_free m )
         ( __s3_check < worst gate label )
     } {}
-    ( nurl_free # s r )
-    ( nurl_free # s xs )
-    ( nurl_free # s ys )
-    ( nurl_free # s xf )
 }
 
 @ main → i {

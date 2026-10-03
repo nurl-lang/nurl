@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`( mem_dup c )` is a fresh value to the call it is passed to**
+  (`( vec_push out ( mem_dup c ) )`, c a `vec_get` payload): the push took
+  it for lent and copied the copy (anomaly meta_clone_versions leaked per
+  fork). `compiler/tests/mem_dup_payload_into_push.nu`.
+- **A lent call result copied on return no longer keeps the local it lent
+  from alive** (`^ ( sane o )`, sane handing back a cursor over its
+  parameter): o is dropped and the copy is published as owned (anomaly
+  prep.nu leaked a String per version patch). `compiler/tests/return_lent_call_on_local.nu`.
+- **A number read out of a local struct into the returned literal is a copy**
+  (`^ @ Ser { y . kd kind }`): kd is dropped with its Vec (anomaly forecast
+  leaked per fit). `compiler/tests/number_field_into_returned_literal.nu`.
+- **A call result assigned over an owned binding is the binding's only when
+  the call says so** (`= x ( at p 0 )`, `at` lending a table element on one
+  path): the binding kept its old flag and dropped the table's element
+  (packages/yoloe-demo crashed on every second /detect).
+  `compiler/tests/reassign_lent_result.nu`.
+- **A Vec or String rebuilt from a word and returned is a view**
+  (`^ # ( Vec T ) . e inits_ref`), as a library handle already was: every
+  caller released the holder's Vec (packages/onnx — a use-after-free in
+  every model with a Split node). `compiler/tests/return_cast_word_vec_is_view.nu`.
+- **A raw string parameter placed in a literal the function keeps to itself
+  is lent, not kept** (`: P q @ P { p … } ^ . q n`): a temporary argument —
+  `( regex_compile ( nurl_argv_get 2 ) )` — was never freed. The parameter is
+  kept once the literal's binding leaves whole (stored, returned, passed on).
+  `compiler/tests/raw_param_in_local_literal.nu`.
 - **A pointer read as an argument of the call that mutates its container is
   not reported stale** (`( vec_push out . op k )` reads `op` before the push).
   `compiler/tests/stale_borrow_read_in_mutating_call.nu`.

@@ -33,25 +33,27 @@ $ `decode.nu`
 @ mask_stride → i { ^ 4 }
 
 // Read a detection's nm mask coefficients from output0 (channels
-// 4+nc .. 4+nc+nm at anchor `ai`) into a fresh host buffer (caller frees).
-@ mask_coeffs * u out i na i nc i ai → *u {
+// 4+nc .. 4+nc+nm at anchor `ai`) into a fresh host f32 buffer.
+@ mask_coeffs * u out i na i nc i ai → ( Vec u ) {
     : i nm ( mask_nm )
-    : *u c ( nurl_alloc * nm 4 )
+    : ( Vec u ) cv ( vec_zeroed [u] * nm 4 )
+    : *u c ( vec_data [u] cv )
     : ~ i m 0
     ~ < m nm {
         ( nurl_poke_f32 c m ( nurl_peek_f32 out + * + + 4 nc m na ai ) )
         = m + m 1
     }
-    ^ c
+    ^ cv
 }
 
 // Build the 160×160 mask logit map for one detection: logit[y,x] =
 // Σ_m coeff[m]·proto[m,y,x]. proto is laid out [nm, MH, MW] row-major.
-// Returns a fresh host f32 buffer of MH*MW (caller frees).
-@ mask_logits * u proto * u coeff i MH i MW → *u {
+// Returns a fresh host f32 buffer of MH*MW.
+@ mask_logits * u proto * u coeff i MH i MW → ( Vec u ) {
     : i nm ( mask_nm )
     : i hw * MH MW
-    : *u L ( nurl_alloc * hw 4 )
+    : ( Vec u ) lv ( vec_zeroed [u] * hw 4 )
+    : *u L ( vec_data [u] lv )
     : ~ i p 0
     ~ < p hw {
         : ~ f acc 0.0
@@ -63,7 +65,7 @@ $ `decode.nu`
         ( nurl_poke_f32 L p acc )
         = p + p 1
     }
-    ^ L
+    ^ lv
 }
 
 // Bilinear sample of an MH×MW grid at fractional (fy,fx); out-of-range

@@ -54,14 +54,13 @@ $ `src/dynamic.nu`
 }
 
 // Ingest a single-feature {"temp": t} point at absolute time `at`.
-@ ingest_temp * Model mo f temp i at → v {
+@ ingest_temp Model mo f temp i at → v {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     : !Verdict String r ( model_ingest_at mo j at )
-    ( json_free j )
     ?? r {
-        T vd → { ( verdict_free vd ) }
-        F e → { ( string_free e ) }
+        T vd → {}
+        F e → {}
     }
 }
 
@@ -85,11 +84,10 @@ $ `src/dynamic.nu`
     }
 }
 
-@ probe_temp * Model mo f temp → ProbeOut {
+@ probe_temp Model mo f temp → ProbeOut {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     : !Verdict String r ( model_detect_only mo j )
-    ( json_free j )
     ?? r {
         T vd → {
             : ~ i hits 0
@@ -112,11 +110,9 @@ $ `src/dynamic.nu`
                 = k + k 1
             }
             : ProbeOut out @ ProbeOut { T . vd anomaly . vd score hits dsh dda dse }
-            ( verdict_free vd )
             ^ out
         }
         F e → {
-            ( string_free e )
             ^ @ ProbeOut { F F 0.0 0 999.0 999.0 999.0 }
         }
     }
@@ -133,7 +129,7 @@ $ `src/dynamic.nu`
 @ test_routing Store st → v {
     = g_lcg 1
     : i NOW + T0 * 400 60
-    : *Model mo ( model_open_at st `routing` T0 )
+    : Model mo ( model_open_at st `routing` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 10 1000 )
 
@@ -148,7 +144,8 @@ $ `src/dynamic.nu`
         = j + j 1
     }
     ( check ( model_is_trained mo ) `routing: trained` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm__h ( model_metadata mo )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == . mm last_trained 30 `routing: final train at 30` )
 
     // Old-regime probe: alien to short_term, familiar to the long windows.
@@ -160,14 +157,13 @@ $ `src/dynamic.nu`
     : ProbeOut p40 ( probe_temp mo 40.0 )
     ( check > . p40 df_short -0.12 `routing: new regime familiar to short_term` )
 
-    ( model_free mo )
 }
 
 // ── Scenario 2: aggregation truth table + fine-tune ───────────────────
 
 @ test_aggregate_finetune Store st → v {
     = g_lcg 7
-    : *Model mo ( model_open_at st `agg` T0 )
+    : Model mo ( model_open_at st `agg` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 10 1000 )
     // The sliding-window timevector needs the window to fit in this tiny
@@ -239,10 +235,8 @@ $ `src/dynamic.nu`
         = q + q 1
     }
     ( check dry_untouched `finetune dry: margins untouched` )
-    ( finetune_free dry )
 
     : FineTuneReport rep ( model_finetune_at mo 0.05 0 0 T none )
-    ( vec_free [String] none )
     ( check == ( vec_len [FtVer] . rep items ) 6 `finetune: 6 versions tuned` )
     ( check == . rep n_rows 20 `finetune: whole ring in the window` )
     : ~ b margins_tightened T
@@ -294,7 +288,6 @@ $ `src/dynamic.nu`
     ( check . v1 anomaly `votes=1: and one is enough to make it an anomaly` )
     : String pv ( model_apply_meta_patch mo ( _jparse `{"votes":2}` ) )
     ( check == ( string_len pv ) 0 `votes: the rule is raised to two` )
-    ( string_free pv )
     : ProbeOut v2 ( probe_temp mo 23.0 )
     ( check == . v2 hits 1 `votes=2: the version still says so` )
     ( check == . v2 anomaly F `votes=2: but one alone is no longer the model's answer` )
@@ -306,11 +299,9 @@ $ `src/dynamic.nu`
     // scores chosen so that the pair together flags the share asked for.
     : ( Vec String ) nonec ( vec_new [String] )
     : FineTuneReport cft ( model_finetune_at mo 0.05 0 0 T nonec )
-    ( vec_free [String] nonec )
     ( check == . cft votes 2 `consensus: the report names the rule it tuned under` )
     ( check == . cft consensus_after 1 `consensus: 5 % of 20 rows = one row two versions agree on` )
     ( check >= . cft per_version_rate 0.05 `consensus: each version alone flags at least the model's share` )
-    ( finetune_free cft )
     : ProbeOut v3 ( probe_temp mo 23.0 )
     ( check . v3 anomaly `consensus: the worst row is the one the versions agree on` )
     ( check >= . v3 hits 2 `consensus: and at least two of them flag it` )
@@ -319,18 +310,14 @@ $ `src/dynamic.nu`
 
     // Back to one vote for the rest of the scenario.
     : String pv1 ( model_apply_meta_patch mo ( _jparse `{"votes":1}` ) )
-    ( string_free pv1 )
     : b _re ( model_set_margin mo `seasonal` 0.5 )
     : ( Vec String ) none1b ( vec_new [String] )
     : FineTuneReport reset1 ( model_finetune_at mo 0.05 0 0 T none1b )
-    ( vec_free [String] none1b )
     ( check == . reset1 votes 1 `consensus: one vote again, and rate is per version` )
-    ( finetune_free reset1 )
 
     // Rate 0: the margin sits just above the worst point, nothing flags.
     : ( Vec String ) none2 ( vec_new [String] )
     : FineTuneReport zero ( model_finetune_at mo 0.0 0 0 T none2 )
-    ( vec_free [String] none2 )
     : ~ b none_flag T
     = q 0
     ~ < q ( vec_len [FtVer] . zero items ) {
@@ -343,7 +330,6 @@ $ `src/dynamic.nu`
     ( check none_flag `finetune: rate 0 flags nothing` )
     : ProbeOut post0 ( probe_temp mo 23.0 )
     ( check == . post0 anomaly F `finetune: rate 0 clears the worst point` )
-    ( finetune_free zero )
 
     // Labels: the worst stored row called a false positive drops out of
     // calibration, so rate 0 — "flag nothing you have seen" — no longer
@@ -360,7 +346,6 @@ $ `src/dynamic.nu`
         }
         = lk + lk 1
     }
-    ( scan_free lsc )
     ( check >= worst_idx 0 `labels: the scan names a worst row` )
     ( check == ( model_label_point mo worst_idx `nonsense` `t` `` 1 ) -2 `labels: an unknown label is refused` )
     ( check == ( model_label_point mo 999 ANOM_LABEL_FP `t` `` 1 ) -1 `labels: an index outside the ring is refused` )
@@ -371,32 +356,23 @@ $ `src/dynamic.nu`
     : ( Vec i ) lmap ( model_label_map mo ls )
     ( check == ( _mlp_iget lmap worst_idx ) 0 `labels: the map points the row at its label` )
     ( check ( _an_label_is ls ( _mlp_iget lmap worst_idx ) ANOM_LABEL_FP ) `labels: and it reads false_positive` )
-    ( vec_free [i] lmap )
-    ( labels_free ls )
     : CalReport lcal ( model_calibrate mo 0 0 )
     ( check == . lcal excluded 1 `labels: calibration leaves the false positive out` )
     ( check == . lcal n_rows 19 `labels: and scores the other nineteen` )
-    ( cal_free lcal )
     : ( Vec String ) none3 ( vec_new [String] )
     : FineTuneReport zero2 ( model_finetune_at mo 0.0 0 0 T none3 )
     ( check == . zero2 excluded 1 `labels: the fine-tune report counts the exclusion` )
-    ( finetune_free zero2 )
-    ( vec_free [String] none3 )
     : ProbeOut post1 ( probe_temp mo 23.0 )
     ( check . post1 anomaly `labels: a false positive no longer pays for the margin` )
     : i lseq2 ( model_label_point mo worst_idx ANOM_LABEL_NONE `tester` `` 1700000001 )
     ( check == lseq2 lseq `labels: none is written under the same sequence` )
     : ( Vec Label ) ls2 ( model_labels mo )
     ( check == ( vec_len [Label] ls2 ) 0 `labels: none withdraws the label` )
-    ( labels_free ls2 )
     : i lseq3 ( model_label_point mo worst_idx ANOM_LABEL_OK `tester` `` 1700000002 )
     ( model_reset mo )
     : ( Vec Label ) ls3 ( model_labels mo )
     ( check == ( vec_len [Label] ls3 ) 0 `labels: a reset drops the labels with the ring` )
-    ( labels_free ls3 )
 
-    ( finetune_free rep )
-    ( model_free mo )
 }
 
 // ── Scenario 3: the flatline guard ────────────────────────────────────
@@ -418,17 +394,17 @@ $ `src/dynamic.nu`
     String feat
 }
 
-@ flat_ingest * Model mo f temp f press f rain i at → FlatProbe {
+@ flat_ingest Model mo f temp f press f rain i at → FlatProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     ( json_obj_set j `press` ( json_float press ) )
     ( json_obj_set j `rain` ( json_float rain ) )
     : !Verdict String r ( model_ingest_at mo j at )
-    ( json_free j )
     : ~ FlatProbe out @ FlatProbe { F F 0.0 ( string_new ) }
     ?? r {
         T vd → {
-            : *Meta mm ( model_metadata mo )
+            : Meta mm__h ( model_metadata mo )
+            : *MetaImpl mm ( _Meta_ptr mm__h )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
             ~ < k nv {
@@ -450,9 +426,8 @@ $ `src/dynamic.nu`
                 }
                 = k + k 1
             }
-            ( verdict_free vd )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ^ out
 }
@@ -464,7 +439,7 @@ $ `src/dynamic.nu`
 
 @ test_flatline Store st → v {
     = g_lcg 11
-    : *Model mo ( model_open_at st `flat` T0 )
+    : Model mo ( model_open_at st `flat` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
@@ -473,45 +448,40 @@ $ `src/dynamic.nu`
         : f wave * 5.0 ( sin / # f k 20.0 )
         = last_temp ( tenths + + 20.0 wave * 0.3 ( gauss3 ) )
         : FlatProbe fp ( flat_ingest mo last_temp + 1000.0 ( gauss3 ) ( rain_now ) + T0 * k 60 )
-        ( string_free . fp feat )
         = k + k 1
     }
     : i tr ( model_force_train_at mo + T0 * 300 60 )
     ( check > tr 0 `flatline: trained` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm__h ( model_metadata mo )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ( check == ( vec_len [f] . mm flat_sd ) ( vec_len [String] . mm feats ) `flatline: one reference per feature` )
-    ( check ( meta_version_enabled mm ANOM_FLAT_NAME F ) `flatline: the version exists and is on` )
-    ( check == ( meta_version_margin mm ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: default margin` )
+    ( check ( meta_version_enabled mm__h ANOM_FLAT_NAME F ) `flatline: the version exists and is on` )
+    ( check == ( meta_version_margin mm__h ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: default margin` )
 
     // The references round-trip through the metadata JSON.
-    : String js ( meta_to_json_str mm )
+    : String js ( meta_to_json_str mm__h )
     ?? ( meta_from_json_str ( string_data js ) ) {
         T m2 → {
-            ( check == ( vec_len [f] . m2 flat_run ) ( vec_len [f] . mm flat_run ) `flatline: references survive the JSON round trip` )
-            ( meta_free m2 )
+            ( check == ( vec_len [f] . ( _Meta_ptr m2 ) flat_run ) ( vec_len [f] . mm flat_run ) `flatline: references survive the JSON round trip` )
         }
         F _ → { ( check F `flatline: metadata parses back` ) }
     }
-    ( string_free js )
 
     // A normal minute: the guard judges and stays quiet.
     : FlatProbe p0 ( flat_ingest mo ( tenths + 20.0 * 0.3 ( gauss3 ) ) + 1000.0 ( gauss3 ) ( rain_now ) + T0 * 300 60 )
     ( check . p0 seen `flatline: a verdict on a normal minute` )
     ( check ! . p0 anomaly `flatline: quiet on a normal minute` )
-    ( string_free . p0 feat )
 
     // The temperature sticks.
     : ~ FlatProbe pa @ FlatProbe { F F 0.0 ( string_new ) }
     = k 0
     ~ < k 70 {
-        ( string_free . pa feat )
         = pa ( flat_ingest mo 20.0 + 1000.0 ( gauss3 ) ( rain_now ) + T0 * + 301 k 60 )
         = k + k 1
     }
     ( check . pa anomaly `flatline: 70 identical readings are flagged` )
     ( check == ( nurl_str_eq ( string_data . pa feat ) `temp` ) 1 `flatline: and the guard names temp` )
     ( check <= . pa score -0.9 `flatline: the fraction is past the line` )
-    ( string_free . pa feat )
 
     // Back to life for a window's worth, then the pressure hangs with dither.
     = k 0
@@ -519,25 +489,21 @@ $ `src/dynamic.nu`
         : f wave * 5.0 ( sin / # f k 20.0 )
         : FlatProbe fp ( flat_ingest mo ( tenths + + 20.0 wave * 0.3 ( gauss3 ) ) + 1000.0 ( gauss3 ) ( rain_now ) + T0 * + 371 k 60 )
         ? == k 69 { ( check ! . fp anomaly `flatline: quiet again once the window has moved` ) } {}
-        ( string_free . fp feat )
         = k + k 1
     }
     : ~ FlatProbe pb @ FlatProbe { F F 0.0 ( string_new ) }
     = k 0
     ~ < k 70 {
-        ( string_free . pb feat )
         : f wave * 5.0 ( sin / # f + 70 k 20.0 )
         = pb ( flat_ingest mo ( tenths + + 20.0 wave * 0.3 ( gauss3 ) ) + 1000.0 * 0.001 ( gauss3 ) ( rain_now ) + T0 * + 441 k 60 )
         = k + k 1
     }
     ( check . pb anomaly `flatline: a dithering stuck sensor is flagged` )
     ( check == ( nurl_str_eq ( string_data . pb feat ) `press` ) 1 `flatline: and the guard names press` )
-    ( string_free . pb feat )
 
     // Fine-tune leaves the flatline's margin alone.
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport ft ( model_finetune_at mo 0.05 0 0 T none )
-    ( vec_free [String] none )
     : ~ b listed F
     = k 0
     ~ < k ( vec_len [FtVer] . ft items ) {
@@ -547,11 +513,9 @@ $ `src/dynamic.nu`
         }
         = k + k 1
     }
-    ( finetune_free ft )
     ( check ! listed `flatline: finetune does not list it` )
-    ( check == ( meta_version_margin mm ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: and its margin stands` )
+    ( check == ( meta_version_margin mm__h ANOM_FLAT_NAME 0.0 ) ANOM_FLAT_MARGIN `flatline: and its margin stands` )
 
-    ( model_free mo )
 }
 
 // ── Scenario 3b: one margin, two resolutions ──────────────────────────
@@ -567,16 +531,16 @@ $ `src/dynamic.nu`
 
 : MixProbe { b anomaly f score String feat }
 
-@ mix_ingest * Model mo f coarse f flow i at → MixProbe {
+@ mix_ingest Model mo f coarse f flow i at → MixProbe {
     : Json j ( json_obj_new )
     ( json_obj_set j `coarse` ( json_float coarse ) )
     ( json_obj_set j `flow` ( json_float flow ) )
     : !Verdict String r ( model_ingest_at mo j at )
-    ( json_free j )
     : ~ MixProbe out @ MixProbe { F 0.0 ( string_new ) }
     ?? r {
         T vd → {
-            : *Meta mm ( model_metadata mo )
+            : Meta mm__h ( model_metadata mo )
+            : *MetaImpl mm ( _Meta_ptr mm__h )
             : i nv ( vec_len [VerVerdict] . vd versions )
             : ~ i k 0
             ~ < k nv {
@@ -597,15 +561,15 @@ $ `src/dynamic.nu`
                 }
                 = k + k 1
             }
-            ( verdict_free vd )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ^ out
 }
 
 // The reference the fit wrote for a named column.
-@ mix_ref * Meta mm s col → f {
+@ mix_ref Meta mm__h s col → f {
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     : i n ( vec_len [String] . mm feats )
     : ~ i k 0
     ~ < k n {
@@ -624,18 +588,18 @@ $ `src/dynamic.nu`
 
 @ test_flatline_mixed Store st → v {
     = g_lcg 7
-    : *Model mo ( model_open_at st `flatmix` T0 )
+    : Model mo ( model_open_at st `flatmix` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
     ~ < k 700 {
         : f coarse # f % / k 35 10
-        ( string_free . ( mix_ingest mo coarse + 5.0 ( gauss3 ) + T0 * k 60 ) feat )
+        : MixProbe _p ( mix_ingest mo coarse + 5.0 ( gauss3 ) + T0 * k 60 )
         = k + k 1
     }
     : i tr ( model_force_train_at mo + T0 * 700 60 )
     ( check > tr 0 `flatline/mixed: trained` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm ( model_metadata mo )
     : f rc ( mix_ref mm `coarse` )
     : f rf ( mix_ref mm `flow` )
     ( check & >= rc 30.0 <= rc 40.0 `flatline/mixed: the coarse column's reference run is its own 35-row habit` )
@@ -649,7 +613,6 @@ $ `src/dynamic.nu`
         : f coarse # f % / + 700 k 35 10
         : MixProbe fp ( mix_ingest mo coarse + 5.0 ( gauss3 ) + T0 * + 700 k 60 )
         ? . fp anomaly { = coarse_flagged T } {}
-        ( string_free . fp feat )
         = k + k 1
     }
     ( check ! coarse_flagged `flatline/mixed: a column that repeats by its own habit is not flagged for it` )
@@ -659,15 +622,12 @@ $ `src/dynamic.nu`
     : ~ MixProbe pf @ MixProbe { F 0.0 ( string_new ) }
     = k 0
     ~ < k 25 {
-        ( string_free . pf feat )
         : f coarse # f % / + 840 k 35 10
         = pf ( mix_ingest mo coarse 5.125 + T0 * + 840 k 60 )
         = k + k 1
     }
     ( check . pf anomaly `flatline/mixed: a genuine 25-row freeze is flagged` )
     ( check == ( nurl_str_eq ( string_data . pf feat ) `flow` ) 1 `flatline/mixed: and the guard names flow, not the coarse column` )
-    ( string_free . pf feat )
-    ( model_free mo )
 }
 
 // ── Scenario 3c: the guard must not learn the fault ───────────────────
@@ -682,19 +642,19 @@ $ `src/dynamic.nu`
 
 @ test_flatline_learns_habit_not_fault Store st → v {
     = g_lcg 21
-    : *Model mo ( model_open_at st `flatfit` T0 )
+    : Model mo ( model_open_at st `flatfit` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 100000 100000 )
     : ~ i k 0
     ~ < k 900 {
         : f coarse # f % / k 35 10
         : f flow ? >= k 875 5.125 + 5.0 ( gauss3 )
-        ( string_free . ( mix_ingest mo coarse flow + T0 * k 60 ) feat )
+        : MixProbe _p ( mix_ingest mo coarse flow + T0 * k 60 )
         = k + k 1
     }
     : i tr ( model_force_train_at mo + T0 * 900 60 )
     ( check > tr 0 `flatline/fit: trained on a ring that holds the freeze` )
-    : *Meta mm ( model_metadata mo )
+    : Meta mm ( model_metadata mo )
     : f rf ( mix_ref mm `flow` )
     : f rc ( mix_ref mm `coarse` )
     ( check <= rf 3.0 `flatline/fit: a freeze in the training rows does not become the reference` )
@@ -705,21 +665,18 @@ $ `src/dynamic.nu`
     : ~ MixProbe pg @ MixProbe { F 0.0 ( string_new ) }
     = k 0
     ~ < k 25 {
-        ( string_free . pg feat )
         : f coarse # f % / + 900 k 35 10
         = pg ( mix_ingest mo coarse 4.875 + T0 * + 900 k 60 )
         = k + k 1
     }
     ( check . pg anomaly `flatline/fit: the next freeze is flagged` )
     ( check == ( nurl_str_eq ( string_data . pg feat ) `flow` ) 1 `flatline/fit: and named` )
-    ( string_free . pg feat )
-    ( model_free mo )
 }
 
 @ main → i {
     : ~ String root ( string_from `./anomaly_ver_test` )
     ?? ( env_get `ANOMALY_TEST_DIR` ) {
-        T d → { ( string_free root ) = root d }
+        T d → { = root d }
         F _ → {}
     }
     : !v IoErr junk ( dir_remove_all ( string_data root ) )
@@ -732,10 +689,8 @@ $ `src/dynamic.nu`
     ( test_flatline_mixed st )
     ( test_flatline_learns_habit_not_fault st )
 
-    ( store_free st )
     : !v IoErr fin ( dir_remove_all ( string_data root ) )
     ?? fin { T _ → {} F _ → {} }
-    ( string_free root )
 
     : String summary ( string_from `versions_test: ` )
     ( string_push_int summary g_pass )
@@ -743,7 +698,6 @@ $ `src/dynamic.nu`
     ( string_push_int summary g_fail )
     ( string_push_str summary ` failed` )
     ( pline ( string_data summary ) )
-    ( string_free summary )
     ? > g_fail 0 { ^ 1 } {}
     ^ 0
 }

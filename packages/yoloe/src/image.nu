@@ -51,7 +51,6 @@ $ `deps/image/src/image.nu`
         T im → {
             ? == ( image_channels im ) 3 { ^ @ ?Image { T im } } {}
             : Image rgb ( image_convert im 3 )
-            ( image_free im )
             ^ @ ?Image { T rgb }
         }
         F _ → { ^ @ ?Image { F } }
@@ -106,11 +105,14 @@ $ `deps/image/src/image.nu`
     ^ @ Letterbox { out scale padx pady }
 }
 
-// Pack to NCHW float tensor normalised to [0,1].
-@ img_to_nchw_norm Image im → *u {
+// Pack to NCHW float tensor normalised to [0,1]: 3*H*W f32 as bytes —
+// hand `( vec_data [u] t )` to the runtime; the Vec releases itself.
+@ img_to_nchw_norm Image im → ( Vec u ) {
     : i W . im width
     : i H . im height
-    : *u host ( nurl_alloc * * * 3 H W 4 )
+    : i nb * * * 3 H W 4
+    : ( Vec u ) out ( vec_with_cap [u] nb )
+    : *u host ( vec_data [u] out )
     : ~ i c 0
     ~ < c 3 {
         : ~ i y 0
@@ -124,7 +126,8 @@ $ `deps/image/src/image.nu`
         }
         = c + c 1
     }
-    ^ host
+    : b _l ( vec_set_len [u] out nb )  // every byte written above
+    ^ out
 }
 
 // Draw a thickness-3 rectangle outline in the given colour.

@@ -193,10 +193,9 @@ $ `stdlib/std/time.nu`
 @ imp_stamp_of_text s raw → ImpStamp {
     : String t0 ( string_from raw )
     : String t ( string_trim t0 )
-    ( string_free t0 )
     : s p ( string_data t )
     : i n ( nurl_str_len p )
-    ? > n 0 {} { ( string_free t ) ^ ( __it_none ) }
+    ? > n 0 {} { ^ ( __it_none ) }
 
     // All digits: a compact date, or a Unix number.
     : ~ i nd 0
@@ -207,7 +206,6 @@ $ `stdlib/std/time.nu`
             : __ItNum mo ( __it_digits p n 4 2 )
             : __ItNum d ( __it_digits p n 6 2 )
             : ImpStamp st ( __it_tail p n 8 . y val . mo val . d val )
-            ( string_free t )
             ^ st
         } {}
         ? == n 14 {
@@ -218,7 +216,6 @@ $ `stdlib/std/time.nu`
             : __ItNum mi ( __it_digits p n 10 2 )
             : __ItNum ss ( __it_digits p n 12 2 )
             : !i ParseErr mk ( time_make . y val . mo val . d val . hh val . mi val . ss val )
-            ( string_free t )
             ?? mk { T x → { ^ @ ImpStamp { STAMP_DATETIME x F } } F _ → { ^ ( __it_none ) } }
         } {}
     } {}
@@ -226,7 +223,7 @@ $ `stdlib/std/time.nu`
     ?? ( string_to_float t ) {
         T x → {
             : ImpStamp u ( __it_unix_of x )
-            ? > . u kind 0 { ( string_free t ) ^ u } {}
+            ? > . u kind 0 { ^ u } {}
         }
         F → {}
     }
@@ -245,7 +242,6 @@ $ `stdlib/std/time.nu`
                 : i j ( __it_skip_ws p n ? == . ss len 2 15 13 )
                 : __ItNum z ( __it_zone_at p n j )
                 ? == ( __it_skip_ws p n + j . z len ) n {
-                    ( string_free t )
                     ^ @ ImpStamp { STAMP_DATETIME ? > . z len 0 - x . z val x > . z len 0 }
                 } {}
             }
@@ -264,7 +260,7 @@ $ `stdlib/std/time.nu`
                 : __ItNum d ( __it_digits p n + k1 1 2 )
                 ? > . d len 0 {
                     : ImpStamp st ( __it_tail p n + + k1 1 . d len . a val . mo val . d val )
-                    ? > . st kind 0 { ( string_free t ) ^ st } {}
+                    ? > . st kind 0 { ^ st } {}
                 } {}
             } {}
         } {}
@@ -286,7 +282,7 @@ $ `stdlib/std/time.nu`
                     // the file is month-first.
                     ? & == sep 47 & > mo 12 <= d 12 { = d . b2 val = mo . b1 val } {}
                     : ImpStamp st ( __it_tail p n + + k2 1 4 . y val mo d )
-                    ? > . st kind 0 { ( string_free t ) ^ st } {}
+                    ? > . st kind 0 { ^ st } {}
                 } {}
             } {}
         } {}
@@ -295,16 +291,14 @@ $ `stdlib/std/time.nu`
     // A time of day alone.
     : __ItNum cl ( __it_clock_at p n 0 )
     ? & > . cl len 0 == ( __it_skip_ws p n . cl len ) n {
-        ( string_free t )
         ^ @ ImpStamp { STAMP_CLOCK . cl val F }
     } {}
 
     // The mail and HTTP spellings, which carry their own zone.
     : !i ParseErr r1 ( rfc2822_parse p )
-    ?? r1 { T x → { ( string_free t ) ^ @ ImpStamp { STAMP_DATETIME x T } } F _ → {} }
+    ?? r1 { T x → { ^ @ ImpStamp { STAMP_DATETIME x T } } F _ → {} }
     : !i ParseErr r2 ( http_date_parse p )
-    ?? r2 { T x → { ( string_free t ) ^ @ ImpStamp { STAMP_DATETIME x T } } F _ → {} }
-    ( string_free t )
+    ?? r2 { T x → { ^ @ ImpStamp { STAMP_DATETIME x T } } F _ → {} }
     ^ ( __it_none )
 }
 
@@ -342,28 +336,26 @@ $ `stdlib/std/time.nu`
 @ imp_span_of_text s raw → i {
     : String t0 ( string_from raw )
     : String t ( string_trim t0 )
-    ( string_free t0 )
     : s p ( string_data t )
     : i n ( nurl_str_len p )
     : ~ i nd 0
     ~ & < nd n ( __it_is_digit p n nd ) { = nd + nd 1 }
-    ? == nd 0 { ( string_free t ) ^ 0 } {}
+    ? == nd 0 { ^ 0 } {}
     : __ItNum num ( __it_digits p n 0 nd )
     : ~ i unit 1
     ? == nd n {} {
-        ? == + nd 1 n {} { ( string_free t ) ^ 0 }
+        ? == + nd 1 n {} { ^ 0 }
         : i c ( nurl_str_at p n nd )
         ? == c 115 { = unit 1 } {
             ? == c 109 { = unit 60 } {
                 ? == c 104 { = unit 3600 } {
                     ? == c 100 { = unit 86400 } {
-                        ? == c 119 { = unit 604800 } { ( string_free t ) ^ 0 }
+                        ? == c 119 { = unit 604800 } { ^ 0 }
                     }
                 }
             }
         }
     }
-    ( string_free t )
     ^ * . num val unit
 }
 
@@ -400,7 +392,6 @@ $ `stdlib/std/time.nu`
 @ __it_norm_name s raw → String {
     : String lo0 ( string_from raw )
     : String lo ( string_to_lower lo0 )
-    ( string_free lo0 )
     : String out ( string_new )
     : s p ( string_data lo )
     : i n ( nurl_str_len p )
@@ -415,9 +406,7 @@ $ `stdlib/std/time.nu`
         }
         = k + k 1
     }
-    ( string_free lo )
     : String tr ( string_trim out )
-    ( string_free out )
     ^ tr
 }
 
@@ -440,7 +429,6 @@ $ `stdlib/std/time.nu`
     ( string_push_str needle name )
     ( string_push_str needle `|` )
     : i r ( nurl_str_find list ( string_data needle ) )
-    ( string_free needle )
     ^ >= r 0
 }
 
@@ -511,12 +499,6 @@ $ `stdlib/std/time.nu`
     String sample
 }
 
-@ __it_col_free sink ImpCol c → v {
-    ( string_free . c cname )
-    ( string_free . c norm )
-    ( string_free . c sample )
-}
-
 @ __it_col_find ( Vec ImpCol ) cols s name → i {
     : i n ( vec_len [ImpCol] cols )
     : ~ i k 0
@@ -538,7 +520,8 @@ $ `stdlib/std/time.nu`
 @ __it_col_add * ImpCol c Json v → v {
     = . c filled + . c filled 1
     ? == ( string_len . c sample ) 0 {
-        ( string_free . c sample )
+        : String old_sample . c sample
+        ( mem_take old_sample )  // a store through the pointer drops nothing
         ? ( json_is_str v ) { = . c sample ( string_from ( json_str_data v ) ) } { = . c sample ( json_stringify v ) }
     } {}
     ? ( json_is_num v ) {
@@ -620,7 +603,6 @@ $ `stdlib/std/time.nu`
                     }
                     = q + q 1
                 }
-                ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
             }
             F _ → {}
         }
@@ -810,7 +792,6 @@ $ `stdlib/std/time.nu`
     ? ( json_is_str v ) {
         : String t ( string_from ( json_str_data v ) )
         : !i ParseErr r ( string_to_int t )
-        ( string_free t )
         ?? r { T x → { ^ x } F _ → { ^ -1 } }
     } {}
     ^ -1
@@ -918,7 +899,6 @@ $ `stdlib/std/time.nu`
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] roles \ String x → v { ( string_free x ) } )
         }
         F _ → {}
     }
@@ -957,14 +937,12 @@ $ `stdlib/std/time.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
     ( json_obj_set out `timestamp` ( json_int secs ) )
     ? calendar {
         : i off ( __it_off_at secs tz )
         : Time lt ( time_from_unix + secs off )
         : String iso ( time_format_offset lt off )
         ( json_obj_set out `time` ( json_str_lit ( string_data iso ) ) )
-        ( string_free iso )
     } {}
     ^ out
 }
@@ -974,8 +952,6 @@ $ `stdlib/std/time.nu`
     i failed  // rows the plan could not read a time from — dropped
     String first_fail  // what the first of them looked like
 }
-
-@ imp_time_result_free sink ImpTimeResult r → v { ( string_free . r first_fail ) }
 
 // Rewrite `rows` in place under `plan`. With mode `none` nothing changes.
 // A row whose time cannot be read is removed: a history point with no
@@ -1003,7 +979,6 @@ $ `stdlib/std/time.nu`
                 } {
                     = failed + failed 1
                     ? == ( string_len first ) 0 {
-                        ( string_free first )
                         = first ( string_from `row ` )
                         ( string_push_int first + k 1 )
                         ( string_push_str first `: no time could be read from ` )
@@ -1019,7 +994,6 @@ $ `stdlib/std/time.nu`
                                         T v → {
                                             : String sv ( json_stringify v )
                                             ( string_push_str first ( string_data sv ) )
-                                            ( string_free sv )
                                         }
                                         F _ → { ( string_push_str first `(missing)` ) }
                                     }
@@ -1038,7 +1012,6 @@ $ `stdlib/std/time.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] drop \ String x → v { ( string_free x ) } )
     ? > failed 0 {
         // Compact: a failed row became an empty object; keep the rest.
         // Each row is taken out of `rows` (its slot left empty): a stamped
@@ -1067,11 +1040,6 @@ $ `stdlib/std/time.nu`
 : ImpPlan {
     Json plan
     String err
-}
-
-@ imp_plan_free sink ImpPlan p → v {
-    ( json_free . p plan )
-    ( string_free . p err )
 }
 
 @ __it_check_col ( Vec ImpCol ) cols s name String err → v {
@@ -1137,7 +1105,6 @@ $ `stdlib/std/time.nu`
                         }
                         = k + k 1
                     }
-                    ( vec_free_with [String] roles \ String x → v { ( string_free x ) } )
                     : b has_date | ( json_obj_has cp `date` ) & & ( json_obj_has cp `year` ) ( json_obj_has cp `month` ) ( json_obj_has cp `day` )
                     ? | has_date > ( string_len err ) 0 {} {
                         ( string_push_str err `parts need a "date" column, or "year", "month" and "day"` )
@@ -1195,7 +1162,6 @@ $ `stdlib/std/time.nu`
                     : String iso ( time_format_offset ( time_from_unix + secs off ) off )
                     ( json_obj_set plan `sample` ( json_str_lit ( string_data iso ) ) )
                     ( json_obj_set plan `sample_unix` ( json_int secs ) )
-                    ( string_free iso )
                 } {}
             }
             F _ → {}
@@ -1203,7 +1169,5 @@ $ `stdlib/std/time.nu`
     } {}
     ( json_obj_set out `time` plan )
     ( json_obj_set out `hints` ( __it_hints cols ) )
-    ( imp_plan_free ip )
-    ( vec_free_with [ImpCol] cols \ ImpCol c → v { ( __it_col_free c ) } )
     ^ out
 }

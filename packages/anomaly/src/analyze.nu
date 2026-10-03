@@ -71,7 +71,7 @@ $ `src/orgfiles.nu`
 // step is found wherever it is.
 : AnaSep { f sep i rows }
 
-@ _ana_separation * Model mo f rate → AnaSep {
+@ _ana_separation Model mo f rate → AnaSep {
     : CalReport cr ( model_calibrate mo 0 0 )
     : ~ AnaSep out @ AnaSep { -1.0 0 }
     : i ni ( vec_len [CalVer] . cr items )
@@ -115,7 +115,6 @@ $ `src/orgfiles.nu`
         }
         = k + k 1
     }
-    ( cal_free cr )
     ^ out
 }
 
@@ -163,9 +162,6 @@ $ `src/orgfiles.nu`
         T _ → { ?? ( fs_rename ( string_data tmp ) ( string_data p ) ) { T _ → { = ok T } F _ → {} } }
         F _ → {}
     }
-    ( string_free txt )
-    ( string_free tmp )
-    ( string_free p )
     ^ ok
 }
 
@@ -175,14 +171,12 @@ $ `src/orgfiles.nu`
     ?? ( read_file ( string_data p ) ) {
         T txt → {
             ?? ( json_parse ( string_data txt ) ) {
-                T j → { ? ( json_is_obj j ) { = out @ ?Json { T j } } { ( json_free j ) } }
+                T j → { ? ( json_is_obj j ) { = out @ ?Json { T j } } {} }
                 F _ → {}
             }
-            ( string_free txt )
         }
         F _ → {}
     }
-    ( string_free p )
     ^ out
 }
 
@@ -218,7 +212,6 @@ $ `src/orgfiles.nu`
     ?? ( analyze_status_read dir ) {
         T st → {
             : String s ( _ana_jstr st `state` )
-            ( json_free st )
             ^ s
         }
         F _ → {}
@@ -241,7 +234,6 @@ $ `src/orgfiles.nu`
     ? ok {
         : String ip ( __ana_file ( string_data dir ) `input` )
         ?? ( write_file_bytes ( string_data ip ) input ) { T _ → {} F _ → { = ok F } }
-        ( string_free ip )
     } {}
     ? ok {
         ( json_obj_set params `id` ( json_str_lit ( string_data id ) ) )
@@ -254,11 +246,8 @@ $ `src/orgfiles.nu`
         ( json_obj_set st `created` ( json_int ( _ana_jint params `created` 0 ) ) )
         ( json_obj_set st `name` ( json_str_lit ( json_as_str ?? ( json_obj_get params `name` ) { T v → v F _ → @ Json { JNull } } ) ) )
         = ok ( analyze_status_write ( string_data dir ) st )
-        ( json_free st )
     } {}
-    ( string_free dir )
     ? ok { ^ id } {}
-    ( string_free id )
     ^ ( string_new )
 }
 
@@ -283,17 +272,14 @@ $ `src/orgfiles.nu`
                             }
                             F _ → {}
                         }
-                        ( string_free td )
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
         }
         F _ → {}
     }
-    ( string_free d )
     // Newest first, by `created`; a handful of tasks, so an insertion sort.
     : i n ( vec_len [Json] items )
     : ~ i i 1
@@ -315,7 +301,6 @@ $ `src/orgfiles.nu`
         ?? ( vec_get [Json] items i ) { T x → { ( json_arr_push out x ) } F _ → {} }
         = i + i 1
     }
-    ( vec_free [Json] items )
     ^ out
 }
 
@@ -325,7 +310,6 @@ $ `src/orgfiles.nu`
     ? ( file_exists ( string_data d ) ) {
         ?? ( dir_remove_all ( string_data d ) ) { T _ → { = ok T } F _ → {} }
     } {}
-    ( string_free d )
     ^ ok
 }
 
@@ -354,7 +338,6 @@ $ `src/orgfiles.nu`
 @ _ana_mark_crashed s dir i code s detail → v {
     : String state ( analyze_state dir )
     : b final ( analyze_state_final ( string_data state ) )
-    ( string_free state )
     ? final { ^ } {}
     : Json st ?? ( analyze_status_read dir ) { T j → j F _ → ( json_obj_new ) }
     ( json_obj_set st `state` ( json_str_lit `failed` ) )
@@ -366,17 +349,12 @@ $ `src/orgfiles.nu`
         : i n ( nurl_str_len detail )
         : String whole ( string_from detail )
         : String tail ? > n 400 ( string_substr whole - n 400 400 ) ( string_clone whole )
-        ( string_free whole )
         : String trimmed ( string_trim tail )
         ( string_push_str msg ( string_data trimmed ) )
-        ( string_free trimmed )
-        ( string_free tail )
     } {}
     ( json_obj_set st `error` ( json_str_lit ( string_data msg ) ) )
     ( json_obj_set st `finished` ( json_int ( now_seconds ) ) )
     ( analyze_status_write dir st )
-    ( json_free st )
-    ( string_free msg )
 }
 
 // Start the job for a task: a thread runs the child process to its end
@@ -398,9 +376,6 @@ $ `src/orgfiles.nu`
             }
             F e → { ( _ana_mark_crashed ( string_data dir ) -1 ( process_err_name e ) ) }
         }
-        ( vec_free [s] args )
-        ( string_free dir )
-        ( string_free exe )
     }
     // Detached and forgotten: the thread frees the closure's env when the
     // body returns, and the body frees what it captured.
@@ -408,8 +383,6 @@ $ `src/orgfiles.nu`
         T t → { ( thread_detach t ) ^ T }
         F _ → {}
     }
-    ( string_free dir )
-    ( string_free exe )
     ^ F
 }
 
@@ -421,7 +394,6 @@ $ `src/orgfiles.nu`
     ( json_obj_set st `error` ( json_str_lit msg ) )
     ( json_obj_set st `finished` ( json_int ( now_seconds ) ) )
     ( analyze_status_write dir st )
-    ( json_free st )
     ( nurl_eprint `anomaly analyze-job: ` )
     ( nurl_eprintln msg )
     ^ 1
@@ -432,10 +404,8 @@ $ `src/orgfiles.nu`
 @ __ana_cleanup s dir → v {
     : String sp ( __ana_file dir `store` )
     ?? ( dir_remove_all ( string_data sp ) ) { T _ → {} F _ → {} }
-    ( string_free sp )
     : String ip ( __ana_file dir `input` )
     ?? ( file_delete ( string_data ip ) ) { T _ → {} F _ → {} }
-    ( string_free ip )
 }
 
 @ analyze_run s dir → i {
@@ -443,16 +413,12 @@ $ `src/orgfiles.nu`
     : String org ( _ana_jstr params `org` )
     : String id ( _ana_jstr params `id` )
     ? & > ( string_len org ) 0 > ( string_len id ) 0 {} {
-        ( string_free org )
-        ( string_free id )
-        ( json_free params )
         ^ ( __ana_fail dir `params.json is missing or names no task` )
     }
     // The store root the service named: the result goes into the
     // organisation's folder beside it.
     : String root ( _ana_jstr params `root` )
     ? > ( string_len root ) 0 { ( orgfiles_set_root ( string_data root ) ) } {}
-    ( string_free root )
     : Json st ?? ( analyze_status_read dir ) { T j → j F _ → ( json_obj_new ) }
     ( json_obj_set st `state` ( json_str_lit `running` ) )
     ( json_obj_set st `started` ( json_int ( now_seconds ) ) )
@@ -462,27 +428,14 @@ $ `src/orgfiles.nu`
     : String ip ( __ana_file dir `input` )
     : ~ String body ( string_new )
     : ~ b have F
-    ?? ( read_file ( string_data ip ) ) { T t → { ( string_free body ) = body t = have T } F _ → {} }
-    ( string_free ip )
+    ?? ( read_file ( string_data ip ) ) { T t → { = body t = have T } F _ → {} }
     ? have {} {
-        ( string_free body )
-        ( json_free st )
-        ( string_free org )
-        ( string_free id )
-        ( json_free params )
         ^ ( __ana_fail dir `the input file could not be read` )
     }
     : String fmt ( _ana_jstr params `format` )
     : ImportParse ip2 ( import_parse ( string_data body ) ( string_data fmt ) )
-    ( string_free fmt )
-    ( string_free body )
     ? > ( string_len . ip2 err ) 0 {
         : i rc ( __ana_fail dir ( string_data . ip2 err ) )
-        ( import_parse_free ip2 )
-        ( json_free st )
-        ( string_free org )
-        ( string_free id )
-        ( json_free params )
         ^ rc
     } {}
     : i nrows ( vec_len [Json] . ip2 rows )
@@ -493,12 +446,6 @@ $ `src/orgfiles.nu`
         ( string_push_int m ANA_MIN_ROWS )
         ( string_push_str m ` are needed)` )
         : i rc ( __ana_fail dir ( string_data m ) )
-        ( string_free m )
-        ( import_parse_free ip2 )
-        ( json_free st )
-        ( string_free org )
-        ( string_free id )
-        ( json_free params )
         ^ rc
     } {}
 
@@ -507,18 +454,10 @@ $ `src/orgfiles.nu`
     : i tz ( imp_tz_of spec )
     : b calendar ( _ana_jbool params `calendar` )
     : Json insp ( import_inspect . ip2 rows spec tz )
-    ( json_free spec )
     : Json plan ?? ( json_obj_get insp `time` ) { T tp → ( json_clone tp ) F _ → ( json_obj_new ) }
-    ( json_free insp )
     ? ( json_obj_has plan `error` ) {
         : s perr ?? ( json_obj_get plan `error` ) { T e → ( json_str_data e ) F _ → `bad time plan` }
         : i rc ( __ana_fail dir perr )
-        ( json_free plan )
-        ( import_parse_free ip2 )
-        ( json_free st )
-        ( string_free org )
-        ( string_free id )
-        ( json_free params )
         ^ rc
     } {}
     : ImpTimeResult tr ( import_time_apply . ip2 rows plan calendar tz )
@@ -527,34 +466,23 @@ $ `src/orgfiles.nu`
     : String sp ( __ana_file dir `store` )
     ?? ( dir_create_all ( string_data sp ) ) { T _ → {} F _ → {} }
     : Store store ( store_open ( string_data sp ) )
-    ( string_free sp )
-    : *Model mo ( model_open store `analysis` )
-    : *Meta mm . mo meta
+    : Model mo__h ( model_open store `analysis` )
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : String clockq ( _ana_jstr params `clock` )
     : ~ b count == . tr stamped 0
     ? == ( nurl_str_eq ( string_data clockq ) `count` ) 1 { = count T } {}
     ? == ( nurl_str_eq ( string_data clockq ) `time` ) 1 { = count F } {}
-    ( string_free clockq )
     = . mm count_clock count
     // The whole file fits: the ring grows to the file, and the warm-up
     // shrinks to it, so a short file still gets a verdict.
     : i minp ? < nrows ANOM_MIN_POINTS nrows ANOM_MIN_POINTS
     : i maxp ? > nrows ANOM_MAX_POINTS nrows ANOM_MAX_POINTS
-    ( model_set_limits mo minp maxp )
+    ( model_set_limits mo__h minp maxp )
 
-    : ImportReport rep ( model_import mo . ip2 rows )
+    : ImportReport rep ( model_import mo__h . ip2 rows )
     ? > ( string_len . rep err ) 0 {
         : i rc ( __ana_fail dir ( string_data . rep err ) )
-        ( import_report_free rep )
-        ( imp_time_result_free tr )
-        ( json_free plan )
-        ( model_free mo )
-        ( store_free store )
-        ( import_parse_free ip2 )
-        ( json_free st )
-        ( string_free org )
-        ( string_free id )
-        ( json_free params )
         ^ rc
     } {}
 
@@ -563,13 +491,12 @@ $ `src/orgfiles.nu`
     // recipe (model_train_whole), shared with a model forked from another
     // model's history.
     : ( Vec i ) dflt_layout ( vec_new [i] )
-    : WholeTrain wt ( model_train_whole mo ANA_TARGET_RATE dflt_layout )
-    ( vec_free [i] dflt_layout )
+    : WholeTrain wt ( model_train_whole mo__h ANA_TARGET_RATE dflt_layout )
     : Json notes . wt notes
     : Json margins . wt margins
 
     // Scan everything, keep the anomalies.
-    : ScanOut so ( model_scan mo 0 0 0 F )
+    : ScanOut so ( model_scan mo__h 0 0 0 F )
     : Json vers ( json_arr_new )
     : i nvn ( vec_len [String] . so vnames )
     : ~ i k 0
@@ -621,9 +548,9 @@ $ `src/orgfiles.nu`
                     ( json_obj_set o `severity` ( json_float . r sp_severity ) )
                     ( json_obj_set o `votes` ( json_int votes ) )
                     ( json_obj_set o `versions` flagged )
-                    ?? ( model_point_json mo . r sp_idx ) {
+                    ?? ( model_point_json mo__h . r sp_idx ) {
                         T rec → {
-                            : ( Vec AeContrib ) cs ( model_ae_contrib mo rec 3 )
+                            : ( Vec AeContrib ) cs ( model_ae_contrib mo__h rec 3 )
                             : i nc ( vec_len [AeContrib] cs )
                             ? > nc 0 {
                                 : Json ca ( json_arr_new )
@@ -644,33 +571,30 @@ $ `src/orgfiles.nu`
                                 }
                                 ( json_obj_set o `contributions` ca )
                             } {}
-                            ( ae_contrib_free cs )
                             ( json_obj_set o `values` rec )
                         }
                         F _ → {}
                     }
                     ( json_arr_push pts o )
-                } { ( json_free flagged ) }
+                } {}
             }
             F _ → {}
         }
         = k + k 1
     }
 
-    : ~ AnaSep sp ( _ana_separation mo ANA_TARGET_RATE )
+    : ~ AnaSep sp ( _ana_separation mo__h ANA_TARGET_RATE )
     ? > . sp sep 0.0 { = . sp sep / ( float_round * . sp sep 100.0 ) 100.0 } {}
     : f sep . sp sep
 
     // The result file, into the organisation's folder.
     : String label ( _ana_jstr params `name` )
     : ~ String base ( orgfiles_safe_name ( string_data label ) )
-    ( string_free label )
-    ? == ( string_len base ) 0 { ( string_free base ) = base ( string_from `analysis` ) } {}
+    ? == ( string_len base ) 0 { = base ( string_from `analysis` ) } {}
     : String fname ( string_clone base )
     ( string_push_char fname 45 )
     ( string_push_str fname ( string_data id ) )
     ( string_push_str fname `.json` )
-    ( string_free base )
 
     : Json res ( json_obj_new )
     ( json_obj_set res `task_id` ( json_str_lit ( string_data id ) ) )
@@ -689,7 +613,6 @@ $ `src/orgfiles.nu`
     ( json_obj_set res `stands_apart_rows` ( json_int . sp rows ) )
     : String rd1 ( _ana_reading nanom sp )
     ( json_obj_set res `reading` ( json_str_lit ( string_data rd1 ) ) )
-    ( string_free rd1 )
     ( json_obj_set res `model_versions` ( json_clone vers ) )
     ( json_obj_set res `margins` ( json_clone margins ) )
     : Json tj ( json_clone plan )
@@ -702,9 +625,6 @@ $ `src/orgfiles.nu`
     : ( Vec u ) rbytes ( bytes_from_str ( string_data rtxt ) )
     : i rsize ( vec_len [u] rbytes )
     : b wrote ( orgfiles_write ( string_data org ) ( string_data fname ) rbytes )
-    ( vec_free [u] rbytes )
-    ( string_free rtxt )
-    ( json_free res )
 
     : ~ i rc 0
     ? wrote {
@@ -721,7 +641,6 @@ $ `src/orgfiles.nu`
         ( json_obj_set st `stands_apart_rows` ( json_int . sp rows ) )
         : String rd2 ( _ana_reading nanom sp )
         ( json_obj_set st `reading` ( json_str_lit ( string_data rd2 ) ) )
-        ( string_free rd2 )
         ( json_obj_set st `model_versions` vers )
         ( json_obj_set st `margins` margins )
         ( json_obj_set st `notes` notes )
@@ -729,23 +648,8 @@ $ `src/orgfiles.nu`
         ( json_obj_set st `size` ( json_int rsize ) )
         ( analyze_status_write dir st )
     } {
-        ( json_free vers )
-        ( json_free margins )
-        ( json_free notes )
         = rc ( __ana_fail dir `the result could not be written to the organisation's folder` )
     }
-    ( string_free fname )
-    ( scan_free so )
-    ( import_report_free rep )
-    ( imp_time_result_free tr )
-    ( json_free plan )
-    ( model_free mo )
-    ( store_free store )
-    ( import_parse_free ip2 )
-    ( json_free st )
-    ( string_free org )
-    ( string_free id )
-    ( json_free params )
     ( __ana_cleanup dir )
     ^ rc
 }

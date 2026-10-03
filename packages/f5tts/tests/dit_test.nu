@@ -44,11 +44,9 @@ $ `src/model.nu`
                 ?? ( bytes_read_f32_le bs * k 4 ) { T x → { ( vec_push [f] out # f x ) } F → {} }
                 = k + k 1
             }
-            ( vec_free [u] bs )
         }
         F _e → { ( nurl_eprint `cannot read ` ) ( nurl_eprintln ( string_data p ) ) }
     }
-    ( string_free p )
     ^ out
 }
 
@@ -63,11 +61,9 @@ $ `src/model.nu`
                 ?? ( bytes_read_u32_le bs * k 4 ) { T x → { ( vec_push [i] out # i x ) } F → {} }
                 = k + k 1
             }
-            ( vec_free [u] bs )
         }
         F _e → { ( nurl_eprint `cannot read ` ) ( nurl_eprintln ( string_data p ) ) }
     }
-    ( string_free p )
     ^ out
 }
 
@@ -106,7 +102,6 @@ $ `src/model.nu`
     ( string_push_str m `  relative ` )
     ( string_push_float m rel )
     ( __d_check < rel tol ( string_data m ) )
-    ( string_free m )
 }
 
 @ main → i {
@@ -160,22 +155,13 @@ $ `src/model.nu`
             ( f5_download m ( f5_buf_pred m ) got_out * n 100 )
             ( __d_cmp got_out want_out `the whole forward (22 blocks)` 1.0e-4 )
 
-            ( vec_free [f] got_txt )
-            ( vec_free [f] got_out )
             ( f5_close m )
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
     }
-    ( vec_free [i] ids )
-    ( vec_free [f] xin )
-    ( vec_free [f] condin )
-    ( vec_free [f] tin )
-    ( vec_free [f] want_txt )
-    ( vec_free [f] want_out )
 
     ( nurl_print `\npassed ` )
     ( nurl_print_int g_pass )

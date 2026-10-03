@@ -42,13 +42,10 @@ $ `src/heads.nu`
                 }
                 : GkBuf b ( gk_dbuf_new kit n GK_F32 )
                 : b _u ( gk_dbuf_upload kit b host )
-                ( vec_free [f] host )
                 = out b
             } {}
-            ( vec_free [u] raw )
         }
     }
-    ( string_free p )
     ^ out
 }
 
@@ -73,8 +70,6 @@ $ `src/heads.nu`
         T → { = ok T }
         F → {}
     }
-    ( string_free p )
-    ( vec_free [u] out )
     ^ ok
 }
 
@@ -86,11 +81,10 @@ $ `src/heads.nu`
     : i gw ( nurl_str_to_int ( nurl_argv 4 ) )
     : i np * gh gw
 
-    : ~ * Lw lw # *Lw 0
+    : ~ Lw lw ( lw_none )
     ?? ( lw_open model ) {
         F e → {
             ( puts ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
         T got → { = lw got }
@@ -105,13 +99,15 @@ $ `src/heads.nu`
     : GkBuf stok ( __hc_read_up kit dir `/stok.bin` 1536 )
     ? & ( gk_buf_ok feat ) ( gk_buf_ok stok ) {} { ^ ( __hc_die `cannot read inputs` ) }
 
-    : *f pose # *f ( nurl_zalloc 56 )
+    : ( Vec u ) pose__v ( vec_zeroed [u] 56 )
+    : *f pose # *f ( vec_data [u] pose__v )
     ? ( ph_forward kit ph feat 0 np pose ) {} { ^ ( __hc_die `ph_forward failed` ) }
     : f scale ( sh_forward kit sh stok 0 )
     ? > scale 0.0 {} { ^ ( __hc_die `sh_forward failed` ) }
 
     ? ( __hc_write dir `/nurl_pose.bin` pose 7 ) {} { ^ ( __hc_die `write pose` ) }
-    : *f sv # *f ( nurl_zalloc 8 )
+    : ( Vec u ) sv__v ( vec_zeroed [u] 8 )
+    : *f sv # *f ( vec_data [u] sv__v )
     = . sv 0 scale
     ? ( __hc_write dir `/nurl_scale.bin` sv 1 ) {} { ^ ( __hc_die `write scale` ) }
     ( puts `wrote nurl_pose/scale.bin` )

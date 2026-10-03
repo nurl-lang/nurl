@@ -10,7 +10,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `src/weights.nu`
 
-@ show * Lw w s name → v {
+@ show Lw w s name → v {
     ( nurl_print name )
     : i nd ( lw_ndim w name )
     ? == nd 0 { ( nurl_print ` MISSING\n` ) ^ v } {}
@@ -26,9 +26,9 @@ $ `src/weights.nu`
 
 @ main → i {
     ? < ( nurl_argc ) 2 { ( nurl_print `usage: wcheck <checkpoint.pt>\n` ) ^ 2 } {}
-    : !*Lw String o ( lw_open ( nurl_argv 1 ) )
+    : !Lw String o ( lw_open ( nurl_argv 1 ) )
     ?? o {
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T w → {
             ( nurl_print `tensors ` )
             ( nurl_print ( nurl_str_int ( lw_n_tensors w ) ) ) ( nurl_print `\n` )
@@ -72,7 +72,8 @@ $ `src/weights.nu`
 
             // a real read, into a buffer sized from the tensor itself
             : i ln ( lw_nelems w `aggregator.frame_blocks.0.ls1.gamma` )
-            : *f buf # *f ( nurl_zalloc * 8 ? > ln 0 ln 1 )
+            : ( Vec u ) buf__v ( vec_zeroed [u] * 8 ? > ln 0 ln 1 )
+            : *f buf # *f ( vec_data [u] buf__v )
             : b rok ( lw_read w `aggregator.frame_blocks.0.ls1.gamma` buf ln )
             ( nurl_print `read_ls1 ` ) ( nurl_print ? rok `OK` `FAIL` )
             ( nurl_print ` n=` ) ( nurl_print ( nurl_str_int ln ) )
@@ -80,9 +81,7 @@ $ `src/weights.nu`
                 ( nurl_print ` v0=` ) ( nurl_print ( nurl_str_float . buf 0 ) )
                 ( nurl_print ` v1023=` ) ( nurl_print ( nurl_str_float . buf - ln 1 ) )
             } {}
-            ( nurl_free # s buf )
             ( nurl_print `\n` )
-            ( lw_close w )
             ^ 0
         }
     }

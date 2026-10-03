@@ -500,7 +500,6 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     ( vec_push [i] a ( gpu_arg_f32 eps ) )
     : b r ( gk_run_dev kit ( __f5k_modln ) `f5_modln` rows 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -514,7 +513,6 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     ( vec_push [i] a ( gpu_arg_f32 eps ) )
     : b r ( gk_run_dev kit ( __f5k_lnaff ) `f5_lnaff` rows 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -526,7 +524,6 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ( vec_push [i] a ( gpu_arg_i64 rows ) )
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     : b r ( gk_run_dev kit ( __f5k_gated_add ) `f5_gated_add` ( gk_grid * rows d 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -543,7 +540,6 @@ extern "C" __global__ void f5_dup(const float* src, float* dst, long long n, lon
     ( vec_push [i] a ( gpu_arg_i64 dorope ) )
     : i tot * * * batch heads n hd
     : b r ( gk_run_dev kit ( __f5k_split_rope ) `f5_split_rope` ( gk_grid tot 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -563,7 +559,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a ( gpu_arg_i64 coff ) )
     : i tot * * * batch heads n hd
     : b r ( gk_run_dev kit ( __f5k_split_rope ) `f5_split_rope_s` ( gk_grid tot 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -577,7 +572,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a ( gpu_arg_i64 hd ) )
     : i tot * * * batch heads n hd
     : b r ( gk_run_dev kit ( __f5k_merge ) `f5_merge` ( gk_grid tot 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -586,7 +580,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a xd )
     ( vec_push [i] a ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( __f5k_acts ) name ( gk_grid n 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -616,7 +609,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a ( gpu_arg_i64 groups ) )
     : i tot * * batch n cout
     : b r ( gk_run_dev kit ( __f5k_convs ) `f5_conv1d` ( gk_grid tot 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -638,7 +630,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a ( gpu_arg_i64 groups ) )
     : i tot * * batch / + n 3 4 cout
     : b r ( gk_run_dev kit ( __f5k_convs ) `f5_conv1d_t4` ( gk_grid tot 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -657,7 +648,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a ( gpu_arg_i64 groups ) )
     : i tot * * batch n cout
     : b r ( gk_run_dev kit ( __f5k_convs ) `f5_conv1d_t` ( gk_grid tot 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -665,11 +655,9 @@ i dorope i stride i coff → b {
     : ( Vec i ) a1 ( __f5k_a3 xd gxd ( gpu_arg_i64 rows ) )
     ( vec_push [i] a1 ( gpu_arg_i64 d ) )
     : ~ b r ( gk_run_dev kit ( __f5k_grn ) `f5_grn_gx` ( gk_grid d 256 ) 256 a1 )
-    ( vec_free [i] a1 )
     ? r {} { ^ F }
     : ( Vec i ) a2 ( __f5k_a3 gxd meand ( gpu_arg_i64 d ) )
     = r ( gk_run_dev kit ( __f5k_grn ) `f5_grn_mean` 1 256 a2 )
-    ( vec_free [i] a2 )
     ? r {} { ^ F }
     : ( Vec i ) a3 ( vec_new [i] )
     ( vec_push [i] a3 xd )
@@ -680,7 +668,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a3 ( gpu_arg_i64 rows ) )
     ( vec_push [i] a3 ( gpu_arg_i64 d ) )
     = r ( gk_run_dev kit ( __f5k_grn ) `f5_grn_apply` ( gk_grid * rows d 256 ) 256 a3 )
-    ( vec_free [i] a3 )
     ^ r
 }
 
@@ -688,7 +675,6 @@ i dorope i stride i coff → b {
     : ( Vec i ) a ( __f5k_a3 xd keepd ( gpu_arg_i64 rows ) )
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_maskrows` ( gk_grid * rows d 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -704,7 +690,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a ( gpu_arg_i64 td ) )
     : i tot * * batch n + * 2 mel td
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_concat3` ( gk_grid tot 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -713,7 +698,6 @@ i dorope i stride i coff → b {
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     ( vec_push [i] a ( gpu_arg_f32 cfg ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_cfg` ( gk_grid * n d 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -721,14 +705,12 @@ i dorope i stride i coff → b {
     : ( Vec i ) ar ( __f5k_a3 yd vd ( gpu_arg_f32 a ) )
     ( vec_push [i] ar ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_axpy` ( gk_grid n 256 ) 256 ar )
-    ( vec_free [i] ar )
     ^ r
 }
 
 @ f5k_addinto GpuKit kit i yd i ad i n → b {
     : ( Vec i ) ar ( __f5k_a3 yd ad ( gpu_arg_i64 n ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_addinto` ( gk_grid n 256 ) 256 ar )
-    ( vec_free [i] ar )
     ^ r
 }
 
@@ -736,7 +718,6 @@ i dorope i stride i coff → b {
     : ( Vec i ) a ( __f5k_a3 xd gd ( gpu_arg_i64 rows ) )
     ( vec_push [i] a ( gpu_arg_i64 d ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_scalecols` ( gk_grid * rows d 256 ) 256 a )
-    ( vec_free [i] a )
     ^ r
 }
 
@@ -744,6 +725,5 @@ i dorope i stride i coff → b {
     : ( Vec i ) ar ( __f5k_a3 srcd dstd ( gpu_arg_i64 n ) )
     ( vec_push [i] ar ( gpu_arg_i64 copies ) )
     : b r ( gk_run_dev kit ( __f5k_misc ) `f5_dup` ( gk_grid * n copies 256 ) 256 ar )
-    ( vec_free [i] ar )
     ^ r
 }

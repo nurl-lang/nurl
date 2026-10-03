@@ -41,6 +41,7 @@ $ `sample.nu`
 $ `text.nu`
 $ `vocos.nu`
 $ `verify.nu`
+$ `stdlib/core/rcbox.nu`
 
 : i F5_SR 24000
 
@@ -54,7 +55,7 @@ $ `verify.nu`
 
 // A voice: the reference recording, already at 24 kHz mono and loudness
 // normalised, plus its mel and its transcript.
-: F5Voice {
+: F5VoiceImpl {
     ( Vec f ) mel  // frames × 100
     i frames
     i samples  // of the normalised recording, which sets ref_audio_len
@@ -63,16 +64,29 @@ $ `verify.nu`
     String text
 }
 
-@ f5_voice_target * F5Voice v → f { ^ . v target }
+// An F5Voice is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same voice, and the last owner releases it.
+: F5Voice { s ctl }
 
-@ f5_voice_free * F5Voice v → v {
-    ( vec_free [f] . v mel )
-    ( string_free . v text )
-    ( nurl_free # s v )
+@ F5Voice_share F5Voice h → F5Voice { ^ @ F5Voice { # s ( rcbox_share # i . h ctl ) } }
+
+@ F5Voice_drop sink F5Voice h → v {
+    ( mem_forget h )
+    ( rcbox_release [F5VoiceImpl] # i . h ctl )
 }
 
-@ __f5r_err s msg → !*F5Voice String {
-    ^ @ !*F5Voice String { F ( string_from msg ) }
+@ __F5Voice_ptr F5Voice h → *F5VoiceImpl { ^ ( rcbox_ptr [F5VoiceImpl] # i . h ctl ) }
+
+@ f5_voice_target F5Voice v__h → f {
+    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+    ^ . v target
+}
+
+// Early release (optional): the last owner of a voice releases it.
+@ f5_voice_free sink F5Voice v → v {}
+
+@ __f5r_err s msg → !F5Voice String {
+    ^ @ !F5Voice String { F ( string_from msg ) }
 }
 
 // F5-TTS insists the reference transcript ends in a sentence break — without
@@ -86,18 +100,15 @@ $ `verify.nu`
     ^ out
 }
 
-@ f5_voice_load s wav_path s ref_text f target_rms → !*F5Voice String {
+@ f5_voice_load s wav_path s ref_text f target_rms → !F5Voice String {
     ?? ( wav_read wav_path ) {
         T w → {
             : ( Vec f ) raw ( wav_mono w )
             // the silence split happens at the FILE's own rate, before the
             // resample, exactly where preprocess_ref_audio_text does it
             : ( Vec f ) mono ( f5_prepare_reference raw . w rate )
-            ( vec_free [f] raw )
             : i src_n ( vec_len [f] mono )
             ? > src_n 0 {} {
-                ( vec_free [f] mono )
-                ( wav_free w )
                 ^ ( __f5r_err `f5tts: the reference recording is silent` )
             }
             // the loudness is measured before the resample, as the reference does
@@ -114,34 +125,21 @@ $ `verify.nu`
                 ~ < k0 src_n { ( vec_set [f] mono k0 * g0 ( __f5r_get mono k0 ) ) = k0 + k0 1 }
             } {}
             : ( Vec f ) at24 ( resample mono . w rate F5_SR )
-            ( vec_free [f] mono )
-            ( wav_free w )
             : i n ( vec_len [f] at24 )
-            ? > n 0 {} { ( vec_free [f] at24 ) ^ ( __f5r_err `f5tts: the reference recording is empty` ) }
+            ? > n 0 {} { ^ ( __f5r_err `f5tts: the reference recording is empty` ) }
             : f rms rms0
             : ( Vec f ) mel ( log_mel_vocos at24 1024 F5_HOP 100 F5_SR )
-            ( vec_free [f] at24 )
-            // nurl_alloc does NOT zero, so every field is set here — a field
-            // left out is not zero, it is whatever the heap last held, and
-            // `target` in particular is DIVIDED BY: a stale huge value scales
-            // the finished waveform to 1e-225 and the voice goes silent with
-            // nothing else looking wrong.
-            : *F5Voice v # *F5Voice ( nurl_alloc Z F5Voice )
-            = . v mel mel
-            = . v frames / ( vec_len [f] mel ) 100
-            = . v samples n
-            = . v rms rms
-            = . v target target_rms
-            = . v text ( f5_fix_ref_text ref_text )
-            ^ @ !*F5Voice String { T v }
+            : i frames / ( vec_len [f] mel ) 100
+            ^ @ !F5Voice String { T @ F5Voice { # s ( rcbox_new [F5VoiceImpl] @ F5VoiceImpl {
+                        mel frames n rms target_rms ( f5_fix_ref_text ref_text ) } ) } }
         }
-        F e → { ^ @ !*F5Voice String { F e } }
+        F e → { ^ @ !F5Voice String { F e } }
     }
 }
 
 // The voice directory the deployed service uses: config.json holds the
 // transcript, reference.wav the recording.
-@ f5_voice_open_dir s dir f target_rms → !*F5Voice String {
+@ f5_voice_open_dir s dir f target_rms → !F5Voice String {
     : String cfg ( string_from dir )
     ( string_push_str cfg `/config.json` )
     : String wavp ( string_from dir )
@@ -157,18 +155,13 @@ $ `verify.nu`
                         }
                         F → {}
                     }
-                    ( json_free root )
                 }
                 F _e → {}
             }
-            ( string_free js )
         }
         F _e → {}
     }
-    ( string_free cfg )
-    : !*F5Voice String r ( f5_voice_load ( string_data wavp ) ( string_data txt ) target_rms )
-    ( string_free wavp )
-    ( string_free txt )
+    : !F5Voice String r ( f5_voice_load ( string_data wavp ) ( string_data txt ) target_rms )
     ^ r
 }
 
@@ -176,7 +169,8 @@ $ `verify.nu`
 //
 // How much text fits beside a reference of this length inside the 22-second
 // window the model was trained on, at the reference's own speaking rate.
-@ f5_max_chars * F5Voice v f speed → i {
+@ f5_max_chars F5Voice v__h f speed → i {
+    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
     : f secs / # f . v samples # f F5_SR
     : i rb ( nurl_str_len ( string_data . v text ) )
     : f room - 22.0 secs
@@ -205,7 +199,8 @@ $ `verify.nu`
 
 : i F5_SHORT_TAPER_END 120
 
-@ f5_duration * F5Voice v s gen_text i n_text f speed → i {
+@ f5_duration F5Voice v__h s gen_text i n_text f speed → i {
+    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
     : i gen_bytes ( nurl_str_len gen_text )
     : ~ f local speed
     ? g_f5r_shortfix {} {
@@ -243,36 +238,35 @@ $ `verify.nu`
     ^ d
 }
 
-@ f5_ref_audio_len * F5Voice v → i { ^ / . v samples F5_HOP }
+@ f5_ref_audio_len F5Voice v__h → i {
+    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+    ^ / . v samples F5_HOP
+}
 
 // ── one chunk ───────────────────────────────────────────────────────
 
-@ __f5r_synth_once * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+@ __f5r_synth_once F5Model m Vocos vc F5Voice vh F5Vocab vocab s gen_text
 i steps f cfg f sway f speed i seed ( Vec f ) out → b {
+    : *F5VoiceImpl v ( __F5Voice_ptr vh )
     : ( Vec i ) ids ( vec_new [i] )
     : String full ( string_clone . v text )
     ( string_push_str full gen_text )
     ( f5_text_ids vocab ( string_data full ) ids )
-    ( string_free full )
-    : i duration ( f5_duration v gen_text ( vec_len [i] ids ) speed )
+    : i duration ( f5_duration vh gen_text ( vec_len [i] ids ) speed )
     : ( Vec f ) noise ( f5_noise duration 100 seed )
     : ( Vec f ) y ( vec_new [f] )
     : b ok ( f5_sample m ids duration . v mel steps cfg sway noise y )
-    ( vec_free [f] noise )
-    ( vec_free [i] ids )
-    ? ok {} { ( vec_free [f] y ) ^ F }
+    ? ok {} { ^ F }
     // the conditioned frames go back over the trajectory before the cut
     : i cf * . v frames 100
     : ~ i k 0
     ~ < k cf { ( vec_set [f] y k ( __f5r_get . v mel k ) ) = k + k 1 }
-    : i ral ( f5_ref_audio_len v )
+    : i ral ( f5_ref_audio_len vh )
     : i gen_frames - duration ral
     : ( Vec f ) gmel ( vec_with_cap [f] * gen_frames 100 )
     = k 0
     ~ < k * gen_frames 100 { ( vec_push [f] gmel ( __f5r_get y + * ral 100 k ) ) = k + k 1 }
-    ( vec_free [f] y )
     : b vok ( voc_decode vc gmel gen_frames out )
-    ( vec_free [f] gmel )
     ? vok {} { ^ F }
     // and the loudness the caller's own recording had
     ? < . v rms . v target {
@@ -359,10 +353,8 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
         : String heard ( f5_transcribe wave )
         ? > ( string_len heard ) 0 {
             : i e ( f5_errors gen_text ( string_data heard ) )
-            ( string_free heard )
             ^ e
         } {}
-        ( string_free heard )
         = t + t 1
         ? < t F5_LISTEN_TRIES { ( sleep_ms * 500 t ) } {}
     }
@@ -379,7 +371,7 @@ i steps f cfg f sway f speed i seed ( Vec f ) out → b {
     }
 }
 
-@ f5_synth_chunk * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+@ f5_synth_chunk F5Model m Vocos vc F5Voice v F5Vocab vocab s gen_text
 i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out ( Vec i ) score → b {
     : ~ b ok ( __f5r_synth_once m vc v vocab gen_text steps cfg sway speed seed out )
     ? ok {} { ^ F }
@@ -406,7 +398,6 @@ i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out ( Vec i ) 
         } {}
         = att + att 1
     }
-    ( vec_free [f] try )
     ? > # f best allowed {
         : String msg ( string_from `f5tts: kept the best of ` )
         ( string_push_int msg att )
@@ -417,7 +408,6 @@ i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out ( Vec i ) 
         ( string_push_str msg ` words wrong: ` )
         ( string_push_str msg gen_text )
         ( nurl_eprintln ( string_data msg ) )
-        ( string_free msg )
     } {}
     ( __f5r_score_add score best nw att )
     ^ T
@@ -453,11 +443,10 @@ i steps f cfg f sway f speed i seed i retries f max_wer ( Vec f ) out ( Vec i ) 
     ~ < k nb { ( vec_push [f] acc ( __f5r_get next k ) ) = k + k 1 }
 }
 
-@ f5_synth * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+@ f5_synth F5Model m Vocos vc F5Voice v F5Vocab vocab s gen_text
 i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
     : ( Vec i ) score ( f5_score_new )
     : b ok ( f5_synth_scored m vc v vocab gen_text steps cfg sway speed fade_s seed 0 1.0 out score )
-    ( vec_free [i] score )
     ^ ok
 }
 
@@ -483,7 +472,6 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
                 ? >= e n { ^ 0 } {}
                 : String head ( string_from ( nurl_str_slice text 0 + k 1 ) )
                 : i wc ( f5_word_count ( string_data head ) )
-                ( string_free head )
                 ^ ? <= wc F5_LEAD_WORDS e 0
             } {}
         } {}
@@ -492,7 +480,7 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
     ^ 0
 }
 
-@ __f5r_chunks * F5Voice v s gen_text f speed → ( Vec String ) {
+@ __f5r_chunks F5Voice v s gen_text f speed → ( Vec String ) {
     : i mc ( f5_max_chars v speed )
     : ( Vec String ) chunks ( f5_chunk_text gen_text mc )
     ? g_f5r_shortfix {} { ^ chunks }
@@ -516,7 +504,7 @@ i steps f cfg f sway f speed f fade_s i seed ( Vec f ) out → b {
 // The utterance, chunk by chunk, each through the gate: `retries` more
 // attempts for a chunk whose word error rate is over `max_wer`, and the
 // score of what was kept added to `score`.
-@ f5_synth_scored * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s gen_text
+@ f5_synth_scored F5Model m Vocos vc F5Voice v F5Vocab vocab s gen_text
 i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out ( Vec i ) score → b {
     : ( Vec String ) chunks ( __f5r_chunks v gen_text speed )
     : i nc ( vec_len [String] chunks )
@@ -530,14 +518,11 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
                 = ok & ok ( f5_synth_chunk m vc v vocab ( string_data c ) steps cfg sway speed
                 + seed k retries max_wer piece score )
                 ? ok { ( f5_crossfade out piece fade ) } {}
-                ( vec_free [f] piece )
             }
             F → {}
         }
         = k + k 1
     }
-    : ( @ v String ) drop_c \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] chunks drop_c )
     ^ ok
 }
 
@@ -608,7 +593,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
         ? <= ( __f5r_rms x a b ) thresh { ( vec_push [i] starts last ) } {}
     } {}
     : i ns ( vec_len [i] starts )
-    ? == ns 0 { ( vec_free [i] starts ) ^ out } {}
+    ? == ns 0 { ^ out } {}
     : ~ i prev ( _f5t_geti starts 0 )
     : ~ i cur prev
     : ~ i k 1
@@ -626,7 +611,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
     }
     ( vec_push [i] out cur )
     ( vec_push [i] out + prev min_ms )
-    ( vec_free [i] starts )
     ^ out
 }
 
@@ -652,7 +636,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
         }
         ? < prev seg_ms { ( vec_push [i] ns prev ) ( vec_push [i] ns seg_ms ) } {}
     }
-    ( vec_free [i] sil )
     // widen by keep_silence, then split any overlap down the middle
     : i nn ( vec_len [i] ns )
     : ~ i k 0
@@ -701,27 +684,23 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
     ? > ( vec_len [f] kept ) ms12 {
         // the long-silence pass did not find a cut: try short pauses
         : ( Vec f ) second ( __f5r_take_segments x rate 100 -40.0 1000 10 )
-        ( vec_free [f] first )
         = kept second
     } {}
     ? > ( vec_len [f] kept ) ms12 {
         : ( Vec f ) cut ( vec_with_cap [f] ms12 )
         : ~ i k 0
         ~ < k ms12 { ( vec_push [f] cut ( __f5r_get kept k ) ) = k + k 1 }
-        ( vec_free [f] kept )
         = kept cut
     } {}
     ? == 0 ( vec_len [f] kept ) {
         // nothing survived: the recording is all silence by these thresholds,
         // and its own samples are a better reference than none
-        ( vec_free [f] kept )
         : ( Vec f ) all ( vec_with_cap [f] ( vec_len [f] x ) )
         : ~ i k 0
         ~ < k ( vec_len [f] x ) { ( vec_push [f] all ( __f5r_get x k ) ) = k + k 1 }
         = kept all
     } {}
     : ( Vec f ) trimmed ( __f5r_trim_edges kept rate )
-    ( vec_free [f] kept )
     // fifty milliseconds of quiet, so the model does not start mid-breath
     : i pad ( __f5r_ms2s 50 rate )
     : ~ i k 0
@@ -751,7 +730,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
             = k + k 2
         }
     }
-    ( vec_free [i] ns )
     ^ out
 }
 
@@ -783,18 +761,14 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
                                     ? > ( string_len sub ) 0 {
                                         ( string_push_str found ( string_data sub ) )
                                     } {}
-                                    ( string_free sub )
                                 } {}
                             }
-                            ( string_free p )
                         } {}
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
-            ( vec_free_with [String] names drop_s )
         }
         F _e → {}
     }
@@ -806,19 +780,16 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
     ? ( file_exists arg ) {
         : String d ( __f5r_find_ext arg ext 2 )
         ? > ( string_len d ) 0 { ^ d } {}
-        ( string_free d )
         ^ ( string_from arg )
     } {}
     ?? ( hub_get arg ) {
         T p → {
             : String d ( __f5r_find_ext ( string_data p ) ext 2 )
-            ? > ( string_len d ) 0 { ( string_free p ) ^ d } {}
-            ( string_free d )
+            ? > ( string_len d ) 0 { ^ d } {}
             ^ p
         }
         F e → {
             ( nurl_eprintln ( string_data e ) )
-            ( string_free e )
             ^ ( string_new )
         }
     }
@@ -829,10 +800,8 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
     ? != 0 ( nurl_str_len arg ) { ^ ( f5_resolve_file arg `.txt` ) } {}
     : String dir ( path_dirname model_path )
     : String p ( string_from ( string_data dir ) )
-    ( string_free dir )
     ( string_push_str p `/vocab.txt` )
     ? ( file_exists ( string_data p ) ) { ^ p } {}
-    ( string_free p )
     ^ ( string_new )
 }
 
@@ -881,8 +850,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
                 ~ & < e n ( __f5r_is_ws ( nurl_str_get text e ) ) { = e + e 1 }
                 : String piece ( string_from ( nurl_str_slice text start - + k 1 start ) )
                 : String tp ( string_trim piece )
-                ? > ( string_len tp ) 0 { ( vec_push [String] raw tp ) } { ( string_free tp ) }
-                ( string_free piece )
+                ? > ( string_len tp ) 0 { ( vec_push [String] raw tp ) } {}
                 = start e
                 = k e
             } { = k + k 1 }
@@ -891,8 +859,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
     ? < start n {
         : String piece ( string_from ( nurl_str_slice text start - n start ) )
         : String tp ( string_trim piece )
-        ? > ( string_len tp ) 0 { ( vec_push [String] raw tp ) } { ( string_free tp ) }
-        ( string_free piece )
+        ? > ( string_len tp ) 0 { ( vec_push [String] raw tp ) } {}
     } {}
     : ( Vec String ) merged ( vec_new [String] )
     : String buf ( string_new )
@@ -926,9 +893,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
             }
         } { ( vec_push [String] merged ( string_clone buf ) ) }
     } {}
-    ( string_free buf )
-    : ( @ v String ) drop_r \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] raw drop_r )
     ^ merged
 }
 
@@ -964,7 +928,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
         ? & == 46 ( nurl_str_get ( string_data t ) - n 1 )
         == 46 ( nurl_str_get ( string_data t ) - n 2 ) { = ms 400 } {}
     } {}
-    ( string_free t )
     ^ ms
 }
 
@@ -982,7 +945,7 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
 // whole is still over `max_wer` after at least `splitfail` attempts, it is
 // generated again a sentence at a time, each sentence through the gate, and
 // whichever of the two came out with fewer errors is kept. Zero turns it off.
-@ __f5r_synth_sentences * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab ( Vec String ) sents
+@ __f5r_synth_sentences F5Model m Vocos vc F5Voice v F5Vocab vocab ( Vec String ) sents
 i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out ( Vec i ) score → b {
     : i ns ( vec_len [String] sents )
     : ~ b ok T
@@ -1001,7 +964,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
                     }
                     ? < k - ns 1 { ( f5_append_silence out 60 ) } {}
                 } {}
-                ( vec_free [f] piece )
             }
             F → {}
         }
@@ -1010,10 +972,10 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer ( Vec f ) out (
     ^ ok
 }
 
-@ f5_synth_line * F5Model m * Vocos vc * F5Voice v * F5Vocab vocab s text
+@ f5_synth_line F5Model m Vocos vc F5Voice v F5Vocab vocab s text
 i steps f cfg f sway f speed f fade_s i seed i retries f max_wer i splitfail ( Vec f ) out ( Vec i ) score → b {
     : String clean ( f5_strip_brackets text )
-    ? > ( string_len clean ) 0 {} { ( string_free clean ) ^ T }
+    ? > ( string_len clean ) 0 {} { ^ T }
     : ( Vec String ) sents ( f5_split_sentences ( string_data clean ) )
     : i ns ( vec_len [String] sents )
     : ~ b ok T
@@ -1044,7 +1006,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer i splitfail ( V
             ( string_push_int msg ( f5_score_errs s1 ) )
             ( string_push_str msg ? better `, kept the sentences` `, kept the whole line` )
             ( nurl_eprintln ( string_data msg ) )
-            ( string_free msg )
             ? better {
                 ( __f5r_copy whole split )
                 ( vec_set [i] s1 0 ( f5_score_errs s2 ) )
@@ -1052,8 +1013,6 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer i splitfail ( V
                 ( vec_set [i] s1 2 ( f5_score_attempts s2 ) )
                 ( vec_set [i] s1 3 ( f5_score_unheard s2 ) )
             } {}
-            ( vec_free [f] split )
-            ( vec_free [i] s2 )
         } {}
         : ~ i j 0
         ~ < j ( vec_len [f] whole ) {
@@ -1061,14 +1020,12 @@ i steps f cfg f sway f speed f fade_s i seed i retries f max_wer i splitfail ( V
             = j + j 1
         }
         ( f5_score_merge score s1 )
-        ( vec_free [f] whole )
-        ( vec_free [i] s1 )
     }
     ( f5_append_silence out ( f5_trailing_pause_ms ( string_data clean ) ) )
-    : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
-    ( vec_free_with [String] sents drop_s )
-    ( string_free clean )
     ^ ok
 }
 
-@ f5_voice_rms * F5Voice v → f { ^ . v rms }
+@ f5_voice_rms F5Voice v__h → f {
+    : *F5VoiceImpl v ( __F5Voice_ptr v__h )
+    ^ . v rms
+}

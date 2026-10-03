@@ -18,10 +18,8 @@
 //   Linear 196→1 → exp, clipped to ≥ 1e-8.
 //
 //   ( ph_load w kit )                     → PoseH
-//   ( ph_free p )                         → v
 //   ( ph_forward kit p fin voff np out )  → b   out: host *f, 7 values
 //   ( sh_load w kit )                     → ScaleH
-//   ( sh_free s )                         → v
 //   ( sh_forward kit s fin row )          → f   the metric scale, ≤0 on error
 
 $ `stdlib/core/string.nu`
@@ -39,7 +37,7 @@ $ `src/load.nu`
 
 : PhLin { GkBuf w GkBuf b }
 
-@ __ph_lin * Lw lw GpuKit kit s name i rows i cols → PhLin {
+@ __ph_lin Lw lw GpuKit kit s name i rows i cols → PhLin {
     : String nw ( string_from name )
     ( string_push_str nw `.weight` )
     : String nb ( string_from name )
@@ -47,12 +45,8 @@ $ `src/load.nu`
     : PhLin l @ PhLin {
         ( maw_upload_t lw kit ( string_data nw ) rows cols )
         ( maw_upload lw kit ( string_data nb ) ) }
-    ( string_free nw )
-    ( string_free nb )
     ^ l
 }
-
-@ __ph_lin_free sink PhLin l → v { ( gk_dbuf_free . l w ) ( gk_dbuf_free . l b ) }
 
 // y[m, n] = x[m, k] · w + b, the shape every layer here is.
 @ __ph_gemm GpuKit kit GkBuf y GkBuf x PhLin l i m i n i k → b {
@@ -68,7 +62,7 @@ $ `src/load.nu`
     PhLin fcr
 }
 
-@ ph_load * Lw lw GpuKit kit → PoseH {
+@ ph_load Lw lw GpuKit kit → PoseH {
     : ( Vec PhLin ) rs ( vec_new [PhLin] )
     : ~ i bi 0
     ~ < bi 2 {
@@ -79,7 +73,6 @@ $ `src/load.nu`
             ( string_push_str nm `.res_conv` )
             ( string_push_int nm ci )
             ( vec_push [PhLin] rs ( __ph_lin lw kit ( string_data nm ) PH_HID PH_HID ) )
-            ( string_free nm )
             = ci + ci 1
         }
         = bi + bi 1
@@ -91,15 +84,6 @@ $ `src/load.nu`
         ( __ph_lin lw kit `pose_head.more_mlps.2` PH_HID PH_HID )
         ( __ph_lin lw kit `pose_head.fc_t` 3 PH_HID )
         ( __ph_lin lw kit `pose_head.fc_rot` 4 PH_HID ) }
-}
-
-@ ph_free sink PoseH p → v {
-    ( __ph_lin_free . p proj )
-    ( vec_free_with [PhLin] . p res \ PhLin l → v { ( __ph_lin_free l ) } )
-    ( __ph_lin_free . p mlp0 )
-    ( __ph_lin_free . p mlp2 )
-    ( __ph_lin_free . p fct )
-    ( __ph_lin_free . p fcr )
 }
 
 // One view's pose from the final features. `out` receives 7 host
@@ -134,7 +118,6 @@ $ `src/load.nu`
         ? & ok ( gkd_add kit a a src ) {} { = ok F }
         = bi + bi 1
     }
-    ( gk_dbuf_free t2 )
     // mean over tokens: ones(1/np) · a
     : GkBuf onesb ( gk_dbuf_new kit np GK_F32 )
     : ( Vec f ) ones ( vec_with_cap [f] np )
@@ -143,12 +126,9 @@ $ `src/load.nu`
     : ~ i j 0
     ~ < j np { = . op j / 1.0 # f np = j + j 1 }
     ? & ok ( gk_dbuf_upload kit onesb ones ) {} { = ok F }
-    ( vec_free [f] ones )
     : GkBuf pooled ( gk_dbuf_new kit PH_HID GK_F32 )
     : GkBuf nob ( gk_buf_none GK_F32 )
     ? & ok ( gkd_gemm kit pooled onesb a nob 0 1 PH_HID np 1.0 0.0 0 ) {} { = ok F }
-    ( gk_dbuf_free onesb )
-    ( gk_dbuf_free a )
     // more_mlps
     : GkBuf m1 ( ma_view t1 0 PH_HID )
     ? & ok ( __ph_gemm kit m1 pooled . p mlp0 1 PH_HID PH_HID ) {} { = ok F }
@@ -160,12 +140,10 @@ $ `src/load.nu`
     : GkBuf rr ( ma_view t1 4 4 )
     ? & ok ( __ph_gemm kit tt pooled . p fct 1 3 PH_HID ) {} { = ok F }
     ? & ok ( __ph_gemm kit rr pooled . p fcr 1 4 PH_HID ) {} { = ok F }
-    ( gk_dbuf_free pooled )
     : ( Vec f ) hv ( vec_with_cap [f] 8 )
     : b _hl ( vec_set_len [f] hv 8 )
     ? & ok ( gk_dbuf_download kit ( ma_view t1 0 8 ) hv ) {} { = ok F }
-    ( gk_dbuf_free t1 )
-    ? ok {} { ( vec_free [f] hv ) ^ F }
+    ? ok {} { ^ F }
     : *f hp ( vec_data [f] hv )
     = . out 0 . hp 0
     = . out 1 . hp 1
@@ -180,7 +158,6 @@ $ `src/load.nu`
     = . out 4 / q1 n
     = . out 5 / q2 n
     = . out 6 / q3 n
-    ( vec_free [f] hv )
     ^ T
 }
 
@@ -195,19 +172,12 @@ $ `src/load.nu`
     PhLin outp
 }
 
-@ sh_load * Lw lw GpuKit kit → ScaleH {
+@ sh_load Lw lw GpuKit kit → ScaleH {
     ^ @ ScaleH {
         ( __ph_lin lw kit `scale_head.proj` SH_HID PH_DIM )
         ( __ph_lin lw kit `scale_head.mlp.0.0` SH_HID SH_HID )
         ( __ph_lin lw kit `scale_head.mlp.1.0` SH_HID SH_HID )
         ( __ph_lin lw kit `scale_head.output_proj` 1 SH_HID ) }
-}
-
-@ sh_free sink ScaleH s → v {
-    ( __ph_lin_free . s proj )
-    ( __ph_lin_free . s m0 )
-    ( __ph_lin_free . s m1 )
-    ( __ph_lin_free . s outp )
 }
 
 // The metric scale from the final scale-token feature (row `row` of the
@@ -226,11 +196,8 @@ $ `src/load.nu`
     : ( Vec f ) hv ( vec_with_cap [f] 1 )
     : b _hl ( vec_set_len [f] hv 1 )
     ? & ok ( gk_dbuf_download kit ( ma_view h2 0 1 ) hv ) {} { = ok F }
-    ( gk_dbuf_free h1 )
-    ( gk_dbuf_free h2 )
-    ? ok {} { ( vec_free [f] hv ) ^ -1.0 }
+    ? ok {} { ^ -1.0 }
     : f x ?? ( vec_get [f] hv 0 ) { T v → v F → 0.0 }
-    ( vec_free [f] hv )
     : f e ( float_exp x )
     ^ ? < e 0.00000001 0.00000001 e
 }

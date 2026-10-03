@@ -26,7 +26,6 @@ $ `src/dpthead.nu`
     : ~ i j 0
     ~ < j n { = . p j * 0.5 ( float_sin + phase * 0.037 # f j ) = j + j 1 }
     : b _u ( gk_dbuf_upload kit b h )
-    ( vec_free [f] h )
     ^ b
 }
 
@@ -40,7 +39,6 @@ $ `src/dpthead.nu`
     : ~ i j 0
     ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) ) = j + j 1 }
     ( nurl_print `\n` )
-    ( vec_free [f] h )
 }
 
 @ mkconv GpuKit kit i cout i cin i k f phase → DpConv {

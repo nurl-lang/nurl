@@ -25,19 +25,19 @@ $ `image.nu`
 
 @ __TIOCGWINSZ → i { ^ 21523 }  // 0x5413; struct winsize { u16 row, col, xpx, ypx }
 
+: WinSz { i rows i cols }
+
 // Terminal (rows, cols) from ioctl on stdout; sensible fallback off a tty.
-@ __winsize * i rowcell → i {  // returns cols, writes rows via cell
-    : *u ws ( nurl_alloc 8 )
-    ( nurl_poke_i32 ws 0 0 ) ( nurl_poke_i32 ws 1 0 )
+@ __winsize → WinSz {
+    : ( Vec u ) wsv ( vec_zeroed [u] 8 )
+    : *u ws ( vec_data [u] wsv )
     : i r ( ioctl # i32 1 ( __TIOCGWINSZ ) ws )
     : i v ( nurl_peek_i32 ws 0 )  // [row:16][col:16] little-endian
-    ( nurl_free ws )
     : ~ i rows & v 65535
     : ~ i cols & >> v 16 65535
     ? | < r 0 == rows 0 { = rows 24 } {}
     ? == cols 0 { = cols 80 } {}
-    ( nurl_poke # *u rowcell 0 rows )
-    ^ cols
+    ^ @ WinSz { rows cols }
 }
 
 // Push the decimal digits of n (0..255) onto a String.
@@ -77,24 +77,23 @@ $ `image.nu`
     : String s ( string_with_cap 16 )
     ( string_push_char s 27 ) ( string_push_str s `[2J` )  // clear
     ( string_push_char s 27 ) ( string_push_str s `[?25l` )  // hide cursor
-    ( nurl_print ( string_data s ) ) ( string_free s )
+    ( nurl_print ( string_data s ) )
 }
 // Show the cursor again (call when the live loop ends).
 @ term_leave → v {
     : String s ( string_with_cap 16 )
     ( string_push_char s 27 ) ( string_push_str s `[?25h` )
     ( string_push_char s 27 ) ( string_push_str s `[0m` )
-    ( nurl_print ( string_data s ) ) ( string_free s )
+    ( nurl_print ( string_data s ) )
 }
 
 // Render `im` to the terminal as truecolor half-blocks, scaled to fit.
 @ img_show Image im → v {
     : i W ( img_w im )
     : i H ( img_h im )
-    : *i rc # *i ( nurl_alloc 8 )
-    : i cols ( __winsize rc )
-    : i rows ( nurl_peek # *u rc 0 )
-    ( nurl_free # *u rc )
+    : WinSz wsz ( __winsize )
+    : i cols . wsz cols
+    : i rows . wsz rows
 
     // Use the FULL terminal width (each cell = 1 px wide × 2 px tall), then
     // pick the row count that preserves aspect, capped to the window height.
@@ -111,8 +110,11 @@ $ `image.nu`
     ? < out_rows 1 { = out_rows 1 } {}
     : i out_h_px * 2 out_rows
 
-    : *u tcell ( nurl_alloc 16 )
-    : *u bcell ( nurl_alloc 16 )
+    // one averaged pixel each (R, G, B as i32 slots), reused for every cell
+    : ( Vec u ) tcv ( vec_zeroed [u] 16 )
+    : ( Vec u ) bcv ( vec_zeroed [u] 16 )
+    : *u tcell ( vec_data [u] tcv )
+    : *u bcell ( vec_data [u] bcv )
     : String s ( string_with_cap + 64 * * out_w out_rows 44 )
     ( string_push_char s 27 ) ( string_push_str s `[H` )  // cursor home
     : ~ i ry 0
@@ -144,6 +146,4 @@ $ `image.nu`
         = ry + ry 1
     }
     ( nurl_print ( string_data s ) )
-    ( string_free s )
-    ( nurl_free tcell ) ( nurl_free bcell )
 }

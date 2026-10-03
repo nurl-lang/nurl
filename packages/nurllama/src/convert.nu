@@ -101,7 +101,6 @@ $ `deps/safetensor/src/safetensor.nu`
         ( string_push_str m detail )
     } {}
     ( nurl_eprintln ( string_data m ) )
-    ( string_free m )
 }
 
 // path join: dir + "/" + name
@@ -131,16 +130,13 @@ $ `deps/safetensor/src/safetensor.nu`
                 F e → {
                     : String em ( json_format_error e )
                     ( __cv_errmsg ( string_data p ) ( string_data em ) )
-                    ( string_free em )
                 }
             }
-            ( string_free txt )
         }
         F _ → {
             ( __cv_errmsg `cannot read` ( string_data p ) )
         }
     }
-    ( string_free p )
     ? got { ^ @ ?Json { T out } } {}
     ^ @ ?Json { F }
 }
@@ -175,7 +171,7 @@ $ `deps/safetensor/src/safetensor.nu`
 
 // Find tensor `name` across the shards: returns shard*65536 + tensor
 // index packed, or -1.
-@ __cv_find * Cv c s name → i {
+@ __cv_find Cv c s name → i {
     : ~ i k 0
     ~ < k ( vec_len [St] . c sts ) {
         ?? ( vec_get [St] . c sts k ) {
@@ -191,7 +187,7 @@ $ `deps/safetensor/src/safetensor.nu`
 }
 
 // Element count of an HF tensor (0 when absent).
-@ __cv_src_nelems * Cv c s name → i {
+@ __cv_src_nelems Cv c s name → i {
     : i h ( __cv_find c name )
     ? < h 0 { ^ 0 } {}
     : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
@@ -208,7 +204,6 @@ $ `deps/safetensor/src/safetensor.nu`
         ?? ( gq_q8_0_encode f32le ) {
             T enc → {
                 : !v String r ( gws_data sw enc )
-                ( vec_free [u] enc )
                 ^ r
             }
             F e → { ^ @ !v String { F e } }
@@ -218,7 +213,6 @@ $ `deps/safetensor/src/safetensor.nu`
         ?? ( gq_f16_encode f32le ) {
             T enc → {
                 : !v String r ( gws_data sw enc )
-                ( vec_free [u] enc )
                 ^ r
             }
             F e → { ^ @ !v String { F e } }
@@ -228,7 +222,6 @@ $ `deps/safetensor/src/safetensor.nu`
         ?? ( gq_bf16_encode f32le ) {
             T enc → {
                 : !v String r ( gws_data sw enc )
-                ( vec_free [u] enc )
                 ^ r
             }
             F e → { ^ @ !v String { F e } }
@@ -241,7 +234,7 @@ $ `deps/safetensor/src/safetensor.nu`
 // chunks of whole rows) into the writer as type `gt`. `row` is the
 // GGUF ne0 — chunk boundaries must land on row boundaries so the
 // quantiser sees whole blocks.
-@ __cv_stream_src * Cv c GgufS sw i gt s hfname i row → !v String {
+@ __cv_stream_src Cv c GgufS sw i gt s hfname i row → !v String {
     : i h ( __cv_find c hfname )
     ? < h 0 {
         : String m ( string_from `nurllama convert: checkpoint has no tensor ` )
@@ -263,7 +256,6 @@ $ `deps/safetensor/src/safetensor.nu`
         ?? ( st_dequant_range st ti off take ) {
             T raw → {
                 : !v String r ( __cv_emit sw gt raw )
-                ( vec_free [u] raw )
                 ?? r {
                     T _ → {}
                     F e → { ^ @ !v String { F e } }
@@ -279,7 +271,7 @@ $ `deps/safetensor/src/safetensor.nu`
 // Stream a fused 3D experts tensor: 256 per-expert HF tensors, in
 // expert order, each dequantised and encoded whole (an expert is a
 // few MB).
-@ __cv_stream_experts * Cv c GgufS sw i gt i layer s proj → !v String {
+@ __cv_stream_experts Cv c GgufS sw i gt i layer s proj → !v String {
     : ~ i e 0
     ~ < e . c n_expert {
         : String nm ( string_from `model.layers.` )
@@ -293,10 +285,8 @@ $ `deps/safetensor/src/safetensor.nu`
         ? < h 0 {
             : String m ( string_from `nurllama convert: checkpoint has no tensor ` )
             ( string_push_str m ( string_data nm ) )
-            ( string_free nm )
             ^ @ !v String { F m }
         } {}
-        ( string_free nm )
         : St st ?? ( vec_get [St] . c sts / h 65536 ) { T a → a F → ( st_none ) }
         : i ti % h 65536
         : ~ i ne 0
@@ -304,7 +294,6 @@ $ `deps/safetensor/src/safetensor.nu`
         ?? ( st_dequant_range st ti 0 ne ) {
             T raw → {
                 : !v String r ( __cv_emit sw gt raw )
-                ( vec_free [u] raw )
                 ?? r {
                     T _ → {}
                     F e → { ^ @ !v String { F e } }
@@ -348,12 +337,10 @@ $ `deps/safetensor/src/safetensor.nu`
     : String nm ( __cv_blk layer suffix )
     : String src ( __cv_hf layer hfsuffix )
     ( __cv_job jobs ( string_data nm ) gt nd d0 d1 d2 ( string_data src ) )
-    ( string_free nm )
-    ( string_free src )
 }
 
 // The full llada2 tensor plan, in declaration = stream order.
-@ __cv_build_jobs * Cv c i wt → CvJobs {
+@ __cv_build_jobs Cv c i wt → CvJobs {
     : CvJobs jobs @ CvJobs {
         ( vec_new [String] )
         ( vec_new [i] )
@@ -401,10 +388,6 @@ $ `deps/safetensor/src/safetensor.nu`
             ( __cv_replace_src jobs - nj 3 mg )
             ( __cv_replace_src jobs - nj 2 md )
             ( __cv_replace_src jobs - nj 1 mu )
-            ( string_free mk )
-            ( string_free g )
-            ( string_free d )
-            ( string_free u2 )
             : i shf * . c n_shared . c moe_ff
             ( __cv_job_blk jobs L `ffn_gate_shexp.weight` wt 2 ne shf 1 `mlp.shared_experts.gate_proj.weight` )
             ( __cv_job_blk jobs L `ffn_down_shexp.weight` wt 2 shf ne 1 `mlp.shared_experts.down_proj.weight` )
@@ -419,21 +402,7 @@ $ `deps/safetensor/src/safetensor.nu`
 
 // Replace srcs[idx] with `m` (takes ownership of m).
 @ __cv_replace_src CvJobs jobs i idx String m → v {
-    ?? ( vec_get [String] . jobs srcs idx ) {
-        T old → { ( string_free old ) }
-        F → {}
-    }
     : b _ok ( vec_set [String] . jobs srcs idx m )
-}
-
-@ __cv_free_jobs CvJobs jobs → v {
-    ( vec_free_with [String] . jobs names \ String t → v { ( string_free t ) } )
-    ( vec_free [i] . jobs gts )
-    ( vec_free [i] . jobs nds )
-    ( vec_free [i] . jobs d0s )
-    ( vec_free [i] . jobs d1s )
-    ( vec_free [i] . jobs d2s )
-    ( vec_free_with [String] . jobs srcs \ String t → v { ( string_free t ) } )
 }
 
 // ── tokenizer.json → tokenizer.ggml.* ───────────────────────────────
@@ -451,10 +420,6 @@ $ `deps/safetensor/src/safetensor.nu`
 
 @ __cv_vocab_set CvVocab vv i id s tok i ty → v {
     ? | < id 0 >= id ( vec_len [String] . vv tokens ) { ^ v } {}
-    ?? ( vec_get [String] . vv tokens id ) {
-        T old → { ( string_free old ) }
-        F → {}
-    }
     : b _o1 ( vec_set [String] . vv tokens id ( string_from tok ) )
     : b _o2 ( vec_set [i] . vv types id ty )
 }
@@ -581,7 +546,6 @@ $ `deps/safetensor/src/safetensor.nu`
             ( string_push_int pad k )
             ( string_push_char pad 93 )
             ( __cv_vocab_set vv k ( string_data pad ) CV_TOK_UNUSED )
-            ( string_free pad )
         } {}
         = k + k 1
     }
@@ -589,21 +553,7 @@ $ `deps/safetensor/src/safetensor.nu`
     ^ vv
 }
 
-@ __cv_free_vocab CvVocab vv → v {
-    ( vec_free_with [String] . vv tokens \ String t → v { ( string_free t ) } )
-    ( vec_free [i] . vv types )
-    ( vec_free_with [String] . vv merges \ String t → v { ( string_free t ) } )
-}
-
 // ── the conversion ──────────────────────────────────────────────────
-
-@ __cv_close * Cv c → v {
-    : ~ i k 0
-    ( vec_free [St] . c sts )
-    ( vec_free_with [String] . c stpaths \ String t → v { ( string_free t ) } )
-    ? . c cfg_ok { ( json_free . c cfg ) } {}
-    ( nurl_free # s c )
-}
 
 @ nurllama_convert s hfdir s outpath s otype → i {
     // output tensor type
@@ -619,10 +569,10 @@ $ `deps/safetensor/src/safetensor.nu`
     }
     : i ftype ? == wt CV_Q8_0 7 ? == wt CV_F16 1 ? == wt CV_BF16 32 0
 
-    : *Cv c # *Cv ( nurl_alloc Z Cv )
-    = . c sts ( vec_new [St] )
-    = . c stpaths ( vec_new [String] )
-    = . c cfg_ok F
+    // the conversion's state: a local value — the shards, their paths and
+    // the config go with it however the conversion ends
+    : ~ Cv c @ Cv { ( vec_new [St] ) ( vec_new [String] ) ( json_null ) F
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.0 0.0 0.0 F 0.0 }
 
     // config.json
     ?? ( __cv_read_json hfdir `config.json` ) {
@@ -631,7 +581,6 @@ $ `deps/safetensor/src/safetensor.nu`
             = . c cfg_ok T
         }
         F → {
-            ( __cv_close c )
             ^ 1
         }
     }
@@ -644,7 +593,6 @@ $ `deps/safetensor/src/safetensor.nu`
     }
     ? arch_ok {} {
         ( __cv_errmsg `unsupported model_type (only llada2_moe for now)` `` )
-        ( __cv_close c )
         ^ 1
     }
     = . c n_layer ( __cv_cfg_i . c cfg `num_hidden_layers` 0 )
@@ -669,7 +617,6 @@ $ `deps/safetensor/src/safetensor.nu`
     = . c partial_rotary ( __cv_cfg_f . c cfg `partial_rotary_factor` 1.0 )
     ? | | | | < . c n_layer 1 < . c n_embd 1 < . c n_head 1 < . c n_expert 1 < . c moe_ff 1 {
         ( __cv_errmsg `config.json is missing required llada2_moe hyperparameters` `` )
-        ( __cv_close c )
         ^ 1
     } {}
     ?? ( json_obj_get . c cfg `score_function` ) {
@@ -699,27 +646,22 @@ $ `deps/safetensor/src/safetensor.nu`
                                 }
                                 F e2 → {
                                     ( __cv_errmsg ( string_data p ) ( string_data e2 ) )
-                                    ( string_free e2 )
                                 }
                             }
-                            ( string_free p )
                         } {}
                     }
                     F → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] entries \ String t → v { ( string_free t ) } )
         }
         F _ → {
             ( __cv_errmsg `cannot list directory` hfdir )
-            ( __cv_close c )
             ^ 1
         }
     }
     ? < ( vec_len [St] . c sts ) 1 {
         ( __cv_errmsg `no model*.safetensors shards found in` hfdir )
-        ( __cv_close c )
         ^ 1
     } {}
 
@@ -734,17 +676,13 @@ $ `deps/safetensor/src/safetensor.nu`
     }
     ?? ( __cv_read_json hfdir `tokenizer.json` ) {
         T tokj → {
-            ( __cv_free_vocab vv )
             = vv ( __cv_build_vocab tokj . c n_vocab )
             = tok_ok . vv ok
-            ( json_free tokj )
         }
         F → {}
     }
     ? tok_ok {} {
         ( __cv_errmsg `tokenizer.json missing or not a byte-level BPE model` `` )
-        ( __cv_free_vocab vv )
-        ( __cv_close c )
         ^ 1
     }
     ? < . vv pad_id 0 { = . vv pad_id ( __cv_cfg_i . c cfg `pad_token_id` -1 ) } {}
@@ -758,7 +696,6 @@ $ `deps/safetensor/src/safetensor.nu`
             ?? ( json_obj_get tc `chat_template` ) {
                 T ct → {
                     ? ( json_is_str ct ) {
-                        ( string_free chat_template )
                         = chat_template ( string_from ( json_str_data ct ) )
                     } {}
                 }
@@ -766,7 +703,6 @@ $ `deps/safetensor/src/safetensor.nu`
             }
             = add_bos ( __cv_cfg_b tc `add_bos_token` F )
             = add_eos ( __cv_cfg_b tc `add_eos_token` F )
-            ( json_free tc )
         }
         F → {}
     }
@@ -777,13 +713,9 @@ $ `deps/safetensor/src/safetensor.nu`
         T sw2 → { = sw sw2 }
         F e → {
             ( __cv_errmsg `cannot create output` ( string_data e ) )
-            ( string_free e )
         }
     }
     ? == 0 # i . sw ctl {
-        ( string_free chat_template )
-        ( __cv_free_vocab vv )
-        ( __cv_close c )
         ^ 1
     } {}
 
@@ -791,7 +723,6 @@ $ `deps/safetensor/src/safetensor.nu`
     : String gname ( string_from `llada2 ` )
     ( string_push_str gname hfdir )
     ( gws_kv_str sw `general.name` ( string_data gname ) )
-    ( string_free gname )
     ( gws_kv_u32 sw `general.quantization_version` 2 )
     ( gws_kv_u32 sw `general.file_type` ftype )
     ( gws_kv_u32 sw `llada2.block_count` . c n_layer )
@@ -836,7 +767,6 @@ $ `deps/safetensor/src/safetensor.nu`
     ? > ( string_len chat_template ) 0 {
         ( gws_kv_str sw `tokenizer.chat_template` ( string_data chat_template ) )
     } {}
-    ( string_free chat_template )
 
     // declare every tensor, then stream every payload in the same order
     : CvJobs jobs ( __cv_build_jobs c wt )
@@ -855,7 +785,6 @@ $ `deps/safetensor/src/safetensor.nu`
             T _ → {}
             F e → {
                 ( __cv_errmsg nm ( string_data e ) )
-                ( string_free e )
                 = ok F
             }
         }
@@ -866,7 +795,6 @@ $ `deps/safetensor/src/safetensor.nu`
             T _ → {}
             F e → {
                 ( __cv_errmsg `begin_data` ( string_data e ) )
-                ( string_free e )
                 = ok F
             }
         }
@@ -891,7 +819,6 @@ $ `deps/safetensor/src/safetensor.nu`
                 T _ → {}
                 F e → {
                     ( __cv_errmsg nm ( string_data e ) )
-                    ( string_free e )
                     = ok F
                 }
             }
@@ -900,7 +827,6 @@ $ `deps/safetensor/src/safetensor.nu`
                 T _ → {}
                 F e → {
                     ( __cv_errmsg nm ( string_data e ) )
-                    ( string_free e )
                     = ok F
                 }
             }
@@ -914,21 +840,15 @@ $ `deps/safetensor/src/safetensor.nu`
             T _ → {}
             F e → {
                 ( __cv_errmsg `finish` ( string_data e ) )
-                ( string_free e )
                 = ok F
             }
         }
     } {}
-    ( gws_free sw )
-    ( __cv_free_jobs jobs )
-    ( __cv_free_vocab vv )
-    ( __cv_close c )
     ? ok {
         : String done ( string_from `wrote ` )
         ( string_push_str done outpath )
         ( string_push_char done 10 )
         ( nurl_print ( string_data done ) )
-        ( string_free done )
         ^ 0
     } {}
     ^ 1

@@ -68,8 +68,10 @@ $ `stdlib/std/float.nu`
 
 @ interp_bicubic_torch * f pin i ih i iw i c i oh i ow f rsy f rsx * f pout → v {
     ? | | | <= ih 0 <= iw 0 <= oh 0 <= ow 0 { ^ v } {}
-    : *f wy # *f ( nurl_zalloc 32 )
-    : *f wx # *f ( nurl_zalloc 32 )
+    : ( Vec u ) wy__v ( vec_zeroed [u] 32 )
+    : *f wy # *f ( vec_data [u] wy__v )
+    : ( Vec u ) wx__v ( vec_zeroed [u] 32 )
+    : *f wx # *f ( vec_data [u] wx__v )
     : ~ i oy 0
     ~ < oy oh {
         : i y0 ( __it_axis oy rsy ih wy )
@@ -101,6 +103,4 @@ $ `stdlib/std/float.nu`
         }
         = oy + oy 1
     }
-    ( nurl_free # s wy )
-    ( nurl_free # s wx )
 }

@@ -31,13 +31,12 @@ $ `src/model.nu`
     ^ s
 }
 
-@ __kernels * Embed e → i { ^ ( gk_kernel_count . e kit ) }
+@ __kernels Embed e → i { ^ ( embed_kernel_count e ) }
 
 // Embed one text of `nw` words; T on success.
-@ __run * Embed e i nw ( Vec f ) out → b {
+@ __run Embed e i nw ( Vec f ) out → b {
     : String w ( __words nw )
     : b r ( embed_encode e ( string_data w ) out )
-    ( string_free w )
     ^ r
 }
 
@@ -75,20 +74,12 @@ $ `src/model.nu`
                 ( nurl_print `  FAIL: kernels were still being compiled\n` )
                 = rc 1
             }
-            ( vec_free [f] out )
             ( embed_close e )
         }
         F err → {
             ( nurl_print `open fail: ` ) ( nurl_print ( string_data err ) ) ( nurl_print `\n` )
-            ( string_free err )
             = rc 1
         }
     }
-    : ~ i k 0
-    ~ < k ( vec_len [String] av ) {
-        ?? ( vec_get [String] av k ) { T s2 → { ( string_free s2 ) } F → {} }
-        = k + k 1
-    }
-    ( vec_free [String] av )
     ^ rc
 }

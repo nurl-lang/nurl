@@ -225,17 +225,22 @@ $ `stdlib/core/rcbox.nu`
 // Input name of a node (k-th), as an `s`.
 @ __in * EngineImpl e ONode n i k → RTensor {
     : ( Vec String ) ins . n inputs
-    : i idx ( rt_find e ( string_data ?? ( vec_get [String] ins k ) { T x → x F _ → ( string_new ) } ) )
+    : i idx ( rt_find e ( __rt_str_at ins k ) )
     ^ ( rt_at e idx )
 }
 
 @ __out_name ONode n → s {
-    ^ ( string_data ?? ( vec_get [String] . n outputs 0 ) { T x → x F _ → ( string_new ) } )
+    ^ ( __rt_str_at . n outputs 0 )
 }
 
-@ __rt_in_name ONode n i k → s {
-    ^ ( string_data ?? ( vec_get [String] . n inputs k ) { T x → x F _ → ( string_new ) } )
+// Name k of a node's input / output list, the empty name when missing (a
+// view of a fresh String made for the purpose would outlive it — kept
+// alive, it leaked once per call).
+@ __rt_str_at ( Vec String ) v i k → s {
+    ?? ( vec_get [String] v k ) { T x → ^ ( string_data x ) F _ → ^ `` }
 }
+
+@ __rt_in_name ONode n i k → s { ^ ( __rt_str_at . n inputs k ) }
 
 // ── host-side INT64 tensors ───────────────────────────────────────
 // The shape-arithmetic chains a torch export leaves behind —
@@ -644,7 +649,7 @@ $ `stdlib/core/rcbox.nu`
 // initializer input[1]; a -1 entry is inferred, 0 copies the input dim.
 @ rt_reshape * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
-    : s shp_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : s shp_name ( __rt_str_at . n inputs 1 )
     : i nd ( __init_i64_len e shp_name )
     : ( Vec i ) ns ( vec_new [i] )
     : ~ i prod 1
@@ -669,17 +674,17 @@ $ `stdlib/core/rcbox.nu`
 @ rt_slice * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i nd0 ( rt_ndim X )
-    : s st_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
-    : s en_name ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } )
+    : s st_name ( __rt_str_at . n inputs 1 )
+    : s en_name ( __rt_str_at . n inputs 2 )
     : ~ i axis 1
     ? > ( vec_len [String] . n inputs ) 3 {
-        : s ax_name ( string_data ?? ( vec_get [String] . n inputs 3 ) { T x → x F _ → ( string_new ) } )
+        : s ax_name ( __rt_str_at . n inputs 3 )
         = axis ( __init_i64 e ax_name 0 )
     } {}
     ? < axis 0 { = axis + axis nd0 } {}
     : ~ i step 1
     ? > ( vec_len [String] . n inputs ) 4 {
-        : s sp_name ( string_data ?? ( vec_get [String] . n inputs 4 ) { T x → x F _ → ( string_new ) } )
+        : s sp_name ( __rt_str_at . n inputs 4 )
         = step ( __init_i64 e sp_name 0 )
     } {}
     ? | != step 1 > ( __init_i64_len e st_name ) 1 {
@@ -839,7 +844,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ b have_sizes F
     : ~ s sz_name ``
     ? > ( vec_len [String] . n inputs ) 1 {
-        = sz_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+        = sz_name ( __rt_str_at . n inputs 1 )
         ? > ( __init_i64_len e sz_name ) 0 { = have_sizes T } {}
     } {}
     : i src_ax ( rt_dim X axis )
@@ -851,7 +856,7 @@ $ `stdlib/core/rcbox.nu`
         : ( Vec i ) os ( vec_new [i] )
         : ~ i d 0
         ~ < d ( rt_ndim X ) { ( vec_push [i] os ? == d axis sz ( rt_dim X d ) ) = d + d 1 }
-        : s onm ( string_data ?? ( vec_get [String] . n outputs k ) { T x → x F _ → ( string_new ) } )
+        : s onm ( __rt_str_at . n outputs k )
         ? == outer 1 {
             // contiguous slice — alias the input buffer at the byte offset
             ( rt_put e onm + . X dptr * * off inner 4 os )
@@ -964,7 +969,7 @@ $ `stdlib/core/rcbox.nu`
         ( rt_own e buf )
         ( rt_put e ( __out_name n ) . buf dptr os )
         : GkBuf ob ( gk_buf_wrap . buf dptr prodos GK_I64 )
-        : s in0 ( string_data ?? ( vec_get [String] . n inputs 0 ) { T x2 → x2 F _ → ( string_new ) } )
+        : s in0 ( __rt_str_at . n inputs 0 )
         // gkd_argmax picks its kernel by the INPUT buffer's element type;
         // the raw token input is the only int64 tensor in play.
         : GkBuf xb ? ( streq2 in0 ( string_data . e input_name ) ) { ( __rt_ibuf x ) } { ( __rt_fbuf x ) }
@@ -983,7 +988,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i inner 1
     : ~ i m + axis 1
     ~ < m ( rt_ndim data ) { = inner * inner ( rt_dim data m ) = m + m 1 }
-    : s idx_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : s idx_name ( __rt_str_at . n inputs 1 )
     : i idx_in_map ( rt_find e idx_name )
     ? >= idx_in_map 0 {
         // device int64 indices → out shape = data[:axis] ++ idx.shape ++ data[axis+1:]
@@ -1053,11 +1058,11 @@ $ `stdlib/core/rcbox.nu`
     // name ("" placeholder input), which must keep the default, not
     // read a nonexistent initializer as 0.0 (that clamped everything).
     ? > ( vec_len [String] . n inputs ) 1 {
-        : s lon ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+        : s lon ( __rt_str_at . n inputs 1 )
         ? > ( nurl_str_len lon ) 0 { = lo ( __init_f32 e lon 0 ) } {}
     } {}
     ? > ( vec_len [String] . n inputs ) 2 {
-        : s hin ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } )
+        : s hin ( __rt_str_at . n inputs 2 )
         ? > ( nurl_str_len hin ) 0 { = hi ( __init_f32 e hin 0 ) } {}
     } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
@@ -1068,7 +1073,7 @@ $ `stdlib/core/rcbox.nu`
 // Expand the last axis (broadcast a (...,1) tensor to the target shape).
 @ rt_expand * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
-    : s shp_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : s shp_name ( __rt_str_at . n inputs 1 )
     : i nd ( __init_i64_len e shp_name )
     : i rep ( __init_i64 e shp_name - nd 1 )
     : i outer . X nelem
@@ -1085,7 +1090,7 @@ $ `stdlib/core/rcbox.nu`
 // input's shape with 1s inserted at the `axes` positions.
 @ rt_unsqueeze * EngineImpl e ONode n → v {
     : RTensor X ( __in e n 0 )
-    : s ax_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : s ax_name ( __rt_str_at . n inputs 1 )
     : i a0 ( __init_i64 e ax_name 0 )
     : ( Vec i ) os ( vec_new [i] )
     : i nd ( rt_ndim X )
@@ -1158,7 +1163,7 @@ $ `stdlib/core/rcbox.nu`
                 // running an op on an empty (dptr 0) tensor would do an illegal
                 // device read and corrupt the whole CUDA context. Detection
                 // (output0) doesn't depend on that branch.
-                : s in0 ( string_data ?? ( vec_get [String] . nd inputs 0 ) { T x → x F _ → ( string_new ) } )
+                : s in0 ( __rt_str_at . nd inputs 0 )
                 : b ready | == ( vec_len [String] . nd inputs ) 0 >= ( rt_find e in0 ) 0
                 // Shape arithmetic first: Constant / Shape and any int
                 // chain op whose data is host-side never touch the device.

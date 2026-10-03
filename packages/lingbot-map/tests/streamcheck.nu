@@ -22,8 +22,10 @@ $ `src/preproc.nu`
 : i STRIDE 9973
 
 @ imnet_norm * f p i h i w → v {
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     : ~ i c 0
@@ -36,7 +38,6 @@ $ `src/preproc.nu`
         }
         = c + c 1
     }
-    ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
 @ main → i {
@@ -50,12 +51,11 @@ $ `src/preproc.nu`
     : String kws ( env_var_or `LINGBOT_KV_WINDOW` `64` )
     : i kvs ( nurl_str_to_int ( string_data kss ) )
     : i kvw ( nurl_str_to_int ( string_data kws ) )
-    ( string_free kss ) ( string_free kws )
     : GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
-    : !*Lw String o ( lw_open ( nurl_argv 1 ) )
+    : !Lw String o ( lw_open ( nurl_argv 1 ) )
     ?? o {
-        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1 }
+        F e → { ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ^ 1 }
         T lw → {
             : Agg a ( ag_load lw kit )
             ? ( lw_ok lw ) {} { ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1 }
@@ -64,15 +64,16 @@ $ `src/preproc.nu`
             : ~ i dn 0
             : ~ i gh 0
             : ~ i gw 0
-            : *i taps # *i ( nurl_zalloc 32 )
+            : ( Vec u ) taps__v ( vec_zeroed [u] 32 )
+            : *i taps # *i ( vec_data [u] taps__v )
             ( ag_default_taps taps )
             : ~ i fi 0
             ~ < fi nframes {
-                : !*Frame String fr ( pp_load ( nurl_argv + 2 fi ) 518 14 )
+                : !Frame String fr ( pp_load ( nurl_argv + 2 fi ) 518 14 )
                 ?? fr {
                     F e → {
                         ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-                        ( string_free e ) ^ 1
+                        ^ 1
                     }
                     T f → {
                         : i h ( pp_height f )
@@ -114,17 +115,10 @@ $ `src/preproc.nu`
                             ( nurl_print `\n` )
                             = k + k 1
                         }
-                        ( vec_free [f] hv )
-                        ( gk_dbuf_free out ) ( gk_dbuf_free tok ) ( gk_dbuf_free dtok )
-                        ( lm_ws_free ws )
-                        ( pp_free f )
                     }
                 }
                 = fi + fi 1
             }
-            ( nurl_free # s taps )
-            ( ag_free a )
-            ( lw_close lw )
         }
     }
     ( gk_close kit )

@@ -65,8 +65,6 @@ $ `deps/gpukit/src/dev.nu`
     ( string_push_str lbl ( nurl_str_int S ) )
     ( string_push_str lbl `)` )
     ( check == dup 0 ( string_data lbl ) )
-    ( string_free lbl )
-    ( vec_free [i] seen )
 }
 
 @ main → i {

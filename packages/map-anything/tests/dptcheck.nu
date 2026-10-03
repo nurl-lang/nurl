@@ -34,7 +34,6 @@ $ `src/dpthead.nu`
     }
     : GkBuf b ( gk_dbuf_new kit n GK_F32 )
     : b _u ( gk_dbuf_upload kit b host )
-    ( vec_free [f] host )
     ^ b
 }
 
@@ -63,9 +62,6 @@ $ `src/dpthead.nu`
         T → { = ok T }
         F → {}
     }
-    ( string_free p )
-    ( vec_free [u] out )
-    ( vec_free [f] host )
     ^ ok
 }
 
@@ -83,17 +79,15 @@ $ `src/dpthead.nu`
     ( string_push_str hp `/hooks.bin` )
     : ~ ( Vec u ) raw ( vec_new [u] )
     ?? ( read_file_bytes ( string_data hp ) ) {
-        T v → { ( vec_free [u] raw ) = raw v }
+        T v → { = raw v }
         F → { ^ ( __dt_die `cannot read hooks.bin` ) }
     }
-    ( string_free hp )
     ? == ( vec_len [u] raw ) * * 4 * np 1536 4 {} { ^ ( __dt_die `hooks.bin wrong size` ) }
 
-    : ~ * Lw lw # *Lw 0
+    : ~ Lw lw ( lw_none )
     ?? ( lw_open model ) {
         F e → {
             ( puts ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
         T got → { = lw got }
@@ -109,7 +103,6 @@ $ `src/dpthead.nu`
     : GkBuf h1 ( __dt_up kit rp per per )
     : GkBuf h2 ( __dt_up kit rp * 2 per per )
     : GkBuf h3 ( __dt_up kit rp * 3 per per )
-    ( vec_free [u] raw )
 
     : i hw * h w
     : GkBuf rays ( gk_dbuf_new kit * 3 hw GK_F32 )

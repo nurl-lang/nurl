@@ -40,8 +40,8 @@ $ `detect.nu`
 // Returns the number of detections.
 @ detect_image Engine e OGraph g Image im f conf f iou → i {
     : Image in416 ? & == ( img_w im ) 416 == ( img_h im ) 416 im ( img_resize im 416 416 )
-    : *u host ( img_to_nchw in416 )
-    : RTensor out ( rt_run_shaped e g host ( shape4 1 3 416 416 ) )
+    : ( Vec u ) host ( img_to_nchw in416 )
+    : RTensor out ( rt_run_shaped e g ( vec_data [u] host ) ( shape4 1 3 416 416 ) )
     : GpuHost grid__h ( rt_download e out )
     : *u grid ( gpu_host_ptr grid__h )
     : ( Vec Detection ) raw ( yolo_decode grid conf )
@@ -69,10 +69,10 @@ $ `detect.nu`
     ^ nd
 }
 
-@ load_model s path * u pok → OGraph {
+@ load_model s path → ?OGraph {
     ?? ( read_file_bytes path ) {
-        T mb → { ( nurl_poke pok 0 1 ) ^ ( onnx_parse mb ) }
-        F _ → { ( nurl_poke pok 0 0 ) ^ @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) } }
+        T mb → { ^ @ ?OGraph { T ( onnx_parse mb ) } }
+        F _ → { ^ @ ?OGraph { F } }
     }
 }
 
@@ -96,9 +96,7 @@ $ `detect.nu`
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
     : String a2 ?? ( vec_get [String] av 2 ) { T x → x F _ → ( string_new ) }
 
-    : *u okc ( nurl_alloc 8 )
-    : OGraph g ( load_model ( string_data mp ) okc )
-    ? == ( nurl_peek okc 0 ) 0 { ( p `cannot read model\n` ) ^ 1 } {}
+    : OGraph g ?? ( load_model ( string_data mp ) ) { T m → m F _ → { ( p `cannot read model\n` ) ^ 1 } }
 
     : Engine e ( rt_open 0 )
     ? ! ( rt_ok e ) { ( p `GPU init / kernel compile failed\n` ) ^ 1 } {}

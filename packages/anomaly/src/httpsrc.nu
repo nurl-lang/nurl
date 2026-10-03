@@ -77,13 +77,11 @@ $ `src/wfs.nu`
                     }
                     F _ → {}
                 }
-                ( string_free name )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
 }
 
 // One JSON object → one record with its clock, into `rows`.
@@ -92,8 +90,7 @@ $ `src/wfs.nu`
     ( __hs_flatten obj row cols `` 0 )
     : ( Vec String ) got ( json_obj_keys row )
     : i ngot ( vec_len [String] got )
-    ( vec_free_with [String] got \ String s → v { ( string_free s ) } )
-    ? == ngot 0 { ( json_free row ) ^ F } {}
+    ? == ngot 0 { ^ F } {}
     ? ( _wfs_wide_clock row time_field ) {} { ( json_obj_set row `timestamp` ( json_int now ) ) }
     ( vec_push [Json] rows row )
     ^ T
@@ -126,39 +123,32 @@ $ `src/wfs.nu`
                             = k + k 1
                         }
                         ? & == members 0 > n 0 {
-                            ( string_free err )
                             = err ( string_from `the array at the path holds no objects with numbers or text in them` )
                         } {}
                     } {
                         ? ( json_is_obj node ) {
                             ? ( __hs_record node rows cols time_field now ) { = members 1 } {
-                                ( string_free err )
                                 = err ( string_from `the object at the path holds no numbers or text` )
                             }
                         } {
-                            ( string_free err )
                             = err ( string_from `the path must lead to an array of objects or to an object` )
                         }
                     }
                 }
                 F _ → {
-                    ( string_free err )
                     = err ( string_from `nothing at the path ` )
                     ( string_push_str err path )
                     ( string_push_str err ` in the answer` )
                 }
             }
-            ( json_free body )
             ^ @ WfsPivot { rows cols members missing err }
         }
         F e → {
             : String msg ( string_from `the answer is not JSON (` )
             : String why ( json_format_error e )
             ( string_push_str msg ( string_data why ) )
-            ( string_free why )
             ( string_push_char msg 41 )
             : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
-            ( string_free msg )
             ^ pe
         }
     }
@@ -181,9 +171,7 @@ $ `src/wfs.nu`
         : String msg ( string_from `the answer is not readable as CSV (` )
         ( string_push_str msg ( string_data . ip err ) )
         ( string_push_char msg 41 )
-        ( import_parse_free ip )
         : WfsPivot pe ( _wfs_pivot_err ( string_data msg ) )
-        ( string_free msg )
         ^ pe
     } {}
     : ( Vec Json ) rows ( vec_new [Json] )
@@ -206,9 +194,7 @@ $ `src/wfs.nu`
                     }
                     = q + q 1
                 }
-                ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
                 ? == nk 0 {
-                    ( json_free row )
                     = missing + missing 1
                 } {
                     ? ( _wfs_wide_clock row time_field ) {} { ( json_obj_set row `timestamp` ( json_int now ) ) }
@@ -220,10 +206,8 @@ $ `src/wfs.nu`
         }
         = k + k 1
     }
-    ( import_parse_free ip )
     : ~ String err ( string_new )
     ? == members 0 {
-        ( string_free err )
         = err ( string_from `the answer parsed as CSV but held no rows with values in them` )
     } {}
     ^ @ WfsPivot { rows cols members missing err }
@@ -252,15 +236,13 @@ $ `src/wfs.nu`
                         T v → {
                             ? ( json_is_str v ) {
                                 ( vec_push [Header] hs ( header_new ( string_data key ) ( json_str_data v ) ) )
-                                // `string_eq` takes two Strings, so the
-                                // literals must be built and freed: made
-                                // inline they were two allocations per
-                                // header of every fetch, forever.
+                                // `string_eq` takes two Strings: the
+                                // literals would be two allocations per
+                                // header of every fetch; compare the data.
                                 : String lower ( string_to_lower key )
                                 : s low ( string_data lower )
                                 ? == ( nurl_str_eq low `accept` ) 1 { = has_accept T } {}
                                 ? == ( nurl_str_eq low `content-type` ) 1 { = has_ctype T } {}
-                                ( string_free lower )
                             } {}
                         }
                         F _ → {}
@@ -270,7 +252,6 @@ $ `src/wfs.nu`
             }
             = k + k 1
         }
-        ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
     } {}
     ? has_accept {} { ( vec_push [Header] hs ( header_new `accept` `application/json` ) ) }
     : i blen ( nurl_str_len body )
@@ -282,7 +263,6 @@ $ `src/wfs.nu`
         T r → {
             : String rb ( bytes_to_str . r body )
             ? & >= . r status 200 < . r status 300 {
-                ( string_free text )
                 = text rb
                 = ok T
             } {
@@ -299,16 +279,13 @@ $ `src/wfs.nu`
                         = k + k 1
                     }
                 } {}
-                ( string_free rb )
             }
-            ( http_response_free r )
         }
         F e → {
             ( string_push_str text `could not fetch: ` )
             ( string_push_str text ( http_client_err_name e ) )
         }
     }
-    ( vec_free [u] bb )
     ? ok { ^ @ !String String { T text } } {}
     ^ @ !String String { F text }
 }

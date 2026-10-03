@@ -18,7 +18,6 @@ $ `src/registry.nu`
     ( nurl_print in )
     ( nurl_print ` -> ` )
     ( nurl_println ( string_data got ) )
-    ( string_free got )
     ^ ? ok 0 1
 }
 

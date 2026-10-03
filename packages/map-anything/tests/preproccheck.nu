@@ -37,8 +37,6 @@ $ `src/preproc.nu`
         ?? ( pp_open ( string_data p ) ) {
             F e → {
                 ( puts ( string_data e ) )
-                ( string_free e )
-                ( string_free p )
                 ^ 1
             }
             T im → {
@@ -46,7 +44,6 @@ $ `src/preproc.nu`
                 ( vec_push [Image] imgs im )
             }
         }
-        ( string_free p )
         = k + k 1
     }
     : i target ( pp_pick_target / aspect_sum # f __PC_N )
@@ -57,7 +54,6 @@ $ `src/preproc.nu`
     ( string_push_char head 32 )
     ( string_push_int head th )
     ( puts ( string_data head ) )
-    ( string_free head )
 
     // Pass 2: fit each image and dump HWC bytes, oracle order.
     = k 0
@@ -68,7 +64,6 @@ $ `src/preproc.nu`
                 ?? ( pp_fit im tw th ) {
                     F e → {
                         ( puts ( string_data e ) )
-                        ( string_free e )
                         ^ 1
                     }
                     T fr → {
@@ -96,14 +91,11 @@ $ `src/preproc.nu`
                             = y + y 1
                         }
                         ( puts ( string_data line ) )
-                        ( string_free line )
-                        ( pp_free fr )
                     }
                 }
             }
         }
         = k + k 1
     }
-    ( vec_free_with [Image] imgs \ Image im → v { ( image_free im ) } )
     ^ 0
 }

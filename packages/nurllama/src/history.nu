@@ -78,7 +78,6 @@ $ `stdlib/ext/sqlite.nu`
 @ __hist_bind Statement st i idx s val → v {
     : String v ( string_from val )
     ?? ( sqlite_bind_text st idx v ) { T _ → {} F _ → {} }
-    ( string_free v )
 }
 
 // Step a prepared statement to completion, ignoring rows. The Statement
@@ -182,7 +181,6 @@ $ `stdlib/ext/sqlite.nu`
         }
         F _ → {}
     }
-    ( string_free title )
 }
 
 // The GUID that owns `conv`, or "" when the conversation does not exist.
@@ -197,7 +195,6 @@ $ `stdlib/ext/sqlite.nu`
                     ?? ( sqlite_step st ) {
                         T has → {
                             ? has {
-                                ( string_free owner )
                                 = owner ( sqlite_column_text st 0 )
                             } {}
                         }
@@ -231,10 +228,8 @@ $ `stdlib/ext/sqlite.nu`
                                     : b _1 ( json_obj_set o `id` ( json_int ( sqlite_column_int st 0 ) ) )
                                     : String md ( sqlite_column_text st 1 )
                                     : b _2 ( json_obj_set o `model` ( json_str_lit ( string_data md ) ) )
-                                    ( string_free md )
                                     : String tt ( sqlite_column_text st 2 )
                                     : b _3 ( json_obj_set o `title` ( json_str_lit ( string_data tt ) ) )
-                                    ( string_free tt )
                                     : b _4 ( json_obj_set o `created_at` ( json_int ( sqlite_column_int st 3 ) ) )
                                     : b _5 ( json_arr_push arr o )
                                 } { = more F }
@@ -269,10 +264,8 @@ $ `stdlib/ext/sqlite.nu`
                                     : Json o ( json_obj_new )
                                     : String rl ( sqlite_column_text st 0 )
                                     : b _1 ( json_obj_set o `role` ( json_str_lit ( string_data rl ) ) )
-                                    ( string_free rl )
                                     : String ct ( sqlite_column_text st 1 )
                                     : b _2 ( json_obj_set o `content` ( json_str_lit ( string_data ct ) ) )
-                                    ( string_free ct )
                                     : b _3 ( json_obj_set o `created_at` ( json_int ( sqlite_column_int st 2 ) ) )
                                     : b _4 ( json_arr_push arr o )
                                 } { = more F }
@@ -294,7 +287,6 @@ $ `stdlib/ext/sqlite.nu`
     : ~ b ok F
     : String owner ( hist_conversation_owner path conv )
     : b owns ( nurl_str_eq ( string_data owner ) guid )
-    ( string_free owner )
     ? owns {} { ^ F }
     ?? ( hist_open path ) {
         T db → {

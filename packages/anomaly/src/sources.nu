@@ -193,15 +193,13 @@ $ `src/imptime.nu`
                     ? ( json_is_obj j ) {
                         ( __src_fill_defaults j )
                         = out @ ?Json { T j }
-                    } { ( json_free j ) }
+                    } {}
                 }
                 F _ → {}
             }
-            ( string_free txt )
         }
         F _ → {}
     }
-    ( string_free p )
     ^ out
 }
 
@@ -214,7 +212,6 @@ $ `src/imptime.nu`
 @ __src_fill_defaults Json src → v {
     : String id ( __src_jstr src `id` )
     : Json blank ( __src_blank ( string_data id ) `` 0 )
-    ( string_free id )
     : ( Vec String ) keys ( json_obj_keys blank )
     : i n ( vec_len [String] keys )
     : ~ i k 0
@@ -232,15 +229,13 @@ $ `src/imptime.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
-    ( json_free blank )
 }
 
 // Written whole to a temp name and renamed over the old: a crash
 // mid-write leaves the previous record, not half of the new one.
 @ source_save s org Json src → b {
     : String id ( __src_jstr src `id` )
-    ? ( source_id_ok ( string_data id ) ) {} { ( string_free id ) ^ F }
+    ? ( source_id_ok ( string_data id ) ) {} { ^ F }
     : String p ( source_path org ( string_data id ) )
     : String tmp ( string_clone p )
     ( string_push_str tmp `.tmp` )
@@ -255,10 +250,6 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    ( string_free txt )
-    ( string_free tmp )
-    ( string_free p )
-    ( string_free id )
     ^ ok
 }
 
@@ -269,7 +260,6 @@ $ `src/imptime.nu`
     ? ( file_exists ( string_data p ) ) {
         ?? ( file_delete ( string_data p ) ) { T _ → { = ok T } F _ → {} }
     } {}
-    ( string_free p )
     ^ ok
 }
 
@@ -290,18 +280,15 @@ $ `src/imptime.nu`
                                 T j → { ( vec_push [Json] out j ) }
                                 F _ → {}
                             }
-                            ( string_free id )
                         } {}
                     }
                     F _ → {}
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _ → {}
     }
-    ( string_free d )
     // Insertion sort on created_at: a folder holds a handful of sources.
     : i m ( vec_len [Json] out )
     : ~ i a 1
@@ -318,10 +305,6 @@ $ `src/imptime.nu`
     ^ out
 }
 
-@ sources_free sink ( Vec Json ) xs → v {
-    ( vec_free_with [Json] xs \ Json j → v { ( json_free j ) } )
-}
-
 // ── Validation ────────────────────────────────────────────────────────
 
 // Apply `body` (what a caller sent) to `src` (a record, fresh or loaded),
@@ -336,7 +319,6 @@ $ `src/imptime.nu`
         || == ( nurl_str_eq ( string_data kind ) SRC_KIND_HTTP ) 1
         == ( nurl_str_eq ( string_data kind ) SRC_KIND_CSV ) 1
         ? ok { ( __src_set_str src `kind` ( string_data kind ) ) } {}
-        ( string_free kind )
         ? ok {} { ^ ( string_from `kind must be "wfs" (an OGC WFS 2.0 endpoint), "http" (a URL answering JSON) or "csv" (a URL answering a CSV file)` ) }
     } {}
     : b is_http ( source_is_url src )
@@ -344,7 +326,6 @@ $ `src/imptime.nu`
     ? ( json_obj_has body `url` ) {
         : String url0 ( __src_jstr body `url` )
         : String url ( string_trim url0 )
-        ( string_free url0 )
         : b ok & ( wfs_url_ok ( string_data url ) ) ( __src_text_ok ( string_data url ) 2048 )
         ? ok {
             // A WFS is named by its endpoint, the requests built on it; an
@@ -352,20 +333,16 @@ $ `src/imptime.nu`
             ? is_http { ( __src_set_str src `url` ( string_data url ) ) } {
                 : String base ( wfs_base_url ( string_data url ) )
                 ( __src_set_str src `url` ( string_data base ) )
-                ( string_free base )
             }
         } {}
-        ( string_free url )
         ? ok {} { ^ ( string_from ? is_http `url must be an http(s) URL` `url must be an http(s) WFS endpoint` ) }
     } {}
 
     ? ( json_obj_has body `method` ) {
         : String m0 ( __src_jstr body `method` )
         : String m ( string_to_upper m0 )
-        ( string_free m0 )
         : b ok | | == ( nurl_str_eq ( string_data m ) `GET` ) 1 == ( nurl_str_eq ( string_data m ) `POST` ) 1 == ( nurl_str_eq ( string_data m ) `PUT` ) 1
         ? ok { ( __src_set_str src `method` ( string_data m ) ) } {}
-        ( string_free m )
         ? ok {} { ^ ( string_from `method must be GET, POST or PUT` ) }
     } {}
 
@@ -381,11 +358,11 @@ $ `src/imptime.nu`
                 ~ & < k nk == ( string_len bad ) 0 {
                     ?? ( vec_get [String] keys k ) {
                         T key → {
-                            ? ( __src_header_name_ok ( string_data key ) ) {} { ( string_free bad ) = bad ( string_from `a header name may hold letters, digits and dashes only` ) }
+                            ? ( __src_header_name_ok ( string_data key ) ) {} { = bad ( string_from `a header name may hold letters, digits and dashes only` ) }
                             ?? ( json_obj_get hv ( string_data key ) ) {
                                 T v → {
                                     ? ( json_is_str v ) {
-                                        ? ( __src_text_ok ( json_str_data v ) 1024 ) {} { ( string_free bad ) = bad ( string_from `a header value is not printable text` ) }
+                                        ? ( __src_text_ok ( json_str_data v ) 1024 ) {} { = bad ( string_from `a header value is not printable text` ) }
                                         // The mask sent back: keep the stored value.
                                         ? == ( nurl_str_eq ( json_str_data v ) SRC_MASK ) 1 {
                                             ?? ( json_obj_get src `headers` ) {
@@ -393,7 +370,7 @@ $ `src/imptime.nu`
                                                 F _ → {}
                                             }
                                         } { ( json_obj_set merged ( string_data key ) ( json_clone v ) ) }
-                                    } { ( string_free bad ) = bad ( string_from `header values must be strings` ) }
+                                    } { = bad ( string_from `header values must be strings` ) }
                                 }
                                 F _ → {}
                             }
@@ -402,10 +379,8 @@ $ `src/imptime.nu`
                     }
                     = k + k 1
                 }
-                ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
-                ? > nk SRC_HEADERS_MAX { ( string_free bad ) = bad ( string_from `too many headers` ) } {}
-                ? > ( string_len bad ) 0 { ( json_free merged ) ^ bad } {}
-                ( string_free bad )
+                ? > nk SRC_HEADERS_MAX { = bad ( string_from `too many headers` ) } {}
+                ? > ( string_len bad ) 0 { ^ bad } {}
                 ( json_obj_set src `headers` merged )
             }
             F _ → {}
@@ -416,17 +391,14 @@ $ `src/imptime.nu`
         : String b ( __src_jstr body `body` )
         : b ok <= ( string_len b ) SRC_BODY_MAX
         ? ok { ( __src_set_str src `body` ( string_data b ) ) } {}
-        ( string_free b )
         ? ok {} { ^ ( string_from `body is too long` ) }
     } {}
 
     ? ( json_obj_has body `path` ) {
         : String p0 ( __src_jstr body `path` )
         : String p ( string_trim p0 )
-        ( string_free p0 )
         : b ok ( __src_text_ok ( string_data p ) 200 )
         ? ok { ( __src_set_str src `path` ( string_data p ) ) } {}
-        ( string_free p )
         ? ok {} { ^ ( string_from `path must be a dotted path into the answer (data.items)` ) }
     } {}
 
@@ -434,7 +406,6 @@ $ `src/imptime.nu`
         : String q ( __src_jstr body `query` )
         : b ok & > ( string_len q ) 0 ( __src_text_ok ( string_data q ) SRC_QUERY_MAX )
         ? ok { ( __src_set_str src `query` ( string_data q ) ) } {}
-        ( string_free q )
         ? ok {} { ^ ( string_from `query must name a stored query (fmi::observations::weather::simple)` ) }
     } {}
 
@@ -455,12 +426,10 @@ $ `src/imptime.nu`
                                     ? | | ( json_is_str v ) ( json_is_num v ) ( json_is_bool v ) {
                                         ? ( json_is_str v ) {
                                             ? ( __src_text_ok ( json_str_data v ) 512 ) {} {
-                                                ( string_free bad )
                                                 = bad ( string_from `a parameter value is not printable text` )
                                             }
                                         } {}
                                     } {
-                                        ( string_free bad )
                                         = bad ( string_from `parameter values must be strings or numbers` )
                                     }
                                 }
@@ -471,10 +440,8 @@ $ `src/imptime.nu`
                     }
                     = k + k 1
                 }
-                ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
-                ? > nk SRC_PARAMS_MAX { ( string_free bad ) = bad ( string_from `too many parameters` ) } {}
+                ? > nk SRC_PARAMS_MAX { = bad ( string_from `too many parameters` ) } {}
                 ? > ( string_len bad ) 0 { ^ bad } {}
-                ( string_free bad )
                 ( json_obj_set src `params` ( json_clone pv ) )
             }
             F _ → {}
@@ -485,7 +452,6 @@ $ `src/imptime.nu`
         : String mode ( __src_jstr body `mode` )
         : b ok | == ( nurl_str_eq ( string_data mode ) SRC_MODE_STORED ) 1 == ( nurl_str_eq ( string_data mode ) SRC_MODE_TYPE ) 1
         ? ok { ( __src_set_str src `mode` ( string_data mode ) ) } {}
-        ( string_free mode )
         ? ok {} { ^ ( string_from `mode must be "stored" (a stored query) or "type" (a feature type)` ) }
     } {}
 
@@ -493,7 +459,6 @@ $ `src/imptime.nu`
         : String tf ( __src_jstr body `time_field` )
         : b ok ( __src_text_ok ( string_data tf ) 64 )
         ? ok { ( __src_set_str src `time_field` ( string_data tf ) ) } {}
-        ( string_free tf )
         ? ok {} { ^ ( string_from `time_field must be a column name` ) }
     } {}
 
@@ -549,7 +514,6 @@ $ `src/imptime.nu`
         : String m ( __src_jstr body `model` )
         : b ok ( __src_model_ok ( string_data m ) )
         ? ok { ( __src_set_str src `model` ( string_data m ) ) } {}
-        ( string_free m )
         ? ok {} { ^ ( string_from `model must be a model name: letters, numbers and underscores` ) }
     } {}
 
@@ -577,10 +541,8 @@ $ `src/imptime.nu`
     ? ( json_obj_has body `name` ) {
         : String nm0 ( __src_jstr body `name` )
         : String nm ( string_trim nm0 )
-        ( string_free nm0 )
         : b ok ( __src_text_ok ( string_data nm ) SRC_NAME_MAX )
         ? ok { ( __src_set_str src `name` ( string_data nm ) ) } {}
-        ( string_free nm )
         ? ok {} { ^ ( string_from `name must be printable text of at most 80 characters` ) }
     } {}
 
@@ -589,14 +551,10 @@ $ `src/imptime.nu`
     : String q ( __src_jstr src `query` )
     : String m ( __src_jstr src `model` )
     : b have & & > ( string_len url ) 0 | is_http > ( string_len q ) 0 > ( string_len m ) 0
-    ( string_free m )
-    ? have {} { ( string_free url ) ( string_free q ) ^ ( string_from ? is_http `a source needs url and model` `a source needs url, query and model` ) }
+    ? have {} { ^ ( string_from ? is_http `a source needs url and model` `a source needs url, query and model` ) }
     // A nameless source is called after its query, or its URL.
     : String nm ( __src_jstr src `name` )
     ? == ( string_len nm ) 0 { ( __src_set_str src `name` ? is_http ( string_data url ) ( string_data q ) ) } {}
-    ( string_free nm )
-    ( string_free url )
-    ( string_free q )
     ^ ( string_new )
 }
 
@@ -619,14 +577,12 @@ $ `src/imptime.nu`
 @ source_is_http Json src → b {
     : String kind ( __src_jstr src `kind` )
     : b h == ( nurl_str_eq ( string_data kind ) SRC_KIND_HTTP ) 1
-    ( string_free kind )
     ^ h
 }
 
 @ source_is_csv Json src → b {
     : String kind ( __src_jstr src `kind` )
     : b c == ( nurl_str_eq ( string_data kind ) SRC_KIND_CSV ) 1
-    ( string_free kind )
     ^ c
 }
 
@@ -682,12 +638,9 @@ $ `src/imptime.nu`
     // rand_hex_str takes a byte count and writes two digits per byte.
     : String id ( rand_hex_str / SRC_ID_LEN 2 )
     : Json src ( __src_blank ( string_data id ) by now )
-    ( string_free id )
     : String err ( source_apply src body )
-    ? > ( string_len err ) 0 { ( json_free src ) ^ @ !Json String { F err } } {}
-    ( string_free err )
+    ? > ( string_len err ) 0 { ^ @ !Json String { F err } } {}
     ? ( source_save org src ) {} {
-        ( json_free src )
         ^ @ !Json String { F ( string_from `the source could not be written to the organisation's folder` ) }
     }
     ^ @ !Json String { T src }
@@ -699,7 +652,6 @@ $ `src/imptime.nu`
 @ __src_push_jstr String acc Json o s key → v {
     : String v ( __src_jstr o key )
     ( string_push_str acc ( string_data v ) )
-    ( string_free v )
 }
 
 // What a source's span depends on, as one String: the URL, the query,
@@ -719,7 +671,7 @@ $ `src/imptime.nu`
     ( __src_push_jstr p src `body` )
     ( __src_push_jstr p src `path` )
     ( __src_push_jstr p src `model` )
-    ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p ( string_data ht ) ) ( string_free ht ) } F _ → {} }
+    ?? ( json_obj_get src `headers` ) { T h → { : String ht ( json_stringify h ) ( string_push_str p ( string_data ht ) ) } F _ → {} }
     ^ p
 }
 
@@ -729,24 +681,18 @@ $ `src/imptime.nu`
             : String f0 ( __src_fingerprint src )
             : String err ( source_apply src body )
             ? > ( string_len err ) 0 {
-                ( string_free f0 )
-                ( json_free src )
                 ^ @ !Json String { F err }
             } {}
-            ( string_free err )
             : String f1 ( __src_fingerprint src )
             // A changed model, too: the span says what the OLD model has
             // seen, and the new one has seen none of it.
             : b same ( string_eq f0 f1 )
-            ( string_free f0 )
-            ( string_free f1 )
             ? same {} {
                 ( __src_set_int src `first_time` 0 )
                 ( __src_set_int src `last_time` 0 )
             }
             ( __src_set_int src `updated_at` now )
             ? ( source_save org src ) {} {
-                ( json_free src )
                 ^ @ !Json String { F ( string_from `the source could not be written to the organisation's folder` ) }
             }
             ^ @ !Json String { T src }
@@ -769,7 +715,6 @@ $ `src/imptime.nu`
     ? ( source_is_url src ) { ^ T } {}
     : String mode ( __src_jstr src `mode` )
     : b t == ( nurl_str_eq ( string_data mode ) SRC_MODE_TYPE ) 1
-    ( string_free mode )
     ^ t
 }
 
@@ -803,10 +748,6 @@ $ `src/imptime.nu`
     i unstamped  // rows whose time could not be read
     i oldest
     i newest
-}
-
-@ __src_project_free sink SrcProject sp → v {
-    ( vec_free_with [Json] . sp points \ Json j → v { ( json_free j ) } )
 }
 
 // Keep, from every pivoted row inside [lo, hi], the chosen features (all
@@ -866,7 +807,6 @@ $ `src/imptime.nu`
                         ? calendar {
                             : String t ( __src_jstr row `time` )
                             ? > ( string_len t ) 0 { ( __src_set_str pt `time` ( string_data t ) ) } {}
-                            ( string_free t )
                         } {}
                         : ~ i got 0
                         ? > nfeat 0 {
@@ -916,14 +856,12 @@ $ `src/imptime.nu`
                                 }
                                 = k + k 1
                             }
-                            ( vec_free_with [String] keys \ String s → v { ( string_free s ) } )
                         }
                         ? > got 0 {
                             ( vec_push [Json] pts pt )
                             ? | == oldest 0 < ts oldest { = oldest ts } {}
                             ? > ts newest { = newest ts } {}
                         } {
-                            ( json_free pt )
                             = empty + empty 1
                         }
                     }
@@ -933,8 +871,6 @@ $ `src/imptime.nu`
         }
         = r + r 1
     }
-    ( vec_free_with [String] feats \ String s → v { ( string_free s ) } )
-    ( vec_free_with [String] cats \ String s → v { ( string_free s ) } )
     ^ @ SrcProject { pts outside empty unstamped oldest newest }
 }
 
@@ -959,7 +895,6 @@ $ `src/imptime.nu`
     ? ( json_is_str v ) { ^ ( json_clone v ) } {}
     : String txt ( json_stringify v )
     : Json out ( json_str_lit ( string_data txt ) )
-    ( string_free txt )
     ^ out
 }
 
@@ -982,17 +917,15 @@ $ `src/imptime.nu`
         : b is_csv ( source_is_csv src )
         : ~ String u ( string_new )
         ? is_http { ( string_push_str u ( string_data url ) ) } {
-            ( string_free u )
             = u ( wfs_url_type ( string_data url ) ( string_data q ) params )
         }
         : ~ String method ( __src_jstr src `method` )
         // A record built for a preview may carry no method: GET it is.
-        ? == ( string_len method ) 0 { ( string_free method ) = method ( string_from `GET` ) } {}
+        ? == ( string_len method ) 0 { = method ( string_from `GET` ) } {}
         : String hbody ( __src_jstr src `body` )
         : String path ( __src_jstr src `path` )
         : Json headers ?? ( json_obj_get src `headers` ) { T h → ( json_clone h ) F _ → ( json_obj_new ) }
         : !String String fr ? is_http ( http_fetch ( string_data method ) ( string_data u ) headers ( string_data hbody ) ) ( wfs_fetch ( string_data u ) )
-        ( json_free headers )
         ?? fr {
             T body → {
                 : WfsPivot pv ? is_csv ( csv_pivot ( string_data body ) ( string_data tf ) ( now_seconds ) )
@@ -1000,7 +933,6 @@ $ `src/imptime.nu`
                 ( wfs_pivot_wide ( string_data body ) ( string_data tf ) ( now_seconds ) )
                 ? > ( string_len . pv err ) 0 {
                     ? & == . pv members 0 ( string_starts_with . pv err `the feature collection holds no` ) {} {
-                        ( string_free err )
                         = err ( string_clone . pv err )
                     }
                 } {}
@@ -1013,21 +945,10 @@ $ `src/imptime.nu`
                     }
                     = k + k 1
                 }
-                ( wfs_pivot_free pv )
-                ( string_free body )
             }
-            F why → { ( string_free err ) = err why }
+            F why → { = err why }
         }
-        ( string_free path )
-        ( string_free hbody )
-        ( string_free method )
-        ( string_free u )
-        ( string_free tf )
-        ( json_free params )
-        ( string_free q )
-        ( string_free url )
         ? > ( string_len err ) 0 {
-            ( vec_free_with [Json] rows \ Json j → v { ( json_free j ) } )
             ^ @ !( Vec Json ) String { F err }
         } {}
         ^ @ !( Vec Json ) String { T rows }
@@ -1046,7 +967,6 @@ $ `src/imptime.nu`
                     // forecast that starts later. Only a service that
                     // refused, or spoke another language, is.
                     ? & == . pv members 0 ( string_starts_with . pv err `the feature collection holds no` ) {} {
-                        ( string_free err )
                         = err ( string_clone . pv err )
                     }
                 } {}
@@ -1059,19 +979,12 @@ $ `src/imptime.nu`
                     }
                     = k + k 1
                 }
-                ( wfs_pivot_free pv )
-                ( string_free body )
             }
-            F why → { ( string_free err ) = err why }
+            F why → { = err why }
         }
-        ( string_free u )
         = a + b 1
     }
-    ( json_free params )
-    ( string_free q )
-    ( string_free url )
     ? > ( string_len err ) 0 {
-        ( vec_free_with [Json] rows \ Json j → v { ( json_free j ) } )
         ^ @ !( Vec Json ) String { F err }
     } {}
     ^ @ !( Vec Json ) String { T rows }
@@ -1111,7 +1024,6 @@ $ `src/imptime.nu`
         }
         = k + k 1
     }
-    ( string_free key )
     ^ found
 }
 
@@ -1132,9 +1044,8 @@ $ `src/imptime.nu`
             = k + k 1
         }
         ? >= hit 0 {
-            ?? ( vec_remove [String] v hit ) { T gone → { ( string_free gone ) } F _ → {} }
+            ?? ( vec_remove [String] v hit ) { T gone → {} F _ → {} }
         } {}
-        ( string_free key )
     }
 }
 
@@ -1144,13 +1055,9 @@ $ `src/imptime.nu`
 @ __src_ingest s org Json src SrcProject sp i now b trained_out → String {
     : String model ( __src_jstr src `model` )
     : String who ( string_from `source:` )
-    // `__src_jstr` hands back an owned String; used inline it was never
-    // freed, once per run of every source, forever.
     : String sid ( __src_jstr src `id` )
     ( string_push_str who ( string_data sid ) )
-    ( string_free sid )
     ( anomaly_set_actor ( string_data who ) )
-    ( string_free who )
     : Store st ( store_open_org ( orgfiles_root ) org )
     : b existed ( store_exists st ( string_data model ) )
     : ~ String err ( string_new )
@@ -1158,36 +1065,33 @@ $ `src/imptime.nu`
         ?? ( az_db_open org ) {
             T db → {
                 ? ( az_model_in_org db ( string_data model ) ) {} {
-                    ( string_free err )
                     = err ( string_from `model ` )
                     ( string_push_str err ( string_data model ) )
                     ( string_push_str err ` is not this organisation's: pick another name, or have an administrator assign it` )
                 }
             }
             F _ → {
-                ( string_free err )
                 = err ( string_from `the organisation's database could not be opened` )
             }
         }
     } {}
     ? > ( string_len err ) 0 {
-        ( store_free st )
-        ( string_free model )
         ^ err
     } {}
-    : *Model mo ( model_open st ( string_data model ) )
+    : Model mo__h ( model_open st ( string_data model ) )
+    : *ModelImpl mo ( _Model_ptr mo__h )
     // A categorical column is declared before the first point arrives,
     // or a coordinate would be judged a number by its first value. On a
     // model that already knows the column the kind is settled and the
     // declaration is a no-op.
     ?? ( json_obj_get src `categorical` ) {
         T cv → {
-            : *Meta mm . mo meta
+            : *MetaImpl mm ( _Meta_ptr . mo meta )
             : i ncv ( json_arr_len cv )
             : ~ i k 0
             ~ < k ncv {
                 ?? ( json_arr_get cv k ) {
-                    T f → { ? ( json_is_str f ) { : b _d ( meta_declare_column mm ( json_str_data f ) COL_CATEGORICAL ) } {} }
+                    T f → { ? ( json_is_str f ) { : b _d ( meta_declare_column . mo meta ( json_str_data f ) COL_CATEGORICAL ) } {} }
                     F _ → {}
                 }
                 = k + k 1
@@ -1195,9 +1099,8 @@ $ `src/imptime.nu`
         }
         F _ → {}
     }
-    : ImportReport rep ( model_import_at mo . sp points now )
+    : ImportReport rep ( model_import_at mo__h . sp points now )
     ? > ( string_len . rep err ) 0 {
-        ( string_free err )
         = err ( string_clone . rep err )
     } {
         ? & ! existed ( anomaly_authz_enabled ) {
@@ -1205,7 +1108,6 @@ $ `src/imptime.nu`
                 T db → {
                     : String by ( __src_jstr src `created_by` )
                     : b _c ( az_model_claim db ( string_data model ) ( string_data by ) now F )
-                    ( string_free by )
                 }
                 F _ → {}
             }
@@ -1214,11 +1116,7 @@ $ `src/imptime.nu`
     ( __src_set_int src `last_rows` . rep accepted )
     ( __src_set_int src `total_rows` + ( _src_jint src `total_rows` 0 ) . rep accepted )
     ( json_obj_set src `last_trained` ( json_bool . rep trained ) )
-    ? . rep trained { ( json_obj_set src `last_tuned` ( json_bool ( __src_first_train mo src . sp points now ) ) ) } {}
-    ( import_report_free rep )
-    ( model_free mo )
-    ( store_free st )
-    ( string_free model )
+    ? . rep trained { ( json_obj_set src `last_tuned` ( json_bool ( __src_first_train mo__h src . sp points now ) ) ) } {}
     ^ err
 }
 
@@ -1241,12 +1139,10 @@ $ `src/imptime.nu`
         ? > g 0 { ( vec_push [i] gaps g ) } {}
         = k + k 1
     }
-    ( vec_free [i] ts )
     : i ng ( vec_len [i] gaps )
-    ? < ng 2 { ( vec_free [i] gaps ) ^ 0 } {}
+    ? < ng 2 { ^ 0 } {}
     ( sort_by [i] gaps \ i a i b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
     : i med ( _src_geti gaps / ng 2 )
-    ( vec_free [i] gaps )
     ^ med
 }
 
@@ -1267,12 +1163,13 @@ $ `src/imptime.nu`
 // version on fits the daily rhythm the feed has, not a plain ARIMA. A
 // model tuned before, by hand or by an earlier run, is left as it is.
 // Returns whether the margins were calibrated now.
-@ __src_first_train * Model mo Json src ( Vec Json ) points i now → b {
-    : *Meta mm ( model_metadata mo )
+@ __src_first_train Model mo Json src ( Vec Json ) points i now → b {
+    : Meta mm__h ( model_metadata mo )
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ? == . mm tuned_at 0 {} { ^ F }
     : i season ( source_season_of ( source_step_of points ) )
     ? > season 0 {
-        : i at ( meta_find_version mm ANOM_FC_NAME )
+        : i at ( meta_find_version mm__h ANOM_FC_NAME )
         : ~ b unset T
         ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? > . vc window_size 0 { = unset F } {} } F _ → {} } } {}
         ? unset { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
@@ -1298,14 +1195,12 @@ $ `src/imptime.nu`
             ?? fr {
                 T rows → {
                     : SrcProject sp ( __src_project cur rows . w start . w end )
-                    ( vec_free_with [Json] rows \ Json j → v { ( json_free j ) } )
                     ( __src_set_int out `fetched` + + + ( vec_len [Json] . sp points ) . sp outside . sp empty . sp unstamped )
                     ( __src_set_int out `skipped_outside` . sp outside )
                     ( __src_set_int out `skipped_empty` . sp empty )
                     ( __src_set_int out `skipped_unstamped` . sp unstamped )
                     : ~ String err ( string_new )
                     ? > ( vec_len [Json] . sp points ) 0 {
-                        ( string_free err )
                         = err ( __src_ingest org cur sp now F )
                     } {
                         ( __src_set_int cur `last_rows` 0 )
@@ -1345,8 +1240,6 @@ $ `src/imptime.nu`
                         ? > . sp newest 0 { ( __src_set_int out `newest` . sp newest ) } {}
                         ? > . sp oldest 0 { ( __src_set_int out `oldest` . sp oldest ) } {}
                     }
-                    ( string_free err )
-                    ( __src_project_free sp )
                 }
                 F why → {
                     ( __src_set_str out `status` `error` )
@@ -1355,16 +1248,14 @@ $ `src/imptime.nu`
                     ( __src_set_int out `ingested` 0 )
                     ( __src_set_str cur `last_status` `error` )
                     ( __src_set_str cur `last_error` ( string_data why ) )
-                    ( string_free why )
                 }
             }
             : b _s ( source_save org cur )
-            ( json_free cur )
         }
         F _ → {
             ?? fr {
-                T rows → { ( vec_free_with [Json] rows \ Json j → v { ( json_free j ) } ) }
-                F why → { ( string_free why ) }
+                T rows → {}
+                F why → {}
             }
             ( __src_set_str out `status` `error` )
             ( __src_set_str out `message` `the source was deleted while it was being fetched` )
@@ -1399,7 +1290,6 @@ $ `src/imptime.nu`
                 ( __src_set_int none `window_end` . w end )
                 ( __src_set_int none `fetched` 0 )
                 ( __src_set_int none `ingested` 0 )
-                ( json_free src )
                 ^ none
             } {}
             ( __src_mark_running org id T )
@@ -1407,7 +1297,6 @@ $ `src/imptime.nu`
             : !( Vec Json ) String fr ( source_fetch src . w start . w end )
             ( lock )
             ( __src_mark_running org id F )
-            ( json_free src )
             ^ ( source_run_rows org id fr w backfill now )
         }
         F _ → {
@@ -1451,18 +1340,12 @@ $ `src/imptime.nu`
                     }
                     = k + k 1
                 }
-                ( sources_free srcs )
             }
             F _ → {}
         }
         = o + o 1
     }
-    ( vec_free_with [String] orgs \ String s → v { ( string_free s ) } )
     ^ out
-}
-
-@ __src_refs_free sink ( Vec SrcRef ) xs → v {
-    ( vec_free_with [SrcRef] xs \ SrcRef r → v { ( string_free . r org ) ( string_free . r id ) } )
 }
 
 // Run everything due. Called with the service lock held; the lock is let
@@ -1484,16 +1367,12 @@ $ `src/imptime.nu`
                     ( nurl_eprint ( string_data . r id ) )
                     ( nurl_eprint `: ` )
                     ( nurl_eprintln ( string_data msg ) )
-                    ( string_free msg )
                 } {}
-                ( string_free status )
-                ( json_free rep )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( __src_refs_free due )
     ^ n
 }
 

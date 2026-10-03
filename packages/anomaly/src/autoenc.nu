@@ -55,17 +55,9 @@ $ `deps/mlp/src/mlp.nu`
     : ( Vec i ) sz ( vec_new [i] )
     ( vec_push [i] sz 1 ) ( vec_push [i] sz 1 )
     : Mlp net ( mlp_new sz 0 )
-    ( vec_free [i] sz )
     : ( Vec f ) e ( vec_new [f] )
     : MinMax mm ( minmax_fit e 0 0 )
-    ( vec_free [f] e )
     ^ @ AeModel { net mm ( vec_new [String] ) 0.0 0 0 0.0 0 F }
-}
-
-@ ae_free sink AeModel ae → v {
-    ( mlp_free . ae net )
-    ( minmax_free . ae mm )
-    ( vec_free_with [String] . ae feats \ String s2 → v { ( string_free s2 ) } )
 }
 
 // ── Training ──────────────────────────────────────────────────────────
@@ -84,7 +76,6 @@ $ `deps/mlp/src/mlp.nu`
         = se + se * e e
         = k + k 1
     }
-    ( vec_free [f] x ) ( vec_free [f] y )
     ^ / se # f d
 }
 
@@ -177,22 +168,16 @@ $ `deps/mlp/src/mlp.nu`
     : ( Vec f ) scaled ( vec_clone [f] raw )
     : Scaler fsc ( scaler_fit scaled n d )
     ( scaler_apply_matrix fsc scaled n d )
-    ( scaler_free fsc )
     : VerCfg fcfg @ VerCfg { ( string_from `aefilter` ) 0 0 0 0 200 256 cont 0.0 T }
     : VerModel fvm ( anom_train_version scaled n d fcfg )
-    ( _an_vercfg_free fcfg )
     : ( Vec i ) keep ( vec_new [i] )
     : ~ i r 0
     ~ < r n {
         ? >= ( anom_decision_row fvm scaled r ) 0.0 { ( vec_push [i] keep r ) } {}
         = r + r 1
     }
-    ( anom_vermodel_free fvm )
-    ( vec_free [f] scaled )
     : i nk ( vec_len [i] keep )
     ? < nk min_rows {
-        ( vec_free [i] keep )
-        ( vec_free [f] raw )
         ^ @ AeTrainOut { ( ae_empty ) ( string_from `too few normal points remain after anomaly filtering` ) }
     } {}
 
@@ -209,8 +194,6 @@ $ `deps/mlp/src/mlp.nu`
         }
         = k + k 1
     }
-    ( vec_free [i] keep )
-    ( vec_free [f] raw )
     : MinMax mm ( minmax_fit Xn nk d )
     ( minmax_apply mm Xn nk )
 
@@ -228,7 +211,6 @@ $ `deps/mlp/src/mlp.nu`
     // GPU when a CUDA device is present, CPU otherwise — bit-identical either
     // way (aegpu.nu), so the backend can never change the trained model.
     : MlpFit fit ( aegpu_fit sz Xn nk d cfg 3 )
-    ( vec_free [i] sz )
 
     // 3. threshold = p95 (nearest-rank) of the training errors.
     : ( Vec f ) errs ( vec_with_cap [f] nk )
@@ -240,8 +222,6 @@ $ `deps/mlp/src/mlp.nu`
     ( sort_by [f] errs \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
     : i p95i # i * 0.95 # f nk
     : f thr ( _mlp_fget errs p95i )
-    ( vec_free [f] errs )
-    ( vec_free [f] Xn )
 
     : ( Vec String ) fcopy ( vec_new [String] )
     : i nf ( vec_len [String] feats )
@@ -292,7 +272,6 @@ $ `deps/mlp/src/mlp.nu`
         = se + se * e e
         = k + k 1
     }
-    ( vec_free [f] x ) ( vec_free [f] y )
     ^ / se # f d
 }
 
@@ -363,7 +342,6 @@ $ `deps/mlp/src/mlp.nu`
         ( vec_push [f] out * e e )
         = k + k 1
     }
-    ( vec_free [f] x ) ( vec_free [f] y )
     ^ out
 }
 
@@ -387,7 +365,6 @@ $ `deps/mlp/src/mlp.nu`
         ( vec_push [f] out + lo * ( _mlp_fget y k ) - hi lo )
         = k + k 1
     }
-    ( vec_free [f] x ) ( vec_free [f] y )
     ^ out
 }
 
@@ -404,7 +381,6 @@ $ `deps/mlp/src/mlp.nu`
     : String mj ( minmax_save . ae mm )
     ( json_obj_set o `net` ( json_str_lit ( string_data nj ) ) )
     ( json_obj_set o `minmax` ( json_str_lit ( string_data mj ) ) )
-    ( string_free nj ) ( string_free mj )
     ( json_obj_set o `threshold_bits` ( json_int ( f64_to_bits . ae threshold ) ) )
     ( json_obj_set o `trained_on` ( json_int . ae trained_on ) )
     ( json_obj_set o `filtered` ( json_int . ae filtered ) )
@@ -422,7 +398,6 @@ $ `deps/mlp/src/mlp.nu`
     }
     ( json_obj_set o `features` fa )
     : String out ( json_stringify o )
-    ( json_free o )
     ^ out
 }
 
@@ -436,7 +411,7 @@ $ `deps/mlp/src/mlp.nu`
             : ~ s mjs ``
             ?? ( json_obj_get j `net` ) { T e → { = njs ( json_str_data e ) } F _ → { = ok F } }
             ?? ( json_obj_get j `minmax` ) { T e → { = mjs ( json_str_data e ) } F _ → { = ok F } }
-            ? ! ok { ( json_free j ) ^ @ ?AeModel { F } } {}
+            ? ! ok { ^ @ ?AeModel { F } } {}
             : ?Mlp neto ( mlp_load njs )
             : ?MinMax mmo ( minmax_load mjs )
             : ~ b have_net F
@@ -444,9 +419,8 @@ $ `deps/mlp/src/mlp.nu`
             : ~ b have_mm F
             ?? mmo { T _ → { = have_mm T } F → {} }
             ? & have_net have_mm {} {
-                ?? neto { T n2 → { ( mlp_free n2 ) } F → {} }
-                ?? mmo { T m2 → { ( minmax_free m2 ) } F → {} }
-                ( json_free j )
+                ?? neto { T n2 → {} F → {} }
+                ?? mmo { T m2 → {} F → {} }
                 ^ @ ?AeModel { F }
             }
             : Mlp net ?? neto { T n2 → n2 F → ( ae_dummy_net ) }
@@ -471,7 +445,6 @@ $ `deps/mlp/src/mlp.nu`
                 }
                 F _ → {}
             }
-            ( json_free j )
             ^ @ ?AeModel { T @ AeModel { net mm feats thr ton fil pre tat T } }
         }
     }
@@ -483,13 +456,11 @@ $ `deps/mlp/src/mlp.nu`
     : ( Vec i ) sz ( vec_new [i] )
     ( vec_push [i] sz 1 ) ( vec_push [i] sz 1 )
     : Mlp m ( mlp_new sz 0 )
-    ( vec_free [i] sz )
     ^ m
 }
 
 @ ae_dummy_mm → MinMax {
     : ( Vec f ) e ( vec_new [f] )
     : MinMax m ( minmax_fit e 0 0 )
-    ( vec_free [f] e )
     ^ m
 }

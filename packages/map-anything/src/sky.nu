@@ -19,7 +19,6 @@
 // depth head hallucinates a far wall instead.
 //
 //   ( sky_open path )                  → Sky      (ok=F on any failure)
-//   ( sky_free s )                     → v
 //   ( sky_mask s chw w h mask )       → b   AND non-sky into mask
 
 $ `stdlib/core/string.nu`
@@ -54,8 +53,6 @@ $ `deps/onnx/src/runtime.nu`
     ^ @ Sky { g e T }
 }
 
-@ sky_free sink Sky s → v {}
-
 // AND "not sky" into `mask` for one view. `chw` is the fitted frame's
 // [3, h, w] planar [0,1] host buffer (pp_data), `mask` h·w bytes.
 @ sky_mask Sky s * f chw i w i h * u mask → b {
@@ -77,13 +74,15 @@ $ `deps/onnx/src/runtime.nu`
         = j + j 1
     }
     : Image sm ( image_resize im SKY_N SKY_N )
-    ( image_free im )
     // ImageNet normalise into the NCHW f32 input buffer
     : i n2 * SKY_N SKY_N
-    : *u inb ( nurl_alloc * * 3 n2 4 )
+    : ( Vec u ) inb__v ( vec_zeroed [u] * * 3 n2 4 )
+    : *u inb # *u ( vec_data [u] inb__v )
     : *u sp ( vec_data [u] . sm data )
-    : *f mean # *f ( nurl_zalloc 24 )
-    : *f std # *f ( nurl_zalloc 24 )
+    : ( Vec u ) mean__v ( vec_zeroed [u] 24 )
+    : *f mean # *f ( vec_data [u] mean__v )
+    : ( Vec u ) std__v ( vec_zeroed [u] 24 )
+    : *f std # *f ( vec_data [u] std__v )
     = . mean 0 0.485 = . mean 1 0.456 = . mean 2 0.406
     = . std 0 0.229 = . std 1 0.224 = . std 2 0.225
     = j 0
@@ -96,14 +95,11 @@ $ `deps/onnx/src/runtime.nu`
         }
         = j + j 1
     }
-    ( image_free sm )
-    ( nurl_free # s mean ) ( nurl_free # s std )
 
     : ( Vec i ) shape ( vec_with_cap [i] 4 )
     ( vec_push [i] shape 1 ) ( vec_push [i] shape 3 )
     ( vec_push [i] shape SKY_N ) ( vec_push [i] shape SKY_N )
     : RTensor out ( rt_run_shaped . s e . s g inb shape )
-    ( nurl_free # s inb )
     ? == . out nelem n2 {} { ^ F }
     : GpuHost score__h ( rt_download . s e out )
     : *u score ( gpu_host_ptr score__h )
@@ -131,13 +127,11 @@ $ `deps/onnx/src/runtime.nu`
     // back to the view's size; a pixel is sky the moment the resized
     // score leaves zero
     : Image mfull ( image_resize m8 w h )
-    ( image_free m8 )
     : *u fp ( vec_data [u] . mfull data )
     = j 0
     ~ < j hw {
         ? != # i . fp j 0 { = . mask j # u 0 } {}
         = j + j 1
     }
-    ( image_free mfull )
     ^ T
 }

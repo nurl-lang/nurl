@@ -11,7 +11,7 @@ $ `stdlib/std/rng.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `src/model.nu`
 
-@ sample_greedy * Llm m → i {
+@ sample_greedy Llm m → i {
     : i n ( llm_n_vocab m )
     : ~ i best 0
     : ~ f bv ( llm_logit m 0 )
@@ -30,7 +30,7 @@ $ `src/model.nu`
 // host-side softmax needs exp — bind libm directly, the stdlib idiom
 & `libm` @ exp f x → f
 
-@ sample_next * Llm m Rng rng f temp i topk f topp → i {
+@ sample_next Llm m Rng rng f temp i topk f topp → i {
     ? <= temp 0.0 { ^ ( sample_greedy m ) } {}
     : i n ( llm_n_vocab m )
 
@@ -119,8 +119,5 @@ $ `src/model.nu`
         } {}
         = a + a 1
     }
-    ( vec_free [f] p )
-    ( vec_free [f] w )
-    ( vec_free [i] idx )
     ^ pick
 }

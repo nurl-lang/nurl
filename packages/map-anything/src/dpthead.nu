@@ -33,7 +33,6 @@
 //   5     mask            sigmoid(x); the logits are kept too
 //
 //   ( dp_load w kit )  → Dpt
-//   ( dp_free d )      → v
 //   ( dp_forward kit d h0 h1 h2 h3 voff gh gw h w rays depth conf mask ) → b
 //     h0..h3: sequence buffers [·, 1536]; this view's patch tokens are
 //             rows voff .. voff+gh·gw
@@ -55,26 +54,19 @@ $ `src/load.nu`
 // A conv with an optional bias, as a pair of device buffers.
 : DpConv { GkBuf w GkBuf b i hasb }
 
-@ __dp_conv * Lw lw GpuKit kit s prefix s leaf b bias → DpConv {
+@ __dp_conv Lw lw GpuKit kit s prefix s leaf b bias → DpConv {
     : String nw ( string_from prefix )
     ( string_push_str nw leaf )
     ( string_push_str nw `.weight` )
     : GkBuf w ( maw_upload lw kit ( string_data nw ) )
-    ( string_free nw )
     ? bias {
         : String nb ( string_from prefix )
         ( string_push_str nb leaf )
         ( string_push_str nb `.bias` )
         : GkBuf b ( maw_upload lw kit ( string_data nb ) )
-        ( string_free nb )
         ^ @ DpConv { w b 1 }
     } {}
     ^ @ DpConv { w ( gk_buf_none GK_F32 ) 0 }
-}
-
-@ __dp_conv_free sink DpConv c → v {
-    ( gk_dbuf_free . c w )
-    ? == . c hasb 1 { ( gk_dbuf_free . c b ) } {}
 }
 
 @ __dp_conv_none → DpConv {
@@ -97,18 +89,17 @@ $ `src/load.nu`
     DpConv oc2b  // dense_head.1.conv2.2
 }
 
-@ __dp_rcu * Lw lw GpuKit kit s prefix s unit → DpRcu {
+@ __dp_rcu Lw lw GpuKit kit s prefix s unit → DpRcu {
     : String p ( string_from prefix )
     ( string_push_str p unit )
     ( string_push_char p 46 )
     : DpRcu r @ DpRcu {
         ( __dp_conv lw kit ( string_data p ) `conv1` T )
         ( __dp_conv lw kit ( string_data p ) `conv2` T ) }
-    ( string_free p )
     ^ r
 }
 
-@ __dp_fuse * Lw lw GpuKit kit i idx b has1 → DpFuse {
+@ __dp_fuse Lw lw GpuKit kit i idx b has1 → DpFuse {
     : String p ( string_from `dense_head.0.scratch.refinenet` )
     ( string_push_int p idx )
     ( string_push_char p 46 )
@@ -118,11 +109,10 @@ $ `src/load.nu`
         ( __dp_rcu lw kit ( string_data p ) `resConfUnit2` )
         ( __dp_conv lw kit ( string_data p ) `out_conv` T )
         ? has1 1 0 }
-    ( string_free p )
     ^ f
 }
 
-@ dp_load * Lw lw GpuKit kit → Dpt {
+@ dp_load Lw lw GpuKit kit → Dpt {
     : ( Vec DpConv ) pj ( vec_new [DpConv] )
     : ( Vec DpConv ) rz ( vec_new [DpConv] )
     : ( Vec DpConv ) rn ( vec_new [DpConv] )
@@ -133,19 +123,15 @@ $ `src/load.nu`
         : String pp ( string_from ( string_data base ) )
         ( string_push_str pp `.0.0` )
         ( vec_push [DpConv] pj ( __dp_conv lw kit ( string_data pp ) `` T ) )
-        ( string_free pp )
         // input_process.2 has no resize stage (identity)
         ? != i0 2 {
             : String rp ( string_from ( string_data base ) )
             ( string_push_str rp `.0.1` )
             ( vec_push [DpConv] rz ( __dp_conv lw kit ( string_data rp ) `` T ) )
-            ( string_free rp )
         } { ( vec_push [DpConv] rz ( __dp_conv_none ) ) }
         : String np ( string_from ( string_data base ) )
         ( string_push_str np `.1` )
         ( vec_push [DpConv] rn ( __dp_conv lw kit ( string_data np ) `` F ) )
-        ( string_free np )
-        ( string_free base )
         = i0 + i0 1
     }
     : ( Vec DpFuse ) fs ( vec_new [DpFuse] )
@@ -158,21 +144,6 @@ $ `src/load.nu`
         ( __dp_conv lw kit `dense_head.1.` `conv1` T )
         ( __dp_conv lw kit `dense_head.1.conv2.` `0` T )
         ( __dp_conv lw kit `dense_head.1.conv2.` `2` T ) }
-}
-
-@ __dp_rcu_free sink DpRcu r → v { ( __dp_conv_free . r c1 ) ( __dp_conv_free . r c2 ) }
-
-@ dp_free sink Dpt d → v {
-    ( vec_free_with [DpConv] . d projects \ DpConv c → v { ( __dp_conv_free c ) } )
-    ( vec_free_with [DpConv] . d resizes \ DpConv c → v { ( __dp_conv_free c ) } )
-    ( vec_free_with [DpConv] . d rns \ DpConv c → v { ( __dp_conv_free c ) } )
-    ( vec_free_with [DpFuse] . d fuse \ DpFuse f → v {
-        ? == . f has1 1 { ( __dp_rcu_free . f u1 ) } {}
-        ( __dp_rcu_free . f u2 )
-        ( __dp_conv_free . f outc ) } )
-    ( __dp_conv_free . d oc1 )
-    ( __dp_conv_free . d oc2a )
-    ( __dp_conv_free . d oc2b )
 }
 
 // ── forward ─────────────────────────────────────────────────────────
@@ -217,7 +188,6 @@ GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
     : ( Vec i ) dims ( _ma_i2 np DP_IN )
     : ( Vec i ) perm ( _ma_i2 1 0 )
     : b r ( gkd_perm kit outmap patches dims perm )
-    ( vec_free [i] dims ) ( vec_free [i] perm )
     ^ r
 }
 
@@ -236,10 +206,13 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
     : i np * gh gw
 
     // per-hook channel counts and post-resize sizes
-    : *i chs # *i ( nurl_zalloc 32 )
+    : ( Vec u ) chs__v ( vec_zeroed [u] 32 )
+    : *i chs # *i ( vec_data [u] chs__v )
     = . chs 0 96 = . chs 1 192 = . chs 2 384 = . chs 3 768
-    : *i ohs # *i ( nurl_zalloc 32 )
-    : *i ows # *i ( nurl_zalloc 32 )
+    : ( Vec u ) ohs__v ( vec_zeroed [u] 32 )
+    : *i ohs # *i ( vec_data [u] ohs__v )
+    : ( Vec u ) ows__v ( vec_zeroed [u] 32 )
+    : *i ows # *i ( vec_data [u] ows__v )
     = . ohs 0 * gh 4 = . ows 0 * gw 4
     = . ohs 1 * gh 2 = . ows 1 * gw 2
     = . ohs 2 gh = . ows 2 gw
@@ -264,7 +237,6 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
             }
             F → { = ok F }
         }
-        ( gk_dbuf_free fmap )
         // resize: transpose-up, identity, or stride-2 down
         : GkBuf rs ( gk_dbuf_new kit * cout * oh ow GK_F32 )
         ?? ( vec_get [DpConv] . d resizes t ) {
@@ -282,7 +254,6 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
             }
             F → { = ok F }
         }
-        ( gk_dbuf_free proj )
         // 3×3 no bias, down to 256 channels
         : GkBuf rn ( gk_dbuf_new kit * DP_FEAT * oh ow GK_F32 )
         ?? ( vec_get [DpConv] . d rns t ) {
@@ -292,13 +263,10 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
             }
             F → { = ok F }
         }
-        ( gk_dbuf_free rs )
         ( vec_push [GkBuf] rns rn )
         = t + t 1
     }
     ? ok {} {
-        ( vec_free_with [GkBuf] rns \ GkBuf b → v { ( gk_dbuf_free b ) } )
-        ( nurl_free # s chs ) ( nurl_free # s ohs ) ( nurl_free # s ows )
         ^ F
     }
 
@@ -334,22 +302,16 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
             }
             F → { = ok F }
         }
-        ( gk_dbuf_free t1 ) ( gk_dbuf_free t2 ) ( gk_dbuf_free up )
-        ( gk_dbuf_free cbuf )
         // crop (a no-op copy except after refinenet4 on odd grids)
         : GkBuf nxt ( gk_dbuf_new kit * DP_FEAT * oh ow GK_F32 )
         : GkBuf mid ( gk_dbuf_new kit * DP_FEAT * oh uw GK_F32 )
         ? & ok ( __dp_crop kit nxt blk mid DP_FEAT uh uw oh ow ) {} { = ok F }
-        ( gk_dbuf_free mid )
-        ( gk_dbuf_free blk )
         = cbuf nxt
         = ch oh
         = cw ow
         = step + step 1
     }
-    ( vec_free_with [GkBuf] rns \ GkBuf b → v { ( gk_dbuf_free b ) } )
-    ( nurl_free # s chs ) ( nurl_free # s ohs ) ( nurl_free # s ows )
-    ? ok {} { ( gk_dbuf_free cbuf ) ^ F }
+    ? ok {} { ^ F }
 
     // conv1 → 128 channels, bilinear straight to (h, w) with
     // align_corners=True, conv2.0 → relu → conv2.2 → 6 channels
@@ -357,23 +319,19 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
     : DpConv c1c . d oc1
     ? ( gkd_conv2d kit o1 cbuf . c1c w . c1c b . c1c hasb
     DP_FEAT ch cw 128 3 3 ch cw 1 1 1 1 ) {} { = ok F }
-    ( gk_dbuf_free cbuf )
-    ? ok {} { ( gk_dbuf_free o1 ) ^ F }
+    ? ok {} { ^ F }
     : GkBuf full ( gk_dbuf_new kit * 128 * h w GK_F32 )
     ? ( gkd_resize_bilinear kit full o1 128 ch cw h w 1 ) {} { = ok F }
-    ( gk_dbuf_free o1 )
     : GkBuf o2 ( gk_dbuf_new kit * 128 * h w GK_F32 )
     : DpConv c2a . d oc2a
     ? & ok ( gkd_conv2d kit o2 full . c2a w . c2a b . c2a hasb
     128 h w 128 3 3 h w 1 1 1 1 ) {} { = ok F }
-    ( gk_dbuf_free full )
     ? & ok ( gkd_relu kit o2 o2 ) {} { = ok F }
     : GkBuf o3 ( gk_dbuf_new kit * 6 * h w GK_F32 )
     : DpConv c2b . d oc2b
     ? & ok ( gkd_conv2d kit o3 o2 . c2b w . c2b b . c2b hasb
     128 h w 6 1 1 h w 0 0 1 1 ) {} { = ok F }
-    ( gk_dbuf_free o2 )
-    ? ok {} { ( gk_dbuf_free o3 ) ^ F }
+    ? ok {} { ^ F }
 
     // adaptors
     : i hw * h w
@@ -389,7 +347,6 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
         ? & ok ( gkd_add kit nrm nrm sq ) {} { = ok F }
         = c + c 1
     }
-    ( gk_dbuf_free sq )
     ? & ok ( gkd_map kit `rnorm` `1.0f/fmaxf(sqrtf(x),1e-8f)` nrm nrm ) {} { = ok F }
     = c 0
     ~ & ok < c 3 {
@@ -401,6 +358,5 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
     ? & ok ( gkd_map kit `dexp` `expf(x)` depth ( ma_view o3 * 3 hw hw ) ) {} { = ok F }
     ? & ok ( gkd_map kit `cexp` `1.0f+expf(x)` conf ( ma_view o3 * 4 hw hw ) ) {} { = ok F }
     ? & ok ( gkd_map kit `copy` `x` mask ( ma_view o3 * 5 hw hw ) ) {} { = ok F }
-    ( gk_dbuf_free o3 )
     ^ ok
 }

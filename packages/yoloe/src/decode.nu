@@ -98,6 +98,5 @@ $ `stdlib/core/string.nu`
             = picked + picked 1
         }
     }
-    ( vec_free [i] used )
     ^ keep
 }

@@ -73,7 +73,8 @@ $ `stdlib/std/float.nu`
     : f a2 ( __gm_sqrt_pos - + - 1.0 m00 m11 m22 )
     : f a3 ( __gm_sqrt_pos + - - 1.0 m00 m11 m22 )
     // candidate k, as (r, i, j, k) scaled by 2*a_k
-    : *f c ( nurl_zalloc 128 )
+    : ( Vec u ) c__v ( vec_zeroed [u] 128 )
+    : *f c # *f ( vec_data [u] c__v )
     = . c 0 * a0 a0
     = . c 1 - m21 m12
     = . c 2 - m02 m20
@@ -101,7 +102,6 @@ $ `stdlib/std/float.nu`
     : f i / . c + base 1 denom
     : f j / . c + base 2 denom
     : f k / . c + base 3 denom
-    ( nurl_free # s c )
     // scalar LAST on the way out
     = . out 0 i
     = . out 1 j
@@ -113,7 +113,8 @@ $ `stdlib/std/float.nu`
 
 // Extrinsics [R|t], world→camera, 3x4 row-major (12 doubles).
 @ pose_enc_to_extri * f pe * f out → v {
-    : *f r ( nurl_zalloc 72 )
+    : ( Vec u ) r__v ( vec_zeroed [u] 72 )
+    : *f r # *f ( vec_data [u] r__v )
     ( quat_to_mat . pe 3 . pe 4 . pe 5 . pe 6 r )
     : ~ i row 0
     ~ < row 3 {
@@ -125,7 +126,6 @@ $ `stdlib/std/float.nu`
         = . out + * row 4 3 . pe row
         = row + row 1
     }
-    ( nurl_free # s r )
 }
 
 // Intrinsics from the two field-of-view angles, 3x3 row-major.
@@ -192,14 +192,14 @@ $ `stdlib/std/float.nu`
 // Camera-to-world 4x4 from a pose encoding: build [R|t] world→camera,
 // lift to 4x4, invert.
 @ pose_enc_to_c2w * f pe * f out → v {
-    : *f e ( nurl_zalloc 128 )
+    : ( Vec u ) e__v ( vec_zeroed [u] 128 )
+    : *f e # *f ( vec_data [u] e__v )
     ( pose_enc_to_extri pe e )
     = . e 12 0.0
     = . e 13 0.0
     = . e 14 0.0
     = . e 15 1.0
     ( se3_inverse e out )
-    ( nurl_free # s e )
 }
 
 // One pixel of a depth map → a world-space point.

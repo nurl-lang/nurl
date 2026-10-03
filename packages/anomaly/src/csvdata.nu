@@ -18,15 +18,9 @@ $ `stdlib/core/string.nu`
     ( Vec String ) headers
 }
 
-@ anom_csv_free sink AnomCsv ds → v {
-    ( vec_free [f] . ds data )
-    ( vec_free_with [String] . ds headers \ String x → v { ( string_free x ) } )
-}
-
 @ anom_parse_csv s input s delim b has_header → AnomCsv {
     : String text ( string_from input )
     : ( Vec String ) lines ( string_split text `\n` )
-    ( string_free text )
 
     : ( Vec f ) data ( vec_new [f] )
     : ( Vec String ) headers ( vec_new [String] )
@@ -50,7 +44,6 @@ $ `stdlib/core/string.nu`
                             }
                             = hi + hi 1
                         }
-                        ( vec_free_with [String] hfields \ String x → v { ( string_free x ) } )
                     } {
                         : ( Vec String ) fields ( string_split tl delim )
                         : ( Vec f ) rowvals ( vec_new [f] )
@@ -64,13 +57,11 @@ $ `stdlib/core/string.nu`
                                         T x → { ( vec_push [f] rowvals x ) }
                                         F _ → {}
                                     }
-                                    ( string_free ft )
                                 }
                                 F _ → {}
                             }
                             = fi + fi 1
                         }
-                        ( vec_free_with [String] fields \ String x → v { ( string_free x ) } )
 
                         : i nv ( vec_len [f] rowvals )
                         ? > nv 0 {
@@ -80,16 +71,13 @@ $ `stdlib/core/string.nu`
                                 = rows + rows 1
                             } {}
                         } {}
-                        ( vec_free [f] rowvals )
                     }
                 } {}
-                ( string_free tl )
             }
             F _ → {}
         }
         = li + li 1
     }
-    ( vec_free_with [String] lines \ String x → v { ( string_free x ) } )
     ? < cols 0 { = cols 0 } {}
     ^ @ AnomCsv { data rows cols headers }
 }

@@ -38,7 +38,6 @@ $ `deps/image/src/image.nu`
         T im → {
             ? == ( image_channels im ) 3 { ^ @ ?Image { T im } } {}
             : Image rgb ( image_convert im 3 )
-            ( image_free im )
             ^ @ ?Image { T rgb }
         }
         F _ → { ^ @ ?Image { F } }
@@ -71,12 +70,15 @@ $ `deps/image/src/image.nu`
 }
 
 // ── pack to NCHW float tensor (values 0..255) ─────────────────────
-// Writes a fresh host buffer of 3*H*W floats in CHW order; the model's
-// in-graph preprocessor scales by 1/255.
-@ img_to_nchw Image im → *u {
+// Returns a fresh host buffer of 3*H*W f32 (bytes) in CHW order — hand
+// `( vec_data [u] t )` to the runtime; the Vec releases itself. The
+// model's in-graph preprocessor scales by 1/255.
+@ img_to_nchw Image im → ( Vec u ) {
     : i W . im width
     : i H . im height
-    : *u host ( nurl_alloc * * * 3 H W 4 )
+    : i nb * * * 3 H W 4
+    : ( Vec u ) out ( vec_with_cap [u] nb )
+    : *u host ( vec_data [u] out )
     : ~ i c 0
     ~ < c 3 {
         : ~ i y 0
@@ -90,5 +92,6 @@ $ `deps/image/src/image.nu`
         }
         = c + c 1
     }
-    ^ host
+    : b _l ( vec_set_len [u] out nb )  // every byte written above
+    ^ out
 }

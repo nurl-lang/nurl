@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** The server state (engine, graphs,
+vocabulary, embeddings) is a handle the route closures capture instead of a
+hand-allocated struct behind a global word; its last owner releases it. The
+per-frame buffers (the NCHW input, mask coefficients and logits, the token
+row) are Vecs the compiler drops; `yd_params_free` is gone (the query
+parameters release themselves).
+
+`/tpe` without `--text-encoder` read past an empty embedding slab; it
+answers 400, as `/prompt` does.
+
 ## 0.2.9
 
 `yd_params_free` now takes a **`sink`** parameter.

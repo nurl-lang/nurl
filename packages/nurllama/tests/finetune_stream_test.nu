@@ -56,39 +56,32 @@ $ `deps/gpukit/src/dev.nu`
                     : ( Vec i ) enc ( tok_encode tk `The capital of France is Paris, and the capital of Italy is` T )
                     : ~ i k 0
                     ~ < k ( vec_len [i] enc ) { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
-                    ( vec_free [i] enc )
-                    ( tok_free tk )
                 }
-                F e → { ( string_free e ) }
+                F _e → {}
             }
-            ( gguf_close gg )
         }
-        F e → { ( string_free e ) }
+        F _e → {}
     }
     ^ ids
 }
 
 // One 1-step training run; writes the step-0 device loss bits into `out`.
-@ run_once s path b stream i dtype * u out → b {
+@ run_once s path b stream i dtype inout i out → b {
     ( ft_set_stream stream )
     ?? ( ft_open path ) {
         T m → {
             : ( Vec i ) ids ( tokens path )
             ? > ( vec_len [i] ids ) 4 {} {
-                ( vec_free [i] ids ) ( ft_free m ) ( ft_set_stream F ) ^ F
+                ( ft_set_stream F ) ^ F
             }
             : FtTrain tr ( ft_train m ids ( vec_len [i] ids ) 8 16.0 42 1 0.002 dtype F )
             : b ok . tr ok
-            ? ok { ( nurl_poke out 0 ( f64_to_bits . tr l0 ) ) } {}
-            ( ft_train_free tr )
-            ( vec_free [i] ids )
-            ( ft_free m )
+            ? ok { = out ( f64_to_bits . tr l0 ) } {}
             ( ft_set_stream F )
             ^ ok
         }
         F e → {
             ( nurl_print `  ft_open failed: ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
             ( ft_set_stream F )
             ^ F
         }
@@ -98,42 +91,35 @@ $ `deps/gpukit/src/dev.nu`
 
 @ main → i {
     : ~ String mp ( string_new )
-    ?? ( env_get `QWEN3_GGUF` ) { T p → { ( string_free mp ) = mp p } F → {} }
+    ?? ( env_get `QWEN3_GGUF` ) { T p → { = mp p } F → {} }
     ? & > ( string_len mp ) 0 ( file_exists ( string_data mp ) ) {} {
         ( nurl_print `finetune_stream_test: SKIP (set QWEN3_GGUF)\n` )
-        ( string_free mp )
         ^ 0
     }
 
-    : *u ea ( nurl_alloc 8 )
-    : *u st ( nurl_alloc 8 )
-    ( nurl_poke ea 0 0 )
-    ( nurl_poke st 0 1 )
+    : ~ i ea 0
+    : ~ i st 1
     : b oks ( run_once ( string_data mp ) T 0 st )
     ( check oks `streamed run completes (shapes at open, values after capture)` )
     : b oke ( run_once ( string_data mp ) F 0 ea )
     ( check oke `eager run completes` )
     ( nurl_print `  step-0 loss eager ` )
-    ( nurl_print ( nurl_str_float ( bits_to_f64 ( nurl_peek ea 0 ) ) ) )
+    ( nurl_print ( nurl_str_float ( bits_to_f64 ea ) ) )
     ( nurl_print ` streamed ` )
-    ( nurl_print ( nurl_str_float ( bits_to_f64 ( nurl_peek st 0 ) ) ) )
+    ( nurl_print ( nurl_str_float ( bits_to_f64 st ) ) )
     ( nurl_print `\n` )
-    ( check == ( nurl_peek ea 0 ) ( nurl_peek st 0 )
+    ( check == ea st
     `step-0 device loss is BIT-IDENTICAL streamed vs eager (f64 replay)` )
 
     // and on the f32 replay, the one a big model actually uses
-    : *u ea32 ( nurl_alloc 8 )
-    : *u st32 ( nurl_alloc 8 )
-    ( nurl_poke ea32 0 0 )
-    ( nurl_poke st32 0 1 )
+    : ~ i ea32 0
+    : ~ i st32 1
     : b oke32 ( run_once ( string_data mp ) F 1 ea32 )
     : b oks32 ( run_once ( string_data mp ) T 1 st32 )
     ( check & oke32 oks32 `f32 replay runs both ways` )
-    ( check == ( nurl_peek ea32 0 ) ( nurl_peek st32 0 )
+    ( check == ea32 st32
     `step-0 device loss bit-identical on the f32 replay too` )
 
-    ( nurl_free ea ) ( nurl_free st ) ( nurl_free ea32 ) ( nurl_free st32 )
-    ( string_free mp )
     ( nurl_print `\nfinetune_stream_test: ` )
     ( nurl_print_int g_pass )
     ( nurl_print ` passed, ` )

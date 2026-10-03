@@ -24,8 +24,7 @@
 //
 //   ( pp_open path )              → !Image String    decoded, forced RGB
 //   ( pp_pick_target avg_aspect ) → i                packed (w<<16)|h
-//   ( pp_fit im tw th )           → !*Frame String
-//   ( pp_free fr )                → v
+//   ( pp_fit im tw th )           → !Frame String
 //   ( pp_width fr ) ( pp_height fr ) → i
 //   ( pp_data fr )                → *f   CHW, [0,1], borrowed
 //
@@ -47,16 +46,11 @@ $ `deps/image/src/image.nu`
     ( Vec f ) data  // CHW, 3 planes, values in [0, 1]
 }
 
-@ pp_width * Frame fr → i { ^ . fr width }
+@ pp_width Frame fr → i { ^ . fr width }
 
-@ pp_height * Frame fr → i { ^ . fr height }
+@ pp_height Frame fr → i { ^ . fr height }
 
-@ pp_data * Frame fr → *f { ^ ( vec_data [f] . fr data ) }
-
-@ pp_free sink * Frame fr → v {
-    ( vec_free [f] . fr data )
-    ( nurl_free # s fr )
-}
+@ pp_data Frame fr → *f { ^ ( vec_data [f] . fr data ) }
 
 // The reference's RESOLUTION_MAPPINGS[518]: aspect-ratio key → (w, h),
 // all divisible by 14. Keys ascending, exactly the floats the table
@@ -116,10 +110,10 @@ $ `deps/image/src/image.nu`
 
 @ pp_target_h i packed → i { ^ & packed 65535 }
 
-@ __pp_err s msg s detail → !*Frame String {
+@ __pp_err s msg s detail → !Frame String {
     : String m ( string_from msg )
     ( string_push_str m detail )
-    ^ @ !*Frame String { F m }
+    ^ @ !Frame String { F m }
 }
 
 // Decode one image and force RGB the way PIL's `.convert("RGB")` does:
@@ -136,7 +130,6 @@ $ `deps/image/src/image.nu`
         T im → {
             ? == . im channels 3 { ^ @ !Image String { T im } } {}
             : Image rgb ( image_convert im 3 )
-            ( image_free im )
             ^ @ !Image String { T rgb }
         }
     }
@@ -149,7 +142,7 @@ $ `deps/image/src/image.nu`
 // kernel is LANCZOS going down and BICUBIC going up, the crop offsets
 // floor — each of those is the reference's own arithmetic, not an
 // approximation of it.
-@ pp_fit Image im i tw i th → !*Frame String {
+@ pp_fit Image im i tw i th → !Frame String {
     : i w . im width
     : i h . im height
     ? | | <= w 0 <= h 0 != . im channels 3 {
@@ -164,11 +157,9 @@ $ `deps/image/src/image.nu`
     : i left / - iw tw 2
     : i top / - ih th 2
     ? | < left 0 < top 0 {
-        ( image_free resized )
         ^ ( __pp_err `map-anything: crop outside the resized image` `` )
     } {}
     : Image fit ( image_crop resized left top tw th )
-    ( image_free resized )
     // Interleaved bytes to planar floats through the raw pointers — at
     // three planes of 518×392 that is 609k per-element calls saved.
     : ( Vec f ) data ( vec_with_cap [f] * 3 * tw th )
@@ -191,10 +182,5 @@ $ `deps/image/src/image.nu`
         }
         = k + k 1
     }
-    ( image_free fit )
-    : *Frame fr # *Frame ( nurl_alloc Z Frame )
-    = . fr width tw
-    = . fr height th
-    = . fr data data
-    ^ @ !*Frame String { T fr }
+    ^ @ !Frame String { T @ Frame { tw th data } }
 }

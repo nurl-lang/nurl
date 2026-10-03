@@ -18,11 +18,10 @@ $ `src/preproc.nu`
 : i STRIDE 997
 
 @ dump_one s path → v {
-    : !*Frame String r ( pp_load path SIZE PATCH )
+    : !Frame String r ( pp_load path SIZE PATCH )
     ?? r {
         F e → {
             ( nurl_print `ERR ` ) ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
-            ( string_free e )
         }
         T fr → {
             : i w ( pp_width fr )
@@ -39,7 +38,6 @@ $ `src/preproc.nu`
                 = j + j STRIDE
             }
             ( nurl_print `\n` )
-            ( pp_free fr )
         }
     }
 }

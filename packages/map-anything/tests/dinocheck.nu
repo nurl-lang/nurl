@@ -40,13 +40,13 @@ $ `src/dino.nu`
     ( string_push_str ip `/input.bin` )
     : ~ ( Vec u ) raw ( vec_new [u] )
     ?? ( read_file_bytes ( string_data ip ) ) {
-        T v → { ( vec_free [u] raw ) = raw v }
+        T v → { = raw v }
         F → { ^ ( __dc_die `cannot read input.bin` ) }
     }
-    ( string_free ip )
     : i nin * 3 * h w
     ? != ( vec_len [u] raw ) * nin 4 { ^ ( __dc_die `input.bin is the wrong size` ) } {}
-    : *f img # *f ( nurl_zalloc * 8 nin )
+    : ( Vec u ) img__v ( vec_zeroed [u] * 8 nin )
+    : *f img # *f ( vec_data [u] img__v )
     : *u rp ( vec_data [u] raw )
     : ~ i j 0
     ~ < j nin {
@@ -55,14 +55,12 @@ $ `src/dino.nu`
         = . img j # f ( bits_to_f32 bits )
         = j + j 1
     }
-    ( vec_free [u] raw )
 
     // model + device
-    : ~ * Lw lw # *Lw 0
+    : ~ Lw lw ( lw_none )
     ?? ( lw_open model ) {
         F e → {
             ( puts ( string_data e ) )
-            ( string_free e )
             ^ 1
         }
         T got → { = lw got }
@@ -101,14 +99,7 @@ $ `src/dino.nu`
         T → { ( puts `wrote nurl_tok.bin` ) }
         F → { ^ ( __dc_die `cannot write nurl_tok.bin` ) }
     }
-    ( string_free opth )
-    ( vec_free [u] out )
-    ( vec_free [f] host )
-    ( gk_dbuf_free tok )
-    ( ma_ws_free ws )
-    ( dn_free d )
     ( lw_close lw )
-    ( nurl_free # s img )
     ( gk_close kit )
     ^ 0
 }

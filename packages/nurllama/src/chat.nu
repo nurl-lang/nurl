@@ -46,15 +46,6 @@ $ `deps/gguf/src/gguf.nu`
     ^ @ ChatMsg { ( string_from role ) ( string_from content ) }
 }
 
-@ chat_msg_free sink ChatMsg m → v {
-    ( string_free . m role )
-    ( string_free . m content )
-}
-
-@ chat_msgs_free sink ( Vec ChatMsg ) v → v {
-    ( vec_free_with [ChatMsg] v \ ChatMsg m → v { ( chat_msg_free m ) } )
-}
-
 // Pick the style from the model's own chat template (substring match on
 // the marker tokens each dialect must contain), falling back to PLAIN
 // when the model ships no template — a base model, honestly served.
@@ -87,7 +78,6 @@ $ `deps/gguf/src/gguf.nu`
         ?? ( vec_get [ChatMsg] msgs k ) {
             T m → {
                 ? ( __chat_is m `system` ) {
-                    ( string_free sys )
                     = sys ( string_from ( __chat_text m ) )
                 } {}
             }
@@ -120,7 +110,6 @@ $ `deps/gguf/src/gguf.nu`
         }
         = k + k 1
     }
-    ( string_free sys )
     ^ out
 }
 
@@ -198,7 +187,6 @@ $ `deps/gguf/src/gguf.nu`
         ?? ( vec_get [ChatMsg] msgs k ) {
             T m → {
                 ? ( __chat_is m `system` ) {
-                    ( string_free sys )
                     = sys ( string_from ( __chat_text m ) )
                 } {}
             }
@@ -230,7 +218,6 @@ $ `deps/gguf/src/gguf.nu`
         = k + k 1
     }
     ( string_push_str out `<start_of_turn>model\n` )
-    ( string_free sys )
     ^ out
 }
 

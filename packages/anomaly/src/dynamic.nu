@@ -38,6 +38,7 @@ $ `src/score.nu`
 $ `src/autoenc.nu`
 $ `src/forecast.nu`
 $ `src/store.nu`
+$ `stdlib/core/rcbox.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -85,22 +86,36 @@ $ `src/store.nu`
     ^ ? <= df 0.0 1.0 0.0
 }
 
-// A live dynamic model. Obtain with model_open, release with model_free.
-: Model {
+// A live dynamic model. Obtain with model_open; the last copy of the
+// handle releases it (model_free lets go early).
+: ModelImpl {
     Store store
     String mname
-    * Meta meta
+    Meta meta
     ( Vec String ) lines
     ( Vec i ) times
     ( Vec VerModel ) forests
     Scaler sc
     AeModel ae
     b ae_stale  // the net names features the current encoding no longer makes
-    * FcModel fc  // the forecast version (src/forecast.nu); untrained handle when none
+    FcModel fc  // the forecast version (src/forecast.nu); untrained handle when none
     i next_train_at
     i min_points
     i max_points
 }
+
+// A Model is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Model { s ctl }
+
+@ Model_share Model h → Model { ^ @ Model { # s ( rcbox_share # i . h ctl ) } }
+
+@ Model_drop sink Model h → v {
+    ( mem_forget h )
+    ( rcbox_release [ModelImpl] # i . h ctl )
+}
+
+@ _Model_ptr Model h → *ModelImpl { ^ ( rcbox_ptr [ModelImpl] # i . h ctl ) }
 
 // Who is acting, and how, for the audit log: the service sets the actor
 // from the request's principal, the CLI and the scheduler name
@@ -133,12 +148,9 @@ $ `src/store.nu`
 }
 
 // The newest `limit` audit entries of a model (all when ≤ 0).
-@ model_audit * Model mo i limit → Json {
+@ model_audit Model mo__h i limit → Json {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( store_load_audit . mo store ( string_data . mo mname ) limit )
-}
-
-@ verdict_free sink Verdict vd → v {
-    ( vec_free_with [VerVerdict] . vd versions \ VerVerdict vv → v { ( string_free . vv vvname ) } )
 }
 
 @ __an_vercfg_clone VerCfg vc → VerCfg {
@@ -162,25 +174,21 @@ $ `src/store.nu`
     ?? r {
         T j → {
             : i ts ( _an_jint j `timestamp` 0 )
-            ( json_free j )
             ^ ts
         }
         F _ → { ^ 0 }
     }
 }
 
-@ __an_free_forests * Model mo → v {
-    ( vec_free_with [VerModel] . mo forests \ VerModel vm → v { ( anom_vermodel_free vm ) } )
-    = . mo forests ( vec_new [VerModel] )
-}
-
-@ __an_free_lines ( Vec String ) xs → v {
-    ( vec_free_with [String] xs \ String x → v { ( string_free x ) } )
+@ __an_clear_forests Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( vec_clear [VerModel] . mo forests )
 }
 
 // The schedule step from the current ring fill: at capacity, retrain less.
-@ __an_sched_step * Model mo → i {
-    : *Meta mm . mo meta
+@ __an_sched_step Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ? >= ( vec_len [String] . mo lines ) . mo max_points { ^ . mm sched_at_max } {}
     ^ . mm sched_below
 }
@@ -200,8 +208,10 @@ $ `src/store.nu`
     ^ ( _an_forestless_name vname )
 }
 
-@ model_open_at Store st s name i now → *Model {
-    : *Model mo # *Model ( nurl_malloc Z Model )
+@ model_open_at Store st s name i now → Model {
+    : i mo__box ( rcbox_zero [ModelImpl] )
+    : *ModelImpl mo ( rcbox_ptr [ModelImpl] mo__box )
+    : Model mo__h @ Model { # s mo__box }
     = . mo store ( store_open_org ( string_data . st root ) ( store_org st ) )
     = . mo mname ( string_from name )
     = . mo forests ( vec_new [VerModel] )
@@ -210,7 +220,7 @@ $ `src/store.nu`
 
     : ~ b loaded F
     ? ( store_exists st name ) {
-        : ?*Meta mload ( store_load_meta st name )
+        : ?Meta mload ( store_load_meta st name )
         ?? mload {
             T got → {
                 = . mo meta got
@@ -232,8 +242,6 @@ $ `src/store.nu`
                     ( string_push_str msg `, the model reopens empty` )
                 } { ( string_push_str msg `the model reopens empty` ) }
                 ( nurl_eprintln ( string_data msg ) )
-                ( string_free msg )
-                ( string_free kept )
             }
         }
     } {}
@@ -241,10 +249,9 @@ $ `src/store.nu`
         : Time t ( time_from_unix now )
         : String iso ( time_format_iso t )
         = . mo meta ( meta_new name ( string_data iso ) )
-        ( string_free iso )
         ( store_save_meta . mo store name . mo meta )
     }
-    : *Meta mm . mo meta
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     = . mo max_points . mm max_points
 
     // Ring: adopt the stored lines wholesale, then stamp times from them.
@@ -260,7 +267,7 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( __an_note_stored mo )
+    ( __an_note_stored mo__h )
 
     // Trained versions: one forest blob per enabled version, if present.
     // The `autoencoder` version is not a forest: its VerCfg only carries
@@ -296,8 +303,6 @@ $ `src/store.nu`
                                 ( string_push_int msg nfeat0 )
                                 ( string_push_str msg ` features; not loaded` )
                                 ( nurl_eprintln ( string_data msg ) )
-                                ( string_free msg )
-                                ( anom_vermodel_free vm )
                             }
                         }
                         F _ → {}
@@ -310,14 +315,14 @@ $ `src/store.nu`
     }
 
     // Scaler from persisted metadata (empty scaler if never trained).
-    = . mo sc ( meta_scaler mm )
+    = . mo sc ( meta_scaler . mo meta )
 
     // The autoencoder version, if one has been trained for this model.
     ?? ( store_load_ae . mo store name ) {
         T ae → { = . mo ae ae }
         F → { = . mo ae ( ae_empty ) }
     }
-    = . mo ae_stale ( an_ae_stale mm . mo ae )
+    = . mo ae_stale ( an_ae_stale . mo meta . mo ae )
 
     // The forecast version: its models with their states as last saved,
     // placed in the ring by the sequence number the file carries. Rows
@@ -329,15 +334,15 @@ $ `src/store.nu`
         T fc → { = . mo fc fc }
         F → { = . mo fc ( fc_new ) }
     }
-    ? . . mo fc trained {
-        ? ( __an_fc_stale mo ) { ( fc_clear . mo fc ) } {
-            : *FcModel fc . mo fc
+    ? . ( _FcModel_ptr . mo fc ) trained {
+        ? ( __an_fc_stale mo__h ) { ( fc_clear . mo fc ) } {
+            : *FcModelImpl fc ( _FcModel_ptr . mo fc )
             : i np2 ( vec_len [String] . mo lines )
-            : ~ i pos - . fc seq ( model_seq_base mo )
+            : ~ i pos - . fc seq ( model_seq_base mo__h )
             ? > pos np2 { = pos np2 } {}
             ? < pos 0 {
                 : ~ i j 0
-                ~ < j . fc nw { ( arima_restart_at # ArimaModel ( _fc_geti . fc models j ) - ( model_seq_base mo ) . fc origin_seq ) = j + j 1 }
+                ~ < j . fc nw { ( arima_restart_at ( _fc_model_at . mo fc j ) - ( model_seq_base mo__h ) . fc origin_seq ) = j + j 1 }
                 = pos 0
             } {}
             = . fc pos pos
@@ -348,20 +353,21 @@ $ `src/store.nu`
     ? == ( vec_len [VerModel] . mo forests ) 0 {
         = . mo next_train_at . mo min_points
     } {
-        = . mo next_train_at + . mm n_seen ( __an_sched_step mo )
+        = . mo next_train_at + . mm n_seen ( __an_sched_step mo__h )
     }
-    ^ mo
+    ^ mo__h
 }
 
-@ model_open Store st s name → *Model {
+@ model_open Store st s name → Model {
     ^ ( model_open_at st name ( now_seconds ) )
 }
 
 // Set a version's sliding-window geometry (timevector). Takes effect at
 // the NEXT retrain — detect derives the live window from the trained
 // forest's width, so a config change can never desync scoring.
-@ model_set_version_window * Model mo s vname i wsize i sstep → b {
-    : *Meta mm . mo meta
+@ model_set_version_window Model mo__h s vname i wsize i sstep → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
     ~ < k nv {
@@ -372,7 +378,7 @@ $ `src/store.nu`
                     = . nc window_size wsize
                     = . nc step_size sstep
                     : b _o ( vec_set [VerCfg] . mm versions k nc )
-                    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+                    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
                     ^ T
                 } {}
             }
@@ -386,14 +392,16 @@ $ `src/store.nu`
 // ── Which clock ───────────────────────────────────────────────────────
 
 // The newest stored stamp, or 0 on an empty ring.
-@ model_last_ts * Model mo → i {
+@ model_last_ts Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : i np ( vec_len [i] . mo times )
     ? > np 0 { ?? ( vec_get [i] . mo times - np 1 ) { T x → { ^ x } F _ → {} } } {}
     ^ 0
 }
 
 // The oldest stored stamp, 0 for an empty ring.
-@ model_first_ts * Model mo → i {
+@ model_first_ts Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ?? ( vec_get [i] . mo times 0 ) { T x → { ^ x } F _ → {} }
     ^ 0
 }
@@ -402,7 +410,7 @@ $ `src/store.nu`
 // newest stored point and an unbounded start the oldest, never a `null`
 // that says "no end" where the answer is "the end of the data". Both
 // bounds are the ones the rows were actually taken between.
-@ model_window_bounds * Model mo i from_ts i to_ts → ( Vec i ) {
+@ model_window_bounds Model mo i from_ts i to_ts → ( Vec i ) {
     : ( Vec i ) w ( vec_new [i] )
     ( vec_push [i] w ? > from_ts 0 from_ts ( model_first_ts mo ) )
     ( vec_push [i] w ? > to_ts 0 to_ts ( model_last_ts mo ) )
@@ -410,35 +418,27 @@ $ `src/store.nu`
 }
 
 // The tick the NEXT point gets on the count clock: one past the newest.
-@ model_next_tick * Model mo → i {
+@ model_next_tick Model mo → i {
     ^ + ( model_last_ts mo ) ANOM_TICK
 }
 
 // "Now" for this model: the wall clock, or on the count clock the newest
 // tick — the moment the last point arrived is the only present it has.
-@ model_now * Model mo → i {
-    : *Meta mm . mo meta
-    ? . mm count_clock { ^ ( model_last_ts mo ) } {}
+@ model_now Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? . mm count_clock { ^ ( model_last_ts mo__h ) } {}
     ^ ( now_seconds )
 }
 
-@ model_free sink * Model mo → v {
-    ( __an_free_forests mo )
-    ( vec_free [VerModel] . mo forests )
-    ( __an_free_lines . mo lines )
-    ( vec_free [i] . mo times )
-    ( scaler_free . mo sc )
-    ( ae_free . mo ae )
-    ( fc_free . mo fc )
-    ( meta_free . mo meta )
-    ( string_free . mo mname )
-    ( store_free . mo store )
-    ( nurl_free mo )
-}
+// Let go of `mo` now rather than at the end of its owner's scope
+// (optional: the last copy of the handle releases the model).
+@ model_free sink Model mo → v {}
 
 // Test hook: shrink the warm-up / ring limits so eviction and scheduling
 // are exercisable without 150 000 points.
-@ model_set_limits * Model mo i min_pts i max_pts → v {
+@ model_set_limits Model mo__h i min_pts i max_pts → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     = . mo min_points min_pts
     = . mo max_points max_pts
     ? == ( vec_len [VerModel] . mo forests ) 0 {
@@ -446,11 +446,13 @@ $ `src/store.nu`
     } {}
 }
 
-@ model_metadata * Model mo → *Meta {
+@ model_metadata Model mo__h → Meta {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ^ . mo meta
 }
 
-@ model_n_points * Model mo → i {
+@ model_n_points Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( vec_len [String] . mo lines )
 }
 
@@ -458,11 +460,13 @@ $ `src/store.nu`
 // changes and before the metadata is written: the listing reads the
 // metadata alone, and "points seen" is a lifetime count that keeps
 // climbing past the cap.
-@ __an_note_stored * Model mo → v {
-    = . ( model_metadata mo ) n_stored ( vec_len [String] . mo lines )
+@ __an_note_stored Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    = . ( _Meta_ptr . mo meta ) n_stored ( vec_len [String] . mo lines )
 }
 
-@ model_is_trained * Model mo → b {
+@ model_is_trained Model mo__h → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ^ > ( vec_len [VerModel] . mo forests ) 0
 }
 
@@ -478,8 +482,9 @@ $ `src/store.nu`
 // timevector window is always the points BEFORE the one under judgement and
 // never leaks the future into a replayed verdict. None when the ring is too
 // short there, or a stored line no longer parses.
-@ __an_window_tail * Model mo i need i end → ?( Vec f ) {
-    : *Meta mm . mo meta
+@ __an_window_tail Model mo__h i need i end → ?( Vec f ) {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i n end
     ? < n need { ^ @ ?( Vec f ) { F } } {}
     : ( Vec f ) out ( vec_new [f] )
@@ -491,18 +496,15 @@ $ `src/store.nu`
                 : !Json JsonError jr ( json_parse ( string_data l ) )
                 ?? jr {
                     T j → {
-                        : !EncPoint String er ( anomaly_preprocess mm j )
+                        : !EncPoint String er ( anomaly_preprocess . mo meta j )
                         ?? er {
                             T pt → {
                                 : ( Vec f ) row ( anomaly_project pt . mm feats )
                                 ( scaler_apply . mo sc row )
                                 ( vec_extend [f] out row )
-                                ( vec_free [f] row )
-                                ( enc_free pt )
                             }
-                            F e → { ( string_free e ) = ok F }
+                            F e → { = ok F }
                         }
-                        ( json_free j )
                     }
                     F _ → { = ok F }
                 }
@@ -512,7 +514,6 @@ $ `src/store.nu`
         = k + k 1
     }
     ? ok { ^ @ ?( Vec f ) { T out } } {}
-    ( vec_free [f] out )
     ^ @ ?( Vec f ) { F }
 }
 
@@ -526,7 +527,7 @@ $ `src/store.nu`
 // The numbers are the per-row path's exactly (anom_decisions is
 // bit-identical to anom_decision, and the window is the same projection
 // of the same rows); only the work is shared.
-: Hist {
+: HistImpl {
     i base
     i n
     i nfeat
@@ -541,22 +542,24 @@ $ `src/store.nu`
     ( Vec i ) fc_ok  // 1 where the row has forecast z-scores
 }
 
-@ __an_hist_free sink * Hist h → v {
-    ? == # i h 0 { ^ } {}
-    ( vec_free [f] . h x )
-    ( vec_free [i] . h ok )
-    ( vec_free [f] . h ae_x )
-    ( vec_free_with [( Vec f )] . h dfs \ ( Vec f ) d → v { ( vec_free [f] d ) } )
-    ( vec_free_with [( Vec i )] . h dfs_ok \ ( Vec i ) d → v { ( vec_free [i] d ) } )
-    ( vec_free [f] . h fc_z )
-    ( vec_free [i] . h fc_ok )
-    ( nurl_free # *u h )
+// A Hist is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
+// every copy is the same state, and the last owner releases it.
+: Hist { s ctl }
+
+@ Hist_share Hist h → Hist { ^ @ Hist { # s ( rcbox_share # i . h ctl ) } }
+
+@ Hist_drop sink Hist h → v {
+    ( mem_forget h )
+    ( rcbox_release [HistImpl] # i . h ctl )
 }
+
+@ _Hist_ptr Hist h → *HistImpl { ^ ( rcbox_ptr [HistImpl] # i . h ctl ) }
 
 // Widest timevector window over the trained forests (1 when there is none):
 // the rows a scan of [lo, hi) needs encoded start at lo − width + 1.
-@ __an_hist_width * Model mo → i {
-    : i nfeat ( vec_len [String] . . mo meta feats )
+@ __an_hist_width Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : i nfeat ( vec_len [String] . ( _Meta_ptr . mo meta ) feats )
     : ~ i w 1
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
@@ -576,8 +579,9 @@ $ `src/store.nu`
 }
 
 // Encode ring rows [from, to) and score them through every forest.
-@ __an_hist_build * Model mo i from i to → *Hist {
-    : *Meta mm . mo meta
+@ __an_hist_build Model mo__h i from i to → Hist {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nfeat ( vec_len [String] . mm feats )
     : AeModel cae . mo ae
     : ~ i ae_nfeat 0
@@ -596,25 +600,22 @@ $ `src/store.nu`
     // a restart ANOM_FC_BURN rows before the window (the diffuse start
     // has faded by then), then every row, each row's z-scores kept when
     // it is in the window.
-    : *FcModel fc . mo fc
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : ~ i fc_nw 0
-    ? & . fc trained ( meta_version_enabled mm ANOM_FC_NAME F ) { = fc_nw . fc nw } {}
+    ? & . fc trained ( meta_version_enabled . mo meta ANOM_FC_NAME F ) { = fc_nw . fc nw } {}
     : ( Vec f ) fc_z ( vec_with_cap [f] * n fc_nw )
     : ( Vec i ) fc_ok ( vec_with_cap [i] n )
-    : ~ ( Vec i ) copies ( vec_new [i] )
+    : ~ ( Vec ArimaModel ) copies ( vec_new [ArimaModel] )
     ? > fc_nw 0 {
         : ~ i b0 - lo ANOM_FC_BURN
         ? < b0 0 { = b0 0 } {}
-        ( vec_free [i] copies )
-        = copies ( fc_replay_begin fc + ( model_seq_base mo ) b0 )
+        = copies ( fc_replay_begin . mo fc + ( model_seq_base mo__h ) b0 )
         : ( Vec f ) noz ( vec_new [f] )
         ~ < b0 lo {
-            : ( Vec f ) fr ( __an_fc_row mo b0 )
-            ( fc_replay_step fc copies fr noz )
-            ( vec_free [f] fr )
+            : ( Vec f ) fr ( __an_fc_row mo__h b0 )
+            ( fc_replay_step . mo fc copies fr noz )
             = b0 + b0 1
         }
-        ( vec_free [f] noz )
     } {}
     : ~ i k lo
     ~ < k hi {
@@ -625,33 +626,27 @@ $ `src/store.nu`
                 : !Json JsonError jr ( json_parse ( string_data l ) )
                 ?? jr {
                     T j → {
-                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
+                        : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
                         ?? er {
                             T p → {
                                 : ( Vec f ) row ( anomaly_project p . mm feats )
                                 ( scaler_apply . mo sc row )
                                 ( vec_extend [f] x row )
-                                ( vec_free [f] row )
                                 ? > ae_nfeat 0 {
                                     : ( Vec f ) araw ( anomaly_project p . cae feats )
                                     ( vec_extend [f] ae_x araw )
-                                    ( vec_free [f] araw )
                                 } {}
                                 ? > fc_nw 0 {
                                     : ( Vec f ) fr ( fc_project p . fc feats )
                                     : ( Vec f ) zrow ( vec_zeroed [f] fc_nw )
-                                    ( fc_replay_step fc copies fr zrow )
+                                    ( fc_replay_step . mo fc copies fr zrow )
                                     ( vec_extend [f] fc_z zrow )
-                                    ( vec_free [f] zrow )
-                                    ( vec_free [f] fr )
                                     = fgot T
                                 } {}
-                                ( enc_free p )
                                 = got T
                             }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -674,14 +669,11 @@ $ `src/store.nu`
                 : ~ i z 0
                 ~ < z fc_nw { = . gp z ( float_nan ) ( vec_push [f] fc_z ( float_nan ) ) = z + z 1 }
                 : ( Vec f ) noz ( vec_new [f] )
-                ( fc_replay_step fc copies gap noz )
-                ( vec_free [f] noz )
-                ( vec_free [f] gap )
+                ( fc_replay_step . mo fc copies gap noz )
             } {}
         }
         = k + k 1
     }
-    ( fc_replay_end copies )
     // Every forest over the whole matrix at once. A point-wide forest takes
     // the matrix as it is; a timevector forest takes each row's window —
     // the W−1 rows before it and itself, all encoded here — laid out in
@@ -698,7 +690,6 @@ $ `src/store.nu`
             T vm → {
                 ? & > n 0 > nfeat 0 {
                     ? == . vm n_cols nfeat {
-                        ( vec_free [f] d )
                         = d ( anom_decisions vm x n nfeat )
                         : ~ i r 0
                         ~ < r n { ( vec_push [i] dok ( _mlp_iget ok r ) ) = r + r 1 }
@@ -746,14 +737,11 @@ $ `src/store.nu`
                                     ( vec_set [i] dok at 1 )
                                     = q + q 1
                                 }
-                                ( vec_free [f] got )
                                 ( vec_set_len [f] batch 0 )
                                 ( vec_set_len [i] rows 0 )
                             } {}
                             = r + r 1
                         }
-                        ( vec_free [f] batch )
-                        ( vec_free [i] rows )
                     }
                 } {}
             }
@@ -763,24 +751,12 @@ $ `src/store.nu`
         ( vec_push [( Vec i )] dfs_ok dok )
         = k + k 1
     }
-    : *Hist h # *Hist ( nurl_malloc Z Hist )
-    = . h base lo
-    = . h n n
-    = . h nfeat nfeat
-    = . h x x
-    = . h ok ok
-    = . h ae_nfeat ae_nfeat
-    = . h ae_x ae_x
-    = . h dfs dfs
-    = . h dfs_ok dfs_ok
-    = . h fc_nw fc_nw
-    = . h fc_z fc_z
-    = . h fc_ok fc_ok
-    ^ h
+    ^ @ Hist { # s ( rcbox_new [HistImpl] @ HistImpl { lo n nfeat x ok ae_nfeat ae_x dfs dfs_ok fc_nw fc_z fc_ok } ) }
 }
 
 // Row `at` of the ring as a standardised point, copied out of the history.
-@ __an_hist_row * Hist h i at → ( Vec f ) {
+@ __an_hist_row Hist h__h i at → ( Vec f ) {
+    : *HistImpl h ( _Hist_ptr h__h )
     : i r - at . h base
     : ( Vec f ) out ( vec_with_cap [f] . h nfeat )
     : *f xp ( vec_data [f] . h x )
@@ -792,7 +768,8 @@ $ `src/store.nu`
 // The `need` rows ending just before `end`, from the history — None when
 // any of them lies outside it or failed to encode (the caller then reads
 // the ring, exactly as without a history).
-@ __an_hist_tail * Hist h i need i end → ?( Vec f ) {
+@ __an_hist_tail Hist h__h i need i end → ?( Vec f ) {
+    : *HistImpl h ( _Hist_ptr h__h )
     : i first - end need
     ? | < first . h base > end + . h base . h n { ^ @ ?( Vec f ) { F } } {}
     : *i okp ( vec_data [i] . h ok )
@@ -812,8 +789,8 @@ $ `src/store.nu`
 
 // The timevector tail: out of the history when one covers it, else read
 // from the ring.
-@ __an_tail_for * Model mo * Hist h i need i end → ?( Vec f ) {
-    ? != # i h 0 {
+@ __an_tail_for Model mo Hist h i need i end → ?( Vec f ) {
+    ? != # i . h ctl 0 {
         ?? ( __an_hist_tail h need end ) {
             T t → { ^ @ ?( Vec f ) { T t } }
             F → {}
@@ -825,37 +802,37 @@ $ `src/store.nu`
 // Score `p` as though it sat at ring position `end` — the point's own slot,
 // exclusive: rows [0, end) are its past and everything from `end` on is
 // future the verdict must not see.
-@ __an_score_enc_upto * Model mo EncPoint p i end b absorb → Verdict {
-    : *Meta mm . mo meta
+@ __an_score_enc_upto Model mo__h EncPoint p i end b absorb → Verdict {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : ( Vec f ) x ( anomaly_project p . mm feats )
     ( scaler_apply . mo sc x )
     : AeModel cae . mo ae
     : ~ ( Vec f ) araw ( vec_new [f] )
     ? & . cae trained ! . mo ae_stale {
-        ( vec_free [f] araw )
         = araw ( anomaly_project p . cae feats )
     } {}
-    : *FcModel fc . mo fc
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : ~ ( Vec f ) fraw ( vec_new [f] )
     ? . fc trained {
-        ( vec_free [f] fraw )
         = fraw ( fc_project p . fc feats )
     } {}
-    ^ ( __an_score_core mo x araw fraw end # *Hist 0 absorb )
+    ^ ( __an_score_core mo__h x araw fraw end @ Hist { # s 0 } absorb )
 }
 
 // Score ring row `at` out of an encoded history that covers it.
-@ __an_score_hist * Model mo * Hist h i at → Verdict {
+@ __an_score_hist Model mo Hist h__h i at → Verdict {
+    : *HistImpl h ( _Hist_ptr h__h )
     : i r - at . h base
-    : ( Vec f ) x ( __an_hist_row h at )
+    : ( Vec f ) x ( __an_hist_row h__h at )
     : ( Vec f ) araw ( vec_with_cap [f] . h ae_nfeat )
     : *f ap ( vec_data [f] . h ae_x )
     : ~ i c 0
     ~ < c . h ae_nfeat { ( vec_push [f] araw . ap + * r . h ae_nfeat c ) = c + c 1 }
-    ^ ( __an_score_core mo x araw ( vec_new [f] ) at h F )
+    ^ ( __an_score_core mo x araw ( vec_new [f] ) at h__h F )
 }
 
-// The verdict of a standardised point `x` (owned, freed here) sitting at
+// The verdict of a standardised point `x` (owned) sitting at
 // ring position `end`, with `araw` its raw projection onto the
 // autoencoder's feature order (owned; empty when the AE is untrained)
 // and `fraw` its readings of the forecast version's watched features
@@ -865,19 +842,18 @@ $ `src/store.nu`
 // come out of it; without, they are computed here and read from the
 // ring, and `absorb` says the point is the ring's newest and the
 // forecast states take it in (the live ingest; detect_only leaves them).
-@ __an_score_core * Model mo ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end * Hist h b absorb → Verdict {
+@ __an_score_core Model mo__h ( Vec f ) x ( Vec f ) araw ( Vec f ) fraw i end Hist h__h b absorb → Verdict {
+    : *HistImpl h ( _Hist_ptr h__h )
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
-    ? & ( model_is_trained mo ) warm {} {
-        ( vec_free [f] x )
-        ( vec_free [f] araw )
-        ( vec_free [f] fraw )
+    ? & ( model_is_trained mo__h ) warm {} {
         ^ @ Verdict { F F 0.0 0.0 vvs 0 0 }
     }
 
-    : *Meta mm . mo meta
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nfeat ( vec_len [String] . mm feats )
-    : b hist != # i h 0
+    : b hist != # i . h__h ctl 0
 
     : ~ i hits 0
     // `worst` is the aggregate score: the decision value of the version
@@ -919,14 +895,14 @@ $ `src/store.nu`
                         // The history scored this window already; an
                         // empty tail stands for it and is not walked.
                         = tailo @ ?( Vec f ) { T ( vec_new [f] ) }
-                    } { = tailo ( __an_tail_for mo h - W 1 end ) }
+                    } { = tailo ( __an_tail_for mo__h h__h - W 1 end ) }
                     ?? tailo {
                         T tail → {
                             ? have {} { ( vec_extend [f] tail x ) }
                             ? | have == ( vec_len [f] tail ) . vm n_cols {
                                 : ~ f dfw hdf
                                 ? have {} { = dfw ( anom_decision vm tail ) }
-                                : f marginw ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
+                                : f marginw ( meta_version_margin . mo meta ( string_data . vm vname ) . vm margin )
                                 : b hitw <= dfw - 0.0 marginw
                                 ? hitw { = hits + hits 1 } {}
                                 : f sevw ( anom_severity dfw marginw )
@@ -941,7 +917,6 @@ $ `src/store.nu`
                                     -1
                                 } )
                             } {}
-                            ( vec_free [f] tail )
                         }
                         F → {}
                         // ring shorter than the window → the version has
@@ -950,7 +925,7 @@ $ `src/store.nu`
                 } {
                     : ~ f df hdf
                     ? have {} { = df ( anom_decision vm x ) }
-                    : f margin ( meta_version_margin mm ( string_data . vm vname ) . vm margin )
+                    : f margin ( meta_version_margin . mo meta ( string_data . vm vname ) . vm margin )
                     : b hit <= df - 0.0 margin
                     ? hit { = hits + hits 1 } {}
                     : f sev ( anom_severity df margin )
@@ -976,7 +951,7 @@ $ `src/store.nu`
     // among many to it; this version is the univariate check the forests
     // structurally cannot make, and it names the feature. Its decision
     // value is -max|z|, so the margin IS the sigma count of the line.
-    ? & ( meta_version_enabled mm ANOM_GUARD_NAME F ) > ( vec_len [f] . . mo sc mean ) 0 {
+    ? & ( meta_version_enabled . mo meta ANOM_GUARD_NAME F ) > ( vec_len [f] . . mo sc mean ) 0 {
         : ~ f gz 0.0
         : ~ i gi -1
         : *f xp ( vec_data [f] x )
@@ -987,7 +962,7 @@ $ `src/store.nu`
             = j + j 1
         }
         : f gdf - 0.0 gz
-        : f gmargin ( meta_version_margin mm ANOM_GUARD_NAME ANOM_GUARD_SIGMA )
+        : f gmargin ( meta_version_margin . mo meta ANOM_GUARD_NAME ANOM_GUARD_SIGMA )
         : b ghit <= gdf - 0.0 gmargin
         ? ghit { = hits + hits 1 } {}
         : f gsev ( anom_severity gdf gmargin )
@@ -1004,11 +979,11 @@ $ `src/store.nu`
     } {}
 
     // The flatline guard: the column that has stopped moving, if one has.
-    ? ( meta_version_enabled mm ANOM_FLAT_NAME F ) {
-        : FlatOut fo ( __an_flat_judge mo x end h )
+    ? ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) {
+        : FlatOut fo ( __an_flat_judge mo__h x end h__h )
         ? . fo ready {
             : f fdf - 0.0 . fo worst
-            : f fmargin ( meta_version_margin mm ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
+            : f fmargin ( meta_version_margin . mo meta ANOM_FLAT_NAME ANOM_FLAT_MARGIN )
             : b fhit <= fdf - 0.0 fmargin
             ? fhit { = hits + hits 1 } {}
             : f fsev ( anom_severity fdf fmargin )
@@ -1029,8 +1004,8 @@ $ `src/store.nu`
     // in the forecast's standard errors, and the feature it is. Out of
     // the history's replay when there is one; live otherwise, the states
     // first caught up with the ring rows they have not seen.
-    : *FcModel fc . mo fc
-    ? & . fc trained ( meta_version_enabled mm ANOM_FC_NAME F ) {
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+    ? & . fc trained ( meta_version_enabled . mo meta ANOM_FC_NAME F ) {
         : ~ b fready F
         : ~ f fworst 0.0
         : ~ i ffeat -1
@@ -1043,26 +1018,24 @@ $ `src/store.nu`
                     : ~ i c 0
                     ~ < c . h fc_nw { ( vec_push [f] zrow . zp + * r . h fc_nw c ) = c + c 1 }
                     : FcPick pk ( fc_worst zrow . fc cols )
-                    ( vec_free [f] zrow )
                     ? >= . pk feat 0 { = fready T = fworst . pk worst = ffeat . pk feat } {}
                 } {}
             } {}
         } {
             ? == ( vec_len [f] fraw ) . fc nw {
-                ( __an_fc_sync mo end )
+                ( __an_fc_sync mo__h end )
                 ? == . fc pos end {
-                    : FcOut fo ( fc_judge fc fraw absorb )
+                    : FcOut fo ( fc_judge . mo fc fraw absorb )
                     = fready . fo ready
                     = fworst . fo worst
                     = ffeat . fo feat
-                    ( fc_out_free fo )
-                    ? & absorb >= . fc unsaved ANOM_FC_SAVE_EVERY { ( __an_fc_save mo ) } {}
+                    ? & absorb >= . fc unsaved ANOM_FC_SAVE_EVERY { ( __an_fc_save mo__h ) } {}
                 } {}
             } {}
         }
         ? fready {
             : f fcdf - 0.0 fworst
-            : f fcmargin ( meta_version_margin mm ANOM_FC_NAME ANOM_FC_SIGMA )
+            : f fcmargin ( meta_version_margin . mo meta ANOM_FC_NAME ANOM_FC_SIGMA )
             : b fchit <= fcdf - 0.0 fcmargin
             ? fchit { = hits + hits 1 } {}
             : f fcsev ( anom_severity fcdf fcmargin )
@@ -1078,7 +1051,6 @@ $ `src/store.nu`
             } )
         } {}
     } {}
-    ( vec_free [f] fraw )
 
     // The autoencoder verdict: reconstruction error against the trained
     // threshold, on the point projected onto the AE's OWN frozen feature
@@ -1086,9 +1058,9 @@ $ `src/store.nu`
     // while its VerCfg is disabled — the net is kept, only the verdict
     // goes away, because re-training it is not a checkbox-priced action.
     : AeModel cae . mo ae
-    ? & & . cae trained ! . mo ae_stale ( meta_version_enabled mm `autoencoder` T ) {
+    ? & & . cae trained ! . mo ae_stale ( meta_version_enabled . mo meta `autoencoder` T ) {
         : f adf ( ae_decision cae araw )
-        : f arel ( meta_version_margin mm `autoencoder` ANOM_AE_MARGIN )
+        : f arel ( meta_version_margin . mo meta `autoencoder` ANOM_AE_MARGIN )
         : f amargin ( anom_ae_margin cae arel )
         : b ahit <= adf - 0.0 amargin
         ? ahit { = hits + hits 1 } {}
@@ -1104,8 +1076,6 @@ $ `src/store.nu`
             -1
         } )
     } {}
-    ( vec_free [f] araw )
-    ( vec_free [f] x )
     // The model's rule, not a query's: `votes` enabled versions must have
     // flagged before the point is an anomaly. One — the default and every
     // model that has never touched the setting — is "any version alone",
@@ -1120,16 +1090,18 @@ $ `src/store.nu`
 // The live-point entry: `ring_has_current` is 1 when the point being scored
 // has already been appended to the ring (ingest) and 0 when it has not
 // (detect_only).
-@ __an_score_enc * Model mo EncPoint p i ring_has_current → Verdict {
-    ^ ( __an_score_enc_upto mo p - ( vec_len [String] . mo lines ) ring_has_current == ring_has_current 1 )
+@ __an_score_enc Model mo__h EncPoint p i ring_has_current → Verdict {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ^ ( __an_score_enc_upto mo__h p - ( vec_len [String] . mo lines ) ring_has_current == ring_has_current 1 )
 }
 
 // ── The forecast version's place in the model ─────────────────────────
 
 // The watched features' readings of ring row `k` (NaN where the row has
 // none, or did not parse).
-@ __an_fc_row * Model mo i k → ( Vec f ) {
-    : *FcModel fc . mo fc
+@ __an_fc_row Model mo__h i k → ( Vec f ) {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : ~ ( Vec f ) out ( vec_new [f] )
     : ~ b got F
     ?? ( vec_get [String] . mo lines k ) {
@@ -1140,14 +1112,11 @@ $ `src/store.nu`
                     : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
                     ?? er {
                         T p → {
-                            ( vec_free [f] out )
                             = out ( fc_project p . fc feats )
-                            ( enc_free p )
                             = got T
                         }
-                        F e → { ( string_free e ) }
+                        F e → {}
                     }
-                    ( json_free j )
                 }
                 F _ → {}
             }
@@ -1163,31 +1132,33 @@ $ `src/store.nu`
 
 // Bring the states up to ring row `target` (exclusive): the rows between
 // are read from the ring and absorbed in order.
-@ __an_fc_sync * Model mo i target → v {
-    : *FcModel fc . mo fc
+@ __an_fc_sync Model mo__h i target → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : i n ( vec_len [String] . mo lines )
     : ~ i t target
     ? > t n { = t n } {}
     ~ < . fc pos t {
-        : ( Vec f ) fr ( __an_fc_row mo . fc pos )
-        ( fc_absorb fc fr )
-        ( vec_free [f] fr )
+        : ( Vec f ) fr ( __an_fc_row mo__h . fc pos )
+        ( fc_absorb . mo fc fr )
     }
 }
 
 // Write forecast.json with the states as they stand.
-@ __an_fc_save * Model mo → v {
-    : *FcModel fc . mo fc
-    = . fc seq + ( model_seq_base mo ) . fc pos
+@ __an_fc_save Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+    = . fc seq + ( model_seq_base mo__h ) . fc pos
     = . fc unsaved 0
-    ( store_save_fc . mo store ( string_data . mo mname ) fc )
+    ( store_save_fc . mo store ( string_data . mo mname ) . mo fc )
 }
 
 // Do the trained models name features the metadata's order no longer
 // has at those places?
-@ __an_fc_stale * Model mo → b {
-    : *FcModel fc . mo fc
-    : *Meta mm . mo meta
+@ __an_fc_stale Model mo__h → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nfeat ( vec_len [String] . mm feats )
     : ~ b stale F
     : ~ i j 0
@@ -1211,19 +1182,21 @@ $ `src/store.nu`
 
 // Ensure a `forecast` VerCfg exists (off by default): a model from
 // before the version gains it at its next retrain.
-@ _an_ensure_fc_cfg * Model mo → v {
-    : *Meta mm . mo meta
-    ? < ( meta_find_version mm ANOM_FC_NAME ) 0 {} { ^ }
+@ _an_ensure_fc_cfg Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? < ( meta_find_version . mo meta ANOM_FC_NAME ) 0 {} { ^ }
     ( vec_push [VerCfg] . mm versions ( _an_vc_fc ) )
 }
 
 // The first row of the forecast's fit window over encoded rows whose
 // times are `ets`: the version's own window_minutes / window_points.
-@ __an_fc_from * Model mo ( Vec i ) ets i now → i {
-    : *Meta mm . mo meta
+@ __an_fc_from Model mo__h ( Vec i ) ets i now → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i ne ( vec_len [i] ets )
     : ~ i from 0
-    : i at ( meta_find_version mm ANOM_FC_NAME )
+    : i at ( meta_find_version . mo meta ANOM_FC_NAME )
     ? >= at 0 {
         ?? ( vec_get [VerCfg] . mm versions at ) {
             T vc → {
@@ -1245,9 +1218,10 @@ $ `src/store.nu`
     ^ from
 }
 
-@ __an_fc_season * Model mo → i {
-    : *Meta mm . mo meta
-    : i at ( meta_find_version mm ANOM_FC_NAME )
+@ __an_fc_season Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : i at ( meta_find_version . mo meta ANOM_FC_NAME )
     ? >= at 0 {
         ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ^ ? > . vc window_size 0 . vc window_size 0 } F _ → {} }
     } {}
@@ -1256,23 +1230,26 @@ $ `src/store.nu`
 
 // Fit the forecast version from encoded ring rows (in ring order, with
 // their times) and persist it. Returns the features watched.
-@ __an_fc_fit * Model mo ( Vec EncPoint ) encs ( Vec i ) ets i now → i {
-    : i from ( __an_fc_from mo ets now )
-    : i nw ( fc_train . mo fc . mo meta encs from ( __an_fc_season mo ) now ( model_seq_base mo ) )
-    ( __an_fc_save mo )
+@ __an_fc_fit Model mo__h ( Vec EncPoint ) encs ( Vec i ) ets i now → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : i from ( __an_fc_from mo__h ets now )
+    : i nw ( fc_train . mo fc . mo meta encs from ( __an_fc_season mo__h ) now ( model_seq_base mo__h ) )
+    ( __an_fc_save mo__h )
     ^ nw
 }
 
 // The forecast version's handle, its j-th model, and its states caught
 // up with the ring (for a forecast from the newest row).
-@ model_forecast * Model mo → *FcModel {
+@ model_forecast Model mo__h → FcModel {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ^ . mo fc
 }
 
 // The ring's step: the median gap between consecutive stored times, in
 // seconds (1 on a count clock; 0 when there are too few rows to say).
-@ model_step * Model mo → i {
-    ? . . mo meta count_clock { ^ 1 } {}
+@ model_step Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ? . ( _Meta_ptr . mo meta ) count_clock { ^ 1 } {}
     : i n ( vec_len [i] . mo times )
     ? < n 3 { ^ 0 } {}
     : ( Vec i ) gaps ( vec_with_cap [i] n )
@@ -1284,10 +1261,9 @@ $ `src/store.nu`
         = k + k 1
     }
     : i ng ( vec_len [i] gaps )
-    ? < ng 2 { ( vec_free [i] gaps ) ^ 0 } {}
+    ? < ng 2 { ^ 0 } {}
     ( sort_by [i] gaps \ i a i b → i { ? < a b { ^ -1 } {} ? > a b { ^ 1 } {} ^ 0 } )
     : i med ( _fc_geti gaps / ng 2 )
-    ( vec_free [i] gaps )
     ^ med
 }
 
@@ -1309,26 +1285,28 @@ $ `src/store.nu`
 // it now, the season from the ring's step when the version has none
 // set, and switch it on. "" when the version is ready (already, or now);
 // otherwise why not (the model has not trained; no feature to forecast).
-@ model_forecast_ensure_at * Model mo i now → String {
-    : *FcModel fc . mo fc
+@ model_forecast_ensure_at Model mo__h i now → String {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     ? . fc trained { ^ ( string_new ) } {}
-    ? ( model_is_trained mo ) {} { ^ ( string_from `the model has not trained yet: a forecast needs the first retrain (min_data_points stored)` ) }
-    ^ ( model_train_forecast_at mo now )
+    ? ( model_is_trained mo__h ) {} { ^ ( string_from `the model has not trained yet: a forecast needs the first retrain (min_data_points stored)` ) }
+    ^ ( model_train_forecast_at mo__h now )
 }
 
 // A version whose season is 0 takes it from the ring's step (the day at
 // a step up to twelve hours, the week at a daily one); a season given
 // stands.
-@ __an_fc_season_from_step * Model mo → v {
-    ( _an_ensure_fc_cfg mo )
-    : *Meta mm . mo meta
-    : i at ( meta_find_version mm ANOM_FC_NAME )
+@ __an_fc_season_from_step Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( _an_ensure_fc_cfg mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : i at ( meta_find_version . mo meta ANOM_FC_NAME )
     // 0 = from the step; a season given, or -1 (none), stands
     : ~ b unset T
     ? >= at 0 { ?? ( vec_get [VerCfg] . mm versions at ) { T vc → { ? == . vc window_size 0 {} { = unset F } } F _ → {} } } {}
     ? unset {
-        : i season ( anomaly_season_of ( model_step mo ) )
-        ? > season 0 { : b _w ( model_set_version_window mo ANOM_FC_NAME season 0 ) } {}
+        : i season ( anomaly_season_of ( model_step mo__h ) )
+        ? > season 0 { : b _w ( model_set_version_window mo__h ANOM_FC_NAME season 0 ) } {}
     } {}
 }
 
@@ -1345,29 +1323,31 @@ $ `src/store.nu`
 // it. `season: 144` beside ARIMA(0,1,0) with s = 0 is not a daily rhythm
 // being watched — it is the number the search was given and every
 // feature declined.
-@ _an_fc_season_json * FcModel fc Json o → v {
+@ _an_fc_season_json FcModel fc__h Json o → v {
+    : *FcModelImpl fc ( _FcModel_ptr fc__h )
     ( json_obj_set o `season` ( json_int . fc season ) )
-    : i used ( fc_seasonal_count fc )
+    : i used ( fc_seasonal_count fc__h )
     ( json_obj_set o `seasonal_features` ( json_int used ) )
     ? & > . fc season 0 == used 0 {
         ( json_obj_set o `season_note` ( json_str_lit `season is the period the order search was offered, in rows; no feature's chosen form uses it (see "selected" per feature), so nothing here models a cycle of that length. train_forecast {season: N} offers a different one, -1 none at all.` ) )
     } {}
 }
 
-@ model_forecast_json * Model mo i h → Json {
-    ( model_forecast_sync mo )
-    : *FcModel fc . mo fc
-    : *Meta mm . mo meta
-    : FcForecast ff ( fc_forecast fc h )
+@ model_forecast_json Model mo__h i h → Json {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( model_forecast_sync mo__h )
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : FcForecast ff ( fc_forecast . mo fc h )
     : Json o ( json_obj_new )
     ( json_obj_set o `horizon` ( json_int h ) )
-    ( _an_fc_season_json fc o )
+    ( _an_fc_season_json . mo fc o )
     ( json_obj_set o `points_absorbed` ( json_int . fc pos ) )
-    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled mm ANOM_FC_NAME F ) ) )
+    ( json_obj_set o `enabled` ( json_bool ( meta_version_enabled . mo meta ANOM_FC_NAME F ) ) )
     ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
-    : i step ( model_step mo )
+    : i step ( model_step mo__h )
     ( json_obj_set o `step_seconds` ( json_int step ) )
-    : i last ? . mm count_clock ( model_seq_base mo ) ( model_last_ts mo )
+    : i last ? . mm count_clock ( model_seq_base mo__h ) ( model_last_ts mo__h )
     : i lastn ? . mm count_clock + last ( vec_len [String] . mo lines ) last
     : Json times ( json_arr_new )
     : ~ i k 1
@@ -1386,7 +1366,6 @@ $ `src/store.nu`
             ( string_push_int w step )
             ( string_push_str w ` s: the models forecast by row, and the times are the step counted from the newest point` )
             ( json_obj_set o `warning` ( json_str_lit ( string_data w ) ) )
-            ( string_free w )
         } {}
     } {}
     : Json fa ( json_arr_new )
@@ -1415,20 +1394,18 @@ $ `src/store.nu`
                         }
                         ( json_obj_set fo `lo80` ( _an_jarr_of_floats lo80 ) ) ( json_obj_set fo `hi80` ( _an_jarr_of_floats hi80 ) )
                         ( json_obj_set fo `lo95` ( _an_jarr_of_floats lo95 ) ) ( json_obj_set fo `hi95` ( _an_jarr_of_floats hi95 ) )
-                        ( vec_free [f] lo80 ) ( vec_free [f] hi80 ) ( vec_free [f] lo95 ) ( vec_free [f] hi95 )
                     }
                     F _ → {}
                 }
             }
             F _ → {}
         }
-        ( json_obj_set fo `selected` ( json_str_lit ( fc_selected_of fc j ) ) )
-        ( json_obj_set fo `model` ( arima_coef # ArimaModel ( _fc_geti . fc models j ) ) )
+        ( json_obj_set fo `selected` ( json_str_lit ( fc_selected_of . mo fc j ) ) )
+        ( json_obj_set fo `model` ( arima_coef ( _fc_model_at . mo fc j ) ) )
         ( json_arr_push fa fo )
         = j + j 1
     }
     ( json_obj_set o `forecasts` fa )
-    ( fc_forecast_free ff )
     ^ o
 }
 
@@ -1437,33 +1414,32 @@ $ `src/store.nu`
 // before it, then the next `h` steps — the same shape as
 // model_forecast_json, with the origin's row and time, so a reader can
 // put the forecast beside what followed. The live states are untouched.
-@ model_forecast_from_json * Model mo i h i origin → Json {
-    : *FcModel fc . mo fc
-    : *Meta mm . mo meta
+@ model_forecast_from_json Model mo__h i h i origin → Json {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i len ( vec_len [String] . mo lines )
     : ~ i at origin
     ? >= at len { = at - len 1 } {}
     ? < at 0 { = at 0 } {}
     : ~ i b0 - + at 1 ANOM_FC_BURN
     ? < b0 0 { = b0 0 } {}
-    : ( Vec i ) copies ( fc_replay_begin fc + ( model_seq_base mo ) b0 )
+    : ( Vec ArimaModel ) copies ( fc_replay_begin . mo fc + ( model_seq_base mo__h ) b0 )
     : ( Vec f ) noz ( vec_new [f] )
     : ~ i t b0
     ~ <= t at {
-        : ( Vec f ) fr ( __an_fc_row mo t )
-        ( fc_replay_step fc copies fr noz )
-        ( vec_free [f] fr )
+        : ( Vec f ) fr ( __an_fc_row mo__h t )
+        ( fc_replay_step . mo fc copies fr noz )
         = t + t 1
     }
-    ( vec_free [f] noz )
     : Json o ( json_obj_new )
     ( json_obj_set o `horizon` ( json_int h ) )
-    ( _an_fc_season_json fc o )
+    ( _an_fc_season_json . mo fc o )
     ( json_obj_set o `origin` ( json_int at ) )
     ( json_obj_set o `clock` ( json_str_lit ? . mm count_clock `count` `time` ) )
-    : i step ( model_step mo )
+    : i step ( model_step mo__h )
     ( json_obj_set o `step_seconds` ( json_int step ) )
-    : i t0 ? . mm count_clock + ( model_seq_base mo ) at ( _fc_geti . mo times at )
+    : i t0 ? . mm count_clock + ( model_seq_base mo__h ) at ( _fc_geti . mo times at )
     ( json_obj_set o `from_time` ( json_int t0 ) )
     : Json times ( json_arr_new )
     : ~ i k 1
@@ -1475,7 +1451,7 @@ $ `src/store.nu`
     ~ < j nw {
         : Json fo ( json_obj_new )
         ?? ( vec_get [String] . fc feats j ) { T fn → { ( json_obj_set fo `feature` ( json_str_lit ( string_data fn ) ) ) } F _ → {} }
-        : ArimaModel cm # ArimaModel ( _fc_geti copies j )
+        : ArimaModel cm . ( vec_data [ArimaModel] copies ) j
         : ArimaForecast f1 ( arima_forecast cm h )
         ( json_obj_set fo `mean` ( _an_jarr_of_floats . f1 mean ) )
         ( json_obj_set fo `se` ( _an_jarr_of_floats . f1 se ) )
@@ -1493,12 +1469,9 @@ $ `src/store.nu`
         }
         ( json_obj_set fo `lo80` ( _an_jarr_of_floats lo80 ) ) ( json_obj_set fo `hi80` ( _an_jarr_of_floats hi80 ) )
         ( json_obj_set fo `lo95` ( _an_jarr_of_floats lo95 ) ) ( json_obj_set fo `hi95` ( _an_jarr_of_floats hi95 ) )
-        ( vec_free [f] lo80 ) ( vec_free [f] hi80 ) ( vec_free [f] lo95 ) ( vec_free [f] hi95 )
-        ( arima_forecast_free f1 )
         ( json_arr_push fa fo )
         = j + j 1
     }
-    ( fc_replay_end copies )
     ( json_obj_set o `forecasts` fa )
     ^ o
 }
@@ -1514,9 +1487,10 @@ $ `src/store.nu`
 // value carried forward, and the value one season earlier — with the
 // skill against each (1 − MAE/MAE_baseline: 0 is no better, 1 is
 // perfect, negative is worse). Gaps are skipped.
-@ model_forecast_backtest * Model mo i h i n → Json {
+@ model_forecast_backtest Model mo__h i h i n → Json {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : Json o ( json_obj_new )
-    : *FcModel fc . mo fc
+    : *FcModelImpl fc ( _FcModel_ptr . mo fc )
     : i len ( vec_len [String] . mo lines )
     : ~ i no n
     ? > no - - len h 1 { = no - - len h 1 } {}
@@ -1539,9 +1513,8 @@ $ `src/store.nu`
     : ( Vec f ) mat ( vec_with_cap [f] * nr nw )
     : ~ i k b0
     ~ < k len {
-        : ( Vec f ) fr ( __an_fc_row mo k )
+        : ( Vec f ) fr ( __an_fc_row mo__h k )
         ( vec_extend [f] mat fr )
-        ( vec_free [f] fr )
         = k + k 1
     }
     : *f mp ( vec_data [f] mat )
@@ -1559,7 +1532,7 @@ $ `src/store.nu`
     : *f pabs ( vec_data [f] s_abs ) : *f ppct ( vec_data [f] s_pct ) : *f pnai ( vec_data [f] s_nai ) : *f psea ( vec_data [f] s_sea )
     : *i cabs ( vec_data [i] c_abs ) : *i cpct ( vec_data [i] c_pct ) : *i cnai ( vec_data [i] c_nai ) : *i csea ( vec_data [i] c_sea ) : *i ccov ( vec_data [i] c_cov )
     : i season . fc season
-    : ( Vec i ) copies ( fc_replay_begin fc + ( model_seq_base mo ) b0 )
+    : ( Vec ArimaModel ) copies ( fc_replay_begin . mo fc + ( model_seq_base mo__h ) b0 )
     : ( Vec f ) noz ( vec_new [f] )
     : ~ i t b0
     ~ < t len {
@@ -1567,12 +1540,11 @@ $ `src/store.nu`
         : ( Vec f ) row ( vec_with_cap [f] nw )
         : ~ i j 0
         ~ < j nw { ( vec_push [f] row . mp + * r nw j ) = j + j 1 }
-        ( fc_replay_step fc copies row noz )
-        ( vec_free [f] row )
+        ( fc_replay_step . mo fc copies row noz )
         ? & >= t o0 <= t - - len h 1 {
             = j 0
             ~ < j nw {
-                : ArimaModel cm # ArimaModel ( _fc_geti copies j )
+                : ArimaModel cm . ( vec_data [ArimaModel] copies ) j
                 : ArimaForecast f1 ( arima_forecast cm h )
                 : f lastv . mp + * r nw j
                 : ~ i q 1
@@ -1595,15 +1567,11 @@ $ `src/store.nu`
                     }
                     = q + q 1
                 }
-                ( arima_forecast_free f1 )
                 = j + j 1
             }
         } {}
         = t + t 1
     }
-    ( vec_free [f] noz )
-    ( fc_replay_end copies )
-    ( vec_free [f] mat )
     ( json_obj_set o `origins` ( json_int no ) )
     ( json_obj_set o `season` ( json_int season ) )
     ( json_obj_set o `rows_from` ( json_int o0 ) )
@@ -1647,29 +1615,30 @@ $ `src/store.nu`
         = j + j 1
     }
     ( json_obj_set o `features` fa )
-    ( vec_free [f] s_abs ) ( vec_free [f] s_pct ) ( vec_free [f] s_nai ) ( vec_free [f] s_sea )
-    ( vec_free [i] c_abs ) ( vec_free [i] c_pct ) ( vec_free [i] c_nai ) ( vec_free [i] c_sea ) ( vec_free [i] c_cov )
     ^ o
 }
 
-@ model_forecast_model * Model mo i j → ArimaModel {
+@ model_forecast_model Model mo__h i j → ArimaModel {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( _fc_model_at . mo fc j )
 }
 
-@ model_forecast_sync * Model mo → v {
-    ( __an_fc_sync mo ( vec_len [String] . mo lines ) )
+@ model_forecast_sync Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    ( __an_fc_sync mo__h ( vec_len [String] . mo lines ) )
 }
 
 // Train the forecast version now, on the ring as it stands, and switch
 // it on. The model must have trained once (a frozen feature order).
 // Returns the error text ("" = success).
-@ model_train_forecast * Model mo → String {
+@ model_train_forecast Model mo → String {
     ^ ( model_train_forecast_at mo ( model_now mo ) )
 }
 
-@ model_train_forecast_at * Model mo i now → String {
-    : *Meta mm . mo meta
-    ? ( model_is_trained mo ) {} { ^ ( string_from `the model has not trained yet: the forecast version fits the feature order a first retrain freezes` ) }
+@ model_train_forecast_at Model mo__h i now → String {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? ( model_is_trained mo__h ) {} { ^ ( string_from `the model has not trained yet: the forecast version fits the feature order a first retrain freezes` ) }
     : i n ( vec_len [String] . mo lines )
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
     : ( Vec i ) ets ( vec_new [i] )
@@ -1680,7 +1649,7 @@ $ `src/store.nu`
                 : !Json JsonError jr ( json_parse ( string_data l ) )
                 ?? jr {
                     T j → {
-                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
+                        : !EncPoint String er ( anomaly_preprocess_ro . mo meta j )
                         ?? er {
                             T p → {
                                 ( vec_push [EncPoint] encs p )
@@ -1688,9 +1657,8 @@ $ `src/store.nu`
                                 ?? ( vec_get [i] . mo times k ) { T t2 → { = ts t2 } F _ → {} }
                                 ( vec_push [i] ets ts )
                             }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -1699,12 +1667,10 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( __an_fc_season_from_step mo )
-    : i nw ( __an_fc_fit mo encs ets now )
-    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-    ( vec_free [i] ets )
+    ( __an_fc_season_from_step mo__h )
+    : i nw ( __an_fc_fit mo__h encs ets now )
     ? > nw 0 {} { ^ ( string_from `no feature to forecast: a watched feature is a numeric column with at least 30 present, not all equal readings in the fit window` ) }
-    : b _on ( model_set_version_enabled mo ANOM_FC_NAME T )
+    : b _on ( model_set_version_enabled mo__h ANOM_FC_NAME T )
     // The default margin is a sigma count, and it is a sigma count of the
     // model's OWN standard errors — which an ARIMA reports from the fit
     // and which a backtest routinely finds optimistic (a 95 % interval
@@ -1717,7 +1683,7 @@ $ `src/store.nu`
     // as a file import calibrates the forests it has just trained. A
     // margin a reader has already moved is left alone — only the untouched
     // default is a placeholder.
-    ( _an_fc_autotune mo )
+    ( _an_fc_autotune mo__h )
     ^ ( string_new )
 }
 
@@ -1728,8 +1694,9 @@ $ `src/store.nu`
 // the feature order), refreshes the authoritative feature order, refits the
 // shared scaler over the full ring, then trains each version on its window.
 // Returns the number of ring points used (0 = not enough data, no change).
-@ model_force_train_at * Model mo i now → i {
-    : *Meta mm . mo meta
+@ model_force_train_at Model mo__h i now → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ 0 } {}
 
@@ -1747,7 +1714,7 @@ $ `src/store.nu`
                 : !Json JsonError jr ( json_parse ( string_data l ) )
                 ?? jr {
                     T j → {
-                        : !EncPoint String er ( anomaly_preprocess mm j )
+                        : !EncPoint String er ( anomaly_preprocess . mo meta j )
                         ?? er {
                             T p → {
                                 ( vec_push [EncPoint] encs p )
@@ -1755,9 +1722,8 @@ $ `src/store.nu`
                                 ?? ( vec_get [i] . mo times k ) { T t2 → { = ts t2 } F _ → {} }
                                 ( vec_push [i] ets ts )
                             }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -1768,8 +1734,6 @@ $ `src/store.nu`
     }
     : i ne ( vec_len [EncPoint] encs )
     ? < ne . mo min_points {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-        ( vec_free [i] ets )
         ^ 0
     } {}
 
@@ -1790,11 +1754,9 @@ $ `src/store.nu`
     }
 
     // Freeze the (possibly grown) feature order, project the full matrix.
-    ( meta_refresh_feats mm )
+    ( meta_refresh_feats . mo meta )
     : i nfeat ( vec_len [String] . mm feats )
     ? <= nfeat 0 {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-        ( vec_free [i] ets )
         ^ 0
     } {}
     : ( Vec f ) big ( vec_with_cap [f] * ne nfeat )
@@ -1804,7 +1766,6 @@ $ `src/store.nu`
             T p → {
                 : ( Vec f ) row ( anomaly_project p . mm feats )
                 ( vec_extend [f] big row )
-                ( vec_free [f] row )
             }
             F _ → {}
         }
@@ -1816,8 +1777,7 @@ $ `src/store.nu`
     // (prep.nu, "Absurd readings"). The forecast and the autoencoder mask
     // their own matrices, which are projected onto their own feature
     // orders.
-    ( vec_free [f] . mm absurd_n )
-    = . mm absurd_n ( vec_new [f] )
+    ( vec_clear [f] . mm absurd_n )
     : ( Vec i ) abs_counts ( vec_new [i] )
     : i abs_total ( anomaly_mask_absurd big ne nfeat abs_counts )
     : ~ i aci 0
@@ -1825,7 +1785,6 @@ $ `src/store.nu`
         ?? ( vec_get [i] abs_counts aci ) { T cnt → { ( vec_push [f] . mm absurd_n # f cnt ) } F _ → {} }
         = aci + aci 1
     }
-    ( vec_free [i] abs_counts )
     ? > abs_total 0 {
         : String amsg ( string_from `anomaly: model '` )
         ( string_push_str amsg ( string_data . mo mname ) )
@@ -1835,20 +1794,19 @@ $ `src/store.nu`
         ? > abs_total 1 { ( string_push_str amsg `s` ) } {}
         ( string_push_str amsg ` too far from their feature's own range to be a measurement of it; left out of this fit, still stored and still scored` )
         ( nurl_eprintln ( string_data amsg ) )
-        ( string_free amsg )
     } {}
 
     // The forecast version, when it is on: a model per numeric feature,
     // fitted on its own window of these rows and filtered over all of
     // them (a version that is off keeps what it has, muted).
-    ( _an_ensure_fc_cfg mo )
-    ? ( meta_version_enabled mm ANOM_FC_NAME F ) { : i _nw ( __an_fc_fit mo encs ets now ) } {}
-    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
+    ( _an_ensure_fc_cfg mo__h )
+    ? ( meta_version_enabled . mo meta ANOM_FC_NAME F ) { : i _nw ( __an_fc_fit mo__h encs ets now ) } {}
 
     // Shared scaler over the whole ring; standardise in place.
     : Scaler snew ( scaler_fit big ne nfeat )
-    ( meta_set_scaler mm snew )
-    ( scaler_free . mo sc )
+    ( meta_set_scaler . mo meta snew )
+    : Scaler old_sc . mo sc
+    ( mem_take old_sc )  // a store through the pointer drops nothing
     = . mo sc snew
     ( scaler_apply_matrix snew big ne nfeat )
 
@@ -1856,14 +1814,14 @@ $ `src/store.nu`
     // `autoencoder` VerCfg is skipped — it has no forest (see
     // model_train_autoencoder), and training one under its name put a
     // second, empty "autoencoder" verdict beside the real one.
-    ( __an_free_forests mo )
+    ( __an_clear_forests mo__h )
     ( store_delete_forest . mo store ( string_data . mo mname ) `autoencoder` )
     // The range guard needs nothing but the scaler just fitted; a model
     // from before it existed gains the version here, at its next retrain,
     // where the epoch bump and the metadata save happen anyway.
-    ( __an_ensure_guard_cfg mo )
-    ( __an_ensure_flat_cfg mo )
-    ( __an_flat_fit mo big ne nfeat )
+    ( __an_ensure_guard_cfg mo__h )
+    ( __an_ensure_flat_cfg mo__h )
+    ( __an_flat_fit mo__h big ne nfeat )
     : *f bigp ( vec_data [f] big )
     : *i etsp ( vec_data [i] ets )
     : i nv ( vec_len [VerCfg] . mm versions )
@@ -1923,7 +1881,6 @@ $ `src/store.nu`
                             : VerModel vm ( anom_train_version wins nwin wdim vc )
                             ( store_save_forest . mo store ( string_data . mo mname ) vm )
                             ( vec_push [VerModel] . mo forests vm )
-                            ( vec_free [f] wins )
                         } {}
                         // cnt < W: too little data for one window — the
                         // version simply has no forest this round (its
@@ -1945,7 +1902,6 @@ $ `src/store.nu`
                         : VerModel vm ( anom_train_version sub cnt nfeat vc )
                         ( store_save_forest . mo store ( string_data . mo mname ) vm )
                         ( vec_push [VerModel] . mo forests vm )
-                        ( vec_free [f] sub )
                     }
                 } {}
             }
@@ -1953,16 +1909,14 @@ $ `src/store.nu`
         }
         = vi + vi 1
     }
-    ( vec_free [f] big )
-    ( vec_free [i] ets )
 
     = . mm last_trained . mm n_seen
     = . mm trained_time ( now_seconds )
-    ( meta_bump_epoch mm )
-    ( store_save_meta . mo store ( string_data . mo mname ) mm )
-    = . mo next_train_at + . mm n_seen ( __an_sched_step mo )
-    = . mo ae_stale ( an_ae_stale mm . mo ae )
-    ( __an_retrain_ae mo now )
+    ( meta_bump_epoch . mo meta )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
+    = . mo next_train_at + . mm n_seen ( __an_sched_step mo__h )
+    = . mo ae_stale ( an_ae_stale . mo meta . mo ae )
+    ( __an_retrain_ae mo__h now )
     ^ ne
 }
 
@@ -1983,7 +1937,7 @@ $ `src/store.nu`
 // that was never 0 in training is a reconstruction error thousands of
 // times the threshold, on every point. A stale net does not score; the
 // next forest retrain replaces it whether or not the schedule says so.
-@ an_ae_stale * Meta mm AeModel ae → b {
+@ an_ae_stale Meta mm AeModel ae → b {
     ? . ae trained {} { ^ F }
     : ( Vec String ) now ( meta_derived_feats mm )
     : i n ( vec_len [String] . ae feats )
@@ -1996,7 +1950,6 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [String] now \ String x → v { ( string_free x ) } )
     ^ stale
 }
 
@@ -2013,17 +1966,16 @@ $ `src/store.nu`
     ^ -1
 }
 
-@ __an_retrain_ae * Model mo i now → v {
-    : *Meta mm . mo meta
+@ __an_retrain_ae Model mo__h i now → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : AeModel cae . mo ae
     ? & . cae trained | . mm sched_ae . mo ae_stale {} { ^ }
     : ( Vec i ) hidden ( ae_hidden cae )
-    : String err ( model_train_autoencoder_at mo hidden . cae prefilter now )
-    ( vec_free [i] hidden )
-    ( string_free err )
+    : String err ( model_train_autoencoder_at mo__h hidden . cae prefilter now )
 }
 
-@ model_force_train * Model mo → i {
+@ model_force_train Model mo → i {
     ^ ( model_force_train_at mo ( model_now mo ) )
 }
 
@@ -2031,8 +1983,9 @@ $ `src/store.nu`
 
 // Ensure an `autoencoder` VerCfg exists in the metadata (margin tunable
 // through the same machinery as the forest versions; window fields 0).
-@ __an_ensure_ae_cfg * Model mo → v {
-    : *Meta mm . mo meta
+@ __an_ensure_ae_cfg Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
     ~ < k nv {
@@ -2053,9 +2006,10 @@ $ `src/store.nu`
 // Ensure a `range_guard` VerCfg exists (SPEC §5.4): margin in standard
 // deviations, tunable like any other, window fields 0 — it has no
 // training of its own beyond the shared scaler.
-@ __an_ensure_guard_cfg * Model mo → v {
-    : *Meta mm . mo meta
-    ? < ( meta_find_version mm ANOM_GUARD_NAME ) 0 {} { ^ }
+@ __an_ensure_guard_cfg Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? < ( meta_find_version . mo meta ANOM_GUARD_NAME ) 0 {} { ^ }
     ( vec_push [VerCfg] . mm versions ( _an_vc_guard ) )
 }
 
@@ -2063,15 +2017,17 @@ $ `src/store.nu`
 
 // Ensure a `flatline` VerCfg exists (SPEC §5.4) — a model from before the
 // version gains it at its next retrain, where the references are fitted.
-@ __an_ensure_flat_cfg * Model mo → v {
-    : *Meta mm . mo meta
-    ? < ( meta_find_version mm ANOM_FLAT_NAME ) 0 {} { ^ }
+@ __an_ensure_flat_cfg Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? < ( meta_find_version . mo meta ANOM_FLAT_NAME ) 0 {} { ^ }
     ( vec_push [VerCfg] . mm versions ( _an_vc_flat ) )
 }
 
 // The configured window, in rows.
-@ _an_flat_window * Meta mm → i {
-    : i at ( meta_find_version mm ANOM_FLAT_NAME )
+@ _an_flat_window Meta mm__h → i {
+    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : i at ( meta_find_version mm__h ANOM_FLAT_NAME )
     ? >= at 0 {
         ?? ( vec_get [VerCfg] . mm versions at ) {
             T vc → { ? >= . vc window_size 2 { ^ . vc window_size } {} }
@@ -2084,8 +2040,9 @@ $ `src/store.nu`
 // The references are fitted when there is one per feature of the frozen
 // order (the retrain refits them; an edit that changes the features
 // bumps the epoch and retrains).
-@ __an_flat_fitted * Model mo → b {
-    : *Meta mm . mo meta
+@ __an_flat_fitted Model mo__h → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nf ( vec_len [String] . mm feats )
     ^ & > nf 0 == ( vec_len [f] . mm flat_sd ) nf
 }
@@ -2099,10 +2056,11 @@ $ `src/store.nu`
 // not a numeric column, a ring shorter than the window, or a column whose
 // reference run is longer than the guard can look back gets -1: not
 // watched.
-@ __an_flat_fit * Model mo ( Vec f ) big i n i nfeat → v {
-    : *Meta mm . mo meta
-    : i W ( _an_flat_window mm )
-    : ( Vec i ) mask ( meta_numeric_feat_mask mm )
+@ __an_flat_fit Model mo__h ( Vec f ) big i n i nfeat → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : i W ( _an_flat_window . mo meta )
+    : ( Vec i ) mask ( meta_numeric_feat_mask . mo meta )
     : ( Vec f ) runs ( vec_with_cap [f] nfeat )
     : ( Vec f ) sds ( vec_with_cap [f] nfeat )
     : *f bp ( vec_data [f] big )
@@ -2141,7 +2099,6 @@ $ `src/store.nu`
                 ^ 0
             } )
             : ~ f refrun ( _an_percentile rl ANOM_FLAT_RUN_Q )
-            ( vec_free [f] rl )
             ? < refrun 1.0 { = refrun 1.0 } {}
             // A column whose own reference already fills the guard's
             // look-back is a constant, not a sensor to watch: watching it
@@ -2177,13 +2134,13 @@ $ `src/store.nu`
                 ^ 0
             } )
             ( vec_push [f] sds ( _an_percentile wsd ANOM_FLAT_SD_Q ) )
-            ( vec_free [f] wsd )
         }
         = j + j 1
     }
-    ( vec_free [i] mask )
-    ( vec_free [f] . mm flat_run )
-    ( vec_free [f] . mm flat_sd )
+    : ( Vec f ) old_flat_run . mm flat_run
+    ( mem_take old_flat_run )  // a store through the pointer drops nothing
+    : ( Vec f ) old_flat_sd . mm flat_sd
+    ( mem_take old_flat_sd )  // a store through the pointer drops nothing
     = . mm flat_run runs
     = . mm flat_sd sds
 }
@@ -2193,7 +2150,8 @@ $ `src/store.nu`
 // not watched. The margin is read against THIS, so one number (0.9) means
 // the same thing on a column quantised to whole degrees and on a smooth
 // one beside it.
-@ _an_flat_ref_len * Meta mm i j → f {
+@ _an_flat_ref_len Meta mm__h i j → f {
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     : ( Vec f ) rr . mm flat_run
     ? < j ( vec_len [f] rr ) {} { ^ -1.0 }
     : f r ( _fc_getf rr j )
@@ -2207,13 +2165,14 @@ $ `src/store.nu`
 // for the longest reference run to be reached (so no watched column has a
 // bar its run can never touch). Bounded by the same cap the fit used to
 // decide what is watchable at all.
-@ _an_flat_need * Meta mm → i {
-    : i W ( _an_flat_window mm )
+@ _an_flat_need Meta mm__h → i {
+    : *MetaImpl mm ( _Meta_ptr mm__h )
+    : i W ( _an_flat_window mm__h )
     : ~ i need W
     : i nf ( vec_len [f] . mm flat_run )
     : ~ i j 0
     ~ < j nf {
-        : f len ( _an_flat_ref_len mm j )
+        : f len ( _an_flat_ref_len mm__h j )
         ? > len 0.0 {
             : i want + # i ( float_ceil len ) 1
             ? > want need { = need want } {}
@@ -2233,16 +2192,16 @@ $ `src/store.nu`
 // reference is 0: a column that never moved in training is not expected
 // to). The larger of the two, over the features, is the verdict's
 // fraction. The collapse rule reads the newest W rows of the look-back.
-@ __an_flat_judge * Model mo ( Vec f ) x i end * Hist h → FlatOut {
-    : *Meta mm . mo meta
-    ? ( __an_flat_fitted mo ) {} { ^ @ FlatOut { F 0.0 -1 } }
+@ __an_flat_judge Model mo__h ( Vec f ) x i end Hist h → FlatOut {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? ( __an_flat_fitted mo__h ) {} { ^ @ FlatOut { F 0.0 -1 } }
     : i nfeat ( vec_len [String] . mm feats )
-    : i W ( _an_flat_window mm )
-    : i N ( _an_flat_need mm )
-    ?? ( __an_tail_for mo h - N 1 end ) {
+    : i W ( _an_flat_window . mo meta )
+    : i N ( _an_flat_need . mo meta )
+    ?? ( __an_tail_for mo__h h - N 1 end ) {
         T tail → {
             ? == ( vec_len [f] tail ) * - N 1 nfeat {} {
-                ( vec_free [f] tail )
                 ^ @ FlatOut { F 0.0 -1 }
             }
             : *f tp ( vec_data [f] tail )
@@ -2252,7 +2211,7 @@ $ `src/store.nu`
             : ~ i wf -1
             : ~ i j 0
             ~ < j nfeat {
-                : f ref_run ( _an_flat_ref_len mm j )
+                : f ref_run ( _an_flat_ref_len . mo meta j )
                 ? < ref_run 0.0 {} {
                     : f cur . xp j
                     : ~ i run 1
@@ -2289,7 +2248,6 @@ $ `src/store.nu`
                 }
                 = j + j 1
             }
-            ( vec_free [f] tail )
             ? < wf 0 { ^ @ FlatOut { F 0.0 -1 } } {}
             ^ @ FlatOut { T worst wf }
         }
@@ -2306,23 +2264,22 @@ $ `src/store.nu`
 // 64-32-64. Explicit by default; with `schedule.autoencoder` on, every
 // forest retrain repeats it with the same layout and pre-filter (see
 // __an_retrain_ae). Returns the error text ("" = success).
-@ model_train_autoencoder * Model mo ( Vec i ) hidden f contamination → String {
+@ model_train_autoencoder Model mo ( Vec i ) hidden f contamination → String {
     ^ ( model_train_autoencoder_at mo hidden contamination ( model_now mo ) )
 }
 
-@ model_train_autoencoder_at * Model mo ( Vec i ) hidden f contamination i now → String {
-    : *Meta mm . mo meta
+@ model_train_autoencoder_at Model mo__h ( Vec i ) hidden f contamination i now → String {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ ( string_from `not enough data points` ) } {}
     : AeModel cur_ae . mo ae
     ? & == ( vec_len [i] hidden ) 0 . cur_ae trained {
         : ( Vec i ) prev ( ae_hidden cur_ae )
         ? > ( vec_len [i] prev ) 0 {
-            : String r ( model_train_autoencoder_at mo prev contamination now )
-            ( vec_free [i] prev )
+            : String r ( model_train_autoencoder_at mo__h prev contamination now )
             ^ r
         } {}
-        ( vec_free [i] prev )
     } {}
 
     : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
@@ -2333,12 +2290,11 @@ $ `src/store.nu`
                 : !Json JsonError jr ( json_parse ( string_data l ) )
                 ?? jr {
                     T j → {
-                        : !EncPoint String er ( anomaly_preprocess mm j )
+                        : !EncPoint String er ( anomaly_preprocess . mo meta j )
                         ?? er {
                             T p → { ( vec_push [EncPoint] encs p ) }
-                            F e → { ( string_free e ) }
+                            F e → {}
                         }
-                        ( json_free j )
                     }
                     F _ → {}
                 }
@@ -2349,7 +2305,6 @@ $ `src/store.nu`
     }
     : i ne ( vec_len [EncPoint] encs )
     ? < ne . mo min_points {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
         ^ ( string_from `not enough decodable data points` )
     } {}
 
@@ -2357,11 +2312,9 @@ $ `src/store.nu`
     // today, which may have grown past the forests' frozen order since
     // their last train. That order is theirs — refreshing it here would
     // shift the columns their scaler and trees were fitted to.
-    : ( Vec String ) afeats ( meta_derived_feats mm )
+    : ( Vec String ) afeats ( meta_derived_feats . mo meta )
     : i nfeat ( vec_len [String] afeats )
     ? <= nfeat 0 {
-        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
-        ( vec_free_with [String] afeats \ String x → v { ( string_free x ) } )
         ^ ( string_from `no numeric features` )
     } {}
     : ( Vec f ) raw ( vec_with_cap [f] * ne nfeat )
@@ -2371,13 +2324,11 @@ $ `src/store.nu`
             T p → {
                 : ( Vec f ) row ( anomaly_project p afeats )
                 ( vec_extend [f] raw row )
-                ( vec_free [f] row )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
 
     // A reading that cannot be a measurement of the same quantity would
     // put the net's MinMax range at 1e200 and map every real value to
@@ -2385,25 +2336,21 @@ $ `src/store.nu`
     // hole as the midpoint of what is left.
     : ( Vec i ) ae_abs ( vec_new [i] )
     : i _ae_masked ( anomaly_mask_absurd raw ne nfeat ae_abs )
-    ( vec_free [i] ae_abs )
 
     : AeTrainOut out ( ae_train_matrix raw ne nfeat afeats hidden contamination . mo min_points )
-    ( vec_free_with [String] afeats \ String x → v { ( string_free x ) } )
-    ( vec_free [f] raw )
     : ~ AeModel nae . out ae
     ? . nae trained {
         = . nae trained_at now
-        ( ae_free . mo ae )
+        : AeModel old_ae . mo ae
+        ( mem_take old_ae )  // a store through the pointer drops nothing
         = . mo ae nae
         = . mo ae_stale F
-        ( __an_ensure_ae_cfg mo )
-        ( meta_bump_epoch mm )
+        ( __an_ensure_ae_cfg mo__h )
+        ( meta_bump_epoch . mo meta )
         ( store_save_ae . mo store ( string_data . mo mname ) . mo ae )
-        ( store_save_meta . mo store ( string_data . mo mname ) mm )
-        ( string_free . out err )
+        ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
         ^ ( string_new )
     } {
-        ( ae_free nae )
         ^ . out err
     }
 }
@@ -2414,16 +2361,16 @@ $ `src/store.nu`
 // ring (evicting the oldest at capacity), persist, retrain if the schedule
 // says so, then score it. Errors (bad numeric / timestamp values) leave the
 // model completely untouched.
-@ model_ingest_at * Model mo Json raw i now → !Verdict String {
-    : *Meta mm . mo meta
-    : !EncPoint String er ( anomaly_preprocess mm raw )
+@ model_ingest_at Model mo__h Json raw i now → !Verdict String {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : !EncPoint String er ( anomaly_preprocess . mo meta raw )
     ?? er {
         T p → {
             // Record the point: raw fields + server-side timestamp stamp.
             : Json rec ( json_clone raw )
             ( json_obj_set rec `timestamp` ( json_int now ) )
             : String line ( json_stringify rec )
-            ( json_free rec )
             : i seq . mm n_seen
             ( vec_push [String] . mo lines line )
             ( vec_push [i] . mo times now )
@@ -2435,45 +2382,46 @@ $ `src/store.nu`
             : ~ i evict 0
             ? > ( vec_len [String] . mo lines ) . mo max_points {
                 ?? ( vec_remove [String] . mo lines 0 ) {
-                    T old → { ( string_free old ) }
+                    T old → {}
                     F _ → {}
                 }
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
                 ( fc_evict . mo fc )
                 = evict - . mm n_seen ( vec_len [String] . mo lines )
             } {}
-            ( __an_note_stored mo )
+            ( __an_note_stored mo__h )
             // The row, the eviction and the counter that says how many
             // points there are go in as ONE transaction: a crash between
             // them would leave the ring and `n_seen` disagreeing, and
             // another thread must never read the ring half-updated.
             ( store_commit_point . mo store ( string_data . mo mname )
-            seq ( string_data line ) evict mm )
+            seq ( string_data line ) evict . mo meta )
 
             // Schedule: lifetime counter reaching the mark retrains all.
             ? & >= . mm n_seen . mo next_train_at >= ( vec_len [String] . mo lines ) . mo min_points {
-                ( model_force_train_at mo now )
+                ( model_force_train_at mo__h now )
             } {}
 
-            : Verdict vd ( __an_score_enc mo p 1 )
-            ( enc_free p )
+            : Verdict vd ( __an_score_enc mo__h p 1 )
             ^ @ !Verdict String { T vd }
         }
         F e → { ^ @ !Verdict String { F e } }
     }
 }
 
-@ model_ingest * Model mo Json raw → !Verdict String {
-    : *Meta mm . mo meta
-    ? . mm count_clock { ^ ( model_ingest_at mo raw ( model_next_tick mo ) ) } {}
-    ^ ( model_ingest_at mo raw ( now_seconds ) )
+@ model_ingest Model mo__h Json raw → !Verdict String {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? . mm count_clock { ^ ( model_ingest_at mo__h raw ( model_next_tick mo__h ) ) } {}
+    ^ ( model_ingest_at mo__h raw ( now_seconds ) )
 }
 
 // Score without ingesting: no metadata learning, no ring append, no
 // retrain, no disk writes. Unknown columns/categories project to zeros;
 // a column the trained model knows and the point leaves out is an
 // error, named — a question about a point must carry the whole point.
-@ model_detect_only * Model mo Json raw → !Verdict String {
+@ model_detect_only Model mo__h Json raw → !Verdict String {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ? ( meta_is_frozen . mo meta ) {
         : ( Vec String ) miss ( anomaly_missing_cols . mo meta raw )
         ? > ( vec_len [String] miss ) 0 {
@@ -2481,7 +2429,6 @@ $ `src/store.nu`
             : String e ( string_from `Missing columns: ` )
             ( string_push_str e ( string_data names ) )
             ( string_push_str e `. A point to score carries every column the model knows; columns it does not know are ignored.` )
-            ( string_free names )
             : ( Vec String ) nulls ( anomaly_null_cols . mo meta raw miss )
             ? > ( vec_len [String] nulls ) 0 {
                 : String nn ( string_join nulls `, ` )
@@ -2489,19 +2436,14 @@ $ `src/store.nu`
                 ( string_push_str e ( string_data nn ) )
                 ? > ( vec_len [String] nulls ) 1 { ( string_push_str e ` were given as null` ) } { ( string_push_str e ` was given as null` ) }
                 ( string_push_str e `, and a null is not a reading — send a number, or leave the column out of an ingest (where a gap is scored as the training mean and listed under "missing").` )
-                ( string_free nn )
             } {}
-            ( vec_free_with [String] nulls \ String x → v { ( string_free x ) } )
-            ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
             ^ @ !Verdict String { F e }
         } {}
-        ( vec_free_with [String] miss \ String x → v { ( string_free x ) } )
     } {}
     : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
     ?? er {
         T p → {
-            : Verdict vd ( __an_score_enc mo p 0 )
-            ( enc_free p )
+            : Verdict vd ( __an_score_enc mo__h p 0 )
             ^ @ !Verdict String { T vd }
         }
         F e → { ^ @ !Verdict String { F e } }
@@ -2550,11 +2492,6 @@ $ `src/store.nu`
     ( Vec String ) notes
 }
 
-@ import_report_free sink ImportReport r → v {
-    ( string_free . r err )
-    ( vec_free_with [String] . r notes \ String s → v { ( string_free s ) } )
-}
-
 // The timestamp a record carries, or 0 when it names none. A number is
 // unix seconds; a string is left to the preprocessing layer, which knows
 // ISO-8601 — but a point still needs a position in the ring, so a record
@@ -2574,9 +2511,10 @@ $ `src/store.nu`
 // record's own stamp is ignored: the file's order is its time, and the
 // rows take the ticks after the newest stored point, one each. Returns
 // what happened.
-@ model_import_at * Model mo ( Vec Json ) recs i now → ImportReport {
-    : *Meta mm . mo meta
-    : ~ i tick ( model_next_tick mo )
+@ model_import_at Model mo__h ( Vec Json ) recs i now → ImportReport {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : ~ i tick ( model_next_tick mo__h )
     : i nrec ( vec_len [Json] recs )
     ? > nrec 0 {} {
         ^ @ ImportReport { 0 0 ( vec_len [String] . mo lines ) F
@@ -2594,17 +2532,15 @@ $ `src/store.nu`
                 // their order all come from the records as they arrive, so
                 // an import teaches the model its shape exactly as a stream
                 // would.
-                : !EncPoint String er ( anomaly_preprocess mm rec )
+                : !EncPoint String er ( anomaly_preprocess . mo meta rec )
                 ?? er {
                     T p → {
-                        ( enc_free p )
                         : i given ( __an_imp_ts rec )
                         : ~ i ts ? > given 0 given now
                         ? . mm count_clock { = ts tick = tick + tick ANOM_TICK } {}
                         : Json out ( json_clone rec )
                         ( json_obj_set out `timestamp` ( json_int ts ) )
                         : String line ( json_stringify out )
-                        ( json_free out )
                         ( vec_push [ImpRow] fresh @ ImpRow { ts line } )
                     }
                     F e → {
@@ -2616,7 +2552,6 @@ $ `src/store.nu`
                             ( string_push_str m ( string_data e ) )
                             ( vec_push [String] notes m )
                         } {}
-                        ( string_free e )
                     }
                 }
             }
@@ -2627,7 +2562,6 @@ $ `src/store.nu`
 
     : i accepted ( vec_len [ImpRow] fresh )
     ? > accepted 0 {} {
-        ( vec_free [ImpRow] fresh )
         ^ @ ImportReport { 0 rejected ( vec_len [String] . mo lines ) F
             ( string_from `no row could be read as a data point` ) notes }
     }
@@ -2665,7 +2599,6 @@ $ `src/store.nu`
             = b + b 1
         }
     }
-    ( vec_free_with [ImpRow] fresh \ ImpRow r → v { ( string_free . r ir_line ) } )
 
     // Ring eviction: the OLDEST go, which after a merge may well be
     // imported ones. A file bigger than the ring is a file whose tail is
@@ -2684,26 +2617,26 @@ $ `src/store.nu`
             ?? ( vec_get [i] mtimes j ) { T x → { ( vec_push [i] kt x ) } F _ → {} }
             = j + j 1
         }
-        ( __an_free_lines mlines )
-        ( vec_free [i] mtimes )
         = mlines kl
         = mtimes kt
     } {}
 
-    ( __an_free_lines . mo lines )
-    ( vec_free [i] . mo times )
+    : ( Vec String ) old_lines . mo lines
+    ( mem_take old_lines )  // a store through the pointer drops nothing
+    : ( Vec i ) old_times . mo times
+    ( mem_take old_times )
     = . mo lines mlines
     = . mo times mtimes
     = . mm n_seen + . mm n_seen accepted
-    ( __an_note_stored mo )
+    ( __an_note_stored mo__h )
     // The merge re-indexed the ring under the forecast states; the train
     // below refits them, and a ring still too small to train has none.
-    ? . . mo fc trained { ( fc_clear . mo fc ) ( store_delete_fc . mo store ( string_data . mo mname ) ) } {}
+    ? . ( _FcModel_ptr . mo fc ) trained { ( fc_clear . mo fc ) ( store_delete_fc . mo store ( string_data . mo mname ) ) } {}
 
     // One transaction for the whole merged ring, not one per point.
     ( store_write_points . mo store ( string_data . mo mname ) . mo lines
     - . mm n_seen ( vec_len [String] . mo lines ) )
-    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
 
     // And one train, if there is now enough to train on. An import that
     // doubles a model's history should not leave it scoring against the
@@ -2711,14 +2644,14 @@ $ `src/store.nu`
     : ~ b trained F
     ? >= ( vec_len [String] . mo lines ) . mo min_points {
         // On the count clock the present moved with the import.
-        : i tnow ? . mm count_clock ( model_now mo ) now
-        ? > ( model_force_train_at mo tnow ) 0 { = trained T } {}
+        : i tnow ? . mm count_clock ( model_now mo__h ) now
+        ? > ( model_force_train_at mo__h tnow ) 0 { = trained T } {}
     } {}
     ^ @ ImportReport { accepted rejected ( vec_len [String] . mo lines ) trained
         ( string_new ) notes }
 }
 
-@ model_import * Model mo ( Vec Json ) recs → ImportReport {
+@ model_import Model mo ( Vec Json ) recs → ImportReport {
     ^ ( model_import_at mo recs ( model_now mo ) )
 }
 
@@ -2762,14 +2695,6 @@ $ `src/store.nu`
     i n_rows  // rows scored
     i agg_flagged  // rows some enabled version flagged at the current margins
     i excluded  // rows in the window left out: labelled false positives
-}
-
-@ cal_free sink CalReport rep → v {
-    ( vec_free_with [CalVer] . rep items \ CalVer x → v {
-        ( string_free . x cvname )
-        ( vec_free [f] . x dfs )
-        ( vec_free [f] . x row_df )
-    } )
 }
 
 // Round to `digits` significant decimal digits, through an exact integer
@@ -2901,19 +2826,20 @@ $ `src/store.nu`
 // live verdict path and collect each version's decision values. Rows are
 // scored as of their own ring position, exactly as the scan does, so a
 // timevector window never sees the future.
-@ model_calibrate * Model mo i from_ts i to_ts → CalReport {
+@ model_calibrate Model mo__h i from_ts i to_ts → CalReport {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec CalVer ) items ( vec_new [CalVer] )
     : ~ i n_rows 0
     : ~ i agg 0
-    ? ( model_is_trained mo ) {} { ^ @ CalReport { items from_ts to_ts 0 0 0 } }
+    ? ( model_is_trained mo__h ) {} { ^ @ CalReport { items from_ts to_ts 0 0 0 } }
 
     // A row a reader has called a false positive is left out: a margin
     // fitted over it would be paid for by known noise.
-    : ( Vec Label ) labels ( model_labels mo )
-    : ( Vec i ) label_of ( model_label_map mo labels )
+    : ( Vec Label ) labels ( model_labels mo__h )
+    : ( Vec i ) label_of ( model_label_map mo__h labels )
     : ~ i excluded 0
 
-    : *Meta mm . mo meta
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : AeModel cae . mo ae
     : f athr . cae threshold
     : i n ( vec_len [String] . mo lines )
@@ -2941,7 +2867,8 @@ $ `src/store.nu`
         }
         = hi q
     } {}
-    : *Hist h ( __an_hist_build mo + - lo ( __an_hist_width mo ) 1 hi )
+    : Hist h__h ( __an_hist_build mo__h + - lo ( __an_hist_width mo__h ) 1 hi )
+    : *HistImpl h ( _Hist_ptr h__h )
     : ~ i k lo
     ~ < k hi {
         : ~ i ts 0
@@ -2949,7 +2876,7 @@ $ `src/store.nu`
         : ~ b inside & || <= from_ts 0 >= ts from_ts || <= to_ts 0 <= ts to_ts
         ? & inside ( _an_label_is labels ( _mlp_iget label_of k ) ANOM_LABEL_FP ) { = inside F = excluded + excluded 1 } {}
         ? & inside == ( _mlp_iget . h ok - k . h base ) 1 {
-            : Verdict vd ( __an_score_hist mo h k )
+            : Verdict vd ( __an_score_hist mo__h h__h k )
             ? . vd ready {
                 = n_rows + n_rows 1
                 ? . vd anomaly { = agg + agg 1 } {}
@@ -3004,11 +2931,9 @@ $ `src/store.nu`
                     = q + q 1
                 }
             } {}
-            ( verdict_free vd )
         } {}
         = k + k 1
     }
-    ( __an_hist_free h )
 
     // Sort, then read the summary numbers off the sorted values.
     : i ni ( vec_len [CalVer] items )
@@ -3032,8 +2957,6 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( vec_free [i] label_of )
-    ( labels_free labels )
     ^ @ CalReport { items from_ts to_ts n_rows agg excluded }
 }
 
@@ -3044,11 +2967,12 @@ $ `src/store.nu`
 
 // Resolve (from, to, last) the way the HTTP layer spells it: `last` seconds
 // back from `to`, or from the newest stored point when `to` is unbounded.
-@ model_window_from_last * Model mo i to_ts i last → i {
+@ model_window_from_last Model mo__h i to_ts i last → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ? <= last 0 { ^ 0 } {}
     : ~ i anchor to_ts
     ? > anchor 0 {} {
-        : i np ( model_n_points mo )
+        : i np ( model_n_points mo__h )
         ? > np 0 {
             ?? ( vec_get [i] . mo times - np 1 ) { T x → { = anchor x } F _ → {} }
         } {}
@@ -3103,47 +3027,41 @@ $ `src/store.nu`
 // same answer in words: "calibrated: false" with nothing beside it left a
 // reader to guess between four different situations, one of which
 // (already tuned) is the normal case and none of which is an error.
-@ model_autotune_why * Model mo f rate → s {
-    : *Meta mm . mo meta
+@ model_autotune_why Model mo__h f rate → s {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ? > rate 0.0 {} { ^ `the caller asked for no calibration (rate 0)` }
-    ? ( model_is_trained mo ) {} { ^ `the model has not trained yet — too few points; the run that brings enough calibrates` }
+    ? ( model_is_trained mo__h ) {} { ^ `the model has not trained yet — too few points; the run that brings enough calibrates` }
     ? == . mm tuned_at 0 {} { ^ `the margins were set once already, by an earlier import, a fine-tune or an edit; a calibration repeated on every import would fold real anomalies into the target rate. finetune {rate: 0.01} sets them again from the history as it now stands` }
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ `the history is too short for the rate to flag even one row; the import that brings enough rows calibrates` }
     ^ ``
 }
 
-@ model_autotune_at * Model mo f rate i now → b {
-    : *Meta mm . mo meta
-    ? & & > rate 0.0 == . mm tuned_at 0 ( model_is_trained mo ) {} { ^ F }
+@ model_autotune_at Model mo__h f rate i now → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? & & > rate 0.0 == . mm tuned_at 0 ( model_is_trained mo__h ) {} { ^ F }
     ? >= * rate # f ( vec_len [String] . mo lines ) 1.0 {} { ^ F }
     ( _an_set_action `autotune` )
     : ( Vec String ) none ( vec_new [String] )
-    : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
-    ( finetune_free ft )
-    ( vec_free [String] none )
+    : FineTuneReport ft ( model_finetune_at mo__h rate 0 0 T none )
     = . mm tuned_at now
-    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     ^ T
 }
 
 // The forecast version's first margin, measured rather than assumed (see
 // model_train_forecast_at). Lives here because it needs FineTuneReport,
 // which is declared with the fine-tune machinery below.
-@ _an_fc_autotune * Model mo → v {
-    : *Meta mm . mo meta
-    ? == ( f64_to_bits ( meta_version_margin mm ANOM_FC_NAME ANOM_FC_SIGMA ) ) ( f64_to_bits ANOM_FC_SIGMA ) {} { ^ }
+@ _an_fc_autotune Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    ? == ( f64_to_bits ( meta_version_margin . mo meta ANOM_FC_NAME ANOM_FC_SIGMA ) ) ( f64_to_bits ANOM_FC_SIGMA ) {} { ^ }
     ? >= * ANOM_FT_RATE # f ( vec_len [String] . mo lines ) 1.0 {} { ^ }
     ( _an_set_action `autotune` )
     : ( Vec String ) only ( vec_new [String] )
     ( vec_push [String] only ( string_from ANOM_FC_NAME ) )
-    : FineTuneReport ft ( model_finetune_at mo ANOM_FT_RATE 0 0 T only )
-    ( finetune_free ft )
-    ( vec_free_with [String] only \ String x → v { ( string_free x ) } )
-}
-
-@ finetune_free sink FineTuneReport rep → v {
-    ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) ( string_free . x warning ) } )
-    ( string_free . rep note )
+    : FineTuneReport ft ( model_finetune_at mo__h ANOM_FT_RATE 0 0 T only )
 }
 
 // Set every enabled, trained version's margin so that a fraction `rate` of
@@ -3258,7 +3176,6 @@ $ `src/store.nu`
         : f mid * 0.5 + lo hi
         : ( Vec f ) ms ( _an_cal_margins_at cal mid )
         : i got ( _an_cal_consensus cal ms need )
-        ( vec_free [f] ms )
         ? <= got want { = lo mid } { = hi mid }
         = it + it 1
     }
@@ -3269,15 +3186,15 @@ $ `src/store.nu`
 @ _an_consensus_at CalReport cal i need f q → i {
     : ( Vec f ) ms ( _an_cal_margins_at cal q )
     : i got ( _an_cal_consensus cal ms need )
-    ( vec_free [f] ms )
     ^ got
 }
 
-@ model_finetune_at * Model mo f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
+@ model_finetune_at Model mo__h f rate i from_ts i to_ts b apply ( Vec String ) only → FineTuneReport {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ? apply { ( _an_set_action ? == ( nurl_str_eq g_an_action `autotune` ) 1 `autotune` `finetune` ) } {}
     : ( Vec FtVer ) items ( vec_new [FtVer] )
-    : CalReport cal ( model_calibrate mo from_ts to_ts )
-    : *Meta ftmm . mo meta
+    : CalReport cal ( model_calibrate mo__h from_ts to_ts )
+    : *MetaImpl ftmm ( _Meta_ptr . mo meta )
     : ~ i need . ftmm votes
     ? < need 1 { = need 1 } {}
     // With one vote `rate` is each version's own share, as it always was.
@@ -3290,7 +3207,6 @@ $ `src/store.nu`
     ? > need 1 {
         : ( Vec f ) mnow ( _an_cal_margins_now cal )
         = cons_before ( _an_cal_consensus cal mnow need )
-        ( vec_free [f] mnow )
         = q ( _an_consensus_q cal need rate )
         = cons_after ( _an_consensus_at cal need q )
         : i want # i ( float_round * rate # f . cal n_rows )
@@ -3355,7 +3271,7 @@ $ `src/store.nu`
                         } {}
                     }
                     : ~ b did F
-                    ? & & apply wanted ! hold { = did ( model_set_margin mo nm nm_new ) } {}
+                    ? & & apply wanted ! hold { = did ( model_set_margin mo__h nm nm_new ) } {}
                     ( vec_push [FtVer] items @ FtVer {
                         ( string_from nm )
                         . cv cur_margin
@@ -3377,7 +3293,6 @@ $ `src/store.nu`
     }
     : i nr . cal n_rows
     : i nex . cal excluded
-    ( cal_free cal )
     ( _an_set_action `set_margin` )
     ^ @ FineTuneReport { items rate from_ts to_ts nr apply nex need q cons_before cons_after cnote }
 }
@@ -3386,8 +3301,9 @@ $ `src/store.nu`
 // point: window_min minutes back for a forest version, window_size points
 // back for timevector, and the whole ring (0) for the autoencoder, whose
 // training set is the whole ring too.
-@ model_version_from * Model mo s vname → i {
-    : *Meta mm . mo meta
+@ model_version_from Model mo__h s vname → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
     ~ < k nv {
@@ -3400,10 +3316,10 @@ $ `src/store.nu`
                         // is one tick short (as `last=N` is in the service).
                         : ~ i span * . vc window_min 60
                         ? . mm count_clock { = span - span ANOM_TICK } {}
-                        ^ ( model_window_from_last mo 0 span )
+                        ^ ( model_window_from_last mo__h 0 span )
                     } {}
                     ? > . vc window_size 0 {
-                        : i np ( model_n_points mo )
+                        : i np ( model_n_points mo__h )
                         : i at - np . vc window_size
                         ? > at 0 { ?? ( vec_get [i] . mo times at ) { T x → { ^ x } F _ → {} } } {}
                     } {}
@@ -3421,7 +3337,7 @@ $ `src/store.nu`
 // so short_term's margin answers for the last three hours and seasonal's
 // for the last ninety days, each at the same rate. One calibration per
 // version; the report's window is the widest of them.
-@ model_finetune_own * Model mo f rate b apply ( Vec String ) only → FineTuneReport {
+@ model_finetune_own Model mo f rate b apply ( Vec String ) only → FineTuneReport {
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : ( Vec String ) names ( model_scan_versions mo )
     : i nn ( vec_len [String] names )
@@ -3467,14 +3383,11 @@ $ `src/store.nu`
                     }
                     = j + j 1
                 }
-                ( finetune_free part )
-                ( vec_free_with [String] one \ String x → v { ( string_free x ) } )
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
     ^ @ FineTuneReport { items rate lo 0 rows apply excluded }
 }
 
@@ -3484,8 +3397,9 @@ $ `src/store.nu`
 // addressed by ring index at the API and by lifetime sequence number on
 // disk; the base of the ring is n_seen minus the rows it holds.
 
-@ model_seq_base * Model mo → i {
-    : *Meta mm . mo meta
+@ model_seq_base Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ^ - . mm n_seen ( vec_len [String] . mo lines )
 }
 
@@ -3493,28 +3407,30 @@ $ `src/store.nu`
 // sequence number, -1 for an index outside the ring, -2 for a label
 // that is not one of ANOM_LABEL_*. Verdicts do not change, so the epoch
 // does not move.
-@ model_label_point * Model mo i index s label s by s note i at → i {
+@ model_label_point Model mo__h i index s label s by s note i at → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ? ( label_known label ) {} { ^ -2 }
     : i n ( vec_len [String] . mo lines )
     ? | < index 0 >= index n { ^ -1 } {}
-    : i seq + ( model_seq_base mo ) index
+    : i seq + ( model_seq_base mo__h ) index
     : ~ i ts 0
     ?? ( vec_get [i] . mo times index ) { T t → { = ts t } F _ → {} }
     : Label l @ Label { seq ts ( string_from label ) ( string_from by ) at ( string_from note ) }
     : b ok ( store_append_label . mo store ( string_data . mo mname ) l )
-    ( label_free l )
     ^ ? ok seq -1
 }
 
 // The labels in force (store_load_labels), evicted rows included.
-@ model_labels * Model mo → ( Vec Label ) {
+@ model_labels Model mo__h → ( Vec Label ) {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ^ ( store_load_labels . mo store ( string_data . mo mname ) )
 }
 
 // Per ring position, the index into `labels` of its label, -1 for none.
-@ model_label_map * Model mo ( Vec Label ) labels → ( Vec i ) {
+@ model_label_map Model mo__h ( Vec Label ) labels → ( Vec i ) {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : i n ( vec_len [String] . mo lines )
-    : i base ( model_seq_base mo )
+    : i base ( model_seq_base mo__h )
     : ( Vec i ) out ( vec_with_cap [i] n )
     : ~ i k 0
     ~ < k n { ( vec_push [i] out -1 ) = k + k 1 }
@@ -3548,23 +3464,24 @@ $ `src/store.nu`
 // A `last` as a caller says it — seconds on a time clock, points on a count
 // clock — as the span model_window_from_last takes. N points back from the
 // newest is N ticks INCLUDING it, so the span is one short of N whole ticks.
-@ model_last_span * Model mo i last → i {
-    : *Meta mm . mo meta
+@ model_last_span Model mo__h i last → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ? & . mm count_clock > last 0 { ^ - * last ANOM_TICK 1 } {}
     ^ last
 }
 
 // The default window: a day, or its worth of points (1440) on a count clock.
-@ model_default_last * Model mo → i {
-    : *Meta mm . mo meta
+@ model_default_last Model mo__h → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ^ ? . mm count_clock / ANOM_CAL_WINDOW ANOM_TICK ANOM_CAL_WINDOW
 }
 
-@ model_finetune * Model mo → FineTuneReport {
+@ model_finetune Model mo → FineTuneReport {
     : i from_ts ( model_window_from_last mo 0 ( model_last_span mo ( model_default_last mo ) ) )
     : ( Vec String ) none ( vec_new [String] )
     : FineTuneReport rep ( model_finetune_at mo ANOM_FT_RATE from_ts 0 T none )
-    ( vec_free [String] none )
     ^ rep
 }
 
@@ -3586,11 +3503,6 @@ $ `src/store.nu`
     Json notes  // strings: what could not be done, and why
 }
 
-@ whole_train_free sink WholeTrain w → v {
-    ( json_free . w margins )
-    ( json_free . w notes )
-}
-
 //
 // The windows are opened for this one training only: the version
 // configuration the model keeps is the one it was given (its own, or the
@@ -3598,8 +3510,9 @@ $ `src/store.nu`
 // retrains its short_term over three hours like its source, not over
 // everything it has ever seen. The autoencoder takes `hidden` as its
 // layout (empty = the 64-16-64 default) and `rate` as its pre-filter.
-@ model_train_whole * Model mo f rate ( Vec i ) hidden → WholeTrain {
-    : *Meta mm . mo meta
+@ model_train_whole Model mo__h f rate ( Vec i ) hidden → WholeTrain {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nv ( vec_len [VerCfg] . mm versions )
     : ( Vec i ) wmins ( vec_with_cap [i] nv )
     : ( Vec i ) wptss ( vec_with_cap [i] nv )
@@ -3618,7 +3531,7 @@ $ `src/store.nu`
         }
         = vi + vi 1
     }
-    ( model_force_train_at mo ( model_last_ts mo ) )
+    ( model_force_train_at mo__h ( model_last_ts mo__h ) )
     = vi 0
     ~ < vi nv {
         ?? ( vec_get [VerCfg] . mm versions vi ) {
@@ -3632,9 +3545,7 @@ $ `src/store.nu`
         }
         = vi + vi 1
     }
-    ( vec_free [i] wmins )
-    ( vec_free [i] wptss )
-    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     : Json notes ( json_arr_new )
     : ( Vec i ) layout ( vec_new [i] )
     ? > ( vec_len [i] hidden ) 0 { ( vec_extend [i] layout hidden ) } {
@@ -3642,18 +3553,14 @@ $ `src/store.nu`
         ( vec_push [i] layout 16 )
         ( vec_push [i] layout 64 )
     }
-    : String aerr ( model_train_autoencoder mo layout rate )
-    ( vec_free [i] layout )
+    : String aerr ( model_train_autoencoder mo__h layout rate )
     ? > ( string_len aerr ) 0 {
         : String m ( string_from `autoencoder not trained: ` )
         ( string_push_str m ( string_data aerr ) )
         ( json_arr_push notes ( json_str_lit ( string_data m ) ) )
-        ( string_free m )
     } {}
-    ( string_free aerr )
     : ( Vec String ) none ( vec_new [String] )
-    : FineTuneReport ft ( model_finetune_at mo rate 0 0 T none )
-    ( vec_free [String] none )
+    : FineTuneReport ft ( model_finetune_at mo__h rate 0 0 T none )
     : Json margins ( json_obj_new )
     : i nft ( vec_len [FtVer] . ft items )
     : ~ i k 0
@@ -3664,10 +3571,9 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( finetune_free ft )
     // The flatline guard keeps its configured margin (finetune leaves it
     // alone); it is reported so the list is every version that judged.
-    ? & ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) ( __an_flat_fitted mo ) {
+    ? & ( meta_version_enabled . mo meta ANOM_FLAT_NAME F ) ( __an_flat_fitted mo__h ) {
         ( json_obj_set margins ANOM_FLAT_NAME ( json_float ( meta_version_margin . mo meta ANOM_FLAT_NAME ANOM_FLAT_MARGIN ) ) )
     } {}
     ^ @ WholeTrain { margins notes }
@@ -3784,23 +3690,14 @@ $ `src/store.nu`
     ^ @ ScanRuns { runs run_of }
 }
 
-@ scan_runs_free sink ScanRuns sr → v {
-    ( vec_free [ScanRun] . sr runs )
-    ( vec_free [i] . sr run_of )
-}
-
-@ scan_free sink ScanOut so → v {
-    ( vec_free [ScoredPt] . so pts )
-    ( vec_free_with [String] . so vnames \ String x → v { ( string_free x ) } )
-}
-
 // Does the model flag the stored row at `index`? Read from the cached
 // ring scan, so a second question about the same model costs nothing.
 // -1 when there is no such row.
-@ model_row_is_anomaly * Model mo i index → i {
+@ model_row_is_anomaly Model mo__h i index → i {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : i n ( vec_len [String] . mo lines )
     ? & >= index 0 < index n {} { ^ -1 }
-    : ScanOut so ( model_scan_at mo 0 0 0 F )
+    : ScanOut so ( model_scan_at mo__h 0 0 0 F )
     : ~ i out -1
     : i np ( vec_len [ScoredPt] . so pts )
     : ~ i k 0
@@ -3811,7 +3708,6 @@ $ `src/store.nu`
         }
         = k + k 1
     }
-    ( scan_free so )
     ^ out
 }
 
@@ -3820,8 +3716,9 @@ $ `src/store.nu`
 // stable within an epoch by construction — anything that adds, removes or
 // toggles a version bumps the epoch — and it is written into the cache so a
 // mismatch is caught rather than silently misread as different versions.
-@ model_scan_versions * Model mo → ( Vec String ) {
-    : *Meta mm . mo meta
+@ model_scan_versions Model mo__h → ( Vec String ) {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : AeModel cae . mo ae
     : ( Vec String ) out ( vec_new [String] )
     : i nv ( vec_len [VerCfg] . mm versions )
@@ -3836,9 +3733,9 @@ $ `src/store.nu`
                     } { ? ( _an_is_guard_name nm ) {
                             ? > ( vec_len [f] . . mo sc mean ) 0 { ( vec_push [String] out ( string_from nm ) ) } {}
                         } { ? ( _an_is_flat_name nm ) {
-                                ? ( __an_flat_fitted mo ) { ( vec_push [String] out ( string_from nm ) ) } {}
+                                ? ( __an_flat_fitted mo__h ) { ( vec_push [String] out ( string_from nm ) ) } {}
                             } { ? ( _an_is_fc_name nm ) {
-                                    ? . . mo fc trained { ( vec_push [String] out ( string_from nm ) ) } {}
+                                    ? . ( _FcModel_ptr . mo fc ) trained { ( vec_push [String] out ( string_from nm ) ) } {}
                                 } {
                                     : ~ b has F
                                     : i nf ( vec_len [VerModel] . mo forests )
@@ -3880,7 +3777,9 @@ $ `src/store.nu`
 // verdict folded into cache words. `at` is the row being scored, so the
 // ring entries AFTER it are the future: a timevector window ends at `at`,
 // not at the ring tip.
-@ __an_scan_row * Model mo * Hist h ( Vec String ) vnames i at → ScoredPt {
+@ __an_scan_row Model mo__h Hist h__h ( Vec String ) vnames i at → ScoredPt {
+    : *HistImpl h ( _Hist_ptr h__h )
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : ~ i st ANOM_SC_NOT_READY
     : ~ f sc 0.0
     : ~ f sv 0.0
@@ -3890,7 +3789,7 @@ $ `src/store.nu`
     : i r - at . h base
     ? & >= r 0 < r . h n {
         ? == ( _mlp_iget . h ok r ) 1 {
-            : Verdict vd ( __an_score_hist mo h at )
+            : Verdict vd ( __an_score_hist mo__h h__h at )
             ? . vd ready {
                 = st ANOM_SC_SCORED
                 = sc . vd score
@@ -3912,7 +3811,6 @@ $ `src/store.nu`
                     = q + q 1
                 }
             } {}
-            ( verdict_free vd )
         } {}
     } {}
     : ~ i ts 0
@@ -3925,9 +3823,10 @@ $ `src/store.nu`
 // (<= 0 = no cap) taken from the END of the window. `force` recomputes
 // even when the cache is warm — the escape hatch for verifying the cache
 // itself, never needed for correctness.
-@ model_scan_at * Model mo i from_ts i to_ts i limit b force → ScanOut {
-    : *Meta mm . mo meta
-    : ( Vec String ) vnames ( model_scan_versions mo )
+@ model_scan_at Model mo__h i from_ts i to_ts i limit b force → ScanOut {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : ( Vec String ) vnames ( model_scan_versions mo__h )
     : i total ( vec_len [String] . mo lines )
     : i epoch . mm score_epoch
     : i base - . mm n_seen total
@@ -3941,10 +3840,9 @@ $ `src/store.nu`
             : b same_epoch == . got epoch epoch
             : b same_vers ( scorecache_vnames_match got vnames )
             ? & & same_epoch same_vers == force F {
-                ( scorecache_free cache )
                 = cache got
                 = cbase . got base_seen
-            } { ( scorecache_free got ) }
+            } {}
         }
         F → {}
     }
@@ -3989,7 +3887,7 @@ $ `src/store.nu`
     // The rows the misses need, encoded once — on the first miss, so a scan
     // the cache answers in full parses nothing. A timevector window reaches
     // back width−1 rows before the first row in the window.
-    : ~ * Hist h # *Hist 0
+    : ~ Hist h @ Hist { # s 0 }
     : ~ i j lo
     ~ < j hi {
         // Cache index of ring row j: lifetime index minus the cache's base.
@@ -4025,8 +3923,8 @@ $ `src/store.nu`
             ( vec_push [ScoredPt] pts @ ScoredPt { j ts sc sv anom pres flag } )
         } {
             = misses + misses 1
-            ? == # i h 0 { = h ( __an_hist_build mo + - lo ( __an_hist_width mo ) 1 hi ) } {}
-            : ScoredPt row ( __an_scan_row mo h vnames j )
+            ? == # i . h ctl 0 { = h ( __an_hist_build mo__h + - lo ( __an_hist_width mo__h ) 1 hi ) } {}
+            : ScoredPt row ( __an_scan_row mo__h h vnames j )
             ? . row sp_anomaly { = anoms + anoms 1 } {}
             ( vec_push [ScoredPt] pts row )
             = dirty T
@@ -4080,21 +3978,19 @@ $ `src/store.nu`
             = k + k 1
         }
         : b _w ( store_save_scores . mo store ( string_data . mo mname ) nc )
-        ( scorecache_free nc )
     } {}
-    ( scorecache_free cache )
-    ( __an_hist_free h )
 
     ^ @ ScanOut { pts vnames epoch total considered hits misses anoms }
 }
 
-@ model_scan * Model mo i from_ts i to_ts i limit b force → ScanOut {
+@ model_scan Model mo i from_ts i to_ts i limit b force → ScanOut {
     ^ ( model_scan_at mo from_ts to_ts limit force )
 }
 
 // The raw stored record at a ring index, parsed (None when out of range or
 // no longer parsable).
-@ model_point_json * Model mo i at → ?Json {
+@ model_point_json Model mo__h i at → ?Json {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ?? ( vec_get [String] . mo lines at ) {
         T l → {
             : !Json JsonError jr ( json_parse ( string_data l ) )
@@ -4120,17 +4016,14 @@ $ `src/store.nu`
     f ac_expected
 }
 
-@ ae_contrib_free sink ( Vec AeContrib ) xs → v {
-    ( vec_free_with [AeContrib] xs \ AeContrib c → v { ( string_free . c ac_name ) } )
-}
-
 // The `topk` features carrying the most of a point's reconstruction error,
 // largest first, with each one's share of the total. This is the answer
 // the forests structurally cannot give: the autoencoder's per-feature error
 // is how badly that feature failed to be predictable FROM THE OTHERS, so
 // the top entries name the broken relationship rather than the extreme
 // value. Empty when the model has no trained autoencoder.
-@ model_ae_contrib * Model mo Json raw i topk → ( Vec AeContrib ) {
+@ model_ae_contrib Model mo__h Json raw i topk → ( Vec AeContrib ) {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec AeContrib ) out ( vec_new [AeContrib] )
     : AeModel cae . mo ae
     ? & . cae trained ! . mo ae_stale {} { ^ out }
@@ -4140,7 +4033,6 @@ $ `src/store.nu`
             : ( Vec f ) araw ( anomaly_project p . cae feats )
             : ( Vec f ) errs ( ae_feature_errors cae araw )
             : ( Vec f ) recon ( ae_reconstruct cae araw )
-            ( enc_free p )
             : i d ( vec_len [f] errs )
             : ~ f tot 0.0
             : ~ i k 0
@@ -4177,7 +4069,7 @@ $ `src/store.nu`
                     ? > tot 0.0 { = share / bestv tot } {}
                     : ~ String nm ( string_new )
                     ?? ( vec_get [String] . cae feats best ) {
-                        T x → { ( string_free nm ) = nm ( string_from ( string_data x ) ) }
+                        T x → { = nm ( string_from ( string_data x ) ) }
                         F _ → {}
                     }
                     : f val ( _mlp_fget araw best )
@@ -4186,12 +4078,8 @@ $ `src/store.nu`
                     = picked + picked 1
                 }
             }
-            ( vec_free [b] taken )
-            ( vec_free [f] errs )
-            ( vec_free [f] recon )
-            ( vec_free [f] araw )
         }
-        F e → { ( string_free e ) }
+        F e → {}
     }
     ^ out
 }
@@ -4200,11 +4088,13 @@ $ `src/store.nu`
 
 // Drop all data and trained forests but keep the model's name, schedule
 // and version configs. Learned columns/categories/features/scaler reset.
-@ model_reset * Model mo → v {
-    : *Meta old . mo meta
+@ model_reset Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl old ( _Meta_ptr . mo meta )
 
     // Fresh metadata, carrying over identity + configuration.
-    : *Meta fresh ( meta_new ( string_data . old name ) ( string_data . old created ) )
+    : Meta fresh__h ( meta_new ( string_data . old name ) ( string_data . old created ) )
+    : *MetaImpl fresh ( _Meta_ptr fresh__h )
     = . fresh sched_below . old sched_below
     = . fresh sched_at_max . old sched_at_max
     = . fresh sched_ae . old sched_ae
@@ -4213,8 +4103,7 @@ $ `src/store.nu`
     // the discarded points must never be mistaken for verdicts of the new
     // ones that will reuse their ring positions.
     = . fresh score_epoch + . old score_epoch 1
-    ( vec_free_with [VerCfg] . fresh versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
-    = . fresh versions ( vec_new [VerCfg] )
+    ( vec_clear [VerCfg] . fresh versions )
     : i nv ( vec_len [VerCfg] . old versions )
     : ~ i vi 0
     ~ < vi nv {
@@ -4228,31 +4117,30 @@ $ `src/store.nu`
         }
         = vi + vi 1
     }
-    ( meta_free old )
-    = . mo meta fresh
+    : Meta old_meta . mo meta
+    ( mem_take old_meta )  // a store through the model pointer drops nothing
+    = . mo meta fresh__h
 
-    ( __an_free_forests mo )
-    ( __an_free_lines . mo lines )
-    = . mo lines ( vec_new [String] )
-    ( vec_free [i] . mo times )
-    = . mo times ( vec_new [i] )
-    ( scaler_free . mo sc )
-    = . mo sc ( meta_scaler fresh )
+    ( __an_clear_forests mo__h )
+    ( vec_clear [String] . mo lines )
+    ( vec_clear [i] . mo times )
+    : Scaler old_sc . mo sc
+    ( mem_take old_sc )  // a store through the pointer drops nothing
+    = . mo sc ( meta_scaler fresh__h )
     ( fc_clear . mo fc )
     ( store_delete_fc . mo store ( string_data . mo mname ) )
     = . mo next_train_at . mo min_points
 
     : ( Vec String ) none ( vec_new [String] )
     ( store_write_points . mo store ( string_data . mo mname ) none 0 )
-    ( vec_free [String] none )
     // Sequence numbers start over with the ring, so labels keyed on the
     // old ones would name rows that never were.
     ( store_delete_labels . mo store ( string_data . mo mname ) )
-    ( store_save_meta . mo store ( string_data . mo mname ) fresh )
+    ( store_save_meta . mo store ( string_data . mo mname ) fresh__h )
 }
 
-// Delete a model from the store entirely (the Model handle, if any, should
-// be freed separately with model_free).
+// Delete a model from the store entirely (an open Model handle of it goes
+// with its owner).
 @ model_delete Store st s name → b {
     ^ ( store_delete st name )
 }
@@ -4262,7 +4150,8 @@ $ `src/store.nu`
 // (fine-tune, autotune, the CLI, a source's first train) and the metadata
 // patch (`edit`), which sets margins straight into the VerCfg and for two
 // releases moved them without a word in the log the tool promises.
-@ _an_audit_margin * Model mo s vname f before f after → v {
+@ _an_audit_margin Model mo__h s vname f before f after → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ? == ( f64_to_bits before ) ( f64_to_bits after ) { ^ } {}
     : Json e ( json_obj_new )
     ( json_obj_set e `at` ( json_int ( now_seconds ) ) )
@@ -4272,14 +4161,14 @@ $ `src/store.nu`
     ( json_obj_set e `from` ( json_float before ) )
     ( json_obj_set e `to` ( json_float after ) )
     : b _a ( store_append_audit . mo store ( string_data . mo mname ) e )
-    ( json_free e )
 }
 
 // Set one version's decision margin in the metadata (persisted, effective
 // immediately at scoring — no retrain needed). Returns F for an unknown
 // version name.
-@ model_set_margin * Model mo s vname f margin → b {
-    : *Meta mm . mo meta
+@ model_set_margin Model mo__h s vname f margin → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
     ~ < k nv {
@@ -4294,9 +4183,9 @@ $ `src/store.nu`
                     // calibration must not overwrite: the model counts
                     // as tuned from here on (model_autotune_at).
                     ? == . mm tuned_at 0 { = . mm tuned_at ( now_seconds ) } {}
-                    ( meta_bump_epoch mm )
-                    ( store_save_meta . mo store ( string_data . mo mname ) mm )
-                    ( _an_audit_margin mo vname before margin )
+                    ( meta_bump_epoch . mo meta )
+                    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
+                    ( _an_audit_margin mo__h vname before margin )
                     ^ T
                 } {}
             }
@@ -4308,14 +4197,15 @@ $ `src/store.nu`
 }
 
 // Update the retraining schedule (persisted immediately).
-@ model_set_schedule * Model mo i below_max i at_max → v {
-    : *Meta mm . mo meta
+@ model_set_schedule Model mo__h i below_max i at_max → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     ? > below_max 0 { = . mm sched_below below_max } {}
     ? > at_max 0 { = . mm sched_at_max at_max } {}
-    ? ( model_is_trained mo ) {
-        = . mo next_train_at + . mm last_trained ( __an_sched_step mo )
+    ? ( model_is_trained mo__h ) {
+        = . mo next_train_at + . mm last_trained ( __an_sched_step mo__h )
     } {}
-    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
 }
 
 // ── Editing a live model's metadata ───────────────────────────────────
@@ -4325,7 +4215,8 @@ $ `src/store.nu`
 // forest trained against a feature order and scaler the model has since
 // moved past, and a stale width reads as a timevector window at scoring
 // time — a wrong verdict rather than an absent one.
-@ __an_drop_forest * Model mo s vname → v {
+@ __an_drop_forest Model mo__h s vname → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     : ( Vec VerModel ) kept ( vec_new [VerModel] )
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
@@ -4333,29 +4224,30 @@ $ `src/store.nu`
         ?? ( vec_get [VerModel] . mo forests k ) {
             T vm → {
                 ? == ( nurl_str_eq ( string_data . vm vname ) vname ) 1 {
-                    ( anom_vermodel_free vm )
                 } { ( vec_push [VerModel] kept vm ) }
             }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free [VerModel] . mo forests )
+    : ( Vec VerModel ) old_forests . mo forests
+    ( mem_take old_forests )  // a store through the pointer drops nothing
     = . mo forests kept
     ( store_delete_forest . mo store ( string_data . mo mname ) vname )
 }
 
 // Every forest whose version is now off (or gone from the metadata) loses
 // its blob. The autoencoder has no forest, so it is never touched here.
-@ __an_prune_disabled * Model mo → v {
-    : *Meta mm . mo meta
+@ __an_prune_disabled Model mo__h → v {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : ( Vec String ) doomed ( vec_new [String] )
     : i nf ( vec_len [VerModel] . mo forests )
     : ~ i k 0
     ~ < k nf {
         ?? ( vec_get [VerModel] . mo forests k ) {
             T vm → {
-                ? ( meta_version_enabled mm ( string_data . vm vname ) F ) {} {
+                ? ( meta_version_enabled . mo meta ( string_data . vm vname ) F ) {} {
                     ( vec_push [String] doomed ( string_from ( string_data . vm vname ) ) )
                 }
             }
@@ -4367,12 +4259,11 @@ $ `src/store.nu`
     = k 0
     ~ < k nd {
         ?? ( vec_get [String] doomed k ) {
-            T d → { ( __an_drop_forest mo ( string_data d ) ) }
+            T d → { ( __an_drop_forest mo__h ( string_data d ) ) }
             F _ → {}
         }
         = k + k 1
     }
-    ( vec_free_with [String] doomed \ String x → v { ( string_free x ) } )
 }
 
 // Turn one version on or off (persisted immediately). Disabling drops the
@@ -4381,9 +4272,10 @@ $ `src/store.nu`
 // its net carries its OWN frozen feature order, so it stays valid across
 // retrains and is far too expensive to throw away on a checkbox. Returns F
 // for an unknown version name.
-@ model_set_version_enabled * Model mo s vname b on → b {
-    : *Meta mm . mo meta
-    : i at ( meta_find_version mm vname )
+@ model_set_version_enabled Model mo__h s vname b on → b {
+    : *ModelImpl mo ( _Model_ptr mo__h )
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
+    : i at ( meta_find_version . mo meta vname )
     ? < at 0 { ^ F } {}
     ?? ( vec_get [VerCfg] . mm versions at ) {
         T vc → {
@@ -4394,10 +4286,10 @@ $ `src/store.nu`
         F _ → {}
     }
     ? on {} {
-        ? ( __an_forestless vname ) {} { ( __an_drop_forest mo vname ) }
+        ? ( __an_forestless vname ) {} { ( __an_drop_forest mo__h vname ) }
     }
-    ( meta_bump_epoch mm )
-    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ( meta_bump_epoch . mo meta )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     ^ T
 }
 
@@ -4446,11 +4338,12 @@ $ `src/store.nu`
 // sent `step_size: 0` read back a 1 and had nothing to blame but the
 // nearest flag it had also sent. Every field the patch names and the
 // config did not keep is reported back beside the change.
-@ _an_patch_adjustments * Meta mm Json vers ( Vec String ) notes → v {
+@ _an_patch_adjustments Meta mm__h Json vers ( Vec String ) notes → v {
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     ? ( json_is_obj vers ) {} { ^ }
     ( json_obj_each vers \ s vn Json vo → v {
         ? ( json_is_obj vo ) {} { ^ }
-        : i at ( meta_find_version mm vn )
+        : i at ( meta_find_version mm__h vn )
         ? >= at 0 {} { ^ }
         ?? ( vec_get [VerCfg] . mm versions at ) {
             T vc → {
@@ -4510,7 +4403,8 @@ $ `src/store.nu`
 
 // How many versions are switched on right now — the ceiling on `votes`,
 // since a point cannot be flagged by a version that does not judge.
-@ _an_enabled_count * Meta mm → i {
+@ _an_enabled_count Meta mm__h → i {
+    : *MetaImpl mm ( _Meta_ptr mm__h )
     : ~ i n 0
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
@@ -4524,16 +4418,16 @@ $ `src/store.nu`
     ^ n
 }
 
-@ model_apply_meta_patch * Model mo Json patch → String {
+@ model_apply_meta_patch Model mo Json patch → String {
     : ( Vec String ) sink ( vec_new [String] )
     : String r ( model_apply_meta_patch_notes mo patch sink )
-    ( vec_free_with [String] sink \ String x → v { ( string_free x ) } )
     ^ r
 }
 
-@ model_apply_meta_patch_notes * Model mo Json patch ( Vec String ) notes → String {
+@ model_apply_meta_patch_notes Model mo__h Json patch ( Vec String ) notes → String {
+    : *ModelImpl mo ( _Model_ptr mo__h )
     ? ( json_is_obj patch ) {} { ^ ( string_from `metadata must be a JSON object` ) }
-    : *Meta mm . mo meta
+    : *MetaImpl mm ( _Meta_ptr . mo meta )
     : ~ b touched F
 
     // Every key must be one the patch reads, at every level: a key it
@@ -4545,10 +4439,8 @@ $ `src/store.nu`
         : String why ( string_from `unknown field ` )
         ( string_push_str why ( string_data badtop ) )
         ( string_push_str why ` (editable: alias, clock, schedule, max_data_points, versions, votes — the same list every metadata response publishes as editable_fields; replace_versions is not a field but a flag on this patch, making versions the whole list)` )
-        ( string_free badtop )
         ^ why
     } {}
-    ( string_free badtop )
     ?? ( json_obj_get patch `schedule` ) {
         T sj0 → {
             : String bads ( _an_unknown_keys sj0 `below_max at_max autoencoder` `schedule` )
@@ -4556,10 +4448,8 @@ $ `src/store.nu`
                 : String why ( string_from `unknown field ` )
                 ( string_push_str why ( string_data bads ) )
                 ( string_push_str why ` (schedule has: below_max, at_max, autoencoder)` )
-                ( string_free bads )
                 ^ why
             } {}
-            ( string_free bads )
         }
         F _ → {}
     }
@@ -4570,9 +4460,8 @@ $ `src/store.nu`
     }
     ?? ( json_obj_get patch `versions` ) {
         T vj0 → {
-            : String badv ( meta_versions_patch_check mm vj0 want_replace )
+            : String badv ( meta_versions_patch_check . mo meta vj0 want_replace )
             ? > ( string_len badv ) 0 { ^ badv } {}
-            ( string_free badv )
         }
         F _ → {}
     }
@@ -4587,8 +4476,8 @@ $ `src/store.nu`
             ? > ( nurl_str_len araw ) ANOM_ALIAS_MAX {
                 ^ ( string_from `alias is too long (max 120 characters)` )
             } {}
-            ( string_free . mm alias )
-            = . mm alias ( string_from araw )
+            ( string_clear . mm alias )
+            ( string_push_str . mm alias araw )
             = touched T
         }
         F _ → {}
@@ -4644,7 +4533,7 @@ $ `src/store.nu`
             : ~ b trimmed F
             ~ > ( vec_len [String] . mo lines ) mx {
                 ?? ( vec_remove [String] . mo lines 0 ) {
-                    T old → { ( string_free old ) }
+                    T old → {}
                     F _ → {}
                 }
                 ?? ( vec_remove [i] . mo times 0 ) { T _ → {} F _ → {} }
@@ -4679,9 +4568,7 @@ $ `src/store.nu`
                 }
                 = vk + vk 1
             }
-            ? < ( meta_apply_versions_json mm vj want_replace ) 0 {
-                ( vec_free_with [String] an \ String x → v { ( string_free x ) } )
-                ( vec_free [f] am )
+            ? < ( meta_apply_versions_json . mo meta vj want_replace ) 0 {
                 ^ ( string_from `versions must be a JSON object of version configs` )
             } {}
             ( _an_set_action `edit` )
@@ -4689,10 +4576,10 @@ $ `src/store.nu`
             ~ < vk ( vec_len [String] an ) {
                 ?? ( vec_get [String] an vk ) {
                     T nm → {
-                        : i at ( meta_find_version mm ( string_data nm ) )
+                        : i at ( meta_find_version . mo meta ( string_data nm ) )
                         ? >= at 0 {
                             ?? ( vec_get [VerCfg] . mm versions at ) {
-                                T now2 → { ( _an_audit_margin mo ( string_data nm ) ( _fc_getf am vk ) . now2 decision_margin ) }
+                                T now2 → { ( _an_audit_margin mo__h ( string_data nm ) ( _fc_getf am vk ) . now2 decision_margin ) }
                                 F _ → {}
                             }
                         } {}
@@ -4701,9 +4588,7 @@ $ `src/store.nu`
                 }
                 = vk + vk 1
             }
-            ( vec_free_with [String] an \ String x → v { ( string_free x ) } )
-            ( vec_free [f] am )
-            ( _an_patch_adjustments mm vj notes )
+            ( _an_patch_adjustments . mo meta vj notes )
             // A margin a reader set is a margin the first train's
             // calibration must not overwrite (model_set_margin does the
             // same for its own door).
@@ -4720,7 +4605,7 @@ $ `src/store.nu`
             : i want ( _an_jint patch `votes` . mm votes )
             ? >= want 1 {} { ^ ( string_from `votes must be at least 1 (1 = any one enabled version is enough, which is the default)` ) }
             ? <= want ANOM_VOTES_MAX {} { ^ ( string_from `votes is far past any model's version count` ) }
-            : i on ( _an_enabled_count mm )
+            : i on ( _an_enabled_count . mo meta )
             ? <= want on {} {
                 : String why ( string_from `votes: ` )
                 ( string_push_int why want )
@@ -4739,12 +4624,12 @@ $ `src/store.nu`
         ^ ( string_from `nothing to update: expected alias, schedule, max_data_points, versions and/or votes` )
     }
 
-    ( __an_prune_disabled mo )
-    ? ( model_is_trained mo ) {
-        = . mo next_train_at + . mm last_trained ( __an_sched_step mo )
+    ( __an_prune_disabled mo__h )
+    ? ( model_is_trained mo__h ) {
+        = . mo next_train_at + . mm last_trained ( __an_sched_step mo__h )
     } {}
-    ( meta_bump_epoch mm )
-    ( __an_note_stored mo )
-    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+    ( meta_bump_epoch . mo meta )
+    ( __an_note_stored mo__h )
+    ( store_save_meta . mo store ( string_data . mo mname ) . mo meta )
     ^ ( string_new )
 }

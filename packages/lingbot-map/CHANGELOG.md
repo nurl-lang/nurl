@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**Nothing is released by hand.** The checkpoint is an `Lw` handle instead
+of a `*Lw` pointer (`lw_open` → `!Lw String`): every copy is the same
+mapping and its last owner unmaps it; `lw_close` is an optional early
+release and `lw_none` is the empty slot. A preprocessed frame is a plain
+`Frame` value (`pp_load` → `!Frame String`) and `pp_free` is gone. The
+models' value structs (`Agg`, `Dino`, `CamHead`, `ChWs`, `Dpt`, `LmBlk`,
+`LmWs`, `LmKv`) hold device buffers that release themselves, so their
+`*_free` functions are gone, as is every tail free in the CLI and the
+checks; the host scratch blocks are Vecs.
+
 ## 0.9.9
 
 Frame lists are compacted with `vec_replace` and trimmed with `vec_truncate` under NURL 0.67.0's element-dropping containers (#1143).

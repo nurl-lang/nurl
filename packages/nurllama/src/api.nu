@@ -85,7 +85,7 @@ $ `stdlib/ext/uuid.nu`
 
 @ __api_unload → v {
     ? != g_api_llm 0 {
-        ( llm_close # *Llm g_api_llm )
+        ( llm_word_release g_api_llm )
         = g_api_llm 0
     } {}
     ? != 0 ( nurl_str_len g_api_name ) {
@@ -111,7 +111,6 @@ $ `stdlib/ext/uuid.nu`
     ( __api_unload )
     : String rootS ( string_from g_api_root )
     : ?String rp ( nl_resolve rootS name )
-    ( string_free rootS )
     ?? rp {
         T path → {
             // the chat style comes from the model's own metadata
@@ -119,17 +118,15 @@ $ `stdlib/ext/uuid.nu`
             ?? ( gguf_open ( string_data path ) ) {
                 T gg → {
                     = style ( chat_style_of gg )
-                    ( gguf_close gg )
                 }
-                F e → { ( string_free e ) }
+                F _e → {}
             }
-            : !*Llm String lr ? != g_api_weights 0
+            : !Llm String lr ? != g_api_weights 0
             ( llm_open_st ( string_data path ) # s g_api_weights 0 )
             ( llm_open ( string_data path ) 0 )
-            ( string_free path )
             ?? lr {
                 T m → {
-                    = g_api_llm # i m
+                    = g_api_llm ( llm_into_word ( Llm_share m ) )
                     = g_api_style style
                     ( __api_set_name name )
                     ^ ( string_new )
@@ -151,7 +148,6 @@ $ `stdlib/ext/uuid.nu`
 @ __api_body_json HttpRequest req → !Json JsonError {
     : String txt ( bytes_to_str . req body )
     : !Json JsonError r ( json_parse ( string_data txt ) )
-    ( string_free txt )
     ^ r
 }
 
@@ -219,7 +215,6 @@ $ `stdlib/ext/uuid.nu`
     }
     : b _6 ( json_obj_set j `done` ( json_bool F ) )
     : String out ( json_stringify j )
-    ( json_free j )
     ( string_push_char out 10 )
     ^ out
 }
@@ -240,7 +235,6 @@ $ `stdlib/ext/uuid.nu`
     : b _8 ( json_obj_set j `prompt_eval_count` ( json_int nprompt ) )
     : b _9 ( json_obj_set j `eval_count` ( json_int neval ) )
     : String out ( json_stringify j )
-    ( json_free j )
     ( string_push_char out 10 )
     ^ out
 }
@@ -248,7 +242,6 @@ $ `stdlib/ext/uuid.nu`
 @ __api_write_str TcpConn c String s → b {
     : ( Vec u ) b2 ( bytes_from_str ( string_data s ) )
     : !v NetErr r ( response_write_chunk c b2 )
-    ( vec_free [u] b2 )
     : ~ b ok T
     ?? r { T _ → {} F _ → { = ok F } }
     ^ ok
@@ -258,7 +251,6 @@ $ `stdlib/ext/uuid.nu`
     : ( Vec Header ) hs ( vec_new [Header] )
     ( vec_push [Header] hs ( header_new `Content-Type` `application/x-ndjson` ) )
     : !v NetErr r ( response_begin_chunked c 200 hs )
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
     : ~ b ok T
     ?? r { T _ → {} F _ → { = ok F } }
     ^ ok
@@ -268,15 +260,12 @@ $ `stdlib/ext/uuid.nu`
     : ( Vec Header ) hs ( vec_new [Header] )
     ( vec_push [Header] hs ( header_new `Content-Type` `application/json` ) )
     : !v NetErr r ( response_begin_chunked c status hs )
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
     ?? r { T _ → {} F _ → { ^ T } }
     : Json j ( json_obj_new )
     : b _1 ( json_obj_set j `error` ( json_str_lit msg ) )
     : String txt ( json_stringify j )
-    ( json_free j )
     ( string_push_char txt 10 )
     : b _w ( __api_write_str c txt )
-    ( string_free txt )
     : !v NetErr _e ( response_end_chunked c )
     ^ T
 }
@@ -287,15 +276,14 @@ $ `stdlib/ext/uuid.nu`
 // and answers with a single object (stream=false).
 @ __api_generate TcpConn c s model String prompt s field b stream
 i npredict f temp i topk f topp i seed → b {
-    : *Llm m # *Llm g_api_llm
+    : Llm m # Llm g_api_llm
     : Tok t ( llm_tok m )
     : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
     : i nprompt ( vec_len [i] ids )
     ? > nprompt ( llm_n_ctx m ) {
-        ( vec_free [i] ids )
         ^ ( __api_error_chunked c 400 `prompt is longer than the model's context` )
     } {}
-    ? stream { ? ( __api_begin_ndjson c ) {} { ( vec_free [i] ids ) ^ T } } {}
+    ? stream { ? ( __api_begin_ndjson c ) {} { ^ T } } {}
 
     // Diffusion model: the block-denoise loop produces the whole
     // response (src/diffuse.nu); a streaming client then receives the
@@ -303,8 +291,6 @@ i npredict f temp i topk f topp i seed → b {
     ? ( llm_is_diffusion m ) {
         : Rng drng ( rng_seed seed )
         : ( Vec i ) gen ( dz_generate m ids npredict 32 0.7 0.5 16 temp drng )
-        ( rng_free drng )
-        ( vec_free [i] ids )
         : String dfull ( string_new )
         : ~ b dbroken F
         : ~ i gi 0
@@ -313,33 +299,25 @@ i npredict f temp i topk f topp i seed → b {
             ?? ( vec_get [i] gen gi ) { T x → { = gid x } F → {} }
             : ( Vec u ) pb ( tok_piece t gid )
             : String piece ( bytes_to_str pb )
-            ( vec_free [u] pb )
             ( string_push_str dfull ( string_data piece ) )
             ? & stream ! dbroken {
                 : String fr ( __api_frame_token model field ( string_data piece ) )
                 ? ( __api_write_str c fr ) {} { = dbroken T }
-                ( string_free fr )
             } {}
-            ( string_free piece )
             = gi + gi 1
         }
         : i dproduced ( vec_len [i] gen )
-        ( vec_free [i] gen )
         ? dbroken {
-            ( string_free dfull )
             ^ T
         } {}
-        ? stream {} { ? ( __api_begin_ndjson c ) {} { ( string_free dfull ) ^ T } }
+        ? stream {} { ? ( __api_begin_ndjson c ) {} { ^ T } }
         : String dfin ( __api_frame_done model field nprompt dproduced ! stream ( string_data dfull ) )
         : b _dw ( __api_write_str c dfin )
-        ( string_free dfin )
-        ( string_free dfull )
         : !v NetErr _de ( response_end_chunked c )
         ^ T
     } {}
 
     ( llm_prefill m ids )
-    ( vec_free [i] ids )
 
     : Rng rng ( rng_seed seed )
     : String full ( string_new )
@@ -352,33 +330,26 @@ i npredict f temp i topk f topp i seed → b {
         ? == nt ( tok_eos t ) { = stop T } {
             : ( Vec u ) pb ( tok_piece t nt )
             : String piece ( bytes_to_str pb )
-            ( vec_free [u] pb )
             // a chat dialect's terminator may arrive as plain text
             ? ( chat_stop_matches g_api_style ( string_data piece ) ) { = stop T } {
                 ( string_push_str full ( string_data piece ) )
                 ? stream {
                     : String fr ( __api_frame_token model field ( string_data piece ) )
                     ? ( __api_write_str c fr ) {} { = broken T }
-                    ( string_free fr )
                 } {}
                 ( llm_eval m nt pos )
                 = pos + pos 1
                 = produced + produced 1
             }
-            ( string_free piece )
         }
     }
 
-    ( rng_free rng )
     ? broken {
-        ( string_free full )
         ^ T
     } {}
-    ? stream {} { ? ( __api_begin_ndjson c ) {} { ( string_free full ) ^ T } }
+    ? stream {} { ? ( __api_begin_ndjson c ) {} { ^ T } }
     : String fin ( __api_frame_done model field nprompt produced ! stream ( string_data full ) )
     : b _w ( __api_write_str c fin )
-    ( string_free fin )
-    ( string_free full )
     : !v NetErr _e ( response_end_chunked c )
     ^ T
 }
@@ -399,29 +370,21 @@ i npredict f temp i topk f topp i seed → b {
             // the request's own model, or the server's default
             : ~ String model ( __api_str j `model` `` )
             ? > ( string_len model ) 0 {} {
-                ( string_free model )
                 = model ( string_from g_api_model )
             }
             ? > ( string_len model ) 0 {} {
-                ( string_free model )
-                ( json_free j )
                 ^ ( __api_error_chunked c 400 `missing "model" and the server has no default — start it as: nurllama serve <model>` )
             }
             : String lerr ( __api_ensure ( string_data model ) )
             ? > ( string_len lerr ) 0 {
                 : b r ( __api_error_chunked c 404 ( string_data lerr ) )
-                ( string_free lerr )
-                ( string_free model )
-                ( json_free j )
                 ^ r
             } {}
-            ( string_free lerr )
 
             // prompt: /api/generate takes it verbatim; /api/chat renders
             // the message list through the model's own chat template
             : ~ String prompt ( string_new )
             ? is_gen {
-                ( string_free prompt )
                 = prompt ( __api_str j `prompt` `` )
             } {
                 : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
@@ -434,8 +397,6 @@ i npredict f temp i topk f topp i seed → b {
                                     : String role ( __api_str mo `role` `user` )
                                     : String content ( __api_str mo `content` `` )
                                     ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
-                                    ( string_free role )
-                                    ( string_free content )
                                 }
                                 F → {}
                             }
@@ -444,9 +405,7 @@ i npredict f temp i topk f topp i seed → b {
                     }
                     F → {}
                 }
-                ( string_free prompt )
                 = prompt ( chat_render g_api_style msgs )
-                ( chat_msgs_free msgs )
             }
 
             : b stream ( __api_bool j `stream` T )
@@ -457,9 +416,6 @@ i npredict f temp i topk f topp i seed → b {
             : i seed ( __api_opt_i j `seed` 42 )
             : s field ? is_gen `response` `message`
             : b r ( __api_generate c ( string_data model ) prompt field stream npredict temp topk topp seed )
-            ( string_free prompt )
-            ( string_free model )
-            ( json_free j )
             ^ r
         }
     }
@@ -487,7 +443,6 @@ i npredict f temp i topk f topp i seed → b {
                                     T n → { = sz n }
                                     F _ → {}
                                 }
-                                ( string_free bp )
                             }
                             F → {}
                         }
@@ -498,20 +453,15 @@ i npredict f temp i topk f topp i seed → b {
                 }
                 = k + k 1
             }
-            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
         }
         F _ → {}
     }
-    ( string_free mdir )
-    ( string_free rootS )
     : Json root ( json_obj_new )
     : b _r ( json_obj_set root `models` arr )
     : String txt ( json_stringify root )
-    ( json_free root )
     : HttpResponse resp ( response_new 200 )
     ( response_set_header resp `Content-Type` `application/json` )
     ( response_set_body_str resp ( string_data txt ) )
-    ( string_free txt )
     ^ resp
 }
 
@@ -521,13 +471,10 @@ i npredict f temp i topk f topp i seed → b {
         F _ → { ^ ( response_text 400 `{"error":"invalid JSON body"}\n` ) }
         T j → {
             : String model ( __api_str j `model` `` )
-            ( json_free j )
             : String rootS ( string_from g_api_root )
             : ?String rp ( nl_resolve rootS ( string_data model ) )
-            ( string_free rootS )
             ?? rp {
                 F → {
-                    ( string_free model )
                     ^ ( response_text 404 `{"error":"model not found"}\n` )
                 }
                 T path → {
@@ -542,18 +489,13 @@ i npredict f temp i topk f topp i seed → b {
                             : b _5 ( json_obj_set d `llama.context_length` ( json_int ( gguf_kv_int_or gg `llama.context_length` 0 ) ) )
                             : b _6 ( json_obj_set d `tensors` ( json_int ( gguf_n_tensors gg ) ) )
                             : b _7 ( json_obj_set o `model_info` d )
-                            ( gguf_close gg )
                         }
-                        F e → { ( string_free e ) }
+                        F _e → {}
                     }
-                    ( string_free path )
-                    ( string_free model )
                     : String txt ( json_stringify o )
-                    ( json_free o )
                     : HttpResponse resp ( response_new 200 )
                     ( response_set_header resp `Content-Type` `application/json` )
                     ( response_set_body_str resp ( string_data txt ) )
-                    ( string_free txt )
                     ^ resp
                 }
             }
@@ -568,7 +510,7 @@ i npredict f temp i topk f topp i seed → b {
 // its own identity, and conversations are scoped to it.
 @ __web_guid HttpRequest req HttpResponse resp → String {
     ?? ( request_cookie req `nl_client` ) {
-        T c → { ? > ( string_len c ) 0 { ^ c } { ( string_free c ) } }
+        T c → { ? > ( string_len c ) 0 { ^ c } {} }
         F → {}
     }
     : String guid ( uuid_v4 )
@@ -576,7 +518,6 @@ i npredict f temp i topk f topp i seed → b {
     ( string_push_str sc ( string_data guid ) )
     ( string_push_str sc `; Path=/; Max-Age=34560000; SameSite=Lax; HttpOnly` )
     ( response_set_header resp `Set-Cookie` ( string_data sc ) )
-    ( string_free sc )
     ^ guid
 }
 
@@ -589,8 +530,6 @@ i npredict f temp i topk f topp i seed → b {
             : String want ( string_from `Bearer ` )
             ( string_push_str want g_api_token )
             : b ok ( nurl_str_eq ( string_data h ) ( string_data want ) )
-            ( string_free want )
-            ( string_free h )
             ^ ok
         }
         F → {}
@@ -611,7 +550,7 @@ i npredict f temp i topk f topp i seed → b {
 // Synchronous full-reply generation: run the model over `ids` and
 // return the decoded text (no streaming — the web UI wants one reply).
 // Diffusion models denoise a block; others sample autoregressively.
-@ __web_gen_reply * Llm m ( Vec i ) ids i npredict f temp i seed → String {
+@ __web_gen_reply Llm m ( Vec i ) ids i npredict f temp i seed → String {
     : Tok t ( llm_tok m )
     : String out ( string_new )
     ? > ( vec_len [i] ids ) ( llm_n_ctx m ) { ^ out } {}
@@ -624,19 +563,15 @@ i npredict f temp i topk f topp i seed → b {
         // tune per-call via the CLI `run` command.
         : Rng drng ( rng_seed seed )
         : ( Vec i ) gen ( dz_generate m ids npredict 32 0.9 1.1 8 temp drng )
-        ( rng_free drng )
         : ~ i gi 0
         ~ < gi ( vec_len [i] gen ) {
             : ~ i gid 0
             ?? ( vec_get [i] gen gi ) { T x → { = gid x } F → {} }
             : ( Vec u ) pb ( tok_piece t gid )
             : String piece ( bytes_to_str pb )
-            ( vec_free [u] pb )
             ( string_push_str out ( string_data piece ) )
-            ( string_free piece )
             = gi + gi 1
         }
-        ( vec_free [i] gen )
         ^ out
     } {}
     // autoregressive
@@ -651,17 +586,14 @@ i npredict f temp i topk f topp i seed → b {
         ? == nt ( tok_eos t ) { = stop T } {
             : ( Vec u ) pb ( tok_piece t nt )
             : String piece ( bytes_to_str pb )
-            ( vec_free [u] pb )
             ? ( chat_stop_matches g_api_style ( string_data piece ) ) { = stop T } {
                 ( string_push_str out ( string_data piece ) )
                 ( llm_eval m nt pos )
                 = pos + pos 1
                 = produced + produced 1
             }
-            ( string_free piece )
         }
     }
-    ( rng_free rng )
     ^ out
 }
 
@@ -676,8 +608,7 @@ i npredict f temp i topk f topp i seed → b {
     ? > ( string_len lerr ) 0 {
         ^ @ !String String { F lerr }
     } {}
-    ( string_free lerr )
-    : *Llm m # *Llm g_api_llm
+    : Llm m # Llm g_api_llm
     : Tok t ( llm_tok m )
     // message list = stored history + the new user turn
     : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
@@ -688,8 +619,6 @@ i npredict f temp i topk f topp i seed → b {
                 : String role ( __api_str mo `role` `user` )
                 : String content ( __api_str mo `content` `` )
                 ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
-                ( string_free role )
-                ( string_free content )
             }
             F → {}
         }
@@ -697,11 +626,8 @@ i npredict f temp i topk f topp i seed → b {
     }
     ( vec_push [ChatMsg] msgs ( chat_msg `user` new_content ) )
     : String prompt ( chat_render g_api_style msgs )
-    ( chat_msgs_free msgs )
     : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
-    ( string_free prompt )
     : String reply ( __web_gen_reply m ids 512 0.0 42 )
-    ( vec_free [i] ids )
     ^ @ !String String { T reply }
 }
 
@@ -716,10 +642,7 @@ i npredict f temp i topk f topp i seed → b {
     : b _1 ( json_obj_set o `client` ( json_str_lit ( string_data guid ) ) )
     : b _2 ( json_obj_set o `model` ( json_str_lit g_api_model ) )
     : String txt ( json_stringify o )
-    ( json_free o )
-    ( string_free guid )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
-    ( string_free txt )
     ^ r
 }
 
@@ -730,10 +653,7 @@ i npredict f temp i topk f topp i seed → b {
     : String guid ( __web_guid req resp )
     : Json arr ( hist_list_conversations g_api_histpath ( string_data guid ) )
     : String txt ( json_stringify arr )
-    ( json_free arr )
-    ( string_free guid )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
-    ( string_free txt )
     ^ r
 }
 
@@ -746,23 +666,17 @@ i npredict f temp i topk f topp i seed → b {
     ?? ( params_get ps `id` ) {
         T idv → {
             ?? ( string_to_int idv ) { T n → { = conv n } F _ → {} }
-            ( string_free idv )
         }
         F → {}
     }
     : String owner ( hist_conversation_owner g_api_histpath conv )
     : b owns ( nurl_str_eq ( string_data owner ) ( string_data guid ) )
-    ( string_free owner )
-    ( string_free guid )
     ? owns {} {
-        ( http_response_free resp )
         ^ ( response_text 404 `{"error":"not found"}\n` )
     }
     : Json arr ( hist_get_messages g_api_histpath conv )
     : String txt ( json_stringify arr )
-    ( json_free arr )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
-    ( string_free txt )
     ^ r
 }
 
@@ -775,18 +689,14 @@ i npredict f temp i topk f topp i seed → b {
     ?? ( params_get ps `id` ) {
         T idv → {
             ?? ( string_to_int idv ) { T n → { = conv n } F _ → {} }
-            ( string_free idv )
         }
         F → {}
     }
     : b ok ( hist_delete_conversation g_api_histpath conv ( string_data guid ) )
-    ( string_free guid )
     : Json o ( json_obj_new )
     : b _1 ( json_obj_set o `ok` ( json_bool ok ) )
     : String txt ( json_stringify o )
-    ( json_free o )
     : HttpResponse r ( __web_json resp ( string_data txt ) )
-    ( string_free txt )
     ^ r
 }
 
@@ -803,16 +713,13 @@ i npredict f temp i topk f topp i seed → b {
     ?? ( __api_body_json req ) {
         F _ → {
             = rc_status 400
-            ( string_free out_txt )
             = out_txt ( string_from `{"error":"invalid JSON body"}` )
         }
         T j → {
             : String content ( __api_str j `content` `` )
             ? == 0 ( string_len content ) {
                 = rc_status 400
-                ( string_free out_txt )
                 = out_txt ( string_from `{"error":"empty content"}` )
-                ( string_free content )
             } {
                 : ~ i conv -1
                 ?? ( json_obj_get j `conversation_id` ) {
@@ -823,7 +730,6 @@ i npredict f temp i topk f topp i seed → b {
                 ? >= conv 0 {
                     : String own ( hist_conversation_owner g_api_histpath conv )
                     ? ( nurl_str_eq ( string_data own ) ( string_data guid ) ) {} { = conv -1 }
-                    ( string_free own )
                 } {}
                 ? < conv 0 {
                     = conv ( hist_new_conversation g_api_histpath ( string_data guid ) g_api_model ( hist_now ) )
@@ -837,38 +743,25 @@ i npredict f temp i topk f topp i seed → b {
                         : Json o ( json_obj_new )
                         : b _1 ( json_obj_set o `conversation_id` ( json_int conv ) )
                         : b _2 ( json_obj_set o `reply` ( json_str_lit ( string_data reply ) ) )
-                        ( string_free out_txt )
                         = out_txt ( json_stringify o )
-                        ( json_free o )
-                        ( string_free reply )
                     }
                     F emsg → {
                         = rc_status 500
                         : Json eo ( json_obj_new )
                         : b _e1 ( json_obj_set eo `error` ( json_str_lit ( string_data emsg ) ) )
-                        ( string_free out_txt )
                         = out_txt ( json_stringify eo )
-                        ( json_free eo )
-                        ( string_free emsg )
                     }
                 }
-                ( json_free history )
-                ( string_free content )
             }
-            ( json_free j )
         }
     }
-    ( string_free guid )
     ? == rc_status 200 {
         : HttpResponse r ( __web_json resp ( string_data out_txt ) )
-        ( string_free out_txt )
         ^ r
     } {}
-    ( http_response_free resp )
     : HttpResponse er ( response_text rc_status `` )
     ( response_set_header er `Content-Type` `application/json` )
     ( response_set_body_str er ( string_data out_txt ) )
-    ( string_free out_txt )
     ^ er
 }
 
@@ -880,14 +773,12 @@ i npredict f temp i topk f topp i seed → b {
     ?? ( header_get . req headers `Accept` ) {
         T a → {
             ? >= ( nurl_str_find ( string_data a ) `text/html` ) 0 { = wants_html T } {}
-            ( string_free a )
         }
         F → {}
     }
     ? wants_html {
         : HttpResponse resp ( response_new 200 )
         : String guid ( __web_guid req resp )
-        ( string_free guid )
         ( response_set_header resp `Content-Type` `text/html; charset=utf-8` )
         ( response_set_body_str resp ( webui_html ) )
         ^ resp
@@ -905,7 +796,6 @@ i npredict f temp i topk f topp i seed → b {
         ( string_from `open` ) ( string_new ) ( string_new )
     }
     : i rc ( api_serve_cfg root cfg )
-    ( cfg_free cfg )
     ^ rc
 }
 
@@ -918,7 +808,6 @@ i npredict f temp i topk f topp i seed → b {
     ( __api_set_model ( string_data . cfg model ) )
     : String hp ( hist_db_path root )
     ( __api_set_histpath ( string_data hp ) )
-    ( string_free hp )
 
     : HttpApp a ( http_app_new )
     ( http_app_workers a 1 )
@@ -939,7 +828,6 @@ i npredict f temp i topk f topp i seed → b {
     ( string_push_int msg . cfg port )
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
-    ( string_free msg )
     : i rc ( http_app_listen a ( string_data . cfg host ) . cfg port )
     ( __api_unload )
     ^ rc

@@ -114,7 +114,6 @@ $ `clip_merges_data.nu`
         ( vec_push [String] out ( utf8_encode_cp ( _ig byte2cp k ) ) )
         = k + k 1
     }
-    ( vec_free [i] byte2cp )
     ^ out
 }
 
@@ -133,6 +132,12 @@ $ `clip_merges_data.nu`
 @ __enc_put Tokenizer tk String key i id → v {
     ( vec_push [String] . tk arena key )
     ( __msi_set . tk enc ( string_data key ) id )
+}
+
+// The tokenizer that encodes nothing (sot=-1): a placeholder for a struct
+// field that holds one only when free-text prompting is on.
+@ tokenizer_none → Tokenizer {
+    ^ @ Tokenizer { ( vec_new [String] ) ( map_new [s i] ) ( map_new [s i] ) ( vec_new [String] ) -1 -1 }
 }
 
 // ── load ─────────────────────────────────────────────────────────
@@ -163,7 +168,6 @@ $ `clip_merges_data.nu`
         ( __enc_put tk k1 + 256 j )
         = j + j 1
     }
-    ( vec_free [i] order )
     // merges: line r → rank r, vocab token (a+b) → id 512+r
     ?? ( read_file_bytes merges_path ) {
         T buf → { ( __load_merges tk buf ) }
@@ -204,7 +208,6 @@ $ `clip_merges_data.nu`
         ( __enc_put tk k1 + 256 j )
         = j + j 1
     }
-    ( vec_free [i] order )
     // the table is embedded as line-aligned chunks (see embed_merges.py)
     : ( Vec u ) buf ( vec_with_cap [u] 524604 )
     : i nchunks ( clip_merges_chunks )
@@ -240,7 +243,7 @@ $ `clip_merges_data.nu`
         }
         = p + p 1
     }
-    ? > ( vec_len [u] cur ) 0 { ( __load_merge_line tk cur rank ) } { ( vec_free [u] cur ) }
+    ? > ( vec_len [u] cur ) 0 { ( __load_merge_line tk cur rank ) } {}
 }
 
 // Register <start_of_text>/<end_of_text> in the vocab maps. tk arrives
@@ -263,9 +266,8 @@ $ `clip_merges_data.nu`
         ( string_push_char line ch )
         = q + q 1
     }
-    ( vec_free [u] cur )
     : i sp ( __first_space ( string_data line ) )
-    ? < sp 0 { ( string_free line ) ^ } {}
+    ? < sp 0 { ^ } {}
     // rank: key = the whole "a b" line (arena-owned)
     ( vec_push [String] . tk arena line )
     ( __msi_set . tk ranks ( string_data line ) rank )
@@ -273,7 +275,6 @@ $ `clip_merges_data.nu`
     : String tokv ( string_substr line 0 sp )
     : String bpart ( string_substr line + sp 1 - ( string_len line ) + sp 1 )
     ( string_push_str tokv ( string_data bpart ) )
-    ( string_free bpart )
     ( __enc_put tk tokv + 512 rank )
 }
 
@@ -291,7 +292,6 @@ $ `clip_merges_data.nu`
         ( vec_push [String] word sym )
         = i + i 1
     }
-    ( vec_free [i] cps )
     ? <= nc 1 { ^ word } {}
 
     ~ T {
@@ -325,7 +325,6 @@ $ `clip_merges_data.nu`
                 = p + p 1
             }
         }
-        ( __free_strvec word )
         = word nw
     }
     ^ word
@@ -345,18 +344,7 @@ $ `clip_merges_data.nu`
         T v → = r v
         F _ → {}
     }
-    ( string_free key )
     ^ r
-}
-
-@ __free_strvec ( Vec String ) v → v {
-    : i n ( vec_len [String] v )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] v k ) { T s → ( string_free s ) F _ → {} }
-        = k + k 1
-    }
-    ( vec_free [String] v )
 }
 
 // Byte substring of a raw char* (string_substr only takes a managed String).
@@ -513,12 +501,8 @@ $ `clip_merges_data.nu`
             }
             = pi + pi 1
         }
-        ( __free_strvec pieces )
-        ( string_free benc )
         = wi + wi 1
     }
-    ( __free_strvec words )
-    ( string_free cleaned )
     ^ ids
 }
 
@@ -540,6 +524,5 @@ $ `clip_merges_data.nu`
         = j + j 1
     }
     ( __is out w . tk eot )
-    ( vec_free [i] ids )
     ^ out
 }
