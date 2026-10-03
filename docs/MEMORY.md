@@ -9,12 +9,14 @@ v2.3).
 
 - **Single owner, deterministic drop.** Every heap allocation has
   exactly one owning binding. The compiler inserts the matching free
-  at the end of that binding's scope. No garbage collector, no
-  reference counting. `String`, `Vec`, the enums and structs that hold
-  them, and the library containers (`HashMap`, `Set`, `Deque`, `BTree`,
-  `Box`, `Rc`, `Arc`) are dropped by the compiler like everything else
-  (§7.6); `vec_free` / `string_free` / `map_free` … remain as an explicit
-  early release, never a requirement. A closure's env is owned wherever the closure is kept and
+  at the end of that binding's scope. No garbage collector. `String`,
+  `Vec`, the enums and structs that hold them, and the library containers
+  (`HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc`) are dropped by
+  the compiler like everything else (§7.6). Opaque library state —
+  `Mutex`, `Channel`, `Regex`, `TlsConn`, `File`, … — is a handle over a
+  counted block whose last copy releases it (§7.4). Nothing is ever
+  released by hand: `vec_free` / `string_free` / `*_close` … remain as an
+  explicit early release, never a requirement. A closure's env is owned wherever the closure is kept and
   dropped by that owner, and freeing one by hand is a compile error.
 - **Automatic cleanup includes unwind paths.** A per-fiber journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
@@ -915,6 +917,8 @@ hits in practice. It deliberately does **not** cover:
 | Return escape (through a field, a nested field, a closure env, a local name, a second helper, a forward / generic callee) | yes (`error:`) |
 | Use-after-free through a closure capture (invoke after the free) | yes (`error:`, §2.11) |
 | Handle released by name after being stored into an owner | yes (`error:`, §2.12) |
+| Raw pointer read after the block that dropped its owner (`= p ( string_data x )` into an outer binding / `Vec s`) | yes (`error:`) |
+| Closure returned past the local it borrows | yes (`error:`) |
 | Handle read by name after its owner released it | no (the aggregate-conduit boundary, §3) |
 | Returned borrows / general lifetime inference | partial (§2.8) |
 | `*T` raw pointers | no (by design) |
