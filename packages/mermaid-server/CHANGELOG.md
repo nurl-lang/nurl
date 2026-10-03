@@ -1,26 +1,46 @@
 # Changelog
 
-## Unreleased
+## [0.3.0] — 2026-10-03
 
-Nothing is released by hand any more.
+Nothing is released by hand any more. The CLI, the HTTP routes and the MCP
+tools are unchanged; the library API below changed.
+
+### Changed (breaking)
+
+- `mmd_build_app i workers b quiet → *HttpApp` became
+  `mmd_build_app i workers b quiet McpServer srv → HttpApp`: it returns
+  http 0.7's `HttpApp` handle and takes the MCP server behind /mcp as a
+  parameter (the caller owns it for as long as the app serves).
+- `mmd_state_init` takes the template set over (`sink`), and installing
+  another releases the old one. `mmd_state_free` is removed — the set lives
+  for the process.
+- Removed: `mmd_graph_free`, `mmd_layout_free`, `mmd_parse_result_free`,
+  `mmd_render_res_free`, `mmd_theme_free` and `mmd_templates_free` —
+  `MmdRenderRes`, `MmdParseResult`, `MmdGraph`, `MmdLayout`, `MmdTheme` and
+  `MmdTemplateSet` are plain values dropped with their binding (nothing
+  outside the package called them).
+
+### Changed
 
 - The loaded template set lives in an rcbox behind its global instead of a
-  `nurl_alloc`'d copy freed by hand; `mmd_state_init` takes the set over
-  (`sink`), and installing another releases the old one. `mmd_state_free`
-  is gone — the set lives for the process.
+  `nurl_alloc`'d copy freed by hand.
 - The parser's cursor and error slot (`MmdParser`) are one local every
   helper takes `inout`, not a heap block allocated and freed per parse.
-- `MmdRenderRes`, `MmdParseResult`, `MmdGraph`, `MmdLayout`, `MmdTheme` and
-  `MmdTemplateSet` are plain values: their `*_free` functions are deleted
-  (nothing outside the package called them), and so is every
-  `string_free` / `vec_free` / `json_free` / `args_free` in the server, the
-  CLI and the tests (216 calls).
-- Fixed: the MCP server behind /mcp was kept alive with `mem_forget`, which
-  leaked it (138 allocations at every shutdown under LSan). `main` now owns
-  it for as long as the app serves and `mmd_build_app` takes it as a
-  parameter — the dispatch closure only views the server it was built from.
+- Every `string_free` / `vec_free` / `json_free` / `args_free` in the
+  server, the CLI and the tests is gone (216 calls).
+
+### Fixed
+
+- The MCP server behind /mcp was kept alive with `mem_forget`, which leaked
+  it (138 allocations at every shutdown under LSan). `main` now owns it for
+  as long as the app serves; the dispatch closure only views it.
+
+### Performance
+
 - Rendering a 60-node diagram with two templates plus a parse error:
   instructions:u −1.15 %, identical SVG.
+
+Requires NURL 0.69.0 and http 0.7.
 
 ## 0.2.1
 
