@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## [0.4.0] — 2026-10-03
+
+Requires NURL 0.69.0 and cli ^0.4 (the `Cli` handle).
 
 Nothing is released by hand any more.
 
@@ -16,6 +18,7 @@ Nothing is released by hand any more.
 - `pg_close` and `pg_result_free` are optional early releases; every
   redundant release in the library and the CLI is gone.
 - Fixed: each server ErrorResponse leaked the previous `lasterr` text.
+- Fixed: `psql --version` reported 0.3.1; it now matches the manifest.
 
 ## 0.3.2
 
