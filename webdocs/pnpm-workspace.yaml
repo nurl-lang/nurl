@@ -14,3 +14,11 @@ overrides:
   undici@>=7.0.0 <7.29.1: ^7.29.1
   brace-expansion@<1.1.21: ^1.1.21
   brace-expansion@>=4.0.0 <5.0.12: ^5.0.12
+# braces (GHSA-vfj7-8cjw-p6xm, deeply nested patterns → stack exhaustion)
+# has no fixed release: every micromatch 4 depends on braces ^3.0.3, the
+# latest. It is reached only through eslint-config-next → fast-glob, which
+# expands this repo's own lint globs — no untrusted pattern reaches it, and
+# nothing of it ships in the site. Drop this once a fixed braces exists.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm

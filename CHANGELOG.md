@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every cut the docs / API search tools make ends on a character
+  boundary.** 0.69.1 fixed the registry footer, but the declaration
+  snippets (700 bytes), search hits (500), grep lines (200) and the
+  per-module API cap cut at fixed byte counts too: `nurl_api query=http`
+  on the live playground still answered invalid UTF-8 (a `→` cut in half).
+  All use the same boundary-aware cut now (`stdlib/ext/mcp_search.nu`), and
+  the playground's end-to-end suite fails on any reply that is not valid
+  UTF-8 (it decoded with `errors="replace"`, which hid this).
+- **The installers retry a failed download.** `nurl upgrade` to v0.69.1
+  failed on a GitHub 500 for the release archive that the same URL served
+  moments later; `install.sh` / `install.ps1` now try each fetch three
+  times.
+
 ## [0.69.1] — 2026-10-03
 
 ### Fixed
