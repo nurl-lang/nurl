@@ -27,6 +27,12 @@ cd "$(dirname "$0")/.."
 fail=0
 checked=0
 
+# Drop a `//` comment — but not a `//` inside a backtick string: psql's and
+# redis's about-strings carry `postgres://` / `redis://`, and stripping from
+# there cut the line before its version, so both shipped announcing an older
+# one while this gate said OK.
+strip_comments() { perl -pe 's{^((?:[^`/]|`[^`]*`|/(?!/))*)//.*$}{$1}' "$@"; }
+
 for toml in packages/*/nurl.toml; do
     pkg=$(basename "$(dirname "$toml")")
     manifest=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$toml" | head -1)
@@ -34,7 +40,7 @@ for toml in packages/*/nurl.toml; do
 
     # Every source of the package, comments stripped, for the rules that
     # must look past the file a literal happens to sit in.
-    pkgsrc=$(sed 's://.*::' packages/"$pkg"/src/*.nu 2>/dev/null || true)
+    pkgsrc=$(strip_comments packages/"$pkg"/src/*.nu 2>/dev/null || true)
 
     for src in packages/"$pkg"/src/*.nu; do
         [ -e "$src" ] || continue
@@ -51,7 +57,7 @@ for toml in packages/*/nurl.toml; do
         # instance segmentation (pure NURL, GPU)". The parenthesis inside
         # the description hid the version from the very gate written to
         # check it, and yoloe shipped 0.6.6 announcing 0.6.0.
-        done < <(sed 's://.*::' "$src" \
+        done < <(strip_comments "$src" \
                  | grep 'cli_new' \
                  | grep -o '`[0-9]\+\.[0-9]\+\.[0-9]\+`' \
                  | tail -1 \
@@ -71,7 +77,7 @@ for toml in packages/*/nurl.toml; do
                 echo "MISMATCH: $pkg — nurl.toml says '$manifest' but $src prints '$pkg $lit'"
                 fail=1
             fi
-        done < <(sed 's://.*::' "$src" \
+        done < <(strip_comments "$src" \
                  | grep -o "\`$pkg [0-9]\+\.[0-9]\+\.[0-9]\+" \
                  | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+$')
 
@@ -86,7 +92,7 @@ for toml in packages/*/nurl.toml; do
         # call site (`mcp_initialize_result \`swarm-mcp\` ( sm_version )`).
         # That keying is what keeps wasmbuilder's `__wb_zig_version` — a
         # genuine version, of something else — out of it.
-        stripped=$(sed 's://.*::' "$src")
+        stripped=$(strip_comments "$src")
         while IFS='|' read -r fn lit; do
             [ -n "$fn" ] || continue
             # A here-string, not a pipe — see the constant rule below for
