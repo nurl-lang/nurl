@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+**The WebGPU engine runs again.** The gpu package's WGSL kernel set (copied
+next to the worker by `tools/build_wasm.sh`) still held onnx's pre-0.7
+kernels, so the engine failed with "no WGSL kernel named gk32_…"; it is now
+held to the onnx executor's kernel census (gpu / onnx changelogs). In
+headless Chrome (SwiftShader WebGPU) the shipped `web/worker.js` detects the
+same four objects on the demo frame with both engines — dog 0.8534, …,
+identical to 4 decimals — and the same masked frame byte for byte.
+
+`tests/webgpu_worker_test.mjs` sends its exit command when the module is
+idle again, not on the result: `host_frame` clears the futex cell before it
+waits, so a wake sent between `host_result` and that clear was lost and the
+run could hang (it did, for the static engine in Chrome).
+
 **Nothing is released by hand.** The server state (engine, graphs,
 vocabulary, embeddings) is a handle the route closures capture instead of a
 hand-allocated struct behind a global word; its last owner releases it. The

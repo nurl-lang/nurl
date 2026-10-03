@@ -1263,7 +1263,10 @@ $ `stdlib/core/rcbox.nu`
 // name and exact source from gpukit's own builders, taking the branches
 // the static backend takes. tools/gen_static_kernels.nu turns that record
 // into kernels_static.c, so the static / wasm kernel set is DERIVED from
-// the executor and the kernel library, not mirrored from them.
+// the executor and the kernel library, not mirrored from them; and
+// tests/wgsl_census_test.nu holds the gpu package's WebGPU set (hand-written
+// WGSL bodies) to the same record, name for name and parameter list for
+// parameter list.
 //
 // Keep it in step with the handlers: a new gkd_* call above belongs here
 // too. tests/census_test.nu fails when a wrapper the executor calls is

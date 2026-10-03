@@ -27,7 +27,11 @@ w.onmessage = (e) => {
     bytes.set(rgb, SAB_IN); ctl[1]=0; ctl[2]=250; ctl[3]=1; ctl[4]=0x3ff;
     setTimeout(() => { Atomics.store(ctl,0,1); Atomics.notify(ctl,0); }, 200);
   }
-  if (m.type === "result") { result=m; ctl[1]=9; Atomics.store(ctl,0,1); Atomics.notify(ctl,0); }
+  // The exit command goes out when the module is idle again, not on the
+  // result: host_frame clears the futex cell before it waits, so a wake
+  // sent between host_result and that clear is lost and the run hangs.
+  if (m.type === "result") { result=m; }
+  if (m.type === "idle" && result) { ctl[1]=9; Atomics.store(ctl,0,1); Atomics.notify(ctl,0); }
   if (m.type === "exit") {
     let dog=false; for(let k=0;k<result.n;k++) if(Math.round(result.dets[k*6])===1 && result.dets[k*6+1]>0.5) dog=true;
     console.log(`${engine}: ${result.n} dets, ${result.ms}ms — ${dog?"PASS (dog)":"FAIL"}`);

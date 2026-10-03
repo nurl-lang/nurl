@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+**The WebGPU backend runs again — and its kernel set is held to the
+executor.** `web/kernels_wgsl.js` was a hand-kept translation of onnx's
+pre-0.7 kernels (`gemm`, `osigmoid`, `conv2d`, … with `int` parameter
+cells); onnx moved onto gpukit's kernel library and now requests
+`gk32_gemm_tiled`, `gk32_sigmoid`, … with `long long` cells, so every WebGPU
+build (objdet's wasm module, yoloe-demo's WebGPU engine) failed at run time
+with "no WGSL kernel named gk32_…" while every test stayed green.
+
+- The set is now gpukit's kernels, one entry per kernel onnx's kernel
+  census records (31). Each entry states the CUDA-C parameter list it
+  implements (`sig`); the storage bindings, the uniform block, the
+  bind-group layout and the decoding of the i64 argument cells are
+  GENERATED from it by one rule (`CTYPES`: `const float*` → read-only
+  `array<f32>`, `long long*` → `array<i32>` word pairs, `long long` → i32,
+  …). Only the WGSL bodies are hand-written. onnx's
+  `tests/wgsl_census_test.nu` fails, with no device, on a census kernel the
+  set lacks, a `sig` that differs from the recorded parameter list, a type
+  with no `CTYPES` row, or an entry the census no longer records.
+- A null pointer argument (CUDA's `C!=0`) reaches the body as
+  `p.nz_<name>`; a `long long` argument that does not fit the i32 WGSL
+  computes in is refused (launch returns -3), never truncated. i64 index /
+  token buffers compare all 64 bits (`gki_argmax`, `gk32_eosg`,
+  `gk32_gather`).
+- Pipelines use an explicit bind-group layout from the parameter list, not
+  `layout: "auto"` (which drops a binding the body does not reference, and
+  the launch's bind group then fails to match). WGSL compile / validation
+  errors are logged with the kernel's name.
+- `gpu_open`'s WebGPU probe compiles the set's sentinel entry
+  `GPU_WGSL_SENTINEL` (`__nurl_wgsl_set`), not a kernel named `osigmoid`.
+- `tests/wgsl_kernels_test.mjs` runs EVERY kernel (and fails on one without
+  a case) through the real host imports — i64 cells in wasm memory, as a
+  NURL module calls them — against JS references of the CUDA-C; the int64
+  test is folded in. New `tests/webgpu_chrome.mjs` runs such a module in
+  headless Chrome (puppeteer), so `tests/webgpu_test.sh` works without Deno:
+  42/42 on Chrome's SwiftShader WebGPU, max relative error 2.7e-6.
+- The host gains `readBuffer(id, bytes)` (a readback without Asyncify, for
+  JS callers that can await).
+
 **The static backend's probe no longer names a kernel.** `gpu_open` under
 `NURL_GPU=static` checked for a kernel called `gemm` to tell a linked
 `kernels_static.c` from runtime_core.c's weak stub — a name that belonged

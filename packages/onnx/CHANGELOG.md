@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+**The WebGPU kernel set is checked against the executor too.** The gpu
+package's WebGPU backend looks kernels up by name in a fixed WGSL set
+(`deps/gpu/web/kernels_wgsl.js`), which still held the pre-0.7 kernels — the
+census that fixed the static backend in 0.9.1 did not reach it, and objdet's
+wasm module and yoloe-demo's WebGPU engine failed at run time. New
+`tests/wgsl_census_test.nu` (no device, no browser) holds that set to
+`rt_kernel_census`: a WGSL kernel for every census kernel, each with exactly
+the parameter list the census recorded, every parameter type marshallable,
+and no entry the executor no longer launches. New `tests/webgpu_test.sh`
+builds `tests/webgpu/run.nu` (one forward on the WebGPU backend, as a
+wasm32-wasi command) and runs tiny.onnx on a real WebGPU device in headless
+Chrome against the onnxruntime reference (skips without zig, node +
+puppeteer, Chrome or an adapter).
+
+Verified on Chrome's WebGPU (SwiftShader): tiny.onnx matches onnxruntime to
+7.3e-8 of range; tinyyolov2 matches the CUDA backend to 4.5e-7 of range
+(21125 outputs); objdet's wasm module detects car 0.6388 / car 0.5774 /
+dog 0.3231, the same boxes and scores as the native CUDA CLI to 4 decimals.
+
 ## 0.9.1
 
 **The static backend and the wasm builds work again — and their kernel set

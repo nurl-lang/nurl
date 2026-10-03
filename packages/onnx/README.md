@@ -129,6 +129,15 @@ NURL_GPU=static ./src/main tests/data/tiny.onnx tests/data/tiny.in.f32 tests/dat
 `tests/census_test.nu` checks the census covers every kernel call in the
 executor; `tests/static_test.sh` runs the whole path above.
 
+The gpu package's **WebGPU** backend (wasm in a browser) has a fixed kernel
+set too, hand-written WGSL in `deps/gpu/web/kernels_wgsl.js`.
+`tests/wgsl_census_test.nu` (no device) checks it against the same census:
+a WGSL kernel for every census kernel, each with exactly the parameter list
+the census recorded, and none the executor no longer launches.
+`tests/webgpu_test.sh` builds `tests/webgpu/run.nu` to wasm and runs
+tiny.onnx on a real WebGPU device in headless Chrome (skips without zig,
+node + puppeteer, Chrome or an adapter).
+
 ## Test fixtures
 
 `tests/data/` holds a tiny 4→8→3 MLP (`tiny.onnx`) plus a reference input
