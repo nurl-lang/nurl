@@ -28,6 +28,9 @@ tools are unchanged; the library API below changed.
   helper takes `inout`, not a heap block allocated and freed per parse.
 - Every `string_free` / `vec_free` / `json_free` / `args_free` in the
   server, the CLI and the tests is gone (216 calls).
+- Two compiled binaries committed by mistake in 0.2.0 (`tests/mermaid_test`,
+  `src/main`) are gone from the package; the published 0.2.x archives
+  carried them.
 
 ### Fixed
 

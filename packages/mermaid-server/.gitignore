@@ -3,3 +3,4 @@
 /mermaid-server
 *.ll
 *.svg
+/src/main
