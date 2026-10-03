@@ -28,6 +28,7 @@ $ `stdlib/ext/mcp_auth.nu`
 $ `stdlib/ext/mcp_server.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/sysinfo.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `api.nu`
@@ -280,7 +281,12 @@ $ `api.nu`
 }
 
 @ ag_serve s host i port i workers b quiet → i {
-    : HttpApp a ( ag_build_app workers quiet )
+    // `--workers 0` means one per CPU — and must mean a pool: the http
+    // package runs a single-threaded loop for 0, where one agent's `wait`
+    // held up every other call until it returned.
+    : i w ? > workers 0 workers ? > ( sys_cpu_count ) 4 ( sys_cpu_count ) 4
+    ( ag_wait_cap_set w )
+    : HttpApp a ( ag_build_app w quiet )
     ^ ( http_app_listen a host port )
 }
 

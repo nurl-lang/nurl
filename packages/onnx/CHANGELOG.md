@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## [0.10.0] — 2026-10-03
+
+**Engine is a self-releasing handle** (`*Engine` → `Engine`; the last copy
+releases the device buffers, kernels and context; `rt_close` is an optional
+early release) — a breaking API change, hence the minor bump; needs
+gpu ^0.14, gpukit ^0.9, tensor ^0.6 and NURL 0.69.0. Folds in the unpublished
+0.9.1 below.
 
 **The WebGPU kernel set is checked against the executor too.** The gpu
 package's WebGPU backend looks kernels up by name in a fixed WGSL set
@@ -21,7 +27,7 @@ Verified on Chrome's WebGPU (SwiftShader): tiny.onnx matches onnxruntime to
 (21125 outputs); objdet's wasm module detects car 0.6388 / car 0.5774 /
 dog 0.3231, the same boxes and scores as the native CUDA CLI to 4 decimals.
 
-## 0.9.1
+### Included from 0.9.1 (never published)
 
 **The static backend and the wasm builds work again — and their kernel set
 can no longer drift from the executor.** `tools/gen_static_kernels.nu`, which

@@ -8,7 +8,7 @@ repository = "https://github.com/nurl-lang/nurl-lang"
 
 [dependencies]
 yoloe = { path = "../yoloe", version = "^0.7" }
-onnx = { path = "../onnx", version = "^0.9.1" }
+onnx = { path = "../onnx", version = "^0.10" }
 image = { path = "../image", version = "^0" }
 http = { path = "../http", version = "^0.7" }
 template = { path = "../template", version = "^0" }

@@ -13,4 +13,4 @@ image = { path = "../image", version = "^0" }
 ply = { path = "../ply", version = "^0.3" }
 video = { path = "../video", version = "^0" }
 safetensor = { path = "../safetensor", version = "^0.4" }
-onnx = { path = "../onnx", version = "^0.9.1" }
+onnx = { path = "../onnx", version = "^0.10" }

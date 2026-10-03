@@ -6,5 +6,5 @@ description = "Object detection from pure NURL, GPU-accelerated, using any tiny-
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-onnx = { path = "../onnx", version = "^0.9.1" }
+onnx = { path = "../onnx", version = "^0.10" }
 image = { path = "../image", version = "^0" }
