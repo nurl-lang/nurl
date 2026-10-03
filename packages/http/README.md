@@ -110,8 +110,8 @@ an auth check:
 A request reaches `[alt-svc] → [log] → [cors] → your middleware → route /
 static`, so CORS preflights and the access log still see the requests a
 gate holds. One middleware per app — a second call replaces the first;
-a chain composes inside the one closure. The wrapper and the handler it
-returns must outlive `http_app_listen`.
+a chain composes inside the one closure. The app keeps its own copy of
+the wrapper and owns the handler it returns — nothing to keep alive or free.
 
 Configuration (call before serving):
 
