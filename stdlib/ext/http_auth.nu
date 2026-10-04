@@ -59,7 +59,7 @@ $ `stdlib/core/errors.nu`
     ~ < k pn {
         : ~ i a ( string_get s k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
-        : i b ( nurl_str_get prefix k )
+        : i b ( nurl_str_at prefix pn k )
         ? != a b { ^ F } {}
         = k + k 1
     }
@@ -218,7 +218,7 @@ $ `stdlib/core/errors.nu`
                             : ~ b match T
                             : ~ i m 0
                             ~ & match < m name_len {
-                                ? != ( string_get h + k m ) ( nurl_str_get name m ) { = match F } {}
+                                ? != ( string_get h + k m ) ( nurl_str_at name name_len m ) { = match F } {}
                                 = m + m 1
                             }
                             ? match {

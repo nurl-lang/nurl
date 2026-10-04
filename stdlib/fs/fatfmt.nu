@@ -43,7 +43,7 @@ $ `stdlib/fs/fat.nu`
     : i len ( nurl_str_len text )
     : ~ i k 0
     ~ < k n {
-        ( __put8 b + off k ? < k len ( nurl_str_get text k ) 32 )
+        ( __put8 b + off k ? < k len ( nurl_str_at text len k ) 32 )
         = k + k 1
     }
 }

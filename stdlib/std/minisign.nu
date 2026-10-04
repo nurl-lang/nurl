@@ -31,15 +31,15 @@ $ `stdlib/std/hash_blake2b.nu`
     : i n ( nurl_str_len text )
     : ~ i i 0
     // skip line 0
-    ~ & < i n != ( nurl_str_get text i ) 10 { = i + i 1 }
+    ~ & < i n != ( nurl_str_at text n i ) 10 { = i + i 1 }
     ? >= i n { ^ ( string_new ) } {}
     = i + i 1
     : i start i
-    ~ & < i n != ( nurl_str_get text i ) 10 { = i + i 1 }
+    ~ & < i n != ( nurl_str_at text n i ) 10 { = i + i 1 }
     : ~ i end i
     : ~ b trimming T
     ~ & trimming > end start {
-        : i c ( nurl_str_get text - end 1 )
+        : i c ( nurl_str_at text n - end 1 )
         ? | | == c 13 == c 32 == c 9 { = end - end 1 } { = trimming F }
     }
     ^ ( __ms_substr text start - end start )

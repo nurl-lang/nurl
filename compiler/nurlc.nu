@@ -6576,6 +6576,25 @@
     ^ & == tt0 TT_LBRACE == ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) ) TT_EQ
 }
 
+// The handles a closure captured live on in the owner it is stored into
+// (a struct literal's field, a field assignment): the free-then-invoke
+// check (docs/MEMORY.md §2.11) follows a closure only by its name, so
+// freeing a capture while the owner still holds the closure ran it on freed
+// memory. They are stored into the owner for the borrow checker (§2.12):
+// reading them stays fine, releasing one is the error. `first_tt` /
+// `first_val` spell the stored value: a literal (`__last_closure_caps__`)
+// or a closure binding (its `__closure_caps`).
+@ bck_note_clo_caps_stored i syms i first_tt s first_val i line → v {
+    : ~ s caps ? == first_tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_caps__` )
+    ? ( is_ident_tok first_tt ) ( nurl_sym_get2 syms first_val `__closure_caps` ) ``
+    ~ != 0 ( nurl_str_len caps ) {
+        : s w ( str_first_word caps )
+        = caps ( str_skip_word caps )
+        ( nurl_sym_set g_bck ( nurl_str_cat4 `sk_` w `_` ( nurl_str_int line ) ) `1` )
+        ( bck_stash_store w line `-` `0` `store` )
+    }
+}
+
 @ mem_clo_into_owner i syms i cg s ty s val i first_tt → s {
     // A literal's (or a closure-returning call's) env now belongs to the
     // aggregate: it is no longer the temporary a call site releases after
@@ -7302,8 +7321,13 @@
 // ── Batch C (2026-05-23): allocation-style ops via libc malloc + memcpy ──
 
 @ nurl_str_get s str i idx → i {
-    : i n ( strlen str )
-    ? | < idx 0 >= idx n { ^ 0 } {}
+    // The byte at `idx` is in range exactly when no NUL comes before it:
+    // measure that far, not the whole string — a per-byte read in a loop
+    // the optimiser cannot hoist strlen out of (one that also writes) was
+    // quadratic in the string's length.
+    ? < idx 0 { ^ 0 } {}
+    : i n ( strnlen str + idx 1 )
+    ? >= idx n { ^ 0 } {}
     : *u p # *u str
     : u b . p idx
     ^ & # i b 255
@@ -20305,6 +20329,15 @@
         ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
         : s name ( nurl_sym_get2 g_bck `rv_` ids )
         : s sl ( nurl_sym_get2 g_bck `sl_` ids )
+        // Stored as a capture of a closure kept there (gen_agg_lit): the
+        // owner does not release it — the closure reads it.
+        ? != 0 ( nurl_sym_len g_bck ( nurl_str_cat4 `sk_` name `_` sl ) ) {
+            ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+            ( nurl_str_cat4 `'` name ( nurl_str_cat3 `' is released here, but a closure that captured it was stored into an owner at line ` sl
+            `, which may still invoke it — on freed memory (the free-then-invoke check follows a closure only by its name). ` )
+            ( nurl_str_cat3 `Release it after that owner is gone, or have the closure capture a copy — ( mem_dup ` name ` ) bound to a name of its own.` ) ) )
+            ^ v
+        } {}
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `'` name ? again `' is stored into a second owner here, but its value was already stored into an owner at line ` `' is consumed here, but its value was stored into an owner at line `
         ( nurl_str_cat3 sl ` (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading '`
@@ -23490,6 +23523,9 @@
                             : s ftype ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
                             : i fidx ( nurl_str_to_int fidx_s )
                             : i __fs_tt ( nurl_lex_type lex )
+                            : s __fs_v0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
+                            : i __fs_l0 ( nurl_lex_line lex )
+
                             ( __clo_tmp_set `` )
                             : s rhs ( gen_field_rhs lex syms cg )
                             ? ( __store_type_clash ( nurl_get_last_type ) ftype )
@@ -23508,6 +23544,7 @@
                             // structure (docs/MEMORY.md §7.5).
                             : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_owner syms cg ftype rhsc0 __fs_tt )
                             ( nurl_str_cat rhsc0 `` )
+                            ? ( __is_closure_ty ftype ) { ( bck_note_clo_caps_stored syms __fs_tt __fs_v0 __fs_l0 ) } {}
                             : s gep ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print gep )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -23636,6 +23673,9 @@
                 {}
                 : i fidx ( nurl_str_to_int fidx_s )
                 : i __fs_tt ( nurl_lex_type lex )
+                : s __fs_v1 ( nurl_str_cat ( nurl_lex_val lex ) `` )
+                : i __fs_l1 ( nurl_lex_line lex )
+
                 ( __clo_tmp_set `` )
                 : s rhs ( gen_field_rhs lex syms cg )
                 ? ( __store_type_clash ( nurl_get_last_type ) ftype )
@@ -23652,6 +23692,7 @@
                 : s rhsc0 ( coerce_store_val lex rhs __fs_rt ftype syms cg )
                 : s rhsc ? ( __is_closure_ty ftype ) ( mem_clo_into_owner syms cg ftype rhsc0 __fs_tt )
                 ( nurl_str_cat rhsc0 `` )
+                ? ( __is_closure_ty ftype ) { ( bck_note_clo_caps_stored syms __fs_tt __fs_v1 __fs_l1 ) } {}
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty pt ) )
@@ -25058,6 +25099,12 @@
         // bindings a literal inside a call names are that call's arguments.
         // (The list only grows inside a field: cut it back to its length.)
         : i __ad_len ( nurl_sym_len syms `__agg_direct__` )
+        // A closure literal in a returned literal is returned with it, as
+        // `^ \ → …` is: its String / Vec captures move into its env
+        // (gen_closure_expr). Left to the function, they were dropped at
+        // the return under the closure the caller then ran — `^ @ Box { \ →
+        // i { ^ ( vec_len [i] a ) } }` read a freed Vec.
+        ? & agg_moves_fields == fld_first_tt TT_BACKSLASH { ( nurl_sym_set_deep syms `__ret_clo__` `1` ) } {}
         : ~ s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
         ? & != fld_first_tt TT_AT != __ad_len ( nurl_sym_len syms `__agg_direct__` )
@@ -25104,6 +25151,9 @@
         == enum_paycount -1 & ( __is_closure_ty fty )
         == 0 ( nurl_sym_len2 syms cur_sname `__variants` )
         ? fld_is_clo { = fval ( mem_clo_into_owner syms cg fty fval fld_first_tt ) } {}
+        // …and the handles it captured live on in the aggregate (a
+        // returned literal moved them into the env already).
+        ? & fld_is_clo ! agg_moves_fields { ( bck_note_clo_caps_stored syms fld_first_tt fld_first_val ( nurl_lex_line lex ) ) } {}
         // A borrowed String / Vec stored into the aggregate: its copy.
         ? ! ( is_ident_tok fld_first_tt ) { = fld_lent ( mem_lent_cond syms cg fty fld_first_tt fld_first_val ) } {}
         // A returned literal takes a field of a struct this function owns

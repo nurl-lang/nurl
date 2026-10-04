@@ -72,16 +72,16 @@ $ `stdlib/std/time.nu`
 @ __default_path s reqpath → String {
     : String p ( string_with_cap 8 )
     : i n ( nurl_str_len reqpath )
-    ? | == n 0 != ( nurl_str_get reqpath 0 ) 47 {  // empty or not absolute
+    ? | == n 0 != ( nurl_str_at reqpath n 0 ) 47 {  // empty or not absolute
         ( string_push_char p 47 )
         ^ p
     } {}
     : ~ i last 0
     : ~ i k 0
-    ~ < k n { ? == ( nurl_str_get reqpath k ) 47 { = last k } {} = k + k 1 }
+    ~ < k n { ? == ( nurl_str_at reqpath n k ) 47 { = last k } {} = k + k 1 }
     ? == last 0 { ( string_push_char p 47 ) } {
         : ~ i j 0
-        ~ < j last { ( string_push_char p ( nurl_str_get reqpath j ) ) = j + j 1 }
+        ~ < j last { ( string_push_char p ( nurl_str_at reqpath n j ) ) = j + j 1 }
     }
     ^ p
 }

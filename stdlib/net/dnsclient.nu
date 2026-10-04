@@ -71,13 +71,13 @@ $ `stdlib/std/bytes.nu`
     ~ <= k n {
         : b at_end == k n
         : ~ b dot F
-        ? ! at_end { ? == ( nurl_str_get name k ) 46 { = dot T } {} } {}
+        ? ! at_end { ? == ( nurl_str_at name n k ) 46 { = dot T } {} } {}
         ? | at_end dot {
             : i llen - k start
             ? | == llen 0 > llen 63 { ^ F } {}
             ( vec_push [u] out # u llen )
             : ~ i j start
-            ~ < j k { ( vec_push [u] out # u ( nurl_str_get name j ) ) = j + j 1 }
+            ~ < j k { ( vec_push [u] out # u ( nurl_str_at name n j ) ) = j + j 1 }
             = start + k 1
         } {}
         = k + k 1
@@ -212,7 +212,7 @@ $ `stdlib/std/bytes.nu`
         : i qn ( nurl_str_len qname )
         : ~ i qk 0
         ~ < qk qn {
-            : ~ i c ( nurl_str_get qname qk )
+            : ~ i c ( nurl_str_at qname qn qk )
             ? && >= c 65 <= c 90 { = c + c 32 } {}
             ( string_push_char want c )
             = qk + qk 1

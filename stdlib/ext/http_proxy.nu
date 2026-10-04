@@ -163,7 +163,7 @@ $ `stdlib/ext/http_server.nu`
     : String url ( string_with_cap + + + bn pn qn 4 )
     ( string_push_str url base )
     : ~ b base_slash F
-    ? > bn 0 { ? == ( nurl_str_get base - bn 1 ) 47 { = base_slash T } {} } {}
+    ? > bn 0 { ? == ( nurl_str_at base bn - bn 1 ) 47 { = base_slash T } {} } {}
     : ~ b path_slash F
     ? > pn 0 { ? == ( string_get . req path 0 ) 47 { = path_slash T } {} } {}
     : ~ i path_start 0
@@ -197,7 +197,7 @@ $ `stdlib/ext/http_server.nu`
     : ~ i k 0
     : ~ b bad F
     ~ & ! bad < k n {
-        : i b ( nurl_str_get str k )
+        : i b ( nurl_str_at str n k )
         ? | == b 13 == b 10 { = bad T } {}
         = k + k 1
     }

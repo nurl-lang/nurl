@@ -280,11 +280,11 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ( vec_push [u] b # u 0 )
     : i un ( nurl_str_len user )
     : ~ i k 0
-    ~ < k un { ( vec_push [u] b # u ( nurl_str_get user k ) ) = k + k 1 }
+    ~ < k un { ( vec_push [u] b # u ( nurl_str_at user un k ) ) = k + k 1 }
     ( vec_push [u] b # u 0 )
     : i pn ( nurl_str_len pass )
     = k 0
-    ~ < k pn { ( vec_push [u] b # u ( nurl_str_get pass k ) ) = k + k 1 }
+    ~ < k pn { ( vec_push [u] b # u ( nurl_str_at pass pn k ) ) = k + k 1 }
     : String tok ( b64_encode_vec b )
     ^ tok
 }
@@ -394,9 +394,9 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     : ~ i k 0
     : ~ i atbol 1
     ~ < k n {
-        : i ch ( nurl_str_get body k )
+        : i ch ( nurl_str_at body n k )
         ? == ch 13 {
-            ? & < + k 1 n == ( nurl_str_get body + k 1 ) 10 { = k + k 1 } {}
+            ? & < + k 1 n == ( nurl_str_at body n + k 1 ) 10 { = k + k 1 } {}
             ( string_push_char out 13 ) ( string_push_char out 10 )
             = atbol 1
         } {

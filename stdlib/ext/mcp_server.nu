@@ -702,7 +702,7 @@ b read_only b destructive b idempotent b open_world
     ( __mcp_find_template_index r uri_template ) )
     : i n ( nurl_str_len uri_template )
     : i open ( nurl_str_find uri_template `{` )
-    ? | < open 0 != ( nurl_str_get uri_template - n 1 ) 125 {
+    ? | < open 0 != ( nurl_str_at uri_template n - n 1 ) 125 {
         ( __mcp_server_reject `resource template` uri_template
         `a URI template must end in a single '{var}' — only a trailing variable can be matched by prefix, and a template that never matches is worse than none` )
     } {}
@@ -1751,13 +1751,13 @@ b read_only b destructive b idempotent b open_world
                 : i avn ( nurl_str_len avs )
                 // "Bearer X" — prefix length 7. Compare X to expected.
                 ? & >= avn 8
-                & == ( nurl_str_get avs 0 ) 66
-                & == ( nurl_str_get avs 1 ) 101
-                & == ( nurl_str_get avs 2 ) 97
-                & == ( nurl_str_get avs 3 ) 114
-                & == ( nurl_str_get avs 4 ) 101
-                & == ( nurl_str_get avs 5 ) 114
-                == ( nurl_str_get avs 6 ) 32
+                & == ( nurl_str_at avs avn 0 ) 66
+                & == ( nurl_str_at avs avn 1 ) 101
+                & == ( nurl_str_at avs avn 2 ) 97
+                & == ( nurl_str_at avs avn 3 ) 114
+                & == ( nurl_str_at avs avn 4 ) 101
+                & == ( nurl_str_at avs avn 5 ) 114
+                == ( nurl_str_at avs avn 6 ) 32
                 {
                     : i tlen ( nurl_str_len expected_token )
                     ? == - avn 7 tlen {

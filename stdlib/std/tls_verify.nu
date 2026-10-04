@@ -280,7 +280,7 @@ $ `stdlib/std/x509.nu`
     ~ <= + i nn hn {
         : ~ b m T
         : ~ i j 0
-        ~ & m < j nn { ? != ( __v_bget hay + i j ) ( nurl_str_get needle j ) { = m F } {} = j + j 1 }
+        ~ & m < j nn { ? != ( __v_bget hay + i j ) ( nurl_str_at needle nn j ) { = m F } {} = j + j 1 }
         ? m { ^ i } {}
         = i + i 1
     }

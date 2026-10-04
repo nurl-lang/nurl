@@ -154,8 +154,13 @@ $ `stdlib/core/char.nu`
 // pass it in. Reach for `nurl_str_get` only for a one-off read where no
 // length is at hand.
 @ nurl_str_get s str i idx → i {
-    : i n ( strlen str )
-    ? | < idx 0 >= idx n { ^ 0 } {}
+    // The byte at `idx` is in range exactly when no NUL comes before it:
+    // measure that far, not the whole string — a per-byte read in a loop
+    // the optimiser cannot hoist strlen out of (one that also writes) was
+    // quadratic in the string's length.
+    ? < idx 0 { ^ 0 } {}
+    : i n ( strnlen str + idx 1 )
+    ? >= idx n { ^ 0 } {}
     : *u p # *u str
     : u b . p idx
     ^ & # i b 255

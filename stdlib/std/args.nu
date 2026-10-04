@@ -205,7 +205,7 @@ $ `stdlib/core/vec.nu`
     : s raw ( string_data tok )
     : ~ i j 1
     ~ < j tl {
-        : i ch ( nurl_str_get raw j )
+        : i ch ( nurl_str_at raw tl j )
         : i idx ( __args_find_short p ch )
         ? < idx 0 {
             ( string_clear . p error )

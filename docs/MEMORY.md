@@ -834,11 +834,16 @@ The discriminator is invocation, not "the argument is a closure". Merely
 the drop of the closure's own env at the end of its scope (§7.5), which
 happens after the captured handles are freed and is correct.
 
-What is not covered is a closure that leaves the frame: stored into a
-struct field, returned, or handed to a callee that keeps it. Its captures
-are then owned and dropped by the env (§7.5), so there is nothing left to
-free by hand; freeing a captured handle early through its own name after
-the closure was stored is the aggregate-conduit boundary in §3.
+A closure that leaves the frame is followed too. Stored into a struct
+field — a literal's or an assignment's — its captures are stored into that
+struct (§2.12): reading them is fine, releasing one while the struct may
+still invoke the closure is an error. Returned — bare or inside a returned
+literal — its captures move into its env (§7.5), which the caller's value
+then drops. What is not followed is a closure handed to a callee that
+keeps it: the callee keeps a copy of the env (§7.5), but the copy still
+names the captured buffer, so freeing that buffer through its own name
+afterwards is the aggregate-conduit boundary in §3. Regressions:
+`borrow_closure_stored_capture_freed.nu`, `closure_returned_in_struct.nu`.
 
 Before this rule the whole family was invisible: a closure body is
 analysed as its own function, where a capture is never seeded and so can

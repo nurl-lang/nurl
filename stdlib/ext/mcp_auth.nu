@@ -54,10 +54,10 @@ $ `stdlib/ext/http_response.nu`
 @ mcp_auth_metadata_path s resource_path → String {
     : String out ( string_from `/.well-known/oauth-protected-resource` )
     : i n ( nurl_str_len resource_path )
-    ? | == n 0 & == n 1 == ( nurl_str_get resource_path 0 ) 47 { ^ out } {}
-    ? != 47 ( nurl_str_get resource_path 0 ) { ( string_push_str out `/` ) } {}
+    ? | == n 0 & == n 1 == ( nurl_str_at resource_path n 0 ) 47 { ^ out } {}
+    ? != 47 ( nurl_str_at resource_path n 0 ) { ( string_push_str out `/` ) } {}
     // Drop one trailing slash so `/mcp/` and `/mcp` name one document.
-    ? == 47 ( nurl_str_get resource_path - n 1 ) {
+    ? == 47 ( nurl_str_at resource_path n - n 1 ) {
         : s head ( nurl_str_slice resource_path 0 - n 1 )
         ( string_push_str out head )
     } {
@@ -75,7 +75,7 @@ $ `stdlib/ext/http_response.nu`
     : i n ( nurl_str_len url )
     : ~ i k + sep 3
     ~ < k n {
-        ? == 47 ( nurl_str_get url k ) { ^ k } {}
+        ? == 47 ( nurl_str_at url n k ) { ^ k } {}
         = k + k 1
     }
     ^ n
@@ -118,7 +118,7 @@ $ `stdlib/ext/http_response.nu`
         : ~ i start 0
         : ~ i k 0
         ~ <= k n {
-            ? | == k n == 32 ( nurl_str_get scopes k ) {
+            ? | == k n == 32 ( nurl_str_at scopes n k ) {
                 ? > k start {
                     : s one ( nurl_str_slice scopes start - k start )
                     ( json_arr_push sc ( json_str_lit one ) )

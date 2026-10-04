@@ -452,7 +452,7 @@ $ `stdlib/std/bytes.nu`
     : String out ( string_new )
     : ~ i k 0
     ~ & okfmt < k hl {
-        : i ch ( nurl_str_get host k )
+        : i ch ( nurl_str_at host hl k )
         ? & >= ch 48 <= ch 57 {
             = cur + * cur 10 - ch 48
             = digits + digits 1
@@ -482,15 +482,15 @@ $ `stdlib/std/bytes.nu`
 @ __host_match s pattern s host → b {
     : i pl ( nurl_str_len pattern )
     : i hl ( nurl_str_len host )
-    ? & > pl 1 == ( nurl_str_get pattern 0 ) 42 {
+    ? & > pl 1 == ( nurl_str_at pattern pl 0 ) 42 {
         // Only "*.rest" is a valid wildcard: the '*' must be the entire
         // leftmost label (so partial-label "*foo.com" is rejected) and the
         // remainder must span at least two labels (so "*.com" / a wildcard
         // in the public-suffix position is rejected) — RFC 6125 §6.4.3.
-        ? != ( nurl_str_get pattern 1 ) 46 { ^ F } {}  // require "*."
+        ? != ( nurl_str_at pattern pl 1 ) 46 { ^ F } {}  // require "*."
         : ~ i dots 0
         : ~ i di 2
-        ~ < di pl { ? == ( nurl_str_get pattern di ) 46 { = dots + dots 1 } {} = di + di 1 }
+        ~ < di pl { ? == ( nurl_str_at pattern pl di ) 46 { = dots + dots 1 } {} = di + di 1 }
         ? < dots 1 { ^ F } {}  // need ≥2 labels after "*."
         // "*.rest" — host must end with ".rest" and have no dot in the
         // matched first label.
@@ -500,7 +500,7 @@ $ `stdlib/std/bytes.nu`
         : i off - hl rl
         // the matched prefix host[0..off) must contain no dot
         : ~ i k 0
-        ~ < k off { ? == ( nurl_str_get host k ) 46 { ^ F } {} = k + k 1 }
+        ~ < k off { ? == ( nurl_str_at host hl k ) 46 { ^ F } {} = k + k 1 }
         : s tail ( nurl_str_slice host off rl )
         ^ ( __ci_eq tail rest )
     } {}
@@ -512,7 +512,7 @@ $ `stdlib/std/bytes.nu`
     ? != la ( nurl_str_len b ) { ^ F } {}
     : ~ i i 0
     ~ < i la {
-        ? != ( __lower ( nurl_str_get a i ) ) ( __lower ( nurl_str_get b i ) ) { ^ F } {}
+        ? != ( __lower ( nurl_str_at a la i ) ) ( __lower ( nurl_str_get b i ) ) { ^ F } {}
         = i + i 1
     }
     ^ T

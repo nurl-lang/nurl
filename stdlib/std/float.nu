@@ -225,7 +225,7 @@ $ `stdlib/core/errors.nu`
     : ~ i pre 0
     : ~ b stopped F
     ~ & < pre n ! stopped {
-        : i c ( nurl_str_get str pre )
+        : i c ( nurl_str_at str n pre )
         ? || == c 32 == c 9 { = pre + pre 1 } { = stopped T }
     }
     ? >= pre n { ^ @ !f ParseErr { F @ ParseErr { Empty } } } {}
@@ -246,7 +246,7 @@ $ `stdlib/core/errors.nu`
     // Trailing garbage: everything after the number must be whitespace.
     : ~ i tk + pre used
     ~ < tk n {
-        : i tc ( nurl_str_get str tk )
+        : i tc ( nurl_str_at str n tk )
         ? || == tc 32 == tc 9 { = tk + tk 1 } {
             ^ @ !f ParseErr { F @ ParseErr { BadFormat } }
         }

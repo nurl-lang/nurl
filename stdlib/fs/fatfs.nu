@@ -1110,7 +1110,7 @@ $ `stdlib/fs/fat.nu`
     : i n ( nurl_str_len path )
     : ~ i k 0
     ~ < k n {
-        ? != & ( nurl_str_get path k ) 255 47 { ^ F } {}
+        ? != & ( nurl_str_at path n k ) 255 47 { ^ F } {}
         = k + k 1
     }
     ^ T

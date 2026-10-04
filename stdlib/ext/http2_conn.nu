@@ -721,7 +721,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i k 0
     : ~ b found F
     ~ & ! found < k n {
-        : i c & ( nurl_str_get name k ) 255
+        : i c & ( nurl_str_at name n k ) 255
         ? & >= c 65 <= c 90 { = found T } {}
         = k + k 1
     }
@@ -868,7 +868,7 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i k 0
     : ~ b bad F
     ~ & ! bad < k n {
-        : i c & ( nurl_str_get text k ) 255
+        : i c & ( nurl_str_at text n k ) 255
         ? | < c 48 > c 57 { = bad T } {
             : i digit - c 48
             ? > acc / - 9223372036854775807 digit 10 { = bad T } {
@@ -942,7 +942,7 @@ $ `stdlib/ext/http2_hpack.nu`
                 : ~ i qi -1
                 : ~ i j 0
                 ~ & == qi -1 < j pl {
-                    ? == 63 ( nurl_str_get vl j ) { = qi j } {}
+                    ? == 63 ( nurl_str_at vl pl j ) { = qi j } {}
                     = j + j 1
                 }
                 ? >= qi 0 {
@@ -1046,8 +1046,8 @@ $ `stdlib/ext/http2_hpack.nu`
     : ~ i k 0
     : ~ i ok 1
     ~ & == ok 1 < k la {
-        : ~ i ca ( nurl_str_get a k )
-        : ~ i cb ( nurl_str_get b k )
+        : ~ i ca ( nurl_str_at a la k )
+        : ~ i cb ( nurl_str_at b lb k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { = ok 0 } {}

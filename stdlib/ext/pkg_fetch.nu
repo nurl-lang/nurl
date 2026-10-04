@@ -258,7 +258,7 @@ $ `stdlib/ext/manifest.nu`
     : String url ( string_with_cap 80 )
     ( string_push_str url registry )
     : i rn ( nurl_str_len registry )
-    ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char url 47 ) } {} } {}
+    ? > rn 0 { ? != ( nurl_str_at registry rn - rn 1 ) 47 { ( string_push_char url 47 ) } {} } {}
     ( string_push_str url `api/v1/search?q=` )
     ( string_push_str url query )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )

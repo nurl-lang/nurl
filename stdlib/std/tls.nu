@@ -1149,14 +1149,14 @@ $ `stdlib/core/rcbox.nu`
     : i n ( nurl_str_len list )
     : ~ i p 0
     ~ < p n {
-        ~ & < p n == ( nurl_str_get list p ) 32 { = p + p 1 }
+        ~ & < p n == ( nurl_str_at list n p ) 32 { = p + p 1 }
         : i start p
-        ~ & < p n != ( nurl_str_get list p ) 32 { = p + p 1 }
+        ~ & < p n != ( nurl_str_at list n p ) 32 { = p + p 1 }
         : i tl - p start
         ? & > tl 0 <= tl 255 {
             ( vec_push [u] out # u tl )
             : ~ i k start
-            ~ < k p { ( vec_push [u] out # u ( nurl_str_get list k ) ) = k + k 1 }
+            ~ < k p { ( vec_push [u] out # u ( nurl_str_at list n k ) ) = k + k 1 }
         } {}
     }
     ^ out

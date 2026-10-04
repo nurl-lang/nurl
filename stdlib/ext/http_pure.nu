@@ -377,7 +377,7 @@ $ `stdlib/core/rcbox.nu`
     : i n ( nurl_str_len in )
     : ~ i k 0
     ~ < k n {
-        : i ch ( nurl_str_get in k )
+        : i ch ( nurl_str_at in n k )
         ( string_push_char out ? & >= ch 65 <= ch 90 + ch 32 ch )
         = k + k 1
     }
@@ -398,14 +398,14 @@ $ `stdlib/core/rcbox.nu`
     : ~ i k 0
     : ~ b hit F
     ~ & ! hit <= + k nl ln {
-        ? | == k 0 == ( nurl_str_get ld - k 1 ) 10 {
+        ? | == k 0 == ( nurl_str_at ld ln - k 1 ) 10 {
             : ~ i j 0
             : ~ b same T
             ~ & same < j nl {
-                ? != ( nurl_str_get ld + k j ) ( nurl_str_get lname j ) { = same F } {}
+                ? != ( nurl_str_at ld ln + k j ) ( nurl_str_at lname nl j ) { = same F } {}
                 = j + j 1
             }
-            ? & same < + k nl ln { = hit == ( nurl_str_get ld + k nl ) 58 } {}
+            ? & same < + k nl ln { = hit == ( nurl_str_at ld ln + k nl ) 58 } {}
         } {}
         = k + k 1
     }
@@ -463,7 +463,7 @@ $ `stdlib/core/rcbox.nu`
         ( bytes_extend_str req headers_blob )
         // Ensure a terminating CRLF if the blob did not end with one.
         : i hl ( nurl_str_len headers_blob )
-        ? | < hl 2 != ( nurl_str_get headers_blob - hl 1 ) 10 {
+        ? | < hl 2 != ( nurl_str_at headers_blob hl - hl 1 ) 10 {
             ( bytes_extend_str req `\r\n` )
         } {}
     } {}
@@ -528,7 +528,7 @@ $ `stdlib/core/rcbox.nu`
             ? > colon 0 {
                 : s name ( nurl_str_slice lnd 0 colon )
                 // Trim a single leading space after the colon.
-                : i vstart ? & < + colon 1 lnlen == ( nurl_str_get lnd + colon 1 ) 32 + colon 2 + colon 1
+                : i vstart ? & < + colon 1 lnlen == ( nurl_str_at lnd lnlen + colon 1 ) 32 + colon 2 + colon 1
                 : s value ( nurl_str_slice lnd vstart - lnlen vstart )
                 ( vec_push [String] . st hnames ( string_from name ) )
                 ( vec_push [String] . st hvalues ( string_from value ) )
@@ -1024,19 +1024,19 @@ i follow i maxredir i verify s ua i timeout_ms → HttpStreamState {
         ( string_push_str out ( nurl_str_int port ) )
     } {}
     : s bpath ( string_data . base path )
-    ? == ( nurl_str_get loc 0 ) 63 {
+    ? == ( nurl_str_at loc ll 0 ) 63 {
         // "?query": the base path, new query.
         ( string_push_str out ? > ( nurl_str_len bpath ) 0 bpath `/` )
         ( string_push_str out loc )
     } {
         : String merged ( string_new )
-        ? == ( nurl_str_get loc 0 ) 47 {
+        ? == ( nurl_str_at loc ll 0 ) 47 {
             ( string_push_str merged loc )
         } {
             // Directory of the base path (through its last "/"), then loc.
             : i bl ( nurl_str_len bpath )
             : ~ i cut - bl 1
-            ~ & >= cut 0 != ( nurl_str_get bpath cut ) 47 { = cut - cut 1 }
+            ~ & >= cut 0 != ( nurl_str_at bpath bl cut ) 47 { = cut - cut 1 }
             ? >= cut 0 { ( string_push_str merged ( nurl_str_slice bpath 0 + cut 1 ) ) } { ( string_push_str merged `/` ) }
             ( string_push_str merged loc )
         }

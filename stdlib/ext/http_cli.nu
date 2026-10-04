@@ -96,7 +96,7 @@ $ `stdlib/ext/http_cli_types.nu`
     : ~ i start 0
     : ~ i i 0
     ~ < i n {
-        ? & == ( nurl_str_get blob i ) 13 & < + i 1 n == ( nurl_str_get blob + i 1 ) 10 {
+        ? & == ( nurl_str_at blob n i ) 13 & < + i 1 n == ( nurl_str_at blob n + i 1 ) 10 {
             ? > i start {
                 : String seg ( __httpc_substr blob start i )
                 ( vec_push [s] a `-H` )

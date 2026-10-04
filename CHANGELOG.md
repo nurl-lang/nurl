@@ -60,7 +60,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only when it removed an entry.** Most frees there are of buffers the
   journal never held; the tail check ran for each.
 
+- **`nurl_str_get` measures a string only up to the byte it reads**
+  (`strnlen(str, idx + 1)`), and 146 stdlib reads in loops use
+  `nurl_str_at` with the length measured once — a byte loop that also
+  writes (where the optimiser cannot hoist the measure out) was quadratic
+  in the string's length: 0.39 s → 0.22 s per 200 KB through
+  `nurl_str_get`, linear through `nurl_str_at`.
 ### Fixed
+
+- **A closure inside a returned struct literal no longer runs on freed
+  captures.** `^ @ Box { \ → i { ^ ( vec_len [i] a ) } }` dropped the
+  local `a` at the return under the closure the caller then ran (it read
+  24 for a 2-element Vec); the captures move into the env, as for a bare
+  `^ \ → …`.
+- **Freeing what a struct-stored closure captured is rejected.** The
+  free-then-invoke check followed a closure only by its name; once stored
+  into a struct field (a literal's or an assignment's), freeing a capture
+  and invoking the closure through the field ran it on freed memory.
 
 - **`( dyn Trait v )` no longer frees `v` twice.** The `%dyn` object owns
   its box and drops the boxed value through the vtable, but boxing copied
