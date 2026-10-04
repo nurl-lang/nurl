@@ -13,8 +13,10 @@
 //   tasks     the work board: open → claimed (under a lease) → done,
 //             or back to open when released or the lease runs out
 //   notes     a shared key → text notebook, per project ('' = global)
-//   users     (signed-in service only) who has signed in, and their role
-//   sessions  (signed-in service only) MCP session → the agent it acts as
+//
+// A signed-in service keeps one such file per repository of each
+// organisation, and the organisation's people in a file of their own
+// (manage.nu).
 //
 // Threading: the service runs a worker pool and any number of stdio
 // processes may share the file. Every operation opens its OWN
@@ -44,7 +46,6 @@ $ `stdlib/ext/sqlite.nu`
     String origin  // the working directory a @cwd identity was made from; '' otherwise
     String status  // what the agent says it is doing now; '' = nothing said
     i status_at  // when it said so
-    String owner  // the signed-in user (OIDC subject) it belongs to; '' = local
 }
 
 : AgChannel {
@@ -105,7 +106,7 @@ $ `stdlib/ext/sqlite.nu`
 
 @ __ag_schema → ( Vec String ) {
     : ( Vec String ) v ( vec_new [String] )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', status_at INTEGER NOT NULL DEFAULT 0, owner TEXT NOT NULL DEFAULT '')` ) )
+    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', token_hash TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL, origin TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', status_at INTEGER NOT NULL DEFAULT 0)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS channels (name TEXT PRIMARY KEY, about TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS follows (agent TEXT NOT NULL, channel TEXT NOT NULL, PRIMARY KEY (agent, channel))` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, sender TEXT NOT NULL, body TEXT NOT NULL, reply_to INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)` ) )
@@ -114,8 +115,6 @@ $ `stdlib/ext/sqlite.nu`
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0, result TEXT NOT NULL DEFAULT '', priority INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, updated INTEGER NOT NULL, ref INTEGER NOT NULL DEFAULT 0)` ) )
     ( vec_push [String] v ( string_from `CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, priority, id)` ) )
     ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS notes (project TEXT NOT NULL DEFAULT '', key TEXT NOT NULL, body TEXT NOT NULL, author TEXT NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY (project, key))` ) )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS users (sub TEXT PRIMARY KEY, email TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created INTEGER NOT NULL, seen INTEGER NOT NULL)` ) )
-    ( vec_push [String] v ( string_from `CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, sub TEXT NOT NULL, agent TEXT NOT NULL, created INTEGER NOT NULL, seen INTEGER NOT NULL)` ) )
     ( vec_push [String] v ( string_from `INSERT OR IGNORE INTO channels (name, about, created_by, created) VALUES ('public', 'Everyone follows this channel.', '', 0)` ) )
     ^ v
 }
@@ -143,10 +142,6 @@ $ `stdlib/ext/sqlite.nu`
             ? ( __ag_table_lacks db `agents` `status` ) {
                 ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN status TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
                 ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN status_at INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
-            } {}
-            // 0.5.0: agents.owner (the signed-in user an agent belongs to).
-            ? ( __ag_table_lacks db `agents` `owner` ) {
-                ?? ( sqlite_exec db `ALTER TABLE agents ADD COLUMN owner TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
             } {}
             ? ( __ag_table_lacks db `tasks` `ref` ) {
                 ?? ( sqlite_exec db `ALTER TABLE tasks ADD COLUMN ref INTEGER NOT NULL DEFAULT 0` ) { T _ → {} F _ → {} }
@@ -404,17 +399,16 @@ $ `stdlib/ext/sqlite.nu`
         ( sqlite_column_text q 4 )
         ( sqlite_column_text q 5 )
         ( sqlite_column_int q 6 )
-        ( sqlite_column_text q 7 )
     }
 }
 
 @ ag_agent_get AgStore st s id → ?AgAgent {
     : ~ b found F
-    : ~ AgAgent out @ AgAgent { ( string_new ) ( string_new ) 0 0 ( string_new ) ( string_new ) 0 ( string_new ) }
+    : ~ AgAgent out @ AgAgent { ( string_new ) ( string_new ) 0 0 ( string_new ) ( string_new ) 0 }
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at, owner FROM agents WHERE id = ?1` ) {
+            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at FROM agents WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
                     ( _ag_bind_s q 1 id )
@@ -435,7 +429,7 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at, owner FROM agents ORDER BY seen DESC` ) {
+            ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at FROM agents ORDER BY seen DESC` ) {
                 F _ → {}
                 T q → {
                     ~ ( _ag_row q ) { ( vec_push [AgAgent] out ( __ag_read_agent q ) ) }

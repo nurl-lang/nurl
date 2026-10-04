@@ -9,11 +9,15 @@
 //   oidc    A shared, signed-in, multi-tenant service. Every request
 //           carries an OIDC access token (or arrives at /mcp without one
 //           and is told where to get one); the token's tenant (`tid`)
-//           is the ORGANISATION, and each organisation is its own file,
-//           <home>/orgs/<org>.db. The org is implicit in the file, so no
-//           query carries an org column and no query can forget one:
-//           two organisations cannot see each other's agents, messages,
-//           tasks or notes because they are not in the same database.
+//           is the ORGANISATION. Its people are <home>/orgs/<org>.db; its
+//           agoras are one file per git REPOSITORY,
+//           <home>/orgs/<org>/<host+owner+repo>.db, and everybody of the
+//           organisation who names that repository meets everybody else
+//           who does. Organisation and repository are implicit in the
+//           file, so no query carries either and no query can forget
+//           one: two organisations (or two repositories) cannot see each
+//           other's agents, messages, tasks or notes because they are
+//           not in the same database.
 //
 // Which organisations may sign in at all is a registry of its own,
 // <home>/tenants.db: the owner organisation always may; another is
@@ -208,7 +212,7 @@ $ `manage.nu`
     String iss_tmpl  // guarded: the provider's `{tenantid}` issuer template
     i prov  // guarded: address of one share of the OidcProvider; 0 = not discovered
     ( Vec AgAuthHit ) hits  // guarded
-    ( Vec String ) ready  // guarded: tenant files whose schema is in place
+    ( Vec String ) ready  // guarded: files whose schema is in place
 }
 
 : ~ i g_ag_auth 0
@@ -382,9 +386,34 @@ $ `manage.nu`
     ^ p
 }
 
-// The organisation's store, its schema made sure of once per process.
-@ ag_org_store s org → AgStore {
-    : String path ( ag_org_path org )
+// The directory of an organisation's repository files.
+@ ag_org_repo_dir s org → String {
+    : String dir ( path_join ( ag_auth_home ) `orgs` )
+    : String p ( path_join ( string_data dir ) org )
+    ^ p
+}
+
+// `repo` is a normalised repository key (api.nu's ag_project_norm: a-z
+// 0-9 . _ - and '/', no '.' or '..' segment): its file swaps each '/'
+// for '+', which the key cannot contain, so the name is the key, read
+// back by swapping again.
+@ ag_repo_path s org s repo → String {
+    : String f ( string_new )
+    : i n ( nurl_str_len repo )
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get repo k )
+        ( string_push_char f ? == c 47 43 c )
+        = k + k 1
+    }
+    ( string_push_str f `.db` )
+    : String dir ( ag_org_repo_dir org )
+    : String p ( path_join ( string_data dir ) ( string_data f ) )
+    ^ p
+}
+
+// Is `path` among the files whose schema this process made sure of?
+@ __ag_ready s path → b {
     : ~ b ready F
     ( __ag_lock )
     : *AgAuth a ( __ag_auth )
@@ -392,23 +421,82 @@ $ `manage.nu`
     : ~ i k 0
     ~ & ! ready < k n {
         ?? ( vec_get [String] . a ready k ) {
-            T p → { = ready != 0 ( nurl_str_eq ( string_data p ) ( string_data path ) ) }
+            T p → { = ready != 0 ( nurl_str_eq ( string_data p ) path ) }
             F _ → {}
         }
         = k + k 1
     }
     ( __ag_unlock )
-    ? ready { ^ @ AgStore { path T } } {}
-    // Outside the lock: opening is idempotent (CREATE … IF NOT EXISTS
-    // under WAL and a busy timeout), and a first request of one
-    // organisation must not hold up everyone else's.
-    : AgStore st ( ag_store_open ( string_data path ) )
-    ? . st ok {
-        ( __ag_lock )
-        ( vec_push [String] . ( __ag_auth ) ready ( string_from ( string_data path ) ) )
-        ( __ag_unlock )
-    } {}
+    ^ ready
+}
+
+@ __ag_mark_ready s path → v {
+    ( __ag_lock )
+    ( vec_push [String] . ( __ag_auth ) ready ( string_from path ) )
+    ( __ag_unlock )
+}
+
+// The organisation's file of people, its schema made sure of once per
+// process. Opening happens outside the lock: it is idempotent (CREATE …
+// IF NOT EXISTS under WAL and a busy timeout), and a first request of
+// one organisation must not hold up everyone else's.
+@ ag_org_store s org → AgStore {
+    : String path ( ag_org_path org )
+    ? ( __ag_ready ( string_data path ) ) { ^ @ AgStore { path T } } {}
+    : AgStore st ( ag_orgdb_open ( string_data path ) )
+    ? . st ok { ( __ag_mark_ready ( string_data path ) ) } {}
     ^ st
+}
+
+// A repository's agora within an organisation (made on first use).
+@ ag_repo_store s org s repo → AgStore {
+    : String path ( ag_repo_path org repo )
+    ? ( __ag_ready ( string_data path ) ) { ^ @ AgStore { path T } } {}
+    : AgStore st ( ag_store_open ( string_data path ) )
+    ? . st ok { ( __ag_mark_ready ( string_data path ) ) } {}
+    ^ st
+}
+
+// The repositories an organisation has an agora for, sorted.
+@ ag_org_repos s org → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : String dir ( ag_org_repo_dir org )
+    ?? ( dir_list ( string_data dir ) ) {
+        F _ → {}
+        T names → {
+            : i n ( vec_len [String] names )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] names k ) {
+                    T f → {
+                        : i fl ( string_len f )
+                        ? & > fl 3 ( string_ends_with f `.db` ) {
+                            : String r ( string_new )
+                            : ~ i j 0
+                            ~ < j - fl 3 {
+                                : i c ( string_get f j )
+                                ( string_push_char r ? == c 43 47 c )
+                                = j + j 1
+                            }
+                            // Sorted as they come: an organisation has few.
+                            : ~ i m ( vec_len [String] out )
+                            : ~ i at 0
+                            ~ < at m {
+                                ?? ( vec_get [String] out at ) {
+                                    T x → { ? > ( nurl_str_cmp ( string_data x ) ( string_data r ) ) 0 { = m at } { = at + at 1 } }
+                                    F _ → { = at + at 1 }
+                                }
+                            }
+                            ( vec_insert [String] out at r )
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+        }
+    }
+    ^ out
 }
 
 // ── Organisations: who may sign in ───────────────────────────────────
@@ -801,42 +889,4 @@ $ `manage.nu`
         F → {}
     }
     ^ ( __ag_verify token now )
-}
-
-// ── The default agent of a person ────────────────────────────────────
-
-// A person who has not said which agent they are acts as one named after
-// them: their e-mail's local part in the name alphabet ("tero.andelin").
-// If somebody else of the organisation already owns that name, the
-// subject's digest tells the two apart.
-@ ag_default_agent AgStore st AgPrincipal p → String {
-    : String src ( string_from ( string_data . p email ) )
-    : String base ( string_new )
-    : i n ( string_len src )
-    : ~ i k 0
-    ~ & & < k n != ( string_get src k ) 64 < ( string_len base ) 40 {
-        : i c0 ( string_get src k )
-        : i c ? & >= c0 65 <= c0 90 + c0 32 c0
-        : b ok | | & >= c 97 <= c 122 & >= c 48 <= c 57 | | == c 45 == c 46 == c 95
-        ( string_push_char base ? ok c 45 )
-        = k + k 1
-    }
-    : String dig ( __ag_token_hash ( string_data . p sub ) )
-    ? == ( string_len base ) 0 {
-        ( string_push_str base `user-` )
-        : String d8 ( string_substr dig 0 8 )
-        ( string_push_str base ( string_data d8 ) )
-        ^ base
-    } {}
-    ?? ( ag_agent_owner st ( string_data base ) ) {
-        T o → {
-            ? != 0 ( nurl_str_eq ( string_data o ) ( string_data . p sub ) ) { ^ base } {}
-            : String alt ( string_from ( string_data base ) )
-            ( string_push_char alt 45 )
-            : String d6 ( string_substr dig 0 6 )
-            ( string_push_str alt ( string_data d6 ) )
-            ^ alt
-        }
-        F → { ^ base }
-    }
 }

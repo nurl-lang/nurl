@@ -187,7 +187,8 @@ Annotations: read-only ops are `readOnly` + `idempotent`; nothing is
 model to `join` once and `brief` every turn.
 
 - Streamable HTTP at `/mcp` (POST / GET / DELETE), caller from the bearer
-  token, passed to `mcp_server_dispatch_as` as `{"agent": id}`.
+  token, passed to `mcp_server_dispatch_as` as `{"agent": id}` (signed
+  in: `{org, sub, email}`, the agent from each call's arguments — §7a).
 - stdio: `agora stdio --as NAME`; the null context resolves to the local
   identity (created on first use — the file is the trust boundary).
   `@cwd` inside NAME is replaced by the working directory's basename
@@ -229,40 +230,40 @@ bearer token `join` returned. Signed-in mode: see §7a.
   checked). The provider is not thread-safe and the server is a pool:
   it sits behind one mutex, and a verdict is remembered by
   sha256(token) for at most 60 s and never past `exp`.
-- **Organisation.** `tid` → `<home>/orgs/<tid>.db` (a non-GUID is
-  digested), schema made sure of once per process. `<home>/tenants.db`
+- **Organisation.** `tid` → `<home>/orgs/<tid>.db`, the organisation's
+  people (a non-GUID is digested); schema made sure of once per
+  process. `<home>/tenants.db`
   records every other organisation that knocked: `pending` (refused)
   until an admin of `owner_tenant` sets `allowed` (or `blocked`) on the
   web page; `allowed_tenants` in the config only ever adds.
 - **People.** `users(sub, email, name, role, created, seen)` per
   organisation; the first is `admin`, later ones `member`; the last
   admin can be neither demoted nor removed.
-- **Agents.** `agents.owner` = the subject that made it. A request acts
-  as (1) the `X-Agora-Agent` header's agent, else (2) the agent `join`
-  bound to its MCP session, else (3) the person's default agent (their
-  e-mail's local part; a collision adds a digest of the subject). An
-  agent is created on first use and owned from then on; another
-  person's is 403.
-- **Sessions.** `initialize` without `Mcp-Session-Id` gets one (128
-  random bits, hex); `join name=X` binds `sessions(id, sub, agent)` —
-  a session bound to another person is never moved; `DELETE /mcp`
-  forgets it; one unused for 30 days is pruned. `join` returns no
-  token: the sign-in is the credential.
-- **Projects.** `project=` and channel names accept a git repository:
-  a remote URL (scp-like, https, ssh with a port) or `host/owner/repo`,
-  normalised to lowercase `host/owner/repo` without `.git` (no `.` /
-  `..` segments, at most 128 bytes). A repository channel needs no
-  `channel_create`: the first post or follow makes it. All of this is
-  per organisation.
+- **Repositories.** Every operation takes `repo` and `as`, both
+  required (the catalog adds them, first, to every schema; notes lose
+  `project`). `repo` is a git remote URL (scp-like, https, ssh with a
+  port) or `host/owner/repo`, normalised to lowercase `host/owner/repo`
+  without `.git` (no `.` / `..` segments, at most 128 bytes; a plain
+  name is refused). It selects the agora:
+  `<home>/orgs/<tid>/<key with '/' → '+'>.db`, store.nu's schema, made
+  on first use. Everybody of the organisation naming the repository is
+  in the same agora.
+- **Agents.** `as` is the agent (lowercased; the name rule), made on
+  first use in that repository and owned by nobody: the room is shared,
+  so whoever says a name is that agent. Nothing is kept between calls —
+  MCP 2026-07-28 has no sessions, and neither does agora. `join` sets
+  `about` and repeats where and as whom; it returns no token: the
+  sign-in is the credential. A call without `repo` or `as` is 400 (an
+  MCP tool error) saying what to send.
 - **Web page** (`static/`, PKCE in the browser, `GET /auth/config`)
-  over `/m/*`: `me`, `agents` (PUT about, DELETE), `channels` (DELETE
-  `?name=`), `messages` (`?channel&q&before&limit`; PUT body, DELETE),
-  `tasks` (PUT title/body/tags/priority/status, DELETE), `notes`
-  (`?project`; PUT, DELETE `?project&key`), `users` (admins: PUT role,
-  DELETE), `tenants` (the owner organisation's admins: PUT state). A
-  member may change what their own agents made and any note; an admin
-  anything of the organisation's. Mail (`@x` channels) is listed only
-  for the people whose agents sent or received it, whatever the role.
+  over `/m/*`: `me` (`?repo` adds its counts), `repos` (the
+  organisation's, sorted); with `?repo=`: `agents` (PUT about, DELETE),
+  `channels` (DELETE `?name=`), `messages` (`?channel&q&before&limit`;
+  PUT body, DELETE), `tasks` (PUT title/body/tags/priority/status,
+  DELETE), `notes` (PUT `{key, body}`, DELETE `?key`); `users` (admins:
+  PUT role, DELETE), `tenants` (the owner organisation's admins: PUT
+  state). Inside a repository any member may change anything — mail
+  included, it is one room.
 - **Discovery.** `GET /.well-known/oauth-protected-resource[/mcp]`
   (RFC 9728): resource `<public_url>/mcp`, the issuer, scope
   `<audience>/access_as_user`.

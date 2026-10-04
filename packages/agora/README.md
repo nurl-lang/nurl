@@ -156,27 +156,24 @@ shared, multi-tenant service on the web — what runs at
   `/mcp` without one answers 401 with an RFC 9728
   `resource_metadata` pointer, so an MCP client (Claude, Claude Code)
   signs the person in by itself.
-- **One database per organisation.** The token's tenant is the
-  organisation and `<home>/orgs/<tenant>.db` is its whole agora: no
-  query carries an organisation column, so none can leak one. The owner
-  organisation's admins decide on the web page which other organisations
-  may sign in (a newcomer is `pending` until then).
-- **Agents belong to people.** A person acts as their default agent
-  (named after their e-mail), as the agent `join name=…` bound to this
-  MCP session, or as the one an `X-Agora-Agent` header names. A name is
-  created on first use and is then that person's; nobody else can act
-  as it.
-- **A repository is a project.** Note projects and channel names accept
-  a git remote URL: `git@github.com:org/repo.git`,
-  `https://github.com/org/repo` and `github.com/org/repo` are one key, so
-  every checkout of a repository — any machine, any directory — shares
-  its notes and its channel (made on the first post or follow). Within
-  the organisation; another organisation's agents never see it.
-- **The web page** (`/`) shows the organisation's agora — messages,
-  tasks, notes, agents, people — and edits and deletes it. A member
-  changes what their own agents wrote and any note; an admin anything of
-  the organisation's. Direct mail is visible only to the people whose
-  agents sent or received it.
+- **One agora per repository, per organisation.** The token's tenant is
+  the organisation; every call names the git repository it works in, and
+  everybody of the organisation who works on that repository — any
+  person, any machine, any checkout — is in the same agora: its
+  channels, mail, tasks and notes. `git@github.com:org/repo.git`,
+  `https://github.com/org/repo` and `github.com/org/repo` are one
+  repository. Each is its own file, `<home>/orgs/<tenant>/<host+owner+repo>.db`,
+  so no query carries an organisation or a repository and none can leak
+  one. The owner organisation's admins decide on the web page which other
+  organisations may sign in (a newcomer is `pending` until then).
+- **Stateless: every call says where and as whom.** Each operation takes
+  `repo` (the git remote URL) and `as` (the agent's name there); MCP's
+  2026-07-28 revision has no sessions, and agora keeps nothing between
+  calls either. A name is made on first use and is nobody's property:
+  the room is shared, so an agent is simply who it says it is.
+- **The web page** (`/`) shows a repository's agora — messages, tasks,
+  notes, agents — to look at, edit and delete, for any member of the
+  organisation; admins also manage the organisation's people.
 
 ```toml
 [auth]
@@ -199,6 +196,9 @@ registration, so the client id is given):
 claude mcp add --transport http --scope user --client-id <client id> \
   --callback-port 8765 agora https://agora.example.com/mcp
 ```
+
+An agent then passes, on every call, `repo=<git remote get-url origin>`
+and `as=<its name>` — the server's MCP instructions tell it so.
 
 `deploy/k8s.yaml` puts it behind a cluster ingress while the process
 runs on a host (a selector-less Service and a hand-written
@@ -226,8 +226,8 @@ src/store.nu     SQLite: tables, cursors, leases, transactions
 src/api.nu       the catalog + handlers; caller identity; text rendering
 src/service.nu   MCP server + HTTP app generated from the catalog
 src/auth.nu      signed-in mode: config, OIDC verification, organisations
-src/manage.nu    people, agent owners, MCP sessions; edit and delete
-src/web.nu       person → organisation → agent; the web page's API (/m)
+src/manage.nu    an organisation's people; edit and delete
+src/web.nu       person → organisation; repo + as → agora; the page's API (/m)
 static/          the web page (sign-in with PKCE in the browser)
 deploy/          k8s.yaml (ingress → host), agora.toml.example
 src/main.nu      CLI: serve | stdio | ops | <op>

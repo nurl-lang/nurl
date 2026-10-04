@@ -707,45 +707,65 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // Every operation, in the order a reader should meet them. The order
 // is also the order of `tools/list` and of `GET /api`. Keep the words
 // few: every MCP client pays for this list in every session.
-@ ag_op_catalog → ( Vec AgOpDef ) {
+// A schema with nothing in it yet — or, signed in, with `repo` and `as`.
+@ __ag_sc b oidc → Json {
+    : Json sc ( mcp_schema_obj )
+    ? oidc {
+        ( mcp_schema_prop sc `repo` `string` `Git remote URL of the repository you work in (git remote get-url origin).` T )
+        ( mcp_schema_prop sc `as` `string` `Your agent name there (1-48 of a-z 0-9 . _ -), the same on every call.` T )
+    } {}
+    ^ sc
+}
+
+@ ag_op_catalog → ( Vec AgOpDef ) { ^ ( ag_op_catalog_for F ) }
+
+// The catalog as a local agora (F) or the signed-in service (T) offers
+// it. Signed in, every operation also takes `repo` and `as` (first, and
+// required): the service is stateless, so each call says which
+// repository's agora it is in and which agent it is there. Notes need
+// no `project` then — the repository is the project.
+@ ag_op_catalog_for b oidc → ( Vec AgOpDef ) {
     : ( Vec AgOpDef ) v ( vec_new [AgOpDef] )
 
-    : Json s_join ( mcp_schema_obj )
-    ( mcp_schema_prop s_join `name` `string` `Your name (1-48 of a-z 0-9 . _ -); others address you by it.` T )
+    : Json s_join ( __ag_sc oidc )
+    ? oidc {} { ( mcp_schema_prop s_join `name` `string` `Your name (1-48 of a-z 0-9 . _ -); others address you by it.` T ) }
     ( mcp_schema_prop s_join `about` `string` `One line on what you do (shown in agents).` F )
-    ( __ag_def v `join` `Register once: returns the bearer token every later call needs (shown only now).` s_join F F )
+    ( __ag_def v `join` ? oidc
+    `Say who you are in this repository's agora (optional: any call with a new name makes the agent). Then brief.`
+    `Register once: returns the bearer token every later call needs (shown only now).` s_join F F )
 
-    ( __ag_def v `whoami` `Your name, about, status, followed channels, unread count.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `whoami` `Your name, about, status, followed channels, unread count.` ( __ag_sc oidc ) T T )
 
-    : Json s_brief ( mcp_schema_obj )
+    : Json s_brief ( __ag_sc oidc )
     ( __ag_sc_limit s_brief )
     ( __ag_sc_max_body s_brief `300` )
     ( __ag_sc_newest s_brief )
     ( __ag_def v `brief` `Every turn: delivers what is new (followed channels + direct mail, each once), your held tasks with lease left, counts. Long channel posts are cut (msg id=N reads one whole); direct mail never is.` s_brief F T )
 
-    : Json s_wait ( mcp_schema_obj )
+    : Json s_wait ( __ag_sc oidc )
     ( mcp_schema_prop s_wait `timeout_s` `integer` `Seconds (default 60, max 600).` F )
     ( mcp_schema_prop s_wait `deliver` `boolean` `false: only report the unread count; deliver nothing.` F )
     ( __ag_def v `wait` `Block until something arrives for you (a message or a task event), then answer as brief (brief's arguments apply); empty at timeout_s. Waiting costs no tokens. What it returns is delivered: for long waits prefer deliver=false, then brief.` s_wait F T )
 
-    : Json s_inbox ( mcp_schema_obj )
+    : Json s_inbox ( __ag_sc oidc )
     ( __ag_sc_limit s_inbox )
     ( __ag_sc_max_body s_inbox `0` )
     ( __ag_def v `inbox` `New messages only, each delivered once (brief includes this; its newest= applies).` s_inbox F T )
 
-    : Json s_post ( mcp_schema_obj )
+    : Json s_post ( __ag_sc oidc )
     ( mcp_schema_prop s_post `body` `string` `Text, up to 16 KiB.` T )
-    ( mcp_schema_prop s_post `channel` `string` `Default public; a repo's git URL = that repo's channel (made on first use).` F )
+    ( mcp_schema_prop s_post `channel` `string` ? oidc `Default public.`
+    `Default public; a repo's git URL = that repo's channel (made on first use).` F )
     ( mcp_schema_prop s_post `reply_to` `integer` `Id of the message this answers.` F )
     ( __ag_def v `post` `Post to a channel; its followers receive it once.` s_post F T )
 
-    : Json s_send ( mcp_schema_obj )
+    : Json s_send ( __ag_sc oidc )
     ( mcp_schema_prop s_send `to` `string` `Agent name.` T )
     ( mcp_schema_prop s_send `body` `string` `Text, up to 16 KiB.` T )
     ( mcp_schema_prop s_send `reply_to` `integer` `Id of the message this answers.` F )
     ( __ag_def v `send` `Direct message to one agent.` s_send F T )
 
-    : Json s_hist ( mcp_schema_obj )
+    : Json s_hist ( __ag_sc oidc )
     ( mcp_schema_prop s_hist `channel` `string` `Channel, or @yourname for your mail.` T )
     ( mcp_schema_prop s_hist `before` `integer` `Ids below this (page back).` F )
     ( mcp_schema_prop s_hist `after` `integer` `Ids above this (page forward).` F )
@@ -755,32 +775,32 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( __ag_sc_max_body s_hist `0` )
     ( __ag_def v `history` `Re-read or search a channel (newest page unless after=); oldest first. Delivers nothing.` s_hist T T )
 
-    : Json s_msg ( mcp_schema_obj )
+    : Json s_msg ( __ag_sc oidc )
     ( mcp_schema_prop s_msg `id` `integer` `Message id.` T )
     ( __ag_def v `msg` `One message in full, by id.` s_msg T T )
 
-    ( __ag_def v `agents` `Who is here: last seen, status, about.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `agents` `Who is here: last seen, status, about.` ( __ag_sc oidc ) T T )
 
-    : Json s_status ( mcp_schema_obj )
+    : Json s_status ( __ag_sc oidc )
     ( mcp_schema_prop s_status `text` `string` `One line, e.g. "running san corpus, ETA 20m"; empty clears.` F )
     ( __ag_def v `status` `Say what you are doing now; agents shows it with its age.` s_status F T )
 
-    ( __ag_def v `channels` `Channels with purpose and message count.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `channels` `Channels with purpose and message count.` ( __ag_sc oidc ) T T )
 
-    : Json s_chc ( mcp_schema_obj )
+    : Json s_chc ( __ag_sc oidc )
     ( mcp_schema_prop s_chc `name` `string` AG_NAME_DESC T )
     ( mcp_schema_prop s_chc `about` `string` `What it is for.` F )
     ( __ag_def v `channel_create` `Create a channel and follow it.` s_chc F T )
 
-    : Json s_follow ( mcp_schema_obj )
-    ( mcp_schema_prop s_follow `channel` `string` `Channel name, or a repo's git URL.` T )
+    : Json s_follow ( __ag_sc oidc )
+    ( mcp_schema_prop s_follow `channel` `string` ? oidc `Channel name.` `Channel name, or a repo's git URL.` T )
     ( __ag_def v `follow` `Follow a channel: its new posts reach your brief.` s_follow F T )
 
-    : Json s_unfollow ( mcp_schema_obj )
+    : Json s_unfollow ( __ag_sc oidc )
     ( mcp_schema_prop s_unfollow `channel` `string` `Channel name.` T )
     ( __ag_def v `unfollow` `Stop following a channel.` s_unfollow F T )
 
-    : Json s_tp ( mcp_schema_obj )
+    : Json s_tp ( __ag_sc oidc )
     ( mcp_schema_prop s_tp `title` `string` `One line, max 200; default: ref's first line.` F )
     ( mcp_schema_prop s_tp `body` `string` `Details; default: ref's body.` F )
     ( mcp_schema_prop s_tp `tags` `string` `Comma-separated, e.g. "review,rust".` F )
@@ -788,7 +808,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( mcp_schema_prop s_tp `ref` `integer` `Message this task is made from (a finding, say); its author also gets the result.` F )
     ( __ag_def v `task_post` `Offer work others can claim; your mail tells you when it is claimed, done, released or cancelled.` s_tp F T )
 
-    : Json s_tasks ( mcp_schema_obj )
+    : Json s_tasks ( __ag_sc oidc )
     : Json which ( json_arr_new )
     ( json_arr_push which ( json_str_lit `open` ) )
     ( json_arr_push which ( json_str_lit `mine` ) )
@@ -800,52 +820,52 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( __ag_sc_limit s_tasks )
     ( __ag_def v `tasks` `List tasks.` s_tasks T T )
 
-    : Json s_task ( mcp_schema_obj )
+    : Json s_task ( __ag_sc oidc )
     ( __ag_sc_id s_task )
     ( __ag_def v `task` `One task in full: body, holder, lease, result.` s_task T T )
 
-    : Json s_claim ( mcp_schema_obj )
+    : Json s_claim ( __ag_sc oidc )
     ( __ag_sc_id s_claim )
     ( mcp_schema_prop s_claim `lease_s` `integer` `Seconds (default 600, max 86400); when it runs out the task reopens.` F )
     ( __ag_def v `task_claim` `Take an open task under a lease (atomic: one winner). Then task_done, or task_release.` s_claim F T )
 
-    : Json s_ext ( mcp_schema_obj )
+    : Json s_ext ( __ag_sc oidc )
     ( __ag_sc_id s_ext )
     ( mcp_schema_prop s_ext `lease_s` `integer` `Seconds from now (default 600, max 86400).` F )
     ( __ag_def v `task_extend` `Renew the lease on a task you hold.` s_ext F T )
 
-    : Json s_done ( mcp_schema_obj )
+    : Json s_done ( __ag_sc oidc )
     ( __ag_sc_id s_done )
     ( mcp_schema_prop s_done `result` `string` `What was done and where to find it.` T )
     ( __ag_def v `task_done` `Finish a task you hold; the poster gets the result.` s_done F T )
 
-    : Json s_rel ( mcp_schema_obj )
+    : Json s_rel ( __ag_sc oidc )
     ( __ag_sc_id s_rel )
     ( mcp_schema_prop s_rel `note` `string` `Why, and what the next holder should know.` F )
     ( __ag_def v `task_release` `Give back a task you hold; it is open again.` s_rel F T )
 
-    : Json s_cancel ( mcp_schema_obj )
+    : Json s_cancel ( __ag_sc oidc )
     ( __ag_sc_id s_cancel )
     ( __ag_def v `task_cancel` `Withdraw a task you posted; a holder is told.` s_cancel F T )
 
-    : Json s_ns ( mcp_schema_obj )
+    : Json s_ns ( __ag_sc oidc )
     ( mcp_schema_prop s_ns `key` `string` AG_NAME_DESC T )
     ( mcp_schema_prop s_ns `body` `string` `Text, up to 16 KiB; replaces what was there.` T )
-    ( __ag_sc_project s_ns )
+    ? oidc {} { ( __ag_sc_project s_ns ) }
     ( __ag_def v `note_set` `Write a shared note: a durable fact under a key.` s_ns F T )
 
-    : Json s_note ( mcp_schema_obj )
+    : Json s_note ( __ag_sc oidc )
     ( mcp_schema_prop s_note `key` `string` `Note key.` T )
-    ( __ag_sc_project s_note )
+    ? oidc {} { ( __ag_sc_project s_note ) }
     ( __ag_def v `note` `Read one note.` s_note T T )
 
-    : Json s_notes ( mcp_schema_obj )
-    ( mcp_schema_prop s_notes `project` `string` `Only this project's; omit for all (keys shown as project/key).` F )
+    : Json s_notes ( __ag_sc oidc )
+    ? oidc {} { ( mcp_schema_prop s_notes `project` `string` `Only this project's; omit for all (keys shown as project/key).` F ) }
     ( __ag_def v `notes` `List notes: keys, authors, ages (no bodies).` s_notes T T )
 
-    : Json s_nd ( mcp_schema_obj )
+    : Json s_nd ( __ag_sc oidc )
     ( mcp_schema_prop s_nd `key` `string` `Note key.` T )
-    ( __ag_sc_project s_nd )
+    ? oidc {} { ( __ag_sc_project s_nd ) }
     ( __ag_def v `note_del` `Delete a note.` s_nd F T )
 
     ^ v

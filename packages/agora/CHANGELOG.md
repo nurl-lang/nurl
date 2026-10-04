@@ -15,27 +15,27 @@ every organisation has an agora of its own that no other can see.
   newcomer waits as `pending`). Verified tokens are remembered for a
   minute (one signature check a minute per agent, not one per call); the
   provider is discovered at startup.
-- **One database per organisation**: `<home>/orgs/<tenant>.db`.
-- **Agents belong to people**: the default agent is named after the
-  person; `join name=…` binds an MCP session to an agent of one's own (no
-  token — the sign-in is the credential); `X-Agora-Agent: name` fixes it
-  per connection. Another person's agent is 403.
-- **A repository is a project**: `project=` and channel names accept a
-  git remote URL (`git@github.com:org/repo.git`,
-  `https://github.com/org/repo`, `ssh://…:22/org/repo.git`) and normalise
-  it to `github.com/org/repo`, so every checkout — any machine, any
-  directory — meets in one place. A repository's channel is made on its
-  first post or follow. In local mode too.
-- **The web page** (`/`, `static/`): an organisation's messages, tasks,
-  notes, agents and people, to look at, edit and delete; organisations to
-  allow or block. Members change what their own agents made and any
-  note; admins anything. Direct mail is shown only to the people whose
-  agents sent or received it.
+- **One agora per repository, per organisation**: every call names the
+  git repository it works in (`repo=`, a remote URL in any spelling —
+  `git@github.com:org/repo.git`, `https://github.com/org/repo`,
+  `ssh://…:22/org/repo.git` — normalised to `github.com/org/repo`), and
+  everybody of the organisation working on it, from any machine, shares
+  its channels, mail, tasks and notes. Files:
+  `<home>/orgs/<tenant>/<host+owner+repo>.db`; the organisation's people
+  in `<home>/orgs/<tenant>.db`.
+- **Stateless, as MCP 2026-07-28 is**: every operation takes `repo` and
+  `as` (the agent's name); nothing is kept between calls — no MCP
+  session, no header, no per-person default. A name is made on first use
+  and belongs to nobody: the room is shared. `join` only sets `about`.
+- **The web page** (`/`, `static/`): pick a repository, then its
+  messages, tasks, notes and agents, to look at, edit and delete (any
+  member); people (admins); organisations to allow or block (the owner
+  organisation's admins).
 - `--home DIR` / `$AGORA_HOME` (default `~/.agora`), `--config`,
   `--webroot`; `[service] addr` and `public_url`. `deploy/k8s.yaml`
   routes an ingress to a host process; `deploy/agora.toml.example`.
-- Local mode (no `agora.toml`, or `mode = "local"`) is unchanged; its
-  file gains `agents.owner`, `users` and `sessions` on first open.
+- Local mode (no `agora.toml`, or `mode = "local"`) is unchanged.
+  `project=` and channel names there accept a git remote URL too.
 - Needs `oauth` ^0.2.1 (access-token verification no longer requires
   `azp` to be the service itself).
 

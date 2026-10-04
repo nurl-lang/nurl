@@ -2,18 +2,17 @@
 //
 // A local agora is one file and one trust boundary: whoever can open
 // the file is everybody. A signed-in service (`[auth] mode = "oidc"`)
-// keeps one file per ORGANISATION and adds three things to it:
+// keeps, per ORGANISATION, one agora file per repository (store.nu's
+// schema; auth.nu picks the file) and one file of its people:
 //
 //   users     everyone who has signed in, with a role. The first person
 //             of an organisation becomes its admin — nobody else could
 //             have granted it, and an organisation with no admin could
 //             never be administered.
-//   owners    every agent belongs to the person who made it
-//             (agents.owner = the OIDC subject). A person acts as any of
-//             their own agents and as nobody else's.
-//   sessions  an MCP session (the Mcp-Session-Id the service handed out
-//             on `initialize`) → the agent `join` chose for it, so one
-//             signed-in person can run several agents at once.
+//
+// People and agents are not tied together: a repository's agora is one
+// shared room for everybody of the organisation who works on it, and an
+// agent is just the name a caller says it is (`as=`).
 //
 // Plus the editing a person does from the web page and an agent never
 // does: rewrite or delete a message, edit or delete a task, delete a
@@ -113,6 +112,29 @@ $ `store.nu`
         }
     }
     ^ out
+}
+
+// ── The organisation's file ──────────────────────────────────────────
+
+// Open (creating) an organisation's file of people at `path`.
+@ ag_orgdb_open s path → AgStore {
+    : String dir ( path_dirname path )
+    ? > ( string_len dir ) 0 {
+        ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → {} }
+    } {}
+    : AgStore st @ AgStore { ( string_from path ) T }
+    : ~ b ok F
+    ?? ( _ag_conn st ) {
+        F _ → {}
+        T db → {
+            ?? ( sqlite_exec db `PRAGMA journal_mode=WAL` ) { T _ → {} F _ → {} }
+            ?? ( sqlite_exec db `CREATE TABLE IF NOT EXISTS users (sub TEXT PRIMARY KEY, email TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created INTEGER NOT NULL, seen INTEGER NOT NULL)` ) {
+                T _ → { = ok T }
+                F _ → {}
+            }
+        }
+    }
+    ^ @ AgStore { ( string_from path ) ok }
 }
 
 // ── Users ────────────────────────────────────────────────────────────
@@ -222,76 +244,20 @@ $ `store.nu`
     ^ > ( _ag_exec_ss st `UPDATE users SET role = ?2 WHERE sub = ?1` sub role ) 0
 }
 
-// Forget a person: their row and their sessions. Their agents stay (the
-// messages they wrote are the organisation's record) but become nobody's
-// — an admin can delete them. The last admin cannot be removed.
+// Forget a person (the next sign-in makes them a member again — the
+// organisation's identity provider, not this list, says who may come).
+// What their agents wrote stays: it is the repository's record. The
+// last admin cannot be removed.
 @ ag_user_delete AgStore st s sub → b {
     : b is_admin != 0 ( nurl_str_eq ( string_data ( ag_user_role st sub ) ) AG_ROLE_ADMIN )
     ? & is_admin <= ( ag_admin_count st ) 1 { ^ F } {}
-    : ~ b ok F
-    ?? ( _ag_conn st ) {
-        F _ → {}
-        T db → {
-            ? ( _ag_begin db ) {} { ^ F }
-            = ok & & ( __ag_on_s db `DELETE FROM users WHERE sub = ?1` sub )
-            ( __ag_on_s db `DELETE FROM sessions WHERE sub = ?1` sub )
-            ( __ag_on_s db `UPDATE agents SET owner = '' WHERE owner = ?1` sub )
-            ? ok { = ok ( _ag_commit db ) } { ( _ag_rollback db ) }
-        }
-    }
-    ^ ok
+    ^ > ( __ag_exec_s st `DELETE FROM users WHERE sub = ?1` sub ) 0
 }
 
-// ── Agent ownership ──────────────────────────────────────────────────
-
-// Who an agent belongs to: None when there is no such agent, '' when
-// it is nobody's (a local agent, or its owner was removed).
-@ ag_agent_owner AgStore st s id → ?String {
-    : ~ b found F
-    : ~ String out ( string_new )
-    ?? ( _ag_conn st ) {
-        F _ → {}
-        T db → {
-            ?? ( sqlite_prepare db `SELECT owner FROM agents WHERE id = ?1` ) {
-                F _ → {}
-                T q → {
-                    ( _ag_bind_s q 1 id )
-                    ? ( _ag_row q ) {
-                        = out ( sqlite_column_text q 0 )
-                        = found T
-                    } {}
-                }
-            }
-        }
-    }
-    ? found { ^ @ ?String { T out } } {}
-    ^ @ ?String { F }
-}
-
-@ ag_agent_set_owner AgStore st s id s owner → b {
-    ^ > ( _ag_exec_ss st `UPDATE agents SET owner = ?2 WHERE id = ?1` id owner ) 0
-}
-
-// The agents `sub` owns, by name.
-@ ag_agents_owned AgStore st s sub → ( Vec String ) {
-    : ( Vec String ) out ( vec_new [String] )
-    ?? ( _ag_conn st ) {
-        F _ → {}
-        T db → {
-            ?? ( sqlite_prepare db `SELECT id FROM agents WHERE owner = ?1 ORDER BY seen DESC` ) {
-                F _ → {}
-                T q → {
-                    ( _ag_bind_s q 1 sub )
-                    ~ ( _ag_row q ) { ( vec_push [String] out ( sqlite_column_text q 0 ) ) }
-                }
-            }
-        }
-    }
-    ^ out
-}
+// ── Agents ───────────────────────────────────────────────────────────
 
 // Delete an agent: the row, what it follows and where it has read to,
-// its sessions and its mailbox. What it posted to channels stays — the
+// and its mailbox. What it posted to channels stays — the
 // other agents have read it and may refer to it. A task it held goes
 // back to open, as an expired lease would.
 @ ag_agent_delete AgStore st s id i now → b {
@@ -303,9 +269,8 @@ $ `store.nu`
             ? ( _ag_begin db ) {} { ^ F }
             = ok ( __ag_on_s db `DELETE FROM agents WHERE id = ?1` id )
             : b existed > ( sqlite_changes db ) 0
-            = ok & & & ok ( __ag_on_s db `DELETE FROM follows WHERE agent = ?1` id )
+            = ok & & ok ( __ag_on_s db `DELETE FROM follows WHERE agent = ?1` id )
             ( __ag_on_s db `DELETE FROM cursors WHERE agent = ?1` id )
-            ( __ag_on_s db `DELETE FROM sessions WHERE agent = ?1` id )
             = ok & ok ( __ag_on_s db `DELETE FROM messages WHERE channel = ?1` ( string_data mbox ) )
             ?? ( sqlite_prepare db `UPDATE tasks SET status = 'open', owner = '', lease_until = 0, updated = ?2 WHERE status = 'claimed' AND owner = ?1` ) {
                 F _ → { = ok F }
@@ -320,73 +285,6 @@ $ `store.nu`
         }
     }
     ^ ok
-}
-
-// ── Sessions ─────────────────────────────────────────────────────────
-
-// Bind MCP session `id` (opened by `sub`) to `agent`. A session id is
-// the service's own 128-bit random value, but it travels in a header:
-// one already bound to a DIFFERENT person is refused, never moved.
-@ ag_session_bind AgStore st s id s sub s agent i now → b {
-    : ~ b ok F
-    ?? ( _ag_conn st ) {
-        F _ → {}
-        T db → {
-            ? ( _ag_begin db ) {} { ^ F }
-            : ~ b foreign F
-            ?? ( sqlite_prepare db `SELECT sub FROM sessions WHERE id = ?1` ) {
-                F _ → {}
-                T q → {
-                    ( _ag_bind_s q 1 id )
-                    ? ( _ag_row q ) {
-                        : String who ( sqlite_column_text q 0 )
-                        = foreign == 0 ( nurl_str_eq ( string_data who ) sub )
-                    } {}
-                }
-            }
-            ? foreign {} {
-                ?? ( sqlite_prepare db `INSERT INTO sessions (id, sub, agent, created, seen) VALUES (?1, ?2, ?3, ?4, ?4) ON CONFLICT(id) DO UPDATE SET agent = ?3, seen = ?4` ) {
-                    F _ → {}
-                    T q → {
-                        ( _ag_bind_s q 1 id )
-                        ( _ag_bind_s q 2 sub )
-                        ( _ag_bind_s q 3 agent )
-                        ( _ag_bind_i q 4 now )
-                        = ok ( _ag_run q )
-                    }
-                }
-            }
-            ? ok { = ok ( _ag_commit db ) } { ( _ag_rollback db ) }
-        }
-    }
-    ^ ok
-}
-
-// The agent session `id` of `sub` acts as; '' when it has not joined.
-@ ag_session_agent AgStore st s id s sub → String {
-    : ~ String out ( string_new )
-    ?? ( _ag_conn st ) {
-        F _ → {}
-        T db → {
-            ?? ( sqlite_prepare db `SELECT agent FROM sessions WHERE id = ?1 AND sub = ?2` ) {
-                F _ → {}
-                T q → {
-                    ( _ag_bind_s q 1 id )
-                    ( _ag_bind_s q 2 sub )
-                    ? ( _ag_row q ) { = out ( sqlite_column_text q 0 ) } {}
-                }
-            }
-        }
-    }
-    ^ out
-}
-
-// Forget sessions nobody has bound since `before`.
-@ ag_sessions_prune AgStore st i before → v {
-    ?? ( _ag_conn st ) {
-        F _ → {}
-        T db → { ( __ag_on_i db `DELETE FROM sessions WHERE seen < ?1` before ) }
-    }
 }
 
 // ── Channels ─────────────────────────────────────────────────────────
@@ -440,25 +338,21 @@ $ `store.nu`
     ^ ok
 }
 
-// What a person sees of the messages, newest first: every channel post,
-// and the direct mail of their own agents — to or from them. Another
-// person's mail is theirs, whatever either person's role (`all` = every
-// mailbox too: the local mode, where one person is everybody). `channel`
-// '' = all channels; `text` '' = any body; `before` 0 = from the newest.
-@ ag_messages_for AgStore st s sub b all s channel s text i before i limit → ( Vec AgMsg ) {
+// The messages, newest first — channel posts and mail alike: the room is
+// shared by everybody in it. `channel` '' = all channels; `text` '' = any
+// body; `before` 0 = from the newest.
+@ ag_messages_list AgStore st s channel s text i before i limit → ( Vec AgMsg ) {
     : ( Vec AgMsg ) out ( vec_new [AgMsg] )
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id, channel, sender, body, reply_to, ts FROM messages WHERE (?2 = '' OR channel = ?2) AND (?3 = 0 OR id < ?3) AND (?4 = '' OR body LIKE ?4 ESCAPE '\\') AND (?6 = 1 OR substr(channel, 1, 1) != '@' OR substr(channel, 2) IN (SELECT id FROM agents WHERE owner = ?1 AND owner != '') OR sender IN (SELECT id FROM agents WHERE owner = ?1 AND owner != '')) ORDER BY id DESC LIMIT ?5` ) {
+            ?? ( sqlite_prepare db `SELECT id, channel, sender, body, reply_to, ts FROM messages WHERE (?2 = '' OR channel = ?2) AND (?3 = 0 OR id < ?3) AND (?4 = '' OR body LIKE ?4 ESCAPE '\\') ORDER BY id DESC LIMIT ?5` ) {
                 F _ → {}
                 T q → {
-                    ( _ag_bind_s q 1 sub )
                     ( _ag_bind_s q 2 channel )
                     ( _ag_bind_i q 3 before )
                     ( _ag_bind_str q 4 ( _ag_like_pat text ) )
                     ( _ag_bind_i q 5 limit )
-                    ( _ag_bind_i q 6 ? all 1 0 )
                     ~ ( _ag_row q ) { ( vec_push [AgMsg] out ( _ag_read_msg q ) ) }
                 }
             }
@@ -515,15 +409,14 @@ $ `store.nu`
     i tasks_open
     i tasks
     i notes
-    i users
 }
 
 @ ag_totals AgStore st → AgTotals {
-    : ~ AgTotals t @ AgTotals { 0 0 0 0 0 0 0 }
+    : ~ AgTotals t @ AgTotals { 0 0 0 0 0 0 }
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM agents), (SELECT COUNT(*) FROM channels), (SELECT COUNT(*) FROM messages WHERE substr(channel, 1, 1) != '@'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed')), (SELECT COUNT(*) FROM tasks), (SELECT COUNT(*) FROM notes), (SELECT COUNT(*) FROM users)` ) {
+            ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM agents), (SELECT COUNT(*) FROM channels), (SELECT COUNT(*) FROM messages WHERE substr(channel, 1, 1) != '@'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed')), (SELECT COUNT(*) FROM tasks), (SELECT COUNT(*) FROM notes)` ) {
                 F _ → {}
                 T q → {
                     ? ( _ag_row q ) {
@@ -534,7 +427,6 @@ $ `store.nu`
                             ( sqlite_column_int q 3 )
                             ( sqlite_column_int q 4 )
                             ( sqlite_column_int q 5 )
-                            ( sqlite_column_int q 6 )
                         }
                     } {}
                 }

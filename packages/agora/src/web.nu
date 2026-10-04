@@ -1,30 +1,25 @@
 // agora/src/web.nu — the signed-in service's HTTP surface.
 //
-// Three things live here, all of them about a PERSON rather than an
-// agent:
+// Three things live here:
 //
 //   resolution  An HTTP request with an OIDC bearer token → the person
-//               (auth.nu) → their organisation's store → the agent they
-//               act as. Which agent, in order: the `X-Agora-Agent`
-//               header (a fixed identity per configured connection);
-//               the agent `join` bound to this MCP session; the
-//               person's default agent (named after their e-mail). A
-//               name is created on first use and is then the person's;
-//               somebody else's name is refused, never borrowed.
-//   join        In signed-in mode the token is the credential, so `join`
-//               hands out no token: it chooses the agent for this MCP
-//               session (or, over REST, claims the name for the
-//               X-Agora-Agent header).
-//   /m/…        What the web page does: look at the organisation's
-//               agora, edit and delete. A member may change what their
-//               own agents wrote and every note (the notebook is shared
-//               by design); an admin may change anything of the
-//               organisation's. Direct mail is visible only to the
-//               people whose agents sent or received it — whatever
-//               their role.
+//               (auth.nu) → their organisation. The service keeps no
+//               state between calls (MCP 2026-07-28 has no sessions):
+//               every agent call names the REPOSITORY it works in
+//               (`repo=`, its git remote URL in any spelling) and the
+//               AGENT it is there (`as=`). The repository picks the
+//               agora — one per repository per organisation, shared by
+//               everybody of the organisation who works on it, from any
+//               machine — and the name is made on first use.
+//   join        Optional in signed-in mode: sets the agent's `about`.
+//   /m/…        What the web page does: look at a repository's agora
+//               (`?repo=`), edit and delete; manage the organisation's
+//               people (admins) and which organisations may sign in
+//               (admins of the owner organisation).
 //
 // In local mode the web page works too, as the one local administrator
-// (whoever can reach the port is whoever can open the file).
+// (whoever can reach the port is whoever can open the file); `repo` is
+// ignored there — the file is the one agora.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -36,8 +31,6 @@ $ `stdlib/ext/http_router.nu`
 $ `stdlib/ext/mcp_auth.nu`
 $ `api.nu`
 $ `auth.nu`
-
-: i AG_SESSION_KEEP_S 2592000  // an MCP session unused for 30 days is forgotten
 
 // ── Small HTTP helpers ───────────────────────────────────────────────
 
@@ -105,20 +98,39 @@ $ `auth.nu`
 : AgWho {
     i status  // 0 = signed in; else the HTTP status to answer with
     AgPrincipal who
-    AgStore st  // the organisation's store (local: the one file)
+    AgStore st  // the organisation's people (local: the one file)
+    AgStore rs  // the repository's agora (ag_who_in; local: the one file)
+    String repo  // its key ('' outside ag_who_in, and in local mode)
 }
 
-// The person behind a request and their organisation's store. Local
-// mode: the one local administrator and the one file.
+@ __ag_no_store → AgStore { ^ @ AgStore { ( string_new ) F } }
+
+// The person behind a request and their organisation. Local mode: the
+// one local administrator and the one file.
 @ ag_who HttpRequest req i now → AgWho {
-    ? ( ag_auth_oidc ) {} { ^ @ AgWho { 0 ( ag_principal_local ) ( ag_store ) } }
+    ? ( ag_auth_oidc ) {} { ^ @ AgWho { 0 ( ag_principal_local ) ( ag_store ) ( ag_store ) ( string_new ) } }
     : ~ String tok ( string_new )
     ?? ( mcp_auth_bearer_token req ) { T t → { = tok t } F _ → {} }
     : AgPrincipal p ( ag_auth_principal ( string_data tok ) now )
-    ? . p authed {} { ^ @ AgWho { 401 p @ AgStore { ( string_new ) F } } }
+    ? . p authed {} { ^ @ AgWho { 401 p ( __ag_no_store ) ( __ag_no_store ) ( string_new ) } }
     : AgStore st ( ag_org_store ( string_data . p org ) )
-    ? . st ok {} { ^ @ AgWho { 500 p st } }
-    ^ @ AgWho { 0 p st }
+    ? . st ok {} { ^ @ AgWho { 500 p st ( __ag_no_store ) ( string_new ) } }
+    ^ @ AgWho { 0 p st ( __ag_no_store ) ( string_new ) }
+}
+
+// The same, inside the repository the request's `?repo=` names.
+@ ag_who_in HttpRequest req i now → AgWho {
+    : AgWho w ( ag_who req now )
+    ? | != . w status 0 ! ( ag_auth_oidc ) { ^ w } {}
+    : String raw ( __ag_query req `repo` )
+    ?? ( ag_repo_key ( string_data raw ) ) {
+        F → { ^ @ AgWho { 400 . w who . w st ( __ag_no_store ) ( string_new ) } }
+        T k → {
+            : AgStore rs ( ag_repo_store ( string_data . . w who org ) ( string_data k ) )
+            ? . rs ok {} { ^ @ AgWho { 500 . w who . w st rs k } }
+            ^ @ AgWho { 0 . w who . w st rs k }
+        }
+    }
 }
 
 // The answer to a request whose AgWho is not 0.
@@ -131,108 +143,93 @@ $ `auth.nu`
         ( response_set_header r `WWW-Authenticate` `Bearer realm="agora"` )
         ^ r
     } {}
+    ? == . w status 400 { ^ ( ag_json_err 400 `repo= names the repository: a git remote URL or host/owner/repo` ) } {}
     ^ ( ag_json_err . w status `the organisation's database could not be opened` )
 }
 
 // ── Acting as an agent ───────────────────────────────────────────────
 
-// Make sure `name` is an agent of `p`: created (theirs) on first use,
-// accepted when it is already theirs. 0, or the HTTP status refusing it
-// (400 a bad name, 403 somebody else's, 500 the store failed).
-@ ag_agent_ensure AgStore st s sub s name i now → i {
-    ? ( ag_name_ok name ) {} { ^ 400 }
-    ?? ( ag_agent_owner st name ) {
-        T o → {
-            ? != 0 ( nurl_str_eq ( string_data o ) sub ) {
-                ( ag_agent_touch st name now )
-                ^ 0
-            } {}
-            ^ 403
+// A repository key from what a caller wrote (ag_project_norm: any remote
+// spelling → host/owner/repo); None for anything that is not a
+// repository (a plain name, a bad path, nothing).
+@ ag_repo_key s raw → ?String {
+    ?? ( ag_project_norm raw ) {
+        T k → { ? ( string_contains k `/` ) { ^ @ ?String { T k } } {} }
+        F → {}
+    }
+    ^ @ ?String { F }
+}
+
+: s AG_REPO_NEEDED `repo is required on every call: the git remote URL of the repository you work in (git remote get-url origin; any spelling, e.g. git@github.com:org/repo.git)`
+: s AG_AS_NEEDED `as is required on every call: your agent name in this repository (1-48 of a-z 0-9 . _ -), the same every time — others address you by it`
+
+// Make sure agent `name` exists in this agora (made on first use) and
+// mark it seen. A name is not anybody's: whoever in the organisation
+// says `as=name` in this repository is that agent.
+@ ag_agent_ensure AgStore st s name i now → b {
+    ?? ( ag_agent_get st name ) {
+        T _ → {
+            ( ag_agent_touch st name now )
+            ^ T
         }
         F → {}
     }
     : String tok ( rand_hex_str 32 )
     : String h ( ag_token_hash ( string_data tok ) )
-    ? ( ag_agent_create_from st name `` ( string_data h ) `` now ) {
-        ? ( ag_agent_set_owner st name sub ) { ^ 0 } {}
-        ^ 500
-    } {}
-    // Lost a race for the name: whoever won owns it now.
-    ?? ( ag_agent_owner st name ) {
-        T o2 → { ? != 0 ( nurl_str_eq ( string_data o2 ) sub ) { ^ 0 } {} ^ 403 }
-        F → { ^ 500 }
-    }
+    ? ( ag_agent_create_from st name `` ( string_data h ) `` now ) { ^ T } {}
+    // Lost a race for the name: it exists now, which is all we wanted.
+    ?? ( ag_agent_get st name ) { T _ → { ^ T } F → { ^ F } }
 }
 
-@ ag_agent_refusal i code s name → AgRes {
-    : String m ( string_new )
-    ? == code 400 {
-        ( string_push_str m `agent name must be ` )
+// Run op `name` for a signed-in person of organisation `org`: the
+// repository and the agent come from the call's own arguments.
+@ ag_oidc_call s org Json args s name i now → AgRes {
+    ? < ( ag_op_auth_kind name ) 0 {
+        ^ ( ag_op_call ( __ag_no_store ) ( ag_caller_anon ) name args now )
+    } {}
+    : String raw_repo ( _ag_arg_str args `repo` )
+    : ~ String repo ( string_new )
+    ?? ( ag_repo_key ( string_data raw_repo ) ) {
+        T k → { = repo k }
+        F → { ^ ( _ag_err 400 AG_REPO_NEEDED ) }
+    }
+    : String raw_as ( _ag_arg_str args `as` )
+    : String who ( string_to_lower raw_as )
+    ? == ( string_len who ) 0 { ^ ( _ag_err 400 AG_AS_NEEDED ) } {}
+    ? ( ag_name_ok ( string_data who ) ) {} {
+        : String m ( string_from `as must be ` )
         ( string_push_str m AG_NAME_RULE )
         ^ ( _ag_err_s 400 m )
-    } {}
-    ? == code 403 {
-        ( string_push_str m `agent '` )
-        ( string_push_str m name )
-        ( string_push_str m `' belongs to somebody else in this organisation — join under another name` )
-        ^ ( _ag_err_s 403 m )
-    } {}
-    ^ ( _ag_err 500 `could not record the agent` )
-}
-
-// Which agent a request acts as (not yet made sure of): the
-// X-Agora-Agent header, the MCP session's joined agent, the default.
-@ ag_agent_for HttpRequest req AgStore st AgPrincipal p s session → String {
-    : String hdr ( _ag_header req `x-agora-agent` )
-    ? > ( string_len hdr ) 0 { ^ ( string_to_lower hdr ) } {}
-    ? > ( nurl_str_len session ) 0 {
-        : String a ( ag_session_agent st session ( string_data . p sub ) )
-        ? > ( string_len a ) 0 { ^ a } {}
-    } {}
-    ^ ( ag_default_agent st p )
-}
-
-// `join` in signed-in mode: choose (and claim) the agent this session
-// acts as. No token: the sign-in is the credential.
-@ ag_oidc_join AgStore st s sub s session Json args i now → AgRes {
-    : String name ( _ag_arg_str args `name` )
-    : String about ( _ag_arg_str args `about` )
-    ? > ( string_len about ) 1024 { ^ ( _ag_err 400 `about: at most 1024 characters` ) } {}
-    : i code ( ag_agent_ensure st sub ( string_data name ) now )
-    ? == code 0 {} { ^ ( ag_agent_refusal code ( string_data name ) ) }
-    ? > ( string_len about ) 0 { ( ag_agent_set_about st ( string_data name ) ( string_data about ) ) } {}
-    : ~ b bound F
-    ? > ( nurl_str_len session ) 0 {
-        = bound ( ag_session_bind st session sub ( string_data name ) now )
-        ( ag_sessions_prune st - now AG_SESSION_KEEP_S )
-    } {}
-    : Json o ( json_obj_new )
-    ( json_obj_set o `agent` ( json_str_lit ( string_data name ) ) )
-    ( json_obj_set o `session` ( json_bool bound ) )
-    : String t ( string_from `joined as ` )
-    ( string_push_str t ( string_data name ) )
-    ? bound {
-        ( string_push_str t ` — this session acts as ` )
-        ( string_push_str t ( string_data name ) )
-        ( string_push_str t ` from now on. Call brief.\n` )
-    } {
-        ( string_push_str t ` — the name is yours; send X-Agora-Agent: ` )
-        ( string_push_str t ( string_data name ) )
-        ( string_push_str t ` to act as it.\n` )
     }
-    ^ ( _ag_ok o t )
-}
-
-// Run op `name` for a signed-in person acting as `agent`.
-@ ag_oidc_call AgStore st s sub s agent s session s name Json args i now → AgRes {
-    ? != 0 ( nurl_str_eq name `join` ) { ^ ( ag_oidc_join st sub session args now ) } {}
-    : i kind ( ag_op_auth_kind name )
-    ? == kind 1 {
-        : i code ( ag_agent_ensure st sub agent now )
-        ? == code 0 {} { ^ ( ag_agent_refusal code agent ) }
+    : AgStore st ( ag_repo_store org ( string_data repo ) )
+    ? . st ok {} { ^ ( _ag_err 500 `the repository's agora could not be opened` ) }
+    ? ( ag_agent_ensure st ( string_data who ) now ) {} { ^ ( _ag_err 500 `could not record the agent` ) }
+    ? != 0 ( nurl_str_eq name `join` ) {
+        : String about ( _ag_arg_str args `about` )
+        ? > ( string_len about ) 1024 { ^ ( _ag_err 400 `about: at most 1024 characters` ) } {}
+        ? > ( string_len about ) 0 { ( ag_agent_set_about st ( string_data who ) ( string_data about ) ) } {}
+        : Json o ( json_obj_new )
+        ( json_obj_set o `agent` ( json_str_lit ( string_data who ) ) )
+        ( json_obj_set o `repo` ( json_str_lit ( string_data repo ) ) )
+        : String t ( string_from `you are ` )
+        ( string_push_str t ( string_data who ) )
+        ( string_push_str t ` in ` )
+        ( string_push_str t ( string_data repo ) )
+        ( string_push_str t ` — pass repo=` )
+        ( string_push_str t ( string_data repo ) )
+        ( string_push_str t ` as=` )
+        ( string_push_str t ( string_data who ) )
+        ( string_push_str t ` on every call. Call brief.\n` )
+        ^ ( _ag_ok o t )
     } {}
-    : AgCaller c @ AgCaller { T ( string_from agent ) }
-    : AgRes r ( ag_op_call st c name args now )
+    : AgCaller c @ AgCaller { T ( string_from ( string_data who ) ) }
+    : ~ AgRes r ( ag_op_call st c name args now )
+    ? & < . r status 400 != 0 ( nurl_str_eq name `whoami` ) {
+        ( string_push_str . r text `repo: ` )
+        ( string_push_str . r text ( string_data repo ) )
+        ( string_push_str . r text `\n` )
+        ( json_obj_set . r body `repo` ( json_str_lit ( string_data repo ) ) )
+    } {}
     ^ r
 }
 
@@ -289,30 +286,9 @@ $ `auth.nu`
 
 // ── /m: the web page's API ───────────────────────────────────────────
 
-// Does `sub` own agent `agent`? (Local mode: the administrator owns all.)
-@ __ag_owns ( Vec String ) mine s agent → b {
-    : i n ( vec_len [String] mine )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] mine k ) {
-            T a → { ? != 0 ( nurl_str_eq ( string_data a ) agent ) { ^ T } {} }
-            F _ → {}
-        }
-        = k + k 1
-    }
-    ^ F
-}
-
-// May `w`'s person change something an agent named `author` made?
-@ __ag_may_change AgWho w s author → b {
-    ? ( ag_principal_is_admin . w who ) { ^ T } {}
-    : ( Vec String ) mine ( ag_agents_owned . w st ( string_data . . w who sub ) )
-    ^ ( __ag_owns mine author )
-}
-
-@ __ag_forbidden → HttpResponse {
-    ^ ( ag_json_err 403 `not yours: a member changes what their own agents made (and any note); an admin changes anything of the organisation's` )
-}
+// Inside a repository's agora everybody of the organisation may change
+// anything — it is one shared room. Administration (people,
+// organisations) is the admins'.
 
 @ __ag_is_owner_admin AgWho w → b {
     ? ( ag_auth_oidc ) {} { ^ F }
@@ -320,10 +296,11 @@ $ `auth.nu`
     ^ != 0 ( nurl_str_eq ( string_data . . w who org ) ( ag_auth_owner ) )
 }
 
-// GET /m/me
+// GET /m/me[?repo=] — who is signed in; with a repository, its counts.
 @ ag_h_me HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : b in_repo | ! ( ag_auth_oidc ) > ( string_len ( __ag_query req `repo` ) ) 0
+    : AgWho w ? in_repo ( ag_who_in req now ) ( ag_who req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `mode` ( json_str_lit ? ( ag_auth_oidc ) `oidc` `local` ) )
@@ -334,41 +311,49 @@ $ `auth.nu`
     ( json_obj_set o `role` ( json_str_lit ( string_data . . w who role ) ) )
     ( json_obj_set o `is_admin` ( json_bool ( ag_principal_is_admin . w who ) ) )
     ( json_obj_set o `is_owner_admin` ( json_bool ( __ag_is_owner_admin w ) ) )
-    : ( Vec String ) mine ( ag_agents_owned . w st ( string_data . . w who sub ) )
-    : Json arr ( json_arr_new )
-    : i n ( vec_len [String] mine )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] mine k ) { T a → { ( json_arr_push arr ( json_str_lit ( string_data a ) ) ) } F _ → {} }
-        = k + k 1
-    }
-    ( json_obj_set o `agents` arr )
-    ? ( ag_auth_oidc ) {
-        : String dflt ( ag_default_agent . w st . w who )
-        ( json_obj_set o `default_agent` ( json_str_lit ( string_data dflt ) ) )
-    } {}
-    : AgTotals t ( ag_totals . w st )
+    ( json_obj_set o `repo` ( json_str_lit ( string_data . w repo ) ) )
     : Json tj ( json_obj_new )
-    ( json_obj_set tj `agents` ( json_int . t agents ) )
-    ( json_obj_set tj `channels` ( json_int . t channels ) )
-    ( json_obj_set tj `messages` ( json_int . t messages ) )
-    ( json_obj_set tj `tasks_open` ( json_int . t tasks_open ) )
-    ( json_obj_set tj `tasks` ( json_int . t tasks ) )
-    ( json_obj_set tj `notes` ( json_int . t notes ) )
-    ( json_obj_set tj `users` ( json_int . t users ) )
+    ? in_repo {
+        : AgTotals t ( ag_totals . w rs )
+        ( json_obj_set tj `agents` ( json_int . t agents ) )
+        ( json_obj_set tj `channels` ( json_int . t channels ) )
+        ( json_obj_set tj `messages` ( json_int . t messages ) )
+        ( json_obj_set tj `tasks_open` ( json_int . t tasks_open ) )
+        ( json_obj_set tj `tasks` ( json_int . t tasks ) )
+        ( json_obj_set tj `notes` ( json_int . t notes ) )
+    } {}
+    ( json_obj_set tj `users` ( json_int ( vec_len [AgUser] ( ag_users . w st ) ) ) )
     ( json_obj_set o `totals` tj )
     ( json_obj_set o `version` ( json_str_lit AG_VERSION ) )
     ^ ( __ag_json_ok o )
 }
 
-// GET /m/agents — every agent of the organisation, with whose it is.
-@ ag_h_agents HttpRequest req Params p → HttpResponse {
+// GET /m/repos — the repositories the organisation has an agora for.
+@ ag_h_repos HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
     : AgWho w ( ag_who req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
-    : ( Vec AgUser ) users ( ag_users . w st )
-    : ( Vec AgAgent ) v ( ag_agents . w st )
-    : b admin ( ag_principal_is_admin . w who )
+    : Json arr ( json_arr_new )
+    : Json out ( json_obj_new )
+    ? ( ag_auth_oidc ) {
+        : ( Vec String ) v ( ag_org_repos ( string_data . . w who org ) )
+        : i n ( vec_len [String] v )
+        : ~ i k 0
+        ~ < k n {
+            ?? ( vec_get [String] v k ) { T r → { ( json_arr_push arr ( json_str_lit ( string_data r ) ) ) } F _ → {} }
+            = k + k 1
+        }
+    } { ( json_obj_set out `local` ( json_bool T ) ) }
+    ( json_obj_set out `repos` arr )
+    ^ ( __ag_json_ok out )
+}
+
+// GET /m/agents?repo= — every agent of the repository's agora.
+@ ag_h_agents HttpRequest req Params p → HttpResponse {
+    : i now ( now_seconds )
+    : AgWho w ( ag_who_in req now )
+    ? == . w status 0 {} { ^ ( ag_who_deny w ) }
+    : ( Vec AgAgent ) v ( ag_agents . w rs )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgAgent] v )
     : ~ i k 0
@@ -382,20 +367,7 @@ $ `auth.nu`
                 ( json_obj_set o `status_at` ( json_int . a status_at ) )
                 ( json_obj_set o `created` ( json_int . a created ) )
                 ( json_obj_set o `seen` ( json_int . a seen ) )
-                : ~ String owner_email ( string_new )
-                : i nu ( vec_len [AgUser] users )
-                : ~ i j 0
-                ~ < j nu {
-                    ?? ( vec_get [AgUser] users j ) {
-                        T u → { ? != 0 ( nurl_str_eq ( string_data . u sub ) ( string_data . a owner ) ) { = owner_email ( string_from ( string_data . u email ) ) } {} }
-                        F _ → {}
-                    }
-                    = j + j 1
-                }
-                ( json_obj_set o `owner` ( json_str_lit ( string_data owner_email ) ) )
-                : b mine & > ( string_len . a owner ) 0 != 0 ( nurl_str_eq ( string_data . a owner ) ( string_data . . w who sub ) )
-                ( json_obj_set o `mine` ( json_bool mine ) )
-                ( json_obj_set o `may_change` ( json_bool | admin mine ) )
+                ( json_obj_set o `may_change` ( json_bool T ) )
                 ( json_arr_push arr o )
             }
             F _ → {}
@@ -410,33 +382,31 @@ $ `auth.nu`
 // PUT /m/agents/:id {about}  ·  DELETE /m/agents/:id
 @ ag_h_agent_put HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String id ( __ag_param req p `id` )
-    ? ( __ag_may_change w ( string_data id ) ) {} { ^ ( __ag_forbidden ) }
     : Json b ( __ag_body_obj req )
     : String about ( _ag_arg_str b `about` )
     ? > ( string_len about ) 1024 { ^ ( ag_json_err 400 `about: at most 1024 characters` ) } {}
-    ? ( ag_agent_set_about . w st ( string_data id ) ( string_data about ) ) {} { ^ ( ag_json_err 404 `no such agent` ) }
+    ? ( ag_agent_set_about . w rs ( string_data id ) ( string_data about ) ) {} { ^ ( ag_json_err 404 `no such agent` ) }
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 @ ag_h_agent_del HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String id ( __ag_param req p `id` )
-    ? ( __ag_may_change w ( string_data id ) ) {} { ^ ( __ag_forbidden ) }
-    ? ( ag_agent_delete . w st ( string_data id ) now ) {} { ^ ( ag_json_err 404 `no such agent` ) }
+    ? ( ag_agent_delete . w rs ( string_data id ) now ) {} { ^ ( ag_json_err 404 `no such agent` ) }
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // GET /m/channels
 @ ag_h_channels HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
-    : ( Vec AgChannel ) v ( ag_channels . w st )
+    : ( Vec AgChannel ) v ( ag_channels . w rs )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgChannel] v )
     : ~ i k 0
@@ -460,36 +430,34 @@ $ `auth.nu`
     ^ ( __ag_json_ok out )
 }
 
-// DELETE /m/channels?name= — the channel and everything in it. (A query
-// parameter: a repository's channel has '/' in its name.)
+// DELETE /m/channels?repo=&name= — the channel and everything in it. (A
+// query parameter: a channel may have '/' in its name.)
 @ ag_h_channel_del HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String name ( __ag_query req `name` )
     ? != 0 ( nurl_str_eq ( string_data name ) `public` ) { ^ ( ag_json_err 400 `public cannot be deleted: every agent follows it` ) } {}
-    : ~ String by ( string_new )
-    : ( Vec AgChannel ) v ( ag_channels . w st )
+    : ( Vec AgChannel ) v ( ag_channels . w rs )
     : i n ( vec_len [AgChannel] v )
     : ~ b found F
     : ~ i k 0
     ~ < k n {
         ?? ( vec_get [AgChannel] v k ) {
-            T c → { ? != 0 ( nurl_str_eq ( string_data . c name ) ( string_data name ) ) { = by ( string_from ( string_data . c created_by ) ) = found T } {} }
+            T c → { ? != 0 ( nurl_str_eq ( string_data . c name ) ( string_data name ) ) { = found T } {} }
             F _ → {}
         }
         = k + k 1
     }
     ? found {} { ^ ( ag_json_err 404 `no such channel` ) }
-    ? ( __ag_may_change w ( string_data by ) ) {} { ^ ( __ag_forbidden ) }
-    ? ( ag_channel_delete . w st ( string_data name ) ) {} { ^ ( ag_json_err 500 `could not delete the channel` ) }
+    ? ( ag_channel_delete . w rs ( string_data name ) ) {} { ^ ( ag_json_err 500 `could not delete the channel` ) }
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
 // GET /m/messages?channel=&q=&before=&limit= — newest first.
 @ ag_h_messages HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String channel ( __ag_query req `channel` )
     : String q ( __ag_query req `q` )
@@ -498,10 +466,7 @@ $ `auth.nu`
     : i before ( nurl_str_to_int ( string_data bs ) )
     : ~ i limit ( nurl_str_to_int ( string_data ls ) )
     ? | <= limit 0 > limit 500 { = limit 100 } {}
-    : b all ! ( ag_auth_oidc )
-    : ( Vec AgMsg ) v ( ag_messages_for . w st ( string_data . . w who sub ) all ( string_data channel ) ( string_data q ) before limit )
-    : b admin ( ag_principal_is_admin . w who )
-    : ( Vec String ) mine ( ag_agents_owned . w st ( string_data . . w who sub ) )
+    : ( Vec AgMsg ) v ( ag_messages_list . w rs ( string_data channel ) ( string_data q ) before limit )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgMsg] v )
     : ~ i k 0
@@ -509,7 +474,7 @@ $ `auth.nu`
         ?? ( vec_get [AgMsg] v k ) {
             T m → {
                 : Json o ( _ag_msg_json m 0 )
-                ( json_obj_set o `may_change` ( json_bool | admin ( __ag_owns mine ( string_data . m sender ) ) ) )
+                ( json_obj_set o `may_change` ( json_bool T ) )
                 ( json_arr_push arr o )
             }
             F _ → {}
@@ -521,35 +486,21 @@ $ `auth.nu`
     ^ ( __ag_json_ok out )
 }
 
-// May `w` see message `m`? Channel posts: yes. Mail: only the people
-// whose agents sent or received it (local mode: the administrator).
-@ __ag_may_see AgWho w AgMsg m → b {
-    ? ( ag_auth_oidc ) {} { ^ T }
-    : s ch ( string_data . m channel )
-    ? == ( nurl_str_get ch 0 ) 64 {} { ^ T }
-    : ( Vec String ) mine ( ag_agents_owned . w st ( string_data . . w who sub ) )
-    ? ( __ag_owns mine ( string_data . m sender ) ) { ^ T } {}
-    : String to ( string_substr . m channel 1 - ( string_len . m channel ) 1 )
-    ^ ( __ag_owns mine ( string_data to ) )
-}
-
 // PUT /m/messages/:id {body}  ·  DELETE /m/messages/:id
 @ ag_h_message_put HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String ids ( __ag_param req p `id` )
     : i id ( nurl_str_to_int ( string_data ids ) )
-    ?? ( ag_msg_get . w st id ) {
+    ?? ( ag_msg_get . w rs id ) {
         F _ → { ^ ( ag_json_err 404 `no such message` ) }
         T m → {
-            ? ( __ag_may_see w m ) {} { ^ ( ag_json_err 404 `no such message` ) }
-            ? ( __ag_may_change w ( string_data . m sender ) ) {} { ^ ( __ag_forbidden ) }
             : Json b ( __ag_body_obj req )
             : String body ( _ag_arg_str b `body` )
             ? == ( string_len body ) 0 { ^ ( ag_json_err 400 `body is empty — delete the message instead` ) } {}
             ? > ( string_len body ) AG_BODY_MAX { ^ ( ag_json_err 400 `body: at most 16 KiB` ) } {}
-            ? ( ag_msg_set_body . w st id ( string_data body ) ) {} { ^ ( ag_json_err 500 `could not save the message` ) }
+            ? ( ag_msg_set_body . w rs id ( string_data body ) ) {} { ^ ( ag_json_err 500 `could not save the message` ) }
             ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
@@ -557,16 +508,14 @@ $ `auth.nu`
 
 @ ag_h_message_del HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String ids ( __ag_param req p `id` )
     : i id ( nurl_str_to_int ( string_data ids ) )
-    ?? ( ag_msg_get . w st id ) {
+    ?? ( ag_msg_get . w rs id ) {
         F _ → { ^ ( ag_json_err 404 `no such message` ) }
         T m → {
-            ? ( __ag_may_see w m ) {} { ^ ( ag_json_err 404 `no such message` ) }
-            ? ( __ag_may_change w ( string_data . m sender ) ) {} { ^ ( __ag_forbidden ) }
-            ? ( ag_msg_delete . w st id ) {} { ^ ( ag_json_err 500 `could not delete the message` ) }
+            ? ( ag_msg_delete . w rs id ) {} { ^ ( ag_json_err 500 `could not delete the message` ) }
             ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
@@ -575,13 +524,11 @@ $ `auth.nu`
 // GET /m/tasks?status=all|open|done|…
 @ ag_h_tasks HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : ~ String which ( __ag_query req `status` )
     ? == ( string_len which ) 0 { = which ( string_from `all` ) } {}
-    : ( Vec AgTask ) v ( ag_tasks . w st ( string_data which ) `` `` 500 now )
-    : b admin ( ag_principal_is_admin . w who )
-    : ( Vec String ) mine ( ag_agents_owned . w st ( string_data . . w who sub ) )
+    : ( Vec AgTask ) v ( ag_tasks . w rs ( string_data which ) `` `` 500 now )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgTask] v )
     : ~ i k 0
@@ -589,7 +536,7 @@ $ `auth.nu`
         ?? ( vec_get [AgTask] v k ) {
             T t → {
                 : Json o ( _ag_task_json t )
-                ( json_obj_set o `may_change` ( json_bool | admin ( __ag_owns mine ( string_data . t poster ) ) ) )
+                ( json_obj_set o `may_change` ( json_bool T ) )
                 ( json_arr_push arr o )
             }
             F _ → {}
@@ -604,14 +551,13 @@ $ `auth.nu`
 // PUT /m/tasks/:id {title, body, tags, priority, status}  ·  DELETE
 @ ag_h_task_put HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String ids ( __ag_param req p `id` )
     : i id ( nurl_str_to_int ( string_data ids ) )
-    ?? ( ag_task_get . w st id now ) {
+    ?? ( ag_task_get . w rs id now ) {
         F _ → { ^ ( ag_json_err 404 `no such task` ) }
         T t → {
-            ? ( __ag_may_change w ( string_data . t poster ) ) {} { ^ ( __ag_forbidden ) }
             : Json b ( __ag_body_obj req )
             : ~ String title ( _ag_arg_str b `title` )
             ? == ( string_len title ) 0 { = title ( string_from ( string_data . t title ) ) } {}
@@ -630,7 +576,7 @@ $ `auth.nu`
             : i prio ( _ag_arg_int b `priority` . t priority )
             : ~ String status ( _ag_arg_str b `status` )
             ? == ( string_len status ) 0 { = status ( string_from ( string_data . t status ) ) } {}
-            ? ( ag_task_edit . w st id ( string_data title ) ( string_data body ) ( string_data tags ) prio ( string_data status ) now ) {} {
+            ? ( ag_task_edit . w rs id ( string_data title ) ( string_data body ) ( string_data tags ) prio ( string_data status ) now ) {} {
                 ^ ( ag_json_err 400 `status must be open, claimed, done or cancelled` )
             }
             ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
@@ -640,24 +586,23 @@ $ `auth.nu`
 
 @ ag_h_task_del HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String ids ( __ag_param req p `id` )
     : i id ( nurl_str_to_int ( string_data ids ) )
-    ?? ( ag_task_get . w st id now ) {
+    ?? ( ag_task_get . w rs id now ) {
         F _ → { ^ ( ag_json_err 404 `no such task` ) }
         T t → {
-            ? ( __ag_may_change w ( string_data . t poster ) ) {} { ^ ( __ag_forbidden ) }
-            ? ( ag_task_delete . w st id ) {} { ^ ( ag_json_err 500 `could not delete the task` ) }
+            ? ( ag_task_delete . w rs id ) {} { ^ ( ag_json_err 500 `could not delete the task` ) }
             ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
         }
     }
 }
 
-// GET /m/notes?project= — with bodies; no project = every note.
+// GET /m/notes?repo=[&project=] — with bodies; no project = every note.
 @ ag_h_notes HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String raw ( __ag_query req `project` )
     : b all == ( string_len raw ) 0
@@ -665,7 +610,7 @@ $ `auth.nu`
     ? all {} {
         ?? ( ag_project_norm ( string_data raw ) ) { T pr → { = project pr } F → { ^ ( ag_json_err 400 `bad project` ) } }
     }
-    : ( Vec AgNote ) v ( ag_notes . w st ( string_data project ) all T )
+    : ( Vec AgNote ) v ( ag_notes . w rs ( string_data project ) all T )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgNote] v )
     : ~ i k 0
@@ -678,11 +623,10 @@ $ `auth.nu`
     ^ ( __ag_json_ok out )
 }
 
-// PUT /m/notes {project, key, body} — the shared notebook: any member.
-// The author becomes the person's default agent.
+// PUT /m/notes?repo= {key, body, project?} — the author is the person.
 @ ag_h_note_put HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : Json b ( __ag_body_obj req )
     : String key ( _ag_arg_str b `key` )
@@ -693,27 +637,23 @@ $ `auth.nu`
     : String body ( _ag_arg_str b `body` )
     ? > ( string_len body ) AG_BODY_MAX { ^ ( ag_json_err 400 `body: at most 16 KiB` ) } {}
     : ~ String author ( string_from `web` )
-    ? ( ag_auth_oidc ) {
-        = author ( ag_default_agent . w st . w who )
-        : i code ( ag_agent_ensure . w st ( string_data . . w who sub ) ( string_data author ) now )
-        ? == code 0 {} { = author ( string_from `web` ) }
-    } {}
-    ? ( ag_note_set . w st ( string_data project ) ( string_data key ) ( string_data body ) ( string_data author ) now ) {} {
+    ? ( ag_auth_oidc ) { = author ( string_from ( string_data . . w who email ) ) } {}
+    ? ( ag_note_set . w rs ( string_data project ) ( string_data key ) ( string_data body ) ( string_data author ) now ) {} {
         ^ ( ag_json_err 500 `could not save the note` )
     }
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 
-// DELETE /m/notes?project=&key=
+// DELETE /m/notes?repo=&key=[&project=]
 @ ag_h_note_del HttpRequest req Params p → HttpResponse {
     : i now ( now_seconds )
-    : AgWho w ( ag_who req now )
+    : AgWho w ( ag_who_in req now )
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
     : String key ( __ag_query req `key` )
     : String raw ( __ag_query req `project` )
     : ~ String project ( string_new )
     ?? ( ag_project_norm ( string_data raw ) ) { T pr → { = project pr } F → { ^ ( ag_json_err 400 `bad project` ) } }
-    ? ( ag_note_del . w st ( string_data project ) ( string_data key ) ) {} { ^ ( ag_json_err 404 `no such note` ) }
+    ? ( ag_note_del . w rs ( string_data project ) ( string_data key ) ) {} { ^ ( ag_json_err 404 `no such note` ) }
     ^ ( __ag_json_ok ( _ag_obj_int `ok` 1 ) )
 }
 

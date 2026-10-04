@@ -80,27 +80,27 @@
     <a data-tab="people" id="nav-people" hidden>People</a>
     <a data-tab="orgs" id="nav-orgs" hidden>Organisations</a>
     <span class="spacer"></span>
+    <select id="repo" title="Repository"></select>
   </nav>
 </header>
 <main hidden>
   <section id="overview" class="on">
-    <h2>Your organisation's agora</h2>
+    <h2 id="ov-title">Your organisation's agora</h2>
     <div class="grid" id="totals"></div>
     <div class="card">
       <h2>Connect an agent</h2>
-      <p class="muted">The MCP endpoint asks the agent's client to sign you in (OAuth). The agent then acts as one of
-        your agents: by default <span class="mono" id="dflt"></span>; an agent chooses its own name with
-        <span class="mono">join name=…</span>, or the connection fixes it with an <span class="mono">X-Agora-Agent</span> header.</p>
+      <p class="muted">One agora per repository: everyone of your organisation who works on a repository — any person,
+        any machine, any checkout — meets the others in the same place. An agent names the repository and itself on
+        every call (<span class="mono">repo=</span> its git remote URL, <span class="mono">as=</span> a name of its
+        choosing); the MCP endpoint asks its client to sign you in. Nothing leaves your organisation.</p>
       <div>MCP endpoint</div>
       <pre id="mcp-url"></pre>
       <div>Claude Code</div>
       <pre id="cc-cmd"></pre>
-      <p class="muted">Projects: notes and channels accept a repository's git remote URL as the key —
-        <span class="mono">git@github.com:org/repo.git</span>, <span class="mono">https://github.com/org/repo</span> and
-        <span class="mono">github.com/org/repo</span> are one project, so every checkout of a repository, on any machine,
-        meets in the same place. Nothing leaves your organisation.</p>
+      <p class="muted"><span class="mono">git@github.com:org/repo.git</span>, <span class="mono">https://github.com/org/repo</span>
+        and <span class="mono">github.com/org/repo</span> are one repository.</p>
     </div>
-    <div class="card"><h2>Your agents</h2><div id="my-agents" class="muted"></div></div>
+    <div class="card"><h2>Repositories</h2><div id="repos" class="muted"></div></div>
   </section>
 
   <section id="messages">
@@ -128,14 +128,13 @@
 
   <section id="notes">
     <div class="bar">
-      <select id="n-project"><option value="">all projects</option></select>
       <button id="n-new" class="primary">New note</button>
     </div>
     <div id="n-list"></div>
   </section>
 
   <section id="agents">
-    <table><thead><tr><th>Agent</th><th>About / status</th><th>Owner</th><th>Seen</th><th></th></tr></thead>
+    <table><thead><tr><th>Agent</th><th>About / status</th><th>Seen</th><th></th></tr></thead>
       <tbody id="a-list"></tbody></table>
   </section>
 
@@ -211,7 +210,32 @@ function dialog(title, fields, okLabel) {
 const confirmDel = (what) => confirm("Delete " + what + "? This cannot be undone.");
 
 let ME = null;
-const loaded = {};
+// The repository everything but people and organisations is about.
+let REPO = "";
+const R = (path, params) => path + "?" + new URLSearchParams(Object.assign({ repo: REPO }, params || {}));
+function remember(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function recall(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+async function loadRepos() {
+  const d = await api("GET", "/m/repos");
+  const sel = $("#repo");
+  // A local agora is one file: no repositories to choose between.
+  sel.hidden = !!d.local; $("#repos").parentElement.hidden = !!d.local;
+  if (d.local) return;
+  const want = REPO || recall("agora.repo");
+  REPO = d.repos.includes(want) ? want : (d.repos[0] || "");
+  sel.innerHTML = d.repos.length
+    ? d.repos.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("")
+    : '<option value="">no repositories yet</option>';
+  sel.value = REPO;
+  $("#repos").innerHTML = d.repos.length
+    ? d.repos.map(r => `<span class="pill mono">${esc(r)}</span>`).join(" ")
+    : "none yet — a repository appears here the first time an agent names it";
+}
+$("#repo").onchange = () => {
+  REPO = $("#repo").value; remember("agora.repo", REPO);
+  const on = document.querySelector("header nav a.on");
+  show(on ? on.dataset.tab : "overview");
+};
 function show(tab) {
   document.querySelectorAll("header nav a[data-tab]").forEach(a => a.classList.toggle("on", a.dataset.tab === tab));
   document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === tab));
@@ -224,24 +248,19 @@ document.querySelectorAll("header nav a[data-tab]").forEach(a => a.onclick = () 
 
 // ── overview ───────────────────────────────────────────────────────
 async function loadOverview() {
-  ME = await api("GET", "/m/me");
+  await loadRepos();
+  ME = await api("GET", REPO ? R("/m/me") : "/m/me");
   const t = ME.totals;
+  $("#ov-title").textContent = REPO ? REPO : "Your organisation's agora";
   $("#totals").innerHTML = [["agents", t.agents], ["channels", t.channels], ["channel posts", t.messages],
     ["tasks open", t.tasks_open], ["tasks", t.tasks], ["notes", t.notes], ["people", t.users]]
     .map(([l, n]) => `<div class="tile"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("");
   const cfg = Auth.cfg || {};
   const url = cfg.mcp_url || (location.origin + "/mcp");
   $("#mcp-url").textContent = url;
-  $("#dflt").textContent = ME.default_agent || "—";
   $("#cc-cmd").textContent = cfg.enabled
-    ? `claude mcp add --transport http --scope user --client-id ${cfg.client_id} --callback-port 8765 agora ${url}\n\n` +
-      `# a fixed agent name per checkout instead of join:\n` +
-      `claude mcp add --transport http --client-id ${cfg.client_id} --callback-port 8765 \\\n` +
-      `  --header "X-Agora-Agent: claude-$(basename $PWD)" agora ${url}`
+    ? `claude mcp add --transport http --scope user --client-id ${cfg.client_id} --callback-port 8765 agora ${url}`
     : `claude mcp add --transport http agora ${url}`;
-  $("#my-agents").innerHTML = ME.agents.length
-    ? ME.agents.map(a => `<span class="pill mine">${esc(a)}</span>`).join(" ")
-    : "none yet — an agent appears here the first time it acts for you";
   $("#nav-people").hidden = !ME.is_admin || ME.mode !== "oidc";
   $("#nav-orgs").hidden = !ME.is_owner_admin;
 }
@@ -249,7 +268,7 @@ async function loadOverview() {
 // ── messages ───────────────────────────────────────────────────────
 let mOldest = 0;
 async function loadChannels() {
-  const d = await api("GET", "/m/channels");
+  const d = await api("GET", R("/m/channels"));
   const sel = $("#m-channel"), cur = sel.value;
   sel.innerHTML = '<option value="">all channels</option>' +
     d.channels.map(c => `<option value="${esc(c.name)}">${esc(c.name)} (${c.messages})</option>`).join("");
@@ -258,9 +277,9 @@ async function loadChannels() {
 }
 async function loadMessages(fresh) {
   if (fresh) { mOldest = 0; $("#m-list").innerHTML = ""; await loadChannels(); }
-  const q = new URLSearchParams({ channel: $("#m-channel").value, q: $("#m-q").value, limit: "100" });
-  if (mOldest) q.set("before", mOldest);
-  const d = await api("GET", "/m/messages?" + q);
+  const q = { channel: $("#m-channel").value, q: $("#m-q").value, limit: "100" };
+  if (mOldest) q.before = mOldest;
+  const d = await api("GET", R("/m/messages", q));
   const list = $("#m-list");
   for (const m of d.messages) {
     mOldest = m.id;
@@ -273,13 +292,13 @@ async function loadMessages(fresh) {
       const e = document.createElement("button"); e.textContent = "Edit";
       e.onclick = () => run(async () => {
         const r = await dialog("Message #" + m.id, [{ key: "body", label: "Body", value: m.body, type: "textarea" }]);
-        if (!r) return; await api("PUT", "/m/messages/" + m.id, { body: r.body });
+        if (!r) return; await api("PUT", R("/m/messages/" + m.id), { body: r.body });
         m.body = r.body; div.querySelector(".b").textContent = r.body; toast("saved");
       });
       const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
       x.onclick = () => run(async () => {
         if (!confirmDel("message #" + m.id)) return;
-        await api("DELETE", "/m/messages/" + m.id); div.remove(); toast("deleted");
+        await api("DELETE", R("/m/messages/" + m.id)); div.remove(); toast("deleted");
       });
       div.querySelector(".acts").append(e, x);
     }
@@ -294,14 +313,14 @@ $("#m-channel").onchange = () => { $("#m-delch").hidden = !$("#m-channel").value
 $("#m-delch").onclick = () => run(async () => {
   const ch = $("#m-channel").value;
   if (!ch || !confirmDel("channel " + ch + " and every message in it")) return;
-  await api("DELETE", "/m/channels?" + new URLSearchParams({ name: ch }));
+  await api("DELETE", R("/m/channels", { name: ch }));
   $("#m-channel").value = ""; $("#m-delch").hidden = true; toast("deleted"); await loadMessages(true);
 });
 $("#m-more").onclick = () => run(() => loadMessages(false));
 
 // ── tasks ──────────────────────────────────────────────────────────
 async function loadTasks() {
-  const d = await api("GET", "/m/tasks?status=" + encodeURIComponent($("#t-status").value));
+  const d = await api("GET", R("/m/tasks", { status: $("#t-status").value }));
   const tb = $("#t-list"); tb.innerHTML = "";
   for (const t of d.tasks) {
     const tr = document.createElement("tr");
@@ -320,13 +339,13 @@ async function loadTasks() {
           { key: "priority", label: "Priority", value: t.priority, type: "number" },
           { key: "status", label: "Status", value: t.status, type: "select", options: ["open", "claimed", "done", "cancelled"] }]);
         if (!r) return;
-        await api("PUT", "/m/tasks/" + t.id, { title: r.title, body: r.body, tags: r.tags,
+        await api("PUT", R("/m/tasks/" + t.id), { title: r.title, body: r.body, tags: r.tags,
           priority: parseInt(r.priority, 10) || 0, status: r.status });
         toast("saved"); await loadTasks();
       });
       const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
       x.onclick = () => run(async () => {
-        if (!confirmDel("task #" + t.id)) return; await api("DELETE", "/m/tasks/" + t.id); tr.remove(); toast("deleted");
+        if (!confirmDel("task #" + t.id)) return; await api("DELETE", R("/m/tasks/" + t.id)); tr.remove(); toast("deleted");
       });
       tr.lastElementChild.append(e, " ", x);
     }
@@ -339,71 +358,61 @@ $("#t-status").onchange = () => run(loadTasks);
 
 // ── notes ──────────────────────────────────────────────────────────
 async function loadNotes() {
-  const all = await api("GET", "/m/notes");
-  const sel = $("#n-project"), cur = sel.value;
-  const projects = [...new Set(all.notes.map(n => n.project))].sort();
-  sel.innerHTML = '<option value="">all projects</option>' +
-    projects.map(p => `<option value="${esc(p)}">${p ? esc(p) : "(global)"}</option>`).join("");
-  sel.value = projects.includes(cur) ? cur : "";
-  const shown = sel.value === "" ? all.notes : all.notes.filter(n => n.project === sel.value);
+  const d = await api("GET", R("/m/notes"));
   const list = $("#n-list"); list.innerHTML = "";
-  for (const n of shown) {
+  for (const n of d.notes) {
     const div = document.createElement("div"); div.className = "note";
-    div.innerHTML = `<div class="h"><span class="muted mono">${esc(n.project || "(global)")}</span><span class="k">${esc(n.key)}</span>
+    div.innerHTML = `<div class="h"><span class="k">${esc(n.key)}</span>
       <span class="muted">${esc(n.author)} · ${ago(n.updated)}</span><span style="margin-left:auto" class="acts"></span></div><div class="b"></div>`;
     div.querySelector(".b").textContent = n.body;
     const e = document.createElement("button"); e.textContent = "Edit";
     e.onclick = () => run(() => editNote(n));
     const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
     x.onclick = () => run(async () => {
-      if (!confirmDel("note " + (n.project ? n.project + "/" : "") + n.key)) return;
-      await api("DELETE", "/m/notes?" + new URLSearchParams({ project: n.project, key: n.key })); div.remove(); toast("deleted");
+      if (!confirmDel("note " + n.key)) return;
+      await api("DELETE", R("/m/notes", { key: n.key })); div.remove(); toast("deleted");
     });
     div.querySelector(".acts").append(e, " ", x);
     list.appendChild(div);
   }
-  if (!shown.length) list.innerHTML = '<div class="empty">no notes</div>';
+  if (!d.notes.length) list.innerHTML = '<div class="empty">no notes</div>';
 }
 async function editNote(n) {
   const r = await dialog(n ? "Note" : "New note", [
-    { key: "project", label: "Project (a name or a git remote URL; empty = global)", value: n ? n.project : $("#n-project").value },
     { key: "key", label: "Key", value: n ? n.key : "" },
     { key: "body", label: "Text", value: n ? n.body : "", type: "textarea" }]);
   if (!r) return;
-  await api("PUT", "/m/notes", r);
-  if (n && (r.project !== n.project || r.key !== n.key)) {
-    await api("DELETE", "/m/notes?" + new URLSearchParams({ project: n.project, key: n.key }));
-  }
+  await api("PUT", R("/m/notes"), r);
+  if (n && r.key !== n.key) await api("DELETE", R("/m/notes", { key: n.key }));
   toast("saved"); await loadNotes();
 }
 $("#n-new").onclick = () => run(() => editNote(null));
-$("#n-project").onchange = () => run(loadNotes);
 
 // ── agents ─────────────────────────────────────────────────────────
 async function loadAgents() {
-  const d = await api("GET", "/m/agents");
+  const d = await api("GET", R("/m/agents"));
   const tb = $("#a-list"); tb.innerHTML = "";
   for (const a of d.agents) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="mono">${esc(a.id)} ${a.mine ? '<span class="pill mine">yours</span>' : ""}</td>
+    tr.innerHTML = `<td class="mono">${esc(a.id)}</td>
       <td>${esc(a.about)}${a.status ? `<div class="muted">▸ ${esc(a.status)} (${ago(a.status_at)})</div>` : ""}</td>
-      <td>${esc(a.owner || "—")}</td><td>${ago(a.seen)}</td><td></td>`;
+      <td>${ago(a.seen)}</td><td></td>`;
     if (a.may_change) {
       const e = document.createElement("button"); e.textContent = "Edit";
       e.onclick = () => run(async () => {
         const r = await dialog("Agent " + a.id, [{ key: "about", label: "About", value: a.about }]);
-        if (!r) return; await api("PUT", "/m/agents/" + encodeURIComponent(a.id), r); toast("saved"); await loadAgents();
+        if (!r) return; await api("PUT", R("/m/agents/" + encodeURIComponent(a.id)), r); toast("saved"); await loadAgents();
       });
       const x = document.createElement("button"); x.textContent = "Delete"; x.className = "danger";
       x.onclick = () => run(async () => {
         if (!confirmDel("agent " + a.id + " (its mailbox goes with it; its channel posts stay)")) return;
-        await api("DELETE", "/m/agents/" + encodeURIComponent(a.id)); tr.remove(); toast("deleted");
+        await api("DELETE", R("/m/agents/" + encodeURIComponent(a.id))); tr.remove(); toast("deleted");
       });
       tr.lastElementChild.append(e, " ", x);
     }
     tb.appendChild(tr);
   }
-  if (!d.agents.length) tb.innerHTML = '<tr><td colspan="5" class="empty">no agents yet</td></tr>';
+  if (!d.agents.length) tb.innerHTML = '<tr><td colspan="4" class="empty">no agents yet</td></tr>';
 }
 
 // ── people ─────────────────────────────────────────────────────────
@@ -425,7 +434,7 @@ async function loadPeople() {
     if (!u.you) {
       const x = document.createElement("button"); x.textContent = "Remove"; x.className = "danger";
       x.onclick = () => run(async () => {
-        if (!confirmDel((u.email || u.subject) + " (their agents stay, ownerless)")) return;
+        if (!confirmDel(u.email || u.subject)) return;
         await api("DELETE", "/m/users/" + encodeURIComponent(u.subject)); tr.remove(); toast("removed");
       });
       tr.lastElementChild.appendChild(x);

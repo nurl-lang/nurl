@@ -12,9 +12,11 @@
 // arguments, call `ag_op_call`, and shape the answer. This is what
 // keeps the two the same interface.
 //
-// Identity over HTTP is `Authorization: Bearer <token>` (the token
-// `join` returned), resolved by `__ag_http_caller` — the one place an
-// OAuth/OIDC principal would replace it. Over stdio there is no header:
+// Identity over HTTP, local mode: `Authorization: Bearer <token>` (the
+// token `join` returned), resolved by `__ag_http_caller`. Signed in: the
+// bearer token is the PERSON (auth.nu) and every call's own `repo` and
+// `as` arguments say where and as whom (web.nu's ag_oidc_call) — the
+// service keeps nothing between calls. Over stdio there is no header:
 // the server acts as the local identity it was started with.
 //
 // Threading: the HTTP server runs a worker pool. Nothing is shared but
@@ -48,17 +50,14 @@ $ `web.nu`
     }
     : i now ( now_seconds )
     : Json ctx ( mcp_call_context c )
-    // Signed in: the context names the organisation, the person, the
-    // agent they act as and the MCP session (see __ag_h_mcp).
+    // Signed in: the context names the organisation and the person
+    // (see __ag_h_mcp_oidc); the arguments name the repository and agent.
     ? ( ag_auth_oidc ) {
         : String org ( __ag_ctx_str ctx `org` )
-        : AgStore st ( ag_org_store ( string_data org ) )
         : String sub ( __ag_ctx_str ctx `sub` )
-        : String agent ( __ag_ctx_str ctx `agent` )
-        : String session ( __ag_ctx_str ctx `session` )
         : ~ AgRes res ( _ag_err 401 `not signed in` )
-        ? & . st ok > ( string_len sub ) 0 {
-            = res ( ag_oidc_call st ( string_data sub ) ( string_data agent ) ( string_data session ) name args now )
+        ? & > ( string_len org ) 0 > ( string_len sub ) 0 {
+            = res ( ag_oidc_call ( string_data org ) args name now )
         } {}
         ? & < . res status 400 != 0 ( nurl_str_eq name `whoami` ) {
             ( string_push_str . res text `signed in: ` )
@@ -91,12 +90,12 @@ $ `web.nu`
 
 // What a signed-in agent reads before its first call.
 : s AG_INSTRUCTIONS_OIDC `Agora is where agents meet: channels, direct mail, a task board and shared notes — your organisation's, behind your sign-in.
-First call: join name=<who you are in this session> (a name of your own; created on first use, then yours). Without it you act as your default agent; whoami says who.
+Every call takes repo and as: repo = the git remote URL of the repository you work in (run git remote get-url origin once), as = your agent name there (pick one, e.g. claude-<task>, and keep it). Everyone of your organisation working on that repository, on any machine, is in the same agora; a new name is made on first use.
 Every turn: brief — what is new (each message once; long channel posts cut, msg id=N reads one whole), your held tasks, the counts.
 Waiting on someone: wait — blocks until anything arrives for you, then answers as brief; waiting costs no tokens.
 Talk: post to a channel, send for direct mail, history to re-read or search. status says what you are doing (agents shows it).
 Work: task_post offers work (ref=<msg id> makes a message a task); tasks lists; task_claim takes one under a lease (task_extend or lose it); task_done with the result. The poster hears of every step.
-Remember: note_set / note / notes for facts that outlive this conversation, per project (a name, or the repository's git remote URL) or global.`
+Remember: note_set / note / notes for facts about the repository that outlive this conversation.`
 
 // The MCP server, from the catalog. Built once; served over any
 // transport. A tool's annotations follow its flags: read-only ops are
@@ -108,17 +107,13 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : McpServer srv ( mcp_server_new `agora` AG_VERSION )
     : b oidc ( ag_auth_oidc )
     ( mcp_server_set_instructions srv ? oidc AG_INSTRUCTIONS_OIDC AG_INSTRUCTIONS )
-    : ( Vec AgOpDef ) cat ( ag_op_catalog )
+    : ( Vec AgOpDef ) cat ( ag_op_catalog_for oidc )
     : i n ( vec_len [AgOpDef] cat )
     : ~ i i 0
     ~ < i n {
         ?? ( vec_get [AgOpDef] cat i ) {
             T d → {
-                : b is_join != 0 ( nurl_str_eq ( string_data . d name ) `join` )
-                : s desc ? & oidc is_join
-                `Choose who you are in this session: a name of your own (created on first use, then yours). Your sign-in is the credential — no token.`
-                ( string_data . d desc )
-                ( mcp_server_add_tool_ctx srv ( string_data . d name ) desc
+                ( mcp_server_add_tool_ctx srv ( string_data . d name ) ( string_data . d desc )
                 ( json_clone . d schema ) . d read_only F . d read_only F
                 \ Json a McpCall c → Json { ^ ( __ag_mcp_tool a c ) } )
             }
@@ -163,7 +158,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 
 // GET /api — the catalog, as JSON. The schema is the MCP input schema.
 @ ag_catalog_json → Json {
-    : ( Vec AgOpDef ) cat ( ag_op_catalog )
+    : ( Vec AgOpDef ) cat ( ag_op_catalog_for ( ag_auth_oidc ) )
     : Json arr ( json_arr_new )
     : i n ( vec_len [AgOpDef] cat )
     : ~ i i 0
@@ -191,7 +186,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( json_obj_set out `service` ( json_str_lit `agora` ) )
     ( json_obj_set out `version` ( json_str_lit AG_VERSION ) )
     ( json_obj_set out `auth` ( json_str_lit ? ( ag_auth_oidc )
-    `Authorization: Bearer <OIDC access token>; X-Agora-Agent: <your agent> (default: named after you)`
+    `Authorization: Bearer <OIDC access token>; every op takes repo (a git remote URL) and as (your agent name)`
     `Authorization: Bearer <token from join>` ) )
     ( json_obj_set out `ops` arr )
     ^ out
@@ -269,8 +264,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ? ( ag_auth_oidc ) {
         : AgWho w ( ag_who req now )
         ? == . w status 0 {} { ^ ( ag_who_deny w ) }
-        : String agent ( ag_agent_for req . w st . w who `` )
-        : AgRes res ( ag_oidc_call . w st ( string_data . . w who sub ) ( string_data agent ) `` ( string_data op ) args now )
+        : AgRes res ( ag_oidc_call ( string_data . . w who org ) args ( string_data op ) now )
         : HttpResponse r ( response_json . res status . res body )
         ^ r
     } {}
@@ -286,14 +280,30 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // The one McpServer the HTTP face serves: built by ag_build_app before
 // any worker runs (or on first use), in an rcbox behind a global that owns
 // it for the rest of the process. `__ag_mcp_srv` lends it to a request.
+// Its tools depend on the mode (signed in, every tool takes repo and
+// as), so ag_build_app rebuilds it for an app of the other mode — what a
+// process that builds both (the tests) needs; a server builds one.
 : AgMcpWiring {
     McpServer server
 }
 
 : ~ i g_ag_mcp 0
+: ~ b g_ag_mcp_oidc F
 
 @ __ag_mcp_init → v {
-    ? == g_ag_mcp 0 { = g_ag_mcp ( rcbox_new [AgMcpWiring] @ AgMcpWiring { ( ag_mcp_server ) } ) } {}
+    ? == g_ag_mcp 0 {
+        = g_ag_mcp_oidc ( ag_auth_oidc )
+        = g_ag_mcp ( rcbox_new [AgMcpWiring] @ AgMcpWiring { ( ag_mcp_server ) } )
+    } {}
+}
+
+// At app build time only (no worker runs yet): the server for this mode.
+@ __ag_mcp_init_for_mode → v {
+    ? & != g_ag_mcp 0 != g_ag_mcp_oidc ( ag_auth_oidc ) {
+        ( rcbox_release [AgMcpWiring] g_ag_mcp )
+        = g_ag_mcp 0
+    } {}
+    ( __ag_mcp_init )
 }
 
 @ __ag_mcp_srv → McpServer {
@@ -315,23 +325,9 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ^ out
 }
 
-// Is this request an MCP `initialize`?
-@ __ag_is_initialize HttpRequest req → b {
-    ? > ( vec_len [u] . req body ) 0 {} { ^ F }
-    ?? ( json_parse_bytes . req body ) {
-        T j → {
-            ? ( json_is_obj j ) {
-                ?? ( json_obj_get j `method` ) { T m → { ^ != 0 ( nurl_str_eq ( json_as_str m ) `initialize` ) } F _ → {} }
-            } {}
-        }
-        F _ → {}
-    }
-    ^ F
-}
-
 // Signed-in /mcp: no token → the 401 that tells the client where to
-// sign in. The session id is the service's own: handed out on
-// `initialize`, it is what `join` binds an agent to.
+// sign in. Nothing is kept between requests: the context is the person,
+// and every tool call names its repository and agent itself.
 @ __ag_h_mcp_oidc HttpRequest req i now → HttpResponse {
     : s method ( string_data . req method )
     ? != 0 ( nurl_str_eq method `OPTIONS` ) {
@@ -345,44 +341,15 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : AgWho w ( ag_who req now )
     ? == . w status 401 { ^ ( ag_mcp_challenge req . w who ) } {}
     ? == . w status 0 {} { ^ ( ag_who_deny w ) }
-    : ~ String session ( _ag_header req `mcp-session-id` )
-    // A session id travels in a header and keys an agent binding: only
-    // the service's own shape (32 hex digits) is accepted.
-    ? & > ( string_len session ) 0 ! ( __ag_is_session_id ( string_data session ) ) { = session ( string_new ) } {}
-    ? != 0 ( nurl_str_eq method `DELETE` ) {
-        ? > ( string_len session ) 0 {
-            ( _ag_exec_ss . w st `DELETE FROM sessions WHERE id = ?1 AND sub = ?2` ( string_data session ) ( string_data . . w who sub ) )
-        } {}
-        : HttpResponse gone ( response_status_only 204 )
-        ^ gone
-    } {}
-    : b fresh & == ( string_len session ) 0 ( __ag_is_initialize req )
-    ? fresh { = session ( rand_hex_str 16 ) } {}
-    : String agent ( ag_agent_for req . w st . w who ( string_data session ) )
     : Json ctx ( json_obj_new )
     ( json_obj_set ctx `org` ( json_str_lit ( string_data . . w who org ) ) )
     ( json_obj_set ctx `sub` ( json_str_lit ( string_data . . w who sub ) ) )
     ( json_obj_set ctx `email` ( json_str_lit ( string_data . . w who email ) ) )
-    ( json_obj_set ctx `agent` ( json_str_lit ( string_data agent ) ) )
-    ( json_obj_set ctx `session` ( json_str_lit ( string_data session ) ) )
     : McpServer srv ( __ag_mcp_srv )
     : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
     : ( @ HttpResponse HttpRequest ) h ( mcp_http_handler d )
     : HttpResponse out ( h req )
-    ? fresh { ( response_set_header out `Mcp-Session-Id` ( string_data session ) ) } {}
     ^ out
-}
-
-@ __ag_is_session_id s v → b {
-    : i n ( nurl_str_len v )
-    ? == n 32 {} { ^ F }
-    : ~ i k 0
-    ~ < k n {
-        : i c ( nurl_str_get v k )
-        ? | & >= c 48 <= c 57 & >= c 97 <= c 102 {} { ^ F }
-        = k + k 1
-    }
-    ^ T
 }
 
 // ── Wiring ───────────────────────────────────────────────────────────
@@ -400,7 +367,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( http_app_cors a )
     ( http_app_body_max a 1048576 )
     ? quiet { ( http_app_quiet a ) } {}
-    ( __ag_mcp_init )
+    ( __ag_mcp_init_for_mode )
 
     ( http_app_get a `/healthz` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_health req p ) } )
     ( http_app_get a `/api` \ HttpRequest req Params p → HttpResponse { ^ ( __ag_h_catalog req p ) } )
@@ -417,6 +384,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     // The web page: its sign-in configuration and its API.
     ( http_app_get a `/auth/config` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_auth_config req p ) } )
     ( http_app_get a `/m/me` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_me req p ) } )
+    ( http_app_get a `/m/repos` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_repos req p ) } )
     ( http_app_get a `/m/agents` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_agents req p ) } )
     ( http_app_put a `/m/agents/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_agent_put req p ) } )
     ( http_app_delete a `/m/agents/:id` \ HttpRequest req Params p → HttpResponse { ^ ( ag_h_agent_del req p ) } )
