@@ -99,8 +99,12 @@ CLASSES = [
         "expect": REJECT_STRICT,
         # (A store into an aggregate is a definite handover since v1: the
         # second free is reported by default, with its own wording.)
+        # (#1162: a second name is an alias partner, and a use of either
+        # after the other was consumed on some path is "use of possibly-
+        # moved value … may share its buffer with …", reported by default.)
         "expect_msg": ["use of moved value", "may already be freed",
-                       "its value was stored into an owner"],
+                       "its value was stored into an owner",
+                       "use of possibly-moved value"],
         "spellings": {
             # Covered as of #899.
             "let-alias": prog(
@@ -358,7 +362,8 @@ CLASSES = [
                "must never differ is `accept` versus either of them, "
                "which is what definition order used to decide.",
         "expect": REJECT_STRICT,
-        "expect_msg": ["use of moved value", "may already be freed"],
+        "expect_msg": ["use of moved value", "may already be freed",
+                       "use of possibly-moved value"],
         "spellings": {
             "sink-above": prog(
                 "    : ( Vec i ) v ( vec_new [i] )\n"

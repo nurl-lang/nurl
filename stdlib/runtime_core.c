@@ -2779,6 +2779,18 @@ char *nurl_strdup(const char *s) {
     memcpy(p, s, n);
     return p;
 }
+/* nurl_strdup for a source whose length the caller already holds: no
+ * strlen. A symbol table caches every value's length, and its reads copy
+ * values out by the million in a compile. The first n bytes of src are
+ * copied and a NUL appended; src must have at least n readable bytes. */
+char *nurl_strdup_n(const char *s, long long n) {
+    if (!s) return NULL;
+    if (n < 0) n = 0;
+    char *p = (char *)nurl_alloc(n + 1);
+    memcpy(p, s, (size_t)n);
+    p[n] = 0;
+    return p;
+}
 long long nurl_alloc_count(void)               { return (long long)nurl__actr_total(0); }
 long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
@@ -2914,12 +2926,15 @@ static __thread NurlSlotEntry *nurl__jslot = NULL;
 NURL_TLS_HOT size_t nurl__jslot_len = 0;
 static __thread size_t nurl__jslot_cap = 0;
 
-static size_t nurl__jrnl_bucket(void *p) {
-    uint64_t h = (uint64_t)(uintptr_t)p;
-    h ^= h >> 30; h *= UINT64_C(0xbf58476d1ce4e5b9);
-    h ^= h >> 27; h *= UINT64_C(0x94d049bb133111eb);
-    h ^= h >> 31;
-    return (size_t)h & (nurl__jrnl_cap * 2 - 1);
+/* Fibonacci hashing: one multiply, then the TOP log2(2*cap) bits, which
+ * every input bit reaches (the low bits of an allocator's pointers are
+ * constant). Every registration and every free inside a recover extent
+ * hashes, so the full 64-bit mixer this replaced was a fifth of the
+ * journal's cost. cap is a power of two >= 32 whenever buckets exist, and
+ * 64 - log2(2*cap) == clz(cap). */
+static inline size_t nurl__jrnl_bucket(void *p) {
+    uint64_t h = (uint64_t)(uintptr_t)p * UINT64_C(0x9e3779b97f4a7c15);
+    return (size_t)(h >> __builtin_clzll((unsigned long long)nurl__jrnl_cap));
 }
 
 static void nurl__jrnl_reindex(void) {
@@ -2932,8 +2947,11 @@ static void nurl__jrnl_reindex(void) {
     }
 }
 
+/* Out of line and cold: inlined into the registration it made every
+ * registration save and restore six callee-saved registers for a branch
+ * taken once per doubling. */
+__attribute__((noinline, cold))
 static void nurl__jrnl_grow(void) {
-    if (nurl__jrnl_len < nurl__jrnl_cap) return;
     if (nurl__jrnl_cap && nurl__jrnl_live <= nurl__jrnl_cap / 2) {
         /* FIFO churn leaves holes below live entries. Compact only after at
          * least half the capacity was removed; this amortizes the copy and
@@ -2969,7 +2987,7 @@ static void nurl__journal_thread_exit(void) {
  * register, instead of paying this body's prologue to learn that. */
 __attribute__((noinline))
 static void nurl__jrnl_push2_slow(void *p, void (*drop)(void*), const unsigned char *flag) {
-    nurl__jrnl_grow();
+    if (__builtin_expect(nurl__jrnl_len >= nurl__jrnl_cap, 0)) nurl__jrnl_grow();
     if (nurl__jrnl_sequence == UINT64_MAX) {
         fputs("nurl: panic journal sequence exhausted\n", stderr);
         abort();
@@ -3029,24 +3047,66 @@ static void nurl__jrnl_pop_nulls(void) {
         --nurl__jrnl_len;
 }
 
+/* While a panic drains the journal, every buffer it frees is recorded, and
+ * a second free of the same address in that drain is skipped. Owned
+ * string bindings are registered per frame by SLOT (nurl_jframe_drop),
+ * not by pointer, and a slot can hold an address some other registration
+ * also reaches (a value placed in a struct the drain also drops): the
+ * pointer journal removes every alias of an address in one step, a slot
+ * cannot — the drain's own record does it instead. The drain marks the
+ * journal live for its duration so every nurl_free reaches the check. */
+static __thread int     nurl__draining = 0;
+static __thread void  **nurl__dseen = NULL;
+static __thread size_t  nurl__dseen_n = 0, nurl__dseen_cap = 0;
+/* Record `p` as freed by this drain; 1 when it already was. */
+static int nurl__drain_seen(void *p) {
+    if (nurl__dseen_n * 2 >= nurl__dseen_cap) {
+        size_t cap = nurl__dseen_cap ? nurl__dseen_cap * 2 : 64;
+        void **t = (void **)calloc(cap, sizeof *t);
+        for (size_t i = 0; i < nurl__dseen_cap; i++) {
+            void *q = nurl__dseen[i];
+            if (!q) continue;
+            size_t h = (size_t)(((uint64_t)(uintptr_t)q * UINT64_C(0x9e3779b97f4a7c15)) >> 32) & (cap - 1);
+            while (t[h]) h = (h + 1) & (cap - 1);
+            t[h] = q;
+        }
+        free(nurl__dseen);
+        nurl__dseen = t; nurl__dseen_cap = cap;
+    }
+    size_t h = (size_t)(((uint64_t)(uintptr_t)p * UINT64_C(0x9e3779b97f4a7c15)) >> 32) & (nurl__dseen_cap - 1);
+    while (nurl__dseen[h]) {
+        if (nurl__dseen[h] == p) return 1;
+        h = (h + 1) & (nurl__dseen_cap - 1);
+    }
+    nurl__dseen[h] = p;
+    nurl__dseen_n++;
+    return 0;
+}
+
 /* Remove all aliases; normal frees and explicit ownership transfers share
  * this operation. Bucket links are stable until growth or compaction.
  * Inline into nurl_free (which already knows the journal is non-empty);
  * out of line behind nurl_journal_forget's early return. */
 static inline void nurl__jrnl_forget_body(void *p) {
     size_t *link = &nurl__jrnl_buckets[nurl__jrnl_bucket(p)];
+    int removed = 0;
     while (*link) {
         NurlJournalEntry *entry = &nurl__jrnl[*link - 1];
         if (entry->ptr == p) {
             *link = entry->next;
             entry->ptr = NULL;
             --nurl__jrnl_live;
+            removed = 1;
         } else link = &entry->next;
     }
-    nurl__jrnl_pop_nulls();
+    /* Only a removal can leave a hole at the tail. Most frees inside a
+     * recover extent are of buffers the journal never held (a free with
+     * nothing registered at its address), and re-checking the tail for
+     * each of them was a tenth of the journal's whole cost. */
+    if (removed) nurl__jrnl_pop_nulls();
 }
 __attribute__((noinline))
-static void nurl__jrnl_forget_slow(void *p) { nurl__jrnl_forget_body(p); }
+static void nurl__jrnl_forget_slow(void *p) { if (nurl__jrnl_cap) nurl__jrnl_forget_body(p); }
 NURL_TLS_WRAP void nurl_journal_forget(void *p) {
     if (__builtin_expect(!NURL_TLS_LD(size_t, nurl__jrnl_live), 1) || !p) return;
     nurl__jrnl_forget_slow(p);
@@ -3066,8 +3126,52 @@ NURL_TLS_WRAP void nurl_journal_forget_slot(void *slot) {
     if (__builtin_expect(!NURL_TLS_LD(size_t, nurl__jslot_len), 1) || !slot) return;
     nurl__jslot_forget_slow(slot);
 }
-static inline void nurl__jrnl_remove(void *p) { if (nurl__jrnl_live) nurl__jrnl_forget_body(p); }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }
+
+/* A function's owned string bindings, registered as ONE slot entry.
+ *
+ * The compiler gives every function that owns string bindings a frame
+ * table `[n+1 x ptr]`: word 0 holds n, word k the address of binding k's
+ * slot once it holds an owned value (null before). The table is registered
+ * at entry with nurl_journal_push_drop2(table, NULL, nurl_jframe_drop) and
+ * forgotten before every `ret`. A binding's slot holds exactly what its
+ * scope exit will free — a hand-off to a callee nulls it, a release nulls
+ * it — so a panic frees each registered slot's current value, which is
+ * what the scope exits would have freed. Registering a binding is then one
+ * store into the table instead of a hashed pointer registration per value
+ * (and a hashed removal at its free): a self-compile spent most of its
+ * journal time there. */
+NURL_TLS_FN void nurl_jframe_drop(void *table) {
+    void **f = (void **)table;
+    size_t n = (size_t)(uintptr_t)f[0];
+    for (size_t k = 1; k <= n; k++) {
+        void **sp = (void **)f[k];
+        if (!sp) continue;
+        void *p = *sp;
+        if (!p) continue;
+        *sp = NULL;
+        nurl_free(p);
+    }
+}
+
+/* An owned value leaves through a struct (stored into a longer-lived
+ * owner, returned): forget its pointer registration, and unregister every
+ * frame slot that currently holds it — the binding's slot keeps the
+ * address (it may still be read), but a panic must not free it. The
+ * pointer journal removed every alias in one step; a frame slot is found
+ * by its value. */
+NURL_TLS_FN void nurl_journal_disown(void *p) {
+    if (!p) return;
+    nurl_journal_forget(p);
+    for (size_t i = nurl__jslot_len; i-- > 0; ) {
+        NurlSlotEntry *e = &nurl__jslot[i];
+        if (!e->slot || e->drop != nurl_jframe_drop) continue;
+        void **f = (void **)e->slot;
+        size_t n = (size_t)(uintptr_t)f[0];
+        for (size_t k = 1; k <= n; k++)
+            if (f[k] && *(void **)f[k] == p) f[k] = NULL;
+    }
+}
 
 /* Normal completion forgets only registrations made in this extent: an
  * outer registration for the same address retains its own obligation. */
@@ -3094,7 +3198,21 @@ static void nurl__jrnl_truncate(uint64_t mark) {
  * register scratch storage, or enter nested recovery. No index/pointer into
  * the journal survives the call. Raw frees forget aliases in outer extents
  * too, so an outer panic cannot reclaim already-freed storage a second time. */
+static void nurl__jrnl_drain_body(uint64_t mark);
 static void nurl__jrnl_drain(uint64_t mark) {
+    /* A drain inside a drop of an outer drain shares the outer record. */
+    int outer = nurl__draining;
+    nurl__draining = 1;
+    ++nurl__jrnl_live;
+    nurl__jrnl_drain_body(mark);
+    --nurl__jrnl_live;
+    nurl__draining = outer;
+    if (!outer) {
+        free(nurl__dseen);
+        nurl__dseen = NULL; nurl__dseen_n = nurl__dseen_cap = 0;
+    }
+}
+static void nurl__jrnl_drain_body(uint64_t mark) {
     for (;;) {
         nurl__jrnl_pop_nulls();
         nurl__jslot_pop_nulls();
@@ -3114,13 +3232,34 @@ static void nurl__jrnl_drain(uint64_t mark) {
             /* A raw buffer nurl_alloc handed out: count its release as
              * nurl_free would, so nurl_alloc_count − nurl_free_count stays
              * the live total across a panic. */
-            nurl__actr_bump(&nurl__actr_slot()->freed);
-            free(entry.ptr);
+            if (!nurl__drain_seen(entry.ptr)) {
+                nurl__actr_bump(&nurl__actr_slot()->freed);
+                free(entry.ptr);
+            }
         }
     }
 }
 
-NURL_TLS_FN void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
+/* Freeing NULL is the common case — a slot released at scope exit after
+ * its value moved on, or a slot's free-old before its first store; a
+ * self-compile makes ~20M such calls against ~15M real frees. The body
+ * saves five callee-saved registers before it could test the pointer, so
+ * the test lives in a wrapper of its own that touches no thread-local
+ * (free to inline under LTO) and tail-calls the body. */
+__attribute__((noinline, cold))
+static int nurl__free_draining(void *ptr) {
+    if (nurl__jrnl_cap) nurl__jrnl_forget_body(ptr);
+    return nurl__drain_seen(ptr);
+}
+NURL_TLS_FN static void nurl__free_nonnull(void *ptr) {
+    if (nurl__jrnl_live) {
+        if (__builtin_expect(nurl__draining, 0)) { if (nurl__free_draining(ptr)) return; }
+        else nurl__jrnl_forget_body(ptr);
+    }
+    nurl__actr_bump(&nurl__actr_slot()->freed);
+    if (!nurl__sc_push(ptr)) free(ptr);
+}
+void nurl_free(void *ptr)                                    { if (ptr) nurl__free_nonnull(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }

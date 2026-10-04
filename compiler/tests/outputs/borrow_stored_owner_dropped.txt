@@ -1,0 +1,11 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_stored_owner_dropped.nu:26: error: use of possibly-moved value 'a' — it was stored into 'h', which then let go of a value it held (a field assigned anew, or an element dropped or handed out) at line 25; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
+    ^ ( vec_len [i] a )
+compiler/tests/borrow_stored_owner_dropped.nu:35: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 34 by vec_free (it was stored in 'all'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
+    ^ ( vec_len [i] a )
+compiler/tests/borrow_stored_owner_dropped.nu:44: error: use of possibly-moved value 'a' — it was stored into 'all', which then let go of a value it held (a field assigned anew, or an element dropped or handed out) at line 43; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
+    ^ ( vec_len [i] a )
+compiler/tests/borrow_stored_owner_dropped.nu:53: error: use of possibly-moved value 'a' — it was stored into 'all', which then let go of a value it held (a field assigned anew, or an element dropped or handed out) at line 52; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
+    ^ ( vec_len [i] a )
+error: compilation aborted — 4 borrow-checker violations (re-run with --no-borrowck to bypass)

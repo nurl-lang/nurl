@@ -50,7 +50,7 @@ $ `stdlib/ext/http_cli.nu`
     : i n ( nurl_str_len ver )
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get ver k ) 45 { ^ F } {}
+        ? == ( nurl_str_at ver n k ) 45 { ^ F } {}
         = k + k 1
     }
     ^ T

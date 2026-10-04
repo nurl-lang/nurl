@@ -72,7 +72,7 @@ $ `stdlib/ext/crypto.nu`
     : ~ i seen 0
     : ~ i k 0
     ~ < k len {
-        ? == ( nurl_str_get str k ) 46 {
+        ? == ( nurl_str_at str len k ) 46 {
             ? == seen n { ^ k } {}
             = seen + seen 1
         } {}

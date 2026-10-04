@@ -2009,6 +2009,45 @@ That is a structural addition to the checker, not an `if`.
 Both measurements argue for deciding the question deliberately rather than
 patching toward it. They are recorded here so the decision has numbers.
 
+### A13: maybe-freed reads and consumes, decided (2026-10-03)
+
+The two measurements above are superseded. The walk did have read events
+(`bck_check_moved_reads` checks every row's reads field against the
+state); what it lacked was a way to tell *freed on some path* from
+*handed to another name on some path* — both were `MAYBE_MOVED`. The
+lattice now has `BCK_MAYBE_ALIAS` for the second (a `?` that selected the
+handle, `= z a`, a call that may return it): the buffer is live through
+one of the names, so a read is fine and only a second consume is
+suspect (still `--strict-borrowck`, check 3). `MAYBE_MOVED` means a free
+on some path, and any use of it — read or consume — is a default error.
+
+Three precision fixes made that affordable rather than noisy:
+
+- `break` / `continue` rows: the walk sends a jump's state to the loop's
+  exit / back edge and ends the path, instead of joining it into the
+  statement after the `?` (the `? == k 3 { ( string_free tmp ) break }`
+  shape in `loop_break_continue`);
+- scope restore: a binding a block (or loop body, or `??` arm) declares
+  is put back to its outer state after the block, so a loop-local or a
+  shadowing inner binding never leaves a state on the outer name — the
+  loop head joins only bindings that existed before the loop;
+- closures free when used: a closure that frees a capture maybe-aliases it
+  at construction and maybe-frees it at each use of the binding.
+
+The `??` arms, which were walked from an empty state with the exit
+discarded, now start from the match's state with their payload names
+bound (carried on the `match-arm-edge` row) and restored after the arm.
+That closed a definite double free through both arms of a match, and a
+read of an option after a payload field was taken apart (now a move of
+the option, decided at module end when the callee's consumption is).
+
+Measured by compiling every first-party source (compiler, stdlib, tests,
+examples, every package) with the old and new compiler and diffing the
+diagnostics: the only new errors are the new regression tests', plus two
+real double frees in `ws_permessage_deflate.nu` (fixed) and one raw-buffer
+loop in `stdlib/ext/env.nu` (rewritten onto a dropped `( Vec u )`).
+No diagnostic disappeared.
+
 ### The compiler leaked every aliased import (2026-09-11)
 
 Grouping the corpus's leaks by the function that allocated them —

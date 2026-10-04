@@ -12,14 +12,13 @@
 // outside and report a bug that is not one. The whole match was therefore a
 // state-preserving black box.
 //
-// The conflation is avoidable without scope-qualified state: walk each arm
-// from an EMPTY state. Only a binding that gets its own `let` row inside the
-// arm becomes tracked, and such a binding is arm-local by construction. A
-// payload name, or an outer name the arm merely touches, starts Uninit and
-// is ignored, so no diagnostic can fire on it — while moving an arm-local
-// binding twice is still caught, because the first move is what makes it
-// tracked. The arm's exit state is discarded, so nothing widens.
-//
+// The conflation is avoidable without scope-qualified state: each arm binds
+// its payload names (carried on its `match-arm-edge` row) for the arm's
+// extent only, and on the way out they — and every binding the arm declared —
+// are put back to their outer state. An arm's `v` never speaks for an outer
+// `v`, and what an arm does to a genuinely outer binding now reaches the
+// code after the match (borrow_match_arm_outer_double_free).
+
 // POSITIVE below: two arm-local aliases of one Vec, both freed, in an arm of
 // a match used as a statement and in one used as a value.
 //

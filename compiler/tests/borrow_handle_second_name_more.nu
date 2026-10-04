@@ -1,4 +1,4 @@
-// borrow_strict_handle_second_name_more.nu — three more ways a heap
+// borrow_handle_second_name_more.nu — three more ways a heap
 // handle acquires a second name, all found by tools/metamorph.
 //
 // #899 closed the copy, the `?`/`??` join, the assignment and the
@@ -24,14 +24,12 @@
 // aggregate hands the value to it, and a later consume of the old name is
 // a second release on every path — see borrow_store_consume.nu.)
 //
-// The other two are MAYBE-moves, so they need --strict-borrowck. The reason
-// is the same one that made the assignment case conditional in #899:
-// the handover is certain, but the old name may still be a legal way to
-// use the live buffer, and only liveness — which this checker does not
-// compute — could say when it stops being one. For the closure there is
-// a second reason: the checker knows the capture, not the call count,
-// and a closure that frees its capture but is never called leaks rather
-// than double-frees.
+// The other two are reported by default too now (both were
+// --strict-borrowck only): the nested `?` makes `a` and the result alias
+// partners on the path that selected `a`, so consuming one maybe-frees
+// the other; and a closure that frees a capture frees it when it RUNS, so
+// after a use of the closure the capture is maybe-freed (docs/MEMORY.md
+// §2.1).
 //
 // Three functions, because recovery is per declaration: one error each.
 

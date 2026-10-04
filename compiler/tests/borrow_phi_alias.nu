@@ -1,4 +1,4 @@
-// borrow_strict_phi_alias.nu — the ownership/phi aggressor: a handle
+// borrow_phi_alias.nu — the ownership/phi aggressor: a handle
 // reaching a new binding through a value-producing `?` whose OTHER arm
 // is a fresh allocation.
 //
@@ -11,13 +11,11 @@
 // `?` result's provenance was never tracked — the checker saw `chosen`
 // and `a` as two unrelated owners.
 //
-// Strict-only, and for the documented reason (docs/MEMORY.md §6.2/§6.5):
-// only ONE arm hands over the handle, so this is a conditional move, and
-// the default checker's no-false-positive contract also protects the
-// mutually-exclusive-frees pattern — freeing whichever binding the `?`
-// did NOT select is correct code with the same shape. CONTROL 2 below is
-// exactly that pattern; it is flagged here too, which is the price
-// strict mode is documented to charge.
+// Reported by default (it used to be --strict-borrowck only): `a` and
+// `chosen` are alias partners on the path where the `?` selected `a`, so
+// consuming `chosen` leaves `a` maybe-freed there, and freeing it again is
+// the double free (docs/MEMORY.md §2.1). Only that path counts: CONTROL 2,
+// freeing whichever binding the `?` did NOT select, is not flagged.
 //
 // One positive + two controls.
 

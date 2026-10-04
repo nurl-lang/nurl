@@ -8,7 +8,157 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Using a value freed on only some paths is an error by default** — a
+  read as much as a second free (docs/MEMORY.md §2.1). `? c { ( string_free
+  x ) } {}` followed by `( string_len x )` or `( string_free x )` compiled
+  clean and was a use-after-free / double free whenever `c` held; the
+  second free was reported only under `--strict-borrowck`, the read never.
+  The walk follows the paths that are real: a `break` / `continue` ends
+  its path (its state goes to the loop exit / next iteration), a binding
+  declared in a loop body or a block is gone after it, a closure frees
+  what it captured when it RUNS (not when it is made), and a handle
+  handed to a second name on some path stays readable (its second consume
+  is still the strict-mode check). Measured against every first-party
+  program (compiler, stdlib, tests, examples, packages): one stdlib
+  function rewritten (`env_cwd`, below) and two real double frees in
+  `compiler/tests/ws_permessage_deflate.nu` fixed; nothing else moved.
+  `borrow_strict_maybe_double_free` / `…_generic_…` are default-mode
+  tests now (`borrow_maybe_double_free`, `borrow_generic_maybe_double_free`).
+
+- **A handle handed to a second name is tracked through both names.**
+  `? c { = z a } {}` then `( string_free z )` left `a` naming freed memory
+  on the path that aliased — `( string_len a )` read 24 for a 5-byte
+  string, silently. The two names are alias partners on that path now:
+  consuming either maybe-frees the other there, so the read (or a second
+  free) is a default error. The relation is path-sensitive (a handover on
+  one arm leaves the other alone; the `= cur nxt` `= nxt tmp` swap drops
+  nothing) and ends when either name is rebound. Five
+  `borrow_strict_*_alias` tests are default-mode tests now; the
+  forward-declared returning call stays the strict check.
+
+### Performance
+
+- **`nurl_str_slice` measures a string only as far as the slice.** The
+  clamp asked `strlen` for the whole string on every call; it asks
+  `strnlen(str, start + n)` now, which decides the same clamp. Cutting a
+  2 MB buffer into 200k lines by offset went from 6.4 s to 2.4 s; a slice
+  near the front of a long string costs the slice. (`strnlen` joins the
+  pre-registered libc surface.)
+- **The compiler's symbol tables answer a value's length from the length
+  they cache.** `nurl_sym_len` / `_len2` and the in-place appends ran
+  `strlen` over the value, and the borrow checker asks that of its
+  statement accumulator once per recorded statement — quadratic in a
+  function's size; splitting the accumulator into rows sliced from the
+  text's start, quadratic again. A self-compile executes 3.8% fewer
+  instructions (12.97 → 12.47 billion; `strlen` 1.25 → 0.77 billion), and
+  182 temporaries the compiler leaked per self-compile — the origin
+  analysis read the old clamp's `strlen` result as address-carrying — are
+  freed.
+- **A free inside a `recover` extent re-checks the panic journal's tail
+  only when it removed an entry.** Most frees there are of buffers the
+  journal never held; the tail check ran for each.
+
+- **`nurl_str_get` measures a string only up to the byte it reads**
+  (`strnlen(str, idx + 1)`), and 146 stdlib reads in loops use
+  `nurl_str_at` with the length measured once — a byte loop that also
+  writes (where the optimiser cannot hoist the measure out) was quadratic
+  in the string's length: 0.39 s → 0.22 s per 200 KB through
+  `nurl_str_get`, linear through `nurl_str_at`.
+- **Symbol-table copies are taken at a known length.** A new runtime
+  primitive, `nurl_strdup_n`, copies a string whose length the caller
+  already holds. The compiler's tables measure a key and a value once per
+  definition (they were measured three times) and copy a value out at its
+  cached length; the borrow checker reads a statement row's numeric
+  fields in place instead of slicing each one out to parse it. Together
+  with a one-multiply hash in the panic journal (every allocation and free
+  inside a `recover` extent hashes, and the compiler runs every
+  declaration inside one), a self-compile takes about 5% less time. The
+  journal's registration no longer carries its growth path inline: every
+  registration saved and restored six registers for a branch taken once
+  per doubling (−1.7% instructions compiling `bench/json_parse.nu`).
+  `nurl_free(NULL)` — a slot released after its value moved on, most of a
+  self-compile's 35M frees — returns before the body's register saves
+  (−1% more).
+- **Owned string bindings are registered with the panic journal per
+  frame, not per value.** Every owned string a binding received inside a
+  `recover` extent was a hashed journal insert, and its free a hashed
+  removal — a self-compile made 14M of each. A function now registers one
+  table of its bindings' slots at entry and forgets it before each
+  return; a binding joins with one store. The journal's instructions on a
+  compile fell by half (−7.7% instructions compiling
+  `bench/json_parse.nu`, a self-compile ~3.5% faster). A value that leaves
+  through a struct is disowned from the table, and a drain frees each
+  address once (docs/MEMORY.md §7.2).
+
 ### Fixed
+
+- **A string handed to a `sink` parameter is reclaimed when the callee
+  panics before freeing it.** The caller drops its registration at the
+  hand-off, and the callee never made one, so the buffer leaked on that
+  unwind. The callee registers it at entry, under the flag that decides
+  the hand-off (`compiler/tests/recover_frame_strings.nu`).
+- **A binding's panic-journal registration is no longer dropped when the
+  panicking path comes after the last return.** The elision pass judged a
+  registration safe to drop when nothing could panic between it and its
+  last `forget_slot` — but a path that ends in a panic (`die`, then
+  `unreachable`) reaches no forget and is laid out after the last `ret`,
+  so a `String` / `Vec` binding live on it leaked when it panicked. The
+  check now runs to the end of the function.
+- **`stdlib/core/symtab.nu` no longer grows without bound.** Each
+  re-definition of a key pushed a new entry holding fresh copies that
+  nothing could read or free again, the bucket array never grew past
+  4096, and there was no way to release a table, so a long-running user
+  that re-defines keys (the language server re-indexes a document on
+  every edit) leaked on every edit and slowed down as it went. A
+  re-definition now replaces the value in place, the buckets grow with
+  the table, and `nurl_sym_free` releases it.
+
+- **A value stored into an owner is followed when the owner lets it go.**
+  `@ Holder { a }` then `= . h v ( vec_new [i] )`, or `( vec_push all a )`
+  then `( vec_free all )`, dropped `a`'s buffer under the name `a`; a read
+  of it compiled clean and read freed memory (24 for a 2-element Vec). The
+  field assignment maybe-frees what was stored into the struct, a
+  released container takes what was pushed into it, and a stdlib call
+  that drops or hands out elements (`vec_clear`, `vec_pop`, `vec_set`,
+  `map_set`, `map_remove`, …) maybe-frees what was pushed into it.
+- **A closure inside a returned struct literal no longer runs on freed
+  captures.** `^ @ Box { \ → i { ^ ( vec_len [i] a ) } }` dropped the
+  local `a` at the return under the closure the caller then ran (it read
+  24 for a 2-element Vec); the captures move into the env, as for a bare
+  `^ \ → …`.
+- **Freeing what a struct-stored closure captured is rejected.** The
+  free-then-invoke check followed a closure only by its name; once stored
+  into a struct field (a literal's or an assignment's), freeing a capture
+  and invoking the closure through the field ran it on freed memory.
+
+- **`( dyn Trait v )` no longer frees `v` twice.** The `%dyn` object owns
+  its box and drops the boxed value through the vtable, but boxing copied
+  the bytes and left `v`'s own drop in place: every `( dyn Speaker d )` of
+  a `d` owning a String was a heap-use-after-free at scope exit. Boxing is
+  a store now — an owned local moves in (a later use is a use-after-move),
+  a parameter or a field read is copied.
+- **A struct with a `%Trait` field is dropped.** It got no drop at all, so
+  the box, the boxed value and every sibling field leaked (docs listed it
+  as a limitation); it gets the field-by-field drop any struct holding a
+  Drop value gets.
+- **A `%dyn` built right in a call's argument is dropped as a whole.**
+  Only the box was freed after the call, leaking what the boxed value
+  owned — and a call inside the operand (`( f ( dyn T ( make ) ) )`) lost
+  the marker, so not even the box was.
+- **What a `??` arm does to an outer binding reaches the code after the
+  match.** The arms were walked in isolation with their exit discarded,
+  so `?? x { T v → ( string_free s ) F → ( string_free s ) }` followed by
+  `( string_free s )` compiled clean and freed `s` twice. Arms now start
+  from the match's state with their payload names bound for the arm only.
+- **Reading an option after taking its payload apart is rejected.**
+  Freeing a field of a match payload (`?? o { T t → ( string_free . t name
+  ) }`) empties it in `o`; reading `o` afterwards read an emptied handle
+  (SEGV). It is a use of a moved value now.
+- **`env_cwd` manages no memory by hand.** Its retry loop freed a raw
+  buffer on one branch and reused it on another; each attempt's buffer is
+  a `( Vec u )` the scope drops.
 
 - **A function that lends on some paths and hands over a fresh value on
   others no longer leaks the fresh ones.** Such a function already reported

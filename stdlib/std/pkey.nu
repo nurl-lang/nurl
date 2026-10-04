@@ -39,13 +39,13 @@ $ `stdlib/std/ecdsa_p256.nu`
     ? < bi 0 { ^ @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } } } {}
     // Advance past the rest of the BEGIN line.
     : ~ i p bi
-    ~ & < p n != ( nurl_str_get pem p ) 10 { = p + p 1 }
+    ~ & < p n != ( nurl_str_at pem n p ) 10 { = p + p 1 }
     = p + p 1
     : i ei ( nurl_str_find pem `-----END` )
     ? | < ei 0 <= ei p { ^ @ !( Vec u ) ParseErr { F @ ParseErr { BadFormat } } } {}
     : String b64 ( string_new )
     ~ < p ei {
-        : i c ( nurl_str_get pem p )
+        : i c ( nurl_str_at pem n p )
         ? ( __pk_is_b64 c ) { ( string_push_char b64 c ) } {}
         = p + p 1
     }

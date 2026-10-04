@@ -482,7 +482,7 @@ $ `stdlib/core/rcbox.nu`
             : ~ i k 0
             : ~ b eq T
             ~ & < k nlen eq {
-                ? != # i . p + noff k ( nurl_str_get name k ) { = eq F } {}
+                ? != # i . p + noff k ( nurl_str_at name nlen k ) { = eq F } {}
                 = k + k 1
             }
             ? eq { ^ e } {}

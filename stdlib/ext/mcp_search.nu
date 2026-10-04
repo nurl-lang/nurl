@@ -193,7 +193,7 @@ $ `stdlib/ext/nurldoc.nu`
                         : i keep ? > bn 700 ( __mcp_utf8_cut raw 700 ) bn
                         : ~ i j 0
                         ~ < j keep {
-                            ( string_push_char out ( nurl_str_get raw j ) )
+                            ( string_push_char out ( nurl_str_at raw bn j ) )
                             = j + j 1
                         }
                         ? > bn keep { ( string_push_str out `…` ) } {}
@@ -328,7 +328,7 @@ $ `stdlib/ext/nurldoc.nu`
                                                                             : ~ i keep ? > dn 160 ( __mcp_utf8_cut d 160 ) dn
                                                                             : ~ i j 0
                                                                             ~ < j keep {
-                                                                                : i c ( nurl_str_get d j )
+                                                                                : i c ( nurl_str_at d dn j )
                                                                                 ( string_push_char out ? == c 10 32 c )
                                                                                 = j + j 1
                                                                             }
@@ -413,7 +413,7 @@ $ `stdlib/ext/nurldoc.nu`
                                                                             : ~ i keep ? > dn 200 ( __mcp_utf8_cut d 200 ) dn
                                                                             : ~ i j 0
                                                                             ~ < j keep {
-                                                                                : i c ( nurl_str_get d j )
+                                                                                : i c ( nurl_str_at d dn j )
                                                                                 ( string_push_char out ? == c 10 32 c )
                                                                                 = j + j 1
                                                                             }
@@ -536,7 +536,7 @@ $ `stdlib/ext/nurldoc.nu`
                                                     : ~ i keep ? > dn 200 ( __mcp_utf8_cut d 200 ) dn
                                                     : ~ i j 0
                                                     ~ < j keep {
-                                                        : i c ( nurl_str_get d j )
+                                                        : i c ( nurl_str_at d dn j )
                                                         ( string_push_char out ? == c 10 32 c )
                                                         = j + j 1
                                                     }
@@ -609,14 +609,14 @@ $ `stdlib/ext/nurldoc.nu`
         : ~ b hit T
         : ~ i j 0
         ~ & hit < j m {
-            ? != ( nurl_str_get hay + k j ) ( nurl_str_get pat j ) { = hit F } {}
+            ? != ( nurl_str_at hay n + k j ) ( nurl_str_at pat m j ) { = hit F } {}
             = j + j 1
         }
         ? hit {
             : ~ b lb T
-            ? > k 0 { = lb ! ( __ms_grep_alpha ( nurl_str_get hay - k 1 ) ) } {}
+            ? > k 0 { = lb ! ( __ms_grep_alpha ( nurl_str_at hay n - k 1 ) ) } {}
             : ~ b rb T
-            ? < + k m n { = rb ! ( __ms_grep_alpha ( nurl_str_get hay + k m ) ) } {}
+            ? < + k m n { = rb ! ( __ms_grep_alpha ( nurl_str_at hay n + k m ) ) } {}
             ? & lb rb { ^ 1 } {}
         } {}
         = k + k 1
@@ -790,14 +790,14 @@ $ `stdlib/ext/nurldoc.nu`
         : ~ b hit T
         : ~ i j 0
         ~ & hit < j m {
-            ? != ( nurl_str_get hay + k j ) ( nurl_str_get pat j ) { = hit F } {}
+            ? != ( nurl_str_at hay n + k j ) ( nurl_str_at pat m j ) { = hit F } {}
             = j + j 1
         }
         ? hit {
             : ~ b lb T
-            ? > k 0 { = lb ! ( __ms_grep_alpha ( nurl_str_get hay - k 1 ) ) } {}
+            ? > k 0 { = lb ! ( __ms_grep_alpha ( nurl_str_at hay n - k 1 ) ) } {}
             : ~ b rb T
-            ? < + k m n { = rb ! ( __ms_grep_alpha ( nurl_str_get hay + k m ) ) } {}
+            ? < + k m n { = rb ! ( __ms_grep_alpha ( nurl_str_at hay n + k m ) ) } {}
             ? & lb rb { = cnt + cnt 1 } {}
         } {}
         = k + k 1
@@ -901,8 +901,8 @@ $ `stdlib/ext/nurldoc.nu`
                 : s braw ( string_data blk )
                 : i bl ( string_len blk )
                 : ~ i si 0
-                ~ & < si bl != ( nurl_str_get braw si ) 10 {
-                    ( string_push_char sig ( nurl_str_get braw si ) )
+                ~ & < si bl != ( nurl_str_at braw bl si ) 10 {
+                    ( string_push_char sig ( nurl_str_at braw bl si ) )
                     = si + si 1
                 }
                 : String sig_lc ( string_to_lower sig )
@@ -922,7 +922,7 @@ $ `stdlib/ext/nurldoc.nu`
                     : i keep ? > bn 500 ( __mcp_utf8_cut raw 500 ) bn
                     : ~ i j 0
                     ~ < j keep {
-                        ( string_push_char snip ( nurl_str_get raw j ) )
+                        ( string_push_char snip ( nurl_str_at raw bl j ) )
                         = j + j 1
                     }
                     ? > bn keep { ( string_push_str snip `…` ) } {}
@@ -1506,14 +1506,14 @@ $ `stdlib/ext/nurldoc.nu`
     : String t ( string_new )
     ~ & & < k n < lines 8 == ( string_len t ) 0 {
         : ~ i e k
-        ~ & < e n != ( nurl_str_get raw e ) 10 { = e + e 1 }
+        ~ & < e n != ( nurl_str_at raw n e ) 10 { = e + e 1 }
         // "# Title" — one hash, then the text after the spaces.
-        ? & & < + k 1 e == ( nurl_str_get raw k ) 35 != ( nurl_str_get raw + k 1 ) 35 {
+        ? & & < + k 1 e == ( nurl_str_at raw n k ) 35 != ( nurl_str_at raw n + k 1 ) 35 {
             : ~ i b + k 1
-            ~ & < b e == ( nurl_str_get raw b ) 32 { = b + b 1 }
+            ~ & < b e == ( nurl_str_at raw n b ) 32 { = b + b 1 }
             : ~ i j b
             ~ & < j e < - j b 110 {
-                ( string_push_char t ( nurl_str_get raw j ) )
+                ( string_push_char t ( nurl_str_at raw n j ) )
                 = j + j 1
             }
             ? > - e b 110 { ( string_push_str t `…` ) } {}
@@ -1716,9 +1716,9 @@ $ `stdlib/ext/nurldoc.nu`
     : ~ b fenced F
     ~ < k n {
         : ~ i e k
-        ~ & < e n != ( nurl_str_get raw e ) 10 { = e + e 1 }
+        ~ & < e n != ( nurl_str_at raw n e ) 10 { = e + e 1 }
         // Fence toggle: a line whose first three bytes are ```.
-        ? & <= + k 3 e & & == ( nurl_str_get raw k ) 96 == ( nurl_str_get raw + k 1 ) 96 == ( nurl_str_get raw + k 2 ) 96 {
+        ? & <= + k 3 e & & == ( nurl_str_at raw n k ) 96 == ( nurl_str_at raw n + k 1 ) 96 == ( nurl_str_at raw n + k 2 ) 96 {
             = fenced ! fenced
         } {
             ? ! fenced {
@@ -1729,7 +1729,7 @@ $ `stdlib/ext/nurldoc.nu`
                     : String t ( string_with_cap 96 )
                     : ~ i j + k + lvl 1
                     ~ < j e {
-                        ( string_push_char t ( nurl_str_get raw j ) )
+                        ( string_push_char t ( nurl_str_at raw n j ) )
                         = j + j 1
                     }
                     ( vec_push [String] titles t )
@@ -1780,7 +1780,7 @@ $ `stdlib/ext/nurldoc.nu`
     : i tn ( string_len tl )
     // Leading number token, e.g. "2.1 move checking" → "2.1".
     : ~ i e 0
-    ~ & < e tn | & >= ( nurl_str_get t e ) 48 <= ( nurl_str_get t e ) 57 == ( nurl_str_get t e ) 46 { = e + e 1 }
+    ~ & < e tn | & >= ( nurl_str_at t tn e ) 48 <= ( nurl_str_at t tn e ) 57 == ( nurl_str_at t tn e ) 46 { = e + e 1 }
     : ~ b hit F
     ? > e 0 {
         : String num ( string_substr tl 0 e )
@@ -1976,7 +1976,7 @@ $ `stdlib/ext/nurldoc.nu`
                                     : s braw ( string_data body )
                                     : ~ i j 0
                                     ~ < j keep {
-                                        ( string_push_char snip ( nurl_str_get braw j ) )
+                                        ( string_push_char snip ( nurl_str_at braw bn j ) )
                                         = j + j 1
                                     }
                                     ? > bn keep { ( string_push_str snip `\n…` ) } {}
@@ -2029,12 +2029,12 @@ $ `stdlib/ext/nurldoc.nu`
     : s t ( string_data title )
     : i n ( string_len title )
     : ~ i e 0
-    ~ & < e n | & >= ( nurl_str_get t e ) 48 <= ( nurl_str_get t e ) 57 == ( nurl_str_get t e ) 46 { = e + e 1 }
+    ~ & < e n | & >= ( nurl_str_at t n e ) 48 <= ( nurl_str_at t n e ) 57 == ( nurl_str_at t n e ) 46 { = e + e 1 }
     ? > e 0 {
         : ~ i stop e
-        ? & > stop 0 == ( nurl_str_get t - stop 1 ) 46 { = stop - stop 1 } {}
+        ? & > stop 0 == ( nurl_str_at t n - stop 1 ) 46 { = stop - stop 1 } {}
         : ~ i j 0
-        ~ < j stop { ( string_push_char out ( nurl_str_get t j ) ) = j + j 1 }
+        ~ < j stop { ( string_push_char out ( nurl_str_at t n j ) ) = j + j 1 }
     } {
         ( string_push_str out ( string_data title ) )
     }
@@ -2095,7 +2095,7 @@ $ `stdlib/ext/nurldoc.nu`
     : i n ( nurl_str_len path )
     : ~ i start 0
     : ~ i k 0
-    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }
+    ~ < k n { ? == ( nurl_str_at path n k ) 47 { = start + k 1 } {} = k + k 1 }
     : s p2 # s + # i path start
     ^ ( string_from p2 )
 }

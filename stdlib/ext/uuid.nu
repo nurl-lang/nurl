@@ -93,7 +93,7 @@ $ `stdlib/std/time.nu`
     : ~ i i 0
     : ~ i bi 0
     ~ < i 36 {
-        : i c ( nurl_str_get input i )
+        : i c ( nurl_str_at input len i )
         // Skip dashes at 8, 13, 18, 23
         ? | | | == i 8 == i 13 == i 18 == i 23 {
             ? != c 45 {
@@ -101,7 +101,7 @@ $ `stdlib/std/time.nu`
             } {}
             = i + i 1
         } {
-            : i c2 ( nurl_str_get input + i 1 )
+            : i c2 ( nurl_str_at input len + i 1 )
 
             : i high ( __uuid_hex_to_int c )
             : i low ( __uuid_hex_to_int c2 )

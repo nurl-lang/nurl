@@ -643,11 +643,14 @@ i timeout_ms i connect_timeout_ms
 
 // Copy bytes [from, from+n) of a raw `s` into a fresh owned String.
 // Used internally by the SSE parser to materialise frame field tokens.
+// (Measured once: a per-byte nurl_str_get measures the string each time,
+// and the push in the loop keeps the optimiser from hoisting it.)
 @ __sse_substr s p i from i n → String {
     : String out ( string_with_cap n )
+    : i pl ( nurl_str_len p )
     : ~ i k 0
     ~ < k n {
-        ( string_push_char out ( nurl_str_get p + from k ) )
+        ( string_push_char out ( nurl_str_at p pl + from k ) )
         = k + k 1
     }
     ^ out
@@ -660,9 +663,10 @@ i timeout_ms i connect_timeout_ms
 // `acc[0 .. offset)` and the next frame starts at `offset + 2`). Returns
 // -1 when no complete frame is buffered yet.
 @ sse_frame_end s acc i acc_len → i {
+    : i al ( nurl_str_len acc )
     : ~ i i 0
     ~ < i - acc_len 1 {
-        ? & == ( nurl_str_get acc i ) 10 == ( nurl_str_get acc + i 1 ) 10 {
+        ? & == ( nurl_str_at acc al i ) 10 == ( nurl_str_at acc al + i 1 ) 10 {
             ^ i
         } {}
         = i + i 1
@@ -679,14 +683,15 @@ i timeout_ms i connect_timeout_ms
     : ~ String id ( string_new )
     : ~ b first_data_line T
 
+    : i fl ( nurl_str_len frame )
     : ~ i ls 0
     : ~ i i 0
     ~ <= i frame_len {
-        : i c ? < i frame_len ( nurl_str_get frame i ) 10
+        : i c ? < i frame_len ( nurl_str_at frame fl i ) 10
         ? == c 10 {
             : i llen - i ls
             ? > llen 0 {
-                : i firstc ( nurl_str_get frame ls )
+                : i firstc ( nurl_str_at frame fl ls )
                 ? == firstc 58 {
                     // Comment line — skip.
                 } {
@@ -694,14 +699,14 @@ i timeout_ms i connect_timeout_ms
                     : ~ i ci ls
                     : ~ b found F
                     ~ & ! found < ci i {
-                        ? == ( nurl_str_get frame ci ) 58 { = found T } {
+                        ? == ( nurl_str_at frame fl ci ) 58 { = found T } {
                             = ci + ci 1
                         }
                     }
                     : i fld_len - ci ls
                     : ~ i vstart ? found + ci 1 i
                     ? & found < vstart i {
-                        ? == ( nurl_str_get frame vstart ) 32 { = vstart + vstart 1 } {}
+                        ? == ( nurl_str_at frame fl vstart ) 32 { = vstart + vstart 1 } {}
                     } {}
                     : i vlen ? found - i vstart 0
                     : String fld ( __sse_substr frame ls fld_len )

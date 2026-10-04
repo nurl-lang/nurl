@@ -90,6 +90,14 @@ nl_size_t strlen(const char *s) {
     return (nl_size_t)(p - s);
 }
 
+/* The runtime's string reads measure only as far as they read
+ * (nurl_str_slice / nurl_str_get / nurl_strdup_n): never past `max`. */
+nl_size_t strnlen(const char *s, nl_size_t max) {
+    nl_size_t n = 0;
+    while (n < max && s[n]) n++;
+    return n;
+}
+
 int strcmp(const char *a, const char *b) {
     const unsigned char *x = (const unsigned char *)a;
     const unsigned char *y = (const unsigned char *)b;

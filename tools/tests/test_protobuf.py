@@ -142,8 +142,8 @@ class ProtobufTest(unittest.TestCase):
             self.assertEqual(run.stderr, "", name)
         # A live path's consumption must still be diagnosed, including a
         # back-edge and conditional consumes through direct/generic calls.
-        for name in ("borrow_loop_carried_free", "borrow_strict_maybe_double_free",
-                     "borrow_strict_generic_maybe_double_free"):
+        for name in ("borrow_loop_carried_free", "borrow_maybe_double_free",
+                     "borrow_generic_maybe_double_free"):
             run = subprocess.run([str(compiler), "--strict-borrowck", "--check",
                                   str(ROOT / f"compiler/tests/{name}.nu")],
                                  cwd=ROOT, env=self.env, capture_output=True,

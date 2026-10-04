@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_closure_stored_capture_freed.nu:19: error: 'a' is released here, but a closure that captured it was stored into an owner at line 17, which may still invoke it — on freed memory (the free-then-invoke check follows a closure only by its name). Release it after that owner is gone, or have the closure capture a copy — ( mem_dup a ) bound to a name of its own.
+    ( vec_free [i] a )
+compiler/tests/borrow_closure_stored_capture_freed.nu:30: error: 'a' is released here, but a closure that captured it was stored into an owner at line 29, which may still invoke it — on freed memory (the free-then-invoke check follows a closure only by its name). Release it after that owner is gone, or have the closure capture a copy — ( mem_dup a ) bound to a name of its own.
+    ( vec_free [i] a )
+error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)

@@ -125,6 +125,10 @@
 // libc string primitives (NUL-terminated).
 & `c` @ strlen s text → i
 
+// Length of `text`, measuring at most `maxlen` bytes: a clamp that only
+// needs to know whether the string reaches some length stops there.
+& `c` @ strnlen s text i maxlen → i
+
 & `c` @ strcmp s a s b → i32
 
 & `c` @ strncmp s a s b i n → i32
@@ -248,6 +252,10 @@
 // freelist cache — strdup, but recyclable by nurl_free. The copy is an
 // ordinary heap block, so plain free() releases it too.
 & `c` @ nurl_strdup s src → s
+
+// nurl_strdup when the caller already knows the source's length: copies
+// the first `n` bytes and appends a NUL, with no strlen.
+& `c` @ nurl_strdup_n s src i n → s
 
 // Raw byte moves/fill over possibly-overlapping regions.
 & `c` @ nurl_memcpy s dst s src i n → v

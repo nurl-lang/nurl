@@ -30,7 +30,7 @@ $ `stdlib/ext/http_cli_types.nu`
     : String out ( string_with_cap 80 )
     ( string_push_str out registry )
     : i rn ( nurl_str_len registry )
-    ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
+    ? > rn 0 { ? != ( nurl_str_at registry rn - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
     ( string_push_str out `index/` )
     ( string_push_str out name )
     ( string_push_str out `.json` )

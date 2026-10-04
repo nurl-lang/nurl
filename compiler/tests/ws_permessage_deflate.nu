@@ -116,7 +116,7 @@ $ `stdlib/ext/websocket.nu`
         F _ → ( nurl_print `client_ctx_fail\n` )
         T client → {
             ?? sm {
-                F _ → { ( nurl_print `server_ctx_fail\n` ) ( ws_deflate_free client ) }
+                F _ → { ( nurl_print `server_ctx_fail\n` ) }
                 T server → {
                     ( pb `client_active` ( ws_deflate_active client ) )
 
@@ -171,7 +171,7 @@ $ `stdlib/ext/websocket.nu`
         F _ → ( nurl_print `ctx_fail\n` )
         T client → {
             ?? sm {
-                F _ → { ( nurl_print `ctx_fail2\n` ) ( ws_deflate_free client ) }
+                F _ → { ( nurl_print `ctx_fail2\n` ) }
                 T server → {
                     // Invalid UTF-8 in a TEXT message must be rejected
                     // AFTER inflation.

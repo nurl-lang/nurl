@@ -769,13 +769,13 @@ $ `stdlib/ext/http2_conn.nu`
         : ~ i colon -1
         : ~ i k 0
         ~ & == colon -1 < k an {
-            ? == 58 ( nurl_str_get addr k ) { = colon k } {}
+            ? == 58 ( nurl_str_at addr an k ) { = colon k } {}
             = k + k 1
         }
         ? > colon 0 {
             : ~ i j 0
             ~ < j colon {
-                ( string_push_char ip_only ( nurl_str_get addr j ) )
+                ( string_push_char ip_only ( nurl_str_at addr an j ) )
                 = j + j 1
             }
             = peer_ip ( string_data ip_only )

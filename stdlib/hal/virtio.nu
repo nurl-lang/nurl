@@ -326,7 +326,7 @@ $ `stdlib/hal/mmio.nu`
         : ~ b match T
         : ~ i j 0
         ~ && match < j klen {
-            ? != ( nurl_str_get cmdline + k j ) ( nurl_str_get key j ) { = match F } {}
+            ? != ( nurl_str_at cmdline n + k j ) ( nurl_str_at key klen j ) { = match F } {}
             = j + j 1
         }
         ? match {
@@ -337,18 +337,18 @@ $ `stdlib/hal/mmio.nu`
                 : ~ i size size_v
                 : ~ i q after
                 ? < q n {
-                    : i c ( nurl_str_get cmdline q )
+                    : i c ( nurl_str_at cmdline n q )
                     ? || == c 75 == c 107 { = size * size 1024 = q + q 1 } {}
                     ? || == c 77 == c 109 { = size * size 1048576 = q + q 1 } {}
                 } {}
                 // '@' then the base, ':' then the irq.
                 ? >= q n { ^ @ VioMmioDev { 0 0 0 F } } {}
-                ? != ( nurl_str_get cmdline q ) 64 { ^ @ VioMmioDev { 0 0 0 F } } {}
+                ? != ( nurl_str_at cmdline n q ) 64 { ^ @ VioMmioDev { 0 0 0 F } } {}
                 : i bstart + q 1
                 : i base_v ( __num cmdline bstart n )
                 : i bend ( __num_end cmdline bstart n )
                 : ~ i irq 0
-                ? && < bend n == ( nurl_str_get cmdline bend ) 58 {
+                ? && < bend n == ( nurl_str_at cmdline n bend ) 58 {
                     = irq ( __num cmdline + bend 1 n )
                 } {}
                 ^ @ VioMmioDev { base_v size irq T }

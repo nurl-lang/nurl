@@ -55,13 +55,13 @@ $ `stdlib/std/net.nu`
     : ~ i start 0
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get raw k ) 10 {
+        ? == ( nurl_str_at raw n k ) 10 {
             ? > k start {
                 : i seg_len - k start
                 : String seg ( string_with_cap seg_len )
                 : ~ i j start
                 ~ < j k {
-                    ( string_push_char seg ( nurl_str_get raw j ) )
+                    ( string_push_char seg ( nurl_str_at raw n j ) )
                     = j + j 1
                 }
                 ( vec_push [String] out seg )
@@ -77,7 +77,7 @@ $ `stdlib/std/net.nu`
         : String seg ( string_with_cap seg_len )
         : ~ i j start
         ~ < j k {
-            ( string_push_char seg ( nurl_str_get raw j ) )
+            ( string_push_char seg ( nurl_str_at raw n j ) )
             = j + j 1
         }
         ( vec_push [String] out seg )

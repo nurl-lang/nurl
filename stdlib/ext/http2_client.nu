@@ -230,8 +230,8 @@ $ `stdlib/core/rcbox.nu`
     : ~ i k 0
     : ~ i ok 1
     ~ & == ok 1 < k la {
-        : ~ i ca ( nurl_str_get a k )
-        : ~ i cb ( nurl_str_get b k )
+        : ~ i ca ( nurl_str_at a la k )
+        : ~ i cb ( nurl_str_at b lb k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { = ok 0 } {}
@@ -248,7 +248,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i k 0
     : ~ b done F
     ~ & ! done < k n {
-        : i ch ( nurl_str_get text k )
+        : i ch ( nurl_str_at text n k )
         ? & >= ch 48 <= ch 57 { = v + * v 10 - ch 48 } { = done T }
         = k + k 1
     }

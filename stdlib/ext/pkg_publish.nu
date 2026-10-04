@@ -140,7 +140,7 @@ $ `stdlib/ext/http_cli.nu`
     : i n ( nurl_str_len name )
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get name k ) 46 { ^ F } {}
+        ? == ( nurl_str_at name n k ) 46 { ^ F } {}
         = k + k 1
     }
     ^ T
@@ -434,7 +434,7 @@ $ `stdlib/ext/http_cli.nu`
     : String out ( string_with_cap 64 )
     ( string_push_str out registry )
     : i rn ( nurl_str_len registry )
-    ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
+    ? > rn 0 { ? != ( nurl_str_at registry rn - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
     ( string_push_str out `api/v1/publish` )
     ^ out
 }
@@ -478,7 +478,7 @@ $ `stdlib/ext/http_cli.nu`
     : String out ( string_with_cap 64 )
     ( string_push_str out registry )
     : i rn ( nurl_str_len registry )
-    ? > rn 0 { ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
+    ? > rn 0 { ? != ( nurl_str_at registry rn - rn 1 ) 47 { ( string_push_char out 47 ) } {} } {}
     ( string_push_str out path )
     ^ out
 }

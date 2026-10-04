@@ -284,7 +284,7 @@ $ `stdlib/core/rcbox.nu`
     ? != n ( nurl_str_len b ) { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : ~ i x ( nurl_str_get a k )
+        : ~ i x ( nurl_str_at a n k )
         : ~ i y ( nurl_str_get b k )
         ? & >= x 65 <= x 90 { = x + x 32 } {}
         ? & >= y 65 <= y 90 { = y + y 32 } {}
@@ -314,7 +314,7 @@ $ `stdlib/core/rcbox.nu`
             : String lower ( string_with_cap ln )
             : ~ i j 0
             ~ < j ln {
-                : i ch ( nurl_str_get nm j )
+                : i ch ( nurl_str_at nm ln j )
                 ( string_push_char lower ? & >= ch 65 <= ch 90 + ch 32 ch )
                 = j + j 1
             }
@@ -333,7 +333,7 @@ $ `stdlib/core/rcbox.nu`
     : ~ i k 0
     : ~ i any 0
     ~ < k n {
-        : i ch ( nurl_str_get v k )
+        : i ch ( nurl_str_at v n k )
         ? & >= ch 48 <= ch 57 { = out + * out 10 - ch 48 = any 1 } { = k n }
         = k + k 1
     }

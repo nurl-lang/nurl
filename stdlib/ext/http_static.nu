@@ -60,8 +60,8 @@ $ `stdlib/core/vec.nu`
     ? != n m { ^ F } {}
     : ~ i k 0
     ~ < k n {
-        : ~ i a ( nurl_str_get ext k )
-        : i b ( nurl_str_get lit k )
+        : ~ i a ( nurl_str_at ext n k )
+        : i b ( nurl_str_at lit m k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
         ? != a b { ^ F } {}
         = k + k 1
@@ -126,13 +126,13 @@ $ `stdlib/core/vec.nu`
     ~ & ! found <= k n {
         : ~ b at_sep F
         ? == k n { = at_sep T } {
-            : i c ( nurl_str_get path k )
+            : i c ( nurl_str_at path n k )
             ? | == c 47 == c 92 { = at_sep T } {}
         }
         ? at_sep {
             : i seg_len - k seg_start
             ? == seg_len 2 {
-                ? & == ( nurl_str_get path seg_start ) 46 == ( nurl_str_get path + seg_start 1 ) 46 {
+                ? & == ( nurl_str_at path n seg_start ) 46 == ( nurl_str_at path n + seg_start 1 ) 46 {
                     = found T
                 } {}
             } {}
@@ -161,13 +161,13 @@ $ `stdlib/core/vec.nu`
 @ __static_rel_tail s path → String {
     : i pn ( nurl_str_len path )
     : ~ i start 0
-    ~ & < start pn ( __is_sep_byte ( nurl_str_get path start ) ) {
+    ~ & < start pn ( __is_sep_byte ( nurl_str_at path pn start ) ) {
         = start + start 1
     }
     : String out ( string_with_cap - pn start )
     : ~ i k start
     ~ < k pn {
-        ( string_push_char out ( nurl_str_get path k ) )
+        ( string_push_char out ( nurl_str_at path pn k ) )
         = k + k 1
     }
     ^ out

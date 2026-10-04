@@ -271,7 +271,7 @@ $ `stdlib/ext/semver.nu`
     ( string_push_str out registry )
     : i rn ( nurl_str_len registry )
     ? > rn 0 {
-        ? != ( nurl_str_get registry - rn 1 ) 47 { ( string_push_char out 47 ) } {}
+        ? != ( nurl_str_at registry rn - rn 1 ) 47 { ( string_push_char out 47 ) } {}
     } {}
     ( string_push_str out `pkgs/` )
     ( string_push_str out name )

@@ -487,14 +487,14 @@ $ `stdlib/core/vec.nu`
     ? == n 0 { ^ @ !BigInt ParseErr { F @ ParseErr { Empty } } } {}
     : ~ i i 0
     : ~ b neg F
-    : i c0 ( nurl_str_get str 0 )
+    : i c0 ( nurl_str_at str n 0 )
     ? == c0 45 { = neg T = i 1 } {}
     ? == c0 43 { = i 1 } {}
     ? >= i n { ^ @ !BigInt ParseErr { F @ ParseErr { Empty } } } {}
     : ( Vec i ) mag ( vec_new [i] )
     : ~ b ok T
     ~ & ok < i n {
-        : i ch ( nurl_str_get str i )
+        : i ch ( nurl_str_at str n i )
         ? & >= ch 48 <= ch 57 {
             ( __mag_mul_add_small_inplace mag 10 - ch 48 )
         } { = ok F }

@@ -1,4 +1,4 @@
-// borrow_strict_nested_join_alias.nu — handle provenance through a
+// borrow_nested_join_alias.nu — handle provenance through a
 // join nested inside a `??` arm (docs/MEMORY.md §2.2).
 //
 // A `?` / `??` can SELECT a manually-managed handle, so the join
@@ -16,8 +16,9 @@
 // nesting was missing, which is what makes it a coverage gap rather
 // than a rule change.
 //
-// Conditional, so `--strict-borrowck`: the join MAY have selected `a`,
-// and the default checker reports only definite faults (§6.3).
+// Conditional — the join MAY have selected `a` — and reported by default:
+// on the path where it did, `a` is the consumed binding's alias partner
+// (docs/MEMORY.md §2.1).
 
 $ `stdlib/core/vec.nu`
 
