@@ -6,7 +6,32 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.70.0] — 2026-10-04
+
+A memory-safety and performance sweep. The compiler now rejects more
+programs that use memory unsafely, and fixes leaks and use-after-frees it
+used to accept: values freed on only some paths, a handle's second name,
+values stored into owners, functions that lend on some paths, and values
+that cannot be copied. `--debug` builds work at -O2 again. The panic
+journal, the symbol tables and string slicing each cost a fraction of what
+they did. agora becomes a signed-in web service with one agora per
+repository.
+
+### Added
+
+- **agora 0.5.0 / 0.5.1: a signed-in, multi-tenant web service with one
+  agora per git repository** (`packages/agora`, running at
+  agora.homecloud.fi).
+  - **Sign-in.** `agora serve` with `[auth] mode = "oidc"` needs a
+    signed-in person on REST, MCP and the web page. Each organisation (the
+    token's tenant) is admitted by the owner organisation.
+  - **Stateless calls.** Every call names its repository (`repo=`, a git
+    remote URL in any spelling) and its agent (`as=`). Everybody of an
+    organisation working on that repository shares one agora. No session
+    is kept, as in MCP 2026-07-28.
+  - **0.5.1** stops leaking per request, opens one SQLite connection per
+    call, and reads its inbox through an index: about 4–25× the
+    throughput of 0.5.0 at a quarter of the CPU per call.
 
 ### Changed
 
@@ -37,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing) and ends when either name is rebound. Five
   `borrow_strict_*_alias` tests are default-mode tests now; the
   forward-declared returning call stays the strict check.
+
+- **The package registry accepts 60 publishes per account per hour**
+  (it was 30). A toolchain release publishes about 60 packages in
+  dependency order, and v0.69's package publish stopped half-way for an
+  hour.
 
 ### Performance
 
@@ -91,6 +121,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bench/json_parse.nu`, a self-compile ~3.5% faster). A value that leaves
   through a struct is disowned from the table, and a drain frees each
   address once (docs/MEMORY.md §7.2).
+
+### Documentation
+
+- **`docs/dev/V1_HARDENING.md`, the v1.0 release-readiness worklist.**
 
 ### Fixed
 
@@ -195,6 +229,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gives every location-less call a location and every subprogram-less
   definition an artificial one. `tools/dwarf_test.sh` asserts this
   invariant with `tools/dwarf_location_census.py`.
+- **`oauth` 0.2.1 verifies access tokens as access tokens.** It applied
+  the ID-token `azp` rule (`azp` must equal the audience), so a token that
+  any other client requested was refused. That included one from the
+  Azure CLI. New `claims_check_access` / `oidc_verify_access_token_at`.
+- **wasmbuilder 0.3.2 bridges `strnlen` to the wasm32 ABI.** NURL passes
+  a 64-bit length and libc takes a 32-bit `size_t`, so wasm-ld replaced
+  every call with a trapping stub. With this release's runtime, nurlc.wasm
+  trapped on its first string slice.
+- **nurlc reports a missing input file as an error of its own**
+  (`nurlc: error: cannot open '<path>' — no such file`). Before, the
+  runtime's file reader printed a bare `cannot open` and exited from
+  inside, past every release the compiler makes.
 - **`nurlpkg publish` names a registry rate limit and shows the HTTP status
   of any other rejection.** A 429 (the registry's per-account publish cap)
   printed only `publish failed (PubRejected)`; it now says the registry is
