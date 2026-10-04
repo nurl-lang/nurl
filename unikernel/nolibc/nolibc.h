@@ -66,6 +66,7 @@ void *memchr(const void *s, int c, nl_size_t n);
 int   memcmp(const void *a, const void *b, nl_size_t n);
 int   bcmp(const void *a, const void *b, nl_size_t n);
 nl_size_t strlen(const char *s);
+nl_size_t strnlen(const char *s, nl_size_t max);
 int   strcmp(const char *a, const char *b);
 
 /* ── allocator ──────────────────────────────────────────────────── */

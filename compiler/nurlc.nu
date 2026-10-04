@@ -43153,6 +43153,12 @@
     ? & != 0 g_split_max != 0 g_dbg_enabled
     { ( nurl_eprintln `nurlc: --split cannot be combined with --g (DWARF metadata is per-module)` ) ^ 1 }
     {}
+    // A missing input is a diagnostic of its own, answered before anything
+    // is read: the runtime's reader used to print a bare `cannot open` and
+    // exit from inside, past every release this function makes.
+    ? & ! stdin_source != 1 ( nurl_file_exists path ) {
+        ( nurl_eprintln ( nurl_str_cat3 `nurlc: error: cannot open '` path `' — no such file` ) ) ^ 1
+    } {}
     ? != g_lint 0 { ( lint_init path ) } {}
     : s src ? stdin_source ( nurl_read_stdin ) ( compiler_read_source path )
     : s input_key ? stdin_source ( __canon_import_key path ) ``
