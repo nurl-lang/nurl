@@ -385,6 +385,12 @@ $ `stdlib/core/string.nu`
     ( nurl_free ctl )
 }
 
+// What the reference-count cycle collector sees in a map (docs/MEMORY.md
+// §7.7): every live entry's key and value.
+@ HashMap_trace [K V] ( HashMap K V ) m s vis → v {
+    ( map_each [K V] m \ K k V x → v { ( mem_trace [K] k vis ) ( mem_trace [V] x vis ) } )
+}
+
 // A copy of the map that owns its own entries (each key and value copied
 // — a String deep, an integer as is), at the same slot layout: no rehash.
 // What a borrowed map stored into an owner becomes (docs/MEMORY.md §7.6).

@@ -646,6 +646,12 @@ $ `stdlib/core/vec.nu`
     ( nurl_free ctl )
 }
 
+// What the reference-count cycle collector sees in a tree (docs/MEMORY.md
+// §7.7): every key and value.
+@ BTree_trace [K V] ( BTree K V ) m s vis → v {
+    ( btree_each [K V] m \ K k V x → v { ( mem_trace [K] k vis ) ( mem_trace [V] x vis ) } )
+}
+
 // A node-for-node copy of the subtree owning copies of its entries.
 @ __bt_clone_rec [K V] s n → s {
     : b leaf ( __bt_leaf n )

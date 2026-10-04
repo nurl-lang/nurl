@@ -18,6 +18,10 @@ v2.3).
   released by hand: `vec_free` / `string_free` / `*_close` … remain as an
   explicit early release, never a requirement. A closure's env is owned wherever the closure is kept and
   dropped by that owner, and freeing one by hand is a compile error.
+- **Rc cycles are collected** (§7.7): a payload type that can hold an Rc
+  back to itself is traced by a synchronous cycle collector (the one place
+  anything is traced); every other
+  type pays nothing. Long `Rc` chains are released without recursion.
 - **Automatic cleanup includes unwind paths.** A per-fiber journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
   tracks owned strings, slices, struct fields, enum owners, `% Drop` values
@@ -1833,3 +1837,62 @@ sanitizer gate runs every test with leak detection **on** (§6.6), the
 compiler's own compile included; `tools/leakgate.sh` and
 `tools/leakcheck` cover the self-compile and a serving HTTP process. A
 program that honours the contract leaks nothing.
+
+### 7.7 Reference-count cycles
+
+Reference counting frees a value when its last handle goes — except a value
+that, through its own contents, holds a handle to itself. A graph node
+listing its neighbours, a parent and child that point at each other, a
+callback stored in the value it captured: every count in such a cycle stays
+above zero after the last outside handle is gone. NURL collects them, so
+**Rc operations do not leak memory in any known situation**: not through a
+cycle, not through a closure, not through a long chain.
+
+**Only types that can close pay.** The compiler walks a payload type's
+ownership graph — fields, option and enum payloads, `Vec` elements, library
+handle contents (`HashMap`, `Deque`, `BTree`, `Set`, `Box`), closure
+captures — to the `Rc` handles it can hold. `Rc T` is *cyclic* when that
+graph leads from `T` back to `T`, or to a closure (whose captures no type
+names): `( mem_cyclic [T] )` answers it as a constant. Every other
+instance — `Rc String`, `Rc Config`, a tree of `Rc` whose nodes hold no
+`Rc` back — compiles to plain counting and never reaches the collector.
+`Arc` and `Channel` contents are `Send` / `Sync` and cannot hold an `Rc`;
+a `Weak` owns nothing; neither is an edge.
+
+**The collector** (stdlib/runtime_core.c) is Bacon and Rajan's synchronous
+cycle collection. A cyclic block is `[ strong ][ weak ][ cc ][ value ]`; a
+handle that goes without taking its count to zero files the block as a
+possible root, and a block whose count does reach zero leaves the buffer at
+once. When the buffer passes a threshold (twice what survived the last
+collection, at least 4096), and when the context ends — the thread, the
+fiber, the program at exit — trial deletion finds the blocks held only by
+each other: their edges into live blocks are counted back, their values
+dropped (an edge into a block being collected is a no-op), their blocks
+freed. The compiler gives each cyclic type a table of two functions — trace
+(hand every handle the value holds to the collector) and drop — generated
+like the drop and clone graphs; a library handle supplies `S_trace`, and a
+closure env's descriptor carries a trace of exactly the handles the env
+owns (a capture it only borrows is no edge: counting it would be wrong).
+`Rc` is not `Send`, so every block belongs to one context and its buffer is
+that context's, swapped with the fiber like the panic journal: collection
+takes no lock. `( rc_collect )` runs one now.
+
+**A long chain is released without recursion.** Dropping the head of a
+million-node list of `Rc` would recurse a million frames deep. A release of
+a value that holds further handles goes through the runtime
+(`nurl_rc_drop_value`), which nests at most 64 deep and queues the rest for
+the outermost release to drain in a loop.
+
+**Weak** (`rc_downgrade` / `weak_upgrade`) is a non-owning handle for a
+back-edge whose target should die with its strong handles: the value is
+dropped when the strong count reaches zero, the block freed when the weak
+count is zero too.
+
+**What is outside.** A cycle through raw memory — a `*T` written by hand, an
+`s` pointer to a block, `rc_ptr` stores, `mem_forget` — is invisible to the
+collector, as raw memory always is (§7.4). The thread-shared doors — `Arc`
+and the handles whose state stores a closure (`Supervisor`, `Route`,
+`QuicServer`, …) — are the next phase of this work; until then a cycle
+through them is a leak the program must break (a `Weak`, or the raw
+back-pointer `http3_server.nu` uses).
+

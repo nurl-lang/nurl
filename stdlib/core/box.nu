@@ -167,6 +167,13 @@ $ `stdlib/core/mem.nu`
     } {}
 }
 
+// What the reference-count cycle collector sees in a box (docs/MEMORY.md
+// §7.7): the payload's handles.
+@ Box_trace [T] ( Box T ) b s vis → v {
+    : *T p # *T . b ptr
+    ? != 0 # i p { ( mem_trace [T] . p 0 vis ) } {}
+}
+
 @ Box_clone [T] ( Box T ) b → ( Box T ) {
     : *T src # *T . b ptr
     ? == 0 # i src { ^ @ ( Box T ) { # s 0 } } {}

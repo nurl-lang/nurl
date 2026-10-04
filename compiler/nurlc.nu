@@ -5801,7 +5801,8 @@
     : ~ i i 0
     ~ < i n {
         : i c ( nurl_str_get src i )
-        ? | | == c 63 == c 126 == c 94 {  // '?' '~' '^'
+        // …or an option / result tag (`@ ?X { T v }`).
+        ? | | | == c 63 == c 126 == c 94 == c 123 {  // '?' '~' '^' '{'
             : ~ i j + i 1
             ~ & < j n | | == ( nurl_str_get src j ) 32 == ( nurl_str_get src j ) 9
             == ( nurl_str_get src j ) 10 { = j + j 1 }
@@ -10761,6 +10762,19 @@
     {}
     ? ( seq fname `mem_dup` )
     { ^ ( gen_mem_dup lex syms cg ) }
+    {}
+    // Reference-count cycle collection (docs/MEMORY.md §7.7).
+    ? ( seq fname `mem_cyclic` )
+    { ^ ( gen_mem_cyclic lex syms cg ) }
+    {}
+    ? ( seq fname `mem_cc_ops` )
+    { ^ ( gen_mem_cc_ops lex syms cg ) }
+    {}
+    ? ( seq fname `mem_trace` )
+    { ^ ( gen_mem_trace lex syms cg ) }
+    {}
+    ? ( seq fname `mem_rc_nested` )
+    { ^ ( gen_mem_rc_nested lex syms cg ) }
     {}
     // Dynamic trait object construction `( dyn Trait v )` (docs/spec.md §4.9).
     // Intercepted only when `dyn` is followed by a known trait name, so a
@@ -27539,9 +27553,13 @@
 }
 
 @ gen_env_vtable s fname s struct_name s captured_vars i syms → s {
-    : s ll_desc `{ i64, void (i8*)*, void (i8*)* }`
+    : s ll_desc `{ i64, void (i8*)*, void (i8*)*, void (i8*, i8*)* }`
     : ~ s drop_body ``
     : ~ s clone_body ``
+    // The reference-count cycle collector's view of the env (docs/MEMORY.md
+    // §7.7): the handles it OWNS — exactly what `drop` releases; a capture it
+    // only borrows is no edge, and counting it would be wrong.
+    : ~ s trace_body ``
     : ~ s vars ( nurl_str_cat captured_vars `` )
     : ~ i field_idx 1
     ~ != 0 ( nurl_str_len vars ) {
@@ -27555,6 +27573,7 @@
             : s ex ( nurl_str_cat4 `  %e` k ` = extractvalue ` ( nurl_str_cat4 ct ` %v` k `, 1\n` ) )
             : s head ( nurl_str_cat4 gep k `\n` ( nurl_str_cat ld ex ) )
             = drop_body ( nurl_str_cat4 drop_body head `  call void @nurl_closure_drop(i8* %e` ( nurl_str_cat k `)\n` ) )
+            = trace_body ( nurl_str_cat4 trace_body head `  call void @nurl_closure_cc_trace(i8* %e` ( nurl_str_cat k `, i8* %vis)\n` ) )
             = clone_body ( nurl_str_cat4 clone_body head
             ( nurl_str_cat3 `  %n` k ` = call i8* @nurl_closure_clone(i8* %e` )
             ( nurl_str_cat4 k `)\n  %w` k ( nurl_str_cat4 ` = insertvalue ` ct ` %v` k ) ) )
@@ -27575,6 +27594,10 @@
             : s head ( nurl_str_cat4 gep k `\n` ld )
             = drop_body ( nurl_str_cat4 drop_body head ( nurl_str_cat4 `  call void @` ( llvm_source_fn ( nurl_str_cat `drop__` hm ) ) `(` ht )
             ( nurl_str_cat3 ` %v` k `)\n` ) )
+            ? ( __cc_traces vty syms ) {
+                ( __cc_request_trace vty syms )
+                = trace_body ( nurl_str_cat4 trace_body gep k ( nurl_str_cat4 `\n  call void @__nurl_trace_` ( __cc_mangle vty ) `(ptr %p` ( nurl_str_cat k `, ptr %vis)\n` ) ) )
+            } {}
             = clone_body ( nurl_str_cat4 clone_body head ( nurl_str_cat4 `  %n` k ` = call ` ( nurl_str_cat4 ht ` @__nurl_clone_` hm `(` ) )
             ( nurl_str_cat4 ht ` %v` k ( nurl_str_cat4 `)\n  store ` ht ` %n` ( nurl_str_cat4 k `, ` ht ( nurl_str_cat3 `* %p` k `\n` ) ) ) ) ) }
         {}
@@ -27582,15 +27605,22 @@
         = field_idx + field_idx 1
     }
     : b nested != 0 ( nurl_str_len drop_body )
+    : b traced != 0 ( nurl_str_len trace_body )
     : s drop_ref ? nested ( nurl_str_cat `@__cenv_drop.` fname ) ( nurl_str_cat `null` `` )
     : s clone_ref ? nested ( nurl_str_cat `@__cenv_clone.` fname ) ( nurl_str_cat `null` `` )
+    : s trace_ref ? traced ( nurl_str_cat `@__cenv_trace.` fname ) ( nurl_str_cat `null` `` )
     : ~ s out ( nurl_str_cat4 `\n@__cenv_vt.` fname ` = constant ` ll_desc )
     = out ( nurl_str_cat4 out ` { i64 ptrtoint (` struct_name ( nurl_str_cat4 `* getelementptr (` struct_name `, ` struct_name ) )
-    = out ( nurl_str_cat4 out `* null, i32 1) to i64), void (i8*)* ` drop_ref ( nurl_str_cat3 `, void (i8*)* ` clone_ref ` }\n` ) )
+    = out ( nurl_str_cat4 out `* null, i32 1) to i64), void (i8*)* ` drop_ref ( nurl_str_cat3 `, void (i8*)* ` clone_ref `` ) )
+    = out ( nurl_str_cat4 out `, void (i8*, i8*)* ` trace_ref ` }\n` )
     ? nested
     { : s entry ( nurl_str_cat4 `(i8* %env) {\nentry:\n  %t = bitcast i8* %env to ` struct_name `*\n` `` )
         = out ( nurl_str_cat4 out `\ndefine void @__cenv_drop.` fname ( nurl_str_cat4 entry drop_body `  ret void\n}\n` `` ) )
         = out ( nurl_str_cat4 out `\ndefine void @__cenv_clone.` fname ( nurl_str_cat4 entry clone_body `  ret void\n}\n` `` ) ) }
+    {}
+    ? traced
+    { : s tentry ( nurl_str_cat4 `(i8* %env, i8* %vis) {\nentry:\n  %t = bitcast i8* %env to ` struct_name `*\n` `` )
+        = out ( nurl_str_cat4 out `\ndefine void @__cenv_trace.` fname ( nurl_str_cat4 tentry trace_body `  ret void\n}\n` `` ) ) }
     {}
     ^ out
 }
@@ -35046,6 +35076,16 @@
         ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print sp ) ( nurl_print `, ptr null, i64 1)\n` )
         ^ v
     } {}
+    // Any other one-pointer struct (a library handle: Rc, Box, HashMap, …)
+    // is stored in the slot itself, as construction stores it
+    // (enum_payload_storage 2) — not boxed: rebuild it and drop it.
+    ? & == 0 ( nurl_str_starts pt `%Vec__` ) == ( enum_payload_storage pt syms ) 2 {
+        : s hv ( __dr ctr )
+        ( nurl_print `  ` ) ( nurl_print hv ) ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty pt ) ) ( nurl_print ` zeroinitializer, i8* ` )
+        ( nurl_print sp ) ( nurl_print `, 0\n` )
+        ( emit_drop_value pt hv ctr syms )
+        ^ v
+    } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) {
         : s elem ( __vec_elem_llvm pt )
         ? ( __type_needs_drop elem syms ) {
@@ -35200,6 +35240,7 @@
         : s hv ( str_first_word hrest ) = hrest ( str_skip_word hrest )
         ( emit_jdrop_thunk ( nurl_llty hv ) ( __drop_mangle hv ) )
     }
+    ( emit_pending_cc syms )
     ( emit_pending_dropifs )
     ( emit_pending_zero_ifs )
     ( emit_pending_clones syms )
@@ -35216,6 +35257,480 @@
         ( nurl_print `define linkonce_odr void @__nurl_argxfen(ptr %f, ptr %s) alwaysinline {\nentry:\n  %c = load i1, ptr %f\n  br i1 %c, label %t, label %x\nt:\n  store i8* null, ptr %s\n  br label %x\nx:\n  ret void\n}\n` ) } {}
     ? != 0 g_use_clear_if
     { ( nurl_print `define linkonce_odr void @__nurl_clear_if(ptr %k, ptr %f) alwaysinline {\nentry:\n  %c = load i1, ptr %k\n  %o = load i1, ptr %f\n  %n = select i1 %c, i1 0, i1 %o\n  store i1 %n, ptr %f\n  ret void\n}\n` ) } {}
+}
+
+// ── Reference-count cycles (docs/MEMORY.md §7.7) ────────────────
+// A value a reference count holds can hold, through its own contents, a
+// handle to itself: such a cycle never reaches zero. Only a type whose
+// ownership graph can close forms one, and only those are collected
+// (stdlib/runtime_core.c, "cycle collector"); for every other type none
+// of this is emitted. The graph's edges are the `Rc` handles a value holds
+// through its owned structure (fields, payloads, Vec elements, library
+// handle contents — not through another Rc, which is the next node), plus
+// "anything" for a closure, whose captures no type names. `Arc` and
+// `Channel` contents are Send / Sync and hold no Rc.
+
+// `|`-separated list helpers (LLVM types hold spaces and commas, never `|`).
+@ __bar_first s l → s {
+    : i k ( nurl_str_find l `|` )
+    ? < k 0 { ^ ( nurl_str_cat l `` ) } {}
+    ^ ( nurl_str_slice l 0 k )
+}
+
+@ __bar_rest s l → s {
+    : i k ( nurl_str_find l `|` )
+    ? < k 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_slice l + k 1 - - ( nurl_str_len l ) k 1 )
+}
+
+@ __bar_has s l s w → b {
+    : ~ s r ( nurl_str_cat l `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s x ( __bar_first r ) = r ( __bar_rest r )
+        ? ( seq x w ) { ^ T } {}
+    }
+    ^ F
+}
+
+@ __bar_add s l s w → s {
+    ? | == 0 ( nurl_str_len w ) ( __bar_has l w ) { ^ ( nurl_str_cat l `` ) } {}
+    ? == 0 ( nurl_str_len l ) { ^ ( nurl_str_cat w `` ) } {}
+    ^ ( nurl_str_cat3 l `|` w )
+}
+
+@ __bar_union s a s b → s {
+    : ~ s out ( nurl_str_cat a `` )
+    : ~ s r ( nurl_str_cat b `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s x ( __bar_first r ) = r ( __bar_rest r )
+        = out ( __bar_add out x )
+    }
+    ^ out
+}
+
+// A spelling of type `ty` fit for a function name: the drop mangle, with
+// whatever an anonymous type (a closure's `{ R (i8*, …)*, i8* }`) spells
+// in punctuation encoded letter by letter, so distinct types stay distinct.
+@ __cc_mangle s ty → s {
+    : s m ( __drop_mangle ty )
+    : i n ( nurl_str_len m )
+    : ~ s out ``
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get m k )
+        : s piece ? | | | & >= c 97 <= c 122 & >= c 65 <= c 90 & >= c 48 <= c 57 | == c 95 == c 46
+        ( nurl_str_slice m k 1 )
+        ? == c 123 `L` ? == c 125 `R` ? == c 40 `P` ? == c 41 `Q` ? == c 42 `S` ? == c 44 `C` ? == c 32 `_` ? == c 37 `` ? == c 91 `A` ? == c 93 `Z` `X`
+        = out ( nurl_str_cat out piece )
+        = k + k 1
+    }
+    ^ out
+}
+
+// Is `ty` an `Rc` instance (its payload is the collectable node)?
+@ __cc_is_rc s ty → b {
+    ? ! ( __is_libh ty ) { ^ F } {}
+    ^ ( seq ( __libh_base ty ) `Rc` )
+}
+
+// The edges of a value of type `ty` (`seen`: the types on the walk so far).
+@ __cc_walk s ty i syms s seen → s {
+    : i n ( nurl_str_len ty )
+    ? | < n 2 ( __bar_has seen ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __is_closure_ty ty ) { ^ ( nurl_str_cat `*` `` ) } {}
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( nurl_str_cat `*` `` ) } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
+    : s seen2 ( __bar_add seen ty )
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s a ( __cc_walk ( __wrap_part ty 0 ) syms seen2 )
+        : s b ( __cc_walk ( __wrap_part ty 1 ) syms seen2 )
+        ^ ( __bar_union a b )
+    } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __cc_is_rc ty ) { ^ ( __libh_targ ty 0 ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __cc_walk ( __vec_elem_llvm ty ) syms seen2 ) } {}
+    ? ( __is_libh ty ) {
+        : s b ( __libh_base ty )
+        // (A Weak owns nothing; Arc / Channel contents are Send / Sync.)
+        ? | | ( seq b `Weak` ) ( seq b `Arc` ) ( seq b `Channel` ) { ^ ( nurl_str_cat `` `` ) } {}
+        : ~ s out ``
+        : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
+        : ~ i k 0
+        ~ < k na {
+            : s ta ( __libh_targ ty k )
+            : s e ( __cc_walk ta syms seen2 )
+            = out ( __bar_union out e )
+            = k + k 1
+        }
+        ^ out
+    } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : ~ s out ``
+    : s vlist ( nurl_sym_get2 syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
+            : ~ i pi 0
+            ~ < pi pc {
+                : s e ( __cc_walk ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms seen2 )
+                = out ( __bar_union out e )
+                = pi + pi 1
+            }
+        }
+        ^ out
+    } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        : s e ( __cc_walk ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms seen2 )
+        = out ( __bar_union out e )
+        = fi + fi 1
+    }
+    ^ out
+}
+
+// The edges of `ty`, memoised.
+@ __cc_edges s ty i syms → s {
+    : s key ( nurl_str_cat `ccedges##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) {
+        : s m ( nurl_sym_get g_impl_name_syms key )
+        ? ( seq m `-` ) { ^ ( nurl_str_cat `` `` ) } {}
+        ^ ( nurl_str_cat m `` )
+    } {}
+    : s e ( __cc_walk ty syms `` )
+    ( nurl_sym_def g_impl_name_syms key ? == 0 ( nurl_str_len e ) ( nurl_str_cat `-` `` ) ( nurl_str_cat e `` ) )
+    ^ e
+}
+
+// Can dropping a value of type `ty` release further handles (it holds an
+// Rc, or a closure)?
+@ __cc_holds_rc s ty i syms → b {
+    ^ != 0 ( nurl_str_len ( __cc_edges ty syms ) )
+}
+
+// Does a value of type `ty` hold anything the collector must see — an Rc
+// whose payload can be part of a cycle, or a closure?
+@ __cc_traces s ty i syms → b {
+    : s key ( nurl_str_cat `cctr##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
+    : ~ s r ( __cc_edges ty syms )
+    : ~ b t F
+    ~ & ! t != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        ? | ( seq u `*` ) ( __cc_cyclic u syms ) { = t T } {}
+    }
+    ( nurl_sym_def g_impl_name_syms key ? t `1` `0` )
+    ^ t
+}
+
+// Can an `Rc t` be part of a cycle — does the edge graph lead from t back
+// to t, or to a closure (which may capture anything)?
+@ __cc_cyclic s t i syms → b {
+    : s key ( nurl_str_cat `cccyc##` t )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
+    : ~ s todo ( __cc_edges t syms )
+    : ~ s seen ``
+    : ~ b cyc F
+    ~ & ! cyc != 0 ( nurl_str_len todo ) {
+        : s u ( __bar_first todo ) = todo ( __bar_rest todo )
+        ? | ( seq u `*` ) ( seq u t ) { = cyc T } {
+            ? ! ( __bar_has seen u ) {
+                = seen ( __bar_add seen u )
+                = todo ( __bar_union todo ( __cc_edges u syms ) )
+            } {}
+        }
+    }
+    ( nurl_sym_def g_impl_name_syms key ? cyc `1` `0` )
+    ^ cyc
+}
+
+// What emitting `ty`'s trace needs, now — a library handle's S_trace
+// instance is generic, and instances can only be added while they are
+// still being collected — and `ty` noted for emission at module end.
+@ __cc_request_trace s ty i syms → v {
+    : s key ( nurl_str_cat `cctrq##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
+    ( nurl_sym_def g_impl_name_syms key `1` )
+    ? ! ( __cc_traces ty syms ) { ^ v } {}
+    : s __ptr0 ( nurl_sym_get g_impl_name_syms `__pending_cctraces__` )
+    ( nurl_sym_def g_impl_name_syms `__pending_cctraces__` ( __bar_add __ptr0 ty ) )
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        ( __cc_request_trace ( __wrap_part ty 0 ) syms )
+        ( __cc_request_trace ( __wrap_part ty 1 ) syms )
+        ^ v
+    } {}
+    ? ( __cc_is_rc ty ) {
+        : s u ( __libh_targ ty 0 )
+        ? ( __cc_cyclic u syms ) { ( __cc_request_ops u syms ) } {}
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ( __cc_request_trace ( __vec_elem_llvm ty ) syms ) ^ v } {}
+    ? ( __is_closure_ty ty ) { ^ v } {}
+    ? ( __is_libh ty ) {
+        ? ! ( __libh_has_op ( __libh_base ty ) `trace` ) {
+            ( die_at `cycle collection` ( nurl_str_cat3 `'` ( llvm_to_nurl ty ) `' can hold an Rc (or a closure) but its module defines no _trace function, so the cycle collector cannot see inside it — add one (see stdlib/std/hashmap.nu HashMap_trace).` ) )
+        } {}
+        ( __libh_defer ty `trace` )
+        ^ v
+    } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s vlist ( nurl_sym_get2 syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
+            : ~ i pi 0
+            ~ < pi pc {
+                ( __cc_request_trace ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms )
+                = pi + pi 1
+            }
+        }
+        ^ v
+    } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        ( __cc_request_trace ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms )
+        = fi + fi 1
+    }
+}
+
+// The collector's table for `Rc t` (t cyclic): noted, with t's trace.
+@ __cc_request_ops s t i syms → v {
+    : s key ( nurl_str_cat `ccopsrq##` t )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ v } {}
+    ( nurl_sym_def g_impl_name_syms key `1` )
+    : s __pop0 ( nurl_sym_get g_impl_name_syms `__pending_ccops__` )
+    ( nurl_sym_def g_impl_name_syms `__pending_ccops__` ( __bar_add __pop0 t ) )
+    ( __cc_request_trace t syms )
+    ? ( __type_needs_drop t syms ) { ( __dropif_request t ( __drop_mangle t ) ) } {}
+}
+
+// `( mem_cyclic [T] )` — can an `Rc T` be part of a cycle? A constant.
+@ __cc_parse_targ i lex → s {
+    ( expect lex TT_LBRACK )
+    : s ty ( parse_type lex )
+    ( expect lex TT_RBRACK )
+    ^ ty
+}
+
+@ gen_mem_cyclic i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    ( expect lex TT_RPAREN )
+    ( nurl_set_last_type `i1` )
+    ^ ? ( __cc_cyclic ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
+}
+
+// `( mem_rc_nested [T] )` — can dropping a T release further handles (it
+// holds an Rc, or a closure)? A constant: such a release goes through the
+// runtime, which keeps a long chain of them off the stack.
+@ gen_mem_rc_nested i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    ( expect lex TT_RPAREN )
+    ( nurl_set_last_type `i1` )
+    ^ ? ( __cc_holds_rc ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
+}
+
+// `( mem_cc_ops [T] )` — the collector's table for `Rc T`.
+@ gen_mem_cc_ops i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    ( expect lex TT_RPAREN )
+    ( __cc_request_ops ty syms )
+    ( nurl_set_last_type `i8*` )
+    ^ ( nurl_str_cat `@__nurl_ccops_` ( __cc_mangle ty ) )
+}
+
+// `( mem_trace [T] x vis )` — hand the collector every edge `x` holds (a
+// library handle's S_trace is written with it).
+@ gen_mem_trace i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    : s v ( gen_operand lex syms cg )
+    : s vis ( gen_operand lex syms cg )
+    ( expect lex TT_RPAREN )
+    ? ( __cc_traces ty syms ) {
+        ( __cc_request_trace ty syms )
+        : s slot ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print `\n` )
+        ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, ptr ` ) ( nurl_print slot ) ( nurl_print `\n` )
+        ( nurl_print `  call void @__nurl_trace_` ) ( nurl_print ( __cc_mangle ty ) ) ( nurl_print `(ptr ` ) ( nurl_print slot )
+        ( nurl_print `, ptr ` ) ( nurl_print vis ) ( nurl_print `)\n` )
+    } {}
+    ( nurl_set_last_type `void` )
+    ^ ( nurl_str_cat `undef` `` )
+}
+
+// Module end: every trace and table the program asked for.
+@ emit_pending_cc i syms → v {
+    : ~ s orest ( nurl_sym_get g_impl_name_syms `__pending_ccops__` )
+    ~ != 0 ( nurl_str_len orest ) {
+        : s t ( __bar_first orest ) = orest ( __bar_rest orest )
+        : s m ( __cc_mangle t )
+        // RcImpl's layout, [ i64 strong ][ i64 weak ][ i64 cc ][ t ].
+        : s impl ( nurl_str_cat3 `{ i64, i64, i64, ` ( nurl_llty t ) ` }` )
+        ( nurl_print `@__nurl_ccops_` ) ( nurl_print m ) ( nurl_print ` = linkonce_odr constant { ptr, ptr } { ptr @__nurl_cctrace_` )
+        ( nurl_print m ) ( nurl_print `, ptr @__nurl_ccdrop_` ) ( nurl_print m ) ( nurl_print ` }\n` )
+        ( nurl_print `define linkonce_odr void @__nurl_cctrace_` ) ( nurl_print m ) ( nurl_print `(ptr %impl, ptr %vis) {\nentry:\n` )
+        ? ( __cc_traces t syms ) {
+            ( nurl_print `  %p = getelementptr ` ) ( nurl_print impl ) ( nurl_print `, ptr %impl, i32 0, i32 3\n  call void @__nurl_trace_` )
+            ( nurl_print m ) ( nurl_print `(ptr %p, ptr %vis)\n` )
+        } {}
+        ( nurl_print `  ret void\n}\n` )
+        ( nurl_print `define linkonce_odr void @__nurl_ccdrop_` ) ( nurl_print m ) ( nurl_print `(ptr %impl) {\nentry:\n` )
+        ? ( __type_needs_drop t syms ) {
+            ( nurl_print `  %p = getelementptr ` ) ( nurl_print impl ) ( nurl_print `, ptr %impl, i32 0, i32 3\n  call void @__dropif_` )
+            ( nurl_print ( __drop_mangle t ) ) ( nurl_print `(i1 true, ptr %p)\n` )
+        } {}
+        ( nurl_print `  ret void\n}\n` )
+    }
+    : ~ s trest ( nurl_sym_get g_impl_name_syms `__pending_cctraces__` )
+    ~ != 0 ( nurl_str_len trest ) {
+        : s t ( __bar_first trest ) = trest ( __bar_rest trest )
+        ( emit_cc_trace_fn t syms )
+    }
+}
+
+// `__nurl_trace_<m>(ptr %p, ptr %vis)`: every edge of the value at %p.
+@ emit_cc_trace_fn s ty i syms → v {
+    : s m ( __cc_mangle ty )
+    : s ll ( nurl_llty ty )
+    ( nurl_print `define linkonce_odr void @__nurl_trace_` ) ( nurl_print m ) ( nurl_print `(ptr %p, ptr %vis) {\nentry:\n` )
+    ? ( __cc_is_rc ty ) {
+        : s u ( __libh_targ ty 0 )
+        ? ( __cc_cyclic u syms ) {
+            ( nurl_print `  %c = load ptr, ptr %p\n  call void @nurl_cc_visit(ptr %vis, ptr %c, ptr @__nurl_ccops_` )
+            ( nurl_print ( __cc_mangle u ) ) ( nurl_print `)\n` )
+        } {}
+        ( nurl_print `  ret void\n}\n` )
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s pt ( __wrap_part ty 0 )
+        : s et ( __wrap_part ty 1 )
+        ( nurl_print `  %tp = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 0\n  %t = load i1, ptr %tp\n  br i1 %t, label %s, label %n\ns:\n` )
+        ? & != 0 ( nurl_str_len pt ) ( __cc_traces pt syms ) {
+            ( nurl_print `  %pp = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 1\n  call void @__nurl_trace_` )
+            ( nurl_print ( __cc_mangle pt ) ) ( nurl_print `(ptr %pp, ptr %vis)\n` )
+        } {}
+        ( nurl_print `  ret void\nn:\n` )
+        ? & != 0 ( nurl_str_len et ) ( __cc_traces et syms ) {
+            ( nurl_print `  %ep = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 2\n  call void @__nurl_trace_` )
+            ( nurl_print ( __cc_mangle et ) ) ( nurl_print `(ptr %ep, ptr %vis)\n` )
+        } {}
+        ( nurl_print `  ret void\n}\n` )
+        ^ v
+    } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) {
+        : s el ( __vec_elem_llvm ty )
+        : s ell ( nurl_llty el )
+        // [ data ][ len ][ cap ]; a borrowed view (cap < 0) owns nothing.
+        ( nurl_print `  %ctl = load ptr, ptr %p\n  %nul = icmp eq ptr %ctl, null\n  br i1 %nul, label %x, label %h\nh:\n` )
+        ( nurl_print `  %lp = getelementptr i64, ptr %ctl, i64 1\n  %len = load i64, ptr %lp\n  %cp = getelementptr i64, ptr %ctl, i64 2\n  %cap = load i64, ptr %cp\n` )
+        ( nurl_print `  %brw = icmp slt i64 %cap, 0\n  br i1 %brw, label %x, label %d\nd:\n  %data = load ptr, ptr %ctl\n  br label %l\nl:\n` )
+        ( nurl_print `  %i = phi i64 [ 0, %d ], [ %i1, %b ]\n  %more = icmp slt i64 %i, %len\n  br i1 %more, label %b, label %x\nb:\n` )
+        ( nurl_print `  %e = getelementptr ` ) ( nurl_print ell ) ( nurl_print `, ptr %data, i64 %i\n  call void @__nurl_trace_` )
+        ( nurl_print ( __cc_mangle el ) ) ( nurl_print `(ptr %e, ptr %vis)\n  %i1 = add i64 %i, 1\n  br label %l\nx:\n  ret void\n}\n` )
+        ^ v
+    } {}
+    ? ( __is_closure_ty ty ) {
+        // A closure's env: its descriptor's trace (null for an env with no
+        // collectable capture).
+        ( nurl_print `  %ep = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 1\n  %env = load ptr, ptr %ep\n  call void @nurl_closure_cc_trace(ptr %env, ptr %vis)\n  ret void\n}\n` )
+        ^ v
+    } {}
+    ? ( __is_libh ty ) {
+        ( nurl_print `  %v = load ` ) ( nurl_print ll ) ( nurl_print `, ptr %p\n  call void @` )
+        ( nurl_print ( llvm_source_fn ( __libh_fn ty `trace` ) ) ) ( nurl_print `(` ) ( nurl_print ll ) ( nurl_print ` %v, ptr %vis)\n  ret void\n}\n` )
+        ^ v
+    } {}
+    : s sname ( nurl_str_slice ty 1 - ( nurl_str_len ty ) 1 )
+    : s vlist ( nurl_sym_get2 syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        // `{ i64 tag, i64 slot… }`: per variant, each payload slot that
+        // holds an edge — a one-pointer handle (Rc, Vec) in the slot itself,
+        // a wider value through the box the slot points at.
+        ( nurl_print `  %tp = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 0
+  %tag = load i64, ptr %tp
+  br label %v0
+` )
+        : ~ s scan ( nurl_str_cat vlist `` )
+        : ~ i vk 0
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : s k ( nurl_str_int vk )
+            : s nk ( nurl_str_int + vk 1 )
+            ( nurl_print `v` ) ( nurl_print k ) ( nurl_print `:
+  %c` ) ( nurl_print k ) ( nurl_print ` = icmp eq i64 %tag, ` ) ( nurl_print k )
+            ( nurl_print `
+  br i1 %c` ) ( nurl_print k ) ( nurl_print `, label %b` ) ( nurl_print k ) ( nurl_print `, label %v` ) ( nurl_print nk )
+            ( nurl_print `
+b` ) ( nurl_print k ) ( nurl_print `:
+` )
+            : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
+            : ~ i pi 0
+            ~ < pi pc {
+                : s pt ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
+                ? ( __cc_traces pt syms ) {
+                    : s q ( nurl_str_cat4 k `_` ( nurl_str_int pi ) `` )
+                    : s pl ( nurl_llty pt )
+                    : i st ( enum_payload_storage pt syms )
+                    ( nurl_print `  %sp` ) ( nurl_print q ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 ` )
+                    ( nurl_print ( nurl_str_int + pi 1 ) ) ( nurl_print `
+  %sv` ) ( nurl_print q ) ( nurl_print ` = load i64, ptr %sp` ) ( nurl_print q )
+                    ( nurl_print `
+  %pp` ) ( nurl_print q ) ( nurl_print ` = inttoptr i64 %sv` ) ( nurl_print q ) ( nurl_print ` to ptr
+` )
+                    ? == st 2 {
+                        ( nurl_print `  %hv` ) ( nurl_print q ) ( nurl_print ` = insertvalue ` ) ( nurl_print pl ) ( nurl_print ` zeroinitializer, ptr %pp` ) ( nurl_print q )
+                        ( nurl_print `, 0
+  %ha` ) ( nurl_print q ) ( nurl_print ` = alloca ` ) ( nurl_print pl ) ( nurl_print `
+  store ` ) ( nurl_print pl )
+                        ( nurl_print ` %hv` ) ( nurl_print q ) ( nurl_print `, ptr %ha` ) ( nurl_print q ) ( nurl_print `
+  call void @__nurl_trace_` ) ( nurl_print ( __cc_mangle pt ) )
+                        ( nurl_print `(ptr %ha` ) ( nurl_print q ) ( nurl_print `, ptr %vis)
+` )
+                    } {
+                        ? == st 3 {
+                            ( nurl_print `  %nz` ) ( nurl_print q ) ( nurl_print ` = icmp ne i64 %sv` ) ( nurl_print q ) ( nurl_print `, 0
+  br i1 %nz` ) ( nurl_print q )
+                            ( nurl_print `, label %t` ) ( nurl_print q ) ( nurl_print `, label %u` ) ( nurl_print q ) ( nurl_print `
+t` ) ( nurl_print q )
+                            ( nurl_print `:
+  call void @__nurl_trace_` ) ( nurl_print ( __cc_mangle pt ) ) ( nurl_print `(ptr %pp` ) ( nurl_print q )
+                            ( nurl_print `, ptr %vis)
+  br label %u` ) ( nurl_print q ) ( nurl_print `
+u` ) ( nurl_print q ) ( nurl_print `:
+` )
+                        } {}
+                    }
+                } {}
+                = pi + pi 1
+            }
+            ( nurl_print `  ret void
+` )
+            = vk + vk 1
+        }
+        ( nurl_print `v` ) ( nurl_print ( nurl_str_int vk ) ) ( nurl_print `:
+  ret void
+}
+` )
+        ^ v
+    } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        : s ft ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+        ? ( __cc_traces ft syms ) {
+            : s fp ( nurl_str_cat `%f` ( nurl_str_int fi ) )
+            ( nurl_print `  ` ) ( nurl_print fp ) ( nurl_print ` = getelementptr ` ) ( nurl_print ll ) ( nurl_print `, ptr %p, i32 0, i32 ` )
+            ( nurl_print ( nurl_str_int fi ) ) ( nurl_print `\n  call void @__nurl_trace_` ) ( nurl_print ( __cc_mangle ft ) )
+            ( nurl_print `(ptr ` ) ( nurl_print fp ) ( nurl_print `, ptr %vis)\n` )
+        } {}
+        = fi + fi 1
+    }
+    ( nurl_print `  ret void\n}\n` )
 }
 
 // ── Clone-on-store (docs/MEMORY.md §7.6) ─────────────────────────
@@ -36080,7 +36595,9 @@
     : s pl ( nurl_llty pt )
     ( nurl_print `define linkonce_odr i64 @__nurl_cloneslot_` ) ( nurl_print pm )
     ( nurl_print `(i64 %s) {\nentry:\n  %z = icmp eq i64 %s, 0\n  br i1 %z, label %x, label %c\nc:\n  %p = inttoptr i64 %s to ptr\n` )
-    ? | ( seq pt `%String` ) != 0 ( nurl_str_starts pt `%Vec__` ) {
+    // (A one-pointer struct — String, Vec, a library handle — is the slot
+    // itself, enum_payload_storage 2; anything wider is boxed.)
+    ? == ( enum_payload_storage pt syms ) 2 {
         ( nurl_print `  %h = insertvalue ` ) ( nurl_print pl ) ( nurl_print ` zeroinitializer, ptr %p, 0\n` )
         ( nurl_print `  %n = call ` ) ( nurl_print pl ) ( nurl_print ` @__nurl_clone_` ) ( nurl_print pm ) ( nurl_print `(` ) ( nurl_print pl ) ( nurl_print ` %h)\n` )
         ( nurl_print `  %q = extractvalue ` ) ( nurl_print pl ) ( nurl_print ` %n, 0\n  %r = ptrtoint ptr %q to i64\n  ret i64 %r\n` )
@@ -37626,6 +38143,8 @@
     // the env is already the caller's.
     ( __emit_rt_decl syms `declare void @nurl_closure_drop(i8*)` )
     ( __emit_rt_decl syms `declare i8* @nurl_closure_clone(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_closure_cc_trace(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_cc_visit(i8*, i8*, i8*)` )
     ( __emit_rt_decl syms `declare i8* @nurl_closure_own(i8*, i8*)` )
     ( __emit_rt_decl syms `declare void @nurl_closure_slice_drop(i8*, i64)` )
     ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**)` )

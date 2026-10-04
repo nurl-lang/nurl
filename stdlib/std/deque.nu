@@ -189,6 +189,23 @@
     ( nurl_free ctl )
 }
 
+// What the reference-count cycle collector sees in a deque (docs/MEMORY.md
+// §7.7): every live element.
+@ Deque_trace [A] ( Deque A ) d s vis → v {
+    : s ctl . d ctl
+    ? == 0 # i ctl { ^ } {}
+    : i len ( nurl_peek ctl 3 )
+    : i cap ( nurl_peek ctl 1 )
+    : i head ( nurl_peek ctl 2 )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : i pos % + head i cap
+        ( mem_trace [A] . data pos vis )
+        = i + i 1
+    }
+}
+
 // A copy that owns its own elements, in logical order (head at 0).
 @ Deque_clone [A] ( Deque A ) d → ( Deque A ) {
     : s sctl . d ctl

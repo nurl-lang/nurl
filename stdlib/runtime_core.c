@@ -2823,6 +2823,7 @@ typedef struct {
     long long size;
     void (*drop)(void *env);
     void (*clone)(void *env);
+    void (*trace)(void *env, void *vis);   /* the owned handles, for the cycle collector */
 } NurlCenvVt;
 
 void nurl_closure_drop(void *env) {
@@ -2908,6 +2909,9 @@ typedef struct {
     uint64_t sequence;
     size_t next;                 /* index + 1 in this pointer's hash bucket */
 } NurlJournalEntry;
+/* The running context's reference-count cycle collector (see "cycle
+ * collector" below); swapped with the fiber like the journal. */
+static __thread void *nurl__cc = NULL;
 static __thread NurlJournalEntry *nurl__jrnl = NULL;
 static __thread size_t *nurl__jrnl_buckets = NULL;
 NURL_TLS_HOT size_t nurl__jrnl_len = 0;
@@ -4488,6 +4492,7 @@ typedef struct NurlRecoverCtx {
     size_t            jslot_len, jslot_cap;
     NurlPanicFrame   *panic_top;
     char             *last_msg;
+    void             *cc;          /* the context's cycle collector (nurl__cc) */
 } NurlRecoverCtx;
 /* runtime_ffi.c reserves NURL_RCTX_WORDS pointers per fiber for it. */
 #define NURL_RCTX_WORDS 14
@@ -4509,6 +4514,7 @@ NURL_TLS_FN void nurl__rctx_swap(void *ctx) {
     NURL__RCTX_XCHG(jslot_cap, nurl__jslot_cap);
     NURL__RCTX_XCHG(panic_top, nurl__panic_top);
     NURL__RCTX_XCHG(last_msg, nurl__panic_last_msg);
+    NURL__RCTX_XCHG(cc, nurl__cc);
 }
 #undef NURL__RCTX_XCHG
 
@@ -4519,6 +4525,308 @@ void nurl__rctx_release(void *ctx) {
     free(c->jrnl); free(c->buckets); free(c->jslot);
     if (c->last_msg) nurl_free(c->last_msg);
     memset(c, 0, sizeof *c);
+}
+
+/* ── Reference-count cycle collector (docs/MEMORY.md §7.7) ──────────────
+ *
+ * Reference counting frees a value when its last handle goes — except a
+ * value that, through its own contents, holds a handle to itself: a cycle
+ * keeps every count in it above zero forever. Only types whose ownership
+ * graph can close (an Rc payload that reaches an Rc, a closure that may
+ * capture one) can form such a cycle; the compiler decides which
+ * (`mem_cyclic`) and gives each of those a table of two functions — trace
+ * (hand every collectable handle the value holds to nurl_cc_visit) and
+ * drop_value (drop the value in place). Every other type never reaches this
+ * code.
+ *
+ * A collectable block is [ i64 strong ][ i64 weak ][ u64 cc ][ value ].
+ * When a strong count goes down without reaching zero, the block may have
+ * just become garbage held only by a cycle: it is buffered as a possible
+ * root. The buffer is collected (Bacon & Rajan's synchronous cycle
+ * collection: trial deletion) when it grows past a threshold and when the
+ * context ends — a fiber, a thread, the program — so nothing is left for
+ * LeakSanitizer to find. The handles are not Send: every block belongs to
+ * one context, the buffer is that context's (swapped with the fiber, like
+ * the panic journal), and collection needs no lock. Every walk is
+ * iterative: a long chain cannot overflow the stack. */
+typedef struct NurlCcOps {
+    void (*trace)(void *impl, void *vis);
+    void (*drop_value)(void *impl);
+} NurlCcOps;
+typedef struct NurlCcHdr { int64_t strong, weak; uint64_t cc; } NurlCcHdr;
+enum { NURL_CC_BLACK = 0, NURL_CC_GRAY = 1, NURL_CC_WHITE = 2, NURL_CC_PURPLE = 3,
+       NURL_CC_COLOR = 3, NURL_CC_BUFFERED = 4, NURL_CC_DEAD = 8, NURL_CC_FREED = 16 };
+/* A buffered block's position in the roots buffer rides in the upper bits
+ * of its cc word: a block whose count reaches zero leaves the buffer at
+ * once (swap with the last entry) and is freed there and then. */
+#define NURL_CC_IDX_SHIFT 8
+#define NURL_CC_FLAGS ((uint64_t)((1u << NURL_CC_IDX_SHIFT) - 1))
+typedef struct { NurlCcHdr *h; const NurlCcOps *ops; } NurlCcRef;
+typedef struct NurlCcState {
+    NurlCcRef *roots; size_t len, cap;
+    size_t threshold;
+    int collecting;
+    /* Releases nested deeper than NURL_RC_DROP_DEPTH wait here (see
+     * nurl_rc_drop_value): a long chain of handles goes iteratively. */
+    NurlCcRef *deferred; size_t dlen, dcap;
+    int depth;
+} NurlCcState;
+typedef struct NurlCcVec { NurlCcRef *v; size_t len, cap; } NurlCcVec;
+enum { NURL_CC_MARKGRAY, NURL_CC_SCAN, NURL_CC_SCANBLACK, NURL_CC_COLLECT, NURL_CC_RESTORE };
+typedef struct NurlCcVis { int mode; NurlCcVec *stack; } NurlCcVis;
+
+#define NURL_CC_MIN_THRESHOLD 4096
+
+static void nurl__cc_push(NurlCcVec *s, NurlCcHdr *h, const NurlCcOps *ops) {
+    if (s->len == s->cap) {
+        size_t nc = s->cap ? s->cap * 2 : 64;
+        NurlCcRef *nv = (NurlCcRef *)realloc(s->v, nc * sizeof *nv);
+        if (!nv) { fputs("nurl: out of memory (cycle collector)\n", stderr); abort(); }
+        s->v = nv; s->cap = nc;
+    }
+    s->v[s->len].h = h; s->v[s->len].ops = ops; s->len++;
+}
+static inline unsigned nurl__cc_color(NurlCcHdr *h) { return (unsigned)(h->cc & NURL_CC_COLOR); }
+static inline void nurl__cc_paint(NurlCcHdr *h, unsigned c) { h->cc = (h->cc & ~(uint64_t)NURL_CC_COLOR) | c; }
+
+/* Called by a value's trace function for each collectable handle it holds. */
+void nurl_cc_visit(void *vis, void *impl, const void *ops) {
+    if (!impl) return;
+    NurlCcVis *v = (NurlCcVis *)vis;
+    NurlCcHdr *t = (NurlCcHdr *)impl;
+    const NurlCcOps *o = (const NurlCcOps *)ops;
+    switch (v->mode) {
+    case NURL_CC_MARKGRAY:          /* trial deletion: the edge is internal */
+        t->strong--;
+        if (nurl__cc_color(t) != NURL_CC_GRAY) nurl__cc_push(v->stack, t, o);
+        break;
+    case NURL_CC_SCAN:
+        nurl__cc_push(v->stack, t, o);
+        break;
+    case NURL_CC_SCANBLACK:         /* live after all: the edge counts again */
+        t->strong++;
+        if (nurl__cc_color(t) != NURL_CC_BLACK) { nurl__cc_paint(t, NURL_CC_BLACK); nurl__cc_push(v->stack, t, o); }
+        break;
+    case NURL_CC_COLLECT:
+        if (nurl__cc_color(t) == NURL_CC_WHITE && !(t->cc & NURL_CC_BUFFERED)) nurl__cc_push(v->stack, t, o);
+        break;
+    case NURL_CC_RESTORE:           /* garbage → live edge: give it back */
+        if (!(t->cc & NURL_CC_DEAD)) t->strong++;
+        break;
+    }
+}
+
+static void nurl__cc_markgray(NurlCcVec *st, NurlCcHdr *h, const NurlCcOps *o) {
+    NurlCcVis vis = { NURL_CC_MARKGRAY, st };
+    nurl__cc_push(st, h, o);
+    while (st->len) {
+        NurlCcRef r = st->v[--st->len];
+        if (nurl__cc_color(r.h) == NURL_CC_GRAY) continue;
+        nurl__cc_paint(r.h, NURL_CC_GRAY);
+        r.ops->trace(r.h, &vis);
+    }
+}
+static void nurl__cc_scanblack(NurlCcVec *st, NurlCcHdr *h, const NurlCcOps *o) {
+    NurlCcVis vis = { NURL_CC_SCANBLACK, st };
+    size_t base = st->len;
+    nurl__cc_paint(h, NURL_CC_BLACK);
+    nurl__cc_push(st, h, o);
+    while (st->len > base) {
+        NurlCcRef r = st->v[--st->len];
+        r.ops->trace(r.h, &vis);
+    }
+}
+static void nurl__cc_scan(NurlCcVec *st, NurlCcVec *aux, NurlCcHdr *h, const NurlCcOps *o) {
+    NurlCcVis vis = { NURL_CC_SCAN, st };
+    nurl__cc_push(st, h, o);
+    while (st->len) {
+        NurlCcRef r = st->v[--st->len];
+        if (nurl__cc_color(r.h) != NURL_CC_GRAY) continue;
+        if (r.h->strong > 0) { nurl__cc_scanblack(aux, r.h, r.ops); continue; }
+        nurl__cc_paint(r.h, NURL_CC_WHITE);
+        r.ops->trace(r.h, &vis);
+    }
+}
+static void nurl__cc_collectwhite(NurlCcVec *st, NurlCcVec *garbage, NurlCcHdr *h, const NurlCcOps *o) {
+    NurlCcVis vis = { NURL_CC_COLLECT, st };
+    nurl__cc_push(st, h, o);
+    while (st->len) {
+        NurlCcRef r = st->v[--st->len];
+        if (nurl__cc_color(r.h) != NURL_CC_WHITE || (r.h->cc & NURL_CC_BUFFERED)) continue;
+        nurl__cc_paint(r.h, NURL_CC_BLACK);
+        r.h->cc |= NURL_CC_DEAD;
+        nurl__cc_push(garbage, r.h, r.ops);
+        r.ops->trace(r.h, &vis);
+    }
+}
+
+static void nurl__cc_free_block(NurlCcHdr *h) {
+    if (h->weak == 0) nurl_free(h);
+}
+
+void nurl_cc_context_end(void);
+
+static NurlCcState *nurl__cc_state(void) {
+    NurlCcState *s = (NurlCcState *)nurl__cc;
+    if (!s) {
+        s = (NurlCcState *)calloc(1, sizeof *s);
+        if (!s) { fputs("nurl: out of memory (cycle collector)\n", stderr); abort(); }
+        s->threshold = NURL_CC_MIN_THRESHOLD;
+        nurl__cc = s;
+        /* The program's main context collects at exit; a thread or a fiber
+         * when its body returns (runtime_ffi.c). */
+        static int registered;
+        if (!__atomic_exchange_n(&registered, 1, __ATOMIC_SEQ_CST)) atexit(nurl_cc_context_end);
+    }
+    return s;
+}
+
+static void nurl__cc_run(NurlCcState *s) {
+    if (s->collecting || s->len == 0) return;
+    s->collecting = 1;
+    /* The roots as they stand; drops during the collection buffer anew. */
+    NurlCcRef *roots = s->roots; size_t n = s->len;
+    s->roots = NULL; s->len = s->cap = 0;
+    NurlCcVec st = {0}, aux = {0}, garbage = {0};
+    size_t live = 0;
+    for (size_t i = 0; i < n; i++) {               /* MarkRoots */
+        NurlCcHdr *h = roots[i].h;
+        if (nurl__cc_color(h) == NURL_CC_PURPLE && h->strong > 0) {
+            nurl__cc_markgray(&st, h, roots[i].ops);
+            roots[live++] = roots[i];
+        } else {
+            h->cc &= ~(uint64_t)NURL_CC_BUFFERED;
+            if (nurl__cc_color(h) == NURL_CC_PURPLE) nurl__cc_paint(h, NURL_CC_BLACK);
+            if (h->strong <= 0 && (h->cc & NURL_CC_FREED)) nurl__cc_free_block(h);
+        }
+    }
+    for (size_t i = 0; i < live; i++)               /* ScanRoots */
+        nurl__cc_scan(&st, &aux, roots[i].h, roots[i].ops);
+    size_t alive = 0;
+    for (size_t i = 0; i < live; i++) {             /* CollectRoots */
+        roots[i].h->cc &= ~(uint64_t)NURL_CC_BUFFERED;
+        nurl__cc_collectwhite(&st, &garbage, roots[i].h, roots[i].ops);
+        if (!(roots[i].h->cc & NURL_CC_DEAD)) alive++;
+    }
+    free(roots);
+    /* The garbage set is final. Its edges into live blocks were taken away
+     * by the trial deletion: hand them back, so dropping the values below
+     * takes each live block's count down exactly once. */
+    NurlCcVis restore = { NURL_CC_RESTORE, &st };
+    for (size_t i = 0; i < garbage.len; i++) garbage.v[i].ops->trace(garbage.v[i].h, &restore);
+    for (size_t i = 0; i < garbage.len; i++) {
+        garbage.v[i].h->strong = 0;
+        garbage.v[i].ops->drop_value(garbage.v[i].h);   /* edges into garbage are no-ops (DEAD) */
+    }
+    for (size_t i = 0; i < garbage.len; i++) nurl__cc_free_block(garbage.v[i].h);
+    free(st.v); free(aux.v); free(garbage.v);
+    /* The next collection when the buffer has doubled past what survived
+     * this one: the work stays proportional to the garbage found. */
+    s->threshold = alive * 2 > NURL_CC_MIN_THRESHOLD ? alive * 2 : NURL_CC_MIN_THRESHOLD;
+    s->collecting = 0;
+}
+
+/* A strong count went down and is still above zero: the block may now be
+ * held only by a cycle. */
+NURL_TLS_FN void nurl_cc_possible_root(void *impl, const void *ops) {
+    NurlCcHdr *h = (NurlCcHdr *)impl;
+    if (nurl__cc_color(h) == NURL_CC_PURPLE) return;
+    nurl__cc_paint(h, NURL_CC_PURPLE);
+    if (h->cc & NURL_CC_BUFFERED) return;
+    h->cc |= NURL_CC_BUFFERED;
+    NurlCcState *s = nurl__cc_state();
+    if (s->len == s->cap) {
+        size_t nc = s->cap ? s->cap * 2 : 256;
+        NurlCcRef *nv = (NurlCcRef *)realloc(s->roots, nc * sizeof *nv);
+        if (!nv) { fputs("nurl: out of memory (cycle collector)\n", stderr); abort(); }
+        s->roots = nv; s->cap = nc;
+    }
+    h->cc = (h->cc & NURL_CC_FLAGS) | ((uint64_t)s->len << NURL_CC_IDX_SHIFT);
+    s->roots[s->len].h = h; s->roots[s->len].ops = (const NurlCcOps *)ops; s->len++;
+    if (s->len >= s->threshold && !s->collecting) nurl__cc_run(s);
+}
+
+/* A closure held inside a collectable value: the handles its env owns
+ * (the descriptor's trace; null when it owns none that matter). */
+void nurl_closure_cc_trace(void *env, void *vis) {
+    if (!env) return;
+    NurlCenvVt *vt = *(NurlCenvVt **)env;
+    if (vt && vt->trace) vt->trace(env, vis);
+}
+
+/* A strong count reached zero on a block whose value can hold further
+ * handles: drop the value and release the block (once no Weak and no
+ * buffer entry names it). Dropping the value releases the handles it held,
+ * which may reach zero in turn — a chain of a million nodes would recurse a
+ * million frames deep. Past NURL_RC_DROP_DEPTH nested releases the block
+ * waits in the context's deferred list instead, and the outermost release
+ * drains that list in a loop: the stack stays shallow whatever the shape. */
+#define NURL_RC_DROP_DEPTH 64
+static void nurl__rc_finish(NurlCcState *s, NurlCcHdr *h) {
+    if (h->cc & NURL_CC_BUFFERED) {
+        /* Mid-collection the buffer it is in is the collector's: it frees
+         * the block when it gets there. Otherwise it leaves the buffer now. */
+        if (s->collecting) { h->cc |= NURL_CC_FREED; return; }
+        size_t i = (size_t)(h->cc >> NURL_CC_IDX_SHIFT);
+        NurlCcRef last = s->roots[--s->len];
+        if (last.h != h) {
+            s->roots[i] = last;
+            last.h->cc = (last.h->cc & NURL_CC_FLAGS) | ((uint64_t)i << NURL_CC_IDX_SHIFT);
+        }
+        h->cc &= ~(uint64_t)NURL_CC_BUFFERED;
+    }
+    if (h->weak == 0) nurl_free(h);
+}
+NURL_TLS_FN void nurl_rc_drop_value(void *impl, const void *ops) {
+    NurlCcHdr *h = (NurlCcHdr *)impl;
+    const NurlCcOps *o = (const NurlCcOps *)ops;
+    NurlCcState *s = nurl__cc_state();
+    if (s->depth >= NURL_RC_DROP_DEPTH) {
+        if (s->dlen == s->dcap) {
+            size_t nc = s->dcap ? s->dcap * 2 : 64;
+            NurlCcRef *nv = (NurlCcRef *)realloc(s->deferred, nc * sizeof *nv);
+            if (!nv) { fputs("nurl: out of memory (rc release)\n", stderr); abort(); }
+            s->deferred = nv; s->dcap = nc;
+        }
+        s->deferred[s->dlen].h = h; s->deferred[s->dlen].ops = o; s->dlen++;
+        return;
+    }
+    s->depth++;
+    o->drop_value(h);
+    nurl__rc_finish(s, h);
+    if (s->depth == 1) {
+        while (s->dlen) {
+            NurlCcRef r = s->deferred[--s->dlen];
+            r.ops->drop_value(r.h);
+            nurl__rc_finish(s, r.h);
+        }
+    }
+    s->depth--;
+}
+
+/* An edge into a block the collector is releasing: nothing to count. */
+int nurl_cc_dead(void *impl) { return (((NurlCcHdr *)impl)->cc & NURL_CC_DEAD) != 0; }
+
+/* Is the block still listed with the collector (which frees it then)? */
+int nurl_cc_buffered(void *impl) { return (((NurlCcHdr *)impl)->cc & NURL_CC_BUFFERED) != 0; }
+
+/* Collect now (also what a long-running context can call between phases). */
+NURL_TLS_FN void nurl_cc_collect(void) {
+    NurlCcState *s = (NurlCcState *)nurl__cc;
+    if (s) nurl__cc_run(s);
+}
+
+/* The context ends (a fiber, a thread, the program): whatever cycles are
+ * left are garbage now; collect until nothing more can be found. */
+NURL_TLS_FN void nurl_cc_context_end(void) {
+    NurlCcState *s = (NurlCcState *)nurl__cc;
+    if (!s) return;
+    while (s->len && !s->collecting) nurl__cc_run(s);
+    if (s->collecting || s->depth) return;
+    free(s->roots);
+    free(s->deferred);
+    free(s);
+    nurl__cc = NULL;
 }
 
 /* Leaving an extent. A fiber can come back from the closure — or from the

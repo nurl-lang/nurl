@@ -4293,6 +4293,7 @@ void wasi_thread_start(int32_t tid, void *start_arg) {
     }
     void (*entry)(void*) = (void (*)(void*))(uintptr_t)ts->fn;
     entry((void*)(uintptr_t)ts->arg);
+    nurl_cc_context_end();
     {
         const unsigned char *guard = (const unsigned char*)(uintptr_t)ts->stack_base;
         int broken = 0;
@@ -4475,6 +4476,7 @@ static void nurl__wf_body(void *arg) {
      * intermittently, depending on whether the block had come from a
      * cache. The M:N backend frees it exactly this way. */
     if (f->own_env && f->env) { nurl_closure_drop(f->env); f->env = NULL; }
+    nurl_cc_context_end();   /* the fiber's refcount cycles, if any */
     atomic_store(&f->done, 1);
     nurl__wake(&f->done, -1);
     {
@@ -4607,6 +4609,7 @@ static void nurl__thr_owned_tramp(void *p) {
     free(p);
     b.fn(b.env);
     if (b.env) nurl_closure_drop(b.env);
+    nurl_cc_context_end();   /* the thread's refcount cycles, if any */
     nurl__journal_thread_exit();
 }
 
@@ -5415,6 +5418,7 @@ static void nurl__fiber_entry(void *arg) {
 #endif
     if (f && f->fn) f->fn(f->env);
     if (f && f->own_env && f->env) { nurl_closure_drop(f->env); f->env = NULL; }
+    nurl_cc_context_end();   /* the fiber's refcount cycles, if any */
     if (f) f->state = NF_DONE;
     NurlWorker *w = nurl__tls_worker;
     if (w) {
@@ -5437,6 +5441,7 @@ static void nurl__fiber_entry(unsigned hi, unsigned lo) {
     NurlFiber *f = (NurlFiber*)p;
     if (f && f->fn) f->fn(f->env);
     if (f && f->own_env && f->env) { nurl_closure_drop(f->env); f->env = NULL; }
+    nurl_cc_context_end();   /* the fiber's refcount cycles, if any */
     if (f) f->state = NF_DONE;
     NurlWorker *w = nurl__tls_worker;
     if (w) setcontext(&w->loop_ctx);

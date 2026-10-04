@@ -296,6 +296,12 @@
     ( __set_release ctl )
 }
 
+// What the reference-count cycle collector sees in a set (docs/MEMORY.md
+// §7.7): every live element.
+@ Set_trace [E] ( Set E ) st s vis → v {
+    ( set_each [E] st \ E x → v { ( mem_trace [E] x vis ) } )
+}
+
 // A copy that owns its own elements, at the same slot layout (no rehash).
 @ Set_clone [E] ( Set E ) st → ( Set E ) {
     : s sctl . st ctl
