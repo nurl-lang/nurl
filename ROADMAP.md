@@ -174,7 +174,11 @@ A high-level map of what exists. Dates and per-feature detail are in
   is released by hand anywhere — stdlib, tools and every package free
   nothing explicitly; opaque library state is self-releasing handles — and
   a raw pointer or closure outliving the value it borrows is a compile
-  error. Model and known gaps: [`docs/MEMORY.md`](docs/MEMORY.md).
+  error. Since 0.70.0 ownership of a returned value is decided per call
+  (a function that lends on one path and gives on another no longer leaks
+  or double-frees), a borrowed value of a type that cannot be copied is
+  never silently duplicated (a compile error says where to clone or move),
+  and `--debug` builds at the default -O2. Model and known gaps: [`docs/MEMORY.md`](docs/MEMORY.md).
 - Front-end is diagnostic-first: malformed prefix-arity programs, undefined
   identifiers, call-arity mismatches, unbalanced braces / stray top-level
   tokens, and visibility violations are hard errors with source locations —

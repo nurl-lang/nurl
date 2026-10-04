@@ -1663,6 +1663,23 @@ handles are freely aliased, so their bindings follow a few more rules:
   an argument is read from the callee's `@.__nurl_retown` constant once
   every return summary is final, so a forward or recursive callee is
   answered correctly.
+- **Per-call answers.** A function that lends on some paths and hands
+  over a fresh value on others answers per call (`@.__nurl_retdyn`, a
+  thread-local bit read right after the call). Every consumer takes that
+  bit: a `:` binding (of a handle or an owning struct), a `?` join of two
+  calls (a phi of their bits — for an owning struct too), a store, a
+  `??` over the call. A static "lends" summary alone would leak each
+  fresh result; a static "owned" would free what was lent.
+- **Values that cannot be copied.** A `% Drop` value with no Clone (a
+  sqlite `Database` or `Statement`, a handle) read out of a parameter's
+  field (`^ . h db`) or bound as the payload of `?? . st db` is lent: the
+  caller or the arm does not drop it — its owner still holds it. Such a
+  value answers per call like any other, so a function may lend one on
+  one path and open a fresh one on another (a per-operation connection
+  handed out of a store). Where a copy would be needed — stored into an
+  owner, handed to a callee that keeps it — compilation stops with an
+  error naming the type: there is no second value to give. A struct field
+  `?T` of such a type is dropped with its struct (tag, then T's drop).
 - **Joins.** A `?` / `??` that yields a `String` / `Vec` hands its
   binding whatever the chosen arm owned — a payload or arm-local moves
   out, a fresh call or literal is owned — through a phi of per-arm
