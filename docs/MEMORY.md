@@ -865,11 +865,23 @@ Releasing it again through the original name (`( vec_push v s )
 error: 's' is consumed here, but its value was stored into an owner at line N …
 ```
 
-Reading the value after the store is still fine; to hand a value on and
-keep one in the owner, store a copy (`string_clone`, `vec_clone`,
-`mem_dup`). A struct of plain words (a device buffer's address and
-length) is copied, not owned, and is not reported.
-`compiler/tests/borrow_store_consume.nu` pins it.
+Reading the value after the store is still fine — while the owner holds
+it. When the owner lets go, the value goes with it, and a read through
+the original name is a use of a moved value: the owner consumed or
+reassigned (`( release h )`, `= h …`), a container the value was pushed
+into released (`( vec_free all )` after `( vec_push all a )`), or a
+handle field of the owner assigned a new value (`= . h v …` — which
+field held the value is not tracked, so it is maybe-freed), or a stdlib
+container call that drops some elements or hands one out (`vec_clear`,
+`vec_truncate`, `vec_set`, `vec_pop`, `vec_remove`, `vec_replace`,
+`map_set`, `map_remove`, `set_remove`, `deque_pop_front` /
+`deque_pop_back`, `btree_set`, `btree_remove` — again maybe-freed, as
+which element went is not tracked). To hand a
+value on and keep one in the owner, store a copy (`string_clone`,
+`vec_clone`, `mem_dup`). A struct of plain words (a device buffer's
+address and length) is copied, not owned, and is not reported.
+`compiler/tests/borrow_store_consume.nu` and
+`borrow_stored_owner_dropped.nu` pin it.
 
 ## 3. What is NOT checked
 
@@ -883,12 +895,14 @@ hits in practice. It deliberately does **not** cover:
   container that is then reallocated is warned about (§2.10), and
   `--strict-borrowck` reports a `# *T` escape from an owned binding
   (§2.9).
-- **Reads of a handle through an aggregate.** A heap handle stored into a
-  struct field (or a `Vec` element) and then *released* through its
-  original name is an error (§2.12), but a *read* through the original
-  name after the owner itself released it is not tracked through the
-  container. The same boundary is what stops §2.11 at a closure that is
-  stored into a struct rather than bound to a name.
+- **User-defined element-dropping wrappers.** A value stored into an
+  owner is followed until the owner is consumed, reassigned, has a
+  handle field reassigned, is released, or (a container) goes through
+  one of the stdlib calls that drop or hand out elements (§2.12). A
+  user function that empties a container it was passed without releasing
+  it is not on that list, so a value read through its own name after
+  such a call is not checked against it. The same boundary is what stops
+  §2.11 at a closure handed to a callee that keeps it.
 - **Aliased mutation beyond a single call.** The exclusive-access
   check (§2.4) covers a binding aliased among one call's arguments —
   by default the bare-identifier spelling, and under

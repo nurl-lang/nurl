@@ -68,6 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nurl_str_get`, linear through `nurl_str_at`.
 ### Fixed
 
+- **A value stored into an owner is followed when the owner lets it go.**
+  `@ Holder { a }` then `= . h v ( vec_new [i] )`, or `( vec_push all a )`
+  then `( vec_free all )`, dropped `a`'s buffer under the name `a`; a read
+  of it compiled clean and read freed memory (24 for a 2-element Vec). The
+  field assignment maybe-frees what was stored into the struct, a
+  released container takes what was pushed into it, and a stdlib call
+  that drops or hands out elements (`vec_clear`, `vec_pop`, `vec_set`,
+  `map_set`, `map_remove`, …) maybe-frees what was pushed into it.
 - **A closure inside a returned struct literal no longer runs on freed
   captures.** `^ @ Box { \ → i { ^ ( vec_len [i] a ) } }` dropped the
   local `a` at the return under the closure the caller then ran (it read
