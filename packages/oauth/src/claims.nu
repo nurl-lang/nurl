@@ -283,8 +283,25 @@ $ `stdlib/core/rcbox.nu`
 
 // None = every check passed. `now` is epoch seconds — passed in, not
 // read here, so a test (or a caller with its own time source) is
-// deterministic.
+// deterministic. The claims of an ID token: see claims_check_access for
+// an access token's.
 @ claims_check Json c OidcPolicy pol__h i now → ?ClaimErr {
+    ^ ( _claims_check c pol__h now F )
+}
+
+// The claims of an ACCESS token (RFC 9068) presented to a resource
+// server. The one difference is `azp`: in an ID token it names the
+// client the token was issued to, and must be us (OIDC Core §3.1.3.7);
+// in an access token it names the client that ASKED for it — the MCP
+// client, the CLI, the single-page app — which is any client the
+// provider let request our scope, never the resource server itself.
+// Requiring azp == our audience there refuses every token but the ones
+// a server's own app registration fetched.
+@ claims_check_access Json c OidcPolicy pol__h i now → ?ClaimErr {
+    ^ ( _claims_check c pol__h now T )
+}
+
+@ _claims_check Json c OidcPolicy pol__h i now b access → ?ClaimErr {
     : *OidcPolicyImpl pol ( _OidcPolicy_ptr pol__h )
     ? ( json_is_obj c ) {} { ^ @ ?ClaimErr { T ClNotObject } }
     : i leeway . pol leeway
@@ -316,9 +333,10 @@ $ `stdlib/core/rcbox.nu`
     ? > ( string_len . pol audience ) 0 {
         : s want ( string_data . pol audience )
         ? ( claims_has_audience c want ) {} { ^ @ ?ClaimErr { T ClAudience } }
-        // OIDC core §3.1.3.7: when azp is present it must be our client.
+        // OIDC core §3.1.3.7: when azp is present it must be our client
+        // (an ID token; an access token's azp is the requesting client).
         : String azp ( claims_str c `azp` )
-        : b azp_bad & > ( string_len azp ) 0 == 0 ( nurl_str_eq ( string_data azp ) want )
+        : b azp_bad & & ! access > ( string_len azp ) 0 == 0 ( nurl_str_eq ( string_data azp ) want )
         ? azp_bad { ^ @ ?ClaimErr { T ClAuthorizedParty } } {}
     } {}
 
