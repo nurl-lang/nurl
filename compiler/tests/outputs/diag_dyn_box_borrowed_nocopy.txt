@@ -1,7 +1,7 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_dyn_box_borrowed_nocopy.nu:25:53: error: '( dyn Named … )' boxes a borrowed value of type '%Conn', which owns heap memory and has no copy: the box would free what its real owner still holds. Box a value this function owns — bind it with ':' first, or take the parameter as 'sink'.
+compiler/tests/diag_dyn_box_borrowed_nocopy.nu:25:45: error: '( dyn Named … )' boxes a borrowed value of type '%Conn', which owns heap memory and has no copy: the box would free what its real owner still holds. Box a value this function owns — bind it with ':' first, or take the parameter as 'sink'.
 @ boxed Holder h → %Named { ^ ( dyn Named . h c ) }
-                                                    ^
+                                            ^
 error: aborting due to 1 previous error
 note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

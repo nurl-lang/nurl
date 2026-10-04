@@ -39546,6 +39546,7 @@
     : i vtt ( nurl_lex_type lex )
     : s vname ( nurl_lex_val lex )
     : i vline ( nurl_lex_line lex )
+    : i vcol ( nurl_lex_col lex )
     : b vident ( is_ident_tok vtt )
     : s vlty ? vident ( nurl_sym_get syms vname ) ``
     : i vpi ? vident ( nurl_sym_word_index syms `__fn_param_names__` vname ) -1
@@ -39581,7 +39582,7 @@
         }
         ? != 0 ( nurl_str_len vlent ) {
             ? vclone { = val ( mem_emit_cloneif cg ct val vlent ) }
-            { ( die lex ( nurl_str_cat4 `'( dyn ` tname ( nurl_str_cat3 ` … )' boxes a borrowed value of type '` ct `', which owns heap memory and has no copy: the box would free what its real owner still holds. ` )
+            { ( die_pos lex vline vcol ( nurl_str_cat4 `'( dyn ` tname ( nurl_str_cat3 ` … )' boxes a borrowed value of type '` ct `', which owns heap memory and has no copy: the box would free what its real owner still holds. ` )
                 `Box a value this function owns — bind it with ':' first, or take the parameter as 'sink'.` ) ) }
         } {}
     } {}
