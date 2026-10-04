@@ -339,11 +339,19 @@ The rule is path-aware where the program is:
   double free;
 - a module-level global is left alone: any call may reassign it.
 
-What the rule does not treat as a free is a handle handed to a second
-name on some path (`= prev t`, a `?` that selected it, a call that may
-return it): the buffer lives on through the other name, so reading
-either is fine. A second *consume* of such a *maybe-aliased* binding is
-reported under `--strict-borrowck` (§2.9).
+A handle handed to a second name on some path (`= prev t`, a `?` that
+selected it, a call that may return it) is not a free: the two names are
+*alias partners* on that path, the buffer lives on through both, and
+reading either is fine. Consuming one of them is what frees the buffer
+under the other, so from that point the other is maybe-freed on the
+aliasing path — reading it, or freeing it again, is the error above. The
+relation follows the path: a handover on one arm of a `?` leaves the
+other arm alone, the reassigned side of the `: tmp cur` `= cur nxt`
+`= nxt tmp` swap had already handed its handle on (nothing drops), and a
+name rebound (`:`, `=`, a `??` payload on the next pass) shares nothing
+with anyone. The one handover not followed is a call to a function
+defined further down that may return its argument; its second consume is
+the `--strict-borrowck` check (§2.9).
 
 Regressions: `borrow_maybe_freed_read.nu` (the positive and every
 control above), `borrow_maybe_double_free.nu`,
@@ -713,9 +721,12 @@ default) adds three further checks, all diagnostic-only and all emitting
      used (after a use it is maybe-freed — the default rule);
    - passed to a call that may hand the handle back.
 
-   Off by default because the other name is usually a borrow that never
-   consumes (`: ( Vec String ) pos ( args_positionals p )` followed by
-   freeing `p`).
+   A consume of *both* partners is a default error (§2.1); what strict
+   mode adds is a consume of a maybe-aliased binding whose partner the
+   walk cannot name — a call to a function defined further down that may
+   return its argument. Off by default because that partner is usually a
+   borrow that never consumes (`: ( Vec String ) pos ( args_positionals p )`
+   followed by freeing `p`).
 
 It is **off by default** because the extensions have a meaningful
 false-positive rate against existing stdlib code; it is a tightening
@@ -1106,13 +1117,14 @@ Concretely — and this is the comparison that matters — code that
 compiles clean, uses no `*T`, and calls no FFI can still do things
 safe Rust cannot:
 
-1. **Double-free through a second name, conditionally.** A value freed
-   on one arm of a `?` and then used — freed again or read — is an
-   error by default (§2.1). What is not flagged by default is a handle
-   handed to a second name on *some* path (`= z a` under a condition, a
-   `?` that selected it) and then consumed through both names:
-   `--strict-borrowck` reports it (§2.9, check 3), at the cost of also
-   flagging the common case where the second name is a borrow that
+1. **Double-free through a forward-declared returning call.** A value
+   freed on one arm of a `?` and then used, or a handle handed to a
+   second name and consumed through both, is an error by default (§2.1).
+   What is not flagged by default is the one handover the walk cannot
+   name the partner of — the result of a call to a function defined
+   further down that may return its argument — consumed through both
+   names: `--strict-borrowck` reports it (§2.9, check 3), at the cost of
+   also flagging the common case where that result is a borrow that
    never consumes.
 2. **Data-race on shared heap state.** There is a `Send`/`Sync`
    system, and it is a *lint over types*, not a proof about programs.

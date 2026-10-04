@@ -19297,7 +19297,7 @@
         ? | ( seq nm dest ) ( str_contains_word params nm ) {} {
             ? definite
             { ( bck_stash_move nm line `an alias copy through a '?' / '??' result` ) }
-            { ( bck_stash_maybe_alias nm line why ) } }
+            { ( bck_stash_maybe_alias nm line why dest ) } }
     }
 }
 
@@ -19336,7 +19336,7 @@
     {  // Bound, not inline — see bck_alias_from_phi: a fresh string
         // passed straight to a user function is never released.
         : s why ( nurl_str_cat3 `its handle was handed to '` dest `' by an alias assignment` )
-        ( bck_stash_maybe_alias rhs_val line why ) }
+        ( bck_stash_maybe_alias rhs_val line why dest ) }
     {}
 }
 
@@ -19428,11 +19428,14 @@
 
 // The alias companion of bck_stash_maybe_move: `name`'s handle went to
 // another name on some path, and stays live through it (BCK_MAYBE_ALIAS).
-@ bck_stash_maybe_alias s name i line s cause → v {
+// `partner` is the name it went to (`-` when none is named, a closure):
+// the two share the buffer, so consuming either may free it under the
+// other (bck_partners_freed).
+@ bck_stash_maybe_alias s name i line s cause s partner → v {
     ? & != g_borrowck 0 == g_bck_rec_off 0 {
         ( nurl_sym_set g_bck ( nurl_str_cat3 `qc_` name ( nurl_str_int line ) ) cause )
         : s cur ( nurl_sym_get g_bck `paliases` )
-        : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        : s add ( nurl_str_cat3 name ` ` ( nurl_str_cat3 ( nurl_str_int line ) ` ` partner ) )
         ( nurl_sym_set g_bck `paliases`
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
     } {}
@@ -19487,7 +19490,10 @@
             = arest ( str_skip_word arest )
             : s aln ( str_first_word arest )
             = arest ( str_skip_word arest )
-            ( bck_record `maybealias` anm ( nurl_str_to_int aln ) )
+            : s apt ( str_first_word arest )
+            = arest ( str_skip_word arest )
+            : s apf ? ( seq apt `-` ) `-` ( nurl_str_cat `=` apt )
+            ( bck_record2 `maybealias` anm ( nurl_str_to_int aln ) apf `0` )
         }
         // …and the calls whose move effect is not decidable yet.
         : ~ s prest ( nurl_sym_get g_bck `ppends` )
@@ -19679,6 +19685,100 @@
     ? & a_nm b_nm { ^ BCK_OWNED } {}
     // Borrow-state disagreements are not produced until a later phase.
     BCK_INVALID
+}
+
+// Alias partners: two bindings that may hold the same buffer since an
+// alias handover on some path (`= z a`, `: x ? c a b`). Kept per function
+// (generation-keyed) and DIRECTED: `ps_<a>` lists the names `a`'s handle
+// went to, `pd_<z>` the names whose handle came to `z`. The handover marks
+// the source maybe-aliased on the path where it happened, which is what
+// makes the relation path-sensitive: a link recorded on one arm of a `?`
+// is inert on the other, where the source is not maybe-aliased.
+@ bck_pt_key s kind i id → s { ^ ( nurl_str_cat4 kind ( nurl_str_int g_bck_gen ) `_` ( nurl_str_int id ) ) }
+
+@ bck_pt_add s k s w → v {
+    : s cur ( nurl_sym_get g_bck k )
+    ? ( str_contains_word cur w ) { ^ v } {}
+    ( nurl_sym_set g_bck k ? == 0 ( nurl_str_len cur ) ( nurl_str_cat w `` ) ( nurl_str_cat3 cur ` ` w ) )
+}
+
+// `src`'s handle went to `dst` on this path.
+@ bck_partner_link i src i dst → v {
+    ? == src dst { ^ v } {}
+    ( bck_pt_add ( bck_pt_key `ps_` src ) ( nurl_str_int dst ) )
+    ( bck_pt_add ( bck_pt_key `pd_` dst ) ( nurl_str_int src ) )
+}
+
+@ bck_pt_drop_word s k s me → v {
+    : ~ s left ( nurl_str_cat ( nurl_sym_get g_bck k ) `` )
+    : ~ s kept ``
+    ~ != 0 ( nurl_str_len left ) {
+        : s x ( str_first_word left )
+        = left ( str_skip_word left )
+        ? ! ( seq x me ) { = kept ? == 0 ( nurl_str_len kept ) ( nurl_str_cat x `` ) ( nurl_str_cat3 kept ` ` x ) } {}
+    }
+    ( nurl_sym_set g_bck k kept )
+}
+
+// `id` is rebound: it shares nothing any more, in either direction.
+@ bck_partner_unlink i id → v {
+    : s me ( nurl_str_int id )
+    : s ks ( bck_pt_key `ps_` id )
+    : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ks ) `` )
+    ? != 0 ( nurl_str_len rest ) { ( nurl_sym_set g_bck ks `` ) } {}
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ( bck_pt_drop_word ( bck_pt_key `pd_` ( nurl_str_to_int w ) ) me )
+    }
+    : s kd ( bck_pt_key `pd_` id )
+    : ~ s rest2 ( nurl_str_cat ( nurl_sym_get g_bck kd ) `` )
+    ? != 0 ( nurl_str_len rest2 ) { ( nurl_sym_set g_bck kd `` ) } {}
+    ~ != 0 ( nurl_str_len rest2 ) {
+        : s w ( str_first_word rest2 )
+        = rest2 ( str_skip_word rest2 )
+        ( bck_pt_drop_word ( bck_pt_key `ps_` ( nurl_str_to_int w ) ) me )
+    }
+}
+
+// Mark binding `pid` maybe-freed because `who` was consumed at `line`.
+@ bck_pt_free_one s st i pid s who i line → s {
+    : s w ( nurl_str_int pid )
+    : s pn ( nurl_sym_get2 g_bck `rv_` w )
+    : s lns ( nurl_str_int line )
+    ( nurl_sym_set g_bck ( nurl_str_cat `ml_` w ) lns )
+    ( nurl_sym_set g_bck ( nurl_str_cat3 `qc_` pn lns )
+    ( nurl_str_cat3 `it may share its buffer with '` who `', which was consumed` ) )
+    ^ ( bck_st_set st pid BCK_MAYBE_MOVED )
+}
+
+// `id`, in state `was` on this path, was consumed (or dropped by a
+// reassignment) at `line`. A name it handed its handle to holds the freed
+// buffer when the handover happened on this path (`id` maybe-aliased); a
+// name that handed its handle to `id` does when that one is maybe-aliased.
+// Either is maybe-freed from here: reading it, or freeing it again, is the
+// use-after-free on the aliasing path.
+@ bck_partners_freed s st i id i was i line → s {
+    : ~ s out ( nurl_str_cat st `` )
+    : s who ( nurl_sym_get2 g_bck `rv_` ( nurl_str_int id ) )
+    ? == was BCK_MAYBE_ALIAS {
+        : ~ s rest ( nurl_str_cat ( nurl_sym_get g_bck ( bck_pt_key `ps_` id ) ) `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s w ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            : i pid ( nurl_str_to_int w )
+            : i ps ( bck_st_get out pid )
+            ? | == ps BCK_OWNED == ps BCK_MAYBE_ALIAS { = out ( bck_pt_free_one out pid who line ) } {}
+        }
+    } {}
+    : ~ s rest2 ( nurl_str_cat ( nurl_sym_get g_bck ( bck_pt_key `pd_` id ) ) `` )
+    ~ != 0 ( nurl_str_len rest2 ) {
+        : s w ( str_first_word rest2 )
+        = rest2 ( str_skip_word rest2 )
+        : i pid ( nurl_str_to_int w )
+        ? == BCK_MAYBE_ALIAS ( bck_st_get out pid ) { = out ( bck_pt_free_one out pid who line ) } {}
+    }
+    ^ out
 }
 
 // The state after a maybe-alias of a binding in state `cur`: a live
@@ -19888,7 +19988,7 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : b __pend | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) | | ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` )
+    : b __pend | | | | | | ( seq kind `pendcall` ) ( seq kind `pendretain` ) ( seq kind `store` ) ( seq kind `pendstore` ) ( seq kind `pendkeep` ) ( seq kind `xfer` ) ( seq kind `maybealias` )
     : s w2 ? | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
     | ( seq kind `maybemove` ) ( seq kind `maybealias` ) __pend
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
@@ -20274,7 +20374,9 @@
                 = done T
             } {}
             ? ( seq kind `let` ) {
-                // A `let` (re)binds the name — Owned, reviving a Moved one.
+                // A `let` (re)binds the name — Owned, reviving a Moved one,
+                // and sharing a buffer with nothing.
+                ( bck_partner_unlink ( nurl_str_to_int ( bck_field rec 1 ) ) )
                 = st ( bck_st_set st ( nurl_str_to_int ( bck_field rec 1 ) ) BCK_OWNED )
                 = p + p 1
                 = done T
@@ -20285,6 +20387,14 @@
                 : i asid ( nurl_str_to_int ( bck_field rec 1 ) )
                 ? & == BCK_OWNED ( bck_st_get st asid ) ( bck_has_stored_in asid )
                 { = st ( bck_kill_stored_in st asid ( nurl_str_to_int ( bck_field rec 3 ) ) T ) } {}
+                // The old value is dropped — when this name still owns it: a
+                // buffer it shared with a partner may go with it. One whose
+                // handle already went to another name (maybe-aliased, the
+                // `= cur nxt` `= nxt tmp` swap) is handed over, not dropped.
+                // Either way the new value shares nothing.
+                ? == BCK_OWNED ( bck_st_get st asid )
+                { = st ( bck_partners_freed st asid BCK_OWNED ( nurl_str_to_int ( bck_field rec 3 ) ) ) } {}
+                ( bck_partner_unlink asid )
                 = st ( bck_st_set st asid BCK_OWNED )
                 = p + p 1
                 = done T
@@ -20306,7 +20416,9 @@
                 ? == BCK_STORED ( bck_st_get st mvid ) { ( bck_diag_stored mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
                 ? & == BCK_OWNED ( bck_st_get st mvid ) ( bck_has_stored_in mvid )
                 { = st ( bck_kill_stored_in st mvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
+                : i mv_was ( bck_st_get st mvid )
                 = st ( bck_st_set st mvid BCK_MOVED )
+                = st ( bck_partners_freed st mvid mv_was ( nurl_str_to_int ( bck_field rec 3 ) ) )
                 ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
                 ( bck_field rec 3 ) )
                 = p + p 1
@@ -20316,6 +20428,10 @@
                 : s avn ( bck_field rec 1 )
                 : i avid ( nurl_str_to_int avn )
                 = st ( bck_st_set st avid ( bck_alias_step ( bck_st_get st avid ) ) )
+                : s apf ( bck_field rec 5 )
+                ? & > ( nurl_str_len apf ) 1 == ( nurl_str_get apf 0 ) 61 {
+                    ( bck_partner_link avid ( nurl_str_to_int ( nurl_str_slice apf 1 - ( nurl_str_len apf ) 1 ) ) )
+                } {}
                 ( nurl_sym_set g_bck ( nurl_str_cat `ml_` avn ) ( bck_field rec 3 ) )
                 = p + p 1
                 = done T
@@ -20438,7 +20554,9 @@
                 { ? | & & != 0 g_maybe_moved == BCK_MAYBE_MOVED ( bck_st_get st pvid ) ! ( bck_id_is_global pvid ) & != 0 g_strict_borrowck | == BCK_MAYBE_MOVED ( bck_st_get st pvid ) == BCK_MAYBE_ALIAS ( bck_st_get st pvid )
                     { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) == BCK_MAYBE_ALIAS ( bck_st_get st pvid ) ) } {}
                     ? == BCK_STORED ( bck_st_get st pvid ) { ( bck_diag_stored pvid ( nurl_str_to_int ( bck_field rec 3 ) ) F ) } {}
+                    : i pv_was ( bck_st_get st pvid )
                     = st ( bck_st_set st pvid BCK_MOVED )
+                    = st ( bck_partners_freed st pvid pv_was ( nurl_str_to_int ( bck_field rec 3 ) ) )
                     ? ( seq kind `pendretain` ) {
                         // A later borrowing argument on this same source line
                         // must not replace the actual retaining call's cause.
@@ -20628,6 +20746,9 @@
                 : s nm ? < cm 0 ( nurl_str_cat binds `` ) ( nurl_str_slice binds 0 cm )
                 = binds ? < cm 0 `` ( nurl_str_slice binds + cm 1 - - ( nurl_str_len binds ) cm 1 )
                 : i id ( bck_intern nm )
+                // A fresh binding each time the arm runs: whatever an
+                // earlier run handed it to is not its partner now.
+                ( bck_partner_unlink id )
                 = entry ( bck_st_set entry id BCK_OWNED )
                 = ids ? == 0 ( nurl_str_len ids ) ( nurl_str_int id ) ( nurl_str_cat3 ids ` ` ( nurl_str_int id ) )
             }
@@ -20675,6 +20796,7 @@
         ? ( seq kind `let` ) {
             : i id ( nurl_str_to_int ( bck_field rec 1 ) )
             = out ( bck_st_set out id ( bck_st_get pre id ) )
+            ( bck_partner_unlink id )
             = j + j 1
         } {
             ? ( seq kind `cond` ) { = j + ( bck_match_close j `cond` `endcond` ) 1 } {
@@ -20699,6 +20821,7 @@
         = rest ( str_skip_word rest )
         : i id ( nurl_str_to_int w )
         = out ( bck_st_set out id ( bck_st_get pre id ) )
+        ( bck_partner_unlink id )
     }
     ^ out
 }
@@ -28198,7 +28321,7 @@
             { ( bck_stash_maybe_move __cl_n ( nurl_lex_line lex )
                 `a closure that captured it frees it` ) }
             { ( bck_stash_maybe_alias __cl_n ( nurl_lex_line lex )
-                `a closure that captured it may free it` ) }
+                `a closure that captured it may free it` `-` ) }
         } {}
     }
     // Fall-off exit. A closure body that ends WITHOUT `^` reached the

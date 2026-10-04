@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `borrow_strict_maybe_double_free` / `…_generic_…` are default-mode
   tests now (`borrow_maybe_double_free`, `borrow_generic_maybe_double_free`).
 
+- **A handle handed to a second name is tracked through both names.**
+  `? c { = z a } {}` then `( string_free z )` left `a` naming freed memory
+  on the path that aliased — `( string_len a )` read 24 for a 5-byte
+  string, silently. The two names are alias partners on that path now:
+  consuming either maybe-frees the other there, so the read (or a second
+  free) is a default error. The relation is path-sensitive (a handover on
+  one arm leaves the other alone; the `= cur nxt` `= nxt tmp` swap drops
+  nothing) and ends when either name is rebound. Five
+  `borrow_strict_*_alias` tests are default-mode tests now; the
+  forward-declared returning call stays the strict check.
+
 ### Performance
 
 - **`nurl_str_slice` measures a string only as far as the slice.** The

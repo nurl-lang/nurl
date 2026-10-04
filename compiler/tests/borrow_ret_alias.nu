@@ -1,4 +1,4 @@
-// borrow_strict_ret_alias.nu — the interprocedural form: a helper that
+// borrow_ret_alias.nu — the interprocedural form: a helper that
 // may hand one of its ARGUMENTS' handles back as its result.
 //
 //     @ pick ( Vec i ) a i f → ( Vec i ) { ^ ? f a ( vec_new [i] ) }
@@ -14,7 +14,9 @@
 // provenance the `?` case uses, by `^ ? c p ( fresh )`.
 //
 // Always conditional, never definite: the summary says the handle MAY
-// come back, so this is strict-only like its intraprocedural twin.
+// come back. The result and the argument are alias partners on that
+// path, so consuming one leaves the other maybe-freed — reported by
+// default, like its intraprocedural twin (borrow_phi_alias).
 //
 // One positive + two controls.
 

@@ -1,4 +1,4 @@
-// borrow_strict_assign_alias.nu — `= dst src` hands `src`'s handle to
+// borrow_assign_alias.nu — `= dst src` hands `src`'s handle to
 // `dst`. gen_assign recorded that only as a lint note, so the borrow
 // checker never saw it and freeing through both names compiled clean.
 //
@@ -8,8 +8,10 @@
 // the still-live buffer. CONTROL 2 is the stdlib's HKDF shape, where
 // reading through the moved-from name after the handover is correct —
 // a definite move would flag those reads and reject working code.
-// Deciding which is which needs liveness this checker does not have, so
-// it declines to guess: reads are never flagged, only a second CONSUME.
+// The two names are alias partners instead: reading either is fine while
+// the buffer lives, and once one of them is consumed the other is
+// maybe-freed on the aliasing path — the positive below is reported by
+// default (it was --strict-borrowck only), CONTROL 2 is not.
 //
 // One positive + two controls.
 
