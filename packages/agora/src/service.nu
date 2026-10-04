@@ -71,7 +71,7 @@ $ `web.nu`
         ( mcp_tool_result_error ( string_data . res text ) )
         ^ out
     } {}
-    : AgStore st ( ag_store )
+    : AgStore st ( ag_store_conn ( ag_store ) )
     : AgCaller caller ( ag_caller_of_ctx st ctx now )
     : AgRes res ( ag_op_call st caller name args now )
     : Json out ? < . res status 400
@@ -128,10 +128,10 @@ Remember: note_set / note / notes for facts about the repository that outlive th
 
 // The caller behind an HTTP request: the bearer token, looked up. THE
 // place a signed-in OAuth principal will be resolved instead.
-@ __ag_http_caller HttpRequest req i now → AgCaller {
+@ __ag_http_caller HttpRequest req AgStore st i now → AgCaller {
     ?? ( mcp_auth_bearer_token req ) {
         T tok → {
-            : AgCaller c ( ag_caller_of_token ( ag_store ) ( string_data tok ) now )
+            : AgCaller c ( ag_caller_of_token st ( string_data tok ) now )
             ^ c
         }
         F _ → { ^ ( ag_caller_anon ) }
@@ -268,8 +268,10 @@ Remember: note_set / note / notes for facts about the repository that outlive th
         : HttpResponse r ( response_json . res status . res body )
         ^ r
     } {}
-    : AgCaller caller ( __ag_http_caller req now )
-    : AgRes res ( ag_op_call ( ag_store ) caller ( string_data op ) args now )
+    // One connection for the whole call: the caller's lookup and the op.
+    : AgStore cst ( ag_store_conn ( ag_store ) )
+    : AgCaller caller ( __ag_http_caller req cst now )
+    : AgRes res ( ag_op_call cst caller ( string_data op ) args now )
     : HttpResponse r ( response_json . res status . res body )
     ? == . res status 401 {
         ( response_set_header r `WWW-Authenticate` `Bearer realm="agora"` )
@@ -316,7 +318,7 @@ Remember: note_set / note / notes for facts about the repository that outlive th
 @ __ag_h_mcp HttpRequest req → HttpResponse {
     : i now ( now_seconds )
     ? ( ag_auth_oidc ) { ^ ( __ag_h_mcp_oidc req now ) } {}
-    : AgCaller caller ( __ag_http_caller req now )
+    : AgCaller caller ( __ag_http_caller req ( ag_store ) now )
     : Json ctx ( __ag_ctx_of caller )
     : McpServer srv ( __ag_mcp_srv )
     : ( @ ?Json Json ) d \ Json rq → ?Json { ^ ( mcp_server_envelope_as srv rq ctx ) }
