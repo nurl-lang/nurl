@@ -81,9 +81,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nurl_free(NULL)` — a slot released after its value moved on, most of a
   self-compile's 35M frees — returns before the body's register saves
   (−1% more).
+- **Owned string bindings are registered with the panic journal per
+  frame, not per value.** Every owned string a binding received inside a
+  `recover` extent was a hashed journal insert, and its free a hashed
+  removal — a self-compile made 14M of each. A function now registers one
+  table of its bindings' slots at entry and forgets it before each
+  return; a binding joins with one store. The journal's instructions on a
+  compile fell by half (−7.7% instructions compiling
+  `bench/json_parse.nu`, a self-compile ~3.5% faster). A value that leaves
+  through a struct is disowned from the table, and a drain frees each
+  address once (docs/MEMORY.md §7.2).
 
 ### Fixed
 
+- **A string handed to a `sink` parameter is reclaimed when the callee
+  panics before freeing it.** The caller drops its registration at the
+  hand-off, and the callee never made one, so the buffer leaked on that
+  unwind. The callee registers it at entry, under the flag that decides
+  the hand-off (`compiler/tests/recover_frame_strings.nu`).
+- **A binding's panic-journal registration is no longer dropped when the
+  panicking path comes after the last return.** The elision pass judged a
+  registration safe to drop when nothing could panic between it and its
+  last `forget_slot` — but a path that ends in a panic (`die`, then
+  `unreachable`) reaches no forget and is laid out after the last `ret`,
+  so a `String` / `Vec` binding live on it leaked when it panicked. The
+  check now runs to the end of the function.
 - **`stdlib/core/symtab.nu` no longer grows without bound.** Each
   re-definition of a key pushed a new entry holding fresh copies that
   nothing could read or free again, the bucket array never grew past

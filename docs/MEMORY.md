@@ -1404,6 +1404,22 @@ drain — each other's extents (`compiler/tests/recover_fiber_interleave.nu`,
     release flows through — removes it again, so a value freed normally
     before the panic leaves no entry (no stale-slot hazard) and an
     aliased buffer is freed once.
+  - a **frame table** for a function's owned string *bindings*: one
+    `[n+1 x ptr]` per function, registered once at entry
+    (`nurl_journal_push_drop2(table, null, nurl_jframe_drop)`) and
+    forgotten before every `ret`. A binding's entry points at its slot
+    once the slot holds an owned value — one store, no hashing. A slot
+    holds exactly what its scope exit will free (a hand-off to a callee
+    nulls it, a release nulls it), so the drain frees each registered
+    slot's current value. A value that leaves through a struct is
+    `nurl_journal_disown`ed: its pointer entry is forgotten and every
+    frame slot holding it is unregistered. The drain records what it
+    frees and skips a second free of the same address, which stands in
+    for the alias removal a pointer entry gets from `nurl_free`.
+  - a **raw `sink` parameter** taken over from the caller: the callee
+    registers it as a raw buffer at entry, under the same module-end flag
+    that decides the caller's hand-off (`@.__nurl_argtransfer.<n>`), so a
+    panic between the hand-off and the callee's own free reclaims it.
   - a **typed destructor** (`nurl_journal_push_drop`) for a value with a
     `% Drop` impl or a heap-boxing autodrop enum. The journal holds the
     value's *alloca* and a generated `__jdrop_<T>` thunk that loads and
@@ -1438,8 +1454,8 @@ arguments use their declared parameter position. A forward result used directly
 as an argument captures its dynamic ownership proof before another call runs.
 
 This relies on the compiler registering each ownership obligation correctly.
-`recover_unwind` and `recover_reassign_temps` pin reclamation on their covered
-paths; `tools/tests/test_panic_journal.py` also compares generated nested scopes
+`recover_unwind`, `recover_reassign_temps` and `recover_frame_strings` pin
+reclamation on their covered paths; `tools/tests/test_panic_journal.py` also compares generated nested scopes
 with an independent ownership model. Known gaps in forward string-return and
 argument ownership remain tracked in [the hardening ledger](dev/V1_HARDENING.md).
 Where in the extent the allocation was made does not change that either:

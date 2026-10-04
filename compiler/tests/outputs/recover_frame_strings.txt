@@ -1,0 +1,25 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+bound-string
+caught bound
+step-0
+step-1
+step-2
+step-3
+xxxx
+caught loop
+inner-scope
+outer-binding
+caught scope
+11kept-after
+caught handed
+callee-owns-it
+caught in callee
+made-7
+caught returned
+caught deep
+after-escape
+out.body=escaped-field
+alive

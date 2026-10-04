@@ -6833,11 +6833,20 @@
         ( nurl_print ? ( mem_handle_temp_drop_safe syms callee ( nurl_str_to_int index ) ) `true` `false` )
         ( nurl_print `\n` )
     }
-    = rest ( nurl_sym_get g_pending_impl `argtransfers` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s number ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s callee ( str_first_word rest ) = rest ( str_skip_word rest )
-        : s index ( str_first_word rest ) = rest ( str_skip_word rest )
+    // One entry per raw string parameter of every function (each one's own
+    // registration reads it too): a cursor walk, not first/skip_word, which
+    // copied the whole remaining list per word — quadratic in its length.
+    : s xl ( nurl_sym_get g_pending_impl `argtransfers` )
+    : i xn ( nurl_str_len xl )
+    : ~ i xp 0
+    ~ < xp xn {
+        : i e1 ( __word_end xl xn xp )
+        : s number ( __span_dup xl xp e1 )
+        : i e2 ( __word_end xl xn + e1 1 )
+        : s callee ( __span_dup xl + e1 1 e2 )
+        : i e3 ( __word_end xl xn + e2 1 )
+        : s index ( __span_dup xl + e2 1 e3 )
+        = xp + e3 1
         ( nurl_print `@.__nurl_argtransfer.` ) ( nurl_print number )
         ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( nurl_sym_has_word g_fn_sink callee index ) `true` `false` )
@@ -6865,17 +6874,22 @@
     ? | == 0 ( nurl_str_len slot )
     ! ( nurl_sym_has_word syms `__owned_strings__` slot ) { ^ ( nurl_str_cat `` `` ) } {}
     ( bck_stash_pending_call ident line callee index callee T )
+    ^ ( nurl_str_cat4 ( mem_guard_drop_slot syms slot ) ` @.__nurl_argtransfer.` ( nurl_str_int ( mem_argtransfer_number callee index ) ) ` ` )
+}
+
+// The module-end constant `@.__nurl_argtransfer.<n>` that says whether
+// `callee` takes over its raw string parameter `index` (index ∈ its sinks):
+// the caller's hand-off and the callee's own registration read the same one.
+@ mem_argtransfer_number s callee i index → i {
     : s key ( nurl_str_cat4 `argtransfer##` callee `##` ( nurl_str_int index ) )
     : s known ( nurl_sym_get g_pending_impl key )
-    : ~ i number ( nurl_str_to_int known )
-    ? == 0 ( nurl_str_len known ) {
-        = number ( nurl_str_to_int ( nurl_sym_get g_pending_impl `argtransfer_count` ) )
-        ( nurl_sym_def g_pending_impl `argtransfer_count` ( nurl_str_int + number 1 ) )
-        ( nurl_sym_def g_pending_impl key ( nurl_str_int number ) )
-        ( __park_append g_pending_impl `argtransfers`
-        ( nurl_str_cat4 ( nurl_str_int number ) ` ` callee ( nurl_str_cat ` ` ( nurl_str_int index ) ) ) )
-    } {}
-    ^ ( nurl_str_cat4 ( mem_guard_drop_slot syms slot ) ` @.__nurl_argtransfer.` ( nurl_str_int number ) ` ` )
+    ? != 0 ( nurl_str_len known ) { ^ ( nurl_str_to_int known ) } {}
+    : i number ( nurl_str_to_int ( nurl_sym_get g_pending_impl `argtransfer_count` ) )
+    ( nurl_sym_def g_pending_impl `argtransfer_count` ( nurl_str_int + number 1 ) )
+    ( nurl_sym_def g_pending_impl key ( nurl_str_int number ) )
+    ( __park_append g_pending_impl `argtransfers`
+    ( nurl_str_cat4 ( nurl_str_int number ) ` ` callee ( nurl_str_cat ` ` ( nurl_str_int index ) ) ) )
+    ^ number
 }
 
 @ mem_emit_string_arg_transfers i cg s transfers → v {
@@ -16578,16 +16592,16 @@
 // of i8* bindings whose value was produced by an allocating runtime call
 // (nurl_str_cat, nurl_read_file, ...). We free the loaded value at fn exit.
 
-// Panic-unwind journal: record an owned i8* (loaded from its alloca
-// `slot`) so a panic that longjmps over the scope-exit nurl_free still
-// reclaims it (docs/MEMORY.md §7). nurl_free removes it again on the
-// normal path, so this never causes a double-free. The runtime push is
-// a no-op outside a recover extent, so the cost is one branch.
-@ mem_journal_push_str i cg s slot → v {
-    : s p ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print p )
-    ( nurl_print ` = load i8*, i8** ` ) ( nurl_print slot ) ( nurl_print `\n` )
-    ( nurl_print `  call void @nurl_journal_push(i8* ` ) ( nurl_print p ) ( nurl_print `)\n` )
+// Panic-unwind journal for an owned string binding: its SLOT joins the
+// function's frame table (`;jfs`, expanded by emit_hoisted into one store),
+// which is registered once per call. A panic that longjmps over the
+// scope-exit nurl_free frees the slot's current value — exactly what that
+// free would have released (docs/MEMORY.md §7). It used to register each
+// value by pointer: a hashed insert per binding and a hashed removal at
+// its free, the larger part of the journal's cost in a recover extent.
+@ mem_journal_push_str i syms i cg s slot → v {
+    // The slot the scope exit frees: a guarded binding's drop slot.
+    ( nurl_print `  ;jfs ` ) ( nurl_print ( mem_guard_drop_slot syms slot ) ) ( nurl_print `\n` )
 }
 
 // Panic-unwind journal for an owned slice. The alloca `slot` holds a
@@ -16913,7 +16927,7 @@
             ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty vt ) )
             ( nurl_print ` ` ) ( nurl_print sval ) ( nurl_print `, ` )
             ( nurl_print ( nurl_str_int i ) ) ( nurl_print `\n` )
-            ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` )
+            ( nurl_print `  call void @nurl_journal_disown(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` )
         }
         { ? ( mem_is_slice_ty ft )
             { : i flen ( nurl_str_len ft )
@@ -16931,7 +16945,7 @@
                 ( nurl_print `  ` ) ( nurl_print raw )
                 ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
                 ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
-                ( nurl_print `  call void @nurl_journal_forget(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
+                ( nurl_print `  call void @nurl_journal_disown(i8* ` ) ( nurl_print raw ) ( nurl_print `)\n` )
             }
             { ? & == ( nurl_str_get ft 0 ) 37 != 0 ( nurl_sym_len2 syms ( nurl_str_slice ft 1 - ( nurl_str_len ft ) 1 ) `__field_count` )
                 { : s iv ( nurl_cg_reg cg )
@@ -22018,7 +22032,7 @@
         ? != 0 g_auto_drop_strings
         { ? & | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
             lit_track ( seq ( nurl_llty vt ) `i8*` )
-            { ( mem_own_add_str syms ptr ) ( mem_journal_push_str cg ptr ) }
+            { ( mem_own_add_str syms ptr ) ( mem_journal_push_str syms cg ptr ) }
             {}
         }
         {}
@@ -22324,7 +22338,7 @@
             ? != 0 g_auto_drop_strings
             { ? & | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
                 lit_track ( seq ( nurl_llty ptype ) `i8*` )
-                { ( mem_own_add_str syms ptr ) ( mem_journal_push_str cg ptr ) }
+                { ( mem_own_add_str syms ptr ) ( mem_journal_push_str syms cg ptr ) }
                 {}
             }
             {}
@@ -22946,7 +22960,7 @@
         }
         // Replacing a tracked binding releases its previous registration via
         // nurl_free. Register the new owner, including copied/branch results.
-        ? lhs_is_owned_str { ( mem_journal_push_str cg ptr ) } {}
+        ? lhs_is_owned_str { ( mem_journal_push_str syms cg ptr ) } {}
         ? lhs_is_owned_slc { ( mem_journal_push_slice cg vt ptr ) } {}
         // Panic-unwind journal: assigning an owned struct into a by-ref
         // capture escapes it to the caller's frame. Forget its heap leaves
@@ -31496,6 +31510,23 @@
     ? < ei 0 { ( nurl_print funcdef ) ^ v } {}
     : i hdr_end + ei 8  // past "\nentry:\n"
     : *u fp # *u funcdef
+    // The frame table of the owned string bindings (`;jfs` lines, see
+    // mem_journal_push_str): one word per distinct slot, in first-seen
+    // order.
+    : ~ s jf_slots ``
+    : ~ i jf_n 0
+    : ~ i jq ( nurl_str_find funcdef `\n  ;jfs ` )
+    ~ >= jq 0 {
+        : i js + jq 8
+        : i je ( __ha_line_end funcdef js flen )
+        : s jw ( nurl_str_slice funcdef js - je js )
+        ? ! ( str_contains_word jf_slots jw ) {
+            = jf_slots ? == 0 jf_n ( nurl_str_cat jw `` ) ( nurl_str_cat3 jf_slots ` ` jw )
+            = jf_n + jf_n 1
+        } {}
+        : i jr ( nurl_memmem_range # s + # i fp je - flen je `\n  ;jfs ` 8 )
+        = jq ? < jr 0 -1 + je jr
+    }
     // Header [0, hdr_end).
     : u sv_h . fp hdr_end
     = . fp hdr_end # u 0
@@ -31529,6 +31560,22 @@
         = . fp le sv
         = p + le 1
     }
+    // The frame table: cleared, its size in word 0, a pointer to each
+    // entry, registered once (the journal-elision pass drops the
+    // registration where no panic can reach it).
+    : s jf_ty ( nurl_str_cat3 `[` ( nurl_str_int + jf_n 1 ) ` x ptr]` )
+    ? > jf_n 0 {
+        ( nurl_print `  %__jf = alloca ` ) ( nurl_print jf_ty ) ( nurl_print `\n` )
+        ( nurl_print `  store ` ) ( nurl_print jf_ty ) ( nurl_print ` zeroinitializer, ptr %__jf\n` )
+        ( nurl_print `  store ptr inttoptr (i64 ` ) ( nurl_print ( nurl_str_int jf_n ) ) ( nurl_print ` to ptr), ptr %__jf\n` )
+        : ~ i jk 1
+        ~ <= jk jf_n {
+            ( nurl_print `  %__jf` ) ( nurl_print ( nurl_str_int jk ) ) ( nurl_print ` = getelementptr inbounds ` )
+            ( nurl_print jf_ty ) ( nurl_print `, ptr %__jf, i64 0, i64 ` ) ( nurl_print ( nurl_str_int jk ) ) ( nurl_print `\n` )
+            = jk + jk 1
+        }
+        ( nurl_print `  call void @nurl_journal_push_drop2(ptr %__jf, ptr null, ptr @nurl_jframe_drop)\n` )
+    } {}
     // Pass 2: everything else, in original order.
     = p hdr_end
     ~ < p flen {
@@ -31537,11 +31584,38 @@
         = . fp le # u 0
         : s line # s + # i fp p
         ? ! ( __ha_is_alloca line ) {
-            ? & != 0 g_ff_any ( __ha_is_ffx line ) { ( __ffx_expand line ) } { ( nurl_print line ) ( nurl_print `\n` ) }
+            ? & > jf_n 0 ( __ha_is_jfs line ) {
+                // A binding's slot now holds an owned value: its table
+                // entry points at it (idempotent on a loop's next pass).
+                : s jw ( nurl_str_slice line 7 - ( strlen line ) 7 )
+                ( nurl_print `  store ptr ` ) ( nurl_print jw ) ( nurl_print `, ptr %__jf` )
+                ( nurl_print ( nurl_str_int + ( str_word_index jf_slots jw ) 1 ) ) ( nurl_print `\n` )
+            } {
+                // Every return leaves the frame: its table is unregistered
+                // first.
+                ? & > jf_n 0 ( __ha_is_ret line ) {
+                    ( nurl_print `  call void @nurl_journal_forget_slot(ptr %__jf)\n` )
+                } {}
+                ? & != 0 g_ff_any ( __ha_is_ffx line ) { ( __ffx_expand line ) } { ( nurl_print line ) ( nurl_print `\n` ) }
+            }
         } {}
         = . fp le sv2
         = p + le 1
     }
+}
+
+// `  ;jfs %slot` — an owned string binding's slot joins the frame table.
+@ __ha_is_jfs s line → b {
+    ? < ( strlen line ) 8 { ^ F } {}
+    : *u p # *u line
+    ^ & & & == # i . p 2 59 == # i . p 3 106 == # i . p 4 102 == # i . p 5 115
+}
+
+// `  ret …` — a return instruction.
+@ __ha_is_ret s line → b {
+    ? < ( strlen line ) 5 { ^ F } {}
+    : *u p # *u line
+    ^ & & & & == # i . p 0 32 == # i . p 1 32 == # i . p 2 114 == # i . p 3 101 == # i . p 4 116
 }
 
 // ── CPU dispatch: the `simd` prefix (grammar v2.6) ─────────────────
@@ -31910,6 +31984,7 @@
     ( nurl_sym_def syms `__dtor_recv__` ? != 0 ( nurl_str_starts fname `drop__` )
     ( str_first_word ( nurl_sym_get syms `__fn_param_names__` ) ) `` )
     ( __own_sink_enum_params syms cg fname sink_acc )
+    ( __journal_sink_str_params syms cg fname )
     // Published for gen_field_store's by-value-parameter diagnostic: a
     // store into a param whose type is part of what this function
     // RETURNS is the legitimate modify-a-copy-and-return-it idiom
@@ -32806,6 +32881,44 @@
             ( nurl_print `  ` ) ( nurl_print env ) ( nurl_print ` = extractvalue ` ) ( nurl_print ll ) ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 1\n` )
             ( mem_clo_slot_new syms cg name env )
             ( mem_own_closure_add syms name )
+        } {}
+        = index + index 1
+    }
+}
+
+// A raw string parameter the function takes over (a `sink`, declared or
+// proven by the module-end summary) is this frame's to free from entry on:
+// the caller dropped its own registration when it handed the value over
+// (__nurl_argxfer). Register it with the panic journal, under the very
+// module-end flag that decides the caller's hand-off, so a panic before
+// the function frees or passes it on reclaims it. Its free, a further
+// hand-off or an escape removes the registration as for any other; the
+// elision pass drops it where no panic can come first.
+@ __journal_sink_str_params i syms i cg s fname → v {
+    ? == 0 g_auto_drop_strings { ^ v } {}
+    : ~ s names ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ i index 0
+    ~ != 0 ( nurl_str_len names ) {
+        : s name ( str_first_word names ) = names ( str_skip_word names )
+        ? & ( seq ( nurl_llty ( nurl_sym_get syms name ) ) `i8*` ) == 0 ( nurl_sym_len2 syms name `__inout` ) {
+            : s flag ( nurl_str_cat `@.__nurl_argtransfer.` ( nurl_str_int ( mem_argtransfer_number fname index ) ) )
+            : s cond ( nurl_cg_reg cg )
+            ( emit_sink_flag_load flag cond )
+            // A branch, not a select: the flag is a constant, so where the
+            // parameter is not taken over the optimiser deletes the call
+            // outright (a select left a push of null in every function
+            // with a string parameter).
+            : s yes ( nurl_cg_reg cg )
+            : s done ( nurl_cg_reg cg )
+            : s yl ( nurl_str_slice yes 1 - ( nurl_str_len yes ) 1 )
+            : s dl ( nurl_str_slice done 1 - ( nurl_str_len done ) 1 )
+            ( nurl_print `  br i1 ` ) ( nurl_print cond ) ( nurl_print `, label %jsp` ) ( nurl_print yl )
+            ( nurl_print `, label %jsp` ) ( nurl_print dl ) ( nurl_print `\n` )
+            ( nurl_print `jsp` ) ( nurl_print yl ) ( nurl_print `:\n` )
+            ( nurl_print `  call void @nurl_journal_push(i8* %` ) ( nurl_print name ) ( nurl_print `)\n` )
+            ( nurl_print `  br label %jsp` ) ( nurl_print dl ) ( nurl_print `\n` )
+            ( nurl_print `jsp` ) ( nurl_print dl ) ( nurl_print `:\n` )
+            ( nurl_sym_def syms `__cur_lbl__` ( nurl_str_cat `jsp` dl ) )
         } {}
         = index + index 1
     }
@@ -36864,6 +36977,8 @@
     ( __emit_rt_decl syms `declare void @nurl_journal_push_drop2(ptr, ptr, ptr)` )
     ( __emit_rt_decl syms `declare void @nurl_journal_forget_slot(ptr)` )
     ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_disown(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_jframe_drop(ptr)` )
     ( __emit_rt_decl syms `declare void @nurl_memcpy(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
     ( __emit_rt_decl syms `declare void @nurl_memmove(i8* nocapture nofree, i8* nocapture nofree, i64) "nurl.value-only"="2"` )
     ( __emit_rt_decl syms `declare void @nurl_memset(i8* nocapture nofree, i64, i64) "nurl.value-only"="2"` )
@@ -41392,7 +41507,11 @@
                     = q + fa 1
                 }
             }
-            ? & >= last 0 ( __jrnl_slot_quiet st le last ) {
+            // Quiet up to the END of the function, not to the last forget:
+            // a path can leave without reaching any forget — one that ends
+            // in a panic (`die`, then `unreachable`) is laid out after the
+            // last `ret` — and a registration is live on it to the end.
+            ? & >= last 0 ( __jrnl_slot_quiet st le en ) {
                 // Blank the forgets first: the slot name is read from the
                 // push line.
                 : ~ i r le
