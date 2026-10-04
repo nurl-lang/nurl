@@ -1,0 +1,3 @@
+COMPILE FAIL
+ERRORS
+in function keep: error: a borrowed 'Conn' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it

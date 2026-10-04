@@ -55,6 +55,29 @@ if [ -f "$CLD_SRC" ]; then
     pass "closure+Drop links at -O2 with --debug and runs correctly"
 fi
 
+# ── memory-model helpers carry locations (census) ───────────────────
+# BUILD-ONLY too. The `__nurl_clone*` / `__dropif*` / `__nurl_ret_own` …
+# helpers are literal IR from many emitters; a location-less call into one
+# that inlines a function with a subprogram broke -O2 the same way. Whether
+# a given program happens to crash depends on whole-module inlining
+# decisions, so the assertion is the invariant itself: every defined
+# function has a subprogram, every call to a module function is located.
+HOWN_SRC="$ROOT_DIR/compiler/tests/dwarf_hown_helpers.nu"
+HOWN_BIN="$ROOT_DIR/build/dwarf_hown_helpers_dbg"
+if [ -f "$HOWN_SRC" ]; then
+    echo "[regression] building $HOWN_SRC with --debug at -O2 (location census)"
+    if ! "$ROOT_DIR/nurl.sh" --debug "$HOWN_SRC" "$HOWN_BIN" >/tmp/dwarf_hown.build 2>&1; then
+        cat /tmp/dwarf_hown.build
+        fail "nurl.sh --debug (-O2) failed on the memory-model helpers — DWARF regression"
+    fi
+    python3 "$ROOT_DIR/tools/dwarf_location_census.py" "$HOWN_BIN.ll" \
+        || fail "location census: a defined function or module call lacks debug info"
+    OUT=$("$HOWN_BIN" 2>&1)
+    echo "$OUT" | grep -q 'dwarf hown helpers: ok' \
+        || fail "memory-model helper binary produced wrong output: $OUT"
+    pass "memory-model helpers: every function has a subprogram, every module call a location"
+fi
+
 if ! command -v gdb >/dev/null 2>&1; then
     echo "SKIP: gdb not found on PATH — remaining DWARF behavioural checks skipped"
     exit 0

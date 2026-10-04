@@ -103,7 +103,7 @@ $ `auth.nu`
     String repo  // its key ('' outside ag_who_in, and in local mode)
 }
 
-@ __ag_no_store → AgStore { ^ @ AgStore { ( string_new ) F } }
+@ __ag_no_store → AgStore { ^ @ AgStore { ( string_new ) F @ ?Database { F } } }
 
 // The person behind a request and their organisation. Local mode: the
 // one local administrator and the one file.
@@ -168,8 +168,8 @@ $ `auth.nu`
 // says `as=name` in this repository is that agent.
 @ ag_agent_ensure AgStore st s name i now → b {
     ?? ( ag_agent_get st name ) {
-        T _ → {
-            ( ag_agent_touch st name now )
+        T a → {
+            ? ( ag_seen_stale . a seen now ) { ( ag_agent_touch st name now ) } {}
             ^ T
         }
         F → {}
@@ -201,7 +201,8 @@ $ `auth.nu`
         ( string_push_str m AG_NAME_RULE )
         ^ ( _ag_err_s 400 m )
     }
-    : AgStore st ( ag_repo_store org ( string_data repo ) )
+    // One connection for the whole call: the agent's row and the op.
+    : AgStore st ( ag_store_conn ( ag_repo_store org ( string_data repo ) ) )
     ? . st ok {} { ^ ( _ag_err 500 `the repository's agora could not be opened` ) }
     ? ( ag_agent_ensure st ( string_data who ) now ) {} { ^ ( _ag_err 500 `could not record the agent` ) }
     ? != 0 ( nurl_str_eq name `join` ) {

@@ -442,7 +442,7 @@ $ `manage.nu`
 // one organisation must not hold up everyone else's.
 @ ag_org_store s org → AgStore {
     : String path ( ag_org_path org )
-    ? ( __ag_ready ( string_data path ) ) { ^ @ AgStore { path T } } {}
+    ? ( __ag_ready ( string_data path ) ) { ^ @ AgStore { path T @ ?Database { F } } } {}
     : AgStore st ( ag_orgdb_open ( string_data path ) )
     ? . st ok { ( __ag_mark_ready ( string_data path ) ) } {}
     ^ st
@@ -451,7 +451,7 @@ $ `manage.nu`
 // A repository's agora within an organisation (made on first use).
 @ ag_repo_store s org s repo → AgStore {
     : String path ( ag_repo_path org repo )
-    ? ( __ag_ready ( string_data path ) ) { ^ @ AgStore { path T } } {}
+    ? ( __ag_ready ( string_data path ) ) { ^ @ AgStore { path T @ ?Database { F } } } {}
     : AgStore st ( ag_store_open ( string_data path ) )
     ? . st ok { ( __ag_mark_ready ( string_data path ) ) } {}
     ^ st
