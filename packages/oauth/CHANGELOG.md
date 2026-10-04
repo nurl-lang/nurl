@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.1] — 2026-10-04
+
+### Fixed
+
+- **An access token requested by another client was refused.**
+  `oidc_verify_access_token` applied the ID-token rule of OIDC Core
+  §3.1.3.7 — `azp`, when present, must be our own client — to access
+  tokens, where `azp` names the client that ASKED for the token (an MCP
+  client, a CLI, a single-page app) and is never the resource server. A
+  resource server therefore accepted only the tokens its own app
+  registration fetched: an Entra token for the API obtained with
+  `az account get-access-token --scope <api>/access_as_user` failed with
+  "wrong authorized party (azp)". Access tokens are now checked by
+  `claims_check_access` (audience, issuer, expiry, … — everything but
+  `azp`), and the new `oidc_verify_access_token_at` is the explicit-clock
+  form. ID-token verification (`oidc_verify_token[_at]`,
+  `oidc_verify_id_token`, `claims_check`) is unchanged.
+
 ## [0.2.0] — 2026-10-03
 
 Nothing is released by hand any more.

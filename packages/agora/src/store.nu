@@ -14,6 +14,10 @@
 //             or back to open when released or the lease runs out
 //   notes     a shared key → text notebook, per project ('' = global)
 //
+// A signed-in service keeps one such file per repository of each
+// organisation, and the organisation's people in a file of their own
+// (manage.nu).
+//
 // Threading: the service runs a worker pool and any number of stdio
 // processes may share the file. Every operation opens its OWN
 // connection for its own duration (a `Database` has a Drop and is
@@ -89,7 +93,7 @@ $ `stdlib/ext/sqlite.nu`
 
 // ── Connections ───────────────────────────────────────────────────────
 
-@ __ag_conn AgStore st → !Database SqliteErr {
+@ _ag_conn AgStore st → !Database SqliteErr {
     ?? ( sqlite_open ( string_data . st path ) ) {
         F e → { ^ @ !Database SqliteErr { F e } }
         T db → {
@@ -125,7 +129,7 @@ $ `stdlib/ext/sqlite.nu`
     } {}
     : AgStore st @ AgStore { ( string_from path ) T }
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_exec db `PRAGMA journal_mode=WAL` ) { T _ → {} F _ → {} }
@@ -181,8 +185,8 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 table )
-            ? ( __ag_row q ) { = has_table > ( sqlite_column_int q 0 ) 0 } {}
+            ( _ag_bind_s q 1 table )
+            ? ( _ag_row q ) { = has_table > ( sqlite_column_int q 0 ) 0 } {}
         }
     }
     ? has_table {} { ^ F }
@@ -190,9 +194,9 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 table )
-            ( __ag_bind_s q 2 column )
-            ? ( __ag_row q ) { = has_col > ( sqlite_column_int q 0 ) 0 } {}
+            ( _ag_bind_s q 1 table )
+            ( _ag_bind_s q 2 column )
+            ? ( _ag_row q ) { = has_col > ( sqlite_column_int q 0 ) 0 } {}
         }
     }
     ^ ! has_col
@@ -201,18 +205,18 @@ $ `stdlib/ext/sqlite.nu`
 // ── Statement helpers ─────────────────────────────────────────────────
 
 // Bind an owned String and free it: sqlite_bind_text copies at once.
-@ __ag_bind_str Statement q i idx String v → v {
+@ _ag_bind_str Statement q i idx String v → v {
     ?? ( sqlite_bind_text q idx v ) { T _ → {} F _ → {} }
 }
 
-@ __ag_bind_s Statement q i idx s v → v { ( __ag_bind_str q idx ( string_from v ) ) }
+@ _ag_bind_s Statement q i idx s v → v { ( _ag_bind_str q idx ( string_from v ) ) }
 
-@ __ag_bind_i Statement q i idx i v → v {
+@ _ag_bind_i Statement q i idx i v → v {
     ?? ( sqlite_bind_int q idx v ) { T _ → {} F _ → {} }
 }
 
 // Step to completion; F when a step failed.
-@ __ag_run Statement q → b {
+@ _ag_run Statement q → b {
     : ~ b ok T
     : ~ b done F
     ~ ! done {
@@ -225,19 +229,19 @@ $ `stdlib/ext/sqlite.nu`
 }
 
 // One step; T when a row is there.
-@ __ag_row Statement q → b {
+@ _ag_row Statement q → b {
     ?? ( sqlite_step q ) { T has → { ^ has } F _ → { ^ F } }
 }
 
-@ __ag_begin Database db → b {
+@ _ag_begin Database db → b {
     ?? ( sqlite_exec db `BEGIN IMMEDIATE` ) { T _ → { ^ T } F _ → { ^ F } }
 }
 
-@ __ag_commit Database db → b {
+@ _ag_commit Database db → b {
     ?? ( sqlite_exec db `COMMIT` ) { T _ → { ^ T } F _ → { ^ F } }
 }
 
-@ __ag_rollback Database db → v {
+@ _ag_rollback Database db → v {
     ?? ( sqlite_exec db `ROLLBACK` ) { T _ → {} F _ → {} }
 }
 
@@ -262,25 +266,25 @@ $ `stdlib/ext/sqlite.nu`
 // The same, recording where a @cwd identity came from.
 @ ag_agent_create_from AgStore st s id s about s token_hash s origin i now → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ F }
+            ? ( _ag_begin db ) {} { ^ F }
             ?? ( sqlite_prepare db `INSERT INTO agents (id, about, token_hash, created, seen, origin) VALUES (?1, ?2, ?3, ?4, ?4, ?5)` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 id )
-                    ( __ag_bind_s q 2 about )
-                    ( __ag_bind_s q 3 token_hash )
-                    ( __ag_bind_i q 4 now )
-                    ( __ag_bind_s q 5 origin )
-                    = ok ( __ag_run q )
+                    ( _ag_bind_s q 1 id )
+                    ( _ag_bind_s q 2 about )
+                    ( _ag_bind_s q 3 token_hash )
+                    ( _ag_bind_i q 4 now )
+                    ( _ag_bind_s q 5 origin )
+                    = ok ( _ag_run q )
                 }
             }
             ? ok {
                 = ok ( __ag_follow_on db id `public` )
-                ? ok { = ok ( __ag_commit db ) } { ( __ag_rollback db ) }
-            } { ( __ag_rollback db ) }
+                ? ok { = ok ( _ag_commit db ) } { ( _ag_rollback db ) }
+            } { ( _ag_rollback db ) }
         }
     }
     ^ ok
@@ -289,16 +293,16 @@ $ `stdlib/ext/sqlite.nu`
 // Replace an agent's token (re-join by name with a fresh secret).
 @ ag_agent_set_token AgStore st s id s token_hash i now → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `UPDATE agents SET token_hash = ?2, seen = ?3 WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 id )
-                    ( __ag_bind_s q 2 token_hash )
-                    ( __ag_bind_i q 3 now )
-                    = ok & ( __ag_run q ) > ( sqlite_changes db ) 0
+                    ( _ag_bind_s q 1 id )
+                    ( _ag_bind_s q 2 token_hash )
+                    ( _ag_bind_i q 3 now )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
                 }
             }
         }
@@ -308,15 +312,15 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_agent_set_about AgStore st s id s about → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `UPDATE agents SET about = ?2 WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 id )
-                    ( __ag_bind_s q 2 about )
-                    = ok & ( __ag_run q ) > ( sqlite_changes db ) 0
+                    ( _ag_bind_s q 1 id )
+                    ( _ag_bind_s q 2 about )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
                 }
             }
         }
@@ -327,16 +331,16 @@ $ `stdlib/ext/sqlite.nu`
 // What the agent says it is doing ('' clears it), stamped `now`.
 @ ag_agent_set_status AgStore st s id s status i now → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `UPDATE agents SET status = ?2, status_at = ?3, seen = ?3 WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 id )
-                    ( __ag_bind_s q 2 status )
-                    ( __ag_bind_i q 3 now )
-                    = ok & ( __ag_run q ) > ( sqlite_changes db ) 0
+                    ( _ag_bind_s q 1 id )
+                    ( _ag_bind_s q 2 status )
+                    ( _ag_bind_i q 3 now )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
                 }
             }
         }
@@ -348,14 +352,14 @@ $ `stdlib/ext/sqlite.nu`
 @ ag_agent_by_token AgStore st s token_hash i now → ?String {
     : ~ String id ( string_new )
     : ~ b found F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT id FROM agents WHERE token_hash = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 token_hash )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_s q 1 token_hash )
+                    ? ( _ag_row q ) {
                         = id ( sqlite_column_text q 0 )
                         = found T
                     } {}
@@ -372,15 +376,15 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `UPDATE agents SET seen = ?2 WHERE id = ?1` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 id )
-            ( __ag_bind_i q 2 now )
-            ( __ag_run q )
+            ( _ag_bind_s q 1 id )
+            ( _ag_bind_i q 2 now )
+            ( _ag_run q )
         }
     }
 }
 
 @ ag_agent_touch AgStore st s id i now → v {
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → { ( __ag_touch_on db id now ) }
     }
@@ -401,14 +405,14 @@ $ `stdlib/ext/sqlite.nu`
 @ ag_agent_get AgStore st s id → ?AgAgent {
     : ~ b found F
     : ~ AgAgent out @ AgAgent { ( string_new ) ( string_new ) 0 0 ( string_new ) ( string_new ) 0 }
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at FROM agents WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 id )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_s q 1 id )
+                    ? ( _ag_row q ) {
                         = out ( __ag_read_agent q )
                         = found T
                     } {}
@@ -422,13 +426,13 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_agents AgStore st → ( Vec AgAgent ) {
     : ( Vec AgAgent ) out ( vec_new [AgAgent] )
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT id, about, created, seen, origin, status, status_at FROM agents ORDER BY seen DESC` ) {
                 F _ → {}
                 T q → {
-                    ~ ( __ag_row q ) { ( vec_push [AgAgent] out ( __ag_read_agent q ) ) }
+                    ~ ( _ag_row q ) { ( vec_push [AgAgent] out ( __ag_read_agent q ) ) }
                 }
             }
         }
@@ -440,7 +444,7 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_channel_exists AgStore st s name → b {
     : ~ b found F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → { = found ( __ag_channel_exists_on db name ) }
     }
@@ -452,8 +456,8 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `SELECT 1 FROM channels WHERE name = ?1` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 name )
-            = found ( __ag_row q )
+            ( _ag_bind_s q 1 name )
+            = found ( _ag_row q )
         }
     }
     ^ found
@@ -462,17 +466,17 @@ $ `stdlib/ext/sqlite.nu`
 // Create a channel; F when it exists already (or on failure).
 @ ag_channel_create AgStore st s name s about s by i now → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `INSERT INTO channels (name, about, created_by, created) VALUES (?1, ?2, ?3, ?4)` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 name )
-                    ( __ag_bind_s q 2 about )
-                    ( __ag_bind_s q 3 by )
-                    ( __ag_bind_i q 4 now )
-                    = ok ( __ag_run q )
+                    ( _ag_bind_s q 1 name )
+                    ( _ag_bind_s q 2 about )
+                    ( _ag_bind_s q 3 by )
+                    ( _ag_bind_i q 4 now )
+                    = ok ( _ag_run q )
                 }
             }
         }
@@ -482,13 +486,13 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_channels AgStore st → ( Vec AgChannel ) {
     : ( Vec AgChannel ) out ( vec_new [AgChannel] )
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT c.name, c.about, c.created_by, c.created, (SELECT COUNT(*) FROM messages m WHERE m.channel = c.name) FROM channels c ORDER BY c.created, c.name` ) {
                 F _ → {}
                 T q → {
-                    ~ ( __ag_row q ) {
+                    ~ ( _ag_row q ) {
                         ( vec_push [AgChannel] out @ AgChannel {
                             ( sqlite_column_text q 0 )
                             ( sqlite_column_text q 1 )
@@ -510,18 +514,18 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `INSERT OR IGNORE INTO follows (agent, channel) VALUES (?1, ?2)` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 agent )
-            ( __ag_bind_s q 2 channel )
-            = ok ( __ag_run q )
+            ( _ag_bind_s q 1 agent )
+            ( _ag_bind_s q 2 channel )
+            = ok ( _ag_run q )
         }
     }
     ? ok {
         ?? ( sqlite_prepare db `INSERT OR IGNORE INTO cursors (agent, channel, last_id) VALUES (?1, ?2, (SELECT COALESCE(MAX(id), 0) FROM messages WHERE channel = ?2))` ) {
             F _ → { = ok F }
             T q → {
-                ( __ag_bind_s q 1 agent )
-                ( __ag_bind_s q 2 channel )
-                = ok ( __ag_run q )
+                ( _ag_bind_s q 1 agent )
+                ( _ag_bind_s q 2 channel )
+                = ok ( _ag_run q )
             }
         }
     } {}
@@ -530,12 +534,12 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_follow AgStore st s agent s channel → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ F }
+            ? ( _ag_begin db ) {} { ^ F }
             = ok ( __ag_follow_on db agent channel )
-            ? ok { = ok ( __ag_commit db ) } { ( __ag_rollback db ) }
+            ? ok { = ok ( _ag_commit db ) } { ( _ag_rollback db ) }
         }
     }
     ^ ok
@@ -546,15 +550,15 @@ $ `stdlib/ext/sqlite.nu`
 // `INSERT OR IGNORE` in __ag_follow_on is what keeps the old cursor.
 @ ag_unfollow AgStore st s agent s channel → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `DELETE FROM follows WHERE agent = ?1 AND channel = ?2` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 agent )
-                    ( __ag_bind_s q 2 channel )
-                    = ok & ( __ag_run q ) > ( sqlite_changes db ) 0
+                    ( _ag_bind_s q 1 agent )
+                    ( _ag_bind_s q 2 channel )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
                 }
             }
         }
@@ -564,14 +568,14 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_follows AgStore st s agent → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT channel FROM follows WHERE agent = ?1 ORDER BY channel` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 agent )
-                    ~ ( __ag_row q ) { ( vec_push [String] out ( sqlite_column_text q 0 ) ) }
+                    ( _ag_bind_s q 1 agent )
+                    ~ ( _ag_row q ) { ( vec_push [String] out ( sqlite_column_text q 0 ) ) }
                 }
             }
         }
@@ -586,12 +590,12 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `INSERT INTO messages (channel, sender, body, reply_to, ts) VALUES (?1, ?2, ?3, ?4, ?5)` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 channel )
-            ( __ag_bind_s q 2 sender )
-            ( __ag_bind_s q 3 body )
-            ( __ag_bind_i q 4 reply_to )
-            ( __ag_bind_i q 5 now )
-            ? ( __ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
+            ( _ag_bind_s q 1 channel )
+            ( _ag_bind_s q 2 sender )
+            ( _ag_bind_s q 3 body )
+            ( _ag_bind_i q 4 reply_to )
+            ( _ag_bind_i q 5 now )
+            ? ( _ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
         }
     }
     ^ id
@@ -601,14 +605,14 @@ $ `stdlib/ext/sqlite.nu`
 // on failure.
 @ ag_post AgStore st s channel s sender s body i reply_to i now → i {
     : ~ i id 0
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → { = id ( __ag_post_on db channel sender body reply_to now ) }
     }
     ^ id
 }
 
-@ __ag_read_msg Statement q → AgMsg {
+@ _ag_read_msg Statement q → AgMsg {
     ^ @ AgMsg {
         ( sqlite_column_int q 0 )
         ( sqlite_column_text q 1 )
@@ -641,10 +645,10 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `INSERT INTO cursors (agent, channel, last_id) VALUES (?1, ?2, ?3) ON CONFLICT (agent, channel) DO UPDATE SET last_id = MAX(last_id, excluded.last_id)` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 agent )
-            ( __ag_bind_s q 2 channel )
-            ( __ag_bind_i q 3 id )
-            ( __ag_run q )
+            ( _ag_bind_s q 1 agent )
+            ( _ag_bind_s q 2 channel )
+            ( _ag_bind_i q 3 id )
+            ( _ag_run q )
         }
     }
 }
@@ -661,10 +665,10 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db ( string_data tsql ) ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 agent )
-            ( __ag_bind_str q 2 ( string_clone mbox ) )
-            ( __ag_bind_i q 3 newest )
-            ? ( __ag_row q ) { = cut ( sqlite_column_int q 0 ) } {}
+            ( _ag_bind_s q 1 agent )
+            ( _ag_bind_str q 2 ( string_clone mbox ) )
+            ( _ag_bind_i q 3 newest )
+            ? ( _ag_row q ) { = cut ( sqlite_column_int q 0 ) } {}
         }
     }
     ? == cut 0 { ^ out } {}
@@ -674,10 +678,10 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db ( string_data ssql ) ) {
         F _ → {}
         T q → {
-            ( __ag_bind_s q 1 agent )
-            ( __ag_bind_str q 2 ( string_clone mbox ) )
-            ( __ag_bind_i q 3 cut )
-            ~ ( __ag_row q ) {
+            ( _ag_bind_s q 1 agent )
+            ( _ag_bind_str q 2 ( string_clone mbox ) )
+            ( _ag_bind_i q 3 cut )
+            ~ ( _ag_row q ) {
                 ( vec_push [AgSkip] out @ AgSkip {
                     ( sqlite_column_text q 0 )
                     ( sqlite_column_int q 1 )
@@ -715,10 +719,10 @@ $ `stdlib/ext/sqlite.nu`
     : ~ ( Vec AgSkip ) skipped ( vec_new [AgSkip] )
     : ~ i remaining 0
     : String mbox ( ag_mailbox agent )
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ @ AgInbox { out 0 skipped } }
+            ? ( _ag_begin db ) {} { ^ @ AgInbox { out 0 skipped } }
             ? > newest 0 { = skipped ( __ag_skip_older_on db agent mbox newest ) } {}
             : String sql ( string_from `SELECT m.id, m.channel, m.sender, m.body, m.reply_to, m.ts` )
             ( string_push_str sql AG_INBOX_WHERE )
@@ -726,10 +730,10 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 agent )
-                    ( __ag_bind_str q 2 ( string_clone mbox ) )
-                    ( __ag_bind_i q 3 limit )
-                    ~ ( __ag_row q ) { ( vec_push [AgMsg] out ( __ag_read_msg q ) ) }
+                    ( _ag_bind_s q 1 agent )
+                    ( _ag_bind_str q 2 ( string_clone mbox ) )
+                    ( _ag_bind_i q 3 limit )
+                    ~ ( _ag_row q ) { ( vec_push [AgMsg] out ( _ag_read_msg q ) ) }
                 }
             }
             // Advance each touched channel's cursor to the last id it got:
@@ -760,13 +764,13 @@ $ `stdlib/ext/sqlite.nu`
                 ?? ( sqlite_prepare db ( string_data csql ) ) {
                     F _ → {}
                     T q → {
-                        ( __ag_bind_s q 1 agent )
-                        ( __ag_bind_str q 2 ( string_clone mbox ) )
-                        ? ( __ag_row q ) { = remaining ( sqlite_column_int q 0 ) } {}
+                        ( _ag_bind_s q 1 agent )
+                        ( _ag_bind_str q 2 ( string_clone mbox ) )
+                        ? ( _ag_row q ) { = remaining ( sqlite_column_int q 0 ) } {}
                     }
                 }
             } {}
-            ? ( __ag_commit db ) {} { ( __ag_rollback db ) }
+            ? ( _ag_commit db ) {} { ( _ag_rollback db ) }
         }
     }
     ^ @ AgInbox { out remaining skipped }
@@ -776,7 +780,7 @@ $ `stdlib/ext/sqlite.nu`
 @ ag_unread AgStore st s agent → i {
     : ~ i n 0
     : String mbox ( ag_mailbox agent )
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             : String csql ( string_from `SELECT COUNT(*)` )
@@ -784,9 +788,9 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_prepare db ( string_data csql ) ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 agent )
-                    ( __ag_bind_str q 2 ( string_clone mbox ) )
-                    ? ( __ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
+                    ( _ag_bind_s q 1 agent )
+                    ( _ag_bind_str q 2 ( string_clone mbox ) )
+                    ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {}
                 }
             }
         }
@@ -811,19 +815,19 @@ $ `stdlib/ext/sqlite.nu`
     : s sql ? forward
     `SELECT id, channel, sender, body, reply_to, ts FROM messages WHERE channel = ?1 AND id > ?4 AND (?5 = '' OR body LIKE ?5 ESCAPE '\\') AND (?6 = '' OR sender = ?6) ORDER BY id LIMIT ?3`
     `SELECT id, channel, sender, body, reply_to, ts FROM (SELECT * FROM messages WHERE channel = ?1 AND (?2 = 0 OR id < ?2) AND id > ?4 AND (?5 = '' OR body LIKE ?5 ESCAPE '\\') AND (?6 = '' OR sender = ?6) ORDER BY id DESC LIMIT ?3) ORDER BY id`
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db sql ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 channel )
-                    ( __ag_bind_i q 2 before )
-                    ( __ag_bind_i q 3 limit )
-                    ( __ag_bind_i q 4 after )
-                    ( __ag_bind_str q 5 ( __ag_like_pat text ) )
-                    ( __ag_bind_s q 6 from )
-                    ~ ( __ag_row q ) { ( vec_push [AgMsg] out ( __ag_read_msg q ) ) }
+                    ( _ag_bind_s q 1 channel )
+                    ( _ag_bind_i q 2 before )
+                    ( _ag_bind_i q 3 limit )
+                    ( _ag_bind_i q 4 after )
+                    ( _ag_bind_str q 5 ( _ag_like_pat text ) )
+                    ( _ag_bind_s q 6 from )
+                    ~ ( _ag_row q ) { ( vec_push [AgMsg] out ( _ag_read_msg q ) ) }
                 }
             }
         }
@@ -832,7 +836,7 @@ $ `stdlib/ext/sqlite.nu`
 }
 
 // `%text%` with LIKE's own characters escaped ('' stays '').
-@ __ag_like_pat s text → String {
+@ _ag_like_pat s text → String {
     : String p ( string_new )
     : i n ( nurl_str_len text )
     ? == n 0 { ^ p } {}
@@ -851,15 +855,15 @@ $ `stdlib/ext/sqlite.nu`
 @ ag_msg_get AgStore st i id → ?AgMsg {
     : ~ b found F
     : ~ AgMsg out @ AgMsg { 0 ( string_new ) ( string_new ) ( string_new ) 0 0 }
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT id, channel, sender, body, reply_to, ts FROM messages WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_i q 1 id )
-                    ? ( __ag_row q ) {
-                        = out ( __ag_read_msg q )
+                    ( _ag_bind_i q 1 id )
+                    ? ( _ag_row q ) {
+                        = out ( _ag_read_msg q )
                         = found T
                     } {}
                 }
@@ -902,8 +906,8 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `SELECT id, owner, title FROM tasks WHERE status = 'claimed' AND lease_until < ?1` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_i q 1 now )
-            ~ ( __ag_row q ) {
+            ( _ag_bind_i q 1 now )
+            ~ ( _ag_row q ) {
                 ( vec_push [i] ids ( sqlite_column_int q 0 ) )
                 ( vec_push [String] owners ( sqlite_column_text q 1 ) )
                 ( vec_push [String] titles ( sqlite_column_text q 2 ) )
@@ -917,9 +921,9 @@ $ `stdlib/ext/sqlite.nu`
         ?? ( sqlite_prepare db `UPDATE tasks SET status = 'open', owner = '', lease_until = 0, updated = ?2 WHERE id = ?1 AND status = 'claimed'` ) {
             F _ → {}
             T q → {
-                ( __ag_bind_i q 1 id )
-                ( __ag_bind_i q 2 now )
-                ( __ag_run q )
+                ( _ag_bind_i q 1 id )
+                ( _ag_bind_i q 2 now )
+                ( _ag_run q )
             }
         }
         ?? ( vec_get [String] owners i ) {
@@ -945,20 +949,20 @@ $ `stdlib/ext/sqlite.nu`
 // message also hears when the task is done.
 @ ag_task_post_ref AgStore st s title s body s tags s poster i priority i ref i now → i {
     : ~ i id 0
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `INSERT INTO tasks (title, body, tags, poster, status, priority, created, updated, ref) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?6, ?7)` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 title )
-                    ( __ag_bind_s q 2 body )
-                    ( __ag_bind_s q 3 tags )
-                    ( __ag_bind_s q 4 poster )
-                    ( __ag_bind_i q 5 priority )
-                    ( __ag_bind_i q 6 now )
-                    ( __ag_bind_i q 7 ref )
-                    ? ( __ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
+                    ( _ag_bind_s q 1 title )
+                    ( _ag_bind_s q 2 body )
+                    ( _ag_bind_s q 3 tags )
+                    ( _ag_bind_s q 4 poster )
+                    ( _ag_bind_i q 5 priority )
+                    ( _ag_bind_i q 6 now )
+                    ( _ag_bind_i q 7 ref )
+                    ? ( _ag_run q ) { = id ( sqlite_last_insert_rowid db ) } {}
                 }
             }
         }
@@ -969,18 +973,18 @@ $ `stdlib/ext/sqlite.nu`
 @ ag_task_get AgStore st i id i now → ?AgTask {
     : ~ b found F
     : ~ AgTask out @ AgTask { 0 ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 ( string_new ) 0 0 0 0 }
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) { ( __ag_expire_on db now ) ( __ag_commit db ) } {}
+            ? ( _ag_begin db ) { ( __ag_expire_on db now ) ( _ag_commit db ) } {}
             : String sql ( string_from `SELECT ` )
             ( string_push_str sql AG_TASK_COLS )
             ( string_push_str sql ` FROM tasks WHERE id = ?1` )
             ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_i q 1 id )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_i q 1 id )
+                    ? ( _ag_row q ) {
                         = out ( __ag_read_task q )
                         = found T
                     } {}
@@ -997,10 +1001,10 @@ $ `stdlib/ext/sqlite.nu`
 // priority first, then oldest first; the rest newest first.
 @ ag_tasks AgStore st s which s agent s tag i limit i now → ( Vec AgTask ) {
     : ( Vec AgTask ) out ( vec_new [AgTask] )
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) { ( __ag_expire_on db now ) ( __ag_commit db ) } {}
+            ? ( _ag_begin db ) { ( __ag_expire_on db now ) ( _ag_commit db ) } {}
             : String sql ( string_from `SELECT ` )
             ( string_push_str sql AG_TASK_COLS )
             ( string_push_str sql ` FROM tasks WHERE (?3 = '' OR tags LIKE ?3) AND ` )
@@ -1028,16 +1032,16 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 agent )
-                    ( __ag_bind_i q 2 limit )
+                    ( _ag_bind_s q 1 agent )
+                    ( _ag_bind_i q 2 limit )
                     : ~ String pat ( string_new )
                     ? > ( nurl_str_len tag ) 0 {
                         ( string_push_str pat `%,` )
                         ( string_push_str pat tag )
                         ( string_push_str pat `,%` )
                     } {}
-                    ( __ag_bind_str q 3 pat )
-                    ~ ( __ag_row q ) { ( vec_push [AgTask] out ( __ag_read_task q ) ) }
+                    ( _ag_bind_str q 3 pat )
+                    ~ ( _ag_row q ) { ( vec_push [AgTask] out ( __ag_read_task q ) ) }
                 }
             }
         }
@@ -1047,12 +1051,12 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_task_count_open AgStore st → i {
     : ~ i n 0
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT COUNT(*) FROM tasks WHERE status = 'open'` ) {
                 F _ → {}
-                T q → { ? ( __ag_row q ) { = n ( sqlite_column_int q 0 ) } {} }
+                T q → { ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {} }
             }
         }
     }
@@ -1069,14 +1073,14 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_counts AgStore st s agent → AgCounts {
     : ~ AgCounts c @ AgCounts { 0 0 0 }
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT (SELECT COUNT(*) FROM tasks WHERE status = 'open'), (SELECT COUNT(*) FROM tasks WHERE status IN ('open', 'claimed') AND poster = ?1), (SELECT COUNT(*) FROM notes)` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 agent )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_s q 1 agent )
+                    ? ( _ag_row q ) {
                         = c @ AgCounts { ( sqlite_column_int q 0 ) ( sqlite_column_int q 1 ) ( sqlite_column_int q 2 ) }
                     } {}
                 }
@@ -1097,10 +1101,10 @@ $ `stdlib/ext/sqlite.nu`
 // about it.
 @ ag_task_claim AgStore st i id s agent i lease_s i now → i {
     : ~ i rc AG_TASK_FAILED
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ AG_TASK_FAILED }
+            ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
             ( __ag_expire_on db now )
             : ~ String poster ( string_new )
             : ~ String title ( string_new )
@@ -1109,8 +1113,8 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_prepare db `SELECT poster, title, status FROM tasks WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_i q 1 id )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_i q 1 id )
+                    ? ( _ag_row q ) {
                         = poster ( sqlite_column_text q 0 )
                         = title ( sqlite_column_text q 1 )
                         = status ( sqlite_column_text q 2 )
@@ -1123,11 +1127,11 @@ $ `stdlib/ext/sqlite.nu`
                     ?? ( sqlite_prepare db `UPDATE tasks SET status = 'claimed', owner = ?2, lease_until = ?3, updated = ?4 WHERE id = ?1 AND status = 'open'` ) {
                         F _ → {}
                         T q → {
-                            ( __ag_bind_i q 1 id )
-                            ( __ag_bind_s q 2 agent )
-                            ( __ag_bind_i q 3 + now lease_s )
-                            ( __ag_bind_i q 4 now )
-                            ? & ( __ag_run q ) > ( sqlite_changes db ) 0 { = rc AG_TASK_OK } { = rc AG_TASK_WRONG_STATE }
+                            ( _ag_bind_i q 1 id )
+                            ( _ag_bind_s q 2 agent )
+                            ( _ag_bind_i q 3 + now lease_s )
+                            ( _ag_bind_i q 4 now )
+                            ? & ( _ag_run q ) > ( sqlite_changes db ) 0 { = rc AG_TASK_OK } { = rc AG_TASK_WRONG_STATE }
                         }
                     }
                 } { = rc AG_TASK_WRONG_STATE }
@@ -1142,7 +1146,7 @@ $ `stdlib/ext/sqlite.nu`
                 : String mbox ( ag_mailbox ( string_data poster ) )
                 ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
             } {}
-            ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
+            ? == rc AG_TASK_OK { ? ( _ag_commit db ) {} { = rc AG_TASK_FAILED ( _ag_rollback db ) } } { ( _ag_rollback db ) }
         }
     }
     ^ rc
@@ -1151,22 +1155,22 @@ $ `stdlib/ext/sqlite.nu`
 // Extend the lease of a task `agent` holds.
 @ ag_task_extend AgStore st i id s agent i lease_s i now → i {
     : ~ i rc AG_TASK_FAILED
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ AG_TASK_FAILED }
+            ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
             ( __ag_expire_on db now )
             ?? ( sqlite_prepare db `UPDATE tasks SET lease_until = ?3, updated = ?4 WHERE id = ?1 AND status = 'claimed' AND owner = ?2` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_i q 1 id )
-                    ( __ag_bind_s q 2 agent )
-                    ( __ag_bind_i q 3 + now lease_s )
-                    ( __ag_bind_i q 4 now )
-                    ? & ( __ag_run q ) > ( sqlite_changes db ) 0 { = rc AG_TASK_OK } { = rc AG_TASK_WRONG_STATE }
+                    ( _ag_bind_i q 1 id )
+                    ( _ag_bind_s q 2 agent )
+                    ( _ag_bind_i q 3 + now lease_s )
+                    ( _ag_bind_i q 4 now )
+                    ? & ( _ag_run q ) > ( sqlite_changes db ) 0 { = rc AG_TASK_OK } { = rc AG_TASK_WRONG_STATE }
                 }
             }
-            ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
+            ? == rc AG_TASK_OK { ? ( _ag_commit db ) {} { = rc AG_TASK_FAILED ( _ag_rollback db ) } } { ( _ag_rollback db ) }
         }
     }
     ^ rc
@@ -1177,10 +1181,10 @@ $ `stdlib/ext/sqlite.nu`
 // way, unless the poster is the holder.
 @ __ag_task_settle AgStore st i id s agent s to_status s text i now → i {
     : ~ i rc AG_TASK_FAILED
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ AG_TASK_FAILED }
+            ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
             ( __ag_expire_on db now )
             : ~ String poster ( string_new )
             : ~ String title ( string_new )
@@ -1189,9 +1193,9 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_prepare db `SELECT poster, title, ref FROM tasks WHERE id = ?1 AND status = 'claimed' AND owner = ?2` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_i q 1 id )
-                    ( __ag_bind_s q 2 agent )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_i q 1 id )
+                    ( _ag_bind_s q 2 agent )
+                    ? ( _ag_row q ) {
                         = poster ( sqlite_column_text q 0 )
                         = title ( sqlite_column_text q 1 )
                         = ref ( sqlite_column_int q 2 )
@@ -1207,11 +1211,11 @@ $ `stdlib/ext/sqlite.nu`
                 ?? ( sqlite_prepare db sql ) {
                     F _ → {}
                     T q → {
-                        ( __ag_bind_i q 1 id )
-                        ( __ag_bind_s q 2 agent )
-                        ? is_done { ( __ag_bind_s q 3 text ) } {}
-                        ( __ag_bind_i q 4 now )
-                        ? & ( __ag_run q ) > ( sqlite_changes db ) 0 { = rc AG_TASK_OK } {}
+                        ( _ag_bind_i q 1 id )
+                        ( _ag_bind_s q 2 agent )
+                        ? is_done { ( _ag_bind_s q 3 text ) } {}
+                        ( _ag_bind_i q 4 now )
+                        ? & ( _ag_run q ) > ( sqlite_changes db ) 0 { = rc AG_TASK_OK } {}
                     }
                 }
             }
@@ -1251,7 +1255,7 @@ $ `stdlib/ext/sqlite.nu`
                     ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) ref now )
                 } {}
             } {}
-            ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
+            ? == rc AG_TASK_OK { ? ( _ag_commit db ) {} { = rc AG_TASK_FAILED ( _ag_rollback db ) } } { ( _ag_rollback db ) }
         }
     }
     ^ rc
@@ -1263,8 +1267,8 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( sqlite_prepare db `SELECT sender FROM messages WHERE id = ?1` ) {
         F _ → {}
         T q → {
-            ( __ag_bind_i q 1 id )
-            ? ( __ag_row q ) { = who ( sqlite_column_text q 0 ) } {}
+            ( _ag_bind_i q 1 id )
+            ? ( _ag_row q ) { = who ( sqlite_column_text q 0 ) } {}
         }
     }
     ^ who
@@ -1282,10 +1286,10 @@ $ `stdlib/ext/sqlite.nu`
 // about it.
 @ ag_task_cancel AgStore st i id s agent i now → i {
     : ~ i rc AG_TASK_FAILED
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ? ( __ag_begin db ) {} { ^ AG_TASK_FAILED }
+            ? ( _ag_begin db ) {} { ^ AG_TASK_FAILED }
             ( __ag_expire_on db now )
             : ~ String owner ( string_new )
             : ~ String title ( string_new )
@@ -1294,8 +1298,8 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_prepare db `SELECT owner, title, status, poster FROM tasks WHERE id = ?1` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_i q 1 id )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_i q 1 id )
+                    ? ( _ag_row q ) {
                         = found T
                         = owner ( sqlite_column_text q 0 )
                         = title ( sqlite_column_text q 1 )
@@ -1311,9 +1315,9 @@ $ `stdlib/ext/sqlite.nu`
                     ?? ( sqlite_prepare db `UPDATE tasks SET status = 'cancelled', updated = ?2 WHERE id = ?1` ) {
                         F _ → {}
                         T q → {
-                            ( __ag_bind_i q 1 id )
-                            ( __ag_bind_i q 2 now )
-                            ? ( __ag_run q ) { = rc AG_TASK_OK } {}
+                            ( _ag_bind_i q 1 id )
+                            ( _ag_bind_i q 2 now )
+                            ? ( _ag_run q ) { = rc AG_TASK_OK } {}
                         }
                     }
                 }
@@ -1328,7 +1332,7 @@ $ `stdlib/ext/sqlite.nu`
                 : String mbox ( ag_mailbox ( string_data owner ) )
                 ( __ag_post_on db ( string_data mbox ) agent ( string_data body ) 0 now )
             } {}
-            ? == rc AG_TASK_OK { ? ( __ag_commit db ) {} { = rc AG_TASK_FAILED ( __ag_rollback db ) } } { ( __ag_rollback db ) }
+            ? == rc AG_TASK_OK { ? ( _ag_commit db ) {} { = rc AG_TASK_FAILED ( _ag_rollback db ) } } { ( _ag_rollback db ) }
         }
     }
     ^ rc
@@ -1343,18 +1347,18 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_note_set AgStore st s project s key s body s author i now → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `INSERT INTO notes (project, key, body, author, updated) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (project, key) DO UPDATE SET body = excluded.body, author = excluded.author, updated = excluded.updated` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 project )
-                    ( __ag_bind_s q 2 key )
-                    ( __ag_bind_s q 3 body )
-                    ( __ag_bind_s q 4 author )
-                    ( __ag_bind_i q 5 now )
-                    = ok ( __ag_run q )
+                    ( _ag_bind_s q 1 project )
+                    ( _ag_bind_s q 2 key )
+                    ( _ag_bind_s q 3 body )
+                    ( _ag_bind_s q 4 author )
+                    ( _ag_bind_i q 5 now )
+                    = ok ( _ag_run q )
                 }
             }
         }
@@ -1375,15 +1379,15 @@ $ `stdlib/ext/sqlite.nu`
 @ ag_note_get AgStore st s project s key → ?AgNote {
     : ~ b found F
     : ~ AgNote out @ AgNote { ( string_new ) ( string_new ) ( string_new ) ( string_new ) 0 }
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT project, key, body, author, updated FROM notes WHERE project = ?1 AND key = ?2` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 project )
-                    ( __ag_bind_s q 2 key )
-                    ? ( __ag_row q ) {
+                    ( _ag_bind_s q 1 project )
+                    ( _ag_bind_s q 2 key )
+                    ? ( _ag_row q ) {
                         = out ( __ag_read_note q )
                         = found T
                     } {}
@@ -1400,7 +1404,7 @@ $ `stdlib/ext/sqlite.nu`
 // bodies are left empty (the listing shows keys and authors only).
 @ ag_notes AgStore st s project b all b full → ( Vec AgNote ) {
     : ( Vec AgNote ) out ( vec_new [AgNote] )
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             : String sql ( string_from ? full `SELECT project, key, body, author, updated FROM notes` `SELECT project, key, '', author, updated FROM notes` )
@@ -1409,8 +1413,8 @@ $ `stdlib/ext/sqlite.nu`
             ?? ( sqlite_prepare db ( string_data sql ) ) {
                 F _ → {}
                 T q → {
-                    ? all {} { ( __ag_bind_s q 1 project ) }
-                    ~ ( __ag_row q ) { ( vec_push [AgNote] out ( __ag_read_note q ) ) }
+                    ? all {} { ( _ag_bind_s q 1 project ) }
+                    ~ ( _ag_row q ) { ( vec_push [AgNote] out ( __ag_read_note q ) ) }
                 }
             }
         }
@@ -1420,15 +1424,15 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_note_del AgStore st s project s key → b {
     : ~ b ok F
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `DELETE FROM notes WHERE project = ?1 AND key = ?2` ) {
                 F _ → {}
                 T q → {
-                    ( __ag_bind_s q 1 project )
-                    ( __ag_bind_s q 2 key )
-                    = ok & ( __ag_run q ) > ( sqlite_changes db ) 0
+                    ( _ag_bind_s q 1 project )
+                    ( _ag_bind_s q 2 key )
+                    = ok & ( _ag_run q ) > ( sqlite_changes db ) 0
                 }
             }
         }
@@ -1438,12 +1442,12 @@ $ `stdlib/ext/sqlite.nu`
 
 @ ag_note_count AgStore st → i {
     : ~ i n 0
-    ?? ( __ag_conn st ) {
+    ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
             ?? ( sqlite_prepare db `SELECT COUNT(*) FROM notes` ) {
                 F _ → {}
-                T q → { ? ( __ag_row q ) { = n ( sqlite_column_int q 0 ) } {} }
+                T q → { ? ( _ag_row q ) { = n ( sqlite_column_int q 0 ) } {} }
             }
         }
     }

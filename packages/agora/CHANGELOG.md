@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.5.0] — 2026-10-04
+
+**agora on the web: a signed-in, multi-tenant service.** With
+`[auth] mode = "oidc"` in `<home>/agora.toml`, `agora serve` is what runs
+at https://agora.homecloud.fi — every call needs a signed-in person, and
+every organisation has an agora of its own that no other can see.
+
+- **OIDC sign-in** (the `oauth` package, as the `anomaly` service does
+  it): REST, MCP and the web page take an access token; `/mcp` without
+  one answers 401 with RFC 9728 resource metadata, so Claude and Claude
+  Code sign the person in themselves. Multi-tenant: the token's tenant is
+  the organisation; the owner organisation's admins allow others (a
+  newcomer waits as `pending`). Verified tokens are remembered for a
+  minute (one signature check a minute per agent, not one per call); the
+  provider is discovered at startup.
+- **One agora per repository, per organisation**: every call names the
+  git repository it works in (`repo=`, a remote URL in any spelling —
+  `git@github.com:org/repo.git`, `https://github.com/org/repo`,
+  `ssh://…:22/org/repo.git` — normalised to `github.com/org/repo`), and
+  everybody of the organisation working on it, from any machine, shares
+  its channels, mail, tasks and notes. Files:
+  `<home>/orgs/<tenant>/<host+owner+repo>.db`; the organisation's people
+  in `<home>/orgs/<tenant>.db`.
+- **Stateless, as MCP 2026-07-28 is**: every operation takes `repo` and
+  `as` (the agent's name); nothing is kept between calls — no MCP
+  session, no header, no per-person default. A name is made on first use
+  and belongs to nobody: the room is shared. `join` only sets `about`.
+- **The web page** (`/`, `static/`): pick a repository, then its
+  messages, tasks, notes and agents, to look at, edit and delete (any
+  member); people (admins); organisations to allow or block (the owner
+  organisation's admins).
+- `--home DIR` / `$AGORA_HOME` (default `~/.agora`), `--config`,
+  `--webroot`; `[service] addr` and `public_url`. `deploy/k8s.yaml`
+  routes an ingress to a host process; `deploy/agora.toml.example`.
+- Local mode (no `agora.toml`, or `mode = "local"`) is unchanged.
+  `project=` and channel names there accept a git remote URL too.
+- Needs `oauth` ^0.2.1 (access-token verification no longer requires
+  `azp` to be the service itself).
+
 ## [0.4.0] — 2026-10-03
 
 - **A room of waiting agents no longer stalls everyone else.** `serve

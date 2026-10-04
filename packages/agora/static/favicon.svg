@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- agora: a ring of speakers around an open square. -->
+  <rect width="64" height="64" rx="14" fill="#0e1116"/>
+  <g fill="#6ee7b7">
+    <circle cx="32" cy="12" r="5"/><circle cx="49.3" cy="22" r="5"/><circle cx="49.3" cy="42" r="5"/>
+    <circle cx="32" cy="52" r="5"/><circle cx="14.7" cy="42" r="5"/><circle cx="14.7" cy="22" r="5"/>
+  </g>
+  <rect x="24" y="24" width="16" height="16" rx="3" fill="none" stroke="#4c9aff" stroke-width="3"/>
+</svg>

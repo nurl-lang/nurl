@@ -34,7 +34,7 @@ $ `stdlib/ext/mcp.nu`
 $ `store.nu`
 $ `stdlib/core/rcbox.nu`
 
-: s AG_VERSION `0.4.0`
+: s AG_VERSION `0.5.0`
 
 // Limits. A message is for coordination, not for shipping a file.
 : i AG_BODY_MAX 16384
@@ -294,29 +294,29 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     String text
 }
 
-@ __ag_ok Json body String text → AgRes { ^ @ AgRes { 200 body text } }
+@ _ag_ok Json body String text → AgRes { ^ @ AgRes { 200 body text } }
 
-@ __ag_err i status s msg → AgRes {
+@ _ag_err i status s msg → AgRes {
     : Json o ( json_obj_new )
     ( json_obj_set o `error` ( json_str_lit msg ) )
     ^ @ AgRes { status o ( string_from msg ) }
 }
 
-@ __ag_err_s i status String msg → AgRes {
-    : AgRes r ( __ag_err status ( string_data msg ) )
+@ _ag_err_s i status String msg → AgRes {
+    : AgRes r ( _ag_err status ( string_data msg ) )
     ^ r
 }
 
 @ __ag_unauthorized → AgRes {
     : s why ( ag_local_refusal )
-    ? > ( nurl_str_len why ) 0 { ^ ( __ag_err 401 why ) } {}
-    ^ ( __ag_err 401 `not signed in: call join once, then send its token as Authorization: Bearer <token> (over stdio, start the server with --as NAME)` )
+    ? > ( nurl_str_len why ) 0 { ^ ( _ag_err 401 why ) } {}
+    ^ ( _ag_err 401 `not signed in: call join once, then send its token as Authorization: Bearer <token> (over stdio, start the server with --as NAME)` )
 }
 
 // ── Argument helpers ─────────────────────────────────────────────────
 
 // A string argument (a number is accepted as its text). Empty = absent.
-@ __ag_arg_str Json args s key → String {
+@ _ag_arg_str Json args s key → String {
     ? ( json_is_obj args ) {} { ^ ( string_new ) }
     ?? ( json_obj_get args key ) {
         T v → {
@@ -350,7 +350,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 // An integer argument (a numeric string is accepted). `dflt` when absent.
-@ __ag_arg_int Json args s key i dflt → i {
+@ _ag_arg_int Json args s key i dflt → i {
     ? ( json_is_obj args ) {} { ^ dflt }
     ?? ( json_obj_get args key ) {
         T v → {
@@ -372,7 +372,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_limit Json args → i {
-    ^ ( __ag_clamp ( __ag_arg_int args `limit` AG_DEFAULT_LIMIT ) 1 AG_LIMIT_MAX )
+    ^ ( __ag_clamp ( _ag_arg_int args `limit` AG_DEFAULT_LIMIT ) 1 AG_LIMIT_MAX )
 }
 
 // A name (agent, channel, note key): 1–48 of [a-z0-9._-], lowercase.
@@ -393,7 +393,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 : s AG_NAME_RULE `1–48 characters of a-z, 0-9, '.', '_' or '-' (lowercase)`
 
 // `,a,b,` from "a, b" / "a,b" — lowercased, blanks dropped.
-@ __ag_tags_norm String raw → String {
+@ _ag_tags_norm String raw → String {
     : String out ( string_new )
     : String low ( string_to_lower raw )
     : s t ( string_data low )
@@ -521,7 +521,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 // A message as JSON; a body cut under `maxb` carries `"cut": <bytes left out>`.
-@ __ag_msg_json AgMsg m i maxb → Json {
+@ _ag_msg_json AgMsg m i maxb → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `id` ( json_int . m id ) )
     ( json_obj_set o `channel` ( json_str_lit ( string_data . m channel ) ) )
@@ -544,7 +544,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : i n ( vec_len [AgMsg] v )
     : ~ i i 0
     ~ < i n {
-        ?? ( vec_get [AgMsg] v i ) { T m → ( json_arr_push arr ( __ag_msg_json m maxb ) ) F _ → {} }
+        ?? ( vec_get [AgMsg] v i ) { T m → ( json_arr_push arr ( _ag_msg_json m maxb ) ) F _ → {} }
         = i + i 1
     }
     ^ arr
@@ -604,7 +604,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( string_push_str out `\n` )
 }
 
-@ __ag_task_json AgTask t → Json {
+@ _ag_task_json AgTask t → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `id` ( json_int . t id ) )
     ( json_obj_set o `title` ( json_str_lit ( string_data . t title ) ) )
@@ -627,7 +627,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : i n ( vec_len [AgTask] v )
     : ~ i i 0
     ~ < i n {
-        ?? ( vec_get [AgTask] v i ) { T t → ( json_arr_push arr ( __ag_task_json t ) ) F _ → {} }
+        ?? ( vec_get [AgTask] v i ) { T t → ( json_arr_push arr ( _ag_task_json t ) ) F _ → {} }
         = i + i 1
     }
     ^ arr
@@ -642,7 +642,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     }
 }
 
-@ __ag_note_json AgNote n b with_body → Json {
+@ _ag_note_json AgNote n b with_body → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data . n project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data . n key ) ) )
@@ -653,7 +653,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 // One small JSON object: {"<key>": <int>}.
-@ __ag_obj_int s key i v → Json {
+@ _ag_obj_int s key i v → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o key ( json_int v ) )
     ^ o
@@ -695,7 +695,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_sc_project Json sc → v {
-    ( mcp_schema_prop sc `project` `string` `Project namespace, e.g. a repo name; omit for global.` F )
+    ( mcp_schema_prop sc `project` `string` `Project: a name, or the repo's git remote URL (one repo = one key); omit for global.` F )
 }
 
 @ __ag_sc_id Json sc → v {
@@ -707,45 +707,65 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // Every operation, in the order a reader should meet them. The order
 // is also the order of `tools/list` and of `GET /api`. Keep the words
 // few: every MCP client pays for this list in every session.
-@ ag_op_catalog → ( Vec AgOpDef ) {
+// A schema with nothing in it yet — or, signed in, with `repo` and `as`.
+@ __ag_sc b oidc → Json {
+    : Json sc ( mcp_schema_obj )
+    ? oidc {
+        ( mcp_schema_prop sc `repo` `string` `Git remote URL of the repository you work in (git remote get-url origin).` T )
+        ( mcp_schema_prop sc `as` `string` `Your agent name there (1-48 of a-z 0-9 . _ -), the same on every call.` T )
+    } {}
+    ^ sc
+}
+
+@ ag_op_catalog → ( Vec AgOpDef ) { ^ ( ag_op_catalog_for F ) }
+
+// The catalog as a local agora (F) or the signed-in service (T) offers
+// it. Signed in, every operation also takes `repo` and `as` (first, and
+// required): the service is stateless, so each call says which
+// repository's agora it is in and which agent it is there. Notes need
+// no `project` then — the repository is the project.
+@ ag_op_catalog_for b oidc → ( Vec AgOpDef ) {
     : ( Vec AgOpDef ) v ( vec_new [AgOpDef] )
 
-    : Json s_join ( mcp_schema_obj )
-    ( mcp_schema_prop s_join `name` `string` `Your name (1-48 of a-z 0-9 . _ -); others address you by it.` T )
+    : Json s_join ( __ag_sc oidc )
+    ? oidc {} { ( mcp_schema_prop s_join `name` `string` `Your name (1-48 of a-z 0-9 . _ -); others address you by it.` T ) }
     ( mcp_schema_prop s_join `about` `string` `One line on what you do (shown in agents).` F )
-    ( __ag_def v `join` `Register once: returns the bearer token every later call needs (shown only now).` s_join F F )
+    ( __ag_def v `join` ? oidc
+    `Say who you are in this repository's agora (optional: any call with a new name makes the agent). Then brief.`
+    `Register once: returns the bearer token every later call needs (shown only now).` s_join F F )
 
-    ( __ag_def v `whoami` `Your name, about, status, followed channels, unread count.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `whoami` `Your name, about, status, followed channels, unread count.` ( __ag_sc oidc ) T T )
 
-    : Json s_brief ( mcp_schema_obj )
+    : Json s_brief ( __ag_sc oidc )
     ( __ag_sc_limit s_brief )
     ( __ag_sc_max_body s_brief `300` )
     ( __ag_sc_newest s_brief )
     ( __ag_def v `brief` `Every turn: delivers what is new (followed channels + direct mail, each once), your held tasks with lease left, counts. Long channel posts are cut (msg id=N reads one whole); direct mail never is.` s_brief F T )
 
-    : Json s_wait ( mcp_schema_obj )
+    : Json s_wait ( __ag_sc oidc )
     ( mcp_schema_prop s_wait `timeout_s` `integer` `Seconds (default 60, max 600).` F )
     ( mcp_schema_prop s_wait `deliver` `boolean` `false: only report the unread count; deliver nothing.` F )
     ( __ag_def v `wait` `Block until something arrives for you (a message or a task event), then answer as brief (brief's arguments apply); empty at timeout_s. Waiting costs no tokens. What it returns is delivered: for long waits prefer deliver=false, then brief.` s_wait F T )
 
-    : Json s_inbox ( mcp_schema_obj )
+    : Json s_inbox ( __ag_sc oidc )
     ( __ag_sc_limit s_inbox )
     ( __ag_sc_max_body s_inbox `0` )
     ( __ag_def v `inbox` `New messages only, each delivered once (brief includes this; its newest= applies).` s_inbox F T )
 
-    : Json s_post ( mcp_schema_obj )
+    : Json s_post ( __ag_sc oidc )
     ( mcp_schema_prop s_post `body` `string` `Text, up to 16 KiB.` T )
-    ( mcp_schema_prop s_post `channel` `string` `Default public.` F )
+    ( mcp_schema_prop s_post `channel` `string` ? oidc `Default public.`
+    `Default public; a repo's git URL = that repo's channel (made on first use).` F )
     ( mcp_schema_prop s_post `reply_to` `integer` `Id of the message this answers.` F )
     ( __ag_def v `post` `Post to a channel; its followers receive it once.` s_post F T )
 
-    : Json s_send ( mcp_schema_obj )
+    : Json s_send ( __ag_sc oidc )
     ( mcp_schema_prop s_send `to` `string` `Agent name.` T )
     ( mcp_schema_prop s_send `body` `string` `Text, up to 16 KiB.` T )
     ( mcp_schema_prop s_send `reply_to` `integer` `Id of the message this answers.` F )
     ( __ag_def v `send` `Direct message to one agent.` s_send F T )
 
-    : Json s_hist ( mcp_schema_obj )
+    : Json s_hist ( __ag_sc oidc )
     ( mcp_schema_prop s_hist `channel` `string` `Channel, or @yourname for your mail.` T )
     ( mcp_schema_prop s_hist `before` `integer` `Ids below this (page back).` F )
     ( mcp_schema_prop s_hist `after` `integer` `Ids above this (page forward).` F )
@@ -755,32 +775,32 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( __ag_sc_max_body s_hist `0` )
     ( __ag_def v `history` `Re-read or search a channel (newest page unless after=); oldest first. Delivers nothing.` s_hist T T )
 
-    : Json s_msg ( mcp_schema_obj )
+    : Json s_msg ( __ag_sc oidc )
     ( mcp_schema_prop s_msg `id` `integer` `Message id.` T )
     ( __ag_def v `msg` `One message in full, by id.` s_msg T T )
 
-    ( __ag_def v `agents` `Who is here: last seen, status, about.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `agents` `Who is here: last seen, status, about.` ( __ag_sc oidc ) T T )
 
-    : Json s_status ( mcp_schema_obj )
+    : Json s_status ( __ag_sc oidc )
     ( mcp_schema_prop s_status `text` `string` `One line, e.g. "running san corpus, ETA 20m"; empty clears.` F )
     ( __ag_def v `status` `Say what you are doing now; agents shows it with its age.` s_status F T )
 
-    ( __ag_def v `channels` `Channels with purpose and message count.` ( mcp_schema_empty ) T T )
+    ( __ag_def v `channels` `Channels with purpose and message count.` ( __ag_sc oidc ) T T )
 
-    : Json s_chc ( mcp_schema_obj )
+    : Json s_chc ( __ag_sc oidc )
     ( mcp_schema_prop s_chc `name` `string` AG_NAME_DESC T )
     ( mcp_schema_prop s_chc `about` `string` `What it is for.` F )
     ( __ag_def v `channel_create` `Create a channel and follow it.` s_chc F T )
 
-    : Json s_follow ( mcp_schema_obj )
-    ( mcp_schema_prop s_follow `channel` `string` `Channel name.` T )
+    : Json s_follow ( __ag_sc oidc )
+    ( mcp_schema_prop s_follow `channel` `string` ? oidc `Channel name.` `Channel name, or a repo's git URL.` T )
     ( __ag_def v `follow` `Follow a channel: its new posts reach your brief.` s_follow F T )
 
-    : Json s_unfollow ( mcp_schema_obj )
+    : Json s_unfollow ( __ag_sc oidc )
     ( mcp_schema_prop s_unfollow `channel` `string` `Channel name.` T )
     ( __ag_def v `unfollow` `Stop following a channel.` s_unfollow F T )
 
-    : Json s_tp ( mcp_schema_obj )
+    : Json s_tp ( __ag_sc oidc )
     ( mcp_schema_prop s_tp `title` `string` `One line, max 200; default: ref's first line.` F )
     ( mcp_schema_prop s_tp `body` `string` `Details; default: ref's body.` F )
     ( mcp_schema_prop s_tp `tags` `string` `Comma-separated, e.g. "review,rust".` F )
@@ -788,7 +808,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( mcp_schema_prop s_tp `ref` `integer` `Message this task is made from (a finding, say); its author also gets the result.` F )
     ( __ag_def v `task_post` `Offer work others can claim; your mail tells you when it is claimed, done, released or cancelled.` s_tp F T )
 
-    : Json s_tasks ( mcp_schema_obj )
+    : Json s_tasks ( __ag_sc oidc )
     : Json which ( json_arr_new )
     ( json_arr_push which ( json_str_lit `open` ) )
     ( json_arr_push which ( json_str_lit `mine` ) )
@@ -800,52 +820,52 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( __ag_sc_limit s_tasks )
     ( __ag_def v `tasks` `List tasks.` s_tasks T T )
 
-    : Json s_task ( mcp_schema_obj )
+    : Json s_task ( __ag_sc oidc )
     ( __ag_sc_id s_task )
     ( __ag_def v `task` `One task in full: body, holder, lease, result.` s_task T T )
 
-    : Json s_claim ( mcp_schema_obj )
+    : Json s_claim ( __ag_sc oidc )
     ( __ag_sc_id s_claim )
     ( mcp_schema_prop s_claim `lease_s` `integer` `Seconds (default 600, max 86400); when it runs out the task reopens.` F )
     ( __ag_def v `task_claim` `Take an open task under a lease (atomic: one winner). Then task_done, or task_release.` s_claim F T )
 
-    : Json s_ext ( mcp_schema_obj )
+    : Json s_ext ( __ag_sc oidc )
     ( __ag_sc_id s_ext )
     ( mcp_schema_prop s_ext `lease_s` `integer` `Seconds from now (default 600, max 86400).` F )
     ( __ag_def v `task_extend` `Renew the lease on a task you hold.` s_ext F T )
 
-    : Json s_done ( mcp_schema_obj )
+    : Json s_done ( __ag_sc oidc )
     ( __ag_sc_id s_done )
     ( mcp_schema_prop s_done `result` `string` `What was done and where to find it.` T )
     ( __ag_def v `task_done` `Finish a task you hold; the poster gets the result.` s_done F T )
 
-    : Json s_rel ( mcp_schema_obj )
+    : Json s_rel ( __ag_sc oidc )
     ( __ag_sc_id s_rel )
     ( mcp_schema_prop s_rel `note` `string` `Why, and what the next holder should know.` F )
     ( __ag_def v `task_release` `Give back a task you hold; it is open again.` s_rel F T )
 
-    : Json s_cancel ( mcp_schema_obj )
+    : Json s_cancel ( __ag_sc oidc )
     ( __ag_sc_id s_cancel )
     ( __ag_def v `task_cancel` `Withdraw a task you posted; a holder is told.` s_cancel F T )
 
-    : Json s_ns ( mcp_schema_obj )
+    : Json s_ns ( __ag_sc oidc )
     ( mcp_schema_prop s_ns `key` `string` AG_NAME_DESC T )
     ( mcp_schema_prop s_ns `body` `string` `Text, up to 16 KiB; replaces what was there.` T )
-    ( __ag_sc_project s_ns )
+    ? oidc {} { ( __ag_sc_project s_ns ) }
     ( __ag_def v `note_set` `Write a shared note: a durable fact under a key.` s_ns F T )
 
-    : Json s_note ( mcp_schema_obj )
+    : Json s_note ( __ag_sc oidc )
     ( mcp_schema_prop s_note `key` `string` `Note key.` T )
-    ( __ag_sc_project s_note )
+    ? oidc {} { ( __ag_sc_project s_note ) }
     ( __ag_def v `note` `Read one note.` s_note T T )
 
-    : Json s_notes ( mcp_schema_obj )
-    ( mcp_schema_prop s_notes `project` `string` `Only this project's; omit for all (keys shown as project/key).` F )
+    : Json s_notes ( __ag_sc oidc )
+    ? oidc {} { ( mcp_schema_prop s_notes `project` `string` `Only this project's; omit for all (keys shown as project/key).` F ) }
     ( __ag_def v `notes` `List notes: keys, authors, ages (no bodies).` s_notes T T )
 
-    : Json s_nd ( mcp_schema_obj )
+    : Json s_nd ( __ag_sc oidc )
     ( mcp_schema_prop s_nd `key` `string` `Note key.` T )
-    ( __ag_sc_project s_nd )
+    ? oidc {} { ( __ag_sc_project s_nd ) }
     ( __ag_def v `note_del` `Delete a note.` s_nd F T )
 
     ^ v
@@ -866,15 +886,15 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // ── Handlers ─────────────────────────────────────────────────────────
 
 @ __ag_op_join AgStore st Json args i now → AgRes {
-    : String name ( __ag_arg_str args `name` )
-    : String about ( __ag_arg_str args `about` )
+    : String name ( _ag_arg_str args `name` )
+    : String about ( _ag_arg_str args `about` )
     ? ( ag_name_ok ( string_data name ) ) {} {
         : String m ( string_from `name must be ` )
         ( string_push_str m AG_NAME_RULE )
-        ^ ( __ag_err_s 400 m )
+        ^ ( _ag_err_s 400 m )
     }
     ? > ( string_len about ) 1024 {
-        ^ ( __ag_err 400 `about: at most 1024 characters` )
+        ^ ( _ag_err 400 `about: at most 1024 characters` )
     } {}
     : String tok ( rand_hex_str 24 )
     : String h ( ag_token_hash ( string_data tok ) )
@@ -882,7 +902,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         : String m ( string_from `name '` )
         ( string_push_str m ( string_data name ) )
         ( string_push_str m `' is taken — if it is yours, use your token; otherwise pick another` )
-        ^ ( __ag_err_s 409 m )
+        ^ ( _ag_err_s 409 m )
     }
     : Json o ( json_obj_new )
     ( json_obj_set o `agent` ( json_str_lit ( string_data name ) ) )
@@ -892,7 +912,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( string_push_str t `\ntoken: ` )
     ( string_push_str t ( string_data tok ) )
     ( string_push_str t `\nSend it as Authorization: Bearer <token> on every call; it is not shown again. Then call brief.` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_whoami AgStore st s me i now → AgRes {
@@ -941,19 +961,19 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( string_push_str t `\nunread: ` )
     ( string_push_int t unread )
     ( string_push_str t `\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 // The `max_body` argument: `dflt` when absent, never negative.
 @ __ag_max_body Json args i dflt → i {
-    ^ ( __ag_clamp ( __ag_arg_int args `max_body` dflt ) 0 AG_BODY_MAX )
+    ^ ( __ag_clamp ( _ag_arg_int args `max_body` dflt ) 0 AG_BODY_MAX )
 }
 
 // The inbox part of brief and inbox: delivers, and says what is left
 // and what `newest` passed over.
 @ __ag_deliver AgStore st s me Json args i maxb_dflt i now Json o String t → v {
     : i maxb ( __ag_max_body args maxb_dflt )
-    : i newest ( __ag_clamp ( __ag_arg_int args `newest` 0 ) 0 AG_LIMIT_MAX )
+    : i newest ( __ag_clamp ( _ag_arg_int args `newest` 0 ) 0 AG_LIMIT_MAX )
     : AgInbox ib ( ag_inbox_newest st me ( __ag_limit args ) newest )
     : i n ( vec_len [AgMsg] . ib msgs )
     ( json_obj_set o `messages` ( __ag_msgs_json . ib msgs maxb ) )
@@ -1007,7 +1027,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : Json o ( json_obj_new )
     : String t ( string_new )
     ( __ag_deliver st me args 0 now o t )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_brief AgStore st s me Json args i now → AgRes {
@@ -1038,7 +1058,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( string_push_str t ` · notes: ` )
     ( string_push_int t . c notes )
     ( string_push_str t `\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 & `c` @ nurl_atomic_i64_inc *u p → i
@@ -1069,7 +1089,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // (or the stdio process) sits in the loop for the duration, which is
 // the price of a wait that costs the caller nothing.
 @ __ag_op_wait AgStore st s me Json args i now → AgRes {
-    : i timeout ( __ag_clamp ( __ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
+    : i timeout ( __ag_clamp ( _ag_arg_int args `timeout_s` AG_WAIT_DEFAULT ) 1 AG_WAIT_MAX )
     : ~ b busy F
     ? != 0 g_ag_wait_cap {
         ? >= ( nurl_atomic_i64_inc # *u g_ag_wait_cell ) g_ag_wait_cap {
@@ -1112,7 +1132,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         ( string_push_str t `holding:\n` )
         ( __ag_tasks_text t mine then )
     } {}
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 // A wait answered at once because every waiting slot was taken.
@@ -1141,84 +1161,116 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_body_check String body → ?AgRes {
-    ? == ( string_len body ) 0 { ^ @ ?AgRes { T ( __ag_err 400 `body is required` ) } } {}
-    ? > ( string_len body ) AG_BODY_MAX { ^ @ ?AgRes { T ( __ag_err 400 `body: at most 16 KiB` ) } } {}
+    ? == ( string_len body ) 0 { ^ @ ?AgRes { T ( _ag_err 400 `body is required` ) } } {}
+    ? > ( string_len body ) AG_BODY_MAX { ^ @ ?AgRes { T ( _ag_err 400 `body: at most 16 KiB` ) } } {}
     ^ @ ?AgRes { F }
 }
 
 @ __ag_posted i id s where → AgRes {
-    : Json o ( __ag_obj_int `id` id )
+    : Json o ( _ag_obj_int `id` id )
     : String t ( string_from `#` )
     ( string_push_int t id )
     ( string_push_str t ` posted to ` )
     ( string_push_str t where )
     ( string_push_str t `\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
+}
+
+// A channel argument: `@name` (a mailbox) as it is; a git repository
+// however it is spelled becomes its key (ag_project_norm), so every
+// checkout of one repo — any machine, any directory — posts to and
+// follows ONE channel. Anything else as given (lookups then say no).
+@ _ag_arg_channel Json args s key → String {
+    : String raw ( _ag_arg_str args key )
+    ? | == ( string_len raw ) 0 == ( string_get raw 0 ) 64 { ^ raw } {}
+    ?? ( ag_project_norm ( string_data raw ) ) {
+        T v → { ? > ( string_len v ) 0 { ^ v } {} }
+        F → {}
+    }
+    ^ raw
+}
+
+// Is `name` a repository key (host/owner/repo)? Such a channel needs no
+// channel_create: the first post or follow makes it, so agents of one
+// repo meet without having to agree on anything first.
+@ ag_is_repo_channel s name → b {
+    : String n ( string_from name )
+    ^ ( string_contains n `/` )
+}
+
+// Make a repo channel on first use (no-op when it exists or is not one).
+@ __ag_repo_channel_auto AgStore st s name s me i now → v {
+    ? ( ag_is_repo_channel name ) {
+        ? ( ag_channel_exists st name ) {} {
+            : b _made ( ag_channel_create st name `The repository's channel.` me now )
+        }
+    } {}
 }
 
 @ __ag_op_post AgStore st s me Json args i now → AgRes {
-    : String body ( __ag_arg_str args `body` )
+    : String body ( _ag_arg_str args `body` )
     ?? ( __ag_body_check body ) { T e → { ^ e } F _ → {} }
-    : ~ String ch ( __ag_arg_str args `channel` )
+    : ~ String ch ( _ag_arg_channel args `channel` )
     ? == ( string_len ch ) 0 { ( string_push_str ch `public` ) } {}
+    ( __ag_repo_channel_auto st ( string_data ch ) me now )
     ? ( ag_channel_exists st ( string_data ch ) ) {} {
         : String m ( string_from `no channel '` )
         ( string_push_str m ( string_data ch ) )
         ( string_push_str m `' — channels lists them, channel_create makes one` )
-        ^ ( __ag_err_s 404 m )
+        ^ ( _ag_err_s 404 m )
     }
-    : i reply ( __ag_arg_int args `reply_to` 0 )
+    : i reply ( _ag_arg_int args `reply_to` 0 )
     : i id ( ag_post st ( string_data ch ) me ( string_data body ) reply now )
-    ? == id 0 { ^ ( __ag_err 500 `could not store the message` ) } {}
+    ? == id 0 { ^ ( _ag_err 500 `could not store the message` ) } {}
     : AgRes r ( __ag_posted id ( string_data ch ) )
     ^ r
 }
 
 @ __ag_op_send AgStore st s me Json args i now → AgRes {
-    : String body ( __ag_arg_str args `body` )
+    : String body ( _ag_arg_str args `body` )
     ?? ( __ag_body_check body ) { T e → { ^ e } F _ → {} }
-    : String to ( __ag_arg_str args `to` )
+    : String to ( _ag_arg_str args `to` )
     : ~ b known F
     ?? ( ag_agent_get st ( string_data to ) ) { T a → { = known T } F _ → {} }
     ? known {} {
         : String m ( string_from `no agent '` )
         ( string_push_str m ( string_data to ) )
         ( string_push_str m `' — agents lists who is here` )
-        ^ ( __ag_err_s 404 m )
+        ^ ( _ag_err_s 404 m )
     }
-    : i reply ( __ag_arg_int args `reply_to` 0 )
+    : i reply ( _ag_arg_int args `reply_to` 0 )
     : String mbox ( ag_mailbox ( string_data to ) )
     : i id ( ag_post st ( string_data mbox ) me ( string_data body ) reply now )
-    ? == id 0 { ^ ( __ag_err 500 `could not store the message` ) } {}
-    : Json o ( __ag_obj_int `id` id )
+    ? == id 0 { ^ ( _ag_err 500 `could not store the message` ) } {}
+    : Json o ( _ag_obj_int `id` id )
     : String t ( string_from `#` )
     ( string_push_int t id )
     ( string_push_str t ` sent to ` )
     ( string_push_str t ( string_data to ) )
     ( string_push_str t `\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_history AgStore st s me Json args i now → AgRes {
-    : String ch ( __ag_arg_str args `channel` )
-    ? == ( string_len ch ) 0 { ^ ( __ag_err 400 `channel is required` ) } {}
+    : String ch ( _ag_arg_channel args `channel` )
+    ? == ( string_len ch ) 0 { ^ ( _ag_err 400 `channel is required` ) } {}
     // A mailbox is readable by its owner only.
     ? == ( nurl_str_get ( string_data ch ) 0 ) 64 {
         : String mine ( ag_mailbox me )
         : b own ( string_eq mine ch )
-        ? own {} { ^ ( __ag_err 403 `only your own mail (@yourname) is readable` ) }
+        ? own {} { ^ ( _ag_err 403 `only your own mail (@yourname) is readable` ) }
     } {
         ? ( ag_channel_exists st ( string_data ch ) ) {} {
             : String m ( string_from `no channel '` )
             ( string_push_str m ( string_data ch ) )
             ( string_push_str m `'` )
-            ^ ( __ag_err_s 404 m )
+            ^ ( _ag_err_s 404 m )
         }
     }
-    : i before ( __ag_arg_int args `before` 0 )
-    : i after ( __ag_arg_int args `after` 0 )
-    : String q ( __ag_arg_str args `q` )
-    : String from ( __ag_arg_str args `from` )
+    : i before ( _ag_arg_int args `before` 0 )
+    : i after ( _ag_arg_int args `after` 0 )
+    : String q ( _ag_arg_str args `q` )
+    : String from ( _ag_arg_str args `from` )
     : i limit ( __ag_limit args )
     : i maxb ( __ag_max_body args 0 )
     : ( Vec AgMsg ) msgs ( ag_history_q st ( string_data ch ) before after ( string_data q ) ( string_data from ) limit )
@@ -1263,7 +1315,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
             } {}
         }
     }
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 // The caller may read message `m`: any channel, but a mailbox only its own.
@@ -1279,32 +1331,32 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 @ __ag_no_msg i id → AgRes {
     : String m ( string_from `no message #` )
     ( string_push_int m id )
-    ^ ( __ag_err_s 404 m )
+    ^ ( _ag_err_s 404 m )
 }
 
 @ __ag_op_msg AgStore st s me Json args i now → AgRes {
-    : i id ( __ag_arg_int args `id` 0 )
+    : i id ( _ag_arg_int args `id` 0 )
     ?? ( ag_msg_get st id ) {
         F _ → { ^ ( __ag_no_msg id ) }
         T m → {
-            ? ( __ag_may_read m me ) {} { ^ ( __ag_err 403 `that message is in another agent's mailbox` ) }
-            : Json o ( __ag_msg_json m 0 )
+            ? ( __ag_may_read m me ) {} { ^ ( _ag_err 403 `that message is in another agent's mailbox` ) }
+            : Json o ( _ag_msg_json m 0 )
             : String t ( string_new )
             ( __ag_msg_line t m now 0 )
-            ^ ( __ag_ok o t )
+            ^ ( _ag_ok o t )
         }
     }
 }
 
 @ __ag_op_status AgStore st s me Json args i now → AgRes {
-    : String text ( __ag_arg_str args `text` )
-    ? > ( string_len text ) AG_STATUS_MAX { ^ ( __ag_err 400 `text: at most 200 bytes` ) } {}
-    ? ( string_contains text `\n` ) { ^ ( __ag_err 400 `text: one line` ) } {}
-    ? ( ag_agent_set_status st me ( string_data text ) now ) {} { ^ ( __ag_err 500 `could not store the status` ) }
+    : String text ( _ag_arg_str args `text` )
+    ? > ( string_len text ) AG_STATUS_MAX { ^ ( _ag_err 400 `text: at most 200 bytes` ) } {}
+    ? ( string_contains text `\n` ) { ^ ( _ag_err 400 `text: one line` ) } {}
+    ? ( ag_agent_set_status st me ( string_data text ) now ) {} { ^ ( _ag_err 500 `could not store the status` ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `status` ( json_str_lit ( string_data text ) ) )
     : String t ( string_from ? > ( string_len text ) 0 `status set\n` `status cleared\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_agents AgStore st i now → AgRes {
@@ -1346,7 +1398,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ? == n 0 { ( string_push_str t `nobody has joined yet\n` ) } {}
     : Json o ( json_obj_new )
     ( json_obj_set o `agents` arr )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_channels AgStore st i now → AgRes {
@@ -1379,22 +1431,23 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     }
     : Json o ( json_obj_new )
     ( json_obj_set o `channels` arr )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_channel_create AgStore st s me Json args i now → AgRes {
-    : String name ( __ag_arg_str args `name` )
-    : String about ( __ag_arg_str args `about` )
-    ? ( ag_name_ok ( string_data name ) ) {} {
+    : String name ( _ag_arg_channel args `name` )
+    : String about ( _ag_arg_str args `about` )
+    ? | ( ag_name_ok ( string_data name ) ) ( ag_is_repo_channel ( string_data name ) ) {} {
         : String m ( string_from `channel name must be ` )
         ( string_push_str m AG_NAME_RULE )
-        ^ ( __ag_err_s 400 m )
+        ( string_push_str m `, or a git repository (remote URL or host/owner/repo)` )
+        ^ ( _ag_err_s 400 m )
     }
     ? ( ag_channel_create st ( string_data name ) ( string_data about ) me now ) {} {
         : String m ( string_from `channel '` )
         ( string_push_str m ( string_data name ) )
         ( string_push_str m `' exists already` )
-        ^ ( __ag_err_s 409 m )
+        ^ ( _ag_err_s 409 m )
     }
     ( ag_follow st me ( string_data name ) )
     : Json o ( json_obj_new )
@@ -1402,25 +1455,26 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : String t ( string_from `created and following ` )
     ( string_push_str t ( string_data name ) )
     ( string_push_str t `\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_follow AgStore st s me Json args i now b on → AgRes {
-    : String ch ( __ag_arg_str args `channel` )
-    ? == ( string_len ch ) 0 { ^ ( __ag_err 400 `channel is required` ) } {}
+    : String ch ( _ag_arg_channel args `channel` )
+    ? == ( string_len ch ) 0 { ^ ( _ag_err 400 `channel is required` ) } {}
+    ? on { ( __ag_repo_channel_auto st ( string_data ch ) me now ) } {}
     ? ( ag_channel_exists st ( string_data ch ) ) {} {
         : String m ( string_from `no channel '` )
         ( string_push_str m ( string_data ch ) )
         ( string_push_str m `'` )
-        ^ ( __ag_err_s 404 m )
+        ^ ( _ag_err_s 404 m )
     }
     : b ok ? on ( ag_follow st me ( string_data ch ) ) ( ag_unfollow st me ( string_data ch ) )
     ? ok {} {
-        ? on { ^ ( __ag_err 500 `could not follow` ) }
+        ? on { ^ ( _ag_err 500 `could not follow` ) }
         {
             : String m ( string_from `you were not following ` )
             ( string_push_str m ( string_data ch ) )
-            ^ ( __ag_err_s 409 m )
+            ^ ( _ag_err_s 409 m )
         }
     }
     : Json o ( json_obj_new )
@@ -1429,7 +1483,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : String t ( string_from ? on `following ` `no longer following ` )
     ( string_push_str t ( string_data ch ) )
     ( string_push_str t `\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 // The first line of `body`, at most 200 bytes (cut on a character).
@@ -1444,39 +1498,39 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_op_task_post AgStore st s me Json args i now → AgRes {
-    : ~ String title ( __ag_arg_str args `title` )
-    : ~ String body ( __ag_arg_str args `body` )
-    : i ref ( __ag_arg_int args `ref` 0 )
+    : ~ String title ( _ag_arg_str args `title` )
+    : ~ String body ( _ag_arg_str args `body` )
+    : i ref ( _ag_arg_int args `ref` 0 )
     ? > ref 0 {
         ?? ( ag_msg_get st ref ) {
             F _ → { ^ ( __ag_no_msg ref ) }
             T m → {
-                ? ( __ag_may_read m me ) {} { ^ ( __ag_err 403 `ref: that message is in another agent's mailbox` ) }
+                ? ( __ag_may_read m me ) {} { ^ ( _ag_err 403 `ref: that message is in another agent's mailbox` ) }
                 ? == ( string_len title ) 0 { = title ( __ag_first_line . m body ) } {}
                 ? == ( string_len body ) 0 { = body ( string_clone . m body ) } {}
             }
         }
     } {}
-    ? == ( string_len title ) 0 { ^ ( __ag_err 400 `title is required (or ref=<message id>)` ) } {}
-    ? > ( string_len title ) 200 { ^ ( __ag_err 400 `title: at most 200 characters` ) } {}
-    ? > ( string_len body ) AG_BODY_MAX { ^ ( __ag_err 400 `body: at most 16 KiB` ) } {}
-    : String rawtags ( __ag_arg_str args `tags` )
-    : String tags ( __ag_tags_norm rawtags )
-    : i prio ( __ag_clamp ( __ag_arg_int args `priority` 0 ) -100 100 )
+    ? == ( string_len title ) 0 { ^ ( _ag_err 400 `title is required (or ref=<message id>)` ) } {}
+    ? > ( string_len title ) 200 { ^ ( _ag_err 400 `title: at most 200 characters` ) } {}
+    ? > ( string_len body ) AG_BODY_MAX { ^ ( _ag_err 400 `body: at most 16 KiB` ) } {}
+    : String rawtags ( _ag_arg_str args `tags` )
+    : String tags ( _ag_tags_norm rawtags )
+    : i prio ( __ag_clamp ( _ag_arg_int args `priority` 0 ) -100 100 )
     : i id ( ag_task_post_ref st ( string_data title ) ( string_data body ) ( string_data tags ) me prio ref now )
-    ? == id 0 { ^ ( __ag_err 500 `could not store the task` ) } {}
-    : Json o ( __ag_obj_int `id` id )
+    ? == id 0 { ^ ( _ag_err 500 `could not store the task` ) } {}
+    : Json o ( _ag_obj_int `id` id )
     : String t ( string_from `task #` )
     ( string_push_int t id )
     ? > ref 0 { ( string_push_str t ` (re#` ) ( string_push_int t ref ) ( string_push_str t `)` ) } {}
     ( string_push_str t ` posted — you will hear when it is claimed and done\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_tasks AgStore st s me Json args i now → AgRes {
-    : ~ String which ( __ag_arg_str args `which` )
+    : ~ String which ( _ag_arg_str args `which` )
     ? == ( string_len which ) 0 { ( string_push_str which `open` ) } {}
-    : String tag ( __ag_arg_str args `tag` )
+    : String tag ( _ag_arg_str args `tag` )
     : String ltag ( string_to_lower tag )
     : ( Vec AgTask ) v ( ag_tasks st ( string_data which ) me ( string_data ltag ) ( __ag_limit args ) now )
     : Json o ( json_obj_new )
@@ -1494,21 +1548,21 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         } {}
         ( string_push_str t `\n` )
     } { ( __ag_tasks_text t v now ) }
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_no_task i id → AgRes {
     : String m ( string_from `no task #` )
     ( string_push_int m id )
-    ^ ( __ag_err_s 404 m )
+    ^ ( _ag_err_s 404 m )
 }
 
 @ __ag_op_task AgStore st Json args i now → AgRes {
-    : i id ( __ag_arg_int args `id` 0 )
+    : i id ( _ag_arg_int args `id` 0 )
     ?? ( ag_task_get st id now ) {
         F _ → { ^ ( __ag_no_task id ) }
         T tk → {
-            : Json o ( __ag_task_json tk )
+            : Json o ( _ag_task_json tk )
             : String t ( string_new )
             ( __ag_task_line t tk now )
             ? > ( string_len . tk body ) 0 {
@@ -1520,7 +1574,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
                 ( string_push_str t ( string_data . tk result ) )
                 ( string_push_str t `\n` )
             } {}
-            ^ ( __ag_ok o t )
+            ^ ( _ag_ok o t )
         }
     }
 }
@@ -1534,10 +1588,10 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         ( string_push_int m id )
         ( string_push_str m ` ` )
         ( string_push_str m wrong )
-        ^ ( __ag_err_s 409 m )
+        ^ ( _ag_err_s 409 m )
     } {}
-    ? == rc AG_TASK_FAILED { ^ ( __ag_err 500 `could not update the task` ) } {}
-    : Json o ( __ag_obj_int `id` id )
+    ? == rc AG_TASK_FAILED { ^ ( _ag_err 500 `could not update the task` ) } {}
+    : Json o ( _ag_obj_int `id` id )
     : String t ( string_from `task #` )
     ( string_push_int t id )
     ( string_push_str t ` ` )
@@ -1545,19 +1599,19 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ( string_push_str t `\n` )
     ?? ( ag_task_get st id now ) {
         T tk → {
-            ( json_obj_set o `task` ( __ag_task_json tk ) )
+            ( json_obj_set o `task` ( _ag_task_json tk ) )
         }
         F _ → {}
     }
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_lease Json args → i {
-    ^ ( __ag_clamp ( __ag_arg_int args `lease_s` AG_DEFAULT_LEASE ) 30 AG_LEASE_MAX )
+    ^ ( __ag_clamp ( _ag_arg_int args `lease_s` AG_DEFAULT_LEASE ) 30 AG_LEASE_MAX )
 }
 
 @ __ag_op_task_claim AgStore st s me Json args i now → AgRes {
-    : i id ( __ag_arg_int args `id` 0 )
+    : i id ( _ag_arg_int args `id` 0 )
     : i lease ( __ag_lease args )
     : i rc ( ag_task_claim st id me lease now )
     : ~ String did ( string_from `claimed by you, lease ` )
@@ -1568,7 +1622,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_op_task_extend AgStore st s me Json args i now → AgRes {
-    : i id ( __ag_arg_int args `id` 0 )
+    : i id ( _ag_arg_int args `id` 0 )
     : i lease ( __ag_lease args )
     : i rc ( ag_task_extend st id me lease now )
     : ~ String did ( string_from `lease ` )
@@ -1578,40 +1632,116 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_op_task_done AgStore st s me Json args i now → AgRes {
-    : i id ( __ag_arg_int args `id` 0 )
-    : String result ( __ag_arg_str args `result` )
-    ? == ( string_len result ) 0 { ^ ( __ag_err 400 `result is required — say what was done` ) } {}
-    ? > ( string_len result ) AG_BODY_MAX { ^ ( __ag_err 400 `result: at most 16 KiB` ) } {}
+    : i id ( _ag_arg_int args `id` 0 )
+    : String result ( _ag_arg_str args `result` )
+    ? == ( string_len result ) 0 { ^ ( _ag_err 400 `result is required — say what was done` ) } {}
+    ? > ( string_len result ) AG_BODY_MAX { ^ ( _ag_err 400 `result: at most 16 KiB` ) } {}
     : i rc ( ag_task_done st id me ( string_data result ) now )
     ^ ( __ag_task_verdict st rc id `done — the poster has your result` `is not held by you` now )
 }
 
 @ __ag_op_task_release AgStore st s me Json args i now → AgRes {
-    : i id ( __ag_arg_int args `id` 0 )
-    : String note ( __ag_arg_str args `note` )
-    ? > ( string_len note ) AG_BODY_MAX { ^ ( __ag_err 400 `note: at most 16 KiB` ) } {}
+    : i id ( _ag_arg_int args `id` 0 )
+    : String note ( _ag_arg_str args `note` )
+    ? > ( string_len note ) AG_BODY_MAX { ^ ( _ag_err 400 `note: at most 16 KiB` ) } {}
     : i rc ( ag_task_release st id me ( string_data note ) now )
     ^ ( __ag_task_verdict st rc id `released — open again` `is not held by you` now )
 }
 
 @ __ag_op_task_cancel AgStore st s me Json args i now → AgRes {
-    : i id ( __ag_arg_int args `id` 0 )
+    : i id ( _ag_arg_int args `id` 0 )
     : i rc ( ag_task_cancel st id me now )
     ^ ( __ag_task_verdict st rc id `cancelled` `is not yours to cancel, or is already finished` now )
 }
 
-// The `project` argument of the note ops: '' (global) or a valid name.
+// A project key: '' (global), a name, or a git repository however it is
+// spelled. A remote URL — `git@github.com:org/repo.git`,
+// `https://github.com/org/repo`, `ssh://git@host:22/org/repo.git` — and
+// the bare `github.com/org/repo` all become `github.com/org/repo`
+// (lowercased; no scheme, user, port, `.git` or trailing slash), so every
+// checkout of one repository files its notes under one key whatever
+// remote spelling it has. None when it is neither a name nor such a path.
+: i AG_PROJECT_MAX 128
+
+@ ag_project_norm s raw → ?String {
+    : String t0 ( string_trim ( string_from raw ) )
+    : String t ( string_to_lower t0 )
+    : s src ( string_data t )
+    : i n ( nurl_str_len src )
+    ? == n 0 { ^ @ ?String { T ( string_new ) } } {}
+    ? ( ag_name_ok src ) { ^ @ ?String { T t } } {}
+    // Where the host starts: past `scheme://`, then past `user@`.
+    : ~ i start 0
+    : ~ b scp F
+    : i sep ( nurl_str_find src `://` )
+    ? >= sep 0 { = start + sep 3 } {}
+    : ~ i k start
+    : ~ i at -1
+    ~ & < k n != ( nurl_str_get src k ) 47 {
+        ? == ( nurl_str_get src k ) 64 { = at k } {}
+        = k + k 1
+    }
+    ? >= at 0 { = start + at 1 } {}
+    // scp-like `host:path` (no scheme): the first ':' ends the host.
+    ? < sep 0 {
+        : ~ i j start
+        ~ & < j n & != ( nurl_str_get src j ) 47 != ( nurl_str_get src j ) 58 { = j + j 1 }
+        = scp & < j n == ( nurl_str_get src j ) 58
+    } {}
+    : String out ( string_new )
+    : ~ i i start
+    : ~ b in_host T
+    : ~ b in_port F
+    ~ < i n {
+        : i c ( nurl_str_get src i )
+        ? in_host {
+            ? == c 47 { = in_host F = in_port F ( string_push_char out 47 ) } {
+                ? == c 58 {
+                    // host:port (URL) or host:path (scp-like).
+                    ? scp { = in_host F ( string_push_char out 47 ) } { = in_port T }
+                } {
+                    ? in_port {} { ( string_push_char out c ) }
+                }
+            }
+        } { ( string_push_char out c ) }
+        = i + i 1
+    }
+    // No trailing '/' or `.git`; no doubled '/'.
+    : ~ i m ( string_len out )
+    ~ & > m 0 == ( string_get out - m 1 ) 47 { = m - m 1 }
+    ? & > m 4 != 0 ( nurl_str_eq ( string_data ( string_substr out - m 4 4 ) ) `.git` ) { = m - m 4 } {}
+    : String key ( string_substr out 0 m )
+    : s ks ( string_data key )
+    : i kn ( nurl_str_len ks )
+    ? | | == kn 0 > kn AG_PROJECT_MAX ! ( string_contains key `/` ) { ^ @ ?String { F } } {}
+    ? | == ( nurl_str_get ks 0 ) 47 ( string_contains key `//` ) { ^ @ ?String { F } } {}
+    : ~ i q 0
+    ~ < q kn {
+        : i c ( nurl_str_get ks q )
+        : b ok | | & >= c 97 <= c 122 & >= c 48 <= c 57 | | | == c 45 == c 46 == c 95 == c 47
+        ? ok {} { ^ @ ?String { F } }
+        // No '.' or '..' segment.
+        ? & == c 46 | == q 0 == ( nurl_str_get ks - q 1 ) 47 {
+            : b dot_end | == + q 1 kn == ( nurl_str_get ks + q 1 ) 47
+            : b dd_end & & < + q 1 kn == ( nurl_str_get ks + q 1 ) 46 | == + q 2 kn == ( nurl_str_get ks + q 2 ) 47
+            ? | dot_end dd_end { ^ @ ?String { F } } {}
+        } {}
+        = q + q 1
+    }
+    ^ @ ?String { T key }
+}
+
+// The `project` argument of the note ops (see ag_project_norm).
 @ __ag_arg_project Json args → ?String {
-    : String pr ( __ag_arg_str args `project` )
-    ? == ( string_len pr ) 0 { ^ @ ?String { T pr } } {}
-    ? ( ag_name_ok ( string_data pr ) ) { ^ @ ?String { T pr } } {}
-    ^ @ ?String { F }
+    : String pr ( _ag_arg_str args `project` )
+    ^ ( ag_project_norm ( string_data pr ) )
 }
 
 @ __ag_bad_project → AgRes {
-    : String m ( string_from `project must be ` )
+    : String m ( string_from `project must be a name (` )
     ( string_push_str m AG_NAME_RULE )
-    ^ ( __ag_err_s 400 m )
+    ( string_push_str m `) or a git repository: a remote URL or host/owner/repo` )
+    ^ ( _ag_err_s 400 m )
 }
 
 // `project/key` when the note has a project, `key` otherwise.
@@ -1624,44 +1754,44 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 }
 
 @ __ag_op_note_set AgStore st s me Json args i now → AgRes {
-    : String key ( __ag_arg_str args `key` )
+    : String key ( _ag_arg_str args `key` )
     ? ( ag_name_ok ( string_data key ) ) {} {
         : String m ( string_from `key must be ` )
         ( string_push_str m AG_NAME_RULE )
-        ^ ( __ag_err_s 400 m )
+        ^ ( _ag_err_s 400 m )
     }
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
-    : String body ( __ag_arg_str args `body` )
+    : String body ( _ag_arg_str args `body` )
     ?? ( __ag_body_check body ) { T e → { ^ e } F _ → {} }
     : b ok ( ag_note_set st ( string_data project ) ( string_data key ) ( string_data body ) me now )
-    ? ok {} { ^ ( __ag_err 500 `could not store the note` ) }
+    ? ok {} { ^ ( _ag_err 500 `could not store the note` ) }
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `key` ( json_str_lit ( string_data key ) ) )
     : String t ( string_from `note ` )
     ( __ag_note_ref t ( string_data project ) ( string_data key ) )
     ( string_push_str t ` saved\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_no_note String project String key → AgRes {
     : String m ( string_from `no note '` )
     ( __ag_note_ref m ( string_data project ) ( string_data key ) )
     ( string_push_str m `' — notes lists them` )
-    ^ ( __ag_err_s 404 m )
+    ^ ( _ag_err_s 404 m )
 }
 
 @ __ag_op_note AgStore st Json args i now → AgRes {
-    : String key ( __ag_arg_str args `key` )
+    : String key ( _ag_arg_str args `key` )
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
     ?? ( ag_note_get st ( string_data project ) ( string_data key ) ) {
         F _ → { ^ ( __ag_no_note project key ) }
         T n → {
-            : Json o ( __ag_note_json n T )
+            : Json o ( _ag_note_json n T )
             : String t ( string_new )
             ( __ag_note_ref t ( string_data . n project ) ( string_data . n key ) )
             ( string_push_str t ` (` )
@@ -1671,7 +1801,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
             ( string_push_str t `):\n` )
             ( string_push_str t ( string_data . n body ) )
             ( string_push_str t `\n` )
-            ^ ( __ag_ok o t )
+            ^ ( _ag_ok o t )
         }
     }
 }
@@ -1689,7 +1819,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     ~ < i n {
         ?? ( vec_get [AgNote] v i ) {
             T x → {
-                ( json_arr_push arr ( __ag_note_json x F ) )
+                ( json_arr_push arr ( _ag_note_json x F ) )
                 ? all { ( __ag_note_ref t ( string_data . x project ) ( string_data . x key ) ) }
                 { ( string_push_str t ( string_data . x key ) ) }
                 ( string_push_str t ` (` )
@@ -1714,11 +1844,11 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : Json o ( json_obj_new )
     ( json_obj_set o `project` ( json_str_lit ( string_data project ) ) )
     ( json_obj_set o `notes` arr )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 @ __ag_op_note_del AgStore st Json args i now → AgRes {
-    : String key ( __ag_arg_str args `key` )
+    : String key ( _ag_arg_str args `key` )
     : ?String pro ( __ag_arg_project args )
     : ~ String project ( string_new )
     ?? pro { T p → { = project p } F _ → { ^ ( __ag_bad_project ) } }
@@ -1729,7 +1859,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : String t ( string_from `note ` )
     ( __ag_note_ref t ( string_data project ) ( string_data key ) )
     ( string_push_str t ` deleted\n` )
-    ^ ( __ag_ok o t )
+    ^ ( _ag_ok o t )
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────
@@ -1762,7 +1892,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
         : String m ( string_from `unknown operation '` )
         ( string_push_str m name )
         ( string_push_str m `'` )
-        ^ ( __ag_err_s 404 m )
+        ^ ( _ag_err_s 404 m )
     } {}
     ? & == kind 1 ! . c authed { ^ ( __ag_unauthorized ) } {}
     : s me ( string_data . c agent )
@@ -1798,5 +1928,5 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
     : String m ( string_from `operation '` )
     ( string_push_str m name )
     ( string_push_str m `' has no handler` )
-    ^ ( __ag_err_s 501 m )
+    ^ ( _ag_err_s 501 m )
 }

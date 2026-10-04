@@ -342,8 +342,18 @@ $ `stdlib/core/rcbox.nu`
 
 // ── Verification ───────────────────────────────────────────────────
 
-// The whole check, at an explicit `now` (epoch seconds).
+// The whole check, at an explicit `now` (epoch seconds), of an ID token.
 @ oidc_verify_token_at OidcProvider p__h OidcPolicy pol__h s token i now → !OidcIdentity OauthErr {
+    ^ ( _oidc_verify_at p__h pol__h token now F )
+}
+
+// The same for an access token presented to a resource server: its `azp`
+// is the client that asked for it, not us (claims_check_access).
+@ oidc_verify_access_token_at OidcProvider p__h OidcPolicy pol__h s token i now → !OidcIdentity OauthErr {
+    ^ ( _oidc_verify_at p__h pol__h token now T )
+}
+
+@ _oidc_verify_at OidcProvider p__h OidcPolicy pol__h s token i now b access → !OidcIdentity OauthErr {
     : *OidcPolicyImpl pol ( _OidcPolicy_ptr pol__h )
     : *OidcProviderImpl p ( _OidcProvider_ptr p__h )
     // Read the JOSE header ONCE: a token that is not a well-formed JWS
@@ -421,7 +431,7 @@ $ `stdlib/core/rcbox.nu`
         ( _oidc_err p `signature did not verify under any published key` )
         ^ @ !OidcIdentity OauthErr { F OaBadSignature }
     }
-    ?? ( claims_check claims pol__h now ) {
+    ?? ( _claims_check claims pol__h now access ) {
         T ce → {
             ( _oidc_err p ( claim_err_desc # ClaimErr ce ) )
             ^ @ !OidcIdentity OauthErr { F OaClaims }
@@ -435,13 +445,14 @@ $ `stdlib/core/rcbox.nu`
     ^ ( oidc_verify_token_at p__h pol__h token ( now_seconds ) )
 }
 
-// Named for the caller's intent — the same check either way. An ID token
-// is verified against the client id in `aud`; an access token issued as
-// a JWT (RFC 9068) against the resource server's own audience.
+// Named for what is verified. An ID token is checked against the client
+// id in `aud` and must have been issued to us (`azp`); an access token
+// issued as a JWT (RFC 9068) is checked against the resource server's
+// own audience, whichever client requested it.
 @ oidc_verify_id_token OidcProvider p__h OidcPolicy pol__h s token → !OidcIdentity OauthErr {
     ^ ( oidc_verify_token_at p__h pol__h token ( now_seconds ) )
 }
 
 @ oidc_verify_access_token OidcProvider p__h OidcPolicy pol__h s token → !OidcIdentity OauthErr {
-    ^ ( oidc_verify_token_at p__h pol__h token ( now_seconds ) )
+    ^ ( oidc_verify_access_token_at p__h pol__h token ( now_seconds ) )
 }

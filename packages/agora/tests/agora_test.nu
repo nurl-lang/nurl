@@ -702,6 +702,203 @@ $ `src/service.nu`
     ( ag_state_set_local `` )
 }
 
+// ── 5. projects, ownership and the signed-in service ─────────────────
+
+@ norm s raw → String {
+    ?? ( ag_project_norm raw ) { T v → { ^ v } F → { ^ ( string_from `<bad>` ) } }
+}
+
+@ test_project_norm → v {
+    : s want `github.com/nurl-lang/nurl`
+    ( check ( seq ( string_data ( norm `git@github.com:Nurl-Lang/nurl.git` ) ) want ) `project: scp-like remote` )
+    ( check ( seq ( string_data ( norm `https://github.com/nurl-lang/nurl/` ) ) want ) `project: https remote, trailing slash` )
+    ( check ( seq ( string_data ( norm `ssh://git@github.com:22/nurl-lang/nurl.git` ) ) want ) `project: ssh remote with a port` )
+    ( check ( seq ( string_data ( norm `github.com/nurl-lang/nurl` ) ) want ) `project: the key itself` )
+    ( check ( seq ( string_data ( norm `nurl` ) ) `nurl` ) `project: a plain name` )
+    ( check ( seq ( string_data ( norm `` ) ) `` ) `project: empty is global` )
+    ( check ( seq ( string_data ( norm `git@github.com:../x` ) ) `<bad>` ) `project: no dot-dot segment` )
+    ( check ( seq ( string_data ( norm `a b` ) ) `<bad>` ) `project: no blanks` )
+    ( check ( seq ( string_data ( norm `/etc/passwd` ) ) `<bad>` ) `project: not an absolute path` )
+}
+
+@ test_manage → v {
+    : s opath `agora_test_scratch/manage-org.db`
+    : s path `agora_test_scratch/manage.db`
+    ?? ( file_delete opath ) { T _ → {} F _ → {} }
+    ?? ( file_delete path ) { T _ → {} F _ → {} }
+    // The organisation's people: a file of their own.
+    : AgStore os ( ag_orgdb_open opath )
+    ( check . os ok `manage: the organisation's file opens` )
+    ( check ( seq ( string_data ( ag_user_touch os `sub-a` `a@x` `A` 10 ) ) `admin` ) `users: the first person is admin` )
+    ( check ( seq ( string_data ( ag_user_touch os `sub-b` `b@x` `B` 11 ) ) `member` ) `users: the second is a member` )
+    ( check ( seq ( string_data ( ag_user_touch os `sub-a` `a@x` `A` 12 ) ) `admin` ) `users: a return keeps the role` )
+    ( check ! ( ag_user_set_role os `sub-a` `member` ) `users: the last admin stays` )
+    ( check ! ( ag_user_delete os `sub-a` ) `users: the last admin cannot be removed` )
+    ( check ( ag_user_set_role os `sub-b` `admin` ) `users: promote b` )
+    ( check ( ag_user_set_role os `sub-a` `member` ) `users: now a can step down` )
+    ( check ( ag_user_delete os `sub-a` ) `users: a member can be removed` )
+    ( check == ( vec_len [AgUser] ( ag_users os ) ) 1 `users: one left` )
+    // A repository's agora: agents are names, made on first use.
+    : AgStore st ( ag_store_open path )
+    ( check . st ok `manage: opens` )
+    ( check ( ag_agent_ensure st `a-bot` 20 ) `agents: a-bot is made on first use` )
+    ( check ( ag_agent_ensure st `a-bot` 21 ) `agents: and is the same agent again` )
+    ( check ( ag_agent_ensure st `b-bot` 22 ) `agents: b-bot` )
+    // One shared room: everybody sees everything, mail too.
+    : i m1 ( ag_post st `public` `a-bot` `hello` 0 40 )
+    : i m2 ( ag_post st `@b-bot` `a-bot` `psst` 0 41 )
+    : i m3 ( ag_post st `@a-bot` `b-bot` `re` 0 42 )
+    : ( Vec AgMsg ) va ( ag_messages_list st `` `` 0 50 )
+    ( check == ( vec_len [AgMsg] va ) 3 `messages: posts and mail alike` )
+    : ( Vec AgMsg ) vq ( ag_messages_list st `` `PSS` 0 50 )
+    ( check == ( vec_len [AgMsg] vq ) 1 `messages: text search, any case` )
+    : ( Vec AgMsg ) vc ( ag_messages_list st `public` `` 0 50 )
+    ( check == ( vec_len [AgMsg] vc ) 1 `messages: one channel` )
+    ( check ( ag_msg_set_body st m1 `hello, edited` ) `msg: edit` )
+    ( check ( ag_msg_delete st m3 ) `msg: delete` )
+    ( check ! ( ag_msg_delete st m3 ) `msg: deleted once` )
+    // Tasks.
+    : i t1 ( ag_task_post st `t` `` `,x,` `a-bot` 0 50 )
+    ( check == ( ag_task_claim st t1 `b-bot` 600 51 ) AG_TASK_OK `task: b claims` )
+    ( check ( ag_task_edit st t1 `t2` `body` `,y,` 5 `open` 52 ) `task: edit back to open` )
+    ?? ( ag_task_get st t1 53 ) {
+        T t → { ( check & & ( seq ( string_data . t status ) `open` ) == ( string_len . t owner ) 0 == . t priority 5 `task: open again, unheld, p5` ) }
+        F _ → { ( check F `task: open again, unheld, p5` ) }
+    }
+    ( check ! ( ag_task_edit st t1 `t2` `` `` 0 `weird` 54 ) `task: an unknown status is refused` )
+    ( check ( ag_task_delete st t1 ) `task: delete` )
+    // Channels and agents.
+    ( check ( ag_channel_create st `c1` `` `a-bot` 60 ) `channel: create` )
+    ( ag_post st `c1` `a-bot` `in c1` 0 61 )
+    ( check ( ag_channel_delete st `c1` ) `channel: delete with its posts` )
+    ( check ! ( ag_channel_delete st `public` ) `channel: public stays` )
+    ( check ( ag_agent_delete st `b-bot` 70 ) `agent: delete` )
+    ?? ( ag_agent_get st `b-bot` ) { T _ → { ( check F `agent: gone` ) } F → { ( check T `agent: gone` ) } }
+    : AgTotals tt ( ag_totals st )
+    ( check & == . tt agents 1 == . tt messages 1 `totals: 1 agent, 1 channel post` )
+}
+
+// A request with one extra header.
+@ rest_h Router r s method s path s query s auth s hname s hval s body → HttpResponse {
+    : HttpRequest req ( request_new )
+    ( string_push_str . req method method )
+    ( string_push_str . req path path )
+    ( string_push_str . req query query )
+    ( string_push_str . req version `HTTP/1.1` )
+    ( vec_push [Header] . req headers ( header_new `Authorization` auth ) )
+    ? > ( nurl_str_len hname ) 0 { ( vec_push [Header] . req headers ( header_new hname hval ) ) } {}
+    ? > ( nurl_str_len body ) 0 {
+        ( vec_push [Header] . req headers ( header_new `Content-Type` `application/json` ) )
+        ( bytes_extend_str . req body body )
+    } {}
+    : HttpResponse resp ( router_handle r req )
+    ^ resp
+}
+
+@ seed s token s org s sub s email → v {
+    : AgStore st ( ag_org_store org )
+    : String role ( ag_user_touch st sub email `` 1 )
+    : AgPrincipal p @ AgPrincipal { T ( string_from org ) ( string_from sub ) ( string_from email ) ( string_new ) role ( string_new ) }
+    ( _ag_auth_seed token p + ( now_seconds ) 3600 )
+}
+
+@ test_signed_in → v {
+    ( ag_auth_set_home `agora_test_scratch/web` )
+    ( ag_auth_configure T T `https://idp.invalid/organizations/v2.0` `cid` `https://agora.test/mcp` `org-a` `` `https://agora.test` )
+    ( seed `tok-a1` `org-a` `sub-a1` `ann@a.example` )
+    ( seed `tok-a2` `org-a` `sub-a2` `bob@a.example` )
+    ( seed `tok-b1` `org-b` `sub-b1` `ann@b.example` )
+    : HttpApp app ( ag_build_app 1 T )
+    : Router r ( http_app_router app )
+    // No token: 401 with where to sign in.
+    : HttpResponse r0 ( rest_h r `POST` `/mcp` `` `` `` `` `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` )
+    ( check == . r0 status 401 `oidc: /mcp without a token is 401` )
+    : HttpResponse md ( rest_h r `GET` `/.well-known/oauth-protected-resource/mcp` `` `` `` `` `` )
+    ( check ( has ( body_of md ) `https://agora.test/mcp` ) `oidc: resource metadata names /mcp` )
+    : HttpResponse rbad ( rest_h r `POST` `/api/whoami` `` `Bearer tok-nope` `` `` `{}` )
+    ( check == . rbad status 401 `oidc: an unknown token is 401` )
+    // Every call names its repository and who it is there.
+    : HttpResponse w0 ( rest_h r `POST` `/api/whoami` `` `Bearer tok-a1` `` `` `{}` )
+    ( check & == . w0 status 400 ( has ( body_of w0 ) `repo is required` ) `oidc: no repo is 400, and says what to send` )
+    : HttpResponse w0b ( rest_h r `POST` `/api/whoami` `` `Bearer tok-a1` `` `` `{"repo":"git@github.com:o/r.git"}` )
+    ( check & == . w0b status 400 ( has ( body_of w0b ) `as is required` ) `oidc: no as is 400` )
+    : HttpResponse w0c ( rest_h r `POST` `/api/whoami` `` `Bearer tok-a1` `` `` `{"repo":"nurl","as":"x"}` )
+    ( check == . w0c status 400 `oidc: a plain name is not a repository` )
+    : HttpResponse w1 ( rest_h r `POST` `/api/whoami` `` `Bearer tok-a1` `` `` `{"repo":"git@github.com:O/r.git","as":"Ann-Bot"}` )
+    ( check & ( has ( body_of w1 ) `"agent":"ann-bot"` ) ( has ( body_of w1 ) `"repo":"github.com/o/r"` ) `oidc: whoami names the agent and the repository` )
+    // One repository = one room for the whole organisation, any spelling, any person.
+    : HttpResponse p1 ( rest_h r `POST` `/api/post` `` `Bearer tok-a1` `` `` `{"repo":"git@github.com:o/r.git","as":"ann-bot","body":"from a"}` )
+    ( check == . p1 status 200 `oidc: ann's agent posts` )
+    : HttpResponse h2 ( rest_h r `POST` `/api/history` `` `Bearer tok-a2` `` `` `{"repo":"https://github.com/o/r","as":"bob-bot","channel":"public"}` )
+    ( check ( has ( body_of h2 ) `from a` ) `oidc: bob's agent of the same org reads it` )
+    : HttpResponse hx ( rest_h r `POST` `/api/history` `` `Bearer tok-a2` `` `` `{"repo":"github.com/o/other","as":"bob-bot","channel":"public"}` )
+    ( check ! ( has ( body_of hx ) `from a` ) `oidc: another repository is another room` )
+    : HttpResponse hb ( rest_h r `POST` `/api/history` `` `Bearer tok-b1` `` `` `{"repo":"github.com/o/r","as":"ann-bot","channel":"public"}` )
+    ( check ! ( has ( body_of hb ) `from a` ) `oidc: the other organisation does not see it` )
+    // A name is nobody's: anybody of the organisation may speak as it.
+    : HttpResponse x1 ( rest_h r `POST` `/api/whoami` `` `Bearer tok-a2` `` `` `{"repo":"github.com/o/r","as":"ann-bot"}` )
+    ( check ( has ( body_of x1 ) `"agent":"ann-bot"` ) `oidc: bob may act as ann-bot` )
+    : HttpResponse s1 ( rest_h r `POST` `/api/send` `` `Bearer tok-a1` `` `` `{"repo":"github.com/o/r","as":"ann-bot","to":"bob-bot","body":"psst"}` )
+    ( check == . s1 status 200 `oidc: mail between the people's agents` )
+    : HttpResponse b1 ( rest_h r `POST` `/api/brief` `` `Bearer tok-a2` `` `` `{"repo":"github.com/o/r","as":"bob-bot"}` )
+    ( check ( has ( body_of b1 ) `psst` ) `oidc: bob-bot's brief delivers it` )
+    // MCP: stateless — no session; every tool call carries repo and as.
+    : HttpResponse i1 ( rest_h r `POST` `/mcp` `` `Bearer tok-a1` `` `` `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}` )
+    ( check == . i1 status 200 `oidc: initialize answers` )
+    ?? ( header_get . i1 headers `Mcp-Session-Id` ) { T _ → { ( check F `oidc: no session id is handed out` ) } F _ → { ( check T `oidc: no session id is handed out` ) } }
+    : HttpResponse tl1 ( rest_h r `POST` `/mcp` `` `Bearer tok-a1` `` `` `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}` )
+    : String tls ( body_of tl1 )
+    ( check & ( has tls `"repo"` ) ( has tls `"as"` ) `oidc: every tool takes repo and as` )
+    ( check ! ( has tls `"project"` ) `oidc: notes take no project: the repository is it` )
+    : HttpResponse k1 ( rest_h r `POST` `/mcp` `` `Bearer tok-a1` `` `` `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whoami","arguments":{"repo":"git@github.com:o/r.git","as":"ann-claude"}}}` )
+    ( check & ( has ( body_of k1 ) `you: ann-claude` ) ( has ( body_of k1 ) `repo: github.com/o/r` ) `oidc: a tool call acts as its as, in its repo` )
+    : HttpResponse k2 ( rest_h r `POST` `/mcp` `` `Bearer tok-a1` `` `` `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"whoami","arguments":{}}}` )
+    ( check & ( has ( body_of k2 ) `"isError":true` ) ( has ( body_of k2 ) `repo is required` ) `oidc: a tool call without repo is a tool error that says why` )
+    : HttpResponse j1 ( rest_h r `POST` `/mcp` `` `Bearer tok-a1` `` `` `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"join","arguments":{"repo":"github.com/o/r","as":"ann-claude","about":"reviews"}}}` )
+    ( check ( has ( body_of j1 ) `you are ann-claude in github.com/o/r` ) `oidc: join says where and as whom` )
+    : HttpResponse n1 ( rest_h r `POST` `/mcp` `` `Bearer tok-a2` `` `` `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"note_set","arguments":{"repo":"github.com/o/r","as":"bob-bot","key":"build","body":"make"}}}` )
+    ( check ( has ( body_of n1 ) `note build saved` ) `oidc: a note goes to the repository` )
+    // The web page's API.
+    : HttpResponse me ( rest_h r `GET` `/m/me` `` `Bearer tok-a1` `` `` `` )
+    ( check & ( has ( body_of me ) `"role":"admin"` ) ( has ( body_of me ) `"is_owner_admin":true` ) `web: ann is admin of the owner org` )
+    : HttpResponse meb ( rest_h r `GET` `/m/me` `repo=github.com%2Fo%2Fr` `Bearer tok-a2` `` `` `` )
+    ( check & ( has ( body_of meb ) `"role":"member"` ) ( has ( body_of meb ) `"notes":1` ) `web: bob is a member; the repo's counts` )
+    : HttpResponse ub ( rest_h r `GET` `/m/users` `` `Bearer tok-a2` `` `` `` )
+    ( check == . ub status 403 `web: a member cannot list people` )
+    : HttpResponse tb ( rest_h r `GET` `/m/tenants` `` `Bearer tok-b1` `` `` `` )
+    ( check == . tb status 403 `web: org b's admin is not the service's` )
+    : HttpResponse rp ( rest_h r `GET` `/m/repos` `` `Bearer tok-a2` `` `` `` )
+    ( check & ( has ( body_of rp ) `"github.com/o/other","github.com/o/r"` ) ! ( has ( body_of rp ) `local` ) `web: the organisation's repositories, sorted` )
+    : HttpResponse mq ( rest_h r `GET` `/m/messages` `` `Bearer tok-a2` `` `` `` )
+    ( check == . mq status 400 `web: messages need a repo` )
+    : HttpResponse ms ( rest_h r `GET` `/m/messages` `repo=github.com%2Fo%2Fr` `Bearer tok-a2` `` `` `` )
+    ( check & ( has ( body_of ms ) `psst` ) ( has ( body_of ms ) `"may_change":true` ) `web: the room's messages, mail too, for any member` )
+    : HttpResponse ed ( rest_h r `PUT` `/m/messages/1` `repo=github.com%2Fo%2Fr` `Bearer tok-a2` `` `` `{"body":"from a, edited"}` )
+    ( check == . ed status 200 `web: a member edits a post` )
+    : HttpResponse nl ( rest_h r `GET` `/m/notes` `repo=git%40github.com%3Ao%2Fr.git` `Bearer tok-a1` `` `` `` )
+    ( check ( has ( body_of nl ) `"key":"build"` ) `web: the repository's notes, any spelling` )
+    : HttpResponse nb ( rest_h r `PUT` `/m/notes` `repo=github.com%2Fo%2Fr` `Bearer tok-a2` `` `` `{"key":"k2","body":"v"}` )
+    ( check == . nb status 200 `web: any member writes a note` )
+    : HttpResponse nlb ( rest_h r `GET` `/m/notes` `repo=github.com%2Fo%2Fr` `Bearer tok-b1` `` `` `` )
+    ( check ! ( has ( body_of nlb ) `build` ) `web: org b has no such note` )
+    : HttpResponse ag ( rest_h r `GET` `/m/agents` `repo=github.com%2Fo%2Fr` `Bearer tok-a1` `` `` `` )
+    ( check & ( has ( body_of ag ) `"id":"ann-claude"` ) ( has ( body_of ag ) `reviews` ) `web: the repository's agents` )
+    : HttpResponse cd ( rest_h r `DELETE` `/m/channels` `repo=github.com%2Fo%2Fr&name=public` `Bearer tok-a1` `` `` `` )
+    ( check == . cd status 400 `web: public cannot be deleted` )
+    // Organisations: a stranger knocks and waits.
+    ( check ( ag_tenant_admitted `org-a` `` 100 ) `tenants: the owner is admitted` )
+    ( check ! ( ag_tenant_admitted `org-c` `c@c` 100 ) `tenants: a newcomer is pending` )
+    : HttpResponse tl ( rest_h r `GET` `/m/tenants` `` `Bearer tok-a1` `` `` `` )
+    ( check ( has ( body_of tl ) `"tenant":"org-c"` ) `tenants: the owner's admin sees the knock` )
+    : HttpResponse ta ( rest_h r `PUT` `/m/tenants/org-c` `` `Bearer tok-a1` `` `` `{"state":"allowed"}` )
+    ( check == . ta status 200 `tenants: allow org-c` )
+    ( check ( ag_tenant_admitted `org-c` `` 101 ) `tenants: org-c is admitted now` )
+    ( check ( seq ( string_data ( ag_org_key `../../etc` ) ) ( string_data ( ag_org_key `../../etc` ) ) ) `org key: deterministic` )
+    ( check ! ( string_contains ( ag_org_key `../../etc` ) `/` ) `org key: no path in it` )
+    ( check ! ( string_contains ( ag_repo_path `org-a` `github.com/o/r` ) `github.com/o` ) `repo file: no '/' from the key` )
+    ( ag_auth_configure F F `` `` `` `` `` `` )
+}
+
 @ main → i {
     : String dir ( string_from `agora_test_scratch` )
     ( dir_create_all ( string_data dir ) )
@@ -723,6 +920,10 @@ $ `src/service.nu`
     : Router r ( http_app_router app )
     ( test_rest r )
     ( test_mcp )
+    ( test_project_norm )
+    ( test_manage )
+    ?? ( dir_remove_all `agora_test_scratch/web` ) { T _ → {} F _ → {} }
+    ( test_signed_in )
 
     : String sum ( string_from `agora_test: ` )
     ( string_push_int sum g_pass )

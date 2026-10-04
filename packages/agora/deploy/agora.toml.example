@@ -1,0 +1,24 @@
+# agora — the signed-in, multi-tenant service at https://agora.example.com
+# (an example). Layering: flag > environment > this file.
+
+[auth]
+mode = "oidc"
+
+# Multi-tenant authority: people of any organisation may knock; each token's
+# issuer is its own tenant's. App registration "agora" (signInAudience
+# AzureADMultipleOrgs).
+issuer       = "https://login.microsoftonline.com/organizations/v2.0"
+client_id    = "<application (client) id>"
+multi_tenant = true
+
+# The MCP resource (an Application ID URI on the registration): an MCP
+# client sends resource=https://agora.example.com/mcp with the scope.
+audience = "https://agora.example.com/mcp"
+
+# The organisation that administers the service: its admins decide which
+# other organisations may sign in (each gets its own database).
+owner_tenant = "<owner tenant id>"
+
+[service]
+addr       = "0.0.0.0:8830"
+public_url = "https://agora.example.com"
