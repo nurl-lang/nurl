@@ -29830,6 +29830,7 @@
         ? == 0 ( nurl_str_len st ) { = st ( nurl_sym_get g_fn_stores generic ) } {}
         ( nurl_print `@.__nurl_store.` ) ( nurl_print number ) ( nurl_print ` = private constant i1 ` )
         ( nurl_print ? ( str_contains_word st index ) `true` `false` ) ( nurl_print `\n` )
+        ? ( str_contains_word st index ) { ( __nc_store_check number ) } {}
     }
     : ~ s rest ( nurl_sym_get g_pending_impl `sinkflags` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -34332,6 +34333,25 @@
     ^ T
 }
 
+// A store flag that resolved true: was a borrowed value that cannot be
+// copied handed to that callee (mem_emit_cloneif_k)?
+@ __nc_store_check s number → v {
+    : ~ s rest ( nurl_sym_get g_pending_impl `ncstores` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s n ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ty ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq n number ) { ( __nc_copy_die fn ty ) } {}
+    }
+}
+
+// A borrowed value that cannot be copied, where its owner would have to
+// part with a copy (one diagnostic, from every site that finds it).
+@ __nc_copy_die s fname s ty → v {
+    ( die_at ( nurl_str_cat `in function ` fname )
+    ( nurl_str_cat3 `a borrowed '` ( llvm_to_nurl ty ) `' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it` ) )
+}
+
 // Does a match's option stay with someone else — a field of a parameter or
 // behind a pointer (`fld`: the field read its scrutinee made), or a binding
 // that only borrowed it?
@@ -34641,6 +34661,18 @@
 // `val` copied when the module-end constant `kflag` AND `lent` (`1` or an
 // i1) hold: `__nurl_cloneifk_<m>`, one call.
 @ mem_emit_cloneif_k i cg s ty s val s kflag s lent → s {
+    // A value that cannot be copied: whether the callee keeps it is a
+    // module-end fact (its store flag). Passed as is; if the callee keeps
+    // it, that is a borrow its owner would have to part with — refused
+    // when the flag resolves (emit_sink_flags). Moved in as before, the
+    // owner dropped it a second time.
+    ? & == 0 ( nurl_str_starts ty `{ i1, ` ) ! ( seq lent `0` ) {
+        ? ( __nc_drop_ty ty ) {
+            ( __park_append g_pending_impl `ncstores` ( nurl_str_cat4 ( nurl_str_slice kflag 15 - ( nurl_str_len kflag ) 15 ) ` `
+            ( nurl_sym_get g_root_syms `__fn_self_name__` ) ( nurl_str_cat ` ` ty ) ) )
+            ^ val
+        } {}
+    } {}
     // An option / result: the same condition, applied side by side.
     ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
         : s kv ( nurl_cg_reg cg )
@@ -34672,8 +34704,7 @@
     // Lent where it has to be owned, and it cannot be copied: there is no
     // second value to hand over — the owner must give it up instead.
     ? ( seq cond0 `0` ) {} { ? == 0 ( nurl_str_starts ty `{ i1, ` ) { ? ( __nc_drop_ty ty ) {
-                ( die_at ( nurl_str_cat `in function ` ( nurl_sym_get g_root_syms `__fn_self_name__` ) )
-                ( nurl_str_cat3 `a borrowed '` ( llvm_to_nurl ty ) `' would have to be copied here, and it cannot be copied — pass or return the value its owner gives up (a 'sink' parameter, or the owner itself), not a borrow of it` ) )
+                ( __nc_copy_die ( nurl_sym_get g_root_syms `__fn_self_name__` ) ty )
             } {} } {} }
     : s cond ( mem_lent_reg cg cond0 )
     // An option / result: copy the side its tag says is there.
