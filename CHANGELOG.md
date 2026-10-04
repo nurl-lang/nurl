@@ -74,7 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fields in place instead of slicing each one out to parse it. Together
   with a one-multiply hash in the panic journal (every allocation and free
   inside a `recover` extent hashes, and the compiler runs every
-  declaration inside one), a self-compile takes about 5% less time.
+  declaration inside one), a self-compile takes about 5% less time. The
+  journal's registration no longer carries its growth path inline: every
+  registration saved and restored six registers for a branch taken once
+  per doubling (−1.7% instructions compiling `bench/json_parse.nu`).
 
 ### Fixed
 

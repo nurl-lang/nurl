@@ -2947,8 +2947,11 @@ static void nurl__jrnl_reindex(void) {
     }
 }
 
+/* Out of line and cold: inlined into the registration it made every
+ * registration save and restore six callee-saved registers for a branch
+ * taken once per doubling. */
+__attribute__((noinline, cold))
 static void nurl__jrnl_grow(void) {
-    if (nurl__jrnl_len < nurl__jrnl_cap) return;
     if (nurl__jrnl_cap && nurl__jrnl_live <= nurl__jrnl_cap / 2) {
         /* FIFO churn leaves holes below live entries. Compact only after at
          * least half the capacity was removed; this amortizes the copy and
@@ -2984,7 +2987,7 @@ static void nurl__journal_thread_exit(void) {
  * register, instead of paying this body's prologue to learn that. */
 __attribute__((noinline))
 static void nurl__jrnl_push2_slow(void *p, void (*drop)(void*), const unsigned char *flag) {
-    nurl__jrnl_grow();
+    if (__builtin_expect(nurl__jrnl_len >= nurl__jrnl_cap, 0)) nurl__jrnl_grow();
     if (nurl__jrnl_sequence == UINT64_MAX) {
         fputs("nurl: panic journal sequence exhausted\n", stderr);
         abort();
@@ -3087,7 +3090,6 @@ NURL_TLS_WRAP void nurl_journal_forget_slot(void *slot) {
     if (__builtin_expect(!NURL_TLS_LD(size_t, nurl__jslot_len), 1) || !slot) return;
     nurl__jslot_forget_slow(slot);
 }
-static inline void nurl__jrnl_remove(void *p) { if (nurl__jrnl_live) nurl__jrnl_forget_body(p); }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }
 
 /* Normal completion forgets only registrations made in this extent: an
@@ -3141,7 +3143,7 @@ static void nurl__jrnl_drain(uint64_t mark) {
     }
 }
 
-NURL_TLS_FN void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
+NURL_TLS_FN void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_live) nurl__jrnl_forget_body(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }
