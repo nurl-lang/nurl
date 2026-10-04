@@ -66,7 +66,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes (where the optimiser cannot hoist the measure out) was quadratic
   in the string's length: 0.39 s → 0.22 s per 200 KB through
   `nurl_str_get`, linear through `nurl_str_at`.
+- **Symbol-table copies are taken at a known length.** A new runtime
+  primitive, `nurl_strdup_n`, copies a string whose length the caller
+  already holds. The compiler's tables measure a key and a value once per
+  definition (they were measured three times) and copy a value out at its
+  cached length; the borrow checker reads a statement row's numeric
+  fields in place instead of slicing each one out to parse it. Together
+  with a one-multiply hash in the panic journal (every allocation and free
+  inside a `recover` extent hashes, and the compiler runs every
+  declaration inside one), a self-compile takes about 5% less time.
+
 ### Fixed
+
+- **`stdlib/core/symtab.nu` no longer grows without bound.** Each
+  re-definition of a key pushed a new entry holding fresh copies that
+  nothing could read or free again, the bucket array never grew past
+  4096, and there was no way to release a table, so a long-running user
+  that re-defines keys (the language server re-indexes a document on
+  every edit) leaked on every edit and slowed down as it went. A
+  re-definition now replaces the value in place, the buckets grow with
+  the table, and `nurl_sym_free` releases it.
 
 - **A value stored into an owner is followed when the owner lets it go.**
   `@ Holder { a }` then `= . h v ( vec_new [i] )`, or `( vec_push all a )`

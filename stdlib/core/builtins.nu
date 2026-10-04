@@ -253,6 +253,10 @@
 // ordinary heap block, so plain free() releases it too.
 & `c` @ nurl_strdup s src → s
 
+// nurl_strdup when the caller already knows the source's length: copies
+// the first `n` bytes and appends a NUL, with no strlen.
+& `c` @ nurl_strdup_n s src i n → s
+
 // Raw byte moves/fill over possibly-overlapping regions.
 & `c` @ nurl_memcpy s dst s src i n → v
 

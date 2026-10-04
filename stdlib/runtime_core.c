@@ -2779,6 +2779,18 @@ char *nurl_strdup(const char *s) {
     memcpy(p, s, n);
     return p;
 }
+/* nurl_strdup for a source whose length the caller already holds: no
+ * strlen. A symbol table caches every value's length, and its reads copy
+ * values out by the million in a compile. The first n bytes of src are
+ * copied and a NUL appended; src must have at least n readable bytes. */
+char *nurl_strdup_n(const char *s, long long n) {
+    if (!s) return NULL;
+    if (n < 0) n = 0;
+    char *p = (char *)nurl_alloc(n + 1);
+    memcpy(p, s, (size_t)n);
+    p[n] = 0;
+    return p;
+}
 long long nurl_alloc_count(void)               { return (long long)nurl__actr_total(0); }
 long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
@@ -2914,12 +2926,15 @@ static __thread NurlSlotEntry *nurl__jslot = NULL;
 NURL_TLS_HOT size_t nurl__jslot_len = 0;
 static __thread size_t nurl__jslot_cap = 0;
 
-static size_t nurl__jrnl_bucket(void *p) {
-    uint64_t h = (uint64_t)(uintptr_t)p;
-    h ^= h >> 30; h *= UINT64_C(0xbf58476d1ce4e5b9);
-    h ^= h >> 27; h *= UINT64_C(0x94d049bb133111eb);
-    h ^= h >> 31;
-    return (size_t)h & (nurl__jrnl_cap * 2 - 1);
+/* Fibonacci hashing: one multiply, then the TOP log2(2*cap) bits, which
+ * every input bit reaches (the low bits of an allocator's pointers are
+ * constant). Every registration and every free inside a recover extent
+ * hashes, so the full 64-bit mixer this replaced was a fifth of the
+ * journal's cost. cap is a power of two >= 32 whenever buckets exist, and
+ * 64 - log2(2*cap) == clz(cap). */
+static inline size_t nurl__jrnl_bucket(void *p) {
+    uint64_t h = (uint64_t)(uintptr_t)p * UINT64_C(0x9e3779b97f4a7c15);
+    return (size_t)(h >> __builtin_clzll((unsigned long long)nurl__jrnl_cap));
 }
 
 static void nurl__jrnl_reindex(void) {
