@@ -160,6 +160,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer on one branch and reused it on another; each attempt's buffer is
   a `( Vec u )` the scope drops.
 
+- **A function that lends on some paths and hands over a fresh value on
+  others no longer leaks the fresh ones.** Such a function already reported
+  per call whether its caller owns the result (`@.__nurl_retdyn`). A `:`
+  binding of a struct, or a `?` join of two such calls, ignored that answer
+  whenever the callee was summarised as lending, so the result counted as a
+  borrow everywhere and every fresh value leaked. A store did the same: it
+  copied the value and leaked the original. The signed-in agora leaked its
+  request principal this way, about 150 B per call. The per-call answer now
+  decides in all of these places. A join of two calls yielding an owning
+  struct carries a phi of their answers, as a String or Vec join already
+  did.
+- **A value that cannot be copied stays with its owner when it is lent.**
+  A sqlite `Database` or `Statement`, or any other dropped handle without a
+  Clone, could be lent in two ways:
+  - read out of a parameter's field (`^ . h db`);
+  - taken as the payload of `?? . st db { T d → … }`.
+
+  In both cases it was dropped by the caller or by the arm. That closed the
+  owner's handle, and the owner's next use was a **use-after-free**, with no
+  diagnostic. Such a value is now lent. A function that lends it on one
+  path and opens a fresh one on another answers per call, like any other.
+  Where a copy would be needed, compilation stops with an error naming the
+  type.
+- **A struct field `?Database` (an option of a value that cannot be copied)
+  is dropped with its struct.** The struct's drop skipped it, and every
+  connection such a field held leaked.
+- **`--debug` builds at -O2 work again.** The memory-model helpers
+  (`__nurl_clone*`, `__nurl_cloneif*`, `__dropif*`, `__nurl_ret_own`, …) are
+  printed as literal IR with no debug location. Inlining a function that has
+  a subprogram through one of them crashed clang in
+  `DwarfDebug::finalizeModuleInfo` on any real program, which made ASan
+  stacks with line numbers unavailable. Under `--g`, the written module now
+  gives every location-less call a location and every subprogram-less
+  definition an artificial one. `tools/dwarf_test.sh` asserts this
+  invariant with `tools/dwarf_location_census.py`.
 - **`nurlpkg publish` names a registry rate limit and shows the HTTP status
   of any other rejection.** A 429 (the registry's per-account publish cap)
   printed only `publish failed (PubRejected)`; it now says the registry is

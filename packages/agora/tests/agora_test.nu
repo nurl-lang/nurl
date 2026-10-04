@@ -721,6 +721,31 @@ $ `src/service.nu`
     ( check ( seq ( string_data ( norm `/etc/passwd` ) ) `<bad>` ) `project: not an absolute path` )
 }
 
+// An agent's own posts never wait in its inbox, and moving its cursor over
+// them never skips a message somebody else wrote. One connection lent to a
+// whole operation (ag_store_conn) sees what it wrote.
+@ test_own_posts → v {
+    : s path `agora_test_scratch/own.db`
+    ?? ( file_delete path ) { T _ → {} F _ → {} }
+    : AgStore st ( ag_store_open path )
+    ( check ( ag_agent_create st `ann` `` `h-ann` 10 ) `own: ann joins` )
+    ( check ( ag_agent_create st `bea` `` `h-bea` 11 ) `own: bea joins` )
+    : ~ i k 0
+    ~ < k 50 { ( ag_post st `public` `ann` `mine` 0 20 ) = k + k 1 }
+    ( check == ( ag_unread st `ann` ) 0 `own: 50 own posts, nothing unread` )
+    : i b1 ( ag_post st `public` `bea` `from bea` 0 21 )
+    ( ag_post st `public` `ann` `mine again` 0 22 )
+    ( check == ( ag_unread st `ann` ) 1 `own: bea's post is not skipped by ann's next one` )
+    : AgInbox ib ( ag_inbox st `ann` 20 )
+    ( check & == ( vec_len [AgMsg] . ib msgs ) 1 == . ib remaining 0 `own: ann gets exactly bea's post` )
+    ?? ( vec_get [AgMsg] . ib msgs 0 ) { T m → { ( check == . m id b1 `own: … by id` ) } F _ → { ( check F `own: … by id` ) } }
+    ( check == ( ag_unread st `ann` ) 0 `own: then nothing` )
+    : AgStore cst ( ag_store_conn st )
+    ( ag_post cst `public` `bea` `in one op` 0 23 )
+    ( check == ( ag_unread cst `ann` ) 1 `conn: one lent connection reads its own write` )
+    ( check == ( ag_unread st `ann` ) 1 `conn: and so does a fresh one` )
+}
+
 @ test_manage → v {
     : s opath `agora_test_scratch/manage-org.db`
     : s path `agora_test_scratch/manage.db`
@@ -921,6 +946,7 @@ $ `src/service.nu`
     ( test_rest r )
     ( test_mcp )
     ( test_project_norm )
+    ( test_own_posts )
     ( test_manage )
     ?? ( dir_remove_all `agora_test_scratch/web` ) { T _ → {} F _ → {} }
     ( test_signed_in )

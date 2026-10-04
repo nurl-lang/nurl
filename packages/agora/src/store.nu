@@ -19,13 +19,21 @@
 // (manage.nu).
 //
 // Threading: the service runs a worker pool and any number of stdio
-// processes may share the file. Every operation opens its OWN
-// connection for its own duration (a `Database` has a Drop and is
-// NotSend: it cannot live in a struct passed by value, nor cross a
-// thread), WAL lets readers run beside one writer, `busy_timeout` makes
-// a second writer wait, and every read-modify-write is one
-// BEGIN IMMEDIATE transaction — so claiming a task or draining an inbox
-// is atomic across processes, not just threads.
+// processes may share the file. Every OPERATION (one call of an op —
+// ag_op_call) opens one connection and every store function it calls
+// borrows it (AgStore's `db`, ag_store_conn); a `Database` is NotSend,
+// so it never leaves the worker that opened it and is closed when the
+// operation's AgStore is dropped. A store without one (the global
+// handle, a CLI one-off) opens a connection per function as before.
+// WAL lets readers run beside one writer, `busy_timeout` makes a second
+// writer wait, and every read-modify-write is one BEGIN IMMEDIATE
+// transaction — so claiming a task or draining an inbox is atomic
+// across processes, not just threads.
+//
+// One connection per operation rather than per statement group: each
+// open/close took SQLite's process-wide VFS lock, mapped the WAL index
+// and re-read the schema — a brief cost five of them, and eight workers
+// spent most of their time in futex waits on those locks.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -36,6 +44,7 @@ $ `stdlib/ext/sqlite.nu`
 : AgStore {
     String path
     b ok
+    ? Database db  // an operation's open connection, lent to every use (ag_store_conn); None = open per use
 }
 
 : AgAgent {
@@ -93,7 +102,27 @@ $ `stdlib/ext/sqlite.nu`
 
 // ── Connections ───────────────────────────────────────────────────────
 
+// A connection for one use: the operation's own (lent), else a new one.
 @ _ag_conn AgStore st → !Database SqliteErr {
+    ?? . st db {
+        T d → { ^ @ !Database SqliteErr { T d } }
+        F → {}
+    }
+    ^ ( __ag_conn_open st )
+}
+
+// The same store, holding one open connection for the duration of an
+// operation (see the header). When opening fails it holds none, and each
+// use opens its own and reports the failure itself.
+@ ag_store_conn AgStore st → AgStore {
+    ?? ( __ag_conn_open st ) {
+        T d → { ^ @ AgStore { ( string_from ( string_data . st path ) ) . st ok @ ?Database { T d } } }
+        F _ → {}
+    }
+    ^ @ AgStore { ( string_from ( string_data . st path ) ) . st ok @ ?Database { F } }
+}
+
+@ __ag_conn_open AgStore st → !Database SqliteErr {
     ?? ( sqlite_open ( string_data . st path ) ) {
         F e → { ^ @ !Database SqliteErr { F e } }
         T db → {
@@ -127,7 +156,7 @@ $ `stdlib/ext/sqlite.nu`
     ? > ( string_len dir ) 0 {
         ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → {} }
     } {}
-    : AgStore st @ AgStore { ( string_from path ) T }
+    : AgStore st @ AgStore { ( string_from path ) T @ ?Database { F } }
     : ~ b ok F
     ?? ( _ag_conn st ) {
         F _ → {}
@@ -169,7 +198,7 @@ $ `stdlib/ext/sqlite.nu`
             = ok ! failed
         }
     }
-    ^ @ AgStore { ( string_from path ) ok }
+    ^ @ AgStore { ( string_from path ) ok @ ?Database { F } }
 }
 
 // A 0.1.0 store has notes keyed by `key` alone; 0.2.0 keys them by
@@ -348,24 +377,36 @@ $ `stdlib/ext/sqlite.nu`
     ^ ok
 }
 
-// The agent whose token hashes to `token_hash`, or None. Touches `seen`.
+// `seen` is kept to AG_SEEN_GRANULE seconds (`agents` shows it as an
+// age, and a waiting agent is marked every 10 s anyway). A call writes it
+// only when the last mark is older: every UPDATE is a write transaction,
+// and one on every read-only call serialised the whole service behind
+// SQLite's busy handler, which sleeps 1, 2, 5, 10 … ms between tries.
+: i AG_SEEN_GRANULE 10
+
+@ ag_seen_stale i seen i now → b { ^ >= - now seen AG_SEEN_GRANULE }
+
+// The agent whose token hashes to `token_hash`, or None. Marks `seen`
+// (to AG_SEEN_GRANULE).
 @ ag_agent_by_token AgStore st s token_hash i now → ?String {
     : ~ String id ( string_new )
     : ~ b found F
+    : ~ i seen 0
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
-            ?? ( sqlite_prepare db `SELECT id FROM agents WHERE token_hash = ?1` ) {
+            ?? ( sqlite_prepare db `SELECT id, seen FROM agents WHERE token_hash = ?1` ) {
                 F _ → {}
                 T q → {
                     ( _ag_bind_s q 1 token_hash )
                     ? ( _ag_row q ) {
                         = id ( sqlite_column_text q 0 )
+                        = seen ( sqlite_column_int q 1 )
                         = found T
                     } {}
                 }
             }
-            ? found { ( __ag_touch_on db ( string_data id ) now ) } {}
+            ? & found ( ag_seen_stale seen now ) { ( __ag_touch_on db ( string_data id ) now ) } {}
         }
     }
     ? found { ^ @ ?String { T id } } {}
@@ -607,9 +648,35 @@ $ `stdlib/ext/sqlite.nu`
     : ~ i id 0
     ?? ( _ag_conn st ) {
         F _ → {}
-        T db → { = id ( __ag_post_on db channel sender body reply_to now ) }
+        T db → {
+            // Two autocommits, not one BEGIN IMMEDIATE around both: holding
+            // the write lock from the start made concurrent posters queue in
+            // SQLite's busy handler (p99 55 ms vs 29 ms at 16 writers). The
+            // cursor step is safe on its own: it never passes a message
+            // anyone else wrote.
+            = id ( __ag_post_on db channel sender body reply_to now )
+            ? > id 0 { ( __ag_cursor_past_own_on db sender channel id ) } {}
+        }
     }
     ^ id
+}
+
+// The poster has read up to its own post when nothing from anyone else
+// waits between its cursor and that post: move the cursor over it. Own
+// posts are never delivered, so without this they piled up past the cursor
+// of an agent that posts more than it receives, and every brief and whoami
+// walked all of them again to find nothing. Exactly-once is untouched: the
+// cursor never passes a message somebody else wrote.
+@ __ag_cursor_past_own_on Database db s agent s channel i id → v {
+    ?? ( sqlite_prepare db `UPDATE cursors SET last_id = ?3 WHERE agent = ?1 AND channel = ?2 AND last_id < ?3 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel = ?2 AND m.id > cursors.last_id AND m.id < ?3 AND m.sender != ?1)` ) {
+        F _ → {}
+        T q → {
+            ( _ag_bind_s q 1 agent )
+            ( _ag_bind_s q 2 channel )
+            ( _ag_bind_i q 3 id )
+            ( _ag_run q )
+        }
+    }
 }
 
 @ _ag_read_msg Statement q → AgMsg {
@@ -623,7 +690,13 @@ $ `stdlib/ext/sqlite.nu`
     }
 }
 
-: s AG_INBOX_WHERE ` FROM messages m WHERE m.sender != ?1 AND (m.channel = ?2 OR m.channel IN (SELECT channel FROM follows WHERE agent = ?1)) AND m.id > COALESCE((SELECT last_id FROM cursors WHERE agent = ?1 AND channel = m.channel), 0)`
+// What is waiting for agent ?1 (mailbox ?2): the channels it reads, each
+// with its cursor, then — through the (channel, id) index — the messages
+// past that cursor. Driven from the few channels, not the whole table: the
+// earlier `channel = ?2 OR channel IN (…)` with a per-row cursor lookup
+// could use no index and read every message ever posted on every brief
+// and whoami. (CROSS JOIN keeps that order.) Callers append `AND …`.
+: s AG_INBOX_WHERE ` FROM (SELECT f.channel AS ch, COALESCE((SELECT last_id FROM cursors WHERE agent = ?1 AND channel = f.channel), 0) AS cur FROM (SELECT channel FROM follows WHERE agent = ?1 UNION SELECT ?2) f) c CROSS JOIN messages m ON m.channel = c.ch AND m.id > c.cur WHERE m.sender != ?1`
 
 : AgInbox {
     ( Vec AgMsg ) msgs
@@ -722,6 +795,10 @@ $ `stdlib/ext/sqlite.nu`
     ?? ( _ag_conn st ) {
         F _ → {}
         T db → {
+            // Nothing waiting — the usual answer for an agent that polls —
+            // takes no write lock: delivering moves cursors and has to, but
+            // checking need not serialise every reader behind it.
+            ? ( __ag_inbox_any_on db agent mbox ) {} { ^ @ AgInbox { out 0 skipped } }
             ? ( _ag_begin db ) {} { ^ @ AgInbox { out 0 skipped } }
             ? > newest 0 { = skipped ( __ag_skip_older_on db agent mbox newest ) } {}
             : String sql ( string_from `SELECT m.id, m.channel, m.sender, m.body, m.reply_to, m.ts` )
@@ -774,6 +851,23 @@ $ `stdlib/ext/sqlite.nu`
         }
     }
     ^ @ AgInbox { out remaining skipped }
+}
+
+// Is anything waiting for `agent` at all? (Read only; no transaction.)
+@ __ag_inbox_any_on Database db s agent String mbox → b {
+    : String sql ( string_from `SELECT 1` )
+    ( string_push_str sql AG_INBOX_WHERE )
+    ( string_push_str sql ` LIMIT 1` )
+    : ~ b any F
+    ?? ( sqlite_prepare db ( string_data sql ) ) {
+        F _ → {}
+        T q → {
+            ( _ag_bind_s q 1 agent )
+            ( _ag_bind_str q 2 ( string_clone mbox ) )
+            = any ( _ag_row q )
+        }
+    }
+    ^ any
 }
 
 // How many are waiting, without delivering anything.

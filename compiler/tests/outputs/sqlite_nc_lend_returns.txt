@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+accessor: the owner's handle survives
+lend-back: one connection per store, a fresh one each use otherwise

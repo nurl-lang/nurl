@@ -34,7 +34,7 @@ $ `stdlib/ext/mcp.nu`
 $ `store.nu`
 $ `stdlib/core/rcbox.nu`
 
-: s AG_VERSION `0.5.0`
+: s AG_VERSION `0.5.1`
 
 // Limits. A message is for coordination, not for shipping a file.
 : i AG_BODY_MAX 16384
@@ -109,7 +109,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
 // The store handle, lent: the path String stays the state's.
 @ ag_store → AgStore {
     : *AgState p ( __ag_state )
-    ^ @ AgStore { . . p store path . . p store ok }
+    ^ @ AgStore { ( string_from ( string_data . . p store path ) ) . . p store ok @ ?Database { F } }
 }
 
 @ ag_local_identity → s {
@@ -220,7 +220,7 @@ Remember: note_set / note / notes for facts that outlive this conversation, per 
                 ( ag_set_local_refusal ( string_data why ) )
                 ^ ( ag_caller_anon )
             } {}
-            ( ag_agent_touch st name now )
+            ? ( ag_seen_stale . a seen now ) { ( ag_agent_touch st name now ) } {}
         }
         F _ → {
             : String tok ( rand_hex_str 32 )

@@ -122,7 +122,7 @@ $ `store.nu`
     ? > ( string_len dir ) 0 {
         ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → {} }
     } {}
-    : AgStore st @ AgStore { ( string_from path ) T }
+    : AgStore st @ AgStore { ( string_from path ) T @ ?Database { F } }
     : ~ b ok F
     ?? ( _ag_conn st ) {
         F _ → {}
@@ -134,7 +134,7 @@ $ `store.nu`
             }
         }
     }
-    ^ @ AgStore { ( string_from path ) ok }
+    ^ @ AgStore { ( string_from path ) ok @ ?Database { F } }
 }
 
 // ── Users ────────────────────────────────────────────────────────────
