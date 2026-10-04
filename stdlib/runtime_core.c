@@ -3143,7 +3143,14 @@ static void nurl__jrnl_drain(uint64_t mark) {
     }
 }
 
-NURL_TLS_FN void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_live) nurl__jrnl_forget_body(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
+/* Freeing NULL is the common case — a slot released at scope exit after
+ * its value moved on, or a slot's free-old before its first store; a
+ * self-compile makes ~20M such calls against ~15M real frees. The body
+ * saves five callee-saved registers before it could test the pointer, so
+ * the test lives in a wrapper of its own that touches no thread-local
+ * (free to inline under LTO) and tail-calls the body. */
+NURL_TLS_FN static void nurl__free_nonnull(void *ptr) { nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_live) nurl__jrnl_forget_body(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
+void nurl_free(void *ptr)                                    { if (ptr) nurl__free_nonnull(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }

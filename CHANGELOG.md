@@ -78,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   journal's registration no longer carries its growth path inline: every
   registration saved and restored six registers for a branch taken once
   per doubling (−1.7% instructions compiling `bench/json_parse.nu`).
+  `nurl_free(NULL)` — a slot released after its value moved on, most of a
+  self-compile's 35M frees — returns before the body's register saves
+  (−1% more).
 
 ### Fixed
 
