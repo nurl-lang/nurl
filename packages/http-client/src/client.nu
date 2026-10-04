@@ -597,7 +597,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __hc_free_headers ( Vec Header ) user → v {
-    ( vec_free_with [Header] user \ Header h → v { ( header_free h ) } )
+    ( vec_free [Header] user )
 }
 
 // HTTP/1.1 over the pooled keep-alive connection.

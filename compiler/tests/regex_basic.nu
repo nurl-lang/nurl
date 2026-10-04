@@ -254,7 +254,7 @@ $ `stdlib/ext/regex.nu`
             ( nurl_print `split_count=` )
             ( nurl_print ( nurl_str_int ( vec_len [String] parts ) ) )
             ( nurl_print `\n` )
-            : ( @ v String ) drop1 \ String s → v { ( string_free s ) }
+            : ( @ v String ) drop1 \ String s → v {}
             ( vec_free_with [String] parts drop1 )
             ( regex_free rx )
         }

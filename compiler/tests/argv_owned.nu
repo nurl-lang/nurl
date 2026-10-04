@@ -54,7 +54,7 @@ $ `stdlib/std/args.nu`
     : b wrappers & & == ( string_len missing ) 0
     == ( vec_len [String] arguments ) ( nurl_argv_count ) parsed
     ( args_free parser )
-    ( vec_free_with [String] arguments \ String argument → v { ( string_free argument ) } )
+    ( vec_free [String] arguments )
     ( string_free missing )
     ( nurl_print ? == dropped 10 `argv_scopes=T\n` `argv_scopes=F\n` )
     ( nurl_print ? == transferred 6 `argv_transfer=T\n` `argv_transfer=F\n` )

@@ -136,7 +136,7 @@ $ `stdlib/std/thread.nu`
                             : ( Vec Header ) hs ( vec_new [Header] )
                             ( vec_push [Header] hs ( header_new `:status` `200` ) )
                             = ok & ok ( queue writer 1 4 1 ( hpack_encode_headers hs ) )
-                            ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+                            ( vec_free [Header] hs )
                             = headers T
                         }
                         0 → {

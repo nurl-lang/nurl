@@ -27,7 +27,7 @@ $ `stdlib/core/string.nu`
 }
 
 @ free_parts ( Vec String ) parts → v {
-    : ( @ v String ) drop \ String e → v { ( string_free e ) }
+    : ( @ v String ) drop \ String e → v {}
     ( vec_free_with [String] parts drop )
 }
 

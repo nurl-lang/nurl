@@ -198,16 +198,10 @@ $ `stdlib/core/mem.nu`
 // matching `vec_free` / `nurl_free`.
 @ box_free [T] sink ( Box T ) b → v { ( Box_drop [T] b ) }
 
-// Free with a per-payload drop closure. Used for owned-T boxes:
-//   ( box_free_with [String] sb \ x → v { ( string_free x ) } )
-// Equivalent to `( drop ( box_get b ) )` followed by `( box_free b )`,
-// but expressed as one call to mirror `vec_free_with`.
+// Early release with a last look: `drop` is lent the payload, then `b`
+// goes as `box_free` releases it (the payload with it). The hook only
+// borrows — see vec_free_with.
 @ box_free_with [T] sink ( Box T ) b ( @ v T ) drop → v {
-    ( mem_forget b )
     : *T p # *T . b ptr
-    ? != 0 # i p {
-        : T v . p 0
-        ( drop v )
-        ( nurl_free # s p )
-    } {}
+    ? != 0 # i p { ( drop . p 0 ) } {}
 }

@@ -65,7 +65,7 @@ $ `stdlib/core/string.nu`
     : ?String fo ( deque_front [String] sd )
     : s fr ?? fo { T s → ( string_data s ) F → `` }
     ? != 1 ( nurl_str_eq fr `b` ) { ( nurl_print `  FAIL sfront\n` ) = fails + fails 1 } {}
-    ( deque_free_with [String] sd \ String s → v { ( string_free s ) } )
+    ( deque_free [String] sd )
 
     ? == fails 0 { ( nurl_print `deque: all checks PASS\n` ) } {
         ( nurl_print `deque: ` ) ( nurl_print ( nurl_str_int fails ) ) ( nurl_print ` FAILURES\n` )

@@ -325,13 +325,10 @@
 // Early release: exactly what dropping `st` does (Set_drop).
 @ set_free [E] sink ( Set E ) st → v {}
 
-// Release through `drop`: it is handed every live element (and owns it
-// from then on), then the buffers go. For elements needing a teardown of
-// their own; plain owned elements are dropped by set_free / scope exit.
+// Early release with a last look at every live element (see
+// vec_free_with); then `st` goes as `set_free` releases it.
 @ set_free_with [E] sink ( Set E ) st ( @ v E ) drop → v {
-    ( mem_forget st )
     ( set_each [E] st drop )
-    ( __set_release . st ctl )
 }
 
 // ── Set algebra ─────────────────────────────────────────────────────

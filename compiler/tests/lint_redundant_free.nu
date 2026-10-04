@@ -79,7 +79,7 @@ $ `stdlib/core/vec.nu`
 @ free_with → v {
     : ( Vec String ) v ( vec_new [String] )
     ( vec_push [String] v ( string_from `a` ) )
-    ( vec_free_with [String] v \ String x → v { ( string_free x ) } )
+    ( vec_free_with [String] v \ String x → v {} )
 }
 
 @ field → i {

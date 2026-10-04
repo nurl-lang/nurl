@@ -47,7 +47,7 @@ $ `stdlib/core/option.nu`
 
     // ── vec_clone_with : owned Vec[String] ─────────────────────────
     : ( @ String String ) sclone \ String s → String { ^ ( string_clone s ) }
-    : ( @ v String ) sdrop \ String s → v { ( string_free s ) }
+    : ( @ v String ) sdrop \ String s → v {}
     : ( @ v String ) sshow \ String s → v {
         ( nurl_print ( string_data s ) )
         ( nurl_print ` ` )

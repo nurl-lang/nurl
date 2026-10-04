@@ -89,7 +89,7 @@ $ `stdlib/core/vec.nu`
     ? < ( nurl_str_find ( string_data u ) `--output` ) 0 { ( nurl_print `  FAIL usage missing option\n` ) = fails + fails 1 } {}
     ( string_free u )
 
-    ( vec_free_with [String] toks \ String s → v { ( string_free s ) } )
+    ( vec_free [String] toks )
     ( args_free p )
 
     // ── glued short value: -ofoo → output == "foo" ──
@@ -100,7 +100,7 @@ $ `stdlib/core/vec.nu`
     : b ok2 ( args_parse p2 t2 )
     ? ! ok2 { ( nurl_print `  FAIL parse2\n` ) = fails + fails 1 } {}
     = fails + fails ( expect_val ( args_value p2 `output` ) `foo` `glued` )
-    ( vec_free_with [String] t2 \ String s → v { ( string_free s ) } )
+    ( vec_free [String] t2 )
     ( args_free p2 )
 
     // ── a repeated value option keeps every occurrence ──
@@ -128,12 +128,12 @@ $ `stdlib/core/vec.nu`
     ? != 1 ( nurl_str_eq v0 `alpha` ) { ( nurl_print `  FAIL include0\n` ) = fails + fails 1 } {}
     ? != 1 ( nurl_str_eq v1 `beta` ) { ( nurl_print `  FAIL include1\n` ) = fails + fails 1 } {}
     ? != 1 ( nurl_str_eq v2 `gamma` ) { ( nurl_print `  FAIL include2\n` ) = fails + fails 1 } {}
-    ( vec_free_with [String] vals \ String s → v { ( string_free s ) } )
+    ( vec_free [String] vals )
     // An option that was never given has no values, and asking is not an error.
     : ( Vec String ) none4 ( args_values p4 `missing` )
     = fails + fails ( expect_int ( vec_len [String] none4 ) 0 `absent values` )
     ( vec_free [String] none4 )
-    ( vec_free_with [String] t4 \ String s → v { ( string_free s ) } )
+    ( vec_free [String] t4 )
     ( args_free p4 )
 
     // ── unknown option must error ──
@@ -144,7 +144,7 @@ $ `stdlib/core/vec.nu`
     : b ok3 ( args_parse p3 t3 )
     ? ok3 { ( nurl_print `  FAIL: accepted unknown option\n` ) = fails + fails 1 } {}
     ? ! ( args_has_error p3 ) { ( nurl_print `  FAIL: no error set\n` ) = fails + fails 1 } {}
-    ( vec_free_with [String] t3 \ String s → v { ( string_free s ) } )
+    ( vec_free [String] t3 )
     ( args_free p3 )
 
     ? == fails 0 {

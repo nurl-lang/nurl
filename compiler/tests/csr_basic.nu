@@ -176,12 +176,12 @@ $ `stdlib/std/csr.nu`
     ( csr_free csr_p256 )
     ( vec_free [u] csr_p256_der )
     ( vec_free [u] scalar )
-    ( vec_free_with [String] sans \ String s → v { ( string_free s ) } )
+    ( vec_free [String] sans )
 
     ( csr_free csr_ed )
     ( vec_free [u] csr_ed_der )
     ( vec_free [u] ed_sk )
-    ( vec_free_with [String] ed_sans \ String s → v { ( string_free s ) } )
+    ( vec_free [String] ed_sans )
 
     ( nurl_print `── ALL 6 CSR TESTS PASSED ──\n` )
     ^ 0

@@ -250,8 +250,8 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
 // arrays drop their (live) entries.
 @ lru_free [V] sink ( LruCache V ) c → v {}
 
-// Release with `drop` run on every live value; the rest of the cache (the
-// keys, the arrays) goes with `c`.
+// Early release with a last look at every live value (see vec_free_with);
+// then `c` goes as `lru_free` releases it, values included.
 @ lru_free_with [V] sink ( LruCache V ) c ( @ v V ) drop → v {
     : ~ i cur ( __lru_head . c ctl )
     ~ >= cur 0 {
@@ -259,6 +259,4 @@ $ `stdlib/std/hashmap.nu`  // HashMap, map_*, hash_string, eq_string
         ?? ( vec_get [V] . c vals cur ) { T v → ( drop v ) F _ → {} }
         = cur nx
     }
-    // `drop` took every value: the value array releases only its buffer.
-    : b _n ( vec_set_len [V] . c vals 0 )
 }

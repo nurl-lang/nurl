@@ -661,20 +661,17 @@
 // packed String buffer is freed with its control block (nurl_vec_drop).
 @ vec_free [A] sink ( Vec A ) v → v {}
 
-// Drop-aware free: invokes `drop` for every live element in [0..len)
-// before releasing the buffer + control block. Pass a closure that
-// performs whatever per-element cleanup the element type needs
-// (`string_free`, nested `vec_free`, `map_free`, …). For trivial
-// element types use the bare `vec_free` instead — calling
-// `vec_free_with` with a no-op closure works but is wasteful.
+// Early release with a last look: `drop` is lent every live element in
+// [0..len), then `v` goes exactly as `vec_free` releases it — its elements
+// with it. The hook only borrows (a closure's parameters always do, docs/
+// MEMORY.md §7.4): it is for teardown the element type does not do itself
+// — closing a raw C handle, logging — never for releasing what `v` owns.
 @ vec_free_with [A] sink ( Vec A ) v ( @ v A ) drop → v {
-    ( mem_forget v )
     : s ctl . v ctl
+    // A borrowed view owns neither the elements nor the buffer: no hook.
+    ? ( __vec_is_borrowed ctl ) { ^ } {}
     : i len ( __vec_len_raw ctl )
     : s data ( __vec_data_raw ctl )
-    // A borrowed view owns neither the elements nor the buffer: no
-    // drops, handle only.
-    ? ( __vec_is_borrowed ctl ) { ( nurl_free ctl ) ^ } {}
     ? != 0 # i data {
         : *A buf # *A data
         : ~ i i 0
@@ -682,12 +679,7 @@
             ( drop . buf i )
             = i + i 1
         }
-        // Skip the buffer free when it lives in the same alloc as the
-        // ctl (see vec_free above for the packed-string layout).
-        : i ctl_end + # i ctl 24
-        ? != # i data ctl_end { ( nurl_free data ) } {}
     } {}
-    ( nurl_free ctl )
 }
 
 // ── Clone ───────────────────────────────────────────────────────────

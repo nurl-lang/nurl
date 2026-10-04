@@ -52,7 +52,7 @@ $ `stdlib/core/string.nu`
     : ?String v1 ( ordmap_get [i String] sm 1 \ i a i b → i { ^ - a b } )
     : s v1r ?? v1 { T s → ( string_data s ) F → `` }
     ? != 1 ( nurl_str_eq v1r `one` ) { ( nurl_print `  FAIL sval\n` ) = fails + fails 1 } {}
-    ( ordmap_free_with [i String] sm \ i k → v {} \ String s → v { ( string_free s ) } )
+    ( ordmap_free_with [i String] sm \ i k → v {} \ String s → v {} )
 
     ? == fails 0 { ( nurl_print `ordmap: all checks PASS\n` ) } {
         ( nurl_print `ordmap: ` ) ( nurl_print ( nurl_str_int fails ) ) ( nurl_print ` FAILURES\n` )

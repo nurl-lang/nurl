@@ -44,13 +44,13 @@ $ `stdlib/std/thread.nu`
             : ( Vec Header ) hs ( vec_new [Header] )
             ( vec_push [Header] hs ( header_new `:status` `200x` ) )
             ( wire tcp 1 5 1 ( hpack_encode_headers hs ) )
-            ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+            ( vec_free [Header] hs )
         }
         4 → {
             : ( Vec Header ) hs ( vec_new [Header] )
             ( vec_push [Header] hs ( header_new `:status` `200` ) )
             ( wire tcp 1 4 1 ( hpack_encode_headers hs ) )
-            ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+            ( vec_free [Header] hs )
             ( wire tcp 0 0 1 ( bytes_from_str `123456789` ) )
             ?? ( h2_read_frame tcp 16384 ) { T f → { ( h2_frame_free f ) } F _ → {} }
         }
@@ -61,7 +61,7 @@ $ `stdlib/std/thread.nu`
                 ( vec_push [Header] hs ( header_new `content-length` ? == scenario 5 `2` `1` ) )
             } {}
             ( wire tcp 1 ? == scenario 7 5 4 1 ( hpack_encode_headers hs ) )
-            ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+            ( vec_free [Header] hs )
             ? != scenario 7 { ( wire tcp 0 1 1 ( bytes_from_str `123` ) ) } {}
         }
     }

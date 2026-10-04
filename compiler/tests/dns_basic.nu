@@ -38,7 +38,7 @@ $ `stdlib/core/vec.nu`
 
 // Walk a Vec[String] and free each element.
 @ free_str_vec ( Vec String ) v → v {
-    : ( @ v String ) drop_str \ String s → v { ( string_free s ) }
+    : ( @ v String ) drop_str \ String s → v {}
     ( vec_free_with [String] v drop_str )
 }
 

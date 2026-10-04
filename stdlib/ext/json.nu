@@ -1235,9 +1235,7 @@ $ `stdlib/core/vec.nu`
 // iterate anything.
 //
 // `json_obj_keys` returns a fresh `Vec[String]` copy of the keys; the
-// caller owns the Vec and each String inside, free with
-//   : (@ v String) drop \ String s → v { ( string_free s ) }
-//   ( vec_free_with [String] keys drop )
+// caller owns the Vec and each String inside — dropped with it.
 // Returns an empty Vec for non-objects.
 
 @ json_arr_each Json j ( @ v Json ) f → v {

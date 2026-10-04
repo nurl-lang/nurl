@@ -216,10 +216,9 @@
 // Early release: exactly what dropping `d` does (Deque_drop).
 @ deque_free [A] sink ( Deque A ) d → v {}
 
-// Release through `drop`: it is handed every live element (and owns it
-// from then on), then the buffer goes.
+// Early release with a last look at every live element (see
+// vec_free_with); then `d` goes as `deque_free` releases it.
 @ deque_free_with [A] sink ( Deque A ) d ( @ v A ) drop → v {
-    ( mem_forget d )
     : s ctl . d ctl
     : i len ( nurl_peek ctl 3 )
     : i cap ( nurl_peek ctl 1 )
@@ -231,7 +230,4 @@
         ( drop . data pos )
         = i + i 1
     }
-    : s buf # s ( nurl_peek ctl 0 )
-    ? != 0 # i buf { ( nurl_free buf ) } {}
-    ( nurl_free ctl )
 }

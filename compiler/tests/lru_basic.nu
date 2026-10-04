@@ -85,7 +85,7 @@ $ `stdlib/std/lru.nu`
     // a 3rd insert evicts `x`; its value String comes back owned → free it
     : ?String s3 ( lru_put [String] sc `z` ( mkstr `zv` ) )
     ?? s3 { T sv → { ( nurl_print `evicted_val=` ) ( nurl_print ( string_data sv ) ) ( nurl_print `\n` ) ( string_free sv ) } F _ → {} }
-    : ( @ v String ) dropf \ String s → v { ( string_free s ) }
+    : ( @ v String ) dropf \ String s → v {}
     ( lru_free_with [String] sc dropf )
     ^ 0
 }

@@ -1566,6 +1566,25 @@ never names again and that no loop around it captures again: they move
 into its env, and the runtime's copy owns its own. A captured binding still
 named later — a Vec the threads fill for the spawner — stays shared.
 
+**A closure's parameters are always borrowed.** A call through a closure
+value cannot see what the body does with its arguments — `( @ R P )`
+carries no ownership summary, and one closure type has many bodies — so
+the contract is fixed instead of inferred:
+
+- the caller keeps what it passes, and drops a temporary it made for the
+  call (`( f ( string_from … ) )`) right after it;
+- what the body stores (`vec_push`, a field, a struct literal) or hands
+  back (`^ p`, a field of `p`, a join over parameters, the fall-off tail)
+  is a **copy** — and every closure result is its caller's own;
+- releasing a parameter (`( string_free p )`, any `sink` slot) is a compile
+  error: the caller would release it again.
+
+So every `*_free_with` (`vec_free_with`, `box_free_with`, `rc_free_with`,
+`arc_free_with`, `btree_free_with`, …) **lends** each element to its hook
+and then drops the container as `*_free` does, elements included. A hook is
+for teardown the element type does not do itself — closing a raw C handle,
+counting, logging — never for releasing what the container owns.
+
 A String / Vec captured **by value** is a snapshot the body may scratch:
 it borrows the env's value, and an assignment over it is discarded when
 the closure returns (the compiler warns). The value so assigned is the
@@ -1768,7 +1787,7 @@ its layout to itself. The compiler instantiates `S_drop` / `S_clone` for
 each concrete type the program uses (`HashMap_drop__i64__String`).
 `HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc` and `Channel` are
 library handles; their `*_free` functions are early releases, their
-`*_free_with` hand each element to a closure instead. A program's own
+`*_free_with` the same release with a hook lent each element first (§7.5). A program's own
 `% Drop` impl for an instance (`% Drop ( Box i )`) wins over the library's.
 
 A plain (non-generic) struct is a library handle the same way when its

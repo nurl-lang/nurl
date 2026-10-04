@@ -157,8 +157,8 @@ $ `stdlib/std/btree.nu`
     ?? ( btree_get [String String] sm probe scmp ) { T v → ( nurl_print ( string_data v ) ) F _ → ( nurl_print `none` ) }
     ( nurl_print `\n` )
     ( string_free probe )
-    : ( @ v String ) dk \ String x → v { ( string_free x ) }
-    : ( @ v String ) dv \ String x → v { ( string_free x ) }
+    : ( @ v String ) dk \ String x → v {}
+    : ( @ v String ) dv \ String x → v {}
     ( btree_free_with [String String] sm dk dv )
     ^ 0
 }

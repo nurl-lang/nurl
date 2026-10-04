@@ -45,7 +45,7 @@ $ `stdlib/core/string.nu`
 
     // Drop every element + free the Vec in one call. Closure wrapping
     // the @-function `string_free` — same pattern as hashmap_generic.nu.
-    : ( @ v String ) drop \ String elt → v { ( string_free elt ) }
+    : ( @ v String ) drop \ String elt → v {}
     ( vec_free_with [String] v drop )
 
     // Second case: empty Vec[String] — drop closure must NOT be called.

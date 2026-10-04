@@ -42,7 +42,7 @@ $ `stdlib/ext/lockfile.nu`
         ( vec_push [Dep] roots ( root `https://b.test/` `^2` ) )
     }
     : !( Vec LockPkg ) ResolveErr result ( resolve_registry roots `https://unused.test/` \ s reg s name → !RegIndex RegistryFetchErr { ^ ( fetch reg name ) } )
-    ( vec_free_with [Dep] roots \ Dep d → v { ( dep_free d ) } )
+    ( vec_free [Dep] roots )
     ?? result {
         F e → { ( nurl_println ( resolve_err_name e ) ) ( resolve_err_free e ) ^ ( string_new ) }
         T locked → {

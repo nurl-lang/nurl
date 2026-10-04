@@ -64,7 +64,7 @@ $ `stdlib/ext/http2_hpack.nu`
             // Bomb was fully decoded — the guard failed.
             ( nurl_eprintln `FAIL: HPACK bomb decoded without hitting the cap` )
             = fails + fails 1
-            ( vec_free_with [Header] . dd headers \ Header h → v { ( header_free h ) } )
+            ( vec_free [Header] . dd headers )
         }
         F e → {
             : s nm ( hpack_err_name e )

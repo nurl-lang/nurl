@@ -686,7 +686,7 @@ $ `stdlib/core/vec.nu`
 // Early release: exactly what dropping `m` does (BTree_drop).
 @ btree_free [K V] sink ( BTree K V ) m → v {}
 
-@ __bt_free_with_rec [K V] s n ( @ v K ) dk ( @ v V ) dv → v {
+@ __bt_look_rec [K V] s n ( @ v K ) dk ( @ v V ) dv → v {
     : *K kp # *K ( nurl_peek n 0 )
     : *V vp # *V ( nurl_peek n 1 )
     : i nk ( __bt_nkeys n )
@@ -698,14 +698,11 @@ $ `stdlib/core/vec.nu`
     }
     ? ( __bt_leaf n ) {} {
         : ~ i c 0
-        ~ <= c nk { ( __bt_free_with_rec [K V] ( __bt_kid n c ) dk dv ) = c + c 1 }
+        ~ <= c nk { ( __bt_look_rec [K V] ( __bt_kid n c ) dk dv ) = c + c 1 }
     }
-    ( __bt_node_release n )
 }
 
 @ btree_free_with [K V] sink ( BTree K V ) m ( @ v K ) dk ( @ v V ) dv → v {
-    ( mem_forget m )
     : s root # s ( nurl_peek . m ctl 0 )
-    ? == 0 # i root {} { ( __bt_free_with_rec [K V] root dk dv ) }
-    ( nurl_free . m ctl )
+    ? == 0 # i root {} { ( __bt_look_rec [K V] root dk dv ) }
 }

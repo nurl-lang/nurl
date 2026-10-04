@@ -35,7 +35,7 @@ $ `stdlib/std/swim.nu`
     ( pst `A state: ` ( mtable_state_of t `A` 8001 ) )
     : ( Vec Member ) d ( mtable_sweep t )
     ( nurl_print `swept dead: ` ) ( nurl_println_int ( vec_len [Member] d ) )
-    ( vec_free_with [Member] d \ Member mm → v { ( member_free mm ) } )
+    ( vec_free [Member] d )
     ( pst `A state: ` ( mtable_state_of t `A` 8001 ) )
 
     // ── self-refutation: a Suspect-about-self bumps our incarnation ─

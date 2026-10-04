@@ -193,7 +193,7 @@ $ `stdlib/ext/http2_hpack.nu`
         F e → ( print_label `roundtrip_err` ( hpack_err_name e ) )
     }
     ( vec_free [u] blob )
-    ( vec_free_with [Header] hs \ Header hh → v { ( header_free hh ) } )
+    ( vec_free [Header] hs )
 }
 
 // ── §C HPACK Huffman ─────────────────────────────────────────────────

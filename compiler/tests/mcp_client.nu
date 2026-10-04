@@ -152,7 +152,7 @@ $ `stdlib/ext/json.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [Json] extracted \ Json e → v { ( json_free e ) } )
+    ( vec_free [Json] extracted )
     ( json_free resp )
 }
 

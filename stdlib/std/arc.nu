@@ -176,8 +176,10 @@
 // Early release of this handle (Arc_drop).
 @ arc_free [T] sink ( Arc T ) r → v {}
 
-// Atomic-decrement; if the count reached zero, run `drop` on the
-// final value and then release the storage.
+// Release this handle as `arc_free` does (an atomic decrement); the owner
+// that takes the count to zero lends `drop` the final value first (then the
+// value is dropped and the storage released). The hook only borrows — see
+// vec_free_with.
 @ arc_free_with [T] sink ( Arc T ) r ( @ v T ) drop → v {
     ( mem_forget r )
     : *u cp # *u . r ctl
@@ -185,7 +187,9 @@
         : i n ( nurl_atomic_i64_dec_fetch cp )
         ? <= n 0 {
             : *( ArcImpl T ) impl # *( ArcImpl T ) . r ctl
-            ( drop . impl value )
+            : T v . impl value
+            ( mem_take v )
+            ( drop v )
             ( nurl_free # s impl )
         } {}
     }

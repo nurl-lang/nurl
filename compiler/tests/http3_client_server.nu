@@ -114,7 +114,7 @@ $ `stdlib/ext/http3_client.nu`
     ( label `alive_after_three` ? ( h3_client_alive cl ) `T` `F` )
     ( vec_free [u] payload )
     ( vec_free [u] nobody )
-    ( vec_free_with [Header] hs \ Header hh → v { ( header_free hh ) } )
+    ( vec_free [Header] hs )
     ( h3_client_close cl )
     ( h3_client_free cl )
 }

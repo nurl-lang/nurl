@@ -202,16 +202,18 @@
 // Early release of this handle (Rc_drop).
 @ rc_free [T] sink ( Rc T ) r → v {}
 
-// Decrement the strong count. If it reaches zero, run `drop` on the
-// final value, then release the storage. Use for owned-T payloads:
-//   ( rc_free_with [Config] cfg \ c → v { ( config_free c ) } )
+// Release this handle as `rc_free` does; when it is the last one, `drop`
+// is lent the final value first (then the value is dropped and the storage
+// released). The hook only borrows — see vec_free_with.
 @ rc_free_with [T] sink ( Rc T ) r ( @ v T ) drop → v {
     ( mem_forget r )
     : *( RcImpl T ) impl # *( RcImpl T ) . r ctl
     ? == 0 # i impl {} {
         = . impl count - . impl count 1
         ? <= . impl count 0 {
-            ( drop . impl value )
+            : T v . impl value
+            ( mem_take v )
+            ( drop v )
             ( nurl_free # s impl )
         } {}
     }

@@ -107,6 +107,7 @@ $ `stdlib/core/vec.nu`
 // Early release: exactly what dropping `h` does (its elements go with it).
 @ heap_free [A] sink ( Heap A ) h → v {}
 
+// Early release with a last look at every element (see vec_free_with).
 @ heap_free_with [A] sink ( Heap A ) h ( @ v A ) drop → v {
-    ( vec_free_with [A] . h data drop )
+    ( vec_each [A] . h data drop )
 }

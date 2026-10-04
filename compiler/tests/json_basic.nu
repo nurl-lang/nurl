@@ -246,7 +246,7 @@ $ `stdlib/ext/json.nu`
                 = ki + ki 1
             }
             ( nurl_print `\n` )
-            : ( @ v String ) drop_s \ String s → v { ( string_free s ) }
+            : ( @ v String ) drop_s \ String s → v {}
             ( vec_free_with [String] keys drop_s )
 
             // arr_each on the inner array (json_obj_get → JArr)

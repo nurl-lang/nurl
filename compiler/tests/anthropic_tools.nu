@@ -106,7 +106,7 @@ $ `stdlib/ext/anthropic.nu`
     ( json_free b6 )
 
     // Cleanup the borrowed Vec[Json] inputs.
-    : ( @ v Json ) drop_json \ Json e → v { ( json_free e ) }
+    : ( @ v Json ) drop_json \ Json e → v {}
     ( vec_free_with [Json] empty_msgs drop_json )
     ( vec_free_with [Json] one_tool drop_json )
 
