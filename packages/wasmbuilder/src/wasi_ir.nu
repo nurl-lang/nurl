@@ -480,7 +480,7 @@ $ `stdlib/core/vec.nu`
     // `unreachable` stub (breaking every fs.nu file-size probe on wasm).
     // Only libc functions whose wasm32 ABI genuinely uses a 32-bit long /
     // size_t where NURL emits i64 belong below (fseek's `long`, ftell, …).
-    : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,memchr:p:pis,memmem:p:psps,strchr:p:pi,strrchr:p:pi,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i,getcwd:p:ps,fread:s:pssp,fwrite:s:pssp,fseek:i:piw,ftell:s:p`
+    : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strnlen:s:ps,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,memchr:p:pis,memmem:p:psps,strchr:p:pi,strrchr:p:pi,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i,getcwd:p:ps,fread:s:pssp,fwrite:s:pssp,fseek:i:piw,ftell:s:p`
     : String slist ( string_from list )
     : ( Vec String ) entries ( string_split slist `,` )
 

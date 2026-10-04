@@ -6585,6 +6585,7 @@
 // `first_val` spell the stored value: a literal (`__last_closure_caps__`)
 // or a closure binding (its `__closure_caps`).
 @ bck_note_clo_caps_stored i syms i first_tt s first_val i line → v {
+    ? == g_borrowck 0 { ^ } {}
     : ~ s caps ? == first_tt TT_BACKSLASH ( nurl_sym_get syms `__last_closure_caps__` )
     ? ( is_ident_tok first_tt ) ( nurl_sym_get2 syms first_val `__closure_caps` ) ``
     ~ != 0 ( nurl_str_len caps ) {
@@ -11766,7 +11767,8 @@
                 // frame: the value lives as long as the container does
                 // (bck_kill_stored_in) — `( vec_push all a )` then
                 // `( vec_free all )` then `( vec_len a )` read freed memory.
-                ? & & > arg_idx 0 != 0 ( nurl_str_len __arg0_bind ) ! ( seq __arg0_bind bck_arg_val ) {
+                // (The borrow checker's table exists only when it runs.)
+                ? & & & != g_borrowck 0 > arg_idx 0 != 0 ( nurl_str_len __arg0_bind ) ! ( seq __arg0_bind bck_arg_val ) {
                     ( nurl_sym_set g_bck ( nurl_str_cat4 `pko_` bck_arg_val `_` ( nurl_str_int ( nurl_lex_line lex ) ) ) __arg0_bind )
                 } {}
                 ( bck_stash_store bck_arg_val ( nurl_lex_line lex ) call_name ( nurl_str_int arg_idx ) `pendkeep` ) } {} }

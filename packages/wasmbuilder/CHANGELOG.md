@@ -2,6 +2,19 @@
 
 All notable changes to this package are documented here.
 
+## [0.3.2] — unreleased
+
+No API change.
+
+### Fixed
+
+- `strnlen` is bridged to the wasm32 ABI like `strlen`. NURL calls it with
+  a 64-bit length and libc takes a 32-bit `size_t`, so wasm-ld replaced
+  every call with a trapping stub. A program built with a runtime that
+  measures strings only as far as it reads, which is how NURL 0.70.0
+  builds them, trapped on its first string slice. This included
+  nurlc.wasm itself.
+
 ## [0.3.1] — 2026-10-03
 
 No API change. Requires NURL 0.69.0.
