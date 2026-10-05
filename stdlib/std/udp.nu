@@ -83,6 +83,7 @@
 // here means the FD has been freed (use-after-close), NOT a TCP-style
 // peer EOF — UDP has no connection.
 
+$ `stdlib/core/marker.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/net.nu`
@@ -143,6 +144,9 @@ $ `stdlib/std/async_ffi.nu`
 // ── Public types ───────────────────────────────────────────────────
 
 : UdpSocket { s raw }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource UdpSocket {}
 
 : UdpPacket {
     ( Vec u ) data

@@ -1902,6 +1902,51 @@ owns (a capture it only borrows is no edge: counting it would be wrong).
 that context's, swapped with the fiber like the panic journal: collection
 takes no lock. `( rc_collect )` runs one now.
 
+**When a cycle is released: memory waits, resources do not.** A value whose
+last handle goes is dropped right there, cyclic type or not. Only a value
+already caught in an unreachable cycle waits — for the threshold or the end
+of its context. For memory that is invisible. For a file, a socket, a child
+process it is not: a program opening files in a loop would run out of
+descriptors while the garbage holding them waits. So the release is
+deterministic for exactly those:
+
+- *What counts as a resource is marked, not guessed.* `% Resource T { }`
+  (stdlib/core/marker.nu) is on the stdlib's OS handles — `File`,
+  `BufReader`, `UdpSocket`, `TlsConn`, `HttpConn`, `QuicClient`,
+  `ProcChild`, `Database`, `Statement`. Anything that *owns* one — a field,
+  an element, an option or enum payload, a library handle's contents, the
+  payload of an `Rc` it holds — is one by structure; `( mem_resource [T] )`
+  answers it for a cyclic `Rc T` as a constant. Releasing memory, a lock or
+  a count is not externally observable: `Mutex` is not a resource. A type
+  of your own whose drop the outside world sees (an FFI close, a flush to a
+  socket) takes the same one-line mark.
+- *A cyclic `Rc` of such a type is collected the moment it may have become
+  garbage.* A handle that goes without taking the count to zero runs trial
+  deletion from that one block (`nurl_cc_collect_now`) instead of filing it:
+  the cycle's files close where the last handle from outside went, before
+  the next statement. Inside a collection or a nested release it waits for
+  that to finish; inside a container's release (`nurl_vec_drop`) it waits for
+  the end of the release, so dropping a `Vec` of handles into one graph is
+  one pass, not one per handle.
+- *The cost, measured.* Trial deletion from a block visits what is reachable
+  from it. Tearing a structure down is linear — a ring of 16 000 resource
+  nodes held by a `Vec` of handles: 2 ms. Mutating a large **live**
+  resource-capable graph is not: every decrement that leaves a count above
+  zero (an `rc_set` replacing a node that pointed into the graph) walks the
+  graph once to find it still alive. Building that ring by rewiring it,
+  2 × n `rc_set`: n = 1 000 → 11 ms, 4 000 → 127 ms, 8 000 → 507 ms,
+  16 000 → 1.97 s — quadratic, against 2 ms for the same graph without a
+  resource in its type. Keep a large mutable graph's OS handles outside it
+  (a table of files the nodes refer to by index) so the graph's type is not
+  resource-capable; a graph of a few hundred nodes does not notice.
+- *The net under it.* A resource the compiler cannot see in a type — behind
+  a trait object (`dyn`), inside a closure's captures — is released by the
+  collector as before. When an open fails for want of descriptors (EMFILE /
+  ENFILE: `fopen` in std/fs.nu, `socket` / `accept` in the runtime), the
+  context's unreachable cycles are collected and the open retried once
+  (`nurl_cc_reclaim_fds`). It costs nothing on a successful open; it does
+  not reach a cycle held by another fiber's collector.
+
 **A long chain is released without recursion.** Dropping the head of a
 million-node list of `Rc` would recurse a million frames deep. A release of
 a value that holds further handles goes through the runtime

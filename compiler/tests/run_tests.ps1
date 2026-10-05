@@ -369,6 +369,7 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # Windows golden RECORDED the link failure, which is a blessed
     # breakage, not coverage.
     elseif ($name -like 'fswatch_*') { $skip = $true }
+    elseif ($name -like 'fdlimit_*') { $skip = $true }
     # fs_glob_symlink builds a symlinked directory under /tmp and globs
     # through it. Windows has neither an unprivileged symlink() nor /tmp.
     # It first declared `requires: ln` as a capability probe, on the

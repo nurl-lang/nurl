@@ -73,6 +73,7 @@
 //   - environment variable overrides for the child
 //   - cwd override for the child
 
+$ `stdlib/core/marker.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/posix.nu`
@@ -726,6 +727,9 @@ $ `stdlib/std/time.nu`
 }
 
 : ProcChild { s raw }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource ProcChild {}
 
 @ ProcChild_share ProcChild h → ProcChild { ^ @ ProcChild { # s ( rcbox_share # i . h raw ) } }
 

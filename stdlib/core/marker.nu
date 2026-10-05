@@ -1,4 +1,4 @@
-// stdlib/core/marker.nu — Send / Sync, the thread-safety marker traits.
+// stdlib/core/marker.nu — Send / Sync, the thread-safety marker traits, and Resource.
 //
 // Two questions a thread boundary asks about a type, and nothing else:
 //
@@ -101,3 +101,21 @@ pub %NotSend [T] {}
 
 // Two threads must never reach one `T` at the same time.
 pub %NotSync [T] {}
+
+// Resource — a type whose drop is observable outside the program: it
+// closes a file descriptor, a socket, a database connection, reaps a child
+// process. Not a thread-safety question: the Rc cycle collector asks it. A
+// cycle of Rc handles that can hold a Resource is released the moment it
+// becomes unreachable (docs/MEMORY.md §7.7), so a file in a graph closes
+// where the last handle into the graph went — not whenever the collector
+// next runs, which a program opening files in a loop would notice as
+// running out of descriptors. Everything that owns a Resource (a struct
+// field, an element, a payload, an Rc it holds) is one by structure; only
+// the OS handles themselves carry the mark:
+//
+//     % Resource File { }
+//
+// Mark a type of your own the same way when its drop does something the
+// outside world sees (an FFI close, a flush to a socket). Freeing memory,
+// releasing a lock or a count is not that: a Mutex is not a Resource.
+pub %Resource [T] {}

@@ -2912,6 +2912,12 @@ typedef struct {
 /* The running context's reference-count cycle collector (see "cycle
  * collector" below); swapped with the fiber like the journal. */
 static __thread void *nurl__cc = NULL;
+/* > 0 while a container releases its elements (nurl_vec_drop): a block
+ * that asks to be collected now waits for the end of that release, so a
+ * Vec of handles into one resource graph is collected once, not once per
+ * handle (nurl_cc_collect_now). */
+static __thread int nurl__cc_batch = 0;
+static void nurl__cc_batch_end(void);
 static __thread NurlJournalEntry *nurl__jrnl = NULL;
 static __thread size_t *nurl__jrnl_buckets = NULL;
 NURL_TLS_HOT size_t nurl__jrnl_len = 0;
@@ -3488,7 +3494,9 @@ void nurl_vec_drop(void *ctl, void (*elem_drop)(void*), long long elem_size) {
     if (c[2] < 0) { nurl_free(ctl); return; }
     if (elem_drop && data && elem_size > 0) {
         char *base = (char*)data;
+        nurl__cc_batch++;
         for (long long i = 0; i < len; i++) elem_drop(base + i*elem_size);
+        if (--nurl__cc_batch == 0) nurl__cc_batch_end();
     }
     if (data && data != (void*)((char*)ctl + 24)) nurl_free(data);
     nurl_free(ctl);
@@ -4510,6 +4518,7 @@ typedef struct NurlRecoverCtx {
     size_t            len, cap, live;
     uint64_t          sequence;
     int               active;
+    int               cc_batch;    /* nurl__cc_batch: a release in progress */
     NurlSlotEntry    *jslot;
     size_t            jslot_len, jslot_cap;
     NurlPanicFrame   *panic_top;
@@ -4537,6 +4546,7 @@ NURL_TLS_FN void nurl__rctx_swap(void *ctx) {
     NURL__RCTX_XCHG(panic_top, nurl__panic_top);
     NURL__RCTX_XCHG(last_msg, nurl__panic_last_msg);
     NURL__RCTX_XCHG(cc, nurl__cc);
+    NURL__RCTX_XCHG(cc_batch, nurl__cc_batch);
 }
 #undef NURL__RCTX_XCHG
 
@@ -4712,6 +4722,9 @@ typedef struct NurlCcState {
      * nurl_rc_drop_value): a long chain of handles goes iteratively. */
     NurlCcRef *deferred; size_t dlen, dcap;
     int depth;
+    /* A resource-holding block asked for an immediate collection while
+     * one was running (or mid-release): run again when that ends. */
+    int urgent;
 } NurlCcState;
 typedef struct NurlCcVec { NurlCcRef *v; size_t len, cap; } NurlCcVec;
 enum { NURL_CC_MARKGRAY, NURL_CC_SCAN, NURL_CC_SCANBLACK, NURL_CC_COLLECT, NURL_CC_RESTORE };
@@ -4823,12 +4836,20 @@ static NurlCcState *nurl__cc_state(void) {
     return s;
 }
 
+static void nurl__cc_run_roots(NurlCcState *s, NurlCcRef *roots, size_t n, int whole);
 static void nurl__cc_run(NurlCcState *s) {
     if (s->collecting || s->len == 0) return;
-    s->collecting = 1;
     /* The roots as they stand; drops during the collection buffer anew. */
     NurlCcRef *roots = s->roots; size_t n = s->len;
     s->roots = NULL; s->len = s->cap = 0;
+    nurl__cc_run_roots(s, roots, n, 1);
+}
+
+/* Trial deletion over `roots` (n of them, the array is the run's and is
+ * freed): the whole buffer (`whole`, which also sets the next threshold)
+ * or one block that must not wait (nurl_cc_collect_now). */
+static void nurl__cc_run_roots(NurlCcState *s, NurlCcRef *roots, size_t n, int whole) {
+    s->collecting = 1;
     NurlCcVec st = {0}, aux = {0}, garbage = {0};
     size_t live = 0;
     for (size_t i = 0; i < n; i++) {               /* MarkRoots */
@@ -4864,8 +4885,11 @@ static void nurl__cc_run(NurlCcState *s) {
     free(st.v); free(aux.v); free(garbage.v);
     /* The next collection when the buffer has doubled past what survived
      * this one: the work stays proportional to the garbage found. */
-    s->threshold = alive * 2 > NURL_CC_MIN_THRESHOLD ? alive * 2 : NURL_CC_MIN_THRESHOLD;
+    if (whole) s->threshold = alive * 2 > NURL_CC_MIN_THRESHOLD ? alive * 2 : NURL_CC_MIN_THRESHOLD;
     s->collecting = 0;
+    /* Releasing the garbage let go of a resource-holding block that may be
+     * garbage now too: it is not left for the next threshold. */
+    if (s->urgent && s->depth == 0 && !nurl__cc_batch) { s->urgent = 0; nurl__cc_run(s); }
 }
 
 /* A strong count went down and is still above zero: the block may now be
@@ -4886,6 +4910,39 @@ NURL_TLS_FN void nurl_cc_possible_root(void *impl, const void *ops) {
     h->cc = (h->cc & NURL_CC_FLAGS) | ((uint64_t)s->len << NURL_CC_IDX_SHIFT);
     s->roots[s->len].h = h; s->roots[s->len].ops = (const NurlCcOps *)ops; s->len++;
     if (s->len >= s->threshold && !s->collecting) nurl__cc_run(s);
+}
+
+/* A strong count went down on a block whose cycle can hold a resource (a
+ * file, a socket, a child process — `% Resource`, mem_resource): if that
+ * made it garbage, it is released now, not when the collector next runs —
+ * its files close where the last outside handle went. Trial deletion from
+ * this one block costs the part of the graph reachable from it. Inside a
+ * collection or a nested release the block waits for that to finish. */
+NURL_TLS_FN void nurl_cc_collect_now(void *impl, const void *ops) {
+    NurlCcHdr *h = (NurlCcHdr *)impl;
+    nurl_cc_possible_root(impl, ops);
+    NurlCcState *s = (NurlCcState *)nurl__cc;
+    if (!s || !(h->cc & NURL_CC_BUFFERED)) return;   /* a threshold run took it */
+    if (s->collecting || s->depth || nurl__cc_batch) { s->urgent = 1; return; }
+    /* Out of the shared buffer, into a run of its own. */
+    size_t i = (size_t)(h->cc >> NURL_CC_IDX_SHIFT);
+    NurlCcRef r = s->roots[i];
+    NurlCcRef last = s->roots[--s->len];
+    if (last.h != h) {
+        s->roots[i] = last;
+        last.h->cc = (last.h->cc & NURL_CC_FLAGS) | ((uint64_t)i << NURL_CC_IDX_SHIFT);
+    }
+    NurlCcRef *one = (NurlCcRef *)malloc(sizeof *one);
+    if (!one) { fputs("nurl: out of memory (cycle collector)\n", stderr); abort(); }
+    *one = r;
+    nurl__cc_run_roots(s, one, 1, 0);
+}
+
+/* The end of a container's release: what asked to be collected now
+ * during it is collected, in one pass. */
+static void nurl__cc_batch_end(void) {
+    NurlCcState *s = (NurlCcState *)nurl__cc;
+    if (s && s->urgent && !s->collecting && !s->depth) { s->urgent = 0; nurl__cc_run(s); }
 }
 
 /* A closure held inside a collectable value: the handles its env owns
@@ -4944,6 +5001,7 @@ NURL_TLS_FN void nurl_rc_drop_value(void *impl, const void *ops) {
         }
     }
     s->depth--;
+    if (s->depth == 0 && s->urgent && !s->collecting && !nurl__cc_batch) { s->urgent = 0; nurl__cc_run(s); }
 }
 
 /* An edge into a block the collector is releasing: nothing to count. */
@@ -4956,6 +5014,27 @@ int nurl_cc_buffered(void *impl) { return (((NurlCcHdr *)impl)->cc & NURL_CC_BUF
 NURL_TLS_FN void nurl_cc_collect(void) {
     NurlCcState *s = (NurlCcState *)nurl__cc;
     if (s) nurl__cc_run(s);
+}
+
+/* The process ran out of file descriptors (EMFILE / ENFILE in errno): a
+ * cycle of Rc handles nobody can reach may be holding some. Collect this
+ * context's cycles; 1 when a collection ran, so the caller retries the
+ * open once (a resource-holding cycle closes its files at once — this is
+ * the net under everything else: a file inside a closure in a cycle, a
+ * cycle held by another fiber's collector is not reached). errno is
+ * kept. Costs nothing on a successful open. */
+int nurl_cc_collect_for_fds(void) {
+    NurlCcState *s = (NurlCcState *)nurl__cc;
+    if (!s || s->len == 0 || s->collecting || s->depth || nurl__cc_batch) return 0;
+    nurl__cc_run(s);
+    return 1;
+}
+int nurl_cc_reclaim_fds(void) {
+    int e = errno;
+    if (e != EMFILE && e != ENFILE) return 0;
+    int r = nurl_cc_collect_for_fds();
+    errno = e;
+    return r;
 }
 
 /* The context ends (a fiber, a thread, the program): whatever cycles are

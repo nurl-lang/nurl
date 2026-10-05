@@ -20,7 +20,12 @@
 // unreachable cycles: when enough roots pile up, and when the thread, the
 // fiber or the program ends (docs/MEMORY.md §7.7). An acyclic payload —
 // every Rc[String], Rc[Config], a tree of Rc whose nodes hold no Rc back —
-// never pays for it. `Weak[T]` (rc_downgrade / weak_upgrade) is a
+// never pays for it. A payload whose cycles can hold a `% Resource` (a
+// file, a socket, a child process, a database — stdlib/core/marker.nu) is
+// collected the moment a handle going leaves it unreachable: its files
+// close where the last outside handle went, deterministically, at the cost
+// of a walk over what is reachable from that block on every such drop.
+// `Weak[T]` (rc_downgrade / weak_upgrade) is a
 // non-owning handle for back-edges whose target must not be kept alive.
 //
 // API:
@@ -51,6 +56,8 @@
 // there is no copy-on-write. Check `rc_is_unique` first when that matters.
 
 & `c` @ nurl_cc_possible_root s impl s ops → v
+
+& `c` @ nurl_cc_collect_now s impl s ops → v
 
 & `c` @ nurl_cc_dead s impl → i32
 
@@ -176,7 +183,13 @@
         ( mem_take v )
         ? == 0 . impl weak { ( nurl_free # s impl ) } {}
     } {
-        ? ( mem_cyclic [A] ) { ( nurl_cc_possible_root # s impl ( mem_cc_ops [A] ) ) } {}
+        // A cycle that can hold a resource (a file, a socket — `% Resource`)
+        // is released the moment it becomes garbage; any other waits for
+        // the collector.
+        ? ( mem_cyclic [A] ) {
+            ? ( mem_resource [A] ) { ( nurl_cc_collect_now # s impl ( mem_cc_ops [A] ) ) }
+            { ( nurl_cc_possible_root # s impl ( mem_cc_ops [A] ) ) }
+        } {}
     }
 }
 

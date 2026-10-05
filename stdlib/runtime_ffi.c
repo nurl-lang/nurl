@@ -1511,6 +1511,18 @@ static inline int nurl__close_sock_hooked(int fd) {
 #    endif
 #  endif
 
+/* A socket call failed for want of descriptors: collect the context's
+ * unreachable Rc cycles (they may hold some) and say whether to retry
+ * once (nurl_cc_reclaim_fds). Off the success path entirely. */
+int nurl_cc_reclaim_fds(void);
+int nurl_cc_collect_for_fds(void);
+static int nurl__fd_reclaim(void) {
+#  ifdef _WIN32
+    if (WSAGetLastError() == WSAEMFILE) return nurl_cc_collect_for_fds();
+#  endif
+    return nurl_cc_reclaim_fds();
+}
+
 
 typedef struct NurlTcp {
     nurl_sockfd_t fd;
@@ -1678,6 +1690,7 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
     if (backlog <= 0) backlog = 16;
 
     nurl_sockfd_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd == NURL_INVALID_SOCK) {
         h->err_kind = NURL_NET_ERR_BIND;
         return (long long)(uintptr_t)h;
@@ -1792,6 +1805,7 @@ long long nurl_tcp_connect(const char *host, long long port) {
     nurl_sockfd_t fd = NURL_INVALID_SOCK;
     for (ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd == NURL_INVALID_SOCK) continue;
         if (connect(fd, ai->ai_addr, (int)ai->ai_addrlen) == 0) break;
         nurl_close_sock(fd);
@@ -1831,6 +1845,7 @@ long long nurl_tcp_accept(long long listener) {
     nurl_sockfd_t fd = NURL_INVALID_SOCK;
 #ifdef _WIN32
     fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+    if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
     if (fd == NURL_INVALID_SOCK) {
         int we = WSAGetLastError();
         c->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_ACCEPT);
@@ -1858,8 +1873,11 @@ long long nurl_tcp_accept(long long listener) {
 #  if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
         fd = accept4(l->fd, (struct sockaddr*)&peer, &peerlen,
                      SOCK_NONBLOCK | SOCK_CLOEXEC);
+        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim())
+            fd = accept4(l->fd, (struct sockaddr*)&peer, &peerlen, SOCK_NONBLOCK | SOCK_CLOEXEC);
 #  else
         fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
         if (fd != NURL_INVALID_SOCK) {
             int fl = fcntl(fd, F_GETFL, 0);
             if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
@@ -1910,6 +1928,7 @@ long long nurl_tcp_accept(long long listener) {
             if (!(pfds[0].revents & (POLLIN | POLLHUP | POLLERR))) continue;
         }
         fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
+        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = accept(l->fd, (struct sockaddr*)&peer, &peerlen);
         if (fd == NURL_INVALID_SOCK) {
             if (errno == EINTR || errno == ECONNABORTED ||
                 errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -2843,6 +2862,7 @@ long long nurl_udp_bind(const char *host, long long port) {
     long long last_err = NURL_NET_ERR_BIND;
     for (ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd == NURL_INVALID_SOCK && nurl__fd_reclaim()) fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd == NURL_INVALID_SOCK) continue;
         int on = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR,

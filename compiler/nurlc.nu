@@ -10888,6 +10888,9 @@
     ? ( seq fname `mem_rc_nested` )
     { ^ ( gen_mem_rc_nested lex syms cg ) }
     {}
+    ? ( seq fname `mem_resource` )
+    { ^ ( gen_mem_resource lex syms cg ) }
+    {}
     ? ( seq fname `mem_ts_cyclic` )
     { ^ ( gen_mem_ts_cyclic lex syms cg ) }
     {}
@@ -35654,6 +35657,74 @@
     ^ cyc
 }
 
+// Does a value of type `t` own — through fields, payloads, elements,
+// handle contents and the payloads of the Rc it holds — a type marked
+// `% Resource` (stdlib/core/marker.nu)? The mark is explicit on the
+// stdlib's OS handles; everything holding one is a resource by structure.
+// (A closure's captures are not in its type: one is not followed.)
+@ __cc_resource s t i syms → b {
+    : s key ( nurl_str_cat `ccres##` t )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
+    : ~ s todo ( nurl_str_cat t `` )
+    : ~ s seen ``
+    : ~ b res F
+    ~ & ! res != 0 ( nurl_str_len todo ) {
+        : s u ( __bar_first todo ) = todo ( __bar_rest todo )
+        ? ! ( __bar_has seen u ) {
+            = seen ( __bar_add seen u )
+            ? ( __thr_marked `Resource##` u ( __lty_base_name u ) ) { = res T } {
+                = todo ( __bar_union todo ( __res_children u syms ) ) }
+        } {}
+    }
+    ( nurl_sym_def g_impl_name_syms key ? res `1` `0` )
+    ^ res
+}
+
+// The types a value of type `ty` owns one level down.
+@ __res_children s ty i syms → s {
+    : i n ( nurl_str_len ty )
+    ? < n 2 { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __is_closure_ty ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        ^ ( __bar_add ( __bar_add `` ( __wrap_part ty 0 ) ) ( __wrap_part ty 1 ) )
+    } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __vec_elem_llvm ty ) } {}
+    ? ( __is_libh ty ) {
+        // (A Weak owns nothing.)
+        ? ( seq ( __libh_base ty ) `Weak` ) { ^ ( nurl_str_cat `` `` ) } {}
+        : ~ s out ``
+        : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
+        : ~ i k 0
+        ~ < k na { = out ( __bar_add out ( __libh_targ ty k ) ) = k + k 1 }
+        ^ out
+    } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : ~ s out ``
+    : s vlist ( nurl_sym_get2 syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
+            : ~ i pi 0
+            ~ < pi pc {
+                = out ( __bar_add out ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) )
+                = pi + pi 1
+            }
+        }
+        ^ out
+    } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        = out ( __bar_add out ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) )
+        = fi + fi 1
+    }
+    ^ out
+}
+
 // ── Thread-shared cycles (docs/MEMORY.md §7.7) ──────────────────
 // Handles that cross threads — Arc, Channel, DChannel, and library handles
 // over a counted block (an rcbox: Route, Supervisor, QuicServer, …) — are
@@ -36570,6 +36641,18 @@
     ( expect lex TT_RPAREN )
     ( nurl_set_last_type `i1` )
     ^ ? ( __cc_holds_rc ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
+}
+
+// `( mem_resource [T] )` — can a cycle through `Rc T` hold a value whose
+// drop is observable outside the program (`% Resource`: a file, a socket,
+// a child process, a database)? Such a cycle is released the moment it
+// becomes unreachable (nurl_cc_collect_now), not when the collector next
+// runs. A constant.
+@ gen_mem_resource i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    ( expect lex TT_RPAREN )
+    ( nurl_set_last_type `i1` )
+    ^ ? ( __cc_resource ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
 }
 
 // `( mem_cc_ops [T] )` — the collector's table for `Rc T`.
