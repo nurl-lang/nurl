@@ -118,7 +118,7 @@ $ `stdlib/std/simd.nu`
     : ~ b found F
     ~ & ! found < k n {
         : Header h . hdata k
-        ? ( __header_name_eq_ci_n . h name name name_n ) {
+        ? ( _header_name_eq_ci_n . h name name name_n ) {
             // vec_set drops the header it replaces.
             ( vec_set [Header] . r headers k ( header_new name value ) )
             = found T
@@ -337,7 +337,7 @@ $ `stdlib/std/simd.nu`
     : ~ i k 0
     ~ < k n {
         : Header h . hdata k
-        ? ( __header_name_eq_ci_n . h name name name_n ) { ^ T } {}
+        ? ( _header_name_eq_ci_n . h name name name_n ) { ^ T } {}
         = k + k 1
     }
     ^ F
@@ -346,13 +346,13 @@ $ `stdlib/std/simd.nu`
 // Case-insensitive ASCII compare between an owned String and a
 // NUL-terminated raw `s`.
 @ _header_name_eq_ci String name s raw → b {
-    ^ ( __header_name_eq_ci_n name raw ( nurl_str_len raw ) )
+    ^ ( _header_name_eq_ci_n name raw ( nurl_str_len raw ) )
 }
 
 // The same with `raw`'s length already known, for the loops that test
 // one name against every header: the name is measured once and most
 // headers are rejected on length alone.
-@ __header_name_eq_ci_n String name s raw i lb → b {
+@ _header_name_eq_ci_n String name s raw i lb → b {
     : i la ( string_len name )
     ? != la lb { ^ F } {}
     ? == la 0 { ^ T } {}

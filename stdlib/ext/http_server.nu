@@ -712,7 +712,7 @@ $ `stdlib/ext/http2_conn.nu`
     : ~ i k 0
     ~ < k n {
         : Header h . hdata k
-        ? ( __header_name_eq_ci_n . h name `Connection` cn ) {
+        ? ( _header_name_eq_ci_n . h name `Connection` cn ) {
             ^ ( __header_value_eq_ci . h value `close` )
         } {}
         = k + k 1
