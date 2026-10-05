@@ -113,11 +113,12 @@ $ `stdlib/std/simd.nu`
 @ response_set_header HttpResponse r s name s value → v {
     : i n ( vec_len [Header] . r headers )
     : *Header hdata ( vec_data [Header] . r headers )
+    : i name_n ( nurl_str_len name )
     : ~ i k 0
     : ~ b found F
     ~ & ! found < k n {
         : Header h . hdata k
-        ? ( _header_name_eq_ci . h name name ) {
+        ? ( __header_name_eq_ci_n . h name name name_n ) {
             // vec_set drops the header it replaces.
             ( vec_set [Header] . r headers k ( header_new name value ) )
             = found T
@@ -332,34 +333,30 @@ $ `stdlib/std/simd.nu`
 @ __has_header_ci ( Vec Header ) hs s name → b {
     : i n ( vec_len [Header] hs )
     : *Header hdata ( vec_data [Header] hs )
+    : i name_n ( nurl_str_len name )
     : ~ i k 0
     ~ < k n {
         : Header h . hdata k
-        ? ( _header_name_eq_ci . h name name ) { ^ T } {}
+        ? ( __header_name_eq_ci_n . h name name name_n ) { ^ T } {}
         = k + k 1
     }
     ^ F
 }
 
 // Case-insensitive ASCII compare between an owned String and a
-// NUL-terminated raw `s`. Mirrors `__string_eq_ci` in http_request.nu;
-// kept inline here so this module doesn't depend on http_request.
+// NUL-terminated raw `s`.
 @ _header_name_eq_ci String name s raw → b {
+    ^ ( __header_name_eq_ci_n name raw ( nurl_str_len raw ) )
+}
+
+// The same with `raw`'s length already known, for the loops that test
+// one name against every header: the name is measured once and most
+// headers are rejected on length alone.
+@ __header_name_eq_ci_n String name s raw i lb → b {
     : i la ( string_len name )
-    : i lb ( nurl_str_len raw )
     ? != la lb { ^ F } {}
-    : *u pa # *u ( string_data name )
-    : *u pb # *u raw
-    : ~ i k 0
-    ~ < k la {
-        : ~ i ca & 255 # i . pa k
-        : ~ i cb & 255 # i . pb k
-        ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
-        ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
-        ? != ca cb { ^ F } {}
-        = k + k 1
-    }
-    ^ T
+    ? == la 0 { ^ T } {}
+    ^ ( simd_bytes_eq_ci # *u ( string_data name ) # *u raw la )
 }
 
 // ── Status reason phrases (RFC 7231 §6) ──────────────────────────────

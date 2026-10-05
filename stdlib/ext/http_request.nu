@@ -267,8 +267,14 @@ $ `stdlib/std/simd.nu`
 // here because the length is established first and neither buffer is
 // touched during the scan.
 @ __string_eq_ci String s s raw → b {
+    ^ ( __string_eq_ci_n s raw ( nurl_str_len raw ) )
+}
+
+// The same with `raw`'s length already known. A lookup that compares
+// one name against every header measures that name once, and most
+// headers are then rejected on length alone.
+@ __string_eq_ci_n String s s raw i lb → b {
     : i la ( string_len s )
-    : i lb ( nurl_str_len raw )
     ? != la lb { ^ F } {}
     ? == la 0 { ^ T } {}
     ^ ( simd_bytes_eq_ci # *u ( string_data s ) # *u raw la )
@@ -323,10 +329,11 @@ $ `stdlib/std/simd.nu`
 @ header_get ( Vec Header ) hs s name → ?String {
     : i n ( vec_len [Header] hs )
     : *Header data ( vec_data [Header] hs )
+    : i name_n ( nurl_str_len name )
     : ~ i k 0
     ~ < k n {
         : Header h . data k
-        ? ( __string_eq_ci . h name name ) {
+        ? ( __string_eq_ci_n . h name name name_n ) {
             : String copy ( string_from ( string_data . h value ) )
             ^ @ ?String { T copy }
         } {}
@@ -379,10 +386,11 @@ $ `stdlib/std/simd.nu`
 @ header_index ( Vec Header ) hs s name → i {
     : i n ( vec_len [Header] hs )
     : *Header data ( vec_data [Header] hs )
+    : i name_n ( nurl_str_len name )
     : ~ i k 0
     ~ < k n {
         : Header h . data k
-        ? ( __string_eq_ci . h name name ) { ^ k } {}
+        ? ( __string_eq_ci_n . h name name name_n ) { ^ k } {}
         = k + k 1
     }
     ^ -1
@@ -784,7 +792,7 @@ $ `stdlib/std/simd.nu`
                                 : ~ i fk 0
                                 ~ & ! folded < fk hcount {
                                     : Header h . hdata fk
-                                    ? ( __string_eq_ci . h name ( string_data . newh name ) ) {
+                                    ? ( __string_eq_ci_n . h name ( string_data . newh name ) ( string_len . newh name ) ) {
                                         ( string_push_str . h value `, ` )
                                         ( string_push_str . h value ( string_data . newh value ) )
                                         = folded T
