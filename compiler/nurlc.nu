@@ -6546,6 +6546,99 @@
     ^ owner
 }
 
+// A raw string temporary the callee may hand back (`( maybe_view ( mk ) )`
+// with `maybe_view` returning its argument on one path): the argdrop
+// constant above says "not after the call", and nothing else owned it —
+// the temporary leaked. Recorded per argument as `owner|value|callee|
+// generic|index` and settled once the result is known (mem_raw_lendback).
+@ mem_raw_lend_word i syms s callee s generic i index s owner s value → s {
+    : b user | != 0 ( nurl_sym_len2 syms generic `__nurlfn` )
+    != 0 ( nurl_sym_len2 syms generic `__garity` )
+    ? ! user { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat4 ( nurl_str_cat4 owner `|` value `|` ) ( nurl_str_cat callee `|` )
+    ( nurl_str_cat generic `|` ) ( nurl_str_int index ) )
+}
+
+// After a call returning a raw string, per temporary the callee may lend
+// back (mem_fn_lend_kind), decided by this call's own answers:
+//   * the result is not the callee's own and IS the temporary: the
+//     temporary becomes the result's owner (its guard slot), so the binding,
+//     the consuming argument or the return that takes the result frees it;
+//   * the result is not the callee's own and is some other address: it
+//     may point into the temporary (`^ # s + # i x 1` — for a raw pointer
+//     "handed back whole" is not something a summary can promise), so the
+//     temporary lives until the function returns;
+//   * otherwise (the result is the callee's own) it is dropped now.
+// A result type other than a raw string keeps the argdrop rule alone.
+@ mem_raw_lendback i syms i cg s words s res s rlt → v {
+    ? | == 0 ( nurl_str_len words ) ! ( seq ( nurl_llty rlt ) `i8*` ) { ^ } {}
+    : s guard ( nurl_sym_get syms `__last_call_guard__` )
+    : ~ s rest ( nurl_str_cat words `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : ~ s w ( str_first_word rest ) = rest ( str_skip_word rest )
+        : i b1 ( nurl_str_find w `|` ) : s owner ( nurl_str_slice w 0 b1 )
+        = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
+        : i b2 ( nurl_str_find w `|` ) : s value ( nurl_str_slice w 0 b2 )
+        = w ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
+        : i b3 ( nurl_str_find w `|` ) : s callee ( nurl_str_slice w 0 b3 )
+        = w ( nurl_str_slice w + b3 1 - - ( nurl_str_len w ) b3 1 )
+        : i b4 ( nurl_str_find w `|` ) : s generic ( nurl_str_slice w 0 b4 )
+        : i index ( nurl_str_to_int ( nurl_str_slice w + b4 1 - - ( nurl_str_len w ) b4 1 ) )
+        : s ad ( nurl_cg_reg cg )
+        ( emit_sink_flag_load ( mem_argdrop_flag callee generic index ) ad )
+        : s one ( nurl_cg_reg cg )
+        ( emit_sink_flag_load ( mem_lend_const syms `one` callee generic index ) one )
+        : s part ( nurl_cg_reg cg )
+        ( emit_sink_flag_load ( mem_lend_const syms `part` callee generic index ) part )
+        : s nad ( mem_emit_i1 cg `xor` ad `1` )
+        : s any ( mem_emit_i1 cg `and` ( mem_emit_i1 cg `or` one part ) nad )
+        // No guard: the callee's result is its own on every path.
+        : ~ s g `null`
+        : ~ s notowned `false`
+        ? != 0 ( nurl_str_len guard ) {
+            = g ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print g ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print guard ) ( nurl_print `\n` )
+            = notowned ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print notowned ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print g ) ( nurl_print `, null\n` )
+        } {}
+        : s eq ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print eq ) ( nurl_print ` = icmp eq i8* ` ) ( nurl_print res ) ( nurl_print `, ` ) ( nurl_print value ) ( nurl_print `\n` )
+        : s onn ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print onn ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print owner ) ( nurl_print `, null\n` )
+        : s take ( mem_emit_i1 cg `and` ( mem_emit_i1 cg `and` any notowned ) ( mem_emit_i1 cg `and` eq onn ) )
+        : s keep ( mem_emit_i1 cg `and` ( mem_emit_i1 cg `and` any notowned ) ( mem_emit_i1 cg `xor` eq `1` ) )
+        : s drop ( mem_emit_i1 cg `and` any ( mem_emit_i1 cg `xor` ( mem_emit_i1 cg `or` take keep ) `1` ) )
+        ? != 0 ( nurl_str_len guard ) {
+            : s ng ( nurl_cg_reg cg )
+            ( emit_sink_owner_select take `i8*` owner g ng )
+            ( nurl_print `  store i8* ` ) ( nurl_print ng ) ( nurl_print `, i8** ` ) ( nurl_print guard ) ( nurl_print `\n` )
+        } {}
+        // The kept temporary's slot: one per call site, emptied (its last
+        // value freed) each time the call runs again, drained at return.
+        : s ks ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print ks ) ( nurl_print ` = alloca i8*\n` )
+        : s kv ( nurl_cg_reg cg )
+        ( emit_sink_owner_select keep `i8*` owner `null` kv )
+        : s old ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print old ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ks ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old ) ( nurl_print `)\n` )
+        ( nurl_print `  store i8* ` ) ( nurl_print kv ) ( nurl_print `, i8** ` ) ( nurl_print ks ) ( nurl_print `\n` )
+        : s cur ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
+        ( nurl_sym_set g_fn_escapes `__deferred_drops__`
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat ks `` ) ( nurl_str_cat3 cur ` ` ks ) )
+        : s fv ( nurl_cg_reg cg )
+        ( emit_sink_owner_select drop `i8*` owner `null` fv )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print fv ) ( nurl_print `)\n` )
+    }
+}
+
+@ mem_emit_i1 i cg s op s a s b → s {
+    : s r ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ` = ` ) ( nurl_print op ) ( nurl_print ` i1 ` )
+    ( nurl_print a ) ( nurl_print `, ` ) ( nurl_print b ) ( nurl_print `\n` )
+    ^ r
+}
+
 // A closure literal's env, handed to a parameter the callee only ever
 // INVOKES, is the caller's to free after the call. Whether the callee
 // only invokes it is `g_fn_invoke_only[callee]` — and for a GENERIC
@@ -10196,6 +10289,7 @@
     = g_func_count + g_func_count 1
     : i kwseq g_func_count
     : ~ s owned_temps ``
+    : ~ s raw_lends ``
     : ~ s lend_one ``
     : ~ s lend_part ``
     : ~ s lend_idx ``
@@ -10282,7 +10376,9 @@
         ? & != 0 g_auto_drop_strings != 0 ( nurl_str_len argument_owner )
         { : s owner ( mem_arg_owner syms cg fname fname slot argument_owner )
             ( mem_journal_push_raw owner )
-            = owned_temps ? == 0 ( nurl_str_len owned_temps ) ( nurl_str_cat owner `` ) ( nurl_str_cat3 owned_temps ` ` owner ) }
+            = owned_temps ? == 0 ( nurl_str_len owned_temps ) ( nurl_str_cat owner `` ) ( nurl_str_cat3 owned_temps ` ` owner )
+            : s __rlw ( mem_raw_lend_word syms fname fname slot argument_owner av )
+            ? != 0 ( nurl_str_len __rlw ) { = raw_lends ? == 0 ( nurl_str_len raw_lends ) __rlw ( nurl_str_cat3 raw_lends ` ` __rlw ) } {} }
         {}
         // A String / Vec / struct temporary: the same rule as a positional
         // argument's.
@@ -10329,6 +10425,7 @@
     ( nurl_sym_def syms `__last_call_guard__`
     ( mem_emit_fwd_own_guard syms cg fname res rlt ) )
     ( mem_capture_hown syms cg fname rlt )
+    ( mem_raw_lendback syms cg raw_lends res rlt )
     = res ( mem_own_lendback syms cg fname res rlt lend_one lend_part lend_idx )
     ( mem_drop_arg_temps owned_temps )
     ( nurl_set_last_type rlt )
@@ -11043,6 +11140,8 @@
     { ^ ( gen_call_kwargs lex syms cg fname ) }
     {}
     : ~ s owned_arg_temps ``
+    // Raw string temporaries the callee may hand back (mem_raw_lend_word).
+    : ~ s raw_lends ``
     // Per argument, whether the call's result is that argument handed back
     // to the caller that owned it (mem_lendone_const): i1 registers.
     : ~ s lendback_bits ``
@@ -12313,7 +12412,9 @@
             ( mem_journal_push_raw owner )
             = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps )
             ( nurl_str_cat owner `` )
-            ( nurl_str_cat3 owned_arg_temps ` ` owner ) }
+            ( nurl_str_cat3 owned_arg_temps ` ` owner )
+            : s __rlw ( mem_raw_lend_word syms call_name fname arg_idx argument_owner av )
+            ? != 0 ( nurl_str_len __rlw ) { = raw_lends ? == 0 ( nurl_str_len raw_lends ) __rlw ( nurl_str_cat3 raw_lends ` ` __rlw ) } {} }
         {}
         // A String / Vec / owning struct made by a call right in the
         // argument (`( run ( string_from … ) )`) is a temporary: dropped
@@ -12874,6 +12975,7 @@
             ( nurl_sym_def syms `__last_call_guard__`
             ( mem_emit_fwd_own_guard syms cg impl_name res impl_ret ) )
             ( mem_capture_hown syms cg impl_name impl_ret )
+            ( mem_raw_lendback syms cg raw_lends res impl_ret )
             ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_closure_temps closure_envs_free )
             ( nurl_set_last_type impl_ret )
             ^ res
@@ -13030,6 +13132,7 @@
                 ( nurl_sym_def syms `__last_call_guard__`
                 ( mem_emit_fwd_own_guard syms cg call_name res rlt ) )
                 ( mem_capture_hown syms cg call_name rlt )
+                ( mem_raw_lendback syms cg raw_lends res rlt )
                 = res ( mem_own_lendback syms cg call_name res rlt lendback_bits lendpart_bits lendback_idx )
                 ( mem_note_vec_get syms cg call_name argstr )
                 // A returned closure is the caller's (mem_retclo_own_result):
