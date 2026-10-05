@@ -80,6 +80,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/std/simd.nu`
 
 // ── HttpResponse struct + lifecycle ───────────────────────────────────
 
@@ -239,27 +240,25 @@ $ `stdlib/ext/json.nu`
 // inject `\r\n<injected-header>` and split the response (CWE-113). RFC
 // 9110 §5.5 forbids CR/LF in field values anyway, so stripping them is
 // lossless for any well-formed header.
-@ __push_header_no_crlf ( Vec u ) out s str → v {
-    : i n ( nurl_str_len str )
-    : *u p # *u str
-    // Fast path — no CR/LF present (every well-formed header): one
-    // scan + one memcpy, instead of a per-byte push (which re-checked
-    // capacity per byte) driven by nurl_str_get (which re-ran strlen
-    // per call — O(n²) on the header string).
-    : ~ i k 0
-    : ~ b clean T
-    ~ & clean < k n {
-        : i c & 255 # i . p k
-        ? | == c 13 == c 10 { = clean F } { = k + k 1 }
-    }
-    ? clean {
-        ( bytes_extend_raw out str n )
+// The String's own length is used, so nothing is re-measured; a NUL
+// still ends the field there, as it did when this took a C string.
+@ __push_header_no_crlf ( Vec u ) out String str → v {
+    : i n ( string_len str )
+    : *u p # *u ( string_data str )
+    // Fast path — no NUL/CR/LF (every well-formed header): one vector
+    // scan + one memcpy.
+    : i hit ( simd_index_ctl3 p n )
+    ? < hit 0 {
+        ( bytes_extend_raw out # s p n )
     } {
-        = k 0
-        ~ < k n {
+        : ~ i k 0
+        : ~ b more T
+        ~ & more < k n {
             : i c & 255 # i . p k
-            ? | == c 13 == c 10 {} { ( vec_push [u] out # u c ) }
-            = k + k 1
+            ? == c 0 { = more F } {
+                ? | == c 13 == c 10 {} { ( vec_push [u] out # u c ) }
+                = k + k 1
+            }
         }
     }
 }
@@ -307,9 +306,9 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     ~ < k hcount {
         : Header h . hdata k
-        ( __push_header_no_crlf out ( string_data . h name ) )
+        ( __push_header_no_crlf out . h name )
         ( bytes_extend_str out `: ` )
-        ( __push_header_no_crlf out ( string_data . h value ) )
+        ( __push_header_no_crlf out . h value )
         ( bytes_extend_str out `\r\n` )
         = k + k 1
     }
@@ -446,9 +445,9 @@ $ `stdlib/ext/json.nu`
         : b is_te != 0 ( nurl_str_eq nm `Transfer-Encoding` )
         : b is_cl != 0 ( nurl_str_eq nm `Content-Length` )
         ? & ! is_te ! is_cl {
-            ( __push_header_no_crlf head nm )
+            ( __push_header_no_crlf head . h name )
             ( bytes_extend_str head `: ` )
-            ( __push_header_no_crlf head ( string_data . h value ) )
+            ( __push_header_no_crlf head . h value )
             ( bytes_extend_str head `\r\n` )
         } {}
         = k + k 1

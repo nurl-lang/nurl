@@ -140,6 +140,9 @@
 
 // Grow the underlying buffer so that cap >= need. Uses nurl_realloc;
 // safe to call when the current data pointer is null (cap == 0).
+// (Callers test `cap < need` first: this is the slow path, and a call per
+// push / reserve / string seal that only found room cost 8 % of an HTTP
+// server's user time.)
 @ __vec_grow [A] s ctl i need → v {
     : i cap ( __vec_cap_raw ctl )
     ? < cap 0 {
@@ -364,7 +367,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? | < idx 0 > idx len { ^ F } {}
-    ( __vec_grow [A] ctl + len 1 )
+    ? < ( __vec_cap_raw ctl ) + len 1 { ( __vec_grow [A] ctl + len 1 ) } {}
     : *A data # *A ( nurl_peek ctl 0 )
     // Shift right [idx..len) → [idx+1..len+1). Walk from the tail to
     // keep adjacent slots from clobbering each other.
@@ -522,7 +525,7 @@
     ? > n 0 {
         : s ctl . v ctl
         : i len ( __vec_len_raw ctl )
-        ( __vec_grow [A] ctl + len n )
+        ? < ( __vec_cap_raw ctl ) + len n { ( __vec_grow [A] ctl + len n ) } {}
     } {}
 }
 
@@ -536,7 +539,7 @@
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
     ? <= n len { ( nurl_poke ctl 1 n ) ^ T } {}
-    ( __vec_grow [A] ctl n )
+    ? < ( __vec_cap_raw ctl ) n { ( __vec_grow [A] ctl n ) } {}
     : s data ( __vec_data_raw ctl )
     : s tail # s + # i data * Z A len
     ( nurl_memset tail 0 * Z A - n len )
@@ -590,7 +593,7 @@
     ? <= cnt 0 { ^ } {}
     : s dctl . dst ctl
     : i dlen ( __vec_len_raw dctl )
-    ( __vec_grow [A] dctl + dlen cnt )
+    ? < ( __vec_cap_raw dctl ) + dlen cnt { ( __vec_grow [A] dctl + dlen cnt ) } {}
     : *A ddata # *A ( nurl_peek dctl 0 )
     : *A sdata # *A ( nurl_peek sctl 0 )
     : ~ i i 0
@@ -611,7 +614,7 @@
     ? > n 0 {
         : s dctl . dst ctl
         : i dlen ( __vec_len_raw dctl )
-        ( __vec_grow [A] dctl + dlen n )
+        ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow [A] dctl + dlen n ) } {}
         : *A ddata # *A ( nurl_peek dctl 0 )
         : *A sdata # *A ( nurl_peek sctl 0 )
         : ~ i i 0
@@ -630,7 +633,7 @@
     ? > n 0 {
         : s dctl . dst ctl
         : i dlen ( __vec_len_raw dctl )
-        ( __vec_grow [A] dctl + dlen n )
+        ? < ( __vec_cap_raw dctl ) + dlen n { ( __vec_grow [A] dctl + dlen n ) } {}
         : *A ddata # *A ( nurl_peek dctl 0 )
         : *A sdata # *A ( nurl_peek sctl 0 )
         : ~ i i 0

@@ -110,10 +110,28 @@ $ `stdlib/core/errors.nu`
 }
 
 // Append the decimal-text bytes of `n` onto `v` (no leading zeros, '-' for
-// negatives). Convenience over `bytes_extend_str ( nurl_str_int n )` —
-// hides the malloc'd intermediate from caller-side accounting.
+// negatives). The digits are written straight into `v` — no
+// intermediate string to allocate, measure and free. The loop works on
+// the non-positive magnitude so the minimum i64 needs no special case
+// (its negation overflows).
 @ bytes_push_int ( Vec u ) v i n → v {
-    ( bytes_extend_str v ( nurl_str_int n ) )
+    : i m ? < n 0 n - 0 n
+    : ~ i nd 1
+    : ~ i t m
+    ~ <= t -10 { = t / t 10 = nd + nd 1 }
+    : i sign ? < n 0 1 0
+    ( vec_reserve [u] v + nd sign )
+    : *u data ( vec_data [u] v )
+    : i len ( vec_len [u] v )
+    ? == sign 1 { = . data len # u 45 } {}
+    : ~ i k + + len sign - nd 1
+    = t m
+    ~ >= k + len sign {
+        = . data k # u + 48 - 0 % t 10
+        = t / t 10
+        = k - k 1
+    }
+    ( vec_set_len [u] v + + len sign nd )
 }
 
 // Bulk-append every byte of `src` to `v` via `nurl_memcpy`. Same shape

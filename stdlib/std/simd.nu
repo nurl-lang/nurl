@@ -81,6 +81,28 @@
     ^ -1
 }
 
+// First index in p[0..n) of a NUL, LF or CR byte, or -1: the bytes a
+// field value may not carry (RFC 9110 §5.5). Three compares OR'd per
+// 16-byte window; checked on every header value of every request.
+@ simd_index_ctl3 * u p i n → i {
+    : v128 vnul ( nurl_v128_bcast8 0 )
+    : v128 vcr ( nurl_v128_bcast8 13 )
+    : v128 vlf ( nurl_v128_bcast8 10 )
+    : ~ i k 0
+    ~ <= + k 16 n {
+        : v128 blk ( nurl_v128_ld # s + # i p k )
+        : i hit | | ( nurl_v128_eqmask8 blk vnul ) ( nurl_v128_eqmask8 blk vcr ) ( nurl_v128_eqmask8 blk vlf )
+        ? != hit 0 { ^ + k # i ( nurl_ctz # u64 hit ) } {}
+        = k + k 16
+    }
+    ~ < k n {
+        : i b & 255 # i . p k
+        ? | | == b 0 == b 10 == b 13 { ^ k } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
 // First index in p[0..n) at which "\r\n\r\n" starts, or -1.
 //
 // Same trick, four deep: a head terminator is CR at j, LF at j+1, CR at
