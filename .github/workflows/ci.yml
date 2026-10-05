@@ -744,7 +744,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # main measured 21-23 minutes against the old 25 (the instrumented
+    # corpus alone 14 of them); a corpus that grows by a dozen tests
+    # crossed it and the job was cancelled mid-run, not failed.
+    timeout-minutes: 35
     container:
       image: nurllang/ci:ubuntu24-20260821
       credentials:
