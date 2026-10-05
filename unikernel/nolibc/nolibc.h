@@ -97,6 +97,7 @@ long  ftell(FILE *f);
 
 /* ── process ────────────────────────────────────────────────────── */
 void  exit(int code);
+int   atexit(void (*fn)(void));
 void  abort(void);
 char *getenv(const char *name);
 int  *__errno_location(void);
