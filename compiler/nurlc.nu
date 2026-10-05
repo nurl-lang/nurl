@@ -32500,7 +32500,18 @@
 // Record the identifiers of the declaration body starting here (from the
 // next '{' to its match), and put the lexer back.
 @ __lazy_collect i lex s owner → v {
-    ? == g_lazy_edges 0 { ^ } {}
+    : b _ran ( __lazy_collect_at lex owner T )
+}
+
+// The same walk for a caller that would skip the body next: the lexer is
+// left past the closing '}' — where skip_balanced leaves it — so the body
+// is lexed once, not twice. F when collection is off and nothing moved.
+@ __lazy_collect_past i lex s owner → b {
+    ^ ( __lazy_collect_at lex owner F )
+}
+
+@ __lazy_collect_at i lex s owner b rewind → b {
+    ? == g_lazy_edges 0 { ^ F } {}
     : i save ( nurl_lex_cur_start lex )
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
         ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( __lazy_note owner ( nurl_lex_val lex ) ) } {}
@@ -32517,7 +32528,8 @@
             ( nurl_lex_advance lex )
         }
     } {}
-    ( nurl_lex_set_pos lex save )
+    ? rewind { ( nurl_lex_set_pos lex save ) } {}
+    ^ T
 }
 
 @ __lazy_note s owner s v → v {
@@ -42649,11 +42661,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
                                 ? == ( nurl_lex_type lex ) TT_LBRACE {
-                                    ( scan_note_empty_body lex syms fname ) ( __lazy_collect lex fname )
+                                    ( scan_note_empty_body lex syms fname )
                                     // (A generic hook — `Set_drop [A]` — is instantiated by
                                     // the late emitters: what it calls must be reached.)
                                     ? ( __lazy_is_root fname F ) { ( nurl_sym_append_word g_lazy_edges `__roots__` fname ) } {}
-                                    ( skip_balanced lex ) }
+                                    ? ! ( __lazy_collect_past lex fname ) { ( skip_balanced lex ) } {} }
                                 { ( die_pos lex template_line template_col ( nurl_str_cat3
                                     `a generic function declaration continues with its body — '@ ` fname
                                     ` [ … ] … → <type> { … }'. This one has no '{', so the declaration after it would be read as its body.` ) ) }
@@ -42781,10 +42793,13 @@ u` ) ( nurl_print q ) ( nurl_print `:
                                 }
                                 {}
                                 ( scan_note_empty_body lex syms fname )
-                                ( __lazy_collect lex fname )
                                 ? ( __lazy_is_root fname decl_eager ) { ( nurl_sym_append_word g_lazy_edges `__roots__` fname ) } {}
                                 ? & != 0 g_lazy_edges != 0 ( nurl_str_len fname_raw_scan ) { ( nurl_sym_append_word g_lazy_edges ( nurl_str_cat `~` fname_raw_scan ) fname ) } {}
-                                ? != 0 ( nurl_str_ends fname `_drop` ) { ( scan_skip_drop_body lex syms fname ) } { ( skip_balanced lex ) }
+                                // A drop body is read again below, so its walk puts the lexer back.
+                                ? != 0 ( nurl_str_ends fname `_drop` ) {
+                                    ( __lazy_collect lex fname )
+                                    ( scan_skip_drop_body lex syms fname )
+                                } { ? ! ( __lazy_collect_past lex fname ) { ( skip_balanced lex ) } {} }
                             }
                         }
                         { ( skip_balanced lex ) }
