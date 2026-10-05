@@ -166,7 +166,6 @@ a space-separated string of nurlc flags from a fixed allow-list:
 | Flag | What it does |
 |---|---|
 | `--lint` | report unused symbols and imports, and release calls the compiler makes redundant (`[redundant-free]`, docs/MEMORY.md §1) |
-| `--no-borrowck` | compile with the borrow checker off |
 | `--strict-borrowck` | the stricter §2.4 argument rules |
 | `--no-strict-arity` | accept the n-ary `&` / `\|` spellings |
 | `--no-cpu-dispatch` | no x86-64-v3 clone for `simd` functions |

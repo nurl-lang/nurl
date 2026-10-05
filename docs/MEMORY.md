@@ -31,16 +31,17 @@ v2.3).
   guarantee that every accepted program is memory-safe or leak-free.
 - **A borrow checker runs by default.** A diagnostic analysis pass
   catches use-after-move, alias double-free, and closures that escape
-  the stack frame they point into. It is on unless you pass
-  `--no-borrowck`. It is a *diagnostic* layered on the auto-drop base,
+  the stack frame they point into. It is always on
+  (`--no-borrowck` is deprecated). It is a *diagnostic* layered on the auto-drop base,
   not a Rust-style borrow system — see the contract in §6.
 - **It is a diagnostic pass and its diagnostics are hard errors.**
   The borrow checker emits `error:` lines and the compiler exits
   non-zero with a count of violations after walking the whole
   program (so every error surfaces in one run). It *never* changes
   generated code — a borrow-clean program compiles to byte-identical
-  IR with or without the checker. `--no-borrowck` remains the
-  escape hatch for a false positive.
+  IR with or without the checker. A false positive is a compiler bug:
+  report it (https://github.com/nurl-lang/nurl/issues). `--no-borrowck`
+  still exists but is deprecated and warns.
 
 ## 1. Ownership and auto-drop
 
@@ -286,18 +287,19 @@ relied on a `_free` spelling need this contract.
 Compiler-managed enum transfer uses static LLVM constants emitted after this
 inference. They let LLVM remove the unused ownership path without depending
 on declaration order. Ownership inference and transfer code generation remain
-active with `--no-borrowck`; that flag only disables diagnostics.
+active with the deprecated `--no-borrowck`; that flag only disables
+diagnostics, and every ownership summary codegen reads is recorded either way.
 
 ## 2. The borrow checker
 
 The borrow checker is a **diagnostic-only** static analysis. It is
-**on by default**; `--no-borrowck` disables it. Because it only emits
+**always on**; `--no-borrowck` (deprecated, warns) disables it. Because it only emits
 diagnostics and never lowers anything, a borrow-clean program produces
 the exact same IR either way — the bootstrap fixed point is
 unaffected.
 
-All eleven rules below (§2.1–§2.8, plus §2.1b, §2.11 and §2.12) emit `error:`. Use `--no-borrowck`
-for the escape hatch if a corner case slips through, and
+All eleven rules below (§2.1–§2.8, plus §2.1b, §2.11 and §2.12) emit `error:`. A corner case that
+rejects a correct program is a false positive: report it as a bug. And
 `--strict-borrowck` (off by default) to add three opt-in checks on top —
 see §2.9.
 

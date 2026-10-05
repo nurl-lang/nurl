@@ -23,7 +23,7 @@ REM    --emit-ir            Stop after stage 1, leave only the .ll
 REM    --emit-asm           Emit .s (native assembly) next to the .ll
 REM    -O0 / -O1 / -O2 / -O3   Clang optimisation level (default -O2)
 REM    -g / --debug         Pass -g to clang (DWARF/CodeView line tables)
-REM    --no-borrowck        Forwarded to nurlc: bypass the borrow checker
+REM    --no-borrowck        Deprecated, forwarded to nurlc (which warns)
 REM    --strict-borrowck    Forwarded to nurlc: the opt-in extra checks
 REM    --strict-arity /     Forwarded to nurlc: n-ary `&`/`|` arity trap
 REM    --no-strict-arity      as error (default) / warning

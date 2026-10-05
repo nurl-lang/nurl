@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_maybe_double_free.nu:25: error: use of possibly-moved value 'xs' — it was consumed on only some paths, at line 24; on that path this reads a freed buffer. Consume it on every path, or rebind it (= xs …) on the path that consumed it
     ( vec_free [i] xs )
-error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
+error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

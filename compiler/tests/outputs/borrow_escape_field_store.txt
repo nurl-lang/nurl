@@ -4,4 +4,4 @@ compiler/tests/borrow_escape_field_store.nu:26: error: storing into a field of '
         = . box cb f
 compiler/tests/borrow_escape_field_store.nu:39: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
     ^ box
-error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)
+error: compilation aborted — 2 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

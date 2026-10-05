@@ -96,12 +96,14 @@ $ `nurlapi/pptws.nu`
 // Every flag below changes only how the compiler CHECKS the one source
 // it was handed; none of them names a path or writes a file.
 //
+// `--no-borrowck` is deprecated and not offered: a program the checker
+// rejects wrongly is a compiler bug to report, not a build to force.
+//
 // The match returns the STATIC literal rather than the caller's bytes,
 // so what lands in argv outlives the request's split parts and cannot be
 // a substring the allow-list read differently than the compiler will.
 @ nurlc_flag_literal s f → s {
     ? != 0 ( nurl_str_eq f `--lint` ) { ^ `--lint` } {}
-    ? != 0 ( nurl_str_eq f `--no-borrowck` ) { ^ `--no-borrowck` } {}
     ? != 0 ( nurl_str_eq f `--strict-borrowck` ) { ^ `--strict-borrowck` } {}
     ? != 0 ( nurl_str_eq f `--no-strict-arity` ) { ^ `--no-strict-arity` } {}
     ? != 0 ( nurl_str_eq f `--no-cpu-dispatch` ) { ^ `--no-cpu-dispatch` } {}
@@ -110,7 +112,7 @@ $ `nurlapi/pptws.nu`
 
 // The same list as prose, for the schema and the rejection message.
 @ nurlc_flags_allowed_list → s {
-    ^ `--lint --no-borrowck --strict-borrowck --no-strict-arity --no-cpu-dispatch`
+    ^ `--lint --strict-borrowck --no-strict-arity --no-cpu-dispatch`
 }
 
 // The FIRST word of `flags` that is not on the list, or an empty String
@@ -4007,7 +4009,7 @@ s combined_stdout s combined_stderr → v {
     : Json sc ( mcp_schema_obj )
     ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` T )
     ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
-    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
+    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
     ^ sc
 }
 
@@ -4023,7 +4025,7 @@ s combined_stdout s combined_stderr → v {
     ( json_arr_push __target_vals ( json_str_lit `macos-arm64` ) )
     ( mcp_schema_prop_enum sc `target` `string` `Cross-compile target id` __target_vals T )
     ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
-    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
+    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
     ^ sc
 }
 
@@ -4129,7 +4131,7 @@ s combined_stdout s combined_stderr → v {
     ( mcp_schema_prop sc `source` `string` `NURL source code (full file contents)` F )
     ( mcp_schema_prop sc `filename` `string` `Logical filename for diagnostics (default main.nu)` F )
     ( mcp_schema_prop sc `run` `boolean` `Also run the compiled binary and return exit code, stdout, stderr. Unsandboxed code execution — disabled unless the operator set NURL_ALLOW_RUN=1 (asking while off returns an error, not a silent build). nurl_build_unikernel is the sandboxed alternative.` F )
-    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --no-borrowck, --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
+    ( mcp_schema_prop sc `flags` `string` `Space-separated nurlc flags, allow-listed: --lint (report an allocation nothing owns — the findings arrive in the compiler stderr of an otherwise normal build), --strict-borrowck, --no-strict-arity, --no-cpu-dispatch. Anything else is a 400, not a silent drop.` F )
     ^ sc
 }
 

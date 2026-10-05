@@ -8,4 +8,4 @@ compiler/tests/borrow_store_consume.nu:36: error: 'x' is consumed here, but its 
     ( string_free x )
 compiler/tests/borrow_store_consume.nu:44: error: 'x' is consumed here, but its value was stored into an owner at line 43 (an aggregate literal, or a call that keeps it, like vec_push) — that owner drops it now, so this is a second release (a double free). Reading 'x' is fine; to hand a value on AND keep one in the owner, store a copy: ( mem_dup x ) — for a shared handle (Arc, Mutex, Channel, Regex, …) that is one more reference to the same value.
     ( string_free x )
-error: compilation aborted — 4 borrow-checker violations (re-run with --no-borrowck to bypass)
+error: compilation aborted — 4 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

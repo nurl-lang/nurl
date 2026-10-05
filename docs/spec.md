@@ -1788,7 +1788,8 @@ borrow.
 ## 9. Borrow checker
 
 The borrow checker is a static analysis pass over the parsed program.
-It is **on by default**; `--no-borrowck` disables it, and
+It is **always on** (`--no-borrowck` is deprecated: a correct program it
+rejects is a false positive to report as a bug), and
 `--strict-borrowck` (off by default) adds three opt-in checks on top
 (see [`docs/MEMORY.md` §2.9](MEMORY.md)). Diagnostics are **hard
 errors**; the compiler exits non-zero

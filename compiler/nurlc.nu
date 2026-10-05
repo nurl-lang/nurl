@@ -44821,7 +44821,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( nurl_print `  --sanitize-address  mark every generated function for AddressSanitizer\n` )
     ( nurl_print `  --lint              run lint-only diagnostics: unused symbols and imports,\n` )
     ( nurl_print `                      a redundant release call ([redundant-free])\n` )
-    ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
+    ( nurl_print `  --no-borrowck       deprecated: disable the borrow-checker pass (report a false positive as a bug instead)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
     ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
@@ -44963,7 +44963,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         { ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `error: compilation aborted — `
             ( nurl_str_int g_bck_errors )
             ? > g_bck_errors 1 ` borrow-checker violations` ` borrow-checker violation` )
-            ` (re-run with --no-borrowck to bypass)` ) )
+            ` (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)` ) )
             = compile_error 1 }
         {}
     } {}
@@ -45024,7 +45024,8 @@ u` ) ( nurl_print q ) ( nurl_print `:
                         { ? ( seq a `--borrowck` )
                             { = g_borrowck 1 }
                             { ? ( seq a `--no-borrowck` )
-                                { = g_borrowck 0 }
+                                { = g_borrowck 0
+                                    ( nurl_eprintln `warning: --no-borrowck is deprecated and will be removed. A program the borrow checker rejects although it is correct is a false positive - please report it as a bug at https://github.com/nurl-lang/nurl/issues instead of bypassing the checker.` ) }
                                 { ? ( seq a `--no-maybe-moved` )
                                     { = g_maybe_moved 0 }
                                     { ? ( seq a `--strict-borrowck` )

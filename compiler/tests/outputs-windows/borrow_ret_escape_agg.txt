@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_ret_escape_agg.nu:20: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
     ^ ( wrap f )
-error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
+error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
