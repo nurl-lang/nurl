@@ -30,8 +30,11 @@
 //   - Mutable globals (: ~ i NAME value) — the RNG state
 //   - Bitwise & / | on i64
 //   - Nested prefix arithmetic and chained ternaries
-//   - Heap arrays via malloc + # *i cast
+//   - Heap arrays via malloc + # *i cast (freed by hand), and a
+//     per-frame Vec scratch buffer that drops itself
 //   - Toroidal wrap-around via modular arithmetic
+
+$ `stdlib/core/vec.nu`
 
 // ─── Config ───────────────────────────────────────────────────
 
@@ -192,13 +195,9 @@
 // ─── Rendering ────────────────────────────────────────────────
 
 @ render i tick_no * i xs * i ys * i bs i N → v {
-    // Cell bitmask buffer
-    : *i grid # *i ( malloc * * W H 8 )
-    : ~ i g 0
-    ~ < g * W H {
-        = . grid g 0
-        = g + g 1
-    }
+    // Cell bitmask buffer: a zeroed Vec, freed automatically on return
+    : ( Vec i ) cells ( vec_zeroed [i] * W H )
+    : *i grid ( vec_data [i] cells )
 
     : ~ i k 0
     ~ < k N {
@@ -295,5 +294,9 @@
     ( nurl_print `\n…time marches on. Final tick = ` )
     ( nurl_print ( nurl_str_int TICKS ) )
     ( nurl_print `.\n` )
+
+    ( free # s xs )
+    ( free # s ys )
+    ( free # s bs )
     ^ 0
 }

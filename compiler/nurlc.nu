@@ -23087,6 +23087,19 @@
         ( nurl_sym_has_word syms `__owned_closure_envs__` bck_rhs_val )
         : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
+        // `= g # i v`: an owned handle's address kept in a global — the
+        // program manages that value by hand from here (a singleton cache
+        // the global hands out again, `^ # ( Vec T ) g`). The binding stops
+        // owning it: not dropped at its scope's end, and handed back by
+        // `^ v` as a lend, not as the caller's (taken for owned, the caller
+        // freed what the global still pointed to).
+        ? & & == bck_rhs_tt TT_HASH != 0 ( nurl_sym_len2 syms name `__global` ) != 0 ( nurl_sym_len syms `__last_cast_src__` ) {
+            : s __gcp ( mem_udrop_ptr_of syms ( nurl_sym_get syms `__last_cast_src__` ) )
+            ? & != 0 ( nurl_str_len __gcp ) ( __is_handle_ty ( nurl_sym_get2 syms __gcp `__udty` ) ) {
+                ( mem_udrop_flag_set syms cg __gcp `0` )
+                ( __sb syms __gcp `dyn` )
+            } {}
+        } {}
         // Borrow checker: `= f \ … { … v … }` rebinds `f` to a closure
         // holding `v`, exactly as the `:` form does — without this the
         // whole use-after-free family came back by spelling the binding
@@ -24769,6 +24782,9 @@
     ( bck_save_expr_carriers syms `__last_cast_params__` source_tt source_val )
     // `# T x` of a T binding is x itself (mem_udrop_bind_flag: a cursor).
     ( nurl_sym_def syms `__last_cast_ident__` ? & ( is_ident_tok source_tt ) ( seq st dt ) ( nurl_str_cat source_val `` ) `` )
+    // …and, whatever the types, the binding cast (gen_assign: an owned
+    // handle's address stored in a global).
+    ( nurl_sym_def syms `__last_cast_src__` ? ( is_ident_tok source_tt ) ( nurl_str_cat source_val `` ) `` )
     // Whether the value cast is a binding at all (`# s x`, `# s . h f`, a
     // cast of such a cast) rather than something computed from one —
     // `# s ( rcbox_new … @ T { … v } )` only READ `v` (gen_agg_lit).
@@ -30333,8 +30349,16 @@
 @ origin_call_arg i syms i result s callee i index i tt s value → v {
     : i argument ( origin_expr syms tt value )
     ? == argument 0 { ^ } {}
+    // A call through a closure value only borrows its arguments (a closure's
+    // parameters always do, docs/MEMORY.md §7.5): nothing it is handed
+    // stays with it, so the argument is verified — taken for kept, a
+    // caller's temporary handed on to a callback was never dropped.
+    : b __clo_callee & | != 0 ( nurl_sym_len2 syms callee `__ptr` ) != 0 ( nurl_sym_len2 syms callee `__param` )
+    ( __is_closure_ty ( nurl_sym_get syms callee ) )
+    // (What it hands back may still be the argument: the result edge below
+    // stays.)
     : i current ( nurl_str_to_int ( nurl_sym_get syms `__origin_return__` ) )
-    ? & != current 0 | == result 0 ! ( mem_ffi_arg_local syms callee index ) {
+    ? & & ! __clo_callee != current 0 | == result 0 ! ( mem_ffi_arg_local syms callee index ) {
         : s caller # s ( nurl_peek # s current 7 )
         : i unverified ( origin_summary g_fn_unverified caller )
         ? | == result 0 & == 0 ( nurl_sym_len2 syms callee `__nurlfn` )
@@ -30344,7 +30368,7 @@
             ( origin_edge argument unverified ( origin_summary g_fn_unverified callee ) index )
         }
     } {}
-    ? | == result 0 & & == 0 ( nurl_sym_len2 syms callee `__nurlfn` )
+    ? & ! __clo_callee | == result 0 & & == 0 ( nurl_sym_len2 syms callee `__nurlfn` )
     == 0 ( nurl_sym_len2 syms callee `__garity` ) ! ( mem_ffi_arg_local syms callee index )
     { ( origin_guard_barrier argument ) } {}
     ? == result 0 { ^ } {}

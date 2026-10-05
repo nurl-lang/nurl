@@ -49,6 +49,11 @@ $ `stdlib/std/float.nu`
     ^ @ ( Stack T ) { # *T ( alloc [T] cap ) 0 cap }
 }
 
+// The store is raw `alloc` memory: release it by hand when done.
+@ stack_free [T] ( Stack T ) st → v {
+    ( nurl_free # s . st data )
+}
+
 @ stack_push [T] inout ( Stack T ) s T v → v {
     // nested member-path assignment + variable-index pointer store:
     // s.data[s.len] = v
@@ -168,6 +173,7 @@ $ `stdlib/std/float.nu`
 
     // (1) inout stack, forwarded into vm_run which forwards it again.
     : ~ ( Stack f ) st ( stack_new [f] STACK_CAP )
+    ; { ( stack_free [f] st ) }
     : f result ( vm_run st prog ops )
 
     ( nurl_print `vm result = ` ) ( show result )  // (2) trait dispatch on f

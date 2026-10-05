@@ -77,5 +77,7 @@
     }
 
     ( nurl_print `\nFrom a single seed cell: pure chaos — yet 100% deterministic.\n` )
+    ( free # s cur )
+    ( free # s nxt )
     ^ 0
 }

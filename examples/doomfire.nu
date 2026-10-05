@@ -115,5 +115,7 @@
     }
 
     ( canvas_close )
+    ( free # s fire )
+    ( free # s pal )
     ^ 0
 }

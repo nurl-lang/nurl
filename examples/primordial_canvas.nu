@@ -223,5 +223,8 @@
     }
 
     ( canvas_close )
+    ( free # s xs )
+    ( free # s ys )
+    ( free # s bs )
     ^ 0
 }

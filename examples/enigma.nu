@@ -109,5 +109,10 @@
     ( nurl_print ( nurl_str_int k ) )
     ( nurl_print `\n` )
 
+    // Heap nodes are raw malloc memory: free them by hand
+    ( free # s n3 )
+    ( free # s n2 )
+    ( free # s n1 )
+
     ^ 0
 }
