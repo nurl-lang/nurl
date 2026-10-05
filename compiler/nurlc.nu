@@ -4179,7 +4179,9 @@
     // lowered type is an integer. Record the expression's own provenance,
     // not the last identifier visited while parsing it.
     ( bck_record_expr_return syms ret_first_tt ret_first_val )
-    ? & != g_borrowck 0 != 0 ( nurl_str_len ret_first_root )
+    // (Ownership summaries, recorded with or without the checker: the code
+    // a program compiles to must not depend on --no-borrowck.)
+    ? != 0 ( nurl_str_len ret_first_root )
     { ( bck_record_ret_alias syms ret_first_root ) }
     {}
     // A field is part of the parameter, not the parameter: a caller that
@@ -4200,7 +4202,7 @@
     // `id` returns its own parameter. gen_call published which
     // arguments sit at those positions; expanding them through
     // bck_param_carriers makes the chain transitive to any depth.
-    ? & != g_borrowck 0 ret_is_direct_call
+    ? ret_is_direct_call
     { : s __rpc ( nurl_sym_get syms `__last_call_ret_param_idents__` )
         ( bck_record_ret_param_list syms __rpc ) }
     {}
@@ -4254,7 +4256,7 @@
     // below reads; only `?` / `??` returns consult it, because after a
     // CALL that channel holds the handle-alias answer, which is a
     // different question (g_fn_ret_alias vs g_fn_ret_param).
-    ? & != g_borrowck 0 ret_is_det_join
+    ? ret_is_det_join
     { : s __rpj ( nurl_sym_get syms `__last_phi_idents__` )
         ( bck_record_ret_param_list syms __rpj ) }
     {}
@@ -4264,18 +4266,17 @@
     // though the return is not a bare identifier. Ownership only — the
     // §2.8 refdepth summary above deliberately stays on the strict
     // `^ p` form, so no escape diagnostic moves because of this.
-    ? != g_borrowck 0
-    { : ~ s __ra_rest ( nurl_sym_get syms `__last_phi_idents__` )
-        ~ != 0 ( nurl_str_len __ra_rest ) {
-            : s __ra_w ( str_first_word __ra_rest )
-            = __ra_rest ( str_skip_word __ra_rest )
-            ( bck_record_ret_alias syms __ra_w )
-        } }
+    : ~ s __ra_rest ( nurl_sym_get syms `__last_phi_idents__` )
+    ~ != 0 ( nurl_str_len __ra_rest ) {
+        : s __ra_w ( str_first_word __ra_rest )
+        = __ra_rest ( str_skip_word __ra_rest )
+        ( bck_record_ret_alias syms __ra_w )
+    }
     {}
     // §2.8 (aggregate form): `^ @ T { … param … }` embeds parameters as
     // fields — the returned struct hands each one back out, so record
     // them too. gen_agg_lit published the embedded parameter names.
-    ? & != g_borrowck 0 == ret_first_tt TT_AT
+    ? == ret_first_tt TT_AT
     { : ~ s __rp_rest ( nurl_sym_get syms `__last_agg_param_idents__` )
         ~ != 0 ( nurl_str_len __rp_rest ) {
             : s __rp_w ( str_first_word __rp_rest )
@@ -4287,7 +4288,7 @@
     // closure captured back out inside its env — the same situation as
     // the aggregate above, one syntax away. gen_closure_expr published
     // which enclosing parameters it captured.
-    ? & != g_borrowck 0 == ret_first_tt TT_BACKSLASH
+    ? == ret_first_tt TT_BACKSLASH
     { : ~ s __cp_rest ( nurl_sym_get syms `__last_closure_param_idents__` )
         ~ != 0 ( nurl_str_len __cp_rest ) {
             : s __cp_w ( str_first_word __cp_rest )
@@ -6513,13 +6514,9 @@
     ^ != 0 ( nurl_sym_len2 syms fname `__body_done` )
 }
 
-@ mem_arg_owner i syms i cg s callee s generic i index s value → s {
-    : b user | != 0 ( nurl_sym_len2 syms generic `__nurlfn` )
-    != 0 ( nurl_sym_len2 syms generic `__garity` )
-    ? ! user {
-        ? ( mem_consumer_arg_drop_safe syms callee index ) { ^ ( nurl_str_cat value `` ) } {}
-        ^ ( nurl_str_cat `null` `` )
-    } {}
+// `@.__nurl_argdrop.N` for argument `index` of `callee`
+// (mem_consumer_arg_drop_safe, resolved at module end).
+@ mem_argdrop_flag s callee s generic i index → s {
     : s key ( nurl_str_cat4 `argdrop##` callee `##` ( nurl_str_int index ) )
     : s known ( nurl_sym_get g_pending_impl key )
     : ~ i number ( nurl_str_to_int known )
@@ -6531,7 +6528,17 @@
         ( nurl_str_cat4 ( nurl_str_int number ) ` ` callee
         ( nurl_str_cat4 ` ` generic ` ` ( nurl_str_int index ) ) ) )
     } {}
-    : s flag ( nurl_str_cat `@.__nurl_argdrop.` ( nurl_str_int number ) )
+    ^ ( nurl_str_cat `@.__nurl_argdrop.` ( nurl_str_int number ) )
+}
+
+@ mem_arg_owner i syms i cg s callee s generic i index s value → s {
+    : b user | != 0 ( nurl_sym_len2 syms generic `__nurlfn` )
+    != 0 ( nurl_sym_len2 syms generic `__garity` )
+    ? ! user {
+        ? ( mem_consumer_arg_drop_safe syms callee index ) { ^ ( nurl_str_cat value `` ) } {}
+        ^ ( nurl_str_cat `null` `` )
+    } {}
+    : s flag ( mem_argdrop_flag callee generic index )
     : s cond ( nurl_cg_reg cg )
     : s owner ( nurl_cg_reg cg )
     ( emit_sink_flag_load flag cond )
@@ -25939,7 +25946,7 @@
         // §2.8: record a field that is exactly a bare parameter of the
         // enclosing function, so `^ @ T { … param … }` propagates that
         // parameter's reference out through the returned aggregate.
-        ? & & != g_borrowck 0 ( is_ident_tok fld_first_tt )
+        ? & ( is_ident_tok fld_first_tt )
         ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
         { : s __fc0 ( bck_param_carriers syms fld_first_val )
             : ~ s __fc ( nurl_str_cat __fc0 `` )
@@ -25964,7 +25971,7 @@
         // unrelated argument (`{ ( f @ Inner { cb } ) }`), which the
         // result need not carry — an over-claim, and this summary is
         // read by a diagnostic that must not false-positive.
-        ? & != g_borrowck 0 | == fld_first_tt TT_AT == fld_first_tt TT_BACKSLASH
+        ? | == fld_first_tt TT_AT == fld_first_tt TT_BACKSLASH
         { : ~ s __ap_rest ? == fld_first_tt TT_AT
             ( nurl_sym_get syms `__last_agg_param_idents__` )
             ( nurl_sym_get syms `__last_closure_param_idents__` )
@@ -26810,8 +26817,7 @@
     // this list — only a parameter that is already a stack reference
     // composes through nesting, via agg_refdepth above; an interprocedural
     // param nested inside an inner aggregate is a remaining boundary.
-    ? != g_borrowck 0
-    { ( nurl_sym_def syms `__last_agg_param_idents__` agg_param_idents ) } {}
+    ( nurl_sym_def syms `__last_agg_param_idents__` agg_param_idents )
     result
 }
 
@@ -28666,7 +28672,7 @@
                 { = g_last_closure_nonsend ( nurl_str_cat cap_inner `` ) } {} }
             // §2.8: a captured parameter of the enclosing function rides
             // out inside this closure's env.
-            ? & != g_borrowck 0 ( str_contains_word outer_param_names cap_name )
+            ? ( str_contains_word outer_param_names cap_name )
             { ? ! ( str_contains_word closure_param_idents cap_name )
                 { = closure_param_idents
                     ? == 0 ( nurl_str_len closure_param_idents )
@@ -29908,20 +29914,20 @@
     {}
 }
 
+// An ownership summary: recorded with or without the checker, since
+// codegen (mem_handle_temp_drop_safe) reads it too.
 @ bck_record_inferred_escape i syms s arg_name → v {
-    ? == g_borrowck 0 {} {
-        : s pn ( nurl_sym_get syms `__fn_param_names__` )
-        : i idx ( str_word_index pn arg_name )
-        ? >= idx 0
-        { : s cur ( nurl_sym_get syms `__fn_inferred_escape__` )
-            : s new ( nurl_str_int idx )
-            ? ! ( str_contains_word cur new )
-            { ( nurl_sym_def syms `__fn_inferred_escape__`
-                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
-                ( nurl_str_cat3 cur ` ` new ) ) }
-            {} }
-        {}
-    }
+    : s pn ( nurl_sym_get syms `__fn_param_names__` )
+    : i idx ( str_word_index pn arg_name )
+    ? >= idx 0
+    { : s cur ( nurl_sym_get syms `__fn_inferred_escape__` )
+        : s new ( nurl_str_int idx )
+        ? ! ( str_contains_word cur new )
+        { ( nurl_sym_def syms `__fn_inferred_escape__`
+            ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
+            ( nurl_str_cat3 cur ` ` new ) ) }
+        {} }
+    {}
 }
 
 // Return-escape inference (docs/MEMORY.md §2.8): record that the
@@ -30486,19 +30492,19 @@
 // ownership twin of bck_record_ret_param — same shape, separate map,
 // because a caller asks the two questions for different reasons.
 @ bck_record_ret_alias i syms s name → v {
-    ? == g_borrowck 0 {} {
-        : s pn ( nurl_sym_get syms `__fn_param_names__` )
-        : i idx ( str_word_index pn name )
-        ? >= idx 0
-        { : s cur ( nurl_sym_get syms `__fn_ret_alias__` )
-            : s new ( nurl_str_int idx )
-            ? ! ( str_contains_word cur new )
-            { ( nurl_sym_def syms `__fn_ret_alias__`
-                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
-                ( nurl_str_cat3 cur ` ` new ) ) }
-            {} }
-        {}
-    }
+    // An ownership summary (callers copy or drop by it): recorded with or
+    // without the checker, so --no-borrowck changes no generated code.
+    : s pn ( nurl_sym_get syms `__fn_param_names__` )
+    : i idx ( str_word_index pn name )
+    ? >= idx 0
+    { : s cur ( nurl_sym_get syms `__fn_ret_alias__` )
+        : s new ( nurl_str_int idx )
+        ? ! ( str_contains_word cur new )
+        { ( nurl_sym_def syms `__fn_ret_alias__`
+            ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
+            ( nurl_str_cat3 cur ` ` new ) ) }
+        {} }
+    {}
 }
 
 // idx-th space-separated word of `list`, or empty when out of range.
@@ -30543,7 +30549,7 @@
 
 @ bck_ret_alias_idents s ret_alias s arg_idents → s {
     : ~ s out ``
-    ? | == g_borrowck 0 == 0 ( nurl_str_len ret_alias ) { ^ out } {}
+    ? == 0 ( nurl_str_len ret_alias ) { ^ out } {}
     : ~ s rest ( nurl_str_cat ret_alias `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest )
