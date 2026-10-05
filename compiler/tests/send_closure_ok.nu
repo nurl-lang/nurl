@@ -1,6 +1,7 @@
 // send_closure_ok.nu — the value-following Send check accepts what may
 // cross: a closure capturing an Arc handed to a function that spawns it,
 // one in a struct queued on a channel, and one read out of a field.
+// requires: fibers
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/async.nu`
 $ `stdlib/std/channel.nu`
