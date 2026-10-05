@@ -83,26 +83,37 @@
 
 & `c` @ nurl_atomic_i64_load *u p → i
 
-: ArcImpl [T] {
+& `c` @ nurl_atomic_i64_inc_if_live *u p → i
+
+// [ count ][ weak ][ value ]. `weak` counts the Weak handles plus one held
+// by the strong handles together: the last strong handle drops the value
+// and gives that one up, and whoever takes `weak` to zero frees the block
+// (Rust's scheme — no strong and weak race over the free).
+: ArcImpl [A] {
     i count
-    T value
+    i weak
+    A value
 }
 
-: Arc [T] { s ctl }
+: Arc [A] { s ctl }
+
+: ArcWeak [A] { s ctl }
 
 // ── Constructors ────────────────────────────────────────────────────
 
-@ arc_new [T] T x → ( Arc T ) {
-    : *( ArcImpl T ) impl # *( ArcImpl T ) ( nurl_alloc Z ( ArcImpl T ) )
+@ arc_new [A] A x → ( Arc A ) {
+    : *( ArcImpl A ) impl # *( ArcImpl A ) ( nurl_alloc Z ( ArcImpl A ) )
     = . impl count 1
+    = . impl weak 1
     = . impl value x
-    ^ @ ( Arc T ) { # s impl }
+    ^ @ ( Arc A ) { # s impl }
 }
 
-@ arc_zero [T] → ( Arc T ) {
-    : *( ArcImpl T ) impl # *( ArcImpl T ) ( nurl_zalloc Z ( ArcImpl T ) )
+@ arc_zero [A] → ( Arc A ) {
+    : *( ArcImpl A ) impl # *( ArcImpl A ) ( nurl_zalloc Z ( ArcImpl A ) )
     = . impl count 1
-    ^ @ ( Arc T ) { # s impl }
+    = . impl weak 1
+    ^ @ ( Arc A ) { # s impl }
 }
 
 // ── Inspectors ──────────────────────────────────────────────────────
@@ -110,29 +121,38 @@
 // Snapshot of the count. Racy by definition — by the time the value
 // is returned, another thread may have already cloned or freed. Use
 // for diagnostics and tests; do not branch on it for correctness.
-@ arc_strong [T] ( Arc T ) r → i {
+@ arc_strong [A] ( Arc A ) r → i {
     : *u cp # *u . r ctl
     ^ ( nurl_atomic_i64_load cp )
 }
 
 // ── Access ──────────────────────────────────────────────────────────
 
-@ arc_get [T] ( Arc T ) r → T {
-    : *( ArcImpl T ) impl # *( ArcImpl T ) . r ctl
+// The shared value. For a payload that can hold a handle back to this Arc
+// (mem_ts_cyclic) it is a COPY: such an Arc is frozen once made, so no
+// cycle of shared handles can be closed through it (docs/MEMORY.md §7.7).
+@ arc_get [A] ( Arc A ) r → A {
+    : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
+    ? ( mem_ts_cyclic [( Arc A )] ) {
+        : A v . impl value
+        ^ ( mem_dup v )
+    } {}
     ^ . impl value
 }
 
-@ arc_set [T] ( Arc T ) r T x → v {
-    : *( ArcImpl T ) impl # *( ArcImpl T ) . r ctl
+@ arc_set [A] ( Arc A ) r A x → v {
+    ( mem_ts_frozen_only [( Arc A )] arc_set )
+    : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
     // The old value is dropped.
-    : T old . impl value
+    : A old . impl value
     ( mem_take old )
     = . impl value x
 }
 
-@ arc_ptr [T] ( Arc T ) r → *T {
+@ arc_ptr [A] ( Arc A ) r → *A {
+    ( mem_ts_frozen_only [( Arc A )] arc_ptr )
     : i base # i . r ctl
-    : *T p # *T + base 8
+    : *A p # *A + base 16
     ^ p
 }
 
@@ -140,12 +160,12 @@
 
 // Atomic increment of the strong count. After this call you have
 // two Arc handles to the same storage, each dropped by its owner.
-@ arc_clone [T] ( Arc T ) r → ( Arc T ) {
+@ arc_clone [A] ( Arc A ) r → ( Arc A ) {
     : *u cp # *u . r ctl
     ( nurl_atomic_i64_inc cp )
     // A handle of its own (not a view of `r`): the caller owns it.
     : s c . r ctl
-    ^ @ ( Arc T ) { c }
+    ^ @ ( Arc A ) { c }
 }
 
 // ── Lifecycle ───────────────────────────────────────────────────────
@@ -153,44 +173,85 @@
 // What dropping a handle does (its owner does it at scope exit — docs/
 // MEMORY.md §7.6): an atomic decrement, and the last handle drops the
 // value and releases the storage.
-@ Arc_drop [T] sink ( Arc T ) r → v {
+@ Arc_drop [A] sink ( Arc A ) r → v {
     // This IS the drop: `r` is not dropped again on the way out.
     ( mem_forget r )
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
         : i n ( nurl_atomic_i64_dec_fetch cp )
         ? <= n 0 {
-            : *( ArcImpl T ) impl # *( ArcImpl T ) . r ctl
-            : T v . impl value
+            : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
+            : A v . impl value
             ( mem_take v )
-            ( nurl_free # s cp )
+            ( __arc_weak_release # s cp )
         } {}
     }
 }
 
+// The strong handles' shared Weak, or a Weak handle, goes: the last frees
+// the block.
+@ __arc_weak_release s ctl → v {
+    : *u wp # *u + # i ctl 8
+    ? <= ( nurl_atomic_i64_dec_fetch wp ) 0 { ( nurl_free ctl ) } {}
+}
+
 // Another owner of the same value: the count goes up, nothing is copied.
-@ Arc_share [T] ( Arc T ) r → ( Arc T ) {
-    ^ ( arc_clone [T] r )
+@ Arc_share [A] ( Arc A ) r → ( Arc A ) {
+    ^ ( arc_clone [A] r )
 }
 
 // Early release of this handle (Arc_drop).
-@ arc_free [T] sink ( Arc T ) r → v {}
+@ arc_free [A] sink ( Arc A ) r → v {}
 
 // Release this handle as `arc_free` does (an atomic decrement); the owner
 // that takes the count to zero lends `drop` the final value first (then the
 // value is dropped and the storage released). The hook only borrows — see
 // vec_free_with.
-@ arc_free_with [T] sink ( Arc T ) r ( @ v T ) drop → v {
+@ arc_free_with [A] sink ( Arc A ) r ( @ v A ) drop → v {
     ( mem_forget r )
     : *u cp # *u . r ctl
     ? == 0 # i cp {} {
         : i n ( nurl_atomic_i64_dec_fetch cp )
         ? <= n 0 {
-            : *( ArcImpl T ) impl # *( ArcImpl T ) . r ctl
-            : T v . impl value
+            : *( ArcImpl A ) impl # *( ArcImpl A ) . r ctl
+            : A v . impl value
             ( mem_take v )
             ( drop v )
-            ( nurl_free # s impl )
+            ( __arc_weak_release # s impl )
         } {}
     }
+}
+
+// ── Weak handles ────────────────────────────────────────────────────
+
+// A handle that does not keep the value alive — for a back-edge (a child's
+// pointer to its parent, a callback that must not own the server it is
+// stored in) that would otherwise close a cycle of strong handles, which
+// counting never frees (docs/MEMORY.md §7.7).
+@ arc_downgrade [A] ( Arc A ) r → ( ArcWeak A ) {
+    : *u wp # *u + # i . r ctl 8
+    ( nurl_atomic_i64_inc wp )
+    : s c . r ctl
+    ^ @ ( ArcWeak A ) { c }
+}
+
+// A strong handle again while the value is alive, `F` once it is gone.
+@ arc_weak_upgrade [A] ( ArcWeak A ) w → ?( Arc A ) {
+    : *u cp # *u . w ctl
+    ? == 0 ( nurl_atomic_i64_inc_if_live cp ) { ^ @ ?( Arc A ) { F } } {}
+    : s c . w ctl
+    ^ @ ?( Arc A ) { T @ ( Arc A ) { c } }
+}
+
+@ ArcWeak_drop [A] sink ( ArcWeak A ) w → v {
+    ( mem_forget w )
+    ? == 0 # i . w ctl { ^ } {}
+    ( __arc_weak_release . w ctl )
+}
+
+@ ArcWeak_share [A] ( ArcWeak A ) w → ( ArcWeak A ) {
+    : *u wp # *u + # i . w ctl 8
+    ( nurl_atomic_i64_inc wp )
+    : s c . w ctl
+    ^ @ ( ArcWeak A ) { c }
 }

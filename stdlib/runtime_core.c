@@ -4232,6 +4232,28 @@ long long nurl_once_slot(long long id, long long candidate) {
 #endif
 }
 
+/* A Weak's upgrade (stdlib/std/arc.nu): one more strong owner, but only
+ * while there is still one — 1 when the count went up, 0 when it was zero. */
+long long nurl_atomic_i64_inc_if_live(void *p) {
+    if (!p) return 0;
+#ifdef _WIN32
+    LONG64 cur = InterlockedCompareExchange64((volatile LONG64*)p, 0, 0);
+    while (cur > 0) {
+        LONG64 seen = InterlockedCompareExchange64((volatile LONG64*)p, cur + 1, cur);
+        if (seen == cur) return 1;
+        cur = seen;
+    }
+    return 0;
+#else
+    long long cur = __atomic_load_n((long long*)p, __ATOMIC_SEQ_CST);
+    while (cur > 0) {
+        if (__atomic_compare_exchange_n((long long*)p, &cur, cur + 1, 0,
+                                        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) return 1;
+    }
+    return 0;
+#endif
+}
+
 long long nurl_atomic_i64_load(void *p) {
     if (!p) return 0;
 #ifdef _WIN32

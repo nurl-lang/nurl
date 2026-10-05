@@ -10776,6 +10776,12 @@
     ? ( seq fname `mem_rc_nested` )
     { ^ ( gen_mem_rc_nested lex syms cg ) }
     {}
+    ? ( seq fname `mem_ts_cyclic` )
+    { ^ ( gen_mem_ts_cyclic lex syms cg ) }
+    {}
+    ? ( seq fname `mem_ts_frozen_only` )
+    { ^ ( gen_mem_ts_frozen_only lex syms cg ) }
+    {}
     // Dynamic trait object construction `( dyn Trait v )` (docs/spec.md §4.9).
     // Intercepted only when `dyn` is followed by a known trait name, so a
     // user function that happens to be named `dyn` still calls through.
@@ -35446,6 +35452,137 @@
     ^ cyc
 }
 
+// ── Thread-shared cycles (docs/MEMORY.md §7.7) ──────────────────
+// Handles that cross threads — Arc, Channel, DChannel, and library handles
+// over a counted block (an rcbox: Route, Supervisor, QuicServer, …) — are
+// not collected: a collector would have to stop every thread at a point
+// where no data structure is half-updated. Their cycles are ruled out at
+// compile time instead, which needs the same graph: its nodes are those
+// handles, an edge is a node its contents can hold (through fields,
+// payloads, elements, library handle contents), and a closure is "any
+// node" (its captures are not in its type).
+
+// The thread-shared nodes a value of type `ty` holds (`|` list; `*` for a
+// closure).
+@ __ts_walk s ty i syms s seen → s {
+    : i n ( nurl_str_len ty )
+    ? | < n 2 ( __bar_has seen ty ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( __is_closure_ty ty ) { ^ ( nurl_str_cat `*` `` ) } {}
+    ? != 0 ( nurl_str_starts ty `%dyn.` ) { ^ ( nurl_str_cat `*` `` ) } {}
+    ? == ( nurl_str_get ty - n 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
+    : s seen2 ( __bar_add seen ty )
+    ? != 0 ( nurl_str_starts ty `{ i1, ` ) {
+        : s a ( __ts_walk ( __wrap_part ty 0 ) syms seen2 )
+        : s b ( __ts_walk ( __wrap_part ty 1 ) syms seen2 )
+        ^ ( __bar_union a b )
+    } {}
+    ? != ( nurl_str_get ty 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
+    ? != 0 ( nurl_str_starts ty `%Vec__` ) { ^ ( __ts_walk ( __vec_elem_llvm ty ) syms seen2 ) } {}
+    ? ( __is_libh ty ) {
+        : s b ( __libh_base ty )
+        ? | | ( seq b `Arc` ) ( seq b `Channel` ) ( seq b `DChannel` ) { ^ ( nurl_str_cat ty `` ) } {}
+        // A Weak owns nothing; an Rc never crosses threads.
+        ? | | ( seq b `ArcWeak` ) ( seq b `Weak` ) ( seq b `Rc` ) { ^ ( nurl_str_cat `` `` ) } {}
+        ? != 0 ( nurl_sym_len2 g_impl_name_syms `rcstate##` ty ) { ^ ( nurl_str_cat ty `` ) } {}
+        : ~ s out ``
+        : i na ( count_words ( nurl_sym_get2 g_impl_name_syms `libhta##` ty ) )
+        : ~ i k 0
+        ~ < k na {
+            : s e ( __ts_walk ( __libh_targ ty k ) syms seen2 )
+            = out ( __bar_union out e )
+            = k + k 1
+        }
+        ^ out
+    } {}
+    : s sname ( nurl_str_slice ty 1 - n 1 )
+    : ~ s out ``
+    : s vlist ( nurl_sym_get2 syms sname `__variants` )
+    ? != 0 ( nurl_str_len vlist ) {
+        : ~ s scan ( nurl_str_cat vlist `` )
+        ~ != 0 ( nurl_str_len scan ) {
+            : s vname ( str_first_word scan ) = scan ( str_skip_word scan )
+            : i pc ( nurl_str_to_int ( nurl_sym_get2 syms vname `__paycount` ) )
+            : ~ i pi 0
+            ~ < pi pc {
+                : s e ( __ts_walk ( nurl_sym_get syms ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) ) syms seen2 )
+                = out ( __bar_union out e )
+                = pi + pi 1
+            }
+        }
+        ^ out
+    } {}
+    : i fc ( nurl_str_to_int ( nurl_sym_get2 syms sname `__field_count` ) )
+    : ~ i fi 0
+    ~ < fi fc {
+        : s e ( __ts_walk ( nurl_sym_get syms ( nurl_str_cat3 sname `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) ) syms seen2 )
+        = out ( __bar_union out e )
+        = fi + fi 1
+    }
+    ^ out
+}
+
+// What a thread-shared node's block holds: an Arc's payload, a Channel's
+// queued elements, a handle's state; a DChannel holds closures.
+@ __ts_contents s node → s {
+    : s b ( __libh_base node )
+    ? | ( seq b `Arc` ) ( seq b `Channel` ) { ^ ( __libh_targ node 0 ) } {}
+    ? ( seq b `DChannel` ) { ^ ( nurl_str_cat `*` `` ) } {}
+    ^ ( nurl_sym_get2 g_impl_name_syms `rcstate##` node )
+}
+
+// Can a value of type `ty` lead, through thread-shared handles, to the node
+// `target` — or to a closure, which may capture it?
+@ __ts_reaches s ty s target i syms → b {
+    : ~ s todo ( __ts_walk ty syms `` )
+    : ~ s seen ``
+    ~ != 0 ( nurl_str_len todo ) {
+        : s u ( __bar_first todo ) = todo ( __bar_rest todo )
+        ? | ( seq u `*` ) ( seq u target ) { ^ T } {}
+        ? ! ( __bar_has seen u ) {
+            = seen ( __bar_add seen u )
+            : s c ( __ts_contents u )
+            ? ( seq c `*` ) { ^ T } {}
+            ? != 0 ( nurl_str_len c ) { = todo ( __bar_union todo ( __ts_walk c syms `` ) ) } {}
+        } {}
+    }
+    ^ F
+}
+
+// Can the thread-shared handle type `node` be part of a cycle — can what
+// its block holds lead back to it?
+@ __ts_cyclic s node i syms → b {
+    : s key ( nurl_str_cat `tscyc##` node )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
+    : s c ( __ts_contents node )
+    : b r ? ( seq c `*` ) T ? == 0 ( nurl_str_len c ) F ( __ts_reaches c node syms )
+    ( nurl_sym_def g_impl_name_syms key ? r `1` `0` )
+    ^ r
+}
+
+// `( mem_ts_cyclic [( Arc T )] )` — can this thread-shared handle type close
+// a cycle? A constant: such an Arc's payload is frozen once shared (arc.nu).
+@ gen_mem_ts_cyclic i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    ( expect lex TT_RPAREN )
+    ( nurl_set_last_type `i1` )
+    ^ ? ( __ts_cyclic ty syms ) ( nurl_str_cat `true` `` ) ( nurl_str_cat `false` `` )
+}
+
+// `( mem_ts_frozen_only [( Arc T )] `op` )` — a compile error when this
+// instance's payload could close a cycle: `op` would mutate it in place.
+@ gen_mem_ts_frozen_only i lex i syms i cg → s {
+    : s ty ( __cc_parse_targ lex )
+    : s op ( nurl_lex_val lex )
+    ( nurl_lex_advance lex )
+    ( expect lex TT_RPAREN )
+    ? ( __ts_cyclic ty syms ) {
+        ( die_at `thread-shared cycle` ( nurl_str_cat ( nurl_str_cat4 `'` op `' on '` ( llvm_to_nurl ty ) )
+        `': its payload can hold, through what it contains, a handle back to this Arc (or a closure that may capture one) — a cycle of shared handles no count ever frees, and Arc's cycles are not collected (docs/MEMORY.md §7.7). Such an Arc is frozen once made: build the payload first and arc_new it whole (a tree is built from its leaves up), read it with arc_get (a copy), and point back with an ArcWeak.` ) ) }
+    {}
+    ( nurl_set_last_type `void` )
+    ^ ( nurl_str_cat `undef` `` )
+}
+
 // What emitting `ty`'s trace needs, now — a library handle's S_trace
 // instance is generic, and instances can only be added while they are
 // still being collected — and `ty` noted for emission at module end.
@@ -39209,6 +39346,35 @@ u` ) ( nurl_print q ) ( nurl_print `:
     }
 }
 
+// A plain library handle's drop (`X_drop sink X h → v { … ( rcbox_release
+// [XImpl] … ) }`) names the type its block holds: recorded as X's state
+// (`rcstate##%X`), so the thread-shared cycle rules (docs/MEMORY.md §7.7)
+// can see what a handle's state can reach. Skips the body like
+// skip_balanced.
+@ scan_skip_drop_body i lex i syms s fname → v {
+    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
+    { ( nurl_lex_advance lex ) }
+    ? != ( nurl_lex_type lex ) TT_LBRACE { ^ v } {}
+    ( nurl_lex_advance lex )
+    : ~ i depth 1
+    ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
+        : i tt ( nurl_lex_type lex )
+        ? == tt TT_LBRACE { = depth + depth 1 } {}
+        ? == tt TT_RBRACE { = depth - depth 1 } {}
+        ? & ( is_ident_tok tt ) ( seq ( nurl_lex_val lex ) `rcbox_release` ) {
+            ( nurl_lex_advance lex )
+            ? == ( nurl_lex_type lex ) TT_LBRACK {
+                ( nurl_lex_advance lex )
+                ? ( is_ident_tok ( nurl_lex_type lex ) ) {
+                    : s st ( nurl_lex_val lex )
+                    : s hn ( nurl_str_slice fname 0 - ( nurl_str_len fname ) 5 )
+                    ( nurl_sym_def g_impl_name_syms ( nurl_str_cat3 `rcstate##` `%` hn ) ( nurl_str_cat `%` st ) )
+                } {}
+            } {}
+        } { ( nurl_lex_advance lex ) }
+    }
+}
+
 @ skip_balanced i lex → v {
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
     { ( nurl_lex_advance lex ) }
@@ -41247,7 +41413,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
                                 }
                                 {}
                                 ( scan_note_empty_body lex syms fname )
-                                ( skip_balanced lex )
+                                ? != 0 ( nurl_str_ends fname `_drop` ) { ( scan_skip_drop_body lex syms fname ) } { ( skip_balanced lex ) }
                             }
                         }
                         { ( skip_balanced lex ) }
