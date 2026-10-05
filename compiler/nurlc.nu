@@ -18617,8 +18617,11 @@
     ? & & ( __is_handle_ty ty ) == rhs_tt TT_LPAREN != 0 ( nurl_sym_len syms `__last_call_ret_view__` )
     { ( mem_udrop_flag_set syms cg ptr `0` ) ( __sb syms ptr `1` ) ^ v } {}
     // A callee not compiled yet: whether it hands back a fresh value or a
-    // borrow (`^ x` out of a `vec_get`) is known at module end.
-    ? & ( __is_handle_ty ty ) == rhs_tt TT_LPAREN {
+    // borrow (`^ x` out of a `vec_get`) is known at module end. (So for a
+    // value that cannot be copied, owned or lent per call — a struct with
+    // a `% Drop` field read out of an Rc by rc_get: taken for owned, the
+    // binding dropped the Rc's own value.)
+    ? & | ( __is_handle_ty ty ) ( __is_hown_ty ty ) == rhs_tt TT_LPAREN {
         ? ( __mem_bind_call_bit syms cg ptr ) { ^ v } {}
     } {}
     // A field read or a cast reads a value something else owns: borrow it.
