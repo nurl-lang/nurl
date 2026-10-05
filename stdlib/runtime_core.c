@@ -628,6 +628,15 @@ const char* nurl_print_buf_stop(void) {
     return ret;
 }
 
+/* The buffered output so far, for a reader that scans it while it grows
+ * (nurlc's lazy library functions): its length, and its address — valid
+ * until the next write, which may move it. */
+long long nurl_print_buf_len(void) { outbuf_init(); return (long long)g_outbuf_len; }
+long long nurl_print_buf_at(long long off) {
+    outbuf_init();
+    return (long long)(intptr_t)(g_outbuf + (off < 0 ? 0 : off));
+}
+
 /* Clear ONLY when no buffering frame is active — preserves the parent
  * frame's bytes when called from inside a nested gen_closure_expr. */
 void nurl_print_buf_reset(void) {

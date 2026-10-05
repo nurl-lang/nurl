@@ -32460,10 +32460,255 @@
 
 // ── Function declaration @ name params → ret { body } ─────────────
 
+// ── Lazy library functions ──────────────────────────────────────────
+//
+// A program that imports `stdlib/ext/json.nu` for `json_parse` used to
+// compile all of it — and of `string.nu`, `vec.nu` and every module those
+// import: an empty `main` beside that one import cost 556 M instructions,
+// 312 functions generated, borrow-checked and emitted for the dead-function
+// pass to throw 310 of them away. A function of an IMPORTED file is now
+// stored like a generic template (its source text, file and line) and
+// compiled only when the program's generated code refers to it: the same
+// discovery the dead-function pass makes (an `@__nurl_fn.<name>` in the
+// IR), run over the module as it grows, so a call, a function value, a
+// generic instance or a vtable all demand it alike. The root file's own
+// functions compile as always — their diagnostics are the user's. Hooks
+// the late emitters call (`X_drop` / `_clone` / `_share` / `_trace`), the
+// `--keep` exports, `simd` / `inline` functions and everything in a file
+// without `main` stay eager. A reference to a function never compiled is
+// reported as an internal error, never left to the linker.
+
+: ~ i g_lazy 0  // symtab: name → its stored source (0: lazy compilation off)
+: ~ s g_lazy_root ``  // the root file's current-src-file spelling
+: ~ i g_lazy_force 0  // compiling one now: no laziness inside
+: ~ i g_lazy_scan 0  // module bytes already scanned for references
+: ~ s g_lazy_queue ``  // demanded, not yet compiled
+: ~ i g_lazy_trace 0  // NURL_LAZY_TRACE: report a late compile (a gap in lazy_reach)
+
+& `c` @ nurl_print_buf_len → i
+
+& `c` @ nurl_print_buf_at i off → i
+
+// The program's reference graph, collected while scan_fn_sigs walks every
+// file (0 when lazy compilation cannot run): a function's name → the
+// identifiers its body spells, `__roots__` → the functions that compile
+// whatever is referenced and the identifiers of every `%` block.
+: ~ i g_lazy_edges 0
+// The functions lazy_reach found reachable from the roots: compiled in place.
+: ~ i g_lazy_live 0
+
+// Record the identifiers of the declaration body starting here (from the
+// next '{' to its match), and put the lexer back.
+@ __lazy_collect i lex s owner → v {
+    ? == g_lazy_edges 0 { ^ } {}
+    : i save ( nurl_lex_cur_start lex )
+    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+        ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( __lazy_note owner ( nurl_lex_val lex ) ) } {}
+        ( nurl_lex_advance lex )
+    }
+    ? == ( nurl_lex_type lex ) TT_LBRACE {
+        ( nurl_lex_advance lex )
+        : ~ i depth 1
+        ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
+            : i tt ( nurl_lex_type lex )
+            ? == tt TT_LBRACE { = depth + depth 1 } {}
+            ? == tt TT_RBRACE { = depth - depth 1 } {}
+            ? ( is_ident_tok tt ) { ( __lazy_note owner ( nurl_lex_val lex ) ) } {}
+            ( nurl_lex_advance lex )
+        }
+    } {}
+    ( nurl_lex_set_pos lex save )
+}
+
+@ __lazy_note s owner s v → v {
+    ? ( priv_is_private v ) {
+        ( nurl_sym_append_word g_lazy_edges owner ( priv_mangle_for v ( priv_file_id ) ) )
+        // (A `__` name of ANOTHER file still resolves by its spelling —
+        // the deprecated cross-file call: `~name` reaches every file's.)
+        ( nurl_sym_append_word g_lazy_edges owner ( nurl_str_cat `~` v ) )
+        ^
+    } {}
+    ( nurl_sym_append_word g_lazy_edges owner v )
+}
+
+// Library code — the stdlib and installed packages (`deps/`) — is what
+// compiles on demand. A project's own files, however many, compile whole:
+// an error in a function nothing calls yet is still the author's to see.
+@ __lazy_lib_file s path → b {
+    ? | != 0 ( nurl_str_starts path `stdlib/` ) != 0 ( nurl_str_starts path `deps/` ) { ^ T } {}
+    ^ | >= ( nurl_str_find path `/stdlib/` ) 0 >= ( nurl_str_find path `/deps/` ) 0
+}
+
+// A function every compilation emits whatever references it: a project
+// file's, the `simd` / `inline` ones, `main`, and the hooks the late
+// emitters call.
+@ __lazy_is_root s fname b eager → b {
+    ? == g_lazy_edges 0 { ^ F } {}
+    ? | eager ! ( __lazy_lib_file ( vis_current_src_file ) ) { ^ T } {}
+    ? ( seq fname `main` ) { ^ T } {}
+    ^ | | | != 0 ( nurl_str_ends fname `_drop` ) != 0 ( nurl_str_ends fname `_clone` )
+    != 0 ( nurl_str_ends fname `_share` ) != 0 ( nurl_str_ends fname `_trace` )
+}
+
+// Everything the roots reach through the reference graph (every identifier
+// a reached body spells; a non-function among them reaches nothing).
+@ lazy_reach → v {
+    ? == g_lazy_edges 0 { ^ } {}
+    = g_lazy_live ( nurl_sym_new )
+    // A worklist indexed in a table of its own; each name's identifiers are
+    // walked with a cursor (no copy of the rest per word).
+    : i q ( nurl_sym_new )
+    : ~ i qn 0
+    : ~ i qi 0
+    // (…and the library functions the compiler's own desugarings call by
+    // name: a `select` over channels.)
+    : ~ s cur ( nurl_str_cat ( nurl_sym_get g_lazy_edges `__roots__` )
+    ` select_waiter_new select_waiter_prepare select_waiter_wait select_waiter_free chan_raw_arm chan_raw_disarm chan_raw_closed chan_raw_poll chan_try_recv` )
+    : ~ b first T
+    ~ | first < qi qn {
+        ? first { = first F } {
+            : s nm ( nurl_sym_get q ( nurl_str_int qi ) )
+            = qi + qi 1
+            = cur ( nurl_sym_get g_lazy_edges nm )
+        }
+        : i cn ( nurl_str_len cur )
+        : ~ i cp 0
+        ~ < cp cn {
+            : i ce ( __word_end cur cn cp )
+            ? > ce cp {
+                : s w ( __span_dup cur cp ce )
+                ? == 0 ( nurl_sym_len g_lazy_live w ) {
+                    ( nurl_sym_def g_lazy_live w `1` )
+                    ( nurl_sym_def q ( nurl_str_int qn ) w )
+                    = qn + qn 1
+                } {}
+            } {}
+            = cp + ce 1
+        }
+    }
+    ( nurl_sym_free q )
+}
+
+@ __lazy_eligible s fname → b {
+    ? | == g_lazy 0 != g_lazy_force 0 { ^ F } {}
+    ? | != g_pending_simd 0 != g_pending_inline 0 { ^ F } {}
+    ? ( seq fname `main` ) { ^ F } {}
+    ? ! ( __lazy_lib_file ( vis_current_src_file ) ) { ^ F } {}
+    ? != 0 ( nurl_sym_len g_fn_link_exports fname ) { ^ F } {}
+    // Reached from the roots: compiled in its place, in source order, as
+    // every function was (callers see its summaries as before).
+    ? & != 0 g_lazy_live != 0 ( nurl_sym_len g_lazy_live fname ) { ^ F } {}
+    ? | | | != 0 ( nurl_str_ends fname `_drop` ) != 0 ( nurl_str_ends fname `_clone` )
+    != 0 ( nurl_str_ends fname `_share` ) != 0 ( nurl_str_ends fname `_trace` ) { ^ F } {}
+    ^ T
+}
+
+@ gen_fn_decl_or_lazy s fname s raw i lex i syms i cg → v {
+    ? ! ( __lazy_eligible fname ) { ( gen_fn_decl_concrete fname lex syms cg ) ^ } {}
+    : i line ( nurl_lex_line lex )
+    : i start ( nurl_lex_cur_start lex )
+    ( skip_balanced lex )
+    // Past the closing brace: the next token, or the end of the source.
+    : i stop ( nurl_lex_cur_start lex )
+    : s src ( nurl_lex_src_slice lex start - stop start )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__src` ) src )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__raw` ) raw )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__line` ) ( nurl_str_int line ) )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__file` ) ( vis_current_src_file ) )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__lexfile` ) ( nurl_lex_filename lex ) )
+}
+
+// Queue every lazy function the module text emitted since the last scan
+// refers to.
+@ __lazy_scan → v {
+    : i n ( nurl_print_buf_len )
+    ? >= g_lazy_scan n { ^ } {}
+    : i base ( nurl_print_buf_at 0 )
+    : *u p # *u base
+    : s pre `__nurl_fn.`
+    : *u q # *u pre
+    : ~ i k g_lazy_scan
+    ~ < k n {
+        ? & == # i . p k 64 < + k 11 n {
+            : ~ b m T
+            : ~ i j 0
+            ~ & m < j 10 { ? != # i . p + + k 1 j # i . q j { = m F } {} = j + j 1 }
+            ? m {
+                : i st + k 11
+                : ~ i e st
+                ~ & < e n ( __dce_ident_byte # i . p e ) { = e + e 1 }
+                : s nm ( nurl_str_slice # s base st - e st )
+                ? & != 0 ( nurl_sym_len2 g_lazy nm `__src` ) == 0 ( nurl_sym_len2 g_lazy nm `__q` ) {
+                    ( nurl_sym_def g_lazy ( nurl_str_cat nm `__q` ) `1` )
+                    = g_lazy_queue ? == 0 ( nurl_str_len g_lazy_queue ) ( nurl_str_cat nm `` ) ( nurl_str_cat3 g_lazy_queue ` ` nm )
+                } {}
+                = k e
+            } { = k + k 1 }
+        } { = k + k 1 }
+    }
+    = g_lazy_scan n
+}
+
+// Compile one stored function, in the file and on the lines it was
+// written on (the same re-parse a generic instantiation makes).
+@ __lazy_emit s fname i syms i cg → v {
+    ? != 0 g_lazy_trace { ( nurl_eprintln ( nurl_str_cat `nurlc: lazy function compiled late (not reached by lazy_reach): ` fname ) ) } {}
+    : s src ( nurl_sym_get2 g_lazy fname `__src` )
+    : s raw ( nurl_sym_get2 g_lazy fname `__raw` )
+    : i line ( nurl_str_to_int ( nurl_sym_get2 g_lazy fname `__line` ) )
+    : s file ( nurl_sym_get2 g_lazy fname `__file` )
+    : s lexfile ( nurl_sym_get2 g_lazy fname `__lexfile` )
+    : s full ( nurl_str_cat ( __nl_pad - line 1 ) ( nurl_str_cat4 `@ ` raw ` ` src ) )
+    : s saved_sf ( vis_current_src_file )
+    ( vis_set_current_src_file file )
+    : i saved_line g_dbg_override_line
+    : s saved_file g_dbg_override_file
+    = g_dbg_override_line line
+    = g_dbg_override_file lexfile
+    : i saved_force g_lazy_force
+    = g_lazy_force 1
+    : i lx ( nurl_lex_new full lexfile )
+    ( gen_fn_decl lx syms cg )
+    ( nurl_lex_free lx )
+    = g_lazy_force saved_force
+    = g_dbg_override_line saved_line
+    = g_dbg_override_file saved_file
+    ( vis_set_current_src_file saved_sf )
+}
+
+// Generic instances and lazy functions demand each other: flush the
+// instances, compile what the module now refers to, until neither grows.
+@ lazy_flush i syms i cg → v {
+    ~ T {
+        ( flush_deferred_instantiations syms cg )
+        ? == g_lazy 0 { ^ } {}
+        ( __lazy_scan )
+        ? == 0 ( nurl_str_len g_lazy_queue ) { ^ } {}
+        ~ != 0 ( nurl_str_len g_lazy_queue ) {
+            : s nm ( str_first_word g_lazy_queue )
+            = g_lazy_queue ( str_skip_word g_lazy_queue )
+            ( __lazy_emit nm syms cg )
+        }
+    }
+}
+
+// After every emitter: a reference to a lazy function nothing compiled is
+// a compiler bug (an emitter running after lazy_flush named one).
+@ lazy_check_complete → v {
+    ? == g_lazy 0 { ^ } {}
+    ( __lazy_scan )
+    ? != 0 ( nurl_str_len g_lazy_queue ) {
+        ( nurl_eprintln ( nurl_str_cat3 `internal error: generated code refers to library function(s) compiled lazily but never demanded before the late emitters ran: ` g_lazy_queue ` — please report this (https://github.com/nurl-lang/nurl/issues); --no-dce compiles everything eagerly.` ) )
+        ( nurl_panic `__nurlc_ice__` )
+    } {}
+}
+
 @ gen_fn_decl i lex i syms i cg → v {
     ( nurl_lex_advance lex )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : ~ s fname ( nurl_lex_val lex )
+        // As spelled, for a lazy library function's later re-parse.
+        : s fname_raw ( nurl_str_cat fname `` )
         ? ( priv_is_private fname ) {
             = fname ( priv_mangle_for fname ( priv_file_id ) )
         } {}
@@ -32520,9 +32765,9 @@
                 { ( die lex `'inline' cannot be applied to a generic function — a generic is monomorphised after the whole program is parsed, and the prefix does not survive to its instantiations` ) }
                 {}
                 ( gen_generic_fn_store lex syms fname ) }
-            { ( gen_fn_decl_concrete fname lex syms cg ) }
+            { ( gen_fn_decl_or_lazy fname fname_raw lex syms cg ) }
         }
-        { ( gen_fn_decl_concrete fname lex syms cg ) }
+        { ( gen_fn_decl_or_lazy fname fname_raw lex syms cg ) }
     }
     { ( die lex ( nurl_str_cat3
         `expected a function name after '@', found ` ( tok_here lex )
@@ -38534,6 +38779,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // them to the template's defining file, not the top file (see
     // lint_note_used). Saved/restored around the recursive
     // gen_fn_decl because nested instantiations re-enter here.
+    // (An instance is demanded already: never stored as a lazy function.)
+    : i saved_force g_lazy_force
+    = g_lazy_force 1
     ? != g_lint 0
     { : s saved_uf ( nurl_sym_get g_lint_syms `use_file` )
         ( nurl_sym_def g_lint_syms `use_file`
@@ -38542,6 +38790,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ( nurl_sym_def g_lint_syms `use_file` saved_uf )
     }
     { ( gen_fn_decl lex2 syms cg ) }
+    = g_lazy_force saved_force
     ( nurl_lex_free lex2 )
     ( vis_set_current_src_file saved_vis_sf )
     = g_diag_ctx saved_diag_ctx
@@ -38552,8 +38801,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
 
 // flush_deferred_instantiations: emit all queued generic instantiations.
 // Re-reads count each iteration so transitive generics are also emitted.
+// (Resumable: lazy_flush calls it again after compiling what the instances
+// demanded, and only the instances queued since then are emitted.)
+: ~ i g_inst_done 0
+
 @ flush_deferred_instantiations i syms i cg → v {
-    : ~ i k 0
+    : ~ i k g_inst_done
     ~ < k ( nurl_str_to_int ( nurl_sym_get g_generic_syms `__deferred_count__` ) ) {
         : s base ( nurl_str_cat `__def` ( nurl_str_int k ) )
         : s fname ( nurl_sym_get2 g_generic_syms base `_fn` )
@@ -38565,6 +38818,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col syms cg )
         = k + k 1
     }
+    = g_inst_done k
 }
 
 // ── Module header ──────────────────────────────────────────────────
@@ -41238,7 +41492,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
             = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
             ` [in the default body of method '` mname `' of trait '` tname )
             ( nurl_str_cat3 `', emitted for impl type '` impl_nurl `' — fix it at the trait declaration]` ) )
+            : i saved_force g_lazy_force
+            = g_lazy_force 1
             ( gen_fn_decl lex2 syms cg )
+            = g_lazy_force saved_force
             = g_diag_ctx saved_ctx
             ( nurl_lex_free lex2 )
         }
@@ -42242,6 +42499,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
                     // Read-and-clear here, where the prefix was parsed,
                     // and hand the answer to the one arm that wants it.
                     : b decl_pub ( vis_take_pending_pub )
+                    // (A `simd` / `inline` function compiles eagerly: a root of
+                    // the lazy-compilation reach, lazy_reach.)
+                    : b decl_eager | != 0 g_pending_simd != 0 g_pending_inline
                     // Same read-and-clear discipline for `simd`. This pass
                     // only collects signatures — codegen re-lexes and sets
                     // the flag again — but a prefix left pending here would
@@ -42256,6 +42516,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
                             // File-private: register under the mangled name.
                             // Same-file duplicates still collide on it (the
                             // dup check below); different files' never do.
+                            : s fname_raw_scan ? ( priv_is_private fname ) ( nurl_str_cat fname `` ) ``
                             ? ( priv_is_private fname ) {
                                 ( priv_note_owner fname )
                                 = fname ( priv_mangle_for fname ( priv_file_id ) )
@@ -42385,7 +42646,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
                                 ? g_saw_inout
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
-                                ? == ( nurl_lex_type lex ) TT_LBRACE { ( scan_note_empty_body lex syms fname ) ( skip_balanced lex ) }
+                                ? == ( nurl_lex_type lex ) TT_LBRACE {
+                                    ( scan_note_empty_body lex syms fname ) ( __lazy_collect lex fname )
+                                    // (A generic hook — `Set_drop [A]` — is instantiated by
+                                    // the late emitters: what it calls must be reached.)
+                                    ? ( __lazy_is_root fname F ) { ( nurl_sym_append_word g_lazy_edges `__roots__` fname ) } {}
+                                    ( skip_balanced lex ) }
                                 { ( die_pos lex template_line template_col ( nurl_str_cat3
                                     `a generic function declaration continues with its body — '@ ` fname
                                     ` [ … ] … → <type> { … }'. This one has no '{', so the declaration after it would be read as its body.` ) ) }
@@ -42513,6 +42779,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
                                 }
                                 {}
                                 ( scan_note_empty_body lex syms fname )
+                                ( __lazy_collect lex fname )
+                                ? ( __lazy_is_root fname decl_eager ) { ( nurl_sym_append_word g_lazy_edges `__roots__` fname ) } {}
+                                ? & != 0 g_lazy_edges != 0 ( nurl_str_len fname_raw_scan ) { ( nurl_sym_append_word g_lazy_edges ( nurl_str_cat `~` fname_raw_scan ) fname ) } {}
                                 ? != 0 ( nurl_str_ends fname `_drop` ) { ( scan_skip_drop_body lex syms fname ) } { ( skip_balanced lex ) }
                             }
                         }
@@ -42604,7 +42873,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
                         {}
                     }
                     { ? == tt TT_PERCENT
-                        { ( scan_impl_decl lex syms ) }
+                        { ( __lazy_collect lex `__roots__` ) ( scan_impl_decl lex syms ) }
                         { ( nurl_lex_advance lex ) }
                     }
                 } } }
@@ -45442,9 +45711,17 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( scan_generic_structs lex0 syms )
     ( nurl_lex_free lex0 )
     : i lex1 ( nurl_lex_new src path )
+    // The reference graph for lazy library compilation is gathered by the
+    // same walk (lazy_reach).
+    ? & & != g_dce 0 == g_lint 0 == g_dbg_enabled 0 {
+        = g_lazy_edges ( nurl_sym_new )
+        = g_lazy_root ( vis_current_src_file )
+        = g_lazy_trace != 0 # i ( getenv `NURL_LAZY_TRACE` )
+    } {}
     ( scan_fn_sigs lex1 syms )
     ( nurl_lex_free lex1 )
     ( llvm_linkage_init )
+    ? g_fn_link_program { ( lazy_reach ) } {}
     ( read_type_layouts syms )
     ( resolve_trait_impls syms )
     // AFTER scan_fn_sigs, and this is load-bearing: the preamble must
@@ -45466,6 +45743,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( ensure_dyn_types_emitted syms cg )
     : i lex ( nurl_lex_new src path )
     ? != g_lint 0 { = g_lint_recording 1 } {}
+    // Library functions compile on demand in a program (lazy_flush): the
+    // dead-function pass would drop what nothing reaches anyway.
+    ? & & & & != g_dce 0 g_fn_link_program == g_lint 0 == g_dbg_enabled 0 != g_lazy_live 0 {
+        = g_lazy ( nurl_sym_new )
+    } {}
     ( parse_program lex syms cg )
     ( nurl_lex_free lex )
     // Multi-error mode: diagnostics were reported per-declaration and the
@@ -45505,8 +45787,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
         // Stop recording new lint targets before flushing generic
         // monomorphisations — those are synthetic, not the user's source.
         = g_lint_recording 0
-        // Emit all deferred generic instantiations collected during compilation.
-        ( flush_deferred_instantiations syms cg )
+        // Emit all deferred generic instantiations collected during
+        // compilation — and the lazy library functions they and the
+        // program refer to (lazy_flush).
+        ( lazy_flush syms cg )
         ( emit_pending_drop_graphs syms )
         // Every function (incl. just-flushed generic instantiations) has now
         // compiled, so the escape summaries are final: replay the deferred
@@ -45524,6 +45808,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
         ( resolve_deferred_borrowck )
+        ( lazy_check_complete )
         ( dbg_flush )
         // Unused-symbol lint (--lint): every call site (incl. generic
         // instantiations) has now been seen, so report the unused private
