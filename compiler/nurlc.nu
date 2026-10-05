@@ -8800,7 +8800,23 @@
 : i TF_START 4
 : i TF_VALID 5
 
-: i LX_SIZE 312  // 39 slots × 8 bytes; 37/38 are compilation ownership links
+: i LX_SIZE 320  // 40 slots × 8 bytes; 37/38 are compilation ownership links
+// The identity of this lexer's text for g_body_ends — "path len hash",
+// owned — or 0 when brace ends are not shared (see skip_balanced).
+: i LX_MEMOKEY 39
+
+// Where each brace block ends: "<text identity> <offset of a '{'>" → the
+// offset just past its matching '}'. Every source file is lexed by several
+// passes (type names, generic structs, signatures, the parse — each import
+// once per pass), and most of what they do with a function body is step
+// over it. The first walk over a body records its end; every later lexer
+// over the same text jumps there instead of lexing the body again.
+//
+// A lexer's text identity (LX_MEMOKEY, set in nurl_lex_new) is its file
+// name, length and a hash of the whole text, so lexers over the same file
+// share ends while an alias-rewritten import or a template re-parse under
+// the same name — different text — never reads another text's offsets.
+: ~ i g_body_ends 0
 
 // ── ASCII byte-class predicates ──────────────────────────────────
 
@@ -9425,6 +9441,12 @@
     ( nurl_poke lx LX_LEN ( strlen src ) )
     ( nurl_poke lx LX_LINE 1 )
     ( __lex_build_linetab lx )
+    // A '<…>' name is a probe or template text: short-lived, not shared.
+    ? & != g_body_ends 0 != 60 & 255 # i . # *u filename 0 {
+        : i n ( nurl_peek lx LX_LEN )
+        : s h ( nurl_str_int ( __src_hash # *u # s ( nurl_peek lx LX_SRC ) n ) )
+        ( nurl_poke lx LX_MEMOKEY # i ( nurl_str_cat4 filename ` ` ( nurl_str_int n ) ( nurl_str_cat ` ` h ) ) )
+    } {}
     // Prime cur token.
     ( __lex_one # i lx LX_CUR )
     ^ # i lx
@@ -9457,6 +9479,8 @@
     ? != 0 fp { ( nurl_free # s fp ) } {}
     : i tp ( nurl_peek p LX_LINETAB )
     ? != 0 tp { ( nurl_free # s tp ) } {}
+    : i mk ( nurl_peek p LX_MEMOKEY )
+    ? != 0 mk { ( nurl_free # s mk ) } {}
     ( nurl_free p )
 }
 
@@ -32513,11 +32537,13 @@
 @ __lazy_collect_at i lex s owner b rewind → b {
     ? == g_lazy_edges 0 { ^ F } {}
     : i save ( nurl_lex_cur_start lex )
+    : ~ i at -1
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
         ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( __lazy_note owner ( nurl_lex_val lex ) ) } {}
         ( nurl_lex_advance lex )
     }
     ? == ( nurl_lex_type lex ) TT_LBRACE {
+        = at ( nurl_lex_cur_start lex )
         ( nurl_lex_advance lex )
         : ~ i depth 1
         ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
@@ -32527,6 +32553,7 @@
             ? ( is_ident_tok tt ) { ( __lazy_note owner ( nurl_lex_val lex ) ) } {}
             ( nurl_lex_advance lex )
         }
+        ( __body_end_note lex at ( nurl_lex_cur_start lex ) )
     } {}
     ? rewind { ( nurl_lex_set_pos lex save ) } {}
     ^ T
@@ -32599,6 +32626,11 @@
         }
     }
     ( nurl_sym_free q )
+    // The graph has answered. The parse walks each import's signatures
+    // again; with no graph to grow, that walk steps over bodies (from
+    // g_body_ends) instead of re-collecting identifiers nothing reads.
+    ( nurl_sym_free g_lazy_edges )
+    = g_lazy_edges 0
 }
 
 @ __lazy_eligible s fname → b {
@@ -40743,6 +40775,44 @@ u` ) ( nurl_print q ) ( nurl_print `:
     }
 }
 
+// A fresh table for a new compilation.
+@ body_ends_reset → v {
+    ? != g_body_ends 0 { ( nurl_sym_free g_body_ends ) } {}
+    = g_body_ends ( nurl_sym_new )
+}
+
+// 64-bit hash of the whole text, eight bytes per step.
+@ __src_hash * u p i n → i {
+    : ~ i h + -3750763034362895579 n
+    : ~ i k 0
+    ~ <= + k 8 n {
+        = h * ^^ h ( __sym_w8 # s p k 8 ) 1099511628211
+        = h ^^ h >> h 29
+        = k + k 8
+    }
+    ~ < k n {
+        = h * ^^ h & 255 # i . p k 1099511628211
+        = k + k 1
+    }
+    ^ h
+}
+
+@ __body_end_key i lex i at → s {
+    ^ ( nurl_str_cat3 # s ( nurl_peek # s lex LX_MEMOKEY ) ` ` ( nurl_str_int at ) )
+}
+
+@ __body_end_known i lex i at → i {
+    ? | == g_body_ends 0 == 0 ( nurl_peek # s lex LX_MEMOKEY ) { ^ -1 } {}
+    : s key ( __body_end_key lex at )
+    ? == 0 ( nurl_sym_len g_body_ends key ) { ^ -1 } {}
+    ^ ( nurl_str_to_int ( nurl_sym_get g_body_ends key ) )
+}
+
+@ __body_end_note i lex i at i stop → v {
+    ? | == g_body_ends 0 == 0 ( nurl_peek # s lex LX_MEMOKEY ) { ^ } {}
+    ( nurl_sym_def g_body_ends ( __body_end_key lex at ) ( nurl_str_int stop ) )
+}
+
 @ skip_balanced i lex → v {
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
     { ( nurl_lex_advance lex ) }
@@ -40750,7 +40820,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // EOF first (malformed source), fall through and let the caller
     // observe TT_EOF on its next step.
     ? == ( nurl_lex_type lex ) TT_LBRACE
-    { ( nurl_lex_advance lex )
+    { : i at ( nurl_lex_cur_start lex )
+        : i known ( __body_end_known lex at )
+        ? >= known 0 { ( nurl_lex_set_pos lex known ) ^ } {}
+        ( nurl_lex_advance lex )
         : ~ i depth 1
         ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
             : i tt2 ( nurl_lex_type lex )
@@ -40758,6 +40831,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
             ? == tt2 TT_RBRACE { = depth - depth 1 } {}
             ( nurl_lex_advance lex )
         }
+        ( __body_end_note lex at ( nurl_lex_cur_start lex ) )
     }
     {}
 }
@@ -42980,87 +43054,91 @@ u` ) ( nurl_print q ) ( nurl_print `:
             ? == ( nurl_lex_type lex ) TT_LBRACE { ( skip_balanced lex ) } {}
         }
         : i tt ( nurl_lex_type lex )
-        ? == tt TT_LBRACE
-        { = depth + depth 1 ( nurl_lex_advance lex ) }
-        { ? == tt TT_RBRACE
-            { = depth - depth 1 ( nurl_lex_advance lex ) }
-            { ? & == depth 0 == tt TT_DOLLAR
-                {  // Nested import: register its type names too, applying
-                    // alias rewriting so an aliased import's types resolve
-                    // under their `alias__` prefix (mirrors scan_fn_sigs).
-                    : i __im_ln ( nurl_lex_line lex )
-                    : i __im_cl ( nurl_lex_col lex )
-                    ( nurl_lex_advance lex )
-                    ? == ( nurl_lex_type lex ) TT_STR
-                    { : s path ( __norm_import_path ( nurl_lex_val lex ) )
+        // Nothing inside a block names a type: step over it whole (which
+        // also records where it ends for the passes after this one).
+        ? & == tt TT_LBRACE == depth 0
+        { ( skip_balanced lex ) }
+        { ? == tt TT_LBRACE
+            { = depth + depth 1 ( nurl_lex_advance lex ) }
+            { ? == tt TT_RBRACE
+                { = depth - depth 1 ( nurl_lex_advance lex ) }
+                { ? & == depth 0 == tt TT_DOLLAR
+                    {  // Nested import: register its type names too, applying
+                        // alias rewriting so an aliased import's types resolve
+                        // under their `alias__` prefix (mirrors scan_fn_sigs).
+                        : i __im_ln ( nurl_lex_line lex )
+                        : i __im_cl ( nurl_lex_col lex )
                         ( nurl_lex_advance lex )
-                        : ~ s alias ``
-                        ? ( is_ident_tok ( nurl_lex_type lex ) )
-                        { = alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) }
-                        {}
-                        : s __tn_key ( __canon_import_key path )
-                        : s marker ( nurl_sym_get syms `__tn_scanned__` )
-                        ? ( str_contains_word marker __tn_key )
-                        {}
-                        { : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __tn_key `` )
-                            ( nurl_str_cat3 marker ` ` __tn_key )
-                            ( nurl_sym_def syms `__tn_scanned__` new_marker )
-                            ( __require_import_file lex __im_ln __im_cl path )
-                            : s src2 ( compiler_read_source path )
-                            // Uniform ownership, as at the other two sites.
-                            : s eff_src2 ? != 0 ( nurl_str_len alias )
-                            { : s names ( collect_alias_targets src2 path )
-                                ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
-                            }
-                            ( nurl_str_cat src2 `` )
-                            : i lex2 ( nurl_lex_new eff_src2 path )
-                            // Track the imported file as current so its own
-                            // `$`-imports resolve importer-relative (mirrors
-                            // scan_fn_sigs / gen_import_decl).
-                            : s saved_sf ( vis_current_src_file )
-                            ( vis_set_current_src_file path )
-                            ( scan_type_names lex2 syms )
-                            ( nurl_lex_free lex2 )
-                            ( vis_set_current_src_file saved_sf )
-                        }
-                    }
-                    {}
-                }
-                { ? & == depth 0 == tt TT_COLON
-                    { ( nurl_lex_advance lex )  // consume ':'
-                        ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
-                        ? == ( nurl_lex_type lex ) TT_PIPE
-                        {  // enum `: | Name { ... }` — name follows the `|`
+                        ? == ( nurl_lex_type lex ) TT_STR
+                        { : s path ( __norm_import_path ( nurl_lex_val lex ) )
                             ( nurl_lex_advance lex )
-                            ? == ( nurl_lex_type lex ) TT_IDENT
-                            { : s name ( nurl_lex_val lex )
-                                ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
-                                ( nurl_lex_advance lex )
-                                ? == ( nurl_lex_type lex ) TT_LBRACE { ( record_type_layout lex name `enum` ) } {}
-                            }
+                            : ~ s alias ``
+                            ? ( is_ident_tok ( nurl_lex_type lex ) )
+                            { = alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) }
                             {}
+                            : s __tn_key ( __canon_import_key path )
+                            : s marker ( nurl_sym_get syms `__tn_scanned__` )
+                            ? ( str_contains_word marker __tn_key )
+                            {}
+                            { : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __tn_key `` )
+                                ( nurl_str_cat3 marker ` ` __tn_key )
+                                ( nurl_sym_def syms `__tn_scanned__` new_marker )
+                                ( __require_import_file lex __im_ln __im_cl path )
+                                : s src2 ( compiler_read_source path )
+                                // Uniform ownership, as at the other two sites.
+                                : s eff_src2 ? != 0 ( nurl_str_len alias )
+                                { : s names ( collect_alias_targets src2 path )
+                                    ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
+                                }
+                                ( nurl_str_cat src2 `` )
+                                : i lex2 ( nurl_lex_new eff_src2 path )
+                                // Track the imported file as current so its own
+                                // `$`-imports resolve importer-relative (mirrors
+                                // scan_fn_sigs / gen_import_decl).
+                                : s saved_sf ( vis_current_src_file )
+                                ( vis_set_current_src_file path )
+                                ( scan_type_names lex2 syms )
+                                ( nurl_lex_free lex2 )
+                                ( vis_set_current_src_file saved_sf )
+                            }
                         }
-                        {  // struct iff a pure IDENT is immediately followed
-                            // by `{` (struct body) or `[` (generic params).
-                            ? == ( nurl_lex_type lex ) TT_IDENT
-                            { : i nxt ( nurl_lex_peek_type lex )
-                                ? | == nxt TT_LBRACE == nxt TT_LBRACK
+                        {}
+                    }
+                    { ? & == depth 0 == tt TT_COLON
+                        { ( nurl_lex_advance lex )  // consume ':'
+                            ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
+                            ? == ( nurl_lex_type lex ) TT_PIPE
+                            {  // enum `: | Name { ... }` — name follows the `|`
+                                ( nurl_lex_advance lex )
+                                ? == ( nurl_lex_type lex ) TT_IDENT
                                 { : s name ( nurl_lex_val lex )
                                     ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
-                                    ? == nxt TT_LBRACE {
-                                        ( nurl_lex_advance lex )
-                                        ( record_type_layout lex name `struct` )
-                                    } {}
+                                    ( nurl_lex_advance lex )
+                                    ? == ( nurl_lex_type lex ) TT_LBRACE { ( record_type_layout lex name `enum` ) } {}
                                 }
                                 {}
                             }
-                            {}
+                            {  // struct iff a pure IDENT is immediately followed
+                                // by `{` (struct body) or `[` (generic params).
+                                ? == ( nurl_lex_type lex ) TT_IDENT
+                                { : i nxt ( nurl_lex_peek_type lex )
+                                    ? | == nxt TT_LBRACE == nxt TT_LBRACK
+                                    { : s name ( nurl_lex_val lex )
+                                        ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
+                                        ? == nxt TT_LBRACE {
+                                            ( nurl_lex_advance lex )
+                                            ( record_type_layout lex name `struct` )
+                                        } {}
+                                    }
+                                    {}
+                                }
+                                {}
+                            }
                         }
+                        { ( nurl_lex_advance lex ) }
                     }
-                    { ( nurl_lex_advance lex ) }
                 }
-            }
-        }
+            } }
     }
 }
 
@@ -45721,6 +45799,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // every struct whose name is one or two tparam-shaped characters.
     // scan_type_names is purely lexical (registers `Name → %Name`, prints
     // no IR), so running it first is free and changes nothing else.
+    // Every pass below re-reads the same files: they share where their
+    // brace blocks end (g_body_ends), so a body is lexed once to be
+    // stepped over, not once per pass.
+    ( body_ends_reset )
     : i lex_tn ( nurl_lex_new src path )
     ( scan_type_names lex_tn syms )
     ( nurl_lex_free lex_tn )
