@@ -31571,14 +31571,16 @@
 
 // N newlines — the re-lex padding that maps a template buffer's line 1
 // onto the template's real source line (see collect_fn_body).
+// n newlines: the padding that puts a re-lexed template body on its own
+// source lines. Copied out of one buffer that only ever grows (doubling)
+// — built one `\n` at a time it was a copy of the whole prefix per line,
+// quadratic in the line a template sits on, paid per instantiation.
+: ~ s g_nl_buf ``
+
 @ __nl_pad i n → s {
-    : ~ s r ``
-    : ~ i k 0
-    ~ < k n {
-        = r ( nurl_str_cat r `\n` )
-        = k + k 1
-    }
-    r
+    ? <= n 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ~ < ( nurl_str_len g_nl_buf ) n { = g_nl_buf ( nurl_str_cat3 g_nl_buf g_nl_buf `\n` ) }
+    ^ ( nurl_str_slice g_nl_buf 0 n )
 }
 
 // compute_generic_inout_sink: derive a generic function's `inout` and
