@@ -1,0 +1,3 @@
+COMPILE FAIL
+ERRORS
+cycle collection: error: handle type 'Slot' (here holding an Rc, or a closure) has a Slot_drop but no Slot_trace, so the cycle collector cannot see inside it and a cycle through it would never be freed. Define Slot_trace beside it — the handle and an 's vis' as parameters, handing ( mem_trace [T] x vis ) each value the handle holds, as stdlib/std/hashmap.nu HashMap_trace does (docs/MEMORY.md 7.7). [while instantiating 'Rc_drop__Node' — the error may depend on the concrete type arguments; first call site: <library handle>:0]

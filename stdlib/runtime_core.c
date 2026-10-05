@@ -4549,6 +4549,126 @@ void nurl__rctx_release(void *ctx) {
     memset(c, 0, sizeof *c);
 }
 
+
+/* Leaving an extent. A fiber can come back from the closure — or from the
+ * longjmp of its panic — on a different worker thread than it entered on,
+ * and the compiler assumes a function's thread never changes: an address
+ * of a thread-local computed before the call may be reused after it. So
+ * every thread-local touched after the call is reached through these
+ * out-of-line helpers, which compute it on the thread they run on. */
+__attribute__((noinline))
+static void nurl__recover_leave(NurlPanicFrame *frame) {
+    nurl__panic_top = frame->prev;
+    nurl__jrnl_active--;
+    nurl__jrnl_truncate(frame->jmark);
+}
+__attribute__((noinline))
+static void nurl__recover_caught(NurlPanicFrame *frame) {
+    nurl__recover_leave(frame);
+    nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
+    nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
+}
+__attribute__((noinline))
+static void nurl__recover_enter(NurlPanicFrame *frame) {
+    frame->jmark = nurl__jrnl_mark();
+    frame->prev  = nurl__panic_top;
+    nurl__panic_top = frame;
+    nurl__jrnl_active++;
+}
+
+/* `recover closure` entry. fn_ptr is `void(*)(void *env)`; returns 0 if
+ * the closure completed, 1 if it panicked (message via _last_msg). */
+NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    NurlPanicFrame frame;
+    frame.msg = NULL;
+    nurl__recover_enter(&frame);
+    if (setjmp(frame.jb) == 0) {
+        ((void (*)(void *))fn_ptr)(env_ptr);
+        /* Normal completion: forget anything that escaped the extent
+         * (the caller's auto-drop owns it now). Values that did not
+         * escape were already freed and removed by nurl_free. */
+        nurl__recover_leave(&frame);
+        return 0;
+    }
+    /* nurl_panic already drained + freed the live entries before the
+     * longjmp; the truncate in leave is defensive. */
+    nurl__recover_caught(&frame);
+    return 1;
+}
+
+/* Captured panic message from the most recent recover-with-panic on
+ * this thread. BORROWED — overwritten by the next panic. */
+NURL_TLS_FN const char *nurl_panic_last_msg(void) {
+    return nurl__panic_last_msg ? nurl__panic_last_msg : "";
+}
+
+/* Trigger a panic. If a recover frame is active on this thread,
+ * longjmp to it; the caller will observe a return of 1 from
+ * nurl_recover, plus the captured message via nurl_panic_last_msg.
+ * Otherwise this is a hard-failure: print to stderr and abort, which
+ * is the v0.3.0 status-quo for any unrecoverable condition. */
+NURL_TLS_FN void nurl_panic(const char *msg) {
+    if (!nurl__panic_top) {
+        fprintf(stderr, "nurl panic: %s\n",
+                msg && *msg ? msg : "(no message)");
+#if NURL_HAVE_EXECINFO
+        /* Drop a stack trace before aborting. With --debug, every frame
+         * line ends in `+0xNNN`; pipe the binary path + offsets through
+         * `addr2line` to recover `.nu:LINE` source locations. The
+         * skip-first-frame heuristic (i=1) hides this helper itself
+         * from the dump; the panic-call frame still appears at top. */
+        void *bt[64];
+        int n = backtrace(bt, 64);
+        if (n > 1) {
+            fprintf(stderr, "stack backtrace:\n");
+            fflush(stderr);
+            backtrace_symbols_fd(bt + 1, n - 1, fileno(stderr));
+        }
+#endif
+        fflush(stderr);
+        /* abort() skips stdio cleanup — see nurl__oom. */
+        fflush(stdout);
+        abort();
+    }
+    nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
+                                         : strdup("(no message)");
+    /* Run the scope-exit drops the longjmp is about to skip: free every
+     * owned allocation recorded since this recover frame's mark while
+     * the owning C frames are still valid. Closes the panic-unwind leak
+     * (docs/MEMORY.md §7). */
+    nurl__jrnl_drain(nurl__panic_top->jmark);
+    longjmp(nurl__panic_top->jb, 1);
+}
+
+#else  /* __wasi__: setjmp/longjmp unavailable until the wasm
+        * Exception Handling proposal is standardised. Stub the panic
+        * model to run-and-abort:
+        *   - nurl_recover runs fn(env) inline and returns 0 (no
+        *     unwind on panic — process aborts).
+        *   - nurl_panic prints to stderr and aborts unconditionally,
+        *     identical to the no-frame path on native targets.
+        *   - nurl_panic_last_msg always returns "". */
+
+NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    ((void (*)(void *))fn_ptr)(env_ptr);
+    return 0;
+}
+
+NURL_TLS_FN const char *nurl_panic_last_msg(void) { return ""; }
+
+NURL_TLS_FN void nurl_panic(const char *msg) {
+    fprintf(stderr, "nurl panic (wasi: no recover): %s\n",
+            msg && *msg ? msg : "(no message)");
+    fflush(stderr);
+    /* abort() skips stdio cleanup — see nurl__oom. */
+    fflush(stdout);
+    abort();
+}
+
+#endif  /* __wasi__ panic stubs */
+
 /* ── Reference-count cycle collector (docs/MEMORY.md §7.7) ──────────────
  *
  * Reference counting frees a value when its last handle goes — except a
@@ -4850,125 +4970,6 @@ NURL_TLS_FN void nurl_cc_context_end(void) {
     free(s);
     nurl__cc = NULL;
 }
-
-/* Leaving an extent. A fiber can come back from the closure — or from the
- * longjmp of its panic — on a different worker thread than it entered on,
- * and the compiler assumes a function's thread never changes: an address
- * of a thread-local computed before the call may be reused after it. So
- * every thread-local touched after the call is reached through these
- * out-of-line helpers, which compute it on the thread they run on. */
-__attribute__((noinline))
-static void nurl__recover_leave(NurlPanicFrame *frame) {
-    nurl__panic_top = frame->prev;
-    nurl__jrnl_active--;
-    nurl__jrnl_truncate(frame->jmark);
-}
-__attribute__((noinline))
-static void nurl__recover_caught(NurlPanicFrame *frame) {
-    nurl__recover_leave(frame);
-    nurl_free(nurl__panic_last_msg);  /* strdup here is nurl__xstrdup: counted */
-    nurl__panic_last_msg = frame->msg ? frame->msg : strdup("(no panic message)");
-}
-__attribute__((noinline))
-static void nurl__recover_enter(NurlPanicFrame *frame) {
-    frame->jmark = nurl__jrnl_mark();
-    frame->prev  = nurl__panic_top;
-    nurl__panic_top = frame;
-    nurl__jrnl_active++;
-}
-
-/* `recover closure` entry. fn_ptr is `void(*)(void *env)`; returns 0 if
- * the closure completed, 1 if it panicked (message via _last_msg). */
-NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
-    if (!fn_ptr) return 0;
-    NurlPanicFrame frame;
-    frame.msg = NULL;
-    nurl__recover_enter(&frame);
-    if (setjmp(frame.jb) == 0) {
-        ((void (*)(void *))fn_ptr)(env_ptr);
-        /* Normal completion: forget anything that escaped the extent
-         * (the caller's auto-drop owns it now). Values that did not
-         * escape were already freed and removed by nurl_free. */
-        nurl__recover_leave(&frame);
-        return 0;
-    }
-    /* nurl_panic already drained + freed the live entries before the
-     * longjmp; the truncate in leave is defensive. */
-    nurl__recover_caught(&frame);
-    return 1;
-}
-
-/* Captured panic message from the most recent recover-with-panic on
- * this thread. BORROWED — overwritten by the next panic. */
-NURL_TLS_FN const char *nurl_panic_last_msg(void) {
-    return nurl__panic_last_msg ? nurl__panic_last_msg : "";
-}
-
-/* Trigger a panic. If a recover frame is active on this thread,
- * longjmp to it; the caller will observe a return of 1 from
- * nurl_recover, plus the captured message via nurl_panic_last_msg.
- * Otherwise this is a hard-failure: print to stderr and abort, which
- * is the v0.3.0 status-quo for any unrecoverable condition. */
-NURL_TLS_FN void nurl_panic(const char *msg) {
-    if (!nurl__panic_top) {
-        fprintf(stderr, "nurl panic: %s\n",
-                msg && *msg ? msg : "(no message)");
-#if NURL_HAVE_EXECINFO
-        /* Drop a stack trace before aborting. With --debug, every frame
-         * line ends in `+0xNNN`; pipe the binary path + offsets through
-         * `addr2line` to recover `.nu:LINE` source locations. The
-         * skip-first-frame heuristic (i=1) hides this helper itself
-         * from the dump; the panic-call frame still appears at top. */
-        void *bt[64];
-        int n = backtrace(bt, 64);
-        if (n > 1) {
-            fprintf(stderr, "stack backtrace:\n");
-            fflush(stderr);
-            backtrace_symbols_fd(bt + 1, n - 1, fileno(stderr));
-        }
-#endif
-        fflush(stderr);
-        /* abort() skips stdio cleanup — see nurl__oom. */
-        fflush(stdout);
-        abort();
-    }
-    nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
-                                         : strdup("(no message)");
-    /* Run the scope-exit drops the longjmp is about to skip: free every
-     * owned allocation recorded since this recover frame's mark while
-     * the owning C frames are still valid. Closes the panic-unwind leak
-     * (docs/MEMORY.md §7). */
-    nurl__jrnl_drain(nurl__panic_top->jmark);
-    longjmp(nurl__panic_top->jb, 1);
-}
-
-#else  /* __wasi__: setjmp/longjmp unavailable until the wasm
-        * Exception Handling proposal is standardised. Stub the panic
-        * model to run-and-abort:
-        *   - nurl_recover runs fn(env) inline and returns 0 (no
-        *     unwind on panic — process aborts).
-        *   - nurl_panic prints to stderr and aborts unconditionally,
-        *     identical to the no-frame path on native targets.
-        *   - nurl_panic_last_msg always returns "". */
-
-NURL_TLS_FN long long nurl_recover(void *fn_ptr, void *env_ptr) {
-    if (!fn_ptr) return 0;
-    ((void (*)(void *))fn_ptr)(env_ptr);
-    return 0;
-}
-
-NURL_TLS_FN const char *nurl_panic_last_msg(void) { return ""; }
-
-NURL_TLS_FN void nurl_panic(const char *msg) {
-    fprintf(stderr, "nurl panic (wasi: no recover): %s\n",
-            msg && *msg ? msg : "(no message)");
-    fflush(stderr);
-    /* abort() skips stdio cleanup — see nurl__oom. */
-    fflush(stdout);
-    abort();
-}
-
-#endif  /* __wasi__ panic stubs */
 
 
 /* ── executable code pages ──────────────────────────────────────────

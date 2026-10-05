@@ -36234,7 +36234,10 @@
     ? ( __is_closure_ty ty ) { ^ v } {}
     ? ( __is_libh ty ) {
         ? ! ( __libh_has_op ( __libh_base ty ) `trace` ) {
-            ( die_at `cycle collection` ( nurl_str_cat3 `'` ( llvm_to_nurl ty ) `' can hold an Rc (or a closure) but its module defines no _trace function, so the cycle collector cannot see inside it — add one (see stdlib/std/hashmap.nu HashMap_trace).` ) )
+            : s __lb ( __libh_base ty )
+            ( die_at `cycle collection` ( nurl_str_cat4 ( nurl_str_cat3 `handle type '` __lb `' (here holding an Rc, or a closure) has a ` )
+            ( nurl_str_cat __lb `_drop but no ` ) ( nurl_str_cat __lb `_trace, so the cycle collector cannot see inside it and a cycle through it would never be freed. Define ` )
+            ( nurl_str_cat __lb `_trace beside it — the handle and an 's vis' as parameters, handing ( mem_trace [T] x vis ) each value the handle holds, as stdlib/std/hashmap.nu HashMap_trace does (docs/MEMORY.md 7.7).` ) ) )
         } {}
         ( __libh_defer ty `trace` )
         ^ v
@@ -36270,6 +36273,9 @@
     : s __pop0 ( nurl_sym_get g_impl_name_syms `__pending_ccops__` )
     ( nurl_sym_def g_impl_name_syms `__pending_ccops__` ( __bar_add __pop0 t ) )
     ( __cc_request_trace t syms )
+    // The table's drop: the value's own drop function, which nothing else
+    // may have asked for — the last handle releases it through the
+    // runtime (nurl_rc_drop_value), not through a drop in this program.
     ? ( __type_needs_drop t syms ) { ( __dropif_request t ( __drop_mangle t ) ) } {}
 }
 
@@ -36332,6 +36338,10 @@
     ~ != 0 ( nurl_str_len orest ) {
         : s t ( __bar_first orest ) = orest ( __bar_rest orest )
         : s m ( __cc_mangle t )
+        // The value's own drop function, which nothing else may have asked
+        // for: the last handle releases it through the runtime
+        // (nurl_rc_drop_value), never through a drop in the program.
+        ( gen_drop_for_type t syms )
         // RcImpl's layout, [ i64 strong ][ i64 weak ][ i64 cc ][ t ].
         : s impl ( nurl_str_cat3 `{ i64, i64, i64, ` ( nurl_llty t ) ` }` )
         ( nurl_print `@__nurl_ccops_` ) ( nurl_print m ) ( nurl_print ` = linkonce_odr constant { ptr, ptr } { ptr @__nurl_cctrace_` )
