@@ -1888,11 +1888,40 @@ back-edge whose target should die with its strong handles: the value is
 dropped when the strong count reaches zero, the block freed when the weak
 count is zero too.
 
-**What is outside.** A cycle through raw memory — a `*T` written by hand, an
-`s` pointer to a block, `rc_ptr` stores, `mem_forget` — is invisible to the
-collector, as raw memory always is (§7.4). The thread-shared doors — `Arc`
-and the handles whose state stores a closure (`Supervisor`, `Route`,
-`QuicServer`, …) — are the next phase of this work; until then a cycle
-through them is a leak the program must break (a `Weak`, or the raw
-back-pointer `http3_server.nu` uses).
+**Thread-shared handles: cycles are ruled out at compile time.** `Arc`,
+`Channel`, `DChannel` and the library handles over a counted block (Route,
+Supervisor, QuicServer, JobNode, …) cross threads; a collector would have to
+stop every thread at a point where no data structure is half-updated, which
+no safepoint the runtime has can promise. So their cycles cannot be built:
 
+- *An `Arc` whose payload can lead back to it is frozen once made.*
+  `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph (a handle's
+  state type is learned from its drop, `rcbox_release [XImpl]`); for such an
+  Arc, `arc_get` hands out a copy — nothing done to it reaches the shared
+  value — and `arc_set` / `arc_ptr` are compile errors. The payload is built
+  first and shared whole, a tree from its leaves up. `ArcWeak`
+  (`arc_downgrade` / `arc_weak_upgrade`) points back without owning.
+- *A store into an existing thread-shared handle may not hold that handle.*
+  A closure's captures are not in its type, so the compiler follows values:
+  what a closure can capture travels with the literal, its bindings, the
+  functions that return one and the bindings it is handed to alongside it
+  (a router its routes' handlers went into). A call that keeps a value and
+  is handed an existing thread-shared handle — `job_register node … f`,
+  `chan_send ch v`, `supervisor_add sup … start` — is decided at module end:
+  if the value's captures lead back to that handle, it is a compile error
+  (`should_fail_ts_closure_self_cycle.nu`); so is a queue receiving a value
+  of its own channel's type. A forwarded closure parameter carries the rule
+  to its callers. A handle being built (a constructor) is reachable from
+  nothing, and needs no check. This rule found a real cycle in
+  packages/swarm-mcp (a job handler capturing its own swarm).
+
+**What is outside.** A cycle through raw memory — a `*T` written by hand, an
+`s` pointer to a block, `rc_ptr` stores, `mem_forget` — is invisible, as raw
+memory always is (§7.4); the non-owning back-pointer in
+stdlib/ext/http3_server.nu is the deliberate use of exactly that. A closure
+whose captures cannot be followed (it came out of a field, an element, a
+call through a closure value, or a factory compiled after its caller) stored
+into an existing thread-shared handle is rejected rather than guessed at.
+Whether two values of one handle type are the same handle is not in their
+types: a tree of handles stores one into another, and outside a channel's
+own queue that is not checked (an Arc tree is safe by being frozen).
