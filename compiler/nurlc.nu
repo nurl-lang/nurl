@@ -4166,7 +4166,7 @@
     } {}
     // What a returned closure can capture: the function's answer at every
     // call (thread-shared cycle rules, __cc_note_call).
-    ? ( __is_closure_ty ( nurl_get_last_type ) ) { ( __clo_ret_cs syms ret_first_tt ret_first_val ) } {}
+    ? | ( __is_closure_ty ( nurl_get_last_type ) ) ( __ts_may_hold_closures ( nurl_get_last_type ) syms ) { ( __clo_ret_cs syms ret_first_tt ret_first_val ) } {}
     // Returned-closure ownership: the caller owns what it gets back
     // (mem_retclo_own_result).
     ? ( __is_closure_ty ( nurl_get_last_type ) )
@@ -32761,7 +32761,7 @@
     : s ret_ident ( nurl_sym_get syms `__last_ident_name__` )
     // Returned-closure ownership: the fall-off tail is a return site like
     // any `^` (mem_retclo_own_result).
-    ? & __fall_used ( __is_closure_ty ret_ty )
+    ? & __fall_used | ( __is_closure_ty ret_ty ) ( __ts_may_hold_closures ret_ty syms )
     { ( __clo_ret_cs syms tail_tt ( nurl_sym_get syms `__tail_first_val__` ) ) } {}
     ? & __fall_used ( __is_closure_ty ret_ty )
     { = last ( mem_retclo_own_result syms cg ret_ty last tail_tt
@@ -35588,6 +35588,23 @@
     ^ F
 }
 
+// As __ts_reaches, following handles only: a closure is no edge.
+@ __ts_reaches_handles s ty s target i syms → b {
+    ? | == 0 ( nurl_str_len ty ) ( seq ty `*` ) { ^ F } {}
+    : ~ s todo ( __ts_walk ty syms `` )
+    : ~ s seen ``
+    ~ != 0 ( nurl_str_len todo ) {
+        : s u ( __bar_first todo ) = todo ( __bar_rest todo )
+        ? ( seq u target ) { ^ T } {}
+        ? & ! ( seq u `*` ) ! ( __bar_has seen u ) {
+            = seen ( __bar_add seen u )
+            : s c ( __ts_contents u )
+            ? & != 0 ( nurl_str_len c ) ! ( seq c `*` ) { = todo ( __bar_union todo ( __ts_walk c syms `` ) ) } {}
+        } {}
+    }
+    ^ F
+}
+
 // Can the thread-shared handle type `node` be part of a cycle — can what
 // its block holds lead back to it?
 @ __ts_cyclic s node i syms → b {
@@ -35642,6 +35659,31 @@
     ^ != 0 ( nurl_sym_len2 g_impl_name_syms `rcstate##` ty )
 }
 
+// Can a value of type `ty` hold a closure — directly, or in the state of a
+// thread-shared handle it reaches? Its closures' captures then have to be
+// followed with the value (memoised).
+@ __ts_may_hold_closures s ty i syms → b {
+    : i c0 ( nurl_str_get ty 0 )
+    ? & != c0 37 != c0 123 { ^ F } {}
+    : s key ( nurl_str_cat `tsmhc##` ty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) { ^ ( seq ( nurl_sym_get g_impl_name_syms key ) `1` ) } {}
+    : ~ s todo ( __ts_walk ty syms `` )
+    : ~ s seen ``
+    : ~ b r F
+    ~ & ! r != 0 ( nurl_str_len todo ) {
+        : s u ( __bar_first todo ) = todo ( __bar_rest todo )
+        ? ( seq u `*` ) { = r T } {
+            ? ! ( __bar_has seen u ) {
+                = seen ( __bar_add seen u )
+                : s c ( __ts_contents u )
+                ? ( seq c `*` ) { = r T } { ? != 0 ( nurl_str_len c ) { = todo ( __bar_union todo ( __ts_walk c syms `` ) ) } {} }
+            } {}
+        }
+    }
+    ( nurl_sym_def g_impl_name_syms key ? r `1` `0` )
+    ^ r
+}
+
 // The CS a value of type `ty` has by its type alone: the nodes it holds,
 // tagged `=` — a value of a type, not a capture: whether it is the very
 // node it is stored into is not in the type (a tree of handles stores one
@@ -35670,10 +35712,19 @@
     : s ty ( nurl_sym_get syms v )
     ? ! ( __is_closure_ty ty ) {
         // …plus the captures of the closures stored into it (a router its
-        // routes' handlers were added to: __cc_note_call).
-        : ~ s lc ( nurl_sym_get2 syms v `__clocs` )
-        ? ( seq lc `-` ) { = lc `` } {}
-        ^ ( __bar_union ( __clo_cs_type ty syms ) lc )
+        // routes' handlers were added to: __cc_note_call) — or, for a value
+        // that can hold closures but whose binding learned nothing, the
+        // caller's (a parameter: `?pK`) or nobody's (`?`).
+        : s tc ( __clo_cs_type ty syms )
+        ? ! ( __ts_may_hold_closures ty syms ) { ^ tc } {}
+        ? != 0 ( nurl_sym_len2 syms v `__clocs` ) {
+            : ~ s lc ( nurl_sym_get2 syms v `__clocs` )
+            ? ( seq lc `-` ) { = lc `` } {}
+            ^ ( __bar_union tc lc )
+        } {}
+        : i pk ( nurl_sym_word_index syms `__fn_param_names__` v )
+        ? >= pk 0 { ^ ( __bar_add tc ( nurl_str_cat `?p` ( nurl_str_int pk ) ) ) } {}
+        ^ ( __bar_add tc `?` )
     } {}
     ? != 0 ( nurl_sym_len2 syms v `__clocs` ) {
         : s c ( nurl_sym_get2 syms v `__clocs` )
@@ -35710,17 +35761,21 @@
     ? ( is_ident_tok tt ) { ^ ( __clo_cs_ident syms val ) } {}
     ? == tt TT_LPAREN {
         ? ( __is_closure_ty ty ) { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_call_cs__` ) `` ) } {}
+        ? ( __ts_may_hold_closures ty syms ) { ^ ( __bar_union ( __clo_cs_type ty syms ) ( nurl_sym_get syms `__last_call_cs__` ) ) } {}
         ^ ( __clo_cs_type ty syms )
     } {}
     ? == tt TT_AT { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_agg_cs__` ) `` ) } {}
+    // A field, an element, a join: what closures it holds is not followed.
+    ? ( __ts_may_hold_closures ty syms ) { ^ ( __bar_add ( __clo_cs_type ty syms ) `?` ) } {}
     ^ ( __clo_cs_type ty syms )
 }
 
 // A closure-typed binding `name` takes the CS of its initialiser (`grow`:
 // an assignment, which adds to what it may already hold).
 @ __clo_bind_cs i syms s name s ty i tt s val b grow → v {
-    ? != ( nurl_str_get ty 0 ) 123 { ^ v } {}
-    ? ! ( __is_closure_ty ty ) { ^ v } {}
+    : i c0 ( nurl_str_get ty 0 )
+    ? & != c0 123 != c0 37 { ^ v } {}
+    ? ! | ( __is_closure_ty ty ) ( __ts_may_hold_closures ty syms ) { ^ v } {}
     : s c ( __clo_cs_expr syms tt val ty )
     : ~ s old ``
     ? & grow != 0 ( nurl_sym_len2 syms name `__clocs` ) {
@@ -35766,11 +35821,8 @@
     : i acn ( nurl_str_len arg_cs )
     : ~ i aci 0
     ~ & ! any < aci acn { ? != ( nurl_str_get arg_cs aci ) 59 { = any T } {} = aci + aci 1 }
-    ? ! any {
-        // (`&` evaluates both sides: the cheap test guards the walk.)
-        ? != ( nurl_str_get rlt 0 ) 123 { ^ v } {}
-        ? ! ( __is_closure_ty rlt ) { ^ v } {}
-    } {}
+    : b rclo | ( __is_closure_ty rlt ) ( __ts_may_hold_closures rlt syms )
+    ? & ! any ! rclo { ^ v } {}
     // A closure handed to a call alongside a binding that is not itself a
     // thread-shared handle (a router, a spec being filled): the binding may
     // now hold it — it carries the closure's captures from here on.
@@ -35803,10 +35855,18 @@
     } {}
     // The CS of a closure the callee returns, its parameters filled in from
     // this call's arguments; not yet known (a function compiled later): `?`.
-    ? ( __is_closure_ty rlt ) {
+    ? rclo {
         : ~ s rc ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcs##` call_name ) )
         ? == 0 ( nurl_str_len rc ) { = rc ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcs##` fname ) ) } {}
-        ? == 0 ( nurl_str_len rc ) { ( nurl_sym_def syms `__last_call_cs__` `?` ) } {
+        // Not known yet (a function compiled after this one): a reference to
+        // this call, expanded at module end (__cc_expand).
+        ? == 0 ( nurl_str_len rc ) {
+            : i cn2 ( nurl_str_to_int ( nurl_sym_get g_pending_impl `cccall_n` ) )
+            ( nurl_sym_def g_pending_impl `cccall_n` ( nurl_str_int + cn2 1 ) )
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat `cccall#` ( nurl_str_int cn2 ) ) ( nurl_str_cat3 call_name ` ` fname ) )
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat3 `cccall#` ( nurl_str_int cn2 ) `#args` ) arg_cs )
+            ( nurl_sym_def syms `__last_call_cs__` ( nurl_str_cat `@` ( nurl_str_int cn2 ) ) )
+        } {
             : ~ s out ``
             ~ != 0 ( nurl_str_len rc ) {
                 : s u ( __bar_first rc ) = rc ( __bar_rest rc )
@@ -35926,6 +35986,38 @@
     ^ out
 }
 
+// `cs` with every call reference `@n` replaced by what that call's callee
+// answers (`retcs##`, its parameters filled in from the call's arguments),
+// now that every function is compiled. A callee that never handed back a
+// closure-holding value through a NURL return answers nothing; a chain
+// deeper than 8 answers `?`.
+@ __cc_expand s cs i depth → s {
+    ? == ( nurl_str_find cs `@` ) -1 { ^ ( nurl_str_cat cs `` ) } {}
+    ? > depth 8 { ^ ( nurl_str_cat `?` `` ) } {}
+    : ~ s r ( nurl_str_cat cs `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        ? & != 0 ( nurl_str_len u ) == ( nurl_str_get u 0 ) 64 {
+            : s id ( nurl_str_slice u 1 - ( nurl_str_len u ) 1 )
+            : s ce ( nurl_sym_get g_pending_impl ( nurl_str_cat `cccall#` id ) )
+            : s args ( nurl_sym_get g_pending_impl ( nurl_str_cat3 `cccall#` id `#args` ) )
+            : ~ s rc ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcs##` ( str_first_word ce ) ) )
+            ? == 0 ( nurl_str_len rc ) { = rc ( nurl_sym_get g_pending_impl ( nurl_str_cat `retcs##` ( str_first_word ( str_skip_word ce ) ) ) ) } {}
+            ~ != 0 ( nurl_str_len rc ) {
+                : s w ( __bar_first rc ) = rc ( __bar_rest rc )
+                ? ( seq w `.` ) {} {
+                    ? & > ( nurl_str_len w ) 2 ( seq ( nurl_str_slice w 0 2 ) `?p` ) {
+                        : s ac ( __semi_nth args ( nurl_str_to_int ( nurl_str_slice w 2 - ( nurl_str_len w ) 2 ) ) )
+                        = out ( __bar_union out ( __cc_expand ac + depth 1 ) )
+                    } { = out ( __bar_union out ( __cc_expand w + depth 1 ) ) }
+                }
+            }
+        } { = out ( __bar_add out u ) }
+    }
+    ^ out
+}
+
 // Module end: propagate what forwarded closure parameters flow into, then
 // decide every parked store.
 @ resolve_cc_checks i syms → v {
@@ -35944,7 +36036,7 @@
             : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccchk#` ns ) )
             : s r3 ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) )
             : s encl ( str_first_word r3 )
-            : s cs ( str_skip_word ( str_skip_word ( str_skip_word r3 ) ) )
+            : s cs ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word r3 ) ) ) 0 )
             : s o ( __cc_owners syms ns )
             ? != 0 ( nurl_str_len o ) {
                 : ~ s r ( nurl_str_cat cs `` )
@@ -35971,7 +36063,7 @@
         : s line ( str_first_word r4 )
         : s r5 ( str_skip_word r4 )
         : s file ( str_first_word r5 )
-        : s cs ( str_skip_word r5 )
+        : s cs ( __cc_expand ( str_skip_word r5 ) 0 )
         : s o ( __cc_owners syms ns )
         ? != 0 ( nurl_str_len o ) {
             : ~ s r ( nurl_str_cat cs `` )
@@ -35992,7 +36084,11 @@
                             : s cu ( __ts_contents uu )
                             : s ob ( __libh_base oo )
                             : b qself & & vt ( seq uu oo ) | ( seq ob `Channel` ) ( seq ob `DChannel` )
-                            ? | qself & ! vt | ( seq uu oo ) & != 0 ( nurl_str_len cu ) | ( seq cu `*` ) ( __ts_reaches cu oo syms ) {
+                            // (A value-type atom follows handles only: the
+                            // closures inside the value are its binding's
+                            // capture atoms, checked as such.)
+                            : b reach ? vt ( __ts_reaches_handles cu oo syms ) | ( seq cu `*` ) ( __ts_reaches cu oo syms )
+                            ? | qself | ( seq uu oo ) & != 0 ( nurl_str_len cu ) reach {
                                 ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat ( nurl_str_cat4 `this stores a value into '` ( llvm_to_nurl oo ) `' (a handle shared across threads) that holds — directly or through a closure's captures — '` ( llvm_to_nurl uu ) )
                                 `', which leads back to it: a cycle of counts that nothing frees, since thread-shared handles are not collected (docs/MEMORY.md §7.7). Point back without owning: an ArcWeak, a raw back-pointer the owner outlives (stdlib/ext/http3_server.nu), or pass the handle in as an argument instead of capturing it.` ) ) }
                             {}

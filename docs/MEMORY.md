@@ -1909,8 +1909,12 @@ no safepoint the runtime has can promise. So their cycles cannot be built:
   is handed an existing thread-shared handle — `job_register node … f`,
   `chan_send ch v`, `supervisor_add sup … start` — is decided at module end:
   if the value's captures lead back to that handle, it is a compile error
-  (`should_fail_ts_closure_self_cycle.nu`); so is a queue receiving a value
-  of its own channel's type. A forwarded closure parameter carries the rule
+  (`should_fail_ts_closure_self_cycle.nu`). A handle VALUE stored there is
+  judged by its type: one that can lead to the owner's type is rejected even
+  when it is another instance — the types cannot tell a tree from a loop —
+  so a structure of shared handles is built from its leaves up, or points
+  back with a weak or raw back-reference; a queue receiving a value of its
+  own channel's type is the same rule. A forwarded closure parameter carries the rule
   to its callers. A handle being built (a constructor) is reachable from
   nothing, and needs no check. This rule found a real cycle in
   packages/swarm-mcp (a job handler capturing its own swarm).
@@ -1919,9 +1923,8 @@ no safepoint the runtime has can promise. So their cycles cannot be built:
 `s` pointer to a block, `rc_ptr` stores, `mem_forget` — is invisible, as raw
 memory always is (§7.4); the non-owning back-pointer in
 stdlib/ext/http3_server.nu is the deliberate use of exactly that. A closure
-whose captures cannot be followed (it came out of a field, an element, a
-call through a closure value, or a factory compiled after its caller) stored
-into an existing thread-shared handle is rejected rather than guessed at.
-Whether two values of one handle type are the same handle is not in their
-types: a tree of handles stores one into another, and outside a channel's
-own queue that is not checked (an Arc tree is safe by being frozen).
+whose captures cannot be followed (it came out of a field, an element or a
+call through a closure value) stored into an existing thread-shared handle
+is rejected rather than guessed at; a function that builds one is followed,
+also when it is compiled after its caller (the call is resolved at module
+end, `should_fail_ts_factory_cycle.nu`).
