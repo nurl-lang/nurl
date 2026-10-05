@@ -32637,7 +32637,9 @@
                 : i st + k 11
                 : ~ i e st
                 ~ & < e n ( __dce_ident_byte # i . p e ) { = e + e 1 }
-                : s nm ( nurl_str_slice # s base st - e st )
+                // Sliced from the name's own address: from `base` the clamp's
+                // strnlen would walk the whole buffer up to `st` per name.
+                : s nm ( nurl_str_slice # s + base st 0 - e st )
                 ? & != 0 ( nurl_sym_len2 g_lazy nm `__src` ) == 0 ( nurl_sym_len2 g_lazy nm `__q` ) {
                     ( nurl_sym_def g_lazy ( nurl_str_cat nm `__q` ) `1` )
                     = g_lazy_queue ? == 0 ( nurl_str_len g_lazy_queue ) ( nurl_str_cat nm `` ) ( nurl_str_cat3 g_lazy_queue ` ` nm )
