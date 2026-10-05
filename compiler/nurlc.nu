@@ -483,6 +483,11 @@
     // nurl_get_last_type): a mixed borrowed-param/owned return would
     // let a caller's owned-arg-temp drop free the very pointer we
     // returned (bit us as garbage `alloca` types in stage2).
+    // Asked of nearly every type the compiler touches, and nearly every
+    // one is already LLVM-shaped: only an unsigned spelling (it has a
+    // `u`) or a vector (`v…`) is rewritten — everything else is a copy.
+    : i __uat ( nurl_str_find t `u` )
+    ? & < __uat 0 != ( nurl_str_get t 0 ) 118 { ^ # s ( nurl_strdup t ) } {}
     ? ( seq t `u8` ) { ^ # s ( nurl_strdup `i8` ) } {}
     ? ( seq t `u16` ) { ^ # s ( nurl_strdup `i16` ) } {}
     ? ( seq t `u32` ) { ^ # s ( nurl_strdup `i32` ) } {}
@@ -7917,23 +7922,61 @@
 // in the same order, so the hash value is unchanged.
 // FNV-1a over base then suffix — the hash of the two concatenated,
 // without concatenating them. See nurl_sym_get2.
-@ __sym_hash2 s base i bl s suffix i sl → i {
-    : *u bp # *u base
-    : *u sp # *u suffix
-    : ~ i hsh 2166136261
+// The symbol table's hash. A compile asks it millions of times, mostly of
+// keys of 10-40 bytes that differ at the start, at the end or in length
+// (`<fn>__arity`, `retlend##<fn>`, `__last_call_guard__`). Byte-serial
+// FNV-1a was a multiply per byte on one dependency chain; this reads at
+// most three 8-byte windows — the first, the middle, the last — and mixes
+// them with the length: constant work per key. Keys equal in all of those
+// but not in between collide, which costs a compare on the chain, never a
+// wrong answer (lookups compare the whole name).
+@ __sym_mix i n i a i b i c → i {
+    : ~ i h ^^ * n 6364136223846793005 a
+    = h * ^^ h >> h 29 2685821657736338717
+    = h ^^ h b
+    = h * ^^ h >> h 31 6364136223846793005
+    = h ^^ h c
+    = h * ^^ h >> h 30 2685821657736338717
+    = h ^^ h >> h 32
+    ^ & h 4294967295
+}
+
+// Bytes [off, off + cnt) of `p` (cnt <= 8) as a little-endian integer.
+@ __sym_w8 s p i off i cnt → i {
+    : *u q # *u p
+    : ~ i w 0
     : ~ i k 0
-    ~ < k bl {
-        = hsh & ^^ hsh & # i . bp k 255 4294967295
-        = hsh & * hsh 16777619 4294967295
+    ~ < k cnt {
+        = w | w << & # i . q + off k 255 * k 8
         = k + k 1
     }
-    = k 0
-    ~ < k sl {
-        = hsh & ^^ hsh & # i . sp k 255 4294967295
-        = hsh & * hsh 16777619 4294967295
+    ^ w
+}
+
+// The same window over the concatenation of base[0, bl) and suffix.
+@ __sym_cw8 s base i bl s suffix i off i cnt → i {
+    ? <= + off cnt bl { ^ ( __sym_w8 base off cnt ) } {}
+    ? >= off bl { ^ ( __sym_w8 suffix - off bl cnt ) } {}
+    : *u bq # *u base
+    : *u sq # *u suffix
+    : ~ i w 0
+    : ~ i k 0
+    ~ < k cnt {
+        : i at + off k
+        : i by ? < at bl & # i . bq at 255 & # i . sq - at bl 255
+        = w | w << by * k 8
         = k + k 1
     }
-    ^ hsh
+    ^ w
+}
+
+@ __sym_hash2 s base i bl s suffix i sl → i {
+    : i n + bl sl
+    : i fc ? < n 8 n 8
+    : i a ( __sym_cw8 base bl suffix 0 fc )
+    : i c ? > n 8 ( __sym_cw8 base bl suffix - n 8 8 ) 0
+    : i b ? > n 16 ( __sym_cw8 base bl suffix - / n 2 4 8 ) 0
+    ^ ( __sym_mix n a b c )
 }
 
 @ __sym_hash s name → i {
@@ -7943,15 +7986,11 @@
 // __sym_hash over the first `n` bytes of `name`, for a caller that has
 // already measured it.
 @ __sym_hash_n s name i n → i {
-    : *u np # *u name
-    : ~ i hsh 2166136261
-    : ~ i k 0
-    ~ < k n {
-        = hsh & ^^ hsh & # i . np k 255 4294967295
-        = hsh & * hsh 16777619 4294967295
-        = k + k 1
-    }
-    ^ hsh
+    : i fc ? < n 8 n 8
+    : i a ( __sym_w8 name 0 fc )
+    : i c ? > n 8 ( __sym_w8 name - n 8 8 ) 0
+    : i b ? > n 16 ( __sym_w8 name - / n 2 4 8 ) 0
+    ^ ( __sym_mix n a b c )
 }
 
 // Twice as many live entries as buckets: four times the buckets, every
@@ -8111,6 +8150,35 @@
     : i tl ( nurl_str_len type )
     : i hn ( __sym_hash_n name nl )
     : i bh % hn ( nurl_peek t 6 )
+    // A name defined again in the scope that already holds it (the
+    // compiler's side channels — `__last_call_guard__` and the like —
+    // are redefined on every call) takes the new value in place: the
+    // newer entry would shadow the older until the same pop removed both,
+    // so nothing can tell the difference — except the cost of a copied
+    // name per definition and bucket chains that grew one duplicate per
+    // call for every other lookup in the bucket to step over.
+    : *i hashes0 # *i # s ( nurl_peek t 12 )
+    : *i lens0 # *i # s ( nurl_peek t 11 )
+    : i dnow ( nurl_peek t 1 )
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { = cur 0 } {
+            ? & == hn . hashes0 idx == 0 # i ( strcmp name . names idx ) {
+                ? == . depths idx dnow {
+                    // (Most redefinitions reset a channel that is already
+                    // empty, or store what it holds: nothing to copy.)
+                    : s old . types idx
+                    ? & == tl ( __sym_vlen t types idx ) == 0 # i ( memcmp old type tl ) { ^ } {}
+                    ( nurl_free old )
+                    = . types idx # s ( nurl_strdup_n type tl )
+                    = . lens0 idx tl
+                    ^
+                } {}
+                = cur 0
+            } { = cur . prev idx }
+        }
+    }
     = . names count # s ( nurl_strdup_n name nl )
     = . types count # s ( nurl_strdup_n type tl )
     = . depths count ( nurl_peek t 1 )
