@@ -28308,7 +28308,17 @@
 // thread boundary, "" when it may. A thin named wrapper so the three
 // call sites (thread_spawn, spawn, chan_send) read the same.
 @ __thr_capture_reason i syms s lty → s {
-    ^ ( __thr_check syms lty 0 0 )
+    // Asked of every capture of every closure (the Send capture atoms):
+    // memoised per type — markers are global, so the answer is too.
+    : s key ( nurl_str_cat `thrsend##` lty )
+    ? != 0 ( nurl_sym_len g_impl_name_syms key ) {
+        : s m ( nurl_sym_get g_impl_name_syms key )
+        ? ( seq m `-` ) { ^ ( nurl_str_cat `` `` ) } {}
+        ^ ( nurl_str_cat m `` )
+    } {}
+    : s r ( __thr_check syms lty 0 0 )
+    ( nurl_sym_def g_impl_name_syms key ? == 0 ( nurl_str_len r ) ( nurl_str_cat `-` `` ) ( nurl_str_cat r `` ) )
+    ^ r
 }
 
 // __thr_lacks: the same question with a BOOLEAN answer, for the callers
