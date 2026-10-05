@@ -6323,18 +6323,22 @@
     ~ != 0 ( nurl_str_len rest ) {
         : s reg ( str_first_word rest )
         = rest ( str_skip_word rest )
-        // `h|cond|type|value`: a handle temporary (gen_call).
-        ? ( nurl_str_starts reg `h|` ) {
-            : ~ s w ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
-            : i b1 ( nurl_str_find w `|` )
-            : s c ( nurl_str_slice w 0 b1 )
-            = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
-            : i b2 ( nurl_str_find w `|` )
-            : s ty ( nurl_str_slice w 0 b2 )
-            : s v ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
-            ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
-            ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-        } { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)` ) ( emit_dbg_eol ) }
+        // `c|env`: a closure literal's env (null when the callee kept it).
+        ? ( nurl_str_starts reg `c|` ) {
+            ( nurl_print `  call void @nurl_closure_drop(i8* ` ) ( nurl_print ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 ) ) ( nurl_print `)` ) ( emit_dbg_eol )
+        } {
+            // `h|cond|type|value`: a handle temporary (gen_call).
+            ? ( nurl_str_starts reg `h|` ) {
+                : ~ s w ( nurl_str_slice reg 2 - ( nurl_str_len reg ) 2 )
+                : i b1 ( nurl_str_find w `|` )
+                : s c ( nurl_str_slice w 0 b1 )
+                = w ( nurl_str_slice w + b1 1 - - ( nurl_str_len w ) b1 1 )
+                : i b2 ( nurl_str_find w `|` )
+                : s ty ( nurl_str_slice w 0 b2 )
+                : s v ( nurl_str_slice w + b2 1 - - ( nurl_str_len w ) b2 1 )
+                ( nurl_print `  call void @__dropifv_` ) ( nurl_print ( __drop_mangle ty ) ) ( nurl_print `(i1 ` ) ( nurl_print c )
+                ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+            } { ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print reg ) ( nurl_print `)` ) ( emit_dbg_eol ) } }
     }
 }
 
@@ -18238,9 +18242,19 @@
                 = lc ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print lc ) ( nurl_print ` = and i1 ` ) ( nurl_print __lnk ) ( nurl_print `, ` ) ( nurl_print lcond ) ( nurl_print `\n` )
             } {}
-            ( __handle_drop_ensure lty )
-            ( __dropifv_request lty )
-            : s w ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval )
+            : ~ s w ``
+            ? ( __is_closure_ty lty ) {
+                // A closure: its env, released through nurl_closure_drop.
+                : s __ce ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __ce ) ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty lty ) ) ( nurl_print ` ` ) ( nurl_print lval ) ( nurl_print `, 1\n` )
+                : s __co ( nurl_cg_reg cg )
+                ( emit_sink_owner_select lc `i8*` __ce `null` __co )
+                = w ( nurl_str_cat `c|` __co )
+            } {
+                ( __handle_drop_ensure lty )
+                ( __dropifv_request lty )
+                = w ( nurl_str_cat4 `h|` lc ( nurl_str_cat3 `|` lty `|` ) lval )
+            }
             = owned ? == 0 ( nurl_str_len owned ) w ( nurl_str_cat3 owned ` ` w )
         }
     } {}
@@ -25908,7 +25922,10 @@
         // literal owns is dropped after it unless the callee keeps or
         // consumes the argument (mem_arg_temps) — it leaked.
         : b __ao_ctx & & & != 0 g_auto_drop_strings != 0 ( nurl_str_len __argk ) ! agg_returned ! agg_nested
-        : b __ao_ty & & | ( __is_handle_ty fty ) ( __is_autodrop_enum fty syms ) ! ( __is_closure_ty fty ) ! ( seq fval `zeroinitializer` )
+        // (A closure the literal builds — a literal, a call's result — is
+        // its own too: its env goes with the literal, like a handle's.)
+        : b __ao_clo & ( __is_closure_ty fty ) | == fld_first_tt TT_BACKSLASH == fld_first_tt TT_LPAREN
+        : b __ao_ty & & | | ( __is_handle_ty fty ) ( __is_autodrop_enum fty syms ) __ao_clo | __ao_clo ! ( __is_closure_ty fty ) ! ( seq fval `zeroinitializer` )
         : b __ao_tag & == idx 0 | agg_is_wrap != 0 ( nurl_sym_len2 syms ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 ) `__variants` )
         ? & & & __ao_ctx __ao_ty != fld_first_tt TT_AT ! __ao_tag {
             : s __aoc ? | ( is_ident_tok fld_first_tt ) == fld_first_tt TT_HASH ( nurl_str_cat fld_lent `` ) ( nurl_str_cat `1` `` )
