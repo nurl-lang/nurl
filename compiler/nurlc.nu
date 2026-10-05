@@ -11830,6 +11830,17 @@
             = cc_arg_cs ( nurl_str_cat cc_arg_cs __acs )
             = cc_arg_tys ( nurl_str_cat cc_arg_tys at )
         } {}
+        // The closure a detach runs on another thread or fiber: what it can
+        // capture is decided at module end (resolve_send_checks) — a
+        // parameter it captures (`?pK`) puts the requirement on this
+        // function's callers.
+        ? & & ( __thr_is_detach fname ) == arg_idx 0 != 0 ( nurl_str_len __acs ) {
+            : i __sn ( nurl_str_to_int ( nurl_sym_get g_pending_impl `sendchk_n` ) )
+            ( nurl_sym_def g_pending_impl `sendchk_n` ( nurl_str_int + __sn 1 ) )
+            ( nurl_sym_def g_pending_impl ( nurl_str_cat `sendchk#` ( nurl_str_int __sn ) )
+            ( nurl_str_cat4 ( nurl_str_cat4 fname ` ` ( nurl_sym_get syms `__fn_self_name__` ) ` ` )
+            ( nurl_str_int bck_arg_line ) ( nurl_str_cat3 ` ` ( nurl_lex_filename lex ) ` ` ) __acs ) )
+        } {}
         // Deferred interprocedural-escape (docs/MEMORY.md §3 forward /
         // generic). This argument is a stack reference (`bck_arg_rd > 0`)
         // that the inline check did NOT flag (`arg_pos_escapes` false —
@@ -25148,6 +25159,10 @@
     ? != 0 g_rawlit_n { = g_member_obj 1 } {}
     : s ov ( gen_operand lex syms cg )
     : s ot ( nurl_get_last_type )
+    // The binding a field chain reads from (`. . s a h` → s): what closures
+    // the field can hold is what that binding can (__clo_cs_expr).
+    ? ( is_ident_tok __mb_tt ) { ( nurl_sym_def syms `__last_member_root__` __mb_val ) } {
+        ? != __mb_tt TT_DOT { ( nurl_sym_def syms `__last_member_root__` `` ) } {} }
     // `. x f` on a struct binding: which field of whose storage was read
     // (`<alloca> <struct type> <index> <field type>`), for a consumer that
     // takes the field's value over (docs/MEMORY.md §7.6).
@@ -28459,6 +28474,9 @@
 
     // Save lexer position at the opening '{' so we can re-parse the body
     : i body_start_pos ( nurl_lex_cur_start lex )
+    // (The line the literal is on, for messages: the capture scan below
+    // reads ahead.)
+    : i clo_line ( nurl_lex_line lex )
 
     // syms is the OUTER scope; param_names is a space-separated list of closure params.
     // Only outer locals (those with __ptr in syms) are captured, not globals/functions.
@@ -28466,7 +28484,17 @@
     : i captured_count ( count_words captured_vars )
     // What it can capture, for the thread-shared cycle rules (published
     // when the literal is done: the body may build closures of its own).
-    : s clo_cs ( __clo_cs_caps syms captured_vars )
+    : s clo_cs ( __clo_cs_caps syms captured_vars clo_line )
+    // …and each capture's own, for the body (`;`-list in capture order).
+    : ~ s clo_cap_cs ``
+    : ~ s __ccr ( nurl_str_cat captured_vars `` )
+    : ~ b __ccfirst T
+    ~ != 0 ( nurl_str_len __ccr ) {
+        : s __ccv ( str_first_word __ccr ) = __ccr ( str_skip_word __ccr )
+        : s __ccs ( __clo_cs_abs syms ( __clo_cs_ident syms __ccv ) )
+        = clo_cap_cs ? __ccfirst ( nurl_str_cat __ccs `` ) ( nurl_str_cat3 clo_cap_cs `;` __ccs )
+        = __ccfirst F
+    }
 
     // Closure-env reclamation: capturing a binding into a closure reads
     // it as a value, so a captured parameter is NOT invoke-only (§7.4) —
@@ -28753,6 +28781,14 @@
             // An enclosing closure's parameter captured here is a capture of
             // THIS body, not a parameter of it.
             ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__cloparam` ) `` )
+            // What closures the capture can hold is what it could hold
+            // outside: its capture set travels into the body (an enclosing
+            // parameter's `?pK` made absolute, `?P<fn>#K` — inside, `?pK`
+            // would name the body's own parameter).
+            ? | ( __is_closure_ty cap_type ) ( __ts_may_hold_closures cap_type syms ) {
+                : s __ocs ( __semi_nth clo_cap_cs - cap_idx 1 )
+                ( nurl_sym_def body_syms ( nurl_str_cat cap_name `__clocs` ) ? == 0 ( nurl_str_len __ocs ) ( nurl_str_cat `-` `` ) __ocs )
+            } {}
             // Thread-safety: a captured value that is not Send makes this
             // closure unsafe to detach. Record the offending capture and
             // WHY — "<capture> <TypeName> <kind>" — and let the
@@ -35846,8 +35882,8 @@
 }
 
 // The CS of a closure literal capturing `caps` (names in the scope that
-// builds it).
-@ __clo_cs_caps i syms s caps → s {
+// builds it, at `line`).
+@ __clo_cs_caps i syms s caps i line → s {
     : ~ s rest ( nurl_str_cat caps `` )
     : ~ s out ``
     ~ != 0 ( nurl_str_len rest ) {
@@ -35856,9 +35892,70 @@
         // owns nothing, and closes no cycle.)
         // (What a closure captures it OWNS: a captured handle's value-type
         // atom becomes a capture atom.)
-        ? ! ( __is_capture_byref v syms ) { = out ( __bar_union out ( __cc_untag ( __clo_cs_ident syms v ) ) ) } {}
+        ? ! ( __is_capture_byref v syms ) {
+            = out ( __bar_union out ( __cc_untag ( __clo_cs_ident syms v ) ) )
+            // A capture that may not cross a thread boundary: `!name@line@
+            // reason` (spaces as `~`), decided where the closure crosses one.
+            : s ty ( nurl_sym_get syms v )
+            ? ! ( __is_closure_ty ty ) {
+                : s why ( __thr_capture_reason syms ty )
+                ? != 0 ( nurl_str_len why ) {
+                    = out ( __bar_add out ( __tilde ( nurl_str_cat4 ( nurl_str_cat `!` v ) `@` ( nurl_str_int line ) ( nurl_str_cat `@` why ) ) ) )
+                } {}
+            } {}
+        } {}
     }
     ^ out
+}
+
+// `cs` with each `?pK` (a parameter of the function `syms` belongs to)
+// spelled absolutely: `?P<fn>#K`.
+@ __clo_cs_abs i syms s cs → s {
+    : s self ( nurl_sym_get syms `__fn_self_name__` )
+    : ~ s r ( nurl_str_cat cs `` )
+    : ~ s out ``
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        ? & > ( nurl_str_len u ) 2 ( seq ( nurl_str_slice u 0 2 ) `?p` ) {
+            = out ( __bar_add out ( nurl_str_cat4 `?P` self `#` ( nurl_str_slice u 2 - ( nurl_str_len u ) 2 ) ) )
+        } { = out ( __bar_add out u ) }
+    }
+    ^ out
+}
+
+// The (function, parameter) a `?pK` / `?P<fn>#K` atom of a record made in
+// `encl` names, as `fn##K`; "" for any other atom.
+@ __cc_param_atom s encl s u → s {
+    ? & > ( nurl_str_len u ) 2 ( seq ( nurl_str_slice u 0 2 ) `?p` ) {
+        ^ ( nurl_str_cat3 encl `##` ( nurl_str_slice u 2 - ( nurl_str_len u ) 2 ) )
+    } {}
+    ? & > ( nurl_str_len u ) 2 ( seq ( nurl_str_slice u 0 2 ) `?P` ) {
+        : s b ( nurl_str_slice u 2 - ( nurl_str_len u ) 2 )
+        : i h ( nurl_str_find b `#` )
+        ? < h 0 { ^ ( nurl_str_cat `` `` ) } {}
+        ^ ( nurl_str_cat3 ( nurl_str_slice b 0 h ) `##` ( nurl_str_slice b + h 1 - - ( nurl_str_len b ) h 1 ) )
+    } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// Spaces as `~` (an atom is one word), and back.
+@ __tilde s x → s { ^ ( __char_swap x 32 `~` ) }
+
+@ __untilde s x → s { ^ ( __char_swap x 126 ` ` ) }
+
+@ __char_swap s x i from s to → s {
+    : i n ( nurl_str_len x )
+    : ~ s out ``
+    : ~ i st 0
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get x i ) from {
+            = out ( nurl_str_cat3 out ( nurl_str_slice x st - i st ) to )
+            = st + i 1
+        } {}
+        = i + i 1
+    }
+    ^ ( nurl_str_cat out ( nurl_str_slice x st - n st ) )
 }
 
 // The CS of an expression spelled from token `tt` / `val`, of type `ty`.
@@ -35874,7 +35971,13 @@
         ^ ( __clo_cs_type ty syms )
     } {}
     ? == tt TT_AT { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_agg_cs__` ) `` ) } {}
-    // A field, an element, a join: what closures it holds is not followed.
+    // A field: no more than the binding it is read from can hold.
+    ? == tt TT_DOT {
+        : s root ( nurl_sym_get syms `__last_member_root__` )
+        ? != 0 ( nurl_str_len root ) { ^ ( __cc_untag ( __clo_cs_ident syms root ) ) } {}
+        ^ ( nurl_str_cat `?` `` )
+    } {}
+    // An element, a join: what closures it holds is not followed.
     ? ( __ts_may_hold_closures ty syms ) { ^ ( __bar_add ( __clo_cs_type ty syms ) `?` ) } {}
     ^ ( __clo_cs_type ty syms )
 }
@@ -36151,8 +36254,9 @@
                 : ~ s r ( nurl_str_cat cs `` )
                 ~ != 0 ( nurl_str_len r ) {
                     : s u ( __bar_first r ) = r ( __bar_rest r )
-                    ? & > ( nurl_str_len u ) 2 ( seq ( nurl_str_slice u 0 2 ) `?p` ) {
-                        : s pk ( nurl_str_cat4 `ccprop##` encl `##` ( nurl_str_slice u 2 - ( nurl_str_len u ) 2 ) )
+                    : s fk ( __cc_param_atom encl u )
+                    ? != 0 ( nurl_str_len fk ) {
+                        : s pk ( nurl_str_cat `ccprop##` fk )
                         : s cur ( nurl_sym_get g_pending_impl pk )
                         : s nw ( __bar_union cur o )
                         ? ! ( seq nw cur ) { ( nurl_sym_def g_pending_impl pk nw ) = changed T } {}
@@ -36178,10 +36282,12 @@
             : ~ s r ( nurl_str_cat cs `` )
             ~ != 0 ( nurl_str_len r ) {
                 : s u ( __bar_first r ) = r ( __bar_rest r )
-                ? & > ( nurl_str_len u ) 2 ( seq ( nurl_str_slice u 0 2 ) `?p` ) {} {
+                // (`?pK`: the callers decide; `!…`: a Send question,
+                // resolve_send_checks.)
+                ? | & > ( nurl_str_len u ) 2 | ( seq ( nurl_str_slice u 0 2 ) `?p` ) ( seq ( nurl_str_slice u 0 2 ) `?P` ) == ( nurl_str_get u 0 ) 33 {} {
                     ? ( seq u `?` ) {
                         ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat3 `this stores a closure into '` ( llvm_to_nurl ( __bar_first o ) )
-                        `' (a handle shared across threads) and what the closure captures cannot be followed here — it comes out of a field, an element, a call through a closure value, or a function compiled after this one. A capture leading back to that handle would close a cycle of counts nothing frees (docs/MEMORY.md §7.7). Build the closure where it is stored (a literal or a binding of one), or capture a weak / raw back-reference.` ) ) }
+                        `' (a handle shared across threads) and what the closure captures cannot be followed here — it comes out of a Vec element, a join of two values, or a call through a closure value. A capture leading back to that handle would close a cycle of counts nothing frees (docs/MEMORY.md §7.7). Build the closure where it is stored (a literal or a binding of one), or capture a weak / raw back-reference.` ) ) }
                     {
                         // A value-type atom (`=N`): only a queue holding a
                         // value of its own channel's type is decided by type.
@@ -36207,6 +36313,151 @@
             }
         } {}
         = i + i 1
+    }
+}
+
+// ── Closures that cross a thread boundary ───────────────────────────
+// A closure's captures are not in its type, so whether it may run on
+// another thread is a question about the VALUE: the same capture sets the
+// cycle rule follows carry a `!name@line@reason` atom per capture that is
+// not Send. A value crosses where a detach runs it (spawn, thread_spawn),
+// where a callee keeps it inside a thread-shared handle (an existing one
+// it is handed — chan_send — or one it builds and returns), and where it
+// is handed to a parameter that crosses (`sendreq##F##K`, to a fixed
+// point: a function that spawns the closure it is passed makes its
+// callers' closures cross). The error names the capture and where the
+// closure was built, at the place the value leaves.
+@ resolve_send_checks i syms → v {
+    : i n ( nurl_str_to_int ( nurl_sym_get g_pending_impl `ccchk_n` ) )
+    : i m ( nurl_str_to_int ( nurl_sym_get g_pending_impl `sendchk_n` ) )
+    ? & == n 0 == m 0 { ^ v } {}
+    // Seeds: a detach of a closure that captures a parameter.
+    : ~ i j 0
+    ~ < j m {
+        : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `sendchk#` ( nurl_str_int j ) ) )
+        : s encl ( str_first_word ( str_skip_word rec ) )
+        ( __send_req_params encl ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) ) ) 0 ) )
+        = j + j 1
+    }
+    : ~ b changed T
+    ~ changed {
+        = changed F
+        : ~ i i 0
+        ~ < i n {
+            : s ns ( nurl_str_int i )
+            : s why ( __send_crossing syms ns )
+            ? != 0 ( nurl_str_len why ) {
+                : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccchk#` ns ) )
+                : s r3 ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) )
+                : s encl ( str_first_word r3 )
+                ? ( __send_req_params encl ( __cc_expand ( str_skip_word ( str_skip_word ( str_skip_word r3 ) ) ) 0 ) ) { = changed T } {}
+            } {}
+            = i + i 1
+        }
+    }
+    // The verdicts.
+    = j 0
+    ~ < j m {
+        : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `sendchk#` ( nurl_str_int j ) ) )
+        : s fname ( str_first_word rec )
+        : s r2 ( str_skip_word ( str_skip_word rec ) )
+        : s line ( str_first_word r2 )
+        : s file ( str_first_word ( str_skip_word r2 ) )
+        ( __send_verdict ( __cc_expand ( str_skip_word ( str_skip_word r2 ) ) 0 ) file line
+        ( nurl_str_cat3 `'` fname `' runs this closure on another thread or fiber` ) )
+        = j + j 1
+    }
+    : ~ i i 0
+    ~ < i n {
+        : s ns ( nurl_str_int i )
+        : s why ( __send_crossing syms ns )
+        ? != 0 ( nurl_str_len why ) {
+            : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccchk#` ns ) )
+            : s r3 ( str_skip_word ( str_skip_word ( str_skip_word rec ) ) )
+            : s r4 ( str_skip_word r3 )
+            : s line ( str_first_word r4 )
+            : s file ( str_first_word ( str_skip_word r4 ) )
+            ( __send_verdict ( __cc_expand ( str_skip_word ( str_skip_word r4 ) ) 0 ) file line why )
+        } {}
+        = i + i 1
+    }
+}
+
+// A type as written: `( Channel Job )` for a handle instance.
+@ __ty_show s ty → s {
+    ? ! ( __is_libh ty ) { ^ ( llvm_to_nurl ty ) } {}
+    : ~ s out ( nurl_str_cat `( ` ( __libh_base ty ) )
+    : ~ i i 0
+    : ~ s a ( __libh_targ ty 0 )
+    ~ & != 0 ( nurl_str_len a ) < i 8 {
+        = out ( nurl_str_cat3 out ` ` ( __ty_show a ) )
+        = i + i 1
+        = a ( __libh_targ ty i )
+    }
+    ^ ( nurl_str_cat out ` )` )
+}
+
+// Mark every `?pK` of `cs` as a parameter of `encl` that crosses; true
+// when one was new.
+@ __send_req_params s encl s cs → b {
+    : ~ b added F
+    : ~ s r ( nurl_str_cat cs `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        : s fk ( __cc_param_atom encl u )
+        ? != 0 ( nurl_str_len fk ) {
+            : s key ( nurl_str_cat `sendreq##` fk )
+            ? == 0 ( nurl_sym_len g_pending_impl key ) { ( nurl_sym_def g_pending_impl key `1` ) = added T } {}
+        } {}
+    }
+    ^ added
+}
+
+// Does the value of call record `ns` cross a thread boundary — and how,
+// for the message ("" when it does not).
+@ __send_crossing i syms s ns → s {
+    : s rec ( nurl_sym_get g_pending_impl ( nurl_str_cat `ccchk#` ns ) )
+    : s cn ( str_first_word rec )
+    : s gn ( str_first_word ( str_skip_word rec ) )
+    : s ks ( str_first_word ( str_skip_word ( str_skip_word rec ) ) )
+    : i k ( nurl_str_to_int ks )
+    : s shown ( llvm_to_nurl gn )
+    ? | != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` cn `##` ks ) )
+    != 0 ( nurl_sym_len g_pending_impl ( nurl_str_cat4 `sendreq##` gn `##` ks ) ) {
+        ^ ( nurl_str_cat4 `'` shown ( nurl_str_cat3 `' runs its parameter ` ( nurl_str_int + k 1 ) ` on another thread or fiber` ) `` )
+    } {}
+    : s o ( __cc_owners syms ns )
+    ? != 0 ( nurl_str_len o ) {
+        ^ ( nurl_str_cat4 `'` shown `' keeps this value inside '` ( nurl_str_cat ( __ty_show ( __bar_first o ) ) `', a handle shared across threads` ) )
+    } {}
+    : s rlt ( nurl_sym_get g_pending_impl ( nurl_str_cat3 `ccchk#` ns `#rlt` ) )
+    : s tys ( nurl_sym_get g_pending_impl ( nurl_str_cat3 `ccchk#` ns `#tys` ) )
+    ? & ( __ts_is_node rlt ) ( __cc_keeps cn gn k ( __semi_nth tys k ) ) {
+        ^ ( nurl_str_cat4 `'` shown `' keeps this value inside the '` ( nurl_str_cat ( __ty_show rlt ) `' it returns, a handle shared across threads` ) )
+    } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+// A value that crosses: every capture that may not, and every closure
+// whose captures cannot be followed, is an error at `file:line`.
+@ __send_verdict s cs s file s line s how → v {
+    : ~ s r ( nurl_str_cat cs `` )
+    ~ != 0 ( nurl_str_len r ) {
+        : s u ( __bar_first r ) = r ( __bar_rest r )
+        ? & != 0 ( nurl_str_len u ) == ( nurl_str_get u 0 ) 33 {
+            : s a ( __untilde ( nurl_str_slice u 1 - ( nurl_str_len u ) 1 ) )
+            : i p1 ( nurl_str_find a `@` )
+            : s nm ( nurl_str_slice a 0 p1 )
+            : s a2 ( nurl_str_slice a + p1 1 - - ( nurl_str_len a ) p1 1 )
+            : i p2 ( nurl_str_find a2 `@` )
+            : s bl ( nurl_str_slice a2 0 p2 )
+            : s reason ( nurl_str_slice a2 + p2 1 - - ( nurl_str_len a2 ) p2 1 )
+            ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat4 ( nurl_str_cat3 how `, but the closure built on line ` bl )
+            ( nurl_str_cat3 ` captures '` nm `', which is not Send: ` ) ( __thr_explain reason ) `` ) )
+        } {}
+        ? ( seq u `?` ) {
+            ( die_at ( nurl_str_cat3 file `:` line ) ( nurl_str_cat how `, and what the closure captures cannot be followed back to where it was built — it comes out of a Vec element, a join of two values, or a call through a closure value — so whether it may run on another thread cannot be decided. Build the closure where it is handed over (a literal, or a binding of one), or take it as a parameter: then each caller's closure is checked where it is built.` ) )
+        } {}
     }
 }
 
@@ -45052,6 +45303,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         // (docs/MEMORY.md §3). May bump g_bck_errors, checked below.
         ( resolve_pending_impls )
         ( resolve_cc_checks syms )
+        ( resolve_send_checks syms )
         ( emit_sink_flags )
         ( mem_emit_arg_flags syms )
         ( lint_free_resolve )

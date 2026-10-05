@@ -1173,6 +1173,29 @@ safe Rust cannot:
    question). `[T: Send]` bounds are answered by the same derivation
    rather than by an impl lookup.
 
+   A closure's captures are not in its type (`( @ v )` says nothing
+   about what it holds), so for closures the question is asked of the
+   **value**, followed from where it is built to where it crosses. Each
+   closure literal carries a capture set — every capture that is not
+   Send, with its name and the line the closure was built on — through
+   bindings, struct literals, fields read back out, calls that return
+   it, and the capture sets of closures that capture it. A value
+   crosses when a detach runs it, when a callee keeps it inside a
+   thread-shared handle (`chan_send` into a `Channel`, a handler stored
+   in a job or server node, an `Arc`/`Mutex` state built around it),
+   and when it is handed to a parameter that crosses — a function that
+   spawns the closure it is passed makes that parameter a boundary, and
+   every caller's closure is checked against it (to a fixed point over
+   the whole program at module end, so declaration order does not
+   matter). The error is reported at the call where the value leaves,
+   naming the capture and the closure's line; adding a store somewhere
+   else never changes a struct type's verdict, because there is no type
+   verdict — only the values that reach a boundary are judged. A
+   closure whose origin cannot be followed (a Vec element, a join, a
+   call through a closure value) is rejected where it crosses: build it
+   where it is handed over, or take it as a parameter so each caller's
+   is checked.
+
    Because it is structural it is wrong in exactly two directions, and
    there is a marker for each: `% Send T { }` / `% Sync T { }` assert
    safety the compiler cannot see (`Mutex` is `{ Cell c }` and is

@@ -1,0 +1,3 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_untraceable.nu:9: error: 'spawn_joinable' runs this closure on another thread or fiber, and what the closure captures cannot be followed back to where it was built — it comes out of a Vec element, a join of two values, or a call through a closure value — so whether it may run on another thread cannot be decided. Build the closure where it is handed over (a literal, or a binding of one), or take it as a parameter: then each caller's closure is checked where it is built.
