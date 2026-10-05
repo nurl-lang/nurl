@@ -23754,11 +23754,15 @@
         { ( nurl_sym_def g_pending_impl __fsk ? == 0 ( nurl_str_len __fsc ) ( nurl_str_cat __fs_val `` ) ( nurl_str_cat3 __fsc ` ` __fs_val ) ) } {}
         // The parameter stops owning its value unless the object turns out
         // to be scratch (freed here, not returned): `@.__nurl_scr.N`,
-        // settled at this function's end.
+        // settled at this function's end. (Listed for that settlement
+        // whatever the parameter: one this function does not drop — a
+        // value that cannot be copied — is still kept when the object
+        // leaves, and its caller must not drop it.)
+        : i __scn ( scratch_flag syms __fs_obj )
         : s __fsp ( mem_udrop_ptr_of syms __fs_val )
         ? != 0 ( nurl_str_len __fsp ) {
             : s __sc ( nurl_cg_reg cg )
-            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_scr.` ( nurl_str_int ( scratch_flag syms __fs_obj ) ) ) __sc )
+            ( emit_sink_flag_load ( nurl_str_cat `@.__nurl_scr.` ( nurl_str_int __scn ) ) __sc )
             : s __of ( mem_udrop_flag_get syms cg __fsp )
             : s __nf ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __nf ) ( nurl_print ` = and i1 ` ) ( nurl_print __of ) ( nurl_print `, ` ) ( nurl_print __sc ) ( nurl_print `\n` )
