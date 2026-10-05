@@ -4,4 +4,4 @@ compiler/tests/borrow_aliased_mut.nu:31: error: 'c' is both mutably borrowed (pa
     ( swap_counters c c )
 compiler/tests/borrow_aliased_mut.nu:35: error: 'c' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call — exclusive access is violated
     ( bump_by_other c c )
-error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)
+error: compilation aborted — 2 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

@@ -36,6 +36,7 @@
 // 7 response body over the caller's cap), so http.nu maps them straight
 // onto HttpErr without translation.
 
+$ `stdlib/core/marker.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -68,6 +69,9 @@ $ `stdlib/core/rcbox.nu`
 // (stdlib/core/rcbox.nu): every copy — the caller's, the one a stream or
 // a pool keeps — is the same connection, and the last owner closes it.
 : HttpConn { s ctl }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource HttpConn {}
 
 @ HttpConn_share HttpConn h → HttpConn { ^ @ HttpConn { # s ( rcbox_share # i . h ctl ) } }
 

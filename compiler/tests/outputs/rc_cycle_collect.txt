@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+garbage-left=0
+kid-of-keep=2
+keep-strong=1
+bounded=1

@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_payload_taken_read.nu:14: error: use of possibly-moved value 'o' — it was consumed on only some paths, at line 13; on that path this reads a freed buffer. Consume it on every path, or rebind it (= o …) on the path that consumed it
     ?? o { T t → ( nurl_print ( string_data . t name ) ) F → {} }
-error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
+error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

@@ -15,7 +15,7 @@ NURL takes a few design positions that are uncommon together:
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
 - **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers and out-of-range shifts inherit LLVM semantics — spec §4.2, §6.1.)
-- **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (on by default, `--no-borrowck` to disable) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
+- **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (always on; a false positive is a bug to report) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
 - **Diagnostics that name the cure** — an error states what was expected, what was found, and the correct form with an example, because for a model the compiler is the only teacher in the loop. 170 of the compiler's 173 error sites carry an explanation — the messages do the work a gotchas document used to.
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
@@ -157,8 +157,8 @@ reference** (lexical structure, types, statements, expressions, casts) is
 
 Single-owner memory with compiler-inserted auto-drop at scope exit — no GC,
 no hidden boxing. Bindings are immutable by default (`: i x 0`; opt into
-mutation with `: ~`). A **static borrow checker** — on by default,
-`--no-borrowck` to disable, `--strict-borrowck` to tighten — catches
+mutation with `: ~`). A **static borrow checker** — always on, `--strict-borrowck` to
+tighten — catches
 use-after-move, alias-double-free, escaping closure-captures, and iterator
 invalidation as hard compile errors, without ever changing generated code.
 The one remaining source-level trap, the n-ary `&`/`|` foot-gun, is a

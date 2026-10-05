@@ -31,7 +31,7 @@ $ `stdlib/core/string.nu`
     ( nurl_print ? ( pair_eq [i i] p1 p4 eq_ii eq_ii ) `T` `F` )
     ( nurl_print `\n` )
 
-    // ── Pair[String i] — owned first, drop via pair_free_a ──
+    // ── Pair[String i] — owned first, dropped with the pair ──
     : String s1 ( string_from `hello` )
     : ( Pair String i ) p5 ( pair_new [String i] s1 7 )
     ( nurl_print `owned_first=` )
@@ -39,8 +39,7 @@ $ `stdlib/core/string.nu`
     ( nurl_print `,` )
     ( nurl_print ( nurl_str_int ( pair_second [String i] p5 ) ) )
     ( nurl_print `\n` )
-    : ( @ v String ) drop_str \ String x → v { ( string_free x ) }
-    ( pair_free_a [String i] p5 drop_str )
+    : ( @ v String ) drop_str \ String x → v {}
 
     // ── Pair[String String] — both owned, pair_free_with ──
     : String k ( string_from `name` )

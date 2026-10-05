@@ -8,4 +8,4 @@ compiler/tests/borrow_stored_owner_dropped.nu:44: error: use of possibly-moved v
     ^ ( vec_len [i] a )
 compiler/tests/borrow_stored_owner_dropped.nu:53: error: use of possibly-moved value 'a' — it was stored into 'all', which then let go of a value it held (a field assigned anew, or an element dropped or handed out) at line 52; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
     ^ ( vec_len [i] a )
-error: compilation aborted — 4 borrow-checker violations (re-run with --no-borrowck to bypass)
+error: compilation aborted — 4 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

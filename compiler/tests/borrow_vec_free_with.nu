@@ -15,6 +15,6 @@ $ `stdlib/core/vec.nu`
 @ main → i {
     : ( Vec String ) v ( vec_new [String] )
     ( vec_push [String] v ( string_from `a` ) )
-    ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
+    ( vec_free_with [String] v \ String s → v {} )
     ^ ( vec_len [String] v )
 }

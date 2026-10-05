@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_param_to_sink.nu:8:62: error: argument 1 to 'string_free' is 's', a parameter of this closure — and a closure only BORROWS its parameters: its caller keeps what it passed and drops it (a call through a closure value cannot know what the body would take). But the parameter is 'sink': the callee takes ownership and releases the value, which the caller then releases again. Do not release it — the owner does; a *_free_with hook is lent each element and the container drops it afterwards. To give the callee a value of its own, pass a copy (( string_clone x ), ( vec_clone [T] x ), …).
+    : ( @ v String ) done \ String s → v { ( string_free s ) }
+                                                             ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

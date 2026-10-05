@@ -29,6 +29,7 @@
 // Retry, Version Negotiation, NEW_TOKEN and HANDSHAKE_DONE are the
 // connection's business; the socket layer here has nothing to know.
 
+$ `stdlib/core/marker.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/udp.nu`
@@ -49,6 +50,9 @@ $ `stdlib/core/rcbox.nu`
 // A QuicClient is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same client, and the last owner releases it.
 : QuicClient { s ctl }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource QuicClient {}
 
 // The socket is the client's own: its drop closes it (the connection,
 // buffers and peer address go with the fields).

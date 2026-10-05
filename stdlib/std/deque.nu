@@ -189,6 +189,23 @@
     ( nurl_free ctl )
 }
 
+// What the reference-count cycle collector sees in a deque (docs/MEMORY.md
+// §7.7): every live element.
+@ Deque_trace [A] ( Deque A ) d s vis → v {
+    : s ctl . d ctl
+    ? == 0 # i ctl { ^ } {}
+    : i len ( nurl_peek ctl 3 )
+    : i cap ( nurl_peek ctl 1 )
+    : i head ( nurl_peek ctl 2 )
+    : *A data # *A ( nurl_peek ctl 0 )
+    : ~ i i 0
+    ~ < i len {
+        : i pos % + head i cap
+        ( mem_trace [A] . data pos vis )
+        = i + i 1
+    }
+}
+
 // A copy that owns its own elements, in logical order (head at 0).
 @ Deque_clone [A] ( Deque A ) d → ( Deque A ) {
     : s sctl . d ctl
@@ -216,10 +233,9 @@
 // Early release: exactly what dropping `d` does (Deque_drop).
 @ deque_free [A] sink ( Deque A ) d → v {}
 
-// Release through `drop`: it is handed every live element (and owns it
-// from then on), then the buffer goes.
+// Early release with a last look at every live element (see
+// vec_free_with); then `d` goes as `deque_free` releases it.
 @ deque_free_with [A] sink ( Deque A ) d ( @ v A ) drop → v {
-    ( mem_forget d )
     : s ctl . d ctl
     : i len ( nurl_peek ctl 3 )
     : i cap ( nurl_peek ctl 1 )
@@ -231,7 +247,4 @@
         ( drop . data pos )
         = i + i 1
     }
-    : s buf # s ( nurl_peek ctl 0 )
-    ? != 0 # i buf { ( nurl_free buf ) } {}
-    ( nurl_free ctl )
 }

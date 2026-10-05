@@ -56,7 +56,7 @@ $ `stdlib/ext/http3_qpack.nu`
 }
 
 @ free_hs ( Vec Header ) hs → v {
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+    ( vec_free [Header] hs )
 }
 
 @ expect_decode_err s label s hex i want → i {

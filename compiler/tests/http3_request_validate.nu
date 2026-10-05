@@ -33,7 +33,7 @@ $ `stdlib/ext/http3_conn.nu`
 @ run s label i want s n0 s v0 s n1 s v1 s n2 s v2 s n3 s v3 s n4 s v4 → i {
     : ( Vec Header ) hs ( section n0 v0 n1 v1 n2 v2 n3 v3 n4 v4 )
     : i got ( _h3_validate_request hs )
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+    ( vec_free [Header] hs )
     ^ ( check_int label got want )
 }
 

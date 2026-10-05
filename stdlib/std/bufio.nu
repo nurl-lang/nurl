@@ -67,6 +67,7 @@
 //     F e → ( nurl_eprintln `open failed` )
 //   }
 
+$ `stdlib/core/marker.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/core/posix.nu`  // errno_kind
@@ -116,6 +117,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 : BufReader { s ctl }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource BufReader {}
 
 @ BufReader_share BufReader h → BufReader { ^ @ BufReader { # s ( rcbox_share # i . h ctl ) } }
 

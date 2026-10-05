@@ -4,4 +4,4 @@ compiler/tests/borrow_nested_join_alias.nu:31: error: use of possibly-moved valu
     ( vec_free [i] a )
 compiler/tests/borrow_nested_join_alias.nu:42: error: use of possibly-moved value 'a' — it may share its buffer with 'b', which was consumed at line 41; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
     ( vec_free [i] a )
-error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)
+error: compilation aborted — 2 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

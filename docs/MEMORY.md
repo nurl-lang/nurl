@@ -18,6 +18,10 @@ v2.3).
   released by hand: `vec_free` / `string_free` / `*_close` … remain as an
   explicit early release, never a requirement. A closure's env is owned wherever the closure is kept and
   dropped by that owner, and freeing one by hand is a compile error.
+- **Rc cycles are collected** (§7.7): a payload type that can hold an Rc
+  back to itself is traced by a synchronous cycle collector (the one place
+  anything is traced); every other
+  type pays nothing. Long `Rc` chains are released without recursion.
 - **Automatic cleanup includes unwind paths.** A per-fiber journal
   runs registered scope drops across `panic`/`recover` (§7.2). The compiler
   tracks owned strings, slices, struct fields, enum owners, `% Drop` values
@@ -27,16 +31,17 @@ v2.3).
   guarantee that every accepted program is memory-safe or leak-free.
 - **A borrow checker runs by default.** A diagnostic analysis pass
   catches use-after-move, alias double-free, and closures that escape
-  the stack frame they point into. It is on unless you pass
-  `--no-borrowck`. It is a *diagnostic* layered on the auto-drop base,
+  the stack frame they point into. It is always on
+  (`--no-borrowck` is deprecated). It is a *diagnostic* layered on the auto-drop base,
   not a Rust-style borrow system — see the contract in §6.
 - **It is a diagnostic pass and its diagnostics are hard errors.**
   The borrow checker emits `error:` lines and the compiler exits
   non-zero with a count of violations after walking the whole
   program (so every error surfaces in one run). It *never* changes
   generated code — a borrow-clean program compiles to byte-identical
-  IR with or without the checker. `--no-borrowck` remains the
-  escape hatch for a false positive.
+  IR with or without the checker. A false positive is a compiler bug:
+  report it (https://github.com/nurl-lang/nurl/issues). `--no-borrowck`
+  still exists but is deprecated and warns.
 
 ## 1. Ownership and auto-drop
 
@@ -282,18 +287,19 @@ relied on a `_free` spelling need this contract.
 Compiler-managed enum transfer uses static LLVM constants emitted after this
 inference. They let LLVM remove the unused ownership path without depending
 on declaration order. Ownership inference and transfer code generation remain
-active with `--no-borrowck`; that flag only disables diagnostics.
+active with the deprecated `--no-borrowck`; that flag only disables
+diagnostics, and every ownership summary codegen reads is recorded either way.
 
 ## 2. The borrow checker
 
 The borrow checker is a **diagnostic-only** static analysis. It is
-**on by default**; `--no-borrowck` disables it. Because it only emits
+**always on**; `--no-borrowck` (deprecated, warns) disables it. Because it only emits
 diagnostics and never lowers anything, a borrow-clean program produces
 the exact same IR either way — the bootstrap fixed point is
 unaffected.
 
-All eleven rules below (§2.1–§2.8, plus §2.1b, §2.11 and §2.12) emit `error:`. Use `--no-borrowck`
-for the escape hatch if a corner case slips through, and
+All eleven rules below (§2.1–§2.8, plus §2.1b, §2.11 and §2.12) emit `error:`. A corner case that
+rejects a correct program is a false positive: report it as a bug. And
 `--strict-borrowck` (off by default) to add three opt-in checks on top —
 see §2.9.
 
@@ -1167,6 +1173,29 @@ safe Rust cannot:
    question). `[T: Send]` bounds are answered by the same derivation
    rather than by an impl lookup.
 
+   A closure's captures are not in its type (`( @ v )` says nothing
+   about what it holds), so for closures the question is asked of the
+   **value**, followed from where it is built to where it crosses. Each
+   closure literal carries a capture set — every capture that is not
+   Send, with its name and the line the closure was built on — through
+   bindings, struct literals, fields read back out, calls that return
+   it, and the capture sets of closures that capture it. A value
+   crosses when a detach runs it, when a callee keeps it inside a
+   thread-shared handle (`chan_send` into a `Channel`, a handler stored
+   in a job or server node, an `Arc`/`Mutex` state built around it),
+   and when it is handed to a parameter that crosses — a function that
+   spawns the closure it is passed makes that parameter a boundary, and
+   every caller's closure is checked against it (to a fixed point over
+   the whole program at module end, so declaration order does not
+   matter). The error is reported at the call where the value leaves,
+   naming the capture and the closure's line; adding a store somewhere
+   else never changes a struct type's verdict, because there is no type
+   verdict — only the values that reach a boundary are judged. A
+   closure whose origin cannot be followed (a Vec element, a join, a
+   call through a closure value) is rejected where it crosses: build it
+   where it is handed over, or take it as a parameter so each caller's
+   is checked.
+
    Because it is structural it is wrong in exactly two directions, and
    there is a marker for each: `% Send T { }` / `% Sync T { }` assert
    safety the compiler cannot see (`Mutex` is `{ Cell c }` and is
@@ -1566,6 +1595,25 @@ never names again and that no loop around it captures again: they move
 into its env, and the runtime's copy owns its own. A captured binding still
 named later — a Vec the threads fill for the spawner — stays shared.
 
+**A closure's parameters are always borrowed.** A call through a closure
+value cannot see what the body does with its arguments — `( @ R P )`
+carries no ownership summary, and one closure type has many bodies — so
+the contract is fixed instead of inferred:
+
+- the caller keeps what it passes, and drops a temporary it made for the
+  call (`( f ( string_from … ) )`) right after it;
+- what the body stores (`vec_push`, a field, a struct literal) or hands
+  back (`^ p`, a field of `p`, a join over parameters, the fall-off tail)
+  is a **copy** — and every closure result is its caller's own;
+- releasing a parameter (`( string_free p )`, any `sink` slot) is a compile
+  error: the caller would release it again.
+
+So every `*_free_with` (`vec_free_with`, `box_free_with`, `rc_free_with`,
+`arc_free_with`, `btree_free_with`, …) **lends** each element to its hook
+and then drops the container as `*_free` does, elements included. A hook is
+for teardown the element type does not do itself — closing a raw C handle,
+counting, logging — never for releasing what the container owns.
+
 A String / Vec captured **by value** is a snapshot the body may scratch:
 it borrows the env's value, and an assignment over it is discarded when
 the closure returns (the compiler warns). The value so assigned is the
@@ -1768,7 +1816,7 @@ its layout to itself. The compiler instantiates `S_drop` / `S_clone` for
 each concrete type the program uses (`HashMap_drop__i64__String`).
 `HashMap`, `Set`, `Deque`, `BTree`, `Box`, `Rc`, `Arc` and `Channel` are
 library handles; their `*_free` functions are early releases, their
-`*_free_with` hand each element to a closure instead. A program's own
+`*_free_with` the same release with a hook lent each element first (§7.5). A program's own
 `% Drop` impl for an instance (`% Drop ( Box i )`) wins over the library's.
 
 A plain (non-generic) struct is a library handle the same way when its
@@ -1814,3 +1862,139 @@ sanitizer gate runs every test with leak detection **on** (§6.6), the
 compiler's own compile included; `tools/leakgate.sh` and
 `tools/leakcheck` cover the self-compile and a serving HTTP process. A
 program that honours the contract leaks nothing.
+
+### 7.7 Reference-count cycles
+
+Reference counting frees a value when its last handle goes — except a value
+that, through its own contents, holds a handle to itself. A graph node
+listing its neighbours, a parent and child that point at each other, a
+callback stored in the value it captured: every count in such a cycle stays
+above zero after the last outside handle is gone. NURL collects them, so
+**Rc operations do not leak memory in any known situation**: not through a
+cycle, not through a closure, not through a long chain.
+
+**Only types that can close pay.** The compiler walks a payload type's
+ownership graph — fields, option and enum payloads, `Vec` elements, library
+handle contents (`HashMap`, `Deque`, `BTree`, `Set`, `Box`), closure
+captures — to the `Rc` handles it can hold. `Rc T` is *cyclic* when that
+graph leads from `T` back to `T`, or to a closure (whose captures no type
+names): `( mem_cyclic [T] )` answers it as a constant. Every other
+instance — `Rc String`, `Rc Config`, a tree of `Rc` whose nodes hold no
+`Rc` back — compiles to plain counting and never reaches the collector.
+`Arc` and `Channel` contents are `Send` / `Sync` and cannot hold an `Rc`;
+a `Weak` owns nothing; neither is an edge.
+
+**The collector** (stdlib/runtime_core.c) is Bacon and Rajan's synchronous
+cycle collection. A cyclic block is `[ strong ][ weak ][ cc ][ value ]`; a
+handle that goes without taking its count to zero files the block as a
+possible root, and a block whose count does reach zero leaves the buffer at
+once. When the buffer passes a threshold (twice what survived the last
+collection, at least 4096), and when the context ends — the thread, the
+fiber, the program at exit — trial deletion finds the blocks held only by
+each other: their edges into live blocks are counted back, their values
+dropped (an edge into a block being collected is a no-op), their blocks
+freed. The compiler gives each cyclic type a table of two functions — trace
+(hand every handle the value holds to the collector) and drop — generated
+like the drop and clone graphs; a library handle supplies `S_trace`, and a
+closure env's descriptor carries a trace of exactly the handles the env
+owns (a capture it only borrows is no edge: counting it would be wrong).
+`Rc` is not `Send`, so every block belongs to one context and its buffer is
+that context's, swapped with the fiber like the panic journal: collection
+takes no lock. `( rc_collect )` runs one now.
+
+**When a cycle is released: memory waits, resources do not.** A value whose
+last handle goes is dropped right there, cyclic type or not. Only a value
+already caught in an unreachable cycle waits — for the threshold or the end
+of its context. For memory that is invisible. For a file, a socket, a child
+process it is not: a program opening files in a loop would run out of
+descriptors while the garbage holding them waits. So the release is
+deterministic for exactly those:
+
+- *What counts as a resource is marked, not guessed.* `% Resource T { }`
+  (stdlib/core/marker.nu) is on the stdlib's OS handles — `File`,
+  `BufReader`, `UdpSocket`, `TlsConn`, `HttpConn`, `QuicClient`,
+  `ProcChild`, `Database`, `Statement`. Anything that *owns* one — a field,
+  an element, an option or enum payload, a library handle's contents, the
+  payload of an `Rc` it holds — is one by structure; `( mem_resource [T] )`
+  answers it for a cyclic `Rc T` as a constant. Releasing memory, a lock or
+  a count is not externally observable: `Mutex` is not a resource. A type
+  of your own whose drop the outside world sees (an FFI close, a flush to a
+  socket) takes the same one-line mark.
+- *A cyclic `Rc` of such a type is collected the moment it may have become
+  garbage.* A handle that goes without taking the count to zero runs trial
+  deletion from that one block (`nurl_cc_collect_now`) instead of filing it:
+  the cycle's files close where the last handle from outside went, before
+  the next statement. Inside a collection or a nested release it waits for
+  that to finish; inside a container's release (`nurl_vec_drop`) it waits for
+  the end of the release, so dropping a `Vec` of handles into one graph is
+  one pass, not one per handle.
+- *The cost, measured.* Trial deletion from a block visits what is reachable
+  from it. Tearing a structure down is linear — a ring of 16 000 resource
+  nodes held by a `Vec` of handles: 2 ms. Mutating a large **live**
+  resource-capable graph is not: every decrement that leaves a count above
+  zero (an `rc_set` replacing a node that pointed into the graph) walks the
+  graph once to find it still alive. Building that ring by rewiring it,
+  2 × n `rc_set`: n = 1 000 → 11 ms, 4 000 → 127 ms, 8 000 → 507 ms,
+  16 000 → 1.97 s — quadratic, against 2 ms for the same graph without a
+  resource in its type. Keep a large mutable graph's OS handles outside it
+  (a table of files the nodes refer to by index) so the graph's type is not
+  resource-capable; a graph of a few hundred nodes does not notice.
+- *The net under it.* A resource the compiler cannot see in a type — behind
+  a trait object (`dyn`), inside a closure's captures — is released by the
+  collector as before. When an open fails for want of descriptors (EMFILE /
+  ENFILE: `fopen` in std/fs.nu, `socket` / `accept` in the runtime), the
+  context's unreachable cycles are collected and the open retried once
+  (`nurl_cc_reclaim_fds`). It costs nothing on a successful open; it does
+  not reach a cycle held by another fiber's collector.
+
+**A long chain is released without recursion.** Dropping the head of a
+million-node list of `Rc` would recurse a million frames deep. A release of
+a value that holds further handles goes through the runtime
+(`nurl_rc_drop_value`), which nests at most 64 deep and queues the rest for
+the outermost release to drain in a loop.
+
+**Weak** (`rc_downgrade` / `weak_upgrade`) is a non-owning handle for a
+back-edge whose target should die with its strong handles: the value is
+dropped when the strong count reaches zero, the block freed when the weak
+count is zero too.
+
+**Thread-shared handles: cycles are ruled out at compile time.** `Arc`,
+`Channel`, `DChannel` and the library handles over a counted block (Route,
+Supervisor, QuicServer, JobNode, …) cross threads; a collector would have to
+stop every thread at a point where no data structure is half-updated, which
+no safepoint the runtime has can promise. So their cycles cannot be built:
+
+- *An `Arc` whose payload can lead back to it is frozen once made.*
+  `( mem_ts_cyclic [( Arc T )] )` walks the thread-shared graph (a handle's
+  state type is learned from its drop, `rcbox_release [XImpl]`); for such an
+  Arc, `arc_get` hands out a copy — nothing done to it reaches the shared
+  value — and `arc_set` / `arc_ptr` are compile errors. The payload is built
+  first and shared whole, a tree from its leaves up. `ArcWeak`
+  (`arc_downgrade` / `arc_weak_upgrade`) points back without owning.
+- *A store into an existing thread-shared handle may not hold that handle.*
+  A closure's captures are not in its type, so the compiler follows values:
+  what a closure can capture travels with the literal, its bindings, the
+  functions that return one and the bindings it is handed to alongside it
+  (a router its routes' handlers went into). A call that keeps a value and
+  is handed an existing thread-shared handle — `job_register node … f`,
+  `chan_send ch v`, `supervisor_add sup … start` — is decided at module end:
+  if the value's captures lead back to that handle, it is a compile error
+  (`should_fail_ts_closure_self_cycle.nu`). A handle VALUE stored there is
+  judged by its type: one that can lead to the owner's type is rejected even
+  when it is another instance — the types cannot tell a tree from a loop —
+  so a structure of shared handles is built from its leaves up, or points
+  back with a weak or raw back-reference; a queue receiving a value of its
+  own channel's type is the same rule. A forwarded closure parameter carries the rule
+  to its callers. A handle being built (a constructor) is reachable from
+  nothing, and needs no check. This rule found a real cycle in
+  packages/swarm-mcp (a job handler capturing its own swarm).
+
+**What is outside.** A cycle through raw memory — a `*T` written by hand, an
+`s` pointer to a block, `rc_ptr` stores, `mem_forget` — is invisible, as raw
+memory always is (§7.4); the non-owning back-pointer in
+stdlib/ext/http3_server.nu is the deliberate use of exactly that. A closure
+whose captures cannot be followed (it came out of a field, an element or a
+call through a closure value) stored into an existing thread-shared handle
+is rejected rather than guessed at; a function that builds one is followed,
+also when it is compiled after its caller (the call is resolved at module
+end, `should_fail_ts_factory_cycle.nu`).

@@ -24,6 +24,7 @@
 // trust store, failing with TlsBadCert otherwise. `tls_connect_insecure`
 // is the encrypted-but-unauthenticated escape hatch.
 
+$ `stdlib/core/marker.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -178,6 +179,9 @@ $ `stdlib/core/rcbox.nu`
 // A TlsConn is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
 // every copy is the same connection, and the last owner releases it.
 : TlsConn { s ctl }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource TlsConn {}
 
 @ TlsConn_share TlsConn h → TlsConn { ^ @ TlsConn { # s ( rcbox_share # i . h ctl ) } }
 

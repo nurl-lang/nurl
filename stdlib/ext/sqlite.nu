@@ -241,7 +241,14 @@ $ `stdlib/core/marker.nu`
 }
 
 : Database { s raw }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource Database {}
+
 : Statement { s raw }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource Statement {}
 
 @ sqlite_err_name SqliteErr e → s {
     ^ ?? e {

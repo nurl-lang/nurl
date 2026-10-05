@@ -33,7 +33,6 @@ $ `stdlib/core/io.nu`
     // The closure runs per element (indirect call inside vec_free_with).
     ( vec_free_with [String] xs \ String s → v {
         = total + total ( string_len s )
-        ( string_free s )
     } )
     ( nurl_print `total_len=` )
     ( nurl_println_int total )

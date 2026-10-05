@@ -296,6 +296,12 @@
     ( __set_release ctl )
 }
 
+// What the reference-count cycle collector sees in a set (docs/MEMORY.md
+// §7.7): every live element.
+@ Set_trace [E] ( Set E ) st s vis → v {
+    ( set_each [E] st \ E x → v { ( mem_trace [E] x vis ) } )
+}
+
 // A copy that owns its own elements, at the same slot layout (no rehash).
 @ Set_clone [E] ( Set E ) st → ( Set E ) {
     : s sctl . st ctl
@@ -325,13 +331,10 @@
 // Early release: exactly what dropping `st` does (Set_drop).
 @ set_free [E] sink ( Set E ) st → v {}
 
-// Release through `drop`: it is handed every live element (and owns it
-// from then on), then the buffers go. For elements needing a teardown of
-// their own; plain owned elements are dropped by set_free / scope exit.
+// Early release with a last look at every live element (see
+// vec_free_with); then `st` goes as `set_free` releases it.
 @ set_free_with [E] sink ( Set E ) st ( @ v E ) drop → v {
-    ( mem_forget st )
     ( set_each [E] st drop )
-    ( __set_release . st ctl )
 }
 
 // ── Set algebra ─────────────────────────────────────────────────────

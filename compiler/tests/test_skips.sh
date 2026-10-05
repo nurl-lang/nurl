@@ -157,6 +157,8 @@ is_skipped() {
         # std/fswatch.nu is Linux-only (inotify is a Linux kernel API; the
         # symbols don't exist to link elsewhere — FreeBSD/macOS CI).
         fswatch_*)  [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
+        # setrlimit(RLIMIT_NOFILE) numbered as on Linux.
+        fdlimit_*)  [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
     esac
 
     local tok

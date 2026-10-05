@@ -128,10 +128,8 @@
 //
 //   ( claude_has_tool_use Json r )      → b   stop_reason == "tool_use"
 //   ( claude_tool_calls   Json r )      → ( Vec Json )
-//                                          Owned Vec of CLONED tool_use blocks.
-//                                          Free with a per-element drop closure:
-//                                          : (@ v Json) drop \ Json e → v { ( json_free e ) }
-//                                          ( vec_free_with [Json] tcs drop )
+//                                          Owned Vec of CLONED tool_use blocks
+//                                          (dropped with the Vec).
 //   ( claude_tool_use_id    Json tu )   → s    BORROWED; "" if missing
 //   ( claude_tool_use_name  Json tu )   → s    BORROWED; "" if missing
 //   ( claude_tool_use_input Json tu )   → ? Json   BORROWED; None if missing

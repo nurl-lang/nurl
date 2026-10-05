@@ -2,4 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/borrow_alias_partner_read.nu:22: error: use of possibly-moved value 'a' — it may share its buffer with 'z', which was consumed at line 21; on that path this reads a freed buffer. Consume it on every path, or rebind it (= a …) on the path that consumed it
     ^ ( string_len a )
-error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
+error: compilation aborted — 1 borrow-checker violation (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)

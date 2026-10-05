@@ -26,7 +26,22 @@ extern long nl_ret(long r);
 
 char **environ;                     /* nl_environ is a macro for this */
 
+/* `atexit` handlers, run by `exit` newest first (C11 7.22.4.2). The
+ * runtime registers one: the cycle collector's end-of-program pass. A
+ * full table is reported as failure, never a handler silently dropped. */
+#define NL_ATEXIT_MAX 32
+static void (*nl_atexit_fns[NL_ATEXIT_MAX])(void);
+static int nl_atexit_n;
+
+int atexit(void (*fn)(void)) {
+    if (nl_atexit_n >= NL_ATEXIT_MAX) return -1;
+    nl_atexit_fns[nl_atexit_n++] = fn;
+    return 0;
+}
+
 void exit(int code) {
+    /* A handler that calls exit again does not rerun the ones before it. */
+    while (nl_atexit_n > 0) nl_atexit_fns[--nl_atexit_n]();
     fflush(stdout);
     fflush(stderr);
     nl_exit_group(code);

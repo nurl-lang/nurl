@@ -15,9 +15,9 @@
 #    --emit-ir | --emit=ir     Stop after stage 1, leave only the .ll
 #    --emit-asm | --emit=asm   Emit .s (native assembly), skip link
 #    -O0 | -O1 | -O2 | -O3     Clang optimisation level (default -O2)
-#    --no-borrowck             Forwarded to nurlc: bypass the borrow
-#                              checker (what its own error text tells you
-#                              to re-run with)
+#    --no-borrowck             Deprecated, forwarded to nurlc (which warns):
+#                              bypass the borrow checker. Report a false
+#                              positive as a bug instead.
 #    --strict-borrowck         Forwarded to nurlc: the three opt-in
 #                              checks (aliased mutation through fields,
 #                              raw-pointer escape, consuming a

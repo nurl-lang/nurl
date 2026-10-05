@@ -25,7 +25,7 @@ $ `stdlib/std/thread.nu`
     } {}
     ( vec_push [Header] hs ( header_new name value ) )
     : ( Vec u ) block ( hpack_encode_headers hs )
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+    ( vec_free [Header] hs )
     ? end {
         // HEADERS(END_STREAM) + CONTINUATION(END_HEADERS), including an
         // empty first fragment. END_STREAM belongs to the HEADERS frame.
@@ -67,7 +67,7 @@ $ `stdlib/std/thread.nu`
                     : ( Vec Header ) hs ( vec_new [Header] )
                     ( vec_push [Header] hs ( header_new `:status` `200` ) )
                     : H2Frame reply @ H2Frame { 1 5 sid ( hpack_encode_headers hs ) }
-                    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+                    ( vec_free [Header] hs )
                     ?? ( h2_serialize_frame reply 16384 ) {
                         T wire → {
                             : ( Vec u ) prefix ( vec_new [u] )

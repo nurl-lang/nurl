@@ -143,7 +143,14 @@ $ `stdlib/core/rcbox.nu`
 // Announce presence; returns whether the broadcast reached the relay. A
 // failed send is the reconnect loop's signal that the relay is gone.
 @ swarm_announce_ok Swarm sw__h i want → b {
-    : *SwarmImpl sw ( __Swarm_ptr sw__h )
+    ^ ( __swarm_announce_ok_at ( __Swarm_ptr sw__h ) want )
+}
+
+// The same through the swarm's state, for a callback the swarm itself
+// stores (a job handler): it points back without owning — capturing the
+// Swarm handle there would make the swarm own a handle to itself, a cycle
+// of counts nothing frees (docs/MEMORY.md §7.7).
+@ __swarm_announce_ok_at * SwarmImpl sw i want → b {
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk . sw self_caps )
     : ~ b ok F
     ?? ( transport_broadcast . sw transport . sw group msg ) { T _ → { = ok T } F _ → {} }
@@ -335,7 +342,10 @@ $ `stdlib/core/rcbox.nu`
                 // a worker chewing on a long chunk still announces itself —
                 // otherwise the coordinator's liveness clock cannot tell it
                 // from a dead node (the handler runs inside this pump loop).
-                ( job_register . sw job ( kind_kernel ) ( kernel_handler_ka . sw key \ → v { : b _ok ( swarm_announce_ok sw__h 1 ) } ) )
+                // (`sw`, not `sw__h`: the swarm stores this handler, so it
+                // points back without owning — the pump loop that runs it
+                // holds sw__h.)
+                ( job_register . sw job ( kind_kernel ) ( kernel_handler_ka . sw key \ → v { : b _ok ( __swarm_announce_ok_at sw 1 ) } ) )
                 ( job_register . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
                 ( job_register . sw job ( kind_blob ) ( blob_handler . sw key ) )
                 ? != gpu 0 { ( job_register . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}

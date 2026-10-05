@@ -1,0 +1,3 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ts_closure_untraceable.nu:10: error: this stores a closure into 'JobNode' (a handle shared across threads) and what the closure captures cannot be followed here — it comes out of a Vec element, a join of two values, or a call through a closure value. A capture leading back to that handle would close a cycle of counts nothing frees (docs/MEMORY.md §7.7). Build the closure where it is stored (a literal or a binding of one), or capture a weak / raw back-reference.

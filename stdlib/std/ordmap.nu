@@ -126,7 +126,9 @@ $ `stdlib/core/vec.nu`
 // Early release: exactly what dropping `m` does (keys and values go with it).
 @ ordmap_free [K V] sink ( OrdMap K V ) m → v {}
 
+// Early release with a last look at every key and value (see
+// vec_free_with).
 @ ordmap_free_with [K V] sink ( OrdMap K V ) m ( @ v K ) dk ( @ v V ) dv → v {
-    ( vec_free_with [K] . m keys dk )
-    ( vec_free_with [V] . m vals dv )
+    ( vec_each [K] . m keys dk )
+    ( vec_each [V] . m vals dv )
 }

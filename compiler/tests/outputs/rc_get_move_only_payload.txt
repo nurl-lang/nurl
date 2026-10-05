@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop res 2
+a strong: 2
+drop res 3
+drop res 1

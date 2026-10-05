@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+parent-via-weak=1
+upgrade-after-free=0
+chain=300000
+left=0

@@ -73,7 +73,7 @@ $ `stdlib/ext/http2_client.nu`
     ( vec_push [Header] hs ( header_new `:path` `/foo` ) )
     ( vec_push [Header] hs ( header_new `x-test` `bar` ) )
     : ( Vec u ) block ( hpack_encode_headers hs )
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+    ( vec_free [Header] hs )
     : ~ HpackDynTable dyn ( hpack_dyn_new 4096 )
     : !HpackDecoded HpackErr dr ( hpack_decode_block block dyn )
     ( vec_free [u] block )
@@ -199,7 +199,7 @@ $ `stdlib/ext/http2_client.nu`
     // submit takes ownership of `body` (mirrors the empty-body calls below).
     : !i H2ClientErr sr ( h2_client_submit client `POST` `http`
     `127.0.0.1` `/big` h body )
-    ( vec_free_with [Header] h \ Header hh → v { ( header_free hh ) } )
+    ( vec_free [Header] h )
     ?? sr {
         T sid → {
             : !v H2ClientErr rr ( h2_client_run_until_complete client )
@@ -241,13 +241,13 @@ $ `stdlib/ext/http2_client.nu`
                     : ( Vec u ) b1 ( vec_new [u] )
                     : !i H2ClientErr s1 ( h2_client_submit client `GET` `http`
                     `127.0.0.1` `/alpha` h1 b1 )
-                    ( vec_free_with [Header] h1 \ Header hh → v { ( header_free hh ) } )
+                    ( vec_free [Header] h1 )
 
                     : ( Vec Header ) h2 ( vec_new [Header] )
                     : ( Vec u ) b2 ( vec_new [u] )
                     : !i H2ClientErr s2 ( h2_client_submit client `GET` `http`
                     `127.0.0.1` `/beta` h2 b2 )
-                    ( vec_free_with [Header] h2 \ Header hh → v { ( header_free hh ) } )
+                    ( vec_free [Header] h2 )
 
                     ?? s1 {
                         T sid1 → {

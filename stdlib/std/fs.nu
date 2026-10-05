@@ -47,6 +47,7 @@
 // callers may pass `( string_data s )` from an owned String without
 // transferring ownership.
 
+$ `stdlib/core/marker.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
@@ -94,9 +95,22 @@ $ `stdlib/core/rcbox.nu`
 // classification routes through `nurl_errno_kind` like every other
 // `IoErr` boundary. The body is pure NURL — `fopen` / `fwrite` /
 // `fclose` are declared in `nurlc.nu`'s preamble and reach libc directly.
+// Out of file descriptors (EMFILE / ENFILE): unreachable Rc cycles may be
+// holding some — collect them and say whether to try once more
+// (stdlib/runtime_core.c, docs/MEMORY.md §7.7).
+& `c` @ nurl_cc_reclaim_fds → i32
+
+// `fopen`, retried once when the process had run out of descriptors and
+// collecting unreachable cycles freed some.
+@ __fs_fopen s path s mode → s {
+    : s fp ( fopen path mode )
+    ? == 0 # i fp { ? != 0 ( nurl_cc_reclaim_fds ) { ^ ( fopen path mode ) } {} } {}
+    ^ fp
+}
+
 @ __write_file_pure s path s content s mode → i {
     ? || == # i path 0 || == # i content 0 == # i mode 0 { ^ -1 } {}
-    : s fp ( fopen path mode )
+    : s fp ( __fs_fopen path mode )
     ? == # i fp 0 { ^ -1 } {}
     : i n ( nurl_str_len content )
     ? > n 0 {
@@ -146,7 +160,7 @@ $ `stdlib/core/rcbox.nu`
 // callers should not be relying on).
 @ __file_size_pure s path → i {
     ? == # i path 0 { ^ -1 } {}
-    : s fp ( fopen path `rb` )
+    : s fp ( __fs_fopen path `rb` )
     ? == # i fp 0 { ^ -1 } {}
     : i32 sr ( fseek fp 0 # i32 2 )
     ? != sr # i32 0 {
@@ -617,7 +631,7 @@ $ `stdlib/core/rcbox.nu`
 // procfs, growing files and short reads all use the same EOF-driven reader.
 @ read_file_bytes s path → !( Vec u ) IoErr {
     ? == # i path 0 { ^ @ !( Vec u ) IoErr { F @ IoErr { Other } } } {}
-    : s f # s ( fopen path `rb` )
+    : s f # s ( __fs_fopen path `rb` )
     ? == # i f 0 {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec u ) IoErr { F e }
@@ -650,7 +664,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 @ __write_bytes s path ( Vec u ) v s mode → !v IoErr {
-    : s f # s ( fopen path mode )
+    : s f # s ( __fs_fopen path mode )
     ? == # i f 0 {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !v IoErr { F e }
@@ -703,7 +717,7 @@ $ `stdlib/core/rcbox.nu`
 // fopen wrapper. Returns NULL handle on failure (NURL callers check
 // via `# i h == 0`).
 @ nurl_file_open s path s mode → *v {
-    : s h # s ( fopen path mode )
+    : s h # s ( __fs_fopen path mode )
     ^ # *v h
 }
 
@@ -921,6 +935,9 @@ $ `stdlib/core/rcbox.nu`
 }
 
 : File { s ctl }
+
+// Its drop closes something the outside world sees (stdlib/core/marker.nu).
+% Resource File {}
 
 @ File_share File h → File { ^ @ File { # s ( rcbox_share # i . h ctl ) } }
 
@@ -1156,9 +1173,9 @@ $ `stdlib/core/rcbox.nu`
 // memory — never slurps the whole file. Does NOT preserve mode/mtime
 // (a plain content copy); layer chmod on top if needed.
 @ fs_copy_file s src s dst → !v IoErr {
-    : s rf # s ( fopen src `rb` )
+    : s rf # s ( __fs_fopen src `rb` )
     ? == # i rf 0 { ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) } } {}
-    : s wf # s ( fopen dst `wb` )
+    : s wf # s ( __fs_fopen dst `wb` )
     ? == # i wf 0 {
         : IoErr e ( _io_err_of_kind ( errno_kind ) )
         : i32 _rc ( fclose rf )

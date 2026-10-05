@@ -42,7 +42,7 @@ $ `stdlib/core/vec.nu`
         }
         = k + k 1
     }
-    ( vec_free_with [Json] q \ Json j → v { ( json_free j ) } )
+    ( vec_free [Json] q )
     ^ hits
 }
 

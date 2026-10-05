@@ -49,7 +49,7 @@ $ `stdlib/core/errors.nu`
     ?? miss {
         T v → {
             ( nurl_print `unexpected ok\n` )
-            : ( @ v String ) drop_str \ String e → v { ( string_free e ) }
+            : ( @ v String ) drop_str \ String e → v {}
             ( vec_free_with [String] v drop_str )
         }
         F e → {
@@ -92,7 +92,7 @@ $ `stdlib/core/errors.nu`
             ( nurl_print `has b.txt: ` )
             ? b_in { ( nurl_print `T` ) } { ( nurl_print `F` ) }
             ( nurl_print `\n` )
-            : ( @ v String ) drop_str \ String e → v { ( string_free e ) }
+            : ( @ v String ) drop_str \ String e → v {}
             ( vec_free_with [String] v drop_str )
         }
         F e → {

@@ -55,7 +55,7 @@ $ `stdlib/ext/http2_hpack.nu`
 }
 
 @ headers_free sink ( Vec Header ) hs → v {
-    ( vec_free_with [Header] hs \ Header h → v { ( header_free h ) } )
+    ( vec_free [Header] hs )
 }
 
 // Decoded list equals the sample, names compared lowercased.

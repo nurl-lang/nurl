@@ -12,4 +12,4 @@ compiler/tests/borrow_stored_owner_gone.nu:74: error: use of moved value 'a' —
     ^ + n ( vec_len [i] a )
 compiler/tests/borrow_stored_owner_gone.nu:83: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 82 by keep (it was stored in 'u'). After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ^ + n ( vec_len [i] a )
-error: compilation aborted — 6 borrow-checker violations (re-run with --no-borrowck to bypass)
+error: compilation aborted — 6 borrow-checker violations (if the program is correct, this is a false positive: please report it as a bug at https://github.com/nurl-lang/nurl/issues)
