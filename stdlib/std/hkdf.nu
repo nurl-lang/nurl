@@ -47,7 +47,7 @@ $ `stdlib/std/hash_sha256.nu`
         = prev t
         : ~ i j 0
         ~ & < j 32 < generated length {
-            ( vec_push [u] out # u ( __hk_bget t j ) )
+            ( vec_push [u] out # u ( __hk_bget prev j ) )
             = generated + generated 1
             = j + j 1
         }
