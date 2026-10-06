@@ -33,7 +33,7 @@ $ `stdlib/std/random.nu`
 
 // Show decoded bytes as a hex round-trip so the test snapshot stays
 // printable — raw decoded bytes may include non-ASCII (e.g. 0xfb).
-@ show_dec_hex s label ! String ParseErr r → v {
+@ show_dec_hex s label sink ! String ParseErr r → v {
     ?? r {
         T s → {
             : String h ( hex_encode ( string_data s ) )
@@ -55,7 +55,7 @@ $ `stdlib/std/random.nu`
     }
 }
 
-@ show_dec_str s label ! String ParseErr r → v {
+@ show_dec_str s label sink ! String ParseErr r → v {
     ?? r {
         T s → {
             ( nurl_print `ok ` )

@@ -83,9 +83,10 @@ $ `stdlib/net/tcpstack.nu`
 // other buffer the exchange produces. Vec is outside auto-drop
 // (docs/MEMORY.md §7.4), so saying who frees what is the whole
 // contract, and a caller that also freed it would double-free.
-@ settle TcpStack a TcpStack b PktBuf from_a i now i rounds → i {
+@ settle TcpStack a TcpStack b sink PktBuf from_a i now i rounds → i {
     : ~ i crossed 0
-    : ~ PktBuf wire from_a
+    : ~ PktBuf wire ( pktbuf_new )
+    = wire from_a
     : ~ i side 0
     : ~ i k 0
     ~ && < k rounds > ( pktbuf_count wire ) 0 {

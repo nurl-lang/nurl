@@ -256,9 +256,9 @@ version = "1.0.0"
     ?? rm2 { T _ → {} F _ → {} }
     : !v IoErr rm3 ( dir_remove_all `/tmp/nurl_pkg_e2e_nosig` )
     ?? rm3 { T _ → {} F _ → {} }
-    ( vec_free [u] tarball )
-    ( string_free index )
-    ( string_free sigtext )
+    // tarball / index / sigtext: the server's handler took them over (it
+    // runs on the server's threads); on the path without a server they are
+    // dropped at scope exit like any binding.
 }
 
 @ main → i {

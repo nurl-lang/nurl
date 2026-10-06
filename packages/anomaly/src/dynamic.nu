@@ -2394,8 +2394,15 @@ $ `stdlib/core/rcbox.nu`
             // points there are go in as ONE transaction: a crash between
             // them would leave the ring and `n_seen` disagreeing, and
             // another thread must never read the ring half-updated.
-            ( store_commit_point . mo store ( string_data . mo mname )
-            seq ( string_data line ) evict . mo meta )
+            // `line` now lives in the ring: it is the newest row (the cap
+            // is at least 1, so the eviction above never takes it).
+            ?? ( vec_get [String] . mo lines - ( vec_len [String] . mo lines ) 1 ) {
+                T ln → {
+                    ( store_commit_point . mo store ( string_data . mo mname )
+                    seq ( string_data ln ) evict . mo meta )
+                }
+                F → {}
+            }
 
             // Schedule: lifetime counter reaching the mark retrains all.
             ? & >= . mm n_seen . mo next_train_at >= ( vec_len [String] . mo lines ) . mo min_points {
@@ -3840,8 +3847,8 @@ $ `stdlib/core/rcbox.nu`
             : b same_epoch == . got epoch epoch
             : b same_vers ( scorecache_vnames_match got vnames )
             ? & & same_epoch same_vers == force F {
-                = cache got
                 = cbase . got base_seen
+                = cache got
             } {}
         }
         F → {}

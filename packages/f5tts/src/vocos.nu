@@ -104,8 +104,9 @@ $ `stdlib/core/rcbox.nu`
     ( string_push_int s k )
     ( string_push_str s suf )
     : GkBuf b ( __voc_up v ( string_data s ) )
+    : b ok ( gk_buf_ok b )
     ( vec_push [GkBuf] dst b )
-    ^ ( gk_buf_ok b )
+    ^ ok
 }
 
 @ __voc_u32 * u p i off → i {
@@ -147,8 +148,9 @@ $ `stdlib/core/rcbox.nu`
     ( string_push_int s k )
     ( string_push_str s suf )
     : GkBuf b ( __voc_up_convw v ( string_data s ) cout ipg K )
+    : b ok ( gk_buf_ok b )
     ( vec_push [GkBuf] dst b )
-    ^ ( gk_buf_ok b )
+    ^ ok
 }
 
 @ __voc_lists * VocosImpl v → v {

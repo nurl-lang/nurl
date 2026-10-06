@@ -289,8 +289,7 @@ $ `src/orgfiles.nu`
             : Json a ?? ( vec_get [Json] items - j 1 ) { T x → x F _ → @ Json { JNull } }
             : Json b ?? ( vec_get [Json] items j ) { T x → x F _ → @ Json { JNull } }
             ? < ( _ana_jint a `created` 0 ) ( _ana_jint b `created` 0 ) {
-                ( vec_set [Json] items - j 1 b )
-                ( vec_set [Json] items j a )
+                ( vec_swap [Json] items - j 1 j )
                 = j - j 1
             } { = j 0 }
         }

@@ -181,6 +181,19 @@ GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
     ch * h 2 * w 2 ch 1 1 * h 2 * w 2 0 0 1 1 )
 }
 
+// The fusion step with hook `fi` as its skip input when `hooked` (and the
+// hook exists); otherwise `out` stands in for it.
+@ __dp_fuse_hook GpuKit kit DpFuse f GkBuf out ( Vec GkBuf ) rns i fi b hooked
+GkBuf up GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w → b {
+    ? hooked {
+        ?? ( vec_get [GkBuf] rns fi ) {
+            T sk → { ^ ( _dp_fuse_fwd kit f out sk up t1 t2 dst ch h w ) }
+            F → {}
+        }
+    } {}
+    ^ ( _dp_fuse_fwd kit f out out up t1 t2 dst ch h w )
+}
+
 // One view's patch tokens out of a sequence buffer, as a [1536, gh·gw]
 // feature map.
 @ __dp_tokens_to_map GpuKit kit GkBuf seq i voff GkBuf outmap i np → b {
@@ -297,8 +310,7 @@ i voff i gh i gw i h i w GkBuf rays GkBuf depth GkBuf conf GkBuf mask → b {
         ?? ( vec_get [DpFuse] . d fuse fi ) {
             T f → {
                 // refinenet3 fuses hook 2, refinenet2 hook 1, refinenet1 hook 0
-                : GkBuf skip ? > step 0 ?? ( vec_get [GkBuf] rns fi ) { T b → b F → cbuf } cbuf
-                ? ( _dp_fuse_fwd kit f cbuf skip up t1 t2 blk DP_FEAT ch cw ) {} { = ok F }
+                ? ( __dp_fuse_hook kit f cbuf rns fi > step 0 up t1 t2 blk DP_FEAT ch cw ) {} { = ok F }
             }
             F → { = ok F }
         }

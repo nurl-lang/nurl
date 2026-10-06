@@ -566,9 +566,9 @@ $ `deps/gpu/src/gpu.nu`
                     ? == . a kind 0 {
                         ? == ( gpu_upload db . a host ) 0 {} { = ok F }
                     } {}
+                    ( vec_push [i] args ( gpu_arg_buffer db ) )
                     ( vec_push [GpuBuffer] bufs db )
                     ( vec_push [i] buf_arg k )
-                    ( vec_push [i] args ( gpu_arg_buffer db ) )
                 }
             }
             F _ → {}

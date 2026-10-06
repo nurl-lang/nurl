@@ -371,20 +371,21 @@ $ `stdlib/core/rcbox.nu`
     ? > need 0 {
         : GpuBuffer big ( gpu_alloc . w g need )
         ? == . big dptr 0 { = . w oom T ^ 0 } {}
-        ( vec_push [i] . w bufs . big dptr )
-        ( vec_push [GpuBuffer] . w bufo big )
+        : i bdp . big dptr
+        ( vec_push [i] . w bufs bdp )
         ( vec_push [i] . w bufsz . big bytes )
-        ^ . big dptr
+        ( vec_push [GpuBuffer] . w bufo big )
+        ^ bdp
     } {}
     ? > + . w arena_off need . w arena_cap {
         : GpuBuffer ch ( gpu_alloc . w g ( __WH_ARENA_CHUNK ) )
         ? == . ch dptr 0 { = . w oom T ^ 0 } {}
         ( vec_push [i] . w bufs . ch dptr )
-        ( vec_push [GpuBuffer] . w bufo ch )
         ( vec_push [i] . w bufsz . ch bytes )
         = . w arena_cur . ch dptr
         = . w arena_off 0
         = . w arena_cap . ch bytes
+        ( vec_push [GpuBuffer] . w bufo ch )
     } {}
     : i d + . w arena_cur . w arena_off
     = . w arena_off + . w arena_off need
@@ -403,11 +404,11 @@ $ `stdlib/core/rcbox.nu`
         : GpuBuffer ch ( gpu_alloc . w g csz )
         ? == . ch dptr 0 { = . w oom T ^ 0 } {}
         ( vec_push [i] . w cvt_raw . ch dptr )
-        ( vec_push [GpuBuffer] . w cvt_rawo ch )
         ( vec_push [i] . w cvt_rawsz . ch bytes )
         = . w raw_cur . ch dptr
         = . w raw_off 0
         = . w raw_cap . ch bytes
+        ( vec_push [GpuBuffer] . w cvt_rawo ch )
     } {}
     : i d + . w raw_cur . w raw_off
     = . w raw_off + . w raw_off need

@@ -747,7 +747,7 @@ $ `stdlib/core/rcbox.nu`
                 = . r body out
                 ( __hc_strip_encoding r )
                 : String length ( string_new )
-                ( string_push_int length ( vec_len [u] out ) )
+                ( string_push_int length ( vec_len [u] . r body ) )
                 ( response_set_header r `Content-Length` ( string_data length ) )
             }
             F error → {
@@ -819,12 +819,11 @@ $ `stdlib/core/rcbox.nu`
 // The one entry point: send `method` to `url` with `body` and the caller's
 // `headers`, following redirects and carrying cookies. `headers` is
 // consumed (freed); `body` is borrowed.
-@ http_client_request HttpClient c__h s method s url ( Vec Header ) headers ( Vec u ) body → !HttpResponse HttpClientErr {
+@ http_client_request HttpClient c__h s method s url sink ( Vec Header ) headers ( Vec u ) body → !HttpResponse HttpClientErr {
     : *HttpClientImpl c ( __HttpClient_ptr c__h )
     : ~ String cur_url ( string_from url )
     : ~ String cur_method ( string_from method )
     : ~ i redirects 0
-    : ~ ( Vec Header ) hdrs headers
     : ~ i result_kind 0  // 0 pending, 1 ok, 2 err
     : ~ i err_code 0
     : ~ HttpResponse out ( response_new 0 )
@@ -850,7 +849,7 @@ $ `stdlib/core/rcbox.nu`
                     : String tgt ( url_request_target u )
                     : *HcOriginImpl o ( __hc_origin c scheme ( string_data . u host ) port )
                     // Copy the header list per attempt (each __hc_do consumes it).
-                    : ( Vec Header ) attempt ( __hc_clone_headers hdrs )
+                    : ( Vec Header ) attempt ( __hc_clone_headers headers )
                     : !HttpResponse HttpClientErr rr ( __hc_do c o ( string_data cur_method ) ( string_data tgt ) attempt body )
                     ?? rr {
                         F e → {
@@ -902,7 +901,7 @@ $ `stdlib/core/rcbox.nu`
             }
         }
     }
-    ( __hc_free_headers hdrs )
+    ( __hc_free_headers headers )
     ( string_free cur_url )
     ( string_free cur_method )
     ? == result_kind 1 {

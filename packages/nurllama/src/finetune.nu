@@ -712,14 +712,14 @@ $ `stdlib/core/rcbox.nu`
         : GVar Wg ( __ft_rec m ( __ft_const tp . gw data . gw rows . gw cols ) L 6 )
         : GVar Wu ( __ft_rec m ( __ft_const tp . uw data . uw rows . uw cols ) L 7 )
         : GVar Wd ( __ft_rec m ( __ft_const tp . dw data . dw rows . dw cols ) L 8 )
-        : FtV anv ?? ( vec_get [FtV] . m an L ) { T x → x F → ( __ft_nov ) }
+        : FtV anv ?? ( vec_get [FtV] . m an L ) { T fv → fv F → ( __ft_nov ) }
         : GVar N1 ( __ft_rec m ( __ft_const tp . anv v 0 H ) L 0 )
-        : FtV fnv ?? ( vec_get [FtV] . m fn L ) { T x → x F → ( __ft_nov ) }
+        : FtV fnv ?? ( vec_get [FtV] . m fn L ) { T fv → fv F → ( __ft_nov ) }
         : GVar N2 ( __ft_rec m ( __ft_const tp . fnv v 0 H ) L 1 )
         // qwen3's per-head Q/K norms, declared here so every base const of
         // this layer is created in one place (the streamer pairs by key).
-        : FtV qnv ?? ( vec_get [FtV] . m qn L ) { T x → x F → ( __ft_nov ) }
-        : FtV knv ?? ( vec_get [FtV] . m kn L ) { T x → x F → ( __ft_nov ) }
+        : FtV qnv ?? ( vec_get [FtV] . m qn L ) { T fv → fv F → ( __ft_nov ) }
+        : FtV knv ?? ( vec_get [FtV] . m kn L ) { T fv → fv F → ( __ft_nov ) }
         : b haveqn . qnv has
         : b havekn . knv has
         : ~ GVar QN @ GVar { -1 }
@@ -731,15 +731,15 @@ $ `stdlib/core/rcbox.nu`
         : ~ GVar q ( __ft_lora_lin tp xn Wq pids + s7 0 scale )
         : ~ GVar kk ( __ft_lora_lin tp xn Wk pids + s7 1 scale )
         : ~ GVar vv ( __ft_lora_lin tp xn Wv pids + s7 2 scale )
-        : FtV bqv ?? ( vec_get [FtV] . m bq L ) { T x → x F → ( __ft_nov ) }
+        : FtV bqv ?? ( vec_get [FtV] . m bq L ) { T fv → fv F → ( __ft_nov ) }
         ? . bqv has {
             = q ( g_add tp q ( __ft_rec m ( __ft_const tp . bqv v 0 * NH hd ) L 11 ) )
         } {}
-        : FtV bkv ?? ( vec_get [FtV] . m bk L ) { T x → x F → ( __ft_nov ) }
+        : FtV bkv ?? ( vec_get [FtV] . m bk L ) { T fv → fv F → ( __ft_nov ) }
         ? . bkv has {
             = kk ( g_add tp kk ( __ft_rec m ( __ft_const tp . bkv v 0 * NKV hd ) L 12 ) )
         } {}
-        : FtV bvv ?? ( vec_get [FtV] . m bv L ) { T x → x F → ( __ft_nov ) }
+        : FtV bvv ?? ( vec_get [FtV] . m bv L ) { T fv → fv F → ( __ft_nov ) }
         ? . bvv has {
             = vv ( g_add tp vv ( __ft_rec m ( __ft_const tp . bvv v 0 * NKV hd ) L 13 ) )
         } {}

@@ -53,7 +53,7 @@ $ `stdlib/ext/http.nu`
 // header_get F-arm's payload is an OWNED empty String (the standard
 // `? String` encoding requires a default value); free it on both arms
 // to keep ASan clean.
-@ show_header s name ? String got → v {
+@ show_header s name sink ? String got → v {
     ?? got {
         T s → {
             ( nurl_print `  hdr ` )

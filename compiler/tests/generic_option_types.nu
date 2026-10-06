@@ -41,7 +41,7 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     // Drop closure takes a `?String` parameter (aggregate closure param).
-    ( vec_free_with [? String] v \ ? String o → v { ?? o { T sv → ( string_free sv ) F _ → {} } } )
+    ( vec_free_with [? String] v \ ? String o → v { ?? o { T sv → {} F _ → {} } } )
 }
 
 @ test_int_vec → v {

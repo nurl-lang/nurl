@@ -340,17 +340,19 @@ $ `stdlib/core/rcbox.nu`
             ( lk_q8_repack . m ks . bq dptr . br dptr / ne0 32 / nb 34 )
             : i _rs ( gpu_sync . m g )
             = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
-            ( vec_push [i] . m wdptr . br dptr )
-            ( vec_push [GpuBuffer] . m wbufs br )
+            : i br_dp . br dptr
+            ( vec_push [i] . m wdptr br_dp )
             ( vec_push [i] . m wbytes . br bytes )
+            ( vec_push [GpuBuffer] . m wbufs br )
             = __lm_last_type gt
-            ^ . br dptr
+            ^ br_dp
         } {}
-        ( vec_push [i] . m wdptr . bq dptr )
-        ( vec_push [GpuBuffer] . m wbufs bq )
+        : i bq_dp . bq dptr
+        ( vec_push [i] . m wdptr bq_dp )
         ( vec_push [i] . m wbytes . bq bytes )
+        ( vec_push [GpuBuffer] . m wbufs bq )
         = __lm_last_type gt
-        ^ . bq dptr
+        ^ bq_dp
     } {}
     : !( Vec u ) String r ( gguf_dequant gg ti )
     ?? r {
@@ -362,11 +364,12 @@ $ `stdlib/core/rcbox.nu`
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_push [i] . m wdptr . b dptr )
-            ( vec_push [GpuBuffer] . m wbufs b )
+            : i b_dp . b dptr
+            ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
+            ( vec_push [GpuBuffer] . m wbufs b )
             = __lm_last_type 0
-            ^ . b dptr
+            ^ b_dp
         }
         F e → {
             ^ -1
@@ -399,10 +402,11 @@ $ `stdlib/core/rcbox.nu`
         = __lm_alloc_failed T
         ^ -1
     } {}
-    ( vec_push [i] . m wdptr . b dptr )
-    ( vec_push [GpuBuffer] . m wbufs b )
+    : i b_dp . b dptr
+    ( vec_push [i] . m wdptr b_dp )
     ( vec_push [i] . m wbytes . b bytes )
-    ^ . b dptr
+    ( vec_push [GpuBuffer] . m wbufs b )
+    ^ b_dp
 }
 
 // Per-layer tensor name: blk.<L>.<suffix>
@@ -575,11 +579,12 @@ $ `stdlib/core/rcbox.nu`
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_push [i] . m wdptr . b dptr )
-            ( vec_push [GpuBuffer] . m wbufs b )
+            : i b_dp . b dptr
+            ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
+            ( vec_push [GpuBuffer] . m wbufs b )
             = __lm_last_type 0
-            ^ . b dptr
+            ^ b_dp
         }
         F e → {
             ^ -1
@@ -629,10 +634,11 @@ $ `stdlib/core/rcbox.nu`
                 ^ -1
             } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
-            ( vec_push [i] . m wdptr . b dptr )
-            ( vec_push [GpuBuffer] . m wbufs b )
+            : i b_dp . b dptr
+            ( vec_push [i] . m wdptr b_dp )
             ( vec_push [i] . m wbytes . b bytes )
-            ^ . b dptr
+            ( vec_push [GpuBuffer] . m wbufs b )
+            ^ b_dp
         }
         F e → {
             ^ -1

@@ -425,10 +425,10 @@ $ `stdlib/core/rcbox.nu`
                         : ?Json sj ( json_arr_get ent 1 )
                         : String pc ?? pj { T x → ( string_from ( json_str_data x ) ) F → ( string_new ) }
                         : f sc ?? sj { T x → ?? ( json_num_as_f x ) { T v → v F → 0.0 } F → 0.0 }
+                        : i blen ( string_len pc )
                         ( vec_push [String] . u pieces pc )
                         ( vec_push [f] . u scores sc )
                         ? < sc minsc { = minsc sc } {}
-                        : i blen ( string_len pc )
                         ? > blen . u max_piece { = . u max_piece blen } {}
                     }
                     F → {}

@@ -3745,17 +3745,24 @@ $ `stdlib/core/rcbox.nu`
         }
     } {}
 
-    // One closure per role (held alive for the process; worker threads share
-    // one closure and each takes a fresh identity inside node_worker).
+    // One closure per role thread. A thread owns what its closure captures,
+    // so every worker gets its own copy of the relay list, dial host and
+    // token (each takes a fresh identity inside node_worker).
     : ( @ v ) relay_body \ → v { ( node_relay ( string_data . lhp host ) . lhp port vflag ) }
-    : ( @ v ) worker_body \ → v { ( node_worker relays ( string_data drh ) drp ( string_data tok ) vflag gpuflag ) }
     : ( @ v ) mcp_body \ → v { ( node_mcp relays ( string_data drh ) drp ( string_data . mhp host ) . mhp port ( string_data certp ) ( string_data keyp ) ( string_data tok ) ) }
 
     : ( Vec Thread ) ths ( vec_new [Thread] )
     ? relay_on { ?? ( thread_spawn relay_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } } {}
     ? worker_on {
         : ~ i wi 0
-        ~ < wi nworkers { ?? ( thread_spawn worker_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } = wi + wi 1 }
+        ~ < wi nworkers {
+            : ( Vec String ) wrelays ( mem_dup relays )
+            : String wdrh ( string_clone drh )
+            : String wtok ( string_clone tok )
+            : ( @ v ) worker_body \ → v { ( node_worker wrelays ( string_data wdrh ) drp ( string_data wtok ) vflag gpuflag ) }
+            ?? ( thread_spawn worker_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} }
+            = wi + wi 1
+        }
     } {}
     ? mcp_on { ?? ( thread_spawn mcp_body ) { T t → ( vec_push [Thread] ths t ) F _ → {} } } {}
 

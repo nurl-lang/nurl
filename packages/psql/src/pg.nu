@@ -284,8 +284,7 @@ $ `stdlib/core/rcbox.nu`
             : ~ i start k
             ~ & < k n != ( __bget payload k ) 0 { = k + k 1 }
             : String val ( __slice_str payload start k )
-            ? == field 77 { = msg val } {}
-            ? == field 67 { = code val } {}
+            ? == field 77 { = msg val } { ? == field 67 { = code val } {} }
             = k + k 1
         }
     }

@@ -402,9 +402,9 @@ $ `stdlib/core/rcbox.nu`
                 ? & != . t dtype 7 != ( otensor_host_ptr t ) 0 {
                     : i n . t nelem
                     : GpuBuffer buf ( gpu_alloc . e g * n 4 )
-                    ( rt_own e buf )
                     ( gpu_upload buf # *u ( otensor_host_ptr t ) )
-                    ( rt_put e ( string_data . t name ) . buf dptr ( __shape_copy_rt . t dims ) )
+                    : i bp ( rt_own e buf )
+                    ( rt_put e ( string_data . t name ) bp ( __shape_copy_rt . t dims ) )
                 } {}
             } F _ → {}
         }
@@ -416,9 +416,9 @@ $ `stdlib/core/rcbox.nu`
 // return its dptr.
 @ rt_alloc_out * EngineImpl e s name sink ( Vec i ) shape → i {
     : GpuBuffer buf ( gpu_alloc . e g * ( __prod shape ) 4 )
-    ( rt_own e buf )
-    ( rt_put e name . buf dptr shape )
-    ^ . buf dptr
+    : i bp ( rt_own e buf )
+    ( rt_put e name bp shape )
+    ^ bp
 }
 
 // ── op handlers ───────────────────────────────────────────────────
@@ -590,8 +590,10 @@ $ `stdlib/core/rcbox.nu`
     : RTensor a ( __in e n 0 )
     : RTensor b ( __in e n 1 )
     : b comm | == op 0 == op 1
-    : RTensor X ? & comm < . a nelem . b nelem b a
-    : RTensor B ? & comm < . a nelem . b nelem a b
+    // which input is the data: the larger one when the op commutes
+    : i xk ? & comm < . a nelem . b nelem 1 0
+    : RTensor X ( __in e n xk )
+    : RTensor B ( __in e n - 1 xk )
     : i C ( rt_dim X 1 )
     : i inner ( rt_last X )
     : ~ i bmode 2
@@ -974,9 +976,9 @@ $ `stdlib/core/rcbox.nu`
         ? != keep 0 { ( vec_push [i] os 1 ) } {}
         : i prodos ( __prod os )
         : GpuBuffer buf ( gpu_alloc . e g * prodos 8 )
-        ( rt_own e buf )
-        ( rt_put e ( __out_name n ) . buf dptr os )
-        : GkBuf ob ( gk_buf_wrap . buf dptr prodos GK_I64 )
+        : i bp ( rt_own e buf )
+        ( rt_put e ( __out_name n ) bp os )
+        : GkBuf ob ( gk_buf_wrap bp prodos GK_I64 )
         : s in0 ( __rt_str_at . n inputs 0 )
         // gkd_argmax picks its kernel by the INPUT buffer's element type;
         // the raw token input is the only int64 tensor in play.
@@ -1121,9 +1123,9 @@ $ `stdlib/core/rcbox.nu`
     ( rt_load_inits e g )
     : i n ( __prod shape )
     : GpuBuffer ib ( gpu_alloc . e g * n 4 )
-    ( rt_own e ib )
     ( gpu_upload ib input_host )
-    ( rt_put e ( string_data . g input_name ) . ib dptr shape )
+    : i bp ( rt_own e ib )
+    ( rt_put e ( string_data . g input_name ) bp shape )
     ^ ( _rt_run_nodes e g )
 }
 
@@ -1135,9 +1137,9 @@ $ `stdlib/core/rcbox.nu`
     ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : GpuBuffer ib ( gpu_alloc . e g * * nrow ncol 8 )
-    ( rt_own e ib )
     ( gpu_upload ib tokhost )
-    ( rt_put e ( string_data . g input_name ) . ib dptr ( __shape2 nrow ncol ) )
+    : i bp ( rt_own e ib )
+    ( rt_put e ( string_data . g input_name ) bp ( __shape2 nrow ncol ) )
     ^ ( _rt_run_nodes e g )
 }
 
@@ -1148,11 +1150,13 @@ $ `stdlib/core/rcbox.nu`
     ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : GpuBuffer b1 ( gpu_alloc . e g * ( __prod s1 ) 4 )
-    ( rt_own e b1 )
-    ( gpu_upload b1 h1 ) ( rt_put e n1 . b1 dptr s1 )
+    ( gpu_upload b1 h1 )
+    : i bp1 ( rt_own e b1 )
+    ( rt_put e n1 bp1 s1 )
     : GpuBuffer b2 ( gpu_alloc . e g * ( __prod s2 ) 4 )
-    ( rt_own e b2 )
-    ( gpu_upload b2 h2 ) ( rt_put e n2 . b2 dptr s2 )
+    ( gpu_upload b2 h2 )
+    : i bp2 ( rt_own e b2 )
+    ( rt_put e n2 bp2 s2 )
     ^ ( _rt_run_nodes e g )
 }
 

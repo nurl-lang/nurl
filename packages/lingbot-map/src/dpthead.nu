@@ -271,8 +271,9 @@ $ `src/load.nu`
     : GkBuf pe ( gk_dbuf_new kit * ch * h w GK_F32 )
     : b ok ( gk_dbuf_upload kit pe hv )
     ? ok {} { ^ F }
+    : b added ( gkd_add kit x x pe )
     ( vec_push [DpPe] cache @ DpPe { ch h w aspect pe } )
-    ^ ( gkd_add kit x x pe )
+    ^ added
 }
 
 // One fusion step. `out` is the coarser path (or the only input, for

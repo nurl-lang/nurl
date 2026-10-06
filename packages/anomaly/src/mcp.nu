@@ -1076,7 +1076,6 @@ $ `src/store.nu`
                 ( __mcp_copy_rounded c `share` co 3 )
                 ( json_arr_push arr co )
             } )
-            ( json_obj_set o `contributions` arr )
             // Blame from the autoencoder is reconstruction error per
             // field, and a broken RELATION puts error on both ends of it:
             // when a temperature freezes, the net's humidity prediction —
@@ -1084,18 +1083,21 @@ $ `src/store.nu`
             // too, and can carry the larger share. Naming one field there
             // sends a reader to the wrong sensor. When the top two shares
             // are of the same order, the finding is the pair.
+            : ~ b pair F
+            : String m ( string_from `` )
             ? >= ( json_arr_len arr ) 2 {
                 : f s0 ( __mcp_share_at arr 0 )
                 : f s1 ( __mcp_share_at arr 1 )
                 ? & > s0 0.0 >= s1 * 0.5 s0 {
-                    : String m ( string_from `` )
+                    = pair T
                     ( string_push_str m ( __mcp_feat_at arr 0 ) )
                     ( string_push_str m ` and ` )
                     ( string_push_str m ( __mcp_feat_at arr 1 ) )
                     ( string_push_str m ` carry the blame together: what broke is the relation between them, not necessarily the field with the larger share — the net predicts each from the other, so the field that FOLLOWED a failure is blamed as loudly as the one that failed. A version that judges one field alone (range_guard, flatline, forecast) names the culprit when there is a single one; see this row's versions.` )
-                    ( json_obj_set o `blame` ( json_str_lit ( string_data m ) ) )
                 } {}
             } {}
+            ( json_obj_set o `contributions` arr )
+            ? pair { ( json_obj_set o `blame` ( json_str_lit ( string_data m ) ) ) } {}
         }
         F _ → {}
     }
@@ -2860,9 +2862,10 @@ $ `src/store.nu`
         F _ → {}
     }
     ( json_obj_set out `total` ( json_int total ) )
-    ( json_obj_set out `listed` ( json_int ( json_arr_len list ) ) )
+    : i nlisted ( json_arr_len list )
+    ( json_obj_set out `listed` ( json_int nlisted ) )
     ( json_obj_set out `queries` list )
-    ? & == ( string_len want ) 0 == ( json_arr_len list ) 0 {} {
+    ? & == ( string_len want ) 0 == nlisted 0 {} {
         ? == ( string_len want ) 0 { ( json_obj_set out `next` ( json_str_lit `source_catalog {url, query: "<id>"} shows one entry's parameters; source_preview {url, query, mode, params, hours} its columns.` ) ) } {}
     }
     ^ ( __mcp_result_json out )

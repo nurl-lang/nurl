@@ -78,8 +78,8 @@ $ `stdlib/core/marker.nu`
 
     ( chan_close [i] ch )
     ( chan_free [i] ch )
-    ( vec_free [i] nums )
-    // `local` moved into `w`, which drops it.
+    // `nums` moved into the worker's closure, which drops it; `local`
+    // moved into `w`, which drops it.
     ( arc_free [i] counter )
     ( cell_free scratch )
     ( mutex_free lock )

@@ -170,20 +170,21 @@ $ `stdlib/core/rcbox.nu`
     ? > need ( __EM_ARENA_CHUNK ) {
         : GpuBuffer big ( gpu_alloc ( gk_gpu . e kit ) need )
         ? == . big dptr 0 { ^ 0 } {}
-        ( vec_push [i] . e arena . big dptr )
-        ( vec_push [GpuBuffer] . e arenao big )
+        : i bdp . big dptr
+        ( vec_push [i] . e arena bdp )
         ( vec_push [i] . e arenasz . big bytes )
-        ^ . big dptr
+        ( vec_push [GpuBuffer] . e arenao big )
+        ^ bdp
     } {}
     ? > + . e arena_off need . e arena_cap {
         : GpuBuffer ch ( gpu_alloc ( gk_gpu . e kit ) ( __EM_ARENA_CHUNK ) )
         ? == . ch dptr 0 { ^ 0 } {}
         ( vec_push [i] . e arena . ch dptr )
-        ( vec_push [GpuBuffer] . e arenao ch )
         ( vec_push [i] . e arenasz . ch bytes )
         = . e arena_cur . ch dptr
         = . e arena_off 0
         = . e arena_cap . ch bytes
+        ( vec_push [GpuBuffer] . e arenao ch )
     } {}
     : i d + . e arena_cur . e arena_off
     = . e arena_off + . e arena_off need

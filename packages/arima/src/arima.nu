@@ -3210,6 +3210,12 @@ $ `stdlib/core/rcbox.nu`
     ^ s
 }
 
+// The order fields of a saved model: under `order`, or (older files) at
+// the top level.
+@ __ar_spec_of_json Json so → ArimaSpec {
+    ^ @ ArimaSpec { ( __ar_jint so `p` ) ( __ar_jint so `d` ) ( __ar_jint so `q` ) ( __ar_jint so `P` ) ( __ar_jint so `D` ) ( __ar_jint so `Q` ) ( __ar_jint so `s` ) ?? ( json_obj_get so `mean` ) { T mv → ( json_as_bool mv ) F _ → F } }
+}
+
 @ arima_from_json s src → ?ArimaModel {
     ?? ( json_parse src ) {
         T o → {
@@ -3221,8 +3227,7 @@ $ `stdlib/core/rcbox.nu`
                 }
             } {}
             ? ok {} { ^ @ ?ArimaModel { F } }
-            : Json so ?? ( json_obj_get o `order` ) { T x → x F _ → o }
-            : ArimaSpec sp @ ArimaSpec { ( __ar_jint so `p` ) ( __ar_jint so `d` ) ( __ar_jint so `q` ) ( __ar_jint so `P` ) ( __ar_jint so `D` ) ( __ar_jint so `Q` ) ( __ar_jint so `s` ) ?? ( json_obj_get so `mean` ) { T mv → ( json_as_bool mv ) F _ → F } }
+            : ArimaSpec sp ?? ( json_obj_get o `order` ) { T x → ( __ar_spec_of_json x ) F _ → ( __ar_spec_of_json o ) }
             : ( Vec f ) phi ?? ( json_obj_get o `phi` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
             : ( Vec f ) th ?? ( json_obj_get o `theta` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }
             : ( Vec f ) sphi ?? ( json_obj_get o `seasonal_phi` ) { T a → ( __ar_unbits a ) F _ → ( vec_new [f] ) }

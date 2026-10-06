@@ -216,8 +216,7 @@ $ `stdlib/ext/json.nu`
             : OrgFile a ?? ( vec_get [OrgFile] out - j 1 ) { T x → x F _ → @ OrgFile { ( string_new ) 0 0 } }
             : OrgFile b ?? ( vec_get [OrgFile] out j ) { T x → x F _ → @ OrgFile { ( string_new ) 0 0 } }
             ? > ( nurl_str_cmp ( string_data . a name ) ( string_data . b name ) ) 0 {
-                ( vec_set [OrgFile] out - j 1 b )
-                ( vec_set [OrgFile] out j a )
+                ( vec_swap [OrgFile] out - j 1 j )
                 = j - j 1
             } { = j 0 }
         }

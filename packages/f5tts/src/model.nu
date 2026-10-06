@@ -278,8 +278,9 @@ $ `stdlib/core/rcbox.nu`
 @ __f5m_upl * F5ModelImpl m s pre i k s suf ( Vec GkBuf ) dst → b {
     : String s ( __f5m_name m pre k suf )
     : GkBuf b ( __f5m_up m ( string_data s ) )
+    : b ok ( gk_buf_ok b )
     ( vec_push [GkBuf] dst b )
-    ^ ( gk_buf_ok b )
+    ^ ok
 }
 
 // A convolution weight, uploaded with the output channel moved LAST:
@@ -331,8 +332,9 @@ $ `stdlib/core/rcbox.nu`
 @ __f5m_up_convwl * F5ModelImpl m s pre i idx s suf ( Vec GkBuf ) dst → b {
     : String s ( __f5m_name m pre idx suf )
     : GkBuf b ( __f5m_up_convw m ( string_data s ) )
+    : b ok ( gk_buf_ok b )
     ( vec_push [GkBuf] dst b )
-    ^ ( gk_buf_ok b )
+    ^ ok
 }
 
 // The three attention projections read the SAME normalised activation and
