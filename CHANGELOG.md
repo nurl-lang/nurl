@@ -62,6 +62,11 @@ program's safety no longer rests on them.
 
 ### Performance
 
+- **String equality rejects unlike compiler names before calling `strcmp`.**
+  Comparing the first two bytes inline handles the common token/type-name
+  mismatch while preserving `strcmp` for the remaining suffix. A fixed-source
+  self-compile executes 3.0% fewer instructions (13.101 to 12.711 billion) and
+  takes about 5.0% less wall time (2.443 to 2.320 seconds, ten-run means).
 - **The compiler trusts the symbol-table value lengths every writer already
   caches.** Zero is a valid cached length, not a missing-value sentinel, so
   the empty sideband values used throughout code generation no longer run

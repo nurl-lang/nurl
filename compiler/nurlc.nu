@@ -7691,7 +7691,16 @@ unsafe @ origin_guard_retained i root → b {
     ^ ( strlen str )
 }
 
-@ nurl_str_eq s a s b → i {
+unsafe @ nurl_str_eq s a s b → i {
+    : *u ap # *u a
+    : *u bp # *u b
+    // Most compiler comparisons reject unlike token/type names. Check the
+    // first two bytes inline so they do not pay an out-of-line strcmp call;
+    // a non-NUL first byte proves byte 1 is readable in both C strings.
+    : i a0 & # i . ap 0 255
+    ? != a0 & # i . bp 0 255 { ^ 0 } {}
+    ? == a0 0 { ^ 1 } {}
+    ? != & # i . ap 1 255 & # i . bp 1 255 { ^ 0 } {}
     : i c # i ( strcmp a b )
     ^ ? == c 0 1 0
 }
