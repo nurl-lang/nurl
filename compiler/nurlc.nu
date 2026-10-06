@@ -11572,7 +11572,7 @@
         // args ( string_data x ) )` — makes the container hold a pointer into
         // x's owner: reading it once that owner is dropped is reported.)
         ? != 0 g_ff_any { ? ( is_ident_tok bck_arg_tt ) { ( mem_ff_handed syms cg bck_arg_val call_name fname arg_idx ) } {} } {}
-        ? & > arg_idx 0 != 0 __pk_vc { ? ( is_ptr_ty at ) {
+        ? & & > arg_idx 0 != 0 __pk_vc | | != 2 __pk_vc == 0 ( nurl_sym_len g_fn_compiled call_name ) | ( nurl_sym_has_word g_fn_keeps call_name ( nurl_str_int arg_idx ) ) ( nurl_sym_has_word g_fn_escapes call_name ( nurl_str_int arg_idx ) ) { ? ( is_ptr_ty at ) {
                 : s __pk_c0 ( nurl_sym_get syms `__pk_c0__` )
                 : s __pkb ( nurl_sym_get syms `__last_borrow_src__` )
                 ? != 0 ( nurl_str_len __pkb ) {
@@ -11595,6 +11595,18 @@
                 ? & ( is_ident_tok bck_arg_tt ) | | ( seq fname `vec_push` ) ( seq fname `vec_insert` ) ( seq fname `vec_set` ) {
                     ( nurl_sym_def syms `__pk_c0__` bck_arg_val ) = __pk_vc 1
                 } {}
+            } {}
+            // Every other container that keeps what it is handed — a map's
+            // key or value, a set's member, a deque's element (sound rules):
+            // a view stored there lives no longer than its source.
+            ? & & ( bck_sound ) ( is_ident_tok bck_arg_tt ) ( str_contains_word `map_set map_insert map_put set_add set_insert deque_push_back deque_push_front btree_set btree_insert` fname ) {
+                ( nurl_sym_def syms `__pk_c0__` bck_arg_val ) = __pk_vc 1
+            } {}
+            // …and a function of the program that keeps an argument (its
+            // keeps summary; one not compiled yet is assumed to): its first
+            // argument may hold a view handed to a kept parameter.
+            ? & & & ( bck_sound ) ( is_ident_tok bck_arg_tt ) == __pk_vc 0 | | != 0 ( nurl_sym_len g_fn_keeps call_name ) != 0 ( nurl_sym_len g_fn_escapes call_name ) & == 0 ( nurl_sym_len g_fn_compiled call_name ) ! ( __lazy_lib_file ( nurl_sym_get2 g_vis_syms call_name `__src_file` ) ) {
+                ( nurl_sym_def syms `__pk_c0__` bck_arg_val ) = __pk_vc 2
             } {}
             ? & ( is_ident_tok bck_arg_tt ) ( __ptr_borrow_fn fname )
             { ( nurl_sym_def syms `__last_borrow_src__` bck_arg_val ) } {}

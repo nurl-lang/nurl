@@ -106,9 +106,11 @@ $ `stdlib/std/cmp.nu`
         F _ → {}
     }
     : i id ( vec_len [String] . solver registries )
-    : String owned ( string_clone normalized )
-    ( vec_push [String] . solver registries owned )
-    ( map_set [s i] . solver registry_ids ( string_data owned ) id \ s text → i { ^ ( hash_string text ) } \ s a s b → b { ^ ( eq_string a b ) } )
+    ( vec_push [String] . solver registries ( string_clone normalized ) )
+    // The map's key is a view of the string the registry list owns (the
+    // list only grows, so the view lives as long as the solver).
+    : s owned_key ?? ( vec_get [String] . solver registries id ) { T o → ( string_data o ) F _ → `` }
+    ( map_set [s i] . solver registry_ids owned_key id \ s text → i { ^ ( hash_string text ) } \ s a s b → b { ^ ( eq_string a b ) } )
     ^ id
 }
 
@@ -120,12 +122,14 @@ $ `stdlib/std/cmp.nu`
         F _ → {}
     }
     : i id ( vec_len [__SolveNode] . solver nodes )
-    : String owned ( string_from name )
     ( vec_push [__SolveNode] . solver nodes @ __SolveNode {
-        owned registry 0 @ RegIndex { ( string_new ) ( vec_new [IdxVersion] ) }
+        ( string_from name ) registry 0 @ RegIndex { ( string_new ) ( vec_new [IdxVersion] ) }
         ( vec_new [__SolveVersion] ) ( vec_new [__SolveConstraint] ) -1 -1 ( vec_new [i] ) -1 ( vec_new [i] )
     } )
-    ( map_set [__SolveKey i] . solver node_ids @ __SolveKey { registry ( string_data owned ) } id
+    // The key's name is a view of the node's own name (the node list only
+    // grows, so the view lives as long as the solver).
+    : s node_name ?? ( vec_get [__SolveNode] . solver nodes id ) { T nd → ( string_data . nd name ) F _ → `` }
+    ( map_set [__SolveKey i] . solver node_ids @ __SolveKey { registry node_name } id
     \ __SolveKey key → i { ^ ( __solve_key_hash key ) } \ __SolveKey a __SolveKey b → b { ^ ( __solve_key_eq a b ) } )
     ^ id
 }
@@ -139,9 +143,10 @@ $ `stdlib/std/cmp.nu`
         F _ → { ^ @ !i ResolveErr { F ResolveBadRequirement } }
         T value → {
             : i id ( vec_len [__SolveReq] . solver requirements )
-            : String owned ( string_from text )
-            ( vec_push [__SolveReq] . solver requirements @ __SolveReq { owned value } )
-            ( map_set [s i] . solver requirement_ids ( string_data owned ) id \ s text → i { ^ ( hash_string text ) } \ s a s b → b { ^ ( eq_string a b ) } )
+            ( vec_push [__SolveReq] . solver requirements @ __SolveReq { ( string_from text ) value } )
+            // A view of the requirement's own text (the list only grows).
+            : s req_text ?? ( vec_get [__SolveReq] . solver requirements id ) { T rq → ( string_data . rq text ) F _ → `` }
+            ( map_set [s i] . solver requirement_ids req_text id \ s text → i { ^ ( hash_string text ) } \ s a s b → b { ^ ( eq_string a b ) } )
             ^ @ !i ResolveErr { T id }
         }
     }
