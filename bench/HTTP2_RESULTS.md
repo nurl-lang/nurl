@@ -1,6 +1,6 @@
 # NURL HTTP/2-server peer-comparison
 
-Generated `2026-10-04T20:11:29Z` by `bench/run_http2.sh`. **Do not edit by hand** — the next run overwrites it.
+Generated `2026-10-06T04:07:59Z` by `bench/run_http2.sh`. **Do not edit by hand** — the next run overwrites it.
 
 The HTTP/2 companion of [`HTTP_RESULTS.md`](HTTP_RESULTS.md) (which stays HTTP/1.1-only). Each implementation accepts a connection, speaks HTTP/2 (RFC 9113 + HPACK, RFC 7541) and answers every request on every stream with the same 14-byte `Hello, World!\n` body (`text/plain`). Section 1 is cleartext HTTP/2 with prior knowledge (§3.4 — the `PRI * HTTP/2.0` preface, what `curl --http2-prior-knowledge`, `h2load` and `oha --http2` send); section 2 negotiates `h2` over ALPN (§3.3) on a self-signed EC (P-256) certificate, which `oha` accepts with `--insecure`.
 
@@ -16,11 +16,11 @@ The NURL server is `bench/http_server.nu` **unchanged from the HTTP/1.1 benchmar
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1022-azure x86_64` |
-| CPU | AMD EPYC 9V74 80-Core Processor (4 logical cores) |
+| CPU | AMD EPYC 9V45 96-Core Processor (4 logical cores) |
 | Memory | 16373452 KiB |
-| Commit | `f7fb2d1a362d8631839c5055fc16fcef912bb289` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/37230925920 |
-| NURL | `v0.70.0-3-gf7fb2d1a` |
+| Commit | `0ae00340604700fba67fd8e9fd5309e85da8fa82` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/37412038521 |
+| NURL | `v0.70.0-12-g0ae00340` |
 | Rust | rustc 1.99.0 (b940084d7 2026-09-28) |
 | Node | v22.23.3 |
 | Load generator | oha 1.8.0 |
@@ -35,15 +35,15 @@ The NURL server is `bench/http_server.nu` **unchanged from the HTTP/1.1 benchmar
 
 |              | Server  | 1 x 1 | 1 x 10 | 1 x 100 | 10 x 1 | 10 x 10 | 50 x 1 | 50 x 10 |
 |--------------|---------|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
-| **req/s**    | NURL    | **29 643** | **93 591** | **194 894** | 82 056 | **215 211** | **110 171** | **247 291** |
-|              | Rust    | 21 284 | 83 666 | 151 331 | **92 117** | 195 086 | 109 682 | 205 200 |
-|              | Node    | 13 738 | 53 332 | 88 826 | 35 826 | 75 501 | 36 671 | 69 039 |
-| **p50 (ms)** | NURL    | **0.03** | **0.10** | **0.50** | **0.10** | **0.42** | **0.42** | **1.77** |
-|              | Rust    | 0.04 | 0.11 | 0.56 | **0.10** | 0.44 | 0.45 | 2.36 |
-|              | Node    | 0.06 | 0.16 | 0.99 | 0.22 | 1.02 | 1.10 | 6.39 |
-| **p99 (ms)** | NURL    | **0.05** | **0.14** | **0.69** | 0.32 | 1.15 | 1.91 | 4.66 |
-|              | Rust    | 0.07 | 0.18 | 0.78 | **0.23** | **1.00** | **0.82** | **4.63** |
-|              | Node    | 0.11 | 0.25 | 2.94 | 0.71 | 3.71 | 2.25 | 18.10 |
+| **req/s**    | NURL    | **39 819** | **127 876** | **265 403** | **116 587** | **298 186** | **144 910** | **336 062** |
+|              | Rust    | 28 441 | 120 624 | 158 825 | 116 228 | 241 954 | 140 110 | 283 306 |
+|              | Node    | 23 519 | 76 181 | 119 145 | 57 572 | 103 177 | 53 396 | 99 772 |
+| **p50 (ms)** | NURL    | **0.02** | 0.08 | **0.36** | **0.07** | **0.30** | **0.32** | **1.31** |
+|              | Rust    | 0.03 | **0.07** | 0.39 | 0.09 | 0.31 | 0.35 | 1.68 |
+|              | Node    | 0.04 | 0.12 | 0.72 | 0.15 | 0.76 | 0.83 | 4.62 |
+| **p99 (ms)** | NURL    | **0.03** | **0.10** | **0.53** | 0.25 | 0.87 | 1.14 | **3.35** |
+|              | Rust    | 0.04 | 0.11 | 0.68 | **0.16** | **0.72** | **0.62** | 3.44 |
+|              | Node    | 0.06 | 0.29 | 2.40 | 0.38 | 2.94 | 1.38 | 13.25 |
 
 ### NURL, same server and listener: HTTP/2 (P = 1) vs HTTP/1.1
 
@@ -51,23 +51,23 @@ The same binary, the same port, `oha` with and without `--http2`. The gap is the
 
 | C | HTTP/2 req/s | HTTP/1.1 req/s | HTTP/2 / HTTP/1.1 | HTTP/2 p50 (ms) | HTTP/1.1 p50 (ms) |
 |--:|------------:|--------------:|------------------:|----------------:|-----------------:|
-| 1 | 29 643 | 37 842 | 0.78x | 0.03 | 0.02 |
-| 10 | 82 056 | 118 543 | 0.69x | 0.10 | 0.07 |
-| 50 | 110 171 | 153 768 | 0.72x | 0.42 | 0.31 |
+| 1 | 39 819 | 44 562 | 0.89x | 0.02 | 0.02 |
+| 10 | 116 587 | 149 623 | 0.78x | 0.07 | 0.06 |
+| 50 | 144 910 | 195 804 | 0.74x | 0.32 | 0.24 |
 
 ## 2. HTTP/2 over TLS (ALPN h2)
 
 |              | Server  | 1 x 1 | 1 x 10 | 1 x 100 | 10 x 1 | 10 x 10 | 50 x 1 | 50 x 10 |
 |--------------|---------|--------:|--------:|--------:|--------:|--------:|--------:|--------:|
-| **req/s**    | NURL    | **25 133** | 70 006 | 140 641 | 66 805 | 164 422 | 90 090 | **189 069** |
-|              | Rust    | 19 016 | **81 920** | **150 005** | **76 364** | **173 129** | **96 296** | 182 521 |
-|              | Node    | 12 058 | 49 197 | 86 853 | 30 652 | 70 894 | 29 370 | 62 674 |
-| **p50 (ms)** | NURL    | **0.04** | 0.13 | 0.69 | 0.13 | 0.56 | **0.50** | **2.33** |
-|              | Rust    | 0.05 | **0.12** | **0.61** | **0.11** | **0.51** | 0.51 | 2.66 |
-|              | Node    | 0.07 | 0.18 | 1.02 | 0.27 | 1.20 | 1.42 | 7.14 |
-| **p99 (ms)** | NURL    | **0.06** | 0.20 | 0.94 | 0.41 | 1.51 | 2.62 | 5.83 |
-|              | Rust    | 0.08 | **0.19** | **0.75** | **0.29** | **1.13** | **0.96** | **5.17** |
-|              | Node    | 0.13 | 0.27 | 3.18 | 0.57 | 3.35 | 2.81 | 18.66 |
+| **req/s**    | NURL    | **31 748** | 86 911 | 171 084 | 85 468 | 208 123 | 104 563 | 235 387 |
+|              | Rust    | 26 440 | **105 559** | **198 792** | **107 229** | **232 545** | **125 648** | **259 859** |
+|              | Node    | 22 533 | 74 058 | 123 001 | 51 806 | 103 908 | 48 519 | 96 092 |
+| **p50 (ms)** | NURL    | **0.03** | 0.11 | 0.57 | 0.10 | 0.43 | 0.43 | 1.99 |
+|              | Rust    | 0.04 | **0.08** | **0.43** | **0.09** | **0.34** | **0.39** | **1.84** |
+|              | Node    | 0.04 | 0.12 | 0.71 | 0.17 | 0.82 | 0.91 | 5.02 |
+| **p99 (ms)** | NURL    | **0.04** | 0.14 | 0.77 | 0.32 | 1.23 | 1.24 | 4.65 |
+|              | Rust    | 0.05 | **0.13** | **0.64** | **0.19** | **0.76** | **0.73** | **3.71** |
+|              | Node    | 0.06 | 0.27 | 3.06 | 0.30 | 2.75 | 1.51 | 13.79 |
 
 ### NURL, same server and listener: HTTP/2 (P = 1) vs HTTP/1.1
 
@@ -75,9 +75,9 @@ The same binary, the same port, `oha` with and without `--http2`. The gap is the
 
 | C | HTTP/2 req/s | HTTP/1.1 req/s | HTTP/2 / HTTP/1.1 | HTTP/2 p50 (ms) | HTTP/1.1 p50 (ms) |
 |--:|------------:|--------------:|------------------:|----------------:|-----------------:|
-| 1 | 25 133 | 31 565 | 0.80x | 0.04 | 0.03 |
-| 10 | 66 805 | 90 712 | 0.74x | 0.13 | 0.09 |
-| 50 | 90 090 | 120 231 | 0.75x | 0.50 | 0.39 |
+| 1 | 31 748 | 37 943 | 0.84x | 0.03 | 0.02 |
+| 10 | 85 468 | 119 913 | 0.71x | 0.10 | 0.07 |
+| 50 | 104 563 | 150 631 | 0.69x | 0.43 | 0.30 |
 
 (Best per column in **bold**; latency winners are chosen only among non-starved cells. ‡ = closed-loop starved. `n/a` = tool absent; `FAIL` = the server did not complete that cell.)
 
