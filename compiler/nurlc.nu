@@ -483,6 +483,11 @@
     // nurl_get_last_type): a mixed borrowed-param/owned return would
     // let a caller's owned-arg-temp drop free the very pointer we
     // returned (bit us as garbage `alloca` types in stage2).
+    // Asked of nearly every type the compiler touches, and nearly every
+    // one is already LLVM-shaped: only an unsigned spelling (it has a
+    // `u`) or a vector (`v…`) is rewritten — everything else is a copy.
+    : i __uat ( nurl_str_find t `u` )
+    ? & < __uat 0 != ( nurl_str_get t 0 ) 118 { ^ # s ( nurl_strdup t ) } {}
     ? ( seq t `u8` ) { ^ # s ( nurl_strdup `i8` ) } {}
     ? ( seq t `u16` ) { ^ # s ( nurl_strdup `i16` ) } {}
     ? ( seq t `u32` ) { ^ # s ( nurl_strdup `i32` ) } {}
@@ -7917,23 +7922,61 @@
 // in the same order, so the hash value is unchanged.
 // FNV-1a over base then suffix — the hash of the two concatenated,
 // without concatenating them. See nurl_sym_get2.
-@ __sym_hash2 s base i bl s suffix i sl → i {
-    : *u bp # *u base
-    : *u sp # *u suffix
-    : ~ i hsh 2166136261
+// The symbol table's hash. A compile asks it millions of times, mostly of
+// keys of 10-40 bytes that differ at the start, at the end or in length
+// (`<fn>__arity`, `retlend##<fn>`, `__last_call_guard__`). Byte-serial
+// FNV-1a was a multiply per byte on one dependency chain; this reads at
+// most three 8-byte windows — the first, the middle, the last — and mixes
+// them with the length: constant work per key. Keys equal in all of those
+// but not in between collide, which costs a compare on the chain, never a
+// wrong answer (lookups compare the whole name).
+@ __sym_mix i n i a i b i c → i {
+    : ~ i h ^^ * n 6364136223846793005 a
+    = h * ^^ h >> h 29 2685821657736338717
+    = h ^^ h b
+    = h * ^^ h >> h 31 6364136223846793005
+    = h ^^ h c
+    = h * ^^ h >> h 30 2685821657736338717
+    = h ^^ h >> h 32
+    ^ & h 4294967295
+}
+
+// Bytes [off, off + cnt) of `p` (cnt <= 8) as a little-endian integer.
+@ __sym_w8 s p i off i cnt → i {
+    : *u q # *u p
+    : ~ i w 0
     : ~ i k 0
-    ~ < k bl {
-        = hsh & ^^ hsh & # i . bp k 255 4294967295
-        = hsh & * hsh 16777619 4294967295
+    ~ < k cnt {
+        = w | w << & # i . q + off k 255 * k 8
         = k + k 1
     }
-    = k 0
-    ~ < k sl {
-        = hsh & ^^ hsh & # i . sp k 255 4294967295
-        = hsh & * hsh 16777619 4294967295
+    ^ w
+}
+
+// The same window over the concatenation of base[0, bl) and suffix.
+@ __sym_cw8 s base i bl s suffix i off i cnt → i {
+    ? <= + off cnt bl { ^ ( __sym_w8 base off cnt ) } {}
+    ? >= off bl { ^ ( __sym_w8 suffix - off bl cnt ) } {}
+    : *u bq # *u base
+    : *u sq # *u suffix
+    : ~ i w 0
+    : ~ i k 0
+    ~ < k cnt {
+        : i at + off k
+        : i by ? < at bl & # i . bq at 255 & # i . sq - at bl 255
+        = w | w << by * k 8
         = k + k 1
     }
-    ^ hsh
+    ^ w
+}
+
+@ __sym_hash2 s base i bl s suffix i sl → i {
+    : i n + bl sl
+    : i fc ? < n 8 n 8
+    : i a ( __sym_cw8 base bl suffix 0 fc )
+    : i c ? > n 8 ( __sym_cw8 base bl suffix - n 8 8 ) 0
+    : i b ? > n 16 ( __sym_cw8 base bl suffix - / n 2 4 8 ) 0
+    ^ ( __sym_mix n a b c )
 }
 
 @ __sym_hash s name → i {
@@ -7943,15 +7986,11 @@
 // __sym_hash over the first `n` bytes of `name`, for a caller that has
 // already measured it.
 @ __sym_hash_n s name i n → i {
-    : *u np # *u name
-    : ~ i hsh 2166136261
-    : ~ i k 0
-    ~ < k n {
-        = hsh & ^^ hsh & # i . np k 255 4294967295
-        = hsh & * hsh 16777619 4294967295
-        = k + k 1
-    }
-    ^ hsh
+    : i fc ? < n 8 n 8
+    : i a ( __sym_w8 name 0 fc )
+    : i c ? > n 8 ( __sym_w8 name - n 8 8 ) 0
+    : i b ? > n 16 ( __sym_w8 name - / n 2 4 8 ) 0
+    ^ ( __sym_mix n a b c )
 }
 
 // Twice as many live entries as buckets: four times the buckets, every
@@ -8111,6 +8150,35 @@
     : i tl ( nurl_str_len type )
     : i hn ( __sym_hash_n name nl )
     : i bh % hn ( nurl_peek t 6 )
+    // A name defined again in the scope that already holds it (the
+    // compiler's side channels — `__last_call_guard__` and the like —
+    // are redefined on every call) takes the new value in place: the
+    // newer entry would shadow the older until the same pop removed both,
+    // so nothing can tell the difference — except the cost of a copied
+    // name per definition and bucket chains that grew one duplicate per
+    // call for every other lookup in the bucket to step over.
+    : *i hashes0 # *i # s ( nurl_peek t 12 )
+    : *i lens0 # *i # s ( nurl_peek t 11 )
+    : i dnow ( nurl_peek t 1 )
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { = cur 0 } {
+            ? & == hn . hashes0 idx == 0 # i ( strcmp name . names idx ) {
+                ? == . depths idx dnow {
+                    // (Most redefinitions reset a channel that is already
+                    // empty, or store what it holds: nothing to copy.)
+                    : s old . types idx
+                    ? & == tl ( __sym_vlen t types idx ) == 0 # i ( memcmp old type tl ) { ^ } {}
+                    ( nurl_free old )
+                    = . types idx # s ( nurl_strdup_n type tl )
+                    = . lens0 idx tl
+                    ^
+                } {}
+                = cur 0
+            } { = cur . prev idx }
+        }
+    }
     = . names count # s ( nurl_strdup_n name nl )
     = . types count # s ( nurl_strdup_n type tl )
     = . depths count ( nurl_peek t 1 )
@@ -8732,7 +8800,23 @@
 : i TF_START 4
 : i TF_VALID 5
 
-: i LX_SIZE 312  // 39 slots × 8 bytes; 37/38 are compilation ownership links
+: i LX_SIZE 320  // 40 slots × 8 bytes; 37/38 are compilation ownership links
+// The identity of this lexer's text for g_body_ends — "path len hash",
+// owned — or 0 when brace ends are not shared (see skip_balanced).
+: i LX_MEMOKEY 39
+
+// Where each brace block ends: "<text identity> <offset of a '{'>" → the
+// offset just past its matching '}'. Every source file is lexed by several
+// passes (type names, generic structs, signatures, the parse — each import
+// once per pass), and most of what they do with a function body is step
+// over it. The first walk over a body records its end; every later lexer
+// over the same text jumps there instead of lexing the body again.
+//
+// A lexer's text identity (LX_MEMOKEY, set in nurl_lex_new) is its file
+// name, length and a hash of the whole text, so lexers over the same file
+// share ends while an alias-rewritten import or a template re-parse under
+// the same name — different text — never reads another text's offsets.
+: ~ i g_body_ends 0
 
 // ── ASCII byte-class predicates ──────────────────────────────────
 
@@ -9357,6 +9441,12 @@
     ( nurl_poke lx LX_LEN ( strlen src ) )
     ( nurl_poke lx LX_LINE 1 )
     ( __lex_build_linetab lx )
+    // A '<…>' name is a probe or template text: short-lived, not shared.
+    ? & != g_body_ends 0 != 60 & 255 # i . # *u filename 0 {
+        : i n ( nurl_peek lx LX_LEN )
+        : s h ( nurl_str_int ( __src_hash # *u # s ( nurl_peek lx LX_SRC ) n ) )
+        ( nurl_poke lx LX_MEMOKEY # i ( nurl_str_cat4 filename ` ` ( nurl_str_int n ) ( nurl_str_cat ` ` h ) ) )
+    } {}
     // Prime cur token.
     ( __lex_one # i lx LX_CUR )
     ^ # i lx
@@ -9389,6 +9479,8 @@
     ? != 0 fp { ( nurl_free # s fp ) } {}
     : i tp ( nurl_peek p LX_LINETAB )
     ? != 0 tp { ( nurl_free # s tp ) } {}
+    : i mk ( nurl_peek p LX_MEMOKEY )
+    ? != 0 mk { ( nurl_free # s mk ) } {}
     ( nurl_free p )
 }
 
@@ -23019,6 +23111,19 @@
         ( nurl_sym_has_word syms `__owned_closure_envs__` bck_rhs_val )
         : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
+        // `= g # i v`: an owned handle's address kept in a global — the
+        // program manages that value by hand from here (a singleton cache
+        // the global hands out again, `^ # ( Vec T ) g`). The binding stops
+        // owning it: not dropped at its scope's end, and handed back by
+        // `^ v` as a lend, not as the caller's (taken for owned, the caller
+        // freed what the global still pointed to).
+        ? & & == bck_rhs_tt TT_HASH != 0 ( nurl_sym_len2 syms name `__global` ) != 0 ( nurl_sym_len syms `__last_cast_src__` ) {
+            : s __gcp ( mem_udrop_ptr_of syms ( nurl_sym_get syms `__last_cast_src__` ) )
+            ? & != 0 ( nurl_str_len __gcp ) ( __is_handle_ty ( nurl_sym_get2 syms __gcp `__udty` ) ) {
+                ( mem_udrop_flag_set syms cg __gcp `0` )
+                ( __sb syms __gcp `dyn` )
+            } {}
+        } {}
         // Borrow checker: `= f \ … { … v … }` rebinds `f` to a closure
         // holding `v`, exactly as the `:` form does — without this the
         // whole use-after-free family came back by spelling the binding
@@ -24701,6 +24806,9 @@
     ( bck_save_expr_carriers syms `__last_cast_params__` source_tt source_val )
     // `# T x` of a T binding is x itself (mem_udrop_bind_flag: a cursor).
     ( nurl_sym_def syms `__last_cast_ident__` ? & ( is_ident_tok source_tt ) ( seq st dt ) ( nurl_str_cat source_val `` ) `` )
+    // …and, whatever the types, the binding cast (gen_assign: an owned
+    // handle's address stored in a global).
+    ( nurl_sym_def syms `__last_cast_src__` ? ( is_ident_tok source_tt ) ( nurl_str_cat source_val `` ) `` )
     // Whether the value cast is a binding at all (`# s x`, `# s . h f`, a
     // cast of such a cast) rather than something computed from one —
     // `# s ( rcbox_new … @ T { … v } )` only READ `v` (gen_agg_lit).
@@ -30265,8 +30373,16 @@
 @ origin_call_arg i syms i result s callee i index i tt s value → v {
     : i argument ( origin_expr syms tt value )
     ? == argument 0 { ^ } {}
+    // A call through a closure value only borrows its arguments (a closure's
+    // parameters always do, docs/MEMORY.md §7.5): nothing it is handed
+    // stays with it, so the argument is verified — taken for kept, a
+    // caller's temporary handed on to a callback was never dropped.
+    : b __clo_callee & | != 0 ( nurl_sym_len2 syms callee `__ptr` ) != 0 ( nurl_sym_len2 syms callee `__param` )
+    ( __is_closure_ty ( nurl_sym_get syms callee ) )
+    // (What it hands back may still be the argument: the result edge below
+    // stays.)
     : i current ( nurl_str_to_int ( nurl_sym_get syms `__origin_return__` ) )
-    ? & != current 0 | == result 0 ! ( mem_ffi_arg_local syms callee index ) {
+    ? & & ! __clo_callee != current 0 | == result 0 ! ( mem_ffi_arg_local syms callee index ) {
         : s caller # s ( nurl_peek # s current 7 )
         : i unverified ( origin_summary g_fn_unverified caller )
         ? | == result 0 & == 0 ( nurl_sym_len2 syms callee `__nurlfn` )
@@ -30276,7 +30392,7 @@
             ( origin_edge argument unverified ( origin_summary g_fn_unverified callee ) index )
         }
     } {}
-    ? | == result 0 & & == 0 ( nurl_sym_len2 syms callee `__nurlfn` )
+    ? & ! __clo_callee | == result 0 & & == 0 ( nurl_sym_len2 syms callee `__nurlfn` )
     == 0 ( nurl_sym_len2 syms callee `__garity` ) ! ( mem_ffi_arg_local syms callee index )
     { ( origin_guard_barrier argument ) } {}
     ? == result 0 { ^ } {}
@@ -31479,14 +31595,16 @@
 
 // N newlines — the re-lex padding that maps a template buffer's line 1
 // onto the template's real source line (see collect_fn_body).
+// n newlines: the padding that puts a re-lexed template body on its own
+// source lines. Copied out of one buffer that only ever grows (doubling)
+// — built one `\n` at a time it was a copy of the whole prefix per line,
+// quadratic in the line a template sits on, paid per instantiation.
+: ~ s g_nl_buf ``
+
 @ __nl_pad i n → s {
-    : ~ s r ``
-    : ~ i k 0
-    ~ < k n {
-        = r ( nurl_str_cat r `\n` )
-        = k + k 1
-    }
-    r
+    ? <= n 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ~ < ( nurl_str_len g_nl_buf ) n { = g_nl_buf ( nurl_str_cat3 g_nl_buf g_nl_buf `\n` ) }
+    ^ ( nurl_str_slice g_nl_buf 0 n )
 }
 
 // compute_generic_inout_sink: derive a generic function's `inout` and
@@ -32366,10 +32484,277 @@
 
 // ── Function declaration @ name params → ret { body } ─────────────
 
+// ── Lazy library functions ──────────────────────────────────────────
+//
+// A program that imports `stdlib/ext/json.nu` for `json_parse` used to
+// compile all of it — and of `string.nu`, `vec.nu` and every module those
+// import: an empty `main` beside that one import cost 556 M instructions,
+// 312 functions generated, borrow-checked and emitted for the dead-function
+// pass to throw 310 of them away. A function of an IMPORTED file is now
+// stored like a generic template (its source text, file and line) and
+// compiled only when the program's generated code refers to it: the same
+// discovery the dead-function pass makes (an `@__nurl_fn.<name>` in the
+// IR), run over the module as it grows, so a call, a function value, a
+// generic instance or a vtable all demand it alike. The root file's own
+// functions compile as always — their diagnostics are the user's. Hooks
+// the late emitters call (`X_drop` / `_clone` / `_share` / `_trace`), the
+// `--keep` exports, `simd` / `inline` functions and everything in a file
+// without `main` stay eager. A reference to a function never compiled is
+// reported as an internal error, never left to the linker.
+
+: ~ i g_lazy 0  // symtab: name → its stored source (0: lazy compilation off)
+: ~ s g_lazy_root ``  // the root file's current-src-file spelling
+: ~ i g_lazy_force 0  // compiling one now: no laziness inside
+: ~ i g_lazy_scan 0  // module bytes already scanned for references
+: ~ s g_lazy_queue ``  // demanded, not yet compiled
+: ~ i g_lazy_trace 0  // NURL_LAZY_TRACE: report a late compile (a gap in lazy_reach)
+
+& `c` @ nurl_print_buf_len → i
+
+& `c` @ nurl_print_buf_at i off → i
+
+// The program's reference graph, collected while scan_fn_sigs walks every
+// file (0 when lazy compilation cannot run): a function's name → the
+// identifiers its body spells, `__roots__` → the functions that compile
+// whatever is referenced and the identifiers of every `%` block.
+: ~ i g_lazy_edges 0
+// The functions lazy_reach found reachable from the roots: compiled in place.
+: ~ i g_lazy_live 0
+
+// Record the identifiers of the declaration body starting here (from the
+// next '{' to its match), and put the lexer back.
+@ __lazy_collect i lex s owner → v {
+    : b _ran ( __lazy_collect_at lex owner T )
+}
+
+// The same walk for a caller that would skip the body next: the lexer is
+// left past the closing '}' — where skip_balanced leaves it — so the body
+// is lexed once, not twice. F when collection is off and nothing moved.
+@ __lazy_collect_past i lex s owner → b {
+    ^ ( __lazy_collect_at lex owner F )
+}
+
+@ __lazy_collect_at i lex s owner b rewind → b {
+    ? == g_lazy_edges 0 { ^ F } {}
+    : i save ( nurl_lex_cur_start lex )
+    : ~ i at -1
+    ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+        ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( __lazy_note owner ( nurl_lex_val lex ) ) } {}
+        ( nurl_lex_advance lex )
+    }
+    ? == ( nurl_lex_type lex ) TT_LBRACE {
+        = at ( nurl_lex_cur_start lex )
+        ( nurl_lex_advance lex )
+        : ~ i depth 1
+        ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
+            : i tt ( nurl_lex_type lex )
+            ? == tt TT_LBRACE { = depth + depth 1 } {}
+            ? == tt TT_RBRACE { = depth - depth 1 } {}
+            ? ( is_ident_tok tt ) { ( __lazy_note owner ( nurl_lex_val lex ) ) } {}
+            ( nurl_lex_advance lex )
+        }
+        ( __body_end_note lex at ( nurl_lex_cur_start lex ) )
+    } {}
+    ? rewind { ( nurl_lex_set_pos lex save ) } {}
+    ^ T
+}
+
+@ __lazy_note s owner s v → v {
+    ? ( priv_is_private v ) {
+        ( nurl_sym_append_word g_lazy_edges owner ( priv_mangle_for v ( priv_file_id ) ) )
+        // (A `__` name of ANOTHER file still resolves by its spelling —
+        // the deprecated cross-file call: `~name` reaches every file's.)
+        ( nurl_sym_append_word g_lazy_edges owner ( nurl_str_cat `~` v ) )
+        ^
+    } {}
+    ( nurl_sym_append_word g_lazy_edges owner v )
+}
+
+// Library code — the stdlib and installed packages (`deps/`) — is what
+// compiles on demand. A project's own files, however many, compile whole:
+// an error in a function nothing calls yet is still the author's to see.
+@ __lazy_lib_file s path → b {
+    ? | != 0 ( nurl_str_starts path `stdlib/` ) != 0 ( nurl_str_starts path `deps/` ) { ^ T } {}
+    ^ | >= ( nurl_str_find path `/stdlib/` ) 0 >= ( nurl_str_find path `/deps/` ) 0
+}
+
+// A function every compilation emits whatever references it: a project
+// file's, the `simd` / `inline` ones, `main`, and the hooks the late
+// emitters call.
+@ __lazy_is_root s fname b eager → b {
+    ? == g_lazy_edges 0 { ^ F } {}
+    ? | eager ! ( __lazy_lib_file ( vis_current_src_file ) ) { ^ T } {}
+    ? ( seq fname `main` ) { ^ T } {}
+    ^ | | | != 0 ( nurl_str_ends fname `_drop` ) != 0 ( nurl_str_ends fname `_clone` )
+    != 0 ( nurl_str_ends fname `_share` ) != 0 ( nurl_str_ends fname `_trace` )
+}
+
+// Everything the roots reach through the reference graph (every identifier
+// a reached body spells; a non-function among them reaches nothing).
+@ lazy_reach → v {
+    ? == g_lazy_edges 0 { ^ } {}
+    = g_lazy_live ( nurl_sym_new )
+    // A worklist indexed in a table of its own; each name's identifiers are
+    // walked with a cursor (no copy of the rest per word).
+    : i q ( nurl_sym_new )
+    : ~ i qn 0
+    : ~ i qi 0
+    // (…and the library functions the compiler's own desugarings call by
+    // name: a `select` over channels.)
+    : ~ s cur ( nurl_str_cat ( nurl_sym_get g_lazy_edges `__roots__` )
+    ` select_waiter_new select_waiter_prepare select_waiter_wait select_waiter_free chan_raw_arm chan_raw_disarm chan_raw_closed chan_raw_poll chan_try_recv` )
+    : ~ b first T
+    ~ | first < qi qn {
+        ? first { = first F } {
+            : s nm ( nurl_sym_get q ( nurl_str_int qi ) )
+            = qi + qi 1
+            = cur ( nurl_sym_get g_lazy_edges nm )
+        }
+        : i cn ( nurl_str_len cur )
+        : ~ i cp 0
+        ~ < cp cn {
+            : i ce ( __word_end cur cn cp )
+            ? > ce cp {
+                : s w ( __span_dup cur cp ce )
+                ? == 0 ( nurl_sym_len g_lazy_live w ) {
+                    ( nurl_sym_def g_lazy_live w `1` )
+                    ( nurl_sym_def q ( nurl_str_int qn ) w )
+                    = qn + qn 1
+                } {}
+            } {}
+            = cp + ce 1
+        }
+    }
+    ( nurl_sym_free q )
+    // The graph has answered. The parse walks each import's signatures
+    // again; with no graph to grow, that walk steps over bodies (from
+    // g_body_ends) instead of re-collecting identifiers nothing reads.
+    ( nurl_sym_free g_lazy_edges )
+    = g_lazy_edges 0
+}
+
+@ __lazy_eligible s fname → b {
+    ? | == g_lazy 0 != g_lazy_force 0 { ^ F } {}
+    ? | != g_pending_simd 0 != g_pending_inline 0 { ^ F } {}
+    ? ( seq fname `main` ) { ^ F } {}
+    ? ! ( __lazy_lib_file ( vis_current_src_file ) ) { ^ F } {}
+    ? != 0 ( nurl_sym_len g_fn_link_exports fname ) { ^ F } {}
+    // Reached from the roots: compiled in its place, in source order, as
+    // every function was (callers see its summaries as before).
+    ? & != 0 g_lazy_live != 0 ( nurl_sym_len g_lazy_live fname ) { ^ F } {}
+    ? | | | != 0 ( nurl_str_ends fname `_drop` ) != 0 ( nurl_str_ends fname `_clone` )
+    != 0 ( nurl_str_ends fname `_share` ) != 0 ( nurl_str_ends fname `_trace` ) { ^ F } {}
+    ^ T
+}
+
+@ gen_fn_decl_or_lazy s fname s raw i lex i syms i cg → v {
+    ? ! ( __lazy_eligible fname ) { ( gen_fn_decl_concrete fname lex syms cg ) ^ } {}
+    : i line ( nurl_lex_line lex )
+    : i start ( nurl_lex_cur_start lex )
+    ( skip_balanced lex )
+    // Past the closing brace: the next token, or the end of the source.
+    : i stop ( nurl_lex_cur_start lex )
+    : s src ( nurl_lex_src_slice lex start - stop start )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__src` ) src )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__raw` ) raw )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__line` ) ( nurl_str_int line ) )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__file` ) ( vis_current_src_file ) )
+    ( nurl_sym_def g_lazy ( nurl_str_cat fname `__lexfile` ) ( nurl_lex_filename lex ) )
+}
+
+// Queue every lazy function the module text emitted since the last scan
+// refers to.
+@ __lazy_scan → v {
+    : i n ( nurl_print_buf_len )
+    ? >= g_lazy_scan n { ^ } {}
+    : i base ( nurl_print_buf_at 0 )
+    : *u p # *u base
+    : s pre `__nurl_fn.`
+    : *u q # *u pre
+    : ~ i k g_lazy_scan
+    ~ < k n {
+        ? & == # i . p k 64 < + k 11 n {
+            : ~ b m T
+            : ~ i j 0
+            ~ & m < j 10 { ? != # i . p + + k 1 j # i . q j { = m F } {} = j + j 1 }
+            ? m {
+                : i st + k 11
+                : ~ i e st
+                ~ & < e n ( __dce_ident_byte # i . p e ) { = e + e 1 }
+                // Sliced from the name's own address: from `base` the clamp's
+                // strnlen would walk the whole buffer up to `st` per name.
+                : s nm ( nurl_str_slice # s + base st 0 - e st )
+                ? & != 0 ( nurl_sym_len2 g_lazy nm `__src` ) == 0 ( nurl_sym_len2 g_lazy nm `__q` ) {
+                    ( nurl_sym_def g_lazy ( nurl_str_cat nm `__q` ) `1` )
+                    = g_lazy_queue ? == 0 ( nurl_str_len g_lazy_queue ) ( nurl_str_cat nm `` ) ( nurl_str_cat3 g_lazy_queue ` ` nm )
+                } {}
+                = k e
+            } { = k + k 1 }
+        } { = k + k 1 }
+    }
+    = g_lazy_scan n
+}
+
+// Compile one stored function, in the file and on the lines it was
+// written on (the same re-parse a generic instantiation makes).
+@ __lazy_emit s fname i syms i cg → v {
+    ? != 0 g_lazy_trace { ( nurl_eprintln ( nurl_str_cat `nurlc: lazy function compiled late (not reached by lazy_reach): ` fname ) ) } {}
+    : s src ( nurl_sym_get2 g_lazy fname `__src` )
+    : s raw ( nurl_sym_get2 g_lazy fname `__raw` )
+    : i line ( nurl_str_to_int ( nurl_sym_get2 g_lazy fname `__line` ) )
+    : s file ( nurl_sym_get2 g_lazy fname `__file` )
+    : s lexfile ( nurl_sym_get2 g_lazy fname `__lexfile` )
+    : s full ( nurl_str_cat ( __nl_pad - line 1 ) ( nurl_str_cat4 `@ ` raw ` ` src ) )
+    : s saved_sf ( vis_current_src_file )
+    ( vis_set_current_src_file file )
+    : i saved_line g_dbg_override_line
+    : s saved_file g_dbg_override_file
+    = g_dbg_override_line line
+    = g_dbg_override_file lexfile
+    : i saved_force g_lazy_force
+    = g_lazy_force 1
+    : i lx ( nurl_lex_new full lexfile )
+    ( gen_fn_decl lx syms cg )
+    ( nurl_lex_free lx )
+    = g_lazy_force saved_force
+    = g_dbg_override_line saved_line
+    = g_dbg_override_file saved_file
+    ( vis_set_current_src_file saved_sf )
+}
+
+// Generic instances and lazy functions demand each other: flush the
+// instances, compile what the module now refers to, until neither grows.
+@ lazy_flush i syms i cg → v {
+    ~ T {
+        ( flush_deferred_instantiations syms cg )
+        ? == g_lazy 0 { ^ } {}
+        ( __lazy_scan )
+        ? == 0 ( nurl_str_len g_lazy_queue ) { ^ } {}
+        ~ != 0 ( nurl_str_len g_lazy_queue ) {
+            : s nm ( str_first_word g_lazy_queue )
+            = g_lazy_queue ( str_skip_word g_lazy_queue )
+            ( __lazy_emit nm syms cg )
+        }
+    }
+}
+
+// After every emitter: a reference to a lazy function nothing compiled is
+// a compiler bug (an emitter running after lazy_flush named one).
+@ lazy_check_complete → v {
+    ? == g_lazy 0 { ^ } {}
+    ( __lazy_scan )
+    ? != 0 ( nurl_str_len g_lazy_queue ) {
+        ( nurl_eprintln ( nurl_str_cat3 `internal error: generated code refers to library function(s) compiled lazily but never demanded before the late emitters ran: ` g_lazy_queue ` — please report this (https://github.com/nurl-lang/nurl/issues); --no-dce compiles everything eagerly.` ) )
+        ( nurl_panic `__nurlc_ice__` )
+    } {}
+}
+
 @ gen_fn_decl i lex i syms i cg → v {
     ( nurl_lex_advance lex )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : ~ s fname ( nurl_lex_val lex )
+        // As spelled, for a lazy library function's later re-parse.
+        : s fname_raw ( nurl_str_cat fname `` )
         ? ( priv_is_private fname ) {
             = fname ( priv_mangle_for fname ( priv_file_id ) )
         } {}
@@ -32426,9 +32811,9 @@
                 { ( die lex `'inline' cannot be applied to a generic function — a generic is monomorphised after the whole program is parsed, and the prefix does not survive to its instantiations` ) }
                 {}
                 ( gen_generic_fn_store lex syms fname ) }
-            { ( gen_fn_decl_concrete fname lex syms cg ) }
+            { ( gen_fn_decl_or_lazy fname fname_raw lex syms cg ) }
         }
-        { ( gen_fn_decl_concrete fname lex syms cg ) }
+        { ( gen_fn_decl_or_lazy fname fname_raw lex syms cg ) }
     }
     { ( die lex ( nurl_str_cat3
         `expected a function name after '@', found ` ( tok_here lex )
@@ -38440,6 +38825,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // them to the template's defining file, not the top file (see
     // lint_note_used). Saved/restored around the recursive
     // gen_fn_decl because nested instantiations re-enter here.
+    // (An instance is demanded already: never stored as a lazy function.)
+    : i saved_force g_lazy_force
+    = g_lazy_force 1
     ? != g_lint 0
     { : s saved_uf ( nurl_sym_get g_lint_syms `use_file` )
         ( nurl_sym_def g_lint_syms `use_file`
@@ -38448,6 +38836,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ( nurl_sym_def g_lint_syms `use_file` saved_uf )
     }
     { ( gen_fn_decl lex2 syms cg ) }
+    = g_lazy_force saved_force
     ( nurl_lex_free lex2 )
     ( vis_set_current_src_file saved_vis_sf )
     = g_diag_ctx saved_diag_ctx
@@ -38458,8 +38847,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
 
 // flush_deferred_instantiations: emit all queued generic instantiations.
 // Re-reads count each iteration so transitive generics are also emitted.
+// (Resumable: lazy_flush calls it again after compiling what the instances
+// demanded, and only the instances queued since then are emitted.)
+: ~ i g_inst_done 0
+
 @ flush_deferred_instantiations i syms i cg → v {
-    : ~ i k 0
+    : ~ i k g_inst_done
     ~ < k ( nurl_str_to_int ( nurl_sym_get g_generic_syms `__deferred_count__` ) ) {
         : s base ( nurl_str_cat `__def` ( nurl_str_int k ) )
         : s fname ( nurl_sym_get2 g_generic_syms base `_fn` )
@@ -38471,6 +38864,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col syms cg )
         = k + k 1
     }
+    = g_inst_done k
 }
 
 // ── Module header ──────────────────────────────────────────────────
@@ -40381,6 +40775,44 @@ u` ) ( nurl_print q ) ( nurl_print `:
     }
 }
 
+// A fresh table for a new compilation.
+@ body_ends_reset → v {
+    ? != g_body_ends 0 { ( nurl_sym_free g_body_ends ) } {}
+    = g_body_ends ( nurl_sym_new )
+}
+
+// 64-bit hash of the whole text, eight bytes per step.
+@ __src_hash * u p i n → i {
+    : ~ i h + -3750763034362895579 n
+    : ~ i k 0
+    ~ <= + k 8 n {
+        = h * ^^ h ( __sym_w8 # s p k 8 ) 1099511628211
+        = h ^^ h >> h 29
+        = k + k 8
+    }
+    ~ < k n {
+        = h * ^^ h & 255 # i . p k 1099511628211
+        = k + k 1
+    }
+    ^ h
+}
+
+@ __body_end_key i lex i at → s {
+    ^ ( nurl_str_cat3 # s ( nurl_peek # s lex LX_MEMOKEY ) ` ` ( nurl_str_int at ) )
+}
+
+@ __body_end_known i lex i at → i {
+    ? | == g_body_ends 0 == 0 ( nurl_peek # s lex LX_MEMOKEY ) { ^ -1 } {}
+    : s key ( __body_end_key lex at )
+    ? == 0 ( nurl_sym_len g_body_ends key ) { ^ -1 } {}
+    ^ ( nurl_str_to_int ( nurl_sym_get g_body_ends key ) )
+}
+
+@ __body_end_note i lex i at i stop → v {
+    ? | == g_body_ends 0 == 0 ( nurl_peek # s lex LX_MEMOKEY ) { ^ } {}
+    ( nurl_sym_def g_body_ends ( __body_end_key lex at ) ( nurl_str_int stop ) )
+}
+
 @ skip_balanced i lex → v {
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
     { ( nurl_lex_advance lex ) }
@@ -40388,7 +40820,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // EOF first (malformed source), fall through and let the caller
     // observe TT_EOF on its next step.
     ? == ( nurl_lex_type lex ) TT_LBRACE
-    { ( nurl_lex_advance lex )
+    { : i at ( nurl_lex_cur_start lex )
+        : i known ( __body_end_known lex at )
+        ? >= known 0 { ( nurl_lex_set_pos lex known ) ^ } {}
+        ( nurl_lex_advance lex )
         : ~ i depth 1
         ~ & != depth 0 != ( nurl_lex_type lex ) TT_EOF {
             : i tt2 ( nurl_lex_type lex )
@@ -40396,6 +40831,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
             ? == tt2 TT_RBRACE { = depth - depth 1 } {}
             ( nurl_lex_advance lex )
         }
+        ( __body_end_note lex at ( nurl_lex_cur_start lex ) )
     }
     {}
 }
@@ -41144,7 +41580,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
             = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
             ` [in the default body of method '` mname `' of trait '` tname )
             ( nurl_str_cat3 `', emitted for impl type '` impl_nurl `' — fix it at the trait declaration]` ) )
+            : i saved_force g_lazy_force
+            = g_lazy_force 1
             ( gen_fn_decl lex2 syms cg )
+            = g_lazy_force saved_force
             = g_diag_ctx saved_ctx
             ( nurl_lex_free lex2 )
         }
@@ -42148,6 +42587,9 @@ u` ) ( nurl_print q ) ( nurl_print `:
                     // Read-and-clear here, where the prefix was parsed,
                     // and hand the answer to the one arm that wants it.
                     : b decl_pub ( vis_take_pending_pub )
+                    // (A `simd` / `inline` function compiles eagerly: a root of
+                    // the lazy-compilation reach, lazy_reach.)
+                    : b decl_eager | != 0 g_pending_simd != 0 g_pending_inline
                     // Same read-and-clear discipline for `simd`. This pass
                     // only collects signatures — codegen re-lexes and sets
                     // the flag again — but a prefix left pending here would
@@ -42162,6 +42604,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
                             // File-private: register under the mangled name.
                             // Same-file duplicates still collide on it (the
                             // dup check below); different files' never do.
+                            : s fname_raw_scan ? ( priv_is_private fname ) ( nurl_str_cat fname `` ) ``
                             ? ( priv_is_private fname ) {
                                 ( priv_note_owner fname )
                                 = fname ( priv_mangle_for fname ( priv_file_id ) )
@@ -42291,7 +42734,12 @@ u` ) ( nurl_print q ) ( nurl_print `:
                                 ? g_saw_inout
                                 { ( nurl_sym_def syms ( nurl_str_cat fname `__has_inout` ) `1` ) }
                                 {}
-                                ? == ( nurl_lex_type lex ) TT_LBRACE { ( scan_note_empty_body lex syms fname ) ( skip_balanced lex ) }
+                                ? == ( nurl_lex_type lex ) TT_LBRACE {
+                                    ( scan_note_empty_body lex syms fname )
+                                    // (A generic hook — `Set_drop [A]` — is instantiated by
+                                    // the late emitters: what it calls must be reached.)
+                                    ? ( __lazy_is_root fname F ) { ( nurl_sym_append_word g_lazy_edges `__roots__` fname ) } {}
+                                    ? ! ( __lazy_collect_past lex fname ) { ( skip_balanced lex ) } {} }
                                 { ( die_pos lex template_line template_col ( nurl_str_cat3
                                     `a generic function declaration continues with its body — '@ ` fname
                                     ` [ … ] … → <type> { … }'. This one has no '{', so the declaration after it would be read as its body.` ) ) }
@@ -42419,7 +42867,13 @@ u` ) ( nurl_print q ) ( nurl_print `:
                                 }
                                 {}
                                 ( scan_note_empty_body lex syms fname )
-                                ? != 0 ( nurl_str_ends fname `_drop` ) { ( scan_skip_drop_body lex syms fname ) } { ( skip_balanced lex ) }
+                                ? ( __lazy_is_root fname decl_eager ) { ( nurl_sym_append_word g_lazy_edges `__roots__` fname ) } {}
+                                ? & != 0 g_lazy_edges != 0 ( nurl_str_len fname_raw_scan ) { ( nurl_sym_append_word g_lazy_edges ( nurl_str_cat `~` fname_raw_scan ) fname ) } {}
+                                // A drop body is read again below, so its walk puts the lexer back.
+                                ? != 0 ( nurl_str_ends fname `_drop` ) {
+                                    ( __lazy_collect lex fname )
+                                    ( scan_skip_drop_body lex syms fname )
+                                } { ? ! ( __lazy_collect_past lex fname ) { ( skip_balanced lex ) } {} }
                             }
                         }
                         { ( skip_balanced lex ) }
@@ -42510,7 +42964,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
                         {}
                     }
                     { ? == tt TT_PERCENT
-                        { ( scan_impl_decl lex syms ) }
+                        { ( __lazy_collect lex `__roots__` ) ( scan_impl_decl lex syms ) }
                         { ( nurl_lex_advance lex ) }
                     }
                 } } }
@@ -42600,87 +43054,91 @@ u` ) ( nurl_print q ) ( nurl_print `:
             ? == ( nurl_lex_type lex ) TT_LBRACE { ( skip_balanced lex ) } {}
         }
         : i tt ( nurl_lex_type lex )
-        ? == tt TT_LBRACE
-        { = depth + depth 1 ( nurl_lex_advance lex ) }
-        { ? == tt TT_RBRACE
-            { = depth - depth 1 ( nurl_lex_advance lex ) }
-            { ? & == depth 0 == tt TT_DOLLAR
-                {  // Nested import: register its type names too, applying
-                    // alias rewriting so an aliased import's types resolve
-                    // under their `alias__` prefix (mirrors scan_fn_sigs).
-                    : i __im_ln ( nurl_lex_line lex )
-                    : i __im_cl ( nurl_lex_col lex )
-                    ( nurl_lex_advance lex )
-                    ? == ( nurl_lex_type lex ) TT_STR
-                    { : s path ( __norm_import_path ( nurl_lex_val lex ) )
+        // Nothing inside a block names a type: step over it whole (which
+        // also records where it ends for the passes after this one).
+        ? & == tt TT_LBRACE == depth 0
+        { ( skip_balanced lex ) }
+        { ? == tt TT_LBRACE
+            { = depth + depth 1 ( nurl_lex_advance lex ) }
+            { ? == tt TT_RBRACE
+                { = depth - depth 1 ( nurl_lex_advance lex ) }
+                { ? & == depth 0 == tt TT_DOLLAR
+                    {  // Nested import: register its type names too, applying
+                        // alias rewriting so an aliased import's types resolve
+                        // under their `alias__` prefix (mirrors scan_fn_sigs).
+                        : i __im_ln ( nurl_lex_line lex )
+                        : i __im_cl ( nurl_lex_col lex )
                         ( nurl_lex_advance lex )
-                        : ~ s alias ``
-                        ? ( is_ident_tok ( nurl_lex_type lex ) )
-                        { = alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) }
-                        {}
-                        : s __tn_key ( __canon_import_key path )
-                        : s marker ( nurl_sym_get syms `__tn_scanned__` )
-                        ? ( str_contains_word marker __tn_key )
-                        {}
-                        { : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __tn_key `` )
-                            ( nurl_str_cat3 marker ` ` __tn_key )
-                            ( nurl_sym_def syms `__tn_scanned__` new_marker )
-                            ( __require_import_file lex __im_ln __im_cl path )
-                            : s src2 ( compiler_read_source path )
-                            // Uniform ownership, as at the other two sites.
-                            : s eff_src2 ? != 0 ( nurl_str_len alias )
-                            { : s names ( collect_alias_targets src2 path )
-                                ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
-                            }
-                            ( nurl_str_cat src2 `` )
-                            : i lex2 ( nurl_lex_new eff_src2 path )
-                            // Track the imported file as current so its own
-                            // `$`-imports resolve importer-relative (mirrors
-                            // scan_fn_sigs / gen_import_decl).
-                            : s saved_sf ( vis_current_src_file )
-                            ( vis_set_current_src_file path )
-                            ( scan_type_names lex2 syms )
-                            ( nurl_lex_free lex2 )
-                            ( vis_set_current_src_file saved_sf )
-                        }
-                    }
-                    {}
-                }
-                { ? & == depth 0 == tt TT_COLON
-                    { ( nurl_lex_advance lex )  // consume ':'
-                        ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
-                        ? == ( nurl_lex_type lex ) TT_PIPE
-                        {  // enum `: | Name { ... }` — name follows the `|`
+                        ? == ( nurl_lex_type lex ) TT_STR
+                        { : s path ( __norm_import_path ( nurl_lex_val lex ) )
                             ( nurl_lex_advance lex )
-                            ? == ( nurl_lex_type lex ) TT_IDENT
-                            { : s name ( nurl_lex_val lex )
-                                ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
-                                ( nurl_lex_advance lex )
-                                ? == ( nurl_lex_type lex ) TT_LBRACE { ( record_type_layout lex name `enum` ) } {}
-                            }
+                            : ~ s alias ``
+                            ? ( is_ident_tok ( nurl_lex_type lex ) )
+                            { = alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) }
                             {}
+                            : s __tn_key ( __canon_import_key path )
+                            : s marker ( nurl_sym_get syms `__tn_scanned__` )
+                            ? ( str_contains_word marker __tn_key )
+                            {}
+                            { : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __tn_key `` )
+                                ( nurl_str_cat3 marker ` ` __tn_key )
+                                ( nurl_sym_def syms `__tn_scanned__` new_marker )
+                                ( __require_import_file lex __im_ln __im_cl path )
+                                : s src2 ( compiler_read_source path )
+                                // Uniform ownership, as at the other two sites.
+                                : s eff_src2 ? != 0 ( nurl_str_len alias )
+                                { : s names ( collect_alias_targets src2 path )
+                                    ( alias_rewrite_source src2 names ( nurl_str_cat alias `__` ) )
+                                }
+                                ( nurl_str_cat src2 `` )
+                                : i lex2 ( nurl_lex_new eff_src2 path )
+                                // Track the imported file as current so its own
+                                // `$`-imports resolve importer-relative (mirrors
+                                // scan_fn_sigs / gen_import_decl).
+                                : s saved_sf ( vis_current_src_file )
+                                ( vis_set_current_src_file path )
+                                ( scan_type_names lex2 syms )
+                                ( nurl_lex_free lex2 )
+                                ( vis_set_current_src_file saved_sf )
+                            }
                         }
-                        {  // struct iff a pure IDENT is immediately followed
-                            // by `{` (struct body) or `[` (generic params).
-                            ? == ( nurl_lex_type lex ) TT_IDENT
-                            { : i nxt ( nurl_lex_peek_type lex )
-                                ? | == nxt TT_LBRACE == nxt TT_LBRACK
+                        {}
+                    }
+                    { ? & == depth 0 == tt TT_COLON
+                        { ( nurl_lex_advance lex )  // consume ':'
+                            ? == ( nurl_lex_type lex ) TT_TILDE { ( nurl_lex_advance lex ) } {}
+                            ? == ( nurl_lex_type lex ) TT_PIPE
+                            {  // enum `: | Name { ... }` — name follows the `|`
+                                ( nurl_lex_advance lex )
+                                ? == ( nurl_lex_type lex ) TT_IDENT
                                 { : s name ( nurl_lex_val lex )
                                     ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
-                                    ? == nxt TT_LBRACE {
-                                        ( nurl_lex_advance lex )
-                                        ( record_type_layout lex name `struct` )
-                                    } {}
+                                    ( nurl_lex_advance lex )
+                                    ? == ( nurl_lex_type lex ) TT_LBRACE { ( record_type_layout lex name `enum` ) } {}
                                 }
                                 {}
                             }
-                            {}
+                            {  // struct iff a pure IDENT is immediately followed
+                                // by `{` (struct body) or `[` (generic params).
+                                ? == ( nurl_lex_type lex ) TT_IDENT
+                                { : i nxt ( nurl_lex_peek_type lex )
+                                    ? | == nxt TT_LBRACE == nxt TT_LBRACK
+                                    { : s name ( nurl_lex_val lex )
+                                        ( nurl_sym_def syms name ( nurl_str_cat `%` name ) )
+                                        ? == nxt TT_LBRACE {
+                                            ( nurl_lex_advance lex )
+                                            ( record_type_layout lex name `struct` )
+                                        } {}
+                                    }
+                                    {}
+                                }
+                                {}
+                            }
                         }
+                        { ( nurl_lex_advance lex ) }
                     }
-                    { ( nurl_lex_advance lex ) }
                 }
-            }
-        }
+            } }
     }
 }
 
@@ -45341,6 +45799,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
     // every struct whose name is one or two tparam-shaped characters.
     // scan_type_names is purely lexical (registers `Name → %Name`, prints
     // no IR), so running it first is free and changes nothing else.
+    // Every pass below re-reads the same files: they share where their
+    // brace blocks end (g_body_ends), so a body is lexed once to be
+    // stepped over, not once per pass.
+    ( body_ends_reset )
     : i lex_tn ( nurl_lex_new src path )
     ( scan_type_names lex_tn syms )
     ( nurl_lex_free lex_tn )
@@ -45348,9 +45810,17 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( scan_generic_structs lex0 syms )
     ( nurl_lex_free lex0 )
     : i lex1 ( nurl_lex_new src path )
+    // The reference graph for lazy library compilation is gathered by the
+    // same walk (lazy_reach).
+    ? & & != g_dce 0 == g_lint 0 == g_dbg_enabled 0 {
+        = g_lazy_edges ( nurl_sym_new )
+        = g_lazy_root ( vis_current_src_file )
+        = g_lazy_trace != 0 # i ( getenv `NURL_LAZY_TRACE` )
+    } {}
     ( scan_fn_sigs lex1 syms )
     ( nurl_lex_free lex1 )
     ( llvm_linkage_init )
+    ? g_fn_link_program { ( lazy_reach ) } {}
     ( read_type_layouts syms )
     ( resolve_trait_impls syms )
     // AFTER scan_fn_sigs, and this is load-bearing: the preamble must
@@ -45372,6 +45842,11 @@ u` ) ( nurl_print q ) ( nurl_print `:
     ( ensure_dyn_types_emitted syms cg )
     : i lex ( nurl_lex_new src path )
     ? != g_lint 0 { = g_lint_recording 1 } {}
+    // Library functions compile on demand in a program (lazy_flush): the
+    // dead-function pass would drop what nothing reaches anyway.
+    ? & & & & != g_dce 0 g_fn_link_program == g_lint 0 == g_dbg_enabled 0 != g_lazy_live 0 {
+        = g_lazy ( nurl_sym_new )
+    } {}
     ( parse_program lex syms cg )
     ( nurl_lex_free lex )
     // Multi-error mode: diagnostics were reported per-declaration and the
@@ -45411,8 +45886,10 @@ u` ) ( nurl_print q ) ( nurl_print `:
         // Stop recording new lint targets before flushing generic
         // monomorphisations — those are synthetic, not the user's source.
         = g_lint_recording 0
-        // Emit all deferred generic instantiations collected during compilation.
-        ( flush_deferred_instantiations syms cg )
+        // Emit all deferred generic instantiations collected during
+        // compilation — and the lazy library functions they and the
+        // program refer to (lazy_flush).
+        ( lazy_flush syms cg )
         ( emit_pending_drop_graphs syms )
         // Every function (incl. just-flushed generic instantiations) has now
         // compiled, so the escape summaries are final: replay the deferred
@@ -45430,6 +45907,7 @@ u` ) ( nurl_print q ) ( nurl_print `:
         ( mem_emit_guard_flags )
         ( resolve_pending_escapes )
         ( resolve_deferred_borrowck )
+        ( lazy_check_complete )
         ( dbg_flush )
         // Unused-symbol lint (--lint): every call site (incl. generic
         // instantiations) has now been seen, so report the unused private

@@ -708,10 +708,11 @@ $ `stdlib/ext/http2_conn.nu`
 @ __conn_header_says_close ( Vec Header ) hs → b {
     : i n ( vec_len [Header] hs )
     : *Header hdata ( vec_data [Header] hs )
+    : i cn ( nurl_str_len `Connection` )
     : ~ i k 0
     ~ < k n {
         : Header h . hdata k
-        ? ( _header_name_eq_ci . h name `Connection` ) {
+        ? ( _header_name_eq_ci_n . h name `Connection` cn ) {
             ^ ( __header_value_eq_ci . h value `close` )
         } {}
         = k + k 1

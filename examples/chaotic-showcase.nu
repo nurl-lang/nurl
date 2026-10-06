@@ -22,10 +22,19 @@
 //
 // The pipeline: parse a formula string into an Expr tree (C), symbolically
 // differentiate + simplify it (B), then evaluate both over Vec3 math (A).
+//
+// RAW MEMORY HERE IS A DELIBERATE EXCEPTION, NOT HOW NURL CODE IS WRITTEN.
+// Ordinary NURL never frees anything by hand: String, Vec, HashMap, Rc and
+// every struct or enum built from them drop themselves when their owner
+// goes out of scope. Raw `alloc` / `*T` memory — and with it `nurl_free` —
+// is reserved for the rare places that need it (FFI buffers, a custom
+// allocator, a stress test like this file). The `nurl_free` calls below
+// exist only because this file stresses that raw path on purpose.
 // ============================================================
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/mem.nu`
+$ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 
 // ── Axis A: Vec3 + dense prefix float arithmetic ────────────────────
@@ -61,8 +70,9 @@ $ `stdlib/std/float.nu`
 
 // ── Axis B: a recursive symbolic-expression ADT ─────────────────────
 //
-// Children are boxed as `*Expr` (raw pointer payloads). This is the only
-// recursive enum in the codebase.
+// Children are boxed as `*Expr` (raw pointer payloads) on purpose — the
+// raw-memory exception described at the top — so the trees are freed by
+// hand at the end of main. This is the only recursive enum in the codebase.
 
 : | Expr {
     Num f
@@ -135,7 +145,12 @@ $ `stdlib/std/float.nu`
             : Expr eb . sb 0
             ?? ea {
                 Num x → ?? eb {
-                    Num y → ( e_num + x y )
+                    Num y → {
+                        // Both folded operands are fresh nodes: release them.
+                        ( nurl_free # s sa )
+                        ( nurl_free # s sb )
+                        ( e_num + x y )
+                    }
                     _ → ( e_add sa sb )
                 }
                 _ → ( e_add sa sb )
@@ -148,13 +163,36 @@ $ `stdlib/std/float.nu`
             : Expr eb . sb 0
             ?? ea {
                 Num x → ?? eb {
-                    Num y → ( e_num * x y )
+                    Num y → {
+                        // Both folded operands are fresh nodes: release them.
+                        ( nurl_free # s sa )
+                        ( nurl_free # s sb )
+                        ( e_num * x y )
+                    }
                     _ → ( e_mul sa sb )
                 }
                 _ → ( e_mul sa sb )
             }
         }
         _ → ( ebox e )
+    }
+}
+
+// The trees are DAGs, not strict trees: e_diff reuses its input's
+// subtrees and e_simplify's leaf copies keep their children. To free them,
+// collect every node reachable from all roots exactly once.
+@ e_collect * Expr p ( Vec i ) seen → v {
+    : i addr # i p
+    ? ( vec_contains [i] seen addr \ i x i y → b { == x y } ) { ^ } {}
+    ( vec_push [i] seen addr )
+    : Expr e . p 0
+    ?? e {
+        Add a b → { ( e_collect a seen ) ( e_collect b seen ) }
+        Mul a b → { ( e_collect a seen ) ( e_collect b seen ) }
+        Neg a → ( e_collect a seen )
+        Sin a → ( e_collect a seen )
+        Cos a → ( e_collect a seen )
+        _ → {}
     }
 }
 
@@ -294,14 +332,27 @@ $ `stdlib/std/float.nu`
     : s formula `x*x + 3.0*x + s(x)`
     : *PState ps ( ps_new formula )
     : ?*Expr parsed ( p_expr ps )
+    ( nurl_free # s ps )
     ?? parsed {
         F → { ( nurl_print `parse failed\n` ) ^ 1 }
         T tree → {
             // ── Axis B: differentiate + simplify + eval ───────
-            : *Expr dtree ( e_simplify ( e_diff tree ) )
+            : *Expr deriv ( e_diff tree )
+            : *Expr dtree ( e_simplify deriv )
             ( nurl_print `f(2)=` ) ( pf ( e_eval tree 2.0 ) ) ( nurl_print `\n` )
             ( nurl_print `f'(2)=` ) ( pf ( e_eval dtree 2.0 ) ) ( nurl_print `\n` )
             ( nurl_print `f(0)=` ) ( pf ( e_eval tree 0.0 ) ) ( nurl_print `\n` )
+
+            : ( Vec i ) nodes ( vec_new [i] )
+            ( e_collect tree nodes )
+            ( e_collect deriv nodes )
+            ( e_collect dtree nodes )
+            : *i addrs ( vec_data [i] nodes )
+            : ~ i k 0
+            ~ < k ( vec_len [i] nodes ) {
+                ( nurl_free # s . addrs k )
+                = k + k 1
+            }
         }
     }
     ^ 0

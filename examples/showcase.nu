@@ -55,6 +55,19 @@
     ^ p
 }
 
+// ── Free a boxed Ast tree, children first ────────────────────
+@ free_ast * Ast e → v {
+    ?? . e 0 {
+        Num n → {}
+        Neg inner → ( free_ast inner )
+        Bin op l r → {
+            ( free_ast l )
+            ( free_ast r )
+        }
+    }
+    ( free # s e )
+}
+
 // ── Evaluator returning an Option (division-by-zero → None) ──
 @ eval * Ast e → ?i {
     = eval_count + eval_count 1
@@ -118,6 +131,7 @@
     : *Ast div ( box_ast @ Ast { Bin 3 ten two } )
     : *Ast neg ( box_ast @ Ast { Neg div } )
     : *Ast root ( box_ast @ Ast { Bin 2 sum neg } )
+    ; { ( free_ast root ) }  // freed on exit, like any deferred cleanup
 
     : ?i result ( eval root )
 
@@ -147,6 +161,9 @@
     ?? r2 {
         _ → ( puts `(got None as expected)\n` )
     }
+    // `bad` shares `three` with `root`, so free only its own two nodes.
+    ( free # s bad )
+    ( free # s zero )
 
     ( puts ( show eval_count ) )
 }

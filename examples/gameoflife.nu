@@ -132,5 +132,7 @@
     }
 
     ( canvas_close )
+    ( free # s grid_a )
+    ( free # s grid_b )
     ^ 0
 }

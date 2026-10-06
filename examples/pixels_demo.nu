@@ -127,5 +127,8 @@
     }
 
     ( canvas_close )
+    ( free # s lut_r )
+    ( free # s lut_g )
+    ( free # s lut_b )
     ^ 0
 }

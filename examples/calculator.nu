@@ -28,6 +28,30 @@
     ^ p
 }
 
+// Free an expression tree: children first, then the node itself
+@ free_expr * Expr e → v {
+    ?? . e 0 {
+        Num n → {}
+        Add l r → {
+            ( free_expr l )
+            ( free_expr r )
+        }
+        Sub l r → {
+            ( free_expr l )
+            ( free_expr r )
+        }
+        Mul l r → {
+            ( free_expr l )
+            ( free_expr r )
+        }
+        Div l r → {
+            ( free_expr l )
+            ( free_expr r )
+        }
+    }
+    ( free # s e )
+}
+
 // Evaluate an expression, returning None on division by zero
 @ eval * Expr e → ?i {
     ?? . e 0 {
@@ -85,6 +109,7 @@
 
     ( nurl_print `(10 + 5) * 2 = ` )
     ( print_result ( eval expr1 ) )
+    ( free_expr expr1 )
 
     // Build: 100 / (5 - 5) = error
     : *Expr h ( box @ Expr { Num 100 } )
@@ -95,6 +120,7 @@
 
     ( nurl_print `100 / (5 - 5) = ` )
     ( print_result ( eval expr2 ) )
+    ( free_expr expr2 )
 
     // Build: (8 - 3) * (4 + 2) = 30
     : *Expr e8 ( box @ Expr { Num 8 } )
@@ -107,6 +133,7 @@
 
     ( nurl_print `(8 - 3) * (4 + 2) = ` )
     ( print_result ( eval expr3 ) )
+    ( free_expr expr3 )
 
     ^ 0
 }

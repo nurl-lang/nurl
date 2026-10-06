@@ -32,7 +32,15 @@
 // The frame codec is pure and deterministic (offline-testable). The
 // server/client wrappers add TCP I/O; the per-conn handler runs as a fiber
 // (tcp_read_chunk / tcp_write_all are reactor-aware), matching the
-// server_run_async idiom in ext/http_server.nu. Path-upgrade (start relayed,
+// server_run_async idiom in ext/http_server.nu.
+//
+// The fibers run on the M:N runtime, so two of them can run at the same
+// moment on different worker threads. Everything they share is guarded
+// for that: the client and group tables by the server's mutex (held only
+// for table work, never across I/O), and each connection's outbound
+// stream by having exactly one writer — a fiber per registered connection
+// draining that connection's queue. Every other fiber only enqueues, so
+// two frames can never interleave on one socket. Path-upgrade (start relayed,
 // punch in the background, promote to direct, demote when direct goes quiet)
 // is wired at the transport seam in Phase 4 — this module is the relay leg.
 //
@@ -45,6 +53,8 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/async.nu`
+$ `stdlib/std/channel.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/core/rcbox.nu`
 
 // runtime client dial (the listen/accept/read/write/close ops are nurlc
@@ -263,8 +273,8 @@ $ `stdlib/core/rcbox.nu`
 : RelayEntry {
     ( Vec u ) pubkey
     TcpConn conn
-    i live  // 1 = registered + connected, 0 = gone
-    i sending  // 1 = a forward write to this conn is in flight (write lock)
+    i live  // 1 = registered + connected, 0 = gone (written under the table lock)
+    ( Channel ( Vec u ) ) outq  // frames for this conn; its writer fiber is the only reader
 }
 
 : GroupEntry {
@@ -277,6 +287,7 @@ $ `stdlib/core/rcbox.nu`
     ( Vec s ) clients  // *RelayEntry
     ( Vec s ) groups  // *GroupEntry
     i verbose  // 1 = log peer connect/disconnect to stdout
+    Mutex tlock  // guards clients, groups and every entry's live flag
 }
 
 // A RelayServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -304,6 +315,7 @@ $ `stdlib/core/rcbox.nu`
             ? != # i pp 0 {
                 : *RelayEntry e # *RelayEntry pp
                 ( vec_free [u] . e pubkey )
+                ( chan_free [( Vec u )] . e outq )
                 ( nurl_free # s e )
             } {}
             = k + k 1
@@ -326,7 +338,7 @@ $ `stdlib/core/rcbox.nu`
 @ relay_server_start s host i port → !RelayServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RelayServer NetErr out ?? lr {
-        T l → @ !RelayServer NetErr { T @ RelayServer { # s ( rcbox_new [RelayServerImpl] @ RelayServerImpl { l ( vec_new [s] ) ( vec_new [s] ) 0 } ) } }
+        T l → @ !RelayServer NetErr { T @ RelayServer { # s ( rcbox_new [RelayServerImpl] @ RelayServerImpl { l ( vec_new [s] ) ( vec_new [s] ) 0 ( mutex_new ) } ) } }
         F e → @ !RelayServer NetErr { F e }
     }
     ^ out
@@ -347,16 +359,18 @@ $ `stdlib/core/rcbox.nu`
     ( nurl_print ( string_data hex ) ) ( nurl_print `\n` )
 }
 
+// A new entry for connection `c`. Caller holds the table lock.
 @ __relay_register_conn * RelayServerImpl rs TcpConn c ( Vec u ) pk → s {
     : *RelayEntry e # *RelayEntry ( nurl_alloc Z RelayEntry )
     = . e pubkey ( __rcpy pk )
     = . e conn c
     = . e live 1
-    = . e sending 0
+    = . e outq ( chan_new [( Vec u )] )
     ( vec_push [s] . rs clients # s e )
     ^ # s e
 }
 
+// The live entry registered under `pk`, or 0. Caller holds the table lock.
 @ __relay_find * RelayServerImpl rs ( Vec u ) pk → s {
     : i n ( vec_len [s] . rs clients )
     : ~ s found # s 0
@@ -372,18 +386,45 @@ $ `stdlib/core/rcbox.nu`
     ^ found
 }
 
-// Serialized write to a destination conn: under cooperative scheduling the
-// check-and-set is atomic (no yield between), and tcp_write_all may park —
-// other forwarders to the same conn spin-yield until the lock clears, so
-// frames never interleave on a shared destination.
-@ __relay_send_locked * RelayEntry de ( Vec u ) frame → v {
-    ~ == . de sending 1 { ( yield ) }
-    = . de sending 1
-    ?? ( tcp_write_all . de conn frame ) { T _ → {} F _ → { = . de live 0 } }
-    = . de sending 0
+// Queue a frame for a destination conn. Never blocks and never writes:
+// the destination's writer fiber does the I/O, so a slow receiver cannot
+// stall the sender's read loop, and frames to one conn stay whole and in
+// order. A frame for a conn that has since gone is dropped.
+@ __relay_enqueue * RelayEntry de ( Vec u ) frame → v {
+    : b _queued ( chan_send [( Vec u )] . de outq frame )
+}
+
+// The one writer of a registered conn: drains its queue onto the socket
+// until the reader side closes the queue, then closes the conn. After a
+// failed write the conn is marked gone and the rest of the queue is
+// discarded (the reader sees the close and ends the session).
+@ __relay_writer * RelayServerImpl rs * RelayEntry de → v {
+    : ~ b more T
+    : ~ b ok T
+    ~ more {
+        ?? ( chan_recv [( Vec u )] . de outq ) {
+            T fr → {
+                ? ok {
+                    ?? ( tcp_write_all . de conn fr ) {
+                        T _ → {}
+                        F _ → {
+                            = ok F
+                            ( mutex_lock . rs tlock )
+                            = . de live 0
+                            ( mutex_unlock . rs tlock )
+                        }
+                    }
+                } {}
+            }
+            F → { = more F }
+        }
+    }
+    ( tcp_close_conn . de conn )
 }
 
 // ── group multicast tables ───────────────────────────────────────
+// Every function below reads or edits the group table: callers hold the
+// table lock.
 
 @ __relay_group_find * RelayServerImpl rs ( Vec u ) gid → s {
     : i n ( vec_len [s] . rs groups )
@@ -475,13 +516,17 @@ $ `stdlib/core/rcbox.nu`
             : *RelayEntry de # *RelayEntry mp
             ? == . de live 1 {
                 : ( Vec u ) out ( relay_build_deliver . se pubkey payload )
-                ( __relay_send_locked de out )
+                ( __relay_enqueue de out )
             } {}
         } {}
         = k + k 1
     }
 }
 
+// One connection's reader. Table work happens under the table lock; the
+// conn is written only by its writer fiber, started at registration, which
+// also closes it. A conn that never registered has no writer and is closed
+// here.
 @ __relay_handle_conn * RelayServerImpl rs TcpConn c → v {
     : ~ s self_entry # s 0
     : ~ b done F
@@ -491,7 +536,21 @@ $ `stdlib/core/rcbox.nu`
             T f → {
                 : i ft . f ftype
                 ? == ft ( relay_reg ) {
-                    = self_entry ( __relay_register_conn rs c . f body )
+                    ( mutex_lock . rs tlock )
+                    ? == # i self_entry 0 {
+                        = self_entry ( __relay_register_conn rs c . f body )
+                        ( mutex_unlock . rs tlock )
+                        : *RelayEntry ne # *RelayEntry self_entry
+                        ( spawn \ → v { ( __relay_writer rs ne ) } )
+                    } {
+                        // Re-registration on the same conn renames its entry:
+                        // a second entry would mean a second writer on the
+                        // same socket.
+                        : *RelayEntry re # *RelayEntry self_entry
+                        ( vec_free [u] . re pubkey )
+                        = . re pubkey ( __rcpy . f body )
+                        ( mutex_unlock . rs tlock )
+                    }
                     ? == . rs verbose 1 { ( __relay_log `+` . f body ) } {}
                 } {}
                 ? == ft ( relay_fwd ) {
@@ -499,21 +558,33 @@ $ `stdlib/core/rcbox.nu`
                         : *RelayEntry se # *RelayEntry self_entry
                         : ( Vec u ) dst ( relay_body_pk . f body )
                         : ( Vec u ) pl ( relay_body_payload . f body )
+                        ( mutex_lock . rs tlock )
                         : s dp ( __relay_find rs dst )
                         ? != # i dp 0 {
                             : *RelayEntry de # *RelayEntry dp
                             : ( Vec u ) out ( relay_build_deliver . se pubkey pl )
-                            ( __relay_send_locked de out )
+                            ( __relay_enqueue de out )
                         } {}
+                        ( mutex_unlock . rs tlock )
                     } {}
                 } {}
-                ? == ft ( relay_gjoin ) { ( __relay_group_join rs self_entry . f body ) } {}
-                ? == ft ( relay_gleave ) { ( __relay_group_leave rs self_entry . f body ) } {}
+                ? == ft ( relay_gjoin ) {
+                    ( mutex_lock . rs tlock )
+                    ( __relay_group_join rs self_entry . f body )
+                    ( mutex_unlock . rs tlock )
+                } {}
+                ? == ft ( relay_gleave ) {
+                    ( mutex_lock . rs tlock )
+                    ( __relay_group_leave rs self_entry . f body )
+                    ( mutex_unlock . rs tlock )
+                } {}
                 ? == ft ( relay_gsend ) {
                     ? != # i self_entry 0 {
                         : ( Vec u ) gid ( relay_gsend_gid . f body )
                         : ( Vec u ) pl ( relay_gsend_payload . f body )
+                        ( mutex_lock . rs tlock )
                         ( __relay_group_fanout rs self_entry gid pl )
+                        ( mutex_unlock . rs tlock )
                     } {}
                 } {}
             }
@@ -522,11 +593,16 @@ $ `stdlib/core/rcbox.nu`
     }
     ? != # i self_entry 0 {
         : *RelayEntry se # *RelayEntry self_entry
+        ( mutex_lock . rs tlock )
         = . se live 0
         ( __relay_drop_from_groups rs self_entry )
+        ( mutex_unlock . rs tlock )
         ? == . rs verbose 1 { ( __relay_log `-` . se pubkey ) } {}
-    } {}
-    ( tcp_close_conn c )
+        // The writer drains what is queued, then closes the conn.
+        ( chan_close [( Vec u )] . se outq )
+    } {
+        ( tcp_close_conn c )
+    }
 }
 
 @ __relay_accept_loop * RelayServerImpl rs → v {

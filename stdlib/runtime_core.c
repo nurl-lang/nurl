@@ -628,6 +628,15 @@ const char* nurl_print_buf_stop(void) {
     return ret;
 }
 
+/* The buffered output so far, for a reader that scans it while it grows
+ * (nurlc's lazy library functions): its length, and its address — valid
+ * until the next write, which may move it. */
+long long nurl_print_buf_len(void) { outbuf_init(); return (long long)g_outbuf_len; }
+long long nurl_print_buf_at(long long off) {
+    outbuf_init();
+    return (long long)(intptr_t)(g_outbuf + (off < 0 ? 0 : off));
+}
+
 /* Clear ONLY when no buffering frame is active — preserves the parent
  * frame's bytes when called from inside a nested gen_closure_expr. */
 void nurl_print_buf_reset(void) {
@@ -3011,7 +3020,7 @@ static void nurl__jrnl_push2_slow(void *p, void (*drop)(void*), const unsigned c
     ++nurl__jrnl_live;
 }
 static inline void nurl__jrnl_push2(void *p, void (*drop)(void*), const unsigned char *flag) {
-    if (__builtin_expect(!NURL_TLS_LD(long long, nurl__jrnl_active), 1) || !p) return;
+    if (!p || __builtin_expect(!NURL_TLS_LD(long long, nurl__jrnl_active), 1)) return;
     nurl__jrnl_push2_slow(p, drop, flag);
 }
 
@@ -3045,7 +3054,7 @@ static void nurl__jslot_push_slow(void *slot, void (*drop)(void*), const unsigne
 /* An owned String / Vec / struct / container binding: `fn` drops the value
  * in `slot` on a panic if the binding's drop flag still says it owns one. */
 NURL_TLS_WRAP void nurl_journal_push_drop2(void *slot, void *flag, void (*fn)(void*)) {
-    if (__builtin_expect(!NURL_TLS_LD(long long, nurl__jrnl_active), 1) || !fn || !slot) return;
+    if (!fn || !slot || __builtin_expect(!NURL_TLS_LD(long long, nurl__jrnl_active), 1)) return;
     nurl__jslot_push_slow(slot, fn, (const unsigned char *)flag);
 }
 static void nurl__jslot_pop_nulls(void) {
@@ -3118,7 +3127,7 @@ static inline void nurl__jrnl_forget_body(void *p) {
 __attribute__((noinline))
 static void nurl__jrnl_forget_slow(void *p) { if (nurl__jrnl_cap) nurl__jrnl_forget_body(p); }
 NURL_TLS_WRAP void nurl_journal_forget(void *p) {
-    if (__builtin_expect(!NURL_TLS_LD(size_t, nurl__jrnl_live), 1) || !p) return;
+    if (!p || __builtin_expect(!NURL_TLS_LD(size_t, nurl__jrnl_live), 1)) return;
     nurl__jrnl_forget_slow(p);
 }
 
@@ -3133,7 +3142,7 @@ static void nurl__jslot_forget_slow(void *slot) {
     nurl__jslot_pop_nulls();
 }
 NURL_TLS_WRAP void nurl_journal_forget_slot(void *slot) {
-    if (__builtin_expect(!NURL_TLS_LD(size_t, nurl__jslot_len), 1) || !slot) return;
+    if (!slot || __builtin_expect(!NURL_TLS_LD(size_t, nurl__jslot_len), 1)) return;
     nurl__jslot_forget_slow(slot);
 }
 static uint64_t nurl__jrnl_mark(void) { return nurl__jrnl_sequence; }

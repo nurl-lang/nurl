@@ -39,6 +39,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/async.nu`
+$ `stdlib/std/thread.nu`
 $ `stdlib/core/rcbox.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
@@ -317,9 +318,13 @@ $ `stdlib/core/rcbox.nu`
 // Rendezvous SERVER — pubkey → PeerRecord directory.
 // ════════════════════════════════════════════════════════════════
 
+// The conn fibers run on the M:N runtime — two can run at once on
+// different worker threads — so the directory is read and written only
+// under `lock`. Each conn writes only its own socket, outside the lock.
 : RzServerImpl {
     TcpListener lst
     ( Vec PeerRecord ) records
+    Mutex lock
 }
 
 // An RzServer is a handle on its state in an rcbox (stdlib/core/rcbox.nu):
@@ -338,7 +343,7 @@ $ `stdlib/core/rcbox.nu`
 @ rz_server_start s host i port → !RzServer NetErr {
     : !TcpListener NetErr lr ( tcp_listen host port )
     : !RzServer NetErr out ?? lr {
-        T l → @ !RzServer NetErr { T @ RzServer { # s ( rcbox_new [RzServerImpl] @ RzServerImpl { l ( vec_new [PeerRecord] ) } ) } }
+        T l → @ !RzServer NetErr { T @ RzServer { # s ( rcbox_new [RzServerImpl] @ RzServerImpl { l ( vec_new [PeerRecord] ) ( mutex_new ) } ) } }
         F e → @ !RzServer NetErr { F e }
     }
     ^ out
@@ -357,7 +362,7 @@ $ `stdlib/core/rcbox.nu`
     ^ e
 }
 
-// Index of the record for `pk`, or -1.
+// Index of the record for `pk`, or -1. Caller holds the lock.
 @ __rz_find * RzServerImpl rs ( Vec u ) pk → i {
     : i n ( vec_len [PeerRecord] . rs records )
     : ~ i found -1
@@ -373,7 +378,7 @@ $ `stdlib/core/rcbox.nu`
 }
 
 // Insert or replace the record for a pubkey (latest registration wins); the
-// replaced record goes with its slot.
+// replaced record goes with its slot. Caller holds the lock.
 @ __rz_upsert * RzServerImpl rs PeerRecord newrec → v {
     : i k ( __rz_find rs ( peer_record_pubkey newrec ) )
     ? >= k 0 { ( vec_set [PeerRecord] . rs records k newrec ) } { ( vec_push [PeerRecord] . rs records newrec ) }
@@ -387,16 +392,20 @@ $ `stdlib/core/rcbox.nu`
             T f → {
                 ? == . f ftype ( rz_register ) {
                     : PeerRecord nr ( rz_record_decode . f body )
+                    ( mutex_lock . rs lock )
                     ( __rz_upsert rs nr )
+                    ( mutex_unlock . rs lock )
                     : ( Vec u ) ack ( rz_build_ok )
                     ?? ( tcp_write_all c ack ) { T _ → {} F _ → { = done T } }
                 } {}
                 ? == . f ftype ( rz_lookup ) {
+                    ( mutex_lock . rs lock )
                     : i found ( __rz_find rs . f body )
                     : ( Vec u ) resp ?? ( vec_get [PeerRecord] . rs records found ) {
                         T r → ( rz_build_record_found r )
                         F → ( rz_build_record_notfound )
                     }
+                    ( mutex_unlock . rs lock )
                     ?? ( tcp_write_all c resp ) { T _ → {} F _ → { = done T } }
                 } {}
             }

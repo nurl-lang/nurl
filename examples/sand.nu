@@ -136,5 +136,6 @@
     }
 
     ( canvas_close )
+    ( free # s grid )
     ^ 0
 }

@@ -107,5 +107,8 @@
     }
 
     ( canvas_close )
+    ( free # s stars_x )
+    ( free # s stars_y )
+    ( free # s stars_z )
     ^ 0
 }

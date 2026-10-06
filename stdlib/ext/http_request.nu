@@ -267,8 +267,14 @@ $ `stdlib/std/simd.nu`
 // here because the length is established first and neither buffer is
 // touched during the scan.
 @ __string_eq_ci String s s raw → b {
+    ^ ( __string_eq_ci_n s raw ( nurl_str_len raw ) )
+}
+
+// The same with `raw`'s length already known. A lookup that compares
+// one name against every header measures that name once, and most
+// headers are then rejected on length alone.
+@ __string_eq_ci_n String s s raw i lb → b {
     : i la ( string_len s )
-    : i lb ( nurl_str_len raw )
     ? != la lb { ^ F } {}
     ? == la 0 { ^ T } {}
     ^ ( simd_bytes_eq_ci # *u ( string_data s ) # *u raw la )
@@ -323,10 +329,11 @@ $ `stdlib/std/simd.nu`
 @ header_get ( Vec Header ) hs s name → ?String {
     : i n ( vec_len [Header] hs )
     : *Header data ( vec_data [Header] hs )
+    : i name_n ( nurl_str_len name )
     : ~ i k 0
     ~ < k n {
         : Header h . data k
-        ? ( __string_eq_ci . h name name ) {
+        ? ( __string_eq_ci_n . h name name name_n ) {
             : String copy ( string_from ( string_data . h value ) )
             ^ @ ?String { T copy }
         } {}
@@ -379,10 +386,11 @@ $ `stdlib/std/simd.nu`
 @ header_index ( Vec Header ) hs s name → i {
     : i n ( vec_len [Header] hs )
     : *Header data ( vec_data [Header] hs )
+    : i name_n ( nurl_str_len name )
     : ~ i k 0
     ~ < k n {
         : Header h . data k
-        ? ( __string_eq_ci . h name name ) { ^ k } {}
+        ? ( __string_eq_ci_n . h name name name_n ) { ^ k } {}
         = k + k 1
     }
     ^ -1
@@ -653,41 +661,41 @@ $ `stdlib/std/simd.nu`
 // (`Host : x`), obs-fold continuation lines (they start with SP/HTAB),
 // control characters and non-ASCII bytes in a name — every field-name
 // smuggling vector at once.
+// The set as two 64-bit masks, bit `b` of the low word for bytes
+// 0-63 and bit `b - 64` of the high one for 64-127: one shift and test
+// per byte instead of a chain of range compares.
 @ __http_is_tchar i b → b {
-    ? & >= b 48 <= b 57 { ^ T } {}  // 0-9
-    ? & >= b 65 <= b 90 { ^ T } {}  // A-Z
-    ? & >= b 97 <= b 122 { ^ T } {}  // a-z
-    ? | == b 33 | == b 35 | == b 36 | == b 37 | == b 38 | == b 39 == b 42 { ^ T } {}  // ! # $ % & ' *
-    ? | == b 43 | == b 45 | == b 46 | == b 94 | == b 95 | == b 96 | == b 124 == b 126 { ^ T } {}  // + - . ^ _ ` | ~
-    ^ F
+    ? | < b 0 > b 127 { ^ F } {}
+    : i m ? < b 64 288068722172624896 6341068274398134270
+    ^ != & >> m & b 63 1 0
 }
 
 // True iff every byte of [from..to) is a valid field-name token char.
 // A zero-length range (from >= to) is NOT a valid name — the caller
 // rejects empty names separately, but we return F here as a backstop.
 @ __http_name_is_token ( Vec u ) buf i from i to → b {
-    ? >= from to { ^ F } {}
-    : ~ i k from
-    : ~ b ok T
-    ~ & ok < k to {
-        ? ! ( __http_is_tchar ( _bbyte buf k ) ) { = ok F } {}
+    : i n ( vec_len [u] buf )
+    : i a ? < from 0 0 from
+    : i b ? > to n n to
+    ? >= a b { ^ F } {}
+    : *u data ( vec_data [u] buf )
+    : ~ i k a
+    ~ < k b {
+        ? ! ( __http_is_tchar # i . data k ) { ^ F } {}
         = k + k 1
     }
-    ^ ok
+    ^ T
 }
 
 // True iff [from..to) contains a byte forbidden in a field-value:
 // NUL (0), LF (10) or CR (13). RFC 9110 §5.5 — these would forge a
 // header split if the value were re-serialised over HTTP/1.1.
 @ __http_value_has_ctl ( Vec u ) buf i from i to → b {
-    : ~ i k from
-    : ~ b bad F
-    ~ & ! bad < k to {
-        : i b ( _bbyte buf k )
-        ? | == b 0 | == b 10 == b 13 { = bad T } {}
-        = k + k 1
-    }
-    ^ bad
+    : i n ( vec_len [u] buf )
+    : i a ? < from 0 0 from
+    : i b ? > to n n to
+    ? >= a b { ^ F } {}
+    ^ >= ( simd_index_ctl3 # *u + # i ( vec_data [u] buf ) a - b a ) 0
 }
 
 // Headers that may appear at most once. A repeat is a request-smuggling
@@ -784,7 +792,7 @@ $ `stdlib/std/simd.nu`
                                 : ~ i fk 0
                                 ~ & ! folded < fk hcount {
                                     : Header h . hdata fk
-                                    ? ( __string_eq_ci . h name ( string_data . newh name ) ) {
+                                    ? ( __string_eq_ci_n . h name ( string_data . newh name ) ( string_len . newh name ) ) {
                                         ( string_push_str . h value `, ` )
                                         ( string_push_str . h value ( string_data . newh value ) )
                                         = folded T

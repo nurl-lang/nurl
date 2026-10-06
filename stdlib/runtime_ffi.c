@@ -5094,6 +5094,13 @@ typedef struct NurlFiber {
      * its env per spawn with no correct place to free it. */
     int              own_env;
     int              done_taken;     /* set after join freed it */
+    /* Set (under join_m) by the worker once it is through with a finished
+     * fiber — after it has swapped the fiber's recovery state back out. A
+     * joiner waits for THIS, not for NF_DONE: the fiber publishes NF_DONE
+     * before it switches back, and a joiner that saw it early freed the
+     * fiber while the worker still swapped its state (ASan: a
+     * use-after-free in nurl__rctx_swap, send_closure_ok). */
+    int              released;
     pthread_mutex_t  join_m;
     pthread_cond_t   join_c;
     /* Park-with-unlock: worker releases this mutex AFTER swap-out so
@@ -5717,7 +5724,7 @@ void nurl_fiber_join(long long fiber) {
     NurlFiber *f = (NurlFiber*)(uintptr_t)fiber;
     if (!f || !f->joinable) return;
     pthread_mutex_lock(&f->join_m);
-    while (f->state != NF_DONE) {
+    while (!f->released) {
         pthread_cond_wait(&f->join_c, &f->join_m);
     }
     f->done_taken = 1;
@@ -5931,6 +5938,7 @@ static void *nurl__worker_loop(void *arg) {
         if (f->state == NF_DONE) {
             if (f->joinable) {
                 pthread_mutex_lock(&f->join_m);
+                f->released = 1;
                 pthread_cond_broadcast(&f->join_c);
                 pthread_mutex_unlock(&f->join_m);
                 /* Joiner does the free. */

@@ -30,8 +30,11 @@
 //   - Mutable globals (: ~ i NAME value) — the RNG state
 //   - Bitwise & / | on i64
 //   - Nested prefix arithmetic and chained ternaries
-//   - Heap arrays via malloc + # *i cast
+//   - Vec-backed arrays read and written through raw `*i` data
+//     pointers; every buffer frees itself (nothing is freed by hand)
 //   - Toroidal wrap-around via modular arithmetic
+
+$ `stdlib/core/vec.nu`
 
 // ─── Config ───────────────────────────────────────────────────
 
@@ -192,13 +195,9 @@
 // ─── Rendering ────────────────────────────────────────────────
 
 @ render i tick_no * i xs * i ys * i bs i N → v {
-    // Cell bitmask buffer
-    : *i grid # *i ( malloc * * W H 8 )
-    : ~ i g 0
-    ~ < g * W H {
-        = . grid g 0
-        = g + g 1
-    }
+    // Cell bitmask buffer: a zeroed Vec, freed automatically on return
+    : ( Vec i ) cells ( vec_zeroed [i] * W H )
+    : *i grid ( vec_data [i] cells )
 
     : ~ i k 0
     ~ < k N {
@@ -244,9 +243,14 @@
 // ─── Init + main loop ─────────────────────────────────────────
 
 @ main → i {
-    : *i xs # *i ( malloc * SLOTS 8 )
-    : *i ys # *i ( malloc * SLOTS 8 )
-    : *i bs # *i ( malloc * SLOTS 8 )
+    // The particle arrays are Vecs: they free themselves when main returns.
+    // The simulation reads and writes them through their data pointers.
+    : ( Vec i ) xv ( vec_zeroed [i] SLOTS )
+    : ( Vec i ) yv ( vec_zeroed [i] SLOTS )
+    : ( Vec i ) bv ( vec_zeroed [i] SLOTS )
+    : *i xs ( vec_data [i] xv )
+    : *i ys ( vec_data [i] yv )
+    : *i bs ( vec_data [i] bv )
 
     : ~ i k 0
     ~ < k SLOTS {
@@ -295,5 +299,6 @@
     ( nurl_print `\n…time marches on. Final tick = ` )
     ( nurl_print ( nurl_str_int TICKS ) )
     ( nurl_print `.\n` )
+
     ^ 0
 }
