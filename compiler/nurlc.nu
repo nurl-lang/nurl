@@ -8154,12 +8154,11 @@ unsafe @ nurl_sym_new → i {
     // 12 slots: 0 count, 1 depth, 2 cap, 3 names, 4 types, 5 depths,
     // 6 nbuckets, 7 buckets (head index+1 per bucket; 0 = empty),
     // 8 prev (per-entry link to the previous entry in the same bucket),
-    // 11 lens (cached byte length of the value, 0 = "ask strlen"),
+    // 11 lens (cached byte length of the value, including zero),
     // 12 hashes (each name's full hash: chains compare it before the bytes,
     // and a rehash needs no name re-read).
-    // Only nurl_sym_append_word maintains slot 11, because it is the only
-    // writer whose cost is dominated by re-deriving a length it just
-    // computed; every other writer stores 0 and the readers never look.
+    // Every writer maintains slot 11, so readers never have to measure a
+    // value again — including the empty sideband values used by the compiler.
     : i nb 4096
     : s t # s ( nurl_zalloc 104 )
     // Compilation owns every table until its explicit release. Intrusive
@@ -8440,8 +8439,7 @@ unsafe @ nurl_sym_append i h s name s suffix → v {
     : *s types # *s # s ( nurl_peek # s h 4 )
     : s old . types idx
     : *i lens # *i # s ( nurl_peek # s h 11 )
-    : i cl . lens idx
-    : i ol ? != cl 0 cl ( nurl_str_len old )
+    : i ol . lens idx
     : i sl ( nurl_str_len suffix )
     // nurl_realloc, not malloc + copy + free: for a value that only
     // ever grows, glibc extends the block in place and the accumulated
@@ -8491,8 +8489,7 @@ unsafe @ nurl_sym_append_word i h s name s word → v {
                 // size. Without it the strlen alone is O(L) per append,
                 // which is the same quadratic one term smaller: 400 KB
                 // rescanned for every record added to it.
-                : i cl . lens idx
-                : i ol ? != cl 0 cl ( nurl_str_len old )
+                : i ol . lens idx
                 : i wl ( nurl_str_len word )
                 : i sep ? == ol 0 0 1
                 : s grown # s ( nurl_realloc # *u old + + + ol sep wl 1 )
@@ -8556,13 +8553,11 @@ unsafe @ nurl_sym_len i h s name → i {
     0
 }
 
-// The length of value `idx` of table `t`: its cached length (slot 11),
-// measured only when nothing cached one.
+// The length of value `idx` of table `t`: every writer maintains slot 11,
+// and zero is the valid cached length of an empty value.
 unsafe @ __sym_vlen s t * s types i idx → i {
     : *i lens # *i # s ( nurl_peek t 11 )
-    : i cl . lens idx
-    ? != cl 0 { ^ cl } {}
-    ^ ( nurl_str_len . types idx )
+    ^ . lens idx
 }
 
 // nurl_sym_len for a two-part key. See nurl_sym_get2.

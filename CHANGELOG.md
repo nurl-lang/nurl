@@ -60,6 +60,15 @@ program's safety no longer rests on them.
   (`check.sh` counts the holes; all are rejected), and seven new
   rejection cores in the inverse-oracle fuzzer.
 
+### Performance
+
+- **The compiler trusts the symbol-table value lengths every writer already
+  caches.** Zero is a valid cached length, not a missing-value sentinel, so
+  the empty sideband values used throughout code generation no longer run
+  `strlen("")` on every lookup, redefinition and append. A self-compile
+  executes 0.8% fewer instructions (13.202 to 13.096 billion) and takes
+  about 1.6% less wall time (2.454 to 2.415 seconds, five-run means).
+
 ### Fixed
 
 - Real memory bugs the rules found in the corpus: arima, onnx and anomaly
