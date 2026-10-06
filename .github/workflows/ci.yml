@@ -440,6 +440,12 @@ jobs:
       - name: trait declaration-order and method ABI gate
         run: ./tools/metamorph/trait_order.py
 
+      # Safe Vec element access (vec_at / vec_put / vec_get) must cost what
+      # a raw-pointer loop costs: instruction counts, so it cannot flake.
+      # Skips itself where perf cannot count instructions.
+      - name: safe Vec access at raw-pointer cost
+        run: ./tools/vec_parity.sh
+
       - name: CRC-32 gate (two code paths, one answer)
         # std/deflate computes CRC-32 bitwise below 512 bytes and with a
         # Sarwate table above it — the table costs 2048 steps to build and

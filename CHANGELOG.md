@@ -42,6 +42,14 @@ program's safety no longer rests on them.
 
 ### Added
 
+- **Safe Vec element access at raw-pointer cost.** A loop over `vec_at`,
+  `vec_put` or `vec_get` executes the instructions of the same loop over a
+  `vec_data` pointer (it was 3.6–7.6× more): the bounds check folds away
+  against a `vec_len` bound and the loop vectorises. The Vec control block
+  is read through new compiler built-ins whose load is not behind a
+  branch, and control-block and element accesses carry TBAA tags that
+  tell the optimiser they never overlap. `stdlib_hotpath` runs half the
+  instructions. `tools/vec_parity.sh` holds it in CI.
 - **`unsafe` functions (grammar v2.8, spec §3.3d).** Raw pointer reads and
   writes, pointer casts, the raw-memory primitives and foreign functions
   declared outside the standard library are allowed only in a function
