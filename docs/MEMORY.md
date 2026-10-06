@@ -695,11 +695,13 @@ so a panic that abandons it mid-scope leaks it, exactly as omitting its
 call that may panic keeps it in the caller's frame (`stdlib/std/panic.nu`
 shows the pattern).
 
-### 7.4 Raw memory
+### 7.4 Manually-managed memory
 
 The compiler does not track memory allocated as raw bytes (`nurl_alloc`
 behind a `*T`) or a value given up with `mem_forget`. Both are possible
-only in `unsafe` code, which releases them with `nurl_free`.
+only in `unsafe` code, which releases them with `nurl_free`. Nothing else
+is managed by hand: `string_free`, `vec_free` and the other release calls
+on compiler-managed values and handles are optional early releases.
 
 Everything the standard library hands out releases itself. Opaque state
 lives behind a library handle over a counted block (`stdlib/core/rcbox.nu`:
